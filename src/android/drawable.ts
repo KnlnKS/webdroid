@@ -21,6 +21,8 @@ export class JDrawable extends JObj {
   stateSet: number[] = [];
   callback: unknown = null; // Drawable.Callback (usually a View)
   tint: number | null = null;
+  autoMirrored = false;
+  layoutDir = 0;
 
   /** TS-side paint. Subclasses override. */
   paint(cv: JCanvas) {}
@@ -93,7 +95,14 @@ const drawableMethods: NativeSpec["methods"] = {
   },
   "getOpacity()I": () => -3,
   "setVisible(ZZ)Z": () => 1,
-  "setAutoMirrored(Z)V": () => {},
+  "setAutoMirrored(Z)V": function (this: JDrawable, m: number) { this.autoMirrored = !!m; },
+  "isAutoMirrored()Z": function (this: JDrawable) { return this.autoMirrored ? 1 : 0; },
+  "setLayoutDirection(I)Z": function (this: JDrawable, d: number) {
+    if (this.layoutDir === d) return 0;
+    this.layoutDir = d;
+    return 1;
+  },
+  "getLayoutDirection()I": function (this: JDrawable) { return this.layoutDir; },
   "jumpToCurrentState()V": () => {},
   "getCurrent()Landroid/graphics/drawable/Drawable;": function (this: JDrawable) {
     return this instanceof JStateListDrawable ? this.current() : this;

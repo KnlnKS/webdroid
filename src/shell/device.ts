@@ -18,6 +18,7 @@ import {
 } from "../android/view";
 import { JCanvas, cssColor, tfMedium } from "../android/graphics";
 import { overlays, drawToasts, removeOverlay } from "../android/popup";
+import { webLayerSweep } from "../android/webkit";
 import { mangleMethod } from "../jvm/abi";
 import { perf } from "../perf";
 import { device } from "./config";
@@ -41,7 +42,7 @@ export function contentTop(): number {
   return act && (act.window.flags & FLAG_FULLSCREEN) ? 0 : STATUS_H;
 }
 
-export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void): Promise<BootedApp> {
+export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, apkFile = ""): Promise<BootedApp> {
   // materialize every registered native class so directly-constructed instances have methods
   for (const name of [...rt.natives.keys()]) {
     try { rt.link(name); } catch (e) { console.warn("[link native]", name, e); }
@@ -105,7 +106,7 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void):
   }
 
   const host: AppHost = {
-    res, theme, pkg, appLabel: label, themeResId, iconRes: iconAttr?.data ?? 0, zip,
+    res, theme, pkg, apkFile, appLabel: label, themeResId, iconRes: iconAttr?.data ?? 0, zip,
     application: null, jresources: jres,
     statusBarColor: -16777216, navBarColor: -16777216,
     launch: async (component, intent) => { await launchActivity(component, intent); },
@@ -470,6 +471,8 @@ async function tick0(ctx: CanvasRenderingContext2D) {
         ctx.restore();
       }
       perf.drawMs += performance.now() - t0;
+      // WebView frames are DOM over the canvas: show the ones this pass drew, hide the rest
+      webLayerSweep(contentY, overlays.length > 0);
       // Only meaningful right after a layout pass: without one, measured-vs-laid-out sizes
       // cannot have changed, so the walk is pure cost.
       if (laidOut) settleWatch(decor);

@@ -141,6 +141,10 @@ export class JView extends JObj {
   idNum = -1;
   tag: unknown = null;
   keyedTags = new Map<number, unknown>();
+  outlineProvider: unknown = null;
+  stateListAnimator: unknown = null;
+  keyboardCluster = false;
+  touchBlocksFocus = false;
   left = 0; top = 0; right = 0; bottom = 0;
   static $nextDrawingId = 0;
   measuredW = 0; measuredH = 0;
@@ -193,6 +197,7 @@ export class JView extends JObj {
     }
     const f = (this as any)[M_drawableStateChanged];
     if (f) await guardCall(f, this);
+    if (this.stateListAnimator) await vcall(this.stateListAnimator, "setState", "([I)V", Int32Array.from(st));
     invalidate();
   }
 }
@@ -400,6 +405,8 @@ const viewMethods: NativeSpec["methods"] = {
   "setTag(Ljava/lang/Object;)V": function (this: JView, t: unknown) { this.tag = t; },
   "getTag(I)Ljava/lang/Object;": function (this: JView, k: number) { return this.keyedTags.get(k) ?? null; },
   "setTag(ILjava/lang/Object;)V": function (this: JView, k: number, t: unknown) { this.keyedTags.set(k, t); },
+  // API 29 layout-inspector bookkeeping: only Studio's attribute inspector ever reads it back
+  "saveAttributeDataForStyleable(Landroid/content/Context;[ILandroid/util/AttributeSet;Landroid/content/res/TypedArray;II)V": () => {},
   "getParent()Landroid/view/ViewParent;": function (this: JView) { return this.parent; },
   "getWidth()I": function (this: JView) { return this.width(); },
   "getHeight()I": function (this: JView) { return this.height(); },
@@ -668,8 +675,19 @@ const viewMethods: NativeSpec["methods"] = {
   "onInitializeAccessibilityNodeInfo(Landroid/view/accessibility/AccessibilityNodeInfo;)V": () => {},
   "onInitializeAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V": () => {},
   "setLabelFor(I)V": () => {},
-  "setStateListAnimator(Landroid/animation/StateListAnimator;)V": () => {},
-  "setOutlineProvider(Landroid/view/ViewOutlineProvider;)V": () => {},
+  "setStateListAnimator(Landroid/animation/StateListAnimator;)V": async function (this: JView, sla: unknown) {
+    this.stateListAnimator = sla;
+    if (sla) await vcall(sla, "setTarget", "(Landroid/view/View;)V", this);
+  },
+  "getStateListAnimator()Landroid/animation/StateListAnimator;": function (this: JView) { return this.stateListAnimator; },
+  "setKeyboardNavigationCluster(Z)V": function (this: JView, v: number) { this.keyboardCluster = !!v; },
+  "setTouchscreenBlocksFocus(Z)V": function (this: JView, v: number) { this.touchBlocksFocus = !!v; },
+  "getTouchscreenBlocksFocus()Z": function (this: JView) { return this.touchBlocksFocus ? 1 : 0; },
+  "destroyDrawingCache()V": () => {},
+  "buildDrawingCache()V": () => {},
+  "isKeyboardNavigationCluster()Z": function (this: JView) { return this.keyboardCluster ? 1 : 0; },
+  "setOutlineProvider(Landroid/view/ViewOutlineProvider;)V": function (this: JView, p: unknown) { this.outlineProvider = p; },
+  "getOutlineProvider()Landroid/view/ViewOutlineProvider;": function (this: JView) { return this.outlineProvider ?? bgOutline; },
   "setClipToOutline(Z)V": () => {},
   "setTransitionName(Ljava/lang/String;)V": () => {},
   "setPointerIcon(Landroid/view/PointerIcon;)V": () => {},
@@ -933,6 +951,7 @@ export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | n
 // ── ViewGroup
 export class JViewGroup extends JView {
   children: JView[] = [];
+  drawingOrderEnabled = false;
   clipChildren = true;
   clipToPadding = true;
   disallowIntercept = false;
@@ -1112,8 +1131,18 @@ const vgMethods: NativeSpec["methods"] = {
   },
   "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z": () => 1,
   "dispatchDraw(Landroid/graphics/Canvas;)V": async function (this: JViewGroup, cv: JCanvas) {
-    for (const c of this.children) await drawView(c, cv);
+    const n = this.children.length;
+    if (!this.drawingOrderEnabled) { for (const c of this.children) await drawView(c, cv); return; }
+    // a subclass's getChildDrawingOrder picks which child paints at each z step (AOSP buildOrderedChildList)
+    for (let i = 0; i < n; i++) {
+      const c = this.children[await vcall(this, "getChildDrawingOrder", "(II)I", n, i)];
+      if (c) await drawView(c, cv);
+    }
   },
+  "setChildrenDrawingOrderEnabled(Z)V": function (this: JViewGroup, e: number) { this.drawingOrderEnabled = !!e; },
+  "isChildrenDrawingOrderEnabled()Z": function (this: JViewGroup) { return this.drawingOrderEnabled ? 1 : 0; },
+  "getChildDrawingOrder(II)I": (_n: number, i: number) => i,
+  "getChildDrawingOrder(I)I": function (this: JViewGroup, i: number) { return vcall(this, "getChildDrawingOrder", "(II)I", this.children.length, i); },
   "onMeasure(II)V": async function (this: JViewGroup, w: number, h: number) {
     // default: act like FrameLayout-lite
     let mw = 0, mh = 0;
@@ -1645,6 +1674,9 @@ function mkOutlineProvider(fill: (view: JView, outline: unknown) => unknown): JV
   (o as unknown as Record<string, unknown>)[mangleMethod("getOutline", GET_OUTLINE_DESC)] = fill;
   return o;
 }
+// AOSP's default provider for every View: no background-outline shape is modeled here, so this
+// always takes the plain-bounds-rect fallback AOSP itself uses when the background can't supply one.
+const bgOutline = mkOutlineProvider((view, outline) => vcall(outline, "setRect", "(IIII)V", 0, 0, view.width(), view.height()));
 rt.register({
   name: "android/view/ViewOutlineProvider", ctor: JViewOutlineProvider,
   methods: {
@@ -1653,10 +1685,7 @@ rt.register({
     ["getOutline" + GET_OUTLINE_DESC]: () => {},
   },
   statics: {
-    // AOSP's default provider for every View: no background-outline shape is modeled here,
-    // so this always takes the plain-bounds-rect fallback AOSP itself uses when the
-    // background can't supply one.
-    BACKGROUND: mkOutlineProvider((view, outline) => vcall(outline, "setRect", "(IIII)V", 0, 0, view.width(), view.height())),
+    BACKGROUND: bgOutline,
     ALPHA: mkOutlineProvider(async (view, outline) => {
       await vcall(outline, "setRect", "(IIII)V", 0, 0, view.width(), view.height());
       await vcall(outline, "setAlpha", "(F)V", 1);

@@ -558,6 +558,8 @@ rt.register({ name: "android/widget/HorizontalScrollView", ctor: class extends J
 
 // ── TextView
 export class JTextView extends JView {
+  /** kept for the app to read back; text is drawn untransformed */
+  transformation: unknown = null;
   text = "";
   rawText: unknown = "";       // original CharSequence (may be Spannable)
   hint = "";
@@ -883,7 +885,8 @@ const textViewMethods: NativeSpec["methods"] = {
   "setImeOptions(I)V": () => {},
   "setKeyListener(Landroid/text/method/KeyListener;)V": () => {},
   "setMovementMethod(Landroid/text/method/MovementMethod;)V": () => {},
-  "setTransformationMethod(Landroid/text/method/TransformationMethod;)V": () => {},
+  "setTransformationMethod(Landroid/text/method/TransformationMethod;)V": function (this: JTextView, m: unknown) { this.transformation = m; },
+  "getTransformationMethod()Landroid/text/method/TransformationMethod;": function (this: JTextView) { return this.transformation; },
   "setHighlightColor(I)V": () => {},
   "setHorizontallyScrolling(Z)V": () => {},
   "setMarqueeRepeatLimit(I)V": () => {},

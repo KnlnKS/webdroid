@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { mangleMethod, charsToString } from "../jvm/abi";
 import { device } from "../shell/config";
-import { vcall, mkEnumSet, JSimpleEnum, linkInit } from "../jvm/natives/jlang";
+import { vcall, mkEnumSet, JSimpleEnum, linkInit, stringHash } from "../jvm/natives/jlang";
 import { usLocale } from "../jvm/natives/jutil";
 import { JPath } from "./path";
 import { perf } from "../perf";
@@ -182,7 +182,7 @@ export class JTypeface extends JObj {
   weight = 400;
   style(): number { return (this.bold ? 1 : 0) | (this.italic ? 2 : 0); }
 }
-function mkTypeface(family: string, bold: boolean, italic: boolean, weight = bold ? 700 : 400): JTypeface {
+export function mkTypeface(family: string, bold: boolean, italic: boolean, weight = bold ? 700 : 400): JTypeface {
   const t = new JTypeface();
   t.family = family; t.bold = bold; t.italic = italic; t.weight = weight;
   return t;
@@ -220,8 +220,15 @@ rt.register({
     "static defaultFromStyle(I)Landroid/graphics/Typeface;": (style: number) =>
       mkTypeface("Roboto, sans-serif", (style & 1) !== 0, (style & 2) !== 0),
     "getStyle()I": function (this: JTypeface) { return this.style(); },
+    "getWeight()I": function (this: JTypeface) { return this.weight; },
     "isBold()Z": function (this: JTypeface) { return this.bold ? 1 : 0; },
     "isItalic()Z": function (this: JTypeface) { return this.italic ? 1 : 0; },
+    // AOSP caches one instance per (base, style), so two creates of a family the system lacks
+    // compare equal to the default -- which is how apps probe for a system font family
+    "equals(Ljava/lang/Object;)Z": function (this: JTypeface, o: unknown) {
+      return o instanceof JTypeface && o.family === this.family && o.bold === this.bold && o.italic === this.italic && o.weight === this.weight ? 1 : 0;
+    },
+    "hashCode()I": function (this: JTypeface) { return (stringHash(this.family) * 31 + this.style() * 7 + this.weight) | 0; },
   },
 });
 
@@ -1300,7 +1307,70 @@ canvasMethods["drawRenderNode(Landroid/graphics/RenderNode;)V"] = function (this
 };
 rt.register({ name: "android/graphics/Paint", ctor: JPaint, methods: paintMethods });
 mkEnumSet("android/graphics/Canvas$EdgeType", ["BW", "AA"]);
-mkEnumSet("android/graphics/Region$Op", ["DIFFERENCE", "INTERSECT", "REPLACE", "REVERSE_DIFFERENCE", "UNION", "XOR"]);
+const regionOps = mkEnumSet("android/graphics/Region$Op", ["DIFFERENCE", "INTERSECT", "REPLACE", "REVERSE_DIFFERENCE", "UNION", "XOR"]);
+
+// Region: modelled by its bounds only. What reads a Region back here — a shape drawable's
+// transparent region, a clip op — needs the rectangle; a subtractive op cannot shrink the bounds
+// without real geometry, so it leaves them alone.
+class JRegion extends JRect {}
+function setRegion(this: JRegion, l: number, t: number, r: number, b: number) {
+  if (l >= r || t >= b) { l = t = r = b = 0; }
+  this.left = l; this.top = t; this.right = r; this.bottom = b;
+  return l < r ? 1 : 0;
+}
+function regionOp(this: JRegion, l: number, t: number, r: number, b: number, op: JSimpleEnum | null) {
+  const empty = this.left >= this.right;
+  switch (op?.ename) {
+    case "REPLACE": return setRegion.call(this, l, t, r, b);
+    case "UNION": return empty ? setRegion.call(this, l, t, r, b)
+      : setRegion.call(this, Math.min(this.left, l), Math.min(this.top, t), Math.max(this.right, r), Math.max(this.bottom, b));
+    case "INTERSECT": return setRegion.call(this, Math.max(this.left, l), Math.max(this.top, t), Math.min(this.right, r), Math.min(this.bottom, b));
+    case "REVERSE_DIFFERENCE": return setRegion.call(this, l, t, r, b);
+    default: return empty ? 0 : 1;
+  }
+}
+const regionRect = (r: JRect) => [r.left, r.top, r.right, r.bottom] as const;
+rt.register({
+  name: "android/graphics/Region", ctor: JRegion, ifaces: ["android/os/Parcelable"],
+  methods: {
+    "<init>()V": function () {},
+    "<init>(IIII)V": setRegion,
+    "<init>(Landroid/graphics/Rect;)V": function (this: JRegion, r: JRect) { setRegion.call(this, ...regionRect(r)); },
+    "<init>(Landroid/graphics/Region;)V": function (this: JRegion, r: JRegion) { setRegion.call(this, ...regionRect(r)); },
+    "set(IIII)Z": setRegion,
+    "set(Landroid/graphics/Rect;)Z": function (this: JRegion, r: JRect) { return setRegion.call(this, ...regionRect(r)); },
+    "set(Landroid/graphics/Region;)Z": function (this: JRegion, r: JRegion) { return setRegion.call(this, ...regionRect(r)); },
+    "setEmpty()V": function (this: JRegion) { setRegion.call(this, 0, 0, 0, 0); },
+    "isEmpty()Z": function (this: JRegion) { return this.left >= this.right ? 1 : 0; },
+    "isRect()Z": () => 1,
+    "isComplex()Z": () => 0,
+    "getBounds()Landroid/graphics/Rect;": function (this: JRegion) {
+      const r = new (rt.link("android/graphics/Rect").ctor)() as JRect;
+      r.left = this.left; r.top = this.top; r.right = this.right; r.bottom = this.bottom;
+      return r;
+    },
+    "getBounds(Landroid/graphics/Rect;)Z": function (this: JRegion, r: JRect) {
+      r.left = this.left; r.top = this.top; r.right = this.right; r.bottom = this.bottom;
+      return this.left < this.right ? 1 : 0;
+    },
+    "setPath(Landroid/graphics/Path;Landroid/graphics/Region;)Z": async function (this: JRegion, p: JPath, clip: JRegion) {
+      const b = new JRectF();
+      await vcall(p, "computeBounds", "(Landroid/graphics/RectF;Z)V", b, 1);
+      return setRegion.call(this, Math.max(Math.floor(b.left), clip.left), Math.max(Math.floor(b.top), clip.top),
+        Math.min(Math.ceil(b.right), clip.right), Math.min(Math.ceil(b.bottom), clip.bottom));
+    },
+    "op(IIIILandroid/graphics/Region$Op;)Z": regionOp,
+    "op(Landroid/graphics/Rect;Landroid/graphics/Region$Op;)Z": function (this: JRegion, r: JRect, op: JSimpleEnum) { return regionOp.call(this, ...regionRect(r), op); },
+    "op(Landroid/graphics/Region;Landroid/graphics/Region$Op;)Z": function (this: JRegion, r: JRegion, op: JSimpleEnum) { return regionOp.call(this, ...regionRect(r), op); },
+    "union(Landroid/graphics/Rect;)Z": function (this: JRegion, r: JRect) { return regionOp.call(this, ...regionRect(r), regionOps[4]); },
+    "contains(II)Z": function (this: JRegion, x: number, y: number) { return x >= this.left && x < this.right && y >= this.top && y < this.bottom ? 1 : 0; },
+    "quickContains(IIII)Z": function (this: JRegion, l: number, t: number, r: number, b: number) { return l >= this.left && t >= this.top && r <= this.right && b <= this.bottom ? 1 : 0; },
+    "quickReject(IIII)Z": function (this: JRegion, l: number, t: number, r: number, b: number) { return r <= this.left || l >= this.right || b <= this.top || t >= this.bottom ? 1 : 0; },
+    "quickReject(Landroid/graphics/Rect;)Z": function (this: JRegion, r: JRect) { return r.right <= this.left || r.left >= this.right || r.bottom <= this.top || r.top >= this.bottom ? 1 : 0; },
+    "translate(II)V": function (this: JRegion, dx: number, dy: number) { this.left += dx; this.right += dx; this.top += dy; this.bottom += dy; },
+    "toString()Ljava/lang/String;": function (this: JRegion) { return `Region(${this.left}, ${this.top} - ${this.right}, ${this.bottom})`; },
+  },
+});
 
 // BitmapFactory
 class JBFOptions extends JObj {

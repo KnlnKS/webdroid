@@ -12,12 +12,16 @@ import { onMain, mainDbg } from "./android/mainloop";
 import { editInput, focusedEdit, focusEditText, setInputElement } from "./android/widget";
 import { overlays } from "./android/popup";
 import { openDatabase } from "./android/sqlite";
+import { setWebLayer, webViewInfo } from "./android/webkit";
 
 const root = document.getElementById("root")!;
 root.innerHTML = `
 <div style="display:flex;align-items:center;gap:20px;height:100%">
   <div id="phone" style="position:relative;background:#0a0a0c;border-radius:28px;padding:14px 10px;box-shadow:0 18px 60px rgba(0,0,0,.6), inset 0 0 0 2px #2a2d33">
-    <canvas id="screen" width="${SCREEN_W}" height="${SCREEN_H}" style="display:block;border-radius:16px;background:#000"></canvas>
+    <div style="position:relative">
+      <canvas id="screen" width="${SCREEN_W}" height="${SCREEN_H}" style="display:block;border-radius:16px;background:#000"></canvas>
+      <div id="weblayer" style="position:absolute;inset:0;pointer-events:none;overflow:hidden;border-radius:16px"></div>
+    </div>
     <div id="nav" style="display:flex;justify-content:space-around;padding-top:10px">
       <button class="navb" id="btn-back" title="Back">◁</button>
       <button class="navb" id="btn-home" title="Home">◯</button>
@@ -47,6 +51,8 @@ const missingEl = document.getElementById("missing")!;
 const launcherEl = document.getElementById("launcher")!;
 const kbd = document.getElementById("kbd") as HTMLInputElement;
 setInputElement(kbd);
+// WebViews are <iframe>s over the canvas: the framework positions them, the shell owns the layer
+setWebLayer(document.getElementById("weblayer")!);
 
 // fit canvas to viewport height. getBoundingClientRect forces layout, so the rect pointer events
 // map through is refreshed here and on pointerdown, not per pointermove.
@@ -114,7 +120,7 @@ async function boot(file: string) {
     const resp = await fetch("/apks/" + encodeURIComponent(file));
     const bytes = new Uint8Array(await resp.arrayBuffer());
     const t0 = performance.now();
-    await bootApk(bytes, (s) => { statusEl.textContent = s; });
+    await bootApk(bytes, (s) => { statusEl.textContent = s; }, file);
     perf.bootMs = performance.now() - t0;
     statusEl.textContent = `running (boot ${perf.bootMs.toFixed(0)}ms)` + (rt.nativeRequired.size ? " — needs native code" : "");
   } catch (e) {
@@ -144,6 +150,8 @@ const tap = async (x: number, y: number) => {
 const wd = {
   rt, uiState, overlays, perf, perfReset, mainDbg, setGL, logs: logBuf, ticks: 0,
   boot, app: () => currentApp(), rnodes: () => JRenderNode.all, back: () => pressBack(),
+  // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
+  web: () => webViewInfo(),
   tree: () => {
     const out: string[] = [];
     const line = ({ v, depth }: { v: any; depth: number }) =>

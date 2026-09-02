@@ -1,25 +1,38 @@
 // java.util.zip on fflate: streaming codecs (Inflater/Deflater raw+zlib, CRC32), ZipFile over a
 // central-directory index, GZIPInputStream over a drained source.
-import { Inflate, Unzlib, Deflate, Zlib, inflateSync, gunzipSync } from "fflate";
+import { Inflate, Unzlib, Deflate, Zlib, Gzip, inflateSync, gunzipSync } from "fflate";
 import { rt, JObj } from "../runtime";
 import { mangleMethod } from "../abi";
 import { vcall, newObj, defineException } from "./jlang";
 import { vfs, JFile, JInputStream, JOutputStream } from "./jio";
 import { mkIter } from "./jutil";
 
-type Codec = Inflate | Unzlib | Deflate | Zlib;
+type Codec = Inflate | Unzlib | Deflate | Zlib | Gzip;
 class JInflater extends JObj {
   raw = false;
   st: Codec | null = null;
   out: Uint8Array[] = [];
   done = false;
   fed = 0;
+  /** input bytes not consumed: what sits past the final block (a gzip trailer) */
+  rem = 0;
   ensure() {
     if (!this.st) {
       this.st = this.raw ? new Inflate() : new Unzlib();
       this.st.ondata = (d, final) => { if (d.length) this.out.push(d); if (final) this.done = true; };
     }
     return this.st;
+  }
+  // Java keeps input handed over after the end of stream (okio reads the trailer back through
+  // getRemaining); fflate would throw on it. It parks the unconsumed tail in `p` and only ever
+  // tests "last block decoded" as `s.f && !s.l` internally, so that test is repeated here.
+  feed(b: Uint8Array) {
+    this.fed += b.length;
+    if (this.done) { this.rem = b.length; return; }
+    const st = this.ensure() as any;
+    st.push(b);
+    if (st.s.f && !st.s.l) this.done = true;
+    this.rem = st.p?.length ?? 0;
   }
 }
 function drain(z: JInflater, b: Int8Array, off: number, len: number): number {
@@ -39,12 +52,10 @@ rt.register({
     "<init>()V": function (this: JInflater) { this.raw = false; },
     "<init>(Z)V": function (this: JInflater, nowrap: number) { this.raw = !!nowrap; },
     "setInput([BII)V": function (this: JInflater, b: Int8Array, off: number, len: number) {
-      this.fed += len;
-      this.ensure().push(new Uint8Array(b.buffer.slice(b.byteOffset + off, b.byteOffset + off + len)));
+      this.feed(new Uint8Array(b.buffer.slice(b.byteOffset + off, b.byteOffset + off + len)));
     },
     "setInput([B)V": function (this: JInflater, b: Int8Array) {
-      this.fed += b.length;
-      this.ensure().push(new Uint8Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.length)));
+      this.feed(new Uint8Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.length)));
     },
     "inflate([BII)I": function (this: JInflater, b: Int8Array, off: number, len: number) { return drain(this, b, off, len); },
     "inflate([B)I": function (this: JInflater, b: Int8Array) { return drain(this, b, 0, b.length); },
@@ -57,9 +68,10 @@ rt.register({
       const s = (this.st as unknown as { s?: { f?: number; l?: unknown } } | null)?.s;
       return (this.done || (s?.f && !s.l)) && !this.out.length ? 1 : 0;
     },
+    "getRemaining()I": function (this: JInflater) { return this.rem; },
     "getBytesRead()J": function (this: JInflater) { return BigInt(this.fed); },
     "getBytesWritten()J": function (this: JInflater) { return BigInt(this.fed); },
-    "reset()V": function (this: JInflater) { this.st = null; this.out = []; this.done = false; this.fed = 0; },
+    "reset()V": function (this: JInflater) { this.st = null; this.out = []; this.done = false; this.fed = 0; this.rem = 0; },
     "end()V": function (this: JInflater) { this.st = null; this.out = []; },
   },
 });
@@ -137,6 +149,14 @@ rt.register({
       await vcall(this, "finish", "()V");
       await vcall(this.out, "close", "()V");
     },
+  },
+});
+class JGzipDeflater extends JDeflater { ensure() { return this.st ??= Object.assign(new Gzip(), { ondata: (d: Uint8Array, f: boolean) => { if (d.length) this.out.push(d); if (f) this.done = true; } }); } }
+rt.register({
+  name: "java/util/zip/GZIPOutputStream", ctor: class extends JDeflaterOut { def = new JGzipDeflater(); }, sup: "java/util/zip/DeflaterOutputStream",
+  methods: {
+    "<init>(Ljava/io/OutputStream;)V": dosInit, "<init>(Ljava/io/OutputStream;I)V": dosInit,
+    "<init>(Ljava/io/OutputStream;Z)V": dosInit, "<init>(Ljava/io/OutputStream;IZ)V": dosInit,
   },
 });
 
