@@ -892,6 +892,9 @@ class JWindow extends JObj {
   actionBarView: JActionBarView | null = null;
   callbackObj: unknown = null;
   features = new Set<number>();
+  /** the window's OnBackInvokedDispatcher (AOSP: one per ViewRootImpl) */
+  backD: JObj | null = null;
+  backDispatcher(): JObj { return this.backD ??= new (rt.link("android/window/OnBackInvokedDispatcher").ctor)(); }
   /** WindowManager.LayoutParams flags; the shell reads FLAG_FULLSCREEN off the top activity. */
   flags = 0;
   /** WindowInsetsController appearance bits; `appearanceMask` = the bits the app has ever
@@ -1323,7 +1326,7 @@ const activityMethods: NonNullable<NativeSpec["methods"]> = {
   ...contextMethods,
   "<init>()V": function (this: JActivity) { this.window.activity = this; },
   "getWindow()Landroid/view/Window;": function (this: JActivity) { return this.window; },
-  "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": () => new (rt.link("android/window/OnBackInvokedDispatcher").ctor)(),
+  "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JActivity) { return this.window.backDispatcher(); },
   "getApplication()Landroid/app/Application;": function (this: JActivity) { return this.$host.application; },
   ...lifecycleCbMethods,
   "getWindowManager()Landroid/view/WindowManager;": function (this: JActivity) { return systemService(this, "window"); },
@@ -1699,6 +1702,7 @@ rt.register({
       if (lp) setWindowFlags(this, lp.flags);
     },
     "getCallback()Landroid/view/Window$Callback;": function (this: JWindow) { return this.callbackObj ?? this.activity; },
+    "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JWindow) { return this.backDispatcher(); },
     "setCallback(Landroid/view/Window$Callback;)V": function (this: JWindow, cb: unknown) { this.callbackObj = cb; },
     "setTitle(Ljava/lang/CharSequence;)V": function (this: JWindow, t: unknown) {
       if (this.activity) (activityMethods["setTitle(Ljava/lang/CharSequence;)V"] as any).call(this.activity, t);
@@ -2209,11 +2213,19 @@ function fillProc<T extends JRunningAppProcessInfo>(p: T): T {
   return p;
 }
 const myProcess = () => fillProc(procInfo ??= new JRunningAppProcessInfo());
+// Back itself is still delivered through Activity.onBackPressed (the pre-33 route androidx's
+// OnBackPressedDispatcher also serves), so the registry only has to hold the callbacks.
+class JBackDispatcher extends JObj { cbs: { p: number; cb: unknown }[] = []; }
 rt.register({
-  name: "android/window/OnBackInvokedDispatcher", ctor: class extends JObj {},
+  name: "android/window/OnBackInvokedDispatcher", ctor: JBackDispatcher,
+  statics: { PRIORITY_DEFAULT: 0, PRIORITY_OVERLAY: 1000000, PRIORITY_SYSTEM: -1 },
   methods: {
-    "registerOnBackInvokedCallback(ILandroid/window/OnBackInvokedCallback;)V": () => {},
-    "unregisterOnBackInvokedCallback(Landroid/window/OnBackInvokedCallback;)V": () => {},
+    "registerOnBackInvokedCallback(ILandroid/window/OnBackInvokedCallback;)V": function (this: JBackDispatcher, p: number, cb: unknown) {
+      if (p < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Application registered OnBackInvokedCallback cannot have negative priority. Value: " + p);
+      this.cbs = this.cbs.filter((e) => e.cb !== cb);
+      this.cbs.push({ p, cb });
+    },
+    "unregisterOnBackInvokedCallback(Landroid/window/OnBackInvokedCallback;)V": function (this: JBackDispatcher, cb: unknown) { this.cbs = this.cbs.filter((e) => e.cb !== cb); },
   },
 });
 rt.register({ name: "android/window/OnBackInvokedCallback", ctor: class extends JObj {} });

@@ -576,7 +576,7 @@ rt.register({
 }
 
 // Java float/double toString: approximate with JS (differences acceptable)
-function fmtDouble(v: number): string {
+export function fmtDouble(v: number): string {
   if (Number.isInteger(v) && Math.abs(v) < 1e21) return v.toFixed(1);
   return String(v);
 }

@@ -1,7 +1,7 @@
 // android.graphics.drawable.* — Drawable hierarchy, XML inflation, 9-patch, vectors.
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, mkEnumSet } from "../jvm/natives/jlang";
 import { mangleMethod } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, insetsOf } from "./graphics";
 import { device } from "../shell/config";
@@ -387,11 +387,11 @@ rt.register({
     "setSize(II)V": function (this: JGradientDrawable, w: number, h: number) { this.sizeW = w; this.sizeH = h; },
     "setGradientType(I)V": function (this: JGradientDrawable, t: number) { this.gradType = t; },
     "setGradientRadius(F)V": function (this: JGradientDrawable, r: number) { this.gradRadius = r; },
-    "<init>(Landroid/graphics/drawable/GradientDrawable$Orientation;[I)V": function (this: JGradientDrawable, o: { ordinal?: number } | null, cs: Int32Array | null) {
+    "<init>(Landroid/graphics/drawable/GradientDrawable$Orientation;[I)V": function (this: JGradientDrawable, o: { ord?: number } | null, cs: Int32Array | null) {
       this.gradColors = cs ? [...cs] : null;
-      this.gradAngle = ORIENT_ANGLE[o?.ordinal ?? 0] ?? 0;
+      this.gradAngle = ORIENT_ANGLE[o?.ord ?? 0] ?? 0;
     },
-    "setOrientation(Landroid/graphics/drawable/GradientDrawable$Orientation;)V": function (this: JGradientDrawable, o: { ordinal?: number } | null) { this.gradAngle = ORIENT_ANGLE[o?.ordinal ?? 0] ?? 0; },
+    "setOrientation(Landroid/graphics/drawable/GradientDrawable$Orientation;)V": function (this: JGradientDrawable, o: { ord?: number } | null) { this.gradAngle = ORIENT_ANGLE[o?.ord ?? 0] ?? 0; },
     "getCornerRadius()F": function (this: JGradientDrawable) { return this.radii[0]; },
     "getCornerRadii()[F": function (this: JGradientDrawable) {
       const r = this.radii;
@@ -406,6 +406,7 @@ rt.register({
 });
 // GradientDrawable.Orientation ordinals (TOP_BOTTOM first) as the angle each one means
 const ORIENT_ANGLE = [270, 225, 180, 135, 90, 45, 0, 315];
+mkEnumSet("android/graphics/drawable/GradientDrawable$Orientation", ["TOP_BOTTOM", "TR_BL", "RIGHT_LEFT", "BR_TL", "BOTTOM_TOP", "BL_TR", "LEFT_RIGHT", "TL_BR"]);
 
 /** a selector/color-state item matches when every required state is set and no negated one is */
 function matchesState(it: { states: number[]; negStates: number[] }, states: number[]): boolean {

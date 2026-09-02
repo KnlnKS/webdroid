@@ -3,7 +3,7 @@
 
 import { rt, JObj, type NativeSpec, type ClassInfo } from "../runtime";
 import { mangleMethod, jarray } from "../abi";
-import { vcall, idHash, stringHash, defineException, JEnum, JInt, JLong, JFloat, JDouble, JByte, JShort, JBool, JChar } from "./jlang";
+import { vcall, idHash, stringHash, defineException, fmtDouble, JEnum, JInt, JLong, JFloat, JDouble, JByte, JShort, JBool, JChar } from "./jlang";
 
 /** Java toArray(T[]) contract: fill the GIVEN array when it fits (callers may
  * ignore the return value), null-terminating; else return a new one. */
@@ -1289,10 +1289,41 @@ rt.register({
     "static copyOfRange([BII)[B": taSlice,
     "static copyOfRange([III)[I": taSlice,
     "static copyOfRange([CII)[C": taSlice,
-    "static copyOfRange([Ljava/lang/Object;II)[Ljava/lang/Object;": (a: unknown[], s: number, e: number) => jarray(a.slice(s, e), elemOf(a)),
+    "static copyOfRange([JII)[J": taSlice,
+    "static copyOfRange([FII)[F": taSlice,
+    "static copyOfRange([DII)[D": taSlice,
+    "static copyOfRange([SII)[S": taSlice,
+    "static copyOfRange([ZII)[Z": taSlice,
+    "static copyOf([ZI)[Z": taCopyOf,
+    "static copyOf([SI)[S": taCopyOf,
+    "static copyOfRange([Ljava/lang/Object;II)[Ljava/lang/Object;": (a: unknown[], s: number, e: number) => objRange(a, s, e, elemOf(a)),
+    "static copyOfRange([Ljava/lang/Object;IILjava/lang/Class;)[Ljava/lang/Object;": (a: unknown[], s: number, e: number, cls: { arrDesc?: string }) =>
+      objRange(a, s, e, cls?.arrDesc?.slice(1) ?? elemOf(a)),
     "static equals([B[B)Z": taEq,
     "static equals([I[I)Z": taEq,
     "static equals([C[C)Z": taEq,
+    "static equals([J[J)Z": taEq,
+    "static equals([F[F)Z": taEq,
+    "static equals([D[D)Z": taEq,
+    "static equals([S[S)Z": taEq,
+    "static equals([Z[Z)Z": taEq,
+    "static hashCode([B)I": taHash,
+    "static hashCode([C)I": taHash,
+    "static hashCode([S)I": taHash,
+    "static hashCode([Z)I": taHash,
+    "static hashCode([F)I": (a: Float32Array | null) => {
+      if (!a) return 0;
+      const f = new Float32Array(1), i = new Int32Array(f.buffer);
+      let h = 1;
+      for (const e of a) { f[0] = e; h = (Math.imul(h, 31) + i[0]) | 0; }
+      return h;
+    },
+    "static toString([F)Ljava/lang/String;": (a: Float32Array) => (a ? "[" + Array.from(a, fmtDouble).join(", ") + "]" : "null"),
+    "static toString([J)Ljava/lang/String;": (a: BigInt64Array) => (a ? "[" + Array.from(a).join(", ") + "]" : "null"),
+    "static toString([Z)Ljava/lang/String;": (a: Uint8Array) => (a ? "[" + Array.from(a, (v) => (v ? "true" : "false")).join(", ") + "]" : "null"),
+    "static sort([C)V": taSort,
+    "static sort([S)V": taSort,
+    "static deepHashCode([Ljava/lang/Object;)I": (a: unknown[] | null) => (a ? hashSeq(a) : 0),
     "static equals([Ljava/lang/Object;[Ljava/lang/Object;)Z": async (a: unknown[], b: unknown[]) => {
       if (a === b) return 1;
       if (!a || !b || a.length !== b.length) return 0;
@@ -1339,7 +1370,28 @@ function taCopyOf(a: TA, n: number): TA {
   c.set(a.subarray(0, Math.min(a.length, n)));
   return c;
 }
-function taSlice(a: TA, s: number, e: number) { return a.slice(s, e); }
+function taSlice(a: TA, s: number, e: number) {
+  if (s > e) throw rt.mkThrowable("java/lang/IllegalArgumentException", s + " > " + e);
+  if (s < 0 || s > a.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(s));
+  // Java pads past the end with zeros where slice() would clip
+  if (e <= a.length) return a.slice(s, e);
+  const c = new a.constructor(e - s);
+  c.set(a.subarray(s));
+  return c;
+}
+function taHash(a: TA | null): number {
+  if (!a) return 0;
+  let h = 1;
+  for (let i = 0; i < a.length; i++) h = (Math.imul(h, 31) + Number(a[i])) | 0;
+  return h;
+}
+function objRange(a: unknown[], s: number, e: number, elem?: string): unknown[] {
+  if (s > e) throw rt.mkThrowable("java/lang/IllegalArgumentException", s + " > " + e);
+  if (s < 0 || s > a.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(s));
+  const out = a.slice(s, e);
+  while (out.length < e - s) out.push(null);
+  return jarray(out, elem);
+}
 function taBinarySearch(a: TA, k: number | bigint): number {
   let lo = 0, hi = a.length - 1;
   while (lo <= hi) {

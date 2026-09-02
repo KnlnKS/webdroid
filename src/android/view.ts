@@ -1003,6 +1003,12 @@ const viewMethods: NativeSpec["methods"] = {
   "setLeftTopRightBottom(IIII)V": function (this: JView, l: number, t: number, r: number, b: number) {
     this.left = l; this.top = t; this.right = r; this.bottom = b; invalidate();
   },
+  "findOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JView) {
+    // the window this view is in: an attached view's context is its activity (or dialog)
+    const c = this.ctx as { window?: { backDispatcher?: () => unknown }; win?: { backDispatcher?: () => unknown } } | null;
+    const w = c?.window ?? c?.win;
+    return this.attached && w?.backDispatcher ? w.backDispatcher() : null;
+  },
   "isInEditMode()Z": () => 0,
   "isLaidOut()Z": function (this: JView) { return this.right > 0 || this.bottom > 0 ? 1 : 0; },
   "getLayoutDirection()I": () => 0,

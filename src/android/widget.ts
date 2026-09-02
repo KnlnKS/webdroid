@@ -46,20 +46,46 @@ rt.register({
     FILL_HORIZONTAL: 7, FILL_VERTICAL: 112,
   },
   methods: {
-    "static getAbsoluteGravity(II)I": (g: number) => g & ~0x00800000,
-    "static apply(IIILandroid/graphics/Rect;Landroid/graphics/Rect;)V":
-      (g: number, w: number, h: number, container: JRect, out: JRect) => {
-        const hg = gravityH(g), vg = gravityV(g);
-        out.left = hg === 1 ? container.left + ((container.right - container.left - w) >> 1)
-          : hg === 5 ? container.right - w : container.left;
-        out.top = vg === 16 ? container.top + ((container.bottom - container.top - h) >> 1)
-          : vg === 80 ? container.bottom - h : container.top;
-        out.right = out.left + w;
-        out.bottom = out.top + h;
-      },
+    "static getAbsoluteGravity(II)I": absGravity,
+    "static apply(IIILandroid/graphics/Rect;Landroid/graphics/Rect;)V": (g: number, w: number, h: number, c: JRect, out: JRect) => gravityApply(g, w, h, c, 0, 0, out),
+    "static apply(IIILandroid/graphics/Rect;Landroid/graphics/Rect;I)V": (g: number, w: number, h: number, c: JRect, out: JRect, ld: number) => gravityApply(absGravity(g, ld), w, h, c, 0, 0, out),
+    "static apply(IIILandroid/graphics/Rect;IILandroid/graphics/Rect;)V": (g: number, w: number, h: number, c: JRect, x: number, y: number, out: JRect) => gravityApply(g, w, h, c, x, y, out),
+    "static apply(IIILandroid/graphics/Rect;IILandroid/graphics/Rect;I)V": (g: number, w: number, h: number, c: JRect, x: number, y: number, out: JRect, ld: number) => gravityApply(absGravity(g, ld), w, h, c, x, y, out),
+    "static applyDisplay(ILandroid/graphics/Rect;Landroid/graphics/Rect;)V": (g: number, disp: JRect, inout: JRect) => {
+      // AOSP: DISPLAY_CLIP_* clip to the display, otherwise push the rect back inside it
+      if (inout.left < disp.left) { inout.right += disp.left - inout.left; inout.left = disp.left; }
+      if (inout.right > disp.right) { inout.left -= inout.right - disp.right; inout.right = disp.right; }
+      if (inout.top < disp.top) { inout.bottom += disp.top - inout.top; inout.top = disp.top; }
+      if (inout.bottom > disp.bottom) { inout.top -= inout.bottom - disp.bottom; inout.bottom = disp.bottom; }
+    },
+    "static isHorizontal(I)Z": (g: number) => (g & 0x800007) ? 1 : 0,
+    "static isVertical(I)Z": (g: number) => (g & 112) ? 1 : 0,
   },
 });
-
+/** AOSP Gravity.getAbsoluteGravity: START/END resolve by layout direction, the relative bit drops */
+function absGravity(g: number, ld = 0): number {
+  if (g & 0x00800000) {
+    const rtl = ld === 1;
+    if ((g & G.START) === G.START) g = (g & ~G.START) | (rtl ? 5 : 3);
+    else if ((g & G.END) === G.END) g = (g & ~G.END) | (rtl ? 3 : 5);
+    g &= ~0x00800000;
+  }
+  return g;
+}
+/** AOSP Gravity.apply: per axis AXIS_PULL_BEFORE(2)/AXIS_PULL_AFTER(4) select the edge, both
+ *  mean FILL, neither means centre; AXIS_CLIP(8) clips the result to the container */
+function gravityApply(g: number, w: number, h: number, c: JRect, xAdj: number, yAdj: number, out: JRect) {
+  const axis = (bits: number, dim: number, lo: number, hi: number, adj: number): [number, number] => {
+    const pull = bits & 6, clip = bits & 8;
+    if (pull === 6) return [lo + adj, hi + adj];
+    let a = pull === 2 ? lo + adj : pull === 4 ? hi + adj - dim : lo + (((hi - lo) - dim) >> 1) + adj;
+    let b = a + dim;
+    if (clip) { if (a < lo) a = lo; if (b > hi) b = hi; }
+    return [a, b];
+  };
+  [out.left, out.right] = axis(g & 0xf, w, c.left, c.right, xAdj);
+  [out.top, out.bottom] = axis((g >> 4) & 0xf, h, c.top, c.bottom, yAdj);
+}
 /** ViewGroup.generateLayoutParams(LayoutParams): keep ours, else copy size (and margins) into a fresh one */
 function adoptLp<T extends JMarginLP>(Ctor: new () => T, lp: JLayoutParams | null): T {
   if (lp instanceof Ctor) return lp;
@@ -1339,8 +1365,10 @@ export async function editInput(text: string) {
 class JProgressBar extends JView {
   indeterminate = true;
   progress = 0;
-  max = 100;
+  max = 100; min = 0;
   horizontal = false;
+  progressD: JDrawable | null = null; indetD: JDrawable | null = null;
+  tintCsl: JColorStateList | null = null;
 }
 rt.register({
   name: "android/widget/ProgressBar", ctor: JProgressBar, sup: "android/view/View",
@@ -1366,8 +1394,21 @@ rt.register({
     "setMax(I)V": function (this: JProgressBar, m: number) { this.max = Math.max(1, m); },
     "getMax()I": function (this: JProgressBar) { return this.max; },
     "setSecondaryProgress(I)V": () => {},
-    "setProgressDrawable(Landroid/graphics/drawable/Drawable;)V": () => {},
-    "setIndeterminateDrawable(Landroid/graphics/drawable/Drawable;)V": () => {},
+    "setProgressDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JProgressBar, d: JDrawable | null) { this.progressD = d; invalidate(); },
+    "getProgressDrawable()Landroid/graphics/drawable/Drawable;": function (this: JProgressBar) { return this.progressD; },
+    "setIndeterminateDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JProgressBar, d: JDrawable | null) { this.indetD = d; invalidate(); },
+    "getIndeterminateDrawable()Landroid/graphics/drawable/Drawable;": function (this: JProgressBar) { return this.indetD; },
+    "setProgressTintList(Landroid/content/res/ColorStateList;)V": function (this: JProgressBar, c: JColorStateList | null) { this.tintCsl = c; invalidate(); },
+    "getProgressTintList()Landroid/content/res/ColorStateList;": function (this: JProgressBar) { return this.tintCsl; },
+    "setIndeterminateTintList(Landroid/content/res/ColorStateList;)V": function (this: JProgressBar, c: JColorStateList | null) { this.tintCsl = c; invalidate(); },
+    "getIndeterminateTintList()Landroid/content/res/ColorStateList;": function (this: JProgressBar) { return this.tintCsl; },
+    "setProgress(IZ)V": function (this: JProgressBar, p: number) { this.progress = p; invalidate(); },
+    "setMin(I)V": function (this: JProgressBar, m: number) { this.min = m; },
+    "getMin()I": function (this: JProgressBar) { return this.min; },
+    "getSecondaryProgress()I": () => 0,
+    "getInterpolator()Landroid/view/animation/Interpolator;": () => null,
+    "setInterpolator(Landroid/view/animation/Interpolator;)V": () => {},
+    "setInterpolator(Landroid/content/Context;I)V": () => {},
     "onMeasure(II)V": function (this: JProgressBar, wSpec: number, hSpec: number) {
       const dw = this.horizontal ? 48 : 96, dh = this.horizontal ? 16 : 96;
       this.measuredW = resolveSizeAndState(Math.max(dw + this.padL + this.padR, this.minW), wSpec);
