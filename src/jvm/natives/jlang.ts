@@ -1085,8 +1085,9 @@ class JDefaultUEH extends JObj {}
 rt.register({
   name: "webdroid/DefaultUEH", ctor: JDefaultUEH, ifaces: ["java/lang/Thread$UncaughtExceptionHandler"],
   methods: {
-    "uncaughtException(Ljava/lang/Thread;Ljava/lang/Throwable;)V": (_t: unknown, e: unknown) => {
-      console.error("[uncaughtException]", (e as { msg?: string })?.msg ?? e);
+    // AOSP's LoggingHandler prints the whole trace; the "Caused by" chain is what names the real fault
+    "uncaughtException(Ljava/lang/Thread;Ljava/lang/Throwable;)V": async (_t: unknown, e: unknown) => {
+      console.error("[uncaughtException]", e instanceof JThrowable ? await stackTraceText(e) : e);
     },
   },
 });
