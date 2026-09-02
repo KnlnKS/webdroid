@@ -17,7 +17,7 @@ import {
   JMotionEvent, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall,
 } from "../android/view";
 import { JCanvas, cssColor, tfMedium } from "../android/graphics";
-import { overlays, drawToasts, removeOverlay } from "../android/popup";
+import { overlays, drawToasts, dismissOverlay } from "../android/popup";
 import { webLayerSweep } from "../android/webkit";
 import { mangleMethod } from "../jvm/abi";
 import { perf } from "../perf";
@@ -336,7 +336,7 @@ export async function pressBack() {
   const act = booted?.stack[booted.stack.length - 1];
   try {
     if (top?.onBack) await top.onBack();
-    else if (top?.dismissOnOutside) removeOverlay(top.view);
+    else if (top?.dismissOnOutside) await dismissOverlay(top);
     else if (act) await vcall(act, "onBackPressed", "()V");
   } catch (e) { reportUncaught(e); }
 }
@@ -543,7 +543,7 @@ async function dispatchPointer0(action: number, x: number, y: number) {
           break;
         }
         if (o.dismissOnOutside) {
-          removeOverlay(v);
+          await dismissOverlay(o);
           touchTarget = null;
           return;
         }
