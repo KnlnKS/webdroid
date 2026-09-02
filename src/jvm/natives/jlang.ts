@@ -616,7 +616,7 @@ export function fmtDouble(v: number): string {
 }
 
 // ── StringBuilder / StringBuffer
-class JSB extends JObj {
+export class JSB extends JObj {
   s = "";
 }
 function sbSpec(name: string): NativeSpec {

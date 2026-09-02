@@ -1563,7 +1563,7 @@ rt.register({
 // duration+delay with the (default accelerate/decelerate) interpolator, and reports through the
 // AnimatorListener / AnimatorUpdateListener / withStart|EndAction hooks.
 function mkVPA(v: JView): any {
-  const info = rt.link("webdroid/VPA");
+  const info = rt.link("android/view/ViewPropertyAnimator");
   const o = new info.ctor();
   o.view = v;
   return o;
@@ -1677,7 +1677,7 @@ for (const [name, prop] of Object.entries(VPA_PROPS)) {
 }
 vpaMethods[`rotationX(F)${VPA}`] = vpaMethods[`rotationY(F)${VPA}`] = function (this: JVPA) { return this; };
 vpaMethods[`rotationXBy(F)${VPA}`] = vpaMethods[`rotationYBy(F)${VPA}`] = function (this: JVPA) { return this; };
-rt.register({ name: "webdroid/VPA", ctor: JVPA, methods: vpaMethods });
+rt.register({ name: "android/view/ViewPropertyAnimator", ctor: JVPA, methods: vpaMethods });
 
 // ViewTreeObserver
 class JVTO extends JObj {
