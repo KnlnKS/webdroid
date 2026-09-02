@@ -1,11 +1,12 @@
 // android.animation: ValueAnimator/ObjectAnimator/AnimatorSet, driven from the frame loop via uiState.animHooks.
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
-import { mangleMethod } from "../jvm/abi";
+import { mangleMethod, jarray } from "../jvm/abi";
 import { vcall, boxInt, box, JFloat } from "../jvm/natives/jlang";
 import { toJsArray, newArrayList } from "../jvm/natives/jutil";
 import { uiState, invalidate, JView, guardCall } from "./view";
 import { reportUncaught, stateSetMatches } from "./os";
+import { onMain } from "./mainloop";
 import { parseAXML, TV, type XmlNode, type XmlAttr } from "./axml";
 import { type Resources, type RV, AID, T_STR, normRV, rvFloat, rvInt } from "./res";
 
@@ -21,26 +22,74 @@ class JValueAnimator extends JObj {
   isInt = false;
   target: unknown = null; // ObjectAnimator
   propName = "";
+  /** an android.util.Property target (ObjectAnimator.ofFloat(Object, Property, ...)) */
+  prop: unknown = null;
   repeat = 0;
   frac = 0;
   delayMs = 0;
   /** a sequential AnimatorSet chains its children through here */
   next: JValueAnimator | null = null;
+  /** multi-keyframe numeric values (from/to mirror the first/last); object keyframes go with an evaluator */
+  keys: number[] | null = null;
+  objKeys: unknown[] | null = null;
+  evaluator: unknown = null;
+  interp: unknown = null;
+  repeatMode = 1; // RESTART
+  paused = false; pausedAt = 0;
+  reversed = false; startReversed = false;
+  /** ofPropertyValuesHolder: every holder is applied to the target each tick */
+  holders: JPVH[] = [];
 }
+/** the value at fraction t of a keyframe list, piecewise linear */
+function keyAt(keys: number[], t: number): number {
+  const n = keys.length;
+  if (n < 2) return keys[0] ?? 0;
+  const pos = t * (n - 1), i = Math.min(n - 2, Math.floor(pos)), f = pos - i;
+  return keys[i] + (keys[i + 1] - keys[i]) * f;
+}
+async function objAt(a: { objKeys: unknown[] | null; evaluator: unknown }, t: number): Promise<unknown> {
+  const keys = a.objKeys!, n = keys.length;
+  if (n < 2) return keys[0] ?? null;
+  const pos = t * (n - 1), i = Math.min(n - 2, Math.floor(pos)), f = pos - i;
+  return a.evaluator ? vcall(a.evaluator, "evaluate", "(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", Math.fround(f), keys[i], keys[i + 1]) : keys[i + 1];
+}
+/** AOSP's default AccelerateDecelerateInterpolator */
+const accelDecel = (t: number) => Math.cos((t + 1) * Math.PI) / 2 + 0.5;
 async function animTick(a: JValueAnimator): Promise<boolean> {
+  if (a.paused) return true;
   const el = performance.now() - a.startT - a.delayMs;
-  const t = el < 0 ? 0 : a.durationMs > 0 ? Math.min(1, el / a.durationMs) : 1;
+  let t: number, done = false;
+  if (el < 0) t = 0;
+  else if (a.durationMs <= 0) { t = 1; done = true; }
+  else {
+    const cycles = el / a.durationMs;
+    let iter = Math.floor(cycles);
+    t = cycles - iter;
+    // repeat: -1 is INFINITE; otherwise the animation ends after `repeat` extra cycles
+    if (a.repeat >= 0 && iter > a.repeat) { iter = a.repeat; t = 1; done = true; }
+    if (a.repeatMode === 2 && iter % 2 === 1) t = 1 - t;
+  }
+  if (a.reversed) t = 1 - t;
   a.frac = t;
-  const v = a.from + (a.to - a.from) * (1 - Math.pow(1 - t, 2));
-  a.cur = a.isInt ? Math.round(v) : v;
-  if (a.target && a.propName) {
-    await applyAnimProp(a.target, a.propName, a.cur as number);
+  const it = a.interp ? Math.fround(await vcall(a.interp, "getInterpolation", "(F)F", Math.fround(t))) : accelDecel(t);
+  if (a.objKeys) a.cur = await objAt(a, it);
+  else {
+    const v = a.keys ? keyAt(a.keys, it) : a.from + (a.to - a.from) * it;
+    a.cur = a.isInt ? Math.round(v) : v;
+  }
+  if (a.target) {
+    if (a.holders.length) for (const h of a.holders) await applyHolder(a.target, h, it);
+    else if (a.prop) await vcall(a.prop, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", a.target, boxedCur(a));
+    else if (a.propName) {
+      if (a.objKeys) await applyAnimObj(a.target, a.propName, a.cur);
+      else await applyAnimProp(a.target, a.propName, a.cur as number);
+    }
   }
   for (const l of a.updateLs) {
     try { await vcall(l, "onAnimationUpdate", "(Landroid/animation/ValueAnimator;)V", a); } catch (e) { reportUncaught(e); }
   }
   invalidate();
-  if (t >= 1) {
+  if (done) {
     a.running = false;
     for (const l of a.animLs) {
       try { await vcall(l, "onAnimationEnd", "(Landroid/animation/Animator;)V", a); } catch (e) { reportUncaught(e); }
@@ -49,6 +98,29 @@ async function animTick(a: JValueAnimator): Promise<boolean> {
     return false;
   }
   return true;
+}
+function boxedCur(a: { cur: unknown; isInt: boolean; objKeys: unknown[] | null }): unknown {
+  return a.objKeys ? a.cur : a.isInt ? boxInt(a.cur as number) : box(JFloat, a.cur as number);
+}
+/** ObjectAnimator.ofObject(target, "name", ...): the setter takes the evaluated object */
+async function applyAnimObj(target: unknown, prop: string, v: unknown) {
+  const setter = "set" + prop[0].toUpperCase() + prop.slice(1);
+  if (v && typeof v === "object" && "v" in (v as object)) {
+    const raw = (v as { v: unknown }).v;
+    if (typeof raw === "number") return applyAnimProp(target, prop, raw);
+  }
+  try { await vcall(target, setter, "(Ljava/lang/Object;)V", v); } catch { /* */ }
+}
+async function applyHolder(target: unknown, h: JPVH, t: number) {
+  if (h.objKeys) {
+    h.cur = await objAt(h, t);
+    if (h.prop) return vcall(h.prop, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", target, h.cur);
+    return applyAnimObj(target, h.name, h.cur);
+  }
+  const v = keyAt(h.keys ?? [0, 1], t);
+  h.cur = h.isInt ? Math.round(v) : v;
+  if (h.prop) return vcall(h.prop, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", target, boxedCur(h));
+  return applyAnimProp(target, h.name, h.cur as number);
 }
 /** the property's value now: what an XML animator with no valueFrom (or no valueTo) starts from */
 async function readAnimProp(target: unknown, prop: string): Promise<number> {
@@ -71,6 +143,87 @@ async function applyAnimProp(target: unknown, prop: string, v: number) {
     try { await vcall(target, setter, "(I)V", Math.round(v)); } catch { /* */ }
   }
 }
+/** one value = animate from the property's current value to it (AOSP: from is read at start) */
+function setNumKeys(a: { keys: number[] | null; from: number; to: number; isInt: boolean; objKeys: unknown[] | null }, v: ArrayLike<number>, isInt: boolean) {
+  a.isInt = isInt; a.objKeys = null;
+  if (v.length === 1) { a.keys = null; a.from = NaN; a.to = v[0]; return; }
+  a.keys = Array.from(v);
+  a.from = a.keys[0] ?? 0; a.to = a.keys[a.keys.length - 1] ?? 1;
+}
+// ── PropertyValuesHolder: one property's keyframes inside a multi-property animator
+class JPVH extends JObj {
+  name = ""; prop: unknown = null;
+  keys: number[] | null = null; from = 0; to = 1; isInt = false;
+  objKeys: unknown[] | null = null; evaluator: unknown = null;
+  cur: unknown = 0;
+}
+function pvhOf(name: string | unknown, v: ArrayLike<number> | null, isInt: boolean, byProp: boolean): JPVH {
+  const h = new JPVH();
+  if (byProp) { h.prop = name; h.name = (name as { name?: string })?.name ?? ""; } else h.name = name as string;
+  if (v) setNumKeys(h, v, isInt);
+  return h;
+}
+rt.register({
+  name: "android/animation/PropertyValuesHolder", ctor: JPVH, ifaces: ["java/lang/Cloneable"],
+  methods: {
+    "static ofFloat(Ljava/lang/String;[F)Landroid/animation/PropertyValuesHolder;": (n: string, v: Float32Array) => pvhOf(n, v, false, false),
+    "static ofInt(Ljava/lang/String;[I)Landroid/animation/PropertyValuesHolder;": (n: string, v: Int32Array) => pvhOf(n, v, true, false),
+    "static ofFloat(Landroid/util/Property;[F)Landroid/animation/PropertyValuesHolder;": (p: unknown, v: Float32Array) => pvhOf(p, v, false, true),
+    "static ofInt(Landroid/util/Property;[I)Landroid/animation/PropertyValuesHolder;": (p: unknown, v: Int32Array) => pvhOf(p, v, true, true),
+    "static ofObject(Ljava/lang/String;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/PropertyValuesHolder;": (n: string, e: unknown, v: unknown[]) => {
+      const h = pvhOf(n, null, false, false); h.evaluator = e; h.objKeys = [...(v ?? [])]; return h;
+    },
+    "static ofObject(Landroid/util/Property;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/PropertyValuesHolder;": (p: unknown, e: unknown, v: unknown[]) => {
+      const h = pvhOf(p, null, false, true); h.evaluator = e; h.objKeys = [...(v ?? [])]; return h;
+    },
+    "getPropertyName()Ljava/lang/String;": function (this: JPVH) { return this.name; },
+    "setPropertyName(Ljava/lang/String;)V": function (this: JPVH, n: string) { this.name = n; },
+    "setFloatValues([F)V": function (this: JPVH, v: Float32Array) { setNumKeys(this, v, false); },
+    "setIntValues([I)V": function (this: JPVH, v: Int32Array) { setNumKeys(this, v, true); },
+    "setObjectValues([Ljava/lang/Object;)V": function (this: JPVH, v: unknown[]) { this.objKeys = [...v]; },
+    "setEvaluator(Landroid/animation/TypeEvaluator;)V": function (this: JPVH, e: unknown) { this.evaluator = e; },
+    "clone()Landroid/animation/PropertyValuesHolder;": function (this: JPVH) { return Object.assign(new JPVH(), this); },
+    "toString()Ljava/lang/String;": function (this: JPVH) { return this.name + ": " + (this.keys ?? this.objKeys ?? [this.from, this.to]).join(", "); },
+  },
+});
+// ── TypeEvaluators
+rt.register({ name: "android/animation/TypeEvaluator", ctor: class extends JObj {} });
+const lerp = (f: number, a: number, b: number) => a + (b - a) * f;
+rt.register({
+  name: "android/animation/FloatEvaluator", ctor: class extends JObj {}, ifaces: ["android/animation/TypeEvaluator"],
+  methods: {
+    "<init>()V": function () {},
+    "evaluate(FLjava/lang/Number;Ljava/lang/Number;)Ljava/lang/Float;": (f: number, a: { v: number }, b: { v: number }) => box(JFloat, Math.fround(lerp(f, Number(a.v), Number(b.v)))),
+    "evaluate(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": (f: number, a: { v: number }, b: { v: number }) => box(JFloat, Math.fround(lerp(f, Number(a.v), Number(b.v)))),
+  },
+});
+rt.register({
+  name: "android/animation/IntEvaluator", ctor: class extends JObj {}, ifaces: ["android/animation/TypeEvaluator"],
+  methods: {
+    "<init>()V": function () {},
+    "evaluate(FLjava/lang/Integer;Ljava/lang/Integer;)Ljava/lang/Integer;": (f: number, a: { v: number }, b: { v: number }) => boxInt(Math.trunc(lerp(f, a.v, b.v))),
+    "evaluate(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": (f: number, a: { v: number }, b: { v: number }) => boxInt(Math.trunc(lerp(f, a.v, b.v))),
+  },
+});
+/** AOSP ArgbEvaluator: per-channel interpolation in linear light (gamma 2.2), alpha linear */
+export function argbLerp(f: number, s: number, e: number): number {
+  const ch = (c: number, sh: number) => ((c >>> sh) & 0xff) / 255;
+  const lin = (c: number) => Math.pow(c, 2.2), gam = (c: number) => Math.pow(c, 1 / 2.2);
+  const a = lerp(f, ch(s, 24), ch(e, 24));
+  const r = gam(lerp(f, lin(ch(s, 16)), lin(ch(e, 16))));
+  const g = gam(lerp(f, lin(ch(s, 8)), lin(ch(e, 8))));
+  const b = gam(lerp(f, lin(ch(s, 0)), lin(ch(e, 0))));
+  return ((Math.round(a * 255) << 24) | (Math.round(r * 255) << 16) | (Math.round(g * 255) << 8) | Math.round(b * 255)) | 0;
+}
+class JArgbEvaluator extends JObj {}
+const argbEvaluator = new JArgbEvaluator();
+rt.register({
+  name: "android/animation/ArgbEvaluator", ctor: JArgbEvaluator, ifaces: ["android/animation/TypeEvaluator"],
+  methods: {
+    "<init>()V": function () {},
+    "evaluate(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": (f: number, a: { v: number }, b: { v: number }) => boxInt(argbLerp(f, a.v, b.v)),
+  },
+});
 function setDur(this: JValueAnimator, d: bigint) {
   this.durationMs = Number(d);
   return this;
@@ -80,13 +233,70 @@ const vaMethods: NativeSpec["methods"] = {
   "setDuration(J)Landroid/animation/ValueAnimator;": setDur,
   "setDuration(J)Landroid/animation/Animator;": setDur,
   "getDuration()J": function (this: JValueAnimator) { return BigInt(this.durationMs); },
-  "setInterpolator(Landroid/animation/TimeInterpolator;)V": () => {},
-  "setInterpolator(Landroid/view/animation/Interpolator;)V": () => {},
+  "setInterpolator(Landroid/animation/TimeInterpolator;)V": function (this: JValueAnimator, i: unknown) { this.interp = i; },
+  "setInterpolator(Landroid/view/animation/Interpolator;)V": function (this: JValueAnimator, i: unknown) { this.interp = i; },
+  "getInterpolator()Landroid/animation/TimeInterpolator;": function (this: JValueAnimator) { return this.interp; },
+  "getRepeatCount()I": function (this: JValueAnimator) { return this.repeat; },
+  "getRepeatMode()I": function (this: JValueAnimator) { return this.repeatMode; },
+  "getTotalDuration()J": function (this: JValueAnimator) { return this.repeat < 0 ? -1n : BigInt(this.delayMs + this.durationMs * (this.repeat + 1)); },
+  "setFloatValues([F)V": function (this: JValueAnimator, v: Float32Array) { setNumKeys(this, v, false); },
+  "setIntValues([I)V": function (this: JValueAnimator, v: Int32Array) { setNumKeys(this, v, true); },
+  "setObjectValues([Ljava/lang/Object;)V": function (this: JValueAnimator, v: unknown[]) { this.objKeys = [...v]; },
+  "setEvaluator(Landroid/animation/TypeEvaluator;)V": function (this: JValueAnimator, e: unknown) { this.evaluator = e; },
+  "removeListener(Landroid/animation/Animator$AnimatorListener;)V": function (this: JValueAnimator, l: unknown) {
+    const i = this.animLs.indexOf(l); if (i >= 0) this.animLs.splice(i, 1);
+  },
+  "removeUpdateListener(Landroid/animation/ValueAnimator$AnimatorUpdateListener;)V": function (this: JValueAnimator, l: unknown) {
+    const i = this.updateLs.indexOf(l); if (i >= 0) this.updateLs.splice(i, 1);
+  },
+  "getListeners()Ljava/util/ArrayList;": function (this: JValueAnimator) { return this.animLs.length ? newArrayList([...this.animLs]) : null; },
+  "addPauseListener(Landroid/animation/Animator$AnimatorPauseListener;)V": () => {},
+  "pause()V": function (this: JValueAnimator) { if (this.running && !this.paused) { this.paused = true; this.pausedAt = performance.now(); } },
+  "resume()V": function (this: JValueAnimator) { if (this.paused) { this.paused = false; this.startT += performance.now() - this.pausedAt; } },
+  "isPaused()Z": function (this: JValueAnimator) { return this.paused ? 1 : 0; },
+  "reverse()V": async function (this: JValueAnimator) {
+    if (this.running) { this.reversed = !this.reversed; this.startT = performance.now() - (this.durationMs - (performance.now() - this.startT)); return; }
+    this.startReversed = true;
+    await guardCall((this as any)[M_start], this);
+  },
+  "setCurrentPlayTime(J)V": function (this: JValueAnimator, t: bigint) { this.startT = performance.now() - Number(t); },
+  "getCurrentPlayTime()J": function (this: JValueAnimator) { return BigInt(Math.max(0, Math.round(performance.now() - this.startT))); },
+  "setCurrentFraction(F)V": function (this: JValueAnimator, f: number) { this.startT = performance.now() - f * this.durationMs; },
+  "getValues()[Landroid/animation/PropertyValuesHolder;": function (this: JValueAnimator) {
+    if (!this.holders.length) { const h = new JPVH(); h.name = this.propName; h.keys = this.keys ?? [this.from, this.to]; h.isInt = this.isInt; h.objKeys = this.objKeys; h.evaluator = this.evaluator; this.holders = [h]; }
+    return jarray([...this.holders], "Landroid/animation/PropertyValuesHolder;");
+  },
+  "getAnimatedValue(Ljava/lang/String;)Ljava/lang/Object;": function (this: JValueAnimator, name: string) {
+    const h = this.holders.find((h) => h.name === name);
+    return h ? boxedCur(h) : boxedCur(this);
+  },
+  "static areAnimatorsEnabled()Z": () => 1,
+  "static getDurationScale()F": () => 1,
+  "static setDurationScale(F)V": () => {},
+  "static getFrameDelay()J": () => 10n,
+  "static setFrameDelay(J)V": () => {},
+  "static registerDurationScaleChangeListener(Landroid/animation/ValueAnimator$DurationScaleChangeListener;)Z": () => 1,
+  "static unregisterDurationScaleChangeListener(Landroid/animation/ValueAnimator$DurationScaleChangeListener;)Z": () => 1,
+  "static ofObject(Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/ValueAnimator;": (ev: unknown, vals: unknown[]) => {
+    const a = new JValueAnimator();
+    a.evaluator = ev; a.objKeys = [...(vals ?? [])];
+    return a;
+  },
+  "static ofPropertyValuesHolder([Landroid/animation/PropertyValuesHolder;)Landroid/animation/ValueAnimator;": (hs: JPVH[]) => {
+    const a = new JValueAnimator();
+    a.holders = [...(hs ?? [])];
+    return a;
+  },
+  "clone()Landroid/animation/ValueAnimator;": function (this: JValueAnimator) {
+    const c = new (this.constructor as any)() as JValueAnimator;
+    Object.assign(c, this, { running: false, paused: false, updateLs: [...this.updateLs], animLs: [...this.animLs], holders: [...this.holders] });
+    return c;
+  },
   "setStartDelay(J)V": function (this: JValueAnimator, d: bigint) { this.delayMs = Number(d); },
   "getStartDelay()J": function (this: JValueAnimator) { return BigInt(this.delayMs); },
   "setTarget(Ljava/lang/Object;)V": function (this: JValueAnimator, t: unknown) { setTargetDeep(this, t); },
   "setRepeatCount(I)V": function (this: JValueAnimator, n: number) { this.repeat = n; },
-  "setRepeatMode(I)V": () => {},
+  "setRepeatMode(I)V": function (this: JValueAnimator, m: number) { this.repeatMode = m; },
   "addUpdateListener(Landroid/animation/ValueAnimator$AnimatorUpdateListener;)V": function (this: JValueAnimator, l: unknown) {
     this.updateLs.push(l);
   },
@@ -96,20 +306,25 @@ const vaMethods: NativeSpec["methods"] = {
   "removeAllListeners()V": function (this: JValueAnimator) { this.animLs.length = 0; },
   "removeAllUpdateListeners()V": function (this: JValueAnimator) { this.updateLs.length = 0; },
   "start()V": async function (this: JValueAnimator) {
-    if (this.target && (Number.isNaN(this.from) || Number.isNaN(this.to))) {
-      const cur = await readAnimProp(this.target, this.propName);
+    if (Number.isNaN(this.from) || Number.isNaN(this.to)) {
+      // a single value animates from the property's current value (ValueAnimator: from 0)
+      const cur = this.target ? await readAnimProp(this.target, this.propName) : 0;
       if (Number.isNaN(this.from)) this.from = cur;
       if (Number.isNaN(this.to)) this.to = cur;
     }
+    this.reversed = this.startReversed;
+    this.startReversed = false;
     this.startT = performance.now();
     this.running = true;
     for (const l of this.animLs) {
       try { await vcall(l, "onAnimationStart", "(Landroid/animation/Animator;)V", this); } catch (e) { reportUncaught(e); }
     }
     const self = this;
+    // one serialized main-looper job per tick, never a floating chain (see ViewPropertyAnimator)
+    let inflight = false;
     const hook = () => {
       if (!self.running) return false;
-      void animTick(self);
+      if (!inflight) { inflight = true; void onMain(() => animTick(self)).finally(() => { inflight = false; }); }
       return self.running;
     };
     uiState.animHooks.add(hook);
@@ -124,21 +339,13 @@ const vaMethods: NativeSpec["methods"] = {
   "end()V": function (this: JValueAnimator) { this.running = false; },
   "isRunning()Z": function (this: JValueAnimator) { return this.running ? 1 : 0; },
   "isStarted()Z": function (this: JValueAnimator) { return this.running ? 1 : 0; },
-  "getAnimatedValue()Ljava/lang/Object;": function (this: JValueAnimator) {
-    return this.isInt ? boxInt(this.cur as number) : box(JFloat, this.cur as number);
-  },
+  "getAnimatedValue()Ljava/lang/Object;": function (this: JValueAnimator) { return boxedCur(this); },
   "getAnimatedFraction()F": function (this: JValueAnimator) { return this.frac; },
-  "static ofFloat([F)Landroid/animation/ValueAnimator;": (vals: Float32Array) => {
+  "static ofFloat([F)Landroid/animation/ValueAnimator;": (vals: Float32Array) => { const a = new JValueAnimator(); setNumKeys(a, vals, false); return a; },
+  "static ofInt([I)Landroid/animation/ValueAnimator;": (vals: Int32Array) => { const a = new JValueAnimator(); setNumKeys(a, vals, true); return a; },
+  "static ofArgb([I)Landroid/animation/ValueAnimator;": (vals: Int32Array) => {
     const a = new JValueAnimator();
-    a.from = vals[0] ?? 0;
-    a.to = vals[vals.length - 1] ?? 1;
-    return a;
-  },
-  "static ofInt([I)Landroid/animation/ValueAnimator;": (vals: Int32Array) => {
-    const a = new JValueAnimator();
-    a.from = vals[0] ?? 0;
-    a.to = vals[vals.length - 1] ?? 1;
-    a.isInt = true;
+    a.evaluator = argbEvaluator; a.objKeys = Array.from(vals, boxInt);
     return a;
   },
 };
@@ -156,8 +363,7 @@ rt.register({
         const a = new (rt.link("android/animation/ObjectAnimator").ctor)();
         a.target = target;
         a.propName = prop;
-        a.from = vals.length > 1 ? vals[0] : 0;
-        a.to = vals[vals.length - 1] ?? 0;
+        setNumKeys(a, vals, false);
         return a;
       },
     "static ofInt(Ljava/lang/Object;Ljava/lang/String;[I)Landroid/animation/ObjectAnimator;":
@@ -165,12 +371,52 @@ rt.register({
         const a = new (rt.link("android/animation/ObjectAnimator").ctor)();
         a.target = target;
         a.propName = prop;
-        a.isInt = true;
-        a.from = vals.length > 1 ? vals[0] : 0;
-        a.to = vals[vals.length - 1] ?? 0;
+        setNumKeys(a, vals, true);
+        return a;
+      },
+    "static ofFloat(Ljava/lang/Object;Landroid/util/Property;[F)Landroid/animation/ObjectAnimator;":
+      (target: unknown, prop: unknown, vals: Float32Array) => {
+        const a = new (rt.link("android/animation/ObjectAnimator").ctor)();
+        a.target = target;
+        a.prop = prop;
+        setNumKeys(a, vals, false);
+        return a;
+      },
+    "static ofInt(Ljava/lang/Object;Landroid/util/Property;[I)Landroid/animation/ObjectAnimator;":
+      (target: unknown, prop: unknown, vals: Int32Array) => {
+        const a = new (rt.link("android/animation/ObjectAnimator").ctor)();
+        a.target = target;
+        a.prop = prop;
+        setNumKeys(a, vals, true);
         return a;
       },
     "setPropertyName(Ljava/lang/String;)V": function (this: any, p: string) { this.propName = p; },
+    "getPropertyName()Ljava/lang/String;": function (this: JValueAnimator) { return this.propName || (this.prop as { name?: string })?.name || (this.holders[0]?.name ?? null); },
+    "setProperty(Landroid/util/Property;)V": function (this: any, p: unknown) { this.prop = p; },
+    "setAutoCancel(Z)V": () => {},
+    "getTarget()Ljava/lang/Object;": function (this: JValueAnimator) { return this.target; },
+    "static ofArgb(Ljava/lang/Object;Ljava/lang/String;[I)Landroid/animation/ObjectAnimator;": (target: unknown, prop: string, vals: Int32Array) => {
+      const a = new (rt.link("android/animation/ObjectAnimator").ctor)() as JValueAnimator;
+      a.target = target; a.propName = prop; a.evaluator = argbEvaluator; a.objKeys = Array.from(vals, boxInt);
+      return a;
+    },
+    "static ofObject(Ljava/lang/Object;Ljava/lang/String;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/ObjectAnimator;": (target: unknown, prop: string, ev: unknown, vals: unknown[]) => {
+      const a = new (rt.link("android/animation/ObjectAnimator").ctor)() as JValueAnimator;
+      a.target = target; a.propName = prop; a.evaluator = ev; a.objKeys = [...(vals ?? [])];
+      return a;
+    },
+    "static ofObject(Ljava/lang/Object;Landroid/util/Property;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/ObjectAnimator;": (target: unknown, prop: unknown, ev: unknown, vals: unknown[]) => {
+      const a = new (rt.link("android/animation/ObjectAnimator").ctor)() as JValueAnimator;
+      a.target = target; a.prop = prop; a.evaluator = ev; a.objKeys = [...(vals ?? [])];
+      return a;
+    },
+    "static ofPropertyValuesHolder(Ljava/lang/Object;[Landroid/animation/PropertyValuesHolder;)Landroid/animation/ObjectAnimator;": (target: unknown, hs: JPVH[]) => {
+      const a = new (rt.link("android/animation/ObjectAnimator").ctor)() as JValueAnimator;
+      a.target = target; a.holders = [...(hs ?? [])];
+      return a;
+    },
+    "setFloatValues([F)V": function (this: JValueAnimator, v: Float32Array) { setNumKeys(this, v, false); },
+    "setIntValues([I)V": function (this: JValueAnimator, v: Int32Array) { setNumKeys(this, v, true); },
   },
 });
 class JAnimatorSet extends JValueAnimator { anims: JValueAnimator[] = []; sequential = false; }
@@ -204,8 +450,74 @@ rt.register({
     },
     "cancel()V": async function (this: JAnimatorSet) { this.running = false; for (const a of this.anims) await guardCall((a as any)[M_cancel], a); },
     "end()V": function (this: JAnimatorSet) { this.running = false; for (const a of this.anims) a.running = false; },
+    "play(Landroid/animation/Animator;)Landroid/animation/AnimatorSet$Builder;": function (this: JAnimatorSet, a: JValueAnimator) {
+      const b = new JAnimatorSetBuilder(); b.set = this; b.anchor = a;
+      if (!this.anims.includes(a)) this.anims.push(a);
+      return b;
+    },
+    "getTotalDuration()J": function (this: JAnimatorSet) {
+      const d = this.sequential ? this.anims.reduce((s, a) => s + a.delayMs + a.durationMs, 0) : Math.max(0, ...this.anims.map((a) => a.delayMs + a.durationMs));
+      return BigInt(this.delayMs + d);
+    },
+    "reverse()V": async function (this: JAnimatorSet) { for (const a of [...this.anims].reverse()) await vcall(a, "reverse", "()V"); },
+    "setCurrentPlayTime(J)V": function (this: JAnimatorSet, t: bigint) { for (const a of this.anims) a.startT = performance.now() - Number(t); },
+    "setInterpolator(Landroid/animation/TimeInterpolator;)V": function (this: JAnimatorSet, i: unknown) { this.interp = i; for (const a of this.anims) a.interp = i; },
+    "isRunning()Z": function (this: JAnimatorSet) { return this.running || this.anims.some((a) => a.running) ? 1 : 0; },
   },
 });
+// AnimatorSet.Builder: with() plays together, before()/after() chain through `next`; a set
+// built this way plays its anchor group together and the chained ones in order.
+class JAnimatorSetBuilder extends JObj { set: JAnimatorSet | null = null; anchor: JValueAnimator | null = null; }
+rt.register({
+  name: "android/animation/AnimatorSet$Builder", ctor: JAnimatorSetBuilder,
+  methods: {
+    "with(Landroid/animation/Animator;)Landroid/animation/AnimatorSet$Builder;": function (this: JAnimatorSetBuilder, a: JValueAnimator) {
+      if (!this.set!.anims.includes(a)) this.set!.anims.push(a);
+      return this;
+    },
+    "before(Landroid/animation/Animator;)Landroid/animation/AnimatorSet$Builder;": function (this: JAnimatorSetBuilder, a: JValueAnimator) {
+      this.anchor!.next = a;
+      const i = this.set!.anims.indexOf(a); if (i >= 0) this.set!.anims.splice(i, 1);
+      return this;
+    },
+    "after(Landroid/animation/Animator;)Landroid/animation/AnimatorSet$Builder;": function (this: JAnimatorSetBuilder, a: JValueAnimator) {
+      a.next = this.anchor;
+      if (!this.set!.anims.includes(a)) this.set!.anims.push(a);
+      const i = this.set!.anims.indexOf(this.anchor!); if (i >= 0) this.set!.anims.splice(i, 1);
+      return this;
+    },
+    "after(J)Landroid/animation/AnimatorSet$Builder;": function (this: JAnimatorSetBuilder, d: bigint) { this.anchor!.delayMs += Number(d); return this; },
+  },
+});
+// ── LayoutTransition: the ViewGroup add/remove/change choreography. Our ViewGroups commit
+// layout changes instantly, so this keeps the configuration and reports it back.
+class JLayoutTransition extends JObj { enabled = new Set([0, 1, 2, 3]); durations = new Map<number, number>(); listeners: unknown[] = []; }
+rt.register({
+  name: "android/animation/LayoutTransition", ctor: JLayoutTransition,
+  statics: { CHANGE_APPEARING: 0, CHANGE_DISAPPEARING: 1, APPEARING: 2, DISAPPEARING: 3, CHANGING: 4 },
+  methods: {
+    "<init>()V": function () {},
+    "enableTransitionType(I)V": function (this: JLayoutTransition, t: number) { this.enabled.add(t); },
+    "disableTransitionType(I)V": function (this: JLayoutTransition, t: number) { this.enabled.delete(t); },
+    "isTransitionTypeEnabled(I)Z": function (this: JLayoutTransition, t: number) { return this.enabled.has(t) ? 1 : 0; },
+    "setDuration(J)V": function (this: JLayoutTransition, d: bigint) { for (let t = 0; t < 5; t++) this.durations.set(t, Number(d)); },
+    "setDuration(IJ)V": function (this: JLayoutTransition, t: number, d: bigint) { this.durations.set(t, Number(d)); },
+    "getDuration(I)J": function (this: JLayoutTransition, t: number) { return BigInt(this.durations.get(t) ?? 300); },
+    "setStartDelay(IJ)V": () => {},
+    "setStagger(IJ)V": () => {},
+    "setInterpolator(ILandroid/animation/TimeInterpolator;)V": () => {},
+    "setAnimator(ILandroid/animation/Animator;)V": () => {},
+    "getAnimator(I)Landroid/animation/Animator;": () => null,
+    "setAnimateParentHierarchy(Z)V": () => {},
+    "addTransitionListener(Landroid/animation/LayoutTransition$TransitionListener;)V": function (this: JLayoutTransition, l: unknown) { this.listeners.push(l); },
+    "removeTransitionListener(Landroid/animation/LayoutTransition$TransitionListener;)V": function (this: JLayoutTransition, l: unknown) { const i = this.listeners.indexOf(l); if (i >= 0) this.listeners.splice(i, 1); },
+    "isRunning()Z": () => 0,
+    "isChangingLayout()Z": () => 0,
+  },
+});
+rt.register({ name: "android/animation/LayoutTransition$TransitionListener", ctor: class extends JObj {} });
+rt.register({ name: "android/animation/Animator$AnimatorPauseListener", ctor: class extends JObj {} });
+rt.register({ name: "android/animation/ValueAnimator$DurationScaleChangeListener", ctor: class extends JObj {} });
 const M_start = mangleMethod("start", "()V");
 const M_cancel = mangleMethod("cancel", "()V");
 

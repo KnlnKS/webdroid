@@ -282,25 +282,50 @@ rt.register({
     "close()V": function () {},
   },
 });
-class JBAOS extends JOutputStream {}
-function baosString(this: JBAOS) { return new TextDecoder().decode(new Uint8Array(this.chunks)); }
+// ByteArrayOutputStream keeps AOSP's protected `buf`/`count` as real fields: subclasses (pooled
+// buffers, size probes) swap the array and read the count directly, so the bytes live in the
+// Int8Array itself rather than in the base stream's chunk list.
+class JBAOS extends JOutputStream {
+  buf = new Int8Array(32);
+  count = 0;
+  grow(min: number) {
+    if (min <= this.buf.length) return;
+    const nb = new Int8Array(Math.max(min, this.buf.length * 2));
+    nb.set(this.buf.subarray(0, this.count));
+    this.buf = nb;
+  }
+  bytes(): Uint8Array { return new Uint8Array(this.buf.buffer, this.buf.byteOffset, this.count); }
+}
+function baosString(this: JBAOS) { return new TextDecoder().decode(this.bytes()); }
 rt.register({
   name: "java/io/ByteArrayOutputStream", ctor: JBAOS, sup: "java/io/OutputStream",
-  fields: { count: "countProp" },
+  fields: { buf: "buf", count: "count" },
   methods: {
     "<init>()V": function () {},
-    "<init>(I)V": function () {},
-    "toByteArray()[B": function (this: JBAOS) { return new Int8Array(this.chunks); },
-    "size()I": function (this: JBAOS) { return this.chunks.length; },
-    "reset()V": function (this: JBAOS) { this.chunks.length = 0; },
+    "<init>(I)V": function (this: JBAOS, n: number) {
+      if (n < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Negative initial size: " + n);
+      this.buf = new Int8Array(n);
+    },
+    "write(I)V": function (this: JBAOS, b: number) { this.grow(this.count + 1); this.buf[this.count++] = b; },
+    "write([BII)V": function (this: JBAOS, b: Int8Array, off: number, len: number) {
+      if (off < 0 || len < 0 || off + len > b.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      this.grow(this.count + len);
+      this.buf.set(b.subarray(off, off + len), this.count);
+      this.count += len;
+    },
+    "writeBytes([B)V": function (this: JBAOS, b: Int8Array) { this.grow(this.count + b.length); this.buf.set(b, this.count); this.count += b.length; },
+    "toByteArray()[B": function (this: JBAOS) { return this.buf.slice(0, this.count); },
+    "size()I": function (this: JBAOS) { return this.count; },
+    "reset()V": function (this: JBAOS) { this.count = 0; },
     "toString()Ljava/lang/String;": baosString,
     "toString(Ljava/lang/String;)Ljava/lang/String;": baosString,
+    "toString(Ljava/nio/charset/Charset;)Ljava/lang/String;": baosString,
     "writeTo(Ljava/io/OutputStream;)V": async function (this: JBAOS, out: unknown) {
-      await vcall(out, "write", "([BII)V", new Int8Array(this.chunks), 0, this.chunks.length);
+      await vcall(out, "write", "([BII)V", this.buf, 0, this.count);
     },
+    "close()V": function () {},
   },
 });
-Object.defineProperty(JBAOS.prototype, "countProp", { get(this: JBAOS) { return this.chunks.length; } });
 
 rt.register({
   name: "java/io/FileOutputStream", ctor: class extends JOutputStream { fpath = ""; append = false; }, sup: "java/io/OutputStream",

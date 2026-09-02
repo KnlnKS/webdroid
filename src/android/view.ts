@@ -7,7 +7,7 @@ import { device } from "../shell/config";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, idHash } from "../jvm/natives/jlang";
 import { JCanvas, JRect, setInvalidateHook, JMatrix } from "./graphics";
-import { JDrawable, ST, loadDrawableRV, JColorDrawable, loadDrawable } from "./drawable";
+import { JDrawable, ST, loadDrawableRV, JColorDrawable, loadDrawable, type JColorStateList, cslColor } from "./drawable";
 import { reportUncaught, mainHandler, type JDisplayMetrics } from "./os";
 import { onMain } from "./mainloop";
 import { type Resources, JTheme, JAttrSet, AID, obtainStyled, rvDimen, rvInt, rvString } from "./res";
@@ -108,6 +108,7 @@ const M_onAttached = mangleMethod("onAttachedToWindow", "()V");
 const M_onDetached = mangleMethod("onDetachedFromWindow", "()V");
 const M_onConfigChanged = mangleMethod("onConfigurationChanged", "(Landroid/content/res/Configuration;)V");
 const M_drawableStateChanged = mangleMethod("drawableStateChanged", "()V");
+const M_setBounds = mangleMethod("setBounds", "(IIII)V");
 
 /** absolute position of v's top-left: translations applied, each ancestor's scroll removed */
 export function locationOnScreen(v: JView): [number, number] {
@@ -177,6 +178,9 @@ export class JView extends JObj {
   layerType = 0;
   elevationV = 0;
   longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  nestedScrolling = false; transientState = 0; textAlignment = 1;
+  clipBounds: JRect | null = null; bgTint: JColorStateList | null = null;
+  focusChangeL: unknown = null; keyL: unknown = null; tooltip: unknown = null;
   win: unknown = null; // ViewRootImpl-ish owner
 
   width(): number { return this.right - this.left; }
@@ -362,8 +366,9 @@ export async function drawView(v: JView, cv: JCanvas) {
     ctx.clip();
     if (v.surfaceLayer) ctx.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
     else if (v.background) {
-      v.background.bounds.left = 0; v.background.bounds.top = 0;
-      v.background.bounds.right = v.width(); v.background.bounds.bottom = v.height();
+      // through setBounds, not the fields: AOSP's onBoundsChange is where wrapper/shape drawables
+      // (and app subclasses) rebuild their geometry, and it only fires on a real change
+      await guardCall((v.background as any)[M_setBounds], v.background, 0, 0, v.width(), v.height());
       await guardCall((v.background as any)[M_drawableDraw], v.background, cv);
     }
     ctx.translate(-v.scrollX, -v.scrollY);
@@ -511,6 +516,7 @@ const viewMethods: NativeSpec["methods"] = {
   "isClickable()Z": function (this: JView) { return this.clickable ? 1 : 0; },
   "setClickable(Z)V": function (this: JView, c: number) { this.clickable = !!c; },
   "setLongClickable(Z)V": function (this: JView, c: number) { this.longClickable = !!c; },
+  "isLongClickable()Z": function (this: JView) { return this.longClickable ? 1 : 0; },
   "isPressed()Z": function (this: JView) { return this.pressed ? 1 : 0; },
   "setPressed(Z)V": function (this: JView, p: number) { this.pressed = !!p; void this.refreshDrawableState(); },
   "isSelected()Z": function (this: JView) { return this.selected ? 1 : 0; },
@@ -828,7 +834,7 @@ const viewMethods: NativeSpec["methods"] = {
   "onKeyUp(ILandroid/view/KeyEvent;)Z": () => 0,
   "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": () => 0,
   "dispatchGenericMotionEvent(Landroid/view/MotionEvent;)Z": () => 0,
-  "onSaveInstanceState()Landroid/os/Parcelable;": () => null,
+  "onSaveInstanceState()Landroid/os/Parcelable;": () => EMPTY_STATE,
   "onRestoreInstanceState(Landroid/os/Parcelable;)V": () => {},
   "saveHierarchyState(Landroid/util/SparseArray;)V": () => {},
   "restoreHierarchyState(Landroid/util/SparseArray;)V": () => {},
@@ -895,7 +901,117 @@ const viewMethods: NativeSpec["methods"] = {
     const info = rt.link("android/view/Display");
     return new info.ctor();
   },
-  "setNestedScrollingEnabled(Z)V": () => {},
+  "setNestedScrollingEnabled(Z)V": function (this: JView, v: number) { this.nestedScrolling = !!v; },
+  "isNestedScrollingEnabled()Z": function (this: JView) { return this.nestedScrolling ? 1 : 0; },
+  "stopNestedScroll()V": () => {},
+  "isInLayout()Z": () => 0,
+  "hasTransientState()Z": function (this: JView) { return this.transientState > 0 ? 1 : 0; },
+  "setHasTransientState(Z)V": function (this: JView, v: number) { this.transientState = Math.max(0, this.transientState + (v ? 1 : -1)); },
+  "getMeasuredState()I": () => 0,
+  "static combineMeasuredStates(II)I": (a: number, b: number) => a | b,
+  "getPivotX()F": function (this: JView) { return this.pivotXv ?? this.width() / 2; },
+  "getPivotY()F": function (this: JView) { return this.pivotYv ?? this.height() / 2; },
+  "getTranslationZ()F": function (this: JView) { return this.translationZ; },
+  "getZ()F": function (this: JView) { return this.elevationV + this.translationZ; },
+  "setRotationX(F)V": () => {},
+  "setRotationY(F)V": () => {},
+  "getRotationX()F": () => 0,
+  "getRotationY()F": () => 0,
+  "getTransitionAlpha()F": () => 1,
+  "setTransitionAlpha(F)V": () => {},
+  "setTransitionVisibility(I)V": function (this: JView, v: number) { this.visibility = v; invalidate(); },
+  "getClipBounds()Landroid/graphics/Rect;": function (this: JView) { return this.clipBounds; },
+  "setClipBounds(Landroid/graphics/Rect;)V": function (this: JView, r: JRect | null) { this.clipBounds = r; invalidate(); },
+  "getClipToOutline()Z": () => 0,
+  "invalidateOutline()V": () => { invalidate(); },
+  "getBackgroundTintList()Landroid/content/res/ColorStateList;": function (this: JView) { return this.bgTint; },
+  "setBackgroundTintList(Landroid/content/res/ColorStateList;)V": function (this: JView, csl: JColorStateList | null) {
+    this.bgTint = csl;
+    if (this.background) this.background.tint = csl ? cslColor(csl, this.drawableState()) : null;
+    invalidate();
+  },
+  "setBackgroundTintMode(Landroid/graphics/PorterDuff$Mode;)V": () => {},
+  "getBackgroundTintMode()Landroid/graphics/PorterDuff$Mode;": () => null,
+  "getDrawingRect(Landroid/graphics/Rect;)V": function (this: JView, r: JRect) {
+    r.left = this.scrollX; r.top = this.scrollY; r.right = this.scrollX + this.width(); r.bottom = this.scrollY + this.height();
+  },
+  "getFocusedRect(Landroid/graphics/Rect;)V": function (this: JView, r: JRect) {
+    r.left = this.scrollX; r.top = this.scrollY; r.right = this.scrollX + this.width(); r.bottom = this.scrollY + this.height();
+  },
+  "getGlobalVisibleRect(Landroid/graphics/Rect;Landroid/graphics/Point;)Z": function (this: JView, r: JRect, off: { x: number; y: number } | null) {
+    const [x, y] = locationOnScreen(this);
+    r.left = x; r.top = y; r.right = x + this.width(); r.bottom = y + this.height();
+    if (off) { off.x = x - this.left; off.y = y - this.top; }
+    return 1;
+  },
+  "getWindowVisibleDisplayFrame(Landroid/graphics/Rect;)V": function (this: JView, r: JRect) {
+    let root: JView = this;
+    while (root.parent) root = root.parent;
+    r.left = 0; r.top = device.statusBar; r.right = root.width() || device.width; r.bottom = device.statusBar + (root.height() || device.height - device.statusBar);
+  },
+  "bringToFront()V": function (this: JView) {
+    const p = this.parent as JViewGroup | null;
+    if (!p) return;
+    const i = p.children.indexOf(this);
+    if (i >= 0) { p.children.splice(i, 1); p.children.push(this); invalidate(); }
+  },
+  "setOnFocusChangeListener(Landroid/view/View$OnFocusChangeListener;)V": function (this: JView, l: unknown) { this.focusChangeL = l; },
+  "getOnFocusChangeListener()Landroid/view/View$OnFocusChangeListener;": function (this: JView) { return this.focusChangeL; },
+  "setOnKeyListener(Landroid/view/View$OnKeyListener;)V": function (this: JView, l: unknown) { this.keyL = l; },
+  "setOnHoverListener(Landroid/view/View$OnHoverListener;)V": () => {},
+  "setTooltipText(Ljava/lang/CharSequence;)V": function (this: JView, t: unknown) { this.tooltip = t; },
+  "getTooltipText()Ljava/lang/CharSequence;": function (this: JView) { return this.tooltip; },
+  "setTextAlignment(I)V": function (this: JView, a: number) { this.textAlignment = a; },
+  "getTextAlignment()I": function (this: JView) { return this.textAlignment; },
+  "hasOverlappingRendering()Z": () => 1,
+  "hasFocusable()Z": function (this: JView) { return this.visibility === 0 && (this.focusable || this.focusableInTouchMode) ? 1 : 0; },
+  "isHovered()Z": () => 0,
+  "isAccessibilityFocused()Z": () => 0,
+  "isDuplicateParentStateEnabled()Z": () => 0,
+  "isLayoutDirectionResolved()Z": () => 1,
+  "getAccessibilityLiveRegion()I": () => 0,
+  "getVerticalFadingEdgeLength()I": () => 0,
+  "setVerticalFadingEdgeEnabled(Z)V": () => {},
+  "setScrollbarFadingEnabled(Z)V": () => {},
+  "setScrollIndicators(II)V": () => {},
+  "setNextFocusLeftId(I)V": () => {},
+  "setNextFocusRightId(I)V": () => {},
+  "setSystemGestureExclusionRects(Ljava/util/List;)V": () => {},
+  "setFrameContentVelocity(F)V": () => {},
+  "setAnimationMatrix(Landroid/graphics/Matrix;)V": () => {},
+  "awakenScrollBars()Z": () => 0,
+  "computeHorizontalScrollExtent()I": function (this: JView) { return this.width(); },
+  "computeHorizontalScrollOffset()I": function (this: JView) { return this.scrollX; },
+  "computeHorizontalScrollRange()I": function (this: JView) { return this.width(); },
+  "computeVerticalScrollExtent()I": function (this: JView) { return this.height(); },
+  "computeVerticalScrollOffset()I": function (this: JView) { return this.scrollY; },
+  "computeVerticalScrollRange()I": function (this: JView) { return this.height(); },
+  "onScrollChanged(IIII)V": () => {},
+  "onVisibilityChanged(Landroid/view/View;I)V": () => {},
+  "onVisibilityAggregated(Z)V": () => {},
+  "onWindowVisibilityChanged(I)V": () => {},
+  "onWindowSystemUiVisibilityChanged(I)V": () => {},
+  "getWindowSystemUiVisibility()I": () => 0,
+  "onAnimationStart()V": () => {},
+  "onAnimationEnd()V": () => {},
+  "onRtlPropertiesChanged(I)V": () => {},
+  "onHoverEvent(Landroid/view/MotionEvent;)Z": () => 0,
+  "dispatchHoverEvent(Landroid/view/MotionEvent;)Z": () => 0,
+  "onDragEvent(Landroid/view/DragEvent;)Z": () => 0,
+  "onKeyPreIme(ILandroid/view/KeyEvent;)Z": () => 0,
+  "onCheckIsTextEditor()Z": () => 0,
+  "onCreateInputConnection(Landroid/view/inputmethod/EditorInfo;)Landroid/view/inputmethod/InputConnection;": () => null,
+  "drawableHotspotChanged(FF)V": () => {},
+  "fitSystemWindows(Landroid/graphics/Rect;)Z": () => 0,
+  "setLeftTopRightBottom(IIII)V": function (this: JView, l: number, t: number, r: number, b: number) {
+    this.left = l; this.top = t; this.right = r; this.bottom = b; invalidate();
+  },
+  "findOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JView) {
+    // the window this view is in: an attached view's context is its activity (or dialog)
+    const c = this.ctx as { window?: { backDispatcher?: () => unknown }; win?: { backDispatcher?: () => unknown } } | null;
+    const w = c?.window ?? c?.win;
+    return this.attached && w?.backDispatcher ? w.backDispatcher() : null;
+  },
   "isInEditMode()Z": () => 0,
   "isLaidOut()Z": function (this: JView) { return this.right > 0 || this.bottom > 0 ? 1 : 0; },
   "getLayoutDirection()I": () => 0,
@@ -1117,6 +1233,31 @@ const vgMethods: NativeSpec["methods"] = {
   "getChildCount()I": function (this: JViewGroup) { return this.children.length; },
   "getChildAt(I)Landroid/view/View;": function (this: JViewGroup, i: number) { return this.children[i] ?? null; },
   "indexOfChild(Landroid/view/View;)I": function (this: JViewGroup, c: JView) { return this.children.indexOf(c); },
+  "removeViews(II)V": function (this: JViewGroup, start: number, n: number) {
+    for (const c of this.children.slice(start, start + n)) detachView(this, c);
+  },
+  "removeViewsInLayout(II)V": function (this: JViewGroup, start: number, n: number) {
+    for (const c of this.children.slice(start, start + n)) detachView(this, c);
+  },
+  "detachViewFromParent(I)V": function (this: JViewGroup, i: number) {
+    const c = this.children[i];
+    if (c) { this.children.splice(i, 1); c.parent = null; }
+  },
+  "onViewAdded(Landroid/view/View;)V": () => {},
+  "onViewRemoved(Landroid/view/View;)V": () => {},
+  "getFocusedChild()Landroid/view/View;": function (this: JViewGroup) {
+    return this.children.find((c) => c.focused || (c instanceof JViewGroup && findByPred(c, (v) => v.focused))) ?? null;
+  },
+  "focusSearch(Landroid/view/View;I)Landroid/view/View;": () => null,
+  "onRequestFocusInDescendants(ILandroid/graphics/Rect;)Z": () => 0,
+  "requestChildRectangleOnScreen(Landroid/view/View;Landroid/graphics/Rect;Z)Z": () => 0,
+  "offsetRectIntoDescendantCoords(Landroid/view/View;Landroid/graphics/Rect;)V": function (this: JViewGroup, d: JView, r: JRect) {
+    const [px, py] = locationOnScreen(this), [dx, dy] = locationOnScreen(d);
+    r.left += px - dx; r.right += px - dx; r.top += py - dy; r.bottom += py - dy;
+  },
+  "setChildrenDrawingCacheEnabled(Z)V": () => {},
+  "setHandwritingBoundsOffsets(FFFF)V": () => {},
+  "suppressLayout(Z)V": () => {},
   "bringChildToFront(Landroid/view/View;)V": function (this: JViewGroup, c: JView) {
     const i = this.children.indexOf(c);
     if (i >= 0) { this.children.splice(i, 1); this.children.push(c); invalidate(); }
@@ -1420,38 +1561,129 @@ rt.register({
   },
 });
 
-// ViewPropertyAnimator-lite: applies instantly, fires end listeners
+// ViewPropertyAnimator: the view's transform/alpha properties animated together from the frame
+// loop. As on AOSP the animation starts on the next frame unless start() is called, runs
+// duration+delay with the (default accelerate/decelerate) interpolator, and reports through the
+// AnimatorListener / AnimatorUpdateListener / withStart|EndAction hooks.
 function mkVPA(v: JView): any {
-  const info = rt.link("webdroid/VPA");
+  const info = rt.link("android/view/ViewPropertyAnimator");
   const o = new info.ctor();
   o.view = v;
   return o;
 }
+type VpaProp = "alphaV" | "translationX" | "translationY" | "translationZ" | "scaleXv" | "scaleYv" | "rotationV";
+const VPA_PROPS: Record<string, VpaProp> = {
+  alpha: "alphaV", translationX: "translationX", translationY: "translationY", translationZ: "translationZ",
+  scaleX: "scaleXv", scaleY: "scaleYv", rotation: "rotationV",
+};
 class JVPA extends JObj {
   view: JView | null = null;
-  endAction: unknown = null;
+  pending = new Map<VpaProp, { to: number; by: boolean }>();
+  from = new Map<VpaProp, number>();
+  to = new Map<VpaProp, number>();
+  durationMs = 300; delayMs = 0;
+  interp: unknown = null;
+  listener: unknown = null; updateL: unknown = null;
+  startAction: unknown = null; endAction: unknown = null;
+  running = false; startT = 0; scheduled = false;
+  /** the animation object handed to listeners: a ValueAnimator whose fraction tracks ours */
+  anim: unknown = null;
 }
-rt.register({
-  name: "webdroid/VPA", ctor: JVPA,
-  methods: {
-    "alpha(F)Landroid/view/ViewPropertyAnimator;": function (this: JVPA, a: number) { if (this.view) this.view.alphaV = a; invalidate(); return this; },
-    "translationX(F)Landroid/view/ViewPropertyAnimator;": function (this: JVPA, x: number) { if (this.view) this.view.translationX = x; invalidate(); return this; },
-    "translationY(F)Landroid/view/ViewPropertyAnimator;": function (this: JVPA, y: number) { if (this.view) this.view.translationY = y; invalidate(); return this; },
-    "scaleX(F)Landroid/view/ViewPropertyAnimator;": function (this: JVPA, s: number) { if (this.view) this.view.scaleXv = s; invalidate(); return this; },
-    "scaleY(F)Landroid/view/ViewPropertyAnimator;": function (this: JVPA, s: number) { if (this.view) this.view.scaleYv = s; invalidate(); return this; },
-    "rotation(F)Landroid/view/ViewPropertyAnimator;": function (this: JVPA, r: number) { if (this.view) this.view.rotationV = r; invalidate(); return this; },
-    "setDuration(J)Landroid/view/ViewPropertyAnimator;": function (this: JVPA) { return this; },
-    "setStartDelay(J)Landroid/view/ViewPropertyAnimator;": function (this: JVPA) { return this; },
-    "setInterpolator(Landroid/view/animation/Interpolator;)Landroid/view/ViewPropertyAnimator;": function (this: JVPA) { return this; },
-    "setListener(Landroid/animation/Animator$AnimatorListener;)Landroid/view/ViewPropertyAnimator;": function (this: JVPA) { return this; },
-    "withEndAction(Ljava/lang/Runnable;)Landroid/view/ViewPropertyAnimator;": function (this: JVPA, r: unknown) {
-      mainHandler().postRun(r, 20);
-      return this;
-    },
-    "start()V": () => {},
-    "cancel()V": () => {},
-  },
-});
+function vpaSet(this: JVPA, prop: VpaProp, v: number, by = false) {
+  this.pending.set(prop, { to: v, by });
+  if (!this.scheduled && !this.running) {
+    // AOSP: starts on the next frame unless start() is called first
+    this.scheduled = true;
+    void onMain(async () => { if (this.scheduled) await vpaStart.call(this); });
+  }
+  return this;
+}
+async function vpaStart(this: JVPA) {
+  this.scheduled = false;
+  const v = this.view;
+  if (!v || !this.pending.size) return;
+  if (this.running) await vpaEnd.call(this, true);
+  this.from.clear(); this.to.clear();
+  for (const [p, { to, by }] of this.pending) { this.from.set(p, v[p]); this.to.set(p, by ? v[p] + to : to); }
+  this.pending.clear();
+  this.running = true;
+  this.startT = performance.now();
+  if (this.startAction) { const r = this.startAction; this.startAction = null; try { await vcall(r, "run", "()V"); } catch (e) { reportUncaught(e); } }
+  if (this.listener) try { await vcall(this.listener, "onAnimationStart", "(Landroid/animation/Animator;)V", vpaAnim(this)); } catch (e) { reportUncaught(e); }
+  const self = this;
+  // the tick is a main-looper job of its own: two animations ending in one frame must not
+  // interleave their end callbacks (RecyclerView's item animator re-enters on that)
+  let inflight = false;
+  uiState.animHooks.add(function hook() {
+    if (!self.running) return false;
+    if (!inflight) { inflight = true; void onMain(() => vpaTick.call(self)).finally(() => { inflight = false; }); }
+    return self.running;
+  });
+  invalidate();
+}
+const accelDecelV = (t: number) => Math.cos((t + 1) * Math.PI) / 2 + 0.5;
+async function vpaTick(this: JVPA) {
+  const v = this.view!;
+  const el = performance.now() - this.startT - this.delayMs;
+  const t = el <= 0 ? 0 : this.durationMs <= 0 ? 1 : Math.min(1, el / this.durationMs);
+  const it = this.interp ? Math.fround(await vcall(this.interp, "getInterpolation", "(F)F", Math.fround(t))) : accelDecelV(t);
+  for (const [p, to] of this.to) v[p] = this.from.get(p)! + (to - this.from.get(p)!) * it;
+  if (this.updateL) try { await vcall(this.updateL, "onAnimationUpdate", "(Landroid/animation/ValueAnimator;)V", vpaAnim(this)); } catch (e) { reportUncaught(e); }
+  invalidate();
+  if (t >= 1) await vpaEnd.call(this, false);
+}
+async function vpaEnd(this: JVPA, cancelled: boolean) {
+  if (!this.running) return;
+  this.running = false;
+  const v = this.view!;
+  if (!cancelled) for (const [p, to] of this.to) v[p] = to;
+  invalidate();
+  if (this.listener) {
+    try {
+      if (cancelled) await vcall(this.listener, "onAnimationCancel", "(Landroid/animation/Animator;)V", vpaAnim(this));
+      await vcall(this.listener, "onAnimationEnd", "(Landroid/animation/Animator;)V", vpaAnim(this));
+    } catch (e) { reportUncaught(e); }
+  }
+  if (this.endAction && !cancelled) { const r = this.endAction; this.endAction = null; try { await vcall(r, "run", "()V"); } catch (e) { reportUncaught(e); } }
+  else if (cancelled) this.endAction = null;
+}
+function vpaAnim(a: JVPA): unknown {
+  if (!a.anim) {
+    const o = new (rt.link("android/animation/ValueAnimator").ctor)();
+    o.durationMs = a.durationMs; o.delayMs = a.delayMs;
+    a.anim = o;
+  }
+  return a.anim;
+}
+const VPA = "Landroid/view/ViewPropertyAnimator;";
+const vpaMethods: NonNullable<NativeSpec["methods"]> = {
+  [`setDuration(J)${VPA}`]: function (this: JVPA, d: bigint) { this.durationMs = Number(d); return this; },
+  "getDuration()J": function (this: JVPA) { return BigInt(this.durationMs); },
+  [`setStartDelay(J)${VPA}`]: function (this: JVPA, d: bigint) { this.delayMs = Number(d); return this; },
+  "getStartDelay()J": function (this: JVPA) { return BigInt(this.delayMs); },
+  [`setInterpolator(Landroid/animation/TimeInterpolator;)${VPA}`]: function (this: JVPA, i: unknown) { this.interp = i; return this; },
+  [`setInterpolator(Landroid/view/animation/Interpolator;)${VPA}`]: function (this: JVPA, i: unknown) { this.interp = i; return this; },
+  "getInterpolator()Landroid/animation/TimeInterpolator;": function (this: JVPA) { return this.interp; },
+  [`setListener(Landroid/animation/Animator$AnimatorListener;)${VPA}`]: function (this: JVPA, l: unknown) { this.listener = l; return this; },
+  [`setUpdateListener(Landroid/animation/ValueAnimator$AnimatorUpdateListener;)${VPA}`]: function (this: JVPA, l: unknown) { this.updateL = l; return this; },
+  [`withStartAction(Ljava/lang/Runnable;)${VPA}`]: function (this: JVPA, r: unknown) { this.startAction = r; return this; },
+  [`withEndAction(Ljava/lang/Runnable;)${VPA}`]: function (this: JVPA, r: unknown) { this.endAction = r; return this; },
+  [`withLayer()${VPA}`]: function (this: JVPA) { return this; },
+  "start()V": function (this: JVPA) { return vpaStart.call(this); },
+  "cancel()V": function (this: JVPA) { this.pending.clear(); this.scheduled = false; return vpaEnd.call(this, true); },
+  // x/y are absolute: the translation that puts the view's left/top there
+  [`x(F)${VPA}`]: function (this: JVPA, x: number) { return vpaSet.call(this, "translationX", x - (this.view?.left ?? 0)); },
+  [`y(F)${VPA}`]: function (this: JVPA, y: number) { return vpaSet.call(this, "translationY", y - (this.view?.top ?? 0)); },
+  [`xBy(F)${VPA}`]: function (this: JVPA, x: number) { return vpaSet.call(this, "translationX", x, true); },
+  [`yBy(F)${VPA}`]: function (this: JVPA, y: number) { return vpaSet.call(this, "translationY", y, true); },
+};
+for (const [name, prop] of Object.entries(VPA_PROPS)) {
+  vpaMethods[`${name}(F)${VPA}`] = function (this: JVPA, v: number) { return vpaSet.call(this, prop, v); };
+  vpaMethods[`${name}By(F)${VPA}`] = function (this: JVPA, v: number) { return vpaSet.call(this, prop, v, true); };
+}
+vpaMethods[`rotationX(F)${VPA}`] = vpaMethods[`rotationY(F)${VPA}`] = function (this: JVPA) { return this; };
+vpaMethods[`rotationXBy(F)${VPA}`] = vpaMethods[`rotationYBy(F)${VPA}`] = function (this: JVPA) { return this; };
+rt.register({ name: "android/view/ViewPropertyAnimator", ctor: JVPA, methods: vpaMethods });
 
 // ViewTreeObserver
 class JVTO extends JObj {
@@ -1610,7 +1842,27 @@ rt.register({
 for (const n of [
   "OnClickListener", "OnLongClickListener", "OnTouchListener", "OnAttachStateChangeListener",
   "OnCreateContextMenuListener", "OnApplyWindowInsetsListener", "OnLayoutChangeListener", "OnDragListener",
+  "OnKeyListener", "OnFocusChangeListener", "OnHoverListener", "OnGenericMotionListener", "OnScrollChangeListener",
+  "OnSystemUiVisibilityChangeListener", "OnCapturedPointerListener", "OnContextClickListener", "OnUnhandledKeyEventListener",
 ]) rt.register({ name: "android/view/View$" + n, ctor: class extends JObj {} });
+// AbsSavedState / View.BaseSavedState: the Parcelable a view's onSaveInstanceState wraps its
+// super's state in. Nothing parcels here (state never leaves the process), so the chain is
+// the object graph itself.
+class JAbsSavedState extends JObj { superState: unknown = null; }
+const EMPTY_STATE = new JAbsSavedState();
+const savedStateMethods: NonNullable<NativeSpec["methods"]> = {
+  "<init>(Landroid/os/Parcelable;)V": function (this: JAbsSavedState, sup: unknown) {
+    if (sup == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "superState must not be null");
+    this.superState = sup === EMPTY_STATE ? null : sup;
+  },
+  "<init>(Landroid/os/Parcel;)V": function () {},
+  "<init>(Landroid/os/Parcel;Ljava/lang/ClassLoader;)V": function () {},
+  "getSuperState()Landroid/os/Parcelable;": function (this: JAbsSavedState) { return this.superState ?? EMPTY_STATE; },
+  "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+  "describeContents()I": () => 0,
+};
+rt.register({ name: "android/view/AbsSavedState", ctor: JAbsSavedState, ifaces: ["android/os/Parcelable"], statics: { EMPTY_STATE }, methods: savedStateMethods });
+rt.register({ name: "android/view/View$BaseSavedState", ctor: class extends JAbsSavedState {}, sup: "android/view/AbsSavedState", methods: savedStateMethods });
 // AccessibilityDelegate is a class in AOSP: apps subclass it and call super.
 rt.register({
   name: "android/view/View$AccessibilityDelegate", ctor: class extends JObj {},

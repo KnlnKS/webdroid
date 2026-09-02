@@ -48,12 +48,46 @@ export function idHash(o: unknown): number {
 const regexMemo = new Map<string, RegExp>();
 /** Java regex source + JS flags → RegExp, memoised: String.matches and Matcher rebuild theirs per call.
  *  Callers that use sticky/global flags must set lastIndex before every exec. */
+const POSIX: Record<string, string> = {
+  Lower: "a-z", Upper: "A-Z", ASCII: "\\x00-\\x7F", Alpha: "a-zA-Z", Digit: "0-9", Alnum: "a-zA-Z0-9",
+  Punct: "!-\\/:-@\\[-`{-~", Graph: "!-~", Print: " -~", Blank: " \\t", Cntrl: "\\x00-\\x1F\\x7F", XDigit: "0-9a-fA-F", Space: " \\t\\n\\x0B\\f\\r",
+  javaLowerCase: "\\p{Ll}", javaUpperCase: "\\p{Lu}", javaWhitespace: "\\s", javaLetter: "\\p{L}", javaDigit: "\\p{Nd}", javaLetterOrDigit: "\\p{L}\\p{Nd}",
+};
+/**
+ * java.util.regex syntax that JS RegExp lacks, rewritten in place: embedded flag groups
+ * `(?ismx)` (folded into the flags — Java scopes them from that point on, JS cannot), `\Q...\E`
+ * literals, `\A`/`\Z`/`\z` anchors, `\h`, possessive quantifiers (made greedy), and the
+ * POSIX/java.lang.Character classes `\p{Alpha}`. Returns the JS source plus extra flags.
+ */
+function javaToJs(src: string): [string, string] {
+  let extra = "";
+  let out = src.replace(/\(\?([a-zA-Z]+)(?:-[a-zA-Z]+)?\)/g, (_m, on: string) => {
+    for (const c of on) if ("ims".includes(c) && !extra.includes(c)) extra += c;
+    return "";
+  });
+  out = out.replace(/\\Q([\s\S]*?)(?:\\E|$)/g, (_m, lit: string) => lit.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&"));
+  out = out.replace(/\\([AZzh])/g, (_m, c: string) => c === "A" ? "^" : c === "h" ? "[ \\t\\xA0]" : "$");
+  out = out.replace(/([*+?}])\+/g, "$1");
+  out = out.replace(/\\([pP])\{(?:Is|In)?([A-Za-z]+)\}/g, (m, neg: string, name: string) => {
+    const cls = POSIX[name];
+    return cls ? (neg === "P" ? `[^${cls}]` : `[${cls}]`) : m;
+  });
+  return [out, extra];
+}
 export function javaRegex(source: string, flags: string): RegExp {
   const key = flags + "/" + source;
   let re = regexMemo.get(key);
   if (!re) {
     if (regexMemo.size > 4096) regexMemo.clear();
-    regexMemo.set(key, (re = new RegExp(source, flags)));
+    try { re = new RegExp(source, flags); }
+    catch (e) {
+      const [js, extra] = javaToJs(source);
+      let f = flags;
+      for (const c of extra) if (!f.includes(c)) f += c;
+      try { re = new RegExp(js, f); }
+      catch { re = new RegExp(js, f.replace("u", "")); }
+    }
+    regexMemo.set(key, re);
   }
   return re;
 }
@@ -576,13 +610,13 @@ rt.register({
 }
 
 // Java float/double toString: approximate with JS (differences acceptable)
-function fmtDouble(v: number): string {
+export function fmtDouble(v: number): string {
   if (Number.isInteger(v) && Math.abs(v) < 1e21) return v.toFixed(1);
   return String(v);
 }
 
 // ── StringBuilder / StringBuffer
-class JSB extends JObj {
+export class JSB extends JObj {
   s = "";
 }
 function sbSpec(name: string): NativeSpec {
@@ -610,6 +644,7 @@ function sbSpec(name: string): NativeSpec {
       [`append(Ljava/lang/String;)${L}`]: app(function (v) { this.s += v === null ? "null" : v; }),
       [`append(Ljava/lang/Object;)${L}`]: appendObj,
       [`append(Ljava/lang/CharSequence;)${L}`]: appendObj,
+      [`append(Ljava/lang/StringBuffer;)${L}`]: appendObj,
       "append(Ljava/lang/CharSequence;)Ljava/lang/Appendable;": appendObj,
       "append(C)Ljava/lang/Appendable;": appendChar,
       "append(Ljava/lang/CharSequence;II)Ljava/lang/Appendable;": appendRange,
@@ -884,8 +919,8 @@ rt.register({
     "equals(Ljava/lang/Object;)Z": function (this: JShort, o: unknown) { return o instanceof JShort && o.v === this.v ? 1 : 0; },
   },
 });
-const TRUE = new JBool(); TRUE.v = 1;
-const FALSE = new JBool();
+export const TRUE = new JBool(); TRUE.v = 1;
+export const FALSE = new JBool();
 rt.register({
   name: "java/lang/Boolean", ctor: JBool,
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
@@ -901,6 +936,12 @@ rt.register({
     "static parseBoolean(Ljava/lang/String;)Z": (s: string) => (s?.toLowerCase() === "true" ? 1 : 0),
     "static toString(Z)Ljava/lang/String;": (v: number) => (v ? "true" : "false"),
     "static hashCode(Z)I": (v: number) => (v ? 1231 : 1237),
+    "compareTo(Ljava/lang/Boolean;)I": cmpV,
+    "compareTo(Ljava/lang/Object;)I": cmpV,
+    "static compare(ZZ)I": (a: number, b: number) => (a === b ? 0 : a ? 1 : -1),
+    "static logicalAnd(ZZ)Z": (a: number, b: number) => (a && b ? 1 : 0),
+    "static logicalOr(ZZ)Z": (a: number, b: number) => (a || b ? 1 : 0),
+    "static logicalXor(ZZ)Z": (a: number, b: number) => ((a ? 1 : 0) ^ (b ? 1 : 0)),
   },
 });
 rt.register({
@@ -1184,6 +1225,10 @@ rt.register({
 
 class JThreadLocal extends JObj {}
 rt.register({
+  name: "webdroid/SuppliedThreadLocal", ctor: class extends JThreadLocal { supplier: unknown = null; }, sup: "java/lang/ThreadLocal",
+  methods: { "initialValue()Ljava/lang/Object;": function (this: { supplier: unknown }) { return vcall(this.supplier, "get", "()Ljava/lang/Object;"); } },
+});
+rt.register({
   name: "java/lang/ThreadLocal", ctor: JThreadLocal,
   methods: {
     "<init>()V": function () {},
@@ -1196,6 +1241,12 @@ rt.register({
     "set(Ljava/lang/Object;)V": function (this: JThreadLocal, v: unknown) { curThread.locals.set(this, v); },
     "remove()V": function (this: JThreadLocal) { curThread.locals.delete(this); },
     "initialValue()Ljava/lang/Object;": function () { return null; },
+    "static withInitial(Ljava/util/function/Supplier;)Ljava/lang/ThreadLocal;": (sup: unknown) => {
+      if (sup == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const t = new (rt.link("webdroid/SuppliedThreadLocal").ctor)();
+      t.supplier = sup;
+      return t;
+    },
   },
 });
 

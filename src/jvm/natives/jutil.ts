@@ -3,7 +3,7 @@
 
 import { rt, JObj, type NativeSpec, type ClassInfo } from "../runtime";
 import { mangleMethod, jarray } from "../abi";
-import { vcall, idHash, stringHash, defineException, JEnum, JInt, JLong, JFloat, JDouble, JByte, JShort, JBool, JChar } from "./jlang";
+import { vcall, idHash, stringHash, defineException, fmtDouble, JEnum, JInt, JLong, JFloat, JDouble, JByte, JShort, JBool, JChar } from "./jlang";
 
 /** Java toArray(T[]) contract: fill the GIVEN array when it fits (callers may
  * ignore the return value), null-terminating; else return a new one. */
@@ -28,7 +28,7 @@ function jhash(o: unknown): number | Promise<number> {
   if (typeof o === "string") return stringHash(o);
   return vcall(o, "hashCode", "()I");
 }
-async function jcmp(cmp: unknown, a: unknown, b: unknown): Promise<number> {
+export async function jcmp(cmp: unknown, a: unknown, b: unknown): Promise<number> {
   if (cmp) return await vcall(cmp, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", a, b);
   const t = typeof a;
   if (typeof b === t && (t === "string" || t === "number" || t === "bigint")) {
@@ -177,6 +177,16 @@ export function mkIter(arr: unknown[], owner: IterOwner | null = null): JIter {
   return new JIter(arr, owner);
 }
 
+async function listBinarySearch(l: unknown, k: unknown, cmp: unknown): Promise<number> {
+  const a = await toJsArray(l);
+  let lo = 0, hi = a.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    const c = await jcmp(cmp, a[mid], k);
+    if (c < 0) lo = mid + 1; else if (c > 0) hi = mid - 1; else return mid;
+  }
+  return -(lo + 1);
+}
 /** A java.util.ArrayList over `items` — compiled code cannot use a bare JS array as a List. */
 export function newArrayList(items: unknown[] = []): JList {
   const l = new (rt.link("java/util/ArrayList").ctor as new () => JList)();
@@ -958,27 +968,44 @@ for (const n of ["java/util/TreeSet", "java/util/concurrent/ConcurrentSkipListSe
   });
 }
 
-class JPriorityQueue extends JList { cmp: unknown = null; }
+export class JPriorityQueue extends JList { cmp: unknown = null; }
+/** keep the backing array sorted ascending so poll() takes the head (stable after equal keys) */
+export async function pqInsert(q: JPriorityQueue, v: unknown) {
+  if (v == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  // the comparator may suspend, and another thread's take()/offer() can move the array under
+  // it (Java holds a lock here): search a snapshot and only splice if the live array still is it
+  for (;;) {
+    const snap = q.a.slice();
+    let lo = 0, hi = snap.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if ((await jcmp(q.cmp, snap[mid], v)) <= 0) lo = mid + 1; else hi = mid;
+    }
+    if (q.a.length === snap.length && (snap.length === 0 || (q.a[0] === snap[0] && q.a[snap.length - 1] === snap[snap.length - 1]))) {
+      q.a.splice(lo, 0, v);
+      return;
+    }
+  }
+}
+export const priorityQueueMethods = (): NonNullable<NativeSpec["methods"]> => ({
+  ...listMethods(),
+  "<init>()V": function () {},
+  "<init>(I)V": function () {},
+  "<init>(ILjava/util/Comparator;)V": function (this: JPriorityQueue, _n: number, c: unknown) { this.cmp = c; },
+  "<init>(Ljava/util/Comparator;)V": function (this: JPriorityQueue, c: unknown) { this.cmp = c; },
+  "<init>(Ljava/util/Collection;)V": async function (this: JPriorityQueue, c: unknown) { for (const v of await toJsArray(c)) await pqInsert(this, v); },
+  "offer(Ljava/lang/Object;)Z": async function (this: JPriorityQueue, v: unknown) { await pqInsert(this, v); return 1; },
+  "add(Ljava/lang/Object;)Z": async function (this: JPriorityQueue, v: unknown) { await pqInsert(this, v); return 1; },
+  "poll()Ljava/lang/Object;": function (this: JPriorityQueue) { return this.a.length ? this.a.shift()! : null; },
+  "remove()Ljava/lang/Object;": function (this: JPriorityQueue) { if (!this.a.length) throw rt.mkThrowable("java/util/NoSuchElementException", null); return this.a.shift()!; },
+  "peek()Ljava/lang/Object;": function (this: JPriorityQueue) { return this.a.length ? this.a[0] : null; },
+  "element()Ljava/lang/Object;": function (this: JPriorityQueue) { if (!this.a.length) throw rt.mkThrowable("java/util/NoSuchElementException", null); return this.a[0]; },
+  "comparator()Ljava/util/Comparator;": function (this: JPriorityQueue) { return this.cmp; },
+});
 rt.register({
   name: "java/util/PriorityQueue", ctor: JPriorityQueue,
-  ifaces: ["java/util/Queue", "java/util/Collection", "java/lang/Iterable"],
-  methods: {
-    ...listMethods(),
-    "<init>(ILjava/util/Comparator;)V": function (this: JPriorityQueue, _n: number, c: unknown) { this.cmp = c; },
-    "<init>(Ljava/util/Comparator;)V": function (this: JPriorityQueue, c: unknown) { this.cmp = c; },
-    "offer(Ljava/lang/Object;)Z": async function (this: JPriorityQueue, v: unknown) {
-      // keep sorted ascending so poll() takes the head
-      let lo = 0, hi = this.a.length;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if ((await jcmp(this.cmp, this.a[mid], v)) <= 0) lo = mid + 1; else hi = mid;
-      }
-      this.a.splice(lo, 0, v);
-      return 1;
-    },
-    "poll()Ljava/lang/Object;": function (this: JPriorityQueue) { return this.a.length ? this.a.shift()! : null; },
-    "peek()Ljava/lang/Object;": function (this: JPriorityQueue) { return this.a.length ? this.a[0] : null; },
-  },
+  ifaces: ["java/util/Queue", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"],
+  methods: priorityQueueMethods(),
 });
 rt.register({
   name: "java/util/concurrent/CopyOnWriteArrayList", ctor: class extends JList {},
@@ -1289,10 +1316,41 @@ rt.register({
     "static copyOfRange([BII)[B": taSlice,
     "static copyOfRange([III)[I": taSlice,
     "static copyOfRange([CII)[C": taSlice,
-    "static copyOfRange([Ljava/lang/Object;II)[Ljava/lang/Object;": (a: unknown[], s: number, e: number) => jarray(a.slice(s, e), elemOf(a)),
+    "static copyOfRange([JII)[J": taSlice,
+    "static copyOfRange([FII)[F": taSlice,
+    "static copyOfRange([DII)[D": taSlice,
+    "static copyOfRange([SII)[S": taSlice,
+    "static copyOfRange([ZII)[Z": taSlice,
+    "static copyOf([ZI)[Z": taCopyOf,
+    "static copyOf([SI)[S": taCopyOf,
+    "static copyOfRange([Ljava/lang/Object;II)[Ljava/lang/Object;": (a: unknown[], s: number, e: number) => objRange(a, s, e, elemOf(a)),
+    "static copyOfRange([Ljava/lang/Object;IILjava/lang/Class;)[Ljava/lang/Object;": (a: unknown[], s: number, e: number, cls: { arrDesc?: string }) =>
+      objRange(a, s, e, cls?.arrDesc?.slice(1) ?? elemOf(a)),
     "static equals([B[B)Z": taEq,
     "static equals([I[I)Z": taEq,
     "static equals([C[C)Z": taEq,
+    "static equals([J[J)Z": taEq,
+    "static equals([F[F)Z": taEq,
+    "static equals([D[D)Z": taEq,
+    "static equals([S[S)Z": taEq,
+    "static equals([Z[Z)Z": taEq,
+    "static hashCode([B)I": taHash,
+    "static hashCode([C)I": taHash,
+    "static hashCode([S)I": taHash,
+    "static hashCode([Z)I": taHash,
+    "static hashCode([F)I": (a: Float32Array | null) => {
+      if (!a) return 0;
+      const f = new Float32Array(1), i = new Int32Array(f.buffer);
+      let h = 1;
+      for (const e of a) { f[0] = e; h = (Math.imul(h, 31) + i[0]) | 0; }
+      return h;
+    },
+    "static toString([F)Ljava/lang/String;": (a: Float32Array) => (a ? "[" + Array.from(a, fmtDouble).join(", ") + "]" : "null"),
+    "static toString([J)Ljava/lang/String;": (a: BigInt64Array) => (a ? "[" + Array.from(a).join(", ") + "]" : "null"),
+    "static toString([Z)Ljava/lang/String;": (a: Uint8Array) => (a ? "[" + Array.from(a, (v) => (v ? "true" : "false")).join(", ") + "]" : "null"),
+    "static sort([C)V": taSort,
+    "static sort([S)V": taSort,
+    "static deepHashCode([Ljava/lang/Object;)I": (a: unknown[] | null) => (a ? hashSeq(a) : 0),
     "static equals([Ljava/lang/Object;[Ljava/lang/Object;)Z": async (a: unknown[], b: unknown[]) => {
       if (a === b) return 1;
       if (!a || !b || a.length !== b.length) return 0;
@@ -1339,7 +1397,28 @@ function taCopyOf(a: TA, n: number): TA {
   c.set(a.subarray(0, Math.min(a.length, n)));
   return c;
 }
-function taSlice(a: TA, s: number, e: number) { return a.slice(s, e); }
+function taSlice(a: TA, s: number, e: number) {
+  if (s > e) throw rt.mkThrowable("java/lang/IllegalArgumentException", s + " > " + e);
+  if (s < 0 || s > a.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(s));
+  // Java pads past the end with zeros where slice() would clip
+  if (e <= a.length) return a.slice(s, e);
+  const c = new a.constructor(e - s);
+  c.set(a.subarray(s));
+  return c;
+}
+function taHash(a: TA | null): number {
+  if (!a) return 0;
+  let h = 1;
+  for (let i = 0; i < a.length; i++) h = (Math.imul(h, 31) + Number(a[i])) | 0;
+  return h;
+}
+function objRange(a: unknown[], s: number, e: number, elem?: string): unknown[] {
+  if (s > e) throw rt.mkThrowable("java/lang/IllegalArgumentException", s + " > " + e);
+  if (s < 0 || s > a.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(s));
+  const out = a.slice(s, e);
+  while (out.length < e - s) out.push(null);
+  return jarray(out, elem);
+}
 function taBinarySearch(a: TA, k: number | bigint): number {
   let lo = 0, hi = a.length - 1;
   while (lo <= hi) {
@@ -1394,6 +1473,8 @@ rt.register({
     "static synchronizedSet(Ljava/util/Set;)Ljava/util/Set;": (s: unknown) => s,
     "static sort(Ljava/util/List;)V": (l: JList) => sortInPlace(l.a, null),
     "static sort(Ljava/util/List;Ljava/util/Comparator;)V": (l: JList, c: unknown) => sortInPlace(l.a, c),
+    "static binarySearch(Ljava/util/List;Ljava/lang/Object;)I": (l: unknown, k: unknown) => listBinarySearch(l, k, null),
+    "static binarySearch(Ljava/util/List;Ljava/lang/Object;Ljava/util/Comparator;)I": listBinarySearch,
     "static reverse(Ljava/util/List;)V": (l: JList) => l.a.reverse(),
     "static shuffle(Ljava/util/List;)V": (l: JList) => {
       for (let i = l.a.length - 1; i > 0; i--) {

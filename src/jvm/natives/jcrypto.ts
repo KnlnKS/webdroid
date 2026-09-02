@@ -2,6 +2,9 @@
 // one-shot and async: update() buffers, doFinal() awaits the whole operation.
 import { rt, JObj } from "../runtime";
 import { defineException } from "./jlang";
+import { mkIter } from "./jutil";
+import { mangleMethod } from "../abi";
+import { type JBuffer, bufferView } from "./jnio";
 
 for (const n of ["java/security/Key", "javax/crypto/SecretKey", "java/security/spec/KeySpec"]) {
   rt.register({ name: n, ctor: class extends JObj {} });
@@ -25,10 +28,13 @@ function join(parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
 }
 const toJava = (u: Uint8Array) => new Int8Array(u.buffer, u.byteOffset, u.length);
 
-class JSecretKeySpec extends JObj {
+export class JSecretKeySpec extends JObj {
   key = new Uint8Array(0);
   algo = "";
   imported = new Map<string, CryptoKey>();
+}
+export function mkSecretKey(key: Uint8Array, algo: string): JSecretKeySpec {
+  const k = new JSecretKeySpec(); k.key = new Uint8Array(key); k.algo = algo; return k;
 }
 function setKey(k: JSecretKeySpec, b: Int8Array, off: number, len: number, algo: string) {
   if (!len || algo == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", len ? "Missing argument" : "Empty key");
@@ -94,6 +100,7 @@ class JCipher extends JObj {
   iv: Uint8Array<ArrayBuffer> | null = null;
   tagLength = 128;
   parts: Uint8Array[] = [];
+  aad: Uint8Array[] = [];
 }
 function getCipher(t: string): JCipher {
   const [alg, mode = "ECB", padding = "PKCS5Padding"] = t.split("/");
@@ -111,7 +118,7 @@ function getCipher(t: string): JCipher {
 async function initCipher(c: JCipher, opmode: number, key: unknown, params: unknown) {
   c.key = await cryptoKey(key, c.alg === "AES-ECB" ? "AES-CBC" : c.alg, ["encrypt", "decrypt"]);
   c.opmode = opmode;
-  c.parts = [];
+  c.parts = []; c.aad = [];
   c.iv = null;
   const gcm = c.alg === "AES-GCM";
   if (c.alg === "AES-ECB") {
@@ -165,7 +172,9 @@ async function doFinal(c: JCipher, b?: Int8Array, off = 0, len = b?.length): Pro
   const op = enc ? "encrypt" : "decrypt";
   if (c.alg === "AES-CTR") return new Int8Array(await crypto.subtle[op]({ name: c.alg, counter: c.iv!, length: 128 }, c.key, data));
   if (c.alg === "AES-GCM") {
-    try { return new Int8Array(await crypto.subtle[op]({ name: c.alg, iv: c.iv!, tagLength: c.tagLength }, c.key, data)); }
+    const p: AesGcmParams = { name: c.alg, iv: c.iv!, tagLength: c.tagLength };
+    if (c.aad.length) { p.additionalData = join(c.aad); c.aad = []; }
+    try { return new Int8Array(await crypto.subtle[op](p, c.key, data)); }
     catch { throw rt.mkThrowable("javax/crypto/AEADBadTagException", "Tag mismatch"); }
   }
   if (c.padded && enc) data = pad(data);
@@ -189,6 +198,13 @@ rt.register({
     "update([B)[B": function (this: JCipher, b: Int8Array) { this.parts.push(bytes(b)); return new Int8Array(0); },
     "update([BII)[B": function (this: JCipher, b: Int8Array, off: number, len: number) { this.parts.push(bytes(b, off, len)); return new Int8Array(0); },
     "update([BII[BI)I": function (this: JCipher, b: Int8Array, off: number, len: number) { this.parts.push(bytes(b, off, len)); return 0; },
+    "updateAAD([B)V": function (this: JCipher, b: Int8Array) { if (this.alg !== "AES-GCM") throw rt.mkThrowable("java/lang/IllegalStateException", "No AAD accepted"); this.aad.push(bytes(b)); },
+    "updateAAD([BII)V": function (this: JCipher, b: Int8Array, off: number, len: number) { if (this.alg !== "AES-GCM") throw rt.mkThrowable("java/lang/IllegalStateException", "No AAD accepted"); this.aad.push(bytes(b, off, len)); },
+    "updateAAD(Ljava/nio/ByteBuffer;)V": function (this: JCipher, bb: JBuffer) {
+      const v = bufferView(bb);
+      const u = new Uint8Array(v.ab, v.byteFromPos, bb.lim - bb.pos);
+      this.aad.push(new Uint8Array(u)); bb.pos = bb.lim;
+    },
     "doFinal()[B": function (this: JCipher) { return doFinal(this); },
     "doFinal([B)[B": function (this: JCipher, b: Int8Array) { return doFinal(this, b); },
     "doFinal([BII)[B": function (this: JCipher, b: Int8Array, off: number, len: number) { return doFinal(this, b, off, len); },
@@ -198,6 +214,20 @@ rt.register({
       out.set(r, off);
       return r.length;
     },
+    "doFinal([BII[BI)I": async function (this: JCipher, b: Int8Array, off: number, len: number, out: Int8Array, outOff: number) {
+      const r = await doFinal(this, b, off, len);
+      if (outOff + r.length > out.length) throw rt.mkThrowable("javax/crypto/ShortBufferException", "Output buffer too short");
+      out.set(r, outOff);
+      return r.length;
+    },
+    "doFinal([BII[B)I": async function (this: JCipher, b: Int8Array, off: number, len: number, out: Int8Array) {
+      const r = await doFinal(this, b, off, len);
+      if (r.length > out.length) throw rt.mkThrowable("javax/crypto/ShortBufferException", "Output buffer too short");
+      out.set(r, 0);
+      return r.length;
+    },
+    "static getInstance(Ljava/lang/String;Ljava/security/Provider;)Ljavax/crypto/Cipher;": getCipher,
+    "getParameters()Ljava/security/AlgorithmParameters;": () => null,
     "getBlockSize()I": () => 16,
     "getOutputSize(I)I": function (this: JCipher, n: number) { return this.parts.reduce((s, p) => s + p.length, n) + 16; },
     "getIV()[B": function (this: JCipher) { return this.iv && new Int8Array(this.iv); },
@@ -248,5 +278,132 @@ rt.register({
     "reset()V": function (this: JMac) { this.parts = []; },
     "getMacLength()I": function (this: JMac) { return this.len; },
     "getAlgorithm()Ljava/lang/String;": function (this: JMac) { return this.algo; },
+  },
+});
+
+// ── KeyStore + KeyGenerator. The "AndroidKeyStore" type is a software store here: keys are
+// generated with WebCrypto randomness and kept per alias (persisted like the app's other state,
+// since a device keystore outlives the process). Other store types start empty, as a JCA
+// KeyStore does before load(); there is no file to load from.
+const KS_KEY = "wd:keystore:";
+class JKeyStore extends JObj {
+  type = "";
+  entries = new Map<string, JSecretKeySpec>();
+  persist() {
+    if (this.type !== "AndroidKeyStore") return;
+    const o: Record<string, [string, string]> = {};
+    for (const [a, k] of this.entries) o[a] = [k.algo, btoa(String.fromCharCode(...k.key))];
+    try { globalThis.localStorage?.setItem(KS_KEY + this.type, JSON.stringify(o)); } catch { /* quota */ }
+  }
+  load() {
+    if (this.type !== "AndroidKeyStore") return;
+    try {
+      const raw = globalThis.localStorage?.getItem(KS_KEY + this.type);
+      if (!raw) return;
+      for (const [a, [algo, b64]] of Object.entries(JSON.parse(raw) as Record<string, [string, string]>)) {
+        this.entries.set(a, mkSecretKey(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)), algo));
+      }
+    } catch { /* corrupt */ }
+  }
+}
+/** one store object per type, so a key generated through KeyGenerator("AndroidKeyStore") is
+ *  visible to every KeyStore.getInstance("AndroidKeyStore") — as the system keystore is */
+const stores = new Map<string, JKeyStore>();
+function storeFor(type: string): JKeyStore {
+  let s = stores.get(type);
+  if (!s) { s = new JKeyStore(); s.type = type; s.load(); stores.set(type, s); }
+  return s;
+}
+class JSecretKeyEntry extends JObj { key: JSecretKeySpec | null = null; }
+rt.register({ name: "java/security/KeyStore$Entry", ctor: class extends JObj {} });
+rt.register({ name: "java/security/KeyStore$LoadStoreParameter", ctor: class extends JObj {} });
+rt.register({ name: "java/security/KeyStore$ProtectionParameter", ctor: class extends JObj {} });
+rt.register({
+  name: "java/security/KeyStore$SecretKeyEntry", ctor: JSecretKeyEntry, ifaces: ["java/security/KeyStore$Entry"],
+  methods: {
+    "<init>(Ljavax/crypto/SecretKey;)V": function (this: JSecretKeyEntry, k: JSecretKeySpec) { this.key = k; },
+    "getSecretKey()Ljavax/crypto/SecretKey;": function (this: JSecretKeyEntry) { return this.key; },
+  },
+});
+const notLoaded = () => rt.mkThrowable("java/security/KeyStoreException", "Uninitialized keystore");
+rt.register({
+  name: "java/security/KeyStore", ctor: JKeyStore,
+  methods: {
+    "static getDefaultType()Ljava/lang/String;": () => "AndroidKeyStore",
+    "static getInstance(Ljava/lang/String;)Ljava/security/KeyStore;": (type: string) => {
+      if (type == null) throw rt.mkThrowable("java/lang/NullPointerException", "type");
+      return storeFor(type);
+    },
+    "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/KeyStore;": (type: string) => storeFor(type),
+    "getType()Ljava/lang/String;": function (this: JKeyStore) { return this.type; },
+    "load(Ljava/io/InputStream;[C)V": function (this: JKeyStore) { (this as any).loaded = true; },
+    "load(Ljava/security/KeyStore$LoadStoreParameter;)V": function (this: JKeyStore) { (this as any).loaded = true; },
+    "aliases()Ljava/util/Enumeration;": function (this: JKeyStore) { return mkIter([...this.entries.keys()]); },
+    "size()I": function (this: JKeyStore) { if (!(this as any).loaded) throw notLoaded(); return this.entries.size; },
+    "containsAlias(Ljava/lang/String;)Z": function (this: JKeyStore, a: string) { if (!(this as any).loaded) throw notLoaded(); return this.entries.has(a) ? 1 : 0; },
+    "isKeyEntry(Ljava/lang/String;)Z": function (this: JKeyStore, a: string) { return this.entries.has(a) ? 1 : 0; },
+    "isCertificateEntry(Ljava/lang/String;)Z": () => 0,
+    "getKey(Ljava/lang/String;[C)Ljava/security/Key;": function (this: JKeyStore, a: string) { if (!(this as any).loaded) throw notLoaded(); return this.entries.get(a) ?? null; },
+    "getEntry(Ljava/lang/String;Ljava/security/KeyStore$ProtectionParameter;)Ljava/security/KeyStore$Entry;": function (this: JKeyStore, a: string) {
+      if (!(this as any).loaded) throw notLoaded();
+      const k = this.entries.get(a);
+      if (!k) return null;
+      const e = new JSecretKeyEntry(); e.key = k; return e;
+    },
+    "setEntry(Ljava/lang/String;Ljava/security/KeyStore$Entry;Ljava/security/KeyStore$ProtectionParameter;)V": function (this: JKeyStore, a: string, e: JSecretKeyEntry) {
+      if (!(e instanceof JSecretKeyEntry) || !e.key) throw rt.mkThrowable("java/security/KeyStoreException", "Unsupported entry type");
+      this.entries.set(a, e.key); this.persist();
+    },
+    "setKeyEntry(Ljava/lang/String;Ljava/security/Key;[C[Ljava/security/cert/Certificate;)V": function (this: JKeyStore, a: string, k: JSecretKeySpec) {
+      if (!(k instanceof JSecretKeySpec)) throw rt.mkThrowable("java/security/KeyStoreException", "Unsupported key type");
+      this.entries.set(a, k); this.persist();
+    },
+    "deleteEntry(Ljava/lang/String;)V": function (this: JKeyStore, a: string) { this.entries.delete(a); this.persist(); },
+    "getCertificate(Ljava/lang/String;)Ljava/security/cert/Certificate;": () => null,
+    "getCertificateChain(Ljava/lang/String;)[Ljava/security/cert/Certificate;": () => null,
+    "getProvider()Ljava/security/Provider;": () => null,
+  },
+});
+defineException("java/security/KeyStoreException", "java/security/GeneralSecurityException");
+defineException("java/security/UnrecoverableKeyException", "java/security/GeneralSecurityException");
+
+// KeyGenerator: AES / HmacSHA* material from getRandomValues. Under the "AndroidKeyStore"
+// provider the AlgorithmParameterSpec names the alias (KeyGenParameterSpec.getKeystoreAlias),
+// and the generated key is stored there.
+class JKeyGenerator extends JObj { algo = ""; provider: string | null = null; bits = 0; alias: string | null = null; }
+const KEYGEN_DEFAULT_BITS: Record<string, number> = { AES: 128, HMACSHA1: 160, HMACSHA256: 256, HMACSHA384: 384, HMACSHA512: 512, DESEDE: 168, CHACHA20: 256 };
+function keyGen(algo: string, provider: string | null): JKeyGenerator {
+  const bits = KEYGEN_DEFAULT_BITS[algo?.toUpperCase()];
+  if (!bits) throw rt.mkThrowable("java/security/NoSuchAlgorithmException", algo + " KeyGenerator not available");
+  if (provider != null && provider !== "AndroidKeyStore" && provider !== "AndroidOpenSSL" && provider !== "BC") {
+    throw rt.mkThrowable("java/security/NoSuchProviderException", "no such provider: " + provider);
+  }
+  const g = new JKeyGenerator(); g.algo = algo; g.provider = provider; g.bits = bits;
+  return g;
+}
+rt.register({
+  name: "javax/crypto/KeyGenerator", ctor: JKeyGenerator,
+  methods: {
+    "static getInstance(Ljava/lang/String;)Ljavax/crypto/KeyGenerator;": (a: string) => keyGen(a, null),
+    "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/KeyGenerator;": (a: string, p: string) => keyGen(a, p),
+    "getAlgorithm()Ljava/lang/String;": function (this: JKeyGenerator) { return this.algo; },
+    "init(I)V": function (this: JKeyGenerator, bits: number) { this.bits = bits; },
+    "init(ILjava/security/SecureRandom;)V": function (this: JKeyGenerator, bits: number) { this.bits = bits; },
+    "init(Ljava/security/SecureRandom;)V": () => {},
+    "init(Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JKeyGenerator, spec: any) {
+      if (this.provider !== "AndroidKeyStore") throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Unsupported parameter spec");
+      if (!spec || typeof spec.alias !== "string") throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Cannot initialize without a KeyGenParameterSpec parameter");
+      this.alias = spec.alias;
+      if (spec.keySize > 0) this.bits = spec.keySize;
+    },
+    "init(Ljava/security/spec/AlgorithmParameterSpec;Ljava/security/SecureRandom;)V": function (this: JKeyGenerator, spec: any) {
+      return (rt.link("javax/crypto/KeyGenerator").ctor.prototype as any)[mangleMethod("init", "(Ljava/security/spec/AlgorithmParameterSpec;)V")].call(this, spec);
+    },
+    "generateKey()Ljavax/crypto/SecretKey;": function (this: JKeyGenerator) {
+      if (this.provider === "AndroidKeyStore" && !this.alias) throw rt.mkThrowable("java/lang/IllegalStateException", "Not initialized");
+      const key = mkSecretKey(crypto.getRandomValues(new Uint8Array(this.bits >> 3)), this.algo);
+      if (this.alias) { const s = storeFor("AndroidKeyStore"); s.entries.set(this.alias, key); s.persist(); }
+      return key;
+    },
   },
 });

@@ -215,7 +215,7 @@ const wd = {
   reset: () => {
     const gone: string[] = [];
     for (const k of Object.keys(localStorage)) {
-      if (k.startsWith("wd:db:") || k.startsWith("wd:prefs:") || k.startsWith("wd:install:")) { localStorage.removeItem(k); gone.push(k); }
+      if (k.startsWith("wd:db:") || k.startsWith("wd:prefs:") || k.startsWith("wd:install:") || k.startsWith("wd:keystore:")) { localStorage.removeItem(k); gone.push(k); }
     }
     return gone;
   },

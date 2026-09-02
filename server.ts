@@ -2,7 +2,7 @@ import index from "./index.html";
 import { unzipSync } from "fflate";
 import { WEB_INJECT } from "./src/shell/webinject";
 
-type TcpData = { host: string; port: number; tls: boolean; sock: import("bun").Socket | null };
+type TcpData = { host: string; port: number; tls: boolean; sock: import("bun").Socket | null; ready: boolean; pending: (Uint8Array | Buffer)[] };
 
 // Hop-by-hop/encoding headers never survive the proxy; the framing/isolation set is dropped
 // only for `frame=1`, where the shell embeds the document in an iframe it must be able to script.
@@ -123,28 +123,35 @@ const server: Bun.Server<TcpData> = Bun.serve({
     if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
       return new Response("bad target", { status: 400 });
     }
-    const data: TcpData = { host, port, tls: u.searchParams.get("tls") === "1", sock: null };
+    const data: TcpData = { host, port, tls: u.searchParams.get("tls") === "1", sock: null, ready: false, pending: [] };
     return srv.upgrade(req, { data }) ? undefined : new Response("expected websocket", { status: 400 });
   },
   websocket: {
     async open(ws) {
       const d = ws.data;
+      // A TLS socket silently drops (returns 0 for) anything written before its handshake
+      // completes, and connect() resolves on the TCP open, not the handshake. So "ok" — the
+      // signal the page may write — goes out only once the socket can carry bytes, and anything
+      // that arrives before then is queued.
+      const ready = () => { d.ready = true; ws.send("ok"); for (const m of d.pending.splice(0)) d.sock?.write(m); };
       try {
         d.sock = await Bun.connect({
           hostname: d.host, port: d.port, tls: d.tls,
           socket: {
             data: (_s, chunk) => { ws.send(chunk); },
+            handshake: (_s, ok, err) => { if (ok) ready(); else ws.close(4001, String(err ?? "tls handshake failed").slice(0, 100)); },
             close: () => ws.close(),
             error: () => ws.close(),
           },
         });
-        ws.send("ok");
+        if (!d.tls) ready();
       } catch (e) {
         ws.close(4000, String(e).slice(0, 100));
       }
     },
     message(ws, msg) {
-      if (typeof msg !== "string") ws.data.sock?.write(msg);
+      if (typeof msg === "string") return;
+      if (ws.data.ready) ws.data.sock?.write(msg); else ws.data.pending.push(msg);
     },
     close(ws) { ws.data.sock?.end(); },
   },

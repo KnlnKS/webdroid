@@ -1,8 +1,9 @@
 // android.graphics.drawable.* — Drawable hierarchy, XML inflation, 9-patch, vectors.
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
-import { JCanvas, JRect, JBitmap, cssColor, decodeBytes, tintedBmp } from "./graphics";
+import { vcall, mkEnumSet } from "../jvm/natives/jlang";
+import { mangleMethod } from "../jvm/abi";
+import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, insetsOf } from "./graphics";
 import { device } from "../shell/config";
 import { Resources, type RV, type JTheme, AID, T_STR, rvColor, rvDimen, rvFloat, normRV, parseFwValue } from "./res";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
@@ -23,6 +24,7 @@ export class JDrawable extends JObj {
   tint: number | null = null;
   autoMirrored = false;
   layoutDir = 0;
+  visible = true;
 
   /** TS-side paint. Subclasses override. */
   paint(cv: JCanvas) {}
@@ -31,9 +33,19 @@ export class JDrawable extends JObj {
   onStateChange(): boolean { return false; }
 }
 
+const M_onBoundsChange = mangleMethod("onBoundsChange", "(Landroid/graphics/Rect;)V");
+const M_onStateChange = mangleMethod("onStateChange", "([I)Z");
+const M_onLevelChange = mangleMethod("onLevelChange", "(I)Z");
+const M_drawD = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
+/** AOSP setBounds: only a real change reaches onBoundsChange, dispatched virtually so an app
+ *  subclass's override (shape caches, wrapped children) sees it */
 function setBounds(this: JDrawable, l: number, t: number, r: number, b: number) {
-  this.bounds.left = l; this.bounds.top = t; this.bounds.right = r; this.bounds.bottom = b;
-  onBoundsChangeAll(this);
+  const bd = this.bounds;
+  if (bd.left === l && bd.top === t && bd.right === r && bd.bottom === b) return;
+  bd.left = l; bd.top = t; bd.right = r; bd.bottom = b;
+  const f = (this as any)[M_onBoundsChange];
+  const res = f ? f.call(this, bd) : onBoundsChangeAll(this);
+  if (res instanceof Promise) return res;
 }
 function scheduleSelf(this: JDrawable, r: unknown, when: bigint) {
   if (this.callback) void vcall(this.callback, "scheduleDrawable", "(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;J)V", this, r, when);
@@ -69,10 +81,17 @@ const drawableMethods: NativeSpec["methods"] = {
   "setTintMode(Landroid/graphics/PorterDuff$Mode;)V": function () {},
   "setState([I)Z": function (this: JDrawable, st: Int32Array) {
     this.stateSet = [...st];
-    return this.onStateChange() ? 1 : 0;
+    return (this as any)[M_onStateChange].call(this, st);
   },
+  "onStateChange([I)Z": function (this: JDrawable) { return this.onStateChange() ? 1 : 0; },
+  "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JDrawable) { onBoundsChangeAll(this); },
+  "onLevelChange(I)Z": () => 0,
   "getState()[I": function (this: JDrawable) { return Int32Array.from(this.stateSet); },
-  "setLevel(I)Z": function (this: JDrawable, l: number) { this.level = l; return 1; },
+  "setLevel(I)Z": function (this: JDrawable, l: number) {
+    if (this.level === l) return 0;
+    this.level = l;
+    return (this as any)[M_onLevelChange].call(this, l);
+  },
   "getLevel()I": function (this: JDrawable) { return this.level; },
   "setCallback(Landroid/graphics/drawable/Drawable$Callback;)V": function (this: JDrawable, cb: unknown) { this.callback = cb; },
   "getCallback()Landroid/graphics/drawable/Drawable$Callback;": function (this: JDrawable) { return this.callback; },
@@ -94,7 +113,24 @@ const drawableMethods: NativeSpec["methods"] = {
     return 0;
   },
   "getOpacity()I": () => -3,
-  "setVisible(ZZ)Z": () => 1,
+  "static resolveOpacity(II)I": (a: number, b: number) => a === b ? a : a === 0 || b === 0 ? 0 : a === -3 || b === -3 ? -3 : a === -2 || b === -2 ? -2 : -1,
+  "setVisible(ZZ)Z": function (this: JDrawable, v: number) { const changed = this.visible !== !!v; this.visible = !!v; return changed ? 1 : 0; },
+  "isVisible()Z": function (this: JDrawable) { return this.visible ? 1 : 0; },
+  "getColorFilter()Landroid/graphics/ColorFilter;": () => null,
+  "setTintBlendMode(Landroid/graphics/BlendMode;)V": () => {},
+  "getChangingConfigurations()I": () => 0,
+  "getOutline(Landroid/graphics/Outline;)V": function (this: JDrawable, o: unknown) {
+    const b = this.bounds;
+    return vcall(o, "setRect", "(IIII)V", b.left, b.top, b.right, b.bottom);
+  },
+  "getOpticalInsets()Landroid/graphics/Insets;": () => insetsOf(0, 0, 0, 0),
+  "getTransparentRegion()Landroid/graphics/Region;": () => null,
+  "isProjected()Z": () => 0,
+  "canApplyTheme()Z": () => 0,
+  "applyTheme(Landroid/content/res/Resources$Theme;)V": () => {},
+  "onLayoutDirectionChanged(I)Z": () => 0,
+  "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;)V": () => {},
+  "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V": () => {},
   "setAutoMirrored(Z)V": function (this: JDrawable, m: number) { this.autoMirrored = !!m; },
   "isAutoMirrored()Z": function (this: JDrawable) { return this.autoMirrored ? 1 : 0; },
   "setLayoutDirection(I)Z": function (this: JDrawable, d: number) {
@@ -276,6 +312,14 @@ export class JGradientDrawable extends JDrawable {
   gradRadius = 0;
   sizeW = -1; sizeH = -1;
   padding = new JRect();
+  solidCsl: JColorStateList | null = null;
+  onStateChange(): boolean {
+    if (!this.solidCsl) return false;
+    const c = cslColor(this.solidCsl, this.stateSet);
+    if (c === this.solid) return false;
+    this.solid = c;
+    return true;
+  }
   paint(cv: JCanvas) {
     const { left, top, right, bottom } = this.bounds;
     const w = right - left, h = bottom - top;
@@ -343,8 +387,26 @@ rt.register({
     "setSize(II)V": function (this: JGradientDrawable, w: number, h: number) { this.sizeW = w; this.sizeH = h; },
     "setGradientType(I)V": function (this: JGradientDrawable, t: number) { this.gradType = t; },
     "setGradientRadius(F)V": function (this: JGradientDrawable, r: number) { this.gradRadius = r; },
+    "<init>(Landroid/graphics/drawable/GradientDrawable$Orientation;[I)V": function (this: JGradientDrawable, o: { ord?: number } | null, cs: Int32Array | null) {
+      this.gradColors = cs ? [...cs] : null;
+      this.gradAngle = ORIENT_ANGLE[o?.ord ?? 0] ?? 0;
+    },
+    "setOrientation(Landroid/graphics/drawable/GradientDrawable$Orientation;)V": function (this: JGradientDrawable, o: { ord?: number } | null) { this.gradAngle = ORIENT_ANGLE[o?.ord ?? 0] ?? 0; },
+    "getCornerRadius()F": function (this: JGradientDrawable) { return this.radii[0]; },
+    "getCornerRadii()[F": function (this: JGradientDrawable) {
+      const r = this.radii;
+      return Float32Array.from([r[0], r[0], r[1], r[1], r[2], r[2], r[3], r[3]]);
+    },
+    "setColor(Landroid/content/res/ColorStateList;)V": function (this: JGradientDrawable, csl: JColorStateList | null) {
+      this.solidCsl = csl;
+      this.solid = csl ? cslColor(csl, this.stateSet) : null;
+    },
+    "getColor()Landroid/content/res/ColorStateList;": function (this: JGradientDrawable) { return this.solidCsl ?? (this.solid !== null ? mkCsl(this.solid) : null); },
   },
 });
+// GradientDrawable.Orientation ordinals (TOP_BOTTOM first) as the angle each one means
+const ORIENT_ANGLE = [270, 225, 180, 135, 90, 45, 0, 315];
+mkEnumSet("android/graphics/drawable/GradientDrawable$Orientation", ["TOP_BOTTOM", "TR_BL", "RIGHT_LEFT", "BR_TL", "BOTTOM_TOP", "BL_TR", "LEFT_RIGHT", "TL_BR"]);
 
 /** a selector/color-state item matches when every required state is set and no negated one is */
 function matchesState(it: { states: number[]; negStates: number[] }, states: number[]): boolean {
@@ -387,15 +449,20 @@ rt.register({
 
 // ── LayerDrawable / InsetDrawable / Ripple
 class JLayerDrawable extends JDrawable {
-  layers: { d: JDrawable; insets: [number, number, number, number] }[] = [];
+  layers: { d: JDrawable; insets: [number, number, number, number]; w?: number; h?: number; gravity?: number }[] = [];
   ids: (number | null)[] = [];
+  /** AOSP updateLayerBounds: insets, then an explicit layer size placed by its gravity */
   layout() {
     for (const l of this.layers) {
-      l.d.bounds.left = this.bounds.left + l.insets[0];
-      l.d.bounds.top = this.bounds.top + l.insets[1];
-      l.d.bounds.right = this.bounds.right - l.insets[2];
-      l.d.bounds.bottom = this.bounds.bottom - l.insets[3];
-      onBoundsChangeAll(l.d);
+      let L = this.bounds.left + l.insets[0], T = this.bounds.top + l.insets[1];
+      let R = this.bounds.right - l.insets[2], B = this.bounds.bottom - l.insets[3];
+      const w = l.w !== undefined && l.w >= 0 ? l.w : -1, h = l.h !== undefined && l.h >= 0 ? l.h : -1;
+      if (w >= 0 || h >= 0) {
+        const g = l.gravity || (w >= 0 && h >= 0 ? 0x33 : w >= 0 ? 0x73 : 0x37);
+        if (w >= 0) { const hg = g & 7; L = hg === 1 ? ((L + R - w) >> 1) : hg === 5 ? R - w : L; R = L + w; }
+        if (h >= 0) { const vg = g & 0x70; T = vg === 16 ? ((T + B - h) >> 1) : vg === 80 ? B - h : T; B = T + h; }
+      }
+      setBounds.call(l.d, L, T, R, B);
     }
   }
   paint(cv: JCanvas) {
@@ -420,6 +487,39 @@ rt.register({
     "setLayerInset(IIIII)V": function (this: JLayerDrawable, i: number, l: number, t: number, r: number, b: number) {
       if (this.layers[i]) this.layers[i].insets = [l, t, r, b];
     },
+    "setLayerInsetLeft(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[0] = v; },
+    "setLayerInsetTop(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[1] = v; },
+    "setLayerInsetRight(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[2] = v; },
+    "setLayerInsetBottom(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[3] = v; },
+    "setLayerInsetStart(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[0] = v; },
+    "setLayerInsetEnd(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[2] = v; },
+    "getLayerInsetLeft(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[0] ?? 0; },
+    "getLayerInsetTop(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[1] ?? 0; },
+    "getLayerInsetRight(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[2] ?? 0; },
+    "getLayerInsetBottom(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[3] ?? 0; },
+    "getLayerInsetStart(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[0] ?? 0; },
+    "getLayerInsetEnd(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[2] ?? 0; },
+    "setLayerSize(III)V": function (this: JLayerDrawable, i: number, w: number, h: number) { if (this.layers[i]) { this.layers[i].w = w; this.layers[i].h = h; } },
+    "setLayerWidth(II)V": function (this: JLayerDrawable, i: number, w: number) { if (this.layers[i]) this.layers[i].w = w; },
+    "setLayerHeight(II)V": function (this: JLayerDrawable, i: number, h: number) { if (this.layers[i]) this.layers[i].h = h; },
+    "getLayerWidth(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.w ?? -1; },
+    "getLayerHeight(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.h ?? -1; },
+    "setLayerGravity(II)V": function (this: JLayerDrawable, i: number, g: number) { if (this.layers[i]) this.layers[i].gravity = g; },
+    "getLayerGravity(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.gravity ?? 0; },
+    "setId(II)V": function (this: JLayerDrawable, i: number, id: number) { this.ids[i] = id; },
+    "getId(I)I": function (this: JLayerDrawable, i: number) { return this.ids[i] ?? -1; },
+    "addLayer(Landroid/graphics/drawable/Drawable;)I": function (this: JLayerDrawable, d: JDrawable) {
+      d.callback = this;
+      this.layers.push({ d, insets: [0, 0, 0, 0] });
+      return this.layers.length - 1;
+    },
+    "setDrawableByLayerId(ILandroid/graphics/drawable/Drawable;)Z": function (this: JLayerDrawable, id: number, d: JDrawable) {
+      const i = this.ids.indexOf(id);
+      if (i < 0 || !this.layers[i]) return 0;
+      this.layers[i].d = d; d.callback = this;
+      return 1;
+    },
+    "setDrawable(ILandroid/graphics/drawable/Drawable;)V": function (this: JLayerDrawable, i: number, d: JDrawable) { if (this.layers[i]) { this.layers[i].d = d; d.callback = this; } },
   },
 });
 /** RippleDrawable.RADIUS_AUTO: compute the radius from bounds instead of using an explicit one. */
@@ -518,6 +618,186 @@ class JVectorDrawable extends JDrawable {
   intrinsicW(): number { return this.vw * device.density; }
   intrinsicH(): number { return this.vh * device.density; }
 }
+// ── DrawableWrapper: one child, everything forwarded (AOSP's base for Clip/Scale/Inset and any
+// app drawable that decorates another). Bounds, state and level reach the child through its
+// own virtual hooks; draw() dispatches virtually so a compiled child subclass paints itself.
+export class JDrawableWrapper extends JDrawable {
+  dr: JDrawable | null = null;
+  paint(cv: JCanvas) { this.dr?.paint(cv); }
+  intrinsicW(): number { return this.dr ? this.dr.intrinsicW() : -1; }
+  intrinsicH(): number { return this.dr ? this.dr.intrinsicH() : -1; }
+  onStateChange(): boolean { return this.dr ? this.dr.onStateChange() : false; }
+}
+function wrapSet(this: JDrawableWrapper, d: JDrawable | null) {
+  if (this.dr) this.dr.callback = null;
+  this.dr = d;
+  if (d) {
+    d.callback = this;
+    d.stateSet = this.stateSet; d.level = this.level;
+    setBounds.call(d, this.bounds.left, this.bounds.top, this.bounds.right, this.bounds.bottom);
+  }
+}
+rt.register({
+  name: "android/graphics/drawable/DrawableWrapper", ctor: JDrawableWrapper, sup: "android/graphics/drawable/Drawable",
+  ifaces: ["android/graphics/drawable/Drawable$Callback"],
+  methods: {
+    "<init>(Landroid/graphics/drawable/Drawable;)V": wrapSet,
+    "setDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JDrawableWrapper, d: JDrawable | null) { wrapSet.call(this, d); invalidateSelf.call(this); },
+    "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableWrapper) { return this.dr; },
+    "draw(Landroid/graphics/Canvas;)V": function (this: JDrawableWrapper, cv: JCanvas) { if (this.dr) return (this.dr as any)[M_drawD].call(this.dr, cv); },
+    "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JDrawableWrapper, r: JRect) { if (this.dr) return setBounds.call(this.dr, r.left, r.top, r.right, r.bottom); },
+    "onStateChange([I)Z": function (this: JDrawableWrapper, st: Int32Array) { return this.dr ? vcall(this.dr, "setState", "([I)Z", st) : 0; },
+    "onLevelChange(I)Z": function (this: JDrawableWrapper, l: number) { return this.dr ? vcall(this.dr, "setLevel", "(I)Z", l) : 0; },
+    "isStateful()Z": function (this: JDrawableWrapper) { return this.dr ? vcall(this.dr, "isStateful", "()Z") : 0; },
+    "hasFocusStateSpecified()Z": function (this: JDrawableWrapper) { return this.dr ? vcall(this.dr, "hasFocusStateSpecified", "()Z") : 0; },
+    "getPadding(Landroid/graphics/Rect;)Z": function (this: JDrawableWrapper, r: JRect) {
+      if (this.dr) return vcall(this.dr, "getPadding", "(Landroid/graphics/Rect;)Z", r);
+      r.left = r.top = r.right = r.bottom = 0; return 0;
+    },
+    "getOpacity()I": function (this: JDrawableWrapper) { return this.dr ? vcall(this.dr, "getOpacity", "()I") : -2; },
+    "setAlpha(I)V": function (this: JDrawableWrapper, a: number) { this.alpha = a; if (this.dr) return vcall(this.dr, "setAlpha", "(I)V", a); },
+    "getAlpha()I": function (this: JDrawableWrapper) { return this.dr ? vcall(this.dr, "getAlpha", "()I") : 255; },
+    "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JDrawableWrapper, f: unknown) { if (this.dr) return vcall(this.dr, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", f); },
+    "setTintList(Landroid/content/res/ColorStateList;)V": function (this: JDrawableWrapper, c: unknown) { if (this.dr) return vcall(this.dr, "setTintList", "(Landroid/content/res/ColorStateList;)V", c); },
+    "setTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JDrawableWrapper, m: unknown) { if (this.dr) return vcall(this.dr, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", m); },
+    "setVisible(ZZ)Z": function (this: JDrawableWrapper, v: number, r: number) { return this.dr ? vcall(this.dr, "setVisible", "(ZZ)Z", v, r) : 0; },
+    "jumpToCurrentState()V": function (this: JDrawableWrapper) { if (this.dr) return vcall(this.dr, "jumpToCurrentState", "()V"); },
+    "mutate()Landroid/graphics/drawable/Drawable;": function (this: JDrawableWrapper) { if (this.dr) void vcall(this.dr, "mutate", "()Landroid/graphics/drawable/Drawable;"); return this; },
+    "applyTheme(Landroid/content/res/Resources$Theme;)V": () => {},
+    "canApplyTheme()Z": () => 0,
+    "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V": () => {},
+    "getOutline(Landroid/graphics/Outline;)V": function (this: JDrawableWrapper, o: unknown) { if (this.dr) return vcall(this.dr, "getOutline", "(Landroid/graphics/Outline;)V", o); },
+    "getChangingConfigurations()I": () => 0,
+    "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;": () => null,
+  },
+});
+// ── android.graphics.drawable.shapes + ShapeDrawable: a Shape is resized to the drawable's
+// bounds and painted with the drawable's own Paint (translated to the bounds origin, as AOSP).
+export class JShape extends JObj {
+  w = 0; h = 0;
+  path(): Path2D { const p = new Path2D(); p.rect(0, 0, this.w, this.h); return p; }
+}
+class JOvalShape extends JShape {
+  path(): Path2D { const p = new Path2D(); p.ellipse(this.w / 2, this.h / 2, this.w / 2, this.h / 2, 0, 0, Math.PI * 2); return p; }
+}
+const rr = (p: Path2D, x: number, y: number, w: number, h: number, radii: Float32Array | null) => {
+  if (!radii) { p.rect(x, y, w, h); return; }
+  // AOSP radii are [tl-x, tl-y, tr-x, tr-y, br-x, br-y, bl-x, bl-y]
+  p.roundRect(x, y, w, h, [
+    { x: radii[0], y: radii[1] }, { x: radii[2], y: radii[3] }, { x: radii[4], y: radii[5] }, { x: radii[6], y: radii[7] },
+  ]);
+};
+class JRoundRectShape extends JShape {
+  outer: Float32Array | null = null; inset: JRectF | null = null; inner: Float32Array | null = null;
+  path(): Path2D {
+    const p = new Path2D();
+    rr(p, 0, 0, this.w, this.h, this.outer);
+    if (this.inset) {
+      const i = this.inset;
+      // the inner ring is cut out (even-odd fill in ShapeDrawable's draw)
+      const q = new Path2D();
+      rr(q, i.left, i.top, this.w - i.left - i.right, this.h - i.top - i.bottom, this.inner);
+      p.addPath(q);
+    }
+    return p;
+  }
+}
+const M_shapeDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V");
+const M_onResize = mangleMethod("onResize", "(FF)V");
+const shapeMethods: NonNullable<NativeSpec["methods"]> = {
+  "<init>()V": function () {},
+  "getWidth()F": function (this: JShape) { return this.w; },
+  "getHeight()F": function (this: JShape) { return this.h; },
+  "resize(FF)V": function (this: JShape, w: number, h: number) {
+    w = Math.max(0, w); h = Math.max(0, h);
+    if (this.w === w && this.h === h) return;
+    this.w = w; this.h = h;
+    return (this as any)[M_onResize].call(this, w, h);
+  },
+  "onResize(FF)V": () => {},
+  "hasAlpha()Z": () => 1,
+  "getOutline(Landroid/graphics/Outline;)V": () => {},
+  "draw(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShape, cv: JCanvas, p: JPaint) {
+    const path = this.path();
+    const evenOdd = this instanceof JRoundRectShape && !!this.inset;
+    cv.drawShape(p, (c) => c.fill(path, evenOdd ? "evenodd" : "nonzero"), (c) => c.stroke(path));
+  },
+  "clone()Landroid/graphics/drawable/shapes/Shape;": function (this: JShape) { return Object.assign(new (this.constructor as any)(), this); },
+};
+rt.register({ name: "android/graphics/drawable/shapes/Shape", ctor: JShape, ifaces: ["java/lang/Cloneable"], methods: shapeMethods });
+rt.register({ name: "android/graphics/drawable/shapes/RectShape", ctor: class extends JShape {}, sup: "android/graphics/drawable/shapes/Shape", methods: { "<init>()V": function () {} } });
+rt.register({ name: "android/graphics/drawable/shapes/OvalShape", ctor: JOvalShape, sup: "android/graphics/drawable/shapes/RectShape", methods: { "<init>()V": function () {} } });
+rt.register({
+  name: "android/graphics/drawable/shapes/RoundRectShape", ctor: JRoundRectShape, sup: "android/graphics/drawable/shapes/RectShape",
+  methods: {
+    "<init>([FLandroid/graphics/RectF;[F)V": function (this: JRoundRectShape, outer: Float32Array | null, inset: JRectF | null, inner: Float32Array | null) {
+      if (outer && outer.length < 8) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", "outer radii must have >= 8 values");
+      if (inner && inner.length < 8) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", "inner radii must have >= 8 values");
+      this.outer = outer; this.inset = inset; this.inner = inner;
+    },
+  },
+});
+
+export class JShapeDrawable extends JDrawable {
+  shape: JShape | null = null;
+  p = new JPaint();
+  iw = 0; ih = 0;
+  padding: JRect | null = null;
+  effPaint(): JPaint { return this.tint === null ? this.p : Object.assign(new JPaint(), this.p, { color: this.tint }); }
+  /** sync path for native callers (LayerDrawable layers): native shape geometry only */
+  paint(cv: JCanvas) {
+    const sh = this.shape;
+    if (!sh) return;
+    const b = this.bounds, ctx = cv.ctx;
+    sh.w = b.right - b.left; sh.h = b.bottom - b.top;
+    ctx.save();
+    ctx.translate(b.left, b.top);
+    (shapeMethods["draw(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V"] as any).call(sh, cv, this.effPaint());
+    ctx.restore();
+  }
+  intrinsicW(): number { return this.iw; }
+  intrinsicH(): number { return this.ih; }
+}
+rt.register({
+  name: "android/graphics/drawable/ShapeDrawable", ctor: JShapeDrawable, sup: "android/graphics/drawable/Drawable",
+  methods: {
+    "<init>()V": function (this: JShapeDrawable) { this.p.antiAlias = true; },
+    "<init>(Landroid/graphics/drawable/shapes/Shape;)V": function (this: JShapeDrawable, sh: JShape | null) { this.shape = sh; this.p.antiAlias = true; },
+    "getPaint()Landroid/graphics/Paint;": function (this: JShapeDrawable) { return this.p; },
+    "getShape()Landroid/graphics/drawable/shapes/Shape;": function (this: JShapeDrawable) { return this.shape; },
+    "setShape(Landroid/graphics/drawable/shapes/Shape;)V": function (this: JShapeDrawable, sh: JShape | null) { this.shape = sh; invalidateSelf.call(this); },
+    "setIntrinsicWidth(I)V": function (this: JShapeDrawable, w: number) { this.iw = w; },
+    "setIntrinsicHeight(I)V": function (this: JShapeDrawable, h: number) { this.ih = h; },
+    "setPadding(IIII)V": function (this: JShapeDrawable, l: number, t: number, r: number, b: number) {
+      if (!l && !t && !r && !b) { this.padding = null; return; }
+      const p = this.padding ?? (this.padding = new JRect());
+      p.left = l; p.top = t; p.right = r; p.bottom = b;
+    },
+    "setPadding(Landroid/graphics/Rect;)V": function (this: JShapeDrawable, r: JRect | null) {
+      if (!r) { this.padding = null; return; }
+      const p = this.padding ?? (this.padding = new JRect());
+      p.left = r.left; p.top = r.top; p.right = r.right; p.bottom = r.bottom;
+    },
+    "setAlpha(I)V": function (this: JShapeDrawable, a: number) { this.alpha = a; this.p.color = ((a << 24) | (this.p.color & 0xffffff)) | 0; invalidateSelf.call(this); },
+    "getAlpha()I": function (this: JShapeDrawable) { return this.p.color >>> 24; },
+    "getOpacity()I": function (this: JShapeDrawable) { const a = this.p.color >>> 24; return a === 255 ? -1 : a === 0 ? -2 : -3; },
+    "getOutline(Landroid/graphics/Outline;)V": () => {},
+    // the virtual route: an app Shape subclass's onResize/draw, and an app ShapeDrawable's onDraw
+    "draw(Landroid/graphics/Canvas;)V": async function (this: JShapeDrawable, cv: JCanvas) {
+      const sh = this.shape;
+      if (!sh) return;
+      const b = this.bounds, ctx = cv.ctx;
+      await vcall(sh, "resize", "(FF)V", b.right - b.left, b.bottom - b.top);
+      ctx.save();
+      ctx.translate(b.left, b.top);
+      try { await vcall(this, "onDraw", "(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V", sh, cv, this.effPaint()); }
+      finally { ctx.restore(); }
+    },
+    "onDraw(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShapeDrawable, sh: JShape, cv: JCanvas, p: JPaint) {
+      return (sh as any)[M_shapeDraw].call(sh, cv, p);
+    },
+  },
+});
 rt.register({ name: "android/graphics/drawable/VectorDrawable", ctor: JVectorDrawable, sup: "android/graphics/drawable/Drawable" });
 
 // ── ColorStateList

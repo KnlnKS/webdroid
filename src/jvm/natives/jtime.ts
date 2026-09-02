@@ -1,7 +1,7 @@
 // java.util.Calendar/Date/TimeZone + java.text formatters + java.util.regex.
 
 import { rt, JObj, type NativeSpec } from "../runtime";
-import { javaMatches, javaRegex, mkEnumSet, type JSimpleEnum } from "./jlang";
+import { javaMatches, javaRegex, mkEnumSet, type JSimpleEnum, type JSB } from "./jlang";
 import { jarray } from "../abi";
 
 // ── Date
@@ -257,19 +257,43 @@ class JMatcher extends JObj {
   input = "";
   m: RegExpExecArray | null = null;
   lastEnd = 0;
+  appendPos = 0;
   regionS = 0;
   regionE = -1;    // -1 = input.length
   rEnd(): number { return this.regionE < 0 ? this.input.length : this.regionE; }
   sticky(): RegExp { return javaRegex(this.re.source, this.re.flags.replace(/[gy]/g, "") + "y"); }
 }
+function appendRepl(m: JMatcher, sb: JSB, r: string): JMatcher {
+  if (!m.m) throw rt.mkThrowable("java/lang/IllegalStateException", "No match available");
+  let out = "";
+  for (let i = 0; i < r.length; i++) {
+    const c = r[i];
+    if (c === "\\") { out += r[++i] ?? ""; continue; }
+    if (c === "$") {
+      if (r[i + 1] === "{") {
+        const j = r.indexOf("}", i);
+        if (j < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "named capturing group is missing trailing '}'");
+        out += m.m.groups?.[r.slice(i + 2, j)] ?? ""; i = j; continue;
+      }
+      let j = i + 1, num = "";
+      while (j < r.length && /[0-9]/.test(r[j]) && Number(num + r[j]) < m.m.length) num += r[j++];
+      if (!num) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Illegal group reference");
+      out += m.m[Number(num)] ?? ""; i = j - 1; continue;
+    }
+    out += c;
+  }
+  sb.s += m.input.slice(m.appendPos, m.m.index) + out;
+  m.appendPos = m.m.index + m.m[0].length;
+  return m;
+}
 function toJsRegex(p: string, flags: number, global: boolean): RegExp {
-  let f = "u";
+  let f = "ud"; // `d`: group indices, which start(n)/end(n) report
   if (flags & 2) f += "i";
   if (flags & 8) f += "m";
   if (flags & 32) f += "s";
   if (global) f += "g";
-  try { return new RegExp(p, f); }
-  catch { return new RegExp(p.replace(/\(\?</g, "(?:<"), f.replace("u", "")); }
+  try { return javaRegex(p, f); }
+  catch { return javaRegex(p.replace(/\(\?</g, "(?:<"), f.replace("u", "")); }
 }
 rt.register({
   name: "java/util/regex/Pattern", ctor: JPattern, ifaces: ["java/io/Serializable"],
@@ -334,8 +358,35 @@ rt.register({
     "groupCount()I": function (this: JMatcher) { return (this.m?.length ?? 1) - 1; },
     "start()I": function (this: JMatcher) { return this.m?.index ?? -1; },
     "end()I": function (this: JMatcher) { return this.m ? this.m.index + this.m[0].length : -1; },
-    "start(I)I": function (this: JMatcher) { return this.m?.index ?? -1; },
-    "end(I)I": function (this: JMatcher) { return this.m ? this.m.index + this.m[0].length : -1; },
+    "start(I)I": function (this: JMatcher, g: number) {
+      if (!this.m) throw rt.mkThrowable("java/lang/IllegalStateException", "No match available");
+      if (g === 0) return this.m.index;
+      const ix = (this.m as unknown as { indices?: (number[] | undefined)[] }).indices?.[g];
+      return ix ? ix[0] : -1;
+    },
+    "end(I)I": function (this: JMatcher, g: number) {
+      if (!this.m) throw rt.mkThrowable("java/lang/IllegalStateException", "No match available");
+      if (g === 0) return this.m.index + this.m[0].length;
+      const ix = (this.m as unknown as { indices?: (number[] | undefined)[] }).indices?.[g];
+      return ix ? ix[1] : -1;
+    },
+    "group(Ljava/lang/String;)Ljava/lang/String;": function (this: JMatcher, n: string) { return this.m?.groups?.[n] ?? null; },
+    "toMatchResult()Ljava/util/regex/MatchResult;": function (this: JMatcher) {
+      const c = new JMatcher(); c.re = this.re; c.input = this.input; c.m = this.m; c.lastEnd = this.lastEnd; return c;
+    },
+    // appendReplacement/appendTail: the classic find() loop that rewrites a string piecewise.
+    // The replacement's $n / ${name} refer to this match's groups; a backslash escapes.
+    "appendReplacement(Ljava/lang/StringBuffer;Ljava/lang/String;)Ljava/util/regex/Matcher;": function (this: JMatcher, sb: JSB, r: string) { return appendRepl(this, sb, r); },
+    "appendReplacement(Ljava/lang/StringBuilder;Ljava/lang/String;)Ljava/util/regex/Matcher;": function (this: JMatcher, sb: JSB, r: string) { return appendRepl(this, sb, r); },
+    "appendTail(Ljava/lang/StringBuffer;)Ljava/lang/StringBuffer;": function (this: JMatcher, sb: JSB) { sb.s += this.input.slice(this.appendPos); return sb; },
+    "appendTail(Ljava/lang/StringBuilder;)Ljava/lang/StringBuilder;": function (this: JMatcher, sb: JSB) { sb.s += this.input.slice(this.appendPos); return sb; },
+    "static quoteReplacement(Ljava/lang/String;)Ljava/lang/String;": (s: string) => s.replace(/[\\$]/g, "\\$&"),
+    "usePattern(Ljava/util/regex/Pattern;)Ljava/util/regex/Matcher;": function (this: JMatcher, p: JPattern) {
+      this.re = toJsRegex(p.flags & 16 ? p.src.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : p.src, p.flags, true);
+      this.m = null;
+      return this;
+    },
+    "pattern()Ljava/util/regex/Pattern;": function (this: JMatcher) { const p = new JPattern(); p.src = this.re.source; return p; },
     "replaceAll(Ljava/lang/String;)Ljava/lang/String;": function (this: JMatcher, r: string) {
       return this.input.replace(javaRegex(this.re.source, this.re.flags), r);
     },
@@ -343,14 +394,14 @@ rt.register({
       return this.input.replace(javaRegex(this.re.source, this.re.flags.replace("g", "")), r);
     },
     "reset()Ljava/util/regex/Matcher;": function (this: JMatcher) {
-      this.lastEnd = 0;
+      this.lastEnd = 0; this.appendPos = 0;
       this.m = null;
       this.regionS = 0; this.regionE = -1;
       return this;
     },
     "reset(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;": function (this: JMatcher, s: unknown) {
       this.input = String(s ?? "");
-      this.lastEnd = 0;
+      this.lastEnd = 0; this.appendPos = 0;
       this.m = null;
       return this;
     },

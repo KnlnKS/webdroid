@@ -896,13 +896,22 @@ function mkActivityInfo(cls: string): JActivityInfo {
 }
 
 // ── Window + decor + ActionBar-lite
+/** PhoneWindow's own content handling, not the Dialog subclass's override: appcompat's
+ *  setContentView override installs its sub-decor THROUGH Window.setContentView, so dispatching
+ *  back to the override would recurse. */
+const dialogNative = (name: string, desc: string) => rt.link("android/app/Dialog").ctor.prototype[mangleMethod(name, desc)] as (...a: unknown[]) => unknown;
 class JWindow extends JObj {
   activity: any = null;
   decor: JFrameLayout | null = null;
   contentParent: JFrameLayout | null = null;
   actionBarView: JActionBarView | null = null;
   callbackObj: unknown = null;
+  /** a Dialog's window: content goes to the dialog, the context is the dialog's */
+  dialog: unknown = null;
   features = new Set<number>();
+  /** the window's OnBackInvokedDispatcher (AOSP: one per ViewRootImpl) */
+  backD: JObj | null = null;
+  backDispatcher(): JObj { return this.backD ??= new (rt.link("android/window/OnBackInvokedDispatcher").ctor)(); }
   /** WindowManager.LayoutParams flags; the shell reads FLAG_FULLSCREEN off the top activity. */
   flags = 0;
   /** WindowInsetsController appearance bits; `appearanceMask` = the bits the app has ever
@@ -1334,7 +1343,7 @@ const activityMethods: NonNullable<NativeSpec["methods"]> = {
   ...contextMethods,
   "<init>()V": function (this: JActivity) { this.window.activity = this; },
   "getWindow()Landroid/view/Window;": function (this: JActivity) { return this.window; },
-  "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": () => new (rt.link("android/window/OnBackInvokedDispatcher").ctor)(),
+  "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JActivity) { return this.window.backDispatcher(); },
   "getApplication()Landroid/app/Application;": function (this: JActivity) { return this.$host.application; },
   ...lifecycleCbMethods,
   "getWindowManager()Landroid/view/WindowManager;": function (this: JActivity) { return systemService(this, "window"); },
@@ -1442,6 +1451,19 @@ const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "onWindowFocusChanged(Z)V": function () {},
   "onAttachedToWindow()V": function () {},
+  // the rest of Window.Callback, as Activity's no-op defaults
+  "onContentChanged()V": function () {},
+  "onDetachedFromWindow()V": function () {},
+  "onWindowAttributesChanged(Landroid/view/WindowManager$LayoutParams;)V": function () {},
+  "onPanelClosed(ILandroid/view/Menu;)V": function () {},
+  "onSearchRequested()Z": () => 0,
+  "onSearchRequested(Landroid/view/SearchEvent;)Z": () => 0,
+  "onActionModeStarted(Landroid/view/ActionMode;)V": function () {},
+  "onActionModeFinished(Landroid/view/ActionMode;)V": function () {},
+  "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;": () => null,
+  "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;": () => null,
+  "onPointerCaptureChanged(Z)V": function () {},
+  "onProvideKeyboardShortcuts(Ljava/util/List;Landroid/view/Menu;I)V": function () {},
   "onLowMemory()V": function () {},
   "onTrimMemory(I)V": function () {},
   "onUserInteraction()V": function () {},
@@ -1665,7 +1687,9 @@ rt.register({
     "isStatusBarContrastEnforced()Z": () => 0,
     "isNavigationBarContrastEnforced()Z": () => 0,
     "getDecorView()Landroid/view/View;": async function (this: JWindow) {
-      // dialog windows: materialize a decor so WindowCompat/insets helpers can operate
+      // AOSP installs the real decor on first access (appcompat asks for it before
+      // setContentView); dialog windows materialize a bare one so insets helpers can operate
+      if (!this.decor && this.activity instanceof JActivity) await ensureDecor(this.activity);
       return this.decor ??= await newObj("android/widget/FrameLayout", "(Landroid/content/Context;)V", this.activity);
     },
     "peekDecorView()Landroid/view/View;": function (this: JWindow) { return this.decor; },
@@ -1673,13 +1697,20 @@ rt.register({
       return this.decor ? findById(this.decor, id) : null;
     },
     "setContentView(I)V": function (this: JWindow, id: number) {
+      if (this.dialog) return dialogNative("setContentView", "(I)V").call(this.dialog, id);
       return (activityMethods["setContentView(I)V"] as any).call(this.activity, id);
     },
     "setContentView(Landroid/view/View;)V": function (this: JWindow, v: unknown) {
+      if (this.dialog) return dialogNative("setContentView", "(Landroid/view/View;)V").call(this.dialog, v);
       return (activityMethods["setContentView(Landroid/view/View;)V"] as any).call(this.activity, v);
     },
     "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JWindow, v: unknown, lp: unknown) {
+      if (this.dialog) return dialogNative("setContentView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V").call(this.dialog, v, lp);
       return (activityMethods["setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V"] as any).call(this.activity, v, lp);
+    },
+    "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JWindow, v: unknown, lp: unknown) {
+      if (this.dialog) return dialogNative("addContentView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V").call(this.dialog, v, lp);
+      return (activityMethods["addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V"] as any).call(this.activity, v, lp);
     },
     "setFlags(II)V": function (this: JWindow, flags: number, mask: number) { setWindowFlags(this, (this.flags & ~mask) | (flags & mask)); },
     "addFlags(I)V": function (this: JWindow, f: number) { setWindowFlags(this, this.flags | f); },
@@ -1710,11 +1741,12 @@ rt.register({
       if (lp) setWindowFlags(this, lp.flags);
     },
     "getCallback()Landroid/view/Window$Callback;": function (this: JWindow) { return this.callbackObj ?? this.activity; },
+    "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JWindow) { return this.backDispatcher(); },
     "setCallback(Landroid/view/Window$Callback;)V": function (this: JWindow, cb: unknown) { this.callbackObj = cb; },
     "setTitle(Ljava/lang/CharSequence;)V": function (this: JWindow, t: unknown) {
       if (this.activity) (activityMethods["setTitle(Ljava/lang/CharSequence;)V"] as any).call(this.activity, t);
     },
-    "getContext()Landroid/content/Context;": function (this: JWindow) { return this.activity; },
+    "getContext()Landroid/content/Context;": function (this: JWindow) { return this.activity ?? (this.dialog as { jctx?: unknown } | null)?.jctx ?? null; },
     "setWindowAnimations(I)V": () => {},
     "setLayout(II)V": () => {},
     "setGravity(I)V": () => {},
@@ -2220,11 +2252,19 @@ function fillProc<T extends JRunningAppProcessInfo>(p: T): T {
   return p;
 }
 const myProcess = () => fillProc(procInfo ??= new JRunningAppProcessInfo());
+// Back itself is still delivered through Activity.onBackPressed (the pre-33 route androidx's
+// OnBackPressedDispatcher also serves), so the registry only has to hold the callbacks.
+class JBackDispatcher extends JObj { cbs: { p: number; cb: unknown }[] = []; }
 rt.register({
-  name: "android/window/OnBackInvokedDispatcher", ctor: class extends JObj {},
+  name: "android/window/OnBackInvokedDispatcher", ctor: JBackDispatcher,
+  statics: { PRIORITY_DEFAULT: 0, PRIORITY_OVERLAY: 1000000, PRIORITY_SYSTEM: -1 },
   methods: {
-    "registerOnBackInvokedCallback(ILandroid/window/OnBackInvokedCallback;)V": () => {},
-    "unregisterOnBackInvokedCallback(Landroid/window/OnBackInvokedCallback;)V": () => {},
+    "registerOnBackInvokedCallback(ILandroid/window/OnBackInvokedCallback;)V": function (this: JBackDispatcher, p: number, cb: unknown) {
+      if (p < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Application registered OnBackInvokedCallback cannot have negative priority. Value: " + p);
+      this.cbs = this.cbs.filter((e) => e.cb !== cb);
+      this.cbs.push({ p, cb });
+    },
+    "unregisterOnBackInvokedCallback(Landroid/window/OnBackInvokedCallback;)V": function (this: JBackDispatcher, cb: unknown) { this.cbs = this.cbs.filter((e) => e.cb !== cb); },
   },
 });
 rt.register({ name: "android/window/OnBackInvokedCallback", ctor: class extends JObj {} });

@@ -541,6 +541,14 @@ rt.register({
   },
 });
 rt.register({ name: "android/text/StaticLayout", ctor: JStaticLayout, sup: "android/text/Layout", methods: {} });
+/** a StaticLayout for a TextView's current text/paint/width (what TextView.getLayout() hands out) */
+export function mkStaticLayout(text: string, p: JTextPaint, w: number, mult = 1, add = 0, maxLines = Number.MAX_SAFE_INTEGER): JLayout {
+  const l = new JStaticLayout();
+  l.text = text; l.paint = p; l.width = Math.max(0, w);
+  l.spacingMult = mult; l.spacingAdd = add;
+  l.layoutLines(maxLines);
+  return l;
+}
 
 // Layout$Alignment enum + TextDirectionHeuristics markers
 mkEnumSet("android/text/Layout$Alignment", ["ALIGN_NORMAL", "ALIGN_OPPOSITE", "ALIGN_CENTER"]);
@@ -648,5 +656,49 @@ rt.register({
     "clear(Ljava/lang/String;)V": function (this: JTime) { Object.assign(this, new JTime()); },
     "static isEpoch(Landroid/text/format/Time;)Z": (t: JTime) => (t.millis() === 0 ? 1 : 0),
     "static compare(Landroid/text/format/Time;Landroid/text/format/Time;)I": (a: JTime, b: JTime) => Math.sign(a.millis() - b.millis()),
+  },
+});
+
+// ── android.text.method: the interfaces app classes implement (AllCaps/Password transformations,
+// custom movement methods) and the framework movement singletons. Our TextView lays text out
+// itself and does not yet map a touch to a character offset, so the link-following part of
+// LinkMovementMethod.onTouchEvent honestly reports "not handled".
+rt.register({ name: "android/text/method/TransformationMethod", ctor: class extends JObj {} });
+rt.register({ name: "android/text/method/MovementMethod", ctor: class extends JObj {} });
+class JBaseMovementMethod extends JObj {}
+const movementMethods: NonNullable<NativeSpec["methods"]> = {
+  "<init>()V": function () {},
+  "initialize(Landroid/widget/TextView;Landroid/text/Spannable;)V": () => {},
+  "onTakeFocus(Landroid/widget/TextView;Landroid/text/Spannable;I)V": () => {},
+  "onKeyDown(Landroid/widget/TextView;Landroid/text/Spannable;ILandroid/view/KeyEvent;)Z": () => 0,
+  "onKeyUp(Landroid/widget/TextView;Landroid/text/Spannable;ILandroid/view/KeyEvent;)Z": () => 0,
+  "onKeyOther(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/KeyEvent;)Z": () => 0,
+  "onTrackballEvent(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/MotionEvent;)Z": () => 0,
+  "onTouchEvent(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/MotionEvent;)Z": () => 0,
+  "onGenericMotionEvent(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/MotionEvent;)Z": () => 0,
+  "canSelectArbitrarily()Z": () => 0,
+};
+rt.register({ name: "android/text/method/BaseMovementMethod", ctor: JBaseMovementMethod, ifaces: ["android/text/method/MovementMethod"], methods: movementMethods });
+class JScrollingMovementMethod extends JBaseMovementMethod {}
+const scrollingMM = new JScrollingMovementMethod();
+rt.register({
+  name: "android/text/method/ScrollingMovementMethod", ctor: JScrollingMovementMethod, sup: "android/text/method/BaseMovementMethod",
+  methods: { "<init>()V": function () {}, "static getInstance()Landroid/text/method/MovementMethod;": () => scrollingMM },
+});
+class JLinkMovementMethod extends JScrollingMovementMethod {}
+const linkMM = new JLinkMovementMethod();
+rt.register({
+  name: "android/text/method/LinkMovementMethod", ctor: JLinkMovementMethod, sup: "android/text/method/ScrollingMovementMethod",
+  methods: { "<init>()V": function () {}, "static getInstance()Landroid/text/method/MovementMethod;": () => linkMM, "canSelectArbitrarily()Z": () => 1 },
+});
+class JPasswordTransformation extends JObj {}
+const passwordTM = new JPasswordTransformation();
+rt.register({
+  name: "android/text/method/PasswordTransformationMethod", ctor: JPasswordTransformation, ifaces: ["android/text/method/TransformationMethod"],
+  methods: {
+    "<init>()V": function () {},
+    "static getInstance()Landroid/text/method/PasswordTransformationMethod;": () => passwordTM,
+    "getTransformation(Ljava/lang/CharSequence;Landroid/view/View;)Ljava/lang/CharSequence;": async (s: unknown) => "\u2022".repeat((await csText(s)).length),
+    "onFocusChanged(Landroid/view/View;Ljava/lang/CharSequence;ZILandroid/graphics/Rect;)V": () => {},
   },
 });

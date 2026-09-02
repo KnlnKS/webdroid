@@ -46,6 +46,13 @@ async function loadCardBg(root: DialogRoot): Promise<void> {
 /** scrim + rounded card container drawn natively */
 class DialogRoot extends JFrameLayout {
   dialog: JDialog | null = null;
+  /** the window's android.R.id.content FrameLayout — appcompat finds it by id, reparents its
+   *  children into a sub-decor and swaps the ids, exactly as it does to an activity window */
+  content!: JFrameLayout;
+  setContent(v: JView | null) {
+    this.content.children.length = 0;
+    if (v) attachView(this.content, v);
+  }
   cardTop = 0; cardLeft = 0; cardW = 0; cardH = 0;
   /** the dialog window's own background, from its theme — not a hardcoded white card */
   cardBg: JDrawable | null = null;
@@ -60,9 +67,11 @@ rt.register({
       if (c && c.visibility !== 8) {
         const maxW = Math.min(this.measuredW - 96, 640);
         const availH = this.measuredH - 200;
-        await measureView(c, makeSpec(maxW, c.lp?.width === -1 ? MS_EXACTLY : (MS_AT_MOST | 0)), makeSpec(availH, MS_AT_MOST | 0));
+        // the card is as wide as its content asks: match_parent fills the dialog width
+        const wide = this.content.children.some((v) => v.lp?.width === -1);
+        await measureView(c, makeSpec(maxW, wide ? MS_EXACTLY : (MS_AT_MOST | 0)), makeSpec(availH, MS_AT_MOST | 0));
         this.cardW = Math.max(560, c.measuredW);
-        if (c.lp?.width === -1) this.cardW = maxW;
+        if (wide) this.cardW = maxW;
         await measureView(c, makeSpec(this.cardW, MS_EXACTLY), makeSpec(availH, MS_AT_MOST | 0));
         this.cardH = c.measuredH;
         this.cardLeft = (this.measuredW - this.cardW) >> 1;
@@ -115,6 +124,7 @@ rt.register({
 
 class JDialog extends JObj {
   jctx: any = null;
+  win: any = null;
   root: DialogRoot | null = null;
   content: JView | null = null;
   titleStr: string | null = null;
@@ -140,11 +150,16 @@ class JDialog extends JObj {
   }
   ensureRoot(): DialogRoot {
     if (!this.root) {
-      this.root = new DialogRoot();
-      this.root.dialog = this;
-      this.root.ctx = this.jctx;
-      this.root.jres = this.jctx?.$host?.res ?? null;
-      this.root.theme = dialogTheme(this.jctx?.$host, this.themeId);
+      const r = this.root = new DialogRoot();
+      r.dialog = this;
+      r.ctx = this.jctx;
+      r.jres = this.jctx?.$host?.res ?? null;
+      r.theme = dialogTheme(this.jctx?.$host, this.themeId);
+      const c = r.content = new JFrameLayout();
+      c.ctx = r.ctx; c.jres = r.jres; c.theme = r.theme;
+      c.idNum = 0x01020002;
+      const lp = new JFrameLP(); lp.width = -1; lp.height = -2; c.lp = lp;
+      attachView(r, c);
     }
     return this.root;
   }
@@ -179,24 +194,28 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "getContext()Landroid/content/Context;": function (this: JDialog) { return this.jctx; },
   "setContentView(I)V": async function (this: JDialog, layoutId: number) {
     const root = this.ensureRoot();
-    root.children.length = 0;
-    await inflateLayout(this.jctx, layoutId, root, true);
+    root.setContent(null);
+    await inflateLayout(this.jctx, layoutId, root.content, true);
     requestLayout();
   },
   "setContentView(Landroid/view/View;)V": function (this: JDialog, v: JView) {
     const root = this.ensureRoot();
-    root.children.length = 0;
     if (!v.lp) {
       const lp = new JFrameLP();
       lp.width = -2; lp.height = -2;
       v.lp = lp;
     }
-    attachView(root, v);
+    root.setContent(v);
     requestLayout();
   },
   "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
     v.lp = lp;
     (dialogMethods["setContentView(Landroid/view/View;)V"] as any).call(this, v);
+  },
+  "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
+    v.lp = lp;
+    attachView(this.ensureRoot().content, v);
+    requestLayout();
   },
   "show()V": async function (this: JDialog) {
     if (this.showing) return;
@@ -236,11 +255,16 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "findViewById(I)Landroid/view/View;": async function (this: JDialog, id: number) {
     return this.root ? findById(this.root, id) : null;
   },
-  "getWindow()Landroid/view/Window;": async function (this: JDialog) {
-    const info = rt.link("android/view/Window");
-    const w = new info.ctor();
-    w.decor = this.root;
-    return w;
+  // one Window per dialog, its callback the dialog itself (AOSP's ctor does w.setCallback(this)):
+  // appcompat wraps that callback and rejects a null one
+  "getWindow()Landroid/view/Window;": function (this: JDialog) {
+    if (!this.win) {
+      this.win = new (rt.link("android/view/Window").ctor)();
+      this.win.callbackObj = this;
+      this.win.dialog = this;
+    }
+    this.win.decor = this.ensureRoot();
+    return this.win;
   },
   "requestWindowFeature(I)Z": () => 1,
   "getLayoutInflater()Landroid/view/LayoutInflater;": async function (this: JDialog) {
@@ -252,6 +276,33 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": () => 0,
   "onBackPressed()V": function (this: JDialog) { if (this.cancelable) return this.cancel(); },
   "create()V": function () {},
+  // Window.Callback, as Dialog's defaults
+  "onContentChanged()V": function () {},
+  "onAttachedToWindow()V": function () {},
+  "onDetachedFromWindow()V": function () {},
+  "onWindowAttributesChanged(Landroid/view/WindowManager$LayoutParams;)V": function () {},
+  "onWindowFocusChanged(Z)V": function () {},
+  "onPanelClosed(ILandroid/view/Menu;)V": function () {},
+  "onSearchRequested()Z": () => 0,
+  "onSearchRequested(Landroid/view/SearchEvent;)Z": () => 0,
+  "onCreatePanelView(I)Landroid/view/View;": () => null,
+  "onCreatePanelMenu(ILandroid/view/Menu;)Z": () => 0,
+  "onPreparePanel(ILandroid/view/View;Landroid/view/Menu;)Z": () => 1,
+  "onMenuOpened(ILandroid/view/Menu;)Z": () => 1,
+  "onMenuItemSelected(ILandroid/view/MenuItem;)Z": () => 0,
+  "onActionModeStarted(Landroid/view/ActionMode;)V": function () {},
+  "onActionModeFinished(Landroid/view/ActionMode;)V": function () {},
+  "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;": () => null,
+  "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;": () => null,
+  "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": () => 0,
+  "dispatchKeyShortcutEvent(Landroid/view/KeyEvent;)Z": () => 0,
+  "dispatchTrackballEvent(Landroid/view/MotionEvent;)Z": () => 0,
+  "dispatchGenericMotionEvent(Landroid/view/MotionEvent;)Z": () => 0,
+  "dispatchPopulateAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)Z": () => 0,
+  "onKeyDown(ILandroid/view/KeyEvent;)Z": () => 0,
+  "onKeyUp(ILandroid/view/KeyEvent;)Z": () => 0,
+  "onSaveInstanceState()Landroid/os/Bundle;": () => new (rt.link("android/os/Bundle").ctor)(),
+  "onRestoreInstanceState(Landroid/os/Bundle;)V": function () {},
 };
 rt.register({
   name: "android/app/Dialog", ctor: JDialog,
@@ -368,17 +419,15 @@ async function buildAlertContent(d: JAlertDialog) {
     if (d.posText) mkBtn(d.posText, -1, d.posL);
     attachView(col, row);
   }
-  const root = d.ensureRoot();
-  root.children.length = 0;
   col.lp = new JFrameLP();
   (col.lp as JFrameLP).width = -1;
   (col.lp as JFrameLP).height = -2;
-  attachView(root, col);
+  d.ensureRoot().setContent(col);
 }
 const alertMethods: NativeSpec["methods"] = {
   ...dialogMethods,
   "show()V": async function (this: JAlertDialog) {
-    if (!this.built && !this.root?.children.length) {
+    if (!this.built && !this.root?.content.children.length) {
       this.built = true;
       await buildAlertContent(this);
     }
