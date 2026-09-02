@@ -761,7 +761,8 @@ Generic gaps this uncovered, none Flutter-specific:
   Found by a sticky method hook (wrap `rt.lz` too, per Debug tools) that showed `$clinit`
   running twice on two different `$i`s; fixed with an own-property check.
 - `Inflater.finished()` was never true for a chunked feeder (fflate only flags `final` when
-  told), so ProfileInstaller's `readCompressed` rejected every fully decoded baseline profile.
+  told), so ProfileInstaller's `readCompressed` rejected every fully decoded baseline profile;
+  once it decoded one it needed `DeflaterOutputStream` to write the transcoded profile.
 - `DisplayManager` listeners/`getDisplays`/`$DisplayListener`, `File.listFiles(filter)`,
   `ApplicationInfo.split*`/`sharedLibraryFiles` (null, as for a plain base.apk), and the
   default uncaught handler now prints the `Caused by` chain (AOSP's does; it is what named the
