@@ -831,7 +831,7 @@ const viewMethods: NativeSpec["methods"] = {
   "onKeyUp(ILandroid/view/KeyEvent;)Z": () => 0,
   "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": () => 0,
   "dispatchGenericMotionEvent(Landroid/view/MotionEvent;)Z": () => 0,
-  "onSaveInstanceState()Landroid/os/Parcelable;": () => null,
+  "onSaveInstanceState()Landroid/os/Parcelable;": () => EMPTY_STATE,
   "onRestoreInstanceState(Landroid/os/Parcelable;)V": () => {},
   "saveHierarchyState(Landroid/util/SparseArray;)V": () => {},
   "restoreHierarchyState(Landroid/util/SparseArray;)V": () => {},
@@ -1751,6 +1751,24 @@ for (const n of [
   "OnKeyListener", "OnFocusChangeListener", "OnHoverListener", "OnGenericMotionListener", "OnScrollChangeListener",
   "OnSystemUiVisibilityChangeListener", "OnCapturedPointerListener", "OnContextClickListener", "OnUnhandledKeyEventListener",
 ]) rt.register({ name: "android/view/View$" + n, ctor: class extends JObj {} });
+// AbsSavedState / View.BaseSavedState: the Parcelable a view's onSaveInstanceState wraps its
+// super's state in. Nothing parcels here (state never leaves the process), so the chain is
+// the object graph itself.
+class JAbsSavedState extends JObj { superState: unknown = null; }
+const EMPTY_STATE = new JAbsSavedState();
+const savedStateMethods: NonNullable<NativeSpec["methods"]> = {
+  "<init>(Landroid/os/Parcelable;)V": function (this: JAbsSavedState, sup: unknown) {
+    if (sup == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "superState must not be null");
+    this.superState = sup === EMPTY_STATE ? null : sup;
+  },
+  "<init>(Landroid/os/Parcel;)V": function () {},
+  "<init>(Landroid/os/Parcel;Ljava/lang/ClassLoader;)V": function () {},
+  "getSuperState()Landroid/os/Parcelable;": function (this: JAbsSavedState) { return this.superState ?? EMPTY_STATE; },
+  "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+  "describeContents()I": () => 0,
+};
+rt.register({ name: "android/view/AbsSavedState", ctor: JAbsSavedState, ifaces: ["android/os/Parcelable"], statics: { EMPTY_STATE }, methods: savedStateMethods });
+rt.register({ name: "android/view/View$BaseSavedState", ctor: class extends JAbsSavedState {}, sup: "android/view/AbsSavedState", methods: savedStateMethods });
 // AccessibilityDelegate is a class in AOSP: apps subclass it and call super.
 rt.register({
   name: "android/view/View$AccessibilityDelegate", ctor: class extends JObj {},
