@@ -8,7 +8,7 @@ import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { attr, TV, parseAXML, type XmlNode } from "./axml";
-import { JAttrSet, normRV, rvString, type Resources, type RV, JTheme } from "./res";
+import { JAttrSet, normRV, resString, rvString, type Resources, type RV, JTheme } from "./res";
 import { JView, JLinearLP, attachView } from "./view";
 import { tfMedium } from "./graphics";
 import { JLinearLayout, JTextView, themeAccent, G } from "./widget";
@@ -42,11 +42,11 @@ function attrStringArray(res: Resources, node: XmlNode, name: string): string[] 
   const a = attr(node, name);
   return a && a.type === TV.REFERENCE ? bagStrings(res, a.data) : [];
 }
-function resString(jctx: any, id: number): string {
+function ctxString(jctx: any, id: number): string {
   const res: Resources | null = jctx?.$host?.res ?? null;
-  return res ? rvString(res, res.resolveRefs(res.value(id))) ?? "" : "";
+  return res ? resString(res, id) : "";
 }
-function resStringArray(jctx: any, id: number): string[] {
+function ctxStringArray(jctx: any, id: number): string[] {
   const res: Resources | null = jctx?.$host?.res ?? null;
   return res ? bagStrings(res, id) : [];
 }
@@ -127,10 +127,10 @@ const preferenceMethods: NonNullable<NativeSpec["methods"]> = {
   "setKey(Ljava/lang/String;)V": function (this: JPreference, k: string) { this.keyStr = k; },
   "getTitle()Ljava/lang/CharSequence;": function (this: JPreference) { return this.titleStr; },
   "setTitle(Ljava/lang/CharSequence;)V": function (this: JPreference, t: unknown) { this.titleStr = t == null ? "" : String(t); notifyChanged(this); },
-  "setTitle(I)V": function (this: JPreference, id: number) { this.titleStr = resString(this.jctx, id); notifyChanged(this); },
+  "setTitle(I)V": function (this: JPreference, id: number) { this.titleStr = ctxString(this.jctx, id); notifyChanged(this); },
   "getSummary()Ljava/lang/CharSequence;": function (this: JPreference) { return this.summaryStr; },
   "setSummary(Ljava/lang/CharSequence;)V": function (this: JPreference, t: unknown) { this.summaryStr = t == null ? "" : String(t); notifyChanged(this); },
-  "setSummary(I)V": function (this: JPreference, id: number) { this.summaryStr = resString(this.jctx, id); notifyChanged(this); },
+  "setSummary(I)V": function (this: JPreference, id: number) { this.summaryStr = ctxString(this.jctx, id); notifyChanged(this); },
   "isEnabled()Z": function (this: JPreference) { return this.enabled ? 1 : 0; },
   "setEnabled(Z)V": function (this: JPreference, e: number) { this.enabled = !!e; notifyChanged(this); },
   "isSelectable()Z": () => 1,
@@ -278,12 +278,12 @@ const listPrefMethods: NonNullable<NativeSpec["methods"]> = {
     this.value = this.keyStr && sp.map.has(this.keyStr) ? String(sp.map.get(this.keyStr)) : dflt;
   },
   "setEntries([Ljava/lang/CharSequence;)V": function (this: JListPreference, arr: unknown[]) { this.entries = (arr ?? []).map(String); },
-  "setEntries(I)V": function (this: JListPreference, id: number) { this.entries = resStringArray(this.jctx, id); },
+  "setEntries(I)V": function (this: JListPreference, id: number) { this.entries = ctxStringArray(this.jctx, id); },
   "getEntries()[Ljava/lang/CharSequence;": function (this: JListPreference) {
     const a: any = [...this.entries]; a.$t = "Ljava/lang/CharSequence;"; return a;
   },
   "setEntryValues([Ljava/lang/CharSequence;)V": function (this: JListPreference, arr: unknown[]) { this.entryValues = (arr ?? []).map(String); },
-  "setEntryValues(I)V": function (this: JListPreference, id: number) { this.entryValues = resStringArray(this.jctx, id); },
+  "setEntryValues(I)V": function (this: JListPreference, id: number) { this.entryValues = ctxStringArray(this.jctx, id); },
   "getEntryValues()[Ljava/lang/CharSequence;": function (this: JListPreference) {
     const a: any = [...this.entryValues]; a.$t = "Ljava/lang/CharSequence;"; return a;
   },
@@ -297,7 +297,7 @@ const listPrefMethods: NonNullable<NativeSpec["methods"]> = {
   "setValueIndex(I)V": function (this: JListPreference, i: number) { return setListValue(this, this.entryValues[i] ?? "", false); },
   "getDialogTitle()Ljava/lang/CharSequence;": function (this: JListPreference) { return this.dialogTitleStr; },
   "setDialogTitle(Ljava/lang/CharSequence;)V": function (this: JListPreference, t: unknown) { this.dialogTitleStr = t == null ? "" : String(t); },
-  "setDialogTitle(I)V": function (this: JListPreference, id: number) { this.dialogTitleStr = resString(this.jctx, id); },
+  "setDialogTitle(I)V": function (this: JListPreference, id: number) { this.dialogTitleStr = ctxString(this.jctx, id); },
   "onClick()V": function (this: JListPreference) { return showListPreferenceDialog(this); },
 };
 
