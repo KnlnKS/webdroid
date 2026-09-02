@@ -1189,6 +1189,8 @@ const menuItemMethods: NativeSpec["methods"] = {
   "isChecked()Z": function (this: JMenuItem) { return this.checked ? 1 : 0; },
   "setCheckable(Z)Landroid/view/MenuItem;": function (this: JMenuItem, v: number) { this.checkable = !!v; return this; },
   "setShowAsAction(I)V": function (this: JMenuItem, v: number) { this.showAsAction = v; invalidate(); },
+  "setOnActionExpandListener(Landroid/view/MenuItem$OnActionExpandListener;)Landroid/view/MenuItem;":
+    function (this: JMenuItem) { return this; },
   "setOnMenuItemClickListener(Landroid/view/MenuItem$OnMenuItemClickListener;)Landroid/view/MenuItem;":
     function (this: JMenuItem, l: unknown) { this.clickL = l; return this; },
   "getSubMenu()Landroid/view/SubMenu;": function (this: JMenuItem) { return this.sub; },
@@ -1205,6 +1207,34 @@ const menuItemMethods: NativeSpec["methods"] = {
 rt.register({ name: "webdroid/MenuItem", ctor: JMenuItem, ifaces: ["android/view/MenuItem"], methods: menuItemMethods });
 rt.register({ name: "android/view/MenuItem", ctor: class extends JObj {} });
 rt.register({ name: "android/view/SubMenu", ctor: class extends JObj {} });
+// Callback interfaces a menu's owner implements. An unregistered one auto-stubs and poisons
+// the app class declaring it, which takes the whole menu down with it.
+rt.register({ name: "android/view/MenuItem$OnMenuItemClickListener", ctor: class extends JObj {} });
+rt.register({ name: "android/view/MenuItem$OnActionExpandListener", ctor: class extends JObj {} });
+rt.register({ name: "android/view/CollapsibleActionView", ctor: class extends JObj {} });
+rt.register({ name: "android/view/ActionProvider$VisibilityListener", ctor: class extends JObj {} });
+// ActionProvider is an abstract class an app subclasses; the base keeps the visibility
+// listener and answers the queries AOSP's default implementation does.
+class JActionProvider extends JObj { visL: unknown = null; }
+rt.register({
+  name: "android/view/ActionProvider", ctor: JActionProvider,
+  methods: {
+    "<init>(Landroid/content/Context;)V": function () {},
+    "onCreateActionView()Landroid/view/View;": () => null,
+    "onCreateActionView(Landroid/view/MenuItem;)Landroid/view/View;": function (this: JActionProvider) {
+      return vcall(this, "onCreateActionView", "()Landroid/view/View;");
+    },
+    "onPerformDefaultAction()Z": () => 0,
+    "hasSubMenu()Z": () => 0,
+    "onPrepareSubMenu(Landroid/view/SubMenu;)V": () => {},
+    "overridesItemVisibility()Z": () => 0,
+    "isVisible()Z": () => 1,
+    "refreshVisibility(Z)V": function (this: JActionProvider, v: number) {
+      if (this.visL) void vcall(this.visL, "onActionProviderVisibilityChanged", "(Z)V", v);
+    },
+    "setVisibilityListener(Landroid/view/ActionProvider$VisibilityListener;)V": function (this: JActionProvider, l: unknown) { this.visL = l; },
+  },
+});
 const menuMethods: NativeSpec["methods"] = {
   "add(Ljava/lang/CharSequence;)Landroid/view/MenuItem;": function (this: JMenu, t: unknown) {
     const m = mkMenuItem(0, String(t ?? ""));

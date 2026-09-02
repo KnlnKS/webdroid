@@ -110,7 +110,7 @@ rt.register({
   fields: { left: "left", top: "top", right: "right", bottom: "bottom" },
   methods: rectMethods(true),
 });
-class JPoint extends JObj { x = 0; y = 0; }
+export class JPoint extends JObj { x = 0; y = 0; }
 rt.register({
   name: "android/graphics/Point", ctor: JPoint,
   fields: { x: "x", y: "y" },

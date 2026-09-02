@@ -65,6 +65,15 @@ const dateFormatMethods: NativeSpec["methods"] = {
     d.t = t;
     return d;
   },
+  // the non-throwing form: on failure AOSP returns null and sets errorIndex rather than raising
+  "parse(Ljava/lang/String;Ljava/text/ParsePosition;)Ljava/util/Date;": function (this: JDateFormat, s: string, pos: JParsePosition) {
+    const t = parseDate(s);
+    if (t === null) { pos.errorIndex = pos.index; return null; }
+    pos.index = s.length;
+    const d = new JDate();
+    d.t = t;
+    return d;
+  },
   "setTimeZone(Ljava/util/TimeZone;)V": () => {},
   "getTimeZone()Ljava/util/TimeZone;": () => localTz,
   "setLenient(Z)V": () => {},

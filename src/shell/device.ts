@@ -431,6 +431,12 @@ async function tick0(ctx: CanvasRenderingContext2D) {
         for (const o of overlays) {
           o.view.layoutRequested = true;
           await measureView(o.view, makeSpec(SCREEN_W, 0x80000000 | 0), makeSpec(contentH, 0x80000000 | 0));
+          // AOSP lays a window out inside the screen: a dropdown anchored near the right edge
+          // shifts left instead of hanging off it. The popup's own placement pass runs before
+          // its content has a measured width, so this is the pass that has the real numbers —
+          // and the position is written back, since hit-testing reads it too.
+          o.x = Math.max(0, Math.min(o.x, SCREEN_W - o.view.measuredW));
+          o.y = Math.max(0, Math.min(o.y, contentH - o.view.measuredH));
           await layoutView(o.view, o.x, o.y, o.x + o.view.measuredW, o.y + o.view.measuredH);
         }
         await fireGlobalLayout(decor);

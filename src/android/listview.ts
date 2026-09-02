@@ -19,7 +19,7 @@ import { addOverlay, removeOverlay } from "./popup";
 // marker interfaces
 for (const i of ["android/widget/Adapter", "android/widget/ListAdapter", "android/widget/SpinnerAdapter",
   "android/widget/AdapterView$OnItemClickListener", "android/widget/AdapterView$OnItemLongClickListener",
-  "android/widget/AdapterView$OnItemSelectedListener"]) {
+  "android/widget/AdapterView$OnItemSelectedListener", "android/widget/AbsListView$SelectionBoundsAdjuster"]) {
   rt.register({ name: i, ctor: class extends JObj {} });
 }
 

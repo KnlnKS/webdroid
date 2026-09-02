@@ -141,6 +141,8 @@ export class JView extends JObj {
   attached = false;
 
   idNum = -1;
+  /** android:contentDescription — the label an icon-only control answers to */
+  contentDesc: string | null = null;
   tag: unknown = null;
   keyedTags = new Map<number, unknown>();
   outlineProvider: unknown = null;
@@ -246,7 +248,7 @@ async function applyViewAttrs(v: JView, set: JAttrSet | null) {
   const ta = obtainStyled(res, v.theme, set, [
     AT.id, AT.background, AT.padding, AT.paddingLeft, AT.paddingTop, AT.paddingRight, AT.paddingBottom,
     AT.visibility, AT.clickable, AT.enabled, AT.minWidth, AT.minHeight, AT.alpha, AT.focusable,
-    AT.paddingStart, AT.paddingEnd, AT.tag,
+    AT.paddingStart, AT.paddingEnd, AT.tag, AT.contentDescription,
   ], 0, 0);
   const g = (i: number) => ta.vals[i];
   if (g(0)) v.idNum = g(0)!.d;
@@ -269,6 +271,7 @@ async function applyViewAttrs(v: JView, set: JAttrSet | null) {
   if (g(11)) v.minH = Math.round(rvDimen(res, g(11), 0));
   if (g(12)) v.alphaV = Math.max(0, Math.min(1, (g(12)!.t === 4 ? g(12)!.d : 1)));
   if (g(16)) v.tag = rvString(res, g(16));
+  if (g(17)) v.contentDesc = rvString(res, g(17));
 }
 
 export function defaultSize(size: number, spec: number): number {
@@ -678,8 +681,8 @@ const viewMethods: NativeSpec["methods"] = {
   "getLayerType()I": function (this: JView) { return this.layerType; },
   "setHapticFeedbackEnabled(Z)V": () => {},
   "setSoundEffectsEnabled(Z)V": () => {},
-  "setContentDescription(Ljava/lang/CharSequence;)V": () => {},
-  "getContentDescription()Ljava/lang/CharSequence;": () => null,
+  "setContentDescription(Ljava/lang/CharSequence;)V": async function (this: JView, cs: unknown) { this.contentDesc = cs === null ? null : await csText(cs); },
+  "getContentDescription()Ljava/lang/CharSequence;": function (this: JView) { return this.contentDesc; },
   "setImportantForAccessibility(I)V": () => {},
   "getImportantForAccessibility()I": () => 0,
   "setAccessibilityDelegate(Landroid/view/View$AccessibilityDelegate;)V": function (this: JView, d: unknown) { this.a11yDelegate = d; },
@@ -1967,6 +1970,8 @@ rt.register({
     "getRotation()I": () => 0,
     "getMetrics(Landroid/util/DisplayMetrics;)V": (dm: JDisplayMetrics) => fillMetrics(dm, device.height - device.statusBar),
     "getRealMetrics(Landroid/util/DisplayMetrics;)V": (dm: JDisplayMetrics) => fillMetrics(dm, device.height),
+    "getSize(Landroid/graphics/Point;)V": (p: JPoint) => { p.x = device.width; p.y = device.height - device.statusBar; },
+    "getRealSize(Landroid/graphics/Point;)V": (p: JPoint) => { p.x = device.width; p.y = device.height; },
     "getRefreshRate()F": () => 60,
     "getDisplayId()I": () => 0,
   },

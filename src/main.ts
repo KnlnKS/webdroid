@@ -174,12 +174,17 @@ const wd = {
   locateText: (s: string): { x: number; y: number } | null => {
     const want = s.toLowerCase();
     const decor = topDecor();
-    const roots: (readonly [any, number, number])[] = [...overlays].reverse().map((o) => [o.view, o.x, o.y] as const);
-    if (decor) roots.push([decor, 0, 0]);
-    for (const [rootView, ox, oy] of roots) {
-      for (const { v, x, y } of walkTree(rootView, 0, ox, oy, true)) {
+    // An overlay's own left/top already carry its position — the layout pass lays it out AT
+    // o.x/o.y — so seeding the walk with them again doubles the offset.
+    const roots: any[] = [...overlays].reverse().map((o) => o.view);
+    if (decor) roots.push(decor);
+    for (const rootView of roots) {
+      for (const { v, x, y } of walkTree(rootView, 0, 0, 0, true)) {
         const txt = String(v.text ?? "").toLowerCase(), raw = String(v.rawText ?? "").toLowerCase();
-        if ((txt === want || raw === want) && v.right > v.left) return { x: x + (v.right - v.left) / 2, y: y + (v.bottom - v.top) / 2 + contentTop() };
+        // the emulator driver resolves a tapText against text OR content-desc, so an icon-only
+        // control (an overflow button, a nav arrow) has to be findable here the same way
+        const cd = String(v.contentDesc ?? "").toLowerCase();
+        if ((txt === want || raw === want || cd === want) && v.right > v.left) return { x: x + (v.right - v.left) / 2, y: y + (v.bottom - v.top) / 2 + contentTop() };
       }
     }
     return null;

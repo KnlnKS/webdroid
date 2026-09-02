@@ -1207,6 +1207,8 @@ class JImageView extends JView {
   scaleType = 3; // FIT_CENTER
   adjustBounds = false;
   tintCsl: JColorStateList | null = null;
+  /** AOSP only applies these when adjustViewBounds is on */
+  maxW = Infinity; maxH = Infinity;
 }
 mkEnumSet("android/widget/ImageView$ScaleType", ["MATRIX", "FIT_XY", "FIT_START", "FIT_CENTER", "FIT_END", "CENTER", "CENTER_CROP", "CENTER_INSIDE"]);
 const imageViewMethods: NativeSpec["methods"] = {
@@ -1249,6 +1251,10 @@ const imageViewMethods: NativeSpec["methods"] = {
   },
   "getScaleType()Landroid/widget/ImageView$ScaleType;": function () { return null; },
   "setAdjustViewBounds(Z)V": function (this: JImageView, v: number) { this.adjustBounds = !!v; },
+  "setMaxWidth(I)V": function (this: JImageView, v: number) { this.maxW = v; requestLayout(this); },
+  "setMaxHeight(I)V": function (this: JImageView, v: number) { this.maxH = v; requestLayout(this); },
+  "getMaxWidth()I": function (this: JImageView) { return Number.isFinite(this.maxW) ? this.maxW : Number.MAX_SAFE_INTEGER; },
+  "getMaxHeight()I": function (this: JImageView) { return Number.isFinite(this.maxH) ? this.maxH : Number.MAX_SAFE_INTEGER; },
   "setColorFilter(I)V": function (this: JImageView, c: number) { if (this.drawable) this.drawable.tint = c; invalidate(); },
   "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": function (this: JImageView, c: number) {
     if (this.drawable) this.drawable.tint = c;
