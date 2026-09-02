@@ -2,6 +2,7 @@
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
+import { mangleMethod } from "../jvm/abi";
 import { JCanvas, JRect, JBitmap, cssColor, decodeBytes, tintedBmp } from "./graphics";
 import { device } from "../shell/config";
 import { Resources, type RV, type JTheme, AID, T_STR, rvColor, rvDimen, rvFloat, normRV, parseFwValue } from "./res";
@@ -31,9 +32,19 @@ export class JDrawable extends JObj {
   onStateChange(): boolean { return false; }
 }
 
+const M_onBoundsChange = mangleMethod("onBoundsChange", "(Landroid/graphics/Rect;)V");
+const M_onStateChange = mangleMethod("onStateChange", "([I)Z");
+const M_onLevelChange = mangleMethod("onLevelChange", "(I)Z");
+const M_drawD = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
+/** AOSP setBounds: only a real change reaches onBoundsChange, dispatched virtually so an app
+ *  subclass's override (shape caches, wrapped children) sees it */
 function setBounds(this: JDrawable, l: number, t: number, r: number, b: number) {
-  this.bounds.left = l; this.bounds.top = t; this.bounds.right = r; this.bounds.bottom = b;
-  onBoundsChangeAll(this);
+  const bd = this.bounds;
+  if (bd.left === l && bd.top === t && bd.right === r && bd.bottom === b) return;
+  bd.left = l; bd.top = t; bd.right = r; bd.bottom = b;
+  const f = (this as any)[M_onBoundsChange];
+  const res = f ? f.call(this, bd) : onBoundsChangeAll(this);
+  if (res instanceof Promise) return res;
 }
 function scheduleSelf(this: JDrawable, r: unknown, when: bigint) {
   if (this.callback) void vcall(this.callback, "scheduleDrawable", "(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;J)V", this, r, when);
@@ -69,10 +80,17 @@ const drawableMethods: NativeSpec["methods"] = {
   "setTintMode(Landroid/graphics/PorterDuff$Mode;)V": function () {},
   "setState([I)Z": function (this: JDrawable, st: Int32Array) {
     this.stateSet = [...st];
-    return this.onStateChange() ? 1 : 0;
+    return (this as any)[M_onStateChange].call(this, st);
   },
+  "onStateChange([I)Z": function (this: JDrawable) { return this.onStateChange() ? 1 : 0; },
+  "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JDrawable) { onBoundsChangeAll(this); },
+  "onLevelChange(I)Z": () => 0,
   "getState()[I": function (this: JDrawable) { return Int32Array.from(this.stateSet); },
-  "setLevel(I)Z": function (this: JDrawable, l: number) { this.level = l; return 1; },
+  "setLevel(I)Z": function (this: JDrawable, l: number) {
+    if (this.level === l) return 0;
+    this.level = l;
+    return (this as any)[M_onLevelChange].call(this, l);
+  },
   "getLevel()I": function (this: JDrawable) { return this.level; },
   "setCallback(Landroid/graphics/drawable/Drawable$Callback;)V": function (this: JDrawable, cb: unknown) { this.callback = cb; },
   "getCallback()Landroid/graphics/drawable/Drawable$Callback;": function (this: JDrawable) { return this.callback; },
@@ -518,6 +536,59 @@ class JVectorDrawable extends JDrawable {
   intrinsicW(): number { return this.vw * device.density; }
   intrinsicH(): number { return this.vh * device.density; }
 }
+// ── DrawableWrapper: one child, everything forwarded (AOSP's base for Clip/Scale/Inset and any
+// app drawable that decorates another). Bounds, state and level reach the child through its
+// own virtual hooks; draw() dispatches virtually so a compiled child subclass paints itself.
+export class JDrawableWrapper extends JDrawable {
+  dr: JDrawable | null = null;
+  paint(cv: JCanvas) { this.dr?.paint(cv); }
+  intrinsicW(): number { return this.dr ? this.dr.intrinsicW() : -1; }
+  intrinsicH(): number { return this.dr ? this.dr.intrinsicH() : -1; }
+  onStateChange(): boolean { return this.dr ? this.dr.onStateChange() : false; }
+}
+function wrapSet(this: JDrawableWrapper, d: JDrawable | null) {
+  if (this.dr) this.dr.callback = null;
+  this.dr = d;
+  if (d) {
+    d.callback = this;
+    d.stateSet = this.stateSet; d.level = this.level;
+    setBounds.call(d, this.bounds.left, this.bounds.top, this.bounds.right, this.bounds.bottom);
+  }
+}
+rt.register({
+  name: "android/graphics/drawable/DrawableWrapper", ctor: JDrawableWrapper, sup: "android/graphics/drawable/Drawable",
+  ifaces: ["android/graphics/drawable/Drawable$Callback"],
+  methods: {
+    "<init>(Landroid/graphics/drawable/Drawable;)V": wrapSet,
+    "setDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JDrawableWrapper, d: JDrawable | null) { wrapSet.call(this, d); invalidateSelf.call(this); },
+    "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableWrapper) { return this.dr; },
+    "draw(Landroid/graphics/Canvas;)V": function (this: JDrawableWrapper, cv: JCanvas) { if (this.dr) return (this.dr as any)[M_drawD].call(this.dr, cv); },
+    "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JDrawableWrapper, r: JRect) { if (this.dr) return setBounds.call(this.dr, r.left, r.top, r.right, r.bottom); },
+    "onStateChange([I)Z": function (this: JDrawableWrapper, st: Int32Array) { return this.dr ? vcall(this.dr, "setState", "([I)Z", st) : 0; },
+    "onLevelChange(I)Z": function (this: JDrawableWrapper, l: number) { return this.dr ? vcall(this.dr, "setLevel", "(I)Z", l) : 0; },
+    "isStateful()Z": function (this: JDrawableWrapper) { return this.dr ? vcall(this.dr, "isStateful", "()Z") : 0; },
+    "hasFocusStateSpecified()Z": function (this: JDrawableWrapper) { return this.dr ? vcall(this.dr, "hasFocusStateSpecified", "()Z") : 0; },
+    "getPadding(Landroid/graphics/Rect;)Z": function (this: JDrawableWrapper, r: JRect) {
+      if (this.dr) return vcall(this.dr, "getPadding", "(Landroid/graphics/Rect;)Z", r);
+      r.left = r.top = r.right = r.bottom = 0; return 0;
+    },
+    "getOpacity()I": function (this: JDrawableWrapper) { return this.dr ? vcall(this.dr, "getOpacity", "()I") : -2; },
+    "setAlpha(I)V": function (this: JDrawableWrapper, a: number) { this.alpha = a; if (this.dr) return vcall(this.dr, "setAlpha", "(I)V", a); },
+    "getAlpha()I": function (this: JDrawableWrapper) { return this.dr ? vcall(this.dr, "getAlpha", "()I") : 255; },
+    "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JDrawableWrapper, f: unknown) { if (this.dr) return vcall(this.dr, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", f); },
+    "setTintList(Landroid/content/res/ColorStateList;)V": function (this: JDrawableWrapper, c: unknown) { if (this.dr) return vcall(this.dr, "setTintList", "(Landroid/content/res/ColorStateList;)V", c); },
+    "setTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JDrawableWrapper, m: unknown) { if (this.dr) return vcall(this.dr, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", m); },
+    "setVisible(ZZ)Z": function (this: JDrawableWrapper, v: number, r: number) { return this.dr ? vcall(this.dr, "setVisible", "(ZZ)Z", v, r) : 0; },
+    "jumpToCurrentState()V": function (this: JDrawableWrapper) { if (this.dr) return vcall(this.dr, "jumpToCurrentState", "()V"); },
+    "mutate()Landroid/graphics/drawable/Drawable;": function (this: JDrawableWrapper) { if (this.dr) void vcall(this.dr, "mutate", "()Landroid/graphics/drawable/Drawable;"); return this; },
+    "applyTheme(Landroid/content/res/Resources$Theme;)V": () => {},
+    "canApplyTheme()Z": () => 0,
+    "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V": () => {},
+    "getOutline(Landroid/graphics/Outline;)V": function (this: JDrawableWrapper, o: unknown) { if (this.dr) return vcall(this.dr, "getOutline", "(Landroid/graphics/Outline;)V", o); },
+    "getChangingConfigurations()I": () => 0,
+    "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;": () => null,
+  },
+});
 rt.register({ name: "android/graphics/drawable/VectorDrawable", ctor: JVectorDrawable, sup: "android/graphics/drawable/Drawable" });
 
 // ── ColorStateList

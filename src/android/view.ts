@@ -108,6 +108,7 @@ const M_onAttached = mangleMethod("onAttachedToWindow", "()V");
 const M_onDetached = mangleMethod("onDetachedFromWindow", "()V");
 const M_onConfigChanged = mangleMethod("onConfigurationChanged", "(Landroid/content/res/Configuration;)V");
 const M_drawableStateChanged = mangleMethod("drawableStateChanged", "()V");
+const M_setBounds = mangleMethod("setBounds", "(IIII)V");
 
 /** absolute position of v's top-left: translations applied, each ancestor's scroll removed */
 export function locationOnScreen(v: JView): [number, number] {
@@ -359,8 +360,9 @@ export async function drawView(v: JView, cv: JCanvas) {
     ctx.rect(0, 0, v.width(), v.height());
     ctx.clip();
     if (v.background) {
-      v.background.bounds.left = 0; v.background.bounds.top = 0;
-      v.background.bounds.right = v.width(); v.background.bounds.bottom = v.height();
+      // through setBounds, not the fields: AOSP's onBoundsChange is where wrapper/shape drawables
+      // (and app subclasses) rebuild their geometry, and it only fires on a real change
+      await guardCall((v.background as any)[M_setBounds], v.background, 0, 0, v.width(), v.height());
       await guardCall((v.background as any)[M_drawableDraw], v.background, cv);
     }
     ctx.translate(-v.scrollX, -v.scrollY);
