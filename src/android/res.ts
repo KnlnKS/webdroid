@@ -12,7 +12,7 @@ import { JObj } from "../jvm/runtime";
 import { JDisplayMetrics, JTypedValue, complexToPx } from "./os";
 
 // ── framework tables
-const fwIds = fw.ids as Record<string, Record<string, number>>;
+export const fwIds = fw.ids as Record<string, Record<string, number>>;
 const fwIdToName = new Map<number, [string, string]>();
 for (const [type, m] of Object.entries(fwIds)) {
   for (const [name, id] of Object.entries(m)) fwIdToName.set(id, [type, name]);
