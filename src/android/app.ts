@@ -20,6 +20,7 @@ import { TV, attr, attrStr, type XmlNode, parseAXML } from "./axml";
 import { csText } from "./text";
 import { JCanvas, cssColor, insetsOf, tfMedium } from "./graphics";
 import { showPopupMenu, addOverlay, removeOverlay, showToast } from "./popup";
+import { dbPath } from "./sqlite";
 
 /** Host bundle shared by all contexts of the app */
 export interface AppHost {
@@ -291,7 +292,7 @@ const contextMethods: NativeSpec["methods"] = {
     return mkFile(`/data/data/${this.$host.pkg}/app_${name}`);
   },
   "getDatabasePath(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, name: string) {
-    return mkFile(`/data/data/${this.$host.pkg}/databases/${name}`);
+    return mkFile(dbPath(this.$host.pkg, name));
   },
   "getFileStreamPath(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, name: string) {
     return mkFile(`/data/data/${this.$host.pkg}/files/${name}`);
@@ -306,7 +307,7 @@ const contextMethods: NativeSpec["methods"] = {
     return vfs.delete(`/data/data/${this.$host.pkg}/files/${name}`) ? 1 : 0;
   },
   "deleteDatabase(Ljava/lang/String;)Z": function (this: JContext, name: string) {
-    return vfs.delete(`/data/data/${this.$host.pkg}/databases/${name}`) ? 1 : 0;
+    return vfs.delete(dbPath(this.$host.pkg, name)) ? 1 : 0;
   },
   "checkSelfPermission(Ljava/lang/String;)I": () => 0,
   "checkPermission(Ljava/lang/String;)I": () => 0,

@@ -72,6 +72,13 @@ class JSQLiteDatabase extends JObj {
   }
 }
 const dbCache = new Map<string, JSQLiteDatabase>();
+/** ContextImpl.getDatabasePath: an absolute name is the path itself (Room/WorkManager hand
+ *  over `<noBackupFilesDir>/x.db`); a relative one lives in databases/ and may not contain '/' */
+export function dbPath(pkg: string, name: string): string {
+  if (name.startsWith("/")) return name;
+  if (name.includes("/")) throw rt.mkThrowable("java/lang/IllegalArgumentException", `File ${name} contains a path separator`);
+  return `/data/data/${pkg}/databases/${name}`;
+}
 export async function openDatabase(path: string): Promise<JSQLiteDatabase> {
   let jdb = dbCache.get(path);
   if (jdb?.open) return jdb;
@@ -523,7 +530,7 @@ rt.register({
 async function openHelperDb(h: JSQLiteOpenHelper): Promise<JSQLiteDatabase> {
   if (h.jdb) return h.jdb;
   const pkg = h.jctx?.$host?.pkg ?? "app";
-  const path = h.name ? `/data/data/${pkg}/databases/${h.name}` : ":memory:";
+  const path = h.name ? dbPath(pkg, h.name) : ":memory:";
   const jdb = await openDatabase(path);
   h.jdb = jdb;
   await vcall(h, "onConfigure", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);
