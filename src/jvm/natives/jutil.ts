@@ -28,7 +28,7 @@ function jhash(o: unknown): number | Promise<number> {
   if (typeof o === "string") return stringHash(o);
   return vcall(o, "hashCode", "()I");
 }
-async function jcmp(cmp: unknown, a: unknown, b: unknown): Promise<number> {
+export async function jcmp(cmp: unknown, a: unknown, b: unknown): Promise<number> {
   if (cmp) return await vcall(cmp, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", a, b);
   const t = typeof a;
   if (typeof b === t && (t === "string" || t === "number" || t === "bigint")) {
@@ -958,27 +958,36 @@ for (const n of ["java/util/TreeSet", "java/util/concurrent/ConcurrentSkipListSe
   });
 }
 
-class JPriorityQueue extends JList { cmp: unknown = null; }
+export class JPriorityQueue extends JList { cmp: unknown = null; }
+/** keep the backing array sorted ascending so poll() takes the head (stable after equal keys) */
+export async function pqInsert(q: JPriorityQueue, v: unknown) {
+  if (v == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  let lo = 0, hi = q.a.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if ((await jcmp(q.cmp, q.a[mid], v)) <= 0) lo = mid + 1; else hi = mid;
+  }
+  q.a.splice(lo, 0, v);
+}
+export const priorityQueueMethods = (): NonNullable<NativeSpec["methods"]> => ({
+  ...listMethods(),
+  "<init>()V": function () {},
+  "<init>(I)V": function () {},
+  "<init>(ILjava/util/Comparator;)V": function (this: JPriorityQueue, _n: number, c: unknown) { this.cmp = c; },
+  "<init>(Ljava/util/Comparator;)V": function (this: JPriorityQueue, c: unknown) { this.cmp = c; },
+  "<init>(Ljava/util/Collection;)V": async function (this: JPriorityQueue, c: unknown) { for (const v of await toJsArray(c)) await pqInsert(this, v); },
+  "offer(Ljava/lang/Object;)Z": async function (this: JPriorityQueue, v: unknown) { await pqInsert(this, v); return 1; },
+  "add(Ljava/lang/Object;)Z": async function (this: JPriorityQueue, v: unknown) { await pqInsert(this, v); return 1; },
+  "poll()Ljava/lang/Object;": function (this: JPriorityQueue) { return this.a.length ? this.a.shift()! : null; },
+  "remove()Ljava/lang/Object;": function (this: JPriorityQueue) { if (!this.a.length) throw rt.mkThrowable("java/util/NoSuchElementException", null); return this.a.shift()!; },
+  "peek()Ljava/lang/Object;": function (this: JPriorityQueue) { return this.a.length ? this.a[0] : null; },
+  "element()Ljava/lang/Object;": function (this: JPriorityQueue) { if (!this.a.length) throw rt.mkThrowable("java/util/NoSuchElementException", null); return this.a[0]; },
+  "comparator()Ljava/util/Comparator;": function (this: JPriorityQueue) { return this.cmp; },
+});
 rt.register({
   name: "java/util/PriorityQueue", ctor: JPriorityQueue,
-  ifaces: ["java/util/Queue", "java/util/Collection", "java/lang/Iterable"],
-  methods: {
-    ...listMethods(),
-    "<init>(ILjava/util/Comparator;)V": function (this: JPriorityQueue, _n: number, c: unknown) { this.cmp = c; },
-    "<init>(Ljava/util/Comparator;)V": function (this: JPriorityQueue, c: unknown) { this.cmp = c; },
-    "offer(Ljava/lang/Object;)Z": async function (this: JPriorityQueue, v: unknown) {
-      // keep sorted ascending so poll() takes the head
-      let lo = 0, hi = this.a.length;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if ((await jcmp(this.cmp, this.a[mid], v)) <= 0) lo = mid + 1; else hi = mid;
-      }
-      this.a.splice(lo, 0, v);
-      return 1;
-    },
-    "poll()Ljava/lang/Object;": function (this: JPriorityQueue) { return this.a.length ? this.a.shift()! : null; },
-    "peek()Ljava/lang/Object;": function (this: JPriorityQueue) { return this.a.length ? this.a[0] : null; },
-  },
+  ifaces: ["java/util/Queue", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"],
+  methods: priorityQueueMethods(),
 });
 rt.register({
   name: "java/util/concurrent/CopyOnWriteArrayList", ctor: class extends JList {},

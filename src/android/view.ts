@@ -1748,6 +1748,8 @@ rt.register({
 for (const n of [
   "OnClickListener", "OnLongClickListener", "OnTouchListener", "OnAttachStateChangeListener",
   "OnCreateContextMenuListener", "OnApplyWindowInsetsListener", "OnLayoutChangeListener", "OnDragListener",
+  "OnKeyListener", "OnFocusChangeListener", "OnHoverListener", "OnGenericMotionListener", "OnScrollChangeListener",
+  "OnSystemUiVisibilityChangeListener", "OnCapturedPointerListener", "OnContextClickListener", "OnUnhandledKeyEventListener",
 ]) rt.register({ name: "android/view/View$" + n, ctor: class extends JObj {} });
 // AccessibilityDelegate is a class in AOSP: apps subclass it and call super.
 rt.register({

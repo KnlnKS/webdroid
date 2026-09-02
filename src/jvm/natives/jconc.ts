@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec, type ClassInfo } from "../runtime";
 import { vcall, newObj, JThread, JEnum, setCurThread, curThread, park, defineException } from "./jlang";
-import { JList, JRandom, listMethods, randomSeed } from "./jutil";
+import { JList, JRandom, listMethods, randomSeed, JPriorityQueue, pqInsert, priorityQueueMethods } from "./jutil";
 
 // ── atomics (single-threaded: trivial)
 class JAtomicInt extends JObj { v = 0; }
@@ -414,6 +414,47 @@ const mkBlockingQueue = (name: string) => rt.register({
   },
 });
 for (const qn of ["java/util/concurrent/LinkedBlockingQueue", "java/util/concurrent/SynchronousQueue", "java/util/concurrent/ArrayBlockingQueue", "java/util/concurrent/LinkedBlockingDeque"]) mkBlockingQueue(qn);
+// PriorityBlockingQueue: the sorted queue with a parking take(); a parked taker receives the
+// element that would have become the head
+class JPriorityBlockingQueue extends JPriorityQueue { takers: ((v: unknown) => void)[] = []; }
+async function pbqPut(this: JPriorityBlockingQueue, v: unknown) {
+  const t = this.takers.shift();
+  if (t) { queueMicrotask(() => t(v)); return 1; }
+  await pqInsert(this, v);
+  return 1;
+}
+rt.register({
+  name: "java/util/concurrent/PriorityBlockingQueue", ctor: JPriorityBlockingQueue,
+  ifaces: ["java/util/concurrent/BlockingQueue", "java/util/Queue", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"],
+  methods: {
+    ...priorityQueueMethods(),
+    "put(Ljava/lang/Object;)V": pbqPut,
+    "offer(Ljava/lang/Object;)Z": pbqPut,
+    "add(Ljava/lang/Object;)Z": pbqPut,
+    "offer(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z": pbqPut,
+    "take()Ljava/lang/Object;": function (this: JPriorityBlockingQueue) {
+      if (this.a.length) return this.a.shift();
+      return new Promise((r) => this.takers.push(r));
+    },
+    "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JPriorityBlockingQueue, d: bigint, u: JTimeUnit) {
+      if (this.a.length) return this.a.shift();
+      return new Promise((resolve) => {
+        const taker = (v: unknown) => resolve(v);
+        this.takers.push(taker);
+        setTimeout(() => {
+          const i = this.takers.indexOf(taker);
+          if (i >= 0) { this.takers.splice(i, 1); resolve(null); }
+        }, Number(d) * u.ms);
+      });
+    },
+    "remainingCapacity()I": () => 0x7fffffff,
+    "drainTo(Ljava/util/Collection;)I": async function (this: JPriorityBlockingQueue, c: unknown) {
+      const n = this.a.length;
+      for (const v of this.a.splice(0)) await vcall(c, "add", "(Ljava/lang/Object;)Z", v);
+      return n;
+    },
+  },
+});
 
 class JSemaphore extends JObj { permits = 0; q: (() => void)[] = []; }
 rt.register({

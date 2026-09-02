@@ -588,7 +588,7 @@ export class JTextView extends JView {
   /** kept for the app to read back; text is drawn untransformed */
   transformation: unknown = null;
   editableFactory: unknown = null; spannableFactory: unknown = null;
-  keyListener: unknown = null; movementMethod: unknown = null; selActionMode: unknown = null;
+  keyListener: unknown = null; movementMethod: unknown = null; selActionMode: unknown = null; editorActionL: unknown = null;
   drawableTint: JColorStateList | null = null;
   imeOptions = 0; breakStrategy = 0; hyphenation = 0; autoSizeType = 0;
   linksClickable = true; fontVariation: string | null = null;
@@ -1010,7 +1010,7 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setAutoLinkMask(I)V": () => {},
   "setLinkTextColor(I)V": () => {},
   "setMaxEms(I)V": () => {},
-  "setOnEditorActionListener(Landroid/widget/TextView$OnEditorActionListener;)V": () => {},
+  "setOnEditorActionListener(Landroid/widget/TextView$OnEditorActionListener;)V": function (this: JTextView, l: unknown) { this.editorActionL = l; },
   "setShadowLayer(FFFI)V": () => {},
   "setFilters([Landroid/text/InputFilter;)V": function (this: JTextView, arr: unknown[]) {
     this.filters = arr ?? [];
@@ -1136,6 +1136,7 @@ rt.register({
   name: "android/widget/TextView", ctor: JTextView, sup: "android/view/View",
   methods: textViewMethods,
 });
+rt.register({ name: "android/widget/TextView$OnEditorActionListener", ctor: class extends JObj {} });
 rt.register({ name: "android/widget/TextView$BufferType", ctor: class extends JObj {}, sup: "java/lang/Enum",
   statics: { NORMAL: null, SPANNABLE: null, EDITABLE: null } });
 
