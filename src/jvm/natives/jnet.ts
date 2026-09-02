@@ -8,7 +8,7 @@
 // verifier needs and nothing more, so an app that PINS a certificate will correctly fail rather
 // than be told a comforting lie.
 import { rt, JObj, type NativeSpec } from "../runtime";
-import { newArrayList, mkIter, toJsArray } from "./jutil";
+import { newArrayList, toJsArray } from "./jutil";
 import { boxInt, stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { jarray } from "../abi";
 import type { JInputStream, JOutputStream } from "./jio";
@@ -156,16 +156,6 @@ rt.register({
     "checkClientTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;)V": () => {},
     "checkServerTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;)V": () => {},
     "getAcceptedIssuers()[Ljava/security/cert/X509Certificate;": () => jarray([], "Ljava/security/cert/X509Certificate;"),
-  },
-});
-rt.register({
-  name: "java/security/KeyStore", ctor: class extends JObj {},
-  methods: {
-    "static getDefaultType()Ljava/lang/String;": () => "AndroidKeyStore",
-    "static getInstance(Ljava/lang/String;)Ljava/security/KeyStore;": () => new (rt.link("java/security/KeyStore").ctor)(),
-    "load(Ljava/io/InputStream;[C)V": () => {},
-    "load(Ljava/security/KeyStore$LoadStoreParameter;)V": () => {},
-    "aliases()Ljava/util/Enumeration;": () => mkIter([]),
   },
 });
 class JSSLContext extends JObj {}
