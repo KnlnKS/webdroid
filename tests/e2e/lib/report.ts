@@ -38,10 +38,11 @@ const pct = (n: number) => n.toFixed(2).padStart(6) + "%";
 export function printSmoke(app: string, runs: StepRun[]): void {
   console.log(`\n--- ${app} (smoke, not scored) ---`);
   let wedgedAt: number | undefined;
-  const missing = new Set<string>();
+  const missing = new Set<string>(), native = new Set<string>();
   for (const s of runs) {
     if (s.mainLoopWedged && wedgedAt === undefined) wedgedAt = s.index;
     for (const m of s.newMissing ?? []) missing.add(m);
+    for (const n of s.nativeRequired ?? []) native.add(n);
     const flags = [
       s.fps !== undefined ? `${s.fps}fps` : "",
       s.slow ? "SLOW" : "",
@@ -57,7 +58,8 @@ export function printSmoke(app: string, runs: StepRun[]): void {
   console.log(`  rendered ${runs.filter((s) => !s.mainLoopWedged).length}/${runs.length}` +
     (wedgedAt !== undefined ? ` · wedged at ${String(wedgedAt).padStart(2, "0")}` : "") +
     (fps.length ? ` · min fps ${Math.min(...fps)}` : "") +
-    (missing.size ? ` · missing: ${[...missing].join(", ")}` : " · nothing missing"));
+    (missing.size ? ` · missing: ${[...missing].join(", ")}` : " · nothing missing") +
+    (native.size ? ` · native code required: ${[...native].join(", ")}` : ""));
 }
 
 export function printFlow(r: FlowReport): void {

@@ -268,6 +268,11 @@ export class WebdroidDriver {
     return this.page.evaluate(() => [...((globalThis as any).wd.rt.missing ?? [])]);
   }
 
+  /** Native libraries the app tried to load that only exist as machine code: "libx.so (abi)". */
+  nativeRequired(): Promise<string[]> {
+    return this.page.evaluate(() => [...((globalThis as any).wd.rt.nativeRequired ?? [])].map(([l, a]) => l + " (" + a + ")"));
+  }
+
   close(): Promise<void> {
     return this.browser.close();
   }
