@@ -3,6 +3,7 @@
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { vcall, mkEnumSet } from "../jvm/natives/jlang";
+import { usLocale } from "../jvm/natives/jutil";
 import { JCanvas, JTypeface, tfDefault, tfMedium, typefaceFor, cssColor, measureCtx, fontAscent, fontDescent, JBitmap, JRect } from "./graphics";
 import { JTextPaint, spannedString, JEditable } from "./text";
 import { JDrawable, loadDrawableRV, loadDrawable, loadColorStateList, JColorStateList, cslColor, mkCsl, ST, JRippleDrawable, JGradientDrawable, JBitmapDrawable } from "./drawable";
@@ -561,6 +562,11 @@ export class JTextView extends JView {
   /** kept for the app to read back; text is drawn untransformed */
   transformation: unknown = null;
   editableFactory: unknown = null; spannableFactory: unknown = null;
+  keyListener: unknown = null; movementMethod: unknown = null; selActionMode: unknown = null;
+  drawableTint: JColorStateList | null = null;
+  imeOptions = 0; breakStrategy = 0; hyphenation = 0; autoSizeType = 0;
+  linksClickable = true; fontVariation: string | null = null;
+  maxW = Infinity;
   text = "";
   rawText: unknown = "";       // original CharSequence (may be Spannable)
   hint = "";
@@ -784,7 +790,7 @@ function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v: T) => 
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": function (this: T, c: unknown, set: JAttrSet | null, dsa: number) { return init(this, c, set, dsa); },
   };
 }
-const textViewMethods: NativeSpec["methods"] = {
+const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   ...textViewCtors("textViewStyle"),
   "setText(Ljava/lang/CharSequence;)V": async function (this: JTextView, cs: unknown) {
     this.rawText = cs;
@@ -892,9 +898,80 @@ const textViewMethods: NativeSpec["methods"] = {
   },
   "setInputType(I)V": function (this: JTextView, t: number) { this.inputTypeV = t; },
   "getInputType()I": function (this: JTextView) { return this.inputTypeV; },
-  "setImeOptions(I)V": () => {},
-  "setKeyListener(Landroid/text/method/KeyListener;)V": () => {},
-  "setMovementMethod(Landroid/text/method/MovementMethod;)V": () => {},
+  "setImeOptions(I)V": function (this: JTextView, o: number) { this.imeOptions = o; },
+  "getImeOptions()I": function (this: JTextView) { return this.imeOptions; },
+  "setKeyListener(Landroid/text/method/KeyListener;)V": function (this: JTextView, l: unknown) { this.keyListener = l; },
+  "getKeyListener()Landroid/text/method/KeyListener;": function (this: JTextView) { return this.keyListener; },
+  "setMovementMethod(Landroid/text/method/MovementMethod;)V": function (this: JTextView, m: unknown) { this.movementMethod = m; },
+  "getMovementMethod()Landroid/text/method/MovementMethod;": function (this: JTextView) { return this.movementMethod; },
+  "getCompoundDrawablesRelative()[Landroid/graphics/drawable/Drawable;": function (this: JTextView) {
+    return jarray([this.drawableL, this.drawableT, this.drawableR, this.drawableB], "Landroid/graphics/drawable/Drawable;");
+  },
+  "setCompoundDrawablesRelative(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
+  "setCompoundDrawablesRelativeWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
+  "setCompoundDrawablesRelativeWithIntrinsicBounds(IIII)V": function (this: JTextView, l: number, t: number, r: number, b: number) {
+    return (textViewMethods["setCompoundDrawablesWithIntrinsicBounds(IIII)V"] as any).call(this, l, t, r, b);
+  },
+  "setCompoundDrawableTintList(Landroid/content/res/ColorStateList;)V": function (this: JTextView, csl: JColorStateList | null) {
+    this.drawableTint = csl;
+    for (const d of [this.drawableL, this.drawableT, this.drawableR, this.drawableB]) if (d) d.tint = csl ? cslColor(csl, d.stateSet) : null;
+    invalidate();
+  },
+  "getCompoundDrawableTintList()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.drawableTint; },
+  "setCompoundDrawableTintMode(Landroid/graphics/PorterDuff$Mode;)V": () => {},
+  "getHintTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.hintColors; },
+  "getLineSpacingExtra()F": function (this: JTextView) { return this.lineSpacingExtra; },
+  "getLineSpacingMultiplier()F": function (this: JTextView) { return this.lineSpacingMult; },
+  "getMinLines()I": function (this: JTextView) { return this.minLinesV; },
+  "getMinWidth()I": function (this: JTextView) { return this.minW; },
+  "getMinHeight()I": function (this: JTextView) { return this.minH; },
+  "getLetterSpacing()F": function (this: JTextView) { return this.paintT.letterSpacingEm; },
+  "getIncludeFontPadding()Z": () => 1,
+  "setBreakStrategy(I)V": function (this: JTextView, b: number) { this.breakStrategy = b; },
+  "getBreakStrategy()I": function (this: JTextView) { return this.breakStrategy; },
+  "setHyphenationFrequency(I)V": function (this: JTextView, h: number) { this.hyphenation = h; },
+  "getHyphenationFrequency()I": function (this: JTextView) { return this.hyphenation; },
+  "getTotalPaddingLeft()I": function (this: JTextView) { return this.padL + (this.drawableL ? this.drawableL.intrinsicW() + this.drawablePad : 0); },
+  "getTotalPaddingRight()I": function (this: JTextView) { return this.padR + (this.drawableR ? this.drawableR.intrinsicW() + this.drawablePad : 0); },
+  "getTotalPaddingTop()I": function (this: JTextView) { return this.padT + (this.drawableT ? this.drawableT.intrinsicH() + this.drawablePad : 0); },
+  "getTotalPaddingBottom()I": function (this: JTextView) { return this.padB + (this.drawableB ? this.drawableB.intrinsicH() + this.drawablePad : 0); },
+  "isHorizontallyScrollable()Z": () => 0,
+  "setWidth(I)V": function (this: JTextView, w: number) { this.minW = w; this.maxW = w; requestLayout(this); },
+  "setMinEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.paintT.textSize); },
+  "setRawInputType(I)V": function (this: JTextView, t: number) { this.inputTypeV = t; },
+  "setLinksClickable(Z)V": function (this: JTextView, v: number) { this.linksClickable = !!v; },
+  "getLinksClickable()Z": function (this: JTextView) { return this.linksClickable ? 1 : 0; },
+  "setTextLocales(Landroid/os/LocaleList;)V": () => {},
+  "setImeHintLocales(Landroid/os/LocaleList;)V": () => {},
+  "getTextLocale()Ljava/util/Locale;": () => usLocale,
+  "setFontVariationSettings(Ljava/lang/String;)Z": function (this: JTextView, s: string | null) { this.fontVariation = s; return 1; },
+  "getFontVariationSettings()Ljava/lang/String;": function (this: JTextView) { return this.fontVariation; },
+  "setCustomSelectionActionModeCallback(Landroid/view/ActionMode$Callback;)V": function (this: JTextView, cb: unknown) { this.selActionMode = cb; },
+  "getCustomSelectionActionModeCallback()Landroid/view/ActionMode$Callback;": function (this: JTextView) { return this.selActionMode; },
+  "beginBatchEdit()V": () => {},
+  "endBatchEdit()V": () => {},
+  "onCheckIsTextEditor()Z": function (this: JTextView) { return this.editable ? 1 : 0; },
+  // AOSP: an explicit line height is applied as extra spacing over the font's own line height
+  "setLineHeight(I)V": function (this: JTextView, h: number) { this.lineSpacingMult = 1; this.lineSpacingExtra = h - this.lineHeight() + this.lineSpacingExtra; requestLayout(this); },
+  "setLineHeight(IF)V": function (this: JTextView, unit: number, h: number) {
+    const px = unit === 1 ? h * device.density : unit === 2 ? h * device.density : h;
+    this.lineSpacingMult = 1; this.lineSpacingExtra = px - this.lineHeight() + this.lineSpacingExtra; requestLayout(this);
+  },
+  "setFirstBaselineToTopHeight(I)V": function (this: JTextView, h: number) {
+    this.padT = Math.max(0, h - this.ascent()); requestLayout(this);
+  },
+  "setLastBaselineToBottomHeight(I)V": function (this: JTextView, h: number) {
+    this.padB = Math.max(0, h - Math.round(fontDescent(this.paintT))); requestLayout(this);
+  },
+  // auto-size is never active: AUTO_SIZE_TEXT_TYPE_NONE and the "unset" -1 sizes, as AOSP reports
+  "setAutoSizeTextTypeWithDefaults(I)V": function (this: JTextView, t: number) { this.autoSizeType = t; },
+  "setAutoSizeTextTypeUniformWithConfiguration(IIII)V": function (this: JTextView) { this.autoSizeType = 1; },
+  "setAutoSizeTextTypeUniformWithPresetSizes([II)V": function (this: JTextView) { this.autoSizeType = 1; },
+  "getAutoSizeTextType()I": function (this: JTextView) { return this.autoSizeType; },
+  "getAutoSizeMinTextSize()I": () => -1,
+  "getAutoSizeMaxTextSize()I": () => -1,
+  "getAutoSizeStepGranularity()I": () => -1,
+  "getAutoSizeTextAvailableSizes()[I": () => new Int32Array(0),
   "setTransformationMethod(Landroid/text/method/TransformationMethod;)V": function (this: JTextView, m: unknown) { this.transformation = m; },
   "getTransformationMethod()Landroid/text/method/TransformationMethod;": function (this: JTextView) { return this.transformation; },
   "setHighlightColor(I)V": () => {},
@@ -916,7 +993,8 @@ const textViewMethods: NativeSpec["methods"] = {
     }
   },
   "getFilters()[Landroid/text/InputFilter;": function (this: JTextView) { const a = this.filters ?? []; (a as any).$t = "Landroid/text/InputFilter;"; return a; },
-  "setMaxWidth(I)V": () => {},
+  "setMaxWidth(I)V": function (this: JTextView, w: number) { this.maxW = w; requestLayout(this); },
+  "getMaxWidth()I": function (this: JTextView) { return Number.isFinite(this.maxW) ? this.maxW : -1; },
   "setMinWidth(I)V": function (this: JTextView, w: number) { this.minW = w; },
   "setMaxHeight(I)V": () => {},
   "setMinHeight(I)V": function (this: JTextView, h: number) { this.minH = h; },
@@ -940,7 +1018,7 @@ const textViewMethods: NativeSpec["methods"] = {
       + (this.drawableR ? Math.max(0, this.drawableR.intrinsicW()) + this.drawablePad : 0);
     const dtH = (this.drawableT ? Math.max(0, this.drawableT.intrinsicH()) + this.drawablePad : 0)
       + (this.drawableB ? Math.max(0, this.drawableB.intrinsicH()) + this.drawablePad : 0);
-    const availText = (wMode === MS_UNSPEC ? 100000 : wSize) - this.padL - this.padR - dlW;
+    const availText = Math.min(wMode === MS_UNSPEC ? 100000 : wSize, this.maxW) - this.padL - this.padR - dlW;
     let w: number;
     const display = this.displayText() || "";
     if (wMode === MS_EXACTLY) {
@@ -953,7 +1031,7 @@ const textViewMethods: NativeSpec["methods"] = {
       for (const l of this.lines) tw = Math.max(tw, ctx.measureText(l).width);
       if (!display && this.hint) tw = Math.max(tw, ctx.measureText(this.hint).width);
       w = Math.ceil(tw) + this.padL + this.padR + dlW;
-      w = Math.max(w, this.minW);
+      w = Math.min(Math.max(w, this.minW), this.maxW);
       if (wMode === MS_AT_MOST) w = Math.min(w, wSize);
     }
     const lineCount = Math.max(this.lines.length, display || this.hint ? 1 : 0, this.minLinesV);
