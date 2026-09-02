@@ -972,12 +972,20 @@ export class JPriorityQueue extends JList { cmp: unknown = null; }
 /** keep the backing array sorted ascending so poll() takes the head (stable after equal keys) */
 export async function pqInsert(q: JPriorityQueue, v: unknown) {
   if (v == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-  let lo = 0, hi = q.a.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if ((await jcmp(q.cmp, q.a[mid], v)) <= 0) lo = mid + 1; else hi = mid;
+  // the comparator may suspend, and another thread's take()/offer() can move the array under
+  // it (Java holds a lock here): search a snapshot and only splice if the live array still is it
+  for (;;) {
+    const snap = q.a.slice();
+    let lo = 0, hi = snap.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if ((await jcmp(q.cmp, snap[mid], v)) <= 0) lo = mid + 1; else hi = mid;
+    }
+    if (q.a.length === snap.length && (snap.length === 0 || (q.a[0] === snap[0] && q.a[snap.length - 1] === snap[snap.length - 1]))) {
+      q.a.splice(lo, 0, v);
+      return;
+    }
   }
-  q.a.splice(lo, 0, v);
 }
 export const priorityQueueMethods = (): NonNullable<NativeSpec["methods"]> => ({
   ...listMethods(),
