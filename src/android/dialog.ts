@@ -46,6 +46,13 @@ async function loadCardBg(root: DialogRoot): Promise<void> {
 /** scrim + rounded card container drawn natively */
 class DialogRoot extends JFrameLayout {
   dialog: JDialog | null = null;
+  /** the window's android.R.id.content FrameLayout — appcompat finds it by id, reparents its
+   *  children into a sub-decor and swaps the ids, exactly as it does to an activity window */
+  content!: JFrameLayout;
+  setContent(v: JView | null) {
+    this.content.children.length = 0;
+    if (v) attachView(this.content, v);
+  }
   cardTop = 0; cardLeft = 0; cardW = 0; cardH = 0;
   /** the dialog window's own background, from its theme — not a hardcoded white card */
   cardBg: JDrawable | null = null;
@@ -60,9 +67,11 @@ rt.register({
       if (c && c.visibility !== 8) {
         const maxW = Math.min(this.measuredW - 96, 640);
         const availH = this.measuredH - 200;
-        await measureView(c, makeSpec(maxW, c.lp?.width === -1 ? MS_EXACTLY : (MS_AT_MOST | 0)), makeSpec(availH, MS_AT_MOST | 0));
+        // the card is as wide as its content asks: match_parent fills the dialog width
+        const wide = this.content.children.some((v) => v.lp?.width === -1);
+        await measureView(c, makeSpec(maxW, wide ? MS_EXACTLY : (MS_AT_MOST | 0)), makeSpec(availH, MS_AT_MOST | 0));
         this.cardW = Math.max(560, c.measuredW);
-        if (c.lp?.width === -1) this.cardW = maxW;
+        if (wide) this.cardW = maxW;
         await measureView(c, makeSpec(this.cardW, MS_EXACTLY), makeSpec(availH, MS_AT_MOST | 0));
         this.cardH = c.measuredH;
         this.cardLeft = (this.measuredW - this.cardW) >> 1;
@@ -141,11 +150,16 @@ class JDialog extends JObj {
   }
   ensureRoot(): DialogRoot {
     if (!this.root) {
-      this.root = new DialogRoot();
-      this.root.dialog = this;
-      this.root.ctx = this.jctx;
-      this.root.jres = this.jctx?.$host?.res ?? null;
-      this.root.theme = dialogTheme(this.jctx?.$host, this.themeId);
+      const r = this.root = new DialogRoot();
+      r.dialog = this;
+      r.ctx = this.jctx;
+      r.jres = this.jctx?.$host?.res ?? null;
+      r.theme = dialogTheme(this.jctx?.$host, this.themeId);
+      const c = r.content = new JFrameLayout();
+      c.ctx = r.ctx; c.jres = r.jres; c.theme = r.theme;
+      c.idNum = 0x01020002;
+      const lp = new JFrameLP(); lp.width = -1; lp.height = -2; c.lp = lp;
+      attachView(r, c);
     }
     return this.root;
   }
@@ -180,19 +194,18 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "getContext()Landroid/content/Context;": function (this: JDialog) { return this.jctx; },
   "setContentView(I)V": async function (this: JDialog, layoutId: number) {
     const root = this.ensureRoot();
-    root.children.length = 0;
-    await inflateLayout(this.jctx, layoutId, root, true);
+    root.setContent(null);
+    await inflateLayout(this.jctx, layoutId, root.content, true);
     requestLayout();
   },
   "setContentView(Landroid/view/View;)V": function (this: JDialog, v: JView) {
     const root = this.ensureRoot();
-    root.children.length = 0;
     if (!v.lp) {
       const lp = new JFrameLP();
       lp.width = -2; lp.height = -2;
       v.lp = lp;
     }
-    attachView(root, v);
+    root.setContent(v);
     requestLayout();
   },
   "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
@@ -201,7 +214,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
     v.lp = lp;
-    attachView(this.ensureRoot(), v);
+    attachView(this.ensureRoot().content, v);
     requestLayout();
   },
   "show()V": async function (this: JDialog) {
@@ -379,17 +392,15 @@ async function buildAlertContent(d: JAlertDialog) {
     if (d.posText) mkBtn(d.posText, -1, d.posL);
     attachView(col, row);
   }
-  const root = d.ensureRoot();
-  root.children.length = 0;
   col.lp = new JFrameLP();
   (col.lp as JFrameLP).width = -1;
   (col.lp as JFrameLP).height = -2;
-  attachView(root, col);
+  d.ensureRoot().setContent(col);
 }
 const alertMethods: NativeSpec["methods"] = {
   ...dialogMethods,
   "show()V": async function (this: JAlertDialog) {
-    if (!this.built && !this.root?.children.length) {
+    if (!this.built && !this.root?.content.children.length) {
       this.built = true;
       await buildAlertContent(this);
     }
