@@ -8,17 +8,34 @@ import { NativeFault, mem } from "./mem";
 import { emitBlock, setMaxBlock } from "./arm";
 import { emitThumbBlock, setMaxBlock as setMaxBlockT } from "./thumb";
 import { Args, hostDispatch, hostReturn, type HostRet } from "./host";
-import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, PAGE_SHIFT, STACK_SIZE } from "./abi";
+import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, PAGE_SHIFT, STACK_SIZE, MEM_SIZE } from "./abi";
 import { perf } from "../perf";
 export { NativeFault };
 
 export const enum SliceExit { Budget = 0, Suspend = 1, Exit = 2 }
-export const SLICE_INSTR = 400_000;
+// ~5 ms of guest time per slice at the observed ~600M instr/s: coarse enough that the macrotask hop
+// per slice is noise, fine enough that a 60 Hz frame loop on the JS thread keeps its cadence
+export const SLICE_INSTR = 3_000_000;
 
-type BlockFn = (c: Cpu, r: Int32Array, M: typeof mem) => number;
-const pages: ((BlockFn | undefined)[] | undefined)[] = [];   // ARM blocks by word
-const tpages: ((BlockFn | undefined)[] | undefined)[] = [];  // Thumb blocks by halfword
-const cov: (Uint8Array | undefined)[] = [];
+/** a compiled block: runs, then returns the next block (F.n caches constant successors; c.look resolves the rest) */
+type BlockFn = ((c: Cpu, r: Int32Array, M: typeof mem, F: BlockFn) => BlockFn) & { pc: number; n: (BlockFn | undefined)[] };
+const allBlocks = new Set<BlockFn>();
+/** pc reached a trampoline / the return sentinel: r[15] holds it, the run loop decides */
+const STOP = ((c: Cpu) => { void c; return STOP; }) as unknown as BlockFn;
+const stubs: (BlockFn | undefined)[] = new Array((TRAMP_END - TRAMP_BASE) >> 3).fill(undefined);
+let retStub: BlockFn | undefined;
+function stubFor(pc: number): BlockFn {
+  const mk = () => { const f = ((c: Cpu) => { c.r[15] = pc; return STOP; }) as unknown as BlockFn; f.pc = pc; f.n = []; return f; };
+  if (pc === RET_SENTINEL) return retStub ?? (retStub = mk());
+  if (pc >= TRAMP_END) return mk();
+  const i = (pc - TRAMP_BASE) >> 3;
+  return stubs[i] ?? (stubs[i] = mk());
+}
+// dense (never sparse: a sparse JS array falls into dictionary mode and every lookup hashes)
+const NPAGES = MEM_SIZE >> PAGE_SHIFT;
+const pages: ((BlockFn | undefined)[] | undefined)[] = new Array(NPAGES).fill(undefined);   // ARM blocks by word
+const tpages: ((BlockFn | undefined)[] | undefined)[] = new Array(NPAGES).fill(undefined);  // Thumb blocks by halfword
+const cov: (Uint8Array | undefined)[] = new Array(NPAGES).fill(undefined);
 export const blockStats = { compiled: 0, invalidated: 0, compileMs: 0 };
 /** single-step register trace: every instruction logs pc + the registers it changed (slow; debugging only) */
 export const stepMode = { on: false, ring: [] as string[], max: 40000, watch: 0, hits: [] as string[] };
@@ -31,6 +48,8 @@ export function setStepMode(on: boolean): void {
 const stepPrev = new Int32Array(16);
 const RN = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "ip", "sp", "lr", "pc"];
 export let processExited = false;
+/** slice-boundary pc samples (one per SLICE_INSTR budget exit): a free statistical profile */
+export const profile = { on: true, samples: new Map<number, number>() };
 export function markProcessExited(): void { processExited = true; }
 
 mem.onCodeWrite = (addr: number) => {
@@ -39,12 +58,18 @@ mem.onCodeWrite = (addr: number) => {
   if (cv && cv[(addr >>> 2) & 1023]) invalidatePage(pg);
 };
 export function invalidatePage(pg: number): void {
+  const drop = (arr: (BlockFn | undefined)[] | undefined) => { if (arr) for (const f of arr) if (f) allBlocks.delete(f); };
+  drop(pages[pg]); drop(tpages[pg]);
   pages[pg] = undefined;
   tpages[pg] = undefined;
   cov[pg] = undefined;
   mem.codePages[pg] = 0;
   blockStats.invalidated++;
+  // every surviving block may cache a successor that lived in this page
+  for (const f of allBlocks) f.n.fill(undefined);
 }
+/** an already-compiled block (either instruction set) for debug tooling */
+export function blockAt(pc: number): unknown { return pages[pc >>> PAGE_SHIFT]?.[(pc >>> 2) & 1023] ?? tpages[pc >>> PAGE_SHIFT]?.[(pc >>> 1) & 2047]; }
 export function invalidateRange(addr: number, size: number): void {
   for (let pg = addr >>> PAGE_SHIFT; pg <= (addr + size - 1) >>> PAGE_SHIFT; pg++) if (pages[pg] || tpages[pg]) invalidatePage(pg);
 }
@@ -54,13 +79,16 @@ function compile(cpu: Cpu, pc: number, pg: (BlockFn | undefined)[], thumb: boole
   if (pc & (thumb ? 1 : 3)) { cpu.r[15] = pc; cpu.fault("misaligned pc"); }
   const b = thumb ? emitThumbBlock(pc) : emitBlock(pc);
   let fn: BlockFn;
-  try { fn = new Function("c", "r", "M", b.src + `\n//# sourceURL=wd/native/${(pc >>> 0).toString(16)}${thumb ? "t" : ""}.js`) as BlockFn; }
+  try { fn = new Function("c", "r", "M", "F", b.src + `\n//# sourceURL=wd/native/${(pc >>> 0).toString(16)}${thumb ? "t" : ""}.js`) as BlockFn; }
   catch (e) { throw new NativeFault(`[native] block compile failed at 0x${pc.toString(16)}: ${e}\n${b.src}`); }
+  fn.pc = pc;
+  fn.n = new Array<BlockFn | undefined>(b.slots).fill(undefined);
+  allBlocks.add(fn);
   pg[thumb ? (pc >>> 1) & 2047 : (pc >>> 2) & 1023] = fn;
   const page = pc >>> PAGE_SHIFT;
   let cv = cov[page];
   if (!cv) cov[page] = cv = new Uint8Array(1024);
-  cv.fill(1, (pc >>> 2) & 1023, ((b.end - 1) >>> 2 & 1023) + 1);
+  cv.fill(1, (pc >>> 2) & 1023, (((b.end - 1) >>> 2) & 1023) + 1);
   mem.codePages[page] = 1;
   blockStats.compiled++;
   blockStats.compileMs += performance.now() - t0;
@@ -194,54 +222,77 @@ export class Cpu {
     }
   }
 
+  /** the block for `pc` in the current instruction set (compiling it on a miss) */
+  look(pc: number): BlockFn {
+    if (pc >= TRAMP_BASE) return stubFor(pc);
+    if (this.t) {
+      let pg = tpages[pc >>> PAGE_SHIFT];
+      if (pg === undefined) pg = tpages[pc >>> PAGE_SHIFT] = new Array<BlockFn | undefined>(2048).fill(undefined);
+      return pg[(pc >>> 1) & 2047] ?? compile(this, pc, pg, true);
+    }
+    let pg = pages[pc >>> PAGE_SHIFT];
+    if (pg === undefined) pg = pages[pc >>> PAGE_SHIFT] = new Array<BlockFn | undefined>(1024).fill(undefined);
+    return pg[(pc >>> 2) & 1023] ?? compile(this, pc, pg, false);
+  }
+
   runSlice(budget: number): SliceExit {
+    if (stepMode.on) return this.runSliceStep(budget);
     const r = this.r;
-    let pc = r[15];
     const limit = this.ic + budget;
+    let fn = this.look(r[15]);
     for (;;) {
-      if (pc >= TRAMP_BASE) {
-        r[15] = pc;
+      fn = fn(this, r, mem, fn);
+      if (fn === STOP) {
+        const pc = r[15];
         if (pc === RET_SENTINEL) return SliceExit.Exit;
-        if (pc < TRAMP_END) {
-          hostDispatch(this, (pc - TRAMP_BASE) >> 3);
-          if (this.pending) return SliceExit.Suspend;
-          if (this.finished) return SliceExit.Exit;
-          pc = r[15];
-          continue;
-        }
-        this.fault("pc outside any module");
+        if (pc >= TRAMP_END) this.fault("pc outside any module");
+        hostDispatch(this, (pc - TRAMP_BASE) >> 3);
+        if (this.pending) return SliceExit.Suspend;
+        if (this.finished) return SliceExit.Exit;
+        fn = this.look(r[15]);
       }
-      let fn: BlockFn | undefined;
-      if (this.t) {
-        let pg = tpages[pc >>> PAGE_SHIFT];
-        if (pg === undefined) pg = tpages[pc >>> PAGE_SHIFT] = new Array<BlockFn | undefined>(2048);
-        fn = pg[(pc >>> 1) & 2047];
-        if (fn === undefined) fn = compile(this, pc, pg, true);
-      } else {
-        let pg = pages[pc >>> PAGE_SHIFT];
-        if (pg === undefined) pg = pages[pc >>> PAGE_SHIFT] = new Array<BlockFn | undefined>(1024);
-        fn = pg[(pc >>> 2) & 1023];
-        if (fn === undefined) fn = compile(this, pc, pg, false);
+      if (this.ic >= limit) {
+        r[15] = fn.pc;
+        if (profile.on) profile.samples.set(fn.pc, (profile.samples.get(fn.pc) ?? 0) + 1);
+        return SliceExit.Budget;
       }
-      if (stepMode.on) {
-        stepPrev.set(r);
-        const at = pc;
-        const w0 = stepMode.watch ? mem.i32[stepMode.watch >>> 2] : 0;
-        pc = fn(this, r, mem);
+    }
+  }
+
+  /** the tracing variant: one instruction per block, register diffs into stepMode.ring */
+  runSliceStep(budget: number): SliceExit {
+    const r = this.r;
+    const limit = this.ic + budget;
+    let fn = this.look(r[15]);
+    for (;;) {
+      const at = fn.pc;
+      stepPrev.set(r);
+      const w0 = stepMode.watch ? mem.i32[stepMode.watch >>> 2] : 0;
+      fn = fn(this, r, mem, fn);
+      if (at < TRAMP_BASE) {
         if (stepMode.watch && mem.i32[stepMode.watch >>> 2] !== w0) stepMode.hits.push(`${this.name} ${symbolizeHook(at)} wrote ${(mem.i32[stepMode.watch >>> 2] >>> 0).toString(16)} r0-3=${[0, 1, 2, 3].map((i) => (r[i] >>> 0).toString(16)).join(",")}\n    ` + stepMode.ring.slice(-40).join("\n    "));
         let d = "";
         for (let i = 0; i < 15; i++) if (r[i] !== stepPrev[i]) d += ` ${RN[i]}=${(r[i] >>> 0).toString(16)}`;
         stepMode.ring.push(`${this.name} ${symbolizeHook(at)}${d} [${this.n}${this.z}${this.c}${this.v}]`);
         if (stepMode.ring.length > stepMode.max) stepMode.ring.splice(0, 5000);
-      } else pc = fn(this, r, mem);
-      if (this.ic >= limit) { r[15] = pc; return SliceExit.Budget; }
+      }
+      if (fn === STOP) {
+        const pc = r[15];
+        if (pc === RET_SENTINEL) return SliceExit.Exit;
+        if (pc >= TRAMP_END) this.fault("pc outside any module");
+        hostDispatch(this, (pc - TRAMP_BASE) >> 3);
+        if (this.pending) return SliceExit.Suspend;
+        if (this.finished) return SliceExit.Exit;
+        fn = this.look(r[15]);
+      }
+      if (this.ic >= limit) { r[15] = fn.pc; return SliceExit.Budget; }
     }
   }
 
   setPc(addr: number): void { this.r[15] = addr & ~1; this.t = addr & 1; }
   /** interworking branch target (BX semantics): returns the pc to continue at */
   bx(addr: number): number { this.t = addr & 1; return addr & ~1; }
-  flush(): void { for (let i = 0; i < Math.max(pages.length, tpages.length); i++) if (pages[i] || tpages[i]) invalidatePage(i); }
+  flush(): void { for (let i = 0; i < NPAGES; i++) if (pages[i] || tpages[i]) invalidatePage(i); }
   cpsr(): number { return ((this.n << 31) | (this.z << 30) | (this.c << 29) | (this.v << 28) | (this.q << 27) | (this.ge << 16) | (this.t << 5) | 0x10) | 0; }
   setFlags(v: number): void { this.n = (v >>> 31) & 1; this.z = (v >>> 30) & 1; this.c = (v >>> 29) & 1; this.v = (v >>> 28) & 1; this.q = (v >>> 27) & 1; }
   /** register-specified shift with carry-out into `sc` (amount already masked to 8 bits) */
@@ -319,7 +370,11 @@ export function setSymbolizeHook(f: (pc: number) => string): void { symbolizeHoo
 // MessageChannel is not subject to the nested-setTimeout clamp.
 const chan = typeof MessageChannel !== "undefined" ? new MessageChannel() : null;
 const waiters: (() => void)[] = [];
-if (chan) chan.port1.onmessage = () => { const w = waiters.splice(0); for (const f of w) f(); };
+if (chan) {
+  chan.port1.onmessage = () => { const w = waiters.splice(0); for (const f of w) f(); };
+  // an open port keeps a bun/node process alive after its work is done (tests, scripts)
+  (chan.port1 as unknown as { unref?: () => void }).unref?.();
+}
 export function yieldToLoop(): Promise<void> {
   if (!chan) return new Promise((r) => setTimeout(r, 0));
   return new Promise((r) => { if (waiters.push(r) === 1) chan.port2.postMessage(0); });

@@ -6,14 +6,13 @@
 import { mem } from "./mem";
 import { PAGE_SIZE } from "./abi";
 import { emitVfp } from "./vfp";
+import { type Ins, type Fl, N, Z, C, ALL, COND, COND_READS, NZ, ADDF, SUBF, ADCF, SBCF, RSBF, RSCF, assemble, hoistRegs, inlineMem } from "./flags";
 
-const COND = ["c.z", "!c.z", "c.c", "!c.c", "c.n", "!c.n", "c.v", "!c.v",
-  "(c.c&&!c.z)", "(!c.c||c.z)", "c.n===c.v", "c.n!==c.v", "(!c.z&&c.n===c.v)", "(c.z||c.n!==c.v)", "", ""];
 let MAX_BLOCK = 256;
 /** 1 = single-instruction blocks (the step tracer) */
 export function setMaxBlock(n: number): void { MAX_BLOCK = n; }
 
-export interface BlockSrc { src: string; len: number; end: number }
+export interface BlockSrc { src: string; len: number; end: number; slots: number }
 
 /** operand2 as a JS expression plus its shifter-carry expression (null = carry unchanged) */
 function op2(w: number, pc: number): { v: string; c: string | null; pre?: string } {
@@ -43,24 +42,28 @@ const reg = (n: number, pc: number) => (n === 15 ? String((pc + 8) | 0) : `r[${n
 const hex = (n: number) => "0x" + (n >>> 0).toString(16);
 const fault = (pc: number, w: number, what: string) => `r[15]=${pc};c.fault(${JSON.stringify(what + " " + hex(w))});`;
 
+let redirect = -1, slot = 0;
+/** exit to a constant target: the block caches the successor's compiled function in F.n[slot] */
+const retK = (k: number, target: string) => { const i = slot++; return `{c.ic+=${k};return F.n[${i}]||(F.n[${i}]=c.look(${target}));}`; };
 /** emit one instruction; returns true when it ends the block */
-function emit(pc: number, w: number, out: string[], k: number): boolean {
+function emit(pc: number, w: number, out: Ins[], k: number): boolean {
   const cond = w >>> 28;
-  const ret = (target: string) => `{c.ic+=${k};return ${target};}`;
-  let body = "", ends = false;
-  const bx = (v: string) => ret(`c.bx(${v})`);
+  const ret = (target: string) => retK(k, target);
+  let body = "", ends = false, fl: Fl | null = null, reads = 0, writes = 0;
+  const bx = (v: string) => `{t=${v};c.t=t&1;c.ic+=${k};return c.look(t&~1);}`;
+  const plain = (code: string) => out.push({ code, fl: null, reads: 0, writes: 0 });
 
   if (cond === 15) {
     // unconditional space: BLX imm, PLD, barriers, CPS, SETEND, RFE/SRS
     if ((w & 0x0e000000) === 0x0a000000) {
       const off = ((w << 8) >> 6) | ((w >>> 23) & 2);
-      out.push(`r[14]=${(pc + 4) | 0};${ret(`c.bx(${hex((pc + 8 + off) | 1)})`)}`);
+      plain(`r[14]=${(pc + 4) | 0};c.t=1;${ret(hex((pc + 8 + off) & ~1))}`);
       return true;
     }
-    if ((w & 0x0d70f000) === 0x0550f000) { out.push(""); return false; } // PLD
-    if ((w & 0x0ff000f0) === 0x05700040 || (w & 0x0ff000f0) === 0x05700050 || (w & 0x0ff000f0) === 0x05700060) { out.push(""); return false; } // DSB/DMB/ISB
-    if ((w & 0x0fff00ff) === 0x057ff01f) { out.push(""); return false; } // CLREX
-    out.push(fault(pc, w, "undefined (NV space)"));
+    if ((w & 0x0d70f000) === 0x0550f000) { plain(""); return false; } // PLD
+    if ((w & 0x0ff000f0) === 0x05700040 || (w & 0x0ff000f0) === 0x05700050 || (w & 0x0ff000f0) === 0x05700060) { plain(""); return false; } // DSB/DMB/ISB
+    if ((w & 0x0fff00ff) === 0x057ff01f) { plain(""); return false; } // CLREX
+    plain(fault(pc, w, "undefined (NV space)"));
     return true;
   }
 
@@ -68,10 +71,11 @@ function emit(pc: number, w: number, out: string[], k: number): boolean {
   const top = (w >>> 25) & 7;
 
   if (top === 5) {
-    // B / BL
+    // B / BL — an unconditional B continues the block at its target (see emitBlock)
     const off = (w << 8) >> 6;
     const target = (pc + 8 + off) | 0;
     if (w & (1 << 24)) body += `r[14]=${(pc + 4) | 0};`;
+    else if (cond === 14) { redirect = target; out.push({ code: `c.ic+=${k};`, fl: null, reads: 0, writes: 0 }); return true; }
     body += ret(hex(target));
     ends = true;
   } else if (top === 0 || top === 1) {
@@ -79,22 +83,22 @@ function emit(pc: number, w: number, out: string[], k: number): boolean {
     else if (top === 0 && (w & 0x0ff000f0) === 0x01200030) { body = `r[14]=${(pc + 4) | 0};` + bx(reg(rm, pc)); ends = true; } // BLX reg
     else if (top === 0 && (w & 0x0ff000f0) === 0x01200070) { body = fault(pc, w, "bkpt"); ends = true; }
     else if (top === 0 && (w & 0x0fff0ff0) === 0x016f0f10) body = `r[${rd}]=Math.clz32(${reg(rm, pc)});`;          // CLZ
-    else if (top === 0 && (w & 0x0fbf0fff) === 0x010f0000) body = `r[${rd}]=c.cpsr();`;                              // MRS
+    else if (top === 0 && (w & 0x0fbf0fff) === 0x010f0000) { body = `r[${rd}]=c.cpsr();`; reads = ALL; }              // MRS
     else if ((w & 0x0db0f000) === 0x0120f000 && (top === 1 || (w & 0xf0) === 0)) {                                    // MSR
       const src = top === 1 ? op2(w, pc).v : reg(rm, pc);
-      if (w & (1 << 19)) body = `c.setFlags(${src});`; else body = "";
+      if (w & (1 << 19)) { body = `c.setFlags(${src});`; writes = ALL; } else body = "";
     }
     else if (top === 0 && (w & 0x0fc000f0) === 0x00000090) {                                                         // MUL/MLA
       const acc = w & (1 << 21), s = w & (1 << 20);
       body = `v=Math.imul(${reg(rm, pc)},${reg(rs, pc)})${acc ? `+r[${rd}]|0` : ""};r[${rn}]=v;`;
-      if (s) body += "c.n=v>>>31;c.z=v===0?1:0;";
+      if (s) fl = NZ;
     }
     else if (top === 0 && (w & 0x0f8000f0) === 0x00800090) {                                                         // UMULL/UMLAL/SMULL/SMLAL
       const signed = w & (1 << 22), acc = w & (1 << 21), s = w & (1 << 20);
       body = `c.${signed ? "smull" : "umull"}(${reg(rm, pc)},${reg(rs, pc)});`;
       if (acc) body += `c.add64(r[${rd}],r[${rn}]);`;
       body += `r[${rd}]=c.lo;r[${rn}]=c.hi;`;
-      if (s) body += `c.n=c.hi>>>31;c.z=(c.hi|c.lo)===0?1:0;`;
+      if (s) fl = { n: "c.n=c.hi>>>31;", z: "c.z=(c.hi|c.lo)===0?1:0;" };
     }
     else if (top === 0 && (w & 0x0f0000f0) === 0x00000090 && (w & 0x0fb000f0) === 0x01000090) {                       // SWP/SWPB
       const b = w & (1 << 22);
@@ -158,8 +162,9 @@ function emit(pc: number, w: number, out: string[], k: number): boolean {
       const noWrite = op >= 8 && op <= 11;
       // arithmetic flag computation needs rn's value after the write, so it goes through local `a`
       const a = S && !isLogical ? "a" : reg(rn, pc);
-      let expr: string, flags = "";
+      let expr: string;
       body = `t=${o.v};` + (S && !isLogical ? `a=${reg(rn, pc)};` : "");
+      if (o.c && o.c.includes("c.c")) reads |= C;   // RRX reads the carry in
       switch (op) {
         case 0: case 8: expr = `${a}&t`; break;
         case 1: case 9: expr = `${a}^t`; break;
@@ -167,19 +172,18 @@ function emit(pc: number, w: number, out: string[], k: number): boolean {
         case 14: expr = `${a}&~t`; break;
         case 13: expr = `t`; break;
         case 15: expr = `~t`; break;
-        case 2: case 10: expr = `(${a}-t)|0`; flags = `c.c=(a>>>0)>=(t>>>0)?1:0;c.v=((a^t)&(a^v))>>>31;`; break;
-        case 3: expr = `(t-${a})|0`; flags = `c.c=(t>>>0)>=(a>>>0)?1:0;c.v=((t^a)&(t^v))>>>31;`; break;
-        case 4: case 11: expr = `(${a}+t)|0`; flags = `c.c=((a>>>0)+(t>>>0))>4294967295?1:0;c.v=((a^v)&(t^v))>>>31;`; break;
-        case 5: expr = `(${a}+t+c.c)|0`; flags = `c.c=((a>>>0)+(t>>>0)+c.c)>4294967295?1:0;c.v=((a^v)&(t^v))>>>31;`; break;
-        case 6: expr = `(${a}-t-1+c.c)|0`; flags = `c.c=((a>>>0)-(t>>>0)-1+c.c)>=0?1:0;c.v=((a^t)&(a^v))>>>31;`; break;
-        default: expr = `(t-${a}-1+c.c)|0`; flags = `c.c=((t>>>0)-(a>>>0)-1+c.c)>=0?1:0;c.v=((t^a)&(t^v))>>>31;`; break;
+        case 2: case 10: expr = `(${a}-t)|0`; fl = SUBF; break;
+        case 3: expr = `(t-${a})|0`; fl = RSBF; break;
+        case 4: case 11: expr = `(${a}+t)|0`; fl = ADDF; break;
+        case 5: expr = `(${a}+t+c.c)|0`; fl = ADCF; reads |= C; break;
+        case 6: expr = `(${a}-t-1+c.c)|0`; fl = SBCF; reads |= C; break;
+        default: expr = `(t-${a}-1+c.c)|0`; fl = RSCF; reads |= C; break;
       }
+      if (S && isLogical) {
+        // the shifter carry reads rm, which the write to rd may alias: capture it first
+        if (o.c) { body += `sc=${o.c};`; fl = { ...NZ, c: "c.c=sc;" }; } else fl = NZ;
+      } else if (!S) fl = null;
       body += `v=${expr};`;
-      if (S) {
-        body += `c.n=v>>>31;c.z=v===0?1:0;`;
-        if (isLogical) { if (o.c) body += `c.c=${o.c};`; }
-        else body += flags;
-      }
       if (!noWrite) {
         if (rd === 15) { body += bx("v"); ends = true; }
         else body += `r[${rd}]=v;`;
@@ -189,7 +193,8 @@ function emit(pc: number, w: number, out: string[], k: number): boolean {
     // single data transfer (word/byte), and the ARMv6 media space at top=3 bit4=1
     if (top === 3 && (w & 0x10)) {
       body = media(pc, w, rd, rn, rm, rs);
-      if (body === "") { out.push(fault(pc, w, "media/undefined")); return true; }
+      if (body === "") { plain(fault(pc, w, "media/undefined")); return true; }
+      if (body.includes("c.ge")) reads |= ALL;
     } else {
       const P = w & (1 << 24), U = w & (1 << 23), B = w & (1 << 22), W = w & (1 << 21), L = w & (1 << 20);
       const off = top === 2 ? String(w & 0xfff) : op2(w & ~(1 << 25), pc).v;
@@ -232,7 +237,7 @@ function emit(pc: number, w: number, out: string[], k: number): boolean {
   } else if (top === 6) {
     // LDC/STC: VFP vldr/vstr/vldm/vstm and the 64-bit VMOV transfers
     const v = emitVfp(pc, w);
-    if (v === null) { out.push(fault(pc, w, `coprocessor ${(w >>> 8) & 15} load/store`)); return true; }
+    if (v === null) { plain(fault(pc, w, `coprocessor ${(w >>> 8) & 15} load/store`)); return true; }
     body = v;
   } else if (top === 7) {
     if (w & (1 << 24)) body = `r[15]=${pc};c.swi();`;
@@ -241,18 +246,19 @@ function emit(pc: number, w: number, out: string[], k: number): boolean {
       if ((w & 0x0ff00fff) === 0x0e1d0f70 && cp === 15) body = `r[${rd}]=c.tlsBase;`;                                 // mrc p15,0,rd,c13,c0,3
       else {
         const v = emitVfp(pc, w);
-        if (v === null) { out.push(fault(pc, w, `coprocessor ${cp} op`)); return true; }
+        if (v === null) { plain(fault(pc, w, `coprocessor ${cp} op`)); return true; }
         body = v;
+        if (v.includes("c.n=")) writes = ALL;
       }
     }
   } else {
-    out.push(fault(pc, w, "undefined"));
+    plain(fault(pc, w, "undefined"));
     return true;
   }
 
-  if (cond === 14) out.push(body);
-  else if (ends) { out.push(`if(${COND[cond]}){${body}}`); ends = false; }
-  else out.push(`if(${COND[cond]}){${body}}`);
+  const flMask = fl ? (fl.v ? ALL : fl.c ? N | Z | C : N | Z) : 0;
+  if (cond === 14) out.push({ code: body, fl, reads, writes: writes | flMask });
+  else { out.push({ code: `if(${COND[cond]}){${body}\0F}`, fl, reads: reads | COND_READS[cond], writes: 0 }); ends = false; }
   return ends;
 }
 
@@ -313,16 +319,27 @@ function media(pc: number, w: number, rd: number, rn: number, rm: number, rs: nu
 
 /** compile the basic block at `pc` to JS source */
 export function emitBlock(pc: number): BlockSrc {
-  const out: string[] = [`c.bpc=${pc};c.ring[c.rp=(c.rp+1)&63]=${pc};`];
-  const pageEnd = (pc & -PAGE_SIZE) + PAGE_SIZE;
-  let p = pc, k = 0;
+  slot = 0;
+  const out: Ins[] = [{ code: `c.bpc=${pc};`, fl: null, reads: 0, writes: 0 }];
+  const pageStart = pc & -PAGE_SIZE, pageEnd = pageStart + PAGE_SIZE;
+  const seen = new Set<number>();
+  let p = pc, k = 0, end = pc;
   for (;;) {
     const w = mem.u32[p >>> 2];
     k++;
+    seen.add(p);
+    redirect = -1;
     const ends = emit(p, w, out, k);
     p += 4;
+    if (p > end) end = p;
+    if (redirect >= 0) {
+      // follow an unconditional branch within the page once: fewer, longer blocks
+      if (redirect >= pageStart && redirect < pageEnd && !seen.has(redirect) && k < MAX_BLOCK) { p = redirect; k = 0; continue; }
+      out.push({ code: retK(0, hex(redirect)), fl: null, reads: 0, writes: 0 });
+      break;
+    }
     if (ends || k >= MAX_BLOCK || p >= pageEnd) break;
   }
-  out.push(`c.ic+=${k};return ${hex(p)};`);
-  return { src: "let t,a,v;" + out.join("\n"), len: k, end: p };
+  if (redirect < 0) out.push({ code: retK(k, hex(p)), fl: null, reads: 0, writes: 0 });
+  return { src: "let t,a,v,sc,m1;" + hoistRegs(inlineMem(assemble(out))), len: (end - pc) >> 2, end, slots: slot };
 }

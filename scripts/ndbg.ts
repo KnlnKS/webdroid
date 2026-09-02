@@ -8,6 +8,10 @@ await drv.page.addInitScript((r) => { (globalThis as any).__wdNativeTrace = r; }
 if (process.env.STEP) await drv.page.addInitScript((w) => { (globalThis as any).__wdNativeStep = true; (globalThis as any).__wdNativeWatch = w; }, Number(process.env.WATCH ?? 0));
 await drv.page.goto(`${process.env.WEBDROID_URL ?? "http://localhost:4083"}/?apk=${encodeURIComponent(apk)}`);
 await drv.page.waitForFunction(() => !!(globalThis as any).wd?.native, undefined, { timeout: 60000 });
+if (process.env.PROF_AFTER) {
+  await new Promise((r) => setTimeout(r, Number(process.env.PROF_AFTER)));
+  await drv.page.evaluate(() => { (globalThis as any).wd.native.profileReset(); (globalThis as any).wd.perfReset(); });
+}
 await new Promise((r) => setTimeout(r, Number(waitMs)));
 if (process.env.TAP) { await drv.page.evaluate(() => (globalThis as any).wd.tap(360, 640)); await new Promise((r) => setTimeout(r, 3000)); }
 const out = await drv.page.evaluate(() => {
@@ -27,9 +31,15 @@ console.log("--- regs ---", JSON.stringify(out.regs, null, 1));
 console.log("--- pc ring ---\n" + out.ring);
 console.log("calledMissing:", out.calledMissing, "jniMissing:", out.jniMissing, "\nmissing:", out.missing);
 console.log("perf:", out.perf, "blocks:", out.blocks);
+console.log("profile:\n" + (await drv.page.evaluate(() => (globalThis as any).wd.native.profile(25))).join("\n"));
 if (process.env.STEP) console.log("watch hits:\n" + (await drv.page.evaluate(() => (globalThis as any).wd.native.stepRing === undefined ? [] : (globalThis as any).wd.native.stepHits)).join("\n"));
 if (process.env.STEP) { const st = await drv.page.evaluate(() => (globalThis as any).wd.native.stepRing.slice(-40000)); await Bun.write("/tmp/steps.txt", st.join("\n")); console.log("steps → /tmp/steps.txt", st.length); }
 if (process.env.PEEK) { const [a, n] = process.env.PEEK.split(",").map(Number); const hex = await drv.page.evaluate(([a, n]) => (globalThis as any).wd.native.peek(a, n), [a, n]); const bytes = hex.split(" ").map((h: string) => parseInt(h, 16)); for (let i = 0; i < bytes.length; i += 32) console.log((a + i).toString(16).padStart(8, "0"), bytes.slice(i, i + 32).map((b: number) => b.toString(16).padStart(2, "0")).join(" "), " ", bytes.slice(i, i + 32).map((b: number) => b >= 32 && b < 127 ? String.fromCharCode(b) : ".").join("")); }
+for (const spec of (process.env.DUMP ?? "").split(";").filter(Boolean)) {
+  const [a, n] = spec.split(",").map(Number);
+  const hex = await drv.page.evaluate(([a, n]) => (globalThis as any).wd.native.peek(a, n), [a, n]);
+  await Bun.write(`/tmp/dump_${a.toString(16)}.bin`, new Uint8Array(hex.split(" ").map((h: string) => parseInt(h, 16))));
+}
 await Bun.write("webdroid-shots/ndbg.png", await drv.page.screenshot());
 await drv.close();
 process.exit(0);
