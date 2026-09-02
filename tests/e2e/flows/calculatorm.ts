@@ -1,17 +1,18 @@
-// calculatorm (Compose + Material3, Room history). Keypad taps are positional: Compose draws
-// through canvas ops and exposes no View.text, so nothing here can resolve by text.
-// KEY COORDINATES ARE PLACEHOLDERS: a plausible 4x5 keypad grid in the lower half
-// (columns x = 90/270/450/630, rows y = 700/840/980/1120 in 720x1280 px) — read the real
-// centres off the first rendered frame (or wd.rnodes()) once the keypad draws, then fix them.
-// The app also loads an arm64 on-device LLM (liblitertlm_jni.so): expected in nativeRequired,
-// off the usable path (the app's own unavailable state).
+// calculatorm (Compose + Material3; history kept in SharedPreferences/SavedStateHandle, not Room).
+// Keypad taps are positional: Compose draws through canvas ops and exposes no View.text, so
+// nothing here can resolve by text. Observed layout (720x1280 px, status bar included): a
+// 4x5 grid of 163px round buttons, columns centred at x = 97/272/447/622, rows at
+// y = 475 (⌫ AC % ÷), 650 (7 8 9 ×), 825 (4 5 6 −), 1000 (1 2 3 +), 1175 (+/− 0 . =); a row of
+// √ π ^ ! text buttons at y = 340 and the history clock icon at (640, 96). The display shows the
+// expression (auto-shrinking to fit) with a live "= result" preview once an operator is entered.
+// The app also bundles an arm64 on-device LLM (liblitertlm_jni.so) behind its camera/AI screen —
+// off this flow; when reached it must surface as nativeRequired (the app's own unavailable state).
 import type { Flow } from "../types";
 
 const N = (x: number, y: number) => ({ x: x / 720, y: y / 1280 });
-// placeholders (see header): 7 8 9 × / 4 5 6 − / 1 2 3 + / 0 . = row order
-const KEY_7 = N(90, 700);
-const KEY_PLUS = N(630, 980);
-const KEY_EQ = N(630, 1120);
+const KEY_7 = N(97, 650);
+const KEY_PLUS = N(622, 1000);
+const KEY_EQ = N(622, 1175);
 
 export const calculatorm: Flow = {
   app: "calculatorm",
