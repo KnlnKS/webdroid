@@ -445,28 +445,29 @@ rt.register({ name: "android/util/LongSparseArray", ctor: class extends JSparseA
 // android.util.StateSet: a spec lists the state ids a drawable/color entry needs (negative =
 // must be absent), 0 terminates either array; both wildcards are answered by the constants.
 const isWild = (s: Int32Array) => s.length === 0 || s[0] === 0;
+export function stateSetMatches(spec: Int32Array | null, set: ArrayLike<number> | null): boolean {
+  if (set === null) return spec === null || isWild(spec);
+  for (let i = 0; i < spec!.length; i++) {
+    let want = spec![i];
+    if (want === 0) return true;
+    const must = want > 0;
+    if (!must) want = -want;
+    let found = false;
+    for (let j = 0; j < set.length; j++) {
+      const st = set[j];
+      if (st === 0) { if (must) return false; break; }
+      if (st === want) { if (!must) return false; found = true; break; }
+    }
+    if (must && !found) return false;
+  }
+  return true;
+}
 rt.register({
   name: "android/util/StateSet", ctor: class extends JObj {},
   statics: { WILD_CARD: new Int32Array(0), NOTHING: Int32Array.of(0) },
   methods: {
     "static isWildCard([I)Z": (s: Int32Array) => isWild(s) ? 1 : 0,
-    "static stateSetMatches([I[I)Z": (spec: Int32Array, set: Int32Array | null) => {
-      if (set === null) return spec === null || isWild(spec) ? 1 : 0;
-      for (let i = 0; i < spec.length; i++) {
-        let want = spec[i];
-        if (want === 0) return 1;
-        const must = want > 0;
-        if (!must) want = -want;
-        let found = false;
-        for (let j = 0; j < set.length; j++) {
-          const st = set[j];
-          if (st === 0) { if (must) return 0; break; }
-          if (st === want) { if (!must) return 0; found = true; break; }
-        }
-        if (must && !found) return 0;
-      }
-      return 1;
-    },
+    "static stateSetMatches([I[I)Z": (spec: Int32Array, set: Int32Array | null) => stateSetMatches(spec, set) ? 1 : 0,
     "static stateSetMatches([II)Z": (spec: Int32Array, state: number) => {
       for (let i = 0; i < spec.length; i++) {
         const want = spec[i];
@@ -577,8 +578,16 @@ rt.register({
       return complexToPx(this.data, dm);
     },
     "getFloat()F": function (this: JTypedValue) { const s = scratchF; s.setUint32(0, this.data); return s.getFloat32(0); },
+    // COMPLEX_UNIT_FRACTION scales the base, FRACTION_PARENT the parent's base
+    "getFraction(FF)F": function (this: JTypedValue, base: number, pbase: number) {
+      return ((this.data & 0xf) === 0 ? base : pbase) * complexToPx(this.data & ~0xf, NO_DM);
+    },
+    "static complexToFraction(IFF)F": (data: number, base: number, pbase: number) =>
+      ((data & 0xf) === 0 ? base : pbase) * complexToPx(data & ~0xf, NO_DM),
+    "static complexToFloat(I)F": (data: number) => complexToPx(data & ~0xf, NO_DM),
   },
 });
+const NO_DM = { density: 1, scaledDensity: 1 };
 const scratchF = new DataView(new ArrayBuffer(4));
 export function complexToPx(data: number, dm: { density: number; scaledDensity: number }): number {
   const unit = data & 0xf;

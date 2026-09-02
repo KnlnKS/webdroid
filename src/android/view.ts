@@ -142,6 +142,7 @@ export class JView extends JObj {
   tag: unknown = null;
   keyedTags = new Map<number, unknown>();
   outlineProvider: unknown = null;
+  stateListAnimator: unknown = null;
   left = 0; top = 0; right = 0; bottom = 0;
   static $nextDrawingId = 0;
   measuredW = 0; measuredH = 0;
@@ -194,6 +195,7 @@ export class JView extends JObj {
     }
     const f = (this as any)[M_drawableStateChanged];
     if (f) await guardCall(f, this);
+    if (this.stateListAnimator) await vcall(this.stateListAnimator, "setState", "([I)V", Int32Array.from(st));
     invalidate();
   }
 }
@@ -671,7 +673,11 @@ const viewMethods: NativeSpec["methods"] = {
   "onInitializeAccessibilityNodeInfo(Landroid/view/accessibility/AccessibilityNodeInfo;)V": () => {},
   "onInitializeAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V": () => {},
   "setLabelFor(I)V": () => {},
-  "setStateListAnimator(Landroid/animation/StateListAnimator;)V": () => {},
+  "setStateListAnimator(Landroid/animation/StateListAnimator;)V": async function (this: JView, sla: unknown) {
+    this.stateListAnimator = sla;
+    if (sla) await vcall(sla, "setTarget", "(Landroid/view/View;)V", this);
+  },
+  "getStateListAnimator()Landroid/animation/StateListAnimator;": function (this: JView) { return this.stateListAnimator; },
   "setOutlineProvider(Landroid/view/ViewOutlineProvider;)V": function (this: JView, p: unknown) { this.outlineProvider = p; },
   "getOutlineProvider()Landroid/view/ViewOutlineProvider;": function (this: JView) { return this.outlineProvider ?? bgOutline; },
   "setClipToOutline(Z)V": () => {},
