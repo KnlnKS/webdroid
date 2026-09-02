@@ -30,6 +30,7 @@ import "./android/inflate";
 import "./android/app";
 import "./android/popup";
 import "./android/security";
+import "./android/transition";
 import "./android/sqlite";
 import "./android/compat";
 import "./android/dialog";

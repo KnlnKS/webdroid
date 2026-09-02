@@ -1657,7 +1657,9 @@ rt.register({
     "isStatusBarContrastEnforced()Z": () => 0,
     "isNavigationBarContrastEnforced()Z": () => 0,
     "getDecorView()Landroid/view/View;": async function (this: JWindow) {
-      // dialog windows: materialize a decor so WindowCompat/insets helpers can operate
+      // AOSP installs the real decor on first access (appcompat asks for it before
+      // setContentView); dialog windows materialize a bare one so insets helpers can operate
+      if (!this.decor && this.activity instanceof JActivity) await ensureDecor(this.activity);
       return this.decor ??= await newObj("android/widget/FrameLayout", "(Landroid/content/Context;)V", this.activity);
     },
     "peekDecorView()Landroid/view/View;": function (this: JWindow) { return this.decor; },
