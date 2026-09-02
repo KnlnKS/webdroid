@@ -4,3 +4,4 @@ node_modules/
 webdroid-shots/
 tests/e2e/actual/
 tests/e2e/report/
+.worktrees/
