@@ -1,6 +1,11 @@
-// java.util.zip on fflate streaming codecs (Inflater/Deflater raw+zlib, CRC32).
-import { Inflate, Unzlib, Deflate, Zlib } from "fflate";
+// java.util.zip on fflate: streaming codecs (Inflater/Deflater raw+zlib, CRC32), ZipFile over a
+// central-directory index, GZIPInputStream over a drained source.
+import { Inflate, Unzlib, Deflate, Zlib, inflateSync, gunzipSync } from "fflate";
 import { rt, JObj } from "../runtime";
+import { mangleMethod } from "../abi";
+import { vcall, newObj, defineException } from "./jlang";
+import { vfs, JFile, JInputStream } from "./jio";
+import { mkIter } from "./jutil";
 
 type Codec = Inflate | Unzlib | Deflate | Zlib;
 class JInflater extends JObj {
@@ -108,5 +113,135 @@ rt.register({
     "update(I)V": function (this: JCRC32, v: number) { this.crc = (CRC_T[(this.crc ^ v) & 0xff] ^ (this.crc >>> 8)) >>> 0; },
     "getValue()J": function (this: JCRC32) { return BigInt((this.crc ^ 0xffffffff) >>> 0); },
     "reset()V": function (this: JCRC32) { this.crc = 0xffffffff; },
+  },
+});
+
+defineException("java/util/zip/ZipException", "java/io/IOException");
+
+// ── ZipFile / ZipEntry: index the central directory, inflate an entry only when it is read
+interface ZEntry { name: string; method: number; csize: number; size: number; time: number; off: number; }
+const UNKNOWN: ZEntry = { name: "", method: -1, csize: -1, size: -1, time: -1, off: -1 };
+/** what ApplicationInfo.sourceDir answers (android/app.ts): the apk exists only as the unpacked classpath */
+const SOURCE_DIR = "/data/app/base.apk";
+function dosTime(date: number, time: number): number {
+  return new Date(1980 + (date >> 9), ((date >> 5) & 15) - 1, date & 31, time >> 11, (time >> 5) & 63, (time & 31) * 2).getTime();
+}
+function centralDir(z: Uint8Array): Map<string, ZEntry> {
+  const v = new DataView(z.buffer, z.byteOffset, z.byteLength);
+  let e = z.length - 22; // end-of-central-directory record, scanning back over any archive comment
+  while (e >= 0 && v.getUint32(e, true) !== 0x06054b50) e--;
+  if (e < 0) throw rt.mkThrowable("java/util/zip/ZipException", "End Of Central Directory signature not found");
+  const out = new Map<string, ZEntry>();
+  let p = v.getUint32(e + 16, true);
+  for (let n = v.getUint16(e + 10, true); n > 0; n--) {
+    const nl = v.getUint16(p + 28, true);
+    const name = new TextDecoder().decode(z.subarray(p + 46, p + 46 + nl));
+    out.set(name, {
+      name, method: v.getUint16(p + 10, true), time: dosTime(v.getUint16(p + 14, true), v.getUint16(p + 12, true)),
+      csize: v.getUint32(p + 20, true), size: v.getUint32(p + 24, true), off: v.getUint32(p + 42, true),
+    });
+    p += 46 + nl + v.getUint16(p + 30, true) + v.getUint16(p + 32, true);
+  }
+  return out;
+}
+function entryBytes(z: Uint8Array, e: ZEntry): Uint8Array {
+  const v = new DataView(z.buffer, z.byteOffset, z.byteLength);
+  // the local header carries its own name/extra lengths, which may differ from the central ones
+  const start = e.off + 30 + v.getUint16(e.off + 26, true) + v.getUint16(e.off + 28, true);
+  const raw = z.subarray(start, start + e.csize);
+  if (e.method === 0) return raw;
+  if (e.method === 8) return inflateSync(raw);
+  throw rt.mkThrowable("java/util/zip/ZipException", "Invalid compression method " + e.method + ": " + e.name);
+}
+class JZipEntry extends JObj { e: ZEntry = UNKNOWN; }
+function mkZipEntry(e: ZEntry): JZipEntry {
+  const z = new (rt.link("java/util/zip/ZipEntry").ctor)() as JZipEntry;
+  z.e = e;
+  return z;
+}
+rt.register({
+  name: "java/util/zip/ZipEntry", ctor: JZipEntry, ifaces: ["java/lang/Cloneable"],
+  statics: { STORED: 0, DEFLATED: 8 },
+  methods: {
+    "<init>(Ljava/lang/String;)V": function (this: JZipEntry, name: string) { this.e = { ...UNKNOWN, name }; },
+    "getName()Ljava/lang/String;": function (this: JZipEntry) { return this.e.name; },
+    "getSize()J": function (this: JZipEntry) { return BigInt(this.e.size); },
+    "getCompressedSize()J": function (this: JZipEntry) { return BigInt(this.e.csize); },
+    "getTime()J": function (this: JZipEntry) { return BigInt(this.e.time); },
+    "getMethod()I": function (this: JZipEntry) { return this.e.method; },
+    "isDirectory()Z": function (this: JZipEntry) { return this.e.name.endsWith("/") ? 1 : 0; },
+    "toString()Ljava/lang/String;": function (this: JZipEntry) { return this.e.name; },
+  },
+});
+class JZipFile extends JObj {
+  name = "";
+  entries = new Map<string, ZEntry>();
+  data: (e: ZEntry) => Uint8Array = () => new Uint8Array(0);
+}
+function openZip(this: JZipFile, path: string) {
+  this.name = vfs.norm(path);
+  const bytes = vfs.read(path);
+  if (bytes) { this.entries = centralDir(bytes); this.data = (e) => entryBytes(bytes, e); return; }
+  // the app's own package is already unpacked; what only the central directory knows stays -1
+  if (this.name === SOURCE_DIR) {
+    for (const [name, b] of Object.entries(rt.classpath)) this.entries.set(name, { ...UNKNOWN, name, size: b.length });
+    this.data = (e) => rt.classpath[e.name];
+    return;
+  }
+  throw rt.mkThrowable("java/io/FileNotFoundException", path + " (No such file or directory)");
+}
+const openZipFile = function (this: JZipFile, f: JFile) { openZip.call(this, f.path); };
+rt.register({
+  name: "java/util/zip/ZipFile", ctor: JZipFile, ifaces: ["java/io/Closeable"],
+  methods: {
+    "<init>(Ljava/lang/String;)V": openZip,
+    "<init>(Ljava/io/File;)V": openZipFile,
+    "<init>(Ljava/io/File;I)V": openZipFile,
+    "getName()Ljava/lang/String;": function (this: JZipFile) { return this.name; },
+    "size()I": function (this: JZipFile) { return this.entries.size; },
+    "entries()Ljava/util/Enumeration;": function (this: JZipFile) { return mkIter([...this.entries.values()].map(mkZipEntry)); },
+    "getEntry(Ljava/lang/String;)Ljava/util/zip/ZipEntry;": function (this: JZipFile, name: string) {
+      const e = this.entries.get(name) ?? this.entries.get(name + "/");
+      return e ? mkZipEntry(e) : null;
+    },
+    "getInputStream(Ljava/util/zip/ZipEntry;)Ljava/io/InputStream;": function (this: JZipFile, ze: JZipEntry) {
+      const e = this.entries.get(ze.e.name);
+      if (!e) return null;
+      const b = this.data(e);
+      return newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array(b.buffer, b.byteOffset, b.length));
+    },
+    "close()V": function () {},
+  },
+});
+
+// ── GZIPInputStream: the whole source is gunzipped up front and served like any buffer-backed stream
+const readI = mangleMethod("read", "()I"), readBII = mangleMethod("read", "([BII)I");
+/** everything the source still holds — in place for a native buffer stream, else through its own read([BII) */
+async function drainStream(src: JInputStream): Promise<Uint8Array> {
+  const base = JInputStream.prototype as any;
+  if (src instanceof JInputStream && (src as any)[readI] === base[readI] && (src as any)[readBII] === base[readBII]) {
+    const b = src.buf.subarray(src.pos);
+    src.pos = src.buf.length;
+    return b;
+  }
+  const chunks: Uint8Array[] = [];
+  const buf = new Int8Array(65536);
+  let n = 0, total = 0;
+  while ((n = await vcall(src, "read", "([BII)I", buf, 0, buf.length)) > 0) { chunks.push(new Uint8Array(buf.buffer.slice(0, n))); total += n; }
+  const out = new Uint8Array(total);
+  let p = 0;
+  for (const c of chunks) { out.set(c, p); p += c.length; }
+  return out;
+}
+async function gunzip(this: JInputStream, src: JInputStream) {
+  const z = await drainStream(src);
+  try { this.buf = gunzipSync(z); }
+  catch (e) { throw rt.mkThrowable("java/util/zip/ZipException", (e as Error).message); }
+}
+rt.register({
+  name: "java/util/zip/GZIPInputStream", ctor: class extends JInputStream {}, sup: "java/io/InputStream",
+  methods: {
+    "<init>(Ljava/io/InputStream;)V": gunzip,
+    "<init>(Ljava/io/InputStream;I)V": gunzip,
   },
 });
