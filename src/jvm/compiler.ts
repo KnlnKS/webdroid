@@ -302,6 +302,7 @@ ${catchBody}
     // ── transfer: apply one block to a state, optionally marking consumers
     const retType = parseMethodDesc(this.desc).ret;
     const run = (lead: number, defs: Defs, arr: Arrs, doMark: boolean) => {
+      let lastRet = "";
       const mark = doMark
         ? (reg: number, kind: "F" | "D") => { const ds = defs.get(reg); if (ds) for (const w of ds) if (!w.constKind) w.constKind = kind; }
         : () => {};
@@ -339,16 +340,26 @@ ${catchBody}
         } else if (n === "return" && retType === "F") mark(i.a, "F");
         else if (n === "return-wide" && retType === "D") mark(i.a, "D");
 
-        // float/double array registers (from new-array [F/[D) so aput types its value const
-        if (n === "new-array") {
-          const t = dex.type(i.c);
-          if (t === "[F") arr.set(i.a, "F");
-          else if (t === "[D") arr.set(i.a, "D");
-          else arr.delete(i.a);
-        } else if (n === "move-object" || n === "move-object/from16" || n === "move-object/16") {
+        // float/double array registers so aput types its value const: from new-array, a field or
+        // a call's declared type, a check-cast, or a copy of one. `aput` alone cannot tell [F from
+        // [I, and 1.0f stored raw into a Float32Array is 1065353216 (Compose's 4x4 matrix
+        // m[3][3], which then inverted every hit-test position into nonsense).
+        const setArr = (reg: number, t: string) => {
+          if (t === "[F") arr.set(reg, "F");
+          else if (t === "[D") arr.set(reg, "D");
+          else arr.delete(reg);
+        };
+        if (n === "new-array") setArr(i.a, dex.type(i.c));
+        else if (n === "check-cast") setArr(i.a, dex.type(i.b));
+        else if (n === "iget-object") setArr(i.a, dex.type(dex.field(i.c).type));
+        else if (n === "sget-object") setArr(i.a, dex.type(dex.field(i.b).type));
+        else if (n === "move-result-object") setArr(i.a, lastRet);
+        else if (n === "move-object" || n === "move-object/from16" || n === "move-object/16") {
           const k = arr.get(i.b);
           if (k) arr.set(i.a, k); else arr.delete(i.a);
         } else if (this.writtenReg(i) >= 0) arr.delete(this.writtenReg(i));
+        if (n.startsWith("invoke") && !n.startsWith("invoke-custom")) lastRet = dex.type(dex.proto(dex.method(i.b).proto).ret);
+        else if (n !== "move-result-object") lastRet = "";
 
         // defs: a const kills whatever reached this register; a move copies the source's set
         if (n.startsWith("const/") || n === "const" || n.startsWith("const-wide")) {
@@ -364,14 +375,25 @@ ${catchBody}
       return { defs, arr };
     };
 
+    // parameters of type [F/[D arrive typed
+    const paramArrs: Arrs = new Map();
+    {
+      const params = parseMethodDesc(this.desc).params;
+      let reg = this.code.regs - this.code.ins + (this.isStatic ? 0 : 1);
+      for (const pt of params) {
+        if (pt === "[F" || pt === "[D") paramArrs.set(reg, pt[1] as "F" | "D");
+        reg += isWide(pt) ? 2 : 1;
+      }
+    }
+
     // A single-block method has no merges: one pass IS the fixpoint.
-    if (leaders.length === 1) { run(leaders[0], new Map(), new Map(), true); return; }
+    if (leaders.length === 1) { run(leaders[0], new Map(), new Map(paramArrs), true); return; }
 
     // ── fixpoint on block entry states. `null` array-kinds = no predecessor seen yet, which
     // is what lets the meet be an intersection without swallowing the first contribution.
     const inDefs = new Map<number, Defs>(leaders.map((l) => [l, new Map()] as const));
     const inArrs = new Map<number, Arrs | null>(leaders.map((l) => [l, null] as const));
-    inArrs.set(leaders[0], new Map());
+    inArrs.set(leaders[0], new Map(paramArrs));
     const work = [...leaders];
     const queued = new Set(leaders);
     while (work.length) {
