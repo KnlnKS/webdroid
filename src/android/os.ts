@@ -161,6 +161,8 @@ rt.register({
       this.pending.clear(); this.byRunnable.clear();
     },
     "hasMessages(I)Z": function (this: JHandler, w: number) { return this.pending.get(w)?.size ? 1 : 0; },
+    // the object variant asks about messages carrying that obj; posts here are keyed by `what`
+    "hasMessages(ILjava/lang/Object;)Z": function (this: JHandler, w: number) { return this.pending.get(w)?.size ? 1 : 0; },
     "getLooper()Landroid/os/Looper;": function (this: JHandler) { return this.looper; },
     "obtainMessage()Landroid/os/Message;": function (this: JHandler) { const m = new JMessage(); m.target = this; return m; },
     "obtainMessage(I)Landroid/os/Message;": function (this: JHandler, w: number) {
@@ -713,6 +715,7 @@ rt.register({
     "isCanceled()Z": () => 0,
   },
 });
+rt.register({ name: "android/view/KeyEvent$Callback", ctor: class extends JObj {} });
 
 // Observable / DataSetObservable. `mObservers` is the protected ArrayList subclasses walk
 // directly (RecyclerView's AdapterDataObservable does), so it is a real java.util.ArrayList.
@@ -790,6 +793,14 @@ class JAsyncTask extends JObj {
 }
 rt.register({
   name: "android/os/AsyncTask", ctor: JAsyncTask,
+  // the two executors AOSP publishes; app code hands them to executeOnExecutor or uses them
+  // directly as a background Executor
+  statics: { THREAD_POOL_EXECUTOR: null, SERIAL_EXECUTOR: null },
+  clinit: () => {
+    const c = rt.link("android/os/AsyncTask").ctor as Record<string, unknown>;
+    c.s$THREAD_POOL_EXECUTOR = new (rt.link("webdroid/Executor").ctor)();
+    c.s$SERIAL_EXECUTOR = new (rt.link("webdroid/Executor").ctor)();
+  },
   methods: {
     "<init>()V": function () {},
     "execute([Ljava/lang/Object;)Landroid/os/AsyncTask;": function (this: JAsyncTask, params: unknown[]) {

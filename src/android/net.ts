@@ -7,6 +7,8 @@ import { vcall, curThread } from "../jvm/natives/jlang";
 import { jarray } from "../jvm/abi";
 import { reportUncaught } from "./os";
 
+/** the transport the one modelled network runs on: ConnectivityManager.TYPE_WIFI */
+const NET_TYPE = 1;
 const netUp = async (): Promise<number> =>
   (await vcall(new (rt.link("android/net/NetworkInfo").ctor)(), "isConnected", "()Z")) ? 1 : 0;
 let theNetwork: unknown = null;
@@ -76,6 +78,7 @@ const registerCallback = (cb: unknown) => {
 };
 rt.register({
   name: "android/net/ConnectivityManager", ctor: class extends JObj {},
+  statics: { TYPE_MOBILE: 0, TYPE_WIFI: 1, TYPE_ETHERNET: 9, TYPE_VPN: 17, RESTRICT_BACKGROUND_STATUS_DISABLED: 1 },
   methods: {
     "getActiveNetworkInfo()Landroid/net/NetworkInfo;": () => new (rt.link("android/net/NetworkInfo").ctor)(),
     // the one Network, present exactly when NetworkInfo says connected (a null here with a
@@ -83,6 +86,10 @@ rt.register({
     "getActiveNetwork()Landroid/net/Network;": async () => (await netUp()) ? network() : null,
     "getAllNetworks()[Landroid/net/Network;": async () => jarray((await netUp()) ? [network()] : [], "Landroid/net/Network;"),
     "getNetworkInfo(Landroid/net/Network;)Landroid/net/NetworkInfo;": (n: unknown) => n ? new (rt.link("android/net/NetworkInfo").ctor)() : null,
+    // by network type (TYPE_WIFI/TYPE_MOBILE...): the one network we model is the active one,
+    // so its own type answers and every other type has no info, as on a device without it
+    "getNetworkInfo(I)Landroid/net/NetworkInfo;": async (t: number) =>
+      (await netUp()) && t === NET_TYPE ? new (rt.link("android/net/NetworkInfo").ctor)() : null,
     "getLinkProperties(Landroid/net/Network;)Landroid/net/LinkProperties;": () => null,
     "bindProcessToNetwork(Landroid/net/Network;)Z": () => 1,
     "getBoundNetworkForProcess()Landroid/net/Network;": () => null,
@@ -101,7 +108,7 @@ rt.register({
   methods: {
     "isConnected()Z": () => 1,
     "isConnectedOrConnecting()Z": () => 1,
-    "getType()I": () => 1,
+    "getType()I": () => NET_TYPE,
     "isAvailable()Z": () => 1,
     "isRoaming()Z": () => 0,
   },
