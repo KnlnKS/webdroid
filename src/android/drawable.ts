@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { mangleMethod } from "../jvm/abi";
-import { JCanvas, JRect, JBitmap, cssColor, decodeBytes, tintedBmp } from "./graphics";
+import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp } from "./graphics";
 import { device } from "../shell/config";
 import { Resources, type RV, type JTheme, AID, T_STR, rvColor, rvDimen, rvFloat, normRV, parseFwValue } from "./res";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
@@ -587,6 +587,133 @@ rt.register({
     "getOutline(Landroid/graphics/Outline;)V": function (this: JDrawableWrapper, o: unknown) { if (this.dr) return vcall(this.dr, "getOutline", "(Landroid/graphics/Outline;)V", o); },
     "getChangingConfigurations()I": () => 0,
     "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;": () => null,
+  },
+});
+// ── android.graphics.drawable.shapes + ShapeDrawable: a Shape is resized to the drawable's
+// bounds and painted with the drawable's own Paint (translated to the bounds origin, as AOSP).
+export class JShape extends JObj {
+  w = 0; h = 0;
+  path(): Path2D { const p = new Path2D(); p.rect(0, 0, this.w, this.h); return p; }
+}
+class JOvalShape extends JShape {
+  path(): Path2D { const p = new Path2D(); p.ellipse(this.w / 2, this.h / 2, this.w / 2, this.h / 2, 0, 0, Math.PI * 2); return p; }
+}
+const rr = (p: Path2D, x: number, y: number, w: number, h: number, radii: Float32Array | null) => {
+  if (!radii) { p.rect(x, y, w, h); return; }
+  // AOSP radii are [tl-x, tl-y, tr-x, tr-y, br-x, br-y, bl-x, bl-y]
+  p.roundRect(x, y, w, h, [
+    { x: radii[0], y: radii[1] }, { x: radii[2], y: radii[3] }, { x: radii[4], y: radii[5] }, { x: radii[6], y: radii[7] },
+  ]);
+};
+class JRoundRectShape extends JShape {
+  outer: Float32Array | null = null; inset: JRectF | null = null; inner: Float32Array | null = null;
+  path(): Path2D {
+    const p = new Path2D();
+    rr(p, 0, 0, this.w, this.h, this.outer);
+    if (this.inset) {
+      const i = this.inset;
+      // the inner ring is cut out (even-odd fill in ShapeDrawable's draw)
+      const q = new Path2D();
+      rr(q, i.left, i.top, this.w - i.left - i.right, this.h - i.top - i.bottom, this.inner);
+      p.addPath(q);
+    }
+    return p;
+  }
+}
+const M_shapeDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V");
+const M_onResize = mangleMethod("onResize", "(FF)V");
+const shapeMethods: NonNullable<NativeSpec["methods"]> = {
+  "<init>()V": function () {},
+  "getWidth()F": function (this: JShape) { return this.w; },
+  "getHeight()F": function (this: JShape) { return this.h; },
+  "resize(FF)V": function (this: JShape, w: number, h: number) {
+    w = Math.max(0, w); h = Math.max(0, h);
+    if (this.w === w && this.h === h) return;
+    this.w = w; this.h = h;
+    return (this as any)[M_onResize].call(this, w, h);
+  },
+  "onResize(FF)V": () => {},
+  "hasAlpha()Z": () => 1,
+  "getOutline(Landroid/graphics/Outline;)V": () => {},
+  "draw(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShape, cv: JCanvas, p: JPaint) {
+    const path = this.path();
+    const evenOdd = this instanceof JRoundRectShape && !!this.inset;
+    cv.drawShape(p, (c) => c.fill(path, evenOdd ? "evenodd" : "nonzero"), (c) => c.stroke(path));
+  },
+  "clone()Landroid/graphics/drawable/shapes/Shape;": function (this: JShape) { return Object.assign(new (this.constructor as any)(), this); },
+};
+rt.register({ name: "android/graphics/drawable/shapes/Shape", ctor: JShape, ifaces: ["java/lang/Cloneable"], methods: shapeMethods });
+rt.register({ name: "android/graphics/drawable/shapes/RectShape", ctor: class extends JShape {}, sup: "android/graphics/drawable/shapes/Shape", methods: { "<init>()V": function () {} } });
+rt.register({ name: "android/graphics/drawable/shapes/OvalShape", ctor: JOvalShape, sup: "android/graphics/drawable/shapes/RectShape", methods: { "<init>()V": function () {} } });
+rt.register({
+  name: "android/graphics/drawable/shapes/RoundRectShape", ctor: JRoundRectShape, sup: "android/graphics/drawable/shapes/RectShape",
+  methods: {
+    "<init>([FLandroid/graphics/RectF;[F)V": function (this: JRoundRectShape, outer: Float32Array | null, inset: JRectF | null, inner: Float32Array | null) {
+      if (outer && outer.length < 8) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", "outer radii must have >= 8 values");
+      if (inner && inner.length < 8) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", "inner radii must have >= 8 values");
+      this.outer = outer; this.inset = inset; this.inner = inner;
+    },
+  },
+});
+
+export class JShapeDrawable extends JDrawable {
+  shape: JShape | null = null;
+  p = new JPaint();
+  iw = 0; ih = 0;
+  padding: JRect | null = null;
+  effPaint(): JPaint { return this.tint === null ? this.p : Object.assign(new JPaint(), this.p, { color: this.tint }); }
+  /** sync path for native callers (LayerDrawable layers): native shape geometry only */
+  paint(cv: JCanvas) {
+    const sh = this.shape;
+    if (!sh) return;
+    const b = this.bounds, ctx = cv.ctx;
+    sh.w = b.right - b.left; sh.h = b.bottom - b.top;
+    ctx.save();
+    ctx.translate(b.left, b.top);
+    (shapeMethods["draw(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V"] as any).call(sh, cv, this.effPaint());
+    ctx.restore();
+  }
+  intrinsicW(): number { return this.iw; }
+  intrinsicH(): number { return this.ih; }
+}
+rt.register({
+  name: "android/graphics/drawable/ShapeDrawable", ctor: JShapeDrawable, sup: "android/graphics/drawable/Drawable",
+  methods: {
+    "<init>()V": function (this: JShapeDrawable) { this.p.antiAlias = true; },
+    "<init>(Landroid/graphics/drawable/shapes/Shape;)V": function (this: JShapeDrawable, sh: JShape | null) { this.shape = sh; this.p.antiAlias = true; },
+    "getPaint()Landroid/graphics/Paint;": function (this: JShapeDrawable) { return this.p; },
+    "getShape()Landroid/graphics/drawable/shapes/Shape;": function (this: JShapeDrawable) { return this.shape; },
+    "setShape(Landroid/graphics/drawable/shapes/Shape;)V": function (this: JShapeDrawable, sh: JShape | null) { this.shape = sh; invalidateSelf.call(this); },
+    "setIntrinsicWidth(I)V": function (this: JShapeDrawable, w: number) { this.iw = w; },
+    "setIntrinsicHeight(I)V": function (this: JShapeDrawable, h: number) { this.ih = h; },
+    "setPadding(IIII)V": function (this: JShapeDrawable, l: number, t: number, r: number, b: number) {
+      if (!l && !t && !r && !b) { this.padding = null; return; }
+      const p = this.padding ?? (this.padding = new JRect());
+      p.left = l; p.top = t; p.right = r; p.bottom = b;
+    },
+    "setPadding(Landroid/graphics/Rect;)V": function (this: JShapeDrawable, r: JRect | null) {
+      if (!r) { this.padding = null; return; }
+      const p = this.padding ?? (this.padding = new JRect());
+      p.left = r.left; p.top = r.top; p.right = r.right; p.bottom = r.bottom;
+    },
+    "setAlpha(I)V": function (this: JShapeDrawable, a: number) { this.alpha = a; this.p.color = ((a << 24) | (this.p.color & 0xffffff)) | 0; invalidateSelf.call(this); },
+    "getAlpha()I": function (this: JShapeDrawable) { return this.p.color >>> 24; },
+    "getOpacity()I": function (this: JShapeDrawable) { const a = this.p.color >>> 24; return a === 255 ? -1 : a === 0 ? -2 : -3; },
+    "getOutline(Landroid/graphics/Outline;)V": () => {},
+    // the virtual route: an app Shape subclass's onResize/draw, and an app ShapeDrawable's onDraw
+    "draw(Landroid/graphics/Canvas;)V": async function (this: JShapeDrawable, cv: JCanvas) {
+      const sh = this.shape;
+      if (!sh) return;
+      const b = this.bounds, ctx = cv.ctx;
+      await vcall(sh, "resize", "(FF)V", b.right - b.left, b.bottom - b.top);
+      ctx.save();
+      ctx.translate(b.left, b.top);
+      try { await vcall(this, "onDraw", "(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V", sh, cv, this.effPaint()); }
+      finally { ctx.restore(); }
+    },
+    "onDraw(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShapeDrawable, sh: JShape, cv: JCanvas, p: JPaint) {
+      return (sh as any)[M_shapeDraw].call(sh, cv, p);
+    },
   },
 });
 rt.register({ name: "android/graphics/drawable/VectorDrawable", ctor: JVectorDrawable, sup: "android/graphics/drawable/Drawable" });
