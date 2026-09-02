@@ -1170,7 +1170,10 @@ rt.register({
 // add/remove/set) increment `this.modCount` themselves via ordinary iput
 // bytecode — the field just has to be a live property (see `fields:` below)
 // wired to the fail-fast iterator this class hands out by default.
-class JAbstractList extends JObj { modCount = 0; }
+// native inheritance is JS inheritance: the bases below must extend each other's ctors
+class JAbstractCollection extends JObj {}
+class JAbstractList extends JAbstractCollection { modCount = 0; }
+class JAbstractSet extends JAbstractCollection {}
 
 // JDK AbstractList.ListItr: every step is a virtual get/set/add/remove on the list, so an app's
 // overrides are what the iterator sees and writes through to (a snapshot would drop set/add).
@@ -1467,7 +1470,7 @@ const absMap: Methods = {
   },
 };
 rt.register({
-  name: "java/util/AbstractCollection", ctor: class extends JObj {},
+  name: "java/util/AbstractCollection", ctor: JAbstractCollection,
   ifaces: ["java/util/Collection", "java/lang/Iterable"], methods: absCollection,
 });
 rt.register({
@@ -1475,7 +1478,7 @@ rt.register({
   ifaces: ["java/util/List"], fields: { modCount: "modCount" }, methods: absList,
 });
 rt.register({
-  name: "java/util/AbstractSet", ctor: class extends JObj {}, sup: "java/util/AbstractCollection",
+  name: "java/util/AbstractSet", ctor: JAbstractSet, sup: "java/util/AbstractCollection",
   ifaces: ["java/util/Set"], methods: absSet,
 });
 rt.register({ name: "java/util/AbstractMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"], methods: absMap });
