@@ -3,16 +3,17 @@
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
-import { JView, JFrameLP, JLinearLP, attachView, requestLayout, AID, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, specSize, findById, guardCall } from "./view";
+import { JView, JFrameLP, JLinearLP, attachView, requestLayout, AID, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, specSize, findById, guardCall, dispatchAttached, dispatchDetached } from "./view";
 import { JFrameLayout, JLinearLayout, JTextView, themeAccent } from "./widget";
 import { JCanvas, tfMedium } from "./graphics";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
 import { reportUncaught } from "./os";
-import { rvString, JTheme } from "./res";
+import { rvString, rvInt, rvFloat, JTheme } from "./res";
 import { TV } from "./axml";
 import { inflateLayout, getInflater } from "./inflate";
 import { csText } from "./text";
+import type { JWindow } from "./app";
 
 const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
 
@@ -22,8 +23,10 @@ const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
  * Without this every dialog inherited the activity's window background (and we painted a
  * hardcoded white card instead).
  */
-function dialogTheme(host: any, themeId: number): JTheme | null {
-  const base: JTheme | null = host?.theme ?? null;
+/** Dialog(Context, theme): the window theme layers the explicit style (else the context theme's
+ *  dialogTheme) over the CONTEXT's theme — a ContextThemeWrapper's own, not the application's. */
+function dialogTheme(ctx: any, themeId: number): JTheme | null {
+  const base: JTheme | null = ctx?.ownTheme ?? ctx?.$host?.theme ?? null;
   if (!base) return null;
   let styleId = themeId;
   if (!styleId) {
@@ -41,15 +44,24 @@ async function loadCardBg(root: DialogRoot): Promise<void> {
   if (root.cardBg || !root.theme || !root.jres) return;
   const rv = root.theme.lookup(AID("windowBackground"));
   if (rv) root.cardBg = await loadDrawableRV(root.jres, rv, root.theme);
+  // PhoneWindow: backgroundDimEnabled defaults to windowIsFloating (attrs.xml), so an
+  // edge-to-edge sheet theme that only unfloats its window loses the platform dim and
+  // draws its own scrim; backgroundDimAmount says how much.
+  const en = root.theme.lookup(AID("backgroundDimEnabled"));
+  const floating = root.theme.lookup(AID("windowIsFloating"));
+  const dimOn = en ? !!rvInt(root.jres, en, 0) : !!rvInt(root.jres, floating, 1);
+  root.themeDim = dimOn ? rvFloat(root.jres, root.theme.lookup(AID("backgroundDimAmount")), 0.6) : 0;
 }
 
-/** scrim + rounded card container drawn natively */
+/** the dialog window: scrim, then the window frame sized/placed by the window's layout params */
 class DialogRoot extends JFrameLayout {
   dialog: JDialog | null = null;
   cardTop = 0; cardLeft = 0; cardW = 0; cardH = 0;
   /** the dialog window's own background, from its theme — not a hardcoded white card */
   cardBg: JDrawable | null = null;
+  themeDim = 0.6;
 }
+const GRAV_TOP = 0x30, GRAV_BOTTOM = 0x50, GRAV_VMASK = 0x70;
 rt.register({
   name: "webdroid/DialogRoot", ctor: DialogRoot, sup: "android/widget/FrameLayout",
   methods: {
@@ -58,15 +70,21 @@ rt.register({
       this.measuredH = specSize(hSpec);
       const c = this.children[0];
       if (c && c.visibility !== 8) {
-        const maxW = Math.min(this.measuredW - 96, 640);
-        const availH = this.measuredH - 200;
-        await measureView(c, makeSpec(maxW, c.lp?.width === -1 ? MS_EXACTLY : (MS_AT_MOST | 0)), makeSpec(availH, MS_AT_MOST | 0));
-        this.cardW = Math.max(560, c.measuredW);
-        if (c.lp?.width === -1) this.cardW = maxW;
-        await measureView(c, makeSpec(this.cardW, MS_EXACTLY), makeSpec(availH, MS_AT_MOST | 0));
+        // WindowManager.LayoutParams: MATCH_PARENT fills the window, WRAP_CONTENT sizes to the content
+        // within the platform dialog's margins and minimum width, a pixel size is exact.
+        const win = this.dialog?.win;
+        const lw = win?.layoutW ?? -2, lh = win?.layoutH ?? -2;
+        const maxW = lw === -1 ? this.measuredW : Math.min(this.measuredW - 96, 640);
+        const availH = lh === -1 ? this.measuredH : this.measuredH - 200;
+        const wantW = lw === -1 || c.lp?.width === -1;
+        await measureView(c, makeSpec(lw > 0 ? lw : maxW, wantW || lw > 0 ? MS_EXACTLY : (MS_AT_MOST | 0)),
+          makeSpec(lh > 0 ? lh : availH, lh > 0 ? MS_EXACTLY : (MS_AT_MOST | 0)));
+        this.cardW = lw === -1 || lw > 0 || wantW ? c.measuredW : Math.max(560, c.measuredW);
+        if (this.cardW !== c.measuredW) await measureView(c, makeSpec(this.cardW, MS_EXACTLY), makeSpec(availH, MS_AT_MOST | 0));
         this.cardH = c.measuredH;
         this.cardLeft = (this.measuredW - this.cardW) >> 1;
-        this.cardTop = (this.measuredH - this.cardH) >> 1;
+        const vg = (win?.gravity ?? 0) & GRAV_VMASK;
+        this.cardTop = vg === GRAV_TOP ? 0 : vg === GRAV_BOTTOM ? this.measuredH - this.cardH : (this.measuredH - this.cardH) >> 1;
       }
     },
     "onLayout(ZIIII)V": async function (this: DialogRoot) {
@@ -77,29 +95,36 @@ rt.register({
     },
     "onDraw(Landroid/graphics/Canvas;)V": async function (this: DialogRoot, cv: JCanvas) {
       const ctx = cv.ctx;
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
-      ctx.fillRect(0, 0, this.width(), this.height());
-      // card shadow + bg
-      ctx.save();
-      ctx.shadowColor = "rgba(0,0,0,0.45)";
-      ctx.shadowBlur = 40;
-      ctx.shadowOffsetY = 12;
-      ctx.fillStyle = "#ffffff";
-      ctx.beginPath();
-      ctx.roundRect(this.cardLeft, this.cardTop, this.cardW, this.cardH, 6);
-      ctx.fill();
-      ctx.restore();
-      // The window background comes from the dialog's theme; the white fill above only
-      // exists so the drop shadow has a shape to cast from.
-      if (this.cardBg) {
+      const win = this.dialog?.win;
+      const dim = win && !Number.isNaN(win.dimAmount) ? win.dimAmount : this.themeDim;
+      if (dim > 0) {
+        ctx.fillStyle = `rgba(0,0,0,${dim})`;
+        ctx.fillRect(0, 0, this.width(), this.height());
+      }
+      // An explicit Window.setBackgroundDrawable replaces the theme's frame (Compose sets it
+      // transparent and draws its own surface); only the platform frame casts a shadow.
+      const bg = win?.bgSet ? win.bg : this.cardBg;
+      if (!win?.bgSet) {
         ctx.save();
+        ctx.shadowColor = "rgba(0,0,0,0.45)";
+        ctx.shadowBlur = 40;
+        ctx.shadowOffsetY = 12;
+        ctx.fillStyle = "#ffffff";
         ctx.beginPath();
         ctx.roundRect(this.cardLeft, this.cardTop, this.cardW, this.cardH, 6);
+        ctx.fill();
+        ctx.restore();
+      }
+      if (bg) {
+        ctx.save();
+        ctx.beginPath();
+        if (win?.bgSet) ctx.rect(this.cardLeft, this.cardTop, this.cardW, this.cardH);
+        else ctx.roundRect(this.cardLeft, this.cardTop, this.cardW, this.cardH, 6);
         ctx.clip();
-        const b = this.cardBg.bounds;
+        const b = bg.bounds;
         b.left = this.cardLeft; b.top = this.cardTop;
         b.right = this.cardLeft + this.cardW; b.bottom = this.cardTop + this.cardH;
-        await guardCall((this.cardBg as any)[M_drawableDraw], this.cardBg, cv);
+        await guardCall((bg as any)[M_drawableDraw], bg, cv);
         ctx.restore();
       }
     },
@@ -116,6 +141,7 @@ rt.register({
 class JDialog extends JObj {
   jctx: any = null;
   root: DialogRoot | null = null;
+  win: JWindow | null = null;
   content: JView | null = null;
   titleStr: string | null = null;
   themeId = 0;
@@ -127,7 +153,11 @@ class JDialog extends JObj {
   async dismissImpl() {
     if (!this.showing) return;
     this.showing = false;
-    if (this.root) removeOverlay(this.root);
+    if (this.root) {
+      removeOverlay(this.root);
+      await dispatchDetached(this.root);
+      try { await vcall(this, "onStop", "()V"); } catch (e) { reportUncaught(e); }
+    }
     if (this.dismissL) {
       try { await vcall(this.dismissL, "onDismiss", "(Landroid/content/DialogInterface;)V", this); } catch (e) { reportUncaught(e); }
     }
@@ -144,7 +174,7 @@ class JDialog extends JObj {
       this.root.dialog = this;
       this.root.ctx = this.jctx;
       this.root.jres = this.jctx?.$host?.res ?? null;
-      this.root.theme = dialogTheme(this.jctx?.$host, this.themeId);
+      this.root.theme = dialogTheme(this.jctx, this.themeId);
     }
     return this.root;
   }
@@ -213,6 +243,10 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
         if (r instanceof Promise) await r;
       } catch (e) { reportUncaught(e); }
     }
+    try { await vcall(this, "onStart", "()V"); } catch (e) { reportUncaught(e); }
+    // WindowManager.addView: the dialog's view tree attaches to its window here, which is what
+    // lets a ComposeView in it find its ViewTree owners and actually compose its content.
+    await dispatchAttached(root);
     if (this.showL) {
       try { await vcall(this.showL, "onShow", "(Landroid/content/DialogInterface;)V", this); } catch (e) { reportUncaught(e); }
     }
@@ -236,11 +270,12 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "findViewById(I)Landroid/view/View;": async function (this: JDialog, id: number) {
     return this.root ? findById(this.root, id) : null;
   },
-  "getWindow()Landroid/view/Window;": async function (this: JDialog) {
-    const info = rt.link("android/view/Window");
-    const w = new info.ctor();
-    w.decor = this.root;
-    return w;
+  "getWindow()Landroid/view/Window;": function (this: JDialog) {
+    if (!this.win) {
+      this.win = new (rt.link("android/view/Window").ctor as new () => JWindow)();
+      this.win.decor = this.ensureRoot();
+    }
+    return this.win;
   },
   "requestWindowFeature(I)Z": () => 1,
   "getLayoutInflater()Landroid/view/LayoutInflater;": async function (this: JDialog) {

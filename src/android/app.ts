@@ -1074,7 +1074,7 @@ function mkActivityInfo(cls: string): JActivityInfo {
 }
 
 // ── Window + decor + ActionBar-lite
-class JWindow extends JObj {
+export class JWindow extends JObj {
   activity: any = null;
   decor: JFrameLayout | null = null;
   contentParent: JFrameLayout | null = null;
@@ -1083,6 +1083,10 @@ class JWindow extends JObj {
   features = new Set<number>();
   /** WindowManager.LayoutParams flags; the shell reads FLAG_FULLSCREEN off the top activity. */
   flags = 0;
+  /** WindowManager.LayoutParams width/height/gravity/dimAmount, which size and place a dialog
+   *  window; `bg` is an explicit setBackgroundDrawable (a dialog window draws it as its frame). */
+  layoutW = -2; layoutH = -2; gravity = 0; dimAmount = Number.NaN;
+  bg: JDrawable | null = null; bgSet = false;
   /** WindowInsetsController appearance bits; `appearanceMask` = the bits the app has ever
    *  set or cleared, so the shell can tell "cleared" from "never asked" (device.ts). */
   appearance = 0;
@@ -1871,13 +1875,15 @@ rt.register({
     "setNavigationBarColor(I)V": function (this: JWindow, c: number) { if (appHost) appHost.navBarColor = c; },
     "setSoftInputMode(I)V": () => {},
     "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JWindow, d: JDrawable | null) {
-      if (this.decor) { this.decor.background = d; invalidate(); }
+      this.bg = d; this.bgSet = true;
+      if (this.activity && this.decor) this.decor.background = d;
+      invalidate();
     },
     "setBackgroundDrawableResource(I)V": async function (this: JWindow, id: number) {
-      if (this.decor && appHost) {
-        this.decor.background = await loadDrawable(appHost.res, id, appHost.theme);
-        invalidate();
-      }
+      if (!appHost) return;
+      this.bg = await loadDrawable(appHost.res, id, appHost.theme); this.bgSet = true;
+      if (this.activity && this.decor) this.decor.background = this.bg;
+      invalidate();
     },
     "getAttributes()Landroid/view/WindowManager$LayoutParams;": function (this: JWindow) {
       const lp = new (rt.link("android/view/WindowManager$LayoutParams").ctor)();
@@ -1894,9 +1900,9 @@ rt.register({
     },
     "getContext()Landroid/content/Context;": function (this: JWindow) { return this.activity; },
     "setWindowAnimations(I)V": () => {},
-    "setLayout(II)V": () => {},
-    "setGravity(I)V": () => {},
-    "setDimAmount(F)V": () => {},
+    "setLayout(II)V": function (this: JWindow, w: number, h: number) { this.layoutW = w; this.layoutH = h; requestLayout(this.decor); },
+    "setGravity(I)V": function (this: JWindow, g: number) { this.gravity = g; requestLayout(this.decor); },
+    "setDimAmount(F)V": function (this: JWindow, a: number) { this.dimAmount = a; invalidate(); },
     "getWindowManager()Landroid/view/WindowManager;": function (this: JWindow) { return systemService(this.activity, "window"); },
     "setFeatureInt(II)V": () => {},
     "hasFeature(I)Z": function (this: JWindow, f: number) { return this.features.has(f) ? 1 : 0; },
