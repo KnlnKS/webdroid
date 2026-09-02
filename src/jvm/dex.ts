@@ -21,7 +21,8 @@ export interface ClassDef {
   dex: DexFile;
 }
 
-export interface EncAnnotation { type: string; elements: Record<string, EncVal>; }
+// `dex` because element values reference types/enums by index into the dex they came from
+export interface EncAnnotation { type: string; elements: Record<string, EncVal>; dex: DexFile; }
 
 interface TryItem { start: number; end: number; handlers: [number, number][]; catchAllAddr: number; }
 
@@ -33,7 +34,7 @@ export interface CodeItem {
 
 // encoded_value results: numbers, bigints, strings, null, or tagged refs
 export type EncVal = number | bigint | string | boolean | null | EncVal[] |
-  { kind: "type" | "field" | "method" | "enum"; idx: number };
+  { kind: "type" | "field" | "method" | "enum"; idx: number } | { kind: "annotation"; anno: EncAnnotation };
 
 class Reader {
   constructor(public bytes: Uint8Array, public pos: number) {}
@@ -258,7 +259,7 @@ export class DexFile {
       const nameIdx = r.uleb();
       elements[this.string(nameIdx)] = this.encodedValue(r);
     }
-    return { type: descToName(this.type(typeIdx)), elements };
+    return { type: descToName(this.type(typeIdx)), elements, dex: this };
   }
 
   code(off: number): CodeItem {
@@ -337,12 +338,7 @@ export class DexFile {
         for (let j = 0; j < n; j++) out.push(this.encodedValue(r));
         return out;
       }
-      case 0x1d: { // annotation: skip type + elements
-        r.uleb();
-        const n = r.uleb();
-        for (let j = 0; j < n; j++) { r.uleb(); this.encodedValue(r); }
-        return null;
-      }
+      case 0x1d: return { kind: "annotation", anno: this.encodedAnnotation(r) };
       case 0x1e: return null;
       case 0x1f: return arg !== 0;
       default: throw new Error(`encoded_value type 0x${type.toString(16)}`);

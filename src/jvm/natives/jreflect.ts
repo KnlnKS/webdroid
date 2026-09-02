@@ -3,7 +3,7 @@
 import { rt, JObj, type ClassInfo, type NativeSpec } from "../runtime";
 import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, PRIM_NAME, PRIM_DESC } from "../abi";
 import { vcall, boxInt, box, stringHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit } from "./jlang";
-import type { EncAnnotation, EncVal } from "../dex";
+import type { DexFile, EncAnnotation, EncVal } from "../dex";
 
 // ── annotation cache per class: methodIdx (within its dex) → EncAnnotation[]
 interface ClassAnno {
@@ -438,12 +438,15 @@ function mkAnnotation(anno: EncAnnotation): JAnnotation {
   const proto = buildAnnoProto(anno.type, info);
   const inst: JAnnotation = Object.create(proto);
   inst.anno = anno;
+  installElements(inst, info, anno);
+  return inst;
+}
+function installElements(target: object, info: ClassInfo, anno: EncAnnotation) {
   for (const [name, val] of Object.entries(anno.elements)) {
     const key = mangleMethod(name, elementDesc(info, name));
-    const resolved = resolveEncVal(val);
-    (inst as any)[key] = () => resolved;
+    const resolved = resolveEncVal(val, anno.dex);
+    (target as any)[key] = () => resolved;
   }
-  return inst;
 }
 function buildAnnoProto(type: string, info: ClassInfo): object {
   const cached = annoProtoCache.get(type);
@@ -453,6 +456,11 @@ function buildAnnoProto(type: string, info: ClassInfo): object {
   (p as any).constructor = { $i: info };
   (p as any)[mangleMethod("annotationType", "()Ljava/lang/Class;")] = () => rt.classFor(type);
   (p as any)[mangleMethod("toString", "()Ljava/lang/String;")] = () => "@" + type.replace(/\//g, ".");
+  // elements a use site omits answer the type's declared defaults: dalvik/annotation/AnnotationDefault
+  // on the annotation interface carries, as `value`, an annotation with one element per default.
+  // On the shared proto so instances only override what they name.
+  const d = classAnno(info).cls.find((a) => a.type === "dalvik/annotation/AnnotationDefault")?.elements.value;
+  if (d && typeof d === "object" && !Array.isArray(d) && d.kind === "annotation") installElements(p, info, d.anno);
   annoProtoCache.set(type, p);
   return p;
 }
@@ -474,11 +482,18 @@ function elementDesc(info: ClassInfo, name: string): string {
   }
   return "()Ljava/lang/String;"; // common default
 }
-function resolveEncVal(v: EncVal): unknown {
-  if (typeof v === "boolean") return v ? 1 : 0;
-  if (Array.isArray(v)) return v.map(resolveEncVal);
-  if (typeof v === "object") return null; // type/field/method/enum refs: not needed by any annotation read so far
-  return v;
+function resolveEncVal(v: EncVal, dex: DexFile): unknown {
+  if (Array.isArray(v)) return v.map((x) => resolveEncVal(x, dex));
+  if (v !== null && typeof v === "object") {
+    if (v.kind === "annotation") return mkAnnotation(v.anno);
+    // an enum constant is a static of its class, which exists only once <clinit> has run;
+    // compiled callers await a promise-valued element like any other call result
+    if (v.kind === "enum") {
+      const p = rt.initClass(rt.link(descToName(dex.type(dex.field(v.idx).cls))));
+      if (p) return p.then(() => rt.encToJs(dex, v));
+    }
+  }
+  return rt.encToJs(dex, v);
 }
 
 // ── core reflection marker interfaces: real classes (Method/Field/Class here, and any
