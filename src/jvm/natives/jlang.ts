@@ -901,6 +901,12 @@ rt.register({
     "static parseBoolean(Ljava/lang/String;)Z": (s: string) => (s?.toLowerCase() === "true" ? 1 : 0),
     "static toString(Z)Ljava/lang/String;": (v: number) => (v ? "true" : "false"),
     "static hashCode(Z)I": (v: number) => (v ? 1231 : 1237),
+    "compareTo(Ljava/lang/Boolean;)I": cmpV,
+    "compareTo(Ljava/lang/Object;)I": cmpV,
+    "static compare(ZZ)I": (a: number, b: number) => (a === b ? 0 : a ? 1 : -1),
+    "static logicalAnd(ZZ)Z": (a: number, b: number) => (a && b ? 1 : 0),
+    "static logicalOr(ZZ)Z": (a: number, b: number) => (a || b ? 1 : 0),
+    "static logicalXor(ZZ)Z": (a: number, b: number) => ((a ? 1 : 0) ^ (b ? 1 : 0)),
   },
 });
 rt.register({
