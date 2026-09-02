@@ -1,0 +1,369 @@
+// DEX file parser. Format: https://source.android.com/docs/core/runtime/dex-format
+// Everything lazy + cached; hot lookups are index math on a DataView.
+
+import { charsToString, descToName } from "./abi";
+
+export const NO_INDEX = 0xffffffff;
+
+interface FieldRef { cls: number; type: number; name: string; }
+interface ProtoRef { shorty: string; ret: number; params: number[]; }
+interface MethodRef { cls: number; proto: number; name: string; }
+
+interface EncodedField { fieldIdx: number; flags: number; }
+export interface EncodedMethod { methodIdx: number; flags: number; codeOff: number; }
+
+export interface ClassDef {
+  typeIdx: number; flags: number; superIdx: number; interfaces: number[];
+  staticFields: EncodedField[]; instanceFields: EncodedField[];
+  directMethods: EncodedMethod[]; virtualMethods: EncodedMethod[];
+  staticValuesOff: number;
+  annotationsOff: number;
+  dex: DexFile;
+}
+
+export interface EncAnnotation { type: string; elements: Record<string, EncVal>; }
+
+interface TryItem { start: number; end: number; handlers: [number, number][]; catchAllAddr: number; }
+
+export interface CodeItem {
+  regs: number; ins: number;
+  insns: Uint16Array;   // code units
+  tries: TryItem[];
+}
+
+// encoded_value results: numbers, bigints, strings, null, or tagged refs
+export type EncVal = number | bigint | string | boolean | null | EncVal[] |
+  { kind: "type" | "field" | "method" | "enum"; idx: number };
+
+class Reader {
+  constructor(public bytes: Uint8Array, public pos: number) {}
+  u8(): number { return this.bytes[this.pos++]; }
+  uleb(): number {
+    let result = 0, shift = 0, b: number;
+    do { b = this.bytes[this.pos++]; result |= (b & 0x7f) << shift; shift += 7; } while (b & 0x80);
+    return result >>> 0;
+  }
+  sleb(): number {
+    let result = 0, shift = 0, b: number;
+    do { b = this.bytes[this.pos++]; result |= (b & 0x7f) << shift; shift += 7; } while (b & 0x80);
+    if (shift < 32 && (b & 0x40)) result |= -1 << shift;
+    return result;
+  }
+}
+
+function decodeMUTF8(bytes: Uint8Array, pos: number, utf16len: number): string {
+  // Fast path: ASCII
+  let ascii = true;
+  for (let i = 0; i < utf16len; i++) {
+    if (bytes[pos + i] > 0x7f) { ascii = false; break; }
+  }
+  if (ascii) return charsToString(bytes, pos, utf16len);
+  const out = new Uint16Array(utf16len);
+  let o = 0, p = pos;
+  while (o < utf16len) {
+    const a = bytes[p++];
+    if (a < 0x80) out[o++] = a;
+    else if ((a & 0xe0) === 0xc0) out[o++] = ((a & 0x1f) << 6) | (bytes[p++] & 0x3f);
+    else {
+      const b = bytes[p++], c = bytes[p++];
+      out[o++] = ((a & 0x0f) << 12) | ((b & 0x3f) << 6) | (c & 0x3f);
+    }
+  }
+  return charsToString(out, 0, utf16len);
+}
+
+export class DexFile {
+  view: DataView;
+  private stringIdsOff: number; private typeIdsOff: number; private protoIdsOff: number;
+  private fieldIdsOff: number; private methodIdsOff: number;
+  classDefCount: number; private classDefsOff: number;
+  stringCount: number; typeCount: number;
+
+  private stringCache: (string | undefined)[];
+  private typeCache: (string | undefined)[];
+  private protoCache: (ProtoRef | undefined)[];
+  private fieldCache: (FieldRef | undefined)[];
+  private methodCache: (MethodRef | undefined)[];
+
+  constructor(public bytes: Uint8Array, public name = "classes.dex") {
+    this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const v = this.view;
+    const magic = String.fromCharCode(...bytes.subarray(0, 4));
+    if (magic !== "dex\n") throw new Error(`bad dex magic in ${name}`);
+    this.stringCount = v.getUint32(56, true); this.stringIdsOff = v.getUint32(60, true);
+    this.typeCount = v.getUint32(64, true); this.typeIdsOff = v.getUint32(68, true);
+    this.protoIdsOff = v.getUint32(76, true);
+    this.fieldIdsOff = v.getUint32(84, true);
+    this.methodIdsOff = v.getUint32(92, true);
+    this.classDefCount = v.getUint32(96, true); this.classDefsOff = v.getUint32(100, true);
+    this.stringCache = new Array(this.stringCount);
+    this.typeCache = new Array(this.typeCount);
+    this.protoCache = new Array(v.getUint32(72, true));
+    this.fieldCache = new Array(v.getUint32(80, true));
+    this.methodCache = new Array(v.getUint32(88, true));
+  }
+
+  string(i: number): string {
+    let s = this.stringCache[i];
+    if (s === undefined) {
+      const off = this.view.getUint32(this.stringIdsOff + i * 4, true);
+      const r = new Reader(this.bytes, off);
+      const len = r.uleb();
+      s = this.stringCache[i] = decodeMUTF8(this.bytes, r.pos, len);
+    }
+    return s;
+  }
+
+  /** type descriptor, e.g. "Ljava/lang/String;" or "[I" */
+  type(i: number): string {
+    let s = this.typeCache[i];
+    if (s === undefined) {
+      s = this.typeCache[i] = this.string(this.view.getUint32(this.typeIdsOff + i * 4, true));
+    }
+    return s;
+  }
+
+  proto(i: number): ProtoRef {
+    let p = this.protoCache[i];
+    if (p === undefined) {
+      const off = this.protoIdsOff + i * 12;
+      const shorty = this.string(this.view.getUint32(off, true));
+      const ret = this.view.getUint32(off + 4, true);
+      const paramsOff = this.view.getUint32(off + 8, true);
+      const params: number[] = [];
+      if (paramsOff) {
+        const n = this.view.getUint32(paramsOff, true);
+        for (let j = 0; j < n; j++) params.push(this.view.getUint16(paramsOff + 4 + j * 2, true));
+      }
+      p = this.protoCache[i] = { shorty, ret, params };
+    }
+    return p;
+  }
+
+  field(i: number): FieldRef {
+    let f = this.fieldCache[i];
+    if (f === undefined) {
+      const off = this.fieldIdsOff + i * 8;
+      f = this.fieldCache[i] = {
+        cls: this.view.getUint16(off, true),
+        type: this.view.getUint16(off + 2, true),
+        name: this.string(this.view.getUint32(off + 4, true)),
+      };
+    }
+    return f;
+  }
+
+  method(i: number): MethodRef {
+    let m = this.methodCache[i];
+    if (m === undefined) {
+      const off = this.methodIdsOff + i * 8;
+      m = this.methodCache[i] = {
+        cls: this.view.getUint16(off, true),
+        proto: this.view.getUint16(off + 2, true),
+        name: this.string(this.view.getUint32(off + 4, true)),
+      };
+    }
+    return m;
+  }
+
+  /** type idx of class_def i without parsing the whole def */
+  classDef2Type(i: number): number {
+    return this.view.getUint32(this.classDefsOff + i * 32, true);
+  }
+
+  /** full descriptor "(params)ret" of method index i */
+  methodDesc(i: number): string {
+    const p = this.proto(this.method(i).proto);
+    return "(" + p.params.map((t) => this.type(t)).join("") + ")" + this.type(p.ret);
+  }
+
+  classDef(i: number): ClassDef {
+    const off = this.classDefsOff + i * 32;
+    const v = this.view;
+    const typeIdx = v.getUint32(off, true);
+    const flags = v.getUint32(off + 4, true);
+    const superIdx = v.getUint32(off + 8, true);
+    const interfacesOff = v.getUint32(off + 12, true);
+    const classDataOff = v.getUint32(off + 24, true);
+    const interfaces: number[] = [];
+    if (interfacesOff) {
+      const n = v.getUint32(interfacesOff, true);
+      for (let j = 0; j < n; j++) interfaces.push(v.getUint16(interfacesOff + 4 + j * 2, true));
+    }
+    const def: ClassDef = {
+      typeIdx, flags, superIdx, interfaces,
+      staticFields: [], instanceFields: [], directMethods: [], virtualMethods: [],
+      staticValuesOff: v.getUint32(off + 28, true), annotationsOff: v.getUint32(off + 20, true), dex: this,
+    };
+    if (classDataOff) {
+      const r = new Reader(this.bytes, classDataOff);
+      const ns = r.uleb(), ni = r.uleb(), nd = r.uleb(), nv = r.uleb();
+      let idx = 0;
+      for (let j = 0; j < ns; j++) { idx += r.uleb(); def.staticFields.push({ fieldIdx: idx, flags: r.uleb() }); }
+      idx = 0;
+      for (let j = 0; j < ni; j++) { idx += r.uleb(); def.instanceFields.push({ fieldIdx: idx, flags: r.uleb() }); }
+      idx = 0;
+      for (let j = 0; j < nd; j++) { idx += r.uleb(); def.directMethods.push({ methodIdx: idx, flags: r.uleb(), codeOff: r.uleb() }); }
+      idx = 0;
+      for (let j = 0; j < nv; j++) { idx += r.uleb(); def.virtualMethods.push({ methodIdx: idx, flags: r.uleb(), codeOff: r.uleb() }); }
+    }
+    return def;
+  }
+
+  /** annotations for a class_def: { methods: Map<methodIdx, EncAnnotation[]>, fields: Map<fieldIdx, ...>, cls: [...] } */
+  classAnnotations(def: ClassDef): { cls: EncAnnotation[]; methods: Map<number, EncAnnotation[]>; fields: Map<number, EncAnnotation[]> } {
+    const out = { cls: [] as EncAnnotation[], methods: new Map<number, EncAnnotation[]>(), fields: new Map<number, EncAnnotation[]>() };
+    const dir = def.annotationsOff;
+    if (!dir) return out;
+    const v = this.view;
+    const classAnnoOff = v.getUint32(dir, true);
+    const fieldsSize = v.getUint32(dir + 4, true);
+    const methodsSize = v.getUint32(dir + 8, true);
+    if (classAnnoOff) out.cls = this.annotationSet(classAnnoOff);
+    let p = dir + 16;
+    for (let i = 0; i < fieldsSize; i++) {
+      const fieldIdx = v.getUint32(p, true);
+      const setOff = v.getUint32(p + 4, true);
+      out.fields.set(fieldIdx, this.annotationSet(setOff));
+      p += 8;
+    }
+    for (let i = 0; i < methodsSize; i++) {
+      const methodIdx = v.getUint32(p, true);
+      const setOff = v.getUint32(p + 4, true);
+      out.methods.set(methodIdx, this.annotationSet(setOff));
+      p += 8;
+    }
+    return out;
+  }
+
+  private annotationSet(off: number): EncAnnotation[] {
+    if (!off) return [];
+    const v = this.view;
+    const size = v.getUint32(off, true);
+    const out: EncAnnotation[] = [];
+    for (let i = 0; i < size; i++) {
+      const itemOff = v.getUint32(off + 4 + i * 4, true);
+      // annotation_item: visibility(u8) + encoded_annotation
+      const r = new Reader(this.bytes, itemOff + 1);
+      out.push(this.encodedAnnotation(r));
+    }
+    return out;
+  }
+
+  private encodedAnnotation(r: Reader): EncAnnotation {
+    const typeIdx = r.uleb();
+    const size = r.uleb();
+    const elements: Record<string, EncVal> = {};
+    for (let i = 0; i < size; i++) {
+      const nameIdx = r.uleb();
+      elements[this.string(nameIdx)] = this.encodedValue(r);
+    }
+    return { type: descToName(this.type(typeIdx)), elements };
+  }
+
+  code(off: number): CodeItem {
+    const v = this.view;
+    const regs = v.getUint16(off, true);
+    const ins = v.getUint16(off + 2, true);
+    const triesSize = v.getUint16(off + 6, true);
+    const insnsSize = v.getUint32(off + 12, true);
+    const insns = new Uint16Array(insnsSize);
+    for (let j = 0; j < insnsSize; j++) insns[j] = v.getUint16(off + 16 + j * 2, true);
+    const tries: TryItem[] = [];
+    if (triesSize) {
+      let p = off + 16 + insnsSize * 2;
+      if (insnsSize & 1) p += 2;
+      const handlersBase = p + triesSize * 8;
+      const handlerCache = new Map<number, { handlers: [number, number][]; catchAllAddr: number }>();
+      for (let j = 0; j < triesSize; j++) {
+        const start = v.getUint32(p, true);
+        const count = v.getUint16(p + 4, true);
+        const hOff = v.getUint16(p + 6, true);
+        p += 8;
+        let h = handlerCache.get(hOff);
+        if (!h) {
+          const r = new Reader(this.bytes, handlersBase + hOff);
+          const size = r.sleb();
+          const n = Math.abs(size);
+          const handlers: [number, number][] = [];
+          for (let k = 0; k < n; k++) handlers.push([r.uleb(), r.uleb()]);
+          const catchAllAddr = size <= 0 ? r.uleb() : -1;
+          h = { handlers, catchAllAddr };
+          handlerCache.set(hOff, h);
+        }
+        tries.push({ start, end: start + count, handlers: h.handlers, catchAllAddr: h.catchAllAddr });
+      }
+    }
+    return { regs, ins, insns, tries };
+  }
+
+  /** encoded_array_item at off (used for static field initial values) */
+  encodedArray(off: number): EncVal[] {
+    const r = new Reader(this.bytes, off);
+    const n = r.uleb();
+    const out: EncVal[] = [];
+    for (let j = 0; j < n; j++) out.push(this.encodedValue(r));
+    return out;
+  }
+
+  encodedValue(r: Reader): EncVal {
+    const b = r.u8();
+    const type = b & 0x1f, arg = b >> 5;
+    const size = arg + 1;
+    switch (type) {
+      case 0x00: { const x = r.u8(); return x << 24 >> 24; } // byte
+      case 0x02: return this.readSExt(r, size);              // short
+      case 0x03: return this.readZExt(r, size);              // char
+      case 0x04: return this.readSExt(r, size);              // int
+      case 0x06: return this.readSExt64(r, size);            // long
+      case 0x10: { // float: size bytes, right-zero-extended to 4
+        const buf = new Uint8Array(4);
+        for (let i = 0; i < size; i++) buf[4 - size + i] = r.u8();
+        return new DataView(buf.buffer).getFloat32(0, true);
+      }
+      case 0x11: { // double: right-zero-extended to 8
+        const buf = new Uint8Array(8);
+        for (let i = 0; i < size; i++) buf[8 - size + i] = r.u8();
+        return new DataView(buf.buffer).getFloat64(0, true);
+      }
+      case 0x17: return this.string(this.readZExt(r, size)); // string
+      case 0x18: return { kind: "type", idx: this.readZExt(r, size) };
+      case 0x19: return { kind: "field", idx: this.readZExt(r, size) };
+      case 0x1a: return { kind: "method", idx: this.readZExt(r, size) };
+      case 0x1b: return { kind: "enum", idx: this.readZExt(r, size) };
+      case 0x1c: { // array
+        const n = r.uleb();
+        const out: EncVal[] = [];
+        for (let j = 0; j < n; j++) out.push(this.encodedValue(r));
+        return out;
+      }
+      case 0x1d: { // annotation: skip type + elements
+        r.uleb();
+        const n = r.uleb();
+        for (let j = 0; j < n; j++) { r.uleb(); this.encodedValue(r); }
+        return null;
+      }
+      case 0x1e: return null;
+      case 0x1f: return arg !== 0;
+      default: throw new Error(`encoded_value type 0x${type.toString(16)}`);
+    }
+  }
+
+  private readZExt(r: Reader, size: number): number {
+    let x = 0;
+    for (let i = 0; i < size; i++) x |= r.u8() << (i * 8);
+    return x >>> 0;
+  }
+  private readSExt(r: Reader, size: number): number {
+    let x = 0;
+    for (let i = 0; i < size; i++) x |= r.u8() << (i * 8);
+    const shift = 32 - size * 8;
+    return shift > 0 ? (x << shift) >> shift : x | 0;
+  }
+  private readSExt64(r: Reader, size: number): bigint {
+    let x = 0n;
+    for (let i = 0; i < size; i++) x |= BigInt(r.u8()) << BigInt(i * 8);
+    const shift = BigInt(64 - size * 8);
+    return shift > 0n ? BigInt.asIntN(64, x << shift) >> shift : BigInt.asIntN(64, x);
+  }
+}

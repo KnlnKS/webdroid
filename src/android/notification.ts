@@ -1,0 +1,467 @@
+// android.app.Notification and everything that feeds it. There is no notification shade
+// here, so nothing is posted and nothing is drawn. The contract these classes have to keep
+// is narrower and entirely mechanical: they must LINK, every fluent setter must hand back
+// the right receiver, and build() must yield a Notification whose PUBLIC FIELDS read back
+// what was set — androidx's NotificationCompat writes and re-reads `n.flags`, `n.when`,
+// `n.extras` and friends directly rather than through getters.
+
+import { newArrayList } from "../jvm/natives/jutil";
+import { rt, JObj } from "../jvm/runtime";
+import { vcall } from "../jvm/natives/jlang";
+import { mkUri } from "./app";
+import type { JBundle } from "./os";
+import type { JBitmap } from "./graphics";
+import { JBitmapDrawable } from "./drawable";
+
+type Impl = (...a: never[]) => unknown;
+const mkBundle = () => new (rt.link("android/os/Bundle").ctor as new () => JBundle)();
+/** `desc` here is "name(args)" — the return descriptor is appended by the caller. */
+const self = (ms: Record<string, Impl>, sigs: string[], ret: string) => {
+  for (const s of sigs) ms[s + ret] = function (this: object) { return this; };
+};
+
+// ── android.graphics.drawable.Icon: a lazy reference to an image, not an image.
+class JIcon extends JObj {
+  type = 0; resPkg: string | null = null; resId = 0;
+  bmp: JBitmap | null = null; uri: unknown = null; data: Int8Array | null = null;
+}
+const TYPE_BITMAP = 1, TYPE_RESOURCE = 2, TYPE_DATA = 3, TYPE_URI = 4, TYPE_ADAPTIVE = 5, TYPE_URI_ADAPTIVE = 6;
+const mkIcon = (type: number, init: (i: JIcon) => void) => { const i = new JIcon(); i.type = type; init(i); return i; };
+const iconMethods: Record<string, Impl> = {
+  "static createWithResource(Ljava/lang/String;I)Landroid/graphics/drawable/Icon;":
+    (pkg: string, id: number) => mkIcon(TYPE_RESOURCE, (i) => { i.resPkg = pkg; i.resId = id; }),
+  "static createWithResource(Landroid/content/Context;I)Landroid/graphics/drawable/Icon;":
+    (_c: unknown, id: number) => mkIcon(TYPE_RESOURCE, (i) => { i.resId = id; }),
+  "static createWithBitmap(Landroid/graphics/Bitmap;)Landroid/graphics/drawable/Icon;":
+    (b: JBitmap) => mkIcon(TYPE_BITMAP, (i) => { i.bmp = b; }),
+  "static createWithAdaptiveBitmap(Landroid/graphics/Bitmap;)Landroid/graphics/drawable/Icon;":
+    (b: JBitmap) => mkIcon(TYPE_ADAPTIVE, (i) => { i.bmp = b; }),
+  "static createWithContentUri(Ljava/lang/String;)Landroid/graphics/drawable/Icon;":
+    (u: string) => mkIcon(TYPE_URI, (i) => { i.uri = mkUri(u); }),
+  "static createWithContentUri(Landroid/net/Uri;)Landroid/graphics/drawable/Icon;":
+    (u: unknown) => mkIcon(TYPE_URI, (i) => { i.uri = u; }),
+  "static createWithAdaptiveBitmapContentUri(Landroid/net/Uri;)Landroid/graphics/drawable/Icon;":
+    (u: unknown) => mkIcon(TYPE_URI_ADAPTIVE, (i) => { i.uri = u; }),
+  "static createWithAdaptiveBitmapContentUri(Ljava/lang/String;)Landroid/graphics/drawable/Icon;":
+    (u: string) => mkIcon(TYPE_URI_ADAPTIVE, (i) => { i.uri = mkUri(u); }),
+  "static createWithData([BII)Landroid/graphics/drawable/Icon;":
+    (b: Int8Array, off: number, len: number) => mkIcon(TYPE_DATA, (i) => { i.data = b?.slice(off, off + len) ?? null; }),
+  "getType()I": function (this: JIcon) { return this.type; },
+  "getResId()I": function (this: JIcon) { return this.resId; },
+  "getResPackage()Ljava/lang/String;": function (this: JIcon) { return this.resPkg; },
+  "getUri()Landroid/net/Uri;": function (this: JIcon) { return this.uri ?? null; },
+  "getBitmap()Landroid/graphics/Bitmap;": function (this: JIcon) { return this.bmp; },
+  "describeContents()I": () => 0,
+  "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+  "loadDrawable(Landroid/content/Context;)Landroid/graphics/drawable/Drawable;":
+    async function (this: JIcon, ctx: unknown) {
+      if (this.type === TYPE_RESOURCE && ctx) {
+        return await vcall(ctx, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", this.resId);
+      }
+      if (!this.bmp) return null;
+      const d = new JBitmapDrawable();
+      d.bmp = this.bmp;
+      return d;
+    },
+};
+self(iconMethods, ["setTint(I)", "setTintList(Landroid/content/res/ColorStateList;)",
+  "setTintBlendMode(Landroid/graphics/BlendMode;)", "setTintMode(Landroid/graphics/PorterDuff$Mode;)"],
+  "Landroid/graphics/drawable/Icon;");
+rt.register({
+  name: "android/graphics/drawable/Icon", ctor: JIcon, ifaces: ["android/os/Parcelable"],
+  statics: { TYPE_BITMAP, TYPE_RESOURCE, TYPE_DATA, TYPE_URI, TYPE_ADAPTIVE_BITMAP: TYPE_ADAPTIVE, TYPE_URI_ADAPTIVE_BITMAP: TYPE_URI_ADAPTIVE },
+  methods: iconMethods,
+});
+
+// ── android.widget.RemoteViews: describes a view hierarchy for a process we don't have.
+// Recording the calls is the whole implementation; nothing ever inflates them.
+class JRemoteViews extends JObj {
+  pkg: string | null = null; layoutId = 0;
+  ops: unknown[][] = [];
+}
+const rvMethods: Record<string, Impl> = {
+  "<init>()V": function () {},
+  "<init>(Ljava/lang/String;I)V": function (this: JRemoteViews, p: string, l: number) { this.pkg = p; this.layoutId = l; },
+  "<init>(Ljava/lang/String;II)V": function (this: JRemoteViews, p: string, l: number) { this.pkg = p; this.layoutId = l; },
+  "<init>(Landroid/widget/RemoteViews;Landroid/widget/RemoteViews;)V": function (this: JRemoteViews, a: JRemoteViews) { this.pkg = a?.pkg ?? null; this.layoutId = a?.layoutId ?? 0; },
+  "<init>(Ljava/util/Map;)V": function () {},
+  "<init>(Landroid/widget/RemoteViews;)V": function (this: JRemoteViews, a: JRemoteViews) { this.pkg = a?.pkg ?? null; this.layoutId = a?.layoutId ?? 0; },
+  "getLayoutId()I": function (this: JRemoteViews) { return this.layoutId; },
+  "getPackage()Ljava/lang/String;": function (this: JRemoteViews) { return this.pkg; },
+  "clone()Landroid/widget/RemoteViews;": function (this: JRemoteViews) { const r = new JRemoteViews(); r.pkg = this.pkg; r.layoutId = this.layoutId; return r; },
+  "describeContents()I": () => 0,
+  "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+};
+for (const sig of [
+  "addStableView(ILandroid/widget/RemoteViews;I)", "addView(ILandroid/widget/RemoteViews;)", "removeAllViews(I)",
+  "setBitmap(ILjava/lang/String;Landroid/graphics/Bitmap;)", "setBlendMode(ILjava/lang/String;Landroid/graphics/BlendMode;)",
+  "setBoolean(ILjava/lang/String;Z)", "setBundle(ILjava/lang/String;Landroid/os/Bundle;)",
+  "setByte(ILjava/lang/String;B)", "setChar(ILjava/lang/String;C)",
+  "setCharSequence(ILjava/lang/String;I)", "setCharSequence(ILjava/lang/String;Ljava/lang/CharSequence;)",
+  "setCharSequenceAttr(ILjava/lang/String;I)", "setChronometer(IJLjava/lang/String;Z)",
+  "setChronometerCountDown(IZ)", "setColor(ILjava/lang/String;I)", "setColorAttr(ILjava/lang/String;I)",
+  "setColorInt(ILjava/lang/String;II)", "setColorStateList(ILjava/lang/String;I)",
+  "setColorStateList(ILjava/lang/String;Landroid/content/res/ColorStateList;)",
+  "setColorStateList(ILjava/lang/String;Landroid/content/res/ColorStateList;Landroid/content/res/ColorStateList;)",
+  "setColorStateListAttr(ILjava/lang/String;I)", "setContentDescription(ILjava/lang/CharSequence;)",
+  "setDouble(ILjava/lang/String;D)", "setFloat(ILjava/lang/String;F)",
+  "setFloatDimen(ILjava/lang/String;FI)", "setFloatDimen(ILjava/lang/String;I)", "setFloatDimenAttr(ILjava/lang/String;I)",
+  "setIcon(ILjava/lang/String;Landroid/graphics/drawable/Icon;)",
+  "setIcon(ILjava/lang/String;Landroid/graphics/drawable/Icon;Landroid/graphics/drawable/Icon;)",
+  "setImageViewBitmap(ILandroid/graphics/Bitmap;)", "setImageViewIcon(ILandroid/graphics/drawable/Icon;)",
+  "setImageViewResource(II)", "setImageViewUri(ILandroid/net/Uri;)",
+  "setInt(ILjava/lang/String;I)", "setIntDimen(ILjava/lang/String;FI)", "setIntDimen(ILjava/lang/String;I)",
+  "setIntDimenAttr(ILjava/lang/String;I)", "setLong(ILjava/lang/String;J)",
+  "setOnClickFillInIntent(ILandroid/content/Intent;)", "setOnClickPendingIntent(ILandroid/app/PendingIntent;)",
+  "setPendingIntentTemplate(ILandroid/app/PendingIntent;)", "setProgressBar(IIIZ)",
+  "setRemoteAdapter(ILandroid/content/Intent;)", "setShort(ILjava/lang/String;S)",
+  "setString(ILjava/lang/String;Ljava/lang/String;)", "setTextColor(II)",
+  "setTextColor(ILandroid/content/res/ColorStateList;)", "setTextViewCompoundDrawables(IIIII)",
+  "setTextViewText(ILjava/lang/CharSequence;)", "setTextViewTextSize(IIF)",
+  "setViewLayoutHeight(IFI)", "setViewLayoutHeightDimen(II)", "setViewLayoutMargin(IIFI)",
+  "setViewLayoutWidth(IFI)", "setViewLayoutWidthDimen(II)",
+  "setViewOutlinePreferredRadius(IFI)", "setViewOutlinePreferredRadiusDimen(II)",
+  "setViewPadding(IIIII)", "setViewVisibility(II)",
+]) {
+  const name = sig.slice(0, sig.indexOf("("));
+  rvMethods[sig + "V"] = function (this: JRemoteViews, ...a: unknown[]) { this.ops.push([name, ...a]); };
+}
+rt.register({ name: "android/widget/RemoteViews", ctor: JRemoteViews, ifaces: ["android/os/Parcelable"], methods: rvMethods });
+// Apps subclass RemoteViewsService, so its JS ctor has to really extend Service's — a
+// plain JObj shell would drop every inherited Service method off the prototype chain.
+rt.register({
+  name: "android/widget/RemoteViewsService", sup: "android/app/Service",
+  ctor: class extends (rt.link("android/app/Service").ctor as new () => JObj) {},
+  methods: { "<init>()V": function () {} },
+});
+rt.register({ name: "android/widget/RemoteViewsService$RemoteViewsFactory", ctor: class extends JObj {} });
+
+// ── android.app.Notification. Every one of these is a PUBLIC field in AOSP.
+const NFIELDS: Record<string, unknown> = {
+  when: 0n, icon: 0, iconLevel: 0, number: 0, flags: 0, defaults: 0,
+  ledARGB: 0, ledOnMS: 0, ledOffMS: 0, audioStreamType: -1, priority: 0, visibility: 0, color: 0,
+  contentIntent: null, deleteIntent: null, fullScreenIntent: null,
+  tickerText: null, tickerView: null, contentView: null, bigContentView: null, headsUpContentView: null,
+  largeIcon: null, sound: null, audioAttributes: null, vibrate: null,
+  actions: null, category: null, publicVersion: null,
+};
+class JNotification extends JObj {
+  [k: string]: unknown;
+  extras = mkBundle();
+  channelId: string | null = null;
+  group: string | null = null;
+  sortKey: string | null = null;
+  constructor() { super(); Object.assign(this, NFIELDS); }
+}
+const FLAG_ONGOING_EVENT = 2, FLAG_AUTO_CANCEL = 16, FLAG_ONLY_ALERT_ONCE = 8;
+const FLAG_LOCAL_ONLY = 256, FLAG_GROUP_SUMMARY = 512, FLAG_HIGH_PRIORITY = 128;
+rt.register({
+  name: "android/app/Notification", ctor: JNotification, ifaces: ["android/os/Parcelable"],
+  fields: Object.fromEntries([...Object.keys(NFIELDS), "extras"].map((k) => [k, k])),
+  statics: {
+    FLAG_SHOW_LIGHTS: 1, FLAG_ONGOING_EVENT, FLAG_INSISTENT: 4, FLAG_ONLY_ALERT_ONCE,
+    FLAG_AUTO_CANCEL, FLAG_NO_CLEAR: 32, FLAG_FOREGROUND_SERVICE: 64, FLAG_HIGH_PRIORITY,
+    FLAG_LOCAL_ONLY, FLAG_GROUP_SUMMARY, FLAG_BUBBLE: 4096,
+    DEFAULT_ALL: -1, DEFAULT_SOUND: 1, DEFAULT_VIBRATE: 2, DEFAULT_LIGHTS: 4,
+    PRIORITY_DEFAULT: 0, PRIORITY_LOW: -1, PRIORITY_MIN: -2, PRIORITY_HIGH: 1, PRIORITY_MAX: 2,
+    VISIBILITY_PUBLIC: 1, VISIBILITY_PRIVATE: 0, VISIBILITY_SECRET: -1,
+    // object-typed, so unlike the int constants it survives as a real field ref
+    AUDIO_ATTRIBUTES_DEFAULT: null,
+  },
+  methods: {
+    "<init>()V": function () {},
+    "<init>(ILjava/lang/CharSequence;J)V": function (this: JNotification, i: number, t: unknown, w: bigint) {
+      this.icon = i; this.tickerText = t; this.when = w;
+    },
+    "clone()Landroid/app/Notification;": function (this: JNotification) { return Object.assign(new JNotification(), this); },
+    "getChannelId()Ljava/lang/String;": function (this: JNotification) { return this.channelId; },
+    "getGroup()Ljava/lang/String;": function (this: JNotification) { return this.group; },
+    "getSortKey()Ljava/lang/String;": function (this: JNotification) { return this.sortKey; },
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+  },
+});
+
+// ── Notification.Builder. One table per kind of setter; the fluent chain matters, the
+// values only have to survive to build().
+class JNBuilder extends JObj {
+  n = new JNotification();
+  style: JNStyle | null = null;
+}
+const B = "Landroid/app/Notification$Builder;";
+const bMethods: Record<string, Impl> = {
+  "<init>(Landroid/content/Context;)V": function () {},
+  "<init>(Landroid/content/Context;Ljava/lang/String;)V": function (this: JNBuilder, _c: unknown, ch: string) { this.n.channelId = ch; },
+  "build()Landroid/app/Notification;": function (this: JNBuilder) { return this.n; },
+  "getNotification()Landroid/app/Notification;": function (this: JNBuilder) { return this.n; },
+  "getExtras()Landroid/os/Bundle;": function (this: JNBuilder) { return this.n.extras as JBundle; },
+  "getStyle()Landroid/app/Notification$Style;": function (this: JNBuilder) { return this.style; },
+  ["setStyle(Landroid/app/Notification$Style;)" + B]: function (this: JNBuilder, s: JNStyle) {
+    this.style = s; if (s) s.builder = this; return this;
+  },
+  ["setFlag(IZ)" + B]: function (this: JNBuilder, bit: number, on: number) {
+    this.n.flags = on ? (this.n.flags as number) | bit : (this.n.flags as number) & ~bit; return this;
+  },
+  ["setSmallIcon(II)" + B]: function (this: JNBuilder, i: number, lvl: number) { this.n.icon = i; this.n.iconLevel = lvl; return this; },
+  ["setLights(III)" + B]: function (this: JNBuilder, argb: number, on: number, off: number) {
+    this.n.ledARGB = argb; this.n.ledOnMS = on; this.n.ledOffMS = off; return this;
+  },
+  ["setSound(Landroid/net/Uri;Landroid/media/AudioAttributes;)" + B]: function (this: JNBuilder, u: unknown, aa: unknown) {
+    this.n.sound = u; this.n.audioAttributes = aa; return this;
+  },
+  ["setSound(Landroid/net/Uri;I)" + B]: function (this: JNBuilder, u: unknown, st: number) {
+    this.n.sound = u; this.n.audioStreamType = st; return this;
+  },
+  ["setTicker(Ljava/lang/CharSequence;Landroid/widget/RemoteViews;)" + B]: function (this: JNBuilder, t: unknown, v: unknown) {
+    this.n.tickerText = t; this.n.tickerView = v; return this;
+  },
+  ["setFullScreenIntent(Landroid/app/PendingIntent;Z)" + B]: function (this: JNBuilder, pi: unknown, hi: number) {
+    this.n.fullScreenIntent = pi;
+    this.n.flags = hi ? (this.n.flags as number) | FLAG_HIGH_PRIORITY : (this.n.flags as number) & ~FLAG_HIGH_PRIORITY;
+    return this;
+  },
+  ["setProgress(IIZ)" + B]: function (this: JNBuilder, max: number, cur: number, ind: number) {
+    const e = (this.n.extras as JBundle).map;
+    e.set("android.progressMax", max); e.set("android.progress", cur); e.set("android.progressIndeterminate", ind);
+    return this;
+  },
+  ["addAction(Landroid/app/Notification$Action;)" + B]: function (this: JNBuilder, a: unknown) {
+    ((this.n.actions ??= mkActionArray()) as unknown[]).push(a); return this;
+  },
+  ["addAction(ILjava/lang/CharSequence;Landroid/app/PendingIntent;)" + B]: function (this: JNBuilder, i: number, t: unknown, pi: unknown) {
+    const a = new JNAction(); a.icon = i; a.title = t; a.actionIntent = pi;
+    ((this.n.actions ??= mkActionArray()) as unknown[]).push(a); return this;
+  },
+};
+// setter → the public Notification field it lands in
+for (const [sig, f] of Object.entries({
+  "setWhen(J)": "when",
+  "setSmallIcon(I)": "icon",
+  "setNumber(I)": "number",
+  "setDefaults(I)": "defaults",
+  "setPriority(I)": "priority",
+  "setVisibility(I)": "visibility",
+  "setColor(I)": "color",
+  "setCategory(Ljava/lang/String;)": "category",
+  "setVibrate([J)": "vibrate",
+  "setSound(Landroid/net/Uri;)": "sound",
+  "setTicker(Ljava/lang/CharSequence;)": "tickerText",
+  "setContentIntent(Landroid/app/PendingIntent;)": "contentIntent",
+  "setDeleteIntent(Landroid/app/PendingIntent;)": "deleteIntent",
+  "setContent(Landroid/widget/RemoteViews;)": "contentView",
+  "setCustomContentView(Landroid/widget/RemoteViews;)": "contentView",
+  "setCustomBigContentView(Landroid/widget/RemoteViews;)": "bigContentView",
+  "setCustomHeadsUpContentView(Landroid/widget/RemoteViews;)": "headsUpContentView",
+  "setLargeIcon(Landroid/graphics/Bitmap;)": "largeIcon",
+  "setLargeIcon(Landroid/graphics/drawable/Icon;)": "largeIcon",
+  "setSmallIcon(Landroid/graphics/drawable/Icon;)": "smallIcon",
+  "setPublicVersion(Landroid/app/Notification;)": "publicVersion",
+  "setExtras(Landroid/os/Bundle;)": "extras",
+  "setGroup(Ljava/lang/String;)": "group",
+  "setSortKey(Ljava/lang/String;)": "sortKey",
+  "setChannelId(Ljava/lang/String;)": "channelId",
+})) bMethods[sig + B] = function (this: JNBuilder, v: unknown) { this.n[f] = v; return this; };
+// setter → the flags bit it toggles
+for (const [sig, bit] of Object.entries({
+  "setOngoing(Z)": FLAG_ONGOING_EVENT, "setAutoCancel(Z)": FLAG_AUTO_CANCEL,
+  "setOnlyAlertOnce(Z)": FLAG_ONLY_ALERT_ONCE, "setLocalOnly(Z)": FLAG_LOCAL_ONLY,
+  "setGroupSummary(Z)": FLAG_GROUP_SUMMARY,
+})) bMethods[sig + B] = function (this: JNBuilder, on: number) {
+  this.n.flags = on ? (this.n.flags as number) | bit : (this.n.flags as number) & ~bit; return this;
+};
+// setter → the extras key AOSP records it under, which is where androidx reads it back
+for (const [sig, key] of Object.entries({
+  "setContentTitle(Ljava/lang/CharSequence;)": "android.title",
+  "setContentText(Ljava/lang/CharSequence;)": "android.text",
+  "setSubText(Ljava/lang/CharSequence;)": "android.subText",
+  "setContentInfo(Ljava/lang/CharSequence;)": "android.infoText",
+  "setSettingsText(Ljava/lang/CharSequence;)": "android.settingsText",
+  "setShortCriticalText(Ljava/lang/String;)": "android.shortCriticalText",
+  "setRemoteInputHistory([Ljava/lang/CharSequence;)": "android.remoteInputHistory",
+  "setShowWhen(Z)": "android.showWhen",
+  "setUsesChronometer(Z)": "android.showChronometer",
+  "setChronometerCountDown(Z)": "android.chronometerCountDown",
+  "setColorized(Z)": "android.colorized",
+})) bMethods[sig + B] = function (this: JNBuilder, v: unknown) { (this.n.extras as JBundle).map.set(key, v); return this; };
+// accepted and dropped: no shade reads these, but the chain must not break
+self(bMethods, [
+  "addPerson(Ljava/lang/String;)", "addPerson(Landroid/app/Person;)",
+  "setAllowSystemGeneratedContextualActions(Z)", "setBadgeIconType(I)",
+  "setBubbleMetadata(Landroid/app/Notification$BubbleMetadata;)",
+  "setGroupAlertBehavior(I)", "setLocusId(Landroid/content/LocusId;)",
+  "setShortcutId(Ljava/lang/String;)", "setTimeoutAfter(J)", "setActions([Landroid/app/Notification$Action;)",
+  "setForegroundServiceBehavior(I)", "setSilent(Z)", "extend(Landroid/app/Notification$Extender;)",
+], B);
+rt.register({ name: "android/app/Notification$Builder", ctor: JNBuilder, methods: bMethods });
+
+// ── Notification.Style: BigTextStyle et al. exist to be handed to Builder.setStyle, and
+// their setters return the SUBCLASS, so each subclass needs its own descriptors.
+class JNStyle extends JObj { builder: JNBuilder | null = null; }
+rt.register({
+  name: "android/app/Notification$Style", ctor: JNStyle,
+  methods: {
+    "<init>()V": function () {},
+    "setBuilder(Landroid/app/Notification$Builder;)V": function (this: JNStyle, b: JNBuilder) { this.builder = b; if (b) b.style = this; },
+    "build()Landroid/app/Notification;": function (this: JNStyle) { return this.builder?.n ?? null; },
+  },
+});
+for (const [name, extra] of Object.entries({
+  BigTextStyle: ["bigText(Ljava/lang/CharSequence;)"],
+  BigPictureStyle: ["bigPicture(Landroid/graphics/Bitmap;)", "bigPicture(Landroid/graphics/drawable/Icon;)",
+    "bigLargeIcon(Landroid/graphics/Bitmap;)", "bigLargeIcon(Landroid/graphics/drawable/Icon;)",
+    "setContentDescription(Ljava/lang/CharSequence;)", "showBigPictureWhenCollapsed(Z)"],
+  InboxStyle: ["addLine(Ljava/lang/CharSequence;)"],
+  DecoratedCustomViewStyle: [],
+})) {
+  const cls = "android/app/Notification$" + name;
+  const ms: Record<string, Impl> = {
+    "<init>()V": function () {},
+    // AOSP's Style(Builder) ctor calls setBuilder, so the style is live on the builder
+    // before any of the fluent setters run.
+    "<init>(Landroid/app/Notification$Builder;)V": function (this: JNStyle, b: JNBuilder) { this.builder = b; if (b) b.style = this; },
+  };
+  self(ms, ["setBigContentTitle(Ljava/lang/CharSequence;)", "setSummaryText(Ljava/lang/CharSequence;)", ...extra], "L" + cls + ";");
+  rt.register({ name: cls, ctor: class extends JNStyle {}, sup: "android/app/Notification$Style", methods: ms });
+}
+
+// ── Notification.Action (+ its Builder)
+class JNAction extends JObj {
+  icon = 0; title: unknown = null; actionIntent: unknown = null;
+  ico: JIcon | null = null; extras = mkBundle(); semantic = 0; contextual = 0;
+}
+const mkActionArray = () => Object.assign([] as unknown[], { $t: "Landroid/app/Notification$Action;" });
+rt.register({
+  name: "android/app/Notification$Action", ctor: JNAction, ifaces: ["android/os/Parcelable"],
+  fields: { icon: "icon", title: "title", actionIntent: "actionIntent" },
+  methods: {
+    "<init>(ILjava/lang/CharSequence;Landroid/app/PendingIntent;)V": function (this: JNAction, i: number, t: unknown, pi: unknown) {
+      this.icon = i; this.title = t; this.actionIntent = pi;
+    },
+    "getIcon()Landroid/graphics/drawable/Icon;": function (this: JNAction) {
+      return this.ico ??= this.icon ? mkIcon(TYPE_RESOURCE, (x) => { x.resId = this.icon; }) : null;
+    },
+    "getTitle()Ljava/lang/CharSequence;": function (this: JNAction) { return this.title; },
+    "getActionIntent()Landroid/app/PendingIntent;": function (this: JNAction) { return this.actionIntent; },
+    "getExtras()Landroid/os/Bundle;": function (this: JNAction) { return this.extras; },
+    "getRemoteInputs()[Landroid/app/RemoteInput;": () => null,
+    "getDataOnlyRemoteInputs()[Landroid/app/RemoteInput;": () => null,
+    "getAllowGeneratedReplies()Z": () => 1,
+    "getSemanticAction()I": function (this: JNAction) { return this.semantic; },
+    "isContextual()Z": function (this: JNAction) { return this.contextual; },
+    "isAuthenticationRequired()Z": () => 0,
+    "clone()Landroid/app/Notification$Action;": function (this: JNAction) { return Object.assign(new JNAction(), this); },
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+  },
+});
+class JNActionBuilder extends JObj { a = new JNAction(); }
+const AB = "Landroid/app/Notification$Action$Builder;";
+const abMethods: Record<string, Impl> = {
+  "<init>(ILjava/lang/CharSequence;Landroid/app/PendingIntent;)V": function (this: JNActionBuilder, i: number, t: unknown, pi: unknown) {
+    this.a.icon = i; this.a.title = t; this.a.actionIntent = pi;
+  },
+  "<init>(Landroid/graphics/drawable/Icon;Ljava/lang/CharSequence;Landroid/app/PendingIntent;)V":
+    function (this: JNActionBuilder, ic: JIcon, t: unknown, pi: unknown) {
+      this.a.ico = ic; this.a.icon = ic?.resId ?? 0; this.a.title = t; this.a.actionIntent = pi;
+    },
+  "<init>(Landroid/app/Notification$Action;)V": function (this: JNActionBuilder, a: JNAction) { if (a) this.a = Object.assign(new JNAction(), a); },
+  "build()Landroid/app/Notification$Action;": function (this: JNActionBuilder) { return this.a; },
+  ["addExtras(Landroid/os/Bundle;)" + AB]: function (this: JNActionBuilder, b: JBundle) {
+    if (b) for (const [k, v] of b.map) this.a.extras.map.set(k, v);
+    return this;
+  },
+  ["setSemanticAction(I)" + AB]: function (this: JNActionBuilder, v: number) { this.a.semantic = v; return this; },
+  ["setContextual(Z)" + AB]: function (this: JNActionBuilder, v: number) { this.a.contextual = v; return this; },
+};
+self(abMethods, ["addRemoteInput(Landroid/app/RemoteInput;)", "setAllowGeneratedReplies(Z)",
+  "setAuthenticationRequired(Z)", "setEmphasisHint(I)", "setStyleHint(I)",
+  "extend(Landroid/app/Notification$Action$Extender;)"], AB);
+rt.register({ name: "android/app/Notification$Action$Builder", ctor: JNActionBuilder, methods: abMethods });
+
+// ── android.app.Person: only ever handed straight back to Notification.Builder.
+class JPerson extends JObj {
+  [k: string]: unknown;
+  name: unknown = null; key: string | null = null; uri: string | null = null; ico: JIcon | null = null;
+}
+rt.register({
+  name: "android/app/Person", ctor: JPerson, ifaces: ["android/os/Parcelable"],
+  methods: {
+    "getName()Ljava/lang/CharSequence;": function (this: JPerson) { return this.name; },
+    "getKey()Ljava/lang/String;": function (this: JPerson) { return this.key; },
+    "getUri()Ljava/lang/String;": function (this: JPerson) { return this.uri; },
+    "getIcon()Landroid/graphics/drawable/Icon;": function (this: JPerson) { return this.ico; },
+    "isBot()Z": () => 0, "isImportant()Z": () => 0,
+    "describeContents()I": () => 0, "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+  },
+});
+class JPersonBuilder extends JObj { p = new JPerson(); }
+{
+  const PB = "Landroid/app/Person$Builder;";
+  const pbMethods: Record<string, Impl> = {
+    "<init>()V": function () {},
+    "build()Landroid/app/Person;": function (this: JPersonBuilder) { return this.p; },
+  };
+  for (const [sig, f] of Object.entries({
+    "setName(Ljava/lang/CharSequence;)": "name", "setKey(Ljava/lang/String;)": "key",
+    "setUri(Ljava/lang/String;)": "uri", "setIcon(Landroid/graphics/drawable/Icon;)": "ico",
+  })) pbMethods[sig + PB] = function (this: JPersonBuilder, v: unknown) { this.p[f] = v; return this; };
+  self(pbMethods, ["setBot(Z)", "setImportant(Z)"], PB);
+  rt.register({ name: "android/app/Person$Builder", ctor: JPersonBuilder, methods: pbMethods });
+}
+
+// ── NotificationChannel / NotificationChannelGroup / NotificationManager. Nothing is ever
+// shown; a channel keeps what apps read back out of it.
+class JNotificationChannel extends JObj { id = ""; nm: unknown = null; imp = 3; }
+rt.register({
+  name: "android/app/NotificationChannel", ctor: JNotificationChannel,
+  methods: {
+    "<init>(Ljava/lang/String;Ljava/lang/CharSequence;I)V": function (this: JNotificationChannel, id: string, nm: unknown, imp: number) {
+      this.id = id; this.nm = nm; this.imp = imp;
+    },
+    "getId()Ljava/lang/String;": function (this: JNotificationChannel) { return this.id; },
+    "getName()Ljava/lang/CharSequence;": function (this: JNotificationChannel) { return this.nm; },
+    "setName(Ljava/lang/CharSequence;)V": function (this: JNotificationChannel, v: unknown) { this.nm = v; },
+    "getImportance()I": function (this: JNotificationChannel) { return this.imp; },
+    "getGroup()Ljava/lang/String;": () => null,
+    "getSound()Landroid/net/Uri;": () => null,
+    "shouldVibrate()Z": () => 0,
+    "canShowBadge()Z": () => 1,
+    "setDescription(Ljava/lang/String;)V": () => {},
+    "setGroup(Ljava/lang/String;)V": () => {},
+    "setShowBadge(Z)V": () => {},
+    "setSound(Landroid/net/Uri;Landroid/media/AudioAttributes;)V": () => {},
+    "enableLights(Z)V": () => {},
+    "enableVibration(Z)V": () => {},
+    "setLockscreenVisibility(I)V": () => {},
+    "setLightColor(I)V": () => {},
+    "setVibrationPattern([J)V": () => {},
+  },
+});
+rt.register({
+  name: "android/app/NotificationChannelGroup", ctor: class extends JObj {},
+  methods: {
+    "<init>(Ljava/lang/String;Ljava/lang/CharSequence;)V": function () {},
+    "setDescription(Ljava/lang/String;)V": () => {},
+  },
+});
+rt.register({
+  name: "android/app/NotificationManager", ctor: class extends JObj {},
+  methods: {
+    "notify(ILandroid/app/Notification;)V": () => {},
+    "notify(Ljava/lang/String;ILandroid/app/Notification;)V": () => {},
+    "cancel(I)V": () => {},
+    "cancel(Ljava/lang/String;I)V": () => {},
+    "cancelAll()V": () => {},
+    "createNotificationChannel(Landroid/app/NotificationChannel;)V": () => {},
+    "createNotificationChannels(Ljava/util/List;)V": () => {},
+    "createNotificationChannelGroup(Landroid/app/NotificationChannelGroup;)V": () => {},
+    "createNotificationChannelGroups(Ljava/util/List;)V": () => {},
+    "deleteNotificationChannel(Ljava/lang/String;)V": () => {},
+    "deleteNotificationChannelGroup(Ljava/lang/String;)V": () => {},
+    "getNotificationChannels()Ljava/util/List;": () => newArrayList(),
+    "getNotificationChannel(Ljava/lang/String;)Landroid/app/NotificationChannel;": () => null,
+    "getActiveNotifications()[Landroid/service/notification/StatusBarNotification;":
+      () => Object.assign([] as unknown[], { $t: "Landroid/service/notification/StatusBarNotification;" }),
+    "areNotificationsEnabled()Z": () => 1,
+  },
+});

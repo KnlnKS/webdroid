@@ -1,0 +1,49 @@
+// Mass-compile every class in an APK's dex files: catches codegen syntax errors broadly.
+import { unzipSync } from "fflate";
+import { DexFile } from "../src/jvm/dex";
+import { rt } from "../src/jvm/runtime";
+import { perf } from "../src/perf";
+import { setLazyMethods } from "../src/jvm/compiler";
+import "../src/jvm/natives/jlang";
+import { descToName } from "../src/jvm/abi";
+
+// this script exists to surface compile failures, so every body must actually be generated
+setLazyMethods(false);
+
+const path = process.argv[2] ?? "apks/FitNotes.apk";
+const zip = unzipSync(new Uint8Array(await Bun.file(path).arrayBuffer()), {
+  filter: (f) => /classes\d*\.dex$/.test(f.name),
+});
+for (const [name, bytes] of Object.entries(zip)) rt.loadDex(new DexFile(bytes, name));
+
+let ok = 0, fail = 0;
+const t0 = performance.now();
+const failures = new Map<string, number>();
+const origWarn = console.warn;
+console.warn = (...a: unknown[]) => {
+  if (String(a[0]).includes("compile error")) {
+    const m = /compile error \S+: (.*)/.exec(String(a[0]));
+    failures.set(m?.[1] ?? "?", (failures.get(m?.[1] ?? "?") ?? 0) + 1);
+    fail++;
+  }
+};
+for (const dex of rt.dexes) {
+  for (let i = 0; i < dex.classDefCount; i++) {
+    const name = descToName(dex.type(dex.classDef2Type(i)));
+    try {
+      const info = rt.link(name);
+      rt.ensureCompiled(info);
+      ok++;
+    } catch (e) {
+      console.error("class-level failure", name, e);
+      fail++;
+      if (fail > 20) process.exit(1);
+    }
+  }
+}
+console.warn = origWarn;
+console.log(`compiled ${ok} classes (${perf.classesCompiled} bodies-bearing) in ${(performance.now() - t0).toFixed(0)}ms (pure compile ${perf.compileMs.toFixed(0)}ms), ${fail} method failures`);
+const sorted = [...failures.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15);
+for (const [msg, n] of sorted) console.log(`  ${n}× ${msg}`);
+console.log(`missing (first 30 of ${rt.missing.size}):`);
+console.log([...rt.missing].slice(0, 30).join("\n"));

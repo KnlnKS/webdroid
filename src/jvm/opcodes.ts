@@ -1,0 +1,105 @@
+// Dalvik opcode table: name + format. Format determines code-unit length & operand decode.
+// https://source.android.com/docs/core/runtime/dalvik-bytecode
+
+export type Fmt =
+  | "10x" | "12x" | "11n" | "11x" | "10t" | "20t" | "22x" | "21t" | "21s" | "21h"
+  | "21c" | "23x" | "22b" | "22t" | "22s" | "22c" | "30t" | "32x" | "31i" | "31t"
+  | "31c" | "35c" | "3rc" | "45cc" | "4rcc" | "51l";
+
+export const FMT_LEN: Record<Fmt, number> = {
+  "10x": 1, "12x": 1, "11n": 1, "11x": 1, "10t": 1,
+  "20t": 2, "22x": 2, "21t": 2, "21s": 2, "21h": 2, "21c": 2, "23x": 2,
+  "22b": 2, "22t": 2, "22s": 2, "22c": 2,
+  "30t": 3, "32x": 3, "31i": 3, "31t": 3, "31c": 3, "35c": 3, "3rc": 3,
+  "45cc": 4, "4rcc": 4, "51l": 5,
+};
+
+type Op = readonly [string, Fmt] | null;
+
+const U = null; // unused
+
+export const OPS: readonly Op[] = [
+  ["nop", "10x"], ["move", "12x"], ["move/from16", "22x"], ["move/16", "32x"],
+  ["move-wide", "12x"], ["move-wide/from16", "22x"], ["move-wide/16", "32x"],
+  ["move-object", "12x"], ["move-object/from16", "22x"], ["move-object/16", "32x"],
+  ["move-result", "11x"], ["move-result-wide", "11x"], ["move-result-object", "11x"],
+  ["move-exception", "11x"], ["return-void", "10x"], ["return", "11x"],
+  ["return-wide", "11x"], ["return-object", "11x"],
+  ["const/4", "11n"], ["const/16", "21s"], ["const", "31i"], ["const/high16", "21h"],
+  ["const-wide/16", "21s"], ["const-wide/32", "31i"], ["const-wide", "51l"], ["const-wide/high16", "21h"],
+  ["const-string", "21c"], ["const-string/jumbo", "31c"], ["const-class", "21c"],
+  ["monitor-enter", "11x"], ["monitor-exit", "11x"],
+  ["check-cast", "21c"], ["instance-of", "22c"], ["array-length", "12x"],
+  ["new-instance", "21c"], ["new-array", "22c"],
+  ["filled-new-array", "35c"], ["filled-new-array/range", "3rc"], ["fill-array-data", "31t"],
+  ["throw", "11x"], ["goto", "10t"], ["goto/16", "20t"], ["goto/32", "30t"],
+  ["packed-switch", "31t"], ["sparse-switch", "31t"],
+  ["cmpl-float", "23x"], ["cmpg-float", "23x"], ["cmpl-double", "23x"], ["cmpg-double", "23x"], ["cmp-long", "23x"],
+  ["if-eq", "22t"], ["if-ne", "22t"], ["if-lt", "22t"], ["if-ge", "22t"], ["if-gt", "22t"], ["if-le", "22t"],
+  ["if-eqz", "21t"], ["if-nez", "21t"], ["if-ltz", "21t"], ["if-gez", "21t"], ["if-gtz", "21t"], ["if-lez", "21t"],
+  U, U, U, U, U, U,
+  ["aget", "23x"], ["aget-wide", "23x"], ["aget-object", "23x"], ["aget-boolean", "23x"],
+  ["aget-byte", "23x"], ["aget-char", "23x"], ["aget-short", "23x"],
+  ["aput", "23x"], ["aput-wide", "23x"], ["aput-object", "23x"], ["aput-boolean", "23x"],
+  ["aput-byte", "23x"], ["aput-char", "23x"], ["aput-short", "23x"],
+  ["iget", "22c"], ["iget-wide", "22c"], ["iget-object", "22c"], ["iget-boolean", "22c"],
+  ["iget-byte", "22c"], ["iget-char", "22c"], ["iget-short", "22c"],
+  ["iput", "22c"], ["iput-wide", "22c"], ["iput-object", "22c"], ["iput-boolean", "22c"],
+  ["iput-byte", "22c"], ["iput-char", "22c"], ["iput-short", "22c"],
+  ["sget", "21c"], ["sget-wide", "21c"], ["sget-object", "21c"], ["sget-boolean", "21c"],
+  ["sget-byte", "21c"], ["sget-char", "21c"], ["sget-short", "21c"],
+  ["sput", "21c"], ["sput-wide", "21c"], ["sput-object", "21c"], ["sput-boolean", "21c"],
+  ["sput-byte", "21c"], ["sput-char", "21c"], ["sput-short", "21c"],
+  ["invoke-virtual", "35c"], ["invoke-super", "35c"], ["invoke-direct", "35c"],
+  ["invoke-static", "35c"], ["invoke-interface", "35c"], U,
+  ["invoke-virtual/range", "3rc"], ["invoke-super/range", "3rc"], ["invoke-direct/range", "3rc"],
+  ["invoke-static/range", "3rc"], ["invoke-interface/range", "3rc"], U, U,
+  ["neg-int", "12x"], ["not-int", "12x"], ["neg-long", "12x"], ["not-long", "12x"],
+  ["neg-float", "12x"], ["neg-double", "12x"],
+  ["int-to-long", "12x"], ["int-to-float", "12x"], ["int-to-double", "12x"],
+  ["long-to-int", "12x"], ["long-to-float", "12x"], ["long-to-double", "12x"],
+  ["float-to-int", "12x"], ["float-to-long", "12x"], ["float-to-double", "12x"],
+  ["double-to-int", "12x"], ["double-to-long", "12x"], ["double-to-float", "12x"],
+  ["int-to-byte", "12x"], ["int-to-char", "12x"], ["int-to-short", "12x"],
+  ["add-int", "23x"], ["sub-int", "23x"], ["mul-int", "23x"], ["div-int", "23x"], ["rem-int", "23x"],
+  ["and-int", "23x"], ["or-int", "23x"], ["xor-int", "23x"], ["shl-int", "23x"], ["shr-int", "23x"], ["ushr-int", "23x"],
+  ["add-long", "23x"], ["sub-long", "23x"], ["mul-long", "23x"], ["div-long", "23x"], ["rem-long", "23x"],
+  ["and-long", "23x"], ["or-long", "23x"], ["xor-long", "23x"], ["shl-long", "23x"], ["shr-long", "23x"], ["ushr-long", "23x"],
+  ["add-float", "23x"], ["sub-float", "23x"], ["mul-float", "23x"], ["div-float", "23x"], ["rem-float", "23x"],
+  ["add-double", "23x"], ["sub-double", "23x"], ["mul-double", "23x"], ["div-double", "23x"], ["rem-double", "23x"],
+  ["add-int/2addr", "12x"], ["sub-int/2addr", "12x"], ["mul-int/2addr", "12x"], ["div-int/2addr", "12x"], ["rem-int/2addr", "12x"],
+  ["and-int/2addr", "12x"], ["or-int/2addr", "12x"], ["xor-int/2addr", "12x"], ["shl-int/2addr", "12x"], ["shr-int/2addr", "12x"], ["ushr-int/2addr", "12x"],
+  ["add-long/2addr", "12x"], ["sub-long/2addr", "12x"], ["mul-long/2addr", "12x"], ["div-long/2addr", "12x"], ["rem-long/2addr", "12x"],
+  ["and-long/2addr", "12x"], ["or-long/2addr", "12x"], ["xor-long/2addr", "12x"], ["shl-long/2addr", "12x"], ["shr-long/2addr", "12x"], ["ushr-long/2addr", "12x"],
+  ["add-float/2addr", "12x"], ["sub-float/2addr", "12x"], ["mul-float/2addr", "12x"], ["div-float/2addr", "12x"], ["rem-float/2addr", "12x"],
+  ["add-double/2addr", "12x"], ["sub-double/2addr", "12x"], ["mul-double/2addr", "12x"], ["div-double/2addr", "12x"], ["rem-double/2addr", "12x"],
+  ["add-int/lit16", "22s"], ["rsub-int", "22s"], ["mul-int/lit16", "22s"], ["div-int/lit16", "22s"],
+  ["rem-int/lit16", "22s"], ["and-int/lit16", "22s"], ["or-int/lit16", "22s"], ["xor-int/lit16", "22s"],
+  ["add-int/lit8", "22b"], ["rsub-int/lit8", "22b"], ["mul-int/lit8", "22b"], ["div-int/lit8", "22b"],
+  ["rem-int/lit8", "22b"], ["and-int/lit8", "22b"], ["or-int/lit8", "22b"], ["xor-int/lit8", "22b"],
+  ["shl-int/lit8", "22b"], ["shr-int/lit8", "22b"], ["ushr-int/lit8", "22b"],
+  U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U,
+  ["invoke-polymorphic", "45cc"], ["invoke-polymorphic/range", "4rcc"],
+  ["invoke-custom", "35c"], ["invoke-custom/range", "3rc"],
+  ["const-method-handle", "21c"], ["const-method-type", "21c"],
+];
+
+/** length in code units of instruction at insns[pc]; handles payload pseudo-instructions */
+export function insnLen(insns: Uint16Array, pc: number): number {
+  const unit = insns[pc];
+  const op = unit & 0xff;
+  if (op === 0x00) {
+    const ident = unit >> 8;
+    if (ident === 0x01) return 4 + insns[pc + 1] * 2;           // packed-switch-payload
+    if (ident === 0x02) return 2 + insns[pc + 1] * 4;           // sparse-switch-payload
+    if (ident === 0x03) {
+      const width = insns[pc + 1];
+      const count = insns[pc + 2] | (insns[pc + 3] << 16);
+      return 4 + ((width * count + 1) >> 1);                    // fill-array-data-payload
+    }
+    return 1;
+  }
+  const entry = OPS[op];
+  if (!entry) throw new Error(`bad opcode 0x${op.toString(16)} at pc ${pc}`);
+  return FMT_LEN[entry[1]];
+}

@@ -1,0 +1,38 @@
+{
+  "name": "webdroid",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run server.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "inspect": "bun scripts/inspect.ts",
+    "smoke": "bun scripts/smoke.ts",
+    "audit": "bun scripts/audit.ts",
+    "opscan": "bun scripts/opscan.ts",
+    "dis": "bun scripts/dis.ts",
+    "jsrc": "bun scripts/jsrc.ts",
+    "layout": "bun scripts/layout.ts",
+    "findstr": "bun scripts/findstr.ts",
+    "trace": "bun scripts/trace.ts",
+    "dbg": "bun scripts/dbg.ts",
+    "gen-framework-res": "bun scripts/gen-framework-res.ts",
+    "e2e:setup": "bash tests/e2e/setup-avd.sh",
+    "e2e:boot": "bash tests/e2e/boot-emulator.sh",
+    "e2e:record": "bun tests/e2e/capture-emulator.ts",
+    "e2e:diff": "bun tests/e2e/score.ts",
+    "e2e": "bun tests/e2e/run.ts"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2",
+    "sql.js": "^1.14.2"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.0",
+    "@types/pngjs": "^6.0.5",
+    "@types/sql.js": "^1.4.11",
+    "pixelmatch": "^7.2.0",
+    "playwright": "^1.62.1",
+    "pngjs": "^7.0.0",
+    "typescript": "^5.9.2"
+  }
+}

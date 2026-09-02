@@ -1,0 +1,551 @@
+// Java-facing android.content.res.* on top of res.ts + drawable.ts
+
+import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { device } from "../shell/config";
+import { Resources, setResourceNight, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV } from "./res";
+import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
+import { JTypedValue } from "./os";
+import { TV, parseAXML, type XmlNode } from "./axml";
+import { javaFormat } from "../jvm/natives/jlang";
+import { usLocale } from "../jvm/natives/jutil";
+import { jarray } from "../jvm/abi";
+import { JInputStream } from "../jvm/natives/jio";
+import { tfDefault } from "./graphics";
+
+export class JResources extends JObj {
+  host!: Resources;
+}
+/** the app's Resources double as the system ones: framework attrs resolve through the same table */
+let systemRes: JResources | null = null;
+export function mkJResources(host: Resources): JResources {
+  const r = new JResources();
+  r.host = host;
+  host.jobj = r;
+  systemRes = r;
+  return r;
+}
+class JConfiguration extends JObj {
+  orientation = 1;
+  screenWidthDp = device.widthDp; screenHeightDp = device.heightDp;
+  smallestScreenWidthDp = device.widthDp;
+  densityDpi = device.densityDpi;
+  fontScale = 1;
+  uiMode = 0x11; // UI_MODE_TYPE_NORMAL | night no
+  locale = null;
+  mcc = 0; mnc = 0; touchscreen = 3; keyboard = 1; keyboardHidden = 2; navigation = 1;
+  navigationHidden = 2; hardKeyboardHidden = 2; screenLayout = 0x10 | 2;
+  fontWeightAdjustment = 0;  // accessibility "bold text" is off, so no weight is added
+  colorMode = 1 | 4;         // WIDE_COLOR_GAMUT_NO | HDR_NO: a plain sRGB canvas
+}
+rt.register({
+  name: "android/content/res/Configuration", ctor: JConfiguration,
+  fields: {
+    orientation: "orientation", screenWidthDp: "screenWidthDp", screenHeightDp: "screenHeightDp",
+    smallestScreenWidthDp: "smallestScreenWidthDp", densityDpi: "densityDpi", fontScale: "fontScale",
+    uiMode: "uiMode", locale: "locale", mcc: "mcc", mnc: "mnc", touchscreen: "touchscreen",
+    keyboard: "keyboard", keyboardHidden: "keyboardHidden", navigation: "navigation",
+    navigationHidden: "navigationHidden", hardKeyboardHidden: "hardKeyboardHidden", screenLayout: "screenLayout",
+    fontWeightAdjustment: "fontWeightAdjustment", colorMode: "colorMode",
+  },
+  methods: {
+    "<init>()V": function () {},
+    "<init>(Landroid/content/res/Configuration;)V": function (this: JConfiguration, o: JConfiguration) {
+      if (o) Object.assign(this, o);
+    },
+    "setTo(Landroid/content/res/Configuration;)V": function (this: JConfiguration, o: JConfiguration) { Object.assign(this, o); },
+    "diff(Landroid/content/res/Configuration;)I": () => 0,
+    "updateFrom(Landroid/content/res/Configuration;)I": () => 0,
+    "equals(Ljava/lang/Object;)Z": function (this: JConfiguration, o: unknown) { return o === this ? 1 : 0; },
+    "getLocales()Landroid/os/LocaleList;": () => localeList,
+    "getLayoutDirection()I": () => 0,
+    "isNightModeActive()Z": function (this: JConfiguration) { return (this.uiMode & 0x30) === 0x20 ? 1 : 0; },
+  },
+});
+class JLocaleList extends JObj {}
+const localeList = new JLocaleList();
+rt.register({
+  name: "android/os/LocaleList", ctor: JLocaleList,
+  methods: {
+    "<init>([Ljava/util/Locale;)V": function () {},
+    "static getDefault()Landroid/os/LocaleList;": () => localeList,
+    "static getAdjustedDefault()Landroid/os/LocaleList;": () => localeList,
+    "get(I)Ljava/util/Locale;": () => usLocale,
+    "size()I": () => 1,
+    "isEmpty()Z": () => 0,
+    "toLanguageTags()Ljava/lang/String;": () => "en-US",
+  },
+});
+
+/**
+ * The one device Configuration every Resources reports. Night mode is device state, not an app
+ * constant: an app changes it by handing us a Configuration through Resources.updateConfiguration
+ * (that is what AppCompat's day/night delegate does), and Compose's isSystemInDarkTheme(), the
+ * `-night` resource qualifier and the window background all read the bit back off this object.
+ */
+const theConfig = new JConfiguration();
+const isNight = () => (theConfig.uiMode & 0x30) === 0x20;
+/** Adopt a Configuration an app handed us, and re-resolve resources if the night bit moved. */
+function applyDeviceConfiguration(c: JConfiguration): void {
+  const was = isNight();
+  Object.assign(theConfig, c);
+  if (isNight() !== was) setResourceNight(isNight());
+}
+export class JAssetManager extends JObj { host!: Resources; }
+class JAssetFd extends JObj { bytes!: Uint8Array; }
+rt.register({
+  name: "android/content/res/AssetFileDescriptor", ctor: JAssetFd,
+  methods: {
+    "createInputStream()Ljava/io/FileInputStream;": function (this: JAssetFd) { return streamOf(this.bytes); },
+    "getLength()J": function (this: JAssetFd) { return BigInt(this.bytes.length); },
+    "getStartOffset()J": () => 0n,
+    "close()V": () => {},
+  },
+});
+function assetBytes(am: JAssetManager, p: string): Uint8Array {
+  const bytes = am.host.zip["assets/" + p];
+  if (!bytes) throw rt.mkThrowable("java/io/FileNotFoundException", "asset " + p);
+  return bytes;
+}
+function streamOf(bytes: Uint8Array): JInputStream {
+  const s = new JInputStream();
+  s.buf = bytes;
+  return s;
+}
+const assetOpen = function (this: JAssetManager, p: string) { return streamOf(assetBytes(this, p)); };
+rt.register({
+  name: "android/content/res/AssetManager", ctor: JAssetManager,
+  methods: {
+    "open(Ljava/lang/String;)Ljava/io/InputStream;": assetOpen,
+    "open(Ljava/lang/String;I)Ljava/io/InputStream;": assetOpen,
+    "openFd(Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;": function (this: JAssetManager, p: string) {
+      const afd = new JAssetFd(); afd.bytes = assetBytes(this, p); return afd;
+    },
+    "list(Ljava/lang/String;)[Ljava/lang/String;": function (this: JAssetManager, p: string) {
+      const prefix = "assets/" + (p ? p + "/" : "");
+      const names = new Set<string>();
+      for (const k of Object.keys(this.host.zip)) {
+        if (k.startsWith(prefix)) names.add(k.slice(prefix.length).split("/")[0]);
+      }
+      return jarray([...names], "Ljava/lang/String;");
+    },
+    "close()V": () => {},
+  },
+});
+
+const getString = function (this: JResources, id: number) { return resString(this.host, id); };
+const getColor = function (this: JResources, id: number) { return rvColor(this.host, this.host.ref(id), 0); };
+const resMethods: NativeSpec["methods"] = {
+  "getString(I)Ljava/lang/String;": getString,
+  "getString(I[Ljava/lang/Object;)Ljava/lang/String;": function (this: JResources, id: number, args: unknown[]) {
+    return javaFormat(resString(this.host, id), args);
+  },
+  "getText(I)Ljava/lang/CharSequence;": getString,
+  "getQuantityString(II)Ljava/lang/String;": function (this: JResources, id: number, n: number) {
+    return pluralString(this.host, id, n) ?? "";
+  },
+  "getQuantityString(II[Ljava/lang/Object;)Ljava/lang/String;": function (this: JResources, id: number, n: number, args: unknown[]) {
+    return javaFormat(pluralString(this.host, id, n) ?? "", args);
+  },
+  "getQuantityText(II)Ljava/lang/CharSequence;": function (this: JResources, id: number, n: number) {
+    return pluralString(this.host, id, n) ?? "";
+  },
+  "getColor(I)I": getColor,
+  "getColor(ILandroid/content/res/Resources$Theme;)I": getColor,
+  "getColorStateList(I)Landroid/content/res/ColorStateList;": function (this: JResources, id: number) {
+    return loadColorStateList(this.host, id, null);
+  },
+  "getColorStateList(ILandroid/content/res/Resources$Theme;)Landroid/content/res/ColorStateList;":
+    function (this: JResources, id: number, theme: JTheme | null) {
+      return loadColorStateList(this.host, id, theme);
+    },
+  "getDimension(I)F": function (this: JResources, id: number) { return rvDimen(this.host, this.host.ref(id), 0); },
+  "getDimensionPixelSize(I)I": function (this: JResources, id: number) { return Math.round(rvDimen(this.host, this.host.ref(id), 0)); },
+  "getDimensionPixelOffset(I)I": function (this: JResources, id: number) { return Math.trunc(rvDimen(this.host, this.host.ref(id), 0)); },
+  "getBoolean(I)Z": function (this: JResources, id: number) { return rvInt(this.host, this.host.ref(id), 0) ? 1 : 0; },
+  "getInteger(I)I": function (this: JResources, id: number) { return rvInt(this.host, this.host.ref(id), 0); },
+  "getFraction(III)F": function (this: JResources, id: number) { return rvFloat(this.host, this.host.ref(id), 0); },
+  "getDrawable(I)Landroid/graphics/drawable/Drawable;": function (this: JResources, id: number) {
+    return loadDrawable(this.host, id, null);
+  },
+  "getDrawable(ILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;":
+    function (this: JResources, id: number, t: JTheme | null) {
+      return loadDrawable(this.host, id, t);
+    },
+  "getStringArray(I)[Ljava/lang/String;": function (this: JResources, id: number) { return jarray(stringArray(this.host, id), "Ljava/lang/String;"); },
+  "getTextArray(I)[Ljava/lang/CharSequence;": function (this: JResources, id: number) { return jarray(stringArray(this.host, id), "Ljava/lang/CharSequence;"); },
+  "getIntArray(I)[I": function (this: JResources, id: number) {
+    return Int32Array.from(arrayValues(this.host, id).map((v) => rvInt(this.host, this.host.resolveRefs(v), 0)));
+  },
+  "obtainTypedArray(I)Landroid/content/res/TypedArray;": function (this: JResources, id: number) {
+    const ta = new JTypedArray();
+    ta.res = this.host;
+    ta.vals = arrayValues(this.host, id);
+    ta.attrIds = new Array(ta.vals.length).fill(0);
+    return ta;
+  },
+  "getValue(ILandroid/util/TypedValue;Z)V": function (this: JResources, id: number, tv: JTypedValue, resolve: number) {
+    let v = this.host.value(id);
+    if (resolve) v = this.host.resolveRefs(v);
+    fillTypedValue(this.host, v, tv);
+  },
+  "getResourceName(I)Ljava/lang/String;": function (this: JResources, id: number) {
+    return (id >>> 24 === 1 ? "android" : this.host.arsc?.pkgName ?? "app") + ":" + this.host.idType(id) + "/" + this.host.idName(id);
+  },
+  "getResourceEntryName(I)Ljava/lang/String;": function (this: JResources, id: number) { return this.host.idName(id); },
+  "getResourceTypeName(I)Ljava/lang/String;": function (this: JResources, id: number) { return this.host.idType(id); },
+  "getResourcePackageName(I)Ljava/lang/String;": function (this: JResources, id: number) {
+    return id >>> 24 === 1 ? "android" : this.host.arsc?.pkgName ?? "app";
+  },
+  "getIdentifier(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I":
+    function (this: JResources, name: string, defType: string | null, defPkg: string | null) {
+      let type = defType ?? "", n = name;
+      const slash = name.indexOf("/");
+      if (slash > 0) {
+        type = name.slice(0, slash).replace(/^.*:/, "");
+        n = name.slice(slash + 1);
+      }
+      return this.host.appIdFor(type, n);
+    },
+  "getDisplayMetrics()Landroid/util/DisplayMetrics;": function (this: JResources) { return this.host.dm; },
+  "getConfiguration()Landroid/content/res/Configuration;": () => theConfig,
+  "newTheme()Landroid/content/res/Resources$Theme;": function (this: JResources) {
+    const t = new JTheme();
+    t.res = this.host;
+    return t;
+  },
+  "getAssets()Landroid/content/res/AssetManager;": function (this: JResources) {
+    const a = new JAssetManager();
+    a.host = this.host;
+    return a;
+  },
+  "openRawResource(I)Ljava/io/InputStream;": function (this: JResources, id: number) {
+    const path = this.host.value(id).s;
+    const bytes = path ? this.host.zip[path] : null;
+    if (!bytes) throw rt.mkThrowable("java/io/FileNotFoundException", "raw 0x" + id.toString(16));
+    return streamOf(bytes);
+  },
+  "obtainAttributes(Landroid/util/AttributeSet;[I)Landroid/content/res/TypedArray;": function (this: JResources, set: JAttrSet | null, attrs: Int32Array) {
+    return obtainStyled(this.host, null, set, attrs, 0, 0);
+  },
+  "getLayout(I)Landroid/content/res/XmlResourceParser;": xmlParser,
+  "getXml(I)Landroid/content/res/XmlResourceParser;": xmlParser,
+  "getAnimation(I)Landroid/content/res/XmlResourceParser;": xmlParser,
+  "updateConfiguration(Landroid/content/res/Configuration;Landroid/util/DisplayMetrics;)V": (c: JConfiguration | null) => { if (c) applyDeviceConfiguration(c); },
+  "getFont(I)Landroid/graphics/Typeface;": () => tfDefault,
+  "static getSystem()Landroid/content/res/Resources;": () => systemRes,
+};
+rt.register({ name: "android/content/res/Resources", ctor: JResources, methods: resMethods });
+rt.register({
+  name: "android/content/res/Resources$NotFoundException",
+  ctor: (() => {
+    const parent = rt.link("java/lang/RuntimeException").ctor;
+    return class extends parent {};
+  })(),
+  sup: "java/lang/RuntimeException",
+});
+
+function xmlParser(this: JResources, id: number) { return mkXmlParser(this.host, id); }
+function arrayValues(res: Resources, id: number): RV[] {
+  const bag = res.bag(id);
+  return bag ? [...bag.map.values()] : [];
+}
+/** a string-array/plurals-like bag as strings, references followed */
+function stringArray(res: Resources, id: number): string[] {
+  return arrayValues(res, id).map((v) => rvString(res, res.resolveRefs(v)) ?? "");
+}
+function pluralString(res: Resources, id: number, n: number): string | null {
+  const bag = res.bag(id);
+  if (!bag) return null;
+  // plurals bag keys: 0x01000004=other, 5=zero, 6=one, 7=two, 8=few, 9=many
+  const pick = (k: number) => bag.map.get(k);
+  const v = (n === 1 ? pick(0x01000006) : undefined) ?? pick(0x01000004) ?? [...bag.map.values()][0];
+  return v ? rvString(res, res.resolveRefs(v)) : null;
+}
+
+// Theme java class
+rt.register({
+  name: "android/content/res/Resources$Theme", ctor: JTheme,
+  methods: {
+    "applyStyle(IZ)V": function (this: JTheme, id: number) { this.apply(id); },
+    "resolveAttribute(ILandroid/util/TypedValue;Z)Z": function (this: JTheme, attr: number, tv: JTypedValue) {
+      const v = this.lookup(attr);
+      if (!v) return 0;
+      fillTypedValue(this.res, v, tv);
+      return 1;
+    },
+    "obtainStyledAttributes([I)Landroid/content/res/TypedArray;": function (this: JTheme, attrs: Int32Array) {
+      return obtainStyled(this.res, this, null, attrs, 0, 0);
+    },
+    "obtainStyledAttributes(I[I)Landroid/content/res/TypedArray;": function (this: JTheme, styleId: number, attrs: Int32Array) {
+      const ta = new JTypedArray();
+      ta.res = this.res;
+      ta.theme = this;
+      ta.attrIds = attrs;
+      ta.vals = [...attrs].map((a) => {
+        let v = this.res.styleLookup(styleId, a);
+        if (v && v.t === TV.ATTRIBUTE) v = this.lookup(v.d);
+        return v ? this.res.resolveRefs(v) : null;
+      });
+      return ta;
+    },
+    "obtainStyledAttributes(Landroid/util/AttributeSet;[III)Landroid/content/res/TypedArray;":
+      function (this: JTheme, set: JAttrSet | null, attrs: Int32Array, defStyleAttr: number, defStyleRes: number) {
+        return obtainStyled(this.res, this, set, attrs, defStyleAttr, defStyleRes);
+      },
+    "getResources()Landroid/content/res/Resources;": function (this: JTheme) { return this.res.jobj; },
+    "dump(ILjava/lang/String;Ljava/lang/String;)V": () => {},
+    "setTo(Landroid/content/res/Resources$Theme;)V": function (this: JTheme, o: JTheme) {
+      this.styles = o.styles.slice();
+      this.cache.clear();
+    },
+  },
+});
+
+// TypedArray java class
+rt.register({
+  name: "android/content/res/TypedArray", ctor: JTypedArray,
+  methods: {
+    "length()I": function (this: JTypedArray) { return this.attrIds.length; },
+    "getChangingConfigurations()I": () => 0,
+    "hasValueOrEmpty(I)Z": function (this: JTypedArray, i: number) { return this.vals[i] ? 1 : 0; },
+    "getIndexCount()I": function (this: JTypedArray) { return this.vals.filter((v) => v).length; },
+    "getIndex(I)I": function (this: JTypedArray, at: number) {
+      let n = -1;
+      for (let i = 0; i < this.vals.length; i++) {
+        if (this.vals[i]) { n++; if (n === at) return i; }
+      }
+      return 0;
+    },
+    "hasValue(I)Z": function (this: JTypedArray, i: number) { return this.vals[i] ? 1 : 0; },
+    "peekValue(I)Landroid/util/TypedValue;": function (this: JTypedArray, i: number) {
+      const v = this.vals[i];
+      if (!v) return null;
+      const tv = new JTypedValue();
+      fillTypedValue(this.res, v, tv);
+      return tv;
+    },
+    "getValue(ILandroid/util/TypedValue;)Z": function (this: JTypedArray, i: number, tv: JTypedValue) {
+      const v = this.vals[i];
+      if (!v) return 0;
+      fillTypedValue(this.res, v, tv);
+      return 1;
+    },
+    "getString(I)Ljava/lang/String;": function (this: JTypedArray, i: number) { return rvString(this.res, this.vals[i]); },
+    "getText(I)Ljava/lang/CharSequence;": function (this: JTypedArray, i: number) { return rvString(this.res, this.vals[i]); },
+    "getNonResourceString(I)Ljava/lang/String;": function (this: JTypedArray, i: number) { return rvString(this.res, this.vals[i]); },
+    "getBoolean(IZ)Z": function (this: JTypedArray, i: number, d: number) {
+      const v = this.vals[i];
+      return v ? (rvInt(this.res, v, d) ? 1 : 0) : d;
+    },
+    "getInt(II)I": function (this: JTypedArray, i: number, d: number) { return this.vals[i] ? rvInt(this.res, this.vals[i], d) : d; },
+    "getInteger(II)I": function (this: JTypedArray, i: number, d: number) { return this.vals[i] ? rvInt(this.res, this.vals[i], d) : d; },
+    "getFloat(IF)F": function (this: JTypedArray, i: number, d: number) { return this.vals[i] ? rvFloat(this.res, this.vals[i], d) : d; },
+    "getColor(II)I": function (this: JTypedArray, i: number, d: number) { return this.vals[i] ? rvColor(this.res, this.vals[i], d) : d; },
+    "getColorStateList(I)Landroid/content/res/ColorStateList;": function (this: JTypedArray, i: number) {
+      const v = this.vals[i];
+      if (!v) return null;
+      if (v.t === TV.REFERENCE) return loadColorStateList(this.res, v.d, this.theme);
+      return mkCsl(rvColor(this.res, v, 0));
+    },
+    "getDimension(IF)F": function (this: JTypedArray, i: number, d: number) { return this.vals[i] ? rvDimen(this.res, this.vals[i], d) : d; },
+    "getDimensionPixelSize(II)I": function (this: JTypedArray, i: number, d: number) {
+      return this.vals[i] ? Math.round(rvDimen(this.res, this.vals[i], d)) : d;
+    },
+    "getDimensionPixelOffset(II)I": function (this: JTypedArray, i: number, d: number) {
+      return this.vals[i] ? Math.trunc(rvDimen(this.res, this.vals[i], d)) : d;
+    },
+    "getLayoutDimension(ILjava/lang/String;)I": function (this: JTypedArray, i: number) {
+      const v = this.vals[i];
+      if (!v) return 0;
+      if (v.t >= TV.INT_DEC && v.d < 0) return v.d;
+      return Math.round(rvDimen(this.res, v, 0));
+    },
+    "getLayoutDimension(II)I": function (this: JTypedArray, i: number, d: number) {
+      const v = this.vals[i];
+      if (!v) return d;
+      if (v.t >= TV.INT_DEC && v.d < 0) return v.d;
+      return Math.round(rvDimen(this.res, v, d));
+    },
+    "getResourceId(II)I": function (this: JTypedArray, i: number, d: number) {
+      const v = this.vals[i];
+      return v && (v.t === TV.REFERENCE || v.t === TV.ATTRIBUTE) ? v.d : v && v.t >= TV.INT_DEC ? d : d;
+    },
+    "getDrawable(I)Landroid/graphics/drawable/Drawable;": async function (this: JTypedArray, i: number) {
+      const v = this.vals[i];
+      if (!v) return null;
+      return loadDrawableRV(this.res, v, this.theme);
+    },
+    "getType(I)I": function (this: JTypedArray, i: number) {
+      const v = this.vals[i];
+      if (!v) return 0;
+      if (v.t === T_PX) return TV.DIMENSION;
+      if (v.t === T_STR) return TV.STRING;
+      return v.t;
+    },
+    "recycle()V": () => {},
+    "getPositionDescription()Ljava/lang/String;": () => "<webdroid>",
+  },
+});
+
+// AttributeSet java-facing
+rt.register({
+  name: "android/util/AttributeSet", ctor: class extends JObj {},
+});
+rt.register({
+  name: "webdroid/AttrSet", ctor: JAttrSet, ifaces: ["android/util/AttributeSet"],
+  methods: {
+    "getAttributeCount()I": function (this: JAttrSet) { return this.node?.attrs.length ?? 0; },
+    "getAttributeName(I)Ljava/lang/String;": function (this: JAttrSet, i: number) { return this.node?.attrs[i]?.name ?? ""; },
+    "getAttributeValue(I)Ljava/lang/String;": function (this: JAttrSet, i: number) {
+      const a = this.node?.attrs[i];
+      return a ? (a.str ?? String(a.data)) : null;
+    },
+    "getAttributeValue(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": function (this: JAttrSet, ns: string, name: string) {
+      const a = this.node?.attrs.find((x) => x.name === name);
+      return a ? (a.str ?? String(a.data)) : null;
+    },
+    "getAttributeNameResource(I)I": function (this: JAttrSet, i: number) { return this.node?.attrs[i]?.resId ?? 0; },
+    "getAttributeResourceValue(Ljava/lang/String;Ljava/lang/String;I)I": function (this: JAttrSet, ns: string, name: string, d: number) {
+      const a = this.node?.attrs.find((x) => x.name === name);
+      return a && a.type === TV.REFERENCE ? a.data : d;
+    },
+    "getAttributeResourceValue(II)I": function (this: JAttrSet, i: number, d: number) {
+      const a = this.node?.attrs[i];
+      return a && a.type === TV.REFERENCE ? a.data : d;
+    },
+    "getAttributeIntValue(Ljava/lang/String;Ljava/lang/String;I)I": function (this: JAttrSet, ns: string, name: string, d: number) {
+      const a = this.node?.attrs.find((x) => x.name === name);
+      return a && a.type >= TV.INT_DEC ? a.data : d;
+    },
+    "getAttributeBooleanValue(Ljava/lang/String;Ljava/lang/String;Z)Z": function (this: JAttrSet, ns: string, name: string, d: number) {
+      const a = this.node?.attrs.find((x) => x.name === name);
+      return a && a.type === TV.BOOLEAN ? (a.data ? 1 : 0) : d;
+    },
+    "getAttributeFloatValue(Ljava/lang/String;Ljava/lang/String;F)F": function (this: JAttrSet, ns: string, name: string, d: number) {
+      const a = this.node?.attrs.find((x) => x.name === name);
+      return a?.type === TV.FLOAT ? normRV({ t: a.type, d: a.data }).d : d;
+    },
+    "getIdAttribute()Ljava/lang/String;": () => null,
+    "getClassAttribute()Ljava/lang/String;": function (this: JAttrSet) {
+      const a = this.node?.attrs.find((x) => x.name === "class");
+      return a?.str ?? null;
+    },
+    "getStyleAttribute()I": function (this: JAttrSet) {
+      const a = this.node?.attrs.find((x) => x.name === "style" && !x.ns);
+      return a ? a.data : 0;
+    },
+    "getPositionDescription()Ljava/lang/String;": () => "<webdroid xml>",
+    "getIdAttributeResourceValue(I)I": function (this: JAttrSet, d: number) {
+      const a = this.node?.attrs.find((x) => x.resId === 0x010100d0);
+      return a ? a.data : d;
+    },
+  },
+});
+
+// XmlResourceParser (pull parser over XmlNode tree)
+class JXmlParser extends JObj {
+  events: { type: number; node: XmlNode | null; depth: number }[] = [];
+  pos = -1;
+  res!: Resources;
+  set = new JAttrSet();
+}
+function mkXmlParser(res: Resources, id: number): JXmlParser {
+  const v = id ? res.value(id) : null;
+  const path = v?.s;
+  const bytes = path ? res.zip[path] : null;
+  if (!bytes && (id >>> 24) === 1) {
+    // framework xml: serve a minimal synthetic doc. android.R.anim 0x010a0004..c are the
+    // stock interpolators (androidx parsers switch on the root tag); anything else <set/>.
+    const INTERP: Record<number, string> = {
+      0x010a0004: "accelerateDecelerateInterpolator", 0x010a0005: "accelerateInterpolator",
+      0x010a0006: "decelerateInterpolator", 0x010a0007: "anticipateInterpolator",
+      0x010a0008: "overshootInterpolator", 0x010a0009: "anticipateOvershootInterpolator",
+      0x010a000a: "bounceInterpolator", 0x010a000b: "linearInterpolator", 0x010a000c: "cycleInterpolator",
+    };
+    const p0 = new JXmlParser();
+    p0.res = res; p0.set.res = res;
+    const node: XmlNode = { name: INTERP[id] ?? "set", attrs: [], children: [] } as unknown as XmlNode;
+    p0.events = [{ type: 0, node: null, depth: 0 }, { type: 2, node, depth: 1 }, { type: 3, node, depth: 1 }, { type: 1, node: null, depth: 0 }];
+    return p0;
+  }
+  if (!bytes) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "xml resource 0x" + id.toString(16));
+  const p = new JXmlParser();
+  p.res = res;
+  p.set.res = res;
+  const events: JXmlParser["events"] = [{ type: 0, node: null, depth: 0 }];
+  const root = parseAXML(bytes);
+  const walk = (n: XmlNode, depth: number) => {
+    events.push({ type: 2, node: n, depth });
+    for (const c of n.children) walk(c, depth + 1);
+    events.push({ type: 3, node: n, depth });
+  };
+  walk(root, 1);
+  events.push({ type: 1, node: null, depth: 0 });
+  p.events = events;
+  return p;
+}
+rt.register({
+  name: "android/content/res/XmlResourceParser", ctor: JXmlParser,
+  ifaces: ["org/xmlpull/v1/XmlPullParser", "android/util/AttributeSet"],
+  methods: {
+    "next()I": function (this: JXmlParser) {
+      this.pos = Math.min(this.pos + 1, this.events.length - 1);
+      const e = this.events[this.pos];
+      this.set.node = e.node;
+      return e.type;
+    },
+    "nextTag()I": function (this: JXmlParser) {
+      do {
+        this.pos = Math.min(this.pos + 1, this.events.length - 1);
+      } while (this.events[this.pos].type !== 2 && this.events[this.pos].type !== 3 && this.events[this.pos].type !== 1);
+      this.set.node = this.events[this.pos].node;
+      return this.events[this.pos].type;
+    },
+    "getEventType()I": function (this: JXmlParser) { return this.pos < 0 ? 0 : this.events[this.pos].type; },
+    "getName()Ljava/lang/String;": function (this: JXmlParser) { return this.events[this.pos]?.node?.name ?? null; },
+    "getDepth()I": function (this: JXmlParser) { return this.events[this.pos]?.depth ?? 0; },
+    "close()V": () => {},
+    "getAttributeCount()I": function (this: JXmlParser) { return this.events[this.pos]?.node?.attrs.length ?? 0; },
+    "getAttributeName(I)Ljava/lang/String;": function (this: JXmlParser, i: number) {
+      return this.events[this.pos]?.node?.attrs[i]?.name ?? "";
+    },
+    "getAttributeValue(I)Ljava/lang/String;": function (this: JXmlParser, i: number) {
+      const a = this.events[this.pos]?.node?.attrs[i];
+      return a ? (a.str ?? String(a.data)) : null;
+    },
+    "getAttributeValue(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": function (this: JXmlParser, ns: string, name: string) {
+      const a = this.events[this.pos]?.node?.attrs.find((x) => x.name === name);
+      return a ? (a.str ?? String(a.data)) : null;
+    },
+    "getAttributeNameResource(I)I": function (this: JXmlParser, i: number) {
+      return this.events[this.pos]?.node?.attrs[i]?.resId ?? 0;
+    },
+    "getAttributeResourceValue(Ljava/lang/String;Ljava/lang/String;I)I": function (this: JXmlParser, ns: string, name: string, d: number) {
+      const a = this.events[this.pos]?.node?.attrs.find((x) => x.name === name);
+      return a && a.type === TV.REFERENCE ? a.data : d;
+    },
+    "getAttributeBooleanValue(Ljava/lang/String;Ljava/lang/String;Z)Z": function (this: JXmlParser, ns: string, name: string, d: number) {
+      const a = this.events[this.pos]?.node?.attrs.find((x) => x.name === name);
+      return a && a.type === TV.BOOLEAN ? (a.data ? 1 : 0) : d;
+    },
+    "getAttributeIntValue(Ljava/lang/String;Ljava/lang/String;I)I": function (this: JXmlParser, ns: string, name: string, d: number) {
+      const a = this.events[this.pos]?.node?.attrs.find((x) => x.name === name);
+      return a && a.type >= TV.INT_DEC ? a.data : d;
+    },
+    "getText()Ljava/lang/String;": () => "",
+    "getPositionDescription()Ljava/lang/String;": () => "<webdroid xml>",
+    "isEmptyElementTag()Z": function (this: JXmlParser) {
+      const e = this.events[this.pos];
+      return e?.type === 2 && !e.node?.children.length ? 1 : 0;
+    },
+  },
+});
+rt.register({
+  name: "android/util/Xml", ctor: class extends JObj {},
+  methods: {
+    // our XmlResourceParser already implements AttributeSet
+    "static asAttributeSet(Lorg/xmlpull/v1/XmlPullParser;)Landroid/util/AttributeSet;": (p: unknown) => p,
+  },
+});
+rt.register({ name: "org/xmlpull/v1/XmlPullParser", ctor: class extends JObj {},
+  statics: { START_DOCUMENT: 0, END_DOCUMENT: 1, START_TAG: 2, END_TAG: 3, TEXT: 4 } });

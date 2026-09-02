@@ -1,0 +1,807 @@
+// DEX bytecode → JS source. One `new Function` per class attaching methods to the
+// linked ctor shell. Control flow: `for(;;) switch(pc)` over basic blocks; DEX try
+// ranges → JS catch with pc-range dispatch. All methods async except provably-sync
+// leaves (no invokes / static ops / allocations); call sites guard dynamically:
+// `$t instanceof Promise ? await $t : $t`.
+
+import type { DexFile, CodeItem, EncodedMethod } from "./dex";
+import { OPS, FMT_LEN, insnLen, type Fmt } from "./opcodes";
+import { mangleMethod, parseMethodDesc, isWide, descToName } from "./abi";
+import { ACC, type Runtime, type ClassInfo } from "./runtime";
+
+const s4 = (v: number) => (v << 28) >> 28;
+const s8 = (v: number) => (v << 24) >> 24;
+const s16 = (v: number) => (v << 16) >> 16;
+
+interface Ins {
+  pc: number; op: number; name: string; fmt: Fmt; len: number;
+  a: number; b: number; c: number;
+  regs: number[];       // 35c/3rc arg regs
+  wideLit: bigint;      // 51l
+  constKind?: "F" | "D"; // const reinterpreted as float/double (set by typeConsts)
+}
+
+function decode(insns: Uint16Array, pc: number): Ins {
+  const u = insns[pc];
+  const op = u & 0xff;
+  const entry = OPS[op];
+  if (!entry) throw new Error(`bad opcode 0x${op.toString(16)}`);
+  const [name, fmt] = entry;
+  const ins: Ins = { pc, op, name, fmt, len: FMT_LEN[fmt], a: 0, b: 0, c: 0, regs: [], wideLit: 0n };
+  switch (fmt) {
+    case "10x": break;
+    case "12x": ins.a = (u >> 8) & 0xf; ins.b = u >> 12; break;
+    case "11n": ins.a = (u >> 8) & 0xf; ins.b = s4(u >> 12); break;
+    case "11x": ins.a = u >> 8; break;
+    case "10t": ins.a = s8(u >> 8); break;
+    case "20t": ins.a = s16(insns[pc + 1]); break;
+    case "22x": ins.a = u >> 8; ins.b = insns[pc + 1]; break;
+    case "21t": case "21s": case "21h": ins.a = u >> 8; ins.b = s16(insns[pc + 1]); break;
+    case "21c": ins.a = u >> 8; ins.b = insns[pc + 1]; break;
+    case "23x": ins.a = u >> 8; ins.b = insns[pc + 1] & 0xff; ins.c = insns[pc + 1] >> 8; break;
+    case "22b": ins.a = u >> 8; ins.b = insns[pc + 1] & 0xff; ins.c = s8(insns[pc + 1] >> 8); break;
+    case "22t": case "22s": ins.a = (u >> 8) & 0xf; ins.b = u >> 12; ins.c = s16(insns[pc + 1]); break;
+    case "22c": ins.a = (u >> 8) & 0xf; ins.b = u >> 12; ins.c = insns[pc + 1]; break;
+    case "30t": ins.a = insns[pc + 1] | (insns[pc + 2] << 16); break;
+    case "32x": ins.a = insns[pc + 1]; ins.b = insns[pc + 2]; break;
+    case "31i": case "31t": ins.a = u >> 8; ins.b = insns[pc + 1] | (insns[pc + 2] << 16); break;
+    case "31c": ins.a = u >> 8; ins.b = (insns[pc + 1] | (insns[pc + 2] << 16)) >>> 0; break;
+    case "35c": {
+      ins.a = u >> 12; ins.b = insns[pc + 1];
+      const r = insns[pc + 2];
+      const all = [r & 0xf, (r >> 4) & 0xf, (r >> 8) & 0xf, (r >> 12) & 0xf, (u >> 8) & 0xf];
+      ins.regs = all.slice(0, ins.a);
+      break;
+    }
+    case "3rc": {
+      ins.a = u >> 8; ins.b = insns[pc + 1];
+      const first = insns[pc + 2];
+      for (let i = 0; i < ins.a; i++) ins.regs.push(first + i);
+      break;
+    }
+    case "45cc": case "4rcc": throw new Error("invoke-polymorphic unsupported");
+    case "51l": {
+      ins.a = u >> 8;
+      ins.wideLit = BigInt.asIntN(64,
+        BigInt(insns[pc + 1]) | (BigInt(insns[pc + 2]) << 16n) |
+        (BigInt(insns[pc + 3]) << 32n) | (BigInt(insns[pc + 4]) << 48n));
+      break;
+    }
+  }
+  return ins;
+}
+
+/** Generating a method's JS source costs ~4x what handing it to `new Function` does, and on
+ *  mihon's boot only 31% of the methods of the classes we load are ever called. So a body is
+ *  emitted as a thunk that compiles itself on first call. Set false to compile everything up
+ *  front (scripts/smoke.ts, which exists to surface compile failures). */
+let lazyMethods = true;
+export function setLazyMethods(v: boolean) { lazyMethods = v; }
+
+export function compileClassSource(R: Runtime, dex: DexFile, info: ClassInfo): string {
+  const def = info.def!;
+  const out: string[] = [];
+  info.lazy = lazyMethods ? [] : undefined;
+  for (const list of [def.directMethods, def.virtualMethods]) {
+    for (const m of list) {
+      if (m.codeOff) out.push(info.lazy ? emitLazy(dex, info, m) : emitMethod(R, dex, info, m));
+      else if (m.flags & ACC.NATIVE) out.push(emitNativeStub(R, dex, info, m));
+    }
+  }
+  return out.join("\n");
+}
+
+/** `C.prototype.m$x = function(p0){ return (cell || (cell = R.lz(C, i))).call(this, p0) }`
+ *  — the cell keeps already-captured references (D.dp direct-dispatch slots, interface
+ *  default methods copied down) one call away, while fresh virtual dispatch finds the real
+ *  function R.lz installed on the prototype. */
+function emitLazy(dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
+  const { name, desc, mangled } = methodKey(dex, m.methodIdx);
+  const isStatic = (m.flags & ACC.STATIC) !== 0;
+  const i = info.lazy!.length;
+  info.lazy!.push({ m, mangled, isStatic, name, desc });
+  const ps = parseMethodDesc(desc).params.map((_, j) => "p" + j).join(",");
+  return `let $z${i};${isStatic ? "C" : "C.prototype"}.${mangled}=function(${ps}){` +
+    `return ($z${i}||($z${i}=R.lz(C,${i}))).call(this${ps ? "," + ps : ""})};`;
+}
+
+/** Compile one lazily-emitted method and install it. */
+export type CompiledCtor = { $i: ClassInfo; prototype: Record<string, unknown> } & Record<string, unknown>;
+export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unknown {
+  const info = C.$i;
+  const rec = info.lazy![i];
+  const target = rec.isStatic ? C : C.prototype;
+  const src = emitMethod(R, info.dex!, info, rec.m);
+  const mk = new Function("C", "D", "R", "S", src);
+  mk(C, R.dexLink(info.dex!), R, info.superInfo?.ctor ?? undefined);
+  return target[rec.mangled];
+}
+
+export function methodKey(dex: DexFile, methodIdx: number): { name: string; desc: string; mangled: string } {
+  const name = dex.method(methodIdx).name, desc = dex.methodDesc(methodIdx);
+  return { name, desc, mangled: mangleMethod(name, desc) };
+}
+
+function emitNativeStub(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
+  const { name, desc, mangled } = methodKey(dex, m.methodIdx);
+  const isStatic = (m.flags & ACC.STATIC) !== 0;
+  const target = isStatic ? "C" : "C.prototype";
+  return `${target}.${mangled} = R.jniFn(${JSON.stringify(info.name)}, ${JSON.stringify(name + desc)}) ?? function(){ throw R.unimplemented(${JSON.stringify(info.name + "." + name + desc + " [native]")}); };`;
+}
+
+function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
+  const { name, desc, mangled } = methodKey(dex, m.methodIdx);
+  const code = dex.code(m.codeOff);
+  const isStatic = (m.flags & ACC.STATIC) !== 0;
+  try {
+    const body = new MethodCompiler(R, dex, info, code, isStatic, desc, name).compile();
+    return `${isStatic ? "C" : "C.prototype"}.${mangled} = ${body};`;
+  } catch (e) {
+    const msg = `compile error ${info.name}.${name}${desc}: ${e}`;
+    console.warn(msg);
+    return `${isStatic ? "C" : "C.prototype"}.${mangled} = function(){ throw R.unimplemented(${JSON.stringify(msg)}); };`;
+  }
+}
+
+class MethodCompiler {
+  ins: Map<number, Ins> = new Map();
+  order: number[] = [];
+  leaders = new Set<number>();
+  hasTries: boolean;
+  sync = true;
+  src: string[] = [];
+
+  constructor(
+    private R: Runtime, private dex: DexFile, private info: ClassInfo,
+    private code: CodeItem, private isStatic: boolean, private desc: string,
+    private mname = "?",
+  ) {
+    this.hasTries = code.tries.length > 0;
+  }
+
+  compile(): string {
+    const { code } = this;
+    const insns = code.insns;
+    // decode all
+    let pc = 0;
+    while (pc < insns.length) {
+      const u = insns[pc];
+      if ((u & 0xff) === 0 && (u >> 8) !== 0) { pc += insnLen(insns, pc); continue; } // payload
+      const ins = decode(insns, pc);
+      ins.len = insnLen(insns, pc);
+      this.ins.set(pc, ins);
+      this.order.push(pc);
+      pc += ins.len;
+    }
+    // leaders
+    this.leaders.add(0);
+    for (const pc2 of this.order) {
+      const i = this.ins.get(pc2)!;
+      const t = this.branchTargets(i);
+      for (const x of t) this.leaders.add(x);
+      if (t.length || /^(return|throw|goto)/.test(i.name)) this.leaders.add(pc2 + i.len);
+    }
+    for (const t of code.tries) {
+      this.leaders.add(t.start); this.leaders.add(t.end);
+      for (const [, addr] of t.handlers) this.leaders.add(addr);
+      if (t.catchAllAddr >= 0) this.leaders.add(t.catchAllAddr);
+    }
+
+    this.typeConsts();
+    // scan for sync eligibility
+    for (const pc2 of this.order) {
+      const i = this.ins.get(pc2)!;
+      if (i.name.startsWith("invoke") || i.name.startsWith("sget") || i.name.startsWith("sput") ||
+          i.name === "new-instance" || i.name === "filled-new-array" || i.name === "filled-new-array/range") {
+        this.sync = false;
+        break;
+      }
+    }
+
+    // emit blocks
+    const blocks: string[] = [];
+    let cur: string[] | null = null;
+    for (const pc2 of this.order) {
+      if (this.leaders.has(pc2)) {
+        if (cur) blocks.push(cur.join("\n"));
+        cur = [`case ${pc2}:${this.hasTries ? `pc=${pc2};` : ""}`];
+      }
+      this.emitIns(this.ins.get(pc2)!, cur!);
+    }
+    if (cur) blocks.push(cur.join("\n"));
+
+    // params
+    const { params } = parseMethodDesc(this.desc);
+    const regs = this.code.regs, ins = this.code.ins;
+    let reg = regs - ins;
+    const jsParams: string[] = [];
+    const paramInit: string[] = [];
+    const paramRegs = new Set<number>();
+    if (!this.isStatic) { paramInit.push(`let v${reg}=this;`); paramRegs.add(reg); reg++; }
+    for (let i = 0; i < params.length; i++) {
+      jsParams.push(`p${i}`);
+      paramInit.push(`let v${reg}=p${i};`);
+      paramRegs.add(reg);
+      reg += isWide(params[i]) ? 2 : 1;
+    }
+    const decls: string[] = [];
+    for (let i = 0; i < regs; i++) if (!paramRegs.has(i)) decls.push(`v${i}`);
+    const declStr = decls.length ? `let ${decls.join(",")};` : "";
+
+    const catchBody = this.hasTries ? this.emitCatch() : "throw $e;";
+    const nameLit = JSON.stringify(this.info.name + "." + this.mname);
+    return `${this.sync ? "function" : "async function"}(${jsParams.join(",")}){
+${paramInit.join("")}${declStr}let $t,$u,$ex,$fu,pc=0,$lc=0;${this.sync ? "" : "const $th=R.th();"}
+for(;;)try{
+if(++$lc>5000000)throw new Error("loopbomb "+${nameLit}+" pc="+pc);
+switch(pc){
+${blocks.join("\n")}
+default: throw new Error("bad pc "+pc);
+}
+}catch($e){
+$e=R.jx($e);
+${catchBody}
+}
+}`;
+  }
+
+  /**
+   * Reaching definitions over the block CFG: type the const instructions whose value is
+   * consumed as float/double (Dalvik registers are untyped, and `const/high16 0x4100` is the
+   * BITS of 8.0f, not the integer 1090519040).
+   *
+   * This has to be a real dataflow, not a linear pc-order scan. R8 merges dozens of lambda
+   * bodies into one method behind a packed-switch with a shared const preamble; in pc order a
+   * write to the register inside a mutually exclusive arm looks like it kills the preamble's
+   * const, even though on every real path from the switch to the use nothing writes it. That
+   * miss is what left Compose holding `Dp(1090519040)` and blew a padding up to 2^26.
+   *
+   * Def sets only grow and array kinds only shrink, so the fixpoint terminates.
+   */
+  private typeConsts() {
+    const { dex } = this;
+    type Defs = Map<number, Set<Ins>>;
+    type Arrs = Map<number, "F" | "D">;
+
+    // ── block CFG (leaders are already computed by compile())
+    const leaders = this.order.filter((pc) => this.leaders.has(pc));
+    const body = new Map<number, number[]>();   // leader → its instruction pcs
+    let cur = -1;
+    for (const pc of this.order) {
+      if (this.leaders.has(pc)) body.set((cur = pc), []);
+      body.get(cur)!.push(pc);
+    }
+    const succ = new Map<number, number[]>();
+    for (const [lead, pcs] of body) {
+      const last = this.ins.get(pcs[pcs.length - 1])!;
+      const out = new Set(this.branchTargets(last).filter((t) => body.has(t)));
+      // fall-through, unless the block ends in an unconditional transfer
+      if (!/^(goto|return|throw)/.test(last.name)) {
+        const next = last.pc + last.len;
+        if (body.has(next)) out.add(next);
+      }
+      succ.set(lead, [...out]);
+    }
+    // an exception can leave any instruction in a try range, so every block that overlaps the
+    // range reaches the handlers.
+    for (const t of this.code.tries) {
+      const hs = t.handlers.map(([, a]) => a).concat(t.catchAllAddr >= 0 ? [t.catchAllAddr] : []);
+      for (const [lead, pcs] of body) {
+        if (pcs[pcs.length - 1] < t.start || lead >= t.end) continue;
+        const out = succ.get(lead)!;
+        for (const h of hs) if (body.has(h) && !out.includes(h)) out.push(h);
+      }
+    }
+
+    // ── transfer: apply one block to a state, optionally marking consumers
+    const retType = parseMethodDesc(this.desc).ret;
+    const run = (lead: number, defs: Defs, arr: Arrs, doMark: boolean) => {
+      const mark = doMark
+        ? (reg: number, kind: "F" | "D") => { const ds = defs.get(reg); if (ds) for (const w of ds) if (!w.constKind) w.constKind = kind; }
+        : () => {};
+      for (const pc of body.get(lead)!) {
+        const i = this.ins.get(pc)!;
+        const n = i.name;
+        // consumers
+        if (/^(add|sub|mul|div|rem)-float/.test(n) || n === "neg-float" || n.startsWith("cmpl-float") || n.startsWith("cmpg-float") ||
+            n === "float-to-int" || n === "float-to-long" || n === "float-to-double") {
+          if (n.endsWith("/2addr")) { mark(i.a, "F"); mark(i.b, "F"); }
+          else if (n.startsWith("neg") || n.startsWith("float-to")) mark(i.b, "F");
+          else { mark(i.b, "F"); mark(i.c, "F"); }
+        } else if (/^(add|sub|mul|div|rem)-double/.test(n) || n === "neg-double" || n.startsWith("cmpl-double") || n.startsWith("cmpg-double") ||
+            n === "double-to-int" || n === "double-to-long" || n === "double-to-float") {
+          if (n.endsWith("/2addr")) { mark(i.a, "D"); mark(i.b, "D"); }
+          else if (n.startsWith("neg") || n.startsWith("double-to")) mark(i.b, "D");
+          else { mark(i.b, "D"); mark(i.c, "D"); }
+        } else if (n === "aput" || n === "aput-wide") {
+          const k = arr.get(i.b);
+          if (k) mark(i.a, k);
+        } else if (n.startsWith("iput") || n.startsWith("sput")) {
+          const ft = dex.type(dex.field(n.startsWith("iput") ? i.c : i.b).type);
+          if (ft === "F") mark(i.a, "F");
+          else if (ft === "D") mark(i.a, "D");
+        } else if (n.startsWith("invoke") && !n.startsWith("invoke-custom")) {
+          const mref = dex.method(i.b);
+          const proto = dex.proto(mref.proto);
+          const isInstance = !n.startsWith("invoke-static");
+          let ri = isInstance ? 1 : 0;
+          for (const pt of proto.params.map((t) => dex.type(t))) {
+            if (pt === "F") mark(i.regs[ri], "F");
+            else if (pt === "D") mark(i.regs[ri], "D");
+            ri += isWide(pt) ? 2 : 1;
+          }
+        } else if (n === "return" && retType === "F") mark(i.a, "F");
+        else if (n === "return-wide" && retType === "D") mark(i.a, "D");
+
+        // float/double array registers (from new-array [F/[D) so aput types its value const
+        if (n === "new-array") {
+          const t = dex.type(i.c);
+          if (t === "[F") arr.set(i.a, "F");
+          else if (t === "[D") arr.set(i.a, "D");
+          else arr.delete(i.a);
+        } else if (n === "move-object" || n === "move-object/from16" || n === "move-object/16") {
+          const k = arr.get(i.b);
+          if (k) arr.set(i.a, k); else arr.delete(i.a);
+        } else if (this.writtenReg(i) >= 0) arr.delete(this.writtenReg(i));
+
+        // defs: a const kills whatever reached this register; a move copies the source's set
+        if (n.startsWith("const/") || n === "const" || n.startsWith("const-wide")) {
+          defs.set(i.a, new Set([i]));
+        } else if (n === "move" || n === "move/from16" || n === "move/16" || n === "move-wide" || n === "move-wide/from16" || n === "move-wide/16") {
+          const src = defs.get(i.b);
+          if (src) defs.set(i.a, new Set(src)); else defs.delete(i.a);
+        } else {
+          const w = this.writtenReg(i);
+          if (w >= 0) defs.delete(w);
+        }
+      }
+      return { defs, arr };
+    };
+
+    // A single-block method has no merges: one pass IS the fixpoint.
+    if (leaders.length === 1) { run(leaders[0], new Map(), new Map(), true); return; }
+
+    // ── fixpoint on block entry states. `null` array-kinds = no predecessor seen yet, which
+    // is what lets the meet be an intersection without swallowing the first contribution.
+    const inDefs = new Map<number, Defs>(leaders.map((l) => [l, new Map()] as const));
+    const inArrs = new Map<number, Arrs | null>(leaders.map((l) => [l, null] as const));
+    inArrs.set(leaders[0], new Map());
+    const work = [...leaders];
+    const queued = new Set(leaders);
+    while (work.length) {
+      const lead = work.shift()!;
+      queued.delete(lead);
+      const st = run(lead, clone(inDefs.get(lead)!), new Map(inArrs.get(lead) ?? []), false);
+      for (const t of succ.get(lead)!) {
+        let changed = false;
+        const dst = inDefs.get(t)!;
+        for (const [reg, set] of st.defs) {
+          const d = dst.get(reg);
+          if (!d) { dst.set(reg, new Set(set)); changed = true; continue; }
+          for (const x of set) if (!d.has(x)) { d.add(x); changed = true; }
+        }
+        const da = inArrs.get(t);
+        if (da === null || da === undefined) { inArrs.set(t, new Map(st.arr)); changed = true; }
+        else for (const [k, v] of [...da]) if (st.arr.get(k) !== v) { da.delete(k); changed = true; }
+        if (changed && !queued.has(t)) { queued.add(t); work.push(t); }
+      }
+    }
+
+    // ── one marking pass per block, from its settled entry state
+    for (const l of leaders) run(l, clone(inDefs.get(l)!), new Map(inArrs.get(l) ?? []), true);
+
+    function clone(d: Defs): Defs {
+      const o: Defs = new Map();
+      for (const [k, v] of d) o.set(k, new Set(v));
+      return o;
+    }
+  }
+  private writtenReg(i: Ins): number {
+    const n = i.name;
+    if (/^(if|goto|return|throw|nop|monitor|aput|iput|sput|invoke|packed|sparse|fill-array|check-cast)/.test(n)) return -1;
+    return i.a;
+  }
+
+  private emitCatch(): string {
+    const parts: string[] = ["$ex=$e;"];
+    for (const t of this.code.tries) {
+      const checks: string[] = [];
+      for (const [typeIdx, addr] of t.handlers) {
+        const tname = descToName(this.dex.type(typeIdx));
+        if (tname === "java/lang/Throwable") checks.push(`{pc=${addr};continue;}`);
+        else checks.push(`if(R.iof($e,${JSON.stringify(tname)})){pc=${addr};continue;}`);
+      }
+      if (t.catchAllAddr >= 0) checks.push(`{pc=${t.catchAllAddr};continue;}`);
+      parts.push(`if(pc>=${t.start}&&pc<${t.end}){${checks.join("")}}`);
+    }
+    parts.push("throw $e;");
+    return parts.join("\n");
+  }
+
+  private branchTargets(i: Ins): number[] {
+    switch (i.name) {
+      case "goto": case "goto/16": case "goto/32": return [i.pc + i.a];
+      case "packed-switch": case "sparse-switch": {
+        const targets = [];
+        const payload = i.pc + i.b;
+        const insns = this.code.insns;
+        if (i.name === "packed-switch") {
+          const size = insns[payload + 1];
+          for (let j = 0; j < size; j++) {
+            targets.push(i.pc + (insns[payload + 4 + j * 2] | (insns[payload + 5 + j * 2] << 16)));
+          }
+        } else {
+          const size = insns[payload + 1];
+          for (let j = 0; j < size; j++) {
+            const off = payload + 2 + size * 2 + j * 2;
+            targets.push(i.pc + (insns[off] | (insns[off + 1] << 16)));
+          }
+        }
+        return targets;
+      }
+      default:
+        if (i.name.startsWith("if-")) return [i.pc + (i.fmt === "22t" ? i.c : i.b)];
+        return [];
+    }
+  }
+
+  // inside <clinit>: pass own type idx so the runtime can detect clinit cycles
+  private get fromArg(): string {
+    return this.mname === "<clinit>" && this.info.def ? `,${this.info.def.typeIdx}` : "";
+  }
+
+  // shorthand emit helpers
+  private guard(expr: string, out: string[], assignTo = "$t") {
+    if (this.sync) { out.push(`${assignTo}=${expr};`); return; }
+    // re-pin the frame's thread identity after every suspension: other chains set
+    // the global current-thread while we were parked (continuation-local restore)
+    out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise){${assignTo}=await ${assignTo};R.st($th);}`);
+  }
+
+  private fieldProp(fieldIdx: number): string {
+    return this.R.resolveInstanceField(this.dex, fieldIdx);
+  }
+
+  private emitIns(i: Ins, out: string[]) {
+    const { dex } = this;
+    const A = `v${i.a}`, B = `v${i.b}`, C = `v${i.c}`;
+    switch (i.name) {
+      case "nop": break;
+      case "move": case "move/from16": case "move/16":
+      case "move-wide": case "move-wide/from16": case "move-wide/16":
+      case "move-object": case "move-object/from16": case "move-object/16":
+        out.push(`${A}=${B};`); break;
+      case "move-result": case "move-result-wide": case "move-result-object":
+        out.push(`${A}=$t;`); break;
+      case "move-exception": out.push(`${A}=$ex;`); break;
+      case "return-void": out.push("return;"); break;
+      case "return": case "return-wide": out.push(`return ${A};`); break;
+      case "return-object": out.push(`return ${A}===0?null:${A};`); break;
+      case "const/4": case "const/16": case "const":
+        out.push(`${A}=${i.constKind === "F" ? f32bits(i.b) : i.b};`);
+        break;
+      case "const/high16":
+        out.push(`${A}=${i.constKind === "F" ? f32bits(i.b << 16) : i.b << 16};`);
+        break;
+      case "const-wide/16": case "const-wide/32":
+        out.push(`${A}=${i.constKind === "D" ? f64bits(BigInt(i.b)) : `${i.b}n`};`);
+        break;
+      case "const-wide":
+        out.push(`${A}=${i.constKind === "D" ? f64bits(i.wideLit) : `${i.wideLit}n`};`);
+        break;
+      case "const-wide/high16":
+        out.push(`${A}=${i.constKind === "D" ? f64bits(BigInt(i.b) << 48n) : `${BigInt(i.b) << 48n}n`};`);
+        break;
+      case "const-string": case "const-string/jumbo":
+        out.push(`${A}=D.s[${i.b}]??D.gs(${i.b});`); break;
+      case "const-class":
+        out.push(`${A}=R.classForIdx(D,${i.b});`); break;
+      case "monitor-enter": case "monitor-exit": break; // cooperative single-thread: no-op
+      case "check-cast":
+        out.push(`R.cc(${A},${JSON.stringify(descToName(dex.type(i.b)))});`); break;
+      case "instance-of":
+        out.push(`${A}=R.iof(${B},${JSON.stringify(descToName(dex.type(i.c)))});`); break;
+      case "array-length": out.push(`${A}=${B}.length;`); break;
+      case "new-instance": {
+        const tname = descToName(dex.type(i.b));
+        if (tname === "java/lang/String") { out.push(`${A}="";`); break; }
+        if (tname === this.info.name) out.push(`$u=D.cl[${i.b}]??D.link(${i.b});`);
+        else this.guard(`D.ic[${i.b}]??D.init(${i.b}${this.fromArg})`, out, "$u");
+        out.push(`${A}=new $u();`);
+        break;
+      }
+      case "new-array": {
+        const elem = descToName(dex.type(i.c)).slice(1); // strip one [
+        out.push(`${A}=${newArrayExpr(elem, B)};`);
+        break;
+      }
+      case "filled-new-array": case "filled-new-array/range": {
+        const elem = dex.type(i.b).slice(1);
+        const vals = i.regs.map((r) => `v${r}`).join(",");
+        if (elem[0] === "L" || elem[0] === "[") {
+          out.push(`$t=R.oa(${i.regs.length},${JSON.stringify(elem)});${i.regs.map((r, j) => `$t[${j}]=v${r}===0?null:v${r};`).join("")}`);
+        } else {
+          out.push(`$t=${typedArrayCtor(elem)}.of(${vals});`);
+        }
+        break;
+      }
+      case "fill-array-data": {
+        const payload = i.pc + i.b;
+        const insns = this.code.insns;
+        const width = insns[payload + 1];
+        const count = insns[payload + 2] | (insns[payload + 3] << 16);
+        const bytes: number[] = [];
+        for (let j = 0; j < Math.ceil(count * width / 2); j++) {
+          bytes.push(insns[payload + 4 + j] & 0xff, insns[payload + 4 + j] >> 8);
+        }
+        const lits: string[] = [];
+        for (let j = 0; j < count; j++) {
+          let v = 0n;
+          for (let k = 0; k < width; k++) v |= BigInt(bytes[j * width + k]) << BigInt(k * 8);
+          if (width === 8) lits.push(BigInt.asIntN(64, v).toString() + "n");
+          else lits.push(String(v)); // stored raw; typed array coerces on set
+        }
+        out.push(`R.fad(${A},[${lits.join(",")}]);`);
+        break;
+      }
+      case "throw": out.push(`throw ${A};`); break;
+      case "goto": case "goto/16": case "goto/32": out.push(this.jumpStr(i.pc + i.a, i.pc)); break;
+      case "packed-switch": case "sparse-switch": {
+        const insns = this.code.insns;
+        const payload = i.pc + i.b;
+        const cases: string[] = [];
+        if (i.name === "packed-switch") {
+          const size = insns[payload + 1];
+          const first = (insns[payload + 2] | (insns[payload + 3] << 16));
+          for (let j = 0; j < size; j++) {
+            const t = i.pc + (insns[payload + 4 + j * 2] | (insns[payload + 5 + j * 2] << 16));
+            cases.push(`case ${first + j}:${this.jumpStr(t, i.pc)}`);
+          }
+        } else {
+          const size = insns[payload + 1];
+          for (let j = 0; j < size; j++) {
+            const k = insns[payload + 2 + j * 2] | (insns[payload + 3 + j * 2] << 16);
+            const off = payload + 2 + size * 2 + j * 2;
+            const t = i.pc + (insns[off] | (insns[off + 1] << 16));
+            cases.push(`case ${k}:${this.jumpStr(t, i.pc)}`);
+          }
+        }
+        out.push(`switch(${A}){${cases.join("")}}`);
+        break;
+      }
+      case "cmpl-float": case "cmpl-double":
+        out.push(`${A}=${B}<${C}?-1:${B}>${C}?1:${B}===${C}?0:-1;`); break;
+      case "cmpg-float": case "cmpg-double":
+        out.push(`${A}=${B}<${C}?-1:${B}>${C}?1:${B}===${C}?0:1;`); break;
+      case "cmp-long":
+        out.push(`${A}=${B}<${C}?-1:${B}>${C}?1:0;`); break;
+      case "if-eq": this.emitIf(`(${A}===${B}||(${nz(A)}&&${nz(B)}))`, i, out); break;
+      case "if-ne": this.emitIf(`!(${A}===${B}||(${nz(A)}&&${nz(B)}))`, i, out); break;
+      case "if-lt": this.emitIf(`${A}<${B}`, i, out); break;
+      case "if-ge": this.emitIf(`${A}>=${B}`, i, out); break;
+      case "if-gt": this.emitIf(`${A}>${B}`, i, out); break;
+      case "if-le": this.emitIf(`${A}<=${B}`, i, out); break;
+      case "if-eqz": this.emitIfz(nz(A), i, out); break;
+      case "if-nez": this.emitIfz(`!${nz(A)}`, i, out); break;
+      case "if-ltz": this.emitIfz(`${A}<0`, i, out); break;
+      case "if-gez": this.emitIfz(`${A}>=0`, i, out); break;
+      case "if-gtz": this.emitIfz(`${A}>0`, i, out); break;
+      case "if-lez": this.emitIfz(`${A}<=0`, i, out); break;
+      default:
+        if (i.name.startsWith("aget")) {
+          out.push(`if((${C}>>>0)>=${B}.length)R.aio(${C},${B}.length);${A}=${B}[${C}];`);
+        } else if (i.name.startsWith("aput")) {
+          const val = i.name === "aput-object" ? `(${A}===0?null:${A})` : A;
+          out.push(`if((${C}>>>0)>=${B}.length)R.aio(${C},${B}.length);${B}[${C}]=${val};`);
+        } else if (i.name.startsWith("iget")) {
+          out.push(`${A}=${B}.${this.fieldProp(i.c)};`);
+        } else if (i.name.startsWith("iput")) {
+          const ft = this.dex.type(this.dex.field(i.c).type);
+          const val = (ft[0] === "L" || ft[0] === "[") ? `(${A}===0?null:${A})` : A;
+          out.push(`${B}.${this.fieldProp(i.c)}=${val};`);
+        } else if (i.name.startsWith("sget")) {
+          this.emitStaticField(i, out, true);
+        } else if (i.name.startsWith("sput")) {
+          this.emitStaticField(i, out, false);
+        } else if (i.name.startsWith("invoke")) {
+          this.emitInvoke(i, out);
+        } else {
+          this.emitArith(i, out);
+        }
+    }
+  }
+
+  private jumpStr(target: number, from: number): string {
+    const fuel = !this.sync && target <= from ? "if(--R.fuel<0){$fu=R.refuel();if($fu){await $fu;R.st($th);}}" : "";
+    return `${fuel}pc=${target};continue;`;
+  }
+
+  private emitIf(cond: string, i: Ins, out: string[]) {
+    out.push(`if(${cond}){${this.jumpStr(i.pc + i.c, i.pc)}}`);
+  }
+  private emitIfz(cond: string, i: Ins, out: string[]) {
+    out.push(`if(${cond}){${this.jumpStr(i.pc + i.b, i.pc)}}`);
+  }
+
+  private emitStaticField(i: Ins, out: string[], isGet: boolean) {
+    const { prop, typeIdx } = this.R.resolveStaticField(this.dex, i.b);
+    if (typeIdx >= 0 && descToName(this.dex.type(typeIdx)) === this.info.name) {
+      out.push(`$u=D.cl[${typeIdx}]??D.link(${typeIdx});`);
+    } else if (typeIdx >= 0) {
+      this.guard(`D.ic[${typeIdx}]??D.init(${typeIdx}${this.fromArg})`, out, "$u");
+    } else {
+      this.guard(`D.fs[${i.b}]??D.rsf(${i.b}${this.fromArg})`, out, "$u");
+    }
+    const ft = this.dex.type(this.dex.field(i.b).type);
+    const isRef = ft[0] === "L" || ft[0] === "[";
+    const A = `v${i.a}`;
+    out.push(isGet ? `${A}=$u.${prop};` : `$u.${prop}=${isRef ? `(${A}===0?null:${A})` : A};`);
+  }
+
+  private emitInvoke(i: Ins, out: string[]) {
+    const { dex } = this;
+    const mref = dex.method(i.b);
+    const proto = dex.proto(mref.proto);
+    const desc = "(" + proto.params.map((t) => dex.type(t)).join("") + ")" + dex.type(proto.ret);
+    const mangled = mangleMethod(mref.name, desc);
+    const clsName = descToName(dex.type(mref.cls));
+    const kind = i.name.replace("/range", "");
+
+    // collapse wide args: regs list per param shorty; 0→null for ref params
+    const isInstance = kind !== "invoke-static";
+    const args: string[] = [];
+    let ri = isInstance ? 1 : 0;
+    for (const p of proto.params.map((t) => dex.type(t))) {
+      const r = `v${i.regs[ri]}`;
+      args.push(p[0] === "L" || p[0] === "[" ? `(${r}===0?null:${r})` : r);
+      ri += isWide(p) ? 2 : 1;
+    }
+    const recv = isInstance ? `v${i.regs[0]}` : "";
+    const argStr = args.join(",");
+
+    if (clsName[0] === "[") {
+      // methods on array types (clone/getClass/…)
+      out.push(`$t=R.arrCall(${recv},${JSON.stringify(mref.name)});`);
+      return;
+    }
+    switch (kind) {
+      case "invoke-virtual": case "invoke-interface":
+        this.guard(`${recv}.${mangled}(${argStr})`, out);
+        break;
+      case "invoke-super": {
+        // resolve against the superclass prototype; an interface-default super call
+        // (Iface.super.m()) instead resolves on the declared interface's prototype
+        out.push(`$t=(S.prototype.${mangled}??(D.cl[${mref.cls}]??D.link(${mref.cls})).prototype.${mangled}??R.nsm(${JSON.stringify(clsName + "." + mref.name + desc + " (super)")})).call(${recv}${argStr ? "," + argStr : ""});`);
+        if (!this.sync) out.push(`if($t instanceof Promise){$t=await $t;R.st($th);}`);
+        break;
+      }
+      case "invoke-direct": {
+        if (clsName === "java/lang/String" && mref.name === "<init>") {
+          out.push(`${recv}=R.newStr(${JSON.stringify(desc)},[${argStr}]);`);
+          break;
+        }
+        // same-class: entry into this class's code implies inited (or initing in
+        // this chain — JVM reentrancy); skip init to avoid clinit self-deadlock
+        if (clsName === this.info.name) out.push(`$u=D.dp[${i.b}]??D.rdp0(${i.b});`);
+        else this.guard(`D.dp[${i.b}]??D.rdp(${i.b}${this.fromArg})`, out, "$u");
+        this.guard(`$u.call(${recv}${argStr ? "," + argStr : ""})`, out);
+        break;
+      }
+      case "invoke-static": {
+        if (clsName === this.info.name) out.push(`$u=D.cl[${mref.cls}]??D.link(${mref.cls});`);
+        else this.guard(`D.ic[${mref.cls}]??D.init(${mref.cls}${this.fromArg})`, out, "$u");
+        this.guard(`$u.${mangled}(${argStr})`, out);
+        break;
+      }
+    }
+  }
+
+  private emitArith(i: Ins, out: string[]) {
+    const A = `v${i.a}`, B = `v${i.b}`, C = `v${i.c}`;
+    const n = i.name;
+    // unops
+    switch (n) {
+      case "neg-int": out.push(`${A}=(-${B})|0;`); return;
+      case "not-int": out.push(`${A}=~${B};`); return;
+      case "neg-long": out.push(`${A}=BigInt.asIntN(64,-${B});`); return;
+      case "not-long": out.push(`${A}=BigInt.asIntN(64,~${B});`); return;
+      case "neg-float": case "neg-double": out.push(`${A}=-${B};`); return;
+      case "int-to-long": out.push(`${A}=BigInt(${B});`); return;
+      case "int-to-float": out.push(`${A}=Math.fround(${B});`); return;
+      case "int-to-double": out.push(`${A}=${B};`); return;
+      case "long-to-int": out.push(`${A}=Number(BigInt.asIntN(32,${B}));`); return;
+      case "long-to-float": out.push(`${A}=Math.fround(Number(${B}));`); return;
+      case "long-to-double": out.push(`${A}=Number(${B});`); return;
+      case "float-to-int": case "double-to-int": out.push(`${A}=R.f2i(${B});`); return;
+      case "float-to-long": case "double-to-long": out.push(`${A}=R.f2l(${B});`); return;
+      case "float-to-double": out.push(`${A}=${B};`); return;
+      case "double-to-float": out.push(`${A}=Math.fround(${B});`); return;
+      case "int-to-byte": out.push(`${A}=(${B}<<24)>>24;`); return;
+      case "int-to-char": out.push(`${A}=${B}&0xffff;`); return;
+      case "int-to-short": out.push(`${A}=(${B}<<16)>>16;`); return;
+    }
+    // binops
+    const two = n.endsWith("/2addr");
+    const lit = n.includes("/lit") || n === "rsub-int"; // 0xd1 is 22s (literal) despite the bare name
+    const base = n.replace("/2addr", "").replace("/lit16", "").replace("/lit8", "");
+    const [x, y] = two ? [A, B] : lit ? [B, String(i.c)] : [B, C];
+    const litVal = i.c;
+    let expr: string;
+    switch (base) {
+      case "add-int": expr = `(${x}+${y})|0`; break;
+      case "sub-int": expr = `(${x}-${y})|0`; break;
+      case "rsub-int": case "rsub-int/lit8": expr = `(${y}-${x})|0`; break;
+      case "mul-int": expr = `Math.imul(${x},${y})`; break;
+      case "div-int":
+        if (lit && litVal !== 0) expr = `(${x}/${y})|0`;
+        else expr = `(${y}===0?R.dz():0,(${x}/${y})|0)`;
+        break;
+      case "rem-int":
+        if (lit && litVal !== 0) expr = `(${x}%${y})|0`;
+        else expr = `(${y}===0?R.dz():0,(${x}%${y})|0)`;
+        break;
+      case "and-int": expr = `${x}&${y}`; break;
+      case "or-int": expr = `${x}|${y}`; break;
+      case "xor-int": expr = `${x}^${y}`; break;
+      case "shl-int": expr = `${x}<<${y}`; break;
+      case "shr-int": expr = `${x}>>${y}`; break;
+      case "ushr-int": expr = `(${x}>>>${y})|0`; break;
+      case "add-long": expr = `BigInt.asIntN(64,${x}+${y})`; break;
+      case "sub-long": expr = `BigInt.asIntN(64,${x}-${y})`; break;
+      case "mul-long": expr = `BigInt.asIntN(64,${x}*${y})`; break;
+      case "div-long": expr = `(${y}===0n?R.dz():0,BigInt.asIntN(64,${x}/${y}))`; break;
+      case "rem-long": expr = `(${y}===0n?R.dz():0,${x}%${y})`; break;
+      case "and-long": expr = `${x}&${y}`; break;
+      case "or-long": expr = `${x}|${y}`; break;
+      case "xor-long": expr = `${x}^${y}`; break;
+      case "shl-long": expr = `BigInt.asIntN(64,${x}<<BigInt(${y}&63))`; break;
+      case "shr-long": expr = `${x}>>BigInt(${y}&63)`; break;
+      case "ushr-long": expr = `BigInt.asIntN(64,BigInt.asUintN(64,${x})>>BigInt(${y}&63))`; break;
+      case "add-float": expr = `Math.fround(${x}+${y})`; break;
+      case "sub-float": expr = `Math.fround(${x}-${y})`; break;
+      case "mul-float": expr = `Math.fround(${x}*${y})`; break;
+      case "div-float": expr = `Math.fround(${x}/${y})`; break;
+      case "rem-float": expr = `Math.fround(${x}%${y})`; break;
+      case "add-double": expr = `${x}+${y}`; break;
+      case "sub-double": expr = `${x}-${y}`; break;
+      case "mul-double": expr = `${x}*${y}`; break;
+      case "div-double": expr = `${x}/${y}`; break;
+      case "rem-double": expr = `${x}%${y}`; break;
+      default: throw new Error("arith? " + n);
+    }
+    out.push(`${A}=${expr};`);
+  }
+}
+
+function nz(v: string): string { return `(${v}===null||${v}===0)`; }
+
+const bitsBuf = new DataView(new ArrayBuffer(8));
+function f32bits(bits: number): string {
+  bitsBuf.setInt32(0, bits | 0);
+  const v = bitsBuf.getFloat32(0);
+  return Number.isFinite(v) ? String(v) : v !== v ? "NaN" : v > 0 ? "Infinity" : "-Infinity";
+}
+function f64bits(bits: bigint): string {
+  bitsBuf.setBigInt64(0, BigInt.asIntN(64, bits));
+  const v = bitsBuf.getFloat64(0);
+  return Number.isFinite(v) ? String(v) : v !== v ? "NaN" : v > 0 ? "Infinity" : "-Infinity";
+}
+
+function typedArrayCtor(elem: string): string {
+  switch (elem) {
+    case "B": return "Int8Array";
+    case "Z": return "Uint8Array";
+    case "C": return "Uint16Array";
+    case "S": return "Int16Array";
+    case "I": return "Int32Array";
+    case "J": return "BigInt64Array";
+    case "F": return "Float32Array";
+    case "D": return "Float64Array";
+    default: throw new Error("elem " + elem);
+  }
+}
+
+function newArrayExpr(elem: string, lenExpr: string): string {
+  if (elem[0] === "L" || elem[0] === "[") return `R.oa(${lenExpr},${JSON.stringify(elem)})`;
+  return `new ${typedArrayCtor(elem)}(${lenExpr})`;
+}

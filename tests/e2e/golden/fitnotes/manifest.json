@@ -1,0 +1,527 @@
+{
+  "app": "fitnotes",
+  "pkg": "com.github.jamesgay.fitnotes",
+  "activity": "com.github.jamesgay.fitnotes.feature.home.MainActivity",
+  "recordedAt": "2026-08-31T23:09:12.187Z",
+  "pinnedClockMs": 1767355200000,
+  "device": {
+    "width": 720,
+    "height": 1280,
+    "densityDpi": 320,
+    "fingerprint": "google/sdk_gphone64_arm64/emu64a:15/AE3A.240806.043/12960925:userdebug/dev-keys",
+    "sdk": "35"
+  },
+  "crop": {
+    "top": 48,
+    "bottom": 48,
+    "left": 0,
+    "right": 0
+  },
+  "steps": [
+    {
+      "id": "launch",
+      "label": "Launch — welcome dialog",
+      "index": 0,
+      "file": "00-launch.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "unit-metric",
+      "label": "Choose Metric (kgs)",
+      "index": 1,
+      "file": "01-unit-metric.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.56953125
+      },
+      "bounds": [
+        88,
+        691,
+        632,
+        766
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "welcome-ok",
+      "label": "Dismiss welcome dialog",
+      "index": 2,
+      "file": "02-welcome-ok.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.8484375
+      },
+      "bounds": [
+        56,
+        1038,
+        664,
+        1134
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "home-tip-ok",
+      "label": "Dismiss Home tutorial",
+      "index": 3,
+      "file": "03-home-tip-ok.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.8828125
+      },
+      "bounds": [
+        50,
+        1082,
+        670,
+        1178
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "home",
+      "label": "Workout log — empty",
+      "index": 4,
+      "file": "04-home.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "start-workout",
+      "label": "Start New Workout",
+      "index": 5,
+      "file": "05-start-workout.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.75703125
+      },
+      "bounds": [
+        213,
+        888,
+        507,
+        1050
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "exlist-tip-ok",
+      "label": "Dismiss Exercise List tip",
+      "index": 6,
+      "file": "06-exlist-tip-ok.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.75625
+      },
+      "bounds": [
+        50,
+        920,
+        670,
+        1016
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "routines-tip-ok",
+      "label": "Dismiss Workout Routines tip",
+      "index": 7,
+      "file": "07-routines-tip-ok.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.86953125
+      },
+      "bounds": [
+        50,
+        1065,
+        670,
+        1161
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "categories",
+      "label": "Exercise categories (SQLite)",
+      "index": 8,
+      "file": "08-categories.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "cat-biceps",
+      "label": "Open Biceps",
+      "index": 9,
+      "file": "09-cat-biceps.png",
+      "resolved": {
+        "x": 0.45555555555555555,
+        "y": 0.41015625
+      },
+      "bounds": [
+        16,
+        477,
+        640,
+        573
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "ex-barbell-curl",
+      "label": "Open Barbell Curl",
+      "index": 10,
+      "file": "10-ex-barbell-curl.png",
+      "resolved": {
+        "x": 0.4444444444444444,
+        "y": 0.25703125
+      },
+      "bounds": [
+        16,
+        304,
+        624,
+        353
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "1-weight",
+      "label": "Enter weight 60 (set 1)",
+      "index": 11,
+      "file": "11-1-weight.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.27578125
+      },
+      "settleTimedOut": false
+    },
+    {
+      "id": "1-reps",
+      "label": "Enter reps 10 (set 1)",
+      "index": 12,
+      "file": "12-1-reps.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.41484375
+      },
+      "settleTimedOut": false
+    },
+    {
+      "id": "1-save",
+      "label": "SAVE set 1 (60x10)",
+      "index": 13,
+      "file": "13-1-save.png",
+      "resolved": {
+        "x": 0.2777777777777778,
+        "y": 0.5078125
+      },
+      "bounds": [
+        46,
+        611,
+        354,
+        689
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "2-weight",
+      "label": "Enter weight 65 (set 2)",
+      "index": 14,
+      "file": "14-2-weight.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.27578125
+      },
+      "settleTimedOut": false
+    },
+    {
+      "id": "2-reps",
+      "label": "Enter reps 8 (set 2)",
+      "index": 15,
+      "file": "15-2-reps.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.41484375
+      },
+      "settleTimedOut": false
+    },
+    {
+      "id": "2-save",
+      "label": "SAVE set 2 (65x8)",
+      "index": 16,
+      "file": "16-2-save.png",
+      "resolved": {
+        "x": 0.2777777777777778,
+        "y": 0.5078125
+      },
+      "bounds": [
+        46,
+        611,
+        354,
+        689
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "tab-history",
+      "label": "HISTORY tab",
+      "index": 17,
+      "file": "17-tab-history.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.14765625
+      },
+      "bounds": [
+        232,
+        144,
+        487,
+        233
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "tab-graph",
+      "label": "GRAPH tab — one exercise plotted",
+      "index": 18,
+      "file": "18-tab-graph.png",
+      "resolved": {
+        "x": 0.8388888888888889,
+        "y": 0.14765625
+      },
+      "bounds": [
+        487,
+        144,
+        720,
+        233
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "back-to-exlist",
+      "label": "Back to exercise list",
+      "index": 19,
+      "file": "19-back-to-exlist.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "new-exercise-open",
+      "label": "Create New Exercise",
+      "index": 20,
+      "file": "20-new-exercise-open.png",
+      "resolved": {
+        "x": 0.7666666666666667,
+        "y": 0.075
+      },
+      "settleTimedOut": false
+    },
+    {
+      "id": "new-name",
+      "label": "Name it \"Webdroid Press\"",
+      "index": 21,
+      "file": "21-new-name.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.22265625
+      },
+      "settleTimedOut": false
+    },
+    {
+      "id": "new-category-open",
+      "label": "Open category spinner",
+      "index": 22,
+      "file": "22-new-category-open.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.53359375
+      },
+      "settleTimedOut": false
+    },
+    {
+      "id": "new-category-chest",
+      "label": "Choose Chest",
+      "index": 23,
+      "file": "23-new-category-chest.png",
+      "resolved": {
+        "x": 0.425,
+        "y": 0.240625
+      },
+      "bounds": [
+        68,
+        260,
+        544,
+        356
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "new-save",
+      "label": "Save new exercise",
+      "index": 24,
+      "file": "24-new-save.png",
+      "resolved": {
+        "x": 0.9222222222222223,
+        "y": 0.075
+      },
+      "settleTimedOut": false
+    },
+    {
+      "id": "up-to-categories",
+      "label": "Up to categories",
+      "index": 25,
+      "file": "25-up-to-categories.png",
+      "resolved": {
+        "x": 0.06666666666666667,
+        "y": 0.075
+      },
+      "settleTimedOut": false
+    },
+    {
+      "id": "cat-chest",
+      "label": "Open Chest",
+      "index": 26,
+      "file": "26-cat-chest.png",
+      "resolved": {
+        "x": 0.45555555555555555,
+        "y": 0.56328125
+      },
+      "bounds": [
+        16,
+        673,
+        640,
+        769
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "scroll-chest",
+      "label": "Scroll to the custom exercise",
+      "index": 27,
+      "file": "27-scroll-chest.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "ex-custom",
+      "label": "Open Webdroid Press",
+      "index": 28,
+      "file": "28-ex-custom.png",
+      "resolved": {
+        "x": 0.4444444444444444,
+        "y": 0.925
+      },
+      "bounds": [
+        16,
+        1159,
+        624,
+        1208
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "3-weight",
+      "label": "Enter weight 40 (set 3)",
+      "index": 29,
+      "file": "29-3-weight.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.27578125
+      },
+      "settleTimedOut": false
+    },
+    {
+      "id": "3-reps",
+      "label": "Enter reps 12 (set 3)",
+      "index": 30,
+      "file": "30-3-reps.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.41484375
+      },
+      "settleTimedOut": false
+    },
+    {
+      "id": "3-save",
+      "label": "SAVE set 3 (40x12)",
+      "index": 31,
+      "file": "31-3-save.png",
+      "resolved": {
+        "x": 0.2777777777777778,
+        "y": 0.5078125
+      },
+      "bounds": [
+        46,
+        611,
+        354,
+        689
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "4-weight",
+      "label": "Enter weight 45 (set 4)",
+      "index": 32,
+      "file": "32-4-weight.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.27578125
+      },
+      "settleTimedOut": false
+    },
+    {
+      "id": "4-reps",
+      "label": "Enter reps 10 (set 4)",
+      "index": 33,
+      "file": "33-4-reps.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.41484375
+      },
+      "settleTimedOut": false
+    },
+    {
+      "id": "4-save",
+      "label": "SAVE set 4 (45x10)",
+      "index": 34,
+      "file": "34-4-save.png",
+      "resolved": {
+        "x": 0.2777777777777778,
+        "y": 0.5078125
+      },
+      "bounds": [
+        46,
+        611,
+        354,
+        689
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "custom-graph",
+      "label": "GRAPH — custom exercise",
+      "index": 35,
+      "file": "35-custom-graph.png",
+      "resolved": {
+        "x": 0.8388888888888889,
+        "y": 0.14765625
+      },
+      "bounds": [
+        487,
+        144,
+        720,
+        233
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "back-1",
+      "label": "Back to exercise list",
+      "index": 36,
+      "file": "36-back-1.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "back-2",
+      "label": "Back to categories",
+      "index": 37,
+      "file": "37-back-2.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "home-final",
+      "label": "Home — workout logged",
+      "index": 38,
+      "file": "38-home-final.png",
+      "settleTimedOut": false
+    }
+  ]
+}

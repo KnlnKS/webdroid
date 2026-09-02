@@ -1,0 +1,81 @@
+{
+  "app": "mihon-onboarding",
+  "pkg": "app.mihon",
+  "activity": "eu.kanade.tachiyomi.ui.main.MainActivity",
+  "recordedAt": "2026-08-31T23:50:17.139Z",
+  "pinnedClockMs": 1767355200000,
+  "device": {
+    "width": 720,
+    "height": 1280,
+    "densityDpi": 320,
+    "fingerprint": "google/sdk_gphone64_arm64/emu64a:15/AE3A.240806.043/12960925:userdebug/dev-keys",
+    "sdk": "35"
+  },
+  "crop": {
+    "top": 48,
+    "bottom": 48,
+    "left": 0,
+    "right": 0
+  },
+  "steps": [
+    {
+      "id": "launch",
+      "label": "Launch — Welcome / theme picker",
+      "index": 0,
+      "file": "00-launch.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "theme-light",
+      "label": "Choose Light mode",
+      "index": 1,
+      "file": "01-theme-light.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.425
+      },
+      "bounds": [
+        327,
+        524,
+        392,
+        564
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "theme-default",
+      "label": "Choose Default theme",
+      "index": 2,
+      "file": "02-theme-default.png",
+      "resolved": {
+        "x": 0.24583333333333332,
+        "y": 0.6796875
+      },
+      "settleTimedOut": false
+    },
+    {
+      "id": "onboarding-next",
+      "label": "Next — storage step",
+      "index": 3,
+      "file": "03-onboarding-next.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.9125
+      },
+      "bounds": [
+        330,
+        1148,
+        390,
+        1188
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "storage-step",
+      "label": "Storage step (picker not entered)",
+      "index": 4,
+      "file": "04-storage-step.png",
+      "settleTimedOut": false
+    }
+  ]
+}

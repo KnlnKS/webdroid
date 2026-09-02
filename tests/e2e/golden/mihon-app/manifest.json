@@ -1,0 +1,211 @@
+{
+  "app": "mihon-app",
+  "pkg": "app.mihon",
+  "activity": "eu.kanade.tachiyomi.ui.main.MainActivity",
+  "recordedAt": "2026-08-31T23:49:17.517Z",
+  "pinnedClockMs": 1767355200000,
+  "device": {
+    "width": 720,
+    "height": 1280,
+    "densityDpi": 320,
+    "fingerprint": "google/sdk_gphone64_arm64/emu64a:15/AE3A.240806.043/12960925:userdebug/dev-keys",
+    "sdk": "35"
+  },
+  "crop": {
+    "top": 48,
+    "bottom": 48,
+    "left": 0,
+    "right": 0
+  },
+  "steps": [
+    {
+      "id": "library",
+      "label": "Library — empty state",
+      "index": 0,
+      "file": "00-library.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "nav-more",
+      "label": "More tab",
+      "index": 1,
+      "file": "01-nav-more.png",
+      "resolved": {
+        "x": 0.9,
+        "y": 0.925
+      },
+      "bounds": [
+        614,
+        1164,
+        681,
+        1204
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "more-scroll",
+      "label": "Scroll the More list",
+      "index": 2,
+      "file": "02-more-scroll.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "settings",
+      "label": "Settings",
+      "index": 3,
+      "file": "03-settings.png",
+      "resolved": {
+        "x": 0.25972222222222224,
+        "y": 0.51640625
+      },
+      "bounds": [
+        128,
+        633,
+        245,
+        689
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "settings-scroll",
+      "label": "Scroll the settings list",
+      "index": 4,
+      "file": "04-settings-scroll.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "settings-scroll-back",
+      "label": "Scroll back to the top",
+      "index": 5,
+      "file": "05-settings-scroll-back.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "reader",
+      "label": "Reader settings (long list)",
+      "index": 6,
+      "file": "06-reader.png",
+      "resolved": {
+        "x": 0.24722222222222223,
+        "y": 0.421875
+      },
+      "bounds": [
+        128,
+        512,
+        228,
+        568
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "reader-scroll",
+      "label": "Scroll Reader settings",
+      "index": 7,
+      "file": "07-reader-scroll.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "reader-rotation",
+      "label": "Open Default rotation dialog",
+      "index": 8,
+      "file": "08-reader-rotation.png",
+      "resolved": {
+        "x": 0.19722222222222222,
+        "y": 0.209375
+      },
+      "bounds": [
+        32,
+        240,
+        252,
+        296
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "dialog-dismiss",
+      "label": "Dismiss dialog",
+      "index": 9,
+      "file": "09-dialog-dismiss.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "back-to-settings",
+      "label": "Back to Settings",
+      "index": 10,
+      "file": "10-back-to-settings.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "appearance",
+      "label": "Appearance settings",
+      "index": 11,
+      "file": "11-appearance.png",
+      "resolved": {
+        "x": 0.2972222222222222,
+        "y": 0.184375
+      },
+      "bounds": [
+        128,
+        208,
+        299,
+        264
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "appearance-dark",
+      "label": "Switch to Dark theme (recomposition)",
+      "index": 12,
+      "file": "12-appearance-dark.png",
+      "resolved": {
+        "x": 0.8027777777777778,
+        "y": 0.265625
+      },
+      "bounds": [
+        548,
+        320,
+        608,
+        360
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "appearance-light",
+      "label": "Switch back to Light",
+      "index": 13,
+      "file": "13-appearance-light.png",
+      "resolved": {
+        "x": 0.5013888888888889,
+        "y": 0.265625
+      },
+      "bounds": [
+        328,
+        320,
+        393,
+        360
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "appearance-scroll",
+      "label": "Scroll Appearance",
+      "index": 14,
+      "file": "14-appearance-scroll.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "back-out",
+      "label": "Back out of Appearance",
+      "index": 15,
+      "file": "15-back-out.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "back-out-2",
+      "label": "Back again",
+      "index": 16,
+      "file": "16-back-out-2.png",
+      "settleTimedOut": false
+    }
+  ]
+}
