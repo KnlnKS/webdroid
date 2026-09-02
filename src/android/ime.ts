@@ -17,7 +17,6 @@ import { JMatrix } from "./graphics";
 import { JTextView, JEditText, focusedEdit, focusEditText } from "./widget";
 
 
-// ── EditorInfo
 class JEditorInfo extends JObj {
   inputType = 0;
   imeOptions = 0;
@@ -97,7 +96,6 @@ rt.register({
   },
 });
 
-// ── ExtractedText / ExtractedTextRequest
 class JExtractedText extends JObj {
   text: unknown = null;
   startOffset = 0;

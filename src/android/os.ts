@@ -8,7 +8,6 @@ import { onMain } from "./mainloop";
 import { mkFile } from "../jvm/natives/jio";
 import { newArrayList } from "../jvm/natives/jutil";
 
-// ── Looper
 class JLooper extends JObj {
   thread: JThread;
   constructor(thread?: JThread) { super(); this.thread = thread ?? curThread; }
@@ -45,7 +44,6 @@ rt.register({
   },
 });
 
-// ── Message / Handler
 class JMessage extends JObj {
   what = 0; arg1 = 0; arg2 = 0; obj: unknown = null;
   callback: unknown = null; target: JHandler | null = null;
@@ -299,7 +297,6 @@ rt.register({
   });
 }
 
-// ── Bundle
 export class JBundle extends JObj {
   map = new Map<string, unknown>();
   loader: unknown = null;
@@ -387,7 +384,6 @@ for (const n of ["android/util/CloseGuard", "dalvik/system/CloseGuard"]) {
   });
 }
 
-// ── android.util.Log & friends
 class JLog extends JObj {}
 const logFn = (lvl: string) => (tag: string, msg: string, tr?: unknown) => {
   const t = tr as { msg?: string; jsStack?: string; stack?: string } | undefined;
@@ -694,7 +690,6 @@ rt.register({
 });
 rt.register({ name: "android/view/Choreographer$FrameCallback", ctor: class extends JObj {} });
 
-// KeyEvent
 class JKeyEvent extends JObj { action = 0; keyCode = 0; }
 rt.register({
   name: "android/view/KeyEvent", ctor: JKeyEvent, ifaces: ["android/os/Parcelable"],
@@ -786,7 +781,6 @@ rt.register({
   },
 });
 
-// ── AsyncTask
 class JAsyncTask extends JObj {
   status = 0; // PENDING/RUNNING/FINISHED
   cancelled = 0;
@@ -850,7 +844,6 @@ function runAsyncTask(t: JAsyncTask, params: unknown[]): JAsyncTask {
 }
 rt.register({ name: "android/os/AsyncTask$Status", ctor: class extends JObj {}, sup: "java/lang/Enum" });
 
-// ── CountDownTimer
 class JCountDownTimer extends JObj {
   totalMs = 0n;
   intervalMs = 1000n;

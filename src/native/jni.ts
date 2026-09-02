@@ -44,7 +44,6 @@ export function deref(h: number): unknown {
 export function pushFrame(cpu: Cpu): void { const l = locals(cpu); l.frames.push(l.refs.length); }
 export function popFrame(cpu: Cpu): void { const l = locals(cpu); const m = l.frames.pop(); if (m !== undefined) l.refs.length = m; }
 
-// ── ids
 interface MethodRec { info: ClassInfo; name: string; desc: string; mangled: string; isStatic: boolean; params: string[]; ret: string }
 interface FieldRec { prop: string; type: string; isStatic: boolean; owner: any }
 const methods: MethodRec[] = [null as unknown as MethodRec];
@@ -185,7 +184,6 @@ export async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, ar
   return out;
 }
 
-// ── env / vm tables
 let envTable = 0;
 const envs = new WeakMap<Cpu, number>();
 export function envFor(cpu: Cpu): number {

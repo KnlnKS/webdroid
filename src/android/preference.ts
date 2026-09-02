@@ -204,7 +204,6 @@ const preferenceGroupMethods: NonNullable<NativeSpec["methods"]> = {
 class JPreferenceCategory extends JPreferenceGroup {}
 class JPreferenceScreen extends JPreferenceGroup {}
 
-// ── CheckBoxPreference ──
 class JCheckBoxPreference extends JPreference {
   checked = false;
 }
@@ -233,7 +232,6 @@ const checkBoxMethods: NonNullable<NativeSpec["methods"]> = {
   "onClick()V": function (this: JCheckBoxPreference) { return setCheckBoxValue(this, !this.checked, true); },
 };
 
-// ── ListPreference ──
 class JListPreference extends JPreference {
   entries: string[] = [];
   entryValues: string[] = [];

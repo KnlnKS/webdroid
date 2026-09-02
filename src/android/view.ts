@@ -1074,7 +1074,6 @@ export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | n
   await applyViewAttrs(v, set);
 }
 
-// ── ViewGroup
 export class JViewGroup extends JView {
   children: JView[] = [];
   drawingOrderEnabled = false;
@@ -1446,7 +1445,6 @@ function lpFromAttrs<T extends JLayoutParams>(lp: T, res: Resources, set: JAttrS
 }
 export { lpFromAttrs };
 
-// ── MotionEvent
 export class JMotionEvent extends JObj {
   action = 0;
   x = 0; y = 0;

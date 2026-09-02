@@ -186,7 +186,6 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JPVH) { return this.name + ": " + (this.keys ?? this.objKeys ?? [this.from, this.to]).join(", "); },
   },
 });
-// ── TypeEvaluators
 rt.register({ name: "android/animation/TypeEvaluator", ctor: class extends JObj {} });
 const lerp = (f: number, a: number, b: number) => a + (b - a) * f;
 rt.register({

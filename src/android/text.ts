@@ -274,7 +274,6 @@ rt.register({
   },
 });
 
-// ── TextUtils
 class JTextUtils extends JObj {}
 rt.register({
   name: "android/text/TextUtils", ctor: JTextUtils,
@@ -647,7 +646,6 @@ rt.register({
   },
 });
 
-// ── android.text.format.DateFormat
 rt.register({
   name: "android/text/format/DateFormat", ctor: class extends JObj {},
   methods: {

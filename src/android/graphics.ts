@@ -13,7 +13,6 @@ export function cssColor(argb: number): string {
   return `rgba(${(argb >> 16) & 0xff},${(argb >> 8) & 0xff},${argb & 0xff},${a.toFixed(3)})`;
 }
 
-// ── geometry
 export class JRect extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
 const rectMethods = (F: boolean): NativeSpec["methods"] => ({
   "<init>()V": function () {},
@@ -167,7 +166,6 @@ rt.register({
   },
 });
 
-// ── Color
 class JColor extends JObj {}
 rt.register({
   name: "android/graphics/Color", ctor: JColor,
@@ -215,7 +213,6 @@ rt.register({
   },
 });
 
-// ── Typeface
 export class JTypeface extends JObj {
   family = "Roboto, sans-serif";
   bold = false; italic = false;
@@ -272,7 +269,6 @@ rt.register({
   },
 });
 
-// ── Paint
 export class JPaint extends JObj {
   color = -16777216;
   style = 0;
@@ -651,7 +647,6 @@ rt.register({ name: "android/graphics/PathEffect", ctor: class extends JObj {} }
 rt.register({ name: "android/graphics/CornerPathEffect", ctor: class extends JObj {}, sup: "android/graphics/PathEffect",
   methods: { "<init>(F)V": function () {} } });
 
-// ── Shader
 class JShader extends JObj {
   grad: CanvasGradient | CanvasPattern | null = null;
   /** setLocalMatrix: maps shader space into the canvas; null = identity */
@@ -798,7 +793,6 @@ rt.register({
   },
 });
 
-// ── Bitmap
 export class JBitmap extends JObj {
   canvas!: OffscreenCanvas;
   ctx!: OffscreenCanvasRenderingContext2D;
@@ -892,7 +886,6 @@ rt.register({
 const bitmapConfigs = mkEnumSet("android/graphics/Bitmap$Config", ["ALPHA_8", "RGB_565", "ARGB_4444", "ARGB_8888"]);
 mkEnumSet("android/graphics/Bitmap$CompressFormat", ["JPEG", "PNG", "WEBP"]);
 
-// ── Canvas
 export class JCanvas extends JObj {
   ctx!: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
   w = 0; h = 0;

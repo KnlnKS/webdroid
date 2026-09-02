@@ -11,7 +11,6 @@ import { TV, parseAXML, type XmlNode } from "./axml";
 import { JObj } from "../jvm/runtime";
 import { JDisplayMetrics, JTypedValue, complexToPx } from "./os";
 
-// ── framework tables
 export const fwIds = fw.ids as Record<string, Record<string, number>>;
 const fwIdToName = new Map<number, [string, string]>();
 for (const [type, m] of Object.entries(fwIds)) {
@@ -245,7 +244,6 @@ export class Resources {
   }
 }
 
-// ── Theme
 export class JTheme extends JObj {
   res!: Resources;
   styles: number[] = []; // applied in order; later wins

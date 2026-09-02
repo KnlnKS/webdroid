@@ -55,7 +55,6 @@ function divRound(n: bigint, d: bigint, mode: number): bigint {
   return q;
 }
 
-// ── MathContext
 class JMathContext extends JObj { prec = 0; rm: JSimpleEnum = RM[6]; }
 function mkMC(prec: number, rm: JSimpleEnum = RM[6]): JMathContext {
   if (prec < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Digits < 0");
@@ -89,7 +88,6 @@ rt.register({
   },
 });
 
-// ── BigDecimal
 class JBigDecimal extends JObj { u = 0n; sc = 0; }
 function mkBD(u: bigint, sc = 0): JBigDecimal {
   const b = new JBigDecimal();
@@ -417,7 +415,6 @@ function divScaled(a: JBigDecimal, b: JBigDecimal, sc: number, mode: number): JB
   return mkBD(shift >= 0 ? divRound(a.u * pow10(shift), b.u, mode) : divRound(a.u, b.u * pow10(-shift), mode), sc);
 }
 
-// ── BigInteger
 class JBigInteger extends JObj { v = 0n; }
 function mkBI(v: bigint): JBigInteger { const b = new JBigInteger(); b.v = v; return b; }
 function bytesToBig(b: Int8Array): bigint { let v = 0n; for (const x of b) v = (v << 8n) | BigInt(x & 0xff); return v; }

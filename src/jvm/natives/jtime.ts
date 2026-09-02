@@ -4,7 +4,6 @@ import { rt, JObj, type NativeSpec } from "../runtime";
 import { javaMatches, javaRegex, mkEnumSet, type JSimpleEnum, type JSB } from "./jlang";
 import { jarray } from "../abi";
 
-// ── Date
 export class JDate extends JObj { t = Date.now(); }
 function dateCmp(this: JDate, o: JDate) { return this.t < o.t ? -1 : this.t > o.t ? 1 : 0; }
 rt.register({

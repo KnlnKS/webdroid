@@ -32,7 +32,6 @@ function classAnno(info: ClassInfo): ClassAnno {
   return a;
 }
 
-// ── reflect Method
 class JMethod extends JObj {
   owner!: ClassInfo;
   name = "";
@@ -62,7 +61,6 @@ function annotatedElement<T>(annosOf: (this: T) => EncAnnotation[]): NonNullable
   };
 }
 
-// ── reflect Field
 class JField extends JObj {
   owner!: ClassInfo;
   fname = "";

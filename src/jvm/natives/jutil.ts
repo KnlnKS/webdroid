@@ -517,7 +517,6 @@ for (const n of ["java/util/ArrayList", "java/util/LinkedList", "java/util/Vecto
   });
 }
 
-// ── HashMap and friends
 class JMap extends JObj {
   m = new Map<unknown, Ent>();       // fast keys
   slow: Ent[] = [];                  // custom-equals keys (linear; rare)
@@ -1535,7 +1534,6 @@ rt.register({ name: "java/util/ListIterator", ctor: class extends JObj {}, iface
 // vcall() the selector by name. Only the marker registration is needed.
 rt.register({ name: "java/util/function/Supplier", ctor: class extends JObj {} });
 
-// ── Arrays / Collections / Objects statics
 class JArrays extends JObj {}
 class JArraysList extends JList {}
 rt.register({
@@ -1842,7 +1840,6 @@ rt.register({
   },
 });
 
-// ── misc
 class JStringJoiner extends JObj { sep = ","; pre = ""; suf = ""; parts: string[] = []; }
 rt.register({
   name: "java/util/StringJoiner", ctor: JStringJoiner,

@@ -66,7 +66,6 @@ rt.register({
   methods: baseAdapterMethods,
 });
 
-// ArrayAdapter
 class JArrayAdapter extends JBaseAdapter {
   jctx: any = null;
   layoutRes = 0;
@@ -208,7 +207,6 @@ rt.register({
   },
 });
 
-// ── AdapterView / AbsListView / ListView
 const CHOICE_MODE_MULTIPLE_MODAL = 3;
 export class JListView extends JViewGroup {
   adapter: unknown = null;

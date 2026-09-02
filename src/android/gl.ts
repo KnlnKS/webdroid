@@ -48,7 +48,6 @@ function getActive(query: (p: WebGLProgram, i: number) => WebGLActiveInfo | null
   };
 }
 
-// ── GLES20
 rt.register({
   name: "android/opengl/GLES20", ctor: class extends JObj {},
   statics: {
@@ -237,7 +236,6 @@ function glParamToInt(v: unknown): number {
   return 0;
 }
 
-// ── GLUtils
 // Bitmap pixels are premultiplied on AOSP and GLUtils uploads them as-is (engines blend with
 // ONE, ONE_MINUS_SRC_ALPHA); WebGL would un-premultiply a canvas source unless told otherwise.
 const RGBA = 0x1908, UNSIGNED_BYTE = 0x1401;

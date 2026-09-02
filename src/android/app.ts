@@ -408,7 +408,6 @@ rt.register({
   },
 });
 
-// ── Intent
 export class JIntent extends JObj {
   action: string | null = null;
   component: string | null = null; // class name dots
@@ -613,7 +612,6 @@ rt.register({ name: "android/provider/Settings", ctor: class extends JObj {},
   statics: { ACTION_APPLICATION_DETAILS_SETTINGS: "android.settings.APPLICATION_DETAILS_SETTINGS",
              ACTION_SETTINGS: "android.settings.SETTINGS" } });
 
-// ── package manager bits
 // The manifest the booted apk was described by: PackageManager answers out of it rather
 // than out of invented defaults, so meta-data/configChanges/uses-feature are the app's own.
 let manifestRoot: XmlNode | null = null;
@@ -1286,7 +1284,6 @@ rt.register({
   },
 });
 
-// ── Activity
 export class JActivity extends JContextWrapper {
   window = new JWindow();
   intent: JIntent | null = null;
@@ -1941,7 +1938,6 @@ rt.register({
 rt.register({ name: "android/app/ActionBar", ctor: class extends JObj {} });
 rt.register({ name: "android/app/ActionBar$OnNavigationListener", ctor: class extends JObj {} });
 
-// ── Application
 class JApplication extends JContextWrapper {
   lifecycleCbs: unknown[] | null = null;
 }
@@ -1975,7 +1971,6 @@ async function launchIntent(host: AppHost, intent: JIntent) {
   }
 }
 
-// Toast
 class JToast extends JObj { text = ""; }
 rt.register({
   name: "android/widget/Toast", ctor: JToast,

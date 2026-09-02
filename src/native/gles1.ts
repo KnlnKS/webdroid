@@ -16,7 +16,6 @@ type GL = WebGL2RenderingContext | WebGLRenderingContext;
 /** getError probe after every GL entry point (perf.glErrors counts) */
 export const glProbe = { on: false };
 
-// ── matrices
 type M4 = Float32Array;
 const ident = (): M4 => { const m = new Float32Array(16); m[0] = m[5] = m[10] = m[15] = 1; return m; };
 function mul(a: M4, b: M4, out: M4): void {

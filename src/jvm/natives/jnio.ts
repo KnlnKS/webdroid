@@ -59,7 +59,6 @@ rt.register({
   methods: bufferBaseMethods(),
 });
 
-// ── ByteBuffer
 rt.register({
   name: "java/nio/ByteBuffer", ctor: JByteBuffer, sup: "java/nio/Buffer",
   ifaces: ["java/lang/Comparable"],
@@ -291,7 +290,6 @@ rt.register({
   },
 });
 
-// ByteOrder
 class JByteOrder extends JObj { little = false; name = "BIG_ENDIAN"; }
 const byteOrderBE = new JByteOrder();
 const byteOrderLE = new JByteOrder(); byteOrderLE.little = true; byteOrderLE.name = "LITTLE_ENDIAN";
@@ -325,7 +323,6 @@ rt.register({
   methods: { "toString()Ljava/lang/String;": () => "REPLACE" },
 });
 
-// ── Charset / StandardCharsets
 class JCharset extends JObj { cname = "UTF-8"; }
 const charset = (n: string) => { const c = new JCharset(); c.cname = n; return c; };
 const utf8 = charset("UTF-8");

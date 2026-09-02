@@ -94,7 +94,6 @@ function adoptLp<T extends JMarginLP>(Ctor: new () => T, lp: JLayoutParams | nul
   return n;
 }
 
-// ── FrameLayout
 export class JFrameLayout extends JViewGroup {}
 const frameMethods: NativeSpec["methods"] = {
   "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": function () {
@@ -175,7 +174,6 @@ rt.register({
   },
 });
 
-// ── LinearLayout
 export class JLinearLayout extends JViewGroup {
   orientation = 0; // 0 horizontal, 1 vertical
   gravity = 48 | G.START;
@@ -428,7 +426,6 @@ rt.register({
   },
 });
 
-// ── ScrollView
 class JScrollView extends JViewGroup {
   fillViewport = false;
   horizontal = false;
@@ -582,7 +579,6 @@ rt.register({ name: "android/widget/ScrollView", ctor: JScrollView, sup: "androi
 rt.register({ name: "android/widget/HorizontalScrollView", ctor: class extends JScrollView { horizontal = true; },
   sup: "android/widget/FrameLayout", methods: { ...frameMethods, ...scrollMethods } });
 
-// ── TextView
 export class JTextView extends JView {
   /** kept for the app to read back; text is drawn untransformed */
   transformation: unknown = null;
@@ -1165,7 +1161,6 @@ rt.register({ name: "android/widget/TextView$OnEditorActionListener", ctor: clas
 rt.register({ name: "android/widget/TextView$BufferType", ctor: class extends JObj {}, sup: "java/lang/Enum",
   statics: { NORMAL: null, SPANNABLE: null, EDITABLE: null } });
 
-// Button
 class JButton extends JTextView {
   constructor() {
     super();
@@ -1198,7 +1193,6 @@ async function applyButtonDefaults(b: JButton) {
   b.paintT.tf = tfMedium;
 }
 
-// ── ImageView
 class JImageView extends JView {
   drawable: JDrawable | null = null;
   scaleType = 3; // FIT_CENTER
@@ -1322,7 +1316,6 @@ rt.register({
   }, sup: "android/widget/ImageView", methods: imageViewMethods,
 });
 
-// EditText
 export class JEditText extends JTextView {
   constructor() {
     super();
@@ -1387,7 +1380,6 @@ export async function editInput(text: string) {
   await focusedEdit.notifyWatchers();
 }
 
-// ── ProgressBar
 class JProgressBar extends JView {
   indeterminate = true;
   progress = 0;
@@ -1804,7 +1796,6 @@ rt.register({
   },
 });
 
-// ── ViewStub
 class JViewStub extends JView {
   layoutRes = 0;
   inflatedId = -1;

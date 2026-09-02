@@ -85,7 +85,6 @@ const scrollerMethods: NativeSpec["methods"] = {
 rt.register({ name: "android/widget/Scroller", ctor: JScroller, methods: scrollerMethods });
 rt.register({ name: "android/widget/OverScroller", ctor: class extends JScroller {}, methods: scrollerMethods });
 
-// VelocityTracker
 class JVelocityTracker extends JObj {
   samples: { x: number; y: number; t: number }[] = [];
   vx = 0; vy = 0;
@@ -117,7 +116,6 @@ rt.register({
   },
 });
 
-// ViewConfiguration
 class JViewConfiguration extends JObj {}
 const vc = new JViewConfiguration();
 rt.register({

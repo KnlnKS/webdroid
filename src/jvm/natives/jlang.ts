@@ -107,7 +107,6 @@ function jclsName(o: unknown): string {
   return i?.name ?? "java/lang/Object";
 }
 
-// ── java.lang.Object
 rt.register({
   name: "java/lang/Object",
   ctor: JObj,
@@ -154,7 +153,6 @@ function monNotify(obj: object, all: boolean) {
   for (const w of picked) queueMicrotask(w);
 }
 
-// ── java.lang.Class
 export class JClass extends JObj {
   ci: ClassInfo | null = null;
   primName: string | null = null;
@@ -271,7 +269,6 @@ export async function classpathStream(path: string): Promise<unknown> {
   return bytes ? newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length)) : null;
 }
 
-// ── Throwable hierarchy
 class JThrowable extends JObj {
   msg: string | null = null;
   cause: JThrowable | null = null;
@@ -640,7 +637,6 @@ export function fmtFloat(v: number): string {
   return fmtDouble(Number(v.toPrecision(9)));
 }
 
-// ── StringBuilder / StringBuffer
 export class JSB extends JObj {
   s = "";
 }
@@ -718,7 +714,6 @@ function sbSpec(name: string): NativeSpec {
 rt.register(sbSpec("java/lang/StringBuilder"));
 rt.register(sbSpec("java/lang/StringBuffer"));
 
-// ── boxes
 class JNumber extends JObj {}
 rt.register({
   name: "java/lang/Number", ctor: JNumber, ifaces: ["java/io/Serializable"],
@@ -1008,7 +1003,6 @@ rt.register({
   },
 });
 
-// ── Math
 class JMath extends JObj {}
 const mm: Record<string, (...a: never[]) => unknown> = {};
 for (const t of ["I", "J", "F", "D"]) {
@@ -1053,7 +1047,6 @@ rt.register({
   },
 });
 
-// ── System
 class JSystem extends JObj {}
 function arraycopy(src: any, sp: number, dst: any, dp: number, len: number) {
   if (src === null || dst === null) rt.npe();
@@ -1138,7 +1131,6 @@ rt.register({
   },
 });
 
-// ── Thread / ThreadLocal
 export class JThread extends JObj {
   jname = "Thread";
   daemon = 0;
@@ -1296,7 +1288,6 @@ rt.register({
   },
 });
 
-// ── Enum
 export class JEnum extends JObj {
   ename = "";
   ord = 0;

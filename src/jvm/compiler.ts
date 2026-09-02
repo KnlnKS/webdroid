@@ -216,7 +216,6 @@ class MethodCompiler {
     }
     if (cur) blocks.push(cur.join("\n"));
 
-    // params
     const { params } = parseMethodDesc(this.desc);
     const regs = this.code.regs, ins = this.code.ins;
     let reg = regs - ins;

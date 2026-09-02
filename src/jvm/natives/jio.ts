@@ -55,7 +55,6 @@ export const vfs = {
 };
 const dirs = new Set<string>(["/data", "/sdcard"]);
 
-// ── File
 export class JFile extends JObj { path = ""; }
 export function mkFile(path: string): JFile { const f = new JFile(); f.path = vfs.norm(path); return f; }
 const listFiles = (d: JFile) => jarray(vfs.list(d.path).map((n) => mkFile(d.path + "/" + n)), "Ljava/io/File;");
@@ -148,7 +147,6 @@ rt.register({
   },
 });
 
-// ── streams
 export class JInputStream extends JObj {
   buf: Uint8Array = new Uint8Array(0);
   pos = 0;
@@ -433,7 +431,6 @@ rt.register({
   sysInfo.ctor[mangleStaticField("err")] = err;
 }
 
-// ── Reader/Writer basics
 class JReader extends JObj { s = ""; pos = 0; }
 rt.register({
   name: "java/io/Reader", ctor: JReader, ifaces: ["java/io/Closeable"],

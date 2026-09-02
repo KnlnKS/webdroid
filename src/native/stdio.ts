@@ -191,7 +191,6 @@ export function stdioInit(): void {
   const stdoutFp = sF + LAYOUT.FILE_SIZE;
 
   const M: Record<string, HostFn> = {
-    // ── fds
     open: (cpu, a) => fdOpen(cpu, a.str(), a.i()),
     __open_2: (cpu, a) => fdOpen(cpu, a.str(), a.i()),
     openat: (cpu, a) => { a.i(); return fdOpen(cpu, a.str(), a.i()); },
@@ -238,7 +237,6 @@ export function stdioInit(): void {
     symlink: (cpu) => fail(cpu, E.PERM), link: (cpu) => fail(cpu, E.PERM),
     utimes: () => 0, utime: () => 0,
 
-    // ── directories
     opendir: (cpu, a) => {
       const p = vfs.norm(a.str());
       if (!vfs.isDir(p)) { fail(cpu, vfs.exists(p) ? E.NOTDIR : E.NOENT); return 0; }
@@ -264,7 +262,6 @@ export function stdioInit(): void {
     closedir: (_c, a) => { const h = a.p(); const d = dirs.get(h); if (d) { mem.free(d.dirent); mem.free(h); dirs.delete(h); return 0; } return -1; },
     dirfd: () => -1,
 
-    // ── FILE*
     fopen: (cpu, a) => {
       const path = a.str(), mode = a.str();
       const { o, f } = modeFlags(mode);

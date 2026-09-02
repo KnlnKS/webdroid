@@ -16,7 +16,6 @@ import { WEB_INJECT } from "../shell/webinject";
 
 const inst = <T = JObj>(cls: string): T => new (rt.link(cls).ctor)();
 
-// ── MimeTypeMap
 const EXT_MIME: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
   html: "text/html", htm: "text/html", css: "text/css", js: "text/javascript", json: "application/json", xml: "text/xml",
@@ -537,7 +536,6 @@ rt.register({
   },
 });
 
-// ── console / JS dialog value types
 const msgLevels = mkEnumSet("android/webkit/ConsoleMessage$MessageLevel", ["TIP", "LOG", "WARNING", "ERROR", "DEBUG"]);
 class JConsoleMessage extends JObj { msg = ""; src = ""; line = 0; level: JSimpleEnum = msgLevels[1]; }
 rt.register({

@@ -73,7 +73,6 @@ export class VaList implements ArgReader {
   get addr(): number { return this.a; }
 }
 
-// ── trampoline slots
 const fns: HostFn[] = [];
 const names: string[] = [];
 export function defineHost(name: string, fn: HostFn): number {

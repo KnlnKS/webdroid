@@ -196,7 +196,6 @@ rt.register({
   },
 });
 
-// ── java.text.ParsePosition
 class JParsePosition extends JObj { index = 0; errorIndex = -1; }
 rt.register({
   name: "java/text/ParsePosition", ctor: JParsePosition,
@@ -331,7 +330,6 @@ rt.register({
   },
 });
 
-// ── StringTokenizer
 class JStringTokenizer extends JObj { toks: string[] = []; i = 0; }
 rt.register({
   name: "java/util/StringTokenizer", ctor: JStringTokenizer,

@@ -213,7 +213,6 @@ const cursorMethods: NativeSpec["methods"] = {
 rt.register({ name: "android/database/Cursor", ctor: class extends JObj {} });
 rt.register({ name: "webdroid/Cursor", ctor: JCursor, ifaces: ["android/database/Cursor", "java/io/Closeable"], methods: cursorMethods });
 
-// ContentValues
 class JContentValues extends JObj {
   map = new Map<string, unknown>();
 }

@@ -349,7 +349,6 @@ async function pressBack0() {
   } catch (e) { reportUncaught(e); }
 }
 
-// ── frame loop
 const M_doFrame = mangleMethod("doFrame", "(J)V");
 const M_dispatch = mangleMethod("dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z");
 let drawing = false;
@@ -522,7 +521,6 @@ function drawStatusIcons(ctx: CanvasRenderingContext2D, bg: number, w: JActivity
   ctx.fill();
 }
 
-// ── touch
 let touchTarget: "decor" | { overlay: number } | null = null;
 // input joins the main queue: keeps DOWN/UP ordered and serialized with layout,
 // Handler posts, and lifecycle — like Android's single main looper.

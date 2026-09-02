@@ -78,7 +78,6 @@ function strtodAt(s: number, endp: number): number {
   return parseFloat(m[1]);
 }
 
-// ── time
 const tzOffsetMin = () => -new Date().getTimezoneOffset();
 function fillTm(tm: number, d: Date, utc: boolean): void {
   const g = utc ? { s: d.getUTCSeconds(), mi: d.getUTCMinutes(), h: d.getUTCHours(), md: d.getUTCDate(), mo: d.getUTCMonth(), y: d.getUTCFullYear(), wd: d.getUTCDay() }
@@ -169,7 +168,6 @@ export function libcInit(): void {
   };
 
   const M: Record<string, HostFn> = {
-    // ── errno / process
     __errno: (cpu) => cpu.errnoAddr,
     __set_errno: (cpu, a) => { setErrno(cpu, a.i()); return -1; },
     abort: (cpu) => { cpu.fault("abort() called"); },
@@ -221,7 +219,6 @@ export function libcInit(): void {
     cacheflush: (_c, a) => { const s = a.p(), e = a.p(); invalidateRange(s, e - s); return 0; },
     __aeabi_read_tp: (cpu) => cpu.tlsBase,
 
-    // ── memory
     malloc: (_c, a) => mem.malloc(a.u()),
     free: (_c, a) => { mem.free(a.p()); },
     calloc: (_c, a) => mem.calloc(a.u(), a.u()),
@@ -243,7 +240,6 @@ export function libcInit(): void {
     bcopy: (_c, a) => { const s = a.p(), d = a.p(), n = a.u(); mem.memmove(d, s, n); },
     bzero: (_c, a) => { const d = a.p(), n = a.u(); mem.memset(d, 0, n); },
 
-    // ── strings
     strlen: (_c, a) => mem.strlen(a.p()),
     strnlen: (_c, a) => { const p = a.p(), n = a.u(); let i = 0; while (i < n && u8[p + i]) i++; return i; },
     strcpy: (_c, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s); mem.memmove(d, s, n + 1); return d; },
@@ -359,7 +355,6 @@ export function libcInit(): void {
     sscanf: (_c, a) => { const s = a.str(), f = a.str(); return scanInto(s, f, a); },
     vsscanf: (_c, a) => { const s = a.str(), f = a.str(); return scanInto(s, f, new VaList(a.p())); },
 
-    // ── time
     time: (_c, a) => { const p = a.p(); const t = Math.floor(Date.now() / 1000); if (p) mem.st32(p, t); return t; },
     gettimeofday: (_c, a) => { const tv = a.p(); if (tv) { const ms = Date.now(); mem.st32(tv, Math.floor(ms / 1000)); mem.st32(tv + 4, (ms % 1000) * 1000); } return 0; },
     clock_gettime: (_c, a) => {
@@ -389,7 +384,6 @@ export function libcInit(): void {
     _longjmp: (cpu, a) => longjmp(cpu, a.p(), a.i()),
     siglongjmp: (cpu, a) => longjmp(cpu, a.p(), a.i()),
 
-    // ── random
     lrand48: () => next48() & 0x7fffffff,
     mrand48: () => next48() | 0,
     drand48: () => dbits((next48() >>> 0) / 4294967296),
@@ -442,7 +436,6 @@ export function libcInit(): void {
     ntohl: (_c, a) => { const v = a.i(); return ((v & 255) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | (v >>> 24); },
     poll: (_c, a) => { a.p(); a.i(); const ms = a.i(); return ms > 0 ? new Promise<number>((r) => setTimeout(() => r(0), ms)) : 0; },
 
-    // ── logging
     __android_log_write: (_c, a) => { const prio = a.i(), tag = a.str(), msg = a.str(); logLine(prio, tag, msg); return 1; },
     __android_log_print: (_c, a) => { const prio = a.i(), tag = a.str(), f = a.str(); logLine(prio, tag, format(f, a)); return 1; },
     __android_log_vprint: (_c, a) => { const prio = a.i(), tag = a.str(), f = a.str(); logLine(prio, tag, format(f, new VaList(a.p()))); return 1; },

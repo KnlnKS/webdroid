@@ -175,7 +175,6 @@ rt.register({ name: "android/graphics/drawable/Drawable$ConstantState", ctor: cl
 // registering it is enough for the instanceof check to resolve instead of throwing on a missing class.
 rt.register({ name: "android/graphics/drawable/Animatable", ctor: class extends JObj {} });
 
-// ── ColorDrawable
 export class JColorDrawable extends JDrawable {
   color = 0;
   paint(cv: JCanvas) {
@@ -198,7 +197,6 @@ rt.register({
   },
 });
 
-// ── BitmapDrawable
 export class JBitmapDrawable extends JDrawable {
   bmp: JBitmap | null = null;
   paint(cv: JCanvas) {
@@ -227,7 +225,6 @@ rt.register({
   },
 });
 
-// ── NinePatch
 class JNinePatchDrawable extends JDrawable {
   bmp: JBitmap | null = null;
   xDivs: number[] = []; yDivs: number[] = [];
@@ -420,7 +417,6 @@ function matchesState(it: { states: number[]; negStates: number[] }, states: num
   return it.states.every((s) => states.includes(s)) && !it.negStates.some((s) => states.includes(s));
 }
 
-// ── StateListDrawable
 class JStateListDrawable extends JDrawable {
   items: { states: number[]; negStates: number[]; d: JDrawable }[] = [];
   current(): JDrawable | null {
@@ -454,7 +450,6 @@ rt.register({
   },
 });
 
-// ── LayerDrawable / InsetDrawable / Ripple
 class JLayerDrawable extends JDrawable {
   layers: { d: JDrawable; insets: [number, number, number, number]; w?: number; h?: number; gravity?: number }[] = [];
   ids: (number | null)[] = [];
@@ -632,7 +627,6 @@ rt.register({
   },
 });
 
-// vector drawable
 class JVectorDrawable extends JDrawable {
   vw = 24; vh = 24; // dp size
   vpW = 24; vpH = 24;
@@ -847,7 +841,6 @@ rt.register({
 });
 rt.register({ name: "android/graphics/drawable/VectorDrawable", ctor: JVectorDrawable, sup: "android/graphics/drawable/Drawable" });
 
-// ── ColorStateList
 export class JColorStateList extends JObj {
   items: { states: number[]; negStates: number[]; color: number }[] = [];
   defColor = -16777216;

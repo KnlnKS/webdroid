@@ -38,7 +38,6 @@ export function sfntStyle(b: Uint8Array, ttcIndex = 0): { weight: number; italic
   return null;
 }
 
-// ── FontStyle
 export class JFontStyle extends JObj { weight = 400; slant = UPRIGHT; }
 export function mkFontStyle(weight: number, slant: number): JFontStyle {
   const s = new JFontStyle(); s.weight = weight; s.slant = slant; return s;
@@ -66,7 +65,6 @@ rt.register({
   },
 });
 
-// ── FontVariationAxis
 class JFontVariationAxis extends JObj { tag = ""; value = 0; }
 function mkAxis(tag: string, value: number): JFontVariationAxis {
   if (!/^[\x20-\x7E]{4}$/.test(tag)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Illegal tag pattern: " + tag);
@@ -102,7 +100,6 @@ rt.register({
   },
 });
 
-// ── Font
 export class JFont extends JObj {
   bytes: Uint8Array | null = null;
   ttcIndex = 0;
@@ -227,7 +224,6 @@ rt.register({
   },
 });
 
-// ── FontFamily
 export class JFontFamily extends JObj { fonts: JFont[] = []; css = ""; }
 class JFontFamilyBuilder extends JObj { fonts: JFont[] = []; }
 rt.register({
