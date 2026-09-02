@@ -5,6 +5,7 @@ import { mangleMethod } from "../jvm/abi";
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { charsToString } from "../jvm/abi";
 import { vcall, boxInt, box, JLong } from "../jvm/natives/jlang";
+import { newArrayList } from "../jvm/natives/jutil";
 import { JBundle } from "./os";
 
 let SQL: Awaited<ReturnType<typeof initSqlJs>> | null = null;
@@ -350,6 +351,11 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
     this.scheduleSave();
   },
   "getPath()Ljava/lang/String;": function (this: JSQLiteDatabase) { return this.path; },
+  "getAttachedDbs()Ljava/util/List;": function (this: JSQLiteDatabase) {
+    const p = new (rt.link("android/util/Pair").ctor)();
+    p.first = "main"; p.second = this.path;
+    return newArrayList([p]);
+  },
   "isReadOnly()Z": () => 0,
   "isDbLockedByCurrentThread()Z": () => 0,
   "setForeignKeyConstraintsEnabled(Z)V": function (this: JSQLiteDatabase, on: number) {
