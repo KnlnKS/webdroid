@@ -4,6 +4,7 @@ import { rt, JObj } from "../runtime";
 import { defineException } from "./jlang";
 import { mkIter } from "./jutil";
 import { mangleMethod } from "../abi";
+import { type JBuffer, bufferView } from "./jnio";
 
 for (const n of ["java/security/Key", "javax/crypto/SecretKey", "java/security/spec/KeySpec"]) {
   rt.register({ name: n, ctor: class extends JObj {} });
@@ -99,6 +100,7 @@ class JCipher extends JObj {
   iv: Uint8Array<ArrayBuffer> | null = null;
   tagLength = 128;
   parts: Uint8Array[] = [];
+  aad: Uint8Array[] = [];
 }
 function getCipher(t: string): JCipher {
   const [alg, mode = "ECB", padding = "PKCS5Padding"] = t.split("/");
@@ -116,7 +118,7 @@ function getCipher(t: string): JCipher {
 async function initCipher(c: JCipher, opmode: number, key: unknown, params: unknown) {
   c.key = await cryptoKey(key, c.alg === "AES-ECB" ? "AES-CBC" : c.alg, ["encrypt", "decrypt"]);
   c.opmode = opmode;
-  c.parts = [];
+  c.parts = []; c.aad = [];
   c.iv = null;
   const gcm = c.alg === "AES-GCM";
   if (c.alg === "AES-ECB") {
@@ -170,7 +172,9 @@ async function doFinal(c: JCipher, b?: Int8Array, off = 0, len = b?.length): Pro
   const op = enc ? "encrypt" : "decrypt";
   if (c.alg === "AES-CTR") return new Int8Array(await crypto.subtle[op]({ name: c.alg, counter: c.iv!, length: 128 }, c.key, data));
   if (c.alg === "AES-GCM") {
-    try { return new Int8Array(await crypto.subtle[op]({ name: c.alg, iv: c.iv!, tagLength: c.tagLength }, c.key, data)); }
+    const p: AesGcmParams = { name: c.alg, iv: c.iv!, tagLength: c.tagLength };
+    if (c.aad.length) { p.additionalData = join(c.aad); c.aad = []; }
+    try { return new Int8Array(await crypto.subtle[op](p, c.key, data)); }
     catch { throw rt.mkThrowable("javax/crypto/AEADBadTagException", "Tag mismatch"); }
   }
   if (c.padded && enc) data = pad(data);
@@ -194,6 +198,13 @@ rt.register({
     "update([B)[B": function (this: JCipher, b: Int8Array) { this.parts.push(bytes(b)); return new Int8Array(0); },
     "update([BII)[B": function (this: JCipher, b: Int8Array, off: number, len: number) { this.parts.push(bytes(b, off, len)); return new Int8Array(0); },
     "update([BII[BI)I": function (this: JCipher, b: Int8Array, off: number, len: number) { this.parts.push(bytes(b, off, len)); return 0; },
+    "updateAAD([B)V": function (this: JCipher, b: Int8Array) { if (this.alg !== "AES-GCM") throw rt.mkThrowable("java/lang/IllegalStateException", "No AAD accepted"); this.aad.push(bytes(b)); },
+    "updateAAD([BII)V": function (this: JCipher, b: Int8Array, off: number, len: number) { if (this.alg !== "AES-GCM") throw rt.mkThrowable("java/lang/IllegalStateException", "No AAD accepted"); this.aad.push(bytes(b, off, len)); },
+    "updateAAD(Ljava/nio/ByteBuffer;)V": function (this: JCipher, bb: JBuffer) {
+      const v = bufferView(bb);
+      const u = new Uint8Array(v.ab, v.byteFromPos, bb.lim - bb.pos);
+      this.aad.push(new Uint8Array(u)); bb.pos = bb.lim;
+    },
     "doFinal()[B": function (this: JCipher) { return doFinal(this); },
     "doFinal([B)[B": function (this: JCipher, b: Int8Array) { return doFinal(this, b); },
     "doFinal([BII)[B": function (this: JCipher, b: Int8Array, off: number, len: number) { return doFinal(this, b, off, len); },
