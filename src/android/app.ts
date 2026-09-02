@@ -52,7 +52,10 @@ const services = new Map<string, unknown>();
 /** a string resource of the running app ("" before boot) */
 const appString = (id: number) => (appHost ? resString(appHost.res, id) : "");
 function ctxString(this: JContext, id: number) { return resString(this.$host.res, id); }
-const display = () => newObj("android/view/Display", null);
+// the one logical display (Display.DEFAULT_DISPLAY = 0); AOSP hands out one Display per id
+let defaultDisplay: unknown;
+const display = () => defaultDisplay ??= newObj("android/view/Display", null);
+const displayListeners = new Set<unknown>();
 /** the one loader Class.getClassLoader() hands out, so `ctx.getClassLoader() == X.class.getClassLoader()` holds */
 let loader: unknown;
 const bootLoader = () => loader ??= rt.link("java/lang/Class").ctor.prototype[mangleMethod("getClassLoader", "()Ljava/lang/ClassLoader;")]();
@@ -2080,13 +2083,24 @@ for (const [name, methods, statics] of [
   }, { GPS_PROVIDER: "gps", NETWORK_PROVIDER: "network", PASSIVE_PROVIDER: "passive" }],
   ["android/os/BatteryManager", { "getIntProperty(I)I": () => 80, "isCharging()Z": () => 1 }],
   ["android/hardware/display/DisplayManager", {
-    "getDisplay(I)Landroid/view/Display;": display,
-  }],
+    // one fixed built-in display: unknown ids are null as in AOSP, and registered listeners
+    // never fire because no display is ever added, removed or reconfigured here
+    "getDisplay(I)Landroid/view/Display;": (id: number) => (id === 0 ? display() : null),
+    "getDisplays()[Landroid/view/Display;": () => jarray([display()], "Landroid/view/Display;"),
+    "getDisplays(Ljava/lang/String;)[Landroid/view/Display;": (cat: string | null) => jarray(cat === null ? [display()] : [], "Landroid/view/Display;"),
+    "registerDisplayListener(Landroid/hardware/display/DisplayManager$DisplayListener;Landroid/os/Handler;)V": (l: unknown) => {
+      if (l === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "listener must not be null");
+      displayListeners.add(l);
+    },
+    "unregisterDisplayListener(Landroid/hardware/display/DisplayManager$DisplayListener;)V": (l: unknown) => { displayListeners.delete(l); },
+  }, { DISPLAY_CATEGORY_PRESENTATION: "android.hardware.display.category.PRESENTATION" }],
   ["android/os/Binder", { "<init>()V": function () {}, "static flushPendingCommands()V": () => {} }],
 ] as [string, NativeSpec["methods"], NativeSpec["statics"]?][]) {
   rt.register({ name, ctor: class extends JObj {}, methods, statics });
 }
 rt.register({ name: "android/telephony/PhoneStateListener", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
+// apps `implements` this to track refresh-rate / display changes; it must link even though it never fires here
+rt.register({ name: "android/hardware/display/DisplayManager$DisplayListener", ctor: class extends JObj {} });
 rt.register({ name: "android/os/IBinder", ctor: class extends JObj {} });
 // AccessibilityManager callback interfaces — apps `implements` these to watch for a
 // screen reader turning on; must link even though it never fires here (see above).
