@@ -392,10 +392,30 @@ class JBlockingQueue extends JList {
     else this.a.push(v);
   }
 }
-const mkBlockingQueue = (name: string) => rt.register({
+/** BlockingDeque's ends: a parked taker still receives whatever arrives next, either end. */
+const dequeMethods = (): NonNullable<NativeSpec["methods"]> => ({
+  "putFirst(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.a.unshift(v); },
+  "offerFirst(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.a.unshift(v); return 1; },
+  "putLast(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); },
+  "offerLast(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
+  "takeFirst()Ljava/lang/Object;": function (this: JBlockingQueue) {
+    return this.a.length ? this.a.shift() : new Promise((r) => this.takers.push(r));
+  },
+  "takeLast()Ljava/lang/Object;": function (this: JBlockingQueue) {
+    return this.a.length ? this.a.pop() : new Promise((r) => this.takers.push(r));
+  },
+  "pollFirst()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.a.length ? this.a.shift() : null; },
+  "pollLast()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.a.length ? this.a.pop() : null; },
+  "peekFirst()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.a[0] ?? null; },
+  "peekLast()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.a[this.a.length - 1] ?? null; },
+});
+const mkBlockingQueue = (name: string, deque = false) => rt.register({
   name, ctor: class extends JBlockingQueue {},
-  ifaces: ["java/util/concurrent/BlockingQueue", "java/util/Queue", "java/util/Collection", "java/lang/Iterable"],
+  ifaces: deque
+    ? ["java/util/concurrent/BlockingDeque", "java/util/Deque", "java/util/concurrent/BlockingQueue", "java/util/Queue", "java/util/Collection", "java/lang/Iterable"]
+    : ["java/util/concurrent/BlockingQueue", "java/util/Queue", "java/util/Collection", "java/lang/Iterable"],
   methods: {
+    ...(deque ? dequeMethods() : {}),
     ...Object.fromEntries(Object.entries(listMethods() ?? {}).filter(([k]) => !k.startsWith("<init>"))),
     "<init>()V": function () {},
     "<init>(I)V": function () {},
@@ -418,7 +438,8 @@ const mkBlockingQueue = (name: string) => rt.register({
     },
   },
 });
-for (const qn of ["java/util/concurrent/LinkedBlockingQueue", "java/util/concurrent/SynchronousQueue", "java/util/concurrent/ArrayBlockingQueue", "java/util/concurrent/LinkedBlockingDeque"]) mkBlockingQueue(qn);
+for (const qn of ["java/util/concurrent/LinkedBlockingQueue", "java/util/concurrent/SynchronousQueue", "java/util/concurrent/ArrayBlockingQueue"]) mkBlockingQueue(qn);
+mkBlockingQueue("java/util/concurrent/LinkedBlockingDeque", true);
 // PriorityBlockingQueue: the sorted queue with a parking take(); a parked taker receives the
 // element that would have become the head
 class JPriorityBlockingQueue extends JPriorityQueue { takers: ((v: unknown) => void)[] = []; }
@@ -486,10 +507,11 @@ rt.register({
 for (const i of ["java/util/concurrent/Executor", "java/util/concurrent/ExecutorService",
   "java/util/concurrent/ScheduledExecutorService", "java/util/concurrent/Future",
   "java/util/concurrent/ScheduledFuture", "java/util/concurrent/Callable", "java/util/concurrent/ThreadFactory",
-  "java/util/concurrent/BlockingQueue",
   "java/util/concurrent/RejectedExecutionHandler"]) {
   rt.register({ name: i, ctor: class extends JObj {} });
 }
+rt.register({ name: "java/util/concurrent/BlockingQueue", ctor: class extends JObj {}, ifaces: ["java/util/Queue"] });
+rt.register({ name: "java/util/concurrent/BlockingDeque", ctor: class extends JObj {}, ifaces: ["java/util/concurrent/BlockingQueue", "java/util/Deque"] });
 defineException("java/util/concurrent/RejectedExecutionException", "java/lang/RuntimeException");
 defineException("java/util/concurrent/TimeoutException", "java/lang/Exception");
 defineException("java/util/concurrent/ExecutionException", "java/lang/Exception");

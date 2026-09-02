@@ -1100,6 +1100,8 @@ rt.register({
     "static getProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (k: string, d: string) => sysProps[k] ?? d,
     "static setProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (k: string, v: string) => { const o = sysProps[k] ?? null; sysProps[k] = v; return o; },
     "static getenv(Ljava/lang/String;)Ljava/lang/String;": () => null,
+    // Android has never installed one; code that asks is deciding whether it may reflect
+    "static getSecurityManager()Ljava/lang/SecurityManager;": () => null,
     "static gc()V": () => {},
     "static exit(I)V": (c: number) => { console.warn("System.exit", c); },
     "static loadLibrary(Ljava/lang/String;)V": loadLibrary,
@@ -1229,6 +1231,7 @@ rt.register({
     "join()V": function (this: JThread) { return this.done ?? undefined; },
     "join(J)V": function (this: JThread, ms: bigint) { return join(this, Number(ms)); },
     "join(JI)V": function (this: JThread, ms: bigint, ns: number) { return join(this, Number(ms) + (ns > 0 ? 1 : 0)); },
+    "getThreadGroup()Ljava/lang/ThreadGroup;": () => mainGroup,
     "getContextClassLoader()Ljava/lang/ClassLoader;": () => bootLoader,
     "setContextClassLoader(Ljava/lang/ClassLoader;)V": () => {},
     "getStackTrace()[Ljava/lang/StackTraceElement;": () => jarray([], "Ljava/lang/StackTraceElement;"),
@@ -1240,6 +1243,24 @@ rt.register({
     "static sleep(J)V": (ms: bigint) => park(curThread, () => () => {}, Number(ms)),
     "static yield()V": () => new Promise((r) => setTimeout(r, 0)),
     "static interrupted()Z": () => { const v = curThread.interrupted; curThread.interrupted = 0; return v; },
+  },
+});
+
+// One ThreadGroup for the process: crash handlers and thread factories walk up to it, and its
+// parent chain ends here (ART's "main" group under "system").
+class JThreadGroup extends JObj { gname = "main"; }
+const mainGroup = new JThreadGroup();
+rt.register({
+  name: "java/lang/ThreadGroup", ctor: JThreadGroup,
+  methods: {
+    "<init>(Ljava/lang/String;)V": function (this: JThreadGroup, n: string) { this.gname = n; },
+    "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V": function (this: JThreadGroup, _p: unknown, n: string) { this.gname = n; },
+    "getName()Ljava/lang/String;": function (this: JThreadGroup) { return this.gname; },
+    "getParent()Ljava/lang/ThreadGroup;": function (this: JThreadGroup) { return this === mainGroup ? null : mainGroup; },
+    "activeCount()I": () => 1,
+    "enumerate([Ljava/lang/Thread;)I": (a: unknown[]) => { if (a.length) a[0] = curThread; return a.length ? 1 : 0; },
+    "uncaughtException(Ljava/lang/Thread;Ljava/lang/Throwable;)V": (_t: unknown, e: unknown) => { console.error("[uncaught]", e); },
+    "toString()Ljava/lang/String;": function (this: JThreadGroup) { return `java.lang.ThreadGroup[name=${this.gname},maxpri=10]`; },
   },
 });
 

@@ -8,7 +8,7 @@
 // verifier needs and nothing more, so an app that PINS a certificate will correctly fail rather
 // than be told a comforting lie.
 import { rt, JObj, type NativeSpec } from "../runtime";
-import { newArrayList, toJsArray } from "./jutil";
+import { newArrayList, toJsArray, mkIter } from "./jutil";
 import { boxInt, stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { jarray } from "../abi";
 import type { JInputStream, JOutputStream } from "./jio";
@@ -194,7 +194,31 @@ rt.register({
     },
     "getHostName()Ljava/lang/String;": function (this: JInetAddress) { return this.host; },
     "getHostAddress()Ljava/lang/String;": function (this: JInetAddress) { return "0.0.0.0"; },
+    "getAddress()[B": () => new Int8Array(4),
+    "isLoopbackAddress()Z": function (this: JInetAddress) { return this.host === "localhost" || this.host.startsWith("127.") ? 1 : 0; },
+    "isAnyLocalAddress()Z": function (this: JInetAddress) { return this.host === "0.0.0.0" ? 1 : 0; },
     "toString()Ljava/lang/String;": function (this: JInetAddress) { return this.host + "/0.0.0.0"; },
+  },
+});
+// NetworkInterface: the browser exposes no interfaces, and the relay's address is the server's,
+// not ours. One loopback interface is what a device with no permission to enumerate sees, and
+// it keeps the callers that walk them (device-id fallbacks, MAC lookups) on their empty path.
+class JNetworkInterface extends JObj { iname = "lo"; }
+const loopback = () => { const a = new JInetAddress(); a.host = "localhost"; return a; };
+rt.register({
+  name: "java/net/NetworkInterface", ctor: JNetworkInterface,
+  methods: {
+    "getName()Ljava/lang/String;": function (this: JNetworkInterface) { return this.iname; },
+    "getDisplayName()Ljava/lang/String;": function (this: JNetworkInterface) { return this.iname; },
+    "getHardwareAddress()[B": () => null,
+    "isLoopback()Z": () => 1,
+    "isUp()Z": () => 1,
+    "getIndex()I": () => 1,
+    "getInetAddresses()Ljava/util/Enumeration;": () => mkIter([loopback()]),
+    "getInterfaceAddresses()Ljava/util/List;": () => newArrayList(),
+    "static getByName(Ljava/lang/String;)Ljava/net/NetworkInterface;": (n: string) =>
+      n === "lo" ? new JNetworkInterface() : null,
+    "static getNetworkInterfaces()Ljava/util/Enumeration;": () => mkIter([new JNetworkInterface()]),
   },
 });
 rt.register({ name: "java/net/SocketAddress", ctor: class extends JObj {} });
@@ -444,6 +468,24 @@ rt.register({
 });
 
 class JURI extends JObj { u = ""; }
+// URLEncoder/URLDecoder: application/x-www-form-urlencoded, which is encodeURIComponent plus
+// "+" for a space and the extra unreserved set Java leaves alone.
+const formEncode = (s: string) =>
+  encodeURIComponent(s ?? "").replace(/[!'()~*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase()).replace(/%20/g, "+");
+rt.register({
+  name: "java/net/URLEncoder", ctor: class extends JObj {},
+  methods: {
+    "static encode(Ljava/lang/String;)Ljava/lang/String;": (s: string) => formEncode(s),
+    "static encode(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (s: string) => formEncode(s),
+  },
+});
+rt.register({
+  name: "java/net/URLDecoder", ctor: class extends JObj {},
+  methods: {
+    "static decode(Ljava/lang/String;)Ljava/lang/String;": (s: string) => decodeURIComponent((s ?? "").replace(/\+/g, " ")),
+    "static decode(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (s: string) => decodeURIComponent((s ?? "").replace(/\+/g, " ")),
+  },
+});
 rt.register({
   name: "java/net/URI", ctor: JURI, ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   methods: {
