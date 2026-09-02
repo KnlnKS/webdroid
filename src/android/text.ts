@@ -541,6 +541,14 @@ rt.register({
   },
 });
 rt.register({ name: "android/text/StaticLayout", ctor: JStaticLayout, sup: "android/text/Layout", methods: {} });
+/** a StaticLayout for a TextView's current text/paint/width (what TextView.getLayout() hands out) */
+export function mkStaticLayout(text: string, p: JTextPaint, w: number, mult = 1, add = 0, maxLines = Number.MAX_SAFE_INTEGER): JLayout {
+  const l = new JStaticLayout();
+  l.text = text; l.paint = p; l.width = Math.max(0, w);
+  l.spacingMult = mult; l.spacingAdd = add;
+  l.layoutLines(maxLines);
+  return l;
+}
 
 // Layout$Alignment enum + TextDirectionHeuristics markers
 mkEnumSet("android/text/Layout$Alignment", ["ALIGN_NORMAL", "ALIGN_OPPOSITE", "ALIGN_CENTER"]);

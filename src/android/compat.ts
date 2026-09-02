@@ -163,18 +163,27 @@ rt.register({
 
 // EdgeEffect (visual stub)
 rt.register({
-  name: "android/widget/EdgeEffect", ctor: class extends JObj {},
+  name: "android/widget/EdgeEffect", ctor: class extends JObj { color = 0x666666; dist = 0; },
+  statics: { DEFAULT_BLEND_MODE: null },
   methods: {
     "<init>(Landroid/content/Context;)V": function () {},
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function () {},
     "setSize(II)V": () => {},
     "isFinished()Z": () => 1,
     "onPull(F)V": () => {},
     "onPull(FF)V": () => {},
-    "onRelease()V": () => {},
+    // stretch overscroll (API 31): the pulled distance is what the caller reads back
+    "onPullDistance(FF)F": function (this: any, d: number) { const before = this.dist; this.dist = Math.max(0, Math.min(1, this.dist + d)); return this.dist - before; },
+    "getDistance()F": function (this: any) { return this.dist; },
+    "onRelease()V": function (this: any) { this.dist = 0; },
     "onAbsorb(I)V": () => {},
     "draw(Landroid/graphics/Canvas;)Z": () => 0,
-    "finish()V": () => {},
-    "setColor(I)V": () => {},
+    "finish()V": function (this: any) { this.dist = 0; },
+    "setColor(I)V": function (this: any, c: number) { this.color = c; },
+    "getColor()I": function (this: any) { return this.color; },
+    "setBlendMode(Landroid/graphics/BlendMode;)V": () => {},
+    "getBlendMode()Landroid/graphics/BlendMode;": () => null,
+    "getMaxHeight()I": () => 0,
   },
 });
 

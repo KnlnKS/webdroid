@@ -5,7 +5,7 @@ import { mangleMethod, jarray } from "../jvm/abi";
 import { vcall, mkEnumSet } from "../jvm/natives/jlang";
 import { usLocale } from "../jvm/natives/jutil";
 import { JCanvas, JTypeface, tfDefault, tfMedium, typefaceFor, cssColor, measureCtx, fontAscent, fontDescent, JBitmap, JRect } from "./graphics";
-import { JTextPaint, spannedString, JEditable } from "./text";
+import { JTextPaint, spannedString, JEditable, mkStaticLayout } from "./text";
 import { JDrawable, loadDrawableRV, loadDrawable, loadColorStateList, JColorStateList, cslColor, mkCsl, ST, JRippleDrawable, JGradientDrawable, JBitmapDrawable } from "./drawable";
 import { JAttrSet } from "./res";
 import {
@@ -593,6 +593,7 @@ export class JTextView extends JView {
   imeOptions = 0; breakStrategy = 0; hyphenation = 0; autoSizeType = 0;
   linksClickable = true; fontVariation: string | null = null;
   maxW = Infinity;
+  layoutObj: unknown = null; layoutKey = "";
   text = "";
   rawText: unknown = "";       // original CharSequence (may be Spannable)
   hint = "";
@@ -1021,6 +1022,24 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getFilters()[Landroid/text/InputFilter;": function (this: JTextView) { const a = this.filters ?? []; (a as any).$t = "Landroid/text/InputFilter;"; return a; },
   "setMaxWidth(I)V": function (this: JTextView, w: number) { this.maxW = w; requestLayout(this); },
   "getMaxWidth()I": function (this: JTextView) { return Number.isFinite(this.maxW) ? this.maxW : -1; },
+  // AOSP: null until the first measure; afterwards the Layout over the measured text width
+  "getLayout()Landroid/text/Layout;": function (this: JTextView) {
+    if (this.layoutWidthFor < 0) return null;
+    const dlW = this.drawableL ? Math.max(0, this.drawableL.intrinsicW()) + this.drawablePad : 0;
+    const drW = this.drawableR ? Math.max(0, this.drawableR.intrinsicW()) + this.drawablePad : 0;
+    const w = this.layoutWidthFor - this.padL - this.padR - dlW - drW;
+    const key = this.displayText() + "\u0000" + w + "\u0000" + this.paintT.font() + "\u0000" + this.maxLinesV;
+    if (this.layoutKey !== key) {
+      this.layoutKey = key;
+      this.layoutObj = mkStaticLayout(this.displayText(), this.paintT, w, this.lineSpacingMult, this.lineSpacingExtra, Number.isFinite(this.maxLinesV) ? this.maxLinesV : undefined);
+    }
+    return this.layoutObj;
+  },
+  "getLineBounds(ILandroid/graphics/Rect;)I": function (this: JTextView, i: number, r: JRect) {
+    const lh = this.lineHeight(), w = this.layoutWidthFor >= 0 ? this.layoutWidthFor : this.width();
+    r.left = this.padL; r.right = Math.max(this.padL, w - this.padR); r.top = this.padT + i * lh; r.bottom = r.top + lh;
+    return r.top + this.ascent();
+  },
   "setMinWidth(I)V": function (this: JTextView, w: number) { this.minW = w; },
   "setMaxHeight(I)V": () => {},
   "setMinHeight(I)V": function (this: JTextView, h: number) { this.minH = h; },

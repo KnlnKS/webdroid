@@ -41,6 +41,7 @@ export class ClassInfo {
   assumeReentrant = false;            // a wait on this clinit timed out once: stop waiting (same-chain cycle)
   stub = false;                       // auto-stubbed unknown class (Class.forName must throw CNFE)
   waitingOn: ClassInfo | null = null; // class this one's clinit currently awaits (cycle detection)
+  initThread: unknown = null;         // the Java thread running <clinit> (state 1)
   fieldTable = new Map<string, string>(); // own instance fields: name → mangled
   ownMethods: string[] = [];          // mangled prototype methods declared here
   dex?: DexFile; def?: ClassDef;
@@ -377,10 +378,15 @@ export class Runtime {
       // clinit cycle (info's chain transitively waits on `from`) → JVM same-thread
       // semantics: proceed with partial statics instead of deadlocking
       for (let c = info.waitingOn; c; c = c.waitingOn) if (c === from) return null;
-      return this.awaitInit(info, from, true);
+      // JVM: only the initializing thread may proceed on a class mid-<clinit>; every other
+      // thread blocks until it completes, however long a heavy static initializer takes. The
+      // timed escape stays for the same thread, where a cycle through untagged methods is
+      // indistinguishable from a wait that will never end.
+      return this.awaitInit(info, from, info.initThread === this.th());
     }
     if (info.state !== 0) return null;
     info.state = 1;
+    info.initThread = this.th();
     info.initP = (async () => {
       try {
         if (info.superInfo && info.superInfo.state !== 2) await this.initClass(info.superInfo, info);
@@ -413,6 +419,7 @@ export class Runtime {
         throw e;
       } finally {
         info.initP = null;
+        info.initThread = null;
         info.assumeReentrant = false;
       }
     })();
