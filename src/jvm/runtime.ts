@@ -198,7 +198,9 @@ export class Runtime {
   /** JNI registry: implementations for dex-declared native methods (key "cls|name+desc") */
   jni = new Map<string, (...a: never[]) => unknown>();
   registerJni(cls: string, sig: string, fn: (...a: never[]) => unknown) { this.jni.set(cls + "|" + sig, fn); }
-  jniFn(cls: string, sig: string): ((...a: never[]) => unknown) | null { return this.jni.get(cls + "|" + sig) ?? null; }
+  jniFn(cls: string, sig: string): ((...a: never[]) => unknown) | null { return this.jni.get(cls + "|" + sig) ?? this.jniResolver?.(cls, sig) ?? null; }
+  /** set by the native tier: resolve a native by its JNI short-name export (`Java_pkg_Cls_m`) in a loaded library */
+  jniResolver: ((cls: string, sig: string) => ((...a: never[]) => unknown) | null) | null = null;
   /** library names (System.loadLibrary spelling) whose natives a TS shim provides */
   nativeLibs = new Set<string>();
   claimNativeLib(name: string) { this.nativeLibs.add(name); }

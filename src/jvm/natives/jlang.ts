@@ -245,7 +245,7 @@ class JThrowable extends JObj {
   jsStack: string | undefined = new Error().stack;
 }
 /** JVM-shaped stack trace text: header from the (overridable) toString, frames from the JS stack. */
-async function stackTraceText(t: JThrowable): Promise<string> {
+export async function stackTraceText(t: JThrowable): Promise<string> {
   const frames = (js: string | undefined) =>
     (js ?? "").split("\n").slice(1, 41).map((l) => "\n\tat " + l.trim().replace(/^at /, "")).join("");
   let out = String(await vcall(t, "toString", "()Ljava/lang/String;")) + frames(t.jsStack);

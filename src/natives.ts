@@ -48,3 +48,4 @@ import "./android/ime";
 import "./android/notification";
 import "./android/base64";
 import "./android/conscrypt";
+import "./native/loader";

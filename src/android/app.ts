@@ -7,6 +7,7 @@ import { vcall, stringHash, javaFormat, newObj } from "../jvm/natives/jlang";
 import { jarray } from "../jvm/abi";
 import { newArrayList, type JList } from "../jvm/natives/jutil";
 import { vfs, mkFile, JFile } from "../jvm/natives/jio";
+const privDir = (p: string): JFile => { vfs.mkdir(p); return mkFile(p); };
 import { type Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, rvColor, rvDimen, rvInt, rvString, resString } from "./res";
 import { JResources, JAssetManager } from "./resnative";
 import { JView, JViewGroup, AID, requestLayout, invalidate, specSize, findById, attachView, detachView, dispatchConfigurationChanged } from "./view";
@@ -277,24 +278,26 @@ const contextMethods: NativeSpec["methods"] = {
   "getClassLoader()Ljava/lang/ClassLoader;": bootLoader,
   "getPackageResourcePath()Ljava/lang/String;": function (this: JContext) { return getAppInfo(this.$host).sourceDir; },
   "getPackageCodePath()Ljava/lang/String;": function (this: JContext) { return getAppInfo(this.$host).sourceDir; },
-  "getFilesDir()Ljava/io/File;": function (this: JContext) { return mkFile(`/data/data/${this.$host.pkg}/files`); },
-  "getCacheDir()Ljava/io/File;": function (this: JContext) { return mkFile(`/data/data/${this.$host.pkg}/cache`); },
-  "getCodeCacheDir()Ljava/io/File;": function (this: JContext) { return mkFile(`/data/data/${this.$host.pkg}/code_cache`); },
-  "getNoBackupFilesDir()Ljava/io/File;": function (this: JContext) { return mkFile(`/data/data/${this.$host.pkg}/no_backup`); },
+  // AOSP's ensurePrivateDirExists: the directory exists once asked for (native code stat()s it)
+  "getFilesDir()Ljava/io/File;": function (this: JContext) { return privDir(`/data/data/${this.$host.pkg}/files`); },
+  "getCacheDir()Ljava/io/File;": function (this: JContext) { return privDir(`/data/data/${this.$host.pkg}/cache`); },
+  "getCodeCacheDir()Ljava/io/File;": function (this: JContext) { return privDir(`/data/data/${this.$host.pkg}/code_cache`); },
+  "getNoBackupFilesDir()Ljava/io/File;": function (this: JContext) { return privDir(`/data/data/${this.$host.pkg}/no_backup`); },
   "getExternalFilesDir(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, type: string | null) {
-    return mkFile(`/sdcard/Android/data/${this.$host.pkg}/files` + (type ? "/" + type : ""));
+    return privDir(`/sdcard/Android/data/${this.$host.pkg}/files` + (type ? "/" + type : ""));
   },
   "getExternalCacheDir()Ljava/io/File;": function (this: JContext) {
-    return mkFile(`/sdcard/Android/data/${this.$host.pkg}/cache`);
+    return privDir(`/sdcard/Android/data/${this.$host.pkg}/cache`);
   },
-  "getObbDir()Ljava/io/File;": function (this: JContext) { return mkFile(`/sdcard/Android/obb/${this.$host.pkg}`); },
+  "getObbDir()Ljava/io/File;": function (this: JContext) { return privDir(`/sdcard/Android/obb/${this.$host.pkg}`); },
   "getDir(Ljava/lang/String;I)Ljava/io/File;": function (this: JContext, name: string) {
-    return mkFile(`/data/data/${this.$host.pkg}/app_${name}`);
+    return privDir(`/data/data/${this.$host.pkg}/app_${name}`);
   },
   "getDatabasePath(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, name: string) {
     return mkFile(dbPath(this.$host.pkg, name));
   },
   "getFileStreamPath(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, name: string) {
+    privDir(`/data/data/${this.$host.pkg}/files`);
     return mkFile(`/data/data/${this.$host.pkg}/files/${name}`);
   },
   "openFileInput(Ljava/lang/String;)Ljava/io/FileInputStream;": function (this: JContext, name: string) {

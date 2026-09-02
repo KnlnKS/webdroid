@@ -8,6 +8,7 @@
 import type { Flow } from "../types";
 
 const N = (x: number, y: number) => ({ x: x / 720, y: y / 1280 });
+const PLAY = N(360, 560);      // the title screen's "play" button
 const CENTER = N(360, 640);
 
 export const doodlejump: Flow = {
@@ -19,8 +20,9 @@ export const doodlejump: Flow = {
   minFps: 30,
   steps: [
     { id: "launch", label: "Launch — loader", action: { type: "launch" }, settleDelayMs: 3000, animated: true },
-    { id: "title", label: "Title screen", action: { type: "settle" }, settleDelayMs: 3000, animated: true },
-    { id: "play", label: "Title → play", action: { type: "tapAt", ...CENTER }, settleDelayMs: 1500, animated: true },
+    // the game decodes every texture at startup (~11G guest instructions): the title takes ~18s to appear
+    { id: "title", label: "Title screen", action: { type: "settle" }, settleDelayMs: 18000, animated: true },
+    { id: "play", label: "Title → play", action: { type: "tapAt", ...PLAY }, settleDelayMs: 1500, animated: true },
     // ~3s of gameplay taps with no capture inside it: the perf window
     { id: "taps", label: "5 taps in play", action: { type: "tapAt", ...CENTER, repeat: 5, everyMs: 600 }, animated: true },
     { id: "playing", label: "Gameplay frame", action: { type: "settle" }, settleDelayMs: 3000, animated: true },

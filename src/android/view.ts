@@ -155,6 +155,8 @@ export class JView extends JObj {
   visibility = 0;                  // 0 visible, 4 invisible, 8 gone
   background: JDrawable | null = null;
   foreground: JDrawable | null = null;
+  /** a SurfaceView's surface: composited behind the view's own drawing, like SurfaceFlinger does */
+  surfaceLayer: OffscreenCanvas | null = null;
   alphaV = 1;
   scrollX = 0; scrollY = 0;
   translationX = 0; translationY = 0; translationZ = 0;
@@ -358,7 +360,8 @@ export async function drawView(v: JView, cv: JCanvas) {
     ctx.beginPath();
     ctx.rect(0, 0, v.width(), v.height());
     ctx.clip();
-    if (v.background) {
+    if (v.surfaceLayer) ctx.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
+    else if (v.background) {
       v.background.bounds.left = 0; v.background.bounds.top = 0;
       v.background.bounds.right = v.width(); v.background.bounds.bottom = v.height();
       await guardCall((v.background as any)[M_drawableDraw], v.background, cv);
