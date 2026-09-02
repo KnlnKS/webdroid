@@ -5,7 +5,8 @@
 // authoritiesOf) lives with PackageManager in app.ts; DocumentsContract reads it from there.
 
 import { rt, JObj } from "../jvm/runtime";
-import { mkUri, providerNodes, matchesAction, authoritiesOf } from "./app";
+import { providerNodes, matchesAction, authoritiesOf } from "./app";
+import { mkUri } from "./net";
 
 
 const PROVIDER_INTERFACE = "android.content.action.DOCUMENTS_PROVIDER";

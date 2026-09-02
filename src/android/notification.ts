@@ -8,7 +8,7 @@
 import { newArrayList } from "../jvm/natives/jutil";
 import { rt, JObj } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
-import { mkUri } from "./app";
+import { mkUri } from "./net";
 import type { JBundle } from "./os";
 import type { JBitmap } from "./graphics";
 import { JBitmapDrawable } from "./drawable";

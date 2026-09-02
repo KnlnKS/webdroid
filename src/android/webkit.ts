@@ -10,7 +10,8 @@ import { vcall, mkEnumSet, type JSimpleEnum } from "../jvm/natives/jlang";
 import { JViewGroup, initViewFromCtx, defaultSize, type JView } from "./view";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
-import { mkUri, type JContext } from "./app";
+import { type JContext } from "./app";
+import { mkUri } from "./net";
 import { WEB_INJECT } from "../shell/webinject";
 
 const inst = <T = JObj>(cls: string): T => new (rt.link(cls).ctor)();
