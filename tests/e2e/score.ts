@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { loadPng, savePng, hconcat } from "./lib/png";
 import { diffImages } from "./lib/diff";
 import { html, printFlow, type FlowReport, type StepReport } from "./lib/report";
-import { selectFlows } from "./lib/args";
+import { parseArgs } from "./lib/args";
 import type { Flow, Manifest } from "./types";
 import type { StepRun } from "./capture-webdroid";
 import { E2E_DIR, sha1 } from "./lib/util";
@@ -92,7 +92,7 @@ export async function writeReport(reports: FlowReport[]): Promise<string> {
 }
 
 if (import.meta.main) {
-  const flows = selectFlows(process.argv.slice(2), "bun run e2e:diff");
+  const { flows } = parseArgs(process.argv.slice(2), "bun run e2e:diff");
   const reports: FlowReport[] = [];
   for (const f of flows) {
     const r = await diffFlow(f);

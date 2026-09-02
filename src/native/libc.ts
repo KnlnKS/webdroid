@@ -4,8 +4,7 @@
 import { mem, NativeFault } from "./mem";
 import { hostLib, hostData, NORET, VaList, type HostFn, fbits, bitsf, dbits, bitsd } from "./host";
 import { E } from "./abi";
-import type { Cpu } from "./cpu";
-import { invalidateRange, markProcessExited } from "./cpu";
+import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
 import { stdioInit } from "./stdio";
 import { pthreadInit } from "./pthread";

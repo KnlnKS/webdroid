@@ -25,22 +25,6 @@ function resolve(name: string): Flow[] {
 
 const DEFAULT_SHOTS_DIR = "webdroid-shots";
 
-/**
- * `--shots [dir]` — save every distinct webdroid frame DURING each step, not just the settled
- * one that gets diffed. Returns the directory, or undefined when the flag is absent.
- */
-export function shotsDir(argv: string[]): string | undefined {
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]!;
-    if (a === "--shots") {
-      const v = argv[i + 1];
-      return v && !v.startsWith("-") ? v : DEFAULT_SHOTS_DIR;
-    }
-    if (a.startsWith("--shots=")) return a.slice("--shots=".length) || DEFAULT_SHOTS_DIR;
-  }
-  return undefined;
-}
-
 function printHelp(cmd: string, extra = ""): void {
   console.log(`usage: ${cmd} [--test <flow>]... [--shots [dir]]
 
@@ -57,22 +41,25 @@ known flows: ${KNOWN().join(", ")}`);
 }
 
 /**
- * Flows named on the command line, or all of them when none are named. Any flag this
- * parser doesn't know is an error rather than a silently ignored typo.
+ * The flows named on the command line, or all of them when none are named, plus the
+ * `--shots [dir]` directory when that flag is present (every distinct webdroid frame DURING
+ * each step, not just the settled one that gets diffed). Any flag this parser doesn't know
+ * is an error rather than a silently ignored typo.
  */
-export function selectFlows(argv: string[], cmd: string): Flow[] {
+export function parseArgs(argv: string[], cmd: string): { flows: Flow[]; shots?: string } {
   const picked: Flow[] = [];
   const unknownFlags: string[] = [];
+  let shots: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--shots") {
-      // Skip its optional directory value so it isn't read as a flow name.
       const v = argv[i + 1];
-      if (v && !v.startsWith("-")) i++;
+      // its optional directory value must not also be read as a flow name
+      if (v && !v.startsWith("-")) { shots = v; i++; } else shots = DEFAULT_SHOTS_DIR;
       continue;
     }
-    if (a.startsWith("--shots=")) continue;
+    if (a.startsWith("--shots=")) { shots = a.slice("--shots=".length) || DEFAULT_SHOTS_DIR; continue; }
     if (a === "--help" || a === "-h") { printHelp(cmd); process.exit(0); }
     if (a === "--list") { console.log(KNOWN().join("\n")); process.exit(0); }
     if (a === "--test" || a === "-t") {
@@ -96,6 +83,5 @@ export function selectFlows(argv: string[], cmd: string): Flow[] {
 
   // De-dupe so `--test mihon --test mihon-app` doesn't run mihon-app twice.
   const seen = new Set<string>();
-  const flows = (picked.length ? picked : FLOWS).filter((f) => !seen.has(f.app) && seen.add(f.app));
-  return flows;
+  return { flows: (picked.length ? picked : FLOWS).filter((f) => !seen.has(f.app) && seen.add(f.app)), shots };
 }

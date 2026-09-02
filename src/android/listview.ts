@@ -4,9 +4,8 @@
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
-import { JAttrSet } from "./res";
 import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSizeAndState, invalidate, requestLayout, initViewFromCtx, inheritContext, AID, JMotionEvent, uiState, guardCall, findById } from "./view";
-import { obtainStyled, rvDimen, rvInt, rvString, type Resources } from "./res";
+import { JAttrSet, obtainStyled, rvDimen, rvInt, rvString, type Resources } from "./res";
 import { attr } from "./axml";
 import { JCanvas } from "./graphics";
 import { JDrawable, loadDrawableRV } from "./drawable";

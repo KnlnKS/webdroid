@@ -1,9 +1,8 @@
 // android.database.* over sql.js (in-memory, persisted to localStorage per db).
 
 import initSqlJs, { type Database } from "sql.js";
-import { mangleMethod } from "../jvm/abi";
+import { mangleMethod, charsToString } from "../jvm/abi";
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
-import { charsToString } from "../jvm/abi";
 import { vcall, boxInt, box, JLong } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { JBundle } from "./os";

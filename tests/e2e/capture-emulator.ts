@@ -7,12 +7,12 @@
 // when the flows change; `bun run e2e` then diffs off the committed result with no emulator.
 import { mkdir, rm } from "node:fs/promises";
 import * as emu from "./drivers/emulator";
-import { selectFlows } from "./lib/args";
+import { parseArgs } from "./lib/args";
 import { PINNED_CLOCK_MS, SCREEN_W, SCREEN_H, type Flow, type Manifest, type RecordedStep } from "./types";
 import { E2E_DIR, sleep } from "./lib/util";
 import { device as profile } from "../../src/shell/config";
 
-const flows = selectFlows(process.argv.slice(2), "bun run e2e:record");
+const { flows } = parseArgs(process.argv.slice(2), "bun run e2e:record");
 
 async function ensureDevice() {
   const devices = (await emu.sh(["devices"], { quiet: true })).split("\n").filter((l) => /\tdevice$/.test(l));

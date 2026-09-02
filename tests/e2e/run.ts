@@ -4,13 +4,12 @@ import { WebdroidDriver } from "./drivers/webdroid";
 import { captureFlow, loadManifest, prepareShots, type StepRun } from "./capture-webdroid";
 import { diffFlow, writeReport } from "./score";
 import { printFlow, printSmoke, type FlowReport } from "./lib/report";
-import { selectFlows, shotsDir } from "./lib/args";
+import { parseArgs } from "./lib/args";
 import { FLOWS } from "./flows";
 
-const flows = selectFlows(process.argv.slice(2), "bun run e2e");
+const { flows, shots } = parseArgs(process.argv.slice(2), "bun run e2e");
 if (flows.length) console.log(`flows: ${flows.map((f) => f.app).join(", ")}`);
 
-const shots = shotsDir(process.argv.slice(2));
 const drv = await WebdroidDriver.launch();
 if (shots) { await prepareShots(shots); drv.enableShots(shots); }
 const runs = new Map<string, StepRun[]>();

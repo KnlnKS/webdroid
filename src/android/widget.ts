@@ -7,7 +7,6 @@ import { usLocale } from "../jvm/natives/jutil";
 import { JCanvas, JTypeface, tfDefault, tfMedium, typefaceFor, cssColor, measureCtx, fontAscent, fontDescent, fontTop, fontBottom, JBitmap, JRect } from "./graphics";
 import { JTextPaint, spannedString, JEditable, mkStaticLayout } from "./text";
 import { JDrawable, loadDrawableRV, loadDrawable, loadColorStateList, JColorStateList, cslColor, mkCsl, ST, JRippleDrawable, JGradientDrawable, JBitmapDrawable } from "./drawable";
-import { JAttrSet } from "./res";
 import {
   JView, JViewGroup, JLayoutParams, JMarginLP, JFrameLP, JLinearLP,
   MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, makeSpec, MATCH_PARENT, WRAP_CONTENT,
@@ -15,7 +14,7 @@ import {
   resolveSizeAndState, defaultSize, invalidate, requestLayout, initViewFromCtx,
   lpFromAttrs, AID, JMotionEvent, uiState, guardCall,
 } from "./view";
-import { obtainStyled, rvDimen, rvColor, rvInt, rvString, rvFloat, type Resources } from "./res";
+import { JAttrSet, obtainStyled, rvDimen, rvColor, rvInt, rvString, rvFloat, type Resources } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
 import { inflateLayout } from "./inflate";

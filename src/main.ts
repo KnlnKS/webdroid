@@ -26,7 +26,6 @@ root.innerHTML = `
     <div id="nav" style="display:flex;justify-content:space-around;padding-top:10px">
       <button class="navb" id="btn-back" title="Back">◁</button>
       <button class="navb" id="btn-home" title="Home">◯</button>
-      <button class="navb" id="btn-recents" title="Recents">▢</button>
     </div>
   </div>
   <div id="side" style="width:340px;max-height:92vh;overflow:auto;font:12px/1.5 ui-monospace,monospace;color:#9aa">
@@ -293,7 +292,6 @@ canvas.addEventListener("pointercancel", () => {
 });
 document.getElementById("btn-back")!.addEventListener("click", () => void pressBack());
 document.getElementById("btn-home")!.addEventListener("click", () => location.reload());
-document.getElementById("btn-recents")!.addEventListener("click", () => {});
 
 kbd.addEventListener("input", () => void editInput(kbd.value));
 kbd.addEventListener("keydown", (e) => {

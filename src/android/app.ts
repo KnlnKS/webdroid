@@ -2,9 +2,8 @@
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { device } from "../shell/config";
-import { mangleMethod } from "../jvm/abi";
+import { mangleMethod, jarray } from "../jvm/abi";
 import { vcall, javaFormat, newObj } from "../jvm/natives/jlang";
-import { jarray } from "../jvm/abi";
 import { newArrayList, mkIter, type JList } from "../jvm/natives/jutil";
 import { vfs, mkFile, JFile } from "../jvm/natives/jio";
 const privDir = (p: string): JFile => { vfs.mkdir(p); return mkFile(p); };
