@@ -110,7 +110,9 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
     application: null, jresources: jres,
     statusBarColor: -16777216, navBarColor: -16777216,
     launch: async (component, intent) => { await launchActivity(component, intent); },
-    finishActivity: (a) => { void finishActivity(a); },
+    // finish() only requests: AOSP delivers the pause/stop/destroy chain as later main-thread
+    // messages, so it queues as a main job rather than running detached alongside the caller
+    finishActivity: (a) => { void onMain(() => finishActivity(a)); },
     recreateActivity: (a) => { recreateActivity(a); },
     currentActivity: () => booted?.stack[booted.stack.length - 1] ?? null,
     invalidateOptionsMenu: (a) => { void buildOptionsMenu(a); },
