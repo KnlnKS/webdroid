@@ -8,7 +8,7 @@ import { Arsc } from "../android/arsc";
 import { parseAXML, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
 import { mkJResources } from "../android/resnative";
-import { setAppHost, setManifest, type AppHost, JIntent, ensureDecor, JActivity, JMenu, pushMenuToBar, JContext, fireActivityLifecycle } from "../android/app";
+import { setAppHost, setManifest, type AppHost, JIntent, ensureDecor, JActivity, JMenu, pushMenuToBar, JContext, fireActivityLifecycle, APPEARANCE_LIGHT_STATUS_BARS } from "../android/app";
 import { reportUncaught, JBundle } from "../android/os";
 import { onMain, inMainJob } from "../android/mainloop";
 import {
@@ -449,7 +449,7 @@ async function tick0(ctx: CanvasRenderingContext2D) {
           if (sb !== sbColor) { sbColor = sb; sbCss = cssColor(sb); }
           ctx.fillStyle = sbCss;
           ctx.fillRect(0, 0, SCREEN_W, STATUS_H);
-          drawStatusIcons(ctx, sb);
+          drawStatusIcons(ctx, sb, act!.window);
         }
         ctx.translate(0, contentY);
         const cv = JCanvas.wrap(ctx, SCREEN_W, contentH);
@@ -482,9 +482,12 @@ function forceLayoutFlags(v: JView) {
   v.oldWSpec = -1;
   if (v instanceof JViewGroup) for (const c of v.children) forceLayoutFlags(c);
 }
-function drawStatusIcons(ctx: CanvasRenderingContext2D, bg: number) {
-  const lum = 0.299 * ((bg >> 16) & 0xff) + 0.587 * ((bg >> 8) & 0xff) + 0.114 * (bg & 0xff);
-  ctx.fillStyle = lum > 160 ? "rgba(0,0,0,0.85)" : "#ffffff";
+function drawStatusIcons(ctx: CanvasRenderingContext2D, bg: number, w: JActivity["window"]) {
+  // AOSP: the light-status-bars appearance bit decides once the app has set or cleared it;
+  // the luminance guess only stands in for an app that never asked.
+  const dark = w.appearanceMask & APPEARANCE_LIGHT_STATUS_BARS ? (w.appearance & APPEARANCE_LIGHT_STATUS_BARS) !== 0
+    : 0.299 * ((bg >> 16) & 0xff) + 0.587 * ((bg >> 8) & 0xff) + 0.114 * (bg & 0xff) > 160;
+  ctx.fillStyle = dark ? "rgba(0,0,0,0.85)" : "#ffffff";
   ctx.font = `500 26px ${tfMedium.family}`;
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";

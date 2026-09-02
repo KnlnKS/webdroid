@@ -879,7 +879,15 @@ class JWindow extends JObj {
   features = new Set<number>();
   /** WindowManager.LayoutParams flags; the shell reads FLAG_FULLSCREEN off the top activity. */
   flags = 0;
+  /** WindowInsetsController appearance bits; `appearanceMask` = the bits the app has ever
+   *  set or cleared, so the shell can tell "cleared" from "never asked" (device.ts). */
+  appearance = 0;
+  appearanceMask = 0;
+  barsBehavior = 1;
+  insetsController: JInsetsController | null = null;
 }
+export const APPEARANCE_LIGHT_STATUS_BARS = 8;
+class JInsetsController extends JObj { w: JWindow = null!; }
 /** FLAG_FULLSCREEN moves the window's top edge, so a flag change is a relayout of the decor. */
 function setWindowFlags(w: JWindow, flags: number) {
   if (w.flags === flags) return;
@@ -1686,9 +1694,38 @@ rt.register({
     "getWindowManager()Landroid/view/WindowManager;": function (this: JWindow) { return systemService(this.activity, "window"); },
     "setFeatureInt(II)V": () => {},
     "hasFeature(I)Z": function (this: JWindow, f: number) { return this.features.has(f) ? 1 : 0; },
-    "getInsetsController()Landroid/view/WindowInsetsController;": () => null,
+    "getInsetsController()Landroid/view/WindowInsetsController;": function (this: JWindow) {
+      if (!this.insetsController) { this.insetsController = new JInsetsController(); this.insetsController.w = this; }
+      return this.insetsController;
+    },
     "setDecorFitsSystemWindows(Z)V": () => {},
     "getSharedElementEnterTransition()Landroid/transition/Transition;": () => null,
+  },
+});
+// The API-30 controller: appearance/behavior are window state (the shell reads the
+// light-status-bars bit); show/hide are no-ops until the shell has movable system bars.
+rt.register({
+  name: "android/view/WindowInsetsController", ctor: class extends JObj {},
+  statics: { APPEARANCE_LOW_PROFILE_BARS: 4, APPEARANCE_LIGHT_STATUS_BARS, APPEARANCE_LIGHT_NAVIGATION_BARS: 16,
+    BEHAVIOR_DEFAULT: 1, BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE: 2 },
+});
+rt.register({
+  name: "webdroid/InsetsController", ctor: JInsetsController, ifaces: ["android/view/WindowInsetsController"],
+  methods: {
+    "setSystemBarsAppearance(II)V": function (this: JInsetsController, v: number, mask: number) {
+      const w = this.w;
+      w.appearance = (w.appearance & ~mask) | (v & mask);
+      w.appearanceMask |= mask;
+      invalidate();
+    },
+    "getSystemBarsAppearance()I": function (this: JInsetsController) { return this.w.appearance; },
+    "setSystemBarsBehavior(I)V": function (this: JInsetsController, b: number) { this.w.barsBehavior = b; },
+    "getSystemBarsBehavior()I": function (this: JInsetsController) { return this.w.barsBehavior; },
+    "show(I)V": () => {},
+    "hide(I)V": () => {},
+    "addOnControllableInsetsChangedListener(Landroid/view/WindowInsetsController$OnControllableInsetsChangedListener;)V": () => {},
+    "removeOnControllableInsetsChangedListener(Landroid/view/WindowInsetsController$OnControllableInsetsChangedListener;)V": () => {},
+    "controlWindowInsetsAnimation(IJLandroid/view/animation/Interpolator;Landroid/os/CancellationSignal;Landroid/view/WindowInsetsAnimationControlListener;)V": () => {},
   },
 });
 rt.register({
