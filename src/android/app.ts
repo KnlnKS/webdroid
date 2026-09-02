@@ -885,6 +885,10 @@ function mkActivityInfo(cls: string): JActivityInfo {
 }
 
 // ── Window + decor + ActionBar-lite
+/** PhoneWindow's own content handling, not the Dialog subclass's override: appcompat's
+ *  setContentView override installs its sub-decor THROUGH Window.setContentView, so dispatching
+ *  back to the override would recurse. */
+const dialogNative = (name: string, desc: string) => rt.link("android/app/Dialog").ctor.prototype[mangleMethod(name, desc)] as (...a: unknown[]) => unknown;
 class JWindow extends JObj {
   activity: any = null;
   decor: JFrameLayout | null = null;
@@ -1669,19 +1673,19 @@ rt.register({
       return this.decor ? findById(this.decor, id) : null;
     },
     "setContentView(I)V": function (this: JWindow, id: number) {
-      if (this.dialog) return vcall(this.dialog, "setContentView", "(I)V", id);
+      if (this.dialog) return dialogNative("setContentView", "(I)V").call(this.dialog, id);
       return (activityMethods["setContentView(I)V"] as any).call(this.activity, id);
     },
     "setContentView(Landroid/view/View;)V": function (this: JWindow, v: unknown) {
-      if (this.dialog) return vcall(this.dialog, "setContentView", "(Landroid/view/View;)V", v);
+      if (this.dialog) return dialogNative("setContentView", "(Landroid/view/View;)V").call(this.dialog, v);
       return (activityMethods["setContentView(Landroid/view/View;)V"] as any).call(this.activity, v);
     },
     "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JWindow, v: unknown, lp: unknown) {
-      if (this.dialog) return vcall(this.dialog, "setContentView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", v, lp);
+      if (this.dialog) return dialogNative("setContentView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V").call(this.dialog, v, lp);
       return (activityMethods["setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V"] as any).call(this.activity, v, lp);
     },
     "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JWindow, v: unknown, lp: unknown) {
-      if (this.dialog) return vcall(this.dialog, "addContentView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", v, lp);
+      if (this.dialog) return dialogNative("addContentView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V").call(this.dialog, v, lp);
       return (activityMethods["addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V"] as any).call(this.activity, v, lp);
     },
     "setFlags(II)V": function (this: JWindow, flags: number, mask: number) { setWindowFlags(this, (this.flags & ~mask) | (flags & mask)); },
