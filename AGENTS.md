@@ -4,6 +4,7 @@ Read `NOTES.md` first: architecture, the "do not regress" lessons, janitor invar
 
 ## Verify
 - `bun run typecheck` — must be clean (noUnusedLocals).
+- `bun run test` — the ARM32 decoder unit tests (`src/native/arm.test.ts`).
 - `bun run smoke apks/<apk>` — every class compiles.
 - `bun run dev` (or `PORT=<n> bun run server.ts`) then `bun run e2e [--test <flow,...>] [--shots]` —
   drives `tests/e2e/flows/*` over Playwright; per-step `newMissing`/`newErrors`/`nativeRequired`/perf
