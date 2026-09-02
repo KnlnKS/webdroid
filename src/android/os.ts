@@ -796,3 +796,26 @@ rt.register({
     "static pow(FF)F": fm2(Math.pow), "static hypot(FF)F": fm2(Math.hypot),
   },
 });
+
+/** a Runnable over a JS closure, for framework code that must go through a Handler queue */
+class JFnRunnable extends JObj { fn: () => unknown = () => {}; }
+rt.register({ name: "webdroid/FnRunnable", ctor: JFnRunnable, ifaces: ["java/lang/Runnable"], methods: { "run()V": function (this: JFnRunnable) { return this.fn(); } } });
+
+// ── ResultReceiver: a callback that crosses processes on Android; here the send() lands on the
+// creating Handler's looper (or inline when made without one), exactly as the in-process path does.
+class JResultReceiver extends JObj { handler: JHandler | null = null; }
+rt.register({
+  name: "android/os/ResultReceiver", ctor: JResultReceiver, ifaces: ["android/os/Parcelable"],
+  methods: {
+    "<init>(Landroid/os/Handler;)V": function (this: JResultReceiver, h: JHandler | null) { this.handler = h; },
+    "send(ILandroid/os/Bundle;)V": function (this: JResultReceiver, code: number, data: unknown) {
+      const deliver = () => vcall(this, "onReceiveResult", "(ILandroid/os/Bundle;)V", code, data);
+      if (!this.handler) return deliver();
+      const r = new JFnRunnable(); r.fn = deliver;
+      this.handler.postRun(r, 0);
+    },
+    "onReceiveResult(ILandroid/os/Bundle;)V": () => {},
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+  },
+});

@@ -54,6 +54,8 @@ export const vfs = {
 const dirs = new Set<string>(["/data", "/sdcard"]);
 
 // ── File
+rt.register({ name: "java/io/FilenameFilter", ctor: class extends JObj {} });
+rt.register({ name: "java/io/FileFilter", ctor: class extends JObj {} });
 export class JFile extends JObj { path = ""; }
 export function mkFile(path: string): JFile { const f = new JFile(); f.path = vfs.norm(path); return f; }
 // Default dir matches System.getProperty("java.io.tmpdir"). Creation cannot fail in the in-memory vfs.
@@ -115,6 +117,22 @@ rt.register({
     "listFiles()[Ljava/io/File;": function (this: JFile) {
       const a = vfs.list(this.path).map((n) => mkFile(this.path + "/" + n));
       (a as any).$t = "Ljava/io/File;"; return a;
+    },
+    // the filtered forms return null for a non-directory, as the unfiltered ones should too
+    "list(Ljava/io/FilenameFilter;)[Ljava/lang/String;": async function (this: JFile, f: unknown) {
+      const out: string[] = [];
+      for (const n of vfs.list(this.path)) if (!f || await vcall(f, "accept", "(Ljava/io/File;Ljava/lang/String;)Z", this, n)) out.push(n);
+      (out as any).$t = "Ljava/lang/String;"; return out;
+    },
+    "listFiles(Ljava/io/FilenameFilter;)[Ljava/io/File;": async function (this: JFile, f: unknown) {
+      const out: JFile[] = [];
+      for (const n of vfs.list(this.path)) if (!f || await vcall(f, "accept", "(Ljava/io/File;Ljava/lang/String;)Z", this, n)) out.push(mkFile(this.path + "/" + n));
+      (out as any).$t = "Ljava/io/File;"; return out;
+    },
+    "listFiles(Ljava/io/FileFilter;)[Ljava/io/File;": async function (this: JFile, f: unknown) {
+      const out: JFile[] = [];
+      for (const n of vfs.list(this.path)) { const c = mkFile(this.path + "/" + n); if (!f || await vcall(f, "accept", "(Ljava/io/File;)Z", c)) out.push(c); }
+      (out as any).$t = "Ljava/io/File;"; return out;
     },
     "canRead()Z": () => 1, "canWrite()Z": () => 1, "canExecute()Z": () => 1,
     "setReadable(Z)Z": () => 1, "setWritable(Z)Z": () => 1, "setExecutable(Z)Z": () => 1,

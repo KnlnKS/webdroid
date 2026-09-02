@@ -423,7 +423,12 @@ function boxReturn(retDesc: string, v: unknown): unknown {
     case "D": return box(JDouble, v as number);
     case "Z": return (JBool as any)[mangleStaticField(v ? "TRUE" : "FALSE")];
     case "C": return box(JChar, v as number);
-    default: return v;
+    default:
+      // native (TS) classes declare their fields as Object, so a primitive read through them must
+      // still come back boxed — a bare JS number has no toString()/hashCode() for the caller
+      if (typeof v === "number") return Number.isInteger(v) ? boxInt(v) : box(JDouble, v);
+      if (typeof v === "bigint") return box(JLong, v);
+      return v;
   }
 }
 
