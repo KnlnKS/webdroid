@@ -1983,6 +1983,12 @@ for (const [name, methods, statics] of [
     "vibrate(Landroid/os/VibrationEffect;)V": () => globalThis.navigator?.vibrate?.(30),
     "hasVibrator()Z": () => 1,
     "cancel()V": () => {},
+    // navigator.vibrate is a bare on/off motor: no amplitude, no composed primitives
+    "hasAmplitudeControl()Z": () => 0,
+    "areAllPrimitivesSupported([I)Z": () => 0,
+    "arePrimitivesSupported([I)[Z": (ids: Int32Array) => new Uint8Array(ids.length),
+    "areAllEffectsSupported([I)I": () => 2,
+    "areEffectsSupported([I)[I": (ids: Int32Array) => new Int32Array(ids.length).fill(2),
   }],
   ["android/media/AudioManager", {
     "getStreamVolume(I)I": () => 5,
@@ -2478,6 +2484,20 @@ rt.register({
     "requestAutofill(Landroid/view/View;)V": () => {},
     "commit()V": () => {},
     "cancel()V": () => {},
+    "registerCallback(Landroid/view/autofill/AutofillManager$AutofillCallback;)V": () => {},
+    "unregisterCallback(Landroid/view/autofill/AutofillManager$AutofillCallback;)V": () => {},
+    "hasEnabledAutofillServices()Z": () => 0,
+    "getAutofillServiceComponentName()Landroid/content/ComponentName;": () => null,
+    "disableAutofillServices()V": () => {},
+  },
+});
+// no autofill service exists, so a registered callback never hears an event
+rt.register({
+  name: "android/view/autofill/AutofillManager$AutofillCallback", ctor: class extends JObj {},
+  statics: { EVENT_INPUT_SHOWN: 1, EVENT_INPUT_HIDDEN: 2, EVENT_INPUT_UNAVAILABLE: 3 },
+  methods: {
+    "<init>()V": function () {},
+    "onAutofillEvent(Landroid/view/View;II)V": () => {},
   },
 });
 class JAutofillValue extends JObj { v: unknown = null; }
