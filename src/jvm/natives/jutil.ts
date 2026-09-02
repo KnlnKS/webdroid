@@ -116,6 +116,7 @@ rt.register({
 type IterOwner = { removeAt?(i: number): void | Promise<void>; readonly modCount?: number };
 class JIter extends JObj {
   i = 0;
+  last = -1; // index next()/previous() returned, the target of set()/remove(); -1 once consumed
   expectedMod: number | null = null; // fail-fast snapshot, only set when owner exposes modCount
   constructor(public arr: unknown[], public owner: IterOwner | null = null) {
     super();
@@ -131,6 +132,7 @@ const iterHasNext = function (this: JIter) { return this.i < this.arr.length ? 1
 const iterNext = function (this: JIter) {
   checkMod(this);
   if (this.i >= this.arr.length) throw rt.mkThrowable("java/util/NoSuchElementException", null);
+  this.last = this.i;
   return this.arr[this.i++];
 };
 rt.register({
@@ -141,15 +143,34 @@ rt.register({
     "hasMoreElements()Z": iterHasNext,
     "nextElement()Ljava/lang/Object;": iterNext,
     "remove()V": async function (this: JIter) {
+      if (this.last < 0) throw rt.mkThrowable("java/lang/IllegalStateException", null);
       checkMod(this);
-      this.i--;
-      if (this.owner?.removeAt) await this.owner.removeAt(this.i);
-      else this.arr.splice(this.i, 1);
+      if (this.owner?.removeAt) await this.owner.removeAt(this.last);
+      else this.arr.splice(this.last, 1);
+      if (this.last < this.i) this.i--;
+      this.last = -1;
       if (this.expectedMod !== null) this.expectedMod = this.owner!.modCount!;
     },
     "hasPrevious()Z": function (this: JIter) { return this.i > 0 ? 1 : 0; },
-    "previous()Ljava/lang/Object;": function (this: JIter) { return this.arr[--this.i]; },
+    "previous()Ljava/lang/Object;": function (this: JIter) {
+      checkMod(this);
+      if (this.i <= 0) throw rt.mkThrowable("java/util/NoSuchElementException", null);
+      this.last = --this.i;
+      return this.arr[this.i];
+    },
     "nextIndex()I": function (this: JIter) { return this.i; },
+    "previousIndex()I": function (this: JIter) { return this.i - 1; },
+    "set(Ljava/lang/Object;)V": function (this: JIter, v: unknown) {
+      if (this.last < 0) throw rt.mkThrowable("java/lang/IllegalStateException", null);
+      checkMod(this);
+      this.arr[this.last] = v;
+    },
+    "add(Ljava/lang/Object;)V": function (this: JIter, v: unknown) {
+      checkMod(this);
+      this.arr.splice(this.i++, 0, v);
+      this.last = -1;
+      if (this.expectedMod !== null) this.expectedMod = this.owner!.modCount!;
+    },
   },
 });
 export function mkIter(arr: unknown[], owner: IterOwner | null = null): JIter {
