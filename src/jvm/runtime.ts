@@ -398,7 +398,10 @@ export class Runtime {
               info.ctor[mangleStaticField(fr.name)] = this.encToJs(dex, vals[i]);
             }
           }
-          const clinit = info.ctor.$clinit;
+          // own property only: JS constructors inherit statics, and a subclass without a
+          // <clinit> must not re-run its super's (which would replace identity-compared
+          // sentinels the super's callers already hold)
+          const clinit = Object.hasOwn(info.ctor, "$clinit") ? info.ctor.$clinit : undefined;
           if (clinit) await clinit.call(info.ctor);
         }
         info.state = 2;
