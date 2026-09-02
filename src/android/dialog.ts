@@ -5,7 +5,7 @@ import { mangleMethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { JView, JFrameLP, JLinearLP, attachView, requestLayout, AID, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, specSize, findById, guardCall, dispatchAttached, dispatchDetached } from "./view";
 import { JFrameLayout, JLinearLayout, JTextView, themeAccent } from "./widget";
-import { JCanvas, tfMedium } from "./graphics";
+import { JCanvas, tfMedium , JRect } from "./graphics";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
 import { reportUncaught } from "./os";
@@ -16,6 +16,7 @@ import { csText } from "./text";
 import type { JWindow } from "./app";
 
 const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
+const M_getPadding = mangleMethod("getPadding", "(Landroid/graphics/Rect;)Z");
 
 /**
  * The dialog's theme: the host theme with the dialog style layered on top — the explicit
@@ -56,6 +57,21 @@ async function loadCardBg(root: DialogRoot): Promise<void> {
 
 /** the dialog window: scrim, then the window frame sized/placed by the window's layout params */
 class DialogRoot extends JFrameLayout {
+  /**
+   * Padding of an app-supplied window background, left/top/right/bottom. Material's alert
+   * dialog hands the window an InsetDrawable — the card it paints is inset from the window —
+   * so the content has to sit inside that inset or it spills outside the card. AOSP takes a
+   * decor's padding from its background for exactly this reason.
+   */
+  bgPad: [number, number, number, number] = [0, 0, 0, 0];
+  async readBgPadding() {
+    const win = this.dialog?.win;
+    const bg = win?.bgSet ? win.bg : null;
+    if (!bg) { this.bgPad = [0, 0, 0, 0]; return; }
+    const r = new JRect();
+    await guardCall((bg as unknown as Record<string, unknown>)[M_getPadding], bg, r);
+    this.bgPad = [r.left, r.top, r.right, r.bottom];
+  }
   dialog: JDialog | null = null;
   /** the window's android.R.id.content FrameLayout — appcompat finds it by id, reparents its
    *  children into a sub-decor and swaps the ids, exactly as it does to an activity window */
@@ -78,6 +94,7 @@ rt.register({
     "onMeasure(II)V": async function (this: DialogRoot, wSpec: number, hSpec: number) {
       this.measuredW = specSize(wSpec);
       this.measuredH = specSize(hSpec);
+      await this.readBgPadding();
       const c = this.children[0];
       if (c && c.visibility !== 8) {
         // WindowManager.LayoutParams: MATCH_PARENT fills the window, WRAP_CONTENT sizes to the content
@@ -91,7 +108,8 @@ rt.register({
           makeSpec(lh > 0 ? lh : availH, lh > 0 ? MS_EXACTLY : (MS_AT_MOST | 0)));
         this.cardW = lw === -1 || lw > 0 || wantW ? c.measuredW : Math.max(560, c.measuredW);
         if (this.cardW !== c.measuredW) await measureView(c, makeSpec(this.cardW, MS_EXACTLY), makeSpec(availH, MS_AT_MOST | 0));
-        this.cardH = c.measuredH;
+        this.cardH = c.measuredH + this.bgPad[1] + this.bgPad[3];
+        this.cardW += this.bgPad[0] + this.bgPad[2];
         this.cardLeft = (this.measuredW - this.cardW) >> 1;
         const vg = (win?.gravity ?? 0) & GRAV_VMASK;
         this.cardTop = vg === GRAV_TOP ? 0 : vg === GRAV_BOTTOM ? this.measuredH - this.cardH : (this.measuredH - this.cardH) >> 1;
@@ -100,7 +118,8 @@ rt.register({
     "onLayout(ZIIII)V": async function (this: DialogRoot) {
       const c = this.children[0];
       if (c && c.visibility !== 8) {
-        await layoutView(c, this.cardLeft, this.cardTop, this.cardLeft + this.cardW, this.cardTop + this.cardH);
+        const [l, t, r, b] = this.bgPad;
+        await layoutView(c, this.cardLeft + l, this.cardTop + t, this.cardLeft + this.cardW - r, this.cardTop + this.cardH - b);
       }
     },
     "onDraw(Landroid/graphics/Canvas;)V": async function (this: DialogRoot, cv: JCanvas) {

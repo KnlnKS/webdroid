@@ -309,7 +309,12 @@ export function obtainStyled(
   let xmlStyleId = 0;
   if (set?.node) {
     for (const a of set.node.attrs) {
-      if (a.name === "style" && !a.ns) xmlStyleId = a.data;
+      if (a.name === "style" && !a.ns) {
+        // `style="?attr/materialButtonOutlinedStyle"` is a THEME ATTRIBUTE, not a style id —
+        // every Material widget in a layout is styled this way, and taking the raw data left
+        // them with no style at all.
+        xmlStyleId = a.type === TV.ATTRIBUTE ? theme?.lookup(a.data)?.d ?? 0 : a.data;
+      }
       if (a.resId === 0x01010000 /* theme attr on view */) { /* ignored here */ }
     }
   }

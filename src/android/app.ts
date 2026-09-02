@@ -357,19 +357,22 @@ const contextMethods: NativeSpec["methods"] = {
   "startActivity(Landroid/content/Intent;Landroid/os/Bundle;)V": async function (this: JContext, intent: JIntent) {
     await launchIntent(this.$host, intent);
   },
+  // AOSP's Context.obtainStyledAttributes delegates to getTheme(). Reading the application
+  // theme instead loses every ThemeOverlay — which is how Material passes a widget its shape
+  // and colours — and resolves `?attr` references against the wrong stack.
   "obtainStyledAttributes([I)Landroid/content/res/TypedArray;": function (this: JContext, attrs: Int32Array) {
-    return obtainStyled(this.$host.res, this.$host.theme, null, attrs, 0, 0);
+    return obtainStyled(this.$host.res, themeOf(this) ?? this.$host.theme, null, attrs, 0, 0);
   },
   "obtainStyledAttributes(Landroid/util/AttributeSet;[I)Landroid/content/res/TypedArray;":
     function (this: JContext, set: JAttrSet | null, attrs: Int32Array) {
-      return obtainStyled(this.$host.res, this.$host.theme, set, attrs, 0, 0);
+      return obtainStyled(this.$host.res, themeOf(this) ?? this.$host.theme, set, attrs, 0, 0);
     },
   "obtainStyledAttributes(Landroid/util/AttributeSet;[III)Landroid/content/res/TypedArray;":
     function (this: JContext, set: JAttrSet | null, attrs: Int32Array, dsa: number, dsr: number) {
-      return obtainStyled(this.$host.res, this.$host.theme, set, attrs, dsa, dsr);
+      return obtainStyled(this.$host.res, themeOf(this) ?? this.$host.theme, set, attrs, dsa, dsr);
     },
   "obtainStyledAttributes(I[I)Landroid/content/res/TypedArray;": function (this: JContext, styleId: number, attrs: Int32Array) {
-    const theme = this.$host.theme;
+    const theme = themeOf(this) ?? this.$host.theme;
     const ta = new JTypedArray();
     ta.res = this.$host.res;
     ta.theme = theme;

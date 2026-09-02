@@ -506,6 +506,22 @@ rt.register({
   name: "android/graphics/drawable/LayerDrawable", ctor: JLayerDrawable, sup: "android/graphics/drawable/Drawable",
   methods: {
     "draw(Landroid/graphics/Canvas;)V": function (this: JLayerDrawable, cv: JCanvas) { return this.drawLayers(cv); },
+    // AOSP: each layer's inset plus that layer's own padding, the widest of each edge. This is
+    // what an InsetDrawable used as a window background reports, and what tells the window how
+    // far inside itself the content has to sit.
+    "getPadding(Landroid/graphics/Rect;)Z": async function (this: JLayerDrawable, r: JRect) {
+      r.left = r.top = r.right = r.bottom = 0;
+      const p = new JRect();
+      for (const l of this.layers) {
+        p.left = p.top = p.right = p.bottom = 0;
+        await vcall(l.d, "getPadding", "(Landroid/graphics/Rect;)Z", p);
+        r.left = Math.max(r.left, l.insets[0] + p.left);
+        r.top = Math.max(r.top, l.insets[1] + p.top);
+        r.right = Math.max(r.right, l.insets[2] + p.right);
+        r.bottom = Math.max(r.bottom, l.insets[3] + p.bottom);
+      }
+      return r.left || r.top || r.right || r.bottom ? 1 : 0;
+    },
     "<init>([Landroid/graphics/drawable/Drawable;)V": function (this: JLayerDrawable, ds: JDrawable[]) {
       for (const d of ds ?? []) this.layers.push({ d, insets: [0, 0, 0, 0] });
     },

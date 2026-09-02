@@ -62,8 +62,8 @@ Scores are `bun run e2e`'s content-diff means; the current ones live in
 mihon-app 90.6%, harmonic 42.3%, every step rendered, nothing wedged). A lower number is
 better; a rising one is not automatically a regression (see "Harness notes"). The smoke flows
 (no goldens) — flappybird, calculatorm, lichess, doodlejump — all render every step; only
-flappybird's optional `DexClassLoader` stays missing. harmonic is scored now and its one
-accepted miss is `WindowExtensionsProvider`.
+flappybird's optional `DexClassLoader` stays missing. harmonic is scored now (89.9% -> 36.2%)
+and its one accepted miss is `WindowExtensionsProvider`.
 - [x] recon, scaffolding; DEX parser + AXML + ARSC (+compact entries, signed values!);
       compiler + runtime core + java.* natives (all 3 APKs compile clean, `bun run smoke <apk>`).
 - [x] FitNotes: boots and is interactive through its full core loop, matching real screenshots:
@@ -87,10 +87,11 @@ accepted miss is `WindowExtensionsProvider`.
       catch-all, deliberately not implemented yet. See "flappybird plays" below.
 - [x] harmonic: the first-run welcome dialog, the front page, the overflow menu, Settings and a
       story's comments all render and respond; the Material search bar scrolls away under the
-      list as on a device, and the app's own bundled fonts are the ones on screen. 89.9% -> 42.3%
+      list as on a device, and the app's own bundled fonts are the ones on screen. 89.9% -> 36.2%
       content diff over 14 steps. See "harmonic: five framework defects" below.
-- [ ] harmonic remaining: the alert dialog's card is drawn with a 50% corner (see below), the
-      settings row pitch is ~3% tall, and story rows have no preview thumbnails or favicons.
+- [ ] harmonic remaining: the welcome dialog's preset buttons paint black, `@mipmap/ic_launcher`
+      is an unhandled `<adaptive-icon>`, the settings row pitch is ~3% tall, and story rows have
+      no preview thumbnails or favicons.
 - [ ] Among Us (IL2CPP ARM64 — extremely hard, best effort)
 
 ## Infrastructure delivered
@@ -517,28 +518,38 @@ measured through the headless Playwright driver instead (a small script that dri
 step N and then evaluates a probe in the page is the tool; `scripts/dbg.ts` is the committed
 version of the same idea). The MCP browser is for *looking*, not for measuring.
 
-## Open: the alert dialog's card is drawn with a 50% corner
-harmonic's welcome dialog paints a blob instead of a 28dp card. The chain, all measured:
-`Canvas.drawRoundRect` is called by the app with `rx = 264` on a 528-wide rect — exactly
-`RelativeCornerSize(0.5)`, and the 0.5 really is in the drawable's own shape model
-(`i21.f$d -> g21.f$e -> fq1.f$a = 0.5`). It is not a shared object: the dialog's model and the
-logo's are different instances. Every theme lookup that returns that fraction (21 of them, all
-of them) comes from one theme whose style stack is `[framework, AppThemeMaterialDayNight,
-0x7f1401f3]`, and `0x7f1401f3` resolves in the arsc to **`ShapeAppearanceHarmonicCircle`** —
-the 50% overlay the app puts on its *logo*, applied as a whole theme by
-`new ContextThemeWrapper(context, shapeAppearanceResId)` inside Material's
-`ShapeAppearanceModel.builder`.
+## The dialog card that was a blob: Context.obtainStyledAttributes ignored the context
+harmonic's welcome dialog painted a 264px-radius blob instead of a 28dp card. The chain, all
+measured rather than guessed: the app itself called `drawRoundRect` with `rx = 264` on a
+528-wide rect — exactly `RelativeCornerSize(0.5)`, and the 0.5 really was in the drawable's own
+shape model. It was not a shared object; the dialog's model and the logo's were distinct
+instances. Every theme lookup returning that fraction (21 of them, all of them) came from one
+theme whose style stack was `[framework, AppThemeMaterialDayNight, 0x7f1401f3]`, and that id
+resolves in the arsc to **`ShapeAppearanceHarmonicCircle`** — the 50% overlay the app puts on
+its *logo*, applied as a whole theme by `new ContextThemeWrapper(context, shapeAppearanceResId)`
+inside Material's `ShapeAppearanceModel.builder`.
 
-So the base and the overlay have been swapped somewhere: Material passes the BASE shape
-appearance to the wrapper and reads the OVERLAY from it, and we are handing it the overlay as
-the base. The next step is to log what our TypedArray returns for the two indices of
-`R.styleable.MaterialShape` (`shapeAppearance`, `shapeAppearanceOverlay`) during the
-ShapeableImageView's inflation — if both come back as the circle, the fault is in `obtainStyled`'s
-per-index resolution, not in Material.
+Root cause: **all four `Context.obtainStyledAttributes` overloads read `$host.theme`** — the
+application theme — instead of delegating to `getTheme()` as AOSP does. Material passes the
+BASE shape appearance to that wrapper and reads the OVERLAY out of it; resolving against the
+wrong theme swapped the two, so the circle became the base and every shape read through that
+context inherited a 50% corner. The same defect in `initViewFromCtx` had already been fixed one
+layer up; this was the Context-side twin, and it is why `themeOf()` exists in one place.
 
-Do NOT "fix" this by ignoring a theme-level `cornerSize`: a ContextThemeWrapper over a style
-really does make that style's attributes theme-wide, on a device too. The wrong value is
-upstream of that.
+Second half of the same screen: a dialog whose window background the app sets is an
+`InsetDrawable`, so the card it paints is inset from the window. The content has to sit inside
+that inset or it spills outside the card — AOSP takes a decor's padding from its background for
+exactly this reason. `LayerDrawable.getPadding` now sums insets and child padding, and
+DialogRoot lays its content out inside it.
+
+Generalise: **anything that resolves a resource against "the theme" has to ask the object it
+was handed, not the application.** A ThemeOverlay is how Material tells a widget its shape,
+colours and type; reading past it produces UI with no bug anywhere near it.
+
+Still off on that dialog, if it comes up again: the preset buttons paint opaque black
+(`0xFF000000`, our `rvColor` fallback, so a colour did not resolve — but `TypedArray.getColor`
+and `getColorStateList` both honour the caller's default, so the miss is further in), and
+`@mipmap/ic_launcher` is an `<adaptive-icon>`, which the drawable inflater does not handle.
 
 ## Conventions
 - bun runtime. Minimal deps (fflate, sql.js; typescript/playwright/pngjs/pixelmatch for tooling).
