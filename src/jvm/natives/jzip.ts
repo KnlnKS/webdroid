@@ -1,10 +1,10 @@
 // java.util.zip on fflate: streaming codecs (Inflater/Deflater raw+zlib, CRC32), ZipFile over a
 // central-directory index, GZIPInputStream over a drained source.
-import { Inflate, Unzlib, Deflate, Zlib, inflateSync, gunzipSync } from "fflate";
-import { rt, JObj } from "../runtime";
+import { Inflate, Unzlib, Deflate, Zlib, inflateSync, gunzipSync, deflateSync, zlibSync, gzipSync } from "fflate";
+import { rt, JObj, type NativeSpec } from "../runtime";
 import { mangleMethod } from "../abi";
 import { vcall, newObj, defineException } from "./jlang";
-import { vfs, JFile, JInputStream } from "./jio";
+import { vfs, JFile, JInputStream, JOutputStream } from "./jio";
 import { mkIter } from "./jutil";
 
 type Codec = Inflate | Unzlib | Deflate | Zlib;
@@ -14,12 +14,25 @@ class JInflater extends JObj {
   out: Uint8Array[] = [];
   done = false;
   fed = 0;
+  /** input bytes not consumed: what sits past the final block (a gzip trailer) */
+  rem = 0;
   ensure() {
     if (!this.st) {
       this.st = this.raw ? new Inflate() : new Unzlib();
       this.st.ondata = (d, final) => { if (d.length) this.out.push(d); if (final) this.done = true; };
     }
     return this.st;
+  }
+  // Java keeps input handed over after the end of stream (okio reads the trailer back through
+  // getRemaining); fflate would throw on it. It parks the unconsumed tail in `p` and only ever
+  // tests "last block decoded" as `s.f && !s.l` internally, so that test is repeated here.
+  feed(b: Uint8Array) {
+    this.fed += b.length;
+    if (this.done) { this.rem = b.length; return; }
+    const st = this.ensure() as any;
+    st.push(b);
+    if (st.s.f && !st.s.l) this.done = true;
+    this.rem = st.p?.length ?? 0;
   }
 }
 function drain(z: JInflater, b: Int8Array, off: number, len: number): number {
@@ -39,21 +52,20 @@ rt.register({
     "<init>()V": function (this: JInflater) { this.raw = false; },
     "<init>(Z)V": function (this: JInflater, nowrap: number) { this.raw = !!nowrap; },
     "setInput([BII)V": function (this: JInflater, b: Int8Array, off: number, len: number) {
-      this.fed += len;
-      this.ensure().push(new Uint8Array(b.buffer.slice(b.byteOffset + off, b.byteOffset + off + len)));
+      this.feed(new Uint8Array(b.buffer.slice(b.byteOffset + off, b.byteOffset + off + len)));
     },
     "setInput([B)V": function (this: JInflater, b: Int8Array) {
-      this.fed += b.length;
-      this.ensure().push(new Uint8Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.length)));
+      this.feed(new Uint8Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.length)));
     },
     "inflate([BII)I": function (this: JInflater, b: Int8Array, off: number, len: number) { return drain(this, b, off, len); },
     "inflate([B)I": function (this: JInflater, b: Int8Array) { return drain(this, b, 0, b.length); },
     "needsInput()Z": function (this: JInflater) { return this.out.length ? 0 : 1; },
     "needsDictionary()Z": () => 0,
     "finished()Z": function (this: JInflater) { return this.done && !this.out.length ? 1 : 0; },
+    "getRemaining()I": function (this: JInflater) { return this.rem; },
     "getBytesRead()J": function (this: JInflater) { return BigInt(this.fed); },
     "getBytesWritten()J": function (this: JInflater) { return BigInt(this.fed); },
-    "reset()V": function (this: JInflater) { this.st = null; this.out = []; this.done = false; this.fed = 0; },
+    "reset()V": function (this: JInflater) { this.st = null; this.out = []; this.done = false; this.fed = 0; this.rem = 0; },
     "end()V": function (this: JInflater) { this.st = null; this.out = []; },
   },
 });
@@ -96,6 +108,31 @@ rt.register({
     "end()V": function (this: JDeflater) { this.st = null; this.out = []; },
     "reset()V": function (this: JDeflater) { this.st = null; this.out = []; this.done = false; this.pending = null; },
   },
+});
+
+// DeflaterOutputStream / GZIPOutputStream: bytes collect in the inherited chunk buffer and are
+// compressed in one go at finish(), which is when Java would emit the final block anyway.
+class JDeflaterOut extends JOutputStream { out: unknown = null; raw = false; gzip = false; finished = false; }
+async function finishDeflate(s: JDeflaterOut) {
+  if (s.finished) return;
+  s.finished = true;
+  const data = new Uint8Array(s.chunks);
+  const z = s.gzip ? gzipSync(data) : s.raw ? deflateSync(data) : zlibSync(data);
+  await vcall(s.out, "write", "([BII)V", new Int8Array(z.buffer, z.byteOffset, z.length), 0, z.length);
+}
+const deflaterOut: NativeSpec["methods"] = {
+  "<init>(Ljava/io/OutputStream;)V": function (this: JDeflaterOut, o: unknown) { this.out = o; },
+  "<init>(Ljava/io/OutputStream;I)V": function (this: JDeflaterOut, o: unknown) { this.out = o; },
+  "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;)V": function (this: JDeflaterOut, o: unknown, d: JDeflater) { this.out = o; this.raw = d.raw; },
+  "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;I)V": function (this: JDeflaterOut, o: unknown, d: JDeflater) { this.out = o; this.raw = d.raw; },
+  "finish()V": function (this: JDeflaterOut) { return finishDeflate(this); },
+  "flush()V": function (this: JDeflaterOut) { return vcall(this.out, "flush", "()V"); },
+  "close()V": async function (this: JDeflaterOut) { await finishDeflate(this); await vcall(this.out, "close", "()V"); },
+};
+rt.register({ name: "java/util/zip/DeflaterOutputStream", ctor: JDeflaterOut, sup: "java/io/OutputStream", methods: deflaterOut });
+rt.register({
+  name: "java/util/zip/GZIPOutputStream", ctor: class extends JDeflaterOut { gzip = true; }, sup: "java/util/zip/DeflaterOutputStream",
+  methods: deflaterOut,
 });
 
 class JCRC32 extends JObj { crc = 0xffffffff; }
