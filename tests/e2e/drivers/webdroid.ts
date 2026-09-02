@@ -268,6 +268,11 @@ export class WebdroidDriver {
     return this.page.evaluate(() => [...((globalThis as any).wd.rt.missing ?? [])]);
   }
 
+  /** The WebView frames on screen (url/title/loaded): the framebuffer capture cannot see them. */
+  web(): Promise<{ url: string | null; title: string; loaded: boolean; progress: number }[]> {
+    return this.page.evaluate(() => (globalThis as any).wd.web?.() ?? []);
+  }
+
   /** Native libraries the app tried to load that only exist as machine code: "libx.so (abi)". */
   nativeRequired(): Promise<string[]> {
     return this.page.evaluate(() => [...((globalThis as any).wd.rt.nativeRequired ?? [])].map(([l, a]) => l + " (" + a + ")"));

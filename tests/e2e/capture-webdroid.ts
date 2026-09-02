@@ -29,6 +29,8 @@ export type StepRun = {
   slow?: boolean;
   /** Uncaught throwables and frame-phase errors this step was the first to log. */
   newErrors?: string[];
+  /** WebView frames on screen at the end of the step — the only evidence a page loaded. */
+  web?: { url: string | null; title: string; loaded: boolean }[];
   error?: string;
 };
 
@@ -125,6 +127,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver): Promise<Step
     const errs = await errorLines();
     const newErrors = errs.filter((e) => !seenErrors.has(e));
     seenErrors = new Set(errs);
+    const web = (await drv.web()).map(({ url, title, loaded }) => ({ url, title, loaded }));
     const fps = stepMs ? (stepPerf.frames ?? 0) * 1000 / stepMs : 0;
     // the launch step's window is mostly boot + lazy compilation, not the app's frame loop
     const slow = !!(step.animated && step.action.type !== "launch" && flow.minFps && fps < flow.minFps);
@@ -134,7 +137,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver): Promise<Step
                 ms: stepMs, perf: stepPerf, fps: step.animated ? Math.round(fps) : undefined, slow: slow || undefined,
                 newMissing: newMissing.length ? newMissing : undefined,
                 nativeRequired: newNative.length ? newNative : undefined,
-                newErrors: newErrors.length ? newErrors : undefined, error });
+                newErrors: newErrors.length ? newErrors : undefined, web: web.length ? web : undefined, error });
     const flags = [
       semanticHit === false ? "coord-fallback" : "",
       timedOut ? "settle timeout" : "",
@@ -148,6 +151,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver): Promise<Step
       stepPerf.draws ? `${stepPerf.draws} draw/${Math.round(stepPerf.drawMs)}ms` : "",
       stepPerf.measureText ? `${stepPerf.measureText} measureText` : "",
       stepPerf.rnReplay ? `${stepPerf.rnReplay} rnOps` : "",
+      ...web.map((w) => `web: ${w.loaded ? "loaded" : "loading"} ${w.url}`),
       error ? `error: ${error}` : "",
     ].filter(Boolean).join(", ");
     console.log(`  ${String(i).padStart(2, "0")} ${step.label}${flags ? "  [" + flags + "]" : ""}`);
