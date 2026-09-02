@@ -148,6 +148,7 @@ rt.register({
 class JExecutor extends JObj {
   shut = false;
   pending = 0;
+  removeOnCancel = 0;
   thread = new JThread();
 }
 /** run one task on the executor's thread; a submitted task's outcome lands on its Future */
@@ -248,6 +249,10 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       "<init>(I)V": function () {},
       "allowCoreThreadTimeOut(Z)V": function () {},
       "setRejectedExecutionHandler(Ljava/util/concurrent/RejectedExecutionHandler;)V": function () {},
+      // kotlinx looks this up reflectively (removeFutureOnCancel); a cancelled schedule() never runs
+      // here regardless, so the policy is just remembered
+      "setRemoveOnCancelPolicy(Z)V": function (this: JExecutor, v: number) { this.removeOnCancel = v; },
+      "getRemoveOnCancelPolicy()Z": function (this: JExecutor) { return this.removeOnCancel; },
     },
   });
 }
