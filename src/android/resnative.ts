@@ -37,6 +37,15 @@ class JConfiguration extends JObj {
   fontWeightAdjustment = 0;  // accessibility "bold text" is off, so no weight is added
   colorMode = 1 | 4;         // WIDE_COLOR_GAMUT_NO | HDR_NO: a plain sRGB canvas
 }
+const CONFIG_FIELDS = ["orientation", "screenWidthDp", "screenHeightDp", "smallestScreenWidthDp", "densityDpi", "fontScale", "uiMode",
+  "mcc", "mnc", "touchscreen", "keyboard", "keyboardHidden", "navigation", "navigationHidden", "hardKeyboardHidden", "screenLayout",
+  "fontWeightAdjustment", "colorMode"] as const;
+/** AOSP compareTo(...) == 0: every public field, not identity (appcompat's resource caches keep a
+ *  COPY of the configuration they were filled under and compare it against the live one) */
+function configEquals(a: JConfiguration, b: JConfiguration): boolean {
+  for (const k of CONFIG_FIELDS) if (a[k] !== b[k]) return false;
+  return a.locale === b.locale;
+}
 rt.register({
   name: "android/content/res/Configuration", ctor: JConfiguration,
   fields: {
@@ -55,7 +64,13 @@ rt.register({
     "setTo(Landroid/content/res/Configuration;)V": function (this: JConfiguration, o: JConfiguration) { Object.assign(this, o); },
     "diff(Landroid/content/res/Configuration;)I": () => 0,
     "updateFrom(Landroid/content/res/Configuration;)I": () => 0,
-    "equals(Ljava/lang/Object;)Z": function (this: JConfiguration, o: unknown) { return o === this ? 1 : 0; },
+    "equals(Ljava/lang/Object;)Z": function (this: JConfiguration, o: unknown) { return o instanceof JConfiguration && configEquals(this, o) ? 1 : 0; },
+    "equals(Landroid/content/res/Configuration;)Z": function (this: JConfiguration, o: JConfiguration | null) { return o && configEquals(this, o) ? 1 : 0; },
+    "hashCode()I": function (this: JConfiguration) {
+      let h = 17;
+      for (const k of CONFIG_FIELDS) h = (h * 31 + ((this as any)[k] | 0)) | 0;
+      return h;
+    },
     "getLocales()Landroid/os/LocaleList;": () => localeList,
     "getLayoutDirection()I": () => 0,
     "isNightModeActive()Z": function (this: JConfiguration) { return (this.uiMode & 0x30) === 0x20 ? 1 : 0; },
@@ -339,6 +354,10 @@ rt.register({
     },
     "getString(I)Ljava/lang/String;": function (this: JTypedArray, i: number) { return rvString(this.res, this.vals[i]); },
     "getText(I)Ljava/lang/CharSequence;": function (this: JTypedArray, i: number) { return rvString(this.res, this.vals[i]); },
+    "getTextArray(I)[Ljava/lang/CharSequence;": function (this: JTypedArray, i: number) {
+      const v = this.vals[i];
+      return v && v.t === TV.REFERENCE && v.d ? jarray(stringArray(this.res, v.d), "Ljava/lang/CharSequence;") : null;
+    },
     "getNonResourceString(I)Ljava/lang/String;": function (this: JTypedArray, i: number) { return rvString(this.res, this.vals[i]); },
     "getBoolean(IZ)Z": function (this: JTypedArray, i: number, d: number) {
       const v = this.vals[i];
