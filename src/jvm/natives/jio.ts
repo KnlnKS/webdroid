@@ -56,8 +56,6 @@ export const vfs = {
 const dirs = new Set<string>(["/data", "/sdcard"]);
 
 // ── File
-rt.register({ name: "java/io/FilenameFilter", ctor: class extends JObj {} });
-rt.register({ name: "java/io/FileFilter", ctor: class extends JObj {} });
 export class JFile extends JObj { path = ""; }
 export function mkFile(path: string): JFile { const f = new JFile(); f.path = vfs.norm(path); return f; }
 const listFiles = (d: JFile) => jarray(vfs.list(d.path).map((n) => mkFile(d.path + "/" + n)), "Ljava/io/File;");
