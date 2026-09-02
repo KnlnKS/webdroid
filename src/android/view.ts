@@ -141,6 +141,7 @@ export class JView extends JObj {
   idNum = -1;
   tag: unknown = null;
   keyedTags = new Map<number, unknown>();
+  outlineProvider: unknown = null;
   left = 0; top = 0; right = 0; bottom = 0;
   static $nextDrawingId = 0;
   measuredW = 0; measuredH = 0;
@@ -400,6 +401,8 @@ const viewMethods: NativeSpec["methods"] = {
   "setTag(Ljava/lang/Object;)V": function (this: JView, t: unknown) { this.tag = t; },
   "getTag(I)Ljava/lang/Object;": function (this: JView, k: number) { return this.keyedTags.get(k) ?? null; },
   "setTag(ILjava/lang/Object;)V": function (this: JView, k: number, t: unknown) { this.keyedTags.set(k, t); },
+  // API 29 layout-inspector bookkeeping: only Studio's attribute inspector ever reads it back
+  "saveAttributeDataForStyleable(Landroid/content/Context;[ILandroid/util/AttributeSet;Landroid/content/res/TypedArray;II)V": () => {},
   "getParent()Landroid/view/ViewParent;": function (this: JView) { return this.parent; },
   "getWidth()I": function (this: JView) { return this.width(); },
   "getHeight()I": function (this: JView) { return this.height(); },
@@ -669,7 +672,8 @@ const viewMethods: NativeSpec["methods"] = {
   "onInitializeAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V": () => {},
   "setLabelFor(I)V": () => {},
   "setStateListAnimator(Landroid/animation/StateListAnimator;)V": () => {},
-  "setOutlineProvider(Landroid/view/ViewOutlineProvider;)V": () => {},
+  "setOutlineProvider(Landroid/view/ViewOutlineProvider;)V": function (this: JView, p: unknown) { this.outlineProvider = p; },
+  "getOutlineProvider()Landroid/view/ViewOutlineProvider;": function (this: JView) { return this.outlineProvider ?? bgOutline; },
   "setClipToOutline(Z)V": () => {},
   "setTransitionName(Ljava/lang/String;)V": () => {},
   "setPointerIcon(Landroid/view/PointerIcon;)V": () => {},
@@ -1645,6 +1649,9 @@ function mkOutlineProvider(fill: (view: JView, outline: unknown) => unknown): JV
   (o as unknown as Record<string, unknown>)[mangleMethod("getOutline", GET_OUTLINE_DESC)] = fill;
   return o;
 }
+// AOSP's default provider for every View: no background-outline shape is modeled here, so this
+// always takes the plain-bounds-rect fallback AOSP itself uses when the background can't supply one.
+const bgOutline = mkOutlineProvider((view, outline) => vcall(outline, "setRect", "(IIII)V", 0, 0, view.width(), view.height()));
 rt.register({
   name: "android/view/ViewOutlineProvider", ctor: JViewOutlineProvider,
   methods: {
@@ -1653,10 +1660,7 @@ rt.register({
     ["getOutline" + GET_OUTLINE_DESC]: () => {},
   },
   statics: {
-    // AOSP's default provider for every View: no background-outline shape is modeled here,
-    // so this always takes the plain-bounds-rect fallback AOSP itself uses when the
-    // background can't supply one.
-    BACKGROUND: mkOutlineProvider((view, outline) => vcall(outline, "setRect", "(IIII)V", 0, 0, view.width(), view.height())),
+    BACKGROUND: bgOutline,
     ALPHA: mkOutlineProvider(async (view, outline) => {
       await vcall(outline, "setRect", "(IIII)V", 0, 0, view.width(), view.height());
       await vcall(outline, "setAlpha", "(F)V", 1);
