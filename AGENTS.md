@@ -58,11 +58,12 @@ Goal: run FitNotes.apk → mihon → flappybird → Among Us.xapk fully client-s
 
 ## Status
 Scores are `bun run e2e`'s content-diff means; the current ones live in
-`tests/e2e/report/report.json` (last full run: fitnotes 39.5%, mihon-onboarding 48.7%,
-mihon-app 90.6%, every step rendered, nothing wedged). A lower number is better; a rising one
-is not automatically a regression (see "Harness notes"). The smoke flows (no goldens) —
-flappybird, harmonic, calculatorm, lichess, doodlejump — all render every step; only
-flappybird's optional `DexClassLoader` and harmonic's `WindowExtensionsProvider` stay missing.
+`tests/e2e/report/report.json` (last full run: fitnotes 39.4%, mihon-onboarding 48.7%,
+mihon-app 90.6%, harmonic 42.3%, every step rendered, nothing wedged). A lower number is
+better; a rising one is not automatically a regression (see "Harness notes"). The smoke flows
+(no goldens) — flappybird, calculatorm, lichess, doodlejump — all render every step; only
+flappybird's optional `DexClassLoader` stays missing. harmonic is scored now and its one
+accepted miss is `WindowExtensionsProvider`.
 - [x] recon, scaffolding; DEX parser + AXML + ARSC (+compact entries, signed values!);
       compiler + runtime core + java.* natives (all 3 APKs compile clean, `bun run smoke <apk>`).
 - [x] FitNotes: boots and is interactive through its full core loop, matching real screenshots:
@@ -84,6 +85,12 @@ flappybird's optional `DexClassLoader` and harmonic's `WindowExtensionsProvider`
       no goldens): 7/7 rendered, 60fps. The one entry left in `wd.rt.missing` is
       `dalvik/system/DexClassLoader` — the ad SDK's optional dynamic-code path, inside its own
       catch-all, deliberately not implemented yet. See "flappybird plays" below.
+- [x] harmonic: the first-run welcome dialog, the front page, the overflow menu, Settings and a
+      story's comments all render and respond; the Material search bar scrolls away under the
+      list as on a device, and the app's own bundled fonts are the ones on screen. 89.9% -> 42.3%
+      content diff over 14 steps. See "harmonic: five framework defects" below.
+- [ ] harmonic remaining: the alert dialog's card is drawn with a 50% corner (see below), the
+      settings row pitch is ~3% tall, and story rows have no preview thumbnails or favicons.
 - [ ] Among Us (IL2CPP ARM64 — extremely hard, best effort)
 
 ## Infrastructure delivered
@@ -364,6 +371,16 @@ See tests/e2e/README.md for the commands and the metrics. What bites:
   Look at the frames before believing the number.
 - Screenshot coords ≠ CSS coords when the window is large (screenshots scale).
   Drive the app with wd.tapText/tap/type helpers in device coords instead.
+- `Flow.liveClock` puts both drivers on the wall clock. PINNED_CLOCK_MS is in the past, so a
+  device held there rejects every current TLS certificate and an app that fetches over HTTPS
+  records a golden of its own error state — harmonic's first recording was a screen full of
+  "Loading failed". Anything such a flow renders from the clock has to be masked.
+- `maskRects` are scoring-time only, so masks can be tuned with `bun run e2e:diff` without
+  re-recording. Mask enough of a frame and the mask colour becomes its modal background, which
+  makes every remaining pixel "ink" — the number stays honest, but read it as "the unmasked
+  strip differs by N%", not as an ink comparison.
+- The emulator recorder never installs an apk; it only `pm clear`s, which throws if the package
+  is absent. Install it yourself before `bun run e2e:record`.
 
 ## Measure in a page the browser is actually drawing
 rAF doesn't fire in background tabs, and **the setInterval fallback does not save you** —
@@ -460,6 +477,68 @@ after Back — the "curThread is a global" hazard, cosmetic here. `MessageDigest
 SHA-256; nothing on the mihon flows reached it, but a 64-bit SHA-2 core is the fix if one does.
 The ad SDK's spam-signal jar wants `DexClassLoader` (unzip the jar from the vfs, `rt.loadDex`,
 `loadClass` → `rt.classFor`) — generic and bounded, left for later.
+
+## harmonic: five framework defects, none of them app-specific
+
+Harmonic for Hacker News is appcompat + Material 3 *Expressive* + RecyclerView + androidx
+preference, with 19 bundled TTFs and no native code. It booted and stayed alive but looked
+nothing like the app. What was actually wrong, in the order it mattered:
+
+- **A container drawable called its child's TS `paint()`, never the child's virtual
+  `draw(Canvas)`.** An app-dex `Drawable` subclass has no `paint()`, so it inherited
+  `JDrawable`'s empty one and drew *nothing*: `MaterialShapeDrawable` — every card, dialog
+  frame, button and chip background in a Material app — was invisible. `drawChild()` now
+  dispatches virtually from LayerDrawable/InsetDrawable/StateListDrawable/RippleDrawable/
+  DrawableWrapper/ImageView/TextView, staying synchronous while every child is native.
+- **`Inflater.getRemaining()` reported fflate's mid-stream parked tail.** okio computes
+  "consumed = given - getRemaining()", so it handed the same bytes back on every refill: a
+  gzipped HTTP response collapsed into a one-byte-per-refill loop that also fed the codec
+  duplicate input. One tap cost 1688ms and one swipe 87 seconds, and the errors surfaced as
+  `invalid distance` far from the cause. Mid-stream, everything handed in is consumed.
+- **A view resolved against the application theme.** Material wraps every widget's context in a
+  ThemeOverlay; `initViewFromCtx` threw it away. `themeOf()` is now the one answer to "which
+  theme does this Context resolve against", walking the base chain as ContextWrapper does.
+- **`android:fontFamily` could not name a `@font/` resource** — it went through `rvString` into
+  `typefaceFor`, which knows three literal names — and **`applyTextAppearance` read styles raw**,
+  so an app-side `TextAppearance.*` (whose `textSize` is always a `@dimen` reference) silently
+  kept whatever size the view already had. Both now go through the resolution the attribute
+  path already used.
+- **Nested scrolling did not exist**, so a CoordinatorLayout Behavior never saw the scroll and
+  the app bar sat still while the list moved under it.
+
+The dev loop that found each one: `bun run e2e --test harmonic`, then the per-step `newMissing`
+and `newErrors` in `tests/e2e/actual/harmonic/run.json`. Every remaining entry was a real
+missing API, never a guess.
+
+### Measure in a page that is actually drawing — the MCP tab is not one
+An in-browser probe reported `wd.ticks` unchanged over three seconds while
+`document.visibilityState` stayed "hidden": zero frames. Everything frame-driven has to be
+measured through the headless Playwright driver instead (a small script that drives a flow to
+step N and then evaluates a probe in the page is the tool; `scripts/dbg.ts` is the committed
+version of the same idea). The MCP browser is for *looking*, not for measuring.
+
+## Open: the alert dialog's card is drawn with a 50% corner
+harmonic's welcome dialog paints a blob instead of a 28dp card. The chain, all measured:
+`Canvas.drawRoundRect` is called by the app with `rx = 264` on a 528-wide rect — exactly
+`RelativeCornerSize(0.5)`, and the 0.5 really is in the drawable's own shape model
+(`i21.f$d -> g21.f$e -> fq1.f$a = 0.5`). It is not a shared object: the dialog's model and the
+logo's are different instances. Every theme lookup that returns that fraction (21 of them, all
+of them) comes from one theme whose style stack is `[framework, AppThemeMaterialDayNight,
+0x7f1401f3]`, and `0x7f1401f3` resolves in the arsc to **`ShapeAppearanceHarmonicCircle`** —
+the 50% overlay the app puts on its *logo*, applied as a whole theme by
+`new ContextThemeWrapper(context, shapeAppearanceResId)` inside Material's
+`ShapeAppearanceModel.builder`.
+
+So the base and the overlay have been swapped somewhere: Material passes the BASE shape
+appearance to the wrapper and reads the OVERLAY from it, and we are handing it the overlay as
+the base. The next step is to log what our TypedArray returns for the two indices of
+`R.styleable.MaterialShape` (`shapeAppearance`, `shapeAppearanceOverlay`) during the
+ShapeableImageView's inflation — if both come back as the circle, the fault is in `obtainStyled`'s
+per-index resolution, not in Material.
+
+Do NOT "fix" this by ignoring a theme-level `cornerSize`: a ContextThemeWrapper over a style
+really does make that style's attributes theme-wide, on a device too. The wrong value is
+upstream of that.
 
 ## Conventions
 - bun runtime. Minimal deps (fflate, sql.js; typescript/playwright/pngjs/pixelmatch for tooling).
