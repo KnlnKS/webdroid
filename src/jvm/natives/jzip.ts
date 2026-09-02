@@ -50,7 +50,13 @@ rt.register({
     "inflate([B)I": function (this: JInflater, b: Int8Array) { return drain(this, b, 0, b.length); },
     "needsInput()Z": function (this: JInflater) { return this.out.length ? 0 : 1; },
     "needsDictionary()Z": () => 0,
-    "finished()Z": function (this: JInflater) { return this.done && !this.out.length ? 1 : 0; },
+    // end of stream = the BFINAL block has been fully decoded (fflate only flags `final` when
+    // the caller says so, which a chunked Java feeder never does) — Inflater.finished() is what
+    // streaming readers loop on
+    "finished()Z": function (this: JInflater) {
+      const s = (this.st as unknown as { s?: { f?: number; l?: unknown } } | null)?.s;
+      return (this.done || (s?.f && !s.l)) && !this.out.length ? 1 : 0;
+    },
     "getBytesRead()J": function (this: JInflater) { return BigInt(this.fed); },
     "getBytesWritten()J": function (this: JInflater) { return BigInt(this.fed); },
     "reset()V": function (this: JInflater) { this.st = null; this.out = []; this.done = false; this.fed = 0; },
