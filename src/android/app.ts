@@ -5,7 +5,7 @@ import { device } from "../shell/config";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, stringHash, javaFormat, newObj } from "../jvm/natives/jlang";
 import { jarray } from "../jvm/abi";
-import { newArrayList, newLinkedHashSet, type JList } from "../jvm/natives/jutil";
+import { newArrayList, newLinkedHashSet, mkIter, type JList } from "../jvm/natives/jutil";
 import { vfs, mkFile, JFile } from "../jvm/natives/jio";
 const privDir = (p: string): JFile => { vfs.mkdir(p); return mkFile(p); };
 import { type Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, rvColor, rvDimen, rvInt, rvString, resString } from "./res";
@@ -97,8 +97,10 @@ function systemService(jctx: any, name: string): unknown {
   let s = services.get(name);
   if (s) return s;
   const cls = SERVICE_CLASS[name];
-  if (!cls) rt.noteMissing("systemService " + name);
-  s = new (rt.link(cls ?? "android/os/Binder").ctor)();
+  // A service we do not model is one this device does not have: AOSP returns null, and callers
+  // handle that. Handing back a stand-in object instead only moved the failure to their cast.
+  if (!cls) { rt.noteMissing("systemService " + name); return null; }
+  s = new (rt.link(cls).ctor)();
   services.set(name, s);
   return s;
 }
@@ -240,6 +242,13 @@ const contextMethods: NativeSpec["methods"] = {
     (this as any).ownTheme = t;
   },
   "getPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
+  // only this package is installed, so its own name is the one context that exists; AOSP
+  // throws NameNotFoundException for anything else (callers handle it — it is how they
+  // discover an optional dependency is absent)
+  "createPackageContext(Ljava/lang/String;I)Landroid/content/Context;": function (this: JContext, pkg: string) {
+    if (pkg !== this.$host.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
+    return this;
+  },
   "getOpPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
   "getApplicationContext()Landroid/content/Context;": function (this: JContext) { return this.$host.application; },
   "getApplicationInfo()Landroid/content/pm/ApplicationInfo;": function (this: JContext) { return getAppInfo(this.$host); },
@@ -405,6 +414,7 @@ export class JIntent extends JObj {
   component: string | null = null; // class name dots
   dataUri: string | null = null;
   typeStr: string | null = null;
+  pkg: string | null = null;
   extras = new JBundle();
   flags = 0;
   categories = new Set<string>();
@@ -447,6 +457,8 @@ const intentMethods: NativeSpec["methods"] = {
     return this.component ? mkComponentName(appHost?.pkg ?? "", this.component) : null;
   },
   "setAction(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, a: string) { this.action = a; return this; },
+  "setPackage(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, p: string) { this.pkg = p; return this; },
+  "getPackage()Ljava/lang/String;": function (this: JIntent) { return this.pkg; },
   "getAction()Ljava/lang/String;": function (this: JIntent) { return this.action; },
   "setData(Landroid/net/Uri;)Landroid/content/Intent;": function (this: JIntent, u: any) { this.dataUri = u?.uri ?? null; return this; },
   "getData()Landroid/net/Uri;": function (this: JIntent) { return this.dataUri ? mkUri(this.dataUri) : null; },
@@ -846,8 +858,12 @@ function metaData(node: XmlNode | null | undefined): JBundle {
     if (md.name !== "meta-data") continue;
     const k = attrStr(md, "name");
     if (k === null) continue;
-    const v = attr(md, "value") ?? attr(md, "resource");
-    b.map.set(k, !v ? null : v.str !== null ? v.str : v.type === TV.BOOLEAN ? (v.data ? 1 : 0) : v.data);
+    // android:resource stays the id; android:value is read through the app's resources, as
+    // PackageParser reads it — "@string/app_id" is the string, not its id
+    const rsrc = attr(md, "resource");
+    const v = attr(md, "value") ?? rsrc;
+    const str = !rsrc && v && appHost && v.type === TV.REFERENCE ? rvString(appHost.res, { t: v.type, d: v.data }) : v?.str ?? null;
+    b.map.set(k, !v ? null : str !== null ? str : v.type === TV.BOOLEAN ? (v.data ? 1 : 0) : v.data);
   }
   return b;
 }
@@ -855,6 +871,9 @@ function metaData(node: XmlNode | null | undefined): JBundle {
 class JApplicationInfo extends JObj {
   packageName = ""; sourceDir = ""; dataDir = ""; nativeLibraryDir = "/lib";
   flags = 0; targetSdkVersion = 33; minSdkVersion = 21; theme = 0; labelRes = 0; icon = 0;
+  // AOSP fills exactly one of these from <application android:label>: the resource id when it
+  // is a reference, the literal otherwise. Code that names the app reads whichever is set.
+  nonLocalizedLabel: string | null = null;
   className: string | null = null; publicSourceDir = ""; uid = 10001; processName = "";
   enabled = 1; metaData: JBundle | null = null;
   // a single base.apk install has no splits: null, as AOSP leaves them (library loaders null-check these)
@@ -866,7 +885,7 @@ rt.register({
   fields: {
     packageName: "packageName", sourceDir: "sourceDir", dataDir: "dataDir", nativeLibraryDir: "nativeLibraryDir",
     flags: "flags", targetSdkVersion: "targetSdkVersion", minSdkVersion: "minSdkVersion", theme: "theme",
-    labelRes: "labelRes", icon: "icon", className: "className", publicSourceDir: "publicSourceDir",
+    labelRes: "labelRes", nonLocalizedLabel: "nonLocalizedLabel", icon: "icon", className: "className", publicSourceDir: "publicSourceDir",
     uid: "uid", processName: "processName", enabled: "enabled", metaData: "metaData",
     splitNames: "splitNames", splitSourceDirs: "splitSourceDirs", splitPublicSourceDirs: "splitPublicSourceDirs",
     sharedLibraryFiles: "sharedLibraryFiles",
@@ -883,6 +902,11 @@ function getAppInfo(host: AppHost): JApplicationInfo {
     cachedAppInfo.dataDir = `/data/data/${host.pkg}`;
     cachedAppInfo.processName = host.pkg;
     cachedAppInfo.theme = host.themeResId;
+    cachedAppInfo.icon = host.iconRes;
+    const node = appNode();
+    const label = node ? attr(node, "label") : undefined;
+    if (label?.type === TV.REFERENCE) cachedAppInfo.labelRes = label.data;
+    else cachedAppInfo.nonLocalizedLabel = host.appLabel;
     cachedAppInfo.metaData = metaData(appNode());
   }
   return cachedAppInfo;
@@ -893,6 +917,7 @@ class JPackageInfo extends JObj {
   firstInstallTime = 0n; lastUpdateTime = 0n;
   signatures: unknown = null; signingInfo: unknown = null;
   reqFeatures: unknown = null;
+  activities: unknown = null; services: unknown = null; providers: unknown = null;
 }
 /**
  * When this package was installed, epoch ms. An app's data directory IS its installation
@@ -932,6 +957,7 @@ rt.register({
     packageName: "packageName", versionName: "versionName", versionCode: "versionCode",
     applicationInfo: "applicationInfo", firstInstallTime: "firstInstallTime", lastUpdateTime: "lastUpdateTime",
     signatures: "signatures", signingInfo: "signingInfo", reqFeatures: "reqFeatures",
+    activities: "activities", services: "services", providers: "providers",
   },
   methods: {
     "<init>()V": function () {},
@@ -980,6 +1006,15 @@ function resolveProvider(authority: string): unknown {
 
 /** An explicit intent resolves to its own manifest entry, as on any device; with nothing else
  *  installed an implicit one honestly resolves to nothing. */
+/** the manifest's launcher activity (dotted), the entry point PackageManager hands out */
+function launcherActivity(): string | null {
+  for (const [name, node] of manifestActivities) {
+    const launcher = node.children.some((f) => f.name === "intent-filter" &&
+      f.children.some((x) => x.name === "category" && attrStr(x, "name") === "android.intent.category.LAUNCHER"));
+    if (launcher) return name.replace(/\//g, ".");
+  }
+  return null;
+}
 function resolveActivity(intent: JIntent | null): unknown {
   const cls = intent?.component;
   if (!cls || !manifestActivities.has(cls.replace(/\./g, "/"))) return null;
@@ -1016,14 +1051,16 @@ rt.register({
       if (appHost && pkg !== appHost.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
       const pi = new JPackageInfo();
       pi.packageName = pkg;
-      pi.versionName = "25.1";
-      pi.versionCode = 64;
-      pi.longVersionCode = 64n;
+      // the manifest's own version, not an invented one
+      pi.versionName = (manifestRoot && attrStr(manifestRoot, "versionName")) ?? "1.0";
+      pi.versionCode = (manifestRoot && attr(manifestRoot, "versionCode")?.data) ?? 1;
+      pi.longVersionCode = BigInt(pi.versionCode);
       pi.applicationInfo = appHost ? getAppInfo(appHost) : null;
       pi.firstInstallTime = pi.lastUpdateTime = installTime(pkg);
       pi.signatures = signatures();
       pi.signingInfo = new (rt.link("android/content/pm/SigningInfo").ctor)();
       pi.reqFeatures = reqFeatures();
+      pi.activities = jarray([...manifestActivities.keys()].map((n) => mkActivityInfo(n.replace(/\//g, "."))), "Landroid/content/pm/ActivityInfo;");
       return pi;
     },
     "getApplicationInfo(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;": function (pkg: string) {
@@ -1051,6 +1088,19 @@ rt.register({
     "getInstalledPackages(Landroid/content/pm/PackageManager$PackageInfoFlags;)Ljava/util/List;": () => newArrayList(),
     "getActivityInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;": (comp: any) =>
       mkActivityInfo(String(comp?.cls ?? "")),
+    // only this package is installed; its launcher activity is the one carrying the LAUNCHER category
+    "getLaunchIntentForPackage(Ljava/lang/String;)Landroid/content/Intent;": (pkg: string) => {
+      if (!appHost || pkg !== appHost.pkg) return null;
+      const cls = launcherActivity();
+      if (!cls) return null;
+      const i = new JIntent();
+      i.action = "android.intent.action.MAIN";
+      i.categories.add("android.intent.category.LAUNCHER");
+      i.pkg = pkg;
+      i.component = cls;
+      i.flags = 0x10000000; // FLAG_ACTIVITY_NEW_TASK, as PackageManager sets
+      return i;
+    },
   },
 });
 rt.register({
@@ -1769,7 +1819,11 @@ function jclsNameOf(o: unknown): string {
 }
 rt.register({
   name: "android/app/Activity", ctor: JActivity, sup: "android/view/ContextThemeWrapper",
-  ifaces: ["android/view/Window$Callback", "android/view/LayoutInflater$Factory2"],
+  // AOSP's Activity implements these; a library that casts an activity to one of them
+  // (ComponentCallbacks2 for trim-memory, KeyEvent.Callback for key dispatch) must not fail
+  ifaces: ["android/view/Window$Callback", "android/view/LayoutInflater$Factory2",
+    "android/content/ComponentCallbacks2", "android/content/ComponentCallbacks",
+    "android/view/KeyEvent$Callback", "android/view/View$OnCreateContextMenuListener"],
   statics: { RESULT_OK: -1, RESULT_CANCELED: 0, DEFAULT_KEYS_DISABLE: 0 },
   methods: activityMethods,
 });
@@ -2222,6 +2276,11 @@ for (const [name, methods, statics] of [
     "acquire()V": () => {}, "acquire(J)V": () => {}, "release()V": () => {},
     "isHeld()Z": () => 0, "setReferenceCounted(Z)V": () => {},
   }],
+  // no radio here: getDefaultAdapter() is null, which is what a device without Bluetooth reports
+  ["android/bluetooth/BluetoothAdapter", {
+    "static getDefaultAdapter()Landroid/bluetooth/BluetoothAdapter;": () => null,
+    "isEnabled()Z": () => 0,
+  }],
   ["android/os/Vibrator", {
     "vibrate(J)V": (ms: bigint) => globalThis.navigator?.vibrate?.(Number(ms)),
     "vibrate(Landroid/os/VibrationEffect;)V": () => globalThis.navigator?.vibrate?.(30),
@@ -2327,7 +2386,8 @@ for (const [name, methods, statics] of [
     "getPrimaryClip()Landroid/content/ClipData;": () => null,
     "hasPrimaryClip()Z": () => 0,
   }],
-  ["android/app/UiModeManager", { "getNightMode()I": () => 1, "setNightMode(I)V": () => {} }],
+  // UI_MODE_TYPE_NORMAL: a handset, not a car/desk/TV dock (Configuration.uiMode agrees)
+  ["android/app/UiModeManager", { "getNightMode()I": () => 1, "setNightMode(I)V": () => {}, "getCurrentModeType()I": () => 1 }],
   ["android/app/KeyguardManager", { "isKeyguardLocked()Z": () => 0, "inKeyguardRestrictedInputMode()Z": () => 0 }],
   ["android/app/job/JobScheduler", { "schedule(Landroid/app/job/JobInfo;)I": () => 1, "cancel(I)V": () => {}, "cancelAll()V": () => {}, "getAllPendingJobs()Ljava/util/List;": () => null }],
   ["android/hardware/SensorManager", { "getDefaultSensor(I)Landroid/hardware/Sensor;": () => null, "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z": () => 0, "unregisterListener(Landroid/hardware/SensorEventListener;)V": () => {} }],
@@ -2558,6 +2618,10 @@ rt.register({
     "<init>()V": function () {},
     "<init>(Ljava/lang/String;)V": function (this: any, a: string) { this.actions.push(a); },
     "addAction(Ljava/lang/String;)V": function (this: any, a: string) { this.actions.push(a); },
+    "countActions()I": function (this: any) { return this.actions.length; },
+    "getAction(I)Ljava/lang/String;": function (this: any, i: number) { return this.actions[i] ?? null; },
+    "hasAction(Ljava/lang/String;)Z": function (this: any, a: string) { return this.actions.includes(a) ? 1 : 0; },
+    "actionsIterator()Ljava/util/Iterator;": function (this: any) { return mkIter(this.actions.slice()); },
     "addCategory(Ljava/lang/String;)V": () => {},
     "addDataScheme(Ljava/lang/String;)V": () => {},
   },
@@ -2575,6 +2639,7 @@ rt.register({
   },
 });
 rt.register({ name: "android/app/Service", ctor: class extends JContextWrapper {}, sup: "android/content/ContextWrapper",
+  ifaces: ["android/content/ComponentCallbacks2", "android/content/ComponentCallbacks"],
   methods: {
     ...contextMethods,
     "<init>()V": function () {},
