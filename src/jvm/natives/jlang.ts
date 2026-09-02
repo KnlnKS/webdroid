@@ -48,12 +48,46 @@ export function idHash(o: unknown): number {
 const regexMemo = new Map<string, RegExp>();
 /** Java regex source + JS flags → RegExp, memoised: String.matches and Matcher rebuild theirs per call.
  *  Callers that use sticky/global flags must set lastIndex before every exec. */
+const POSIX: Record<string, string> = {
+  Lower: "a-z", Upper: "A-Z", ASCII: "\\x00-\\x7F", Alpha: "a-zA-Z", Digit: "0-9", Alnum: "a-zA-Z0-9",
+  Punct: "!-\\/:-@\\[-`{-~", Graph: "!-~", Print: " -~", Blank: " \\t", Cntrl: "\\x00-\\x1F\\x7F", XDigit: "0-9a-fA-F", Space: " \\t\\n\\x0B\\f\\r",
+  javaLowerCase: "\\p{Ll}", javaUpperCase: "\\p{Lu}", javaWhitespace: "\\s", javaLetter: "\\p{L}", javaDigit: "\\p{Nd}", javaLetterOrDigit: "\\p{L}\\p{Nd}",
+};
+/**
+ * java.util.regex syntax that JS RegExp lacks, rewritten in place: embedded flag groups
+ * `(?ismx)` (folded into the flags — Java scopes them from that point on, JS cannot), `\Q...\E`
+ * literals, `\A`/`\Z`/`\z` anchors, `\h`, possessive quantifiers (made greedy), and the
+ * POSIX/java.lang.Character classes `\p{Alpha}`. Returns the JS source plus extra flags.
+ */
+function javaToJs(src: string): [string, string] {
+  let extra = "";
+  let out = src.replace(/\(\?([a-zA-Z]+)(?:-[a-zA-Z]+)?\)/g, (_m, on: string) => {
+    for (const c of on) if ("ims".includes(c) && !extra.includes(c)) extra += c;
+    return "";
+  });
+  out = out.replace(/\\Q([\s\S]*?)(?:\\E|$)/g, (_m, lit: string) => lit.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&"));
+  out = out.replace(/\\([AZzh])/g, (_m, c: string) => c === "A" ? "^" : c === "h" ? "[ \\t\\xA0]" : "$");
+  out = out.replace(/([*+?}])\+/g, "$1");
+  out = out.replace(/\\([pP])\{(?:Is|In)?([A-Za-z]+)\}/g, (m, neg: string, name: string) => {
+    const cls = POSIX[name];
+    return cls ? (neg === "P" ? `[^${cls}]` : `[${cls}]`) : m;
+  });
+  return [out, extra];
+}
 export function javaRegex(source: string, flags: string): RegExp {
   const key = flags + "/" + source;
   let re = regexMemo.get(key);
   if (!re) {
     if (regexMemo.size > 4096) regexMemo.clear();
-    regexMemo.set(key, (re = new RegExp(source, flags)));
+    try { re = new RegExp(source, flags); }
+    catch (e) {
+      const [js, extra] = javaToJs(source);
+      let f = flags;
+      for (const c of extra) if (!f.includes(c)) f += c;
+      try { re = new RegExp(js, f); }
+      catch { re = new RegExp(js, f.replace("u", "")); }
+    }
+    regexMemo.set(key, re);
   }
   return re;
 }
@@ -1189,6 +1223,10 @@ rt.register({
 
 class JThreadLocal extends JObj {}
 rt.register({
+  name: "webdroid/SuppliedThreadLocal", ctor: class extends JThreadLocal { supplier: unknown = null; }, sup: "java/lang/ThreadLocal",
+  methods: { "initialValue()Ljava/lang/Object;": function (this: { supplier: unknown }) { return vcall(this.supplier, "get", "()Ljava/lang/Object;"); } },
+});
+rt.register({
   name: "java/lang/ThreadLocal", ctor: JThreadLocal,
   methods: {
     "<init>()V": function () {},
@@ -1201,6 +1239,12 @@ rt.register({
     "set(Ljava/lang/Object;)V": function (this: JThreadLocal, v: unknown) { curThread.locals.set(this, v); },
     "remove()V": function (this: JThreadLocal) { curThread.locals.delete(this); },
     "initialValue()Ljava/lang/Object;": function () { return null; },
+    "static withInitial(Ljava/util/function/Supplier;)Ljava/lang/ThreadLocal;": (sup: unknown) => {
+      if (sup == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const t = new (rt.link("webdroid/SuppliedThreadLocal").ctor)();
+      t.supplier = sup;
+      return t;
+    },
   },
 });
 

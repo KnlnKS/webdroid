@@ -283,6 +283,7 @@ export class JPaint extends JObj {
   textAlignN = 0; // 0 left, 1 center, 2 right
   alphaMul = 1;   // via setAlpha on top of color? android: setAlpha replaces color alpha
   shader: CanvasGradient | CanvasPattern | null = null;
+  shaderObj: JShader | null = null;
   strokeCapN: CanvasLineCap = "butt";
   strokeJoinN: CanvasLineJoin = "miter";
   dash: number[] | null = null;
@@ -341,7 +342,7 @@ const paintMethods: NativeSpec["methods"] = {
   "getWordSpacing()F": () => 0,
   "getLetterSpacing()F": () => 0,
   "isDither()Z": () => 0,
-  "getShader()Landroid/graphics/Shader;": function (this: JPaint) { return this.shader ?? null; },
+  "getShader()Landroid/graphics/Shader;": function (this: JPaint) { return this.shaderObj; },
   "getStrokeCap()Landroid/graphics/Paint$Cap;": function (this: JPaint) { return null; },
   "getStrokeJoin()Landroid/graphics/Paint$Join;": function (this: JPaint) { return null; },
   "getStrokeMiter()F": () => 4,
@@ -384,6 +385,7 @@ const paintMethods: NativeSpec["methods"] = {
   "setStrokeMiter(F)V": function () {},
   "setShader(Landroid/graphics/Shader;)Landroid/graphics/Shader;": function (this: JPaint, s: JShader | null) {
     this.shader = s?.grad ?? null;
+    this.shaderObj = s ?? null;
     return s;
   },
   "setPathEffect(Landroid/graphics/PathEffect;)Landroid/graphics/PathEffect;": function (this: JPaint, e: any) {
@@ -471,7 +473,7 @@ const paintMethods: NativeSpec["methods"] = {
 export function copyPaint(src: JPaint, dst: JPaint) {
   dst.color = src.color; dst.style = src.style; dst.strokeWidth = src.strokeWidth;
   dst.textSize = src.textSize; dst.tf = src.tf; dst.antiAlias = src.antiAlias;
-  dst.textAlignN = src.textAlignN; dst.shader = src.shader; dst.dash = src.dash;
+  dst.textAlignN = src.textAlignN; dst.shader = src.shader; dst.shaderObj = src.shaderObj; dst.dash = src.dash;
   dst.filterColor = src.filterColor; dst.underline = src.underline; dst.fakeBold = src.fakeBold;
   dst.letterSpacingEm = src.letterSpacingEm;
   dst.blend = src.blend; dst.xfermode = src.xfermode; dst.blendMode = src.blendMode;
@@ -638,8 +640,26 @@ rt.register({ name: "android/graphics/CornerPathEffect", ctor: class extends JOb
   methods: { "<init>(F)V": function () {} } });
 
 // ── Shader
-class JShader extends JObj { grad: CanvasGradient | CanvasPattern | null = null; }
-rt.register({ name: "android/graphics/Shader", ctor: JShader });
+class JShader extends JObj {
+  grad: CanvasGradient | CanvasPattern | null = null;
+  /** setLocalMatrix: maps shader space into the canvas; null = identity */
+  local: [number, number, number, number, number, number] | null = null;
+}
+const isIdentityM = (m: number[]) => m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0;
+rt.register({
+  name: "android/graphics/Shader", ctor: JShader,
+  methods: {
+    "<init>()V": function () {},
+    "setLocalMatrix(Landroid/graphics/Matrix;)V": function (this: JShader, m: JMatrix | null) {
+      this.local = m && !isIdentityM(m.m) ? [...m.m] : null;
+      if (this.grad instanceof CanvasPattern) this.grad.setTransform(this.local ? new DOMMatrix(this.local) : new DOMMatrix());
+    },
+    "getLocalMatrix(Landroid/graphics/Matrix;)Z": function (this: JShader, m: JMatrix) {
+      m.m = this.local ? [...this.local] : [1, 0, 0, 1, 0, 0];
+      return this.local ? 1 : 0;
+    },
+  },
+});
 mkEnumSet("android/graphics/Shader$TileMode", ["CLAMP", "REPEAT", "MIRROR"]);
 /** colour stops onto a canvas gradient; evenly spaced when `stops` is null, as Android does */
 function gradientStops(g: CanvasGradient, colors: ArrayLike<number>, stops: ArrayLike<number> | null): CanvasGradient {
@@ -888,9 +908,45 @@ export class JCanvas extends JObj {
     // so a CLEAR fill can never leak into the next drawImage/drawText and erase it.
     const prev = p.blend ? this.ctx.globalCompositeOperation : null;
     if (p.blend) this.ctx.globalCompositeOperation = p.blend;
-    if (p.style === 0 || p.style === 2) { this.prep(p, false); fill(this.ctx); }
+    if (p.style === 0 || p.style === 2) {
+      this.prep(p, false);
+      const lm = p.shaderObj?.local;
+      // a gradient with a local matrix: Canvas2D gradients have no transform of their own, so
+      // clip to the shape and fill the plane under the matrix instead
+      fill(lm && !(p.shader instanceof CanvasPattern) ? this.shaderClipCtx(lm) : this.ctx);
+    }
     if (p.style === 1 || p.style === 2) { this.prep(p, true); stroke(this.ctx); }
     if (prev) this.ctx.globalCompositeOperation = prev;
+  }
+  private shaderCtx: (typeof this.ctx) | null = null;
+  private shaderCtxLm: number[] | null = null;
+  shaderClipCtx(lm: [number, number, number, number, number, number]): typeof this.ctx {
+    const ctx = this.ctx;
+    const under = (clip: (c: typeof ctx) => void) => {
+      ctx.save();
+      clip(ctx);
+      ctx.transform(lm[0], lm[1], lm[2], lm[3], lm[4], lm[5]);
+      ctx.fillRect(-1e5, -1e5, 2e5, 2e5);
+      ctx.restore();
+    };
+    if (!this.shaderCtx || this.shaderCtxLm !== lm) {
+      this.shaderCtxLm = lm;
+      const over: Record<string, unknown> = {
+        fill: (a?: Path2D | CanvasFillRule, b?: CanvasFillRule) => under((c) => { if (a instanceof Path2D) c.clip(a, b); else c.clip(a); }),
+        fillRect: (x: number, y: number, w: number, h: number) => under((c) => { c.beginPath(); c.rect(x, y, w, h); c.clip(); }),
+      };
+      // every other member goes to the real context with the real receiver (a 2D context's
+      // methods throw on any other `this`)
+      this.shaderCtx = new Proxy(ctx, {
+        get: (t, k) => {
+          if (k in over) return over[k as string];
+          const v = (t as unknown as Record<PropertyKey, unknown>)[k];
+          return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+        },
+        set: (t, k, v) => { (t as unknown as Record<PropertyKey, unknown>)[k] = v; return true; },
+      });
+    }
+    return this.shaderCtx!;
   }
 }
 // ── Canvas method bodies shared by several overloads

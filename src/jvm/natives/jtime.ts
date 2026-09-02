@@ -268,8 +268,8 @@ function toJsRegex(p: string, flags: number, global: boolean): RegExp {
   if (flags & 8) f += "m";
   if (flags & 32) f += "s";
   if (global) f += "g";
-  try { return new RegExp(p, f); }
-  catch { return new RegExp(p.replace(/\(\?</g, "(?:<"), f.replace("u", "")); }
+  try { return javaRegex(p, f); }
+  catch { return javaRegex(p.replace(/\(\?</g, "(?:<"), f.replace("u", "")); }
 }
 rt.register({
   name: "java/util/regex/Pattern", ctor: JPattern, ifaces: ["java/io/Serializable"],

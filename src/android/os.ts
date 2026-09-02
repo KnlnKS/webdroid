@@ -494,6 +494,36 @@ rt.register({
   },
 });
 
+// ── android.os.StatFs: the browser's storage estimate for whichever path is asked about (one
+// filesystem backs everything here), in 4K blocks.
+class JStatFs extends JObj { path = ""; total = 0; free = 0; }
+async function statFs(this: JStatFs, p: string) {
+  this.path = p;
+  try {
+    const e = await navigator.storage?.estimate?.();
+    this.total = e?.quota ?? 0; this.free = Math.max(0, (e?.quota ?? 0) - (e?.usage ?? 0));
+  } catch { /* no estimate available: report an empty filesystem */ }
+}
+const BLK = 4096n;
+rt.register({
+  name: "android/os/StatFs", ctor: JStatFs,
+  methods: {
+    "<init>(Ljava/lang/String;)V": statFs,
+    "restat(Ljava/lang/String;)V": statFs,
+    "getBlockSizeLong()J": () => BLK,
+    "getBlockSize()I": () => Number(BLK),
+    "getBlockCountLong()J": function (this: JStatFs) { return BigInt(Math.floor(this.total / 4096)); },
+    "getBlockCount()I": function (this: JStatFs) { return Math.floor(this.total / 4096) | 0; },
+    "getAvailableBlocksLong()J": function (this: JStatFs) { return BigInt(Math.floor(this.free / 4096)); },
+    "getAvailableBlocks()I": function (this: JStatFs) { return Math.floor(this.free / 4096) | 0; },
+    "getFreeBlocksLong()J": function (this: JStatFs) { return BigInt(Math.floor(this.free / 4096)); },
+    "getFreeBlocks()I": function (this: JStatFs) { return Math.floor(this.free / 4096) | 0; },
+    "getAvailableBytes()J": function (this: JStatFs) { return BigInt(Math.floor(this.free)); },
+    "getFreeBytes()J": function (this: JStatFs) { return BigInt(Math.floor(this.free)); },
+    "getTotalBytes()J": function (this: JStatFs) { return BigInt(Math.floor(this.total)); },
+  },
+});
+
 // ── android.util.Property / IntProperty / FloatProperty: abstract get/set handles that
 // ObjectAnimator drives. The primitive subclasses unbox into the app's setValue override.
 export class JProperty extends JObj { type: unknown = null; name = ""; }
