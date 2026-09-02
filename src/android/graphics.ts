@@ -490,6 +490,15 @@ export function measureText(p: JPaint, s: string): number {
   perf.measureText++;
   return Math.fround(rawWidth(p.font(), s) + p.letterSpacingEm * p.textSize * s.length);
 }
+/**
+ * The device font's vertical metrics, in em units: AOSP's Roboto build reports hhea
+ * ascender/descender 1900/-500 as Paint ascent/descent and the OS/2 win metrics 2146/555 as
+ * top/bottom, so a line is 1.172em. The Roboto we ship (the Google Fonts build) carries
+ * 2146/-555 in hhea too, so the browser's fontBoundingBox is Android's top/bottom — every line
+ * came out 12.5% too tall, and auto-sizing text (measure, overflow, shrink, repeat) converged
+ * on the wrong size. main.ts applies these as ascent/descent-override on the loaded faces.
+ */
+export const SYSTEM_FONT = { ascent: 1900 / 2048, descent: 500 / 2048, top: 2146 / 2048, bottom: 555 / 2048 };
 function vmetrics(p: JPaint): { a: number; d: number } {
   const f = p.font();
   const hit = vmetCache.get(f);
@@ -497,20 +506,21 @@ function vmetrics(p: JPaint): { a: number; d: number } {
   const ctx = measureCtx(f);
   const m = ctx.measureText("Ag");
   const v = {
-    a: -(m.fontBoundingBoxAscent ?? p.textSize * 0.928),
-    d: m.fontBoundingBoxDescent ?? p.textSize * 0.244,
+    a: -(m.fontBoundingBoxAscent ?? p.textSize * SYSTEM_FONT.ascent),
+    d: m.fontBoundingBoxDescent ?? p.textSize * SYSTEM_FONT.descent,
   };
   vmetCache.set(f, v);
   return v;
 }
 export function fontAscent(p: JPaint): number { return vmetrics(p).a; }
 export function fontDescent(p: JPaint): number { return vmetrics(p).d; }
-function fillFontMetrics(p: JPaint, fm: JFontMetrics | JFontMetricsInt, int: boolean) {
+export function fillFontMetrics(p: JPaint, fm: { top: number; ascent: number; descent: number; bottom: number; leading: number }, int: boolean) {
   const a = fontAscent(p), d = fontDescent(p);
+  const top = a * (SYSTEM_FONT.top / SYSTEM_FONT.ascent), bottom = d * (SYSTEM_FONT.bottom / SYSTEM_FONT.descent);
   fm.ascent = int ? Math.round(a) : a;
   fm.descent = int ? Math.round(d) : d;
-  fm.top = int ? Math.round(a * 1.06) : a * 1.06;
-  fm.bottom = int ? Math.round(d * 1.06) : d * 1.06;
+  fm.top = int ? Math.round(top) : top;
+  fm.bottom = int ? Math.round(bottom) : bottom;
   fm.leading = 0;
 }
 
@@ -1107,26 +1117,47 @@ export function tintedBmp(b: JBitmap, tint: number | null): OffscreenCanvas {
   return t;
 }
 rt.register({ name: "android/graphics/Canvas", ctor: JCanvas, methods: canvasMethods });
-class JOutline extends JObj {}
+// android.graphics.Outline: the shape a RenderNode clips to (clipToOutline) — Compose's
+// Modifier.clip(shape) is exactly this, so a round button's ripple and children stay inside it.
+export class JOutline extends JObj {
+  kind: 0 | 1 | 2 | 3 = 0;   // empty | rect/roundRect | oval | path
+  l = 0; t = 0; r = 0; b = 0; rad = 0; alpha = 1;
+  path: JPath | null = null;
+  setRR(l: number, t: number, r: number, b: number, rad: number) { this.kind = 1; this.l = l; this.t = t; this.r = r; this.b = b; this.rad = rad; this.path = null; }
+  /** intersect ctx's clip with the outline shape */
+  trace(ctx: Ctx2D) {
+    ctx.beginPath();
+    if (this.kind === 3 && this.path) { ctx.clip(this.path.path()); return; }
+    if (this.kind === 2) ctx.ellipse((this.l + this.r) / 2, (this.t + this.b) / 2, (this.r - this.l) / 2, (this.b - this.t) / 2, 0, 0, Math.PI * 2);
+    else if (this.rad > 0) ctx.roundRect(this.l, this.t, this.r - this.l, this.b - this.t, this.rad);
+    else ctx.rect(this.l, this.t, this.r - this.l, this.b - this.t);
+    ctx.clip();
+  }
+}
 rt.register({
   name: "android/graphics/Outline", ctor: JOutline,
   methods: {
     "<init>()V": () => {},
-    "setRoundRect(IIIIF)V": () => {},
-    "setRoundRect(Landroid/graphics/Rect;F)V": () => {},
-    "setRect(IIII)V": () => {},
-    "setRect(Landroid/graphics/Rect;)V": () => {},
-    "setOval(IIII)V": () => {},
-    "setPath(Landroid/graphics/Path;)V": () => {},
-    "setConvexPath(Landroid/graphics/Path;)V": () => {},
-    "setEmpty()V": () => {},
-    "offset(II)V": () => {},
-    "canClip()Z": () => 1,
-    "isEmpty()Z": () => 0,
-    "getAlpha()F": () => 1,
-    "getRadius()F": () => 0,
-    "getRect(Landroid/graphics/Rect;)Z": () => 0,
-    "setAlpha(F)V": () => {},
+    "setRoundRect(IIIIF)V": function (this: JOutline, l: number, t: number, r: number, b: number, rad: number) { this.setRR(l, t, r, b, asF(rad)); },
+    "setRoundRect(Landroid/graphics/Rect;F)V": function (this: JOutline, rc: JRect, rad: number) { this.setRR(rc.left, rc.top, rc.right, rc.bottom, asF(rad)); },
+    "setRect(IIII)V": function (this: JOutline, l: number, t: number, r: number, b: number) { this.setRR(l, t, r, b, 0); },
+    "setRect(Landroid/graphics/Rect;)V": function (this: JOutline, rc: JRect) { this.setRR(rc.left, rc.top, rc.right, rc.bottom, 0); },
+    "setOval(IIII)V": function (this: JOutline, l: number, t: number, r: number, b: number) { this.setRR(l, t, r, b, 0); this.kind = 2; },
+    "setOval(Landroid/graphics/Rect;)V": function (this: JOutline, rc: JRect) { this.setRR(rc.left, rc.top, rc.right, rc.bottom, 0); this.kind = 2; },
+    "setPath(Landroid/graphics/Path;)V": function (this: JOutline, p: JPath) { this.kind = 3; this.path = p; },
+    "setConvexPath(Landroid/graphics/Path;)V": function (this: JOutline, p: JPath) { this.kind = 3; this.path = p; },
+    "setEmpty()V": function (this: JOutline) { this.kind = 0; this.path = null; },
+    "offset(II)V": function (this: JOutline, dx: number, dy: number) { this.l += dx; this.r += dx; this.t += dy; this.b += dy; },
+    "canClip()Z": function (this: JOutline) { return this.kind === 3 ? 0 : 1; },
+    "isEmpty()Z": function (this: JOutline) { return this.kind === 0 ? 1 : 0; },
+    "getAlpha()F": function (this: JOutline) { return this.alpha; },
+    "setAlpha(F)V": function (this: JOutline, a: number) { this.alpha = asF(a); },
+    "getRadius()F": function (this: JOutline) { return this.kind === 1 ? this.rad : -1; },
+    "getRect(Landroid/graphics/Rect;)Z": function (this: JOutline, rc: JRect) {
+      if (this.kind !== 1) return 0;
+      rc.left = this.l; rc.top = this.t; rc.right = this.r; rc.bottom = this.b;
+      return 1;
+    },
   },
 });
 class JRecordingCanvas extends JCanvas {}
@@ -1141,6 +1172,7 @@ export class JRenderNode extends JObj {
   alpha = 1; tx = 0; ty = 0; sx = 1; sy = 1; rot = 0;
   px = Number.NaN; py = Number.NaN;   // pivot (NaN = center)
   clip = true;
+  clipOutline = false; outline: JOutline | null = null;
   off: OffscreenCanvas | null = null;
   octx: OffscreenCanvasRenderingContext2D | null = null;
   // deferred display list: replayed against the target ctx each draw so child layers
@@ -1193,6 +1225,7 @@ function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
     ctx.translate(-px, -py);
   }
   if (n.clip) { ctx.beginPath(); ctx.rect(0, 0, n.w, n.h); ctx.clip(); }
+  if (n.clipOutline && n.outline && n.outline.kind) n.outline.trace(ctx);
   perf.rnReplay += n.ops.length;
   // The display list stays a deferred command list (recorded ops replayed against the real
   // target). A bad op must not abandon this node's save, or its clip leaks into the frame.
@@ -1269,8 +1302,8 @@ rt.register({
     "setRotationX(F)Z": rn1, "setRotationY(F)Z": rn1,
     "setCameraDistance(F)Z": rn1,
     "setClipToBounds(Z)Z": function (this: JRenderNode, c: number) { this.clip = !!c; return 1; },
-    "setClipToOutline(Z)Z": rn1,
-    "setOutline(Landroid/graphics/Outline;)Z": rn1,
+    "setClipToOutline(Z)Z": function (this: JRenderNode, c: number) { this.clipOutline = !!c; return 1; },
+    "setOutline(Landroid/graphics/Outline;)Z": function (this: JRenderNode, o: JOutline | null) { this.outline = o; return 1; },
     "setAmbientShadowColor(I)Z": rn1, "setSpotShadowColor(I)Z": rn1,
     "setUseCompositingLayer(ZLandroid/graphics/Paint;)Z": rn1,
     "setRenderEffect(Landroid/graphics/RenderEffect;)Z": rn1,
@@ -1292,7 +1325,7 @@ rt.register({
     "getElevation()F": () => 0,
     "getCameraDistance()F": () => 8000,
     "getClipToBounds()Z": function (this: JRenderNode) { return this.clip ? 1 : 0; },
-    "getClipToOutline()Z": () => 0,
+    "getClipToOutline()Z": function (this: JRenderNode) { return this.clipOutline ? 1 : 0; },
   },
 });
 canvasMethods["drawRenderNode(Landroid/graphics/RenderNode;)V"] = function (this: JCanvas, n: JRenderNode) {

@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { vcall, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import { type JDate } from "../jvm/natives/jtime";
-import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent } from "./graphics";
+import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fillFontMetrics } from "./graphics";
 import { device } from "../shell/config";
 import { formatDate } from "../jvm/natives/jtext";
 import { toJsArray } from "../jvm/natives/jutil";
@@ -467,9 +467,7 @@ rt.register({
 function boringMetrics(text: string, paint: JTextPaint): JBoringMetrics | null {
   if (text.includes("\n") || /[\u0590-\u08ff\u200f\u202b\u202e\ud800-\udfff]/.test(text)) return null;
   const m = new JBoringMetrics();
-  const a = fontAscent(paint), d = fontDescent(paint);
-  m.ascent = Math.round(a); m.top = m.ascent;
-  m.descent = Math.round(d); m.bottom = m.descent;
+  fillFontMetrics(paint, m, true);
   m.width = Math.ceil(measureText(paint, text));
   return m;
 }
