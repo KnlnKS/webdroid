@@ -1608,9 +1608,12 @@ async function vpaStart(this: JVPA) {
   if (this.startAction) { const r = this.startAction; this.startAction = null; try { await vcall(r, "run", "()V"); } catch (e) { reportUncaught(e); } }
   if (this.listener) try { await vcall(this.listener, "onAnimationStart", "(Landroid/animation/Animator;)V", vpaAnim(this)); } catch (e) { reportUncaught(e); }
   const self = this;
+  // the tick is a main-looper job of its own: two animations ending in one frame must not
+  // interleave their end callbacks (RecyclerView's item animator re-enters on that)
+  let inflight = false;
   uiState.animHooks.add(function hook() {
     if (!self.running) return false;
-    void vpaTick.call(self);
+    if (!inflight) { inflight = true; void onMain(() => vpaTick.call(self)).finally(() => { inflight = false; }); }
     return self.running;
   });
   invalidate();

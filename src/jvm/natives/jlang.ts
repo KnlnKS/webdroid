@@ -644,6 +644,7 @@ function sbSpec(name: string): NativeSpec {
       [`append(Ljava/lang/String;)${L}`]: app(function (v) { this.s += v === null ? "null" : v; }),
       [`append(Ljava/lang/Object;)${L}`]: appendObj,
       [`append(Ljava/lang/CharSequence;)${L}`]: appendObj,
+      [`append(Ljava/lang/StringBuffer;)${L}`]: appendObj,
       "append(Ljava/lang/CharSequence;)Ljava/lang/Appendable;": appendObj,
       "append(C)Ljava/lang/Appendable;": appendChar,
       "append(Ljava/lang/CharSequence;II)Ljava/lang/Appendable;": appendRange,

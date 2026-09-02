@@ -6,6 +6,7 @@ import { vcall, boxInt, box, JFloat } from "../jvm/natives/jlang";
 import { toJsArray, newArrayList } from "../jvm/natives/jutil";
 import { uiState, invalidate, JView, guardCall } from "./view";
 import { reportUncaught, stateSetMatches } from "./os";
+import { onMain } from "./mainloop";
 import { parseAXML, TV, type XmlNode, type XmlAttr } from "./axml";
 import { type Resources, type RV, AID, T_STR, normRV, rvFloat, rvInt } from "./res";
 
@@ -319,9 +320,11 @@ const vaMethods: NativeSpec["methods"] = {
       try { await vcall(l, "onAnimationStart", "(Landroid/animation/Animator;)V", this); } catch (e) { reportUncaught(e); }
     }
     const self = this;
+    // one serialized main-looper job per tick, never a floating chain (see ViewPropertyAnimator)
+    let inflight = false;
     const hook = () => {
       if (!self.running) return false;
-      void animTick(self);
+      if (!inflight) { inflight = true; void onMain(() => animTick(self)).finally(() => { inflight = false; }); }
       return self.running;
     };
     uiState.animHooks.add(hook);
