@@ -7,7 +7,7 @@ import { device } from "../shell/config";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, idHash } from "../jvm/natives/jlang";
 import { JCanvas, JRect, setInvalidateHook, JMatrix } from "./graphics";
-import { JDrawable, ST, loadDrawableRV, JColorDrawable, loadDrawable } from "./drawable";
+import { JDrawable, ST, loadDrawableRV, JColorDrawable, loadDrawable, type JColorStateList, cslColor } from "./drawable";
 import { reportUncaught, mainHandler, type JDisplayMetrics } from "./os";
 import { onMain } from "./mainloop";
 import { type Resources, JTheme, JAttrSet, AID, obtainStyled, rvDimen, rvInt, rvString } from "./res";
@@ -176,6 +176,9 @@ export class JView extends JObj {
   layerType = 0;
   elevationV = 0;
   longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  nestedScrolling = false; transientState = 0; textAlignment = 1;
+  clipBounds: JRect | null = null; bgTint: JColorStateList | null = null;
+  focusChangeL: unknown = null; keyL: unknown = null; tooltip: unknown = null;
   win: unknown = null; // ViewRootImpl-ish owner
 
   width(): number { return this.right - this.left; }
@@ -510,6 +513,7 @@ const viewMethods: NativeSpec["methods"] = {
   "isClickable()Z": function (this: JView) { return this.clickable ? 1 : 0; },
   "setClickable(Z)V": function (this: JView, c: number) { this.clickable = !!c; },
   "setLongClickable(Z)V": function (this: JView, c: number) { this.longClickable = !!c; },
+  "isLongClickable()Z": function (this: JView) { return this.longClickable ? 1 : 0; },
   "isPressed()Z": function (this: JView) { return this.pressed ? 1 : 0; },
   "setPressed(Z)V": function (this: JView, p: number) { this.pressed = !!p; void this.refreshDrawableState(); },
   "isSelected()Z": function (this: JView) { return this.selected ? 1 : 0; },
@@ -894,7 +898,111 @@ const viewMethods: NativeSpec["methods"] = {
     const info = rt.link("android/view/Display");
     return new info.ctor();
   },
-  "setNestedScrollingEnabled(Z)V": () => {},
+  "setNestedScrollingEnabled(Z)V": function (this: JView, v: number) { this.nestedScrolling = !!v; },
+  "isNestedScrollingEnabled()Z": function (this: JView) { return this.nestedScrolling ? 1 : 0; },
+  "stopNestedScroll()V": () => {},
+  "isInLayout()Z": () => 0,
+  "hasTransientState()Z": function (this: JView) { return this.transientState > 0 ? 1 : 0; },
+  "setHasTransientState(Z)V": function (this: JView, v: number) { this.transientState = Math.max(0, this.transientState + (v ? 1 : -1)); },
+  "getMeasuredState()I": () => 0,
+  "static combineMeasuredStates(II)I": (a: number, b: number) => a | b,
+  "getPivotX()F": function (this: JView) { return this.pivotXv ?? this.width() / 2; },
+  "getPivotY()F": function (this: JView) { return this.pivotYv ?? this.height() / 2; },
+  "getTranslationZ()F": function (this: JView) { return this.translationZ; },
+  "getZ()F": function (this: JView) { return this.elevationV + this.translationZ; },
+  "setRotationX(F)V": () => {},
+  "setRotationY(F)V": () => {},
+  "getRotationX()F": () => 0,
+  "getRotationY()F": () => 0,
+  "getTransitionAlpha()F": () => 1,
+  "setTransitionAlpha(F)V": () => {},
+  "setTransitionVisibility(I)V": function (this: JView, v: number) { this.visibility = v; invalidate(); },
+  "getClipBounds()Landroid/graphics/Rect;": function (this: JView) { return this.clipBounds; },
+  "setClipBounds(Landroid/graphics/Rect;)V": function (this: JView, r: JRect | null) { this.clipBounds = r; invalidate(); },
+  "getClipToOutline()Z": () => 0,
+  "invalidateOutline()V": () => { invalidate(); },
+  "getBackgroundTintList()Landroid/content/res/ColorStateList;": function (this: JView) { return this.bgTint; },
+  "setBackgroundTintList(Landroid/content/res/ColorStateList;)V": function (this: JView, csl: JColorStateList | null) {
+    this.bgTint = csl;
+    if (this.background) this.background.tint = csl ? cslColor(csl, this.drawableState()) : null;
+    invalidate();
+  },
+  "setBackgroundTintMode(Landroid/graphics/PorterDuff$Mode;)V": () => {},
+  "getBackgroundTintMode()Landroid/graphics/PorterDuff$Mode;": () => null,
+  "getDrawingRect(Landroid/graphics/Rect;)V": function (this: JView, r: JRect) {
+    r.left = this.scrollX; r.top = this.scrollY; r.right = this.scrollX + this.width(); r.bottom = this.scrollY + this.height();
+  },
+  "getFocusedRect(Landroid/graphics/Rect;)V": function (this: JView, r: JRect) {
+    r.left = this.scrollX; r.top = this.scrollY; r.right = this.scrollX + this.width(); r.bottom = this.scrollY + this.height();
+  },
+  "getGlobalVisibleRect(Landroid/graphics/Rect;Landroid/graphics/Point;)Z": function (this: JView, r: JRect, off: { x: number; y: number } | null) {
+    const [x, y] = locationOnScreen(this);
+    r.left = x; r.top = y; r.right = x + this.width(); r.bottom = y + this.height();
+    if (off) { off.x = x - this.left; off.y = y - this.top; }
+    return 1;
+  },
+  "getWindowVisibleDisplayFrame(Landroid/graphics/Rect;)V": function (this: JView, r: JRect) {
+    let root: JView = this;
+    while (root.parent) root = root.parent;
+    r.left = 0; r.top = device.statusBar; r.right = root.width() || device.width; r.bottom = device.statusBar + (root.height() || device.height - device.statusBar);
+  },
+  "bringToFront()V": function (this: JView) {
+    const p = this.parent as JViewGroup | null;
+    if (!p) return;
+    const i = p.children.indexOf(this);
+    if (i >= 0) { p.children.splice(i, 1); p.children.push(this); invalidate(); }
+  },
+  "setOnFocusChangeListener(Landroid/view/View$OnFocusChangeListener;)V": function (this: JView, l: unknown) { this.focusChangeL = l; },
+  "getOnFocusChangeListener()Landroid/view/View$OnFocusChangeListener;": function (this: JView) { return this.focusChangeL; },
+  "setOnKeyListener(Landroid/view/View$OnKeyListener;)V": function (this: JView, l: unknown) { this.keyL = l; },
+  "setOnHoverListener(Landroid/view/View$OnHoverListener;)V": () => {},
+  "setTooltipText(Ljava/lang/CharSequence;)V": function (this: JView, t: unknown) { this.tooltip = t; },
+  "getTooltipText()Ljava/lang/CharSequence;": function (this: JView) { return this.tooltip; },
+  "setTextAlignment(I)V": function (this: JView, a: number) { this.textAlignment = a; },
+  "getTextAlignment()I": function (this: JView) { return this.textAlignment; },
+  "hasOverlappingRendering()Z": () => 1,
+  "hasFocusable()Z": function (this: JView) { return this.visibility === 0 && (this.focusable || this.focusableInTouchMode) ? 1 : 0; },
+  "isHovered()Z": () => 0,
+  "isAccessibilityFocused()Z": () => 0,
+  "isDuplicateParentStateEnabled()Z": () => 0,
+  "isLayoutDirectionResolved()Z": () => 1,
+  "getAccessibilityLiveRegion()I": () => 0,
+  "getVerticalFadingEdgeLength()I": () => 0,
+  "setVerticalFadingEdgeEnabled(Z)V": () => {},
+  "setScrollbarFadingEnabled(Z)V": () => {},
+  "setScrollIndicators(II)V": () => {},
+  "setNextFocusLeftId(I)V": () => {},
+  "setNextFocusRightId(I)V": () => {},
+  "setSystemGestureExclusionRects(Ljava/util/List;)V": () => {},
+  "setFrameContentVelocity(F)V": () => {},
+  "setAnimationMatrix(Landroid/graphics/Matrix;)V": () => {},
+  "awakenScrollBars()Z": () => 0,
+  "computeHorizontalScrollExtent()I": function (this: JView) { return this.width(); },
+  "computeHorizontalScrollOffset()I": function (this: JView) { return this.scrollX; },
+  "computeHorizontalScrollRange()I": function (this: JView) { return this.width(); },
+  "computeVerticalScrollExtent()I": function (this: JView) { return this.height(); },
+  "computeVerticalScrollOffset()I": function (this: JView) { return this.scrollY; },
+  "computeVerticalScrollRange()I": function (this: JView) { return this.height(); },
+  "onScrollChanged(IIII)V": () => {},
+  "onVisibilityChanged(Landroid/view/View;I)V": () => {},
+  "onVisibilityAggregated(Z)V": () => {},
+  "onWindowVisibilityChanged(I)V": () => {},
+  "onWindowSystemUiVisibilityChanged(I)V": () => {},
+  "getWindowSystemUiVisibility()I": () => 0,
+  "onAnimationStart()V": () => {},
+  "onAnimationEnd()V": () => {},
+  "onRtlPropertiesChanged(I)V": () => {},
+  "onHoverEvent(Landroid/view/MotionEvent;)Z": () => 0,
+  "dispatchHoverEvent(Landroid/view/MotionEvent;)Z": () => 0,
+  "onDragEvent(Landroid/view/DragEvent;)Z": () => 0,
+  "onKeyPreIme(ILandroid/view/KeyEvent;)Z": () => 0,
+  "onCheckIsTextEditor()Z": () => 0,
+  "onCreateInputConnection(Landroid/view/inputmethod/EditorInfo;)Landroid/view/inputmethod/InputConnection;": () => null,
+  "drawableHotspotChanged(FF)V": () => {},
+  "fitSystemWindows(Landroid/graphics/Rect;)Z": () => 0,
+  "setLeftTopRightBottom(IIII)V": function (this: JView, l: number, t: number, r: number, b: number) {
+    this.left = l; this.top = t; this.right = r; this.bottom = b; invalidate();
+  },
   "isInEditMode()Z": () => 0,
   "isLaidOut()Z": function (this: JView) { return this.right > 0 || this.bottom > 0 ? 1 : 0; },
   "getLayoutDirection()I": () => 0,
@@ -1116,6 +1224,31 @@ const vgMethods: NativeSpec["methods"] = {
   "getChildCount()I": function (this: JViewGroup) { return this.children.length; },
   "getChildAt(I)Landroid/view/View;": function (this: JViewGroup, i: number) { return this.children[i] ?? null; },
   "indexOfChild(Landroid/view/View;)I": function (this: JViewGroup, c: JView) { return this.children.indexOf(c); },
+  "removeViews(II)V": function (this: JViewGroup, start: number, n: number) {
+    for (const c of this.children.slice(start, start + n)) detachView(this, c);
+  },
+  "removeViewsInLayout(II)V": function (this: JViewGroup, start: number, n: number) {
+    for (const c of this.children.slice(start, start + n)) detachView(this, c);
+  },
+  "detachViewFromParent(I)V": function (this: JViewGroup, i: number) {
+    const c = this.children[i];
+    if (c) { this.children.splice(i, 1); c.parent = null; }
+  },
+  "onViewAdded(Landroid/view/View;)V": () => {},
+  "onViewRemoved(Landroid/view/View;)V": () => {},
+  "getFocusedChild()Landroid/view/View;": function (this: JViewGroup) {
+    return this.children.find((c) => c.focused || (c instanceof JViewGroup && findByPred(c, (v) => v.focused))) ?? null;
+  },
+  "focusSearch(Landroid/view/View;I)Landroid/view/View;": () => null,
+  "onRequestFocusInDescendants(ILandroid/graphics/Rect;)Z": () => 0,
+  "requestChildRectangleOnScreen(Landroid/view/View;Landroid/graphics/Rect;Z)Z": () => 0,
+  "offsetRectIntoDescendantCoords(Landroid/view/View;Landroid/graphics/Rect;)V": function (this: JViewGroup, d: JView, r: JRect) {
+    const [px, py] = locationOnScreen(this), [dx, dy] = locationOnScreen(d);
+    r.left += px - dx; r.right += px - dx; r.top += py - dy; r.bottom += py - dy;
+  },
+  "setChildrenDrawingCacheEnabled(Z)V": () => {},
+  "setHandwritingBoundsOffsets(FFFF)V": () => {},
+  "suppressLayout(Z)V": () => {},
   "bringChildToFront(Landroid/view/View;)V": function (this: JViewGroup, c: JView) {
     const i = this.children.indexOf(c);
     if (i >= 0) { this.children.splice(i, 1); this.children.push(c); invalidate(); }
