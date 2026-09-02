@@ -1556,13 +1556,11 @@ rt.register({
     "static copyOf([Ljava/lang/Object;I)[Ljava/lang/Object;": (a: unknown[], n: number) => objCopyOf(a, n, elemOf(a)),
     "static copyOf([Ljava/lang/Object;ILjava/lang/Class;)[Ljava/lang/Object;": (a: unknown[], n: number, cls: { arrDesc?: string }) =>
       objCopyOf(a, n, cls?.arrDesc?.slice(1) ?? elemOf(a)),
-    "static copyOfRange([BII)[B": taSlice,
-    "static copyOfRange([III)[I": taSlice,
-    "static copyOfRange([CII)[C": taSlice,
-    "static copyOfRange([Ljava/lang/Object;II)[Ljava/lang/Object;": (a: unknown[], s: number, e: number) => jarray(a.slice(s, e), elemOf(a)),
-    "static equals([B[B)Z": taEq,
-    "static equals([I[I)Z": taEq,
-    "static equals([C[C)Z": taEq,
+    ...Object.fromEntries(["B", "I", "C", "J", "F", "D", "S", "Z"].map((t) => [`static copyOfRange([${t}II)[${t}`, taCopyOfRange])),
+    "static copyOfRange([Ljava/lang/Object;II)[Ljava/lang/Object;": (a: unknown[], s: number, e: number) => objCopyOfRange(a, s, e, elemOf(a)),
+    "static copyOfRange([Ljava/lang/Object;IILjava/lang/Class;)[Ljava/lang/Object;": (a: unknown[], s: number, e: number, cls: { arrDesc?: string }) =>
+      objCopyOfRange(a, s, e, cls?.arrDesc?.slice(1) ?? elemOf(a)),
+    ...Object.fromEntries(["B", "I", "C", "J", "F", "D", "S", "Z"].map((t) => [`static equals([${t}[${t})Z`, taEq])),
     "static equals([Ljava/lang/Object;[Ljava/lang/Object;)Z": async (a: unknown[], b: unknown[]) => {
       if (a === b) return 1;
       if (!a || !b || a.length !== b.length) return 0;
@@ -1609,7 +1607,23 @@ function taCopyOf(a: TA, n: number): TA {
   c.set(a.subarray(0, Math.min(a.length, n)));
   return c;
 }
-function taSlice(a: TA, s: number, e: number) { return a.slice(s, e); }
+// Arrays.copyOfRange: `to` may run past the end (zero/null padded); from > to or from > length throws
+function rangeCheck(len: number, s: number, e: number) {
+  if (s > e) throw rt.mkThrowable("java/lang/IllegalArgumentException", `${s} > ${e}`);
+  if (s < 0 || s > len) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", `Array index out of range: ${s}`);
+}
+function taCopyOfRange(a: TA, s: number, e: number): TA {
+  rangeCheck(a.length, s, e);
+  const out = new a.constructor(e - s);
+  out.set(a.subarray(s, Math.min(e, a.length)));
+  return out;
+}
+function objCopyOfRange(a: unknown[], s: number, e: number, elem?: string): unknown[] {
+  rangeCheck(a.length, s, e);
+  const c = a.slice(s, e);
+  while (c.length < e - s) c.push(null);
+  return jarray(c, elem);
+}
 function taBinarySearch(a: TA, k: number | bigint): number {
   let lo = 0, hi = a.length - 1;
   while (lo <= hi) {
@@ -1623,7 +1637,8 @@ function taBinarySearch(a: TA, k: number | bigint): number {
 function taEq(a: TA | null, b: TA | null): number {
   if (a === b) return 1;
   if (!a || !b || a.length !== b.length) return 0;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return 0;
+  // Object.is is Java's bit comparison for float/double: NaN equals NaN, 0.0 differs from -0.0
+  for (let i = 0; i < a.length; i++) if (!Object.is(a[i], b[i])) return 0;
   return 1;
 }
 function elemOf(a: unknown[]) { return (a as { $t?: string }).$t; }
