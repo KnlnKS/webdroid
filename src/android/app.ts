@@ -2034,10 +2034,17 @@ for (const [name, methods, statics] of [
       const i = rt.link("android/webkit/CookieManager");
       return ((i.ctor as any).$inst ??= new i.ctor());
     },
+    // no cookie jar: a WebView frame's cookies live in the browser and are not readable here
     "getCookie(Ljava/lang/String;)Ljava/lang/String;": () => null,
     "setCookie(Ljava/lang/String;Ljava/lang/String;)V": () => {},
+    "setCookie(Ljava/lang/String;Ljava/lang/String;Landroid/webkit/ValueCallback;)V": () => {},
     "setAcceptCookie(Z)V": () => {},
+    "acceptCookie()Z": () => 1,
+    "setAcceptThirdPartyCookies(Landroid/webkit/WebView;Z)V": () => {},
+    "acceptThirdPartyCookies(Landroid/webkit/WebView;)Z": () => 0,
+    "hasCookies()Z": () => 0,
     "removeAllCookies(Landroid/webkit/ValueCallback;)V": () => {},
+    "removeSessionCookies(Landroid/webkit/ValueCallback;)V": () => {},
     "flush()V": () => {},
   }],
   ["android/view/accessibility/AccessibilityManager", {
