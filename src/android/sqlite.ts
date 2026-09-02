@@ -561,6 +561,7 @@ const bstmt = (h: bigint): BStmt => {
 };
 const jni = (cls: string, sig: string, fn: (...a: never[]) => unknown) =>
   rt.registerJni("androidx/sqlite/driver/bundled/" + cls, sig, fn);
+rt.claimNativeLib("sqliteJni");
 jni("BundledSQLiteDriverKt", "nativeThreadSafeMode()I", () => 0);
 jni("BundledSQLiteDriverKt", "nativeOpen(Ljava/lang/String;I)J", (async (name: string) => {
   const jdb = await openDatabase(name && name !== ":memory:" ? name : ":memory:");

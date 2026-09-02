@@ -13,6 +13,7 @@ import { rt } from "../jvm/runtime";
 
 const jni = (sig: string, fn: (...a: never[]) => unknown) =>
   rt.registerJni("org/conscrypt/NativeCrypto", sig, fn);
+rt.claimNativeLib("conscrypt_jni");
 
 // Pairs of (IANA standard name, OpenSSL name), the shape SSL_CIPHER_standard_name /
 // SSL_CIPHER_get_name produce. The clinit splits them: even entries become the supported
