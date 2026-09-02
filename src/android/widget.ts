@@ -560,6 +560,7 @@ rt.register({ name: "android/widget/HorizontalScrollView", ctor: class extends J
 export class JTextView extends JView {
   /** kept for the app to read back; text is drawn untransformed */
   transformation: unknown = null;
+  editableFactory: unknown = null; spannableFactory: unknown = null;
   text = "";
   rawText: unknown = "";       // original CharSequence (may be Spannable)
   hint = "";
@@ -875,6 +876,15 @@ const textViewMethods: NativeSpec["methods"] = {
     return jarray([this.drawableL, this.drawableT, this.drawableR, this.drawableB], "Landroid/graphics/drawable/Drawable;");
   },
   "setCompoundDrawablePadding(I)V": function (this: JTextView, p: number) { this.drawablePad = p; requestLayout(this); },
+  "getCompoundDrawablePadding()I": function (this: JTextView) { return this.drawablePad; },
+  "getCompoundPaddingLeft()I": function (this: JTextView) { return this.padL + (this.drawableL ? this.drawableL.intrinsicW() + this.drawablePad : 0); },
+  "getCompoundPaddingRight()I": function (this: JTextView) { return this.padR + (this.drawableR ? this.drawableR.intrinsicW() + this.drawablePad : 0); },
+  "getCompoundPaddingTop()I": function (this: JTextView) { return this.padT + (this.drawableT ? this.drawableT.intrinsicH() + this.drawablePad : 0); },
+  "getCompoundPaddingBottom()I": function (this: JTextView) { return this.padB + (this.drawableB ? this.drawableB.intrinsicH() + this.drawablePad : 0); },
+  // the factories only matter to a TextView that hands its buffer to the app (emoji2 wraps
+  // them to intercept the Editable); kept so getters round-trip
+  "setEditableFactory(Landroid/text/Editable$Factory;)V": function (this: JTextView, f: unknown) { this.editableFactory = f; },
+  "setSpannableFactory(Landroid/text/Spannable$Factory;)V": function (this: JTextView, f: unknown) { this.spannableFactory = f; },
   "addTextChangedListener(Landroid/text/TextWatcher;)V": function (this: JTextView, w: unknown) { this.watchers.push(w); },
   "removeTextChangedListener(Landroid/text/TextWatcher;)V": function (this: JTextView, w: unknown) {
     const i = this.watchers.indexOf(w);
