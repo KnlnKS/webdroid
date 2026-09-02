@@ -135,16 +135,6 @@ rt.register({
       for (const n of vfs.list(this.path)) if (!f || await vcall(f, "accept", "(Ljava/io/File;Ljava/lang/String;)Z", this, n)) out.push(n);
       (out as any).$t = "Ljava/lang/String;"; return out;
     },
-    "listFiles(Ljava/io/FilenameFilter;)[Ljava/io/File;": async function (this: JFile, f: unknown) {
-      const out: JFile[] = [];
-      for (const n of vfs.list(this.path)) if (!f || await vcall(f, "accept", "(Ljava/io/File;Ljava/lang/String;)Z", this, n)) out.push(mkFile(this.path + "/" + n));
-      (out as any).$t = "Ljava/io/File;"; return out;
-    },
-    "listFiles(Ljava/io/FileFilter;)[Ljava/io/File;": async function (this: JFile, f: unknown) {
-      const out: JFile[] = [];
-      for (const n of vfs.list(this.path)) { const c = mkFile(this.path + "/" + n); if (!f || await vcall(f, "accept", "(Ljava/io/File;)Z", c)) out.push(c); }
-      (out as any).$t = "Ljava/io/File;"; return out;
-    },
     "canRead()Z": () => 1, "canWrite()Z": () => 1, "canExecute()Z": () => 1,
     "setReadable(Z)Z": () => 1, "setWritable(Z)Z": () => 1, "setExecutable(Z)Z": () => 1,
     "setReadable(ZZ)Z": () => 1, "setWritable(ZZ)Z": () => 1, "setExecutable(ZZ)Z": () => 1,
