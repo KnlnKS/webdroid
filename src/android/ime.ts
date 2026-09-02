@@ -13,6 +13,7 @@ import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { JEditable, JSpannable, csText } from "./text";
 import { JView, invalidate } from "./view";
+import { JMatrix } from "./graphics";
 import { JTextView, JEditText, focusedEdit, focusEditText } from "./widget";
 
 
@@ -374,6 +375,80 @@ rt.register({
       o.text = await csText(cs);
       if (cs instanceof JSpannable) o.spans = cs.spans.slice();
       return o;
+    },
+  },
+});
+
+// ── CursorAnchorInfo: an editor's report of where its cursor and text sit, assembled through a
+// Builder. No IME reads it here, but the editor drives collect/build/reset, and build() keeps
+// AOSP's rule that positional data without a matrix is an IllegalArgumentException.
+class JCursorAnchorInfo extends JObj {
+  selStart = -1; selEnd = -1; compStart = -1; compText: unknown = null;
+  marker: number[] | null = null; markerFlags = 0;
+  bounds: number[] = []; matrix: JMatrix | null = null;
+}
+rt.register({
+  name: "android/view/inputmethod/CursorAnchorInfo", ctor: JCursorAnchorInfo, ifaces: ["android/os/Parcelable"],
+  methods: {
+    "getSelectionStart()I": function (this: JCursorAnchorInfo) { return this.selStart; },
+    "getSelectionEnd()I": function (this: JCursorAnchorInfo) { return this.selEnd; },
+    "getComposingTextStart()I": function (this: JCursorAnchorInfo) { return this.compStart; },
+    "getComposingText()Ljava/lang/CharSequence;": function (this: JCursorAnchorInfo) { return this.compText; },
+    "getInsertionMarkerFlags()I": function (this: JCursorAnchorInfo) { return this.markerFlags; },
+    "getInsertionMarkerHorizontal()F": function (this: JCursorAnchorInfo) { return this.marker ? this.marker[0] : NaN; },
+    "getInsertionMarkerTop()F": function (this: JCursorAnchorInfo) { return this.marker ? this.marker[1] : NaN; },
+    "getInsertionMarkerBaseline()F": function (this: JCursorAnchorInfo) { return this.marker ? this.marker[2] : NaN; },
+    "getInsertionMarkerBottom()F": function (this: JCursorAnchorInfo) { return this.marker ? this.marker[3] : NaN; },
+    "getMatrix()Landroid/graphics/Matrix;": function (this: JCursorAnchorInfo) {
+      const m = new JMatrix();
+      if (this.matrix) m.m = [...this.matrix.m];
+      return m;
+    },
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+  },
+});
+class JCursorAnchorInfoBuilder extends JObj { info = new JCursorAnchorInfo(); matrixSet = false; }
+const CAB = "Landroid/view/inputmethod/CursorAnchorInfo$Builder;";
+rt.register({
+  name: "android/view/inputmethod/CursorAnchorInfo$Builder", ctor: JCursorAnchorInfoBuilder,
+  methods: {
+    "<init>()V": function () {},
+    [`setSelectionRange(II)${CAB}`]: function (this: JCursorAnchorInfoBuilder, a: number, b: number) {
+      this.info.selStart = a; this.info.selEnd = b;
+      return this;
+    },
+    [`setComposingText(ILjava/lang/CharSequence;)${CAB}`]: function (this: JCursorAnchorInfoBuilder, i: number, t: unknown) {
+      this.info.compStart = t === null ? -1 : i; this.info.compText = t === null ? null : csText(t);
+      return this;
+    },
+    [`setInsertionMarkerLocation(FFFFI)${CAB}`]: function (this: JCursorAnchorInfoBuilder, x: number, t: number, bl: number, b: number, f: number) {
+      this.info.marker = [x, t, bl, b]; this.info.markerFlags = f;
+      return this;
+    },
+    [`addCharacterBounds(IFFFFI)${CAB}`]: function (this: JCursorAnchorInfoBuilder, i: number, l: number, t: number, r: number, b: number, f: number) {
+      if (i < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "index must not be a negative integer.");
+      this.info.bounds.push(i, l, t, r, b, f);
+      return this;
+    },
+    [`setMatrix(Landroid/graphics/Matrix;)${CAB}`]: function (this: JCursorAnchorInfoBuilder, m: JMatrix | null) {
+      const c = new JMatrix();
+      if (m) c.m = [...m.m];
+      this.info.matrix = c; this.matrixSet = true;
+      return this;
+    },
+    [`addEditorBoundsInfo(Landroid/view/inputmethod/EditorBoundsInfo;)${CAB}`]: function (this: JCursorAnchorInfoBuilder) { return this; },
+    [`addVisibleLineBounds(FFFF)${CAB}`]: function (this: JCursorAnchorInfoBuilder) { return this; },
+    [`clearVisibleLineBounds()${CAB}`]: function (this: JCursorAnchorInfoBuilder) { return this; },
+    "reset()V": function (this: JCursorAnchorInfoBuilder) { this.info = new JCursorAnchorInfo(); this.matrixSet = false; },
+    "build()Landroid/view/inputmethod/CursorAnchorInfo;": function (this: JCursorAnchorInfoBuilder) {
+      const i = this.info;
+      if (!this.matrixSet && (i.marker || i.bounds.length)) {
+        throw rt.mkThrowable("java/lang/IllegalArgumentException", "Coordinate transformation matrix is required when positional parameters are specified.");
+      }
+      const out = new JCursorAnchorInfo();
+      Object.assign(out, i, { bounds: i.bounds.slice() });
+      return out;
     },
   },
 });
