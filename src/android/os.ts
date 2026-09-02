@@ -6,6 +6,7 @@ import { vcall, curThread, mainThread, JThread, setCurThread, reportUncaught } f
 export { reportUncaught };
 import { onMain } from "./mainloop";
 import { mkFile } from "../jvm/natives/jio";
+import { newArrayList } from "../jvm/natives/jutil";
 
 // ── Looper
 class JLooper extends JObj {
@@ -683,16 +684,27 @@ rt.register({
   },
 });
 
-// Observable / DataSetObservable
-class JObservable extends JObj { observers: unknown[] = []; }
+// Observable / DataSetObservable. `mObservers` is the protected ArrayList subclasses walk
+// directly (RecyclerView's AdapterDataObservable does), so it is a real java.util.ArrayList.
+class JObservable extends JObj {
+  list = newArrayList();
+  get observers(): unknown[] { return this.list.a; }
+}
 rt.register({
   name: "android/database/Observable", ctor: JObservable,
+  fields: { mObservers: "list" },
   methods: {
     "<init>()V": function () {},
-    "registerObserver(Ljava/lang/Object;)V": function (this: JObservable, o: unknown) { this.observers.push(o); },
+    "registerObserver(Ljava/lang/Object;)V": function (this: JObservable, o: unknown) {
+      if (o == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "The observer is null.");
+      if (this.observers.includes(o)) throw rt.mkThrowable("java/lang/IllegalStateException", "Observer " + o + " is already registered.");
+      this.observers.push(o);
+    },
     "unregisterObserver(Ljava/lang/Object;)V": function (this: JObservable, o: unknown) {
+      if (o == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "The observer is null.");
       const i = this.observers.indexOf(o);
-      if (i >= 0) this.observers.splice(i, 1);
+      if (i < 0) throw rt.mkThrowable("java/lang/IllegalStateException", "Observer " + o + " was not registered.");
+      this.observers.splice(i, 1);
     },
     "unregisterAll()V": function (this: JObservable) { this.observers.length = 0; },
   },
