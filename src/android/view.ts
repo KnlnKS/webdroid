@@ -143,6 +143,10 @@ export class JView extends JObj {
   idNum = -1;
   /** android:contentDescription — the label an icon-only control answers to */
   contentDesc: string | null = null;
+  /** nested scrolling: AOSP defaults this on for ScrollView/RecyclerView-shaped children,
+   *  and the accepted parent is remembered for the life of one gesture */
+  nestedEnabled = true;
+  nestedParent: JView | null = null;
   tag: unknown = null;
   keyedTags = new Map<number, unknown>();
   outlineProvider: unknown = null;
@@ -181,7 +185,7 @@ export class JView extends JObj {
   layerType = 0;
   elevationV = 0;
   longPressTimer: ReturnType<typeof setTimeout> | null = null;
-  nestedScrolling = false; transientState = 0; textAlignment = 1;
+  transientState = 0; textAlignment = 1;
   clipBounds: JRect | null = null; bgTint: JColorStateList | null = null;
   tooltip: unknown = null;
   win: unknown = null; // ViewRootImpl-ish owner
@@ -777,6 +781,54 @@ const viewMethods: NativeSpec["methods"] = {
   "cancelLongPress()V": function (this: JView) {
     if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = null; }
   },
+  // ── nested scrolling, child half (AOSP View). A scrolling child offers each scroll to its
+  // parents first; a CoordinatorLayout Behavior is how a collapsing app bar, a bottom sheet or
+  // a swipe-refresh consumes it. androidx's helpers fall back to these framework methods
+  // whenever the parent is not one of its own interfaces.
+  "setNestedScrollingEnabled(Z)V": function (this: JView, v: number) { this.nestedEnabled = !!v; },
+  "isNestedScrollingEnabled()Z": function (this: JView) { return this.nestedEnabled ? 1 : 0; },
+  "startNestedScroll(I)Z": async function (this: JView, axes: number) {
+    if (this.nestedParent) return 1;
+    if (!this.nestedEnabled) return 0;
+    for (let p: JView | null = this.parent; p; p = p.parent) {
+      if (await vcall(p, "onStartNestedScroll", "(Landroid/view/View;Landroid/view/View;I)Z", this, this, axes)) {
+        this.nestedParent = p;
+        await vcall(p, "onNestedScrollAccepted", "(Landroid/view/View;Landroid/view/View;I)V", this, this, axes);
+        return 1;
+      }
+    }
+    return 0;
+  },
+  "stopNestedScroll()V": async function (this: JView) {
+    const p = this.nestedParent;
+    this.nestedParent = null;
+    if (p) await vcall(p, "onStopNestedScroll", "(Landroid/view/View;)V", this);
+  },
+  "hasNestedScrollingParent()Z": function (this: JView) { return this.nestedParent ? 1 : 0; },
+  "dispatchNestedPreScroll(II[I[I)Z": async function (this: JView, dx: number, dy: number, consumed: Int32Array | null, offset: Int32Array | null) {
+    const p = this.nestedParent;
+    if (!p || (!dx && !dy)) { if (offset) { offset[0] = 0; offset[1] = 0; } return 0; }
+    const c = consumed ?? new Int32Array(2);
+    c[0] = 0; c[1] = 0;
+    await vcall(p, "onNestedPreScroll", "(Landroid/view/View;II[I)V", this, dx, dy, c);
+    if (offset) { offset[0] = 0; offset[1] = 0; }
+    return c[0] !== 0 || c[1] !== 0 ? 1 : 0;
+  },
+  "dispatchNestedScroll(IIII[I)Z": async function (this: JView, dxc: number, dyc: number, dxu: number, dyu: number, offset: Int32Array | null) {
+    const p = this.nestedParent;
+    if (offset) { offset[0] = 0; offset[1] = 0; }
+    if (!p || (!dxc && !dyc && !dxu && !dyu)) return 0;
+    await vcall(p, "onNestedScroll", "(Landroid/view/View;IIII)V", this, dxc, dyc, dxu, dyu);
+    return 1;
+  },
+  "dispatchNestedPreFling(FF)Z": async function (this: JView, vx: number, vy: number) {
+    const p = this.nestedParent;
+    return p ? await vcall(p, "onNestedPreFling", "(Landroid/view/View;FF)Z", this, vx, vy) : 0;
+  },
+  "dispatchNestedFling(FFZ)Z": async function (this: JView, vx: number, vy: number, consumed: number) {
+    const p = this.nestedParent;
+    return p ? await vcall(p, "onNestedFling", "(Landroid/view/View;FFZ)Z", this, vx, vy, consumed) : 0;
+  },
   "willNotDraw()Z": () => 0,
   "canScrollVertically(I)Z": () => 0,
   "canScrollHorizontally(I)Z": () => 0,
@@ -915,9 +967,6 @@ const viewMethods: NativeSpec["methods"] = {
     const info = rt.link("android/view/Display");
     return new info.ctor();
   },
-  "setNestedScrollingEnabled(Z)V": function (this: JView, v: number) { this.nestedScrolling = !!v; },
-  "isNestedScrollingEnabled()Z": function (this: JView) { return this.nestedScrolling ? 1 : 0; },
-  "stopNestedScroll()V": () => {},
   "isInLayout()Z": () => 0,
   "hasTransientState()Z": function (this: JView) { return this.transientState > 0 ? 1 : 0; },
   "setHasTransientState(Z)V": function (this: JView, v: number) { this.transientState = Math.max(0, this.transientState + (v ? 1 : -1)); },
@@ -1080,6 +1129,8 @@ export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | n
 
 export class JViewGroup extends JView {
   children: JView[] = [];
+  /** ViewGroup.getNestedScrollAxes() — the axes of the nested scroll in progress */
+  nestedAxes = 0;
   drawingOrderEnabled = false;
   clipChildren = true;
   clipToPadding = true;
@@ -1921,7 +1972,19 @@ rt.register({
   ifaces: ["android/view/ViewParent", "android/view/ViewManager"],
   methods: {
     "onDescendantInvalidated(Landroid/view/View;Landroid/view/View;)V": () => { invalidate(); },
-    "shouldDelayChildPressedState()Z": () => 0, ...viewMethods, ...vgMethods },
+    "shouldDelayChildPressedState()Z": () => 0,
+    // ── nested scrolling, parent half (AOSP ViewGroup). The base declines and passes nothing
+    // on; a subclass that wants the scroll (CoordinatorLayout, SwipeRefreshLayout) overrides
+    // onStartNestedScroll. Declining here is what lets a child walk further up the tree.
+    "onStartNestedScroll(Landroid/view/View;Landroid/view/View;I)Z": () => 0,
+    "onNestedScrollAccepted(Landroid/view/View;Landroid/view/View;I)V": function (this: JViewGroup, _c: JView, _t: JView, axes: number) { this.nestedAxes = axes; },
+    "onStopNestedScroll(Landroid/view/View;)V": function (this: JViewGroup) { this.nestedAxes = 0; },
+    "onNestedScroll(Landroid/view/View;IIII)V": () => {},
+    "onNestedPreScroll(Landroid/view/View;II[I)V": () => {},
+    "onNestedFling(Landroid/view/View;FFZ)Z": (_t: JView, _vx: number, _vy: number, consumed: number) => (consumed ? 0 : 1),
+    "onNestedPreFling(Landroid/view/View;FF)Z": () => 0,
+    "getNestedScrollAxes()I": function (this: JViewGroup) { return this.nestedAxes; },
+    ...viewMethods, ...vgMethods },
 });
 rt.register({ name: "android/view/ViewParent", ctor: class extends JObj {} });
 rt.register({ name: "android/view/ViewManager", ctor: class extends JObj {} });
