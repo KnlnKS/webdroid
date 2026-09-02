@@ -6,7 +6,7 @@ import { vcall, mkEnumSet } from "../jvm/natives/jlang";
 import { usLocale } from "../jvm/natives/jutil";
 import { JCanvas, JTypeface, tfDefault, tfMedium, typefaceFor, cssColor, measureCtx, fontAscent, fontDescent, fontTop, fontBottom, JBitmap, JRect } from "./graphics";
 import { JTextPaint, spannedString, JEditable, mkStaticLayout } from "./text";
-import { JDrawable, loadDrawableRV, loadDrawable, loadColorStateList, JColorStateList, cslColor, mkCsl, ST, JRippleDrawable, JGradientDrawable, JBitmapDrawable } from "./drawable";
+import { JDrawable, drawChild, loadDrawableRV, loadDrawable, loadColorStateList, JColorStateList, cslColor, mkCsl, ST, JRippleDrawable, JGradientDrawable, JBitmapDrawable } from "./drawable";
 import {
   JView, JViewGroup, JLayoutParams, JMarginLP, JFrameLP, JLinearLP,
   MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, makeSpec, MATCH_PARENT, WRAP_CONTENT,
@@ -1104,7 +1104,7 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       this.drawableL.bounds.top = (this.height() - dh) >> 1;
       this.drawableL.bounds.right = this.padL + dlW;
       this.drawableL.bounds.bottom = ((this.height() - dh) >> 1) + dh;
-      this.drawableL.paint(cv);
+      drawChild(this.drawableL, cv);
     }
     if (this.drawableR) {
       const dh = Math.max(0, this.drawableR.intrinsicH());
@@ -1112,7 +1112,7 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       this.drawableR.bounds.top = (this.height() - dh) >> 1;
       this.drawableR.bounds.right = this.width() - this.padR;
       this.drawableR.bounds.bottom = ((this.height() - dh) >> 1) + dh;
-      this.drawableR.paint(cv);
+      drawChild(this.drawableR, cv);
     }
     const avail = contentR - contentL;
     if (this.layoutWidthFor !== this.width()) {
@@ -1301,12 +1301,12 @@ const imageViewMethods: NativeSpec["methods"] = {
       ctx.rect(this.padL, this.padT, aw, ah);
       ctx.clip();
       d.bounds.left = l; d.bounds.top = t; d.bounds.right = l + w; d.bounds.bottom = t + h;
-      d.paint(cv);
+      drawChild(d, cv);
       ctx.restore();
       return;
     }
     d.bounds.left = l; d.bounds.top = t; d.bounds.right = l + w; d.bounds.bottom = t + h;
-    d.paint(cv);
+    drawChild(d, cv);
   },
 };
 rt.register({ name: "android/widget/ImageView", ctor: JImageView, sup: "android/view/View", methods: imageViewMethods });
@@ -1893,7 +1893,7 @@ rt.register({
         d.onStateChange();
         d.bounds.left = indX; d.bounds.top = cy - r;
         d.bounds.right = indX + 2 * r; d.bounds.bottom = cy + r;
-        d.paint(cv);
+        drawChild(d, cv);
         drawTextInset(this, cv, indX + 2 * r + 34);
         return;
       }

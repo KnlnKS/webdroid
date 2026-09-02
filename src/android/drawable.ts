@@ -37,6 +37,17 @@ const M_onBoundsChange = mangleMethod("onBoundsChange", "(Landroid/graphics/Rect
 const M_onStateChange = mangleMethod("onStateChange", "([I)Z");
 const M_onLevelChange = mangleMethod("onLevelChange", "(I)Z");
 const M_drawD = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
+/**
+ * Draw a drawable this one does not own. A container must go through the child's virtual
+ * `draw(Canvas)`, never its TS `paint()`: an app-dex Drawable subclass (Material's
+ * MaterialShapeDrawable, every library's shape/insets wrapper) has no `paint`, so it inherits
+ * the base class's empty one and the child silently draws nothing. Returns whatever the child
+ * returns, so a compiled override that suspends is awaitable by a caller that can.
+ */
+export function drawChild(d: JDrawable, cv: JCanvas): unknown {
+  const f = (d as unknown as Record<string, (cv: JCanvas) => unknown>)[M_drawD];
+  return f ? f.call(d, cv) : d.paint(cv);
+}
 /** AOSP setBounds: only a real change reaches onBoundsChange, dispatched virtually so an app
  *  subclass's override (shape caches, wrapped children) sees it */
 function setBounds(this: JDrawable, l: number, t: number, r: number, b: number) {
@@ -422,15 +433,16 @@ class JStateListDrawable extends JDrawable {
   current(): JDrawable | null {
     return (this.items.find((it) => matchesState(it, this.stateSet)) ?? this.items[this.items.length - 1])?.d ?? null;
   }
-  paint(cv: JCanvas) {
+  /** the child to draw, with this drawable's bounds and paint state pushed onto it */
+  target(): JDrawable | null {
     const c = this.current();
-    if (c) {
-      copyBounds(this, c);
-      c.alpha = this.alpha;
-      c.tint = c.tint ?? this.tint;
-      c.paint(cv);
-    }
+    if (!c) return null;
+    copyBounds(this, c);
+    c.alpha = this.alpha;
+    c.tint = c.tint ?? this.tint;
+    return c;
   }
+  paint(cv: JCanvas) { this.target()?.paint(cv); }
   onStateChange(): boolean {
     for (const it of this.items) it.d.stateSet = this.stateSet;
     return true;
@@ -441,6 +453,10 @@ class JStateListDrawable extends JDrawable {
 rt.register({
   name: "android/graphics/drawable/StateListDrawable", ctor: JStateListDrawable, sup: "android/graphics/drawable/Drawable",
   methods: {
+    "draw(Landroid/graphics/Canvas;)V": function (this: JStateListDrawable, cv: JCanvas) {
+      const c = this.target();
+      return c ? drawChild(c, cv) : undefined;
+    },
     "<init>()V": function () {},
     "addState([ILandroid/graphics/drawable/Drawable;)V": function (this: JStateListDrawable, st: Int32Array, d: JDrawable) {
       const states: number[] = [], neg: number[] = [];
@@ -471,12 +487,25 @@ class JLayerDrawable extends JDrawable {
     this.layout();
     for (const l of this.layers) l.d.paint(cv);
   }
+  /** Every layer through its virtual draw. Stays synchronous — no promise allocated — unless a
+   *  compiled child actually suspends, in which case the rest follow it in order. */
+  drawLayers(cv: JCanvas): unknown {
+    this.layout();
+    const step = (i: number): unknown => {
+      for (; i < this.layers.length; i++) {
+        const r = drawChild(this.layers[i].d, cv);
+        if (r instanceof Promise) return r.then(() => step(i + 1));
+      }
+    };
+    return step(0);
+  }
   intrinsicW(): number { return this.layers.reduce((a, l) => Math.max(a, l.d.intrinsicW() + l.insets[0] + l.insets[2]), -1); }
   intrinsicH(): number { return this.layers.reduce((a, l) => Math.max(a, l.d.intrinsicH() + l.insets[1] + l.insets[3]), -1); }
 }
 rt.register({
   name: "android/graphics/drawable/LayerDrawable", ctor: JLayerDrawable, sup: "android/graphics/drawable/Drawable",
   methods: {
+    "draw(Landroid/graphics/Canvas;)V": function (this: JLayerDrawable, cv: JCanvas) { return this.drawLayers(cv); },
     "<init>([Landroid/graphics/drawable/Drawable;)V": function (this: JLayerDrawable, ds: JDrawable[]) {
       for (const d of ds ?? []) this.layers.push({ d, insets: [0, 0, 0, 0] });
     },
@@ -554,6 +583,9 @@ export class JRippleDrawable extends JLayerDrawable {
   }
   paint(cv: JCanvas) {
     super.paint(cv);
+    this.ripple(cv);
+  }
+  ripple(cv: JCanvas) {
     const now = performance.now();
     let grow: number, fade: number, animating: boolean;
     if (this.active) {
@@ -597,6 +629,10 @@ export class JRippleDrawable extends JLayerDrawable {
 rt.register({
   name: "android/graphics/drawable/RippleDrawable", ctor: JRippleDrawable, sup: "android/graphics/drawable/LayerDrawable",
   methods: {
+    "draw(Landroid/graphics/Canvas;)V": function (this: JRippleDrawable, cv: JCanvas) {
+      const r = this.drawLayers(cv);
+      return r instanceof Promise ? r.then(() => this.ripple(cv)) : this.ripple(cv);
+    },
     "<init>(Landroid/content/res/ColorStateList;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V":
       function (this: JRippleDrawable, csl: JColorStateList | null, content: JDrawable | null) {
         if (content) this.layers.push({ d: content, insets: [0, 0, 0, 0] });
@@ -664,7 +700,7 @@ class JVectorDrawable extends JDrawable {
 // own virtual hooks; draw() dispatches virtually so a compiled child subclass paints itself.
 export class JDrawableWrapper extends JDrawable {
   dr: JDrawable | null = null;
-  paint(cv: JCanvas) { this.dr?.paint(cv); }
+  paint(cv: JCanvas) { if (this.dr) drawChild(this.dr, cv); }
   intrinsicW(): number { return this.dr ? this.dr.intrinsicW() : -1; }
   intrinsicH(): number { return this.dr ? this.dr.intrinsicH() : -1; }
   onStateChange(): boolean { return this.dr ? this.dr.onStateChange() : false; }
