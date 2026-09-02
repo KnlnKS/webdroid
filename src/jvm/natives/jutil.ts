@@ -177,6 +177,16 @@ export function mkIter(arr: unknown[], owner: IterOwner | null = null): JIter {
   return new JIter(arr, owner);
 }
 
+async function listBinarySearch(l: unknown, k: unknown, cmp: unknown): Promise<number> {
+  const a = await toJsArray(l);
+  let lo = 0, hi = a.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    const c = await jcmp(cmp, a[mid], k);
+    if (c < 0) lo = mid + 1; else if (c > 0) hi = mid - 1; else return mid;
+  }
+  return -(lo + 1);
+}
 /** A java.util.ArrayList over `items` — compiled code cannot use a bare JS array as a List. */
 export function newArrayList(items: unknown[] = []): JList {
   const l = new (rt.link("java/util/ArrayList").ctor as new () => JList)();
@@ -1455,6 +1465,8 @@ rt.register({
     "static synchronizedSet(Ljava/util/Set;)Ljava/util/Set;": (s: unknown) => s,
     "static sort(Ljava/util/List;)V": (l: JList) => sortInPlace(l.a, null),
     "static sort(Ljava/util/List;Ljava/util/Comparator;)V": (l: JList, c: unknown) => sortInPlace(l.a, c),
+    "static binarySearch(Ljava/util/List;Ljava/lang/Object;)I": (l: unknown, k: unknown) => listBinarySearch(l, k, null),
+    "static binarySearch(Ljava/util/List;Ljava/lang/Object;Ljava/util/Comparator;)I": listBinarySearch,
     "static reverse(Ljava/util/List;)V": (l: JList) => l.a.reverse(),
     "static shuffle(Ljava/util/List;)V": (l: JList) => {
       for (let i = l.a.length - 1; i > 0; i--) {
