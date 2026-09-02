@@ -20,6 +20,7 @@ import { TV, attr, attrStr, type XmlNode, parseAXML } from "./axml";
 import { csText } from "./text";
 import { JCanvas, cssColor, insetsOf, tfMedium } from "./graphics";
 import { showPopupMenu, addOverlay, removeOverlay, showToast } from "./popup";
+import { dbPath } from "./sqlite";
 
 /** Host bundle shared by all contexts of the app */
 export interface AppHost {
@@ -291,7 +292,7 @@ const contextMethods: NativeSpec["methods"] = {
     return mkFile(`/data/data/${this.$host.pkg}/app_${name}`);
   },
   "getDatabasePath(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, name: string) {
-    return mkFile(`/data/data/${this.$host.pkg}/databases/${name}`);
+    return mkFile(dbPath(this.$host.pkg, name));
   },
   "getFileStreamPath(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, name: string) {
     return mkFile(`/data/data/${this.$host.pkg}/files/${name}`);
@@ -306,7 +307,7 @@ const contextMethods: NativeSpec["methods"] = {
     return vfs.delete(`/data/data/${this.$host.pkg}/files/${name}`) ? 1 : 0;
   },
   "deleteDatabase(Ljava/lang/String;)Z": function (this: JContext, name: string) {
-    return vfs.delete(`/data/data/${this.$host.pkg}/databases/${name}`) ? 1 : 0;
+    return vfs.delete(dbPath(this.$host.pkg, name)) ? 1 : 0;
   },
   "checkSelfPermission(Ljava/lang/String;)I": () => 0,
   "checkPermission(Ljava/lang/String;)I": () => 0,
@@ -512,6 +513,13 @@ rt.register({
   methods: intentMethods,
 });
 class JComponentName extends JObj { pkg = ""; cls = ""; }
+/** PackageManager component enabled states an app set (DEFAULT until then); part of the
+ *  install like firstInstallTime, so they survive a reboot and go with wd.reset */
+const componentState = {
+  key: (c: JComponentName) => "wd:install:" + c.pkg + ":component:" + c.cls,
+  get(c: JComponentName): number { return Number(globalThis.localStorage?.getItem(this.key(c)) ?? 0); },
+  set(c: JComponentName, st: number) { try { globalThis.localStorage?.setItem(this.key(c), String(st)); } catch { /* private mode */ } },
+};
 function mkComponentName(pkg: string, cls: string): JComponentName {
   const c = new JComponentName();
   c.pkg = pkg; c.cls = cls;
@@ -842,8 +850,8 @@ rt.register({
     "resolveContentProvider(Ljava/lang/String;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Landroid/content/pm/ProviderInfo;": (a: string) => resolveProvider(a),
     // Only <provider> nodes are cached at boot, so no <service> filter can be matched.
     "queryIntentServices(Landroid/content/Intent;I)Ljava/util/List;": () => newArrayList(),
-    "getComponentEnabledSetting(Landroid/content/ComponentName;)I": () => 0,
-    "setComponentEnabledSetting(Landroid/content/ComponentName;II)V": () => {},
+    "getComponentEnabledSetting(Landroid/content/ComponentName;)I": (c: JComponentName) => componentState.get(c),
+    "setComponentEnabledSetting(Landroid/content/ComponentName;II)V": (c: JComponentName, st: number) => componentState.set(c, st),
     "hasSystemFeature(Ljava/lang/String;)Z": () => 0,
     "checkPermission(Ljava/lang/String;Ljava/lang/String;)I": () => 0,
     "getInstallerPackageName(Ljava/lang/String;)Ljava/lang/String;": () => null,
@@ -2335,7 +2343,7 @@ class JFragmentManager extends JObj {
   act: any = null;
   active: JFragment[] = [];
 }
-interface FragOp { kind: "add" | "replace" | "remove"; containerId: number; frag: JFragment | null; }
+interface FragOp { kind: "add" | "replace" | "remove"; containerId: number; frag: JFragment | null; tag?: string | null; }
 class JFragmentTransaction extends JObj {
   fm: JFragmentManager | null = null;
   ops: FragOp[] = [];
@@ -2379,6 +2387,7 @@ async function runFragmentTransaction(tx: JFragmentTransaction): Promise<number>
   if (!fm) return 0;
   for (const op of tx.ops) {
     if (!op.frag) continue;
+    if (op.tag !== undefined) op.frag.tag = op.tag;
     if (op.kind === "replace") {
       const container = op.containerId && fm.act?.window?.decor ? findById(fm.act.window.decor, op.containerId) as JViewGroup | null : null;
       for (const old of [...fm.active]) if (old.containerId === op.containerId) await runFragmentRemove(fm, old);
@@ -2398,7 +2407,7 @@ rt.register({
   name: "android/app/FragmentTransaction", ctor: JFragmentTransaction,
   methods: {
     "add(Landroid/app/Fragment;Ljava/lang/String;)Landroid/app/FragmentTransaction;":
-      function (this: JFragmentTransaction, f: JFragment) { this.ops.push({ kind: "add", containerId: 0, frag: f }); return this; },
+      function (this: JFragmentTransaction, f: JFragment, tag: string | null) { this.ops.push({ kind: "add", containerId: 0, frag: f, tag }); return this; },
     "add(ILandroid/app/Fragment;)Landroid/app/FragmentTransaction;":
       function (this: JFragmentTransaction, id: number, f: JFragment) { this.ops.push({ kind: "add", containerId: id, frag: f }); return this; },
     "remove(Landroid/app/Fragment;)Landroid/app/FragmentTransaction;":
@@ -2418,8 +2427,13 @@ rt.register({
       tx.fm = this;
       return tx;
     },
-    "findFragmentByTag(Ljava/lang/String;)Landroid/app/Fragment;": () => null,
-    "executePendingTransactions()Z": () => 0,
+    "findFragmentByTag(Ljava/lang/String;)Landroid/app/Fragment;": function (this: JFragmentManager, tag: string | null) {
+      return (tag !== null && this.active.find((f) => f.tag === tag)) || null;
+    },
+    "findFragmentById(I)Landroid/app/Fragment;": function (this: JFragmentManager, id: number) {
+      return (id && this.active.find((f) => f.containerId === id)) || null;
+    },
+    "executePendingTransactions()Z": () => 0, // commit() ran the transaction inline: nothing is pending
     // Nothing pushes to the back stack yet (androidx apps keep their own separate one), but
     // Activity.onBackPressed consults it.
     "isStateSaved()Z": () => 0,
@@ -2532,6 +2546,7 @@ export class JFragment extends JObj {
   args: unknown = null;
   attachedView: JView | null = null;
   containerId = 0;
+  tag: string | null = null;
 }
 export const fragMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>()V": function () {},
@@ -2555,7 +2570,7 @@ export const fragMethods: NonNullable<NativeSpec["methods"]> = {
   "setArguments(Landroid/os/Bundle;)V": function (this: JFragment, b: unknown) { this.args = b; },
   "onCreateView(Landroid/view/LayoutInflater;Landroid/view/ViewGroup;Landroid/os/Bundle;)Landroid/view/View;": () => null,
   "getView()Landroid/view/View;": function (this: JFragment) { return this.attachedView; },
-  "getTag()Ljava/lang/String;": () => null,
+  "getTag()Ljava/lang/String;": function (this: JFragment) { return this.tag; },
   "getId()I": function (this: JFragment) { return this.containerId; },
   "onActivityResult(IILandroid/content/Intent;)V": () => {},
   "dump(Ljava/lang/String;Ljava/io/FileDescriptor;Ljava/io/PrintWriter;[Ljava/lang/String;)V": () => {},

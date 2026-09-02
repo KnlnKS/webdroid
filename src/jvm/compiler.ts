@@ -461,7 +461,7 @@ ${catchBody}
     if (this.sync) { out.push(`${assignTo}=${expr};`); return; }
     // re-pin the frame's thread identity after every suspension: other chains set
     // the global current-thread while we were parked (continuation-local restore)
-    out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise){${assignTo}=await ${assignTo};R.st($th);}`);
+    out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise){R.su();${assignTo}=await ${assignTo};R.st($th);}`);
   }
 
   private fieldProp(fieldIdx: number): string {
@@ -618,7 +618,7 @@ ${catchBody}
   }
 
   private jumpStr(target: number, from: number): string {
-    const fuel = !this.sync && target <= from ? "if(--R.fuel<0){$fu=R.refuel();if($fu){await $fu;R.st($th);}}" : "";
+    const fuel = !this.sync && target <= from ? "if(--R.fuel<0){$fu=R.refuel();if($fu){R.su();await $fu;R.st($th);}}" : "";
     return `${fuel}pc=${target};continue;`;
   }
 
@@ -678,7 +678,7 @@ ${catchBody}
         // resolve against the superclass prototype; an interface-default super call
         // (Iface.super.m()) instead resolves on the declared interface's prototype
         out.push(`$t=(S.prototype.${mangled}??(D.cl[${mref.cls}]??D.link(${mref.cls})).prototype.${mangled}??R.nsm(${JSON.stringify(clsName + "." + mref.name + desc + " (super)")})).call(${recv}${argStr ? "," + argStr : ""});`);
-        if (!this.sync) out.push(`if($t instanceof Promise){$t=await $t;R.st($th);}`);
+        if (!this.sync) out.push(`if($t instanceof Promise){R.su();$t=await $t;R.st($th);}`);
         break;
       }
       case "invoke-direct": {

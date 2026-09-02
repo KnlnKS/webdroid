@@ -1089,6 +1089,7 @@ mainThread.alive = 1;
 export let curThread = mainThread;
 rt.th = () => curThread;
 rt.st = (t) => { curThread = t as JThread; };
+rt.su = () => { curThread = mainThread; };
 class JDefaultUEH extends JObj {}
 rt.register({
   name: "webdroid/DefaultUEH", ctor: JDefaultUEH, ifaces: ["java/lang/Thread$UncaughtExceptionHandler"],

@@ -3,7 +3,11 @@
 // paints (androidx Theme.SplashScreen over Theme.DeviceDefault.DayNight: #fafafa; the icon
 // splash it describes is the system starting window, not modelled), System.loadLibrary
 // ("flutter") surfaces as UnsatisfiedLinkError, Flutter's ensureInitializationComplete
-// rethrows it as the one RuntimeException in newErrors, nothing wedges.
+// rethrows it as the one RuntimeException in newErrors, nothing wedges. The androidx.startup
+// initializers (WorkManager: Room db under no_backup/, SystemJobService enabled; ProfileInstaller;
+// EmojiCompat — "font provider not available", as on any device without one) and the lifecycle
+// verbs after the failed onCreate (FlutterActivity's own "called after detach" early-outs, Back
+// included) all complete; a second boot on the persisted state is identical.
 // Expected nativeRequired: libflutter.so (arm64-v8a). No framework API may be in newMissing.
 import type { Flow } from "../types";
 
