@@ -8,9 +8,10 @@
 // verifier needs and nothing more, so an app that PINS a certificate will correctly fail rather
 // than be told a comforting lie.
 import { rt, JObj, type NativeSpec } from "../runtime";
-import { newArrayList, mkIter } from "./jutil";
-import { boxInt, stringHash, mkEnumSet, newObj } from "./jlang";
+import { newArrayList, mkIter, toJsArray } from "./jutil";
+import { boxInt, stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { jarray } from "../abi";
+import type { JInputStream, JOutputStream } from "./jio";
 
 const relayUrl = (host: string, port: number, tls: boolean) =>
   `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}` +
@@ -69,7 +70,7 @@ for (const marker of [
   "javax/net/ssl/KeyManager", "javax/net/ssl/SSLSession",
   "java/nio/channels/ReadableByteChannel", "java/nio/channels/WritableByteChannel", "java/nio/channels/ByteChannel",
   "java/nio/channels/Channel",
-  "java/net/CookieHandler", "java/net/ResponseCache",
+  "java/net/ResponseCache",
 ]) rt.register({ name: marker, ctor: class extends JObj {} });
 
 class JSocketFactory extends JObj {}
@@ -457,6 +458,12 @@ rt.register({
   name: "java/net/URI", ctor: JURI, ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   methods: {
     "<init>(Ljava/lang/String;)V": function (this: JURI, s: string) { this.u = s ?? ""; },
+    // (scheme, userInfo, host, port, path, query, fragment): how a URL is rebuilt from parts
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V":
+      function (this: JURI, sch: string | null, ui: string | null, host: string | null, port: number, path: string | null, q: string | null, f: string | null) {
+        this.u = (sch ? sch + ":" : "") + (host ? "//" + (ui ? ui + "@" : "") + host + (port === -1 ? "" : ":" + port) : "") +
+          (path ?? "") + (q ? "?" + q : "") + (f ? "#" + f : "");
+      },
     "static create(Ljava/lang/String;)Ljava/net/URI;": (s: string) => { const r = new JURI(); r.u = s ?? ""; return r; },
     "toString()Ljava/lang/String;": function (this: JURI) { return this.u; },
     "toASCIIString()Ljava/lang/String;": function (this: JURI) { return this.u; },
@@ -471,5 +478,351 @@ rt.register({
     "resolve(Ljava/lang/String;)Ljava/net/URI;": function (this: JURI, o: string) { const r = new JURI(); try { r.u = new URL(o, this.u).href; } catch { r.u = o; } return r; },
     "equals(Ljava/lang/Object;)Z": function (this: JURI, o: unknown) { return o instanceof JURI && o.u === this.u ? 1 : 0; },
     "hashCode()I": function (this: JURI) { return stringHash(this.u); },
+  },
+});
+
+// ── java.net.URL and HttpURLConnection, over the dev server's /proxy route: a page cannot speak
+// raw HTTP to another origin. The proxy forwards `x-wd-*` request headers with the prefix
+// stripped, follows redirects itself and reports the final URL in x-wd-final-url.
+defineException("java/net/MalformedURLException", "java/io/IOException");
+defineException("java/net/ProtocolException", "java/io/IOException");
+defineException("java/net/URISyntaxException", "java/lang/Exception");
+
+const SCHEMES = /^(https?|ftp|file|jar):$/;       // what Android's URL has a handler for
+const DEFAULT_PORT: Record<string, number> = { "http:": 80, "https:": 443, "ftp:": 21 };
+const userInfo = (u: URL) => u.username ? u.username + (u.password ? ":" + u.password : "") : null;
+const noRef = (u: URL) => u.href.slice(0, u.href.length - u.hash.length);
+
+class JURL extends JObj {
+  spec = ""; u!: URL;
+  open(): JURLConnection {
+    const https = this.u.protocol === "https:";
+    if (!https && this.u.protocol !== "http:") throw rt.unimplemented("URL.openConnection " + this.u.protocol);
+    const c = new (rt.link(https ? "javax/net/ssl/HttpsURLConnection" : "java/net/HttpURLConnection").ctor)() as JURLConnection;
+    c.url = this;
+    return c;
+  }
+}
+/** Java keeps the spec string it was given (toString round-trips); only a resolved URL is re-serialised */
+function urlInit(r: JURL, spec: string | null, base?: URL): JURL {
+  const s = String(spec);
+  try { r.u = new URL(s, base); } catch {
+    throw rt.mkThrowable("java/net/MalformedURLException", /^[a-z][a-z0-9+.-]*:/i.test(s) ? s : "no protocol: " + s);
+  }
+  if (!SCHEMES.test(r.u.protocol)) throw rt.mkThrowable("java/net/MalformedURLException", "unknown protocol: " + r.u.protocol.slice(0, -1));
+  r.spec = base ? r.u.href : s;
+  return r;
+}
+const mkURL = (spec: string) => urlInit(new JURL(), spec);
+rt.register({
+  name: "java/net/URL", ctor: JURL, ifaces: ["java/io/Serializable"],
+  methods: {
+    "<init>(Ljava/lang/String;)V": function (this: JURL, s: string) { urlInit(this, s); },
+    "<init>(Ljava/net/URL;Ljava/lang/String;)V": function (this: JURL, ctx: JURL | null, s: string) { urlInit(this, s, ctx?.u); },
+    // Java concatenates "file" verbatim after the authority, so a file without a leading "/" fuses with the host
+    "<init>(Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;)V": function (this: JURL, p: string, h: string, port: number, file: string) {
+      urlInit(this, p + ":" + (h ? "//" + h + (port === -1 ? "" : ":" + port) : "") + (file ?? ""));
+    },
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JURL, p: string, h: string, file: string) {
+      urlInit(this, p + ":" + (h ? "//" + h : "") + (file ?? ""));
+    },
+    "getProtocol()Ljava/lang/String;": function (this: JURL) { return this.u.protocol.slice(0, -1); },
+    "getHost()Ljava/lang/String;": function (this: JURL) { return this.u.hostname; },
+    "getPort()I": function (this: JURL) { return this.u.port ? Number(this.u.port) : -1; },
+    "getDefaultPort()I": function (this: JURL) { return DEFAULT_PORT[this.u.protocol] ?? -1; },
+    "getPath()Ljava/lang/String;": function (this: JURL) { return this.u.pathname; },
+    "getQuery()Ljava/lang/String;": function (this: JURL) { return this.u.search ? this.u.search.slice(1) : null; },
+    "getFile()Ljava/lang/String;": function (this: JURL) { return this.u.pathname + this.u.search; },
+    "getRef()Ljava/lang/String;": function (this: JURL) { return this.u.hash ? this.u.hash.slice(1) : null; },
+    "getUserInfo()Ljava/lang/String;": function (this: JURL) { return userInfo(this.u); },
+    "getAuthority()Ljava/lang/String;": function (this: JURL) { const ui = userInfo(this.u); return (ui ? ui + "@" : "") + this.u.host; },
+    "toExternalForm()Ljava/lang/String;": function (this: JURL) { return this.spec; },
+    "toString()Ljava/lang/String;": function (this: JURL) { return this.spec; },
+    "toURI()Ljava/net/URI;": function (this: JURL) { return newObj("java/net/URI", "(Ljava/lang/String;)V", this.spec); },
+    "equals(Ljava/lang/Object;)Z": function (this: JURL, o: unknown) { return o instanceof JURL && o.u.href === this.u.href ? 1 : 0; },
+    "sameFile(Ljava/net/URL;)Z": function (this: JURL, o: JURL | null) { return o && noRef(o.u) === noRef(this.u) ? 1 : 0; },
+    // over the normalised form, not the spec, so equal URLs hash alike as Object requires
+    "hashCode()I": function (this: JURL) { return stringHash(this.u.href); },
+    "openConnection()Ljava/net/URLConnection;": function (this: JURL) { return this.open(); },
+    "openConnection(Ljava/net/Proxy;)Ljava/net/URLConnection;": function (this: JURL) { return this.open(); },
+    "openStream()Ljava/io/InputStream;": function (this: JURL) { return vcall(this.open(), "getInputStream", "()Ljava/io/InputStream;"); },
+  },
+});
+const idnAscii = (s: string) => {
+  if (!s) return s;
+  // a hostname only: URL would silently truncate anything with a delimiter in it
+  if (/[/?#@:\\\s]/.test(s)) throw rt.mkThrowable("java/lang/IllegalArgumentException", s);
+  try { return new URL("http://" + s).hostname; } catch { throw rt.mkThrowable("java/lang/IllegalArgumentException", s); }
+};
+rt.register({
+  name: "java/net/IDN", ctor: class extends JObj {}, statics: { ALLOW_UNASSIGNED: 1, USE_STD3_ASCII_RULES: 2 },
+  methods: {
+    "static toASCII(Ljava/lang/String;)Ljava/lang/String;": idnAscii,
+    "static toASCII(Ljava/lang/String;I)Ljava/lang/String;": idnAscii,
+    // no punycode decoder in the page; ToUnicode's contract is to hand back the input when it cannot convert
+    "static toUnicode(Ljava/lang/String;)Ljava/lang/String;": (s: string) => s,
+    "static toUnicode(Ljava/lang/String;I)Ljava/lang/String;": (s: string) => s,
+  },
+});
+
+type HttpRes = { status: number; msg: string; hdrs: [string, string][]; body: Uint8Array };
+const statusLine = (r: HttpRes) => "HTTP/1.1 " + r.status + (r.msg ? " " + r.msg : "");
+const PUT = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+/** Map<String, List<String>> as URLConnection and CookieHandler hand headers out (a null key is legal: the status line) */
+async function headerMap(groups: Iterable<[string | null, string[]]>) {
+  const m = new (rt.link("java/util/HashMap").ctor)();
+  for (const [k, v] of groups) await vcall(m, "put", PUT, k, newArrayList(v));
+  return m;
+}
+function group(entries: [string | null, string][]): Map<string | null, string[]> {
+  const g = new Map<string | null, string[]>();
+  for (const [k, v] of entries) { let l = g.get(k); if (!l) g.set(k, l = []); l.push(v); }
+  return g;
+}
+let followRedirects = 1, defaultUseCaches = 1;
+class JURLConnection extends JObj {
+  url!: JURL;
+  method = "GET"; follow = followRedirects; doOut = 0; doIn = 1; useCaches = defaultUseCaches;
+  cto = 0; rto = 0; ifMod = 0n;
+  req: [string, string][] = [];
+  out: JOutputStream | null = null;
+  inStream: JInputStream | null = null;
+  ac: AbortController | null = null;
+  res: HttpRes | null = null;
+  /** The one fetch. Everything that needs the response funnels through here, which is what makes
+   *  the connection lazy the way AOSP's is. The whole body is awaited: the VM can suspend, a
+   *  Java read() cannot fail half-way, and the proxy has already removed the framing. */
+  async connect(): Promise<HttpRes> {
+    if (this.res) return this.res;
+    const ac = (this.ac = new AbortController());
+    let timer: ReturnType<typeof setTimeout> | undefined, timedOut = "";
+    // fetch resolves once the head is in, so the connect timeout runs until then and the read timeout after
+    const arm = (ms: number, what: string) => {
+      clearTimeout(timer);
+      if (ms > 0) timer = setTimeout(() => { timedOut = what; ac.abort(); }, ms);
+    };
+    const headers = new Headers();
+    for (const [k, v] of this.req) headers.append("x-wd-" + k, v);
+    if (this.ifMod) headers.set("x-wd-if-modified-since", new Date(Number(this.ifMod)).toUTCString());
+    const hasBody = this.out && this.method !== "GET" && this.method !== "HEAD";
+    let r: Response, body: Uint8Array;
+    arm(this.cto, "connect timed out");
+    try {
+      r = await fetch("/proxy?url=" + encodeURIComponent(this.url.spec), {
+        method: this.method, headers, signal: ac.signal, body: hasBody ? new Uint8Array(this.out!.chunks) : undefined,
+      });
+      arm(this.rto, "Read timed out");
+      body = new Uint8Array(await r.arrayBuffer());
+    } catch (e) {
+      if (timedOut) throw rt.mkThrowable("java/net/SocketTimeoutException", timedOut);
+      if (ac.signal.aborted) throw rt.mkThrowable("java/net/SocketException", "Socket closed");
+      throw rt.mkThrowable("java/io/IOException", String(e));
+    } finally { clearTimeout(timer); this.ac = null; }
+    const final = r.headers.get("x-wd-final-url");
+    // the proxy's own failure answer carries no final URL; a genuine upstream 502 does
+    if (r.status === 502 && !final) throw rt.mkThrowable("java/net/UnknownHostException", new TextDecoder().decode(body));
+    if (final && final !== this.url.u.href) this.url = mkURL(final);   // getURL() reports where a redirect landed
+    const hdrs: [string, string][] = [];
+    r.headers.forEach((v, k) => { if (k !== "x-wd-final-url") hdrs.push([k, v]); });
+    return (this.res = { status: r.status, msg: r.statusText, hdrs, body });
+  }
+  /** case-insensitive; the last value wins, as URLConnection documents */
+  hdr(name: string | null): string | null {
+    const r = this.res!;
+    if (name === null) return statusLine(r);
+    const k = name.toLowerCase();
+    let v: string | null = null;
+    for (const [hk, hv] of r.hdrs) if (hk === k) v = hv;
+    return v;
+  }
+  stream(): JInputStream {
+    if (!this.inStream) {
+      this.inStream = new (rt.link("java/io/ByteArrayInputStream").ctor)() as JInputStream;
+      this.inStream.buf = this.res!.body;
+    }
+    return this.inStream;
+  }
+}
+/** an accessor that needs the response: connect first */
+function withRes<A extends unknown[]>(f: (this: JURLConnection, r: HttpRes, ...a: A) => unknown) {
+  return async function (this: JURLConnection, ...a: A) { return f.call(this, await this.connect(), ...a); };
+}
+const asLong = (v: string | null, d: bigint) => v && /^\s*-?\d+\s*$/.test(v) ? BigInt(v.trim()) : d;
+rt.register({
+  name: "java/net/URLConnection", ctor: JURLConnection,
+  methods: {
+    "<init>(Ljava/net/URL;)V": function (this: JURLConnection, u: JURL) { this.url = u; },
+    "connect()V": async function (this: JURLConnection) { await this.connect(); },
+    "getURL()Ljava/net/URL;": function (this: JURLConnection) { return this.url; },
+    "getInputStream()Ljava/io/InputStream;": withRes(function (r) {
+      if (!this.doIn) throw rt.mkThrowable("java/net/ProtocolException", "Cannot read from URLConnection if doInput=false (call setDoInput(true))");
+      if (r.status >= 400) throw r.status === 404 || r.status === 410
+        ? rt.mkThrowable("java/io/FileNotFoundException", this.url.spec)
+        : rt.mkThrowable("java/io/IOException", `Server returned HTTP response code: ${r.status} for URL: ${this.url.spec}`);
+      return this.stream();
+    }),
+    "getOutputStream()Ljava/io/OutputStream;": function (this: JURLConnection) {
+      if (!this.doOut) throw rt.mkThrowable("java/net/ProtocolException", "cannot write to a URLConnection if doOutput=false - call setDoOutput(true)");
+      if (this.method === "GET") this.method = "POST";   // a GET that writes a body becomes a POST (OpenJDK and AOSP alike)
+      return this.out ??= new (rt.link("java/io/OutputStream").ctor)() as JOutputStream;
+    },
+    "setRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JURLConnection, k: string | null, v: string) {
+      if (k === null) throw rt.mkThrowable("java/lang/NullPointerException", "key is null");
+      this.req = this.req.filter(([n]) => n.toLowerCase() !== k.toLowerCase());
+      this.req.push([k, v]);
+    },
+    "addRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JURLConnection, k: string | null, v: string) {
+      if (k === null) throw rt.mkThrowable("java/lang/NullPointerException", "key is null");
+      this.req.push([k, v]);
+    },
+    "getRequestProperty(Ljava/lang/String;)Ljava/lang/String;": function (this: JURLConnection, k: string | null) {
+      let v: string | null = null;
+      for (const [n, x] of this.req) if (n.toLowerCase() === k?.toLowerCase()) v = x;
+      return v;
+    },
+    "getRequestProperties()Ljava/util/Map;": function (this: JURLConnection) { return headerMap(group(this.req)); },
+    "setDoOutput(Z)V": function (this: JURLConnection, b: number) { this.doOut = b; },
+    "getDoOutput()Z": function (this: JURLConnection) { return this.doOut; },
+    "setDoInput(Z)V": function (this: JURLConnection, b: number) { this.doIn = b; },
+    "getDoInput()Z": function (this: JURLConnection) { return this.doIn; },
+    "setUseCaches(Z)V": function (this: JURLConnection, b: number) { this.useCaches = b; },
+    "getUseCaches()Z": function (this: JURLConnection) { return this.useCaches; },
+    "setDefaultUseCaches(Z)V": (b: number) => { defaultUseCaches = b; },
+    "getDefaultUseCaches()Z": () => defaultUseCaches,
+    "setAllowUserInteraction(Z)V": () => {},
+    "setConnectTimeout(I)V": function (this: JURLConnection, ms: number) { this.cto = ms; },
+    "getConnectTimeout()I": function (this: JURLConnection) { return this.cto; },
+    "setReadTimeout(I)V": function (this: JURLConnection, ms: number) { this.rto = ms; },
+    "getReadTimeout()I": function (this: JURLConnection) { return this.rto; },
+    "setIfModifiedSince(J)V": function (this: JURLConnection, t: bigint) { this.ifMod = t; },
+    "getIfModifiedSince()J": function (this: JURLConnection) { return this.ifMod; },
+    "getHeaderField(Ljava/lang/String;)Ljava/lang/String;": withRes(function (_r, k: string | null) { return this.hdr(k); }),
+    // index 0 is the status line under a null key; past the end both are null, which is how a caller finds the end
+    "getHeaderField(I)Ljava/lang/String;": withRes((r, i: number) => i === 0 ? statusLine(r) : r.hdrs[i - 1]?.[1] ?? null),
+    "getHeaderFieldKey(I)Ljava/lang/String;": withRes((r, i: number) => r.hdrs[i - 1]?.[0] ?? null),
+    "getHeaderFields()Ljava/util/Map;": withRes((r) => headerMap(group([[null, statusLine(r)], ...r.hdrs]))),
+    "getHeaderFieldInt(Ljava/lang/String;I)I": withRes(function (_r, k: string, d: number) {
+      const n = parseInt(this.hdr(k) ?? "", 10);
+      return Number.isNaN(n) ? d : n;
+    }),
+    "getHeaderFieldLong(Ljava/lang/String;J)J": withRes(function (_r, k: string, d: bigint) { return asLong(this.hdr(k), d); }),
+    "getHeaderFieldDate(Ljava/lang/String;J)J": withRes(function (_r, k: string, d: bigint) {
+      const t = Date.parse(this.hdr(k) ?? "");
+      return Number.isNaN(t) ? d : BigInt(t);
+    }),
+    "getContentType()Ljava/lang/String;": withRes(function () { return this.hdr("content-type"); }),
+    "getContentEncoding()Ljava/lang/String;": withRes(function () { return this.hdr("content-encoding"); }),
+    // the proxy strips content-length; the byte count is exact once the body is in hand, and HEAD has none to count
+    "getContentLength()I": withRes(function (r) { return this.method === "HEAD" ? -1 : r.body.length; }),
+    "getContentLengthLong()J": withRes(function (r) { return BigInt(this.method === "HEAD" ? -1 : r.body.length); }),
+    "toString()Ljava/lang/String;": function (this: JURLConnection) {
+      return (this.constructor as typeof JObj).$i.name.replace(/\//g, ".") + ":" + this.url.spec;
+    },
+  },
+});
+const HTTP_METHODS = new Set(["GET", "POST", "HEAD", "OPTIONS", "PUT", "DELETE", "TRACE", "PATCH"]);
+class JHttpURLConnection extends JURLConnection {}
+rt.register({
+  name: "java/net/HttpURLConnection", ctor: JHttpURLConnection, sup: "java/net/URLConnection",
+  statics: {
+    HTTP_OK: 200, HTTP_CREATED: 201, HTTP_ACCEPTED: 202, HTTP_NOT_AUTHORITATIVE: 203, HTTP_NO_CONTENT: 204, HTTP_RESET: 205,
+    HTTP_PARTIAL: 206, HTTP_MULT_CHOICE: 300, HTTP_MOVED_PERM: 301, HTTP_MOVED_TEMP: 302, HTTP_SEE_OTHER: 303,
+    HTTP_NOT_MODIFIED: 304, HTTP_USE_PROXY: 305, HTTP_BAD_REQUEST: 400, HTTP_UNAUTHORIZED: 401, HTTP_PAYMENT_REQUIRED: 402,
+    HTTP_FORBIDDEN: 403, HTTP_NOT_FOUND: 404, HTTP_BAD_METHOD: 405, HTTP_NOT_ACCEPTABLE: 406, HTTP_PROXY_AUTH: 407,
+    HTTP_CLIENT_TIMEOUT: 408, HTTP_CONFLICT: 409, HTTP_GONE: 410, HTTP_LENGTH_REQUIRED: 411, HTTP_PRECON_FAILED: 412,
+    HTTP_ENTITY_TOO_LARGE: 413, HTTP_REQ_TOO_LONG: 414, HTTP_UNSUPPORTED_TYPE: 415, HTTP_SERVER_ERROR: 500,
+    HTTP_INTERNAL_ERROR: 500, HTTP_NOT_IMPLEMENTED: 501, HTTP_BAD_GATEWAY: 502, HTTP_UNAVAILABLE: 503,
+    HTTP_GATEWAY_TIMEOUT: 504, HTTP_VERSION: 505,
+  },
+  methods: {
+    "setRequestMethod(Ljava/lang/String;)V": function (this: JHttpURLConnection, m: string) {
+      if (this.res || this.ac) throw rt.mkThrowable("java/net/ProtocolException", "Can't reset method: already connected");
+      if (!HTTP_METHODS.has(m)) throw rt.mkThrowable("java/net/ProtocolException", "Invalid HTTP method: " + m);
+      this.method = m;
+    },
+    "getRequestMethod()Ljava/lang/String;": function (this: JHttpURLConnection) { return this.method; },
+    "setInstanceFollowRedirects(Z)V": function (this: JHttpURLConnection, b: number) { this.follow = b; },
+    "getInstanceFollowRedirects()Z": function (this: JHttpURLConnection) { return this.follow; },
+    "static setFollowRedirects(Z)V": (b: number) => { followRedirects = b; },
+    "static getFollowRedirects()Z": () => followRedirects,
+    "setChunkedStreamingMode(I)V": () => {},
+    "setFixedLengthStreamingMode(I)V": () => {},
+    "setFixedLengthStreamingMode(J)V": () => {},
+    "getResponseCode()I": withRes((r) => r.status),
+    "getResponseMessage()Ljava/lang/String;": withRes((r) => r.msg || null),
+    "getErrorStream()Ljava/io/InputStream;": async function (this: JHttpURLConnection) {
+      // AOSP connects here too, and answers null for any failure rather than throwing
+      try { return (await this.connect()).status >= 400 ? this.stream() : null; } catch { return null; }
+    },
+    // a response already in hand stays readable, as it does on AOSP; only an in-flight fetch is cut
+    "disconnect()V": function (this: JHttpURLConnection) { this.ac?.abort(); },
+    "usingProxy()Z": () => 0,
+  },
+});
+// TLS ends at the proxy: there is no socket for a factory or verifier to attach to
+rt.register({
+  name: "javax/net/ssl/HttpsURLConnection", ctor: class extends JHttpURLConnection {}, sup: "java/net/HttpURLConnection",
+  methods: {
+    "setHostnameVerifier(Ljavax/net/ssl/HostnameVerifier;)V": () => {},
+    "setSSLSocketFactory(Ljavax/net/ssl/SSLSocketFactory;)V": () => {},
+    "static setDefaultHostnameVerifier(Ljavax/net/ssl/HostnameVerifier;)V": () => {},
+    "static setDefaultSSLSocketFactory(Ljavax/net/ssl/SSLSocketFactory;)V": () => {},
+  },
+});
+
+// ── cookies. CookieHandler.get/put are abstract and always reach a CookieManager receiver, so the
+// manager carries them; the store is a host → name → value map (attributes are not kept).
+class JCookieHandler extends JObj {}
+let defaultCookieHandler: JCookieHandler | null = null;
+rt.register({
+  name: "java/net/CookieHandler", ctor: JCookieHandler,
+  methods: {
+    "<init>()V": function () {},
+    "static getDefault()Ljava/net/CookieHandler;": () => defaultCookieHandler,
+    "static setDefault(Ljava/net/CookieHandler;)V": (h: JCookieHandler | null) => { defaultCookieHandler = h; },
+  },
+});
+class JCookiePolicy extends JObj { accept = 1; }
+const acceptAll = new JCookiePolicy(), acceptOriginal = new JCookiePolicy(), acceptNone = Object.assign(new JCookiePolicy(), { accept: 0 });
+rt.register({
+  name: "java/net/CookiePolicy", ctor: JCookiePolicy,
+  statics: { ACCEPT_ALL: acceptAll, ACCEPT_NONE: acceptNone, ACCEPT_ORIGINAL_SERVER: acceptOriginal },
+  methods: { "shouldAccept(Ljava/net/URI;Ljava/net/HttpCookie;)Z": function (this: JCookiePolicy) { return this.accept; } },
+});
+rt.register({ name: "java/net/CookieStore", ctor: class extends JObj {} });
+class JCookieStore extends JObj { jar = new Map<string, Map<string, string>>(); }
+rt.register({
+  name: "webdroid/CookieStore", ctor: JCookieStore, ifaces: ["java/net/CookieStore"],
+  methods: { "removeAll()Z": function (this: JCookieStore) { const n = this.jar.size; this.jar.clear(); return n ? 1 : 0; } },
+});
+class JCookieManager extends JCookieHandler { store = new JCookieStore(); policy: JObj = acceptOriginal; }
+const hostOf = (uri: JURI | null) => { try { return new URL(uri?.u ?? "").hostname; } catch { return uri?.u ?? ""; } };
+rt.register({
+  name: "java/net/CookieManager", ctor: JCookieManager, sup: "java/net/CookieHandler",
+  methods: {
+    "<init>()V": function () {},
+    "<init>(Ljava/net/CookieStore;Ljava/net/CookiePolicy;)V": function (this: JCookieManager, _s: unknown, p: JObj | null) { if (p) this.policy = p; },
+    "setCookiePolicy(Ljava/net/CookiePolicy;)V": function (this: JCookieManager, p: JObj | null) { if (p) this.policy = p; },
+    "getCookieStore()Ljava/net/CookieStore;": function (this: JCookieManager) { rt.link("webdroid/CookieStore"); return this.store; },
+    "get(Ljava/net/URI;Ljava/util/Map;)Ljava/util/Map;": function (this: JCookieManager, uri: JURI | null) {
+      const c = this.store.jar.get(hostOf(uri));
+      // OpenJDK always answers the Cookie key, with an empty list when nothing matches
+      return headerMap([["Cookie", c ? [...c].map(([k, v]) => k + "=" + v) : []]]);
+    },
+    "put(Ljava/net/URI;Ljava/util/Map;)V": async function (this: JCookieManager, uri: JURI | null, hdrs: unknown) {
+      if (this.policy === acceptNone || !hdrs) return;
+      const host = hostOf(uri);
+      for (const e of await toJsArray(await vcall(hdrs, "entrySet", "()Ljava/util/Set;"))) {
+        const k = await vcall(e, "getKey", "()Ljava/lang/Object;") as string | null;
+        if (!k || !/^set-cookie2?$/i.test(k)) continue;
+        for (const v of await toJsArray(await vcall(e, "getValue", "()Ljava/lang/Object;")) as string[]) {
+          const m = /^\s*([^=;\s]+)=([^;]*)/.exec(v);
+          if (!m) continue;
+          let c = this.store.jar.get(host);
+          if (!c) this.store.jar.set(host, c = new Map());
+          c.set(m[1], m[2].trim());
+        }
+      }
+    },
   },
 });
