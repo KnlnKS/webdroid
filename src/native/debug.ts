@@ -2,7 +2,7 @@
 import { modules, symbolizePc } from "./dl";
 import { hostTrace, calledMissing, unresolved } from "./host";
 import { jniMissing, jniTrace, registered } from "./jni";
-import { Cpu, cpus, blockStats, stepMode, setStepMode, profile, blockAt } from "./cpu";
+import { Cpu, cpus, blockStats, stepMode, setStepMode, profile, blockAt, slice } from "./cpu";
 import { mainThread } from "../jvm/natives/jlang";
 import { mem } from "./mem";
 import { glProbe } from "./gles1";
@@ -24,7 +24,8 @@ export const native = {
   pcRing: (tid?: number) => { const c = [...cpus].find((x) => tid === undefined || x.tid === tid); return c ? Array.from({ length: 64 }, (_, i) => symbolizePc(c.ring[(c.rp + 1 + i) & 63] >>> 0)) : []; },
   calledMissing, unresolved, jniMissing, registered,
   blocks: blockStats,
-  profileReset: () => profile.samples.clear(),
+  /** profileReset(n) also sets the slice budget: a smaller one samples the hot pcs more finely */
+  profileReset: (instr = slice.instr) => { slice.instr = instr; profile.samples.clear(); },
   /** the JS a block compiles to (odd pc = Thumb) */
   src: (pc: number) => (pc & 1 ? emitThumbBlock(pc & ~1) : emitBlock(pc)).src,
   /** top pcs at slice boundaries, symbolised (share of all samples) */

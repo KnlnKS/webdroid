@@ -74,3 +74,18 @@ export function inlineMem(src: string): string {
     .replace(/M\.st16\(([^(),]*),([^()]*)\);/g, `if(${A}&&!(m1&1)&&!M.codePages[m1>>>12])M.u16[m1>>>1]=$2;else M.st16(m1,$2);`)
     .replace(/M\.st32\(([^(),]*),([^()]*)\);/g, `if(${A}&&!(m1&3)&&!M.codePages[m1>>>12])M.i32[m1>>>2]=$2;else M.st32(m1,$2);`);
 }
+
+// A block that branches back to its own start runs that loop inside the block: the register
+// locals stay live across iterations instead of round-tripping through the register file, and
+// the run loop's indirect dispatch leaves the loop entirely. The iteration cap hands control
+// back often enough for the slice budget, and the page check drops out of a loop whose own
+// code was overwritten (the store took mem's slow path and invalidated the page).
+const LOOP_ITERS = 4096;
+export function selfLoop(src: string, pc: number, page: number): string {
+  const self = "0x" + (pc >>> 0).toString(16);
+  const back = new RegExp(String.raw`\{c\.ic\+=([1-9]\d*);return F\.n\[(\d+)\]\|\|\(F\.n\[\2\]=c\.look\(${self}\)\);\}`, "g");
+  if (!back.test(src)) return src;
+  back.lastIndex = 0;
+  return `let z=${LOOP_ITERS};for(;;){\n` +
+    src.replace(back, (_m, k: string) => `{c.ic+=${k};if(--z&&M.codePages[${page}])continue;return F;}`) + "}\n";
+}

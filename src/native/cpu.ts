@@ -16,6 +16,8 @@ export const enum SliceExit { Budget = 0, Suspend = 1, Exit = 2 }
 // ~5 ms of guest time per slice at the observed ~600M instr/s: coarse enough that the macrotask hop
 // per slice is noise, fine enough that a 60 Hz frame loop on the JS thread keeps its cadence
 export const SLICE_INSTR = 3_000_000;
+/** the run loop's instruction budget per slice; lowering it makes `profile` sample finely (debug) */
+export const slice = { instr: SLICE_INSTR };
 
 /** a compiled block: runs, then returns the next block (F.n caches constant successors; c.look resolves the rest) */
 type BlockFn = ((c: Cpu, r: Int32Array, M: typeof mem, F: BlockFn) => BlockFn) & { pc: number; n: (BlockFn | undefined)[] };
@@ -48,7 +50,7 @@ export function setStepMode(on: boolean): void {
 const stepPrev = new Int32Array(16);
 const RN = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "ip", "sp", "lr", "pc"];
 export let processExited = false;
-/** slice-boundary pc samples (one per SLICE_INSTR budget exit): a free statistical profile */
+/** slice-boundary pc samples (one per budget exit; `slice.instr` sets how fine): a free statistical profile */
 export const profile = { on: true, samples: new Map<number, number>() };
 export function markProcessExited(): void { processExited = true; }
 
@@ -197,7 +199,7 @@ export class Cpu {
       if (processExited) await new Promise<never>(() => {});
       const t0 = performance.now(), ic0 = this.ic;
       let ex: SliceExit;
-      try { ex = this.runSlice(SLICE_INSTR); }
+      try { ex = this.runSlice(slice.instr); }
       catch (e) {
         if (e instanceof NativeFault) {
           if (!e.pc) e.pc = this.bpc >>> 0;

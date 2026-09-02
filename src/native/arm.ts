@@ -4,9 +4,9 @@
 // returns the next pc. Registers are int32; flags are 0/1 numbers on `c`.
 
 import { mem } from "./mem";
-import { PAGE_SIZE } from "./abi";
+import { PAGE_SIZE, PAGE_SHIFT } from "./abi";
 import { emitVfp } from "./vfp";
-import { type Ins, type Fl, N, Z, C, ALL, COND, COND_READS, NZ, ADDF, SUBF, ADCF, SBCF, RSBF, RSCF, assemble, hoistRegs, inlineMem } from "./flags";
+import { type Ins, type Fl, N, Z, C, ALL, COND, COND_READS, NZ, ADDF, SUBF, ADCF, SBCF, RSBF, RSCF, assemble, hoistRegs, inlineMem, selfLoop } from "./flags";
 
 let MAX_BLOCK = 256;
 /** 1 = single-instruction blocks (the step tracer) */
@@ -341,5 +341,5 @@ export function emitBlock(pc: number): BlockSrc {
     if (ends || k >= MAX_BLOCK || p >= pageEnd) break;
   }
   if (redirect < 0) out.push({ code: retK(k, hex(p)), fl: null, reads: 0, writes: 0 });
-  return { src: "let t,a,v,sc,m1;" + hoistRegs(inlineMem(assemble(out))), len: (end - pc) >> 2, end, slots: slot };
+  return { src: "let t,a,v,sc,m1;" + hoistRegs(selfLoop(inlineMem(assemble(out)), pc, pc >>> PAGE_SHIFT)), len: (end - pc) >> 2, end, slots: slot };
 }
