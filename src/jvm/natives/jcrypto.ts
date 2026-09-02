@@ -214,6 +214,20 @@ rt.register({
       out.set(r, off);
       return r.length;
     },
+    "doFinal([BII[BI)I": async function (this: JCipher, b: Int8Array, off: number, len: number, out: Int8Array, outOff: number) {
+      const r = await doFinal(this, b, off, len);
+      if (outOff + r.length > out.length) throw rt.mkThrowable("javax/crypto/ShortBufferException", "Output buffer too short");
+      out.set(r, outOff);
+      return r.length;
+    },
+    "doFinal([BII[B)I": async function (this: JCipher, b: Int8Array, off: number, len: number, out: Int8Array) {
+      const r = await doFinal(this, b, off, len);
+      if (r.length > out.length) throw rt.mkThrowable("javax/crypto/ShortBufferException", "Output buffer too short");
+      out.set(r, 0);
+      return r.length;
+    },
+    "static getInstance(Ljava/lang/String;Ljava/security/Provider;)Ljavax/crypto/Cipher;": getCipher,
+    "getParameters()Ljava/security/AlgorithmParameters;": () => null,
     "getBlockSize()I": () => 16,
     "getOutputSize(I)I": function (this: JCipher, n: number) { return this.parts.reduce((s, p) => s + p.length, n) + 16; },
     "getIV()[B": function (this: JCipher) { return this.iv && new Int8Array(this.iv); },
