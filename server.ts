@@ -1,14 +1,38 @@
 import index from "./index.html";
+import { unzipSync } from "fflate";
 
 type TcpData = { host: string; port: number; tls: boolean; sock: import("bun").Socket | null };
 
+// Hop-by-hop/encoding headers never survive the proxy; the framing/isolation set is dropped
+// only for `frame=1`, where the shell embeds the document in an iframe it must be able to script.
+const DROP = /^(content-encoding|content-length|transfer-encoding|set-cookie)$/i;
+const DROP_FRAME = /^(x-frame-options|content-security-policy(-report-only)?|cross-origin-(opener|embedder)-policy)$/i;
+const attr = (s: string) => s.replace(/[&"<]/g, (c) => c === "&" ? "&amp;" : c === '"' ? "&quot;" : "&lt;");
+
+const ASSET_TYPE: Record<string, string> = {
+  html: "text/html", js: "text/javascript", css: "text/css", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+  svg: "image/svg+xml", json: "application/json", txt: "text/plain", woff2: "font/woff2", pdf: "application/pdf",
+};
+// assets/ of each apk inflated once: an article page pulls several files and the apk is 100MB
+const assetCache = new Map<string, Record<string, Uint8Array>>();
+async function apkAssets(apk: string): Promise<Record<string, Uint8Array>> {
+  let a = assetCache.get(apk);
+  if (!a) {
+    const bytes = new Uint8Array(await Bun.file(`apks/${apk}`).arrayBuffer());
+    assetCache.set(apk, a = unzipSync(bytes, { filter: (f) => f.name.startsWith("assets/") }));
+  }
+  return a;
+}
+
 const server: Bun.Server<TcpData> = Bun.serve({
-  port: 4080,
+  port: Number(process.env.PORT ?? 4080),
   development: { hmr: false },
   routes: {
     "/": index,
     "/proxy": async (req) => {
-      const url = new URL(req.url).searchParams.get("url");
+      const q = new URL(req.url).searchParams;
+      const url = q.get("url");
+      const frame = q.get("frame") === "1";
       if (!url || !/^https?:\/\//.test(url)) return new Response("bad url", { status: 400 });
       try {
         const headers = new Headers();
@@ -24,14 +48,37 @@ const server: Bun.Server<TcpData> = Bun.serve({
         });
         const h = new Headers();
         upstream.headers.forEach((v, k) => {
-          if (!/^(content-encoding|content-length|transfer-encoding|set-cookie)$/i.test(k)) h.set(k, v);
+          if (!DROP.test(k) && !(frame && DROP_FRAME.test(k))) h.set(k, v);
         });
         h.set("Access-Control-Allow-Origin", "*");
         h.set("x-wd-final-url", upstream.url);
+        if (frame && upstream.body && /^text\/html/i.test(upstream.headers.get("content-type") ?? "")) {
+          // Served from our origin so the shell can script it; <base> keeps its subresources and
+          // links resolving against the real one. text() re-encodes as UTF-8, so say so.
+          const html = await upstream.text();
+          const base = `<base href="${attr(upstream.url)}">`;
+          const m = /<head[^>]*>/i.exec(html);
+          const at = m ? m.index + m[0].length : 0;
+          h.set("content-type", "text/html; charset=utf-8");
+          return new Response(html.slice(0, at) + base + html.slice(at), { status: upstream.status, headers: h });
+        }
         return new Response(upstream.body, { status: upstream.status, headers: h });
       } catch (e) {
+        // a WebView reads the meta to report onReceivedError — a contract, not text sniffing
+        if (frame) return new Response(`<!doctype html><meta name="wd-proxy-error" content="${attr(String(e))}">`,
+          { status: 502, headers: { "content-type": "text/html; charset=utf-8" } });
         return new Response(`proxy error: ${e}`, { status: 502 });
       }
+    },
+    // an apk's assets/ entry — what file:///android_asset/ resolves to inside a WebView
+    "/asset": async (req) => {
+      const q = new URL(req.url).searchParams;
+      const apk = q.get("apk") ?? "", path = q.get("path") ?? "";
+      if (apk.includes("/") || apk.includes("..") || !path.startsWith("assets/") || path.includes("..")) return new Response("nope", { status: 400 });
+      const bytes = (await apkAssets(apk))[path];
+      if (!bytes) return new Response("not found", { status: 404 });
+      const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+      return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { "content-type": ASSET_TYPE[ext] ?? "application/octet-stream" } });
     },
     "/Roboto/:file": (req) => {
       const f = req.params.file;
