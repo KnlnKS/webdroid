@@ -183,7 +183,12 @@ export function newArrayList(items: unknown[] = []): JList {
   l.a = items;
   return l;
 }
-
+/** A java.util.LinkedHashSet over `items` (insertion order, Java equality). */
+export async function newLinkedHashSet(items: unknown[] = []): Promise<JSet> {
+  const s = new (rt.link("java/util/LinkedHashSet").ctor as new () => JSet)();
+  for (const v of items) { const r = addToSet(s, v); if (r instanceof Promise) await r; }
+  return s;
+}
 
 let ioobeLogged = 0;
 function ioobe(i: number, n: number): never {
@@ -1167,48 +1172,313 @@ rt.register({
 // wired to the fail-fast iterator this class hands out by default.
 class JAbstractList extends JObj { modCount = 0; }
 
-// abstract bases apps extend (methods delegate via virtual calls on `this`)
-for (const [n, sup] of [
-  ["java/util/AbstractCollection", "java/lang/Object"],
-  ["java/util/AbstractList", "java/util/AbstractCollection"],
-  ["java/util/AbstractSet", "java/util/AbstractCollection"],
-  ["java/util/AbstractMap", "java/lang/Object"],
-] as const) {
-  rt.register({
-    name: n, ctor: n === "java/util/AbstractList" ? JAbstractList : class extends JObj {}, sup,
-    ifaces: n.endsWith("Map") ? ["java/util/Map"] : ["java/util/Collection", "java/lang/Iterable",
-      n.endsWith("List") ? "java/util/List" : "java/util/Set"],
-    ...(n === "java/util/AbstractList" ? { fields: { modCount: "modCount" } } : {}),
-    methods: {
-      "<init>()V": function () {},
-      "isEmpty()Z": async function (this: JObj) { return (await vcall(this, "size", "()I")) === 0 ? 1 : 0; },
-      ...(n === "java/util/AbstractList" ? {
-        "iterator()Ljava/util/Iterator;": async function (this: JAbstractList) {
-          const self = this;
-          const size = await vcall(self, "size", "()I");
-          const arr: unknown[] = [];
-          for (let i = 0; i < size; i++) arr.push(await vcall(self, "get", "(I)Ljava/lang/Object;", i));
-          return mkIter(arr, {
-            get modCount() { return self.modCount; },
-            removeAt: (i: number) => vcall(self, "remove", "(I)Ljava/lang/Object;", i),
-          });
-        },
-      } : {}),
-      ...(n === "java/util/AbstractMap" ? {
-        "get(Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JObj, k: unknown) {
-          const es = await vcall(this, "entrySet", "()Ljava/util/Set;");
-          const it = await vcall(es, "iterator", "()Ljava/util/Iterator;");
-          while (await vcall(it, "hasNext", "()Z")) {
-            const e = await vcall(it, "next", "()Ljava/lang/Object;");
-            const r = jeq(await vcall(e, "getKey", "()Ljava/lang/Object;"), k);
-            if (r instanceof Promise ? await r : r) return vcall(e, "getValue", "()Ljava/lang/Object;");
-          }
-          return null;
-        },
-      } : {}),
-    },
-  });
+// JDK AbstractList.ListItr: every step is a virtual get/set/add/remove on the list, so an app's
+// overrides are what the iterator sees and writes through to (a snapshot would drop set/add).
+class JAbsListIter extends JObj {
+  cursor = 0; lastRet = -1; expectedMod: number;
+  constructor(public list: JAbstractList, at: number) { super(); this.cursor = at; this.expectedMod = list.modCount; }
+  check() { if (this.list.modCount !== this.expectedMod) throw rt.mkThrowable("java/util/ConcurrentModificationException", null); }
 }
+const size = (o: unknown): Promise<number> => vcall(o, "size", "()I");
+const getAt = (o: unknown, i: number): Promise<unknown> => vcall(o, "get", "(I)Ljava/lang/Object;", i);
+const iterOf = (o: unknown): Promise<unknown> => vcall(o, "iterator", "()Ljava/util/Iterator;");
+const aeq = async (a: unknown, b: unknown) => { const r = jeq(a, b); return (r instanceof Promise ? await r : r) !== 0; };
+const uoe = (): never => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
+rt.register({
+  name: "webdroid/AbstractListIter", ctor: JAbsListIter, ifaces: ["java/util/Iterator", "java/util/ListIterator"],
+  methods: {
+    "hasNext()Z": async function (this: JAbsListIter) { return this.cursor !== (await size(this.list)) ? 1 : 0; },
+    "next()Ljava/lang/Object;": async function (this: JAbsListIter) {
+      this.check();
+      const i = this.cursor;
+      if (i >= (await size(this.list))) throw rt.mkThrowable("java/util/NoSuchElementException", null);
+      const v = await getAt(this.list, i);
+      this.lastRet = i;
+      this.cursor = i + 1;
+      return v;
+    },
+    "hasPrevious()Z": function (this: JAbsListIter) { return this.cursor !== 0 ? 1 : 0; },
+    "previous()Ljava/lang/Object;": async function (this: JAbsListIter) {
+      this.check();
+      const i = this.cursor - 1;
+      if (i < 0) throw rt.mkThrowable("java/util/NoSuchElementException", null);
+      const v = await getAt(this.list, i);
+      this.lastRet = this.cursor = i;
+      return v;
+    },
+    "nextIndex()I": function (this: JAbsListIter) { return this.cursor; },
+    "previousIndex()I": function (this: JAbsListIter) { return this.cursor - 1; },
+    "remove()V": async function (this: JAbsListIter) {
+      if (this.lastRet < 0) throw rt.mkThrowable("java/lang/IllegalStateException", null);
+      this.check();
+      await vcall(this.list, "remove", "(I)Ljava/lang/Object;", this.lastRet);
+      if (this.lastRet < this.cursor) this.cursor--;
+      this.lastRet = -1;
+      this.expectedMod = this.list.modCount;
+    },
+    "set(Ljava/lang/Object;)V": async function (this: JAbsListIter, v: unknown) {
+      if (this.lastRet < 0) throw rt.mkThrowable("java/lang/IllegalStateException", null);
+      this.check();
+      await vcall(this.list, "set", "(ILjava/lang/Object;)Ljava/lang/Object;", this.lastRet, v);
+      this.expectedMod = this.list.modCount;
+    },
+    "add(Ljava/lang/Object;)V": async function (this: JAbsListIter, v: unknown) {
+      this.check();
+      await vcall(this.list, "add", "(ILjava/lang/Object;)V", this.cursor++, v);
+      this.lastRet = -1;
+      this.expectedMod = this.list.modCount;
+    },
+  },
+});
+// JDK AbstractList.SubList: a live window whose every operation is an offset virtual call on the parent.
+class JAbsSubList extends JAbstractList { parent!: JAbstractList; off = 0; n = 0; }
+rt.register({
+  name: "webdroid/AbstractSubList", ctor: JAbsSubList, sup: "java/util/AbstractList",
+  methods: {
+    "size()I": function (this: JAbsSubList) { return this.n; },
+    "get(I)Ljava/lang/Object;": function (this: JAbsSubList, i: number) {
+      if (i < 0 || i >= this.n) ioobe(i, this.n);
+      return getAt(this.parent, this.off + i);
+    },
+    "set(ILjava/lang/Object;)Ljava/lang/Object;": function (this: JAbsSubList, i: number, v: unknown) {
+      if (i < 0 || i >= this.n) ioobe(i, this.n);
+      return vcall(this.parent, "set", "(ILjava/lang/Object;)Ljava/lang/Object;", this.off + i, v);
+    },
+    "add(ILjava/lang/Object;)V": async function (this: JAbsSubList, i: number, v: unknown) {
+      if (i < 0 || i > this.n) ioobe(i, this.n);
+      await vcall(this.parent, "add", "(ILjava/lang/Object;)V", this.off + i, v);
+      this.n++;
+      this.modCount = this.parent.modCount;
+    },
+    "remove(I)Ljava/lang/Object;": async function (this: JAbsSubList, i: number) {
+      if (i < 0 || i >= this.n) ioobe(i, this.n);
+      const v = await vcall(this.parent, "remove", "(I)Ljava/lang/Object;", this.off + i);
+      this.n--;
+      this.modCount = this.parent.modCount;
+      return v;
+    },
+  },
+});
+
+// abstract bases apps extend: the JDK's default bodies, each a virtual call on `this`
+const absCollection: Methods = {
+  "<init>()V": function () {},
+  "isEmpty()Z": async function (this: JObj) { return (await size(this)) === 0 ? 1 : 0; },
+  "add(Ljava/lang/Object;)Z": uoe,
+  "contains(Ljava/lang/Object;)Z": async function (this: JObj, o: unknown) {
+    for (const x of await toJsArray(this)) if (await aeq(x, o)) return 1;
+    return 0;
+  },
+  "containsAll(Ljava/util/Collection;)Z": async function (this: JObj, c: unknown) {
+    for (const x of await toJsArray(c)) if (!(await vcall(this, "contains", "(Ljava/lang/Object;)Z", x))) return 0;
+    return 1;
+  },
+  "addAll(Ljava/util/Collection;)Z": async function (this: JObj, c: unknown) {
+    let ch = 0;
+    for (const x of (await toJsArray(c)).slice()) if (await vcall(this, "add", "(Ljava/lang/Object;)Z", x)) ch = 1;
+    return ch;
+  },
+  "remove(Ljava/lang/Object;)Z": async function (this: JObj, o: unknown) {
+    const it = await iterOf(this);
+    while (await vcall(it, "hasNext", "()Z")) {
+      if (await aeq(await vcall(it, "next", "()Ljava/lang/Object;"), o)) { await vcall(it, "remove", "()V"); return 1; }
+    }
+    return 0;
+  },
+  "removeAll(Ljava/util/Collection;)Z": async function (this: JObj, c: unknown) { return bulkRemove(this, c, true); },
+  "retainAll(Ljava/util/Collection;)Z": async function (this: JObj, c: unknown) { return bulkRemove(this, c, false); },
+  "clear()V": async function (this: JObj) {
+    const it = await iterOf(this);
+    while (await vcall(it, "hasNext", "()Z")) { await vcall(it, "next", "()Ljava/lang/Object;"); await vcall(it, "remove", "()V"); }
+  },
+  "toArray()[Ljava/lang/Object;": async function (this: JObj) { return jarray((await toJsArray(this)).slice()); },
+  "toArray([Ljava/lang/Object;)[Ljava/lang/Object;": async function (this: JObj, out: unknown[]) {
+    return fillToArray(await toJsArray(this), out);
+  },
+  "toString()Ljava/lang/String;": async function (this: JObj) {
+    const parts: string[] = [];
+    for (const x of await toJsArray(this)) {
+      parts.push(x === this ? "(this Collection)" : x === null ? "null" : String(await vcall(x, "toString", "()Ljava/lang/String;")));
+    }
+    return "[" + parts.join(", ") + "]";
+  },
+};
+async function bulkRemove(self: unknown, c: unknown, when: boolean): Promise<number> {
+  let ch = 0;
+  const it = await iterOf(self);
+  while (await vcall(it, "hasNext", "()Z")) {
+    const x = await vcall(it, "next", "()Ljava/lang/Object;");
+    if ((await vcall(c, "contains", "(Ljava/lang/Object;)Z", x)) !== 0 === when) { await vcall(it, "remove", "()V"); ch = 1; }
+  }
+  return ch;
+}
+const absList: Methods = {
+  "add(Ljava/lang/Object;)Z": async function (this: JAbstractList, v: unknown) {
+    await vcall(this, "add", "(ILjava/lang/Object;)V", await size(this), v);
+    return 1;
+  },
+  "add(ILjava/lang/Object;)V": uoe,
+  "set(ILjava/lang/Object;)Ljava/lang/Object;": uoe,
+  "remove(I)Ljava/lang/Object;": uoe,
+  "addAll(ILjava/util/Collection;)Z": async function (this: JAbstractList, at: number, c: unknown) {
+    let ch = 0;
+    for (const x of (await toJsArray(c)).slice()) { await vcall(this, "add", "(ILjava/lang/Object;)V", at++, x); ch = 1; }
+    return ch;
+  },
+  "clear()V": async function (this: JAbstractList) { await vcall(this, "removeRange", "(II)V", 0, await size(this)); },
+  "removeRange(II)V": async function (this: JAbstractList, from: number, to: number) {
+    const it = await vcall(this, "listIterator", "(I)Ljava/util/ListIterator;", from);
+    for (let i = 0; i < to - from; i++) { await vcall(it, "next", "()Ljava/lang/Object;"); await vcall(it, "remove", "()V"); }
+  },
+  "indexOf(Ljava/lang/Object;)I": async function (this: JAbstractList, o: unknown) {
+    const it = await vcall(this, "listIterator", "()Ljava/util/ListIterator;");
+    while (await vcall(it, "hasNext", "()Z")) {
+      if (await aeq(await vcall(it, "next", "()Ljava/lang/Object;"), o)) return vcall(it, "previousIndex", "()I");
+    }
+    return -1;
+  },
+  "lastIndexOf(Ljava/lang/Object;)I": async function (this: JAbstractList, o: unknown) {
+    const it = await vcall(this, "listIterator", "(I)Ljava/util/ListIterator;", await size(this));
+    while (await vcall(it, "hasPrevious", "()Z")) {
+      if (await aeq(await vcall(it, "previous", "()Ljava/lang/Object;"), o)) return vcall(it, "nextIndex", "()I");
+    }
+    return -1;
+  },
+  "iterator()Ljava/util/Iterator;": function (this: JAbstractList) { return new JAbsListIter(this, 0); },
+  "listIterator()Ljava/util/ListIterator;": function (this: JAbstractList) { return new JAbsListIter(this, 0); },
+  "listIterator(I)Ljava/util/ListIterator;": async function (this: JAbstractList, at: number) {
+    const n = await size(this);
+    if (at < 0 || at > n) ioobe(at, n);
+    return new JAbsListIter(this, at);
+  },
+  "subList(II)Ljava/util/List;": async function (this: JAbstractList, from: number, to: number) {
+    const n = await size(this);
+    if (from < 0 || to > n || from > to) ioobe(from < 0 ? from : to, n);
+    const s = new JAbsSubList();
+    s.parent = this; s.off = from; s.n = to - from; s.modCount = this.modCount;
+    return s;
+  },
+  "equals(Ljava/lang/Object;)Z": async function (this: JAbstractList, o: unknown) {
+    if (o === this) return 1;
+    if (!(o instanceof JObj) || !rt.iof(o, "java/util/List")) return 0;
+    const a = await toJsArray(this), b = await toJsArray(o);
+    if (a.length !== b.length) return 0;
+    for (let i = 0; i < a.length; i++) if (!(await aeq(a[i], b[i]))) return 0;
+    return 1;
+  },
+  "hashCode()I": async function (this: JAbstractList) {
+    let h = 1;
+    for (const x of await toJsArray(this)) { const r = jhash(x); h = (31 * h + (r instanceof Promise ? await r : r)) | 0; }
+    return h;
+  },
+};
+const absSet: Methods = {
+  "equals(Ljava/lang/Object;)Z": async function (this: JObj, o: unknown) {
+    if (o === this) return 1;
+    if (!(o instanceof JObj) || !rt.iof(o, "java/util/Set")) return 0;
+    if ((await size(o)) !== (await size(this))) return 0;
+    return vcall(this, "containsAll", "(Ljava/util/Collection;)Z", o);
+  },
+  "hashCode()I": async function (this: JObj) {
+    let h = 0;
+    for (const x of await toJsArray(this)) { const r = jhash(x); h = (h + (r instanceof Promise ? await r : r)) | 0; }
+    return h;
+  },
+  "removeAll(Ljava/util/Collection;)Z": async function (this: JObj, c: unknown) {
+    let ch = 0;
+    if ((await size(this)) > (await size(c))) {
+      for (const x of (await toJsArray(c)).slice()) if (await vcall(this, "remove", "(Ljava/lang/Object;)Z", x)) ch = 1;
+      return ch;
+    }
+    return bulkRemove(this, c, true);
+  },
+};
+async function mapEntries(m: unknown): Promise<unknown[]> { return toJsArray(await vcall(m, "entrySet", "()Ljava/util/Set;")); }
+const entryKey = (e: unknown) => vcall(e, "getKey", "()Ljava/lang/Object;");
+const entryVal = (e: unknown) => vcall(e, "getValue", "()Ljava/lang/Object;");
+async function findEntry(m: unknown, k: unknown): Promise<unknown> {
+  for (const e of await mapEntries(m)) if (await aeq(await entryKey(e), k)) return e;
+  return null;
+}
+const absMap: Methods = {
+  "<init>()V": function () {},
+  "size()I": async function (this: JObj) { return size(await vcall(this, "entrySet", "()Ljava/util/Set;")); },
+  "isEmpty()Z": async function (this: JObj) { return (await size(this)) === 0 ? 1 : 0; },
+  "get(Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JObj, k: unknown) {
+    const e = await findEntry(this, k);
+    return e ? entryVal(e) : null;
+  },
+  "getOrDefault(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JObj, k: unknown, d: unknown) {
+    const e = await findEntry(this, k);
+    return e ? entryVal(e) : d;
+  },
+  "containsKey(Ljava/lang/Object;)Z": async function (this: JObj, k: unknown) { return (await findEntry(this, k)) ? 1 : 0; },
+  "containsValue(Ljava/lang/Object;)Z": async function (this: JObj, v: unknown) {
+    for (const e of await mapEntries(this)) if (await aeq(await entryVal(e), v)) return 1;
+    return 0;
+  },
+  "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": uoe,
+  "putAll(Ljava/util/Map;)V": async function (this: JObj, m: unknown) {
+    for (const e of await mapEntries(m)) {
+      await vcall(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", await entryKey(e), await entryVal(e));
+    }
+  },
+  "remove(Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JObj, k: unknown) {
+    const it = await iterOf(await vcall(this, "entrySet", "()Ljava/util/Set;"));
+    while (await vcall(it, "hasNext", "()Z")) {
+      const e = await vcall(it, "next", "()Ljava/lang/Object;");
+      if (await aeq(await entryKey(e), k)) { const v = await entryVal(e); await vcall(it, "remove", "()V"); return v; }
+    }
+    return null;
+  },
+  "clear()V": async function (this: JObj) { await vcall(await vcall(this, "entrySet", "()Ljava/util/Set;"), "clear", "()V"); },
+  "keySet()Ljava/util/Set;": async function (this: JObj) {
+    const out: unknown[] = [];
+    for (const e of await mapEntries(this)) out.push(await entryKey(e));
+    return newLinkedHashSet(out);
+  },
+  "values()Ljava/util/Collection;": async function (this: JObj) {
+    const out: unknown[] = [];
+    for (const e of await mapEntries(this)) out.push(await entryVal(e));
+    return newArrayList(out);
+  },
+  "equals(Ljava/lang/Object;)Z": async function (this: JObj, o: unknown) {
+    if (o === this) return 1;
+    if (!(o instanceof JObj) || !rt.iof(o, "java/util/Map")) return 0;
+    if ((await size(o)) !== (await size(this))) return 0;
+    for (const e of await mapEntries(this)) {
+      const k = await entryKey(e), v = await entryVal(e);
+      if (v === null) {
+        if (!(await vcall(o, "containsKey", "(Ljava/lang/Object;)Z", k)) || (await vcall(o, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k)) !== null) return 0;
+      } else if (!(await aeq(v, await vcall(o, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k)))) return 0;
+    }
+    return 1;
+  },
+  "hashCode()I": async function (this: JObj) {
+    let h = 0;
+    for (const e of await mapEntries(this)) { const r = jhash(e); h = (h + (r instanceof Promise ? await r : r)) | 0; }
+    return h;
+  },
+  "toString()Ljava/lang/String;": async function (this: JObj) {
+    const s = async (x: unknown) => (x === this ? "(this Map)" : x === null ? "null" : String(await vcall(x, "toString", "()Ljava/lang/String;")));
+    const parts: string[] = [];
+    for (const e of await mapEntries(this)) parts.push(`${await s(await entryKey(e))}=${await s(await entryVal(e))}`);
+    return "{" + parts.join(", ") + "}";
+  },
+};
+rt.register({
+  name: "java/util/AbstractCollection", ctor: class extends JObj {},
+  ifaces: ["java/util/Collection", "java/lang/Iterable"], methods: absCollection,
+});
+rt.register({
+  name: "java/util/AbstractList", ctor: JAbstractList, sup: "java/util/AbstractCollection",
+  ifaces: ["java/util/List"], fields: { modCount: "modCount" }, methods: absList,
+});
+rt.register({
+  name: "java/util/AbstractSet", ctor: class extends JObj {}, sup: "java/util/AbstractCollection",
+  ifaces: ["java/util/Set"], methods: absSet,
+});
+rt.register({ name: "java/util/AbstractMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"], methods: absMap });
 
 // collection interfaces as markers — with their real extends-hierarchy so
 // check-cast/instanceof through superinterfaces works (dex classes implementing
