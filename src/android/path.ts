@@ -76,9 +76,12 @@ const opPairs: Record<string, number> = { m: 1, l: 1, q: 2, c: 3, z: 0, rect: 2,
 /** Trailing scalars that are lengths and so scale with the path (radii, not angles). */
 const opRadii: Record<string, [number, number]> = { rrect: [5, 13], circle: [3, 4] };
 
-function flattenPath(ops: PathOp[]): Pt[][] {
-  const out: Pt[][] = [];
-  let cur: Pt[] | null = null, cx = 0, cy = 0, sx = 0, sy = 0;
+type Contour = Pt[] & { closed?: boolean };
+/** Polylines for every contour; `all` keeps degenerate/open ones and marks which were closed
+ *  (Path.op wants only real polygons, PathMeasure wants every stroke). */
+function flattenPath(ops: PathOp[], all = false): Contour[] {
+  const out: Contour[] = [];
+  let cur: Contour | null = null, cx = 0, cy = 0, sx = 0, sy = 0;
   const move = (x: number, y: number) => { cur = [[x, y]]; out.push(cur); cx = sx = x; cy = sy = y; };
   const line = (x: number, y: number) => { if (cur) cur.push([x, y]); else move(x, y); cx = x; cy = y; };
   // Steps grow with the square root of the arc length, which keeps the chord's sagitta under
@@ -108,8 +111,8 @@ function flattenPath(ops: PathOp[]): Pt[][] {
         }
         break;
       }
-      case "z": cur = null; cx = sx; cy = sy; break;
-      case "rect": out.push([[a, b], [c, b], [c, d], [a, d]]); cur = null; cx = sx = a; cy = sy = b; break;
+      case "z": if (cur) cur.closed = true; cur = null; cx = sx; cy = sy; break;
+      case "rect": { const r: Contour = [[a, b], [c, b], [c, d], [a, d]]; r.closed = true; out.push(r); cur = null; cx = sx = a; cy = sy = b; break; }
       case "rrect": {
         const q = rrRadii(op);
         move(a + q[0], b);
@@ -117,11 +120,12 @@ function flattenPath(ops: PathOp[]): Pt[][] {
         line(c, d - q[5]); arc(c - q[4], d - q[5], q[4], q[5], 0, P / 2);
         line(a + q[6], d); arc(a + q[6], d - q[7], q[6], q[7], P / 2, P);
         line(a, b + q[1]); arc(a + q[0], b + q[1], q[0], q[1], P, P * 1.5);
+        if (cur) cur.closed = true;
         cur = null;
         break;
       }
-      case "oval": move(c, (b + d) / 2); arc((a + c) / 2, (b + d) / 2, (c - a) / 2, (d - b) / 2, 0, P * 2); cur = null; break;
-      case "circle": move(a + c, b); arc(a, b, c, c, 0, P * 2); cur = null; break;
+      case "oval": move(c, (b + d) / 2); arc((a + c) / 2, (b + d) / 2, (c - a) / 2, (d - b) / 2, 0, P * 2); if (cur) cur.closed = true; cur = null; break;
+      case "circle": move(a + c, b); arc(a, b, c, c, 0, P * 2); if (cur) cur.closed = true; cur = null; break;
       case "arc": {
         const mx = (a + c) / 2, my = (b + d) / 2, rx = (c - a) / 2, ry = (d - b) / 2, a0 = e * P / 180;
         if (!cur || op[7]) move(mx + rx * Math.cos(a0), my + ry * Math.sin(a0)); else line(mx + rx * Math.cos(a0), my + ry * Math.sin(a0));
@@ -130,8 +134,89 @@ function flattenPath(ops: PathOp[]): Pt[][] {
       }
     }
   }
-  return out.filter((c) => c.length > 2);
+  return all ? out : out.filter((c) => c.length > 2);
 }
+
+// ── PathMeasure: arc-length queries over the flattened contours, one contour at a time
+class JPathMeasure extends JObj {
+  contours: Contour[] = [];
+  idx = 0;
+  forceClosed = false;
+  segs: number[] = []; // cumulative length at each vertex of the current contour
+  pts: Pt[] = [];
+  load(p: JPath | null, forceClosed: boolean) {
+    this.forceClosed = forceClosed;
+    this.contours = p ? flattenPath(p.ops, true).filter((c) => c.length > 1) : [];
+    this.idx = 0;
+    this.prep();
+  }
+  prep() {
+    const c = this.contours[this.idx];
+    this.pts = c ? (this.closed(c) && (c[0][0] !== c[c.length - 1][0] || c[0][1] !== c[c.length - 1][1]) ? [...c, c[0]] : [...c]) : [];
+    this.segs = [0];
+    for (let i = 1; i < this.pts.length; i++) this.segs.push(this.segs[i - 1] + Math.hypot(this.pts[i][0] - this.pts[i - 1][0], this.pts[i][1] - this.pts[i - 1][1]));
+  }
+  closed(c: Contour) { return this.forceClosed || !!c.closed; }
+  length() { return this.segs[this.segs.length - 1] ?? 0; }
+  /** position + unit tangent at distance d along the current contour */
+  at(d: number): [number, number, number, number] | null {
+    const n = this.pts.length;
+    if (n < 2) return null;
+    d = Math.max(0, Math.min(this.length(), d));
+    let i = 1;
+    while (i < n - 1 && this.segs[i] < d) i++;
+    const [x0, y0] = this.pts[i - 1], [x1, y1] = this.pts[i];
+    const L = this.segs[i] - this.segs[i - 1];
+    const t = L > 0 ? (d - this.segs[i - 1]) / L : 0;
+    const tx = L > 0 ? (x1 - x0) / L : 1, ty = L > 0 ? (y1 - y0) / L : 0;
+    return [x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, tx, ty];
+  }
+}
+rt.register({
+  name: "android/graphics/PathMeasure", ctor: JPathMeasure,
+  statics: { POSITION_MATRIX_FLAG: 1, TANGENT_MATRIX_FLAG: 2 },
+  methods: {
+    "<init>()V": function () {},
+    "<init>(Landroid/graphics/Path;Z)V": function (this: JPathMeasure, p: JPath | null, fc: number) { this.load(p, !!fc); },
+    "setPath(Landroid/graphics/Path;Z)V": function (this: JPathMeasure, p: JPath | null, fc: number) { this.load(p, !!fc); },
+    "getLength()F": function (this: JPathMeasure) { return Math.fround(this.length()); },
+    "isClosed()Z": function (this: JPathMeasure) { const c = this.contours[this.idx]; return c && this.closed(c) ? 1 : 0; },
+    "nextContour()Z": function (this: JPathMeasure) {
+      if (this.idx + 1 >= this.contours.length) return 0;
+      this.idx++; this.prep(); return 1;
+    },
+    "getPosTan(F[F[F)Z": function (this: JPathMeasure, d: number, pos: Float32Array | null, tan: Float32Array | null) {
+      const r = this.at(d);
+      if (!r) return 0;
+      if (pos) { pos[0] = r[0]; pos[1] = r[1]; }
+      if (tan) { tan[0] = r[2]; tan[1] = r[3]; }
+      return 1;
+    },
+    "getMatrix(FLandroid/graphics/Matrix;I)Z": function (this: JPathMeasure, d: number, m: JMatrix, flags: number) {
+      const r = this.at(d);
+      if (!r) return 0;
+      const rot = flags & 2 ? Math.atan2(r[3], r[2]) : 0, c = Math.cos(rot), s = Math.sin(rot);
+      const tx = flags & 1 ? r[0] : 0, ty = flags & 1 ? r[1] : 0;
+      m.m = [c, s, -s, c, tx, ty]; // canvas affine [a, b, c, d, tx, ty]: rotation then translate
+      return 1;
+    },
+    "getSegment(FFLandroid/graphics/Path;Z)Z": function (this: JPathMeasure, start: number, stop: number, dst: JPath, moveTo: number) {
+      const len = this.length();
+      if (this.pts.length < 2) return 0;
+      start = Math.max(0, start); stop = Math.min(len, stop);
+      if (start >= stop) return 0;
+      const a = this.at(start)!, b = this.at(stop)!;
+      if (moveTo || !dst.ops.length) dst.add(["m", a[0], a[1]]); else dst.add(["l", a[0], a[1]]);
+      dst.curX = a[0]; dst.curY = a[1];
+      for (let i = 1; i < this.pts.length - 1; i++) {
+        if (this.segs[i] > start && this.segs[i] < stop) dst.add(["l", this.pts[i][0], this.pts[i][1]]);
+      }
+      dst.add(["l", b[0], b[1]]);
+      dst.curX = b[0]; dst.curY = b[1];
+      return 1;
+    },
+  },
+});
 
 function contourWinding(c: Pt[], x: number, y: number): number {
   let w = 0;
