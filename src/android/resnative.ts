@@ -5,8 +5,8 @@ import { device } from "../shell/config";
 import { Resources, setResourceNight, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
 import { JTypedValue } from "./os";
-import { TV, parseAXML, type XmlNode } from "./axml";
-import { javaFormat } from "../jvm/natives/jlang";
+import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
+import { javaFormat, defineException } from "../jvm/natives/jlang";
 import { usLocale } from "../jvm/natives/jutil";
 import { jarray } from "../jvm/abi";
 import { JInputStream } from "../jvm/natives/jio";
@@ -301,11 +301,14 @@ rt.register({
   },
 });
 
+defineException("android/content/res/Resources$NotFoundException", "java/lang/RuntimeException");
+
 // TypedArray java class
 rt.register({
   name: "android/content/res/TypedArray", ctor: JTypedArray,
   methods: {
     "length()I": function (this: JTypedArray) { return this.attrIds.length; },
+    "getResources()Landroid/content/res/Resources;": function (this: JTypedArray) { return this.res.jobj; },
     "getChangingConfigurations()I": () => 0,
     "hasValueOrEmpty(I)Z": function (this: JTypedArray, i: number) { return this.vals[i] ? 1 : 0; },
     "getIndexCount()I": function (this: JTypedArray) { return this.vals.filter((v) => v).length; },
@@ -391,40 +394,36 @@ rt.register({
 rt.register({
   name: "android/util/AttributeSet", ctor: class extends JObj {},
 });
+// The AttributeSet surface, shared by the inflater's attribute set and the XML parser that
+// doubles as one (AOSP's XmlBlock.Parser); `node` is the element the reader is positioned on.
+type HasNode = { node: XmlNode | null };
+const byIdx = (s: HasNode, i: number) => s.node?.attrs[i];
+const byName = (s: HasNode, name: string) => s.node?.attrs.find((x) => x.name === name);
+const attrInt = (a: XmlAttr | undefined, d: number) => a && a.type >= TV.INT_DEC ? a.data : d;
+const attrBool = (a: XmlAttr | undefined, d: number) => a && a.type === TV.BOOLEAN ? (a.data ? 1 : 0) : d;
+const attrFloat = (a: XmlAttr | undefined, d: number) => a?.type === TV.FLOAT ? normRV({ t: a.type, d: a.data }).d : d;
+const attrRef = (a: XmlAttr | undefined, d: number) => a && a.type === TV.REFERENCE ? a.data : d;
+const attrStr = (a: XmlAttr | undefined) => a ? (a.str ?? String(a.data)) : null;
+const attributeSetMethods: NativeSpec["methods"] = {
+  "getAttributeCount()I": function (this: HasNode) { return this.node?.attrs.length ?? 0; },
+  "getAttributeName(I)Ljava/lang/String;": function (this: HasNode, i: number) { return byIdx(this, i)?.name ?? ""; },
+  "getAttributeNameResource(I)I": function (this: HasNode, i: number) { return byIdx(this, i)?.resId ?? 0; },
+  "getAttributeValue(I)Ljava/lang/String;": function (this: HasNode, i: number) { return attrStr(byIdx(this, i)); },
+  "getAttributeValue(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": function (this: HasNode, _ns: string, n: string) { return attrStr(byName(this, n)); },
+  "getAttributeResourceValue(II)I": function (this: HasNode, i: number, d: number) { return attrRef(byIdx(this, i), d); },
+  "getAttributeResourceValue(Ljava/lang/String;Ljava/lang/String;I)I": function (this: HasNode, _ns: string, n: string, d: number) { return attrRef(byName(this, n), d); },
+  "getAttributeIntValue(II)I": function (this: HasNode, i: number, d: number) { return attrInt(byIdx(this, i), d); },
+  "getAttributeIntValue(Ljava/lang/String;Ljava/lang/String;I)I": function (this: HasNode, _ns: string, n: string, d: number) { return attrInt(byName(this, n), d); },
+  "getAttributeUnsignedIntValue(II)I": function (this: HasNode, i: number, d: number) { return attrInt(byIdx(this, i), d); },
+  "getAttributeBooleanValue(IZ)Z": function (this: HasNode, i: number, d: number) { return attrBool(byIdx(this, i), d); },
+  "getAttributeBooleanValue(Ljava/lang/String;Ljava/lang/String;Z)Z": function (this: HasNode, _ns: string, n: string, d: number) { return attrBool(byName(this, n), d); },
+  "getAttributeFloatValue(IF)F": function (this: HasNode, i: number, d: number) { return attrFloat(byIdx(this, i), d); },
+  "getAttributeFloatValue(Ljava/lang/String;Ljava/lang/String;F)F": function (this: HasNode, _ns: string, n: string, d: number) { return attrFloat(byName(this, n), d); },
+};
 rt.register({
   name: "webdroid/AttrSet", ctor: JAttrSet, ifaces: ["android/util/AttributeSet"],
   methods: {
-    "getAttributeCount()I": function (this: JAttrSet) { return this.node?.attrs.length ?? 0; },
-    "getAttributeName(I)Ljava/lang/String;": function (this: JAttrSet, i: number) { return this.node?.attrs[i]?.name ?? ""; },
-    "getAttributeValue(I)Ljava/lang/String;": function (this: JAttrSet, i: number) {
-      const a = this.node?.attrs[i];
-      return a ? (a.str ?? String(a.data)) : null;
-    },
-    "getAttributeValue(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": function (this: JAttrSet, ns: string, name: string) {
-      const a = this.node?.attrs.find((x) => x.name === name);
-      return a ? (a.str ?? String(a.data)) : null;
-    },
-    "getAttributeNameResource(I)I": function (this: JAttrSet, i: number) { return this.node?.attrs[i]?.resId ?? 0; },
-    "getAttributeResourceValue(Ljava/lang/String;Ljava/lang/String;I)I": function (this: JAttrSet, ns: string, name: string, d: number) {
-      const a = this.node?.attrs.find((x) => x.name === name);
-      return a && a.type === TV.REFERENCE ? a.data : d;
-    },
-    "getAttributeResourceValue(II)I": function (this: JAttrSet, i: number, d: number) {
-      const a = this.node?.attrs[i];
-      return a && a.type === TV.REFERENCE ? a.data : d;
-    },
-    "getAttributeIntValue(Ljava/lang/String;Ljava/lang/String;I)I": function (this: JAttrSet, ns: string, name: string, d: number) {
-      const a = this.node?.attrs.find((x) => x.name === name);
-      return a && a.type >= TV.INT_DEC ? a.data : d;
-    },
-    "getAttributeBooleanValue(Ljava/lang/String;Ljava/lang/String;Z)Z": function (this: JAttrSet, ns: string, name: string, d: number) {
-      const a = this.node?.attrs.find((x) => x.name === name);
-      return a && a.type === TV.BOOLEAN ? (a.data ? 1 : 0) : d;
-    },
-    "getAttributeFloatValue(Ljava/lang/String;Ljava/lang/String;F)F": function (this: JAttrSet, ns: string, name: string, d: number) {
-      const a = this.node?.attrs.find((x) => x.name === name);
-      return a?.type === TV.FLOAT ? normRV({ t: a.type, d: a.data }).d : d;
-    },
+    ...attributeSetMethods,
     "getIdAttribute()Ljava/lang/String;": () => null,
     "getClassAttribute()Ljava/lang/String;": function (this: JAttrSet) {
       const a = this.node?.attrs.find((x) => x.name === "class");
@@ -448,6 +447,7 @@ class JXmlParser extends JObj {
   pos = -1;
   res!: Resources;
   set = new JAttrSet();
+  get node(): XmlNode | null { return this.events[this.pos]?.node ?? null; }
 }
 function mkXmlParser(res: Resources, id: number): JXmlParser {
   const v = id ? res.value(id) : null;
@@ -502,32 +502,17 @@ rt.register({
       return this.events[this.pos].type;
     },
     "getEventType()I": function (this: JXmlParser) { return this.pos < 0 ? 0 : this.events[this.pos].type; },
+    "getNamespace()Ljava/lang/String;": () => "",
+    "require(ILjava/lang/String;Ljava/lang/String;)V": function (this: JXmlParser, type: number, _ns: string | null, name: string | null) {
+      const e = this.events[this.pos];
+      if (e?.type !== type || (name !== null && e.node?.name !== name)) {
+        throw rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "expected " + (name ?? "event " + type) + " at " + (e?.node?.name ?? "start"));
+      }
+    },
     "getName()Ljava/lang/String;": function (this: JXmlParser) { return this.events[this.pos]?.node?.name ?? null; },
     "getDepth()I": function (this: JXmlParser) { return this.events[this.pos]?.depth ?? 0; },
     "close()V": () => {},
-    "getAttributeCount()I": function (this: JXmlParser) { return this.events[this.pos]?.node?.attrs.length ?? 0; },
-    "getAttributeName(I)Ljava/lang/String;": function (this: JXmlParser, i: number) {
-      return this.events[this.pos]?.node?.attrs[i]?.name ?? "";
-    },
-    "getAttributeValue(I)Ljava/lang/String;": function (this: JXmlParser, i: number) {
-      const a = this.events[this.pos]?.node?.attrs[i];
-      return a ? (a.str ?? String(a.data)) : null;
-    },
-    "getAttributeValue(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": function (this: JXmlParser, ns: string, name: string) {
-      const a = this.events[this.pos]?.node?.attrs.find((x) => x.name === name);
-      return a ? (a.str ?? String(a.data)) : null;
-    },
-    "getAttributeNameResource(I)I": function (this: JXmlParser, i: number) {
-      return this.events[this.pos]?.node?.attrs[i]?.resId ?? 0;
-    },
-    "getAttributeResourceValue(Ljava/lang/String;Ljava/lang/String;I)I": function (this: JXmlParser, ns: string, name: string, d: number) {
-      const a = this.events[this.pos]?.node?.attrs.find((x) => x.name === name);
-      return a && a.type === TV.REFERENCE ? a.data : d;
-    },
-    "getAttributeBooleanValue(Ljava/lang/String;Ljava/lang/String;Z)Z": function (this: JXmlParser, ns: string, name: string, d: number) {
-      const a = this.events[this.pos]?.node?.attrs.find((x) => x.name === name);
-      return a && a.type === TV.BOOLEAN ? (a.data ? 1 : 0) : d;
-    },
+    ...attributeSetMethods,
     "getAttributeIntValue(Ljava/lang/String;Ljava/lang/String;I)I": function (this: JXmlParser, ns: string, name: string, d: number) {
       const a = this.events[this.pos]?.node?.attrs.find((x) => x.name === name);
       return a && a.type >= TV.INT_DEC ? a.data : d;
