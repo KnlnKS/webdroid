@@ -44,9 +44,11 @@ Goal: run FitNotes.apk → mihon → flappybird → Among Us.xapk fully client-s
 
 ## Status
 Scores are `bun run e2e`'s content-diff means; the current ones live in
-`tests/e2e/report/report.json` (last full run: fitnotes 42.6%, mihon-onboarding 47.6%,
-mihon-app 91.7%, every step rendered, nothing wedged). A lower number is better; a rising one
-is not automatically a regression (see "Harness notes").
+`tests/e2e/report/report.json` (last full run: fitnotes 39.5%, mihon-onboarding 48.7%,
+mihon-app 90.6%, every step rendered, nothing wedged). A lower number is better; a rising one
+is not automatically a regression (see "Harness notes"). The smoke flows (no goldens) —
+flappybird, harmonic, calculatorm, lichess, doodlejump — all render every step; only
+flappybird's optional `DexClassLoader` and harmonic's `WindowExtensionsProvider` stay missing.
 - [x] recon, scaffolding; DEX parser + AXML + ARSC (+compact entries, signed values!);
       compiler + runtime core + java.* natives (all 3 APKs compile clean, `bun run smoke <apk>`).
 - [x] FitNotes: boots and is interactive through its full core loop, matching real screenshots:
@@ -84,6 +86,9 @@ is not automatically a regression (see "Harness notes").
   ActivityLifecycleCallbacks (Pre/plain/Post) so androidx ReportFragment drives Lifecycle,
   recreate() as a real relaunch
 - java.net.Socket over the /tcp relay; SSLSocketFactory re-dials with TLS at the relay
+- ARM32 native tier (`src/native/`): memory, ELF loader, ARM+Thumb block compiler, libc/stdio/
+  pthread/zlib, JNI, GLES1/EGL over WebGL, AudioTrack over Web Audio — doodlejump plays at
+  ~690M emulated instr/s, and lichess/flappybird load their .so honestly
 
 ## VM and framework lessons (do not regress)
 - **Main-looper serialization** (android/mainloop.ts onMain): ALL main-thread
@@ -767,3 +772,48 @@ Generic gaps this uncovered, none Flutter-specific:
   `ApplicationInfo.split*`/`sharedLibraryFiles` (null, as for a plain base.apk), and the
   default uncaught handler now prints the `Caused by` chain (AOSP's does; it is what named the
   real fault above).
+
+## Text metrics: ascent/descent are the font's, line boxes are includeFontPadding's
+The device font's vertical metrics are now AOSP's Roboto hhea values (1900/-500 per em),
+applied as `ascentOverride`/`descentOverride` on the loaded faces (`graphics.SYSTEM_FONT`), so
+`Paint.ascent/descent` match a real device instead of reporting the OS/2 win metrics the
+browser hands back. That alone made every text block one padding short, because AOSP's
+TextView and Layout default to `includeFontPadding=true`: the FIRST line's box starts at the
+font's `top` and the LAST one's ends at its `bottom`, while the space between lines stays
+ascent..descent. `JTextView.topPad/bottomPad/textHeight` and `JLayout.padTop/padBottom` are
+that rule; `setIncludeFontPadding` and the XML attr turn it off.
+
+Compose asks for its typography line height with a **`LineHeightSpan` on the text**, which the
+StaticLayout builder was throwing away when it flattened the CharSequence to a string. The
+layout now keeps the source (`JLayout.src`) and hands each line's `FontMetricsInt` to the spans
+covering it (`applyLineHeightSpans`), laying the line out with what they wrote back — AOSP's
+own mechanism, so it serves any app that sets a line height, not just Compose. Mihon's body
+text went from a 37px pitch to the 40px (20sp) its typography asks for.
+
+## Native tier: a self-branching block runs its loop inside the block
+A block whose branch targets its own start used to return itself to the run loop, which meant
+spilling every live register to the register file and re-entering through a megamorphic call
+per iteration. `flags.selfLoop` wraps such a block in `for(;;)` and turns the back edge into a
+`continue`, so the registers stay in JS locals. An iteration cap returns to the run loop often
+enough for the slice budget, and the loop drops out if its own code page was invalidated (a
+store into it took mem's slow path). Byte-copy microbenchmark 2.3G → 5.1G instr/s;
+doodlejump's 10.9B emulated instructions 626M → 694M instr/s.
+
+`wd.native.profileReset(n)` also sets the slice budget, so the slice-boundary profiler samples
+finely enough to name the hot pcs (`wd.native.profile()`, `wd.native.src(pc)` — set the low bit
+for a Thumb block, or you disassemble Thumb code as ARM and see phantom faults).
+
+## Generality: what a device without the thing reports
+Fixes found by booting an app with no flow of its own (Resy: Facebook/Firebase/Koin/joda), all
+of them things any APK can hit:
+- **An Activity implements ComponentCallbacks2, KeyEvent.Callback and OnCreateContextMenuListener**
+  in AOSP; a library casting an activity to one of them died on a ClassCastException.
+- **An unmodelled system service is null**, not a stand-in Binder — a stand-in only moves the
+  failure to the caller's cast, while null is what a device without that service returns.
+- **`<meta-data android:value="@string/x">` is a string**, not the id: PackageParser resolves it
+  through the app's resources, and SDKs that read an app id out of the manifest depend on it.
+- PackageInfo carries the manifest's own version/activities, `getLaunchIntentForPackage` finds
+  the LAUNCHER activity, `createPackageContext` throws NameNotFoundException for anything but
+  this package (callers use it to discover an optional dependency is absent).
+- `android.R.<type>` now carries the framework's real ids, straight off framework-res.json.
+- A boxed Long put into a JSONObject was stored as a bigint, which `JSON.stringify` refuses.
