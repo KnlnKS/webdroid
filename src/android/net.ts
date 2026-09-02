@@ -3,7 +3,7 @@
 // the network going away.
 
 import { rt, JObj } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, curThread } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
 
 const netUp = async (): Promise<number> =>
@@ -95,5 +95,31 @@ rt.register({
     "getType()I": () => 1,
     "isAvailable()Z": () => 1,
     "isRoaming()Z": () => 0,
+  },
+});
+
+// TrafficStats: per-thread socket tagging for the kernel's accounting. Bytes are counted per
+// tag nowhere here, so the tag is kept per thread and the totals answer UNSUPPORTED (-1).
+const threadTags = new WeakMap<object, number>();
+rt.register({
+  name: "android/net/TrafficStats", ctor: class extends JObj {},
+  statics: { UNSUPPORTED: -1 },
+  methods: {
+    "static setThreadStatsTag(I)V": (tag: number) => { threadTags.set(curThread, tag); },
+    "static getThreadStatsTag()I": () => threadTags.get(curThread) ?? -1,
+    "static clearThreadStatsTag()V": () => { threadTags.set(curThread, -1); },
+    "static getAndSetThreadStatsTag(I)I": (tag: number) => { const t = curThread; const old = threadTags.get(t) ?? -1; threadTags.set(t, tag); return old; },
+    "static tagSocket(Ljava/net/Socket;)V": () => {},
+    "static untagSocket(Ljava/net/Socket;)V": () => {},
+    "static tagDatagramSocket(Ljava/net/DatagramSocket;)V": () => {},
+    "static untagDatagramSocket(Ljava/net/DatagramSocket;)V": () => {},
+    "static incrementOperationCount(I)V": () => {},
+    "static incrementOperationCount(II)V": () => {},
+    "static getTotalRxBytes()J": () => -1n,
+    "static getTotalTxBytes()J": () => -1n,
+    "static getMobileRxBytes()J": () => -1n,
+    "static getMobileTxBytes()J": () => -1n,
+    "static getUidRxBytes(I)J": () => -1n,
+    "static getUidTxBytes(I)J": () => -1n,
   },
 });
