@@ -195,6 +195,17 @@ export class Runtime {
   jni = new Map<string, (...a: never[]) => unknown>();
   registerJni(cls: string, sig: string, fn: (...a: never[]) => unknown) { this.jni.set(cls + "|" + sig, fn); }
   jniFn(cls: string, sig: string): ((...a: never[]) => unknown) | null { return this.jni.get(cls + "|" + sig) ?? null; }
+  /** library names (System.loadLibrary spelling) whose natives a TS shim provides */
+  nativeLibs = new Set<string>();
+  claimNativeLib(name: string) { this.nativeLibs.add(name); }
+  /** .so files the app tried to load that only exist as machine code: file → abi */
+  nativeRequired = new Map<string, string>();
+  onNativeRequired: (lib: string, abi: string) => void = () => {};
+  /** a native method nothing registered — what calling it throws */
+  ulink(cls: string, name: string, desc: string): Error {
+    this.noteMissing(cls + "." + name + desc + " [native]");
+    return this.mkThrowable("java/lang/UnsatisfiedLinkError", "No implementation found for " + cls.replace(/\//g, ".") + "." + name + desc);
+  }
 
   noteMissing(what: string) {
     if (!this.missing.has(what)) {

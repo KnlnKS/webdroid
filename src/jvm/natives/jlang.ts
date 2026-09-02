@@ -219,14 +219,14 @@ rt.register({
 });
 
 class JClassLoader extends JObj {}
+const loadClass = (n: string) => (JClass as any).$i.ctor[mangleMethod("forName", "(Ljava/lang/String;)Ljava/lang/Class;")](n);
 rt.register({
   name: "java/lang/ClassLoader",
   ctor: JClassLoader,
   methods: {
     "<init>()V": function () {},
-    "loadClass(Ljava/lang/String;)Ljava/lang/Class;": function (n: string) {
-      return (JClass as any).$i.ctor[mangleMethod("forName", "(Ljava/lang/String;)Ljava/lang/Class;")](n);
-    },
+    "loadClass(Ljava/lang/String;)Ljava/lang/Class;": loadClass,
+    "loadClass(Ljava/lang/String;Z)Ljava/lang/Class;": loadClass,
     "getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;": (path: string) => classpathStream(path.replace(/^\//, "")),
   },
 });
@@ -1001,6 +1001,19 @@ function arraycopy(src: any, sp: number, dst: any, dp: number, len: number) {
   }
 }
 const loadedLibs = new Set<string>();
+const ABIS = ["arm64-v8a", "armeabi-v7a", "armeabi", "x86_64", "x86"];
+const E_MACHINE: Record<number, string> = { 0xb7: "arm64-v8a", 0x28: "armeabi", 0x3e: "x86_64", 0x03: "x86" };
+/** dlopen: a lib whose natives a TS shim claims loads; anything else is machine code we cannot run, said so */
+function dlopen(lib: string, abi: () => string | null) {
+  if (rt.nativeLibs.has(lib.replace(/^lib|\.so$/g, ""))) {
+    if (!loadedLibs.has(lib)) { loadedLibs.add(lib); console.log("[webdroid] loadLibrary", lib); }
+    return;
+  }
+  const a = abi();
+  if (a) { rt.nativeRequired.set(lib, a); rt.onNativeRequired(lib, a); }
+  throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${lib}" ${a ? "is " + a + " machine code" : "not found"}`);
+}
+const loadLibrary = (n: string) => dlopen(`lib${n}.so`, () => ABIS.find((a) => rt.classpath[`lib/${a}/lib${n}.so`]) ?? null);
 const sysProps: Record<string, string> = {
   "java.version": "0", "os.name": "Linux", "line.separator": "\n",
   "java.vm.name": "webdroid", "file.separator": "/", "path.separator": ":",
@@ -1020,10 +1033,16 @@ rt.register({
     "static getenv(Ljava/lang/String;)Ljava/lang/String;": () => null,
     "static gc()V": () => {},
     "static exit(I)V": (c: number) => { console.warn("System.exit", c); },
-    "static loadLibrary(Ljava/lang/String;)V": (n: string) => {
-      if (!loadedLibs.has(n)) { loadedLibs.add(n); console.log("[webdroid] loadLibrary", n); }
+    "static loadLibrary(Ljava/lang/String;)V": loadLibrary,
+    "static load(Ljava/lang/String;)V": async (path: string) => {
+      // jio imports this module, so its vfs is reached lazily rather than through a static cycle
+      const { vfs } = await import("./jio");
+      dlopen(path.slice(path.lastIndexOf("/") + 1), () => {
+        const b = vfs.read(path);
+        return b ? E_MACHINE[b[18] | (b[19] << 8)] ?? "unknown" : null;
+      });
     },
-    "static load(Ljava/lang/String;)V": () => {},
+    "static mapLibraryName(Ljava/lang/String;)Ljava/lang/String;": (n: string) => `lib${n}.so`,
     "static lineSeparator()Ljava/lang/String;": () => "\n",
   },
 });
@@ -1039,7 +1058,7 @@ rt.register({
     "totalMemory()J": () => 268435456n,
     "freeMemory()J": () => 134217728n,
     "gc()V": () => {},
-    "loadLibrary0(Ljava/lang/Class;Ljava/lang/String;)V": () => {},
+    "loadLibrary0(Ljava/lang/Class;Ljava/lang/String;)V": (_c: unknown, n: string) => loadLibrary(n),
   },
 });
 
