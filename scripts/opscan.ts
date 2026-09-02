@@ -1,15 +1,11 @@
 // Walk every method body in the given APKs; histogram opcodes; validate the walker.
-import { unzipSync } from "fflate";
-import { DexFile } from "../src/jvm/dex";
+import { openDexes } from "./lib";
 import { OPS, insnLen } from "../src/jvm/opcodes";
 
 const hist = new Map<number, number>();
 for (const path of process.argv.slice(2)) {
-  const zip = unzipSync(new Uint8Array(await Bun.file(path).arrayBuffer()), {
-    filter: (f) => /classes\d*\.dex$/.test(f.name),
-  });
-  for (const [name, bytes] of Object.entries(zip)) {
-    const dex = new DexFile(bytes, name);
+  for (const dex of await openDexes(path)) {
+    const name = dex.name;
     let bodies = 0, units = 0;
     for (let i = 0; i < dex.classDefCount; i++) {
       const def = dex.classDef(i);

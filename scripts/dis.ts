@@ -1,15 +1,11 @@
 // Disassemble a method: bun scripts/dis.ts <apk> <class> [methodName]
-import { unzipSync } from "fflate";
-import { DexFile } from "../src/jvm/dex";
+import { openDexes } from "./lib";
 import { OPS, insnLen, FMT_LEN } from "../src/jvm/opcodes";
 import { descToName } from "../src/jvm/abi";
 
 const [apk, clsName, methodName] = process.argv.slice(2);
-const zip = unzipSync(new Uint8Array(await Bun.file(apk).arrayBuffer()), {
-  filter: (f) => /classes\d*\.dex$/.test(f.name),
-});
-for (const [dname, bytes] of Object.entries(zip)) {
-  const dex = new DexFile(bytes, dname);
+for (const dex of await openDexes(apk)) {
+  const dname = dex.name;
   for (let i = 0; i < dex.classDefCount; i++) {
     if (descToName(dex.type(dex.classDef2Type(i))) !== clsName) continue;
     const def = dex.classDef(i);

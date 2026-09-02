@@ -1,22 +1,18 @@
 // List every framework method ref in the APK that our natives don't implement.
 // bun scripts/audit.ts <apk> [prefix-filter]
-import { unzipSync } from "fflate";
-import { DexFile } from "../src/jvm/dex";
+import { openDexes } from "./lib";
 import { rt } from "../src/jvm/runtime";
 import "../src/natives";
 import { mangleMethod, descToName } from "../src/jvm/abi";
 
 const [apk, filter] = process.argv.slice(2);
-const zip = unzipSync(new Uint8Array(await Bun.file(apk).arrayBuffer()), {
-  filter: (f) => /classes\d*\.dex$/.test(f.name),
-});
+const dexes = await openDexes(apk);
 for (const name of [...rt.natives.keys()]) {
   try { rt.link(name); } catch { /* */ }
 }
 const missing = new Map<string, number>();
 const missingClasses = new Map<string, number>();
-for (const [dn, b] of Object.entries(zip)) {
-  const dex = new DexFile(b, dn);
+for (const dex of dexes) {
   rt.loadDex(dex);
   for (let i = 0; ; i++) {
     let m;

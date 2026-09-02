@@ -1,6 +1,5 @@
 // Mass-compile every class in an APK's dex files: catches codegen syntax errors broadly.
-import { unzipSync } from "fflate";
-import { DexFile } from "../src/jvm/dex";
+import { loadDexes } from "./lib";
 import { rt } from "../src/jvm/runtime";
 import { perf } from "../src/perf";
 import { setLazyMethods } from "../src/jvm/compiler";
@@ -11,10 +10,7 @@ import { descToName } from "../src/jvm/abi";
 setLazyMethods(false);
 
 const path = process.argv[2] ?? "apks/FitNotes.apk";
-const zip = unzipSync(new Uint8Array(await Bun.file(path).arrayBuffer()), {
-  filter: (f) => /classes\d*\.dex$/.test(f.name),
-});
-for (const [name, bytes] of Object.entries(zip)) rt.loadDex(new DexFile(bytes, name));
+await loadDexes(path);
 
 let ok = 0, fail = 0;
 const t0 = performance.now();
