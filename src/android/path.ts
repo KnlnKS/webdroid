@@ -399,3 +399,86 @@ rt.register({
   },
 });
 mkEnumSet("android/graphics/Path$Direction", ["CW", "CCW"]);
+
+// ── androidx.graphics.path (Compose/Material3 below API 34): its JNI walks Skia's verb and
+// point arrays. Ours walks the op list, expanding the compound ops into the verbs Skia would
+// have stored — arcs as cubics rather than conics, so the conic-evaluation mode and tolerance
+// have nothing to convert and Conic never appears.
+const MOVE = 0, LINE = 1, QUAD = 2, CUBIC = 4, CLOSE = 5, DONE = 6;
+/** [verb, ...floats]: Move its point; Line/Quad/Cubic the current point then 1/2/3 points; Close none */
+type Verb = number[];
+function pathVerbs(ops: PathOp[]): Verb[] {
+  const out: Verb[] = [];
+  let cx = 0, cy = 0, sx = 0, sy = 0, open = false;
+  const move = (x: number, y: number) => { out.push([MOVE, x, y]); cx = sx = x; cy = sy = y; open = true; };
+  // Skia injects a moveTo at the current point before a segment that has no contour
+  const start = () => { if (!open) move(cx, cy); };
+  const line = (x: number, y: number) => { start(); out.push([LINE, cx, cy, x, y]); cx = x; cy = y; };
+  const cubic = (a: number, b: number, c: number, d: number, e: number, f: number) => {
+    start(); out.push([CUBIC, cx, cy, a, b, c, d, e, f]); cx = e; cy = f;
+  };
+  const close = () => { if (open) { out.push([CLOSE]); open = false; } cx = sx; cy = sy; };
+  const arc = (ax: number, ay: number, rx: number, ry: number, a0: number, a1: number) => {
+    const n = Math.max(1, Math.ceil(Math.abs(a1 - a0) / (Math.PI / 2) - 1e-6));
+    const d = (a1 - a0) / n, k = 4 / 3 * Math.tan(d / 4);
+    for (let i = 0; i < n; i++) {
+      const t0 = a0 + d * i, t1 = t0 + d;
+      const c0 = Math.cos(t0), s0 = Math.sin(t0), c1 = Math.cos(t1), s1 = Math.sin(t1);
+      cubic(ax + rx * (c0 - k * s0), ay + ry * (s0 + k * c0), ax + rx * (c1 + k * s1), ay + ry * (s1 - k * c1), ax + rx * c1, ay + ry * s1);
+    }
+  };
+  const P = Math.PI;
+  for (const op of ops) {
+    const [k, a, b, c, d, e, f] = op as [string, ...number[]];
+    switch (k) {
+      case "m": move(a, b); break;
+      case "l": line(a, b); break;
+      case "q": start(); out.push([QUAD, cx, cy, a, b, c, d]); cx = c; cy = d; break;
+      case "c": cubic(a, b, c, d, e, f); break;
+      case "z": close(); break;
+      case "rect": move(a, b); line(c, b); line(c, d); line(a, d); close(); break;
+      case "rrect": {
+        const q = rrRadii(op);
+        move(a + q[0], b);
+        line(c - q[2], b); arc(c - q[2], b + q[3], q[2], q[3], -P / 2, 0);
+        line(c, d - q[5]); arc(c - q[4], d - q[5], q[4], q[5], 0, P / 2);
+        line(a + q[6], d); arc(a + q[6], d - q[7], q[6], q[7], P / 2, P);
+        line(a, b + q[1]); arc(a + q[0], b + q[1], q[0], q[1], P, P * 1.5);
+        close();
+        break;
+      }
+      case "oval": move(c, (b + d) / 2); arc((a + c) / 2, (b + d) / 2, (c - a) / 2, (d - b) / 2, 0, P * 2); close(); break;
+      case "circle": move(a + c, b); arc(a, b, c, c, 0, P * 2); close(); break;
+      case "arc": {
+        const mx = (a + c) / 2, my = (b + d) / 2, rx = (c - a) / 2, ry = (d - b) / 2, a0 = e * P / 180;
+        const px = mx + rx * Math.cos(a0), py = my + ry * Math.sin(a0);
+        if (!open || op[7]) move(px, py); else line(px, py);
+        arc(mx, my, rx, ry, a0, a0 + f * P / 180);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+const pathIters = new Map<bigint, { segs: Verb[]; i: number }>();
+let nextPathIter = 1n;
+const pjni = (sig: string, fn: (...a: never[]) => unknown) => rt.registerJni("androidx/graphics/path/PathIteratorPreApi34Impl", sig, fn);
+const iterSize = (h: bigint) => pathIters.get(h)?.segs.length ?? 0;
+pjni("createInternalPathIterator(Landroid/graphics/Path;IF)J", (p: JPath) => {
+  pathIters.set(nextPathIter, { segs: pathVerbs(p.ops), i: 0 });
+  return nextPathIter++;
+});
+pjni("destroyInternalPathIterator(J)V", (h: bigint) => { pathIters.delete(h); });
+pjni("internalPathIteratorHasNext(J)Z", (h: bigint) => { const it = pathIters.get(h); return it && it.i < it.segs.length ? 1 : 0; });
+pjni("internalPathIteratorPeek(J)I", (h: bigint) => { const it = pathIters.get(h); return it?.segs[it.i]?.[0] ?? DONE; });
+pjni("internalPathIteratorNext(J[FI)I", (h: bigint, pts: Float32Array, off: number) => {
+  const it = pathIters.get(h), s = it?.segs[it.i];
+  if (!it || !s) return DONE;
+  it.i++;
+  for (let i = 1; i < s.length; i++) pts[off + i - 1] = s[i];
+  return s[0];
+});
+pjni("internalPathIteratorSize(J)I", iterSize);
+pjni("internalPathIteratorRawSize(J)I", iterSize);
+rt.claimNativeLib("androidx.graphics.path");
