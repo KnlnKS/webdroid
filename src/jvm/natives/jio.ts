@@ -1,7 +1,7 @@
 // java.io.* natives + an in-memory VFS. Nothing persists it; vfs.onWrite is the hook for a host that wants to.
 
 import { rt, JObj, type NativeSpec } from "../runtime";
-import { mangleStaticField, mangleMethod, charsToString } from "../abi";
+import { mangleStaticField, mangleMethod, charsToString, jarray } from "../abi";
 import { vcall, stringHash, mkEnumSet } from "./jlang";
 
 // marker interface — apps implement this to opt into custom serialization; writeExternal/
@@ -56,6 +56,10 @@ const dirs = new Set<string>(["/data", "/sdcard"]);
 // ── File
 export class JFile extends JObj { path = ""; }
 export function mkFile(path: string): JFile { const f = new JFile(); f.path = vfs.norm(path); return f; }
+const listFiles = (d: JFile) => jarray(vfs.list(d.path).map((n) => mkFile(d.path + "/" + n)), "Ljava/io/File;");
+// apps implement these to pick over a directory listing (File.listFiles(filter))
+rt.register({ name: "java/io/FilenameFilter", ctor: class extends JObj {} });
+rt.register({ name: "java/io/FileFilter", ctor: class extends JObj {} });
 // Default dir matches System.getProperty("java.io.tmpdir"). Creation cannot fail in the in-memory vfs.
 function createTempFile(prefix: string, suffix: string | null, dir: JFile | null): JFile {
   if (prefix.length < 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Prefix string too short");
@@ -112,12 +116,20 @@ rt.register({
     "list()[Ljava/lang/String;": function (this: JFile) {
       const a = vfs.list(this.path); (a as any).$t = "Ljava/lang/String;"; return a;
     },
-    "listFiles()[Ljava/io/File;": function (this: JFile) {
-      const a = vfs.list(this.path).map((n) => mkFile(this.path + "/" + n));
-      (a as any).$t = "Ljava/io/File;"; return a;
+    "listFiles()[Ljava/io/File;": function (this: JFile) { return listFiles(this); },
+    "listFiles(Ljava/io/FilenameFilter;)[Ljava/io/File;": async function (this: JFile, f: unknown) {
+      const out: JFile[] = [];
+      for (const c of listFiles(this)) if (f === null || (await vcall(f, "accept", "(Ljava/io/File;Ljava/lang/String;)Z", this, c.path.slice(this.path.length + 1)))) out.push(c);
+      return jarray(out, "Ljava/io/File;");
+    },
+    "listFiles(Ljava/io/FileFilter;)[Ljava/io/File;": async function (this: JFile, f: unknown) {
+      const out: JFile[] = [];
+      for (const c of listFiles(this)) if (f === null || (await vcall(f, "accept", "(Ljava/io/File;)Z", c))) out.push(c);
+      return jarray(out, "Ljava/io/File;");
     },
     "canRead()Z": () => 1, "canWrite()Z": () => 1, "canExecute()Z": () => 1,
     "setReadable(Z)Z": () => 1, "setWritable(Z)Z": () => 1, "setExecutable(Z)Z": () => 1,
+    "setReadable(ZZ)Z": () => 1, "setWritable(ZZ)Z": () => 1, "setExecutable(ZZ)Z": () => 1,
     "toString()Ljava/lang/String;": function (this: JFile) { return this.path; },
     "equals(Ljava/lang/Object;)Z": function (this: JFile, o: unknown) { return o instanceof JFile && o.path === this.path ? 1 : 0; },
     "hashCode()I": function (this: JFile) { return stringHash(this.path) ^ 1234321; },
