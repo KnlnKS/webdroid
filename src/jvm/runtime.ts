@@ -39,6 +39,7 @@ export class ClassInfo {
   state = 0;                          // 0 linked, 1 initing, 2 inited
   initP: Promise<void> | null = null; // in-flight clinit (state 1): cross-chain waiters await it
   assumeReentrant = false;            // a wait on this clinit timed out once: stop waiting (same-chain cycle)
+  initThread: unknown = null;         // thread running the in-flight clinit (JLS recursive-request check)
   stub = false;                       // auto-stubbed unknown class (Class.forName must throw CNFE)
   waitingOn: ClassInfo | null = null; // class this one's clinit currently awaits (cycle detection)
   fieldTable = new Map<string, string>(); // own instance fields: name → mangled
@@ -91,9 +92,12 @@ export class Runtime {
     return e;
   };
   onMissing: (what: string) => void = () => {};
-  /** current-thread hooks (set by jlang) — compiled frames re-pin after awaits */
+  /** current-thread hooks (set by jlang): a compiled frame pins its thread after every await
+   *  (st) and releases it when it suspends (su), so a parked worker never leaves its identity
+   *  behind for the native main-thread drivers that resume next */
   th: () => unknown = () => null;
   st: (t: unknown) => void = () => {};
+  su: () => void = () => {};
   onUncaught: ((e: unknown) => void) | null = null;
   fuel = 100000;
 
@@ -358,7 +362,7 @@ export class Runtime {
           // healthy wait too, marking classes reentrant that never cycled (so later reads
           // stopped waiting for a clinit that really was in flight) and logging a cycle
           // warning per class per boot.
-          esc = setTimeout(() => { console.warn("[webdroid] clinit wait timeout (cycle?)", info.name); info.assumeReentrant = true; res(); },
+          esc = setTimeout(() => { console.warn("[webdroid] clinit wait timeout (cycle?)", info.name, "waited on by", from?.name); info.assumeReentrant = true; res(); },
                            this.clinitWaitMs);
         })])
       : info.initP!;
@@ -374,6 +378,12 @@ export class Runtime {
     this.ensureCompiled(info);
     if (info.state === 1) {
       if (!info.initP || info === from || info.assumeReentrant) return null; // sync-prefix / self / known-cycle reentrancy
+      // JLS 12.4.2 step 3: a request from the thread already initializing this class is
+      // recursive and completes at once with the statics as they are. The `from` tag only
+      // sees <clinit>-to-<clinit> edges; <clinit> → constructor → sget of its own class is the
+      // common shape (kotlinx's ChannelSegment reads BufferedChannelKt.SEGMENT_SIZE while
+      // BufferedChannelKt's <clinit> builds NULL_SEGMENT) and used to eat the escape timeout.
+      if (info.initThread === this.th()) return null;
       // clinit cycle (info's chain transitively waits on `from`) → JVM same-thread
       // semantics: proceed with partial statics instead of deadlocking
       for (let c = info.waitingOn; c; c = c.waitingOn) if (c === from) return null;
@@ -381,6 +391,7 @@ export class Runtime {
     }
     if (info.state !== 0) return null;
     info.state = 1;
+    info.initThread = this.th();
     info.initP = (async () => {
       try {
         if (info.superInfo && info.superInfo.state !== 2) await this.initClass(info.superInfo, info);
@@ -404,6 +415,7 @@ export class Runtime {
           // <clinit> must not re-run its super's (which would replace identity-compared
           // sentinels the super's callers already hold)
           const clinit = Object.hasOwn(info.ctor, "$clinit") ? info.ctor.$clinit : undefined;
+          this.st(info.initThread); // <clinit> runs on the initiating thread, whatever ran meanwhile
           if (clinit) await clinit.call(info.ctor);
         }
         info.state = 2;
@@ -413,6 +425,7 @@ export class Runtime {
         throw e;
       } finally {
         info.initP = null;
+        info.initThread = null;
         info.assumeReentrant = false;
       }
     })();
