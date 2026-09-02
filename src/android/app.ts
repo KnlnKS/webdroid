@@ -1975,6 +1975,12 @@ for (const [name, methods, statics] of [
     "vibrate(Landroid/os/VibrationEffect;)V": () => globalThis.navigator?.vibrate?.(30),
     "hasVibrator()Z": () => 1,
     "cancel()V": () => {},
+    // navigator.vibrate is a bare on/off motor: no amplitude, no composed primitives
+    "hasAmplitudeControl()Z": () => 0,
+    "areAllPrimitivesSupported([I)Z": () => 0,
+    "arePrimitivesSupported([I)[Z": (ids: Int32Array) => new Uint8Array(ids.length),
+    "areAllEffectsSupported([I)I": () => 2,
+    "areEffectsSupported([I)[I": (ids: Int32Array) => new Int32Array(ids.length).fill(2),
   }],
   ["android/media/AudioManager", {
     "getStreamVolume(I)I": () => 5,
