@@ -9,7 +9,7 @@ import { JCanvas, tfMedium } from "./graphics";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
 import { reportUncaught } from "./os";
-import { rvString, rvInt, rvFloat, rvDimen, JTheme } from "./res";
+import { rvString, rvInt, rvFloat, rvDimen, themeOf, JTheme } from "./res";
 import { TV } from "./axml";
 import { inflateLayout, getInflater } from "./inflate";
 import { csText } from "./text";
@@ -26,7 +26,7 @@ const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
 /** Dialog(Context, theme): the window theme layers the explicit style (else the context theme's
  *  dialogTheme) over the CONTEXT's theme — a ContextThemeWrapper's own, not the application's. */
 function dialogTheme(ctx: any, themeId: number): JTheme | null {
-  const base: JTheme | null = ctx?.ownTheme ?? ctx?.$host?.theme ?? null;
+  const base: JTheme | null = themeOf(ctx);
   if (!base) return null;
   let styleId = themeId;
   if (!styleId) {

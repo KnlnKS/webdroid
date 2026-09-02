@@ -7,7 +7,7 @@ import { vcall, javaFormat, newObj } from "../jvm/natives/jlang";
 import { newArrayList, mkIter, type JList } from "../jvm/natives/jutil";
 import { vfs, mkFile, JFile } from "../jvm/natives/jio";
 const privDir = (p: string): JFile => { vfs.mkdir(p); return mkFile(p); };
-import { type Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, rvColor, rvDimen, rvInt, rvString, resString } from "./res";
+import { type Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, rvColor, rvDimen, rvInt, rvString, resString, themeOf } from "./res";
 import { JResources, JAssetManager } from "./resnative";
 import { signatures, JActivityInfo } from "./pm";
 import { mkUri, type JUri } from "./net";
@@ -232,12 +232,14 @@ const contextMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "getResources()Landroid/content/res/Resources;": function (this: JContext) { return this.$host.jresources; },
   "getTheme()Landroid/content/res/Resources$Theme;": function (this: JContext) {
-    return (this as any).ownTheme ?? this.$host.theme;
+    return themeOf(this) ?? this.$host.theme;
   },
+  // AOSP layers the style over whatever theme this context already resolves to, so a
+  // ThemeOverlay on an already-themed context keeps everything underneath it
   "setTheme(I)V": function (this: JContext, id: number) {
     const t = new JTheme();
     t.res = this.$host.res;
-    t.styles = this.$host.theme.styles.slice();
+    t.styles = (themeOf(this) ?? this.$host.theme).styles.slice();
     t.apply(id);
     (this as any).ownTheme = t;
   },
@@ -875,6 +877,11 @@ rt.register({
     },
   },
 });
+/** The activity's own `android:theme`, or 0 when it just inherits the application's. */
+export function manifestActivityTheme(cls: string): number {
+  const node = manifestActivities.get(cls.replace(/\./g, "/"));
+  return (node && attr(node, "theme")?.data) ?? 0;
+}
 /** ActivityInfo for a dotted class name, read off that activity's own manifest node. */
 function mkActivityInfo(cls: string): JActivityInfo {
   const node = manifestActivities.get(cls.replace(/\./g, "/"));
@@ -1587,7 +1594,7 @@ export async function ensureDecor(act: JActivity) {
   if (act.window.decor) return;
   getInflater(act).privateFactory = act; // framework: the Activity is the private Factory2
   const host = act.$host;
-  const theme: JTheme = (act as any).ownTheme ?? host.theme;
+  const theme: JTheme = themeOf(act) ?? host.theme;
   const decor = new JFrameLayout();
   decor.ctx = act;
   decor.jres = host.res;

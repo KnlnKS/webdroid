@@ -6,11 +6,12 @@ import { perf } from "../perf";
 import { device } from "../shell/config";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, idHash } from "../jvm/natives/jlang";
-import { JCanvas, JRect, setInvalidateHook, JMatrix } from "./graphics";
+import { JCanvas, JRect, JPoint, setInvalidateHook, JMatrix } from "./graphics";
+import { csText } from "./text";
 import { JDrawable, ST, loadDrawableRV, JColorDrawable, loadDrawable, type JColorStateList, cslColor } from "./drawable";
 import { reportUncaught, mainHandler, type JDisplayMetrics } from "./os";
 import { onMain } from "./mainloop";
-import { type Resources, JTheme, JAttrSet, AID, obtainStyled, rvDimen, rvInt, rvString } from "./res";
+import { type Resources, JTheme, JAttrSet, AID, obtainStyled, rvDimen, rvInt, rvString, themeOf } from "./res";
 
 export { AID };
 
@@ -1068,7 +1069,7 @@ export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | n
     const host = (jctx as any).$host;
     if (host) {
       v.jres = host.res;
-      v.theme = host.theme;
+      v.theme = themeOf(jctx) ?? host.theme;
     }
   }
   await applyViewAttrs(v, set);

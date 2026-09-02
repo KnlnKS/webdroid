@@ -407,6 +407,18 @@ function colorFromSelector(res: Resources, resId: number, dflt: number): number 
   }
   return dflt;
 }
+/**
+ * The theme a Context resolves against: its own if setTheme/ContextThemeWrapper gave it one,
+ * else its base context's (AOSP's ContextWrapper delegates rather than jumping to the
+ * application), else the application's. Material wraps every widget's context in a
+ * ThemeOverlay, so a view that reads the application theme gets none of its own styling.
+ */
+export function themeOf(ctx: unknown): JTheme | null {
+  for (let c = ctx as { ownTheme?: JTheme; base?: unknown } | null | undefined; c; c = c.base as typeof c) {
+    if (c.ownTheme) return c.ownTheme;
+  }
+  return (ctx as { $host?: { theme?: JTheme } } | null)?.$host?.theme ?? null;
+}
 export function rvDimen(res: Resources, v: RV | null, dflt = 0): number {
   if (!v) return dflt;
   if (v.t === T_PX) return v.d;

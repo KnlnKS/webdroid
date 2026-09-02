@@ -9,7 +9,7 @@ import { Arsc } from "../android/arsc";
 import { parseAXML, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
 import { mkJResources } from "../android/resnative";
-import { setAppHost, setManifest, type AppHost, JIntent, ensureDecor, JActivity, JMenu, pushMenuToBar, JContext, fireActivityLifecycle, APPEARANCE_LIGHT_STATUS_BARS } from "../android/app";
+import { setAppHost, setManifest, type AppHost, JIntent, ensureDecor, JActivity, JMenu, pushMenuToBar, JContext, fireActivityLifecycle, manifestActivityTheme, APPEARANCE_LIGHT_STATUS_BARS } from "../android/app";
 import { reportUncaught, JBundle } from "../android/os";
 import { onMain, inMainJob } from "../android/mainloop";
 import {
@@ -188,6 +188,10 @@ async function launchActivity0(cls: string, intent: JIntent | null, relaunch?: R
   if (p) await p;
   const act: JActivity = new info.ctor();
   act.$host = host;
+  // AOSP applies the manifest's android:theme before onCreate, so an app's own setTheme layers
+  // on top of it rather than replacing it
+  const actTheme = manifestActivityTheme(cls);
+  if (actTheme) vcall(act, "setTheme", "(I)V", actTheme);
   act.lastNonConfig = relaunch?.nonConfig ?? null;
   const saved = relaunch?.state ?? null;
   try {

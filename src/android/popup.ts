@@ -10,7 +10,7 @@ import {
 } from "./view";
 import { JFrameLayout } from "./widget";
 import { JDrawable, loadDrawableRV } from "./drawable";
-import { AID, obtainStyled, rvDimen, rvInt, type Resources, type JTheme, type JAttrSet } from "./res";
+import { AID, obtainStyled, rvDimen, rvInt, themeOf, type Resources, type JTheme, type JAttrSet } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
 import { JCanvas, JRect, measureCtx } from "./graphics";
@@ -256,7 +256,7 @@ async function pwInit(this: JPopupWindow, c: any, set: JAttrSet | null, defStyle
   this.jctx = c;
   const host = c?.$host;
   if (!host) return;
-  const res: Resources = host.res, theme: JTheme = c.ownTheme ?? host.theme;
+  const res: Resources = host.res, theme: JTheme = themeOf(c) ?? host.theme;
   const ids = PW_ATTRS.map(AID);
   const ta = obtainStyled(res, theme, set, ids, defStyleAttr || AID("popupWindowStyle"), defStyleRes);
   if (ta.vals[0]) this.bg = await loadDrawableRV(res, ta.vals[0], theme);
@@ -286,7 +286,7 @@ async function pwShow(this: JPopupWindow, x: number, y: number) {
   d.popup = this;
   d.ctx = this.jctx;
   const host = this.jctx?.$host;
-  if (host) { d.jres = host.res; d.theme = this.jctx.ownTheme ?? host.theme; }
+  if (host) { d.jres = host.res; d.theme = themeOf(this.jctx) ?? host.theme; }
   d.background = this.bg;
   [d.padL, d.padT, d.padR, d.padB] = this.bgPad();
   const lp = new JFrameLP();
