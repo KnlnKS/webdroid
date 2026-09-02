@@ -10,6 +10,7 @@ import { vfs, mkFile, JFile } from "../jvm/natives/jio";
 const privDir = (p: string): JFile => { vfs.mkdir(p); return mkFile(p); };
 import { type Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, rvColor, rvDimen, rvInt, rvString, resString } from "./res";
 import { JResources, JAssetManager } from "./resnative";
+import { signatures, JActivityInfo } from "./pm";
 import { mkUri, type JUri } from "./net";
 import { JView, JViewGroup, AID, requestLayout, invalidate, specSize, findById, attachView, detachView, dispatchConfigurationChanged } from "./view";
 import { JFrameLayout, JLinearLayout } from "./widget";
@@ -64,7 +65,6 @@ const displayListeners = new Set<unknown>();
 /** the one loader Class.getClassLoader() hands out, so `ctx.getClassLoader() == X.class.getClassLoader()` holds */
 let loader: unknown;
 const bootLoader = () => loader ??= rt.link("java/lang/Class").ctor.prototype[mangleMethod("getClassLoader", "()Ljava/lang/ClassLoader;")]();
-const signatures = () => jarray([new (rt.link("android/content/pm/Signature").ctor)()], "Landroid/content/pm/Signature;");
 // Context.XXX_SERVICE name → the manager class; getSystemService(Class) walks it backwards.
 const SERVICE_CLASS: Record<string, string> = {
   window: "android/view/WindowManagerImpl",
@@ -877,24 +877,6 @@ rt.register({
       return i;
     },
   },
-});
-rt.register({
-  name: "android/content/pm/PackageManager$NameNotFoundException",
-  ctor: (() => { const p = rt.link("java/lang/Exception").ctor; return class extends p {}; })(),
-  sup: "java/lang/Exception",
-});
-class JActivityInfo extends JObj {
-  theme = 0; name = ""; packageName = ""; configChanges = 0;
-  parentActivityName: string | null = null; metaData: JBundle | null = null;
-}
-rt.register({
-  name: "android/content/pm/ActivityInfo", ctor: JActivityInfo, ifaces: ["android/os/Parcelable"],
-  fields: {
-    theme: "theme", name: "name", packageName: "packageName", configChanges: "configChanges",
-    parentActivityName: "parentActivityName", metaData: "metaData",
-  },
-  statics: { SCREEN_ORIENTATION_PORTRAIT: 1, SCREEN_ORIENTATION_UNSPECIFIED: -1 },
-  methods: { "<init>()V": function () {} },
 });
 /** ActivityInfo for a dotted class name, read off that activity's own manifest node. */
 function mkActivityInfo(cls: string): JActivityInfo {
@@ -2113,9 +2095,6 @@ for (const [name, methods, statics] of [
     CALL_STATE_IDLE: 0, CALL_STATE_RINGING: 1, CALL_STATE_OFFHOOK: 2,
     DATA_DISCONNECTED: 0,
   }],
-  ["android/content/pm/PackageManager$PackageInfoFlags", {
-    "static of(J)Landroid/content/pm/PackageManager$PackageInfoFlags;": () => new (rt.link("android/content/pm/PackageManager$PackageInfoFlags").ctor)(),
-  }],
   ["android/os/ext/SdkExtensions", {
     "static getExtensionVersion(I)I": () => 0,
   }],
@@ -2298,37 +2277,6 @@ rt.register({
   },
 });
 rt.register({ name: "android/window/OnBackInvokedCallback", ctor: class extends JObj {} });
-rt.register({
-  name: "android/content/pm/ResolveInfo", ctor: class extends JObj {
-    activityInfo = null; serviceInfo = null; providerInfo = null; filter = null; priority = 0; preferredOrder = 0;
-    match = 0; specificIndex = -1; isDefault = 0; labelRes = 0; nonLocalizedLabel = null; icon = 0; resolvePackageName = null;
-  },
-  fields: { activityInfo: "activityInfo", serviceInfo: "serviceInfo", providerInfo: "providerInfo", filter: "filter",
-    priority: "priority", preferredOrder: "preferredOrder", match: "match", specificIndex: "specificIndex", isDefault: "isDefault",
-    labelRes: "labelRes", nonLocalizedLabel: "nonLocalizedLabel", icon: "icon", resolvePackageName: "resolvePackageName" },
-  methods: {
-    "<init>()V": function () {},
-    "loadLabel(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;": async function (this: any, pm: unknown) {
-      if (this.nonLocalizedLabel !== null) return this.nonLocalizedLabel;
-      const ci = this.activityInfo ?? this.serviceInfo ?? this.providerInfo;
-      return ci ? vcall(ci, "loadLabel", "(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;", pm) : "";
-    },
-    "loadIcon(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;": async function (this: any, pm: unknown) {
-      const ci = this.activityInfo ?? this.serviceInfo ?? this.providerInfo;
-      return ci ? vcall(ci, "loadIcon", "(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;", pm) : null;
-    },
-  },
-});
-rt.register({
-  name: "android/content/pm/ProviderInfo", ctor: class extends JObj { applicationInfo = null; authority = ""; packageName = ""; metaData = null; name = ""; exported = 0; grantUriPermissions = 0; multiprocess = 0; },
-  fields: { applicationInfo: "applicationInfo", authority: "authority", packageName: "packageName", metaData: "metaData", name: "name", exported: "exported", grantUriPermissions: "grantUriPermissions", multiprocess: "multiprocess" },
-  methods: { "<init>()V": function () {} },
-});
-rt.register({
-  name: "android/content/pm/ServiceInfo", ctor: class extends JObj { metaData = null; name = ""; packageName = ""; },
-  fields: { metaData: "metaData", name: "name", packageName: "packageName" },
-  methods: { "<init>()V": function () {} },
-});
 // The screen models no inset other than the status bar — no nav bar, no display cutout.
 const STATUS_BAR_INSET_PX = device.statusBar;
 rt.register({
@@ -2356,29 +2304,6 @@ rt.register({
     "onCreate()Z": () => 1,
     "getContext()Landroid/content/Context;": function (this: any) { return this.$ctx ?? appHost?.application ?? null; },
     "attachInfo(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V": function (this: any, c: unknown) { this.$ctx = c; },
-  },
-});
-const FAKE_SIG = new Int8Array(64).fill(-0x55);
-rt.register({
-  name: "android/content/pm/Signature", ctor: class extends JObj {},
-  methods: {
-    "<init>()V": function () {},
-    "toByteArray()[B": () => FAKE_SIG.slice(),
-    "toCharsString()Ljava/lang/String;": () => "ab".repeat(64),
-    "hashCode()I": () => 0xabab,
-    "equals(Ljava/lang/Object;)Z": function (o: unknown) { return o === this ? 1 : 0; },
-  },
-});
-rt.register({
-  name: "android/content/pm/SigningInfo", ctor: class extends JObj {},
-  methods: {
-    "<init>()V": function () {},
-    "hasMultipleSigners()Z": () => 0,
-    "hasPastSigningCertificates()Z": () => 0,
-    "getApkContentsSigners()[Landroid/content/pm/Signature;": signatures,
-    "getSigningCertificateHistory()[Landroid/content/pm/Signature;": () => {
-      const a = [new (rt.link("android/content/pm/Signature").ctor)()]; (a as any).$t = "Landroid/content/pm/Signature;"; return a;
-    },
   },
 });
 

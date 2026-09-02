@@ -564,3 +564,7 @@ for (const [type, ids] of Object.entries(fwIds)) {
   rt.register({ name: `android/R$${type}`, ctor: class extends JObj {}, statics: ids });
 }
 rt.register({ name: "android/R", ctor: class extends JObj {} });
+
+// Implemented by app/library code, never handed out by us — it only has to exist so a
+// class declaring `implements NamespaceContext` links instead of being auto-stubbed.
+rt.register({ name: "javax/xml/namespace/NamespaceContext", ctor: class extends JObj {} });

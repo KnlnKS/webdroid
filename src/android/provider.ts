@@ -13,13 +13,6 @@ const PROVIDER_INTERFACE = "android.content.action.DOCUMENTS_PROVIDER";
 const isDocumentsProvider = (auth: string) =>
   providerNodes().some(([, n]) => matchesAction(n, PROVIDER_INTERFACE) && authoritiesOf(n).includes(auth));
 
-rt.register({
-  name: "android/content/pm/PackageManager$ComponentInfoFlags", ctor: class extends JObj {},
-  methods: {
-    "static of(J)Landroid/content/pm/PackageManager$ComponentInfoFlags;":
-      () => new (rt.link("android/content/pm/PackageManager$ComponentInfoFlags").ctor)(),
-  },
-});
 
 // ── DocumentsContract: content://<authority>/tree/<treeId>/document/<docId>[/children]
 type JUriLike = { uri?: string } | null;
