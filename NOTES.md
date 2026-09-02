@@ -723,3 +723,46 @@ surfaced only once something finally destroyed a view hierarchy and started a se
 Generalise: **a stubbed lifecycle verb is a silent behaviour hole.** `recreate()` looks
 discardable in a one-activity emulator right up to the moment an app uses it as its only
 mechanism for something visible.
+
+## lichess is an honest boot (native tier)
+lichess (org.lichess.mobileV2) is Flutter: every pixel and every line of app logic is Dart AOT
+in `lib/arm64-v8a/libapp.so`, run by `libflutter.so` (11.7MB of arm64 machine code with 480+
+libc/EGL/GLES imports). It sits in the same bucket as Among Us (IL2CPP arm64): nothing short
+of an ARM64 emulator runs it, so the target is a boot that is *honest*, not usable. What the
+Java embedding does now, all of it the app's own code:
+- `MainActivity.onCreate` → `SplashScreen.installSplashScreen` → `FlutterActivity.onCreate`
+  → `FlutterLoader.startInitialization` (needs `DisplayManager.registerDisplayListener` for
+  its `VsyncWaiter`) → the init `Callable` on an executor → `FlutterJNI.loadLibrary`:
+  `System.loadLibrary("flutter")` throws ULE (`dlopen failed: library "libflutter.so" is
+  arm64-v8a machine code`, `nativeRequired` + the `#native` line); the embedded ReLinker then
+  re-extracts the real .so from `ZipFile(ApplicationInfo.sourceDir)` into
+  `getDir("lib")` (`listFiles(FilenameFilter)`, `FileOutputStream`, `getFD().sync()`) and
+  `System.load(path)` sniffs the ELF `e_machine` and throws the same ULE. Flutter's catch only
+  recognises the two bionic "not found" messages, so it rethrows; `Future.get` wraps it in
+  `ExecutionException`; `ensureInitializationComplete` logs `Flutter initialization failed.`
+  and throws `RuntimeException` out of `onCreate` (`reportUncaught`, the one entry in
+  `newErrors`). `onStart/onResume/onPostResume/onBackPressed` then take FlutterActivity's own
+  "called after detach" early-outs — Back is a no-op, the activity stays.
+- The frame is the launch theme's own window background. The planning note expected a
+  `launch_background` layer-list; the real theme is androidx `Theme.SplashScreen` (v31
+  variant on our SDK 33), whose `windowSplashScreenBackground`/`AnimatedIcon` describe the
+  *system* starting window that webdroid does not model; what the app window paints is
+  `Theme.DeviceDefault.DayNight`'s `windowBackground` = `#fafafa`, which is what the frame
+  shows. `setTheme(NormalTheme)` in `onCreate` does not repaint an already-installed decor,
+  same as AOSP.
+
+Generic gaps this uncovered, none Flutter-specific:
+- **`initClass` ran inherited `<clinit>`s.** JS constructors inherit statics through the
+  prototype chain, so a subclass with no `<clinit>` resolved `ctor.$clinit` to its super's and
+  re-ran it. R8 horizontally merges static facades into unrelated classes — here kotlinx's
+  `ThreadContextKt` into `CoordinatorLayout.Behavior` — so initializing any `Behavior`
+  subclass rebuilt `NO_THREAD_ELEMENTS`, and every coroutine that had captured the old
+  sentinel died in `restoreThreadContext` with "Fatal exception in coroutines machinery".
+  Found by a sticky method hook (wrap `rt.lz` too, per Debug tools) that showed `$clinit`
+  running twice on two different `$i`s; fixed with an own-property check.
+- `Inflater.finished()` was never true for a chunked feeder (fflate only flags `final` when
+  told), so ProfileInstaller's `readCompressed` rejected every fully decoded baseline profile.
+- `DisplayManager` listeners/`getDisplays`/`$DisplayListener`, `File.listFiles(filter)`,
+  `ApplicationInfo.split*`/`sharedLibraryFiles` (null, as for a plain base.apk), and the
+  default uncaught handler now prints the `Caused by` chain (AOSP's does; it is what named the
+  real fault above).
