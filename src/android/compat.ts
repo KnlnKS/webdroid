@@ -4,6 +4,7 @@ import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { invalidate, JViewGroup, initViewFromCtx } from "./view";
 import { newArrayList } from "../jvm/natives/jutil";
+import { device } from "../shell/config";
 
 // ── Scroller/OverScroller: time-based interpolated scroll values
 class JScroller extends JObj {
@@ -127,6 +128,18 @@ rt.register({
     "getScaledPagingTouchSlop()I": () => 32,
     "getScaledMinimumFlingVelocity()I": () => 100,
     "getScaledMaximumFlingVelocity()I": () => 16000,
+    "getScaledMinimumFlingVelocity(III)I": () => 100,
+    "getScaledMaximumFlingVelocity(III)I": () => 16000,
+    // AOSP: 64dp per wheel/keyboard scroll unit
+    "getScaledHorizontalScrollFactor()F": () => 64 * device.density,
+    "getScaledVerticalScrollFactor()F": () => 64 * device.density,
+    "getScaledHoverSlop()I": () => 8,
+    "getScaledFadingEdgeLength()I": () => Math.round(12 * device.density),
+    "getScaledMinScalingSpan()I": () => Math.round(27 * device.density),
+    "shouldShowMenuShortcutsWhenKeyboardPresent()Z": () => 0,
+    "static getAmbiguousGestureMultiplier()F": () => 2,
+    "static getMinimumFlingVelocity()I": () => 50,
+    "static getMaximumFlingVelocity()I": () => 8000,
     "getScaledOverscrollDistance()I": () => 0,
     "getScaledOverflingDistance()I": () => 12,
     "getScaledEdgeSlop()I": () => 24,

@@ -130,8 +130,17 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "<init>(FF)V": function (this: JPoint, x: number, y: number) { this.x = x; this.y = y; },
+    "<init>(Landroid/graphics/Point;)V": function (this: JPoint, p: JPoint) { this.x = p.x; this.y = p.y; },
+    "<init>(Landroid/graphics/PointF;)V": function (this: JPoint, p: JPoint) { this.x = p.x; this.y = p.y; },
     "set(FF)V": function (this: JPoint, x: number, y: number) { this.x = x; this.y = y; },
+    "set(Landroid/graphics/PointF;)V": function (this: JPoint, p: JPoint) { this.x = p.x; this.y = p.y; },
+    "offset(FF)V": function (this: JPoint, dx: number, dy: number) { this.x += dx; this.y += dy; },
+    "negate()V": function (this: JPoint) { this.x = -this.x; this.y = -this.y; },
     "length()F": function (this: JPoint) { return Math.fround(Math.hypot(this.x, this.y)); },
+    "static length(FF)F": (x: number, y: number) => Math.fround(Math.hypot(x, y)),
+    "equals(FF)Z": function (this: JPoint, x: number, y: number) { return this.x === x && this.y === y ? 1 : 0; },
+    "equals(Ljava/lang/Object;)Z": function (this: JPoint, o: unknown) { return o instanceof JPoint && o.x === this.x && o.y === this.y ? 1 : 0; },
+    "toString()Ljava/lang/String;": function (this: JPoint) { return `PointF(${this.x}, ${this.y})`; },
   },
 });
 
