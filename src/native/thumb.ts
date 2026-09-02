@@ -6,7 +6,9 @@ import { PAGE_SIZE } from "./abi";
 
 const COND = ["c.z", "!c.z", "c.c", "!c.c", "c.n", "!c.n", "c.v", "!c.v",
   "(c.c&&!c.z)", "(!c.c||c.z)", "c.n===c.v", "c.n!==c.v", "(!c.z&&c.n===c.v)", "(c.z||c.n!==c.v)"];
-const MAX_BLOCK = 256;
+let MAX_BLOCK = 256;
+/** 1 = single-instruction blocks (the step tracer) */
+export function setMaxBlock(n: number): void { MAX_BLOCK = n; }
 const hex = (n: number) => "0x" + (n >>> 0).toString(16);
 const NZ = "c.n=v>>>31;c.z=v===0?1:0;";
 const ADDF = "c.c=((a>>>0)+(t>>>0))>4294967295?1:0;c.v=((a^v)&(t^v))>>>31;";

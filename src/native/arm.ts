@@ -8,7 +8,9 @@ import { PAGE_SIZE } from "./abi";
 
 const COND = ["c.z", "!c.z", "c.c", "!c.c", "c.n", "!c.n", "c.v", "!c.v",
   "(c.c&&!c.z)", "(!c.c||c.z)", "c.n===c.v", "c.n!==c.v", "(!c.z&&c.n===c.v)", "(c.z||c.n!==c.v)", "", ""];
-const MAX_BLOCK = 256;
+let MAX_BLOCK = 256;
+/** 1 = single-instruction blocks (the step tracer) */
+export function setMaxBlock(n: number): void { MAX_BLOCK = n; }
 
 export interface BlockSrc { src: string; len: number; end: number }
 

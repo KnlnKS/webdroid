@@ -162,7 +162,12 @@ export function libcInit(): void {
 
   const strerrorBuf = mem.hostAlloc(64);
   const envBuf = new Map<string, number>();
-  const ENV: Record<string, string> = { LANG: "en_US.UTF-8", TMPDIR: "/data/local/tmp", ANDROID_DATA: "/data", ANDROID_ROOT: "/system", EXTERNAL_STORAGE: "/sdcard" };
+  // an Android app process's environment (init.environ.rc + the values zygote inherits)
+  const ENV: Record<string, string> = {
+    PATH: "/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin", LD_LIBRARY_PATH: "/vendor/lib:/system/lib", HOME: "/data",
+    ANDROID_BOOTLOGO: "1", ANDROID_ROOT: "/system", ANDROID_ASSETS: "/system/app", ANDROID_DATA: "/data", ANDROID_STORAGE: "/storage",
+    EXTERNAL_STORAGE: "/sdcard", ASEC_MOUNTPOINT: "/mnt/asec", LOOP_MOUNTPOINT: "/mnt/obb", TMPDIR: "/data/local/tmp",
+  };
 
   const M: Record<string, HostFn> = {
     // ── errno / process

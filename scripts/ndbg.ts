@@ -1,0 +1,35 @@
+// Boot an apk headless with the native host-call trace on, wait, then dump wd.native state and logs.
+//   bun scripts/ndbg.ts <apk> [waitMs] [traceRegex]
+import { WebdroidDriver } from "../tests/e2e/drivers/webdroid";
+
+const [apk, waitMs = "8000", re] = process.argv.slice(2);
+const drv = await WebdroidDriver.launch();
+await drv.page.addInitScript((r) => { (globalThis as any).__wdNativeTrace = r; }, re ?? ".");
+if (process.env.STEP) await drv.page.addInitScript((w) => { (globalThis as any).__wdNativeStep = true; (globalThis as any).__wdNativeWatch = w; }, Number(process.env.WATCH ?? 0));
+await drv.page.goto(`${process.env.WEBDROID_URL ?? "http://localhost:4083"}/?apk=${encodeURIComponent(apk)}`);
+await drv.page.waitForFunction(() => !!(globalThis as any).wd?.native, undefined, { timeout: 60000 });
+await new Promise((r) => setTimeout(r, Number(waitMs)));
+if (process.env.TAP) { await drv.page.evaluate(() => (globalThis as any).wd.tap(360, 640)); await new Promise((r) => setTimeout(r, 3000)); }
+const out = await drv.page.evaluate(() => {
+  const n = (globalThis as any).wd.native;
+  return {
+    logs: (globalThis as any).wd.logs.slice(-80),
+    trace: n.trace().ring.slice(-60),
+    regs: n.regs(),
+    ring: n.regs().map((r: { tid: number; name: string }) => `== ${r.name} (tid ${r.tid})\n` + n.pcRing(r.tid).join("\n")).join("\n"),
+    calledMissing: [...n.calledMissing], jniMissing: [...n.jniMissing], missing: [...(globalThis as any).wd.rt.missing],
+    perf: (globalThis as any).wd.perf, blocks: n.blocks, steps: n.step ? (globalThis as any).wd.native.step.ring ?? [] : [],
+  };
+});
+console.log("--- logs ---\n" + out.logs.join("\n"));
+console.log("--- host trace ---\n" + out.trace.join("\n"));
+console.log("--- regs ---", JSON.stringify(out.regs, null, 1));
+console.log("--- pc ring ---\n" + out.ring);
+console.log("calledMissing:", out.calledMissing, "jniMissing:", out.jniMissing, "\nmissing:", out.missing);
+console.log("perf:", out.perf, "blocks:", out.blocks);
+if (process.env.STEP) console.log("watch hits:\n" + (await drv.page.evaluate(() => (globalThis as any).wd.native.stepRing === undefined ? [] : (globalThis as any).wd.native.stepHits)).join("\n"));
+if (process.env.STEP) { const st = await drv.page.evaluate(() => (globalThis as any).wd.native.stepRing.slice(-40000)); await Bun.write("/tmp/steps.txt", st.join("\n")); console.log("steps → /tmp/steps.txt", st.length); }
+if (process.env.PEEK) { const [a, n] = process.env.PEEK.split(",").map(Number); const hex = await drv.page.evaluate(([a, n]) => (globalThis as any).wd.native.peek(a, n), [a, n]); const bytes = hex.split(" ").map((h: string) => parseInt(h, 16)); for (let i = 0; i < bytes.length; i += 32) console.log((a + i).toString(16).padStart(8, "0"), bytes.slice(i, i + 32).map((b: number) => b.toString(16).padStart(2, "0")).join(" "), " ", bytes.slice(i, i + 32).map((b: number) => b >= 32 && b < 127 ? String.fromCharCode(b) : ".").join("")); }
+await Bun.write("webdroid-shots/ndbg.png", await drv.page.screenshot());
+await drv.close();
+process.exit(0);

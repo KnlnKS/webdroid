@@ -206,13 +206,13 @@ export function stdioInit(): void {
     fstat: (cpu, a) => { const fd = a.i(), buf = a.p(); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); fillStat(buf, f.dir, f.len, Date.now()); return 0; },
     stat: (cpu, a) => statPath(cpu, a.str(), a.p()),
     lstat: (cpu, a) => statPath(cpu, a.str(), a.p()),
-    access: (cpu, a) => { const p = a.str(); a.i(); return vfs.exists(p) || synth(vfs.norm(p)) !== null ? 0 : fail(cpu, E.NOENT); },
+    access: (cpu, a) => { const p = a.str(); a.i(); return vfs.exists(p) || vfs.isDir(p) || synth(vfs.norm(p)) !== null ? 0 : fail(cpu, E.NOENT); },
     chmod: () => 0, fchmod: () => 0, chown: () => 0, fchown: () => 0, umask: () => 0o22,
     unlink: (cpu, a) => (vfs.delete(a.str()) ? 0 : fail(cpu, E.NOENT)),
     remove: (cpu, a) => { const p = vfs.norm(a.str()); if (vfs.isDir(p)) return vfs.list(p).length ? fail(cpu, E.NOTEMPTY) : 0; return vfs.delete(p) ? 0 : fail(cpu, E.NOENT); },
     rename: (cpu, a) => { const from = vfs.norm(a.str()), to = vfs.norm(a.str()); const d = vfs.read(from); if (!d) return fail(cpu, E.NOENT); vfs.write(to, d); vfs.delete(from); return 0; },
-    mkdir: (cpu, a) => { const p = vfs.norm(a.str()); if (vfs.exists(p)) return fail(cpu, E.EXIST); vfs.write(p + "/.keep", new Uint8Array(0)); return 0; },
-    rmdir: (cpu, a) => { const p = vfs.norm(a.str()); if (!vfs.isDir(p)) return fail(cpu, E.NOTDIR); const rest = vfs.list(p).filter((n) => n !== ".keep"); if (rest.length) return fail(cpu, E.NOTEMPTY); vfs.delete(p + "/.keep"); return 0; },
+    mkdir: (cpu, a) => { const p = vfs.norm(a.str()); if (vfs.exists(p) || vfs.isDir(p)) return fail(cpu, E.EXIST); const parent = p.slice(0, p.lastIndexOf("/")) || "/"; if (parent !== "/" && !vfs.isDir(parent)) return fail(cpu, E.NOENT); vfs.mkdir(p); return 0; },
+    rmdir: (cpu, a) => { const p = vfs.norm(a.str()); if (!vfs.isDir(p)) return fail(cpu, E.NOTDIR); if (vfs.list(p).length) return fail(cpu, E.NOTEMPTY); vfs.rmdir(p); return 0; },
     ftruncate: (cpu, a) => { const f = fds.get(a.i()); const n = a.i(); if (!f) return fail(cpu, E.BADF); grow(f, n); if (n > f.len) f.data.fill(0, f.len, n); f.len = n; f.dirty = true; return 0; },
     truncate: (cpu, a) => { const p = vfs.norm(a.str()), n = a.i(); const d = vfs.read(p); if (!d) return fail(cpu, E.NOENT); const nd = new Uint8Array(n); nd.set(d.subarray(0, Math.min(n, d.length))); vfs.write(p, nd); return 0; },
     fcntl: (cpu, a) => { const fd = a.i(), cmd = a.i(); if (!fds.has(fd)) return fail(cpu, E.BADF); return cmd === 3 ? 2 : 0; }, // F_GETFL → O_RDWR
@@ -243,10 +243,10 @@ export function stdioInit(): void {
       const p = vfs.norm(a.str());
       if (!vfs.isDir(p)) { fail(cpu, vfs.exists(p) ? E.NOTDIR : E.NOENT); return 0; }
       const h = mem.malloc(16);
-      dirs.set(h, { entries: [".", "..", ...vfs.list(p).filter((n) => n !== ".keep")], i: 0, dirent: mem.malloc(LAYOUT.DIRENT_SIZE) });
+      dirs.set(h, { entries: [".", "..", ...vfs.list(p)], i: 0, dirent: mem.malloc(LAYOUT.DIRENT_SIZE) });
       return h;
     },
-    fdopendir: (cpu, a) => { const f = fds.get(a.i()); if (!f || !f.dir) { fail(cpu, E.NOTDIR); return 0; } const h = mem.malloc(16); dirs.set(h, { entries: [".", "..", ...vfs.list(f.path).filter((n) => n !== ".keep")], i: 0, dirent: mem.malloc(LAYOUT.DIRENT_SIZE) }); return h; },
+    fdopendir: (cpu, a) => { const f = fds.get(a.i()); if (!f || !f.dir) { fail(cpu, E.NOTDIR); return 0; } const h = mem.malloc(16); dirs.set(h, { entries: [".", "..", ...vfs.list(f.path)], i: 0, dirent: mem.malloc(LAYOUT.DIRENT_SIZE) }); return h; },
     readdir: (_c, a) => {
       const d = dirs.get(a.p());
       if (!d || d.i >= d.entries.length) return 0;

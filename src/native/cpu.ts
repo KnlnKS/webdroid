@@ -5,8 +5,8 @@
 
 import { JThread, setCurThread } from "../jvm/natives/jlang";
 import { NativeFault, mem } from "./mem";
-import { emitBlock } from "./arm";
-import { emitThumbBlock } from "./thumb";
+import { emitBlock, setMaxBlock } from "./arm";
+import { emitThumbBlock, setMaxBlock as setMaxBlockT } from "./thumb";
 import { Args, hostDispatch, hostReturn, type HostRet } from "./host";
 import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, PAGE_SHIFT, STACK_SIZE } from "./abi";
 import { perf } from "../perf";
@@ -20,6 +20,16 @@ const pages: ((BlockFn | undefined)[] | undefined)[] = [];   // ARM blocks by wo
 const tpages: ((BlockFn | undefined)[] | undefined)[] = [];  // Thumb blocks by halfword
 const cov: (Uint8Array | undefined)[] = [];
 export const blockStats = { compiled: 0, invalidated: 0, compileMs: 0 };
+/** single-step register trace: every instruction logs pc + the registers it changed (slow; debugging only) */
+export const stepMode = { on: false, ring: [] as string[], max: 40000, watch: 0, hits: [] as string[] };
+export function setStepMode(on: boolean): void {
+  stepMode.on = on;
+  setMaxBlock(on ? 1 : 256); setMaxBlockT(on ? 1 : 256);
+  for (const c of cpus) c.flush();
+  stepMode.ring.length = 0;
+}
+const stepPrev = new Int32Array(16);
+const RN = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "ip", "sp", "lr", "pc"];
 export let processExited = false;
 export function markProcessExited(): void { processExited = true; }
 
@@ -212,7 +222,17 @@ export class Cpu {
         fn = pg[(pc >>> 2) & 1023];
         if (fn === undefined) fn = compile(this, pc, pg, false);
       }
-      pc = fn(this, r, mem);
+      if (stepMode.on) {
+        stepPrev.set(r);
+        const at = pc;
+        const w0 = stepMode.watch ? mem.i32[stepMode.watch >>> 2] : 0;
+        pc = fn(this, r, mem);
+        if (stepMode.watch && mem.i32[stepMode.watch >>> 2] !== w0) stepMode.hits.push(`${this.name} ${symbolizeHook(at)} wrote ${(mem.i32[stepMode.watch >>> 2] >>> 0).toString(16)} r0-3=${[0, 1, 2, 3].map((i) => (r[i] >>> 0).toString(16)).join(",")}\n    ` + stepMode.ring.slice(-40).join("\n    "));
+        let d = "";
+        for (let i = 0; i < 15; i++) if (r[i] !== stepPrev[i]) d += ` ${RN[i]}=${(r[i] >>> 0).toString(16)}`;
+        stepMode.ring.push(`${this.name} ${symbolizeHook(at)}${d} [${this.n}${this.z}${this.c}${this.v}]`);
+        if (stepMode.ring.length > stepMode.max) stepMode.ring.splice(0, 5000);
+      } else pc = fn(this, r, mem);
       if (this.ic >= limit) { r[15] = pc; return SliceExit.Budget; }
     }
   }

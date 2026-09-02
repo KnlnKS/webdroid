@@ -13,6 +13,7 @@ import { editInput, focusedEdit, focusEditText, setInputElement } from "./androi
 import { overlays } from "./android/popup";
 import { openDatabase } from "./android/sqlite";
 import { setWebLayer, webViewInfo } from "./android/webkit";
+import { native } from "./native/debug";
 
 const root = document.getElementById("root")!;
 root.innerHTML = `
@@ -148,7 +149,7 @@ const tap = async (x: number, y: number) => {
 
 /** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. */
 const wd = {
-  rt, uiState, overlays, perf, perfReset, mainDbg, setGL, logs: logBuf, ticks: 0,
+  rt, uiState, overlays, perf, perfReset, mainDbg, setGL, logs: logBuf, ticks: 0, native,
   boot, app: () => currentApp(), rnodes: () => JRenderNode.all, back: () => pressBack(),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
   web: () => webViewInfo(),

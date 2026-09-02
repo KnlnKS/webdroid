@@ -39,6 +39,8 @@ export const vfs = {
     return dirs.has(p);
   },
   delete(p: string): boolean { const r = this.files.delete(this.norm(p)); if (r) this.onWrite(this.norm(p)); return r; },
+  mkdir(p: string) { dirs.add(this.norm(p)); },
+  rmdir(p: string): boolean { return dirs.delete(this.norm(p)); },
   list(p: string): string[] {
     p = this.norm(p);
     const dir = p === "/" ? "/" : p + "/";
