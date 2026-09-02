@@ -891,6 +891,8 @@ class JWindow extends JObj {
   contentParent: JFrameLayout | null = null;
   actionBarView: JActionBarView | null = null;
   callbackObj: unknown = null;
+  /** a Dialog's window: content goes to the dialog, the context is the dialog's */
+  dialog: unknown = null;
   features = new Set<number>();
   /** the window's OnBackInvokedDispatcher (AOSP: one per ViewRootImpl) */
   backD: JObj | null = null;
@@ -1667,13 +1669,20 @@ rt.register({
       return this.decor ? findById(this.decor, id) : null;
     },
     "setContentView(I)V": function (this: JWindow, id: number) {
+      if (this.dialog) return vcall(this.dialog, "setContentView", "(I)V", id);
       return (activityMethods["setContentView(I)V"] as any).call(this.activity, id);
     },
     "setContentView(Landroid/view/View;)V": function (this: JWindow, v: unknown) {
+      if (this.dialog) return vcall(this.dialog, "setContentView", "(Landroid/view/View;)V", v);
       return (activityMethods["setContentView(Landroid/view/View;)V"] as any).call(this.activity, v);
     },
     "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JWindow, v: unknown, lp: unknown) {
+      if (this.dialog) return vcall(this.dialog, "setContentView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", v, lp);
       return (activityMethods["setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V"] as any).call(this.activity, v, lp);
+    },
+    "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JWindow, v: unknown, lp: unknown) {
+      if (this.dialog) return vcall(this.dialog, "addContentView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", v, lp);
+      return (activityMethods["addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V"] as any).call(this.activity, v, lp);
     },
     "setFlags(II)V": function (this: JWindow, flags: number, mask: number) { setWindowFlags(this, (this.flags & ~mask) | (flags & mask)); },
     "addFlags(I)V": function (this: JWindow, f: number) { setWindowFlags(this, this.flags | f); },
@@ -1709,7 +1718,7 @@ rt.register({
     "setTitle(Ljava/lang/CharSequence;)V": function (this: JWindow, t: unknown) {
       if (this.activity) (activityMethods["setTitle(Ljava/lang/CharSequence;)V"] as any).call(this.activity, t);
     },
-    "getContext()Landroid/content/Context;": function (this: JWindow) { return this.activity; },
+    "getContext()Landroid/content/Context;": function (this: JWindow) { return this.activity ?? (this.dialog as { jctx?: unknown } | null)?.jctx ?? null; },
     "setWindowAnimations(I)V": () => {},
     "setLayout(II)V": () => {},
     "setGravity(I)V": () => {},

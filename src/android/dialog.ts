@@ -199,6 +199,11 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     v.lp = lp;
     (dialogMethods["setContentView(Landroid/view/View;)V"] as any).call(this, v);
   },
+  "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
+    v.lp = lp;
+    attachView(this.ensureRoot(), v);
+    requestLayout();
+  },
   "show()V": async function (this: JDialog) {
     if (this.showing) return;
     this.showing = true;
@@ -243,6 +248,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     if (!this.win) {
       this.win = new (rt.link("android/view/Window").ctor)();
       this.win.callbackObj = this;
+      this.win.dialog = this;
     }
     this.win.decor = this.ensureRoot();
     return this.win;

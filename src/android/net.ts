@@ -4,6 +4,7 @@
 
 import { rt, JObj } from "../jvm/runtime";
 import { vcall, curThread } from "../jvm/natives/jlang";
+import { jarray } from "../jvm/abi";
 import { reportUncaught } from "./os";
 
 const netUp = async (): Promise<number> =>
@@ -77,7 +78,15 @@ rt.register({
   name: "android/net/ConnectivityManager", ctor: class extends JObj {},
   methods: {
     "getActiveNetworkInfo()Landroid/net/NetworkInfo;": () => new (rt.link("android/net/NetworkInfo").ctor)(),
-    "getActiveNetwork()Landroid/net/Network;": () => null,
+    // the one Network, present exactly when NetworkInfo says connected (a null here with a
+    // connected NetworkInfo reads as "no internet" to every modern connectivity check)
+    "getActiveNetwork()Landroid/net/Network;": async () => (await netUp()) ? network() : null,
+    "getAllNetworks()[Landroid/net/Network;": async () => jarray((await netUp()) ? [network()] : [], "Landroid/net/Network;"),
+    "getNetworkInfo(Landroid/net/Network;)Landroid/net/NetworkInfo;": (n: unknown) => n ? new (rt.link("android/net/NetworkInfo").ctor)() : null,
+    "getLinkProperties(Landroid/net/Network;)Landroid/net/LinkProperties;": () => null,
+    "bindProcessToNetwork(Landroid/net/Network;)Z": () => 1,
+    "getBoundNetworkForProcess()Landroid/net/Network;": () => null,
+    "getRestrictBackgroundStatus()I": () => 1,
     "registerNetworkCallback(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;)V": (_r: unknown, cb: unknown) => registerCallback(cb),
     "registerNetworkCallback(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;Landroid/os/Handler;)V": (_r: unknown, cb: unknown) => registerCallback(cb),
     "registerDefaultNetworkCallback(Landroid/net/ConnectivityManager$NetworkCallback;)V": registerCallback,
