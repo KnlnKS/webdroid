@@ -26,6 +26,7 @@ root.innerHTML = `
   </div>
   <div id="side" style="width:340px;max-height:92vh;overflow:auto;font:12px/1.5 ui-monospace,monospace;color:#9aa">
     <div id="status" style="color:#7c8; margin-bottom:8px">webdroid</div>
+    <div id="native" style="color:#fc6"></div>
     <div id="launcher"></div>
     <div id="missing" style="white-space:pre-wrap"></div>
   </div>
@@ -73,6 +74,8 @@ rt.onUncaught = (e: any) => {
   statusEl.textContent = "uncaught: " + (e?.msg ?? e);
   statusEl.style.color = "#e77";
 };
+const nativeEl = document.getElementById("native")!;
+rt.onNativeRequired = (lib, abi) => { nativeEl.textContent = "native code required: " + lib + " (" + abi + ")"; };
 
 // launcher: whatever is in apks/, named from the filename
 void fetch("/apks").then((r) => r.json() as Promise<string[]>).catch(() => [] as string[]).then((files) => {
@@ -113,7 +116,7 @@ async function boot(file: string) {
     const t0 = performance.now();
     await bootApk(bytes, (s) => { statusEl.textContent = s; });
     perf.bootMs = performance.now() - t0;
-    statusEl.textContent = `running (boot ${perf.bootMs.toFixed(0)}ms)`;
+    statusEl.textContent = `running (boot ${perf.bootMs.toFixed(0)}ms)` + (rt.nativeRequired.size ? " — needs native code" : "");
   } catch (e) {
     console.error(e);
     statusEl.textContent = "boot failed: " + e;
