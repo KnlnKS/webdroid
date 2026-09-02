@@ -16,6 +16,9 @@ export const device = {
   sdk: 33,
   release: "13",
   lang: "en",
+  /** what /proc/cpuinfo, /proc/meminfo and uname report to native code. No vfp/neon: the ARM32
+   *  tier has no VFP, so a library that branches on cpu features must take its softfloat path. */
+  cpu: { cores: 4, features: "swp half thumb fastmult edsp", hardware: "webdroid", memKb: 2 * 1024 * 1024 },
   get widthDp(): number { return Math.round(this.width / this.density); },
   /** the activity's height in dp — the status bar is not part of it */
   get heightDp(): number { return Math.round((this.height - this.statusBar) / this.density); },
