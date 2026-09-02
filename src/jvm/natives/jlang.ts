@@ -1004,16 +1004,24 @@ const loadedLibs = new Set<string>();
 const ABIS = ["arm64-v8a", "armeabi-v7a", "armeabi", "x86_64", "x86"];
 const E_MACHINE: Record<number, string> = { 0xb7: "arm64-v8a", 0x28: "armeabi", 0x3e: "x86_64", 0x03: "x86" };
 /** dlopen: a lib whose natives a TS shim claims loads; anything else is machine code we cannot run, said so */
-function dlopen(lib: string, abi: () => string | null) {
-  if (rt.nativeLibs.has(lib.replace(/^lib|\.so$/g, ""))) {
+function dlopen(lib: string, abi: () => string | null, bytes: (a: string) => Uint8Array | null = () => null): Promise<void> | void {
+  if (rt.nativeLibs.has(lib.replace(/^lib|\.so$/g, "")) || loadedLibs.has(lib)) {
     if (!loadedLibs.has(lib)) { loadedLibs.add(lib); console.log("[webdroid] loadLibrary", lib); }
     return;
   }
   const a = abi();
+  // an ABI the native tier can run (src/native/loader.ts) loads for real; the rest is honest
+  const b = a && rt.loadNativeLib ? bytes(a) : null;
+  if (a && b && rt.loadNativeLib) {
+    loadedLibs.add(lib);
+    console.log("[webdroid] loadLibrary", lib, a);
+    return rt.loadNativeLib(lib, b, a).catch((e) => { loadedLibs.delete(lib); throw e; });
+  }
   if (a) { rt.nativeRequired.set(lib, a); rt.onNativeRequired(lib, a); }
   throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${lib}" ${a ? "is " + a + " machine code" : "not found"}`);
 }
-const loadLibrary = (n: string) => dlopen(`lib${n}.so`, () => ABIS.find((a) => rt.classpath[`lib/${a}/lib${n}.so`]) ?? null);
+const loadLibrary = (n: string) => dlopen(`lib${n}.so`, () => ABIS.find((a) => rt.classpath[`lib/${a}/lib${n}.so`]) ?? null,
+  (a) => rt.classpath[`lib/${a}/lib${n}.so`] ?? null);
 const sysProps: Record<string, string> = {
   "java.version": "0", "os.name": "Linux", "line.separator": "\n",
   "java.vm.name": "webdroid", "file.separator": "/", "path.separator": ":",
@@ -1037,10 +1045,10 @@ rt.register({
     "static load(Ljava/lang/String;)V": async (path: string) => {
       // jio imports this module, so its vfs is reached lazily rather than through a static cycle
       const { vfs } = await import("./jio");
-      dlopen(path.slice(path.lastIndexOf("/") + 1), () => {
+      await dlopen(path.slice(path.lastIndexOf("/") + 1), () => {
         const b = vfs.read(path);
         return b ? E_MACHINE[b[18] | (b[19] << 8)] ?? "unknown" : null;
-      });
+      }, () => vfs.read(path));
     },
     "static mapLibraryName(Ljava/lang/String;)Ljava/lang/String;": (n: string) => `lib${n}.so`,
     "static lineSeparator()Ljava/lang/String;": () => "\n",

@@ -3,6 +3,7 @@
 import { unzipSync } from "fflate";
 import { DexFile } from "../jvm/dex";
 import { rt } from "../jvm/runtime";
+import { vfs } from "../jvm/natives/jio";
 import { vcall, curThread, mainThread, setCurThread, newObj } from "../jvm/natives/jlang";
 import { Arsc } from "../android/arsc";
 import { parseAXML, attrStr, type XmlNode } from "../android/axml";
@@ -48,6 +49,7 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void):
   onStatus("unpacking apk…");
   const zip = unzipSync(bytes);
   rt.classpath = zip;
+  vfs.write("/data/app/base.apk", bytes);
   onStatus("loading dex…");
   for (const [name, data] of Object.entries(zip)) {
     if (/^classes\d*\.dex$/.test(name)) rt.loadDex(new DexFile(data, name));

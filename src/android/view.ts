@@ -1681,3 +1681,19 @@ rt.register({
     "getDisplayId()I": () => 0,
   },
 });
+
+// ── OrientationEventListener: the device is fixed portrait, so enable() never produces a
+// rotation callback; canDetectOrientation() is honest about having an accelerometer.
+class JOrientationEventListener extends JObj { enabled = 0; rate = 3; }
+rt.register({
+  name: "android/view/OrientationEventListener", ctor: JOrientationEventListener,
+  statics: { ORIENTATION_UNKNOWN: -1 },
+  methods: {
+    "<init>(Landroid/content/Context;)V": function () {},
+    "<init>(Landroid/content/Context;I)V": function (this: JOrientationEventListener, _c: unknown, rate: number) { this.rate = rate; },
+    "enable()V": function (this: JOrientationEventListener) { this.enabled = 1; },
+    "disable()V": function (this: JOrientationEventListener) { this.enabled = 0; },
+    "canDetectOrientation()Z": () => 1,
+    "onOrientationChanged(I)V": () => {},
+  },
+});

@@ -272,6 +272,8 @@ const contextMethods: NativeSpec["methods"] = {
     return a;
   },
   "getClassLoader()Ljava/lang/ClassLoader;": bootLoader,
+  "getPackageResourcePath()Ljava/lang/String;": function (this: JContext) { return getAppInfo(this.$host).sourceDir; },
+  "getPackageCodePath()Ljava/lang/String;": function (this: JContext) { return getAppInfo(this.$host).sourceDir; },
   "getFilesDir()Ljava/io/File;": function (this: JContext) { return mkFile(`/data/data/${this.$host.pkg}/files`); },
   "getCacheDir()Ljava/io/File;": function (this: JContext) { return mkFile(`/data/data/${this.$host.pkg}/cache`); },
   "getCodeCacheDir()Ljava/io/File;": function (this: JContext) { return mkFile(`/data/data/${this.$host.pkg}/code_cache`); },
@@ -1560,6 +1562,8 @@ export async function ensureDecor(act: JActivity) {
   else decor.background = (() => { const d = new JColorDrawable(); d.color = -328966; return d; })();
   const noTitle = rvInt(host.res, theme.lookup(AID("windowNoTitle")), 0);
   const actionBar = rvInt(host.res, theme.lookup(AID("windowActionBar")), noTitle ? 0 : 1);
+  // a *.Fullscreen theme is the same request as Window.addFlags(FLAG_FULLSCREEN): no status bar
+  if (rvInt(host.res, theme.lookup(AID("windowFullscreen")), 0)) act.window.flags |= 1024;
   const root = new JLinearLayout();
   root.orientation = 1;
   root.ctx = act;
