@@ -85,7 +85,7 @@ export function compileClassSource(R: Runtime, dex: DexFile, info: ClassInfo): s
   for (const list of [def.directMethods, def.virtualMethods]) {
     for (const m of list) {
       if (m.codeOff) out.push(info.lazy ? emitLazy(dex, info, m) : emitMethod(R, dex, info, m));
-      else if (m.flags & ACC.NATIVE) out.push(emitNativeStub(R, dex, info, m));
+      else if (m.flags & ACC.NATIVE) out.push(emitNativeStub(dex, info, m));
     }
   }
   return out.join("\n");
@@ -122,11 +122,17 @@ export function methodKey(dex: DexFile, methodIdx: number): { name: string; desc
   return { name, desc, mangled: mangleMethod(name, desc) };
 }
 
-function emitNativeStub(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
+/** Resolved on first call, not when the class body is generated: a JNI_OnLoad run later may
+ *  register the native. The cell mirrors emitLazy's so a captured thunk stays one call away. */
+function emitNativeStub(dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
-  const isStatic = (m.flags & ACC.STATIC) !== 0;
-  const target = isStatic ? "C" : "C.prototype";
-  return `${target}.${mangled} = R.jniFn(${JSON.stringify(info.name)}, ${JSON.stringify(name + desc)}) ?? function(){ throw R.unimplemented(${JSON.stringify(info.name + "." + name + desc + " [native]")}); };`;
+  const target = (m.flags & ACC.STATIC) !== 0 ? "C" : "C.prototype";
+  const cls = JSON.stringify(info.name), v = `$n${m.methodIdx}`;
+  const ps = parseMethodDesc(desc).params.map((_, j) => "p" + j).join(",");
+  return `let ${v};${target}.${mangled}=function(${ps}){` +
+    `if(!${v}&&!(${v}=${target}.${mangled}=R.jniFn(${cls},${JSON.stringify(name + desc)})))` +
+    `throw R.ulink(${cls},${JSON.stringify(name)},${JSON.stringify(desc)});` +
+    `return ${v}.call(this${ps ? "," + ps : ""})};`;
 }
 
 function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
