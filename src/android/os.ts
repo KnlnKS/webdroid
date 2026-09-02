@@ -442,6 +442,44 @@ rt.register({ name: "android/util/LongSparseArray", ctor: class extends JSparseA
     "delete(J)V": function (this: JSparseArray, k: bigint) { this.m.delete(k as any); },
   } });
 
+// android.util.StateSet: a spec lists the state ids a drawable/color entry needs (negative =
+// must be absent), 0 terminates either array; both wildcards are answered by the constants.
+const isWild = (s: Int32Array) => s.length === 0 || s[0] === 0;
+rt.register({
+  name: "android/util/StateSet", ctor: class extends JObj {},
+  statics: { WILD_CARD: new Int32Array(0), NOTHING: Int32Array.of(0) },
+  methods: {
+    "static isWildCard([I)Z": (s: Int32Array) => isWild(s) ? 1 : 0,
+    "static stateSetMatches([I[I)Z": (spec: Int32Array, set: Int32Array | null) => {
+      if (set === null) return spec === null || isWild(spec) ? 1 : 0;
+      for (let i = 0; i < spec.length; i++) {
+        let want = spec[i];
+        if (want === 0) return 1;
+        const must = want > 0;
+        if (!must) want = -want;
+        let found = false;
+        for (let j = 0; j < set.length; j++) {
+          const st = set[j];
+          if (st === 0) { if (must) return 0; break; }
+          if (st === want) { if (!must) return 0; found = true; break; }
+        }
+        if (must && !found) return 0;
+      }
+      return 1;
+    },
+    "static stateSetMatches([II)Z": (spec: Int32Array, state: number) => {
+      for (let i = 0; i < spec.length; i++) {
+        const want = spec[i];
+        if (want === 0) return 1;
+        if (want > 0 ? state !== want : state === -want) return 0;
+      }
+      return 1;
+    },
+    "static trimStateSet([II)[I": (s: Int32Array, n: number) => s.length === n ? s : s.slice(0, n),
+    "static dump([I)Ljava/lang/String;": (s: Int32Array) => Array.from(s, (v) => v.toString(16)).join(" "),
+  },
+});
+
 class JPair extends JObj { first: unknown = null; second: unknown = null; }
 rt.register({
   name: "android/util/Pair", ctor: JPair,
