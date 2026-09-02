@@ -377,7 +377,9 @@ export class Runtime {
       if (!info.initP || info === from || info.assumeReentrant) return null; // sync-prefix / self / known-cycle reentrancy
       // clinit cycle (info's chain transitively waits on `from`) → JVM same-thread
       // semantics: proceed with partial statics instead of deadlocking
-      for (let c = info.waitingOn; c; c = c.waitingOn) if (c === from) return null;
+      // walk the wait chain; a loop in it (two threads' clinits waiting on each other, which a
+      // JVM would deadlock on) also proceeds with partial statics rather than hanging the page
+      for (let c = info.waitingOn, n = 0; c; c = c.waitingOn) if (c === from || ++n > 64) return null;
       // JVM: only the initializing thread may proceed on a class mid-<clinit>; every other
       // thread blocks until it completes, however long a heavy static initializer takes. The
       // timed escape stays for the same thread, where a cycle through untagged methods is
