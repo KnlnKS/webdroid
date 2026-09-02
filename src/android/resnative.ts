@@ -10,7 +10,7 @@ import { javaFormat, defineException } from "../jvm/natives/jlang";
 import { usLocale } from "../jvm/natives/jutil";
 import { jarray } from "../jvm/abi";
 import { JInputStream } from "../jvm/natives/jio";
-import { loadFontResource } from "./fonts";
+import { fontResource } from "./fonts";
 
 export class JResources extends JObj {
   host!: Resources;
@@ -247,7 +247,7 @@ const resMethods: NativeSpec["methods"] = {
   "getAnimation(I)Landroid/content/res/XmlResourceParser;": xmlParser,
   "updateConfiguration(Landroid/content/res/Configuration;Landroid/util/DisplayMetrics;)V": (c: JConfiguration | null) => { if (c) applyDeviceConfiguration(c); },
   "getFont(I)Landroid/graphics/Typeface;": async function (this: JResources, id: number) {
-    const t = await loadFontResource(this.host, id);
+    const t = await fontResource(this.host, id);
     if (!t) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Font resource ID #0x" + (id >>> 0).toString(16));
     return t;
   },

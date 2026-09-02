@@ -326,9 +326,24 @@ const tfbMethods: NonNullable<NativeSpec["methods"]> = {
 };
 rt.register({ name: "android/graphics/Typeface$Builder", ctor: JTypefaceBuilder, methods: tfbMethods });
 
+const fontMemo = new WeakMap<Resources, Map<number, Promise<JTypeface | null>>>();
+/**
+ * Resources.getFont(id), parsed and registered once per (Resources, id). A style is applied per
+ * view, so an app whose theme names a @font/ family would otherwise re-parse it and load a new
+ * FontFace for every TextView — and graphics.ts memoises text widths on the font string alone,
+ * so a face that swaps in late poisons them.
+ */
+export function fontResource(res: Resources, id: number): Promise<JTypeface | null> {
+  let m = fontMemo.get(res);
+  if (!m) fontMemo.set(res, (m = new Map()));
+  let p = m.get(id);
+  if (!p) m.set(id, (p = loadFontResource(res, id)));
+  return p;
+}
+
 /** Resources.getFont(id): a font file resource, or a <font-family> XML whose members become one
  *  family; the Typeface carries the regular member's style. */
-export async function loadFontResource(res: Resources, id: number): Promise<JTypeface | null> {
+async function loadFontResource(res: Resources, id: number): Promise<JTypeface | null> {
   const path = res.value(id).s;
   if (!path) return null;
   const fonts: JFont[] = [];

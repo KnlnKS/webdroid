@@ -5,6 +5,7 @@ import { mangleMethod, jarray } from "../jvm/abi";
 import { vcall, mkEnumSet } from "../jvm/natives/jlang";
 import { usLocale } from "../jvm/natives/jutil";
 import { JCanvas, JTypeface, tfDefault, tfMedium, typefaceFor, cssColor, measureCtx, fontAscent, fontDescent, fontTop, fontBottom, JBitmap, JRect } from "./graphics";
+import { fontResource } from "./fonts";
 import { JTextPaint, spannedString, JEditable, mkStaticLayout } from "./text";
 import { JDrawable, drawChild, loadDrawableRV, loadDrawable, loadColorStateList, JColorStateList, cslColor, mkCsl, ST, JRippleDrawable, JGradientDrawable, JBitmapDrawable } from "./drawable";
 import {
@@ -14,7 +15,7 @@ import {
   resolveSizeAndState, defaultSize, invalidate, requestLayout, initViewFromCtx,
   lpFromAttrs, AID, JMotionEvent, uiState, guardCall,
 } from "./view";
-import { JAttrSet, obtainStyled, rvDimen, rvColor, rvInt, rvString, rvFloat, type Resources } from "./res";
+import { JAttrSet, obtainStyled, resolveStyleValue, rvDimen, rvColor, rvInt, rvString, rvFloat, type RV, type Resources } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
 import { inflateLayout } from "./inflate";
@@ -721,7 +722,7 @@ const tvAttr = {
 };
 async function applyTextAppearance(tv: JTextView, res: Resources, styleId: number) {
   if (!styleId) return;
-  const look = (name: string) => res.styleLookup(styleId, AID(name));
+  const look = (name: string) => resolveStyleValue(res, tv.theme, res.styleLookup(styleId, AID(name)));
   const ts = look("textSize");
   if (ts) tv.paintT.textSize = rvDimen(res, ts, tv.paintT.textSize);
   const tc = look("textColor");
@@ -731,12 +732,20 @@ async function applyTextAppearance(tv: JTextView, res: Resources, styleId: numbe
   }
   const st = look("textStyle");
   if (st) tv.styleBits = rvInt(res, st, 0);
-  const ff = look("fontFamily");
-  if (ff) applyFontFamily(tv, rvString(res, ff));
+  await applyFontFamily(tv, res, look("fontFamily"));
   const caps = look("textAllCaps");
   if (caps) tv.allCaps = !!rvInt(res, caps, 0);
 }
-function applyFontFamily(tv: JTextView, fam: string | null) {
+/** `android:fontFamily` is either a system family name or a reference to a @font/ resource —
+ *  a bare .ttf or a <font-family> XML. Apps ship their own fonts and name them this way. */
+async function applyFontFamily(tv: JTextView, res: Resources, v: RV | null) {
+  if (!v) return;
+  if (v.t === TV.REFERENCE && v.d) {
+    const tf = await fontResource(res, v.d);
+    if (tf) tv.paintT.tf = tf;
+    return;
+  }
+  const fam = rvString(res, v);
   if (fam) tv.paintT.tf = typefaceFor(fam);
 }
 async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyleAttr: number) {
@@ -785,7 +794,7 @@ async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyleAttr: n
   if (dr) tv.drawableR = await loadDrawableRV(res, dr, tv.theme);
   if (db) tv.drawableB = await loadDrawableRV(res, db, tv.theme);
   if (g(14)) tv.drawablePad = Math.round(rvDimen(res, g(14), 0));
-  if (g(15)) applyFontFamily(tv, rvString(res, g(15)));
+  await applyFontFamily(tv, res, g(15));
   if (g(16)) tv.allCaps = !!rvInt(res, g(16), 0);
   if (g(17)) {
     const v = g(17)!;

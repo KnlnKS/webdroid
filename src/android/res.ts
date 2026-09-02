@@ -330,13 +330,24 @@ export function obtainStyled(
     if (!v && xmlStyleId) v = res.styleLookup(xmlStyleId, attrId);
     if (!v && defStyleId) v = res.styleLookup(defStyleId, attrId);
     if (!v && theme) v = theme.lookup(attrId);
-    if (v && v.t === TV.ATTRIBUTE) v = theme?.lookup(v.d) ?? null;
-    // aapt flattens @null as a reference to 0; AOSP's ApplyStyle turns it back into TYPE_NULL
-    // only at the end, after it has masked any style/theme value beneath it
-    if (v && v.t === TV.REFERENCE && !v.d) v = null;
-    if (v && v.t !== TV.NULL) ta.vals[i] = res.resolveRefs(v);
+    ta.vals[i] = resolveStyleValue(res, theme, v);
   }
   return ta;
+}
+
+/**
+ * Finish a raw style/theme value the way an attribute lookup does: dereference a theme
+ * attribute, mask @null, then resolve references. `styleLookup` deliberately returns the raw
+ * value, so anything reading a style directly has to come through here — an app-side
+ * TextAppearance compiles its android:textSize to a `@dimen/...` reference, and reading that
+ * raw silently yields no size at all.
+ */
+export function resolveStyleValue(res: Resources, theme: JTheme | null | undefined, v: RV | null): RV | null {
+  if (v && v.t === TV.ATTRIBUTE) v = theme?.lookup(v.d) ?? null;
+  // aapt flattens @null as a reference to 0; AOSP's ApplyStyle turns it back into TYPE_NULL
+  // only at the end, after it has masked any style/theme value beneath it
+  if (v && v.t === TV.REFERENCE && !v.d) v = null;
+  return v && v.t !== TV.NULL ? res.resolveRefs(v) : null;
 }
 
 // value coercion helpers
