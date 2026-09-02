@@ -297,8 +297,15 @@ const contextMethods: NativeSpec["methods"] = {
   "getExternalFilesDir(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, type: string | null) {
     return privDir(`/sdcard/Android/data/${this.$host.pkg}/files` + (type ? "/" + type : ""));
   },
+  // the array forms: one emulated volume, so each is the singleton of its scalar form
+  "getExternalFilesDirs(Ljava/lang/String;)[Ljava/io/File;": function (this: JContext, type: string | null) {
+    return jarray([privDir(`/sdcard/Android/data/${this.$host.pkg}/files` + (type ? "/" + type : ""))], "Ljava/io/File;");
+  },
   "getExternalCacheDir()Ljava/io/File;": function (this: JContext) {
     return privDir(`/sdcard/Android/data/${this.$host.pkg}/cache`);
+  },
+  "getExternalCacheDirs()[Ljava/io/File;": function (this: JContext) {
+    return jarray([privDir(`/sdcard/Android/data/${this.$host.pkg}/cache`)], "Ljava/io/File;");
   },
   "getObbDir()Ljava/io/File;": function (this: JContext) { return privDir(`/sdcard/Android/obb/${this.$host.pkg}`); },
   "getDir(Ljava/lang/String;I)Ljava/io/File;": function (this: JContext, name: string) {

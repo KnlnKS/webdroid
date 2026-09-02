@@ -537,6 +537,17 @@ export function measureText(p: JPaint, s: string): number {
  * on the wrong size. main.ts applies these as ascent/descent-override on the loaded faces.
  */
 export const SYSTEM_FONT = { ascent: 1900 / 2048, descent: 500 / 2048, top: 2146 / 2048, bottom: 555 / 2048 };
+export type FontMetrics = typeof SYSTEM_FONT;
+/** Per CSS family, the metrics AOSP would report for it; anything unregistered is the device
+ *  font's. fonts.ts fills this in as it registers a face out of an app's own resources. */
+const familyMetrics = new Map<string, FontMetrics>();
+export function setFamilyMetrics(family: string, m: FontMetrics) { familyMetrics.set(family, m); }
+/** the metrics of the first family in a paint's CSS stack — the one the browser will pick */
+function metricsOf(p: JPaint): FontMetrics {
+  const fam = p.tf.family;
+  const i = fam.indexOf(",");
+  return familyMetrics.get(i < 0 ? fam : fam.slice(0, i)) ?? SYSTEM_FONT;
+}
 function vmetrics(p: JPaint): { a: number; d: number } {
   const f = p.font();
   const hit = vmetCache.get(f);
@@ -552,8 +563,8 @@ function vmetrics(p: JPaint): { a: number; d: number } {
 }
 export function fontAscent(p: JPaint): number { return vmetrics(p).a; }
 export function fontDescent(p: JPaint): number { return vmetrics(p).d; }
-export function fontTop(p: JPaint): number { return vmetrics(p).a * (SYSTEM_FONT.top / SYSTEM_FONT.ascent); }
-export function fontBottom(p: JPaint): number { return vmetrics(p).d * (SYSTEM_FONT.bottom / SYSTEM_FONT.descent); }
+export function fontTop(p: JPaint): number { const m = metricsOf(p); return vmetrics(p).a * (m.top / m.ascent); }
+export function fontBottom(p: JPaint): number { const m = metricsOf(p); return vmetrics(p).d * (m.bottom / m.descent); }
 export function fillFontMetrics(p: JPaint, fm: { top: number; ascent: number; descent: number; bottom: number; leading: number }, int: boolean) {
   const a = fontAscent(p), d = fontDescent(p);
   const top = fontTop(p), bottom = fontBottom(p);
