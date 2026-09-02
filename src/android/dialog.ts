@@ -9,7 +9,7 @@ import { JCanvas, tfMedium } from "./graphics";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
 import { reportUncaught } from "./os";
-import { rvString, rvInt, rvFloat, JTheme } from "./res";
+import { rvString, rvInt, rvFloat, rvDimen, JTheme } from "./res";
 import { TV } from "./axml";
 import { inflateLayout, getInflater } from "./inflate";
 import { csText } from "./text";
@@ -44,6 +44,7 @@ async function loadCardBg(root: DialogRoot): Promise<void> {
   if (root.cardBg || !root.theme || !root.jres) return;
   const rv = root.theme.lookup(AID("windowBackground"));
   if (rv) root.cardBg = await loadDrawableRV(root.jres, rv, root.theme);
+  root.cardRadius = rvDimen(root.jres, root.theme.lookup(AID("dialogCornerRadius")), 0);
   // PhoneWindow: backgroundDimEnabled defaults to windowIsFloating (attrs.xml), so an
   // edge-to-edge sheet theme that only unfloats its window loses the platform dim and
   // draws its own scrim; backgroundDimAmount says how much.
@@ -67,6 +68,8 @@ class DialogRoot extends JFrameLayout {
   /** the dialog window's own background, from its theme — not a hardcoded white card */
   cardBg: JDrawable | null = null;
   themeDim = 0.6;
+  /** the theme's dialogCornerRadius: the frame's shape, and so the shadow's */
+  cardRadius = 0;
 }
 const GRAV_TOP = 0x30, GRAV_BOTTOM = 0x50, GRAV_VMASK = 0x70;
 rt.register({
@@ -111,22 +114,25 @@ rt.register({
       // An explicit Window.setBackgroundDrawable replaces the theme's frame (Compose sets it
       // transparent and draws its own surface); only the platform frame casts a shadow.
       const bg = win?.bgSet ? win.bg : this.cardBg;
+      const r = win?.bgSet ? 0 : this.cardRadius;
       if (!win?.bgSet) {
+        // the frame's elevation shadow, cast from its own shape: an almost-transparent fill
+        // paints the shadow without tinting the card, whose colour is the theme's to pick
         ctx.save();
         ctx.shadowColor = "rgba(0,0,0,0.45)";
         ctx.shadowBlur = 40;
         ctx.shadowOffsetY = 12;
-        ctx.fillStyle = "#ffffff";
+        ctx.globalAlpha = 0.01;
+        ctx.fillStyle = "#000";
         ctx.beginPath();
-        ctx.roundRect(this.cardLeft, this.cardTop, this.cardW, this.cardH, 6);
+        ctx.roundRect(this.cardLeft, this.cardTop, this.cardW, this.cardH, r);
         ctx.fill();
         ctx.restore();
       }
       if (bg) {
         ctx.save();
         ctx.beginPath();
-        if (win?.bgSet) ctx.rect(this.cardLeft, this.cardTop, this.cardW, this.cardH);
-        else ctx.roundRect(this.cardLeft, this.cardTop, this.cardW, this.cardH, 6);
+        ctx.roundRect(this.cardLeft, this.cardTop, this.cardW, this.cardH, r);
         ctx.clip();
         const b = bg.bounds;
         b.left = this.cardLeft; b.top = this.cardTop;
