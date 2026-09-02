@@ -278,13 +278,19 @@ screen — any direct fillText in the framework must set its own.)
   fastest way to learn what an app actually calls), `jsrc` (dump generated JS), `layout <apk>
   <0xid|name>` (dump a binary layout XML), `findstr <apk> <needle>` (grep the dex string pools),
   `trace` (TRACE=<class-regex> METH=<regex>: log entry/exit of matching methods during boot),
+  `nrun <apk> <lib.so>` (load one ARM32 library headless and run its JNI_OnLoad — the fastest
+  way to shake out the CPU/libc/JNI layers), `ndbg` (the same over a booted page),
   `dbg [flow] [stopAt] [outDir]` (walk an e2e flow until it wedges and dump the queue site,
   logs and missing list; frames land in webdroid-shots/dbg), `gen-framework-res` (rebuild the
   committed src/android/framework-res.json from vendor/aosp-res).
-- `bun run typecheck` must be clean; tsconfig has noUnusedLocals on.
+- `bun run typecheck` must be clean; tsconfig has noUnusedLocals on. `bun run test` runs the
+  ARM32 decoder unit tests (src/native/arm.test.ts) — the only bun:test suite in the tree.
 - browser: `http://localhost:4080/?apk=<file>` boots that apk on load (reload = rebundle +
-  reboot); `wd.{boot,tree,find,logs,rt,uiState,perf,perfReset,tap,tapText,swipe,type,back,
-  alive,reset,rnodes,measure,querydb,mainDbg}` (src/main.ts) + the missing-API panel; the
+  reboot); `wd.{boot,app,tree,find,locateText,logs,rt,uiState,overlays,perf,perfReset,tap,
+  tapText,swipe,type,back,alive,reset,rnodes,measure,querydb,mainDbg,native,web,ticks,setGL}`
+  (src/main.ts) + the missing-API panel; `locateText` is what `tapText` and the e2e driver
+  resolve a label to device coords with, and `ticks` is how you tell a live frame loop from a
+  throttled one; the
   missing list is `wd.rt.missing` (a Set) — there is no `wd.missing`. loop-bomb guard names
   runaway methods; [junk measure] warns on 0x3fffffff dims.
 - wd.perf (src/perf.ts): always-on counters — frames/frameMs, layoutPasses/layoutMs,
@@ -433,8 +439,9 @@ Perf, measured headless (swiftshader): a CDP CPU profile over 3.6s of gameplay i
 0.8ms of JavaScript per shell tick, ~7ms wall per GL frame during play and ~13ms on the busier
 title screen (that is the software rasteriser, not our code; `perf.glSkipped` ≈ 3% of ticks in
 play, 28% on the title). `inputMs` is ~40ms per tap and all of it is the engine's own
-`Thread.sleep(20)` per DOWN/UP. The full suite after all of this: fitnotes 41.97%,
-mihon-onboarding 47.58%, mihon-app 91.80%, everything rendered — unchanged from before.
+`Thread.sleep(20)` per DOWN/UP. The full suite after all of this: everything rendered,
+the scored flows unchanged — see `## Status` for the current numbers rather than a second
+copy of them here.
 
 Seen, not fixed: `Thread.currentThread()` inside `onPause`/`onDestroy` reported the update thread
 after Back — the "curThread is a global" hazard, cosmetic here. `MessageDigest` now throws
@@ -444,10 +451,11 @@ The ad SDK's spam-signal jar wants `DexClassLoader` (unzip the jar from the vfs,
 `loadClass` → `rt.classFor`) — generic and bounded, left for later.
 
 ## Conventions
+AGENTS.md carries the rules an agent has to follow (verify commands, file layout, commit
+subjects, the janitor invariants). Only what it does not say lives here:
 - bun runtime. Minimal deps (fflate, sql.js; typescript/playwright/pngjs/pixelmatch for tooling).
-  Terse TS, perf > purity in hot paths. Comments explain why, never what.
-- Commits: small, focused. Test in Chrome via claude-in-chrome MCP (screenshot loop), verify
-  with `bun run e2e`.
+  Terse TS, perf > purity in hot paths.
+- Test in Chrome via claude-in-chrome MCP (screenshot loop) as well as `bun run e2e`.
 
 ## Mihon renders
 Mihon boots to its Compose onboarding screen (Welcome + theme picker) and responds to taps

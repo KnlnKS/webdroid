@@ -1,6 +1,8 @@
-// Every native module, in dependency order. Single source of truth: the browser shell and
-// the CLI tools import THIS, never their own copy of the list — a drifted copy makes
-// scripts/audit.ts report implemented classes as missing.
+// Every native module, in dependency order. The browser shell and scripts/audit.ts import
+// THIS, never their own copy of the list — a drifted copy makes audit report implemented
+// classes as missing. smoke.ts, jsrc.ts and nrun.ts deliberately load a partial list instead:
+// a registered native shadows the dex class, and those three exist to compile or dump the
+// app's own bytecode.
 import "./jvm/natives/jlang";
 import "./jvm/natives/jutil";
 import "./jvm/natives/jjson";
