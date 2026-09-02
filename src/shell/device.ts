@@ -17,6 +17,7 @@ import {
 } from "../android/view";
 import { JCanvas, cssColor, tfMedium } from "../android/graphics";
 import { overlays, drawToasts, removeOverlay } from "../android/popup";
+import { webLayerSweep } from "../android/webkit";
 import { mangleMethod } from "../jvm/abi";
 import { perf } from "../perf";
 import { device } from "./config";
@@ -468,6 +469,8 @@ async function tick0(ctx: CanvasRenderingContext2D) {
         ctx.restore();
       }
       perf.drawMs += performance.now() - t0;
+      // WebView frames are DOM over the canvas: show the ones this pass drew, hide the rest
+      webLayerSweep(contentY, overlays.length > 0);
       // Only meaningful right after a layout pass: without one, measured-vs-laid-out sizes
       // cannot have changed, so the walk is pure cost.
       if (laidOut) settleWatch(decor);
