@@ -53,6 +53,9 @@ const services = new Map<string, unknown>();
 const appString = (id: number) => (appHost ? resString(appHost.res, id) : "");
 function ctxString(this: JContext, id: number) { return resString(this.$host.res, id); }
 const display = () => newObj("android/view/Display", null);
+/** the one loader Class.getClassLoader() hands out, so `ctx.getClassLoader() == X.class.getClassLoader()` holds */
+let loader: unknown;
+const bootLoader = () => loader ??= rt.link("java/lang/Class").ctor.prototype[mangleMethod("getClassLoader", "()Ljava/lang/ClassLoader;")]();
 const signatures = () => jarray([new (rt.link("android/content/pm/Signature").ctor)()], "Landroid/content/pm/Signature;");
 // Context.XXX_SERVICE name → the manager class; getSystemService(Class) walks it backwards.
 const SERVICE_CLASS: Record<string, string> = {
@@ -265,7 +268,7 @@ const contextMethods: NativeSpec["methods"] = {
     a.host = this.$host.res;
     return a;
   },
-  "getClassLoader()Ljava/lang/ClassLoader;": () => newObj("java/lang/ClassLoader", null),
+  "getClassLoader()Ljava/lang/ClassLoader;": bootLoader,
   "getFilesDir()Ljava/io/File;": function (this: JContext) { return mkFile(`/data/data/${this.$host.pkg}/files`); },
   "getCacheDir()Ljava/io/File;": function (this: JContext) { return mkFile(`/data/data/${this.$host.pkg}/cache`); },
   "getCodeCacheDir()Ljava/io/File;": function (this: JContext) { return mkFile(`/data/data/${this.$host.pkg}/code_cache`); },
