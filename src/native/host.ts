@@ -85,7 +85,7 @@ export function defineHost(name: string, fn: HostFn): number {
   return trampAddr(slot);
 }
 export function slotName(slot: number): string { return names[slot] ?? `slot${slot}`; }
-const STR0 = new Set(["fopen", "open", "access", "stat", "lstat", "mkdir", "opendir", "getenv", "unlink", "rename", "remove", "rmdir", "__android_log_write", "dlopen", "strlen", "strcmp", "strncmp", "strcpy", "strncpy", "strstr", "strchr", "atoi", "strtol", "strdup", "sprintf", "snprintf", "puts", "printf"]);
+const STR0 = new Set(["fopen", "open", "access", "stat", "lstat", "mkdir", "opendir", "getenv", "unlink", "rename", "remove", "rmdir", "dlopen", "strlen", "strcmp", "strncmp", "strcpy", "strncpy", "strstr", "strchr", "atoi", "strtol", "strdup", "sprintf", "snprintf", "puts", "printf"]);
 export const hostTrace = { on: false, ring: [] as string[], max: 256, filter: null as RegExp | null };
 
 /** dispatch a host call at trampoline `slot`; a returned promise parks the Cpu (see Cpu.runSlice) */
@@ -99,7 +99,8 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
     const nm = names[slot];
     if (!hostTrace.filter || hostTrace.filter.test(nm)) {
       const r = cpu.r;
-      const s0 = STR0.has(nm) && r[0] ? ` "${mem.cstr(r[0] >>> 0, 120)}"` : "";
+      let s0 = "";
+      if (STR0.has(nm) && r[0]) { try { s0 = ` "${mem.cstr(r[0] >>> 0, 120)}"`; } catch { s0 = " <bad ptr>"; } }
       hostTrace.ring.push(`${nm}(${(r[0] >>> 0).toString(16)},${(r[1] >>> 0).toString(16)},${(r[2] >>> 0).toString(16)},${(r[3] >>> 0).toString(16)})${s0} lr=${(r[14] >>> 0).toString(16)}`);
       if (hostTrace.ring.length > hostTrace.max) hostTrace.ring.splice(0, hostTrace.ring.length - hostTrace.max);
     }

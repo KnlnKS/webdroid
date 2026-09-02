@@ -5,6 +5,7 @@
 
 import { mem } from "./mem";
 import { PAGE_SIZE } from "./abi";
+import { emitVfp } from "./vfp";
 
 const COND = ["c.z", "!c.z", "c.c", "!c.c", "c.n", "!c.n", "c.v", "!c.v",
   "(c.c&&!c.z)", "(!c.c||c.z)", "c.n===c.v", "c.n!==c.v", "(!c.z&&c.n===c.v)", "(c.z||c.n!==c.v)", "", ""];
@@ -229,14 +230,21 @@ function emit(pc: number, w: number, out: string[], k: number): boolean {
       body += wb;
     }
   } else if (top === 6) {
-    // LDC/STC (VFP vldr/vstr, or other coprocessors)
-    out.push(fault(pc, w, `coprocessor ${(w >>> 8) & 15} load/store (VFP?)`));
-    return true;
+    // LDC/STC: VFP vldr/vstr/vldm/vstm and the 64-bit VMOV transfers
+    const v = emitVfp(pc, w);
+    if (v === null) { out.push(fault(pc, w, `coprocessor ${(w >>> 8) & 15} load/store`)); return true; }
+    body = v;
   } else if (top === 7) {
-    if (w & (1 << 24)) { out.push(fault(pc, w, "swi")); return true; }
-    const cp = (w >>> 8) & 15;
-    if ((w & 0x0ff00fff) === 0x0e1d0f70 && cp === 15) body = `r[${rd}]=c.tlsBase;`;                                   // mrc p15,0,rd,c13,c0,3
-    else { out.push(fault(pc, w, `coprocessor ${cp} op (VFP?)`)); return true; }
+    if (w & (1 << 24)) body = `r[15]=${pc};c.swi();`;
+    else {
+      const cp = (w >>> 8) & 15;
+      if ((w & 0x0ff00fff) === 0x0e1d0f70 && cp === 15) body = `r[${rd}]=c.tlsBase;`;                                 // mrc p15,0,rd,c13,c0,3
+      else {
+        const v = emitVfp(pc, w);
+        if (v === null) { out.push(fault(pc, w, `coprocessor ${cp} op`)); return true; }
+        body = v;
+      }
+    }
   } else {
     out.push(fault(pc, w, "undefined"));
     return true;

@@ -182,3 +182,101 @@ rt.register({
     },
   },
 });
+
+// ── AudioTrack (MODE_STREAM): PCM written from Java is scheduled back-to-back on the shared
+// AudioContext; the periodic position listener is what streaming mixers (a native engine's
+// SoundPlayer) refill from, so it fires whenever the queue runs below a few periods.
+const D_periodic = "(Landroid/media/AudioTrack;)V";
+class JAudioTrack extends JObj {
+  rate = 44100; channels = 2; bytesPerSample = 2; bufBytes = 0;
+  state = 1; playState = 1;          // STATE_INITIALIZED; PLAYSTATE_STOPPED
+  nextTime = 0; written = 0;
+  period = 0; listener: unknown = null; timer: ReturnType<typeof setInterval> | null = null;
+  gain: GainNode | null = null;
+  vol = 1;
+  ctx(): AudioContext { return (actx ??= new AudioContext()); }
+  frameBytes(): number { return this.channels * this.bytesPerSample; }
+  queuedSec(): number { return Math.max(0, this.nextTime - this.ctx().currentTime); }
+  /** interleaved 16-bit (or 8-bit unsigned) PCM → one scheduled buffer */
+  push(samples: Int16Array | Int8Array, frames: number): void {
+    if (frames <= 0) return;
+    const ctx = this.ctx();
+    const buf = ctx.createBuffer(this.channels, frames, this.rate);
+    for (let c = 0; c < this.channels; c++) {
+      const ch = buf.getChannelData(c);
+      if (samples instanceof Int16Array) for (let i = 0; i < frames; i++) ch[i] = samples[i * this.channels + c] / 32768;
+      else for (let i = 0; i < frames; i++) ch[i] = ((samples[i * this.channels + c] & 0xff) - 128) / 128;
+    }
+    if (!this.gain) { this.gain = ctx.createGain(); this.gain.gain.value = this.vol; this.gain.connect(ctx.destination); }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(this.gain);
+    const at = Math.max(this.nextTime, ctx.currentTime + 0.02);
+    src.start(at);
+    this.nextTime = at + frames / this.rate;
+    this.written += frames;
+  }
+  startTimer(): void {
+    if (this.timer || !this.listener || !this.period) return;
+    const periodMs = Math.max(5, this.period / this.rate * 1000);
+    this.timer = setInterval(() => {
+      if (this.playState !== 3 || !this.listener) return;
+      // refill until ~3 periods are queued; each callback is one write of one period
+      if (this.queuedSec() < 3 * this.period / this.rate) void onMain(() => vcall(this.listener, "onPeriodicNotification", D_periodic, this)).catch(reportUncaught);
+    }, periodMs / 2);
+  }
+  stopTimer(): void { if (this.timer) { clearInterval(this.timer); this.timer = null; } }
+}
+rt.register({
+  name: "android/media/AudioTrack", ctor: JAudioTrack,
+  statics: { MODE_STATIC: 0, MODE_STREAM: 1, PLAYSTATE_STOPPED: 1, PLAYSTATE_PAUSED: 2, PLAYSTATE_PLAYING: 3, STATE_UNINITIALIZED: 0, STATE_INITIALIZED: 1, STATE_NO_STATIC_DATA: 2,
+    SUCCESS: 0, ERROR: -1, ERROR_BAD_VALUE: -2, ERROR_INVALID_OPERATION: -3, WRITE_BLOCKING: 0, WRITE_NON_BLOCKING: 1 },
+  methods: {
+    "<init>(IIIIII)V": function (this: JAudioTrack, _stream: number, rate: number, chanCfg: number, fmt: number, bufBytes: number) {
+      this.rate = rate; this.channels = chanCfg === 12 || chanCfg === 3 ? 2 : 1; this.bytesPerSample = fmt === 3 ? 1 : 2; this.bufBytes = bufBytes;
+    },
+    "static getMinBufferSize(III)I": (rate: number, chanCfg: number, fmt: number) => {
+      // ~100 ms of frames, as AudioFlinger answers for a typical output
+      const frames = Math.max(1024, Math.ceil(rate / 10));
+      return frames * (chanCfg === 12 || chanCfg === 3 ? 2 : 1) * (fmt === 3 ? 1 : 2);
+    },
+    "static getNativeOutputSampleRate(I)I": () => actx?.sampleRate ?? 44100,
+    "static getMaxVolume()F": () => 1, "static getMinVolume()F": () => 0,
+    "getState()I": function (this: JAudioTrack) { return this.state; },
+    "getPlayState()I": function (this: JAudioTrack) { return this.playState; },
+    "getSampleRate()I": function (this: JAudioTrack) { return this.rate; },
+    "getChannelCount()I": function (this: JAudioTrack) { return this.channels; },
+    "getPlaybackHeadPosition()I": function (this: JAudioTrack) { return Math.min(this.written, Math.floor((this.written - this.queuedSec() * this.rate))) | 0; },
+    "setStereoVolume(FF)I": function (this: JAudioTrack, l: number, r: number) { this.vol = (l + r) / 2; if (this.gain) this.gain.gain.value = this.vol; return 0; },
+    "setVolume(F)I": function (this: JAudioTrack, v: number) { this.vol = v; if (this.gain) this.gain.gain.value = v; return 0; },
+    "setPlaybackRate(I)I": () => 0,
+    "setPlaybackPositionUpdateListener(Landroid/media/AudioTrack$OnPlaybackPositionUpdateListener;)V": function (this: JAudioTrack, l: unknown) { this.listener = l; if (!l) this.stopTimer(); else if (this.playState === 3) this.startTimer(); },
+    "setPlaybackPositionUpdateListener(Landroid/media/AudioTrack$OnPlaybackPositionUpdateListener;Landroid/os/Handler;)V": function (this: JAudioTrack, l: unknown) { this.listener = l; if (!l) this.stopTimer(); else if (this.playState === 3) this.startTimer(); },
+    "setPositionNotificationPeriod(I)I": function (this: JAudioTrack, p: number) { this.period = p; return 0; },
+    "setNotificationMarkerPosition(I)I": () => 0,
+    "play()V": function (this: JAudioTrack) { this.playState = 3; void this.ctx().resume(); this.nextTime = Math.max(this.nextTime, this.ctx().currentTime); this.startTimer(); },
+    "pause()V": function (this: JAudioTrack) { this.playState = 2; this.stopTimer(); },
+    "stop()V": function (this: JAudioTrack) { this.playState = 1; this.stopTimer(); },
+    "flush()V": function (this: JAudioTrack) { this.nextTime = 0; },
+    "release()V": function (this: JAudioTrack) { this.stopTimer(); this.state = 0; this.listener = null; },
+    "write([SII)I": function (this: JAudioTrack, data: Int16Array, off: number, n: number) {
+      if (this.state !== 1) return -3;
+      this.push(data.subarray(off, off + n), Math.floor(n / this.channels));
+      return n;
+    },
+    "write([BII)I": function (this: JAudioTrack, data: Int8Array, off: number, n: number) {
+      if (this.state !== 1) return -3;
+      if (this.bytesPerSample === 2) this.push(new Int16Array(data.buffer.slice(data.byteOffset + off, data.byteOffset + off + (n & ~1))), Math.floor(n / this.frameBytes()));
+      else this.push(data.subarray(off, off + n), Math.floor(n / this.channels));
+      return n;
+    },
+    "getAudioSessionId()I": () => 1,
+  },
+});
+rt.register({ name: "android/media/AudioTrack$OnPlaybackPositionUpdateListener", ctor: class extends JObj {} });
+rt.register({ name: "android/media/AudioRecord$OnRecordPositionUpdateListener", ctor: class extends JObj {} });
+rt.register({
+  name: "android/media/AudioFormat", ctor: class extends JObj {},
+  statics: { CHANNEL_CONFIGURATION_MONO: 2, CHANNEL_CONFIGURATION_STEREO: 3, CHANNEL_OUT_MONO: 4, CHANNEL_OUT_STEREO: 12, CHANNEL_IN_MONO: 16, CHANNEL_IN_STEREO: 12,
+    ENCODING_PCM_16BIT: 2, ENCODING_PCM_8BIT: 3, ENCODING_PCM_FLOAT: 4, ENCODING_DEFAULT: 1, ENCODING_INVALID: 0 },
+});

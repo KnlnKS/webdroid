@@ -78,6 +78,7 @@ export class Cpu {
   ring = new Int32Array(64); rp = 0;
   s = new Float32Array(64);
   d = new Float64Array(this.s.buffer);
+  si = new Int32Array(this.s.buffer);
   fpscr = 0;
   tlsBase = 0;
   jthread: JThread;
@@ -273,6 +274,22 @@ export class Cpu {
     const s = (this.lo >>> 0) + (l >>> 0);
     this.lo = s | 0;
     this.hi = (this.hi + h + (s > 4294967295 ? 1 : 0)) | 0;
+  }
+  /** EABI syscall (swi 0, number in r7): only what a userspace runtime issues directly */
+  swi(): void {
+    const r = this.r;
+    switch (r[7] >>> 0) {
+      case 0xf0002: invalidateRange(r[0] >>> 0, (r[1] - r[0]) >>> 0); r[0] = 0; return;   // __ARM_NR_cacheflush
+      case 0xf0005: this.tlsBase = r[0]; r[0] = 0; return;                                   // __ARM_NR_set_tls
+      case 20: r[0] = 4242; return;                                                          // getpid
+      case 224: r[0] = 4242 + this.tid; return;                                              // gettid
+      default: this.fault(`swi: unsupported syscall ${r[7] >>> 0}`);
+    }
+  }
+  /** round to nearest, ties to even (the default FPSCR rounding mode for VCVT) */
+  rne(x: number): number {
+    const f = Math.floor(x), d = x - f;
+    return d < 0.5 ? f : d > 0.5 ? f + 1 : (f % 2 === 0 ? f : f + 1);
   }
   sat(v: number): number { if (v > 2147483647) { this.q = 1; return 2147483647; } if (v < -2147483648) { this.q = 1; return -2147483648; } return v | 0; }
   fault(msg: string): never {

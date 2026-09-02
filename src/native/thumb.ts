@@ -182,7 +182,7 @@ function emit(pc: number, h: number, out: string[], k: number): number {
     }
     case 13: {
       const cond = (h >>> 8) & 15;
-      if (cond === 15) { out.push(fault("swi")); return -2; }
+      if (cond === 15) { out.push(`r[15]=${pc};c.swi();`); return 2; }
       if (cond === 14) { out.push(fault("udf")); return -2; }
       const off = ((h & 255) << 24) >> 23;
       out.push(`if(${COND[cond]})${ret(hex(pc + 4 + off))}`);
