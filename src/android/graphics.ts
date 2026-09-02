@@ -68,6 +68,37 @@ const rectMethods = (F: boolean): NativeSpec["methods"] => ({
     this.left = Math.min(this.left, o.left); this.top = Math.min(this.top, o.top);
     this.right = Math.max(this.right, o.right); this.bottom = Math.max(this.bottom, o.bottom);
   },
+  [`intersect(${F ? "FFFF" : "IIII"})Z`]: function (this: JRect, l: number, t: number, r: number, b: number) {
+    if (this.left < r && l < this.right && this.top < b && t < this.bottom) {
+      if (this.left < l) this.left = l; if (this.top < t) this.top = t;
+      if (this.right > r) this.right = r; if (this.bottom > b) this.bottom = b;
+      return 1;
+    }
+    return 0;
+  },
+  [`intersects(${F ? "FFFF" : "IIII"})Z`]: function (this: JRect, l: number, t: number, r: number, b: number) {
+    return this.left < r && l < this.right && this.top < b && t < this.bottom ? 1 : 0;
+  },
+  [`static intersects(${F ? "Landroid/graphics/RectF;Landroid/graphics/RectF;" : "Landroid/graphics/Rect;Landroid/graphics/Rect;"})Z`]: (a: JRect, b: JRect) =>
+    a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom ? 1 : 0,
+  [`contains(${F ? "Landroid/graphics/RectF;" : "Landroid/graphics/Rect;"})Z`]: function (this: JRect, o: JRect) {
+    return this.left < this.right && this.top < this.bottom && this.left <= o.left && this.top <= o.top && this.right >= o.right && this.bottom >= o.bottom ? 1 : 0;
+  },
+  [`contains(${F ? "FFFF" : "IIII"})Z`]: function (this: JRect, l: number, t: number, r: number, b: number) {
+    return this.left < this.right && this.top < this.bottom && this.left <= l && this.top <= t && this.right >= r && this.bottom >= b ? 1 : 0;
+  },
+  "toShortString()Ljava/lang/String;": function (this: JRect) { return `[${this.left},${this.top}][${this.right},${this.bottom}]`; },
+  ...(F ? {
+    "round(Landroid/graphics/Rect;)V": function (this: JRect, o: JRect) {
+      o.left = Math.round(this.left); o.top = Math.round(this.top); o.right = Math.round(this.right); o.bottom = Math.round(this.bottom);
+    },
+    "roundOut(Landroid/graphics/Rect;)V": function (this: JRect, o: JRect) {
+      o.left = Math.floor(this.left); o.top = Math.floor(this.top); o.right = Math.ceil(this.right); o.bottom = Math.ceil(this.bottom);
+    },
+  } : {
+    "exactCenterX()F": function (this: JRect) { return (this.left + this.right) * 0.5; },
+    "exactCenterY()F": function (this: JRect) { return (this.top + this.bottom) * 0.5; },
+  }),
 });
 rt.register({
   name: "android/graphics/Rect", ctor: JRect, ifaces: ["android/os/Parcelable"],

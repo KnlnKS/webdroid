@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { mangleMethod } from "../jvm/abi";
-import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp } from "./graphics";
+import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, insetsOf } from "./graphics";
 import { device } from "../shell/config";
 import { Resources, type RV, type JTheme, AID, T_STR, rvColor, rvDimen, rvFloat, normRV, parseFwValue } from "./res";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
@@ -24,6 +24,7 @@ export class JDrawable extends JObj {
   tint: number | null = null;
   autoMirrored = false;
   layoutDir = 0;
+  visible = true;
 
   /** TS-side paint. Subclasses override. */
   paint(cv: JCanvas) {}
@@ -112,7 +113,24 @@ const drawableMethods: NativeSpec["methods"] = {
     return 0;
   },
   "getOpacity()I": () => -3,
-  "setVisible(ZZ)Z": () => 1,
+  "static resolveOpacity(II)I": (a: number, b: number) => a === b ? a : a === 0 || b === 0 ? 0 : a === -3 || b === -3 ? -3 : a === -2 || b === -2 ? -2 : -1,
+  "setVisible(ZZ)Z": function (this: JDrawable, v: number) { const changed = this.visible !== !!v; this.visible = !!v; return changed ? 1 : 0; },
+  "isVisible()Z": function (this: JDrawable) { return this.visible ? 1 : 0; },
+  "getColorFilter()Landroid/graphics/ColorFilter;": () => null,
+  "setTintBlendMode(Landroid/graphics/BlendMode;)V": () => {},
+  "getChangingConfigurations()I": () => 0,
+  "getOutline(Landroid/graphics/Outline;)V": function (this: JDrawable, o: unknown) {
+    const b = this.bounds;
+    return vcall(o, "setRect", "(IIII)V", b.left, b.top, b.right, b.bottom);
+  },
+  "getOpticalInsets()Landroid/graphics/Insets;": () => insetsOf(0, 0, 0, 0),
+  "getTransparentRegion()Landroid/graphics/Region;": () => null,
+  "isProjected()Z": () => 0,
+  "canApplyTheme()Z": () => 0,
+  "applyTheme(Landroid/content/res/Resources$Theme;)V": () => {},
+  "onLayoutDirectionChanged(I)Z": () => 0,
+  "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;)V": () => {},
+  "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V": () => {},
   "setAutoMirrored(Z)V": function (this: JDrawable, m: number) { this.autoMirrored = !!m; },
   "isAutoMirrored()Z": function (this: JDrawable) { return this.autoMirrored ? 1 : 0; },
   "setLayoutDirection(I)Z": function (this: JDrawable, d: number) {
@@ -294,6 +312,14 @@ export class JGradientDrawable extends JDrawable {
   gradRadius = 0;
   sizeW = -1; sizeH = -1;
   padding = new JRect();
+  solidCsl: JColorStateList | null = null;
+  onStateChange(): boolean {
+    if (!this.solidCsl) return false;
+    const c = cslColor(this.solidCsl, this.stateSet);
+    if (c === this.solid) return false;
+    this.solid = c;
+    return true;
+  }
   paint(cv: JCanvas) {
     const { left, top, right, bottom } = this.bounds;
     const w = right - left, h = bottom - top;
@@ -361,8 +387,25 @@ rt.register({
     "setSize(II)V": function (this: JGradientDrawable, w: number, h: number) { this.sizeW = w; this.sizeH = h; },
     "setGradientType(I)V": function (this: JGradientDrawable, t: number) { this.gradType = t; },
     "setGradientRadius(F)V": function (this: JGradientDrawable, r: number) { this.gradRadius = r; },
+    "<init>(Landroid/graphics/drawable/GradientDrawable$Orientation;[I)V": function (this: JGradientDrawable, o: { ordinal?: number } | null, cs: Int32Array | null) {
+      this.gradColors = cs ? [...cs] : null;
+      this.gradAngle = ORIENT_ANGLE[o?.ordinal ?? 0] ?? 0;
+    },
+    "setOrientation(Landroid/graphics/drawable/GradientDrawable$Orientation;)V": function (this: JGradientDrawable, o: { ordinal?: number } | null) { this.gradAngle = ORIENT_ANGLE[o?.ordinal ?? 0] ?? 0; },
+    "getCornerRadius()F": function (this: JGradientDrawable) { return this.radii[0]; },
+    "getCornerRadii()[F": function (this: JGradientDrawable) {
+      const r = this.radii;
+      return Float32Array.from([r[0], r[0], r[1], r[1], r[2], r[2], r[3], r[3]]);
+    },
+    "setColor(Landroid/content/res/ColorStateList;)V": function (this: JGradientDrawable, csl: JColorStateList | null) {
+      this.solidCsl = csl;
+      this.solid = csl ? cslColor(csl, this.stateSet) : null;
+    },
+    "getColor()Landroid/content/res/ColorStateList;": function (this: JGradientDrawable) { return this.solidCsl ?? (this.solid !== null ? mkCsl(this.solid) : null); },
   },
 });
+// GradientDrawable.Orientation ordinals (TOP_BOTTOM first) as the angle each one means
+const ORIENT_ANGLE = [270, 225, 180, 135, 90, 45, 0, 315];
 
 /** a selector/color-state item matches when every required state is set and no negated one is */
 function matchesState(it: { states: number[]; negStates: number[] }, states: number[]): boolean {
@@ -405,15 +448,20 @@ rt.register({
 
 // ── LayerDrawable / InsetDrawable / Ripple
 class JLayerDrawable extends JDrawable {
-  layers: { d: JDrawable; insets: [number, number, number, number] }[] = [];
+  layers: { d: JDrawable; insets: [number, number, number, number]; w?: number; h?: number; gravity?: number }[] = [];
   ids: (number | null)[] = [];
+  /** AOSP updateLayerBounds: insets, then an explicit layer size placed by its gravity */
   layout() {
     for (const l of this.layers) {
-      l.d.bounds.left = this.bounds.left + l.insets[0];
-      l.d.bounds.top = this.bounds.top + l.insets[1];
-      l.d.bounds.right = this.bounds.right - l.insets[2];
-      l.d.bounds.bottom = this.bounds.bottom - l.insets[3];
-      onBoundsChangeAll(l.d);
+      let L = this.bounds.left + l.insets[0], T = this.bounds.top + l.insets[1];
+      let R = this.bounds.right - l.insets[2], B = this.bounds.bottom - l.insets[3];
+      const w = l.w !== undefined && l.w >= 0 ? l.w : -1, h = l.h !== undefined && l.h >= 0 ? l.h : -1;
+      if (w >= 0 || h >= 0) {
+        const g = l.gravity || (w >= 0 && h >= 0 ? 0x33 : w >= 0 ? 0x73 : 0x37);
+        if (w >= 0) { const hg = g & 7; L = hg === 1 ? ((L + R - w) >> 1) : hg === 5 ? R - w : L; R = L + w; }
+        if (h >= 0) { const vg = g & 0x70; T = vg === 16 ? ((T + B - h) >> 1) : vg === 80 ? B - h : T; B = T + h; }
+      }
+      setBounds.call(l.d, L, T, R, B);
     }
   }
   paint(cv: JCanvas) {
@@ -438,6 +486,39 @@ rt.register({
     "setLayerInset(IIIII)V": function (this: JLayerDrawable, i: number, l: number, t: number, r: number, b: number) {
       if (this.layers[i]) this.layers[i].insets = [l, t, r, b];
     },
+    "setLayerInsetLeft(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[0] = v; },
+    "setLayerInsetTop(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[1] = v; },
+    "setLayerInsetRight(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[2] = v; },
+    "setLayerInsetBottom(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[3] = v; },
+    "setLayerInsetStart(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[0] = v; },
+    "setLayerInsetEnd(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[2] = v; },
+    "getLayerInsetLeft(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[0] ?? 0; },
+    "getLayerInsetTop(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[1] ?? 0; },
+    "getLayerInsetRight(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[2] ?? 0; },
+    "getLayerInsetBottom(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[3] ?? 0; },
+    "getLayerInsetStart(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[0] ?? 0; },
+    "getLayerInsetEnd(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[2] ?? 0; },
+    "setLayerSize(III)V": function (this: JLayerDrawable, i: number, w: number, h: number) { if (this.layers[i]) { this.layers[i].w = w; this.layers[i].h = h; } },
+    "setLayerWidth(II)V": function (this: JLayerDrawable, i: number, w: number) { if (this.layers[i]) this.layers[i].w = w; },
+    "setLayerHeight(II)V": function (this: JLayerDrawable, i: number, h: number) { if (this.layers[i]) this.layers[i].h = h; },
+    "getLayerWidth(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.w ?? -1; },
+    "getLayerHeight(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.h ?? -1; },
+    "setLayerGravity(II)V": function (this: JLayerDrawable, i: number, g: number) { if (this.layers[i]) this.layers[i].gravity = g; },
+    "getLayerGravity(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.gravity ?? 0; },
+    "setId(II)V": function (this: JLayerDrawable, i: number, id: number) { this.ids[i] = id; },
+    "getId(I)I": function (this: JLayerDrawable, i: number) { return this.ids[i] ?? -1; },
+    "addLayer(Landroid/graphics/drawable/Drawable;)I": function (this: JLayerDrawable, d: JDrawable) {
+      d.callback = this;
+      this.layers.push({ d, insets: [0, 0, 0, 0] });
+      return this.layers.length - 1;
+    },
+    "setDrawableByLayerId(ILandroid/graphics/drawable/Drawable;)Z": function (this: JLayerDrawable, id: number, d: JDrawable) {
+      const i = this.ids.indexOf(id);
+      if (i < 0 || !this.layers[i]) return 0;
+      this.layers[i].d = d; d.callback = this;
+      return 1;
+    },
+    "setDrawable(ILandroid/graphics/drawable/Drawable;)V": function (this: JLayerDrawable, i: number, d: JDrawable) { if (this.layers[i]) { this.layers[i].d = d; d.callback = this; } },
   },
 });
 /** RippleDrawable.RADIUS_AUTO: compute the radius from bounds instead of using an explicit one. */
