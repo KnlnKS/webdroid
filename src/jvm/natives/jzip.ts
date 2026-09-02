@@ -4,7 +4,7 @@ import { Inflate, Unzlib, Deflate, Zlib, inflateSync, gunzipSync } from "fflate"
 import { rt, JObj } from "../runtime";
 import { mangleMethod } from "../abi";
 import { vcall, newObj, defineException } from "./jlang";
-import { vfs, JFile, JInputStream } from "./jio";
+import { vfs, JFile, JInputStream, JOutputStream } from "./jio";
 import { mkIter } from "./jutil";
 
 type Codec = Inflate | Unzlib | Deflate | Zlib;
@@ -101,6 +101,42 @@ rt.register({
     "needsInput()Z": function (this: JDeflater) { return this.pending ? 0 : 1; },
     "end()V": function (this: JDeflater) { this.st = null; this.out = []; },
     "reset()V": function (this: JDeflater) { this.st = null; this.out = []; this.done = false; this.pending = null; },
+  },
+});
+
+// DeflaterOutputStream: feeds its Deflater and forwards whatever it produces to the wrapped
+// stream; close() finishes the deflate stream first (the zlib trailer), as the JDK does.
+class JDeflaterOut extends JOutputStream { out: unknown = null; def = new JDeflater(); closed = false; }
+async function pump(s: JDeflaterOut) {
+  for (const c of s.def.out) await vcall(s.out, "write", "([BII)V", new Int8Array(c.buffer, c.byteOffset, c.length), 0, c.length);
+  s.def.out = [];
+}
+function dosInit(this: JDeflaterOut, o: unknown, def?: JDeflater | null) { this.out = o; if (def) this.def = def; }
+rt.register({
+  name: "java/util/zip/DeflaterOutputStream", ctor: JDeflaterOut, sup: "java/io/FilterOutputStream",
+  fields: { out: "out", def: "def" },
+  methods: {
+    "<init>(Ljava/io/OutputStream;)V": dosInit,
+    "<init>(Ljava/io/OutputStream;Z)V": dosInit,
+    "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;)V": dosInit,
+    "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;I)V": dosInit,
+    "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;Z)V": dosInit,
+    "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;IZ)V": dosInit,
+    "write(I)V": function (this: JDeflaterOut, b: number) { return vcall(this, "write", "([BII)V", Int8Array.of(b), 0, 1); },
+    "write([BII)V": async function (this: JDeflaterOut, b: Int8Array, off: number, len: number) {
+      if (this.def.done) throw rt.mkThrowable("java/io/IOException", "write beyond end of stream");
+      if (len > 0) { this.def.ensure().push(new Uint8Array(b.buffer.slice(b.byteOffset + off, b.byteOffset + off + len))); await pump(this); }
+    },
+    "finish()V": async function (this: JDeflaterOut) {
+      if (!this.def.done) { this.def.ensure().push(new Uint8Array(0), true); await pump(this); }
+    },
+    "flush()V": function (this: JDeflaterOut) { return vcall(this.out, "flush", "()V"); },
+    "close()V": async function (this: JDeflaterOut) {
+      if (this.closed) return;
+      this.closed = true;
+      await vcall(this, "finish", "()V");
+      await vcall(this.out, "close", "()V");
+    },
   },
 });
 
