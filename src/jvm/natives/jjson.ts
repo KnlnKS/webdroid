@@ -2,7 +2,7 @@
 
 import { rt, JObj } from "../runtime";
 import { defineException, boxInt, box, JLong, JDouble, TRUE, FALSE } from "./jlang";
-import { mkIter } from "./jutil";
+import { mkIter, newLinkedHashSet } from "./jutil";
 
 class JJSONObject extends JObj { o: Record<string, unknown> = {}; }
 class JJSONArray extends JObj { a: unknown[] = []; }
@@ -26,7 +26,10 @@ function jsonWrap(v: unknown): unknown {
 function jsonUnwrap(v: unknown): unknown {
   if (v instanceof JJSONObject) return v.o;
   if (v instanceof JJSONArray) return v.a;
-  if (typeof v === "object" && v !== null && "v" in v) return (v as { v: unknown }).v;
+  if (typeof v === "object" && v !== null && "v" in v) return jsonUnwrap((v as { v: unknown }).v);
+  // a boxed Long arrives as a bigint, which JSON.stringify refuses; org.json stores the value,
+  // and every read path (getLong/optLong) boxes it back
+  if (typeof v === "bigint") return Number(v);
   return v;
 }
 rt.register({
@@ -40,6 +43,10 @@ rt.register({
     },
     "put(Ljava/lang/String;Ljava/lang/Object;)Lorg/json/JSONObject;": function (this: JJSONObject, k: string, v: unknown) {
       this.o[k] = jsonUnwrap(v);
+      return this;
+    },
+    "putOpt(Ljava/lang/String;Ljava/lang/Object;)Lorg/json/JSONObject;": function (this: JJSONObject, k: string, v: unknown) {
+      if (k !== null && v !== null && v !== undefined) this.o[k] = jsonUnwrap(v);
       return this;
     },
     "put(Ljava/lang/String;I)Lorg/json/JSONObject;": function (this: JJSONObject, k: string, v: number) { this.o[k] = v; return this; },
@@ -77,8 +84,13 @@ rt.register({
       return Number.isFinite(v) ? v : d;
     },
     "getBoolean(Ljava/lang/String;)Z": function (this: JJSONObject, k: string) { return this.o[k] ? 1 : 0; },
+    "optBoolean(Ljava/lang/String;)Z": function (this: JJSONObject, k: string) { return this.o[k] ? 1 : 0; },
     "optBoolean(Ljava/lang/String;Z)Z": function (this: JJSONObject, k: string, d: number) {
       return this.o[k] === undefined ? d : this.o[k] ? 1 : 0;
+    },
+    "optDouble(Ljava/lang/String;)D": function (this: JJSONObject, k: string) {
+      const v = Number(this.o[k]);
+      return Number.isFinite(v) ? v : Number.NaN;
     },
     "getJSONObject(Ljava/lang/String;)Lorg/json/JSONObject;": function (this: JJSONObject, k: string) {
       const v = this.o[k];
@@ -106,6 +118,11 @@ rt.register({
     },
     "length()I": function (this: JJSONObject) { return Object.keys(this.o).length; },
     "keys()Ljava/util/Iterator;": function (this: JJSONObject) { return mkIter(Object.keys(this.o)); },
+    "keySet()Ljava/util/Set;": function (this: JJSONObject) { return newLinkedHashSet(Object.keys(this.o)); },
+    "names()Lorg/json/JSONArray;": function (this: JJSONObject) {
+      const ks = Object.keys(this.o);
+      return ks.length ? jsonWrap(ks) : null;
+    },
     "toString()Ljava/lang/String;": function (this: JJSONObject) { return JSON.stringify(this.o); },
     "toString(I)Ljava/lang/String;": function (this: JJSONObject, indent: number) { return JSON.stringify(this.o, null, indent); },
   },
@@ -135,7 +152,35 @@ rt.register({
     "getInt(I)I": function (this: JJSONArray, i: number) { return Math.trunc(Number(this.a[i])) | 0; },
     "getLong(I)J": function (this: JJSONArray, i: number) { return BigInt(Math.trunc(Number(this.a[i] ?? 0))); },
     "getDouble(I)D": function (this: JJSONArray, i: number) { return Number(this.a[i] ?? 0); },
+    "getBoolean(I)Z": function (this: JJSONArray, i: number) { return this.a[i] ? 1 : 0; },
+    "getJSONArray(I)Lorg/json/JSONArray;": function (this: JJSONArray, i: number) {
+      if (!Array.isArray(this.a[i])) throw rt.mkThrowable("org/json/JSONException", i + " is not an array");
+      return jsonWrap(this.a[i]);
+    },
+    "optJSONArray(I)Lorg/json/JSONArray;": function (this: JJSONArray, i: number) {
+      return Array.isArray(this.a[i]) ? jsonWrap(this.a[i]) : null;
+    },
+    "optInt(I)I": function (this: JJSONArray, i: number) { return Math.trunc(Number(this.a[i] ?? 0)) | 0; },
+    "optInt(II)I": function (this: JJSONArray, i: number, d: number) {
+      const v = Number(this.a[i]);
+      return Number.isFinite(v) ? Math.trunc(v) | 0 : d;
+    },
+    "optLong(I)J": function (this: JJSONArray, i: number) { return BigInt(Math.trunc(Number(this.a[i] ?? 0))); },
+    "optDouble(I)D": function (this: JJSONArray, i: number) { const v = Number(this.a[i]); return Number.isFinite(v) ? v : Number.NaN; },
+    "optBoolean(I)Z": function (this: JJSONArray, i: number) { return this.a[i] ? 1 : 0; },
+    "optString(ILjava/lang/String;)Ljava/lang/String;": function (this: JJSONArray, i: number, d: string) {
+      return this.a[i] === undefined ? d : String(this.a[i]);
+    },
+    "isNull(I)Z": function (this: JJSONArray, i: number) { return this.a[i] === null || this.a[i] === undefined ? 1 : 0; },
+    "remove(I)Ljava/lang/Object;": function (this: JJSONArray, i: number) { return jsonWrap(this.a.splice(i, 1)[0] ?? null); },
+    "put(ILjava/lang/Object;)Lorg/json/JSONArray;": function (this: JJSONArray, i: number, v: unknown) {
+      while (this.a.length < i) this.a.push(null);
+      this.a[i] = jsonUnwrap(v);
+      return this;
+    },
+    "put(J)Lorg/json/JSONArray;": function (this: JJSONArray, v: bigint) { this.a.push(Number(v)); return this; },
     "toString()Ljava/lang/String;": function (this: JJSONArray) { return JSON.stringify(this.a); },
+    "toString(I)Ljava/lang/String;": function (this: JJSONArray, indent: number) { return JSON.stringify(this.a, null, indent); },
   },
 });
 defineException("org/json/JSONException", "java/lang/Exception");
