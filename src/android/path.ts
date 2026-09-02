@@ -83,6 +83,7 @@ function flattenPath(ops: PathOp[], all = false): Contour[] {
   const out: Contour[] = [];
   let cur: Contour | null = null, cx = 0, cy = 0, sx = 0, sy = 0;
   const move = (x: number, y: number) => { cur = [[x, y]]; out.push(cur); cx = sx = x; cy = sy = y; };
+  const close = () => { if (cur) cur.closed = true; cur = null; };
   const line = (x: number, y: number) => { if (cur) cur.push([x, y]); else move(x, y); cx = x; cy = y; };
   // Steps grow with the square root of the arc length, which keeps the chord's sagitta under
   // about a quarter pixel for anything screen-sized without exploding the segment count.
@@ -111,7 +112,7 @@ function flattenPath(ops: PathOp[], all = false): Contour[] {
         }
         break;
       }
-      case "z": if (cur) cur.closed = true; cur = null; cx = sx; cy = sy; break;
+      case "z": close(); cx = sx; cy = sy; break;
       case "rect": { const r: Contour = [[a, b], [c, b], [c, d], [a, d]]; r.closed = true; out.push(r); cur = null; cx = sx = a; cy = sy = b; break; }
       case "rrect": {
         const q = rrRadii(op);
@@ -120,12 +121,11 @@ function flattenPath(ops: PathOp[], all = false): Contour[] {
         line(c, d - q[5]); arc(c - q[4], d - q[5], q[4], q[5], 0, P / 2);
         line(a + q[6], d); arc(a + q[6], d - q[7], q[6], q[7], P / 2, P);
         line(a, b + q[1]); arc(a + q[0], b + q[1], q[0], q[1], P, P * 1.5);
-        if (cur) cur.closed = true;
-        cur = null;
+        close();
         break;
       }
-      case "oval": move(c, (b + d) / 2); arc((a + c) / 2, (b + d) / 2, (c - a) / 2, (d - b) / 2, 0, P * 2); if (cur) cur.closed = true; cur = null; break;
-      case "circle": move(a + c, b); arc(a, b, c, c, 0, P * 2); if (cur) cur.closed = true; cur = null; break;
+      case "oval": move(c, (b + d) / 2); arc((a + c) / 2, (b + d) / 2, (c - a) / 2, (d - b) / 2, 0, P * 2); close(); break;
+      case "circle": move(a + c, b); arc(a, b, c, c, 0, P * 2); close(); break;
       case "arc": {
         const mx = (a + c) / 2, my = (b + d) / 2, rx = (c - a) / 2, ry = (d - b) / 2, a0 = e * P / 180;
         if (!cur || op[7]) move(mx + rx * Math.cos(a0), my + ry * Math.sin(a0)); else line(mx + rx * Math.cos(a0), my + ry * Math.sin(a0));
