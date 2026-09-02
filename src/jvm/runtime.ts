@@ -201,6 +201,8 @@ export class Runtime {
   /** .so files the app tried to load that only exist as machine code: file → abi */
   nativeRequired = new Map<string, string>();
   onNativeRequired: (lib: string, abi: string) => void = () => {};
+  /** set by src/native/loader.ts: loads a machine-code library for an ABI it can run (loadLibrary consults it before giving up) */
+  loadNativeLib: ((lib: string, bytes: Uint8Array, abi: string) => Promise<void>) | null = null;
   /** a native method nothing registered — what calling it throws */
   ulink(cls: string, name: string, desc: string): Error {
     this.noteMissing(cls + "." + name + desc + " [native]");

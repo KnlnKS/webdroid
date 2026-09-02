@@ -16,6 +16,9 @@ export const perf = {
   // GL surfaces: Renderer frames and their wall time; glSkipped = ticks where the previous
   // GL frame was still in flight (a renderer that awaits its engine spans ticks).
   glFrames: 0, glFrameMs: 0, glSkipped: 0,
+  // the ARM32 native tier: guest instructions, wall time in the interpreter, slices, host calls,
+  // time spent running native code on the main thread, GLES draws and errors from native GL.
+  nativeInstr: 0, nativeMs: 0, nativeSlices: 0, nativeHostCalls: 0, nativeMainMs: 0, glDraws: 0, glErrors: 0,
   bootMs: 0,
 };
 export function perfReset() {
