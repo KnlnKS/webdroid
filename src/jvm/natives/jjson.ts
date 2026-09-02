@@ -1,17 +1,26 @@
 // org.json over plain JS objects/arrays.
 
 import { rt, JObj } from "../runtime";
-import { defineException } from "./jlang";
+import { defineException, boxInt, box, JLong, JDouble, TRUE, FALSE } from "./jlang";
 import { mkIter } from "./jutil";
 
 class JJSONObject extends JObj { o: Record<string, unknown> = {}; }
 class JJSONArray extends JObj { a: unknown[] = []; }
+/** get()/opt() hand out Java objects: numbers box the way org.json parses them (Integer when it
+ *  fits, else Long, else Double), booleans box, strings are already Java strings */
 function jsonWrap(v: unknown): unknown {
   if (v === null || v === undefined) return null;
   if (typeof v === "object") {
     if (Array.isArray(v)) { const a = new JJSONArray(); a.a = v; return a; }
+    if (v instanceof JObj) return v;
     const o = new JJSONObject(); o.o = v as Record<string, unknown>; return o;
   }
+  if (typeof v === "number") {
+    if (Number.isInteger(v)) return v >= -2147483648 && v <= 2147483647 ? boxInt(v) : box(JLong, BigInt(v));
+    return box(JDouble, v);
+  }
+  if (typeof v === "bigint") return box(JLong, v);
+  if (typeof v === "boolean") return v ? TRUE : FALSE;
   return v;
 }
 function jsonUnwrap(v: unknown): unknown {

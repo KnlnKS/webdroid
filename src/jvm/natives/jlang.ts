@@ -884,8 +884,8 @@ rt.register({
     "equals(Ljava/lang/Object;)Z": function (this: JShort, o: unknown) { return o instanceof JShort && o.v === this.v ? 1 : 0; },
   },
 });
-const TRUE = new JBool(); TRUE.v = 1;
-const FALSE = new JBool();
+export const TRUE = new JBool(); TRUE.v = 1;
+export const FALSE = new JBool();
 rt.register({
   name: "java/lang/Boolean", ctor: JBool,
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
