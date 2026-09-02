@@ -965,6 +965,181 @@ rt.register({
   methods: listMethods(),
 });
 
+// ── BitSet: 32-bit words (Java's are 64-bit, which only shows in size()/hashCode, handled)
+class JBitSet extends JObj { w: Int32Array = new Int32Array(2); }
+function bsGrow(b: JBitSet, words: number) {
+  if (words <= b.w.length) return;
+  const n = new Int32Array(Math.max(words, b.w.length * 2));
+  n.set(b.w);
+  b.w = n;
+}
+function bsCheck(i: number, to = i) {
+  if (i < 0 || to < i) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", to === i ? `bitIndex < 0: ${i}` : `fromIndex: ${i}, toIndex: ${to}`);
+}
+/** apply `op(word, mask)` over [from, to) — Java's WORD_MASK << from / >>> -to split */
+function bsRange(b: JBitSet, from: number, to: number, op: (w: number, m: number) => number) {
+  const fw = from >>> 5, lw = (to - 1) >>> 5, fm = -1 << (from & 31), lm = -1 >>> (-to & 31);
+  if (fw === lw) { b.w[fw] = op(b.w[fw], fm & lm); return; }
+  b.w[fw] = op(b.w[fw], fm);
+  for (let i = fw + 1; i < lw; i++) b.w[i] = op(b.w[i], -1);
+  b.w[lw] = op(b.w[lw], lm);
+}
+const bsOr = (w: number, m: number) => w | m, bsClr = (w: number, m: number) => w & ~m, bsXor = (w: number, m: number) => w ^ m;
+/** highest set bit + 1 */
+function bsLength(b: JBitSet): number {
+  for (let i = b.w.length - 1; i >= 0; i--) if (b.w[i]) return i * 32 + 32 - Math.clz32(b.w[i]);
+  return 0;
+}
+function bsLong(b: JBitSet, i: number): bigint {
+  const lo = b.w[2 * i] >>> 0, hi = 2 * i + 1 < b.w.length ? b.w[2 * i + 1] >>> 0 : 0;
+  return BigInt.asIntN(64, (BigInt(hi) << 32n) | BigInt(lo));
+}
+function bsFromWords(w: Int32Array): JBitSet { const b = new JBitSet(); b.w = w; return b; }
+function bsSet(this: JBitSet, i: number) { bsCheck(i); bsGrow(this, (i >>> 5) + 1); this.w[i >>> 5] |= 1 << (i & 31); }
+function bsClear(this: JBitSet, i: number) { bsCheck(i); if (i >>> 5 < this.w.length) this.w[i >>> 5] &= ~(1 << (i & 31)); }
+function bsSetRange(this: JBitSet, from: number, to: number) {
+  bsCheck(from, to);
+  if (from === to) return;
+  bsGrow(this, ((to - 1) >>> 5) + 1);
+  bsRange(this, from, to, bsOr);
+}
+function bsClearRange(this: JBitSet, from: number, to: number) {
+  bsCheck(from, to);
+  to = Math.min(to, this.w.length * 32);
+  if (from < to) bsRange(this, from, to, bsClr);
+}
+function bsBinary(f: (a: number, b: number) => number, grow: boolean) {
+  return function (this: JBitSet, o: JBitSet) {
+    if (grow) bsGrow(this, o.w.length);
+    const n = Math.min(this.w.length, o.w.length);
+    for (let i = 0; i < n; i++) this.w[i] = f(this.w[i], o.w[i]);
+    if (!grow) for (let i = n; i < this.w.length; i++) this.w[i] = f(this.w[i], 0);
+  };
+}
+rt.register({
+  name: "java/util/BitSet", ctor: JBitSet, ifaces: ["java/lang/Cloneable", "java/io/Serializable"],
+  methods: {
+    "<init>()V": function () {},
+    "<init>(I)V": function (this: JBitSet, n: number) {
+      if (n < 0) throw rt.mkThrowable("java/lang/NegativeArraySizeException", `nbits < 0: ${n}`);
+      this.w = new Int32Array(Math.max(1, (n + 31) >>> 5));
+    },
+    "set(I)V": bsSet,
+    "set(IZ)V": function (this: JBitSet, i: number, v: number) { (v ? bsSet : bsClear).call(this, i); },
+    "set(II)V": bsSetRange,
+    "set(IIZ)V": function (this: JBitSet, from: number, to: number, v: number) { (v ? bsSetRange : bsClearRange).call(this, from, to); },
+    "get(I)Z": function (this: JBitSet, i: number) {
+      bsCheck(i);
+      const wi = i >>> 5;
+      return wi < this.w.length ? (this.w[wi] >>> (i & 31)) & 1 : 0;
+    },
+    "clear(I)V": bsClear,
+    "clear(II)V": bsClearRange,
+    "clear()V": function (this: JBitSet) { this.w.fill(0); },
+    "flip(I)V": function (this: JBitSet, i: number) { bsCheck(i); bsGrow(this, (i >>> 5) + 1); this.w[i >>> 5] ^= 1 << (i & 31); },
+    "flip(II)V": function (this: JBitSet, from: number, to: number) {
+      bsCheck(from, to);
+      if (from === to) return;
+      bsGrow(this, ((to - 1) >>> 5) + 1);
+      bsRange(this, from, to, bsXor);
+    },
+    "isEmpty()Z": function (this: JBitSet) { return bsLength(this) === 0 ? 1 : 0; },
+    "cardinality()I": function (this: JBitSet) {
+      let n = 0;
+      for (let i = 0; i < this.w.length; i++) {
+        let v = this.w[i];
+        v -= (v >>> 1) & 0x55555555;
+        v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+        n += Math.imul((v + (v >>> 4)) & 0x0f0f0f0f, 0x01010101) >>> 24;
+      }
+      return n;
+    },
+    "nextSetBit(I)I": function (this: JBitSet, from: number) {
+      bsCheck(from);
+      let wi = from >>> 5;
+      if (wi >= this.w.length) return -1;
+      let word = this.w[wi] & (-1 << (from & 31));
+      for (;;) {
+        if (word) return wi * 32 + 31 - Math.clz32(word & -word);
+        if (++wi === this.w.length) return -1;
+        word = this.w[wi];
+      }
+    },
+    "nextClearBit(I)I": function (this: JBitSet, from: number) {
+      bsCheck(from);
+      let wi = from >>> 5;
+      if (wi >= this.w.length) return from;
+      let word = ~this.w[wi] & (-1 << (from & 31));
+      for (;;) {
+        if (word) return wi * 32 + 31 - Math.clz32(word & -word);
+        if (++wi === this.w.length) return wi * 32;
+        word = ~this.w[wi];
+      }
+    },
+    "previousSetBit(I)I": function (this: JBitSet, from: number) {
+      if (from < 0) { if (from === -1) return -1; bsCheck(from); }
+      let wi = from >>> 5;
+      if (wi >= this.w.length) return bsLength(this) - 1;
+      let word = this.w[wi] & (-1 >>> (-(from + 1) & 31));
+      for (;;) {
+        if (word) return wi * 32 + 31 - Math.clz32(word);
+        if (wi-- === 0) return -1;
+        word = this.w[wi];
+      }
+    },
+    "length()I": function (this: JBitSet) { return bsLength(this); },
+    "size()I": function (this: JBitSet) { return this.w.length * 32; },
+    "and(Ljava/util/BitSet;)V": bsBinary((a, b) => a & b, false),
+    "or(Ljava/util/BitSet;)V": bsBinary((a, b) => a | b, true),
+    "xor(Ljava/util/BitSet;)V": bsBinary((a, b) => a ^ b, true),
+    "andNot(Ljava/util/BitSet;)V": bsBinary((a, b) => a & ~b, false),
+    "intersects(Ljava/util/BitSet;)Z": function (this: JBitSet, o: JBitSet) {
+      for (let i = Math.min(this.w.length, o.w.length) - 1; i >= 0; i--) if (this.w[i] & o.w[i]) return 1;
+      return 0;
+    },
+    "static valueOf([B)Ljava/util/BitSet;": (bytes: Int8Array) => {
+      const w = new Int32Array(Math.max(1, (bytes.length + 3) >>> 2));
+      for (let i = 0; i < bytes.length; i++) w[i >>> 2] |= (bytes[i] & 0xff) << ((i & 3) * 8);
+      return bsFromWords(w);
+    },
+    "static valueOf([J)Ljava/util/BitSet;": (longs: BigInt64Array) => {
+      const w = new Int32Array(Math.max(1, longs.length * 2));
+      for (let i = 0; i < longs.length; i++) {
+        w[2 * i] = Number(BigInt.asIntN(32, longs[i]));
+        w[2 * i + 1] = Number(BigInt.asIntN(32, longs[i] >> 32n));
+      }
+      return bsFromWords(w);
+    },
+    "toByteArray()[B": function (this: JBitSet) {
+      const out = new Int8Array((bsLength(this) + 7) >>> 3);
+      for (let i = 0; i < out.length; i++) out[i] = this.w[i >>> 2] >>> ((i & 3) * 8);
+      return out;
+    },
+    "toLongArray()[J": function (this: JBitSet) {
+      const out = new BigInt64Array((bsLength(this) + 63) >>> 6);
+      for (let i = 0; i < out.length; i++) out[i] = bsLong(this, i);
+      return out;
+    },
+    "equals(Ljava/lang/Object;)Z": function (this: JBitSet, o: unknown) {
+      if (!(o instanceof JBitSet)) return 0;
+      const n = Math.max(this.w.length, o.w.length);
+      for (let i = 0; i < n; i++) if ((this.w[i] ?? 0) !== (o.w[i] ?? 0)) return 0;
+      return 1;
+    },
+    "hashCode()I": function (this: JBitSet) {
+      let h = 1234n;
+      for (let i = (bsLength(this) + 63) >>> 6; --i >= 0;) h ^= BigInt.asIntN(64, bsLong(this, i) * BigInt(i + 1));
+      return Number(BigInt.asIntN(32, (h >> 32n) ^ h));
+    },
+    "toString()Ljava/lang/String;": function (this: JBitSet) {
+      const parts: number[] = [];
+      for (let i = 0; i < this.w.length; i++) for (let v = this.w[i]; v; v &= v - 1) parts.push(i * 32 + 31 - Math.clz32(v & -v));
+      return `{${parts.join(", ")}}`;
+    },
+    "clone()Ljava/lang/Object;": function (this: JBitSet) { return bsFromWords(this.w.slice()); },
+  },
+});
+
 // AbstractList carries a REAL modCount: apps extending it (and overriding
 // add/remove/set) increment `this.modCount` themselves via ordinary iput
 // bytecode — the field just has to be a live property (see `fields:` below)
