@@ -143,6 +143,8 @@ export class JView extends JObj {
   keyedTags = new Map<number, unknown>();
   outlineProvider: unknown = null;
   stateListAnimator: unknown = null;
+  keyboardCluster = false;
+  touchBlocksFocus = false;
   left = 0; top = 0; right = 0; bottom = 0;
   static $nextDrawingId = 0;
   measuredW = 0; measuredH = 0;
@@ -678,6 +680,12 @@ const viewMethods: NativeSpec["methods"] = {
     if (sla) await vcall(sla, "setTarget", "(Landroid/view/View;)V", this);
   },
   "getStateListAnimator()Landroid/animation/StateListAnimator;": function (this: JView) { return this.stateListAnimator; },
+  "setKeyboardNavigationCluster(Z)V": function (this: JView, v: number) { this.keyboardCluster = !!v; },
+  "setTouchscreenBlocksFocus(Z)V": function (this: JView, v: number) { this.touchBlocksFocus = !!v; },
+  "getTouchscreenBlocksFocus()Z": function (this: JView) { return this.touchBlocksFocus ? 1 : 0; },
+  "destroyDrawingCache()V": () => {},
+  "buildDrawingCache()V": () => {},
+  "isKeyboardNavigationCluster()Z": function (this: JView) { return this.keyboardCluster ? 1 : 0; },
   "setOutlineProvider(Landroid/view/ViewOutlineProvider;)V": function (this: JView, p: unknown) { this.outlineProvider = p; },
   "getOutlineProvider()Landroid/view/ViewOutlineProvider;": function (this: JView) { return this.outlineProvider ?? bgOutline; },
   "setClipToOutline(Z)V": () => {},
@@ -943,6 +951,7 @@ export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | n
 // ── ViewGroup
 export class JViewGroup extends JView {
   children: JView[] = [];
+  drawingOrderEnabled = false;
   clipChildren = true;
   clipToPadding = true;
   disallowIntercept = false;
@@ -1122,8 +1131,18 @@ const vgMethods: NativeSpec["methods"] = {
   },
   "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z": () => 1,
   "dispatchDraw(Landroid/graphics/Canvas;)V": async function (this: JViewGroup, cv: JCanvas) {
-    for (const c of this.children) await drawView(c, cv);
+    const n = this.children.length;
+    if (!this.drawingOrderEnabled) { for (const c of this.children) await drawView(c, cv); return; }
+    // a subclass's getChildDrawingOrder picks which child paints at each z step (AOSP buildOrderedChildList)
+    for (let i = 0; i < n; i++) {
+      const c = this.children[await vcall(this, "getChildDrawingOrder", "(II)I", n, i)];
+      if (c) await drawView(c, cv);
+    }
   },
+  "setChildrenDrawingOrderEnabled(Z)V": function (this: JViewGroup, e: number) { this.drawingOrderEnabled = !!e; },
+  "isChildrenDrawingOrderEnabled()Z": function (this: JViewGroup) { return this.drawingOrderEnabled ? 1 : 0; },
+  "getChildDrawingOrder(II)I": (_n: number, i: number) => i,
+  "getChildDrawingOrder(I)I": function (this: JViewGroup, i: number) { return vcall(this, "getChildDrawingOrder", "(II)I", this.children.length, i); },
   "onMeasure(II)V": async function (this: JViewGroup, w: number, h: number) {
     // default: act like FrameLayout-lite
     let mw = 0, mh = 0;
