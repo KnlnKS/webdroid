@@ -123,6 +123,8 @@ export class Runtime {
       link(i) { return (this.cl[i] = this.linfo(i).ctor); },
       init(i, from) {
         const info = this.linfo(i);
+        // ART fails the resolution itself, so the call site re-throws every time: never cache
+        if (info.stub) throw R.ncdfe(info.name);
         // only cache once fully inited — a mid-init hit must keep going through init()
         const done = () => (info.state === 2 ? (this.ic[i] = info.ctor) : info.ctor);
         if (info.state === 2) return (this.ic[i] = info.ctor);
@@ -138,6 +140,7 @@ export class Runtime {
       rdp0(i) {
         const m = dex.method(i);
         const info = this.linfo(m.cls);
+        if (info.stub) throw R.ncdfe(info.name);
         R.ensureCompiled(info);
         const fn = info.ctor.prototype[mangleMethod(m.name, dex.methodDesc(i))];
         if (!fn) throw R.unimplemented(`${info.name}.${m.name}${dex.methodDesc(i)} (direct)`);
@@ -147,6 +150,7 @@ export class Runtime {
         const fr = dex.field(i);
         const prop = mangleStaticField(fr.name);
         const start = this.linfo(fr.cls);
+        if (start.stub) throw R.ncdfe(start.name);
         const owner = findStaticOwner(start, prop) ?? start;
         const set = () => (owner.state === 2 ? (this.fs[i] = owner.ctor) : owner.ctor);
         if (owner.state === 2) return set();
@@ -210,6 +214,14 @@ export class Runtime {
     return this.mkThrowable("java/lang/UnsupportedOperationException", "webdroid missing: " + what);
   }
 
+  /** what a call site into an auto-stubbed class throws (link() already logged the class) */
+  ncdfe(name: string): Error {
+    // link first: an unlinked exception class inherits its super's ClassInfo, so compiled
+    // `catch (NoClassDefFoundError)` — which matches on ClassInfo.types — would miss it
+    this.link("java/lang/NoClassDefFoundError");
+    return this.mkThrowable("java/lang/NoClassDefFoundError", "Failed resolution of: L" + name + ";");
+  }
+
   /** sync: get linked ClassInfo (creates ctor shell, fields, types) */
   link(name: string): ClassInfo {
     let info = this.classes.get(name);
@@ -239,8 +251,9 @@ export class Runtime {
 
     const loc = this.dexIndex.get(name);
     if (!loc) {
-      // auto-stub: unknown framework class → empty JObj subclass, logged for triage.
-      // Calls on it surface as NoSuchMethodError with the exact signature.
+      // auto-stub: unknown framework class → empty JObj subclass, logged for triage. It keeps
+      // instanceof/check-cast/catch matching/field types working; resolving it from a call
+      // site (DexLink.init/rdp0/rsf) throws NoClassDefFoundError as ART does.
       this.noteMissing("class " + name);
       info.stub = true;
       info.native = true;
