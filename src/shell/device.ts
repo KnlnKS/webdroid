@@ -330,7 +330,13 @@ async function buildOptionsMenu(act: JActivity) {
   pushMenuToBar(menu);
 }
 
-export async function pressBack() {
+// A key is input like a touch: it runs as a main-looper job, so androidx's main-thread asserts
+// (handleLifecycleEvent inside the finish path) see the main thread, not whichever worker
+// last set curThread.
+export function pressBack(): Promise<void> {
+  return inMainJob() ? pressBack0() : onMain(pressBack0);
+}
+async function pressBack0() {
   // the topmost window takes the key: a dialog or popup before the activity under it
   const top = overlays[overlays.length - 1];
   const act = booted?.stack[booted.stack.length - 1];
