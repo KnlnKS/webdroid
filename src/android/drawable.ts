@@ -68,8 +68,15 @@ const drawableMethods: NativeSpec["methods"] = {
   },
   "setTintMode(Landroid/graphics/PorterDuff$Mode;)V": function () {},
   "setState([I)Z": function (this: JDrawable, st: Int32Array) {
+    const cur = this.stateSet;
+    if (cur.length === st.length && cur.every((v, i) => v === st[i])) return 0;
     this.stateSet = [...st];
-    return this.onStateChange() ? 1 : 0;
+    // AOSP: every onStateChange that reports a visual change invalidates (StateListDrawable's
+    // selectDrawable, RippleDrawable's setRippleActive); the callback is how a Compose ripple
+    // host learns to re-record its layer, so a silent state change leaves a pressed ripple stuck.
+    if (!this.onStateChange()) return 0;
+    invalidateSelf.call(this);
+    return 1;
   },
   "getState()[I": function (this: JDrawable) { return Int32Array.from(this.stateSet); },
   "setLevel(I)Z": function (this: JDrawable, l: number) { this.level = l; return 1; },
@@ -424,10 +431,16 @@ rt.register({
 });
 /** RippleDrawable.RADIUS_AUTO: compute the radius from bounds instead of using an explicit one. */
 const RADIUS_AUTO = -1;
+// AOSP RippleForeground timings: the ripple grows from the hotspot to cover the bounds while
+// fading in, and on release finishes growing while fading out.
+const RIPPLE_ENTER_MS = 225, RIPPLE_ENTER_ALPHA_MS = 75, RIPPLE_EXIT_MS = 150;
+const decel = (t: number) => 1 - (1 - t) * (1 - t);
 export class JRippleDrawable extends JLayerDrawable {
   rippleColor = 0x33000000;
   /** explicit override from setRadius(), or RADIUS_AUTO to derive it from bounds each draw. */
   explicitRadius = RADIUS_AUTO;
+  active = false; enterAt = 0; exitAt = 0;
+  hx = Number.NaN; hy = Number.NaN;
   /**
    * RippleDrawable.computeRadius(): half the bounds' diagonal — the distance from the hotspot
    * bounds' center to a corner — so a fully-grown ripple just covers the drawable. (Not half of
@@ -439,23 +452,52 @@ export class JRippleDrawable extends JLayerDrawable {
     return Math.sqrt(halfW * halfW + halfH * halfH);
   }
   radius(): number { return this.explicitRadius >= 0 ? this.explicitRadius : this.computedRadius(); }
+  setColor(csl: JColorStateList | null) {
+    // AOSP getRipplePaint caps the ripple at 50% opacity whatever the state list says
+    const c = csl ? cslColor(csl, this.stateSet) : 0x33000000;
+    this.rippleColor = (c >>> 24) > 0x80 ? ((c & 0xffffff) | 0x80000000) | 0 : c;
+  }
   paint(cv: JCanvas) {
     super.paint(cv);
-    if (this.stateSet.includes(ST.pressed) || this.stateSet.includes(ST.focused)) {
-      const { left, top, right, bottom } = this.bounds;
-      const ctx = cv.ctx;
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(left, top, right - left, bottom - top);
-      ctx.clip();
-      ctx.fillStyle = cssColor(this.rippleColor);
-      ctx.beginPath();
-      ctx.arc((left + right) / 2, (top + bottom) / 2, this.radius(), 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    }
+    const now = performance.now();
+    let grow: number, fade: number, animating: boolean;
+    if (this.active) {
+      const t = (now - this.enterAt) / RIPPLE_ENTER_MS;
+      grow = decel(Math.min(1, t));
+      fade = Math.min(1, (now - this.enterAt) / RIPPLE_ENTER_ALPHA_MS);
+      animating = t < 1;
+    } else if (this.exitAt) {
+      const t = (now - this.exitAt) / RIPPLE_EXIT_MS;
+      if (t >= 1) { this.exitAt = 0; return; }
+      grow = 1;
+      fade = 1 - t;
+      animating = true;
+    } else return;
+    const { left, top, right, bottom } = this.bounds;
+    const cx0 = (left + right) / 2, cy0 = (top + bottom) / 2;
+    const cx = Number.isNaN(this.hx) ? cx0 : this.hx + (cx0 - this.hx) * grow;
+    const cy = Number.isNaN(this.hy) ? cy0 : this.hy + (cy0 - this.hy) * grow;
+    const ctx = cv.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(left, top, right - left, bottom - top);
+    ctx.clip();
+    ctx.globalAlpha *= fade * (this.alpha / 255);
+    ctx.fillStyle = cssColor(this.rippleColor);
+    ctx.beginPath();
+    ctx.arc(cx, cy, this.radius() * grow, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    if (animating) invalidateSelf.call(this);
   }
-  onStateChange(): boolean { return true; }
+  onStateChange(): boolean {
+    const active = this.stateSet.includes(ST.pressed) && this.stateSet.includes(ST.enabled);
+    if (active === this.active) return false;
+    this.active = active;
+    const now = performance.now();
+    if (active) { this.enterAt = now; this.exitAt = 0; } else this.exitAt = now;
+    return true;
+  }
 }
 rt.register({
   name: "android/graphics/drawable/RippleDrawable", ctor: JRippleDrawable, sup: "android/graphics/drawable/LayerDrawable",
@@ -463,11 +505,16 @@ rt.register({
     "<init>(Landroid/content/res/ColorStateList;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V":
       function (this: JRippleDrawable, csl: JColorStateList | null, content: JDrawable | null) {
         if (content) this.layers.push({ d: content, insets: [0, 0, 0, 0] });
-        if (csl) this.rippleColor = (cslColor(csl, []) & 0xffffff) | 0x33000000;
+        this.setColor(csl);
       },
     "setColor(Landroid/content/res/ColorStateList;)V": function (this: JRippleDrawable, csl: JColorStateList) {
-      this.rippleColor = (cslColor(csl, []) & 0xffffff) | 0x33000000;
+      this.setColor(csl);
+      invalidateSelf.call(this);
     },
+    "setHotspot(FF)V": function (this: JRippleDrawable, x: number, y: number) { this.hx = x; this.hy = y; },
+    "isProjected()Z": () => 0,
+    "isStateful()Z": () => 1,
+    "hasFocusStateSpecified()Z": () => 1,
     "setRadius(I)V": function (this: JRippleDrawable, r: number) { this.explicitRadius = r; },
     "getRadius()I": function (this: JRippleDrawable) { return this.explicitRadius; },
   },
