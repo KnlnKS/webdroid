@@ -575,3 +575,19 @@ rt.register({
     "static format(Ljava/lang/CharSequence;Ljava/util/Date;)Ljava/lang/CharSequence;": (fmt: unknown, d: JDate | null) => formatDate(String(fmt), d?.t ?? Date.now()),
   },
 });
+
+// ── android.text.format.Formatter: SI units and the 900 roll-over, as API 26+ formats them
+const fmtBytes = (n: bigint, short: boolean) => {
+  const units = ["B", "kB", "MB", "GB", "TB", "PB"];
+  let v = Math.abs(Number(n)), i = 0;
+  while (v > 900 && i < units.length - 1) { v /= 1000; i++; }
+  const dec = i === 0 ? 0 : v < 1 ? 2 : v < 10 ? (short ? 1 : 2) : v < 100 ? (short ? 0 : 2) : 0;
+  return (n < 0n ? "-" : "") + v.toFixed(dec) + " " + units[i];
+};
+rt.register({
+  name: "android/text/format/Formatter", ctor: class extends JObj {},
+  methods: {
+    "static formatFileSize(Landroid/content/Context;J)Ljava/lang/String;": (_c: unknown, n: bigint) => fmtBytes(n, false),
+    "static formatShortFileSize(Landroid/content/Context;J)Ljava/lang/String;": (_c: unknown, n: bigint) => fmtBytes(n, true),
+  },
+});
