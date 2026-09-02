@@ -26,13 +26,21 @@ class JInflater extends JObj {
   // Java keeps input handed over after the end of stream (okio reads the trailer back through
   // getRemaining); fflate would throw on it. It parks the unconsumed tail in `p` and only ever
   // tests "last block decoded" as `s.f && !s.l` internally, so that test is repeated here.
+  //
+  // getRemaining() must only ever count bytes past the END of the deflate stream. Mid-stream
+  // fflate also parks a partial tail in `p` — but it keeps those bytes and decodes them once
+  // more input arrives, so reporting them as unconsumed makes a caller that computes
+  // "consumed = given - getRemaining()" (okio's InflaterSource.releaseBytesAfterInflate) hand
+  // the very same bytes back on the next refill. That both wedges the reader into a one-byte-
+  // per-refill loop and feeds the codec duplicate input, which surfaces far away as
+  // "invalid distance" / "invalid block type" out of a gzipped HTTP response.
   feed(b: Uint8Array) {
     this.fed += b.length;
     if (this.done) { this.rem = b.length; return; }
     const st = this.ensure() as any;
     st.push(b);
     if (st.s.f && !st.s.l) this.done = true;
-    this.rem = st.p?.length ?? 0;
+    this.rem = this.done ? st.p?.length ?? 0 : 0;
   }
 }
 function drain(z: JInflater, b: Int8Array, off: number, len: number): number {
