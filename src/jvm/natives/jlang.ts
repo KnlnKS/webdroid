@@ -333,7 +333,12 @@ rt.register({
 /** log a throwable that escaped every handler and tell the shell (status line) */
 export function reportUncaught(e: unknown) {
   const je = rt.jx(e);
-  console.error("[uncaught]", (je?.constructor as any)?.$i?.name ?? "?", je?.msg ?? "", (je as any)?.jsStack ?? (e as any)?.stack ?? "");
+  // the cause chain travels with the throwable and is usually where the real failure is named
+  let causes = "";
+  for (let c = je?.cause, depth = 0; c && depth < 8; c = c.cause, depth++) {
+    causes += `\n  caused by ${(c.constructor as any)?.$i?.name ?? "?"}: ${c.msg ?? ""}`;
+  }
+  console.error("[uncaught]", (je?.constructor as any)?.$i?.name ?? "?", (je?.msg ?? "") + causes, (je as any)?.jsStack ?? (e as any)?.stack ?? "");
   rt.onUncaught?.(je);
 }
 

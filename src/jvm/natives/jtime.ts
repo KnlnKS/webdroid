@@ -37,6 +37,13 @@ rt.register({
 class JTimeZone extends JObj { id = "GMT"; }
 export const localTz = new JTimeZone();
 try { localTz.id = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "GMT"; } catch { /* */ }
+/** the zone's name as Intl spells it; an unknown id falls back to the id itself */
+function tzName(id: string, style: number): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: id, timeZoneName: style ? "long" : "short" }).formatToParts(new Date());
+    return parts.find((p) => p.type === "timeZoneName")?.value ?? id;
+  } catch { return id; }
+}
 rt.register({
   name: "java/util/TimeZone", ctor: JTimeZone,
   methods: {
@@ -53,6 +60,13 @@ rt.register({
     "useDaylightTime()Z": () => 0,
     "getDSTSavings()I": () => 0,
     "hasSameRules(Ljava/util/TimeZone;)Z": function (this: JTimeZone, o: JTimeZone) { return o?.id === this.id ? 1 : 0; },
+    // Intl names the zone; SHORT (style 0) is the abbreviation, LONG (1) the full name
+    "getDisplayName()Ljava/lang/String;": function (this: JTimeZone) { return tzName(this.id, 1); },
+    "getDisplayName(Ljava/util/Locale;)Ljava/lang/String;": function (this: JTimeZone) { return tzName(this.id, 1); },
+    "getDisplayName(ZI)Ljava/lang/String;": function (this: JTimeZone, _dst: number, style: number) { return tzName(this.id, style); },
+    "getDisplayName(ZILjava/util/Locale;)Ljava/lang/String;": function (this: JTimeZone, _dst: number, style: number) { return tzName(this.id, style); },
+    "static getAvailableIDs()[Ljava/lang/String;": () => jarray([localTz.id], "Ljava/lang/String;"),
+    "setID(Ljava/lang/String;)V": function (this: JTimeZone, id: string) { this.id = id; },
   },
 });
 
