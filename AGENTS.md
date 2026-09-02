@@ -8,8 +8,10 @@ Read `NOTES.md` first: architecture, the "do not regress" lessons, janitor invar
 - `bun run dev` (or `PORT=<n> bun run server.ts`) then `bun run e2e [--test <flow,...>] [--shots]` —
   drives `tests/e2e/flows/*` over Playwright; per-step `newMissing`/`newErrors`/`nativeRequired`/perf
   land in `tests/e2e/actual/<flow>/run.json`. Flows without goldens run in smoke mode.
-- Janitor: `rg -oNh 'name: "[^"]+"' src | sort | uniq -d` empty; `rg -n 'endsWith\("/' src` free of
-  library names; no app/library names in `src/` outside comments explaining a real quirk.
+- Janitor: `grep -rhoE 'name: "[a-z][a-z0-9]*(/[A-Za-z0-9_$]+)+"' src | sort | uniq -d` empty
+  (ripgrep's `-h` is `--help`, so an `rg -oNh` form of this silently passes and tests nothing);
+  `rg -n 'endsWith\("/' src` free of library names; no app/library names in `src/` outside
+  comments explaining a real quirk.
 
 ## Parallel work: one worktree per task
 The dev server rebundles on every page load and the e2e harness writes one shared output tree, so
