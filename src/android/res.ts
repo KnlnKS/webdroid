@@ -331,6 +331,9 @@ export function obtainStyled(
     if (!v && defStyleId) v = res.styleLookup(defStyleId, attrId);
     if (!v && theme) v = theme.lookup(attrId);
     if (v && v.t === TV.ATTRIBUTE) v = theme?.lookup(v.d) ?? null;
+    // aapt flattens @null as a reference to 0; AOSP's ApplyStyle turns it back into TYPE_NULL
+    // only at the end, after it has masked any style/theme value beneath it
+    if (v && v.t === TV.REFERENCE && !v.d) v = null;
     if (v && v.t !== TV.NULL) ta.vals[i] = res.resolveRefs(v);
   }
   return ta;
@@ -439,7 +442,13 @@ export function fillTypedValue(res: Resources, v: RV | null, tv: JTypedValue): n
   tv.type = v.t;
   tv.data = v.d;
   if (v.t === TV.STRING) tv.string = v.s ?? null;
-  if (v.t === TV.REFERENCE) tv.resourceId = v.d;
+  if (v.t === TV.REFERENCE) {
+    // a reference that resolveRefs kept (a file resource) is, once resolved as AOSP does it,
+    // the file's path string carrying the id it came from
+    tv.resourceId = v.d;
+    const f = res.value(v.d);
+    if (f.t === TV.STRING) { tv.type = TV.STRING; tv.string = f.s ?? null; }
+  }
   return 1;
 }
 function pxToComplex(px: number): number {
