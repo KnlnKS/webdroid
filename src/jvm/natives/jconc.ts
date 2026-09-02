@@ -1,7 +1,7 @@
 // java.util.concurrent.* — cooperative single-JS-thread implementations.
 
 import { rt, JObj, type NativeSpec, type ClassInfo } from "../runtime";
-import { vcall, JThread, JEnum, setCurThread, curThread, park, defineException, reportUncaught } from "./jlang";
+import { vcall, newObj, JThread, JEnum, setCurThread, curThread, park, defineException } from "./jlang";
 import { JList, JRandom, listMethods, randomSeed } from "./jutil";
 
 // ── atomics (single-threaded: trivial)
@@ -150,59 +150,66 @@ class JExecutor extends JObj {
   pending = 0;
   thread = new JThread();
 }
-async function runTask(ex: JExecutor, task: unknown, method = "run", desc = "()V") {
+/** run one task on the executor's thread; a submitted task's outcome lands on its Future */
+async function runTask(ex: JExecutor, task: unknown, f: JFuture | null = null, method = "run", desc = "()V") {
   ex.pending++;
   const prev = curThread;
   setCurThread(ex.thread);
-  try { await vcall(task, method, desc); }
+  try { const v = await vcall(task, method, desc); if (f && v !== undefined) f.value = v; }
   catch (e) {
-    const je = rt.jx(e);
-    console.error("[executor]", (je as any).msg ?? je, (e as any)?.stack ?? "");
-  } finally { setCurThread(prev); ex.pending--; }
+    // AOSP: the failure belongs to the Future (get() rethrows it); an execute()d task has no owner
+    if (f) f.error = rt.jx(e);
+    else { const je = rt.jx(e); console.error("[executor]", (je as any).msg ?? je, (e as any)?.stack ?? ""); }
+  } finally { setCurThread(prev); ex.pending--; if (f) f.done = 1; }
 }
 class JFuture extends JObj {
   promise: Promise<unknown> | null = null;
   value: unknown = null;
+  error: unknown = null;
   done = 0;
   cancelled = 0;
+}
+/** get(): the value, or the task's throwable as ExecutionException (cause = it, message = its toString) */
+async function futureGet(f: JFuture) {
+  if (!f.cancelled && f.promise) await f.promise;
+  if (f.cancelled) throw rt.mkThrowable("java/util/concurrent/CancellationException", null);
+  if (f.error) throw await newObj("java/util/concurrent/ExecutionException", "(Ljava/lang/Throwable;)V", f.error);
+  return f.value;
+}
+async function futureGetTimed(f: JFuture, d: bigint, u: JTimeUnit) {
+  if (!f.done && f.promise) {
+    const late = {};
+    const first = await Promise.race([f.promise, new Promise((r) => setTimeout(() => r(late), Number(d) * u.ms))]);
+    if (first === late && !f.done) throw rt.mkThrowable("java/util/concurrent/TimeoutException", null);
+  }
+  return futureGet(f);
 }
 rt.register({
   name: "webdroid/Future", ctor: JFuture,
   ifaces: ["java/util/concurrent/Future", "java/util/concurrent/ScheduledFuture"],
   methods: {
-    "get()Ljava/lang/Object;": async function (this: JFuture) { return this.promise ? await this.promise : this.value; },
-    "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": async function (this: JFuture) { return this.promise ? await this.promise : this.value; },
+    "get()Ljava/lang/Object;": function (this: JFuture) { return futureGet(this); },
+    "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JFuture, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); },
     "isDone()Z": function (this: JFuture) { return this.done; },
     "isCancelled()Z": function (this: JFuture) { return this.cancelled; },
     "cancel(Z)Z": function (this: JFuture) { this.cancelled = 1; return 1; },
   },
 });
+function submit(ex: JExecutor, task: unknown, method: string, desc: string): JFuture {
+  const f = new JFuture();
+  f.promise = new Promise((resolve) => setTimeout(() => runTask(ex, task, f, method, desc).then(resolve), 0));
+  return f;
+}
 const executorMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "execute(Ljava/lang/Runnable;)V": function (this: JExecutor, r: unknown) {
     setTimeout(() => void runTask(this, r), 0);
   },
   "submit(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown) {
-    const f = new JFuture();
-    f.promise = new Promise((resolve) => {
-      setTimeout(async () => { await runTask(this, r); f.done = 1; resolve(null); }, 0);
-    });
-    return f;
+    return submit(this, r, "run", "()V");
   },
   "submit(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;": function (this: JExecutor, c: unknown) {
-    const f = new JFuture();
-    f.promise = new Promise((resolve) => {
-      setTimeout(async () => {
-        const prev = curThread;
-        setCurThread(this.thread);
-        try { f.value = await vcall(c, "call", "()Ljava/lang/Object;"); }
-        catch (e) { console.error("[executor callable]", e); }
-        finally { setCurThread(prev); }
-        f.done = 1;
-        resolve(f.value);
-      }, 0);
-    });
-    return f;
+    return submit(this, c, "call", "()Ljava/lang/Object;");
   },
   "shutdown()V": function (this: JExecutor) { this.shut = true; },
   "shutdownNow()Ljava/util/List;": function (this: JExecutor) { this.shut = true; return new JList(); },
@@ -212,7 +219,8 @@ const executorMethods: NativeSpec["methods"] = {
   "schedule(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;":
     function (this: JExecutor, r: unknown, d: bigint, u: JTimeUnit) {
       const f = new JFuture();
-      setTimeout(() => { if (!f.cancelled) void runTask(this, r).then(() => (f.done = 1)); }, Number(d) * u.ms);
+      f.promise = new Promise((resolve) =>
+        setTimeout(() => (f.cancelled ? resolve(null) : runTask(this, r, f).then(resolve)), Number(d) * u.ms));
       return f;
     },
   "scheduleAtFixedRate(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;":
@@ -596,29 +604,35 @@ rt.register({
     "static unpark(Ljava/lang/Thread;)V": () => {},
   },
 });
-class JFutureTask extends JObj {
+// get() parks until whoever executes the task has run() it
+class JFutureTask extends JFuture {
   callable: unknown = null;
-  result: unknown = null;
-  done = 0;
+  wake: (v: unknown) => void = () => {};
+}
+function armTask(t: JFutureTask, callable: unknown) {
+  t.callable = callable;
+  t.promise = new Promise((r) => (t.wake = r));
 }
 rt.register({
   name: "java/util/concurrent/FutureTask", ctor: JFutureTask,
   ifaces: ["java/util/concurrent/Future", "java/lang/Runnable", "java/util/concurrent/RunnableFuture"],
   methods: {
-    "<init>(Ljava/util/concurrent/Callable;)V": function (this: JFutureTask, c: unknown) { this.callable = c; },
+    "<init>(Ljava/util/concurrent/Callable;)V": function (this: JFutureTask, c: unknown) { armTask(this, c); },
     "<init>(Ljava/lang/Runnable;Ljava/lang/Object;)V": function (this: JFutureTask, r: unknown, v: unknown) {
-      this.callable = { runnable: r };
-      this.result = v;
+      armTask(this, { runnable: r });
+      this.value = v;
     },
     "run()V": async function (this: JFutureTask) {
       try {
         const c = this.callable as any;
         if (c?.runnable) await vcall(c.runnable, "run", "()V");
-        else if (c) this.result = await vcall(c, "call", "()Ljava/lang/Object;");
-      } catch (e) { reportUncaught(e); }
+        else if (c) this.value = await vcall(c, "call", "()Ljava/lang/Object;");
+      } catch (e) { this.error = rt.jx(e); } // surfaces from get(), as AOSP's setException
       this.done = 1;
+      this.wake(null);
     },
-    "get()Ljava/lang/Object;": function (this: JFutureTask) { return this.result; },
+    "get()Ljava/lang/Object;": function (this: JFutureTask) { return futureGet(this); },
+    "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JFutureTask, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); },
     "isDone()Z": function (this: JFutureTask) { return this.done; },
     "isCancelled()Z": () => 0,
     "cancel(Z)Z": () => 0,
