@@ -653,6 +653,9 @@ class JApplicationInfo extends JObj {
   flags = 0; targetSdkVersion = 33; minSdkVersion = 21; theme = 0; labelRes = 0; icon = 0;
   className: string | null = null; publicSourceDir = ""; uid = 10001; processName = "";
   enabled = 1; metaData: JBundle | null = null;
+  // a single base.apk install has no splits: null, as AOSP leaves them (library loaders null-check these)
+  splitNames: string[] | null = null; splitSourceDirs: string[] | null = null; splitPublicSourceDirs: string[] | null = null;
+  sharedLibraryFiles: string[] | null = null;
 }
 rt.register({
   name: "android/content/pm/ApplicationInfo", ctor: JApplicationInfo, ifaces: ["android/os/Parcelable"],
@@ -661,6 +664,8 @@ rt.register({
     flags: "flags", targetSdkVersion: "targetSdkVersion", minSdkVersion: "minSdkVersion", theme: "theme",
     labelRes: "labelRes", icon: "icon", className: "className", publicSourceDir: "publicSourceDir",
     uid: "uid", processName: "processName", enabled: "enabled", metaData: "metaData",
+    splitNames: "splitNames", splitSourceDirs: "splitSourceDirs", splitPublicSourceDirs: "splitPublicSourceDirs",
+    sharedLibraryFiles: "sharedLibraryFiles",
   },
   methods: { "<init>()V": function () {}, "loadLabel(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;": function (this: JApplicationInfo) { return appHost?.appLabel ?? this.packageName; } },
 });
