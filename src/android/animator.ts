@@ -299,6 +299,7 @@ rt.register({
   },
 });
 rt.register({ name: "android/animation/Animator$AnimatorListener", ctor: class extends JObj {} });
+rt.register({ name: "android/animation/ValueAnimator$AnimatorUpdateListener", ctor: class extends JObj {} });
 rt.register({
   name: "android/animation/AnimatorListenerAdapter", ctor: class extends JObj {},
   ifaces: ["android/animation/Animator$AnimatorListener"],
