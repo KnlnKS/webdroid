@@ -638,6 +638,13 @@ export class Runtime {
         const b = args[0] as Int8Array;
         return new TextDecoder().decode(b.subarray(args[1] as number, (args[1] as number) + (args[2] as number)));
       }
+      // code points, not chars: each element is a whole Unicode scalar
+      case "([III)V": {
+        const cp = args[0] as Int32Array, off = args[1] as number, n = args[2] as number;
+        let out = "";
+        for (let i = 0; i < n; i++) out += String.fromCodePoint(cp[off + i]);
+        return out;
+      }
       default: throw this.unimplemented("String.<init>" + desc);
     }
   }

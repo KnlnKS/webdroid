@@ -431,16 +431,39 @@ rt.register({
   sysInfo.ctor[mangleStaticField("err")] = err;
 }
 
+rt.register({ name: "java/lang/Readable", ctor: class extends JObj {} });
 class JReader extends JObj { s = ""; pos = 0; }
+// Every Reader here is the same model — a decoded string and a cursor — so the whole read
+// surface lives on the base and the subclasses inherit it instead of each re-declaring read().
 rt.register({
-  name: "java/io/Reader", ctor: JReader, ifaces: ["java/io/Closeable"],
-  methods: { "<init>()V": function () {}, "close()V": function () {} },
+  name: "java/io/Reader", ctor: JReader, ifaces: ["java/io/Closeable", "java/lang/Readable"],
+  methods: {
+    "<init>()V": function () {},
+    "close()V": function () {},
+    "read()I": function (this: JReader) { return this.pos < this.s.length ? this.s.charCodeAt(this.pos++) : -1; },
+    "read([CII)I": function (this: JReader, out: Uint16Array, off: number, len: number) {
+      if (this.pos >= this.s.length) return len === 0 ? 0 : -1;
+      const n = Math.min(len, this.s.length - this.pos);
+      for (let i = 0; i < n; i++) out[off + i] = this.s.charCodeAt(this.pos + i);
+      this.pos += n;
+      return n;
+    },
+    "read([C)I": function (this: JReader, out: Uint16Array) {
+      return vcall(this, "read", "([CII)I", out, 0, out.length);
+    },
+    "ready()Z": function (this: JReader) { return this.pos < this.s.length ? 1 : 0; },
+    "skip(J)J": function (this: JReader, n: bigint) {
+      const k = Math.min(Number(n), this.s.length - this.pos);
+      this.pos += k;
+      return BigInt(k);
+    },
+    "markSupported()Z": () => 0,
+  },
 });
 rt.register({
   name: "java/io/StringReader", ctor: class extends JReader {}, sup: "java/io/Reader",
   methods: {
     "<init>(Ljava/lang/String;)V": function (this: JReader, s: string) { this.s = s; },
-    "read()I": function (this: JReader) { return this.pos < this.s.length ? this.s.charCodeAt(this.pos++) : -1; },
   },
 });
 // UTF-8 whatever charset was asked for
@@ -464,7 +487,6 @@ rt.register({
       this.pos = i < 0 ? this.s.length : i + 1;
       return line.endsWith("\r") ? line.slice(0, -1) : line;
     },
-    "read()I": function (this: JReader) { return this.pos < this.s.length ? this.s.charCodeAt(this.pos++) : -1; },
   },
 });
 class JWriter extends JObj { s = ""; }

@@ -283,6 +283,9 @@ export function listMethods(): Methods {
     },
     "size()I": function (this: JList) { return this.a.length; },
     "isEmpty()Z": function (this: JList) { return this.a.length === 0 ? 1 : 0; },
+    // capacity is advisory on a JS array; the JDK signature still has to exist
+    "ensureCapacity(I)V": () => {},
+    "trimToSize()V": () => {},
     "get(I)Ljava/lang/Object;": function (this: JList, i: number) {
       if (i >>> 0 >= this.a.length) ioobe(i, this.a.length);
       return this.a[i];
@@ -542,6 +545,13 @@ function mapMethods(): NativeSpec["methods"] {
     },
     "size()I": function (this: JMap) { return this.m.size + this.slow.length; },
     "isEmpty()Z": function (this: JMap) { return this.m.size + this.slow.length === 0 ? 1 : 0; },
+    "computeIfAbsent(Ljava/lang/Object;Ljava/util/function/Function;)Ljava/lang/Object;": async function (this: JMap, k: unknown, fn: unknown) {
+      const cur = await vcall(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
+      if (cur !== null && cur !== undefined) return cur;
+      const v = await vcall(fn, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
+      if (v !== null && v !== undefined) await vcall(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, v);
+      return v ?? null;
+    },
     "get(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMap, k: unknown) {
       const mk = mapKey(k);
       if (mk !== SLOW) {
@@ -1523,16 +1533,56 @@ rt.register({ name: "java/util/SortedMap", ctor: class extends JObj {}, ifaces: 
 rt.register({ name: "java/util/NavigableMap", ctor: class extends JObj {}, ifaces: ["java/util/SortedMap"] });
 rt.register({ name: "java/util/concurrent/ConcurrentMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"] });
 for (const i of ["java/util/Map", "java/util/RandomAccess", "java/util/Iterator",
-  "java/util/Comparator", "java/util/Enumeration"]) {
+  "java/util/Enumeration"]) {
   rt.register({ name: i, ctor: class extends JObj {} });
 }
+// Comparator is an interface whose STATICS and defaults apps really do call. A comparator we
+// build here is a plain JObj carrying `compare`, which is all sortInPlace's vcall needs.
+const mkCmp = (compare: (a: unknown, b: unknown) => unknown) => {
+  const o = new (rt.link("java/util/Comparator").ctor as new () => JObj)();
+  (o as unknown as Record<string, unknown>)[mangleMethod("compare", "(Ljava/lang/Object;Ljava/lang/Object;)I")] = compare;
+  return o;
+};
+const keyed = (fn: unknown, sel: string, desc: string) =>
+  mkCmp(async (a, b) => {
+    const ka = await vcall(fn, sel, desc, a), kb = await vcall(fn, sel, desc, b);
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
+rt.register({
+  name: "java/util/Comparator", ctor: class extends JObj {},
+  methods: {
+    "static comparingInt(Ljava/util/function/ToIntFunction;)Ljava/util/Comparator;":
+      (f: unknown) => keyed(f, "applyAsInt", "(Ljava/lang/Object;)I"),
+    "static comparingLong(Ljava/util/function/ToLongFunction;)Ljava/util/Comparator;":
+      (f: unknown) => keyed(f, "applyAsLong", "(Ljava/lang/Object;)J"),
+    "static comparingDouble(Ljava/util/function/ToDoubleFunction;)Ljava/util/Comparator;":
+      (f: unknown) => keyed(f, "applyAsDouble", "(Ljava/lang/Object;)D"),
+    "static comparing(Ljava/util/function/Function;)Ljava/util/Comparator;":
+      (f: unknown) => keyed(f, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;"),
+    "static naturalOrder()Ljava/util/Comparator;": () => mkCmp((a, b) => vcall(a, "compareTo", "(Ljava/lang/Object;)I", b)),
+    "static reverseOrder()Ljava/util/Comparator;": () => mkCmp((a, b) => vcall(b, "compareTo", "(Ljava/lang/Object;)I", a)),
+    "reversed()Ljava/util/Comparator;": function (this: unknown) {
+      return mkCmp((a, b) => vcall(this, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", b, a));
+    },
+    "thenComparing(Ljava/util/Comparator;)Ljava/util/Comparator;": function (this: unknown, next: unknown) {
+      return mkCmp(async (a, b) => {
+        const r = await vcall(this, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", a, b);
+        return r !== 0 ? r : await vcall(next, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", a, b);
+      });
+    },
+  },
+});
 rt.register({ name: "java/util/ListIterator", ctor: class extends JObj {}, ifaces: ["java/util/Iterator"] });
 
 // java.util.function.* — single-abstract-method interfaces. No dispatch logic
 // lives here (same as java/lang/Runnable): a lambda/class implementing one
 // compiles its own real method (get/apply/accept/test/...), so callers just
 // vcall() the selector by name. Only the marker registration is needed.
-rt.register({ name: "java/util/function/Supplier", ctor: class extends JObj {} });
+for (const f of ["Supplier", "Function", "BiFunction", "Consumer", "BiConsumer", "Predicate",
+  "BiPredicate", "ToIntFunction", "ToLongFunction", "ToDoubleFunction", "IntFunction",
+  "UnaryOperator", "BinaryOperator"]) {
+  rt.register({ name: "java/util/function/" + f, ctor: class extends JObj {} });
+}
 
 class JArrays extends JObj {}
 class JArraysList extends JList {}

@@ -681,6 +681,11 @@ function sbSpec(name: string): NativeSpec {
       "toString()Ljava/lang/String;": function (this: JSB) { return this.s; },
       "length()I": function (this: JSB) { return this.s.length; },
       "charAt(I)C": function (this: JSB, i: number) { return this.s.charCodeAt(i); },
+      [`appendCodePoint(I)L${name};`]: function (this: JSB, cp: number) { this.s += String.fromCodePoint(cp); return this; },
+      [`replace(IILjava/lang/String;)L${name};`]: function (this: JSB, a: number, b: number, r: string) {
+        this.s = this.s.slice(0, a) + r + this.s.slice(Math.min(b, this.s.length));
+        return this;
+      },
       "setLength(I)V": function (this: JSB, n: number) {
         this.s = n <= this.s.length ? this.s.slice(0, n) : this.s.padEnd(n, "\0");
       },
@@ -775,6 +780,7 @@ rt.register({
     "static valueOf(Ljava/lang/String;)Ljava/lang/Integer;": (s: string) => boxInt(parseIntJ(s)),
     "static parseInt(Ljava/lang/String;)I": (s: string) => parseIntJ(s),
     "static parseInt(Ljava/lang/String;I)I": (s: string, r: number) => parseIntJ(s, r),
+    "static valueOf(Ljava/lang/String;I)Ljava/lang/Integer;": (s: string, r: number) => boxInt(parseIntJ(s, r)),
     "static toString(I)Ljava/lang/String;": (v: number) => String(v),
     "static toString(II)Ljava/lang/String;": (v: number, r: number) => v.toString(r),
     "static toHexString(I)Ljava/lang/String;": (v: number) => (v >>> 0).toString(16),

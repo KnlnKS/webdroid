@@ -606,6 +606,9 @@ export class JTextView extends JView {
   lineSpacingExtra = 0;
   lineSpacingMult = 1;
   allCaps = false;
+  /** set once a style or the app has spoken about textAllCaps, so a widget default cannot
+   *  overrule it afterwards */
+  capsSet: boolean | undefined = undefined;
   drawableL: JDrawable | null = null;
   drawableT: JDrawable | null = null;
   drawableR: JDrawable | null = null;
@@ -734,7 +737,7 @@ async function applyTextAppearance(tv: JTextView, res: Resources, styleId: numbe
   if (st) tv.styleBits = rvInt(res, st, 0);
   await applyFontFamily(tv, res, look("fontFamily"));
   const caps = look("textAllCaps");
-  if (caps) tv.allCaps = !!rvInt(res, caps, 0);
+  if (caps) { tv.allCaps = !!rvInt(res, caps, 0); tv.capsSet = true; }
 }
 /** `android:fontFamily` is either a system family name or a reference to a @font/ resource —
  *  a bare .ttf or a <font-family> XML. Apps ship their own fonts and name them this way. */
@@ -795,7 +798,7 @@ async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyleAttr: n
   if (db) tv.drawableB = await loadDrawableRV(res, db, tv.theme);
   if (g(14)) tv.drawablePad = Math.round(rvDimen(res, g(14), 0));
   await applyFontFamily(tv, res, g(15));
-  if (g(16)) tv.allCaps = !!rvInt(res, g(16), 0);
+  if (g(16)) { tv.allCaps = !!rvInt(res, g(16), 0); tv.capsSet = true; }
   if (g(17)) {
     const v = g(17)!;
     tv.hintColors = v.t === TV.REFERENCE ? await loadColorStateList(res, v.d, tv.theme) : mkCsl(rvColor(res, v, 1627389952));
@@ -900,7 +903,7 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setEllipsize(Landroid/text/TextUtils$TruncateAt;)V": function (this: JTextView, e: { ord: number } | null) {
     this.ellipsizeEnd = e?.ord === 2;
   },
-  "setAllCaps(Z)V": function (this: JTextView, v: number) { this.allCaps = !!v; requestLayout(this); },
+  "setAllCaps(Z)V": function (this: JTextView, v: number) { this.allCaps = !!v; this.capsSet = true; requestLayout(this); },
   "setLineSpacing(FF)V": function (this: JTextView, extra: number, mult: number) {
     this.lineSpacingExtra = extra; this.lineSpacingMult = mult;
     requestLayout(this);
@@ -1198,8 +1201,11 @@ async function applyButtonDefaults(b: JButton) {
     r.ids.push(null);
     b.background = r;
   }
-  b.allCaps = true;
-  b.paintT.tf = tfMedium;
+  // AOSP's Widget.Material.Button supplies these; they are DEFAULTS, not overrides. A style
+  // that spoke for itself — every Material3 button is sentence-case with its own face — has
+  // already run in applyTvStyle, and forcing them here undid it.
+  if (b.capsSet === undefined) b.allCaps = true;
+  if (b.paintT.tf === tfDefault) b.paintT.tf = tfMedium;
 }
 
 class JImageView extends JView {

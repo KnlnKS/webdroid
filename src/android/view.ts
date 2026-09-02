@@ -1782,8 +1782,17 @@ function getVTO(v: JView): JVTO {
 }
 /** fire-and-forget: scroll setters are synchronous void natives, same shape as refreshDrawableState */
 function fireScrollChanged(v: JView) { void getVTO(v).dispatchScrollChanged(); }
+class JA11yAction extends JObj { actionId = 0; label: string | null = null; }
 rt.register({
-  name: "android/view/accessibility/AccessibilityNodeInfo$AccessibilityAction", ctor: class extends JObj {},
+  name: "android/view/accessibility/AccessibilityNodeInfo$AccessibilityAction", ctor: JA11yAction,
+  methods: {
+    "<init>(ILjava/lang/CharSequence;)V": async function (this: JA11yAction, id: number, label: unknown) {
+      this.actionId = id;
+      this.label = label === null ? null : await csText(label);
+    },
+    "getId()I": function (this: JA11yAction) { return this.actionId; },
+    "getLabel()Ljava/lang/CharSequence;": function (this: JA11yAction) { return this.label; },
+  },
 });
 rt.register({ name: "android/view/autofill/AutofillId", ctor: class extends JObj {} });
 rt.register({
