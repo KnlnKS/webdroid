@@ -174,8 +174,8 @@ export function libcInit(): void {
     __errno: (cpu) => cpu.errnoAddr,
     __set_errno: (cpu, a) => { setErrno(cpu, a.i()); return -1; },
     abort: (cpu) => { cpu.fault("abort() called"); },
-    exit: (cpu, a) => { const code = a.i(); console.warn("[native] exit(" + code + ")"); markProcessExited(); onExit(code); cpu.finished = true; return new Promise<never>(() => {}); },
-    _exit: (cpu, a) => { markProcessExited(); onExit(a.i()); cpu.finished = true; return new Promise<never>(() => {}); },
+    exit: (cpu, a) => { console.warn("[native] exit(" + a.i() + ")"); markProcessExited(); cpu.finished = true; return new Promise<never>(() => {}); },
+    _exit: (cpu) => { markProcessExited(); cpu.finished = true; return new Promise<never>(() => {}); },
     atexit: () => 0,
     __cxa_atexit: () => 0,
     __cxa_finalize: () => 0,
@@ -462,10 +462,6 @@ export function libcInit(): void {
   pthreadInit();
   zlibInit();
 }
-
-/** what exit() reports to the shell (System.exit-equivalent); the loader hooks it */
-export let onExit: (code: number) => void = () => {};
-export function setOnExit(f: (code: number) => void): void { onExit = f; }
 
 const PRIO = ["", "", "V", "D", "I", "W", "E", "F", "S"];
 export function logLine(prio: number, tag: string, msg: string): void {

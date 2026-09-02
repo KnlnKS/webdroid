@@ -19,7 +19,6 @@ export const STACK_GUARD = 0x1_0000;
 
 export const trampAddr = (slot: number) => TRAMP_BASE + slot * 8;
 export const trampSlot = (pc: number) => (pc - TRAMP_BASE) >> 3;
-export const isTramp = (pc: number) => pc >= TRAMP_BASE && pc < TRAMP_END;
 
 // errno values (bionic/Linux ARM)
 export const E = {
