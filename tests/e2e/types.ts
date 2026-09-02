@@ -56,6 +56,13 @@ export type Flow = {
   seedPrefs?: string;
   /** Frame-rate gate for animated steps; a step below it is flagged SLOW. */
   minFps?: number;
+  /**
+   * Run this flow on the wall clock instead of PINNED_CLOCK_MS. The pin is in the past, so a
+   * device held there rejects every current TLS certificate: an app that fetches over HTTPS
+   * records a golden of its own error state. Both drivers honour it, or the two passes would
+   * disagree about what "now" is. Anything the flow renders from the clock must be masked.
+   */
+  liveClock?: boolean;
   steps: Step[];
 };
 

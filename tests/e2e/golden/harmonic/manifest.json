@@ -1,0 +1,174 @@
+{
+  "app": "harmonic",
+  "pkg": "com.simon.harmonichackernews",
+  "activity": "com.simon.harmonichackernews.MainActivity",
+  "recordedAt": "2026-09-02T21:50:30.523Z",
+  "pinnedClockMs": 1788385744839,
+  "device": {
+    "width": 720,
+    "height": 1280,
+    "densityDpi": 320,
+    "fingerprint": "google/sdk_gphone64_arm64/emu64a:15/AE3A.240806.043/12960925:userdebug/dev-keys",
+    "sdk": "35"
+  },
+  "crop": {
+    "top": 48,
+    "bottom": 48,
+    "left": 0,
+    "right": 0
+  },
+  "steps": [
+    {
+      "id": "launch",
+      "label": "Launch — welcome dialog over the loading front page",
+      "index": 0,
+      "file": "00-launch.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "welcome-scroll",
+      "label": "Scroll the welcome dialog to its button",
+      "index": 1,
+      "file": "01-welcome-scroll.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "preset-simple",
+      "label": "Pick the Simple UI preset",
+      "index": 2,
+      "file": "02-preset-simple.png",
+      "resolved": {
+        "x": 0.6722222222222223,
+        "y": 0.546875
+      },
+      "bounds": [
+        362,
+        653,
+        606,
+        747
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "preset-expressive",
+      "label": "Back to the Expressive preset",
+      "index": 3,
+      "file": "03-preset-expressive.png",
+      "resolved": {
+        "x": 0.3277777777777778,
+        "y": 0.5453125
+      },
+      "bounds": [
+        114,
+        649,
+        358,
+        747
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "welcome-dismiss",
+      "label": "Get started → dismiss the welcome dialog",
+      "index": 4,
+      "file": "04-welcome-dismiss.png",
+      "resolved": {
+        "x": 0.5,
+        "y": 0.7625
+      },
+      "bounds": [
+        114,
+        920,
+        606,
+        1032
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "front",
+      "label": "Front page — story rows",
+      "index": 5,
+      "file": "05-front.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "overflow",
+      "label": "Open the overflow menu",
+      "index": 6,
+      "file": "06-overflow.png",
+      "resolved": {
+        "x": 0.8944444444444445,
+        "y": 0.14375
+      },
+      "bounds": [
+        608,
+        136,
+        680,
+        232
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "settings",
+      "label": "Settings",
+      "index": 7,
+      "file": "07-settings.png",
+      "resolved": {
+        "x": 0.7277777777777777,
+        "y": 0.38203125
+      },
+      "bounds": [
+        360,
+        469,
+        688,
+        509
+      ],
+      "settleTimedOut": false
+    },
+    {
+      "id": "settings-scroll",
+      "label": "Scroll the settings list",
+      "index": 8,
+      "file": "08-settings-scroll.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "settings-back",
+      "label": "Back to the front page",
+      "index": 9,
+      "file": "09-settings-back.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "comments",
+      "label": "Comment count → the comments screen",
+      "index": 10,
+      "file": "10-comments.png",
+      "resolved": {
+        "x": 0.8958333333333334,
+        "y": 0.30859375
+      },
+      "settleTimedOut": false
+    },
+    {
+      "id": "back",
+      "label": "Back to the front page",
+      "index": 11,
+      "file": "11-back.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "scroll",
+      "label": "Scroll the front page",
+      "index": 12,
+      "file": "12-scroll.png",
+      "settleTimedOut": false
+    },
+    {
+      "id": "scrolled",
+      "label": "Scrolled front page",
+      "index": 13,
+      "file": "13-scrolled.png",
+      "settleTimedOut": false
+    }
+  ]
+}

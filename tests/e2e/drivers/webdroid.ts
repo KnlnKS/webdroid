@@ -97,6 +97,11 @@ export class WebdroidDriver {
     return new WebdroidDriver(browser, page);
   }
 
+  /** Pin Date to `ms` without freezing timers. Per flow: see Flow.liveClock. */
+  setClock(ms: number): Promise<void> {
+    return this.page.clock.setFixedTime(new Date(ms));
+  }
+
   /** Clear persisted SQLite + prefs so every run starts from a fresh install. */
   async reset(): Promise<void> {
     await this.page.evaluate(() => {

@@ -44,12 +44,24 @@ async function seedPrefs(flow: Flow) {
   await emu.shell(`chown ${uid}:${uid} ${path} && chmod 660 ${path} && restorecon ${path}`);
 }
 
+/** Point the device at the instant this flow wants, and report it. Needs root. */
+async function setDeviceClock(flow: Flow): Promise<number> {
+  const ms = flow.liveClock ? Date.now() : PINNED_CLOCK_MS;
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}` +
+    `${d.getUTCFullYear()}.${p(d.getUTCSeconds())}`;
+  await emu.shell(`date ${stamp}`, { quiet: true });
+  return ms;
+}
+
 async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceInfo>>) {
   const dir = `${E2E_DIR}golden/${flow.app}`;
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
 
   console.log(`\n=== recording ${flow.app} (${flow.steps.length} steps) ===`);
+  const clockMs = await setDeviceClock(flow);
   await emu.shell(`pm clear ${flow.pkg}`);
   await sleep(1200);
   if (flow.seedPrefs) {
@@ -124,7 +136,7 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
   const manifest: Manifest = {
     app: flow.app, pkg: flow.pkg, activity: flow.activity,
     recordedAt: new Date().toISOString(),
-    pinnedClockMs: PINNED_CLOCK_MS,
+    pinnedClockMs: clockMs,
     device, crop: flow.crop, steps: recorded,
   };
   await Bun.write(`${dir}/manifest.json`, JSON.stringify(manifest, null, 2));
@@ -135,7 +147,7 @@ const device = await ensureDevice();
 console.log(`device: ${device.width}x${device.height} @${device.densityDpi}dpi  sdk=${device.sdk}`);
 const clock = (await emu.shell("date -u +%s")).trim();
 const drift = Math.abs(+clock * 1000 - PINNED_CLOCK_MS);
-if (drift > 86_400_000) {
+if (drift > 86_400_000 && flows.some((f) => !f.liveClock)) {
   console.warn(`WARN: device clock is ${new Date(+clock * 1000).toISOString()}, not the pinned ` +
     `${new Date(PINNED_CLOCK_MS).toISOString()}. Re-run boot-emulator.sh or date-bearing screens will drift.`);
 }

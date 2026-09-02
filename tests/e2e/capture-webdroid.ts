@@ -5,7 +5,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import type { WebdroidDriver } from "./drivers/webdroid";
 import { E2E_DIR, sleep } from "./lib/util";
-import type { Flow, Manifest, RecordedStep, Step } from "./types";
+import { PINNED_CLOCK_MS, type Flow, type Manifest, type RecordedStep, type Step } from "./types";
 
 export type StepRun = {
   id: string; index: number; file: string;
@@ -88,6 +88,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver): Promise<Step
   await mkdir(outDir, { recursive: true });
 
   console.log(`\n=== webdroid: ${flow.app} (${flow.steps.length} steps) ===`);
+  await drv.setClock(flow.liveClock ? Date.now() : PINNED_CLOCK_MS);
   await drv.reset();
   if (flow.seedPrefs) await drv.seedPrefs(flow.pkg, flow.seedPrefs);
 

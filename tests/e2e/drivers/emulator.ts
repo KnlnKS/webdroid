@@ -13,7 +13,7 @@ export async function sh(args: string[], opts: { quiet?: boolean } = {}): Promis
   return out;
 }
 
-export const shell = (cmd: string) => sh(["shell", cmd]);
+export const shell = (cmd: string, opts?: { quiet?: boolean }) => sh(["shell", cmd], opts);
 
 /** Raw PNG bytes of the current screen. `exec-out` avoids the CRLF mangling of `shell`. */
 async function screencap(): Promise<Buffer> {

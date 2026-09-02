@@ -1,34 +1,58 @@
-// Harmonic for Hacker News (Java/Kotlin, no native code). The front page is live data — the
-// HN API arrives over the dev server's /proxy (Volley's HttpURLConnection) — so this flow needs
-// the server's network and is a smoke target (rendered / alive / missing), never a pixel one.
-// Observed boot: MainActivity's story list starts loading behind a first-run AlertDialog
-// ("Welcome to Harmonic for Hacker News") whose custom view is a ScrollView taller than the
-// card; its "Get started" button only comes into reach after scrolling that dialog. Once
-// dismissed, the front page is a Material toolbar ("Top Stories" spinner, search, overflow)
-// over a RecyclerView of story rows (title / points • domain • age / comment count); the
-// first row's title sits at y≈300 in the 720x1280 frame.
-// Accepted newMissing: `class androidx/window/extensions/WindowExtensionsProvider` — an
-// optional system <uses-library> absent on most real devices too; the app catches the NCDFE.
+// Harmonic for Hacker News (Java/Kotlin, no native code) — appcompat + Material 3 Expressive,
+// RecyclerView, androidx preference. The front page is live data (the HN API arrives over the
+// dev server's /proxy), so those steps carry `maskRects` and the flow's real pixel signal comes
+// from the screens the app draws entirely from its own resources: the first-run welcome dialog
+// and Settings.
+// Observed boot: MainActivity's story list loads behind a first-run AlertDialog ("Welcome to
+// Harmonic for Hacker News") built by MaterialAlertDialogBuilder.setView(ScrollView) — no title,
+// no message, no dialog buttons; the whole dialog is that one custom view, which is taller than
+// the card, so "Get started" only comes into reach after scrolling it. Its UI-preset toggle
+// (Expressive / Simple) picks the app's fonts and card style. Once dismissed, the front page is
+// a Material search bar over a RecyclerView of story rows (title / points • domain • age /
+// comment count); the overflow reaches Settings, which is offline and deterministic.
+// Accepted newMissing: `class androidx/window/extensions/WindowExtensionsProvider` — the
+// optional <uses-library> the foldable split layout wants, absent on most real devices too.
 import type { Flow } from "../types";
 
 const N = (x: number, y: number) => ({ x: x / 720, y: y / 1280 });
 const P = (x: number, y: number): [number, number] => [x / 720, y / 1280];
+const R = (x: number, y: number, w: number, h: number) => ({ x: x / 720, y: y / 1280, w: w / 720, h: h / 1280 });
+
+// The story list is live HN, so it is masked away and these steps score the chrome around it.
+const LIST = [R(0, 282, 720, 998)];
+// Everything outside the welcome dialog's card — the same live list, dimmed by the scrim.
+const AROUND_CARD = [R(0, 0, 720, 212), R(0, 1072, 720, 208), R(0, 212, 68, 860), R(652, 212, 68, 860)];
+// The comments screen is one live story: its preview image, title, meta line and replies all
+// change under the golden. What does not is the action row (profile / save / share / refresh /
+// overflow), so that strip is the only part left compared.
+const COMMENTS = [R(0, 90, 720, 610), R(0, 780, 720, 500)];
 
 export const harmonic: Flow = {
   app: "harmonic",
   pkg: "com.simon.harmonichackernews",
   activity: "com.simon.harmonichackernews.MainActivity",
   apk: "harmonic.apk",
+  // the HN API is HTTPS: a device pinned to a past instant rejects every current certificate
+  // and the app records its "Loading failed" state instead of its real UI
+  liveClock: true,
   // status bar [0,48) and gesture bar [1232,1280) — the split fitnotes verified on-device
   crop: { top: 48, bottom: 48, left: 0, right: 0 },
   steps: [
-    { id: "launch", label: "Launch — welcome dialog over the loading front page", action: { type: "launch" }, settleDelayMs: 6000 },
-    { id: "welcome-scroll", label: "Scroll the welcome dialog to its button", action: { type: "swipe", from: P(360, 1000), to: P(360, 300) } },
-    { id: "welcome-dismiss", label: "Get started → dismiss the welcome dialog", action: { type: "tapText", text: "Get started" }, settleDelayMs: 2000 },
-    { id: "front", label: "Front page — story rows", action: { type: "settle" } },
-    { id: "story", label: "First story row → comments", action: { type: "tapAt", ...N(360, 300) }, settleDelayMs: 4000 },
-    { id: "back", label: "Back to the front page", action: { type: "back" } },
-    { id: "scroll", label: "Scroll the front page", action: { type: "swipe", from: P(360, 1000), to: P(360, 400) } },
-    { id: "scrolled", label: "Scrolled front page", action: { type: "settle" } },
+    { id: "launch", label: "Launch — welcome dialog over the loading front page", action: { type: "launch" }, settleDelayMs: 6000, maskRects: AROUND_CARD },
+    { id: "welcome-scroll", label: "Scroll the welcome dialog to its button", action: { type: "swipe", from: P(360, 1000), to: P(360, 300) }, maskRects: AROUND_CARD },
+    { id: "preset-simple", label: "Pick the Simple UI preset", action: { type: "tapText", text: "Simple" }, maskRects: AROUND_CARD },
+    { id: "preset-expressive", label: "Back to the Expressive preset", action: { type: "tapText", text: "Expressive" }, maskRects: AROUND_CARD },
+    { id: "welcome-dismiss", label: "Get started → dismiss the welcome dialog", action: { type: "tapText", text: "Get started" }, settleDelayMs: 2000, maskRects: LIST },
+    { id: "front", label: "Front page — story rows", action: { type: "settle" }, settleDelayMs: 2000, maskRects: LIST },
+    { id: "overflow", label: "Open the overflow menu", action: { type: "tapText", text: "More options" } },
+    { id: "settings", label: "Settings", action: { type: "tapText", text: "Settings" }, settleDelayMs: 2000 },
+    { id: "settings-scroll", label: "Scroll the settings list", action: { type: "swipe", from: P(360, 1000), to: P(360, 500) } },
+    { id: "settings-back", label: "Back to the front page", action: { type: "back" }, settleDelayMs: 2000, maskRects: LIST },
+    // the comment count, not the title: tapping the title opens the article in a WebView, whose
+    // pixels the canvas capture cannot see at all
+    { id: "comments", label: "Comment count → the comments screen", action: { type: "tapAt", ...N(645, 395) }, settleDelayMs: 5000, maskRects: COMMENTS },
+    { id: "back", label: "Back to the front page", action: { type: "back" }, settleDelayMs: 2000, maskRects: LIST },
+    { id: "scroll", label: "Scroll the front page", action: { type: "swipe", from: P(360, 1000), to: P(360, 400) }, maskRects: LIST },
+    { id: "scrolled", label: "Scrolled front page", action: { type: "settle" }, maskRects: LIST },
   ],
 };
