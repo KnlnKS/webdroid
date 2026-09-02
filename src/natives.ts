@@ -19,6 +19,7 @@ import "./android/gl";
 import "./android/glview";
 import "./android/os";
 import "./android/graphics";
+import "./android/fonts";
 import "./android/path";
 import "./android/text";
 import "./android/drawable";
