@@ -493,6 +493,34 @@ rt.register({
   },
 });
 
+// ── android.util.Property / IntProperty / FloatProperty: abstract get/set handles that
+// ObjectAnimator drives. The primitive subclasses unbox into the app's setValue override.
+export class JProperty extends JObj { type: unknown = null; name = ""; }
+rt.register({
+  name: "android/util/Property", ctor: JProperty,
+  methods: {
+    "<init>(Ljava/lang/Class;Ljava/lang/String;)V": function (this: JProperty, t: unknown, n: string) { this.type = t; this.name = n; },
+    "getName()Ljava/lang/String;": function (this: JProperty) { return this.name; },
+    "getType()Ljava/lang/Class;": function (this: JProperty) { return this.type; },
+    "isReadOnly()Z": () => 0,
+    "set(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JProperty) {
+      throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Property " + this.name + " is read-only");
+    },
+  },
+});
+for (const [name, desc, cls, unbox] of [
+  ["android/util/IntProperty", "(Ljava/lang/Object;I)V", "java/lang/Integer", (v: any) => v?.v | 0],
+  ["android/util/FloatProperty", "(Ljava/lang/Object;F)V", "java/lang/Float", (v: any) => Math.fround(v?.v ?? 0)],
+] as const) {
+  rt.register({
+    name, ctor: class extends JProperty {}, sup: "android/util/Property",
+    methods: {
+      "<init>(Ljava/lang/String;)V": function (this: JProperty, n: string) { this.type = rt.classFor(cls); this.name = n; },
+      "set(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JProperty, o: unknown, v: unknown) { return vcall(this, "setValue", desc, o, unbox(v)); },
+    },
+  });
+}
+
 export class JDisplayMetrics extends JObj {
   density = device.density; densityDpi = device.densityDpi; scaledDensity = device.density;
   widthPixels = device.width; heightPixels = device.height;

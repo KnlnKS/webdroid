@@ -21,6 +21,8 @@ class JValueAnimator extends JObj {
   isInt = false;
   target: unknown = null; // ObjectAnimator
   propName = "";
+  /** an android.util.Property target (ObjectAnimator.ofFloat(Object, Property, ...)) */
+  prop: unknown = null;
   repeat = 0;
   frac = 0;
   delayMs = 0;
@@ -33,7 +35,9 @@ async function animTick(a: JValueAnimator): Promise<boolean> {
   a.frac = t;
   const v = a.from + (a.to - a.from) * (1 - Math.pow(1 - t, 2));
   a.cur = a.isInt ? Math.round(v) : v;
-  if (a.target && a.propName) {
+  if (a.target && a.prop) {
+    await vcall(a.prop, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", a.target, a.isInt ? boxInt(a.cur as number) : box(JFloat, a.cur as number));
+  } else if (a.target && a.propName) {
     await applyAnimProp(a.target, a.propName, a.cur as number);
   }
   for (const l of a.updateLs) {
@@ -170,7 +174,27 @@ rt.register({
         a.to = vals[vals.length - 1] ?? 0;
         return a;
       },
+    "static ofFloat(Ljava/lang/Object;Landroid/util/Property;[F)Landroid/animation/ObjectAnimator;":
+      (target: unknown, prop: unknown, vals: Float32Array) => {
+        const a = new (rt.link("android/animation/ObjectAnimator").ctor)();
+        a.target = target;
+        a.prop = prop;
+        a.from = vals.length > 1 ? vals[0] : 0;
+        a.to = vals[vals.length - 1] ?? 0;
+        return a;
+      },
+    "static ofInt(Ljava/lang/Object;Landroid/util/Property;[I)Landroid/animation/ObjectAnimator;":
+      (target: unknown, prop: unknown, vals: Int32Array) => {
+        const a = new (rt.link("android/animation/ObjectAnimator").ctor)();
+        a.target = target;
+        a.prop = prop;
+        a.isInt = true;
+        a.from = vals.length > 1 ? vals[0] : 0;
+        a.to = vals[vals.length - 1] ?? 0;
+        return a;
+      },
     "setPropertyName(Ljava/lang/String;)V": function (this: any, p: string) { this.propName = p; },
+    "setProperty(Landroid/util/Property;)V": function (this: any, p: unknown) { this.prop = p; },
   },
 });
 class JAnimatorSet extends JValueAnimator { anims: JValueAnimator[] = []; sequential = false; }
