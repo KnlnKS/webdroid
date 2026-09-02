@@ -352,12 +352,16 @@ rt.register({
 interface TLine { start: number; end: number; text: string; width: number; }
 class JLayout extends JObj {
   text = "";
+  /** the CharSequence the layout was built from, kept for its spans (LineHeightSpan) */
+  src: unknown = null;
   paint!: JTextPaint;
   width = 0;
   lines: TLine[] = [];
   spacingMult = 1; spacingAdd = 0;
   includePad = true;
   asc = 0; desc = 0; padTop = 0; padBottom = 0;
+  /** per-line box tops/baselines, set only when a LineHeightSpan makes the lines non-uniform */
+  tops: number[] | null = null; bases: number[] | null = null;
   layoutLines(maxLines = Number.MAX_SAFE_INTEGER) {
     const p = this.paint;
     this.asc = fontAscent(p); this.desc = fontDescent(p);
@@ -399,9 +403,43 @@ class JLayout extends JObj {
     }
     if (!this.lines.length) this.lines.push({ start: 0, end: 0, text: "", width: 0 });
   }
+  /**
+   * AOSP StaticLayout hands every line's font metrics to the LineHeightSpans covering it and
+   * lays the line out with what they wrote back. That is how a Compose Paragraph (and any
+   * app-set line height) gets its spacing, so a layout without it is a font-metrics line short.
+   */
+  async applyLineHeightSpans() {
+    this.tops = this.bases = null;
+    const src = this.src;
+    if (!(src instanceof JSpannable)) return;
+    const spans = src.spans.filter((s) => rt.iof(s.span, "android/text/style/LineHeightSpan"));
+    if (!spans.length) return;
+    const fm = new (rt.link("android/graphics/Paint$FontMetricsInt").ctor as new () => { top: number; ascent: number; descent: number; bottom: number; leading: number })();
+    const tops: number[] = [], bases: number[] = [];
+    let v = 0;
+    for (let i = 0; i < this.lines.length; i++) {
+      const l = this.lines[i];
+      fillFontMetrics(this.paint, fm, true);
+      if (i === 0) fm.ascent -= this.padTop;
+      if (i === this.lines.length - 1) fm.descent += this.padBottom;
+      for (const s of spans) {
+        if (s.start > l.end || s.end < l.start) continue;
+        await vcall(s.span, "chooseHeight", "(Ljava/lang/CharSequence;IIIILandroid/graphics/Paint$FontMetricsInt;)V",
+          src, l.start, l.end, s.start, v, fm);
+      }
+      tops.push(v);
+      bases.push(v - fm.ascent);
+      v += Math.round((fm.descent - fm.ascent) * this.spacingMult + this.spacingAdd);
+    }
+    tops.push(v);
+    this.tops = tops; this.bases = bases;
+  }
   lineHeight(): number { return Math.round((this.desc - this.asc) * this.spacingMult + this.spacingAdd); }
-  lineTop(i: number): number { return i * this.lineHeight() + (i > 0 ? this.padTop : 0); }
-  baseline(i: number): number { return Math.round(this.lineTop(i) - this.asc) + (i === 0 ? this.padTop : 0); }
+  lineTop(i: number): number { return this.tops ? this.tops[Math.min(i, this.tops.length - 1)] : i * this.lineHeight() + (i > 0 ? this.padTop : 0); }
+  baseline(i: number): number {
+    if (this.bases) return this.bases[Math.min(i, this.bases.length - 1)];
+    return Math.round(this.lineTop(i) - this.asc) + (i === 0 ? this.padTop : 0);
+  }
 }
 /** AOSP Layout.getDesiredWidth: widest paragraph, unwrapped. */
 function desiredWidth(text: string, p: JTextPaint): number {
@@ -433,7 +471,7 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "getLineRight(I)F": function (this: JLayout, i: number) { return this.lines[i]?.width ?? 0; },
   "getLineWidth(I)F": function (this: JLayout, i: number) { return this.lines[i]?.width ?? 0; },
   "getLineMax(I)F": function (this: JLayout, i: number) { return this.lines[i]?.width ?? 0; },
-  "getHeight()I": function (this: JLayout) { return this.lines.length * this.lineHeight() + this.padTop + this.padBottom; },
+  "getHeight()I": function (this: JLayout) { return this.tops ? this.tops[this.tops.length - 1] : this.lines.length * this.lineHeight() + this.padTop + this.padBottom; },
   "getWidth()I": function (this: JLayout) { return this.width; },
   "getText()Ljava/lang/CharSequence;": function (this: JLayout) { return this.text; },
   "getPaint()Landroid/text/TextPaint;": function (this: JLayout) { return this.paint; },
@@ -445,6 +483,7 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "getParagraphDirection(I)I": () => 1,
   "isRtlCharAt(I)Z": () => 0,
   "getLineForVertical(I)I": function (this: JLayout, y: number) {
+    if (this.tops) { let i = 0; while (i + 1 < this.lines.length && this.tops[i + 1] <= y) i++; return i; }
     return Math.max(0, Math.min(this.lines.length - 1, Math.floor((y - this.padTop) / this.lineHeight())));
   },
   "getLineForOffset(I)I": function (this: JLayout, off: number) {
@@ -508,10 +547,11 @@ function boringMetrics(text: string, paint: JTextPaint): JBoringMetrics | null {
 }
 class JBoringLayout extends JLayout {
   /** the single-line layout every ctor/make overload builds; `incl` is the include-pad flag only make() takes */
-  setup(cs: unknown, p: JTextPaint, w: number, smult: number, sadd: number, incl = this.includePad): this {
-    this.text = spannedString(cs); this.paint = p; this.width = w;
+  async setup(cs: unknown, p: JTextPaint, w: number, smult: number, sadd: number, incl = this.includePad): Promise<this> {
+    this.text = spannedString(cs); this.src = cs; this.paint = p; this.width = w;
     this.spacingMult = smult; this.spacingAdd = sadd; this.includePad = incl;
     this.layoutLines(1);
+    await this.applyLineHeightSpans();
     return this;
   }
 }
@@ -548,7 +588,8 @@ rt.register({
     "static obtain(Ljava/lang/CharSequence;IILandroid/text/TextPaint;I)Landroid/text/StaticLayout$Builder;":
       (cs: unknown, start: number, end: number, p: JTextPaint, w: number) => {
         const b = new JSLBuilder();
-        b.cs = spannedString(cs).slice(start, end); b.p = p; b.w = w;
+        b.cs = start === 0 && end === spannedString(cs).length ? cs : spannedString(cs).slice(start, end);
+        b.p = p; b.w = w;
         return b;
       },
     "setAlignment(Landroid/text/Layout$Alignment;)Landroid/text/StaticLayout$Builder;": slSetter(),
@@ -564,11 +605,12 @@ rt.register({
     "setJustificationMode(I)Landroid/text/StaticLayout$Builder;": slSetter(),
     "setUseLineSpacingFromFallbacks(Z)Landroid/text/StaticLayout$Builder;": slSetter(),
     "setLineBreakConfig(Landroid/graphics/text/LineBreakConfig;)Landroid/text/StaticLayout$Builder;": slSetter(),
-    "build()Landroid/text/StaticLayout;": function (this: JSLBuilder) {
+    "build()Landroid/text/StaticLayout;": async function (this: JSLBuilder) {
       const l = new JStaticLayout();
-      l.text = String(this.cs); l.paint = this.p; l.width = this.w;
+      l.text = spannedString(this.cs); l.src = this.cs; l.paint = this.p; l.width = this.w;
       l.spacingMult = this.smult; l.spacingAdd = this.sadd; l.includePad = this.incl;
       l.layoutLines(this.maxLines);
+      await l.applyLineHeightSpans();
       return l;
     },
   },
