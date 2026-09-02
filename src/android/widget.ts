@@ -4,7 +4,7 @@ import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { vcall, mkEnumSet } from "../jvm/natives/jlang";
 import { usLocale } from "../jvm/natives/jutil";
-import { JCanvas, JTypeface, tfDefault, tfMedium, typefaceFor, cssColor, measureCtx, fontAscent, fontDescent, JBitmap, JRect } from "./graphics";
+import { JCanvas, JTypeface, tfDefault, tfMedium, typefaceFor, cssColor, measureCtx, fontAscent, fontDescent, fontTop, fontBottom, JBitmap, JRect } from "./graphics";
 import { JTextPaint, spannedString, JEditable, mkStaticLayout } from "./text";
 import { JDrawable, loadDrawableRV, loadDrawable, loadColorStateList, JColorStateList, cslColor, mkCsl, ST, JRippleDrawable, JGradientDrawable, JBitmapDrawable } from "./drawable";
 import { JAttrSet } from "./res";
@@ -623,6 +623,7 @@ export class JTextView extends JView {
   layoutWidthFor = -1;
   inputTypeV = 1;
   styleBits = 0;
+  includePad = true;
 
   constructor() {
     super();
@@ -638,7 +639,12 @@ export class JTextView extends JView {
   lineHeight(): number {
     return Math.round((fontDescent(this.paintT) - fontAscent(this.paintT)) * this.lineSpacingMult + this.lineSpacingExtra);
   }
-  ascent(): number { return Math.round(-fontAscent(this.paintT)); }
+  /** includeFontPadding (AOSP's default): the first line's box starts at the font's `top` and the
+   *  last one's ends at its `bottom`, so a line box is taller than ascent..descent at both ends. */
+  topPad(): number { return this.includePad ? Math.round(fontAscent(this.paintT) - fontTop(this.paintT)) : 0; }
+  bottomPad(): number { return this.includePad ? Math.round(fontBottom(this.paintT) - fontDescent(this.paintT)) : 0; }
+  textHeight(lines: number): number { return lines * this.lineHeight() + this.topPad() + this.bottomPad(); }
+  ascent(): number { return Math.round(-fontAscent(this.paintT)) + this.topPad(); }
   wrap(avail: number): string[] {
     const text = this.displayText();
     if (avail <= 0) return text ? [text] : [];
@@ -748,7 +754,7 @@ async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyleAttr: n
     tvAttr.drawablePadding, tvAttr.fontFamily, tvAttr.textAllCaps, tvAttr.textColorHint,
     tvAttr.inputType, tvAttr.lineSpacingExtra, tvAttr.lineSpacingMultiplier, tvAttr.lines,
     tvAttr.drawableStart, tvAttr.drawableEnd, tvAttr.minLines,
-    tvAttr.ems, tvAttr.minEms, tvAttr.minWidth,
+    tvAttr.ems, tvAttr.minEms, tvAttr.minWidth, tvAttr.includeFontPadding,
   ];
   const ta = obtainStyled(res, tv.theme, set, ids, defStyleAttr, 0);
   const g = (i: number) => ta.vals[i];
@@ -793,6 +799,7 @@ async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyleAttr: n
   if (g(18)) tv.inputTypeV = rvInt(res, g(18), 1);
   if (g(19)) tv.lineSpacingExtra = rvDimen(res, g(19), 0);
   if (g(20)) tv.lineSpacingMult = g(20)!.t === TV.FLOAT ? g(20)!.d : 1;
+  if (g(28)) tv.includePad = !!rvInt(res, g(28), 1);
   if (tv.styleBits & 1) tv.paintT.fakeBold = true;
   if (tv.styleBits & 2) tv.paintT.tf = (() => { const t = new JTypeface(); t.family = tv.paintT.tf.family; t.italic = true; t.weight = tv.paintT.tf.weight; return t; })();
 }
@@ -895,7 +902,7 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     requestLayout(this);
   },
   "setLetterSpacing(F)V": function (this: JTextView, v: number) { this.paintT.letterSpacingEm = v; },
-  "setIncludeFontPadding(Z)V": () => {},
+  "setIncludeFontPadding(Z)V": function (this: JTextView, on: number) { this.includePad = !!on; requestLayout(this); },
   "setTextAppearance(Landroid/content/Context;I)V": function (this: JTextView, c: unknown, id: number) { return setTextAppearance.call(this, id); },
   "setTextAppearance(I)V": setTextAppearance,
   "setCompoundDrawablesWithIntrinsicBounds(IIII)V": async function (this: JTextView, l: number, t: number, r: number, b: number) {
@@ -1081,7 +1088,7 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     }
     const lineCount = Math.max(this.lines.length, display || this.hint ? 1 : 0, this.minLinesV);
     const dHeights = [this.drawableL ? this.drawableL.intrinsicH() : 0, this.drawableR ? this.drawableR.intrinsicH() : 0];
-    let h = lineCount * this.lineHeight() + this.padT + this.padB + dtH;
+    let h = this.textHeight(lineCount) + this.padT + this.padB + dtH;
     h = Math.max(h, this.minH, ...dHeights.map((x) => x + this.padT + this.padB));
     this.measuredW = w;
     this.measuredH = resolveSizeAndState(h, hSpec);
@@ -1120,7 +1127,7 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const lines = showHint ? this.wrapHint(avail) : this.lines;
     if (!lines.length && !this.editable) return;
     const lh = this.lineHeight();
-    const totalH = Math.max(1, lines.length) * lh;
+    const totalH = this.textHeight(Math.max(1, lines.length));
     const vg = gravityV(this.gravityT);
     let y = (vg === 16 ? (this.height() - this.padT - this.padB - totalH) / 2 + this.padT
       : vg === 80 ? this.height() - this.padB - totalH : this.padT) + this.ascent();

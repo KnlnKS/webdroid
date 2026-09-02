@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { vcall, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import { type JDate } from "../jvm/natives/jtime";
-import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fillFontMetrics } from "./graphics";
+import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics } from "./graphics";
 import { device } from "../shell/config";
 import { formatDate } from "../jvm/natives/jtext";
 import { toJsArray } from "../jvm/natives/jutil";
@@ -357,10 +357,14 @@ class JLayout extends JObj {
   lines: TLine[] = [];
   spacingMult = 1; spacingAdd = 0;
   includePad = true;
-  asc = 0; desc = 0;
+  asc = 0; desc = 0; padTop = 0; padBottom = 0;
   layoutLines(maxLines = Number.MAX_SAFE_INTEGER) {
     const p = this.paint;
     this.asc = fontAscent(p); this.desc = fontDescent(p);
+    // includePad (AOSP's default): the first line's box reaches up to the font's `top` and the
+    // last one's down to its `bottom`; the space between lines stays ascent..descent.
+    this.padTop = this.includePad ? Math.round(this.asc - fontTop(p)) : 0;
+    this.padBottom = this.includePad ? Math.round(fontBottom(p) - this.desc) : 0;
     this.lines = [];
     let pos = 0;
     for (const para of this.text.split("\n")) {
@@ -396,6 +400,8 @@ class JLayout extends JObj {
     if (!this.lines.length) this.lines.push({ start: 0, end: 0, text: "", width: 0 });
   }
   lineHeight(): number { return Math.round((this.desc - this.asc) * this.spacingMult + this.spacingAdd); }
+  lineTop(i: number): number { return i * this.lineHeight() + (i > 0 ? this.padTop : 0); }
+  baseline(i: number): number { return Math.round(this.lineTop(i) - this.asc) + (i === 0 ? this.padTop : 0); }
 }
 /** AOSP Layout.getDesiredWidth: widest paragraph, unwrapped. */
 function desiredWidth(text: string, p: JTextPaint): number {
@@ -414,10 +420,10 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "getSpacingAdd()F": function (this: JLayout) { return this.spacingAdd; },
   "getAlignment()Landroid/text/Layout$Alignment;": () => null,
   "getUseFallbackLineSpacing()Z": () => 0,
-  "getLineTop(I)I": function (this: JLayout, i: number) { return Math.min(i, this.lines.length) * this.lineHeight(); },
-  "getLineBottom(I)I": function (this: JLayout, i: number) { return (Math.min(i, this.lines.length - 1) + 1) * this.lineHeight(); },
-  "getLineBottom(IZ)I": function (this: JLayout, i: number) { return (Math.min(i, this.lines.length - 1) + 1) * this.lineHeight(); },
-  "getLineBaseline(I)I": function (this: JLayout, i: number) { return Math.round(i * this.lineHeight() - this.asc); },
+  "getLineTop(I)I": function (this: JLayout, i: number) { return this.lineTop(Math.min(i, this.lines.length)); },
+  "getLineBottom(I)I": function (this: JLayout, i: number) { return this.lineTop(Math.min(i, this.lines.length - 1) + 1); },
+  "getLineBottom(IZ)I": function (this: JLayout, i: number) { return this.lineTop(Math.min(i, this.lines.length - 1) + 1); },
+  "getLineBaseline(I)I": function (this: JLayout, i: number) { return this.baseline(i); },
   "getLineAscent(I)I": function (this: JLayout) { return Math.round(this.asc); },
   "getLineDescent(I)I": function (this: JLayout) { return Math.round(this.desc); },
   "getLineStart(I)I": function (this: JLayout, i: number) { return this.lines[Math.min(i, this.lines.length - 1)]?.start ?? 0; },
@@ -427,19 +433,19 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "getLineRight(I)F": function (this: JLayout, i: number) { return this.lines[i]?.width ?? 0; },
   "getLineWidth(I)F": function (this: JLayout, i: number) { return this.lines[i]?.width ?? 0; },
   "getLineMax(I)F": function (this: JLayout, i: number) { return this.lines[i]?.width ?? 0; },
-  "getHeight()I": function (this: JLayout) { return this.lines.length * this.lineHeight(); },
+  "getHeight()I": function (this: JLayout) { return this.lines.length * this.lineHeight() + this.padTop + this.padBottom; },
   "getWidth()I": function (this: JLayout) { return this.width; },
   "getText()Ljava/lang/CharSequence;": function (this: JLayout) { return this.text; },
   "getPaint()Landroid/text/TextPaint;": function (this: JLayout) { return this.paint; },
   "getEllipsisStart(I)I": () => 0,
   "getEllipsisCount(I)I": () => 0,
   "getEllipsizedWidth()I": function (this: JLayout) { return this.width; },
-  "getTopPadding()I": () => 0,
-  "getBottomPadding()I": () => 0,
+  "getTopPadding()I": function (this: JLayout) { return -this.padTop; },
+  "getBottomPadding()I": function (this: JLayout) { return this.padBottom; },
   "getParagraphDirection(I)I": () => 1,
   "isRtlCharAt(I)Z": () => 0,
   "getLineForVertical(I)I": function (this: JLayout, y: number) {
-    return Math.max(0, Math.min(this.lines.length - 1, Math.floor(y / this.lineHeight())));
+    return Math.max(0, Math.min(this.lines.length - 1, Math.floor((y - this.padTop) / this.lineHeight())));
   },
   "getLineForOffset(I)I": function (this: JLayout, off: number) {
     for (let i = 0; i < this.lines.length; i++) if (off <= this.lines[i].end) return i;
@@ -466,17 +472,15 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
     return l.end;
   },
   "getLineBounds(ILandroid/graphics/Rect;)I": function (this: JLayout, i: number, r: { left: number; top: number; right: number; bottom: number }) {
-    const lh = this.lineHeight();
-    r.left = 0; r.right = this.lines[i]?.width ?? 0; r.top = i * lh; r.bottom = (i + 1) * lh;
-    return Math.round(i * lh - this.asc);
+    r.left = 0; r.right = this.lines[i]?.width ?? 0; r.top = this.lineTop(i); r.bottom = this.lineTop(i + 1);
+    return this.baseline(i);
   },
   "draw(Landroid/graphics/Canvas;)V": async function (this: JLayout, c: JCanvas) {
     // c may be a dex Canvas wrapper (Compose TextAndroidCanvas) — dispatch virtually
-    const lh = this.lineHeight();
     for (let i = 0; i < this.lines.length; i++) {
       if (this.lines[i].text) {
         await vcall(c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V",
-          this.lines[i].text, 0, Math.round(i * lh - this.asc), this.paint);
+          this.lines[i].text, 0, this.baseline(i), this.paint);
       }
     }
   },

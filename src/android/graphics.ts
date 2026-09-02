@@ -556,9 +556,11 @@ function vmetrics(p: JPaint): { a: number; d: number } {
 }
 export function fontAscent(p: JPaint): number { return vmetrics(p).a; }
 export function fontDescent(p: JPaint): number { return vmetrics(p).d; }
+export function fontTop(p: JPaint): number { return vmetrics(p).a * (SYSTEM_FONT.top / SYSTEM_FONT.ascent); }
+export function fontBottom(p: JPaint): number { return vmetrics(p).d * (SYSTEM_FONT.bottom / SYSTEM_FONT.descent); }
 export function fillFontMetrics(p: JPaint, fm: { top: number; ascent: number; descent: number; bottom: number; leading: number }, int: boolean) {
   const a = fontAscent(p), d = fontDescent(p);
-  const top = a * (SYSTEM_FONT.top / SYSTEM_FONT.ascent), bottom = d * (SYSTEM_FONT.bottom / SYSTEM_FONT.descent);
+  const top = fontTop(p), bottom = fontBottom(p);
   fm.ascent = int ? Math.round(a) : a;
   fm.descent = int ? Math.round(d) : d;
   fm.top = int ? Math.round(top) : top;
