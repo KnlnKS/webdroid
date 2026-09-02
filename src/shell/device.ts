@@ -40,7 +40,7 @@ export function contentTop(): number {
   return act && (act.window.flags & FLAG_FULLSCREEN) ? 0 : STATUS_H;
 }
 
-export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void): Promise<BootedApp> {
+export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, apkFile = ""): Promise<BootedApp> {
   // materialize every registered native class so directly-constructed instances have methods
   for (const name of [...rt.natives.keys()]) {
     try { rt.link(name); } catch (e) { console.warn("[link native]", name, e); }
@@ -103,7 +103,7 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void):
   }
 
   const host: AppHost = {
-    res, theme, pkg, appLabel: label, themeResId, iconRes: iconAttr?.data ?? 0, zip,
+    res, theme, pkg, apkFile, appLabel: label, themeResId, iconRes: iconAttr?.data ?? 0, zip,
     application: null, jresources: jres,
     statusBarColor: -16777216, navBarColor: -16777216,
     launch: async (component, intent) => { await launchActivity(component, intent); },

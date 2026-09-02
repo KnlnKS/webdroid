@@ -114,7 +114,7 @@ async function boot(file: string) {
     const resp = await fetch("/apks/" + encodeURIComponent(file));
     const bytes = new Uint8Array(await resp.arrayBuffer());
     const t0 = performance.now();
-    await bootApk(bytes, (s) => { statusEl.textContent = s; });
+    await bootApk(bytes, (s) => { statusEl.textContent = s; }, file);
     perf.bootMs = performance.now() - t0;
     statusEl.textContent = `running (boot ${perf.bootMs.toFixed(0)}ms)` + (rt.nativeRequired.size ? " — needs native code" : "");
   } catch (e) {
