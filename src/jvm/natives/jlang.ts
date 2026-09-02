@@ -583,7 +583,7 @@ rt.register({
   methods: {
     "static valueOf(I)Ljava/lang/String;": (v: number) => String(v),
     "static valueOf(J)Ljava/lang/String;": (v: bigint) => String(v),
-    "static valueOf(F)Ljava/lang/String;": (v: number) => fmtDouble(v),
+    "static valueOf(F)Ljava/lang/String;": (v: number) => fmtFloat(v),
     "static valueOf(D)Ljava/lang/String;": (v: number) => fmtDouble(v),
     "static valueOf(Z)Ljava/lang/String;": (v: number) => (v ? "true" : "false"),
     "static valueOf(C)Ljava/lang/String;": (v: number) => String.fromCharCode(v),
@@ -609,10 +609,30 @@ rt.register({
   }
 }
 
-// Java float/double toString: approximate with JS (differences acceptable)
+// Java Double.toString: shortest round-tripping digits (JS agrees), laid out plain with at least
+// one fraction digit inside [1e-3, 1e7) and as "d.dddE±n" outside (BigDecimal.valueOf(double)
+// is specified in terms of this string, so the layout is load-bearing, not cosmetic).
 export function fmtDouble(v: number): string {
-  if (Number.isInteger(v) && Math.abs(v) < 1e21) return v.toFixed(1);
-  return String(v);
+  if (v !== v) return "NaN";
+  if (v === Infinity) return "Infinity";
+  if (v === -Infinity) return "-Infinity";
+  if (v === 0) return 1 / v < 0 ? "-0.0" : "0.0";
+  const a = Math.abs(v);
+  if (a >= 1e-3 && a < 1e7) {
+    const s = String(v);
+    return s.includes(".") ? s : s + ".0";
+  }
+  const [m, e] = v.toExponential().split("e");
+  return (m.includes(".") ? m : m + ".0") + "E" + (e[0] === "+" ? e.slice(1) : e);
+}
+// Float.toString: the shortest digits that round-trip through a 32-bit float, not the double's.
+export function fmtFloat(v: number): string {
+  if (v !== v || v === 0 || !Number.isFinite(v)) return fmtDouble(v);
+  for (let p = 1; p < 9; p++) {
+    const d = Number(v.toPrecision(p));
+    if (Math.fround(d) === v) return fmtDouble(d);
+  }
+  return fmtDouble(Number(v.toPrecision(9)));
 }
 
 // ── StringBuilder / StringBuffer
@@ -651,7 +671,7 @@ function sbSpec(name: string): NativeSpec {
       [`append(Ljava/lang/CharSequence;II)${L}`]: appendRange,
       [`append(I)${L}`]: app(function (v) { this.s += v; }),
       [`append(J)${L}`]: app(function (v) { this.s += v; }),
-      [`append(F)${L}`]: app(function (v) { this.s += fmtDouble(v); }),
+      [`append(F)${L}`]: app(function (v) { this.s += fmtFloat(v); }),
       [`append(D)${L}`]: app(function (v) { this.s += fmtDouble(v); }),
       [`append(Z)${L}`]: app(function (v) { this.s += v ? "true" : "false"; }),
       [`append(C)${L}`]: appendChar,
@@ -737,7 +757,7 @@ const numCommon = (kind: "I" | "J" | "F" | "D" | "B" | "S") => ({
     return Number(this.v) | 0;
   },
   "toString()Ljava/lang/String;": function (this: { v: number | bigint }) {
-    return kind === "F" || kind === "D" ? fmtDouble(this.v as number) : String(this.v);
+    return kind === "F" ? fmtFloat(this.v as number) : kind === "D" ? fmtDouble(this.v as number) : String(this.v);
   },
 });
 rt.register({
@@ -872,7 +892,7 @@ rt.register({
     "static isNaN(F)Z": isNaNZ,
     "static isInfinite(F)Z": isInfZ,
     "static compare(FF)I": cmpFloat,
-    "static toString(F)Ljava/lang/String;": fmtDouble,
+    "static toString(F)Ljava/lang/String;": fmtFloat,
     "isNaN()Z": function (this: JFloat) { return isNaNZ(this.v); },
   },
 });

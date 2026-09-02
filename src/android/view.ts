@@ -167,7 +167,7 @@ export class JView extends JObj {
   clickable = false; longClickable = false;
   enabled = true; pressed = false; selected = false; activated = false; focused = false;
   focusable = false; focusableInTouchMode = false;
-  clickL: unknown = null; longClickL: unknown = null; touchL: unknown = null;
+  clickL: unknown = null; longClickL: unknown = null; touchL: unknown = null; keyL: unknown = null; focusL: unknown = null;
   insetsL: unknown = null; a11yDelegate: unknown = null; dragL: unknown = null;
   layoutChangeLs: unknown[] = [];
   attachLs: unknown[] = [];
@@ -180,7 +180,7 @@ export class JView extends JObj {
   longPressTimer: ReturnType<typeof setTimeout> | null = null;
   nestedScrolling = false; transientState = 0; textAlignment = 1;
   clipBounds: JRect | null = null; bgTint: JColorStateList | null = null;
-  focusChangeL: unknown = null; keyL: unknown = null; tooltip: unknown = null;
+  tooltip: unknown = null;
   win: unknown = null; // ViewRootImpl-ish owner
 
   width(): number { return this.right - this.left; }
@@ -540,6 +540,9 @@ const viewMethods: NativeSpec["methods"] = {
     if (l) this.longClickable = true;
   },
   "setOnTouchListener(Landroid/view/View$OnTouchListener;)V": function (this: JView, l: unknown) { this.touchL = l; },
+  "setOnKeyListener(Landroid/view/View$OnKeyListener;)V": function (this: JView, l: unknown) { this.keyL = l; },
+  "setOnFocusChangeListener(Landroid/view/View$OnFocusChangeListener;)V": function (this: JView, l: unknown) { this.focusL = l; },
+  "getOnFocusChangeListener()Landroid/view/View$OnFocusChangeListener;": function (this: JView) { return this.focusL; },
   "addOnLayoutChangeListener(Landroid/view/View$OnLayoutChangeListener;)V": function (this: JView, l: unknown) {
     this.layoutChangeLs.push(l);
   },
@@ -832,7 +835,14 @@ const viewMethods: NativeSpec["methods"] = {
   "setBottom(I)V": function (this: JView, v: number) { setBound(this, this.left, this.top, this.right, v); },
   "onKeyDown(ILandroid/view/KeyEvent;)Z": () => 0,
   "onKeyUp(ILandroid/view/KeyEvent;)Z": () => 0,
-  "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": () => 0,
+  // AOSP View.dispatchKeyEvent: the OnKeyListener sees the event first, then KeyEvent.dispatch
+  // routes it to onKeyDown/onKeyUp by action.
+  "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": async function (this: JView, ev: unknown) {
+    const code = await vcall(ev, "getKeyCode", "()I"), action = await vcall(ev, "getAction", "()I");
+    if (this.keyL && this.enabled && (await vcall(this.keyL, "onKey", "(Landroid/view/View;ILandroid/view/KeyEvent;)Z", this, code, ev))) return 1;
+    return action === 0 ? vcall(this, "onKeyDown", "(ILandroid/view/KeyEvent;)Z", code, ev)
+      : action === 1 ? vcall(this, "onKeyUp", "(ILandroid/view/KeyEvent;)Z", code, ev) : 0;
+  },
   "dispatchGenericMotionEvent(Landroid/view/MotionEvent;)Z": () => 0,
   "onSaveInstanceState()Landroid/os/Parcelable;": () => EMPTY_STATE,
   "onRestoreInstanceState(Landroid/os/Parcelable;)V": () => {},
@@ -955,9 +965,6 @@ const viewMethods: NativeSpec["methods"] = {
     const i = p.children.indexOf(this);
     if (i >= 0) { p.children.splice(i, 1); p.children.push(this); invalidate(); }
   },
-  "setOnFocusChangeListener(Landroid/view/View$OnFocusChangeListener;)V": function (this: JView, l: unknown) { this.focusChangeL = l; },
-  "getOnFocusChangeListener()Landroid/view/View$OnFocusChangeListener;": function (this: JView) { return this.focusChangeL; },
-  "setOnKeyListener(Landroid/view/View$OnKeyListener;)V": function (this: JView, l: unknown) { this.keyL = l; },
   "setOnHoverListener(Landroid/view/View$OnHoverListener;)V": () => {},
   "setTooltipText(Ljava/lang/CharSequence;)V": function (this: JView, t: unknown) { this.tooltip = t; },
   "getTooltipText()Ljava/lang/CharSequence;": function (this: JView) { return this.tooltip; },

@@ -223,7 +223,9 @@ export class Resources {
       const v = parseFwValue(raw, attrName, this);
       if (v) map.set(attrId, v);
     }
-    const parentId = st.parent ? fwIds.style?.[st.parent] ?? 0 : 0;
+    // Theme.Material.Dialog's whole body lives in the non-public Theme.Material.BaseDialog: a
+    // parent without a public id gets a minted one so the chain keeps walking
+    const parentId = st.parent ? fwIds.style?.[st.parent] ?? (fwStyles[st.parent] ? mintFwId("style", st.parent) : 0) : 0;
     b = { parent: parentId, map };
     this.fwStyleBags.set(name, b);
     return b;

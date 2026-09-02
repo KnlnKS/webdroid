@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { vcall, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import { type JDate } from "../jvm/natives/jtime";
-import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent } from "./graphics";
+import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fillFontMetrics } from "./graphics";
 import { device } from "../shell/config";
 import { formatDate } from "../jvm/natives/jtext";
 import { toJsArray } from "../jvm/natives/jutil";
@@ -226,6 +226,37 @@ for (const [name] of [
     },
   });
 }
+
+// Paragraph-level spans: interfaces the layout would consult per paragraph (nothing in JLayout
+// walks them yet), plus the concrete Standard leading-margin span Compose uses for textIndent.
+rt.register({ name: "android/text/style/ParagraphStyle", ctor: class extends JObj {} });
+rt.register({ name: "android/text/style/LeadingMarginSpan", ctor: class extends JObj {}, ifaces: ["android/text/style/ParagraphStyle"] });
+rt.register({ name: "android/text/style/LeadingMarginSpan$LeadingMarginSpan2", ctor: class extends JObj {}, ifaces: ["android/text/style/LeadingMarginSpan", "android/text/style/WrapTogetherSpan"] });
+rt.register({ name: "android/text/style/WrapTogetherSpan", ctor: class extends JObj {}, ifaces: ["android/text/style/ParagraphStyle"] });
+rt.register({ name: "android/text/style/AlignmentSpan", ctor: class extends JObj {}, ifaces: ["android/text/style/ParagraphStyle"] });
+class JLeadingMarginStd extends JObj { first = 0; rest = 0; }
+rt.register({
+  name: "android/text/style/LeadingMarginSpan$Standard", ctor: JLeadingMarginStd,
+  ifaces: ["android/text/style/LeadingMarginSpan", "android/text/ParcelableSpan"],
+  methods: {
+    "<init>(II)V": function (this: JLeadingMarginStd, f: number, r: number) { this.first = f; this.rest = r; },
+    "<init>(I)V": function (this: JLeadingMarginStd, v: number) { this.first = this.rest = v; },
+    "getLeadingMargin(Z)I": function (this: JLeadingMarginStd, first: number) { return first ? this.first : this.rest; },
+    "drawLeadingMargin(Landroid/graphics/Canvas;Landroid/graphics/Paint;IIIIIILjava/lang/CharSequence;IIZLandroid/text/Layout;)V": () => {},
+  },
+});
+class JScaleXSpan extends JMetricAffectingSpan { scaleX = 1; }
+rt.register({
+  name: "android/text/style/ScaleXSpan", ctor: JScaleXSpan, sup: "android/text/style/MetricAffectingSpan",
+  ifaces: ["android/text/ParcelableSpan"],
+  methods: {
+    "<init>(F)V": function (this: JScaleXSpan, v: number) { this.scaleX = v; },
+    "getScaleX()F": function (this: JScaleXSpan) { return this.scaleX; },
+    // Paint.setTextScaleX is itself a no-op here, so the span only carries its factor
+    "updateDrawState(Landroid/text/TextPaint;)V": () => {},
+    "updateMeasureState(Landroid/text/TextPaint;)V": () => {},
+  },
+});
 
 // Editable for EditText
 export class JEditable extends JSpannable {}
@@ -467,9 +498,7 @@ rt.register({
 function boringMetrics(text: string, paint: JTextPaint): JBoringMetrics | null {
   if (text.includes("\n") || /[\u0590-\u08ff\u200f\u202b\u202e\ud800-\udfff]/.test(text)) return null;
   const m = new JBoringMetrics();
-  const a = fontAscent(paint), d = fontDescent(paint);
-  m.ascent = Math.round(a); m.top = m.ascent;
-  m.descent = Math.round(d); m.bottom = m.descent;
+  fillFontMetrics(paint, m, true);
   m.width = Math.ceil(measureText(paint, text));
   return m;
 }

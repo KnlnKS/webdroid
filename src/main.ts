@@ -2,7 +2,7 @@
 
 import "./natives";
 
-import { JRenderNode } from "./android/graphics";
+import { JRenderNode, SYSTEM_FONT } from "./android/graphics";
 import { setGL } from "./android/gl";
 import { rt } from "./jvm/runtime";
 import { bootApk, tick, dispatchPointer, pressBack, currentApp, contentTop, SCREEN_W, SCREEN_H } from "./shell/device";
@@ -303,7 +303,10 @@ kbd.addEventListener("keydown", (e) => {
 // load Roboto
 for (const [name, file, weight] of [["Roboto", "Roboto-Regular.ttf", "400"], ["Roboto Medium", "Roboto-Medium.ttf", "500"],
   ["Roboto", "Roboto-Bold.ttf", "700"], ["Roboto", "Roboto-Italic.ttf", "400"]] as const) {
-  const f = new FontFace(name, `url(/Roboto/${file})`, { weight, style: file.includes("Italic") ? "italic" : "normal" });
+  const f = new FontFace(name, `url(/Roboto/${file})`, {
+    weight, style: file.includes("Italic") ? "italic" : "normal",
+    ascentOverride: `${SYSTEM_FONT.ascent * 100}%`, descentOverride: `${SYSTEM_FONT.descent * 100}%`,
+  });
   f.load().then((loaded) => {
     document.fonts.add(loaded);
     uiState.needsDraw = true;

@@ -407,6 +407,7 @@ const pwMethods: NonNullable<NativeSpec["methods"]> = {
   "isSplitTouchEnabled()Z": () => 1,
   "setTouchModal(Z)V": () => {},
   "setIgnoreCheekPress()V": () => {},
+  "setLayoutInScreenEnabled(Z)V": () => {},
   "setAllowScrollingAnchorParent(Z)V": () => {},
   "setWindowLayoutMode(II)V": () => {},
   "setOverlapAnchor(Z)V": function (this: JPopupWindow, f: number) { this.overlapAnchor = !!f; },

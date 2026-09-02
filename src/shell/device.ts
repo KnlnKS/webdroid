@@ -110,7 +110,9 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
     application: null, jresources: jres,
     statusBarColor: -16777216, navBarColor: -16777216,
     launch: async (component, intent) => { await launchActivity(component, intent); },
-    finishActivity: (a) => { void finishActivity(a); },
+    // finish() only requests: AOSP delivers the pause/stop/destroy chain as later main-thread
+    // messages, so it queues as a main job rather than running detached alongside the caller
+    finishActivity: (a) => { void onMain(() => finishActivity(a)); },
     recreateActivity: (a) => { recreateActivity(a); },
     currentActivity: () => booted?.stack[booted.stack.length - 1] ?? null,
     invalidateOptionsMenu: (a) => { void buildOptionsMenu(a); },
@@ -330,7 +332,13 @@ async function buildOptionsMenu(act: JActivity) {
   pushMenuToBar(menu);
 }
 
-export async function pressBack() {
+// A key is input like a touch: it runs as a main-looper job, so androidx's main-thread asserts
+// (handleLifecycleEvent inside the finish path) see the main thread, not whichever worker
+// last set curThread.
+export function pressBack(): Promise<void> {
+  return inMainJob() ? pressBack0() : onMain(pressBack0);
+}
+async function pressBack0() {
   // the topmost window takes the key: a dialog or popup before the activity under it
   const top = overlays[overlays.length - 1];
   const act = booted?.stack[booted.stack.length - 1];
