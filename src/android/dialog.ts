@@ -115,6 +115,7 @@ rt.register({
 
 class JDialog extends JObj {
   jctx: any = null;
+  win: any = null;
   root: DialogRoot | null = null;
   content: JView | null = null;
   titleStr: string | null = null;
@@ -236,11 +237,15 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "findViewById(I)Landroid/view/View;": async function (this: JDialog, id: number) {
     return this.root ? findById(this.root, id) : null;
   },
-  "getWindow()Landroid/view/Window;": async function (this: JDialog) {
-    const info = rt.link("android/view/Window");
-    const w = new info.ctor();
-    w.decor = this.root;
-    return w;
+  // one Window per dialog, its callback the dialog itself (AOSP's ctor does w.setCallback(this)):
+  // appcompat wraps that callback and rejects a null one
+  "getWindow()Landroid/view/Window;": function (this: JDialog) {
+    if (!this.win) {
+      this.win = new (rt.link("android/view/Window").ctor)();
+      this.win.callbackObj = this;
+    }
+    this.win.decor = this.ensureRoot();
+    return this.win;
   },
   "requestWindowFeature(I)Z": () => 1,
   "getLayoutInflater()Landroid/view/LayoutInflater;": async function (this: JDialog) {
