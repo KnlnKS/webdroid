@@ -120,6 +120,8 @@ and its one accepted miss is `WindowExtensionsProvider`.
   ActivityLifecycleCallbacks (Pre/plain/Post) so androidx ReportFragment drives Lifecycle,
   recreate() as a real relaunch
 - java.net.Socket over the /tcp relay; SSLSocketFactory re-dials with TLS at the relay
+- Host input (`src/shell/input.ts`): a pointer drag and a trackpad two-finger swipe, both
+  arriving as one ordinary MotionEvent stream
 - ARM32 native tier (`src/native/`): memory, ELF loader, ARM+Thumb block compiler, libc/stdio/
   pthread/zlib, JNI, GLES1/EGL over WebGL, AudioTrack over Web Audio — doodlejump plays at
   ~690M emulated instr/s, and lichess/flappybird load their .so honestly
@@ -333,7 +335,11 @@ screen — any direct fillText in the framework must set its own.)
   `nrun <apk> <lib.so>` (load one ARM32 library headless and run its JNI_OnLoad — the fastest
   way to shake out the CPU/libc/JNI layers), `ndbg` (the same over a booted page),
   `dbg [flow] [stopAt] [outDir]` (walk an e2e flow until it wedges and dump the queue site,
-  logs and missing list; frames land in webdroid-shots/dbg), `gen-framework-res` (rebuild the
+  logs and missing list; frames land in webdroid-shots/dbg),
+  `bun scripts/wheel.ts [flow] [stopAt] [px] [x|y]` (drive a screen with a REAL trackpad burst
+  and compare where it lands against the same distance dragged with the mouse — the only thing
+  that exercises the DOM listeners, since the e2e driver goes through page.evaluate into wd.*),
+  `gen-framework-res` (rebuild the
   committed vendor/framework-res.apk with aapt2 from the SDK's own platform res tree; needs the
   Android SDK, but nothing else does -- the apk is committed).
 - browser: `http://localhost:4080/?apk=<file>` boots that apk on load (reload = rebundle +
@@ -1021,3 +1027,73 @@ of them things any APK can hit:
 - `android.R.<type>` carries the framework's real ids, off the real table, with names spelled
   as java identifiers the way R.java writes them.
 - A boxed Long put into a JSONObject was stored as a bigint, which `JSON.stringify` refuses.
+
+## A trackpad swipe is a finger drag, and the inertia is the trackpad's
+Nothing listened for a `wheel`, so on a laptop every scrollable surface — our ListView and
+ScrollView, an androidx RecyclerView, a Compose LazyColumn, a ViewPager's tabs — was reachable
+only by pressing the mouse button and dragging. `src/shell/input.ts` now moves a synthetic finger
+with the wheel deltas and hands the framework the one-finger stream it already understands, so
+nothing above the shell knows which device the gesture came from.
+
+**Two roads not taken, both recorded so they are not retried:**
+- **`ACTION_SCROLL` / `onGenericMotionEvent`** is what a real Android device does with a mouse
+  wheel, and it is a dead end here: `View.dispatchGenericMotionEvent` returns 0 everywhere, and
+  even with a dispatch path a ViewPager, a DrawerLayout or a swipe-to-dismiss would never see
+  one — those are touch gestures. A synthetic drag is the only "swipe" every app understands.
+  `ViewConfiguration.getScaledVerticalScrollFactor` exists for apps that ask; nothing feeds it.
+- **Detecting the momentum phase.** macOS keeps sending wheel events after the fingers lift and
+  Chrome exposes no phase, so ending the gesture at the lift means guessing from the shape of the
+  deltas — a tuned threshold, which is the thing to avoid. Instead the momentum arrives as more
+  MOVEs: the finger stays down through the coast and the UP lands when the stream goes quiet,
+  with nothing left to fling. The trackpad's inertia is the only inertia, and the decision is
+  structural rather than heuristic.
+
+The three properties that make it feel like a finger rather than a scrollbar:
+- **DOWN waits for the touch slop.** Below it nothing is dispatched at all, so a stray two-finger
+  nudge cannot press, tap or long-press whatever the cursor is over; and because the first MOVE
+  is already past slop, the scroll container intercepts and cancels the child it pressed within
+  the same dispatch instead of leaving it lit for a frame.
+- **One dispatch in flight, drained once per frame.** A trackpad fires up to 120 times a second
+  while every input resolves through the one serialized main-looper queue: a MOVE per event
+  builds a backlog the app can never catch up with and the gesture visibly lags the fingers.
+  The drain sits at the top of `doTick`, *before* its re-entry guard — AOSP drains input in the
+  Choreographer's input phase for the same reason, and the drain is the only thing that can emit
+  the UP, so a slow frame must not starve it.
+- **The finger is not clamped to the screen.** Pinning it at an edge would stop a long coast
+  dead. Targets are latched on DOWN and every consumer works on deltas — ViewPager's
+  `determineTargetPage` reads `x - initialMotionX` — so an out-of-bounds MOVE is correct, and a
+  real finger sliding off the digitizer produces the same stream.
+
+**Three framework defects fell out of it, none trackpad-specific.**
+- **`MotionEvent.downTime`/`eventTime` were declared and never set** — every shell-dispatched
+  event reported 0. `GestureDetectorCompat` (real app bytecode) then computes
+  `thisUp.getEventTime() - lastUp.getEventTime() == 0 < DOUBLE_TAP_TIMEOUT` and calls every
+  second tap a double tap; Compose builds its velocity tracker out of the same dt. They are
+  stamped when the event *arrives*, not when the queue reaches it: a gap between two events has
+  to mean the finger paused, never that the app was busy.
+- **Velocity had no horizon.** The scrollers keep an EWMA fed one sample per MOVE and decayed by
+  nothing else, so a gesture that stopped moving and stayed down carried the speed of its last
+  move all the way to the UP — drag, hold still, lift, and the list flings anyway. VelocityTracker
+  had the same shape, a secant over the last six samples whatever the gap between them, and that
+  is what every androidx scroller actually reads. Both now say what AOSP says. The subtlety:
+  one frame of silence is the normal interval between a move and the up that follows it, not a
+  rest — measured, `wd.swipe` delivers an event every 20-23ms — so exempting the first frame is
+  what keeps every existing fling intact while still zeroing the 120ms a wheel gesture ends with.
+- **A press that dismissed an overlay left the rest of its gesture orphaned.** The DOWN returns
+  after `dismissOverlay` with no latched target, and every later MOVE fell through to the decor
+  as though a finger had been down on it, so a scroller jumped by the distance since its stale
+  last position. Rare with a mouse (it needs a drag that starts by dismissing a popup), constant
+  with a trackpad, where any scroll while a dropdown is open is exactly that gesture.
+
+**Deliberately left faithful rather than convenient:** a two-finger swipe that ends over a large
+clickable view with nothing scrollable under it still clicks it — `View.onTouchEvent` un-presses
+only once the pointer leaves the bounds, which is what AOSP does and what a real finger does. Same
+for a horizontal swipe over a list: `AbsListView`'s drag slop is y-only on AOSP too, so the row
+takes the click. The gesture ends with UP rather than CANCEL for a concrete reason — CANCEL makes
+a ViewPager snap back to the page it started on instead of turning it.
+
+Measured with `bun scripts/wheel.ts`: on a Compose LazyColumn (mihon), on our own ListView
+(fitnotes) and on a ViewPager page turn (fitnotes TRACK -> HISTORY) the trackpad lands on the same
+pixels as the mouse; on harmonic's RecyclerView it lands short of the drag by exactly the drag's
+fling. Scores across the change: fitnotes 43.07 -> 43.07, mihon-onboarding 17.56 -> 17.56,
+mihon-app 88.75 -> 88.83 (two identical runs differ by 0.5), harmonic 46.51 -> 46.37.
