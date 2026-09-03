@@ -6,6 +6,11 @@ import { SCREEN_W, SCREEN_H, PINNED_CLOCK_MS, type UiNode } from "../types";
 import { sleep, sha1 } from "../lib/util";
 
 const BASE = process.env.WEBDROID_URL ?? "http://localhost:4080";
+// WEBDROID_BYTECODE=android/graphics/,android/content/res/ scores a provenance cut: the same
+// bundle, with those prefixes served by AOSP's own bytecode instead of our native specs. That
+// is how a cut becomes a measurement (PLAN.md's B2) rather than an edit and a rebuild.
+const CUT = process.env.WEBDROID_BYTECODE;
+const PAGE_URL = CUT ? `${BASE}/?bytecode=${encodeURIComponent(CUT)}` : BASE;
 
 declare global {
   // eslint-disable-next-line no-var
@@ -90,7 +95,7 @@ export class WebdroidDriver {
 
     page.on("pageerror", (e) => console.error("  [page error]", String(e).slice(0, 200)));
 
-    const resp = await page.goto(BASE, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    const resp = await page.goto(PAGE_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
     if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE} — run \`bun run dev\``);
     await page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
     await page.evaluate(() => (document as any).fonts.ready);

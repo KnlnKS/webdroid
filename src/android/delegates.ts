@@ -766,6 +766,22 @@ function applyMatrix(c: JCanvas, m: Mat, replace: boolean) {
   else c.ctx.transform(m[0], m[3], m[1], m[4], m[2], m[5]);
 }
 
+// ── android.os.SystemProperties ────────────────────────────────────────────────────────
+// Reached the moment any framework class runs: Typeface, Paint and the view stack all read
+// debug and persist properties from their <clinit>. Every property is ABSENT here, so every
+// read gets the caller's own default — which is what a device that has not set one reports,
+// and is the difference between "this device does not do that" and a made-up answer a library
+// will branch on. A property that turns out to need a real value belongs in the one device
+// profile (src/shell/config.ts), not in a table here.
+delegate("android/os/SystemProperties", {
+  "native_get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (_k: string, def: string | null) => def ?? "",
+  "native_get_boolean(Ljava/lang/String;Z)Z": (_k: string, def: number) => def,
+  "native_get_int(Ljava/lang/String;I)I": (_k: string, def: number) => def,
+  "native_get_long(Ljava/lang/String;J)J": (_k: string, def: bigint) => def,
+  "native_set(Ljava/lang/String;Ljava/lang/String;)V": () => {},
+  "native_report_sysprop_change()V": () => {},
+});
+
 // ── android.graphics.Bitmap ────────────────────────────────────────────────────────────
 // The handle is a JBitmap. Several of these build the Java object rather than returning a
 // handle, so they construct AOSP's own Bitmap through its (nativePtr, w, h, density, mutable,

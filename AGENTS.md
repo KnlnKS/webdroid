@@ -923,6 +923,39 @@ Left: the decoders. `BitmapFactory` (5), `BitmapRegionDecoder` (8) and `BitmapSh
 NOT written, because nothing reaches them yet and `createImageBitmap` cannot be exercised
 outside a browser — a delegate exists because `fwtest` said so.
 
+## What a cut costs, measured: fitnotes on AOSP's own graphics bytecode
+`?bytecode=<prefix,...>` on the shell URL (and `WEBDROID_BYTECODE=` for the e2e driver) serves
+those prefixes from vendor/aosp/framework.jar for one page load, so a cut is a measurement
+against the same bundle instead of an edit and a rebuild. B2 stops being a plan at that point.
+
+With `android/graphics/{Paint,Canvas,BaseCanvas,Matrix,Path,Typeface,Bitmap}` on AOSP bytecode,
+fitnotes runs its whole 39-step flow: **43.33% content diff against 43.07% without the cut**,
+39/39 rendered, and fitnotes is repeatable to the digit. 36,926 classes are indexed (4,213 the
+app's, 32,713 the framework's) and boot goes 165ms -> 221ms.
+
+**Exactly three things break, and the shape of them is the whole lesson:**
+- **`Canvas.drawRect(FFFF Paint)` and `drawLine` are "not a function" — on views the APP draws.**
+  Our framework draws in TS, calling `canvasMethods` bodies directly, so it never notices; app
+  bytecode calls the *mangled Java* method on the `JCanvas` it was handed, and a cut withholds
+  the spec that put those methods on the prototype. So the 129 `JCanvas` references PLAN.md
+  counts are not evenly costly: the ones that matter are wherever the framework hands a canvas
+  (or a paint) to app code. Two of fitnotes' own custom views hit it and the rest of the app
+  does not, which is why the score barely moved.
+- **`SystemProperties.native_get`** — reached from a `<clinit>` the moment any framework class
+  runs. It is a delegate now, and every property is absent, so every read gets the caller's
+  own default.
+- **`android/icu/util/ULocale` is not in framework.jar.** It lives in the i18n apex
+  (`core-icu4j.jar`), which `gen-framework` does not pull. Anything on AOSP's locale path needs
+  that second jar.
+
+Two things this run settles that reading could not:
+- **A failed draw does not cost the frame.** Both draw errors landed in `perf.drawErrors`, every
+  step still rendered, and the score moved 0.26 points — the "a frame that throws must not end
+  rendering" work is what makes a cut survivable enough to be measured at all.
+- **The framework jar is a safety net for everything else.** Once it is loaded, a class we have
+  no spec for resolves out of AOSP's dex rather than going missing, which is why a partial cut
+  boots at all.
+
 ## A layer-list item carries its own size, and a gravity to place it by
 `JLayerDrawable.layout()` has implemented AOSP's `updateLayerBounds` — insets, then an
 explicit layer size placed by its gravity — the whole time. The inflater never filled `w`,

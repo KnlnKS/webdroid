@@ -19,7 +19,7 @@ See "One build, or none" and "The delegates" in AGENTS.md.
 | | state |
 |---|---|
 | Framework provenance | `bun run gen-framework` pulls the jar + res pair off the reference AVD and proves the ids agree (0 wrong paired, 3,582 wrong against a relinked table) |
-| Policy | `src/jvm/provenance.ts` — `BYTECODE` is **empty**; nothing is cut over yet |
+| Policy | `src/jvm/provenance.ts` — `BYTECODE` is empty by default, and `?bytecode=<prefix,...>` / `WEBDROID_BYTECODE=` cut a subtree over for one run. Measured: fitnotes on AOSP's Paint/Canvas/Matrix/Path/Typeface/Bitmap scores 43.33% vs 43.07%, 39/39 rendered |
 | Delegates | `src/android/delegates.ts` — Paint 86/86, Canvas 33/33, BaseCanvas 32/32, Matrix 40/40, Path 43/43, Typeface 17/17, AssetManager 55/55, XmlBlock 22/22, StringBlock 5/5 |
 | Graphics cut coverage | 295/363 declared natives (Bitmap 42/46) |
 | Evidence | `bun run fwtest` runs real bytecode headless: `new Paint()`, `new Matrix()`, `new Path()`, three AssetManager lookups against the real framework table, and `android:layout/alert_dialog` opened through `nativeOpenXmlAsset` and walked to END_DOCUMENT |

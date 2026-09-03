@@ -14,8 +14,14 @@
 // misses, logs, and reads `undefined` with no throw. android/view/View is a clean cut for
 // exactly this reason: its super is java/lang/Object, which has no fields.
 
+/** `?bytecode=android/graphics/text/,android/graphics/fonts/` cuts those prefixes over for one
+ *  page load. A cut is meant to be one line and a measurement (see PLAN.md's B2), and a URL
+ *  parameter is what lets the same bundle be A/B'd against itself — by the e2e driver, by a
+ *  comparison script, or by hand — instead of needing an edit and a rebuild to try one. */
+const fromUrl = typeof location !== "undefined" ? new URLSearchParams(location.search).get("bytecode") : null;
+
 /** class-name prefixes served by AOSP bytecode instead of a native spec */
-export const BYTECODE: string[] = [];
+export const BYTECODE: string[] = fromUrl ? fromUrl.split(",").map((s) => s.trim()).filter(Boolean) : [];
 
 export function isBytecode(name: string): boolean {
   for (const p of BYTECODE) if (name.startsWith(p)) return true;
