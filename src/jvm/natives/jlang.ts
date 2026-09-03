@@ -432,7 +432,8 @@ rt.mkThrowable = (cls: string, msg: string | null) => {
 // Closeable that is not one falls off the end of the chain into its throw.
 for (const [i, ext] of [["java/lang/Runnable"], ["java/lang/Comparable"], ["java/lang/CharSequence"],
   ["java/lang/Cloneable"], ["java/lang/Iterable"], ["java/lang/Appendable"], ["java/lang/AutoCloseable"],
-  ["java/io/Serializable"], ["java/io/Closeable", "java/lang/AutoCloseable"], ["java/io/Flushable"]] as const) {
+  ["java/io/Serializable"], ["java/io/Closeable", "java/lang/AutoCloseable"], ["java/io/Flushable"],
+  ["java/io/DataInput"], ["java/io/DataOutput"]] as const) {
   rt.register({ name: i, ctor: class extends JObj {}, ifaces: ext ? [ext] : undefined });
 }
 

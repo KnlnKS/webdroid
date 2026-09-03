@@ -246,6 +246,7 @@ rt.register({
 });
 rt.register({
   name: "java/io/DataInputStream", ctor: class extends JInputStream {}, sup: "java/io/InputStream",
+  ifaces: ["java/io/DataInput"],
   methods: {
     "<init>(Ljava/io/InputStream;)V": function (this: JInputStream, src: JInputStream) {
       this.buf = src.buf; this.pos = src.pos;
@@ -625,6 +626,7 @@ rt.register({
 class JDataOut extends JOutputStream { sink: JOutputStream | null = null; }
 rt.register({
   name: "java/io/DataOutputStream", ctor: JDataOut, sup: "java/io/OutputStream",
+  ifaces: ["java/io/DataOutput"],
   methods: {
     "<init>(Ljava/io/OutputStream;)V": function (this: JDataOut, s: JOutputStream) { this.sink = s; },
     "write(I)V": function (this: JDataOut, b: number) { this.sink?.chunks.push(b & 0xff); },
