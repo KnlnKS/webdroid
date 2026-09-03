@@ -362,6 +362,7 @@ rt.register({
     "<init>(Ljava/io/File;)V": function (this: any, f: JFile) { this.fpath = f.path; },
     "<init>(Ljava/io/File;Z)V": function (this: any, f: JFile, app: number) { this.fpath = f.path; this.append = !!app; },
     "<init>(Ljava/lang/String;)V": function (this: any, p: string) { this.fpath = vfs.norm(p); },
+    "<init>(Ljava/lang/String;Z)V": function (this: any, p: string, app: number) { this.fpath = vfs.norm(p); this.append = !!app; },
     "flush()V": function (this: any) { flushFOS(this); },
     "close()V": function (this: any) { flushFOS(this); },
   },

@@ -157,6 +157,11 @@ export async function docCreate(parentId: string, mime: string, name: string): P
   return id;
 }
 
+/** A directory takes its children with it, and every cached descendant with them. */
+function forget(docId: string) {
+  for (const k of cache.keys()) if (k === docId || k.startsWith(docId + "/")) cache.delete(k);
+}
+
 export async function docDelete(docId: string): Promise<boolean> {
   const [vol, segs] = split(docId);
   const name = segs.pop();
@@ -164,24 +169,27 @@ export async function docDelete(docId: string): Promise<boolean> {
   const p = await resolveDoc(join(vol, segs));
   if (p?.kind !== "directory") return false;
   await (p as FileSystemDirectoryHandle).removeEntry(name, { recursive: true });
-  cache.delete(docId);
+  forget(docId);
   return true;
 }
 
-/** No handle can be renamed in place, so a file is copied to the new name and the old removed. */
+/** No handle renames in place, so a rename is a copy under the new name and a delete of the
+ *  old — recursive, because UniFile renames directories as readily as files. */
 export async function docRename(docId: string, name: string): Promise<string | null> {
-  const src = await resolveDoc(docId);
-  if (!src) return null;
   const [vol, segs] = split(docId);
-  const dst = join(vol, [...segs.slice(0, -1), name]);
-  if (src.kind === "file") {
-    const bytes = await docRead(docId);
-    if (!await docCreate(join(vol, segs.slice(0, -1)), mimeOf(name), name)) return null;
-    await docWrite(dst, bytes);
-    await docDelete(docId);
-    return dst;
-  }
-  return null;
+  const parent = join(vol, segs.slice(0, -1));
+  if (!segs.length || !await copyDoc(docId, parent, name)) return null;
+  await docDelete(docId);
+  return join(vol, [...segs.slice(0, -1), name]);
+}
+async function copyDoc(srcId: string, parentId: string, name: string): Promise<string | null> {
+  const src = await resolveDoc(srcId);
+  if (!src) return null;
+  const dst = await docCreate(parentId, src.kind === "directory" ? DIR_MIME : mimeOf(name), name);
+  if (!dst) return null;
+  if (src.kind === "file") await docWrite(dst, await docRead(srcId));
+  else for (const child of await docChildren(srcId)) await copyDoc(child.id, dst, child.name);
+  return dst;
 }
 
 /** The user picks a directory; the tree URI is what an app persists and reopens it by. */
@@ -207,9 +215,10 @@ class JDocOutputStream extends JOutputStream { docId = ""; }
 rt.register({
   name: "webdroid/DocOutputStream", ctor: JDocOutputStream, sup: "java/io/OutputStream",
   methods: {
-    // A handle's writable is a one-shot truncating stream, so the bytes are buffered here and
-    // committed on close — which is when a Java caller expects them to be on disk anyway.
-    "flush()V": async function (this: JDocOutputStream) { await docWrite(this.docId, Uint8Array.from(this.chunks)); },
+    // A handle's writable truncates on open, so the bytes are buffered here and committed once,
+    // on close. flush() cannot be that commit: a BufferedOutputStream wrapper flushes per block,
+    // which would rewrite the whole file for every buffer's worth of a backup.
+    "flush()V": () => {},
     "close()V": async function (this: JDocOutputStream) { await docWrite(this.docId, Uint8Array.from(this.chunks)); },
   },
 });

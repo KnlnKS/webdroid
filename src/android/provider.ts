@@ -5,15 +5,12 @@
 // authoritiesOf) lives with PackageManager in app.ts; DocumentsContract reads it from there.
 
 import { rt, JObj } from "../jvm/runtime";
-import { providerNodes, matchesAction, authoritiesOf, registerSystemActivity, mkResultIntent } from "./app";
+import { isDocumentsProvider, registerSystemActivity, mkResultIntent } from "./app";
 import { mkUri } from "./net";
-import { DOCS_AUTHORITY, docCreate, docDelete, docRename, pickTree, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
+import { docCreate, docDelete, docRename, pickTree, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
 
 
 const PROVIDER_INTERFACE = "android.content.action.DOCUMENTS_PROVIDER";
-/** The manifest walk only sees the app's own providers; the storage one is a system package. */
-const isDocumentsProvider = (auth: string) => auth === DOCS_AUTHORITY ||
-  providerNodes().some(([, n]) => matchesAction(n, PROVIDER_INTERFACE) && authoritiesOf(n).includes(auth));
 
 registerSystemActivity("android.intent.action.OPEN_DOCUMENT_TREE",
   async () => { const uri = await pickTree(); return uri ? mkResultIntent(uri) : null; });

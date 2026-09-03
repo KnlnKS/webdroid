@@ -106,13 +106,22 @@ function applyDeviceConfiguration(c: JConfiguration): void {
   if (isNight() !== was) setResourceNight(isNight());
 }
 export class JAssetManager extends JObj { host!: Resources; }
-class JAssetFd extends JObj { bytes!: Uint8Array; }
+class JAssetFd extends JObj { bytes!: Uint8Array; pfd: unknown = null; }
+export function mkAssetFd(bytes: Uint8Array, pfd: unknown = null): JAssetFd {
+  const fd = new JAssetFd();
+  fd.bytes = bytes;
+  fd.pfd = pfd;
+  return fd;
+}
 rt.register({
   name: "android/content/res/AssetFileDescriptor", ctor: JAssetFd,
   methods: {
     "createInputStream()Ljava/io/FileInputStream;": function (this: JAssetFd) { return streamOf(this.bytes); },
     "getLength()J": function (this: JAssetFd) { return BigInt(this.bytes.length); },
+    "getDeclaredLength()J": function (this: JAssetFd) { return BigInt(this.bytes.length); },
     "getStartOffset()J": () => 0n,
+    "getParcelFileDescriptor()Landroid/os/ParcelFileDescriptor;": function (this: JAssetFd) { return this.pfd; },
+    "getFileDescriptor()Ljava/io/FileDescriptor;": () => new (rt.link("java/io/FileDescriptor").ctor)(),
     "close()V": () => {},
   },
 });
@@ -128,7 +137,7 @@ rt.register({
     "open(Ljava/lang/String;)Ljava/io/InputStream;": assetOpen,
     "open(Ljava/lang/String;I)Ljava/io/InputStream;": assetOpen,
     "openFd(Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;": function (this: JAssetManager, p: string) {
-      const afd = new JAssetFd(); afd.bytes = assetBytes(this, p); return afd;
+      return mkAssetFd(assetBytes(this, p));
     },
     "list(Ljava/lang/String;)[Ljava/lang/String;": function (this: JAssetManager, p: string) {
       const prefix = "assets/" + (p ? p + "/" : "");

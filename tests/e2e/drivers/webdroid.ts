@@ -102,13 +102,9 @@ export class WebdroidDriver {
     return this.page.clock.setFixedTime(new Date(ms));
   }
 
-  /** Clear persisted SQLite + prefs so every run starts from a fresh install. */
+  /** A fresh install — wd.reset() is the one definition of what that wipes. */
   async reset(): Promise<void> {
-    await this.page.evaluate(() => {
-      for (const k of Object.keys(localStorage)) {
-        if (k.startsWith("wd:db:") || k.startsWith("wd:prefs:") || k.startsWith("wd:install:")) localStorage.removeItem(k);
-      }
-    });
+    await this.page.evaluate(() => (globalThis as any).wd.reset());
     await this.page.reload({ waitUntil: "domcontentloaded" });
     await this.page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
     await this.page.evaluate(() => (document as any).fonts.ready);

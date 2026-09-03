@@ -5,7 +5,7 @@ import { device } from "../shell/config";
 import { vcall, curThread, mainThread, JThread, setCurThread, reportUncaught, JEnum } from "../jvm/natives/jlang";
 export { reportUncaught };
 import { onMain } from "./mainloop";
-import { mkFile } from "../jvm/natives/jio";
+import { mkFile, JInputStream, JOutputStream, vfs } from "../jvm/natives/jio";
 import { newArrayList } from "../jvm/natives/jutil";
 
 class JLooper extends JObj {
@@ -378,6 +378,64 @@ rt.register({
       if (this.cancelled) throw rt.mkThrowable("android/os/OperationCanceledException", null);
     },
     "setOnCancelListener(Landroid/os/CancellationSignal$OnCancelListener;)V": () => {},
+  },
+});
+
+/**
+ * A file descriptor an app can pass around and read or write through. There are no real fds
+ * here, so one carries the bytes it was opened over plus where they go on close — which is all
+ * AutoClose{In,Out}putStream, the only way a Java caller can touch it, ever needs.
+ */
+export class JParcelFileDescriptor extends JObj {
+  bytes: Uint8Array = new Uint8Array(0);
+  sink: ((b: Uint8Array) => unknown) | null = null;
+}
+export function mkPfd(bytes: Uint8Array, sink: ((b: Uint8Array) => unknown) | null): JParcelFileDescriptor {
+  const p = new JParcelFileDescriptor();
+  p.bytes = bytes;
+  p.sink = sink;
+  return p;
+}
+rt.register({
+  name: "android/os/ParcelFileDescriptor", ctor: JParcelFileDescriptor,
+  ifaces: ["android/os/Parcelable", "java/io/Closeable"],
+  statics: {
+    MODE_READ_ONLY: 0x10000000, MODE_WRITE_ONLY: 0x20000000, MODE_READ_WRITE: 0x30000000,
+    MODE_CREATE: 0x08000000, MODE_TRUNCATE: 0x04000000, MODE_APPEND: 0x02000000,
+  },
+  methods: {
+    "static open(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;": (f: { path: string }, mode: number) => {
+      const path = f?.path ?? "";
+      if (!vfs.exists(path) && !(mode & 0x08000000)) throw rt.mkThrowable("java/io/FileNotFoundException", path);
+      return mkPfd(vfs.read(path) ?? new Uint8Array(0), (b) => vfs.write(path, b));
+    },
+    "static parseMode(Ljava/lang/String;)I": (m: string) =>
+      (m?.includes("w") ? 0x28000000 : 0x10000000) | (m?.includes("t") || m === "w" ? 0x04000000 : 0)
+      | (m?.includes("a") ? 0x02000000 : 0),
+    "getFileDescriptor()Ljava/io/FileDescriptor;": () => new (rt.link("java/io/FileDescriptor").ctor)(),
+    "getFd()I": () => -1,
+    "detachFd()I": () => -1,
+    "dup()Landroid/os/ParcelFileDescriptor;": function (this: JParcelFileDescriptor) { return mkPfd(this.bytes, this.sink); },
+    "getStatSize()J": function (this: JParcelFileDescriptor) { return BigInt(this.bytes.length); },
+    "close()V": () => {},
+    "checkError()V": () => {},
+  },
+});
+class JPfdIn extends JInputStream {}
+rt.register({
+  name: "android/os/ParcelFileDescriptor$AutoCloseInputStream", ctor: JPfdIn, sup: "java/io/InputStream",
+  methods: {
+    "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JPfdIn, p: JParcelFileDescriptor) { this.buf = p?.bytes ?? new Uint8Array(0); },
+  },
+});
+class JPfdOut extends JOutputStream { pfd: JParcelFileDescriptor | null = null; }
+const pfdFlush = async function (this: JPfdOut) { await this.pfd?.sink?.(Uint8Array.from(this.chunks)); };
+rt.register({
+  name: "android/os/ParcelFileDescriptor$AutoCloseOutputStream", ctor: JPfdOut, sup: "java/io/OutputStream",
+  methods: {
+    "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JPfdOut, p: JParcelFileDescriptor) { this.pfd = p; },
+    "flush()V": pfdFlush,
+    "close()V": pfdFlush,
   },
 });
 

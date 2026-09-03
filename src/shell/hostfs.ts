@@ -87,4 +87,8 @@ export async function restoreRoots(): Promise<void> {
 export async function clearRoots(): Promise<void> {
   roots.clear();
   await tx("readwrite", (s) => s.clear()).catch(() => {});
+  // the OPFS stand-in is ours to empty; a directory the user picked is theirs, and stays
+  const opfs = await navigator.storage?.getDirectory().catch(() => null);
+  if (!opfs) return;
+  for await (const [name] of opfs.entries()) await opfs.removeEntry(name, { recursive: true }).catch(() => {});
 }

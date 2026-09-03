@@ -110,7 +110,7 @@ function bindArgs(args: unknown[] | null): (string | number | Uint8Array | null)
   });
 }
 
-class JCursor extends JObj {
+export class JCursor extends JObj {
   cols: string[] = [];
   rows: unknown[][] = [];
   pos = -1;
@@ -121,6 +121,13 @@ class JCursor extends JObj {
     return i;
   }
   val(i: number): unknown { return this.rows[this.pos]?.[i] ?? null; }
+}
+/** a cursor over rows already in hand — the one Cursor implementation in the tree */
+export function mkCursor(cols: string[], rows: unknown[][]): JCursor {
+  const c = new JCursor();
+  c.cols = cols;
+  c.rows = rows;
+  return c;
 }
 function runQuery(jdb: JSQLiteDatabase, sqlStr: string, args: unknown[] | null): JCursor {
   const c = new JCursor();

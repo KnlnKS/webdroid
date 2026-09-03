@@ -8,21 +8,22 @@ import { newArrayList, mkIter, type JList } from "../jvm/natives/jutil";
 import { vfs, mkFile, JFile } from "../jvm/natives/jio";
 const privDir = (p: string): JFile => { vfs.mkdir(p); return mkFile(p); };
 import { type Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, rvColor, rvDimen, rvInt, rvString, resString, themeOf, themeByName } from "./res";
-import { JResources, JAssetManager } from "./resnative";
+import { JResources, JAssetManager, mkAssetFd } from "./resnative";
 import { signatures, JActivityInfo } from "./pm";
 import { mkUri, type JUri } from "./net";
+import { DOCS_AUTHORITY, isDocsUri, isChildrenUri, documentId, docRow, docChildren, docDelete, docRead, docWrite, docInputStream, docOutputStream, docCells, DOC_COLUMNS } from "./documents";
 import { JView, JViewGroup, AID, requestLayout, invalidate, specSize, findById, attachView, detachView, dispatchConfigurationChanged, rootWindowInsets } from "./view";
 import { JFrameLayout, JLinearLayout } from "./widget";
 import { getInflater, inflateLayout } from "./inflate";
 import { loadDrawable, loadDrawableRV, JColorDrawable, JDrawable, loadColorStateList } from "./drawable";
-import { JBundle, mainLooper, reportUncaught } from "./os";
+import { JBundle, mainLooper, reportUncaught, mkPfd } from "./os";
 import { onMain } from "./mainloop";
 import { isMusicActive } from "./media";
 import { TV, attr, attrStr, type XmlNode, parseAXML } from "./axml";
 import { csText } from "./text";
 import { JCanvas, tfMedium } from "./graphics";
 import { showPopupMenu, addOverlay, removeOverlay, showToast } from "./popup";
-import { dbPath } from "./sqlite";
+import { dbPath, mkCursor } from "./sqlite";
 
 /** Host bundle shared by all contexts of the app */
 export interface AppHost {
@@ -586,15 +587,80 @@ function contentResolver(): unknown {
   }
   return s;
 }
+/** A persistable grant is app state that survives a reboot, so it lives with the install. */
+const uriGrants = {
+  key: () => "wd:install:" + (appHost?.pkg ?? "") + ":uriperms",
+  all(): string[] { try { return JSON.parse(globalThis.localStorage?.getItem(this.key()) ?? "[]"); } catch { return []; } },
+  set(v: string[]) { try { globalThis.localStorage?.setItem(this.key(), JSON.stringify(v)); } catch { /* private mode */ } },
+};
+const fileOf = (u: JUri) => u.uri.replace(/^file:\/\//, "");
+/** A descriptor carries the document's current bytes and writes them back when it is closed. */
+async function openPfd(u: JUri, mode: string) {
+  if (!isDocsUri(u)) return mkPfd(vfs.read(fileOf(u)) ?? new Uint8Array(0), (b) => vfs.write(fileOf(u), b));
+  const id = documentId(u, true);
+  const write = (mode ?? "r").includes("w");
+  return mkPfd(write && (mode ?? "").includes("t") ? new Uint8Array(0) : await docRead(id),
+    write ? (b) => docWrite(id, b) : null);
+}
+const openAfd = async (u: JUri, mode: string) => {
+  const pfd = await openPfd(u, mode);
+  return mkAssetFd(pfd.bytes, pfd);
+};
+const resolverMethods: NativeSpec["methods"] = {
+  "notifyChange(Landroid/net/Uri;Landroid/database/ContentObserver;)V": () => {},
+  "registerContentObserver(Landroid/net/Uri;ZLandroid/database/ContentObserver;)V": () => {},
+  "unregisterContentObserver(Landroid/database/ContentObserver;)V": () => {},
+  "openInputStream(Landroid/net/Uri;)Ljava/io/InputStream;": (u: JUri) =>
+    isDocsUri(u) ? docInputStream(documentId(u, true))
+      : newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", fileOf(u)),
+  "openOutputStream(Landroid/net/Uri;)Ljava/io/OutputStream;": (u: JUri) =>
+    isDocsUri(u) ? docOutputStream(documentId(u, true), false)
+      : newObj("java/io/FileOutputStream", "(Ljava/lang/String;)V", fileOf(u)),
+  // AOSP's modes: "w" truncates, "wa" appends, "rw"/"rwt" keep or truncate in place.
+  "openOutputStream(Landroid/net/Uri;Ljava/lang/String;)Ljava/io/OutputStream;": (u: JUri, mode: string) =>
+    isDocsUri(u) ? docOutputStream(documentId(u, true), (mode ?? "w").includes("a"))
+      : newObj("java/io/FileOutputStream", "(Ljava/lang/String;Z)V", fileOf(u), (mode ?? "w").includes("a") ? 1 : 0),
+  "getType(Landroid/net/Uri;)Ljava/lang/String;": async (u: JUri) =>
+    isDocsUri(u) ? (await docRow(documentId(u, true)))?.mime ?? null : null,
+  "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
+    async (u: JUri, proj: string[] | null) => {
+      if (!isDocsUri(u)) return null;
+      const id = documentId(u, true);
+      const row = isChildrenUri(u) ? null : await docRow(id);
+      const rows = isChildrenUri(u) ? await docChildren(id) : row ? [row] : [];
+      const cols = proj?.length ? [...proj] : DOC_COLUMNS;
+      return mkCursor(cols, rows.map((r) => {
+        const cells = docCells(r);
+        return cols.map((c) => cells[DOC_COLUMNS.indexOf(c)] ?? null);
+      }));
+    },
+  "openFileDescriptor(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;": openPfd,
+  "openFileDescriptor(Landroid/net/Uri;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/os/ParcelFileDescriptor;": openPfd,
+  "openAssetFileDescriptor(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;": openAfd,
+  "openTypedAssetFile(Landroid/net/Uri;Ljava/lang/String;Landroid/os/Bundle;Landroid/os/CancellationSignal;)Landroid/content/res/AssetFileDescriptor;": openAfd,
+  "insert(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;": () => null,
+  "delete(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I": async (u: JUri) =>
+    isDocsUri(u) && await docDelete(documentId(u, true)) ? 1 : 0,
+  // A grant we cannot refuse: nothing here revokes URI access, so the app keeps what it took.
+  "takePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri) => {
+    const all = uriGrants.all();
+    if (!all.includes(u.uri)) uriGrants.set([...all, u.uri]);
+  },
+  "releasePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri) =>
+    uriGrants.set(uriGrants.all().filter((s) => s !== u.uri)),
+  "getPersistedUriPermissions()Ljava/util/List;": () =>
+    newArrayList(uriGrants.all().map((s) => { const p = new JUriPermission(); p.uriStr = s; return p; })),
+};
+rt.register({ name: "android/content/ContentResolver", ctor: class extends JObj {}, methods: resolverMethods });
+class JUriPermission extends JObj { uriStr = ""; }
 rt.register({
-  name: "android/content/ContentResolver", ctor: class extends JObj {},
+  name: "android/content/UriPermission", ctor: JUriPermission,
   methods: {
-    "notifyChange(Landroid/net/Uri;Landroid/database/ContentObserver;)V": () => {},
-    "registerContentObserver(Landroid/net/Uri;ZLandroid/database/ContentObserver;)V": () => {},
-    "unregisterContentObserver(Landroid/database/ContentObserver;)V": () => {},
-    "openInputStream(Landroid/net/Uri;)Ljava/io/InputStream;": (u: JUri) =>
-      newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", u.uri.replace(/^file:\/\//, "")),
-    "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;": () => null,
+    "<init>()V": function () {},
+    "getUri()Landroid/net/Uri;": function (this: JUriPermission) { return mkUri(this.uriStr); },
+    "isReadPermission()Z": () => 1,
+    "isWritePermission()Z": () => 1,
+    "getPersistedTime()J": () => 0n,
   },
 });
 
@@ -760,39 +826,58 @@ rt.register({
 // ── content providers from the manifest: what queryIntentContentProviders/resolveContentProvider
 // answer, and what android.provider's DocumentsContract reads to decide who owns an authority.
 /** The manifest <provider> nodes, as (dotted class name, node) pairs. */
-export const providerNodes = (): [string, XmlNode][] => [...manifestProviders];
+const providerNodes = (): [string, XmlNode][] => [...manifestProviders];
 
-export const authoritiesOf = (n: XmlNode) => (attrStr(n, "authorities") ?? "").split(";");
+const authoritiesOf = (n: XmlNode) => (attrStr(n, "authorities") ?? "").split(";");
+
+const DOCS_PROVIDER_INTERFACE = "android.content.action.DOCUMENTS_PROVIDER";
+/** Providers the *system* installs. A device answers for the storage authority out of
+ *  ExternalStorageProvider, which no app can see in its own manifest — yet every SAF client
+ *  (UniFile, DocumentFile) asks the package manager for it before trusting a tree URI. */
+const systemProviders: [authority: string, cls: string, action: string][] =
+  [[DOCS_AUTHORITY, "com.android.externalstorage.ExternalStorageProvider", DOCS_PROVIDER_INTERFACE]];
+
+export const isDocumentsProvider = (auth: string) =>
+  systemProviders.some(([a, , act]) => a === auth && act === DOCS_PROVIDER_INTERFACE) ||
+  providerNodes().some(([, n]) => matchesAction(n, DOCS_PROVIDER_INTERFACE) && authoritiesOf(n).includes(auth));
 
 // AOSP resolves an intent against each component's <intent-filter>; a provider declaring none
 // is reachable by authority only. An action-less intent matches everything, as IntentFilter does.
-export function matchesAction(n: XmlNode, action: string | null): boolean {
+function matchesAction(n: XmlNode, action: string | null): boolean {
   if (!action) return true;
   return n.children.some((f) => f.name === "intent-filter" &&
     f.children.some((a) => a.name === "action" && attrStr(a, "name") === action));
 }
 
-function mkProviderInfo(cls: string, n: XmlNode): unknown {
+function providerInfo(cls: string, pkg: string, authority: string, n: XmlNode | null): unknown {
   const pi = new (rt.link("android/content/pm/ProviderInfo").ctor)() as Record<string, unknown>;
   pi.name = cls;
-  pi.packageName = appHost?.pkg ?? "";
-  pi.authority = authoritiesOf(n).join(";");
-  pi.exported = attr(n, "exported")?.data ? 1 : 0;
-  pi.grantUriPermissions = attr(n, "grantUriPermissions")?.data ? 1 : 0;
+  pi.packageName = pkg;
+  pi.authority = authority;
+  pi.exported = !n || attr(n, "exported")?.data ? 1 : 0;
+  pi.grantUriPermissions = !n || attr(n, "grantUriPermissions")?.data ? 1 : 0;
   return pi;
 }
+const mkProviderInfo = (cls: string, n: XmlNode) =>
+  providerInfo(cls, appHost?.pkg ?? "", authoritiesOf(n).join(";"), n);
+const sysProviderInfo = ([auth, cls]: [string, string, string]) =>
+  providerInfo(cls, cls.slice(0, cls.lastIndexOf(".")), auth, null);
 
 function queryProviders(intent: { action?: string | null } | null): JList {
-  return newArrayList(providerNodes()
-    .filter(([, n]) => matchesAction(n, intent?.action ?? null))
-    .map(([c, n]) => {
-      const ri = new (rt.link("android/content/pm/ResolveInfo").ctor)() as Record<string, unknown>;
-      ri.providerInfo = mkProviderInfo(c, n);
-      return ri;
-    }));
+  const action = intent?.action ?? null;
+  return newArrayList([
+    ...systemProviders.filter(([, , act]) => !action || act === action).map(sysProviderInfo),
+    ...providerNodes().filter(([, n]) => matchesAction(n, action)).map(([c, n]) => mkProviderInfo(c, n)),
+  ].map((pi) => {
+    const ri = new (rt.link("android/content/pm/ResolveInfo").ctor)() as Record<string, unknown>;
+    ri.providerInfo = pi;
+    return ri;
+  }));
 }
 
 function resolveProvider(authority: string): unknown {
+  const sys = systemProviders.find(([a]) => a === authority);
+  if (sys) return sysProviderInfo(sys);
   for (const [c, n] of providerNodes()) if (authoritiesOf(n).includes(authority)) return mkProviderInfo(c, n);
   return null;
 }
@@ -1576,6 +1661,11 @@ const activityMethods: NonNullable<NativeSpec["methods"]> = {
     await launchIntent(this.$host, intent);
     const started = this.$host.currentActivity();
     if (started && started !== this) started.resultTo = { act: this, code };
+  },
+  // ActivityCompat — and so every androidx ActivityResultRegistry launcher — calls the options
+  // overload, which must funnel into the body above rather than carry a second copy of it.
+  "startActivityForResult(Landroid/content/Intent;ILandroid/os/Bundle;)V": function (this: JActivity, intent: JIntent, code: number) {
+    return (activityMethods["startActivityForResult(Landroid/content/Intent;I)V"] as any).call(this, intent, code);
   },
   "setResult(I)V": function (this: JActivity, c: number) { this.resultCode = c; },
   "setResult(ILandroid/content/Intent;)V": function (this: JActivity, c: number, d: JIntent) {
