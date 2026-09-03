@@ -58,8 +58,8 @@ Goal: run FitNotes.apk → mihon → flappybird → Among Us.xapk fully client-s
 
 ## Status
 Scores are `bun run e2e`'s content-diff means; the current ones live in
-`tests/e2e/report/report.json` (last full run: fitnotes 39.4%, mihon-onboarding 48.7%,
-mihon-app 90.6%, harmonic 42.3%, every step rendered, nothing wedged). A lower number is
+`tests/e2e/report/report.json` (last full run: fitnotes 39.5%, mihon-onboarding 24.3%,
+mihon-app 88.7%, harmonic 36.6%, every step rendered, nothing wedged). A lower number is
 better; a rising one is not automatically a regression (see "Harness notes"). The smoke flows
 (no goldens) — flappybird, calculatorm, lichess, doodlejump — all render every step; only
 flappybird's optional `DexClassLoader` stays missing. harmonic is scored now (89.9% -> 36.2%)
@@ -87,8 +87,13 @@ and its one accepted miss is `WindowExtensionsProvider`.
       catch-all, deliberately not implemented yet. See "flappybird plays" below.
 - [x] harmonic: the first-run welcome dialog, the front page, the overflow menu, Settings and a
       story's comments all render and respond; the Material search bar scrolls away under the
-      list as on a device, and the app's own bundled fonts are the ones on screen. 89.9% -> 36.2%
+      list as on a device, and the app's own bundled fonts are the ones on screen. 89.9% -> 36.6%
       content diff over 14 steps. See "harmonic: five framework defects" below.
+- [x] harmonic, the four interactions: a story's COMMENTS load and render (HTML bodies with
+      their paragraphs, links and quotes); SEARCH opens, takes a query and lists Algolia hits;
+      the story-type SPINNER opens and switching Top -> New Stories reloads the feed; and a
+      story LINK opens the article in the WebView with the comment sheet's button strip under
+      it. See "harmonic: the four dead interactions" below.
 - [ ] harmonic remaining: the welcome dialog's preset buttons paint black, `@mipmap/ic_launcher`
       is an unhandled `<adaptive-icon>`, the settings row pitch is ~3% tall, and story rows have
       no preview thumbnails or favicons.
@@ -510,6 +515,55 @@ nothing like the app. What was actually wrong, in the order it mattered:
 The dev loop that found each one: `bun run e2e --test harmonic`, then the per-step `newMissing`
 and `newErrors` in `tests/e2e/actual/harmonic/run.json`. Every remaining entry was a real
 missing API, never a guess.
+
+## harmonic: the four dead interactions, and the one gap under three of them
+Comments never loaded, the search button did nothing, Top Stories -> New Stories did nothing,
+and the link screen's bottom bar was empty. Four symptoms, one dominant cause.
+
+**Window insets were never dispatched.** `requestApplyInsets()` was a no-op,
+`getRootWindowInsets()` returned null on purpose, and nothing ever handed the decor a
+`WindowInsets` — so an `OnApplyWindowInsetsListener` never fired. That is not a cosmetic gap:
+harmonic's `CommentsFragment` sets its "the view is ready" flags *inside* one, and its
+OnPreDrawListener will not build the request queue until both are set. The app logged
+`Skipping comments load ... queuePresent=false` on every frame and never issued a request —
+nothing was wrong with the transport, and no amount of looking at the network would have found
+it. The same gap left the link screen's button strip empty (it is the comments adapter's header
+item) and put the bottom sheet in the wrong place.
+
+The values matter as much as the dispatch. The shell lays the decor out BELOW the status bar,
+so `statusBars()` is genuinely zero, while the window's bottom edge is the physical bottom and
+the gesture bar is the one inset an app must pad for. The mihon golden is the proof: its bottom
+nav was 48px too low, and reporting `navigationBars()` = bottom 48 moved it onto the golden
+(mihon-onboarding 48.7% -> 24.3%, mihon-app 90.6% -> 88.7%).
+
+The rest, each a one-liner once found — the runtime missing-list named every one:
+- **`View.getOverlay()`** — Material's SearchView expands through a ViewOverlay; without it the
+  search button threw `NoSuchMethodError` and nothing opened.
+- **`AbsListView.getChoiceMode()` / `AdapterView.getOnItemClickListener()`** — appcompat's
+  Spinner dropdown is its own ListPopupWindow over our ListView and reads both back.
+- **`requestFocus()` set a flag nobody read.** widget.ts alone decides which editable view the
+  keyboard types into, so an app that opens its own search field got a caret and swallowed every
+  key. Programmatic focus now reaches it through a hook.
+- **`android:imeOptions` was never parsed** and the editor-action listener never fired, so the
+  IME action key — the thing a search field is waiting for — did nothing. `wd.enter()` is the
+  harness-side action key.
+- **`Charset.newEncoder()`** threw on every layout pass of the front page (okio asks an encoder
+  whether a character is representable). A throw per layout is also a perf bug.
+- **`Spanned.subSequence()` returned a String** and **`getSpans()` tagged its array
+  `Ljava/lang/Object;`** whatever class was asked for — both ClassCastExceptions in app code
+  that trims a Spanned or assigns the result to a `T[]`. And `Html.fromHtml` stripped tags with
+  a regex; the browser has a parser, so use it and emit the spans AOSP does.
+- **A word wider than the line only hard-broke on one of the two paths through `TextView.wrap`**,
+  so a URL in a comment ran off the right edge; and a wrap-content measure wrapped at the width
+  it *wanted* while reporting the width it was *clamped to*, leaving both the lines and the line
+  count (i.e. the height) belonging to a wider view.
+
+Generalise: **an app's own control flow can hang off a framework callback that looks decorative.**
+Insets look like padding; here they gate a network request. When a feature does nothing and the
+logs are quiet, find the callback the app is waiting for rather than the API it never reached.
+
+Also worth remembering: `rt.register` stamps the ClassInfo onto the ctor, so registering two
+class names with one TS class silently swaps their identities.
 
 ### Measure in a page that is actually drawing — the MCP tab is not one
 An in-browser probe reported `wd.ticks` unchanged over three seconds while
