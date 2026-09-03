@@ -5,6 +5,7 @@ import { mkdir } from "node:fs/promises";
 import { WebdroidDriver } from "../tests/e2e/drivers/webdroid";
 import { applyStep, loadManifest, settleStep } from "../tests/e2e/capture-webdroid";
 import { FLOWS } from "../tests/e2e/flows";
+import { PINNED_CLOCK_MS } from "../tests/e2e/types";
 
 const app = process.argv[2] ?? "fitnotes";
 const stopAt = Number(process.argv[3] ?? 99);
@@ -16,6 +17,8 @@ const byId = new Map((manifest?.steps ?? []).map((s) => [s.id, s]));
 await mkdir(outDir, { recursive: true });
 
 const drv = await WebdroidDriver.launch();
+// the same clock the flow's capture uses: a device held in the past renders an app's error state
+await drv.setClock(flow.liveClock ? Date.now() : PINNED_CLOCK_MS);
 await drv.reset();
 await drv.page.evaluate(() => { (globalThis as any).wd.mainDbg.trace = true; });
 for (const [i, step] of flow.steps.entries()) {
