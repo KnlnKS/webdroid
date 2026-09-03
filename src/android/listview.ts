@@ -15,6 +15,7 @@ import { toJsArray } from "../jvm/natives/jutil";
 import { JTextView } from "./widget";
 import { inflateLayout } from "./inflate";
 import { addOverlay, removeOverlay } from "./popup";
+import { device } from "../shell/config";
 
 // marker interfaces
 for (const i of ["android/widget/Adapter", "android/widget/ListAdapter", "android/widget/SpinnerAdapter",
@@ -613,7 +614,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
       this.flingAnim = null;
       this.setScrollState(0);
       this.velo = 0;
-    } else if (a === 2 && Math.abs(ev.y - this.downY) > 16) {
+    } else if (a === 2 && Math.abs(ev.y - this.downY) > device.touchSlop) {
       this.dragging = true;
       return 1;
     }
@@ -643,7 +644,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
       const dt = Math.max(1, now - this.lastMoveT);
       this.velo = 0.8 * this.velo + 0.2 * (d / dt * 16);
       this.lastMoveT = now;
-      if (!this.dragging && Math.abs(ev.y - this.downY) > 16) this.dragging = true;
+      if (!this.dragging && Math.abs(ev.y - this.downY) > device.touchSlop) this.dragging = true;
       if (this.dragging) {
         cancelItemLongPress(this);
         this.setScrollState(1);

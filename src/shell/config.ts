@@ -16,12 +16,20 @@ export const device = {
   navBar: 48,
   density: 2,
   densityDpi: 320,
+  /** AOSP ViewConfiguration.TOUCH_SLOP: dp of travel before a press counts as a drag */
+  touchSlopDp: 8,
+  /** AOSP ViewConfiguration.SCROLL_FACTOR: dp scrolled per wheel/keyboard scroll unit */
+  scrollUnitDp: 64,
   sdk: 33,
   release: "13",
   lang: "en",
   /** what /proc/cpuinfo, /proc/meminfo and uname report to native code: an ARMv7 with VFPv3 and
    *  no NEON (the ARM32 tier implements VFP, not the SIMD extension) */
   cpu: { cores: 4, features: "swp half thumb fastmult vfp edsp thumbee vfpv3 tls", hardware: "webdroid", memKb: 2 * 1024 * 1024 },
+  /** the drag threshold every gesture in the framework measures against, in framebuffer px */
+  get touchSlop(): number { return Math.round(this.touchSlopDp * this.density); },
+  /** framebuffer px one wheel/keyboard scroll unit moves */
+  get scrollUnit(): number { return this.scrollUnitDp * this.density; },
   get widthDp(): number { return Math.round(this.width / this.density); },
   /** the activity's height in dp — the status bar is not part of it */
   get heightDp(): number { return Math.round((this.height - this.statusBar) / this.density); },

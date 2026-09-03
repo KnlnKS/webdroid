@@ -125,15 +125,14 @@ rt.register({
   name: "android/view/ViewConfiguration", ctor: JViewConfiguration,
   methods: {
     "static get(Landroid/content/Context;)Landroid/view/ViewConfiguration;": () => vc,
-    "getScaledTouchSlop()I": () => 16,
-    "getScaledPagingTouchSlop()I": () => 32,
+    "getScaledTouchSlop()I": () => device.touchSlop,
+    "getScaledPagingTouchSlop()I": () => device.touchSlop * 2,
     "getScaledMinimumFlingVelocity()I": () => 100,
     "getScaledMaximumFlingVelocity()I": () => 16000,
     "getScaledMinimumFlingVelocity(III)I": () => 100,
     "getScaledMaximumFlingVelocity(III)I": () => 16000,
-    // AOSP: 64dp per wheel/keyboard scroll unit
-    "getScaledHorizontalScrollFactor()F": () => 64 * device.density,
-    "getScaledVerticalScrollFactor()F": () => 64 * device.density,
+    "getScaledHorizontalScrollFactor()F": () => device.scrollUnit,
+    "getScaledVerticalScrollFactor()F": () => device.scrollUnit,
     "getScaledHoverSlop()I": () => 8,
     "getScaledFadingEdgeLength()I": () => Math.round(12 * device.density),
     "getScaledMinScalingSpan()I": () => Math.round(27 * device.density),
@@ -144,7 +143,7 @@ rt.register({
     "getScaledOverscrollDistance()I": () => 0,
     "getScaledOverflingDistance()I": () => 12,
     "getScaledEdgeSlop()I": () => 24,
-    "getScaledWindowTouchSlop()I": () => 32,
+    "getScaledWindowTouchSlop()I": () => device.touchSlop * 2,
     "getScaledDoubleTapSlop()I": () => 200,
     "getScaledScrollBarSize()I": () => 8,
     "hasPermanentMenuKey()Z": () => 0,
@@ -516,7 +515,7 @@ rt.register({
         this.vx = 0.7 * this.vx + 0.3 * ((ev.x - this.lastX) / dt * 1000);
         this.vy = 0.7 * this.vy + 0.3 * ((ev.y - this.lastY) / dt * 1000);
         const dx = this.lastX - ev.x, dy = this.lastY - ev.y;
-        if (!this.moved && Math.hypot(ev.x - this.downX, ev.y - this.downY) > 16) this.moved = true;
+        if (!this.moved && Math.hypot(ev.x - this.downX, ev.y - this.downY) > device.touchSlop) this.moved = true;
         if (this.moved) {
           await vcall(this.l, "onScroll", "(Landroid/view/MotionEvent;Landroid/view/MotionEvent;FF)Z", ev, ev, dx, dy);
         }

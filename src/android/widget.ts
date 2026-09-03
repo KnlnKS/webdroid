@@ -502,7 +502,7 @@ const scrollMethods: NativeSpec["methods"] = {
     } else if (a === 2) {
       const d = this.horizontal ? Math.abs(ev.x - this.downX) : Math.abs(ev.y - this.downY);
       const cross = this.horizontal ? Math.abs(ev.y - this.downY) : Math.abs(ev.x - this.downX);
-      if (d > 16 && d > cross) { this.dragging = true; return 1; }
+      if (d > device.touchSlop && d > cross) { this.dragging = true; return 1; }
     }
     return 0;
   },
@@ -521,7 +521,7 @@ const scrollMethods: NativeSpec["methods"] = {
       this.lastMoveT = now;
       if (!this.dragging) {
         const dd = this.horizontal ? Math.abs(ev.x - this.downX) : Math.abs(ev.y - this.downY);
-        if (dd > 16) this.dragging = true;
+        if (dd > device.touchSlop) this.dragging = true;
       }
       if (this.dragging) {
         if (this.horizontal) this.scrollX += d;
