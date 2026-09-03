@@ -278,8 +278,9 @@ rt.register({
     "clear()V": function (this: JViewOverlay) { this.drawables.length = 0; this.views.length = 0; invalidate(); },
   },
 });
+class JViewGroupOverlay extends JViewOverlay {}
 rt.register({
-  name: "android/view/ViewGroupOverlay", ctor: JViewOverlay, sup: "android/view/ViewOverlay",
+  name: "android/view/ViewGroupOverlay", ctor: JViewGroupOverlay, sup: "android/view/ViewOverlay",
   methods: {
     // an overlay view is laid out by whoever put it there, so it keeps the bounds it arrives with
     "add(Landroid/view/View;)V": async function (this: JViewOverlay, v: JView) {
@@ -292,8 +293,9 @@ rt.register({
   },
 });
 /** every window here is the one framebuffer, so one token answers for all of them */
-const WINDOW_ID = new JObj();
-rt.register({ name: "android/view/WindowId", ctor: JObj });
+class JWindowId extends JObj {}
+const WINDOW_ID = new JWindowId();
+rt.register({ name: "android/view/WindowId", ctor: JWindowId });
 
 /** AOSP View.dispatchApplyWindowInsets: a listener wins outright, otherwise the virtual
  *  onApplyWindowInsets. ViewGroup's override calls this as its super. */
@@ -452,6 +454,11 @@ export async function drawView(v: JView, cv: JCanvas) {
     while (cv.saveCount > sc) { ctx.restore(); cv.saveCount--; }
     ctx.restore();
   }
+}
+
+/** AOSP: a ViewGroup's overlay can host views, a plain View's only drawables */
+function overlayOf(this: JView) {
+  return (this.overlay ??= this instanceof JViewGroup ? new JViewGroupOverlay(this) : new JViewOverlay(this));
 }
 
 /** AOSP draws the overlay last, over the host's own content and children */
@@ -990,8 +997,8 @@ const viewMethods: NativeSpec["methods"] = {
   // The overlay is a layer on top of the host's own content that anything can park a drawable
   // (or, for a ViewGroup, a view) in without touching the hierarchy. Material's SearchView
   // expand and androidx transitions both animate through it.
-  "getOverlay()Landroid/view/ViewOverlay;": function (this: JView) { return (this.overlay ??= new JViewOverlay(this)); },
-  "getOverlay()Landroid/view/ViewGroupOverlay;": function (this: JView) { return (this.overlay ??= new JViewOverlay(this)); },
+  "getOverlay()Landroid/view/ViewOverlay;": overlayOf,
+  "getOverlay()Landroid/view/ViewGroupOverlay;": overlayOf,
   "getWindowId()Landroid/view/WindowId;": function (this: JView) { return this.attached ? WINDOW_ID : null; },
   "getRootWindowInsets()Landroid/view/WindowInsets;": () => rootWindowInsets(),
   // AOSP: a view that fits system windows turns the bars into padding and consumes them; one
