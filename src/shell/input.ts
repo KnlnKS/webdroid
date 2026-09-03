@@ -17,7 +17,7 @@ const at = (e: { clientX: number; clientY: number }): [number, number] =>
 // The synthetic finger a wheel burst drives: where it went down, how far the deltas have carried
 // it, and where it was last dispatched.
 let ox = 0, oy = 0, ax = 0, ay = 0, lx = 0, ly = 0;
-let live = false, armed = false, busy = false, lastWheel = 0;
+let live = false, armed = false, lastWheel = 0, pending = 0;
 
 /** A wheel stream — the fingers, and the momentum macOS sends after they lift — never gaps this
  *  long, and Chrome exposes no phase to tell the two apart. */
@@ -25,8 +25,8 @@ const WHEEL_IDLE_MS = 120;
 
 function send(action: number, x: number, y: number) {
   lx = x; ly = y;
-  busy = true;
-  void dispatchPointer(action, x, y).finally(() => { busy = false; });
+  pending++;
+  void dispatchPointer(action, x, y).finally(() => { pending--; });
 }
 
 function cancelWheel() {
@@ -91,7 +91,7 @@ export function attachInput(canvas: HTMLCanvasElement, onDown: () => void) {
  * instead, and dispatch where the fingers have reached once the previous one has landed.
  */
 export function drainInput() {
-  if (!live || busy) return;
+  if (!live || pending) return;
   const idle = performance.now() - lastWheel > WHEEL_IDLE_MS;
   if (!armed) {
     // Under the slop nothing is dispatched at all, so a stray two-finger nudge cannot land a
