@@ -6,16 +6,70 @@
  * The framebuffer is `width x height` px; `statusBar` px of it are the system bar, so the
  * activity gets `height - statusBar`. Resource selection and Configuration use the dp sizes
  * derived from `density`.
+ *
+ * The screen is RESOLVED at module init rather than hardcoded, so the same bundle runs at
+ * another resolution without an edit or a rebuild — the shell's settings panel persists one,
+ * and `?screen=` / `WEBDROID_SCREEN` pin one for a single run (the idiom jvm/provenance.ts uses
+ * for `?bytecode=`). config.ts still imports nothing, so anything may import it; every host
+ * global it reads is optional, because bun scripts import this file too.
  */
+
+/** AOSP DisplayMetrics.DENSITY_DEFAULT: the dpi at which one dp is one px. */
+const DENSITY_DEFAULT = 160;
+
+/** what the shell persists a user-chosen screen under. Not app state: `wd.reset()` leaves it. */
+export const SCREEN_KEY = "wd:screen";
+
+export type Screen = { width: number; height: number; densityDpi: number };
+
+/** the built-in screen, used when nothing overrides it */
+const DEFAULT: Screen = { width: 720, height: 1280, densityDpi: 320 };
+
+/** `1080x2424@480` — the dpi is optional and falls back to the built-in profile's. */
+export function parseScreen(s: string | null | undefined): Screen | null {
+  const m = /^\s*(\d+)\s*x\s*(\d+)\s*(?:@\s*(\d+))?\s*$/i.exec(s ?? "");
+  if (!m) return null;
+  const width = +m[1], height = +m[2], densityDpi = m[3] ? +m[3] : DEFAULT.densityDpi;
+  return width > 0 && height > 0 && densityDpi > 0 ? { width, height, densityDpi } : null;
+}
+
+export const formatScreen = (s: Screen): string => `${s.width}x${s.height}@${s.densityDpi}`;
+
+/** localStorage throws outright in some privacy modes, so every touch of it is guarded. */
+export function readStoredScreen(): Screen | null {
+  try { return parseScreen(globalThis.localStorage?.getItem(SCREEN_KEY)); } catch { return null; }
+}
+
+export function storeScreen(s: Screen | null): void {
+  try {
+    if (s) globalThis.localStorage?.setItem(SCREEN_KEY, formatScreen(s));
+    else globalThis.localStorage?.removeItem(SCREEN_KEY);
+  } catch { /* the setting is a convenience, not state anything depends on */ }
+}
+
+/**
+ * A per-run pin beats a persisted preference, so an e2e run scores the geometry it asked for
+ * whatever the browser profile it happens to reuse remembers.
+ */
+function resolveScreen(): Screen {
+  const url = typeof location !== "undefined" ? new URLSearchParams(location.search).get("screen") : null;
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.WEBDROID_SCREEN;
+  return parseScreen(url) ?? parseScreen(env) ?? readStoredScreen() ?? DEFAULT;
+}
+
+const screen = resolveScreen();
+
 export const device = {
-  width: 720,
-  height: 1280,
-  statusBar: 48,
+  width: screen.width,
+  height: screen.height,
+  densityDpi: screen.densityDpi,
+  /** AOSP: DisplayMetrics.density is densityDpi/160, so the two can never disagree */
+  get density(): number { return this.densityDpi / DENSITY_DEFAULT; },
+  /** AOSP status_bar_height */
+  statusBarDp: 24,
   /** the gesture/navigation bar: not painted (the activity spans the whole framebuffer), but it
    *  is what the device reports as the bottom window inset, so an edge-to-edge app pads for it */
-  navBar: 48,
-  density: 2,
-  densityDpi: 320,
+  navBarDp: 24,
   /** AOSP ViewConfiguration.TOUCH_SLOP: dp of travel before a press counts as a drag */
   touchSlopDp: 8,
   /** AOSP ViewConfiguration.SCROLL_FACTOR: dp scrolled per wheel/keyboard scroll unit */
@@ -30,6 +84,10 @@ export const device = {
   /** what /proc/cpuinfo, /proc/meminfo and uname report to native code: an ARMv7 with VFPv3 and
    *  no NEON (the ARM32 tier implements VFP, not the SIMD extension) */
   cpu: { cores: 4, features: "swp half thumb fastmult vfp edsp thumbee vfpv3 tls", hardware: "webdroid", memKb: 2 * 1024 * 1024 },
+  /** the system bar in framebuffer px. It and every metric below is a dp scaled by the density,
+   *  so a profile at any density stays self-consistent. */
+  get statusBar(): number { return Math.round(this.statusBarDp * this.density); },
+  get navBar(): number { return Math.round(this.navBarDp * this.density); },
   /** the drag threshold every gesture in the framework measures against, in framebuffer px */
   get touchSlop(): number { return Math.round(this.touchSlopDp * this.density); },
   /** framebuffer px one wheel/keyboard scroll unit moves */
@@ -39,4 +97,6 @@ export const device = {
   get heightDp(): number { return Math.round((this.height - this.statusBar) / this.density); },
   /** full display height in dp, status bar included (resource qualifiers use this) */
   get screenHeightDp(): number { return Math.round(this.height / this.density); },
+  /** framebuffer px for a dp, for the synthesized widgets that size themselves in dp */
+  dp(n: number): number { return Math.round(n * this.density); },
 };
