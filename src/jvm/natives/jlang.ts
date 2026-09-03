@@ -602,15 +602,31 @@ rt.register({
     "static join(Ljava/lang/CharSequence;[Ljava/lang/CharSequence;)Ljava/lang/String;":
       (sep: string, parts: string[]) => parts.join(String(sep)),
   },
+  // A getter, because java.util.Comparator is not registered yet when this spec is built.
+  statics: { get CASE_INSENSITIVE_ORDER() { return mkCmp(caseInsensitive); } },
 });
+/** A Comparator is a plain JObj carrying `compare` — all a vcall from a sort needs. */
+export const mkCmp = (compare: (a: unknown, b: unknown) => unknown) => {
+  const o = new (rt.link("java/util/Comparator").ctor as new () => JObj)();
+  (o as unknown as Record<string, unknown>)[mangleMethod("compare", "(Ljava/lang/Object;Ljava/lang/Object;)I")] = compare;
+  return o;
+};
+const caseInsensitive = (a: unknown, b: unknown) => {
+  const x = String(a).toUpperCase().toLowerCase(), y = String(b).toUpperCase().toLowerCase();
+  return x < y ? -1 : x > y ? 1 : 0;
+};
 // make String's ClassInfo know its real JS type
 {
   const info = rt.link("java/lang/String");
   info.ctor = String;
   (String as any).$i = info;
-  // copy statics from holder
+  // copy statics from holder — a lazy one stays lazy across the hop, since reading it here
+  // would resolve it before the class it names has registered (see setupNativeMembers)
   for (const k of Object.getOwnPropertyNames(JStringStatics)) {
-    if (k.startsWith("m$") || k.startsWith("s$")) (String as any)[k] = (JStringStatics as any)[k];
+    if (!k.startsWith("m$") && !k.startsWith("s$")) continue;
+    if (Object.getOwnPropertyDescriptor(JStringStatics, k)!.get) {
+      Object.defineProperty(String, k, { configurable: true, get: () => (JStringStatics as any)[k] });
+    } else (String as any)[k] = (JStringStatics as any)[k];
   }
 }
 

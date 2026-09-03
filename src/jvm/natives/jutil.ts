@@ -3,7 +3,7 @@
 
 import { rt, JObj, type NativeSpec, type ClassInfo } from "../runtime";
 import { mangleMethod, jarray } from "../abi";
-import { vcall, idHash, stringHash, defineException, fmtDouble, JEnum, JInt, JLong, JFloat, JDouble, JByte, JShort, JBool, JChar } from "./jlang";
+import { vcall, idHash, stringHash, defineException, fmtDouble, mkCmp, JEnum, JInt, JLong, JFloat, JDouble, JByte, JShort, JBool, JChar } from "./jlang";
 
 /** Java toArray(T[]) contract: fill the GIVEN array when it fits (callers may
  * ignore the return value), null-terminating; else return a new one. */
@@ -1536,13 +1536,7 @@ for (const i of ["java/util/Map", "java/util/RandomAccess", "java/util/Iterator"
   "java/util/Enumeration"]) {
   rt.register({ name: i, ctor: class extends JObj {} });
 }
-// Comparator is an interface whose STATICS and defaults apps really do call. A comparator we
-// build here is a plain JObj carrying `compare`, which is all sortInPlace's vcall needs.
-const mkCmp = (compare: (a: unknown, b: unknown) => unknown) => {
-  const o = new (rt.link("java/util/Comparator").ctor as new () => JObj)();
-  (o as unknown as Record<string, unknown>)[mangleMethod("compare", "(Ljava/lang/Object;Ljava/lang/Object;)I")] = compare;
-  return o;
-};
+// Comparator is an interface whose STATICS and defaults apps really do call.
 const keyed = (fn: unknown, sel: string, desc: string) =>
   mkCmp(async (a, b) => {
     const ka = await vcall(fn, sel, desc, a), kb = await vcall(fn, sel, desc, b);

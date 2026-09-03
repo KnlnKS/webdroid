@@ -342,8 +342,20 @@ export class Runtime {
       target[mangled] = fn;
       if (!isStatic) info.ownMethods.push(mangled);
     }
-    for (const [fname, val] of Object.entries(spec.statics ?? {})) {
-      ctorAny[mangleStaticField(fname)] = val;
+    // A static written as a getter is resolved on first READ, not here: link order is
+    // registration order, so a static whose value is an instance of another class would
+    // otherwise link that class before its own module had registered it — and get a stub.
+    // First read replaces the accessor with the value, so identity still holds.
+    for (const fname of Object.keys(spec.statics ?? {})) {
+      const key = mangleStaticField(fname);
+      const d = Object.getOwnPropertyDescriptor(spec.statics!, fname)!;
+      if (!d.get) { ctorAny[key] = d.value; continue; }
+      const pin = (value: unknown) => Object.defineProperty(ctorAny, key, { value, writable: true, configurable: true });
+      Object.defineProperty(ctorAny, key, {
+        configurable: true,
+        get: () => { const v = d.get!.call(spec.statics); pin(v); return v; },
+        set: pin,
+      });
     }
     for (const [jname, prop] of Object.entries(spec.fields ?? {})) info.fieldTable.set(jname, prop);
     ctorAny.$i = info;
