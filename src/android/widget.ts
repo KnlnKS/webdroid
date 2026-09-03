@@ -840,7 +840,17 @@ function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v: T) => 
 }
 const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   ...textViewCtors("textViewStyle"),
-  "setText(Ljava/lang/CharSequence;)V": async function (this: JTextView, cs: unknown) {
+  // AOSP routes every setText through the two-arg form, and that is the one apps override:
+  // Material's Chip hands the text to its ChipDrawable there and nowhere else, and without it
+  // the drawable measures itself with no text at all.
+  "setText(Ljava/lang/CharSequence;)V": function (this: JTextView, cs: unknown) {
+    return vcall(this, "setText", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", cs, bufferTypes[0]);
+  },
+  "setText(I)V": async function (this: JTextView, id: number) {
+    const s = this.jres ? rvString(this.jres, this.jres.resolveRefs({ t: TV.REFERENCE, d: id })) ?? "" : "";
+    await guardCall((this as any)[M("setText", "(Ljava/lang/CharSequence;)V")], this, s);
+  },
+  "setText(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V": async function (this: JTextView, cs: unknown) {
     this.rawText = cs;
     const t = spannedString(cs);
     if (t !== this.text) {
@@ -850,13 +860,6 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       requestLayout(this);
       await this.notifyWatchers();
     }
-  },
-  "setText(I)V": async function (this: JTextView, id: number) {
-    const s = this.jres ? rvString(this.jres, this.jres.resolveRefs({ t: TV.REFERENCE, d: id })) ?? "" : "";
-    await guardCall((this as any)[M("setText", "(Ljava/lang/CharSequence;)V")], this, s);
-  },
-  "setText(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V": async function (this: JTextView, cs: unknown) {
-    await guardCall((this as any)[M("setText", "(Ljava/lang/CharSequence;)V")], this, cs);
   },
   "getText()Ljava/lang/CharSequence;": function (this: JTextView) {
     return this.editable ? this.getEditable() : (this.rawText ?? this.text);
@@ -904,7 +907,7 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setSingleLine()V": function (this: JTextView) { this.singleLine = true; requestLayout(this); },
   "setSingleLine(Z)V": function (this: JTextView, v: number) { this.singleLine = !!v; requestLayout(this); },
   "setMaxLines(I)V": function (this: JTextView, n: number) { this.maxLinesV = n || Infinity; requestLayout(this); },
-  "getMaxLines()I": function (this: JTextView) { return Number.isFinite(this.maxLinesV) ? this.maxLinesV : -1; },
+  "getMaxLines()I": function (this: JTextView) { return Number.isFinite(this.maxLinesV) ? this.maxLinesV : 0x7fffffff; },
   "setMinLines(I)V": function (this: JTextView, n: number) { this.minLinesV = n; requestLayout(this); },
   "setLines(I)V": function (this: JTextView, n: number) { this.maxLinesV = n; this.minLinesV = n; requestLayout(this); },
   "setEllipsize(Landroid/text/TextUtils$TruncateAt;)V": function (this: JTextView, e: { ord: number } | null) {
@@ -1042,7 +1045,8 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "getFilters()[Landroid/text/InputFilter;": function (this: JTextView) { const a = this.filters ?? []; (a as any).$t = "Landroid/text/InputFilter;"; return a; },
   "setMaxWidth(I)V": function (this: JTextView, w: number) { this.maxW = w; requestLayout(this); },
-  "getMaxWidth()I": function (this: JTextView) { return Number.isFinite(this.maxW) ? this.maxW : -1; },
+  // AOSP: an unbounded maximum reads back as Integer.MAX_VALUE, and callers Math.min() with it
+  "getMaxWidth()I": function (this: JTextView) { return Number.isFinite(this.maxW) ? this.maxW : 0x7fffffff; },
   // AOSP: null until the first measure; afterwards the Layout over the measured text width
   "getLayout()Landroid/text/Layout;": function (this: JTextView) {
     if (this.layoutWidthFor < 0) return null;
@@ -1182,8 +1186,7 @@ rt.register({
   methods: textViewMethods,
 });
 rt.register({ name: "android/widget/TextView$OnEditorActionListener", ctor: class extends JObj {} });
-rt.register({ name: "android/widget/TextView$BufferType", ctor: class extends JObj {}, sup: "java/lang/Enum",
-  statics: { NORMAL: null, SPANNABLE: null, EDITABLE: null } });
+const bufferTypes = mkEnumSet("android/widget/TextView$BufferType", ["NORMAL", "SPANNABLE", "EDITABLE"]);
 
 class JButton extends JTextView {
   constructor() {
@@ -1271,8 +1274,8 @@ const imageViewMethods: NativeSpec["methods"] = {
   "setAdjustViewBounds(Z)V": function (this: JImageView, v: number) { this.adjustBounds = !!v; },
   "setMaxWidth(I)V": function (this: JImageView, v: number) { this.maxW = v; requestLayout(this); },
   "setMaxHeight(I)V": function (this: JImageView, v: number) { this.maxH = v; requestLayout(this); },
-  "getMaxWidth()I": function (this: JImageView) { return Number.isFinite(this.maxW) ? this.maxW : Number.MAX_SAFE_INTEGER; },
-  "getMaxHeight()I": function (this: JImageView) { return Number.isFinite(this.maxH) ? this.maxH : Number.MAX_SAFE_INTEGER; },
+  "getMaxWidth()I": function (this: JImageView) { return Number.isFinite(this.maxW) ? this.maxW : 0x7fffffff; },
+  "getMaxHeight()I": function (this: JImageView) { return Number.isFinite(this.maxH) ? this.maxH : 0x7fffffff; },
   "setColorFilter(I)V": function (this: JImageView, c: number) { if (this.drawable) this.drawable.tint = c; invalidate(); },
   "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": function (this: JImageView, c: number) {
     if (this.drawable) this.drawable.tint = c;
@@ -1539,7 +1542,9 @@ class JCompoundButton extends JButton {
     this.minW = 0;
     this.padL = 0; this.padR = 0;
   }
-  indicatorSize(): number { return 40; }
+  /** the android:button drawable, and the width the indicator reserves (0 = no indicator) */
+  buttonD: JDrawable | null = null;
+  buttonW = 0;
   async setCheckedInternal(c: boolean) {
     if (this.checked === c) return;
     this.checked = c;
@@ -1558,18 +1563,30 @@ class JCompoundButton extends JButton {
     return st;
   }
 }
-const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["methods"] => ({
-  ...textViewMethods,
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JCompoundButton, c: unknown, set: JAttrSet | null) {
+const CB_STYLE = { check: "checkboxStyle", radio: "radioButtonStyle", switch: "switchStyle" } as const;
+const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["methods"] => {
+  const init = async function (this: JCompoundButton, c: unknown, set: JAttrSet | null, defStyleAttr?: number, defStyleRes?: number) {
     await initViewFromCtx(this, c, set);
     await applyTvStyle(this, set, 0);
     this.background = null;
     this.clickable = true;
-    if (set && this.jres) {
-      const ta = obtainStyled(this.jres, this.theme, set, [AID("checked")], 0, 0);
-      if (ta.vals[0]) this.checked = !!rvInt(this.jres, ta.vals[0], 0);
+    if (!this.jres) return;
+    // AOSP's two-arg constructors pass the widget's own default style attribute; the indicator
+    // is the android:button that cascade resolves, and a CompoundButton subclass styled as
+    // something else (a Material Chip) has none and reserves no room for one.
+    const ta = obtainStyled(this.jres, this.theme, set, [AID("checked"), AID("button")],
+      defStyleAttr || AID(CB_STYLE[kind]), defStyleRes ?? 0);
+    if (ta.vals[0]) this.checked = !!rvInt(this.jres, ta.vals[0], 0);
+    if (ta.vals[1]) {
+      this.buttonD = await loadDrawableRV(this.jres, ta.vals[1], this.theme);
+      this.buttonW = kind === "switch" ? 104 : 64;
     }
-  },
+  };
+  return {
+  ...textViewMethods,
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": init,
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": init,
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": init,
   "setChecked(Z)V": function (this: JCompoundButton, c: number) { return this.setCheckedInternal(!!c); },
   "isChecked()Z": function (this: JCompoundButton) { return this.checked ? 1 : 0; },
   "toggle()V": function (this: JCompoundButton) { return this.setCheckedInternal(!this.checked); },
@@ -1587,19 +1604,36 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
     if (this.clickL) await vcall(this.clickL, "onClick", "(Landroid/view/View;)V", this);
     return 1;
   },
-  "setButtonDrawable(Landroid/graphics/drawable/Drawable;)V": () => {},
-  "setButtonDrawable(I)V": () => {},
+  "setButtonDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JCompoundButton, d: JDrawable | null) {
+    this.buttonD = d;
+    this.buttonW = d ? (kind === "switch" ? 104 : 64) : 0;
+    invalidate();
+  },
+  "setButtonDrawable(I)V": async function (this: JCompoundButton, id: number) {
+    this.buttonD = id ? await loadDrawable(this.jres!, id, this.theme) : null;
+    this.buttonW = id ? (kind === "switch" ? 104 : 64) : 0;
+    invalidate();
+  },
   "onMeasure(II)V": function (this: JCompoundButton, wSpec: number, hSpec: number) {
     (textViewMethods["onMeasure(II)V"] as (a: number, b: number) => void).call(this, wSpec, hSpec);
-    const ind = kind === "switch" ? 104 : 64;
-    this.measuredW = resolveSizeAndState(this.measuredW + ind, wSpec);
+    this.measuredW = resolveSizeAndState(this.measuredW + this.buttonW, wSpec);
     this.measuredH = Math.max(this.measuredH, 96);
   },
   "onDraw(Landroid/graphics/Canvas;)V": function (this: JCompoundButton, cv: JCanvas) {
+    if (!this.buttonW) return (textViewMethods["onDraw(Landroid/graphics/Canvas;)V"] as (cv: JCanvas) => void).call(this, cv);
     const ctx = cv.ctx;
     const accent = themeAccent(this);
     const cy = this.height() / 2;
     const indX = kind === "switch" ? this.width() - this.padR - 88 : this.padL + 8;
+    if (this.buttonD && this.buttonD.intrinsicW() > 0) {
+      const w = this.buttonD.intrinsicW(), h = this.buttonD.intrinsicH();
+      const b = this.buttonD.bounds;
+      b.left = indX; b.top = cy - h / 2; b.right = indX + w; b.bottom = cy + h / 2;
+      this.buttonD.stateSet = this.drawableState();
+      this.buttonD.paint(cv);
+      drawTextInset(this, cv, kind !== "switch" ? indX + this.buttonW - 8 : this.padL);
+      return;
+    }
     if (kind === "check") {
       const s = 36;
       const x = indX, y = cy - s / 2;
@@ -1650,9 +1684,10 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
       ctx.stroke();
     }
     // text after indicator
-    drawTextInset(this, cv, kind !== "switch" ? indX + 64 - 8 : this.padL);
+    drawTextInset(this, cv, kind !== "switch" ? indX + this.buttonW - 8 : this.padL);
   },
-});
+  };
+};
 rt.register({ name: "android/widget/CompoundButton", ctor: JCompoundButton, sup: "android/widget/Button", methods: compoundMethods("check") });
 rt.register({ name: "android/widget/CompoundButton$OnCheckedChangeListener", ctor: class extends JObj {} });
 rt.register({ name: "android/widget/CheckBox", ctor: class extends JCompoundButton {}, sup: "android/widget/CompoundButton", methods: compoundMethods("check") });
