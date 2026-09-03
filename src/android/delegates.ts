@@ -25,7 +25,7 @@ import {
   Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, resolveStyleValue, rvString,
   currentResources, T_STR, T_PX, type RV,
 } from "./res";
-import { TV } from "./axml";
+import { TV, XE, parseAXMLDoc, StringPool, type XmlDoc, type XmlEvent } from "./axml";
 import { jarray } from "../jvm/abi";
 import { device } from "../shell/config";
 
@@ -765,6 +765,95 @@ function applyMatrix(c: JCanvas, m: Mat, replace: boolean) {
   else c.ctx.transform(m[0], m[3], m[1], m[4], m[2], m[5]);
 }
 
+// ── android.content.res.StringBlock / XmlBlock ─────────────────────────────────────────
+// The layout-inflation path. AOSP's XmlBlock is a pull parser over the binary XML bytes whose
+// accessors return STRING-POOL INDICES, not strings: the Java half resolves each one through
+// the block's own StringBlock. So the pool has to be the real one out of these bytes — an
+// interned copy would hand out indices into a pool the caller does not read.
+//
+// What the framework reads back out of an index is fixed by XmlBlock$Parser's own bytecode:
+// -1 is null for a name or a text, "" for a namespace, and getStyleAttribute is a resource
+// id rather than an index. A malformed document is ERROR_BAD_DOCUMENT (-EINVAL); we throw
+// while parsing instead, so nothing here ever returns it.
+
+interface Block { doc: XmlDoc; res: Resources | null; strings: bigint }
+
+/** the parse cursor. It IS an AttributeSet — AOSP passes XmlBlock.Parser.mParseState straight
+ *  to applyStyle/retrieveAttributes, and res.ts's obtainStyled reads the element off `node`. */
+class ParseState extends JAttrSet {
+  pos = 0;
+  constructor(readonly blk: Block, readonly sourceResId: number) {
+    super();
+    this.res = blk.res as Resources;
+    this.node = null;
+  }
+  get ev(): XmlEvent { return this.blk.doc.events[this.pos]; }
+}
+
+const block = (h: bigint) => deref<Block>(h);
+const state = (h: bigint) => deref<ParseState>(h);
+const mkBlock = (bytes: Uint8Array, res: Resources | null): Block =>
+  ({ doc: parseAXMLDoc(bytes, true), res, strings: 0n });
+/** the attribute the element named as its id/class/style, or -1 when it declared none */
+const namedAttr = (st: ParseState, which: "idIdx" | "classIdx" | "styleIdx") => st.ev[which];
+
+delegate("android/content/res/StringBlock", {
+  "nativeCreate([BII)J": (b: Int8Array, off: number, len: number) =>
+    handle(new StringPool(new DataView(b.buffer, b.byteOffset + off, len), 0)),
+  "nativeDestroy(J)V": release,
+  "nativeGetSize(J)I": (h: bigint) => deref<StringPool>(h).strings.length,
+  "nativeGetString(JI)Ljava/lang/String;": (h: bigint, i: number) => deref<StringPool>(h).strings[i] ?? null,
+  "nativeGetStyle(JI)[I": (h: bigint, i: number) => deref<StringPool>(h).styleOf(i),
+});
+
+delegate("android/content/res/XmlBlock", {
+  "nativeCreate([BII)J": (b: Int8Array, off: number, len: number) =>
+    handle(mkBlock(new Uint8Array(b.buffer, b.byteOffset + off, len), currentResources())),
+  "nativeDestroy(J)V": release,
+  "nativeGetStringBlock(J)J": (h: bigint) => {
+    const b = block(h);
+    return b.strings || (b.strings = handle(b.doc.pool));
+  },
+  "nativeCreateParseState(JI)J": (h: bigint, sourceResId: number) => handle(new ParseState(block(h), sourceResId)),
+  "nativeDestroyParseState(J)V": release,
+  "nativeGetSourceResId(J)I": (h: bigint) => state(h).sourceResId,
+
+  // the cursor starts on START_DOCUMENT, which XmlBlock$Parser reports itself before it ever
+  // calls in; every next() from there returns the following event
+  "nativeNext(J)I": (h: bigint) => {
+    const st = state(h);
+    if (st.pos < st.blk.doc.events.length - 1) st.pos++;
+    st.node = st.ev.node;
+    return st.ev.type;
+  },
+  "nativeGetName(J)I": (h: bigint) => (state(h).ev.type === XE.START_TAG || state(h).ev.type === XE.END_TAG ? state(h).ev.nameIdx : -1),
+  "nativeGetNamespace(J)I": (h: bigint) => state(h).ev.nsIdx,
+  "nativeGetText(J)I": (h: bigint) => (state(h).ev.type === XE.TEXT ? state(h).ev.nameIdx : -1),
+  "nativeGetLineNumber(J)I": (h: bigint) => state(h).ev.line,
+
+  "nativeGetAttributeCount(J)I": (h: bigint) => (state(h).ev.raw?.length ?? 0) / 3,
+  "nativeGetAttributeNamespace(JI)I": (h: bigint, i: number) => state(h).ev.raw?.[i * 3] ?? -1,
+  "nativeGetAttributeName(JI)I": (h: bigint, i: number) => state(h).ev.raw?.[i * 3 + 1] ?? -1,
+  "nativeGetAttributeStringValue(JI)I": (h: bigint, i: number) => state(h).ev.raw?.[i * 3 + 2] ?? -1,
+  "nativeGetAttributeResource(JI)I": (h: bigint, i: number) => state(h).ev.node?.attrs[i]?.resId ?? 0,
+  "nativeGetAttributeDataType(JI)I": (h: bigint, i: number) => state(h).ev.node?.attrs[i]?.type ?? TV.NULL,
+  "nativeGetAttributeData(JI)I": (h: bigint, i: number) => state(h).ev.node?.attrs[i]?.data ?? 0,
+  "nativeGetAttributeIndex(JLjava/lang/String;Ljava/lang/String;)I": (h: bigint, ns: string | null, name: string) => {
+    const attrs = state(h).ev.node?.attrs;
+    if (attrs) for (let i = 0; i < attrs.length; i++) if (attrs[i].name === name && (ns == null || attrs[i].ns === ns)) return i;
+    return -1;
+  },
+  // id and class are the raw string value of the attribute the element pointed at; style is
+  // its resource id, and 0 unless it is one
+  "nativeGetIdAttribute(J)I": (h: bigint) => { const i = namedAttr(state(h), "idIdx"); return i < 0 ? -1 : state(h).ev.raw![i * 3 + 2]; },
+  "nativeGetClassAttribute(J)I": (h: bigint) => { const i = namedAttr(state(h), "classIdx"); return i < 0 ? -1 : state(h).ev.raw![i * 3 + 2]; },
+  "nativeGetStyleAttribute(J)I": (h: bigint) => {
+    const st = state(h);
+    const a = st.ev.node?.attrs[namedAttr(st, "styleIdx")];
+    return a && (a.type === TV.REFERENCE || a.type === TV.ATTRIBUTE) ? a.data : 0;
+  },
+});
+
 // ── android.content.res.AssetManager ───────────────────────────────────────────────────
 // B3. The handle is a Resources — the same object our own resource stack reads through, so
 // AOSP's Resources/TypedArray/Theme bytecode and ours answer off one arsc.ts.
@@ -901,7 +990,19 @@ delegate("android/content/res/AssetManager", {
 
   // asset streams: an apk's assets/ and its res/ files are entries in the zip we already hold
   "nativeOpenAsset(JLjava/lang/String;I)J": (h: bigint, path: string) => openAsset(assets(h), "assets/" + path),
-  "nativeOpenNonAsset(JILjava/lang/String;I)J": (h: bigint, _cookie: number, path: string) => openAsset(assets(h), path),
+  "nativeOpenNonAsset(JILjava/lang/String;I)J": (h: bigint, cookie: number, path: string) => openAsset(assets(h), path, cookie),
+
+  // the layout-inflation entry point: Resources.getLayout ends here, and the block it returns
+  // is what LayoutInflater pulls tags out of
+  "nativeOpenXmlAsset(JILjava/lang/String;)J": (h: bigint, cookie: number, path: string) => {
+    const res = assets(h);
+    const bytes = readEntry(res, cookie, path);
+    if (!bytes) throw rt.mkThrowable("java/io/FileNotFoundException", path);
+    return handle(mkBlock(bytes, res));
+  },
+  // there are no file descriptors here: an asset is a zip entry, and the path form above is
+  // the one the framework takes for everything it opens by name
+  "nativeOpenXmlAssetFd(JILjava/io/FileDescriptor;)J": () => { throw rt.mkThrowable("java/io/FileNotFoundException", "no file descriptors"); },
   "nativeAssetDestroy(J)V": (a: bigint) => { objs[Number(a)] = undefined; },
   "nativeAssetGetLength(J)J": (a: bigint) => BigInt(deref<Cursor>(a).bytes.length),
   "nativeAssetGetRemainingLength(J)J": (a: bigint) => { const c = deref<Cursor>(a); return BigInt(c.bytes.length - c.pos); },
@@ -944,9 +1045,23 @@ delegate("android/content/res/AssetManager", {
 });
 
 interface Cursor { bytes: Uint8Array; pos: number }
+
+// A cookie is a 1-based index into the AssetManager's ordered ApkAssets. A device loads the
+// framework package first and the app last, and a path alone cannot say which apk it came
+// from — res/layout/alert_dialog.xml exists in both. Cookie 0 is AOSP's "any".
+const COOKIE_FW = 1, COOKIE_APP = 2;
+const cookieOf = (resId: number) => (resId >>> 24 === 0x01 ? COOKIE_FW : COOKIE_APP);
+
+/** an archive entry, out of the apk the cookie names */
+function readEntry(res: Resources, cookie: number, path: string): Uint8Array | null {
+  const fw = () => res.tbl(0x01000000)?.files(path) ?? null;
+  const app = () => res.zip[path] ?? res.arsc?.files(path) ?? null;
+  return cookie === COOKIE_FW ? fw() : cookie === COOKIE_APP ? app() : app() ?? fw();
+}
+
 /** an asset stream over a zip entry; 0 is what AOSP returns for "no such asset" */
-function openAsset(res: Resources, path: string): bigint {
-  const bytes = res.zip[path] ?? res.arsc?.files(path);
+function openAsset(res: Resources, path: string, cookie = 0): bigint {
+  const bytes = readEntry(res, cookie, path);
   return bytes ? handle({ bytes, pos: 0 } as Cursor) : 0n;
 }
 
@@ -955,11 +1070,24 @@ interface TypedValueLike { type: number; data: number; resourceId: number; densi
 /** an RV into the TypedValue the caller passed, returning the block index AOSP returns */
 function fillTypedValue(res: Resources, tv: TypedValueLike, v: RV | null, srcId: number): number {
   if (!v || v.t === TV.NULL) { tv.type = TV.NULL; tv.data = 0; return -1; }
+  // On a device a file-backed resource IS a TYPE_STRING: aapt writes the archive path into
+  // the package's value pool, and getLayout/loadDrawable read value.string. resolveRefs keeps
+  // those as references because our own stack loads them by id, so the translation belongs
+  // here, at the boundary — without it Resources.getLayout throws NotFoundException.
+  if (v.t === TV.REFERENCE && v.d) {
+    const f = res.pathOf(v.d);
+    if (f) {
+      tv.type = TV.STRING; tv.data = 0; tv.string = f.path;
+      tv.resourceId = f.id; tv.density = device.densityDpi;
+      tv.assetCookie = cookieOf(f.id); tv.changingConfigurations = 0;
+      return 0;
+    }
+  }
   tv.type = v.t === T_STR ? TV.STRING : v.t === T_PX ? TV.DIMENSION : v.t;
   tv.data = v.t === TV.FLOAT ? floatBits(v.d) : v.d | 0;
   tv.resourceId = srcId;
   tv.density = device.densityDpi;
-  tv.assetCookie = 0;
+  tv.assetCookie = cookieOf(srcId);
   tv.changingConfigurations = 0;
   tv.string = v.t === TV.STRING || v.t === T_STR ? rvString(res, v) : null;
   return 0;

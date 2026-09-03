@@ -121,15 +121,22 @@ if (existsSync("vendor/aosp/framework-res.apk")) {
   const { Arsc } = await import("../src/android/arsc");
   const { Resources, setFramework } = await import("../src/android/res");
   const { handle } = await import("../src/android/delegates");
-  const apk = unzipSync(new Uint8Array(await Bun.file("vendor/aosp/framework-res.apk").arrayBuffer()), { filter: (f) => f.name === "resources.arsc" });
-  const arsc = new Arsc(apk["resources.arsc"]);
+  const { centralDir, entryBytes } = await import("../src/jvm/natives/jzip");
+  // read the package lazily, as framework.ts does: the arsc up front, every other entry on
+  // demand — the layout exercise below needs res/ to be reachable, not just the table
+  const apkBytes = new Uint8Array(await Bun.file("vendor/aosp/framework-res.apk").arrayBuffer());
+  const dir = centralDir(apkBytes);
+  const files = (path: string) => { const e = dir.get(path); return e ? entryBytes(apkBytes, e) : null; };
+  const arsc = new Arsc(files("resources.arsc")!, files);
   setFramework(arsc);
-  const am = handle(new Resources(arsc, {}));
-  const call = (sig: string, ...a: unknown[]) => {
-    const fn = rt.jniFn("android/content/res/AssetManager", sig);
-    if (!fn) throw new Error(`no delegate for ${sig}`);
-    return (fn as (...x: unknown[]) => unknown)(am, ...a);
+  const res = new Resources(arsc, {});
+  const am = handle(res);
+  const jni = (cls: string, sig: string) => {
+    const fn = rt.jniFn(cls, sig);
+    if (!fn) throw new Error(`no delegate for ${cls}.${sig}`);
+    return fn as (...x: unknown[]) => unknown;
   };
+  const call = (sig: string, ...a: unknown[]) => jni("android/content/res/AssetManager", sig)(am, ...a);
 
   await exercise("AssetManager.nativeGetResourceIdentifier", async () => {
     const id = call("nativeGetResourceIdentifier(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "ok", "string", "android") as number;
@@ -160,6 +167,44 @@ if (existsSync("vendor/aosp/framework-res.apk")) {
     const indices = new Int32Array(attrs.length + 1);
     call("nativeApplyStyle(JJIIJ[IJJ)V", theme, 0, 0, 0n, attrs, handle(values), handle(indices));
     if (indices[0] === 0) throw new Error("the theme resolved none of the two attributes");
+  });
+
+  await exercise("AssetManager.nativeOpenXmlAsset (XmlBlock walk)", async () => {
+    const id = call("nativeGetResourceIdentifier(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "alert_dialog", "layout", "android") as number;
+    if (!id) throw new Error("no android:layout/alert_dialog");
+    const tv = { type: 0, data: 0, resourceId: 0, density: 0, string: null as unknown, assetCookie: 0, changingConfigurations: 0 };
+    call("nativeGetResourceValue(JISLandroid/util/TypedValue;Z)I", id, 0, tv, 1);
+    // Resources.getLayout takes the TYPE_STRING branch or throws NotFoundException
+    if (tv.type !== 3) throw new Error(`layout resolved as type ${tv.type}, not TYPE_STRING`);
+
+    const blk = call("nativeOpenXmlAsset(JILjava/lang/String;)J", tv.assetCookie, tv.string) as bigint;
+    const xb = (sig: string, ...a: unknown[]) => jni("android/content/res/XmlBlock", sig)(blk, ...a);
+    const pool = xb("nativeGetStringBlock(J)J") as bigint;
+    const str = (i: number) => jni("android/content/res/StringBlock", "nativeGetString(JI)Ljava/lang/String;")(pool, i);
+    const st = xb("nativeCreateParseState(JI)J", id) as bigint;
+    const sx = (sig: string, ...a: unknown[]) => jni("android/content/res/XmlBlock", sig)(st, ...a);
+
+    const tags: string[] = [];
+    let attrs = 0, depth = 0, ev = 0;
+    while ((ev = sx("nativeNext(J)I") as number) !== 1) {
+      if (ev === 2) { tags.push(str(sx("nativeGetName(J)I") as number) as string); attrs += sx("nativeGetAttributeCount(J)I") as number; depth++; }
+      if (ev === 3) depth--;
+    }
+    if (depth !== 0) throw new Error(`walk ended at depth ${depth}`);
+
+    // the tree parse of the same bytes is an independent count: it never sees a pool index
+    const { parseAXML } = await import("../src/android/axml");
+    const bytes = res.fileOf(id)!.bytes;
+    const want: string[] = [];
+    let wantAttrs = 0;
+    const walk = (n: { name: string; attrs: unknown[]; children: never[] }) => {
+      want.push(n.name); wantAttrs += n.attrs.length;
+      for (const c of n.children) walk(c);
+    };
+    walk(parseAXML(bytes) as never);
+    if (tags.join(",") !== want.join(",")) throw new Error(`${tags.length} tags vs the tree's ${want.length}`);
+    if (attrs !== wantAttrs) throw new Error(`${attrs} attributes vs the tree's ${wantAttrs}`);
+    if (!(pool > 0n) || !str(0)) throw new Error("the block's string pool is empty");
   });
 }
 

@@ -123,16 +123,22 @@ export class Resources {
   /** the table a resource id belongs to: package 0x01 is the framework, anything else the app */
   tbl(resId: number): Arsc | null { return resId >>> 24 === 0x01 ? fwPkg : this.arsc; }
 
-  /** the archive entry a file resource names, out of the package that owns it */
-  fileOf(resId: number, depth = 0): { path: string; bytes: Uint8Array } | null {
+  /** the archive path a file resource names, the package that owns it, and the id the
+   *  reference chain ended on — everything but the bytes, which cost an inflate */
+  pathOf(resId: number, depth = 0): { path: string; id: number; arsc: Arsc } | null {
     const a = this.tbl(resId);
     const e = a?.entry(resId);
     if (!e?.value) return null;
-    if (e.value.type === TV.REFERENCE && e.value.data && depth < 8) return this.fileOf(e.value.data, depth + 1);
+    if (e.value.type === TV.REFERENCE && e.value.data && depth < 8) return this.pathOf(e.value.data, depth + 1);
     if (e.value.type !== TV.STRING) return null;
-    const path = a!.values.get(e.value.data);
-    const bytes = a!.files(path);
-    return bytes ? { path, bytes } : null;
+    return { path: a!.values.get(e.value.data), id: resId, arsc: a! };
+  }
+
+  /** the archive entry a file resource names, out of the package that owns it */
+  fileOf(resId: number): { path: string; bytes: Uint8Array } | null {
+    const f = this.pathOf(resId);
+    const bytes = f && f.arsc.files(f.path);
+    return bytes ? { path: f!.path, bytes } : null;
   }
 
   /** id by type and name; a package name picks a table, otherwise the app is searched first */
