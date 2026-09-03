@@ -685,11 +685,13 @@ for (const n of ["java/util/concurrent/locks/ReentrantReadWriteLock$ReadLock", "
 }
 
 // ── ConcurrentLinkedQueue / LockSupport / FutureTask
-rt.register({
-  name: "java/util/concurrent/ConcurrentLinkedQueue", ctor: class extends JList {},
-  ifaces: ["java/util/Queue", "java/util/Collection", "java/lang/Iterable"],
-  methods: listMethods(),
-});
+for (const n of ["java/util/concurrent/ConcurrentLinkedQueue", "java/util/AbstractQueue"]) {
+  rt.register({
+    name: n, ctor: class extends JList {},
+    ifaces: ["java/util/Queue", "java/util/Collection", "java/lang/Iterable"],
+    methods: listMethods(),
+  });
+}
 // unpark() is a no-op, so a parked thread only wakes on its own deadline (see NOTES: curThread is a global)
 const parkFor = (ms: number) => new Promise((r) => setTimeout(r, ms));
 rt.register({

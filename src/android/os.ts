@@ -238,6 +238,7 @@ rt.register({
     "static isIsolated()Z": () => 0,
     "static myTid()I": () => 1000,
     "static myUid()I": () => 10001,
+    "static getThreadPriority(I)I": () => 0,
     "static setThreadPriority(I)V": () => {},
     "static setThreadPriority(II)V": () => {},
   },

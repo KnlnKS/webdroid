@@ -320,6 +320,15 @@ export function listMethods(): Methods {
     "contains(Ljava/lang/Object;)Z": async function (this: JList, v: unknown) {
       return (await indexOfAsync(this.a, v)) >= 0 ? 1 : 0;
     },
+    // Collection default methods. They are declared on the interface, so nothing in an app
+    // ever names the implementing class and a static scan cannot see them go missing.
+    "removeIf(Ljava/util/function/Predicate;)Z": async function (this: JList, p: unknown) {
+      const keep: unknown[] = [];
+      for (const v of this.a) if (!(await vcall(p, "test", "(Ljava/lang/Object;)Z", v))) keep.push(v);
+      const changed = keep.length !== this.a.length;
+      this.a = keep;
+      return changed ? 1 : 0;
+    },
     "clear()V": function (this: JList) { this.a.length = 0; },
     "iterator()Ljava/util/Iterator;": function (this: JList) { return mkIter(this.a, this); },
     "listIterator()Ljava/util/ListIterator;": function (this: JList) { return mkIter(this.a, this); },
@@ -702,16 +711,42 @@ rt.register({
 });
 
 rt.register({ name: "webdroid/BaseMap", ctor: JMap, ifaces: ["java/util/Map", "java/io/Serializable"], methods: mapMethods() });
+// ArrayMap is a Map that also answers by index; a JS Map already keeps insertion order, so
+// the index is just its key order. The slow bucket (custom-equals keys) comes after, the way
+// mapMethods already treats it.
+const mapKeysInOrder = (m: JMap): unknown[] => [...[...m.m.values()].map((e) => e.k), ...m.slow.map((e) => e.k)];
+const arrayMapMethods: NativeSpec["methods"] = {
+  "keyAt(I)Ljava/lang/Object;": function (this: JMap, i: number) { return mapKeysInOrder(this)[i] ?? null; },
+  "valueAt(I)Ljava/lang/Object;": async function (this: JMap, i: number) {
+    const k = mapKeysInOrder(this)[i];
+    return k === undefined ? null : vcall(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
+  },
+  "indexOfKey(Ljava/lang/Object;)I": async function (this: JMap, k: unknown) {
+    const keys = mapKeysInOrder(this);
+    for (let i = 0; i < keys.length; i++) {
+      const r = jeq(keys[i], k);
+      if (r instanceof Promise ? await r : r) return i;
+    }
+    return -1;
+  },
+  "removeAt(I)Ljava/lang/Object;": async function (this: JMap, i: number) {
+    const k = mapKeysInOrder(this)[i];
+    return k === undefined ? null : vcall(this, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
+  },
+  "ensureCapacity(I)V": () => {},
+};
+const mapExtras: Record<string, NativeSpec["methods"]> = {
+  "java/util/EnumMap": { "<init>(Ljava/lang/Class;)V": function () {} },
+  "android/util/ArrayMap": arrayMapMethods,
+};
 for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/concurrent/ConcurrentHashMap",
-  "java/util/WeakHashMap", "java/util/IdentityHashMap", "java/util/Hashtable", "java/util/EnumMap"]) {
+  "java/util/WeakHashMap", "java/util/IdentityHashMap", "java/util/Hashtable", "java/util/EnumMap",
+  "android/util/ArrayMap"]) {
   rt.register({
     name: n, ctor: class extends JMap {},
     sup: n === "java/util/LinkedHashMap" ? "java/util/HashMap" : "java/lang/Object",
     ifaces: ["java/util/Map", "java/util/concurrent/ConcurrentMap", "java/util/SortedMap", "java/lang/Cloneable", "java/io/Serializable"],
-    methods: {
-      ...mapMethods(),
-      ...(n === "java/util/EnumMap" ? { "<init>(Ljava/lang/Class;)V": function () {} } : {}),
-    },
+    methods: { ...mapMethods(), ...mapExtras[n] },
   });
 }
 
@@ -1021,11 +1056,22 @@ rt.register({
   ifaces: ["java/util/Queue", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"],
   methods: priorityQueueMethods(),
 });
-rt.register({
-  name: "java/util/concurrent/CopyOnWriteArrayList", ctor: class extends JList {},
-  ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable"],
-  methods: listMethods(),
-});
+const concurrentListExtras: Record<string, Methods> = {
+  "java/util/concurrent/CopyOnWriteArrayList": {
+    "addIfAbsent(Ljava/lang/Object;)Z": async function (this: JList, v: unknown) {
+      if ((await indexOfAsync(this.a, v)) >= 0) return 0;
+      this.a.push(v);
+      return 1;
+    },
+  },
+};
+for (const n of ["java/util/concurrent/CopyOnWriteArrayList", "java/util/concurrent/ConcurrentLinkedDeque"]) {
+  rt.register({
+    name: n, ctor: class extends JList {},
+    ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/Queue", "java/util/Deque"],
+    methods: { ...listMethods(), ...concurrentListExtras[n] },
+  });
+}
 
 // ── BitSet: 32-bit words (Java's are 64-bit, which only shows in size()/hashCode, handled)
 class JBitSet extends JObj { w: Int32Array = new Int32Array(2); }

@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray } from "../abi";
-import { vcall, stringHash, mkEnumSet } from "./jlang";
+import { vcall, stringHash, mkEnumSet, javaFormat } from "./jlang";
 
 // marker interface — apps implement this to opt into custom serialization; writeExternal/
 // readExternal dispatch isn't needed by anything exercised so far, so this just stops the
@@ -380,6 +380,93 @@ function flushFOS(s: { fpath: string; append: boolean; chunks: number[] }) {
   }
 }
 
+// RandomAccessFile: the whole file in memory with a cursor, written back as it grows. The
+// vfs has no partial write, so "rw" is read-modify-write — correct, and the sizes an apk
+// opens this way (a cache index, a downloaded chunk) are the sizes it already unzipped.
+class JRAF extends JObj { path = ""; buf: Uint8Array = new Uint8Array(0); pos = 0; write = false; }
+const rafGrow = (f: JRAF, need: number) => {
+  if (need <= f.buf.length) return;
+  const n = new Uint8Array(need);
+  n.set(f.buf);
+  f.buf = n;
+};
+const rafOpen = function (this: JRAF, p: string, mode: string) {
+  this.path = vfs.norm(p);
+  this.write = mode.includes("w");
+  const d = vfs.read(this.path);
+  if (!d && !this.write) throw rt.mkThrowable("java/io/FileNotFoundException", p);
+  this.buf = d ?? new Uint8Array(0);
+};
+rt.register({
+  name: "java/io/RandomAccessFile", ctor: JRAF, ifaces: ["java/io/Closeable", "java/io/DataInput", "java/io/DataOutput"],
+  methods: {
+    "<init>(Ljava/lang/String;Ljava/lang/String;)V": rafOpen,
+    "<init>(Ljava/io/File;Ljava/lang/String;)V": function (this: JRAF, f: JFile, m: string) { rafOpen.call(this, f.path, m); },
+    "length()J": function (this: JRAF) { return BigInt(this.buf.length); },
+    "getFilePointer()J": function (this: JRAF) { return BigInt(this.pos); },
+    "seek(J)V": function (this: JRAF, p: bigint) { this.pos = Number(p); },
+    "skipBytes(I)I": function (this: JRAF, n: number) {
+      const step = Math.max(0, Math.min(n, this.buf.length - this.pos));
+      this.pos += step;
+      return step;
+    },
+    "getFD()Ljava/io/FileDescriptor;": () => new JFileDescriptor(),
+    "read()I": function (this: JRAF) { return this.pos < this.buf.length ? this.buf[this.pos++] : -1; },
+    "read([B)I": function (this: JRAF, b: Int8Array) { return rafRead(this, b, 0, b.length); },
+    "read([BII)I": function (this: JRAF, b: Int8Array, off: number, len: number) { return rafRead(this, b, off, len); },
+    "readFully([B)V": function (this: JRAF, b: Int8Array) { rafRead(this, b, 0, b.length); },
+    "readFully([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { rafRead(this, b, off, len); },
+    "write(I)V": function (this: JRAF, v: number) {
+      rafGrow(this, this.pos + 1);
+      this.buf[this.pos++] = v & 0xff;
+      vfs.write(this.path, this.buf);
+    },
+    "write([B)V": function (this: JRAF, b: Int8Array) { rafWrite(this, b, 0, b.length); },
+    "write([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { rafWrite(this, b, off, len); },
+    "setLength(J)V": function (this: JRAF, n: bigint) {
+      const len = Number(n);
+      if (len <= this.buf.length) this.buf = this.buf.slice(0, len);
+      else rafGrow(this, len);
+      if (this.pos > len) this.pos = len;
+      vfs.write(this.path, this.buf);
+    },
+    "close()V": function (this: JRAF) { if (this.write) vfs.write(this.path, this.buf); },
+  },
+});
+function rafRead(f: JRAF, b: Int8Array, off: number, len: number): number {
+  const n = Math.min(len, f.buf.length - f.pos);
+  if (n <= 0) return -1;
+  b.set(f.buf.subarray(f.pos, f.pos + n) as unknown as Int8Array, off);
+  f.pos += n;
+  return n;
+}
+function rafWrite(f: JRAF, b: Int8Array, off: number, len: number) {
+  rafGrow(f, f.pos + len);
+  f.buf.set(new Uint8Array(b.buffer, b.byteOffset + off, len), f.pos);
+  f.pos += len;
+  vfs.write(f.path, f.buf);
+}
+
+// The two interfaces DataInputStream, DataOutputStream and RandomAccessFile all declare.
+// Dispatch goes through the concrete class, so nothing calls them by this name — which is
+// why they were absent while every apk in the corpus reached them.
+rt.register({ name: "java/io/DataInput", ctor: class extends JObj {} });
+rt.register({ name: "java/io/DataOutput", ctor: class extends JObj {} });
+
+// serialPersistentFields is a static array a serializable class declares; nothing here
+// serializes, but the <clinit> that builds the array has to be able to construct one.
+class JObjectStreamField extends JObj { fname = ""; ftype: unknown = null; }
+rt.register({
+  name: "java/io/ObjectStreamField", ctor: JObjectStreamField, ifaces: ["java/lang/Comparable"],
+  methods: {
+    "<init>(Ljava/lang/String;Ljava/lang/Class;)V": function (this: JObjectStreamField, n: string, t: unknown) { this.fname = n; this.ftype = t; },
+    "<init>(Ljava/lang/String;Ljava/lang/Class;Z)V": function (this: JObjectStreamField, n: string, t: unknown) { this.fname = n; this.ftype = t; },
+    "getName()Ljava/lang/String;": function (this: JObjectStreamField) { return this.fname; },
+    "getType()Ljava/lang/Class;": function (this: JObjectStreamField) { return this.ftype; },
+    "toString()Ljava/lang/String;": function (this: JObjectStreamField) { return this.fname; },
+  },
+});
+
 // Filter streams: delegate to wrapped
 rt.register({
   name: "java/io/FilterOutputStream", ctor: class extends JOutputStream { out: unknown = null; }, sup: "java/io/OutputStream",
@@ -429,11 +516,18 @@ const PRINT_ARGS: [string, (v: any) => string | Promise<string>][] = [
   ["C", (v: number) => String.fromCharCode(v)],
   ["[C", (v: Uint16Array) => chars(v)],
 ];
-function printMethods<T>(sink: (self: T, s: string, ln: boolean) => unknown): NativeSpec["methods"] {
+function printMethods<T>(sink: (self: T, s: string, ln: boolean) => unknown, self: string): NativeSpec["methods"] {
   const m: NativeSpec["methods"] = { "println()V": function (this: T) { return sink(this, "", true); } };
   for (const [desc, str] of PRINT_ARGS) {
     m[`print(${desc})V`] = async function (this: T, v: unknown) { return sink(this, await str(v), false); };
     m[`println(${desc})V`] = async function (this: T, v: unknown) { return sink(this, await str(v), true); };
+  }
+  // printf/format are String.format into the same sink, and both return the stream
+  const fmt = function (this: T, f: string, a: unknown[]) { sink(this, javaFormat(f, a), false); return this; };
+  const fmtL = function (this: T, _l: unknown, f: string, a: unknown[]) { sink(this, javaFormat(f, a), false); return this; };
+  for (const name of ["printf", "format"]) {
+    m[`${name}(Ljava/lang/String;[Ljava/lang/Object;)L${self};`] = fmt;
+    m[`${name}(Ljava/util/Locale;Ljava/lang/String;[Ljava/lang/Object;)L${self};`] = fmtL;
   }
   return m;
 }
@@ -449,7 +543,7 @@ function pr(ps: JPrintStream, s: string, ln: boolean) {
 rt.register({
   name: "java/io/PrintStream", ctor: JPrintStream, sup: "java/io/FilterOutputStream",
   methods: {
-    ...printMethods(pr),
+    ...printMethods(pr, "java/io/PrintStream"),
     "flush()V": function () {},
     "close()V": function () {},
     "write(I)V": function (this: JPrintStream, b: number) { pr(this, String.fromCharCode(b), false); },
@@ -507,6 +601,20 @@ rt.register({
     "<init>(Ljava/io/InputStream;)V": decodeStream,
     "<init>(Ljava/io/InputStream;Ljava/lang/String;)V": decodeStream,
     "<init>(Ljava/io/InputStream;Ljava/nio/charset/Charset;)V": decodeStream,
+  },
+});
+// FileReader is an InputStreamReader over a file: the file's bytes, decoded, in one go —
+// the same shape openRead gives FileInputStream.
+const openReader = function (this: JReader, p: string) {
+  const d = vfs.read(p);
+  if (!d) throw rt.mkThrowable("java/io/FileNotFoundException", p);
+  this.s = new TextDecoder().decode(d);
+};
+rt.register({
+  name: "java/io/FileReader", ctor: class extends JReader {}, sup: "java/io/InputStreamReader",
+  methods: {
+    "<init>(Ljava/lang/String;)V": openReader,
+    "<init>(Ljava/io/File;)V": function (this: JReader, f: JFile) { openReader.call(this, f.path); },
   },
 });
 rt.register({
@@ -592,7 +700,7 @@ rt.register({
       if (this.target === null) { this.s += s; return; }
       return vcall(this.target, "write", "(Ljava/lang/String;)V", s);
     },
-    ...printMethods(pw),
+    ...printMethods(pw, "java/io/PrintWriter"),
     "flush()V": function (this: JPrintWriter) { return this.target === null ? undefined : vcall(this.target, "flush", "()V"); },
     "close()V": function (this: JPrintWriter) { return this.target === null ? undefined : vcall(this.target, "close", "()V"); },
     "checkError()Z": function () { return 0; },
