@@ -8,7 +8,7 @@ import { rt } from "./jvm/runtime";
 import { loadFramework } from "./android/framework";
 import { unreadAttrs } from "./android/res";
 import { bootApk, tick, dispatchPointer, pressBack, currentApp, contentTop, SCREEN_W, SCREEN_H } from "./shell/device";
-import { attachInput } from "./shell/input";
+import { attachInput, drainInput } from "./shell/input";
 import { perf, perfReset } from "./perf";
 import { uiState, measureView, makeSpec } from "./android/view";
 import { onMain, mainDbg } from "./android/mainloop";
@@ -23,7 +23,7 @@ root.innerHTML = `
 <div style="display:flex;align-items:center;gap:20px;height:100%">
   <div id="phone" style="position:relative;background:#0a0a0c;border-radius:28px;padding:14px 10px;box-shadow:0 18px 60px rgba(0,0,0,.6), inset 0 0 0 2px #2a2d33">
     <div style="position:relative">
-      <canvas id="screen" width="${SCREEN_W}" height="${SCREEN_H}" style="display:block;border-radius:16px;background:#000"></canvas>
+      <canvas id="screen" width="${SCREEN_W}" height="${SCREEN_H}" style="display:block;border-radius:16px;background:#000;touch-action:none"></canvas>
       <div id="weblayer" style="position:absolute;inset:0;pointer-events:none;overflow:hidden;border-radius:16px"></div>
     </div>
     <div id="nav" style="display:flex;justify-content:space-around;padding-top:10px">
@@ -40,6 +40,7 @@ root.innerHTML = `
 </div>
 <input id="kbd" style="position:absolute;left:-9999px;top:0" autocomplete="off">
 <style>
+  html, body { overscroll-behavior: none }
   .navb { background:none;border:none;color:#9aa;font-size:20px;cursor:pointer;padding:2px 26px;border-radius:8px }
   .navb:hover { background:#22252b }
   .appcard { display:flex;align-items:center;gap:10px;background:#1d2026;border:1px solid #2a2e35;border-radius:10px;
@@ -274,6 +275,7 @@ const wd = {
 // frame loop: rAF when visible, timer fallback when the tab is hidden/backgrounded
 let lastTick = 0, ticking = false;
 function doTick() {
+  drainInput(); // ahead of the frame, and ahead of the guard below: a slow frame must not starve input
   if (ticking) return; // the timer fallback must not count a frame that is still in flight
   ticking = true;
   wd.ticks++;
