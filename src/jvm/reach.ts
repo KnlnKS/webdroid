@@ -1,0 +1,256 @@
+// Whole-program reachability over one or more dex files: what an apk can actually call,
+// rather than what its constant pool happens to mention.
+//
+// Rapid type analysis (Bacon & Sweeney). It is what makes the answer at a virtual or
+// interface call site real rather than "not decidable statically": a site (D, sig) reaches
+// the implementations of sig on the types some reachable `new-instance` actually creates.
+// Interface dispatch — the thing a constant-pool walk cannot speak to at all — falls out of
+// the same rule, with no special case.
+
+import { DexFile, type ClassDef, type EncodedMethod } from "./dex";
+import { insnLen } from "./opcodes";
+import { ACC } from "./runtime";
+import { descToName } from "./abi";
+
+const NO_INDEX = 0xffffffff;
+
+/** "cls.name(desc)ret" — the identity a call site and a definition agree on */
+export type MemberKey = string;
+
+export interface ReachResult {
+  methods: Set<MemberKey>;            // bodies the analysis walked
+  instantiated: Set<string>;          // classes a reachable new-instance creates
+  classes: Set<string>;               // classes touched at all
+  unresolvedMethods: Map<MemberKey, number>;  // call sites that resolved to nothing
+  unresolvedFields: Map<MemberKey, number>;
+  nativeMethods: Map<MemberKey, number>;      // reachable and `native`: the JNI line
+  absentClasses: Map<string, number>;         // named by a reachable instruction, defined nowhere
+}
+
+interface ClassRec {
+  loc: { dex: DexFile; defIdx: number };
+  def?: ClassDef;
+  own?: Map<string, EncodedMethod>;   // name+desc → declaration, this class only
+  fields?: Set<string>;
+  supers?: string[];                  // transitive, self excluded
+}
+
+/** name+desc of a method ref, memoised per dex: the walk asks for these once per call site */
+const sigCaches = new WeakMap<DexFile, (string | undefined)[]>();
+function sigOf(dex: DexFile, mIdx: number): string {
+  let c = sigCaches.get(dex);
+  if (!c) sigCaches.set(dex, (c = []));
+  return (c[mIdx] ??= dex.method(mIdx).name + dex.methodDesc(mIdx));
+}
+
+/** a type descriptor's class name; arrays reduce to their element, primitives to "" */
+function typeName(desc: string): string {
+  let i = 0;
+  while (desc[i] === "[") i++;
+  const e = desc.slice(i);
+  return e[0] === "L" ? descToName(e) : "";
+}
+
+export class Program {
+  private byName = new Map<string, ClassRec>();
+
+  add(dex: DexFile) {
+    for (let i = 0; i < dex.classDefCount; i++) {
+      const name = descToName(dex.type(dex.classDef2Type(i)));
+      if (!this.byName.has(name)) this.byName.set(name, { loc: { dex, defIdx: i } });
+    }
+  }
+
+  has(name: string): boolean { return this.byName.has(name); }
+  get size(): number { return this.byName.size; }
+  names(): IterableIterator<string> { return this.byName.keys(); }
+  dexOf(name: string): DexFile | null { return this.byName.get(name)?.loc.dex ?? null; }
+
+  def(name: string): ClassDef | null {
+    const rec = this.byName.get(name);
+    if (!rec) return null;
+    return (rec.def ??= rec.loc.dex.classDef(rec.loc.defIdx));
+  }
+
+  private own(name: string): Map<string, EncodedMethod> | null {
+    const rec = this.byName.get(name);
+    if (!rec) return null;
+    if (rec.own) return rec.own;
+    const def = this.def(name)!, dex = rec.loc.dex;
+    const m = (rec.own = new Map());
+    for (const em of def.directMethods) m.set(sigOf(dex, em.methodIdx), em);
+    for (const em of def.virtualMethods) m.set(sigOf(dex, em.methodIdx), em);
+    return m;
+  }
+
+  private superOf(name: string): string | null {
+    const rec = this.byName.get(name);
+    const def = rec && this.def(name);
+    if (!rec || !def || def.superIdx === NO_INDEX) return null;
+    return descToName(rec.loc.dex.type(def.superIdx));
+  }
+
+  /** every supertype, classes and interfaces, transitively */
+  supers(name: string): string[] {
+    const rec = this.byName.get(name);
+    if (!rec) return [];
+    if (rec.supers) return rec.supers;
+    rec.supers = [];   // stands in while we recurse, so a malformed cycle terminates
+    const def = this.def(name)!, dex = rec.loc.dex;
+    const out = new Set<string>();
+    const parents = def.interfaces.map((i) => descToName(dex.type(i)));
+    const sup = this.superOf(name);
+    if (sup) parents.unshift(sup);
+    for (const p of parents) {
+      out.add(p);
+      for (const s of this.supers(p)) out.add(s);
+    }
+    return (rec.supers = [...out]);
+  }
+
+  /** the declaration a call on `start` reaches, walking up as the JVM does */
+  resolve(start: string, sig: string): { cls: string; m: EncodedMethod } | null {
+    for (let c: string | null = start; c; c = this.superOf(c)) {
+      const m = this.own(c)?.get(sig);
+      if (m) return { cls: c, m };
+    }
+    for (const s of this.supers(start)) {          // interface defaults, after the class chain
+      const m = this.own(s)?.get(sig);
+      if (m?.codeOff) return { cls: s, m };
+    }
+    return null;
+  }
+
+  hasField(start: string, name: string): boolean {
+    for (const c of [start, ...this.supers(start)]) {
+      const rec = this.byName.get(c);
+      const def = rec && this.def(c);
+      if (!rec || !def) continue;
+      if (!rec.fields) {
+        rec.fields = new Set();
+        for (const f of def.instanceFields) rec.fields.add(rec.loc.dex.field(f.fieldIdx).name);
+        for (const f of def.staticFields) rec.fields.add(rec.loc.dex.field(f.fieldIdx).name);
+      }
+      if (rec.fields.has(name)) return true;
+    }
+    return false;
+  }
+}
+
+const bump = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) ?? 0) + 1);
+
+const INVOKE: Record<number, 0 | 1> = {   // 1 = virtual/interface (dispatched), 0 = exact
+  0x6e: 1, 0x6f: 0, 0x70: 0, 0x71: 0, 0x72: 1,
+  0x74: 1, 0x75: 0, 0x76: 0, 0x77: 0, 0x78: 1,
+};
+
+export function reach(p: Program, roots: MemberKey[], rootClasses: string[] = []): ReachResult {
+  const r: ReachResult = {
+    methods: new Set(), instantiated: new Set(), classes: new Set(),
+    unresolvedMethods: new Map(), unresolvedFields: new Map(),
+    nativeMethods: new Map(), absentClasses: new Map(),
+  };
+  const work: MemberKey[] = [];
+  // the two halves of a virtual site arrive in either order, so each remembers what the
+  // other has already seen rather than rescanning
+  const sitesBySuper = new Map<string, Set<string>>();    // declared type → sigs called on it
+  const instancesBySuper = new Map<string, string[]>();   // declared type → created subtypes
+
+  const addMethod = (cls: string, sig: string) => {
+    const k = cls + "." + sig;
+    if (!r.methods.has(k)) { r.methods.add(k); work.push(k); }
+  };
+
+  function touchClass(name: string) {
+    if (!name) return;
+    // absent classes count every reference, so the report ranks by how much depends on one
+    if (!p.has(name)) { bump(r.absentClasses, name); return; }
+    if (r.classes.has(name)) return;
+    r.classes.add(name);
+    if (p.resolve(name, "<clinit>()V")) addMethod(name, "<clinit>()V");   // first static touch
+  }
+
+  function instantiate(name: string) {
+    if (r.instantiated.has(name)) return;
+    r.instantiated.add(name);
+    touchClass(name);
+    if (!p.has(name)) return;
+    for (const s of [name, ...p.supers(name)]) {
+      let list = instancesBySuper.get(s);
+      if (!list) instancesBySuper.set(s, (list = []));
+      list.push(name);
+      const sigs = sitesBySuper.get(s);
+      if (sigs) for (const sig of sigs) {
+        const hit = p.resolve(name, sig);
+        if (hit?.m.codeOff) addMethod(hit.cls, sig);
+      }
+    }
+  }
+
+  function noteDecl(cls: string, sig: string) {
+    const hit = p.resolve(cls, sig);
+    if (!hit) { bump(r.unresolvedMethods, cls + "." + sig); return null; }
+    if (!hit.m.codeOff && hit.m.flags & ACC.NATIVE) bump(r.nativeMethods, hit.cls + "." + sig);
+    return hit;
+  }
+
+  function virtualSite(declared: string, sig: string) {
+    touchClass(declared);
+    let sigs = sitesBySuper.get(declared);
+    if (!sigs) sitesBySuper.set(declared, (sigs = new Set()));
+    if (sigs.has(sig)) return;
+    sigs.add(sig);
+    for (const t of instancesBySuper.get(declared) ?? []) {
+      const hit = p.resolve(t, sig);
+      if (hit?.m.codeOff) addMethod(hit.cls, sig);
+    }
+    noteDecl(declared, sig);   // the declared type may hold the only body, or a native
+  }
+
+  function exactSite(cls: string, sig: string) {
+    touchClass(cls);
+    const hit = noteDecl(cls, sig);
+    if (hit?.m.codeOff) addMethod(hit.cls, sig);
+  }
+
+  for (const c of rootClasses) instantiate(c);
+  for (const k of roots) { const i = k.indexOf("."); addMethod(k.slice(0, i), k.slice(i + 1)); }
+
+  while (work.length) {
+    const k = work.pop()!;
+    const i = k.indexOf(".");
+    const hit = p.resolve(k.slice(0, i), k.slice(i + 1));
+    if (!hit?.m.codeOff) continue;
+    const dex = p.dexOf(hit.cls)!;
+    const code = dex.code(hit.m.codeOff);
+    const insns = code.insns;
+    for (let pc = 0; pc < insns.length; ) {
+      const op = insns[pc] & 0xff;
+      const kind = INVOKE[op];
+      if (kind !== undefined) {
+        const mIdx = insns[pc + 1];
+        const owner = typeName(dex.type(dex.method(mIdx).cls));
+        if (owner) (kind ? virtualSite : exactSite)(owner, sigOf(dex, mIdx));
+      } else if (op === 0x22) {                                  // new-instance
+        const t = typeName(dex.type(insns[pc + 1]));
+        if (p.has(t)) instantiate(t); else touchClass(t);
+      } else if (op === 0x23 || op === 0x24 || op === 0x25 ||    // new-array, filled-new-array
+                 op === 0x1c || op === 0x1f || op === 0x20) {    // const-class, check-cast, instance-of
+        touchClass(typeName(dex.type(insns[pc + 1])));
+      } else if (op >= 0x52 && op <= 0x6d) {                     // iget/iput/sget/sput
+        const f = dex.field(insns[pc + 1]);
+        const owner = typeName(dex.type(f.cls));
+        touchClass(owner);
+        if (owner && (!p.has(owner) || !p.hasField(owner, f.name))) bump(r.unresolvedFields, owner + "." + f.name);
+      }
+      let len: number;
+      // one unwalkable instruction must not cost us the rest of the program
+      try { len = insnLen(insns, pc); } catch { break; }
+      if (len <= 0) break;
+      pc += len;
+    }
+    for (const t of code.tries) for (const [typeIdx] of t.handlers) touchClass(typeName(dex.type(typeIdx)));
+  }
+
+  return r;
+}

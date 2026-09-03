@@ -164,12 +164,13 @@ and a `removeMessages` on something that is not our Handler.
 - Annotation-based ORMs: getMethods → getAnnotation(@Column) → getColumnIndex → Method.invoke.
   DEX annotations live in annotations_directory_item (class_def+20). reflect Method.invoke
   must UNBOX boxed primitive args and BOX primitive returns.
-- Interface method refs (SharedPreferences etc.) dispatch dynamically, so scripts/audit.ts
-  never lists them. That does NOT make them optional: an app class declaring
-  `implements View$OnClickListener` cannot link until the interface is registered, and
-  Runtime.link auto-stubs it and poisons everything downstream. Register every callback
-  interface an app implements — the runtime list (`wd.rt.missing`, or run.json's per-step
-  `newMissing`) is the real work queue, not the static audit.
+- Interface method refs (SharedPreferences etc.) dispatch dynamically. That does NOT make them
+  optional: an app class declaring `implements View$OnClickListener` cannot link until the
+  interface is registered, and Runtime.link auto-stubs it and poisons everything downstream.
+  `bun run audit` answers this properly now — rapid type analysis resolves an interface site
+  against the types some reachable new-instance creates, so the work queue is computable
+  before the apk runs and is not "whatever crashed today". `wd.rt.missing` and run.json's
+  per-step `newMissing` remain the check that the queue was right.
 - ViewPager caches child measure specs in fields → layout settle passes (uiState.settle).
 - Duplicate registration bites: rt.register keeps the LAST spec for a name (the earlier one
   with more methods is silently gone), and nothing errors. The Verify grep is what catches it.
@@ -330,8 +331,10 @@ screen — any direct fillText in the framework must set its own.)
 
 ## Debug tools
 - `bun run <tool> <apk>` (package.json): `inspect` (manifest + dex stats), `smoke` (compile
-  every class eagerly; the compile-failure check), `audit` (static missing-API list — see the
-  interface caveat above), `opscan`, `dis <apk> <class> [method]` (disassemble one method — the
+  every class eagerly; the compile-failure check), `audit [--framework] [--all] [--json f]`
+  (whole-program reachability: what this apk can actually reach and we do not answer for,
+  ranked by call sites, methods AND fields; with --framework the real AOSP dex joins the
+  program and the answer becomes the native methods it stands on), `opscan`, `dis <apk> <class> [method]` (disassemble one method — the
   fastest way to learn what an app actually calls), `jsrc` (dump generated JS), `layout <apk>
   <0xid|name>` (dump a binary layout XML), `findstr <apk> <needle>` (grep the dex string pools),
   `trace` (TRACE=<class-regex> METH=<regex>: log entry/exit of matching methods during boot),
@@ -344,7 +347,10 @@ screen — any direct fillText in the framework must set its own.)
   that exercises the DOM listeners, since the e2e driver goes through page.evaluate into wd.*),
   `gen-framework-res` (rebuild the
   committed vendor/framework-res.apk with aapt2 from the SDK's own platform res tree; needs the
-  Android SDK, but nothing else does -- the apk is committed).
+  Android SDK, but nothing else does -- the apk is committed),
+  `gen-framework` (pull framework.jar + framework-res.apk off the booted reference AVD into
+  vendor/aosp and verify the two halves name the same resources -- see "One build, or none"),
+  `fwscan [jar] [prefix]` (what a dex would ask of us: classes, methods, natives).
 - browser: `http://localhost:4080/?apk=<file>` boots that apk on load (reload = rebundle +
   reboot); `wd.{boot,app,tree,find,locateText,logs,rt,uiState,overlays,perf,perfReset,tap,
   tapText,swipe,type,back,alive,reset,rnodes,measure,querydb,mainDbg,native,web,ticks,setGL}`
