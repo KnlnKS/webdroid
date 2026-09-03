@@ -885,6 +885,18 @@ no colour-long API at all, which killed every `Paint.setColor` — it caches `Co
 Left: Bitmap (46), the decoders, and `nativeOpenXmlAsset` with the XmlBlock pull parser
 behind it, which is the layout-inflation path and the next thing the view stack needs.
 
+## A layer-list item carries its own size, and a gravity to place it by
+`JLayerDrawable.layout()` has implemented AOSP's `updateLayerBounds` — insets, then an
+explicit layer size placed by its gravity — the whole time. The inflater never filled `w`,
+`h` or `gravity` in, so every `<item>` was stretched to the drawable's full bounds.
+
+What that looks like: harmonic's "Top Stories" spinner background is a layer-list whose
+second layer is the dropdown arrow. Stretched from 24dp to the spinner's 404x105, the
+arrow's triangle became a tapered wedge drawn straight through the title text, and the caret
+itself was nowhere to be seen. Reading android:width/height/gravity puts it back where it
+belongs — and mihon-app moved 79.7% -> 77.4% off the same change, because it is not one
+drawable, it is every layer-list in every app.
+
 ## A ripple's mask is not one of its layers
 `selectableItemBackground` is `<ripple><item android:id="@android:id/mask"
 android:drawable="@android:color/white"/></ripple>`. AOSP's RippleDrawable treats the layer

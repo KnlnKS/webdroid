@@ -1014,7 +1014,8 @@ const AT = attrTable(
   "bottomRightRadius", "width", "height", "left", "top", "right", "bottom", "startColor", "centerColor",
   "endColor", "angle", "type", "gradientRadius", "src", "alpha", "tint", "viewportWidth",
   "viewportHeight", "pathData", "fillColor", "strokeColor", "strokeWidth", "fillAlpha", "fillType",
-  "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id");
+  "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id",
+  "gravity");
 async function loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): Promise<JDrawable> {
   const root = parseAXML(bytes);
   return inflateDrawableNode(res, root, theme);
@@ -1102,6 +1103,9 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
         if (c.name !== "item") continue;
         const child = await itemDrawable(res, c, theme);
         if (child) {
+          // AOSP LayerDrawable: an item may carry its own size and a gravity to place it by,
+          // and layout() already implements that. Without them a 24dp arrow inflated into a
+          // spinner's background is stretched across the whole widget.
           d.layers.push({
             d: child,
             insets: [
@@ -1110,6 +1114,9 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
               rvDimen(res, nodeAttr(res, c, AT.right), 0),
               rvDimen(res, nodeAttr(res, c, AT.bottom), 0),
             ],
+            w: rvDimen(res, nodeAttr(res, c, AT.width), -1),
+            h: rvDimen(res, nodeAttr(res, c, AT.height), -1),
+            gravity: nodeAttr(res, c, AT.gravity)?.d,
           });
           const idv = nodeAttr(res, c, AT.id);
           d.ids.push(idv ? idv.d : null);
