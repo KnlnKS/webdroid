@@ -183,6 +183,14 @@ and its one accepted miss is `WindowExtensionsProvider`.
   `[object Object]` for every `Html.fromHtml` Spanned handed to a dialog or Toast. CharSequence
   parameters resolve through `csText` (Java `toString()`, so app classes work too); Spannables
   carry a JS `toString` for the sites that still coerce.
+- **A widget resolves its own default style**: initViewFromCtx takes the widget's style attribute
+  (buttonStyle, editTextStyle, ...) and passes it to obtainStyled as defStyleAttr, for the base
+  View attributes as well as the text ones. Without it tiers 3 and 4 of the cascade are dead for
+  background/padding/minWidth/minHeight, which is why that chrome used to be hand-built. It runs
+  with no AttributeSet too: `new Button(ctx)` gets its background from the style on a device.
+- **android:theme on a tag wraps the subtree**: the inflater builds a ContextThemeWrapper and
+  inflates the tag and its children against it, and the AttributeSet carries that theme, not the
+  application's. 90 of mihon's layouts depend on it; so do the framework's own.
 - **AbsListView selection and scroll callbacks are layout-time state**: apps call
   `setSelection`/`setSelectionFromTop` right after `setAdapter`/`notifyDataSetChanged`, before any
   row has a height, so the request lands in the next layout (`pendingSel`, AOSP's
@@ -375,6 +383,10 @@ them a whole unreferenced file, before anyone checked.
 See tests/e2e/README.md for the commands and the metrics. What bites:
 - Per-step missing-API capture: each step prints the APIs it was the first to ask for and
   not find. That list is the dev loop's work queue.
+- `unreadAttrs` beside it (`wd.unreadAttrs()`, and per step in run.json) is the same queue for
+  attributes: a framework attribute a layout carried that nothing asked `obtainStyled` for.
+  Those render wrong in total silence -- no missing class, no missing method, no log line -- so
+  a screen that is subtly off with a clean missing list is usually one of these.
 - `settle()` accepts a steady two-frame oscillation, not just identical frames — the EditText
   caret blinks every 530ms, and 12 of 39 fitnotes steps used to burn the full 20s timeout.
 - The harness writes to ONE shared output tree (tests/e2e/actual, report/report.json).
