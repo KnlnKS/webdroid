@@ -11,7 +11,7 @@ import { type Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, rvColor, r
 import { JResources, JAssetManager } from "./resnative";
 import { signatures, JActivityInfo } from "./pm";
 import { mkUri, type JUri } from "./net";
-import { JView, JViewGroup, AID, requestLayout, invalidate, specSize, findById, attachView, detachView, dispatchConfigurationChanged } from "./view";
+import { JView, JViewGroup, AID, requestLayout, invalidate, specSize, findById, attachView, detachView, dispatchConfigurationChanged, rootWindowInsets } from "./view";
 import { JFrameLayout, JLinearLayout } from "./widget";
 import { getInflater, inflateLayout } from "./inflate";
 import { loadDrawable, loadDrawableRV, JColorDrawable, JDrawable, loadColorStateList } from "./drawable";
@@ -20,7 +20,7 @@ import { onMain } from "./mainloop";
 import { isMusicActive } from "./media";
 import { TV, attr, attrStr, type XmlNode, parseAXML } from "./axml";
 import { csText } from "./text";
-import { JCanvas, cssColor, insetsOf, tfMedium } from "./graphics";
+import { JCanvas, cssColor, tfMedium } from "./graphics";
 import { showPopupMenu, addOverlay, removeOverlay, showToast } from "./popup";
 import { dbPath } from "./sqlite";
 
@@ -1862,7 +1862,7 @@ rt.register({
   methods: {
     "getBounds()Landroid/graphics/Rect;": () => newObj("android/graphics/Rect", "(IIII)V", 0, 0, device.width, device.height - device.statusBar),
     "getDensity()F": () => 2,
-    "getWindowInsets()Landroid/view/WindowInsets;": () => null,
+    "getWindowInsets()Landroid/view/WindowInsets;": () => rootWindowInsets(),
   },
 });
 rt.register({
@@ -2318,18 +2318,6 @@ rt.register({
   },
 });
 rt.register({ name: "android/window/OnBackInvokedCallback", ctor: class extends JObj {} });
-// The screen models no inset other than the status bar — no nav bar, no display cutout.
-const STATUS_BAR_INSET_PX = device.statusBar;
-rt.register({
-  name: "android/view/WindowInsets", ctor: class extends JObj {},
-  methods: {
-    "<init>(Landroid/view/WindowInsets;)V": () => {},
-    "getSystemWindowInsets()Landroid/graphics/Insets;": () => insetsOf(0, STATUS_BAR_INSET_PX, 0, 0),
-    // type is a WindowInsets.Type bitmask; bit 0 (statusBars(), and any combo that includes
-    // it such as systemBars()) is the only inset this fixed viewport actually tracks.
-    "getInsets(I)Landroid/graphics/Insets;": (type: number) => insetsOf(0, (type & 1) ? STATUS_BAR_INSET_PX : 0, 0, 0),
-  },
-});
 rt.register({
   name: "android/net/http/X509TrustManagerExtensions", ctor: class extends JObj {},
   methods: {

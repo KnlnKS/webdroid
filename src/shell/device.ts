@@ -15,6 +15,7 @@ import { onMain, inMainJob } from "../android/mainloop";
 import {
   JView, JViewGroup, uiState, measureView, layoutView, drawView, makeSpec, MS_EXACTLY,
   JMotionEvent, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall,
+  dispatchWindowInsets,
 } from "../android/view";
 import { JCanvas, cssColor, tfMedium } from "../android/graphics";
 import { overlays, drawToasts, dismissOverlay } from "../android/popup";
@@ -220,6 +221,7 @@ async function launchActivity0(cls: string, intent: JIntent | null, relaunch?: R
     void buildOptionsMenu(act);
     uiState.needsLayout = true;
     uiState.needsDraw = true;
+    uiState.needsInsets = true; // a new window: its decor has never been handed the insets
     // Fragment pages (ViewPager/FragmentPagerAdapter) instantiate asynchronously, after this
     // frame's layout. Schedule extra re-layouts so they get measured/laid out once present.
     uiState.settle = Math.max(uiState.settle, 6);
@@ -322,6 +324,7 @@ async function finishActivity(act: JActivity) {
   await lifecycleStep(act, "onDestroy", "Destroyed");
   uiState.needsLayout = true;
   uiState.needsDraw = true;
+  uiState.needsInsets = true; // the revealed activity's decor is the new dispatch target
 }
 
 async function buildOptionsMenu(act: JActivity) {
@@ -415,6 +418,15 @@ async function tick0(ctx: CanvasRenderingContext2D) {
     if (!decor) return;
     let didLayout = false;
     const contentY = contentTop(), contentH = SCREEN_H - contentY;
+    // AOSP's performTraversals dispatches insets before measure, so padding a fitsSystemWindows
+    // consumer sets is visible to the same pass. Waiting for one completed layout keeps a
+    // listener that reads getHeight() from seeing zeros; clearing the flag BEFORE dispatching
+    // means a listener's own requestApplyInsets() re-arms the next frame instead of recursing.
+    if (uiState.needsInsets && decor.right > 0) {
+      uiState.needsInsets = false;
+      try { await dispatchWindowInsets(decor); } catch (e) { console.error("[insets]", e); }
+      uiState.needsLayout = true;
+    }
     if (uiState.needsLayout) {
       uiState.needsLayout = false;
       didLayout = true;

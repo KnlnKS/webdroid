@@ -11,6 +11,9 @@ export const device = {
   width: 720,
   height: 1280,
   statusBar: 48,
+  /** the gesture/navigation bar: not painted (the activity spans the whole framebuffer), but it
+   *  is what the device reports as the bottom window inset, so an edge-to-edge app pads for it */
+  navBar: 48,
   density: 2,
   densityDpi: 320,
   sdk: 33,
