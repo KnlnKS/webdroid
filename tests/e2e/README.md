@@ -77,6 +77,38 @@ cropped to `y ∈ [48, 1232)`, dropping the status bar (48px, `device.statusBar`
 
 Also reported per flow: **rendered N/total** and **WEDGED at step N** (see below).
 
+### structure — which view is wrong, not how much
+
+Beside the pixel numbers, each step compares the two **view hierarchies**: what
+`uiautomator dump` reported on the device against what `wd.uiTree()` reports here, both in
+absolute device px with the status bar included.
+
+Views are paired by what both sides can name the same way — resource id first, then text, then
+content-description, which is what the tap resolver already matches on. Anonymous containers
+are not comparable; system chrome is not the app's hierarchy. **STRUCTURE** is the share of
+nameable device views that webdroid puts somewhere else (>2px on any edge) or does not have at
+all, so it falls as things improve like everything else here. The worst offenders print with
+both sets of bounds:
+
+```
+  STRUCTURE  83.33% of nameable device views misplaced, over 18 steps
+    02 t:OK off by 494px  device [50,1082,670,1178] here [544,1084,648,1172]
+```
+
+That line says the dialog's OK button is within 2px vertically and 104px wide where the device
+makes it 620 — the button bar is not stretching. A content percentage cannot say that.
+
+The device half comes from `NN-id.ui.json` beside each golden png, written by `e2e:record`.
+Goldens recorded before that existed have no hierarchy files, and the metric falls back to the
+one node the manifest already carries for every `tapText` step: the bounds the device resolved
+that anchor to. Those are read **a step behind** — a tap resolves against the screen already on
+display, so the bounds recorded for step N+1 describe the frame captured at step N. Re-record to
+compare whole hierarchies instead of one node per step.
+
+A flow that pairs nothing says so rather than reporting 100%: Compose draws through canvas ops
+and exposes no `View.text` for either side to name, which is why those flows also fall back to
+recorded coordinates for their taps.
+
 ### Non-renders score 100%
 
 A step webdroid never rendered — because its main-looper queue was wedged — is scored a flat

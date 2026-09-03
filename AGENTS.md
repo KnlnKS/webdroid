@@ -383,6 +383,12 @@ them a whole unreferenced file, before anyone checked.
 See tests/e2e/README.md for the commands and the metrics. What bites:
 - Per-step missing-API capture: each step prints the APIs it was the first to ask for and
   not find. That list is the dev loop's work queue.
+- **STRUCTURE** is the structural half of the diff: the two view hierarchies paired by resource
+  id / text / content-description, reported as the share of nameable device views webdroid puts
+  somewhere else. It names the view and prints both sets of bounds, which is what turns "the
+  settings screen is off" into "the dialog button bar is not stretching". Whole-hierarchy
+  goldens need a re-record (`e2e:record` writes NN-id.ui.json now); until then it falls back to
+  the tap anchor the manifest already carries, read one step behind.
 - `unreadAttrs` beside it (`wd.unreadAttrs()`, and per step in run.json) is the same queue for
   attributes: a framework attribute a layout carried that nothing asked `obtainStyled` for.
   Those render wrong in total silence -- no missing class, no missing method, no log line -- so
