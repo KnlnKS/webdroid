@@ -14,6 +14,7 @@
 // there because that said so.
 
 import { rt, JObj } from "../jvm/runtime";
+import { handle, deref, replace, release } from "./handles";
 import {
   JPaint, JTypeface, tfDefault, mkTypeface, measureText,
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
@@ -22,6 +23,7 @@ import {
 import { newObj } from "../jvm/natives/jlang";
 import { charsToString } from "../jvm/abi";
 import { JPath, pathBounds, pathOffset, pathTransform } from "./path";
+import { greedyBreaks, type JTextPaint, type TLine } from "./text";
 import {
   Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, resolveStyleValue, rvString,
   currentResources, T_STR, T_PX, type RV,
@@ -31,18 +33,9 @@ import { jarray } from "../jvm/abi";
 import { device } from "../shell/config";
 
 // ── handles ────────────────────────────────────────────────────────────────────────────
-const objs: (object | undefined)[] = [undefined];
-
-/** hand framework Java a long for this object */
-export function handle(o: object): bigint {
-  objs.push(o);
-  return BigInt(objs.length - 1);
-}
-/** the object behind a long, or undefined for the null handle */
-export function deref<T>(h: bigint): T {
-  return objs[Number(h)] as T;
-}
-function release(h: bigint) { objs[Number(h)] = undefined; }
+// The table itself is src/android/handles.ts: AOSP bytecode asks our own objects for their
+// native pointer too, and graphics.ts cannot import this file.
+export { handle, deref } from "./handles";
 
 type Fn = (...a: never[]) => unknown;
 /** register the native halves of one class, by their exact AOSP descriptors */
@@ -120,9 +113,9 @@ function matrixOps(name: string, make: (...a: number[]) => Mat, arity: number): 
   const plain = `(J${"F".repeat(arity)})V`;
   const pivoted = `(J${"F".repeat(arity + 2)})V`;
   const at = (a: number[]) => (a.length > arity ? about(make(...a.slice(0, arity)), a[arity], a[arity + 1]) : make(...a));
-  const set = (h: bigint, ...a: number[]) => { objs[Number(h)] = at(a); };
-  const pre = (h: bigint, ...a: number[]) => { objs[Number(h)] = mul(deref<Mat>(h), at(a)); };
-  const post = (h: bigint, ...a: number[]) => { objs[Number(h)] = mul(at(a), deref<Mat>(h)); };
+  const set = (h: bigint, ...a: number[]) => { replace(h, at(a)); };
+  const pre = (h: bigint, ...a: number[]) => { replace(h, mul(deref<Mat>(h), at(a))); };
+  const post = (h: bigint, ...a: number[]) => { replace(h, mul(at(a), deref<Mat>(h))); };
   return {
     [`nSet${name}${plain}`]: set, [`nSet${name}${pivoted}`]: set,
     [`nPre${name}${plain}`]: pre, [`nPre${name}${pivoted}`]: pre,
@@ -159,11 +152,11 @@ delegate("android/graphics/Matrix", {
   ...matrixOps("Skew", skewM, 2),
   ...matrixOps("Rotate", rotateM, 1),
   ...matrixOps("SinCos", sinCosM, 2),
-  "nReset(J)V": (h: bigint) => { objs[Number(h)] = identity(); },
-  "nSet(JJ)V": (h: bigint, s: bigint) => { objs[Number(h)] = s ? Float64Array.from(deref<Mat>(s)) : identity(); },
-  "nSetConcat(JJJ)V": (h: bigint, a: bigint, b: bigint) => { objs[Number(h)] = mul(deref<Mat>(a), deref<Mat>(b)); },
-  "nPreConcat(JJ)V": (h: bigint, o: bigint) => { objs[Number(h)] = mul(deref<Mat>(h), deref<Mat>(o)); },
-  "nPostConcat(JJ)V": (h: bigint, o: bigint) => { objs[Number(h)] = mul(deref<Mat>(o), deref<Mat>(h)); },
+  "nReset(J)V": (h: bigint) => { replace(h, identity()); },
+  "nSet(JJ)V": (h: bigint, s: bigint) => { replace(h, s ? Float64Array.from(deref<Mat>(s)) : identity()); },
+  "nSetConcat(JJJ)V": (h: bigint, a: bigint, b: bigint) => { replace(h, mul(deref<Mat>(a), deref<Mat>(b))); },
+  "nPreConcat(JJ)V": (h: bigint, o: bigint) => { replace(h, mul(deref<Mat>(h), deref<Mat>(o))); },
+  "nPostConcat(JJ)V": (h: bigint, o: bigint) => { replace(h, mul(deref<Mat>(o), deref<Mat>(h))); },
   "nIsIdentity(J)Z": (h: bigint) => (isIdentity(deref<Mat>(h)) ? 1 : 0),
   "nIsAffine(J)Z": (h: bigint) => { const m = deref<Mat>(h); return m[6] === 0 && m[7] === 0 && m[8] === 1 ? 1 : 0; },
   "nRectStaysRect(J)Z": (h: bigint) => {
@@ -172,11 +165,11 @@ delegate("android/graphics/Matrix", {
   },
   "nEquals(JJ)Z": (a: bigint, b: bigint) => (deref<Mat>(a).every((v, i) => v === deref<Mat>(b)[i]) ? 1 : 0),
   "nGetValues(J[F)V": (h: bigint, out: Float32Array) => out.set(deref<Mat>(h)),
-  "nSetValues(J[F)V": (h: bigint, v: Float32Array) => { objs[Number(h)] = Float64Array.from(v); },
+  "nSetValues(J[F)V": (h: bigint, v: Float32Array) => { replace(h, Float64Array.from(v)); },
   "nInvert(JJ)Z": (h: bigint, into: bigint) => {
     const inv = invert(deref<Mat>(h));
     if (!inv) return 0;
-    objs[Number(into)] = inv;
+    replace(into, inv);
     return 1;
   },
   "nMapPoints(J[FI[FIIZ)V": (h: bigint, dst: Float32Array, dstI: number, src: Float32Array, srcI: number, n: number, isPts: number) => {
@@ -208,7 +201,7 @@ delegate("android/graphics/Matrix", {
     const k = stf === 2 ? 0.5 : stf === 3 ? 1 : 0;
     const tx = dst.left - src.left * sx + (stf === 0 ? 0 : slackX * k);
     const ty = dst.top - src.top * sy + (stf === 0 ? 0 : slackY * k);
-    objs[Number(h)] = Float64Array.of(sx, 0, tx, 0, sy, ty, 0, 0, 1);
+    replace(h, Float64Array.of(sx, 0, tx, 0, sy, ty, 0, 0, 1));
     return 1;
   },
   // 1 point is a translation, 2 a similarity, 3 a full affine. 4 is a perspective solve we
@@ -216,8 +209,8 @@ delegate("android/graphics/Matrix", {
   "nSetPolyToPoly(J[FI[FII)Z": (h: bigint, src: Float32Array, si: number, dst: Float32Array, di: number, n: number) => {
     const sp = (i: number) => [src[si + i * 2], src[si + i * 2 + 1]] as const;
     const dp = (i: number) => [dst[di + i * 2], dst[di + i * 2 + 1]] as const;
-    if (n === 0) { objs[Number(h)] = identity(); return 1; }
-    if (n === 1) { objs[Number(h)] = translateM(dp(0)[0] - sp(0)[0], dp(0)[1] - sp(0)[1]); return 1; }
+    if (n === 0) { replace(h, identity()); return 1; }
+    if (n === 1) { replace(h, translateM(dp(0)[0] - sp(0)[0], dp(0)[1] - sp(0)[1])); return 1; }
     if (n === 2) {
       const [s0, s1] = [sp(0), sp(1)], [d0, d1] = [dp(0), dp(1)];
       const sdx = s1[0] - s0[0], sdy = s1[1] - s0[1];
@@ -228,7 +221,7 @@ delegate("android/graphics/Matrix", {
       const m = Float64Array.of(a, -b, 0, b, a, 0, 0, 0, 1);
       const [mx, my] = mapPoint(m, s0[0], s0[1]);
       m[2] = d0[0] - mx; m[5] = d0[1] - my;
-      objs[Number(h)] = m;
+      replace(h, m);
       return 1;
     }
     if (n === 3) {
@@ -241,7 +234,7 @@ delegate("android/graphics/Matrix", {
       ];
       const [a, c] = solve(d0[0], d1[0], d2[0]);
       const [b, d] = solve(d0[1], d1[1], d2[1]);
-      objs[Number(h)] = Float64Array.of(a, c, d0[0] - a * s0[0] - c * s0[1], b, d, d0[1] - b * s0[0] - d * s0[1], 0, 0, 1);
+      replace(h, Float64Array.of(a, c, d0[0] - a * s0[0] - c * s0[1], b, d, d0[1] - b * s0[0] - d * s0[1], 0, 0, 1));
       return 1;
     }
     return 0;
@@ -309,7 +302,7 @@ delegate("android/graphics/Paint", {
     return handle(p);
   },
   "nGetNativeFinalizer()J": () => FINALIZER,
-  "nReset(J)V": (h: bigint) => { objs[Number(h)] = new JPaint(); },
+  "nReset(J)V": (h: bigint) => { replace(h, new JPaint()); },
   "nSet(JJ)V": (h: bigint, src: bigint) => copyPaint(paint(src), paint(h)),
 
   // colour and geometry
@@ -621,7 +614,7 @@ delegate("android/graphics/Canvas", {
   "nInitRaster(JJ)J": (b: bigint) => handle(bitmapCanvas(deref<JBitmap>(b))),
   "nInitRaster(J)J": (b: bigint) => handle(bitmapCanvas(deref<JBitmap>(b))),
   "nGetNativeFinalizer()J": () => FINALIZER,
-  "nSetBitmap(JJ)V": (h: bigint, b: bigint) => { objs[Number(h)] = bitmapCanvas(deref<JBitmap>(b)); },
+  "nSetBitmap(JJ)V": (h: bigint, b: bigint) => { replace(h, bitmapCanvas(deref<JBitmap>(b))); },
   "nGetWidth(J)I": (h: bigint) => canvas(h).w,
   "nGetHeight(J)I": (h: bigint) => canvas(h).h,
   "nIsOpaque(J)Z": () => 0,
@@ -649,7 +642,7 @@ delegate("android/graphics/Canvas", {
   "nSetMatrix(JJ)V": (h: bigint, m: bigint) => applyMatrix(canvas(h), m ? deref<Mat>(m) : identity(), true),
   "nGetMatrix(JJ)V": (h: bigint, into: bigint) => {
     const t = canvas(h).ctx.getTransform();
-    objs[Number(into)] = Float64Array.of(t.a, t.c, t.e, t.b, t.d, t.f, 0, 0, 1);
+    replace(into, Float64Array.of(t.a, t.c, t.e, t.b, t.d, t.f, 0, 0, 1));
   },
 
   "nClipRect(JFFFFI)Z": (h: bigint, l: number, t: number, r: number, b: number) => on("clipRect(FFFF)Z")(h, l, t, r, b),
@@ -765,6 +758,83 @@ function applyMatrix(c: JCanvas, m: Mat, replace: boolean) {
   if (replace) c.ctx.setTransform(m[0], m[3], m[1], m[4], m[2], m[5]);
   else c.ctx.transform(m[0], m[3], m[1], m[4], m[2], m[5]);
 }
+
+// ── android.graphics.text: MeasuredText and LineBreaker ────────────────────────────────
+// StaticLayout and Layout declare ZERO natives, so real AOSP line breaking is what these two
+// buy: everything above them is pure Java that already runs. The parameter meanings are not
+// guessable from the descriptors — nAddStyleRun is (builder, paint, lineBreakStyle,
+// lineBreakWordStyle, hyphenation, start, end, isRtl) — so they came out of appendStyleRun's
+// and computeLineBreaks' own bytecode, off the register moves into each range invoke.
+//
+// The breaking itself is text.ts's greedyBreaks, the body JLayout uses, so AOSP's Layout and
+// ours agree by construction rather than by two implementations happening to match. AOSP's
+// balanced and optimal strategies are a later, separate change; this is the greedy one.
+interface Run { start: number; end: number; paint: JTextPaint }
+interface Meas { text: string; runs: Run[] }
+interface Breaks { lines: TLine[]; asc: number; desc: number }
+
+const meas = (h: bigint) => deref<Meas>(h);
+/** the paint covering `at`, or the paragraph's first — one paint per paragraph is the common
+ *  case, and a run-aware breaker is what AOSP's own is, not what greedyBreaks is */
+const runPaint = (m: Meas, at = 0) => (m.runs.find((r) => at >= r.start && at < r.end) ?? m.runs[0])?.paint;
+const measWidth = (m: Meas, start: number, end: number) => {
+  const p = runPaint(m, start);
+  return p ? measureText(p, m.text.slice(start, end)) : 0;
+};
+
+delegate("android/graphics/text/MeasuredText$Builder", {
+  "nInitBuilder()J": () => handle({ text: "", runs: [] } as Meas),
+  "nFreeBuilder(J)V": release,
+  "nAddStyleRun(JJIIZIIZ)V": (h: bigint, pt: bigint, _lbStyle: number, _lbWordStyle: number, _hyphen: number, start: number, end: number) => {
+    meas(h).runs.push({ start, end, paint: paint(pt) as JTextPaint });
+  },
+  // a replacement span (an inline image) occupies its width and no text: nothing to measure
+  "nAddReplacementRun(JJIIF)V": () => {},
+  "nBuildMeasuredText(JJ[CZZZZ)J": (h: bigint, _hint: bigint, chars: Uint16Array) => {
+    const m = meas(h);
+    return handle({ text: charsToString(chars, 0, chars.length), runs: m.runs } as Meas);
+  },
+});
+
+delegate("android/graphics/text/MeasuredText", {
+  "nGetReleaseFunc()J": () => FINALIZER,
+  "nGetMemoryUsage(J)I": (h: bigint) => meas(h).text.length * 2,
+  "nGetWidth(JII)F": (h: bigint, start: number, end: number) => measWidth(meas(h), start, end),
+  "nGetCharWidthAt(JI)F": (h: bigint, i: number) => measWidth(meas(h), i, i + 1),
+  "nGetBounds(J[CIILandroid/graphics/Rect;)V": (h: bigint, _c: Uint16Array, start: number, end: number, r: JRect) => {
+    const m = meas(h), p = runPaint(m, start);
+    r.left = 0; r.right = Math.ceil(measWidth(m, start, end));
+    r.top = p ? Math.floor(fontAscent(p)) : 0;
+    r.bottom = p ? Math.ceil(fontDescent(p)) : 0;
+  },
+});
+
+delegate("android/graphics/text/LineBreaker", {
+  "nInit(IIZ[IZ)J": () => handle({ lines: [], asc: 0, desc: 0 } as Breaks),
+  "nGetReleaseFunc()J": () => FINALIZER,
+  "nGetReleaseResultFunc()J": () => FINALIZER,
+  "nComputeLineBreaks(J[CJIFIF[FFI)J": (_h: bigint, chars: Uint16Array, mt: bigint, len: number, firstWidth: number, firstCount: number, restWidth: number) => {
+    const m = meas(mt);
+    const p = runPaint(m);
+    // AOSP has already split the text into paragraphs and hands us ONE, with its terminating
+    // newline included. greedyBreaks splits on "\n" itself (JLayout gives it whole text), so
+    // the newline has to come off first or every paragraph gains an empty line after it — and
+    // the last break offset still has to cover it, because that is where the next paragraph
+    // starts and minikin reports the same.
+    const full = charsToString(chars, 0, len);
+    const body = full.endsWith("\n") ? full.slice(0, -1) : full;
+    const lines = p ? greedyBreaks(body, p, firstWidth, firstCount, restWidth) : [];
+    if (lines.length && body.length !== full.length) lines[lines.length - 1].end = full.length;
+    return handle({ lines, asc: p ? fontAscent(p) : 0, desc: p ? fontDescent(p) : 0 } as Breaks);
+  },
+  "nGetLineCount(J)I": (h: bigint) => deref<Breaks>(h).lines.length,
+  "nGetLineBreakOffset(JI)I": (h: bigint, i: number) => deref<Breaks>(h).lines[i]?.end ?? 0,
+  "nGetLineWidth(JI)F": (h: bigint, i: number) => deref<Breaks>(h).lines[i]?.width ?? 0,
+  "nGetLineAscent(JI)F": (h: bigint) => deref<Breaks>(h).asc,
+  "nGetLineDescent(JI)F": (h: bigint) => deref<Breaks>(h).desc,
+  // no hyphenation and no tabs, which is what the flags carry
+  "nGetLineFlag(JI)I": () => 0,
+});
 
 // ── android.os.SystemProperties ────────────────────────────────────────────────────────
 // Reached the moment any framework class runs: Typeface, Paint and the view stack all read
@@ -1128,7 +1198,7 @@ delegate("android/content/res/AssetManager", {
   // there are no file descriptors here: an asset is a zip entry, and the path form above is
   // the one the framework takes for everything it opens by name
   "nativeOpenXmlAssetFd(JILjava/io/FileDescriptor;)J": () => { throw rt.mkThrowable("java/io/FileNotFoundException", "no file descriptors"); },
-  "nativeAssetDestroy(J)V": (a: bigint) => { objs[Number(a)] = undefined; },
+  "nativeAssetDestroy(J)V": release,
   "nativeAssetGetLength(J)J": (a: bigint) => BigInt(deref<Cursor>(a).bytes.length),
   "nativeAssetGetRemainingLength(J)J": (a: bigint) => { const c = deref<Cursor>(a); return BigInt(c.bytes.length - c.pos); },
   "nativeAssetReadChar(J)I": (a: bigint) => { const c = deref<Cursor>(a); return c.pos < c.bytes.length ? c.bytes[c.pos++] : -1; },

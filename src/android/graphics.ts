@@ -3,6 +3,7 @@
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { mangleMethod, charsToString } from "../jvm/abi";
 import { device } from "../shell/config";
+import { handle } from "./handles";
 import { vcall, mkEnumSet, JSimpleEnum, linkInit, stringHash } from "../jvm/natives/jlang";
 import { usLocale } from "../jvm/natives/jutil";
 import { readStreamFully } from "../jvm/natives/jio";
@@ -325,6 +326,22 @@ export class JPaint extends JObj {
   }
 }
 const paintMethods: NativeSpec["methods"] = {
+  // AOSP's own bytecode hands a paint to its native half as a long — MeasuredText.Builder and
+  // every Canvas draw do it — so a paint that is OURS still has to be able to name itself in
+  // the handle table. handles.ts is stable per object, so this is not an allocation per call.
+  "getNativeInstance()J": function (this: JPaint) { return handle(this); },
+  // The hyphen a line break may add or remove at either end. There is no hyphenator here, so
+  // there is never an edit; AOSP's MeasuredText reads these back per run whatever the answer.
+  "getStartHyphenEdit()I": () => 0, "getEndHyphenEdit()I": () => 0,
+  // The advance up to `offset`, filling `advances` with one per character. The per-character
+  // widths are PREFIX DIFFERENCES rather than each character measured alone: their sum then
+  // equals measureText of the whole run, which is what actually gets drawn, and a set of
+  // context-free single-character widths would not (Canvas2D kerns). That costs one measure
+  // per character, so it is only worth doing when a caller asked for the array.
+  "getRunCharacterAdvance([CIIIIZI[FILandroid/graphics/RectF;Landroid/graphics/Paint$RunInfo;)F":
+    function (this: JPaint, chars: Uint16Array, start: number, end: number, _cs: number, _ce: number, _rtl: number, offset: number, advances: Float32Array | null, advIdx: number) {
+      return runAdvances(this, charsToString(chars, 0, chars.length), start, end, offset, advances, advIdx);
+    },
   "<init>()V": function () {},
   "<init>(I)V": function () {},
   "<init>(Landroid/graphics/Paint;)V": function (this: JPaint, o: JPaint) { if (o) copyPaint(o, this); },
@@ -540,6 +557,21 @@ function rawWidth(f: string, s: string): number {
   widthCache.set(k, w);
   return w;
 }
+/** the advance up to `offset` within [start,end), and per-character advances when asked for.
+ *  Exported for the CharSequence overload, which lives on TextPaint because flattening a
+ *  Spanned is text.ts's job and text.ts imports this file. */
+export function runAdvances(p: JPaint, text: string, start: number, end: number, offset: number, advances: Float32Array | null, advIdx: number): number {
+  if (advances) {
+    let prev = 0;
+    for (let i = start; i < end; i++) {
+      const w = measureText(p, text.slice(start, i + 1));
+      advances[advIdx + i - start] = w - prev;
+      prev = w;
+    }
+  }
+  return measureText(p, text.slice(start, Math.max(start, offset)));
+}
+
 export function measureText(p: JPaint, s: string): number {
   perf.measureText++;
   return Math.fround(rawWidth(p.font(), s) + p.letterSpacingEm * p.textSize * s.length);
