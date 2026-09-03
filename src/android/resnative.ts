@@ -9,7 +9,7 @@ import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 import { javaFormat, defineException } from "../jvm/natives/jlang";
 import { usLocale } from "../jvm/natives/jutil";
 import { jarray } from "../jvm/abi";
-import { JInputStream } from "../jvm/natives/jio";
+import { streamOf } from "../jvm/natives/jio";
 import { fontResource } from "./fonts";
 
 export class JResources extends JObj {
@@ -120,11 +120,6 @@ function assetBytes(am: JAssetManager, p: string): Uint8Array {
   const bytes = am.host.zip["assets/" + p];
   if (!bytes) throw rt.mkThrowable("java/io/FileNotFoundException", "asset " + p);
   return bytes;
-}
-function streamOf(bytes: Uint8Array): JInputStream {
-  const s = new JInputStream();
-  s.buf = bytes;
-  return s;
 }
 const assetOpen = function (this: JAssetManager, p: string) { return streamOf(assetBytes(this, p)); };
 rt.register({

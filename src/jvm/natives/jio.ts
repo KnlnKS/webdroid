@@ -151,6 +151,12 @@ export class JInputStream extends JObj {
   buf: Uint8Array = new Uint8Array(0);
   pos = 0;
 }
+/** a plain InputStream over bytes already in hand */
+export function streamOf(bytes: Uint8Array): JInputStream {
+  const s = new JInputStream();
+  s.buf = bytes;
+  return s;
+}
 const inputStreamMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "read()I": function (this: JInputStream) {

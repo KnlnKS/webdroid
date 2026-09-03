@@ -5,73 +5,61 @@
 // authoritiesOf) lives with PackageManager in app.ts; DocumentsContract reads it from there.
 
 import { rt, JObj } from "../jvm/runtime";
-import { providerNodes, matchesAction, authoritiesOf } from "./app";
+import { providerNodes, matchesAction, authoritiesOf, registerSystemActivity, mkResultIntent } from "./app";
 import { mkUri } from "./net";
+import { DOCS_AUTHORITY, docCreate, docDelete, docRename, pickTree, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
 
 
 const PROVIDER_INTERFACE = "android.content.action.DOCUMENTS_PROVIDER";
-const isDocumentsProvider = (auth: string) =>
+/** The manifest walk only sees the app's own providers; the storage one is a system package. */
+const isDocumentsProvider = (auth: string) => auth === DOCS_AUTHORITY ||
   providerNodes().some(([, n]) => matchesAction(n, PROVIDER_INTERFACE) && authoritiesOf(n).includes(auth));
 
+registerSystemActivity("android.intent.action.OPEN_DOCUMENT_TREE",
+  async () => { const uri = await pickTree(); return uri ? mkResultIntent(uri) : null; });
 
-// ── DocumentsContract: content://<authority>/tree/<treeId>/document/<docId>[/children]
-type JUriLike = { uri?: string } | null;
 
-/** (authority, decoded path segments) — Uri.getPathSegments decodes, and document ids carry ':'. */
-function parts(u: JUriLike): [string, string[]] {
-  const s = u?.uri ?? "";
-  const i = s.indexOf("://");
-  if (i < 0) return ["", []];
-  const rest = s.slice(i + 3).split(/[?#]/)[0];
-  const j = rest.indexOf("/");
-  if (j < 0) return [rest, []];
-  return [rest.slice(0, j), rest.slice(j + 1).split("/").filter(Boolean).map(decodeURIComponent)];
-}
-const isContent = (u: JUriLike) => (u?.uri ?? "").startsWith("content://");
-const bad = (u: JUriLike) => rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid URI: " + (u?.uri ?? "null"));
 const enc = encodeURIComponent;
-
-function treeDocumentId(u: JUriLike): string {
-  const p = parts(u)[1];
-  if (p.length >= 2 && p[0] === "tree") return p[1];
-  throw bad(u);
-}
 
 rt.register({
   name: "android/provider/DocumentsContract", ctor: class extends JObj {},
   statics: { PROVIDER_INTERFACE, EXTRA_LOADING: "loading", EXTRA_ERROR: "error", EXTRA_INFO: "info" },
   methods: {
     "static isDocumentUri(Landroid/content/Context;Landroid/net/Uri;)Z": (_c: unknown, u: JUriLike) => {
-      if (!isContent(u)) return 0;
-      const [auth, p] = parts(u);
+      if (!isContentUri(u)) return 0;
+      const [auth, p] = uriParts(u);
       if (!isDocumentsProvider(auth)) return 0;
       if (p.length === 2 && p[0] === "document") return 1;
       return p.length === 4 && p[0] === "tree" && p[2] === "document" ? 1 : 0;
     },
     "static isTreeUri(Landroid/net/Uri;)Z": (u: JUriLike) => {
-      const p = parts(u)[1];
+      const p = uriParts(u)[1];
       return p.length >= 2 && p[0] === "tree" ? 1 : 0;
     },
-    "static getDocumentId(Landroid/net/Uri;)Ljava/lang/String;": (u: JUriLike) => {
-      const p = parts(u)[1];
-      if (p.length >= 2 && p[0] === "document") return p[1];
-      if (p.length >= 4 && p[0] === "tree" && p[2] === "document") return p[3];
-      throw bad(u);
-    },
+    "static getDocumentId(Landroid/net/Uri;)Ljava/lang/String;": (u: JUriLike) => documentId(u),
     "static getTreeDocumentId(Landroid/net/Uri;)Ljava/lang/String;": treeDocumentId,
     "static buildDocumentUri(Ljava/lang/String;Ljava/lang/String;)Landroid/net/Uri;":
       (auth: string, id: string) => mkUri(`content://${auth}/document/${enc(id)}`),
     "static buildTreeDocumentUri(Ljava/lang/String;Ljava/lang/String;)Landroid/net/Uri;":
       (auth: string, id: string) => mkUri(`content://${auth}/tree/${enc(id)}`),
     "static buildDocumentUriUsingTree(Landroid/net/Uri;Ljava/lang/String;)Landroid/net/Uri;":
-      (u: JUriLike, id: string) => mkUri(`content://${parts(u)[0]}/tree/${enc(treeDocumentId(u))}/document/${enc(id)}`),
+      (u: JUriLike, id: string) => mkUri(`content://${uriParts(u)[0]}/tree/${enc(treeDocumentId(u))}/document/${enc(id)}`),
     "static buildChildDocumentsUriUsingTree(Landroid/net/Uri;Ljava/lang/String;)Landroid/net/Uri;":
-      (u: JUriLike, id: string) => mkUri(`content://${parts(u)[0]}/tree/${enc(treeDocumentId(u))}/document/${enc(id)}/children`),
-    // Mutations are a ContentResolver.call into the owning DocumentsProvider. No such provider
-    // is installed here, so they take AOSP's own failure return rather than throwing.
-    "static createDocument(Landroid/content/ContentResolver;Landroid/net/Uri;Ljava/lang/String;Ljava/lang/String;)Landroid/net/Uri;": () => null,
-    "static renameDocument(Landroid/content/ContentResolver;Landroid/net/Uri;Ljava/lang/String;)Landroid/net/Uri;": () => null,
-    "static deleteDocument(Landroid/content/ContentResolver;Landroid/net/Uri;)Z": () => 0,
+      (u: JUriLike, id: string) => mkUri(`content://${uriParts(u)[0]}/tree/${enc(treeDocumentId(u))}/document/${enc(id)}/children`),
+    // Mutations are a ContentResolver.call into the owning DocumentsProvider; ours answers for
+    // DOCS_AUTHORITY and anything else takes AOSP's own failure return rather than throwing.
+    "static createDocument(Landroid/content/ContentResolver;Landroid/net/Uri;Ljava/lang/String;Ljava/lang/String;)Landroid/net/Uri;":
+      async (_r: unknown, u: JUriLike, mime: string, name: string) => {
+        const id = isDocsUri(u) ? await docCreate(documentId(u, true), mime, name) : null;
+        return id ? mkUri(docUriLike(u, id)) : null;
+      },
+    "static renameDocument(Landroid/content/ContentResolver;Landroid/net/Uri;Ljava/lang/String;)Landroid/net/Uri;":
+      async (_r: unknown, u: JUriLike, name: string) => {
+        const id = isDocsUri(u) ? await docRename(documentId(u, true), name) : null;
+        return id ? mkUri(docUriLike(u, id)) : null;
+      },
+    "static deleteDocument(Landroid/content/ContentResolver;Landroid/net/Uri;)Z":
+      async (_r: unknown, u: JUriLike) => isDocsUri(u) && await docDelete(documentId(u, true)) ? 1 : 0,
   },
 });
 rt.register({

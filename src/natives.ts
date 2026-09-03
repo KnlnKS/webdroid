@@ -48,6 +48,7 @@ import "./android/hardware";
 import "./android/location";
 import "./android/job";
 import "./android/service";
+import "./android/documents";
 import "./android/provider";
 import "./android/ime";
 import "./android/notification";
