@@ -9,6 +9,7 @@ import { loadFramework } from "./android/framework";
 import { unreadAttrs } from "./android/res";
 import { bootApk, tick, dispatchPointer, pressBack, currentApp, contentTop, SCREEN_W, SCREEN_H } from "./shell/device";
 import { attachInput, drainInput } from "./shell/input";
+import { clearRoots } from "./shell/hostfs";
 import { perf, perfReset } from "./perf";
 import { uiState, measureView, makeSpec } from "./android/view";
 import { onMain, mainDbg } from "./android/mainloop";
@@ -247,8 +248,9 @@ const wd = {
     onMain(() => true),
     new Promise((r) => setTimeout(() => r(false), ms)),
   ]),
-  // wipe persisted app state (sqlite + prefs) so a run starts from a fresh install
+  // wipe persisted app state (sqlite + prefs + the picked directories) so a run starts fresh
   reset: () => {
+    void clearRoots();
     const gone: string[] = [];
     for (const k of Object.keys(localStorage)) {
       if (k.startsWith("wd:db:") || k.startsWith("wd:prefs:") || k.startsWith("wd:install:") || k.startsWith("wd:keystore:")) { localStorage.removeItem(k); gone.push(k); }

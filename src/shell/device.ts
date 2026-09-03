@@ -24,6 +24,7 @@ import { webLayerSweep } from "../android/webkit";
 import { mangleMethod } from "../jvm/abi";
 import { perf } from "../perf";
 import { device } from "./config";
+import { restoreRoots } from "./hostfs";
 
 export const SCREEN_W = device.width, SCREEN_H = device.height, STATUS_H = device.statusBar;
 
@@ -48,6 +49,8 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
   // be here before anything links. main.ts starts the fetch alongside the apk's, so this waits on
   // nothing in the common case.
   const fwPkg = await loadFramework();
+  // the directories a previous session picked, so a persisted content:// tree still resolves
+  void restoreRoots();
   // materialize every registered native class so directly-constructed instances have methods
   for (const name of [...rt.natives.keys()]) {
     try { rt.link(name); } catch (e) { console.warn("[link native]", name, e); }
