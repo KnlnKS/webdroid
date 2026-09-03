@@ -548,6 +548,7 @@ function drawStatusIcons(ctx: CanvasRenderingContext2D, bg: number, w: JActivity
 }
 
 let touchTarget: "decor" | { overlay: number } | null = null;
+let downTime = 0;
 // input joins the main queue: keeps DOWN/UP ordered and serialized with layout,
 // Handler posts, and lifecycle — like Android's single main looper.
 export function dispatchPointer(action: number, x: number, y: number): Promise<void> {
@@ -563,6 +564,11 @@ async function dispatchPointer0(action: number, x: number, y: number) {
   ev.action = action;
   ev.rawX = x;
   ev.rawY = y;
+  // The same clock SystemClock.uptimeMillis reports, because app code subtracts one from the
+  // other: Compose's velocity tracker divides by this dt, and 0 - 0 is not a duration.
+  ev.eventTime = performance.now();
+  if (action === 0) downTime = ev.eventTime;
+  ev.downTime = downTime;
   const ly = y - contentTop();
   try {
     if (action === 0) {
