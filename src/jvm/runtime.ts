@@ -320,7 +320,17 @@ export class Runtime {
   private setupNativeMembers(info: ClassInfo, spec: NativeSpec) {
     const proto = spec.ctor.prototype as Record<string, unknown>;
     const ctorAny = spec.ctor as any;
-    for (const [key, impl] of Object.entries(spec.methods ?? {})) {
+    const methods = { ...spec.methods } as Record<string, unknown>;
+    // AOSP's (Context, AttributeSet) constructor delegates to the defStyle ones, so a widget
+    // that spells only the two-arg form must not let a SUBCLASS reach the superclass's
+    // three-arg native instead and skip its attribute parsing (Material passes its own
+    // default style to every widget it wraps).
+    const two = methods["<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V"];
+    if (two) for (const extra of ["I)V", "II)V"]) {
+      const k = "<init>(Landroid/content/Context;Landroid/util/AttributeSet;" + extra;
+      methods[k] ??= two;
+    }
+    for (const [key, impl] of Object.entries(methods)) {
       let k = key, isStatic = false;
       if (k.startsWith("static ")) { isStatic = true; k = k.slice(7); }
       const paren = k.indexOf("(");

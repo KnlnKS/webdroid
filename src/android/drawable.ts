@@ -583,6 +583,53 @@ const RADIUS_AUTO = -1;
 // fading in, and on release finishes growing while fading out.
 const RIPPLE_ENTER_MS = 225, RIPPLE_ENTER_ALPHA_MS = 75, RIPPLE_EXIT_MS = 150;
 const decel = (t: number) => 1 - (1 - t) * (1 - t);
+/**
+ * AdaptiveIconDrawable: two 108dp layers behind a 72dp viewport, clipped to the device mask.
+ * Every `@mipmap/ic_launcher` on a modern app is one, and without it an app's own icon — the
+ * one it puts in its about screen and its first-run dialog — is a blank square.
+ */
+class JAdaptiveIconDrawable extends JLayerDrawable {
+  /** AOSP getFullBounds: each layer is the viewport grown by 25% on every side */
+  layout() {
+    const { left, top, right, bottom } = this.bounds;
+    const dx = (right - left) / 4, dy = (bottom - top) / 4;
+    for (const l of this.layers) setBounds.call(l.d, left - dx, top - dy, right + dx, bottom + dy);
+  }
+  clip(cv: JCanvas) {
+    const { left, top, right, bottom } = this.bounds;
+    cv.ctx.beginPath();
+    cv.ctx.roundRect(left, top, right - left, bottom - top, Math.min(right - left, bottom - top) * 0.28);
+    cv.ctx.clip();
+  }
+  paint(cv: JCanvas) {
+    cv.ctx.save();
+    this.clip(cv);
+    super.paint(cv);
+    cv.ctx.restore();
+  }
+  // the viewport, not the 108dp layers the children actually are
+  intrinsicW(): number { const w = super.intrinsicW(); return w < 0 ? w : Math.round(w * 2 / 3); }
+  intrinsicH(): number { const h = super.intrinsicH(); return h < 0 ? h : Math.round(h * 2 / 3); }
+}
+rt.register({
+  name: "android/graphics/drawable/AdaptiveIconDrawable", ctor: JAdaptiveIconDrawable,
+  sup: "android/graphics/drawable/LayerDrawable",
+  methods: {
+    "<init>(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V":
+      function (this: JAdaptiveIconDrawable, bg: JDrawable | null, fg: JDrawable | null) {
+        for (const d of [bg, fg]) if (d) this.layers.push({ d, insets: [0, 0, 0, 0] });
+      },
+    "getBackground()Landroid/graphics/drawable/Drawable;": function (this: JAdaptiveIconDrawable) { return this.layers[0]?.d ?? null; },
+    "getForeground()Landroid/graphics/drawable/Drawable;": function (this: JAdaptiveIconDrawable) { return this.layers[1]?.d ?? null; },
+    "draw(Landroid/graphics/Canvas;)V": function (this: JAdaptiveIconDrawable, cv: JCanvas) {
+      cv.ctx.save();
+      this.clip(cv);
+      const r = this.drawLayers(cv);
+      return r instanceof Promise ? r.finally(() => cv.ctx.restore()) : cv.ctx.restore();
+    },
+  },
+});
+
 export class JRippleDrawable extends JLayerDrawable {
   rippleColor = 0x33000000;
   /** explicit override from setRadius(), or RADIUS_AUTO to derive it from bounds each draw. */
@@ -1067,6 +1114,15 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
           const idv = nodeAttr(res, c, AT.id);
           d.ids.push(idv ? idv.d : null);
         }
+      }
+      return d;
+    }
+    case "adaptive-icon": {
+      const d = new JAdaptiveIconDrawable();
+      for (const n of ["background", "foreground"]) {
+        const c = node.children.find((k) => k.name === n);
+        const child = c ? await itemDrawable(res, c, theme) : null;
+        if (child) d.layers.push({ d: child, insets: [0, 0, 0, 0] });
       }
       return d;
     }

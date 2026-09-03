@@ -46,15 +46,20 @@ function applyPathOp(p: Path2D, op: PathOp) {
     case "q": p.quadraticCurveTo(op[1], op[2], op[3], op[4]); break;
     case "c": p.bezierCurveTo(op[1], op[2], op[3], op[4], op[5], op[6]); break;
     case "z": p.closePath(); break;
-    case "rect": p.rect(op[1], op[2], op[3] - op[1], op[4] - op[2]); break;
+    // Direction is not decoration: a shape added CW inside a rect added CCW is how Material's
+    // ShapeableImageView builds "everything outside the shape" for its non-zero-winding mask.
+    case "rect":
+      if (op[5]) { p.moveTo(op[1], op[2]); p.lineTo(op[1], op[4]); p.lineTo(op[3], op[4]); p.lineTo(op[3], op[2]); p.closePath(); }
+      else p.rect(op[1], op[2], op[3] - op[1], op[4] - op[2]);
+      break;
     case "rrect": {
       const [, l, t, r, b] = op;
       const q = rrRadii(op);
       p.roundRect(l, t, r - l, b - t, [{ x: q[0], y: q[1] }, { x: q[2], y: q[3] }, { x: q[4], y: q[5] }, { x: q[6], y: q[7] }]);
       break;
     }
-    case "oval": p.ellipse((op[1] + op[3]) / 2, (op[2] + op[4]) / 2, (op[3] - op[1]) / 2, (op[4] - op[2]) / 2, 0, 0, Math.PI * 2); break;
-    case "circle": p.arc(op[1], op[2], op[3], 0, Math.PI * 2); break;
+    case "oval": p.ellipse((op[1] + op[3]) / 2, (op[2] + op[4]) / 2, (op[3] - op[1]) / 2, (op[4] - op[2]) / 2, 0, 0, Math.PI * 2, !!op[5]); break;
+    case "circle": p.arc(op[1], op[2], op[3], 0, Math.PI * 2, !!op[4]); break;
     case "arc": {
       const [, l, t, r, b, startDeg, sweepDeg] = op;
       const cx = (l + r) / 2, cy = (t + b) / 2, rx = (r - l) / 2, ry = (b - t) / 2;
@@ -405,11 +410,11 @@ rt.register({
       return pathFillTypes[this.fillRule === "evenodd" ? 1 : 0];
     },
 
-    "addRect(FFFFLandroid/graphics/Path$Direction;)V": function (this: JPath, l: number, t: number, r: number, b: number) {
-      this.add(["rect", l, t, r, b]);
+    "addRect(FFFFLandroid/graphics/Path$Direction;)V": function (this: JPath, l: number, t: number, r: number, b: number, d: { ord: number } | null) {
+      this.add(["rect", l, t, r, b, d?.ord ?? 0]);
     },
-    "addRect(Landroid/graphics/RectF;Landroid/graphics/Path$Direction;)V": function (this: JPath, r: JRectF) {
-      this.add(["rect", r.left, r.top, r.right, r.bottom]);
+    "addRect(Landroid/graphics/RectF;Landroid/graphics/Path$Direction;)V": function (this: JPath, r: JRectF, d: { ord: number } | null) {
+      this.add(["rect", r.left, r.top, r.right, r.bottom, d?.ord ?? 0]);
     },
     "addRoundRect(Landroid/graphics/RectF;FFLandroid/graphics/Path$Direction;)V": function (this: JPath, r: JRectF, rx: number, ry: number) {
       this.add(["rrect", r.left, r.top, r.right, r.bottom, rx, ry, rx, ry, rx, ry, rx, ry]);
@@ -426,11 +431,11 @@ rt.register({
     "addRoundRect(FFFF[FLandroid/graphics/Path$Direction;)V": function (this: JPath, l: number, t: number, r: number, b: number, radii: Float32Array) {
       this.add(["rrect", l, t, r, b, ...Array.from({ length: 8 }, (_, i) => radii[i] ?? 0)]);
     },
-    "addOval(Landroid/graphics/RectF;Landroid/graphics/Path$Direction;)V": function (this: JPath, r: JRectF) {
-      this.add(["oval", r.left, r.top, r.right, r.bottom]);
+    "addOval(Landroid/graphics/RectF;Landroid/graphics/Path$Direction;)V": function (this: JPath, r: JRectF, d: { ord: number } | null) {
+      this.add(["oval", r.left, r.top, r.right, r.bottom, d?.ord ?? 0]);
     },
-    "addCircle(FFFLandroid/graphics/Path$Direction;)V": function (this: JPath, x: number, y: number, r: number) {
-      this.add(["circle", x, y, r]);
+    "addCircle(FFFLandroid/graphics/Path$Direction;)V": function (this: JPath, x: number, y: number, r: number, d: { ord: number } | null) {
+      this.add(["circle", x, y, r, d?.ord ?? 0]);
     },
     "addPath(Landroid/graphics/Path;)V": function (this: JPath, o: JPath) { this.ops.push(...o.ops); this.dirty = true; },
     "arcTo(Landroid/graphics/RectF;FF)V": function (this: JPath, r: JRectF, start: number, sweep: number) {
@@ -469,6 +474,11 @@ rt.register({
     },
     "transform(Landroid/graphics/Matrix;)V": function (this: JPath, mt: JMatrix) {
       const m = mt.m;
+      // A rotation or skew cannot be folded into an arc's axis-aligned rect and its angles, so
+      // expand the compound ops into the curves Skia would already be holding. Material's
+      // ShapeAppearancePathProvider rotates the path around every corner, and without this each
+      // corner arc came out as a straight chord.
+      if (m[1] !== 0 || m[2] !== 0) this.ops = verbsToOps(pathVerbs(this.ops));
       const sx = Math.hypot(m[0], m[1]), sy = Math.hypot(m[2], m[3]);
       for (const op of this.ops) {
         for (let i = 1, n = opPairs[op[0]] ?? 0; n--; i += 2) {
@@ -521,7 +531,10 @@ function pathVerbs(ops: PathOp[]): Verb[] {
       case "q": start(); out.push([QUAD, cx, cy, a, b, c, d]); cx = c; cy = d; break;
       case "c": cubic(a, b, c, d, e, f); break;
       case "z": close(); break;
-      case "rect": move(a, b); line(c, b); line(c, d); line(a, d); close(); break;
+      case "rect":
+        if (op[5]) { move(a, b); line(a, d); line(c, d); line(c, b); }
+        else { move(a, b); line(c, b); line(c, d); line(a, d); }
+        close(); break;
       case "rrect": {
         const q = rrRadii(op);
         move(a + q[0], b);
@@ -542,6 +555,19 @@ function pathVerbs(ops: PathOp[]): Verb[] {
         break;
       }
     }
+  }
+  return out;
+}
+
+/** the inverse of pathVerbs: a flattened path back as ops */
+function verbsToOps(vs: Verb[]): PathOp[] {
+  const out: PathOp[] = [];
+  for (const v of vs) {
+    if (v[0] === MOVE) out.push(["m", v[1], v[2]]);
+    else if (v[0] === LINE) out.push(["l", v[3], v[4]]);
+    else if (v[0] === QUAD) out.push(["q", v[3], v[4], v[5], v[6]]);
+    else if (v[0] === CUBIC) out.push(["c", v[3], v[4], v[5], v[6], v[7], v[8]]);
+    else if (v[0] === CLOSE) out.push(["z"]);
   }
   return out;
 }

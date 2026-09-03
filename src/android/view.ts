@@ -212,6 +212,8 @@ export class JView extends JObj {
   clipBounds: JRect | null = null; bgTint: JColorStateList | null = null;
   tooltip: unknown = null;
   win: unknown = null; // ViewRootImpl-ish owner
+  /** an offscreen canvas when layerType asks for one (see drawLayered) */
+  layerCanvas: OffscreenCanvas | null = null;
   /** the running android.view.animation.Animation and the transformation it last produced */
   jAnim: unknown = null;
   animTf: { alpha: number; matrix: { m: number[] } } | null = null;
@@ -456,22 +458,17 @@ export async function drawView(v: JView, cv: JCanvas) {
       ctx.scale(v.scaleXv, v.scaleYv);
       ctx.translate(-px, -py);
     }
-    ctx.beginPath();
-    ctx.rect(0, 0, v.width(), v.height());
-    ctx.clip();
-    if (v.surfaceLayer) ctx.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
-    else if (v.background) {
-      // through setBounds, not the fields: AOSP's onBoundsChange is where wrapper/shape drawables
-      // (and app subclasses) rebuild their geometry, and it only fires on a real change
-      await guardCall((v.background as any)[M_setBounds], v.background, 0, 0, v.width(), v.height());
-      await guardCall((v.background as any)[M_drawableDraw], v.background, cv);
+    // A view with a layer composites its own pixels separately, which is the whole point of
+    // asking for one: ShapeableImageView draws its mask with a DST_OUT paint that must erase
+    // the image and nothing underneath it.
+    const w = v.width(), h = v.height();
+    if (v.layerType && w > 0 && h > 0) await drawLayered(v, cv, w, h);
+    else {
+      ctx.beginPath();
+      ctx.rect(0, 0, w, h);
+      ctx.clip();
+      await drawContent(v, cv);
     }
-    ctx.translate(-v.scrollX, -v.scrollY);
-    const od = (v as any)[M_onDraw];
-    if (od) await guardCall(od, v, cv);
-    const dd = (v as any)[M_dispatchDraw];
-    if (dd) await guardCall(dd, v, cv);
-    if (v.overlay) await drawOverlay(v.overlay, cv);
   } catch (e) {
     perf.drawErrors++;
     noteDrawError(v, e);
@@ -479,6 +476,37 @@ export async function drawView(v: JView, cv: JCanvas) {
     while (cv.saveCount > sc) { ctx.restore(); cv.saveCount--; }
     ctx.restore();
   }
+}
+
+async function drawLayered(v: JView, cv: JCanvas, w: number, h: number) {
+  let layer = v.layerCanvas;
+  if (!layer || layer.width !== w || layer.height !== h) layer = v.layerCanvas = new OffscreenCanvas(w, h);
+  const lctx = layer.getContext("2d") as OffscreenCanvasRenderingContext2D;
+  lctx.setTransform(1, 0, 0, 1, 0, 0);
+  lctx.globalCompositeOperation = "source-over";
+  lctx.globalAlpha = 1;
+  lctx.clearRect(0, 0, w, h);
+  const lcv = JCanvas.wrap(lctx, w, h);
+  await drawContent(v, lcv);
+  cv.ctx.drawImage(layer, 0, 0);
+}
+
+/** the view's own painting, in its own coordinate space: background, content, children, overlay */
+async function drawContent(v: JView, cv: JCanvas) {
+  const ctx = cv.ctx;
+  if (v.surfaceLayer) ctx.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
+  else if (v.background) {
+    // through setBounds, not the fields: AOSP's onBoundsChange is where wrapper/shape drawables
+    // (and app subclasses) rebuild their geometry, and it only fires on a real change
+    await guardCall((v.background as any)[M_setBounds], v.background, 0, 0, v.width(), v.height());
+    await guardCall((v.background as any)[M_drawableDraw], v.background, cv);
+  }
+  ctx.translate(-v.scrollX, -v.scrollY);
+  const od = (v as any)[M_onDraw];
+  if (od) await guardCall(od, v, cv);
+  const dd = (v as any)[M_dispatchDraw];
+  if (dd) await guardCall(dd, v, cv);
+  if (v.overlay) await drawOverlay(v.overlay, cv);
 }
 
 /** AOSP: a ViewGroup's overlay can host views, a plain View's only drawables */
