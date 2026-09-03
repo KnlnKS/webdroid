@@ -116,8 +116,8 @@ rt.register({
           v.ctx = this.jctx;
           v.jres = this.jctx?.$host?.res ?? null;
           v.theme = this.jctx?.$host?.theme ?? null;
-          v.paintT.textSize = 32;
-          v.padL = 32; v.padR = 32; v.padT = 28; v.padB = 28;
+          v.paintT.textSize = device.dp(16);
+          v.padL = v.padR = device.dp(16); v.padT = v.padB = device.dp(14);
         }
         let target = v;
         if (this.textViewId) {
@@ -925,10 +925,10 @@ rt.register({
     },
     "onMeasure(II)V": async function (this: JSpinner, wSpec: number, hSpec: number) {
       if (this.selView) {
-        await measureView(this.selView, childMeasureSpec(wSpec, 40, this.selView.lp?.width ?? WRAP_CONTENT), makeSpec(0, MS_UNSPEC));
+        await measureView(this.selView, childMeasureSpec(wSpec, device.dp(20), this.selView.lp?.width ?? WRAP_CONTENT), makeSpec(0, MS_UNSPEC));
       }
-      const w = specMode(wSpec) === MS_EXACTLY ? specSize(wSpec) : Math.max(this.minW, (this.selView?.measuredW ?? 100) + 56);
-      const h = specMode(hSpec) === MS_EXACTLY ? specSize(hSpec) : Math.max(this.minH, (this.selView?.measuredH ?? 60), 84);
+      const w = specMode(wSpec) === MS_EXACTLY ? specSize(wSpec) : Math.max(this.minW, (this.selView?.measuredW ?? device.dp(50)) + device.dp(28));
+      const h = specMode(hSpec) === MS_EXACTLY ? specSize(hSpec) : Math.max(this.minH, (this.selView?.measuredH ?? device.dp(30)), device.dp(42));
       this.measuredW = w;
       this.measuredH = h;
     },

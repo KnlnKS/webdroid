@@ -610,23 +610,23 @@ function drawStatusIcons(ctx: CanvasRenderingContext2D, bg: number, w: JActivity
   const dark = w.appearanceMask & APPEARANCE_LIGHT_STATUS_BARS ? (w.appearance & APPEARANCE_LIGHT_STATUS_BARS) !== 0
     : 0.299 * ((bg >> 16) & 0xff) + 0.587 * ((bg >> 8) & 0xff) + 0.114 * (bg & 0xff) > 160;
   ctx.fillStyle = dark ? "rgba(0,0,0,0.85)" : "#ffffff";
-  ctx.font = `500 26px ${tfMedium.family}`;
+  ctx.font = `500 ${device.dp(13)}px ${tfMedium.family}`;
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";
   const now = new Date(), minute = now.getHours() * 60 + now.getMinutes();
   if (minute !== clockMinute) { clockMinute = minute; clockText = `${now.getHours()}:${String(now.getMinutes()).padStart(2, "0")}`; }
-  ctx.fillText(clockText, 20, STATUS_H / 2 + 1);
+  ctx.fillText(clockText, device.dp(10), STATUS_H / 2 + device.dp(0.5));
   ctx.textAlign = "right";
-  const x = SCREEN_W - 16;
+  const x = SCREEN_W - device.dp(8);
   ctx.strokeStyle = ctx.fillStyle;
-  ctx.lineWidth = 2.5;
-  ctx.strokeRect(x - 34, 12, 26, 24);
-  ctx.fillRect(x - 30, 16, 18, 16);
-  ctx.fillRect(x - 7, 19, 4, 10);
+  ctx.lineWidth = device.dp(1.25);
+  ctx.strokeRect(x - device.dp(17), device.dp(6), device.dp(13), device.dp(12));
+  ctx.fillRect(x - device.dp(15), device.dp(8), device.dp(9), device.dp(8));
+  ctx.fillRect(x - device.dp(3.5), device.dp(9.5), device.dp(2), device.dp(5));
   ctx.beginPath();
-  ctx.moveTo(x - 74, 34);
-  ctx.lineTo(x - 46, 34);
-  ctx.lineTo(x - 60, 14);
+  ctx.moveTo(x - device.dp(37), device.dp(17));
+  ctx.lineTo(x - device.dp(23), device.dp(17));
+  ctx.lineTo(x - device.dp(30), device.dp(7));
   ctx.closePath();
   ctx.fill();
 }

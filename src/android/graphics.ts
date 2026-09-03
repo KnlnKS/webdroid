@@ -283,7 +283,7 @@ export class JPaint extends JObj {
   color = -16777216;
   style = 0;
   strokeWidth = 0;
-  textSize = 32; // AOSP defaults to 12px, but every view sets its own
+  textSize = device.dp(16); // AOSP defaults to 12px, but every view sets its own
   tf: JTypeface = tfDefault;
   antiAlias = true;
   textAlignN = 0; // 0 left, 1 center, 2 right

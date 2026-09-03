@@ -51,19 +51,19 @@ export function drawToasts(ctx: CanvasRenderingContext2D, w: number, h: number) 
   const t = toasts[toasts.length - 1];
   if (!t) return;
   ctx.save();
-  ctx.font = "28px Roboto, sans-serif";
-  const tw = Math.min(w - 80, ctx.measureText(t.text).width + 64);
-  const x = (w - tw) / 2, y = h - 176;
+  ctx.font = `${device.dp(14)}px Roboto, sans-serif`;
+  const tw = Math.min(w - device.dp(40), ctx.measureText(t.text).width + device.dp(32));
+  const x = (w - tw) / 2, y = h - device.dp(88);
   const alpha = Math.min(1, (t.until - now) / 300);
   ctx.globalAlpha = alpha;
   ctx.beginPath();
-  ctx.roundRect(x, y, tw, 88, 44);
+  ctx.roundRect(x, y, tw, device.dp(44), device.dp(22));
   ctx.fillStyle = "rgba(50,50,50,0.92)";
   ctx.fill();
   ctx.fillStyle = "#fff";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(t.text, w / 2, y + 44, tw - 48);
+  ctx.fillText(t.text, w / 2, y + device.dp(22), tw - device.dp(24));
   ctx.restore();
   if (toasts.length) invalidate();
 }
@@ -72,8 +72,8 @@ export function drawToasts(ctx: CanvasRenderingContext2D, w: number, h: number) 
 class PopupMenuView extends JView {
   items: { id: number; title: string }[] = [];
   onPick: ((id: number) => void) | null = null;
-  itemH = 96;
-  padV = 16;
+  itemH = device.dp(48);
+  padV = device.dp(8);
 }
 
 // android.widget.PopupMenu.OnMenuItemClickListener — pure interface. PopupMenu below already
@@ -85,29 +85,29 @@ rt.register({
   name: "webdroid/PopupMenuView", ctor: PopupMenuView, sup: "android/view/View",
   methods: {
     "onMeasure(II)V": function (this: PopupMenuView) {
-      const ctx = measureCtx("30px Roboto, sans-serif");
-      let w = 240;
-      for (const it of this.items) w = Math.max(w, ctx.measureText(it.title).width + 96);
-      this.measuredW = Math.min(560, Math.ceil(w));
+      const ctx = measureCtx(`${device.dp(15)}px Roboto, sans-serif`);
+      let w = device.dp(120);
+      for (const it of this.items) w = Math.max(w, ctx.measureText(it.title).width + device.dp(48));
+      this.measuredW = Math.min(device.dp(280), Math.ceil(w));
       this.measuredH = this.items.length * this.itemH + this.padV * 2;
     },
     "onDraw(Landroid/graphics/Canvas;)V": function (this: PopupMenuView, cv: JCanvas) {
       const ctx = cv.ctx;
       ctx.save();
       ctx.shadowColor = "rgba(0,0,0,0.35)";
-      ctx.shadowBlur = 24;
-      ctx.shadowOffsetY = 6;
+      ctx.shadowBlur = device.dp(12);
+      ctx.shadowOffsetY = device.dp(3);
       ctx.fillStyle = "#ffffff";
       ctx.beginPath();
-      ctx.roundRect(0, 0, this.width(), this.height(), 8);
+      ctx.roundRect(0, 0, this.width(), this.height(), device.dp(4));
       ctx.fill();
       ctx.restore();
-      ctx.font = "30px Roboto, sans-serif";
+      ctx.font = `${device.dp(15)}px Roboto, sans-serif`;
       ctx.fillStyle = "rgba(0,0,0,0.87)";
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
       for (let i = 0; i < this.items.length; i++) {
-        ctx.fillText(this.items[i].title, 40, this.padV + i * this.itemH + this.itemH / 2);
+        ctx.fillText(this.items[i].title, device.dp(20), this.padV + i * this.itemH + this.itemH / 2);
       }
     },
     "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: PopupMenuView, ev: any) {
@@ -128,7 +128,7 @@ export function showPopupMenu(anchor: JView, items: { id: number; title: string 
   v.jres = anchor.jres;
   v.theme = anchor.theme;
   const [x, y] = locationOnScreen(anchor);
-  addOverlay(v, Math.max(8, Math.min(device.width - 400, x + anchor.width() - 400)), y + 20, true);
+  addOverlay(v, Math.max(device.dp(4), Math.min(device.width - device.dp(200), x + anchor.width() - device.dp(200))), y + device.dp(10), true);
 }
 
 // ── android.widget.PopupMenu over the overlay popup

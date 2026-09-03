@@ -627,7 +627,7 @@ export class JTextView extends JView {
 
   constructor() {
     super();
-    this.paintT.textSize = 28; // 14sp default
+    this.paintT.textSize = device.dp(14); // AOSP TextView default, 14sp
     this.paintT.color = -16777216;
   }
   private upperOf = ""; private upper = "";
@@ -1510,7 +1510,7 @@ class JCompoundButton extends JButton {
     this.allCaps = false;
     this.gravityT = 16 | G.START;
     this.background = null;
-    this.minH = 96;
+    this.minH = device.dp(48);
     this.minW = 0;
     this.padL = 0; this.padR = 0;
   }

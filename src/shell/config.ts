@@ -97,6 +97,8 @@ export const device = {
   get heightDp(): number { return Math.round((this.height - this.statusBar) / this.density); },
   /** full display height in dp, status bar included (resource qualifiers use this) */
   get screenHeightDp(): number { return Math.round(this.height / this.density); },
-  /** framebuffer px for a dp, for the synthesized widgets that size themselves in dp */
-  dp(n: number): number { return Math.round(n * this.density); },
+  /** framebuffer px for a dp, for the synthesized widgets that size themselves in dp. Unrounded
+   *  like scrollUnit: a stroke width or a glyph offset is legitimately fractional, and rounding
+   *  here would not survive a non-integer density. */
+  dp(n: number): number { return n * this.density; },
 };

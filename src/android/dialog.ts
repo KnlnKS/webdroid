@@ -11,6 +11,7 @@ import { addOverlay, removeOverlay } from "./popup";
 import { reportUncaught } from "./os";
 import { rvString, rvInt, rvFloat, rvDimen, themeOf, JTheme } from "./res";
 import { TV } from "./axml";
+import { device } from "../shell/config";
 import { inflateLayout, getInflater } from "./inflate";
 import { csText } from "./text";
 import type { JWindow } from "./app";
@@ -101,12 +102,12 @@ rt.register({
         // within the platform dialog's margins and minimum width, a pixel size is exact.
         const win = this.dialog?.win;
         const lw = win?.layoutW ?? -2, lh = win?.layoutH ?? -2;
-        const maxW = lw === -1 ? this.measuredW : Math.min(this.measuredW - 96, 640);
-        const availH = lh === -1 ? this.measuredH : this.measuredH - 200;
+        const maxW = lw === -1 ? this.measuredW : Math.min(this.measuredW - device.dp(48), device.dp(320));
+        const availH = lh === -1 ? this.measuredH : this.measuredH - device.dp(100);
         const wantW = lw === -1 || c.lp?.width === -1;
         await measureView(c, makeSpec(lw > 0 ? lw : maxW, wantW || lw > 0 ? MS_EXACTLY : (MS_AT_MOST | 0)),
           makeSpec(lh > 0 ? lh : availH, lh > 0 ? MS_EXACTLY : (MS_AT_MOST | 0)));
-        this.cardW = lw === -1 || lw > 0 || wantW ? c.measuredW : Math.max(560, c.measuredW);
+        this.cardW = lw === -1 || lw > 0 || wantW ? c.measuredW : Math.max(device.dp(280), c.measuredW);
         if (this.cardW !== c.measuredW) await measureView(c, makeSpec(this.cardW, MS_EXACTLY), makeSpec(availH, MS_AT_MOST | 0));
         this.cardH = c.measuredH + this.bgPad[1] + this.bgPad[3];
         this.cardW += this.bgPad[0] + this.bgPad[2];
@@ -139,8 +140,8 @@ rt.register({
         // paints the shadow without tinting the card, whose colour is the theme's to pick
         ctx.save();
         ctx.shadowColor = "rgba(0,0,0,0.45)";
-        ctx.shadowBlur = 40;
-        ctx.shadowOffsetY = 12;
+        ctx.shadowBlur = device.dp(20);
+        ctx.shadowOffsetY = device.dp(6);
         ctx.globalAlpha = 0.01;
         ctx.fillStyle = "#000";
         ctx.beginPath();
@@ -401,10 +402,10 @@ async function buildAlertContent(d: JAlertDialog) {
     const t = new JTextView();
     t.ctx = d.jctx; t.jres = col.jres; t.theme = col.theme;
     t.text = d.titleStr;
-    t.paintT.textSize = 40;
+    t.paintT.textSize = device.dp(20);
     t.paintT.tf = tfMedium;
     t.colors.defColor = -13421773;
-    t.padL = 48; t.padR = 48; t.padT = 44; t.padB = 8;
+    t.padL = t.padR = device.dp(24); t.padT = device.dp(22); t.padB = device.dp(4);
     t.lp = lpFill();
     attachView(col, t);
   }
@@ -412,9 +413,9 @@ async function buildAlertContent(d: JAlertDialog) {
     const t = new JTextView();
     t.ctx = d.jctx; t.jres = col.jres; t.theme = col.theme;
     t.text = d.message;
-    t.paintT.textSize = 32;
+    t.paintT.textSize = device.dp(16);
     t.colors.defColor = -10066330;
-    t.padL = 48; t.padR = 48; t.padT = d.titleStr ? 16 : 44; t.padB = 20;
+    t.padL = t.padR = device.dp(24); t.padT = device.dp(d.titleStr ? 8 : 22); t.padB = device.dp(10);
     t.lp = lpFill(1);
     attachView(col, t);
   }
@@ -427,9 +428,9 @@ async function buildAlertContent(d: JAlertDialog) {
       const t = new JTextView();
       t.ctx = d.jctx; t.jres = col.jres; t.theme = col.theme;
       t.text = d.items[i];
-      t.paintT.textSize = 32;
+      t.paintT.textSize = device.dp(16);
       t.colors.defColor = -13421773;
-      t.padL = 48; t.padR = 48; t.padT = 28; t.padB = 28;
+      t.padL = t.padR = device.dp(24); t.padT = t.padB = device.dp(14);
       t.clickable = true;
       t.lp = lpFill();
       const idx = i;
@@ -448,16 +449,16 @@ async function buildAlertContent(d: JAlertDialog) {
     row.orientation = 0;
     row.gravity = 5 | 16;
     row.ctx = d.jctx; row.jres = col.jres; row.theme = col.theme;
-    row.padL = 24; row.padR = 24; row.padT = 8; row.padB = 8;
+    row.padL = row.padR = device.dp(12); row.padT = row.padB = device.dp(4);
     row.lp = lpFill();
     const mkBtn = (text: string, which: number, l: unknown) => {
       const b = new JTextView();
       b.ctx = d.jctx; b.jres = col.jres; b.theme = col.theme;
       b.text = text.toUpperCase();
-      b.paintT.textSize = 30;
+      b.paintT.textSize = device.dp(15);
       b.paintT.tf = tfMedium;
       b.colors.defColor = accent;
-      b.padL = 32; b.padR = 32; b.padT = 24; b.padB = 24;
+      b.padL = b.padR = device.dp(16); b.padT = b.padB = device.dp(12);
       b.clickable = true;
       const lp = new JLinearLP();
       lp.width = -2; lp.height = -2;

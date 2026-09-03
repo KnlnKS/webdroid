@@ -15,6 +15,7 @@ import { JLinearLayout, JTextView, themeAccent, G } from "./widget";
 import { JBaseAdapter, JListView, baseAdapterMethods } from "./listview";
 import { reportUncaught } from "./os";
 import { getPrefs, JFragment, fragMethods } from "./app";
+import { device } from "../shell/config";
 
 // ── attribute resolution: mirrors res.ts's own value-resolution helpers (obtainStyled etc.),
 // just driven off a raw AXML attribute instead of a styleable index. ──
@@ -341,10 +342,10 @@ async function buildRowView(row: Row, jctx: any): Promise<JView> {
   if (row.header) {
     const t = mkText(jctx, theme, jres);
     t.text = row.pref.titleStr;
-    t.paintT.textSize = 26;
+    t.paintT.textSize = device.dp(13);
     t.paintT.tf = tfMedium;
     t.colors.defColor = themeAccent(t);
-    t.padL = 32; t.padR = 32; t.padT = 32; t.padB = 12;
+    t.padL = t.padR = t.padT = device.dp(16); t.padB = device.dp(6);
     t.lp = lpFill();
     return t;
   }
@@ -353,7 +354,7 @@ async function buildRowView(row: Row, jctx: any): Promise<JView> {
   rowL.orientation = 0;
   rowL.gravity = 16 | G.START;
   rowL.ctx = jctx; rowL.jres = jres; rowL.theme = theme;
-  rowL.padL = 32; rowL.padR = 32; rowL.padT = 28; rowL.padB = 28;
+  rowL.padL = rowL.padR = device.dp(16); rowL.padT = rowL.padB = device.dp(14);
   rowL.lp = lpFill();
   rowL.clickable = pref.enabled;
   if (pref.enabled) {
@@ -367,7 +368,7 @@ async function buildRowView(row: Row, jctx: any): Promise<JView> {
 
   const title = mkText(jctx, theme, jres);
   title.text = pref.titleStr;
-  title.paintT.textSize = 32;
+  title.paintT.textSize = device.dp(16);
   title.colors.defColor = pref.enabled ? -13421773 : -6710887;
   title.lp = lpFill();
   attachView(col, title);
@@ -375,9 +376,9 @@ async function buildRowView(row: Row, jctx: any): Promise<JView> {
   if (pref.summaryStr) {
     const sum = mkText(jctx, theme, jres);
     sum.text = pref.summaryStr;
-    sum.paintT.textSize = 26;
+    sum.paintT.textSize = device.dp(13);
     sum.colors.defColor = pref.enabled ? -8355712 : -6710887;
-    sum.padT = 4;
+    sum.padT = device.dp(2);
     sum.lp = lpFill();
     attachView(col, sum);
   }

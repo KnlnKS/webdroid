@@ -863,7 +863,8 @@ const viewMethods: NativeSpec["methods"] = {
         }
         return 1;
       case 2: { // MOVE
-        if (ev.x < -20 || ev.y < -20 || ev.x > this.width() + 20 || ev.y > this.height() + 20) {
+        const slop = device.dp(10);
+        if (ev.x < -slop || ev.y < -slop || ev.x > this.width() + slop || ev.y > this.height() + slop) {
           this.pressed = false;
           void this.refreshDrawableState();
         }
