@@ -59,7 +59,19 @@ function decode(insns: Uint16Array, pc: number): Ins {
       for (let i = 0; i < ins.a; i++) ins.regs.push(first + i);
       break;
     }
-    case "45cc": case "4rcc": throw new Error("invoke-polymorphic unsupported");
+    case "45cc": {
+      ins.a = u >> 12; ins.b = insns[pc + 1]; ins.c = insns[pc + 3];  // c = proto idx
+      const r = insns[pc + 2];
+      const all = [r & 0xf, (r >> 4) & 0xf, (r >> 8) & 0xf, (r >> 12) & 0xf, (u >> 8) & 0xf];
+      ins.regs = all.slice(0, ins.a);
+      break;
+    }
+    case "4rcc": {
+      ins.a = u >> 8; ins.b = insns[pc + 1]; ins.c = insns[pc + 3];
+      const first = insns[pc + 2];
+      for (let i = 0; i < ins.a; i++) ins.regs.push(first + i);
+      break;
+    }
     case "51l": {
       ins.a = u >> 8;
       ins.wideLit = BigInt.asIntN(64,
@@ -95,6 +107,20 @@ export function compileClassSource(R: Runtime, dex: DexFile, info: ClassInfo): s
  *  — the cell keeps already-captured references (D.dp direct-dispatch slots, interface
  *  default methods copied down) one call away, while fresh virtual dispatch finds the real
  *  function R.lz installed on the prototype. */
+/** the bootstrap a call_site links through, for the missing-API report. Best effort:
+ *  a dex we cannot read the call site out of still has to compile the rest of its class. */
+function bootstrapName(dex: DexFile, callSiteIdx: number): string {
+  try {
+    const h = dex.callSite(callSiteIdx)[0];
+    if (!h || typeof h !== "object" || !("kind" in h) || h.kind !== "mhandle") return `#${callSiteIdx}`;
+    const ref = dex.methodHandle(h.idx);
+    const m = dex.method(ref.idx);
+    return descToName(dex.type(m.cls)) + "." + m.name;
+  } catch {
+    return `#${callSiteIdx}`;
+  }
+}
+
 function emitLazy(dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const isStatic = (m.flags & ACC.STATIC) !== 0;
@@ -614,6 +640,9 @@ ${catchBody}
       case "if-gez": this.emitIfz(`${A}>=0`, i, out); break;
       case "if-gtz": this.emitIfz(`${A}>0`, i, out); break;
       case "if-lez": this.emitIfz(`${A}<=0`, i, out); break;
+      case "const-method-handle": case "const-method-type":
+        out.push(this.unsupported(`${i.name} #${i.b}`));
+        break;
       default:
         if (i.name.startsWith("aget")) {
           out.push(`if((${C}>>>0)>=${B}.length)R.aio(${C},${B}.length);${A}=${B}[${C}];`);
@@ -665,8 +694,19 @@ ${catchBody}
     out.push(isGet ? `${A}=$u.${prop};` : `$u.${prop}=${isRef ? `(${A}===0?null:${A})` : A};`);
   }
 
+  /** an instruction we cannot compile: throw here, so the rest of the method still runs */
+  private unsupported(what: string): string {
+    return `throw R.unimplemented(${JSON.stringify(`${this.info.name} ${what}`)});`;
+  }
+
   private emitInvoke(i: Ins, out: string[]) {
     const { dex } = this;
+    // invoke-custom's B operand is a call_site_idx: never a method ref. Name the
+    // bootstrap so the report says which linkage is missing, not just "invoke-custom".
+    if (i.name.startsWith("invoke-custom")) {
+      out.push(this.unsupported(`invoke-custom ${bootstrapName(dex, i.b)}`));
+      return;
+    }
     const mref = dex.method(i.b);
     const proto = dex.proto(mref.proto);
     const desc = "(" + proto.params.map((t) => dex.type(t)).join("") + ")" + dex.type(proto.ret);
@@ -720,6 +760,8 @@ ${catchBody}
         this.guard(`$u.${mangled}(${argStr})`, out);
         break;
       }
+      // invoke-polymorphic (MethodHandle.invoke/invokeExact) lands here
+      default: out.push(this.unsupported(`${kind} ${clsName}.${mref.name}${desc}`));
     }
   }
 

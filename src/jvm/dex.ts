@@ -34,7 +34,13 @@ export interface CodeItem {
 
 // encoded_value results: numbers, bigints, strings, null, or tagged refs
 export type EncVal = number | bigint | string | boolean | null | EncVal[] |
-  { kind: "type" | "field" | "method" | "enum"; idx: number } | { kind: "annotation"; anno: EncAnnotation };
+  { kind: "type" | "field" | "method" | "enum" | "proto" | "mhandle"; idx: number } |
+  { kind: "annotation"; anno: EncAnnotation };
+
+/** method_handle_item: what the handle points at, and which field/method id */
+export interface MethodHandleRef { type: number; idx: number; }
+/** the four method_handle_type values that name a method rather than a field */
+export const MH_INVOKE_STATIC = 0x04;
 
 class Reader {
   constructor(public bytes: Uint8Array, public pos: number) {}
@@ -78,6 +84,9 @@ export class DexFile {
   private stringIdsOff: number; private typeIdsOff: number; private protoIdsOff: number;
   private fieldIdsOff: number; private methodIdsOff: number;
   classDefCount: number; private classDefsOff: number;
+  private mapOff: number;
+  /** map_list sections, resolved on first use: call_site_ids and method_handles live only here */
+  private sections?: Map<number, { size: number; off: number }>;
   stringCount: number; typeCount: number;
 
   private stringCache: (string | undefined)[];
@@ -97,6 +106,7 @@ export class DexFile {
     this.fieldIdsOff = v.getUint32(84, true);
     this.methodIdsOff = v.getUint32(92, true);
     this.classDefCount = v.getUint32(96, true); this.classDefsOff = v.getUint32(100, true);
+    this.mapOff = v.getUint32(52, true);
     this.stringCache = new Array(this.stringCount);
     this.typeCache = new Array(this.typeCount);
     this.protoCache = new Array(v.getUint32(72, true));
@@ -262,6 +272,37 @@ export class DexFile {
     return { type: descToName(this.type(typeIdx)), elements, dex: this };
   }
 
+  /** map_list entry for a TYPE_* code, or undefined. The header stops at class_defs, so
+   *  call_site_ids (0x0007) and method_handles (0x0008) are reachable only through here. */
+  private section(type: number): { size: number; off: number } | undefined {
+    let m = this.sections;
+    if (!m) {
+      m = this.sections = new Map();
+      if (this.mapOff) {
+        const n = this.view.getUint32(this.mapOff, true);
+        for (let i = 0; i < n; i++) {
+          const p = this.mapOff + 4 + i * 12;
+          m.set(this.view.getUint16(p, true), { size: this.view.getUint32(p + 4, true), off: this.view.getUint32(p + 8, true) });
+        }
+      }
+    }
+    return m.get(type);
+  }
+
+  methodHandle(i: number): MethodHandleRef {
+    const sec = this.section(0x0008);
+    if (!sec || i >= sec.size) throw new Error(`method_handle ${i} out of range in ${this.name}`);
+    const off = sec.off + i * 8;
+    return { type: this.view.getUint16(off, true), idx: this.view.getUint16(off + 4, true) };
+  }
+
+  /** call_site_item: [bootstrap handle, name, method type, ...bootstrap args] */
+  callSite(i: number): EncVal[] {
+    const sec = this.section(0x0007);
+    if (!sec || i >= sec.size) throw new Error(`call_site ${i} out of range in ${this.name}`);
+    return this.encodedArray(this.view.getUint32(sec.off + i * 4, true));
+  }
+
   code(off: number): CodeItem {
     const v = this.view;
     const regs = v.getUint16(off, true);
@@ -330,6 +371,8 @@ export class DexFile {
       case 0x17: return this.string(this.readZExt(r, size)); // string
       case 0x18: return { kind: "type", idx: this.readZExt(r, size) };
       case 0x19: return { kind: "field", idx: this.readZExt(r, size) };
+      case 0x15: return { kind: "proto", idx: this.readZExt(r, size) };
+      case 0x16: return { kind: "mhandle", idx: this.readZExt(r, size) };
       case 0x1a: return { kind: "method", idx: this.readZExt(r, size) };
       case 0x1b: return { kind: "enum", idx: this.readZExt(r, size) };
       case 0x1c: { // array
