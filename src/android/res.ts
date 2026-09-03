@@ -4,9 +4,31 @@
 
 import fw from "./framework-res.json";
 
-/** framework attr id by name, e.g. AID("textColor") */
-export const AID = (name: string): number => (fw.ids as any).attr?.[name] ?? 0;
 import { Arsc } from "./arsc";
+
+let fwPkg: Arsc | null = null;
+const aidMemo = new Map<string, number>();
+/** framework attr id by name, e.g. AID("textColor") */
+export const AID = (name: string): number => {
+  let v = aidMemo.get(name);
+  if (v === undefined) aidMemo.set(name, v = fwPkg?.findId("attr", name) ?? 0);
+  return v;
+};
+
+// The package arrives over the network, but the attr-id tables the widgets read are built while
+// their modules evaluate. They are handed out empty and filled in place, before any app boots.
+const deferred: (() => void)[] = [];
+export function onFramework(fn: () => void): void { deferred.push(fn); }
+export function attrTable<K extends string>(...names: K[]): Record<K, number> {
+  const t = {} as Record<K, number>;
+  onFramework(() => { for (const n of names) t[n] = AID(n); });
+  return t;
+}
+export function setFramework(a: Arsc): void {
+  fwPkg = a;
+  aidMemo.clear();
+  for (const fill of deferred) fill();
+}
 import { TV, parseAXML, type XmlNode } from "./axml";
 import { JObj } from "../jvm/runtime";
 import { JDisplayMetrics, JTypedValue, complexToPx } from "./os";

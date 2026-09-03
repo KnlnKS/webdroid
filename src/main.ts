@@ -5,6 +5,7 @@ import "./natives";
 import { JRenderNode, SYSTEM_FONT } from "./android/graphics";
 import { setGL } from "./android/gl";
 import { rt } from "./jvm/runtime";
+import { loadFramework } from "./android/framework";
 import { bootApk, tick, dispatchPointer, pressBack, currentApp, contentTop, SCREEN_W, SCREEN_H } from "./shell/device";
 import { perf, perfReset } from "./perf";
 import { uiState, measureView, makeSpec } from "./android/view";
@@ -82,6 +83,9 @@ rt.onUncaught = (e: any) => {
 };
 const nativeEl = document.getElementById("native")!;
 rt.onNativeRequired = (lib, abi) => { nativeEl.textContent = "native code required: " + lib + " (" + abi + ")"; };
+
+// The android resource package is the same for every app: start it now so a boot never waits.
+void loadFramework();
 
 // launcher: whatever is in apks/, named from the filename
 void fetch("/apks").then((r) => r.json() as Promise<string[]>).catch(() => [] as string[]).then((files) => {

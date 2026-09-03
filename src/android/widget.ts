@@ -15,7 +15,7 @@ import {
   resolveSizeAndState, defaultSize, invalidate, requestLayout, initViewFromCtx,
   lpFromAttrs, AID, JMotionEvent, uiState, guardCall, setFocusHook,
 } from "./view";
-import { JAttrSet, obtainStyled, resolveStyleValue, rvDimen, rvColor, rvInt, rvString, rvFloat, type RV, type Resources } from "./res";
+import { JAttrSet, attrTable, onFramework, obtainStyled, resolveStyleValue, rvDimen, rvColor, rvInt, rvString, rvFloat, type RV, type Resources } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
 import { inflateLayout } from "./inflate";
@@ -714,21 +714,12 @@ export class JTextView extends JView {
     return lines;
   }
 }
-const tvAttr = {
-  text: AID("text"), textSize: AID("textSize"), textColor: AID("textColor"), textStyle: AID("textStyle"),
-  textAppearance: AID("textAppearance"), hint: AID("hint"), gravity: AID("gravity"),
-  maxLines: AID("maxLines"), minLines: AID("minLines"), lines: AID("lines"), singleLine: AID("singleLine"),
-  ellipsize: AID("ellipsize"), lineSpacingExtra: AID("lineSpacingExtra"), lineSpacingMultiplier: AID("lineSpacingMultiplier"),
-  drawableLeft: AID("drawableLeft"), drawableTop: AID("drawableTop"), drawableRight: AID("drawableRight"),
-  drawableBottom: AID("drawableBottom"), drawablePadding: AID("drawablePadding"),
-  drawableStart: AID("drawableStart"), drawableEnd: AID("drawableEnd"),
-  fontFamily: AID("fontFamily"), textAllCaps: AID("textAllCaps"), textColorHint: AID("textColorHint"),
-  inputType: AID("inputType"), letterSpacing: AID("letterSpacing"), maxLength: AID("maxLength"),
-  imeOptions: AID("imeOptions"),
-  includeFontPadding: AID("includeFontPadding"), textAppearanceAttr: 0,
-  ems: AID("ems"), minEms: AID("minEms"), minWidth: AID("minWidth"),
-};
-async function applyTextAppearance(tv: JTextView, res: Resources, styleId: number) {
+const tvAttr = attrTable(
+  "text", "textSize", "textColor", "textStyle", "textAppearance", "hint", "gravity", "maxLines",
+  "minLines", "lines", "singleLine", "ellipsize", "lineSpacingExtra", "lineSpacingMultiplier",
+  "drawableLeft", "drawableTop", "drawableRight", "drawableBottom", "drawablePadding", "drawableStart",
+  "drawableEnd", "fontFamily", "textAllCaps", "textColorHint", "inputType", "letterSpacing", "maxLength",
+  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth");async function applyTextAppearance(tv: JTextView, res: Resources, styleId: number) {
   if (!styleId) return;
   const look = (name: string) => resolveStyleValue(res, tv.theme, res.styleLookup(styleId, AID(name)));
   const ts = look("textSize");
@@ -1761,7 +1752,8 @@ const rlAttrByName: [string, number][] = [
   ["layout_alignStart", RL.ALIGN_LEFT], ["layout_alignEnd", RL.ALIGN_RIGHT],
   ["layout_alignParentStart", RL.ALIGN_PARENT_LEFT], ["layout_alignParentEnd", RL.ALIGN_PARENT_RIGHT],
 ];
-const rlAttrIds = rlAttrByName.map(([n, verb]) => [AID(n), verb] as const);
+const rlAttrIds: (readonly [number, number])[] = [];
+onFramework(() => { for (const [n, verb] of rlAttrByName) rlAttrIds.push([AID(n), verb] as const); });
 class JRelativeLayout extends JViewGroup {
   /** positions resolved by the last onMeasure, consumed by onLayout */
   rlPos = new Map<JView, { l: number; t: number }>();

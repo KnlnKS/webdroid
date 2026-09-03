@@ -175,6 +175,13 @@ export class Arsc {
 
   typeName(typeId: number): string { return this.types.get(typeId)?.[0]?.name ?? "?"; }
 
+  /** every type name the table defines, each once */
+  allTypes(): string[] {
+    const s = new Set<string>();
+    for (const chunks of this.types.values()) for (const ch of chunks) s.add(ch.name);
+    return [...s];
+  }
+
   /** best-config entry for resId, or null */
   entry(resId: number): ResEntry | null {
     if ((resId >>> 24) !== this.pkgId) return null;

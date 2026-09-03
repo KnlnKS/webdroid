@@ -5,7 +5,7 @@ import { vcall, mkEnumSet } from "../jvm/natives/jlang";
 import { mangleMethod } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, insetsOf } from "./graphics";
 import { device } from "../shell/config";
-import { Resources, type RV, type JTheme, AID, T_STR, rvColor, rvDimen, rvFloat, normRV, parseFwValue } from "./res";
+import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, normRV, parseFwValue } from "./res";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 
 // state constants
@@ -997,24 +997,12 @@ function nodeAttr(res: Resources, node: XmlNode, resId: number): RV | null {
   for (const a of node.attrs) if (a.resId === resId) return attrRV(res, a);
   return null;
 }
-const AT = {
-  color: AID("color"), drawable: AID("drawable"), shape: AID("shape"),
-  radius: AID("radius"), topLeftRadius: AID("topLeftRadius"), topRightRadius: AID("topRightRadius"),
-  bottomLeftRadius: AID("bottomLeftRadius"), bottomRightRadius: AID("bottomRightRadius"),
-  width: AID("width"), height: AID("height"), left: AID("left"), top: AID("top"),
-  right: AID("right"), bottom: AID("bottom"),
-  startColor: AID("startColor"), centerColor: AID("centerColor"), endColor: AID("endColor"),
-  angle: AID("angle"), type: AID("type"), gradientRadius: AID("gradientRadius"),
-  src: AID("src"), alpha: AID("alpha"), tint: AID("tint"),
-  viewportWidth: AID("viewportWidth"), viewportHeight: AID("viewportHeight"),
-  pathData: AID("pathData"), fillColor: AID("fillColor"), strokeColor: AID("strokeColor"),
-  strokeWidth: AID("strokeWidth"), fillAlpha: AID("fillAlpha"), fillType: AID("fillType"),
-  insetLeft: AID("insetLeft"), insetTop: AID("insetTop"), insetRight: AID("insetRight"),
-  insetBottom: AID("insetBottom"), inset: AID("inset"),
-  dashWidth: AID("dashWidth"), dashGap: AID("dashGap"),
-  drawableLeft: 0, id: AID("id"),
-};
-
+const AT = attrTable(
+  "color", "drawable", "shape", "radius", "topLeftRadius", "topRightRadius", "bottomLeftRadius",
+  "bottomRightRadius", "width", "height", "left", "top", "right", "bottom", "startColor", "centerColor",
+  "endColor", "angle", "type", "gradientRadius", "src", "alpha", "tint", "viewportWidth",
+  "viewportHeight", "pathData", "fillColor", "strokeColor", "strokeWidth", "fillAlpha", "fillType",
+  "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id");
 async function loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): Promise<JDrawable> {
   const root = parseAXML(bytes);
   return inflateDrawableNode(res, root, theme);

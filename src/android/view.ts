@@ -11,7 +11,7 @@ import { csText } from "./text";
 import { JDrawable, ST, loadDrawableRV, JColorDrawable, loadDrawable, type JColorStateList, cslColor } from "./drawable";
 import { reportUncaught, mainHandler, type JDisplayMetrics } from "./os";
 import { onMain } from "./mainloop";
-import { type Resources, JTheme, JAttrSet, AID, obtainStyled, rvDimen, rvInt, rvString, askTheme } from "./res";
+import { type Resources, JTheme, JAttrSet, AID, attrTable, obtainStyled, rvDimen, rvInt, rvString, askTheme } from "./res";
 
 export { AID };
 
@@ -257,29 +257,15 @@ export class JMarginLP extends JLayoutParams {
 export class JFrameLP extends JMarginLP { gravity = -1; }
 export class JLinearLP extends JMarginLP { weight = 0; gravity = -1; }
 
-const AT = {
-  id: AID("id"), tag: AID("tag"), background: AID("background"),
-  padding: AID("padding"), paddingLeft: AID("paddingLeft"), paddingTop: AID("paddingTop"),
-  paddingRight: AID("paddingRight"), paddingBottom: AID("paddingBottom"),
-  paddingStart: AID("paddingStart"), paddingEnd: AID("paddingEnd"),
-  layout_width: AID("layout_width"), layout_height: AID("layout_height"),
-  layout_margin: AID("layout_margin"), layout_marginLeft: AID("layout_marginLeft"),
-  layout_marginTop: AID("layout_marginTop"), layout_marginRight: AID("layout_marginRight"),
-  layout_marginBottom: AID("layout_marginBottom"), layout_marginStart: AID("layout_marginStart"),
-  layout_marginEnd: AID("layout_marginEnd"),
-  layout_gravity: AID("layout_gravity"), layout_weight: AID("layout_weight"),
-  gravity: AID("gravity"), orientation: AID("orientation"),
-  visibility: AID("visibility"), clickable: AID("clickable"), enabled: AID("enabled"),
-  minWidth: AID("minWidth"), minHeight: AID("minHeight"), alpha: AID("alpha"),
-  focusable: AID("focusable"), scaleType: AID("scaleType"), src: AID("src"),
-  contentDescription: AID("contentDescription"), weightSum: AID("weightSum"),
-  divider: AID("divider"), showDividers: AID("showDividers"), dividerPadding: AID("dividerPadding"),
-  fillViewport: AID("fillViewport"), scrollbars: AID("scrollbars"), fadeScrollbars: AID("fadeScrollbars"),
-  clipToPadding: AID("clipToPadding"), clipChildren: AID("clipChildren"),
-  descendantFocusability: AID("descendantFocusability"), foreground: AID("foreground"),
-  duplicateParentState: AID("duplicateParentState"), baselineAligned: AID("baselineAligned"),
-};
-
+const AT = attrTable(
+  "id", "tag", "background", "padding", "paddingLeft", "paddingTop", "paddingRight", "paddingBottom",
+  "paddingStart", "paddingEnd", "layout_width", "layout_height", "layout_margin", "layout_marginLeft",
+  "layout_marginTop", "layout_marginRight", "layout_marginBottom", "layout_marginStart",
+  "layout_marginEnd", "layout_gravity", "layout_weight", "gravity", "orientation", "visibility",
+  "clickable", "enabled", "minWidth", "minHeight", "alpha", "focusable", "scaleType", "src",
+  "contentDescription", "weightSum", "divider", "showDividers", "dividerPadding", "fillViewport",
+  "scrollbars", "fadeScrollbars", "clipToPadding", "clipChildren", "descendantFocusability",
+  "foreground", "duplicateParentState", "baselineAligned");
 // ── ViewOverlay: a drawing layer over the host's content. AOSP keeps an internal ViewGroup for
 // it; ours holds the two lists the host's draw pass walks, which is all anything reads back.
 export class JViewOverlay extends JObj {

@@ -189,14 +189,14 @@ rt.register({
 defineException("java/util/zip/ZipException", "java/io/IOException");
 
 // ── ZipFile / ZipEntry: index the central directory, inflate an entry only when it is read
-interface ZEntry { name: string; method: number; csize: number; size: number; time: number; off: number; }
+export interface ZEntry { name: string; method: number; csize: number; size: number; time: number; off: number; }
 const UNKNOWN: ZEntry = { name: "", method: -1, csize: -1, size: -1, time: -1, off: -1 };
 /** what ApplicationInfo.sourceDir answers (android/app.ts): the apk exists only as the unpacked classpath */
 const SOURCE_DIR = "/data/app/base.apk";
 function dosTime(date: number, time: number): number {
   return new Date(1980 + (date >> 9), ((date >> 5) & 15) - 1, date & 31, time >> 11, (time >> 5) & 63, (time & 31) * 2).getTime();
 }
-function centralDir(z: Uint8Array): Map<string, ZEntry> {
+export function centralDir(z: Uint8Array): Map<string, ZEntry> {
   const v = new DataView(z.buffer, z.byteOffset, z.byteLength);
   let e = z.length - 22; // end-of-central-directory record, scanning back over any archive comment
   while (e >= 0 && v.getUint32(e, true) !== 0x06054b50) e--;
@@ -214,7 +214,7 @@ function centralDir(z: Uint8Array): Map<string, ZEntry> {
   }
   return out;
 }
-function entryBytes(z: Uint8Array, e: ZEntry): Uint8Array {
+export function entryBytes(z: Uint8Array, e: ZEntry): Uint8Array {
   const v = new DataView(z.buffer, z.byteOffset, z.byteLength);
   // the local header carries its own name/extra lengths, which may differ from the central ones
   const start = e.off + 30 + v.getUint16(e.off + 26, true) + v.getUint16(e.off + 28, true);

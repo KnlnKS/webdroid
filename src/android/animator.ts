@@ -8,7 +8,7 @@ import { uiState, invalidate, JView, guardCall } from "./view";
 import { reportUncaught, stateSetMatches } from "./os";
 import { onMain } from "./mainloop";
 import { parseAXML, TV, type XmlNode, type XmlAttr } from "./axml";
-import { type Resources, type RV, AID, T_STR, normRV, rvFloat, rvInt } from "./res";
+import { type Resources, type RV, attrTable, T_STR, normRV, rvFloat, rvInt } from "./res";
 
 // ── ValueAnimator/ObjectAnimator (time-driven via animHooks)
 class JValueAnimator extends JObj {
@@ -521,11 +521,9 @@ const M_start = mangleMethod("start", "()V");
 const M_cancel = mangleMethod("cancel", "()V");
 
 // ── AnimatorInflater: <objectAnimator>/<set> resources, and <selector> state-list animators
-const A = {
-  propertyName: AID("propertyName"), duration: AID("duration"), valueFrom: AID("valueFrom"), valueTo: AID("valueTo"),
-  valueType: AID("valueType"), startOffset: AID("startOffset"), repeatCount: AID("repeatCount"), ordering: AID("ordering"),
-};
-function xmlAttr(res: Resources, node: XmlNode, id: number): RV | null {
+const A = attrTable(
+  "propertyName", "duration", "valueFrom", "valueTo", "valueType", "startOffset", "repeatCount",
+  "ordering");function xmlAttr(res: Resources, node: XmlNode, id: number): RV | null {
   const a: XmlAttr | undefined = node.attrs.find((x) => x.resId === id);
   if (!a) return null;
   return a.type === TV.STRING ? { t: T_STR, d: 0, s: a.str ?? "" } : res.resolveRefs(normRV({ t: a.type, d: a.data }));

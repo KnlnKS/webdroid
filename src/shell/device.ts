@@ -6,6 +6,7 @@ import { rt } from "../jvm/runtime";
 import { vfs } from "../jvm/natives/jio";
 import { vcall, curThread, mainThread, setCurThread, newObj } from "../jvm/natives/jlang";
 import { Arsc } from "../android/arsc";
+import { loadFramework } from "../android/framework";
 import { parseAXML, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
 import { mkJResources } from "../android/resnative";
@@ -23,7 +24,6 @@ import { webLayerSweep } from "../android/webkit";
 import { mangleMethod } from "../jvm/abi";
 import { perf } from "../perf";
 import { device } from "./config";
-import fw from "../android/framework-res.json";
 
 export const SCREEN_W = device.width, SCREEN_H = device.height, STATUS_H = device.statusBar;
 
@@ -44,6 +44,10 @@ export function contentTop(): number {
 }
 
 export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, apkFile = ""): Promise<BootedApp> {
+  // The android package registers android.R.* and fills the widgets' attr-id tables, so it has to
+  // be here before anything links. main.ts starts the fetch alongside the apk's, so this waits on
+  // nothing in the common case.
+  const fwPkg = await loadFramework();
   // materialize every registered native class so directly-constructed instances have methods
   for (const name of [...rt.natives.keys()]) {
     try { rt.link(name); } catch (e) { console.warn("[link native]", name, e); }
@@ -93,7 +97,7 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
   const theme = new JTheme();
   theme.res = res;
   // sensible base: Material Light, then app theme on top
-  const fwMaterial = fw.ids.style?.["Theme.Material.Light.DarkActionBar"] ?? 0;
+  const fwMaterial = fwPkg.findId("style", "Theme.Material.Light.DarkActionBar");
   if (fwMaterial) theme.apply(fwMaterial);
   if (themeResId) theme.apply(themeResId);
 

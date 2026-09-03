@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { device } from "../shell/config";
-import { Resources, setResourceNight, fwIds, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV } from "./res";
+import { Resources, setResourceNight, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
 import { JTypedValue } from "./os";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
@@ -557,13 +557,6 @@ rt.register({
 });
 rt.register({ name: "org/xmlpull/v1/XmlPullParser", ctor: class extends JObj {},
   statics: { START_DOCUMENT: 0, END_DOCUMENT: 1, START_TAG: 2, END_TAG: 3, TEXT: 4 } });
-
-// android.R.<type>.<name>: the framework's own id constants, straight off the generated table,
-// so an app that names android.R.id.content or android.R.attr.textColor gets the real id.
-for (const [type, ids] of Object.entries(fwIds)) {
-  rt.register({ name: `android/R$${type}`, ctor: class extends JObj {}, statics: ids });
-}
-rt.register({ name: "android/R", ctor: class extends JObj {} });
 
 // Implemented by app/library code, never handed out by us — it only has to exist so a
 // class declaring `implements NamespaceContext` links instead of being auto-stubbed.
