@@ -315,14 +315,17 @@ async function viewDispatchInsets(this: JView, ins: unknown) {
 }
 
 /** apply base View attrs from an AttributeSet (used by native View ctor) */
-async function applyViewAttrs(v: JView, set: JAttrSet | null) {
-  if (!set?.node || !v.jres) return;
+// defStyleAttr is the widget's own style attribute (buttonStyle, editTextStyle, ...). Without it
+// tiers 3 and 4 of the cascade are dead for every base-View attribute, which is why a Button had
+// to be handed a background in TypeScript instead of resolving Widget.Material.Button's.
+async function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0) {
+  if (!v.jres || (!set?.node && !defStyleAttr)) return;
   const res = v.jres;
   const ta = obtainStyled(res, v.theme, set, [
     AT.id, AT.background, AT.padding, AT.paddingLeft, AT.paddingTop, AT.paddingRight, AT.paddingBottom,
     AT.visibility, AT.clickable, AT.enabled, AT.minWidth, AT.minHeight, AT.alpha, AT.focusable,
     AT.paddingStart, AT.paddingEnd, AT.tag, AT.contentDescription,
-  ], 0, 0);
+  ], defStyleAttr, 0);
   const g = (i: number) => ta.vals[i];
   if (g(0)) v.idNum = g(0)!.d;
   const bgv = g(1);
@@ -1246,7 +1249,7 @@ function findByPred(v: JView, p: (v: JView) => boolean): JView | null {
 export function inheritContext(child: JView, from: JView) {
   child.ctx = from.ctx; child.jres = from.jres; child.theme = from.theme;
 }
-export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | null) {
+export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | null, defStyleAttr = 0) {
   v.ctx = jctx;
   if (jctx) {
     const host = (jctx as any).$host;
@@ -1255,7 +1258,7 @@ export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | n
       v.theme = await askTheme(jctx) ?? host.theme;
     }
   }
-  await applyViewAttrs(v, set);
+  await applyViewAttrs(v, set, defStyleAttr);
 }
 
 export class JViewGroup extends JView {

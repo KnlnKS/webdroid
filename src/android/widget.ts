@@ -7,7 +7,7 @@ import { usLocale } from "../jvm/natives/jutil";
 import { JCanvas, JTypeface, tfDefault, tfMedium, typefaceFor, cssColor, measureCtx, fontAscent, fontDescent, fontTop, fontBottom, JBitmap, JRect } from "./graphics";
 import { fontResource } from "./fonts";
 import { JTextPaint, spannedString, JEditable, mkStaticLayout } from "./text";
-import { JDrawable, drawChild, loadDrawableRV, loadDrawable, loadColorStateList, JColorStateList, cslColor, mkCsl, ST, JRippleDrawable, JGradientDrawable, JBitmapDrawable } from "./drawable";
+import { JDrawable, drawChild, loadDrawableRV, loadDrawable, loadColorStateList, JColorStateList, cslColor, mkCsl, ST, JBitmapDrawable } from "./drawable";
 import {
   JView, JViewGroup, JLayoutParams, JMarginLP, JFrameLP, JLinearLP,
   MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, makeSpec, MATCH_PARENT, WRAP_CONTENT,
@@ -819,8 +819,9 @@ function setCompoundDrawables(this: JTextView, l: JDrawable | null, t: JDrawable
  *  TextView subclass: attach to the context, apply the widget's default style (or the caller's), then `then` */
 function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v: T) => unknown): NativeSpec["methods"] {
   const init = async (v: T, c: unknown, set: JAttrSet | null, dsa = 0) => {
-    await initViewFromCtx(v, c, set);
-    await applyTvStyle(v, set, dsa || AID(styleAttr));
+    const style = dsa || AID(styleAttr);
+    await initViewFromCtx(v, c, set, style);
+    await applyTvStyle(v, set, style);
     await then?.(v);
   };
   return {
@@ -1195,18 +1196,6 @@ rt.register({
 });
 async function applyButtonDefaults(b: JButton) {
   b.clickable = true;
-  if (b.minH < 96) b.minH = 96;   // 48dp
-  if (b.minW < 128) b.minW = 128;
-  if (!b.padL && !b.padR) { b.padL = b.padR = 32; b.padT = b.padB = 0; }
-  if (!b.background) {
-    const bg = new JGradientDrawable();
-    bg.solid = -2101004;  // material grey 300-ish
-    bg.radii = [4, 4, 4, 4];
-    const r = new JRippleDrawable();
-    r.layers.push({ d: bg, insets: [0, 12, 0, 12] });
-    r.ids.push(null);
-    b.background = r;
-  }
   // AOSP's Widget.Material.Button supplies these; they are DEFAULTS, not overrides. A style
   // that spoke for itself — every Material3 button is sentence-case with its own face — has
   // already run in applyTvStyle, and forcing them here undid it.
@@ -1356,7 +1345,7 @@ rt.register({
   name: "android/widget/EditText", ctor: JEditText, sup: "android/widget/TextView",
   methods: {
     ...textViewMethods,
-    ...textViewCtors<JEditText>("editTextStyle", (et) => { if (et.minH < 96) et.minH = 96; editTextChrome(et); }),
+    ...textViewCtors<JEditText>("editTextStyle"),
     "getText()Landroid/text/Editable;": function (this: JEditText) { return this.getEditable(); },
     "setSelection(I)V": () => {},
     "setSelection(II)V": () => {},
@@ -1370,17 +1359,6 @@ rt.register({
     },
   },
 });
-function editTextChrome(et: JEditText) {
-  // material underline
-  const d = new (class extends JDrawable {
-    paint(cv: JCanvas) {
-      const ctx = cv.ctx;
-      ctx.fillStyle = et.focused ? "#6200ee" : "rgba(0,0,0,0.38)";
-      ctx.fillRect(this.bounds.left + 8, this.bounds.bottom - (et.focused ? 4 : 2), this.bounds.right - this.bounds.left - 16, et.focused ? 4 : 2);
-    }
-  })();
-  if (!et.background) et.background = d;
-}
 export let focusedEdit: JEditText | null = null;
 /** the shell's hidden <input>: the focused EditText mirrors into it so the soft keyboard shows */
 let inputEl: HTMLInputElement | null = null;
