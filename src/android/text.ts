@@ -53,7 +53,17 @@ const spanMethods: NativeSpec["methods"] = {
   "length()I": function (this: JSpannable) { return this.text.length; },
   "charAt(I)C": function (this: JSpannable, i: number) { return this.text.charCodeAt(i); },
   "toString()Ljava/lang/String;": function (this: JSpannable) { return this.text; },
-  "subSequence(II)Ljava/lang/CharSequence;": function (this: JSpannable, a: number, b: number) { return this.text.slice(a, b); },
+  // AOSP returns a Spanned (SpannableStringBuilder), not a String: app code trims a Spanned and
+  // casts the result straight back, so handing out a bare String is a ClassCastException later.
+  "subSequence(II)Ljava/lang/CharSequence;": function (this: JSpannable, a: number, b: number) {
+    const out = new (this.constructor as new () => JSpannable)();
+    out.text = this.text.slice(a, b);
+    for (const r of this.spans) {
+      if (r.end <= a || r.start >= b) continue;
+      out.spans.push({ ...r, start: Math.max(0, r.start - a), end: Math.min(b, r.end) - a });
+    }
+    return out;
+  },
   "setSpan(Ljava/lang/Object;III)V": function (this: JSpannable, span: unknown, start: number, end: number, flags: number) {
     this.spans.push({ span, start, end, flags });
   },
@@ -63,7 +73,9 @@ const spanMethods: NativeSpec["methods"] = {
   "getSpans(IILjava/lang/Class;)[Ljava/lang/Object;": function (this: JSpannable, start: number, end: number, cls: any) {
     const name = cls?.ci?.name;
     const out = this.spans.filter((s) => s.start < end && s.end > start && (!name || rt.iof(s.span, name))).map((s) => s.span);
-    (out as any).$t = "Ljava/lang/Object;";
+    // AOSP returns a T[] built from the requested Class, and callers assign it to one: the
+    // array's own type tag has to be the queried class, not Object.
+    (out as any).$t = name ? "L" + name + ";" : "Ljava/lang/Object;";
     return out;
   },
   "getSpanStart(Ljava/lang/Object;)I": function (this: JSpannable, span: unknown) {
@@ -213,7 +225,7 @@ for (const [name] of [
   ["android/text/style/ClickableSpan", {}],
   ["android/text/style/URLSpan", {}],
 ] as const) {
-  const c = class extends JObj { color = 0; style = 0; size = 1; };
+  const c = class extends JObj { color = 0; style = 0; size = 1; url = ""; };
   rt.register({
     name, ctor: c,
     ...spanHierarchy[name],
@@ -221,6 +233,8 @@ for (const [name] of [
       "<init>()V": function () {},
       "<init>(I)V": function (this: any, v: number) { this.color = v; this.style = v; this.size = v; },
       "<init>(F)V": function (this: any, v: number) { this.size = v; },
+      "<init>(Ljava/lang/String;)V": function (this: any, v: string) { this.url = v; },
+      "getURL()Ljava/lang/String;": function (this: any) { return this.url; },
       "getForegroundColor()I": function (this: any) { return this.color; },
       "getStyle()I": function (this: any) { return this.style; },
     },
@@ -242,6 +256,38 @@ rt.register({
     "<init>(II)V": function (this: JLeadingMarginStd, f: number, r: number) { this.first = f; this.rest = r; },
     "<init>(I)V": function (this: JLeadingMarginStd, v: number) { this.first = this.rest = v; },
     "getLeadingMargin(Z)I": function (this: JLeadingMarginStd, first: number) { return first ? this.first : this.rest; },
+    "drawLeadingMargin(Landroid/graphics/Canvas;Landroid/graphics/Paint;IIIIIILjava/lang/CharSequence;IIZLandroid/text/Layout;)V": () => {},
+  },
+});
+rt.register({ name: "android/text/style/LineBackgroundSpan", ctor: class extends JObj {} });
+class JQuoteSpan extends JObj { color = 0xff0000ff | 0; stripe = 2; gap = 2; }
+rt.register({
+  name: "android/text/style/QuoteSpan", ctor: JQuoteSpan,
+  ifaces: ["android/text/style/LeadingMarginSpan", "android/text/ParcelableSpan"],
+  methods: {
+    "<init>()V": function () {},
+    "<init>(I)V": function (this: JQuoteSpan, c: number) { this.color = c; },
+    "<init>(III)V": function (this: JQuoteSpan, c: number, w: number, g: number) { this.color = c; this.stripe = w; this.gap = g; },
+    "getColor()I": function (this: JQuoteSpan) { return this.color; },
+    "getStripeWidth()I": function (this: JQuoteSpan) { return this.stripe; },
+    "getGapWidth()I": function (this: JQuoteSpan) { return this.gap; },
+    "getLeadingMargin(Z)I": function (this: JQuoteSpan) { return this.stripe + this.gap; },
+    "drawLeadingMargin(Landroid/graphics/Canvas;Landroid/graphics/Paint;IIIIIILjava/lang/CharSequence;IIZLandroid/text/Layout;)V": () => {},
+  },
+});
+class JBulletSpan extends JObj { gap = 8; color = 0; radius = 4; }
+rt.register({
+  name: "android/text/style/BulletSpan", ctor: JBulletSpan,
+  ifaces: ["android/text/style/LeadingMarginSpan", "android/text/ParcelableSpan"],
+  methods: {
+    "<init>()V": function () {},
+    "<init>(I)V": function (this: JBulletSpan, gap: number) { this.gap = gap; },
+    "<init>(II)V": function (this: JBulletSpan, gap: number, c: number) { this.gap = gap; this.color = c; },
+    "<init>(III)V": function (this: JBulletSpan, gap: number, c: number, r: number) { this.gap = gap; this.color = c; this.radius = r; },
+    "getLeadingMargin(Z)I": function (this: JBulletSpan) { return 2 * this.radius + this.gap; },
+    "getBulletRadius()I": function (this: JBulletSpan) { return this.radius; },
+    "getGapWidth()I": function (this: JBulletSpan) { return this.gap; },
+    "getColor()I": function (this: JBulletSpan) { return this.color; },
     "drawLeadingMargin(Landroid/graphics/Canvas;Landroid/graphics/Paint;IIIIIILjava/lang/CharSequence;IIZLandroid/text/Layout;)V": () => {},
   },
 });
@@ -327,12 +373,46 @@ rt.register({
   methods: {
     "static fromHtml(Ljava/lang/String;)Landroid/text/Spanned;": (s: string) => htmlToSpan(s),
     "static fromHtml(Ljava/lang/String;I)Landroid/text/Spanned;": (s: string) => htmlToSpan(s),
+    // the image getter and tag handler are the app's hooks for <img> and unknown tags; the
+    // stripping converter below has neither, so they are accepted and ignored
+    "static fromHtml(Ljava/lang/String;Landroid/text/Html$ImageGetter;Landroid/text/Html$TagHandler;)Landroid/text/Spanned;": (s: string) => htmlToSpan(s),
+    "static fromHtml(Ljava/lang/String;ILandroid/text/Html$ImageGetter;Landroid/text/Html$TagHandler;)Landroid/text/Spanned;": (s: string) => htmlToSpan(s),
+    "static toHtml(Landroid/text/Spanned;)Ljava/lang/String;": (sp: unknown) => spannedString(sp),
   },
 });
+for (const n of ["android/text/Html$ImageGetter", "android/text/Html$TagHandler",
+  "org/xml/sax/ContentHandler", "org/xml/sax/XMLReader", "org/xml/sax/Attributes"]) {
+  rt.register({ name: n, ctor: class extends JObj {} });
+}
+/** AOSP parses the markup and emits spans; the browser already has the parser, so use it —
+ *  a stripper loses the bold/italic/link/quote structure AND every named entity. */
+const HTML_BLOCK = /^(P|DIV|LI|UL|OL|BLOCKQUOTE|H[1-6]|PRE|TABLE|TR)$/;
 function htmlToSpan(s: string): JSpannable {
   const sp = new JSpannable();
-  sp.text = s.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "")
-    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, d) => String.fromCharCode(parseInt(d)));
+  if (typeof DOMParser === "undefined") { sp.text = s.replace(/<[^>]+>/g, ""); return sp; }
+  const mk = (n: string) => new (rt.link(n).ctor as new () => Record<string, unknown>)();
+  const walk = (node: Node) => {
+    for (const c of node.childNodes) {
+      if (c.nodeType === 3) { sp.text += c.nodeValue ?? ""; continue; }
+      if (c.nodeType !== 1) continue;
+      const el = c as Element, tag = el.tagName;
+      if (tag === "BR") { sp.text += "\n"; continue; }
+      const block = HTML_BLOCK.test(tag);
+      if (block && sp.text && !sp.text.endsWith("\n\n")) sp.text += "\n\n";
+      const start = sp.text.length;
+      walk(el);
+      const add = (span: unknown) => sp.spans.push({ span, start, end: sp.text.length, flags: 33 });
+      if (tag === "B" || tag === "STRONG") { const o = mk("android/text/style/StyleSpan"); o.style = 1; add(o); }
+      else if (tag === "I" || tag === "EM" || tag === "CITE") { const o = mk("android/text/style/StyleSpan"); o.style = 2; add(o); }
+      else if (tag === "U") add(mk("android/text/style/UnderlineSpan"));
+      else if (tag === "CODE" || tag === "PRE") add(mk("android/text/style/TypefaceSpan"));
+      else if (tag === "BLOCKQUOTE") add(mk("android/text/style/QuoteSpan"));
+      else if (tag === "A") { const o = mk("android/text/style/URLSpan"); o.url = el.getAttribute("href") ?? ""; add(o); }
+      if (block) sp.text += "\n\n";
+    }
+  };
+  walk(new DOMParser().parseFromString(s, "text/html").body);
+  sp.text = sp.text.replace(/\n{3,}/g, "\n\n").replace(/\s+$/, "");
   return sp;
 }
 
