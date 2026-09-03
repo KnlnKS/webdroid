@@ -10,6 +10,9 @@ import { Arsc } from "./arsc";
 import { TV, parseAXML, type XmlNode } from "./axml";
 import { JObj } from "../jvm/runtime";
 import { JDisplayMetrics, JTypedValue, complexToPx } from "./os";
+import { mangleMethod } from "../jvm/abi";
+
+const M_getTheme = mangleMethod("getTheme", "()Landroid/content/res/Resources$Theme;");
 
 export const fwIds = fw.ids as Record<string, Record<string, number>>;
 const fwIdToName = new Map<number, [string, string]>();
@@ -429,6 +432,21 @@ function colorFromSelector(res: Resources, resId: number, dflt: number): number 
  * application), else the application's. Material wraps every widget's context in a
  * ThemeOverlay, so a view that reads the application theme gets none of its own styling.
  */
+/**
+ * The theme the Context itself reports, memoized as its ownTheme so the synchronous themeOf()
+ * agrees from then on. appcompat's ContextThemeWrapper is app dex holding its own
+ * Resources.Theme, invisible to a base-chain walk — and it is the wrapper Material puts every
+ * widget's ThemeOverlay in.
+ */
+export async function askTheme(ctx: unknown): Promise<JTheme | null> {
+  const f = ctx && (ctx as Record<string, unknown>)[M_getTheme];
+  if (typeof f === "function") {
+    const r = (f as () => unknown).call(ctx);
+    const t = r instanceof Promise ? await r : r;
+    if (t instanceof JTheme) { (ctx as { ownTheme?: JTheme }).ownTheme = t; return t; }
+  }
+  return themeOf(ctx);
+}
 export function themeOf(ctx: unknown): JTheme | null {
   for (let c = ctx as { ownTheme?: JTheme; base?: unknown } | null | undefined; c; c = c.base as typeof c) {
     if (c.ownTheme) return c.ownTheme;

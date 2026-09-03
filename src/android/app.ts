@@ -276,10 +276,10 @@ const contextMethods: NativeSpec["methods"] = {
   "getText(I)Ljava/lang/CharSequence;": ctxString,
   "getColor(I)I": function (this: JContext, id: number) { return rvColor(this.$host.res, this.$host.res.ref(id), 0); },
   "getColorStateList(I)Landroid/content/res/ColorStateList;": async function (this: JContext, id: number) {
-    return loadColorStateList(this.$host.res, id, this.$host.theme);
+    return loadColorStateList(this.$host.res, id, themeOf(this));
   },
   "getDrawable(I)Landroid/graphics/drawable/Drawable;": function (this: JContext, id: number) {
-    return loadDrawable(this.$host.res, id, this.$host.theme);
+    return loadDrawable(this.$host.res, id, themeOf(this));
   },
   "getAssets()Landroid/content/res/AssetManager;": function (this: JContext) {
     const a = new JAssetManager();

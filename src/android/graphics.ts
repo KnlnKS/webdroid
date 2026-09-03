@@ -284,6 +284,7 @@ export class JPaint extends JObj {
   strokeJoinN: CanvasLineJoin = "miter";
   dash: number[] | null = null;
   filterColor: number | null = null; // PorterDuff SRC_IN tint
+  filterObj: JObj | null = null;     // kept only so getColorFilter() round-trips
   /** Canvas2D form of the paint's Xfermode/BlendMode; null = plain source-over. */
   blend: GlobalCompositeOperation | null = null;
   xfermode: JObj | null = null;      // kept only so getXfermode() round-trips
@@ -306,7 +307,12 @@ export class JPaint extends JObj {
     return (this.fCache = `${it}${w} ${this.textSize}px ${this.tf.family}`);
   }
   fillStyle(): string | CanvasGradient | CanvasPattern {
-    return this.shader ?? cssColor(this.color);
+    if (this.shader) return this.shader;
+    const f = this.filterColor;
+    // PorterDuff/BlendMode SRC_IN — how Material tints every shape it draws: the filter's
+    // colour replaces the paint's, keeping the alpha the two agree on
+    if (f === null) return cssColor(this.color);
+    return cssColor(((f & 0xffffff) | ((((f >>> 24) * (this.color >>> 24) / 255) | 0) << 24)) | 0);
   }
 }
 const paintMethods: NativeSpec["methods"] = {
@@ -390,9 +396,10 @@ const paintMethods: NativeSpec["methods"] = {
   },
   "setColorFilter(Landroid/graphics/ColorFilter;)Landroid/graphics/ColorFilter;": function (this: JPaint, f: any) {
     this.filterColor = f?.tint ?? null;
+    this.filterObj = f ?? null;
     return f;
   },
-  "getColorFilter()Landroid/graphics/ColorFilter;": function () { return null; },
+  "getColorFilter()Landroid/graphics/ColorFilter;": function (this: JPaint) { return this.filterObj; },
   "setXfermode(Landroid/graphics/Xfermode;)Landroid/graphics/Xfermode;": function (this: JPaint, x: JXfermode | null) {
     this.xfermode = x;
     this.blend = x ? COMPOSITE[x.ename] ?? null : null;
@@ -470,7 +477,7 @@ export function copyPaint(src: JPaint, dst: JPaint) {
   dst.color = src.color; dst.style = src.style; dst.strokeWidth = src.strokeWidth;
   dst.textSize = src.textSize; dst.tf = src.tf; dst.antiAlias = src.antiAlias;
   dst.textAlignN = src.textAlignN; dst.shader = src.shader; dst.shaderObj = src.shaderObj; dst.dash = src.dash;
-  dst.filterColor = src.filterColor; dst.underline = src.underline; dst.fakeBold = src.fakeBold;
+  dst.filterColor = src.filterColor; dst.filterObj = src.filterObj; dst.underline = src.underline; dst.fakeBold = src.fakeBold;
   dst.letterSpacingEm = src.letterSpacingEm;
   dst.blend = src.blend; dst.xfermode = src.xfermode; dst.blendMode = src.blendMode;
 }

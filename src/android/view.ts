@@ -11,7 +11,7 @@ import { csText } from "./text";
 import { JDrawable, ST, loadDrawableRV, JColorDrawable, loadDrawable, type JColorStateList, cslColor } from "./drawable";
 import { reportUncaught, mainHandler, type JDisplayMetrics } from "./os";
 import { onMain } from "./mainloop";
-import { type Resources, JTheme, JAttrSet, AID, obtainStyled, rvDimen, rvInt, rvString, themeOf } from "./res";
+import { type Resources, JTheme, JAttrSet, AID, obtainStyled, rvDimen, rvInt, rvString, askTheme } from "./res";
 
 export { AID };
 
@@ -87,6 +87,9 @@ async function performClick(this: JView) {
 }
 function setBackground(this: JView, d: JDrawable | null) {
   this.background = d;
+  // AOSP hands a fresh background the view's current state; without it a stateful drawable
+  // paints its "no state at all" entry until something else happens to the view
+  if (d) void this.refreshDrawableState();
   invalidate();
 }
 /** this view's origin in window coordinates */
@@ -124,6 +127,7 @@ const M_onAttached = mangleMethod("onAttachedToWindow", "()V");
 const M_onDetached = mangleMethod("onDetachedFromWindow", "()V");
 const M_onConfigChanged = mangleMethod("onConfigurationChanged", "(Landroid/content/res/Configuration;)V");
 const M_drawableStateChanged = mangleMethod("drawableStateChanged", "()V");
+const M_onCreateDrawableState = mangleMethod("onCreateDrawableState", "(I)[I");
 const M_setBounds = mangleMethod("setBounds", "(IIII)V");
 
 /** absolute position of v's top-left: translations applied, each ancestor's scroll removed */
@@ -135,11 +139,13 @@ export function locationOnScreen(v: JView): [number, number] {
   }
   return [x, y];
 }
+/** AOSP: fills baseState's trailing zeros IN PLACE — callers ignore the return value */
 function mergeStates(base: Int32Array, extra: Int32Array | null): Int32Array {
-  const out = new Int32Array(base.length + (extra?.length ?? 0));
-  out.set(base);
-  if (extra) out.set(extra, base.length);
-  return out;
+  if (!extra) return base;
+  let i = base.length - 1;
+  while (i >= 0 && base[i] === 0) i--;
+  base.set(extra.subarray(0, base.length - i - 1), i + 1);
+  return base;
 }
 
 /** call a (possibly async) compiled method and settle it */
@@ -213,7 +219,8 @@ export class JView extends JObj {
   width(): number { return this.right - this.left; }
   height(): number { return this.bottom - this.top; }
 
-  drawableState(): number[] {
+  /** the states this view contributes itself; a TS subclass adds its own on top */
+  baseState(): number[] {
     const st: number[] = [ST.window_focused];
     if (this.enabled) st.push(ST.enabled);
     if (this.pressed) st.push(ST.pressed);
@@ -222,12 +229,18 @@ export class JView extends JObj {
     if (this.focused) st.push(ST.focused);
     return st;
   }
+  /** AOSP's cached mDrawableState — what onCreateDrawableState last produced, app states included */
+  stateCache: number[] | null = null;
+  drawableState(): number[] { return this.stateCache ?? this.baseState(); }
   async refreshDrawableState() {
-    const st = this.drawableState();
-    if (this.background) {
-      this.background.stateSet = st;
-      this.background.onStateChange();
-    }
+    // through the virtual onCreateDrawableState: state_checked/checkable/error live only in
+    // the app's override (every Material toggle is one), and nothing else ever sees them
+    this.stateCache = null;
+    const oc = (this as any)[M_onCreateDrawableState];
+    const raw = oc ? await guardCall(oc, this, 0) as Int32Array | null : null;
+    const st = raw ? [...raw].filter((x) => x !== 0) : this.baseState();
+    this.stateCache = st;
+    if (this.background) await vcall(this.background, "setState", "([I)Z", Int32Array.from(st));
     const f = (this as any)[M_drawableStateChanged];
     if (f) await guardCall(f, this);
     if (this.stateListAnimator) await vcall(this.stateListAnimator, "setState", "([I)V", Int32Array.from(st));
@@ -999,7 +1012,12 @@ const viewMethods: NativeSpec["methods"] = {
   "getDrawingCache()Landroid/graphics/Bitmap;": () => null,
   "getDrawingTime()J": () => BigInt(Math.floor(performance.now())),
   "verifyDrawable(Landroid/graphics/drawable/Drawable;)Z": function (this: JView, d: unknown) { return d === this.background ? 1 : 0; },
-  "onCreateDrawableState(I)[I": function (this: JView) { return Int32Array.from(this.drawableState()); },
+  "onCreateDrawableState(I)[I": function (this: JView, extra: number) {
+    const base = this.baseState();
+    const out = new Int32Array(base.length + Math.max(0, extra | 0));
+    out.set(base);
+    return out;
+  },
   "static mergeDrawableStates([I[I)[I": mergeStates,
   "mergeDrawableStates([I[I)[I": mergeStates,
   "addFocusables(Ljava/util/ArrayList;II)V": () => {},
@@ -1219,7 +1237,7 @@ export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | n
     const host = (jctx as any).$host;
     if (host) {
       v.jres = host.res;
-      v.theme = themeOf(jctx) ?? host.theme;
+      v.theme = await askTheme(jctx) ?? host.theme;
     }
   }
   await applyViewAttrs(v, set);

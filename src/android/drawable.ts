@@ -525,6 +525,14 @@ rt.register({
     "<init>([Landroid/graphics/drawable/Drawable;)V": function (this: JLayerDrawable, ds: JDrawable[]) {
       for (const d of ds ?? []) this.layers.push({ d, insets: [0, 0, 0, 0] });
     },
+    // AOSP hands the state to every layer: a Material button's fill is a MaterialShapeDrawable
+    // inside an InsetDrawable inside the ripple, and it is the one that reads state_checked
+    "onStateChange([I)Z": async function (this: JLayerDrawable, st: Int32Array) {
+      let changed = this.onStateChange();
+      for (const l of this.layers) if (await vcall(l.d, "setState", "([I)Z", st)) changed = true;
+      return changed ? 1 : 0;
+    },
+    "isStateful()Z": () => 1,
     "getNumberOfLayers()I": function (this: JLayerDrawable) { return this.layers.length; },
     "getDrawable(I)Landroid/graphics/drawable/Drawable;": function (this: JLayerDrawable, i: number) { return this.layers[i]?.d ?? null; },
     "findDrawableByLayerId(I)Landroid/graphics/drawable/Drawable;": function (this: JLayerDrawable, id: number) {
@@ -1340,10 +1348,16 @@ function frameworkDrawable(res: Resources, resId: number): JDrawable {
 }
 
 // ── ColorStateList loading (color/*.xml selectors)
-const cslCache = new Map<number, JColorStateList>();
+// Keyed by theme as well as id: a Material colour selector is a list of `?attr/` items, so
+// the same resource is a different list under every ThemeOverlay that reads it.
+const NO_THEME = {};
+const cslCache = new WeakMap<object, Map<number, JColorStateList>>();
 export async function loadColorStateList(res: Resources, resId: number, theme: JTheme | null): Promise<JColorStateList> {
   if (!resId) return mkCsl(0);
-  const cached = cslCache.get(resId);
+  const key = theme ?? NO_THEME;
+  let byId = cslCache.get(key);
+  if (!byId) cslCache.set(key, byId = new Map());
+  const cached = byId.get(resId);
   if (cached) return cached;
   let out: JColorStateList;
   if (resId >>> 24 === 0x01) {
@@ -1360,7 +1374,7 @@ export async function loadColorStateList(res: Resources, resId: number, theme: J
       out = mkCsl(rvColor(res, v, -16777216));
     } else out = mkCsl(-16777216);
   }
-  cslCache.set(resId, out);
+  byId.set(resId, out);
   return out;
 }
 function parseCslXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): JColorStateList {

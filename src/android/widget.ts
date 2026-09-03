@@ -1552,8 +1552,8 @@ class JCompoundButton extends JButton {
     this.broadcasting = false;
     invalidate();
   }
-  drawableState(): number[] {
-    const st = super.drawableState();
+  baseState(): number[] {
+    const st = super.baseState();
     if (this.checked) st.push(ST.checked);
     return st;
   }
@@ -1901,8 +1901,8 @@ rt.register({ name: "android/view/ViewStub$OnInflateListener", ctor: class exten
 class JCheckedTextView extends JTextView {
   checked = false;
   checkMarkDrawable: JDrawable | null = null;
-  drawableState(): number[] {
-    const st = super.drawableState();
+  baseState(): number[] {
+    const st = super.baseState();
     if (this.checked) st.push(ST.checked);
     return st;
   }
