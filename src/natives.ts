@@ -54,4 +54,7 @@ import "./android/ime";
 import "./android/notification";
 import "./android/base64";
 import "./android/conscrypt";
+// last of the android modules: the delegates read the classes the ones above define, and
+// they register JNI implementations rather than native classes, so nothing shadows anything
+import "./android/delegates";
 import "./native/loader";

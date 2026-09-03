@@ -453,46 +453,59 @@ rt.register({
     "isEmpty()Z": function (this: JPath) { return this.ops.length ? 0 : 1; },
     // These three walk coordinates only: an op's trailing scalars are radii and angles, and
     // moving or bounding a path must not touch them.
-    "computeBounds(Landroid/graphics/RectF;Z)V": function (this: JPath, r: JRectF) {
-      let l = Infinity, t = Infinity, rr = -Infinity, b = -Infinity;
-      for (const op of this.ops) {
-        for (let i = 1, n = opPairs[op[0]] ?? 0; n--; i += 2) {
-          l = Math.min(l, op[i] as number); rr = Math.max(rr, op[i] as number);
-          t = Math.min(t, op[i + 1] as number); b = Math.max(b, op[i + 1] as number);
-        }
-      }
-      if (l === Infinity) { r.left = r.top = r.right = r.bottom = 0; }
-      else { r.left = l; r.top = t; r.right = rr; r.bottom = b; }
-    },
-    "offset(FF)V": function (this: JPath, dx: number, dy: number) {
-      for (const op of this.ops) {
-        for (let i = 1, n = opPairs[op[0]] ?? 0; n--; i += 2) {
-          (op[i] as number) += dx; (op[i + 1] as number) += dy;
-        }
-      }
-      this.dirty = true;
-    },
+    "computeBounds(Landroid/graphics/RectF;Z)V": function (this: JPath, r: JRectF) { pathBounds(this, r); },
+    "offset(FF)V": function (this: JPath, dx: number, dy: number) { pathOffset(this, dx, dy); },
     "transform(Landroid/graphics/Matrix;)V": function (this: JPath, mt: JMatrix) {
-      const m = mt.m;
+      pathTransform(this, mt.m);
       // A rotation or skew cannot be folded into an arc's axis-aligned rect and its angles, so
       // expand the compound ops into the curves Skia would already be holding. Material's
       // ShapeAppearancePathProvider rotates the path around every corner, and without this each
       // corner arc came out as a straight chord.
-      if (m[1] !== 0 || m[2] !== 0) this.ops = verbsToOps(pathVerbs(this.ops));
-      const sx = Math.hypot(m[0], m[1]), sy = Math.hypot(m[2], m[3]);
-      for (const op of this.ops) {
-        for (let i = 1, n = opPairs[op[0]] ?? 0; n--; i += 2) {
-          const x = op[i] as number, y = op[i + 1] as number;
-          (op[i] as number) = m[0] * x + m[2] * y + m[4];
-          (op[i + 1] as number) = m[1] * x + m[3] * y + m[5];
-        }
-        const rad = opRadii[op[0]];
-        if (rad) for (let i = rad[0]; i < rad[1] && i < op.length; i++) (op[i] as number) *= (i - rad[0]) % 2 ? sy : sx;
-      }
-      this.dirty = true;
     },
   },
 });
+
+// These three walk coordinates only: an op's trailing scalars are radii and angles, and moving
+// or bounding a path must not touch them. Exported because AOSP's own Path bytecode reaches
+// the same three through nComputeBounds/nOffset/nTransform (src/android/delegates.ts).
+export function pathBounds(p: JPath, r: { left: number; top: number; right: number; bottom: number }) {
+  let l = Infinity, t = Infinity, rr = -Infinity, b = -Infinity;
+  for (const op of p.ops) {
+    for (let i = 1, n = opPairs[op[0]] ?? 0; n--; i += 2) {
+      l = Math.min(l, op[i] as number); rr = Math.max(rr, op[i] as number);
+      t = Math.min(t, op[i + 1] as number); b = Math.max(b, op[i + 1] as number);
+    }
+  }
+  if (l === Infinity) { r.left = r.top = r.right = r.bottom = 0; }
+  else { r.left = l; r.top = t; r.right = rr; r.bottom = b; }
+}
+export function pathOffset(p: JPath, dx: number, dy: number) {
+  for (const op of p.ops) {
+    for (let i = 1, n = opPairs[op[0]] ?? 0; n--; i += 2) {
+      (op[i] as number) += dx; (op[i + 1] as number) += dy;
+    }
+  }
+  p.dirty = true;
+}
+/** @param m an affine [a, b, c, d, tx, ty] */
+export function pathTransform(p: JPath, m: ArrayLike<number>) {
+  // A rotation or skew cannot be folded into an arc's axis-aligned rect and its angles, so
+  // expand the compound ops into the curves Skia would already be holding. Material's
+  // ShapeAppearancePathProvider rotates the path around every corner, and without this each
+  // corner arc came out as a straight chord.
+  if (m[1] !== 0 || m[2] !== 0) p.ops = verbsToOps(pathVerbs(p.ops));
+  const sx = Math.hypot(m[0], m[1]), sy = Math.hypot(m[2], m[3]);
+  for (const op of p.ops) {
+    for (let i = 1, n = opPairs[op[0]] ?? 0; n--; i += 2) {
+      const x = op[i] as number, y = op[i + 1] as number;
+      (op[i] as number) = m[0] * x + m[2] * y + m[4];
+      (op[i + 1] as number) = m[1] * x + m[3] * y + m[5];
+    }
+    const rad = opRadii[op[0]];
+    if (rad) for (let i = rad[0]; i < rad[1] && i < op.length; i++) (op[i] as number) *= (i - rad[0]) % 2 ? sy : sx;
+  }
+  p.dirty = true;
+}
 mkEnumSet("android/graphics/Path$Direction", ["CW", "CCW"]);
 
 // ── androidx.graphics.path (Compose/Material3 below API 34): its JNI walks Skia's verb and

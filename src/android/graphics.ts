@@ -194,6 +194,14 @@ rt.register({
       if (v === undefined) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown color " + s);
       return v;
     },
+    // a @ColorLong is the sRGB argb in the high word; argbOfColorLong reads the same encoding
+    "static pack(I)J": (c: number) => BigInt.asIntN(64, BigInt(c >>> 0) << 32n),
+    "static toArgb(J)I": (v: bigint) => argbOfColorLong(v),
+    "static alpha(J)F": (v: bigint) => (argbOfColorLong(v) >>> 24) / 255,
+    "static red(J)F": (v: bigint) => ((argbOfColorLong(v) >> 16) & 0xff) / 255,
+    "static green(J)F": (v: bigint) => ((argbOfColorLong(v) >> 8) & 0xff) / 255,
+    "static blue(J)F": (v: bigint) => (argbOfColorLong(v) & 0xff) / 255,
+    "static isSrgb(J)Z": () => 1,
     "static colorToHSV(I[F)V": (c: number, hsv: Float32Array) => {
       const r = ((c >> 16) & 0xff) / 255, g = ((c >> 8) & 0xff) / 255, b = (c & 0xff) / 255;
       const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
