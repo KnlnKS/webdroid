@@ -89,3 +89,16 @@ rt.register({
     SECURITY_LEVEL_SOFTWARE: 1, SECURITY_LEVEL_TRUSTED_ENVIRONMENT: 2, SECURITY_LEVEL_STRONGBOX: 3,
   },
 });
+
+// The cleartext policy an HTTP stack checks before a plain http:// request. The dev server's
+// proxy will fetch either scheme, so the answer is the permissive one a debug manifest gives.
+class JNetSecPolicy extends JObj {}
+const NET_SEC_POLICY = new JNetSecPolicy();
+rt.register({
+  name: "android/security/NetworkSecurityPolicy", ctor: JNetSecPolicy,
+  methods: {
+    "static getInstance()Landroid/security/NetworkSecurityPolicy;": () => NET_SEC_POLICY,
+    "isCleartextTrafficPermitted()Z": () => 1,
+    "isCleartextTrafficPermitted(Ljava/lang/String;)Z": () => 1,
+  },
+});
