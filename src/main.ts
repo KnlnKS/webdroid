@@ -8,6 +8,7 @@ import { rt } from "./jvm/runtime";
 import { loadFramework } from "./android/framework";
 import { unreadAttrs } from "./android/res";
 import { bootApk, tick, dispatchPointer, pressBack, currentApp, contentTop, SCREEN_W, SCREEN_H } from "./shell/device";
+import { attachInput } from "./shell/input";
 import { perf, perfReset } from "./perf";
 import { uiState, measureView, makeSpec } from "./android/view";
 import { onMain, mainDbg } from "./android/mainloop";
@@ -56,15 +57,12 @@ setInputElement(kbd);
 // WebViews are <iframe>s over the canvas: the framework positions them, the shell owns the layer
 setWebLayer(document.getElementById("weblayer")!);
 
-// fit canvas to viewport height. getBoundingClientRect forces layout, so the rect pointer events
-// map through is refreshed here and on pointerdown, not per pointermove.
-let rect: DOMRect;
+// fit canvas to viewport height
 function fit() {
   const h = Math.min(window.innerHeight - 110, SCREEN_H / 2 * 1.2);
   const cssH = Math.max(480, h);
   canvas.style.height = `${cssH}px`;
   canvas.style.width = `${cssH * SCREEN_W / SCREEN_H}px`;
-  rect = canvas.getBoundingClientRect();
 }
 fit();
 window.addEventListener("resize", fit);
@@ -303,32 +301,9 @@ ctx.font = "26px system-ui";
 ctx.fillText("pick an app on the right →", SCREEN_W / 2, SCREEN_H / 2 + 40);
 
 // input
-function coords(e: PointerEvent): [number, number] {
-  return [(e.clientX - rect.left) * SCREEN_W / rect.width, (e.clientY - rect.top) * SCREEN_H / rect.height];
-}
-let down = false;
-canvas.addEventListener("pointerdown", (e) => {
-  down = true;
-  rect = canvas.getBoundingClientRect();
-  try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
-  const [x, y] = coords(e);
-  void dispatchPointer(0, x, y);
+attachInput(canvas, () => {
   // refocus hidden input if an EditText is active
   if (focusedEdit) setTimeout(() => kbd.focus(), 0);
-});
-canvas.addEventListener("pointermove", (e) => {
-  if (!down) return;
-  const [x, y] = coords(e);
-  void dispatchPointer(2, x, y);
-});
-canvas.addEventListener("pointerup", (e) => {
-  if (!down) return;
-  down = false;
-  const [x, y] = coords(e);
-  void dispatchPointer(1, x, y);
-});
-canvas.addEventListener("pointercancel", () => {
-  if (down) { down = false; void dispatchPointer(3, 0, 0); }
 });
 document.getElementById("btn-back")!.addEventListener("click", () => void pressBack());
 document.getElementById("btn-home")!.addEventListener("click", () => location.reload());
