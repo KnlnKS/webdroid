@@ -1,7 +1,7 @@
 // java.nio.* buffers backed by a shared ArrayBuffer. position/limit/capacity semantics.
 
 import { rt, JObj, type NativeSpec } from "../runtime";
-import { defineException } from "./jlang";
+import { defineException, vcall } from "./jlang";
 
 export class JBuffer extends JObj {
   ab!: ArrayBuffer;
@@ -334,6 +334,83 @@ rt.register({
     "name()Ljava/lang/String;": function (this: JCharset) { return this.cname; },
     "toString()Ljava/lang/String;": function (this: JCharset) { return this.cname; },
     "displayName()Ljava/lang/String;": function (this: JCharset) { return this.cname; },
+    "static isSupported(Ljava/lang/String;)Z": () => 1,
+    "canEncode()Z": () => 1,
+    "equals(Ljava/lang/Object;)Z": function (this: JCharset, o: unknown) {
+      return o instanceof JCharset && o.cname.toUpperCase() === this.cname.toUpperCase() ? 1 : 0;
+    },
+    "hashCode()I": function (this: JCharset) { return this.cname.length; },
+    "newEncoder()Ljava/nio/charset/CharsetEncoder;": function (this: JCharset) { return mkCoder("CharsetEncoder", this); },
+    "newDecoder()Ljava/nio/charset/CharsetDecoder;": function (this: JCharset) { return mkCoder("CharsetDecoder", this); },
+    "decode(Ljava/nio/ByteBuffer;)Ljava/nio/CharBuffer;": function (this: JCharset, b: JBuffer) {
+      const text = new TextDecoder(this.cname).decode(new Uint8Array(b.ab, b.dv.byteOffset + b.pos, b.lim - b.pos));
+      b.pos = b.lim;
+      const out = viewBuffer(mkByteBuffer(text.length * 2), JCharBuffer, 1);
+      for (let i = 0; i < text.length; i++) out.dv.setUint16(i << 1, text.charCodeAt(i), out.little);
+      return out;
+    },
+  },
+});
+/** the coder classes are registered after Charset, so build them through the registry */
+function mkCoder(n: string, cs: JCharset) {
+  const c = new (rt.link("java/nio/charset/" + n).ctor as new () => JCharsetCoder)();
+  c.cs = cs;
+  return c;
+}
+// ── coders. Only UTF-8/UTF-16/Latin-1 style charsets ever reach here, and the coding-error
+// policy is fixed at REPLACE, so an encoder is its charset plus the one question anyone asks it:
+// can this character be represented?
+class JCharsetCoder extends JObj { cs: JCharset = utf8; }
+const coderChain = (ret: string): NativeSpec["methods"] => ({
+  [`charset()Ljava/nio/charset/Charset;`]: function (this: JCharsetCoder) { return this.cs; },
+  [`reset()${ret}`]: function (this: JCharsetCoder) { return this; },
+  [`onMalformedInput(Ljava/nio/charset/CodingErrorAction;)${ret}`]: function (this: JCharsetCoder) { return this; },
+  [`onUnmappableCharacter(Ljava/nio/charset/CodingErrorAction;)${ret}`]: function (this: JCharsetCoder) { return this; },
+  [`replaceWith([B)${ret}`]: function (this: JCharsetCoder) { return this; },
+});
+/** ASCII and Latin-1 have holes; every Unicode transformation format encodes everything */
+const encodable = (cs: JCharset, c: number) =>
+  /^(US-ASCII|ASCII)$/i.test(cs.cname) ? c < 0x80 : /8859-1|latin/i.test(cs.cname) ? c < 0x100 : true;
+rt.register({
+  name: "java/nio/charset/CharsetEncoder", ctor: JCharsetCoder,
+  methods: {
+    ...coderChain("Ljava/nio/charset/CharsetEncoder;"),
+    "canEncode(C)Z": function (this: JCharsetCoder, c: number) { return encodable(this.cs, c) ? 1 : 0; },
+    "canEncode(Ljava/lang/CharSequence;)Z": async function (this: JCharsetCoder, cs: unknown) {
+      const s = typeof cs === "string" ? cs : String(await vcall(cs, "toString", "()Ljava/lang/String;"));
+      for (let i = 0; i < s.length; i++) if (!encodable(this.cs, s.charCodeAt(i))) return 0;
+      return 1;
+    },
+  },
+});
+rt.register({
+  name: "java/nio/charset/CharsetDecoder", ctor: class extends JCharsetCoder {},
+  methods: {
+    ...coderChain("Ljava/nio/charset/CharsetDecoder;"),
+    "decode(Ljava/nio/ByteBuffer;Ljava/nio/CharBuffer;Z)Ljava/nio/charset/CoderResult;":
+      function (this: JCharsetCoder, src: JBuffer, dst: JBuffer) {
+        const bytes = new Uint8Array(src.ab, src.dv.byteOffset + src.pos, src.lim - src.pos);
+        const text = new TextDecoder(this.cs.cname).decode(bytes);
+        const n = Math.min(text.length, dst.lim - dst.pos);
+        for (let i = 0; i < n; i++) dst.dv.setUint16((dst.pos + i) << 1, text.charCodeAt(i), dst.little);
+        dst.pos += n;
+        src.pos = src.lim;
+        return n < text.length ? CODER_OVERFLOW : CODER_UNDERFLOW;
+      },
+  },
+});
+class JCoderResult extends JObj { over = false; }
+const CODER_UNDERFLOW = new JCoderResult();
+const CODER_OVERFLOW = new JCoderResult();
+CODER_OVERFLOW.over = true;
+rt.register({
+  name: "java/nio/charset/CoderResult", ctor: JCoderResult,
+  statics: { UNDERFLOW: CODER_UNDERFLOW, OVERFLOW: CODER_OVERFLOW },
+  methods: {
+    "isUnderflow()Z": function (this: JCoderResult) { return this.over ? 0 : 1; },
+    "isOverflow()Z": function (this: JCoderResult) { return this.over ? 1 : 0; },
+    "isError()Z": () => 0,
+    "throwException()V": () => {},
   },
 });
 rt.register({
