@@ -1649,10 +1649,11 @@ export { lpFromAttrs };
  * The scrollers keep velocity as an EWMA over one sample per frame. A finger that stops moving
  * but stays down produces no samples at all, so the last move's speed survives to the UP and
  * flings a gesture the user had already brought to rest. Those frames did have a velocity —
- * zero — so feed it to them: n missing frames is the same weight applied n times.
+ * zero — so feed it to them: n missing frames is the same weight applied n times. One frame of
+ * silence is the normal cadence between a move and the up that follows it, and costs nothing.
  */
 export const restVelocity = (v: number, weight: number, idleMs: number) =>
-  v * weight ** Math.max(0, idleMs / 16);
+  v * weight ** Math.max(0, idleMs / 16 - 1);
 
 export class JMotionEvent extends JObj {
   action = 0;
