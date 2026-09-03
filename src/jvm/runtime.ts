@@ -276,7 +276,9 @@ export class Runtime {
       this.noteMissing("class " + name);
       info.stub = true;
       info.native = true;
-      info.superInfo = this.link("java/lang/Object");
+      // Object stubbing means the natives never loaded; it must not become its own super,
+      // or every super-chain walk (copyDefaults, findStaticOwner) runs until the stack ends.
+      info.superInfo = name === "java/lang/Object" ? null : this.link("java/lang/Object");
       info.types.add(name).add("java/lang/Object");
       info.ctor = new Function("S", `return class ${name.replace(/[^A-Za-z0-9_$]/g, "_")}$stub extends S {}`)(JObj);
       info.ctor.$i = info;

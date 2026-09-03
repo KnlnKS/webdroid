@@ -5,3 +5,4 @@ webdroid-shots/
 tests/e2e/actual/
 tests/e2e/report/
 .worktrees/
+vendor/aosp/
