@@ -299,6 +299,7 @@ const contextMethods: NativeSpec["methods"] = {
   "getPackageCodePath()Ljava/lang/String;": function (this: JContext) { return getAppInfo(this.$host).sourceDir; },
   // AOSP's ensurePrivateDirExists: the directory exists once asked for (native code stat()s it)
   "getFilesDir()Ljava/io/File;": function (this: JContext) { return privDir(`/data/data/${this.$host.pkg}/files`); },
+  "getDataDir()Ljava/io/File;": function (this: JContext) { return privDir(`/data/data/${this.$host.pkg}`); },
   "getCacheDir()Ljava/io/File;": function (this: JContext) { return privDir(`/data/data/${this.$host.pkg}/cache`); },
   "getCodeCacheDir()Ljava/io/File;": function (this: JContext) { return privDir(`/data/data/${this.$host.pkg}/code_cache`); },
   "getNoBackupFilesDir()Ljava/io/File;": function (this: JContext) { return privDir(`/data/data/${this.$host.pkg}/no_backup`); },

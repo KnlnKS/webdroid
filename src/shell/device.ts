@@ -41,6 +41,8 @@ interface BootedApp {
 }
 let booted: BootedApp | null = null;
 export function currentApp(): BootedApp | null { return booted; }
+/** <activity-alias> component name → the Activity class that actually runs */
+const aliasTargets = new Map<string, string>();
 
 const FLAG_FULLSCREEN = 1024;
 /** Where the top activity's window starts: FLAG_FULLSCREEN takes the status bar's rows too. */
@@ -94,12 +96,20 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
   const iconAttr = appNode?.attrs.find((a) => a.name === "icon");
   // find launcher activity
   let mainActivity: string | null = null;
+  aliasTargets.clear();
   const activities = new Map<string, XmlNode>();
   for (const c of appNode?.children ?? []) {
     if (c.name !== "activity" && c.name !== "activity-alias") continue;
     let n = attrStr(c, "name") ?? "";
     if (n.startsWith(".")) n = pkg + n;
     activities.set(n.replace(/\./g, "/"), c);
+    // An <activity-alias> names a component, not a class: the class that runs is its
+    // targetActivity. The alias keeps its own name everywhere a component is named (that is
+    // what an intent resolves to and what PackageManager answers for) and only the launch
+    // resolves through. Play-store icon swaps and renamed entry points are aliases, so an
+    // apk whose LAUNCHER is one used to link the alias name and auto-stub it.
+    const target = attrStr(c, "targetActivity");
+    if (target) aliasTargets.set(n.replace(/\./g, "/"), (target.startsWith(".") ? pkg + target : target).replace(/\./g, "/"));
     const hasLauncher = c.children.some((f) =>
       f.name === "intent-filter" &&
       f.children.some((x) => x.name === "category" && attrStr(x, "name") === "android.intent.category.LAUNCHER"));
@@ -204,9 +214,10 @@ function launchActivity(cls: string, intent: JIntent | null): Promise<void> {
   };
   return inMainJob() ? run() : onMain(run);
 }
-async function launchActivity0(cls: string, intent: JIntent | null, relaunch?: Relaunch) {
+async function launchActivity0(component: string, intent: JIntent | null, relaunch?: Relaunch) {
   if (!booted) return;
   const host = booted.host;
+  const cls = aliasTargets.get(component) ?? component;
   let info;
   try {
     info = rt.link(cls);

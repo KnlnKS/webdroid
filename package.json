@@ -11,6 +11,7 @@
     "audit": "bun scripts/audit.ts",
     "opscan": "bun scripts/opscan.ts",
     "natcheck": "bun scripts/natcheck.ts",
+    "corpus": "bun scripts/corpus.ts",
     "dis": "bun scripts/dis.ts",
     "jsrc": "bun scripts/jsrc.ts",
     "layout": "bun scripts/layout.ts",

@@ -142,6 +142,36 @@ if (fwDexes.length) {
 }
 show("framework fields reached and not implemented", rank(r.unresolvedFields, (k) => isFramework(k) && !registeredField(k)));
 
+// --cut <prefix>: what moving this subtree to AOSP bytecode would cost. The native line is
+// only half of it — a cut is also bounded by what the hand-written framework ABOVE it still
+// names, because those sites hold the TS class and read its JS properties, and bytecode
+// spells the same fields f$name$hash. Cutting a leaf under a TS framework moves the problem.
+const cut = args.filter((a, i) => args[i - 1] === "--cut");
+if (cut.length) {
+  const src = new Map<string, string>();   // file → text, read once
+  const files: string[] = [];
+  for await (const f of new Bun.Glob("src/**/*.ts").scan(".")) files.push(f);
+  for (const f of files) src.set(f, await Bun.file(f).text());
+  const rows: [string, string, number][] = [];
+  for (const [name, spec] of rt.natives) {
+    if (!cut.some((c) => name.startsWith(c))) continue;
+    const ctor = spec.ctor.name;
+    // an anonymous or shared ctor cannot be counted by name; report it as unknown
+    let refs = 0;
+    if (/^[A-Z]\w+$/.test(ctor)) {
+      const re = new RegExp("\\b" + ctor + "\\b", "g");
+      for (const [, text] of src) refs += (text.match(re) ?? []).length;
+    }
+    rows.push([name, ctor, refs]);
+  }
+  rows.sort((a, b) => b[2] - a[2]);
+  const total = rows.reduce((n, r) => n + r[2], 0);
+  console.log(`\n=== cut [${cut.join(" ")}]: ${rows.length} native specs to withhold, ${total} references from src/ to rehome`);
+  for (const [name, ctor, n] of rows.slice(0, flag("--all") ? rows.length : limit || 25)) {
+    console.log(`  ${String(n).padStart(5)}  ${name}  (${ctor || "anonymous"})`);
+  }
+}
+
 const out = opt("--json");
 if (out) {
   await Bun.write(out, JSON.stringify({

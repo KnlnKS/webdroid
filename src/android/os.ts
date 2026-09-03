@@ -43,6 +43,10 @@ rt.register({
     "removeIdleHandler(Landroid/os/MessageQueue$IdleHandler;)V": () => {},
   },
 });
+// A callback interface an app implements has to be registered or its class cannot link, and
+// Runtime.link auto-stubs it and poisons everything downstream. Nothing calls it through this
+// name -- addIdleHandler dispatches dynamically -- which is exactly why it was missed.
+rt.register({ name: "android/os/MessageQueue$IdleHandler", ctor: class extends JObj {} });
 
 class JMessage extends JObj {
   what = 0; arg1 = 0; arg2 = 0; obj: unknown = null;
@@ -226,6 +230,12 @@ rt.register({
   statics: { THREAD_PRIORITY_BACKGROUND: 10, THREAD_PRIORITY_DEFAULT: 0, THREAD_PRIORITY_URGENT_DISPLAY: -8 },
   methods: {
     "static myPid()I": () => 1000,
+    // androidx's startup tracing asks how long ago this process began; there is no earlier
+    // moment here than the page's own timeOrigin
+    "static getStartUptimeMillis()J": () => 0n,
+    "static getStartElapsedRealtime()J": () => 0n,
+    "static getElapsedCpuTime()J": () => BigInt(Math.round(performance.now())),
+    "static isIsolated()Z": () => 0,
     "static myTid()I": () => 1000,
     "static myUid()I": () => 10001,
     "static setThreadPriority(I)V": () => {},

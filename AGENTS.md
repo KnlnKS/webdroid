@@ -342,6 +342,8 @@ screen — any direct fillText in the framework must set its own.)
   return a promise without being declared async — see "The sync tier is worth 24x"),
   `bun scripts/perfsum.ts [dir] [baseline.json]` (roll the per-step perf counters up per flow,
   with deltas against a saved baseline: how two runs compare on cost, not just on pixels),
+  `corpus [apk ...]` (boot every apk in apks/ headlessly and rank the gaps by how many apks
+  reach them -- needs `bun run dev`, needs no goldens; see "The corpus, and what it is for"),
   `nrun <apk> <lib.so>` (load one ARM32 library headless and run its JNI_OnLoad — the fastest
   way to shake out the CPU/libc/JNI layers), `ndbg` (the same over a booted page),
   `dbg [flow] [stopAt] [outDir]` (walk an e2e flow until it wedges and dump the queue site,
@@ -781,6 +783,70 @@ three are the same mistake — state cleared before the work that consumes it, w
   does — `JCanvas` already tracked saveCount and we simply were not using it.
 - the `drawing` re-entrancy guard had no `finally`.
 `perf.layoutErrors`/`drawErrors` count these. They must be 0 on fitnotes; non-zero names a gap.
+
+## One build, or none (running AOSP's own framework bytecode)
+`bun run gen-framework` pulls /system/framework/framework.jar and framework-res.apk off the
+booted reference AVD — the same android-35 image tests/e2e/golden is recorded from — into
+vendor/aosp (gitignored, 43MB + 35MB). The jar holds five plain classes*.dex: **32,713
+classes, 245,617 methods, 4,408 of them native**. src/jvm/dex.ts opens it unmodified and
+indexing all five costs 35ms.
+
+The two halves are one artifact. `com.android.internal.R.styleable.*` are int[] built in
+`<clinit>`, and the index constants beside them (`View_background = 13`) are already inlined
+into the framework's own bytecode, so a table whose ids drifted does not fail loudly — it
+answers with the wrong resource. Comparing the NAME at each of the 7,825 ids the framework's
+R classes declare:
+
+    vendor/aosp/framework-res.apk   7807 right (99.8%), 0 wrong
+    vendor/framework-res.apk        4188 right (53.5%), 3582 wrong
+
+The relinked table is not merely thinner, it is misaligned: 0x1070038 is
+`config_defaultCloudSearchServices` there and `config_defaultAmbientContextServices` in the
+bytecode, and every internal id past that point is shifted by one. public-final.xml pins the
+public ids; nothing pins the internal ones, which is most of what framework code reads. So
+gen-framework-res stays for the hand-written framework (which asks by name and does not care)
+and the pair is the precondition for bytecode.
+
+**Provenance is policy** (`src/jvm/provenance.ts`), not import order: a prefix in BYTECODE
+withholds our native spec and lets AOSP's class answer. Two orderings had to be right, both
+found by loading the real dex: natives must materialize AFTER every dex is indexed (a native
+naming a withheld class as its super used to link it, find no dex, and auto-stub it for the
+run), and the apk's dex goes in before the framework's. With view+widget withheld, View
+compiles as bytecode with super java/lang/Object, ViewGroup's super is View, and nothing is
+missing.
+
+**What a cut actually costs** — `bun run audit <apk> --framework --cut <prefix>` answers both
+halves, and the second one is the surprise:
+
+    cut android/view/ android/widget/
+      703 native methods on the reachable path, 76 classes to shim
+      209 native specs to withhold, 1760 references from src/ to rehome
+
+A cut is not bounded by super chains. It is bounded by what the hand-written framework ABOVE
+it still names: 425 sites hold `JView`, 155 `JTextView`. Even the smallest leaf is not small —
+`android/graphics/Rect` alone is 112. So a cut has to be downward-closed in the TS reference
+graph, which means the view stack moves with everything above it or not at all. Do not start
+from the leaves; the numbers say it moves the problem rather than shrinking it.
+
+Of the 703, RenderNode (58), HardwareRenderer (20), SurfaceControl (15), Surface (10) and the
+RenderNode animators (22) are behind `mAttachInfo.mHardwareAccelerated`, which RTA cannot see
+is false. Forcing the software draw path — what layoutlib does — takes ~125 off the top.
+
+## The corpus, and what it is for
+`bun run corpus` boots every apk in apks/ headlessly and ranks each gap by how many apks
+reach it, so the queue is ordered by expected value rather than by whichever app was opened
+last. It needs `bun run dev` and no goldens, so it works on an apk nobody has written a flow
+for — which is most of them.
+
+It is breadth gated on depth: a gap here is a candidate, not a task. It earns work when it
+also shows up in a scored flow. The first pass read 8/10, and four entries off the top of its
+ranking (ScheduledThreadPoolExecutor's ThreadFactory constructor, AbstractExecutorService,
+MessageQueue$IdleHandler, Process.getStartUptimeMillis, Context.getDataDir, java.util.Currency
+over Intl) took **TikTok** from failing to rendering a frame with 1,365 classes compiled.
+None of them came from staring at a stack trace.
+
+Among Us is the remaining failure and it is structural: an .xapk is split apks, and bootApk
+unzips the outer file expecting AndroidManifest.xml at the root.
 
 ## The sync tier is worth 24x, and we cannot have it yet
 Every compiled method is `async` because any call might return a promise. In the shape the

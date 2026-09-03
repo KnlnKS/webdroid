@@ -1946,6 +1946,33 @@ rt.register({
   },
 });
 
+// Currency is data the browser already has: Intl knows every ISO 4217 code's symbol and its
+// fraction digits, so nothing here is a table we would have to keep current.
+class JCurrency extends JObj { code = "USD"; }
+const currencyFmt = (code: string) => new Intl.NumberFormat("en-US", { style: "currency", currency: code });
+rt.register({
+  name: "java/util/Currency", ctor: JCurrency,
+  methods: {
+    "static getInstance(Ljava/lang/String;)Ljava/util/Currency;": (c: string) => {
+      const cur = new JCurrency();
+      cur.code = c;
+      return cur;
+    },
+    "static getInstance(Ljava/util/Locale;)Ljava/util/Currency;": () => new JCurrency(),
+    "getCurrencyCode()Ljava/lang/String;": function (this: JCurrency) { return this.code; },
+    "toString()Ljava/lang/String;": function (this: JCurrency) { return this.code; },
+    "getDisplayName()Ljava/lang/String;": function (this: JCurrency) { return this.code; },
+    "getSymbol()Ljava/lang/String;": function (this: JCurrency) {
+      const parts = currencyFmt(this.code).formatToParts(0);
+      return parts.find((p) => p.type === "currency")?.value ?? this.code;
+    },
+    "getSymbol(Ljava/util/Locale;)Ljava/lang/String;": mangleMethod("getSymbol", "()Ljava/lang/String;"),
+    "getDefaultFractionDigits()I": function (this: JCurrency) {
+      return currencyFmt(this.code).resolvedOptions().maximumFractionDigits ?? 2;
+    },
+  },
+});
+
 class JLogger extends JObj { lname = ""; }
 rt.register({
   name: "java/util/logging/Logger", ctor: JLogger,

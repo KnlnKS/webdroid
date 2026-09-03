@@ -242,6 +242,9 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
     name: n, ctor: class extends JExecutor {},
     ifaces: ["java/util/concurrent/ExecutorService", "java/util/concurrent/Executor",
       "java/util/concurrent/ScheduledExecutorService"],
+    // an app subclassing ThreadPoolExecutor to hook beforeExecute/afterExecute cannot link
+    // until the class AOSP puts between it and Object exists
+    sup: "java/util/concurrent/AbstractExecutorService",
     methods: {
       ...executorMethods,
       "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V": function () {},
@@ -249,6 +252,9 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/RejectedExecutionHandler;)V": function () {},
       "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": function () {},
       "<init>(I)V": function () {},
+      "<init>(ILjava/util/concurrent/ThreadFactory;)V": function () {},
+      "<init>(ILjava/util/concurrent/RejectedExecutionHandler;)V": function () {},
+      "<init>(ILjava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": function () {},
       "allowCoreThreadTimeOut(Z)V": function () {},
       "setRejectedExecutionHandler(Ljava/util/concurrent/RejectedExecutionHandler;)V": function () {},
       // kotlinx looks this up reflectively (removeFutureOnCancel); a cancelled schedule() never runs
@@ -258,6 +264,11 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
     },
   });
 }
+rt.register({
+  name: "java/util/concurrent/AbstractExecutorService", ctor: class extends JExecutor {},
+  ifaces: ["java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"],
+  methods: executorMethods,
+});
 class JExecutors extends JObj {}
 function mkExec(): JExecutor {
   const info = rt.link("webdroid/Executor");
