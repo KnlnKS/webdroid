@@ -13,7 +13,7 @@ import {
   MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, makeSpec, MATCH_PARENT, WRAP_CONTENT,
   childMeasureSpec, measureChildWithMargins, measureView, layoutView,
   resolveSizeAndState, defaultSize, invalidate, requestLayout, initViewFromCtx,
-  lpFromAttrs, AID, JMotionEvent, uiState, guardCall,
+  lpFromAttrs, AID, JMotionEvent, uiState, guardCall, setFocusHook,
 } from "./view";
 import { JAttrSet, obtainStyled, resolveStyleValue, rvDimen, rvColor, rvInt, rvString, rvFloat, type RV, type Resources } from "./res";
 import { TV } from "./axml";
@@ -720,6 +720,7 @@ const tvAttr = {
   drawableStart: AID("drawableStart"), drawableEnd: AID("drawableEnd"),
   fontFamily: AID("fontFamily"), textAllCaps: AID("textAllCaps"), textColorHint: AID("textColorHint"),
   inputType: AID("inputType"), letterSpacing: AID("letterSpacing"), maxLength: AID("maxLength"),
+  imeOptions: AID("imeOptions"),
   includeFontPadding: AID("includeFontPadding"), textAppearanceAttr: 0,
   ems: AID("ems"), minEms: AID("minEms"), minWidth: AID("minWidth"),
 };
@@ -761,7 +762,7 @@ async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyleAttr: n
     tvAttr.drawablePadding, tvAttr.fontFamily, tvAttr.textAllCaps, tvAttr.textColorHint,
     tvAttr.inputType, tvAttr.lineSpacingExtra, tvAttr.lineSpacingMultiplier, tvAttr.lines,
     tvAttr.drawableStart, tvAttr.drawableEnd, tvAttr.minLines,
-    tvAttr.ems, tvAttr.minEms, tvAttr.minWidth, tvAttr.includeFontPadding,
+    tvAttr.ems, tvAttr.minEms, tvAttr.minWidth, tvAttr.includeFontPadding, tvAttr.imeOptions,
   ];
   const ta = obtainStyled(res, tv.theme, set, ids, defStyleAttr, 0);
   const g = (i: number) => ta.vals[i];
@@ -807,6 +808,8 @@ async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyleAttr: n
   if (g(19)) tv.lineSpacingExtra = rvDimen(res, g(19), 0);
   if (g(20)) tv.lineSpacingMult = g(20)!.t === TV.FLOAT ? g(20)!.d : 1;
   if (g(28)) tv.includePad = !!rvInt(res, g(28), 1);
+  // the action the IME key performs: a search field declares it here and nowhere else
+  if (g(29)) tv.imeOptions = rvInt(res, g(29), 0);
   if (tv.styleBits & 1) tv.paintT.fakeBold = true;
   if (tv.styleBits & 2) tv.paintT.tf = (() => { const t = new JTypeface(); t.family = tv.paintT.tf.family; t.italic = true; t.weight = tv.paintT.tf.weight; return t; })();
 }
@@ -1379,6 +1382,21 @@ export let focusedEdit: JEditText | null = null;
 /** the shell's hidden <input>: the focused EditText mirrors into it so the soft keyboard shows */
 let inputEl: HTMLInputElement | null = null;
 export function setInputElement(el: HTMLInputElement) { inputEl = el; }
+setFocusHook((v, on) => {
+  if (v instanceof JEditText) focusEditText(on ? v : null);
+  else if (on && focusedEdit) focusEditText(null);
+});
+/** the IME action key: AOSP hands the listener the action out of imeOptions and, when nothing
+ *  consumes it, moves focus off the field the way closing the keyboard does. */
+export async function fireEditorAction(): Promise<boolean> {
+  const et = focusedEdit;
+  if (!et) return false;
+  const action = (et.imeOptions & 0xff) || 0;
+  if (et.editorActionL && await vcall(et.editorActionL, "onEditorAction",
+    "(Landroid/widget/TextView;ILandroid/view/KeyEvent;)Z", et, action, null)) return true;
+  focusEditText(null);
+  return false;
+}
 export function focusEditText(et: JEditText | null) {
   if (focusedEdit === et) return;
   if (focusedEdit) focusedEdit.focused = false;

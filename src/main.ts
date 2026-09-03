@@ -9,7 +9,7 @@ import { bootApk, tick, dispatchPointer, pressBack, currentApp, contentTop, SCRE
 import { perf, perfReset } from "./perf";
 import { uiState, measureView, makeSpec } from "./android/view";
 import { onMain, mainDbg } from "./android/mainloop";
-import { editInput, focusedEdit, focusEditText, setInputElement } from "./android/widget";
+import { editInput, fireEditorAction, focusedEdit, setInputElement } from "./android/widget";
 import { overlays } from "./android/popup";
 import { openDatabase } from "./android/sqlite";
 import { setWebLayer, webViewInfo } from "./android/webkit";
@@ -228,6 +228,8 @@ const wd = {
     await editInput(s);
     return "typed " + s;
   },
+  /** the IME action key — what a search field is waiting for after wd.type */
+  enter: () => fireEditorAction(),
   measure: (v: any, w: number, wm: number, h: number, hm: number) =>
     measureView(v, makeSpec(w, wm), makeSpec(h, hm)).then(() => [v.measuredW, v.measuredH]),
   querydb: async (sql: string) => {
@@ -300,7 +302,7 @@ document.getElementById("btn-home")!.addEventListener("click", () => location.re
 
 kbd.addEventListener("input", () => void editInput(kbd.value));
 kbd.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { focusEditText(null); }
+  if (e.key === "Enter") { void fireEditorAction(); }
 });
 
 // load Roboto

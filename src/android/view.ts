@@ -44,6 +44,15 @@ export const uiState = {
 };
 export function invalidate() { perf.invalidates++; uiState.needsDraw = true; }
 setInvalidateHook(invalidate);
+/** widget.ts owns which editable view the keyboard types into; a programmatic requestFocus()
+ *  has to reach it, or an app that opens its own search field gets a caret and no input. */
+let focusHook: (v: JView, on: boolean) => void = () => {};
+export const setFocusHook = (h: typeof focusHook) => { focusHook = h; };
+function takeFocus(v: JView) {
+  v.focused = true;
+  focusHook(v, true);
+  return 1;
+}
 /**
  * Schedule a layout pass. Pass the view whose measurement went stale so the pass can skip
  * the clean parts of the tree (AOSP marks the view and walks UP to the root; children are
@@ -180,6 +189,7 @@ export class JView extends JObj {
   clickL: unknown = null; longClickL: unknown = null; touchL: unknown = null; keyL: unknown = null; focusL: unknown = null;
   insetsL: unknown = null; a11yDelegate: unknown = null; dragL: unknown = null;
   fitsSys = false;
+  overlay: JViewOverlay | null = null;
   layoutChangeLs: unknown[] = [];
   attachLs: unknown[] = [];
   layoutRequested = true;
@@ -248,6 +258,42 @@ const AT = {
   descendantFocusability: AID("descendantFocusability"), foreground: AID("foreground"),
   duplicateParentState: AID("duplicateParentState"), baselineAligned: AID("baselineAligned"),
 };
+
+// ── ViewOverlay: a drawing layer over the host's content. AOSP keeps an internal ViewGroup for
+// it; ours holds the two lists the host's draw pass walks, which is all anything reads back.
+export class JViewOverlay extends JObj {
+  drawables: JDrawable[] = [];
+  views: JView[] = [];
+  constructor(public host: JView) { super(); }
+}
+rt.register({
+  name: "android/view/ViewOverlay", ctor: JViewOverlay,
+  methods: {
+    "add(Landroid/graphics/drawable/Drawable;)V": function (this: JViewOverlay, d: JDrawable) {
+      if (!this.drawables.includes(d)) { this.drawables.push(d); invalidate(); }
+    },
+    "remove(Landroid/graphics/drawable/Drawable;)V": function (this: JViewOverlay, d: JDrawable) {
+      removeFrom(this.drawables, d); invalidate();
+    },
+    "clear()V": function (this: JViewOverlay) { this.drawables.length = 0; this.views.length = 0; invalidate(); },
+  },
+});
+rt.register({
+  name: "android/view/ViewGroupOverlay", ctor: JViewOverlay, sup: "android/view/ViewOverlay",
+  methods: {
+    // an overlay view is laid out by whoever put it there, so it keeps the bounds it arrives with
+    "add(Landroid/view/View;)V": async function (this: JViewOverlay, v: JView) {
+      if (this.views.includes(v)) return;
+      this.views.push(v);
+      if (this.host.attached) await dispatchAttached(v);
+      invalidate();
+    },
+    "remove(Landroid/view/View;)V": function (this: JViewOverlay, v: JView) { removeFrom(this.views, v); invalidate(); },
+  },
+});
+/** every window here is the one framebuffer, so one token answers for all of them */
+const WINDOW_ID = new JObj();
+rt.register({ name: "android/view/WindowId", ctor: JObj });
 
 /** AOSP View.dispatchApplyWindowInsets: a listener wins outright, otherwise the virtual
  *  onApplyWindowInsets. ViewGroup's override calls this as its super. */
@@ -398,6 +444,7 @@ export async function drawView(v: JView, cv: JCanvas) {
     if (od) await guardCall(od, v, cv);
     const dd = (v as any)[M_dispatchDraw];
     if (dd) await guardCall(dd, v, cv);
+    if (v.overlay) await drawOverlay(v.overlay, cv);
   } catch (e) {
     perf.drawErrors++;
     noteDrawError(v, e);
@@ -405,6 +452,12 @@ export async function drawView(v: JView, cv: JCanvas) {
     while (cv.saveCount > sc) { ctx.restore(); cv.saveCount--; }
     ctx.restore();
   }
+}
+
+/** AOSP draws the overlay last, over the host's own content and children */
+async function drawOverlay(o: JViewOverlay, cv: JCanvas) {
+  for (const d of o.drawables) await guardCall((d as any)[M_drawableDraw], d, cv);
+  for (const v of o.views) await drawView(v, cv);
 }
 
 /** One log line per offending view class: a broken subtree must not log 60x a second. */
@@ -549,9 +602,9 @@ const viewMethods: NativeSpec["methods"] = {
   "hasFocus()Z": function (this: JView) { return this.focused ? 1 : 0; },
   "setFocusable(Z)V": function (this: JView, f: number) { this.focusable = !!f; },
   "setFocusableInTouchMode(Z)V": function (this: JView, f: number) { this.focusableInTouchMode = !!f; },
-  "requestFocus()Z": function (this: JView) { this.focused = true; return 1; },
+  "requestFocus()Z": function (this: JView) { return takeFocus(this); },
   "findFocus()Landroid/view/View;": function (this: JView) { return this.focused ? this : null; },
-  "clearFocus()V": function (this: JView) { this.focused = false; },
+  "clearFocus()V": function (this: JView) { this.focused = false; focusHook(this, false); },
   "isInTouchMode()Z": () => 1,
   "setOnClickListener(Landroid/view/View$OnClickListener;)V": function (this: JView, l: unknown) {
     this.clickL = l;
@@ -897,8 +950,8 @@ const viewMethods: NativeSpec["methods"] = {
   "getSuggestedMinimumHeight()I": function (this: JView) { return Math.max(this.minH, this.background?.intrinsicH() ?? 0); },
   "isFocusable()Z": function (this: JView) { return this.focusable ? 1 : 0; },
   "isFocusableInTouchMode()Z": function (this: JView) { return this.focusableInTouchMode ? 1 : 0; },
-  "requestFocus(I)Z": function (this: JView) { this.focused = true; return 1; },
-  "requestFocus(ILandroid/graphics/Rect;)Z": function (this: JView) { this.focused = true; return 1; },
+  "requestFocus(I)Z": function (this: JView) { return takeFocus(this); },
+  "requestFocus(ILandroid/graphics/Rect;)Z": function (this: JView) { return takeFocus(this); },
   "offsetLeftAndRight(I)V": function (this: JView, d: number) { this.left += d; this.right += d; invalidate(); },
   "offsetTopAndBottom(I)V": function (this: JView, d: number) { this.top += d; this.bottom += d; invalidate(); },
   // AOSP's setLeft/setTop/setRight/setBottom: direct bounds mutation outside a layout pass
@@ -934,6 +987,12 @@ const viewMethods: NativeSpec["methods"] = {
   "addTouchables(Ljava/util/ArrayList;)V": () => {},
   "cancelPendingInputEvents()V": () => {},
   "getFitsSystemWindows()Z": function (this: JView) { return this.fitsSys ? 1 : 0; },
+  // The overlay is a layer on top of the host's own content that anything can park a drawable
+  // (or, for a ViewGroup, a view) in without touching the hierarchy. Material's SearchView
+  // expand and androidx transitions both animate through it.
+  "getOverlay()Landroid/view/ViewOverlay;": function (this: JView) { return (this.overlay ??= new JViewOverlay(this)); },
+  "getOverlay()Landroid/view/ViewGroupOverlay;": function (this: JView) { return (this.overlay ??= new JViewOverlay(this)); },
+  "getWindowId()Landroid/view/WindowId;": function (this: JView) { return this.attached ? WINDOW_ID : null; },
   "getRootWindowInsets()Landroid/view/WindowInsets;": () => rootWindowInsets(),
   // AOSP: a view that fits system windows turns the bars into padding and consumes them; one
   // that does not still offers them to the deprecated fitSystemWindows(Rect) an app may override.
