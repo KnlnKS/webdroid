@@ -180,8 +180,7 @@ function fromBytes(this: JFontBuilder, b: Uint8Array | null, what: string) {
   if (b) this.bytes = b; else this.err = what;
 }
 function resourceBytes(res: Resources, id: number): Uint8Array | null {
-  const path = res.value(id).s;
-  return path ? res.zip[path] ?? null : null;
+  return res.fileOf(id)?.bytes ?? null;
 }
 rt.register({
   name: "android/graphics/fonts/Font$Builder", ctor: JFontBuilder,

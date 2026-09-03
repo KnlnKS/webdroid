@@ -549,10 +549,9 @@ function inflateAnimator(res: Resources, node: XmlNode): JValueAnimator {
 }
 function animatorXml(ctx: unknown, id: number): [Resources, XmlNode] {
   const res: Resources = (ctx as any).$host.res;
-  const v = res.value(id);
-  const bytes = v.t === TV.STRING && v.s ? res.zip[v.s] : undefined;
-  if (!bytes) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Can't load animation resource ID #0x" + id.toString(16));
-  return [res, parseAXML(bytes)];
+  const f = res.fileOf(id);
+  if (!f) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Can't load animation resource ID #0x" + id.toString(16));
+  return [res, parseAXML(f.bytes)];
 }
 class JStateListAnimator extends JObj {
   tuples: { spec: Int32Array; anim: JValueAnimator }[] = [];

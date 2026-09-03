@@ -7,7 +7,7 @@ import { vcall, javaFormat, newObj } from "../jvm/natives/jlang";
 import { newArrayList, mkIter, type JList } from "../jvm/natives/jutil";
 import { vfs, mkFile, JFile } from "../jvm/natives/jio";
 const privDir = (p: string): JFile => { vfs.mkdir(p); return mkFile(p); };
-import { type Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, rvColor, rvDimen, rvInt, rvString, resString, themeOf } from "./res";
+import { type Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, rvColor, rvDimen, rvInt, rvString, resString, themeOf, themeByName } from "./res";
 import { JResources, JAssetManager } from "./resnative";
 import { signatures, JActivityInfo } from "./pm";
 import { mkUri, type JUri } from "./net";
@@ -20,7 +20,7 @@ import { onMain } from "./mainloop";
 import { isMusicActive } from "./media";
 import { TV, attr, attrStr, type XmlNode, parseAXML } from "./axml";
 import { csText } from "./text";
-import { JCanvas, cssColor, tfMedium } from "./graphics";
+import { JCanvas, tfMedium } from "./graphics";
 import { showPopupMenu, addOverlay, removeOverlay, showToast } from "./popup";
 import { dbPath } from "./sqlite";
 
@@ -247,8 +247,12 @@ const contextMethods: NativeSpec["methods"] = {
   // only this package is installed, so its own name is the one context that exists; AOSP
   // throws NameNotFoundException for anything else (callers handle it — it is how they
   // discover an optional dependency is absent)
+  // The framework package is loaded too, and one Resources answers for both, so a context on
+  // "android" is this one. Material asks for it to read the platform palette.
   "createPackageContext(Ljava/lang/String;I)Landroid/content/Context;": function (this: JContext, pkg: string) {
-    if (pkg !== this.$host.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
+    if (pkg !== this.$host.pkg && pkg !== this.$host.res.tbl(0x01000000)?.pkgName) {
+      throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
+    }
     return this;
   },
   "getOpPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
@@ -949,7 +953,6 @@ function setWindowFlags(w: JWindow, flags: number) {
 class JActionBarView extends JViewGroup {
   titleStr = "";
   subtitleStr: string | null = null;
-  bg = -12303292;
   barH = 112;
   icon: JDrawable | null = null;
   /** The options menu, in menu order. The bar/overflow split is derived, never stored. */
@@ -979,8 +982,6 @@ class JActionBarView extends JViewGroup {
   onDrawSelf(cv: JCanvas) {
     const ctx = cv.ctx;
     const h = this.height();
-    ctx.fillStyle = cssColor(this.bg);
-    ctx.fillRect(0, 0, this.width(), h);
     let x = 27;
     if (this.showUp && this.upDrawable) {
       const d = this.upDrawable;
@@ -1304,10 +1305,9 @@ rt.register({
     "<init>(Landroid/content/Context;)V": function (this: JMenuInflater, c: unknown) { this.jctx = c; },
     "inflate(ILandroid/view/Menu;)V": async function (this: JMenuInflater, id: number, menu: JMenu) {
       const host: AppHost = this.jctx.$host;
-      const v = host.res.value(id);
-      const bytes = v.s ? host.res.zip[v.s] : null;
-      if (!bytes) { rt.noteMissing("menu 0x" + id.toString(16)); return; }
-      const root = parseAXML(bytes);
+      const f = host.res.fileOf(id);
+      if (!f) { rt.noteMissing("menu 0x" + id.toString(16)); return; }
+      const root = parseAXML(f.bytes);
       const A_id = 0x010100d0, A_title = AID("title"), A_icon = AID("icon"), A_showAsAction = AID("showAsAction");
       const walk = async (node: typeof root, target: JMenu) => {
         for (const c of node.children) {
@@ -1645,8 +1645,8 @@ export async function ensureDecor(act: JActivity) {
   const winBg = theme.lookup(AID("windowBackground"));
   if (winBg) decor.background = await loadDrawableRV(host.res, winBg, theme);
   else decor.background = (() => { const d = new JColorDrawable(); d.color = -328966; return d; })();
-  const noTitle = rvInt(host.res, theme.lookup(AID("windowNoTitle")), 0);
-  const actionBar = rvInt(host.res, theme.lookup(AID("windowActionBar")), noTitle ? 0 : 1);
+  const noTitle = rvInt(host.res, themeByName(host.res, theme, "windowNoTitle"), 0);
+  const actionBar = rvInt(host.res, themeByName(host.res, theme, "windowActionBar"), noTitle ? 0 : 1);
   // a *.Fullscreen theme is the same request as Window.addFlags(FLAG_FULLSCREEN): no status bar
   if (rvInt(host.res, theme.lookup(AID("windowFullscreen")), 0)) act.window.flags |= 1024;
   const root = new JLinearLayout();
@@ -1676,13 +1676,19 @@ export async function ensureDecor(act: JActivity) {
       if (bgv) bg = bgv;
     }
     const primary = theme.lookup(AID("colorPrimary"));
-    const bgD = bg ? await loadDrawableRV(host.res, bg as any, theme) : null;
-    bar.bg = bgD instanceof JColorDrawable ? bgD.color
-      : primary ? rvColor(host.res, primary, -12303292) : -12303292;
+    // The bar paints whatever the style names -- Holo's is a nine-patch, Material's resolves
+    // through ?attr/colorPrimary to a colour. Only a flat colour can tint the status bar.
+    let bgD = bg ? await loadDrawableRV(host.res, bg as any, theme) : null;
+    if (!bgD || (bgD instanceof JColorDrawable && !bgD.color)) {
+      const c = new JColorDrawable();
+      c.color = primary ? rvColor(host.res, primary, -12303292) : -12303292;
+      bgD = c;
+    }
+    bar.background = bgD;
     if (host.iconRes) bar.icon = await loadDrawableRV(host.res, { t: TV.REFERENCE, d: host.iconRes }, theme);
     const upv = theme.lookup(AID("homeAsUpIndicator"));
     if (upv) bar.upDrawable = await loadDrawableRV(host.res, upv as any, theme);
-    host.statusBarColor = darken(bar.bg);
+    if (bgD instanceof JColorDrawable) host.statusBarColor = darken(bgD.color);
     const sbc = theme.lookup(AID("statusBarColor"));
     if (sbc) host.statusBarColor = rvColor(host.res, sbc, host.statusBarColor);
     const lp = new (rt.link("android/widget/LinearLayout$LayoutParams").ctor)();
@@ -1940,7 +1946,7 @@ rt.register({
     "setDisplayUseLogoEnabled(Z)V": () => {},
     "setElevation(F)V": () => {},
     "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JActionBar, d: JDrawable | null) {
-      if (d instanceof JColorDrawable) this.bar((b) => { b.bg = d.color; });
+      this.bar((b) => { b.background = d; });
     },
     "hide()V": function (this: JActionBar) { this.bar((b) => { b.visibility = 8; }, requestLayout); },
     "show()V": function (this: JActionBar) { this.bar((b) => { b.visibility = 0; }, requestLayout); },

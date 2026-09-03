@@ -458,11 +458,9 @@ const preferenceFragmentMethods: NonNullable<NativeSpec["methods"]> = {
     const jctx: any = this.act;
     const host = jctx?.$host;
     if (!host) { rt.noteMissing("preference xml (no activity)"); return; }
-    const v = host.res.value(resId);
-    const path = v.s ?? (v.t === TV.REFERENCE ? host.res.value(v.d).s : undefined);
-    const bytes = path ? host.zip[path] : null;
-    if (!bytes) { rt.noteMissing("preference xml 0x" + resId.toString(16)); return; }
-    const screen = await buildPreferenceNode(parseAXML(bytes), jctx, this) as JPreferenceScreen;
+    const f = host.res.fileOf(resId);
+    if (!f) { rt.noteMissing("preference xml 0x" + resId.toString(16)); return; }
+    const screen = await buildPreferenceNode(parseAXML(f.bytes), jctx, this) as JPreferenceScreen;
     if (this.root) { for (const c of screen.children) { this.root.children.push(c); bindTree(c, this); } }
     else this.root = screen;
   },

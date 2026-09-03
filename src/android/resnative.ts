@@ -213,13 +213,15 @@ const resMethods: NativeSpec["methods"] = {
   },
   "getIdentifier(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I":
     function (this: JResources, name: string, defType: string | null, defPkg: string | null) {
-      let type = defType ?? "", n = name;
+      let type = defType ?? "", n = name, pkg = defPkg ?? "";
       const slash = name.indexOf("/");
       if (slash > 0) {
-        type = name.slice(0, slash).replace(/^.*:/, "");
+        const head = name.slice(0, slash), colon = head.indexOf(":");
+        if (colon >= 0) pkg = head.slice(0, colon);
+        type = head.replace(/^.*:/, "");
         n = name.slice(slash + 1);
       }
-      return this.host.appIdFor(type, n);
+      return this.host.idFor(type, n, pkg);
     },
   "getDisplayMetrics()Landroid/util/DisplayMetrics;": function (this: JResources) { return this.host.dm; },
   "getConfiguration()Landroid/content/res/Configuration;": () => theConfig,
@@ -234,10 +236,9 @@ const resMethods: NativeSpec["methods"] = {
     return a;
   },
   "openRawResource(I)Ljava/io/InputStream;": function (this: JResources, id: number) {
-    const path = this.host.value(id).s;
-    const bytes = path ? this.host.zip[path] : null;
-    if (!bytes) throw rt.mkThrowable("java/io/FileNotFoundException", "raw 0x" + id.toString(16));
-    return streamOf(bytes);
+    const f = this.host.fileOf(id);
+    if (!f) throw rt.mkThrowable("java/io/FileNotFoundException", "raw 0x" + id.toString(16));
+    return streamOf(f.bytes);
   },
   "obtainAttributes(Landroid/util/AttributeSet;[I)Landroid/content/res/TypedArray;": function (this: JResources, set: JAttrSet | null, attrs: Int32Array) {
     return obtainStyled(this.host, null, set, attrs, 0, 0);
@@ -473,24 +474,7 @@ class JXmlParser extends JObj {
   get node(): XmlNode | null { return this.events[this.pos]?.node ?? null; }
 }
 function mkXmlParser(res: Resources, id: number): JXmlParser {
-  const v = id ? res.value(id) : null;
-  const path = v?.s;
-  const bytes = path ? res.zip[path] : null;
-  if (!bytes && (id >>> 24) === 1) {
-    // framework xml: serve a minimal synthetic doc. android.R.anim 0x010a0004..c are the
-    // stock interpolators (androidx parsers switch on the root tag); anything else <set/>.
-    const INTERP: Record<number, string> = {
-      0x010a0004: "accelerateDecelerateInterpolator", 0x010a0005: "accelerateInterpolator",
-      0x010a0006: "decelerateInterpolator", 0x010a0007: "anticipateInterpolator",
-      0x010a0008: "overshootInterpolator", 0x010a0009: "anticipateOvershootInterpolator",
-      0x010a000a: "bounceInterpolator", 0x010a000b: "linearInterpolator", 0x010a000c: "cycleInterpolator",
-    };
-    const p0 = new JXmlParser();
-    p0.res = res; p0.set.res = res;
-    const node: XmlNode = { name: INTERP[id] ?? "set", attrs: [], children: [] } as unknown as XmlNode;
-    p0.events = [{ type: 0, node: null, depth: 0 }, { type: 2, node, depth: 1 }, { type: 3, node, depth: 1 }, { type: 1, node: null, depth: 0 }];
-    return p0;
-  }
+  const bytes = id ? res.fileOf(id)?.bytes : null;
   if (!bytes) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "xml resource 0x" + id.toString(16));
   const p = new JXmlParser();
   p.res = res;

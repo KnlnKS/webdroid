@@ -15,10 +15,17 @@ import { device } from "../src/shell/config";
 const OUT = "vendor/framework-res.apk";
 
 const sdkRoot = process.env.ANDROID_HOME ?? process.env.ANDROID_SDK_ROOT ?? `${process.env.HOME}/Library/Android/sdk`;
-const platform = `${sdkRoot}/platforms/android-${device.sdk}`;
-if (!existsSync(`${platform}/data/res`)) {
-  throw new Error(`no res tree at ${platform}/data/res — install it with:\n  sdkmanager "platforms;android-${device.sdk}"`);
-}
+// The res tree only has to be a superset of what the device can select, since anything it cannot
+// is dropped at link time and again when the table is parsed. So: the device's own API level if
+// that platform is installed, else the lowest one above it -- not the newest, whose values files
+// can use build-flag syntax an older aapt2 refuses.
+const levels = readdirSync(`${sdkRoot}/platforms`)
+  .filter((d) => existsSync(`${sdkRoot}/platforms/${d}/data/res`))
+  .map((d) => parseInt(d.slice(8)) || 0)
+  .sort((a, b) => a - b);
+const apiLevel = levels.find((l) => l >= device.sdk) ?? levels.pop();
+if (!apiLevel) throw new Error(`no platform res tree under ${sdkRoot}/platforms — install one with:\n  sdkmanager "platforms;android-${device.sdk}"`);
+const platform = `${sdkRoot}/platforms/android-${apiLevel}`;
 // build-tools are forward compatible, so the newest installed one wins
 const tools = readdirSync(`${sdkRoot}/build-tools`).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 const aapt2 = tools.map((v) => `${sdkRoot}/build-tools/${v}/aapt2`).filter(existsSync).pop();
@@ -33,13 +40,13 @@ const tmp = mkdtempSync(join(tmpdir(), "wd-fw-"));
 const flata = `${tmp}/res.zip`, manifest = `${tmp}/AndroidManifest.xml`, ids = `${tmp}/ids.txt`;
 await Bun.write(manifest, `<?xml version="1.0" encoding="utf-8"?>\n<manifest package="android"/>\n`);
 
-console.log(`compiling ${platform}/data/res …`);
+console.log(`compiling ${platform}/data/res (device reports API ${device.sdk})…`);
 run("compile", "--dir", `${platform}/data/res`, "-o", flata);
 
 // Every axis the device can never select is dropped here rather than shipped and skipped at
 // runtime: the tablet wallpapers alone are 7MB.
 console.log(`linking (density ${device.densityDpi}dpi, lang ${device.lang}, sw${device.widthDp}dp) …`);
-run("link", "-x", "--manifest", manifest, "--min-sdk-version", String(device.sdk),
+run("link", "-x", "--manifest", manifest, "--min-sdk-version", String(apiLevel),
   "--preferred-density", `${device.densityDpi}dpi`, "-c", `${device.lang},sw${device.widthDp}dp`,
   "--emit-ids", ids, "-o", OUT, flata);
 

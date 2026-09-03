@@ -37,9 +37,8 @@ rt.register({
       const mp = new JMediaPlayer();
       const host = c?.$host;
       if (host) {
-        const v = host.res.value(resId);
-        const bytes = v.s ? host.zip[v.s] : null;
-        if (bytes) mpLoad(mp, bytes);
+        const f = host.res.fileOf(resId);
+        if (f) mpLoad(mp, f.bytes);
       }
       return mp;
     },
@@ -119,8 +118,7 @@ rt.register({
     "load(Landroid/content/res/AssetFileDescriptor;I)I": function (this: JSoundPool, afd: any) { return this.load(afd?.bytes ?? null); },
     "load(Landroid/content/Context;II)I": function (this: JSoundPool, c: any, resId: number) {
       const host = c?.$host;
-      const v = host ? host.res.value(resId) : null;
-      return this.load(v?.s ? host.zip[v.s] ?? null : null);
+      return this.load(host?.res.fileOf(resId)?.bytes ?? null);
     },
     "load(Ljava/lang/String;I)I": function (this: JSoundPool, path: string) { return this.load(vfs.read(path)); },
     "play(IFFIIF)I": function (this: JSoundPool, id: number, l: number, r: number, prio: number, loop: number, rate: number) {

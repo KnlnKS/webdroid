@@ -5,7 +5,7 @@ import { vcall, mkEnumSet } from "../jvm/natives/jlang";
 import { mangleMethod } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, insetsOf } from "./graphics";
 import { device } from "../shell/config";
-import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, normRV, parseFwValue } from "./res";
+import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, normRV } from "./res";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 
 // state constants
@@ -1141,7 +1141,10 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
       }
       return d;
     }
-    case "bitmap": {
+    // Both wrap a bitmap named by android:src; the .9.png's own npTc chunk is what makes it
+    // stretch, so the tag only has to reach the file.
+    case "bitmap":
+    case "nine-patch": {
       const da = nodeAttr(res, node, AT.src);
       return da ? loadDrawableRV(res, da, theme) : new JColorDrawable();
     }
@@ -1217,29 +1220,30 @@ export async function loadDrawableRV(res: Resources, v: RV | null, theme: JTheme
     d.color = v.d;
     return d;
   }
-  if (v.s) { // direct file path
-    return loadDrawableFile(res, v.s, theme);
+  if (v.s) { // a path straight off an attribute, always the app's own
+    const bytes = res.arsc?.files(v.s);
+    if (bytes) return loadDrawableFile(res, v.s, bytes, theme);
   }
   return new JColorDrawable();
 }
 
 export async function loadDrawable(res: Resources, resId: number, theme: JTheme | null): Promise<JDrawable> {
   if (!resId) return new JColorDrawable();
-  if (resId >>> 24 === 0x01) return frameworkDrawable(res, resId);
-  const e = res.arsc?.entry(resId);
+  const e = res.tbl(resId)?.entry(resId);
   if (!e) { rt.noteMissing("drawable 0x" + resId.toString(16)); return new JColorDrawable(); }
   if (e.value) {
-    const v: RV = { t: e.value.type, d: e.value.data };
-    if (v.t === TV.STRING) return loadDrawableFile(res, res.arsc!.values.get(v.d), theme);
-    if (v.t === TV.REFERENCE) return loadDrawable(res, v.d, theme);
-    return loadDrawableRV(res, v, theme);
+    if (e.value.type === TV.STRING) {
+      const f = res.fileOf(resId);
+      if (!f) { rt.noteMissing("drawable file for 0x" + resId.toString(16)); return new JColorDrawable(); }
+      return loadDrawableFile(res, f.path, f.bytes, theme);
+    }
+    if (e.value.type === TV.REFERENCE) return loadDrawable(res, e.value.data, theme);
+    return loadDrawableRV(res, { t: e.value.type, d: e.value.data }, theme);
   }
   return new JColorDrawable();
 }
 
-async function loadDrawableFile(res: Resources, path: string, theme: JTheme | null): Promise<JDrawable> {
-  const bytes = res.zip[path];
-  if (!bytes) { rt.noteMissing("drawable file " + path); return new JColorDrawable(); }
+async function loadDrawableFile(res: Resources, path: string, bytes: Uint8Array, theme: JTheme | null): Promise<JDrawable> {
   if (path.endsWith(".xml")) return loadDrawableXml(res, bytes, theme);
   if (path.endsWith(".9.png")) {
     const chunk = parseNinePatchChunk(bytes);
@@ -1268,137 +1272,6 @@ async function loadDrawableFile(res: Resources, path: string, theme: JTheme | nu
   return d;
 }
 
-// ── synthetic framework drawables
-// AOSP asset names decompose as [ic_]<family>_<concept>[_holo|_material][_light|_dark], the theme
-// tokens in either order (ab_solid_dark_holo / ic_ab_back_holo_dark). Drop the qualifier tokens,
-// then match the remaining base against the icon table and the family table below; colours come
-// from the real framework palette (vendor/aosp-res/colors_holo.xml via framework-res.json).
-
-/** icon concepts → 24dp-viewport path; key lists every AOSP name that means the same glyph */
-const FW_ICONS: Record<string, string> = {
-  "back|up|previous|find_previous|media_previous": "M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z",
-  "forward|next|find_next|media_next|go_search": "M10 6 8.6 7.4 13.2 12l-4.6 4.6L10 18l6-6z",
-  "more|moreoverflow|overflow": "M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z",
-  "search|find": "M15.5 14h-.8l-.3-.3a6.5 6.5 0 1 0-.7.7l.3.3v.8l5 5 1.5-1.5-5-5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z",
-  "close|clear|cancel|close_clear_cancel|delete": "M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z",
-  "add|new": "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z",
-  "done|check|commit_search|save": "M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z",
-  share: "M18 16.1c-.8 0-1.5.3-2 .8l-7.1-4.2a3 3 0 0 0 0-1.4l7-4.1a3 3 0 1 0-1-2.2l.1.7L8 9.8a3 3 0 1 0 0 4.4l7.1 4.2-.1.6a2.9 2.9 0 1 0 3-2.9z",
-  "edit|compose": "M3 17.2V21h3.8L17.8 9.9l-3.7-3.7zm17.7-10a1 1 0 0 0 0-1.4l-2.3-2.3a1 1 0 0 0-1.4 0l-1.8 1.8 3.7 3.7z",
-  "alert|error": "M1 21h22L12 2zm12-3h-2v-2h2zm0-4h-2v-4h2z",
-  "info|details|help": "M11 7h2v2h-2zm0 4h2v6h-2zm1-9a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z",
-  "refresh|rotate|sync": "M17.6 6.4A8 8 0 1 0 19.7 14h-2.1A6 6 0 1 1 12 6a6 6 0 0 1 4.2 1.8L13 11h7V4z",
-};
-let ICON: Map<string, Path2D> | null = null; // built on first use: Path2D is DOM-only
-function icon(name: string): Path2D | undefined {
-  if (!ICON) {
-    ICON = new Map();
-    for (const [k, d] of Object.entries(FW_ICONS)) { const p = new Path2D(d); for (const n of k.split("|")) ICON.set(n, p); }
-  }
-  return ICON.get(name);
-}
-/** tokens that only qualify the variant, never the concept */
-const QUAL = new Set(["holo", "material", "light", "dark", "inverse", "api", "am", "alpha"]);
-/** families an ic_ name may name before its concept */
-const ICFAM = new Set(["ab", "cab", "menu", "dialog", "input", "btn", "action", "media", "lock", "notification"]);
-
-const fwColorCache = new Map<string, number>();
-function fwc(res: Resources, name: string): number {
-  let c = fwColorCache.get(name);
-  if (c === undefined) fwColorCache.set(name, (c = rvColor(res, parseFwValue("@color/" + name, null, res), 0)));
-  return c;
-}
-const av = (c: number, a: number) => ((a << 24) | (c & 0xffffff)) | 0;
-const solidD = (c: number) => { const d = new JColorDrawable(); d.color = c; return d; };
-/** the holo state background: transparent at rest, control-accent under press/activation */
-function selD(hi: number): JStateListDrawable {
-  const d = new JStateListDrawable();
-  const it = (st: number[], c: number) => d.items.push({ states: st, negStates: [], d: solidD(c) });
-  it([ST.pressed], av(hi, 0x99));
-  for (const s of [ST.activated, ST.selected, ST.checked]) it([s], av(hi, 0x66));
-  it([ST.focused], av(hi, 0x33));
-  it([], 0);
-  return d;
-}
-const DP = 2; // px per dp at our fixed xhdpi density
-/** the holo spinner asset: transparent, a 1dp rule along the bottom ending in a caret triangle */
-class JSpinnerBg extends JDrawable {
-  norm = 0; hi = 0; rule = true;
-  paint(cv: JCanvas) {
-    const { left, right, bottom } = this.bounds;
-    const y = bottom - DP, side = 12 * DP;
-    const c = this.tint ?? (this.stateSet.includes(ST.pressed) || this.stateSet.includes(ST.focused) ? this.hi : this.norm);
-    const ctx = cv.ctx;
-    ctx.save();
-    ctx.globalAlpha *= this.alpha / 255;
-    if (this.rule) {
-      ctx.fillStyle = cssColor(av(c, 0x80));
-      ctx.fillRect(left, y, right - left, DP);
-    }
-    ctx.fillStyle = cssColor(c);
-    ctx.beginPath();
-    if (this.rule) { ctx.moveTo(right, y - side); ctx.lineTo(right, y); ctx.lineTo(right - side, y); }
-    else { // the Material caret points down, centred on the drawable's right edge
-      const cy = (this.bounds.top + bottom) / 2, w = 5 * DP;
-      ctx.moveTo(right - 2 * w, cy - w / 2); ctx.lineTo(right, cy - w / 2); ctx.lineTo(right - w, cy + w);
-    }
-    ctx.fill();
-    ctx.restore();
-  }
-  onStateChange(): boolean { return true; }
-}
-type FwGen = (res: Resources, dark: boolean, base: string, material: boolean) => JDrawable | null;
-const FW_FAMILY: [RegExp, FwGen][] = [
-  [/^ic_/, (r, dark, b) => {
-    const t = b.split("_").slice(1);
-    if (ICFAM.has(t[0])) t.shift();
-    const p = icon(t.join("_"));
-    if (!p) return null;
-    const d = new JVectorDrawable();
-    d.paths.push({ p2d: p, fill: fwc(r, dark ? "bright_foreground_holo_dark" : "bright_foreground_holo_light"), stroke: null, strokeW: 0, fillAlpha: 1, evenOdd: false });
-    return d;
-  }],
-  // widgets draw these glyphs themselves; the framework asset is a no-op
-  [/transparent|shadow|^text_cursor|^switch_|^btn_(check|radio|toggle|star)|^ratingbar|^indicator_/, () => solidD(0)],
-  [/^spinner_(background|default|pressed|focused|disabled|ab)/, (r, dark, _base, material) => {
-    const d = new JSpinnerBg();
-    // the Material asset is the caret alone; only the Holo one carries the rule under it
-    d.rule = !material;
-    d.norm = fwc(r, dark ? "hint_foreground_holo_dark" : "hint_foreground_holo_light");
-    d.hi = fwc(r, dark ? "holo_control_activated" : "holo_light_control_activated");
-    return d;
-  }],
-  [/^c?ab_|_ab(_|$)/, (r, dark) => solidD(fwc(r, dark ? "holo_primary" : "background_holo_light"))],
-  [/divider/, (r) => solidD(fwc(r, "holo_gray_light"))],
-  [/activated_background|_selector|item_background|selectable/, (r, dark) => selD(fwc(r, dark ? "holo_control_activated" : "holo_light_control_activated"))],
-  [/^btn_|^button_/, (r, dark) => {
-    const d = new JGradientDrawable();
-    d.solid = fwc(r, dark ? "holo_button_normal" : "holo_light_button_normal");
-    d.radii = [4, 4, 4, 4];
-    return d;
-  }],
-  [/edit_text|editbox|textfield/, () => solidD(0)],
-  [/background|panel|dialog|popup|toast|menu|frame/, (r, dark) => solidD(fwc(r, dark ? "background_holo_dark" : "background_holo_light"))],
-  [/scrollbar|fastscroll|scrubber|progress/, (r) => solidD(fwc(r, "holo_gray_light"))],
-];
-
-const fwSpec = new Map<number, { gen: FwGen; dark: boolean; base: string; material: boolean } | null>();
-function frameworkDrawable(res: Resources, resId: number): JDrawable {
-  let sp = fwSpec.get(resId);
-  if (sp === undefined) {
-    const toks = res.idName(resId).split("_");
-    const base = toks.filter((t) => !QUAL.has(t)).join("_");
-    const dark = toks.includes("dark") || toks.includes("inverse");
-    sp = null;
-    for (const [re, gen] of FW_FAMILY) if (re.test(base)) { sp = { gen, dark, base, material: toks.includes("material") }; break; }
-    fwSpec.set(resId, sp);
-  }
-  const d = sp?.gen(res, sp.dark, sp.base, sp.material);
-  if (d) return d;
-  rt.noteMissing("fw drawable " + res.idName(resId));
-  return new JColorDrawable();
-}
-
 // ── ColorStateList loading (color/*.xml selectors)
 // Keyed by theme as well as id: a Material colour selector is a list of `?attr/` items, so
 // the same resource is a different list under every ThemeOverlay that reads it.
@@ -1412,20 +1285,15 @@ export async function loadColorStateList(res: Resources, resId: number, theme: J
   const cached = byId.get(resId);
   if (cached) return cached;
   let out: JColorStateList;
-  if (resId >>> 24 === 0x01) {
-    out = mkCsl(rvColor(res, res.resolveRefs({ t: TV.REFERENCE, d: resId }), -16777216));
-  } else {
-    const e = res.arsc?.entry(resId);
-    if (e?.value?.type === TV.STRING) {
-      const path = res.arsc!.values.get(e.value.data);
-      const bytes = res.zip[path];
-      out = bytes ? parseCslXml(res, bytes, theme) : mkCsl(-16777216);
-    } else if (e?.value) {
-      const v = res.resolveRefs({ t: e.value.type, d: e.value.data });
-      if (v.t === TV.REFERENCE && v.d !== resId) return loadColorStateList(res, v.d, theme);
-      out = mkCsl(rvColor(res, v, -16777216));
-    } else out = mkCsl(-16777216);
-  }
+  const e = res.tbl(resId)?.entry(resId);
+  if (e?.value?.type === TV.STRING) {
+    const f = res.fileOf(resId);
+    out = f ? parseCslXml(res, f.bytes, theme) : mkCsl(-16777216);
+  } else if (e?.value) {
+    const v = res.resolveRefs({ t: e.value.type, d: e.value.data });
+    if (v.t === TV.REFERENCE && v.d !== resId) return loadColorStateList(res, v.d, theme);
+    out = mkCsl(rvColor(res, v, -16777216));
+  } else out = mkCsl(-16777216);
   byId.set(resId, out);
   return out;
 }

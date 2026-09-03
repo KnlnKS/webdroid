@@ -3,7 +3,7 @@
 import { rt, JObj } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
-import { parseAXML, TV, type XmlNode } from "./axml";
+import { parseAXML, type XmlNode } from "./axml";
 import { JAttrSet } from "./res";
 import { JView, JViewGroup, guardCall } from "./view";
 import type { AppHost } from "./app";
@@ -132,23 +132,12 @@ export async function inflateLayout(jctx: any, layoutId: number, parent: unknown
 }
 async function inflateLayoutInner(jctx: any, layoutId: number, parent: unknown, attach: boolean): Promise<JView | null> {
   const host = hostOf(jctx);
-  // android.R.layout.* framework layouts (0x0109xxxx) — synthesize programmatically
-  if ((layoutId & 0xffff0000) === 0x01090000) {
-    const v = await frameworkLayout(jctx, layoutId, parent as JViewGroup | null, attach);
-    if (v) return v;
-  }
-  const v = host.res.value(layoutId);
-  const path = v.s ?? (v.t === TV.REFERENCE ? host.res.value(v.d).s : undefined);
-  if (!path) {
+  const f = host.res.fileOf(layoutId);
+  if (!f) {
     rt.noteMissing("layout 0x" + layoutId.toString(16));
     return null;
   }
-  const bytes = host.res.zip[path];
-  if (!bytes) {
-    rt.noteMissing("layout file " + path);
-    return null;
-  }
-  const root = parseAXML(bytes);
+  const root = parseAXML(f.bytes);
   return inflateNode(jctx, root, (parent as JViewGroup) ?? null, attach && !!parent);
 }
 
@@ -205,57 +194,3 @@ rt.register({
 rt.register({ name: "android/view/LayoutInflater$Factory", ctor: class extends JObj {} });
 rt.register({ name: "android/view/LayoutInflater$Factory2", ctor: class extends JObj {} });
 
-// android.R.layout.* — the simple built-in list/spinner layouts, synthesized as view trees.
-// android.R.id.text1 = 0x01020014, text2 = 0x01020015
-async function frameworkLayout(jctx: any, id: number, parent: JViewGroup | null, attach: boolean): Promise<JView | null> {
-  const mk = (cls: string): Promise<JView> => newObj(cls, "(Landroid/content/Context;)V", jctx);
-  const dp = (n: number) => Math.round(n * 2); // 2x density
-  const cfgText = async (tv: JView, id2: number) => {
-    tv.idNum = id2;
-    await vcall(tv, "setTextSize", "(F)V", 18);
-    (tv as any).padL = dp(16); (tv as any).padR = dp(16); (tv as any).padT = dp(12); (tv as any).padB = dp(12);
-    (tv as any).minH = dp(40);
-  };
-  let root: JView | null = null;
-  switch (id) {
-    case 0x01090003: // simple_list_item_1
-    case 0x01090008: // simple_spinner_item
-    // Holo's Widget.Holo.DropDownItem.Spinner carries no check mark, so the dropdown row is
-    // a plain text row -- only a genuine single-choice list gets an indicator.
-    case 0x01090009: // simple_spinner_dropdown_item
-    case 0x0109000f: { // simple_dropdown_item_1line
-      const tv = await mk("android/widget/TextView");
-      await cfgText(tv, 0x01020014);
-      root = tv;
-      break;
-    }
-    case 0x0109001a: { // simple_list_item_single_choice / checked
-      const tv = await mk("android/widget/CheckedTextView");
-      await cfgText(tv, 0x01020014);
-      root = tv;
-      break;
-    }
-    case 0x01090004: { // simple_list_item_2
-      const ll = await mk("android/widget/LinearLayout");
-      await vcall(ll, "setOrientation", "(I)V", 1);
-      const t1 = await mk("android/widget/TextView"); await cfgText(t1, 0x01020014); await vcall(t1, "setTextSize", "(F)V", 18);
-      const t2 = await mk("android/widget/TextView"); await cfgText(t2, 0x01020015); await vcall(t2, "setTextSize", "(F)V", 14);
-      await vcall(ll, "addView", "(Landroid/view/View;)V", t1);
-      await vcall(ll, "addView", "(Landroid/view/View;)V", t2);
-      root = ll;
-      break;
-    }
-    default: {
-      // generic fallback: a single TextView (covers most unlisted simple_* item layouts)
-      const tv = await mk("android/widget/TextView");
-      await cfgText(tv, 0x01020014);
-      root = tv;
-    }
-  }
-  if (root && parent) {
-    const lp = await guardCall((parent as any)[M_generateLP], parent, null);
-    if (attach) await guardCall((parent as any)[M_addView], parent, root, lp);
-    else root.lp = lp;
-  }
-  return attach && parent ? parent : root;
-}
