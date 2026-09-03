@@ -54,19 +54,37 @@ async function opfsRoot(name: string): Promise<FileSystemDirectoryHandle> {
   return (await navigator.storage.getDirectory()).getDirectoryHandle(name, { create: true });
 }
 
+/**
+ * A dialog that rejects before anyone could have seen it was never shown: Chrome answers
+ * AbortError both for "the user cancelled" and for "this window may not open a chooser"
+ * (an unfocused or automated window, and every headless one), and the timing is the only
+ * thing that tells them apart. A refusal falls through to OPFS so the app still gets a
+ * directory; a real cancellation is reported as one.
+ */
+const SHOWN_MS = 250;
+
 /** The picked directory, or null if the user backed out. */
 export async function pickDirectory(): Promise<FileSystemDirectoryHandle | null> {
   const show = window.showDirectoryPicker;
-  const open = show ? () => show.call(window, { mode: "readwrite", id: "webdroid" }) : () => opfsRoot("storage");
-  let h: FileSystemDirectoryHandle | null = await open().catch(async (e: Error) =>
-    // AbortError is the user cancelling; SecurityError means the gesture that led here had
-    // already gone stale, so ask again on the next press rather than losing the request.
+  const open = async () => {
+    if (!show) return opfsRoot("storage");
+    const t0 = performance.now();
+    try {
+      return await show.call(window, { mode: "readwrite", id: "webdroid" });
+    } catch (e) {
+      if ((e as Error)?.name === "AbortError" && performance.now() - t0 < SHOWN_MS) return opfsRoot("storage");
+      throw e;
+    }
+  };
+  const h = await open().catch((e: Error) =>
+    // SecurityError: the gesture that led here had gone stale by the time the app asked, so
+    // put the request on the next press rather than losing it.
     e?.name === "SecurityError"
       ? new Promise<FileSystemDirectoryHandle>((res, rej) => onNextGesture(() => open().then(res, rej))).catch(() => null)
       : null);
   if (!h) return null;
   roots.set(h.name, h);
-  await tx("readwrite", (s) => s.put(h!, h!.name)).catch(() => {});
+  await tx("readwrite", (s) => s.put(h, h.name)).catch(() => {});
   return h;
 }
 

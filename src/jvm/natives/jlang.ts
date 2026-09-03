@@ -404,10 +404,13 @@ rt.mkThrowable = (cls: string, msg: string | null) => {
 };
 
 // marker interfaces (registered early so link of String/implementors works + iof)
-for (const i of ["java/lang/Runnable", "java/lang/Comparable", "java/lang/CharSequence", "java/lang/Cloneable",
-  "java/lang/Iterable", "java/lang/Appendable", "java/lang/AutoCloseable", "java/io/Serializable",
-  "java/io/Closeable", "java/io/Flushable"]) {
-  rt.register({ name: i, ctor: class extends JObj {} });
+// Closeable extends AutoCloseable, and that inheritance is load-bearing: R8 merges every
+// close-this-thing helper into one method that tests `instanceof AutoCloseable` first, so a
+// Closeable that is not one falls off the end of the chain into its throw.
+for (const [i, ext] of [["java/lang/Runnable"], ["java/lang/Comparable"], ["java/lang/CharSequence"],
+  ["java/lang/Cloneable"], ["java/lang/Iterable"], ["java/lang/Appendable"], ["java/lang/AutoCloseable"],
+  ["java/io/Serializable"], ["java/io/Closeable", "java/lang/AutoCloseable"], ["java/io/Flushable"]] as const) {
+  rt.register({ name: i, ctor: class extends JObj {}, ifaces: ext ? [ext] : undefined });
 }
 
 // ── arrays: Object-typed call sites (Kotlin generics) dispatch mangled Object

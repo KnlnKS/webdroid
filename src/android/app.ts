@@ -947,6 +947,7 @@ rt.register({
     },
     "getApplicationLabel(Landroid/content/pm/ApplicationInfo;)Ljava/lang/CharSequence;": () => appHost?.appLabel ?? "App",
     "resolveActivity(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;": (i: JIntent | null) => resolveActivity(i),
+    "resolveActivity(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Landroid/content/pm/ResolveInfo;": (i: JIntent | null) => resolveActivity(i),
     "queryIntentActivities(Landroid/content/Intent;I)Ljava/util/List;": (i: JIntent | null) => {
       const ri = resolveActivity(i);
       return newArrayList(ri ? [ri] : []);
@@ -962,6 +963,14 @@ rt.register({
     "hasSystemFeature(Ljava/lang/String;)Z": () => 0,
     "checkPermission(Ljava/lang/String;Ljava/lang/String;)I": () => 0,
     "getInstallerPackageName(Ljava/lang/String;)Ljava/lang/String;": () => null,
+    // "Install unknown apps" is off until the user turns it on in Settings, which is what an
+    // app checks before offering to sideload its own updates.
+    "canRequestPackageInstalls()Z": () => 0,
+    "isInstantApp()Z": () => 0,
+    "isInstantApp(Ljava/lang/String;)Z": () => 0,
+    // one package is installed and it owns every uid this process can ask about
+    "getNameForUid(I)Ljava/lang/String;": () => appHost?.pkg ?? null,
+    "getPackagesForUid(I)[Ljava/lang/String;": () => jarray([appHost?.pkg ?? ""], "Ljava/lang/String;"),
     "getInstalledPackages(I)Ljava/util/List;": () => newArrayList(),
     "getInstalledPackages(Landroid/content/pm/PackageManager$PackageInfoFlags;)Ljava/util/List;": () => newArrayList(),
     "getActivityInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;": (comp: any) =>
@@ -2209,6 +2218,12 @@ for (const [name, methods, statics] of [
     },
     "isInteractive()Z": () => 1,
     "isPowerSaveMode()Z": () => 0,
+    // the screen is on and this app was never exempted from doze, which is the state an app
+    // offering a "disable battery optimisation" prompt is asking about
+    "isDeviceIdleMode()Z": () => 0,
+    "isDeviceLightIdleMode()Z": () => 0,
+    "isLowPowerStandbyEnabled()Z": () => 0,
+    "isIgnoringBatteryOptimizations(Ljava/lang/String;)Z": () => 0,
   }],
   ["android/os/PowerManager$WakeLock", {
     "acquire()V": () => {}, "acquire(J)V": () => {}, "release()V": () => {},

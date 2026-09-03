@@ -278,3 +278,24 @@ rt.register({
   statics: { CHANNEL_CONFIGURATION_MONO: 2, CHANNEL_CONFIGURATION_STEREO: 3, CHANNEL_OUT_MONO: 4, CHANNEL_OUT_STEREO: 12, CHANNEL_IN_MONO: 16, CHANNEL_IN_STEREO: 12,
     ENCODING_PCM_16BIT: 2, ENCODING_PCM_8BIT: 3, ENCODING_PCM_FLOAT: 4, ENCODING_DEFAULT: 1, ENCODING_INVALID: 0 },
 });
+
+/**
+ * The media scanner indexes a file into MediaStore so a gallery can see it. Nothing here has a
+ * MediaStore to index into, but the callback is not optional: an app that waits for it before
+ * calling a file finished would hang. AOSP answers with the scanned path and the content URI it
+ * was given, and a device with no media provider answers with a null URI.
+ */
+rt.register({
+  name: "android/media/MediaScannerConnection", ctor: class extends JObj {},
+  methods: {
+    "static scanFile(Landroid/content/Context;[Ljava/lang/String;[Ljava/lang/String;Landroid/media/MediaScannerConnection$OnScanCompletedListener;)V":
+      (_c: unknown, paths: string[] | null, _m: unknown, l: unknown) => {
+        if (!l) return;
+        for (const p of paths ?? []) {
+          void onMain(() => vcall(l, "onScanCompleted", "(Ljava/lang/String;Landroid/net/Uri;)V", p, null)).catch(reportUncaught);
+        }
+      },
+  },
+});
+rt.register({ name: "android/media/MediaScannerConnection$OnScanCompletedListener", ctor: class extends JObj {} });
+rt.register({ name: "android/media/MediaScannerConnection$MediaScannerConnectionClient", ctor: class extends JObj {} });
