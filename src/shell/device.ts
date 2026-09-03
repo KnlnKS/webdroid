@@ -10,7 +10,7 @@ import { loadFramework } from "../android/framework";
 import { parseAXML, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
 import { mkJResources } from "../android/resnative";
-import { setAppHost, setManifest, type AppHost, JIntent, ensureDecor, JActivity, JMenu, pushMenuToBar, JContext, fireActivityLifecycle, manifestActivityTheme, APPEARANCE_LIGHT_STATUS_BARS } from "../android/app";
+import { setAppHost, setManifest, type AppHost, JIntent, ensureDecor, JActivity, JMenu, pushMenuToBar, JContext, fireActivityLifecycle, manifestActivityTheme, APPEARANCE_LIGHT_STATUS_BARS, deliverActivityResult } from "../android/app";
 import { reportUncaught, JBundle } from "../android/os";
 import { onMain, inMainJob } from "../android/mainloop";
 import {
@@ -323,6 +323,8 @@ async function finishActivity(act: JActivity) {
     await windowFocus(top, true);
     void buildOptionsMenu(top);
   }
+  // AOSP hands the result to the launcher once it is back up, before the finished instance dies.
+  if (act.resultTo) deliverActivityResult(act.resultTo.act, act.resultTo.code, act.resultCode, act.resultData);
   if (act.window.decor) await dispatchDetached(act.window.decor);
   if (act.started) await stopActivity(act);
   await lifecycleStep(act, "onDestroy", "Destroyed");

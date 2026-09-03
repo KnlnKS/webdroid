@@ -536,10 +536,12 @@ rt.register({
     ACTION_SEND: "android.intent.action.SEND", ACTION_EDIT: "android.intent.action.EDIT",
     ACTION_PICK: "android.intent.action.PICK", ACTION_GET_CONTENT: "android.intent.action.GET_CONTENT",
     ACTION_CREATE_DOCUMENT: "android.intent.action.CREATE_DOCUMENT", ACTION_OPEN_DOCUMENT: "android.intent.action.OPEN_DOCUMENT",
+    ACTION_OPEN_DOCUMENT_TREE: "android.intent.action.OPEN_DOCUMENT_TREE",
     ACTION_BOOT_COMPLETED: "android.intent.action.BOOT_COMPLETED",
     CATEGORY_LAUNCHER: "android.intent.category.LAUNCHER", CATEGORY_DEFAULT: "android.intent.category.DEFAULT",
     FLAG_ACTIVITY_NEW_TASK: 0x10000000, FLAG_ACTIVITY_CLEAR_TOP: 0x04000000, FLAG_ACTIVITY_CLEAR_TASK: 0x00008000,
     FLAG_ACTIVITY_SINGLE_TOP: 0x20000000, FLAG_GRANT_READ_URI_PERMISSION: 1, FLAG_GRANT_WRITE_URI_PERMISSION: 2,
+    FLAG_GRANT_PERSISTABLE_URI_PERMISSION: 64, FLAG_GRANT_PREFIX_URI_PERMISSION: 128,
     EXTRA_TEXT: "android.intent.extra.TEXT", EXTRA_STREAM: "android.intent.extra.STREAM",
     EXTRA_SUBJECT: "android.intent.extra.SUBJECT", EXTRA_TITLE: "android.intent.extra.TITLE",
   },
@@ -1344,9 +1346,10 @@ export class JActivity extends JContextWrapper {
   hasWindowFocus = false;
   actionBarObj: any = null;
   optionsMenu: JMenu | null = null;
-  // setResult() records these; nothing delivers them — startActivityForResult only launches.
   resultCode = 0;
   resultData: JIntent | null = null;
+  /** who asked for this activity's result, and under which request code */
+  resultTo: { act: JActivity; code: number } | null = null;
   lifecycleCbs: unknown[] | null = null;
   fragMgr: any = null;
   // set while a configuration-change relaunch is tearing this instance down, so androidx keeps
@@ -1558,8 +1561,21 @@ const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "isFinishing()Z": function (this: JActivity) { return this.finished ? 1 : 0; },
   "isDestroyed()Z": function (this: JActivity) { return this.finished ? 1 : 0; },
   "isTaskRoot()Z": () => 1,
+  // AOSP's startActivityForResult only *starts* something; the result arrives later through
+  // onActivityResult. Awaiting a system activity here would hold the serialized main-looper
+  // queue for as long as its (native, modal) UI is up, which reads as a wedge.
   "startActivityForResult(Landroid/content/Intent;I)V": async function (this: JActivity, intent: JIntent, code: number) {
+    const sys = intent?.component ? null : systemActivities[intent?.action ?? ""];
+    if (sys) {
+      void sys(intent).then(
+        (data) => deliverActivityResult(this, code, data ? RESULT_OK : RESULT_CANCELED, data),
+        (e) => { reportUncaught(e); deliverActivityResult(this, code, RESULT_CANCELED, null); },
+      );
+      return;
+    }
     await launchIntent(this.$host, intent);
+    const started = this.$host.currentActivity();
+    if (started && started !== this) started.resultTo = { act: this, code };
   },
   "setResult(I)V": function (this: JActivity, c: number) { this.resultCode = c; },
   "setResult(ILandroid/content/Intent;)V": function (this: JActivity, c: number, d: JIntent) {
@@ -2025,6 +2041,31 @@ async function launchIntent(host: AppHost, intent: JIntent) {
   } else {
     console.log("[webdroid] implicit intent ignored:", intent?.action, intent?.dataUri);
   }
+}
+
+export const RESULT_OK = -1, RESULT_CANCELED = 0;
+
+/**
+ * The activities the *system* provides, keyed by the action an app sends. On a device these are
+ * DocumentsUI; here they are the browser's own pickers. Each answers with the result Intent, or
+ * null for "the user backed out" — which is RESULT_CANCELED, not an error.
+ */
+const systemActivities: Record<string, (intent: JIntent) => Promise<JIntent | null>> = {};
+export function registerSystemActivity(action: string, run: (intent: JIntent) => Promise<JIntent | null>) {
+  systemActivities[action] = run;
+}
+export function mkResultIntent(uri: string): JIntent {
+  const i = new JIntent();
+  i.dataUri = uri;
+  return i;
+}
+
+/** Post a result to the activity that asked for it. Scheduled, never inline: the caller is
+ *  usually mid-click-handler, and androidx dispatches straight into app code from here. */
+export function deliverActivityResult(act: JActivity, code: number, resultCode: number, data: JIntent | null) {
+  setTimeout(() => void onMain(() =>
+    vcall(act, "onActivityResult", "(IILandroid/content/Intent;)V", code, resultCode, data)
+      .catch(reportUncaught)), 0);
 }
 
 class JToast extends JObj { text = ""; }
