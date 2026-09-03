@@ -442,6 +442,11 @@ See tests/e2e/README.md for the commands and the metrics. What bites:
   between identical runs. `lsof -p $(lsof -ti:4080) | grep cwd` names it; the cheap defence is
   `PORT=4090 bun run server.ts` + `WEBDROID_URL=http://localhost:4090 bun run e2e`. A fix that
   does not appear in `curl -s localhost:PORT/chunk-*.js` is not being tested.
+- **harmonic's score spreads ~2 points run to run, not 0.5.** Measured on identical code:
+  35.87%, 37.84%. Its scroll steps are the whole spread (see "notes: draws follow the scroll
+  steps"), so a harmonic move under 2 points says nothing on its own — A/B it against the
+  parent commit before believing it either way. fitnotes and mihon-onboarding are repeatable
+  to the digit; mihon-app to ~0.1.
 - A rising content-diff % is not automatically a regression: when the app starts doing work
   it previously skipped it can reach a *correct* state the goldens have already moved past.
   Look at the frames before believing the number.
@@ -853,9 +858,10 @@ what the bytecode actually reached and could not find (evidence). Every delegate
 because that said so.
 
     Paint 86/86   Canvas 33/33   BaseCanvas 32/32   Matrix 40/40   Path 43/43
-    Typeface 17/17   AssetManager 53/55
+    Typeface 17/17   AssetManager 55/55   XmlBlock 22/22   StringBlock 5/5
     ok  new Paint()  new Matrix()  new Path()  — real bytecode, headless
     ok  nativeGetResourceIdentifier / nativeGetResourceValue / nativeApplyStyle
+    ok  android:layout/alert_dialog opened and walked to END_DOCUMENT
 
 Things worth keeping:
 - **The draw bodies are not duplicated.** Every `nDraw*` routes into `canvasMethods`, the
@@ -882,8 +888,23 @@ graphics class hands its finalizer to `libcore/util/NativeAllocationRegistry` fr
 class fails to initialize before any of the work is reached. `android/graphics/Color` also had
 no colour-long API at all, which killed every `Paint.setColor` — it caches `Color.pack(int)`.
 
-Left: Bitmap (46), the decoders, and `nativeOpenXmlAsset` with the XmlBlock pull parser
-behind it, which is the layout-inflation path and the next thing the view stack needs.
+- **An index is not a string, and a file resource is not a reference.** XmlBlock's natives hand
+  out string-pool INDICES; the block keeps the real pool out of its own bytes, so nothing is
+  interned and an index means what the caller resolves it to. And `resolveRefs` deliberately
+  keeps a file-typed reference AS a reference, because our own stack loads it by id — a device
+  resolves it to the archive path, since that is literally what aapt wrote into the entry.
+  `Resources.getLayout` takes the TYPE_STRING branch or throws NotFoundException, so the
+  translation belongs in `fillTypedValue`, at the boundary. The `fwtest` walk found that on its
+  first run; nothing else would have, because our own inflater never asks.
+- **The XmlBlock parse state IS a `JAttrSet`.** AOSP passes `XmlBlock.Parser.mParseState`
+  straight to `applyStyle`/`retrieveAttributes`, and `res.ts`'s `obtainStyled` reads the element
+  off `node` — so the whole existing attribute cascade serves bytecode with no new code.
+- **ApkAssets (12) is deliberately unwritten.** `nativeCreate` hands back a `Resources` and
+  `nativeSetApkAssets` is a no-op, so no bytecode reaches it. Asset cookies are still real:
+  1 is the framework package and 2 the app, because a path alone cannot say which apk it came
+  from — `res/layout/alert_dialog.xml` exists in both.
+
+Left: Bitmap (46) and the decoders.
 
 ## A layer-list item carries its own size, and a gravity to place it by
 `JLayerDrawable.layout()` has implemented AOSP's `updateLayerBounds` — insets, then an
