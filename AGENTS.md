@@ -34,9 +34,16 @@ Goal: run FitNotes.apk → mihon → flappybird → Among Us.xapk fully client-s
 - **android.***: TS reimplementation. Views render to one <canvas> framebuffer
   (360x640dp @2x = 720x1280, `src/shell/config.ts`). Binary XML (AXML) + resources.arsc
   parsers feed LayoutInflater/Resources. Handler/Looper on JS event loop; Choreographer = rAF.
+- **The android: resource package is real**: `vendor/framework-res.apk`, aapt2-linked at package
+  id 0x01 from the SDK's own platform res tree (`bun run gen-framework-res`), fetched once per
+  page beside the apk and read lazily -- only resources.arsc is inflated up front. A resource id
+  picks its table by its package byte; nothing about the framework is synthesised, named or
+  guessed. This is also the prerequisite for ever running real framework *bytecode*: View.java
+  reads com.android.internal.R.styleable.View.
 - **SQLite**: sql.js wasm, in-memory, persisted to localStorage per database (debounced,
   snapshotted without reopening — see "Persisting a database must not close it").
-- **Server** (`server.ts`, `Bun.serve` routes): `/` the shell, `/proxy?url=` for CORS fetches,
+- **Server** (`server.ts`, `Bun.serve` routes): `/` the shell, `/vendor/:file` the framework
+  package, `/proxy?url=` for CORS fetches,
   `/tcp?host=&port=&tls=` a WebSocket that relays one TCP connection (TLS terminated there),
   `/apks` + `/apks/:name` the launcher list, `/Roboto/:file`, `/sqljs/:file`.
 - Missing-API telemetry: unresolved class/method throws + logs signature; dev loop =
@@ -308,7 +315,8 @@ screen — any direct fillText in the framework must set its own.)
   way to shake out the CPU/libc/JNI layers), `ndbg` (the same over a booted page),
   `dbg [flow] [stopAt] [outDir]` (walk an e2e flow until it wedges and dump the queue site,
   logs and missing list; frames land in webdroid-shots/dbg), `gen-framework-res` (rebuild the
-  committed src/android/framework-res.json from vendor/aosp-res).
+  committed vendor/framework-res.apk with aapt2 from the SDK's own platform res tree; needs the
+  Android SDK, but nothing else does -- the apk is committed).
 - browser: `http://localhost:4080/?apk=<file>` boots that apk on load (reload = rebundle +
   reboot); `wd.{boot,app,tree,find,locateText,logs,rt,uiState,overlays,perf,perfReset,tap,
   tapText,swipe,type,back,alive,reset,rnodes,measure,querydb,mainDbg,native,web,ticks,setGL}`
@@ -354,8 +362,8 @@ bypassed the method the real behaviour lives in.
 ## No app/library class-name matching, and the other janitor invariants
 `grep -rn 'endsWith("/' src` must stay empty of library names. The framework is free of
 it; `view.ts`'s `=== "android/view/View"` is a genuine AOSP getDefaultSize distinction and
-stays. Framework drawables resolve by decomposing AOSP's own naming convention, not by an
-includes() ladder. The launcher lists apks/ rather than naming the four apks; app names
+stays. Framework resources are read out of vendor/framework-res.apk, never synthesised or
+matched by name. The launcher lists apks/ rather than naming the four apks; app names
 appear in `src/` only inside comments that explain a real library quirk.
 Also: no `rt.natives.get(...)` patching of a spec registered elsewhere (spread the methods into
 the spec instead); one copy of each helper (`guardCall`, `newArrayList`, `defineException`,
@@ -978,7 +986,9 @@ of them things any APK can hit:
 - **`<meta-data android:value="@string/x">` is a string**, not the id: PackageParser resolves it
   through the app's resources, and SDKs that read an app id out of the manifest depend on it.
 - PackageInfo carries the manifest's own version/activities, `getLaunchIntentForPackage` finds
-  the LAUNCHER activity, `createPackageContext` throws NameNotFoundException for anything but
-  this package (callers use it to discover an optional dependency is absent).
-- `android.R.<type>` now carries the framework's real ids, straight off framework-res.json.
+  the LAUNCHER activity, `createPackageContext` answers for this package and for "android"
+  (Material reads the platform palette through it) and throws NameNotFoundException otherwise,
+  which is how callers discover an optional dependency is absent.
+- `android.R.<type>` carries the framework's real ids, off the real table, with names spelled
+  as java identifiers the way R.java writes them.
 - A boxed Long put into a JSONObject was stored as a bigint, which `JSON.stringify` refuses.
