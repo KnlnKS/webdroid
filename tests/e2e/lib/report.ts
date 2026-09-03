@@ -1,6 +1,7 @@
 // JSON + standalone HTML report. The HTML embeds nothing but relative PNG links, so the whole
 // report/ directory is portable.
 import type { StepRun } from "../capture-webdroid";
+import type { TreeDiff } from "./tree";
 export type StepReport = {
   index: number; id: string; label: string; file: string;
   strictPct: number; tolerantPct: number;
@@ -12,6 +13,8 @@ export type StepReport = {
   comparedPixels: number; maskedPixels: number;
   semanticHit?: boolean; settleTimedOut: boolean; goldenSettleTimedOut?: boolean;
   mainLoopWedged?: boolean;
+  /** Structural diff against the device hierarchy, when there is one to compare against. */
+  tree?: TreeDiff;
   error?: string; note?: string;
 };
 
@@ -29,6 +32,10 @@ export type FlowReport = {
   stepsTracked: number;
   /** First step at which webdroid's main looper stopped draining, if it did. */
   wedgedAtStep?: number;
+  /** Mean share of nameable device views webdroid puts somewhere else, over the steps that have
+   *  a hierarchy to compare against. Undefined when none do. */
+  meanTreeDiffPct?: number;
+  treeSteps?: number;
   recordedAt: string;
 };
 
@@ -78,6 +85,18 @@ export function printFlow(r: FlowReport): void {
     (r.stepsRendered < r.steps.length
       ? `  (${r.steps.length - r.stepsRendered} never rendered, scored 100%; raw mean ${r.meanRawContentDiffPct.toFixed(2)}%)`
       : ""));
+  if (r.meanTreeDiffPct === undefined && r.steps.some((s) => s.tree)) {
+    console.log("  STRUCTURE  nothing to compare: no view on either side carries text or an id");
+  }
+  if (r.meanTreeDiffPct !== undefined) {
+    console.log(`  STRUCTURE ${pct(r.meanTreeDiffPct)} of nameable device views misplaced, over ${r.treeSteps} steps`);
+    // the worst offender names itself, which is the whole point of measuring structure
+    const worst = r.steps.flatMap((s) => (s.tree?.worst ?? []).map((w) => ({ step: s.index, ...w })))
+      .sort((a, b) => b.off - a.off).slice(0, 3);
+    for (const w of worst) console.log(`    ${String(w.step).padStart(2, "0")} ${w.key} off by ${w.off}px  device [${w.golden}] here [${w.actual}]`);
+    const missing = [...new Set(r.steps.flatMap((s) => s.tree?.missing ?? []))].slice(0, 3);
+    if (missing.length) console.log(`    no counterpart: ${missing.join(", ")}`);
+  }
 }
 
 export function html(reports: FlowReport[], generatedAt: string): string {

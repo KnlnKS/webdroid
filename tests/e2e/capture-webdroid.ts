@@ -5,7 +5,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import type { WebdroidDriver } from "./drivers/webdroid";
 import { E2E_DIR, sleep } from "./lib/util";
-import { PINNED_CLOCK_MS, type Flow, type Manifest, type RecordedStep, type Step } from "./types";
+import { PINNED_CLOCK_MS, uiFileFor, type Flow, type Manifest, type RecordedStep, type Step } from "./types";
 
 export type StepRun = {
   id: string; index: number; file: string;
@@ -139,6 +139,8 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver): Promise<Step
     // the launch step's window is mostly boot + lazy compilation, not the app's frame loop
     const slow = !!(step.animated && step.action.type !== "launch" && flow.minFps && fps < flow.minFps);
     await Bun.write(`${outDir}/${file}`, png);
+    // the structural half of the comparison; score.ts reads it back off disk like the png
+    await Bun.write(`${outDir}/${uiFileFor(file)}`, JSON.stringify(await drv.uiTree()));
     runs.push({ id: step.id, index: i, file, semanticHit, settleTimedOut: timedOut,
                 mainLoopWedged: wedged, frames: frames || undefined,
                 ms: stepMs, perf: stepPerf, fps: step.animated ? Math.round(fps) : undefined, slow: slow || undefined,

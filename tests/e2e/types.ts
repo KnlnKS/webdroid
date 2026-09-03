@@ -66,6 +66,22 @@ export type Flow = {
   steps: Step[];
 };
 
+/**
+ * One node of a view hierarchy, as `uiautomator dump` reports it and as webdroid emits it.
+ * Bounds are absolute device px, status bar included -- the space a tap is expressed in.
+ */
+export type UiNode = {
+  text: string;
+  desc: string;
+  cls: string;
+  resId: string;
+  bounds: [number, number, number, number];
+  clickable: boolean;
+};
+
+/** The hierarchy dump that sits beside a step's png, on both sides. */
+export const uiFileFor = (png: string): string => png.replace(/\.png$/, ".ui.json");
+
 /** What the emulator pass learned and the webdroid pass replays. */
 export type RecordedStep = {
   id: string;
@@ -76,6 +92,8 @@ export type RecordedStep = {
   resolved?: { x: number; y: number };
   /** Node bounds the text matched, device px — diagnostics only. */
   bounds?: [number, number, number, number];
+  /** Hierarchy dump beside the png, when the recorder captured one. */
+  uiFile?: string;
   settleTimedOut?: boolean;
   note?: string;
 };

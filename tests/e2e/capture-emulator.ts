@@ -8,7 +8,7 @@
 import { mkdir, rm } from "node:fs/promises";
 import * as emu from "./drivers/emulator";
 import { parseArgs } from "./lib/args";
-import { PINNED_CLOCK_MS, SCREEN_W, SCREEN_H, type Flow, type Manifest, type RecordedStep } from "./types";
+import { PINNED_CLOCK_MS, SCREEN_W, SCREEN_H, uiFileFor, type Flow, type Manifest, type RecordedStep } from "./types";
 import { E2E_DIR, sleep } from "./lib/util";
 import { device as profile } from "../../src/shell/config";
 
@@ -129,7 +129,14 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
     const { png, timedOut } = await emu.settle();
     const file = `${String(i).padStart(2, "0")}-${step.id}.png`;
     await Bun.write(`${dir}/${file}`, png);
-    recorded.push({ id: step.id, label: step.label, index: i, file, resolved, bounds, settleTimedOut: timedOut, note });
+    // The hierarchy this screen actually had. dumpUi already runs for every tapText step and its
+    // nodes were thrown away; the whole point of the golden pass is to keep what the device knew.
+    let uiFile: string | undefined;
+    try {
+      await Bun.write(`${dir}/${uiFileFor(file)}`, JSON.stringify(await emu.dumpUi()));
+      uiFile = uiFileFor(file);
+    } catch (e) { console.log(`     (no hierarchy: ${(e as Error).message})`); }
+    recorded.push({ id: step.id, label: step.label, index: i, file, resolved, bounds, uiFile, settleTimedOut: timedOut, note });
     console.log(`  ${String(i).padStart(2, "0")} ${step.label}${timedOut ? "  [settle timeout]" : ""}${note ? "  [" + note + "]" : ""}`);
   }
 

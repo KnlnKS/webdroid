@@ -2,7 +2,7 @@
 // Deliberately free of any Android/adb dependency: `bun run e2e` must run with no SDK present.
 import { mkdir } from "node:fs/promises";
 import { chromium, type Browser, type Page } from "playwright";
-import { SCREEN_W, SCREEN_H, PINNED_CLOCK_MS } from "../types";
+import { SCREEN_W, SCREEN_H, PINNED_CLOCK_MS, type UiNode } from "../types";
 import { sleep, sha1 } from "../lib/util";
 
 const BASE = process.env.WEBDROID_URL ?? "http://localhost:4080";
@@ -276,6 +276,11 @@ export class WebdroidDriver {
   /** The WebView frames on screen (url/title/loaded): the framebuffer capture cannot see them. */
   web(): Promise<{ url: string | null; title: string; loaded: boolean; progress: number }[]> {
     return this.page.evaluate(() => (globalThis as any).wd.web?.() ?? []);
+  }
+
+  /** The view hierarchy in the shape `uiautomator dump` reports, for the structural diff. */
+  uiTree(): Promise<UiNode[]> {
+    return this.page.evaluate(() => (globalThis as any).wd.uiTree?.() ?? []);
   }
 
   /** Framework attributes a layout carried that nothing in the framework reads. */

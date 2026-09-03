@@ -6,9 +6,30 @@ import { loadPng, savePng, hconcat } from "./lib/png";
 import { diffImages } from "./lib/diff";
 import { html, printFlow, type FlowReport, type StepReport } from "./lib/report";
 import { parseArgs } from "./lib/args";
-import type { Flow, Manifest } from "./types";
+import { uiFileFor, type Flow, type Manifest, type RecordedStep, type Step, type UiNode } from "./types";
+import { diffTrees } from "./lib/tree";
 import type { StepRun } from "./capture-webdroid";
 import { E2E_DIR, sha1 } from "./lib/util";
+
+/**
+ * The device half of the structural comparison. A full hierarchy if the recorder captured one;
+ * otherwise the one node the manifest already carries for every text-anchored tap, which is
+ * device truth that has been sitting in the goldens all along.
+ *
+ * That fallback is a step behind on purpose: a tap is resolved against the screen already on
+ * display, so the bounds recorded for step N+1 describe the frame captured at step N.
+ */
+async function treeDiffFor(goldenDir: string, actualDir: string, rec: RecordedStep, next?: { rec: RecordedStep; step: Step }) {
+  const actualFile = actualDir + '/' + uiFileFor(rec.file);
+  if (!existsSync(actualFile)) return undefined;
+  let golden: UiNode[];
+  if (rec.uiFile && existsSync(goldenDir + '/' + rec.uiFile)) {
+    golden = await Bun.file(goldenDir + '/' + rec.uiFile).json();
+  } else if (next?.rec.bounds && next.step.action.type === 'tapText') {
+    golden = [{ text: next.step.action.text, desc: '', cls: '', resId: '', bounds: next.rec.bounds, clickable: true }];
+  } else return undefined;
+  return diffTrees(golden, await Bun.file(actualFile).json());
+}
 
 export async function diffFlow(flow: Flow, runs?: StepRun[]): Promise<FlowReport> {
   const goldenDir = `${E2E_DIR}golden/${flow.app}`;
@@ -32,7 +53,7 @@ export async function diffFlow(flow: Flow, runs?: StepRun[]): Promise<FlowReport
   let lastHash = "";
   let stepsTracked = 0;
 
-  for (const step of flow.steps) {
+  for (const [i, step] of flow.steps.entries()) {
     const rec = manifest.steps.find((s) => s.id === step.id);
     if (!rec) throw new Error(`golden manifest has no step "${step.id}" — re-record ${flow.app}`);
     const actualPath = `${actualDir}/${rec.file}`;
@@ -49,6 +70,9 @@ export async function diffFlow(flow: Flow, runs?: StepRun[]): Promise<FlowReport
     if (h !== lastHash) stepsTracked = steps.length + 1;
     lastHash = h;
 
+    const nextStep = flow.steps[i + 1];
+    const nextRec = nextStep && manifest.steps.find((s) => s.id === nextStep.id);
+    const tree = await treeDiffFor(goldenDir, actualDir, rec, nextRec && { rec: nextRec, step: nextStep });
     const run = runById.get(step.id);
     // A wedged step is not a rendering near-miss — the app was not executing, so the frame on
     // screen is one it drew several steps ago. Scoring the measured difference hands out
@@ -65,13 +89,19 @@ export async function diffFlow(flow: Flow, runs?: StepRun[]): Promise<FlowReport
       comparedPixels: d.comparedPixels, maskedPixels: d.maskedPixels,
       semanticHit: run?.semanticHit, settleTimedOut: run?.settleTimedOut ?? false,
       mainLoopWedged: run?.mainLoopWedged,
-      goldenSettleTimedOut: rec.settleTimedOut, error: run?.error, note: rec.note,
+      goldenSettleTimedOut: rec.settleTimedOut, tree, error: run?.error, note: rec.note,
     });
   }
 
   const mean = (f: (s: StepReport) => number) => steps.reduce((a, s) => a + f(s), 0) / (steps.length || 1);
+  const withTree = steps.filter((s) => s.tree);
+  // A flow that never paired a single view has no structural signal to report, rather than a
+  // bad one: Compose draws through canvas ops and exposes no View.text for either side to name.
+  const paired = withTree.some((s) => s.tree!.matched > 0);
   return {
     app: flow.app, steps,
+    meanTreeDiffPct: paired ? withTree.reduce((a, s) => a + s.tree!.diffPct, 0) / withTree.length : undefined,
+    treeSteps: paired ? withTree.length : undefined,
     meanTolerantPct: mean((s) => s.tolerantPct),
     meanStrictPct: mean((s) => s.strictPct),
     meanContentDiffPct: mean((s) => s.contentDiffPct),

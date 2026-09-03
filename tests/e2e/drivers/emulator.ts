@@ -1,6 +1,6 @@
 // Emulator driver — adb + uiautomator. Imported ONLY by capture-emulator.ts.
 // Nothing on the diff path may reach this file; `bun run e2e` must work with no Android SDK.
-import { SCREEN_W, SCREEN_H } from "../types";
+import { SCREEN_W, SCREEN_H, type UiNode } from "../types";
 import { sleep, sha1 } from "../lib/util";
 
 const ADB = process.env.ADB ?? "adb";
@@ -66,15 +66,6 @@ export async function dismissIme(): Promise<boolean> {
   }
   return true;
 }
-
-type UiNode = {
-  text: string;
-  desc: string;
-  cls: string;
-  resId: string;
-  bounds: [number, number, number, number];
-  clickable: boolean;
-};
 
 /** Dump the accessibility hierarchy. Works for Compose too — Mihon exposes semantics. */
 export async function dumpUi(): Promise<UiNode[]> {

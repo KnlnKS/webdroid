@@ -171,6 +171,31 @@ const wd = {
     for (const o of overlays) { out.push("OVERLAY:"); for (const n of walkTree(o.view, 1)) line(n); }
     return out.join("\n");
   },
+  // The same shape `uiautomator dump` reports, so the two hierarchies can be diffed directly:
+  // absolute device px with the status bar included, which is the space a tap is expressed in.
+  uiTree: () => {
+    const app = currentApp();
+    const decor = topDecor();
+    if (!app || !decor) return [];
+    const res = app.host.res, top = contentTop();
+    const out: unknown[] = [];
+    const emit = (root: any, ox: number, oy: number) => {
+      for (const { v, x, y } of walkTree(root, 0, ox, oy, true)) {
+        const id = v.idNum > 0 ? res.idName(v.idNum) : "";
+        out.push({
+          text: String(v.text ?? ""),
+          desc: String(v.contentDesc ?? ""),
+          cls: clsName(v).replace(/\//g, "."),
+          resId: id && !id.startsWith("0x") ? `${v.idNum >>> 24 === 1 ? "android" : app.host.pkg}:id/${id}` : "",
+          bounds: [x, y + top, x + (v.right - v.left), y + top + (v.bottom - v.top)],
+          clickable: !!v.clickable,
+        });
+      }
+    };
+    emit(decor, 0, 0);
+    for (const o of overlays) emit(o.view, 0, 0);
+    return out;
+  },
   find: (idOrCls: number | string): any[] => {
     const decor = topDecor();
     if (!decor) return [];
