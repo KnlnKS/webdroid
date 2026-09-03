@@ -40,7 +40,11 @@ class JInflater extends JObj {
     const st = this.ensure() as any;
     st.push(b);
     if (st.s.f && !st.s.l) this.done = true;
-    this.rem = this.done ? st.p?.length ?? 0 : 0;
+    // fflate trims `p` to the byte the bit cursor sits in and keeps the leftover bit offset in
+    // `s.p`. A stream that ended mid-byte has therefore consumed p[0] as far as the container
+    // is concerned, and counting it as remaining puts the caller one byte early into the gzip
+    // trailer — which reads as a CRC that is the real one shifted left by eight bits.
+    this.rem = this.done ? Math.max(0, (st.p?.length ?? 0) - ((st.s.p & 7) ? 1 : 0)) : 0;
   }
 }
 function drain(z: JInflater, b: Int8Array, off: number, len: number): number {

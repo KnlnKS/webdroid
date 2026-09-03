@@ -4,7 +4,7 @@ import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { vcall, javaFormat, newObj } from "../jvm/natives/jlang";
-import { newArrayList, mkIter, type JList } from "../jvm/natives/jutil";
+import { newArrayList, newLinkedHashSet, mkIter, type JList } from "../jvm/natives/jutil";
 import { vfs, mkFile, JFile } from "../jvm/natives/jio";
 const privDir = (p: string): JFile => { vfs.mkdir(p); return mkFile(p); };
 import { type Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, rvColor, rvDimen, rvInt, rvString, resString, themeOf, themeByName } from "./res";
@@ -499,6 +499,38 @@ const intentMethods: NativeSpec["methods"] = {
     return this;
   },
   "hasExtra(Ljava/lang/String;)Z": function (this: JIntent, k: string) { return this.extras.map.has(k) ? 1 : 0; },
+  "removeExtra(Ljava/lang/String;)V": function (this: JIntent, k: string) { this.extras.map.delete(k); },
+  // Extras are live objects here, never a parcel, so there is nothing for a class loader to do.
+  "setExtrasClassLoader(Ljava/lang/ClassLoader;)V": () => {},
+  // API 33 type-checked getters: the extras are already the objects the caller asked for.
+  "getParcelableExtra(Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/Object;": function (this: JIntent, k: string) { return this.extras.map.get(k) ?? null; },
+  "getSerializableExtra(Ljava/lang/String;Ljava/lang/Class;)Ljava/io/Serializable;": function (this: JIntent, k: string) { return this.extras.map.get(k) ?? null; },
+  "getCategories()Ljava/util/Set;": async function (this: JIntent) {
+    return this.categories.size ? await newLinkedHashSet([...this.categories]) : null;
+  },
+  "getScheme()Ljava/lang/String;": function (this: JIntent) {
+    const i = this.dataUri?.indexOf(":") ?? -1;
+    return i > 0 ? this.dataUri!.slice(0, i) : null;
+  },
+  "resolveType(Landroid/content/ContentResolver;)Ljava/lang/String;": function (this: JIntent) { return this.typeStr; },
+  "resolveTypeIfNeeded(Landroid/content/ContentResolver;)Ljava/lang/String;": function (this: JIntent) { return this.typeStr; },
+  // A chooser needs a chooser activity; with none installed the target intent is what launches,
+  // which is what AOSP falls back to when nothing can handle ACTION_CHOOSER.
+  "static createChooser(Landroid/content/Intent;Ljava/lang/CharSequence;)Landroid/content/Intent;": (t: JIntent) => t,
+  "static createChooser(Landroid/content/Intent;Ljava/lang/CharSequence;Landroid/content/IntentSender;)Landroid/content/Intent;": (t: JIntent) => t,
+  "static makeMainActivity(Landroid/content/ComponentName;)Landroid/content/Intent;": (c: JComponentName) => {
+    const i = new JIntent();
+    i.action = "android.intent.action.MAIN";
+    i.categories.add("android.intent.category.LAUNCHER");
+    i.component = c?.cls ?? null;
+    return i;
+  },
+  // Nothing here builds a ClipData or a launch rectangle, and AOSP answers null when it has none.
+  "getClipData()Landroid/content/ClipData;": () => null,
+  "setClipData(Landroid/content/ClipData;)V": () => {},
+  "getSourceBounds()Landroid/graphics/Rect;": () => null,
+  "getSelector()Landroid/content/Intent;": () => null,
+  "getIdentifier()Ljava/lang/String;": () => null,
   "resolveActivity(Landroid/content/pm/PackageManager;)Landroid/content/ComponentName;": function (this: JIntent) {
     return this.component ? mkComponentName(appHost?.pkg ?? "", this.component) : null;
   },
@@ -1011,6 +1043,8 @@ function mkActivityInfo(cls: string): JActivityInfo {
   a.packageName = appHost?.pkg ?? "";
   a.theme = (node && attr(node, "theme")?.data) ?? appHost?.themeResId ?? 0;
   a.configChanges = (node && attr(node, "configChanges")?.data) ?? 0;
+  a.exported = node && attr(node, "exported")?.data ? 1 : 0;
+  a.permission = node ? attrStr(node, "permission") : null;
   a.parentActivityName = node ? attrStr(node, "parentActivityName") : null;
   a.metaData = metaData(node);
   return a;

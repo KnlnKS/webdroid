@@ -10,7 +10,11 @@
 
 // lib.dom types the handles but not the picker, the async iteration or the permission calls.
 declare global {
-  interface Window { showDirectoryPicker?(o?: { mode?: string; id?: string }): Promise<FileSystemDirectoryHandle> }
+  interface Window {
+    showDirectoryPicker?(o?: { mode?: string; id?: string }): Promise<FileSystemDirectoryHandle>;
+    showOpenFilePicker?(o?: { multiple?: boolean; types?: unknown[] }): Promise<FileSystemFileHandle[]>;
+    showSaveFilePicker?(o?: { suggestedName?: string }): Promise<FileSystemFileHandle>;
+  }
   interface FileSystemHandle {
     queryPermission?(o?: { mode?: string }): Promise<PermissionState>;
     requestPermission?(o?: { mode?: string }): Promise<PermissionState>;
@@ -89,6 +93,31 @@ export async function pickDirectory(): Promise<FileSystemDirectoryHandle | null>
 }
 
 export const rootHandles = (): Map<string, FileSystemDirectoryHandle> => roots;
+
+/** One or more files the user chose, or null if they backed out. `save` asks for a new one. */
+export async function pickFiles(opts: { multiple?: boolean; save?: string; mime?: string | null }): Promise<FileSystemFileHandle[] | null> {
+  const save = opts.save;
+  const open = save
+    ? () => window.showSaveFilePicker?.({ suggestedName: save }).then((h) => [h])
+    : () => window.showOpenFilePicker?.({ multiple: !!opts.multiple, ...(opts.mime ? { types: [{ accept: { [opts.mime]: [] } }] } : {}) });
+  if (!(save ? window.showSaveFilePicker : window.showOpenFilePicker)) return opfsPicked(save);
+  const t0 = performance.now();
+  try {
+    return await open() ?? null;
+  } catch (e) {
+    if ((e as Error)?.name === "AbortError" && performance.now() - t0 < SHOWN_MS) return opfsPicked(opts.save);
+    return null;
+  }
+}
+/** Without a dialog the stand-in is a file in OPFS: a save gets the name it asked for, and an
+ *  open can only offer what is already there. */
+async function opfsPicked(save?: string): Promise<FileSystemFileHandle[] | null> {
+  const dir = await opfsRoot("files");
+  if (save) return [await dir.getFileHandle(save, { create: true })];
+  const out: FileSystemFileHandle[] = [];
+  for await (const [, h] of dir.entries()) if (h.kind === "file") out.push(h as FileSystemFileHandle);
+  return out.length ? out.slice(0, 1) : null;
+}
 
 /** Re-adopt the directories a previous session picked. Chrome may have downgraded the grant to
  *  "prompt", and only a gesture can lift that, so the ask rides the next press. */

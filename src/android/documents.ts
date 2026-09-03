@@ -11,7 +11,7 @@
 
 import { rt } from "../jvm/runtime";
 import { JOutputStream, streamOf, type JInputStream } from "../jvm/natives/jio";
-import { pickDirectory, rootHandles } from "../shell/hostfs";
+import { pickDirectory, pickFiles, rootHandles } from "../shell/hostfs";
 
 export const DOCS_AUTHORITY = "com.android.externalstorage.documents";
 
@@ -200,11 +200,17 @@ export async function pickTree(): Promise<string | null> {
   return `content://${DOCS_AUTHORITY}/tree/${enc(h.name + ":")}`;
 }
 
-export function looseDocUri(h: FileSystemFileHandle): string {
+function looseDocUri(h: FileSystemFileHandle): string {
   const vol = "single-" + ++looseSeq;
   loose.set(vol, h);
   cache.set(vol + ":", h);
   return `content://${DOCS_AUTHORITY}/document/${enc(vol + ":")}`;
+}
+/** OPEN_DOCUMENT / GET_CONTENT / CREATE_DOCUMENT: one file, named by a document URI of its own,
+ *  since a file the user picked outside a tree has no tree to be relative to. */
+export async function pickDocument(opts: { save?: string; mime?: string | null }): Promise<string | null> {
+  const picked = await pickFiles(opts);
+  return picked?.length ? looseDocUri(picked[0]!) : null;
 }
 
 // ── the streams ContentResolver hands out for a document

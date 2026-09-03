@@ -274,8 +274,31 @@ class JThrowable extends JObj {
   cause: JThrowable | null = null;
   suppressed: JThrowable[] = [];
   jsStack: string | undefined = new Error().stack;
+  /** memoised getStackTrace(), or what setStackTrace() was handed */
+  trace: unknown[] | null = null;
 }
 /** JVM-shaped stack trace text: header from the (overridable) toString, frames from the JS stack. */
+/**
+ * A throwable's frames, out of the JS stack the throw actually has. An EMPTY trace is not a
+ * thing any JVM produces, and library code counts on that: kotlinx.coroutines' stack-trace
+ * recovery does `copyOfRange(trace, 1, trace.size)` on the way out of a *caught* exception,
+ * which on an empty array throws — turning a handled failure into a fatal one.
+ */
+function jsStackTrace(js: string | undefined): unknown[] {
+  const out = (js ?? "").split("\n").slice(1, 33).map((line) => {
+    const m = /^\s*at\s+(?:(.*?)\s+\()?(.*?)(?::(\d+))?(?::\d+)?\)?$/.exec(line);
+    const e = new JStackTraceElement();
+    const [decl, meth] = (m?.[1] ?? "<unknown>").split(/\.(?=[^.]*$)/);
+    e.declaring = meth ? decl! : "webdroid";
+    e.method = meth ?? decl!;
+    e.file = m?.[2] ?? null;
+    e.line = Number(m?.[3] ?? 0);
+    return e;
+  });
+  if (!out.length) out.push(new JStackTraceElement());
+  return jarray(out, "Ljava/lang/StackTraceElement;");
+}
+
 export async function stackTraceText(t: JThrowable): Promise<string> {
   const frames = (js: string | undefined) =>
     (js ?? "").split("\n").slice(1, 41).map((l) => "\n\tat " + l.trim().replace(/^at /, "")).join("");
@@ -319,9 +342,9 @@ rt.register({
     "printStackTrace(Ljava/io/PrintStream;)V": async function (this: JThrowable, s: unknown) {
       await vcall(s, "println", "(Ljava/lang/String;)V", await stackTraceText(this));
     },
-    "fillInStackTrace()Ljava/lang/Throwable;": function (this: JThrowable) { return this; },
-    "getStackTrace()[Ljava/lang/StackTraceElement;": () => jarray([], "Ljava/lang/StackTraceElement;"),
-    "setStackTrace([Ljava/lang/StackTraceElement;)V": function () {},
+    "fillInStackTrace()Ljava/lang/Throwable;": function (this: JThrowable) { this.jsStack = new Error().stack; this.trace = null; return this; },
+    "getStackTrace()[Ljava/lang/StackTraceElement;": function (this: JThrowable) { return this.trace ??= jsStackTrace(this.jsStack); },
+    "setStackTrace([Ljava/lang/StackTraceElement;)V": function (this: JThrowable, t: unknown[]) { this.trace = t ?? null; },
     "addSuppressed(Ljava/lang/Throwable;)V": function (this: JThrowable, t: JThrowable) { this.suppressed.push(t); },
     "getSuppressed()[Ljava/lang/Throwable;": function (this: JThrowable) { return jarray(this.suppressed.slice(), "Ljava/lang/Throwable;"); },
   },
@@ -1256,7 +1279,7 @@ rt.register({
     "getThreadGroup()Ljava/lang/ThreadGroup;": () => mainGroup,
     "getContextClassLoader()Ljava/lang/ClassLoader;": () => bootLoader,
     "setContextClassLoader(Ljava/lang/ClassLoader;)V": () => {},
-    "getStackTrace()[Ljava/lang/StackTraceElement;": () => jarray([], "Ljava/lang/StackTraceElement;"),
+    "getStackTrace()[Ljava/lang/StackTraceElement;": () => jsStackTrace(new Error().stack),
     "static currentThread()Ljava/lang/Thread;": () => curThread,
     "static getDefaultUncaughtExceptionHandler()Ljava/lang/Thread$UncaughtExceptionHandler;": () => defaultUEH,
     "getUncaughtExceptionHandler()Ljava/lang/Thread$UncaughtExceptionHandler;": () => defaultUEH,

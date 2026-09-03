@@ -7,13 +7,24 @@
 import { rt, JObj } from "../jvm/runtime";
 import { isDocumentsProvider, registerSystemActivity, mkResultIntent } from "./app";
 import { mkUri } from "./net";
-import { docCreate, docDelete, docRename, pickTree, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
+import { docCreate, docDelete, docRename, pickTree, pickDocument, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
 
 
 const PROVIDER_INTERFACE = "android.content.action.DOCUMENTS_PROVIDER";
 
+// The activities DocumentsUI provides on a device, over the browser's own pickers.
 registerSystemActivity("android.intent.action.OPEN_DOCUMENT_TREE",
   async () => { const uri = await pickTree(); return uri ? mkResultIntent(uri) : null; });
+for (const action of ["android.intent.action.OPEN_DOCUMENT", "android.intent.action.GET_CONTENT",
+  "android.intent.action.CREATE_DOCUMENT"] as const) {
+  registerSystemActivity(action, async (intent) => {
+    const uri = await pickDocument({
+      save: action.endsWith("CREATE_DOCUMENT") ? String(intent.extras.map.get("android.intent.extra.TITLE") ?? "file") : undefined,
+      mime: intent.typeStr && intent.typeStr !== "*/*" ? intent.typeStr : null,
+    });
+    return uri ? mkResultIntent(uri) : null;
+  });
+}
 
 
 const enc = encodeURIComponent;
