@@ -48,6 +48,9 @@ setInvalidateHook(invalidate);
  *  has to reach it, or an app that opens its own search field gets a caret and no input. */
 let focusHook: (v: JView, on: boolean) => void = () => {};
 export const setFocusHook = (h: typeof focusHook) => { focusHook = h; };
+/** compat.ts owns android.view.animation; View.startAnimation hands it the view to drive */
+let startViewAnim: (v: JView, a: unknown) => void = () => {};
+export const setViewAnimHook = (h: typeof startViewAnim) => { startViewAnim = h; };
 function takeFocus(v: JView) {
   v.focused = true;
   focusHook(v, true);
@@ -203,6 +206,9 @@ export class JView extends JObj {
   clipBounds: JRect | null = null; bgTint: JColorStateList | null = null;
   tooltip: unknown = null;
   win: unknown = null; // ViewRootImpl-ish owner
+  /** the running android.view.animation.Animation and the transformation it last produced */
+  jAnim: unknown = null;
+  animTf: { alpha: number; matrix: { m: number[] } } | null = null;
 
   width(): number { return this.right - this.left; }
   height(): number { return this.bottom - this.top; }
@@ -424,6 +430,12 @@ export async function drawView(v: JView, cv: JCanvas) {
   try {
     ctx.translate(v.left + v.translationX, v.top + v.translationY);
     if (v.alphaV < 1) ctx.globalAlpha *= v.alphaV;
+    const tf = v.animTf;
+    if (tf) {
+      if (tf.alpha < 1) ctx.globalAlpha *= tf.alpha;
+      const m = tf.matrix.m;
+      if (m[0] !== 1 || m[1] !== 0 || m[2] !== 0 || m[3] !== 1 || m[4] !== 0 || m[5] !== 0) ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+    }
     if (v.rotationV || v.scaleXv !== 1 || v.scaleYv !== 1) {
       const px = v.pivotXv ?? v.width() / 2, py = v.pivotYv ?? v.height() / 2;
       ctx.translate(px, py);
@@ -1034,9 +1046,10 @@ const viewMethods: NativeSpec["methods"] = {
   "setScreenReaderFocusable(Z)V": () => {},
   "setDuplicateParentStateEnabled(Z)V": () => {},
   "setAddStatesFromChildren(Z)V": () => {},
-  "startAnimation(Landroid/view/animation/Animation;)V": () => { invalidate(); }, // view animations complete instantly
-  "clearAnimation()V": () => {},
-  "getAnimation()Landroid/view/animation/Animation;": () => null,
+  "startAnimation(Landroid/view/animation/Animation;)V": function (this: JView, a: unknown) { startViewAnim(this, a); },
+  "setAnimation(Landroid/view/animation/Animation;)V": function (this: JView, a: unknown) { this.jAnim = a; },
+  "clearAnimation()V": function (this: JView) { this.jAnim = null; this.animTf = null; invalidate(); },
+  "getAnimation()Landroid/view/animation/Animation;": function (this: JView) { return this.jAnim; },
   "animate()Landroid/view/ViewPropertyAnimator;": function (this: JView) { return mkVPA(this); },
   "getForeground()Landroid/graphics/drawable/Drawable;": function (this: JView) { return this.foreground; },
   "onWindowFocusChanged(Z)V": () => {},
