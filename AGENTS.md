@@ -442,11 +442,12 @@ See tests/e2e/README.md for the commands and the metrics. What bites:
   between identical runs. `lsof -p $(lsof -ti:4080) | grep cwd` names it; the cheap defence is
   `PORT=4090 bun run server.ts` + `WEBDROID_URL=http://localhost:4090 bun run e2e`. A fix that
   does not appear in `curl -s localhost:PORT/chunk-*.js` is not being tested.
-- **harmonic's score spreads ~2 points run to run, not 0.5.** Measured on identical code:
-  35.87%, 37.84%. Its scroll steps are the whole spread (see "notes: draws follow the scroll
-  steps"), so a harmonic move under 2 points says nothing on its own — A/B it against the
-  parent commit before believing it either way. fitnotes and mihon-onboarding are repeatable
-  to the digit; mihon-app to ~0.1.
+- **harmonic's score spreads ~6 points run to run, not 0.5.** Measured on identical code:
+  31.80%, 35.87%, 37.84%. It renders live Hacker News, and although the flow masks the story
+  list away, what the unmasked strip holds still moves with the stories (and its scroll steps
+  move `draws` with them — see "notes: draws follow the scroll steps"). So a harmonic move
+  under ~6 points says nothing on its own; A/B it against the parent commit before believing
+  it either way. fitnotes and mihon-onboarding are repeatable to the digit, mihon-app to ~0.3.
 - A rising content-diff % is not automatically a regression: when the app starts doing work
   it previously skipped it can reach a *correct* state the goldens have already moved past.
   Look at the frames before believing the number.
@@ -904,7 +905,23 @@ no colour-long API at all, which killed every `Paint.setColor` — it caches `Co
   1 is the framework package and 2 the app, because a path alone cannot say which apk it came
   from — `res/layout/alert_dialog.xml` exists in both.
 
-Left: Bitmap (46) and the decoders.
+- **A bitmap does not need a raster to be a bitmap.** `JBitmap`'s OffscreenCanvas is made on
+  demand now: until something draws, the RGBA bytes ARE the bitmap, and after that they are a
+  memo of it that handing out the context drops (whoever took it may draw). That is what makes
+  a run of `getPixel` one readback instead of one per pixel — and it is the only reason AOSP's
+  own `Bitmap.createBitmap` can be exercised headless at all, since bun has no `OffscreenCanvas`,
+  no `ImageData` and no `createImageBitmap`.
+- **Several Bitmap natives return the Java object, not a handle**, so they build AOSP's own
+  `Bitmap` through its `(nativePtr, w, h, density, mutable, chunk, insets)` constructor with
+  `newObj` — which makes them async. That is safe on a cut class *because* it is cut: the
+  suspension analysis finds no spec for the name, and unknown means assumed-suspending. A class
+  that is both registered and served by bytecode gets the opposite answer and the caller
+  compiles sync; `fwtest` avoids it by pushing the cut into `BYTECODE` before importing
+  `src/natives`, and anything else that runs delegates must do the same.
+
+Left: the decoders. `BitmapFactory` (5), `BitmapRegionDecoder` (8) and `BitmapShader` (1) are
+NOT written, because nothing reaches them yet and `createImageBitmap` cannot be exercised
+outside a browser — a delegate exists because `fwtest` said so.
 
 ## A layer-list item carries its own size, and a gravity to place it by
 `JLayerDrawable.layout()` has implemented AOSP's `updateLayerBounds` — insets, then an

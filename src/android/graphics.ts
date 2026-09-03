@@ -195,7 +195,7 @@ rt.register({
       return v;
     },
     // a @ColorLong is the sRGB argb in the high word; argbOfColorLong reads the same encoding
-    "static pack(I)J": (c: number) => BigInt.asIntN(64, BigInt(c >>> 0) << 32n),
+    "static pack(I)J": (c: number) => colorLongOfArgb(c),
     "static toArgb(J)I": (v: bigint) => argbOfColorLong(v),
     "static alpha(J)F": (v: bigint) => (argbOfColorLong(v) >>> 24) / 255,
     "static red(J)F": (v: bigint) => ((argbOfColorLong(v) >> 16) & 0xff) / 255,
@@ -637,6 +637,9 @@ rt.register({
     "isWideGamut()Z": () => 0,
     "getId()I": () => 0,
     "getModel()Landroid/graphics/ColorSpace$Model;": () => null,
+    // AOSP's Bitmap passes this pointer to nativeCreate/nativeErase. There is no native colour
+    // space behind a 2D context, and 0 is the null handle — which those delegates ignore.
+    "getNativeInstance()J": () => 0n,
     "equals(Ljava/lang/Object;)Z": function (this: JColorSpace, o: unknown) { return o === this ? 1 : 0; },
   },
 });
@@ -701,6 +704,7 @@ mkEnumSet("android/graphics/Shader$TileMode", ["CLAMP", "REPEAT", "MIRROR"]);
  * canvas has) is the ARGB int in the top 32 bits, which is what getColorLong writes.
  */
 export const argbOfColorLong = (v: bigint) => Number(BigInt.asUintN(32, v >> 32n)) | 0;
+export const colorLongOfArgb = (c: number) => BigInt.asIntN(64, BigInt(c >>> 0) << 32n);
 
 function gradientStops(g: CanvasGradient, colors: ArrayLike<number>, stops: ArrayLike<number> | null): CanvasGradient {
   for (let i = 0; i < colors.length; i++) g.addColorStop(stops ? stops[i] : i / (colors.length - 1), cssColor(colors[i]));
@@ -838,17 +842,61 @@ rt.register({
   },
 });
 
+/** unpremultiplied RGBA bytes <-> the ARGB int Bitmap's pixel API speaks */
+type RGBA = Uint8ClampedArray<ArrayBuffer>;
+const argbAt = (d: RGBA, i: number) => ((d[i + 3] << 24) | (d[i] << 16) | (d[i + 1] << 8) | d[i + 2]) | 0;
+const putArgb = (d: RGBA, i: number, c: number) => {
+  d[i] = (c >> 16) & 0xff; d[i + 1] = (c >> 8) & 0xff; d[i + 2] = c & 0xff; d[i + 3] = c >>> 24;
+};
+
 export class JBitmap extends JObj {
-  canvas!: OffscreenCanvas;
-  ctx!: OffscreenCanvasRenderingContext2D;
   w = 0; h = 0;
   density = device.densityDpi;
   recycled = false;
+  /** AOSP's NATIVE config numbering (ALPHA_8=1 … ARGB_8888=5, RGBA_F16=6, HARDWARE=7), which is
+   *  not Bitmap.Config's ordinal. Everything we back is 8888. */
+  config = 5;
+  hasAlpha = true; premultiplied = true; immutable = false; mipmap = false;
+  genId = 0;
+  private cv: OffscreenCanvas | null = null;
+  private cx: OffscreenCanvasRenderingContext2D | null = null;
+  private px: RGBA | null = null;
+
+  /** The raster, made on demand. A bitmap that is only written and read as pixels never needs
+   *  one — and outside a browser there is no OffscreenCanvas to make. Handing it out drops the
+   *  pixel memo, because whoever took it may draw. */
+  get canvas(): OffscreenCanvas {
+    if (!this.cv) {
+      this.cv = new OffscreenCanvas(this.w, this.h);
+      this.cx = this.cv.getContext("2d", { willReadFrequently: false })!;
+      if (this.px) this.cx.putImageData(new ImageData(this.px, this.w, this.h), 0, 0);
+    }
+    this.px = null;
+    return this.cv;
+  }
+  get ctx(): OffscreenCanvasRenderingContext2D { void this.canvas; return this.cx!; }
+
+  /** RGBA bytes. Until a raster exists these ARE the bitmap; after that they are a memo of it,
+   *  which is what makes a run of getPixel one readback instead of one per pixel. */
+  pixels(): RGBA {
+    return this.px ??= this.cx ? this.cx.getImageData(0, 0, this.w, this.h).data : new Uint8ClampedArray(this.w * this.h * 4) as RGBA;
+  }
+  /** a written region reaches the raster too, once there is one */
+  commit(x: number, y: number, w: number, h: number): void {
+    const cx = this.cx, px = this.px;
+    if (!cx || !px) return;
+    let buf = px;
+    if (x || y || w !== this.w || h !== this.h) {
+      buf = new Uint8ClampedArray(w * h * 4) as RGBA;
+      for (let r = 0; r < h; r++) buf.set(px.subarray(((y + r) * this.w + x) * 4, ((y + r) * this.w + x + w) * 4), r * w * 4);
+    }
+    cx.putImageData(new ImageData(buf, w, h), x, y);
+    this.genId++;
+  }
+
   static create(w: number, h: number): JBitmap {
     const b = new JBitmap();
     b.w = Math.max(1, w | 0); b.h = Math.max(1, h | 0);
-    b.canvas = new OffscreenCanvas(b.w, b.h);
-    b.ctx = b.canvas.getContext("2d", { willReadFrequently: false })!;
     return b;
   }
   static fromImage(img: ImageBitmap | HTMLImageElement, w = img.width, h = img.height): JBitmap {
@@ -857,9 +905,9 @@ export class JBitmap extends JObj {
     return b;
   }
 }
-rt.register({
-  name: "android/graphics/Bitmap", ctor: JBitmap, ifaces: ["android/os/Parcelable"],
-  methods: {
+/** Exported for the same reason canvasMethods is: AOSP's own Bitmap bytecode reaches these
+ *  bodies through its native* delegates (src/android/delegates.ts), not a second copy. */
+export const bitmapMethods: NativeSpec["methods"] = {
     "static createBitmap(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;": blankBitmap,
     "static createBitmap(Landroid/util/DisplayMetrics;IILandroid/graphics/Bitmap$Config;ZLandroid/graphics/ColorSpace;)Landroid/graphics/Bitmap;":
       (_dm: unknown, w: number, h: number) => JBitmap.create(w, h),
@@ -882,29 +930,29 @@ rt.register({
     "recycle()V": function (this: JBitmap) { this.recycled = true; },
     "isRecycled()Z": function (this: JBitmap) { return this.recycled ? 1 : 0; },
     "getPixel(II)I": function (this: JBitmap, x: number, y: number) {
-      const d = this.ctx.getImageData(x, y, 1, 1).data;
-      return ((d[3] << 24) | (d[0] << 16) | (d[1] << 8) | d[2]) | 0;
+      return argbAt(this.pixels(), (y * this.w + x) * 4);
     },
     "setPixel(III)V": function (this: JBitmap, x: number, y: number, c: number) {
-      const id = this.ctx.createImageData(1, 1);
-      id.data[0] = (c >> 16) & 0xff; id.data[1] = (c >> 8) & 0xff; id.data[2] = c & 0xff; id.data[3] = c >>> 24;
-      this.ctx.putImageData(id, x, y);
+      putArgb(this.pixels(), (y * this.w + x) * 4, c);
+      this.commit(x, y, 1, 1);
     },
     "getPixels([IIIIIII)V": function (this: JBitmap, out: Int32Array, off: number, stride: number, x: number, y: number, w: number, h: number) {
-      const d = this.ctx.getImageData(x, y, w, h).data;
+      const d = this.pixels();
       for (let row = 0; row < h; row++) {
-        for (let col = 0; col < w; col++) {
-          const i = (row * w + col) * 4;
-          out[off + row * stride + col] = ((d[i + 3] << 24) | (d[i] << 16) | (d[i + 1] << 8) | d[i + 2]) | 0;
-        }
+        for (let col = 0; col < w; col++) out[off + row * stride + col] = argbAt(d, ((y + row) * this.w + x + col) * 4);
       }
     },
+    "setPixels([IIIIIII)V": function (this: JBitmap, src: Int32Array, off: number, stride: number, x: number, y: number, w: number, h: number) {
+      const d = this.pixels();
+      for (let row = 0; row < h; row++) {
+        for (let col = 0; col < w; col++) putArgb(d, ((y + row) * this.w + x + col) * 4, src[off + row * stride + col]);
+      }
+      this.commit(x, y, w, h);
+    },
     "eraseColor(I)V": function (this: JBitmap, c: number) {
-      this.ctx.save();
-      this.ctx.globalCompositeOperation = "copy";
-      this.ctx.fillStyle = cssColor(c);
-      this.ctx.fillRect(0, 0, this.w, this.h);
-      this.ctx.restore();
+      const d = this.pixels();
+      for (let i = 0; i < d.length; i += 4) putArgb(d, i, c);
+      this.commit(0, 0, this.w, this.h);
     },
     "extractAlpha()Landroid/graphics/Bitmap;": function (this: JBitmap) { return this; },
     "copy(Landroid/graphics/Bitmap$Config;Z)Landroid/graphics/Bitmap;": function (this: JBitmap) {
@@ -913,9 +961,9 @@ rt.register({
       return b;
     },
     "getConfig()Landroid/graphics/Bitmap$Config;": () => bitmapConfigs[3],
-    "hasAlpha()Z": () => 1,
-    "setHasAlpha(Z)V": () => {},
-    "isMutable()Z": () => 1,
+    "hasAlpha()Z": function (this: JBitmap) { return this.hasAlpha ? 1 : 0; },
+    "setHasAlpha(Z)V": function (this: JBitmap, v: number) { this.hasAlpha = !!v; },
+    "isMutable()Z": function (this: JBitmap) { return this.immutable ? 0 : 1; },
     "getByteCount()I": function (this: JBitmap) { return this.w * this.h * 4; },
     "getAllocationByteCount()I": function (this: JBitmap) { return this.w * this.h * 4; },
     "getRowBytes()I": function (this: JBitmap) { return this.w * 4; },
@@ -926,8 +974,8 @@ rt.register({
       return 1;
     },
     "prepareToDraw()V": () => {},
-  },
-});
+};
+rt.register({ name: "android/graphics/Bitmap", ctor: JBitmap, ifaces: ["android/os/Parcelable"], methods: bitmapMethods });
 const bitmapConfigs = mkEnumSet("android/graphics/Bitmap$Config", ["ALPHA_8", "RGB_565", "ARGB_4444", "ARGB_8888"]);
 mkEnumSet("android/graphics/Bitmap$CompressFormat", ["JPEG", "PNG", "WEBP"]);
 

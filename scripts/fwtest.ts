@@ -81,7 +81,16 @@ async function exercise(name: string, fn: () => Promise<void>, needsDom = false)
   }
 }
 
-const { newObj, vcall } = await import("../src/jvm/natives/jlang");
+const { newObj, vcall, linkInit } = await import("../src/jvm/natives/jlang");
+const { mangleMethod } = await import("../src/jvm/abi");
+/** a static on a bytecode class: statics live on the constructor, mangled the same way */
+async function scall(cls: string, name: string, desc: string, ...args: unknown[]): Promise<any> {
+  const info = await linkInit(cls);
+  const fn = (info.ctor as Record<string, unknown>)[mangleMethod(name, desc)];
+  if (typeof fn !== "function") throw new Error(`no static ${cls}.${name}${desc}`);
+  const r = (fn as (...a: unknown[]) => unknown)(...args);
+  return r instanceof Promise ? await r : r;
+}
 console.log("");
 
 await exercise("new Paint()", async () => {
@@ -112,6 +121,29 @@ await exercise("new Path()", async () => {
   await vcall(p, "moveTo", "(FF)V", 0, 0);
   await vcall(p, "lineTo", "(FF)V", 10, 10);
   await vcall(p, "close", "()V");
+});
+
+await exercise("Bitmap.createBitmap + pixels", async () => {
+  const cfg = await linkInit("android/graphics/Bitmap$Config");
+  const argb = (cfg.ctor as Record<string, unknown>).s$ARGB_8888;
+  if (!argb) throw new Error("no Bitmap.Config.ARGB_8888");
+  const b = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 4, 3, argb);
+  const w = await vcall(b, "getWidth", "()I"), h = await vcall(b, "getHeight", "()I");
+  if (w !== 4 || h !== 3) throw new Error(`created ${w}x${h}`);
+  if (await vcall(b, "getRowBytes", "()I") !== 16) throw new Error("rowBytes is not 4 pixels");
+  if (await vcall(b, "getConfig", "()Landroid/graphics/Bitmap$Config;") !== argb) throw new Error("config is not ARGB_8888");
+
+  await vcall(b, "setPixel", "(III)V", 1, 2, -16711681);   // 0xff00ffff
+  const got = await vcall(b, "getPixel", "(II)I", 1, 2);
+  if (got !== -16711681) throw new Error(`getPixel returned 0x${(got >>> 0).toString(16)}`);
+  if (await vcall(b, "getPixel", "(II)I", 0, 0) !== 0) throw new Error("an untouched pixel is not transparent");
+
+  const out = new Int32Array(12);
+  await vcall(b, "getPixels", "([IIIIIII)V", out, 0, 4, 0, 0, 4, 3);
+  if (out[2 * 4 + 1] !== -16711681) throw new Error("getPixels disagrees with getPixel");
+  await vcall(b, "eraseColor", "(I)V", -1);
+  if (await vcall(b, "getPixel", "(II)I", 3, 0) !== -1) throw new Error("eraseColor did not reach every pixel");
+  if (await vcall(b, "isRecycled", "()Z")) throw new Error("a fresh bitmap reports recycled");
 });
 
 // The resource delegates are exercised against the real framework table rather than through

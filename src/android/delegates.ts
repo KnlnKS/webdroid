@@ -17,8 +17,9 @@ import { rt, JObj } from "../jvm/runtime";
 import {
   JPaint, JTypeface, tfDefault, mkTypeface, measureText,
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
-  JCanvas, JBitmap, JRect, canvasMethods,
+  JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, colorLongOfArgb,
 } from "./graphics";
+import { newObj } from "../jvm/natives/jlang";
 import { charsToString } from "../jvm/abi";
 import { JPath, pathBounds, pathOffset, pathTransform } from "./path";
 import {
@@ -764,6 +765,114 @@ function applyMatrix(c: JCanvas, m: Mat, replace: boolean) {
   if (replace) c.ctx.setTransform(m[0], m[3], m[1], m[4], m[2], m[5]);
   else c.ctx.transform(m[0], m[3], m[1], m[4], m[2], m[5]);
 }
+
+// ── android.graphics.Bitmap ────────────────────────────────────────────────────────────
+// The handle is a JBitmap. Several of these build the Java object rather than returning a
+// handle, so they construct AOSP's own Bitmap through its (nativePtr, w, h, density, mutable,
+// ninePatchChunk, insets) constructor — which makes them async, and an async delegate on a cut
+// class is safe because the suspension analysis has no spec to consult and assumes suspension.
+//
+// Everything here is ARGB_8888: that is what a Canvas2D raster is, and reporting anything else
+// would have callers allocate for a depth we do not have. AOSP's NATIVE config numbering is
+// not Bitmap.Config's ordinal (ALPHA_8=1 … ARGB_8888=5), and JBitmap.config carries the native
+// one because that is what nativeConfig hands back.
+const bmp = (h: bigint) => deref<JBitmap>(h);
+type BitmapFn = (this: JBitmap, ...a: never[]) => unknown;
+function bmf(desc: string): BitmapFn {
+  const fn = bitmapMethods?.[desc];
+  if (typeof fn !== "function") throw new Error(`delegates: no bitmapMethods[${desc}]`);
+  return fn as BitmapFn;
+}
+/** the Java Bitmap around one of ours */
+const wrap = (b: JBitmap) =>
+  newObj("android/graphics/Bitmap", "(JIIIZ[BLandroid/graphics/NinePatch$InsetStruct;)V",
+    handle(b), b.w, b.h, b.density, b.immutable ? 0 : 1, null, null);
+const copyOf = (src: JBitmap) => {
+  const b = JBitmap.create(src.w, src.h);
+  b.density = src.density; b.hasAlpha = src.hasAlpha; b.premultiplied = src.premultiplied;
+  b.pixels().set(src.pixels());
+  return b;
+};
+
+delegate("android/graphics/Bitmap", {
+  "nativeCreate([IIIIIIZJ)Landroid/graphics/Bitmap;": (colors: Int32Array | null, off: number, stride: number, w: number, h: number, _cfg: number, mutable: number) => {
+    const b = JBitmap.create(w, h);
+    b.immutable = !mutable;
+    if (colors) bmf("setPixels([IIIIIII)V").call(b, colors as never, off as never, stride as never, 0 as never, 0 as never, w as never, h as never);
+    return wrap(b);
+  },
+  "nativeCopy(JIZ)Landroid/graphics/Bitmap;": (h: bigint, _cfg: number, mutable: number) => {
+    const b = copyOf(bmp(h));
+    b.immutable = !mutable;
+    return wrap(b);
+  },
+  "nativeCopyPreserveInternalConfig(J)Landroid/graphics/Bitmap;": (h: bigint) => wrap(copyOf(bmp(h))),
+  // ashmem is a device allocator, not a pixel format: a copy is what the caller asked for
+  "nativeCopyAshmem(J)Landroid/graphics/Bitmap;": (h: bigint) => wrap(copyOf(bmp(h))),
+  "nativeCopyAshmemConfig(JI)Landroid/graphics/Bitmap;": (h: bigint) => wrap(copyOf(bmp(h))),
+  // the shadow mask: AOSP returns an ALPHA_8 bitmap, and the nearest thing a Canvas2D raster
+  // has is black with the source alpha, which composites identically
+  "nativeExtractAlpha(JJ[I)Landroid/graphics/Bitmap;": (h: bigint, _paint: bigint, offsetXY: Int32Array | null) => {
+    const src = bmp(h), b = JBitmap.create(src.w, src.h);
+    const s = src.pixels(), d = b.pixels();
+    for (let i = 0; i < d.length; i += 4) d[i + 3] = s[i + 3];
+    if (offsetXY) { offsetXY[0] = 0; offsetXY[1] = 0; }
+    return wrap(b);
+  },
+
+  "nativeRecycle(J)V": (h: bigint) => { bmp(h).recycled = true; },
+  "nativeGetNativeFinalizer()J": () => FINALIZER,
+  "nativePrepareToDraw(J)V": () => {},
+  "nativeGenerationId(J)I": (h: bigint) => bmp(h).genId,
+  "nativeConfig(J)I": (h: bigint) => bmp(h).config,
+  "nativeRowBytes(J)I": (h: bigint) => bmp(h).w * 4,
+  "nativeGetAllocationByteCount(J)I": (h: bigint) => bmp(h).w * bmp(h).h * 4,
+  "nativeReconfigure(JIIIZ)V": (h: bigint, w: number, ht: number, _cfg: number, premul: number) => {
+    const b = bmp(h);
+    b.w = Math.max(1, w | 0); b.h = Math.max(1, ht | 0); b.premultiplied = !!premul;
+  },
+
+  "nativeGetPixel(JII)I": (h: bigint, x: number, y: number) => bmf("getPixel(II)I").call(bmp(h), x as never, y as never),
+  "nativeSetPixel(JIII)V": (h: bigint, x: number, y: number, c: number) => bmf("setPixel(III)V").call(bmp(h), x as never, y as never, c as never),
+  "nativeGetPixels(J[IIIIIII)V": (h: bigint, ...a: unknown[]) => bmf("getPixels([IIIIIII)V").apply(bmp(h), a as never[]),
+  "nativeSetPixels(J[IIIIIII)V": (h: bigint, ...a: unknown[]) => bmf("setPixels([IIIIIII)V").apply(bmp(h), a as never[]),
+  "nativeGetColor(JII)J": (h: bigint, x: number, y: number) => colorLongOfArgb(bmf("getPixel(II)I").call(bmp(h), x as never, y as never) as number),
+  "nativeErase(JI)V": (h: bigint, c: number) => bmf("eraseColor(I)V").call(bmp(h), c as never),
+  "nativeErase(JJJ)V": (h: bigint, _cs: bigint, color: bigint) => bmf("eraseColor(I)V").call(bmp(h), argbOfColorLong(color) as never),
+  "nativeSameAs(JJ)Z": (a: bigint, b: bigint) => {
+    const x = bmp(a), y = bmp(b);
+    if (x.w !== y.w || x.h !== y.h) return 0;
+    const p = x.pixels(), q = y.pixels();
+    for (let i = 0; i < p.length; i++) if (p[i] !== q[i]) return 0;
+    return 1;
+  },
+  "nativeCompress(JIILjava/io/OutputStream;[B)Z": (h: bigint, _fmt: number, q: number, out: unknown) =>
+    bmf("compress(Landroid/graphics/Bitmap$CompressFormat;ILjava/io/OutputStream;)Z").call(bmp(h), null as never, q as never, out as never),
+
+  "nativeHasAlpha(J)Z": (h: bigint) => (bmp(h).hasAlpha ? 1 : 0),
+  "nativeSetHasAlpha(JZZ)V": (h: bigint, v: number) => { bmp(h).hasAlpha = !!v; },
+  "nativeIsPremultiplied(J)Z": (h: bigint) => (bmp(h).premultiplied ? 1 : 0),
+  "nativeSetPremultiplied(JZ)V": (h: bigint, v: number) => { bmp(h).premultiplied = !!v; },
+  "nativeIsImmutable(J)Z": (h: bigint) => (bmp(h).immutable ? 1 : 0),
+  "nativeSetImmutable(J)V": (h: bigint) => { bmp(h).immutable = true; },
+  "nativeHasMipMap(J)Z": (h: bigint) => (bmp(h).mipmap ? 1 : 0),
+  "nativeSetHasMipMap(JZ)V": (h: bigint, v: number) => { bmp(h).mipmap = !!v; },
+
+  // one colour space, and it is sRGB: there is no colour management behind a 2D context
+  "nativeIsSRGB(J)Z": () => 1,
+  "nativeIsSRGBLinear(J)Z": () => 0,
+  "nativeSetColorSpace(JJ)V": () => {},
+  "nativeComputeColorSpace(J)Landroid/graphics/ColorSpace;": () => null,
+  // a device's shared-memory and HDR allocators, and the gainmap that rides on one: absent
+  // here, and a caller discovers that the way it would on a device without them
+  "nativeGetAshmemFD(J)I": () => -1,
+  "nativeIsBackedByAshmem(J)Z": () => 0,
+  "nativeHasGainmap(J)Z": () => 0,
+  "nativeExtractGainmap(J)Landroid/graphics/Gainmap;": () => null,
+  "nativeSetGainmap(JJ)V": () => {},
+  "nativeGetHardwareBuffer(J)Landroid/hardware/HardwareBuffer;": () => null,
+  "nativeWrapHardwareBufferBitmap(Landroid/hardware/HardwareBuffer;J)Landroid/graphics/Bitmap;": () => null,
+});
 
 // ── android.content.res.StringBlock / XmlBlock ─────────────────────────────────────────
 // The layout-inflation path. AOSP's XmlBlock is a pull parser over the binary XML bytes whose

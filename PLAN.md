@@ -21,7 +21,7 @@ See "One build, or none" and "The delegates" in AGENTS.md.
 | Framework provenance | `bun run gen-framework` pulls the jar + res pair off the reference AVD and proves the ids agree (0 wrong paired, 3,582 wrong against a relinked table) |
 | Policy | `src/jvm/provenance.ts` — `BYTECODE` is **empty**; nothing is cut over yet |
 | Delegates | `src/android/delegates.ts` — Paint 86/86, Canvas 33/33, BaseCanvas 32/32, Matrix 40/40, Path 43/43, Typeface 17/17, AssetManager 55/55, XmlBlock 22/22, StringBlock 5/5 |
-| Graphics cut coverage | 253/363 declared natives |
+| Graphics cut coverage | 295/363 declared natives (Bitmap 42/46) |
 | Evidence | `bun run fwtest` runs real bytecode headless: `new Paint()`, `new Matrix()`, `new Path()`, three AssetManager lookups against the real framework table, and `android:layout/alert_dialog` opened through `nativeOpenXmlAsset` and walked to END_DOCUMENT |
 | e2e | 46.67% overall, every step rendered — flat against main |
 | Corpus | `bun run corpus` 9/10 render a frame |
@@ -60,19 +60,12 @@ not because a list has a row.** Run `bun run fwtest <prefix>` first, implement w
 re-run. Get the exact descriptors from `bun run fwscan vendor/aosp/framework.jar <prefix>` —
 never guess a signature; `nSetTextLocales` returns `I`, not `V`, and that cost a round trip.
 
-### 1.1 Bitmap — 60 natives (+ BitmapFactory 5, BitmapRegionDecoder 8, BitmapShader 1)
-**Why:** every drawable, icon and image goes through it; it is the largest remaining block.
-**What:** `JBitmap` is the object (`OffscreenCanvas` + 2D context). `nativeCreate`,
-`nativeRecycle`, `nativeGetWidth/Height`, `nativeGetPixels/SetPixels`, `nativeCopy`,
-`nativeCompress`, `nativeConfig`, `nativeGetNativeFinalizer`. Decoders go through the
-browser's `createImageBitmap`, which is async — see the trap below.
-**Verify:** a `fwtest` exercise that creates a Bitmap, sets and reads back pixels.
-**Traps:**
-- `createImageBitmap` is async and JNI delegates are called from possibly-sync frames. The
-  existing decode path in `graphics.ts` already faces this; follow whatever it does rather
-  than inventing a second answer.
-- `Bitmap.Config` ordinals matter: ALPHA_8=1, RGB_565=3, ARGB_4444=4, ARGB_8888=5,
-  RGBA_F16=6, HARDWARE=7. Report ARGB_8888 for everything we actually back.
+### 1.1 Bitmap — **DONE** (42/46)
+`graphics: a bitmap does not need a raster to be a bitmap`. 253/363 -> 295/363 on `bun run
+fwtest`. `JBitmap`'s raster is lazy and its pixels are the store until one exists, so AOSP's
+own `Bitmap.createBitmap` + setPixel/getPixel/getPixels/eraseColor round-trip headless.
+Left of the 46: the two Parcel natives and `copyPixelsTo/FromBuffer`, none reached.
+`BitmapFactory`/`BitmapRegionDecoder`/`BitmapShader` are unwritten for the same reason.
 
 ### 1.2 XmlBlock + StringBlock — the layout-inflation path — **DONE**
 `res: the XmlBlock behind nativeOpenXmlAsset, and a file resource is a path`. 53/97 -> 82/97 on
