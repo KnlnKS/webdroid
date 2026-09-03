@@ -23,7 +23,7 @@ BYTECODE.push(...(CUTS.length ? CUTS : [
 
 // imported AFTER the policy is set: rt.register consults it, so the specs never land
 const { rt } = await import("../src/jvm/runtime");
-const { DexFile } = await import("../src/jvm/dex");
+const { dexesIn } = await import("../src/jvm/dex");
 const { ACC } = await import("../src/jvm/runtime");
 const { descToName } = await import("../src/jvm/abi");
 await import("../src/natives");
@@ -31,7 +31,7 @@ await import("../src/natives");
 const JAR = "vendor/aosp/framework.jar";
 if (!existsSync(JAR)) throw new Error(`no ${JAR} — run \`bun run gen-framework\` with the reference AVD booted`);
 const zip = unzipSync(new Uint8Array(await Bun.file(JAR).arrayBuffer()), { filter: (f) => /^classes\d*\.dex$/.test(f.name) });
-for (const n of Object.keys(zip).sort()) rt.loadDex(new DexFile(zip[n], n));
+for (const n of Object.keys(zip).sort()) for (const d of dexesIn(zip[n], n)) rt.loadDex(d);
 for (const n of [...rt.natives.keys()]) { try { rt.link(n); } catch { /* */ } }
 
 console.log(`withheld ${BYTECODE.length} prefixes; ${rt.dexIndex.size} framework classes\n`);

@@ -1,13 +1,13 @@
 // What the real framework dex contains, and what it would ask of us.
 // bun scripts/fwscan.ts [vendor/aosp/framework.jar] [class-name-prefix]
 import { unzipSync } from "fflate";
-import { DexFile } from "../src/jvm/dex";
+import { dexesIn } from "../src/jvm/dex";
 import { ACC } from "../src/jvm/runtime";
 import { descToName, isWide } from "../src/jvm/abi";
 
 const [jar = "vendor/aosp/framework.jar", prefix] = process.argv.slice(2);
 const zip = unzipSync(new Uint8Array(await Bun.file(jar).arrayBuffer()), { filter: (f) => /classes\d*\.dex$/.test(f.name) });
-const dexes = Object.entries(zip).map(([n, b]) => new DexFile(b, n));
+const dexes = Object.entries(zip).flatMap(([n, b]) => dexesIn(b, n));
 
 let classes = 0, methods = 0, bodies = 0, natives = 0, fields = 0;
 const nativesByPkg = new Map<string, number>();

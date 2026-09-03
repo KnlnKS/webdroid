@@ -1,7 +1,7 @@
 // Device shell: APK boot, activity stack, frame loop, touch routing.
 
 import { unzipSync } from "fflate";
-import { DexFile } from "../jvm/dex";
+import { dexesIn } from "../jvm/dex";
 import { rt } from "../jvm/runtime";
 import { analyseProgram } from "../jvm/analyse";
 import { vfs } from "../jvm/natives/jio";
@@ -92,7 +92,7 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
   // The apk goes in first: loadDex is first-wins by name, so an app shipping its own copy of a
   // framework class keeps it, as on a device where the app's dex is ahead on the class path.
   for (const [name, data] of Object.entries(zip)) {
-    if (/^classes\d*\.dex$/.test(name)) rt.loadDex(new DexFile(data, name));
+    if (/^classes\d*\.dex$/.test(name)) for (const d of dexesIn(data, name)) rt.loadDex(d);
   }
   await loadFrameworkDex();
   // Natives materialize AFTER every dex is indexed, never before: a native whose super or

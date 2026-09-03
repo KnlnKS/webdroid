@@ -1,5 +1,5 @@
 import { unzipSync } from "fflate";
-import { DexFile } from "../src/jvm/dex";
+import { dexesIn, DexFile } from "../src/jvm/dex";
 import { rt } from "../src/jvm/runtime";
 import type { XmlNode } from "../src/android/axml";
 
@@ -15,7 +15,7 @@ export async function openApk(path: string, filter?: RegExp): Promise<Zip> {
 export function dexesOf(zip: Zip): DexFile[] {
   return Object.entries(zip)
     .filter(([name]) => DEX_RE.test(name))
-    .map(([name, bytes]) => new DexFile(bytes, name));
+    .flatMap(([name, bytes]) => dexesIn(bytes, name));
 }
 
 export async function openDexes(path: string): Promise<DexFile[]> {

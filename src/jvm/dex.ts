@@ -5,6 +5,22 @@ import { charsToString, descToName } from "./abi";
 
 export const NO_INDEX = 0xffffffff;
 
+/** The logical dex files in one physical file. Before v41 that is always exactly one; the v41
+ *  container format (Android 15) packs several into a file and is what an apk built against a
+ *  current SDK now ships, so a reader that assumes one header sees only the first classes'
+ *  worth and silently misses the rest. */
+export function dexesIn(bytes: Uint8Array, name = "classes.dex"): DexFile[] {
+  const out: DexFile[] = [];
+  for (let off = 0; ;) {
+    const d = new DexFile(bytes, out.length ? `${name}!${out.length}` : name, off);
+    out.push(d);
+    const next = off + d.fileSize;
+    if (d.version < 41 || !d.fileSize || next + 112 > bytes.length || next >= d.containerSize) break;
+    off = next;
+  }
+  return out;
+}
+
 interface FieldRef { cls: number; type: number; name: string; }
 interface ProtoRef { shorty: string; ret: number; params: number[]; }
 interface MethodRef { cls: number; proto: number; name: string; }
@@ -88,6 +104,7 @@ export class DexFile {
   /** map_list sections, resolved on first use: call_site_ids and method_handles live only here */
   private sections?: Map<number, { size: number; off: number }>;
   stringCount: number; typeCount: number;
+  version: number; fileSize: number; containerSize: number;
 
   private stringCache: (string | undefined)[];
   private typeCache: (string | undefined)[];
@@ -95,23 +112,31 @@ export class DexFile {
   private fieldCache: (FieldRef | undefined)[];
   private methodCache: (MethodRef | undefined)[];
 
-  constructor(public bytes: Uint8Array, public name = "classes.dex") {
+  /** `headerOff` is where this logical dex's header sits inside the physical file. It is 0 for
+   *  everything before v41; a v41 container holds several headers and their section offsets are
+   *  relative to the CONTAINER, so every dex in one keeps the whole buffer and only the header
+   *  moves. That is also why nothing below this constructor needs to know about containers. */
+  constructor(public bytes: Uint8Array, public name = "classes.dex", public headerOff = 0) {
     this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const v = this.view;
-    const magic = String.fromCharCode(...bytes.subarray(0, 4));
+    const h = headerOff;
+    const magic = String.fromCharCode(...bytes.subarray(h, h + 4));
     if (magic !== "dex\n") throw new Error(`bad dex magic in ${name}`);
-    this.stringCount = v.getUint32(56, true); this.stringIdsOff = v.getUint32(60, true);
-    this.typeCount = v.getUint32(64, true); this.typeIdsOff = v.getUint32(68, true);
-    this.protoIdsOff = v.getUint32(76, true);
-    this.fieldIdsOff = v.getUint32(84, true);
-    this.methodIdsOff = v.getUint32(92, true);
-    this.classDefCount = v.getUint32(96, true); this.classDefsOff = v.getUint32(100, true);
-    this.mapOff = v.getUint32(52, true);
+    this.version = Number(String.fromCharCode(...bytes.subarray(h + 4, h + 7))) || 0;
+    this.fileSize = v.getUint32(h + 32, true);
+    this.containerSize = this.version >= 41 ? v.getUint32(h + 112, true) : this.fileSize;
+    this.stringCount = v.getUint32(h + 56, true); this.stringIdsOff = v.getUint32(h + 60, true);
+    this.typeCount = v.getUint32(h + 64, true); this.typeIdsOff = v.getUint32(h + 68, true);
+    this.protoIdsOff = v.getUint32(h + 76, true);
+    this.fieldIdsOff = v.getUint32(h + 84, true);
+    this.methodIdsOff = v.getUint32(h + 92, true);
+    this.classDefCount = v.getUint32(h + 96, true); this.classDefsOff = v.getUint32(h + 100, true);
+    this.mapOff = v.getUint32(h + 52, true);
     this.stringCache = new Array(this.stringCount);
     this.typeCache = new Array(this.typeCount);
-    this.protoCache = new Array(v.getUint32(72, true));
-    this.fieldCache = new Array(v.getUint32(80, true));
-    this.methodCache = new Array(v.getUint32(88, true));
+    this.protoCache = new Array(v.getUint32(h + 72, true));
+    this.fieldCache = new Array(v.getUint32(h + 80, true));
+    this.methodCache = new Array(v.getUint32(h + 88, true));
   }
 
   string(i: number): string {

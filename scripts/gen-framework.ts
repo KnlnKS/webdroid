@@ -15,7 +15,7 @@ export {};
 // bytecode we run and the screenshots we score against come from the same platform build.
 import { existsSync } from "node:fs";
 import { unzipSync } from "fflate";
-import { DexFile } from "../src/jvm/dex";
+import { dexesIn } from "../src/jvm/dex";
 import { rt } from "../src/jvm/runtime";
 import "../src/natives";
 import { mangleStaticField } from "../src/jvm/abi";
@@ -53,7 +53,7 @@ for (const f of [JAR, RES]) if (!existsSync(f)) throw new Error(`missing ${f} â€
 
 // --- verify: every id the framework's own R classes name must resolve in the paired table ---
 const jarZip = unzipSync(new Uint8Array(await Bun.file(JAR).arrayBuffer()), { filter: (f) => /^classes\d*\.dex$/.test(f.name) });
-for (const n of Object.keys(jarZip).sort()) rt.loadDex(new DexFile(jarZip[n], n));
+for (const n of Object.keys(jarZip).sort()) for (const d of dexesIn(jarZip[n], n)) rt.loadDex(d);
 // the R classes are dex, but their <clinit> runs on java.* natives
 console.log(`${JAR}: ${Object.keys(jarZip).length} dex, ${rt.dexIndex.size} classes`);
 

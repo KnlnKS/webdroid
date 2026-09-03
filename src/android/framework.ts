@@ -13,7 +13,7 @@
 import { Arsc } from "./arsc";
 import { centralDir, entryBytes } from "../jvm/natives/jzip";
 import { rt, JObj } from "../jvm/runtime";
-import { DexFile } from "../jvm/dex";
+import { dexesIn } from "../jvm/dex";
 import { mangleStaticField } from "../jvm/abi";
 import { setFramework } from "./res";
 import { needsFramework } from "../jvm/provenance";
@@ -32,7 +32,7 @@ export function loadFrameworkDex(): Promise<void> {
     const jar = new Uint8Array(await res.arrayBuffer());
     const dir = centralDir(jar);
     for (const name of [...dir.keys()].filter((n) => /^classes\d*\.dex$/.test(n)).sort()) {
-      rt.loadDex(new DexFile(entryBytes(jar, dir.get(name)!), `framework:${name}`));
+      for (const d of dexesIn(entryBytes(jar, dir.get(name)!), `framework:${name}`)) rt.loadDex(d);
     }
   })();
 }

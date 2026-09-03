@@ -15,7 +15,7 @@
 import { openApk, dexesOf, DEX_RE } from "./lib";
 import { Program, reach } from "../src/jvm/reach";
 import { rootsOf, reflectiveRoots } from "../src/jvm/roots";
-import { DexFile } from "../src/jvm/dex";
+import { dexesIn, DexFile } from "../src/jvm/dex";
 import { rt } from "../src/jvm/runtime";
 import "../src/natives";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
@@ -43,7 +43,7 @@ if (flag("--framework")) {
   const jar = "vendor/aosp/framework.jar";
   if (!existsSync(jar)) throw new Error(`no ${jar} — run \`bun run gen-framework\` first`);
   const fz = unzipSync(new Uint8Array(await Bun.file(jar).arrayBuffer()), { filter: (f) => DEX_RE.test(f.name) });
-  fwDexes = Object.keys(fz).sort().map((n) => new DexFile(fz[n], n));
+  fwDexes = Object.keys(fz).sort().flatMap((n) => dexesIn(fz[n], n));
   for (const d of fwDexes) p.add(d);
 }
 
