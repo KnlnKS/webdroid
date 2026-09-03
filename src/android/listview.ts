@@ -426,6 +426,9 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setOnItemClickListener(Landroid/widget/AdapterView$OnItemClickListener;)V": function (this: JListView, l: unknown) {
     this.itemClickL = l;
   },
+  // appcompat's dropdown list reads both back: without them a Spinner popup dies on open, and
+  // picking a row throws instead of selecting it
+  "getOnItemClickListener()Landroid/widget/AdapterView$OnItemClickListener;": function (this: JListView) { return this.itemClickL; },
   "setOnItemLongClickListener(Landroid/widget/AdapterView$OnItemLongClickListener;)V": function (this: JListView, l: unknown) {
     this.itemLongClickL = l;
   },
@@ -458,6 +461,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setSelector(Landroid/graphics/drawable/Drawable;)V": () => {},
   "setSelector(I)V": () => {},
   "setDrawSelectorOnTop(Z)V": () => {},
+  "getChoiceMode()I": function (this: JListView) { return this.choiceMode; },
   "setChoiceMode(I)V": async function (this: JListView, m: number) {
     this.choiceMode = m;
     if (m !== CHOICE_MODE_MULTIPLE_MODAL && this.actionMode) await vcall(this.actionMode, "finish", "()V");
