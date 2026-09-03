@@ -9,6 +9,7 @@ import { reportUncaught, stateSetMatches } from "./os";
 import { onMain } from "./mainloop";
 import { parseAXML, TV, type XmlNode, type XmlAttr } from "./axml";
 import { type Resources, type RV, attrTable, T_STR, normRV, rvFloat, rvInt } from "./res";
+import type { JContext } from "./app";
 
 // ── ValueAnimator/ObjectAnimator (time-driven via animHooks)
 class JValueAnimator extends JObj {
@@ -548,7 +549,7 @@ function inflateAnimator(res: Resources, node: XmlNode): JValueAnimator {
   return a;
 }
 function animatorXml(ctx: unknown, id: number): [Resources, XmlNode] {
-  const res: Resources = (ctx as any).$host.res;
+  const res: Resources = (ctx as JContext).$host.res;
   const f = res.fileOf(id);
   if (!f) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Can't load animation resource ID #0x" + id.toString(16));
   return [res, parseAXML(f.bytes)];

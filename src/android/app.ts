@@ -36,15 +36,16 @@ export interface AppHost {
   themeResId: number;
   iconRes: number;
   zip: Record<string, Uint8Array>;
-  application: any;
+  /** null between setAppHost and the Application instance being constructed (device.ts) */
+  application: JApplication | null;
   jresources: JResources;
   statusBarColor: number;
   navBarColor: number;
-  launch: (component: string, intent: any) => Promise<void>;
-  finishActivity: (activity: any) => void;
-  recreateActivity: (activity: any) => void;
-  currentActivity: () => any;
-  invalidateOptionsMenu: (activity: any) => void;
+  launch: (component: string, intent: JIntent | null) => Promise<void>;
+  finishActivity: (activity: JActivity) => void;
+  recreateActivity: (activity: JActivity) => void;
+  currentActivity: () => JActivity | null;
+  invalidateOptionsMenu: (activity: JActivity) => void;
 }
 let appHost: AppHost | null = null;
 export function setAppHost(h: AppHost) { appHost = h; }

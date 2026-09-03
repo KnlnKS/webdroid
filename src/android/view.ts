@@ -12,6 +12,7 @@ import { JDrawable, ST, loadDrawableRV, JColorDrawable, loadDrawable, type JColo
 import { reportUncaught, mainHandler, type JDisplayMetrics } from "./os";
 import { onMain } from "./mainloop";
 import { type Resources, JTheme, JAttrSet, AID, attrTable, obtainStyled, rvDimen, rvInt, rvString, askTheme } from "./res";
+import type { JContext } from "./app";
 
 export { AID };
 
@@ -1262,7 +1263,7 @@ export function inheritContext(child: JView, from: JView) {
 export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | null, defStyleAttr = 0) {
   v.ctx = jctx;
   if (jctx) {
-    const host = (jctx as any).$host;
+    const host = (jctx as JContext | null)?.$host;
     if (host) {
       v.jres = host.res;
       v.theme = await askTheme(jctx) ?? host.theme;

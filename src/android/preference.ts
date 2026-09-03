@@ -14,7 +14,7 @@ import { tfMedium } from "./graphics";
 import { JLinearLayout, JTextView, themeAccent, G } from "./widget";
 import { JBaseAdapter, JListView, baseAdapterMethods } from "./listview";
 import { reportUncaught } from "./os";
-import { getPrefs, JFragment, fragMethods } from "./app";
+import { getPrefs, JFragment, fragMethods, type JContext } from "./app";
 
 // ── attribute resolution: mirrors res.ts's own value-resolution helpers (obtainStyled etc.),
 // just driven off a raw AXML attribute instead of a styleable index. ──
@@ -217,7 +217,7 @@ const checkBoxMethods: NonNullable<NativeSpec["methods"]> = {
   ...preferenceMethods,
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JCheckBoxPreference, c: unknown, set: JAttrSet | null) {
     initPrefCommon(this, c, set);
-    const res: Resources | null = (c as any)?.$host?.res ?? null;
+    const res: Resources | null = (c as JContext | null)?.$host?.res ?? null;
     const node = set?.node ?? null;
     let dflt = false;
     if (res && node) {
@@ -262,7 +262,7 @@ const listPrefMethods: NonNullable<NativeSpec["methods"]> = {
   ...preferenceMethods,
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JListPreference, c: unknown, set: JAttrSet | null) {
     initPrefCommon(this, c, set);
-    const res: Resources | null = (c as any)?.$host?.res ?? null;
+    const res: Resources | null = (c as JContext | null)?.$host?.res ?? null;
     const node = set?.node ?? null;
     let dflt: string | null = null;
     if (res && node) {

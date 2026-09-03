@@ -244,8 +244,9 @@ WEBDROID_BYTECODE='android/graphics/Paint,android/graphics/Canvas' \
   WEBDROID_URL=http://localhost:4090 bun run e2e --test fitnotes
 ```
 
-**Reading the scores.** fitnotes and mihon-onboarding are repeatable to the digit and mihon-app
-to ~0.3, so a move there is real. **harmonic spreads ~6 points run to run on identical code**
+**Reading the scores.** fitnotes and mihon-onboarding are repeatable to the digit; mihon-app
+spreads ~1.4 (measured over seven runs -- see "Harness notes" in AGENTS.md), so only fitnotes is
+a tight gate. **harmonic spreads ~6 points run to run on identical code**
 because it renders live Hacker News — see "Harness notes" in AGENTS.md for the measurements, and
 A/B against the parent commit before believing anything. Read `draws`/`drawMs` beside the
 per-step content diff, never alone.

@@ -13,6 +13,7 @@ import { JLinearLP, attachView, requestLayout, invalidate, initViewFromCtx, inhe
 import { tfMedium } from "./graphics";
 import { JAttrSet } from "./res";
 import { JLinearLayout, JTextView, themeAccent, G } from "./widget";
+import type { JContext } from "./app";
 
 // ── TimePicker: hour/minute steppers with an optional AM/PM column.
 class JTimePicker extends JLinearLayout {
@@ -219,8 +220,9 @@ function initTimePickerDialog(d: JTimePickerDialog, c: unknown, listener: unknow
   d.jctx = c;
   const tp = new JTimePicker();
   tp.ctx = c;
-  tp.jres = (c as any)?.$host?.res ?? null;
-  tp.theme = (c as any)?.$host?.theme ?? null;
+  const host = (c as JContext | null)?.$host;
+  tp.jres = host?.res ?? null;
+  tp.theme = host?.theme ?? null;
   tp.hourVal = hourOfDay | 0;
   tp.minuteVal = minute | 0;
   tp.is24 = !!is24HourView;
