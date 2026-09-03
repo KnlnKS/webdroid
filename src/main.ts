@@ -5,6 +5,8 @@ import "./natives";
 import { JRenderNode, SYSTEM_FONT } from "./android/graphics";
 import { setGL } from "./android/gl";
 import { rt } from "./jvm/runtime";
+import { newObj, vcall, linkInit } from "./jvm/natives/jlang";
+import { mangleMethod } from "./jvm/abi";
 import { loadFramework } from "./android/framework";
 import { unreadAttrs } from "./android/res";
 import { bootApk, tick, dispatchPointer, pressBack, currentApp, contentTop, SCREEN_W, SCREEN_H } from "./shell/device";
@@ -159,6 +161,17 @@ rt.auditNatives = new URLSearchParams(location.search).get("natcheck") === "1";
 
 const wd = {
   rt, uiState, overlays, perf, perfReset, mainDbg, setGL, logs: logBuf, ticks: 0, native,
+  // The JVM's own entry points, so a script can drive real bytecode from the page the way
+  // scripts/fwtest.ts drives it headless. That is the only way to exercise anything needing
+  // Canvas2D — text metrics, a bitmap raster, an image decode — since bun has no canvas.
+  newObj, vcall, linkInit,
+  jni: (cls: string, sig: string) => rt.jniFn(cls, sig),
+  /** a static on a bytecode class: statics live on the constructor, mangled the same way */
+  scall: async (cls: string, name: string, desc: string, ...args: unknown[]) => {
+    const fn = ((await linkInit(cls)).ctor as Record<string, unknown>)[mangleMethod(name, desc)];
+    if (typeof fn !== "function") throw new Error(`no static ${cls}.${name}${desc}`);
+    return (fn as (...a: unknown[]) => unknown)(...args);
+  },
   nativeLiars: () => [...rt.nativeLiars].sort(),
   boot, app: () => currentApp(), rnodes: () => JRenderNode.all, back: () => pressBack(),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded

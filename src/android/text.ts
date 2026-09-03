@@ -3,13 +3,16 @@
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { vcall, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import { type JDate } from "../jvm/natives/jtime";
-import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics } from "./graphics";
+import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances } from "./graphics";
 import { device } from "../shell/config";
 import { formatDate } from "../jvm/natives/jtext";
 import { toJsArray } from "../jvm/natives/jutil";
 
 export class JTextPaint extends JPaint {
   linkColor = -16776961;
+  /** AOSP's StaticLayout reads these off the paint directly, so they are real fields rather
+   *  than accessors: a BackgroundColorSpan writes bgColor and the layout draws from it */
+  bgColor = 0;
   baselineShift = 0;
   drawableState: Int32Array | null = null;
   /** dp/sp-based span math (updateDrawState/updateMeasureState) reads this to scale —
@@ -18,7 +21,7 @@ export class JTextPaint extends JPaint {
 }
 rt.register({
   name: "android/text/TextPaint", ctor: JTextPaint, sup: "android/graphics/Paint",
-  fields: { linkColor: "linkColor", baselineShift: "baselineShift", drawableState: "drawableState", density: "density" },
+  fields: { linkColor: "linkColor", bgColor: "bgColor", baselineShift: "baselineShift", drawableState: "drawableState", density: "density" },
   methods: {
     "<init>()V": function () {},
     "<init>(I)V": function () {},
@@ -26,6 +29,12 @@ rt.register({
       if (p) copyPaint(p, this);
     },
     "set(Landroid/text/TextPaint;)V": function (this: JTextPaint, p: JTextPaint) { if (p) copyPaint(p, this); },
+    // the CharSequence half of Paint.getRunCharacterAdvance: same body, but flattening a
+    // Spanned belongs here. AOSP's StaticLayout reads per-character advances through it.
+    "getRunCharacterAdvance(Ljava/lang/CharSequence;IIIIZI[FILandroid/graphics/RectF;Landroid/graphics/Paint$RunInfo;)F":
+      function (this: JTextPaint, cs: unknown, start: number, end: number, _cs2: number, _ce: number, _rtl: number, offset: number, adv: Float32Array | null, advIdx: number) {
+        return runAdvances(this, spannedString(cs), start, end, offset, adv, advIdx);
+      },
   },
 });
 
@@ -325,6 +334,32 @@ rt.register({
   name: "android/text/TextUtils", ctor: JTextUtils,
   methods: {
     "static isEmpty(Ljava/lang/CharSequence;)Z": (s: unknown) => (s === null || spannedString(s).length === 0 ? 1 : 0),
+    // True when a run is left-to-right throughout, which lets StaticLayout skip the bidi
+    // reordering entirely. It is a real scan, not an assumption: the RTL blocks are Hebrew,
+    // Arabic, Syriac, Thaana, N'Ko, Samaritan and the Arabic presentation forms, plus the
+    // explicit direction-formatting characters.
+    "static doesNotNeedBidi([CII)Z": (text: Uint16Array, start: number, len: number) => {
+      for (let i = start; i < start + len; i++) {
+        const c = text[i];
+        if ((c >= 0x0590 && c <= 0x08ff) || (c >= 0xfb1d && c <= 0xfdff) || (c >= 0xfe70 && c <= 0xfefc) ||
+            (c >= 0x200e && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)) return 0;
+      }
+      return 1;
+    },
+    // AOSP's StaticLayout copies each paragraph out through this rather than toString(), so a
+    // Spanned is never flattened on the way in
+    "static getChars(Ljava/lang/CharSequence;II[CI)V": (src: unknown, start: number, end: number, dst: Uint16Array, off: number) => {
+      const t = spannedString(src);
+      for (let i = start; i < end; i++) dst[off + i - start] = t.charCodeAt(i);
+    },
+    // how AOSP's own StaticLayout finds paragraph boundaries, and how app code scans a Spanned
+    // without flattening it
+    "static indexOf(Ljava/lang/CharSequence;C)I": (s: unknown, ch: number) => spannedString(s).indexOf(String.fromCharCode(ch)),
+    "static indexOf(Ljava/lang/CharSequence;CI)I": (s: unknown, ch: number, from: number) => spannedString(s).indexOf(String.fromCharCode(ch), from),
+    "static indexOf(Ljava/lang/CharSequence;CII)I": (s: unknown, ch: number, from: number, to: number) => {
+      const i = spannedString(s).slice(0, to).indexOf(String.fromCharCode(ch), from);
+      return i;
+    },
     "static equals(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Z": (a: unknown, b: unknown) =>
       (spannedString(a) === spannedString(b) && (a === null) === (b === null) ? 1 : 0),
     "static isDigitsOnly(Ljava/lang/CharSequence;)Z": (s: unknown) => (/^\d*$/.test(spannedString(s)) ? 1 : 0),
@@ -428,7 +463,57 @@ rt.register({
 });
 
 // ── android.text layout stack (BoringLayout/StaticLayout) — what Compose ui-text draws through.
-interface TLine { start: number; end: number; text: string; width: number; }
+export interface TLine { start: number; end: number; text: string; width: number; }
+
+/**
+ * Greedy line breaking over `measureText`: the break point is the largest space index that
+ * still fits, else the largest character index. Widths grow monotonically with prefix length,
+ * so the character limit is a binary search rather than a step back per word (that was O(n)
+ * measures per line and O(n^2) per paragraph).
+ *
+ * `first` is the width of the first `firstCount` lines and `rest` of the ones after, which is
+ * AOSP's ParagraphConstraints. Exported so its own LineBreaker bytecode reaches this body
+ * through the delegate rather than a second copy of it.
+ */
+export function greedyBreaks(text: string, p: JTextPaint, first: number, firstCount: number, rest: number, maxLines = Number.MAX_SAFE_INTEGER): TLine[] {
+  const out: TLine[] = [];
+  const paras = text.split("\n");
+  let pos = 0;
+  for (let pi = 0; pi < paras.length; pi++) {
+    const para = paras[pi];
+    if (out.length >= maxLines) break;
+    const before = out.length;
+    if (para === "") { out.push({ start: pos, end: pos, text: "", width: 0 }); }
+    else {
+      let left = para, off = 0;
+      while (left.length && out.length < maxLines) {
+        const width = out.length < firstCount ? first : rest;
+        let n = left.length;
+        if (measureText(p, left) > width) {
+          let lo = 1, hi = left.length;
+          while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (measureText(p, left.slice(0, mid)) <= width) lo = mid; else hi = mid - 1;
+          }
+          const sp = left.lastIndexOf(" ", Math.min(lo, left.length - 2));
+          n = sp > 0 ? sp : lo;
+        }
+        const chunk = left.slice(0, n);
+        out.push({ start: pos + off, end: pos + off + n, text: chunk, width: measureText(p, chunk) });
+        off += n;
+        if (left[n] === " ") { n++; off++; }
+        left = left.slice(n);
+      }
+    }
+    // A line that ends a paragraph OWNS its newline: AOSP's invariant is
+    // getLineEnd(i) == getLineStart(i + 1), and an app slicing text by line loses the
+    // separators without it. `text` still excludes it, which is what getLineVisibleEnd reports.
+    if (pi < paras.length - 1 && out.length > before) out[out.length - 1].end++;
+    pos += para.length + 1;
+  }
+  if (!out.length) out.push({ start: 0, end: 0, text: "", width: 0 });
+  return out;
+}
 class JLayout extends JObj {
   text = "";
   /** the CharSequence the layout was built from, kept for its spans (LineHeightSpan) */
@@ -448,39 +533,7 @@ class JLayout extends JObj {
     // last one's down to its `bottom`; the space between lines stays ascent..descent.
     this.padTop = this.includePad ? Math.round(this.asc - fontTop(p)) : 0;
     this.padBottom = this.includePad ? Math.round(fontBottom(p) - this.desc) : 0;
-    this.lines = [];
-    let pos = 0;
-    for (const para of this.text.split("\n")) {
-      if (this.lines.length >= maxLines) break;
-      if (para === "") {
-        this.lines.push({ start: pos, end: pos, text: "", width: 0 });
-      } else {
-        let rest = para, off = 0;
-        while (rest.length && this.lines.length < maxLines) {
-          // Break point = the largest space index that still fits, else the largest
-          // character index that fits. Widths grow monotonically with prefix length, so
-          // find the character limit by binary search instead of stepping back one
-          // word/char at a time (that was O(n) measures per line, O(n^2) per paragraph).
-          let n = rest.length;
-          if (measureText(p, rest) > this.width) {
-            let lo = 1, hi = rest.length;
-            while (lo < hi) {
-              const mid = (lo + hi + 1) >> 1;
-              if (measureText(p, rest.slice(0, mid)) <= this.width) lo = mid; else hi = mid - 1;
-            }
-            const sp = rest.lastIndexOf(" ", Math.min(lo, rest.length - 2));
-            n = sp > 0 ? sp : lo;
-          }
-          let chunk = rest.slice(0, n);
-          this.lines.push({ start: pos + off, end: pos + off + n, text: chunk, width: measureText(p, chunk) });
-          off += n;
-          if (rest[n] === " ") { n++; off++; }
-          rest = rest.slice(n);
-        }
-      }
-      pos += para.length + 1;
-    }
-    if (!this.lines.length) this.lines.push({ start: 0, end: 0, text: "", width: 0 });
+    this.lines = greedyBreaks(this.text, p, this.width, 0, this.width, maxLines);
   }
   /**
    * AOSP StaticLayout hands every line's font metrics to the LineHeightSpans covering it and
@@ -545,7 +598,11 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "getLineDescent(I)I": function (this: JLayout) { return Math.round(this.desc); },
   "getLineStart(I)I": function (this: JLayout, i: number) { return this.lines[Math.min(i, this.lines.length - 1)]?.start ?? 0; },
   "getLineEnd(I)I": function (this: JLayout, i: number) { return this.lines[Math.min(i, this.lines.length - 1)]?.end ?? 0; },
-  "getLineVisibleEnd(I)I": function (this: JLayout, i: number) { return this.lines[Math.min(i, this.lines.length - 1)]?.end ?? 0; },
+  // the end WITHOUT the trailing newline the line owns, which is what AOSP reports
+  "getLineVisibleEnd(I)I": function (this: JLayout, i: number) {
+    const l = this.lines[Math.min(i, this.lines.length - 1)];
+    return l ? l.start + l.text.length : 0;
+  },
   "getLineLeft(I)F": function () { return 0; },
   "getLineRight(I)F": function (this: JLayout, i: number) { return this.lines[i]?.width ?? 0; },
   "getLineWidth(I)F": function (this: JLayout, i: number) { return this.lines[i]?.width ?? 0; },

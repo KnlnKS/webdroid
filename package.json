@@ -26,7 +26,8 @@
     "e2e:boot": "bash tests/e2e/boot-emulator.sh",
     "e2e:record": "bun tests/e2e/capture-emulator.ts",
     "e2e:diff": "bun tests/e2e/score.ts",
-    "e2e": "bun tests/e2e/run.ts"
+    "e2e": "bun tests/e2e/run.ts",
+    "textcmp": "bun scripts/textcmp.ts"
   },
   "dependencies": {
     "fflate": "^0.8.2",
