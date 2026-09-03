@@ -2,7 +2,7 @@
 
 import initSqlJs, { type Database } from "sql.js";
 import { mangleMethod, charsToString } from "../jvm/abi";
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf } from "../jvm/runtime";
 import { vcall, boxInt, box, JLong } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { JBundle } from "./os";
@@ -340,7 +340,7 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
     this.txOk = false;
   },
   "beginTransactionNonExclusive()V": function (this: JSQLiteDatabase) {
-    (dbMethods["beginTransaction()V"] as any).call(this);
+    callSelf(dbMethods, "beginTransaction()V", this);
   },
   "setTransactionSuccessful()V": function (this: JSQLiteDatabase) { this.txOk = true; },
   "endTransaction()V": function (this: JSQLiteDatabase) {
@@ -539,17 +539,17 @@ async function openHelperDb(h: JSQLiteOpenHelper): Promise<JSQLiteDatabase> {
   const jdb = await openDatabase(path);
   h.jdb = jdb;
   await vcall(h, "onConfigure", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);
-  const cur = (dbMethods["getVersion()I"] as any).call(jdb) as number;
+  const cur = callSelf(dbMethods, "getVersion()I", jdb) as number;
   if (cur !== h.version) {
-    (dbMethods["beginTransaction()V"] as any).call(jdb);
+    callSelf(dbMethods, "beginTransaction()V", jdb);
     try {
       if (cur === 0) await vcall(h, "onCreate", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);
       else if (cur < h.version) await vcall(h, "onUpgrade", "(Landroid/database/sqlite/SQLiteDatabase;II)V", jdb, cur, h.version);
       else await vcall(h, "onDowngrade", "(Landroid/database/sqlite/SQLiteDatabase;II)V", jdb, cur, h.version);
-      (dbMethods["setVersion(I)V"] as any).call(jdb, h.version);
-      (dbMethods["setTransactionSuccessful()V"] as any).call(jdb);
+      callSelf(dbMethods, "setVersion(I)V", jdb, h.version);
+      callSelf(dbMethods, "setTransactionSuccessful()V", jdb);
     } finally {
-      (dbMethods["endTransaction()V"] as any).call(jdb);
+      callSelf(dbMethods, "endTransaction()V", jdb);
     }
   }
   await vcall(h, "onOpen", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);

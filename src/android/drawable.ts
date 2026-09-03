@@ -1,6 +1,6 @@
 // android.graphics.drawable.* — Drawable hierarchy, XML inflation, 9-patch, vectors.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf } from "../jvm/runtime";
 import { vcall, mkEnumSet } from "../jvm/natives/jlang";
 import { mangleMethod } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, insetsOf } from "./graphics";
@@ -909,7 +909,7 @@ class JShapeDrawable extends JDrawable {
     sh.w = b.right - b.left; sh.h = b.bottom - b.top;
     ctx.save();
     ctx.translate(b.left, b.top);
-    (shapeMethods["draw(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V"] as any).call(sh, cv, this.effPaint());
+    callSelf(shapeMethods, "draw(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V", sh, cv, this.effPaint());
     ctx.restore();
   }
   intrinsicW(): number { return this.iw; }

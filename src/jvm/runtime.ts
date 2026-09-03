@@ -32,6 +32,14 @@ export interface NativeSpec {
   clinit?: () => void | Promise<void>;
 }
 
+/** Call another entry in the same spec's method table, with the receiver the caller already
+ *  has. An overload that skips the real entry is a recurring bug class (see AGENTS.md
+ *  "Overload paths that skip the real entry"), so the delegation is deliberate; this is the one
+ *  place that knows the table's values are callable and not the `string` alias arm. */
+export function callSelf(m: NativeSpec["methods"], sig: string, self: unknown, ...args: unknown[]): unknown {
+  return (m![sig] as (this: unknown, ...a: unknown[]) => unknown).call(self, ...args);
+}
+
 export class ClassInfo {
   ctor: any;
   superInfo: ClassInfo | null = null;

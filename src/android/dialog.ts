@@ -1,6 +1,6 @@
 // android.app.Dialog / AlertDialog rendered as overlays (scrim + centered card).
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { JView, JFrameLP, JLinearLP, attachView, requestLayout, AID, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, specSize, findById, guardCall, dispatchAttached, dispatchDetached } from "./view";
@@ -262,7 +262,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
     v.lp = lp;
-    (dialogMethods["setContentView(Landroid/view/View;)V"] as any).call(this, v);
+    callSelf(dialogMethods, "setContentView(Landroid/view/View;)V", this, v);
   },
   "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
     v.lp = lp;
@@ -487,7 +487,7 @@ const alertMethods: NativeSpec["methods"] = {
       this.built = true;
       await buildAlertContent(this);
     }
-    await (dialogMethods["show()V"] as any).call(this);
+    await callSelf(dialogMethods, "show()V", this);
   },
   "setMessage(Ljava/lang/CharSequence;)V": async function (this: JAlertDialog, m: unknown) { this.message = await str(this.jctx?.$host, m); },
   "setView(Landroid/view/View;)V": function (this: JAlertDialog, v: JView) { this.customView = v; },
@@ -529,7 +529,7 @@ const builderMethods: NativeSpec["methods"] = {
   "setIcon(I)Landroid/app/AlertDialog$Builder;": function (this: JAlertBuilder) { return this; },
   "create()Landroid/app/AlertDialog;": function (this: JAlertBuilder) { return this.d; },
   "show()Landroid/app/AlertDialog;": async function (this: JAlertBuilder) {
-    await (alertMethods["show()V"] as any).call(this.d);
+    await callSelf(alertMethods, "show()V", this.d);
     return this.d;
   },
 };
@@ -574,7 +574,7 @@ rt.register({ name: "android/app/ProgressDialog", ctor: class extends JAlertDial
         d.jctx = c;
         d.titleStr = await str(c?.$host, t);
         d.message = await str(c?.$host, m);
-        await (alertMethods["show()V"] as any).call(d);
+        await callSelf(alertMethods, "show()V", d);
         return d;
       },
   } });

@@ -1,6 +1,6 @@
 // android.content.Context / android.app.Activity / Window / services.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { vcall, javaFormat, newObj } from "../jvm/natives/jlang";
@@ -424,7 +424,7 @@ rt.register({
     "<init>(Landroid/content/Context;)V": attachBase,
     "<init>(Landroid/content/Context;I)V": function (this: JContextWrapper, base: JContext, themeId: number) {
       attachBase.call(this, base);
-      if (themeId) (contextMethods["setTheme(I)V"] as any).call(this, themeId);
+      if (themeId) callSelf(contextMethods, "setTheme(I)V", this, themeId);
     },
   },
 });
@@ -1560,7 +1560,7 @@ const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": async function (this: JActivity, v: JView, lp: any) {
     v.lp = lp;
-    await (activityMethods["setContentView(Landroid/view/View;)V"] as any).call(this, v);
+    await callSelf(activityMethods, "setContentView(Landroid/view/View;)V", this, v);
   },
   "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": async function (this: JActivity, v: JView, lp: any) {
     await ensureDecor(this);
@@ -1674,7 +1674,7 @@ const activityMethods: NonNullable<NativeSpec["methods"]> = {
     if (this.window.actionBarView) { this.window.actionBarView.titleStr = this.titleStr; invalidate(); }
   },
   "setTitle(I)V": function (this: JActivity, id: number) {
-    (activityMethods["setTitle(Ljava/lang/CharSequence;)V"] as any).call(this, resString(this.$host.res, id));
+    callSelf(activityMethods, "setTitle(Ljava/lang/CharSequence;)V", this, resString(this.$host.res, id));
   },
   "getTitle()Ljava/lang/CharSequence;": function (this: JActivity) { return this.titleStr; },
   "getActionBar()Landroid/app/ActionBar;": function (this: JActivity) {
@@ -1694,7 +1694,7 @@ const activityMethods: NonNullable<NativeSpec["methods"]> = {
       appHost?.finishActivity(this);
     }
   },
-  "finishAffinity()V": function (this: JActivity) { (activityMethods["finish()V"] as any).call(this); },
+  "finishAffinity()V": function (this: JActivity) { callSelf(activityMethods, "finish()V", this); },
   "isFinishing()Z": function (this: JActivity) { return this.finished ? 1 : 0; },
   "isDestroyed()Z": function (this: JActivity) { return this.finished ? 1 : 0; },
   "isTaskRoot()Z": () => 1,
@@ -1717,7 +1717,7 @@ const activityMethods: NonNullable<NativeSpec["methods"]> = {
   // ActivityCompat — and so every androidx ActivityResultRegistry launcher — calls the options
   // overload, which must funnel into the body above rather than carry a second copy of it.
   "startActivityForResult(Landroid/content/Intent;ILandroid/os/Bundle;)V": function (this: JActivity, intent: JIntent, code: number) {
-    return (activityMethods["startActivityForResult(Landroid/content/Intent;I)V"] as any).call(this, intent, code);
+    return callSelf(activityMethods, "startActivityForResult(Landroid/content/Intent;I)V", this, intent, code);
   },
   "setResult(I)V": function (this: JActivity, c: number) { this.resultCode = c; },
   "setResult(ILandroid/content/Intent;)V": function (this: JActivity, c: number, d: JIntent) {
@@ -1912,19 +1912,19 @@ rt.register({
     },
     "setContentView(I)V": function (this: JWindow, id: number) {
       if (this.dialog) return dialogNative("setContentView", "(I)V").call(this.dialog, id);
-      return (activityMethods["setContentView(I)V"] as any).call(this.activity, id);
+      return callSelf(activityMethods, "setContentView(I)V", this.activity, id);
     },
     "setContentView(Landroid/view/View;)V": function (this: JWindow, v: unknown) {
       if (this.dialog) return dialogNative("setContentView", "(Landroid/view/View;)V").call(this.dialog, v);
-      return (activityMethods["setContentView(Landroid/view/View;)V"] as any).call(this.activity, v);
+      return callSelf(activityMethods, "setContentView(Landroid/view/View;)V", this.activity, v);
     },
     "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JWindow, v: unknown, lp: unknown) {
       if (this.dialog) return dialogNative("setContentView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V").call(this.dialog, v, lp);
-      return (activityMethods["setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V"] as any).call(this.activity, v, lp);
+      return callSelf(activityMethods, "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", this.activity, v, lp);
     },
     "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JWindow, v: unknown, lp: unknown) {
       if (this.dialog) return dialogNative("addContentView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V").call(this.dialog, v, lp);
-      return (activityMethods["addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V"] as any).call(this.activity, v, lp);
+      return callSelf(activityMethods, "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", this.activity, v, lp);
     },
     "setFlags(II)V": function (this: JWindow, flags: number, mask: number) { setWindowFlags(this, (this.flags & ~mask) | (flags & mask)); },
     "addFlags(I)V": function (this: JWindow, f: number) { setWindowFlags(this, this.flags | f); },
@@ -1960,7 +1960,7 @@ rt.register({
     "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JWindow) { return this.backDispatcher(); },
     "setCallback(Landroid/view/Window$Callback;)V": function (this: JWindow, cb: unknown) { this.callbackObj = cb; },
     "setTitle(Ljava/lang/CharSequence;)V": function (this: JWindow, t: unknown) {
-      if (this.activity) (activityMethods["setTitle(Ljava/lang/CharSequence;)V"] as any).call(this.activity, t);
+      if (this.activity) callSelf(activityMethods, "setTitle(Ljava/lang/CharSequence;)V", this.activity, t);
     },
     "getContext()Landroid/content/Context;": function (this: JWindow) { return this.activity ?? (this.dialog as { jctx?: unknown } | null)?.jctx ?? null; },
     "setWindowAnimations(I)V": () => {},

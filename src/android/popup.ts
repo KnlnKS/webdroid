@@ -1,6 +1,6 @@
 // Overlay layer: toasts, popup menus, dialogs-lite. Drawn above the decor by the shell.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
@@ -453,7 +453,7 @@ const pwMethods: NonNullable<NativeSpec["methods"]> = {
     return pwUpdate.call(this);
   },
   "update(IIIIZ)V": function (this: JPopupWindow, x: number, y: number, w: number, h: number) {
-    return (pwMethods["update(IIII)V"] as any).call(this, x, y, w, h);
+    return callSelf(pwMethods, "update(IIII)V", this, x, y, w, h);
   },
   "update(Landroid/view/View;II)V": function (this: JPopupWindow, a: JView, w: number, h: number) { return pwUpdateAnchor.call(this, a, this.xoff, this.yoff, w, h); },
   "update(Landroid/view/View;IIII)V": pwUpdateAnchor,

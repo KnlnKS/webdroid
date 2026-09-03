@@ -1,6 +1,6 @@
 // android.widget.* — layouts + text/image widgets.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf } from "../jvm/runtime";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { vcall, mkEnumSet } from "../jvm/natives/jlang";
 import { usLocale } from "../jvm/natives/jutil";
@@ -348,7 +348,7 @@ rt.register({
   name: "android/widget/TableLayout", ctor: JTableLayout, sup: "android/widget/LinearLayout",
   methods: {
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JTableLayout, c: unknown, set: JAttrSet | null) {
-      await (linearMethods["<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V"] as any).call(this, c, set);
+      await callSelf(linearMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
       this.orientation = 1;
       const scId = AID("stretchColumns");
       const sc = scId ? set?.node?.attrs.find((a) => a.resId === scId) : undefined;
@@ -385,7 +385,7 @@ rt.register({
   name: "android/widget/TableRow", ctor: JTableRow, sup: "android/widget/LinearLayout",
   methods: {
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JTableRow, c: unknown, set: JAttrSet | null) {
-      await (linearMethods["<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V"] as any).call(this, c, set);
+      await callSelf(linearMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
       this.orientation = 0;
     },
     "onMeasure(II)V": async function (this: JTableRow, wSpec: number, hSpec: number) {
@@ -957,7 +957,7 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setCompoundDrawablesRelative(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
   "setCompoundDrawablesRelativeWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
   "setCompoundDrawablesRelativeWithIntrinsicBounds(IIII)V": function (this: JTextView, l: number, t: number, r: number, b: number) {
-    return (textViewMethods["setCompoundDrawablesWithIntrinsicBounds(IIII)V"] as any).call(this, l, t, r, b);
+    return callSelf(textViewMethods, "setCompoundDrawablesWithIntrinsicBounds(IIII)V", this, l, t, r, b);
   },
   "setCompoundDrawableTintList(Landroid/content/res/ColorStateList;)V": function (this: JTextView, csl: JColorStateList | null) {
     this.drawableTint = csl;
