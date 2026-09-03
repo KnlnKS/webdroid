@@ -43,12 +43,18 @@ await Bun.write(manifest, `<?xml version="1.0" encoding="utf-8"?>\n<manifest pac
 console.log(`compiling ${platform}/data/res (device reports API ${device.sdk})…`);
 run("compile", "--dir", `${platform}/data/res`, "-o", flata);
 
-// Every axis the device can never select is dropped here rather than shipped and skipped at
-// runtime: the tablet wallpapers alone are 7MB.
-console.log(`linking (density ${device.densityDpi}dpi, lang ${device.lang}, sw${device.widthDp}dp) …`);
+// The screen is a setting now, so this package can no longer be pre-picked for one profile.
+// The two filters fail differently, and only one of them is safe to keep:
+//   --preferred-density left ONLY xhdpi art, so any other density silently rendered a rescaled
+//     bitmap — wrong pixels with nothing to notice them by. Dropped: every bucket ships, and
+//     arsc.ts's density scoring picks per profile, which is what it is for. Costs 4.6MB.
+//   -c sw<N>dp drops the tablet-qualified variants. A profile wider than N does not lose the
+//     resource, it falls back to the unqualified one — a documented degradation rather than a
+//     wrong pixel — and keeping it is what holds the package to 11.9MB instead of 18.9, since
+//     the three sw600/sw720 wallpapers alone are 7.4MB of art nothing here ever draws.
+console.log(`linking (lang ${device.lang}, sw${device.widthDp}dp, every density) …`);
 run("link", "-x", "--manifest", manifest, "--min-sdk-version", String(apiLevel),
-  "--preferred-density", `${device.densityDpi}dpi`, "-c", `${device.lang},sw${device.widthDp}dp`,
-  "--emit-ids", ids, "-o", OUT, flata);
+  "-c", `${device.lang},sw${device.widthDp}dp`, "--emit-ids", ids, "-o", OUT, flata);
 
 // The linked ids must be the frozen platform ones, or every android.R reference in every app is
 // off. public-final.xml is the platform's own record of them, so compare against it directly.
