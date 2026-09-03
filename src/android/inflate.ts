@@ -3,8 +3,8 @@
 import { rt, JObj } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
-import { parseAXML, type XmlNode } from "./axml";
-import { JAttrSet } from "./res";
+import { parseAXML, TV, type XmlNode } from "./axml";
+import { JAttrSet, askTheme, themeOf } from "./res";
 import { JView, JViewGroup, guardCall } from "./view";
 import type { AppHost } from "./app";
 
@@ -50,6 +50,16 @@ async function createViewFromTag(
   return createViewByName(name, jctx, set);
 }
 
+const A_theme = 0x01010000;
+/** AOSP wraps a tag carrying android:theme -- and its whole subtree -- in a ContextThemeWrapper,
+ *  which is how a per-widget ThemeOverlay reaches everything the tag contains. */
+async function themedCtx(jctx: any, node: XmlNode): Promise<any> {
+  const a = node.attrs.find((x) => x.resId === A_theme);
+  if (!a) return jctx;
+  const id = a.type === TV.ATTRIBUTE ? (await askTheme(jctx))?.lookup(a.data)?.d ?? 0 : a.data;
+  return id ? newObj("android/view/ContextThemeWrapper", "(Landroid/content/Context;I)V", jctx, id) : jctx;
+}
+
 const M_generateLP = mangleMethod("generateLayoutParams", "(Landroid/util/AttributeSet;)Landroid/view/ViewGroup$LayoutParams;");
 const M_addView = mangleMethod("addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V");
 const M_onFinishInflate = mangleMethod("onFinishInflate", "()V");
@@ -82,16 +92,17 @@ async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentV
       }
       continue;
     }
+    const cctx = await themedCtx(jctx, child);
     const set = new JAttrSet();
     set.node = child;
     set.res = host.res;
-    set.theme = host.theme;
-    const v = await createViewFromTag(inflater, parentView, child.name, jctx, set);
+    set.theme = themeOf(cctx) ?? host.theme;
+    const v = await createViewFromTag(inflater, parentView, child.name, cctx, set);
     let lp = v.lp;
     if (!lp) lp = await guardCall((parentView as any)[M_generateLP], parentView, set);
     await guardCall((parentView as any)[M_addView], parentView, v, lp);
     if (v instanceof JViewGroup && child.children.length) {
-      await inflateChildren(inflater, child, v, jctx);
+      await inflateChildren(inflater, child, v, cctx);
     }
     const fin = (v as any)[M_onFinishInflate];
     if (fin) await guardCall(fin, v);
@@ -106,18 +117,19 @@ async function inflateNode(jctx: any, root: XmlNode, parent: JViewGroup | null, 
     await inflateChildren(inf, root, parent, jctx);
     return parent;
   }
+  const rctx = await themedCtx(jctx, root);
   const set = new JAttrSet();
   set.node = root;
   set.res = host.res;
-  set.theme = host.theme;
-  const v = await createViewFromTag(inf, parent, root.name, jctx, set);
+  set.theme = themeOf(rctx) ?? host.theme;
+  const v = await createViewFromTag(inf, parent, root.name, rctx, set);
   if (parent) {
     const lp = await guardCall((parent as any)[M_generateLP], parent, set);
     if (attach) await guardCall((parent as any)[M_addView], parent, v, lp);
     else v.lp = lp;
   }
   if (v instanceof JViewGroup && root.children.length) {
-    await inflateChildren(inf, root, v, jctx);
+    await inflateChildren(inf, root, v, rctx);
   }
   const fin = (v as any)[M_onFinishInflate];
   if (fin) await guardCall(fin, v);

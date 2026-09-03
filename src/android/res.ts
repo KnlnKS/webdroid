@@ -262,7 +262,6 @@ export function obtainStyled(
         // them with no style at all.
         xmlStyleId = a.type === TV.ATTRIBUTE ? theme?.lookup(a.data)?.d ?? 0 : a.data;
       }
-      if (a.resId === 0x01010000 /* theme attr on view */) { /* ignored here */ }
     }
   }
 
