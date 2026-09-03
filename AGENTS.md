@@ -5,8 +5,8 @@ Goal: run FitNotes.apk → mihon → flappybird → Among Us.xapk fully client-s
 
 ## Verify
 - `bun run typecheck` — must be clean (noUnusedLocals).
-- `bun run test` — the ARM32 decoder unit tests (`src/native/arm.test.ts`), the only bun:test
-  suite in the tree.
+- `bun run test` — the ARM32 decoder unit tests (`src/native/arm.test.ts`) and the gzip trailer
+  arithmetic (`src/jvm/natives/jzip.test.ts`).
 - `bun run smoke apks/<apk>` — every class compiles.
 - `bun run dev` (or `PORT=<n> bun run server.ts`) then `bun run e2e [--test <flow,...>] [--shots]` —
   drives `tests/e2e/flows/*` over Playwright; per-step `newMissing`/`newErrors`/`nativeRequired`/perf
@@ -65,12 +65,13 @@ Goal: run FitNotes.apk → mihon → flappybird → Among Us.xapk fully client-s
 
 ## Status
 Scores are `bun run e2e`'s content-diff means; the current ones live in
-`tests/e2e/report/report.json` (last full run: fitnotes 39.5%, mihon-onboarding 24.3%,
-mihon-app 88.7%, harmonic 36.6%, every step rendered, nothing wedged). A lower number is
+`tests/e2e/report/report.json` (last full run: fitnotes 43.1%, mihon-onboarding 17.6%,
+mihon-app 76.9%, harmonic 46.7%, every step rendered, nothing wedged). A lower number is
 better; a rising one is not automatically a regression (see "Harness notes"). The smoke flows
 (no goldens) — flappybird, calculatorm, lichess, doodlejump — all render every step; only
-flappybird's optional `DexClassLoader` stays missing. harmonic is scored now (89.9% -> 36.2%)
-and its one accepted miss is `WindowExtensionsProvider`.
+flappybird's optional `DexClassLoader` stays missing. harmonic's one accepted miss is
+`WindowExtensionsProvider`; fitnotes still wants `TranslateAnimation(FFFF)` through a subclass
+and a `removeMessages` on something that is not our Handler.
 - [x] recon, scaffolding; DEX parser + AXML + ARSC (+compact entries, signed values!);
       compiler + runtime core + java.* natives (all 3 APKs compile clean, `bun run smoke <apk>`).
 - [x] FitNotes: boots and is interactive through its full core loop, matching real screenshots:
@@ -81,10 +82,12 @@ and its one accepted miss is `WindowExtensionsProvider`.
       exercise arc and the overflow menu (a ⋮ carrying a nested <menu>) work; `newMissing` is
       empty for every step.
 - [ ] FitNotes remaining: EditText box styling.
-- [x] Mihon: renders and responds. Onboarding (welcome/theme/storage) and, with onboarding
-      seeded, the real app — Library with its bottom nav, More, Settings, Reader, Appearance
-      (Dark relaunches the activity, as on a real device). `wd.rt.missing` is empty across a
-      boot; boot ~3.0s; a tap settles in 130-580ms.
+- [x] Mihon: renders and responds, and onboarding COMPLETES — welcome/theme, then a real
+      folder picked with the browser's File System Access API, then permissions, then the
+      Library. The picked directory is a live SAF tree: Mihon creates local/, downloads/ and
+      autobackup/ in it, the Local source lists a manga out of it, and it survives a reload.
+      Browse (Sources/Extensions/Migrate) and More -> Data and storage work. `wd.rt.missing` is
+      empty across both flows; boot ~3.0s; a tap settles in 130-580ms.
 - [x] flappybird: plays. Splash → title (bobbing bird, scrolling ground) → PLAY → Get Ready →
       taps flap, pipes, score → Game Over panel with score/medal → PLAY again; SoundPool plays
       the five ogg effects; the high score round-trips through SharedPreferences; Back tears the
@@ -415,6 +418,12 @@ See tests/e2e/README.md for the commands and the metrics. What bites:
 - The harness writes to ONE shared output tree (tests/e2e/actual, report/report.json).
   Concurrent runs corrupt each other — never run two at once. The dev server rebundles on
   every page load, so do not edit src/ while a run is in flight either.
+- **Check WHOSE dev server is on port 4080 before believing a number.** A server left running in
+  another worktree (`.claude/worktrees/*`) answers on the same port and serves that worktree's
+  bundle, so a run measures code you did not write and the score wanders by tens of percent
+  between identical runs. `lsof -p $(lsof -ti:4080) | grep cwd` names it; the cheap defence is
+  `PORT=4090 bun run server.ts` + `WEBDROID_URL=http://localhost:4090 bun run e2e`. A fix that
+  does not appear in `curl -s localhost:PORT/chunk-*.js` is not being tested.
 - A rising content-diff % is not automatically a regression: when the app starts doing work
   it previously skipped it can reach a *correct* state the goldens have already moved past.
   Look at the frames before believing the number.
@@ -936,6 +945,89 @@ surfaced only once something finally destroyed a view hierarchy and started a se
 Generalise: **a stubbed lifecycle verb is a silent behaviour hole.** `recreate()` looks
 discardable in a one-activity emulator right up to the moment an app uses it as its only
 mechanism for something visible.
+
+And the other half of that switch, "System", was a lie for as long: the night bit was the
+literal `0x11` in `Configuration` and a literal `0` in the resource table, so an app following
+the system saw a device permanently in daylight. It comes off the one device profile now, and
+the profile reads the browser's `prefers-color-scheme` — there is no device setting to read, but
+there is a real answer and it is the user's own. A change under a running app goes through the
+same two doors: the top activity is told if it declared `uiMode` in its manifest, and relaunched
+if it did not. `UiModeManager.getNightMode()` reports it instead of claiming it is always off.
+
+## The folder picker: a device's SAF, over the browser's own
+Mihon's onboarding hard-gates on a folder, and every piece of the path between the tap and the
+directory was missing. What it took, none of it app-specific:
+- **`startActivityForResult` only launched.** The request code was dropped, an intent without a
+  component was logged and ignored, and nothing ever called `onActivityResult` — so every
+  androidx `ActivityResultRegistry` launcher was a dead end. An activity now remembers who asked
+  for its result and `finish()` delivers it, and an implicit intent resolves against a registry
+  of the activities the *system* provides, keyed by action (OPEN_DOCUMENT_TREE, OPEN_DOCUMENT,
+  GET_CONTENT, CREATE_DOCUMENT), which is what DocumentsUI is on a device.
+  **androidx launches through the three-arg options overload**, which was not registered — the
+  two-arg one it funnels into had been there all along, doing nothing.
+- The answer is **posted, never awaited**: the picker's UI is modal and the main-looper queue is
+  serialized, so awaiting it inline freezes frames and reads as a wedge. AOSP's
+  startActivityForResult only *starts* something anyway.
+- **A SAF client does not trust `DocumentsContract`; it asks the package manager.** UniFile and
+  DocumentFile call `queryIntentContentProviders`/`resolveContentProvider` to find out whether a
+  provider owns the authority, and those only ever walked the app's own manifest — the storage
+  provider is a *system* package no app can see in its own. There is a system-provider table now
+  and one `isDocumentsProvider`.
+- `src/android/documents.ts` is the provider itself, over the `FileSystemDirectoryHandle`s
+  `src/shell/hostfs.ts` gets from the browser, with AOSP's own `<volume>:<path>` document ids so
+  the URI algebra needs no special case. It is async, and that is faithful: on a device a
+  `content://` tree is not reachable through `java.io.File` either, so nothing is mounted into
+  the sync VFS.
+- **A dialog that rejects before anyone could have seen it was never shown.** Chrome answers
+  `AbortError` both for "the user cancelled" and for "this window may not open a chooser" — an
+  unfocused window, an automated one, every headless one — and the only thing that separates them
+  is the timing. Under 250ms is a refusal and falls through to OPFS, which serves the same
+  interface; slower is a real cancellation and reports RESULT_CANCELED. A `SecurityError` instead
+  means the gesture went stale on the way through the main-looper queue, so the request is parked
+  and replayed on the next press rather than lost.
+- **A restored handle has to be there before the app asks.** The IndexedDB restore was
+  fire-and-forget and lost the race with app startup; an app reads its storage URI while it is
+  starting and caches the answer, so a tree that does not resolve *yet* is one that does not
+  exist for the rest of the session — the Local source listed nothing and made no query doing it.
+
+## Four gaps that turned a handled failure into a fatal one
+The same shape as the `printStackTrace` lesson above, four more times. Each was found by walking
+a screen, not by reading a list:
+- **`java.io.Closeable` did not extend `java.lang.AutoCloseable`.** R8 merges every
+  close-this-thing call site into one helper that tests `instanceof AutoCloseable` first and
+  throws off the end of the chain if nothing matched, so closing any cursor, stream, socket or
+  database from a Kotlin `use {}` threw a bare `IllegalArgumentException` from a synthetic class
+  with no bug in it.
+- **`Throwable.getStackTrace()` returned an empty array**, which no JVM produces.
+  kotlinx.coroutines' stack-trace recovery does `copyOfRange(trace, 1, trace.size)` on the way
+  out of a *caught* exception; on an empty array that throws, and the failure surfaces as
+  `IllegalArgumentException: 1 > 0` arbitrarily far from anything. Frames come off the JS stack
+  the throw actually has.
+- **The whole `java.security.cert` family was absent.** Its exceptions are catch types before
+  they are anything else: `catch (CertificateException)` cannot match a class that does not
+  exist. The factory answers the way a provider handed bytes it cannot parse does — a catchable
+  `CertificateException` — rather than not existing.
+- **`java/util/DataInput`/`DataOutput`** and the rest of that habit: an interface nothing
+  implements in the framework is still one an app class declares, and an auto-stub poisons
+  everything downstream.
+
+## A static that names another class must resolve when it is read
+`String.CASE_INSENSITIVE_ORDER` could not simply be added: `setupNativeMembers` resolved a
+native class's statics at LINK time, link order is registration order, and a static whose value
+is an instance of another class therefore linked that class before its own module had registered
+it — and got a stub. A static written as a getter is resolved on first READ now and pinned, which
+is the lazy-clinit semantics the JVM has anyway. `java/lang/String` needs it twice over: its
+statics are copied from the holder onto the JS `String` constructor, and that copy has to move
+the accessor, not read it.
+
+## The gzip trailer starts one byte later than fflate says
+Reading any gzipped stream ended in `CRC: actual 0x… != expected 0x…` where the two differ by
+exactly an eight-bit shift — the signature of reading the trailer one byte early. fflate trims
+its input buffer to the byte its bit cursor sits in and keeps the leftover bit offset in `s.p`,
+so a deflate stream that ended mid-byte (most of them) left that partly-consumed byte in the
+buffer and `getRemaining()` counted it as untouched; Java counts it as consumed.
+`src/jvm/natives/jzip.test.ts` pins it, because the arithmetic is invisible until a CRC four
+bytes later disagrees.
 
 ## lichess is an honest boot (native tier)
 lichess (org.lichess.mobileV2) is Flutter: every pixel and every line of app logic is Dart AOT
