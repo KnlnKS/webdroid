@@ -5,7 +5,7 @@ import { mem } from "./mem";
 import { defineHost, type HostFn, type Args, VaList, fbits, bitsf, dbits, bitsd, retPair } from "./host";
 import { Cpu, cpuFor } from "./cpu";
 import { rt, JObj, type ClassInfo } from "../jvm/runtime";
-import { mangleMethod, mangleStaticField, parseMethodDesc, jarray } from "../jvm/abi";
+import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, newPrimArray } from "../jvm/abi";
 import { curThread, JClass, stackTraceText } from "../jvm/natives/jlang";
 
 export const jniMissing = new Set<string>();
@@ -194,10 +194,6 @@ export function envFor(cpu: Cpu): number {
 
 const PRIM = ["Object", "Boolean", "Byte", "Char", "Short", "Int", "Long", "Float", "Double", "Void"];
 const PRIM_DESC = ["L", "Z", "B", "C", "S", "I", "J", "F", "D", "V"];
-const arrayCtor: Record<string, (n: number) => unknown> = {
-  Z: (n) => new Uint8Array(n), B: (n) => new Int8Array(n), C: (n) => new Uint16Array(n), S: (n) => new Int16Array(n),
-  I: (n) => new Int32Array(n), J: (n) => new BigInt64Array(n), F: (n) => new Float32Array(n), D: (n) => new Float64Array(n),
-};
 const elemSize: Record<string, number> = { Z: 1, B: 1, C: 2, S: 2, I: 4, J: 8, F: 4, D: 8 };
 const pinned = new Map<number, { arr: any; type: string }>();
 function copyOut(type: string, arr: any, p: number, start: number, len: number): void {
@@ -347,7 +343,7 @@ export function jniInit(): void {
   def(174, "SetObjectArrayElement", (cpu, a) => { a.p(); const arr = deref(a.p()) as unknown[]; const i = a.i(); const v = deref(a.p()); if (!arr || i < 0 || i >= arr.length) { pend(cpu, throwable("java/lang/ArrayIndexOutOfBoundsException", String(i))); return; } arr[i] = v; });
   for (let k = 1; k <= 8; k++) {
     const P = PRIM[k], D = PRIM_DESC[k];
-    def(174 + k, `New${P}Array`, (_c, a) => { a.p(); return toRef(arrayCtor[D](a.i())); });
+    def(174 + k, `New${P}Array`, (_c, a) => { a.p(); return toRef(newPrimArray[D](a.i())); });
     def(182 + k, `Get${P}ArrayElements`, (_c, a) => {
       a.p(); const arr = deref(a.p()) as any; const isCopy = a.p();
       if (!arr) return 0;

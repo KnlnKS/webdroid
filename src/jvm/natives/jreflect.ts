@@ -1,7 +1,7 @@
 // java.lang.reflect.Method + annotation instances backed by DEX annotation parsing.
 
 import { rt, JObj, type ClassInfo, type NativeSpec } from "../runtime";
-import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, PRIM_NAME, PRIM_DESC } from "../abi";
+import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, newPrimArray, PRIM_NAME, PRIM_DESC } from "../abi";
 import { vcall, boxInt, box, stringHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 
@@ -196,6 +196,55 @@ function parseTypeSig(s: string, ref: { pos: number }): unknown {
   ref.pos++; // primitive
   return rt.classFor(PRIM_NAME[c] ?? "int");
 }
+
+/** an array of `len` elements whose component type is `cls` — what both
+ *  java.lang.reflect.Array.newInstance and VMRuntime.newUnpaddedArray hand back */
+function newArrayOf(cls: JClass | null, len: number): unknown {
+  if (len < 0) throw rt.mkThrowable("java/lang/NegativeArraySizeException", String(len));
+  const prim = cls?.primName;
+  if (prim && PRIM_DESC[prim]) return newPrimArray[PRIM_DESC[prim]](len);
+  const elem = cls?.arrDesc ? "[" + cls.arrDesc : cls?.ci ? "L" + cls.ci.name + ";" : "Ljava/lang/Object;";
+  return rt.oa(len, elem);
+}
+
+rt.register({
+  name: "java/lang/reflect/Array", ctor: class extends JObj {},
+  methods: {
+    "static newInstance(Ljava/lang/Class;I)Ljava/lang/Object;": (cls: JClass | null, len: number) => newArrayOf(cls, len),
+    "static getLength(Ljava/lang/Object;)I": (a: ArrayLike<unknown> | null) => a?.length ?? 0,
+    "static get(Ljava/lang/Object;I)Ljava/lang/Object;": (a: ArrayLike<unknown>, i: number) => a[i],
+    "static set(Ljava/lang/Object;ILjava/lang/Object;)V": (a: unknown[], i: number, v: unknown) => { a[i] = v; },
+  },
+});
+
+// libcore's shared empty arrays. Framework code returns these instead of allocating, so an
+// absent class is a NoClassDefFoundError on a path that was trying to allocate nothing.
+rt.register({
+  name: "libcore/util/EmptyArray", ctor: class extends JObj {},
+  statics: {
+    BOOLEAN: new Uint8Array(0), BYTE: new Int8Array(0), CHAR: new Uint16Array(0),
+    DOUBLE: new Float64Array(0), FLOAT: new Float32Array(0), INT: new Int32Array(0),
+    LONG: new BigInt64Array(0), SHORT: new Int16Array(0),
+    OBJECT: jarray([], "Ljava/lang/Object;"), STRING: jarray([], "Ljava/lang/String;"),
+    CLASS: jarray([], "Ljava/lang/Class;"),
+  },
+});
+
+// ── dalvik.system.VMRuntime: the allocator libcore and the framework grow arrays through.
+// ArrayUtils.newUnpaddedObjectArray and every growable collection in android.util reach it, so
+// it is the first thing framework bytecode wants that has nothing to do with the framework.
+// "Unpadded" is a request for the slack a real heap has at the end of a block; there is no such
+// slack here, so the array is exactly the length asked for — which the contract allows.
+class JVMRuntime extends JObj {}
+const theVmRuntime = new JVMRuntime();
+rt.register({
+  name: "dalvik/system/VMRuntime", ctor: JVMRuntime,
+  methods: {
+    "static getRuntime()Ldalvik/system/VMRuntime;": () => theVmRuntime,
+    "newUnpaddedArray(Ljava/lang/Class;I)Ljava/lang/Object;": (cls: JClass | null, len: number) => newArrayOf(cls, len),
+    "newNonMovableArray(Ljava/lang/Class;I)Ljava/lang/Object;": (cls: JClass | null, len: number) => newArrayOf(cls, len),
+  },
+});
 
 // ── sun.misc.Unsafe: enough for kotlinx-coroutines' artificial stack frames
 class JUnsafe extends JObj {}

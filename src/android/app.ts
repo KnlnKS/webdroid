@@ -2171,6 +2171,33 @@ rt.register({
     "registerComponentCallbacks(Landroid/content/ComponentCallbacks;)V": () => {},
   },
 });
+// The application without a Context, which is how the framework's own bytecode and a great many
+// libraries reach it — AOSP's LineBreakConfig gates on
+// ActivityThread.currentApplication().getApplicationInfo().targetSdkVersion, and returning null
+// there is a NullPointerException on the layout path, not a graceful absence. One body, three
+// names: ActivityThread is the hidden one, AppGlobals the @SystemApi wrapper over it.
+const currentApplication = () => appHost?.application ?? null;
+// the core settings the system pushes into every process. None is set here, so every read gets
+// the caller's own default — a device that has not set one reports the same.
+const intCoreSetting = (_k: string, def: number) => def;
+rt.register({
+  name: "android/app/ActivityThread", ctor: class extends JObj {},
+  methods: {
+    "static currentApplication()Landroid/app/Application;": currentApplication,
+    "static currentPackageName()Ljava/lang/String;": () => appHost?.pkg ?? null,
+    "static currentProcessName()Ljava/lang/String;": () => appHost?.pkg ?? null,
+    "static getIntCoreSetting(Ljava/lang/String;I)I": intCoreSetting,
+  },
+});
+rt.register({
+  name: "android/app/AppGlobals", ctor: class extends JObj {},
+  methods: {
+    "static getInitialApplication()Landroid/app/Application;": currentApplication,
+    "static getInitialPackage()Ljava/lang/String;": () => appHost?.pkg ?? null,
+    "static getIntCoreSetting(Ljava/lang/String;I)I": intCoreSetting,
+  },
+});
+
 // Pure interface: implementors are dispatched dynamically by fireActivityLifecycle, which
 // probes each of the plain/Pre*/Post* variants, so no default bodies belong here.
 rt.register({ name: "android/app/Application$ActivityLifecycleCallbacks", ctor: class extends JObj {} });

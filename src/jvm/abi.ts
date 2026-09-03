@@ -85,6 +85,13 @@ export function descToName(desc: string): string {
 export const PRIM_NAME: Record<string, string> = { I: "int", J: "long", F: "float", D: "double", Z: "boolean", B: "byte", C: "char", S: "short", V: "void" };
 export const PRIM_DESC: Record<string, string> = Object.fromEntries(Object.entries(PRIM_NAME).map(([d, n]) => [n, d]));
 
+/** a primitive array of `n` elements, by type descriptor — the one mapping of Java's element
+ *  types onto TypedArrays (byte=Int8, boolean=Uint8, char=Uint16, long=BigInt64). */
+export const newPrimArray: Record<string, (n: number) => unknown> = {
+  Z: (n) => new Uint8Array(n), B: (n) => new Int8Array(n), C: (n) => new Uint16Array(n), S: (n) => new Int16Array(n),
+  I: (n) => new Int32Array(n), J: (n) => new BigInt64Array(n), F: (n) => new Float32Array(n), D: (n) => new Float64Array(n),
+};
+
 /** tag a JS array as a Java `elem[]` for compiled code (in place, returns the same array) */
 export function jarray<T>(items: T[], elem = "Ljava/lang/Object;"): T[] {
   (items as { $t?: string }).$t = elem;
