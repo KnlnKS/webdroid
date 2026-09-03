@@ -1335,7 +1335,7 @@ function selD(hi: number): JStateListDrawable {
 const DP = 2; // px per dp at our fixed xhdpi density
 /** the holo spinner asset: transparent, a 1dp rule along the bottom ending in a caret triangle */
 class JSpinnerBg extends JDrawable {
-  norm = 0; hi = 0;
+  norm = 0; hi = 0; rule = true;
   paint(cv: JCanvas) {
     const { left, right, bottom } = this.bounds;
     const y = bottom - DP, side = 12 * DP;
@@ -1343,17 +1343,23 @@ class JSpinnerBg extends JDrawable {
     const ctx = cv.ctx;
     ctx.save();
     ctx.globalAlpha *= this.alpha / 255;
-    ctx.fillStyle = cssColor(av(c, 0x80));
-    ctx.fillRect(left, y, right - left, DP);
+    if (this.rule) {
+      ctx.fillStyle = cssColor(av(c, 0x80));
+      ctx.fillRect(left, y, right - left, DP);
+    }
     ctx.fillStyle = cssColor(c);
     ctx.beginPath();
-    ctx.moveTo(right, y - side); ctx.lineTo(right, y); ctx.lineTo(right - side, y);
+    if (this.rule) { ctx.moveTo(right, y - side); ctx.lineTo(right, y); ctx.lineTo(right - side, y); }
+    else { // the Material caret points down, centred on the drawable's right edge
+      const cy = (this.bounds.top + bottom) / 2, w = 5 * DP;
+      ctx.moveTo(right - 2 * w, cy - w / 2); ctx.lineTo(right, cy - w / 2); ctx.lineTo(right - w, cy + w);
+    }
     ctx.fill();
     ctx.restore();
   }
   onStateChange(): boolean { return true; }
 }
-type FwGen = (res: Resources, dark: boolean, base: string) => JDrawable | null;
+type FwGen = (res: Resources, dark: boolean, base: string, material: boolean) => JDrawable | null;
 const FW_FAMILY: [RegExp, FwGen][] = [
   [/^ic_/, (r, dark, b) => {
     const t = b.split("_").slice(1);
@@ -1366,8 +1372,10 @@ const FW_FAMILY: [RegExp, FwGen][] = [
   }],
   // widgets draw these glyphs themselves; the framework asset is a no-op
   [/transparent|shadow|^text_cursor|^switch_|^btn_(check|radio|toggle|star)|^ratingbar|^indicator_/, () => solidD(0)],
-  [/^spinner_(background|default|pressed|focused|disabled|ab)/, (r, dark) => {
+  [/^spinner_(background|default|pressed|focused|disabled|ab)/, (r, dark, _base, material) => {
     const d = new JSpinnerBg();
+    // the Material asset is the caret alone; only the Holo one carries the rule under it
+    d.rule = !material;
     d.norm = fwc(r, dark ? "hint_foreground_holo_dark" : "hint_foreground_holo_light");
     d.hi = fwc(r, dark ? "holo_control_activated" : "holo_light_control_activated");
     return d;
@@ -1386,7 +1394,7 @@ const FW_FAMILY: [RegExp, FwGen][] = [
   [/scrollbar|fastscroll|scrubber|progress/, (r) => solidD(fwc(r, "holo_gray_light"))],
 ];
 
-const fwSpec = new Map<number, { gen: FwGen; dark: boolean; base: string } | null>();
+const fwSpec = new Map<number, { gen: FwGen; dark: boolean; base: string; material: boolean } | null>();
 function frameworkDrawable(res: Resources, resId: number): JDrawable {
   let sp = fwSpec.get(resId);
   if (sp === undefined) {
@@ -1394,10 +1402,10 @@ function frameworkDrawable(res: Resources, resId: number): JDrawable {
     const base = toks.filter((t) => !QUAL.has(t)).join("_");
     const dark = toks.includes("dark") || toks.includes("inverse");
     sp = null;
-    for (const [re, gen] of FW_FAMILY) if (re.test(base)) { sp = { gen, dark, base }; break; }
+    for (const [re, gen] of FW_FAMILY) if (re.test(base)) { sp = { gen, dark, base, material: toks.includes("material") }; break; }
     fwSpec.set(resId, sp);
   }
-  const d = sp?.gen(res, sp.dark, sp.base);
+  const d = sp?.gen(res, sp.dark, sp.base, sp.material);
   if (d) return d;
   rt.noteMissing("fw drawable " + res.idName(resId));
   return new JColorDrawable();

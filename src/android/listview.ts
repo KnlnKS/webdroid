@@ -906,10 +906,12 @@ rt.register({
     "<init>(Landroid/content/Context;)V": function (this: JSpinner, c: unknown) {
       return (this as any)[mangleMethod("<init>", "(Landroid/content/Context;Landroid/util/AttributeSet;)V")](c, null);
     },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JSpinner, c: unknown, set: JAttrSet | null) {
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JSpinner, c: unknown, set: JAttrSet | null, dsa?: number) {
       await initViewFromCtx(this, c, set);
       if (!this.jres) return;
-      const ta = obtainStyled(this.jres, this.theme, set, [AID("background"), AID("popupBackground")], AID("spinnerStyle"), 0);
+      // appcompat's Spinner passes its OWN spinnerStyle: resolving the framework one instead
+      // gives a widget the app never styled (a Holo underline under a Material app's title)
+      const ta = obtainStyled(this.jres, this.theme, set, [AID("background"), AID("popupBackground")], dsa || AID("spinnerStyle"), 0);
       if (ta.vals[0]) this.background = await loadDrawableRV(this.jres, ta.vals[0], this.theme);
       if (ta.vals[1]) this.popupBg = await loadDrawableRV(this.jres, ta.vals[1], this.theme);
     },
