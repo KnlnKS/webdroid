@@ -1645,6 +1645,15 @@ function lpFromAttrs<T extends JLayoutParams>(lp: T, res: Resources, set: JAttrS
 }
 export { lpFromAttrs };
 
+/**
+ * The scrollers keep velocity as an EWMA over one sample per frame. A finger that stops moving
+ * but stays down produces no samples at all, so the last move's speed survives to the UP and
+ * flings a gesture the user had already brought to rest. Those frames did have a velocity —
+ * zero — so feed it to them: n missing frames is the same weight applied n times.
+ */
+export const restVelocity = (v: number, weight: number, idleMs: number) =>
+  v * weight ** Math.max(0, idleMs / 16);
+
 export class JMotionEvent extends JObj {
   action = 0;
   x = 0; y = 0;

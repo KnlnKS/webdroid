@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { vcall, newObj } from "../jvm/natives/jlang";
-import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook } from "./view";
+import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook, restVelocity } from "./view";
 import { JMatrix } from "./graphics";
 import { mangleMethod } from "../jvm/abi";
 import { onMain } from "./mainloop";
@@ -88,13 +88,22 @@ const scrollerMethods: NativeSpec["methods"] = {
 rt.register({ name: "android/widget/Scroller", ctor: JScroller, methods: scrollerMethods });
 rt.register({ name: "android/widget/OverScroller", ctor: class extends JScroller {}, methods: scrollerMethods });
 
+/** AOSP VelocityTracker: movements older than this before the newest one are not in the estimate */
+const VELOCITY_HORIZON_MS = 100;
+
 class JVelocityTracker extends JObj {
   samples: { x: number; y: number; t: number }[] = [];
   vx = 0; vy = 0;
   compute(units: number, max = Infinity) {
     const n = this.samples.length;
     if (n < 2) { this.vx = 0; this.vy = 0; return; }
-    const a = this.samples[Math.max(0, n - 6)], b = this.samples[n - 1];
+    const b = this.samples[n - 1];
+    // A pointer that rested before it lifted has no velocity, however fast it was moving before
+    // that: walking back only within the horizon says so by leaving the estimate a single sample.
+    let i = n - 1;
+    while (i > 0 && i > n - 6 && b.t - this.samples[i - 1].t <= VELOCITY_HORIZON_MS) i--;
+    if (i === n - 1) { this.vx = 0; this.vy = 0; return; }
+    const a = this.samples[i];
     const dt = Math.max(1, b.t - a.t);
     this.vx = Math.max(-max, Math.min(max, (b.x - a.x) / dt * units));
     this.vy = Math.max(-max, Math.min(max, (b.y - a.y) / dt * units));
@@ -523,10 +532,12 @@ rt.register({
         return 1;
       }
       if (a === 1) {
+        const idle = now - this.lastT;
+        const vx = restVelocity(this.vx, 0.7, idle), vy = restVelocity(this.vy, 0.7, idle);
         if (!this.moved && now - this.downT < 300) {
           await vcall(this.l, "onSingleTapUp", "(Landroid/view/MotionEvent;)Z", ev);
-        } else if (this.moved && Math.hypot(this.vx, this.vy) > 400) {
-          await vcall(this.l, "onFling", "(Landroid/view/MotionEvent;Landroid/view/MotionEvent;FF)Z", ev, ev, this.vx, this.vy);
+        } else if (this.moved && Math.hypot(vx, vy) > 400) {
+          await vcall(this.l, "onFling", "(Landroid/view/MotionEvent;Landroid/view/MotionEvent;FF)Z", ev, ev, vx, vy);
         }
         return 1;
       }

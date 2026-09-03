@@ -12,7 +12,7 @@ import {
   JView, JViewGroup, JLayoutParams, JMarginLP, JFrameLP, JLinearLP,
   MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, makeSpec, MATCH_PARENT, WRAP_CONTENT,
   childMeasureSpec, measureChildWithMargins, measureView, layoutView,
-  resolveSizeAndState, defaultSize, invalidate, requestLayout, initViewFromCtx,
+  resolveSizeAndState, defaultSize, invalidate, requestLayout, restVelocity, initViewFromCtx,
   lpFromAttrs, AID, findById, JMotionEvent, uiState, guardCall, setFocusHook,
 } from "./view";
 import { JAttrSet, attrTable, onFramework, obtainStyled, resolveStyleValue, rvDimen, rvColor, rvInt, rvString, rvFloat, type RV, type Resources } from "./res";
@@ -510,15 +510,15 @@ const scrollMethods: NativeSpec["methods"] = {
     const a = ev.action & 0xff;
     if (a === 0) {
       this.lastX = ev.x; this.lastY = ev.y;
+      this.lastMoveT = ev.eventTime;
       this.flingAnim = null;
       return 1;
     }
     if (a === 2) {
       const d = this.horizontal ? this.lastX - ev.x : this.lastY - ev.y;
-      const now = performance.now();
-      const dt = Math.max(1, now - this.lastMoveT);
+      const dt = Math.max(1, ev.eventTime - this.lastMoveT);
       this.velo = 0.8 * this.velo + 0.2 * (d / dt * 16);
-      this.lastMoveT = now;
+      this.lastMoveT = ev.eventTime;
       if (!this.dragging) {
         const dd = this.horizontal ? Math.abs(ev.x - this.downX) : Math.abs(ev.y - this.downY);
         if (dd > device.touchSlop) this.dragging = true;
@@ -533,8 +533,8 @@ const scrollMethods: NativeSpec["methods"] = {
       return 1;
     }
     if (a === 1 || a === 3) {
-      if (this.dragging && Math.abs(this.velo) > 2) {
-        let v = this.velo;
+      let v = restVelocity(this.velo, 0.8, ev.eventTime - this.lastMoveT);
+      if (this.dragging && Math.abs(v) > 2) {
         const anim = () => {
           if (this.flingAnim !== anim) return false;
           if (this.horizontal) this.scrollX += v;

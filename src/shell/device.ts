@@ -554,9 +554,9 @@ let downTime = 0;
 export function dispatchPointer(action: number, x: number, y: number): Promise<void> {
   // charged to perf.inputMs: the wall time a tap costs is otherwise in no counter at all.
   const t0 = performance.now();
-  return onMain(() => dispatchPointer0(action, x, y)).finally(() => { perf.inputMs += performance.now() - t0; });
+  return onMain(() => dispatchPointer0(action, x, y, t0)).finally(() => { perf.inputMs += performance.now() - t0; });
 }
-async function dispatchPointer0(action: number, x: number, y: number) {
+async function dispatchPointer0(action: number, x: number, y: number, t: number) {
   const act = booted?.stack[booted.stack.length - 1];
   const decor = act?.window.decor;
   if (!decor) return;
@@ -566,7 +566,9 @@ async function dispatchPointer0(action: number, x: number, y: number) {
   ev.rawY = y;
   // The same clock SystemClock.uptimeMillis reports, because app code subtracts one from the
   // other: Compose's velocity tracker divides by this dt, and 0 - 0 is not a duration.
-  ev.eventTime = performance.now();
+  // t is when the event arrived, not when the queue got round to it: a gap between two events
+  // has to mean the finger paused, never that the app was busy.
+  ev.eventTime = t;
   if (action === 0) downTime = ev.eventTime;
   ev.downTime = downTime;
   const ly = y - contentTop();

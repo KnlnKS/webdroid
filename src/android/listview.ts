@@ -4,7 +4,7 @@
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
-import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSizeAndState, invalidate, requestLayout, initViewFromCtx, inheritContext, AID, JMotionEvent, uiState, guardCall, findById } from "./view";
+import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSizeAndState, invalidate, requestLayout, initViewFromCtx, inheritContext, AID, JMotionEvent, uiState, guardCall, findById, restVelocity } from "./view";
 import { JAttrSet, obtainStyled, rvDimen, rvInt, rvString, type Resources } from "./res";
 import { attr } from "./axml";
 import { JCanvas } from "./graphics";
@@ -624,6 +624,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     const a = ev.action & 0xff;
     if (a === 0) {
       this.lastY = ev.y;
+      this.lastMoveT = ev.eventTime;
       this.flingAnim = null;
       // press feedback on the item under finger
       const idx = this.itemIndexAt(ev.y + this.scrollY);
@@ -640,10 +641,9 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     }
     if (a === 2) {
       const d = this.lastY - ev.y;
-      const now = performance.now();
-      const dt = Math.max(1, now - this.lastMoveT);
+      const dt = Math.max(1, ev.eventTime - this.lastMoveT);
       this.velo = 0.8 * this.velo + 0.2 * (d / dt * 16);
-      this.lastMoveT = now;
+      this.lastMoveT = ev.eventTime;
       if (!this.dragging && Math.abs(ev.y - this.downY) > device.touchSlop) this.dragging = true;
       if (this.dragging) {
         cancelItemLongPress(this);
@@ -661,8 +661,8 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
           await guardCall((this as any)[M_perfItemClick], this, v, this.pressTarget, await rowId(this, this.pressTarget));
         }
       }
-      if (this.dragging && Math.abs(this.velo) > 2) {
-        let vv = this.velo;
+      let vv = restVelocity(this.velo, 0.8, ev.eventTime - this.lastMoveT);
+      if (this.dragging && Math.abs(vv) > 2) {
         const anim = () => {
           if (this.flingAnim !== anim) return false;
           this.scrollRows(vv);
