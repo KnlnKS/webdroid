@@ -1,98 +1,67 @@
 export {};
-// Distill AOSP values XML (vendor/aosp-res) → src/android/framework-res.json
-// Gives real android.R ids, attr enum maps, Material theme/style bags, colors, dimens.
+// Build vendor/framework-res.apk — the real android: resource package, compiled with aapt2 from
+// the platform's own res tree. `-x` links it at package id 0x01, so every android.R.* id it
+// carries is the one an app compiled against the same platform already refers to.
+//
+//   bun run gen-framework-res
+//
+// The device profile chooses the platform and the config filter, so there is no second place
+// where the target device is described.
+import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { device } from "../src/shell/config";
 
-const dir = "vendor/aosp-res";
-const read = (f: string) => Bun.file(`${dir}/${f}`).text();
+const OUT = "vendor/framework-res.apk";
 
-// crude-but-adequate XML element scanner for AOSP values files
-function* elements(xml: string, tag: string): Generator<{ attrs: Record<string, string>; body: string }> {
-  const re = new RegExp(`<${tag}\\b([^>]*?)(/>|>([\\s\\S]*?)</${tag}>)`, "g");
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(xml))) {
-    const attrs: Record<string, string> = {};
-    const attrRe = /([\w:-]+)\s*=\s*"([^"]*)"/g;
-    let am: RegExpExecArray | null;
-    while ((am = attrRe.exec(m[1]))) attrs[am[1]] = am[2];
-    yield { attrs, body: m[3] ?? "" };
-  }
+const sdkRoot = process.env.ANDROID_HOME ?? process.env.ANDROID_SDK_ROOT ?? `${process.env.HOME}/Library/Android/sdk`;
+const platform = `${sdkRoot}/platforms/android-${device.sdk}`;
+if (!existsSync(`${platform}/data/res`)) {
+  throw new Error(`no res tree at ${platform}/data/res — install it with:\n  sdkmanager "platforms;android-${device.sdk}"`);
+}
+// build-tools are forward compatible, so the newest installed one wins
+const tools = readdirSync(`${sdkRoot}/build-tools`).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+const aapt2 = tools.map((v) => `${sdkRoot}/build-tools/${v}/aapt2`).filter(existsSync).pop();
+if (!aapt2) throw new Error(`no aapt2 under ${sdkRoot}/build-tools — install it with:\n  sdkmanager "build-tools;35.0.1"`);
+
+const run = (...args: string[]) => {
+  const r = Bun.spawnSync([aapt2, ...args], { stderr: "pipe", stdout: "pipe" });
+  if (r.exitCode !== 0) throw new Error(`aapt2 ${args[0]} failed:\n${r.stderr.toString().split("\n").slice(0, 12).join("\n")}`);
+};
+
+const tmp = mkdtempSync(join(tmpdir(), "wd-fw-"));
+const flata = `${tmp}/res.zip`, manifest = `${tmp}/AndroidManifest.xml`, ids = `${tmp}/ids.txt`;
+await Bun.write(manifest, `<?xml version="1.0" encoding="utf-8"?>\n<manifest package="android"/>\n`);
+
+console.log(`compiling ${platform}/data/res …`);
+run("compile", "--dir", `${platform}/data/res`, "-o", flata);
+
+// Every axis the device can never select is dropped here rather than shipped and skipped at
+// runtime: the tablet wallpapers alone are 7MB.
+console.log(`linking (density ${device.densityDpi}dpi, lang ${device.lang}, sw${device.widthDp}dp) …`);
+run("link", "-x", "--manifest", manifest, "--min-sdk-version", String(device.sdk),
+  "--preferred-density", `${device.densityDpi}dpi`, "-c", `${device.lang},sw${device.widthDp}dp`,
+  "--emit-ids", ids, "-o", OUT, flata);
+
+// The linked ids must be the frozen platform ones, or every android.R reference in every app is
+// off. public-final.xml is the platform's own record of them, so compare against it directly.
+const declared = new Map<string, number>();
+for (const m of (await Bun.file(`${platform}/data/res/values/public-final.xml`).text())
+  .matchAll(/<public\s+type="([^"]+)"\s+name="([^"]+)"\s+id="([^"]+)"/g)) {
+  declared.set(`${m[1]}/${m[2]}`, parseInt(m[3], 16));
+}
+const linked = new Map<string, number>();
+for (const line of (await Bun.file(ids).text()).split("\n")) {
+  const m = /^android:(\S+) = (0x[0-9a-f]+)$/.exec(line.trim());
+  if (m) linked.set(m[1], parseInt(m[2], 16));
+}
+// A retired resource keeps its index under a `removed_` name so later ids do not shift; aapt2 is
+// free not to emit one. Any id that linked to a *different* value is always fatal.
+const wrong = [...declared].filter(([k, v]) => (linked.get(k) ?? v) !== v || (!linked.has(k) && !/removed/.test(k)));
+if (wrong.length) {
+  throw new Error(`${wrong.length}/${declared.size} public ids do not match public-final.xml, e.g. ` +
+    wrong.slice(0, 3).map(([k, v]) => `${k}=0x${v.toString(16)} linked 0x${(linked.get(k) ?? 0).toString(16)}`).join(", "));
 }
 
-// ── public ids
-const ids: Record<string, Record<string, number>> = {};
-for (const f of ["public-final.xml"]) {
-  const xml = await read(f);
-  for (const el of elements(xml, "public")) {
-    const { type, name, id } = el.attrs;
-    if (!type || !name || !id) continue;
-    (ids[type] ??= {})[name] = parseInt(id, 16);
-  }
-}
-console.log("public ids:", Object.entries(ids).map(([t, m]) => `${t}=${Object.keys(m).length}`).join(" "));
-
-// ── attr enum/flag values
-const attrEnums: Record<string, Record<string, number>> = {};
-{
-  const xml = await read("attrs.xml");
-  for (const el of elements(xml, "attr")) {
-    const name = el.attrs.name;
-    if (!name || !el.body) continue;
-    const map: Record<string, number> = {};
-    for (const en of elements(el.body, "enum")) map[en.attrs.name] = parseInt(en.attrs.value);
-    for (const fl of elements(el.body, "flag")) map[fl.attrs.name] = parseInt(fl.attrs.value, fl.attrs.value?.startsWith("0x") ? 16 : 10);
-    if (Object.keys(map).length) attrEnums[name] = map;
-  }
-  console.log("attr enums:", Object.keys(attrEnums).length);
-}
-
-// ── colors & dimens (raw strings; resolved at runtime)
-const colors: Record<string, string> = {};
-const dimens: Record<string, string> = {};
-for (const f of ["colors.xml", "colors_holo.xml", "colors_material.xml"]) {
-  for (const el of elements(await read(f), "color")) colors[el.attrs.name] = el.body.trim();
-  // colors also defined via <item type="color">
-  for (const el of elements(await read(f), "item")) {
-    if (el.attrs.type === "color") colors[el.attrs.name] = el.body.trim();
-  }
-}
-for (const f of ["dimens.xml", "dimens_material.xml"]) {
-  for (const el of elements(await read(f), "dimen")) dimens[el.attrs.name] = el.body.trim();
-  for (const el of elements(await read(f), "item")) {
-    if (el.attrs.type === "dimen") dimens[el.attrs.name] = el.body.trim();
-  }
-}
-console.log("colors:", Object.keys(colors).length, "dimens:", Object.keys(dimens).length);
-
-// ── styles/themes: name → {parent, items{attrName: rawValue}}
-const styles: Record<string, { parent: string; items: Record<string, string> }> = {};
-for (const f of ["themes.xml", "themes_holo.xml", "themes_material.xml", "themes_device_defaults.xml", "styles.xml", "styles_holo.xml", "styles_material.xml"]) {
-  const xml = await read(f);
-  for (const el of elements(xml, "style")) {
-    const name = el.attrs.name;
-    if (!name) continue;
-    let parent = el.attrs.parent ?? "";
-    if (!("parent" in el.attrs) && name.includes(".")) parent = name.slice(0, name.lastIndexOf("."));
-    const items: Record<string, string> = {};
-    for (const it of elements(el.body, "item")) {
-      const an = it.attrs.name;
-      if (an && !an.includes(":") || an?.startsWith("android:")) {
-        items[an.replace("android:", "")] = it.body.trim();
-      }
-    }
-    styles[name] = { parent: parent.replace(/^@(android:)?style\//, "").replace(/^android:/, ""), items };
-  }
-}
-console.log("styles:", Object.keys(styles).length);
-
-// ── the strings framework widgets need (buttons etc.)
-const strings: Record<string, string> = {};
-{
-  const want = new Set(["ok", "cancel", "yes", "no", "copy", "paste", "cut", "selectAll", "search_go", "close", "untitled"]);
-  for (const el of elements(await read("strings.xml"), "string")) {
-    if (want.has(el.attrs.name)) strings[el.attrs.name] = el.body.trim().replace(/^"|"$/g, "");
-  }
-}
-
-const out = { ids, attrEnums, colors, dimens, styles, strings };
-await Bun.write("src/android/framework-res.json", JSON.stringify(out));
-console.log("wrote src/android/framework-res.json", (JSON.stringify(out).length / 1024).toFixed(0) + "KB");
+const size = (await Bun.file(OUT).arrayBuffer()).byteLength;
+console.log(`wrote ${OUT} ${(size / 1048576).toFixed(1)}MB — ${linked.size} resources, ${declared.size} public ids verified`);

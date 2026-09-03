@@ -96,6 +96,13 @@ const server: Bun.Server<TcpData> = Bun.serve({
       if (!/^[\w.-]+$/.test(f)) return new Response("nope", { status: 400 });
       return new Response(Bun.file(`node_modules/sql.js/dist/${f}`));
     },
+    // the android: resource package (bun run gen-framework-res). It only changes when the device
+    // profile does, so let the browser keep it across reloads.
+    "/vendor/:file": (req) => {
+      const f = req.params.file;
+      if (!/^[\w.-]+$/.test(f)) return new Response("nope", { status: 400 });
+      return new Response(Bun.file(`vendor/${f}`), { headers: { "cache-control": "max-age=31536000, immutable" } });
+    },
     "/apks": async () => {
       const names: string[] = [];
       for await (const f of new Bun.Glob("*.{apk,xapk}").scan("apks")) names.push(f);

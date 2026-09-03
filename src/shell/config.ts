@@ -16,8 +16,8 @@ export const device = {
   navBar: 48,
   density: 2,
   densityDpi: 320,
-  sdk: 33,
-  release: "13",
+  sdk: 35,
+  release: "15",
   lang: "en",
   /** what /proc/cpuinfo, /proc/meminfo and uname report to native code: an ARMv7 with VFPv3 and
    *  no NEON (the ARM32 tier implements VFP, not the SIMD extension) */
