@@ -12,20 +12,18 @@
 // "which android.* method have we not written" to "which native method would we have to
 // implement if this class ran as AOSP's own bytecode" — a set the platform build fixes,
 // not one the next apk grows.
-import { openApk, dexesOf, DEX_RE } from "./lib";
+import { openApk, openDexes, dexesOf } from "./lib";
+import { argv } from "./args";
 import { Program, reach } from "../src/jvm/reach";
 import { rootsOf, reflectiveRoots } from "../src/jvm/roots";
-import { dexesIn, DexFile } from "../src/jvm/dex";
+import { DexFile } from "../src/jvm/dex";
 import { rt } from "../src/jvm/runtime";
 import "../src/natives";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
-import { unzipSync } from "fflate";
-import { existsSync } from "node:fs";
 
 const args = process.argv.slice(2);
-const flag = (n: string) => args.includes(n);
-const opt = (n: string, d?: string) => { const i = args.indexOf(n); return i < 0 ? d : args[i + 1]; };
-const apk = args.find((a) => !a.startsWith("--") && args[args.indexOf(a) - 1] !== "--limit" && args[args.indexOf(a) - 1] !== "--json");
+const { flag, opt, positional } = argv(args, ["--limit", "--json"]);
+const apk = positional[0];
 if (!apk) throw new Error("usage: bun run audit <apk> [--framework] [--all] [--limit N] [--json out.json]");
 const limit = parseInt(opt("--limit", "40")!);
 
@@ -40,10 +38,7 @@ const appClasses = p.size;
 
 let fwDexes: DexFile[] = [];
 if (flag("--framework")) {
-  const jar = "vendor/aosp/framework.jar";
-  if (!existsSync(jar)) throw new Error(`no ${jar} — run \`bun run gen-framework\` first`);
-  const fz = unzipSync(new Uint8Array(await Bun.file(jar).arrayBuffer()), { filter: (f) => DEX_RE.test(f.name) });
-  fwDexes = Object.keys(fz).sort().flatMap((n) => dexesIn(fz[n], n));
+  fwDexes = await openDexes("vendor/aosp/framework.jar");
   for (const d of fwDexes) p.add(d);
 }
 

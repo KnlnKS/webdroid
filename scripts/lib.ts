@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { unzipSync } from "fflate";
 import { dexesIn, DexFile } from "../src/jvm/dex";
 import { rt } from "../src/jvm/runtime";
@@ -5,7 +6,7 @@ import type { XmlNode } from "../src/android/axml";
 
 export type Zip = Record<string, Uint8Array>;
 
-export const DEX_RE = /classes\d*\.dex$/;
+export const DEX_RE = /^classes\d*\.dex$/;
 
 export async function openApk(path: string, filter?: RegExp): Promise<Zip> {
   const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
@@ -26,6 +27,12 @@ export async function loadDexes(path: string): Promise<DexFile[]> {
   const dexes = await openDexes(path);
   for (const d of dexes) rt.loadDex(d);
   return dexes;
+}
+
+/** the same, for a framework jar: `bun run gen-framework` puts it at vendor/aosp/framework.jar */
+export async function loadJarDexes(path: string): Promise<DexFile[]> {
+  if (!existsSync(path)) throw new Error(`no ${path} — run \`bun run gen-framework\` with the reference AVD booted`);
+  return loadDexes(path);
 }
 
 export function dumpXml(n: XmlNode, depth: number, out: string[], maxDepth = Infinity): string[] {

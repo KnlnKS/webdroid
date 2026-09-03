@@ -11,18 +11,20 @@
 //
 // Breadth gated on depth: a gap here is a candidate, not a task. It earns work when it also
 // shows up in a scored flow.
-import { chromium, type Page } from "playwright";
+import { type Page } from "playwright";
 import { readdirSync } from "node:fs";
+import { argv } from "./args";
+import { BASE_URL } from "../tests/e2e/lib/util";
+import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
 
 // the e2e driver's convention: a server left running in another worktree answers on 4080 and a
 // run then measures code you did not write (see "Harness notes" in AGENTS.md)
-const BASE = process.env.WEBDROID_URL ?? "http://localhost:4080";
+
 
 const args = process.argv.slice(2);
-const opt = (n: string, d: string) => { const i = args.indexOf(n); return i < 0 ? d : args[i + 1]; };
-const waitMs = parseInt(opt("--wait", "12000"));
-const named = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--json" && args[i - 1] !== "--wait");
-const apks = named.length ? named : readdirSync("apks").filter((f) => /\.x?apk$/.test(f)).sort();
+const { opt, positional } = argv(args, ["--json", "--wait"]);
+const waitMs = parseInt(opt("--wait", "12000")!);
+const apks = positional.length ? positional : readdirSync("apks").filter((f) => /\.x?apk$/.test(f)).sort();
 
 interface Row {
   apk: string;
@@ -36,7 +38,7 @@ interface Row {
   note: string;
 }
 
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 const rows: Row[] = [];
 
 async function boot(page: Page, apk: string): Promise<Row> {
@@ -44,7 +46,7 @@ async function boot(page: Page, apk: string): Promise<Row> {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e).slice(0, 200)));
   try {
-    await page.goto(`${BASE}/?apk=${encodeURIComponent(apk)}`, { waitUntil: "load", timeout: 60000 });
+    await page.goto(`${BASE_URL}/?apk=${encodeURIComponent(apk)}`, { waitUntil: "load", timeout: 60000 });
     // a frame having been drawn is the only evidence that matters; ticks alone can spin on a
     // shell that never got an activity up
     await page.waitForFunction("window.wd && window.wd.perf.draws > 0", null, { timeout: waitMs }).catch(() => {});
@@ -65,7 +67,7 @@ async function boot(page: Page, apk: string): Promise<Row> {
 }
 
 for (const apk of apks) {
-  const page = await browser.newPage({ viewport: { width: 760, height: 1400 } });
+  const page = await browser.newPage(CONTEXT_OPTS);
   const row = await boot(page, apk);
   await page.close();
   rows.push(row);

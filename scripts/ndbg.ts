@@ -1,12 +1,13 @@
 // Boot an apk headless with the native host-call trace on, wait, then dump wd.native state and logs.
 //   bun scripts/ndbg.ts <apk> [waitMs] [traceRegex]
 import { WebdroidDriver } from "../tests/e2e/drivers/webdroid";
+import { BASE_URL } from "../tests/e2e/lib/util";
 
 const [apk, waitMs = "8000", re] = process.argv.slice(2);
 const drv = await WebdroidDriver.launch();
 await drv.page.addInitScript((r) => { (globalThis as any).__wdNativeTrace = r; }, re ?? ".");
 if (process.env.STEP) await drv.page.addInitScript((w) => { (globalThis as any).__wdNativeStep = true; (globalThis as any).__wdNativeWatch = w; }, Number(process.env.WATCH ?? 0));
-await drv.page.goto(`${process.env.WEBDROID_URL ?? "http://localhost:4083"}/?apk=${encodeURIComponent(apk)}`);
+await drv.page.goto(`${BASE_URL}/?apk=${encodeURIComponent(apk)}`);
 await drv.page.waitForFunction(() => !!(globalThis as any).wd?.native, undefined, { timeout: 60000 });
 if (process.env.PROF_AFTER) {
   await new Promise((r) => setTimeout(r, Number(process.env.PROF_AFTER)));

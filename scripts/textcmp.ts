@@ -11,9 +11,10 @@
 //
 // Text measurement needs a Canvas2D context, so this cannot be `bun run fwtest`: it has to be
 // a page. The page must be a REAL one — the MCP browser is throttled (see AGENTS.md).
-import { chromium } from "playwright";
+import { BASE_URL } from "../tests/e2e/lib/util";
+import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
 
-const BASE = process.env.WEBDROID_URL ?? "http://localhost:4080";
+
 const CUT = "android/text/Layout,android/text/StaticLayout,android/graphics/text/";
 
 const PARAGRAPHS: [string, number, number][] = [        // text, width px, text size px
@@ -26,10 +27,10 @@ const PARAGRAPHS: [string, number, number][] = [        // text, width px, text 
 ];
 
 async function layouts(cut: boolean) {
-  const browser = await chromium.launch({ headless: true, args: ["--font-render-hinting=none", "--disable-lcd-text"] });
-  const page = await browser.newPage();
-  const resp = await page.goto(cut ? `${BASE}/?bytecode=${encodeURIComponent(CUT)}` : BASE, { waitUntil: "domcontentloaded" });
-  if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE} — run \`bun run dev\``);
+  const browser = await launchBrowser();
+  const page = await browser.newPage(CONTEXT_OPTS);
+  const resp = await page.goto(cut ? `${BASE_URL}/?bytecode=${encodeURIComponent(CUT)}` : BASE_URL, { waitUntil: "domcontentloaded" });
+  if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE_URL} — run \`bun run dev\``);
   await page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
   await page.evaluate(() => (document as any).fonts.ready);
   // BOTH sides boot. Native specs get their mangled methods at rt.link, which boot is what

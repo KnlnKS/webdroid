@@ -3,14 +3,14 @@
 import { mkdir } from "node:fs/promises";
 import { chromium, type Browser, type Page } from "playwright";
 import { SCREEN_W, SCREEN_H, PINNED_CLOCK_MS, type UiNode } from "../types";
-import { sleep, sha1 } from "../lib/util";
+import { sleep, sha1, BASE_URL } from "../lib/util";
 
-const BASE = process.env.WEBDROID_URL ?? "http://localhost:4080";
+
 // WEBDROID_BYTECODE=android/graphics/,android/content/res/ scores a provenance cut: the same
 // bundle, with those prefixes served by AOSP's own bytecode instead of our native specs. That
 // is how a cut becomes a measurement (PLAN.md's B2) rather than an edit and a rebuild.
 const CUT = process.env.WEBDROID_BYTECODE;
-const PAGE_URL = CUT ? `${BASE}/?bytecode=${encodeURIComponent(CUT)}` : BASE;
+const PAGE_URL = CUT ? `${BASE_URL}/?bytecode=${encodeURIComponent(CUT)}` : BASE_URL;
 
 declare global {
   // eslint-disable-next-line no-var
@@ -19,6 +19,25 @@ declare global {
 
 /** Hard stop so a step that repaints forever cannot fill the disk. */
 const MAX_FRAMES_PER_STEP = 240;
+
+/** The flags every measurement has to share: software GL, no hinting or LCD subpixels, no
+ *  device-scale surprise. A script that launches its own browser without these is not
+ *  comparable with the goldens — text metrics move first. */
+export const LAUNCH_ARGS = [
+  "--use-gl=angle", "--use-angle=swiftshader",
+  "--font-render-hinting=none", "--disable-lcd-text",
+  "--force-device-scale-factor=1", "--hide-scrollbars",
+  "--disable-partial-raster", "--disable-skia-runtime-opts",
+];
+export const CONTEXT_OPTS = {
+  viewport: { width: 1400, height: 1500 },
+  deviceScaleFactor: 1,
+  locale: "en-US",
+  timezoneId: "UTC",
+  colorScheme: "light" as const,
+  reducedMotion: "reduce" as const,
+};
+export const launchBrowser = () => chromium.launch({ headless: true, args: LAUNCH_ARGS });
 
 export class WebdroidDriver {
   constructor(private browser: Browser, public page: Page) {}
@@ -72,23 +91,8 @@ export class WebdroidDriver {
   }
 
   static async launch(): Promise<WebdroidDriver> {
-    const browser = await chromium.launch({
-      headless: true,
-      args: [
-        "--use-gl=angle", "--use-angle=swiftshader",
-        "--font-render-hinting=none", "--disable-lcd-text",
-        "--force-device-scale-factor=1", "--hide-scrollbars",
-        "--disable-partial-raster", "--disable-skia-runtime-opts",
-      ],
-    });
-    const ctx = await browser.newContext({
-      viewport: { width: 1400, height: 1500 },
-      deviceScaleFactor: 1,
-      locale: "en-US",
-      timezoneId: "UTC",
-      colorScheme: "light",
-      reducedMotion: "reduce",
-    });
+    const browser = await launchBrowser();
+    const ctx = await browser.newContext(CONTEXT_OPTS);
     const page = await ctx.newPage();
     // Pin Date without freezing timers — rAF and the 33ms setInterval fallback keep running.
     await page.clock.setFixedTime(new Date(PINNED_CLOCK_MS));
@@ -96,7 +100,7 @@ export class WebdroidDriver {
     page.on("pageerror", (e) => console.error("  [page error]", String(e).slice(0, 200)));
 
     const resp = await page.goto(PAGE_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE} — run \`bun run dev\``);
+    if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE_URL} — run \`bun run dev\``);
     await page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
     await page.evaluate(() => (document as any).fonts.ready);
     return new WebdroidDriver(browser, page);
