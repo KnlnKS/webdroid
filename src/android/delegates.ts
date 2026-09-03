@@ -17,6 +17,7 @@ import { rt, JObj } from "../jvm/runtime";
 import {
   JPaint, JTypeface, tfDefault, mkTypeface, measureText,
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
+  JCanvas, JBitmap, JRect, canvasMethods,
 } from "./graphics";
 import { charsToString } from "../jvm/abi";
 import { JPath, pathBounds, pathOffset, pathTransform } from "./path";
@@ -260,9 +261,24 @@ delegate("android/graphics/Typeface", {
   "nativeGetWeight(J)I": (h: bigint) => (deref<JTypeface>(h) ?? tfDefault).weight,
   "nativeGetReleaseFunc()J": () => FINALIZER,
   "nativeGetFamilySize(J)I": () => 1,
-  "nativeCreateFromArray([JJII)J": () => handle(tfDefault),
+  "nativeCreateFromTypefaceWithExactStyle(JIZ)J": (h: bigint, weight: number, italic: number) => {
+    const src = deref<JTypeface>(h) ?? tfDefault;
+    return handle(mkTypeface(src.family, weight >= 600, !!italic, weight));
+  },
+  // a family built from font handles: we have the browser's faces, not font files, so the
+  // family it resolves to is whatever the first face named
+  "nativeCreateFromArray([JJII)J": (_fonts: BigInt64Array, fallback: bigint) => handle(deref<JTypeface>(fallback) ?? tfDefault),
+  "nativeGetSupportedAxes(J)[I": () => null,
   "nativeSetDefault(J)V": () => {},
   "nativeRegisterGenericFamily(Ljava/lang/String;J)V": () => {},
+  "nativeRegisterLocaleList(Ljava/lang/String;)V": () => {},
+  "nativeAddFontCollections(J)V": () => {},
+  "nativeWarmUpCache(Ljava/lang/String;)V": () => {},
+  // the serialised typeface cache a process shares with the system; there is no other process
+  "nativeReadTypefaces(Ljava/nio/ByteBuffer;I)[J": () => null,
+  "nativeWriteTypefaces(Ljava/nio/ByteBuffer;I[J)I": () => 0,
+  // Typeface.DEFAULT and friends are set through this from the static initialiser
+  "nativeForceSetStaticFinalField(Ljava/lang/String;Landroid/graphics/Typeface;)V": () => {},
 });
 
 // ── android.graphics.Paint ─────────────────────────────────────────────────────────────
@@ -571,3 +587,173 @@ delegate("android/graphics/Path", {
 
 /** the 6-element affine pathTransform takes, from AOSP's 3x3 */
 const affine = (m: Mat): number[] => [m[0], m[3], m[1], m[4], m[2], m[5]];
+
+// ── android.graphics.Canvas / BaseCanvas ───────────────────────────────────────────────
+// Every one of these routes into canvasMethods, which is the table our own Canvas native
+// already uses: one copy of each draw body, reached under two sets of names.
+const canvas = (h: bigint) => deref<JCanvas>(h);
+type CanvasFn = (this: JCanvas, ...a: never[]) => unknown;
+/** call one of Canvas's own method bodies by its Java descriptor */
+function cm(desc: string): CanvasFn {
+  const fn = canvasMethods?.[desc];
+  if (typeof fn !== "function") throw new Error(`delegates: no canvasMethods[${desc}]`);
+  return fn as CanvasFn;
+}
+const on = (desc: string) => {
+  const fn = cm(desc);
+  return (h: bigint, ...a: unknown[]) => (fn as (...x: unknown[]) => unknown).apply(canvas(h), a);
+};
+/** the trailing paint handle every nDraw* carries has to become the paint itself */
+const withPaint = (desc: string, arity: number) => {
+  const fn = cm(desc);
+  return (h: bigint, ...a: unknown[]) => (fn as (...x: unknown[]) => unknown).apply(canvas(h), [...a.slice(0, arity), paint(a[arity] as bigint)]);
+};
+
+delegate("android/graphics/Canvas", {
+  "nInitRaster(JJ)J": (b: bigint) => handle(bitmapCanvas(deref<JBitmap>(b))),
+  "nInitRaster(J)J": (b: bigint) => handle(bitmapCanvas(deref<JBitmap>(b))),
+  "nGetNativeFinalizer()J": () => FINALIZER,
+  "nSetBitmap(JJ)V": (h: bigint, b: bigint) => { objs[Number(h)] = bitmapCanvas(deref<JBitmap>(b)); },
+  "nGetWidth(J)I": (h: bigint) => canvas(h).w,
+  "nGetHeight(J)I": (h: bigint) => canvas(h).h,
+  "nIsOpaque(J)Z": () => 0,
+  "nIsHighContrastText(J)Z": () => 0,
+  "nSetCompatibilityVersion(I)V": () => {},
+  "nFreeCaches()V": () => {}, "nFreeTextLayoutCaches()V": () => {},
+  "nSetDrawFilter(JJ)V": () => {},
+
+  "nSave(JI)I": on("save()I"),
+  "nRestore(J)Z": (h: bigint) => { const c = canvas(h); if (c.saveCount <= 1) return 0; on("restore()V")(h); return 1; },
+  "nRestoreToCount(JI)V": on("restoreToCount(I)V"),
+  "nGetSaveCount(J)I": on("getSaveCount()I"),
+  "nSaveLayer(JFFFFJ)I": (h: bigint, l: number, t: number, r: number, b: number) => on("saveLayerAlpha(FFFFI)I")(h, l, t, r, b, 255),
+  "nSaveLayerAlpha(JFFFFI)I": on("saveLayerAlpha(FFFFI)I"),
+  // an unclipped layer is a plain save here: there is no clip to lift
+  "nSaveUnclippedLayer(JIIII)I": on("save()I"),
+  "nRestoreUnclippedLayer(JIJ)V": (h: bigint, count: number) => on("restoreToCount(I)V")(h, count),
+
+  "nTranslate(JFF)V": on("translate(FF)V"),
+  "nScale(JFF)V": on("scale(FF)V"),
+  "nRotate(JF)V": on("rotate(F)V"),
+  "nSkew(JFF)V": on("skew(FF)V"),
+  "nConcat(JJ)V": (h: bigint, m: bigint) => applyMatrix(canvas(h), deref<Mat>(m), false),
+  "nConcat(J[F)V": (h: bigint, v: Float32Array) => applyMatrix(canvas(h), Float64Array.from(v), false),
+  "nSetMatrix(JJ)V": (h: bigint, m: bigint) => applyMatrix(canvas(h), m ? deref<Mat>(m) : identity(), true),
+  "nGetMatrix(JJ)V": (h: bigint, into: bigint) => {
+    const t = canvas(h).ctx.getTransform();
+    objs[Number(into)] = Float64Array.of(t.a, t.c, t.e, t.b, t.d, t.f, 0, 0, 1);
+  },
+
+  "nClipRect(JFFFFI)Z": (h: bigint, l: number, t: number, r: number, b: number) => on("clipRect(FFFF)Z")(h, l, t, r, b),
+  "nClipPath(JJI)Z": (h: bigint, p: bigint) => {
+    const c = canvas(h), pp = deref<JPath>(p);
+    c.ctx.clip(pp.path(), pp.fillRule);
+    return 1;
+  },
+  "nClipShader(JJI)V": () => {},
+  "nGetClipBounds(JLandroid/graphics/Rect;)Z": (h: bigint, r: Rect) => {
+    const c = canvas(h);
+    r.left = 0; r.top = 0; r.right = c.w; r.bottom = c.h;
+    return 1;
+  },
+  "nQuickReject(JFFFF)Z": () => 0,
+  "nQuickReject(JJ)Z": () => 0,
+});
+
+delegate("android/graphics/BaseCanvas", {
+  "nDrawColor(JII)V": (h: bigint, c: number) => on("drawColor(I)V")(h, c),
+  "nDrawColor(JJJI)V": (h: bigint, _cs: bigint, c: bigint) => on("drawColor(I)V")(h, argbOfColorLong(c)),
+  "nDrawPaint(JJ)V": (h: bigint, p: bigint) => on("drawColor(I)V")(h, paint(p).color),
+  "nDrawRect(JFFFFJ)V": withPaint("drawRect(FFFFLandroid/graphics/Paint;)V", 4),
+  "nDrawRoundRect(JFFFFFFJ)V": withPaint("drawRoundRect(FFFFFFLandroid/graphics/Paint;)V", 6),
+  "nDrawCircle(JFFFJ)V": withPaint("drawCircle(FFFLandroid/graphics/Paint;)V", 3),
+  "nDrawOval(JFFFFJ)V": withPaint("drawOval(FFFFLandroid/graphics/Paint;)V", 4),
+  "nDrawArc(JFFFFFFZJ)V": withPaint("drawArc(FFFFFFZLandroid/graphics/Paint;)V", 7),
+  "nDrawLine(JFFFFJ)V": withPaint("drawLine(FFFFLandroid/graphics/Paint;)V", 4),
+  "nDrawPoint(JFFJ)V": withPaint("drawPoint(FFLandroid/graphics/Paint;)V", 2),
+  "nDrawPath(JJJ)V": (h: bigint, p: bigint, pt: bigint) => cm("drawPath(Landroid/graphics/Path;Landroid/graphics/Paint;)V").call(canvas(h), deref<JPath>(p) as never, paint(pt) as never),
+  "nDrawLines(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, count: number, pt: bigint) =>
+    cm("drawLines([FLandroid/graphics/Paint;)V").call(canvas(h), pts.subarray(off, off + count) as never, paint(pt) as never),
+  "nDrawPoints(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, count: number, pt: bigint) => {
+    const c = canvas(h), p = paint(pt);
+    for (let i = 0; i + 1 < count; i += 2) cm("drawPoint(FFLandroid/graphics/Paint;)V").call(c, pts[off + i] as never, pts[off + i + 1] as never, p as never);
+  },
+  "nDrawText(JLjava/lang/String;IIFFIJ)V": (h: bigint, s: string, start: number, end: number, x: number, y: number, _flags: number, pt: bigint) =>
+    cm("drawText(Ljava/lang/String;FFLandroid/graphics/Paint;)V").call(canvas(h), s.slice(start, end) as never, x as never, y as never, paint(pt) as never),
+  "nDrawText(J[CIIFFIJ)V": (h: bigint, c: Uint16Array, i: number, n: number, x: number, y: number, _flags: number, pt: bigint) =>
+    cm("drawText(Ljava/lang/String;FFLandroid/graphics/Paint;)V").call(canvas(h), charsToString(c, i, n) as never, x as never, y as never, paint(pt) as never),
+  "nDrawTextRun(JLjava/lang/String;IIIIFFZJ)V": (h: bigint, s: string, start: number, end: number, _cs: number, _ce: number, x: number, y: number, _rtl: number, pt: bigint) =>
+    cm("drawText(Ljava/lang/String;FFLandroid/graphics/Paint;)V").call(canvas(h), s.slice(start, end) as never, x as never, y as never, paint(pt) as never),
+  "nDrawTextRun(J[CIIIIFFZJJ)V": (h: bigint, c: Uint16Array, i: number, n: number, _cs: number, _cc: number, x: number, y: number, _rtl: number, pt: bigint) =>
+    cm("drawText(Ljava/lang/String;FFLandroid/graphics/Paint;)V").call(canvas(h), charsToString(c, i, n) as never, x as never, y as never, paint(pt) as never),
+  "nDrawBitmap(JJFFJIII)V": (h: bigint, b: bigint, x: number, y: number, pt: bigint) =>
+    cm("drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V").call(canvas(h), deref<JBitmap>(b) as never, x as never, y as never, (pt ? paint(pt) : null) as never),
+  "nDrawBitmap(JJFFFFFFFFJII)V": (h: bigint, b: bigint, sl: number, st: number, sr: number, sb: number, dl: number, dt: number, dr: number, db: number, pt: bigint) =>
+    cm("drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/RectF;Landroid/graphics/Paint;)V")
+      .call(canvas(h), rect(sl, st, sr, sb) as never, rect(dl, dt, dr, db) as never, (pt ? paint(pt) : null) as never, deref<JBitmap>(b) as never),
+  "nDrawBitmapMatrix(JJJJ)V": (h: bigint, b: bigint, m: bigint, pt: bigint) => {
+    const c = canvas(h);
+    c.ctx.save();
+    applyMatrix(c, deref<Mat>(m), false);
+    cm("drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V")
+      .call(c, deref<JBitmap>(b) as never, 0 as never, 0 as never, (pt ? paint(pt) : null) as never);
+    c.ctx.restore();
+  },
+  // a colour array rather than a Bitmap: put the pixels in one and draw that
+  "nDrawBitmap(J[IIIFFIIZJ)V": (h: bigint, colors: Int32Array, offset: number, stride: number, x: number, y: number, w: number, ih: number, _alpha: number, pt: bigint) => {
+    const b = JBitmap.create(w, ih);
+    const img = b.ctx.createImageData(w, ih);
+    for (let row = 0; row < ih; row++) {
+      for (let col = 0; col < w; col++) {
+        const c = colors[offset + row * stride + col], o = (row * w + col) * 4;
+        img.data[o] = (c >> 16) & 0xff; img.data[o + 1] = (c >> 8) & 0xff;
+        img.data[o + 2] = c & 0xff; img.data[o + 3] = (c >>> 24) & 0xff;
+      }
+    }
+    b.ctx.putImageData(img, 0, 0);
+    cm("drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V").call(canvas(h), b as never, x as never, y as never, (pt ? paint(pt) : null) as never);
+  },
+  // the ring between two round rects, which is how a ripple's bounded edge is drawn: the
+  // outer filled with the inner taken out of it
+  "nDrawDoubleRoundRect(JFFFFFFFFFFFFJ)V": (h: bigint, ol: number, ot: number, or: number, ob: number, orx: number, ory: number, il: number, it: number, ir: number, ib: number, irx: number, iry: number, pt: bigint) =>
+    doubleRoundRect(canvas(h), [ol, ot, or, ob], [orx, ory], [il, it, ir, ib], [irx, iry], paint(pt)),
+  "nDrawDoubleRoundRect(JFFFF[FFFFF[FJ)V": (h: bigint, ol: number, ot: number, or: number, ob: number, orad: Float32Array, il: number, it: number, ir: number, ib: number, irad: Float32Array, pt: bigint) =>
+    doubleRoundRect(canvas(h), [ol, ot, or, ob], [orad[0], orad[1]], [il, it, ir, ib], [irad[0], irad[1]], paint(pt)),
+  // a nine-patch's stretch regions live in its chunk, which the drawable layer already
+  // resolves; from here it is the bitmap scaled into the destination
+  "nDrawNinePatch(JJJFFFFJII)V": (h: bigint, b: bigint, _chunk: bigint, l: number, t: number, r: number, bo: number, pt: bigint) =>
+    cm("drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/RectF;Landroid/graphics/Paint;)V")
+      .call(canvas(h), null as never, rect(l, t, r, bo) as never, (pt ? paint(pt) : null) as never, deref<JBitmap>(b) as never),
+  // positioned glyph ids, which only a shaping engine produces: there is none behind
+  // Canvas2D, and the text entry points above are what the framework actually uses
+  "nDrawGlyphs(J[I[FIIIJJ)V": () => {},
+  // text on a path, meshes, vertices and regions have no Canvas2D form; a hole punched in a
+  // surface is a compositor operation there is no surface for
+  "nDrawTextOnPath(J[CIIJFFIJ)V": () => {}, "nDrawTextOnPath(JLjava/lang/String;JFFIJ)V": () => {},
+  "nDrawBitmapMesh(JJII[FI[IIJ)V": () => {}, "nDrawMesh(JJIJ)V": () => {},
+  "nDrawVertices(JII[FI[FI[II[SIIJ)V": () => {}, "nDrawRegion(JJJ)V": () => {},
+  "nPunchHole(JFFFFFFF)V": () => {},
+});
+
+/** a Canvas over a bitmap's backing context, as Canvas(Bitmap) makes one */
+function bitmapCanvas(b: JBitmap | undefined): JCanvas {
+  const c = new JCanvas();
+  if (b) { c.ctx = b.ctx; c.w = b.w; c.h = b.h; c.bmp = b; }
+  return c;
+}
+function doubleRoundRect(c: JCanvas, o: number[], orad: number[], i: number[], irad: number[], p: JPaint) {
+  const ring = new Path2D();
+  ring.roundRect(o[0], o[1], o[2] - o[0], o[3] - o[1], Math.min(orad[0], (o[2] - o[0]) / 2, (o[3] - o[1]) / 2));
+  ring.roundRect(i[0], i[1], i[2] - i[0], i[3] - i[1], Math.min(irad[0], (i[2] - i[0]) / 2, (i[3] - i[1]) / 2));
+  c.drawShape(p, (x) => x.fill(ring, "evenodd"), (x) => x.stroke(ring));
+}
+function rect(l: number, t: number, r: number, b: number): JRect {
+  const o = new JRect();
+  o.left = l; o.top = t; o.right = r; o.bottom = b;
+  return o;
+}
+/** AOSP's 3x3 onto the 2D context's transform; a perspective row cannot be carried */
+function applyMatrix(c: JCanvas, m: Mat, replace: boolean) {
+  if (replace) c.ctx.setTransform(m[0], m[3], m[1], m[4], m[2], m[5]);
+  else c.ctx.transform(m[0], m[3], m[1], m[4], m[2], m[5]);
+}

@@ -1037,7 +1037,9 @@ function cropBitmap(src: JBitmap, x: number, y: number, w: number, h: number, m:
   if (m) b.ctx.setTransform(1, 0, 0, 1, 0, 0);
   return b;
 }
-const canvasMethods: NativeSpec["methods"] = {
+/** Exported so AOSP's own Canvas bytecode reaches the same bodies through its nDraw*
+ *  delegates (src/android/delegates.ts) rather than a second copy of each. */
+export const canvasMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "<init>(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap) {
     this.ctx = b.ctx; this.w = b.w; this.h = b.h; this.bmp = b;
