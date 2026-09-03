@@ -51,6 +51,31 @@ export function contentTop(): number {
   return act && (act.window.flags & FLAG_FULLSCREEN) ? 0 : STATUS_H;
 }
 
+/** A split install (.xapk, .apks, an App Bundle's output) is a zip of apks rather than an
+ *  apk: a base and its config/feature splits. Merge them into the one tree the rest of the
+ *  boot expects — the base wins every conflict, exactly as the base's dex is first on a
+ *  device's class path, and each split's dex keeps a distinct name so both survive. */
+function openInstall(outer: Record<string, Uint8Array>): Record<string, Uint8Array> {
+  if (outer["AndroidManifest.xml"]) return outer;
+  const apks = Object.keys(outer).filter((n) => n.endsWith(".apk"));
+  if (!apks.length) throw new Error("no AndroidManifest.xml and no apks inside: not an apk or a split install");
+  const opened = apks.map((n) => [n, unzipSync(outer[n])] as const);
+  const base = opened.find(([, z]) => z["AndroidManifest.xml"] && !attrStr(parseAXML(z["AndroidManifest.xml"]), "split"));
+  if (!base) throw new Error(`split install has no base apk among ${apks.join(", ")}`);
+  const merged: Record<string, Uint8Array> = { ...base[1] };
+  let extra = 0;
+  for (const [name, z] of opened) {
+    if (z === base[1]) continue;
+    for (const [path, data] of Object.entries(z)) {
+      if (path === "AndroidManifest.xml" || path === "resources.arsc" || path.startsWith("META-INF/")) continue;
+      // a split's own classes.dex would collide with the base's, and both have to load
+      merged[/^classes\d*\.dex$/.test(path) ? `classes${1000 + extra++}.dex` : path] ??= data;
+    }
+    console.log("[webdroid] split", name, Object.keys(z).length, "entries");
+  }
+  return merged;
+}
+
 export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, apkFile = ""): Promise<BootedApp> {
   // The android package registers android.R.* and fills the widgets' attr-id tables, so it has to
   // be here before anything links. main.ts starts the fetch alongside the apk's, so this waits on
@@ -60,7 +85,7 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
   // far as it is concerned — for the whole session, since it caches the answer.
   const [fwPkg] = await Promise.all([loadFramework(), restoreRoots()]);
   onStatus("unpacking apk…");
-  const zip = unzipSync(bytes);
+  const zip = openInstall(unzipSync(bytes));
   rt.classpath = zip;
   vfs.write("/data/app/base.apk", bytes);
   onStatus("loading dex…");

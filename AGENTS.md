@@ -845,8 +845,12 @@ MessageQueue$IdleHandler, Process.getStartUptimeMillis, Context.getDataDir, java
 over Intl) took **TikTok** from failing to rendering a frame with 1,365 classes compiled.
 None of them came from staring at a stack trace.
 
-Among Us is the remaining failure and it is structural: an .xapk is split apks, and bootApk
-unzips the outer file expecting AndroidManifest.xml at the root.
+A split install (.xapk, .apks, an App Bundle's output) is a zip of apks rather than an apk,
+which is how Play distributes everything now. `openInstall` merges them into the one tree the
+rest of the boot expects: the base is the apk whose manifest has no `split` attribute, it
+wins every conflict the way its dex is first on a device's class path, and each split's dex
+is renamed so both survive. Among Us now unpacks and compiles 368 classes — it does not
+render, because IL2CPP arm64 is still the final boss, but the format is no longer the wall.
 
 ## The sync tier is worth 24x, and we cannot have it yet
 Every compiled method is `async` because any call might return a promise. In the shape the
