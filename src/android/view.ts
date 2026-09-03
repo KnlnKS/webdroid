@@ -6,7 +6,7 @@ import { perf } from "../perf";
 import { device } from "../shell/config";
 import { mangleMethod, jmethod, type JMethod } from "../jvm/abi";
 import { vcall, idHash } from "../jvm/natives/jlang";
-import { JCanvas, JRect, JPoint, setInvalidateHook, JMatrix, insetsOf } from "./graphics";
+import { JCanvas, JRect, JPoint, setInvalidateHook, JMatrix, insetsOf, matMul, rotM } from "./graphics";
 import { csText } from "./text";
 import { JDrawable, ST, loadDrawableRV, JColorDrawable, loadDrawable, type JColorStateList, cslColor } from "./drawable";
 import { reportUncaught, mainHandler, type JDisplayMetrics } from "./os";
@@ -994,8 +994,16 @@ const viewMethods: NativeSpec["methods"] = {
   "setRequestedFrameRate(F)V": () => {},
   "getKeepScreenOn()Z": () => 0,
   "requestRectangleOnScreen(Landroid/graphics/Rect;)Z": () => 0,
-  "getMatrix()Landroid/graphics/Matrix;": async function () {
-    return new JMatrix();
+  "getMatrix()Landroid/graphics/Matrix;": function (this: JView) {
+    const m = new JMatrix();
+    const px = this.pivotXv ?? this.width() / 2, py = this.pivotYv ?? this.height() / 2;
+    let a = [1, 0, 0, 1, this.translationX, this.translationY] as [number, number, number, number, number, number];
+    if (this.rotationV) a = matMul(a, rotM(this.rotationV, px, py));
+    if (this.scaleXv !== 1 || this.scaleYv !== 1) {
+      a = matMul(a, [this.scaleXv, 0, 0, this.scaleYv, px - this.scaleXv * px, py - this.scaleYv * py]);
+    }
+    m.m = a;
+    return m;
   },
   "hashCode()I": function (this: JView) { return idHash(this); },
   "getY()F": function (this: JView) { return this.top + this.translationY; },
@@ -1555,7 +1563,6 @@ const vgMethods: NativeSpec["methods"] = {
   "isTransitionGroup()Z": () => 0,
   "startViewTransition(Landroid/view/View;)V": () => {},
   "endViewTransition(Landroid/view/View;)V": () => {},
-  "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": () => 0,
   "offsetDescendantRectToMyCoords(Landroid/view/View;Landroid/graphics/Rect;)V": function (this: JViewGroup, c: JView, r: JRect) {
     let v: JView | null = c;
     while (v && v !== this) {

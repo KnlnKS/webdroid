@@ -782,11 +782,11 @@ export class JMatrix extends JObj {
   m: [number, number, number, number, number, number] = [1, 0, 0, 1, 0, 0];
 }
 /** rotation by `deg` about (px, py) as an affine [a, b, c, d, tx, ty] */
-function rotM(deg: number, px = 0, py = 0): [number, number, number, number, number, number] {
+export function rotM(deg: number, px = 0, py = 0): [number, number, number, number, number, number] {
   const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
   return [c, s, -s, c, px - c * px + s * py, py - s * px - c * py];
 }
-function matMul(a: number[], b: number[]): [number, number, number, number, number, number] {
+export function matMul(a: number[], b: number[]): [number, number, number, number, number, number] {
   return [
     a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1],
     a[0] * b[2] + a[2] * b[3], a[1] * b[2] + a[3] * b[3],
