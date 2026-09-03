@@ -178,6 +178,31 @@ const inputStreamMethods: NativeSpec["methods"] = {
   "markSupported()Z": () => 1,
 };
 const readBII = mangleMethod("read", "([BII)I");
+/**
+ * Every byte an InputStream has left, through its virtual read() — the only way that works for
+ * a stream that is not one of ours (okhttp hands out its own, and its bytes are on a socket,
+ * not in JInputStream.buf).
+ */
+export async function readStreamFully(s: unknown): Promise<Uint8Array> {
+  if (s instanceof JInputStream && (s as JInputStream).constructor === JInputStream) {
+    const out = s.buf.subarray(s.pos);
+    s.pos = s.buf.length;
+    return out;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const tmp = new Int8Array(1 << 16);
+  for (;;) {
+    const n = await vcall(s, "read", "([BII)I", tmp, 0, tmp.length) as number;
+    if (n <= 0) break;
+    chunks.push(new Uint8Array(tmp.buffer.slice(0, n)));
+    total += n;
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) { out.set(c, at); at += c.length; }
+  return out;
+}
 rt.register({ name: "java/io/InputStream", ctor: JInputStream, ifaces: ["java/io/Closeable"], methods: inputStreamMethods });
 rt.register({
   name: "java/io/ByteArrayInputStream", ctor: class extends JInputStream {}, sup: "java/io/InputStream",

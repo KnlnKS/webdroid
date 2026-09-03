@@ -246,6 +246,8 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       ...executorMethods,
       "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V": function () {},
       "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/ThreadFactory;)V": function () {},
+      "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/RejectedExecutionHandler;)V": function () {},
+      "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": function () {},
       "<init>(I)V": function () {},
       "allowCoreThreadTimeOut(Z)V": function () {},
       "setRejectedExecutionHandler(Ljava/util/concurrent/RejectedExecutionHandler;)V": function () {},
@@ -509,6 +511,21 @@ for (const i of ["java/util/concurrent/Executor", "java/util/concurrent/Executor
   "java/util/concurrent/ScheduledFuture", "java/util/concurrent/Callable", "java/util/concurrent/ThreadFactory",
   "java/util/concurrent/RejectedExecutionHandler"]) {
   rt.register({ name: i, ctor: class extends JObj {} });
+}
+// ThreadPoolExecutor's four saturation policies. Our executors never saturate, so the policy is
+// only ever constructed and handed over — but a pool built with one must not fail to link.
+for (const [n, run] of [["AbortPolicy", 0], ["CallerRunsPolicy", 1], ["DiscardPolicy", 0], ["DiscardOldestPolicy", 0]] as const) {
+  rt.register({
+    name: "java/util/concurrent/ThreadPoolExecutor$" + n, ctor: class extends JObj {},
+    ifaces: ["java/util/concurrent/RejectedExecutionHandler"],
+    methods: {
+      "<init>()V": function () {},
+      "rejectedExecution(Ljava/lang/Runnable;Ljava/util/concurrent/ThreadPoolExecutor;)V": (r: unknown) => {
+        if (run) return vcall(r, "run", "()V");
+        if (n === "AbortPolicy") throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "rejected");
+      },
+    },
+  });
 }
 rt.register({ name: "java/util/concurrent/BlockingQueue", ctor: class extends JObj {}, ifaces: ["java/util/Queue"] });
 rt.register({ name: "java/util/concurrent/BlockingDeque", ctor: class extends JObj {}, ifaces: ["java/util/concurrent/BlockingQueue", "java/util/Deque"] });

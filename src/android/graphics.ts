@@ -5,6 +5,7 @@ import { mangleMethod, charsToString } from "../jvm/abi";
 import { device } from "../shell/config";
 import { vcall, mkEnumSet, JSimpleEnum, linkInit, stringHash } from "../jvm/natives/jlang";
 import { usLocale } from "../jvm/natives/jutil";
+import { readStreamFully } from "../jvm/natives/jio";
 import { JPath } from "./path";
 import { perf } from "../perf";
 
@@ -1565,10 +1566,10 @@ rt.register({
     "static decodeByteArray([BIILandroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;":
       (b: Int8Array, off: number, len: number, o: JBFOptions) =>
         decodeBytes(new Uint8Array(b.buffer, b.byteOffset + off, len), o),
-    "static decodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;": async (s: any) =>
-      decodeBytes(s.buf.subarray(s.pos), null),
+    "static decodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;": async (s: unknown) =>
+      decodeBytes(await readStreamFully(s), null),
     "static decodeStream(Ljava/io/InputStream;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;":
-      async (s: any, r: unknown, o: JBFOptions) => decodeBytes(s.buf.subarray(s.pos), o),
+      async (s: unknown, r: unknown, o: JBFOptions) => decodeBytes(await readStreamFully(s), o),
     // decodeResource/decodeFile wired by res.ts / vfs
   },
 });

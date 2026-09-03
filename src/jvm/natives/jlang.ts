@@ -1357,6 +1357,37 @@ export function mkEnumSet(cls: string, names: string[], extra: NativeSpec["metho
 rt.register({ name: "java/lang/Thread$UncaughtExceptionHandler", ctor: class extends JObj {} });
 mkEnumSet("java/lang/Thread$State", ["NEW", "RUNNABLE", "BLOCKED", "WAITING", "TIMED_WAITING", "TERMINATED"]);
 
+// java.lang.Character.UnicodeScript. Java's constant names ARE Unicode's script names, and the
+// regex engine already carries the table, so `of()` is a property test rather than a range list.
+const SCRIPT_NAMES = ["COMMON", "LATIN", "GREEK", "CYRILLIC", "ARMENIAN", "HEBREW", "ARABIC", "SYRIAC",
+  "THAANA", "DEVANAGARI", "BENGALI", "GURMUKHI", "GUJARATI", "ORIYA", "TAMIL", "TELUGU", "KANNADA",
+  "MALAYALAM", "SINHALA", "THAI", "LAO", "TIBETAN", "MYANMAR", "GEORGIAN", "HANGUL", "ETHIOPIC",
+  "CHEROKEE", "OGHAM", "RUNIC", "KHMER", "MONGOLIAN", "HIRAGANA", "KATAKANA", "BOPOMOFO", "HAN",
+  "YI", "GOTHIC", "DESERET", "CANADIAN_ABORIGINAL", "TAGALOG", "BRAILLE", "CHAM", "COPTIC",
+  "GLAGOLITIC", "JAVANESE", "TIFINAGH", "VAI", "INHERITED", "UNKNOWN"];
+const scriptRe = SCRIPT_NAMES.map((n) => {
+  const uni = n.toLowerCase().split("_").map((w) => w[0].toUpperCase() + w.slice(1)).join("_");
+  try { return new RegExp(`\\p{Script=${uni}}`, "u"); } catch { return null; }
+});
+const scriptMemo = new Map<number, unknown>();
+const scriptEnums = mkEnumSet("java/lang/Character$UnicodeScript", SCRIPT_NAMES, {
+  "static of(I)Ljava/lang/Character$UnicodeScript;": (cp: number) => {
+    let hit = scriptMemo.get(cp);
+    if (hit !== undefined) return hit;
+    if (cp < 0 || cp > 0x10ffff) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a valid code point");
+    const ch = String.fromCodePoint(cp);
+    hit = scriptEnums[SCRIPT_NAMES.length - 1];
+    for (let i = 0; i < scriptRe.length; i++) if (scriptRe[i]?.test(ch)) { hit = scriptEnums[i]; break; }
+    scriptMemo.set(cp, hit);
+    return hit;
+  },
+  "static forName(Ljava/lang/String;)Ljava/lang/Character$UnicodeScript;": (n: string) => {
+    const i = SCRIPT_NAMES.indexOf(String(n).toUpperCase().replace(/[- ]/g, "_"));
+    if (i < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", String(n));
+    return scriptEnums[i];
+  },
+});
+
 // java.lang.ref basics
 class JRef extends JObj { referent: unknown = null; }
 rt.register({
