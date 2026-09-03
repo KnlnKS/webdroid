@@ -630,8 +630,17 @@ rt.register({
   },
 });
 
+/** @android:id/mask, read off the framework table once rather than written down */
+let maskIdCache = -1;
+function maskId(res: Resources): number {
+  if (maskIdCache === -1) maskIdCache = res.idFor("id", "mask", "android");
+  return maskIdCache;
+}
+
 export class JRippleDrawable extends JLayerDrawable {
   rippleColor = 0x33000000;
+  /** the mask layer: it bounds the ripple, and is not part of what the drawable paints */
+  mask: JDrawable | null = null;
   /** explicit override from setRadius(), or RADIUS_AUTO to derive it from bounds each draw. */
   explicitRadius = RADIUS_AUTO;
   active = false; enterAt = 0; exitAt = 0;
@@ -1123,8 +1132,14 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
       if (cv) d.rippleColor = (colorOf(cv, 0x33000000) & 0xffffff) | 0x40000000;
       for (const c of node.children) {
         if (c.name !== "item") continue;
+        const idv = nodeAttr(res, c, AT.id);
+        // AOSP RippleDrawable: the layer identified as @android:id/mask is the shape the
+        // ripple is clipped to, and is NEVER drawn. selectableItemBackground's mask is
+        // @android:color/white, so drawing it fills the view with opaque white — which is
+        // invisible on a light theme and the entire surface on a dark one.
+        if (idv && idv.d === maskId(res)) { d.mask = await itemDrawable(res, c, theme); continue; }
         const child = await itemDrawable(res, c, theme);
-        if (child) { d.layers.push({ d: child, insets: [0, 0, 0, 0] }); d.ids.push(null); }
+        if (child) { d.layers.push({ d: child, insets: [0, 0, 0, 0] }); d.ids.push(idv ? idv.d : null); }
       }
       return d;
     }

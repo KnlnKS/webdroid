@@ -885,6 +885,34 @@ no colour-long API at all, which killed every `Paint.setColor` — it caches `Co
 Left: Bitmap (46), the decoders, and `nativeOpenXmlAsset` with the XmlBlock pull parser
 behind it, which is the layout-inflation path and the next thing the view stack needs.
 
+## A ripple's mask is not one of its layers
+`selectableItemBackground` is `<ripple><item android:id="@android:id/mask"
+android:drawable="@android:color/white"/></ripple>`. AOSP's RippleDrawable treats the layer
+identified as `@android:id/mask` as the shape the ripple is clipped to and **never draws it**.
+We pushed it into `layers` like any other item, so every view with a selectable background
+painted an opaque white rectangle over itself.
+
+On a light theme that is invisible — the surface underneath is nearly white already. On a
+dark one it is the entire surface: harmonic's story cards came out white with the theme's
+near-white `colorOnSurface` text on top, i.e. unreadable, while the app bar and window
+background were correctly dark. The card's own MaterialShapeDrawable held the right colour
+(#2e3038) the whole time; it was being covered.
+
+harmonic 46.3% -> 36.6% on the scored flow, which is exactly the number this file already
+recorded before it broke. The mask id is read off the framework table, not written down.
+
+Two things this cost, both worth remembering:
+- **The e2e run could not see it.** Playwright defaults to a light colour scheme and
+  `src/shell/config.ts` takes night from `prefers-color-scheme`, so every scored run was in
+  light mode where the white rectangle is invisible. A dark-only defect is invisible to the
+  harness as it stands.
+- **The MCP Chrome tab could not see it either**, for the opposite reason: it is throttled, so
+  `wd.ticks` stops advancing and the canvas holds a stale half-drawn frame. Sampling pixels
+  there produced a white content area that no view in the tree accounted for, and turning the
+  decor's background red changed nothing. Check `wd.perf.draws` is still incrementing before
+  believing anything read out of that tab; the finding only became reproducible in headless
+  Playwright with `colorScheme: "dark"`.
+
 ## The corpus, and what it is for
 `bun run corpus` boots every apk in apks/ headlessly and ranks each gap by how many apks
 reach it, so the queue is ordered by expected value rather than by whichever app was opened
