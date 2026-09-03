@@ -204,8 +204,12 @@ it has been tried three ways and measured.
   `wd.uiTree()`) across the corpus: it needs no hand-authored golden, so it gives a numeric
   layout-fidelity score for arbitrary apps. That is the only honest way to claim generality.
 - Front-end generality is **done** — quickened opcodes, v41 dex containers, parameter
-  annotations and header validation all landed with tests. CompactDex (`cdex001`) is still
-  rejected at the magic check, which is correct: its `code_item` differs.
+  annotations and header validation all landed; quickened opcodes, containers and header
+  validation have tests (`src/jvm/opcodes.test.ts`, `src/jvm/dex.test.ts`), **parameter
+  annotations (`src/jvm/dex.ts`) do not** — that is the one shape with no regression test.
+  CompactDex (`cdex001`) is rejected incidentally, by the `dex\n` magic check, which is the
+  right answer since its `code_item` differs — but nothing in `dex.ts` names CompactDex, so a
+  reader searching for it finds nothing.
 
 ---
 
@@ -231,41 +235,21 @@ it has been tried three ways and measured.
 
 # How to verify anything
 
-```bash
-bun run typecheck && bun run test          # must be clean
-bun run smoke apks/<apk>                   # 0 method failures
-bun run fwtest [prefix ...]                # delegate coverage + real-bytecode evidence, headless
-PORT=4090 bun run server.ts &              # NOT 4080 — see the harness note below
-WEBDROID_URL=http://localhost:4090 bun run textcmp   # AOSP's StaticLayout against ours, in a page
-WEBDROID_URL=http://localhost:4090 bun run e2e       # the gate: 4 scored flows, none may regress
-WEBDROID_URL=http://localhost:4090 bun run corpus    # breadth: how many apks still render
-bun scripts/perfsum.ts tests/e2e/actual <baseline.json>   # cost, not just pixels
+The commands, the janitor greps and the private-port rule live in **AGENTS.md's "Verify"
+section** — run them from there, so there is one copy to keep true. The cut-scoring form is
+the one thing specific to this file:
 
-# score a provenance cut — the same bundle, against itself
+```bash
 WEBDROID_BYTECODE='android/graphics/Paint,android/graphics/Canvas' \
   WEBDROID_URL=http://localhost:4090 bun run e2e --test fitnotes
 ```
 
-Janitor, from AGENTS.md's Verify section:
-
-```bash
-grep -rhoE 'name: "[a-z][a-z0-9]*(/[A-Za-z0-9_$]+)+"' src | sort | uniq -d   # must be empty
-rg -n 'endsWith\("/' src                                                     # no library names
-```
-
-**The grep only sees `name: "..."` literals.** A name registered from a loop (jlang's marker
-interfaces, jutil's collection families) is invisible to it, and a duplicate of one passes clean
-— check the loops by hand when adding an interface.
-
 **Reading the scores.** fitnotes and mihon-onboarding are repeatable to the digit and mihon-app
 to ~0.3, so a move there is real. **harmonic spreads ~6 points run to run on identical code**
-(measured 31.80 / 35.87 / 37.84) because it renders live Hacker News — A/B it against the
-parent commit before believing anything. Read `draws`/`drawMs` beside the per-step content diff,
-never alone.
+because it renders live Hacker News — see "Harness notes" in AGENTS.md for the measurements, and
+A/B against the parent commit before believing anything. Read `draws`/`drawMs` beside the
+per-step content diff, never alone.
 
-**Use a private port.** A dev server left running in another worktree answers on 4080 and a run
-then measures code you did not write. And after any milestone, *look* at harmonic, mihon and
-fitnotes in a real browser — a dark-only or small-region defect can be invisible to the scored
-diff (the ripple-mask white rectangle was). The MCP Chrome tab is throttled: check
-`document.visibilityState` and that `wd.ticks` and `wd.perf.draws` advance before believing
-anything read there.
+After any milestone, *look* at harmonic, mihon and fitnotes in a real browser — a dark-only or
+small-region defect can be invisible to the scored diff (the ripple-mask white rectangle was).
+On the MCP tab's throttling see "Measure in a page the browser is actually drawing".

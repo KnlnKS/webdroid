@@ -755,7 +755,7 @@ class JSet extends JObj {
   m = new Map<unknown, Ent>();
   slow: Ent[] = [];
 }
-/** the members, fast bucket first then the custom-equals ones (both must be walked: see NOTES) */
+/** the members, fast bucket first then the custom-equals ones (both must be walked) */
 function setItems(s: JSet): unknown[] { return [...s.m.values(), ...s.slow].map((e) => e.k); }
 function setMethods(): NativeSpec["methods"] {
   return {

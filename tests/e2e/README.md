@@ -170,12 +170,14 @@ dismiss key also closes dialogs.
   (Dark/Light toggle, scroll). The recorder seeds Mihon's four onboarding preferences with
   root so the emulator starts at the Library: onboarding hard-gates on the system file picker,
   which is DocumentsUI, not Mihon, and capturing it would diff webdroid against a different app.
+* **harmonic** (14 steps) — the welcome dialog and its presets, the front page, settings, a
+  story and its comments. It renders live Hacker News, so it spreads ~6 points run to run;
+  A/B it against the parent commit rather than reading one number.
 
-The other five have no goldens and run in smoke mode — every step must render, and the run
+The other four have no goldens and run in smoke mode — every step must render, and the run
 reports fps and the per-step missing-API list rather than a diff percentage:
 
 * **flappybird** (7 steps) — splash → title → PLAY → taps flap past pipes → Game Over panel.
-* **harmonic** (8 steps) — the welcome dialog, then the front page and a story.
 * **calculatorm** (8 steps) — keys from the rendered keypad.
 * **lichess** (3 steps) — boots as far as its arm64-only libflutter.so allows.
 * **doodlejump** (6 steps) — title → play → Back, on the ARM32 native tier.

@@ -2,7 +2,7 @@
 //
 // Two arcs: log two sets against a stock exercise and read its graph, then create a custom
 // exercise from scratch, log against it, and read ITS graph. Aspirational by design — it
-// deliberately crosses surfaces NOTES.md lists as unfinished (overflow menu, EditText box
+// deliberately crosses surfaces AGENTS.md lists as unfinished (overflow menu, EditText box
 // styling, the ViewPager draw/settle gap), because the flow is the target, not a certificate.
 import type { Flow } from "../types";
 

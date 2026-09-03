@@ -5,17 +5,41 @@ Goal: run FitNotes.apk → mihon → flappybird → Among Us.xapk fully client-s
 
 ## Verify
 - `bun run typecheck` — must be clean (noUnusedLocals).
-- `bun run test` — the ARM32 decoder unit tests (`src/native/arm.test.ts`) and the gzip trailer
-  arithmetic (`src/jvm/natives/jzip.test.ts`).
-- `bun run smoke apks/<apk>` — every class compiles.
+- `bun run test` — 29 tests over the ARM32 decoder (`src/native/arm.test.ts`), the dex front-end
+  (`src/jvm/dex.test.ts`, `src/jvm/opcodes.test.ts`), the gzip trailer
+  (`src/jvm/natives/jzip.test.ts`) and the e2e structural diff (`tests/e2e/lib/tree.test.ts`).
+- `bun run smoke apks/<apk>` — every class compiles (0 method failures).
+- `bun run fwtest [prefix ...]` — delegate coverage + real-bytecode evidence, headless.
 - `bun run dev` (or `PORT=<n> bun run server.ts`) then `bun run e2e [--test <flow,...>] [--shots]` —
   drives `tests/e2e/flows/*` over Playwright; per-step `newMissing`/`newErrors`/`nativeRequired`/perf
   land in `tests/e2e/actual/<flow>/run.json`. Flows without goldens run in smoke mode.
+
+```bash
+bun run typecheck && bun run test          # must be clean
+bun run smoke apks/<apk>                   # 0 method failures
+bun run fwtest [prefix ...]                # delegate coverage + real-bytecode evidence, headless
+PORT=4090 bun run server.ts &              # NOT 4080 — see "use a private port" below
+WEBDROID_URL=http://localhost:4090 bun run textcmp   # AOSP's StaticLayout against ours, in a page
+WEBDROID_URL=http://localhost:4090 bun run e2e       # the gate: 4 scored flows, none may regress
+WEBDROID_URL=http://localhost:4090 bun run corpus    # breadth: how many apks still render
+bun scripts/perfsum.ts tests/e2e/actual <baseline.json>   # cost, not just pixels
+
+# score a provenance cut — the same bundle, against itself
+WEBDROID_BYTECODE='android/graphics/Paint,android/graphics/Canvas' \
+  WEBDROID_URL=http://localhost:4090 bun run e2e --test fitnotes
+```
+
+**Use a private port.** A dev server left running in another worktree answers on 4080 and a run
+then measures code you did not write.
+
 - Janitor: `grep -rhoE 'name: "[a-z][a-z0-9]*(/[A-Za-z0-9_$]+)+"' src | sort | uniq -d` empty,
   and `rg -n 'endsWith\("/' src` free of library names. Write the first one with `grep`, not
   `rg -oNh`: ripgrep's `-h` is `--help`, so that form prints ripgrep's help text, finds no
   duplicate lines in it, and passes unconditionally — it is how two duplicate `java/io/FileFilter`
   registrations survived. See "the other janitor invariants" for the rest.
+  **The grep only sees `name: "..."` literals.** A name registered from a loop (jlang's marker
+  interfaces, jutil's collection families) is invisible to it, and a duplicate of one passes
+  clean — check the loops by hand when adding an interface.
 
 ## Architecture (decided)
 - **Execution**: DEX bytecode → JS source compiled per-class at load time (GWT/TeaVM
@@ -42,10 +66,11 @@ Goal: run FitNotes.apk → mihon → flappybird → Among Us.xapk fully client-s
   reads com.android.internal.R.styleable.View.
 - **SQLite**: sql.js wasm, in-memory, persisted to localStorage per database (debounced,
   snapshotted without reopening — see "Persisting a database must not close it").
-- **Server** (`server.ts`, `Bun.serve` routes): `/` the shell, `/vendor/:file` the framework
-  package, `/proxy?url=` for CORS fetches,
-  `/tcp?host=&port=&tls=` a WebSocket that relays one TCP connection (TLS terminated there),
-  `/apks` + `/apks/:name` the launcher list, `/Roboto/:file`, `/sqljs/:file`.
+- **Server** (`server.ts`, `Bun.serve` routes): `/` the shell, `/vendor/:file` +
+  `/vendor/aosp/:file` the framework package and the AOSP jar/res pair, `/proxy?url=` for CORS
+  fetches, `/tcp?host=&port=&tls=` a WebSocket that relays one TCP connection (TLS terminated
+  there), `/asset/:apk/*` an apk's own `assets/` tree, `/apks` + `/apks/:name` the launcher
+  list, `/Roboto/:file`, `/sqljs/:file`.
 - Missing-API telemetry: unresolved class/method throws + logs signature; dev loop =
   run → collect missing list → implement → reload.
 
@@ -65,8 +90,8 @@ Goal: run FitNotes.apk → mihon → flappybird → Among Us.xapk fully client-s
 
 ## Status
 Scores are `bun run e2e`'s content-diff means; the current ones live in
-`tests/e2e/report/report.json` (last full run: fitnotes 43.1%, mihon-onboarding 17.6%,
-mihon-app 76.9%, harmonic 46.7%, every step rendered, nothing wedged). A lower number is
+`tests/e2e/report/report.json`, and PLAN.md's "Where this stands" table quotes the last full
+run. Do not copy them here: every inline copy in this file has gone stale. A lower number is
 better; a rising one is not automatically a regression (see "Harness notes"). The smoke flows
 (no goldens) — flappybird, calculatorm, lichess, doodlejump — all render every step; only
 flappybird's optional `DexClassLoader` stays missing. harmonic's one accepted miss is
@@ -104,9 +129,9 @@ and a `removeMessages` on something that is not our Handler.
       the story-type SPINNER opens and switching Top -> New Stories reloads the feed; and a
       story LINK opens the article in the WebView with the comment sheet's button strip under
       it. See "harmonic: the four dead interactions" below.
-- [ ] harmonic remaining: the welcome dialog's preset buttons paint black, `@mipmap/ic_launcher`
-      is an unhandled `<adaptive-icon>`, the settings row pitch is ~3% tall, and story rows have
-      no preview thumbnails or favicons.
+- [ ] harmonic remaining: the two dialog defects written up under "The dialog card that was a
+      blob", plus the settings row pitch being ~3% tall and story rows having no preview
+      thumbnails or favicons.
 - [ ] Among Us (IL2CPP ARM64 — extremely hard, best effort)
 
 ## Infrastructure delivered
@@ -348,8 +373,9 @@ screen — any direct fillText in the framework must set its own.)
   with deltas against a saved baseline: how two runs compare on cost, not just on pixels),
   `corpus [apk ...]` (boot every apk in apks/ headlessly and rank the gaps by how many apks
   reach them -- needs `bun run dev`, needs no goldens; see "The corpus, and what it is for"),
-  `nrun <apk> <lib.so>` (load one ARM32 library headless and run its JNI_OnLoad — the fastest
-  way to shake out the CPU/libc/JNI layers), `ndbg` (the same over a booted page),
+  `bun scripts/nrun.ts <apk> <lib.so>` (load one ARM32 library headless and run its JNI_OnLoad —
+  the fastest way to shake out the CPU/libc/JNI layers), `bun scripts/ndbg.ts` (the same over a
+  booted page),
   `dbg [flow] [stopAt] [outDir]` (walk an e2e flow until it wedges and dump the queue site,
   logs and missing list; frames land in webdroid-shots/dbg),
   `bun scripts/wheel.ts [flow] [stopAt] [px] [x|y]` (drive a screen with a REAL trackpad burst
@@ -366,9 +392,10 @@ screen — any direct fillText in the framework must set its own.)
   `fwtest [prefix ...]` (withhold our specs for those prefixes, run AOSP's own bytecode
   against the delegates, report coverage and what it reached -- see "The delegates").
 - browser: `http://localhost:4080/?apk=<file>` boots that apk on load (reload = rebundle +
-  reboot); `wd.{boot,app,tree,find,locateText,logs,rt,uiState,overlays,perf,perfReset,tap,
-  tapText,swipe,type,back,alive,reset,rnodes,measure,querydb,mainDbg,native,web,ticks,setGL}`
-  (src/main.ts) + the missing-API panel; `locateText` is what `tapText` and the e2e driver
+  reboot); `wd.{rt,uiState,overlays,perf,perfReset,mainDbg,setGL,logs,ticks,native,newObj,vcall,
+  linkInit,jni,scall,nativeLiars,boot,app,rnodes,back,web,unreadAttrs,tree,uiTree,find,
+  locateText,tap,tapText,swipe,alive,reset,type,enter,measure,querydb}` (src/main.ts)
+  + the missing-API panel; `locateText` is what `tapText` and the e2e driver
   resolve a label to device coords with, and `ticks` is how you tell a live frame loop from a
   throttled one; the
   missing list is `wd.rt.missing` (a Set) — there is no `wd.missing`. loop-bomb guard names
@@ -475,7 +502,9 @@ so on return it reports finished and ViewPager's computeScroll short-circuits, a
 scroll instead of settling it); a whole first pass of "the frame loop is crawling" was an
 artifact of it. ALWAYS check `document.visibilityState` and that `wd.ticks` advances before
 believing an in-browser observation; prefer the headless Playwright driver, whose page is
-genuinely visible. (An AudioContext keeps a hidden tab "audible" and restores ~15fps if you
+genuinely visible — a small script that drives a flow to step N and then evaluates a probe in
+the page is the tool, and `scripts/dbg.ts` is the committed version of that idea. The MCP
+browser is for *looking*, not for measuring. (An AudioContext keeps a hidden tab "audible" and restores ~15fps if you
 must drive one interactively.) Also: a fixed `sleep` is not a settle measurement. "One tap
 costs 8 seconds" was just an 8-second sleep; polling `perf.draws` until it stops changing gave
 130-580ms.
@@ -491,7 +520,7 @@ callback interfaces the dex implements (`DownloadListener`, `SensorEventListener
 interface auto-stubs and poisons the class that implements it), `TelephonyManager` ("phone"),
 `AudioManager.getMode/isMusicActive/isSpeakerphoneOn`, and one fabricated answer:
 `PackageManager.resolveActivity` returned null for the app's OWN manifest-declared `AdActivity`,
-which the SDK reads as "misconfigured" (the NOTES "phantom dialog" lesson again — a PackageManager
+which the SDK reads as "misconfigured" (the "phantom dialog" lesson again — a PackageManager
 answer is app state). With honest answers the SDK builds its ad URL inside a hidden `WebView`
 via JavaScript we never run, times itself out after 60s ("AdLoader timed out"), and posts
 NETWORK_ERROR to a null listener. Play Games: `getPackageInfo("com.android.vending")` throws
@@ -642,13 +671,6 @@ logs are quiet, find the callback the app is waiting for rather than the API it 
 
 Also worth remembering: `rt.register` stamps the ClassInfo onto the ctor, so registering two
 class names with one TS class silently swaps their identities.
-
-### Measure in a page that is actually drawing — the MCP tab is not one
-An in-browser probe reported `wd.ticks` unchanged over three seconds while
-`document.visibilityState` stayed "hidden": zero frames. Everything frame-driven has to be
-measured through the headless Playwright driver instead (a small script that drives a flow to
-step N and then evaluates a probe in the page is the tool; `scripts/dbg.ts` is the committed
-version of the same idea). The MCP browser is for *looking*, not for measuring.
 
 ## The dialog card that was a blob: Context.obtainStyledAttributes ignored the context
 harmonic's welcome dialog painted a 264px-radius blob instead of a 28dp card. The chain, all
@@ -1542,4 +1564,5 @@ Measured with `bun scripts/wheel.ts`: on a Compose LazyColumn (mihon), on our ow
 (fitnotes) and on a ViewPager page turn (fitnotes TRACK -> HISTORY) the trackpad lands on the same
 pixels as the mouse; on harmonic's RecyclerView it lands short of the drag by exactly the drag's
 fling. Scores across the change: fitnotes 43.07 -> 43.07, mihon-onboarding 17.56 -> 17.56,
-mihon-app 88.75 -> 88.83 (two identical runs differ by 0.5), harmonic 46.51 -> 46.37.
+mihon-app and harmonic unchanged within their run-to-run spread (two identical runs differ by
+0.5 on mihon-app, ~6 on harmonic).

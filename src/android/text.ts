@@ -167,7 +167,7 @@ rt.register({
 // extends one of these needs it to link with the real AOSP superclass/interfaces so
 // instanceof checks and getSpans(SomeBase.class) filtering (used to decide "does this
 // span need a TextPaint rebuild") actually match. Nothing in our Layout engine walks
-// spans yet (see NOTES.md "android.text layout stack"), so update*State/chooseHeight/
+// spans yet (see AGENTS.md "Infrastructure delivered"), so update*State/chooseHeight/
 // getSize/draw are abstract here exactly as in real Android — concrete leaf spans
 // (below, or any app-defined subclass) provide the bodies.
 class JCharacterStyle extends JObj {}

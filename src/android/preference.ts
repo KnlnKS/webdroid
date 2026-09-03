@@ -306,7 +306,8 @@ rt.register({ name: "android/preference/PreferenceScreen", ctor: JPreferenceScre
 rt.register({ name: "android/preference/CheckBoxPreference", ctor: JCheckBoxPreference, sup: "android/preference/Preference", methods: checkBoxMethods });
 rt.register({ name: "android/preference/ListPreference", ctor: JListPreference, sup: "android/preference/Preference", methods: listPrefMethods });
 // pure callback interfaces — apps implement these; left unregistered they'd auto-stub in
-// Runtime.link and poison downstream linking (see NOTES.md), same fix as dialog.ts:256.
+// Runtime.link and poison downstream linking (see AGENTS.md "VM and framework lessons"),
+// same fix as dialog.ts:256.
 for (const n of ["OnPreferenceClickListener", "OnPreferenceChangeListener"]) {
   rt.register({ name: "android/preference/Preference$" + n, ctor: class extends JObj {} });
 }

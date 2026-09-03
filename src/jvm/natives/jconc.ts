@@ -692,7 +692,7 @@ for (const n of ["java/util/concurrent/ConcurrentLinkedQueue", "java/util/Abstra
     methods: listMethods(),
   });
 }
-// unpark() is a no-op, so a parked thread only wakes on its own deadline (see NOTES: curThread is a global)
+// unpark() is a no-op, so a parked thread only wakes on its own deadline (see AGENTS.md "curThread is a global")
 const parkFor = (ms: number) => new Promise((r) => setTimeout(r, ms));
 rt.register({
   name: "java/util/concurrent/locks/LockSupport", ctor: class extends JObj {},
