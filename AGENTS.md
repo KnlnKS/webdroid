@@ -183,6 +183,17 @@ and its one accepted miss is `WindowExtensionsProvider`.
   `[object Object]` for every `Html.fromHtml` Spanned handed to a dialog or Toast. CharSequence
   parameters resolve through `csText` (Java `toString()`, so app classes work too); Spannables
   carry a JS `toString` for the sites that still coerce.
+- **Text width goes through measureText, never ctx.measureText**: the memo is keyed on (font,
+  string) and applies letterSpacing, and it is what counts the calls. JTextView walked past it
+  for years -- harmonic makes 229,334 text measurements per run and 745 of them miss.
+- **The framework's own layouts are inflatable**: SearchView reads ?attr/searchViewStyle and
+  inflates the layout it names, icons and backgrounds included. `<view class="a.b.C"/>` is how
+  AOSP writes a tag whose class is not a legal element name; the framework uses it. Prefer this
+  to describing a widget's internals here -- the assets and the ids are all real now.
+- **Two negative results, kept so they are not redone**: indexing a tag's attributes by id is a
+  wash at 6 attributes per tag (0.40ms vs 0.39ms over every framework layout tag), and applying
+  a background drawable's padding to its view -- which AOSP does -- moves no flow. Neither is in
+  the tree. Do not re-add either without a measurement that asks for it.
 - **A widget resolves its own default style**: initViewFromCtx takes the widget's style attribute
   (buttonStyle, editTextStyle, ...) and passes it to obtainStyled as defStyleAttr, for the base
   View attributes as well as the text ones. Without it tiers 3 and 4 of the cascade are dead for
