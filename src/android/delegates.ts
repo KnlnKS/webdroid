@@ -21,6 +21,13 @@ import {
 } from "./graphics";
 import { charsToString } from "../jvm/abi";
 import { JPath, pathBounds, pathOffset, pathTransform } from "./path";
+import {
+  Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, resolveStyleValue, rvString,
+  currentResources, T_STR, T_PX, type RV,
+} from "./res";
+import { TV } from "./axml";
+import { jarray } from "../jvm/abi";
+import { device } from "../shell/config";
 
 // ── handles ────────────────────────────────────────────────────────────────────────────
 const objs: (object | undefined)[] = [undefined];
@@ -756,4 +763,218 @@ function rect(l: number, t: number, r: number, b: number): JRect {
 function applyMatrix(c: JCanvas, m: Mat, replace: boolean) {
   if (replace) c.ctx.setTransform(m[0], m[3], m[1], m[4], m[2], m[5]);
   else c.ctx.transform(m[0], m[3], m[1], m[4], m[2], m[5]);
+}
+
+// ── android.content.res.AssetManager ───────────────────────────────────────────────────
+// B3. The handle is a Resources — the same object our own resource stack reads through, so
+// AOSP's Resources/TypedArray/Theme bytecode and ours answer off one arsc.ts.
+//
+// AOSP's TypedArray is a flat int[]: STYLE_NUM_ENTRIES ints per attribute, in the order
+// (type, data, assetCookie, resourceId, changingConfigurations, density, sourceResourceId).
+// applyStyle fills it, and every getX() on the Java side reads back out of it, so getting
+// the stride or the order wrong is not a visible error — it is silently the wrong attribute.
+const STYLE_NUM_ENTRIES = 7;
+const assets = (h: bigint) => deref<Resources>(h);
+
+/** one attribute's slot in AOSP's TypedArray layout */
+function writeSlot(out: Int32Array, i: number, v: RV | null, srcId: number) {
+  const at = i * STYLE_NUM_ENTRIES;
+  out.fill(0, at, at + STYLE_NUM_ENTRIES);
+  if (!v || v.t === TV.NULL) return;
+  out[at] = v.t === T_STR ? TV.STRING : v.t === T_PX ? TV.DIMENSION : v.t;
+  // FLOAT is carried decoded here and as bits on the Java side
+  out[at + 1] = v.t === TV.FLOAT ? floatBits(v.d) : v.d | 0;
+  out[at + 3] = srcId;
+  out[at + 5] = device.densityDpi;
+}
+const fbits = new DataView(new ArrayBuffer(4));
+const floatBits = (f: number) => { fbits.setFloat32(0, f); return fbits.getInt32(0); };
+
+delegate("android/content/res/AssetManager", {
+  "nativeCreate()J": () => handle(currentResources() ?? new Resources(null, {})),
+  "nativeDestroy(J)V": () => {},
+  "nativeSetApkAssets(J[Landroid/content/res/ApkAssets;ZZ)V": () => {},
+  "nativeSetConfiguration(JIILjava/lang/String;[Ljava/lang/String;IIIIIIIIIIIIIIIIZ)V": () => {},
+  "nativeSetResourceResolutionLoggingEnabled(JZ)V": () => {},
+  "nativeGetLastResourceResolution(J)Ljava/lang/String;": () => "",
+  "nativeContainsAllocatedTable(J)Z": () => 0,
+  "getGlobalAssetCount()I": () => 0,
+  "getGlobalAssetManagerCount()I": () => 1,
+  "getAssetAllocations()Ljava/lang/String;": () => "",
+
+  // resource reads: every one of these is a lookup arsc.ts already answers
+  "nativeGetResourceValue(JISLandroid/util/TypedValue;Z)I": (h: bigint, id: number, _dens: number, tv: TypedValueLike, resolve: number) => {
+    const res = assets(h);
+    const v = resolve ? res.ref(id) : res.value(id);
+    return fillTypedValue(res, tv, v, id);
+  },
+  "nativeGetResourceIdentifier(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I": (h: bigint, name: string, type: string, pkg: string) =>
+    assets(h).idFor(type ?? "", name ?? "", pkg ?? ""),
+  "nativeGetResourceName(JI)Ljava/lang/String;": (h: bigint, id: number) => {
+    const r = assets(h);
+    const t = r.idType(id), n = r.idName(id);
+    return t && n ? `${pkgOf(r, id)}:${t}/${n}` : null;
+  },
+  "nativeGetResourceEntryName(JI)Ljava/lang/String;": (h: bigint, id: number) => assets(h).idName(id) || null,
+  "nativeGetResourceTypeName(JI)Ljava/lang/String;": (h: bigint, id: number) => assets(h).idType(id) || null,
+  "nativeGetResourcePackageName(JI)Ljava/lang/String;": (h: bigint, id: number) => pkgOf(assets(h), id),
+  "nativeGetResourceArraySize(JI)I": (h: bigint, id: number) => assets(h).bag(id)?.map.size ?? -1,
+  "nativeGetResourceArray(JI[I)I": (h: bigint, id: number, out: Int32Array) => {
+    const res = assets(h);
+    const bag = res.bag(id);
+    if (!bag) return -1;
+    [...bag.map].forEach(([key, v], i) => writeSlot(out, i, res.resolveRefs(v), key));
+    return bag.map.size;
+  },
+  "nativeGetResourceIntArray(JI)[I": (h: bigint, id: number) => {
+    const res = assets(h);
+    const bag = res.bag(id);
+    return bag ? Int32Array.from(bag.map.values(), (v) => res.resolveRefs(v).d | 0) : null;
+  },
+  "nativeGetResourceStringArray(JI)[Ljava/lang/String;": (h: bigint, id: number) => {
+    const res = assets(h);
+    const bag = res.bag(id);
+    if (!bag) return null;
+    return jarray([...bag.map.values()].map((v) => rvString(res, res.resolveRefs(v))), "Ljava/lang/String;");
+  },
+  "nativeGetResourceStringArrayInfo(JI)[I": (h: bigint, id: number) => {
+    const bag = assets(h).bag(id);
+    // (cookie, index) per entry; nothing here reads a string pool by index
+    return bag ? new Int32Array(bag.map.size * 2).fill(-1) : null;
+  },
+  "nativeGetResourceBagValue(JIILandroid/util/TypedValue;)I": (h: bigint, id: number, attrId: number, tv: TypedValueLike) => {
+    const res = assets(h);
+    const v = res.styleLookup(id, attrId);
+    return fillTypedValue(res, tv, v && res.resolveRefs(v), id);
+  },
+  "nativeGetStyleAttributes(JI)[I": (h: bigint, id: number) => {
+    const bag = assets(h).bag(id);
+    return bag ? Int32Array.from(bag.map.keys()) : null;
+  },
+
+  // themes: a JTheme is the stack of styles applied to it, which is what AOSP's is too
+  "nativeThemeCreate(J)J": (h: bigint) => {
+    const t = new JTheme();
+    t.res = assets(h);
+    return handle(t);
+  },
+  "nativeGetThemeFreeFunction()J": () => FINALIZER,
+  "nativeThemeApplyStyle(JJIZ)V": (_h: bigint, th: bigint, styleId: number) => deref<JTheme>(th).apply(styleId),
+  "nativeThemeCopy(JJJJ)V": (_a: bigint, dst: bigint, _b: bigint, src: bigint) => {
+    const d = deref<JTheme>(dst), s = deref<JTheme>(src);
+    d.res = s.res; d.styles = s.styles.slice(); d.cache.clear();
+  },
+  "nativeThemeRebase(JJ[I[ZI)V": (h: bigint, th: bigint, styleIds: Int32Array, _force: Uint8Array, n: number) => {
+    const t = deref<JTheme>(th);
+    t.res = assets(h); t.styles = []; t.cache.clear();
+    for (let i = 0; i < n; i++) t.apply(styleIds[i]);
+  },
+  "nativeThemeGetAttributeValue(JJILandroid/util/TypedValue;Z)I": (h: bigint, th: bigint, attrId: number, tv: TypedValueLike, resolve: number) => {
+    const res = assets(h);
+    const t = deref<JTheme>(th);
+    const v = t.lookup(attrId);
+    return fillTypedValue(res, tv, resolve ? resolveStyleValue(res, t, v) : v, attrId);
+  },
+  "nativeThemeGetChangingConfigurations(J)I": () => 0,
+  "nativeThemeDump(JJILjava/lang/String;Ljava/lang/String;)V": () => {},
+  "nativeGetParentThemeIdentifier(JI)I": (h: bigint, id: number) => assets(h).bag(id)?.parent ?? 0,
+
+  // obtainStyledAttributes, which is what every widget constructor is really doing
+  "nativeApplyStyle(JJIIJ[IJJ)V": (h: bigint, th: bigint, defStyleAttr: number, defStyleRes: number, xml: bigint, attrIds: Int32Array, outValues: bigint, outIndices: bigint) => {
+    const res = assets(h);
+    const ta = obtainStyled(res, th ? deref<JTheme>(th) : null, xml ? deref<JAttrSet>(xml) : null, attrIds, defStyleAttr, defStyleRes);
+    fillStyleArrays(res, ta, attrIds, deref<Int32Array>(outValues), deref<Int32Array>(outIndices));
+  },
+  "nativeResolveAttrs(JJII[I[I[I[I)Z": (h: bigint, th: bigint, defStyleAttr: number, defStyleRes: number, _values: Int32Array, attrIds: Int32Array, outValues: Int32Array, outIndices: Int32Array) => {
+    const res = assets(h);
+    const ta = obtainStyled(res, th ? deref<JTheme>(th) : null, null, attrIds, defStyleAttr, defStyleRes);
+    fillStyleArrays(res, ta, attrIds, outValues, outIndices);
+    return 1;
+  },
+  "nativeRetrieveAttributes(JJ[I[I[I)Z": (h: bigint, xml: bigint, attrIds: Int32Array, outValues: Int32Array, outIndices: Int32Array) => {
+    const res = assets(h);
+    const ta = obtainStyled(res, null, xml ? deref<JAttrSet>(xml) : null, attrIds, 0, 0);
+    fillStyleArrays(res, ta, attrIds, outValues, outIndices);
+    return 1;
+  },
+  "nativeAttributeResolutionStack(JJIII)[I": () => new Int32Array(0),
+
+  // asset streams: an apk's assets/ and its res/ files are entries in the zip we already hold
+  "nativeOpenAsset(JLjava/lang/String;I)J": (h: bigint, path: string) => openAsset(assets(h), "assets/" + path),
+  "nativeOpenNonAsset(JILjava/lang/String;I)J": (h: bigint, _cookie: number, path: string) => openAsset(assets(h), path),
+  "nativeAssetDestroy(J)V": (a: bigint) => { objs[Number(a)] = undefined; },
+  "nativeAssetGetLength(J)J": (a: bigint) => BigInt(deref<Cursor>(a).bytes.length),
+  "nativeAssetGetRemainingLength(J)J": (a: bigint) => { const c = deref<Cursor>(a); return BigInt(c.bytes.length - c.pos); },
+  "nativeAssetReadChar(J)I": (a: bigint) => { const c = deref<Cursor>(a); return c.pos < c.bytes.length ? c.bytes[c.pos++] : -1; },
+  "nativeAssetRead(J[BII)I": (a: bigint, out: Int8Array, off: number, len: number) => {
+    const c = deref<Cursor>(a);
+    const n = Math.min(len, c.bytes.length - c.pos);
+    if (n <= 0) return -1;
+    out.set(c.bytes.subarray(c.pos, c.pos + n) as unknown as Int8Array, off);
+    c.pos += n;
+    return n;
+  },
+  "nativeAssetSeek(JJI)J": (a: bigint, off: bigint, whence: number) => {
+    const c = deref<Cursor>(a);
+    const base = whence === 0 ? 0 : whence === 1 ? c.pos : c.bytes.length;
+    c.pos = Math.max(0, Math.min(c.bytes.length, base + Number(off)));
+    return BigInt(c.pos);
+  },
+  "nativeList(JLjava/lang/String;)[Ljava/lang/String;": (h: bigint, path: string) => {
+    const dir = "assets/" + (path ? path + "/" : "");
+    const names = new Set<string>();
+    for (const k of Object.keys(assets(h).zip)) {
+      if (k.startsWith(dir) && k.length > dir.length) names.add(k.slice(dir.length).split("/")[0]);
+    }
+    return jarray([...names].sort(), "Ljava/lang/String;");
+  },
+  // a file descriptor is a host concept there is nothing behind here; callers fall back to
+  // the stream forms above when these return null
+  "nativeOpenAssetFd(JLjava/lang/String;[J)Landroid/os/ParcelFileDescriptor;": () => null,
+  "nativeOpenNonAssetFd(JILjava/lang/String;[J)Landroid/os/ParcelFileDescriptor;": () => null,
+
+  // the overlay/locale queries: no apk here is an overlay, and one device profile means one
+  // locale and one configuration
+  "nativeGetLocales(JZ)[Ljava/lang/String;": () => jarray([device.lang], "Ljava/lang/String;"),
+  "nativeGetSizeConfigurations(J)[Landroid/content/res/Configuration;": () => null,
+  "nativeGetSizeAndUiModeConfigurations(J)[Landroid/content/res/Configuration;": () => null,
+  "nativeGetOverlayableMap(JLjava/lang/String;)Ljava/util/Map;": () => null,
+  "nativeGetOverlayablesToString(JLjava/lang/String;)Ljava/lang/String;": () => null,
+  "nativeGetAssignedPackageIdentifiers(JZZ)Landroid/util/SparseArray;": () => null,
+});
+
+interface Cursor { bytes: Uint8Array; pos: number }
+/** an asset stream over a zip entry; 0 is what AOSP returns for "no such asset" */
+function openAsset(res: Resources, path: string): bigint {
+  const bytes = res.zip[path] ?? res.arsc?.files(path);
+  return bytes ? handle({ bytes, pos: 0 } as Cursor) : 0n;
+}
+
+interface TypedValueLike { type: number; data: number; resourceId: number; density: number; string: unknown; assetCookie: number; changingConfigurations: number }
+
+/** an RV into the TypedValue the caller passed, returning the block index AOSP returns */
+function fillTypedValue(res: Resources, tv: TypedValueLike, v: RV | null, srcId: number): number {
+  if (!v || v.t === TV.NULL) { tv.type = TV.NULL; tv.data = 0; return -1; }
+  tv.type = v.t === T_STR ? TV.STRING : v.t === T_PX ? TV.DIMENSION : v.t;
+  tv.data = v.t === TV.FLOAT ? floatBits(v.d) : v.d | 0;
+  tv.resourceId = srcId;
+  tv.density = device.densityDpi;
+  tv.assetCookie = 0;
+  tv.changingConfigurations = 0;
+  tv.string = v.t === TV.STRING || v.t === T_STR ? rvString(res, v) : null;
+  return 0;
+}
+
+/** the package a resource id belongs to: 0x01 is always the framework */
+const pkgOf = (r: Resources, id: number) => (id >>> 24 === 0x01 ? "android" : r.arsc?.pkgName ?? "");
+
+function fillStyleArrays(res: Resources, ta: JTypedArray, attrIds: ArrayLike<number>, outValues: Int32Array, outIndices: Int32Array | undefined) {
+  let found = 0;
+  for (let i = 0; i < attrIds.length; i++) {
+    const v = resolveStyleValue(res, ta.theme, ta.vals[i] ?? null);
+    writeSlot(outValues, i, v, attrIds[i]);
+    // outIndices[0] is the count and the rest are the 1-based positions that were set
+    if (v && v.t !== TV.NULL && outIndices) outIndices[++found] = i;
+  }
+  if (outIndices) outIndices[0] = found;
 }

@@ -80,6 +80,9 @@ interface Bag { parent: number; map: Map<number, RV>; }
  */
 let configGen = 0;
 const allResources: Resources[] = [];
+/** the booted app's Resources — the framework package is an Arsc, not one of these, so the
+ *  most recent is the app's. AOSP's AssetManager handle is this (src/android/delegates.ts). */
+export function currentResources(): Resources | null { return allResources[allResources.length - 1] ?? null; }
 export function setResourceNight(night: boolean): void {
   configGen++;
   selCache.clear();

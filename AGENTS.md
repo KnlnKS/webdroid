@@ -360,7 +360,9 @@ screen — any direct fillText in the framework must set its own.)
   Android SDK, but nothing else does -- the apk is committed),
   `gen-framework` (pull framework.jar + framework-res.apk off the booted reference AVD into
   vendor/aosp and verify the two halves name the same resources -- see "One build, or none"),
-  `fwscan [jar] [prefix]` (what a dex would ask of us: classes, methods, natives).
+  `fwscan [jar] [prefix]` (what a dex would ask of us: classes, methods, natives),
+  `fwtest [prefix ...]` (withhold our specs for those prefixes, run AOSP's own bytecode
+  against the delegates, report coverage and what it reached -- see "The delegates").
 - browser: `http://localhost:4080/?apk=<file>` boots that apk on load (reload = rebundle +
   reboot); `wd.{boot,app,tree,find,locateText,logs,rt,uiState,overlays,perf,perfReset,tap,
   tapText,swipe,type,back,alive,reset,rnodes,measure,querydb,mainDbg,native,web,ticks,setGL}`
@@ -835,6 +837,53 @@ from the leaves; the numbers say it moves the problem rather than shrinking it.
 Of the 703, RenderNode (58), HardwareRenderer (20), SurfaceControl (15), Surface (10) and the
 RenderNode animators (22) are behind `mAttachInfo.mHardwareAccelerated`, which RTA cannot see
 is false. Forcing the software draw path — what layoutlib does — takes ~125 off the top.
+
+## The delegates: AOSP's native halves (B1 and B3)
+A class served by AOSP bytecode (see provenance above) keeps its Java half and loses its
+native half. `src/android/delegates.ts` is the native half: `Paint.nInit()J`,
+`Matrix.nPreScale(JFF)V`, `AssetManager.nativeApplyStyle(JJIIJ[IJJ)V` — the exact descriptors
+the framework's own bytecode calls, registered through `rt.registerJni`. The `long` a
+framework class holds in `mNativePtr` is an index into a table there, which is layoutlib's
+DelegateManager: framework Java owns a handle, we own the object.
+
+**Nothing in it is written from a list.** `bun run fwtest [prefix ...]` withholds our native
+specs for the named prefixes, loads the real classes out of vendor/aosp/framework.jar and
+reports two numbers: how many of the natives the dex declares we implement (coverage), and
+what the bytecode actually reached and could not find (evidence). Every delegate is there
+because that said so.
+
+    Paint 86/86   Canvas 33/33   BaseCanvas 32/32   Matrix 40/40   Path 43/43
+    Typeface 17/17   AssetManager 53/55
+    ok  new Paint()  new Matrix()  new Path()  — real bytecode, headless
+    ok  nativeGetResourceIdentifier / nativeGetResourceValue / nativeApplyStyle
+
+Things worth keeping:
+- **The draw bodies are not duplicated.** Every `nDraw*` routes into `canvasMethods`, the
+  table our own Canvas native already uses; it is exported for that and nothing else. Same
+  for Path's three coordinate walks, which moved out of the method table into `pathBounds`/
+  `pathOffset`/`pathTransform`.
+- **Matrix is NOT JMatrix.** AOSP's is a full 3x3 and a 6-element affine cannot hold a
+  perspective, so setPolyToPoly and every perspective map would quietly flatten.
+- **AOSP's TypedArray is a flat int[]** with STYLE_NUM_ENTRIES=7 ints per attribute in the
+  order (type, data, assetCookie, resourceId, changingConfigurations, density,
+  sourceResourceId). Getting the stride or the order wrong is not a visible error — it is
+  silently the wrong attribute.
+- **Where Canvas2D has no form for something, do nothing rather than something wrong.**
+  getTextPath leaves the path empty rather than filling it with wrong geometry; setPolyToPoly
+  reports failure for the 4-point perspective solve; positioned glyph ids need a shaping
+  engine there is none of.
+- **BaseRecordingCanvas stays unimplemented on purpose.** It is the display-list path, and
+  forcing the software draw path is the whole reason RenderNode (58), HardwareRenderer (20)
+  and SurfaceControl (15) are off the boundary. Registering its draw ops re-opens it.
+
+Two absent classes had to come first, and only real bytecode finds them: every framework
+graphics class hands its finalizer to `libcore/util/NativeAllocationRegistry` from a
+`<clinit>`, and `android/compat/Compatibility` gates behaviour on targetSdk. Without them the
+class fails to initialize before any of the work is reached. `android/graphics/Color` also had
+no colour-long API at all, which killed every `Paint.setColor` — it caches `Color.pack(int)`.
+
+Left: Bitmap (46), the decoders, and `nativeOpenXmlAsset` with the XmlBlock pull parser
+behind it, which is the layout-inflation path and the next thing the view stack needs.
 
 ## The corpus, and what it is for
 `bun run corpus` boots every apk in apks/ headlessly and ranks each gap by how many apks

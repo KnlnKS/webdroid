@@ -114,6 +114,55 @@ await exercise("new Path()", async () => {
   await vcall(p, "close", "()V");
 });
 
+// The resource delegates are exercised against the real framework table rather than through
+// bytecode: constructing an AOSP Resources needs ResourcesImpl, a Configuration and a
+// DisplayMetrics, none of which says anything more about whether the lookups are right.
+if (existsSync("vendor/aosp/framework-res.apk")) {
+  const { Arsc } = await import("../src/android/arsc");
+  const { Resources, setFramework } = await import("../src/android/res");
+  const { handle } = await import("../src/android/delegates");
+  const apk = unzipSync(new Uint8Array(await Bun.file("vendor/aosp/framework-res.apk").arrayBuffer()), { filter: (f) => f.name === "resources.arsc" });
+  const arsc = new Arsc(apk["resources.arsc"]);
+  setFramework(arsc);
+  const am = handle(new Resources(arsc, {}));
+  const call = (sig: string, ...a: unknown[]) => {
+    const fn = rt.jniFn("android/content/res/AssetManager", sig);
+    if (!fn) throw new Error(`no delegate for ${sig}`);
+    return (fn as (...x: unknown[]) => unknown)(am, ...a);
+  };
+
+  await exercise("AssetManager.nativeGetResourceIdentifier", async () => {
+    const id = call("nativeGetResourceIdentifier(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "ok", "string", "android") as number;
+    if ((id >>> 24) !== 0x01) throw new Error(`android:string/ok resolved to 0x${(id >>> 0).toString(16)}`);
+    const name = call("nativeGetResourceName(JI)Ljava/lang/String;", id);
+    if (name !== "android:string/ok") throw new Error(`name round-tripped as ${name}`);
+  });
+
+  await exercise("AssetManager.nativeGetResourceValue", async () => {
+    const id = call("nativeGetResourceIdentifier(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "ok", "string", "android") as number;
+    const tv = { type: 0, data: 0, resourceId: 0, density: 0, string: null as unknown, assetCookie: 0, changingConfigurations: 0 };
+    const block = call("nativeGetResourceValue(JISLandroid/util/TypedValue;Z)I", id, 0, tv, 1);
+    if (block !== 0 || tv.string !== "OK") throw new Error(`block ${block}, string ${JSON.stringify(tv.string)}`);
+  });
+
+  await exercise("AssetManager.nativeApplyStyle (obtainStyledAttributes)", async () => {
+    // com.android.internal.R.styleable.View's first entry is android:id; asking a real theme
+    // for the View styleable is what every widget constructor does
+    const theme = call("nativeThemeCreate(J)J") as bigint;
+    const styleId = call("nativeGetResourceIdentifier(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "Theme.Material.Light", "style", "android") as number;
+    if (!styleId) throw new Error("no android:style/Theme.Material.Light");
+    call("nativeThemeApplyStyle(JJIZ)V", theme, styleId, 1);
+    const attrs = Int32Array.of(
+      call("nativeGetResourceIdentifier(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "textColorPrimary", "attr", "android") as number,
+      call("nativeGetResourceIdentifier(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "colorBackground", "attr", "android") as number,
+    );
+    const values = new Int32Array(attrs.length * 7);
+    const indices = new Int32Array(attrs.length + 1);
+    call("nativeApplyStyle(JJIIJ[IJJ)V", theme, 0, 0, 0n, attrs, handle(values), handle(indices));
+    if (indices[0] === 0) throw new Error("the theme resolved none of the two attributes");
+  });
+}
+
 if (gaps.length) {
   console.log(`\n${gaps.length} declared natives with no delegate, first 30:`);
   for (const g of gaps.slice(0, 30)) console.log("  " + g);
