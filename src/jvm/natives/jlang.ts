@@ -1276,11 +1276,15 @@ rt.register({
   name: "java/lang/ThreadLocal", ctor: JThreadLocal,
   methods: {
     "<init>()V": function () {},
+    // curThread is a global: pin the thread BEFORE initialValue suspends, or the value is
+    // stored on whichever thread happened to be current when it resolved and read back as null.
     "get()Ljava/lang/Object;": async function (this: JThreadLocal) {
-      if (!curThread.locals.has(this)) {
-        curThread.locals.set(this, await vcall(this, "initialValue", "()Ljava/lang/Object;"));
+      const t = curThread;
+      if (!t.locals.has(this)) {
+        const v = await vcall(this, "initialValue", "()Ljava/lang/Object;");
+        if (!t.locals.has(this)) t.locals.set(this, v);
       }
-      return curThread.locals.get(this) ?? null;
+      return t.locals.get(this) ?? null;
     },
     "set(Ljava/lang/Object;)V": function (this: JThreadLocal, v: unknown) { curThread.locals.set(this, v); },
     "remove()V": function (this: JThreadLocal) { curThread.locals.delete(this); },
