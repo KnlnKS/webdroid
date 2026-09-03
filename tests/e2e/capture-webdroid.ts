@@ -3,9 +3,10 @@
 // The entry point is run.ts; this module only captures.
 import { mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import type { WebdroidDriver } from "./drivers/webdroid";
+import { ENV_SCREEN, type WebdroidDriver } from "./drivers/webdroid";
 import { E2E_DIR, sleep } from "./lib/util";
-import { PINNED_CLOCK_MS, uiFileFor, type Flow, type Manifest, type RecordedStep, type Step } from "./types";
+import { PINNED_CLOCK_MS, screenOf, uiFileFor, type Flow, type Manifest, type RecordedStep, type Step } from "./types";
+import { parseScreen } from "../../src/shell/config";
 
 export type StepRun = {
   id: string; index: number; file: string;
@@ -91,7 +92,8 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver): Promise<Step
 
   console.log(`\n=== webdroid: ${flow.app} (${flow.steps.length} steps) ===`);
   await drv.setClock(flow.liveClock ? Date.now() : PINNED_CLOCK_MS);
-  await drv.reset();
+  // The goldens' own geometry, unless the run is deliberately pinned elsewhere to measure cost.
+  await drv.reset(parseScreen(ENV_SCREEN) ?? screenOf(manifest));
   if (flow.seedPrefs) await drv.seedPrefs(flow.pkg, flow.seedPrefs);
 
   const runs: StepRun[] = [];

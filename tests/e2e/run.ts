@@ -1,6 +1,8 @@
 // `bun run e2e` — capture webdroid, diff against the committed goldens, report.
 // Never starts, queries, or requires an Android emulator.
-import { WebdroidDriver } from "./drivers/webdroid";
+import { ENV_SCREEN, WebdroidDriver } from "./drivers/webdroid";
+import { sameScreen, screenOf, screenParam } from "./types";
+import { parseScreen } from "../../src/shell/config";
 import { captureFlow, loadManifest, prepareShots, type StepRun } from "./capture-webdroid";
 import { diffFlow, writeReport } from "./score";
 import { printFlow, printSmoke, type FlowReport } from "./lib/report";
@@ -22,7 +24,17 @@ try {
 const reports: FlowReport[] = [];
 for (const f of flows) {
   // A flow without goldens is a smoke target: rendered/wedged/missing/fps, no pixel score.
-  if (!await loadManifest(f.app)) { printSmoke(f.app, runs.get(f.app) ?? []); continue; }
+  const manifest = await loadManifest(f.app);
+  if (!manifest) { printSmoke(f.app, runs.get(f.app) ?? []); continue; }
+  // So is a flow the run pinned to some other geometry. The goldens are pixels at one size, so
+  // a run at any other size measures cost, never fidelity — and saying so here means the gate
+  // cannot be passed at the wrong size by accident.
+  const pinned = parseScreen(ENV_SCREEN);
+  if (pinned && !sameScreen(pinned, screenOf(manifest))) {
+    console.log(`\n--- ${f.app} (smoke: ran at ${screenParam(pinned)}, goldens are ${screenParam(screenOf(manifest))}) ---`);
+    printSmoke(f.app, runs.get(f.app) ?? []);
+    continue;
+  }
   const r = await diffFlow(f, runs.get(f.app));
   printFlow(r);
   reports.push(r);
@@ -32,7 +44,7 @@ if (!reports.length) {
   process.exit(0);
 }
 
-const out = await writeReport(reports);
+const out = await writeReport(reports, screenParam(drv.screen));
 // smoke flows (no goldens) never appear in the report, so compare against the scorable set
 let scorable = 0;
 for (const f of FLOWS) if (await loadManifest(f.app)) scorable++;

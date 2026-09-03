@@ -61,7 +61,8 @@ export function diffImages(
   if (golden.width !== actual.width || golden.height !== actual.height) {
     throw new Error(
       `size mismatch: golden ${golden.width}x${golden.height} vs actual ${actual.width}x${actual.height}. ` +
-      `Both must be the raw 720x1280 framebuffer — no rescaling is permitted into the metric.`,
+      `Both must be the raw ${golden.width}x${golden.height} framebuffer the goldens were ` +
+      `recorded at — no rescaling is permitted into the metric.`,
     );
   }
   const g = crop(golden, box);

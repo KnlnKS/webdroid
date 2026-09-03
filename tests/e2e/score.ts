@@ -6,7 +6,7 @@ import { loadPng, savePng, hconcat } from "./lib/png";
 import { diffImages } from "./lib/diff";
 import { html, printFlow, type FlowReport, type StepReport } from "./lib/report";
 import { parseArgs } from "./lib/args";
-import { uiFileFor, type Flow, type Manifest, type RecordedStep, type Step, type UiNode } from "./types";
+import { screenOf, screenParam, uiFileFor, type Flow, type Manifest, type RecordedStep, type Step, type UiNode } from "./types";
 import { diffTrees } from "./lib/tree";
 import type { StepRun } from "./capture-webdroid";
 import { E2E_DIR, sha1 } from "./lib/util";
@@ -112,11 +112,11 @@ export async function diffFlow(flow: Flow, runs?: StepRun[]): Promise<FlowReport
   };
 }
 
-export async function writeReport(reports: FlowReport[]): Promise<string> {
+export async function writeReport(reports: FlowReport[], geometry: string): Promise<string> {
   const dir = `${E2E_DIR}report`;
   await mkdir(dir, { recursive: true });
   const generatedAt = new Date().toISOString();
-  await Bun.write(`${dir}/index.html`, html(reports, generatedAt));
+  await Bun.write(`${dir}/index.html`, html(reports, generatedAt, geometry));
   await Bun.write(`${dir}/report.json`, JSON.stringify({ generatedAt, reports }, null, 2));
   return `${dir}/index.html`;
 }
@@ -129,6 +129,8 @@ if (import.meta.main) {
     printFlow(r);
     reports.push(r);
   }
-  const out = await writeReport(reports);
+  // scored flows all share the goldens' geometry — diffImages would have thrown otherwise
+  const first: Manifest = await Bun.file(`${E2E_DIR}golden/${flows[0].app}/manifest.json`).json();
+  const out = await writeReport(reports, screenParam(screenOf(first)));
   console.log(`\nreport: ${out}`);
 }

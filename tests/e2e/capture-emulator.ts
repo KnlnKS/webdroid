@@ -8,7 +8,7 @@
 import { mkdir, rm } from "node:fs/promises";
 import * as emu from "./drivers/emulator";
 import { parseArgs } from "./lib/args";
-import { PINNED_CLOCK_MS, SCREEN_W, SCREEN_H, uiFileFor, type Flow, type Manifest, type RecordedStep } from "./types";
+import { PINNED_CLOCK_MS, uiFileFor, type Flow, type Manifest, type RecordedStep } from "./types";
 import { E2E_DIR, sleep } from "./lib/util";
 import { device as profile } from "../../src/shell/config";
 
@@ -20,10 +20,10 @@ async function ensureDevice() {
     throw new Error("no emulator attached — run `bash tests/e2e/boot-emulator.sh` first");
   }
   const info = await emu.deviceInfo();
-  if (info.width !== SCREEN_W || info.height !== SCREEN_H || info.densityDpi !== profile.densityDpi) {
+  if (info.width !== profile.width || info.height !== profile.height || info.densityDpi !== profile.densityDpi) {
     throw new Error(
       `device is ${info.width}x${info.height} @${info.densityDpi}dpi — the goldens must come from ` +
-      `${SCREEN_W}x${SCREEN_H} @${profile.densityDpi}dpi so no rescaling enters the metric. Use the webdroid_ref AVD.`,
+      `${profile.width}x${profile.height} @${profile.densityDpi}dpi so no rescaling enters the metric. Use the webdroid_ref AVD.`,
     );
   }
   return info;
@@ -95,11 +95,11 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
       }
       case "tapAt":
         resolved = { x: a.x, y: a.y };
-        await emu.tap(a.x * SCREEN_W, a.y * SCREEN_H);
+        await emu.tap(a.x * profile.width, a.y * profile.height);
         break;
       case "typeInto":
         resolved = { x: a.x, y: a.y };
-        await emu.tap(a.x * SCREEN_W, a.y * SCREEN_H);
+        await emu.tap(a.x * profile.width, a.y * profile.height);
         await sleep(700);
         await emu.typeText(a.text);
         await sleep(500);
@@ -113,8 +113,8 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
         await emu.back();
         break;
       case "swipe":
-        await emu.swipe(a.from[0] * SCREEN_W, a.from[1] * SCREEN_H,
-                        a.to[0] * SCREEN_W, a.to[1] * SCREEN_H, a.ms ?? 400);
+        await emu.swipe(a.from[0] * profile.width, a.from[1] * profile.height,
+                        a.to[0] * profile.width, a.to[1] * profile.height, a.ms ?? 400);
         break;
       case "settle":
         break;

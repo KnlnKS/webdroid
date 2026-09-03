@@ -110,9 +110,26 @@ export type Manifest = {
   steps: RecordedStep[];
 };
 
-// one source of truth with the emulator itself
-export const SCREEN_W = device.width;
-export const SCREEN_H = device.height;
+/**
+ * The geometry a comparison happens at. It is NOT the device profile: the goldens are pixels
+ * captured at one size, lib/diff.ts refuses any other, and the normalized taps a flow carries
+ * denormalize into that same space. So the manifest a run is scored against is what says how
+ * big the screen is, and `screenOf` reads it from there. The profile only answers for a flow
+ * with no goldens, and for the recorder — which is *defining* the geometry, not matching one.
+ */
+export type Screen = { width: number; height: number; densityDpi: number };
+
+export const screenOf = (m: Manifest | undefined): Screen =>
+  m ? { width: m.device.width, height: m.device.height, densityDpi: m.device.densityDpi } : deviceScreen();
+
+export const deviceScreen = (): Screen =>
+  ({ width: device.width, height: device.height, densityDpi: device.densityDpi });
+
+/** the `?screen=` the shell parses, and what setup-avd.sh prints */
+export const screenParam = (s: Screen): string => `${s.width}x${s.height}@${s.densityDpi}`;
+
+export const sameScreen = (a: Screen, b: Screen): boolean =>
+  a.width === b.width && a.height === b.height && a.densityDpi === b.densityDpi;
 
 /**
  * Fixed instant both sides pin to: 2026-01-02T12:00:00Z.

@@ -1,6 +1,9 @@
 // Emulator driver — adb + uiautomator. Imported ONLY by capture-emulator.ts.
 // Nothing on the diff path may reach this file; `bun run e2e` must work with no Android SDK.
-import { SCREEN_W, SCREEN_H, type UiNode } from "../types";
+// The recorder DEFINES the geometry a golden set is captured at, so it reads the device profile
+// directly rather than a manifest — the manifest is what it writes.
+import { device } from "../../../src/shell/config";
+import { type UiNode } from "../types";
 import { sleep, sha1 } from "../lib/util";
 
 const ADB = process.env.ADB ?? "adb";
@@ -126,7 +129,7 @@ export function findNode(nodes: UiNode[], text: string): UiNode | null {
     if (best < 0) continue;
     const area = (n.bounds[2] - n.bounds[0]) * (n.bounds[3] - n.bounds[1]);
     if (area <= 0) continue;
-    scored.push({ n, s: best + (n.clickable ? 15 : 0) - Math.min(14, area / (SCREEN_W * SCREEN_H) * 30) });
+    scored.push({ n, s: best + (n.clickable ? 15 : 0) - Math.min(14, area / (device.width * device.height) * 30) });
   }
   scored.sort((a, b) => b.s - a.s);
   return scored[0]?.n ?? null;
@@ -144,7 +147,7 @@ export const swipe = (x1: number, y1: number, x2: number, y2: number, ms = 400) 
 export const typeText = (s: string) =>
   shell(`input text ${JSON.stringify(s.replace(/ /g, "%s"))}`);
 
-export const norm = (x: number, y: number) => ({ x: x / SCREEN_W, y: y / SCREEN_H });
+export const norm = (x: number, y: number) => ({ x: x / device.width, y: y / device.height });
 
 export async function deviceInfo() {
   const [size, density, fp, sdk] = await Promise.all([

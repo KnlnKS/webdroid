@@ -99,7 +99,7 @@ export function printFlow(r: FlowReport): void {
   }
 }
 
-export function html(reports: FlowReport[], generatedAt: string): string {
+export function html(reports: FlowReport[], generatedAt: string, geometry: string): string {
   const bar = (v: number) =>
     `<span class="bar"><i style="width:${Math.min(100, v).toFixed(1)}%"></i></span>`;
   const rows = (r: FlowReport) => r.steps.map((s) => `
@@ -145,7 +145,7 @@ export function html(reports: FlowReport[], generatedAt: string): string {
   a { color:inherit }
 </style>
 <h1>webdroid vs. real Android — visual diff</h1>
-<div class="meta">generated ${esc(generatedAt)} &middot; 720&times;1280 @320dpi &middot; system bars cropped &middot;
+<div class="meta">generated ${esc(generatedAt)} &middot; ${esc(geometry)} &middot; system bars cropped &middot;
   <b>content</b> = tolerant mismatch over the union of both images' non-background pixels
   (the target metric &mdash; a blank render scores ~100% here, ~3% on whole-frame numbers).
   A step webdroid never rendered, because its main loop was wedged, scores a flat 100%: a

@@ -7,7 +7,8 @@ import { PNG } from "pngjs";
 import { WebdroidDriver } from "../tests/e2e/drivers/webdroid";
 import { applyStep, loadManifest, settleStep } from "../tests/e2e/capture-webdroid";
 import { FLOWS } from "../tests/e2e/flows";
-import { PINNED_CLOCK_MS, SCREEN_W, SCREEN_H } from "../tests/e2e/types";
+import { PINNED_CLOCK_MS } from "../tests/e2e/types";
+import { device } from "../src/shell/config";
 import { sleep } from "../tests/e2e/lib/util";
 
 const app = process.argv[2] ?? "harmonic";
@@ -73,7 +74,7 @@ async function trackpad(drv: WebdroidDriver, nx: number, ny: number, dx: number,
   // the listener maps CSS px back to framebuffer px, so the burst is expressed the way a
   // trackpad expresses it and the scaling is exercised rather than bypassed
   for (const k of w) {
-    await drv.page.mouse.wheel(dx * k / sum * r.w / SCREEN_W, dy * k / sum * r.h / SCREEN_H);
+    await drv.page.mouse.wheel(dx * k / sum * r.w / device.width, dy * k / sum * r.h / device.height);
     await sleep(16);
   }
   await sleep(300); // the burst has to go quiet before the gesture lifts
@@ -93,7 +94,7 @@ for (const [i, step] of flow.steps.entries()) {
 }
 
 const from: [number, number] = horiz ? [0.75, 0.5] : [0.5, 0.75];
-const to: [number, number] = horiz ? [0.75 - dist / SCREEN_W, 0.5] : [0.5, 0.75 - dist / SCREEN_H];
+const to: [number, number] = horiz ? [0.75 - dist / device.width, 0.5] : [0.5, 0.75 - dist / device.height];
 const base = (await drv.settle()).png, t0 = await tree(drv);
 await drv.swipe(from, to);
 const drag = (await drv.settle()).png, t1 = await tree(drv);

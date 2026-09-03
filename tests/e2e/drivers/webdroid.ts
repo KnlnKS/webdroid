@@ -2,7 +2,7 @@
 // Deliberately free of any Android/adb dependency: `bun run e2e` must run with no SDK present.
 import { mkdir } from "node:fs/promises";
 import { chromium, type Browser, type Page } from "playwright";
-import { SCREEN_W, SCREEN_H, PINNED_CLOCK_MS, type UiNode } from "../types";
+import { PINNED_CLOCK_MS, deviceScreen, screenParam, type Screen, type UiNode } from "../types";
 import { sleep, sha1, BASE_URL } from "../lib/util";
 
 
@@ -10,7 +10,19 @@ import { sleep, sha1, BASE_URL } from "../lib/util";
 // bundle, with those prefixes served by AOSP's own bytecode instead of our native specs. That
 // is how a cut becomes a measurement (PLAN.md's B2) rather than an edit and a rebuild.
 const CUT = process.env.WEBDROID_BYTECODE;
-const PAGE_URL = CUT ? `${BASE_URL}/?bytecode=${encodeURIComponent(CUT)}` : BASE_URL;
+
+/** `WEBDROID_SCREEN=1080x2424@480` overrides the geometry every flow runs at — which un-scores
+ *  the run, because the goldens are pixels at one size. That is the point: it measures cost. */
+export const ENV_SCREEN = process.env.WEBDROID_SCREEN;
+
+/** Compose the query rather than concatenating it: `?bytecode=x` + `?screen=y` silently drops
+ *  the second parameter, and the run then measures the wrong geometry against the right pixels. */
+function pageUrl(screen?: Screen): string {
+  const q = new URLSearchParams();
+  if (CUT) q.set("bytecode", CUT);
+  if (screen) q.set("screen", screenParam(screen));
+  return q.size ? `${BASE_URL}/?${q}` : BASE_URL;
+}
 
 declare global {
   // eslint-disable-next-line no-var
@@ -41,6 +53,9 @@ export const launchBrowser = () => chromium.launch({ headless: true, args: LAUNC
 
 export class WebdroidDriver {
   constructor(private browser: Browser, public page: Page) {}
+
+  /** what the page is currently rendering at — the space every denormalized tap is expressed in */
+  screen: Screen = deviceScreen();
 
   // Optional frame recorder (--shots). The diffed capture is one settled frame per step. This records every DISTINCT frame while
   // the step runs, which is what you actually need to see when a step goes wrong: what was
@@ -99,7 +114,7 @@ export class WebdroidDriver {
 
     page.on("pageerror", (e) => console.error("  [page error]", String(e).slice(0, 200)));
 
-    const resp = await page.goto(PAGE_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    const resp = await page.goto(pageUrl(), { waitUntil: "domcontentloaded", timeout: 30_000 });
     if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE_URL} — run \`bun run dev\``);
     await page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
     await page.evaluate(() => (document as any).fonts.ready);
@@ -111,10 +126,12 @@ export class WebdroidDriver {
     return this.page.clock.setFixedTime(new Date(ms));
   }
 
-  /** A fresh install — wd.reset() is the one definition of what that wipes. */
-  async reset(): Promise<void> {
+  /** A fresh install — wd.reset() is the one definition of what that wipes. Navigates rather
+   *  than reloads, so each flow gets the geometry its own goldens were recorded at. */
+  async reset(screen: Screen = deviceScreen()): Promise<void> {
     await this.page.evaluate(() => (globalThis as any).wd.reset());
-    await this.page.reload({ waitUntil: "domcontentloaded" });
+    this.screen = screen;
+    await this.page.goto(pageUrl(screen), { waitUntil: "domcontentloaded" });
     await this.page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
     await this.page.evaluate(() => (document as any).fonts.ready);
   }
@@ -170,7 +187,7 @@ export class WebdroidDriver {
   }
 
   async tapNorm(x: number, y: number): Promise<void> {
-    await this.fire("tap", x * SCREEN_W, y * SCREEN_H);
+    await this.fire("tap", x * this.screen.width, y * this.screen.height);
   }
 
   async type(text: string): Promise<void> {
@@ -182,8 +199,8 @@ export class WebdroidDriver {
   }
 
   async swipe(from: [number, number], to: [number, number], ms = 400): Promise<void> {
-    await this.fire("swipe", from[0] * SCREEN_W, from[1] * SCREEN_H,
-                    to[0] * SCREEN_W, to[1] * SCREEN_H, ms);
+    await this.fire("swipe", from[0] * this.screen.width, from[1] * this.screen.height,
+                    to[0] * this.screen.width, to[1] * this.screen.height, ms);
   }
 
   /** Exact framebuffer pixels — sidesteps the CSS-scaling trap AGENTS.md "Harness notes" warns about. */

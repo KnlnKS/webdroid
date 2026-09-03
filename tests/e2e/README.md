@@ -62,10 +62,17 @@ ops and exposes no `View.text` to match on. A step that needed the fallback is f
 
 ## Metrics
 
-Both images are the raw 720×1280 framebuffer — no rescaling ever enters the comparison. The
-`webdroid_ref` AVD is configured to 720×1280 @ 320dpi precisely so this holds. Each frame is
-cropped to `y ∈ [48, 1232)`, dropping the status bar (48px, `device.statusBar` in
-`src/shell/config.ts`) and the gesture bar.
+Both images are the raw framebuffer at the geometry the goldens were recorded at — no rescaling
+ever enters the comparison. Each golden set carries that geometry in its `manifest.json`
+`device` block, and the run navigates the page to it (`?screen=WxH@dpi`), so the shell's own
+default can move without invalidating a golden. `bun run e2e:setup` reads the same geometry out
+of the device profile, so the `webdroid_ref` AVD cannot drift from it. Today every set is
+720×1280 @ 320dpi, cropped to `y ∈ [48, 1232)` — dropping the status bar (`device.statusBar`)
+and the gesture bar.
+
+`WEBDROID_SCREEN=1080x2424@480 bun run e2e` runs every flow at that size instead. Such a run is
+reported as **smoke, never scored**: the goldens are pixels at one size, so a run at any other
+size measures cost, not fidelity.
 
 * **content** — the target metric. Tolerant mismatch measured over the union of the two
   images' non-background pixels. Whole-frame percentages flatter a renderer that draws
@@ -143,7 +150,7 @@ first to ask for and not find). None of that is in the HTML report; read the fil
 ## Re-recording the goldens (needs an emulator)
 
 ```bash
-bun run e2e:setup    # create/configure the webdroid_ref AVD (720x1280 @ 320dpi)
+bun run e2e:setup    # create/configure the webdroid_ref AVD (geometry from the device profile)
 bun run e2e:boot     # boot it and apply the determinism settings
 bun run e2e:record   # walk every flow, write golden/ + manifest.json
 ```
