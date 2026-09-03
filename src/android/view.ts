@@ -4,7 +4,7 @@
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { perf } from "../perf";
 import { device } from "../shell/config";
-import { mangleMethod } from "../jvm/abi";
+import { mangleMethod, jmethod, type JMethod } from "../jvm/abi";
 import { vcall, idHash } from "../jvm/natives/jlang";
 import { JCanvas, JRect, JPoint, setInvalidateHook, JMatrix, insetsOf } from "./graphics";
 import { csText } from "./text";
@@ -148,9 +148,25 @@ function mergeStates(base: Int32Array, extra: Int32Array | null): Int32Array {
   return base;
 }
 
-/** call a (possibly async) compiled method and settle it */
-export async function guardCall(fn: unknown, self: unknown, ...args: unknown[]): Promise<any> {
-  const r = (fn as (...a: unknown[]) => unknown).apply(self, args);
+/** Dispatch a mangled method on `self` and settle it. The method must exist: these are the
+ *  calls whose receiver AOSP guarantees declares it, and a miss is a real defect that has to
+ *  surface rather than render half a frame. Use guardMaybe for the optional hooks. */
+export async function guardCall(self: unknown, mangled: string, ...args: unknown[]): Promise<any> {
+  const r = (jmethod(self, mangled) as JMethod).apply(self, args);
+  return r instanceof Promise ? await r : r;
+}
+
+/** the same for a hook an app subclass may simply not override (onDraw, onSizeChanged...) */
+export async function guardMaybe(self: unknown, mangled: string, ...args: unknown[]): Promise<any> {
+  const fn = jmethod(self, mangled);
+  if (!fn) return undefined;
+  const r = fn.apply(self, args);
+  return r instanceof Promise ? await r : r;
+}
+
+/** the same, when the caller already holds the function (it compared identity, or built it) */
+export async function guardApply(fn: JMethod, self: unknown, ...args: unknown[]): Promise<any> {
+  const r = fn.apply(self, args);
   return r instanceof Promise ? await r : r;
 }
 
@@ -238,13 +254,11 @@ export class JView extends JObj {
     // through the virtual onCreateDrawableState: state_checked/checkable/error live only in
     // the app's override (every Material toggle is one), and nothing else ever sees them
     this.stateCache = null;
-    const oc = (this as any)[M_onCreateDrawableState];
-    const raw = oc ? await guardCall(oc, this, 0) as Int32Array | null : null;
+    const raw = await guardMaybe(this, M_onCreateDrawableState, 0) as Int32Array | null;
     const st = raw ? [...raw].filter((x) => x !== 0) : this.baseState();
     this.stateCache = st;
     if (this.background) await vcall(this.background, "setState", "([I)Z", Int32Array.from(st));
-    const f = (this as any)[M_drawableStateChanged];
-    if (f) await guardCall(f, this);
+    await guardMaybe(this, M_drawableStateChanged);
     if (this.stateListAnimator) await vcall(this.stateListAnimator, "setState", "([I)V", Int32Array.from(st));
     invalidate();
   }
@@ -367,7 +381,7 @@ export async function measureView(v: JView, wSpec: number, hSpec: number) {
   if (!v.layoutRequested && wSpec === v.oldWSpec && hSpec === v.oldHSpec) return;
   v.oldWSpec = wSpec; v.oldHSpec = hSpec;
   try {
-    await guardCall((v as any)[M_onMeasure], v, wSpec, hSpec);
+    await guardCall(v, M_onMeasure, wSpec, hSpec);
     v.layoutRequired = true;   // AOSP sets PFLAG_LAYOUT_REQUIRED whenever onMeasure runs
   } catch (e) {
     v.oldWSpec = -1;
@@ -383,8 +397,7 @@ function setBound(v: JView, l: number, t: number, r: number, b: number) {
   const ow = v.width(), oh = v.height();
   v.left = l; v.top = t; v.right = r; v.bottom = b;
   invalidate();
-  const f = (v as any)[M_onSizeChanged];
-  if (f && (r - l !== ow || b - t !== oh)) void guardCall(f, v, r - l, b - t, ow, oh);
+  if (r - l !== ow || b - t !== oh) void guardMaybe(v, M_onSizeChanged, r - l, b - t, ow, oh);
   for (const ll of v.layoutChangeLs) {
     void vcall(ll, "onLayoutChange", "(Landroid/view/View;IIIIIIII)V", v, l, t, r, b, oldL, oldT, oldR, oldB);
   }
@@ -396,14 +409,13 @@ export async function layoutView(v: JView, l: number, t: number, r: number, b: n
   const ow = v.width(), oh = v.height();
   v.left = l; v.top = t; v.right = r; v.bottom = b;
   if (changed) {
-    const f = (v as any)[M_onSizeChanged];
-    if (f) await guardCall(f, v, r - l, b - t, ow, oh);
+    await guardMaybe(v, M_onSizeChanged, r - l, b - t, ow, oh);
   }
   // AOSP View.layout: onLayout runs only when the frame moved or a measure re-ran
   // (PFLAG_LAYOUT_REQUIRED). Without the gate every pass walked the whole tree laying out
   // children the measure memo had just skipped, which is what made settle passes cost.
   if (changed || v.layoutRequired) {
-    await guardCall((v as any)[M_onLayout], v, changed ? 1 : 0, l, t, r, b);
+    await guardCall(v, M_onLayout, changed ? 1 : 0, l, t, r, b);
     v.layoutRequired = false;
   }
   v.layoutRequested = false;
@@ -423,8 +435,8 @@ export async function drawView(v: JView, cv: JCanvas) {
   if (v.visibility !== 0) return;
   // Android calls computeScroll() before drawing each child — drives Scroller
   // animations (ViewPager page snaps, OverScroller flings)
-  const cs = (v as any)[M_computeScroll];
-  if (cs && cs !== noopComputeScroll) await guardCall(cs, v);
+  const cs = jmethod(v, M_computeScroll);
+  if (cs && cs !== noopComputeScroll) await guardApply(cs, v);
   const ctx = cv.ctx;
   // AOSP View.draw() brackets the whole thing with getSaveCount()/restoreToCount(): a view
   // that throws between save() and restore() must not leave its clip on the shared context,
@@ -487,14 +499,12 @@ async function drawContent(v: JView, cv: JCanvas) {
   else if (v.background) {
     // through setBounds, not the fields: AOSP's onBoundsChange is where wrapper/shape drawables
     // (and app subclasses) rebuild their geometry, and it only fires on a real change
-    await guardCall((v.background as any)[M_setBounds], v.background, 0, 0, v.width(), v.height());
-    await guardCall((v.background as any)[M_drawableDraw], v.background, cv);
+    await guardCall(v.background, M_setBounds, 0, 0, v.width(), v.height());
+    await guardCall(v.background, M_drawableDraw, cv);
   }
   ctx.translate(-v.scrollX, -v.scrollY);
-  const od = (v as any)[M_onDraw];
-  if (od) await guardCall(od, v, cv);
-  const dd = (v as any)[M_dispatchDraw];
-  if (dd) await guardCall(dd, v, cv);
+  await guardMaybe(v, M_onDraw, cv);
+  await guardMaybe(v, M_dispatchDraw, cv);
   if (v.overlay) await drawOverlay(v.overlay, cv);
 }
 
@@ -505,7 +515,7 @@ function overlayOf(this: JView) {
 
 /** AOSP draws the overlay last, over the host's own content and children */
 async function drawOverlay(o: JViewOverlay, cv: JCanvas) {
-  for (const d of o.drawables) await guardCall((d as any)[M_drawableDraw], d, cv);
+  for (const d of o.drawables) await guardCall(d, M_drawableDraw, cv);
   for (const v of o.views) await drawView(v, cv);
 }
 
@@ -858,7 +868,7 @@ const viewMethods: NativeSpec["methods"] = {
         if (this.longClickable) {
           this.longPressTimer = setTimeout(async () => {
             this.longPressTimer = null;
-            await guardCall((this as any)[M_performLongClick], this);
+            await guardCall(this, M_performLongClick);
           }, 450);
         }
         return 1;
@@ -875,7 +885,7 @@ const viewMethods: NativeSpec["methods"] = {
         this.pressed = false;
         void this.refreshDrawableState();
         if (wasPressed && this.clickable) {
-          await guardCall((this as any)[M_performClick], this);
+          await guardCall(this, M_performClick);
         }
         return 1;
       }
@@ -892,7 +902,7 @@ const viewMethods: NativeSpec["methods"] = {
       const r = await vcall(this.touchL, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev);
       if (r) return 1;
     }
-    return await guardCall((this as any)[M_onTouchEvent], this, ev);
+    return await guardCall(this, M_onTouchEvent, ev);
   },
   "onInterceptTouchEvent(Landroid/view/MotionEvent;)Z": () => 0,
   "requestDisallowInterceptTouchEvent(Z)V": function (this: JView, dis: number) {
@@ -1276,15 +1286,11 @@ export class JViewGroup extends JView {
  *  and casts in its onLayout otherwise). Dispatches to the ViewGroup's own check/generate overrides. */
 async function convertLp(vg: JViewGroup, lp: JLayoutParams | null): Promise<JLayoutParams | null> {
   if (!lp) return lp;
-  const check = (vg as any)[mangleMethod("checkLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)Z")];
-  if (typeof check === "function") {
-    const ok = await guardCall(check, vg, lp);
+  if (jmethod(vg, M_checkLp)) {
+    const ok = await guardCall(vg, M_checkLp, lp);
     if (!ok) {
-      const gen = (vg as any)[mangleMethod("generateLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;")];
-      if (typeof gen === "function") {
-        const converted = await guardCall(gen, vg, lp);
-        if (converted) return converted as JLayoutParams;
-      }
+      const converted = await guardMaybe(vg, M_generateLp, lp);
+      if (converted) return converted as JLayoutParams;
     }
   }
   return lp;
@@ -1327,8 +1333,7 @@ export function detachView(parent: JViewGroup, child: JView) {
 export async function dispatchAttached(v: JView) {
   if (v.attached) return;
   v.attached = true;
-  const f = (v as any)[M_onAttached];
-  if (f) try { await guardCall(f, v); } catch (e) { reportUncaught(e); }
+  try { await guardMaybe(v, M_onAttached); } catch (e) { reportUncaught(e); }
   for (const l of v.attachLs) {
     try { await vcall(l, "onViewAttachedToWindow", "(Landroid/view/View;)V", v); } catch (e) { reportUncaught(e); }
   }
@@ -1344,16 +1349,14 @@ export async function dispatchAttached(v: JView) {
  * to republish LocalConfiguration (hence isSystemInDarkTheme).
  */
 export async function dispatchConfigurationChanged(v: JView, cfg: unknown) {
-  const f = (v as any)[M_onConfigChanged];
-  if (f) try { await guardCall(f, v, cfg); } catch (e) { reportUncaught(e); }
+  try { await guardMaybe(v, M_onConfigChanged, cfg); } catch (e) { reportUncaught(e); }
   if (v instanceof JViewGroup) for (const c of [...v.children]) await dispatchConfigurationChanged(c, cfg);
 }
 export async function dispatchDetached(v: JView) {
   if (!v.attached) return;
   v.attached = false;
   if (v instanceof JViewGroup) for (const c of [...v.children]) await dispatchDetached(c);
-  const f = (v as any)[M_onDetached];
-  if (f) await guardCall(f, v);
+  await guardMaybe(v, M_onDetached);
   for (const l of v.attachLs) await vcall(l, "onViewDetachedFromWindow", "(Landroid/view/View;)V", v);
 }
 
@@ -1379,6 +1382,8 @@ export async function measureChildWithMargins(vg: JViewGroup, child: JView, wSpe
     childMeasureSpec(hSpec, vg.padT + vg.padB + mt + hUsed, lp?.height ?? WRAP_CONTENT));
 }
 
+const M_checkLp = mangleMethod("checkLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)Z");
+const M_generateLp = mangleMethod("generateLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;");
 const M_addView3 = mangleMethod("addView", "(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V");
 const M_genDefaultLP = mangleMethod("generateDefaultLayoutParams", "()Landroid/view/ViewGroup$LayoutParams;");
 
@@ -1386,7 +1391,7 @@ const M_genDefaultLP = mangleMethod("generateDefaultLayoutParams", "()Landroid/v
 async function addView3(this: JViewGroup, c: JView, i: number, lp: JLayoutParams | null) {
   c.lp = lp ? await convertLp(this, lp)
     : c.lp ? await convertLp(this, c.lp)
-    : await guardCall((this as any)[M_genDefaultLP], this);
+    : await guardCall(this, M_genDefaultLP);
   attachView(this, c, i);
 }
 /**
@@ -1396,8 +1401,8 @@ async function addView3(this: JViewGroup, c: JView, i: number, lp: JLayoutParams
  * directly from each overload skipped all of it.
  */
 async function addViewFunnel(vg: JViewGroup, c: JView, i: number, lp: JLayoutParams | null) {
-  const f = (vg as any)[M_addView3];
-  if (f && f !== addView3) return void await guardCall(f, vg, c, i, lp);
+  const f = jmethod(vg, M_addView3);
+  if (f && f !== addView3) return void await guardApply(f, vg, c, i, lp);
   await addView3.call(vg, c, i, lp);
 }
 
@@ -1572,7 +1577,7 @@ const vgMethods: NativeSpec["methods"] = {
     // intercept?
     let intercepted = false;
     if (!this.disallowIntercept && (action === 0 || this.touchTarget)) {
-      intercepted = !!(await guardCall((this as any)[M_onIntercept], this, ev));
+      intercepted = !!(await guardCall(this, M_onIntercept, ev));
     }
     if (action === 0 && !intercepted) {
       // find touch target among children (reverse order)
@@ -1584,7 +1589,7 @@ const vgMethods: NativeSpec["methods"] = {
         if (cx < 0 || cy < 0 || cx >= c.width() || cy >= c.height()) continue;
         const ox = ev.x, oy = ev.y;
         ev.x = cx; ev.y = cy;
-        const handled = await guardCall((c as any)[M_dispatchTouch], c, ev);
+        const handled = await guardCall(c, M_dispatchTouch, ev);
         ev.x = ox; ev.y = oy;
         if (handled) { this.touchTarget = c; return 1; }
       }
@@ -1593,7 +1598,7 @@ const vgMethods: NativeSpec["methods"] = {
       const ox = ev.x, oy = ev.y;
       ev.x = ev.x + this.scrollX - (c.left + c.translationX);
       ev.y = ev.y + this.scrollY - (c.top + c.translationY);
-      const handled = await guardCall((c as any)[M_dispatchTouch], c, ev);
+      const handled = await guardCall(c, M_dispatchTouch, ev);
       ev.x = ox; ev.y = oy;
       if (action === 1 || action === 3) this.touchTarget = null;
       return handled ? 1 : 0;
@@ -1602,11 +1607,11 @@ const vgMethods: NativeSpec["methods"] = {
       const c = this.touchTarget;
       const oldAction = ev.action;
       ev.action = 3;
-      await guardCall((c as any)[M_dispatchTouch], c, ev);
+      await guardCall(c, M_dispatchTouch, ev);
       ev.action = oldAction;
       this.touchTarget = null;
     }
-    const self = await guardCall((this as any)[M_onTouchEvent], this, ev);
+    const self = await guardCall(this, M_onTouchEvent, ev);
     return self ? 1 : 0;
   },
 };

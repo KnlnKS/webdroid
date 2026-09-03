@@ -844,7 +844,7 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setText(I)V": async function (this: JTextView, id: number) {
     const s = this.jres ? rvString(this.jres, this.jres.resolveRefs({ t: TV.REFERENCE, d: id })) ?? "" : "";
-    await guardCall((this as any)[M("setText", "(Ljava/lang/CharSequence;)V")], this, s);
+    await guardCall(this, M("setText", "(Ljava/lang/CharSequence;)V"), s);
   },
   "setText(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V": async function (this: JTextView, cs: unknown) {
     this.rawText = cs;

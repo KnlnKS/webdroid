@@ -106,3 +106,11 @@ export function charsToString(chars: Uint16Array | Uint8Array, off: number, len:
   }
   return s;
 }
+
+/** A mangled method off a Java object, or undefined when the class does not declare it.
+ *  Callers hoist the mangled key into a module const: mangleMethod is memoised but not free,
+ *  and these run per view per frame. */
+export type JMethod = (this: unknown, ...a: unknown[]) => unknown;
+export function jmethod(o: unknown, mangled: string): JMethod | undefined {
+  return (o as Record<string, JMethod | undefined> | null)?.[mangled];
+}

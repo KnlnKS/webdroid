@@ -5,7 +5,7 @@ import { mangleMethod } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { parseAXML, TV, type XmlNode } from "./axml";
 import { JAttrSet, askTheme, themeOf, noteAttrsRead, noteUnreadAttrs } from "./res";
-import { JView, JViewGroup, guardCall } from "./view";
+import { JView, JViewGroup, guardCall, guardMaybe } from "./view";
 import type { AppHost } from "./app";
 
 class JLayoutInflater extends JObj {
@@ -90,9 +90,9 @@ async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentV
           // AOSP: the <include> tag's layout params win only when it declares them; otherwise
           // the included root keeps its own (inflateNode already put them on incView.lp).
           const lp = child.attrs.some((a) => a.resId === A_layoutWidth)
-            ? await guardCall((parentView as any)[M_generateLP], parentView, set)
-            : (incView as JView).lp ?? await guardCall((parentView as any)[M_generateLP], parentView, set);
-          await guardCall((parentView as any)[M_addView], parentView, incView, lp);
+            ? await guardCall(parentView, M_generateLP, set)
+            : (incView as JView).lp ?? await guardCall(parentView, M_generateLP, set);
+          await guardCall(parentView, M_addView, incView, lp);
         }
       }
       continue;
@@ -105,13 +105,12 @@ async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentV
     const v = await createViewFromTag(inflater, parentView, child.name, cctx, set);
     noteUnreadAttrs(child, child.name);
     let lp = v.lp;
-    if (!lp) lp = await guardCall((parentView as any)[M_generateLP], parentView, set);
-    await guardCall((parentView as any)[M_addView], parentView, v, lp);
+    if (!lp) lp = await guardCall(parentView, M_generateLP, set);
+    await guardCall(parentView, M_addView, v, lp);
     if (v instanceof JViewGroup && child.children.length) {
       await inflateChildren(inflater, child, v, cctx);
     }
-    const fin = (v as any)[M_onFinishInflate];
-    if (fin) await guardCall(fin, v);
+    await guardMaybe(v, M_onFinishInflate);
   }
 }
 
@@ -131,15 +130,14 @@ async function inflateNode(jctx: any, root: XmlNode, parent: JViewGroup | null, 
   const v = await createViewFromTag(inf, parent, root.name, rctx, set);
   noteUnreadAttrs(root, root.name);
   if (parent) {
-    const lp = await guardCall((parent as any)[M_generateLP], parent, set);
-    if (attach) await guardCall((parent as any)[M_addView], parent, v, lp);
+    const lp = await guardCall(parent, M_generateLP, set);
+    if (attach) await guardCall(parent, M_addView, v, lp);
     else v.lp = lp;
   }
   if (v instanceof JViewGroup && root.children.length) {
     await inflateChildren(inf, root, v, rctx);
   }
-  const fin = (v as any)[M_onFinishInflate];
-  if (fin) await guardCall(fin, v);
+  await guardMaybe(v, M_onFinishInflate);
   return attach && parent ? parent : v;
 }
 

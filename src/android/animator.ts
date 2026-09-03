@@ -94,7 +94,7 @@ async function animTick(a: JValueAnimator): Promise<boolean> {
     for (const l of a.animLs) {
       try { await vcall(l, "onAnimationEnd", "(Landroid/animation/Animator;)V", a); } catch (e) { reportUncaught(e); }
     }
-    if (a.next) await guardCall((a.next as any)[M_start], a.next);
+    if (a.next) await guardCall(a.next, M_start);
     return false;
   }
   return true;
@@ -256,7 +256,7 @@ const vaMethods: NativeSpec["methods"] = {
   "reverse()V": async function (this: JValueAnimator) {
     if (this.running) { this.reversed = !this.reversed; this.startT = performance.now() - (this.durationMs - (performance.now() - this.startT)); return; }
     this.startReversed = true;
-    await guardCall((this as any)[M_start], this);
+    await guardCall(this, M_start);
   },
   "setCurrentPlayTime(J)V": function (this: JValueAnimator, t: bigint) { this.startT = performance.now() - Number(t); },
   "getCurrentPlayTime()J": function (this: JValueAnimator) { return BigInt(Math.max(0, Math.round(performance.now() - this.startT))); },
@@ -437,17 +437,17 @@ rt.register({
       this.running = true;
       if (this.sequential) {
         for (let i = 0; i + 1 < this.anims.length; i++) this.anims[i].next = this.anims[i + 1];
-        if (this.anims.length) await guardCall((this.anims[0] as any)[M_start], this.anims[0]);
-      } else for (const a of this.anims) await guardCall((a as any)[M_start], a);
+        if (this.anims.length) await guardCall(this.anims[0], M_start);
+      } else for (const a of this.anims) await guardCall(a, M_start);
       const total = this.sequential ? this.anims.reduce((s, a) => s + a.delayMs + a.durationMs, 0)
         : Math.max(0, ...this.anims.map((a) => a.delayMs + a.durationMs));
       setTimeout(() => {
         this.running = false;
         for (const l of this.animLs) void vcall(l, "onAnimationEnd", "(Landroid/animation/Animator;)V", this).catch(reportUncaught);
-        if (this.next) void guardCall((this.next as any)[M_start], this.next);
+        if (this.next) void guardCall(this.next, M_start);
       }, total);
     },
-    "cancel()V": async function (this: JAnimatorSet) { this.running = false; for (const a of this.anims) await guardCall((a as any)[M_cancel], a); },
+    "cancel()V": async function (this: JAnimatorSet) { this.running = false; for (const a of this.anims) await guardCall(a, M_cancel); },
     "end()V": function (this: JAnimatorSet) { this.running = false; for (const a of this.anims) a.running = false; },
     "play(Landroid/animation/Animator;)Landroid/animation/AnimatorSet$Builder;": function (this: JAnimatorSet, a: JValueAnimator) {
       const b = new JAnimatorSetBuilder(); b.set = this; b.anchor = a;
@@ -594,9 +594,9 @@ rt.register({
     "setState([I)V": async function (this: JStateListAnimator, state: Int32Array) {
       const hit = this.tuples.find((t) => stateSetMatches(t.spec, state))?.anim ?? null;
       if (hit === this.cur) return;
-      if (this.cur) await guardCall((this.cur as any)[M_cancel], this.cur);
+      if (this.cur) await guardCall(this.cur, M_cancel);
       this.cur = hit;
-      if (hit) await guardCall((hit as any)[M_start], hit);
+      if (hit) await guardCall(hit, M_start);
     },
     "jumpToCurrentState()V": function (this: JStateListAnimator) { if (this.cur) this.cur.running = false; },
     "clone()Ljava/lang/Object;": function (this: JStateListAnimator) {
