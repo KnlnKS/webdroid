@@ -995,6 +995,14 @@ export function manifestActivityTheme(cls: string): number {
   const node = manifestActivities.get(cls.replace(/\./g, "/"));
   return (node && attr(node, "theme")?.data) ?? 0;
 }
+/** ActivityInfo.CONFIG_UI_MODE: an activity that declares it handles a day/night change is told
+ *  about it; one that does not is relaunched, which is the whole of AppCompat's day/night switch. */
+export const CONFIG_UI_MODE = 0x0200;
+export function activityHandlesConfig(act: JActivity, bits: number): boolean {
+  const node = manifestActivities.get(jclsNameOf(act).replace(/\./g, "/"));
+  return (((node && attr(node, "configChanges")?.data) ?? 0) & bits) === bits;
+}
+
 /** ActivityInfo for a dotted class name, read off that activity's own manifest node. */
 function mkActivityInfo(cls: string): JActivityInfo {
   const node = manifestActivities.get(cls.replace(/\./g, "/"));
@@ -2336,8 +2344,13 @@ for (const [name, methods, statics] of [
     "getPrimaryClip()Landroid/content/ClipData;": () => null,
     "hasPrimaryClip()Z": () => 0,
   }],
-  // UI_MODE_TYPE_NORMAL: a handset, not a car/desk/TV dock (Configuration.uiMode agrees)
-  ["android/app/UiModeManager", { "getNightMode()I": () => 1, "setNightMode(I)V": () => {}, "getCurrentModeType()I": () => 1 }],
+  // UI_MODE_TYPE_NORMAL: a handset, not a car/desk/TV dock (Configuration.uiMode agrees).
+  // getNightMode reports the device's own setting, which is not this app's to change.
+  ["android/app/UiModeManager", {
+    "getNightMode()I": () => device.night ? 2 : 1,
+    "setNightMode(I)V": () => {},
+    "getCurrentModeType()I": () => 1,
+  }],
   ["android/app/KeyguardManager", { "isKeyguardLocked()Z": () => 0, "inKeyguardRestrictedInputMode()Z": () => 0 }],
   ["android/app/job/JobScheduler", { "schedule(Landroid/app/job/JobInfo;)I": () => 1, "cancel(I)V": () => {}, "cancelAll()V": () => {}, "getAllPendingJobs()Ljava/util/List;": () => null }],
   ["android/hardware/SensorManager", { "getDefaultSensor(I)Landroid/hardware/Sensor;": () => null, "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z": () => 0, "unregisterListener(Landroid/hardware/SensorEventListener;)V": () => {} }],

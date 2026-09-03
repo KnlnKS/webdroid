@@ -9,8 +9,8 @@ import { Arsc } from "../android/arsc";
 import { loadFramework } from "../android/framework";
 import { parseAXML, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
-import { mkJResources } from "../android/resnative";
-import { setAppHost, setManifest, type AppHost, JIntent, ensureDecor, JActivity, JMenu, pushMenuToBar, JContext, fireActivityLifecycle, manifestActivityTheme, APPEARANCE_LIGHT_STATUS_BARS, deliverActivityResult } from "../android/app";
+import { mkJResources, setDeviceNight, deviceConfiguration } from "../android/resnative";
+import { setAppHost, setManifest, type AppHost, JIntent, ensureDecor, JActivity, JMenu, pushMenuToBar, JContext, fireActivityLifecycle, manifestActivityTheme, APPEARANCE_LIGHT_STATUS_BARS, deliverActivityResult, activityHandlesConfig, CONFIG_UI_MODE } from "../android/app";
 import { reportUncaught, JBundle } from "../android/os";
 import { onMain, inMainJob } from "../android/mainloop";
 import {
@@ -239,6 +239,27 @@ async function launchActivity0(cls: string, intent: JIntent | null, relaunch?: R
     reportUncaught(e);
   }
 }
+
+/**
+ * The device's own light/dark setting changed under a running app. AOSP delivers that the way it
+ * delivers any configuration change: the top activity is told if it declared uiMode in its
+ * manifest, and relaunched if it did not. An app following the system reaches its new colours
+ * through one of those two doors and no other.
+ */
+function deviceNightChanged(night: boolean): void {
+  if (!setDeviceNight(night) || !booted) return;
+  uiState.needsLayout = true;
+  uiState.needsDraw = true;
+  const act = booted.stack[booted.stack.length - 1];
+  if (!act) return;
+  if (activityHandlesConfig(act, CONFIG_UI_MODE)) {
+    void onMain(async () => {
+      await vcall(act, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", deviceConfiguration());
+    }).catch(reportUncaught);
+  } else recreateActivity(act);
+}
+globalThis.matchMedia?.("(prefers-color-scheme: dark)")
+  .addEventListener("change", (e) => deviceNightChanged(e.matches));
 
 interface Relaunch { state: JBundle | null; nonConfig: unknown }
 

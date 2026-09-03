@@ -41,7 +41,7 @@ export class Arsc {
   pkgId = 0x7f;
   pkgName = "";
   types = new Map<number, TypeChunk[]>();   // typeId → chunks (one per config)
-  device = { density: dev.densityDpi, sdk: dev.sdk, night: 0, wdp: dev.widthDp, hdp: dev.screenHeightDp, swdp: dev.widthDp, lang: dev.lang, size: sizeClass(dev.widthDp), dir: 0x40, uiType: 1 };
+  device = { density: dev.densityDpi, sdk: dev.sdk, night: dev.night ? 1 : 0, wdp: dev.widthDp, hdp: dev.screenHeightDp, swdp: dev.widthDp, lang: dev.lang, size: sizeClass(dev.widthDp), dir: 0x40, uiType: 1 };
   private byType = new Map<string, Map<string, number>>();
 
   constructor(bytes: Uint8Array, readonly files: Files = () => null) {

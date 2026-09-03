@@ -23,6 +23,10 @@ export const device = {
   sdk: 33,
   release: "13",
   lang: "en",
+  /** Whether the device is in dark mode. There is no device setting to read but there is a real
+   *  answer: the browser's, which is the user's own system preference. Live, because it changes
+   *  under a running app exactly as a device's does (see setDeviceNight). */
+  get night(): boolean { return globalThis.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false; },
   /** what /proc/cpuinfo, /proc/meminfo and uname report to native code: an ARMv7 with VFPv3 and
    *  no NEON (the ARM32 tier implements VFP, not the SIMD extension) */
   cpu: { cores: 4, features: "swp half thumb fastmult vfp edsp thumbee vfpv3 tls", hardware: "webdroid", memKb: 2 * 1024 * 1024 },

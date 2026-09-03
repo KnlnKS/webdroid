@@ -30,7 +30,8 @@ class JConfiguration extends JObj {
   smallestScreenWidthDp = device.widthDp;
   densityDpi = device.densityDpi;
   fontScale = 1;
-  uiMode = 0x11; // UI_MODE_TYPE_NORMAL | night no
+  // UI_MODE_TYPE_NORMAL | the device's night bit
+  uiMode = 0x01 | (device.night ? 0x20 : 0x10);
   locale = null;
   mcc = 0; mnc = 0; touchscreen = 3; keyboard = 1; keyboardHidden = 2; navigation = 1;
   navigationHidden = 2; hardKeyboardHidden = 2; screenLayout = 0x10 | 2;
@@ -104,6 +105,14 @@ function applyDeviceConfiguration(c: JConfiguration): void {
   const was = isNight();
   Object.assign(theConfig, c);
   if (isNight() !== was) setResourceNight(isNight());
+}
+export const deviceConfiguration = (): JConfiguration => theConfig;
+/** The device's own night setting changed. Returns whether anything moved. */
+export function setDeviceNight(night: boolean): boolean {
+  if (night === isNight()) return false;
+  theConfig.uiMode = (theConfig.uiMode & ~0x30) | (night ? 0x20 : 0x10);
+  setResourceNight(night);
+  return true;
 }
 export class JAssetManager extends JObj { host!: Resources; }
 class JAssetFd extends JObj { bytes!: Uint8Array; pfd: unknown = null; }
