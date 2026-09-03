@@ -78,7 +78,18 @@ export const OPS: readonly Op[] = [
   ["add-int/lit8", "22b"], ["rsub-int/lit8", "22b"], ["mul-int/lit8", "22b"], ["div-int/lit8", "22b"],
   ["rem-int/lit8", "22b"], ["and-int/lit8", "22b"], ["or-int/lit8", "22b"], ["xor-int/lit8", "22b"],
   ["shl-int/lit8", "22b"], ["shr-int/lit8", "22b"], ["ushr-int/lit8", "22b"],
-  U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U,
+  // 0xe3-0xf2: ART's quickened forms, which dexlayout and de-odexing emit. Their operand is a
+  // resolved field or vtable OFFSET rather than an index, so nothing can compile them without
+  // the layout the odex resolved them against — but they are here so a dex carrying one is
+  // WALKABLE. Without a length insnLen throws and the whole file is unreadable before
+  // compilation starts; with one, only a method that actually runs quickened bytecode fails,
+  // and it says so. 0xf3-0xf9 are unused in ART too.
+  ["iget-quick", "22c"], ["iget-wide-quick", "22c"], ["iget-object-quick", "22c"],
+  ["iput-quick", "22c"], ["iput-wide-quick", "22c"], ["iput-object-quick", "22c"],
+  ["invoke-virtual-quick", "35c"], ["invoke-virtual/range-quick", "3rc"],
+  ["iput-boolean-quick", "22c"], ["iput-byte-quick", "22c"], ["iput-char-quick", "22c"], ["iput-short-quick", "22c"],
+  ["iget-boolean-quick", "22c"], ["iget-byte-quick", "22c"], ["iget-char-quick", "22c"], ["iget-short-quick", "22c"],
+  U, U, U, U, U, U, U,
   ["invoke-polymorphic", "45cc"], ["invoke-polymorphic/range", "4rcc"],
   ["invoke-custom", "35c"], ["invoke-custom/range", "3rc"],
   ["const-method-handle", "21c"], ["const-method-type", "21c"],

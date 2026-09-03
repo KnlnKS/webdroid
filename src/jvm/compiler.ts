@@ -654,6 +654,8 @@ ${catchBody}
         out.push(this.unsupported(`${i.name} #${i.b}`));
         break;
       default:
+        // before the prefix matching below, which would read a quickened offset as a field index
+        if (i.name.endsWith("-quick")) { out.push(this.unsupported(`${i.name}: this dex is odexed`)); break; }
         if (i.name.startsWith("aget")) {
           out.push(`if((${C}>>>0)>=${B}.length)R.aio(${C},${B}.length);${A}=${B}[${C}];`);
         } else if (i.name.startsWith("aput")) {
