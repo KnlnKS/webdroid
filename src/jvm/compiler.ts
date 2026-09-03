@@ -6,7 +6,7 @@
 
 import type { DexFile, CodeItem, EncodedMethod } from "./dex";
 import { OPS, FMT_LEN, insnLen, type Fmt } from "./opcodes";
-import { mangleMethod, parseMethodDesc, isWide, descToName } from "./abi";
+import { mangleMethod, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble } from "./abi";
 import { ACC, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
 
@@ -856,17 +856,9 @@ ${catchBody}
 
 function nz(v: string): string { return `(${v}===null||${v}===0)`; }
 
-const bitsBuf = new DataView(new ArrayBuffer(8));
-function f32bits(bits: number): string {
-  bitsBuf.setInt32(0, bits | 0);
-  const v = bitsBuf.getFloat32(0);
-  return Number.isFinite(v) ? String(v) : v !== v ? "NaN" : v > 0 ? "Infinity" : "-Infinity";
-}
-function f64bits(bits: bigint): string {
-  bitsBuf.setBigInt64(0, BigInt.asIntN(64, bits));
-  const v = bitsBuf.getFloat64(0);
-  return Number.isFinite(v) ? String(v) : v !== v ? "NaN" : v > 0 ? "Infinity" : "-Infinity";
-}
+const litOf = (v: number) => Number.isFinite(v) ? String(v) : v !== v ? "NaN" : v > 0 ? "Infinity" : "-Infinity";
+const f32bits = (bits: number) => litOf(intBitsToFloat(bits));
+const f64bits = (bits: bigint) => litOf(longBitsToDouble(BigInt.asIntN(64, bits)));
 
 function typedArrayCtor(elem: string): string {
   switch (elem) {

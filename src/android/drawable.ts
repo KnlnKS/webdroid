@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec, callSelf } from "../jvm/runtime";
 import { vcall, mkEnumSet } from "../jvm/natives/jlang";
-import { mangleMethod, jmethod } from "../jvm/abi";
+import { mangleMethod, jmethod, intBitsToFloat } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, insetsOf } from "./graphics";
 import { device } from "../shell/config";
 import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, normRV } from "./res";
@@ -1337,7 +1337,7 @@ function parseCslXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): J
         if (v && v.t === TV.REFERENCE) v = res.resolveRefs(v);
         color = rvColor(res, v, -16777216);
       } else if (a.resId === AT.alpha) {
-        alphaMul = a.type === TV.FLOAT ? new Float32Array(Int32Array.of(a.data).buffer)[0] : 1;
+        alphaMul = a.type === TV.FLOAT ? intBitsToFloat(a.data) : 1;
       }
     }
     if (alphaMul < 1) color = (((color >>> 24) * alphaMul) << 24 | (color & 0xffffff)) | 0;

@@ -7,12 +7,11 @@
 // Interface dispatch — the thing a constant-pool walk cannot speak to at all — falls out of
 // the same rule, with no special case.
 
-import { DexFile, type ClassDef, type EncodedMethod } from "./dex";
+import { DexFile, NO_INDEX, type ClassDef, type EncodedMethod } from "./dex";
 import { insnLen } from "./opcodes";
 import { ACC } from "./runtime";
 import { descToName } from "./abi";
 
-const NO_INDEX = 0xffffffff;
 
 /** "cls.name(desc)ret" — the identity a call site and a definition agree on */
 type MemberKey = string;
@@ -37,7 +36,7 @@ interface ClassRec {
 
 /** name+desc of a method ref, memoised per dex: the walk asks for these once per call site */
 const sigCaches = new WeakMap<DexFile, (string | undefined)[]>();
-function sigOf(dex: DexFile, mIdx: number): string {
+export function sigOf(dex: DexFile, mIdx: number): string {
   let c = sigCaches.get(dex);
   if (!c) sigCaches.set(dex, (c = []));
   return (c[mIdx] ??= dex.method(mIdx).name + dex.methodDesc(mIdx));

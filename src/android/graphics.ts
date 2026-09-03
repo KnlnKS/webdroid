@@ -1,7 +1,7 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
-import { mangleMethod, charsToString } from "../jvm/abi";
+import { mangleMethod, charsToString, intBitsToFloat } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle } from "./handles";
 import { vcall, mkEnumSet, JSimpleEnum, linkInit, stringHash } from "../jvm/natives/jlang";
@@ -1462,9 +1462,8 @@ const rn1 = () => 1;
 // Dalvik registers are untyped: R8'd code may pass float BITS where our JS sees the raw
 // int (e.g. 1065353216 for 1.0f). Layer properties are all small floats, so reinterpret
 // anything implausibly large.
-const bitsBuf2 = new DataView(new ArrayBuffer(4));
 function asF(v: number): number {
-  if (Math.abs(v) > 1e6 && Number.isInteger(v)) { bitsBuf2.setInt32(0, v | 0); return bitsBuf2.getFloat32(0); }
+  if (Math.abs(v) > 1e6 && Number.isInteger(v)) return intBitsToFloat(v);
   return v;
 }
 rt.register({

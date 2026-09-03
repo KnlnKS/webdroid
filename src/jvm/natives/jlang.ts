@@ -2,7 +2,7 @@
 // Strings are JS string primitives (String.prototype carries mangled Java methods).
 
 import { rt, JObj, type ClassInfo, type NativeSpec } from "../runtime";
-import { mangleMethod, descToName, charsToString, jarray, PRIM_NAME } from "../abi";
+import { mangleMethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits } from "../abi";
 
 // dynamic virtual call from native code, with promise guard
 export async function vcall(obj: any, name: string, desc: string, ...args: unknown[]): Promise<any> {
@@ -909,15 +909,12 @@ rt.register({
     },
   },
 });
-const scratch = new DataView(new ArrayBuffer(8));
 function parseFloatJ(s: string): number {
   if (typeof s !== "string") nfe(s);
   const t = s.trim().replace(/[fFdD]$/, "");
   if (!/^[+-]?((\d+\.?\d*)|(\.\d+))([eE][+-]?\d+)?$/.test(t) && !/^[+-]?(Infinity|NaN)$/.test(t)) nfe(s);
   return parseFloat(t);
 }
-const floatBits = (v: number) => { scratch.setFloat32(0, v); return scratch.getInt32(0); };
-const doubleBits = (v: number) => { scratch.setFloat64(0, v); return scratch.getBigInt64(0); };
 const isNaNZ = (v: number) => (v !== v ? 1 : 0);
 const isInfZ = (v: number) => (v === Infinity || v === -Infinity ? 1 : 0);
 /** Float/Double.compare: NaN sorts above everything, including itself equal */
@@ -934,10 +931,10 @@ rt.register({
     "compareTo(Ljava/lang/Object;)I": cmpV,
     "static valueOf(F)Ljava/lang/Float;": (v: number) => box(JFloat, v),
     "static parseFloat(Ljava/lang/String;)F": (s: string) => Math.fround(parseFloatJ(s)),
-    "static hashCode(F)I": floatBits,
-    "static floatToIntBits(F)I": floatBits,
-    "static floatToRawIntBits(F)I": floatBits,
-    "static intBitsToFloat(I)F": (v: number) => { scratch.setInt32(0, v); return scratch.getFloat32(0); },
+    "static hashCode(F)I": floatToIntBits,
+    "static floatToIntBits(F)I": floatToIntBits,
+    "static floatToRawIntBits(F)I": floatToIntBits,
+    "static intBitsToFloat(I)F": intBitsToFloat,
     "static isNaN(F)Z": isNaNZ,
     "static isInfinite(F)Z": isInfZ,
     "static compare(FF)I": cmpFloat,
@@ -957,13 +954,13 @@ rt.register({
     "compareTo(Ljava/lang/Object;)I": cmpV,
     "static valueOf(D)Ljava/lang/Double;": (v: number) => box(JDouble, v),
     "static parseDouble(Ljava/lang/String;)D": parseFloatJ,
-    "static doubleToLongBits(D)J": doubleBits,
-    "static doubleToRawLongBits(D)J": doubleBits,
-    "static longBitsToDouble(J)D": (v: bigint) => { scratch.setBigInt64(0, v); return scratch.getFloat64(0); },
+    "static doubleToLongBits(D)J": doubleToLongBits,
+    "static doubleToRawLongBits(D)J": doubleToLongBits,
+    "static longBitsToDouble(J)D": longBitsToDouble,
     "static isNaN(D)Z": isNaNZ,
     "static isInfinite(D)Z": isInfZ,
     "static compare(DD)I": cmpFloat,
-    "static hashCode(D)I": (v: number) => { scratch.setFloat64(0, v); return scratch.getInt32(0) ^ scratch.getInt32(4); },
+    "static hashCode(D)I": (v: number) => { const b = doubleToLongBits(v); return Number(BigInt.asIntN(32, b ^ (b >> 32n))); },
     "static toString(D)Ljava/lang/String;": fmtDouble,
     "isNaN()Z": function (this: JDouble) { return isNaNZ(this.v); },
     "isInfinite()Z": function (this: JDouble) { return isInfZ(this.v); },

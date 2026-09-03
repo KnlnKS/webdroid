@@ -15,6 +15,7 @@ import { JEditable, JSpannable, csText } from "./text";
 import { JView, invalidate } from "./view";
 import { JMatrix } from "./graphics";
 import { JTextView, JEditText, focusedEdit, focusEditText } from "./widget";
+import { PARCELABLE } from "./os";
 
 
 class JEditorInfo extends JObj {
@@ -91,8 +92,7 @@ rt.register({
     "getSupportedHandwritingGestures()Ljava/util/List;": function (this: JEditorInfo) { return this.gestures; },
     "setSupportedHandwritingGesturePreviews(Ljava/util/Set;)V": function (this: JEditorInfo, s: unknown) { this.gesturePreviews = s; },
     "getSupportedHandwritingGesturePreviews()Ljava/util/Set;": function (this: JEditorInfo) { return this.gesturePreviews; },
-    "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+    ...PARCELABLE,
   },
 });
 
@@ -402,8 +402,7 @@ rt.register({
       if (this.matrix) m.m = [...this.matrix.m];
       return m;
     },
-    "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+    ...PARCELABLE,
   },
 });
 class JCursorAnchorInfoBuilder extends JObj { info = new JCursorAnchorInfo(); matrixSet = false; }

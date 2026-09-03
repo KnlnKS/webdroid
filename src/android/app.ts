@@ -16,7 +16,7 @@ import { JView, JViewGroup, AID, requestLayout, invalidate, specSize, findById, 
 import { JFrameLayout, JLinearLayout } from "./widget";
 import { getInflater, inflateLayout } from "./inflate";
 import { loadDrawable, loadDrawableRV, JColorDrawable, JDrawable, loadColorStateList } from "./drawable";
-import { JBundle, mainLooper, reportUncaught, mkPfd } from "./os";
+import { JBundle, mainLooper, reportUncaught, mkPfd, PARCELABLE } from "./os";
 import { onMain } from "./mainloop";
 import { isMusicActive } from "./media";
 import { TV, attr, attrStr, type XmlNode, parseAXML } from "./axml";
@@ -36,7 +36,6 @@ export interface AppHost {
   themeResId: number;
   iconRes: number;
   zip: Record<string, Uint8Array>;
-  /** null between setAppHost and the Application instance being constructed (device.ts) */
   application: JApplication | null;
   jresources: JResources;
   statusBarColor: number;
@@ -2787,8 +2786,7 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "loadLabel(Landroid/content/pm/PackageManager;)Ljava/lang/String;": function (this: JAppWidgetProviderInfo) { return this.label; },
-    "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+    ...PARCELABLE,
   },
 });
 

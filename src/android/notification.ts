@@ -9,6 +9,7 @@ import { newArrayList } from "../jvm/natives/jutil";
 import { rt, JObj } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { mkUri } from "./net";
+import { PARCELABLE } from "./os";
 import type { JBundle } from "./os";
 import type { JBitmap } from "./graphics";
 import { JBitmapDrawable } from "./drawable";
@@ -51,8 +52,7 @@ const iconMethods: Record<string, Impl> = {
   "getResPackage()Ljava/lang/String;": function (this: JIcon) { return this.resPkg; },
   "getUri()Landroid/net/Uri;": function (this: JIcon) { return this.uri ?? null; },
   "getBitmap()Landroid/graphics/Bitmap;": function (this: JIcon) { return this.bmp; },
-  "describeContents()I": () => 0,
-  "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+  ...PARCELABLE,
   "loadDrawable(Landroid/content/Context;)Landroid/graphics/drawable/Drawable;":
     async function (this: JIcon, ctx: unknown) {
       if (this.type === TYPE_RESOURCE && ctx) {
@@ -89,8 +89,7 @@ const rvMethods: Record<string, Impl> = {
   "getLayoutId()I": function (this: JRemoteViews) { return this.layoutId; },
   "getPackage()Ljava/lang/String;": function (this: JRemoteViews) { return this.pkg; },
   "clone()Landroid/widget/RemoteViews;": function (this: JRemoteViews) { const r = new JRemoteViews(); r.pkg = this.pkg; r.layoutId = this.layoutId; return r; },
-  "describeContents()I": () => 0,
-  "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+  ...PARCELABLE,
 };
 for (const sig of [
   "addStableView(ILandroid/widget/RemoteViews;I)", "addView(ILandroid/widget/RemoteViews;)", "removeAllViews(I)",
@@ -177,8 +176,7 @@ rt.register({
     "getChannelId()Ljava/lang/String;": function (this: JNotification) { return this.channelId; },
     "getGroup()Ljava/lang/String;": function (this: JNotification) { return this.group; },
     "getSortKey()Ljava/lang/String;": function (this: JNotification) { return this.sortKey; },
-    "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+    ...PARCELABLE,
   },
 });
 
@@ -350,8 +348,7 @@ rt.register({
     "isContextual()Z": function (this: JNAction) { return this.contextual; },
     "isAuthenticationRequired()Z": () => 0,
     "clone()Landroid/app/Notification$Action;": function (this: JNAction) { return Object.assign(new JNAction(), this); },
-    "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+    ...PARCELABLE,
   },
 });
 class JNActionBuilder extends JObj { a = new JNAction(); }
@@ -391,7 +388,7 @@ rt.register({
     "getUri()Ljava/lang/String;": function (this: JPerson) { return this.uri; },
     "getIcon()Landroid/graphics/drawable/Icon;": function (this: JPerson) { return this.ico; },
     "isBot()Z": () => 0, "isImportant()Z": () => 0,
-    "describeContents()I": () => 0, "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+    ...PARCELABLE,
   },
 });
 class JPersonBuilder extends JObj { p = new JPerson(); }

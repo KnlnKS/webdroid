@@ -4,6 +4,7 @@
 
 import { rt, JObj } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jutil";
+import { PARCELABLE } from "./os";
 
 // ── UserHandle: single-user device, so one handle stands for the whole system.
 class JUserHandle extends JObj { id = 0; }
@@ -17,8 +18,7 @@ rt.register({
       return o instanceof JUserHandle && o.id === this.id ? 1 : 0;
     },
     "toString()Ljava/lang/String;": function (this: JUserHandle) { return "UserHandle{" + this.id + "}"; },
-    "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+    ...PARCELABLE,
     "static getUserHandleForUid(I)Landroid/os/UserHandle;": () => theUser,
   },
 });

@@ -407,18 +407,8 @@ rt.register({
     },
   },
 });
-rt.register({
-  name: "android/widget/TableRow$LayoutParams", ctor: class extends JLinearLP {}, sup: "android/widget/LinearLayout$LayoutParams",
-  methods: {
-    "<init>()V": function (this: JLinearLP) { this.width = MATCH_PARENT; this.height = WRAP_CONTENT; },
-    "<init>(II)V": function (this: JLinearLP, w: number, h: number) { this.width = w; this.height = h; },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JLinearLP, c: unknown, set: JAttrSet) {
-      lpFromAttrs(this, set.res, set);
-    },
-  },
-});
-rt.register({
-  name: "android/widget/TableLayout$LayoutParams", ctor: class extends JLinearLP {}, sup: "android/widget/LinearLayout$LayoutParams",
+for (const owner of ["TableRow", "TableLayout"]) rt.register({
+  name: `android/widget/${owner}$LayoutParams`, ctor: class extends JLinearLP {}, sup: "android/widget/LinearLayout$LayoutParams",
   methods: {
     "<init>()V": function (this: JLinearLP) { this.width = MATCH_PARENT; this.height = WRAP_CONTENT; },
     "<init>(II)V": function (this: JLinearLP, w: number, h: number) { this.width = w; this.height = h; },

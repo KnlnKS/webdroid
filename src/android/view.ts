@@ -149,15 +149,11 @@ function mergeStates(base: Int32Array, extra: Int32Array | null): Int32Array {
   return base;
 }
 
-/** Dispatch a mangled method on `self` and settle it. The method must exist: these are the
- *  calls whose receiver AOSP guarantees declares it, and a miss is a real defect that has to
- *  surface rather than render half a frame. Use guardMaybe for the optional hooks. */
 export async function guardCall(self: unknown, mangled: string, ...args: unknown[]): Promise<any> {
   const r = (jmethod(self, mangled) as JMethod).apply(self, args);
   return r instanceof Promise ? await r : r;
 }
 
-/** the same for a hook an app subclass may simply not override (onDraw, onSizeChanged...) */
 export async function guardMaybe(self: unknown, mangled: string, ...args: unknown[]): Promise<any> {
   const fn = jmethod(self, mangled);
   if (!fn) return undefined;
@@ -165,7 +161,6 @@ export async function guardMaybe(self: unknown, mangled: string, ...args: unknow
   return r instanceof Promise ? await r : r;
 }
 
-/** the same, when the caller already holds the function (it compared identity, or built it) */
 export async function guardApply(fn: JMethod, self: unknown, ...args: unknown[]): Promise<any> {
   const r = fn.apply(self, args);
   return r instanceof Promise ? await r : r;

@@ -107,10 +107,13 @@ export function charsToString(chars: Uint16Array | Uint8Array, off: number, len:
   return s;
 }
 
-/** A mangled method off a Java object, or undefined when the class does not declare it.
- *  Callers hoist the mangled key into a module const: mangleMethod is memoised but not free,
- *  and these run per view per frame. */
 export type JMethod = (this: unknown, ...a: unknown[]) => unknown;
 export function jmethod(o: unknown, mangled: string): JMethod | undefined {
   return (o as Record<string, JMethod | undefined> | null)?.[mangled];
 }
+
+const bits = new DataView(new ArrayBuffer(8));
+export function intBitsToFloat(i: number): number { bits.setInt32(0, i | 0); return bits.getFloat32(0); }
+export function floatToIntBits(f: number): number { bits.setFloat32(0, f); return bits.getInt32(0); }
+export function longBitsToDouble(l: bigint): number { bits.setBigInt64(0, l); return bits.getFloat64(0); }
+export function doubleToLongBits(d: number): bigint { bits.setFloat64(0, d); return bits.getBigInt64(0); }

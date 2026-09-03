@@ -29,7 +29,6 @@ export async function loadDexes(path: string): Promise<DexFile[]> {
   return dexes;
 }
 
-/** the same, for a framework jar: `bun run gen-framework` puts it at vendor/aosp/framework.jar */
 export async function loadJarDexes(path: string): Promise<DexFile[]> {
   if (!existsSync(path)) throw new Error(`no ${path} — run \`bun run gen-framework\` with the reference AVD booted`);
   return loadDexes(path);
