@@ -899,7 +899,14 @@ this; measure the native layer instead.
 so it returned a promise whatever the body did, and every FIRST touch of any class forced its
 toucher to await. It now runs synchronously until a step actually yields. That is correct
 regardless of the tier — and it is also the precondition for it, since otherwise no method
-containing an sget or a new-instance could ever be sync.
+containing an sget or a new-instance could ever be sync. Measured neutral on boot and on
+frame counts (checked by A/B, not assumed).
+
+**A harness note that cost time**: harmonic's `draws` looked like it had doubled against an
+earlier baseline. It had not. harmonic invalidates on essentially every frame at idle either
+way — the earlier run simply drew less because its scroll steps timed out. A step that wedges
+draws fewer frames, so `draws` and `drawMs` move with the scroll steps' own instability and
+say nothing on their own. Read them beside the per-step content diff, never alone.
 
 ## Generating JS source costs 4x what parsing it does
 Loading a class generated source for every method it declares: 4397 classes / 24870 methods /
