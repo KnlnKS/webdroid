@@ -697,7 +697,7 @@ delegate("android/graphics/BaseCanvas", {
     cm("drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V").call(canvas(h), deref<JBitmap>(b) as never, x as never, y as never, (pt ? paint(pt) : null) as never),
   "nDrawBitmap(JJFFFFFFFFJII)V": (h: bigint, b: bigint, sl: number, st: number, sr: number, sb: number, dl: number, dt: number, dr: number, db: number, pt: bigint) =>
     cm("drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/RectF;Landroid/graphics/Paint;)V")
-      .call(canvas(h), rect(sl, st, sr, sb) as never, rect(dl, dt, dr, db) as never, (pt ? paint(pt) : null) as never, deref<JBitmap>(b) as never),
+      .call(canvas(h), deref<JBitmap>(b) as never, rect(sl, st, sr, sb) as never, rect(dl, dt, dr, db) as never, (pt ? paint(pt) : null) as never),
   "nDrawBitmapMatrix(JJJJ)V": (h: bigint, b: bigint, m: bigint, pt: bigint) => {
     const c = canvas(h);
     c.ctx.save();
@@ -730,7 +730,7 @@ delegate("android/graphics/BaseCanvas", {
   // resolves; from here it is the bitmap scaled into the destination
   "nDrawNinePatch(JJJFFFFJII)V": (h: bigint, b: bigint, _chunk: bigint, l: number, t: number, r: number, bo: number, pt: bigint) =>
     cm("drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/RectF;Landroid/graphics/Paint;)V")
-      .call(canvas(h), null as never, rect(l, t, r, bo) as never, (pt ? paint(pt) : null) as never, deref<JBitmap>(b) as never),
+      .call(canvas(h), deref<JBitmap>(b) as never, null as never, rect(l, t, r, bo) as never, (pt ? paint(pt) : null) as never),
   // positioned glyph ids, which only a shaping engine produces: there is none behind
   // Canvas2D, and the text entry points above are what the framework actually uses
   "nDrawGlyphs(J[I[FIIIJJ)V": () => {},
