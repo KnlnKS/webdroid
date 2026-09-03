@@ -14,6 +14,10 @@
 import { chromium, type Page } from "playwright";
 import { readdirSync } from "node:fs";
 
+// the e2e driver's convention: a server left running in another worktree answers on 4080 and a
+// run then measures code you did not write (see "Harness notes" in AGENTS.md)
+const BASE = process.env.WEBDROID_URL ?? "http://localhost:4080";
+
 const args = process.argv.slice(2);
 const opt = (n: string, d: string) => { const i = args.indexOf(n); return i < 0 ? d : args[i + 1]; };
 const waitMs = parseInt(opt("--wait", "12000"));
@@ -40,7 +44,7 @@ async function boot(page: Page, apk: string): Promise<Row> {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e).slice(0, 200)));
   try {
-    await page.goto(`http://localhost:4080/?apk=${encodeURIComponent(apk)}`, { waitUntil: "load", timeout: 60000 });
+    await page.goto(`${BASE}/?apk=${encodeURIComponent(apk)}`, { waitUntil: "load", timeout: 60000 });
     // a frame having been drawn is the only evidence that matters; ticks alone can spin on a
     // shell that never got an activity up
     await page.waitForFunction("window.wd && window.wd.perf.draws > 0", null, { timeout: waitMs }).catch(() => {});
