@@ -23,7 +23,11 @@ const TAG_PREFIXES = ["android/widget/", "android/webkit/", "android/app/", "and
 
 async function createViewByName(name: string, jctx: any, set: JAttrSet): Promise<JView> {
   let clsName: string;
-  if (name === "view" || name === "View") clsName = "android/view/View";
+  // <view class="a.b.C"/> is how AOSP writes a tag whose class name is not a legal element
+  // name -- an inner class, above all. The framework's own layouts use it.
+  const asClass = name === "view" ? set.node?.attrs.find((a) => a.name === "class" && !a.ns)?.str : null;
+  if (asClass) clsName = asClass.replace(/\./g, "/");
+  else if (name === "view" || name === "View") clsName = "android/view/View";
   else if (name.includes(".")) clsName = name.replace(/\./g, "/");
   // Probe the registry rather than link()ing each candidate: linking a name we do
   // not implement auto-stubs it and reports a miss that was never real.
