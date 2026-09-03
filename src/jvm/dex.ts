@@ -221,9 +221,9 @@ export class DexFile {
     return def;
   }
 
-  /** annotations for a class_def: { methods: Map<methodIdx, EncAnnotation[]>, fields: Map<fieldIdx, ...>, cls: [...] } */
-  classAnnotations(def: ClassDef): { cls: EncAnnotation[]; methods: Map<number, EncAnnotation[]>; fields: Map<number, EncAnnotation[]> } {
-    const out = { cls: [] as EncAnnotation[], methods: new Map<number, EncAnnotation[]>(), fields: new Map<number, EncAnnotation[]>() };
+  /** annotations for a class_def: the class's own, and per field, method and method PARAMETER */
+  classAnnotations(def: ClassDef): { cls: EncAnnotation[]; methods: Map<number, EncAnnotation[]>; fields: Map<number, EncAnnotation[]>; params: Map<number, EncAnnotation[][]> } {
+    const out = { cls: [] as EncAnnotation[], methods: new Map<number, EncAnnotation[]>(), fields: new Map<number, EncAnnotation[]>(), params: new Map<number, EncAnnotation[][]>() };
     const dir = def.annotationsOff;
     if (!dir) return out;
     const v = this.view;
@@ -243,6 +243,19 @@ export class DexFile {
       const setOff = v.getUint32(p + 4, true);
       out.methods.set(methodIdx, this.annotationSet(setOff));
       p += 8;
+    }
+    // annotated_parameters: one annotation_set_ref_list per method, one set per parameter.
+    // Retrofit, Dagger and Jackson read nothing else — @Query, @Named, @JsonProperty are all here.
+    const paramsSize = v.getUint32(dir + 12, true);
+    for (let i = 0; i < paramsSize; i++) {
+      const methodIdx = v.getUint32(p, true);
+      const listOff = v.getUint32(p + 4, true);
+      p += 8;
+      if (!listOff) continue;
+      const n = v.getUint32(listOff, true);
+      const per: EncAnnotation[][] = [];
+      for (let k = 0; k < n; k++) per.push(this.annotationSet(v.getUint32(listOff + 4 + k * 4, true)));
+      out.params.set(methodIdx, per);
     }
     return out;
   }

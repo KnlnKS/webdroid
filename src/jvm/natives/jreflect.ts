@@ -10,12 +10,13 @@ interface ClassAnno {
   cls: EncAnnotation[];
   methodsByRef: Map<string, EncAnnotation[]>; // "name+desc" → annotations
   fieldsByName: Map<string, EncAnnotation[]>;
+  paramsByRef: Map<string, EncAnnotation[][]>;
 }
 const annoCache = new WeakMap<ClassInfo, ClassAnno>();
 function classAnno(info: ClassInfo): ClassAnno {
   let a = annoCache.get(info);
   if (a) return a;
-  a = { cls: [], methodsByRef: new Map(), fieldsByName: new Map() };
+  a = { cls: [], methodsByRef: new Map(), fieldsByName: new Map(), paramsByRef: new Map() };
   if (info.dex && info.def) {
     const raw = info.dex.classAnnotations(info.def);
     a.cls = raw.cls;
@@ -26,6 +27,10 @@ function classAnno(info: ClassInfo): ClassAnno {
     }
     for (const [fieldIdx, annos] of raw.fields) {
       a.fieldsByName.set(info.dex.field(fieldIdx).name, annos);
+    }
+    for (const [methodIdx, per] of raw.params) {
+      const m = info.dex.method(methodIdx);
+      a.paramsByRef.set(m.name + info.dex.methodDesc(methodIdx), per);
     }
   }
   annoCache.set(info, a);
@@ -43,6 +48,16 @@ function mkMethod(owner: ClassInfo, name: string, desc: string, isStatic: boolea
   const m = new JMethod();
   m.owner = owner; m.name = name; m.desc = desc; m.isStatic = isStatic; m.fn = fn;
   return m;
+}
+
+/** the dex's per-parameter annotation sets, padded to the descriptor's parameter count: a dex
+ *  records a list only up to the last annotated parameter, and callers index by position */
+function paramAnnotations(owner: ClassInfo, name: string, desc: string) {
+  const per = classAnno(owner).paramsByRef.get(name + desc) ?? [];
+  const n = parseMethodDesc(desc).params.length;
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(jarray((per[i] ?? []).map(mkAnnotation), "Ljava/lang/annotation/Annotation;"));
+  return jarray(out, "[Ljava/lang/annotation/Annotation;");
 }
 
 /** getAnnotation/isAnnotationPresent/getAnnotations/getDeclaredAnnotations over the receiver's own annotation list */
@@ -324,6 +339,7 @@ rt.register({
       return boxReturn(parseMethodDesc(this.desc).ret, val);
     },
     ...annotatedElement(function (this: JMethod) { return classAnno(this.owner).methodsByRef.get(this.name + this.desc) ?? []; }),
+    "getParameterAnnotations()[[Ljava/lang/annotation/Annotation;": function (this: JMethod) { return paramAnnotations(this.owner, this.name, this.desc); },
     "getGenericReturnType()Ljava/lang/reflect/Type;": function (this: JMethod) {
       return classForDesc(parseMethodDesc(this.desc).ret);
     },
@@ -377,9 +393,7 @@ rt.register({
     "isVarArgs()Z": function (this: JCtor) { return (this.flags & 0x80) ? 1 : 0; },
     "getParameterTypes()[Ljava/lang/Class;": function (this: JCtor) { return paramClasses(this.desc, "Ljava/lang/Class;"); },
     "getGenericParameterTypes()[Ljava/lang/reflect/Type;": function (this: JCtor) { return paramClasses(this.desc, "Ljava/lang/reflect/Type;"); },
-    "getParameterAnnotations()[[Ljava/lang/annotation/Annotation;": function (this: JCtor) {
-      return jarray(parseMethodDesc(this.desc).params.map(() => jarray([], "Ljava/lang/annotation/Annotation;")), "[Ljava/lang/annotation/Annotation;");
-    },
+    "getParameterAnnotations()[[Ljava/lang/annotation/Annotation;": function (this: JCtor) { return paramAnnotations(this.owner, "<init>", this.desc); },
     "newInstance([Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JCtor, args: unknown[] | null) {
       const info = this.owner;
       const p = rt.initClass(info); if (p) await p;
