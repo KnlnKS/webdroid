@@ -1,0 +1,26 @@
+// Which implementation of a framework class wins: ours, or AOSP's own bytecode.
+//
+// This is the ONLY place that decision is made. It used to be made by whether a module
+// appeared in src/natives.ts — provenance by import order, which cannot be ranked, reported
+// or A/B'd. HostStubGen drives the same decision for Ravenwood from a policy file, for the
+// same reason.
+//
+// Empty means "everything as today". Adding a prefix moves that subtree onto
+// vendor/aosp/framework.jar and withholds our native spec for it, which is what makes a cut
+// one line and a measurement rather than a rewrite.
+//
+// A cut is a class AND its whole super chain. A native spec's fieldTable holds only what
+// `fields:` declared — almost nothing — so bytecode that does `iget` on a native superclass
+// misses, logs, and reads `undefined` with no throw. android/view/View is a clean cut for
+// exactly this reason: its super is java/lang/Object, which has no fields.
+
+/** class-name prefixes served by AOSP bytecode instead of a native spec */
+export const BYTECODE: string[] = [];
+
+export function isBytecode(name: string): boolean {
+  for (const p of BYTECODE) if (name.startsWith(p)) return true;
+  return false;
+}
+
+/** the framework jar is only worth fetching when something is actually cut over to it */
+export const needsFramework = (): boolean => BYTECODE.length > 0;

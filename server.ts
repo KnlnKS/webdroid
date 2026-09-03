@@ -21,6 +21,11 @@ const ASSET_TYPE: Record<string, string> = {
   svg: "image/svg+xml", json: "application/json", txt: "text/plain", woff2: "font/woff2", pdf: "application/pdf",
 };
 // assets/ of each apk inflated once: an article page pulls several files and the apk is 100MB
+function serveVendor(path: string): Response {
+  if (!/^(aosp\/)?[\w.-]+$/.test(path)) return new Response("nope", { status: 400 });
+  return new Response(Bun.file(`vendor/${path}`), { headers: { "cache-control": "max-age=31536000, immutable" } });
+}
+
 const assetCache = new Map<string, Record<string, Uint8Array>>();
 async function apkAssets(apk: string): Promise<Record<string, Uint8Array>> {
   let a = assetCache.get(apk);
@@ -96,13 +101,11 @@ const server: Bun.Server<TcpData> = Bun.serve({
       if (!/^[\w.-]+$/.test(f)) return new Response("nope", { status: 400 });
       return new Response(Bun.file(`node_modules/sql.js/dist/${f}`));
     },
-    // the android: resource package (bun run gen-framework-res). It only changes when the device
-    // profile does, so let the browser keep it across reloads.
-    "/vendor/:file": (req) => {
-      const f = req.params.file;
-      if (!/^[\w.-]+$/.test(f)) return new Response("nope", { status: 400 });
-      return new Response(Bun.file(`vendor/${f}`), { headers: { "cache-control": "max-age=31536000, immutable" } });
-    },
+    // the android: resource package (bun run gen-framework-res) and, under vendor/aosp, the
+    // device's own framework.jar + framework-res.apk (bun run gen-framework). Both only change
+    // when the device profile does, so let the browser keep them across reloads.
+    "/vendor/:file": (req) => serveVendor(req.params.file),
+    "/vendor/aosp/:file": (req) => serveVendor(`aosp/${req.params.file}`),
     "/apks": async () => {
       const names: string[] = [];
       for await (const f of new Bun.Glob("*.{apk,xapk}").scan("apks")) names.push(f);

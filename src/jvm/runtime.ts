@@ -8,6 +8,7 @@
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, defaultValue, charsToString } from "./abi";
 import { compileClassSource, compileLazyMethod, methodKey, type CompiledCtor } from "./compiler";
+import { isBytecode } from "./provenance";
 import { perf } from "../perf";
 
 export const ACC = { STATIC: 0x8, FINAL: 0x10, NATIVE: 0x100, INTERFACE: 0x200, ABSTRACT: 0x400 } as const;
@@ -110,6 +111,7 @@ export class Runtime {
   }
 
   register(spec: NativeSpec) {
+    if (isBytecode(spec.name)) return;   // provenance says AOSP's own bytecode answers for this
     if (this.classes.has(spec.name)) console.warn("[webdroid] native registered after link:", spec.name);
     this.natives.set(spec.name, spec);
   }

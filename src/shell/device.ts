@@ -6,7 +6,7 @@ import { rt } from "../jvm/runtime";
 import { vfs } from "../jvm/natives/jio";
 import { vcall, curThread, mainThread, setCurThread, newObj } from "../jvm/natives/jlang";
 import { Arsc } from "../android/arsc";
-import { loadFramework } from "../android/framework";
+import { loadFramework, loadFrameworkDex } from "../android/framework";
 import { parseAXML, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
 import { mkJResources, setDeviceNight, deviceConfiguration } from "../android/resnative";
@@ -52,17 +52,22 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
   // while it is starting, and a tree that does not resolve *yet* is one that does not exist as
   // far as it is concerned — for the whole session, since it caches the answer.
   const [fwPkg] = await Promise.all([loadFramework(), restoreRoots()]);
-  // materialize every registered native class so directly-constructed instances have methods
-  for (const name of [...rt.natives.keys()]) {
-    try { rt.link(name); } catch (e) { console.warn("[link native]", name, e); }
-  }
   onStatus("unpacking apk…");
   const zip = unzipSync(bytes);
   rt.classpath = zip;
   vfs.write("/data/app/base.apk", bytes);
   onStatus("loading dex…");
+  // The apk goes in first: loadDex is first-wins by name, so an app shipping its own copy of a
+  // framework class keeps it, as on a device where the app's dex is ahead on the class path.
   for (const [name, data] of Object.entries(zip)) {
     if (/^classes\d*\.dex$/.test(name)) rt.loadDex(new DexFile(data, name));
+  }
+  await loadFrameworkDex();
+  // Natives materialize AFTER every dex is indexed, never before: a native whose super or
+  // interface is a class provenance withheld would otherwise link it, find no dex yet, and
+  // auto-stub it into the class cache for the rest of the run.
+  for (const name of [...rt.natives.keys()]) {
+    try { rt.link(name); } catch (e) { console.warn("[link native]", name, e); }
   }
   const manifest = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(manifest, "package") ?? "app";
