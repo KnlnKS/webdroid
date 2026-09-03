@@ -22,8 +22,13 @@ export const SCREEN_KEY = "wd:screen";
 
 export type Screen = { width: number; height: number; densityDpi: number };
 
-/** the built-in screen, used when nothing overrides it */
-const DEFAULT: Screen = { width: 720, height: 1280, densityDpi: 320 };
+/**
+ * The built-in screen, used when nothing overrides it: a current phone. 480dpi is what makes
+ * it divide exactly — 1080/3 and 2424/3 — so no rounding enters any dp->px site, and it keeps
+ * the 360dp width every width-qualified layout and `sw360dp` resource already selects for.
+ * The shape changes; the width bucket does not.
+ */
+const DEFAULT: Screen = { width: 1080, height: 2424, densityDpi: 480 };
 
 /** `1080x2424@480` — the dpi is optional and falls back to the built-in profile's. */
 export function parseScreen(s: string | null | undefined): Screen | null {
