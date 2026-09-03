@@ -24,7 +24,7 @@ See "One build, or none" and "The delegates" in AGENTS.md.
 | Graphics cut coverage | 295/363 declared natives (Bitmap 42/46) |
 | Evidence | `bun run fwtest` runs real bytecode headless: `new Paint()`, `new Matrix()`, `new Path()`, three AssetManager lookups against the real framework table, and `android:layout/alert_dialog` opened through `nativeOpenXmlAsset` and walked to END_DOCUMENT |
 | e2e | 46.67% overall, every step rendered — flat against main |
-| Corpus | `bun run corpus` 9/10 render a frame |
+| Corpus | `bun run corpus` 9/10 render a frame (only Among Us does not; `WEBDROID_URL` picks the server) |
 
 ## The shape of the endgame, and why the order is what it is
 
@@ -173,21 +173,22 @@ lists are coverage-dependent and were measured failing. Options worth designing:
 returned a promise without saying `async`. **Do not attempt the tier without solving this
 first** — it has already been tried three ways and measured.
 
-## 5. Front-end generality **[parallel]**
+## 5. Front-end generality **[parallel]** — **DONE**
 
-Independent of everything above. Each is small and each unblocks a class of apk.
+All four landed, each with a test that would have caught it:
 
-- **Quickened opcodes `0xe3–0xf9`** are `null` in `OPS`, so `insnLen` throws and the whole dex
-  is unwalkable. Any de-odexed or `dexlayout`-quickened dex fails before compilation starts.
-- **Dex container format v41** (Android 15+): several logical dex in one physical file,
-  offsets relative to the physical file. `art/dexlayout/dex_container.h`. Becomes urgent as
-  target apks move forward.
-- **Parameter annotations** are dropped (`annotated_parameters_size` is read past and unused),
-  so Retrofit/Dagger/Jackson-shaped libraries see nothing.
-- **CompactDex** (`cdex001`) is rejected at the magic check, which is correct today; its
-  `code_item` differs, so support is more than relaxing the check.
-- **No header validation at all**: version, checksum, SHA-1 signature and endian tag are never
-  read, and there are no bounds checks.
+- **Quickened opcodes** `0xe3–0xf2` have names and lengths, so an odexed dex walks instead of
+  throwing on the first one; the compiler stops at the `-quick` suffix *before* the prefix
+  matching that would have read a resolved offset as a field index.
+- **Dex container v41**: `dexesIn()` walks the headers, and each logical dex keeps the whole
+  buffer so container-relative offsets are what every existing read already computes.
+- **Parameter annotations** are parsed and reach `Method`/`Constructor.getParameterAnnotations`.
+  FitNotes carries 22 methods with them; harmonic and mihon none, because R8 strips them.
+- **Header validation**: version, endian tag, header size and every section's bounds. The
+  checksum and SHA-1 stay unverified — the zip already CRC'd the same bytes.
+
+**CompactDex** (`cdex001`) is still rejected at the magic check, which is correct: its
+`code_item` differs, so support is more than relaxing the check.
 
 ## 6. Native tier **[parallel]** — what the remaining apks need
 

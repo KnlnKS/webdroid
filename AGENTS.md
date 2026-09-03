@@ -963,6 +963,29 @@ Two things this cost, both worth remembering:
   believing anything read out of that tab; the finding only became reproducible in headless
   Playwright with `colorScheme: "dark"`.
 
+## The dex front-end: three ways a file was unreadable before it was wrong
+None of these was found by an app failing. Each was a shape the reader did not have, and each
+fails silently or unhelpfully rather than loudly:
+- **A quickened opcode has to be walkable even though it cannot be compiled.** `0xe3-0xf2` were
+  null in `OPS`, so `insnLen` threw on the first one and took the whole file — any de-odexed or
+  `dexlayout`-quickened dex failed before compilation started. The trap in fixing it is that the
+  compiler's `default` branch matches on the *name prefix*, so calling one `iget-quick` would
+  have emitted `A = B.<field>` with a resolved vtable offset in place of a field index: silently
+  wrong code. The `-quick` suffix is checked first.
+- **A v41 container is several logical dex, and their offsets are the FILE's.** Android 15 packs
+  them into one physical file; a reader that assumes one header at 0 sees only the first
+  classes' worth, with no error. Each `DexFile` keeps the whole buffer and only its header moves,
+  so container-relative is what every existing offset read already computes.
+- **`annotated_parameters_size` was read past.** Retrofit, Dagger and Jackson read nothing but
+  parameter annotations, so a library shaped like that saw a method the app had annotated as
+  bare. R8 strips them, which is why the corpus mostly cannot see the gap: harmonic and mihon
+  carry none, FitNotes 22.
+
+And the header itself was never checked at all, so a truncated or byte-swapped file surfaced as
+a RangeError from a DataView inside a string lookup. Version, endian tag, header size and every
+section's bounds are checked now; the checksum and SHA-1 are not, because they cost an adler32
+and a SHA-1 over every megabyte on every boot and the zip already CRC'd the same bytes.
+
 ## The corpus, and what it is for
 `bun run corpus` boots every apk in apks/ headlessly and ranks each gap by how many apks
 reach it, so the queue is ordered by expected value rather than by whichever app was opened
