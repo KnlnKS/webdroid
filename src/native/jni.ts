@@ -215,7 +215,7 @@ export function jniInit(): void {
   def(6, "FindClass", (cpu, a) => {
     a.p(); const name = a.str();
     const n = name.replace(/\./g, "/");
-    const info = rt.link(n[0] === "[" ? n : n);
+    const info = rt.link(n);
     if (info.stub) { pend(cpu, rt.ncdfe(n)); return 0; }
     return toRef(rt.classFor(n));
   });
@@ -389,7 +389,6 @@ export function jniInit(): void {
       const name = mem.cstr(mem.ld32(tab + k * 12)), sig = mem.cstr(mem.ld32(tab + k * 12 + 4)), fn = mem.ld32(tab + k * 12 + 8) >>> 0;
       registerNative(i, name, sig, fn);
     }
-    void cpu;
     return 0;
   });
   def(216, "UnregisterNatives", () => 0);

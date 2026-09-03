@@ -3,7 +3,6 @@
 // rather than in bytecode — a manifest attribute and a services file.
 
 import type { Program } from "./reach";
-import { descToName } from "./abi";
 import { parseAXML, attrStr, type XmlNode } from "../android/axml";
 
 export interface Roots {
@@ -97,4 +96,3 @@ export function reflectiveRoots(p: Program, dexes: { stringCount: number; string
   return [...out];
 }
 
-export { descToName };

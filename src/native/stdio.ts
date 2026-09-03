@@ -149,12 +149,11 @@ function modeFlags(mode: string): { o: number; f: number } {
   if (mode[0] === "w") return { o: (plus ? 2 : 1) | O_CREAT | O_TRUNC, f: plus ? F_RW : F_WR };
   return { o: (plus ? 2 : 1) | O_CREAT | O_APPEND, f: plus ? F_RW : F_WR };
 }
-function fgetc(cpu: Cpu, fp: number): number {
+function fgetc(_cpu: Cpu, fp: number): number {
   const fd = fileFd(fp);
   const f = fds.get(fd);
   if (!f) { setFlag(fp, F_ERR); return -1; }
   if (f.pos >= f.len) { setFlag(fp, F_EOF); return -1; }
-  void cpu;
   return f.data[f.pos++];
 }
 function fwriteBytes(cpu: Cpu, fp: number, p: number, n: number): number {
@@ -335,7 +334,6 @@ export function stdioInit(): void {
       });
       fo.pos += utf8(text.slice(0, consumed)).length;
       if (r < 0) setFlag(fp, F_EOF);
-      void cpu;
       return r;
     },
     perror: (_c, a) => { const s = a.p(); logLine(6, "stderr", (s ? mem.cstr(s) + ": " : "") + "error"); },

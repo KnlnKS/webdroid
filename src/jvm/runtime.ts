@@ -11,7 +11,7 @@ import { compileClassSource, compileLazyMethod, methodKey, type CompiledCtor } f
 import { isBytecode } from "./provenance";
 import { perf } from "../perf";
 
-export const ACC = { STATIC: 0x8, FINAL: 0x10, NATIVE: 0x100, INTERFACE: 0x200, ABSTRACT: 0x400 } as const;
+export const ACC = { STATIC: 0x8, NATIVE: 0x100, INTERFACE: 0x200 } as const;
 
 /** Root of the unified JS/Java object hierarchy (java.lang.Object). */
 export class JObj {
@@ -726,10 +726,6 @@ export class Runtime {
     if (now - this.lastYield < 8) return null;
     this.lastYield = now;
     return new Promise((r) => setTimeout(r, 0));
-  }
-  str(v: unknown): string { // String.valueOf semantics for concat paths
-    if (v === null || v === undefined) return "null";
-    return String(v);
   }
   /** java.lang.Class for the type at dex typeIdx (compiled const-class) */
   classForIdx(D: DexLink, typeIdx: number): unknown {

@@ -7,16 +7,13 @@ import { PAGE_SIZE } from "./abi";
 export interface Module {
   name: string;
   base: number;
-  size: number;
   end: number;
   exports: Map<string, number>;
   initArray: number[];
-  finiArray: number[];
   init: number;
   needed: string[];
   exidx: { addr: number; count: number };
   symbols: { addr: Uint32Array; names: string[] };
-  textrel: boolean;
   /** dlopen handle bookkeeping */
   refs: number;
   inited: boolean;
@@ -53,14 +50,14 @@ export function loadElf(name: string, bytes: Uint8Array, resolve: Resolver): Mod
     if (l.memsz > l.filesz) mem.u8.fill(0, base + l.vaddr + l.filesz, base + l.vaddr + l.memsz);
   }
   const mod: Module = {
-    name, base, size, end: base + hi, exports: new Map(), initArray: [], finiArray: [], init: 0, needed: [],
-    exidx: { addr: base + exidxAddr, count: exidxSz >> 3 }, symbols: { addr: new Uint32Array(0), names: [] }, textrel: false,
+    name, base, end: base + hi, exports: new Map(), initArray: [], init: 0, needed: [],
+    exidx: { addr: base + exidxAddr, count: exidxSz >> 3 }, symbols: { addr: new Uint32Array(0), names: [] },
     refs: 1, inited: false,
   };
   if (!dynOff) return mod;
 
   // .dynamic
-  let strtab = 0, symtab = 0, hash = 0, rel = 0, relsz = 0, jmprel = 0, pltrelsz = 0, initArr = 0, initArrSz = 0, finiArr = 0, finiArrSz = 0;
+  let strtab = 0, symtab = 0, hash = 0, rel = 0, relsz = 0, jmprel = 0, pltrelsz = 0, initArr = 0, initArrSz = 0;
   const neededOffs: number[] = [];
   for (let p = base + dynOff; p < base + dynOff + dynSz; p += 8) {
     const tag = mem.i32[p >>> 2], val = mem.u32[(p + 4) >>> 2];
@@ -74,12 +71,9 @@ export function loadElf(name: string, bytes: Uint8Array, resolve: Resolver): Mod
       case 12: mod.init = base + val; break;
       case 17: rel = val; break;
       case 18: relsz = val; break;
-      case 22: mod.textrel = true; break;
       case 23: jmprel = val; break;
       case 25: initArr = val; break;
       case 27: initArrSz = val; break;
-      case 26: finiArr = val; break;
-      case 28: finiArrSz = val; break;
     }
   }
   const str = (off: number) => mem.cstr(base + strtab + off);
@@ -136,7 +130,6 @@ export function loadElf(name: string, bytes: Uint8Array, resolve: Resolver): Mod
   if (rel) apply(rel, relsz);
   if (jmprel) apply(jmprel, pltrelsz);
   for (let i = 0; i < initArrSz; i += 4) mod.initArray.push(mem.u32[(base + initArr + i) >>> 2]);
-  for (let i = 0; i < finiArrSz; i += 4) mod.finiArray.push(mem.u32[(base + finiArr + i) >>> 2]);
   return mod;
 }
 

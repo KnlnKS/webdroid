@@ -112,7 +112,7 @@ export function pthreadInit(): void {
     pthread_attr_init: () => 0, pthread_attr_destroy: () => 0, pthread_attr_setstacksize: () => 0, pthread_attr_setstack: () => 0,
     pthread_attr_setdetachstate: () => 0, pthread_attr_setschedparam: () => 0, pthread_attr_setschedpolicy: () => 0,
     pthread_attr_getstacksize: (_c, a) => { a.p(); mem.st32(a.p(), 0x100000); return 0; },
-    pthread_attr_getstack: (_c, a) => { a.p(); const base = a.p(), sz = a.p(); const cpu = _c; mem.st32(base, cpu.stackBase); mem.st32(sz, cpu.stackTop - cpu.stackBase); return 0; },
+    pthread_attr_getstack: (cpu, a) => { a.p(); const base = a.p(), sz = a.p(); mem.st32(base, cpu.stackBase); mem.st32(sz, cpu.stackTop - cpu.stackBase); return 0; },
     pthread_getattr_np: () => 0,
     // mutex: state keyed by address, the guest word untouched
     pthread_mutex_init: (_c, a) => { mutexes.set(a.p(), { owner: 0, count: 0, waiters: [] }); return 0; },

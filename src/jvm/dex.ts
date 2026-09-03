@@ -56,7 +56,6 @@ export type EncVal = number | bigint | string | boolean | null | EncVal[] |
 /** method_handle_item: what the handle points at, and which field/method id */
 export interface MethodHandleRef { type: number; idx: number; }
 /** the four method_handle_type values that name a method rather than a field */
-export const MH_INVOKE_STATIC = 0x04;
 
 class Reader {
   constructor(public bytes: Uint8Array, public pos: number) {}

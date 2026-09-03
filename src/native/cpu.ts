@@ -125,8 +125,6 @@ export class Cpu {
   depth = 0;
   /** guest-visible thread exit (pthread_exit / thread function returned) */
   finished = false;
-  onExit: (() => void) | null = null;
-  cleanup: { fn: number; arg: number }[] = [];
 
   constructor(jthread: JThread, name: string) {
     this.jthread = jthread;

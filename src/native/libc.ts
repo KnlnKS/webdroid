@@ -50,7 +50,6 @@ function strtoNum(cpu: Cpu, s: number, endp: number, base: number, bits: 32 | 64
   if ((base === 0 || base === 16) && u8[p] === 48 && (u8[p + 1] | 32) === 120) { base = 16; p += 2; }
   else if (base === 0) base = u8[p] === 48 ? 8 : 10;
   let v = 0n, any = false;
-  const start = p;
   for (;;) {
     const c = u8[p];
     let d: number;
@@ -62,9 +61,8 @@ function strtoNum(cpu: Cpu, s: number, endp: number, base: number, bits: 32 | 64
   if (endp) mem.st32(endp, any ? p : s);
   if (neg) v = -v;
   const max = unsigned ? (1n << BigInt(bits)) - 1n : (1n << BigInt(bits - 1)) - 1n, min = unsigned ? 0n : -(1n << BigInt(bits - 1));
-  if (v > max) { setErrno(cpu, E.RANGE); return unsigned ? max : max; }
+  if (v > max) { setErrno(cpu, E.RANGE); return max; }
   if (v < min) { setErrno(cpu, E.RANGE); return min; }
-  void start;
   return v;
 }
 function strtodAt(s: number, endp: number): number {

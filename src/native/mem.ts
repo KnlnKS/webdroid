@@ -47,7 +47,6 @@ export const mem = {
   onCodeWrite: (_addr: number): void => {},
 
   ld32(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) badAddr(a); return (a & 3) === 0 ? i32[a >>> 2] : dv.getInt32(a >>> 0, true); },
-  ld32u(a: number): number { return mem.ld32(a) >>> 0; },
   ld16u(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 2) badAddr(a); return (a & 1) === 0 ? u16[a >>> 1] : dv.getUint16(a >>> 0, true); },
   ld16s(a: number): number { return (mem.ld16u(a) << 16) >> 16; },
   ld8u(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 1) badAddr(a); return u8[a >>> 0]; },

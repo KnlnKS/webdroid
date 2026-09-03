@@ -6,7 +6,7 @@
 // column-major Float32Array(16) stacks; the shader takes the MVP product and the texture matrix.
 
 import { mem } from "./mem";
-import { hostLib, lookupHost, missingStub, calledMissing, type HostFn, bitsf, fbits } from "./host";
+import { hostLib, lookupHost, missingStub, calledMissing, type HostFn, bitsf } from "./host";
 import { gl, setGL } from "../android/gl";
 import { glSurfaces, type GlSurface } from "../android/glview";
 import { perf } from "../perf";
@@ -168,7 +168,7 @@ function prepareDraw(c: Ctx, first: number, count: number): boolean {
   if (texOn) {
     const rec = c.textures[c.bound[0]]!;
     const env = c.texEnv[0];
-    g.uniform1i(c.u.uTexMode, env === 0x2100 ? 1 : env === 0x1e01 ? 2 : env === 0x2101 ? 3 : env === 0x0104 ? 4 : env === 0x2000 ? 1 : 1);
+    g.uniform1i(c.u.uTexMode, env === 0x2100 ? 1 : env === 0x1e01 ? 2 : env === 0x2101 ? 3 : env === 0x0104 ? 4 : 1);
     g.uniform1i(c.u.uTexAlpha, rec.hasAlpha ? 1 : 0);
     g.activeTexture(g.TEXTURE0);
     g.bindTexture(g.TEXTURE_2D, rec.tex);
@@ -604,5 +604,4 @@ export function gles1Init(): void {
     eglGetProcAddress: (_c, a) => { const n = a.str(); return lookupHost(n, "libGLESv1_CM.so") ?? lookupHost(n, "libEGL.so") ?? missingStub("eglGetProcAddress!" + n); },
   };
   hostLib("libEGL.so", E);
-  void fbits;
 }
