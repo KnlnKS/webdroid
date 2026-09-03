@@ -4,7 +4,7 @@ import { rt, JObj } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { parseAXML, TV, type XmlNode } from "./axml";
-import { JAttrSet, askTheme, themeOf } from "./res";
+import { JAttrSet, askTheme, themeOf, noteAttrsRead, noteUnreadAttrs } from "./res";
 import { JView, JViewGroup, guardCall } from "./view";
 import type { AppHost } from "./app";
 
@@ -50,7 +50,8 @@ async function createViewFromTag(
   return createViewByName(name, jctx, set);
 }
 
-const A_theme = 0x01010000;
+const A_theme = 0x01010000, A_id = 0x010100d0, A_layout = 0x010100f2, A_layoutWidth = 0x010100f4;
+noteAttrsRead(A_theme, A_id, A_layout, A_layoutWidth);
 /** AOSP wraps a tag carrying android:theme -- and its whole subtree -- in a ContextThemeWrapper,
  *  which is how a per-widget ThemeOverlay reaches everything the tag contains. */
 async function themedCtx(jctx: any, node: XmlNode): Promise<any> {
@@ -69,7 +70,7 @@ async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentV
   for (const child of node.children) {
     if (child.name === "requestFocus" || child.name === "tag") continue;
     if (child.name === "include") {
-      const layoutAttr = child.attrs.find((a) => a.name === "layout" || a.resId === 0x010100f2);
+      const layoutAttr = child.attrs.find((a) => a.name === "layout" || a.resId === A_layout);
       const layoutId = layoutAttr?.data ?? 0;
       if (layoutId) {
         const incView = await inflateLayout(jctx, layoutId, parentView, false);
@@ -80,11 +81,11 @@ async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentV
           set.node = child;
           set.res = host.res;
           set.theme = host.theme;
-          const idAttr = child.attrs.find((a) => a.resId === 0x010100d0);
+          const idAttr = child.attrs.find((a) => a.resId === A_id);
           if (idAttr) (incView as JView).idNum = idAttr.data;
           // AOSP: the <include> tag's layout params win only when it declares them; otherwise
           // the included root keeps its own (inflateNode already put them on incView.lp).
-          const lp = child.attrs.some((a) => a.resId === 0x010100f4 /* layout_width */)
+          const lp = child.attrs.some((a) => a.resId === A_layoutWidth)
             ? await guardCall((parentView as any)[M_generateLP], parentView, set)
             : (incView as JView).lp ?? await guardCall((parentView as any)[M_generateLP], parentView, set);
           await guardCall((parentView as any)[M_addView], parentView, incView, lp);
@@ -98,6 +99,7 @@ async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentV
     set.res = host.res;
     set.theme = themeOf(cctx) ?? host.theme;
     const v = await createViewFromTag(inflater, parentView, child.name, cctx, set);
+    noteUnreadAttrs(child, child.name);
     let lp = v.lp;
     if (!lp) lp = await guardCall((parentView as any)[M_generateLP], parentView, set);
     await guardCall((parentView as any)[M_addView], parentView, v, lp);
@@ -123,6 +125,7 @@ async function inflateNode(jctx: any, root: XmlNode, parent: JViewGroup | null, 
   set.res = host.res;
   set.theme = themeOf(rctx) ?? host.theme;
   const v = await createViewFromTag(inf, parent, root.name, rctx, set);
+  noteUnreadAttrs(root, root.name);
   if (parent) {
     const lp = await guardCall((parent as any)[M_generateLP], parent, set);
     if (attach) await guardCall((parent as any)[M_addView], parent, v, lp);

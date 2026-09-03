@@ -6,6 +6,7 @@ import { JRenderNode, SYSTEM_FONT } from "./android/graphics";
 import { setGL } from "./android/gl";
 import { rt } from "./jvm/runtime";
 import { loadFramework } from "./android/framework";
+import { unreadAttrs } from "./android/res";
 import { bootApk, tick, dispatchPointer, pressBack, currentApp, contentTop, SCREEN_W, SCREEN_H } from "./shell/device";
 import { perf, perfReset } from "./perf";
 import { uiState, measureView, makeSpec } from "./android/view";
@@ -156,6 +157,9 @@ const wd = {
   boot, app: () => currentApp(), rnodes: () => JRenderNode.all, back: () => pressBack(),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
   web: () => webViewInfo(),
+  // framework attributes a layout used that nothing here reads: a look that is wrong with a
+  // clean missing list is usually one of these
+  unreadAttrs: () => { const a = currentApp(); return a ? unreadAttrs(a.host.res) : []; },
   tree: () => {
     const out: string[] = [];
     const line = ({ v, depth }: { v: any; depth: number }) =>

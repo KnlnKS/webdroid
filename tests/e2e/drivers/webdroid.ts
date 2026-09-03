@@ -278,6 +278,11 @@ export class WebdroidDriver {
     return this.page.evaluate(() => (globalThis as any).wd.web?.() ?? []);
   }
 
+  /** Framework attributes a layout carried that nothing in the framework reads. */
+  unreadAttrs(): Promise<string[]> {
+    return this.page.evaluate(() => (globalThis as any).wd.unreadAttrs?.() ?? []);
+  }
+
   /** Native libraries the app tried to load that only exist as machine code: "libx.so (abi)". */
   nativeRequired(): Promise<string[]> {
     return this.page.evaluate(() => [...((globalThis as any).wd.rt.nativeRequired ?? [])].map(([l, a]) => l + " (" + a + ")"));

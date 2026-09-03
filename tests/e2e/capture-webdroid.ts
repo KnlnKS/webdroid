@@ -21,6 +21,8 @@ export type StepRun = {
   newMissing?: string[];
   /** Native libraries this step was the first to need as machine code ("libx.so (abi)"). */
   nativeRequired?: string[];
+  /** framework attributes this step was the first to use and find unread */
+  unreadAttrs?: string[];
   /** Wall-clock ms this step took to settle, and the perf counters it burned getting there. */
   ms?: number;
   perf?: Record<string, number>;
@@ -95,6 +97,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver): Promise<Step
   const runs: StepRun[] = [];
   let seenMissing = new Set(await drv.missing());
   let seenNative = new Set(await drv.nativeRequired());
+  let seenAttrs = new Set(await drv.unreadAttrs());
   const errorLines = async () => (await drv.logs()).filter((l) => l.startsWith("error:"));
   let seenErrors = new Set(await errorLines());
   for (const [i, step] of flow.steps.entries()) {
@@ -125,6 +128,9 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver): Promise<Step
     const native = await drv.nativeRequired();
     const newNative = native.filter((n) => !seenNative.has(n));
     seenNative = new Set(native);
+    const attrs = await drv.unreadAttrs();
+    const newAttrs = attrs.filter((a) => !seenAttrs.has(a));
+    seenAttrs = new Set(attrs);
     const errs = await errorLines();
     const newErrors = errs.filter((e) => !seenErrors.has(e));
     seenErrors = new Set(errs);
@@ -138,6 +144,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver): Promise<Step
                 ms: stepMs, perf: stepPerf, fps: step.animated ? Math.round(fps) : undefined, slow: slow || undefined,
                 newMissing: newMissing.length ? newMissing : undefined,
                 nativeRequired: newNative.length ? newNative : undefined,
+                unreadAttrs: newAttrs.length ? newAttrs : undefined,
                 newErrors: newErrors.length ? newErrors : undefined, web: web.length ? web : undefined, error });
     const flags = [
       semanticHit === false ? "coord-fallback" : "",

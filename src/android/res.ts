@@ -8,9 +8,29 @@ const aidMemo = new Map<string, number>();
 /** framework attr id by name, e.g. AID("textColor") */
 export const AID = (name: string): number => {
   let v = aidMemo.get(name);
-  if (v === undefined) aidMemo.set(name, v = fwPkg?.findId("attr", name) ?? 0);
+  if (v === undefined) { aidMemo.set(name, v = fwPkg?.findId("attr", name) ?? 0); if (v) askedAttrs.add(v); }
   return v;
 };
+
+// Naming an attribute here is the only way to read one, so every id AID has ever returned is the
+// set we understand. A framework attribute on a tag outside it renders wrong in silence -- no
+// missing class, no missing method, nothing in the log -- which is the hardest kind of gap to
+// find in an app nobody has run before.
+const askedAttrs = new Set<number>();
+const unread = new Map<number, string>();
+export function noteAttrsRead(...ids: number[]): void { for (const id of ids) askedAttrs.add(id); }
+export function noteUnreadAttrs(node: XmlNode, cls: string): void {
+  for (const a of node.attrs) {
+    if (a.resId >>> 24 !== 0x01 || askedAttrs.has(a.resId) || unread.has(a.resId)) continue;
+    unread.set(a.resId, cls);
+  }
+}
+/** filtered at read time: a widget that had not been constructed yet has since named its own */
+export function unreadAttrs(res: Resources): string[] {
+  const out: string[] = [];
+  for (const [id, cls] of unread) if (!askedAttrs.has(id)) out.push(`${cls} android:${res.idName(id)}`);
+  return out.sort();
+}
 
 // The package arrives over the network, but the attr-id tables the widgets read are built while
 // their modules evaluate. They are handed out empty and filled in place, before any app boots.
@@ -243,6 +263,9 @@ export function obtainStyled(
   ta.attrIds = attrIds;
   const n = attrIds.length;
   ta.vals = new Array(n).fill(null);
+  // asking is what counts, not finding: app classes reach their own framework attributes through
+  // this same cascade, so an attribute nobody asks for is one nobody implements.
+  for (let i = 0; i < n; i++) askedAttrs.add(attrIds[i]);
 
   // 3/4. defStyle chain
   let defStyleId = 0;
