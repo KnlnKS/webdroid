@@ -830,6 +830,8 @@ rt.register({
     "static getDataDirectory()Ljava/io/File;": () => mkFile("/data"),
     "static getDownloadCacheDirectory()Ljava/io/File;": () => mkFile("/cache"),
     "static getExternalStorageState()Ljava/lang/String;": () => "mounted",
+    "static getExternalStorageState(Ljava/io/File;)Ljava/lang/String;": () => "mounted",
+    "static getStorageState(Ljava/io/File;)Ljava/lang/String;": () => "mounted",
     "static isExternalStorageManager()Z": () => 1,
     "static isExternalStorageLegacy()Z": () => 0,
   },

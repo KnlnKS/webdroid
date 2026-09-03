@@ -123,6 +123,52 @@ defineException("java/security/NoSuchAlgorithmException", "java/security/General
 defineException("java/security/NoSuchProviderException", "java/security/GeneralSecurityException");
 defineException("java/security/KeyException", "java/security/GeneralSecurityException");
 defineException("java/security/InvalidKeyException", "java/security/KeyException");
+// java.security.cert's exceptions are CATCH types before they are anything else: an app that
+// wraps a certificate operation in `catch (CertificateException)` cannot match a class that
+// does not exist, so the failure it meant to handle escapes instead.
+defineException("java/security/cert/CertificateException", "java/security/GeneralSecurityException");
+defineException("java/security/cert/CertificateEncodingException", "java/security/cert/CertificateException");
+defineException("java/security/cert/CertificateParsingException", "java/security/cert/CertificateException");
+defineException("java/security/cert/CertificateExpiredException", "java/security/cert/CertificateException");
+defineException("java/security/cert/CertificateNotYetValidException", "java/security/cert/CertificateException");
+defineException("java/security/cert/CRLException", "java/security/GeneralSecurityException");
+defineException("java/security/cert/CertPathValidatorException", "java/security/GeneralSecurityException");
+defineException("java/security/cert/CertPathBuilderException", "java/security/GeneralSecurityException");
+rt.register({ name: "java/security/cert/CertPath", ctor: class extends JObj {} });
+rt.register({ name: "java/security/cert/CertificateFactorySpi", ctor: class extends JObj {} });
+function certFactory(type: string) {
+  if (type?.toUpperCase() !== "X.509") throw rt.mkThrowable("java/security/cert/CertificateException", type + " not available");
+  return new (rt.link("java/security/cert/CertificateFactory").ctor)();
+}
+/**
+ * There is no X.509 parser here and no store to validate against, so a factory exists (its
+ * absence is a NoClassDefFoundError nothing can catch) and answers the way a provider handed
+ * bytes it cannot make sense of does: a catchable CertificateException.
+ */
+rt.register({
+  name: "java/security/cert/CertificateFactory", ctor: class extends JObj {},
+  methods: {
+    "static getInstance(Ljava/lang/String;)Ljava/security/cert/CertificateFactory;": certFactory,
+    "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/cert/CertificateFactory;": certFactory,
+    "getType()Ljava/lang/String;": () => "X.509",
+    "generateCertificate(Ljava/io/InputStream;)Ljava/security/cert/Certificate;": () => {
+      throw rt.mkThrowable("java/security/cert/CertificateException", "no certificate parser");
+    },
+    "generateCertificates(Ljava/io/InputStream;)Ljava/util/Collection;": () => {
+      throw rt.mkThrowable("java/security/cert/CertificateException", "no certificate parser");
+    },
+  },
+});
+rt.register({
+  name: "java/security/cert/CertPathValidator", ctor: class extends JObj {},
+  methods: {
+    "static getInstance(Ljava/lang/String;)Ljava/security/cert/CertPathValidator;": () =>
+      new (rt.link("java/security/cert/CertPathValidator").ctor)(),
+    "validate(Ljava/security/cert/CertPath;Ljava/security/cert/CertPathParameters;)Ljava/security/cert/CertPathValidatorResult;": () => {
+      throw rt.mkThrowable("java/security/cert/CertPathValidatorException", "no trust anchors");
+    },
+  },
+});
 
 type Digest = (data: Uint8Array) => Uint8Array;
 // Standard names plus the aliases Android's providers accept (case-insensitive); anything else is
