@@ -1337,7 +1337,7 @@ export function tintedBmp(b: JBitmap, tint: number | null): OffscreenCanvas {
 rt.register({ name: "android/graphics/Canvas", ctor: JCanvas, methods: canvasMethods });
 // android.graphics.Outline: the shape a RenderNode clips to (clipToOutline) — Compose's
 // Modifier.clip(shape) is exactly this, so a round button's ripple and children stay inside it.
-export class JOutline extends JObj {
+class JOutline extends JObj {
   kind: 0 | 1 | 2 | 3 = 0;   // empty | rect/roundRect | oval | path
   l = 0; t = 0; r = 0; b = 0; rad = 0; alpha = 1;
   path: JPath | null = null;

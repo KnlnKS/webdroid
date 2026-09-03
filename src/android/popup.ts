@@ -226,7 +226,7 @@ rt.register({
   },
 });
 
-export class JPopupWindow extends JObj {
+class JPopupWindow extends JObj {
   jctx: any = null;
   content: JView | null = null;
   decor: PopupDecorView | null = null;

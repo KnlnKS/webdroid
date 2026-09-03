@@ -5,7 +5,7 @@
 
 import type { UiNode } from "../types";
 
-export interface NodeDelta {
+interface NodeDelta {
   key: string;
   /** device bounds, then ours */
   golden: [number, number, number, number];

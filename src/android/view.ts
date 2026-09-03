@@ -268,7 +268,7 @@ const AT = attrTable(
   "foreground", "duplicateParentState", "baselineAligned");
 // ── ViewOverlay: a drawing layer over the host's content. AOSP keeps an internal ViewGroup for
 // it; ours holds the two lists the host's draw pass walks, which is all anything reads back.
-export class JViewOverlay extends JObj {
+class JViewOverlay extends JObj {
   drawables: JDrawable[] = [];
   views: JView[] = [];
   constructor(public host: JView) { super(); }
@@ -2233,7 +2233,7 @@ const IT_STATUS = 0, IT_NAV = 1, IT_CAPTION = 2, IT_IME = 3, IT_GESTURES = 4,
   IT_MANDATORY = 5, IT_TAPPABLE = 6, IT_CUTOUT = 7, IT_OVERLAYS = 8, IT_TYPES = 9;
 const TYPE_BARS = (1 << IT_STATUS) | (1 << IT_NAV) | (1 << IT_CAPTION);
 
-export class JWindowInsets extends JObj {
+class JWindowInsets extends JObj {
   ins: (Ins | null)[] = new Array(IT_TYPES).fill(null);
   /** per-type visibility, as AOSP's mVisible bitmask */
   vis = ~0;

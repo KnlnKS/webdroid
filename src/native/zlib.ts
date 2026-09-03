@@ -55,7 +55,7 @@ function inflate(strm: number): number {
 // CRC-32 (the zlib polynomial), table driven
 const crcTab = new Int32Array(256);
 for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; crcTab[n] = c; }
-export function crc32(crc: number, buf: Uint8Array): number {
+function crc32(crc: number, buf: Uint8Array): number {
   let c = ~crc;
   for (let i = 0; i < buf.length; i++) c = crcTab[(c ^ buf[i]) & 255] ^ (c >>> 8);
   return ~c;

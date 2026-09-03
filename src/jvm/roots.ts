@@ -5,7 +5,7 @@
 import type { Program } from "./reach";
 import { parseAXML, attrStr, type XmlNode } from "../android/axml";
 
-export interface Roots {
+interface Roots {
   classes: string[];              // classes the platform instantiates and calls into
   methods: string[];              // their whole declared surface: nothing in the apk calls it
   why: Map<string, string>;       // what named each root, for the report

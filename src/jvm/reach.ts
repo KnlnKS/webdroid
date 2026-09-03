@@ -15,9 +15,9 @@ import { descToName } from "./abi";
 const NO_INDEX = 0xffffffff;
 
 /** "cls.name(desc)ret" — the identity a call site and a definition agree on */
-export type MemberKey = string;
+type MemberKey = string;
 
-export interface ReachResult {
+interface ReachResult {
   methods: Set<MemberKey>;            // bodies the analysis walked
   instantiated: Set<string>;          // classes a reachable new-instance creates
   classes: Set<string>;               // classes touched at all

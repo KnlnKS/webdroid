@@ -315,7 +315,7 @@ function parseNinePatchChunk(png: Uint8Array): { xDivs: number[]; yDivs: number[
 }
 
 // ── GradientDrawable (shape)
-export class JGradientDrawable extends JDrawable {
+class JGradientDrawable extends JDrawable {
   shape = 0; // 0 rect, 1 oval, 2 line, 3 ring
   solid: number | null = null;
   radii: number[] = [0, 0, 0, 0]; // tl tr br bl
@@ -637,7 +637,7 @@ function maskId(res: Resources): number {
   return maskIdCache;
 }
 
-export class JRippleDrawable extends JLayerDrawable {
+class JRippleDrawable extends JLayerDrawable {
   rippleColor = 0x33000000;
   /** the mask layer: it bounds the ripple, and is not part of what the drawable paints */
   mask: JDrawable | null = null;
@@ -778,7 +778,7 @@ class JVectorDrawable extends JDrawable {
 // ── DrawableWrapper: one child, everything forwarded (AOSP's base for Clip/Scale/Inset and any
 // app drawable that decorates another). Bounds, state and level reach the child through its
 // own virtual hooks; draw() dispatches virtually so a compiled child subclass paints itself.
-export class JDrawableWrapper extends JDrawable {
+class JDrawableWrapper extends JDrawable {
   dr: JDrawable | null = null;
   paint(cv: JCanvas) { if (this.dr) drawChild(this.dr, cv); }
   intrinsicW(): number { return this.dr ? this.dr.intrinsicW() : -1; }
@@ -830,7 +830,7 @@ rt.register({
 });
 // ── android.graphics.drawable.shapes + ShapeDrawable: a Shape is resized to the drawable's
 // bounds and painted with the drawable's own Paint (translated to the bounds origin, as AOSP).
-export class JShape extends JObj {
+class JShape extends JObj {
   w = 0; h = 0;
   path(): Path2D { const p = new Path2D(); p.rect(0, 0, this.w, this.h); return p; }
 }
@@ -895,7 +895,7 @@ rt.register({
   },
 });
 
-export class JShapeDrawable extends JDrawable {
+class JShapeDrawable extends JDrawable {
   shape: JShape | null = null;
   p = new JPaint();
   iw = 0; ih = 0;

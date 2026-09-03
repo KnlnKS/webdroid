@@ -22,7 +22,7 @@ const inflight = new Map<string, Promise<Module>>();
 function basename(p: string): string { return p.slice(p.lastIndexOf("/") + 1); }
 
 /** the bytes of lib<name>.so shipped in the booted apk, for any ABI the tier runs */
-export function apkLibBytes(name: string): Uint8Array | null {
+function apkLibBytes(name: string): Uint8Array | null {
   for (const a of ABIS) { const b = rt.classpath[`lib/${a}/${name}`]; if (b) return b; }
   return null;
 }
@@ -56,7 +56,7 @@ async function runInit(mod: Module): Promise<void> {
   for (const f of mod.initArray) if (f && f !== 0xffffffff && f !== RET_SENTINEL) await cpu.call(f);
 }
 
-export function resolveGlobal(sym: string, weak: boolean, _from: Module): number {
+function resolveGlobal(sym: string, weak: boolean, _from: Module): number {
   for (const m of modules) { const a = m.exports.get(sym); if (a !== undefined) return a; }
   const h = lookupHost(sym);
   if (h !== undefined) return h;
@@ -64,7 +64,7 @@ export function resolveGlobal(sym: string, weak: boolean, _from: Module): number
   return missingStub(sym);
 }
 
-export function moduleOf(pc: number): Module | null {
+function moduleOf(pc: number): Module | null {
   for (const m of modules) if (pc >= m.base && pc < m.end) return m;
   return null;
 }

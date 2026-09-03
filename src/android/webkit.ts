@@ -159,7 +159,7 @@ function mkRequest(url: string, gesture = false): JReq {
 class JWebErr extends JObj { code = -1; desc = ""; }
 
 interface Entry { url: string; src?: string; doc?: string }
-export class JWebView extends JViewGroup {
+class JWebView extends JViewGroup {
   settings = inst<JWebSettings>("android/webkit/WebSettings");
   client = inst("android/webkit/WebViewClient");
   chrome = inst("android/webkit/WebChromeClient");

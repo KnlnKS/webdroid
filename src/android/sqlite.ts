@@ -110,7 +110,7 @@ function bindArgs(args: unknown[] | null): (string | number | Uint8Array | null)
   });
 }
 
-export class JCursor extends JObj {
+class JCursor extends JObj {
   cols: string[] = [];
   rows: unknown[][] = [];
   pos = -1;

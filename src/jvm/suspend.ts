@@ -21,9 +21,9 @@ import { insnLen } from "./opcodes";
 import { descToName } from "./abi";
 
 /** answers for a method no dex defines: true suspends, false does not, null unknown */
-export type NativeOracle = (cls: string, sig: string) => boolean | null;
+type NativeOracle = (cls: string, sig: string) => boolean | null;
 
-export interface SuspendResult {
+interface SuspendResult {
   suspends: Set<string>;      // method keys that can suspend
   scanned: number;            // bodies walked
   edges: number;

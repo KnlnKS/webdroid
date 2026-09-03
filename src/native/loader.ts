@@ -11,7 +11,7 @@ import { cpuFor } from "./cpu";
 import { lookupHost } from "./host";
 
 let inited = false;
-export function nativeInit(): void {
+function nativeInit(): void {
   if (inited) return;
   inited = true;
   libcInit();

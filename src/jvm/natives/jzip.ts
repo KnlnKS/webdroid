@@ -193,7 +193,7 @@ rt.register({
 defineException("java/util/zip/ZipException", "java/io/IOException");
 
 // ── ZipFile / ZipEntry: index the central directory, inflate an entry only when it is read
-export interface ZEntry { name: string; method: number; csize: number; size: number; time: number; off: number; }
+interface ZEntry { name: string; method: number; csize: number; size: number; time: number; off: number; }
 const UNKNOWN: ZEntry = { name: "", method: -1, csize: -1, size: -1, time: -1, off: -1 };
 /** what ApplicationInfo.sourceDir answers (android/app.ts): the apk exists only as the unpacked classpath */
 const SOURCE_DIR = "/data/app/base.apk";

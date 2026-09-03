@@ -54,7 +54,7 @@ export type EncVal = number | bigint | string | boolean | null | EncVal[] |
   { kind: "annotation"; anno: EncAnnotation };
 
 /** method_handle_item: what the handle points at, and which field/method id */
-export interface MethodHandleRef { type: number; idx: number; }
+interface MethodHandleRef { type: number; idx: number; }
 /** the four method_handle_type values that name a method rather than a field */
 
 class Reader {

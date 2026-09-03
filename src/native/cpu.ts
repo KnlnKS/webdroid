@@ -15,7 +15,7 @@ export { NativeFault };
 export const enum SliceExit { Budget = 0, Suspend = 1, Exit = 2 }
 // ~5 ms of guest time per slice at the observed ~600M instr/s: coarse enough that the macrotask hop
 // per slice is noise, fine enough that a 60 Hz frame loop on the JS thread keeps its cadence
-export const SLICE_INSTR = 3_000_000;
+const SLICE_INSTR = 3_000_000;
 /** the run loop's instruction budget per slice; lowering it makes `profile` sample finely (debug) */
 export const slice = { instr: SLICE_INSTR };
 
@@ -49,7 +49,7 @@ export function setStepMode(on: boolean): void {
 }
 const stepPrev = new Int32Array(16);
 const RN = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "ip", "sp", "lr", "pc"];
-export let processExited = false;
+let processExited = false;
 /** slice-boundary pc samples (one per budget exit; `slice.instr` sets how fine): a free statistical profile */
 export const profile = { on: true, samples: new Map<number, number>() };
 export function markProcessExited(): void { processExited = true; }
@@ -59,7 +59,7 @@ mem.onCodeWrite = (addr: number) => {
   const cv = cov[pg];
   if (cv && cv[(addr >>> 2) & 1023]) invalidatePage(pg);
 };
-export function invalidatePage(pg: number): void {
+function invalidatePage(pg: number): void {
   const drop = (arr: (BlockFn | undefined)[] | undefined) => { if (arr) for (const f of arr) if (f) allBlocks.delete(f); };
   drop(pages[pg]); drop(tpages[pg]);
   pages[pg] = undefined;
@@ -363,7 +363,7 @@ export function cpuFor(t: JThread): Cpu {
 export function bindCpu(t: JThread, c: Cpu): void { byThread.set(t, c); }
 export function cpuByTid(tid: number): Cpu | undefined { for (const c of cpus) if (c.tid === tid) return c; return undefined; }
 
-export let symbolizeHook: (pc: number) => string = (pc) => "0x" + pc.toString(16);
+let symbolizeHook: (pc: number) => string = (pc) => "0x" + pc.toString(16);
 export function setSymbolizeHook(f: (pc: number) => string): void { symbolizeHook = f; }
 
 // A macrotask boundary so the main looper, rAF and other cooperative threads get the JS thread.

@@ -31,7 +31,7 @@ function synth(path: string): string | null {
   return null;
 }
 
-export function fdOpen(cpu: Cpu, path: string, flags: number): number {
+function fdOpen(cpu: Cpu, path: string, flags: number): number {
   path = vfs.norm(path);
   const s = synth(path);
   if (s !== null) { const b = utf8(s); return put({ path, data: b, len: b.length, pos: 0, write: false, dirty: false, dir: false, append: false, synthetic: true }); }
@@ -60,7 +60,7 @@ function grow(f: Fd, need: number): void {
   n.set(f.data.subarray(0, f.len));
   f.data = n;
 }
-export function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
+function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   if (fd === 1 || fd === 2) {
     const s = new TextDecoder().decode(u8.subarray(p, p + n));
     const f = fds.get(fd)!;
@@ -80,7 +80,7 @@ export function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   f.dirty = true;
   return n;
 }
-export function fdRead(cpu: Cpu, fd: number, p: number, n: number): number {
+function fdRead(cpu: Cpu, fd: number, p: number, n: number): number {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   if (f.dir) return fail(cpu, E.ISDIR);
@@ -92,7 +92,7 @@ export function fdRead(cpu: Cpu, fd: number, p: number, n: number): number {
 function flushFd(f: Fd): void {
   if (f.dirty && !f.synthetic) { vfs.write(f.path, f.data.slice(0, f.len)); f.dirty = false; }
 }
-export function fdClose(cpu: Cpu, fd: number): number {
+function fdClose(cpu: Cpu, fd: number): number {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   flushFd(f);

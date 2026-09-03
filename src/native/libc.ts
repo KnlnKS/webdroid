@@ -19,7 +19,7 @@ export const LAYOUT = {
   TM_SIZE: 44, UTSNAME_FIELD: 65, JMPBUF_SIZE: 256,
 } as const;
 
-export function setErrno(cpu: Cpu, e: number): void { mem.st32(cpu.errnoAddr, e); }
+function setErrno(cpu: Cpu, e: number): void { mem.st32(cpu.errnoAddr, e); }
 /** the common "-1 and errno" return */
 export function fail(cpu: Cpu, e: number): number { setErrno(cpu, e); return -1; }
 
@@ -89,7 +89,7 @@ function fillTm(tm: number, d: Date, utc: boolean): void {
 function readTm(tm: number): number[] { const f: number[] = []; for (let i = 0; i < 9; i++) f.push(mem.ld32(tm + i * 4)); return f; }
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-export function strftime(fmt: string, tm: number): string {
+function strftime(fmt: string, tm: number): string {
   const [sec, min, hour, mday, mon, year, wday, yday] = readTm(tm);
   const p2 = (n: number) => String(n).padStart(2, "0");
   const y = year + 1900;
@@ -513,7 +513,7 @@ function scanInto(s: string, f: string, a: { p(): number }): number {
     return 0;
   });
 }
-export const ERRSTR: Record<number, string> = {
+const ERRSTR: Record<number, string> = {
   1: "Operation not permitted", 2: "No such file or directory", 4: "Interrupted system call", 5: "I/O error", 9: "Bad file descriptor",
   11: "Try again", 12: "Out of memory", 13: "Permission denied", 16: "Device or resource busy", 17: "File exists", 20: "Not a directory",
   21: "Is a directory", 22: "Invalid argument", 24: "Too many open files", 28: "No space left on device", 29: "Illegal seek", 34: "Numerical result out of range",

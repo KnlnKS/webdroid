@@ -28,12 +28,12 @@ function join(parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
 }
 const toJava = (u: Uint8Array) => new Int8Array(u.buffer, u.byteOffset, u.length);
 
-export class JSecretKeySpec extends JObj {
+class JSecretKeySpec extends JObj {
   key = new Uint8Array(0);
   algo = "";
   imported = new Map<string, CryptoKey>();
 }
-export function mkSecretKey(key: Uint8Array, algo: string): JSecretKeySpec {
+function mkSecretKey(key: Uint8Array, algo: string): JSecretKeySpec {
   const k = new JSecretKeySpec(); k.key = new Uint8Array(key); k.algo = algo; return k;
 }
 function setKey(k: JSecretKeySpec, b: Int8Array, off: number, len: number, algo: string) {

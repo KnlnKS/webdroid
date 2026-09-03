@@ -18,7 +18,7 @@ const codePages = new Uint8Array(MEM_SIZE >> PAGE_SHIFT);
 const LOW = 0x10000, SPAN = MEM_SIZE - LOW;
 const enc = new TextEncoder(), dec = new TextDecoder();
 
-export function checkAddr(a: number, n: number): void {
+function checkAddr(a: number, n: number): void {
   if (((a >>> 0) - LOW) >>> 0 > SPAN - n) badAddr(a);
 }
 function badAddr(a: number): never {

@@ -46,7 +46,7 @@ const pre = (globalThis as { __wdNativeTrace?: string }).__wdNativeTrace;
 if (pre) { hostTrace.on = true; hostTrace.filter = pre === "." ? null : new RegExp(pre); hostTrace.max = 2000; }
 if ((globalThis as { __wdNativeStep?: boolean }).__wdNativeStep) { setStepMode(true); stepMode.watch = (globalThis as { __wdNativeWatch?: number }).__wdNativeWatch ?? 0; }
 /** microbenchmark: the classic byte-copy loop, 20M iterations on a scratch Cpu (M instr/s) */
-export function bench(): string {
+function bench(): string {
   const CODE = 0x00f00000;
   const words = [0xe7d1c003, 0xe2422001, 0xe7c0c003, 0xe2833001, 0xe3520000, 0x1afffffa, 0xe12fff1e];
   for (let i = 0; i < words.length; i++) mem.u32[(CODE >>> 2) + i] = words[i];

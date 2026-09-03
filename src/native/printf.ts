@@ -110,7 +110,7 @@ export function format(fmt: string, args: ArgReader): string {
   return out;
 }
 
-export type ScanSink = (kind: "i" | "h" | "b" | "l" | "f" | "d" | "s" | "n", value: number | bigint | string) => number;
+type ScanSink = (kind: "i" | "h" | "b" | "l" | "f" | "d" | "s" | "n", value: number | bigint | string) => number;
 
 /** sscanf core: parses `input` per `fmt`, calling `out` per conversion (kind, value); returns the count */
 export function scan(input: string, fmt: string, out: ScanSink): number {

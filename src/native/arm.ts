@@ -12,7 +12,7 @@ let MAX_BLOCK = 256;
 /** 1 = single-instruction blocks (the step tracer) */
 export function setMaxBlock(n: number): void { MAX_BLOCK = n; }
 
-export interface BlockSrc { src: string; len: number; end: number; slots: number }
+interface BlockSrc { src: string; len: number; end: number; slots: number }
 
 /** operand2 as a JS expression plus its shifter-carry expression (null = carry unchanged) */
 function op2(w: number, pc: number): { v: string; c: string | null; pre?: string } {

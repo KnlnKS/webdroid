@@ -19,7 +19,7 @@ export const DOCS_AUTHORITY = "com.android.externalstorage.documents";
 export type JUriLike = { uri?: string } | null;
 const enc = encodeURIComponent;
 export const isContentUri = (u: JUriLike) => (u?.uri ?? "").startsWith("content://");
-export const badUri = (u: JUriLike) => rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid URI: " + (u?.uri ?? "null"));
+const badUri = (u: JUriLike) => rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid URI: " + (u?.uri ?? "null"));
 
 /** (authority, decoded path segments) — Uri.getPathSegments decodes, and document ids carry ':'. */
 export function uriParts(u: JUriLike): [string, string[]] {
@@ -68,11 +68,11 @@ const MIMES: Record<string, string> = {
   pdf: "application/pdf", zip: "application/zip", cbz: "application/vnd.comicbook+zip", epub: "application/epub+zip",
   gz: "application/gzip", tachibk: "application/octet-stream", mp3: "audio/mpeg", mp4: "video/mp4",
 };
-export function mimeOf(name: string): string {
+function mimeOf(name: string): string {
   return MIMES[name.slice(name.lastIndexOf(".") + 1).toLowerCase()] ?? "application/octet-stream";
 }
 
-export interface DocRow { id: string; name: string; mime: string; size: number; modified: number; flags: number }
+interface DocRow { id: string; name: string; mime: string; size: number; modified: number; flags: number }
 export const DOC_COLUMNS = ["document_id", "_display_name", "mime_type", "_size", "last_modified", "flags"];
 export const docCells = (r: DocRow) => [r.id, r.name, r.mime, r.size, r.modified, r.flags];
 
@@ -91,7 +91,7 @@ const split = (docId: string): [string, string[]] => {
 const join = (vol: string, segs: string[]) => vol + ":" + segs.join("/");
 
 /** The handle a document id names, or null if nothing is there. */
-export async function resolveDoc(docId: string): Promise<FileSystemHandle | null> {
+async function resolveDoc(docId: string): Promise<FileSystemHandle | null> {
   const hit = cache.get(docId);
   if (hit) return hit;
   const [vol, segs] = split(docId);

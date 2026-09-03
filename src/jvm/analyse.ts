@@ -12,7 +12,7 @@ import { rootsOf, reflectiveRoots } from "./roots";
 import { analyseSuspend, subtypeIndex } from "./suspend";
 import { perf } from "../perf";
 
-export interface Analysis {
+interface Analysis {
   reachable: number;
   sync: number;
   suspending: number;

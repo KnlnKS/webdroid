@@ -2212,7 +2212,7 @@ async function launchIntent(host: AppHost, intent: JIntent) {
   }
 }
 
-export const RESULT_OK = -1, RESULT_CANCELED = 0;
+const RESULT_OK = -1, RESULT_CANCELED = 0;
 
 /**
  * The activities the *system* provides, keyed by the action an app sends. On a device these are

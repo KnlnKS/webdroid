@@ -28,7 +28,7 @@ function jhash(o: unknown): number | Promise<number> {
   if (typeof o === "string") return stringHash(o);
   return vcall(o, "hashCode", "()I");
 }
-export async function jcmp(cmp: unknown, a: unknown, b: unknown): Promise<number> {
+async function jcmp(cmp: unknown, a: unknown, b: unknown): Promise<number> {
   if (cmp) return await vcall(cmp, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", a, b);
   const t = typeof a;
   if (typeof b === t && (t === "string" || t === "number" || t === "bigint")) {

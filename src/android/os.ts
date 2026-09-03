@@ -397,7 +397,7 @@ rt.register({
  * here, so one carries the bytes it was opened over plus where they go on close — which is all
  * AutoClose{In,Out}putStream, the only way a Java caller can touch it, ever needs.
  */
-export class JParcelFileDescriptor extends JObj {
+class JParcelFileDescriptor extends JObj {
   bytes: Uint8Array = new Uint8Array(0);
   sink: ((b: Uint8Array) => unknown) | null = null;
 }
@@ -602,7 +602,7 @@ rt.register({
 
 // ── android.util.Property / IntProperty / FloatProperty: abstract get/set handles that
 // ObjectAnimator drives. The primitive subclasses unbox into the app's setValue override.
-export class JProperty extends JObj { type: unknown = null; name = ""; }
+class JProperty extends JObj { type: unknown = null; name = ""; }
 rt.register({
   name: "android/util/Property", ctor: JProperty,
   methods: {

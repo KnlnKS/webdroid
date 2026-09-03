@@ -19,7 +19,7 @@ export interface Module {
   inited: boolean;
 }
 
-export type Resolver = (sym: string, weak: boolean, from: Module) => number;
+type Resolver = (sym: string, weak: boolean, from: Module) => number;
 
 const PT_LOAD = 1, PT_DYNAMIC = 2, PT_ARM_EXIDX = 0x70000001;
 const R_ARM_ABS32 = 2, R_ARM_REL32 = 3, R_ARM_GLOB_DAT = 21, R_ARM_JUMP_SLOT = 22, R_ARM_RELATIVE = 23;

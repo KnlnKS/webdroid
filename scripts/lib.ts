@@ -4,9 +4,9 @@ import { dexesIn, DexFile } from "../src/jvm/dex";
 import { rt } from "../src/jvm/runtime";
 import type { XmlNode } from "../src/android/axml";
 
-export type Zip = Record<string, Uint8Array>;
+type Zip = Record<string, Uint8Array>;
 
-export const DEX_RE = /^classes\d*\.dex$/;
+const DEX_RE = /^classes\d*\.dex$/;
 
 export async function openApk(path: string, filter?: RegExp): Promise<Zip> {
   const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());

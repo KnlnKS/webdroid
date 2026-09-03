@@ -23,13 +23,13 @@ function locals(cpu: Cpu) {
   return l;
 }
 let cur: Cpu | null = null;   // the Cpu executing the current JNI function
-export function toRef(o: unknown, cpu: Cpu | null = cur): number {
+function toRef(o: unknown, cpu: Cpu | null = cur): number {
   if (o === null || o === undefined) return 0;
   const l = locals(cpu!);
   l.refs.push(o);
   return l.refs.length - 1;
 }
-export function newGlobalRef(o: unknown): number {
+function newGlobalRef(o: unknown): number {
   if (o === null || o === undefined) return 0;
   const i = freeGlobals.pop();
   if (i !== undefined) { globals[i] = o; return GLOBAL_BIT | i; }
@@ -49,7 +49,7 @@ interface FieldRec { prop: string; type: string; isStatic: boolean; owner: any }
 const methods: MethodRec[] = [null as unknown as MethodRec];
 const fields: FieldRec[] = [null as unknown as FieldRec];
 
-export interface Registered { cls: string; name: string; sig: string; fn: number; isStatic: boolean }
+interface Registered { cls: string; name: string; sig: string; fn: number; isStatic: boolean }
 export const registered: Registered[] = [];
 
 const clsName = (o: unknown): string => {
@@ -142,7 +142,7 @@ async function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], no
 }
 
 /** a Java native method whose body is guest code: marshal, run on the caller's Cpu, convert the result */
-export async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unknown[]): Promise<unknown> {
+async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unknown[]): Promise<unknown> {
   const { params, ret } = parseMethodDesc(r.sig);
   const prevCur = cur;
   cur = cpu;
@@ -186,7 +186,7 @@ export async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, ar
 
 let envTable = 0;
 const envs = new WeakMap<Cpu, number>();
-export function envFor(cpu: Cpu): number {
+function envFor(cpu: Cpu): number {
   let e = envs.get(cpu);
   if (!e) { e = mem.hostAlloc(4); mem.st32(e, envTable); envs.set(cpu, e); cpu.env = e; }
   return e;

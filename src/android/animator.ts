@@ -205,7 +205,7 @@ rt.register({
   },
 });
 /** AOSP ArgbEvaluator: per-channel interpolation in linear light (gamma 2.2), alpha linear */
-export function argbLerp(f: number, s: number, e: number): number {
+function argbLerp(f: number, s: number, e: number): number {
   const ch = (c: number, sh: number) => ((c >>> sh) & 0xff) / 255;
   const lin = (c: number) => Math.pow(c, 2.2), gam = (c: number) => Math.pow(c, 1 / 2.2);
   const a = lerp(f, ch(s, 24), ch(e, 24));

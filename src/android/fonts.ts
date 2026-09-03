@@ -38,7 +38,7 @@ function sfntTables(b: Uint8Array, ttcIndex: number): { dv: DataView; at: Map<nu
 const T_OS2 = 0x4f532f32, T_HHEA = 0x68686561, T_HEAD = 0x68656164;
 
 /** weight/italic from the face's OS/2 table (what AOSP's analyzeStyle reads), null if absent */
-export function sfntStyle(b: Uint8Array, ttcIndex = 0): { weight: number; italic: boolean } | null {
+function sfntStyle(b: Uint8Array, ttcIndex = 0): { weight: number; italic: boolean } | null {
   const t = sfntTables(b, ttcIndex);
   const off = t?.at.get(T_OS2);
   if (!t || off === undefined || off + 64 > b.length) return null;
@@ -53,7 +53,7 @@ export function sfntStyle(b: Uint8Array, ttcIndex = 0): { weight: number; italic
  * graphics.ts pins Roboto's by hand — every other loaded face needs the same treatment or its
  * line boxes come out as much as 12% too tall.
  */
-export function sfntMetrics(b: Uint8Array, ttcIndex = 0): { ascent: number; descent: number; top: number; bottom: number } | null {
+function sfntMetrics(b: Uint8Array, ttcIndex = 0): { ascent: number; descent: number; top: number; bottom: number } | null {
   const t = sfntTables(b, ttcIndex);
   const head = t?.at.get(T_HEAD), hhea = t?.at.get(T_HHEA), os2 = t?.at.get(T_OS2);
   if (!t || head === undefined || hhea === undefined) return null;
@@ -66,8 +66,8 @@ export function sfntMetrics(b: Uint8Array, ttcIndex = 0): { ascent: number; desc
   return { ascent: asc, descent: desc, top: Math.max(win.top, asc), bottom: Math.max(win.bottom, desc) };
 }
 
-export class JFontStyle extends JObj { weight = 400; slant = UPRIGHT; }
-export function mkFontStyle(weight: number, slant: number): JFontStyle {
+class JFontStyle extends JObj { weight = 400; slant = UPRIGHT; }
+function mkFontStyle(weight: number, slant: number): JFontStyle {
   const s = new JFontStyle(); s.weight = weight; s.slant = slant; return s;
 }
 rt.register({
@@ -99,7 +99,7 @@ function mkAxis(tag: string, value: number): JFontVariationAxis {
   const a = new JFontVariationAxis(); a.tag = tag; a.value = Math.fround(value); return a;
 }
 /** AOSP's grammar: `'tag' value` pairs, comma separated, tags in single or double quotes */
-export function parseVariationSettings(s: string | null): JFontVariationAxis[] | null {
+function parseVariationSettings(s: string | null): JFontVariationAxis[] | null {
   if (!s || !s.trim()) return null;
   const out: JFontVariationAxis[] = [];
   for (const part of s.split(",")) {
@@ -128,7 +128,7 @@ rt.register({
   },
 });
 
-export class JFont extends JObj {
+class JFont extends JObj {
   bytes: Uint8Array | null = null;
   ttcIndex = 0;
   style: JFontStyle = mkFontStyle(400, UPRIGHT);
@@ -259,7 +259,7 @@ rt.register({
   },
 });
 
-export class JFontFamily extends JObj { fonts: JFont[] = []; css = ""; }
+class JFontFamily extends JObj { fonts: JFont[] = []; css = ""; }
 class JFontFamilyBuilder extends JObj { fonts: JFont[] = []; }
 rt.register({
   name: "android/graphics/fonts/FontFamily$Builder", ctor: JFontFamilyBuilder,

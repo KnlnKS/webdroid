@@ -31,7 +31,7 @@ function unlock(m: Mutex): void {
   const w = m.waiters.shift();
   if (w) w();
 }
-export const sleepMs = (ms: number): Promise<number> => (ms < 1 ? yieldToLoop().then(() => 0) : new Promise((r) => setTimeout(() => r(0), ms)));
+const sleepMs = (ms: number): Promise<number> => (ms < 1 ? yieldToLoop().then(() => 0) : new Promise((r) => setTimeout(() => r(0), ms)));
 const absMs = (ts: number) => mem.ld32(ts) * 1000 + mem.ld32(ts + 4) / 1e6;
 
 function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | null): Promise<number> {
@@ -56,7 +56,7 @@ function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | nul
   });
 }
 
-export function startThread(start: number, arg: number, name?: string): Cpu {
+function startThread(start: number, arg: number, name?: string): Cpu {
   const jt = new JThread();
   jt.jname = name ?? `pthread-${++threadSeq}`;
   jt.alive = 1;

@@ -23,7 +23,7 @@ const MAX_FRAMES_PER_STEP = 240;
 /** The flags every measurement has to share: software GL, no hinting or LCD subpixels, no
  *  device-scale surprise. A script that launches its own browser without these is not
  *  comparable with the goldens — text metrics move first. */
-export const LAUNCH_ARGS = [
+const LAUNCH_ARGS = [
   "--use-gl=angle", "--use-angle=swiftshader",
   "--font-render-hinting=none", "--disable-lcd-text",
   "--force-device-scale-factor=1", "--hide-scrollbars",
