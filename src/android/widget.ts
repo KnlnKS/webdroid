@@ -652,28 +652,32 @@ export class JTextView extends JView {
     for (const hard of text.split("\n")) {
       if (this.singleLine || this.maxLinesV === 1) { out.push(hard); break; }
       if (ctx.measureText(hard).width <= avail) { out.push(hard); continue; }
+      // a word wider than the line is hard-broken; emit full lines and return what is left over
+      const breakWide = (l: string) => {
+        while (ctx.measureText(l).width > avail && l.length > 1) {
+          let lo = 1, hi = l.length;
+          while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (ctx.measureText(l.slice(0, mid)).width <= avail) lo = mid;
+            else hi = mid - 1;
+          }
+          out.push(l.slice(0, lo));
+          l = l.slice(lo);
+        }
+        return l;
+      };
       let line = "";
       for (const word of hard.split(/(\s+)/)) {
         if (!word) continue;
-        if (ctx.measureText(line + word).width <= avail || !line) {
-          line += word;
-          // very long single word: hard-break
-          while (ctx.measureText(line).width > avail && line.length > 1) {
-            let lo = 1, hi = line.length;
-            while (lo < hi) {
-              const mid = (lo + hi + 1) >> 1;
-              if (ctx.measureText(line.slice(0, mid)).width <= avail) lo = mid;
-              else hi = mid - 1;
-            }
-            out.push(line.slice(0, lo));
-            line = line.slice(lo);
-          }
-        } else {
-          out.push(line.trimEnd());
+        if (ctx.measureText(line + word).width <= avail || !line) line = breakWide(line + word);
+        else {
+          // the pending line can itself be one over-long word, parked here by an earlier break
+          const rest = breakWide(line.trimEnd());
+          if (rest) out.push(rest);
           line = word.trimStart();
         }
       }
-      if (line) out.push(line.trimEnd());
+      if (line) { const rest = breakWide(line.trimEnd()); if (rest) out.push(rest); }
     }
     while (out.length > this.maxLinesV) out.pop();
     if (out.length && this.ellipsizeEnd) {
@@ -1095,6 +1099,11 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       w = Math.ceil(tw) + this.padL + this.padR + dlW;
       w = Math.min(Math.max(w, this.minW), this.maxW);
       if (wMode === MS_AT_MOST) w = Math.min(w, wSize);
+      // AOSP rebuilds the layout at the width the view actually got. Without this the lines
+      // stay wrapped for the desired width, so a clamp leaves both the height (too few lines)
+      // and the draw (a line wider than the view, silently clipped) wrong.
+      const finalAvail = w - this.padL - this.padR - dlW;
+      if (finalAvail < availText) this.lines = this.wrap(finalAvail);
     }
     const lineCount = Math.max(this.lines.length, display || this.hint ? 1 : 0, this.minLinesV);
     const dHeights = [this.drawableL ? this.drawableL.intrinsicH() : 0, this.drawableR ? this.drawableR.intrinsicH() : 0];
