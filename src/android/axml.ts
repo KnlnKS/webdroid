@@ -6,6 +6,8 @@ export const TV = { // typed value dataType
   BOOLEAN: 0x12, COLOR_ARGB8: 0x1c, COLOR_RGB8: 0x1d, COLOR_ARGB4: 0x1e, COLOR_RGB4: 0x1f,
 } as const;
 
+const utf8Dec = new TextDecoder();
+
 export class StringPool {
   strings: string[] = [];
   constructor(view: DataView, off: number) {
@@ -22,7 +24,7 @@ export class StringPool {
         let bytelen = view.getUint8(p++);
         if (bytelen & 0x80) bytelen = ((bytelen & 0x7f) << 8) | view.getUint8(p++);
         const bytes = new Uint8Array(view.buffer, view.byteOffset + p, bytelen);
-        this.strings.push(new TextDecoder().decode(bytes));
+        this.strings.push(utf8Dec.decode(bytes));
       } else {
         let len = view.getUint16(p, true); p += 2;
         if (len & 0x8000) { len = ((len & 0x7fff) << 16) | view.getUint16(p, true); p += 2; }

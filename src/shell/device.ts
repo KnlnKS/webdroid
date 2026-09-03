@@ -86,7 +86,7 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
   setManifest(manifest, activities, providers); // PackageManager answers from the real manifest
 
   onStatus("resources…");
-  const arsc = new Arsc(zip["resources.arsc"]);
+  const arsc = new Arsc(zip["resources.arsc"], (p) => zip[p] ?? null);
   const res = new Resources(arsc, zip);
   const jres = mkJResources(res);
   const themeResId = themeAttr?.data ?? 0;
