@@ -350,7 +350,8 @@ rt.register({
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JTableLayout, c: unknown, set: JAttrSet | null) {
       await (linearMethods["<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V"] as any).call(this, c, set);
       this.orientation = 1;
-      const sc = set?.node?.attrs.find((a) => a.resId === AID("stretchColumns"));
+      const scId = AID("stretchColumns");
+      const sc = scId ? set?.node?.attrs.find((a) => a.resId === scId) : undefined;
       if (sc) this.stretchCols = sc.str ?? String(sc.data);
     },
     "setStretchAllColumns(Z)V": function (this: JTableLayout, v: number) { this.stretchCols = v ? "*" : ""; requestLayout(this); },

@@ -993,7 +993,10 @@ function attrRV(res: Resources, a: XmlAttr): RV {
   if (a.type === TV.STRING) return { t: T_STR, d: 0, s: a.str ?? "" };
   return normRV({ t: a.type, d: a.data });
 }
+// An id of 0 is AID missing the name, and an attribute with no resource-map entry (style=, a
+// tools: one) also carries 0 -- so a miss would bind to whichever of those came first.
 function nodeAttr(res: Resources, node: XmlNode, resId: number): RV | null {
+  if (!resId) return null;
   for (const a of node.attrs) if (a.resId === resId) return attrRV(res, a);
   return null;
 }
