@@ -173,7 +173,11 @@ and a `removeMessages` on something that is not our Handler.
   per-step `newMissing` remain the check that the queue was right.
 - ViewPager caches child measure specs in fields → layout settle passes (uiState.settle).
 - Duplicate registration bites: rt.register keeps the LAST spec for a name (the earlier one
-  with more methods is silently gone), and nothing errors. The Verify grep is what catches it.
+  with more methods is silently gone), and nothing errors. The Verify grep is what catches it —
+  but only for `name: "..."` literals. A name registered from a LOOP over a list (the marker
+  interfaces in jlang, the collection families in jutil) is invisible to it, and a second
+  registration of one of those passes the grep clean. Check the loops by hand when adding an
+  interface: java/io/DataInput was registered twice that way and the grep said nothing.
 - JNI registry (rt.registerJni / R.jniFn): native methods of DEX classes (bundled sqlite,
   conscrypt) get implementations without shadowing the class (which would kill its compiled
   access$ bridges).

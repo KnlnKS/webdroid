@@ -447,12 +447,6 @@ function rafWrite(f: JRAF, b: Int8Array, off: number, len: number) {
   vfs.write(f.path, f.buf);
 }
 
-// The two interfaces DataInputStream, DataOutputStream and RandomAccessFile all declare.
-// Dispatch goes through the concrete class, so nothing calls them by this name — which is
-// why they were absent while every apk in the corpus reached them.
-rt.register({ name: "java/io/DataInput", ctor: class extends JObj {} });
-rt.register({ name: "java/io/DataOutput", ctor: class extends JObj {} });
-
 // serialPersistentFields is a static array a serializable class declares; nothing here
 // serializes, but the <clinit> that builds the array has to be able to construct one.
 class JObjectStreamField extends JObj { fname = ""; ftype: unknown = null; }
