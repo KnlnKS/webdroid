@@ -587,6 +587,12 @@ async function dispatchPointer0(action: number, x: number, y: number) {
         }
       }
       if (touchTarget === null) touchTarget = "decor";
+    } else if (touchTarget === null) {
+      // No target is latched, so the DOWN either never happened or was swallowed dismissing an
+      // overlay. Falling through would dispatch this MOVE to the decor as though a finger had
+      // been down on it all along, and a scroller would jump by the whole distance since its
+      // stale last position.
+      return;
     }
     if (touchTarget && touchTarget !== "decor") {
       const o = overlays[touchTarget.overlay];
