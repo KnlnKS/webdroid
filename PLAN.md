@@ -21,7 +21,7 @@ See "One build, or none" and "The delegates" in AGENTS.md.
 | Framework provenance | `bun run gen-framework` pulls the jar + res pair off the reference AVD and proves the ids agree (0 wrong paired, 3,582 wrong against a relinked table) |
 | Policy | `src/jvm/provenance.ts` — `BYTECODE` is empty by default, and `?bytecode=<prefix,...>` / `WEBDROID_BYTECODE=` cut a subtree over for one run. Measured: fitnotes on AOSP's Paint/Canvas/Matrix/Path/Typeface/Bitmap scores 43.33% vs 43.07%, 39/39 rendered |
 | Delegates | `src/android/delegates.ts` — Paint 86/86, Canvas 33/33, BaseCanvas 32/32, Matrix 40/40, Path 43/43, Typeface 17/17, AssetManager 55/55, XmlBlock 22/22, StringBlock 5/5 |
-| Graphics cut coverage | 295/363 declared natives (Bitmap 42/46) |
+| Graphics cut coverage | 295/363 declared natives (Bitmap 42/46); `android/graphics/text/` 20/37 |
 | Evidence | `bun run fwtest` runs real bytecode headless: `new Paint()`, `new Matrix()`, `new Path()`, three AssetManager lookups against the real framework table, and `android:layout/alert_dialog` opened through `nativeOpenXmlAsset` and walked to END_DOCUMENT |
 | e2e | 46.67% overall, every step rendered — flat against main |
 | Corpus | `bun run corpus` 9/10 render a frame (only Among Us does not; `WEBDROID_URL` picks the server) |
@@ -74,16 +74,12 @@ numbers the tree drops; the parse state is a `JAttrSet`, so obtainStyledAttribut
 unchanged. ApkAssets (12) stays unwritten — no bytecode reaches it. See "The delegates" in
 AGENTS.md for the two traps it turned up.
 
-### 1.3 Text: LineBreaker (10) + MeasuredText (11) + Font/FontFamily (~11)
-**Why:** `StaticLayout` and `Layout` declare **zero** natives, so real AOSP line breaking
-comes free once these exist — and text is both the biggest fidelity gap and the hottest path
-(harmonic makes 229,334 measurements per run).
-**What:** `nComputeLineBreaks` over the existing `measureText` memo. Start with the greedy
-strategy; AOSP's balanced/optimal are a later, separate change.
-**Verify:** compare the break positions AOSP's `StaticLayout` produces against the current
-`JLayout` on the same paragraph — they should agree on the greedy strategy.
-**Traps:** see "Text metrics: ascent/descent are the font's, line boxes are
-includeFontPadding's" in AGENTS.md. Do not re-derive that.
+### 1.3 Text: LineBreaker + MeasuredText — **DONE** (20/37 under android/graphics/text/)
+`text: AOSP's own StaticLayout breaks lines where ours does, on our delegates`. `bun run
+textcmp` is the evidence: 6/6 paragraphs identical, and it found two defects of ours on the way
+(a line must own its newline; the delegate must not re-split paragraphs). Font/FontFamily were
+NOT needed — nothing reached them. PositionedGlyphs and TextRunShaper stay unwritten: they are
+the shaping engine, and there is none behind Canvas2D.
 
 ### 1.4 The small effects classes **[parallel]**
 PathMeasure (9), PathIterator (4), PathEffect (1), PathDashPathEffect (1),

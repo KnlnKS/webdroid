@@ -361,6 +361,8 @@ screen — any direct fillText in the framework must set its own.)
   `gen-framework` (pull framework.jar + framework-res.apk off the booted reference AVD into
   vendor/aosp and verify the two halves name the same resources -- see "One build, or none"),
   `fwscan [jar] [prefix]` (what a dex would ask of us: classes, methods, natives),
+  `textcmp` (AOSP's own StaticLayout against ours over the same paragraphs, in a real page --
+  see "AOSP's StaticLayout breaks where ours does"),
   `fwtest [prefix ...]` (withhold our specs for those prefixes, run AOSP's own bytecode
   against the delegates, report coverage and what it reached -- see "The delegates").
 - browser: `http://localhost:4080/?apk=<file>` boots that apk on load (reload = rebundle +
@@ -922,6 +924,35 @@ no colour-long API at all, which killed every `Paint.setColor` — it caches `Co
 Left: the decoders. `BitmapFactory` (5), `BitmapRegionDecoder` (8) and `BitmapShader` (1) are
 NOT written, because nothing reaches them yet and `createImageBitmap` cannot be exercised
 outside a browser — a delegate exists because `fwtest` said so.
+
+## AOSP's StaticLayout breaks where ours does, and the comparison found our bug
+`bun run textcmp` loads the same bundle twice — once with `android/text/{Layout,StaticLayout}`
+and `android/graphics/text/` on AOSP bytecode — and breaks six paragraphs through the same
+`StaticLayout.Builder` call on both. It went 0/6 to 6/6 while naming, one at a time, every gap
+between here and there. Text measurement needs a Canvas2D context, so this cannot be `fwtest`;
+it has to be a real page, and the MCP tab is not one.
+
+The delegates it stands on are `MeasuredText` + `LineBreaker` (20 natives), and the breaking
+routes into `text.ts`'s `greedyBreaks` — the body `JLayout` already used — so the two agree by
+construction rather than by two implementations happening to match. What the comparison is
+actually testing is everything AOSP does *around* the break: paragraph splitting, bidi,
+per-character advances, span handling. Layout and StaticLayout declare **zero** natives.
+
+Two of the gaps were ours, not the framework's:
+- **A line that ends a paragraph owns its newline.** AOSP's invariant is
+  `getLineEnd(i) == getLineStart(i + 1)`; ours ended the line at the `\n` and started the next
+  after it, so an app slicing text by line lost every separator. `getLineVisibleEnd` is the one
+  that excludes it. mihon-app 77.65% -> 76.96% on that alone.
+- **`nComputeLineBreaks` must not split paragraphs again.** AOSP has already split them and
+  hands the delegate ONE, with its trailing newline included — so `greedyBreaks`, which splits
+  on `\n` itself, was adding an empty line after every paragraph. The last break offset still
+  has to cover the newline, because that is where the next paragraph starts.
+
+And one that is worth knowing before writing any text delegate: **per-character advances are
+prefix differences, not characters measured alone.** Their sum then equals `measureText` of the
+whole run, which is what actually gets drawn; Canvas2D kerns, so context-free single-character
+widths do not add up to it. That costs one measure per character, which is why
+`getRunCharacterAdvance` only does it when the caller passed an array.
 
 ## What a cut costs, measured: fitnotes on AOSP's own graphics bytecode
 `?bytecode=<prefix,...>` on the shell URL (and `WEBDROID_BYTECODE=` for the e2e driver) serves
