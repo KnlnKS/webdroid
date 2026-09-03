@@ -83,6 +83,11 @@ export class Program {
     return m;
   }
 
+  /** does this exact class declare it, ignoring what it inherits */
+  declares(name: string, sig: string): boolean {
+    return this.own(name)?.has(sig) ?? false;
+  }
+
   private superOf(name: string): string | null {
     const rec = this.byName.get(name);
     const def = rec && this.def(name);

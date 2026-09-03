@@ -75,6 +75,8 @@ interface DexLink {
   rsf(i: number, from?: number): Promise<any> | any;   // resolve+init static field owner ctor
 }
 
+type NativeFn = (...a: never[]) => unknown;
+
 export class Runtime {
   classes = new Map<string, ClassInfo>();
   natives = new Map<string, NativeSpec>();
@@ -101,6 +103,9 @@ export class Runtime {
   su: () => void = () => {};
   onUncaught: ((e: unknown) => void) | null = null;
   fuel = 100000;
+  /** methods the suspension analysis proved cannot suspend, so they compile without `async`.
+   *  Null until it has run; a method it never saw falls back to the compiler's syntactic rule. */
+  syncMethods: Set<string> | null = null;
 
   loadDex(dex: DexFile) {
     this.dexes.push(dex);
@@ -230,6 +235,70 @@ export class Runtime {
     return () => { throw this.unimplemented(what); };
   }
 
+  /** Whether a call that leaves the dex can suspend. Our own natives are the leaves of the
+   *  suspension analysis, and whether one suspends is not a matter of annotation: it is
+   *  `fn.constructor.name === "AsyncFunction"`.
+   *
+   *  Dispatch is on the runtime receiver, not the declared type, so the answer has to cover
+   *  every registered class assignable to it — an interface registered as an empty marker
+   *  (android/content/SharedPreferences) carries no method at all, and the body that runs
+   *  lives on webdroid/SharedPrefs. A call that resolves to nothing throws, which is not a
+   *  suspension; only a class we cannot see into at all is unknown. */
+  nativeOracle(): (cls: string, sig: string) => boolean | null {
+    // registered class name → every registered class assignable to it, itself included
+    const subs = new Map<string, ClassInfo[]>();
+    for (const name of this.natives.keys()) {
+      const info = this.classes.get(name);
+      if (!info?.ctor || info.stub) continue;
+      for (const t of info.types) {
+        let l = subs.get(t);
+        if (!l) subs.set(t, (l = []));
+        l.push(info);
+      }
+    }
+    return (cls, sig) => {
+      // a native's static initializer is the spec's `clinit` hook, not a prototype method,
+      // and it belongs to that exact class rather than to anything assignable to it
+      if (sig === "<clinit>()V") {
+        const c = this.natives.get(cls)?.clinit;
+        return c ? c.constructor.name === "AsyncFunction" : this.natives.has(cls) ? false : null;
+      }
+      const l = subs.get(cls);
+      const paren = sig.indexOf("(");
+      if (!l || paren < 0) return null;          // nothing registered under this name
+      const mangled = mangleMethod(sig.slice(0, paren), sig.slice(paren));
+      for (const info of l) {
+        const fn = info.ctor.prototype[mangled] ?? info.ctor[mangled];
+        if (typeof fn === "function" && fn.constructor.name === "AsyncFunction") return true;
+      }
+      // either every implementation is sync, or there is none and the call throws
+      return false;
+    };
+  }
+
+  /** `?natcheck=1`: report natives that return a promise without being declared async.
+   *  The suspension analysis takes `fn.constructor.name === "AsyncFunction"` as the truth
+   *  about a native, so one that returns a promise without saying so makes a caller compile
+   *  sync and then hand it a promise. Off by default — it costs a call frame per native. */
+  auditNatives = false;
+  nativeLiars = new Set<string>();
+  private auditWrap(cls: string, key: string, fn: NativeFn): NativeFn {
+    if (fn.constructor.name === "AsyncFunction") return fn;
+    const rt = this;
+    return function (this: unknown, ...a: unknown[]) {
+      const r = (fn as (...x: unknown[]) => unknown).apply(this, a);
+      if (r instanceof Promise) rt.nativeLiars.add(cls + " " + key);
+      return r;
+    };
+  }
+
+  /** a frame compiled sync got a promise anyway: the analysis was wrong about something it
+   *  could reach. It cannot await, and handing the promise on as a value would be silent. */
+  nosusp(what: string): Error {
+    this.noteMissing(`${what} suspended in a sync frame`);
+    return this.mkThrowable("java/lang/IllegalStateException", `webdroid: ${what} suspended in a frame compiled sync`);
+  }
+
   unimplemented(what: string): Error {
     this.noteMissing(what);
     return this.mkThrowable("java/lang/UnsupportedOperationException", "webdroid missing: " + what);
@@ -343,7 +412,7 @@ export class Runtime {
       const target: Record<string, unknown> = isStatic ? ctorAny : proto;
       const fn = typeof impl === "string" ? proto[impl] : impl;
       if (typeof fn !== "function") throw new Error(`bad native impl ${spec.name}.${key}`);
-      target[mangled] = fn;
+      target[mangled] = this.auditNatives ? this.auditWrap(spec.name, key, fn as NativeFn) : fn;
       if (!isStatic) info.ownMethods.push(mangled);
     }
     // A static written as a getter is resolved on first READ, not here: link order is
@@ -426,44 +495,66 @@ export class Runtime {
     if (info.state !== 0) return null;
     info.state = 1;
     info.initThread = this.th();
-    info.initP = (async () => {
-      try {
-        if (info.superInfo && info.superInfo.state !== 2) await this.initClass(info.superInfo, info);
-        // interfaces with defaults: ensure compiled so copy-down works
-        for (const i of info.interfaces) this.ensureCompiled(i);
-        this.ensureCompiled(info);
-        if (info.native) {
-          const spec = this.natives.get(info.name);
-          if (spec?.clinit) await spec.clinit();
-        } else if (info.def) {
-          const dex = info.dex!;
-          // encoded static values
-          if (info.def.staticValuesOff) {
-            const vals = dex.encodedArray(info.def.staticValuesOff);
-            for (let i = 0; i < vals.length; i++) {
-              const fr = dex.field(info.def.staticFields[i].fieldIdx);
-              info.ctor[mangleStaticField(fr.name)] = this.encToJs(dex, vals[i]);
-            }
+
+    // Initialize synchronously for as long as nothing actually suspends. This used to be one
+    // `(async () => …)()`, which returns a promise whatever the body does — so EVERY first
+    // touch of a class forced its toucher to await, and no method containing an sget, a
+    // new-instance or an invoke-static could ever compile sync. Only the step that really
+    // yields gets a promise now, and the rest of the sequence continues from there.
+    const rest = (): Promise<void> | null => {
+      for (const i of info.interfaces) this.ensureCompiled(i);   // defaults copy down
+      this.ensureCompiled(info);
+      let r: unknown;
+      if (info.native) {
+        const spec = this.natives.get(info.name);
+        if (spec?.clinit) r = spec.clinit();
+      } else if (info.def) {
+        const dex = info.dex!;
+        if (info.def.staticValuesOff) {
+          const vals = dex.encodedArray(info.def.staticValuesOff);
+          for (let i = 0; i < vals.length; i++) {
+            const fr = dex.field(info.def.staticFields[i].fieldIdx);
+            info.ctor[mangleStaticField(fr.name)] = this.encToJs(dex, vals[i]);
           }
-          // own property only: JS constructors inherit statics, and a subclass without a
-          // <clinit> must not re-run its super's (which would replace identity-compared
-          // sentinels the super's callers already hold)
-          const clinit = Object.hasOwn(info.ctor, "$clinit") ? info.ctor.$clinit : undefined;
-          this.st(info.initThread); // <clinit> runs on the initiating thread, whatever ran meanwhile
-          if (clinit) await clinit.call(info.ctor);
         }
-        info.state = 2;
-      } catch (e) {
-        info.state = 2; // ExceptionInInitializerError-ish: don't retry forever
-        console.warn("[webdroid clinit-failed]", info.name, e);
-        throw e;
-      } finally {
-        info.initP = null;
-        info.initThread = null;
-        info.assumeReentrant = false;
+        // own property only: JS constructors inherit statics, and a subclass without a
+        // <clinit> must not re-run its super's (which would replace identity-compared
+        // sentinels the super's callers already hold)
+        const clinit = Object.hasOwn(info.ctor, "$clinit") ? info.ctor.$clinit : undefined;
+        this.st(info.initThread); // <clinit> runs on the initiating thread, whatever ran meanwhile
+        if (clinit) r = clinit.call(info.ctor);
       }
-    })();
-    return from ? this.awaitInit(info, from, false) : info.initP;
+      return r instanceof Promise ? r : null;
+    };
+
+    const settle = () => { info.state = 2; info.initP = null; info.initThread = null; info.assumeReentrant = false; };
+    const failed = (e: unknown) => {
+      settle();   // ExceptionInInitializerError-ish: don't retry forever
+      console.warn("[webdroid clinit-failed]", info.name, e);
+    };
+    /** hand the remaining steps to the microtask queue, from the one that yielded */
+    const async = (pending: Promise<unknown>, after: (() => Promise<void> | null) | null): Promise<void> => {
+      info.initP = (async () => {
+        try {
+          await pending;
+          const more = after?.();
+          if (more) await more;
+          info.state = 2;
+        } catch (e) { failed(e); throw e; } finally {
+          info.initP = null; info.initThread = null; info.assumeReentrant = false;
+        }
+      })();
+      return from ? this.awaitInit(info, from, false) : info.initP;
+    };
+
+    try {
+      const sup = info.superInfo && info.superInfo.state !== 2 ? this.initClass(info.superInfo, info) : null;
+      if (sup) return async(sup, rest);
+      const pending = rest();
+      if (pending) return async(pending, null);
+    } catch (e) { failed(e); throw e; }
+    settle();
+    return null;
   }
 
   ensureCompiled(info: ClassInfo) {

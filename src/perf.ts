@@ -13,6 +13,9 @@ export const perf = {
   layoutErrors: 0, drawErrors: 0,
   // wall time inside input dispatch, and lazy class compilation — both land ON the tap.
   inputMs: 0, compileMs: 0, classesCompiled: 0,
+  // method bodies emitted without `async` because the suspension analysis proved they cannot
+  // suspend, against those that can. A sync call is ~24x cheaper in the shape we emit.
+  syncMethods: 0, asyncMethods: 0, analyseMs: 0,
   // GL surfaces: Renderer frames and their wall time; glSkipped = ticks where the previous
   // GL frame was still in flight (a renderer that awaits its engine spans ticks).
   glFrames: 0, glFrameMs: 0, glSkipped: 0,
@@ -22,5 +25,5 @@ export const perf = {
   bootMs: 0,
 };
 export function perfReset() {
-  for (const k of Object.keys(perf) as (keyof typeof perf)[]) if (k !== "bootMs") perf[k] = 0;
+  for (const k of Object.keys(perf) as (keyof typeof perf)[]) if (k !== "bootMs" && k !== "analyseMs") perf[k] = 0;
 }

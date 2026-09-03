@@ -338,6 +338,10 @@ screen — any direct fillText in the framework must set its own.)
   fastest way to learn what an app actually calls), `jsrc` (dump generated JS), `layout <apk>
   <0xid|name>` (dump a binary layout XML), `findstr <apk> <needle>` (grep the dex string pools),
   `trace` (TRACE=<class-regex> METH=<regex>: log entry/exit of matching methods during boot),
+  `natcheck [apk ...]` (boot each apk with every native wrapped and report the ones that
+  return a promise without being declared async — see "The sync tier is worth 24x"),
+  `bun scripts/perfsum.ts [dir] [baseline.json]` (roll the per-step perf counters up per flow,
+  with deltas against a saved baseline: how two runs compare on cost, not just on pixels),
   `nrun <apk> <lib.so>` (load one ARM32 library headless and run its JNI_OnLoad — the fastest
   way to shake out the CPU/libc/JNI layers), `ndbg` (the same over a booted page),
   `dbg [flow] [stopAt] [outDir]` (walk an e2e flow until it wedges and dump the queue site,
@@ -777,6 +781,55 @@ three are the same mistake — state cleared before the work that consumes it, w
   does — `JCanvas` already tracked saveCount and we simply were not using it.
 - the `drawing` re-entrancy guard had no `finally`.
 `perf.layoutErrors`/`drawErrors` count these. They must be 0 on fitnotes; non-zero names a gap.
+
+## The sync tier is worth 24x, and we cannot have it yet
+Every compiled method is `async` because any call might return a promise. In the shape the
+compiler emits, an async caller of an async leaf runs at 20M calls/s where the same body
+compiled sync runs at 490M: **24x**. That is the largest single performance number in the
+tree, and it is why the sync tier keeps coming up.
+
+Widening the syntactic rule buys nothing. It is sync today iff there is no invoke, sget,
+sput, new-instance or filled-new-array — 12.4% of harmonic's bodies. Dropping the init
+clause entirely (every method with no invoke at all) reaches 13.4%. The invokes are the
+whole story, so the answer has to come from the call graph.
+
+So it does: `src/jvm/suspend.ts` is a backward closure over the RTA graph (a method suspends
+if it can reach one that does), `src/jvm/analyse.ts` runs it at boot in the one moment when
+every dex is loaded and nothing is compiled yet, and the compiler consults `rt.syncMethods`.
+It costs 81ms on harmonic and 483ms on mihon, and it says **40%** of reachable bodies cannot
+suspend. A virtual site is one node, not one per receiver — fanning out per site made mihon
+12.5M edges and 37 seconds instead of 0.7M and 0.5s.
+
+It is off by default (`?sync=1`), because the 40% is not true.
+
+The analysis takes `fn.constructor.name === "AsyncFunction"` as a native's whole statement
+about itself, which is the only statement a function makes. **67 of ours return a promise
+without being async** — `bun run natcheck` wraps every native, boots the apks and lists them.
+They are not mistakes: `HashMap.get` runs a user `hashCode()`, `ViewGroup.measure` runs a
+subclass `onMeasure()`, `TextView.setText` runs a CharSequence's `toString()`. They return
+synchronously almost every time, so declaring them `async` would make the hottest paths in
+the system always allocate a promise — more than the tier saves.
+
+Three ways to tell the analysis anyway, all measured, none good enough:
+- **A generated list of them.** Coverage-dependent. With harmonic's 57 recorded, three of its
+  own methods still threw: `getPackageInfo(String,PackageInfoFlags)` returns `vcall(...)` and
+  that overload had not run during the scan.
+- **Scan each native's source for a re-entry helper.** Finds 10 of the 67. The rest re-enter
+  through shared TS helpers (`measureView`, `drawView`, `inflate`) or are alias strings, and
+  none of that is visible in the function's own text.
+- **Assume every native suspends.** Sound, and yields **13.7%** — which is what the syntactic
+  rule already gets. The whole value of the tier is in trusting the natives.
+
+So the tier lands when the native layer can state re-entry, not before. `R.nosusp` is what
+makes a wrong answer loud rather than silent: a frame compiled sync that receives a promise
+throws and lands in `wd.rt.missing` as "… suspended in a sync frame". Do not re-derive any of
+this; measure the native layer instead.
+
+**One piece of it shipped on its own merits**: `initClass` was a single `(async () => …)()`,
+so it returned a promise whatever the body did, and every FIRST touch of any class forced its
+toucher to await. It now runs synchronously until a step actually yields. That is correct
+regardless of the tier — and it is also the precondition for it, since otherwise no method
+containing an sget or a new-instance could ever be sync.
 
 ## Generating JS source costs 4x what parsing it does
 Loading a class generated source for every method it declares: 4397 classes / 24870 methods /

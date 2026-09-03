@@ -52,8 +52,22 @@ for (const [name, bytes] of Object.entries(zip)) {
   if (name.startsWith("META-INF/services/")) services[name] = new TextDecoder().decode(bytes);
 }
 
-const roots = rootsOf(zip["AndroidManifest.xml"], p, services);
-const refl = reflectiveRoots(p, appDexes);
+// --from <class> asks the same question of a framework subtree instead of an apk: what
+// would running THIS as bytecode need? Same closure, different roots.
+const from = args.filter((a, i) => args[i - 1] === "--from");
+const roots = from.length
+  ? { classes: from.map((f) => f.split("#")[0]), why: new Map(from.map((c) => [c.split("#")[0], "--from"])), methods: from.flatMap((f) => {
+      const [c, only] = f.split("#");
+      const def = p.def(c), dex = p.dexOf(c);
+      if (!def || !dex) throw new Error(`--from ${c}: no such class`);
+      const want = only ? new Set(only.split("+")) : null;
+      return [...def.directMethods, ...def.virtualMethods]
+        .map((m) => [dex.method(m.methodIdx).name, dex.methodDesc(m.methodIdx)] as const)
+        .filter(([n]) => !want || want.has(n))
+        .map(([n, d]) => c + "." + n + d);
+    }) }
+  : rootsOf(zip["AndroidManifest.xml"], p, services);
+const refl = from.length ? [] : reflectiveRoots(p, appDexes);
 const t1 = performance.now();
 const r = reach(p, roots.methods, [...roots.classes, ...refl]);
 const t2 = performance.now();
@@ -107,7 +121,20 @@ show(fwDexes.length ? "absent classes (not in the apk, not in AOSP, no native)" 
 if (fwDexes.length) {
   // With the framework in the program, an unresolved call means AOSP does not have it
   // either — a genuinely missing API, not one we have yet to write.
-  show("native methods on the reachable path (the JNI line this apk stands on)", rank(r.nativeMethods, () => true));
+  const nat = rank(r.nativeMethods, () => true);
+  show("native methods on the reachable path (the JNI line this apk stands on)", nat);
+  // the shim work is bought per class, not per method: one delegate table serves all of them
+  const byClass = new Map<string, [number, number]>();
+  for (const [k, n] of nat) {
+    const c = k.slice(0, k.indexOf("."));
+    const e = byClass.get(c) ?? [0, 0];
+    byClass.set(c, [e[0] + 1, e[1] + n]);
+  }
+  const rows = [...byClass].sort((a, b) => b[1][0] - a[1][0]);
+  console.log(`\n=== the same, by class: ${rows.length} classes to shim`);
+  for (const [c, [m, sites]] of rows.slice(0, flag("--all") ? rows.length : limit || 25)) {
+    console.log(`  ${String(m).padStart(4)} methods ${String(sites).padStart(5)} sites  ${c}`);
+  }
   show("unresolved after AOSP (no dex anywhere, no native)", rank(r.unresolvedMethods, (k) => isFramework(k) && !registered(k)));
 } else {
   const missing = rank(r.unresolvedMethods, (k) => isFramework(k) && !registered(k));

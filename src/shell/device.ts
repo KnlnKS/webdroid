@@ -3,6 +3,7 @@
 import { unzipSync } from "fflate";
 import { DexFile } from "../jvm/dex";
 import { rt } from "../jvm/runtime";
+import { analyseProgram } from "../jvm/analyse";
 import { vfs } from "../jvm/natives/jio";
 import { vcall, curThread, mainThread, setCurThread, newObj } from "../jvm/natives/jlang";
 import { Arsc } from "../android/arsc";
@@ -27,6 +28,10 @@ import { device } from "./config";
 import { restoreRoots } from "./hostfs";
 
 export const SCREEN_W = device.width, SCREEN_H = device.height, STATUS_H = device.statusBar;
+
+/** `?sync=1` opts into the sync tier. Off by default: see "The sync tier is worth 24x and we
+ *  cannot have it yet" in AGENTS.md — the analysis is sound, our natives are not. */
+const SYNC_TIER = typeof location !== "undefined" && new URLSearchParams(location.search).get("sync") === "1";
 
 interface BootedApp {
   host: AppHost;
@@ -68,6 +73,17 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
   // auto-stub it into the class cache for the rest of the run.
   for (const name of [...rt.natives.keys()]) {
     try { rt.link(name); } catch (e) { console.warn("[link native]", name, e); }
+  }
+  // Every dex is loaded and every native has a prototype, so the call graph is complete and
+  // nothing has been compiled yet: the only moment the suspension analysis can run.
+  if (SYNC_TIER) {
+    onStatus("analysing…");
+    const services: Record<string, string> = {};
+    for (const [n, b] of Object.entries(zip)) {
+      if (n.startsWith("META-INF/services/")) services[n] = new TextDecoder().decode(b);
+    }
+    const a = analyseProgram(zip["AndroidManifest.xml"], services);
+    if (a) console.log(`[webdroid] ${a.reachable} reachable methods, ${a.sync} cannot suspend, in ${a.ms.toFixed(0)}ms`);
   }
   const manifest = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(manifest, "package") ?? "app";

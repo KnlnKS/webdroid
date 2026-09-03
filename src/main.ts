@@ -152,8 +152,14 @@ const tap = async (x: number, y: number) => {
 };
 
 /** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. */
+// `?natcheck=1` before anything links: the suspension analysis believes what a native
+// declares about itself, so a native that returns a promise without being async has to be
+// findable rather than guessed at.
+rt.auditNatives = new URLSearchParams(location.search).get("natcheck") === "1";
+
 const wd = {
   rt, uiState, overlays, perf, perfReset, mainDbg, setGL, logs: logBuf, ticks: 0, native,
+  nativeLiars: () => [...rt.nativeLiars].sort(),
   boot, app: () => currentApp(), rnodes: () => JRenderNode.all, back: () => pressBack(),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
   web: () => webViewInfo(),

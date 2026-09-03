@@ -8,6 +8,7 @@ import type { DexFile, CodeItem, EncodedMethod } from "./dex";
 import { OPS, FMT_LEN, insnLen, type Fmt } from "./opcodes";
 import { mangleMethod, parseMethodDesc, isWide, descToName } from "./abi";
 import { ACC, type Runtime, type ClassInfo } from "./runtime";
+import { perf } from "../perf";
 
 const s4 = (v: number) => (v << 28) >> 28;
 const s8 = (v: number) => (v << 24) >> 24;
@@ -220,15 +221,21 @@ class MethodCompiler {
     }
 
     this.typeConsts();
-    // scan for sync eligibility
-    for (const pc2 of this.order) {
-      const i = this.ins.get(pc2)!;
-      if (i.name.startsWith("invoke") || i.name.startsWith("sget") || i.name.startsWith("sput") ||
-          i.name === "new-instance" || i.name === "filled-new-array" || i.name === "filled-new-array/range") {
-        this.sync = false;
-        break;
+    // Sync eligibility. The whole-program answer (src/jvm/suspend.ts) is authoritative where
+    // it has one; a method it never saw — reflection, a class loaded later — falls back to
+    // the syntactic rule, which is sound because none of those instructions can suspend.
+    if (this.R.syncMethods?.has(this.info.name + "." + this.mname + this.desc)) this.sync = true;
+    else {
+      for (const pc2 of this.order) {
+        const i = this.ins.get(pc2)!;
+        if (i.name.startsWith("invoke") || i.name.startsWith("sget") || i.name.startsWith("sput") ||
+            i.name === "new-instance" || i.name === "filled-new-array" || i.name === "filled-new-array/range") {
+          this.sync = false;
+          break;
+        }
       }
     }
+    if (this.sync) perf.syncMethods++; else perf.asyncMethods++;
 
     // emit blocks
     const blocks: string[] = [];
@@ -505,7 +512,10 @@ ${catchBody}
 
   // shorthand emit helpers
   private guard(expr: string, out: string[], assignTo = "$t") {
-    if (this.sync) { out.push(`${assignTo}=${expr};`); return; }
+    // A sync frame cannot await. If the analysis was wrong the value arrives as a promise,
+    // and saying so is the only honest thing left — proceeding would hand a promise on as
+    // if it were the result.
+    if (this.sync) { out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise)throw R.nosusp(${JSON.stringify(this.info.name + "." + this.mname + this.desc)});`); return; }
     // re-pin the frame's thread identity after every suspension: other chains set
     // the global current-thread while we were parked (continuation-local restore)
     out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise){R.su();${assignTo}=await ${assignTo};R.st($th);}`);
