@@ -132,11 +132,32 @@ export class DexFile {
     this.methodIdsOff = v.getUint32(h + 92, true);
     this.classDefCount = v.getUint32(h + 96, true); this.classDefsOff = v.getUint32(h + 100, true);
     this.mapOff = v.getUint32(h + 52, true);
+    const protoCount = v.getUint32(h + 72, true), fieldCount = v.getUint32(h + 80, true), methodCount = v.getUint32(h + 88, true);
     this.stringCache = new Array(this.stringCount);
     this.typeCache = new Array(this.typeCount);
-    this.protoCache = new Array(v.getUint32(h + 72, true));
-    this.fieldCache = new Array(v.getUint32(h + 80, true));
-    this.methodCache = new Array(v.getUint32(h + 88, true));
+    this.protoCache = new Array(protoCount);
+    this.fieldCache = new Array(fieldCount);
+    this.methodCache = new Array(methodCount);
+
+    // Nothing here was checked before, so a truncated or byte-swapped file surfaced as a
+    // RangeError from a DataView deep inside a lookup, naming neither the file nor the cause.
+    // The checksum and SHA-1 are deliberately NOT verified: they cost an adler32 and a SHA-1
+    // over every megabyte of every dex on every boot, and the zip these came out of already
+    // CRC'd the same bytes.
+    const endian = v.getUint32(h + 40, true);
+    if (endian !== 0x12345678) {
+      throw new Error(`${name}: endian_tag 0x${endian.toString(16)}${endian === 0x78563412 ? " — a byte-swapped dex" : ""}`);
+    }
+    if (this.version < 35 || this.version > 41) throw new Error(`${name}: dex version ${this.version || "?"} is not one this reads`);
+    const headerSize = v.getUint32(h + 36, true);
+    if (headerSize !== (this.version >= 41 ? 120 : 112)) throw new Error(`${name}: header_size ${headerSize} for version ${this.version}`);
+    for (const [what, count, off, stride] of [
+      ["string_ids", this.stringCount, this.stringIdsOff, 4], ["type_ids", this.typeCount, this.typeIdsOff, 4],
+      ["proto_ids", protoCount, this.protoIdsOff, 12], ["field_ids", fieldCount, this.fieldIdsOff, 8],
+      ["method_ids", methodCount, this.methodIdsOff, 8], ["class_defs", this.classDefCount, this.classDefsOff, 32],
+    ] as [string, number, number, number][]) {
+      if (count && off + count * stride > bytes.length) throw new Error(`${name}: ${what} runs past the file (${count} at ${off}, file ${bytes.length})`);
+    }
   }
 
   string(i: number): string {

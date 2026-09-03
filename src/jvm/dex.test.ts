@@ -4,15 +4,16 @@ import { dexesIn } from "./dex";
 // A v41 container: several logical dex in one physical file, with every section offset relative
 // to the CONTAINER rather than to the header it was read from. A reader that assumes one header
 // sees only the first classes' worth and silently misses the rest.
-function container(versions: string, names: string[]): Uint8Array {
-  const HDR = 120, SLOT = 160;                       // header + 40 bytes of that dex's own data
+function container(version: string, names: string[]): Uint8Array {
+  const HDR = Number(version) >= 41 ? 120 : 112, SLOT = 160;   // header + that dex's own data
   const buf = new Uint8Array(SLOT * names.length);
   const v = new DataView(buf.buffer);
   names.forEach((name, i) => {
     const h = i * SLOT, data = h + HDR;
-    buf.set([0x64, 0x65, 0x78, 0x0a, ...versions.split("").map((c) => c.charCodeAt(0)), 0], h);
+    buf.set([0x64, 0x65, 0x78, 0x0a, ...version.split("").map((c) => c.charCodeAt(0)), 0], h);
     v.setUint32(h + 32, SLOT, true);                 // file_size: this logical dex
     v.setUint32(h + 36, HDR, true);                  // header_size
+    v.setUint32(h + 40, 0x12345678, true);           // endian_tag
     v.setUint32(h + 56, 1, true);                    // string_ids_size
     v.setUint32(h + 60, data, true);                 // string_ids_off — container-relative
     v.setUint32(h + 112, buf.length, true);          // container_size
@@ -36,4 +37,20 @@ test("a pre-container dex is one logical dex whatever follows it", () => {
   const dexes = dexesIn(container("039", ["alpha", "beta"]), "classes.dex");
   expect(dexes.length).toBe(1);
   expect(dexes[0].string(0)).toBe("alpha");
+});
+
+// None of the header was checked before, so these surfaced as a RangeError from a DataView
+// deep inside a lookup, naming neither the file nor the cause.
+test("a byte-swapped, misversioned or truncated dex says which it is", () => {
+  const swapped = container("041", ["alpha"]);
+  new DataView(swapped.buffer).setUint32(40, 0x78563412, true);
+  expect(() => dexesIn(swapped, "swapped.dex")).toThrow(/byte-swapped/);
+
+  const old = container("041", ["alpha"]);
+  old.set(new TextEncoder().encode("033"), 4);
+  expect(() => dexesIn(old, "old.dex")).toThrow(/version 33/);
+
+  const short = container("041", ["alpha"]);
+  new DataView(short.buffer).setUint32(56, 1000, true);   // string_ids_size, way past the end
+  expect(() => dexesIn(short, "short.dex")).toThrow(/string_ids runs past the file/);
 });
