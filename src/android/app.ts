@@ -2683,7 +2683,25 @@ rt.register({
     "getInstalledProvidersForPackage(Ljava/lang/String;Landroid/os/UserHandle;)Ljava/util/List;": () => newArrayList(),
     "updateAppWidget([ILandroid/widget/RemoteViews;)V": () => {},
     "updateAppWidget(Landroid/content/ComponentName;Landroid/widget/RemoteViews;)V": () => {},
+    "updateAppWidget(ILandroid/widget/RemoteViews;)V": () => {},
     "notifyAppWidgetViewDataChanged([II)V": () => {},
+    // No widget is placed on a home screen here, so no id names one and its options are empty.
+    "getAppWidgetInfo(I)Landroid/appwidget/AppWidgetProviderInfo;": () => null,
+    "getAppWidgetOptions(I)Landroid/os/Bundle;": () => new JBundle(),
+  },
+});
+// A widget host would deliver these; nothing does, but the class has to exist — an app class
+// extending it cannot link otherwise, and that poisons everything it is referenced from.
+rt.register({
+  name: "android/appwidget/AppWidgetProvider", ctor: class extends JObj {}, sup: "android/content/BroadcastReceiver",
+  methods: {
+    "<init>()V": function () {},
+    "onUpdate(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;[I)V": () => {},
+    "onDeleted(Landroid/content/Context;[I)V": () => {},
+    "onEnabled(Landroid/content/Context;)V": () => {},
+    "onDisabled(Landroid/content/Context;)V": () => {},
+    "onRestored(Landroid/content/Context;[I[I)V": () => {},
+    "onAppWidgetOptionsChanged(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;ILandroid/os/Bundle;)V": () => {},
   },
 });
 class JAppWidgetProviderInfo extends JObj {

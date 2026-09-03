@@ -605,6 +605,7 @@ rt.register({
       if ((o[this.prop] ?? 0n) !== e) return 0;
       o[this.prop] = v; return 1;
     },
+    "getAndSet(Ljava/lang/Object;J)J": function (this: JFieldUpdater, o: any, v: bigint) { const old = o[this.prop] ?? 0n; o[this.prop] = v; return old; },
   },
 });
 rt.register({
@@ -625,6 +626,7 @@ rt.register({
       if ((o[this.prop] ?? 0) !== e) return 0;
       o[this.prop] = v; return 1;
     },
+    "getAndSet(Ljava/lang/Object;I)I": function (this: JFieldUpdater, o: any, v: number) { const old = o[this.prop] ?? 0; o[this.prop] = v; return old; },
   },
 });
 

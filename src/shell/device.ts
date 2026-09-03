@@ -48,9 +48,10 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
   // The android package registers android.R.* and fills the widgets' attr-id tables, so it has to
   // be here before anything links. main.ts starts the fetch alongside the apk's, so this waits on
   // nothing in the common case.
-  const fwPkg = await loadFramework();
-  // the directories a previous session picked, so a persisted content:// tree still resolves
-  void restoreRoots();
+  // The directories a previous session picked, awaited: an app reads its persisted storage URI
+  // while it is starting, and a tree that does not resolve *yet* is one that does not exist as
+  // far as it is concerned — for the whole session, since it caches the answer.
+  const [fwPkg] = await Promise.all([loadFramework(), restoreRoots()]);
   // materialize every registered native class so directly-constructed instances have methods
   for (const name of [...rt.natives.keys()]) {
     try { rt.link(name); } catch (e) { console.warn("[link native]", name, e); }
