@@ -105,7 +105,6 @@ export class Cpu {
   lo = 0; hi = 0;     // 64-bit multiply results
   ic = 0;             // instructions executed
   bpc = 0;            // start of the block being executed (fault attribution)
-  ring = new Int32Array(64); rp = 0;
   s = new Float32Array(64);
   d = new Float64Array(this.s.buffer);
   si = new Int32Array(this.s.buffer);
@@ -201,7 +200,6 @@ export class Cpu {
       catch (e) {
         if (e instanceof NativeFault) {
           if (!e.pc) e.pc = this.bpc >>> 0;
-          if (!e.ring.length) for (let i = 1; i <= 64; i++) e.ring.push(this.ring[(this.rp + i) & 63] >>> 0);
           if (!e.message.includes("@")) e.message += ` @ ${symbolizeHook(e.pc)} (block 0x${(this.bpc >>> 0).toString(16)}, ${this.name})`;
         }
         throw e;
@@ -346,7 +344,6 @@ export class Cpu {
   fault(msg: string): never {
     const e = new NativeFault(`[native] ${msg} @ ${symbolizeHook(this.r[15] >>> 0)} (${this.name})`);
     e.pc = this.r[15] >>> 0;
-    for (let i = 1; i <= 64; i++) e.ring.push(this.ring[(this.rp + i) & 63] >>> 0);
     throw e;
   }
 }

@@ -6,7 +6,6 @@ import { MEM_SIZE, PAGE_SHIFT, PAGE_SIZE, MODULE_BASE, STACK_BASE, STACK_END, HE
 
 export class NativeFault extends Error {
   pc = 0;
-  ring: number[] = [];
 }
 
 const buf = new ArrayBuffer(MEM_SIZE);
@@ -135,8 +134,7 @@ export const mem = {
   valloc(n: number): number { return mem.memalign(PAGE_SIZE, n); },
   usableSize(p: number): number {
     if (!p) return 0;
-    const owner = i32[(p - 8) >>> 2];
-    return owner ? i32[(p - 4) >>> 2] : i32[(p - 4) >>> 2];
+    return i32[(p - 4) >>> 2];
   },
   /** address space for a module image: never freed, 64 KiB aligned by default */
   reserve(size: number, align = 0x10000): number {

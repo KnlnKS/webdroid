@@ -21,7 +21,6 @@ export const native = {
   },
   jni: jniTrace,
   regs: () => [...cpus].map((c) => ({ name: c.name, tid: c.tid, pc: symbolizePc(c.r[15] >>> 0), t: c.t, ic: c.ic, r: [...c.r].map((v) => (v >>> 0).toString(16)), finished: c.finished, pending: !!c.pending })),
-  pcRing: (tid?: number) => { const c = [...cpus].find((x) => tid === undefined || x.tid === tid); return c ? Array.from({ length: 64 }, (_, i) => symbolizePc(c.ring[(c.rp + 1 + i) & 63] >>> 0)) : []; },
   calledMissing, unresolved, jniMissing, registered,
   blocks: blockStats,
   /** profileReset(n) also sets the slice budget: a smaller one samples the hot pcs more finely */

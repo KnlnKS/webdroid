@@ -21,7 +21,6 @@ const out = await drv.page.evaluate(() => {
     logs: (globalThis as any).wd.logs.slice(-80),
     trace: n.trace().ring.slice(-60),
     regs: n.regs(),
-    ring: n.regs().map((r: { tid: number; name: string }) => `== ${r.name} (tid ${r.tid})\n` + n.pcRing(r.tid).join("\n")).join("\n"),
     calledMissing: [...n.calledMissing], jniMissing: [...n.jniMissing], missing: [...(globalThis as any).wd.rt.missing],
     perf: (globalThis as any).wd.perf, blocks: n.blocks, steps: n.step ? (globalThis as any).wd.native.step.ring ?? [] : [],
   };
@@ -29,7 +28,6 @@ const out = await drv.page.evaluate(() => {
 console.log("--- logs ---\n" + out.logs.join("\n"));
 console.log("--- host trace ---\n" + out.trace.join("\n"));
 console.log("--- regs ---", JSON.stringify(out.regs, null, 1));
-console.log("--- pc ring ---\n" + out.ring);
 console.log("calledMissing:", out.calledMissing, "jniMissing:", out.jniMissing, "\nmissing:", out.missing);
 console.log("perf:", out.perf, "blocks:", out.blocks);
 console.log("profile:\n" + (await drv.page.evaluate(() => (globalThis as any).wd.native.profile(25))).join("\n"));
