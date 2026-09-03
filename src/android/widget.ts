@@ -4,7 +4,7 @@ import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { vcall, mkEnumSet } from "../jvm/natives/jlang";
 import { usLocale } from "../jvm/natives/jutil";
-import { JCanvas, JTypeface, tfDefault, tfMedium, typefaceFor, cssColor, measureCtx, fontAscent, fontDescent, fontTop, fontBottom, JBitmap, JRect } from "./graphics";
+import { JCanvas, JTypeface, tfDefault, tfMedium, typefaceFor, cssColor, measureText, fontAscent, fontDescent, fontTop, fontBottom, JBitmap, JRect } from "./graphics";
 import { fontResource } from "./fonts";
 import { JTextPaint, spannedString, JEditable, mkStaticLayout } from "./text";
 import { JDrawable, drawChild, loadDrawableRV, loadDrawable, loadColorStateList, JColorStateList, cslColor, mkCsl, ST, JBitmapDrawable } from "./drawable";
@@ -648,18 +648,21 @@ export class JTextView extends JView {
   wrap(avail: number): string[] {
     const text = this.displayText();
     if (avail <= 0) return text ? [text] : [];
-    const ctx = measureCtx(this.paintT.font());
+    // measureText memoises on (font, string) and applies letter spacing; ctx.measureText did
+    // neither, so every probe of the break search went to the browser and no line accounted for
+    // android:letterSpacing that android.text.* has always honoured.
+    const mw = (t: string) => measureText(this.paintT, t);
     const out: string[] = [];
     for (const hard of text.split("\n")) {
       if (this.singleLine || this.maxLinesV === 1) { out.push(hard); break; }
-      if (ctx.measureText(hard).width <= avail) { out.push(hard); continue; }
+      if (mw(hard) <= avail) { out.push(hard); continue; }
       // a word wider than the line is hard-broken; emit full lines and return what is left over
       const breakWide = (l: string) => {
-        while (ctx.measureText(l).width > avail && l.length > 1) {
+        while (mw(l) > avail && l.length > 1) {
           let lo = 1, hi = l.length;
           while (lo < hi) {
             const mid = (lo + hi + 1) >> 1;
-            if (ctx.measureText(l.slice(0, mid)).width <= avail) lo = mid;
+            if (mw(l.slice(0, mid)) <= avail) lo = mid;
             else hi = mid - 1;
           }
           out.push(l.slice(0, lo));
@@ -670,7 +673,7 @@ export class JTextView extends JView {
       let line = "";
       for (const word of hard.split(/(\s+)/)) {
         if (!word) continue;
-        if (ctx.measureText(line + word).width <= avail || !line) line = breakWide(line + word);
+        if (mw(line + word) <= avail || !line) line = breakWide(line + word);
         else {
           // the pending line can itself be one over-long word, parked here by an earlier break
           const rest = breakWide(line.trimEnd());
@@ -685,9 +688,9 @@ export class JTextView extends JView {
       const last = out[out.length - 1];
       let shown = out.length - 1;
       for (const l of out) shown += l.length;
-      if (shown < text.length && ctx.measureText(last).width > 0) {
+      if (shown < text.length && mw(last) > 0) {
         let l = last;
-        while (l.length && ctx.measureText(l + "…").width > avail) l = l.slice(0, -1);
+        while (l.length && mw(l + "…") > avail) l = l.slice(0, -1);
         out[out.length - 1] = l + "…";
       }
     }
@@ -1089,10 +1092,9 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       this.lines = this.wrap(w - this.padL - this.padR - dlW);
     } else {
       this.lines = this.wrap(availText);
-      const ctx = measureCtx(this.paintT.font());
       let tw = 0;
-      for (const l of this.lines) tw = Math.max(tw, ctx.measureText(l).width);
-      if (!display && this.hint) tw = Math.max(tw, ctx.measureText(this.hint).width);
+      for (const l of this.lines) tw = Math.max(tw, measureText(this.paintT, l));
+      if (!display && this.hint) tw = Math.max(tw, measureText(this.paintT, this.hint));
       w = Math.ceil(tw) + this.padL + this.padR + dlW;
       w = Math.min(Math.max(w, this.minW), this.maxW);
       if (wMode === MS_AT_MOST) w = Math.min(w, wSize);
@@ -1156,7 +1158,7 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     for (const line of lines) {
       ctx.fillText(line, x, y);
       if (this.paintT.strikeThru && line) {
-        const w = ctx.measureText(line).width;
+        const w = measureText(this.paintT, line);
         const sx = hg === 1 ? x - w / 2 : hg === 5 ? x - w : x;
         ctx.fillRect(sx, y - this.paintT.textSize * 0.3, w, Math.max(1, this.paintT.textSize / 14));
       }
@@ -1165,7 +1167,7 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     // cursor for editable focused
     if (this.editable && this.focused && this.cursorVisible && Math.floor(performance.now() / 530) % 2 === 0) {
       const lastLine = lines[lines.length - 1] ?? "";
-      const cw = ctx.measureText(lastLine).width;
+      const cw = measureText(this.paintT, lastLine);
       const cx = (hg === 1 ? x + cw / 2 : hg === 5 ? x : x + cw) + 1;
       const cy = y - lh;
       ctx.fillStyle = cssColor(cslColor(this.colors, []));
