@@ -94,6 +94,10 @@ rt.register({
     "cancelAll()V": () => { pendingJobs.clear(); },
     "getPendingJob(I)Landroid/app/job/JobInfo;": (id: number) => pendingJobs.get(id) ?? null,
     "getAllPendingJobs()Ljava/util/List;": () => { const l = new JList(); l.a = [...pendingJobs.values()]; return l; },
+    // API 34: a namespaced view of the same scheduler. Nothing here runs a job, and ids are
+    // already unique per caller, so the namespace only has to exist. WorkManager needs it.
+    "forNamespace(Ljava/lang/String;)Landroid/app/job/JobScheduler;": function (this: JObj) { return this; },
+    "getNamespace()Ljava/lang/String;": () => null,
   },
 });
 class JJobParameters extends JObj { id = 0; extras: unknown = null; }

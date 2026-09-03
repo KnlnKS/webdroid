@@ -349,6 +349,15 @@ for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "
     };
   }
 }
+// The API 33 type-checked getters. The class argument only narrows the return type, so they read
+// the same slot; androidx reaches for them from SDK_INT 34 up.
+for (const [t, d] of [["Parcelable", "Ljava/lang/Object;"], ["Serializable", "Ljava/lang/Object;"],
+  ["ParcelableArrayList", "Ljava/util/ArrayList;"], ["ParcelableArray", "[Ljava/lang/Object;"],
+  ["SparseParcelableArray", "Landroid/util/SparseArray;"]] as const) {
+  bundleMethods[`get${t}(Ljava/lang/String;Ljava/lang/Class;)${d}`] = function (this: JBundle, k: string) {
+    return this.map.get(k) ?? null;
+  };
+}
 rt.register({ name: "android/os/BaseBundle", ctor: JBundle, methods: bundleMethods });
 rt.register({ name: "android/os/Bundle", ctor: class extends JBundle {}, sup: "android/os/BaseBundle",
   ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], methods: bundleMethods });

@@ -682,6 +682,7 @@ rt.register({
     "setHyphenationFrequency(I)Landroid/text/StaticLayout$Builder;": slSetter(),
     "setIndents([I[I)Landroid/text/StaticLayout$Builder;": slSetter(),
     "setJustificationMode(I)Landroid/text/StaticLayout$Builder;": slSetter(),
+    "setUseBoundsForWidth(Z)Landroid/text/StaticLayout$Builder;": slSetter(),
     "setUseLineSpacingFromFallbacks(Z)Landroid/text/StaticLayout$Builder;": slSetter(),
     "setLineBreakConfig(Landroid/graphics/text/LineBreakConfig;)Landroid/text/StaticLayout$Builder;": slSetter(),
     "build()Landroid/text/StaticLayout;": async function (this: JSLBuilder) {

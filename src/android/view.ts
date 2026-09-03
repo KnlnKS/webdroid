@@ -996,6 +996,7 @@ const viewMethods: NativeSpec["methods"] = {
   "getBaseline()I": () => -1,
   "hasOnClickListeners()Z": function (this: JView) { return this.clickL ? 1 : 0; },
   "setKeepScreenOn(Z)V": () => {},
+  "setRequestedFrameRate(F)V": () => {},
   "getKeepScreenOn()Z": () => 0,
   "requestRectangleOnScreen(Landroid/graphics/Rect;)Z": () => 0,
   "getMatrix()Landroid/graphics/Matrix;": async function () {
@@ -2230,7 +2231,7 @@ rt.register({
 type Ins = { left: number; top: number; right: number; bottom: number };
 /** android.view.WindowInsets.Type bit positions */
 const IT_STATUS = 0, IT_NAV = 1, IT_CAPTION = 2, IT_IME = 3, IT_GESTURES = 4,
-  IT_MANDATORY = 5, IT_TAPPABLE = 6, IT_CUTOUT = 7, IT_TYPES = 9;
+  IT_MANDATORY = 5, IT_TAPPABLE = 6, IT_CUTOUT = 7, IT_OVERLAYS = 8, IT_TYPES = 9;
 const TYPE_BARS = (1 << IT_STATUS) | (1 << IT_NAV) | (1 << IT_CAPTION);
 
 export class JWindowInsets extends JObj {
@@ -2363,6 +2364,7 @@ rt.register({
     "static tappableElement()I": () => 1 << IT_TAPPABLE,
     "static displayCutout()I": () => 1 << IT_CUTOUT,
     "static systemBars()I": () => TYPE_BARS,
+    "static systemOverlays()I": () => 1 << IT_OVERLAYS,
     "static all()I": () => -1,
   },
 });

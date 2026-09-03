@@ -253,6 +253,9 @@ const contextMethods: NativeSpec["methods"] = {
   },
   "getOpPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
   "getApplicationContext()Landroid/content/Context;": function (this: JContext) { return this.$host.application; },
+  // API 31. Everything here draws into the one window, but the application context is not a
+  // display context on a device and callers branch on that.
+  "isUiContext()Z": function (this: JContext) { return this === this.$host.application ? 0 : 1; },
   "getApplicationInfo()Landroid/content/pm/ApplicationInfo;": function (this: JContext) { return getAppInfo(this.$host); },
   "getPackageManager()Landroid/content/pm/PackageManager;": function () { return getPM(); },
   "getContentResolver()Landroid/content/ContentResolver;": function () { return contentResolver(); },
