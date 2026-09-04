@@ -10,6 +10,7 @@ import { gl as current, tables, put } from "../android/gl";
 import { yieldToLoop } from "./cpu";
 import { perf } from "../perf";
 import { glProbe } from "./gles1";
+import { rewriteTextureSwizzles, visibleUniforms, type SwizzleRewrite, type VisibleUniforms } from "./swizzle";
 /** the last GL entry points, while the probe is on (wd.native.glRing) */
 export const glRing: string[] = [];
 /** wd.native.gl3: the live context and the objects behind guest handles (debug) */
@@ -21,6 +22,141 @@ const T = tables;
 let err = 0;                                  // an error we raised ourselves; glGetError reports it before WebGL's
 let unpackPbo = false, packPbo = false;
 const mapped = new WeakMap<object, { ptr: number; off: number; len: number; access: number }>();   // a mapping belongs to the buffer, not the target
+
+const TEXTURE0 = 0x84c0, ACTIVE_TEXTURE = 0x84e0, CURRENT_PROGRAM = 0x8b8d;
+const IDENTITY_SWIZZLE = 0x688;
+const shaderRecs = new WeakMap<WebGLShader, { original: string; rewrite: SwizzleRewrite }>();
+interface TexRec { channels: [number, number, number, number]; code: number; deleted: boolean }
+const texRecs = new WeakMap<WebGLTexture, TexRec>();
+interface SamplerBinding { locations: WebGLUniformLocation[]; target: number; units: Int32Array }
+interface ProgramMap { binding: SamplerBinding; location: WebGLUniformLocation; pending: Int32Array; uploaded: Int32Array }
+interface ProgramRec {
+  hidden: ReadonlySet<string>;
+  uniforms: VisibleUniforms;
+  bindings: SamplerBinding[];
+  maps: ProgramMap[];
+  unitsDirty: boolean;
+  bindingRevision: number;
+}
+const programRecs = new WeakMap<WebGLProgram, ProgramRec>();
+interface ContextState {
+  activeUnit: number;
+  bindings: Map<number, Map<number, WebGLTexture | null>>;
+  revision: number;
+  program: WebGLProgram | null;
+}
+const contextStates = new WeakMap<GL, ContextState>();
+
+function contextState(): ContextState {
+  const gl = g();
+  let state = contextStates.get(gl);
+  if (!state) {
+    const active = gl.getParameter(ACTIVE_TEXTURE) as number;
+    state = { activeUnit: Math.max(0, active - TEXTURE0), bindings: new Map(), revision: 0, program: null };
+    contextStates.set(gl, state);
+  }
+  return state;
+}
+
+function textureRec(texture: WebGLTexture): TexRec {
+  let rec = texRecs.get(texture);
+  if (!rec) { rec = { channels: [0, 1, 2, 3], code: IDENTITY_SWIZZLE, deleted: false }; texRecs.set(texture, rec); }
+  return rec;
+}
+
+const bindingName = (target: number): number => target === 0x0de1 ? 0x8069 : target === 0x8513 ? 0x8514 : target === 0x806f ? 0x806a : target === 0x8c1a ? 0x8c1d : 0;
+function boundTexture(state: ContextState, unit: number, target: number): WebGLTexture | null {
+  let unitBindings = state.bindings.get(unit);
+  if (unitBindings?.has(target)) return unitBindings.get(target) ?? null;
+  const pname = bindingName(target);
+  if (!pname) return null;
+  const gl = g(), previous = gl.getParameter(ACTIVE_TEXTURE) as number;
+  gl.activeTexture(TEXTURE0 + unit);
+  const texture = gl.getParameter(pname) as WebGLTexture | null;
+  gl.activeTexture(previous);
+  state.activeUnit = Math.max(0, previous - TEXTURE0);
+  if (!unitBindings) { unitBindings = new Map(); state.bindings.set(unit, unitBindings); }
+  unitBindings.set(target, texture);
+  return texture;
+}
+
+function samplerTarget(type: number): number {
+  switch (type) {
+    case 0x8b5e: case 0x8dca: case 0x8dd2: return 0x0de1;                       // sampler2D
+    case 0x8b60: case 0x8dcc: case 0x8dd4: return 0x8513;                       // samplerCube
+    case 0x8b5f: case 0x8dcb: case 0x8dd3: return 0x806f;                       // sampler3D
+    case 0x8dc1: case 0x8dcf: case 0x8dd7: return 0x8c1a;                       // sampler2DArray
+    default: return 0;
+  }
+}
+
+function linkProgram(program: WebGLProgram): void {
+  const gl = g();
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) { programRecs.delete(program); return; }
+  const rewrites = (gl.getAttachedShaders(program) ?? []).map((shader) => shaderRecs.get(shader)?.rewrite).filter((r): r is SwizzleRewrite => !!r);
+  const hidden = new Set(rewrites.flatMap((rewrite) => [...rewrite.hidden]));
+  if (!hidden.size) { programRecs.delete(program); return; }
+  const uniforms = visibleUniforms(gl, program, hidden);
+  const infoByName = new Map(uniforms.infos.map((info) => [info.name.endsWith("[0]") ? info.name.slice(0, -3) : info.name, info]));
+  const bindingsByName = new Map<string, SamplerBinding>();
+  const bindings: SamplerBinding[] = [], maps: ProgramMap[] = [];
+  const rawCount = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS) as number;
+  const rawInfo = new Map<string, WebGLActiveInfo>();
+  for (let i = 0; i < rawCount; i++) {
+    const info = gl.getActiveUniform(program, i);
+    if (info) rawInfo.set(info.name.endsWith("[0]") ? info.name.slice(0, -3) : info.name, info);
+  }
+  for (const map of rewrites.flatMap((rewrite) => rewrite.maps)) {
+    const info = infoByName.get(map.sampler), hiddenInfo = rawInfo.get(map.mapUniform);
+    const target = info && samplerTarget(info.type);
+    const mapLocation = gl.getUniformLocation(program, map.mapUniform);
+    if (!info || !hiddenInfo || !target || !mapLocation) continue;
+    let binding = bindingsByName.get(map.sampler);
+    if (!binding) {
+      const size = Math.min(map.size, info.size);
+      const locations = Array.from({ length: size }, (_, i) => gl.getUniformLocation(program, size > 1 ? `${map.sampler}[${i}]` : map.sampler)).filter((location): location is WebGLUniformLocation => !!location);
+      if (locations.length !== size) continue;
+      binding = { locations, target, units: new Int32Array(size) };
+      bindingsByName.set(map.sampler, binding);
+      bindings.push(binding);
+    }
+    const size = Math.min(binding.units.length, hiddenInfo.size);
+    maps.push({ binding, location: mapLocation, pending: new Int32Array(size), uploaded: new Int32Array(size).fill(-1) });
+  }
+  programRecs.set(program, { hidden, uniforms, bindings, maps, unitsDirty: false, bindingRevision: -1 });
+}
+
+function prepareDraw(): void {
+  const gl = g(), state = contextState();
+  if (!state.program) state.program = gl.getParameter(CURRENT_PROGRAM) as WebGLProgram | null;
+  const rec = state.program && programRecs.get(state.program);
+  if (!rec || (!rec.unitsDirty && rec.bindingRevision === state.revision)) return;
+  if (rec.unitsDirty) {
+    for (const binding of rec.bindings) {
+      for (let i = 0; i < binding.locations.length; i++) binding.units[i] = gl.getUniform(state.program!, binding.locations[i]) as number;
+    }
+    rec.unitsDirty = false;
+  }
+  for (const map of rec.maps) {
+    let changed = false;
+    for (let i = 0; i < map.pending.length; i++) {
+      const texture = boundTexture(state, map.binding.units[i], map.binding.target);
+      const textureState = texture && texRecs.get(texture);
+      map.pending[i] = textureState && !textureState.deleted ? textureState.code : IDENTITY_SWIZZLE;
+      if (map.pending[i] !== map.uploaded[i]) changed = true;
+    }
+    if (changed) { gl.uniform1iv(map.location, map.pending); map.uploaded.set(map.pending); }
+  }
+  rec.bindingRevision = state.revision;
+}
+
+function markSamplerUnitsDirty(): void {
+  const state = contextState();
+  if (!state.program) state.program = g().getParameter(CURRENT_PROGRAM) as WebGLProgram | null;
+  const rec = state.program && programRecs.get(state.program);
+  if (rec) rec.unitsDirty = true;
+}
 
 // ── guest memory views (a misaligned pointer is copied, which GL data rarely is)
 type Ctor<A> = { new (b: ArrayBuffer, off: number, n: number): A; new (b: ArrayBuffer): A; BYTES_PER_ELEMENT: number };
@@ -68,9 +204,15 @@ function del(tbl: (object | null)[], n: number, p: number, kill: (o: never) => v
 function captureDraw(): unknown {
   const gl = g(), vp = gl.getParameter(gl.VIEWPORT) as Int32Array, px = new Uint8Array(4);
   let lit = 0; const grid = 12;
-  for (let y = 0; y < grid; y++) for (let x = 0; x < grid; x++) {
-    gl.readPixels(vp[0] + Math.floor((x + 0.5) * vp[2] / grid), vp[1] + Math.floor((y + 0.5) * vp[3] / grid), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
-    if (Math.max(px[0], px[1], px[2]) > 16) lit++;
+  const read = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING), draw = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING);
+  gl.bindFramebuffer(gl.READ_FRAMEBUFFER, draw);
+  try {
+    for (let y = 0; y < grid; y++) for (let x = 0; x < grid; x++) {
+      gl.readPixels(vp[0] + Math.floor((x + 0.5) * vp[2] / grid), vp[1] + Math.floor((y + 0.5) * vp[3] / grid), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      if (Math.max(px[0], px[1], px[2]) > 16) lit++;
+    }
+  } finally {
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, read);
   }
   const prog = gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null;
   const attribs = prog ? Array.from({ length: gl.getProgramParameter(prog, gl.ACTIVE_ATTRIBUTES) as number }, (_, i) => gl.getActiveAttrib(prog, i)?.name) : [];
@@ -152,9 +294,12 @@ const maxName = (p: WebGLProgram, n: number, q: (p: WebGLProgram, i: number) => 
 };
 function progParam(p: WebGLProgram, pname: number): unknown {
   const gl = g();
+  const rec = programRecs.get(p);
   switch (pname) {
     case 0x8b84: return (gl.getProgramInfoLog(p)?.length ?? 0) + 1;                // INFO_LOG_LENGTH
-    case 0x8b87: return maxName(p, gl.getProgramParameter(p, 0x8b86), (q, i) => gl.getActiveUniform(q, i));      // ACTIVE_UNIFORM_MAX_LENGTH
+    case 0x8b86: return rec?.uniforms.infos.length ?? gl.getProgramParameter(p, pname); // ACTIVE_UNIFORMS
+    case 0x8b87: return rec ? Math.max(0, ...rec.uniforms.infos.map((info) => info.name.length + 1))
+      : maxName(p, gl.getProgramParameter(p, 0x8b86), (q, i) => gl.getActiveUniform(q, i)); // ACTIVE_UNIFORM_MAX_LENGTH
     case 0x8b8a: return maxName(p, gl.getProgramParameter(p, 0x8b89), (q, i) => gl.getActiveAttrib(q, i));       // ACTIVE_ATTRIBUTE_MAX_LENGTH
     case 0x8a35: return maxName(p, gl.getProgramParameter(p, 0x8a36), (q, i) => ({ name: gl.getActiveUniformBlockName(q, i) ?? "" })); // ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH
     case 0x8c76: return maxName(p, gl.getProgramParameter(p, 0x8c83), (q, i) => gl.getTransformFeedbackVarying(q, i)); // TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH
@@ -165,7 +310,7 @@ function progParam(p: WebGLProgram, pname: number): unknown {
 function shaderParam(s: WebGLShader, pname: number): unknown {
   const gl = g();
   if (pname === 0x8b84) return (gl.getShaderInfoLog(s)?.length ?? 0) + 1;
-  if (pname === 0x8b88) return (gl.getShaderSource(s)?.length ?? 0) + 1;            // SHADER_SOURCE_LENGTH
+  if (pname === 0x8b88) return (shaderRecs.get(s)?.original.length ?? gl.getShaderSource(s)?.length ?? 0) + 1; // SHADER_SOURCE_LENGTH
   return gl.getShaderParameter(s, pname);
 }
 /** glGetActive{Attrib,Uniform,TransformFeedbackVarying}: (prog, index, bufsize, *length, *size, *type, *name) */
@@ -225,18 +370,23 @@ export function gles3Init(): void {
     glDeleteShader: (_c, a) => { const h = a.i(), s = T().shaders[h]; if (s) { g().deleteShader(s); T().shaders[h] = null; } },
     glIsShader: (_c, a) => (H(T().shaders, a.i()) ? 1 : 0),
     glShaderSource: (_c, a) => {
-      const s = H(T().shaders, a.i()); const n = a.i(), pp = a.p(), lp = a.p();
+      const handle = a.i(), s = H(T().shaders, handle); const n = a.i(), pp = a.p(), lp = a.p();
       let src = "";
       for (let i = 0; i < n; i++) {
         const p = ldp(pp + i * PTR), len = lp ? mem.ld32(lp + 4 * i) : -1;
         src += len < 0 ? mem.cstr(p) : new TextDecoder().decode(mem.bytes(p, len));
       }
-      if (s) g().shaderSource(s, src);
+      if (s) {
+        const rewrite = rewriteTextureSwizzles(src, handle);
+        shaderRecs.set(s, { original: src, rewrite });
+        if (rewrite.unsupported.length) calledMissing.add("gles3:texture swizzle shader transform");
+        g().shaderSource(s, rewrite.source);
+      }
     },
     glCompileShader: (_c, a) => { const s = H(T().shaders, a.i()); if (s) g().compileShader(s); },
     glGetShaderiv: (_c, a) => { const s = H(T().shaders, a.i()), pn = a.i(); out(s ? shaderParam(s, pn) : 0, a.p(), st32, 4); },
     glGetShaderInfoLog: (_c, a) => { const s = H(T().shaders, a.i()); outStr((s && g().getShaderInfoLog(s)) ?? "", a.i(), a.p(), a.p()); },
-    glGetShaderSource: (_c, a) => { const s = H(T().shaders, a.i()); outStr((s && g().getShaderSource(s)) ?? "", a.i(), a.p(), a.p()); },
+    glGetShaderSource: (_c, a) => { const s = H(T().shaders, a.i()); outStr((s && (shaderRecs.get(s)?.original ?? g().getShaderSource(s))) ?? "", a.i(), a.p(), a.p()); },
     glReleaseShaderCompiler: () => {},
     glShaderBinary: () => { err = 0x500; },                                       // INVALID_ENUM: no binary formats
     glCreateProgram: () => put(T().programs, g().createProgram()),
@@ -244,8 +394,8 @@ export function gles3Init(): void {
     glIsProgram: (_c, a) => (H(T().programs, a.i()) ? 1 : 0),
     glAttachShader: (_c, a) => { const p = H(T().programs, a.i()), s = H(T().shaders, a.i()); if (p && s) g().attachShader(p, s); },
     glDetachShader: (_c, a) => { const p = H(T().programs, a.i()), s = H(T().shaders, a.i()); if (p && s) g().detachShader(p, s); },
-    glLinkProgram: (_c, a) => { const p = H(T().programs, a.i()); if (p) g().linkProgram(p); },
-    glUseProgram: (_c, a) => g().useProgram(H(T().programs, a.i())),
+    glLinkProgram: (_c, a) => { const p = H(T().programs, a.i()); if (p) linkProgram(p); },
+    glUseProgram: (_c, a) => { const p = H(T().programs, a.i()); g().useProgram(p); contextState().program = p; },
     glValidateProgram: (_c, a) => { const p = H(T().programs, a.i()); if (p) g().validateProgram(p); },
     glGetProgramiv: (_c, a) => { const p = H(T().programs, a.i()), pn = a.i(); out(p ? progParam(p, pn) : 0, a.p(), st32, 4); },
     glGetProgramInfoLog: (_c, a) => { const p = H(T().programs, a.i()); outStr((p && g().getProgramInfoLog(p)) ?? "", a.i(), a.p(), a.p()); },
@@ -262,16 +412,36 @@ export function gles3Init(): void {
     glBindAttribLocation: (_c, a) => { const p = H(T().programs, a.i()); const i = a.i(), n = a.str(); if (p) g().bindAttribLocation(p, i, n); },
     glGetAttribLocation: (_c, a) => { const p = H(T().programs, a.i()); return p ? g().getAttribLocation(p, a.str()) : -1; },
     glGetFragDataLocation: (_c, a) => { const p = H(T().programs, a.i()); return p ? g().getFragDataLocation(p, a.str()) : -1; },
-    glGetUniformLocation: (_c, a) => { const p = H(T().programs, a.i()); const u = p && g().getUniformLocation(p, a.str()); return u ? put(T().uniforms, u) : -1; },
+    glGetUniformLocation: (_c, a) => {
+      const p = H(T().programs, a.i()), name = a.str();
+      if (p && programRecs.get(p)?.hidden.has(name.replace(/\[\d+\]$/, ""))) return -1;
+      const u = p && g().getUniformLocation(p, name); return u ? put(T().uniforms, u) : -1;
+    },
     glGetActiveAttrib: active((p, i) => g().getActiveAttrib(p, i)),
-    glGetActiveUniform: active((p, i) => g().getActiveUniform(p, i)),
+    glGetActiveUniform: active((p, i) => { const rec = programRecs.get(p); return rec ? rec.uniforms.infos[i] ?? null : g().getActiveUniform(p, i); }),
     glGetTransformFeedbackVarying: active((p, i) => g().getTransformFeedbackVarying(p, i)),
     glGetUniformBlockIndex: (_c, a) => { const p = H(T().programs, a.i()); return p ? g().getUniformBlockIndex(p, a.str()) : 0xffffffff; },
     glUniformBlockBinding: (_c, a) => { const p = H(T().programs, a.i()); const i = a.i(), b = a.i(); if (p) g().uniformBlockBinding(p, i, b); },
-    glGetActiveUniformBlockiv: (_c, a) => { const p = H(T().programs, a.i()); const i = a.i(), pn = a.i(); out(p && g().getActiveUniformBlockParameter(p, i, pn), a.p(), st32, 4); },
+    glGetActiveUniformBlockiv: (_c, a) => {
+      const p = H(T().programs, a.i()); const i = a.i(), pn = a.i(), rec = p && programRecs.get(p);
+      let value = p && g().getActiveUniformBlockParameter(p, i, pn);
+      if (pn === 0x8a43 && rec && value && typeof value === "object" && "length" in value) {
+        value = Uint32Array.from(value as ArrayLike<number>, (web) => rec.uniforms.webToGuest[web] >= 0 ? rec.uniforms.webToGuest[web] : 0xffffffff);
+      }
+      out(value, a.p(), st32, 4);
+    },
     glGetActiveUniformBlockName: (_c, a) => { const p = H(T().programs, a.i()); const i = a.i(); outStr((p && g().getActiveUniformBlockName(p, i)) ?? "", a.i(), a.p(), a.p()); },
-    glGetUniformIndices: (_c, a) => { const p = H(T().programs, a.i()); const n = a.i(), pp = a.p(); out(p && g().getUniformIndices(p, names(pp, n)), a.p(), st32, 4); },
-    glGetActiveUniformsiv: (_c, a) => { const p = H(T().programs, a.i()); const n = a.i(), ip = a.p(), pn = a.i(); out(p && g().getActiveUniforms(p, Array.from(u32(ip, n)), pn), a.p(), st32, 4); },
+    glGetUniformIndices: (_c, a) => {
+      const p = H(T().programs, a.i()); const n = a.i(), pp = a.p(), rec = p && programRecs.get(p);
+      let value = p && g().getUniformIndices(p, names(pp, n));
+      if (rec && value) value = Array.from(value, (web) => web === 0xffffffff || rec.uniforms.webToGuest[web] < 0 ? 0xffffffff : rec.uniforms.webToGuest[web]);
+      out(value, a.p(), st32, 4);
+    },
+    glGetActiveUniformsiv: (_c, a) => {
+      const p = H(T().programs, a.i()); const n = a.i(), ip = a.p(), pn = a.i(), rec = p && programRecs.get(p);
+      const indices = Array.from(u32(ip, n), (guest) => rec ? rec.uniforms.guestToWeb[guest] ?? 0xffffffff : guest);
+      out(p && g().getActiveUniforms(p, indices, pn), a.p(), st32, 4);
+    },
     glTransformFeedbackVaryings: (_c, a) => { const p = H(T().programs, a.i()); const n = a.i(), pp = a.p(), mode = a.i(); if (p) g().transformFeedbackVaryings(p, names(pp, n), mode); },
     glGetUniformfv: (_c, a) => { const p = H(T().programs, a.i()), u = U(a.i()); out(p && u && g().getUniform(p, u), a.p(), stf, 4); },
     glGetUniformiv: (_c, a) => { const p = H(T().programs, a.i()), u = U(a.i()); out(p && u && g().getUniform(p, u), a.p(), st32, 4); },
@@ -353,18 +523,32 @@ export function gles3Init(): void {
     glGetVertexAttribPointerv: (_c, a) => { const i = a.i(), pn = a.i(); stp(a.p(), g().getVertexAttribOffset(i, pn)); },
 
     // ── draws
-    glDrawArrays: (_c, a) => { perf.glDraws++; g().drawArrays(a.i(), a.i(), a.i()); },
-    glDrawElements: (_c, a) => { perf.glDraws++; g().drawElements(a.i(), a.i(), a.i(), a.p()); },
-    glDrawArraysInstanced: (_c, a) => { perf.glDraws++; g().drawArraysInstanced(a.i(), a.i(), a.i(), a.i()); },
-    glDrawElementsInstanced: (_c, a) => { perf.glDraws++; g().drawElementsInstanced(a.i(), a.i(), a.i(), a.p(), a.i()); },
-    glDrawRangeElements: (_c, a) => { perf.glDraws++; g().drawRangeElements(a.i(), a.i(), a.i(), a.i(), a.i(), a.p()); },
+    glDrawArrays: (_c, a) => { perf.glDraws++; prepareDraw(); g().drawArrays(a.i(), a.i(), a.i()); },
+    glDrawElements: (_c, a) => { perf.glDraws++; prepareDraw(); g().drawElements(a.i(), a.i(), a.i(), a.p()); },
+    glDrawArraysInstanced: (_c, a) => { perf.glDraws++; prepareDraw(); g().drawArraysInstanced(a.i(), a.i(), a.i(), a.i()); },
+    glDrawElementsInstanced: (_c, a) => { perf.glDraws++; prepareDraw(); g().drawElementsInstanced(a.i(), a.i(), a.i(), a.p(), a.i()); },
+    glDrawRangeElements: (_c, a) => { perf.glDraws++; prepareDraw(); g().drawRangeElements(a.i(), a.i(), a.i(), a.i(), a.i(), a.p()); },
 
     // ── textures and samplers
-    glActiveTexture: (_c, a) => g().activeTexture(a.i()),
-    glGenTextures: (_c, a) => { const n = a.i(); gen(T().textures, n, a.p(), () => g().createTexture()); },
-    glDeleteTextures: (_c, a) => { const n = a.i(); del(T().textures, n, a.p(), (o) => g().deleteTexture(o)); },
+    glActiveTexture: (_c, a) => { const texture = a.i(); g().activeTexture(texture); if (texture >= TEXTURE0) contextState().activeUnit = texture - TEXTURE0; },
+    glGenTextures: (_c, a) => { const n = a.i(); gen(T().textures, n, a.p(), () => { const texture = g().createTexture(); if (texture) textureRec(texture); return texture; }); },
+    glDeleteTextures: (_c, a) => {
+      const n = a.i(), p = a.p(), state = contextState();
+      del(T().textures, n, p, (texture) => {
+        textureRec(texture).deleted = true;
+        for (const unit of state.bindings.values()) for (const [target, bound] of unit) if (bound === texture) unit.set(target, null);
+        g().deleteTexture(texture);
+      });
+      state.revision++;
+    },
     glIsTexture: (_c, a) => (H(T().textures, a.i()) ? 1 : 0),
-    glBindTexture: (_c, a) => g().bindTexture(a.i(), H(T().textures, a.i())),
+    glBindTexture: (_c, a) => {
+      const target = a.i(), texture = H(T().textures, a.i()), state = contextState();
+      g().bindTexture(target, texture);
+      let unit = state.bindings.get(state.activeUnit);
+      if (!unit) { unit = new Map(); state.bindings.set(state.activeUnit, unit); }
+      if (unit.get(target) !== texture) { unit.set(target, texture); state.revision++; }
+    },
     glTexImage2D: (_c, a) => { const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(), b = a.i(), fmt = a.i(), ty = a.i(); (g().texImage2D as Function)(t, l, f, w, h, b, fmt, ty, texData(ty, a.p())); },
     glTexSubImage2D: (_c, a) => { const t = a.i(), l = a.i(), x = a.i(), y = a.i(), w = a.i(), h = a.i(), fmt = a.i(), ty = a.i(); (g().texSubImage2D as Function)(t, l, x, y, w, h, fmt, ty, texData(ty, a.p())); },
     glTexImage3D: (_c, a) => { const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(), d = a.i(), b = a.i(), fmt = a.i(), ty = a.i(); (g().texImage3D as Function)(t, l, f, w, h, d, b, fmt, ty, texData(ty, a.p())); },
@@ -392,11 +576,11 @@ export function gles3Init(): void {
     glCopyTexSubImage3D: (_c, a) => g().copyTexSubImage3D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i()),
     glGenerateMipmap: (_c, a) => g().generateMipmap(a.i()),
     glTexParameteri: (_c, a) => texParam(a.i(), a.i(), a.i()),
-    glTexParameterf: (_c, a) => { const t = a.i(), pn = a.i(); g().texParameterf(t, pn, a.f()); },
+    glTexParameterf: (_c, a) => texParamf(a.i(), a.i(), a.f()),
     glTexParameteriv: (_c, a) => { const t = a.i(), pn = a.i(); texParam(t, pn, mem.ld32(a.p())); },
-    glTexParameterfv: (_c, a) => { const t = a.i(), pn = a.i(); g().texParameterf(t, pn, mem.ldf32(a.p())); },
-    glGetTexParameteriv: (_c, a) => { const t = a.i(), pn = a.i(); out(g().getTexParameter(t, pn), a.p(), st32, 4); },
-    glGetTexParameterfv: (_c, a) => { const t = a.i(), pn = a.i(); out(g().getTexParameter(t, pn), a.p(), stf, 4); },
+    glTexParameterfv: (_c, a) => { const t = a.i(), pn = a.i(); texParamf(t, pn, mem.ldf32(a.p())); },
+    glGetTexParameteriv: (_c, a) => { const t = a.i(), pn = a.i(); out(texParameter(t, pn), a.p(), st32, 4); },
+    glGetTexParameterfv: (_c, a) => { const t = a.i(), pn = a.i(); out(texParameter(t, pn), a.p(), stf, 4); },
     glGenSamplers: (_c, a) => { const n = a.i(); gen(T().samplers, n, a.p(), () => g().createSampler()); },
     glDeleteSamplers: (_c, a) => { const n = a.i(); del(T().samplers, n, a.p(), (o) => g().deleteSampler(o)); },
     glIsSampler: (_c, a) => (H(T().samplers, a.i()) ? 1 : 0),
@@ -470,8 +654,12 @@ export function gles3Init(): void {
     G[`glUniform${n}${k}`] = (_c, a) => {
       const u = U(a.i()), x = rd(a), y = n > 1 ? rd(a) : 0, z = n > 2 ? rd(a) : 0, w = n > 3 ? rd(a) : 0;
       if (u) (g() as unknown as Record<string, (...v: unknown[]) => void>)[fn](u, x, y, z, w);
+      if (u && n === 1 && k === "i") markSamplerUnitsDirty();
     };
-    G[`glUniform${n}${k}v`] = (_c, a) => { const u = U(a.i()), cnt = a.i(), p = a.p(); if (u) (g() as unknown as Record<string, (...v: unknown[]) => void>)[fnv](u, vw(p, cnt * n)); };
+    G[`glUniform${n}${k}v`] = (_c, a) => {
+      const u = U(a.i()), cnt = a.i(), p = a.p(); if (u) (g() as unknown as Record<string, (...v: unknown[]) => void>)[fnv](u, vw(p, cnt * n));
+      if (u && n === 1 && k === "i") markSamplerUnitsDirty();
+    };
   }
   for (const [m, e] of [["2", 4], ["3", 9], ["4", 16], ["2x3", 6], ["3x2", 6], ["2x4", 8], ["4x2", 8], ["3x4", 12], ["4x3", 12]] as const) {
     const fn = `uniformMatrix${m}fv`;
@@ -485,7 +673,7 @@ export function gles3Init(): void {
       const r = f(c, a);
       if (glProbe.on && current) {
         glRing.push(k + args); if (glRing.length > 400) glRing.splice(0, 200);
-        if (glProbe.capture > 0 && k.startsWith("glDraw")) { glProbe.capture--; console.log("[gl-capture] " + k + args + " " + JSON.stringify(captureDraw())); }
+        if (glProbe.capture > 0 && k.startsWith("glDraw") && k !== "glDrawBuffers") { glProbe.capture--; console.log("[gl-capture] " + k + args + " " + JSON.stringify(captureDraw())); }
         const e = current.getError(); if (e) { perf.glErrors++; console.warn("[gl] 0x" + e.toString(16), "after", k + args); }
       }
       return r;
@@ -495,7 +683,31 @@ export function gles3Init(): void {
   hostLib("libGLESv3.so", G, { closed: true });
 }
 function texParam(t: number, pn: number, v: number): void {
-  // WebGL2 has no texture swizzle; an engine that reads back glGetError sees INVALID_ENUM, as on a GL without it
-  if (pn >= 0x8e42 && pn <= 0x8e45) { err = 0x500; if (!calledMissing.has("gles3:texture swizzle")) calledMissing.add("gles3:texture swizzle"); return; }
+  if (pn >= 0x8e42 && pn <= 0x8e45) { setSwizzle(t, pn, v); return; }
   g().texParameteri(t, pn, v);
+}
+
+function texParamf(t: number, pn: number, v: number): void {
+  if (pn >= 0x8e42 && pn <= 0x8e45) { setSwizzle(t, pn, Math.trunc(v)); return; }
+  g().texParameterf(t, pn, v);
+}
+
+function setSwizzle(target: number, pname: number, value: number): void {
+  const selector = value === 0 ? 4 : value === 1 ? 5 : value >= 0x1903 && value <= 0x1906 ? value - 0x1903 : -1;
+  if (selector < 0) { err = 0x500; return; }                                     // INVALID_ENUM
+  const state = contextState(), texture = boundTexture(state, state.activeUnit, target);
+  if (!texture) { err = 0x502; return; }                                         // INVALID_OPERATION
+  const rec = textureRec(texture), channel = pname - 0x8e42;
+  if (rec.channels[channel] === selector) return;
+  rec.channels[channel] = selector;
+  rec.code = rec.channels[0] | (rec.channels[1] << 3) | (rec.channels[2] << 6) | (rec.channels[3] << 9);
+  state.revision++;
+}
+
+function texParameter(target: number, pname: number): unknown {
+  if (pname < 0x8e42 || pname > 0x8e45) return g().getTexParameter(target, pname);
+  const state = contextState(), texture = boundTexture(state, state.activeUnit, target);
+  if (!texture) { err = 0x502; return 0; }
+  const selector = textureRec(texture).channels[pname - 0x8e42];
+  return selector < 4 ? 0x1903 + selector : selector === 4 ? 0 : 1;
 }
