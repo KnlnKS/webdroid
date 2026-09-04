@@ -72,4 +72,11 @@ describe("the cold tier agrees with the compiled tier", () => {
     expect(blockStats.compiled).toBeGreaterThan(compiled);
     expect(coldTier.stats.instr).toBeGreaterThan(interpreted);
   });
+
+  test("admission thresholds above 255 do not wrap", () => {
+    const compiled = blockStats.compiled;
+    const c = runCold([0x52800000, 0x52803201, 0x0b010000, 0x71000421, 0x54ffffc1, RET], undefined, 300);
+    expect(c.r[0]).toBe(80_200);
+    expect(blockStats.compiled).toBeGreaterThan(compiled);
+  });
 });

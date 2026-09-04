@@ -44,7 +44,7 @@ let NPAGES = 0;
 let pages: ((BlockFn | undefined)[] | undefined)[] = [];   // ARM blocks by word
 let tpages: ((BlockFn | undefined)[] | undefined)[] = [];  // Thumb blocks by halfword
 let cov: (Uint8Array | undefined)[] = [];
-let heat: (Uint8Array | undefined)[] = [];
+let heat: (Uint16Array | undefined)[] = [];
 let refs: (Set<BlockFn> | undefined)[] = [];
 function sizePages(): void {
   NPAGES = MEM_SIZE >>> PAGE_SHIFT;
@@ -100,7 +100,7 @@ function invalidatePage(pg: number): void {
 }
 /** page → the blocks whose successor cache holds a block in it (what an invalidation must clear) */
 /** the cold tier (interp.ts): how many times a block entry runs interpreted before it is compiled; 0 compiles at once */
-export const coldTier = { heat: 8, stats: coldStats };
+export const coldTier = { heat: 1024, stats: coldStats };
 /** the shared stub that interprets one basic block from r[32] and hands the next pc back to the dispatcher */
 const cold: BlockFn = Object.assign(function (c: Cpu, r: Int32Array, M: typeof mem): BlockFn {
   const next = coldRun(c, r, M, c.h);
@@ -438,9 +438,10 @@ export class Cpu {
     const b = pg?.[i];
     if (b) return b;
     // A64 code is interpreted until it has run coldTier.heat times at this entry, then compiled
-    if (A64 && !stepMode.on && coldTier.heat) {
-      const hp = heat[page] ??= new Uint8Array(1024);
-      if (hp[i] < coldTier.heat) { hp[i]++; this.r[32] = pc; return cold; }
+    const threshold = Math.min(0xffff, Math.max(0, Math.trunc(coldTier.heat)));
+    if (A64 && !stepMode.on && threshold) {
+      const hp = heat[page] ??= new Uint16Array(1024);
+      if (hp[i] < threshold) { hp[i]++; this.r[32] = pc; return cold; }
     }
     if (pg === undefined) pg = pages[page] = new Array<BlockFn | undefined>(1024).fill(undefined);
     return compile(this, pc, pg, false);
