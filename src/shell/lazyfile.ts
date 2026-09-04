@@ -1,0 +1,153 @@
+export interface FileSource {
+  readonly size: number;
+  read(offset: number, length: number): Uint8Array | Promise<Uint8Array>;
+  stats?(): RangeFileStats;
+}
+
+export class BytesFile implements FileSource {
+  readonly size: number;
+
+  constructor(readonly bytes: Uint8Array) {
+    this.size = bytes.length;
+  }
+
+  read(offset: number, length: number): Uint8Array {
+    const start = Math.max(0, Math.min(this.size, offset));
+    return this.bytes.subarray(start, Math.min(this.size, start + Math.max(0, length)));
+  }
+}
+
+export class SliceFile implements FileSource {
+  readonly size: number;
+
+  constructor(readonly source: FileSource, readonly offset: number, size: number) {
+    this.size = size;
+  }
+
+  read(offset: number, length: number): Uint8Array | Promise<Uint8Array> {
+    const start = Math.max(0, Math.min(this.size, offset));
+    return this.source.read(this.offset + start, Math.min(Math.max(0, length), this.size - start));
+  }
+
+  stats(): RangeFileStats {
+    return this.source.stats?.() ?? { requests: 0, fetched: 0, hits: 0, resident: 0 };
+  }
+}
+
+export async function readFully(source: FileSource, offset = 0, length = source.size - offset): Promise<Uint8Array> {
+  const end = Math.min(source.size, offset + Math.max(0, length));
+  const out = new Uint8Array(Math.max(0, end - offset));
+  let pos = 0;
+  while (offset + pos < end) {
+    const chunk = await source.read(offset + pos, end - offset - pos);
+    if (!chunk.length) break;
+    out.set(chunk.subarray(0, end - offset - pos), pos);
+    pos += chunk.length;
+  }
+  return pos === out.length ? out : out.slice(0, pos);
+}
+
+export interface RangeFileStats {
+  requests: number;
+  fetched: number;
+  hits: number;
+  resident: number;
+}
+type FileFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+export class RangeFile implements FileSource {
+  private readonly chunks = new Map<number, Uint8Array>();
+  private readonly inflight = new Map<number, Promise<Uint8Array>>();
+  private lastEnd = -1;
+  private requests = 0;
+  private fetched = 0;
+  private hits = 0;
+
+  constructor(
+    readonly url: string,
+    readonly size: number,
+    private readonly chunkSize = 1 << 20,
+    private readonly maxChunks = 32,
+    private readonly fetcher: FileFetch = fetch,
+  ) {}
+
+  static async open(url: string, fetcher: FileFetch = fetch): Promise<RangeFile> {
+    const response = await fetcher.call(globalThis, url, { method: "HEAD" });
+    if (!response.ok) throw new Error(`HEAD ${url}: ${response.status}`);
+    const header = response.headers.get("content-length");
+    if (header === null || !/^\d+$/.test(header)) throw new Error(`HEAD ${url}: no valid Content-Length`);
+    const size = Number(header);
+    if (!Number.isSafeInteger(size)) throw new Error(`HEAD ${url}: no valid Content-Length`);
+    return new RangeFile(url, size, 1 << 20, 32, fetcher);
+  }
+
+  read(offset: number, length: number): Promise<Uint8Array> {
+    const start = Math.max(0, Math.min(this.size, offset));
+    const end = Math.min(this.size, start + Math.max(0, length));
+    if (start === end) return Promise.resolve(new Uint8Array(0));
+    if (end - start >= this.chunkSize * 8) {
+      this.lastEnd = end;
+      return this.range(start, end - 1);
+    }
+    const index = Math.floor(start / this.chunkSize);
+    const within = start - index * this.chunkSize;
+    const wanted = Math.min(end - start, this.chunkSize - within);
+    const sequential = start === this.lastEnd;
+    const readEnd = start + wanted;
+    this.lastEnd = readEnd;
+    return this.chunk(index).then((chunk) => {
+      if (sequential && readEnd < this.size) void this.chunk(Math.floor(readEnd / this.chunkSize)).catch(() => {});
+      return chunk.subarray(within, within + wanted);
+    });
+  }
+
+  stats(): RangeFileStats {
+    let resident = 0;
+    for (const chunk of this.chunks.values()) resident += chunk.length;
+    return { requests: this.requests, fetched: this.fetched, hits: this.hits, resident };
+  }
+
+  private chunk(index: number): Promise<Uint8Array> {
+    const cached = this.chunks.get(index);
+    if (cached) {
+      this.hits++;
+      this.chunks.delete(index);
+      this.chunks.set(index, cached);
+      return Promise.resolve(cached);
+    }
+    const pending = this.inflight.get(index);
+    if (pending) { this.hits++; return pending; }
+    const start = index * this.chunkSize;
+    const end = Math.min(this.size, start + this.chunkSize) - 1;
+    const request = this.range(start, end).then((bytes) => {
+      this.chunks.set(index, bytes);
+      while (this.chunks.size > this.maxChunks) {
+        const oldest = this.chunks.keys().next();
+        if (oldest.done) break;
+        this.chunks.delete(oldest.value);
+      }
+      return bytes;
+    }).finally(() => this.inflight.delete(index));
+    this.inflight.set(index, request);
+    return request;
+  }
+
+  private async range(start: number, end: number): Promise<Uint8Array> {
+    this.requests++;
+    const response = await this.fetcher.call(globalThis, this.url, { headers: { Range: `bytes=${start}-${end}` } });
+    if (response.status !== 206) {
+      await response.body?.cancel();
+      throw new Error(`range ${start}-${end} from ${this.url}: ${response.status}`);
+    }
+    const contentRange = response.headers.get("content-range");
+    const match = contentRange?.match(/^bytes (\d+)-(\d+)\/(\d+)$/);
+    if (!match || Number(match[1]) !== start || Number(match[2]) !== end || Number(match[3]) !== this.size) {
+      await response.body?.cancel();
+      throw new Error(`range ${start}-${end} from ${this.url}: invalid Content-Range ${contentRange ?? "(missing)"}`);
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length !== end - start + 1) throw new Error(`short range ${start}-${end} from ${this.url}: ${bytes.length}`);
+    this.fetched += bytes.length;
+    return bytes;
+  }
+}

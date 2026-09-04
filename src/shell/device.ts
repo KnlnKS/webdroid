@@ -4,7 +4,7 @@ import { dexesIn } from "../jvm/dex";
 import { rt } from "../jvm/runtime";
 import { analyseProgram } from "../jvm/analyse";
 import { vfs, apkPath } from "../jvm/natives/jio";
-import { openInstall } from "./install";
+import { openInstall, type Install } from "./install";
 import { vcall, curThread, mainThread, setCurThread, newObj } from "../jvm/natives/jlang";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadFrameworkDex } from "../android/framework";
@@ -51,7 +51,7 @@ export function contentTop(): number {
   return act && (act.window.flags & FLAG_FULLSCREEN) ? 0 : STATUS_H;
 }
 
-export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, apkFile = ""): Promise<BootedApp> {
+export async function bootApk(input: Uint8Array | Install, onStatus: (s: string) => void, apkFile = ""): Promise<BootedApp> {
   // The android package registers android.R.* and fills the widgets' attr-id tables, so it has to
   // be here before anything links. main.ts starts the fetch alongside the apk's, so this waits on
   // nothing in the common case.
@@ -60,13 +60,16 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
   // far as it is concerned — for the whole session, since it caches the answer.
   const [fwPkg] = await Promise.all([loadFramework(), restoreRoots()]);
   onStatus("unpacking apk…");
-  const install = openInstall(bytes);
+  const install = input instanceof Uint8Array ? openInstall(input) : input;
   const zip = install.zip;
   rt.classpath = zip;
   // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its
   // own .so with ZipFile(ApplicationInfo.sourceDir) has to find lib/, not a list of apks.
   vfs.write(apkPath(), install.base);
-  for (const sp of install.splits) vfs.write(apkPath(sp.name), sp.bytes);
+  for (const sp of install.splits) {
+    if (sp.bytes) vfs.write(apkPath(sp.name), sp.bytes);
+    else vfs.mount(apkPath(sp.name), sp.source);
+  }
   onStatus("loading dex…");
   // The apk goes in first: loadDex is first-wins by name, so an app shipping its own copy of a
   // framework class keeps it, as on a device where the app's dex is ahead on the class path.
@@ -130,7 +133,7 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
 
   onStatus("resources…");
   const arsc = new Arsc(zip["resources.arsc"], (p) => zip[p] ?? null);
-  const res = new Resources(arsc, zip);
+  const res = new Resources(arsc, zip, install.lazyEntries);
   const jres = mkJResources(res);
   const themeResId = themeAttr?.data ?? 0;
   const theme = new JTheme();

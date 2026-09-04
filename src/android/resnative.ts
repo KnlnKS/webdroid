@@ -9,7 +9,8 @@ import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 import { javaFormat, defineException } from "../jvm/natives/jlang";
 import { usLocale } from "../jvm/natives/jutil";
 import { jarray } from "../jvm/abi";
-import { streamOf } from "../jvm/natives/jio";
+import { streamOf, streamOfSource } from "../jvm/natives/jio";
+import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 import { fontResource } from "./fonts";
 
 export class JResources extends JObj {
@@ -134,24 +135,32 @@ rt.register({
     "close()V": () => {},
   },
 });
-function assetBytes(am: JAssetManager, p: string): Uint8Array {
-  const bytes = am.host.zip["assets/" + p];
-  if (!bytes) throw rt.mkThrowable("java/io/FileNotFoundException", "asset " + p);
-  return bytes;
+function assetSource(am: JAssetManager, p: string): FileSource {
+  const path = "assets/" + p;
+  const bytes = am.host.zip[path];
+  const source = bytes ? new BytesFile(bytes) : am.host.lazyEntries.get(path);
+  if (!source) throw rt.mkThrowable("java/io/FileNotFoundException", "asset " + p);
+  return source;
 }
-const assetOpen = function (this: JAssetManager, p: string) { return streamOf(assetBytes(this, p)); };
+const assetOpen = function (this: JAssetManager, p: string) {
+  const bytes = this.host.zip["assets/" + p];
+  return bytes ? streamOf(bytes) : streamOfSource(assetSource(this, p));
+};
 rt.register({
   name: "android/content/res/AssetManager", ctor: JAssetManager,
   methods: {
     "open(Ljava/lang/String;)Ljava/io/InputStream;": assetOpen,
     "open(Ljava/lang/String;I)Ljava/io/InputStream;": assetOpen,
-    "openFd(Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;": function (this: JAssetManager, p: string) {
-      return mkAssetFd(assetBytes(this, p));
+    "openFd(Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;": async function (this: JAssetManager, p: string) {
+      return mkAssetFd(await readFully(assetSource(this, p)));
     },
     "list(Ljava/lang/String;)[Ljava/lang/String;": function (this: JAssetManager, p: string) {
       const prefix = "assets/" + (p ? p + "/" : "");
       const names = new Set<string>();
       for (const k of Object.keys(this.host.zip)) {
+        if (k.startsWith(prefix)) names.add(k.slice(prefix.length).split("/")[0]);
+      }
+      for (const k of this.host.lazyEntries.keys()) {
         if (k.startsWith(prefix)) names.add(k.slice(prefix.length).split("/")[0]);
       }
       return jarray([...names], "Ljava/lang/String;");

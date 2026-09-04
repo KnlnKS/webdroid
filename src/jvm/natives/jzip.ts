@@ -6,6 +6,7 @@ import { mangleMethod } from "../abi";
 import { vcall, newObj, defineException } from "./jlang";
 import { vfs, JFile, JInputStream, JOutputStream } from "./jio";
 import { mkIter } from "./jutil";
+import { readFully, type FileSource } from "../../shell/lazyfile";
 
 type Codec = Inflate | Unzlib | Deflate | Zlib | Gzip;
 class JInflater extends JObj {
@@ -193,19 +194,34 @@ rt.register({
 defineException("java/util/zip/ZipException", "java/io/IOException");
 
 // ── ZipFile / ZipEntry: index the central directory, inflate an entry only when it is read
-interface ZEntry { name: string; method: number; csize: number; size: number; time: number; off: number; }
+export interface ZEntry { name: string; method: number; csize: number; size: number; time: number; off: number; }
 const UNKNOWN: ZEntry = { name: "", method: -1, csize: -1, size: -1, time: -1, off: -1 };
 function dosTime(date: number, time: number): number {
   return new Date(1980 + (date >> 9), ((date >> 5) & 15) - 1, date & 31, time >> 11, (time >> 5) & 63, (time & 31) * 2).getTime();
 }
-export function centralDir(z: Uint8Array): Map<string, ZEntry> {
+interface ZipDirectory { offset: number; size: number; entries: number }
+function directoryFromTail(z: Uint8Array, fileSize: number): ZipDirectory {
   const v = new DataView(z.buffer, z.byteOffset, z.byteLength);
   let e = z.length - 22; // end-of-central-directory record, scanning back over any archive comment
-  while (e >= 0 && v.getUint32(e, true) !== 0x06054b50) e--;
+  while (e >= 0 && (v.getUint32(e, true) !== 0x06054b50 || e + 22 + v.getUint16(e + 20, true) !== z.length)) e--;
   if (e < 0) throw rt.mkThrowable("java/util/zip/ZipException", "End Of Central Directory signature not found");
+  const entries = v.getUint16(e + 10, true);
+  const size = v.getUint32(e + 12, true);
+  const offset = v.getUint32(e + 16, true);
+  if (entries === 0xffff || size === 0xffffffff || offset === 0xffffffff) {
+    throw rt.mkThrowable("java/util/zip/ZipException", "ZIP64 is not supported");
+  }
+  if (offset + size > fileSize) throw rt.mkThrowable("java/util/zip/ZipException", "Central Directory is outside the archive");
+  return { offset, size, entries };
+}
+export function centralDirRecords(z: Uint8Array, entries: number): Map<string, ZEntry> {
+  const v = new DataView(z.buffer, z.byteOffset, z.byteLength);
   const out = new Map<string, ZEntry>();
-  let p = v.getUint32(e + 16, true);
-  for (let n = v.getUint16(e + 10, true); n > 0; n--) {
+  let p = 0;
+  for (let n = entries; n > 0; n--) {
+    if (p + 46 > z.length || v.getUint32(p, true) !== 0x02014b50) {
+      throw rt.mkThrowable("java/util/zip/ZipException", "Invalid Central Directory entry");
+    }
     const nl = v.getUint16(p + 28, true);
     const name = new TextDecoder().decode(z.subarray(p + 46, p + 46 + nl));
     out.set(name, {
@@ -216,11 +232,45 @@ export function centralDir(z: Uint8Array): Map<string, ZEntry> {
   }
   return out;
 }
+export function centralDirFromTail(z: Uint8Array, fileSize: number): Map<string, ZEntry> {
+  const d = directoryFromTail(z, fileSize);
+  const start = d.offset - (fileSize - z.length);
+  if (start < 0 || start + d.size > z.length) {
+    throw rt.mkThrowable("java/util/zip/ZipException", `Central Directory needs range ${d.offset}-${d.offset + d.size - 1}`);
+  }
+  return centralDirRecords(z.subarray(start, start + d.size), d.entries);
+}
+export function centralDirInfoFromTail(z: Uint8Array, fileSize: number): ZipDirectory {
+  return directoryFromTail(z, fileSize);
+}
+export function centralDir(z: Uint8Array): Map<string, ZEntry> {
+  const d = directoryFromTail(z, z.length);
+  return centralDirRecords(z.subarray(d.offset, d.offset + d.size), d.entries);
+}
 export function entryBytes(z: Uint8Array, e: ZEntry): Uint8Array {
   const v = new DataView(z.buffer, z.byteOffset, z.byteLength);
   // the local header carries its own name/extra lengths, which may differ from the central ones
   const start = e.off + 30 + v.getUint16(e.off + 26, true) + v.getUint16(e.off + 28, true);
   const raw = z.subarray(start, start + e.csize);
+  if (e.method === 0) return raw;
+  if (e.method === 8) return inflateSync(raw);
+  throw rt.mkThrowable("java/util/zip/ZipException", "Invalid compression method " + e.method + ": " + e.name);
+}
+async function centralDirOfSource(source: FileSource): Promise<Map<string, ZEntry>> {
+  const tailSize = Math.min(22 + 0xffff, source.size);
+  const tail = await readFully(source, source.size - tailSize, tailSize);
+  const info = centralDirInfoFromTail(tail, source.size);
+  if (info.offset >= source.size - tail.length) return centralDirFromTail(tail, source.size);
+  return centralDirRecords(await readFully(source, info.offset, info.size), info.entries);
+}
+async function entryBytesOfSource(source: FileSource, e: ZEntry): Promise<Uint8Array> {
+  const header = await readFully(source, e.off, 30);
+  const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
+  if (header.length !== 30 || view.getUint32(0, true) !== 0x04034b50) {
+    throw rt.mkThrowable("java/util/zip/ZipException", "Invalid local header: " + e.name);
+  }
+  const start = e.off + 30 + view.getUint16(26, true) + view.getUint16(28, true);
+  const raw = await readFully(source, start, e.csize);
   if (e.method === 0) return raw;
   if (e.method === 8) return inflateSync(raw);
   throw rt.mkThrowable("java/util/zip/ZipException", "Invalid compression method " + e.method + ": " + e.name);
@@ -268,15 +318,17 @@ rt.register({
 class JZipFile extends JObj {
   name = "";
   entries = new Map<string, ZEntry>();
-  data: (e: ZEntry) => Uint8Array = () => new Uint8Array(0);
+  data: (e: ZEntry) => Uint8Array | Promise<Uint8Array> = () => new Uint8Array(0);
 }
-function openZip(this: JZipFile, path: string) {
+async function openZip(this: JZipFile, path: string) {
   this.name = vfs.norm(path);
   const bytes = vfs.read(path);
   if (bytes) { this.entries = centralDir(bytes); this.data = (e) => entryBytes(bytes, e); return; }
+  const source = vfs.source(path);
+  if (source) { this.entries = await centralDirOfSource(source); this.data = (e) => entryBytesOfSource(source, e); return; }
   throw rt.mkThrowable("java/io/FileNotFoundException", path + " (No such file or directory)");
 }
-const openZipFile = function (this: JZipFile, f: JFile) { openZip.call(this, f.path); };
+const openZipFile = function (this: JZipFile, f: JFile) { return openZip.call(this, f.path); };
 rt.register({
   name: "java/util/zip/ZipFile", ctor: JZipFile, ifaces: ["java/io/Closeable"],
   methods: {
@@ -290,10 +342,10 @@ rt.register({
       const e = this.entries.get(name) ?? this.entries.get(name + "/");
       return e ? mkZipEntry(e) : null;
     },
-    "getInputStream(Ljava/util/zip/ZipEntry;)Ljava/io/InputStream;": function (this: JZipFile, ze: JZipEntry) {
+    "getInputStream(Ljava/util/zip/ZipEntry;)Ljava/io/InputStream;": async function (this: JZipFile, ze: JZipEntry) {
       const e = this.entries.get(ze.e.name);
       if (!e) return null;
-      const b = this.data(e);
+      const b = await this.data(e);
       return newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array(b.buffer, b.byteOffset, b.length));
     },
     "close()V": function () {},
@@ -306,6 +358,11 @@ const readI = mangleMethod("read", "()I"), readBII = mangleMethod("read", "([BII
 async function drainStream(src: JInputStream): Promise<Uint8Array> {
   const base = JInputStream.prototype as any;
   if (src instanceof JInputStream && (src as any)[readI] === base[readI] && (src as any)[readBII] === base[readBII]) {
+    if (src.source) {
+      const b = await readFully(src.source, src.pos);
+      src.pos += b.length;
+      return b;
+    }
     const b = src.buf.subarray(src.pos);
     src.pos = src.buf.length;
     return b;

@@ -6,6 +6,7 @@ import { TV, parseAXML, type XmlNode } from "./axml";
 import { JObj } from "../jvm/runtime";
 import { JDisplayMetrics, JTypedValue, complexToPx } from "./os";
 import { mangleMethod, intBitsToFloat } from "../jvm/abi";
+import type { FileSource } from "../shell/lazyfile";
 
 let fwPkg: Arsc | null = null;
 const aidMemo = new Map<string, number>();
@@ -109,13 +110,15 @@ export function themeByName(res: Resources, theme: JTheme | null, name: string):
 export class Resources {
   arsc: Arsc | null;
   zip: Record<string, Uint8Array>;
+  lazyEntries: Map<string, FileSource>;
   dm = new JDisplayMetrics();
   bagCache = new Map<number, Bag | null>();
   jobj: any = null; // android.content.res.Resources instance
 
-  constructor(arsc: Arsc | null, zip: Record<string, Uint8Array>) {
+  constructor(arsc: Arsc | null, zip: Record<string, Uint8Array>, lazyEntries = new Map<string, FileSource>()) {
     this.arsc = arsc;
     this.zip = zip;
+    this.lazyEntries = lazyEntries;
     allResources.push(this);
   }
 

@@ -3,6 +3,7 @@
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray } from "../abi";
 import { vcall, stringHash, mkEnumSet, javaFormat } from "./jlang";
+import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
  *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
@@ -17,6 +18,7 @@ rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, iface
 // ── VFS: path → bytes. Directories implicit.
 export const vfs = {
   files: new Map<string, Uint8Array>(),
+  lazyFiles: new Map<string, FileSource>(),
   onWrite: (path: string) => {},
   norm(p: string): string {
     const parts: string[] = [];
@@ -28,22 +30,58 @@ export const vfs = {
     return "/" + parts.join("/");
   },
   read(p: string): Uint8Array | null { return this.files.get(this.norm(p)) ?? null; },
-  write(p: string, data: Uint8Array) { this.files.set(this.norm(p), data); this.onWrite(this.norm(p)); },
+  readFile(p: string): Uint8Array | Promise<Uint8Array> | null {
+    const path = this.norm(p);
+    const bytes = this.files.get(path);
+    if (bytes) return bytes;
+    const source = this.lazyFiles.get(path);
+    return source ? readFully(source) : null;
+  },
+  source(p: string): FileSource | null {
+    const path = this.norm(p);
+    const bytes = this.files.get(path);
+    return bytes ? new BytesFile(bytes) : this.lazyFiles.get(path) ?? null;
+  },
+  stat(p: string): { size: number; source: FileSource } | null {
+    const source = this.source(p);
+    return source ? { size: source.size, source } : null;
+  },
+  write(p: string, data: Uint8Array) {
+    const path = this.norm(p);
+    this.lazyFiles.delete(path);
+    this.files.set(path, data);
+    this.onWrite(path);
+  },
+  mount(p: string, source: FileSource) {
+    const path = this.norm(p);
+    this.files.delete(path);
+    this.lazyFiles.set(path, source);
+  },
+  lazy() {
+    return [...this.lazyFiles].map(([path, source]) => ({ path, size: source.size, ...source.stats?.() }));
+  },
   exists(p: string): boolean {
     p = this.norm(p);
-    if (this.files.has(p)) return true;
+    if (this.files.has(p) || this.lazyFiles.has(p)) return true;
     const dir = p.endsWith("/") ? p : p + "/";
     for (const k of this.files.keys()) if (k.startsWith(dir)) return true;
+    for (const k of this.lazyFiles.keys()) if (k.startsWith(dir)) return true;
     return false;
   },
   isDir(p: string): boolean {
     p = this.norm(p);
-    if (this.files.has(p)) return false;
+    if (this.files.has(p) || this.lazyFiles.has(p)) return false;
     const dir = p.endsWith("/") ? p : p + "/";
     for (const k of this.files.keys()) if (k.startsWith(dir)) return true;
+    for (const k of this.lazyFiles.keys()) if (k.startsWith(dir)) return true;
     return dirs.has(p);
   },
-  delete(p: string): boolean { const r = this.files.delete(this.norm(p)); if (r) this.onWrite(this.norm(p)); return r; },
+  delete(p: string): boolean {
+    const path = this.norm(p);
+    const removed = this.files.delete(path) || this.lazyFiles.delete(path);
+    if (removed) this.onWrite(path);
+    return removed;
+  },
   mkdir(p: string) { dirs.add(this.norm(p)); },
   rmdir(p: string): boolean { return dirs.delete(this.norm(p)); },
   list(p: string): string[] {
@@ -51,6 +89,9 @@ export const vfs = {
     const dir = p === "/" ? "/" : p + "/";
     const names = new Set<string>();
     for (const k of this.files.keys()) {
+      if (k.startsWith(dir)) names.add(k.slice(dir.length).split("/")[0]);
+    }
+    for (const k of this.lazyFiles.keys()) {
       if (k.startsWith(dir)) names.add(k.slice(dir.length).split("/")[0]);
     }
     for (const d of dirs) if (d.startsWith(dir)) names.add(d.slice(dir.length).split("/")[0]);
@@ -98,13 +139,13 @@ rt.register({
     "getCanonicalFile()Ljava/io/File;": function (this: JFile) { return this; },
     "exists()Z": function (this: JFile) { return vfs.exists(this.path) ? 1 : 0; },
     "isDirectory()Z": function (this: JFile) { return vfs.isDir(this.path) ? 1 : 0; },
-    "isFile()Z": function (this: JFile) { return vfs.files.has(this.path) ? 1 : 0; },
-    "length()J": function (this: JFile) { return BigInt(vfs.read(this.path)?.length ?? 0); },
+    "isFile()Z": function (this: JFile) { return vfs.stat(this.path) ? 1 : 0; },
+    "length()J": function (this: JFile) { return BigInt(vfs.stat(this.path)?.size ?? 0); },
     "lastModified()J": function () { return BigInt(Date.now()); },
     "mkdir()Z": function (this: JFile) { dirs.add(this.path); return 1; },
     "mkdirs()Z": function (this: JFile) { dirs.add(this.path); return 1; },
     "createNewFile()Z": function (this: JFile) {
-      if (vfs.files.has(this.path)) return 0;
+      if (vfs.exists(this.path)) return 0;
       vfs.write(this.path, new Uint8Array(0));
       return 1;
     },
@@ -154,6 +195,7 @@ rt.register({
 
 export class JInputStream extends JObj {
   buf: Uint8Array = new Uint8Array(0);
+  source: FileSource | null = null;
   pos = 0;
 }
 /** a plain InputStream over bytes already in hand */
@@ -162,24 +204,43 @@ export function streamOf(bytes: Uint8Array): JInputStream {
   s.buf = bytes;
   return s;
 }
+export function streamOfSource(source: FileSource): JInputStream {
+  const s = new JInputStream();
+  s.source = source;
+  return s;
+}
 const inputStreamMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
-  "read()I": function (this: JInputStream) {
+  "read()I": async function (this: JInputStream) {
+    if (this.source) {
+      const bytes = await this.source.read(this.pos, 1);
+      if (!bytes.length) return -1;
+      this.pos++;
+      return bytes[0];
+    }
     return this.pos < this.buf.length ? this.buf[this.pos++] : -1;
   },
-  "read([B)I": function (this: JInputStream, out: Int8Array) {
-    return (this as any)[readBII](out, 0, out.length);
+  "read([B)I": async function (this: JInputStream, out: Int8Array) {
+    return await (this as any)[readBII](out, 0, out.length);
   },
-  "read([BII)I": function (this: JInputStream, out: Int8Array, off: number, len: number) {
+  "read([BII)I": async function (this: JInputStream, out: Int8Array, off: number, len: number) {
+    if (len === 0) return 0;
+    if (this.source) {
+      const bytes = await this.source.read(this.pos, len);
+      if (!bytes.length) return -1;
+      out.set(new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length), off);
+      this.pos += bytes.length;
+      return bytes.length;
+    }
     if (this.pos >= this.buf.length) return -1;
     const n = Math.min(len, this.buf.length - this.pos);
     out.set(new Int8Array(this.buf.buffer, this.buf.byteOffset + this.pos, n), off);
     this.pos += n;
     return n;
   },
-  "available()I": function (this: JInputStream) { return this.buf.length - this.pos; },
+  "available()I": function (this: JInputStream) { return (this.source?.size ?? this.buf.length) - this.pos; },
   "skip(J)J": function (this: JInputStream, n: bigint) {
-    const k = Math.min(Number(n), this.buf.length - this.pos);
+    const k = Math.min(Number(n), (this.source?.size ?? this.buf.length) - this.pos);
     this.pos += k;
     return BigInt(k);
   },
@@ -195,7 +256,7 @@ const readBII = mangleMethod("read", "([BII)I");
  * not in JInputStream.buf).
  */
 export async function readStreamFully(s: unknown): Promise<Uint8Array> {
-  if (s instanceof JInputStream && (s as JInputStream).constructor === JInputStream) {
+  if (s instanceof JInputStream && s.constructor === JInputStream && !s.source) {
     const out = s.buf.subarray(s.pos);
     s.pos = s.buf.length;
     return out;
@@ -225,9 +286,13 @@ rt.register({
   },
 });
 function openRead(this: JInputStream, p: string) {
-  const d = vfs.read(p);
-  if (!d) throw rt.mkThrowable("java/io/FileNotFoundException", p);
-  this.buf = d;
+  const bytes = vfs.read(p);
+  if (bytes) this.buf = bytes;
+  else {
+    const source = vfs.source(p);
+    if (!source) throw rt.mkThrowable("java/io/FileNotFoundException", p);
+    this.source = source;
+  }
 }
 rt.register({
   name: "java/io/FileInputStream", ctor: class extends JInputStream {}, sup: "java/io/InputStream",
@@ -240,7 +305,7 @@ rt.register({
 });
 /** a wrapping stream shares the source's bytes and cursor */
 function adoptStream(this: JInputStream, src: JInputStream) {
-  if (src instanceof JInputStream) { this.buf = src.buf; this.pos = src.pos; }
+  if (src instanceof JInputStream) { this.buf = src.buf; this.source = src.source; this.pos = src.pos; }
 }
 rt.register({
   name: "java/io/BufferedInputStream", ctor: class extends JInputStream {}, sup: "java/io/InputStream",
@@ -254,43 +319,47 @@ rt.register({
   ifaces: ["java/io/DataInput"],
   methods: {
     "<init>(Ljava/io/InputStream;)V": function (this: JInputStream, src: JInputStream) {
-      this.buf = src.buf; this.pos = src.pos;
+      this.buf = src.buf; this.source = src.source; this.pos = src.pos;
     },
-    "readInt()I": function (this: JInputStream) {
-      const v = (this.buf[this.pos] << 24) | (this.buf[this.pos + 1] << 16) | (this.buf[this.pos + 2] << 8) | this.buf[this.pos + 3];
-      this.pos += 4;
-      return v;
+    "readInt()I": async function (this: JInputStream) {
+      const b = await dataBytes(this, 4);
+      return (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3];
     },
-    "readByte()B": function (this: JInputStream) { return (this.buf[this.pos++] << 24) >> 24; },
-    "readUnsignedByte()I": function (this: JInputStream) { return this.buf[this.pos++]; },
-    "readShort()S": function (this: JInputStream) {
-      const v = ((this.buf[this.pos] << 8) | this.buf[this.pos + 1]) << 16 >> 16;
-      this.pos += 2;
-      return v;
+    "readByte()B": async function (this: JInputStream) { return (await dataBytes(this, 1))[0] << 24 >> 24; },
+    "readUnsignedByte()I": async function (this: JInputStream) { return (await dataBytes(this, 1))[0]; },
+    "readShort()S": async function (this: JInputStream) {
+      const b = await dataBytes(this, 2);
+      return ((b[0] << 8) | b[1]) << 16 >> 16;
     },
-    "readUnsignedShort()I": function (this: JInputStream) {
-      const v = (this.buf[this.pos] << 8) | this.buf[this.pos + 1];
-      this.pos += 2;
-      return v;
+    "readUnsignedShort()I": async function (this: JInputStream) {
+      const b = await dataBytes(this, 2);
+      return (b[0] << 8) | b[1];
     },
-    "readLong()J": function (this: JInputStream) {
+    "readLong()J": async function (this: JInputStream) {
+      const b = await dataBytes(this, 8);
       let v = 0n;
-      for (let i = 0; i < 8; i++) v = (v << 8n) | BigInt(this.buf[this.pos++]);
+      for (const byte of b) v = (v << 8n) | BigInt(byte);
       return BigInt.asIntN(64, v);
     },
-    "readBoolean()Z": function (this: JInputStream) { return this.buf[this.pos++] ? 1 : 0; },
-    "readFully([B)V": function (this: JInputStream, out: Int8Array) {
-      (this as any)[readBII](out, 0, out.length);
+    "readBoolean()Z": async function (this: JInputStream) { return (await dataBytes(this, 1))[0] ? 1 : 0; },
+    "readFully([B)V": async function (this: JInputStream, out: Int8Array) {
+      const bytes = await dataBytes(this, out.length);
+      out.set(new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length));
     },
-    "readUTF()Ljava/lang/String;": function (this: JInputStream) {
-      const len = (this.buf[this.pos] << 8) | this.buf[this.pos + 1];
-      this.pos += 2;
-      const s = new TextDecoder().decode(this.buf.subarray(this.pos, this.pos + len));
-      this.pos += len;
-      return s;
+    "readUTF()Ljava/lang/String;": async function (this: JInputStream) {
+      const head = await dataBytes(this, 2);
+      return new TextDecoder().decode(await dataBytes(this, (head[0] << 8) | head[1]));
     },
   },
 });
+async function dataBytes(stream: JInputStream, length: number): Promise<Uint8Array> {
+  const bytes = stream.source
+    ? await readFully(stream.source, stream.pos, length)
+    : stream.buf.subarray(stream.pos, stream.pos + length);
+  if (bytes.length !== length) throw rt.mkThrowable("java/io/EOFException", null);
+  stream.pos += length;
+  return bytes;
+}
 
 class JFileDescriptor extends JObj {}
 rt.register({
@@ -388,7 +457,7 @@ function flushFOS(s: { fpath: string; append: boolean; chunks: number[] }) {
 // RandomAccessFile: the whole file in memory with a cursor, written back as it grows. The
 // vfs has no partial write, so "rw" is read-modify-write — correct, and the sizes an apk
 // opens this way (a cache index, a downloaded chunk) are the sizes it already unzipped.
-class JRAF extends JObj { path = ""; buf: Uint8Array = new Uint8Array(0); pos = 0; write = false; }
+class JRAF extends JObj { path = ""; buf: Uint8Array = new Uint8Array(0); source: FileSource | null = null; pos = 0; write = false; }
 const rafGrow = (f: JRAF, need: number) => {
   if (need <= f.buf.length) return;
   const n = new Uint8Array(need);
@@ -398,29 +467,38 @@ const rafGrow = (f: JRAF, need: number) => {
 const rafOpen = function (this: JRAF, p: string, mode: string) {
   this.path = vfs.norm(p);
   this.write = mode.includes("w");
-  const d = vfs.read(this.path);
-  if (!d && !this.write) throw rt.mkThrowable("java/io/FileNotFoundException", p);
-  this.buf = d ?? new Uint8Array(0);
+  const data = vfs.read(this.path);
+  const source = data ? null : vfs.source(this.path);
+  if (!source && !this.write) throw rt.mkThrowable("java/io/FileNotFoundException", p);
+  if (source && this.write) throw rt.mkThrowable("java/io/IOException", "read-only file: " + p);
+  this.source = this.write ? null : source;
+  this.buf = data ?? new Uint8Array(0);
 };
 rt.register({
   name: "java/io/RandomAccessFile", ctor: JRAF, ifaces: ["java/io/Closeable", "java/io/DataInput", "java/io/DataOutput"],
   methods: {
     "<init>(Ljava/lang/String;Ljava/lang/String;)V": rafOpen,
     "<init>(Ljava/io/File;Ljava/lang/String;)V": function (this: JRAF, f: JFile, m: string) { rafOpen.call(this, f.path, m); },
-    "length()J": function (this: JRAF) { return BigInt(this.buf.length); },
+    "length()J": function (this: JRAF) { return BigInt(this.source?.size ?? this.buf.length); },
     "getFilePointer()J": function (this: JRAF) { return BigInt(this.pos); },
     "seek(J)V": function (this: JRAF, p: bigint) { this.pos = Number(p); },
     "skipBytes(I)I": function (this: JRAF, n: number) {
-      const step = Math.max(0, Math.min(n, this.buf.length - this.pos));
+      const step = Math.max(0, Math.min(n, (this.source?.size ?? this.buf.length) - this.pos));
       this.pos += step;
       return step;
     },
     "getFD()Ljava/io/FileDescriptor;": () => new JFileDescriptor(),
-    "read()I": function (this: JRAF) { return this.pos < this.buf.length ? this.buf[this.pos++] : -1; },
-    "read([B)I": function (this: JRAF, b: Int8Array) { return rafRead(this, b, 0, b.length); },
-    "read([BII)I": function (this: JRAF, b: Int8Array, off: number, len: number) { return rafRead(this, b, off, len); },
-    "readFully([B)V": function (this: JRAF, b: Int8Array) { rafRead(this, b, 0, b.length); },
-    "readFully([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { rafRead(this, b, off, len); },
+    "read()I": async function (this: JRAF) {
+      if (!this.source) return this.pos < this.buf.length ? this.buf[this.pos++] : -1;
+      const bytes = await this.source.read(this.pos, 1);
+      if (!bytes.length) return -1;
+      this.pos++;
+      return bytes[0];
+    },
+    "read([B)I": async function (this: JRAF, b: Int8Array) { return await rafRead(this, b, 0, b.length); },
+    "read([BII)I": async function (this: JRAF, b: Int8Array, off: number, len: number) { return await rafRead(this, b, off, len); },
+    "readFully([B)V": function (this: JRAF, b: Int8Array) { return rafReadFully(this, b, 0, b.length); },
+    "readFully([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { return rafReadFully(this, b, off, len); },
     "write(I)V": function (this: JRAF, v: number) {
       rafGrow(this, this.pos + 1);
       this.buf[this.pos++] = v & 0xff;
@@ -446,12 +524,31 @@ rt.register({
     "close()V": function (this: JRAF) { if (this.write) vfs.write(this.path, this.buf); },
   },
 });
-function rafRead(f: JRAF, b: Int8Array, off: number, len: number): number {
+function rafRead(f: JRAF, b: Int8Array, off: number, len: number): number | Promise<number> {
+  if (len === 0) return 0;
+  if (f.source) {
+    const value = f.source.read(f.pos, len);
+    const done = (bytes: Uint8Array) => {
+      if (!bytes.length) return -1;
+      b.set(new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length), off);
+      f.pos += bytes.length;
+      return bytes.length;
+    };
+    return value instanceof Promise ? value.then(done) : done(value);
+  }
   const n = Math.min(len, f.buf.length - f.pos);
   if (n <= 0) return -1;
   b.set(f.buf.subarray(f.pos, f.pos + n) as unknown as Int8Array, off);
   f.pos += n;
   return n;
+}
+async function rafReadFully(f: JRAF, b: Int8Array, off: number, len: number): Promise<void> {
+  let read = 0;
+  while (read < len) {
+    const n = await rafRead(f, b, off + read, len - read);
+    if (n <= 0) throw rt.mkThrowable("java/io/EOFException", null);
+    read += n;
+  }
 }
 function rafWrite(f: JRAF, b: Int8Array, off: number, len: number) {
   rafGrow(f, f.pos + len);
@@ -492,7 +589,7 @@ rt.register({
   methods: {
     "<init>(Ljava/io/InputStream;)V": function (this: any, s: unknown) {
       this.in_ = s;
-      if (s instanceof JInputStream) { this.buf = s.buf; this.pos = s.pos; }
+      if (s instanceof JInputStream) { this.buf = s.buf; this.source = s.source; this.pos = s.pos; }
     },
   },
 });
@@ -844,18 +941,18 @@ rt.register({
     "static delete(Ljava/nio/file/Path;)V": (p: JNioPath) => { vfs.delete(p.p); },
     "static deleteIfExists(Ljava/nio/file/Path;)Z": (p: JNioPath) => (vfs.delete(p.p) ? 1 : 0),
     "static createDirectories(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;": (p: JNioPath) => { dirs.add(p.p); return p; },
-    "static size(Ljava/nio/file/Path;)J": (p: JNioPath) => BigInt(vfs.read(p.p)?.length ?? 0),
+    "static size(Ljava/nio/file/Path;)J": (p: JNioPath) => BigInt(vfs.stat(p.p)?.size ?? 0),
     "static readAttributes(Ljava/nio/file/Path;Ljava/lang/Class;[Ljava/nio/file/LinkOption;)Ljava/nio/file/attribute/BasicFileAttributes;": (p: JNioPath) => {
       const a = new JBasicAttrs();
-      a.sz = vfs.read(p.p)?.length ?? 0;
+      a.sz = vfs.stat(p.p)?.size ?? 0;
       a.dir = vfs.isDir(p.p);
       return a;
     },
     "static isDirectory(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Z": (p: JNioPath) => (vfs.isDir(p.p) ? 1 : 0),
-    "static isRegularFile(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Z": (p: JNioPath) => (vfs.files.has(p.p) ? 1 : 0),
-    "static readAllBytes(Ljava/nio/file/Path;)[B": (p: JNioPath) => {
-      const d = vfs.read(p.p) ?? new Uint8Array(0);
-      return new Int8Array(d.buffer.slice(d.byteOffset, d.byteOffset + d.length));
+    "static isRegularFile(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Z": (p: JNioPath) => (vfs.stat(p.p) ? 1 : 0),
+    "static readAllBytes(Ljava/nio/file/Path;)[B": async (p: JNioPath) => {
+      const bytes = await vfs.readFile(p.p) ?? new Uint8Array(0);
+      return new Int8Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length));
     },
   },
 });
@@ -889,7 +986,14 @@ rt.register({ name: "java/nio/file/LinkOption", ctor: class extends JObj {}, sup
 
 // ── java.util.Scanner: tokens and lines over a source read whole up front (a stream, a string, a file)
 async function slurp(src: unknown): Promise<Uint8Array> {
-  if (src instanceof JInputStream) return src.buf.subarray(src.pos);
+  if (src instanceof JInputStream) {
+    if (src.source) {
+      const bytes = await readFully(src.source, src.pos);
+      src.pos += bytes.length;
+      return bytes;
+    }
+    return src.buf.subarray(src.pos);
+  }
   const parts: Uint8Array[] = [];
   for (;;) {
     const chunk = new Int8Array(8192);

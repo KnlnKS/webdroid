@@ -8,6 +8,7 @@ import { hostLib, hostData, cstr, stp, retF, type HostFn, type ArgReader } from 
 import { deref } from "./jni";
 import { JSurface, type GlSurface } from "../android/glview";
 import type { Cpu } from "./cpu";
+import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 
 // ── ANativeWindow: a handle per surface (non-zero, as the pointer it stands for)
 const windows: (GlSurface | null)[] = [null];
@@ -28,14 +29,15 @@ const poll: HostFn = async (cpu, a) => {
   return r;
 };
 
-// ── AAsset: the apk's resident assets/ entries
-interface Asset { data: Uint8Array; pos: number; buf: number }
-const zips: Record<string, Uint8Array>[] = [{}];
+// ── AAsset: the apk's assets/ entries
+interface Asset { source: FileSource; data?: Uint8Array; pos: number; buf: number }
+interface AssetSet { zip: Record<string, Uint8Array>; lazyEntries: Map<string, FileSource> }
+const zips: AssetSet[] = [{ zip: {}, lazyEntries: new Map() }];
 const assets: (Asset | null)[] = [null];
 const A = (a: ArgReader) => assets[a.i()];
 const seek = (s: Asset, off: number, whence: number): number => {
-  const p = whence === 0 ? off : whence === 1 ? s.pos + off : s.data.length + off;
-  return p < 0 || p > s.data.length ? -1 : (s.pos = p);
+  const p = whence === 0 ? off : whence === 1 ? s.pos + off : s.source.size + off;
+  return p < 0 || p > s.source.size ? -1 : (s.pos = p);
 };
 
 export function ndkInit(): void {
@@ -75,34 +77,41 @@ export function ndkInit(): void {
     ASensor_getName: () => cstr(""), ASensor_getVendor: () => cstr(""),
 
     AAssetManager_fromJava: (cpu, a) => {
-      a.p(); const am = deref(a.i(), cpu) as { host?: { zip: Record<string, Uint8Array> } } | null;
+      a.p(); const am = deref(a.i(), cpu) as { host?: AssetSet } | null;
       if (!am?.host) return 0;
-      zips.push(am.host.zip);
+      zips.push(am.host);
       return zips.length - 1;
     },
     AAssetManager_open: (_c, a) => {
-      const zip = zips[a.i()], data = zip?.["assets/" + a.str()];
-      if (!data) return 0;
-      assets.push({ data, pos: 0, buf: 0 });
+      const set = zips[a.i()], path = "assets/" + a.str(), data = set?.zip[path];
+      const source = data ? new BytesFile(data) : set?.lazyEntries.get(path);
+      if (!source) return 0;
+      assets.push({ source, data, pos: 0, buf: 0 });
       return assets.length - 1;
     },
     AAsset_read: (_c, a) => {
       const s = A(a); if (!s) return -1;
-      const buf = a.p(), n = Math.min(a.i(), s.data.length - s.pos);
-      mem.write(buf, s.data.subarray(s.pos, s.pos + n));
-      s.pos += n;
-      return n;
+      const buf = a.p(), n = Math.min(a.i(), s.source.size - s.pos);
+      if (!n) return 0;
+      const dst = mem.va(buf);
+      const value = s.data ? s.data.subarray(s.pos, s.pos + n) : s.source.read(s.pos, n);
+      const done = (bytes: Uint8Array) => { mem.write(typeof dst === "bigint" ? mem.txVa(dst) : dst, bytes); s.pos += bytes.length; return bytes.length; };
+      return value instanceof Promise ? value.then(done) : done(value);
     },
     AAsset_seek: (_c, a) => { const s = A(a); return s ? seek(s, a.i(), a.i()) : -1; },
     AAsset_seek64: (_c, a) => { const s = A(a); return BigInt(s ? seek(s, Number(a.l()), a.i()) : -1); },
-    AAsset_getLength: (_c, a) => A(a)?.data.length ?? 0,
-    AAsset_getLength64: (_c, a) => BigInt(A(a)?.data.length ?? 0),
-    AAsset_getRemainingLength: (_c, a) => { const s = A(a); return s ? s.data.length - s.pos : 0; },
-    AAsset_getRemainingLength64: (_c, a) => { const s = A(a); return BigInt(s ? s.data.length - s.pos : 0); },
+    AAsset_getLength: (_c, a) => A(a)?.source.size ?? 0,
+    AAsset_getLength64: (_c, a) => BigInt(A(a)?.source.size ?? 0),
+    AAsset_getRemainingLength: (_c, a) => { const s = A(a); return s ? s.source.size - s.pos : 0; },
+    AAsset_getRemainingLength64: (_c, a) => { const s = A(a); return BigInt(s ? s.source.size - s.pos : 0); },
     AAsset_getBuffer: (_c, a) => {
       const s = A(a); if (!s) return 0;
-      if (!s.buf) { s.buf = mem.malloc(s.data.length); mem.write(s.buf, s.data); }
-      return s.buf;
+      const done = (bytes: Uint8Array) => {
+        s.data = bytes;
+        if (!s.buf) { s.buf = mem.malloc(bytes.length); mem.write(s.buf, bytes); }
+        return s.buf;
+      };
+      return s.data ? done(s.data) : readFully(s.source).then(done);
     },
     AAsset_isAllocated: () => 0,
     AAsset_openFileDescriptor: () => -1, AAsset_openFileDescriptor64: () => -1,

@@ -9,6 +9,7 @@ import { LAYOUT, fail, utf8, logLine, readTs, offArg } from "./libc";
 import { format, scan } from "./printf";
 import { vfs } from "../jvm/natives/jio";
 import { device } from "../shell/config";
+import type { FileSource } from "../shell/lazyfile";
 
 const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_DIRECTORY = 0x4000;
 const S_IFDIR = 0x4000, S_IFREG = 0x8000;
@@ -17,11 +18,11 @@ const S_IFDIR = 0x4000, S_IFREG = 0x8000;
 interface Pipe { q: Uint8Array[]; wake: (() => void)[]; closed: boolean }
 interface Fd {
   path: string; data: Uint8Array; len: number; pos: number; write: boolean; dirty: boolean; dir: boolean; append: boolean; line?: string; synthetic?: boolean;
-  nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Map<number, { events: number; data: bigint }>;
+  source?: FileSource; readQueue?: Promise<void>; byte?: number; random?: boolean; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Map<number, { events: number; data: bigint }>;
 }
 const EPOLLIN = 1, EAGAIN = E.AGAIN;
 const newPipe = (): Pipe => ({ q: [], wake: [], closed: false });
-const ready = (f: Fd): boolean => !!(f.rpipe && (f.rpipe.q.length || f.rpipe.closed)) || !!(f.event && f.event.count > 0);
+const ready = (f: Fd): boolean => !!f.random || !!(f.rpipe && (f.rpipe.q.length || f.rpipe.closed)) || !!(f.event && f.event.count > 0);
 function wakeAll(p: { wake: (() => void)[] }): void { for (const w of p.wake.splice(0)) w(); }
 /** the fd's interest in being woken: pipe readers and epoll waiters both park here */
 function waitOn(f: Fd, w: () => void): void { if (f.rpipe) f.rpipe.wake.push(w); else if (f.event) f.event.wake.push(w); }
@@ -30,6 +31,7 @@ const fds = new Map<number, Fd>();
 let nextFd = 3;
 const files = new Map<number, number>();       // FILE* → fd
 const dirs = new Map<number, { entries: string[]; i: number; dirent: number }>();
+const cpuList = device.cpu.cores === 1 ? "0\n" : `0-${device.cpu.cores - 1}\n`;
 
 function synth(path: string): string | null {
   if (path === "/proc/cpuinfo") {
@@ -37,6 +39,7 @@ function synth(path: string): string | null {
     for (let i = 0; i < device.cpu.cores; i++) s += `processor\t: ${i}\nmodel name\t: ARMv7 Processor rev 0 (v7l)\nBogoMIPS\t: 38.40\nFeatures\t: ${device.cpu.features}\nCPU implementer\t: 0x41\nCPU architecture: 7\nCPU variant\t: 0x0\nCPU part\t: 0xc07\nCPU revision\t: 0\n\n`;
     return s + `Hardware\t: ${device.cpu.hardware}\nRevision\t: 0000\nSerial\t\t: 0000000000000000\n`;
   }
+  if (path === "/sys/devices/system/cpu/present" || path === "/sys/devices/system/cpu/possible" || path === "/sys/devices/system/cpu/online") return cpuList;
   if (path === "/proc/meminfo") return `MemTotal:        ${device.cpu.memKb} kB\nMemFree:         ${device.cpu.memKb >> 1} kB\nBuffers:               0 kB\nCached:                0 kB\n`;
   if (path === "/proc/self/maps" || path === "/proc/self/cmdline") return "";
   return null;
@@ -44,16 +47,22 @@ function synth(path: string): string | null {
 
 function fdOpen(cpu: Cpu, path: string, flags: number): number {
   path = vfs.norm(path);
+  const acc = flags & O_ACCMODE;
+  if (path === "/dev/urandom" || path === "/dev/random") {
+    if (acc !== 0) return fail(cpu, E.ACCES);
+    return put({ ...fdBase(path), random: true });
+  }
   const s = synth(path);
   if (s !== null) { const b = utf8(s); return put({ path, data: b, len: b.length, pos: 0, write: false, dirty: false, dir: false, append: false, synthetic: true }); }
-  const acc = flags & O_ACCMODE;
   if (vfs.isDir(path)) {
     if (acc !== 0) return fail(cpu, E.ISDIR);
     return put({ path, data: new Uint8Array(0), len: 0, pos: 0, write: false, dirty: false, dir: true, append: false });
   }
   if (flags & O_DIRECTORY) return fail(cpu, E.NOTDIR);
+  const found = vfs.stat(path);
   let data = vfs.read(path);
-  if (!data) {
+  if (found && !data && acc !== 0) return fail(cpu, E.ACCES);
+  if (!found) {
     if (!(flags & O_CREAT)) return fail(cpu, E.NOENT);
     const parent = path.slice(0, path.lastIndexOf("/")) || "/";
     if (!vfs.isDir(parent)) return fail(cpu, E.NOENT);
@@ -61,7 +70,7 @@ function fdOpen(cpu: Cpu, path: string, flags: number): number {
     vfs.write(path, data);
   } else if (flags & O_CREAT && flags & O_EXCL) return fail(cpu, E.EXIST);
   if (flags & O_TRUNC && acc !== 0) { data = new Uint8Array(0); vfs.write(path, data); }
-  return put({ path, data, len: data.length, pos: 0, write: acc !== 0, dirty: false, dir: false, append: !!(flags & O_APPEND) });
+  return put({ path, data: data ?? new Uint8Array(0), source: data ? undefined : found?.source, len: data?.length ?? found?.size ?? 0, pos: 0, write: acc !== 0, dirty: false, dir: false, append: !!(flags & O_APPEND) });
 }
 function put(f: Fd): number { const fd = nextFd++; fds.set(fd, f); return fd; }
 
@@ -93,6 +102,29 @@ function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   f.dirty = true;
   return n;
 }
+const guestAt = (base: number | bigint, offset = 0): number =>
+  typeof base === "bigint" ? mem.txVa(base + BigInt(offset)) : base + offset;
+function fdReadAt(cpu: Cpu, f: Fd, p: number, n: number, off: number): number | Promise<number> {
+  if (!n) return 0;
+  if (f.random) {
+    let done = 0;
+    while (done < n) {
+      const take = Math.min(65536, n - done);
+      crypto.getRandomValues(mem.u8.subarray(p + done, p + done + take));
+      done += take;
+    }
+    return n;
+  }
+  const k = Math.max(0, Math.min(n, f.len - off));
+  if (!k) return 0;
+  if (!f.source) { mem.write(p, f.data.subarray(off, off + k)); return k; }
+  let value: Uint8Array | Promise<Uint8Array>;
+  const dst = mem.va(p);
+  try { value = f.source.read(off, k); }
+  catch { return fail(cpu, E.IO); }
+  const done = (bytes: Uint8Array) => { mem.write(guestAt(dst), bytes); return bytes.length; };
+  return value instanceof Promise ? value.then(done, () => fail(cpu, E.IO)) : done(value);
+}
 function fdRead(cpu: Cpu, fd: number, p: number, n: number): number | Promise<number> {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
@@ -101,7 +133,8 @@ function fdRead(cpu: Cpu, fd: number, p: number, n: number): number | Promise<nu
     if (!ready(f)) {
       if (f.rpipe?.closed) return 0;
       if (f.nonblock) return fail(cpu, EAGAIN);
-      return new Promise<void>((r) => waitOn(f, r)).then(() => fdRead(cpu, fd, mem.rephys(p), n));
+      const dst = mem.va(p);
+      return new Promise<void>((r) => waitOn(f, r)).then(() => fdRead(cpu, fd, guestAt(dst), n));
     }
     if (f.event) { const c = f.event.count; f.event.count = 0; mem.st32(p, c); mem.st32(p + 4, 0); return 8; }
     const q = f.rpipe!.q;
@@ -109,20 +142,50 @@ function fdRead(cpu: Cpu, fd: number, p: number, n: number): number | Promise<nu
     while (k < n && q.length) { const c = q[0], take = Math.min(n - k, c.length); mem.u8.set(c.subarray(0, take), p + k); k += take; if (take === c.length) q.shift(); else q[0] = c.subarray(take); }
     return k;
   }
-  const k = Math.max(0, Math.min(n, f.len - f.pos));
-  if (k > 0) mem.write(p, f.data.subarray(f.pos, f.pos + k));
-  f.pos += k;
-  return k;
+  if (f.source) {
+    const dst = mem.va(p);
+    const read = (f.readQueue ?? Promise.resolve()).then(async () => {
+      const result = await fdReadAt(cpu, f, guestAt(dst), n, f.pos);
+      if (result > 0) f.pos += result;
+      return result;
+    });
+    f.readQueue = read.then(() => {}, () => {});
+    return read;
+  }
+  const result = fdReadAt(cpu, f, p, n, f.pos);
+  const advance = (read: number) => { if (read > 0) f.pos += read; return read; };
+  return result instanceof Promise ? result.then(advance) : advance(result);
+}
+function fdReadFully(cpu: Cpu, fd: number, p: number, n: number): number | Promise<number> {
+  const f = fds.get(fd);
+  if (!f?.source) return fdRead(cpu, fd, p, n);
+  const dst = mem.va(p);
+  return (async () => {
+    let total = 0;
+    while (total < n) {
+      const read = await fdRead(cpu, fd, guestAt(dst, total), n - total);
+      if (read <= 0) return total || read;
+      total += read;
+    }
+    return total;
+  })();
 }
 /** `n` bytes of `fd` from offset `off` into guest memory at `dst`, without moving the position */
 export function readInto(cpu: Cpu, fd: number, off: number, dst: number, n: number): number | Promise<number> {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
-  const save = f.pos;
-  f.pos = off;
-  const r = fdRead(cpu, fd, dst, n);
-  f.pos = save;
-  return r;
+  if (!f.source) return fdReadAt(cpu, f, dst, n, off);
+  return readIntoAsync(cpu, f, off, dst, n);
+}
+async function readIntoAsync(cpu: Cpu, f: Fd, off: number, dst: number, n: number): Promise<number> {
+  const target = mem.va(dst);
+  let total = 0;
+  while (total < n) {
+    const read = await fdReadAt(cpu, f, guestAt(target, total), n - total, off + total);
+    if (read <= 0) return total || read;
+    total += read;
+  }
+  return total;
 }
 function flushFd(f: Fd): void {
   if (f.dirty && !f.synthetic) { vfs.write(f.path, f.data.slice(0, f.len)); f.dirty = false; }
@@ -138,6 +201,7 @@ function fdClose(cpu: Cpu, fd: number): number {
 function fdSeek(cpu: Cpu, fd: number, off: number, whence: number): number {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
+  if (f.random) return fail(cpu, E.SPIPE);
   const np = whence === 0 ? off : whence === 1 ? f.pos + off : f.len + off;
   if (np < 0) return fail(cpu, E.INVAL);
   f.pos = np;
@@ -198,12 +262,13 @@ function epollWait(cpu: Cpu, epfd: number, events: number, max: number, timeout:
 }
 function statPath(cpu: Cpu, path: string, buf: number): number {
   path = vfs.norm(path);
+  if (path === "/dev/urandom" || path === "/dev/random") { fillStat(buf, false, 0, Date.now(), path); return 0; }
   const s = synth(path);
   if (s !== null) { fillStat(buf, false, utf8(s).length, Date.now(), path); return 0; }
   if (vfs.isDir(path)) { fillStat(buf, true, 4096, Date.now(), path); return 0; }
-  const d = vfs.read(path);
-  if (!d) return fail(cpu, E.NOENT);
-  fillStat(buf, false, d.length, Date.now(), path);
+  const file = vfs.stat(path);
+  if (!file) return fail(cpu, E.NOENT);
+  fillStat(buf, false, file.size, Date.now(), path);
   return 0;
 }
 
@@ -226,12 +291,18 @@ function modeFlags(mode: string): { o: number; f: number } {
   if (mode[0] === "w") return { o: (plus ? 2 : 1) | O_CREAT | O_TRUNC, f: plus ? F_RW : F_WR };
   return { o: (plus ? 2 : 1) | O_CREAT | O_APPEND, f: plus ? F_RW : F_WR };
 }
-function fgetc(_cpu: Cpu, fp: number): number {
+let scratch = 0;
+function fgetc(cpu: Cpu, fp: number): number | Promise<number> {
   const fd = fileFd(fp);
   const f = fds.get(fd);
   if (!f) { setFlag(fp, F_ERR); return -1; }
-  if (f.pos >= f.len) { setFlag(fp, F_EOF); return -1; }
-  return f.data[f.pos++];
+  const byte = f.byte ?? (f.byte = mem.hostAlloc(1));
+  const done = (read: number) => {
+    if (read <= 0) { setFlag(fp, read < 0 ? F_ERR : F_EOF); return -1; }
+    return mem.u8[byte];
+  };
+  const read = fdRead(cpu, fd, byte, 1);
+  return read instanceof Promise ? read.then(done) : done(read);
 }
 function fwriteBytes(cpu: Cpu, fp: number, p: number, n: number): number {
   const r = fdWrite(cpu, fileFd(fp), p, n);
@@ -274,16 +345,16 @@ export function stdioInit(): void {
     close: (cpu, a) => fdClose(cpu, a.i()),
     read: (cpu, a) => fdRead(cpu, a.i(), a.p(), a.u()),
     write: (cpu, a) => fdWrite(cpu, a.i(), a.p(), a.u()),
-    pread: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = offArg(a); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); const save = f.pos; f.pos = off; const r = fdRead(cpu, fd, p, n); f.pos = save; return r; },
+    pread: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = offArg(a); const f = fds.get(fd); return f ? fdReadAt(cpu, f, p, n, off) : fail(cpu, E.BADF); },
     pwrite: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = offArg(a); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); const save = f.pos; f.pos = off; const r = fdWrite(cpu, fd, p, n); f.pos = save; return r; },
-    pread64: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); const save = f.pos; f.pos = off; const r = fdRead(cpu, fd, p, n); f.pos = save; return r; },
+    pread64: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); const f = fds.get(fd); return f ? fdReadAt(cpu, f, p, n, off) : fail(cpu, E.BADF); },
     pwrite64: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); const save = f.pos; f.pos = off; const r = fdWrite(cpu, fd, p, n); f.pos = save; return r; },
     lseek: (cpu, a) => (PTR === 8 ? BigInt(fdSeek(cpu, a.i(), Number(a.l()), a.i())) : fdSeek(cpu, a.i(), a.i(), a.i())),
     lseek64: (cpu, a) => BigInt(fdSeek(cpu, a.i(), Number(a.l()), a.i())),
     fstat: (cpu, a) => { const fd = a.i(), buf = a.p(); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); fillStat(buf, f.dir, f.len, Date.now(), f.path); return 0; },
     stat: (cpu, a) => statPath(cpu, a.str(), a.p()),
     lstat: (cpu, a) => statPath(cpu, a.str(), a.p()),
-    access: (cpu, a) => { const p = a.str(); a.i(); return vfs.exists(p) || vfs.isDir(p) || synth(vfs.norm(p)) !== null ? 0 : fail(cpu, E.NOENT); },
+    access: (cpu, a) => { const p = vfs.norm(a.str()); a.i(); return vfs.exists(p) || vfs.isDir(p) || synth(p) !== null || p === "/dev/urandom" || p === "/dev/random" ? 0 : fail(cpu, E.NOENT); },
     chmod: () => 0, fchmod: () => 0, chown: () => 0, fchown: () => 0, umask: () => 0o22,
     unlink: (cpu, a) => (vfs.delete(a.str()) ? 0 : fail(cpu, E.NOENT)),
     remove: (cpu, a) => { const p = vfs.norm(a.str()); if (vfs.isDir(p)) return vfs.list(p).length ? fail(cpu, E.NOTEMPTY) : 0; return vfs.delete(p) ? 0 : fail(cpu, E.NOENT); },
@@ -319,8 +390,8 @@ export function stdioInit(): void {
     epoll_pwait: (cpu, a) => epollWait(cpu, a.i(), a.p(), a.i(), a.i()),
     sendfile: (cpu) => fail(cpu, E.NOSYS),
     __read_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(); if (n > a.u()) cpu.fault("fortify: read past the buffer"); return fdRead(cpu, fd, p, n); },
-    __pread64_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); if (n > a.u()) cpu.fault("fortify: pread past the buffer"); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); const save = f.pos; f.pos = off; const r = fdRead(cpu, fd, p, n); f.pos = save; return r; },
-    __pread_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = offArg(a); if (n > a.u()) cpu.fault("fortify: pread past the buffer"); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); const save = f.pos; f.pos = off; const r = fdRead(cpu, fd, p, n); f.pos = save; return r; },
+    __pread64_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); if (n > a.u()) cpu.fault("fortify: pread past the buffer"); const f = fds.get(fd); return f ? fdReadAt(cpu, f, p, n, off) : fail(cpu, E.BADF); },
+    __pread_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = offArg(a); if (n > a.u()) cpu.fault("fortify: pread past the buffer"); const f = fds.get(fd); return f ? fdReadAt(cpu, f, p, n, off) : fail(cpu, E.BADF); },
     flock: () => 0,
     unlinkat: (cpu, a) => { a.i(); const p = a.str(), flags = a.i(); if (flags & 0x200) { const d = vfs.norm(p); if (!vfs.isDir(d)) return fail(cpu, E.NOTDIR); vfs.rmdir(d); return 0; } return vfs.delete(p) ? 0 : fail(cpu, E.NOENT); },
     fchmodat: () => 0, utimensat: () => 0, futimens: () => 0,
@@ -388,7 +459,7 @@ export function stdioInit(): void {
       const total = sz * n;
       if (!total) return 0;
       const fin = (r: number) => { if (r < 0) { setFlag(fp, F_ERR); return 0; } if (r < total) setFlag(fp, F_EOF); return Math.floor(r / sz); };
-      const r = fdRead(cpu, fileFd(fp), p, total);
+      const r = fdReadFully(cpu, fileFd(fp), p, total);
       return r instanceof Promise ? r.then(fin) : fin(r);
     },
     fwrite: (cpu, a) => { const p = a.p(), sz = a.u(), n = a.u(), fp = a.p(); const total = sz * n; if (!total) return 0; const r = fwriteBytes(cpu, fp, p, total); return Math.floor(r / sz); },
@@ -408,13 +479,13 @@ export function stdioInit(): void {
     getc: (cpu, a) => fgetc(cpu, a.p()),
     __srget: (cpu, a) => fgetc(cpu, a.p()),
     getchar: () => -1,
-    ungetc: (_c, a) => { const c = a.i(), fp = a.p(); const f = fds.get(fileFd(fp)); if (!f || f.pos === 0) return -1; f.pos--; if (f.data[f.pos] !== c && !f.synthetic) { f.data[f.pos] = c; } return c; },
-    fgets: (cpu, a) => {
+    ungetc: (_c, a) => { const c = a.i(), fp = a.p(); const f = fds.get(fileFd(fp)); if (!f || f.pos === 0) return -1; f.pos--; if (f.data[f.pos] !== c && !f.synthetic && !f.source && !f.random) { f.data[f.pos] = c; } return c; },
+    fgets: async (cpu, a) => {
       const buf = a.p(), n = a.i(), fp = a.p();
       if (n <= 0) return 0;
       let i = 0;
       while (i < n - 1) {
-        const c = fgetc(cpu, fp);
+        const c = await fgetc(cpu, fp);
         if (c < 0) break;
         mem.u8[buf + i++] = c;
         if (c === 10) break;
@@ -455,7 +526,7 @@ export function stdioInit(): void {
     },
     perror: (_c, a) => { const s = a.p(); logLine(6, "stderr", (s ? mem.cstr(s) + ": " : "") + "error"); },
   };
-  const scratch = mem.hostAlloc(16);
+  scratch = mem.hostAlloc(16);
   const isStd = (fp: number) => fp >= sF && fp < sF + 3 * LAYOUT.FILE_SIZE;
   hostLib("libc.so", M);
 }

@@ -31,6 +31,7 @@ import {
 import { TV, XE, parseAXMLDoc, StringPool, type XmlDoc, type XmlEvent } from "./axml";
 import { jarray } from "../jvm/abi";
 import { device } from "../shell/config";
+import { BytesFile, type FileSource } from "../shell/lazyfile";
 
 // ── handles ────────────────────────────────────────────────────────────────────────────
 // The table itself is src/android/handles.ts: AOSP bytecode asks our own objects for their
@@ -1197,27 +1198,37 @@ delegate("android/content/res/AssetManager", {
   // the one the framework takes for everything it opens by name
   "nativeOpenXmlAssetFd(JILjava/io/FileDescriptor;)J": () => { throw rt.mkThrowable("java/io/FileNotFoundException", "no file descriptors"); },
   "nativeAssetDestroy(J)V": release,
-  "nativeAssetGetLength(J)J": (a: bigint) => BigInt(deref<Cursor>(a).bytes.length),
-  "nativeAssetGetRemainingLength(J)J": (a: bigint) => { const c = deref<Cursor>(a); return BigInt(c.bytes.length - c.pos); },
-  "nativeAssetReadChar(J)I": (a: bigint) => { const c = deref<Cursor>(a); return c.pos < c.bytes.length ? c.bytes[c.pos++] : -1; },
-  "nativeAssetRead(J[BII)I": (a: bigint, out: Int8Array, off: number, len: number) => {
+  "nativeAssetGetLength(J)J": (a: bigint) => BigInt(deref<Cursor>(a).source.size),
+  "nativeAssetGetRemainingLength(J)J": (a: bigint) => { const c = deref<Cursor>(a); return BigInt(c.source.size - c.pos); },
+  "nativeAssetReadChar(J)I": async (a: bigint) => {
     const c = deref<Cursor>(a);
-    const n = Math.min(len, c.bytes.length - c.pos);
-    if (n <= 0) return -1;
-    out.set(c.bytes.subarray(c.pos, c.pos + n) as unknown as Int8Array, off);
-    c.pos += n;
-    return n;
+    const bytes = await c.source.read(c.pos, 1);
+    if (!bytes.length) return -1;
+    c.pos++;
+    return bytes[0];
+  },
+  "nativeAssetRead(J[BII)I": async (a: bigint, out: Int8Array, off: number, len: number) => {
+    const c = deref<Cursor>(a);
+    if (!len) return 0;
+    const bytes = await c.source.read(c.pos, len);
+    if (!bytes.length) return -1;
+    out.set(new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length), off);
+    c.pos += bytes.length;
+    return bytes.length;
   },
   "nativeAssetSeek(JJI)J": (a: bigint, off: bigint, whence: number) => {
     const c = deref<Cursor>(a);
-    const base = whence === 0 ? 0 : whence === 1 ? c.pos : c.bytes.length;
-    c.pos = Math.max(0, Math.min(c.bytes.length, base + Number(off)));
+    const base = whence === 0 ? 0 : whence === 1 ? c.pos : c.source.size;
+    c.pos = Math.max(0, Math.min(c.source.size, base + Number(off)));
     return BigInt(c.pos);
   },
   "nativeList(JLjava/lang/String;)[Ljava/lang/String;": (h: bigint, path: string) => {
     const dir = "assets/" + (path ? path + "/" : "");
     const names = new Set<string>();
     for (const k of Object.keys(assets(h).zip)) {
+      if (k.startsWith(dir) && k.length > dir.length) names.add(k.slice(dir.length).split("/")[0]);
+    }
+    for (const k of assets(h).lazyEntries.keys()) {
       if (k.startsWith(dir) && k.length > dir.length) names.add(k.slice(dir.length).split("/")[0]);
     }
     return jarray([...names].sort(), "Ljava/lang/String;");
@@ -1237,7 +1248,7 @@ delegate("android/content/res/AssetManager", {
   "nativeGetAssignedPackageIdentifiers(JZZ)Landroid/util/SparseArray;": () => null,
 });
 
-interface Cursor { bytes: Uint8Array; pos: number }
+interface Cursor { source: FileSource; pos: number }
 
 // A cookie is a 1-based index into the AssetManager's ordered ApkAssets. A device loads the
 // framework package first and the app last, and a path alone cannot say which apk it came
@@ -1255,7 +1266,8 @@ function readEntry(res: Resources, cookie: number, path: string): Uint8Array | n
 /** an asset stream over a zip entry; 0 is what AOSP returns for "no such asset" */
 function openAsset(res: Resources, path: string, cookie = 0): bigint {
   const bytes = readEntry(res, cookie, path);
-  return bytes ? handle({ bytes, pos: 0 } as Cursor) : 0n;
+  const source = bytes ? new BytesFile(bytes) : cookie === COOKIE_FW ? null : res.lazyEntries.get(path);
+  return source ? handle({ source, pos: 0 } as Cursor) : 0n;
 }
 
 interface TypedValueLike { type: number; data: number; resourceId: number; density: number; string: unknown; assetCookie: number; changingConfigurations: number }

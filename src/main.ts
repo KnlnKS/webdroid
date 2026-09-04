@@ -22,6 +22,8 @@ import { setWebLayer, webViewInfo } from "./android/webkit";
 import { native } from "./native/debug";
 import { allSurfaces, probeSurface } from "./android/glview";
 import { device, parseScreen, readStoredScreen, storeScreen, type Screen } from "./shell/config";
+import { openInstallRemote } from "./shell/install";
+import { vfs } from "./jvm/natives/jio";
 
 const root = document.getElementById("root")!;
 
@@ -184,10 +186,9 @@ window.addEventListener("unhandledrejection", (e) => logBuf.push("unhandledrejec
 async function boot(file: string) {
   try {
     statusEl.textContent = "downloading " + file + "…";
-    const resp = await fetch("/apks/" + encodeURIComponent(file));
-    const bytes = new Uint8Array(await resp.arrayBuffer());
+    const install = await openInstallRemote("/apks/" + encodeURIComponent(file));
     const t0 = performance.now();
-    await bootApk(bytes, (s) => { statusEl.textContent = s; }, file);
+    await bootApk(install, (s) => { statusEl.textContent = s; }, file);
     perf.bootMs = performance.now() - t0;
     statusEl.textContent = `running (boot ${perf.bootMs.toFixed(0)}ms)` + (rt.nativeRequired.size ? " — needs native code" : "");
   } catch (e) {
@@ -220,7 +221,7 @@ const tap = async (x: number, y: number) => {
 rt.auditNatives = new URLSearchParams(location.search).get("natcheck") === "1";
 
 const wd = {
-  rt, uiState, overlays, perf, perfReset, mainDbg, setGL, logs: logBuf, ticks: 0, native,
+  rt, uiState, overlays, perf, perfReset, mainDbg, setGL, logs: logBuf, ticks: 0, native, vfs,
   surfaces: () => allSurfaces.map((s) => ({ view: s.view?.constructor.name, width: s.width, height: s.height, frames: s.frames, present: !!s.present })), probeSurface,
   // The JVM's own entry points, so a script can drive real bytecode from the page the way
   // scripts/fwtest.ts drives it headless. That is the only way to exercise anything needing
