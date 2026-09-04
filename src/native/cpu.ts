@@ -122,6 +122,8 @@ export function isA64(): boolean { return A64; }
 /** the register file at the first native fault, as the faulting block found it (debug) */
 export const lastFault: { regs: { cpu: string; r: number[]; h: number[] } | null } = { regs: null };
 /** pcs whose block entry logs the registers: a breakpoint that does not stop (wd.native.watch) */
+/** log every call() frame on the named thread (debug: set __wdCallLog to the thread name before load) */
+const callLog = (globalThis as { __wdCallLog?: string }).__wdCallLog ?? "";
 /** count block executions (debug: set __wdCount before load; wd.native.allBlocks for the histogram) */
 const countExec = !!(globalThis as { __wdCount?: boolean }).__wdCount;
 export const watchPcs = new Set<number>(((globalThis as { __wdWatch?: number[] }).__wdWatch ?? []).map((p) => p >>> 0));
@@ -190,7 +192,10 @@ export class Cpu {
   pending: Promise<unknown> | null = null;
   /** signals queued for this thread, delivered at its next slice boundary */
   signals: number[] = [];
-  parked = false;                                   // awaiting a host call's promise
+  /** the depth of the run loop awaiting a host call's promise, -1 for none: the Cpu is parked only when that
+   *  loop is the innermost one — a nested frame in its teardown, or a handler above, owns the register file */
+  parkedAt = -1;
+  get parked(): boolean { return this.parkedAt === this.depth; }
   loops = 0;                                        // run loops alive on this Cpu (0: a Java thread between native calls)
   state = "";                                       // which await the run loop is in (wd.native.regs)
   idle: (() => void)[] = [];                        // a run loop waiting for a handler stacked above it to finish
@@ -202,9 +207,14 @@ export class Cpu {
   kill(sig: number): void {
     if (this.finished || !sigHandlers.has(sig)) return;
     if (this.handling.has(sig)) { this.deferred.add(sig); return; }   // blocked, as sa_mask blocks a signal in its own handler
-    if (this.signals.includes(sig)) return;                            // pending already: signals do not queue up
-    if (this.parked || this.loops === 0) void this.deliver(sig);
-    else this.signals.push(sig);
+    if (!this.signals.includes(sig)) this.signals.push(sig);           // pending already: signals do not queue up
+    this.pump();
+  }
+  /** a queued signal reaches a parked or idle Cpu on a clean stack, never inside the sender's own host call;
+   *  a running loop takes its queue at its next slice boundary. A handler parked in its own host call
+   *  (sigsuspend) is a parked frame like any other: the next signal runs on top of it. */
+  pump(): void {
+    queueMicrotask(() => { if ((this.parked || this.loops === 0) && this.signals.length) void this.deliver(this.signals.shift()!); });
   }
   sigLog: string[] = [];                           // wd.native.regs: what each thread was signalled and when it ran
   /** a handler running on an otherwise idle Cpu (a Java thread between native calls): the next
@@ -219,6 +229,7 @@ export class Cpu {
   }
   async deliver(sig: number): Promise<void> {
     const h = sigHandlers.get(sig);
+    if (callLog && this.name === callLog) console.log(`[call-native] ${this.name} deliver ${sig} depth=${this.depth} loops=${this.loops} parked=${this.parked} state=${this.state}`);
     this.sigLog.push(`${sig}@${this.ic}${this.parked ? "p" : ""}/${this.loops}`);
     this.handling.add(sig);
     const base = this.loops === 0;
@@ -264,12 +275,17 @@ export class Cpu {
   /** run guest function `fn` to completion on this Cpu (reentrant: saves and restores the register file) */
   frames: string[] = [];                            // what each nested call() is for (wd.native.regs)
   async call(fn: number, args: CallArg[] = [], label = "call"): Promise<number> {
+    // host code calling back into the guest (a comparator, a JNI entry) while a signal handler owns the
+    // register file above the frame it belongs to waits for that handler, as the kernel would hold the
+    // thread; a handler's own delivery never waits
+    if (!label.startsWith("signal ")) while (this.frames.length && this.frames[this.frames.length - 1].startsWith("signal ")) await new Promise<void>((r) => this.idle.push(r));
     this.frames.push(label);
+    if (callLog && this.name === callLog) console.log(`[call-native] ${this.name} enter ${label} depth=${this.depth} loops=${this.loops} parked=${this.parked} pending=${!!this.pending} fn=${symbolizeHook(fn >>> 0)} lr=${symbolizeHook(this.r[this.lrx] >>> 0)} pc=${symbolizeHook(this.r[this.pcx] >>> 0)}`);
     this.ensureStack();
     const r = this.r;
     const saved = new Int32Array(r);
     const st = this.t, sn = this.n, sz = this.z, scf = this.c, sv = this.v;
-    const spending = this.pending, sparked = this.parked, sstate = this.state;   // the frame below is parked in its host call until we return
+    const spending = this.pending, sstate = this.state;   // the frame below is parked in its host call until we return
     const savedH = this.a64 ? new Int32Array(this.h) : null;
     const savedV = this.a64 ? new Int32Array(this.si) : null;
     const sexcl = this.excl;
@@ -318,6 +334,7 @@ export class Cpu {
       this.ret1 = this.a64 ? this.h[0] : r[1];
       return r[0];
     } finally {
+      if (callLog && this.name === callLog) console.log(`[call-native] ${this.name} leave ${label} depth=${this.depth} loops=${this.loops} pc=${symbolizeHook(r[this.pcx] >>> 0)} r0=${(r[0] >>> 0).toString(16)} restoring lr=${symbolizeHook(saved[this.lrx] >>> 0)} pc=${symbolizeHook(saved[this.pcx] >>> 0)}`);
       this.depth--;
       this.frames.pop();
       for (const w of this.idle.splice(0)) w();
@@ -326,7 +343,8 @@ export class Cpu {
       if (savedV) this.si.set(savedV);
       this.t = st; this.n = sn; this.z = sz; this.c = scf; this.v = sv;
       this.excl = sexcl;
-      this.pending = spending; this.parked = sparked; this.state = sstate;
+      this.pending = spending; this.state = sstate;
+      this.pump();                                                          // a signal that arrived while this frame owned the register file reaches the frame below now
     }
   }
 
@@ -360,19 +378,22 @@ export class Cpu {
         perf.nativeMs += performance.now() - t0; perf.nativeSlices++; perf.nativeInstr += this.ic - ic0;
         if (slowMs && performance.now() - t0 > slowMs) console.warn(`[slow-native] ${this.name} slice ${(performance.now() - t0).toFixed(0)}ms ${this.ic - ic0} instr from ${symbolizeHook(this.bpc >>> 0)}`);
       }
-      if (ex === SliceExit.Exit) return;
+      if (ex === SliceExit.Exit) { if (callLog && this.name === callLog) console.log(`[call-native] ${this.name} loop exit depth=${this.depth} myDepth=${myDepth} loops=${this.loops}`); return; }
       if (ex === SliceExit.Suspend) {
         const p = this.pending!;
+        if (callLog && this.name === callLog) console.log(`[call-native] ${this.name} loop park depth=${this.depth} myDepth=${myDepth} at ${symbolizeHook(this.r[this.pcx] >>> 0)}`);
         this.pending = null;
-        this.parked = true;
-        while (this.signals.length) void this.deliver(this.signals.shift()!);
+        const outerParked = this.parkedAt;                                        // a frame below may be parked in its own host call
+        this.parkedAt = myDepth;
+        this.pump();
         this.state = "park";
         const v = await p;
         // a handler delivered while we were parked may still be running on top of this frame,
         // parked in its own host call (sigsuspend): the flag is its until it finishes
         this.state = "idle";
         while (this.depth > myDepth) await new Promise<void>((r) => this.idle.push(r));
-        this.parked = false;
+        if (callLog && this.name === callLog) console.log(`[call-native] ${this.name} loop resume depth=${this.depth} myDepth=${myDepth} loops=${this.loops} pc=${symbolizeHook(this.r[this.pcx] >>> 0)} lr=${symbolizeHook(this.r[this.lrx] >>> 0)}`);
+        this.parkedAt = outerParked;
         setCurThread(this.jthread);
         if (this.finished) return;
         hostReturn(this, v as HostRet);

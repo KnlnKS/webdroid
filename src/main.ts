@@ -174,7 +174,7 @@ for (const level of ["log", "warn", "error"] as const) {
     orig(...args);
     try {
       logBuf.push(level + ": " + args.map((a) => typeof a === "string" ? a : ((a as any)?.msg ?? (a as any)?.message ?? JSON.stringify(a)?.slice(0, 200) ?? String(a))).join(" "));
-      if (logBuf.length > 400) logBuf.splice(0, 100);
+      if (logBuf.length > 4000) logBuf.splice(0, 1000);
     } catch { /* */ }
   };
 }

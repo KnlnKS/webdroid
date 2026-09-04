@@ -104,6 +104,13 @@ function widestRun(units: number): number {
   }
   return best;
 }
+/** the plane's run moves to the free run at `dst` (its `need` units), the guest none the wiser */
+function moveRun(h: number, dst: number, need: number): void {
+  const at = (P[h] - poolBase) / UNIT, have = unitsOf(S[h]);
+  if (dst !== at) { u8.copyWithin(poolBase + dst * UNIT, P[h], P[h] + S[h]); owner.fill(-1, at, at + have); moves++; }
+  owner.fill(h, dst, dst + need);
+  P[h] = poolBase + dst * UNIT;
+}
 /** commit the plane's prefix up to `bytes`: extend the run in place, or move it to a free run */
 function grow(h: number, bytes: number): boolean {
   const have = unitsOf(S[h]), need = unitsOf(bytes);
@@ -111,9 +118,7 @@ function grow(h: number, bytes: number): boolean {
     const at = have ? (P[h] - poolBase) / UNIT : -1;
     const dst = at < 0 ? widestRun(need) : freeRun(need - have, at + have) === at + have ? at : freeRun(need);
     if (dst < 0) return false;
-    if (at >= 0 && dst !== at) { u8.copyWithin(poolBase + dst * UNIT, P[h], P[h] + S[h]); owner.fill(-1, at, at + have); moves++; console.log(`[mem-native] plane ${h} moved: ${have} units at ${at} -> ${need} at ${dst}`); }
-    owner.fill(h, dst, dst + need);
-    P[h] = poolBase + dst * UNIT;
+    if (at < 0) { owner.fill(h, dst, dst + need); P[h] = poolBase + dst * UNIT; } else moveRun(h, dst, need);
   }
   u8.fill(0, P[h] + S[h], P[h] + bytes);
   S[h] = bytes;
@@ -303,7 +308,11 @@ export const mem = {
   /** MADV_DONTNEED on a private anonymous mapping: what is committed of it reads back as zero */
   dropVa(va: bigint, n: number): void {
     const [h, lo] = split(va);
-    if (!h) { u8.fill(0, lo, lo + n); return; }
+    if (!h) {
+      // only a mapping of the process's own is a private anonymous page to drop; the images and the loader's data are not
+      if (lo < ARENA_BASE || lo + n > (poolBase || moduleBot)) { console.warn(`[mem-native] madvise(DONTNEED) outside the arena ignored: 0x${lo.toString(16)}+0x${n.toString(16)}`); return; }
+      u8.fill(0, lo, lo + n); return;
+    }
     const off = lo - PLANE_LO;
     if (off < S[h]) u8.fill(0, P[h] + off, P[h] + Math.min(S[h], off + n));
   },
@@ -362,6 +371,20 @@ export const mem = {
   /** address space for a module image: never freed, 64 KiB aligned by default */
   reserve(size: number, align = 0x10000): number {
     const base = ((moduleBot - size) & -align) >>> 0;   // int32 masking; the image region sits above 2 GiB
+    // the pool's top units become the image's: a plane run up there moves down first
+    if (poolBase) {
+      const keep = Math.floor((base - poolBase) / UNIT);
+      for (let h = 1; h < PLANES; h++) {
+        if (!R[h] || !S[h]) continue;
+        const at = (P[h] - poolBase) / UNIT, need = unitsOf(S[h]);
+        if (at + need <= keep) continue;
+        owner.fill(-1, at, at + need);                                          // its own units count as free for the search
+        const dst = (() => { for (let i = 0, run = 0; i < keep; i++) { run = owner[i] < 0 ? run + 1 : 0; if (run === need) return i + 1 - need; } return -1; })();
+        owner.fill(h, at, at + need);
+        if (dst < 0) throw new NativeFault(`[native] out of module address space (${(size / 1048576).toFixed(1)} MiB wanted, the pool holds plane ${h})`);
+        moveRun(h, dst, need);
+      }
+    }
     for (let i = pageOf(base); i < pageOf(moduleBot); i++) if (pages[i] === USED) throw new NativeFault(`[native] out of module address space (${(size / 1048576).toFixed(1)} MiB wanted, the pool reaches the images)`);
     if (base < heapTop) throw new NativeFault(`[native] out of module address space (${(size / 1048576).toFixed(1)} MiB wanted, ${((moduleBot - heapTop) / 1048576).toFixed(1)} free)`);
     moduleBot = base;

@@ -6,6 +6,7 @@ import { mem, NativeFault } from "./mem";
 import { hostLib, hostData, NORET, ARG0, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, calledMissing } from "./host";
 import { E } from "./abi";
 import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
+import { backtrace } from "./dl";
 import { format, scan } from "./printf";
 import { stdioInit, readInto } from "./stdio";
 import { pthreadInit, futex } from "./pthread";
@@ -486,9 +487,9 @@ export function libcInit(): void {
     ntohl: (_c, a) => { const v = a.i(); return ((v & 255) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | (v >>> 24); },
     poll: (_c, a) => { a.p(); a.i(); const ms = a.i(); return ms > 0 ? new Promise<number>((r) => setTimeout(() => r(0), ms)) : 0; },
 
-    __android_log_write: (_c, a) => { const prio = a.i(), tag = a.str(), msg = a.str(); logLine(prio, tag, msg); return 1; },
-    __android_log_print: (_c, a) => { const prio = a.i(), tag = a.str(), f = a.str(); logLine(prio, tag, format(f, a)); return 1; },
-    __android_log_vprint: (_c, a) => { const prio = a.i(), tag = a.str(), f = a.str(); logLine(prio, tag, format(f, vaList(a.p()))); return 1; },
+    __android_log_write: (c, a) => { const prio = a.i(), tag = a.str(), msg = a.str(); logLine(prio, tag, msg, c); return 1; },
+    __android_log_print: (c, a) => { const prio = a.i(), tag = a.str(), f = a.str(); logLine(prio, tag, format(f, a), c); return 1; },
+    __android_log_vprint: (c, a) => { const prio = a.i(), tag = a.str(), f = a.str(); logLine(prio, tag, format(f, vaList(a.p())), c); return 1; },
     __android_log_assert: (cpu, a) => { a.p(); const tag = a.str(); const f = a.p(); cpu.fault(`assert ${tag}: ${f ? format(mem.cstr(f), a) : ""}`); },
   };
   // the *_l variants: the base function, with the trailing locale_t never read
@@ -514,9 +515,12 @@ export function libcInit(): void {
 }
 
 const PRIO = ["", "", "V", "D", "I", "W", "E", "F", "S"];
-export function logLine(prio: number, tag: string, msg: string): void {
+const logTrap = (globalThis as { __wdLogTrap?: string }).__wdLogTrap ? new RegExp((globalThis as { __wdLogTrap?: string }).__wdLogTrap!) : null;
+export function logLine(prio: number, tag: string, msg: string, cpu?: Cpu): void {
   const line = `${PRIO[prio] ?? prio}/${tag}: ${msg.replace(/\n$/, "")}`;
   if (prio >= 6) console.error("[logcat]", line); else if (prio === 5) console.warn("[logcat]", line); else console.log("[logcat]", line);
+  // a debugging trap: which thread, under which entry, with which callers, logged a matching line
+  if (logTrap && cpu && logTrap.test(msg)) console.warn(`[trap-native] ${cpu.name} ic=${cpu.ic} frames=${cpu.frames.join(">")} bt=${backtrace(cpu, 10).join(" < ")}`);
 }
 
 function strcmpAt(x: number, y: number, n: number, ci: boolean): number {

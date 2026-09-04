@@ -21,6 +21,7 @@ class JLooper extends JObj {
     if (this === mainLooper) return onMain(job);
     const p = this.q.then(async () => {
       await yieldToLoop();
+      await this.thread.untilIdle();                                             // a thread blocked in native code runs no message, as on a device
       const prev = curThread;
       setCurThread(this.thread);
       try { return await job(); } finally { setCurThread(prev); }

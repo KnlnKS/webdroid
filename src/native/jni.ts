@@ -156,8 +156,10 @@ async function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], no
 }
 
 /** a Java native method whose body is guest code: marshal, run on the caller's Cpu, convert the result */
+const jniCalls = !!(globalThis as { __wdJniCalls?: boolean }).__wdJniCalls;   // debug: log every Java → native call
 async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unknown[]): Promise<unknown> {
   const { params, ret } = parseMethodDesc(r.sig);
+  if (jniCalls && !r.name.startsWith("fmod")) console.log(`[jni-call] ${cpu.name}: ${r.cls.split("/").pop()}.${r.name}(${args.map((x) => (typeof x === "object" && x ? x.constructor.name : String(x)).slice(0, 24)).join(",")})`);
   await cpu.awaitIdleBase();
   const prevCur = cur;
   cur = cpu;
@@ -175,10 +177,12 @@ async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unk
   }
   if (jniTrace.on) console.log("[jni] →", r.cls, r.name, r.sig);
   let r0: number, r1: number;
+  const jt = cpu.jthread;
+  jt.inNative++;
   try {
     r0 = await cpu.call(r.fn, list, r.cls.split("/").pop() + "." + r.name);
     r1 = cpu.ret1;
-  } finally { cur = cpu; }
+  } finally { cur = cpu; if (--jt.inNative === 0) for (const w of jt.nativeIdle.splice(0)) w(); }
   let out: unknown;
   switch (ret[0]) {
     case "V": out = undefined; break;
@@ -191,6 +195,10 @@ async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unk
     case "F": out = cpu.retF(); break;
     case "D": out = cpu.retD(); break;
     default: out = deref(r0);
+  }
+  if (jniCalls && !r.name.startsWith("fmod")) {
+    console.log(`[jni-ret] ${cpu.name}: ${r.name} = ${typeof out === "object" ? (out ? out.constructor.name : "null") : String(out)}${cpu.exc ? " exc=" + (cpu.exc as { constructor: { name: string } }).constructor.name : ""}`);
+    if (r.name === "nativeRender" && hostTrace.on) console.log("[jni-ret-trace] " + hostTrace.ring.filter((l) => l.startsWith(cpu.name + ":")).slice(-40).join(" | "));
   }
   popFrame(cpu);
   cur = prevCur;

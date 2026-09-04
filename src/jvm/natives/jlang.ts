@@ -1220,6 +1220,11 @@ export class JThread extends JObj {
   wake: (() => void) | null = null;
   done: Promise<void> | null = null;
   looper: unknown = null;   // android Looper, set by android/os
+  /** native calls in progress on this thread: its looper cannot dispatch while it is inside one */
+  inNative = 0;
+  nativeIdle: (() => void)[] = [];
+  /** resolves once the thread is back from native code (at once when it is not in any) */
+  untilIdle(): Promise<void> { return this.inNative ? new Promise((r) => this.nativeIdle.push(r)) : Promise.resolve(); }
 }
 export const mainThread = new JThread();
 mainThread.jname = "main";

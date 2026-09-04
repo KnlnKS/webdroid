@@ -21,6 +21,7 @@ export function inMainJob(): boolean { return mainDbg.depth > 0; }
 export function onMain<T>(job: () => Promise<T> | T): Promise<T> {
   const site = mainDbg.trace ? new Error().stack ?? "" : "";
   const p = q.then(async () => {
+    await mainThread.untilIdle();                                               // main blocked in a native call dispatches nothing until it returns
     const prev = curThread;
     setCurThread(mainThread);
     mainDbg.depth++;
