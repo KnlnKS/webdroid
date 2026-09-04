@@ -6,7 +6,7 @@
 import { mem } from "./mem";
 import { PAGE_SIZE, PAGE_SHIFT } from "./abi";
 import { emitVfp } from "./vfp";
-import { type Ins, type Fl, C, ALL, COND, COND_READS, hex, maskOf, NZ, ADDF, SUBF, ADCF, SBCF, RSBF, RSCF, assemble, hoistRegs, inlineMem, selfLoop } from "./flags";
+import { type Ins, type Fl, C, ALL, COND, COND_READS, hex, maskOf, NZ, ADDF, SUBF, ADCF, SBCF, RSBF, RSCF, assemble, hoistRegs, inlineMem, selfLoop, retK } from "./flags";
 
 let MAX_BLOCK = 256;
 /** 1 = single-instruction blocks (the step tracer) */
@@ -42,12 +42,11 @@ const reg = (n: number, pc: number) => (n === 15 ? String((pc + 8) | 0) : `r[${n
 const fault = (pc: number, w: number, what: string) => `r[15]=${pc};c.fault(${JSON.stringify(what + " " + hex(w))});`;
 
 let redirect = -1, slot = 0;
-/** exit to a constant target: the block caches the successor's compiled function in F.n[slot] */
-const retK = (k: number, target: string) => { const i = slot++; return `{c.ic+=${k};return F.n[${i}]||(F.n[${i}]=c.look(${target}));}`; };
+const ret1 = (k: number, target: string) => retK(slot++, k, target);
 /** emit one instruction; returns true when it ends the block */
 function emit(pc: number, w: number, out: Ins[], k: number): boolean {
   const cond = w >>> 28;
-  const ret = (target: string) => retK(k, target);
+  const ret = (target: string) => ret1(k, target);
   let body = "", ends = false, fl: Fl | null = null, reads = 0, writes = 0;
   const bx = (v: string) => `{t=${v};c.t=t&1;c.ic+=${k};return c.look(t&~1);}`;
   const plain = (code: string) => out.push({ code, fl: null, reads: 0, writes: 0 });
@@ -333,11 +332,11 @@ export function emitBlock(pc: number): BlockSrc {
     if (redirect >= 0) {
       // follow an unconditional branch within the page once: fewer, longer blocks
       if (redirect >= pageStart && redirect < pageEnd && !seen.has(redirect) && k < MAX_BLOCK) { p = redirect; k = 0; continue; }
-      out.push({ code: retK(0, hex(redirect)), fl: null, reads: 0, writes: 0 });
+      out.push({ code: ret1(0, hex(redirect)), fl: null, reads: 0, writes: 0 });
       break;
     }
     if (ends || k >= MAX_BLOCK || p >= pageEnd) break;
   }
-  if (redirect < 0) out.push({ code: retK(k, hex(p)), fl: null, reads: 0, writes: 0 });
+  if (redirect < 0) out.push({ code: ret1(k, hex(p)), fl: null, reads: 0, writes: 0 });
   return { src: "let t,a,v,sc,m1;" + hoistRegs(selfLoop(inlineMem(assemble(out)), pc, pc >>> PAGE_SHIFT)), len: (end - pc) >> 2, end, slots: slot };
 }

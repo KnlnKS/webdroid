@@ -79,6 +79,12 @@ export function inlineMem(src: string): string {
     .replace(/M\.st32\(([^(),]*),([^()]*)\);/g, `if(${A}&&!(m1&3)&&!M.codePages[m1>>>12])M.i32[m1>>>2]=$2;else M.st32(m1,$2);`);
 }
 
+/** Exit to a constant target: the block caches the successor's compiled function in F.n[slot],
+ *  so control flow between blocks is a direct call rather than a dispatch through the run loop.
+ *  It lives here because selfLoop below matches this exact shape — the two have to agree. */
+export const retK = (slot: number, k: number, target: string) =>
+  `{c.ic+=${k};return F.n[${slot}]||(F.n[${slot}]=c.look(${target}));}`;
+
 // A block that branches back to its own start runs that loop inside the block: the register
 // locals stay live across iterations instead of round-tripping through the register file, and
 // the run loop's indirect dispatch leaves the loop entirely. The iteration cap hands control

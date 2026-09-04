@@ -4,7 +4,7 @@
 
 import { mem } from "./mem";
 import { PAGE_SIZE, PAGE_SHIFT } from "./abi";
-import { type Ins, type Fl, C, COND, COND_READS, hex, maskOf, NZ, ADDF, SUBF, ADCF, SBCF, assemble, hoistRegs, inlineMem, selfLoop } from "./flags";
+import { type Ins, type Fl, C, COND, COND_READS, hex, maskOf, NZ, ADDF, SUBF, ADCF, SBCF, assemble, hoistRegs, inlineMem, selfLoop, retK } from "./flags";
 
 let MAX_BLOCK = 256;
 /** 1 = single-instruction blocks (the step tracer) */
@@ -13,10 +13,10 @@ const NZC: Fl = { ...NZ, c: "c.c=c.sc;" };
 const RSB0: Fl = { ...NZ, c: "c.c=(0>>>0)>=(t>>>0)?1:0;", v: "c.v=((0^t)&(0^v))>>>31;" };
 
 let redirect = -1, slot = 0;
-const retK = (k: number, target: string) => { const i = slot++; return `{c.ic+=${k};return F.n[${i}]||(F.n[${i}]=c.look(${target}));}`; };
+const ret1 = (k: number, target: string) => retK(slot++, k, target);
 /** emit one 16-bit (or fused 32-bit bl/blx) instruction; returns the byte length, negative when it ends the block */
 function emit(pc: number, h: number, out: Ins[], k: number): number {
-  const ret = (target: string) => retK(k, target);
+  const ret = (target: string) => ret1(k, target);
   const fault = (what: string) => `r[15]=${pc};c.fault(${JSON.stringify(what + " " + hex(h))});`;
   const push = (code: string, fl: Fl | null = null, reads = 0, writes = maskOf(fl)) => out.push({ code, fl, reads, writes });
   const top = h >>> 12;
@@ -216,11 +216,11 @@ export function emitThumbBlock(pc: number): { src: string; len: number; end: num
     if (p > end) end = p;
     if (redirect >= 0) {
       if (redirect >= pageStart && redirect < pageEnd && !seen.has(redirect) && k < MAX_BLOCK) { p = redirect; k = 0; continue; }
-      out.push({ code: retK(0, hex(redirect)), fl: null, reads: 0, writes: 0 });
+      out.push({ code: ret1(0, hex(redirect)), fl: null, reads: 0, writes: 0 });
       break;
     }
     if (n < 0 || k >= MAX_BLOCK || p >= pageEnd) break;
   }
-  if (redirect < 0) out.push({ code: retK(k, hex(p)), fl: null, reads: 0, writes: 0 });
+  if (redirect < 0) out.push({ code: ret1(k, hex(p)), fl: null, reads: 0, writes: 0 });
   return { src: "let t,a,v,m1;" + hoistRegs(selfLoop(inlineMem(assemble(out)), pc, pc >>> PAGE_SHIFT)), len: (end - pc + 3) >> 2, end, slots: slot };
 }
