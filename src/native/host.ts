@@ -164,12 +164,16 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
       if (hostTrace.ring.length > hostTrace.max) hostTrace.ring.splice(0, hostTrace.ring.length - hostTrace.max);
     }
   }
+  const t0 = slowMs ? performance.now() : 0;
   const ret = fn(cpu, a);
+  if (slowMs && performance.now() - t0 > slowMs) console.warn(`[slow-native] ${cpu.name}:${names[slot]}(${(cpu.r[0] >>> 0).toString(16)},${(cpu.r[1] >>> 0).toString(16)},${(cpu.r[2] >>> 0).toString(16)}) ${(performance.now() - t0).toFixed(0)}ms`);
   if (ret instanceof Promise) { cpu.pending = ret; return; }
   if (traced) hostTrace.ring[hostTrace.ring.length - 1] += `=${typeof ret === "number" ? (ret >>> 0).toString(16) : String(ret)}`;
   hostReturn(cpu, ret);
 }
 
+/** host calls and slices slower than this many ms are logged (debug: set __wdSlowMs before load) */
+export const slowMs = Number((globalThis as { __wdSlowMs?: number }).__wdSlowMs ?? 0);
 export function hostReturn(cpu: Cpu, ret: HostRet): void {
   if (ret === NORET) return;
   // AAPCS64 returns a 64-bit value in x0 alone; AAPCS32 splits it across r0/r1

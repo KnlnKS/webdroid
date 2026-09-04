@@ -29,7 +29,8 @@ function rwRelease(cpu: Cpu, l: RwLock): number {
 }
 const threads = new Map<number, { cpu: Cpu; done: Promise<void>; retval: bigint }>();
 let keySeq = 1, threadSeq = 0;
-const keyDtors = new Map<number, number>();                      // pthread key → destructor, run for the thread's non-null values at its exit
+const keyDtors = new Map<number, number>();
+const onceWaiters = new AddrMap<(() => void)[]>();                      // pthread key → destructor, run for the thread's non-null values at its exit
 const ETIMEDOUT = E.TIMEDOUT, EBUSY = E.BUSY;
 
 function mutexOf(a: number): Mutex {
@@ -212,11 +213,13 @@ export function pthreadInit(): void {
     pthread_key_delete: (_c, a) => { keyDtors.delete(a.i()); return 0; },
     pthread_getspecific: (cpu, a) => cpu.tls.get(a.i()) ?? 0n,
     pthread_setspecific: (cpu, a) => { const k = a.i(), v = a.va(); cpu.tls.set(k, v); return 0; },
+    // the control word: 0 untouched, 1 running (callers wait), 2 done — no caller returns before the initializer has
     pthread_once: async (cpu, a) => {
       const once = a.p(), fn = a.p();
-      if (mem.ld32(once) !== 0) return 0;
-      mem.st32(once, 1);
-      await cpu.call(fn);
+      if (mem.ld32(once) === 2) return 0;
+      if (mem.ld32(once) === 1) { await new Promise<void>((r) => onceWaiters.get(once)!.push(r)); return 0; }
+      mem.st32(once, 1); onceWaiters.set(once, []);
+      try { await cpu.call(fn); } finally { mem.st32(once, 2); for (const w of onceWaiters.get(once) ?? []) w(); onceWaiters.delete(once); }
       return 0;
     },
     // semaphores (sem_t is a 32-bit word)

@@ -242,9 +242,9 @@ export function libcInit(): void {
     unsetenv: (_c, a) => { delete ENV[a.str()]; return 0; },
     setlocale: (_c, a) => { a.i(); const l = a.p(); return l && mem.cstr(l) !== "" && mem.cstr(l) !== "C" && mem.cstr(l) !== "POSIX" ? 0 : cLocale; },
     localeconv: () => localeConv,
+    // a protection change moves no byte: a block stays valid until a write or a cache flush says otherwise
     mprotect: (cpu, a) => {
       const va = a.va(), n = a.u(), prot = a.i();
-      if (!(va >> 32n)) invalidateRange(Number(va), n);
       if (prot & 3) return mem.commitVa(va, n) ? 0 : fail(cpu, E.NOMEM);
       mem.decommitVa(va, n);
       return 0;
@@ -280,7 +280,7 @@ export function libcInit(): void {
     },
     // PR_SET_NAME names the calling thread: what wd.native.regs shows and what a trace prefixes
     prctl: (cpu, a) => { const op = a.i(); if (op === 15) { const s = mem.cstr(a.p(), 16); if (s) { cpu.name = s; cpu.jthread.jname = s; } } return 0; },
-    cacheflush: (_c, a) => { const s = a.p(), e = a.p(); invalidateRange(s, e - s); return 0; },
+    cacheflush: (_c, a) => { const s = a.p(), e = a.p(); invalidateRange(s, e - s, "cacheflush"); return 0; },
     __aeabi_read_tp: (cpu) => cpu.tlsBase,
 
     malloc: (_c, a) => mem.malloc(a.u()),

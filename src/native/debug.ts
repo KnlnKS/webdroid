@@ -4,7 +4,7 @@ import { hostTrace, calledMissing, unresolved, probed } from "./host";
 import { killLog } from "./proc";
 import { futexStats } from "./pthread";
 import { jniMissing, jniTrace, registered } from "./jni";
-import { Cpu, cpus, blockStats, stepMode, setStepMode, profile, blockAt, slice, isA64, setA64, hasProcessExited, yieldStats, sigHandlers, watchPcs, lastFault } from "./cpu";
+import { Cpu, cpus, blockStats, stepMode, setStepMode, profile, blockAt, slice, isA64, setA64, hasProcessExited, yieldStats, sigHandlers, watchPcs, lastFault, allBlocks, invalidatedPages, invalidations } from "./cpu";
 import { mainThread } from "../jvm/natives/jlang";
 import { mem } from "./mem";
 import { RET_SENTINEL } from "./abi";
@@ -50,7 +50,7 @@ export const native = {
   stepRing: stepMode.ring, stepHits: stepMode.hits,
   mem: mem.stats, memObj: mem, cpus: () => [...cpus], blockAt,
   /** the frame-pointer chain of a thread; a watched pc logs its registers on every entry (set before its block compiles) */
-  backtrace: (name: string) => { const c = [...cpus].find((c) => c.name === name); return c ? backtrace(c) : []; }, watchPcs, lastFault,
+  backtrace: (name: string) => { const c = [...cpus].find((c) => c.name === name); return c ? backtrace(c) : []; }, watchPcs, lastFault, allBlocks, invalidatedPages, invalidations,
   peek: (a: number, n = 16) => Array.from(mem.bytes(a, n)).map((b) => b.toString(16).padStart(2, "0")).join(" "),
   cstr: (a: number) => mem.cstr(a),
   glProbe, glRing, gl3: glDebug,

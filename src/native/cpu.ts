@@ -8,7 +8,7 @@ import { NativeFault, mem } from "./mem";
 import { emitBlock, setMaxBlock } from "./arm";
 import { emitA64Block, setMaxBlockA64 } from "./a64";
 import { emitThumbBlock, setMaxBlock as setMaxBlockT } from "./thumb";
-import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair } from "./host";
+import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs } from "./host";
 import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, PAGE_SHIFT, STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
 export { NativeFault };
@@ -25,8 +25,8 @@ export const slice = { instr: SLICE_INSTR };
 export type CallArg = number | bigint | { f: number } | { d: number };
 
 /** a compiled block: runs, then returns the next block (F.n caches constant successors; c.look resolves the rest) */
-type BlockFn = ((c: Cpu, r: Int32Array, M: typeof mem, F: BlockFn) => BlockFn) & { pc: number; n: (BlockFn | undefined)[] };
-const allBlocks = new Set<BlockFn>();
+type BlockFn = ((c: Cpu, r: Int32Array, M: typeof mem, F: BlockFn) => BlockFn) & { pc: number; n: (BlockFn | undefined)[]; links: number[] };
+export const allBlocks = new Set<BlockFn>();
 /** pc reached a trampoline / the return sentinel: r[15] holds it, the run loop decides */
 const STOP = ((c: Cpu) => { void c; return STOP; }) as unknown as BlockFn;
 const stubs: (BlockFn | undefined)[] = new Array((TRAMP_END - TRAMP_BASE) >> 3).fill(undefined);
@@ -58,7 +58,7 @@ export const stepMode = { on: false, ring: [] as string[], max: 40000, watch: 0,
 export function setStepMode(on: boolean): void {
   stepMode.on = on;
   setMaxBlock(on ? 1 : 256); setMaxBlockT(on ? 1 : 256); setMaxBlockA64(on ? 1 : 256);
-  for (const c of cpus) c.flush();
+  for (let i = 0; i < NPAGES; i++) if (pages[i] || tpages[i]) invalidatePage(i);
   stepMode.ring.length = 0;
 }
 const stepPrev = new Int32Array(33), stepPrevH = new Int32Array(32);
@@ -73,22 +73,33 @@ export const hasProcessExited = (): boolean => processExited;
 mem.onCodeWrite = (addr: number) => {
   const pg = addr >>> PAGE_SHIFT;
   const cv = cov[pg];
-  if (cv && cv[(addr >>> 2) & 1023]) invalidatePage(pg);
+  if (cv && cv[(addr >>> 2) & 1023]) { why = `write@${symbolizeHook(addr)} by ${running?.name} in ${running ? symbolizeHook(running.bpc >>> 0) : "?"}`; invalidatePage(pg); }
 };
+let why = "", running: Cpu | null = null;
+/** why code pages were invalidated, by cause and page (wd.native.invalidations) */
+export const invalidations = new Map<string, number>();
 function invalidatePage(pg: number): void {
-  const drop = (arr: (BlockFn | undefined)[] | undefined) => { if (arr) for (const f of arr) if (f) allBlocks.delete(f); };
+  const drop = (arr: (BlockFn | undefined)[] | undefined) => { if (arr) for (const f of arr) if (f) { allBlocks.delete(f); for (const p of f.links) refs[p]?.delete(f); } };
+  invalidatedPages.set(pg, (invalidatedPages.get(pg) ?? 0) + 1);
+  const k = `${why} → ${symbolizeHook(pg << PAGE_SHIFT >>> 0)}`; invalidations.set(k, (invalidations.get(k) ?? 0) + 1);
   drop(pages[pg]); drop(tpages[pg]);
   pages[pg] = undefined;
   tpages[pg] = undefined;
   cov[pg] = undefined;
   mem.codePages[pg] = 0;
   blockStats.invalidated++;
-  // every surviving block may cache a successor that lived in this page
-  for (const f of allBlocks) f.n.fill(undefined);
+  // the blocks whose successor caches point into this page forget them; nothing else is touched
+  for (const f of refs[pg] ?? []) f.n.fill(undefined);
+  refs[pg] = undefined;
 }
+/** page → the blocks whose successor cache holds a block in it (what an invalidation must clear) */
+const refs: (Set<BlockFn> | undefined)[] = [];
+/** page → how often it was invalidated (wd.native.invalidatedPages): a page written and executed */
+export const invalidatedPages = new Map<number, number>();
 /** an already-compiled block (either instruction set) for debug tooling */
 export function blockAt(pc: number): unknown { return pages[pc >>> PAGE_SHIFT]?.[(pc >>> 2) & 1023] ?? tpages[pc >>> PAGE_SHIFT]?.[(pc >>> 1) & 2047]; }
-export function invalidateRange(addr: number, size: number): void {
+export function invalidateRange(addr: number, size: number, reason = "range"): void {
+  why = `${reason} by ${running?.name}`;
   for (let pg = addr >>> PAGE_SHIFT; pg <= (addr + size - 1) >>> PAGE_SHIFT; pg++) if (pages[pg] || tpages[pg]) invalidatePage(pg);
 }
 
@@ -103,23 +114,29 @@ export function setA64(on: boolean): void {
   // JNI tables are laid out before the first Cpu exists
   setPtrWidth(on ? 8 : 4);
   for (const c of cpus) c.setAbi(on);
+  // the blocks are the process's, compiled for one instruction set: the switch drops them once
+  for (let i = 0; i < NPAGES; i++) if (pages[i] || tpages[i]) invalidatePage(i);
 }
 export function isA64(): boolean { return A64; }
 
 /** the register file at the first native fault, as the faulting block found it (debug) */
 export const lastFault: { regs: { cpu: string; r: number[]; h: number[] } | null } = { regs: null };
 /** pcs whose block entry logs the registers: a breakpoint that does not stop (wd.native.watch) */
+/** count block executions (debug: set __wdCount before load; wd.native.allBlocks for the histogram) */
+const countExec = !!(globalThis as { __wdCount?: boolean }).__wdCount;
 export const watchPcs = new Set<number>(((globalThis as { __wdWatch?: number[] }).__wdWatch ?? []).map((p) => p >>> 0));
 function compile(cpu: Cpu, pc: number, pg: (BlockFn | undefined)[], thumb: boolean): BlockFn {
   const t0 = performance.now();
   if (pc & (thumb ? 1 : 3)) { cpu.r[cpu.pcx] = pc; cpu.fault("misaligned pc"); }
   const b = thumb ? emitThumbBlock(pc) : A64 ? emitA64Block(pc) : emitBlock(pc);
   if (watchPcs.has(pc >>> 0)) b.src = "c.watchHit();" + b.src;
+  if (countExec) b.src = "F.x=(F.x|0)+1;" + b.src;
   let fn: BlockFn;
   try { fn = new Function("c", "r", "M", "F", b.src + `\n//# sourceURL=wd/native/${(pc >>> 0).toString(16)}${thumb ? "t" : ""}.js`) as BlockFn; }
   catch (e) { throw new NativeFault(`[native] block compile failed at 0x${pc.toString(16)}: ${e}\n${b.src}`); }
   fn.pc = pc;
   fn.n = new Array<BlockFn | undefined>(b.slots).fill(undefined);
+  fn.links = [];
   allBlocks.add(fn);
   pg[thumb ? (pc >>> 1) & 2047 : (pc >>> 2) & 1023] = fn;
   const page = pc >>> PAGE_SHIFT;
@@ -341,6 +358,7 @@ export class Cpu {
         throw e;
       } finally {
         perf.nativeMs += performance.now() - t0; perf.nativeSlices++; perf.nativeInstr += this.ic - ic0;
+        if (slowMs && performance.now() - t0 > slowMs) console.warn(`[slow-native] ${this.name} slice ${(performance.now() - t0).toFixed(0)}ms ${this.ic - ic0} instr from ${symbolizeHook(this.bpc >>> 0)}`);
       }
       if (ex === SliceExit.Exit) return;
       if (ex === SliceExit.Suspend) {
@@ -366,6 +384,13 @@ export class Cpu {
   }
 
   /** the block for `pc` in the current instruction set (compiling it on a miss) */
+  /** a block fills its successor cache: the target page remembers who points into it */
+  link(F: BlockFn, i: number, pc: number): BlockFn {
+    const b = this.look(pc), pg = pc >>> PAGE_SHIFT;
+    (refs[pg] ??= new Set()).add(F);
+    F.links.push(pg);
+    return (F.n[i] = b);
+  }
   look(pc: number): BlockFn {
     if (pc >= TRAMP_BASE && pc < TRAMP_END) return stubFor(pc);
     if (this.t) {
@@ -383,6 +408,7 @@ export class Cpu {
     const r = this.r;
     const px = this.pcx;
     const limit = this.ic + budget;
+    running = this;
     let fn = this.look(r[px]);
     for (;;) {
       fn = fn(this, r, mem, fn);
@@ -408,6 +434,7 @@ export class Cpu {
   runSliceStep(budget: number): SliceExit {
     const r = this.r, px = this.pcx, a64 = this.a64, names = a64 ? XN : RN, nregs = a64 ? 32 : 15;
     const limit = this.ic + budget;
+    running = this;
     let fn = this.look(r[px]);
     for (;;) {
       const at = fn.pc;
@@ -440,12 +467,10 @@ export class Cpu {
     this.a64 = on;
     this.pcx = on ? 32 : 15; this.lrx = on ? 30 : 14; this.spx = on ? 31 : 13;
     if (on !== (this.args instanceof Args64)) this.args = on ? new Args64(this) : new Args(this);
-    this.flush();
   }
   setPc(addr: number): void { if (this.a64) this.r[32] = addr; else { this.r[15] = addr & ~1; this.t = addr & 1; } }
   /** interworking branch target (BX semantics): returns the pc to continue at */
   bx(addr: number): number { this.t = addr & 1; return addr & ~1; }
-  flush(): void { for (let i = 0; i < NPAGES; i++) if (pages[i] || tpages[i]) invalidatePage(i); }
   cpsr(): number { return ((this.n << 31) | (this.z << 30) | (this.c << 29) | (this.v << 28) | (this.q << 27) | (this.ge << 16) | (this.t << 5) | 0x10) | 0; }
   setFlags(v: number): void { this.n = (v >>> 31) & 1; this.z = (v >>> 30) & 1; this.c = (v >>> 29) & 1; this.v = (v >>> 28) & 1; this.q = (v >>> 27) & 1; }
   /** register-specified shift with carry-out into `sc` (amount already masked to 8 bits) */
@@ -557,7 +582,7 @@ export class Cpu {
   swi(): void {
     const r = this.r;
     switch (r[7] >>> 0) {
-      case 0xf0002: invalidateRange(r[0] >>> 0, (r[1] - r[0]) >>> 0); r[0] = 0; return;   // __ARM_NR_cacheflush
+      case 0xf0002: invalidateRange(r[0] >>> 0, (r[1] - r[0]) >>> 0, "cacheflush"); r[0] = 0; return;   // __ARM_NR_cacheflush
       case 0xf0005: this.tlsBase = r[0]; r[0] = 0; return;                                   // __ARM_NR_set_tls
       case 20: r[0] = 4242; return;                                                          // getpid
       case 224: r[0] = 4242 + this.tid; return;                                              // gettid

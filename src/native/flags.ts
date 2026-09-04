@@ -98,7 +98,7 @@ export function inlineMem(src: string): string {
  *  so control flow between blocks is a direct call rather than a dispatch through the run loop.
  *  It lives here because selfLoop below matches this exact shape — the two have to agree. */
 export const retK = (slot: number, k: number, target: string) =>
-  `{c.ic+=${k};return F.n[${slot}]||(F.n[${slot}]=c.look(${target}));}`;
+  `{c.ic+=${k};return F.n[${slot}]||c.link(F,${slot},${target});}`;
 
 // A block that branches back to its own start runs that loop inside the block: the register
 // locals stay live across iterations instead of round-tripping through the register file, and
@@ -108,7 +108,7 @@ export const retK = (slot: number, k: number, target: string) =>
 const LOOP_ITERS = 4096;
 export function selfLoop(src: string, pc: number, page: number): string {
   const self = "0x" + (pc >>> 0).toString(16);
-  const back = new RegExp(String.raw`\{c\.ic\+=([1-9]\d*);return F\.n\[(\d+)\]\|\|\(F\.n\[\2\]=c\.look\(${self}\)\);\}`, "g");
+  const back = new RegExp(String.raw`\{c\.ic\+=([1-9]\d*);return F\.n\[(\d+)\]\|\|c\.link\(F,\2,${self}\);\}`, "g");
   if (!back.test(src)) return src;
   back.lastIndex = 0;
   return `let z=${LOOP_ITERS};for(;;){\n` +
