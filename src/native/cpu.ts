@@ -479,10 +479,51 @@ export class Cpu {
       default: this.fault(`swi: unsupported syscall ${r[7] >>> 0}`);
     }
   }
-  /** round to nearest, ties to even (the default FPSCR rounding mode for VCVT) */
+  /** round to nearest, ties to even; keeps the sign of a zero, as FRINTN must */
   rne(x: number): number {
-    const f = Math.floor(x), d = x - f;
-    return d < 0.5 ? f : d > 0.5 ? f + 1 : (f % 2 === 0 ? f : f + 1);
+    const r = Math.round(x);
+    return r % 2 !== 0 && Math.abs(x - Math.trunc(x)) === 0.5 ? r - 1 : r;
+  }
+  /** round to nearest, ties away from zero (FRINTA, FCVTAS) */
+  rna(x: number): number { return x < 0 ? -Math.round(-x) : Math.round(x); }
+  /** round in FPCR's current mode (FRINTX/FRINTI): 0 nearest-even, 1 +inf, 2 -inf, 3 zero */
+  rint(x: number): number {
+    switch ((this.fpcr >>> 22) & 3) { case 1: return Math.ceil(x); case 2: return Math.floor(x); case 3: return Math.trunc(x); default: return this.rne(x); }
+  }
+  /** an integer-valued double to a saturated 64-bit integer in lo/hi; NaN is 0 */
+  cvt64(x: number, signed: number): void {
+    if (x !== x) { this.lo = 0; this.hi = 0; return; }
+    if (signed) {
+      if (x >= 9223372036854775807) { this.lo = -1; this.hi = 0x7fffffff; return; }
+      if (x <= -9223372036854775808) { this.lo = 0; this.hi = -2147483648; return; }
+    } else {
+      if (x <= 0) { this.lo = 0; this.hi = 0; return; }
+      if (x >= 18446744073709551615) { this.lo = -1; this.hi = -1; return; }
+    }
+    const t = Math.trunc(x), hi = Math.floor(t / 4294967296);
+    this.hi = hi | 0;
+    this.lo = (t - hi * 4294967296) | 0;
+  }
+  /** IEEE half to a number, and a number to half (round to nearest even, denormals, NaN kept quiet) */
+  h2f(h: number): number {
+    const s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 0x1f, m = h & 0x3ff;
+    if (e === 0) return s * m * 2 ** -24;
+    if (e === 31) return m ? NaN : s * Infinity;
+    return s * (1 + m / 1024) * 2 ** (e - 15);
+  }
+  f2h(x: number): number {
+    if (x !== x) return 0x7e00;
+    const s = x < 0 || (x === 0 && 1 / x < 0) ? 0x8000 : 0;
+    x = Math.abs(x);
+    if (x === Infinity) return s | 0x7c00;
+    if (x === 0) return s;
+    let e = Math.floor(Math.log2(x));
+    if (x / 2 ** e >= 2) e++;
+    if (e < -14) { const m = this.rne(x * 2 ** 24); return m >= 1024 ? s | 0x0400 : s | m; }     // denormal (or rounds up into the smallest normal)
+    let m = this.rne((x / 2 ** e - 1) * 1024);
+    if (m === 1024) { m = 0; e++; }
+    if (e > 15) return s | 0x7c00;
+    return s | ((e + 15) << 10) | m;
   }
   sat(v: number): number { if (v > 2147483647) { this.q = 1; return 2147483647; } if (v < -2147483648) { this.q = 1; return -2147483648; } return v | 0; }
   fault(msg: string): never {

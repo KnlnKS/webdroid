@@ -7,8 +7,8 @@
 // own destination is about to overwrite when Vd is also a source, so `lanes` targets the scratch
 // register V32 and copies back in that case — decided at emit time, free when registers differ.
 
-import { type Fl, hex } from "./flags";
-import { sp, sph, zr, zrh, setX, setW, lane, zeroHi, zeroS, words, SCRATCH, type View } from "./a64regs";
+import { type Fl, hex, ALL, COND, COND_READS } from "./flags";
+import { sp, sph, zr, zrh, setX, setW, int32, lane, zeroHi, zeroS, words, SCRATCH, type View } from "./a64regs";
 import { vfpImm } from "./vfp";
 import { fbits, dbits } from "./host";
 
@@ -301,6 +301,167 @@ export function emitSimd(_pc: number, w: number, push: Push, fault: Fault): bool
     return false;
   }
 
+  // ── scalar floating point (bit 28 set): the data-processing groups and the conversions
+  if ((w & 0x50000000) === 0x10000000) return emitFp(w, push, fault);
+
   push(fault("unimplemented"));
+  return true;
+}
+
+/** the flags FCMP leaves: less 1000, equal 0110, greater 0010, unordered 0011 (`a`, `t` hold the operands) */
+const FCMP: Fl = { n: "c.n=a<t?1:0;", z: "c.z=a===t?1:0;", c: "c.c=a<t?0:1;", v: "c.v=(a!==a||t!==t)?1:0;" };
+const FCMP_ALL = FCMP.n! + FCMP.z! + FCMP.c! + FCMP.v!;
+
+/** round `x` (a JS expression) the way rmode/opcode of FCVT* and FRINT* ask */
+function rounded(x: string, mode: "N" | "P" | "M" | "Z" | "A" | "X"): string {
+  switch (mode) {
+    case "N": return `c.rne(${x})`;
+    case "P": return `Math.ceil(${x})`;
+    case "M": return `Math.floor(${x})`;
+    case "Z": return `Math.trunc(${x})`;
+    case "A": return `c.rna(${x})`;
+    default: return `c.rint(${x})`;
+  }
+}
+/** an integer-valued double in `t` into Wd/Xd, saturating; NaN is 0 */
+function toInt(rd: number, sf: number, unsigned: boolean): string {
+  if (sf) return `c.cvt64(t,${unsigned ? 0 : 1});` + setX(rd, "c.lo", "c.hi");
+  return setW(rd, unsigned ? "(t!==t||t<=0?0:t>=4294967295?-1:t|0)" : "(t!==t?0:t>=2147483647?2147483647:t<=-2147483648?-2147483648:t|0)");
+}
+
+function emitFp(w: number, push: Push, fault: Fault): boolean {
+  const rd = w & 31, rn = (w >>> 5) & 31, rm = (w >>> 16) & 31, ftype = (w >>> 22) & 3, sf = (w >>> 31) & 1;
+  if (w & 0x20000000) { push(fault("fp")); return true; }                               // S=1 is unallocated
+  const dp = ftype === 1, half = ftype === 3;
+  // the scalar as an arithmetic operand, and the write that zeroes the rest of the register
+  const S = (n: number) => (dp ? `D[${2 * n}]` : `S[${4 * n}]`);
+  const setF = (d: number, e: string) => (dp ? `D[${2 * d}]=${e};` + zeroHi(d) : `S[${4 * d}]=${e};` + zeroS(d));
+  const movF = (d: number, n: number) => (dp ? `I[${4 * d}]=I[${4 * n}];I[${4 * d + 1}]=I[${4 * n + 1}];` + zeroHi(d) : `I[${4 * d}]=I[${4 * n}];` + zeroS(d));
+
+  // FP <-> integer conversion, and the FMOV general forms
+  if (is(w, 0x5f20fc00, 0x1e200000)) {
+    const rmode = (w >>> 19) & 3, opcode = (w >>> 16) & 7;
+    if (opcode >= 6) {                                                                   // FMOV between a V register and a GPR
+      if (ftype === 2 && rmode === 1 && sf) {                                            // the top half of a D
+        push(opcode === 6 ? setX(rd, `I[${4 * rn + 2}]`, `I[${4 * rn + 3}]`) : `I[${4 * rd + 2}]=${zr(rn)};I[${4 * rd + 3}]=${zrh(rn)};`);
+        return false;
+      }
+      if (rmode !== 0 || half || ftype === 2 || (dp !== !!sf)) { push(fault("fmov")); return true; }
+      if (opcode === 6) push(sf ? setX(rd, `I[${4 * rn}]`, `I[${4 * rn + 1}]`) : setW(rd, `I[${4 * rn}]`));
+      else push(sf ? `I[${4 * rd}]=${zr(rn)};I[${4 * rd + 1}]=${zrh(rn)};` + zeroHi(rd) : `I[${4 * rd}]=${zr(rn)};` + zeroS(rd));
+      return false;
+    }
+    if (half) { push(fault("fp16")); return true; }
+    if (opcode === 2 || opcode === 3) {                                                  // SCVTF / UCVTF from Wn/Xn
+      const src = sf ? (opcode === 2 ? `${zrh(rn)}*4294967296+(${zr(rn)}>>>0)` : `(${zrh(rn)}>>>0)*4294967296+(${zr(rn)}>>>0)`)
+        : (opcode === 2 ? zr(rn) : `(${zr(rn)}>>>0)`);
+      push(setF(rd, src));
+      return false;
+    }
+    if (opcode <= 1 || opcode === 4 || opcode === 5) {                                   // FCVT{N,P,M,Z,A}{S,U}
+      const mode = opcode >= 4 ? "A" : rmode === 0 ? "N" : rmode === 1 ? "P" : rmode === 2 ? "M" : "Z";
+      push(`t=${rounded(S(rn), mode)};` + toInt(rd, sf, (opcode & 1) === 1));
+      return false;
+    }
+    push(fault("fp<->int"));
+    return true;
+  }
+  // FP <-> fixed point
+  if (is(w, 0x5f200000, 0x1e000000)) {
+    const rmode = (w >>> 19) & 3, opcode = (w >>> 16) & 7, fbits = 64 - ((w >>> 10) & 0x3f);
+    if (half) { push(fault("fp16")); return true; }
+    const scale = 2 ** fbits;
+    if (rmode === 0 && (opcode === 2 || opcode === 3)) {
+      const src = sf ? (opcode === 2 ? `(${zrh(rn)}*4294967296+(${zr(rn)}>>>0))` : `((${zrh(rn)}>>>0)*4294967296+(${zr(rn)}>>>0))`)
+        : (opcode === 2 ? zr(rn) : `(${zr(rn)}>>>0)`);
+      push(setF(rd, `${src}/${scale}`));
+      return false;
+    }
+    if (rmode === 3 && opcode <= 1) {
+      push(`t=Math.trunc(${S(rn)}*${scale});` + toInt(rd, sf, opcode === 1));
+      return false;
+    }
+    push(fault("fp<->fixed"));
+    return true;
+  }
+  if (sf) { push(fault("fp")); return true; }
+  // 1-source
+  if (is(w, 0x5f207c00, 0x1e204000)) {
+    const opcode = (w >>> 15) & 0x3f;
+    if (opcode >= 4 && opcode <= 7) {                                                    // FCVT between widths
+      const to = opcode & 3;
+      if (to === ftype || to === 2) { push(fault("fcvt")); return true; }
+      const src = half ? `c.h2f(W[${8 * rn}])` : S(rn);
+      push(to === 0 ? `S[${4 * rd}]=${src};` + zeroS(rd) : to === 1 ? `D[${2 * rd}]=${src};` + zeroHi(rd) : `I[${4 * rd}]=c.f2h(${src});` + zeroS(rd));
+      return false;
+    }
+    if (half) { push(fault("fp16")); return true; }
+    const signBit = dp ? `I[${4 * rn + 1}]` : `I[${4 * rn}]`, signDst = dp ? `I[${4 * rd + 1}]` : `I[${4 * rd}]`;
+    switch (opcode) {
+      case 0: push(movF(rd, rn)); return false;                                          // FMOV
+      case 1: push((dp ? `I[${4 * rd}]=I[${4 * rn}];` : "") + `${signDst}=${signBit}&0x7fffffff;` + (dp ? zeroHi(rd) : zeroS(rd))); return false;   // FABS
+      case 2: push((dp ? `I[${4 * rd}]=I[${4 * rn}];` : "") + `${signDst}=${signBit}^-2147483648;` + (dp ? zeroHi(rd) : zeroS(rd))); return false;  // FNEG
+      case 3: push(setF(rd, `Math.sqrt(${S(rn)})`)); return false;                       // FSQRT
+      case 8: case 9: case 10: case 11: case 12: case 14: case 15: {                      // FRINT N P M Z A X I
+        const mode = (["N", "P", "M", "Z", "A", "", "X", "X"] as const)[opcode - 8];
+        push(setF(rd, rounded(S(rn), mode as "N")));
+        return false;
+      }
+    }
+    push(fault("fp 1-source"));
+    return true;
+  }
+  if (half) { push(fault("fp16")); return true; }
+  // compare
+  if (is(w, 0x5f203c00, 0x1e202000)) {
+    const opcode2 = w & 31;
+    if (opcode2 & 7) { push(fault("fcmp")); return true; }
+    push(`a=${S(rn)};t=${opcode2 & 8 ? "0" : S(rm)};\0F`, FCMP, 0, ALL);
+    return false;
+  }
+  // immediate
+  if (is(w, 0x5f201c00, 0x1e201000)) {
+    const imm8 = (w >>> 13) & 0xff;
+    if (dp) {
+      const d = dbits(vfpImm(imm8, true));
+      push(`I[${4 * rd}]=${int32(Number(d & 0xffffffffn))};I[${4 * rd + 1}]=${int32(Number((d >> 32n) & 0xffffffffn))};` + zeroHi(rd));
+    } else push(`I[${4 * rd}]=${int32(fbits(vfpImm(imm8, false)))};` + zeroS(rd));
+    return false;
+  }
+  // conditional compare
+  if (is(w, 0x5f200c00, 0x1e200400)) {
+    const cond = (w >>> 12) & 15, nzcv = w & 15;
+    const setNzcv = `c.n=${(nzcv >> 3) & 1};c.z=${(nzcv >> 2) & 1};c.c=${(nzcv >> 1) & 1};c.v=${nzcv & 1};`;
+    push(`if(${COND[cond]}){a=${S(rn)};t=${S(rm)};${FCMP_ALL}}else{${setNzcv}}`, null, COND_READS[cond], ALL);
+    return false;
+  }
+  // 2-source
+  if (is(w, 0x5f200c00, 0x1e200800)) {
+    const opcode = (w >>> 12) & 15, a = S(rn), b = S(rm);
+    const e = opcode === 0 ? `${a}*${b}` : opcode === 1 ? `${a}/${b}` : opcode === 2 ? `${a}+${b}` : opcode === 3 ? `${a}-${b}`
+      : opcode === 4 ? `Math.max(${a},${b})` : opcode === 5 ? `Math.min(${a},${b})` : opcode === 8 ? `-(${a}*${b})` : null;
+    if (e !== null) { push(setF(rd, e)); return false; }
+    if (opcode === 6 || opcode === 7) {                                                  // FMAXNM / FMINNM: a quiet NaN loses
+      push(`a=${a};t=${b};` + setF(rd, `a!==a?t:t!==t?a:Math.${opcode === 6 ? "max" : "min"}(a,t)`));
+      return false;
+    }
+    push(fault("fp 2-source"));
+    return true;
+  }
+  // conditional select
+  if (is(w, 0x5f200c00, 0x1e200c00)) {
+    const cond = (w >>> 12) & 15;
+    push(dp ? `if(${COND[cond]}){I[${4 * rd}]=I[${4 * rn}];I[${4 * rd + 1}]=I[${4 * rn + 1}];}else{I[${4 * rd}]=I[${4 * rm}];I[${4 * rd + 1}]=I[${4 * rm + 1}];}` + zeroHi(rd)
+      : `I[${4 * rd}]=${COND[cond]}?I[${4 * rn}]:I[${4 * rm}];` + zeroS(rd), null, COND_READS[cond], 0);
+    return false;
+  }
+  // 3-source: FMADD / FMSUB / FNMADD / FNMSUB (one rounding of the product, then of the sum)
+  if (is(w, 0x5f000000, 0x1f000000)) {
+    const o1 = (w >>> 21) & 1, o0 = (w >>> 15) & 1, ra = (w >>> 10) & 31;
+    const p = `${S(rn)}*${S(rm)}`, acc = S(ra);
+    push(setF(rd, !o1 ? (o0 ? `${acc}-${p}` : `${acc}+${p}`) : (o0 ? `${p}-${acc}` : `-${acc}-${p}`)));
+    return false;
+  }
+  push(fault("fp"));
   return true;
 }
