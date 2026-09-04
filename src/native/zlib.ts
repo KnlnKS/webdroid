@@ -1,58 +1,36 @@
-// libz streaming API (z_stream in guest memory) over fflate's streaming classes.
+// libz streaming inflate API over fflate's raw DEFLATE decoder. Container headers and trailers
+// stay here so zlib, gzip, and auto-detect modes have zlib-compatible completion and checksums.
 
-import { Inflate, Unzlib } from "fflate";
+import { Inflate } from "fflate";
 import { mem, AddrMap } from "./mem";
 import { hostLib, type HostFn, PTR, stp, ldp } from "./host";
 
-// z_stream: next_in, avail_in, total_in, next_out, avail_out, total_out, msg, state, ... — pointer
-// and ulong fields, so the offsets follow the pointer width (32-bit: 0/4/8/12/16/20/24/28;
-// LP64: 0/8/16/24/32/40/48/56, 112 bytes in all)
-let Z = { IN: 0, AVIN: 4, TIN: 8, OUT: 12, AVOUT: 16, TOUT: 20, MSG: 24, STATE: 28 };
-const Z_OK = 0, Z_STREAM_END = 1, Z_STREAM_ERROR = -2, Z_DATA_ERROR = -3, Z_BUF_ERROR = -5;
+// z_stream fields used here. Pointer and ulong fields follow the process pointer width.
+let Z = { IN: 0, AVIN: 4, TIN: 8, OUT: 12, AVOUT: 16, TOUT: 20, MSG: 24, STATE: 28, ADLER: 48 };
+const Z_OK = 0, Z_STREAM_END = 1, Z_NEED_DICT = 2, Z_STREAM_ERROR = -2, Z_DATA_ERROR = -3, Z_BUF_ERROR = -5;
 
-interface Stream { st: Inflate | Unzlib; out: Uint8Array[]; done: boolean; err: string | null }
+type Wrapper = "raw" | "zlib" | "gzip";
+type Phase = "header" | "body" | "trailer" | "done" | "error";
+interface RawInflate {
+  ondata: (data: Uint8Array, final: boolean) => void;
+  push(data: Uint8Array): void;
+  s: { f?: number; l?: unknown; p?: number };
+  p: Uint8Array;
+}
+interface Stream {
+  windowBits: number;
+  wrapper: Wrapper | null;
+  phase: Phase;
+  st: RawInflate | null;
+  pending: Uint8Array;
+  out: Uint8Array[];
+  check: number;
+  size: number;
+  error: number;
+}
 const streams = new AddrMap<Stream>();
 let stateSeq = 1;
-
-function open(strm: number, windowBits: number): number {
-  const raw = windowBits < 0;
-  const st = raw ? new Inflate() : new Unzlib();
-  const s: Stream = { st, out: [], done: false, err: null };
-  st.ondata = (d, final) => { if (d.length) s.out.push(d); if (final) s.done = true; };
-  streams.set(strm, s);
-  stp(strm + Z.STATE, stateSeq++);
-  stp(strm + Z.TIN, 0); stp(strm + Z.TOUT, 0); stp(strm + Z.MSG, 0);
-  return Z_OK;
-}
-
-function inflate(strm: number): number {
-  const s = streams.get(strm);
-  if (!s) return Z_STREAM_ERROR;
-  const availIn = mem.ld32(strm + Z.AVIN) >>> 0, nextIn = ldp(strm + Z.IN);
-  if (availIn && !s.done) {
-    try {
-      const st = s.st as unknown as { push(d: Uint8Array): void; s: { f?: number; l?: unknown } };
-      st.push(mem.u8.slice(nextIn, nextIn + availIn));
-      // BFINAL block decoded (fflate only flags `final` on request) — see java.util.zip.Inflater
-      if (st.s.f && !st.s.l) s.done = true;
-    } catch (e) { s.err = String(e); return Z_DATA_ERROR; }
-    stp(strm + Z.IN, nextIn + availIn); mem.st32(strm + Z.AVIN, 0);
-    stp(strm + Z.TIN, mem.ld32(strm + Z.TIN) + availIn);
-  }
-  let availOut = mem.ld32(strm + Z.AVOUT) >>> 0, nextOut = ldp(strm + Z.OUT), wrote = 0;
-  while (availOut > 0 && s.out.length) {
-    const c = s.out[0];
-    const take = Math.min(availOut, c.length);
-    mem.u8.set(c.subarray(0, take), nextOut);
-    nextOut += take; availOut -= take; wrote += take;
-    if (take === c.length) s.out.shift(); else s.out[0] = c.subarray(take);
-  }
-  stp(strm + Z.OUT, nextOut); mem.st32(strm + Z.AVOUT, availOut);
-  stp(strm + Z.TOUT, mem.ld32(strm + Z.TOUT) + wrote);
-  if (s.done && !s.out.length) return Z_STREAM_END;
-  if (!wrote && !availIn) return Z_BUF_ERROR;
-  return Z_OK;
-}
+const empty = new Uint8Array(0);
 
 // CRC-32 (the zlib polynomial), table driven
 const crcTab = new Int32Array(256);
@@ -60,40 +38,240 @@ for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1
 function crc32(crc: number, buf: Uint8Array): number {
   let c = ~crc;
   for (let i = 0; i < buf.length; i++) c = crcTab[(c ^ buf[i]) & 255] ^ (c >>> 8);
-  return ~c;
+  return (~c) >>> 0;
 }
 function adler32(adler: number, buf: Uint8Array): number {
   let a = adler & 0xffff, b = (adler >>> 16) & 0xffff;
   for (let i = 0; i < buf.length; i++) { a = (a + buf[i]) % 65521; b = (b + a) % 65521; }
-  return ((b << 16) | a) | 0;
+  return ((b << 16) | a) >>> 0;
+}
+
+function loadUlong(address: number): number {
+  return PTR === 8 ? Number(BigInt.asUintN(64, mem.ld64(address))) : mem.ld32(address) >>> 0;
+}
+
+function storeUlong(address: number, value: number): void {
+  if (PTR === 8) mem.st64(address, BigInt(value));
+  else mem.st32(address, value);
+}
+
+function append(a: Uint8Array, b: Uint8Array): Uint8Array {
+  if (!a.length) return b;
+  if (!b.length) return a;
+  const joined = new Uint8Array(a.length + b.length);
+  joined.set(a); joined.set(b, a.length);
+  return joined;
+}
+
+function configuredWrapper(windowBits: number): Wrapper | null | undefined {
+  if (windowBits <= -8 && windowBits >= -15) return "raw";
+  if (windowBits === 0 || windowBits >= 8 && windowBits <= 15) return "zlib";
+  if (windowBits >= 24 && windowBits <= 31) return "gzip";
+  if (windowBits >= 40 && windowBits <= 47) return null;
+  return undefined;
+}
+
+function startBody(s: Stream): void {
+  const st = new Inflate() as unknown as RawInflate;
+  st.ondata = (data) => {
+    if (!data.length) return;
+    s.out.push(data);
+    s.check = s.wrapper === "gzip" ? crc32(s.check, data) : adler32(s.check, data);
+    s.size = (s.size + data.length) >>> 0;
+  };
+  s.st = st;
+  s.phase = "body";
+}
+
+function makeStream(windowBits: number): Stream | null {
+  const wrapper = configuredWrapper(windowBits);
+  if (wrapper === undefined) return null;
+  const s: Stream = {
+    windowBits, wrapper, phase: wrapper === "raw" ? "body" : "header", st: null,
+    pending: empty, out: [], check: wrapper === "gzip" ? 0 : 1, size: 0, error: Z_OK,
+  };
+  if (wrapper === "raw") startBody(s);
+  return s;
+}
+
+function open(strm: number, windowBits: number): number {
+  if (!strm) return Z_STREAM_ERROR;
+  const s = makeStream(windowBits);
+  if (!s) return Z_STREAM_ERROR;
+  streams.set(strm, s);
+  stp(strm + Z.STATE, stateSeq++);
+  storeUlong(strm + Z.TIN, 0); storeUlong(strm + Z.TOUT, 0);
+  stp(strm + Z.MSG, 0); storeUlong(strm + Z.ADLER, s.check);
+  return Z_OK;
+}
+
+function gzipHeaderLength(data: Uint8Array): number {
+  if (data.length < 10) return 0;
+  const flags = data[3];
+  if (data[0] !== 0x1f || data[1] !== 0x8b || data[2] !== 8 || flags & 0xe0) return -1;
+  let at = 10;
+  if (flags & 4) {
+    if (data.length < at + 2) return 0;
+    const length = data[at] | data[at + 1] << 8;
+    at += 2;
+    if (data.length < at + length) return 0;
+    at += length;
+  }
+  for (const flag of [8, 16]) if (flags & flag) {
+    while (at < data.length && data[at]) at++;
+    if (at === data.length) return 0;
+    at++;
+  }
+  if (flags & 2) {
+    if (data.length < at + 2) return 0;
+    const expected = data[at] | data[at + 1] << 8;
+    if ((crc32(0, data.subarray(0, at)) & 0xffff) !== expected) return -1;
+    at += 2;
+  }
+  return at;
+}
+
+function failStream(s: Stream, code = Z_DATA_ERROR): number {
+  s.phase = "error";
+  s.error = code;
+  return code;
+}
+
+function parseHeader(s: Stream): number {
+  if (s.wrapper === null) {
+    if (s.pending.length < 2) return Z_OK;
+    s.wrapper = s.pending[0] === 0x1f && s.pending[1] === 0x8b ? "gzip" : "zlib";
+    s.check = s.wrapper === "gzip" ? 0 : 1;
+  }
+  if (s.wrapper === "zlib") {
+    if (s.pending.length < 2) return Z_OK;
+    const cmf = s.pending[0], flags = s.pending[1];
+    const maximum = s.windowBits === 0 || s.windowBits >= 40 ? 15 : s.windowBits;
+    if ((cmf & 15) !== 8 || cmf >>> 4 > 7 || (cmf >>> 4) + 8 > maximum || ((cmf << 8) | flags) % 31) return failStream(s);
+    if (flags & 0x20) {
+      if (s.pending.length < 6) return Z_OK;
+      s.pending = s.pending.subarray(6);
+      return failStream(s, Z_NEED_DICT);
+    }
+    s.pending = s.pending.subarray(2);
+  } else {
+    const header = gzipHeaderLength(s.pending);
+    if (header < 0) return failStream(s);
+    if (!header) return Z_OK;
+    s.pending = s.pending.subarray(header);
+  }
+  startBody(s);
+  return Z_OK;
+}
+
+function little32(data: Uint8Array, at: number): number {
+  return (data[at] | data[at + 1] << 8 | data[at + 2] << 16 | data[at + 3] << 24) >>> 0;
+}
+
+function processPending(s: Stream): number {
+  if (s.phase === "error") return s.error;
+  if (s.phase === "done") return Z_STREAM_END;
+  if (s.phase === "header") {
+    const code = parseHeader(s);
+    if (code !== Z_OK || s.phase === "header") return code;
+  }
+  if (s.phase === "body" && s.pending.length) {
+    const input = s.pending;
+    s.pending = empty;
+    try { s.st!.push(input); } catch { return failStream(s); }
+    const st = s.st!;
+    if (st.s.f && !st.s.l) {
+      const remaining = Math.max(0, st.p.length - (((st.s.p ?? 0) & 7) ? 1 : 0));
+      s.pending = remaining ? st.p.slice(st.p.length - remaining) : empty;
+      s.phase = s.wrapper === "raw" ? "done" : "trailer";
+    }
+  }
+  if (s.phase !== "trailer") return s.phase === "done" ? Z_STREAM_END : Z_OK;
+  const trailerSize = s.wrapper === "gzip" ? 8 : 4;
+  if (s.pending.length < trailerSize) return Z_OK;
+  if (s.wrapper === "gzip") {
+    if (little32(s.pending, 0) !== (s.check >>> 0) || little32(s.pending, 4) !== s.size) return failStream(s);
+  } else {
+    const expected = (s.pending[0] << 24 | s.pending[1] << 16 | s.pending[2] << 8 | s.pending[3]) >>> 0;
+    if (expected !== (s.check >>> 0)) return failStream(s);
+  }
+  s.pending = s.pending.subarray(trailerSize);
+  s.phase = "done";
+  return Z_STREAM_END;
+}
+
+function drain(s: Stream, strm: number): number {
+  let avail = mem.ld32(strm + Z.AVOUT) >>> 0, out = ldp(strm + Z.OUT), wrote = 0;
+  while (avail && s.out.length) {
+    const chunk = s.out[0], take = Math.min(avail, chunk.length);
+    mem.u8.set(chunk.subarray(0, take), out);
+    out += take; avail -= take; wrote += take;
+    if (take === chunk.length) s.out.shift(); else s.out[0] = chunk.subarray(take);
+  }
+  stp(strm + Z.OUT, out); mem.st32(strm + Z.AVOUT, avail);
+  storeUlong(strm + Z.TOUT, loadUlong(strm + Z.TOUT) + wrote);
+  return wrote;
+}
+
+function inflate(strm: number, _flush: number): number {
+  const s = streams.get(strm);
+  if (!s) return Z_STREAM_ERROR;
+  let wrote = drain(s, strm);
+  if (s.out.length) return wrote ? Z_OK : Z_BUF_ERROR;
+  if (s.phase === "error") return s.error;
+  if (s.phase === "done") return Z_STREAM_END;
+
+  const availIn = mem.ld32(strm + Z.AVIN) >>> 0, nextIn = ldp(strm + Z.IN);
+  let consumed = 0, code = Z_OK;
+  if (availIn) {
+    s.pending = append(s.pending, mem.u8.slice(nextIn, nextIn + availIn));
+    code = processPending(s);
+    const phase = s.phase as Phase;
+    const extra = phase === "done" || phase === "error" ? Math.min(availIn, s.pending.length) : 0;
+    consumed = availIn - extra;
+    stp(strm + Z.IN, nextIn + consumed); mem.st32(strm + Z.AVIN, availIn - consumed);
+    storeUlong(strm + Z.TIN, loadUlong(strm + Z.TIN) + consumed);
+    storeUlong(strm + Z.ADLER, s.check);
+  }
+  if (code < Z_OK || code === Z_NEED_DICT) return code;
+  wrote += drain(s, strm);
+  if ((s.phase as Phase) === "done" && !s.out.length) return Z_STREAM_END;
+  return consumed || wrote ? Z_OK : Z_BUF_ERROR;
+}
+
+function decodeZlib(data: Uint8Array): Uint8Array | null {
+  const s = makeStream(15)!;
+  s.pending = data;
+  if (processPending(s) !== Z_STREAM_END) return null;
+  let size = 0;
+  for (const chunk of s.out) size += chunk.length;
+  const result = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of s.out) { result.set(chunk, at); at += chunk.length; }
+  return result;
 }
 
 export function zlibInit(): void {
-  if (PTR === 8) Z = { IN: 0, AVIN: 8, TIN: 16, OUT: 24, AVOUT: 32, TOUT: 40, MSG: 48, STATE: 56 };
+  if (PTR === 8) Z = { IN: 0, AVIN: 8, TIN: 16, OUT: 24, AVOUT: 32, TOUT: 40, MSG: 48, STATE: 56, ADLER: 96 };
+  else Z = { IN: 0, AVIN: 4, TIN: 8, OUT: 12, AVOUT: 16, TOUT: 20, MSG: 24, STATE: 28, ADLER: 48 };
   const M: Record<string, HostFn> = {
-    inflateInit_: (_c, a) => open(a.p(), 15),
-    inflateInit2_: (_c, a) => { const strm = a.p(), wb = a.i(); return open(strm, wb); },
-    inflate: (_c, a) => inflate(a.p()),
-    inflateEnd: (_c, a) => { streams.delete(a.p()); return Z_OK; },
-    inflateReset: (_c, a) => { const strm = a.p(); const s = streams.get(strm); return open(strm, s && s.st instanceof Inflate ? -15 : 15); },
+    inflateInit_: (_c, a) => { const strm = a.p(); a.str(); a.i(); return open(strm, 15); },
+    inflateInit2_: (_c, a) => { const strm = a.p(), bits = a.i(); a.str(); a.i(); return open(strm, bits); },
+    inflate: (_c, a) => inflate(a.p(), a.i()),
+    inflateEnd: (_c, a) => streams.delete(a.p()) ? Z_OK : Z_STREAM_ERROR,
+    inflateReset: (_c, a) => { const strm = a.p(), s = streams.get(strm); return s ? open(strm, s.windowBits) : Z_STREAM_ERROR; },
     inflateSetDictionary: () => Z_STREAM_ERROR,
     crc32: (_c, a) => { const crc = a.i(), p = a.p(), n = a.u(); if (!p) return 0; return crc32(crc, mem.u8.subarray(p, p + n)); },
     adler32: (_c, a) => { const ad = a.i(), p = a.p(), n = a.u(); if (!p) return 1; return adler32(ad, mem.u8.subarray(p, p + n)); },
     zlibVersion: () => zver,
     zError: () => zver,
     uncompress: (_c, a) => {
-      const dst = a.p(), dstLen = a.p(), src = a.p(), n = a.u();
-      try {
-        const out = new Unzlib();
-        const chunks: Uint8Array[] = [];
-        out.ondata = (d) => chunks.push(d);
-        out.push(mem.u8.slice(src, src + n), true);
-        let total = 0; for (const c of chunks) total += c.length;
-        if (total > (mem.ld32(dstLen) >>> 0)) return Z_BUF_ERROR;
-        let o = dst; for (const c of chunks) { mem.u8.set(c, o); o += c.length; }
-        stp(dstLen, total);
-        return Z_OK;
-      } catch { return Z_DATA_ERROR; }
+      const dst = a.p(), dstLen = a.p(), src = a.p(), length = a.u();
+      const out = decodeZlib(mem.u8.slice(src, src + length));
+      if (!out) return Z_DATA_ERROR;
+      if (out.length > loadUlong(dstLen)) return Z_BUF_ERROR;
+      mem.u8.set(out, dst); storeUlong(dstLen, out.length);
+      return Z_OK;
     },
   };
   hostLib("libz.so", M);
