@@ -5,7 +5,7 @@ import { device } from "../shell/config";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { vcall, javaFormat, newObj } from "../jvm/natives/jlang";
 import { newArrayList, newLinkedHashSet, mkIter, type JList } from "../jvm/natives/jutil";
-import { vfs, mkFile, JFile } from "../jvm/natives/jio";
+import { vfs, mkFile, JFile, apkPath } from "../jvm/natives/jio";
 const privDir = (p: string): JFile => { vfs.mkdir(p); return mkFile(p); };
 import { type Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, rvColor, rvDimen, rvInt, rvString, resString, themeOf, themeByName } from "./res";
 import { JResources, JAssetManager, mkAssetFd } from "./resnative";
@@ -36,6 +36,8 @@ export interface AppHost {
   themeResId: number;
   iconRes: number;
   zip: Record<string, Uint8Array>;
+  /** the names of the config/feature splits installed beside the base, empty for a plain apk */
+  splits: string[];
   application: JApplication | null;
   jresources: JResources;
   statusBarColor: number;
@@ -789,8 +791,14 @@ function getAppInfo(host: AppHost): JApplicationInfo {
   if (!cachedAppInfo) {
     cachedAppInfo = new JApplicationInfo();
     cachedAppInfo.packageName = host.pkg;
-    cachedAppInfo.sourceDir = "/data/app/base.apk";
-    cachedAppInfo.publicSourceDir = "/data/app/base.apk";
+    cachedAppInfo.sourceDir = apkPath();
+    cachedAppInfo.publicSourceDir = apkPath();
+    // AOSP leaves these null for a base-only install, and library loaders null-check them
+    if (host.splits.length) {
+      cachedAppInfo.splitNames = host.splits.slice();
+      cachedAppInfo.splitSourceDirs = host.splits.map((n) => apkPath(n));
+      cachedAppInfo.splitPublicSourceDirs = cachedAppInfo.splitSourceDirs.slice();
+    }
     cachedAppInfo.dataDir = `/data/data/${host.pkg}`;
     cachedAppInfo.processName = host.pkg;
     cachedAppInfo.theme = host.themeResId;
@@ -805,6 +813,7 @@ function getAppInfo(host: AppHost): JApplicationInfo {
 }
 class JPackageInfo extends JObj {
   packageName = ""; versionName = "1.0"; versionCode = 1; longVersionCode = 1n;
+  splitNames: string[] | null = null;
   applicationInfo: JApplicationInfo | null = null;
   firstInstallTime = 0n; lastUpdateTime = 0n;
   signatures: unknown = null; signingInfo: unknown = null;
@@ -846,7 +855,7 @@ function reqFeatures(): unknown[] | null {
 rt.register({
   name: "android/content/pm/PackageInfo", ctor: JPackageInfo, ifaces: ["android/os/Parcelable"],
   fields: {
-    packageName: "packageName", versionName: "versionName", versionCode: "versionCode",
+    packageName: "packageName", versionName: "versionName", versionCode: "versionCode", splitNames: "splitNames",
     applicationInfo: "applicationInfo", firstInstallTime: "firstInstallTime", lastUpdateTime: "lastUpdateTime",
     signatures: "signatures", signingInfo: "signingInfo", reqFeatures: "reqFeatures",
     activities: "activities", services: "services", providers: "providers",
@@ -968,6 +977,7 @@ rt.register({
       pi.versionCode = (manifestRoot && attr(manifestRoot, "versionCode")?.data) ?? 1;
       pi.longVersionCode = BigInt(pi.versionCode);
       pi.applicationInfo = appHost ? getAppInfo(appHost) : null;
+      pi.splitNames = pi.applicationInfo?.splitNames ?? null;
       pi.firstInstallTime = pi.lastUpdateTime = installTime(pkg);
       pi.signatures = signatures();
       pi.signingInfo = new (rt.link("android/content/pm/SigningInfo").ctor)();

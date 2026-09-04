@@ -4,6 +4,10 @@ import { rt, JObj, type NativeSpec } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray } from "../abi";
 import { vcall, stringHash, mkEnumSet, javaFormat } from "./jlang";
 
+/** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
+ *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
+export const apkPath = (split?: string) => split ? `/data/app/split_${split}.apk` : "/data/app/base.apk";
+
 // marker interface — apps implement this to opt into custom serialization; writeExternal/
 // readExternal dispatch isn't needed by anything exercised so far, so this just stops the
 // interface from auto-stubbing when an app class implements it directly (see AGENTS.md

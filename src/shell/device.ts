@@ -3,7 +3,7 @@
 import { dexesIn } from "../jvm/dex";
 import { rt } from "../jvm/runtime";
 import { analyseProgram } from "../jvm/analyse";
-import { vfs } from "../jvm/natives/jio";
+import { vfs, apkPath } from "../jvm/natives/jio";
 import { zipTree } from "../jvm/natives/jzip";
 import { vcall, curThread, mainThread, setCurThread, newObj } from "../jvm/natives/jlang";
 import { Arsc } from "../android/arsc";
@@ -55,26 +55,41 @@ export function contentTop(): number {
  *  apk: a base and its config/feature splits. Merge them into the one tree the rest of the
  *  boot expects — the base wins every conflict, exactly as the base's dex is first on a
  *  device's class path, and each split's dex keeps a distinct name so both survive. */
-function openInstall(bytes: Uint8Array): Record<string, Uint8Array> {
+interface Install {
+  zip: Record<string, Uint8Array>;
+  /** the base apk's own bytes: what sourceDir names and what ZipFile(sourceDir) must open */
+  base: Uint8Array;
+  splits: { name: string; bytes: Uint8Array }[];
+}
+function openInstall(bytes: Uint8Array): Install {
   const outer = zipTree(bytes);
-  if (outer["AndroidManifest.xml"]) return outer;
+  if (outer["AndroidManifest.xml"]) return { zip: outer, base: bytes, splits: [] };
   const apks = Object.keys(outer).filter((n) => n.endsWith(".apk"));
   if (!apks.length) throw new Error("no AndroidManifest.xml and no apks inside: not an apk or a split install");
-  const opened = apks.map((n) => [n, outer[n]] as const).map(([n, b]) => [n, b, zipTree(b)] as const);
-  const base = opened.find(([, , z]) => z["AndroidManifest.xml"] && !attrStr(parseAXML(z["AndroidManifest.xml"]), "split"));
+  const opened = apks.map((n) => outer[n]).map((b) => {
+    const z = zipTree(b);
+    const m = z["AndroidManifest.xml"];
+    return { bytes: b, zip: z, split: m ? attrStr(parseAXML(m), "split") : null, hasManifest: !!m };
+  });
+  const base = opened.find((o) => o.hasManifest && !o.split);
   if (!base) throw new Error(`split install has no base apk among ${apks.join(", ")}`);
-  const merged = base[2];
+  const merged = base.zip;
+  const splits: Install["splits"] = [];
   let extra = 0;
-  for (const [name, b, z] of opened) {
-    if (z === merged) continue;
-    zipTree(b, merged, (path) =>
+  for (const o of opened) {
+    if (o === base) continue;
+    zipTree(o.bytes, merged, (path) =>
       path === "AndroidManifest.xml" || path === "resources.arsc" || path.startsWith("META-INF/") ? null
         // a split's own classes.dex would collide with the base's, and both have to load
         : /^classes\d*\.dex$/.test(path) ? `classes${1000 + extra++}.dex` : path);
-    console.log("[webdroid] split", name, Object.keys(z).length, "entries");
+    // a split with no manifest is not one Android would have installed, but it is in the file
+    // and its entries are already merged; name it after nothing rather than invent one
+    if (o.split) splits.push({ name: o.split, bytes: o.bytes });
+    console.log("[webdroid] split", o.split ?? "(unnamed)", Object.keys(o.zip).length, "entries");
   }
-  return merged;
+  return { zip: merged, base: base.bytes, splits };
 }
+
 
 export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, apkFile = ""): Promise<BootedApp> {
   // The android package registers android.R.* and fills the widgets' attr-id tables, so it has to
@@ -85,9 +100,13 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
   // far as it is concerned — for the whole session, since it caches the answer.
   const [fwPkg] = await Promise.all([loadFramework(), restoreRoots()]);
   onStatus("unpacking apk…");
-  const zip = openInstall(bytes);
+  const install = openInstall(bytes);
+  const zip = install.zip;
   rt.classpath = zip;
-  vfs.write("/data/app/base.apk", bytes);
+  // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its
+  // own .so with ZipFile(ApplicationInfo.sourceDir) has to find lib/, not a list of apks.
+  vfs.write(apkPath(), install.base);
+  for (const sp of install.splits) vfs.write(apkPath(sp.name), sp.bytes);
   onStatus("loading dex…");
   // The apk goes in first: loadDex is first-wins by name, so an app shipping its own copy of a
   // framework class keeps it, as on a device where the app's dex is ahead on the class path.
@@ -172,6 +191,7 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
 
   const host: AppHost = {
     res, theme, pkg, apkFile, appLabel: label, themeResId, iconRes: iconAttr?.data ?? 0, zip,
+    splits: install.splits.map((sp) => sp.name),
     application: null, jresources: jres,
     statusBarColor: -16777216, navBarColor: -16777216,
     launch: async (component, intent) => { await launchActivity(component, intent); },

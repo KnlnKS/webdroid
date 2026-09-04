@@ -195,8 +195,6 @@ defineException("java/util/zip/ZipException", "java/io/IOException");
 // ── ZipFile / ZipEntry: index the central directory, inflate an entry only when it is read
 interface ZEntry { name: string; method: number; csize: number; size: number; time: number; off: number; }
 const UNKNOWN: ZEntry = { name: "", method: -1, csize: -1, size: -1, time: -1, off: -1 };
-/** what ApplicationInfo.sourceDir answers (android/app.ts): the apk exists only as the unpacked classpath */
-const SOURCE_DIR = "/data/app/base.apk";
 function dosTime(date: number, time: number): number {
   return new Date(1980 + (date >> 9), ((date >> 5) & 15) - 1, date & 31, time >> 11, (time >> 5) & 63, (time & 31) * 2).getTime();
 }
@@ -276,12 +274,6 @@ function openZip(this: JZipFile, path: string) {
   this.name = vfs.norm(path);
   const bytes = vfs.read(path);
   if (bytes) { this.entries = centralDir(bytes); this.data = (e) => entryBytes(bytes, e); return; }
-  // the app's own package is already unpacked; what only the central directory knows stays -1
-  if (this.name === SOURCE_DIR) {
-    for (const name of Object.keys(rt.classpath)) this.entries.set(name, { ...UNKNOWN, name });
-    this.data = (e) => rt.classpath[e.name];
-    return;
-  }
   throw rt.mkThrowable("java/io/FileNotFoundException", path + " (No such file or directory)");
 }
 const openZipFile = function (this: JZipFile, f: JFile) { openZip.call(this, f.path); };
