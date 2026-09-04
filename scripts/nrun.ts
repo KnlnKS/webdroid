@@ -9,7 +9,6 @@ import { loadNativeLib } from "../src/native/loader";
 import { calledMissing, unresolved, hostTrace } from "../src/native/host";
 import { jniMissing, registered } from "../src/native/jni";
 import { blockStats, NativeFault } from "../src/native/cpu";
-import { symbolizePc } from "../src/native/dl";
 import { perf } from "../src/perf";
 
 const [apk, lib] = process.argv.slice(2);
@@ -24,7 +23,6 @@ try {
   console.log("loaded", lib, "in", (performance.now() - t0).toFixed(0), "ms");
 } catch (e) {
   console.error("FAULT", e instanceof NativeFault ? e.message : e);
-  if (e instanceof NativeFault) console.error("ring:", e.ring.slice(-16).map((p) => symbolizePc(p)).join("\n  "));
   if (hostTrace.on) console.error("host trace:\n  " + hostTrace.ring.slice(-40).join("\n  "));
 }
 console.log("registered natives:", registered.map((r) => `${r.cls.split("/").pop()}.${r.name}${r.sig}`).join(" "));

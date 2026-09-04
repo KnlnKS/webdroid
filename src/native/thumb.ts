@@ -4,12 +4,11 @@
 
 import { mem } from "./mem";
 import { PAGE_SIZE, PAGE_SHIFT } from "./abi";
-import { type Ins, type Fl, N, Z, C, ALL, COND, COND_READS, NZ, ADDF, SUBF, ADCF, SBCF, assemble, hoistRegs, inlineMem, selfLoop } from "./flags";
+import { type Ins, type Fl, C, COND, COND_READS, hex, maskOf, NZ, ADDF, SUBF, ADCF, SBCF, assemble, hoistRegs, inlineMem, selfLoop } from "./flags";
 
 let MAX_BLOCK = 256;
 /** 1 = single-instruction blocks (the step tracer) */
 export function setMaxBlock(n: number): void { MAX_BLOCK = n; }
-const hex = (n: number) => "0x" + (n >>> 0).toString(16);
 const NZC: Fl = { ...NZ, c: "c.c=c.sc;" };
 const RSB0: Fl = { ...NZ, c: "c.c=(0>>>0)>=(t>>>0)?1:0;", v: "c.v=((0^t)&(0^v))>>>31;" };
 
@@ -19,7 +18,7 @@ const retK = (k: number, target: string) => { const i = slot++; return `{c.ic+=$
 function emit(pc: number, h: number, out: Ins[], k: number): number {
   const ret = (target: string) => retK(k, target);
   const fault = (what: string) => `r[15]=${pc};c.fault(${JSON.stringify(what + " " + hex(h))});`;
-  const push = (code: string, fl: Fl | null = null, reads = 0, writes = fl ? (fl.v ? ALL : fl.c ? N | Z | C : N | Z) : 0) => out.push({ code, fl, reads, writes });
+  const push = (code: string, fl: Fl | null = null, reads = 0, writes = maskOf(fl)) => out.push({ code, fl, reads, writes });
   const top = h >>> 12;
   const rd = h & 7, rn = (h >>> 3) & 7, rm = (h >>> 6) & 7;
   switch (top) {

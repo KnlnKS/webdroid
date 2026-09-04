@@ -1,6 +1,6 @@
 // android.widget.* — layouts + text/image widgets.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf } from "../jvm/runtime";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { vcall, mkEnumSet } from "../jvm/natives/jlang";
 import { usLocale } from "../jvm/natives/jutil";
@@ -13,8 +13,7 @@ import {
   MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, makeSpec, MATCH_PARENT, WRAP_CONTENT,
   childMeasureSpec, measureChildWithMargins, measureView, layoutView,
   resolveSizeAndState, defaultSize, invalidate, requestLayout, restVelocity, initViewFromCtx,
-  lpFromAttrs, AID, findById, JMotionEvent, uiState, guardCall, setFocusHook,
-} from "./view";
+  lpFromAttrs, AID, findById, JMotionEvent, uiState, guardCall, setFocusHook, trackVelocity, SCROLL_WEIGHT, FLING } from "./view";
 import { JAttrSet, attrTable, onFramework, obtainStyled, resolveStyleValue, rvDimen, rvColor, rvInt, rvString, rvFloat, type RV, type Resources } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
@@ -348,7 +347,7 @@ rt.register({
   name: "android/widget/TableLayout", ctor: JTableLayout, sup: "android/widget/LinearLayout",
   methods: {
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JTableLayout, c: unknown, set: JAttrSet | null) {
-      await (linearMethods["<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V"] as any).call(this, c, set);
+      await callSelf(linearMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
       this.orientation = 1;
       const scId = AID("stretchColumns");
       const sc = scId ? set?.node?.attrs.find((a) => a.resId === scId) : undefined;
@@ -385,7 +384,7 @@ rt.register({
   name: "android/widget/TableRow", ctor: JTableRow, sup: "android/widget/LinearLayout",
   methods: {
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JTableRow, c: unknown, set: JAttrSet | null) {
-      await (linearMethods["<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V"] as any).call(this, c, set);
+      await callSelf(linearMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
       this.orientation = 0;
     },
     "onMeasure(II)V": async function (this: JTableRow, wSpec: number, hSpec: number) {
@@ -407,18 +406,8 @@ rt.register({
     },
   },
 });
-rt.register({
-  name: "android/widget/TableRow$LayoutParams", ctor: class extends JLinearLP {}, sup: "android/widget/LinearLayout$LayoutParams",
-  methods: {
-    "<init>()V": function (this: JLinearLP) { this.width = MATCH_PARENT; this.height = WRAP_CONTENT; },
-    "<init>(II)V": function (this: JLinearLP, w: number, h: number) { this.width = w; this.height = h; },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JLinearLP, c: unknown, set: JAttrSet) {
-      lpFromAttrs(this, set.res, set);
-    },
-  },
-});
-rt.register({
-  name: "android/widget/TableLayout$LayoutParams", ctor: class extends JLinearLP {}, sup: "android/widget/LinearLayout$LayoutParams",
+for (const owner of ["TableRow", "TableLayout"]) rt.register({
+  name: `android/widget/${owner}$LayoutParams`, ctor: class extends JLinearLP {}, sup: "android/widget/LinearLayout$LayoutParams",
   methods: {
     "<init>()V": function (this: JLinearLP) { this.width = MATCH_PARENT; this.height = WRAP_CONTENT; },
     "<init>(II)V": function (this: JLinearLP, w: number, h: number) { this.width = w; this.height = h; },
@@ -517,7 +506,7 @@ const scrollMethods: NativeSpec["methods"] = {
     if (a === 2) {
       const d = this.horizontal ? this.lastX - ev.x : this.lastY - ev.y;
       const dt = Math.max(1, ev.eventTime - this.lastMoveT);
-      this.velo = 0.8 * this.velo + 0.2 * (d / dt * 16);
+      this.velo = trackVelocity(this.velo, d, dt);
       this.lastMoveT = ev.eventTime;
       if (!this.dragging) {
         const dd = this.horizontal ? Math.abs(ev.x - this.downX) : Math.abs(ev.y - this.downY);
@@ -533,8 +522,8 @@ const scrollMethods: NativeSpec["methods"] = {
       return 1;
     }
     if (a === 1 || a === 3) {
-      let v = restVelocity(this.velo, 0.8, ev.eventTime - this.lastMoveT);
-      if (this.dragging && Math.abs(v) > 2) {
+      let v = restVelocity(this.velo, SCROLL_WEIGHT, ev.eventTime - this.lastMoveT);
+      if (this.dragging && Math.abs(v) > FLING.arm) {
         const anim = () => {
           if (this.flingAnim !== anim) return false;
           if (this.horizontal) this.scrollX += v;
@@ -542,9 +531,9 @@ const scrollMethods: NativeSpec["methods"] = {
           const before = this.horizontal ? this.scrollX : this.scrollY;
           this.clampScroll();
           const after = this.horizontal ? this.scrollX : this.scrollY;
-          v *= 0.95;
+          v *= FLING.decay;
           invalidate();
-          return Math.abs(v) > 0.7 && before === after;
+          return Math.abs(v) > FLING.stop && before === after;
         };
         this.flingAnim = anim;
         uiState.animHooks.add(anim);
@@ -723,7 +712,9 @@ const tvAttr = attrTable(
   "minLines", "lines", "singleLine", "ellipsize", "lineSpacingExtra", "lineSpacingMultiplier",
   "drawableLeft", "drawableTop", "drawableRight", "drawableBottom", "drawablePadding", "drawableStart",
   "drawableEnd", "fontFamily", "textAllCaps", "textColorHint", "inputType", "letterSpacing", "maxLength",
-  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth");async function applyTextAppearance(tv: JTextView, res: Resources, styleId: number) {
+  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth");
+
+async function applyTextAppearance(tv: JTextView, res: Resources, styleId: number) {
   if (!styleId) return;
   const look = (name: string) => resolveStyleValue(res, tv.theme, res.styleLookup(styleId, AID(name)));
   const ts = look("textSize");
@@ -844,7 +835,7 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setText(I)V": async function (this: JTextView, id: number) {
     const s = this.jres ? rvString(this.jres, this.jres.resolveRefs({ t: TV.REFERENCE, d: id })) ?? "" : "";
-    await guardCall((this as any)[M("setText", "(Ljava/lang/CharSequence;)V")], this, s);
+    await guardCall(this, M("setText", "(Ljava/lang/CharSequence;)V"), s);
   },
   "setText(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V": async function (this: JTextView, cs: unknown) {
     this.rawText = cs;
@@ -957,7 +948,7 @@ const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setCompoundDrawablesRelative(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
   "setCompoundDrawablesRelativeWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
   "setCompoundDrawablesRelativeWithIntrinsicBounds(IIII)V": function (this: JTextView, l: number, t: number, r: number, b: number) {
-    return (textViewMethods["setCompoundDrawablesWithIntrinsicBounds(IIII)V"] as any).call(this, l, t, r, b);
+    return callSelf(textViewMethods, "setCompoundDrawablesWithIntrinsicBounds(IIII)V", this, l, t, r, b);
   },
   "setCompoundDrawableTintList(Landroid/content/res/ColorStateList;)V": function (this: JTextView, csl: JColorStateList | null) {
     this.drawableTint = csl;

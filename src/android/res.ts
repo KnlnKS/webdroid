@@ -2,6 +2,10 @@
 // resource id. Implements the full attribute-resolution cascade (XML → style → defStyle → theme).
 
 import { Arsc } from "./arsc";
+import { TV, parseAXML, type XmlNode } from "./axml";
+import { JObj } from "../jvm/runtime";
+import { JDisplayMetrics, JTypedValue, complexToPx } from "./os";
+import { mangleMethod, intBitsToFloat } from "../jvm/abi";
 
 let fwPkg: Arsc | null = null;
 const aidMemo = new Map<string, number>();
@@ -46,10 +50,6 @@ export function setFramework(a: Arsc): void {
   aidMemo.clear();
   for (const fill of deferred) fill();
 }
-import { TV, parseAXML, type XmlNode } from "./axml";
-import { JObj } from "../jvm/runtime";
-import { JDisplayMetrics, JTypedValue, complexToPx } from "./os";
-import { mangleMethod } from "../jvm/abi";
 
 const M_getTheme = mangleMethod("getTheme", "()Landroid/content/res/Resources$Theme;");
 
@@ -57,10 +57,9 @@ const M_getTheme = mangleMethod("getTheme", "()Landroid/content/res/Resources$Th
 export interface RV { t: number; d: number; s?: string }
 export const T_PX = 0xfe, T_STR = 0xfd;
 const NULL_RV: RV = { t: TV.NULL, d: 0 };
-const fbuf = new DataView(new ArrayBuffer(4));
 /** binary Res_value → RV with FLOAT bits decoded to a JS number */
 export function normRV(v: RV): RV {
-  if (v.t === TV.FLOAT) { fbuf.setInt32(0, v.d); return { t: TV.FLOAT, d: fbuf.getFloat32(0), s: v.s }; }
+  if (v.t === TV.FLOAT) return { t: TV.FLOAT, d: intBitsToFloat(v.d), s: v.s };
   return v;
 }
 

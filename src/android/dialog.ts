@@ -1,7 +1,7 @@
 // android.app.Dialog / AlertDialog rendered as overlays (scrim + centered card).
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
-import { mangleMethod } from "../jvm/abi";
+import { rt, JObj, type NativeSpec, callSelf } from "../jvm/runtime";
+import { mangleMethod, jmethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { JView, JFrameLP, JLinearLP, attachView, requestLayout, AID, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, specSize, findById, guardCall, dispatchAttached, dispatchDetached } from "./view";
 import { JFrameLayout, JLinearLayout, JTextView, themeAccent } from "./widget";
@@ -17,6 +17,7 @@ import { csText } from "./text";
 import type { JWindow } from "./app";
 
 const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
+const M_onCreate = mangleMethod("onCreate", "(Landroid/os/Bundle;)V");
 const M_getPadding = mangleMethod("getPadding", "(Landroid/graphics/Rect;)Z");
 
 /**
@@ -70,7 +71,7 @@ class DialogRoot extends JFrameLayout {
     const bg = win?.bgSet ? win.bg : null;
     if (!bg) { this.bgPad = [0, 0, 0, 0]; return; }
     const r = new JRect();
-    await guardCall((bg as unknown as Record<string, unknown>)[M_getPadding], bg, r);
+    await guardCall(bg, M_getPadding, r);
     this.bgPad = [r.left, r.top, r.right, r.bottom];
   }
   dialog: JDialog | null = null;
@@ -157,7 +158,7 @@ rt.register({
         const b = bg.bounds;
         b.left = this.cardLeft; b.top = this.cardTop;
         b.right = this.cardLeft + this.cardW; b.bottom = this.cardTop + this.cardH;
-        await guardCall((bg as any)[M_drawableDraw], bg, cv);
+        await guardCall(bg, M_drawableDraw, cv);
         ctx.restore();
       }
     },
@@ -263,7 +264,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
     v.lp = lp;
-    (dialogMethods["setContentView(Landroid/view/View;)V"] as any).call(this, v);
+    callSelf(dialogMethods, "setContentView(Landroid/view/View;)V", this, v);
   },
   "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
     v.lp = lp;
@@ -276,8 +277,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     const root = this.ensureRoot();
     await loadCardBg(root);
     addOverlay(root, 0, 0, false, () => vcall(this, "onBackPressed", "()V"));
-    const M_onCreate = mangleMethod("onCreate", "(Landroid/os/Bundle;)V");
-    const f = (this as any)[M_onCreate];
+    const f = jmethod(this, M_onCreate);
     if (f && !(this as any).$created) {
       (this as any).$created = true;
       try {
@@ -488,7 +488,7 @@ const alertMethods: NativeSpec["methods"] = {
       this.built = true;
       await buildAlertContent(this);
     }
-    await (dialogMethods["show()V"] as any).call(this);
+    await callSelf(dialogMethods, "show()V", this);
   },
   "setMessage(Ljava/lang/CharSequence;)V": async function (this: JAlertDialog, m: unknown) { this.message = await str(this.jctx?.$host, m); },
   "setView(Landroid/view/View;)V": function (this: JAlertDialog, v: JView) { this.customView = v; },
@@ -530,7 +530,7 @@ const builderMethods: NativeSpec["methods"] = {
   "setIcon(I)Landroid/app/AlertDialog$Builder;": function (this: JAlertBuilder) { return this; },
   "create()Landroid/app/AlertDialog;": function (this: JAlertBuilder) { return this.d; },
   "show()Landroid/app/AlertDialog;": async function (this: JAlertBuilder) {
-    await (alertMethods["show()V"] as any).call(this.d);
+    await callSelf(alertMethods, "show()V", this.d);
     return this.d;
   },
 };
@@ -575,7 +575,7 @@ rt.register({ name: "android/app/ProgressDialog", ctor: class extends JAlertDial
         d.jctx = c;
         d.titleStr = await str(c?.$host, t);
         d.message = await str(c?.$host, m);
-        await (alertMethods["show()V"] as any).call(d);
+        await callSelf(alertMethods, "show()V", d);
         return d;
       },
   } });

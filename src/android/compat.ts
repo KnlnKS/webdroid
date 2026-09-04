@@ -288,7 +288,7 @@ const resolveDim = (type: number, v: number, size: number, parent: number) =>
   type === ABSOLUTE ? v : v * (type === REL_SELF ? size : parent);
 
 async function fire(a: JAnimation, v: JView | null, what: string) {
-  if (v) await guardCall((v as any)[mangleMethod("onAnimation" + what, "()V")], v);
+  if (v) await guardCall(v, mangleMethod("onAnimation" + what, "()V"));
   if (a.listener) await vcall(a.listener, "onAnimation" + what, "(Landroid/view/animation/Animation;)V", a);
 }
 

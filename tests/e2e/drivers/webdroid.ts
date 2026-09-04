@@ -3,7 +3,7 @@
 import { mkdir } from "node:fs/promises";
 import { chromium, type Browser, type Page } from "playwright";
 import { PINNED_CLOCK_MS, deviceScreen, screenParam, type Screen, type UiNode } from "../types";
-import { sleep, sha1, BASE_URL } from "../lib/util";
+import { sleep, sha1, BASE_URL, settleOn } from "../lib/util";
 
 
 // WEBDROID_BYTECODE=android/graphics/,android/content/res/ scores a provenance cut: the same
@@ -32,9 +32,6 @@ declare global {
 /** Hard stop so a step that repaints forever cannot fill the disk. */
 const MAX_FRAMES_PER_STEP = 240;
 
-/** The flags every measurement has to share: software GL, no hinting or LCD subpixels, no
- *  device-scale surprise. A script that launches its own browser without these is not
- *  comparable with the goldens — text metrics move first. */
 const LAUNCH_ARGS = [
   "--use-gl=angle", "--use-angle=swiftshader",
   "--font-render-hinting=none", "--disable-lcd-text",
@@ -219,46 +216,10 @@ export class WebdroidDriver {
    */
   async settle({ stableFrames = 4, intervalMs = 250, timeoutMs = 20_000 } = {}):
       Promise<{ png: Buffer; timedOut: boolean; wedged: boolean }> {
-    const t0 = Date.now();
-    let last = "", stable = 0;
-    // A focused EditText blinks its caret on a 530ms cycle, so those screens never produce N
-    // identical frames however long we wait. Treat a settled OSCILLATION between a small number
-    // of frames as settled too, and return the most frequent one so the capture is deterministic
-    // rather than whichever phase we happened to sample.
-    const win = stableFrames * 2;
-    const recent: { h: string; png: Buffer }[] = [];
-    /** the window holds exactly two frames, each seen more than once: a steady blink */
-    const oscillation = () => {
-      if (recent.length < win) return null;
-      const tally = new Map<string, { png: Buffer; n: number }>();
-      for (const r of recent) {
-        const e = tally.get(r.h);
-        if (e) e.n++; else tally.set(r.h, { png: r.png, n: 1 });
-      }
-      if (tally.size !== 2) return null;
-      const [a, b] = [...tally.values()];
-      if (a.n < 2 || b.n < 2) return null;
-      return (a.n >= b.n ? a : b).png;
-    };
-    let png = await this.capture();
-    while (Date.now() - t0 < timeoutMs) {
-      await sleep(intervalMs);
-      png = await this.capture();
-      const h = sha1(png);
-      recent.push({ h, png });
-      if (recent.length > win) recent.shift();
-      stable = h === last ? stable + 1 : 0;
-      last = h;
-      const osc = oscillation();
-      if (osc) return { png: osc, timedOut: false, wedged: !(await this.alive(1500)) };
-      if (stable >= stableFrames) {
-        // Stable pixels alone prove nothing: confirm the main queue is still draining, so a
-        // hung app is reported as hung instead of silently passing as "settled".
-        const ok = await this.alive(1500);
-        return { png, timedOut: false, wedged: !ok };
-      }
-    }
-    return { png, timedOut: true, wedged: !(await this.alive(1500)) };
+    const r = await settleOn(() => this.capture(), { stableFrames, intervalMs, timeoutMs });
+    // Stable pixels alone prove nothing: confirm the main queue is still draining, so a hung
+    // app is reported as hung instead of silently passing as "settled".
+    return { ...r, wedged: !(await this.alive(1500)) };
   }
 
   /** One frame now, plus the liveness check settle() does. For screens that never settle. */

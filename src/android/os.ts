@@ -376,6 +376,10 @@ rt.register({ name: "android/os/PersistableBundle", ctor: class extends JBundle 
   ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], methods: bundleMethods });
 
 // Parcelable/Parcel markers
+export const PARCELABLE = {
+  "describeContents()I": () => 0,
+  "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+} as const;
 rt.register({ name: "android/os/Parcelable", ctor: class extends JObj {} });
 rt.register({ name: "android/os/Parcelable$Creator", ctor: class extends JObj {} });
 rt.register({ name: "android/os/Parcel", ctor: class extends JObj {} });
@@ -712,7 +716,7 @@ rt.register({
     "getDimension(Landroid/util/DisplayMetrics;)F": function (this: JTypedValue, dm: JDisplayMetrics) {
       return complexToPx(this.data, dm);
     },
-    "getFloat()F": function (this: JTypedValue) { const s = scratchF; s.setUint32(0, this.data); return s.getFloat32(0); },
+    "getFloat()F": function (this: JTypedValue) { return intBitsToFloat(this.data); },
     // COMPLEX_UNIT_FRACTION scales the base, FRACTION_PARENT the parent's base
     "getFraction(FF)F": function (this: JTypedValue, base: number, pbase: number) {
       return ((this.data & 0xf) === 0 ? base : pbase) * complexToPx(this.data & ~0xf, NO_DM);
@@ -723,7 +727,6 @@ rt.register({
   },
 });
 const NO_DM = { density: 1, scaledDensity: 1 };
-const scratchF = new DataView(new ArrayBuffer(4));
 export function complexToPx(data: number, dm: { density: number; scaledDensity: number }): number {
   const unit = data & 0xf;
   const mantissa = (data & 0xffffff00) | 0; // signed
@@ -742,6 +745,7 @@ export function complexToPx(data: number, dm: { density: number; scaledDensity: 
 
 // ── Choreographer (frame callbacks; shell drains queue each rAF)
 import { uiState } from "./view";
+import { intBitsToFloat } from "../jvm/abi";
 class JChoreographer extends JObj {}
 const theChoreographer = new JChoreographer();
 rt.register({

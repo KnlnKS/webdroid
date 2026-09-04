@@ -1,8 +1,8 @@
 // android.graphics.drawable.* — Drawable hierarchy, XML inflation, 9-patch, vectors.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf } from "../jvm/runtime";
 import { vcall, mkEnumSet } from "../jvm/natives/jlang";
-import { mangleMethod } from "../jvm/abi";
+import { mangleMethod, jmethod, intBitsToFloat } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, insetsOf } from "./graphics";
 import { device } from "../shell/config";
 import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, normRV } from "./res";
@@ -54,7 +54,7 @@ function setBounds(this: JDrawable, l: number, t: number, r: number, b: number) 
   const bd = this.bounds;
   if (bd.left === l && bd.top === t && bd.right === r && bd.bottom === b) return;
   bd.left = l; bd.top = t; bd.right = r; bd.bottom = b;
-  const f = (this as any)[M_onBoundsChange];
+  const f = jmethod(this, M_onBoundsChange);
   const res = f ? f.call(this, bd) : onBoundsChangeAll(this);
   if (res instanceof Promise) return res;
 }
@@ -97,7 +97,7 @@ const drawableMethods: NativeSpec["methods"] = {
     // AOSP: every onStateChange that reports a visual change invalidates (StateListDrawable's
     // selectDrawable, RippleDrawable's setRippleActive); the callback is how a Compose ripple
     // host learns to re-record its layer, so a silent state change leaves a pressed ripple stuck.
-    if (!await (this as any)[M_onStateChange].call(this, st)) return 0;
+    if (!await jmethod(this, M_onStateChange)!.call(this, st)) return 0;
     invalidateSelf.call(this);
     return 1;
   },
@@ -108,7 +108,7 @@ const drawableMethods: NativeSpec["methods"] = {
   "setLevel(I)Z": function (this: JDrawable, l: number) {
     if (this.level === l) return 0;
     this.level = l;
-    return (this as any)[M_onLevelChange].call(this, l);
+    return jmethod(this, M_onLevelChange)!.call(this, l);
   },
   "getLevel()I": function (this: JDrawable) { return this.level; },
   "setCallback(Landroid/graphics/drawable/Drawable$Callback;)V": function (this: JDrawable, cb: unknown) { this.callback = cb; },
@@ -801,7 +801,7 @@ rt.register({
     "<init>(Landroid/graphics/drawable/Drawable;)V": wrapSet,
     "setDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JDrawableWrapper, d: JDrawable | null) { wrapSet.call(this, d); invalidateSelf.call(this); },
     "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableWrapper) { return this.dr; },
-    "draw(Landroid/graphics/Canvas;)V": function (this: JDrawableWrapper, cv: JCanvas) { if (this.dr) return (this.dr as any)[M_drawD].call(this.dr, cv); },
+    "draw(Landroid/graphics/Canvas;)V": function (this: JDrawableWrapper, cv: JCanvas) { if (this.dr) return jmethod(this.dr, M_drawD)!.call(this.dr, cv); },
     "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JDrawableWrapper, r: JRect) { if (this.dr) return setBounds.call(this.dr, r.left, r.top, r.right, r.bottom); },
     "onStateChange([I)Z": function (this: JDrawableWrapper, st: Int32Array) { return this.dr ? vcall(this.dr, "setState", "([I)Z", st) : 0; },
     "onLevelChange(I)Z": function (this: JDrawableWrapper, l: number) { return this.dr ? vcall(this.dr, "setLevel", "(I)Z", l) : 0; },
@@ -869,7 +869,7 @@ const shapeMethods: NonNullable<NativeSpec["methods"]> = {
     w = Math.max(0, w); h = Math.max(0, h);
     if (this.w === w && this.h === h) return;
     this.w = w; this.h = h;
-    return (this as any)[M_onResize].call(this, w, h);
+    return jmethod(this, M_onResize)!.call(this, w, h);
   },
   "onResize(FF)V": () => {},
   "hasAlpha()Z": () => 1,
@@ -909,7 +909,7 @@ class JShapeDrawable extends JDrawable {
     sh.w = b.right - b.left; sh.h = b.bottom - b.top;
     ctx.save();
     ctx.translate(b.left, b.top);
-    (shapeMethods["draw(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V"] as any).call(sh, cv, this.effPaint());
+    callSelf(shapeMethods, "draw(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V", sh, cv, this.effPaint());
     ctx.restore();
   }
   intrinsicW(): number { return this.iw; }
@@ -951,7 +951,7 @@ rt.register({
       finally { ctx.restore(); }
     },
     "onDraw(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShapeDrawable, sh: JShape, cv: JCanvas, p: JPaint) {
-      return (sh as any)[M_shapeDraw].call(sh, cv, p);
+      return jmethod(sh, M_shapeDraw)!.call(sh, cv, p);
     },
   },
 });
@@ -1337,7 +1337,7 @@ function parseCslXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): J
         if (v && v.t === TV.REFERENCE) v = res.resolveRefs(v);
         color = rvColor(res, v, -16777216);
       } else if (a.resId === AT.alpha) {
-        alphaMul = a.type === TV.FLOAT ? new Float32Array(Int32Array.of(a.data).buffer)[0] : 1;
+        alphaMul = a.type === TV.FLOAT ? intBitsToFloat(a.data) : 1;
       }
     }
     if (alphaMul < 1) color = (((color >>> 24) * alphaMul) << 24 | (color & 0xffffff)) | 0;

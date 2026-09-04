@@ -32,6 +32,10 @@ export interface NativeSpec {
   clinit?: () => void | Promise<void>;
 }
 
+export function callSelf(m: NativeSpec["methods"], sig: string, self: unknown, ...args: unknown[]): unknown {
+  return (m![sig] as (this: unknown, ...a: unknown[]) => unknown).call(self, ...args);
+}
+
 export class ClassInfo {
   ctor: any;
   superInfo: ClassInfo | null = null;

@@ -1,7 +1,7 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
-import { mangleMethod, charsToString } from "../jvm/abi";
+import { mangleMethod, charsToString, intBitsToFloat } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle } from "./handles";
 import { vcall, mkEnumSet, JSimpleEnum, linkInit, stringHash } from "../jvm/natives/jlang";
@@ -782,11 +782,11 @@ export class JMatrix extends JObj {
   m: [number, number, number, number, number, number] = [1, 0, 0, 1, 0, 0];
 }
 /** rotation by `deg` about (px, py) as an affine [a, b, c, d, tx, ty] */
-function rotM(deg: number, px = 0, py = 0): [number, number, number, number, number, number] {
+export function rotM(deg: number, px = 0, py = 0): [number, number, number, number, number, number] {
   const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
   return [c, s, -s, c, px - c * px + s * py, py - s * px - c * py];
 }
-function matMul(a: number[], b: number[]): [number, number, number, number, number, number] {
+export function matMul(a: number[], b: number[]): [number, number, number, number, number, number] {
   return [
     a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1],
     a[0] * b[2] + a[2] * b[3], a[1] * b[2] + a[3] * b[3],
@@ -1462,9 +1462,8 @@ const rn1 = () => 1;
 // Dalvik registers are untyped: R8'd code may pass float BITS where our JS sees the raw
 // int (e.g. 1065353216 for 1.0f). Layer properties are all small floats, so reinterpret
 // anything implausibly large.
-const bitsBuf2 = new DataView(new ArrayBuffer(4));
 function asF(v: number): number {
-  if (Math.abs(v) > 1e6 && Number.isInteger(v)) { bitsBuf2.setInt32(0, v | 0); return bitsBuf2.getFloat32(0); }
+  if (Math.abs(v) > 1e6 && Number.isInteger(v)) return intBitsToFloat(v);
   return v;
 }
 rt.register({

@@ -76,6 +76,7 @@ export function printFlow(r: FlowReport): void {
     const flags = [
       s.semanticHit === false ? "coord-fallback" : "",
       s.settleTimedOut ? "settle-timeout" : "",
+      s.goldenSettleTimedOut ? "golden-settle-timeout" : "",
       s.mainLoopWedged ? `WEDGED, not rendered (measured ${s.rawContentDiffPct.toFixed(1)}%)` : "",
       s.error ? "error" : "",
     ].filter(Boolean).join(" ");
@@ -85,6 +86,9 @@ export function printFlow(r: FlowReport): void {
     (r.stepsRendered < r.steps.length
       ? `  (${r.steps.length - r.stepsRendered} never rendered, scored 100%; raw mean ${r.meanRawContentDiffPct.toFixed(2)}%)`
       : ""));
+  if (r.stepsTracked < r.steps.length) {
+    console.log(`  TRACKED  webdroid's screen stopped changing after step ${r.stepsTracked} of ${r.steps.length}`);
+  }
   if (r.meanTreeDiffPct === undefined && r.steps.some((s) => s.tree)) {
     console.log("  STRUCTURE  nothing to compare: no view on either side carries text or an id");
   }

@@ -70,13 +70,13 @@ describe("arm decoder", () => {
       0xe3a02c01,   // mov r2, #256
       0xe58d2000,   // str r2, [sp]
       0xe58d2004,   // str r2, [sp, #4]
+      0xe1a0400d,   // mov r4, sp        -> the sp BEFORE either writeback
       0xe59d0004,   // ldr r0, [sp, #4]
-      0xe49d1004,   // ldr r1, [sp], #4   (post-index)
-      0xe5bd3004,   // ldr r3, [sp, #4]!  -> sp += 4 then load (garbage beyond); check sp
-      0xe1a0400d,   // mov r4, sp
+      0xe49d1004,   // ldr r1, [sp], #4   (post-index)  -> sp += 4
+      0xe5bd3004,   // ldr r3, [sp, #4]!  (pre-index)   -> sp += 4, then load
       BXLR], (c) => { c.r[13] -= 64; });
     expect(c.r[0]).toBe(256); expect(c.r[1]).toBe(256);
-    expect(c.r[4] - c.r[13]).toBe(0);
+    expect(c.r[13] - c.r[4]).toBe(8);
   });
   test("ldrb/strb/ldrh/strh/ldrsb/ldrsh", () => {
     const c = run([
@@ -97,8 +97,8 @@ describe("arm decoder", () => {
       0xeb000000,   // bl +1 -> to 'mov r0,#9; bx lr'
       0xe8bd8010,   // pop {r4, pc}
       0xe3a00009,   // mov r0, #9
-      BXLR]);
-    expect(c.r[0]).toBe(9); expect(c.r[4]).toBe(0);
+      BXLR], (c) => { c.r[4] = 0x5eed; });
+    expect(c.r[0]).toBe(9); expect(c.r[4]).toBe(0x5eed);
   });
   test("conditional execution and cmp", () => {
     const c = run([

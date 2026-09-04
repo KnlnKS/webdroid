@@ -21,7 +21,7 @@ import {
   JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, colorLongOfArgb,
 } from "./graphics";
 import { newObj } from "../jvm/natives/jlang";
-import { charsToString } from "../jvm/abi";
+import { charsToString, floatToIntBits } from "../jvm/abi";
 import { JPath, pathBounds, pathOffset, pathTransform } from "./path";
 import { greedyBreaks, type JTextPaint, type TLine } from "./text";
 import {
@@ -1067,12 +1067,10 @@ function writeSlot(out: Int32Array, i: number, v: RV | null, srcId: number) {
   if (!v || v.t === TV.NULL) return;
   out[at] = v.t === T_STR ? TV.STRING : v.t === T_PX ? TV.DIMENSION : v.t;
   // FLOAT is carried decoded here and as bits on the Java side
-  out[at + 1] = v.t === TV.FLOAT ? floatBits(v.d) : v.d | 0;
+  out[at + 1] = v.t === TV.FLOAT ? floatToIntBits(v.d) : v.d | 0;
   out[at + 3] = srcId;
   out[at + 5] = device.densityDpi;
 }
-const fbits = new DataView(new ArrayBuffer(4));
-const floatBits = (f: number) => { fbits.setFloat32(0, f); return fbits.getInt32(0); };
 
 delegate("android/content/res/AssetManager", {
   "nativeCreate()J": () => handle(currentResources() ?? new Resources(null, {})),
@@ -1279,7 +1277,7 @@ function fillTypedValue(res: Resources, tv: TypedValueLike, v: RV | null, srcId:
     }
   }
   tv.type = v.t === T_STR ? TV.STRING : v.t === T_PX ? TV.DIMENSION : v.t;
-  tv.data = v.t === TV.FLOAT ? floatBits(v.d) : v.d | 0;
+  tv.data = v.t === TV.FLOAT ? floatToIntBits(v.d) : v.d | 0;
   tv.resourceId = srcId;
   tv.density = device.densityDpi;
   tv.assetCookie = cookieOf(srcId);

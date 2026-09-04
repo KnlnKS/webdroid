@@ -2,9 +2,9 @@
 // Non-recycling: materializes all item views (fine at app scale), scrolls internally.
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
-import { mangleMethod } from "../jvm/abi";
+import { mangleMethod, jmethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
-import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSizeAndState, invalidate, requestLayout, initViewFromCtx, inheritContext, AID, JMotionEvent, uiState, guardCall, findById, restVelocity } from "./view";
+import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSizeAndState, invalidate, requestLayout, initViewFromCtx, inheritContext, AID, JMotionEvent, uiState, guardCall, findById, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./view";
 import { JAttrSet, obtainStyled, rvDimen, rvInt, rvString, type Resources } from "./res";
 import { attr } from "./axml";
 import { JCanvas } from "./graphics";
@@ -185,12 +185,12 @@ rt.register({
     "setTitle(Ljava/lang/CharSequence;)V": function (this: JActionMode, t: unknown) {
       this.title = t === null || t === undefined ? "" : String(t);
     },
-    "setTitle(I)V": function (this: JActionMode, id: number) { (this as any)[M_amSetTitle](amString(this, id)); },
+    "setTitle(I)V": function (this: JActionMode, id: number) { jmethod(this, M_amSetTitle)!.call(this, amString(this, id)); },
     "getTitle()Ljava/lang/CharSequence;": function (this: JActionMode) { return this.title; },
     "setSubtitle(Ljava/lang/CharSequence;)V": function (this: JActionMode, t: unknown) {
       this.subtitle = t === null || t === undefined ? "" : String(t);
     },
-    "setSubtitle(I)V": function (this: JActionMode, id: number) { (this as any)[M_amSetSubtitle](amString(this, id)); },
+    "setSubtitle(I)V": function (this: JActionMode, id: number) { jmethod(this, M_amSetSubtitle)!.call(this, amString(this, id)); },
     "getSubtitle()Ljava/lang/CharSequence;": function (this: JActionMode) { return this.subtitle; },
     "invalidate()V": async function (this: JActionMode) {
       if (this.cb) {
@@ -359,7 +359,7 @@ async function notifyChoiceMode(list: JListView, pos: number, checked: boolean) 
     mode.menu = new (rt.link("webdroid/Menu").ctor)();
     mode.onFinish = async () => {
       list.actionMode = null;
-      for (const p of [...list.checked]) await guardCall((list as any)[M_setItemChecked], list, p, 0);
+      for (const p of [...list.checked]) await guardCall(list, M_setItemChecked, p, 0);
     };
     list.actionMode = mode;
     if (!await vcall(cb, "onCreateActionMode", "(Landroid/view/ActionMode;Landroid/view/Menu;)Z", mode, mode.menu)) {
@@ -384,7 +384,7 @@ async function dispatchLongPress(list: JListView, pos: number) {
   const v = list.allViews()[pos];
   if (!v) return;
   const id = await rowId(list, pos);
-  list.longFired = !!await guardCall((list as any)[M_perfLongPress], list, v, pos, id);
+  list.longFired = !!await guardCall(list, M_perfLongPress, v, pos, id);
 }
 
 /** ListView's default divider is the theme's listDivider (ListView style: divider="?attr/listDivider") */
@@ -496,8 +496,8 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     this.pendingSel = { pos, off };
     requestLayout(this);
   },
-  "setSelection(I)V": function (this: JListView, pos: number) { (this as any)[M_setSelFromTop](pos, 0); },
-  "smoothScrollToPosition(I)V": function (this: JListView, pos: number) { (this as any)[M_setSelFromTop](pos, 0); },
+  "setSelection(I)V": function (this: JListView, pos: number) { jmethod(this, M_setSelFromTop)!.call(this, pos, 0); },
+  "smoothScrollToPosition(I)V": function (this: JListView, pos: number) { jmethod(this, M_setSelFromTop)!.call(this, pos, 0); },
   "getPositionForView(Landroid/view/View;)I": function (this: JListView, v: JView) {
     let cur: JView | null = v;
     while (cur && cur.parent !== this) cur = cur.parent;
@@ -507,7 +507,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     // modal choice mode only consumes clicks while its ActionMode is up; before that a tap is a plain click
     const modalActive = this.choiceMode === CHOICE_MODE_MULTIPLE_MODAL && this.actionMode !== null;
     if (this.choiceMode && (this.choiceMode !== CHOICE_MODE_MULTIPLE_MODAL || modalActive)) {
-      await guardCall((this as any)[M_setItemChecked], this, pos, this.checked.has(pos) ? 0 : 1);
+      await guardCall(this, M_setItemChecked, pos, this.checked.has(pos) ? 0 : 1);
       if (modalActive) return 1;
     }
     if (this.itemClickL) {
@@ -520,7 +520,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   // goes to the OnItemLongClickListener.
   "performLongPress(Landroid/view/View;IJ)Z": async function (this: JListView, v: JView, pos: number, id: bigint) {
     if (this.choiceMode === CHOICE_MODE_MULTIPLE_MODAL && this.multiChoiceL) {
-      await guardCall((this as any)[M_setItemChecked], this, pos, 1);
+      await guardCall(this, M_setItemChecked, pos, 1);
       return this.actionMode ? 1 : 0;
     }
     if (this.itemLongClickL) {
@@ -642,7 +642,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (a === 2) {
       const d = this.lastY - ev.y;
       const dt = Math.max(1, ev.eventTime - this.lastMoveT);
-      this.velo = 0.8 * this.velo + 0.2 * (d / dt * 16);
+      this.velo = trackVelocity(this.velo, d, dt);
       this.lastMoveT = ev.eventTime;
       if (!this.dragging && Math.abs(ev.y - this.downY) > device.touchSlop) this.dragging = true;
       if (this.dragging) {
@@ -658,16 +658,16 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
       if (!this.dragging && !this.longFired && this.pressTarget >= 0) {
         const v = this.allViews()[this.pressTarget];
         if (v) {
-          await guardCall((this as any)[M_perfItemClick], this, v, this.pressTarget, await rowId(this, this.pressTarget));
+          await guardCall(this, M_perfItemClick, v, this.pressTarget, await rowId(this, this.pressTarget));
         }
       }
-      let vv = restVelocity(this.velo, 0.8, ev.eventTime - this.lastMoveT);
-      if (this.dragging && Math.abs(vv) > 2) {
+      let vv = restVelocity(this.velo, SCROLL_WEIGHT, ev.eventTime - this.lastMoveT);
+      if (this.dragging && Math.abs(vv) > FLING.arm) {
         const anim = () => {
           if (this.flingAnim !== anim) return false;
           this.scrollRows(vv);
-          vv *= 0.95;
-          if (Math.abs(vv) > 0.7) return true;
+          vv *= FLING.decay;
+          if (Math.abs(vv) > FLING.stop) return true;
           this.setScrollState(0);
           return false;
         };

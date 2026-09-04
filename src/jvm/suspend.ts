@@ -15,8 +15,7 @@
 // A virtual call site is one node, not one node per possible receiver. Fanning out per site
 // made mihon 12.5M edges and 37s.
 
-import type { Program } from "./reach";
-import type { DexFile } from "./dex";
+import { type Program, sigOf } from "./reach";
 import { insnLen } from "./opcodes";
 import { descToName } from "./abi";
 
@@ -34,13 +33,6 @@ const INVOKE_VIRTUAL: Record<number, 1> = { 0x6e: 1, 0x72: 1, 0x74: 1, 0x78: 1 }
 const INVOKE_EXACT: Record<number, 1> = { 0x6f: 1, 0x70: 1, 0x71: 1, 0x75: 1, 0x76: 1, 0x77: 1 };
 const CLINIT = "<clinit>()V";
 const SUSPENDS = "\0suspends";   // the node every unresolvable target reports to
-
-const sigCaches = new WeakMap<DexFile, (string | undefined)[]>();
-function sigOf(dex: DexFile, mIdx: number): string {
-  let c = sigCaches.get(dex);
-  if (!c) sigCaches.set(dex, (c = []));
-  return (c[mIdx] ??= dex.method(mIdx).name + dex.methodDesc(mIdx));
-}
 
 /**
  * @param methods  the bodies to consider — the reachable set, not the whole apk
@@ -121,7 +113,7 @@ export function analyseSuspend(
           virtualSites.add(site);
           edge("@" + site, self);
         }
-      } else if (op === 0x22 || op === 0x24 || op === 0x25) {    // new-instance, filled-new-array
+      } else if (op === 0x22 || op === 0x24 || op === 0x25) {    // new-instance, filled-new-array{,/range}
         initOf(descToName(dex.type(insns[pc + 1])), self);
       } else if (op >= 0x60 && op <= 0x6d) {                     // sget/sput
         initOf(descToName(dex.type(dex.field(insns[pc + 1]).cls)), self);

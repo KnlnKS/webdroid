@@ -9,6 +9,7 @@ import { format, scan } from "./printf";
 import { stdioInit } from "./stdio";
 import { pthreadInit } from "./pthread";
 import { zlibInit } from "./zlib";
+import { MONTHS, DAYS } from "../jvm/natives/jtime";
 
 /** bionic 32-bit ARM struct offsets/sizes (one block, see CONTRACT). */
 export const LAYOUT = {
@@ -87,8 +88,6 @@ function fillTm(tm: number, d: Date, utc: boolean): void {
   mem.st32(tm + 40, tznames[utc ? 0 : 1]);
 }
 function readTm(tm: number): number[] { const f: number[] = []; for (let i = 0; i < 9; i++) f.push(mem.ld32(tm + i * 4)); return f; }
-const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 function strftime(fmt: string, tm: number): string {
   const [sec, min, hour, mday, mon, year, wday, yday] = readTm(tm);
   const p2 = (n: number) => String(n).padStart(2, "0");

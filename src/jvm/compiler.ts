@@ -6,7 +6,7 @@
 
 import type { DexFile, CodeItem, EncodedMethod } from "./dex";
 import { OPS, FMT_LEN, insnLen, type Fmt } from "./opcodes";
-import { mangleMethod, parseMethodDesc, isWide, descToName } from "./abi";
+import { mangleMethod, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble } from "./abi";
 import { ACC, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
 
@@ -22,13 +22,28 @@ interface Ins {
   constKind?: "F" | "D"; // const reinterpreted as float/double (set by typeConsts)
 }
 
+const NO_REGS: number[] = [];
+const ENDS_RE = /^(goto|return|throw)/;
+const NO_WRITE_RE = /^(if|goto|return|throw|nop|monitor|aput|iput|sput|invoke|packed|sparse|fill-array|check-cast)/;
+const FLOAT_OP_RE = /^(add|sub|mul|div|rem)-float/;
+const DOUBLE_OP_RE = /^(add|sub|mul|div|rem)-double/;
+function nibbleRegs(r: number, u: number, n: number): number[] {
+  const out = new Array<number>(n);
+  for (let i = 0; i < n; i++) out[i] = i === 4 ? (u >> 8) & 0xf : (r >> (i * 4)) & 0xf;
+  return out;
+}
+function rangeRegs(first: number, n: number): number[] {
+  const out = new Array<number>(n);
+  for (let i = 0; i < n; i++) out[i] = first + i;
+  return out;
+}
 function decode(insns: Uint16Array, pc: number): Ins {
   const u = insns[pc];
   const op = u & 0xff;
   const entry = OPS[op];
   if (!entry) throw new Error(`bad opcode 0x${op.toString(16)}`);
   const [name, fmt] = entry;
-  const ins: Ins = { pc, op, name, fmt, len: FMT_LEN[fmt], a: 0, b: 0, c: 0, regs: [], wideLit: 0n };
+  const ins: Ins = { pc, op, name, fmt, len: FMT_LEN[fmt], a: 0, b: 0, c: 0, regs: NO_REGS, wideLit: 0n };
   switch (fmt) {
     case "10x": break;
     case "12x": ins.a = (u >> 8) & 0xf; ins.b = u >> 12; break;
@@ -49,28 +64,22 @@ function decode(insns: Uint16Array, pc: number): Ins {
     case "31c": ins.a = u >> 8; ins.b = (insns[pc + 1] | (insns[pc + 2] << 16)) >>> 0; break;
     case "35c": {
       ins.a = u >> 12; ins.b = insns[pc + 1];
-      const r = insns[pc + 2];
-      const all = [r & 0xf, (r >> 4) & 0xf, (r >> 8) & 0xf, (r >> 12) & 0xf, (u >> 8) & 0xf];
-      ins.regs = all.slice(0, ins.a);
+      ins.regs = nibbleRegs(insns[pc + 2], u, ins.a);
       break;
     }
     case "3rc": {
       ins.a = u >> 8; ins.b = insns[pc + 1];
-      const first = insns[pc + 2];
-      for (let i = 0; i < ins.a; i++) ins.regs.push(first + i);
+      ins.regs = rangeRegs(insns[pc + 2], ins.a);
       break;
     }
     case "45cc": {
       ins.a = u >> 12; ins.b = insns[pc + 1]; ins.c = insns[pc + 3];  // c = proto idx
-      const r = insns[pc + 2];
-      const all = [r & 0xf, (r >> 4) & 0xf, (r >> 8) & 0xf, (r >> 12) & 0xf, (u >> 8) & 0xf];
-      ins.regs = all.slice(0, ins.a);
+      ins.regs = nibbleRegs(insns[pc + 2], u, ins.a);
       break;
     }
     case "4rcc": {
       ins.a = u >> 8; ins.b = insns[pc + 1]; ins.c = insns[pc + 3];
-      const first = insns[pc + 2];
-      for (let i = 0; i < ins.a; i++) ins.regs.push(first + i);
+      ins.regs = rangeRegs(insns[pc + 2], ins.a);
       break;
     }
     case "51l": {
@@ -104,10 +113,6 @@ export function compileClassSource(R: Runtime, dex: DexFile, info: ClassInfo): s
   return out.join("\n");
 }
 
-/** `C.prototype.m$x = function(p0){ return (cell || (cell = R.lz(C, i))).call(this, p0) }`
- *  — the cell keeps already-captured references (D.dp direct-dispatch slots, interface
- *  default methods copied down) one call away, while fresh virtual dispatch finds the real
- *  function R.lz installed on the prototype. */
 /** the bootstrap a call_site links through, for the missing-API report. Best effort:
  *  a dex we cannot read the call site out of still has to compile the rest of its class. */
 function bootstrapName(dex: DexFile, callSiteIdx: number): string {
@@ -122,6 +127,10 @@ function bootstrapName(dex: DexFile, callSiteIdx: number): string {
   }
 }
 
+/** `C.prototype.m$x = function(p0){ return (cell || (cell = R.lz(C, i))).call(this, p0) }`
+ *  — the cell keeps already-captured references (D.dp direct-dispatch slots, interface
+ *  default methods copied down) one call away, while fresh virtual dispatch finds the real
+ *  function R.lz installed on the prototype. */
 function emitLazy(dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const isStatic = (m.flags & ACC.STATIC) !== 0;
@@ -212,7 +221,7 @@ class MethodCompiler {
       const i = this.ins.get(pc2)!;
       const t = this.branchTargets(i);
       for (const x of t) this.leaders.add(x);
-      if (t.length || /^(return|throw|goto)/.test(i.name)) this.leaders.add(pc2 + i.len);
+      if (t.length || ENDS_RE.test(i.name)) this.leaders.add(pc2 + i.len);
     }
     for (const t of code.tries) {
       this.leaders.add(t.start); this.leaders.add(t.end);
@@ -314,7 +323,7 @@ ${catchBody}
       const last = this.ins.get(pcs[pcs.length - 1])!;
       const out = new Set(this.branchTargets(last).filter((t) => body.has(t)));
       // fall-through, unless the block ends in an unconditional transfer
-      if (!/^(goto|return|throw)/.test(last.name)) {
+      if (!ENDS_RE.test(last.name)) {
         const next = last.pc + last.len;
         if (body.has(next)) out.add(next);
       }
@@ -342,12 +351,12 @@ ${catchBody}
         const i = this.ins.get(pc)!;
         const n = i.name;
         // consumers
-        if (/^(add|sub|mul|div|rem)-float/.test(n) || n === "neg-float" || n.startsWith("cmpl-float") || n.startsWith("cmpg-float") ||
+        if (FLOAT_OP_RE.test(n) || n === "neg-float" || n.startsWith("cmpl-float") || n.startsWith("cmpg-float") ||
             n === "float-to-int" || n === "float-to-long" || n === "float-to-double") {
           if (n.endsWith("/2addr")) { mark(i.a, "F"); mark(i.b, "F"); }
           else if (n.startsWith("neg") || n.startsWith("float-to")) mark(i.b, "F");
           else { mark(i.b, "F"); mark(i.c, "F"); }
-        } else if (/^(add|sub|mul|div|rem)-double/.test(n) || n === "neg-double" || n.startsWith("cmpl-double") || n.startsWith("cmpg-double") ||
+        } else if (DOUBLE_OP_RE.test(n) || n === "neg-double" || n.startsWith("cmpl-double") || n.startsWith("cmpg-double") ||
             n === "double-to-int" || n === "double-to-long" || n === "double-to-float") {
           if (n.endsWith("/2addr")) { mark(i.a, "D"); mark(i.b, "D"); }
           else if (n.startsWith("neg") || n.startsWith("double-to")) mark(i.b, "D");
@@ -389,7 +398,7 @@ ${catchBody}
         else if (n === "move-object" || n === "move-object/from16" || n === "move-object/16") {
           const k = arr.get(i.b);
           if (k) arr.set(i.a, k); else arr.delete(i.a);
-        } else if (this.writtenReg(i) >= 0) arr.delete(this.writtenReg(i));
+        } else { const w = this.writtenReg(i); if (w >= 0) arr.delete(w); }
         if (n.startsWith("invoke") && !n.startsWith("invoke-custom")) lastRet = dex.type(dex.proto(dex.method(i.b).proto).ret);
         else if (n !== "move-result-object") lastRet = "";
 
@@ -458,7 +467,7 @@ ${catchBody}
   }
   private writtenReg(i: Ins): number {
     const n = i.name;
-    if (/^(if|goto|return|throw|nop|monitor|aput|iput|sput|invoke|packed|sparse|fill-array|check-cast)/.test(n)) return -1;
+    if (NO_WRITE_RE.test(n)) return -1;
     return i.a;
   }
 
@@ -856,17 +865,9 @@ ${catchBody}
 
 function nz(v: string): string { return `(${v}===null||${v}===0)`; }
 
-const bitsBuf = new DataView(new ArrayBuffer(8));
-function f32bits(bits: number): string {
-  bitsBuf.setInt32(0, bits | 0);
-  const v = bitsBuf.getFloat32(0);
-  return Number.isFinite(v) ? String(v) : v !== v ? "NaN" : v > 0 ? "Infinity" : "-Infinity";
-}
-function f64bits(bits: bigint): string {
-  bitsBuf.setBigInt64(0, BigInt.asIntN(64, bits));
-  const v = bitsBuf.getFloat64(0);
-  return Number.isFinite(v) ? String(v) : v !== v ? "NaN" : v > 0 ? "Infinity" : "-Infinity";
-}
+const litOf = (v: number) => Number.isFinite(v) ? String(v) : v !== v ? "NaN" : v > 0 ? "Infinity" : "-Infinity";
+const f32bits = (bits: number) => litOf(intBitsToFloat(bits));
+const f64bits = (bits: bigint) => litOf(longBitsToDouble(BigInt.asIntN(64, bits)));
 
 function typedArrayCtor(elem: string): string {
   switch (elem) {

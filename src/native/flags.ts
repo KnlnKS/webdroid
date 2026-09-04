@@ -9,6 +9,7 @@ export interface Fl { n?: string; z?: string; c?: string; v?: string }
 export interface Ins { code: string; fl: Fl | null; reads: number; writes: number }
 
 /** flags a condition code tests (index = cond field) */
+export const hex = (n: number) => "0x" + (n >>> 0).toString(16);
 export const COND_READS = [Z, Z, C, C, N, N, V, V, C | Z, C | Z, N | V, N | V, Z | N | V, Z | N | V, 0, 0];
 export const COND = ["c.z", "!c.z", "c.c", "!c.c", "c.n", "!c.n", "c.v", "!c.v",
   "(c.c&&!c.z)", "(!c.c||c.z)", "c.n===c.v", "c.n!==c.v", "(!c.z&&c.n===c.v)", "(c.z||c.n!==c.v)", "", ""];
@@ -20,7 +21,7 @@ export const ADCF: Fl = { ...NZ, c: "c.c=((a>>>0)+(t>>>0)+c.c)>4294967295?1:0;",
 export const SBCF: Fl = { ...NZ, c: "c.c=((a>>>0)-(t>>>0)-1+c.c)>=0?1:0;", v: "c.v=((a^t)&(a^v))>>>31;" };
 export const RSBF: Fl = { ...NZ, c: "c.c=(t>>>0)>=(a>>>0)?1:0;", v: "c.v=((t^a)&(t^v))>>>31;" };
 export const RSCF: Fl = { ...NZ, c: "c.c=((t>>>0)-(a>>>0)-1+c.c)>=0?1:0;", v: "c.v=((t^a)&(t^v))>>>31;" };
-const maskOf = (f: Fl | null): number => (f ? (f.n ? N : 0) | (f.z ? Z : 0) | (f.c ? C : 0) | (f.v ? V : 0) : 0);
+export const maskOf = (f: Fl | null): number => (f ? (f.n ? N : 0) | (f.z ? Z : 0) | (f.c ? C : 0) | (f.v ? V : 0) : 0);
 
 /** the block's JS: flag updates kept only where live (live-out of the block = all) */
 export function assemble(ins: Ins[]): string {

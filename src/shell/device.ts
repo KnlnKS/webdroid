@@ -493,7 +493,7 @@ async function tick0(ctx: CanvasRenderingContext2D) {
     const cbs = uiState.frameCallbacks.splice(0);
     for (const cb of cbs as { frame?: any; run?: any }[]) {
       try {
-        if (cb.frame) await guardCall((cb.frame as any)[M_doFrame], cb.frame, uiState.frameTimeNanos);
+        if (cb.frame) await guardCall(cb.frame, M_doFrame, uiState.frameTimeNanos);
         else if (cb.run) await vcall(cb.run, "run", "()V");
       } catch (e) { reportUncaught(e); }
     }
@@ -685,12 +685,12 @@ async function dispatchPointer0(action: number, x: number, y: number, t: number)
       if (o) {
         ev.x = x - o.view.left;
         ev.y = ly - o.view.top;
-        await guardCall((o.view as any)[M_dispatch], o.view, ev);
+        await guardCall(o.view, M_dispatch, ev);
       }
     } else {
       ev.x = x;
       ev.y = ly;
-      await guardCall((decor as any)[M_dispatch], decor, ev);
+      await guardCall(decor, M_dispatch, ev);
     }
     if (action === 1 || action === 3) touchTarget = null;
   } catch (e) {

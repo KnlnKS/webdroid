@@ -62,10 +62,10 @@ class JGLSurfaceView extends JViewGroup {
                 new (rt.link("javax/microedition/khronos/egl/EGLDisplay").ctor)())) ?? theConfig
             : theConfig;
         }
-        await guardCall((this.renderer as any)[M_onSurfaceCreated], this.renderer, this.fakeGL10, this.eglConfig);
-        await guardCall((this.renderer as any)[M_onSurfaceChanged], this.renderer, this.fakeGL10, this.lastW, this.lastH);
+        await guardCall(this.renderer, M_onSurfaceCreated, this.fakeGL10, this.eglConfig);
+        await guardCall(this.renderer, M_onSurfaceChanged, this.fakeGL10, this.lastW, this.lastH);
       }
-      await guardCall((this.renderer as any)[M_onDrawFrame], this.renderer, this.fakeGL10);
+      await guardCall(this.renderer, M_onDrawFrame, this.fakeGL10);
     } catch (e) {
       reportUncaught(e);
     } finally {
@@ -156,6 +156,9 @@ rt.register({ name: "android/opengl/GLSurfaceView$EGLWindowSurfaceFactory", ctor
 // these surfaces (glSurfaces), so there is exactly one drawing buffer per SurfaceView.
 export interface GlSurface { view: JView; canvas: OffscreenCanvas; ctx: WebGL2RenderingContext | WebGLRenderingContext; frames: number }
 const D_created = "(Landroid/view/SurfaceHolder;)V", D_changed = "(Landroid/view/SurfaceHolder;III)V";
+const M_surfaceCreated = mangleMethod("surfaceCreated", D_created);
+const M_surfaceChanged = mangleMethod("surfaceChanged", D_changed);
+const M_surfaceDestroyed = mangleMethod("surfaceDestroyed", D_created);
 const PIXEL_FORMAT_RGBA_8888 = 1;
 class JSurfaceHolder extends JObj {
   view: JView;
@@ -205,8 +208,8 @@ class JSurfaceView extends JViewGroup {
     this.surfW = w; this.surfH = h;
     void onMain(async () => {
       for (const cb of holder.callbacks.slice()) {
-        if (created) await guardCall((cb as any)[mangleMethod("surfaceCreated", D_created)], cb, holder);
-        await guardCall((cb as any)[mangleMethod("surfaceChanged", D_changed)], cb, holder, holder.format, w, h);
+        if (created) await guardCall(cb, M_surfaceCreated, holder);
+        await guardCall(cb, M_surfaceChanged, holder, holder.format, w, h);
       }
     });
   }
@@ -219,7 +222,7 @@ class JSurfaceView extends JViewGroup {
     if (primary === s) primary = null;
     if (glSurfaces.current === s) glSurfaces.current = null;
     void onMain(async () => {
-      for (const cb of holder.callbacks.slice()) await guardCall((cb as any)[mangleMethod("surfaceDestroyed", D_created)], cb, holder);
+      for (const cb of holder.callbacks.slice()) await guardCall(cb, M_surfaceDestroyed, holder);
     });
   }
 }

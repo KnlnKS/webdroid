@@ -6,7 +6,7 @@
 import { mem } from "./mem";
 import { PAGE_SIZE, PAGE_SHIFT } from "./abi";
 import { emitVfp } from "./vfp";
-import { type Ins, type Fl, N, Z, C, ALL, COND, COND_READS, NZ, ADDF, SUBF, ADCF, SBCF, RSBF, RSCF, assemble, hoistRegs, inlineMem, selfLoop } from "./flags";
+import { type Ins, type Fl, C, ALL, COND, COND_READS, hex, maskOf, NZ, ADDF, SUBF, ADCF, SBCF, RSBF, RSCF, assemble, hoistRegs, inlineMem, selfLoop } from "./flags";
 
 let MAX_BLOCK = 256;
 /** 1 = single-instruction blocks (the step tracer) */
@@ -39,7 +39,6 @@ function op2(w: number, pc: number): { v: string; c: string | null; pre?: string
 }
 
 const reg = (n: number, pc: number) => (n === 15 ? String((pc + 8) | 0) : `r[${n}]`);
-const hex = (n: number) => "0x" + (n >>> 0).toString(16);
 const fault = (pc: number, w: number, what: string) => `r[15]=${pc};c.fault(${JSON.stringify(what + " " + hex(w))});`;
 
 let redirect = -1, slot = 0;
@@ -256,8 +255,7 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
     return true;
   }
 
-  const flMask = fl ? (fl.v ? ALL : fl.c ? N | Z | C : N | Z) : 0;
-  if (cond === 14) out.push({ code: body, fl, reads, writes: writes | flMask });
+  if (cond === 14) out.push({ code: body, fl, reads, writes: writes | maskOf(fl) });
   else { out.push({ code: `if(${COND[cond]}){${body}\0F}`, fl, reads: reads | COND_READS[cond], writes: 0 }); ends = false; }
   return ends;
 }

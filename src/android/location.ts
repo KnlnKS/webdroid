@@ -2,6 +2,7 @@
 // LocationManager itself is a Context system service and lives with the others in app.ts.
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { PARCELABLE } from "./os";
 
 rt.register({ name: "android/location/LocationListener", ctor: class extends JObj {} });
 
@@ -27,7 +28,7 @@ const locMethods: NonNullable<NativeSpec["methods"]> = {
   "getTime()J": function (this: JLocation) { return this.time; },
   "setTime(J)V": function (this: JLocation, t: bigint) { this.time = t; },
   "distanceTo(Landroid/location/Location;)F": function (this: JLocation, o: JLocation) { return Math.fround(distanceM(this, o)); },
-  "describeContents()I": () => 0, "writeToParcel(Landroid/os/Parcel;I)V": () => {},
+  ...PARCELABLE,
 };
 for (const [n, d] of [["Altitude", "D"], ["Accuracy", "F"], ["Speed", "F"], ["Bearing", "F"]] as const) {
   locMethods[`get${n}()${d}`] = function (this: JLocation) { return this.opt[n] ?? 0; };

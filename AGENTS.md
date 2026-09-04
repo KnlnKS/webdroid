@@ -481,7 +481,9 @@ See tests/e2e/README.md for the commands and the metrics. What bites:
   list away, what the unmasked strip holds still moves with the stories (and its scroll steps
   move `draws` with them — see "notes: draws follow the scroll steps"). So a harmonic move
   under ~6 points says nothing on its own; A/B it against the parent commit before believing
-  it either way. fitnotes and mihon-onboarding are repeatable to the digit, mihon-app to ~0.3.
+  it either way. fitnotes and mihon-onboarding are repeatable to the digit; **mihon-app spreads
+  ~1.4** (76.96 / 77.02 / 77.58 / 77.64 / 77.77 / 78.26 / 78.37 over seven runs, some of them
+  behaviour-identical), so a move under that is noise and only fitnotes is a tight gate.
 - A rising content-diff % is not automatically a regression: when the app starts doing work
   it previously skipped it can reach a *correct* state the goldens have already moved past.
   Look at the frames before believing the number.
