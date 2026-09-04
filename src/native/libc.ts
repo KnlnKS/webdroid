@@ -164,10 +164,6 @@ function longjmp(cpu: Cpu, buf: number, val: number): typeof NORET {
   return NORET;
 }
 
-// ── sockets: creation succeeds, anything that would reach a network fails with ENETUNREACH
-const socks = new Set<number>();
-let nextSock = 1000;
-
 // ── random (lrand48 family: 48-bit LCG as in the C library)
 let r48 = 0x1234abcd330en;
 const A48 = 0x5deece66dn, C48 = 0xbn, M48 = (1n << 48n) - 1n;
@@ -462,33 +458,21 @@ export function libcInit(): void {
     arc4random: () => (Math.random() * 4294967296) | 0,
     arc4random_uniform: (_c, a) => Math.floor(Math.random() * a.u()) | 0,
 
-    // ── sockets: descriptors exist, the network does not
-    socket: () => { const fd = nextSock++; socks.add(fd); return fd; },
+    // Native TCP and resolver functions are registered by netInit below. These unsupported
+    // server-side operations stay explicit rather than pretending that a listener exists.
     bind: (cpu) => fail(cpu, E.ACCES),
     listen: (cpu) => fail(cpu, E.NETUNREACH),
     accept: (cpu) => fail(cpu, E.NETUNREACH),
-    connect: (cpu) => fail(cpu, E.NETUNREACH),
-    send: (cpu) => fail(cpu, E.NETUNREACH), sendto: (cpu) => fail(cpu, E.NETUNREACH),
-    recv: (cpu) => fail(cpu, E.NETUNREACH), recvfrom: (cpu) => fail(cpu, E.NETUNREACH),
-    shutdown: () => 0,
-    setsockopt: () => 0,
-    getsockopt: (_c, a) => { a.i(); a.i(); a.i(); const v = a.p(), l = a.p(); if (v) mem.st32(v, 0); if (l) mem.st32(l, 4); return 0; },
     getsockname: (cpu) => fail(cpu, E.NETUNREACH), getpeername: (cpu) => fail(cpu, E.NETUNREACH),
     gethostbyname: () => 0,
     gethostbyaddr: () => 0,
-    getaddrinfo: () => -3, // EAI_AGAIN
-    freeaddrinfo: () => {},
-    gai_strerror: () => gaiStr,
     gethostname: (_c, a) => { const b = a.p(), n = a.u(); mem.putCstr(b, "localhost", n); return 0; },
     inet_aton: (_c, a) => { const s = a.str(), out = a.p(); const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s); if (!m) return 0; for (let i = 0; i < 4; i++) mem.u8[out + i] = +m[i + 1]; return 1; },
     inet_addr: (_c, a) => { const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(a.str()); if (!m) return -1; return (+m[1]) | (+m[2] << 8) | (+m[3] << 16) | (+m[4] << 24); },
     inet_ntoa: (_c, a) => { const v = a.u(); mem.putCstr(inetBuf, `${v & 255}.${(v >>> 8) & 255}.${(v >>> 16) & 255}.${v >>> 24}`, 20); return inetBuf; },
-    inet_pton: () => 0, inet_ntop: () => 0,
     htons: (_c, a) => { const v = a.i() & 0xffff; return ((v & 255) << 8) | (v >>> 8); }, ntohs: (_c, a) => { const v = a.i() & 0xffff; return ((v & 255) << 8) | (v >>> 8); },
     htonl: (_c, a) => { const v = a.i(); return ((v & 255) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | (v >>> 24); },
     ntohl: (_c, a) => { const v = a.i(); return ((v & 255) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | (v >>> 24); },
-    poll: (_c, a) => { a.p(); a.i(); const ms = a.i(); return ms > 0 ? new Promise<number>((r) => setTimeout(() => r(0), ms)) : 0; },
-
     __android_log_write: (c, a) => { const prio = a.i(), tag = a.str(), msg = a.str(); logLine(prio, tag, msg, c); return 1; },
     __android_log_print: (c, a) => { const prio = a.i(), tag = a.str(), f = a.str(); logLine(prio, tag, format(f, a), c); return 1; },
     __android_log_vprint: (c, a) => { const prio = a.i(), tag = a.str(), f = a.str(); logLine(prio, tag, format(f, vaList(a.p())), c); return 1; },
@@ -504,7 +488,6 @@ export function libcInit(): void {
   hostLib("liblog.so", { __android_log_write: M.__android_log_write, __android_log_print: M.__android_log_print, __android_log_vprint: M.__android_log_vprint, __android_log_assert: M.__android_log_assert });
   const tmBuf = mem.hostAlloc(LAYOUT.TM_SIZE);
   const inetBuf = mem.hostAlloc(20);
-  const gaiStr = mem.hostStr("Temporary failure in name resolution");
   const cLocale = mem.hostStr("C");
   const localeConv = mem.hostAlloc(16 * PTR);
   stp(localeConv, mem.hostStr(".")); stp(localeConv + PTR, mem.hostStr("")); stp(localeConv + 2 * PTR, mem.hostStr(""));

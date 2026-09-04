@@ -5,7 +5,7 @@ import { mem } from "./mem";
 import { hostLib, hostData, vaList, type HostFn, PTR, stp, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
-import { LAYOUT, fail, utf8, logLine, readTs, offArg } from "./libc";
+import { LAYOUT, fail, utf8, logLine, offArg } from "./libc";
 import { format, scan } from "./printf";
 import { vfs } from "../jvm/natives/jio";
 import { device } from "../shell/config";
@@ -462,13 +462,6 @@ export function stdioInit(): void {
     fstatvfs: (_c, a) => { a.i(); fillStatvfs(a.p()); return 0; },
     isatty: () => 0,
     ioctl: (cpu) => fail(cpu, E.NOSYS),
-    select: (_c, a) => {
-      // no descriptor we hand out ever becomes readable: a timed select is a sleep, an untimed one blocks forever
-      a.i(); a.p(); a.p(); a.p(); const tv = a.p();
-      if (!tv) return new Promise<never>(() => {});
-      const ms = readTs(tv, 1e3);
-      return ms > 0 ? new Promise<number>((r) => setTimeout(() => r(0), ms)) : Promise.resolve(0);
-    },
     statfs: (_c, a) => { a.str(); fillStatfs(a.p()); return 0; },
     fstatfs: (_c, a) => { a.i(); fillStatfs(a.p()); return 0; },
     getcwd: (_c, a) => { const b = a.p(), n = a.u(); mem.putCstr(b, "/", n); return ARG0; },
