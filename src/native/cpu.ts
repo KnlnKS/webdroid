@@ -8,7 +8,7 @@ import { NativeFault, mem } from "./mem";
 import { emitBlock, setMaxBlock } from "./arm";
 import { emitA64Block, setMaxBlockA64 } from "./a64";
 import { emitThumbBlock, setMaxBlock as setMaxBlockT } from "./thumb";
-import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet } from "./host";
+import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair } from "./host";
 import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, PAGE_SHIFT, STACK_SIZE, MEM_SIZE } from "./abi";
 import { perf } from "../perf";
 export { NativeFault };
@@ -19,6 +19,10 @@ export const enum SliceExit { Budget = 0, Suspend = 1, Exit = 2 }
 const SLICE_INSTR = 3_000_000;
 /** the run loop's instruction budget per slice; lowering it makes `profile` sample finely (debug) */
 export const slice = { instr: SLICE_INSTR };
+
+/** an argument to a guest function: a float or double travels in a V register on AAPCS64 and as
+ *  its bit pattern in core registers on the softfp ABI, and only Cpu.call knows which */
+export type CallArg = number | bigint | { f: number } | { d: number };
 
 /** a compiled block: runs, then returns the next block (F.n caches constant successors; c.look resolves the rest) */
 type BlockFn = ((c: Cpu, r: Int32Array, M: typeof mem, F: BlockFn) => BlockFn) & { pc: number; n: (BlockFn | undefined)[] };
@@ -125,9 +129,18 @@ export class Cpu {
   lo = 0; hi = 0;     // 64-bit multiply results
   ic = 0;             // instructions executed
   bpc = 0;            // start of the block being executed (fault attribution)
-  s = new Float32Array(64);
+  // The SIMD&FP register file: A64's V0..V31 (Vn.S[i] = s[4n+i], Vn.D[i] = d[2n+i], bytes at
+  // vb[16n+i]) plus V32/V33 as emitter scratch for an op whose destination aliases a source.
+  // ARM32's VFP keeps its own map over the same bytes (Sn = s[n], Dn = d[n]); a process is one
+  // ABI, so the two never meet. Moves go through the integer views so NaN payloads survive.
+  s = new Float32Array(136);
   d = new Float64Array(this.s.buffer);
   si = new Int32Array(this.s.buffer);
+  vu = new Uint32Array(this.s.buffer);
+  vw = new Uint16Array(this.s.buffer);
+  vsw = new Int16Array(this.s.buffer);
+  vb = new Uint8Array(this.s.buffer);
+  vsb = new Int8Array(this.s.buffer);
   fpscr = 0;
   /** A64 FPCR/FPSR: stored so a save/restore round-trips; only frint*'s rounding mode reads them */
   fpcr = 0; fpsr = 0;
@@ -169,19 +182,28 @@ export class Cpu {
   }
 
   /** run guest function `fn` to completion on this Cpu (reentrant: saves and restores the register file) */
-  async call(fn: number, args: (number | bigint)[] = []): Promise<number> {
+  async call(fn: number, args: CallArg[] = []): Promise<number> {
     this.ensureStack();
     const r = this.r;
     const saved = new Int32Array(r);
     const st = this.t, sn = this.n, sz = this.z, scf = this.c, sv = this.v;
     const spending = this.pending;
     const savedH = this.a64 ? new Int32Array(this.h) : null;
+    const savedV = this.a64 ? new Int32Array(this.si) : null;
     const sexcl = this.excl;
     this.excl = 0;
-    let n = 0;
+    let n = 0, nv = 0;
     const stack: (number | bigint)[] = [];
     const nregs = this.a64 ? 8 : 4;
-    for (const a of args) {
+    for (const a0 of args) {
+      let a = a0;
+      if (typeof a === "object") {
+        // AAPCS64 hard float: v0-v7, then 8-byte stack slots. softfp: the bits, as an integer
+        if (this.a64) {
+          if (nv < 8) { if ("f" in a) this.s[nv * 4] = a.f; else this.d[nv * 2] = a.d; nv++; continue; }
+          a = "f" in a ? fbits(a.f) : dbits(a.d);
+        } else a = "f" in a ? fbits(a.f) : dbits(a.d);
+      }
       if (typeof a === "bigint") {
         // AAPCS64 puts a 64-bit value in one register; AAPCS32 wants an even pair
         if (!this.a64 && (n & 1)) n++;
@@ -217,11 +239,16 @@ export class Cpu {
       this.depth--;
       r.set(saved);
       if (savedH) this.h.set(savedH);
+      if (savedV) this.si.set(savedV);
       this.t = st; this.n = sn; this.z = sz; this.c = scf; this.v = sv;
       this.excl = sexcl;
       this.pending = spending;
     }
   }
+
+  /** the float/double a call() just returned, wherever the ABI put it */
+  retF(): number { return this.a64 ? this.s[0] : bitsf(this.r[0]); }
+  retD(): number { return this.a64 ? this.d[0] : bitsd(retPair(this.r[0], this.ret1)); }
 
   /** the slice driver: run until the frame returns (pc = RET_SENTINEL) or the thread finishes */
   async run(): Promise<void> {

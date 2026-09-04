@@ -2,8 +2,8 @@
 // between guest natives (AAPCS words) and the JVM's value model.
 
 import { mem } from "./mem";
-import { defineHost, type HostFn, VaList, fbits, bitsf, dbits, bitsd, retPair, type ArgReader, PTR, stp, ldp } from "./host";
-import { Cpu, cpuFor } from "./cpu";
+import { defineHost, type HostFn, VaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet } from "./host";
+import { Cpu, cpuFor, type CallArg } from "./cpu";
 import { rt, JObj, type ClassInfo } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, newPrimArray } from "../jvm/abi";
 import { curThread, JClass, stackTraceText } from "../jvm/natives/jlang";
@@ -108,19 +108,19 @@ function readJvalues(params: string[], p: number): unknown[] {
   }
   return out;
 }
-function retWord(ret: string, v: unknown, cpu: Cpu): number | bigint {
+function retWord(ret: string, v: unknown, cpu: Cpu): HostRet {
   switch (ret[0]) {
     case "V": return 0;
     case "Z": return v ? 1 : 0;
     case "J": return v as bigint;
-    case "F": return fbits(v as number);
-    case "D": return dbits(v as number);
+    case "F": return retF(cpu, v as number);
+    case "D": return retD(cpu, v as number);
     case "L": case "[": return toRef(v, cpu);
     default: return (v as number) | 0;
   }
 }
 
-async function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], nonvirtual: boolean): Promise<number | bigint> {
+async function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], nonvirtual: boolean): Promise<HostRet> {
   try {
     let fn: any;
     if (m.isStatic) {
@@ -147,13 +147,13 @@ async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unk
   const prevCur = cur;
   cur = cpu;
   pushFrame(cpu);
-  const list: (number | bigint)[] = [envFor(cpu), toRef(r.isStatic ? rt.classFor(r.cls) : self)];
+  const list: CallArg[] = [envFor(cpu), toRef(r.isStatic ? rt.classFor(r.cls) : self)];
   for (let i = 0; i < params.length; i++) {
     const t = params[i], v = args[i];
     switch (t[0]) {
       case "J": list.push(v as bigint); break;
-      case "F": list.push(fbits(v as number)); break;
-      case "D": list.push(dbits(v as number)); break;
+      case "F": list.push({ f: v as number }); break;
+      case "D": list.push({ d: v as number }); break;
       case "L": case "[": list.push(toRef(v)); break;
       default: list.push((v as number) | 0);
     }
@@ -173,8 +173,8 @@ async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unk
     case "S": out = (r0 << 16) >> 16; break;
     case "I": out = r0; break;
     case "J": out = retPair(r0, r1); break;
-    case "F": out = bitsf(r0); break;
-    case "D": out = bitsd(retPair(r0, r1)); break;
+    case "F": out = cpu.retF(); break;
+    case "D": out = cpu.retD(); break;
     default: out = deref(r0);
   }
   popFrame(cpu);
@@ -316,7 +316,7 @@ export function jniInit(): void {
   def(144, "GetStaticFieldID", getFieldID(true));
   for (let k = 0; k < 9; k++) {
     const P = PRIM[k], D = PRIM_DESC[k];
-    const fromJava = (v: unknown, cpu: Cpu): number | bigint => retWord(D, v, cpu);
+    const fromJava = (v: unknown, cpu: Cpu): HostRet => retWord(D, v, cpu);
     const toJava = (a: ArgReader): unknown => D === "J" ? a.l() : D === "F" ? a.f() : D === "D" ? a.d() : D === "L" ? deref(a.p()) : D === "Z" ? (a.i() ? 1 : 0) : a.i();
     def(95 + k, `Get${P}Field`, (cpu, a) => { a.p(); const o = deref(a.p()) as any; const f = fields[a.i()]; return o && f ? fromJava(o[f.prop], cpu) : D === "J" ? 0n : 0; });
     def(104 + k, `Set${P}Field`, (_c, a) => { a.p(); const o = deref(a.p()) as any; const f = fields[a.i()]; const v = toJava(a); if (o && f) o[f.prop] = v; });

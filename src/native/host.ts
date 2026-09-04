@@ -7,7 +7,9 @@ import { trampAddr, TRAMP_BASE, TRAMP_END } from "./abi";
 import { perf } from "../perf";
 
 export const NORET: unique symbol = Symbol("noret");
-export type HostRet = number | bigint | void | typeof NORET;
+/** the result is already in v0 (see retF/retD); only the return itself is left to do */
+export const VRET: unique symbol = Symbol("vret");
+export type HostRet = number | bigint | void | typeof NORET | typeof VRET;
 export type HostFn = (cpu: Cpu, a: ArgReader) => HostRet | Promise<HostRet>;
 
 export interface ArgReader {
@@ -21,6 +23,9 @@ export function bitsf(i: number): number { scratch.setInt32(0, i, true); return 
 export function dbits(x: number): bigint { scratch.setFloat64(0, x, true); return scratch.getBigInt64(0, true); }
 export function bitsd(l: bigint): number { scratch.setBigInt64(0, l, true); return scratch.getFloat64(0, true); }
 export function retPair(lo: number, hi: number): bigint { return (BigInt(hi | 0) << 32n) | BigInt(lo >>> 0); }
+/** return a float / double from a host function: s0/d0 on AAPCS64, the bits in r0(/r1) on softfp */
+export function retF(cpu: Cpu, x: number): HostRet { if (cpu.a64) { cpu.s[0] = x; return VRET; } return fbits(x); }
+export function retD(cpu: Cpu, x: number): HostRet { if (cpu.a64) { cpu.d[0] = x; return VRET; } return dbits(x); }
 
 /** AAPCS argument cursor: r0–r3, then the caller's stack; 64-bit values on even registers / 8-byte stack slots */
 export class Args implements ArgReader {
@@ -114,7 +119,8 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
 export function hostReturn(cpu: Cpu, ret: HostRet): void {
   if (ret === NORET) return;
   // AAPCS64 returns a 64-bit value in x0 alone; AAPCS32 splits it across r0/r1
-  if (typeof ret === "number") { cpu.r[0] = ret | 0; if (cpu.a64) cpu.h[0] = 0; }
+  if (ret === VRET) { /* already in v0 */ }
+  else if (typeof ret === "number") { cpu.r[0] = ret | 0; if (cpu.a64) cpu.h[0] = 0; }
   else if (typeof ret === "bigint") {
     cpu.r[0] = Number(ret & 0xffffffffn) | 0;
     const hi = Number((ret >> 32n) & 0xffffffffn) | 0;
@@ -125,8 +131,7 @@ export function hostReturn(cpu: Cpu, ret: HostRet): void {
 
 /** AAPCS64 argument cursor: x0–x7 then the caller's stack in 8-byte slots. A 64-bit value is one
  *  register, not an even pair, and floating-point arguments arrive in v0–v7 — hard float, unlike
- *  the armeabi-v7a softfp ABI Args reads. Only the low 64 bits of a V register are modelled;
- *  anything that would need the rest faults in the decoder before it gets here. */
+ *  the armeabi-v7a softfp ABI Args reads. */
 export class Args64 implements ArgReader {
   private cpu!: Cpu;
   private n = 0;      // next core register
@@ -145,8 +150,8 @@ export class Args64 implements ArgReader {
     const v = mem.ld64(this.sp); this.sp += 8; return v;
   }
   ul(): bigint { return BigInt.asUintN(64, this.l()); }
-  f(): number { if (this.nv < 8) return this.cpu.s[this.nv++ * 2]; const v = mem.ld32(this.sp); this.sp += 8; return bitsf(v); }
-  d(): number { if (this.nv < 8) return this.cpu.d[this.nv++]; const v = mem.ld64(this.sp); this.sp += 8; return bitsd(v); }
+  f(): number { if (this.nv < 8) return this.cpu.s[this.nv++ * 4]; const v = mem.ld32(this.sp); this.sp += 8; return bitsf(v); }
+  d(): number { if (this.nv < 8) return this.cpu.d[this.nv++ * 2]; const v = mem.ld64(this.sp); this.sp += 8; return bitsd(v); }
   vd(): number { return this.d(); }
   str(): string { return mem.cstr(this.p()); }
   strAt(p: number): string { return mem.cstr(p); }

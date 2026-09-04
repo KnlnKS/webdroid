@@ -2,7 +2,7 @@
 // that fail honestly. Struct layouts live in LAYOUT. stdio is in stdio.ts, printf/scanf in printf.ts.
 
 import { mem, NativeFault } from "./mem";
-import { hostLib, hostData, NORET, VaList, type HostFn, fbits, bitsf, dbits, bitsd, PTR } from "./host";
+import { hostLib, hostData, NORET, VaList, type HostFn, retF, retD, PTR } from "./host";
 import { E } from "./abi";
 import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
@@ -294,9 +294,9 @@ export function libcInit(): void {
     atoi: (cpu, a) => Number(strtoNum(cpu, a.p(), 0, 10, 32, false)),
     atol: (cpu, a) => Number(strtoNum(cpu, a.p(), 0, 10, 32, false)),
     atoll: (cpu, a) => strtoNum(cpu, a.p(), 0, 10, 64, false),
-    strtod: (_c, a) => dbits(strtodAt(a.p(), a.p())),
-    strtof: (_c, a) => fbits(Math.fround(strtodAt(a.p(), a.p()))),
-    atof: (_c, a) => dbits(strtodAt(a.p(), 0)),
+    strtod: (c, a) => retD(c, strtodAt(a.p(), a.p())),
+    strtof: (c, a) => retF(c, Math.fround(strtodAt(a.p(), a.p()))),
+    atof: (c, a) => retD(c, strtodAt(a.p(), 0)),
     tolower: (_c, a) => { const c = a.i(); return c >= 65 && c <= 90 ? c + 32 : c; },
     toupper: (_c, a) => { const c = a.i(); return c >= 97 && c <= 122 ? c - 32 : c; },
     isupper: (_c, a) => { const c = a.i(); return c >= 65 && c <= 90 ? 1 : 0; },
@@ -377,7 +377,7 @@ export function libcInit(): void {
     timegm: (_c, a) => { const [sec, min, hour, mday, mon, year] = readTm(a.p()); return Math.floor(Date.UTC(year + 1900, mon, mday, hour, min, sec) / 1000); },
     strftime: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(), tm = a.p(); const s = utf8(strftime(f, tm)); if (s.length >= n) return 0; u8.set(s, d); u8[d + s.length] = 0; return s.length; },
     tzset: () => {},
-    difftime: (_c, a) => dbits(a.i() - a.i()),
+    difftime: (c, a) => retD(c, a.i() - a.i()),
 
     // ── setjmp / longjmp (the buffer holds r4–r14; sigsetjmp aliases)
     setjmp: (cpu, a) => setjmp(cpu, a.p()),
@@ -389,7 +389,7 @@ export function libcInit(): void {
 
     lrand48: () => next48() & 0x7fffffff,
     mrand48: () => next48() | 0,
-    drand48: () => dbits((next48() >>> 0) / 4294967296),
+    drand48: (c) => retD(c, (next48() >>> 0) / 4294967296),
     srand48: (_c, a) => { r48 = (BigInt(a.u()) << 16n) | 0x330en; },
     rand: () => next48() & 0x7fffffff,
     random: () => next48() & 0x7fffffff,
@@ -399,18 +399,18 @@ export function libcInit(): void {
     arc4random_uniform: (_c, a) => Math.floor(Math.random() * a.u()) | 0,
 
     // ── math the guest might import despite softfloat helpers (values travel as bit patterns)
-    sin: (_c, a) => dbits(Math.sin(a.d())), cos: (_c, a) => dbits(Math.cos(a.d())), tan: (_c, a) => dbits(Math.tan(a.d())),
-    asin: (_c, a) => dbits(Math.asin(a.d())), acos: (_c, a) => dbits(Math.acos(a.d())), atan: (_c, a) => dbits(Math.atan(a.d())),
-    atan2: (_c, a) => dbits(Math.atan2(a.d(), a.d())), sqrt: (_c, a) => dbits(Math.sqrt(a.d())), pow: (_c, a) => dbits(Math.pow(a.d(), a.d())),
-    exp: (_c, a) => dbits(Math.exp(a.d())), log: (_c, a) => dbits(Math.log(a.d())), log10: (_c, a) => dbits(Math.log10(a.d())),
-    floor: (_c, a) => dbits(Math.floor(a.d())), ceil: (_c, a) => dbits(Math.ceil(a.d())), fmod: (_c, a) => dbits(a.d() % a.d()),
-    fabs: (_c, a) => dbits(Math.abs(a.d())), ldexp: (_c, a) => dbits(a.d() * Math.pow(2, a.i())),
-    frexp: (_c, a) => { const v = a.d(), ep = a.p(); if (v === 0 || !isFinite(v)) { mem.st32(ep, 0); return dbits(v); } const e = Math.floor(Math.log2(Math.abs(v))) + 1; mem.st32(ep, e); return dbits(v / Math.pow(2, e)); },
-    modf: (_c, a) => { const v = a.d(), ip = a.p(); const i = Math.trunc(v); mem.stf64(ip, i); return dbits(v - i); },
-    sinf: (_c, a) => fbits(Math.sin(a.f())), cosf: (_c, a) => fbits(Math.cos(a.f())), tanf: (_c, a) => fbits(Math.tan(a.f())),
-    sqrtf: (_c, a) => fbits(Math.sqrt(a.f())), powf: (_c, a) => fbits(Math.pow(a.f(), a.f())), atan2f: (_c, a) => fbits(Math.atan2(a.f(), a.f())),
-    floorf: (_c, a) => fbits(Math.floor(a.f())), ceilf: (_c, a) => fbits(Math.ceil(a.f())), fmodf: (_c, a) => fbits(a.f() % a.f()),
-    expf: (_c, a) => fbits(Math.exp(a.f())), logf: (_c, a) => fbits(Math.log(a.f())), fabsf: (_c, a) => fbits(Math.abs(a.f())),
+    sin: (c, a) => retD(c, Math.sin(a.d())), cos: (c, a) => retD(c, Math.cos(a.d())), tan: (c, a) => retD(c, Math.tan(a.d())),
+    asin: (c, a) => retD(c, Math.asin(a.d())), acos: (c, a) => retD(c, Math.acos(a.d())), atan: (c, a) => retD(c, Math.atan(a.d())),
+    atan2: (c, a) => retD(c, Math.atan2(a.d(), a.d())), sqrt: (c, a) => retD(c, Math.sqrt(a.d())), pow: (c, a) => retD(c, Math.pow(a.d(), a.d())),
+    exp: (c, a) => retD(c, Math.exp(a.d())), log: (c, a) => retD(c, Math.log(a.d())), log10: (c, a) => retD(c, Math.log10(a.d())),
+    floor: (c, a) => retD(c, Math.floor(a.d())), ceil: (c, a) => retD(c, Math.ceil(a.d())), fmod: (c, a) => retD(c, a.d() % a.d()),
+    fabs: (c, a) => retD(c, Math.abs(a.d())), ldexp: (c, a) => retD(c, a.d() * Math.pow(2, a.i())),
+    frexp: (c, a) => { const v = a.d(), ep = a.p(); if (v === 0 || !isFinite(v)) { mem.st32(ep, 0); return retD(c, v); } const e = Math.floor(Math.log2(Math.abs(v))) + 1; mem.st32(ep, e); return retD(c, v / Math.pow(2, e)); },
+    modf: (c, a) => { const v = a.d(), ip = a.p(); const i = Math.trunc(v); mem.stf64(ip, i); return retD(c, v - i); },
+    sinf: (c, a) => retF(c, Math.sin(a.f())), cosf: (c, a) => retF(c, Math.cos(a.f())), tanf: (c, a) => retF(c, Math.tan(a.f())),
+    sqrtf: (c, a) => retF(c, Math.sqrt(a.f())), powf: (c, a) => retF(c, Math.pow(a.f(), a.f())), atan2f: (c, a) => retF(c, Math.atan2(a.f(), a.f())),
+    floorf: (c, a) => retF(c, Math.floor(a.f())), ceilf: (c, a) => retF(c, Math.ceil(a.f())), fmodf: (c, a) => retF(c, a.f() % a.f()),
+    expf: (c, a) => retF(c, Math.exp(a.f())), logf: (c, a) => retF(c, Math.log(a.f())), fabsf: (c, a) => retF(c, Math.abs(a.f())),
 
     // ── sockets: descriptors exist, the network does not
     socket: () => { const fd = nextSock++; socks.add(fd); return fd; },
@@ -524,4 +524,4 @@ const ERRSTR: Record<number, string> = {
   21: "Is a directory", 22: "Invalid argument", 24: "Too many open files", 28: "No space left on device", 29: "Illegal seek", 34: "Numerical result out of range",
   35: "Resource deadlock would occur", 38: "Function not implemented", 39: "Directory not empty", 101: "Network is unreachable", 110: "Connection timed out",
 };
-export { NativeFault, bitsf, bitsd };
+export { NativeFault };
