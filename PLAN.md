@@ -25,7 +25,8 @@ See "One build, or none" and "The delegates" in AGENTS.md.
 | Evidence, headless | `bun run fwtest`: `new Paint/Matrix/Path`, `Bitmap.createBitmap` + pixel round-trip, three AssetManager lookups, `android:layout/alert_dialog` opened through `nativeOpenXmlAsset` and walked to END_DOCUMENT |
 | Evidence, in a page | `bun run textcmp`: AOSP's own `StaticLayout` against ours, **6/6 paragraphs break identically** |
 | e2e (last full run) | fitnotes 43.07 · mihon-onboarding 17.55 · mihon-app 76.91 · harmonic 33.36 · overall 42.72, every step rendered |
-| Corpus | `bun run corpus` 9/10 render a frame; only Among Us does not (IL2CPP arm64) |
+| Corpus | `bun run corpus` 7/8 render a frame; only Among Us does not, and that is now honest — its launcher activity's `<clinit>` is `System.loadLibrary("EOSSDK")`, 25 MB of arm64. Its `wd.rt.missing` is empty and the one remaining ranked gap in the whole corpus is harmonic's accepted `WindowExtensionsProvider` |
+| Native tier | ARM32 **and AArch64**. All 17 arm64 images in `apks/` load and relocate; `libmain.so`/`libsentry.so` run their init arrays and `JNI_OnLoad`. `wd.native.bench()`: arm 4,196M instr/s, a64 2,852M. The wall is NEON — see "The A64 tier" and "Among Us: where the wall actually is" in AGENTS.md |
 | Screen | a resolved **setting**, default 1080x2424 @480dpi (360x808dp). `?screen=WxH@dpi`, `WEBDROID_SCREEN`, or the shell's own panel. The gate stays pinned to each flow's goldens — see "The screen is a setting" in AGENTS.md |
 
 ## What a cut costs — measured, not projected
@@ -187,13 +188,36 @@ it has been tried three ways and measured.
 
 ## 5. Native tier **[parallel]** — what the remaining apks need
 
-- **Thumb-2 is unimplemented** (`thumb.ts` faults on every 32-bit T32 encoding). Nearly every
-  current armeabi-v7a `.so` faults immediately. Highest-value native fix by far.
-- **No arm64**, yet `Build.SUPPORTED_ABIS` advertises `arm64-v8a` — a lie a library can act on.
-  mihon ships arm64-only `.so`; Among Us is IL2CPP arm64. Worth researching whether the CPU
-  tier should target **wasm** rather than JS source for AArch64.
-- No `DT_RELR` packed relocations (NDK r23+ default), no ifuncs, no symbol versioning.
-- Direct `ByteBuffer` unsupported; no `libandroid.so`, no `libjnigraphics.so`, no `libc++`.
+- **NEON is unimplemented and is now the wall.** `vfp.ts` is VFPv3 scalar; there is no SIMD at
+  all. Every large arm64 image in the corpus — libc++_shared, libEOSSDK, libunity, libil2cpp —
+  stops at its first NEON encoding, each one named in the fault. Measured over `libil2cpp.so`'s
+  11.2M instructions, SIMD is 2.4% of the image; over `libunity.so` it is 10.6%. **Do not guess
+  lane order or saturation**: a wrong lane is a plausible number nothing will flag (rule 5).
+- **The Bionic surface those images want.** `bun scripts/nrun.ts <apk> <lib> --link` prints the
+  unresolved imports per image: 322 for libEOSSDK, 346 for libunity. That list is the queue, and
+  it is mostly `_l` locale variants, `__*_chk` fortified wrappers, `pthread_rwlock_*`,
+  `dl_iterate_phdr`, `getauxval` and `__system_property_get`.
+- **`libandroid.so`, `libOpenSLES.so`, `libmediandk.so` do not exist here at all**, and
+  `libGLESv3.so` is what Unity's renderer needs. A programmable-pipeline GLES host library is
+  roughly `gles1.ts`'s size and is **independent of the CPU work** — do not entangle them.
+- **Thumb-2 is still unimplemented** (`thumb.ts` faults on every 32-bit T32 encoding). It is
+  orthogonal to the arm64 work: lichess and Among Us ship arm64 only, so no amount of Thumb-2
+  reaches them. mihon's v7a libs are all claimed by TS shims before the tier sees them.
+- **`Build.SUPPORTED_ABIS` still advertises arm64-v8a.** That is now true of the *device* and
+  true of the *tier* for loading, and `rt.nativeAbis` is the separate fact about what executes.
+  Deliberately not changed: the device profile is a modern phone, and reporting v7a-only would
+  make a ReLinker-style app extract a v7a library Thumb-2 cannot run in preference to reporting
+  the honest arm64 requirement.
+- No ifuncs, no symbol versioning, no `DT_RELR` — all three measured absent from every arm64
+  image in the corpus, and `DT_RELR`/`DT_ANDROID_RELA` are now *refused by name* rather than
+  skipped, because relocations silently never applied crash somewhere unrelated.
+- Direct `ByteBuffer` unsupported; no `libjnigraphics.so`.
+- **wasm as the backend** (the open question above): not yet, and the measurements say why. The
+  JS backend's floor is ~800M instr/s on all-64-bit code and its ceiling ~4.3G on 32-bit code.
+  wasm's advantage is i64 as a native type, which buys the floor — real, but it costs the whole
+  `flags.ts` string-pass architecture, `selfLoop`, block invalidation and the `new Function`
+  compile model, and it cannot be staged. Revisit only if a profile shows an app spending its
+  time in 64-bit arithmetic.
 
 ## 6. Corpus and coverage **[parallel]**
 

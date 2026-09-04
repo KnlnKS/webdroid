@@ -14,7 +14,7 @@
 
 import { mem } from "./mem";
 import { PAGE_SIZE, PAGE_SHIFT } from "./abi";
-import { type Ins, type Fl, N, Z, C, V, ALL, COND, COND_READS, hex, assemble, hoistRegs, inlineMem, selfLoop, retK } from "./flags";
+import { type Ins, type Fl, C, ALL, COND, COND_READS, NZ, ADDF, SUBF, hex, assemble, hoistRegs, inlineMem, selfLoop, retK } from "./flags";
 
 let MAX_BLOCK = 256;
 /** 1 = single-instruction blocks (the step tracer) */
@@ -36,10 +36,9 @@ const setW = (d: number, lo: string) => (d === SP ? "" : `r[${d}]=${lo};H[${d}]=
 const setSP = (d: number, lo: string, hi: string) => `r[${d}]=${lo};H[${d}]=${hi};`;
 
 // ── flags. NZCV is ARM's, so COND/COND_READS carry over unchanged; only the 64-bit forms are new.
-const NZ32: Fl = { n: "c.n=v>>>31;", z: "c.z=v===0?1:0;" };
-const ADD32: Fl = { ...NZ32, c: "c.c=((a>>>0)+(t>>>0))>4294967295?1:0;", v: "c.v=((a^v)&(t^v))>>>31;" };
-const SUB32: Fl = { ...NZ32, c: "c.c=(a>>>0)>=(t>>>0)?1:0;", v: "c.v=((a^t)&(a^v))>>>31;" };
-const LOG32: Fl = { ...NZ32, c: "c.c=0;", v: "c.v=0;" };
+// the 32-bit forms are ARM's own, bit for bit: NZ/ADDF/SUBF from flags.ts. Only the 64-bit ones
+// and the logical form (which clears C and V rather than leaving them) are new here.
+const LOG32: Fl = { ...NZ, c: "c.c=0;", v: "c.v=0;" };
 const NZ64: Fl = { n: "c.n=vh>>>31;", z: "c.z=(v|vh)===0?1:0;" };
 const ADD64: Fl = {
   ...NZ64,
@@ -156,7 +155,7 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
         push(core + (S ? setX(rd, "v", "vh") : setSP(rd, "v", "vh")) + "\0F", S ? (sub ? SUB64 : ADD64) : null, 0, S ? ALL : 0);
       } else {
         const core = `a=${sp(rn)};t=${hex(imm)};v=(a${sub ? "-" : "+"}t)|0;`;
-        push(core + (S ? setW(rd, "v") : setSP(rd, "v", "0")) + "\0F", S ? (sub ? SUB32 : ADD32) : null, 0, S ? ALL : 0);
+        push(core + (S ? setW(rd, "v") : setSP(rd, "v", "0")) + "\0F", S ? (sub ? SUBF : ADDF) : null, 0, S ? ALL : 0);
       }
       return false;
     }
@@ -371,7 +370,6 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
 
   // ── data processing, register
   if (is(0x0e000000, 0x0a000000)) {
-    const op = (w >>> 21) & 0xff;
     // logical, shifted register
     if (is(0x1f000000, 0x0a000000)) {
       const opc = (w >>> 29) & 3, nbit = (w >>> 21) & 1, type = (w >>> 22) & 3, amt = (w >>> 10) & 0x3f;
@@ -410,7 +408,7 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
           + (S ? setX(rd, "v", "vh") : setSP(rd, "v", "vh")) + "\0F", S ? (sub ? SUB64 : ADD64) : null, 0, S ? ALL : 0);
       } else {
         push(`a=${base};t=${ml};v=(a${sub ? "-" : "+"}t)|0;` + (S ? setW(rd, "v") : setSP(rd, "v", "0")) + "\0F",
-          S ? (sub ? SUB32 : ADD32) : null, 0, S ? ALL : 0);
+          S ? (sub ? SUBF : ADDF) : null, 0, S ? ALL : 0);
       }
       return false;
     }
@@ -424,7 +422,7 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
         push(core + setX(rd, "v", "vh") + "\0F", S ? ADD64 : null, C, S ? ALL : 0);
       } else {
         const core = `a=${zr(rn)};t=${sub ? `~${zr(rm)}` : zr(rm)};v=(a+t+c.c)|0;`;
-        push(core + setW(rd, "v") + "\0F", S ? ADD32 : null, C, S ? ALL : 0);
+        push(core + setW(rd, "v") + "\0F", S ? ADDF : null, C, S ? ALL : 0);
       }
       return false;
     }
@@ -438,7 +436,7 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
       const cmp = w64
         ? `a=${zr(rn)};ah=${zrh(rn)};t=${rhs};th=${rhsH};` + (sub ? SUB_CORE64 : ADD_CORE64)
         : `a=${zr(rn)};t=${rhs};v=(a${sub ? "-" : "+"}t)|0;`;
-      const fl = w64 ? (sub ? SUB64 : ADD64) : (sub ? SUB32 : ADD32);
+      const fl = w64 ? (sub ? SUB64 : ADD64) : (sub ? SUBF : ADDF);
       const upd = (fl.n ?? "") + (fl.z ?? "") + (fl.c ?? "") + (fl.v ?? "");
       push(`if(${COND[cond]}){${cmp}${upd}}else{${setNzcv}}`, null, COND_READS[cond], ALL);
       return false;
@@ -517,7 +515,6 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
       push(fault("3-source"));
       return true;
     }
-    void op;
     push(fault("data processing (register)"));
     return true;
   }
@@ -556,6 +553,3 @@ export function emitA64Block(pc: number): BlockSrc {
     len: (end - pc) >> 2, end, slots: slot,
   };
 }
-
-// referenced so the flag constants stay one set rather than two
-void N; void Z; void V;

@@ -5,9 +5,10 @@ Goal: run FitNotes.apk → mihon → flappybird → Among Us.xapk fully client-s
 
 ## Verify
 - `bun run typecheck` — must be clean (noUnusedLocals).
-- `bun run test` — 29 tests over the ARM32 decoder (`src/native/arm.test.ts`), the dex front-end
-  (`src/jvm/dex.test.ts`, `src/jvm/opcodes.test.ts`), the gzip trailer
-  (`src/jvm/natives/jzip.test.ts`) and the e2e structural diff (`tests/e2e/lib/tree.test.ts`).
+- `bun run test` — 46 tests over the ARM32 decoder (`src/native/arm.test.ts`), the A64 decoder
+  (`src/native/a64.test.ts`), the dex front-end (`src/jvm/dex.test.ts`,
+  `src/jvm/opcodes.test.ts`), the gzip trailer (`src/jvm/natives/jzip.test.ts`) and the e2e
+  structural diff (`tests/e2e/lib/tree.test.ts`).
 - `bun run smoke apks/<apk>` — every class compiles (0 method failures).
 - `bun run fwtest [prefix ...]` — delegate coverage + real-bytecode evidence, headless.
 - `bun run dev` (or `PORT=<n> bun run server.ts`) then `bun run e2e [--test <flow,...>] [--shots]` —
@@ -137,7 +138,14 @@ and a `removeMessages` on something that is not our Handler.
 - [ ] harmonic remaining: the two dialog defects written up under "The dialog card that was a
       blob", plus the settings row pitch being ~3% tall and story rows having no preview
       thumbnails or favicons.
-- [ ] Among Us (IL2CPP ARM64 — extremely hard, best effort)
+- [x] Among Us: the whole Java layer runs and `wd.rt.missing` is EMPTY — split install merged,
+      18,889 classes compiled with 0 method failures, WorkManager/Sentry/ProfileInstaller all
+      initialised, the starting window on screen, and the only failure is the one a device would
+      not have: `libEOSSDK.so` is arm64 machine code. It now *loads* and runs 140 instructions
+      of its init arrays before an unimplemented NEON encoding. See "Among Us: where the wall
+      actually is".
+- [ ] Among Us remaining: NEON, the Bionic surface those images import (322 for libEOSSDK
+      alone), `libandroid.so`/`libGLESv3.so`/`libOpenSLES.so`, and a GLES3 host library.
 
 ## Infrastructure delivered
 - DEX→JS AOT VM: compiles 4200+ classes/APK in ~400ms, 0 method failures; bodies generated lazily
@@ -1093,11 +1101,20 @@ over Intl) took **TikTok** from failing to rendering a frame with 1,365 classes 
 None of them came from staring at a stack trace.
 
 A split install (.xapk, .apks, an App Bundle's output) is a zip of apks rather than an apk,
-which is how Play distributes everything now. `openInstall` merges them into the one tree the
-rest of the boot expects: the base is the apk whose manifest has no `split` attribute, it
-wins every conflict the way its dex is first on a device's class path, and each split's dex
-is renamed so both survive. Among Us now unpacks and compiles 368 classes — it does not
-render, because IL2CPP arm64 is still the final boss, but the format is no longer the wall.
+which is how Play distributes everything now. `openInstall` (`src/shell/install.ts`) merges them
+into the one tree the rest of the boot expects: the base is the apk whose manifest has no
+`split` attribute, it wins every conflict the way its dex is first on a device's class path, and
+each split's dex is renamed so both survive. It is shared by the shell, the dev server's
+`/asset` route and the bun scripts, so an xapk is an apk everywhere or nowhere — before that,
+`bun run inspect|dis|smoke|audit` could not open one at all.
+
+**An entry that was stored is a view, not a copy.** `zipTree` (`jzip.ts`) indexes the central
+directory and materialises one entry at a time: a stored entry is a subarray of bytes already
+held, a deflated one is inflated on first read and then replaces its own accessor. `Object.keys`
+stays free; **`Object.entries` inflates the whole tree**, which is why nothing on the boot path
+uses it. Among Us.xapk is 1.1 GB with a 1.05 GB asset pack, and the eager form cost 6,573 MB of
+`usedJSHeapSize` against a 4,395 MB limit — one boot, over the limit. Lazily it is 1,518 MB, and
+every other apk boots faster for it.
 
 ## The sync tier is worth 24x, and we cannot have it yet
 Every compiled method is `async` because any call might return a promise. In the shape the
@@ -1512,6 +1529,74 @@ Generic gaps this uncovered, none Flutter-specific:
   `ApplicationInfo.split*`/`sharedLibraryFiles` (null, as for a plain base.apk), and the
   default uncaught handler now prints the `Caused by` chain (AOSP's does; it is what named the
   real fault above).
+
+## Among Us: where the wall actually is
+The whole Java layer runs. `bun run smoke "apks/Among Us.xapk"` compiles all 18,889 classes with
+0 method failures in 2.6s; a boot merges the split install, initialises WorkManager, Sentry and
+ProfileInstaller, and leaves **`wd.rt.missing` empty**. Nine APIs got it there, none of them
+Among-Us-specific and all of them found by reading that list rather than a stack trace — see the
+commits from `net: X500Principal` onward. Two were only legible after inverting `abi.ts`'s
+`hash36` over candidate descriptors: a missing method that surfaces as
+`v0.m$getQueue$ucjqmv is not a function` carries no class name, and the technique is how
+`getQueue()BlockingQueue`, `purge()V` and `Runtime.exec([String)Process` got their signatures.
+
+The launcher activity's `<clinit>` is one instruction: `System.loadLibrary("EOSSDK")`. That is a
+25 MB arm64 image, so the boot's outcome is decided entirely by the native tier — which is why
+this app, uniquely, is a native-tier problem wearing a framework problem's clothes.
+
+**Where it stops now.** `libEOSSDK.so` loads: 70,789 RELA relocations applied, 744 exports,
+57 init-array entries, GNU-hash-only symbol table. It executes 140 instructions of those init
+arrays and stops at `unimplemented 0x4f07f601 @ libEOSSDK.so!EOS_EndScopeEvent+0x31ccc` — a NEON
+`movi`. `libc++_shared.so`, `libunity.so` and `libil2cpp.so` stop the same way, each naming its
+own encoding. `libmain.so` and `libsentry.so` run to completion; `libmain.so`'s `JNI_OnLoad`
+registers `NativeLoader.load(String)Z` and `NativeLoader.unload()Z` in 27 instructions.
+
+**What is between here and a frame of the game**, in order of size: NEON (`vfp.ts` is VFPv3
+scalar and there is no SIMD at all, and guessing lane semantics is exactly the plausible-wrong-
+value rule 5 forbids); the Bionic surface those images import — 322 undefined symbols for
+libEOSSDK, 346 for libunity, and `nrun --link` prints them per image, which is the queue;
+`libandroid.so`, `libOpenSLES.so` and `libmediandk.so`, which do not exist here at all; and a
+programmable-pipeline `libGLESv3.so`, which `gles1.ts` (ES 1.1 plus a 17-function ES2 alias
+table) is not. The last of those is independent of the CPU work and should not be entangled with
+it. Do not read "Among Us boots" as "Among Us is close".
+
+## The A64 tier: a split register file, because BigInt is 32x
+`src/native/a64.ts` is a third emitter on `arm.ts`'s contract — `emitA64Block` returns
+`{src,len,end,slots}`, `flags.ts`'s liveness pass, memory inlining, self-loop wrapping, register
+hoisting and exit shape are all shared, and A64's condition codes are ARM's so `COND`/
+`COND_READS` carry over verbatim.
+
+**The register file was measured before it was written.** On a data-dependent chain of 50M
+emulated adds: a split hi/lo `Int32Array` pair 53ms, `BigInt64Array` 1,686ms, the 32-bit tier
+52ms. BigInt is not a slow option, it is not an option. A W-form write zero-extends into its X
+register *architecturally*, so `H[d]=0` is the entire cost of the 32-bit half of the ISA, and
+every shift whose amount is in the encoding is split across the halves at emit time.
+
+`wd.native.bench()` quotes both tiers on the same six-instruction byte-copy loop: **arm 4,196M
+instr/s, a64 2,852M** (bun). Hoisting is worth 2,258 → 2,852 on the A64 side; the rest of the gap
+is that loop's `sub`/`add`/`cbnz` doing two halves each, which is the architecture.
+
+**A process is one ABI.** Android never mixes widths in one image's dependency graph, so the
+instruction set, the pc/lr/sp register indices and the guest pointer width are properties of the
+*process*, set when its first image loads (`setA64`) — one `Int32Array(33)` either way, so the
+run loop indexes rather than branches. `dl.ts` throws if a second image disagrees.
+
+Two bugs worth remembering, both a whole class rather than one site:
+- **`w & mask` is a signed int32 in JS.** Every encoding test whose mask keeps bit 31 compared a
+  negative number against a positive literal and could never match. `RET` was the first casualty
+  and the block ran off the end of the function. All 31 tests go through one unsigned helper now.
+- **ARM's `DecodeBitMasks` rejects `imms == levels` only for a logical immediate.** Applying it
+  to the bitfield forms as well would have refused `lsr x, x, #40` and every alias like it.
+
+The decoder's tests take their encodings from `clang -target aarch64-linux-gnu` and their
+mnemonics from objdump — never hand-derived, the same discipline PLAN.md's rule 3 states for dex
+signatures. Both decoder test files reserve their code page through `mem.reserve` rather than
+naming an address the stack allocator can march into.
+
+**Deliberately absent, and why:** NEON (above); `DT_RELR` and Android packed relocations, which
+appear in none of the corpus's 17 arm64 images and are *refused by name* rather than skipped,
+because a relocation table silently never applied crashes somewhere unrelated; ifuncs, TLS
+relocations and symbol versioning, all measured absent.
 
 ## Text metrics: ascent/descent are the font's, line boxes are includeFontPadding's
 The device font's vertical metrics are now AOSP's Roboto hhea values (1900/-500 per em),
