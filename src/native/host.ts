@@ -3,7 +3,7 @@
 
 import type { Cpu } from "./cpu";
 import { mem } from "./mem";
-import { trampAddr, TRAMP_BASE, TRAMP_END } from "./abi";
+import { trampAddr, TRAMP_BASE, TRAMP_END, RET_SENTINEL } from "./abi";
 import { perf } from "../perf";
 
 export const NORET: unique symbol = Symbol("noret");
@@ -119,7 +119,7 @@ const fns: HostFn[] = [];
 const names: string[] = [];
 export function defineHost(name: string, fn: HostFn): number {
   const slot = fns.length;
-  if (trampAddr(slot) >= TRAMP_END) throw new Error("out of trampoline slots");
+  if (trampAddr(slot) >= RET_SENTINEL) throw new Error("out of trampoline slots");
   fns.push(fn); names.push(name);
   // `bx lr` at the slot so a guest that reads its own code (or a disassembler) sees something sane
   mem.u32[trampAddr(slot) >>> 2] = 0xe12fff1e;

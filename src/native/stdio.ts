@@ -12,7 +12,6 @@ import { device } from "../shell/config";
 
 const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_DIRECTORY = 0x4000;
 const S_IFDIR = 0x4000, S_IFREG = 0x8000;
-const u8 = mem.u8;
 
 /** a pipe: byte chunks, and whoever is parked waiting for them (a reader, or an epoll_wait) */
 interface Pipe { q: Uint8Array[]; wake: (() => void)[]; closed: boolean }
@@ -74,7 +73,7 @@ function grow(f: Fd, need: number): void {
 }
 function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   if (fd === 1 || fd === 2) {
-    const s = new TextDecoder().decode(u8.subarray(p, p + n));
+    const s = new TextDecoder().decode(mem.u8.subarray(p, p + n));
     const f = fds.get(fd)!;
     f.line = (f.line ?? "") + s;
     let i: number;
@@ -83,12 +82,12 @@ function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   }
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
-  if (f.wpipe) { f.wpipe.q.push(u8.slice(p, p + n)); wakeAll(f.wpipe); return n; }
+  if (f.wpipe) { f.wpipe.q.push(mem.u8.slice(p, p + n)); wakeAll(f.wpipe); return n; }
   if (f.event) { f.event.count += mem.ld32(p); wakeAll(f.event); return 8; }
   if (!f.write) return fail(cpu, E.BADF);
   if (f.append) f.pos = f.len;
   grow(f, f.pos + n);
-  f.data.set(u8.subarray(p, p + n), f.pos);
+  f.data.set(mem.u8.subarray(p, p + n), f.pos);
   f.pos += n;
   if (f.pos > f.len) f.len = f.pos;
   f.dirty = true;
@@ -107,13 +106,23 @@ function fdRead(cpu: Cpu, fd: number, p: number, n: number): number | Promise<nu
     if (f.event) { const c = f.event.count; f.event.count = 0; mem.st32(p, c); mem.st32(p + 4, 0); return 8; }
     const q = f.rpipe!.q;
     let k = 0;
-    while (k < n && q.length) { const c = q[0], take = Math.min(n - k, c.length); u8.set(c.subarray(0, take), p + k); k += take; if (take === c.length) q.shift(); else q[0] = c.subarray(take); }
+    while (k < n && q.length) { const c = q[0], take = Math.min(n - k, c.length); mem.u8.set(c.subarray(0, take), p + k); k += take; if (take === c.length) q.shift(); else q[0] = c.subarray(take); }
     return k;
   }
   const k = Math.max(0, Math.min(n, f.len - f.pos));
-  if (k > 0) u8.set(f.data.subarray(f.pos, f.pos + k), p);
+  if (k > 0) mem.u8.set(f.data.subarray(f.pos, f.pos + k), p);
   f.pos += k;
   return k;
+}
+/** `n` bytes of `fd` from offset `off` into guest memory at `dst`, without moving the position */
+export function readInto(cpu: Cpu, fd: number, off: number, dst: number, n: number): number | Promise<number> {
+  const f = fds.get(fd);
+  if (!f) return fail(cpu, E.BADF);
+  const save = f.pos;
+  f.pos = off;
+  const r = fdRead(cpu, fd, dst, n);
+  f.pos = save;
+  return r;
 }
 function flushFd(f: Fd): void {
   if (f.dirty && !f.synthetic) { vfs.write(f.path, f.data.slice(0, f.len)); f.dirty = false; }
@@ -229,7 +238,7 @@ function fwriteBytes(cpu: Cpu, fp: number, p: number, n: number): number {
 function fwriteStr(cpu: Cpu, fp: number, s: string): number {
   const b = utf8(s);
   const tmp = mem.malloc(b.length + 1);
-  u8.set(b, tmp);
+  mem.u8.set(b, tmp);
   const r = fwriteBytes(cpu, fp, tmp, b.length);
   mem.free(tmp);
   return r < b.length ? -1 : b.length;
@@ -404,17 +413,17 @@ export function stdioInit(): void {
       while (i < n - 1) {
         const c = fgetc(cpu, fp);
         if (c < 0) break;
-        u8[buf + i++] = c;
+        mem.u8[buf + i++] = c;
         if (c === 10) break;
       }
       if (i === 0) return 0;
-      u8[buf + i] = 0;
+      mem.u8[buf + i] = 0;
       return buf;
     },
-    fputc: (cpu, a) => { const c = a.i() & 255, fp = a.p(); u8[scratch] = c; return fwriteBytes(cpu, fp, scratch, 1) === 1 ? c : -1; },
-    putc: (cpu, a) => { const c = a.i() & 255, fp = a.p(); u8[scratch] = c; return fwriteBytes(cpu, fp, scratch, 1) === 1 ? c : -1; },
-    __swbuf: (cpu, a) => { const c = a.i() & 255, fp = a.p(); u8[scratch] = c; return fwriteBytes(cpu, fp, scratch, 1) === 1 ? c : -1; },
-    putchar: (cpu, a) => { const c = a.i() & 255; u8[scratch] = c; return fwriteBytes(cpu, stdoutFp, scratch, 1) === 1 ? c : -1; },
+    fputc: (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; return fwriteBytes(cpu, fp, scratch, 1) === 1 ? c : -1; },
+    putc: (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; return fwriteBytes(cpu, fp, scratch, 1) === 1 ? c : -1; },
+    __swbuf: (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; return fwriteBytes(cpu, fp, scratch, 1) === 1 ? c : -1; },
+    putchar: (cpu, a) => { const c = a.i() & 255; mem.u8[scratch] = c; return fwriteBytes(cpu, stdoutFp, scratch, 1) === 1 ? c : -1; },
     fputs: (cpu, a) => { const s = a.str(), fp = a.p(); return fwriteStr(cpu, fp, s) < 0 ? -1 : 0; },
     puts: (cpu, a) => fwriteStr(cpu, stdoutFp, a.str() + "\n"),
     fprintf: (cpu, a) => { const fp = a.p(), f = a.str(); return fwriteStr(cpu, fp, format(f, a)); },

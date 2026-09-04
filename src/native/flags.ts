@@ -79,9 +79,10 @@ export function hoistRegs(src: string, { pc = 15, hi = false, sync = "c.swi();" 
 
 // Memory access inlining: the mid-tier JIT does not inline the mem helpers, so the common case
 // (in range, aligned, not a code page) is spelled out; the helper stays as the slow/fault path.
-// derived, never spelled: a stale bound here does not fault, it reads the wrong word
-const A = `(m1=($1)>>>0)-${LOW}>>>0<${MEM_SIZE - LOW}`;
+// derived from the live size, never spelled: a stale bound here does not fault, it reads the
+// wrong word. Read per block, since the process sizes its memory before its first image loads.
 export function inlineMem(src: string): string {
+  const A = `(m1=($1)>>>0)-${LOW}>>>0<${MEM_SIZE - LOW}`;
   return src
     .replace(/M\.ld8u\(([^()]*)\)/g, `(${A}?M.u8[m1]:M.ld8u(m1))`)
     .replace(/M\.ld8s\(([^()]*)\)/g, `(${A}?M.i8[m1]:M.ld8s(m1))`)

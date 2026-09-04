@@ -7,7 +7,7 @@ import { hostLib, hostData, NORET, vaList, type HostFn, retF, retD, PTR, stp, ld
 import { E } from "./abi";
 import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
-import { stdioInit } from "./stdio";
+import { stdioInit, readInto } from "./stdio";
 import { pthreadInit } from "./pthread";
 import { zlibInit } from "./zlib";
 import { libmInit } from "./libm";
@@ -48,7 +48,6 @@ export function fail(cpu: Cpu, e: number): number { setErrno(cpu, e); return -1;
 
 const enc = new TextEncoder();
 export const utf8 = (s: string) => enc.encode(s);
-const u8 = mem.u8;
 
 // ── ctype: BSD _ctype_ table (index c+1), the bit values bionic's <ctype.h> macros test
 const _U = 0x01, _L = 0x02, _N = 0x04, _S = 0x08, _P = 0x10, _C = 0x20, _X = 0x40, _B = 0x80;
@@ -67,14 +66,14 @@ const isdigit = (c: number) => c >= 48 && c <= 57;
 // ── strtol family over guest memory
 function strtoNum(cpu: Cpu, s: number, endp: number, base: number, bits: 32 | 64, unsigned: boolean): bigint {
   let p = s;
-  while (isspace(u8[p])) p++;
+  while (isspace(mem.u8[p])) p++;
   let neg = false;
-  if (u8[p] === 43 || u8[p] === 45) { neg = u8[p] === 45; p++; }
-  if ((base === 0 || base === 16) && u8[p] === 48 && (u8[p + 1] | 32) === 120) { base = 16; p += 2; }
-  else if (base === 0) base = u8[p] === 48 ? 8 : 10;
+  if (mem.u8[p] === 43 || mem.u8[p] === 45) { neg = mem.u8[p] === 45; p++; }
+  if ((base === 0 || base === 16) && mem.u8[p] === 48 && (mem.u8[p + 1] | 32) === 120) { base = 16; p += 2; }
+  else if (base === 0) base = mem.u8[p] === 48 ? 8 : 10;
   let v = 0n, any = false;
   for (;;) {
-    const c = u8[p];
+    const c = mem.u8[p];
     let d: number;
     if (c >= 48 && c <= 57) d = c - 48; else if ((c | 32) >= 97 && (c | 32) <= 122) d = (c | 32) - 87; else break;
     if (d >= base) break;
@@ -175,7 +174,7 @@ export function libcInit(): void {
   LAYOUT = PTR === 8 ? LAYOUT64 : LAYOUT32;
   // _ctype_ (257 bytes, index c+1), tzname
   const ct = mem.hostAlloc(384);
-  for (let c = 0; c < 256; c++) u8[ct + 1 + c] = c < 128 ? ctypeBits(c) : 0;
+  for (let c = 0; c < 256; c++) mem.u8[ct + 1 + c] = c < 128 ? ctypeBits(c) : 0;
   hostData("libc.so", "_ctype_", ct);
   tznames = [mem.hostStr("UTC"), mem.hostStr("UTC")];
   const tzn = mem.hostAlloc(2 * PTR);
@@ -186,7 +185,7 @@ export function libcInit(): void {
   hostData("libc.so", "environ", mem.hostAlloc(PTR));
   const optErr = mem.hostAlloc(4); hostData("libc.so", "opterr", optErr);
   const upperTab = mem.hostAlloc(384), lowerTab = mem.hostAlloc(384);
-  for (let c = -128; c < 256; c++) { u8[upperTab + 128 + c] = c >= 97 && c <= 122 ? c - 32 : c & 255; u8[lowerTab + 128 + c] = c >= 65 && c <= 90 ? c + 32 : c & 255; }
+  for (let c = -128; c < 256; c++) { mem.u8[upperTab + 128 + c] = c >= 97 && c <= 122 ? c - 32 : c & 255; mem.u8[lowerTab + 128 + c] = c >= 65 && c <= 90 ? c + 32 : c & 255; }
   hostData("libc.so", "_toupper_tab_", upperTab + 128); hostData("libc.so", "_tolower_tab_", lowerTab + 128);
 
   const strerrorBuf = mem.hostAlloc(64);
@@ -246,9 +245,22 @@ export function libcInit(): void {
     setlocale: (_c, a) => { a.i(); const l = a.p(); return l && mem.cstr(l) !== "" && mem.cstr(l) !== "C" && mem.cstr(l) !== "POSIX" ? 0 : cLocale; },
     localeconv: () => localeConv,
     mprotect: (_c, a) => { const p = a.p(), n = a.u(); invalidateRange(p, n); return 0; },
-    mmap: (cpu, a) => { a.p(); const n = a.u(); a.i(); a.i(); const fd = a.i(); if (fd !== -1) return fail(cpu, E.NOSYS) >>> 0; const p = mem.valloc(n); if (!p) return fail(cpu, E.NOMEM) >>> 0; mem.memset(p, 0, n); return p; },
-    munmap: (_c, a) => { mem.free(a.p()); return 0; },
-    madvise: () => 0, msync: () => 0,
+    // MAP_FAILED is (void*)-1 at the pointer width; MAP_FIXED is refused by name, and a file
+    // mapping is a private copy (a shared writable one would be a lie: the file never sees the writes)
+    mmap: (cpu, a) => {
+      a.p(); const n = a.u(), prot = a.i(), flags = a.i(), fd = a.i(), off = offArg(a);
+      const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
+      if (flags & 0x10) return failed(E.INVAL);
+      if (fd !== -1 && !(flags & 0x20) && (flags & 0x1) && (prot & 2)) return failed(E.NOSYS);
+      const p = mem.mapPages(n);
+      if (!p) return failed(E.NOMEM);
+      if (fd !== -1 && !(flags & 0x20)) { const r = readInto(cpu, fd, off, p, n); return r instanceof Promise ? r.then(() => p) : p; }
+      return p;
+    },
+    mmap64: (cpu, a) => M.mmap(cpu, a),
+    munmap: (cpu, a) => (mem.unmapPages(a.p(), a.u()) ? 0 : fail(cpu, E.INVAL)),
+    mremap: (cpu) => { fail(cpu, E.NOSYS); return PTR === 8 ? -1n : -1; },
+    madvise: () => 0, msync: () => 0, mlock: () => 0, munlock: () => 0,
     getrlimit: (_c, a) => { a.i(); const r = a.p(); stp(r, 0x100000); stp(r + PTR, 0x100000); return 0; },
     setrlimit: () => 0,
     syscall: (cpu) => fail(cpu, E.NOSYS),
@@ -269,22 +281,22 @@ export function libcInit(): void {
     memset: (_c, a) => { const d = a.p(), v = a.i(), n = a.u(); mem.memset(d, v, n); return d; },
     memcmp: (_c, a) => {
       const x = a.p(), y = a.p(), n = a.u();
-      for (let i = 0; i < n; i++) { const d = u8[x + i] - u8[y + i]; if (d) return d; }
+      for (let i = 0; i < n; i++) { const d = mem.u8[x + i] - mem.u8[y + i]; if (d) return d; }
       return 0;
     },
-    memchr: (_c, a) => { const p = a.p(), c = a.i() & 255, n = a.u(); const i = u8.indexOf(c, p); return i >= 0 && i < p + n ? i : 0; },
-    memrchr: (_c, a) => { const p = a.p(), c = a.i() & 255, n = a.u(); for (let i = p + n - 1; i >= p; i--) if (u8[i] === c) return i; return 0; },
+    memchr: (_c, a) => { const p = a.p(), c = a.i() & 255, n = a.u(); const i = mem.u8.indexOf(c, p); return i >= 0 && i < p + n ? i : 0; },
+    memrchr: (_c, a) => { const p = a.p(), c = a.i() & 255, n = a.u(); for (let i = p + n - 1; i >= p; i--) if (mem.u8[i] === c) return i; return 0; },
     bcopy: (_c, a) => { const s = a.p(), d = a.p(), n = a.u(); mem.memmove(d, s, n); },
     bzero: (_c, a) => { const d = a.p(), n = a.u(); mem.memset(d, 0, n); },
 
     strlen: (_c, a) => mem.strlen(a.p()),
-    strnlen: (_c, a) => { const p = a.p(), n = a.u(); let i = 0; while (i < n && u8[p + i]) i++; return i; },
+    strnlen: (_c, a) => { const p = a.p(), n = a.u(); let i = 0; while (i < n && mem.u8[p + i]) i++; return i; },
     strcpy: (_c, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s); mem.memmove(d, s, n + 1); return d; },
     strncpy: (_c, a) => {
       const d = a.p(), s = a.p(), n = a.u();
       let i = 0;
-      for (; i < n && u8[s + i]; i++) u8[d + i] = u8[s + i];
-      for (; i < n; i++) u8[d + i] = 0;
+      for (; i < n && mem.u8[s + i]; i++) mem.u8[d + i] = mem.u8[s + i];
+      for (; i < n; i++) mem.u8[d + i] = 0;
       return d;
     },
     stpcpy: (_c, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s); mem.memmove(d, s, n + 1); return d + n; },
@@ -293,8 +305,8 @@ export function libcInit(): void {
       const d = a.p(), s = a.p(), n = a.u();
       const dl = mem.strlen(d);
       let i = 0;
-      for (; i < n && u8[s + i]; i++) u8[d + dl + i] = u8[s + i];
-      u8[d + dl + i] = 0;
+      for (; i < n && mem.u8[s + i]; i++) mem.u8[d + dl + i] = mem.u8[s + i];
+      mem.u8[d + dl + i] = 0;
       return d;
     },
     strcmp: (_c, a) => strcmpAt(a.p(), a.p(), 0x7fffffff, false),
@@ -302,9 +314,9 @@ export function libcInit(): void {
     strcasecmp: (_c, a) => strcmpAt(a.p(), a.p(), 0x7fffffff, true),
     strncasecmp: (_c, a) => strcmpAt(a.p(), a.p(), a.u(), true),
     strcoll: (_c, a) => strcmpAt(a.p(), a.p(), 0x7fffffff, false),
-    strxfrm: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const l = mem.strlen(s); if (n) { const k = Math.min(l, n - 1); mem.memmove(d, s, k); u8[d + k] = 0; } return l; },
-    strchr: (_c, a) => { const p = a.p(), c = a.i() & 255; for (let i = p; ; i++) { if (u8[i] === c) return i; if (!u8[i]) return 0; } },
-    strrchr: (_c, a) => { const p = a.p(), c = a.i() & 255; let r = 0; for (let i = p; ; i++) { if (u8[i] === c) r = i; if (!u8[i]) return r; } },
+    strxfrm: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const l = mem.strlen(s); if (n) { const k = Math.min(l, n - 1); mem.memmove(d, s, k); mem.u8[d + k] = 0; } return l; },
+    strchr: (_c, a) => { const p = a.p(), c = a.i() & 255; for (let i = p; ; i++) { if (mem.u8[i] === c) return i; if (!mem.u8[i]) return 0; } },
+    strrchr: (_c, a) => { const p = a.p(), c = a.i() & 255; let r = 0; for (let i = p; ; i++) { if (mem.u8[i] === c) r = i; if (!mem.u8[i]) return r; } },
     strstr: (_c, a) => {
       const h = a.p(), n = a.p();
       const hs = mem.cstr(h), ns = mem.cstr(n);
@@ -312,11 +324,11 @@ export function libcInit(): void {
       return i < 0 ? 0 : h + utf8(hs.slice(0, i)).length;
     },
     strcasestr: (_c, a) => { const h = a.p(), n = a.p(); const hs = mem.cstr(h).toLowerCase(), ns = mem.cstr(n).toLowerCase(); const i = hs.indexOf(ns); return i < 0 ? 0 : h + utf8(hs.slice(0, i)).length; },
-    strpbrk: (_c, a) => { const p = a.p(), set = mem.cstr(a.p()); for (let i = p; u8[i]; i++) if (set.includes(String.fromCharCode(u8[i]))) return i; return 0; },
-    strspn: (_c, a) => { const p = a.p(), set = mem.cstr(a.p()); let i = 0; while (u8[p + i] && set.includes(String.fromCharCode(u8[p + i]))) i++; return i; },
-    strcspn: (_c, a) => { const p = a.p(), set = mem.cstr(a.p()); let i = 0; while (u8[p + i] && !set.includes(String.fromCharCode(u8[p + i]))) i++; return i; },
+    strpbrk: (_c, a) => { const p = a.p(), set = mem.cstr(a.p()); for (let i = p; mem.u8[i]; i++) if (set.includes(String.fromCharCode(mem.u8[i]))) return i; return 0; },
+    strspn: (_c, a) => { const p = a.p(), set = mem.cstr(a.p()); let i = 0; while (mem.u8[p + i] && set.includes(String.fromCharCode(mem.u8[p + i]))) i++; return i; },
+    strcspn: (_c, a) => { const p = a.p(), set = mem.cstr(a.p()); let i = 0; while (mem.u8[p + i] && !set.includes(String.fromCharCode(mem.u8[p + i]))) i++; return i; },
     strdup: (_c, a) => { const s = a.p(); const n = mem.strlen(s); const d = mem.malloc(n + 1); mem.memcpy(d, s, n + 1); return d; },
-    strndup: (_c, a) => { const s = a.p(), n = a.u(); let l = 0; while (l < n && u8[s + l]) l++; const d = mem.malloc(l + 1); mem.memcpy(d, s, l); u8[d + l] = 0; return d; },
+    strndup: (_c, a) => { const s = a.p(), n = a.u(); let l = 0; while (l < n && mem.u8[s + l]) l++; const d = mem.malloc(l + 1); mem.memcpy(d, s, l); mem.u8[d + l] = 0; return d; },
     strtok: (cpu, a) => strtok(cpu, a.p(), a.p(), 0),
     strtok_r: (_c, a) => { const s = a.p(), d = a.p(), save = a.p(); return strtokR(s, d, save); },
     strerror: (_c, a) => { mem.putCstr(strerrorBuf, ERRSTR[a.i()] ?? `Unknown error ${a.i()}`, 64); return strerrorBuf; },
@@ -370,24 +382,24 @@ export function libcInit(): void {
       const pwc = a.p(), s = a.p(), n = a.u();
       if (!s) return 0;
       if (n === 0) return -2;
-      const b0 = u8[s];
+      const b0 = mem.u8[s];
       const len = b0 < 0x80 ? 1 : b0 >= 0xf0 ? 4 : b0 >= 0xe0 ? 3 : b0 >= 0xc0 ? 2 : 1;
       if (n < len) return -2;
-      const cp = new TextDecoder().decode(u8.subarray(s, s + len)).codePointAt(0) ?? 0;
+      const cp = new TextDecoder().decode(mem.u8.subarray(s, s + len)).codePointAt(0) ?? 0;
       if (pwc) mem.st32(pwc, cp);
       return b0 === 0 ? 0 : len;
     },
-    wcrtomb: (_c, a) => { const d = a.p(), wc = a.i(); const b = utf8(String.fromCodePoint(wc >>> 0 > 0x10ffff ? 0xfffd : wc >>> 0)); if (d) u8.set(b, d); return b.length; },
+    wcrtomb: (_c, a) => { const d = a.p(), wc = a.i(); const b = utf8(String.fromCodePoint(wc >>> 0 > 0x10ffff ? 0xfffd : wc >>> 0)); if (d) mem.u8.set(b, d); return b.length; },
     mbstowcs: (_c, a) => { const d = a.p(), s = mem.cstr(a.p()), n = a.u(); const cps = [...s].map((c) => c.codePointAt(0)!); if (!d) return cps.length; const k = Math.min(cps.length, n); for (let i = 0; i < k; i++) mem.st32(d + i * 4, cps[i]); if (k < n) mem.st32(d + k * 4, 0); return k; },
-    wcstombs: (_c, a) => { const d = a.p(), s = wstr(a.p()), n = a.u(); const b = utf8(s); if (!d) return b.length; const k = Math.min(b.length, n); u8.set(b.subarray(0, k), d); if (k < n) u8[d + k] = 0; return k; },
-    mblen: (_c, a) => { const s = a.p(); if (!s) return 0; const b0 = u8[s]; return b0 === 0 ? 0 : b0 < 0x80 ? 1 : b0 >= 0xf0 ? 4 : b0 >= 0xe0 ? 3 : 2; },
+    wcstombs: (_c, a) => { const d = a.p(), s = wstr(a.p()), n = a.u(); const b = utf8(s); if (!d) return b.length; const k = Math.min(b.length, n); mem.u8.set(b.subarray(0, k), d); if (k < n) mem.u8[d + k] = 0; return k; },
+    mblen: (_c, a) => { const s = a.p(); if (!s) return 0; const b0 = mem.u8[s]; return b0 === 0 ? 0 : b0 < 0x80 ? 1 : b0 >= 0xf0 ? 4 : b0 >= 0xe0 ? 3 : 2; },
     __ctype_get_mb_cur_max: () => 4,
 
     // ── formatting (printf family that lands in memory; the FILE ones live in stdio.ts)
     sprintf: (_c, a) => { const d = a.p(), f = a.str(); return mem.putCstr(d, format(f, a)); },
-    snprintf: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(); const s = format(f, a); const b = utf8(s); if (n > 0) { const k = Math.min(b.length, n - 1); u8.set(b.subarray(0, k), d); u8[d + k] = 0; } return b.length; },
+    snprintf: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(); const s = format(f, a); const b = utf8(s); if (n > 0) { const k = Math.min(b.length, n - 1); mem.u8.set(b.subarray(0, k), d); mem.u8[d + k] = 0; } return b.length; },
     vsprintf: (_c, a) => { const d = a.p(), f = a.str(); return mem.putCstr(d, format(f, vaList(a.p()))); },
-    vsnprintf: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(); const s = format(f, vaList(a.p())); const b = utf8(s); if (n > 0) { const k = Math.min(b.length, n - 1); u8.set(b.subarray(0, k), d); u8[d + k] = 0; } return b.length; },
+    vsnprintf: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(); const s = format(f, vaList(a.p())); const b = utf8(s); if (n > 0) { const k = Math.min(b.length, n - 1); mem.u8.set(b.subarray(0, k), d); mem.u8[d + k] = 0; } return b.length; },
     vasprintf: (_c, a) => { const out = a.p(), f = a.str(); const s = format(f, vaList(a.p())); stp(out, mem.strdup(s)); return utf8(s).length; },
     asprintf: (_c, a) => { const out = a.p(), f = a.str(); const s = format(f, a); stp(out, mem.strdup(s)); return utf8(s).length; },
     sscanf: (_c, a) => { const s = a.str(), f = a.str(); return scanInto(s, f, a); },
@@ -409,7 +421,7 @@ export function libcInit(): void {
     gmtime: (_c, a) => { const t = mem.ld32(a.p()); fillTm(tmBuf, new Date(t * 1000), true); return tmBuf; },
     mktime: (_c, a) => Math.floor(mktime(a.p()) / 1000),
     timegm: (_c, a) => { const [sec, min, hour, mday, mon, year] = readTm(a.p()); return Math.floor(Date.UTC(year + 1900, mon, mday, hour, min, sec) / 1000); },
-    strftime: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(), tm = a.p(); const s = utf8(strftime(f, tm)); if (s.length >= n) return 0; u8.set(s, d); u8[d + s.length] = 0; return s.length; },
+    strftime: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(), tm = a.p(); const s = utf8(strftime(f, tm)); if (s.length >= n) return 0; mem.u8.set(s, d); mem.u8[d + s.length] = 0; return s.length; },
     tzset: () => {},
     difftime: (c, a) => retD(c, a.i() - a.i()),
 
@@ -450,7 +462,7 @@ export function libcInit(): void {
     freeaddrinfo: () => {},
     gai_strerror: () => gaiStr,
     gethostname: (_c, a) => { const b = a.p(), n = a.u(); mem.putCstr(b, "localhost", n); return 0; },
-    inet_aton: (_c, a) => { const s = a.str(), out = a.p(); const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s); if (!m) return 0; for (let i = 0; i < 4; i++) u8[out + i] = +m[i + 1]; return 1; },
+    inet_aton: (_c, a) => { const s = a.str(), out = a.p(); const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s); if (!m) return 0; for (let i = 0; i < 4; i++) mem.u8[out + i] = +m[i + 1]; return 1; },
     inet_addr: (_c, a) => { const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(a.str()); if (!m) return -1; return (+m[1]) | (+m[2] << 8) | (+m[3] << 16) | (+m[4] << 24); },
     inet_ntoa: (_c, a) => { const v = a.u(); mem.putCstr(inetBuf, `${v & 255}.${(v >>> 8) & 255}.${(v >>> 16) & 255}.${v >>> 24}`, 20); return inetBuf; },
     inet_pton: () => 0, inet_ntop: () => 0,
@@ -494,7 +506,7 @@ export function logLine(prio: number, tag: string, msg: string): void {
 
 function strcmpAt(x: number, y: number, n: number, ci: boolean): number {
   for (let i = 0; i < n; i++) {
-    let a = u8[x + i], b = u8[y + i];
+    let a = mem.u8[x + i], b = mem.u8[y + i];
     if (ci) { if (a >= 65 && a <= 90) a += 32; if (b >= 65 && b <= 90) b += 32; }
     if (a !== b) return a - b;
     if (a === 0) return 0;
@@ -525,11 +537,11 @@ function strtokR(s: number, delim: number, save: number): number {
 function strtokAt(s: number, delim: string): { tok: number; next: number } {
   if (!s) return { tok: 0, next: 0 };
   let p = s;
-  while (u8[p] && delim.includes(String.fromCharCode(u8[p]))) p++;
-  if (!u8[p]) return { tok: 0, next: p };
+  while (mem.u8[p] && delim.includes(String.fromCharCode(mem.u8[p]))) p++;
+  if (!mem.u8[p]) return { tok: 0, next: p };
   const tok = p;
-  while (u8[p] && !delim.includes(String.fromCharCode(u8[p]))) p++;
-  if (u8[p]) { u8[p] = 0; p++; }
+  while (mem.u8[p] && !delim.includes(String.fromCharCode(mem.u8[p]))) p++;
+  if (mem.u8[p]) { mem.u8[p] = 0; p++; }
   return { tok, next: p };
 }
 function scanInto(s: string, f: string, a: { p(): number }): number {
