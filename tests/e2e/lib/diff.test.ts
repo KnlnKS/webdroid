@@ -10,7 +10,7 @@ function img(r: number, g: number, b: number): Img {
   for (let i = 0; i < im.data.length; i += 4) { im.data[i] = r; im.data[i + 1] = g; im.data[i + 2] = b; }
   return im;
 }
-function box(im: Img, x: number, y: number, w: number, h: number, r: number, g: number, b: number): Img {
+function rect(im: Img, x: number, y: number, w: number, h: number, r: number, g: number, b: number): Img {
   for (let yy = y; yy < y + h; yy++) {
     for (let xx = x; xx < x + w; xx++) {
       const i = (yy * W + xx) * 4;
@@ -25,7 +25,7 @@ const diff = (g: Img, a: Img, masks: { x: number; y: number; w: number; h: numbe
 
 describe("diffImages", () => {
   test("identical images score zero on every metric", () => {
-    const d = diff(box(white(), 8, 8, 10, 10, 0, 0, 0), box(white(), 8, 8, 10, 10, 0, 0, 0));
+    const d = diff(rect(white(), 8, 8, 10, 10, 0, 0, 0), rect(white(), 8, 8, 10, 10, 0, 0, 0));
     expect(d.strictPct).toBe(0);
     expect(d.tolerantPct).toBe(0);
     expect(d.contentDiffPct).toBe(0);
@@ -34,7 +34,7 @@ describe("diffImages", () => {
   });
 
   test("a blank render scores ~100% content, not the ~3% a whole-frame metric gives it", () => {
-    const d = diff(box(white(), 8, 8, 10, 10, 0, 0, 0), white());
+    const d = diff(rect(white(), 8, 8, 10, 10, 0, 0, 0), white());
     expect(d.actualInk).toBe(0);
     expect(d.goldenInk).toBe(100);
     expect(d.contentDiffPct).toBe(100);
@@ -42,7 +42,7 @@ describe("diffImages", () => {
   });
 
   test("drawing where the golden is blank is penalised the same way", () => {
-    const d = diff(white(), box(white(), 8, 8, 10, 10, 0, 0, 0));
+    const d = diff(white(), rect(white(), 8, 8, 10, 10, 0, 0, 0));
     expect(d.goldenInk).toBe(0);
     expect(d.actualInk).toBe(100);
     expect(d.contentDiffPct).toBe(100);
@@ -60,15 +60,15 @@ describe("diffImages", () => {
   });
 
   test("content in the same place with the same colour scores 0 even on a shifted background", () => {
-    const g = box(img(240, 240, 240), 8, 8, 10, 10, 0, 0, 0);
-    const a = box(img(255, 255, 255), 8, 8, 10, 10, 0, 0, 0);
+    const g = rect(img(240, 240, 240), 8, 8, 10, 10, 0, 0, 0);
+    const a = rect(img(255, 255, 255), 8, 8, 10, 10, 0, 0, 0);
     const d = diff(g, a);
     expect(d.bgMismatch).toBe(false);
     expect(d.contentDiffPct).toBeLessThan(50);
   });
 
   test("masking removes pixels from the denominator, so it cannot buy a better score", () => {
-    const g = box(white(), 8, 8, 10, 10, 0, 0, 0);
+    const g = rect(white(), 8, 8, 10, 10, 0, 0, 0);
     const plain = diff(g, white());
     const masked = diff(g, white(), [{ x: 8 / W, y: 8 / H, w: 10 / W, h: 10 / H }]);
     expect(plain.maskedPixels).toBe(0);
