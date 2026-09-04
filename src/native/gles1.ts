@@ -13,7 +13,7 @@ import { perf } from "../perf";
 type GL = WebGL2RenderingContext | WebGLRenderingContext;
 
 /** getError probe after every GL entry point (perf.glErrors counts) */
-export const glProbe = { on: false };
+export const glProbe = { on: false, capture: 0 };
 
 type M4 = Float32Array;
 const ident = (): M4 => { const m = new Float32Array(16); m[0] = m[5] = m[10] = m[15] = 1; return m; };

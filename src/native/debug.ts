@@ -9,6 +9,7 @@ import { mainThread } from "../jvm/natives/jlang";
 import { mem } from "./mem";
 import { RET_SENTINEL } from "./abi";
 import { glProbe } from "./gles1";
+import { glRing, glDebug } from "./gles3";
 import { emitBlock } from "./arm";
 import { emitA64Block } from "./a64";
 import { emitThumbBlock } from "./thumb";
@@ -52,7 +53,7 @@ export const native = {
   backtrace: (name: string) => { const c = [...cpus].find((c) => c.name === name); return c ? backtrace(c) : []; }, watchPcs, lastFault,
   peek: (a: number, n = 16) => Array.from(mem.bytes(a, n)).map((b) => b.toString(16).padStart(2, "0")).join(" "),
   cstr: (a: number) => mem.cstr(a),
-  glProbe,
+  glProbe, glRing, gl3: glDebug,
 };
 // a harness can arm the trace before boot: page.addInitScript(() => { globalThis.__wdNativeTrace = "regex" })
 const pre = (globalThis as { __wdNativeTrace?: string }).__wdNativeTrace;

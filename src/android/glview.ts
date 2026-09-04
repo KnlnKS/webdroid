@@ -6,7 +6,7 @@ import { mangleMethod } from "../jvm/abi";
 import { vcall, JThread, setCurThread, curThread } from "../jvm/natives/jlang";
 import { JView, JViewGroup, guardCall, initViewFromCtx, invalidate, uiState, requestLayout, specSize, defaultSize } from "./view";
 import { onMain } from "./mainloop";
-import { JCanvas } from "./graphics";
+import { JCanvas, JBitmap } from "./graphics";
 import { setGL } from "./gl";
 import { reportUncaught } from "./os";
 import { perf } from "../perf";
@@ -188,6 +188,38 @@ export class EglContext {
   }
 }
 export const glSurfaces = { current: null as EglContext | null };
+
+// PixelCopy: the surface's last presented frame into a Bitmap, the listener told on its handler's looper
+rt.register({ name: "android/view/PixelCopy$OnPixelCopyFinishedListener", ctor: class extends JObj {} });
+const pixelCopy = async (s: GlSurface | null, bmp: JBitmap, listener: unknown): Promise<void> => {
+  let result = 1;                                                              // ERROR_UNKNOWN
+  if (s?.present) { bmp.ctx.drawImage(s.present, 0, 0, bmp.w, bmp.h); result = 0; }
+  else if (!s) result = 2;                                                     // ERROR_TIMEOUT: nothing is there to copy
+  await onMain(() => vcall(listener, "onPixelCopyFinished", "(I)V", result));
+};
+rt.register({
+  name: "android/view/PixelCopy", ctor: class extends JObj {},
+  statics: { SUCCESS: 0, ERROR_UNKNOWN: 1, ERROR_TIMEOUT: 2, ERROR_SOURCE_NO_DATA: 3, ERROR_SOURCE_INVALID: 4, ERROR_DESTINATION_INVALID: 5 },
+  methods: {
+    "static request(Landroid/view/SurfaceView;Landroid/graphics/Bitmap;Landroid/view/PixelCopy$OnPixelCopyFinishedListener;Landroid/os/Handler;)V":
+      (v: JView, bmp: JBitmap, l: unknown) => { void pixelCopy(getHolder(v).surface, bmp, l); },
+    "static request(Landroid/view/Surface;Landroid/graphics/Bitmap;Landroid/view/PixelCopy$OnPixelCopyFinishedListener;Landroid/os/Handler;)V":
+      (s: JSurface, bmp: JBitmap, l: unknown) => { void pixelCopy(s.surf, bmp, l); },
+  },
+});
+/** every window surface ever created (wd.surfaces), and a coarse look at what one last presented */
+export const allSurfaces: GlSurface[] = [];
+export function probeSurface(i: number, grid = 32): { nonBlack: number; mean: number[]; corners: number[][] } | null {
+  const s = allSurfaces[i];
+  if (!s?.present) return null;
+  const c = new OffscreenCanvas(grid, grid), ctx = c.getContext("2d")!;
+  ctx.drawImage(s.present, 0, 0, grid, grid);
+  const d = ctx.getImageData(0, 0, grid, grid).data;
+  let lit = 0; const mean = [0, 0, 0];
+  for (let p = 0; p < d.length; p += 4) { if (Math.max(d[p], d[p + 1], d[p + 2]) > 16) lit++; mean[0] += d[p]; mean[1] += d[p + 1]; mean[2] += d[p + 2]; }
+  const px = (x: number, y: number) => [...d.subarray((y * grid + x) * 4, (y * grid + x) * 4 + 3)];
+  return { nonBlack: lit / (grid * grid), mean: mean.map((m) => Math.round(m / (grid * grid))), corners: [px(0, 0), px(grid - 1, 0), px(grid >> 1, grid >> 1), px(0, grid - 1), px(grid - 1, grid - 1)] };
+}
 class JEGLContext extends JObj { egl!: EglContext; }
 /** the one EGL config: RGBA8, depth 24, stencil 8, no multisampling, ES1/2/3, window + pbuffer */
 export function eglConfigAttrib(attr: number): number {
@@ -233,7 +265,7 @@ class JSurfaceView extends JViewGroup {
     const holder = getHolder(this);
     if (holder.surface && this.surfW === w && this.surfH === h) return;
     const created = !holder.surface;
-    if (created) holder.surface = { view: this, width: w, height: h, present: null, frames: 0 };
+    if (created) allSurfaces.push(holder.surface = { view: this, width: w, height: h, present: null, frames: 0 });
     else { holder.surface!.width = w; holder.surface!.height = h; }
     this.surfW = w; this.surfH = h;
     void onMain(async () => {

@@ -1,6 +1,7 @@
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { vcall, curThread, mainThread, JThread, setCurThread, reportUncaught, JEnum } from "../jvm/natives/jlang";
 export { reportUncaught };
@@ -229,6 +230,7 @@ rt.register({
   statics: { THREAD_PRIORITY_BACKGROUND: 10, THREAD_PRIORITY_DEFAULT: 0, THREAD_PRIORITY_URGENT_DISPLAY: -8 },
   methods: {
     "static myPid()I": () => 1000,
+    "static killProcess(I)V": (pid: number) => { console.warn("Process.killProcess", pid); markProcessExited(); },
     // androidx's startup tracing asks how long ago this process began; there is no earlier
     // moment here than the page's own timeOrigin
     "static getStartUptimeMillis()J": () => 0n,

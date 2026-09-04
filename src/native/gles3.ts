@@ -10,13 +10,17 @@ import { gl as current, tables, put } from "../android/gl";
 import { yieldToLoop } from "./cpu";
 import { perf } from "../perf";
 import { glProbe } from "./gles1";
+/** the last GL entry points, while the probe is on (wd.native.glRing) */
+export const glRing: string[] = [];
+/** wd.native.gl3: the live context and the objects behind guest handles (debug) */
+export const glDebug = { gl: () => current, buf: (h: number) => rec(h), tex: (h: number) => T().textures[h], prog: (h: number) => T().programs[h] };
 
 type GL = WebGL2RenderingContext;
 const g = (): GL => { if (!current) throw new Error("GL call without a current context"); return current as GL; };
 const T = tables;
 let err = 0;                                  // an error we raised ourselves; glGetError reports it before WebGL's
 let unpackPbo = false, packPbo = false;
-const mapped = new Map<number, { ptr: number; off: number; len: number; access: number }>();
+const mapped = new WeakMap<object, { ptr: number; off: number; len: number; access: number }>();   // a mapping belongs to the buffer, not the target
 
 // ── guest memory views (a misaligned pointer is copied, which GL data rarely is)
 type Ctor<A> = { new (b: ArrayBuffer, off: number, n: number): A; new (b: ArrayBuffer): A; BYTES_PER_ELEMENT: number };
@@ -58,6 +62,51 @@ const U = (h: number) => (h < 0 ? null : T().uniforms[h] ?? null);
 function gen(tbl: (object | null)[], n: number, p: number, make: () => object | null): void { for (let i = 0; i < n; i++) mem.st32(p + 4 * i, put(tbl, make())); }
 function del(tbl: (object | null)[], n: number, p: number, kill: (o: never) => void): void {
   for (let i = 0; i < n; i++) { const h = mem.ld32(p + 4 * i), o = tbl[h]; if (o) { kill(o as never); tbl[h] = null; } }
+}
+
+/** what a draw just did: the framebuffer's lit pixels on a grid, and the state the draw ran with (wd.native.glProbe.capture = n) */
+function captureDraw(): unknown {
+  const gl = g(), vp = gl.getParameter(gl.VIEWPORT) as Int32Array, px = new Uint8Array(4);
+  let lit = 0; const grid = 12;
+  for (let y = 0; y < grid; y++) for (let x = 0; x < grid; x++) {
+    gl.readPixels(vp[0] + Math.floor((x + 0.5) * vp[2] / grid), vp[1] + Math.floor((y + 0.5) * vp[3] / grid), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    if (Math.max(px[0], px[1], px[2]) > 16) lit++;
+  }
+  const prog = gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null;
+  const attribs = prog ? Array.from({ length: gl.getProgramParameter(prog, gl.ACTIVE_ATTRIBUTES) as number }, (_, i) => gl.getActiveAttrib(prog, i)?.name) : [];
+  const uniforms = prog ? Array.from({ length: gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS) as number }, (_, i) => { const u = gl.getActiveUniform(prog, i); return u ? `${u.name}:${u.type.toString(16)}` : null; }) : [];
+  const va = [0, 1, 2, 3].map((i) => ({ on: gl.getVertexAttrib(i, gl.VERTEX_ATTRIB_ARRAY_ENABLED), size: gl.getVertexAttrib(i, gl.VERTEX_ATTRIB_ARRAY_SIZE), type: (gl.getVertexAttrib(i, gl.VERTEX_ATTRIB_ARRAY_TYPE) as number).toString(16), stride: gl.getVertexAttrib(i, gl.VERTEX_ATTRIB_ARRAY_STRIDE), buf: !!gl.getVertexAttrib(i, gl.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING) }));
+  const fb = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+  const vals = prog ? uniforms.map((u) => { const name = (u ?? "").split(":")[0]; const isArr = name.endsWith("[0]"); const base = isArr ? name.slice(0, -3) : name; const r: number[] = []; for (let i = 0; i < (isArr ? 4 : 1); i++) { const loc = gl.getUniformLocation(prog, isArr ? `${base}[${i}]` : base); const v = loc ? gl.getUniform(prog, loc) : null; r.push(...(typeof v === "number" ? [v] : v ? Array.from(v as ArrayLike<number>) : [NaN])); } return `${base}=${r.map((x) => +x.toFixed(3)).join(",")}`; }) : [];
+  const vbuf = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING) as WebGLBuffer | null;
+  let vdata: number[] = [];
+  if (vbuf) { const prev = gl.getParameter(gl.ARRAY_BUFFER_BINDING); gl.bindBuffer(gl.ARRAY_BUFFER, vbuf); const f = new Float32Array(12); gl.getBufferSubData(gl.ARRAY_BUFFER, 0, f); vdata = Array.from(f).map((x) => +x.toFixed(3)); gl.bindBuffer(gl.ARRAY_BUFFER, prev); }
+  return { lit: `${lit}/${grid * grid}`, vp: [...vp], fbo: !!fb, link: prog ? gl.getProgramParameter(prog, gl.LINK_STATUS) : null, attribs, uniforms, vals, vdata, va, depth: gl.isEnabled(gl.DEPTH_TEST), stencil: gl.isEnabled(gl.STENCIL_TEST), blend: gl.isEnabled(gl.BLEND), scissor: gl.isEnabled(gl.SCISSOR_TEST), cull: gl.isEnabled(gl.CULL_FACE), mask: gl.getParameter(gl.COLOR_WRITEMASK), tex: !!gl.getParameter(gl.TEXTURE_BINDING_2D), err: gl.getError() };
+}
+// ── buffer records: kind (element or not) decided at the first typed bind, data shadowed until then
+interface BufRec { gl: WebGLBuffer | null; elem: boolean | null; shadow: Uint8Array | null; usage: number }
+const COPY_READ = 0x8f36, COPY_WRITE = 0x8f37, ELEM = 0x8893, ARRAY = 0x8892;
+const recOf = new WeakMap<object, BufRec>();
+const bound = new Map<number, number>();                         // target → the guest handle last bound there
+const rec = (h: number): BufRec | null => { const o = H(T().buffers, h); return o ? recOf.get(o) ?? null : null; };
+const recAt = (t: number): BufRec | null => rec(bound.get(t) ?? 0);
+/** the record behind a data target while its kind is undecided: writes land in the shadow */
+const shadowed = (t: number): BufRec | null => { if (t !== COPY_READ && t !== COPY_WRITE) return null; const r = recAt(t); return r && r.elem === null ? r : null; };
+/** run an operation on a data target: a copy target stands in for the buffer's own kind, binding restored */
+function withTarget<R>(t: number, fn: (tt: number) => R): R {
+  if (t !== COPY_READ && t !== COPY_WRITE) return fn(t);
+  const r = recAt(t), tt = r?.elem ? ELEM : ARRAY;
+  const prev = g().getParameter(tt === ELEM ? 0x8895 : 0x8894) as WebGLBuffer | null;
+  g().bindBuffer(tt, r?.gl ?? null);
+  try { return fn(tt); } finally { g().bindBuffer(tt, prev); }
+}
+const writeBack = (t: number, off: number, data: Uint8Array): void => { const r = shadowed(t); if (r) r.shadow!.set(data, off); else withTarget(t, (tt) => g().bufferSubData(tt, off, data)); };
+/** a buffer bound by index (uniform, transform feedback) is vertex-side: decide it and flush its shadow */
+function realize(t: number, h: number): WebGLBuffer | null {
+  const r = rec(h);
+  if (!r) return null;
+  if (r.elem === null) { r.elem = false; r.gl = g().createBuffer(); if (r.shadow) { g().bindBuffer(t, r.gl); g().bufferData(t, r.shadow, r.usage); r.shadow = null; } }
+  return r.gl;
 }
 
 // ── what this context can do: a WebGL extension is advertised under its ES name only when
@@ -228,39 +277,59 @@ export function gles3Init(): void {
     glGetUniformiv: (_c, a) => { const p = H(T().programs, a.i()), u = U(a.i()); out(p && u && g().getUniform(p, u), a.p(), st32, 4); },
     glGetUniformuiv: (_c, a) => { const p = H(T().programs, a.i()), u = U(a.i()); out(p && u && g().getUniform(p, u), a.p(), st32, 4); },
 
-    // ── buffers
-    glGenBuffers: (_c, a) => { const n = a.i(); gen(T().buffers, n, a.p(), () => g().createBuffer()); },
-    glDeleteBuffers: (_c, a) => { const n = a.i(); del(T().buffers, n, a.p(), (o) => g().deleteBuffer(o)); },
+    // ── buffers. WebGL fixes a buffer as an element or a vertex-side buffer at its first bind to
+    // ELEMENT_ARRAY_BUFFER or any other target and refuses to change it; GLES lets an engine upload
+    // through COPY_WRITE_BUFFER before it says which. So a buffer's kind is decided by its first
+    // typed bind, its data waits in a guest shadow until then, and a copy-target operation after
+    // that goes through the kind's own target with the binding put back.
+    glGenBuffers: (_c, a) => { const n = a.i(); gen(T().buffers, n, a.p(), () => { const o = {} as WebGLBuffer; recOf.set(o, { gl: null, elem: null, shadow: null, usage: 0x88e4 }); return o; }); },
+    glDeleteBuffers: (_c, a) => { const n = a.i(); del(T().buffers, n, a.p(), (o) => { const r = recOf.get(o); if (r?.gl) g().deleteBuffer(r.gl); }); },
     glIsBuffer: (_c, a) => (H(T().buffers, a.i()) ? 1 : 0),
     glBindBuffer: (_c, a) => {
       const t = a.i(), h = a.i();
       if (t === 0x88ec) unpackPbo = !!h; else if (t === 0x88eb) packPbo = !!h;      // PIXEL_UNPACK/PACK_BUFFER
-      g().bindBuffer(t, H(T().buffers, h));
+      bound.set(t, h);
+      if (t === COPY_READ || t === COPY_WRITE) return;
+      const r = rec(h);
+      if (!r) { g().bindBuffer(t, null); return; }
+      if (r.elem === null) { r.elem = t === ELEM; r.gl = g().createBuffer(); g().bindBuffer(t, r.gl); if (r.shadow) { g().bufferData(t, r.shadow, r.usage); r.shadow = null; } return; }
+      if (r.elem !== (t === ELEM)) { err = 0x502; calledMissing.add("gles3:buffer bound as both element and vertex data"); return; }
+      g().bindBuffer(t, r.gl);
     },
-    glBindBufferBase: (_c, a) => g().bindBufferBase(a.i(), a.i(), H(T().buffers, a.i())),
-    glBindBufferRange: (_c, a) => g().bindBufferRange(a.i(), a.i(), H(T().buffers, a.i()), a.i(), a.i()),
-    glBufferData: (_c, a) => { const t = a.i(), n = a.i(), p = a.p(), usage = a.i(); if (p) g().bufferData(t, u8(p, n), usage); else g().bufferData(t, n, usage); },
-    glBufferSubData: (_c, a) => { const t = a.i(), off = a.i(), n = a.i(); g().bufferSubData(t, off, u8(a.p(), n)); },
-    glCopyBufferSubData: (_c, a) => g().copyBufferSubData(a.i(), a.i(), a.i(), a.i(), a.i()),
-    glGetBufferParameteriv: (_c, a) => { const t = a.i(), pn = a.i(); out(g().getBufferParameter(t, pn), a.p(), st32, 4); },
-    glGetBufferParameteri64v: (_c, a) => { const t = a.i(), pn = a.i(); out(g().getBufferParameter(t, pn), a.p(), st64, 8); },
-    // a mapping is a guest shadow of the range: read in on map, written back on unmap or flush
+    glBindBufferBase: (_c, a) => { const t = a.i(), i = a.i(); g().bindBufferBase(t, i, realize(t, a.i())); },
+    glBindBufferRange: (_c, a) => { const t = a.i(), i = a.i(), gl = realize(t, a.i()); g().bindBufferRange(t, i, gl, a.i(), a.i()); },
+    glBufferData: (_c, a) => {
+      const t = a.i(), n = a.i(), p = a.p(), usage = a.i(), r = shadowed(t);
+      if (r) { r.shadow = new Uint8Array(n); if (p) r.shadow.set(u8(p, n)); r.usage = usage; }
+      else withTarget(t, (tt) => { if (p) g().bufferData(tt, u8(p, n), usage); else g().bufferData(tt, n, usage); });
+    },
+    glBufferSubData: (_c, a) => { const t = a.i(), off = a.i(), n = a.i(), p = a.p(), r = shadowed(t); if (r) r.shadow!.set(u8(p, n), off); else withTarget(t, (tt) => g().bufferSubData(tt, off, u8(p, n))); },
+    glCopyBufferSubData: (_c, a) => {
+      const rt = a.i(), wt = a.i(), roff = a.i(), woff = a.i(), n = a.i(), rs = shadowed(rt), ws = shadowed(wt);
+      const src = rs ? rs.shadow!.subarray(roff, roff + n) : withTarget(rt, (tt) => { const d = new Uint8Array(n); g().getBufferSubData(tt, roff, d); return d; });
+      if (ws) ws.shadow!.set(src, woff); else withTarget(wt, (tt) => g().bufferSubData(tt, woff, src));
+    },
+    glGetBufferParameteriv: (_c, a) => { const t = a.i(), pn = a.i(), r = shadowed(t); out(r ? (pn === 0x8765 ? r.usage : r.shadow!.length) : withTarget(t, (tt) => g().getBufferParameter(tt, pn)), a.p(), st32, 4); },
+    glGetBufferParameteri64v: (_c, a) => { const t = a.i(), pn = a.i(), r = shadowed(t); out(r ? (pn === 0x8765 ? r.usage : r.shadow!.length) : withTarget(t, (tt) => g().getBufferParameter(tt, pn)), a.p(), st64, 8); },
+    // a mapping is a guest copy of the range: read in on map, written back on unmap or flush
     glMapBufferRange: (_c, a) => {
-      const t = a.i(), off = a.i(), len = a.i(), access = a.i(), ptr = mem.malloc(len);
-      if (access & 1) g().getBufferSubData(t, off, u8(ptr, len));
-      mapped.set(t, { ptr, off, len, access });
+      const t = a.i(), off = a.i(), len = a.i(), access = a.i(), b = recAt(t);
+      if (!b) { err = 0x502; return 0; }
+      const ptr = mem.malloc(len), r = shadowed(t);
+      if (access & 1) { if (r) u8(ptr, len).set(r.shadow!.subarray(off, off + len)); else withTarget(t, (tt) => g().getBufferSubData(tt, off, u8(ptr, len))); }
+      mapped.set(b, { ptr, off, len, access });
       return ptr;
     },
-    glFlushMappedBufferRange: (_c, a) => { const t = a.i(), m = mapped.get(t), off = a.i(), len = a.i(); if (m) g().bufferSubData(t, m.off + off, u8(m.ptr + off, len)); },
+    glFlushMappedBufferRange: (_c, a) => { const t = a.i(), b = recAt(t), m = b && mapped.get(b), off = a.i(), len = a.i(); if (m) writeBack(t, m.off + off, u8(m.ptr + off, len)); },
     glUnmapBuffer: (_c, a) => {
-      const t = a.i(), m = mapped.get(t);
-      if (!m) return 0;
-      mapped.delete(t);
-      if ((m.access & 2) && !(m.access & 0x10)) g().bufferSubData(t, m.off, u8(m.ptr, m.len));   // MAP_WRITE_BIT without MAP_FLUSH_EXPLICIT_BIT
+      const t = a.i(), b = recAt(t), m = b && mapped.get(b);
+      if (!b || !m) return 0;
+      mapped.delete(b);
+      if ((m.access & 2) && !(m.access & 0x10)) writeBack(t, m.off, u8(m.ptr, m.len));   // MAP_WRITE_BIT without MAP_FLUSH_EXPLICIT_BIT
       mem.free(m.ptr);
       return 1;
     },
-    glGetBufferPointerv: (_c, a) => { const t = a.i(); a.i(); stp(a.p(), mapped.get(t)?.ptr ?? 0); },
+    glGetBufferPointerv: (_c, a) => { const t = a.i(); a.i(); const b = recAt(t); stp(a.p(), (b && mapped.get(b)?.ptr) || 0); },
 
     // ── vertex arrays and attributes
     glGenVertexArrays: (_c, a) => { const n = a.i(); gen(T().vaos, n, a.p(), () => g().createVertexArray()); },
@@ -411,7 +480,16 @@ export function gles3Init(): void {
   // the probe: after each entry point, count and name a GL error (wd.native.glProbe)
   for (const [k, f] of Object.entries(G)) {
     if (k === "glGetError") continue;
-    G[k] = (c, a) => { const r = f(c, a); if (glProbe.on && current) { const e = current.getError(); if (e) { perf.glErrors++; console.warn("[gl] 0x" + e.toString(16), "after", k); } } return r; };
+    G[k] = (c, a) => {
+      const args = glProbe.on ? `(${c.r[0] >>> 0},${c.r[1] >>> 0},${c.r[2] >>> 0})` : "";   // read before f consumes them
+      const r = f(c, a);
+      if (glProbe.on && current) {
+        glRing.push(k + args); if (glRing.length > 400) glRing.splice(0, 200);
+        if (glProbe.capture > 0 && k.startsWith("glDraw")) { glProbe.capture--; console.log("[gl-capture] " + k + args + " " + JSON.stringify(captureDraw())); }
+        const e = current.getError(); if (e) { perf.glErrors++; console.warn("[gl] 0x" + e.toString(16), "after", k + args); }
+      }
+      return r;
+    };
   }
   hostLib("libGLESv2.so", G, { closed: true });
   hostLib("libGLESv3.so", G, { closed: true });

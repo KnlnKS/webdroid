@@ -20,6 +20,7 @@ import { overlays } from "./android/popup";
 import { openDatabase } from "./android/sqlite";
 import { setWebLayer, webViewInfo } from "./android/webkit";
 import { native } from "./native/debug";
+import { allSurfaces, probeSurface } from "./android/glview";
 import { device, parseScreen, readStoredScreen, storeScreen, type Screen } from "./shell/config";
 
 const root = document.getElementById("root")!;
@@ -220,6 +221,7 @@ rt.auditNatives = new URLSearchParams(location.search).get("natcheck") === "1";
 
 const wd = {
   rt, uiState, overlays, perf, perfReset, mainDbg, setGL, logs: logBuf, ticks: 0, native,
+  surfaces: () => allSurfaces.map((s) => ({ view: s.view?.constructor.name, width: s.width, height: s.height, frames: s.frames, present: !!s.present })), probeSurface,
   // The JVM's own entry points, so a script can drive real bytecode from the page the way
   // scripts/fwtest.ts drives it headless. That is the only way to exercise anything needing
   // Canvas2D — text metrics, a bitmap raster, an image decode — since bun has no canvas.

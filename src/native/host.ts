@@ -174,7 +174,9 @@ export function hostReturn(cpu: Cpu, ret: HostRet): void {
   if (ret === NORET) return;
   // AAPCS64 returns a 64-bit value in x0 alone; AAPCS32 splits it across r0/r1
   if (ret === VRET || ret === ARG0) { /* already in v0 / x0 */ }
-  else if (typeof ret === "number") { cpu.r[0] = ret | 0; if (cpu.a64) cpu.h[0] = 0; }
+  // a negative number is an error or count the caller may read as a 64-bit ssize_t/long: sign-extend it;
+  // a pointer is a positive number, and an int result's upper half is unspecified either way
+  else if (typeof ret === "number") { cpu.r[0] = ret | 0; if (cpu.a64) cpu.h[0] = ret < 0 ? -1 : 0; }
   else if (typeof ret === "bigint") {
     cpu.r[0] = Number(ret & 0xffffffffn) | 0;
     const hi = Number((ret >> 32n) & 0xffffffffn) | 0;
