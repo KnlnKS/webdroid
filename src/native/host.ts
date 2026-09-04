@@ -83,7 +83,7 @@ export class VaList implements ArgReader {
  *  are kept here, not written back: no caller reuses the list after a v*printf or Call*MethodV. */
 export class VaList64 implements ArgReader {
   private stack: number; private grTop: number; private vrTop: number; private grOffs: number; private vrOffs: number;
-  constructor(a: number) { this.stack = ldp(a); this.grTop = ldp(a + 8); this.vrTop = ldp(a + 16); this.grOffs = mem.ld32(a + 24); this.vrOffs = mem.ld32(a + 32); }
+  constructor(a: number) { this.stack = ldp(a); this.grTop = ldp(a + 8); this.vrTop = ldp(a + 16); this.grOffs = mem.ld32(a + 24); this.vrOffs = mem.ld32(a + 28); }
   private slot(): number { const p = (this.stack + 7) & ~7; this.stack = p + 8; return p; }
   private gp(): number {
     if (this.grOffs >= 0) return this.slot();
