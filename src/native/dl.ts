@@ -27,7 +27,9 @@ function apkLibBytes(name: string): Uint8Array | null {
   return null;
 }
 
-export async function loadModule(name: string, bytes?: Uint8Array): Promise<Module> {
+/** `link` loads and relocates without executing anything — no init array, no JNI_OnLoad. It is
+ *  what an image whose machine code the tier cannot run yet can still be proved to do. */
+export async function loadModule(name: string, bytes?: Uint8Array, link = false): Promise<Module> {
   name = basename(name);
   const have = byName.get(name);
   if (have) { have.refs++; return have; }
@@ -40,8 +42,8 @@ export async function loadModule(name: string, bytes?: Uint8Array): Promise<Modu
     modules.push(mod);
     byName.set(name, mod);
     // dependencies that are real modules in the apk load (and initialise) first; host libs need nothing
-    for (const n of mod.needed) if (!hostLibNames().includes(n) && !byName.has(n) && apkLibBytes(n)) await loadModule(n);
-    await runInit(mod);
+    for (const n of mod.needed) if (!hostLibNames().includes(n) && !byName.has(n) && apkLibBytes(n)) await loadModule(n, undefined, link);
+    if (!link) await runInit(mod);
     return mod;
   })();
   inflight.set(name, q);

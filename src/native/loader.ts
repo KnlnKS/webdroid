@@ -5,6 +5,7 @@ import { rt } from "../jvm/runtime";
 import { curThread } from "../jvm/natives/jlang";
 import { libcInit } from "./libc";
 import { dlInit, loadModule, modules } from "./dl";
+import type { Module } from "./elf";
 import { jniInit, javaVM, pushFrame, popFrame, resolveByExport } from "./jni";
 import { gles1Init } from "./gles1";
 import { cpuFor } from "./cpu";
@@ -26,6 +27,13 @@ function nativeInit(): void {
  *  adding a backend is one edit here. */
 export const NATIVE_ABIS = ["armeabi-v7a", "armeabi"] as const;
 rt.nativeAbis = NATIVE_ABIS;
+
+/** Load and relocate an image without executing a single instruction of it. An ABI whose
+ *  emitter does not exist yet can still prove its loader: scripts/nrun.ts --load-only. */
+export async function linkNativeLib(name: string, bytes: Uint8Array): Promise<Module> {
+  nativeInit();
+  return loadModule(name, bytes, true);
+}
 
 export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string): Promise<void> {
   if (!(NATIVE_ABIS as readonly string[]).includes(abi)) {

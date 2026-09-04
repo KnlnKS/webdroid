@@ -1,26 +1,52 @@
-// Load an apk's ARM32 library headless and run its JNI_OnLoad: the fastest way to shake out the
-// CPU/libc/JNI layers without a browser. bun scripts/nrun.ts <apk> <libname.so>
+// Load an apk's native library headless and run its JNI_OnLoad: the fastest way to shake out the
+// CPU/libc/JNI layers without a browser.
+//
+//   bun scripts/nrun.ts <apk> <libname.so> [--link]
+//
+// An ABI the tier can execute runs. One it cannot is loaded and relocated only, and the report
+// says so — that is how a loader is proved before its emitter exists. --link forces it.
 import { openApk, dexesOf } from "./lib";
 import { rt } from "../src/jvm/runtime";
 import "../src/jvm/natives/jlang";
 import "../src/jvm/natives/jutil";
 import "../src/jvm/natives/jio";
-import { loadNativeLib } from "../src/native/loader";
+import { loadNativeLib, linkNativeLib } from "../src/native/loader";
 import { calledMissing, unresolved, hostTrace } from "../src/native/host";
 import { jniMissing, registered } from "../src/native/jni";
 import { blockStats, NativeFault } from "../src/native/cpu";
 import { perf } from "../src/perf";
 
-const [apk, lib] = process.argv.slice(2);
+const args = process.argv.slice(2);
+const [apk, lib] = args.filter((a) => !a.startsWith("--"));
 const zip = await openApk(apk);
 for (const dex of dexesOf(zip)) rt.loadDex(dex);
 rt.classpath = zip;
 hostTrace.on = !!process.env.TRACE;
-const abi = ["armeabi-v7a", "armeabi"].find((a) => rt.classpath[`lib/${a}/${lib}`])!;
+
+// the ABIs this apk actually ships this library for, in the order the tree lists them
+const abis = Object.keys(rt.classpath).flatMap((k) => {
+  const m = /^lib\/([^/]+)\/(.+)$/.exec(k);
+  return m && m[2] === lib ? [m[1]] : [];
+});
+if (!abis.length) { console.error(`no lib/*/${lib} in ${apk}`); process.exit(1); }
+const abi = abis.find((a) => rt.nativeAbis.includes(a)) ?? abis[0];
+const link = args.includes("--link") || !rt.nativeAbis.includes(abi);
+
 const t0 = performance.now();
 try {
-  await loadNativeLib(lib, rt.classpath[`lib/${abi}/${lib}`], abi);
-  console.log("loaded", lib, "in", (performance.now() - t0).toFixed(0), "ms");
+  if (link) {
+    const mod = await linkNativeLib(lib, rt.classpath[`lib/${abi}/${lib}`]);
+    const ms = (performance.now() - t0).toFixed(0);
+    console.log(`linked ${lib} (${abi}${rt.nativeAbis.includes(abi) ? "" : ", no emitter"}) in ${ms}ms`);
+    console.log(`  base=0x${mod.base.toString(16)} size=0x${(mod.end - mod.base).toString(16)} ${mod.w64 ? "ELF64" : "ELF32"}`);
+    console.log(`  NEEDED: ${mod.needed.join(" ")}`);
+    console.log(`  exports: ${mod.exports.size}  initArray: ${mod.initArray.length}  init: ${mod.init ? "yes" : "no"}`);
+    console.log(`  JNI_OnLoad: ${mod.exports.has("JNI_OnLoad") ? "0x" + mod.exports.get("JNI_OnLoad")!.toString(16) : "absent"}`);
+    console.log("  0 instructions executed");
+  } else {
+    await loadNativeLib(lib, rt.classpath[`lib/${abi}/${lib}`], abi);
+    console.log("loaded", lib, `(${abi})`, "in", (performance.now() - t0).toFixed(0), "ms");
+  }
 } catch (e) {
   console.error("FAULT", e instanceof NativeFault ? e.message : e);
   if (hostTrace.on) console.error("host trace:\n  " + hostTrace.ring.slice(-40).join("\n  "));
