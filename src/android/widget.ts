@@ -1551,7 +1551,7 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
     if (ta.vals[0]) this.checked = !!rvInt(this.jres, ta.vals[0], 0);
     if (ta.vals[1]) {
       this.buttonD = await loadDrawableRV(this.jres, ta.vals[1], this.theme);
-      this.buttonW = kind === "switch" ? 104 : 64;
+      this.buttonW = kind === "switch" ? device.dp(52) : device.dp(32);
     }
   };
   return {
@@ -1578,85 +1578,85 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
   },
   "setButtonDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JCompoundButton, d: JDrawable | null) {
     this.buttonD = d;
-    this.buttonW = d ? (kind === "switch" ? 104 : 64) : 0;
+    this.buttonW = d ? (kind === "switch" ? device.dp(52) : device.dp(32)) : 0;
     invalidate();
   },
   "setButtonDrawable(I)V": async function (this: JCompoundButton, id: number) {
     this.buttonD = id ? await loadDrawable(this.jres!, id, this.theme) : null;
-    this.buttonW = id ? (kind === "switch" ? 104 : 64) : 0;
+    this.buttonW = id ? (kind === "switch" ? device.dp(52) : device.dp(32)) : 0;
     invalidate();
   },
   "onMeasure(II)V": function (this: JCompoundButton, wSpec: number, hSpec: number) {
     (textViewMethods["onMeasure(II)V"] as (a: number, b: number) => void).call(this, wSpec, hSpec);
     this.measuredW = resolveSizeAndState(this.measuredW + this.buttonW, wSpec);
-    this.measuredH = Math.max(this.measuredH, 96);
+    this.measuredH = Math.max(this.measuredH, device.dp(48));
   },
   "onDraw(Landroid/graphics/Canvas;)V": function (this: JCompoundButton, cv: JCanvas) {
     if (!this.buttonW) return (textViewMethods["onDraw(Landroid/graphics/Canvas;)V"] as (cv: JCanvas) => void).call(this, cv);
     const ctx = cv.ctx;
     const accent = themeAccent(this);
     const cy = this.height() / 2;
-    const indX = kind === "switch" ? this.width() - this.padR - 88 : this.padL + 8;
+    const indX = kind === "switch" ? this.width() - this.padR - device.dp(44) : this.padL + device.dp(4);
     if (this.buttonD && this.buttonD.intrinsicW() > 0) {
       const w = this.buttonD.intrinsicW(), h = this.buttonD.intrinsicH();
       const b = this.buttonD.bounds;
       b.left = indX; b.top = cy - h / 2; b.right = indX + w; b.bottom = cy + h / 2;
       this.buttonD.stateSet = this.drawableState();
       this.buttonD.paint(cv);
-      drawTextInset(this, cv, kind !== "switch" ? indX + this.buttonW - 8 : this.padL);
+      drawTextInset(this, cv, kind !== "switch" ? indX + this.buttonW - device.dp(4) : this.padL);
       return;
     }
     if (kind === "check") {
-      const s = 36;
+      const s = device.dp(18);
       const x = indX, y = cy - s / 2;
-      ctx.lineWidth = 4;
+      ctx.lineWidth = device.dp(2);
       if (this.checked) {
         ctx.fillStyle = cssColor(accent);
         ctx.beginPath();
-        ctx.roundRect(x, y, s, s, 4);
+        ctx.roundRect(x, y, s, s, device.dp(2));
         ctx.fill();
         ctx.strokeStyle = "#fff";
-        ctx.lineWidth = 5;
+        ctx.lineWidth = device.dp(2.5);
         ctx.beginPath();
-        ctx.moveTo(x + 8, y + 19);
-        ctx.lineTo(x + 15, y + 26);
-        ctx.lineTo(x + 28, y + 10);
+        ctx.moveTo(x + device.dp(4), y + device.dp(9.5));
+        ctx.lineTo(x + device.dp(7.5), y + device.dp(13));
+        ctx.lineTo(x + device.dp(14), y + device.dp(5));
         ctx.stroke();
       } else {
         ctx.strokeStyle = "rgba(0,0,0,0.54)";
         ctx.beginPath();
-        ctx.roundRect(x + 2, y + 2, s - 4, s - 4, 4);
+        ctx.roundRect(x + device.dp(1), y + device.dp(1), s - device.dp(2), s - device.dp(2), device.dp(2));
         ctx.stroke();
       }
     } else if (kind === "radio") {
-      const r = 18;
-      ctx.lineWidth = 4;
+      const r = device.dp(9);
+      ctx.lineWidth = device.dp(2);
       ctx.strokeStyle = this.checked ? cssColor(accent) : "rgba(0,0,0,0.54)";
       ctx.beginPath();
-      ctx.arc(indX + r, cy, r - 2, 0, Math.PI * 2);
+      ctx.arc(indX + r, cy, r - device.dp(1), 0, Math.PI * 2);
       ctx.stroke();
       if (this.checked) {
         ctx.fillStyle = cssColor(accent);
         ctx.beginPath();
-        ctx.arc(indX + r, cy, r - 10, 0, Math.PI * 2);
+        ctx.arc(indX + r, cy, r - device.dp(5), 0, Math.PI * 2);
         ctx.fill();
       }
     } else {
       // switch: track + thumb on right
-      const tw = 68, th = 28;
+      const tw = device.dp(34), th = device.dp(14);
       ctx.fillStyle = this.checked ? cssColor((accent & 0xffffff) | 0x66000000) : "rgba(0,0,0,0.26)";
       ctx.beginPath();
-      ctx.roundRect(indX + 10, cy - th / 2, tw - 20, th, th / 2);
+      ctx.roundRect(indX + device.dp(5), cy - th / 2, tw - device.dp(10), th, th / 2);
       ctx.fill();
       ctx.fillStyle = this.checked ? cssColor(accent) : "#fafafa";
       ctx.strokeStyle = "rgba(0,0,0,0.13)";
       ctx.beginPath();
-      ctx.arc(this.checked ? indX + tw - 20 : indX + 20, cy, 20, 0, Math.PI * 2);
+      ctx.arc(this.checked ? indX + tw - device.dp(10) : indX + device.dp(10), cy, device.dp(10), 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
     }
     // text after indicator
-    drawTextInset(this, cv, kind !== "switch" ? indX + this.buttonW - 8 : this.padL);
+    drawTextInset(this, cv, kind !== "switch" ? indX + this.buttonW - device.dp(4) : this.padL);
   },
   };
 };
@@ -1934,12 +1934,12 @@ rt.register({
     },
     "onMeasure(II)V": function (this: JCheckedTextView, wSpec: number, hSpec: number) {
       (textViewMethods["onMeasure(II)V"] as (a: number, b: number) => void).call(this, wSpec, hSpec);
-      this.measuredH = Math.max(this.measuredH, 96);
+      this.measuredH = Math.max(this.measuredH, device.dp(48));
     },
     "onDraw(Landroid/graphics/Canvas;)V": function (this: JCheckedTextView, cv: JCanvas) {
       const ctx = cv.ctx;
       const cy = this.height() / 2;
-      const r = 18;
+      const r = device.dp(9);
       const indX = this.padL;
       // A supplied check mark wins; the drawn indicator is only the fallback for the
       // synthesized single-choice row, which has no framework asset behind it.
@@ -1954,7 +1954,7 @@ rt.register({
         return;
       }
       const accent = themeAccent(this);
-      ctx.lineWidth = 4;
+      ctx.lineWidth = device.dp(2);
       ctx.strokeStyle = this.checked ? cssColor(accent) : "rgba(0,0,0,0.54)";
       ctx.beginPath();
       ctx.arc(indX + r + 2, cy, r - 2, 0, Math.PI * 2);
