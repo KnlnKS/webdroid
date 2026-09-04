@@ -378,6 +378,7 @@ rt.register({ name: "java/security/Principal", ctor: class extends JObj {} });
 rt.register({
   name: "javax/security/auth/x500/X500Principal", ctor: JPrincipal, ifaces: ["java/security/Principal"],
   methods: {
+    "<init>(Ljava/lang/String;)V": function (this: JPrincipal, dn: string) { this.name = dn; },
     "getName()Ljava/lang/String;": function (this: JPrincipal) { return this.name; },
     "toString()Ljava/lang/String;": function (this: JPrincipal) { return this.name; },
   },
