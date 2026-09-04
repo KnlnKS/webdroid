@@ -578,6 +578,7 @@ rt.register({
     ACTION_CREATE_DOCUMENT: "android.intent.action.CREATE_DOCUMENT", ACTION_OPEN_DOCUMENT: "android.intent.action.OPEN_DOCUMENT",
     ACTION_OPEN_DOCUMENT_TREE: "android.intent.action.OPEN_DOCUMENT_TREE",
     ACTION_BOOT_COMPLETED: "android.intent.action.BOOT_COMPLETED",
+    ACTION_BATTERY_CHANGED: "android.intent.action.BATTERY_CHANGED",
     CATEGORY_LAUNCHER: "android.intent.category.LAUNCHER", CATEGORY_DEFAULT: "android.intent.category.DEFAULT",
     FLAG_ACTIVITY_NEW_TASK: 0x10000000, FLAG_ACTIVITY_CLEAR_TOP: 0x04000000, FLAG_ACTIVITY_CLEAR_TASK: 0x00008000,
     FLAG_ACTIVITY_SINGLE_TOP: 0x20000000, FLAG_GRANT_READ_URI_PERMISSION: 1, FLAG_GRANT_WRITE_URI_PERMISSION: 2,
@@ -2257,9 +2258,13 @@ const currentApplication = () => appHost?.application ?? null;
 // the core settings the system pushes into every process. None is set here, so every read gets
 // the caller's own default — a device that has not set one reports the same.
 const intCoreSetting = (_k: string, def: number) => def;
+class JActivityThread extends JObj {}
+let activityThread: JActivityThread | null = null;
 rt.register({
-  name: "android/app/ActivityThread", ctor: class extends JObj {},
+  name: "android/app/ActivityThread", ctor: JActivityThread,
   methods: {
+    "static currentActivityThread()Landroid/app/ActivityThread;": () => appHost ? activityThread ??= new JActivityThread() : null,
+    "getApplication()Landroid/app/Application;": currentApplication,
     "static currentApplication()Landroid/app/Application;": currentApplication,
     "static currentPackageName()Ljava/lang/String;": () => appHost?.pkg ?? null,
     "static currentProcessName()Ljava/lang/String;": () => appHost?.pkg ?? null,
