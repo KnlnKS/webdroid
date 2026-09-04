@@ -15,6 +15,8 @@ const byName = new Map<string, Module>();
 
 type Handle = { mod: Module } | { lib: string };
 const handles: Handle[] = [];
+/** dlopen handles start here: 0, -1 and 1 (the main program) mean the global scope to dlsym */
+const HANDLE_BASE = 0x100;
 let dlerrorMsg: string | null = null;
 let dlerrorBuf = 0;
 const inflight = new Map<string, Promise<Module>>();
@@ -81,9 +83,9 @@ export function symbolizePc(pc: number): string {
 function setErr(msg: string): void { dlerrorMsg = msg; }
 function handleOf(h: Handle): number {
   const i = handles.findIndex((x) => ("mod" in x && "mod" in h && x.mod === h.mod) || ("lib" in x && "lib" in h && x.lib === h.lib));
-  if (i >= 0) return i + 1;
+  if (i >= 0) return HANDLE_BASE + i;
   handles.push(h);
-  return handles.length;
+  return HANDLE_BASE + handles.length - 1;
 }
 
 export function dlInit(): void {
@@ -102,12 +104,12 @@ export function dlInit(): void {
     },
     dlsym: (_cpu, a) => {
       const h = a.i(), sym = a.str();
-      if (h === 0 || h === -1 || h === 1) {
+      if (h === 0 || h === -1 || h === -2 || h === 1) {
         const v = resolveGlobalOrNull(sym);
         if (v === undefined) { setErr(`undefined symbol: ${sym}`); return 0; }
         return v;
       }
-      const hd = handles[h - 1];
+      const hd = handles[h - HANDLE_BASE];
       if (!hd) { setErr("invalid handle"); return 0; }
       if ("mod" in hd) {
         const v = hd.mod.exports.get(sym);
@@ -120,7 +122,7 @@ export function dlInit(): void {
       // actually called, so telemetry rather than a symbol list decides what matters
       return missingStub(hd.lib + "!" + sym);
     },
-    dlclose: (_cpu, a) => { const hd = handles[a.i() - 1]; if (hd && "mod" in hd) hd.mod.refs--; return 0; },
+    dlclose: (_cpu, a) => { const hd = handles[a.i() - HANDLE_BASE]; if (hd && "mod" in hd) hd.mod.refs--; return 0; },
     dlerror: () => {
       if (dlerrorMsg === null) return 0;
       mem.putCstr(dlerrorBuf, dlerrorMsg, 256);
