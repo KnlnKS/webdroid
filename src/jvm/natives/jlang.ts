@@ -1108,8 +1108,14 @@ function arraycopy(src: any, sp: number, dst: any, dp: number, len: number) {
 const loadedLibs = new Set<string>();
 const ABIS = ["arm64-v8a", "armeabi-v7a", "armeabi", "x86_64", "x86"];
 const E_MACHINE: Record<number, string> = { 0xb7: "arm64-v8a", 0x28: "armeabi", 0x3e: "x86_64", 0x03: "x86" };
+/** every way this ends without the library loaded: the app is going to get an
+ *  UnsatisfiedLinkError, and the shell says which machine code it would have taken. */
+function needsNative(lib: string, abi: string): void {
+  rt.nativeRequired.set(lib, abi);
+  rt.onNativeRequired(lib, abi);
+}
 /** dlopen: a lib whose natives a TS shim claims loads; anything else is machine code we cannot run, said so */
-function dlopen(lib: string, abi: () => string | null, bytes: (a: string) => Uint8Array | null = () => null): Promise<void> | void {
+async function dlopen(lib: string, abi: () => string | null, bytes: (a: string) => Uint8Array | null = () => null): Promise<void> {
   if (rt.nativeLibs.has(lib.replace(/^lib|\.so$/g, "")) || loadedLibs.has(lib)) {
     if (!loadedLibs.has(lib)) { loadedLibs.add(lib); console.log("[webdroid] loadLibrary", lib); }
     return;
@@ -1120,12 +1126,15 @@ function dlopen(lib: string, abi: () => string | null, bytes: (a: string) => Uin
   if (a && b && rt.loadNativeLib) {
     loadedLibs.add(lib);
     console.log("[webdroid] loadLibrary", lib, a);
-    return rt.loadNativeLib(lib, b, a).catch((e) => { loadedLibs.delete(lib); throw e; });
+    // a load that faults part-way is machine code we could not run too, whatever the reason:
+    // an ABI the tier rejects, an instruction it cannot decode, a symbol it cannot resolve
+    try { return await rt.loadNativeLib(lib, b, a); }
+    catch (e) { loadedLibs.delete(lib); needsNative(lib, a); throw e; }
   }
-  if (a) { rt.nativeRequired.set(lib, a); rt.onNativeRequired(lib, a); }
+  if (a) needsNative(lib, a);
   throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${lib}" ${a ? "is " + a + " machine code" : "not found"}`);
 }
-const loadLibrary = (n: string) => dlopen(`lib${n}.so`, () => ABIS.find((a) => rt.classpath[`lib/${a}/lib${n}.so`]) ?? null,
+const loadLibrary = async (n: string) => dlopen(`lib${n}.so`, () => ABIS.find((a) => rt.classpath[`lib/${a}/lib${n}.so`]) ?? null,
   (a) => rt.classpath[`lib/${a}/lib${n}.so`] ?? null);
 const sysProps: Record<string, string> = {
   "java.version": "0", "os.name": "Linux", "line.separator": "\n",
@@ -1173,7 +1182,7 @@ rt.register({
     "totalMemory()J": () => 268435456n,
     "freeMemory()J": () => 134217728n,
     "gc()V": () => {},
-    "loadLibrary0(Ljava/lang/Class;Ljava/lang/String;)V": (_c: unknown, n: string) => loadLibrary(n),
+    "loadLibrary0(Ljava/lang/Class;Ljava/lang/String;)V": async (_c: unknown, n: string) => loadLibrary(n),
   },
 });
 
