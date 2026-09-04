@@ -10,7 +10,9 @@ export const sph = (n: number) => `H[${n}]`;
 export const zr = (n: number) => (n === SP ? "0" : `r[${n}]`);
 export const zrh = (n: number) => (n === SP ? "0" : `H[${n}]`);
 /** write a 64-bit result to a zero-register-encoded destination */
-export const setX = (d: number, lo: string, hi: string) => (d === SP ? "" : `r[${d}]=${lo};H[${d}]=${hi};`);
+/** a high half computed from the destination's own low half goes through the temporaries */
+export const setX = (d: number, lo: string, hi: string) =>
+  d === SP ? "" : hi.includes(`r[${d}]`) ? `v=${lo};vh=${hi};r[${d}]=v;H[${d}]=vh;` : `r[${d}]=${lo};H[${d}]=${hi};`;
 /** write a 32-bit result: A64 zero-extends every W write into its X register */
 export const setW = (d: number, lo: string) => (d === SP ? "" : `r[${d}]=${lo};H[${d}]=0;`);
 /** write to a stack-pointer-encoded destination (ADD/SUB immediate with S=0) */

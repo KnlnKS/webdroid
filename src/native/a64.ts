@@ -540,8 +540,9 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
       }
       if (op31 === 1 || op31 === 5) {                                                // SMADDL / UMADDL
         const signed = op31 === 1;
-        push(`c.${signed ? "smull" : "umull"}(${zr(rn)},${zr(rm)});a=c.lo;ah=c.hi;t=${zr(ra)};th=${zrh(ra)};`
-          + (o0 ? SUB_CORE64.replace("v=(a-t)", "v=(a-t)") : ADD_CORE64) + setX(rd, "v", "vh"));
+        // Xd = Xa ± (Wn * Wm): the accumulator is the minuend
+        push(`c.${signed ? "smull" : "umull"}(${zr(rn)},${zr(rm)});a=${zr(ra)};ah=${zrh(ra)};t=c.lo;th=c.hi;`
+          + (o0 ? SUB_CORE64 : ADD_CORE64) + setX(rd, "v", "vh"));
         return false;
       }
       if (op31 === 2 || op31 === 6) {                                                // SMULH / UMULH

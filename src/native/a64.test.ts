@@ -52,6 +52,39 @@ describe("a64 decoder", () => {
     expect([c.r[13], c.h[13]]).toEqual([255, 0]);
   });
 
+  test("the multiply family: widening, high halves, and the subtracting forms", () => {
+    // umull x2,w0,w1; smull x3; umaddl x4,w0,w1,x5; smaddl x6; umsubl x7; smsubl x8; umulh x9,x0,x1; mul x10; mneg x11; mul w12; msub x13,x0,x1,x5
+    const W = [0x9ba17c02, 0x9b217c03, 0x9ba11404, 0x9b211406, 0x9ba19407, 0x9b219408, 0x9bc17c09, 0x9b017c0a, 0x9b01fc0b, 0x1b017c0c, 0x9b01940d, RET];
+    const x = (c: { r: Int32Array; h: Int32Array }, i: number) => (BigInt(c.h[i] >>> 0) << 32n) | BigInt(c.r[i] >>> 0);
+    const set = (c: { r: Int32Array; h: Int32Array }, i: number, v: bigint) => { c.r[i] = Number(v & 0xffffffffn) | 0; c.h[i] = Number((v >> 32n) & 0xffffffffn) | 0; };
+    const U = (v: bigint) => BigInt.asUintN(64, v), U32 = (v: bigint) => BigInt.asUintN(32, v), S32 = (v: bigint) => BigInt.asIntN(32, v);
+    for (const [a, b, acc] of [[0x1050n, 0x2492493n, 0x123n], [0xffffffffn, 0xffffffffn, 0n], [0x80000000n, 2n, 0x10n], [0x1_00000007n, 0xf_00000009n, 0x5n], [0x7fffffffn, 0x80000001n, 0xffffffffffffffffn]] as [bigint, bigint, bigint][]) {
+      const c = run(W, (c) => { set(c, 0, a); set(c, 1, b); set(c, 5, acc); });
+      const ua = U32(a), ub = U32(b), sa = S32(ua), sb = S32(ub);
+      expect(x(c, 2)).toBe(ua * ub); expect(x(c, 3)).toBe(U(sa * sb));
+      expect(x(c, 4)).toBe(U(acc + ua * ub)); expect(x(c, 6)).toBe(U(acc + sa * sb));
+      expect(x(c, 7)).toBe(U(acc - ua * ub)); expect(x(c, 8)).toBe(U(acc - sa * sb));
+      expect(x(c, 9)).toBe((U(a) * U(b)) >> 64n); expect(x(c, 10)).toBe(U(a * b)); expect(x(c, 11)).toBe(U(-(a * b)));
+      expect(c.r[12] >>> 0).toBe(Number(U32(a * b))); expect(x(c, 13)).toBe(U(acc - a * b));
+    }
+  });
+  test("ROR/EXTR into one of their own sources keep the high half", () => {
+    // ror x8,x8,#9; extr x10,x11,x12,#9; extr x13,x11,x12,#40; ror w14,w15,#5; extr w16,w17,w18,#7; ror x19,x11,#32; ror x20,x11,#0
+    const W = [0x93c82508, 0x93cc256a, 0x93cca16d, 0x138f15ee, 0x13921e30, 0x93cb8173, 0x93cb0174, RET];
+    const x = (c: { r: Int32Array; h: Int32Array }, i: number) => (BigInt(c.h[i] >>> 0) << 32n) | BigInt(c.r[i] >>> 0);
+    const set = (c: { r: Int32Array; h: Int32Array }, i: number, v: bigint) => { c.r[i] = Number(v & 0xffffffffn) | 0; c.h[i] = Number((v >> 32n) & 0xffffffffn) | 0; };
+    const ror = (v: bigint, s: bigint, w = 64n) => BigInt.asUintN(Number(w), (v >> s) | (v << (w - s)));
+    const extr = (hi: bigint, lo: bigint, s: bigint, w = 64n) => BigInt.asUintN(Number(w), ((hi << w) | lo) >> s);
+    const a = 0x072884f61000n, b = 0x1122334455667788n, d = 0x99aabbccddeeff00n;
+    const c = run(W, (c) => { set(c, 8, a); set(c, 11, b); set(c, 12, d); c.r[15] = 0x80000001 | 0; c.r[17] = 0x12345678; c.r[18] = 0x9abcdef0 | 0; });
+    expect(x(c, 8)).toBe(ror(a, 9n));
+    expect(x(c, 10)).toBe(extr(b, d, 9n));
+    expect(x(c, 13)).toBe(extr(b, d, 40n));
+    expect(c.r[14] >>> 0).toBe(Number(ror(0x80000001n, 5n, 32n)));
+    expect(c.r[16] >>> 0).toBe(Number(extr(0x12345678n, 0x9abcdef0n, 7n, 32n)));
+    expect(x(c, 19)).toBe(ror(b, 32n));
+    expect(x(c, 20)).toBe(b);
+  });
   test("shifted register operands carry across the halves", () => {
     const c = run([
       0x92800000,   // mov x0, #-1
@@ -131,7 +164,7 @@ describe("a64 decoder", () => {
     expect(c.r[6]).toBe(4);
     expect(c.r[7]).toBe(5);
     expect(c.r[8]).toBe(4);
-    expect(c.r[9]).toBe(buf);
+    expect(c.r[9] >>> 0).toBe(buf);
   });
 
   test("branches: b.cond, cbz, tbz and the fallthrough", () => {
