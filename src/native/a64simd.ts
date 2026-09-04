@@ -256,6 +256,17 @@ export function emitSimd(_pc: number, w: number, push: Push, fault: Fault): bool
     return false;
   }
 
+  // ── TBL / TBX: bytes of Vd picked out of 1-4 consecutive table registers by the indices in Vm
+  if (is(w, 0xbfe08c00, 0x0e000000)) {
+    const len = ((w >>> 13) & 3) + 1, tbx = (w >>> 12) & 1, bytes = q ? 16 : 8;
+    // Vn..Vn+len-1 are contiguous bytes of the file, so an index is a byte offset from Vn; the
+    // table wrapping past V31 is spelled out because the corpus never does it
+    if (rn + len > 32) { push(fault("tbl past v31")); return true; }
+    const pick = (i: number) => `B[${16 * rm + i}]<${16 * len}?B[${16 * rn}+B[${16 * rm + i}]]:${tbx ? `B[${16 * rd + i}]` : "0"}`;
+    push(lanes(rd, bytes, "B", pick, !!q, false, [rn, rm]));
+    return false;
+  }
+
   // ── permute: UZP1 / TRN1 / ZIP1 / UZP2 / TRN2 / ZIP2
   if (is(w, 0xbf208c00, 0x0e000800)) {
     const size = (w >>> 22) & 3, opcode = (w >>> 12) & 7;
@@ -396,7 +407,8 @@ function emitFp(w: number, push: Push, fault: Fault): boolean {
       const to = opcode & 3;
       if (to === ftype || to === 2) { push(fault("fcvt")); return true; }
       const src = half ? `c.h2f(W[${8 * rn}])` : S(rn);
-      push(to === 0 ? `S[${4 * rd}]=${src};` + zeroS(rd) : to === 1 ? `D[${2 * rd}]=${src};` + zeroHi(rd) : `I[${4 * rd}]=c.f2h(${src});` + zeroS(rd));
+      const toHalf = half ? `c.f2h(${src})` : dp ? `c.f2hd(I[${4 * rn}],I[${4 * rn + 1}])` : `c.f2hs(I[${4 * rn}])`;
+      push(to === 0 ? `S[${4 * rd}]=${src};` + zeroS(rd) : to === 1 ? `D[${2 * rd}]=${src};` + zeroHi(rd) : `I[${4 * rd}]=${toHalf};` + zeroS(rd));
       return false;
     }
     if (half) { push(fault("fp16")); return true; }
@@ -445,8 +457,9 @@ function emitFp(w: number, push: Push, fault: Fault): boolean {
     const e = opcode === 0 ? `${a}*${b}` : opcode === 1 ? `${a}/${b}` : opcode === 2 ? `${a}+${b}` : opcode === 3 ? `${a}-${b}`
       : opcode === 4 ? `Math.max(${a},${b})` : opcode === 5 ? `Math.min(${a},${b})` : opcode === 8 ? `-(${a}*${b})` : null;
     if (e !== null) { push(setF(rd, e)); return false; }
-    if (opcode === 6 || opcode === 7) {                                                  // FMAXNM / FMINNM: a quiet NaN loses
-      push(`a=${a};t=${b};` + setF(rd, `a!==a?t:t!==t?a:Math.${opcode === 6 ? "max" : "min"}(a,t)`));
+    if (opcode === 6 || opcode === 7) {                                                  // FMAXNM / FMINNM: a quiet NaN loses, a signaling one wins
+      push(dp ? `c.fnm64(I[${4 * rn}],I[${4 * rn + 1}],I[${4 * rm}],I[${4 * rm + 1}],${opcode === 6});I[${4 * rd}]=c.lo;I[${4 * rd + 1}]=c.hi;` + zeroHi(rd)
+        : `I[${4 * rd}]=c.fnm32(I[${4 * rn}],I[${4 * rm}],${opcode === 6});` + zeroS(rd));
       return false;
     }
     push(fault("fp 2-source"));
@@ -462,8 +475,9 @@ function emitFp(w: number, push: Push, fault: Fault): boolean {
   // 3-source: FMADD / FMSUB / FNMADD / FNMSUB (one rounding of the product, then of the sum)
   if (is(w, 0x5f000000, 0x1f000000)) {
     const o1 = (w >>> 21) & 1, o0 = (w >>> 15) & 1, ra = (w >>> 10) & 31;
-    const p = `${S(rn)}*${S(rm)}`, acc = S(ra);
-    push(setF(rd, !o1 ? (o0 ? `${acc}-${p}` : `${acc}+${p}`) : (o0 ? `${p}-${acc}` : `-${acc}-${p}`)));
+    const acc = S(ra);
+    if (dp) push(setF(rd, `c.fma(${!o1 === !o0 ? "" : "-"}${S(rn)},${S(rm)},${o1 ? "-" : ""}${acc})`));   // one rounding, as the hardware fuses
+    else { const p = `${S(rn)}*${S(rm)}`; push(setF(rd, !o1 ? (o0 ? `${acc}-${p}` : `${acc}+${p}`) : (o0 ? `${p}-${acc}` : `-${acc}-${p}`))); }
     return false;
   }
   push(fault("fp"));
@@ -525,13 +539,18 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
       if (opcode === 25 && U) return unimpl("fmlal");
       const N = (i: number) => F(rn, i), Mm = (i: number) => F(rm, i), Dd = (i: number) => F(rd, i);
       const each = (f: (i: number) => string, safe = true) => fin(rd, lanes(rd, fcount, FV, f, !!Q, safe, [rn, rm]));
-      const nm = (max: boolean) => `a!==a?t:t!==t?a:Math.${max ? "max" : "min"}(a,t)`;
+      // FMAXNM/FMINNM on the lane bits: a signaling NaN wins, a quiet one loses to a number
+      const nmBits = (x: (i: number) => [string, string], y: (i: number) => [string, string], max: boolean, safe: boolean) => fin(rd, fdp
+        ? lanes64(rd, fcount, (i) => [`(c.fnm64(${x(i)[0]},${x(i)[1]},${y(i)[0]},${y(i)[1]},${max}),c.lo)`, "c.hi"], !!Q, safe, [rn, rm])
+        : lanes(rd, fcount, "I", (i) => `c.fnm32(${x(i)[0]},${y(i)[0]},${max})`, !!Q, safe, [rn, rm]));
+      const bitsOf = (n: number, i: number): [string, string] => (fdp ? [lo64(n, i), hi64(n, i)] : [`I[${4 * n + i}]`, ""]);
+      const pairBits = (i: number): [[string, string], [string, string]] => (i < fcount / 2 ? [bitsOf(rn, 2 * i), bitsOf(rn, 2 * i + 1)] : [bitsOf(rm, 2 * i - fcount), bitsOf(rm, 2 * i - fcount + 1)]);
       const fcmp = (test: (i: number) => string) => fin(rd, [...Array(fcount)].map((_, i) => fdp ? `t=${test(i)}?-1:0;${lo64(rd, i)}=t;${hi64(rd, i)}=t;` : `I[${4 * rd + i}]=${test(i)}?-1:0;`).join(""));
       const pair = (i: number) => (i < fcount / 2 ? [N(2 * i), N(2 * i + 1)] : [Mm(2 * i - fcount), Mm(2 * i - fcount + 1)]);
       switch (opcode) {
-        case 24: if (!U) return done(each((i) => `(a=${N(i)},t=${Mm(i)},${nm(!fv)})`));                                 // FMAXNM / FMINNM
-          return done(each((i) => { const [x, y] = pair(i); return `(a=${x},t=${y},${nm(!fv)})`; }, false));            // FMAXNMP / FMINNMP
-        case 25: return done(each((i) => (fv ? `${Dd(i)}-${N(i)}*${Mm(i)}` : `${Dd(i)}+${N(i)}*${Mm(i)}`)));            // FMLA / FMLS
+        case 24: if (!U) return done(nmBits((i) => bitsOf(rn, i), (i) => bitsOf(rm, i), !fv, true));                    // FMAXNM / FMINNM
+          return done(nmBits((i) => pairBits(i)[0], (i) => pairBits(i)[1], !fv, false));                                 // FMAXNMP / FMINNMP
+        case 25: return done(each((i) => (fdp ? `c.fma(${fv ? "-" : ""}${N(i)},${Mm(i)},${Dd(i)})` : fv ? `${Dd(i)}-${N(i)}*${Mm(i)}` : `${Dd(i)}+${N(i)}*${Mm(i)}`)));   // FMLA / FMLS
         case 26: if (!U) return done(each((i) => `${N(i)}${fv ? "-" : "+"}${Mm(i)}`));                                  // FADD / FSUB
           if (fv) return done(each((i) => `Math.abs(${N(i)}-${Mm(i)})`));                                               // FABD
           return done(each((i) => { const [x, y] = pair(i); return `${x}+${y}`; }, false));                             // FADDP
@@ -550,6 +569,7 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
       const each64 = (f: (i: number) => [string, string], safe = true) => finI(rd, lanes64(rd, count, f, !!Q, safe, [rn, rm]));
       const mask = (kind: "gt" | "ge" | "hi" | "hs" | "eq" | "tst") => each64((i) => [`${cmp64(rn, rm, i, kind)}?-1:0`, "t"]);
       switch (opcode) {
+        case 1: case 5: return done(each64((i) => [`(c.sat64(${lo64(rn, i)},${hi64(rn, i)},${lo64(rm, i)},${hi64(rm, i)},${opcode === 5},${!!U}),c.lo)`, "c.hi"]));   // SQADD/UQADD, SQSUB/UQSUB
         case 6: return done(mask(U ? "hi" : "gt"));
         case 7: return done(mask(U ? "hs" : "ge"));
         case 8: return done(each64((i) => [`(s=SB[${16 * rm + 8 * i}],s>=0?(c.shift64(${lo64(rn, i)},${hi64(rn, i)},s>63?64:s,0),c.lo):(c.shift64(${lo64(rn, i)},${hi64(rn, i)},-s>63?64:-s,${U ? 1 : 2}),c.lo))`, "c.hi"]));   // SSHL / USHL
@@ -583,9 +603,9 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
         const round = opcode === 10;
         return done(each((i) => {
           const a = N(i), sh = `SB[${16 * rm + (bits / 8) * i}]`;
-          const right = U ? (round ? `((${a}+(1<<(-s-1)))>>>-s)` : `(${a}>>>-s)`) : (round ? `((${a}+(1<<(-s-1)))>>-s)` : `(${a}>>-s)`);
-          const far = U ? "0" : `(${a}>>${bits - 1})`;
-          return `(s=${sh},s>=0?(s>=${bits}?0:${a}<<s):(s<=-${bits}?${round && !U ? "0" : far}:${right}))`;
+          // a rounding right shift of the full width can still round up to 1; past it, everything is 0
+          const right = round ? `(-s>${bits}?0:Math.floor((${a}+2**(-s-1))/2**-s))` : U ? `(-s>=${bits}?0:${a}>>>-s)` : `(-s>=${bits}?${a}>>${bits - 1}:${a}>>-s)`;
+          return `(s=${sh},s>=0?(s>=${bits}?0:${a}<<s):${right})`;
         }));
       }
       case 12: return done(each((i) => `Math.max(${N(i)},${Mm(i)})`));                                                  // SMAX / UMAX
@@ -602,7 +622,7 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
       case 22: {                                                                                                          // SQDMULH / SQRDMULH
         if (size === 0) return unimpl("sqdmulh .b");
         const round = U ? `+${2 ** (bits - 1)}` : "";
-        return done(each((i) => sat(`Math.floor((2*${N(i)}*${Mm(i)}${round})/${2 ** bits})`, bits, true), sv));
+        return done(each((i) => sat(`Math.floor((2*${lane(sv, rn, i)}*${lane(sv, rm, i)}${round})/${2 ** bits})`, bits, true), sv));
       }
       case 23: if (U) return unimpl("three-same");
         return done(each((i) => { const [x, y] = pair(i); return wrap(`${x}+${y}`); }, V, false));                       // ADDP
@@ -625,7 +645,7 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
           if (fv) return unimpl("frint32/64");
           // FCVTN(2): .2s from .2d, or .4h from .4s
           if (fdp) return done(narrowed(`S[${4 * SCRATCH}]=D[${2 * rn}];S[${4 * SCRATCH + 1}]=D[${2 * rn + 1}];`));
-          return done(narrowed([...Array(4)].map((_, i) => `W[${8 * SCRATCH + i}]=c.f2h(S[${4 * rn + i}]);`).join("")));
+          return done(narrowed([...Array(4)].map((_, i) => `W[${8 * SCRATCH + i}]=c.f2hs(I[${4 * rn + i}]);`).join("")));
         case 23: {                                                                       // FCVTL: .4s from .4h, .2d from .2s (upper half when Q)
           const off = Q ? (fdp ? 2 : 4) : 0;
           if (fdp) return done(lanes(rd, 2, "D", (i) => `S[${4 * rn + off + i}]`, true, false, [rn]));
@@ -640,7 +660,7 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
         case 29: if (!fv) return done(each((i) => (fdp ? (U ? `(${hi64(rn, i)}>>>0)*4294967296+(${lo64(rn, i)}>>>0)` : `${hi64(rn, i)}*4294967296+(${lo64(rn, i)}>>>0)`) : U ? `U[${4 * rn + i}]` : `I[${4 * rn + i}]`)));   // SCVTF / UCVTF
           return done(each((i) => `c.${U ? "rsqrte" : "recpe"}(${N(i)},${fdp})`));      // FRECPE / FRSQRTE
         case 31: if (U) return done(each((i) => `Math.sqrt(${N(i)})`));                   // FSQRT
-          if (scalar) return done(each((i) => `1/${N(i)}`));                               // FRECPX (exact for the exponent; the fraction is zero in ARM's — documented)
+          if (scalar) return done(each((i) => `c.recpx(${N(i)},${fdp})`));                 // FRECPX
           return unimpl("two-misc");
         case 12: return done(fcmp0((i) => (U ? `${N(i)}>=0` : `${N(i)}>0`)));          // FCMGT #0 / FCMGE #0
         case 13: return done(fcmp0((i) => (U ? `${N(i)}<=0` : `${N(i)}===0`)));        // FCMEQ #0 / FCMLE #0
@@ -664,17 +684,19 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
       }
       case 2: case 6: {                                                                  // SADDLP / UADDLP, SADALP / UADALP
         if (size === 3) return unimpl("addlp .2d");
-        const wide = size + 1, wv = iv(Math.min(wide, 2), !U), acc = opcode === 6;
+        const wide = size + 1, wv = iv(Math.min(wide, 2), !U), acc = opcode === 6, srcv = iv(size, !U);
         const wcount = count / 2;
-        if (wide === 3) return done(I64((i) => { const t = `${lane(sv, rn, 2 * i)}+${lane(sv, rn, 2 * i + 1)}` + (acc ? `+(${hi64(rd, i)}*4294967296+(${lo64(rd, i)}>>>0))` : ""); return split64(`(${t})`); }, false));
-        return done(finI(rd, lanes(rd, wcount, wv, (i) => `${acc ? `${lane(wv, rd, i)}+` : ""}${lane(sv, rn, 2 * i)}+${lane(sv, rn, 2 * i + 1)}`, !!Q, false, [rn])));
+        if (wide === 3) return done(finI(rd, lanes64(rd, wcount, (i) => acc
+          ? [`(v=${lane(srcv, rn, 2 * i)}+${lane(srcv, rn, 2 * i + 1)},a=(${lo64(rd, i)}>>>0)+v,a)|0`, `(${hi64(rd, i)}+Math.floor(a/4294967296))|0`]
+          : split64(`(${lane(srcv, rn, 2 * i)}+${lane(srcv, rn, 2 * i + 1)})`), !!Q, false, [rn])));
+        return done(finI(rd, lanes(rd, wcount, wv, (i) => `${acc ? `${lane(wv, rd, i)}+` : ""}${lane(srcv, rn, 2 * i)}+${lane(srcv, rn, 2 * i + 1)}`, !!Q, false, [rn])));
       }
       case 4: if (size === 3) return unimpl("cls/clz .2d");                              // CLS / CLZ
         return done(eachI((i) => (U ? `Math.clz32(${lane(uv, rn, i)})-${32 - bits}` : `Math.clz32(${lane(sv, rn, i)}^(${lane(sv, rn, i)}>>${bits - 1}))-${32 - bits + 1}`)));
-      case 5: if (U && size === 1) return done(eachI((i) => `c.rbit32(${lane(uv, rn, i)})>>>24`, uv));   // RBIT
+      case 5: if (U && size === 1) return done(finI(rd, lanes(rd, Q ? 16 : 8, "B", (i) => `c.rbit32(B[${16 * rn + i}])>>>24`, !!Q)));   // RBIT
         if (!U && size === 0) return done(eachI((i) => `c.pop8(${lane(uv, rn, i)})`, uv));             // CNT
         return unimpl("two-misc");
-      case 7: if (size === 3) return unimpl("sqabs/sqneg .2d");                          // SQABS / SQNEG
+      case 7: if (size === 3) return done(I64((i) => [`(c.sat64(0,0,${lo64(rn, i)},${hi64(rn, i)},true,false),${U ? "c.lo" : `${hi64(rn, i)}<0?c.lo:${lo64(rn, i)}`})`, U ? "c.hi" : `(${hi64(rn, i)}<0?c.hi:${hi64(rn, i)})`]));   // SQABS / SQNEG .2d
         return done(eachI((i) => sat(U ? `(-${lane(sv, rn, i)})` : `Math.abs(${lane(sv, rn, i)})`, bits, true)));
       case 8: if (size === 3) return done(I64((i) => [`(${U ? `${hi64(rn, i)}>=0` : `${hi64(rn, i)}>0||(${hi64(rn, i)}===0&&${lo64(rn, i)}!==0)`})?-1:0`, "t"]));   // CMGT #0 / CMGE #0
         return done(eachI((i) => `${lane(sv, rn, i)}${U ? ">=" : ">"}0?-1:0`));
@@ -718,16 +740,18 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
       if (!U && opcode === 27) return done(lanes64(rd, 1, () => [`(${lo64(rn, 0)}+${lo64(rn, 1)})|0`, `(${hi64(rn, 0)}+${hi64(rn, 1)}+(((${lo64(rn, 0)}>>>0)+(${lo64(rn, 1)}>>>0))>4294967295?1:0))|0`], false));   // ADDP d
       if (!U) return unimpl("scalar pairwise");
       const a = F(rn, 0), b = F(rn, 1);
-      const e = opcode === 13 ? `${a}+${b}` : opcode === 15 ? `Math.${fv ? "min" : "max"}(${a},${b})` : opcode === 12 ? `(a=${a},t=${b},a!==a?t:t!==t?a:Math.${fv ? "min" : "max"}(a,t))` : null;
+      if (opcode === 12) return done(fin(rd, fdp ? `c.fnm64(${lo64(rn, 0)},${hi64(rn, 0)},${lo64(rn, 1)},${hi64(rn, 1)},${!fv});I[${4 * rd}]=c.lo;I[${4 * rd + 1}]=c.hi;` : `I[${4 * rd}]=c.fnm32(I[${4 * rn}],I[${4 * rn + 1}],${!fv});`));
+      const e = opcode === 13 ? `${a}+${b}` : opcode === 15 ? `Math.${fv ? "min" : "max"}(${a},${b})` : null;
       if (e === null) return unimpl("scalar pairwise");
       return done(fin(rd, `${F(rd, 0)}=${e};`));
     }
     if (U && (opcode === 12 || opcode === 15)) {                                          // FMAXNMV/FMINNMV, FMAXV/FMINV (.4s)
       if (fdp || !q) return unimpl("fmaxv");
       const fn = fv ? "min" : "max";
-      let body = `a=S[${4 * rn}];`;
-      for (let i = 1; i < 4; i++) body += opcode === 15 ? `a=Math.${fn}(a,S[${4 * rn + i}]);` : `t=S[${4 * rn + i}];a=a!==a?t:t!==t?a:Math.${fn}(a,t);`;
-      return done(body + `S[${4 * rd}]=a;` + zeroS(rd));
+      if (opcode === 15) { let body = `a=S[${4 * rn}];`; for (let i = 1; i < 4; i++) body += `a=Math.${fn}(a,S[${4 * rn + i}]);`; return done(body + `S[${4 * rd}]=a;` + zeroS(rd)); }
+      let body = `t=I[${4 * rn}];`;
+      for (let i = 1; i < 4; i++) body += `t=c.fnm32(t,I[${4 * rn + i}],${!fv});`;
+      return done(body + `I[${4 * rd}]=t;` + zeroS(rd));
     }
     if (size === 3) return unimpl("across .2d");
     const V = iv(size, !U);
@@ -760,8 +784,19 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
       switch (opcode) {
         case 0: return done(each64((i) => (U ? shr64(...src(i), shr) : sar64(...src(i), shr))));                        // SSHR / USHR
         case 2: return done(each64((i) => { const [l, h] = U ? shr64(...src(i), shr) : sar64(...src(i), shr); return [`(${lo64(rd, i)}+${l})|0`, `(${hi64(rd, i)}+${h}+(((${lo64(rd, i)}>>>0)+(${l}>>>0))>4294967295?1:0))|0`]; }));   // SSRA / USRA
-        case 10: if (U) return unimpl("sli .2d");
-          return done(each64((i) => shl64(...src(i), shl)));                                                            // SHL
+        case 4: return done(each64((i) => [`(c.rshr64(${lo64(rn, i)},${hi64(rn, i)},${shr},${!!U}),c.lo)`, "c.hi"]));   // SRSHR / URSHR
+        case 6: return done(each64((i) => [`(c.rshr64(${lo64(rn, i)},${hi64(rn, i)},${shr},${!!U}),a=c.lo,ah=c.hi,(${lo64(rd, i)}+a)|0)`, `(${hi64(rd, i)}+ah+(((${lo64(rd, i)}>>>0)+(a>>>0))>4294967295?1:0))|0`]));   // SRSRA / URSRA
+        case 8: {                                                                                                        // SRI: the top n bits of Vd kept
+          if (!U) return unimpl("shift .2d");
+          const m = (2n ** 64n - 1n) >> BigInt(shr), ml = Number(m & 0xffffffffn) | 0, mh = Number((m >> 32n) & 0xffffffffn) | 0;
+          return done(each64((i) => { const [l, h] = shr64(...src(i), shr); return [`(${lo64(rd, i)}&${~ml})|${l}`, `(${hi64(rd, i)}&${~mh})|${h}`]; }));
+        }
+        case 10: {
+          if (!U) return done(each64((i) => shl64(...src(i), shl)));                                                     // SHL
+          const m = ((2n ** 64n - 1n) << BigInt(shl)) & (2n ** 64n - 1n), ml = Number(m & 0xffffffffn) | 0, mh = Number((m >> 32n) & 0xffffffffn) | 0;
+          return done(each64((i) => { const [l, h] = shl64(...src(i), shl); return [`(${lo64(rd, i)}&${~ml})|${l}`, `(${hi64(rd, i)}&${~mh})|${h}`]; }));   // SLI
+        }
+        case 12: case 14: return done(each64((i) => [`(c.sqshl64(${lo64(rn, i)},${hi64(rn, i)},${shl},${opcode === 12 || !!U},${opcode === 12 || !U}),c.lo)`, "c.hi"]));   // SQSHLU, SQSHL / UQSHL
         case 28: return done(fin(rd, lanes(rd, ecount, "D", (i) => `(${U ? `(${hi64(rn, i)}>>>0)` : hi64(rn, i)}*4294967296+(${lo64(rn, i)}>>>0))/${2 ** shr}`, !!Q)));   // SCVTF / UCVTF fixed .2d
         case 31: return done(fin(rd, [...Array(ecount)].map((_, i) => `t=Math.trunc(D[${2 * rn + i}]*${2 ** shr});c.cvt64(t,${U ? 0 : 1});${lo64(rd, i)}=c.lo;${hi64(rd, i)}=c.hi;`).join("")));   // FCVTZS / FCVTZU fixed .2d
       }
@@ -770,7 +805,8 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
     const sv = iv(esz, true), uv = iv(esz, false), V = iv(esz, !U);
     const N = (i: number) => lane(V, rn, i), Dd = (i: number) => lane(V, rd, i);
     const each = (f: (i: number) => string, view: View = V, safe = true) => finS(rd, lanes(rd, ecount, view, f, !!Q, safe, [rn]));
-    const rsh = (a: string, round: boolean) => (U ? (round ? `((${a}+${2 ** (shr - 1)})>>>${shr})` : `(${a}>>>${shr})`) : (round ? `((${a}+${2 ** (shr - 1)})>>${shr})` : `(${a}>>${shr})`));
+    const rsh = (a: string, round: boolean) => (round ? `Math.floor((${a}+${2 ** (shr - 1)})/${2 ** shr})`
+      : shr >= ebits ? (U ? "0" : `(${a}>>${ebits - 1})`) : U ? `(${a}>>>${shr})` : `(${a}>>${shr})`);
     switch (opcode) {
       case 0: case 4: return done(each((i) => rsh(N(i), opcode === 4)));                                                 // SSHR / USHR / SRSHR / URSHR
       case 2: case 6: return done(each((i) => `${Dd(i)}+${rsh(N(i), opcode === 6)}`));                                   // SSRA / USRA / SRSRA / URSRA
@@ -784,11 +820,17 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
       case 16: case 17: case 18: case 19: {                                                                              // SHRN/RSHRN, SQSHRUN/SQRSHRUN (U), SQSHRN/UQSHRN, SQRSHRN/UQRSHRN
         // narrow from lanes twice as wide; the "2" form writes the upper half and keeps the lower
         const wide = esz + 1, round = (opcode & 1) === 1, wcount = Q ? ecount / 2 : ecount;
-        if (wide === 3) return unimpl("shrn from .2d");
         const plain = opcode <= 17 && !U, srcSigned = !(opcode >= 18 && U), outSigned = opcode >= 18 && !U;
         const srcv = (i: number) => lane(iv(wide, plain ? false : srcSigned), rn, i);
         const shifted = (i: number) => (round ? `Math.floor((${srcv(i)}+${2 ** (shr - 1)})/${2 ** shr})` : `Math.floor(${srcv(i)}/${2 ** shr})`);
-        const f = (i: number) => (plain ? shifted(i) : sat(shifted(i), ebits, outSigned));
+        // a 64-bit lane shifts exactly through its halves; the saturation reads the high half
+        const from64 = (i: number) => {
+          const sh = round ? `c.rshr64(${lo64(rn, i)},${hi64(rn, i)},${shr},${!srcSigned})` : `c.shift64(${lo64(rn, i)},${hi64(rn, i)},${shr},${srcSigned ? 2 : 1})`;
+          if (plain) return `(${sh},c.lo)`;
+          if (outSigned) return `(${sh},c.hi===(c.lo>>31)?c.lo:c.hi<0?-2147483648:2147483647)`;
+          return srcSigned ? `(${sh},c.hi<0?0:c.hi===0?c.lo:-1)` : `(${sh},c.hi===0?c.lo:-1)`;
+        };
+        const f = (i: number) => (wide === 3 ? from64(i) : plain ? shifted(i) : sat(shifted(i), ebits, outSigned));
         let body = "";
         for (let i = 0; i < wcount; i++) body += `${lane(iv(esz, outSigned), SCRATCH, i)}=${f(i)};`;
         return done(narrowed(body, esz));
@@ -814,7 +856,9 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
       if (dp && L) return unimpl("by element");
       const view: View = dp ? "D" : "S", cnt = scalar ? 1 : (Q ? 128 : 64) / (dp ? 64 : 32);
       const pre = `t=${lane(view, m, idx)};`;
-      const f = (i: number) => (opcode === 9 ? (U ? `${lane(view, rn, i)}*t` : `c.fmulx(${lane(view, rn, i)},t)`) : opcode === 1 ? `${lane(view, rd, i)}+${lane(view, rn, i)}*t` : `${lane(view, rd, i)}-${lane(view, rn, i)}*t`);
+      const f = (i: number) => (opcode === 9 ? (U ? `c.fmulx(${lane(view, rn, i)},t)` : `${lane(view, rn, i)}*t`)
+        : dp ? `c.fma(${opcode === 5 ? "-" : ""}${lane(view, rn, i)},t,${lane(view, rd, i)})`
+          : opcode === 1 ? `${lane(view, rd, i)}+${lane(view, rn, i)}*t` : `${lane(view, rd, i)}-${lane(view, rn, i)}*t`);
       return done(pre + lanes(rd, cnt, view, f, !!Q) + (scalar ? (dp ? zeroHi(rd) : zeroS(rd)) : ""));
     }
     if (scalar) return unimpl("scalar by element");
@@ -829,13 +873,13 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
         return done(el + finI(rd, lanes(rd, count, uv, (i) => `${lane(uv, rd, i)}${opcode === 0 ? "+" : "-"}${mul(i)}`, !!Q)));   // MLA / MLS
       case 10: case 2: case 6: {                                                         // SMULL/UMULL, SMLAL/UMLAL, SMLSL/UMLSL by element
         const wcount = 64 / bits, off = Q ? wcount : 0, V = iv(size, !U);
-        const elv = `t=${lane(V, m, idx)};`;
+        const elv = `v=${lane(V, m, idx)};`;
         if (size === 2) {
           const acc = opcode === 10 ? "" : opcode === 2 ? "+" : "-";
-          return done(elv + lanes64(rd, wcount, (i) => { const p = `c.${U ? "umull" : "smull"}(${lane(V, rn, off + i)},t)`; return acc ? [`(${p},a=c.lo,ah=c.hi,(${lo64(rd, i)}${acc}a)|0)`, `(${hi64(rd, i)}${acc}ah${acc === "+" ? `+(((${lo64(rd, i)}>>>0)+(a>>>0))>4294967295?1:0)` : `-((${lo64(rd, i)}>>>0)<(a>>>0)?1:0)`})|0`] : [`(${p},c.lo)`, "c.hi"]; }, true, false, [rn]));
+          return done(elv + lanes64(rd, wcount, (i) => { const p = `c.${U ? "umull" : "smull"}(${lane(V, rn, off + i)},v)`; return acc ? [`(${p},a=c.lo,ah=c.hi,(${lo64(rd, i)}${acc}a)|0)`, `(${hi64(rd, i)}${acc}ah${acc === "+" ? `+(((${lo64(rd, i)}>>>0)+(a>>>0))>4294967295?1:0)` : `-((${lo64(rd, i)}>>>0)<(a>>>0)?1:0)`})|0`] : [`(${p},c.lo)`, "c.hi"]; }, true, false, [rn]));
         }
         const wv = iv(2, !U);
-        return done(elv + lanes(rd, wcount, wv, (i) => (opcode === 10 ? `${lane(V, rn, off + i)}*t` : `${lane(wv, rd, i)}${opcode === 2 ? "+" : "-"}${lane(V, rn, off + i)}*t`), true, false, [rn]));
+        return done(elv + lanes(rd, wcount, wv, (i) => (opcode === 10 ? `${lane(V, rn, off + i)}*v` : `${lane(wv, rd, i)}${opcode === 2 ? "+" : "-"}${lane(V, rn, off + i)}*v`), true, false, [rn]));
       }
       case 12: case 13: {                                                                // SQDMULH / SQRDMULH by element
         const round = opcode === 13 ? `+${2 ** (bits - 1)}` : "";
@@ -868,9 +912,10 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
     if (narrowing) {                                                                     // ADDHN / RADDHN / SUBHN / RSUBHN: the high half of the wide op
       const wv = iv(Math.min(wide, 2), false), nv = iv(size, false), half = bits;
       const rnd = U ? `+${2 ** (half - 1)}` : "";
+      const sign = opcode === 4 ? "+" : "-";
       const f = (i: number) => (wide === 3
-        ? `(${lo64(rn, i)}${opcode === 4 ? "+" : "-"}${lo64(rm, i)}${rnd ? "+2147483648" : ""}>>>0)>4294967295?${hi64(rn, i)}${opcode === 4 ? "+" : "-"}${hi64(rm, i)}+1:${hi64(rn, i)}${opcode === 4 ? "+" : "-"}${hi64(rm, i)}`
-        : `Math.floor(((${lane(wv, rn, i)}${opcode === 4 ? "+" : "-"}${lane(wv, rm, i)}${rnd})&${2 ** (2 * half) - 1})/${2 ** half})`);
+        ? `${hi64(rn, i)}${sign}${hi64(rm, i)}+Math.floor(((${lo64(rn, i)}>>>0)${sign}(${lo64(rm, i)}>>>0)${U ? "+2147483648" : ""})/4294967296)`
+        : `Math.floor(((${lane(wv, rn, i)}${sign}${lane(wv, rm, i)}${rnd})&${2 ** (2 * half) - 1})/${2 ** half})`);
       let body = "";
       for (let i = 0; i < wcount; i++) body += `${lane(nv, SCRATCH, i)}=${wide === 3 ? `((${f(i)})|0)` : f(i)};`;
       const words2 = q ? [`I[${4 * rd + 2}]=I[${4 * SCRATCH}];`, `I[${4 * rd + 3}]=I[${4 * SCRATCH + 1}];`] : [`I[${4 * rd}]=I[${4 * SCRATCH}];`, `I[${4 * rd + 1}]=I[${4 * SCRATCH + 1}];`, zeroHi(rd)];
@@ -903,7 +948,7 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
       case 10: return done(each((i) => `${Dd(i)}-${N(i)}*${Mm(i)}`));                                                   // SMLSL / UMLSL
       case 12: return done(each((i) => `${N(i)}*${Mm(i)}`));                                                            // SMULL / UMULL
       case 14: if (U || size !== 0) return unimpl("pmull");
-        return done(each((i) => `c.pmul8(${N(i)},${Mm(i)})`));                                                          // PMULL .8h
+        return done(each((i) => `c.pmul8(B[${16 * rn + off + i}],B[${16 * rm + off + i}])`));                             // PMULL .8h
     }
     return unimpl("three-different");
   }

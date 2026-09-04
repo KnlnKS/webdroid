@@ -576,6 +576,27 @@ export class Cpu {
     dv.setUint32(0, ((neg ? 1 : 0) << 31) | (exp << 23) | Math.floor(frac52 / 536870912));
     return dv.getFloat32(0);
   }
+  /** the 64-bit saturating and rounding forms, in BigInt: cold paths (a handful of sites in the corpus) */
+  private big(lo: number, hi: number, unsigned: boolean): bigint { const v = (BigInt(hi >>> 0) << 32n) | BigInt(lo >>> 0); return unsigned ? v : BigInt.asIntN(64, v); }
+  private out64(v: bigint): void { v = BigInt.asIntN(64, v); this.lo = Number(v & 0xffffffffn) | 0; this.hi = Number((v >> 32n) & 0xffffffffn) | 0; }
+  private clamp64(v: bigint, unsigned: boolean): bigint {
+    const max = unsigned ? 0xffffffffffffffffn : 0x7fffffffffffffffn, min = unsigned ? 0n : -0x8000000000000000n;
+    if (v > max) { this.q = 1; return max; }
+    if (v < min) { this.q = 1; return min; }
+    return v;
+  }
+  sat64(al: number, ah: number, bl: number, bh: number, sub: boolean, unsigned: boolean): void {
+    const a = this.big(al, ah, unsigned), b = this.big(bl, bh, unsigned);
+    this.out64(this.clamp64(sub ? a - b : a + b, unsigned));
+  }
+  rshr64(lo: number, hi: number, n: number, unsigned: boolean): void {
+    const a = this.big(lo, hi, unsigned);
+    this.out64(n >= 64 ? (a < 0n ? -1n : 0n) + (n === 64 && a < 0n ? 1n : 0n) : (a + (1n << BigInt(n - 1))) >> BigInt(n));
+  }
+  sqshl64(lo: number, hi: number, n: number, unsigned: boolean, srcSigned: boolean): void {
+    const a = this.big(lo, hi, !srcSigned);
+    this.out64(this.clamp64(a << BigInt(n), unsigned));
+  }
   /** population count of a byte, and the carry-less product of two bytes (PMULL) */
   pop8(x: number): number { x = x - ((x >> 1) & 0x55); x = (x & 0x33) + ((x >> 2) & 0x33); return (x + (x >> 4)) & 15; }
   pmul8(a: number, b: number): number { let r = 0; for (let i = 0; i < 8; i++) if ((b >> i) & 1) r ^= a << i; return r & 0xffff; }
@@ -585,6 +606,77 @@ export class Cpu {
     if (e === 0) return s * m * 2 ** -24;
     if (e === 31) return m ? NaN : s * Infinity;
     return s * (1 + m / 1024) * 2 ** (e - 15);
+  }
+  /** compensated a*b+c: the product's error (Dekker) and the sum's (TwoSum) are folded back in,
+   *  which is the fused result except in the rare case where that last add double-rounds */
+  fma(a: number, b: number, c: number): number {
+    const p = a * b;
+    // Dekker's split needs |a|, |b| < 2^996 and a finite product; outside that the plain sum is all there is
+    if (!isFinite(p) || !isFinite(c) || Math.abs(a) > 1e290 || Math.abs(b) > 1e290 || Math.abs(p) < 1e-290) return p + c;
+    const ah = a * 134217729 - (a * 134217729 - a), al = a - ah, bh = b * 134217729 - (b * 134217729 - b), bl = b - bh;
+    const pe = al * bl - (p - ah * bh - al * bh - ah * bl);
+    const s = p + c, bb = s - p, se = (p - (s - bb)) + (c - bb);
+    return s + (se + pe);
+  }
+  /** FRECPX: the exponent negated bitwise, the fraction zeroed */
+  recpx(x: number, dp: boolean): number {
+    if (x !== x) return NaN;
+    const dv = this.est;
+    if (dp) dv.setFloat64(0, x); else dv.setFloat32(0, x);
+    const hi = dv.getUint32(0);
+    const ebits = dp ? 11 : 8, eshift = dp ? 20 : 23, mask = (1 << ebits) - 1;
+    const exp = (hi >>> eshift) & mask;
+    // a zero or denormal gets the largest exponent, an infinity gets zero, anything else its exponent inverted
+    const ne = exp === 0 ? mask - 1 : ~exp & mask;
+    dv.setUint32(0, ((hi & 0x80000000) | (ne << eshift)) >>> 0);
+    if (dp) dv.setUint32(4, 0);
+    return dp ? dv.getFloat64(0) : dv.getFloat32(0);
+  }
+  /** FMAXNM/FMINNM on bit patterns: a signaling NaN wins (quieted), a quiet NaN loses to a number */
+  fnm32(a: number, b: number, max: boolean): number {
+    const na = (a & 0x7fffffff) > 0x7f800000, nb = (b & 0x7fffffff) > 0x7f800000;
+    if (na || nb) {
+      const sa = na && !(a & 0x400000), sb = nb && !(b & 0x400000);
+      if (sa) return a | 0x400000;
+      if (sb) return b | 0x400000;
+      if (na && nb) return a;
+      return na ? b : a;
+    }
+    const dv = this.est;
+    dv.setInt32(0, a); dv.setInt32(4, b);
+    const x = dv.getFloat32(0), y = dv.getFloat32(4);
+    dv.setFloat32(0, max ? Math.max(x, y) : Math.min(x, y));
+    return dv.getInt32(0);
+  }
+  fnm64(al: number, ah: number, bl: number, bh: number, max: boolean): void {
+    const na = (ah & 0x7fffffff) > 0x7ff00000 || ((ah & 0x7fffffff) === 0x7ff00000 && al !== 0);
+    const nb = (bh & 0x7fffffff) > 0x7ff00000 || ((bh & 0x7fffffff) === 0x7ff00000 && bl !== 0);
+    if (na || nb) {
+      const sa = na && !(ah & 0x80000), sb = nb && !(bh & 0x80000);
+      if (sa) { this.lo = al; this.hi = ah | 0x80000; return; }
+      if (sb) { this.lo = bl; this.hi = bh | 0x80000; return; }
+      if (na && nb) { this.lo = al; this.hi = ah; return; }
+      this.lo = na ? bl : al; this.hi = na ? bh : ah; return;
+    }
+    const dv = this.est;
+    dv.setInt32(0, ah); dv.setInt32(4, al);
+    const x = dv.getFloat64(0);
+    dv.setInt32(0, bh); dv.setInt32(4, bl);
+    const y = dv.getFloat64(0);
+    dv.setFloat64(0, max ? Math.max(x, y) : Math.min(x, y));
+    this.hi = dv.getInt32(0); this.lo = dv.getInt32(4);
+  }
+  /** a float's bits to half: a NaN keeps its sign and top payload bits, quieted — from the bits,
+   *  because a float32 NaN does not survive the trip through a JS number with its payload */
+  f2hs(bits: number): number {
+    if ((bits & 0x7fffffff) > 0x7f800000) return ((bits >>> 16) & 0x8000) | 0x7e00 | ((bits >>> 13) & 0x1ff);
+    this.est.setInt32(0, bits);
+    return this.f2h(this.est.getFloat32(0));
+  }
+  f2hd(lo: number, hi: number): number {
+    if ((hi & 0x7fffffff) > 0x7ff00000 || ((hi & 0x7fffffff) === 0x7ff00000 && lo !== 0)) return ((hi >>> 16) & 0x8000) | 0x7e00 | ((hi >>> 10) & 0x1ff);
+    this.est.setInt32(0, hi); this.est.setInt32(4, lo);
+    return this.f2h(this.est.getFloat64(0));
   }
   f2h(x: number): number {
     if (x !== x) return 0x7e00;

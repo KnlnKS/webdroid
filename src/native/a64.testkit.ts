@@ -8,11 +8,16 @@ import { RET_SENTINEL } from "./abi";
 
 export const RET = 0xd65f03c0;
 
+/** one Cpu for every run: a thread stack is address space that is never given back */
+let shared: Cpu | null = null;
 export function run(words: number[], setup: (c: Cpu) => void = () => {}): Cpu {
   const at = mem.reserve((words.length * 4 + 0xfff) & ~0xfff, 0x1000);
   for (let i = 0; i < words.length; i++) mem.u32[(at >>> 2) + i] = words[i];
-  const c = new Cpu(mainThread, "test");
+  const c = (shared ??= new Cpu(mainThread, "test"));
+  c.r.fill(0); c.h.fill(0); c.si.fill(0);
+  c.n = c.z = c.c = c.v = c.q = c.t = c.excl = c.fpcr = c.fpsr = 0;
   c.ensureStack();
+  c.r[c.spx] = c.stackTop;
   setup(c);
   c.r[30] = RET_SENTINEL;
   c.setPc(at);
