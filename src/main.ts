@@ -191,7 +191,7 @@ async function boot(file: string) {
     statusEl.textContent = `running (boot ${perf.bootMs.toFixed(0)}ms)` + (rt.nativeRequired.size ? " — needs native code" : "");
   } catch (e) {
     console.error(e);
-    statusEl.textContent = "boot failed: " + e;
+    statusEl.textContent = "boot failed: " + ((e as any)?.msg ?? e);
     statusEl.style.color = "#e77";
   }
 }

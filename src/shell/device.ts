@@ -243,16 +243,19 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
   if (!booted) return;
   const host = booted.host;
   const cls = aliasTargets.get(component) ?? component;
-  let info;
+  // Linking, <clinit> and construction are the app's code too: a static initializer that
+  // throws (System.loadLibrary in one is enough) crashes the activity, exactly as on a device.
+  // It must not take the boot down with it.
+  let act: JActivity;
   try {
-    info = rt.link(cls);
+    const info = rt.link(cls);
+    const p = rt.initClass(info);
+    if (p) await p;
+    act = new info.ctor();
   } catch (e) {
     reportUncaught(e);
     return;
   }
-  const p = rt.initClass(info);
-  if (p) await p;
-  const act: JActivity = new info.ctor();
   act.$host = host;
   // AOSP applies the manifest's android:theme before onCreate, so an app's own setTheme layers
   // on top of it rather than replacing it
