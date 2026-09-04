@@ -105,9 +105,9 @@ function sysWrite(key: number, rt: number): string | null {
 let redirect = -1, slot = 0;
 
 /** emit one instruction; returns true when it ends the block */
-function emit(pc: number, w: number, out: Ins[], k: number): boolean {
+function emit(pc: number, w: number, out: Ins[], k: number, faultPc = String(pc)): boolean {
   const ret = (target: string) => retK(slot++, k, target);
-  const fault = (what: string) => `r[32]=${pc};c.fault(${JSON.stringify(what + " " + hex(w))});`;
+  const fault = (what: string) => `r[32]=${faultPc};c.fault(${JSON.stringify(what + " " + hex(w))});`;
   const push = (code: string, fl: Fl | null = null, reads = 0, writes = 0) => out.push({ code, fl, reads, writes });
 
   // `w & mask` is a signed int32 in JS, so a mask that keeps bit 31 yields a negative number and
@@ -561,6 +561,18 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
   if (simd !== null) return simd;
   push(fault(w === 0 ? "udf" : "unimplemented"));
   return true;
+}
+
+/** one instruction's JS with every flag written, for the cold tier (interp.ts): the words it asks for
+ *  never depend on pc, so the same function serves the word wherever it appears */
+export function emitA64Word(w: number): string {
+  slot = 0; redirect = -1;
+  const out: Ins[] = [];
+  emit(0, w, out, 1, "c.bpc");
+  const body = assemble(out);
+  let views = "";
+  for (const [name, expr] of Object.entries(VIEWS)) if (new RegExp(`\\b${name}\\[`).test(body)) views += `,${name}=${expr}`;
+  return `let t,a,ah,th,v,vh,s,m1${views};${body}`;
 }
 
 /** compile the basic block at `pc` to JS source */

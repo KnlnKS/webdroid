@@ -6,6 +6,7 @@
 import { JThread, setCurThread } from "../jvm/natives/jlang";
 import { NativeFault, mem } from "./mem";
 import { emitBlock, setMaxBlock } from "./arm";
+import { coldRun, coldStats } from "./interp";
 import { emitA64Block, setMaxBlockA64 } from "./a64";
 import { emitThumbBlock, setMaxBlock as setMaxBlockT } from "./thumb";
 import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs } from "./host";
@@ -43,11 +44,15 @@ let NPAGES = 0;
 let pages: ((BlockFn | undefined)[] | undefined)[] = [];   // ARM blocks by word
 let tpages: ((BlockFn | undefined)[] | undefined)[] = [];  // Thumb blocks by halfword
 let cov: (Uint8Array | undefined)[] = [];
+let heat: (Uint8Array | undefined)[] = [];
+let refs: (Set<BlockFn> | undefined)[] = [];
 function sizePages(): void {
   NPAGES = MEM_SIZE >>> PAGE_SHIFT;
   pages = new Array(NPAGES).fill(undefined);
   tpages = new Array(NPAGES).fill(undefined);
   cov = new Array(NPAGES).fill(undefined);
+  heat = new Array(NPAGES).fill(undefined);
+  refs = new Array(NPAGES).fill(undefined);
   allBlocks.clear();
 }
 sizePages();
@@ -86,6 +91,7 @@ function invalidatePage(pg: number): void {
   pages[pg] = undefined;
   tpages[pg] = undefined;
   cov[pg] = undefined;
+  heat[pg] = undefined;
   mem.codePages[pg] = 0;
   blockStats.invalidated++;
   // the blocks whose successor caches point into this page forget them; nothing else is touched
@@ -93,7 +99,14 @@ function invalidatePage(pg: number): void {
   refs[pg] = undefined;
 }
 /** page → the blocks whose successor cache holds a block in it (what an invalidation must clear) */
-const refs: (Set<BlockFn> | undefined)[] = [];
+/** the cold tier (interp.ts): how many times a block entry runs interpreted before it is compiled; 0 compiles at once */
+export const coldTier = { heat: 8, stats: coldStats };
+/** the shared stub that interprets one basic block from r[32] and hands the next pc back to the dispatcher */
+const cold: BlockFn = Object.assign(function (c: Cpu, r: Int32Array, M: typeof mem): BlockFn {
+  const next = coldRun(c, r, M, c.h);
+  r[32] = next;
+  return c.look(next);
+}, { pc: -1, n: [] as (BlockFn | undefined)[], links: [] as number[] });
 /** page → how often it was invalidated (wd.native.invalidatedPages): a page written and executed */
 export const invalidatedPages = new Map<number, number>();
 /** an already-compiled block (either instruction set) for debug tooling */
@@ -408,6 +421,7 @@ export class Cpu {
   /** a block fills its successor cache: the target page remembers who points into it */
   link(F: BlockFn, i: number, pc: number): BlockFn {
     const b = this.look(pc), pg = pc >>> PAGE_SHIFT;
+    if (b === cold) return b;                                                  // not a block yet: nothing to cache
     (refs[pg] ??= new Set()).add(F);
     F.links.push(pg);
     return (F.n[i] = b);
@@ -419,9 +433,17 @@ export class Cpu {
       if (pg === undefined) pg = tpages[pc >>> PAGE_SHIFT] = new Array<BlockFn | undefined>(2048).fill(undefined);
       return pg[(pc >>> 1) & 2047] ?? compile(this, pc, pg, true);
     }
-    let pg = pages[pc >>> PAGE_SHIFT];
-    if (pg === undefined) pg = pages[pc >>> PAGE_SHIFT] = new Array<BlockFn | undefined>(1024).fill(undefined);
-    return pg[(pc >>> 2) & 1023] ?? compile(this, pc, pg, false);
+    const page = pc >>> PAGE_SHIFT, i = (pc >>> 2) & 1023;
+    let pg = pages[page];
+    const b = pg?.[i];
+    if (b) return b;
+    // A64 code is interpreted until it has run coldTier.heat times at this entry, then compiled
+    if (A64 && !stepMode.on && coldTier.heat) {
+      const hp = heat[page] ??= new Uint8Array(1024);
+      if (hp[i] < coldTier.heat) { hp[i]++; this.r[32] = pc; return cold; }
+    }
+    if (pg === undefined) pg = pages[page] = new Array<BlockFn | undefined>(1024).fill(undefined);
+    return compile(this, pc, pg, false);
   }
 
   runSlice(budget: number): SliceExit {
@@ -444,8 +466,8 @@ export class Cpu {
       // a CAS loop's block ends between its LDXR and STXR: another thread running there would
       // make the unconditional-success store write a stale value, so the monitor holds the slice
       if (this.ic >= limit && (!this.excl || this.ic >= limit + 256)) {
-        r[px] = fn.pc;
-        if (profile.on) profile.samples.set(fn.pc, (profile.samples.get(fn.pc) ?? 0) + 1);
+        if (fn !== cold) r[px] = fn.pc;                                          // the cold stub reads r[px], which look() set
+        if (profile.on) profile.samples.set(r[px], (profile.samples.get(r[px]) ?? 0) + 1);
         return SliceExit.Budget;
       }
     }
@@ -480,7 +502,7 @@ export class Cpu {
         if (this.finished) return SliceExit.Exit;
         fn = this.look(r[px]);
       }
-      if (this.ic >= limit) { r[px] = fn.pc; return SliceExit.Budget; }
+      if (this.ic >= limit) { if (fn !== cold) r[px] = fn.pc; return SliceExit.Budget; }
     }
   }
 
