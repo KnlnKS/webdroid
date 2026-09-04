@@ -30,7 +30,7 @@ const limit = parseInt(opt("--limit", "40")!);
 const FRAMEWORK_RE = /^(android|java|javax|dalvik|sun|libcore|com\/android\/internal|org\/xmlpull|org\/json|org\/apache\/http)\//;
 
 const t0 = performance.now();
-const zip = await openApk(apk, /classes\d*\.dex$|AndroidManifest\.xml$|^META-INF\/services\//);
+const zip = await openApk(apk);
 const appDexes = dexesOf(zip);
 const p = new Program();
 for (const d of appDexes) p.add(d);
@@ -43,8 +43,8 @@ if (flag("--framework")) {
 }
 
 const services: Record<string, string> = {};
-for (const [name, bytes] of Object.entries(zip)) {
-  if (name.startsWith("META-INF/services/")) services[name] = new TextDecoder().decode(bytes);
+for (const name of Object.keys(zip)) {
+  if (name.startsWith("META-INF/services/")) services[name] = new TextDecoder().decode(zip[name]);
 }
 
 // --from <class> asks the same question of a framework subtree instead of an apk: what

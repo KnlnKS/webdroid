@@ -1,6 +1,6 @@
 import index from "./index.html";
-import { unzipSync } from "fflate";
 import { WEB_INJECT } from "./src/shell/webinject";
+import { openInstall } from "./src/shell/install";
 
 type TcpData = { host: string; port: number; tls: boolean; sock: import("bun").Socket | null; ready: boolean; pending: (Uint8Array | Buffer)[] };
 
@@ -27,11 +27,13 @@ function serveVendor(path: string): Response {
 }
 
 const assetCache = new Map<string, Record<string, Uint8Array>>();
+/** The apk's assets/ tree, through the same merge the shell boots: a split install's assets
+ *  live in its splits, so filtering the container's own entries finds nothing. */
 async function apkAssets(apk: string): Promise<Record<string, Uint8Array>> {
   let a = assetCache.get(apk);
   if (!a) {
     const bytes = new Uint8Array(await Bun.file(`apks/${apk}`).arrayBuffer());
-    assetCache.set(apk, a = unzipSync(bytes, { filter: (f) => f.name.startsWith("assets/") }));
+    assetCache.set(apk, a = openInstall(bytes).zip);
   }
   return a;
 }
@@ -81,8 +83,11 @@ const server: Bun.Server<TcpData> = Bun.serve({
     // an apk's assets/ entry — what file:///android_asset/ resolves to inside a WebView. Path-shaped
     // so a page's relative subresources resolve to siblings, as they do under android_asset.
     "/asset/:apk/*": async (req) => {
-      const apk = decodeURIComponent(req.params.apk);
-      const path = decodeURIComponent(new URL(req.url).pathname.slice(8 + req.params.apk.length));
+      // the apk segment is measured in the raw pathname, so a name that had to be escaped
+      // ("Among%20Us.xapk") must not be counted at its decoded length
+      const [, rawApk, rawPath] = /^\/asset\/([^/]+)\/(.*)$/.exec(new URL(req.url).pathname) ?? [];
+      const apk = decodeURIComponent(rawApk ?? "");
+      const path = decodeURIComponent(rawPath ?? "");
       if (apk.includes("/") || apk.includes("..") || !path.startsWith("assets/") || path.includes("..")) return new Response("nope", { status: 400 });
       const bytes = (await apkAssets(apk))[path];
       if (!bytes) return new Response("not found", { status: 404 });

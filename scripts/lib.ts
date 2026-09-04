@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
-import { unzipSync } from "fflate";
 import { dexesIn, DexFile } from "../src/jvm/dex";
+import { openInstall } from "../src/shell/install";
 import { rt } from "../src/jvm/runtime";
 import type { XmlNode } from "../src/android/axml";
 
@@ -8,19 +8,20 @@ type Zip = Record<string, Uint8Array>;
 
 const DEX_RE = /^classes\d*\.dex$/;
 
-export async function openApk(path: string, filter?: RegExp): Promise<Zip> {
-  const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
-  return unzipSync(bytes, filter ? { filter: (f) => filter.test(f.name) } : {});
+/** an apk or a split install, as the one merged tree the shell boots — entries materialise on
+ *  read, so there is nothing for a caller to filter down to */
+export async function openApk(path: string): Promise<Zip> {
+  return openInstall(new Uint8Array(await Bun.file(path).arrayBuffer())).zip;
 }
 
 export function dexesOf(zip: Zip): DexFile[] {
-  return Object.entries(zip)
-    .filter(([name]) => DEX_RE.test(name))
-    .flatMap(([name, bytes]) => dexesIn(bytes, name));
+  return Object.keys(zip)
+    .filter((name) => DEX_RE.test(name))
+    .flatMap((name) => dexesIn(zip[name], name));
 }
 
 export async function openDexes(path: string): Promise<DexFile[]> {
-  return dexesOf(await openApk(path, DEX_RE));
+  return dexesOf(await openApk(path));
 }
 
 export async function loadDexes(path: string): Promise<DexFile[]> {

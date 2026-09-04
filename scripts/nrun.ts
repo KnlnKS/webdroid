@@ -14,7 +14,7 @@ import { perf } from "../src/perf";
 const [apk, lib] = process.argv.slice(2);
 const zip = await openApk(apk);
 for (const dex of dexesOf(zip)) rt.loadDex(dex);
-for (const [name, bytes] of Object.entries(zip)) rt.classpath[name] = bytes;
+rt.classpath = zip;
 hostTrace.on = !!process.env.TRACE;
 const abi = ["armeabi-v7a", "armeabi"].find((a) => rt.classpath[`lib/${a}/${lib}`])!;
 const t0 = performance.now();

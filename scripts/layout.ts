@@ -11,8 +11,9 @@ function has(n: XmlNode, id: number): boolean {
   if (n.attrs.some((a) => a.name === "id" && a.data === id)) return true;
   return n.children.some((c) => has(c, id));
 }
-for (const [path, bytes] of Object.entries(zip)) {
+for (const path of Object.keys(zip)) {
   if (!path.startsWith("res/") || !path.endsWith(".xml")) continue;
+  const bytes = zip[path];
   let root: XmlNode;
   try { root = parseAXML(bytes); } catch { continue; }
   const match = wantId ? has(root, wantId) : path.includes(target);

@@ -3,7 +3,7 @@ import { openApk, dexesOf, dumpXml } from "./lib";
 import { parseAXML } from "../src/android/axml";
 
 const path = process.argv[2] ?? "apks/FitNotes.apk";
-const zip = await openApk(path, /\.dex$|AndroidManifest\.xml$/);
+const zip = await openApk(path);
 
 console.log(dumpXml(parseAXML(zip["AndroidManifest.xml"]), 0, [], 3).join("\n"));
 
