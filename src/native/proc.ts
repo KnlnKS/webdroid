@@ -13,6 +13,25 @@ import { device } from "../shell/config";
 /** wd.native.killLog: the last pthread_kill calls, who signalled whom and what the target was doing */
 export const killLog: string[] = [];
 
+const CAP_VERSION_1 = 0x19980330, CAP_VERSION_2 = 0x20071026, CAP_VERSION_3 = 0x20080522;
+const capWords = (version: number) => version === CAP_VERSION_1 ? 1 : version === CAP_VERSION_2 || version === CAP_VERSION_3 ? 2 : 0;
+
+/** Linux capget for the one unprivileged Android app process represented by this runtime. */
+export function capget(cpu: Cpu, header: number, data: number): number {
+  if (!header) return fail(cpu, 14);                                               // EFAULT
+  const words = capWords(mem.ld32(header));
+  if (!words) {
+    mem.st32(header, CAP_VERSION_3);
+    return data ? fail(cpu, E.INVAL) : 0;
+  }
+  if (!data) return 0; // Linux permits a header-only capability-version probe.
+  const pid = mem.ld32(header + 4);
+  if (pid < 0) return fail(cpu, E.INVAL);
+  if (pid !== 0 && pid !== 4242 && !cpuByTid(pid - 4242)) return fail(cpu, E.SRCH);
+  mem.memset(data, 0, words * 12);
+  return 0;
+}
+
 let abortMessage = "";
 export function abortMessageOr(what: string): string { return abortMessage ? `${what}: ${abortMessage}` : what; }
 
@@ -45,6 +64,7 @@ export function procInit(): void {
     __sched_cpucount: (_c, a) => { const n = a.u(), set = a.p(); let k = 0; for (let i = 0; i < n; i++) { let b = u8[set + i]; while (b) { k += b & 1; b >>= 1; } } return k; },
     sched_get_priority_max: () => 99, sched_get_priority_min: () => 1,
     sched_getscheduler: () => 0, sched_setscheduler: () => 0, sched_getparam: (_c, a) => { a.i(); mem.st32(a.p(), 0); return 0; },
+    capget: (cpu, a) => capget(cpu, a.p(), a.p()),
     getpwuid: () => pw,
     getpwuid_r: (_c, a) => { a.i(); const out = a.p(); a.p(); a.p(); const res = a.p(); mem.memcpy(out, pw, 8 * PTR); stp(res, out); return 0; },
     getpwnam: () => pw,
