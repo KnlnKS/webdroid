@@ -3,6 +3,9 @@
 import { rt, JObj } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { vfs } from "../jvm/natives/jio";
+rt.register({ name: "android/media/AudioManager$OnAudioFocusChangeListener", ctor: class extends JObj {} });
+/** the rate the Web Audio output actually runs at */
+export const outputSampleRate = (): number => actx?.sampleRate ?? 44100;
 import { onMain } from "./mainloop";
 import { reportUncaught } from "./os";
 
@@ -195,6 +198,12 @@ class JAudioTrack extends JObj {
   ctx(): AudioContext { return (actx ??= new AudioContext()); }
   frameBytes(): number { return this.channels * this.bytesPerSample; }
   queuedSec(): number { return Math.max(0, this.nextTime - this.ctx().currentTime); }
+  /** a streaming write blocks while the track's buffer is full, which is what paces a writer
+   *  loop; the wait is the excess over one buffer's worth of queued audio */
+  wrote(n: number): number | Promise<number> {
+    const bufSec = this.bufBytes / (this.rate * this.frameBytes()), excess = this.queuedSec() - bufSec;
+    return excess > 0.005 ? new Promise((r) => setTimeout(() => r(n), excess * 1000)) : n;
+  }
   /** interleaved 16-bit (or 8-bit unsigned) PCM → one scheduled buffer */
   push(samples: Int16Array | Int8Array, frames: number): void {
     if (frames <= 0) return;
@@ -238,7 +247,7 @@ rt.register({
       const frames = Math.max(1024, Math.ceil(rate / 10));
       return frames * (chanCfg === 12 || chanCfg === 3 ? 2 : 1) * (fmt === 3 ? 1 : 2);
     },
-    "static getNativeOutputSampleRate(I)I": () => actx?.sampleRate ?? 44100,
+    "static getNativeOutputSampleRate(I)I": () => outputSampleRate(),
     "static getMaxVolume()F": () => 1, "static getMinVolume()F": () => 0,
     "getState()I": function (this: JAudioTrack) { return this.state; },
     "getPlayState()I": function (this: JAudioTrack) { return this.playState; },
@@ -260,13 +269,19 @@ rt.register({
     "write([SII)I": function (this: JAudioTrack, data: Int16Array, off: number, n: number) {
       if (this.state !== 1) return -3;
       this.push(data.subarray(off, off + n), Math.floor(n / this.channels));
-      return n;
+      return this.wrote(n);
+    },
+    "write([BIII)I": function (this: JAudioTrack, data: Int8Array, off: number, n: number, mode: number) {
+      if (this.state !== 1) return -3;
+      if (this.bytesPerSample === 2) this.push(new Int16Array(data.buffer.slice(data.byteOffset + off, data.byteOffset + off + (n & ~1))), Math.floor(n / this.frameBytes()));
+      else this.push(data.subarray(off, off + n), Math.floor(n / this.channels));
+      return mode === 1 ? n : this.wrote(n);   // WRITE_NON_BLOCKING
     },
     "write([BII)I": function (this: JAudioTrack, data: Int8Array, off: number, n: number) {
       if (this.state !== 1) return -3;
       if (this.bytesPerSample === 2) this.push(new Int16Array(data.buffer.slice(data.byteOffset + off, data.byteOffset + off + (n & ~1))), Math.floor(n / this.frameBytes()));
       else this.push(data.subarray(off, off + n), Math.floor(n / this.channels));
-      return n;
+      return this.wrote(n);
     },
     "getAudioSessionId()I": () => 1,
   },
@@ -299,3 +314,32 @@ rt.register({
 });
 rt.register({ name: "android/media/MediaScannerConnection$OnScanCompletedListener", ctor: class extends JObj {} });
 rt.register({ name: "android/media/MediaScannerConnection$MediaScannerConnectionClient", ctor: class extends JObj {} });
+
+// ── MediaRouter: one route, the device's own display, with no presentation display behind it
+class JRouteInfo extends JObj {}
+const theRoute = new JRouteInfo();
+rt.register({
+  name: "android/media/MediaRouter", ctor: class extends JObj {},
+  statics: { ROUTE_TYPE_LIVE_AUDIO: 1, ROUTE_TYPE_LIVE_VIDEO: 2, ROUTE_TYPE_USER: 0x800000, CALLBACK_FLAG_PERFORM_ACTIVE_SCAN: 1, CALLBACK_FLAG_UNFILTERED_EVENTS: 2 },
+  methods: {
+    "getSelectedRoute(I)Landroid/media/MediaRouter$RouteInfo;": () => theRoute,
+    "getDefaultRoute()Landroid/media/MediaRouter$RouteInfo;": () => theRoute,
+    "getRouteCount()I": () => 1,
+    "getRouteAt(I)Landroid/media/MediaRouter$RouteInfo;": (i: number) => (i === 0 ? theRoute : null),
+    "addCallback(ILandroid/media/MediaRouter$Callback;)V": () => {},
+    "addCallback(ILandroid/media/MediaRouter$Callback;I)V": () => {},
+    "removeCallback(Landroid/media/MediaRouter$Callback;)V": () => {},
+  },
+});
+rt.register({ name: "android/media/MediaRouter$Callback", ctor: class extends JObj {} });
+rt.register({
+  name: "android/media/MediaRouter$RouteInfo", ctor: JRouteInfo,
+  methods: {
+    "getPresentationDisplay()Landroid/view/Display;": () => null,
+    "getName()Ljava/lang/CharSequence;": () => "Phone",
+    "getName(Landroid/content/Context;)Ljava/lang/CharSequence;": () => "Phone",
+    "getSupportedTypes()I": () => 3,
+    "getPlaybackType()I": () => 0,
+    "isEnabled()Z": () => 1,
+  },
+});

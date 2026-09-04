@@ -761,3 +761,68 @@ rt.register({
   },
 });
 rt.register({ name: "java/util/concurrent/RunnableFuture", ctor: class extends JObj {} });
+
+// ── AbstractQueuedSynchronizer: the state word, its CAS, and FIFO waiting in exclusive and shared
+// modes; a subclass supplies tryAcquire/tryRelease (and the shared pair) as the JDK's does
+class JAQS extends JObj { state = 0; q: (() => void)[] = []; owner: unknown = null; }
+const D_TA = "(I)Z", D_TAS = "(I)I";
+async function aqsAcquire(self: JAQS, arg: number, shared: boolean): Promise<void> {
+  for (;;) {
+    const ok = shared ? ((await vcall(self, "tryAcquireShared", D_TAS, arg)) as number) >= 0 : !!(await vcall(self, "tryAcquire", D_TA, arg));
+    if (ok) { if (shared) for (const w of self.q.splice(0)) w(); return; }   // a shared acquire propagates
+    await new Promise<void>((r) => self.q.push(r));
+  }
+}
+async function aqsRelease(self: JAQS, arg: number, shared: boolean): Promise<number> {
+  const ok = await vcall(self, shared ? "tryReleaseShared" : "tryRelease", D_TA, arg);
+  if (ok) for (const w of self.q.splice(0)) w();
+  return ok ? 1 : 0;
+}
+rt.register({
+  name: "java/util/concurrent/locks/AbstractQueuedSynchronizer", ctor: JAQS, sup: "java/util/concurrent/locks/AbstractOwnableSynchronizer",
+  methods: {
+    "<init>()V": function () {},
+    "getState()I": function (this: JAQS) { return this.state; },
+    "setState(I)V": function (this: JAQS, v: number) { this.state = v; },
+    "compareAndSetState(II)Z": function (this: JAQS, e: number, v: number) { if (this.state !== e) return 0; this.state = v; return 1; },
+    "acquire(I)V": function (this: JAQS, a: number) { return aqsAcquire(this, a, false); },
+    "acquireInterruptibly(I)V": function (this: JAQS, a: number) { return aqsAcquire(this, a, false); },
+    "acquireShared(I)V": function (this: JAQS, a: number) { return aqsAcquire(this, a, true); },
+    "acquireSharedInterruptibly(I)V": function (this: JAQS, a: number) { return aqsAcquire(this, a, true); },
+    "tryAcquireNanos(IJ)Z": async function (this: JAQS, a: number, ns: bigint) {
+      let done = false;
+      const t = setTimeout(() => { done = true; for (const w of this.q.splice(0)) w(); }, Number(ns) / 1e6);
+      for (;;) {
+        if (await vcall(this, "tryAcquire", D_TA, a)) { clearTimeout(t); return 1; }
+        if (done) return 0;
+        await new Promise<void>((r) => this.q.push(r));
+      }
+    },
+    "tryAcquireSharedNanos(IJ)Z": async function (this: JAQS, a: number, ns: bigint) {
+      let done = false;
+      const t = setTimeout(() => { done = true; for (const w of this.q.splice(0)) w(); }, Number(ns) / 1e6);
+      for (;;) {
+        if (((await vcall(this, "tryAcquireShared", D_TAS, a)) as number) >= 0) { clearTimeout(t); for (const w of this.q.splice(0)) w(); return 1; }
+        if (done) return 0;
+        await new Promise<void>((r) => this.q.push(r));
+      }
+    },
+    "release(I)Z": function (this: JAQS, a: number) { return aqsRelease(this, a, false); },
+    "releaseShared(I)Z": function (this: JAQS, a: number) { return aqsRelease(this, a, true); },
+    "hasQueuedThreads()Z": function (this: JAQS) { return this.q.length ? 1 : 0; },
+    "hasQueuedPredecessors()Z": function (this: JAQS) { return this.q.length ? 1 : 0; },
+    "getQueueLength()I": function (this: JAQS) { return this.q.length; },
+    "isQueued(Ljava/lang/Thread;)Z": () => 0,
+    "getExclusiveOwnerThread()Ljava/lang/Thread;": function (this: JAQS) { return this.owner; },
+    "setExclusiveOwnerThread(Ljava/lang/Thread;)V": function (this: JAQS, t: unknown) { this.owner = t; },
+    "isHeldExclusively()Z": function (this: JAQS) { return this.owner === curThread ? 1 : 0; },
+  },
+});
+rt.register({
+  name: "java/util/concurrent/locks/AbstractOwnableSynchronizer", ctor: class extends JObj { owner: unknown = null; },
+  methods: {
+    "<init>()V": function () {},
+    "getExclusiveOwnerThread()Ljava/lang/Thread;": function (this: { owner: unknown }) { return this.owner; },
+    "setExclusiveOwnerThread(Ljava/lang/Thread;)V": function (this: { owner: unknown }, t: unknown) { this.owner = t; },
+  },
+});

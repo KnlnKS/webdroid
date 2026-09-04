@@ -38,8 +38,12 @@ export function mangleMethod(name: string, desc: string): string {
     : name === "<clinit>" ? "$clinit"
     : "m$" + safeName(name) + "$" + hash36(desc);
   byDesc.set(desc, m);
+  demangled.set(m, [name, desc]);
   return m;
 }
+const demangled = new Map<string, [string, string]>();
+/** a reflect.Proxy materialises a method on first use; set by jreflect, consulted by jmethod */
+export const lateMethod = { find: null as ((o: unknown, name: string, desc: string) => JMethod | undefined) | null };
 
 /** mangle instance field. declCls = "java/lang/Object" form */
 export function mangleField(declCls: string, name: string): string {
@@ -109,7 +113,10 @@ export function charsToString(chars: Uint16Array | Uint8Array, off: number, len:
 
 export type JMethod = (this: unknown, ...a: unknown[]) => unknown;
 export function jmethod(o: unknown, mangled: string): JMethod | undefined {
-  return (o as Record<string, JMethod | undefined> | null)?.[mangled];
+  const f = (o as Record<string, JMethod | undefined> | null)?.[mangled];
+  if (f !== undefined || !lateMethod.find) return f;
+  const nd = demangled.get(mangled);
+  return nd ? lateMethod.find(o, nd[0], nd[1]) : undefined;
 }
 
 const bits = new DataView(new ArrayBuffer(8));

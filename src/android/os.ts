@@ -843,6 +843,8 @@ rt.register({
 // android.os.Environment: virtual storage paths (backed by our in-memory FS)
 rt.register({
   name: "android/os/Environment", ctor: class extends JObj {},
+  statics: { MEDIA_MOUNTED: "mounted", MEDIA_MOUNTED_READ_ONLY: "mounted_ro", MEDIA_UNMOUNTED: "unmounted", MEDIA_REMOVED: "removed", MEDIA_UNKNOWN: "unknown",
+    DIRECTORY_DOWNLOADS: "Download", DIRECTORY_PICTURES: "Pictures", DIRECTORY_DCIM: "DCIM", DIRECTORY_MUSIC: "Music", DIRECTORY_MOVIES: "Movies", DIRECTORY_DOCUMENTS: "Documents" },
   methods: {
     "static getExternalStorageDirectory()Ljava/io/File;": () => mkFile("/sdcard"),
     "static getExternalStoragePublicDirectory(Ljava/lang/String;)Ljava/io/File;": (t: string) => mkFile("/sdcard/" + (t ?? "")),

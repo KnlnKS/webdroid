@@ -275,10 +275,10 @@ class MethodCompiler {
     for (let i = 0; i < regs; i++) if (!paramRegs.has(i)) decls.push(`v${i}`);
     const declStr = decls.length ? `let ${decls.join(",")};` : "";
 
-    const catchBody = this.hasTries ? this.emitCatch() : "throw $e;";
+    const catchBody = this.hasTries ? this.emitCatch() : this.leave() + "throw $e;";
     const nameLit = JSON.stringify(this.info.name + "." + this.mname);
     return `${this.sync ? "function" : "async function"}(${jsParams.join(",")}){
-${paramInit.join("")}${declStr}let $t,$u,$ex,$fu,pc=0,$lc=0;${this.sync ? "" : "const $th=R.th();"}
+${paramInit.join("")}${declStr}let $t,$u,$ex,$fu,pc=0,$lc=0;${this.sync ? "" : "const $th=R.th();let $s=0;"}
 for(;;)try{
 if(++$lc>5000000)throw new Error("loopbomb "+${nameLit}+" pc="+pc);
 switch(pc){
@@ -291,6 +291,12 @@ ${catchBody}
 }
 }`;
   }
+
+  /** A method that suspended can only return or throw into an asynchronous resumption of its
+   *  caller: a compiled caller re-pins its own thread, and shell code on the main looper expects
+   *  the main thread. Leaving curThread on this method's thread would hand the caller's next
+   *  synchronous work (a Thread.currentThread check, a fresh vcall) the wrong identity. */
+  private leave(): string { return this.sync ? "" : "if($s)R.su();"; }
 
   /**
    * Reaching definitions over the block CFG: type the const instructions whose value is
@@ -483,7 +489,7 @@ ${catchBody}
       if (t.catchAllAddr >= 0) checks.push(`{pc=${t.catchAllAddr};continue;}`);
       parts.push(`if(pc>=${t.start}&&pc<${t.end}){${checks.join("")}}`);
     }
-    parts.push("throw $e;");
+    parts.push(this.leave() + "throw $e;");
     return parts.join("\n");
   }
 
@@ -527,7 +533,7 @@ ${catchBody}
     if (this.sync) { out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise)throw R.nosusp(${JSON.stringify(this.info.name + "." + this.mname + this.desc)});`); return; }
     // re-pin the frame's thread identity after every suspension: other chains set
     // the global current-thread while we were parked (continuation-local restore)
-    out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise){R.su();${assignTo}=await ${assignTo};R.st($th);}`);
+    out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise){R.su();$s=1;${assignTo}=await ${assignTo};R.st($th);}`);
   }
 
   private fieldProp(fieldIdx: number): string {
@@ -546,9 +552,9 @@ ${catchBody}
       case "move-result": case "move-result-wide": case "move-result-object":
         out.push(`${A}=$t;`); break;
       case "move-exception": out.push(`${A}=$ex;`); break;
-      case "return-void": out.push("return;"); break;
-      case "return": case "return-wide": out.push(`return ${A};`); break;
-      case "return-object": out.push(`return ${A}===0?null:${A};`); break;
+      case "return-void": out.push(this.leave() + "return;"); break;
+      case "return": case "return-wide": out.push(`${this.leave()}return ${A};`); break;
+      case "return-object": out.push(`${this.leave()}return ${A}===0?null:${A};`); break;
       case "const/4": case "const/16": case "const":
         out.push(`${A}=${i.constKind === "F" ? f32bits(i.b) : i.b};`);
         break;
@@ -689,7 +695,7 @@ ${catchBody}
   }
 
   private jumpStr(target: number, from: number): string {
-    const fuel = !this.sync && target <= from ? "if(--R.fuel<0){$fu=R.refuel();if($fu){R.su();await $fu;R.st($th);}}" : "";
+    const fuel = !this.sync && target <= from ? "if(--R.fuel<0){$fu=R.refuel();if($fu){R.su();$s=1;await $fu;R.st($th);}}" : "";
     return `${fuel}pc=${target};continue;`;
   }
 
@@ -760,7 +766,7 @@ ${catchBody}
         // resolve against the superclass prototype; an interface-default super call
         // (Iface.super.m()) instead resolves on the declared interface's prototype
         out.push(`$t=(S.prototype.${mangled}??(D.cl[${mref.cls}]??D.link(${mref.cls})).prototype.${mangled}??R.nsm(${JSON.stringify(clsName + "." + mref.name + desc + " (super)")})).call(${recv}${argStr ? "," + argStr : ""});`);
-        if (!this.sync) out.push(`if($t instanceof Promise){R.su();$t=await $t;R.st($th);}`);
+        if (!this.sync) out.push(`if($t instanceof Promise){R.su();$s=1;$t=await $t;R.st($th);}`);
         break;
       }
       case "invoke-direct": {

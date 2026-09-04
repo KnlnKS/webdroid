@@ -209,6 +209,7 @@ export class DexFile {
     return f;
   }
 
+  get methodCount(): number { return this.methodCache.length; }
   method(i: number): MethodRef {
     let m = this.methodCache[i];
     if (m === undefined) {

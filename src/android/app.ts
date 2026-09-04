@@ -18,7 +18,7 @@ import { getInflater, inflateLayout } from "./inflate";
 import { loadDrawable, loadDrawableRV, JColorDrawable, JDrawable, loadColorStateList } from "./drawable";
 import { JBundle, mainLooper, reportUncaught, mkPfd, PARCELABLE } from "./os";
 import { onMain } from "./mainloop";
-import { isMusicActive } from "./media";
+import { isMusicActive, outputSampleRate } from "./media";
 import { TV, attr, attrStr, type XmlNode, parseAXML } from "./axml";
 import { csText } from "./text";
 import { JCanvas, tfMedium } from "./graphics";
@@ -74,6 +74,8 @@ const SERVICE_CLASS: Record<string, string> = {
   connectivity: "android/net/ConnectivityManager",
   activity: "android/app/ActivityManager",
   power: "android/os/PowerManager",
+  input: "android/hardware/input/InputManager",
+  media_router: "android/media/MediaRouter",
   vibrator: "android/os/Vibrator",
   audio: "android/media/AudioManager",
   phone: "android/telephony/TelephonyManager",
@@ -319,6 +321,7 @@ const contextMethods: NativeSpec["methods"] = {
     return jarray([privDir(`/sdcard/Android/data/${this.$host.pkg}/cache`)], "Ljava/io/File;");
   },
   "getObbDir()Ljava/io/File;": function (this: JContext) { return privDir(`/sdcard/Android/obb/${this.$host.pkg}`); },
+  "getObbDirs()[Ljava/io/File;": function (this: JContext) { return jarray([privDir(`/sdcard/Android/obb/${this.$host.pkg}`)], "Ljava/io/File;"); },
   "getDir(Ljava/lang/String;I)Ljava/io/File;": function (this: JContext, name: string) {
     return privDir(`/data/data/${this.$host.pkg}/app_${name}`);
   },
@@ -402,7 +405,7 @@ const contextMethods: NativeSpec["methods"] = {
 };
 
 rt.register({ name: "android/content/Context", ctor: JContext, methods: contextMethods,
-  statics: { LAYOUT_INFLATER_SERVICE: "layout_inflater", WINDOW_SERVICE: "window", INPUT_METHOD_SERVICE: "input_method", CONNECTIVITY_SERVICE: "connectivity", ACTIVITY_SERVICE: "activity", NOTIFICATION_SERVICE: "notification", ALARM_SERVICE: "alarm", POWER_SERVICE: "power", VIBRATOR_SERVICE: "vibrator", AUDIO_SERVICE: "audio", CLIPBOARD_SERVICE: "clipboard", USER_SERVICE: "user", MODE_PRIVATE: 0, BIND_AUTO_CREATE: 1 } });
+  statics: { LAYOUT_INFLATER_SERVICE: "layout_inflater", WINDOW_SERVICE: "window", INPUT_METHOD_SERVICE: "input_method", CONNECTIVITY_SERVICE: "connectivity", ACTIVITY_SERVICE: "activity", NOTIFICATION_SERVICE: "notification", ALARM_SERVICE: "alarm", POWER_SERVICE: "power", VIBRATOR_SERVICE: "vibrator", AUDIO_SERVICE: "audio", CLIPBOARD_SERVICE: "clipboard", USER_SERVICE: "user", LOCATION_SERVICE: "location", SENSOR_SERVICE: "sensor", MEDIA_ROUTER_SERVICE: "media_router", TELEPHONY_SERVICE: "phone", WIFI_SERVICE: "wifi", DISPLAY_SERVICE: "display", CAMERA_SERVICE: "camera", INPUT_SERVICE: "input", STORAGE_SERVICE: "storage", BATTERY_SERVICE: "batterymanager", KEYGUARD_SERVICE: "keyguard", ACCESSIBILITY_SERVICE: "accessibility", JOB_SCHEDULER_SERVICE: "jobscheduler", UI_MODE_SERVICE: "uimode", DOWNLOAD_SERVICE: "download", MODE_PRIVATE: 0, BIND_AUTO_CREATE: 1 } });
 
 export class JContextWrapper extends JContext { base: JContext | null = null; }
 function attachBase(this: JContextWrapper, base: JContext) {
@@ -703,6 +706,16 @@ rt.register({
 // Reads go through a ContentResolver on a real device; nothing here is writable, so every
 // getter simply hands back the caller's own default. AOSP splits the same table three ways.
 const settingsUri = (table: string, name: string) => mkUri(`content://settings/${table}/${name}`);
+/** ANDROID_ID: 64 random bits minted on first ask and kept for the install, as the platform does */
+function androidId(): string {
+  const store = typeof localStorage === "undefined" ? null : localStorage;
+  let id = store?.getItem("wd:android_id") ?? null;
+  if (!id) {
+    id = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, "0")).join("");
+    store?.setItem("wd:android_id", id);
+  }
+  return id;
+}
 for (const [cls, table] of [["Global", "global"], ["Secure", "secure"], ["System", "system"]] as const) {
   rt.register({
     name: `android/provider/Settings$${cls}`, ctor: class extends JObj {},
@@ -715,13 +728,14 @@ for (const [cls, table] of [["Global", "global"], ["Secure", "secure"], ["System
       DEVELOPMENT_SETTINGS_ENABLED: "development_settings_enabled",
       TEXT_SHOW_PASSWORD: "show_password",
       FONT_SCALE: "font_scale",
+      ANDROID_ID: "android_id", DEVICE_NAME: "device_name",
       CONTENT_URI: mkUri(`content://settings/${table}`),
     },
     methods: {
       "static getFloat(Landroid/content/ContentResolver;Ljava/lang/String;F)F": (_r: unknown, _n: string, d: number) => d,
       "static getInt(Landroid/content/ContentResolver;Ljava/lang/String;I)I": (_r: unknown, _n: string, d: number) => d,
       "static getLong(Landroid/content/ContentResolver;Ljava/lang/String;J)J": (_r: unknown, _n: string, d: bigint) => d,
-      "static getString(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;": () => null,
+      "static getString(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;": (_r: unknown, n: string) => (n === "android_id" ? androidId() : n === "device_name" ? "webdroid" : null),
       "static getUriFor(Ljava/lang/String;)Landroid/net/Uri;": (n: string) => settingsUri(table, n),
       "static putFloat(Landroid/content/ContentResolver;Ljava/lang/String;F)Z": () => 0,
       "static putInt(Landroid/content/ContentResolver;Ljava/lang/String;I)Z": () => 0,
@@ -952,7 +966,12 @@ rt.register({
   name: "android/content/pm/PackageManager", ctor: JPackageManager,
   statics: { PERMISSION_GRANTED: 0, PERMISSION_DENIED: -1, GET_ACTIVITIES: 1, GET_META_DATA: 128, GET_SIGNATURES: 64,
     COMPONENT_ENABLED_STATE_DEFAULT: 0, COMPONENT_ENABLED_STATE_ENABLED: 1, COMPONENT_ENABLED_STATE_DISABLED: 2,
-    DONT_KILL_APP: 1 },
+    DONT_KILL_APP: 1,
+    FEATURE_AUDIO_LOW_LATENCY: "android.hardware.audio.low_latency", FEATURE_AUDIO_PRO: "android.hardware.audio.pro", FEATURE_TOUCHSCREEN: "android.hardware.touchscreen",
+    FEATURE_TOUCHSCREEN_MULTITOUCH: "android.hardware.touchscreen.multitouch", FEATURE_CAMERA: "android.hardware.camera", FEATURE_CAMERA_ANY: "android.hardware.camera.any",
+    FEATURE_SENSOR_ACCELEROMETER: "android.hardware.sensor.accelerometer", FEATURE_SENSOR_GYROSCOPE: "android.hardware.sensor.gyroscope", FEATURE_LOCATION: "android.hardware.location",
+    FEATURE_LOCATION_GPS: "android.hardware.location.gps", FEATURE_MICROPHONE: "android.hardware.microphone", FEATURE_WIFI: "android.hardware.wifi", FEATURE_BLUETOOTH: "android.hardware.bluetooth",
+    FEATURE_VR_MODE: "android.software.vr.mode", FEATURE_TELEPHONY: "android.hardware.telephony", FEATURE_LEANBACK: "android.software.leanback" },
   methods: {
     "getProviderInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ProviderInfo;": (comp: any) => {
       const cls = String(comp?.cls ?? comp?.className ?? "");
@@ -1746,6 +1765,7 @@ const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "getLocalClassName()Ljava/lang/String;": function (this: JActivity) { return jclsNameOf(this); },
   "getCallingActivity()Landroid/content/ComponentName;": () => null,
+  "getCallingPackage()Ljava/lang/String;": () => null,
   "overridePendingTransition(II)V": () => {},
   "getPreferences(I)Landroid/content/SharedPreferences;": function (this: JActivity) {
     return getPrefs(this.$host.pkg, jclsNameOf(this));
@@ -2335,6 +2355,7 @@ for (const [name, methods, statics] of [
     },
     "isInteractive()Z": () => 1,
     "isPowerSaveMode()Z": () => 0,
+    "isSustainedPerformanceModeSupported()Z": () => 0,
     // the screen is on and this app was never exempted from doze, which is the state an app
     // offering a "disable battery optimisation" prompt is asking about
     "isDeviceIdleMode()Z": () => 0,
@@ -2375,9 +2396,16 @@ for (const [name, methods, statics] of [
     "isMusicActive()Z": isMusicActive,
     "isBluetoothA2dpOn()Z": () => 0,
     "isWiredHeadsetOn()Z": () => 0,
+    // the output path is the Web Audio context: its rate is real, its buffer size is not a fixed number of frames
+    "getProperty(Ljava/lang/String;)Ljava/lang/String;": (k: string) => (k === "android.media.property.OUTPUT_SAMPLE_RATE" ? String(outputSampleRate()) : null),
+    "getDevices(I)[Landroid/media/AudioDeviceInfo;": () => jarray([], "Landroid/media/AudioDeviceInfo;"),
   }, {
     MODE_NORMAL: 0, MODE_RINGTONE: 1, MODE_IN_CALL: 2, MODE_IN_COMMUNICATION: 3,
     RINGER_MODE_SILENT: 0, RINGER_MODE_VIBRATE: 1, RINGER_MODE_NORMAL: 2,
+    GET_DEVICES_INPUTS: 1, GET_DEVICES_OUTPUTS: 2, GET_DEVICES_ALL: 3,
+    PROPERTY_OUTPUT_SAMPLE_RATE: "android.media.property.OUTPUT_SAMPLE_RATE", PROPERTY_OUTPUT_FRAMES_PER_BUFFER: "android.media.property.OUTPUT_FRAMES_PER_BUFFER",
+    STREAM_VOICE_CALL: 0, STREAM_SYSTEM: 1, STREAM_RING: 2, STREAM_MUSIC: 3, STREAM_ALARM: 4, STREAM_NOTIFICATION: 5,
+    AUDIOFOCUS_GAIN: 1, AUDIOFOCUS_LOSS: -1, AUDIOFOCUS_REQUEST_GRANTED: 1, AUDIOFOCUS_REQUEST_FAILED: 0,
   }],
   // A Wi-Fi-only device with no SIM: no operator, no radio, and the identifiers API 29+
   // withholds from ordinary apps are null.

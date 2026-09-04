@@ -259,7 +259,9 @@ rt.register({
     NET_CAPABILITY_NOT_ROAMING: 18, NET_CAPABILITY_NOT_CONGESTED: 20, NET_CAPABILITY_NOT_SUSPENDED: 21,
     NET_CAPABILITY_TEMPORARILY_NOT_METERED: 25,
   },
-  methods: { "hasCapability(I)Z": netUp, "hasTransport(I)Z": (t: number) => (t === 1 ? 1 : 0) },
+  methods: { "hasCapability(I)Z": netUp, "hasTransport(I)Z": (t: number) => (t === 1 ? 1 : 0),
+    // no bandwidth estimate: the platform's "unspecified"
+    "getLinkDownstreamBandwidthKbps()I": () => 0, "getLinkUpstreamBandwidthKbps()I": () => 0, "getSignalStrength()I": () => -2147483648 },
 });
 class JNetworkRequest extends JObj { caps: number[] = []; transports: number[] = []; }
 class JNetworkRequestBuilder extends JObj { r = new JNetworkRequest(); }

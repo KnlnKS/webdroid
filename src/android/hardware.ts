@@ -2,6 +2,8 @@
 // SensorManager itself is a Context system service and lives with the others in app.ts.
 
 import { rt, JObj } from "../jvm/runtime";
+import { device } from "../shell/config";
+import { newArrayList } from "../jvm/natives/jutil";
 
 rt.register({ name: "android/hardware/SensorEventListener", ctor: class extends JObj {} });
 
@@ -26,4 +28,54 @@ class JSensorEvent extends JObj { values = new Float32Array(3); accuracy = 0; ti
 rt.register({
   name: "android/hardware/SensorEvent", ctor: JSensorEvent,
   fields: { values: "values", accuracy: "accuracy", timestamp: "timestamp", sensor: "sensor" },
+});
+
+// ── android.hardware.input: the one input device is the touchscreen (id 1, SOURCE_TOUCHSCREEN)
+class JInputDevice extends JObj {}
+class JMotionRange extends JObj { axis = 0; max = 0; }
+const touchscreen = new JInputDevice();
+const range = (axis: number, max: number) => { const r = new JMotionRange(); r.axis = axis; r.max = max; return r; };
+rt.register({
+  name: "android/view/InputDevice", ctor: JInputDevice,
+  statics: { SOURCE_TOUCHSCREEN: 0x1002, SOURCE_KEYBOARD: 0x101, SOURCE_MOUSE: 0x2002, SOURCE_JOYSTICK: 0x1000010, SOURCE_GAMEPAD: 0x401, SOURCE_DPAD: 0x201,
+    SOURCE_CLASS_POINTER: 2, SOURCE_CLASS_BUTTON: 1, SOURCE_CLASS_JOYSTICK: 16, SOURCE_UNKNOWN: 0, SOURCE_ANY: -256, KEYBOARD_TYPE_NONE: 0, KEYBOARD_TYPE_ALPHABETIC: 2 },
+  methods: {
+    "static getDeviceIds()[I": () => Int32Array.of(1),
+    "static getDevice(I)Landroid/view/InputDevice;": (id: number) => (id === 1 ? touchscreen : null),
+    "getId()I": () => 1,
+    "getName()Ljava/lang/String;": () => "touchscreen",
+    "getDescriptor()Ljava/lang/String;": () => "touchscreen",
+    "getSources()I": () => 0x1002,
+    "supportsSource(I)Z": (s: number) => ((s & 0x1002) === s ? 1 : 0),
+    "getKeyboardType()I": () => 0,
+    "isVirtual()Z": () => 0,
+    "isExternal()Z": () => 0,
+    "getVendorId()I": () => 0,
+    "getProductId()I": () => 0,
+    "getControllerNumber()I": () => 0,
+    "getMotionRange(I)Landroid/view/InputDevice$MotionRange;": (axis: number) => (axis === 0 ? range(0, device.width) : axis === 1 ? range(1, device.height) : null),
+    "getMotionRange(II)Landroid/view/InputDevice$MotionRange;": (axis: number) => (axis === 0 ? range(0, device.width) : axis === 1 ? range(1, device.height) : null),
+    "getMotionRanges()Ljava/util/List;": () => newArrayList([range(0, device.width), range(1, device.height)]),
+    "hasKeys([I)[Z": (keys: Int32Array) => new Uint8Array(keys.length),
+  },
+});
+rt.register({
+  name: "android/view/InputDevice$MotionRange", ctor: JMotionRange,
+  methods: {
+    "getAxis()I": function (this: JMotionRange) { return this.axis; },
+    "getMin()F": () => 0, "getMax()F": function (this: JMotionRange) { return this.max; },
+    "getRange()F": function (this: JMotionRange) { return this.max; },
+    "getFlat()F": () => 0, "getFuzz()F": () => 0, "getResolution()F": () => 0,
+    "getSource()I": () => 0x1002,
+  },
+});
+rt.register({ name: "android/hardware/input/InputManager$InputDeviceListener", ctor: class extends JObj {} });
+rt.register({
+  name: "android/hardware/input/InputManager", ctor: class extends JObj {},
+  methods: {
+    "getInputDeviceIds()[I": () => Int32Array.of(1),
+    "getInputDevice(I)Landroid/view/InputDevice;": (id: number) => (id === 1 ? touchscreen : null),
+    "registerInputDeviceListener(Landroid/hardware/input/InputManager$InputDeviceListener;Landroid/os/Handler;)V": () => {},
+    "unregisterInputDeviceListener(Landroid/hardware/input/InputManager$InputDeviceListener;)V": () => {},
+  },
 });

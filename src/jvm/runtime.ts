@@ -86,6 +86,22 @@ export class Runtime {
   natives = new Map<string, NativeSpec>();
   dexes: DexFile[] = [];
   dexIndex = new Map<string, [DexFile, number]>();
+  private refCache = new Map<string, Map<string, string>>();
+  /** every method the loaded dexes reference on class `cls`, name+desc → desc: the surface a
+   *  framework interface has as far as this app is concerned, which is what a proxy over it or a
+   *  JNI method id on it can be checked against when no bytecode declares the interface */
+  methodRefs(cls: string): Map<string, string> {
+    let m = this.refCache.get(cls);
+    if (m) return m;
+    this.refCache.set(cls, (m = new Map()));
+    for (const dex of this.dexes) for (let i = 0; i < dex.methodCount; i++) {
+      const r = dex.method(i);
+      if (descToName(dex.type(r.cls)) !== cls) continue;
+      const d = dex.methodDesc(i);
+      m.set(r.name + d, d);
+    }
+    return m;
+  }
   links = new Map<DexFile, DexLink>();
   missing = new Set<string>();
   /** the booted apk's entries: what ClassLoader.getResourceAsStream and ServiceLoader read */
@@ -103,10 +119,12 @@ export class Runtime {
    *  (st) and releases it when it suspends (su), so a parked worker never leaves its identity
    *  behind for the native main-thread drivers that resume next */
   th: () => unknown = () => null;
+  /** set by jreflect: a reflect.Proxy answers a method it has not materialised yet from the name and descriptor the caller holds */
+  proxyMethod: ((obj: unknown, name: string, desc: string) => ((...a: unknown[]) => unknown) | null) | null = null;
   st: (t: unknown) => void = () => {};
   su: () => void = () => {};
   onUncaught: ((e: unknown) => void) | null = null;
-  fuel = 100000;
+  fuel = 4096;
   /** methods the suspension analysis proved cannot suspend, so they compile without `async`.
    *  Null until it has run; a method it never saw falls back to the compiler's syntactic rule. */
   syncMethods: Set<string> | null = null;
@@ -643,6 +661,7 @@ export class Runtime {
     if (typeof e === "object" && e !== null && (e as any).$javaClass) return e;
     if (e instanceof TypeError) {
       const m = e.message;
+      if ((globalThis as { __wdJxTrace?: boolean }).__wdJxTrace) console.warn("[jx]", e.stack);
       if (/null|undefined/.test(m) && /read|call|properties/i.test(m)) {
         return this.mkThrowable("java/lang/NullPointerException", m);
       }
@@ -728,7 +747,7 @@ export class Runtime {
    *  nested) taken while holding the main-looper job. Only actually yield if we have not
    *  yielded recently; otherwise just refill and keep going. */
   refuel(): Promise<void> | null {
-    this.fuel = 100000;
+    this.fuel = 4096;   // a loop of native calls costs tens of µs an iteration: check the clock often enough to yield within ~10 ms
     const now = performance.now();
     if (now - this.lastYield < 8) return null;
     this.lastYield = now;

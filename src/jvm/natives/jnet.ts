@@ -499,10 +499,23 @@ rt.register({
       },
     "static create(Ljava/lang/String;)Ljava/net/URI;": (s: string) => { const r = new JURI(); r.u = s ?? ""; return r; },
     "toString()Ljava/lang/String;": function (this: JURI) { return this.u; },
+    // RFC 2396 path normalisation: "." and ".." segments resolved, the rest of the URI untouched
+    "normalize()Ljava/net/URI;": function (this: JURI) {
+      const m = /^([^:/?#]+:)?(\/\/[^/?#]*)?([^?#]*)(.*)$/.exec(this.u)!;
+      const out: string[] = [];
+      for (const seg of (m[3] ?? "").split("/")) {
+        if (seg === ".") continue;
+        if (seg === ".." && out.length > 1) { out.pop(); continue; }
+        out.push(seg);
+      }
+      const r = new JURI(); r.u = (m[1] ?? "") + (m[2] ?? "") + out.join("/") + m[4]; return r;
+    },
     "toASCIIString()Ljava/lang/String;": function (this: JURI) { return this.u; },
     "getScheme()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf(":"); return i > 0 ? this.u.slice(0, i) : null; },
     "getHost()Ljava/lang/String;": function (this: JURI) { try { return new URL(this.u).hostname; } catch { return null; } },
     "getPath()Ljava/lang/String;": function (this: JURI) { try { return new URL(this.u).pathname; } catch { return this.u.replace(/^[a-z]+:/i, ""); } },
+    "toURL()Ljava/net/URL;": function (this: JURI) { const u = new JURL(); urlInit(u, this.u); return u; },
+    "getUserInfo()Ljava/lang/String;": function (this: JURI) { const m = /^[^:/?#]+:\/\/([^@/?#]*)@/.exec(this.u); return m ? decodeURIComponent(m[1]) : null; },
     "getPort()I": function (this: JURI) { try { return Number(new URL(this.u).port) || -1; } catch { return -1; } },
     "getQuery()Ljava/lang/String;": function (this: JURI) { try { const q = new URL(this.u).search; return q ? q.slice(1) : null; } catch { return null; } },
     "getFragment()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf("#"); return i < 0 ? null : this.u.slice(i + 1); },

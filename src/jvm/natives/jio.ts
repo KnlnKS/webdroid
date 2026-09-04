@@ -428,6 +428,14 @@ rt.register({
     },
     "write([B)V": function (this: JRAF, b: Int8Array) { rafWrite(this, b, 0, b.length); },
     "write([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { rafWrite(this, b, off, len); },
+    // DataOutput: big-endian, as the JDK writes
+    "writeInt(I)V": function (this: JRAF, v: number) { rafWrite(this, new Int8Array(Int32Array.of(v).buffer).reverse(), 0, 4); },
+    "writeShort(I)V": function (this: JRAF, v: number) { rafWrite(this, Int8Array.of(v >> 8, v), 0, 2); },
+    "writeByte(I)V": function (this: JRAF, v: number) { rafWrite(this, Int8Array.of(v), 0, 1); },
+    "writeBoolean(Z)V": function (this: JRAF, v: number) { rafWrite(this, Int8Array.of(v ? 1 : 0), 0, 1); },
+    "writeLong(J)V": function (this: JRAF, v: bigint) { rafWrite(this, new Int8Array(BigInt64Array.of(v).buffer).reverse(), 0, 8); },
+    "writeDouble(D)V": function (this: JRAF, v: number) { rafWrite(this, new Int8Array(Float64Array.of(v).buffer).reverse(), 0, 8); },
+    "writeFloat(F)V": function (this: JRAF, v: number) { rafWrite(this, new Int8Array(Float32Array.of(v).buffer).reverse(), 0, 4); },
     "setLength(J)V": function (this: JRAF, n: bigint) {
       const len = Number(n);
       if (len <= this.buf.length) this.buf = this.buf.slice(0, len);
@@ -639,6 +647,10 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "write(Ljava/lang/String;)V": function (this: JWriter, s: string) { this.s += s; },
+    // Appendable: the base class routes through write(String), which a subclass overrides
+    "append(Ljava/lang/CharSequence;)Ljava/io/Writer;": async function (this: JWriter, cs: unknown) { await vcall(this, "write", "(Ljava/lang/String;)V", String(cs ?? "null")); return this; },
+    "append(Ljava/lang/CharSequence;II)Ljava/io/Writer;": async function (this: JWriter, cs: unknown, a: number, b: number) { await vcall(this, "write", "(Ljava/lang/String;)V", String(cs ?? "null").slice(a, b)); return this; },
+    "append(C)Ljava/io/Writer;": async function (this: JWriter, c: number) { await vcall(this, "write", "(Ljava/lang/String;)V", String.fromCharCode(c)); return this; },
     "write(Ljava/lang/String;II)V": function (this: JWriter, s: string, off: number, len: number) { return wr(this, s.substr(off, len)); },
     "write(I)V": function (this: JWriter, c: number) { return wr(this, String.fromCharCode(c & 0xffff)); },
     "write([C)V": function (this: JWriter, c: Uint16Array) { return wr(this, chars(c)); },
@@ -874,3 +886,65 @@ rt.register({
 });
 rt.register({ name: "java/nio/file/LinkOption", ctor: class extends JObj {}, sup: "java/lang/Enum",
   statics: { NOFOLLOW_LINKS: new JObj() } });
+
+// ── java.util.Scanner: tokens and lines over a source read whole up front (a stream, a string, a file)
+async function slurp(src: unknown): Promise<Uint8Array> {
+  if (src instanceof JInputStream) return src.buf.subarray(src.pos);
+  const parts: Uint8Array[] = [];
+  for (;;) {
+    const chunk = new Int8Array(8192);
+    const n = (await vcall(src, "read", "([BII)I", chunk, 0, chunk.length)) as number;
+    if (n <= 0) break;
+    parts.push(new Uint8Array(chunk.buffer, 0, n).slice());
+  }
+  const out = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
+}
+class JScanner extends JObj { text = ""; pos = 0; delim = /\s+/y; }
+function skipDelim(s: JScanner): void { s.delim.lastIndex = s.pos; const m = s.delim.exec(s.text); if (m && m.index === s.pos) s.pos += m[0].length; }
+function peekToken(s: JScanner): string | null {
+  skipDelim(s);
+  if (s.pos >= s.text.length) return null;
+  s.delim.lastIndex = s.pos;
+  const re = new RegExp(s.delim.source, "g"); re.lastIndex = s.pos;
+  const m = re.exec(s.text);
+  return s.text.slice(s.pos, m ? m.index : s.text.length);
+}
+function nextToken(s: JScanner): string {
+  const t = peekToken(s);
+  if (t === null) throw rt.mkThrowable("java/util/NoSuchElementException", null);
+  s.pos += t.length;
+  return t;
+}
+rt.register({
+  name: "java/util/Scanner", ctor: JScanner, ifaces: ["java/util/Iterator", "java/io/Closeable"],
+  methods: {
+    "<init>(Ljava/io/InputStream;)V": async function (this: JScanner, s: unknown) { this.text = new TextDecoder().decode(await slurp(s)); },
+    "<init>(Ljava/io/InputStream;Ljava/lang/String;)V": async function (this: JScanner, s: unknown) { this.text = new TextDecoder().decode(await slurp(s)); },
+    "<init>(Ljava/lang/String;)V": function (this: JScanner, s: string) { this.text = s; },
+    "<init>(Ljava/io/File;)V": function (this: JScanner, f: JFile) {
+      const b = vfs.read(f.path);
+      if (!b) throw rt.mkThrowable("java/io/FileNotFoundException", f.path);
+      this.text = new TextDecoder().decode(b);
+    },
+    "useDelimiter(Ljava/lang/String;)Ljava/util/Scanner;": function (this: JScanner, p: string) { this.delim = new RegExp(p, "y"); return this; },
+    "hasNext()Z": function (this: JScanner) { return peekToken(this) !== null ? 1 : 0; },
+    "next()Ljava/lang/String;": function (this: JScanner) { return nextToken(this); },
+    "next()Ljava/lang/Object;": function (this: JScanner) { return nextToken(this); },
+    "hasNextInt()Z": function (this: JScanner) { const t = peekToken(this); return t !== null && /^[+-]?\d+$/.test(t) ? 1 : 0; },
+    "nextInt()I": function (this: JScanner) { const t = nextToken(this); if (!/^[+-]?\d+$/.test(t)) throw rt.mkThrowable("java/util/InputMismatchException", t); return Number(t) | 0; },
+    "nextLong()J": function (this: JScanner) { const t = nextToken(this); if (!/^[+-]?\d+$/.test(t)) throw rt.mkThrowable("java/util/InputMismatchException", t); return BigInt(t); },
+    "nextDouble()D": function (this: JScanner) { const t = nextToken(this); const v = Number(t); if (Number.isNaN(v)) throw rt.mkThrowable("java/util/InputMismatchException", t); return v; },
+    "hasNextLine()Z": function (this: JScanner) { return this.pos < this.text.length ? 1 : 0; },
+    "nextLine()Ljava/lang/String;": function (this: JScanner) {
+      if (this.pos >= this.text.length) throw rt.mkThrowable("java/util/NoSuchElementException", null);
+      const i = this.text.indexOf("\n", this.pos);
+      const line = i < 0 ? this.text.slice(this.pos) : this.text.slice(this.pos, i);
+      this.pos = i < 0 ? this.text.length : i + 1;
+      return line.endsWith("\r") ? line.slice(0, -1) : line;
+    },
+    "close()V": () => {},
+  },
+});

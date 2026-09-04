@@ -6,7 +6,7 @@ import { mangleMethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFl
 
 // dynamic virtual call from native code, with promise guard
 export async function vcall(obj: any, name: string, desc: string, ...args: unknown[]): Promise<any> {
-  const fn = obj[mangleMethod(name, desc)];
+  const fn = obj[mangleMethod(name, desc)] ?? rt.proxyMethod?.(obj, name, desc);
   if (typeof fn !== "function") throw rt.unimplemented(`vcall ${describe(obj)}.${name}${desc}`);
   const r = fn.apply(obj, args);
   return r instanceof Promise ? await r : r;
@@ -260,6 +260,8 @@ rt.register({
     "loadClass(Ljava/lang/String;)Ljava/lang/Class;": loadClass,
     "loadClass(Ljava/lang/String;Z)Ljava/lang/Class;": loadClass,
     "getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;": (path: string) => classpathStream(path.replace(/^\//, "")),
+    // the path System.load would take for lib<name>.so, or null: dlopen resolves it by name
+    "findLibrary(Ljava/lang/String;)Ljava/lang/String;": (n: string) => { const a = pickAbi((abi) => !!rt.classpath[`lib/${abi}/lib${n}.so`]); return a ? `/lib/lib${n}.so` : null; },
   },
 });
 const bootLoader = new JClassLoader();
@@ -1158,6 +1160,11 @@ rt.register({
     "static identityHashCode(Ljava/lang/Object;)I": idHash,
     "static getProperty(Ljava/lang/String;)Ljava/lang/String;": (k: string) => sysProps[k] ?? null,
     "static getProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (k: string, d: string) => sysProps[k] ?? d,
+    "static getProperties()Ljava/util/Properties;": async () => {
+      const p = await newObj("java/util/Properties");
+      for (const [k, v] of Object.entries(sysProps)) await vcall(p, "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;", k, v);
+      return p;
+    },
     "static setProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (k: string, v: string) => { const o = sysProps[k] ?? null; sysProps[k] = v; return o; },
     "static getenv(Ljava/lang/String;)Ljava/lang/String;": () => null,
     // Android has never installed one; code that asks is deciding whether it may reflect
@@ -1180,10 +1187,14 @@ rt.register({
 
 class JRuntimeCls extends JObj {}
 const theRuntime = new JRuntimeCls();
+const shutdownHooks = new Set<unknown>();
 rt.register({
   name: "java/lang/Runtime", ctor: JRuntimeCls,
   methods: {
     "static getRuntime()Ljava/lang/Runtime;": () => theRuntime,
+    // the page never shuts the runtime down the way a JVM does; hooks are kept so removal works
+    "addShutdownHook(Ljava/lang/Thread;)V": (t: unknown) => { shutdownHooks.add(t); },
+    "removeShutdownHook(Ljava/lang/Thread;)Z": (t: unknown) => (shutdownHooks.delete(t) ? 1 : 0),
     "availableProcessors()I": () => (globalThis.navigator?.hardwareConcurrency ?? 4),
     "maxMemory()J": () => 536870912n,
     "totalMemory()J": () => 268435456n,

@@ -2,11 +2,12 @@
 // between guest natives (AAPCS words) and the JVM's value model.
 
 import { mem } from "./mem";
-import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet } from "./host";
+import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet, hostTrace } from "./host";
 import { Cpu, cpuFor, type CallArg } from "./cpu";
 import { rt, JObj, type ClassInfo } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, newPrimArray } from "../jvm/abi";
 import { curThread, JClass, stackTraceText } from "../jvm/natives/jlang";
+import { JMethod, mkMethod } from "../jvm/natives/jreflect";
 
 export const jniMissing = new Set<string>();
 export const jniTrace = { on: false };
@@ -36,10 +37,10 @@ function newGlobalRef(o: unknown): number {
   globals.push(o);
   return GLOBAL_BIT | (globals.length - 1);
 }
-export function deref(h: number): unknown {
+export function deref(h: number, cpu: Cpu | null = cur): unknown {
   if (h === 0) return null;
   if (h & GLOBAL_BIT) return globals[h & ~GLOBAL_BIT] ?? null;
-  return locals(cur!).refs[h] ?? null;
+  return locals(cpu!).refs[h] ?? null;
 }
 export function pushFrame(cpu: Cpu): void { const l = locals(cpu); l.frames.push(l.refs.length); }
 export function popFrame(cpu: Cpu): void { const l = locals(cpu); const m = l.frames.pop(); if (m !== undefined) l.refs.length = m; }
@@ -47,6 +48,19 @@ export function popFrame(cpu: Cpu): void { const l = locals(cpu); const m = l.fr
 interface MethodRec { info: ClassInfo; name: string; desc: string; mangled: string; isStatic: boolean; params: string[]; ret: string }
 interface FieldRec { prop: string; type: string; isStatic: boolean; owner: any }
 const methods: MethodRec[] = [null as unknown as MethodRec];
+const methodIds = new Map<string, number>();
+/** a jmethodID is canonical: the same method looked up twice, or reached through a reflected
+ *  Method, is the same id (an engine caches ids per proxy method and matches by identity) */
+function methodId(info: ClassInfo, name: string, desc: string, isStatic: boolean): number {
+  const key = (isStatic ? "static " : "") + info.name + "." + name + desc;
+  let id = methodIds.get(key);
+  if (id === undefined) {
+    const { params, ret } = parseMethodDesc(desc);
+    methods.push({ info, name, desc, mangled: mangleMethod(name, desc), isStatic, params, ret });
+    methodIds.set(key, (id = methods.length - 1));
+  }
+  return id;
+}
 const fields: FieldRec[] = [null as unknown as FieldRec];
 
 interface Registered { cls: string; name: string; sig: string; fn: number; isStatic: boolean }
@@ -67,7 +81,7 @@ function infoOf(clsRef: number): ClassInfo | null {
 }
 function pend(cpu: Cpu, e: unknown): void {
   cpu.exc = e;
-  if (jniTrace.on) console.warn("[jni] pending exception", e);
+  if (jniTrace.on) { console.warn("[jni] pending", (e as { msg?: string })?.msg, e); console.warn("[jni] ring", hostTrace.ring.slice(-50).join(" | "), new Error().stack); }
 }
 const throwable = (cls: string, msg: string) => rt.mkThrowable(cls, msg);
 
@@ -131,7 +145,7 @@ async function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], no
       return retWord(m.ret, r instanceof Promise ? await r : r, cpu);
     }
     if (self === null || self === undefined) throw throwable("java/lang/NullPointerException", "JNI call on null " + m.name);
-    fn = nonvirtual ? m.info.ctor.prototype[m.mangled] : (self as any)[m.mangled];
+    fn = nonvirtual ? m.info.ctor.prototype[m.mangled] : (self as any)[m.mangled] ?? rt.proxyMethod?.(self, m.name, m.desc);
     if (typeof fn !== "function") throw throwable("java/lang/NoSuchMethodError", m.name + m.desc);
     const r = fn.apply(self, args);
     return retWord(m.ret, r instanceof Promise ? await r : r, cpu);
@@ -144,6 +158,7 @@ async function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], no
 /** a Java native method whose body is guest code: marshal, run on the caller's Cpu, convert the result */
 async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unknown[]): Promise<unknown> {
   const { params, ret } = parseMethodDesc(r.sig);
+  await cpu.awaitIdleBase();
   const prevCur = cur;
   cur = cpu;
   pushFrame(cpu);
@@ -161,7 +176,7 @@ async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unk
   if (jniTrace.on) console.log("[jni] →", r.cls, r.name, r.sig);
   let r0: number, r1: number;
   try {
-    r0 = await cpu.call(r.fn, list);
+    r0 = await cpu.call(r.fn, list, r.cls.split("/").pop() + "." + r.name);
     r1 = cpu.ret1;
   } finally { cur = cpu; }
   let out: unknown;
@@ -206,12 +221,21 @@ function copyIn(type: string, arr: any, p: number, start: number, len: number): 
 }
 
 export function jniInit(): void {
+  jniTrace.on ||= !!(globalThis as { __wdJniTrace?: boolean }).__wdJniTrace;
   const T: (HostFn | null)[] = new Array(233).fill(null);
   const names: string[] = new Array(233).fill("?");
   const def = (i: number, name: string, fn: HostFn) => { T[i] = fn; names[i] = name; };
   const utf8Len = (s: string) => new TextEncoder().encode(s).length;
 
   def(4, "GetVersion", () => 0x00010006);
+  def(7, "FromReflectedMethod", (_c, a) => {
+    a.p(); const m = deref(a.i());
+    return m instanceof JMethod ? methodId(m.owner, m.name, m.desc, m.isStatic) : 0;
+  });
+  def(9, "ToReflectedMethod", (_c, a) => {
+    a.p(); a.p(); const m = methods[a.i()]; a.i();
+    return m ? toRef(mkMethod(m.info, m.name, m.desc, m.isStatic, m.isStatic ? m.info.ctor[m.mangled] : m.info.ctor.prototype[m.mangled])) : 0;
+  });
   def(6, "FindClass", (cpu, a) => {
     a.p(); const name = a.str();
     const n = name.replace(/\./g, "/");
@@ -242,6 +266,7 @@ export function jniInit(): void {
     try {
       const p = rt.initClass(i); if (p) await p;
       const args = read(m, a);
+      if (i.name === "java/lang/String") return toRef(rt.newStr(m.desc, args), cpu);   // a Java string is a JS string, built by the runtime's own constructor table
       const o = new i.ctor();
       const fn = o[m.mangled];
       if (typeof fn !== "function") throw throwable("java/lang/NoSuchMethodError", "<init>" + m.desc);
@@ -260,11 +285,12 @@ export function jniInit(): void {
     if (!i) { pend(cpu, throwable("java/lang/NoClassDefFoundError", "null class")); return 0; }
     const p = rt.initClass(i); if (p) await p;
     const mangled = mangleMethod(name, sig);
-    const have = isStatic ? typeof i.ctor[mangled] === "function" : typeof i.ctor.prototype?.[mangled] === "function" || (i.name === "java/lang/String" && typeof (String.prototype as any)[mangled] === "function");
+    // an interface the framework only marks (its methods live on the implementations) answers for
+    // what the app's own bytecode calls on it; the receiver dispatches at call time as always
+    const have = isStatic ? typeof i.ctor[mangled] === "function" : typeof i.ctor.prototype?.[mangled] === "function" || (i.name === "java/lang/String" && typeof (String.prototype as any)[mangled] === "function")
+      || (!i.dex && !isStatic && (rt.methodRefs(i.name).has(name + sig) || !Object.keys(rt.natives.get(i.name)?.methods ?? {}).length));
     if (!have) { pend(cpu, throwable("java/lang/NoSuchMethodError", `${i.name}.${name}${sig}`)); jniMissing.add(`${isStatic ? "static " : ""}${i.name}.${name}${sig}`); return 0; }
-    const { params, ret } = parseMethodDesc(sig);
-    methods.push({ info: i, name, desc: sig, mangled, isStatic, params, ret });
-    return methods.length - 1;
+    return methodId(i, name, sig, isStatic);
   };
   def(33, "GetMethodID", getMethodID(false));
   def(113, "GetStaticMethodID", getMethodID(true));

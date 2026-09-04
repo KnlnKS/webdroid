@@ -13,7 +13,7 @@
 import { Arsc } from "./arsc";
 import { centralDir, entryBytes } from "../jvm/natives/jzip";
 import { rt, JObj } from "../jvm/runtime";
-import { dexesIn } from "../jvm/dex";
+import { dexesIn, type DexFile } from "../jvm/dex";
 import { mangleStaticField } from "../jvm/abi";
 import { setFramework } from "./res";
 import { needsFramework } from "../jvm/provenance";
@@ -34,6 +34,20 @@ export function loadFrameworkDex(): Promise<void> {
     for (const name of [...dir.keys()].filter((n) => /^classes\d*\.dex$/.test(n)).sort()) {
       for (const d of dexesIn(entryBytes(jar, dir.get(name)!), `framework:${name}`)) rt.loadDex(d);
     }
+  })();
+}
+
+/** AOSP's declarations without running any of it: the dexes of framework.jar, parsed but never
+ *  loaded into the runtime, for what a framework interface declares (a reflect.Proxy over an
+ *  interface the hand-written framework only marks needs the method list and its owner) */
+let decls: Promise<DexFile[]> | null = null;
+export function frameworkDecls(): Promise<DexFile[]> {
+  return decls ??= (async () => {
+    const res = await fetch("/vendor/aosp/framework.jar");
+    if (!res.ok) return [];
+    const jar = new Uint8Array(await res.arrayBuffer());
+    const dir = centralDir(jar);
+    return [...dir.keys()].filter((n) => /^classes\d*\.dex$/.test(n)).sort().flatMap((name) => dexesIn(entryBytes(jar, dir.get(name)!), `framework:${name}`));
   })();
 }
 
