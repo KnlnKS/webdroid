@@ -2,7 +2,7 @@
 // that fail honestly. Struct layouts live in LAYOUT. stdio is in stdio.ts, printf/scanf in printf.ts.
 
 import { mem, NativeFault } from "./mem";
-import { hostLib, hostData, NORET, VaList, type HostFn, fbits, bitsf, dbits, bitsd } from "./host";
+import { hostLib, hostData, NORET, VaList, type HostFn, fbits, bitsf, dbits, bitsd, PTR } from "./host";
 import { E } from "./abi";
 import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
@@ -187,9 +187,15 @@ export function libcInit(): void {
     sched_yield: () => 0,
     sysconf: (_c, a) => { const n = a.i(); return n === 0x27 || n === 0x60 || n === 0x61 ? 4 : n === 0x1e ? 4096 : n === 0x55 ? 65536 : -1; }, // _SC_NPROCESSORS_*, PAGESIZE, PHYS_PAGES
     getpagesize: () => 4096,
+    // AT_HWCAP and friends: this CPU advertises no optional feature bits, which is true and is
+    // also what steers a library away from the paths the emitter has not written.
+    getauxval: (_c, a) => { const t = a.i(); return t === 6 ? 4096 : 0; },   // AT_PAGESZ, else none
+    // an unset system property: zero length written, zero returned, as bionic does
+    __system_property_get: (_c, a) => { a.p(); mem.st8(a.p(), 0); return 0; },
+    __system_property_find: () => 0,
     uname: (_c, a) => {
       const p = a.p();
-      const f = ["Linux", "localhost", "3.10.0", "#1 SMP PREEMPT", "armv7l", "localdomain"];
+      const f = ["Linux", "localhost", "3.10.0", "#1 SMP PREEMPT", PTR === 8 ? "aarch64" : "armv7l", "localdomain"];
       for (let i = 0; i < f.length; i++) mem.putCstr(p + i * LAYOUT.UTSNAME_FIELD, f[i], LAYOUT.UTSNAME_FIELD);
       return 0;
     },
