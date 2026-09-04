@@ -21,6 +21,21 @@ const DENSITY_DEFAULT = 160;
 export const SCREEN_KEY = "wd:screen";
 
 export type Screen = { width: number; height: number; densityDpi: number };
+export type DeviceOrientation = 1 | 2; // Configuration.ORIENTATION_PORTRAIT / LANDSCAPE
+
+/** Fixed ActivityInfo requests. Sensor/user/unspecified requests keep the display as it is. */
+export function orientationForRequest(request: number): DeviceOrientation | null {
+  if (request === 0 || request === 6 || request === 8 || request === 11) return 2;
+  if (request === 1 || request === 7 || request === 9 || request === 12) return 1;
+  return null;
+}
+
+/** Rotate a configured framebuffer while preserving its exact two dimensions and density. */
+export function orientScreen(screen: Screen, orientation: DeviceOrientation): Screen {
+  const landscape = screen.width > screen.height;
+  if ((orientation === 2) === landscape || screen.width === screen.height) return screen;
+  return { width: screen.height, height: screen.width, densityDpi: screen.densityDpi };
+}
 
 /**
  * The built-in screen, used when nothing overrides it: a current phone. 480dpi is what makes
@@ -98,6 +113,8 @@ export const device = {
   /** framebuffer px one wheel/keyboard scroll unit moves */
   get scrollUnit(): number { return this.scrollUnitDp * this.density; },
   get widthDp(): number { return Math.round(this.width / this.density); },
+  get orientation(): DeviceOrientation { return this.width > this.height ? 2 : 1; },
+  get smallestWidthDp(): number { return Math.round(Math.min(this.width, this.height) / this.density); },
   /** the activity's height in dp — the status bar is not part of it */
   get heightDp(): number { return Math.round((this.height - this.statusBar) / this.density); },
   /** full display height in dp, status bar included (resource qualifiers use this) */
@@ -107,3 +124,12 @@ export const device = {
    *  here would not survive a non-integer density. */
   dp(n: number): number { return n * this.density; },
 };
+
+/** Apply an Activity orientation to the live display. Returns whether its geometry changed. */
+export function setDeviceOrientation(orientation: DeviceOrientation): boolean {
+  const next = orientScreen(device, orientation);
+  if (next === device) return false;
+  device.width = next.width;
+  device.height = next.height;
+  return true;
+}

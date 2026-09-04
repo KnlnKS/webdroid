@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { device } from "../shell/config";
-import { Resources, setResourceNight, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV } from "./res";
+import { Resources, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
 import { JTypedValue } from "./os";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
@@ -26,9 +26,9 @@ export function mkJResources(host: Resources): JResources {
   return r;
 }
 class JConfiguration extends JObj {
-  orientation = 1;
+  orientation = device.orientation;
   screenWidthDp = device.widthDp; screenHeightDp = device.heightDp;
-  smallestScreenWidthDp = device.widthDp;
+  smallestScreenWidthDp = device.smallestWidthDp;
   densityDpi = device.densityDpi;
   fontScale = 1;
   // UI_MODE_TYPE_NORMAL | the device's night bit
@@ -108,6 +108,14 @@ function applyDeviceConfiguration(c: JConfiguration): void {
   if (isNight() !== was) setResourceNight(isNight());
 }
 export const deviceConfiguration = (): JConfiguration => theConfig;
+/** Keep Configuration and resource qualifiers in step with the shell framebuffer. */
+export function syncDeviceOrientation(): void {
+  theConfig.orientation = device.orientation;
+  theConfig.screenWidthDp = device.widthDp;
+  theConfig.screenHeightDp = device.heightDp;
+  theConfig.smallestScreenWidthDp = device.smallestWidthDp;
+  setResourceOrientation(theConfig.orientation, theConfig.screenWidthDp, device.screenHeightDp, theConfig.smallestScreenWidthDp);
+}
 /** The device's own night setting changed. Returns whether anything moved. */
 export function setDeviceNight(night: boolean): boolean {
   if (night === isNight()) return false;

@@ -9,7 +9,7 @@ import { newObj, vcall, linkInit } from "./jvm/natives/jlang";
 import { mangleMethod } from "./jvm/abi";
 import { loadFramework } from "./android/framework";
 import { unreadAttrs } from "./android/res";
-import { bootApk, tick, dispatchPointer, pressBack, currentApp, contentTop, SCREEN_W, SCREEN_H } from "./shell/device";
+import { bootApk, tick, dispatchPointer, pressBack, currentApp, contentTop, SCREEN_W, SCREEN_H, setDisplayChangeHandler } from "./shell/device";
 import { attachInput, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { perf, perfReset } from "./perf";
@@ -105,6 +105,11 @@ function fit() {
 }
 fit();
 window.addEventListener("resize", fit);
+setDisplayChangeHandler(() => {
+  canvas.width = SCREEN_W;
+  canvas.height = SCREEN_H;
+  fit();
+});
 
 // ── the screen setting. Applying reloads: the profile is read once at module init, before
 // anything that derives from it, so a reload is correct by construction and costs the frame

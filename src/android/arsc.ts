@@ -41,7 +41,9 @@ export class Arsc {
   pkgId = 0x7f;
   pkgName = "";
   types = new Map<number, TypeChunk[]>();   // typeId → chunks (one per config)
-  device = { density: dev.densityDpi, sdk: dev.sdk, night: dev.night ? 1 : 0, wdp: dev.widthDp, hdp: dev.screenHeightDp, swdp: dev.widthDp, lang: dev.lang, size: sizeClass(dev.widthDp), dir: 0x40, uiType: 1 };
+  device = { density: dev.densityDpi, sdk: dev.sdk, orientation: dev.orientation, night: dev.night ? 1 : 0,
+    wdp: dev.widthDp, hdp: dev.screenHeightDp, swdp: dev.smallestWidthDp, lang: dev.lang,
+    size: sizeClass(dev.smallestWidthDp), dir: 0x40, uiType: 1 };
   private byType = new Map<string, Map<string, number>>();
 
   constructor(bytes: Uint8Array, readonly files: Files = () => null) {
@@ -111,7 +113,8 @@ export class Arsc {
       cfg.hdp = view.getUint16(c + 34, true);
     }
     // A config the device can never select costs only memory: an apk carries 75+ locales.
-    if (this.skip(cfg)) return;
+    // Keep both display axes, though: Activity orientation can change after this table is parsed.
+    if (this.skipAtParse(cfg)) return;
     const chunk: TypeChunk = { id, name: typeNames.get(id - 1), config: cfg, entries: new Map() };
     const offBase = base + headerSize;
     const sparse = (flags & 0x01) !== 0;
@@ -200,17 +203,26 @@ export class Arsc {
     return best;
   }
 
-  /** a config this device can never select. Night is excluded: setResourceNight flips it. */
-  private skip(c: Config): boolean {
+  /** Static parse-time rejection. Night and display axes can both change while the table lives. */
+  private skipAtParse(c: Config): boolean {
     const d = this.device;
-    return c.sdk > d.sdk || (!!c.lang && c.lang !== d.lang) || c.orientation === 2
+    const fitsEitherAxis = (c.wdp <= d.wdp && c.hdp <= d.hdp) || (c.wdp <= d.hdp && c.hdp <= d.wdp);
+    return c.sdk > d.sdk || (!!c.lang && c.lang !== d.lang)
+      || c.swdp > d.swdp || !fitsEitherAxis
+      || c.size > d.size || (c.dir !== 0 && c.dir !== d.dir) || (c.uiType !== 0 && c.uiType !== d.uiType);
+  }
+
+  /** Match the current Configuration. Unlike parse-time viability, the current axes are exact. */
+  private skipCurrent(c: Config): boolean {
+    const d = this.device;
+    return c.sdk > d.sdk || (!!c.lang && c.lang !== d.lang) || (!!c.orientation && c.orientation !== d.orientation)
       || c.swdp > d.swdp || c.wdp > d.wdp || c.hdp > d.hdp
       || c.size > d.size || (c.dir !== 0 && c.dir !== d.dir) || (c.uiType !== 0 && c.uiType !== d.uiType);
   }
 
   private configScore(c: Config): number {
     const d = this.device;
-    if (this.skip(c)) return -1;
+    if (this.skipCurrent(c)) return -1;
     if (c.night !== 0 && c.night !== (d.night ? 1 : -1)) return -1;
     let s = 0;
     if (c.lang) s += 1 << 20;
@@ -218,6 +230,7 @@ export class Arsc {
     if (c.swdp) s += (1 << 14) + c.swdp;
     if (c.wdp || c.hdp) s += (1 << 13) + c.wdp;
     if (c.size) s += 1 << 12;
+    if (c.orientation) s += 1 << 12;
     if (c.night !== 0) s += 1 << 10;
     if (c.uiType) s += 1 << 9;
     if (c.density) {

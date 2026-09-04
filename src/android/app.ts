@@ -45,6 +45,7 @@ export interface AppHost {
   launch: (component: string, intent: JIntent | null) => Promise<void>;
   finishActivity: (activity: JActivity) => void;
   recreateActivity: (activity: JActivity) => void;
+  setRequestedOrientation: (activity: JActivity, orientation: number) => void;
   currentActivity: () => JActivity | null;
   invalidateOptionsMenu: (activity: JActivity) => void;
 }
@@ -1061,6 +1062,10 @@ export function manifestActivityTheme(cls: string): number {
   const node = manifestActivities.get(cls.replace(/\./g, "/"));
   return (node && attr(node, "theme")?.data) ?? 0;
 }
+export function manifestActivityOrientation(cls: string): number {
+  const node = manifestActivities.get(cls.replace(/\./g, "/"));
+  return (node && attr(node, "screenOrientation")?.data) ?? -1;
+}
 /** ActivityInfo.CONFIG_UI_MODE: an activity that declares it handles a day/night change is told
  *  about it; one that does not is relaunched, which is the whole of AppCompat's day/night switch. */
 export const CONFIG_UI_MODE = 0x0200;
@@ -1077,6 +1082,7 @@ function mkActivityInfo(cls: string): JActivityInfo {
   a.packageName = appHost?.pkg ?? "";
   a.theme = (node && attr(node, "theme")?.data) ?? appHost?.themeResId ?? 0;
   a.configChanges = (node && attr(node, "configChanges")?.data) ?? 0;
+  a.screenOrientation = (node && attr(node, "screenOrientation")?.data) ?? -1;
   a.exported = node && attr(node, "exported")?.data ? 1 : 0;
   a.permission = node ? attrStr(node, "permission") : null;
   a.parentActivityName = node ? attrStr(node, "parentActivityName") : null;
@@ -1526,6 +1532,7 @@ export class JActivity extends JContextWrapper {
   // the ViewModelStore alive; the retained object is handed to the replacement instance.
   changingConfigurations = false;
   lastNonConfig: unknown = null;
+  requestedOrientation = -1;
 }
 /** Fire an ActivityLifecycleCallbacks event (both Pre/Post + the plain variant, API 29+ shapes).
  *  androidx ReportFragment.LifecycleCallbacks uses the Post* variants to advance the activity Lifecycle. */
@@ -1758,8 +1765,11 @@ const activityMethods: NonNullable<NativeSpec["methods"]> = {
     this.resultData = d;
   },
   "requestWindowFeature(I)Z": function (this: JActivity, f: number) { this.window.features.add(f); return 1; },
-  "setRequestedOrientation(I)V": () => {},
-  "getRequestedOrientation()I": () => 1,
+  "setRequestedOrientation(I)V": function (this: JActivity, orientation: number) {
+    this.requestedOrientation = orientation;
+    this.$host.setRequestedOrientation(this, orientation);
+  },
+  "getRequestedOrientation()I": function (this: JActivity) { return this.requestedOrientation; },
   "getComponentName()Landroid/content/ComponentName;": function (this: JActivity) {
     return mkComponentName(this.$host.pkg, jclsNameOf(this));
   },

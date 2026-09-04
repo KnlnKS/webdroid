@@ -8,10 +8,10 @@ import { openInstall, type Install } from "./install";
 import { vcall, curThread, mainThread, setCurThread, newObj } from "../jvm/natives/jlang";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadFrameworkDex } from "../android/framework";
-import { parseAXML, attrStr, type XmlNode } from "../android/axml";
+import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
-import { mkJResources, setDeviceNight, deviceConfiguration } from "../android/resnative";
-import { setAppHost, setManifest, type AppHost, JIntent, ensureDecor, JActivity, JMenu, pushMenuToBar, JContext, fireActivityLifecycle, manifestActivityTheme, startingWindow, APPEARANCE_LIGHT_STATUS_BARS, deliverActivityResult, activityHandlesConfig, CONFIG_UI_MODE } from "../android/app";
+import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguration } from "../android/resnative";
+import { setAppHost, setManifest, type AppHost, JIntent, ensureDecor, JActivity, JMenu, pushMenuToBar, JContext, fireActivityLifecycle, manifestActivityTheme, manifestActivityOrientation, startingWindow, APPEARANCE_LIGHT_STATUS_BARS, deliverActivityResult, activityHandlesConfig, CONFIG_UI_MODE } from "../android/app";
 import { reportUncaught, JBundle } from "../android/os";
 import { onMain, inMainJob } from "../android/mainloop";
 import {
@@ -24,10 +24,44 @@ import { overlays, drawToasts, dismissOverlay } from "../android/popup";
 import { webLayerSweep } from "../android/webkit";
 import { mangleMethod } from "../jvm/abi";
 import { perf } from "../perf";
-import { device } from "./config";
+import { device, orientationForRequest, setDeviceOrientation } from "./config";
 import { restoreRoots } from "./hostfs";
 
-export const SCREEN_W = device.width, SCREEN_H = device.height, STATUS_H = device.statusBar;
+export let SCREEN_W = device.width, SCREEN_H = device.height;
+export const STATUS_H = device.statusBar;
+let displayChanged = () => {};
+export function setDisplayChangeHandler(handler: () => void): void { displayChanged = handler; }
+
+/** Apply one of ActivityInfo's fixed orientations; all other requests retain the current axes. */
+function applyOrientationRequest(request: number): boolean {
+  const orientation = orientationForRequest(request);
+  if (!orientation || !setDeviceOrientation(orientation)) return false;
+  SCREEN_W = device.width;
+  SCREEN_H = device.height;
+  syncDeviceOrientation();
+  displayChanged();
+  return true;
+}
+
+/** The launch component's declaration, resolving an alias to its target Activity when needed. */
+function launcherOrientation(root: XmlNode): number {
+  const pkg = attrStr(root, "package") ?? "";
+  const app = root.children.find((c) => c.name === "application");
+  const nameOf = (node: XmlNode) => {
+    const name = attrStr(node, "name") ?? "";
+    return name.startsWith(".") ? pkg + name : name;
+  };
+  const launcher = app?.children.find((node) => (node.name === "activity" || node.name === "activity-alias") && node.children.some((filter) =>
+    filter.name === "intent-filter" && filter.children.some((x) => x.name === "category" && attrStr(x, "name") === "android.intent.category.LAUNCHER")));
+  if (!launcher) return -1;
+  const own = attr(launcher, "screenOrientation");
+  if (own) return own.data;
+  const target = attrStr(launcher, "targetActivity");
+  if (!target) return -1;
+  const full = target.startsWith(".") ? pkg + target : target;
+  const targetNode = app?.children.find((node) => node.name === "activity" && nameOf(node) === full);
+  return (targetNode && attr(targetNode, "screenOrientation")?.data) ?? -1;
+}
 
 /** `?sync=1` opts into the sync tier. Off by default: see "The sync tier is worth 24x and we
  *  cannot have it yet" in AGENTS.md — the analysis is sound, our natives are not. */
@@ -58,10 +92,13 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   // The directories a previous session picked, awaited: an app reads its persisted storage URI
   // while it is starting, and a tree that does not resolve *yet* is one that does not exist as
   // far as it is concerned — for the whole session, since it caches the answer.
-  const [fwPkg] = await Promise.all([loadFramework(), restoreRoots()]);
   onStatus("unpacking apk…");
   const install = input instanceof Uint8Array ? openInstall(input) : input;
   const zip = install.zip;
+  // Orientation precedes resource construction: both app and framework tables must select the
+  // same -land/-port entries the Activity will see through Configuration.
+  applyOrientationRequest(launcherOrientation(parseAXML(zip["AndroidManifest.xml"])));
+  const [fwPkg] = await Promise.all([loadFramework(), restoreRoots()]);
   rt.classpath = zip;
   // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its
   // own .so with ZipFile(ApplicationInfo.sourceDir) has to find lib/, not a list of apks.
@@ -162,6 +199,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     // messages, so it queues as a main job rather than running detached alongside the caller
     finishActivity: (a) => { void onMain(() => finishActivity(a)); },
     recreateActivity: (a) => { recreateActivity(a); },
+    setRequestedOrientation: (a, orientation) => { changeActivityOrientation(a, orientation); },
     currentActivity: () => booted?.stack[booted.stack.length - 1] ?? null,
     invalidateOptionsMenu: (a) => { void buildOptionsMenu(a); },
   };
@@ -226,6 +264,8 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
   if (!booted) return;
   const host = booted.host;
   const cls = aliasTargets.get(component) ?? component;
+  const requestedOrientation = relaunch?.requestedOrientation ?? manifestActivityOrientation(cls);
+  applyOrientationRequest(requestedOrientation);
   // AOSP puts a window up from the package's own theme before the process has run a line, and
   // it stands until the activity's decor draws. That is why a launch that dies on the way up
   // still leaves a frame on a device, and it is the frame this shows.
@@ -249,6 +289,7 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
     return;
   }
   act.$host = host;
+  act.requestedOrientation = requestedOrientation;
   // AOSP applies the manifest's android:theme before onCreate, so an app's own setTheme layers
   // on top of it rather than replacing it
   const actTheme = manifestActivityTheme(cls);
@@ -293,6 +334,17 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
   }
 }
 
+const CONFIG_ORIENTATION_SIZE = 0x0080 | 0x0400;
+function changeActivityOrientation(act: JActivity, request: number): void {
+  if (!applyOrientationRequest(request)) return;
+  uiState.needsLayout = true;
+  uiState.needsDraw = true;
+  uiState.needsInsets = true;
+  if (activityHandlesConfig(act, CONFIG_ORIENTATION_SIZE)) {
+    void onMain(() => vcall(act, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", deviceConfiguration())).catch(reportUncaught);
+  } else recreateActivity(act);
+}
+
 /**
  * The device's own light/dark setting changed under a running app. AOSP delivers that the way it
  * delivers any configuration change: the top activity is told if it declared uiMode in its
@@ -314,7 +366,7 @@ function deviceNightChanged(night: boolean): void {
 globalThis.matchMedia?.("(prefers-color-scheme: dark)")
   .addEventListener("change", (e) => deviceNightChanged(e.matches));
 
-interface Relaunch { state: JBundle | null; nonConfig: unknown }
+interface Relaunch { state: JBundle | null; nonConfig: unknown; requestedOrientation: number }
 
 /**
  * A configuration change an activity did not declare in its manifest relaunches it: AOSP saves
@@ -350,7 +402,7 @@ export function recreateActivity(act: JActivity): void {
         await fireActivityLifecycle(act, "Destroyed");
       } catch (e) { reportUncaught(e); }
       booted.stack.splice(i, 1);
-      await launchActivity0(cls, act.intent, { state, nonConfig });
+      await launchActivity0(cls, act.intent, { state, nonConfig, requestedOrientation: act.requestedOrientation });
     } catch (e) { reportUncaught(e); }
     finally { setCurThread(prev); }
   }), 0);
@@ -396,6 +448,7 @@ async function finishActivity(act: JActivity) {
   await windowFocus(act, false);
   const top = booted.stack[booted.stack.length - 1];
   if (top) {
+    applyOrientationRequest(top.requestedOrientation);
     await resumeActivity(top);
     await windowFocus(top, true);
     void buildOptionsMenu(top);

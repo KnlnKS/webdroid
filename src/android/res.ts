@@ -95,6 +95,18 @@ export function setResourceNight(night: boolean): void {
   }
 }
 
+/** Re-resolve orientation and size-qualified entries in every live resource table. */
+export function setResourceOrientation(orientation: number, wdp: number, hdp: number, swdp: number): void {
+  configGen++;
+  selCache.clear();
+  const update = (a: Arsc) => Object.assign(a.device, { orientation, wdp, hdp, swdp });
+  for (const r of allResources) {
+    r.bagCache.clear();
+    if (r.arsc) update(r.arsc);
+  }
+  if (fwPkg) update(fwPkg);
+}
+
 /**
  * A theme attribute by name, in either package. A support library re-declares framework attr
  * names in the app's own package -- AppCompat's windowActionBar is not android:windowActionBar --

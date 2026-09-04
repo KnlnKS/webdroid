@@ -34,14 +34,14 @@ rt.register({
   sup: "java/lang/Exception",
 });
 export class JActivityInfo extends JObj {
-  theme = 0; name = ""; packageName = ""; configChanges = 0; exported = 0;
+  theme = 0; name = ""; packageName = ""; configChanges = 0; screenOrientation = -1; exported = 0;
   permission: string | null = null;
   parentActivityName: string | null = null; metaData: JBundle | null = null;
 }
 rt.register({
   name: "android/content/pm/ActivityInfo", ctor: JActivityInfo, ifaces: ["android/os/Parcelable"],
   fields: {
-    theme: "theme", name: "name", packageName: "packageName", configChanges: "configChanges",
+    theme: "theme", name: "name", packageName: "packageName", configChanges: "configChanges", screenOrientation: "screenOrientation",
     exported: "exported", permission: "permission",
     parentActivityName: "parentActivityName", metaData: "metaData",
   },
