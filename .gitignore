@@ -7,3 +7,4 @@ tests/e2e/report/
 .worktrees/
 vendor/aosp
 tests/e2e/perf-rollup.json
+scripts/simd-oracle/build/
