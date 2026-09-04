@@ -14,7 +14,7 @@
 
 import { mem } from "./mem";
 import { PAGE_SIZE, PAGE_SHIFT } from "./abi";
-import { type Ins, type Fl, C, ALL, COND, COND_READS, NZ, ADDF, SUBF, hex, assemble, hoistRegs, inlineMem, selfLoop, retK } from "./flags";
+import { type Ins, type Fl, C, ALL, COND, COND_READS, NZ, ADDF, ADCF, SUBF, hex, assemble, hoistRegs, inlineMem, selfLoop, retK } from "./flags";
 import { SP, sp, sph, zr, zrh, setX, setW, setSP, int32, sx, shl64, shr64, ror64, shiftOf, VIEWS, wb64, txA, txAx } from "./a64regs";
 import { emitSimd, emitSimdMem } from "./a64simd";
 
@@ -33,6 +33,11 @@ const ADD64: Fl = {
   ...NZ64,
   c: "c.c=((ah>>>0)+(th>>>0)+(((a>>>0)+(t>>>0))>4294967295?1:0))>4294967295?1:0;",
   v: "c.v=((ah^vh)&(th^vh))>>>31;",
+};
+const ADC64: Fl = {
+  ...NZ64,
+  c: "c.c=((ah>>>0)+(th>>>0)+(((a>>>0)+(t>>>0)+c.c)>4294967295?1:0))>4294967295?1:0;",
+  v: ADD64.v,
 };
 const SUB64: Fl = {
   ...NZ64,
@@ -452,10 +457,10 @@ function emit(pc: number, w: number, out: Ins[], k: number, faultPc = String(pc)
         const core = sub
           ? `t=~${zr(rm)};th=~${zrh(rm)};a=${zr(rn)};ah=${zrh(rn)};v=(a+t+c.c)|0;vh=(ah+th+(((a>>>0)+(t>>>0)+c.c)>4294967295?1:0))|0;`
           : `t=${zr(rm)};th=${zrh(rm)};a=${zr(rn)};ah=${zrh(rn)};v=(a+t+c.c)|0;vh=(ah+th+(((a>>>0)+(t>>>0)+c.c)>4294967295?1:0))|0;`;
-        push(core + setX(rd, "v", "vh") + "\0F", S ? ADD64 : null, C, S ? ALL : 0);
+        push(core + setX(rd, "v", "vh") + "\0F", S ? ADC64 : null, C, S ? ALL : 0);
       } else {
         const core = `a=${zr(rn)};t=${sub ? `~${zr(rm)}` : zr(rm)};v=(a+t+c.c)|0;`;
-        push(core + setW(rd, "v") + "\0F", S ? ADDF : null, C, S ? ALL : 0);
+        push(core + setW(rd, "v") + "\0F", S ? ADCF : null, C, S ? ALL : 0);
       }
       return false;
     }
