@@ -227,6 +227,26 @@ export function entryBytes(z: Uint8Array, e: ZEntry): Uint8Array {
   if (e.method === 8) return inflateSync(raw);
   throw rt.mkThrowable("java/util/zip/ZipException", "Invalid compression method " + e.method + ": " + e.name);
 }
+/** A zip as the file tree the rest of the boot reads, materialised one entry at a time: a
+ *  stored entry is a view into bytes we already hold and costs nothing, a deflated one is
+ *  inflated on first read and then replaces its own accessor, so a second read is a plain
+ *  property. `Object.keys` stays free; `Object.entries` inflates the whole tree, which is why
+ *  nothing on the boot path uses it. `rename` returns null to drop an entry. */
+export function zipTree(z: Uint8Array, into: Record<string, Uint8Array> = {}, rename?: (n: string) => string | null): Record<string, Uint8Array> {
+  for (const e of centralDir(z).values()) {
+    if (e.name.endsWith("/")) continue;
+    const name = rename ? rename(e.name) : e.name;
+    if (name === null || Object.prototype.hasOwnProperty.call(into, name)) continue;
+    const pin = (value: Uint8Array) => { Object.defineProperty(into, name, { value, writable: true, enumerable: true, configurable: true }); return value; };
+    Object.defineProperty(into, name, {
+      enumerable: true, configurable: true,
+      get: () => pin(entryBytes(z, e)),
+      set: pin,
+    });
+  }
+  return into;
+}
+
 class JZipEntry extends JObj { e: ZEntry = UNKNOWN; }
 function mkZipEntry(e: ZEntry): JZipEntry {
   const z = new (rt.link("java/util/zip/ZipEntry").ctor)() as JZipEntry;
@@ -258,7 +278,7 @@ function openZip(this: JZipFile, path: string) {
   if (bytes) { this.entries = centralDir(bytes); this.data = (e) => entryBytes(bytes, e); return; }
   // the app's own package is already unpacked; what only the central directory knows stays -1
   if (this.name === SOURCE_DIR) {
-    for (const [name, b] of Object.entries(rt.classpath)) this.entries.set(name, { ...UNKNOWN, name, size: b.length });
+    for (const name of Object.keys(rt.classpath)) this.entries.set(name, { ...UNKNOWN, name });
     this.data = (e) => rt.classpath[e.name];
     return;
   }

@@ -1,10 +1,10 @@
 // Device shell: APK boot, activity stack, frame loop, touch routing.
 
-import { unzipSync } from "fflate";
 import { dexesIn } from "../jvm/dex";
 import { rt } from "../jvm/runtime";
 import { analyseProgram } from "../jvm/analyse";
 import { vfs } from "../jvm/natives/jio";
+import { zipTree } from "../jvm/natives/jzip";
 import { vcall, curThread, mainThread, setCurThread, newObj } from "../jvm/natives/jlang";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadFrameworkDex } from "../android/framework";
@@ -55,22 +55,22 @@ export function contentTop(): number {
  *  apk: a base and its config/feature splits. Merge them into the one tree the rest of the
  *  boot expects — the base wins every conflict, exactly as the base's dex is first on a
  *  device's class path, and each split's dex keeps a distinct name so both survive. */
-function openInstall(outer: Record<string, Uint8Array>): Record<string, Uint8Array> {
+function openInstall(bytes: Uint8Array): Record<string, Uint8Array> {
+  const outer = zipTree(bytes);
   if (outer["AndroidManifest.xml"]) return outer;
   const apks = Object.keys(outer).filter((n) => n.endsWith(".apk"));
   if (!apks.length) throw new Error("no AndroidManifest.xml and no apks inside: not an apk or a split install");
-  const opened = apks.map((n) => [n, unzipSync(outer[n])] as const);
-  const base = opened.find(([, z]) => z["AndroidManifest.xml"] && !attrStr(parseAXML(z["AndroidManifest.xml"]), "split"));
+  const opened = apks.map((n) => [n, outer[n]] as const).map(([n, b]) => [n, b, zipTree(b)] as const);
+  const base = opened.find(([, , z]) => z["AndroidManifest.xml"] && !attrStr(parseAXML(z["AndroidManifest.xml"]), "split"));
   if (!base) throw new Error(`split install has no base apk among ${apks.join(", ")}`);
-  const merged: Record<string, Uint8Array> = { ...base[1] };
+  const merged = base[2];
   let extra = 0;
-  for (const [name, z] of opened) {
-    if (z === base[1]) continue;
-    for (const [path, data] of Object.entries(z)) {
-      if (path === "AndroidManifest.xml" || path === "resources.arsc" || path.startsWith("META-INF/")) continue;
-      // a split's own classes.dex would collide with the base's, and both have to load
-      merged[/^classes\d*\.dex$/.test(path) ? `classes${1000 + extra++}.dex` : path] ??= data;
-    }
+  for (const [name, b, z] of opened) {
+    if (z === merged) continue;
+    zipTree(b, merged, (path) =>
+      path === "AndroidManifest.xml" || path === "resources.arsc" || path.startsWith("META-INF/") ? null
+        // a split's own classes.dex would collide with the base's, and both have to load
+        : /^classes\d*\.dex$/.test(path) ? `classes${1000 + extra++}.dex` : path);
     console.log("[webdroid] split", name, Object.keys(z).length, "entries");
   }
   return merged;
@@ -85,14 +85,14 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
   // far as it is concerned — for the whole session, since it caches the answer.
   const [fwPkg] = await Promise.all([loadFramework(), restoreRoots()]);
   onStatus("unpacking apk…");
-  const zip = openInstall(unzipSync(bytes));
+  const zip = openInstall(bytes);
   rt.classpath = zip;
   vfs.write("/data/app/base.apk", bytes);
   onStatus("loading dex…");
   // The apk goes in first: loadDex is first-wins by name, so an app shipping its own copy of a
   // framework class keeps it, as on a device where the app's dex is ahead on the class path.
-  for (const [name, data] of Object.entries(zip)) {
-    if (/^classes\d*\.dex$/.test(name)) for (const d of dexesIn(data, name)) rt.loadDex(d);
+  for (const name of Object.keys(zip)) {
+    if (/^classes\d*\.dex$/.test(name)) for (const d of dexesIn(zip[name], name)) rt.loadDex(d);
   }
   await loadFrameworkDex();
   // Natives materialize AFTER every dex is indexed, never before: a native whose super or
@@ -106,8 +106,8 @@ export async function bootApk(bytes: Uint8Array, onStatus: (s: string) => void, 
   if (SYNC_TIER) {
     onStatus("analysing…");
     const services: Record<string, string> = {};
-    for (const [n, b] of Object.entries(zip)) {
-      if (n.startsWith("META-INF/services/")) services[n] = new TextDecoder().decode(b);
+    for (const n of Object.keys(zip)) {
+      if (n.startsWith("META-INF/services/")) services[n] = new TextDecoder().decode(zip[n]);
     }
     const a = analyseProgram(zip["AndroidManifest.xml"], services);
     if (a) console.log(`[webdroid] ${a.reachable} reachable methods, ${a.sync} cannot suspend, in ${a.ms.toFixed(0)}ms`);
