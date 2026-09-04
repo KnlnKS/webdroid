@@ -43,28 +43,29 @@ function holds(c: Cpu, cc: number): boolean {
 
 /** run from r[32] to the first control transfer (or MAX instructions) and return the next pc */
 export function coldRun(c: Cpu, r: Int32Array, M: typeof Mem, H: Int32Array): number {
-  let pc = r[32] >>> 0;
+  // Keep high addresses signed while walking; memory and look() normalize at their boundaries.
+  let pc = r[32] | 0;
   for (let n = 0; n < 256; n++) {
     const w = M.ld32(pc);
     c.ic++; coldStats.instr++;
     if (is(w, 0x7c000000, 0x14000000)) {                                      // B / BL
       if (w < 0) { r[30] = (pc + 4) | 0; H[30] = 0; }
-      return (pc + sx(w & 0x3ffffff, 26) * 4) >>> 0;
+      return (pc + sx(w & 0x3ffffff, 26) * 4) | 0;
     }
     if (is(w, 0xff000010, 0x54000000)) {                                      // B.cond
-      if (holds(c, w & 15)) return (pc + sx((w >>> 5) & 0x7ffff, 19) * 4) >>> 0;
-      pc = (pc + 4) >>> 0; continue;
+      if (holds(c, w & 15)) return (pc + sx((w >>> 5) & 0x7ffff, 19) * 4) | 0;
+      pc = (pc + 4) | 0; continue;
     }
     if (is(w, 0x7e000000, 0x34000000)) {                                      // CBZ / CBNZ
       const rt = w & 31, zero = rt === 31 ? true : w < 0 ? (r[rt] | H[rt]) === 0 : r[rt] === 0;
-      if (zero !== !!((w >>> 24) & 1)) return (pc + sx((w >>> 5) & 0x7ffff, 19) * 4) >>> 0;
-      pc = (pc + 4) >>> 0; continue;
+      if (zero !== !!((w >>> 24) & 1)) return (pc + sx((w >>> 5) & 0x7ffff, 19) * 4) | 0;
+      pc = (pc + 4) | 0; continue;
     }
     if (is(w, 0x7e000000, 0x36000000)) {                                      // TBZ / TBNZ
       const rt = w & 31, bit = ((w >>> 31) << 5) | ((w >>> 19) & 31);
       const set = rt === 31 ? 0 : bit < 32 ? (r[rt] >>> bit) & 1 : (H[rt] >>> (bit - 32)) & 1;
-      if (set === ((w >>> 24) & 1)) return (pc + sx((w >>> 5) & 0x3fff, 14) * 4) >>> 0;
-      pc = (pc + 4) >>> 0; continue;
+      if (set === ((w >>> 24) & 1)) return (pc + sx((w >>> 5) & 0x3fff, 14) * 4) | 0;
+      pc = (pc + 4) | 0; continue;
     }
     if (is(w, 0x1f000000, 0x10000000)) {                                      // ADR / ADRP
       const rd = w & 31, imm = (sx((w >>> 5) & 0x7ffff, 19) << 2) | ((w >>> 29) & 3);
@@ -72,26 +73,26 @@ export function coldRun(c: Cpu, r: Int32Array, M: typeof Mem, H: Int32Array): nu
         const v = w < 0 ? ((pc & ~0xfff) + imm * 4096) | 0 : (pc + imm) | 0;
         r[rd] = v; H[rd] = 0;
       }
-      pc = (pc + 4) >>> 0; continue;
+      pc = (pc + 4) | 0; continue;
     }
     if (is(w, 0x3b000000, 0x18000000)) {                                      // LDR (literal), PRFM (literal)
-      const rt = w & 31, opc = w >>> 30, a = (pc + sx((w >>> 5) & 0x7ffff, 19) * 4) >>> 0, I = c.si;
+      const rt = w & 31, opc = w >>> 30, a = (pc + sx((w >>> 5) & 0x7ffff, 19) * 4) | 0, I = c.si;
       if (w & 0x04000000) {                                                    // S / D / Q
         I[rt * 4] = M.ld32(a); I[rt * 4 + 1] = opc ? M.ld32(a + 4) : 0;
         I[rt * 4 + 2] = opc === 2 ? M.ld32(a + 8) : 0; I[rt * 4 + 3] = opc === 2 ? M.ld32(a + 12) : 0;
       } else if (opc !== 3 && rt !== 31) { r[rt] = M.ld32(a); H[rt] = opc === 1 ? M.ld32(a + 4) : opc === 2 ? r[rt] >> 31 : 0; }
-      pc = (pc + 4) >>> 0; continue;
+      pc = (pc + 4) | 0; continue;
     }
     if (is(w, 0xff9ffc1f, 0xd61f0000)) {                                      // BR / BLR / RET
-      const rn = (w >>> 5) & 31, kind = (w >>> 21) & 3, target = rn === 31 ? 0 : r[rn] >>> 0;
+      const rn = (w >>> 5) & 31, kind = (w >>> 21) & 3, target = rn === 31 ? 0 : r[rn] | 0;
       if (kind === 1) { r[30] = (pc + 4) | 0; H[30] = 0; }
       return target;
     }
-    if (is(w, 0xffe0001f, 0xd4000001)) { r[32] = (pc + 4) | 0; c.svc(); return r[32] >>> 0; }   // SVC
+    if (is(w, 0xffe0001f, 0xd4000001)) { r[32] = (pc + 4) | 0; c.svc(); return r[32] | 0; }   // SVC
     c.bpc = pc;                                                                // a fault names where
     const record = wordFn(w);
     record.fn(c, r, M, H, record.operands);
-    pc = (pc + 4) >>> 0;
+    pc = (pc + 4) | 0;
   }
   return pc;
 }

@@ -3,6 +3,7 @@ import { emitA64Word } from "./a64";
 import { blockStats, coldTier, setA64 } from "./cpu";
 import { run, runCold, RET, pattern } from "./a64.testkit";
 import { mem } from "./mem";
+import { RET_SENTINEL } from "./abi";
 
 beforeAll(() => setA64(true));
 afterAll(() => setA64(false));
@@ -35,7 +36,11 @@ describe("the cold tier agrees with the compiled tier", () => {
     const buf = pattern(), a = run(p.words, (c) => p.setup(c, buf)), sa = state(a), m1 = mem.u8.slice(buf + 0x800, buf + 0x900);
     for (let i = 0; i < 0x1000; i++) mem.u8[buf + i] = i & 0xff;
     const b = runCold(p.words, (c) => p.setup(c, buf)), sb = state(b), m2 = mem.u8.slice(buf + 0x800, buf + 0x900);
-    if (p.name === "control flow") { expect(a.r[0]).toBe(55); expect(a.r[4]).toBe(0x12345678); expect(a.r[2]).toBe(0); }
+    if (p.name === "control flow") {
+      expect(a.r[0]).toBe(55); expect(a.r[4]).toBe(0x12345678); expect(a.r[2]).toBe(0);
+      expect(b.r[3] >>> 0).toBeGreaterThan(0x80000000);             // ADR stayed in the high image
+      expect(b.r[32] >>> 0).toBe(RET_SENTINEL);                    // RET reached the low trampoline
+    }
     if (p.name === "register branches") expect(a.r[0]).toBe(9);
     if (p.name === "svc") expect(a.r[0]).toBe(4242);
     if (p.name === "branches read both register halves") expect([a.r[1], a.r[2], a.r[3], a.r[4], a.r[6]]).toEqual([1, 0, 1, 0, 0]);
