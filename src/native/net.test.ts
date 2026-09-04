@@ -6,7 +6,7 @@ import { ldp } from "./host";
 import { mem } from "./mem";
 import {
   nativeConnect, nativeFreeaddrinfo, nativeGetaddrinfo, nativeGetnameinfo, nativeGetsockopt, nativePoll,
-  nativeSend, nativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketRead, nativeSocketWrite,
+  nativeSelect, nativeSend, nativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketRead, nativeSocketWrite,
   resetNativeNetworkForTest, setNativePollProvider, setNativeRelayTransportFactoryForTest,
 } from "./net";
 
@@ -39,6 +39,14 @@ let transports: FakeWebSocket[];
 
 beforeAll(() => { cpu = new Cpu(mainThread, "native network test"); });
 afterEach(() => resetNativeNetworkForTest());
+
+test("closing sockets reuses the lowest available descriptor", () => {
+  const first = nativeSocket(cpu, 2, 1, 6), second = nativeSocket(cpu, 2, 1, 6);
+  nativeSocketClose(cpu, first);
+  expect(nativeSocket(cpu, 2, 1, 6)).toBe(first);
+  nativeSocketClose(cpu, second);
+  expect(nativeSocket(cpu, 2, 1, 6)).toBe(second);
+});
 
 function installFakeTransport(): void {
   transports = [];
@@ -167,6 +175,47 @@ test("poll ignores negative descriptors", () => {
   mem.st32(pollfd, -1); mem.st16(pollfd + 4, 1); mem.st16(pollfd + 6, 0x7fff);
   expect(nativePoll(cpu, pollfd, 1, 0)).toBe(0);
   expect(mem.ld16u(pollfd + 6)).toBe(0);
+});
+
+test("select reports connected sockets as writable and clears unready sets", async () => {
+  installFakeTransport();
+  const { root, sockaddr } = resolvedAddress("services.example", "443");
+  const fd = nativeSocket(cpu, 2, 1 | 0x800, 6);
+  expect(nativeConnect(cpu, fd, sockaddr, 16)).toBe(-1);
+  const readSet = mem.hostAlloc(128), writeSet = mem.hostAlloc(128), timeout = mem.hostAlloc(16);
+  mem.memset(readSet, 0, 128); mem.memset(writeSet, 0, 128); mem.memset(timeout, 0, 16);
+  mem.u8[readSet + (fd >>> 3)] |= 1 << (fd & 7);
+  mem.u8[writeSet + (fd >>> 3)] |= 1 << (fd & 7);
+  expect(nativeSelect(cpu, fd + 1, readSet, writeSet, 0, timeout)).toBe(0);
+  expect(mem.u8[readSet + (fd >>> 3)] & (1 << (fd & 7))).toBe(0);
+  expect(mem.u8[writeSet + (fd >>> 3)] & (1 << (fd & 7))).toBe(0);
+
+  transports[0].connect();
+  await Promise.resolve();
+  mem.u8[writeSet + (fd >>> 3)] |= 1 << (fd & 7);
+  expect(nativeSelect(cpu, fd + 1, 0, writeSet, 0, timeout)).toBe(1);
+  expect(mem.u8[writeSet + (fd >>> 3)] & (1 << (fd & 7))).not.toBe(0);
+  nativeSocketClose(cpu, fd);
+  nativeFreeaddrinfo(root);
+});
+
+test("select waits for socket read readiness", async () => {
+  installFakeTransport();
+  const { root, sockaddr } = resolvedAddress("services.example", "443");
+  const fd = nativeSocket(cpu, 2, 1 | 0x800, 6);
+  nativeConnect(cpu, fd, sockaddr, 16);
+  transports[0].connect();
+  await Promise.resolve();
+  const readSet = mem.hostAlloc(128);
+  mem.memset(readSet, 0, 128);
+  mem.u8[readSet + (fd >>> 3)] |= 1 << (fd & 7);
+  const waiting = nativeSelect(cpu, fd + 1, readSet, 0, 0, 0);
+  expect(waiting).toBeInstanceOf(Promise);
+  transports[0].receive(new Uint8Array([9]));
+  expect(await waiting).toBe(1);
+  expect(mem.u8[readSet + (fd >>> 3)] & (1 << (fd & 7))).not.toBe(0);
+  nativeSocketClose(cpu, fd);
+  nativeFreeaddrinfo(root);
 });
 
 test("getnameinfo honors Bionic NI_NUMERICHOST", () => {

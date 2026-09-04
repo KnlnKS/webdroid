@@ -12,7 +12,7 @@ const SOCK_NONBLOCK = 0x800, SOCK_CLOEXEC = 0x80000;
 const F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4;
 const O_RDWR = 2, O_NONBLOCK = 0x800;
 const SOL_SOCKET = 1, SO_ERROR = 4;
-const POLLIN = 1, POLLOUT = 4, POLLERR = 8, POLLHUP = 16, POLLNVAL = 32;
+const POLLIN = 1, POLLPRI = 2, POLLOUT = 4, POLLERR = 8, POLLHUP = 16, POLLNVAL = 32;
 const AI_PASSIVE = 1, AI_CANONNAME = 2, AI_NUMERICHOST = 4, AI_NUMERICSERV = 8, AI_ADDRCONFIG = 0x400;
 const EAI_ADDRFAMILY = 1, EAI_BADFLAGS = 3, EAI_FAMILY = 5, EAI_NONAME = 8;
 const EAI_SERVICE = 9, EAI_SOCKTYPE = 10, EAI_SYSTEM = 11, EAI_PROTOCOL = 13, EAI_OVERFLOW = 14;
@@ -298,6 +298,64 @@ export function nativePoll(_cpu: Cpu, pollfds: number, count: number, timeout: n
   });
 }
 
+const FD_SETSIZE = 1024;
+const fdIsSet = (set: number, fd: number): boolean => !!set && !!(mem.u8[set + (fd >>> 3)] & (1 << (fd & 7)));
+const setFd = (set: number, fd: number): void => { mem.u8[set + (fd >>> 3)] |= 1 << (fd & 7); };
+
+/** Bionic select(2), sharing readiness and wakeups with poll(2). */
+export function nativeSelect(cpu: Cpu, count: number, readSet: number, writeSet: number, exceptSet: number, timeout: number): number | Promise<number> {
+  if (count < 0 || count > FD_SETSIZE) return fail(cpu, E.INVAL);
+  const setBytes = Math.ceil(count / (PTR * 8)) * PTR;
+  const requested: { fd: number; events: number }[] = [];
+  for (let fd = 0; fd < count; fd++) {
+    let events = 0;
+    if (fdIsSet(readSet, fd)) events |= POLLIN;
+    if (fdIsSet(writeSet, fd)) events |= POLLOUT;
+    if (fdIsSet(exceptSet, fd)) events |= POLLPRI;
+    if (events) requested.push({ fd, events });
+  }
+
+  let ms = -1;
+  if (timeout) {
+    const seconds = mem.ld32(timeout), micros = mem.ld32(timeout + PTR);
+    if (seconds < 0 || micros < 0 || micros >= 1_000_000) return fail(cpu, E.INVAL);
+    ms = seconds * 1000 + micros / 1000;
+  }
+
+  const pollfds = mem.malloc(requested.length * 8 || 1);
+  for (let i = 0; i < requested.length; i++) {
+    const entry = pollfds + i * 8;
+    mem.st32(entry, requested[i].fd);
+    mem.st16(entry + 4, requested[i].events);
+    mem.st16(entry + 6, 0);
+  }
+  const pollVa = mem.va(pollfds);
+  const setVas = [readSet, writeSet, exceptSet].map((set) => set ? mem.va(set) : 0);
+
+  const finish = (): number => {
+    const currentPoll = typeof pollVa === "bigint" ? mem.txVa(pollVa) : pollVa;
+    const sets = setVas.map((set) => typeof set === "bigint" ? mem.txVa(set) : set);
+    if (requested.some((_request, i) => mem.ld16u(currentPoll + i * 8 + 6) & POLLNVAL)) {
+      mem.free(currentPoll);
+      return fail(cpu, E.BADF);
+    }
+    for (const set of sets) if (set && setBytes) mem.memset(set, 0, setBytes);
+    let ready = 0;
+    for (let i = 0; i < requested.length; i++) {
+      const { fd, events } = requested[i];
+      const revents = mem.ld16u(currentPoll + i * 8 + 6);
+      if (sets[0] && events & POLLIN && revents & (POLLIN | POLLERR | POLLHUP)) { setFd(sets[0], fd); ready++; }
+      if (sets[1] && events & POLLOUT && revents & (POLLOUT | POLLERR)) { setFd(sets[1], fd); ready++; }
+      if (sets[2] && events & POLLPRI && revents & POLLPRI) { setFd(sets[2], fd); ready++; }
+    }
+    mem.free(currentPoll);
+    return ready;
+  };
+
+  const result = nativePoll(cpu, pollfds, requested.length, ms);
+  return result instanceof Promise ? result.then(finish) : finish();
+}
+
 export function nativeGetsockopt(cpu: Cpu, fd: number, level: number, option: number, value: number, length: number): number {
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
@@ -381,6 +439,7 @@ export function netInit(): void {
     inet_pton: (_cpu, args) => { const family = args.i(), text = args.str(), out = args.p(); const bytes = parseIpv4(text); if (family !== AF_INET) return -1; if (!bytes) return 0; mem.u8.set(bytes, out); return 1; },
     inet_ntop: (_cpu, args) => { const family = args.i(), source = args.p(), destination = args.p(), length = args.u(); if (family !== AF_INET || !copyText(ipv4Text(mem.u8.subarray(source, source + 4)), destination, length)) return 0; return ptr(destination); },
     poll: (cpu, args) => nativePoll(cpu, args.p(), args.u(), args.i()),
+    select: (cpu, args) => nativeSelect(cpu, args.i(), args.p(), args.p(), args.p(), args.p()),
   };
   hostLib("libc.so", functions);
 }

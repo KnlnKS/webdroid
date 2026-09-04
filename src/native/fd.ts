@@ -11,7 +11,7 @@ export function allocateFd(): number {
 }
 
 export function releaseFd(fd: number): void {
-  if (fd > 2) claimed.delete(fd);
+  if (fd > 2 && claimed.delete(fd)) next = Math.min(next, fd);
 }
 
 export function reserveFd(fd: number): void {
