@@ -149,6 +149,7 @@ class JExecutor extends JObj {
   shut = false;
   pending = 0;
   removeOnCancel = 0;
+  queue: JObj | null = null;
   thread = new JThread();
 }
 /** run one task on the executor's thread; a submitted task's outcome lands on its Future */
@@ -256,6 +257,12 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       "<init>(ILjava/util/concurrent/RejectedExecutionHandler;)V": function () {},
       "<init>(ILjava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": function () {},
       "allowCoreThreadTimeOut(Z)V": function () {},
+      // Our tasks go straight to setTimeout and nothing ever waits, so the work queue is the
+      // one an idle pool reports: real, and empty. Sentry asks it whether it may still submit.
+      "getQueue()Ljava/util/concurrent/BlockingQueue;": function (this: JExecutor) {
+        return this.queue ??= new (rt.link("java/util/concurrent/LinkedBlockingQueue").ctor)();
+      },
+      "purge()V": function () {},
       "setRejectedExecutionHandler(Ljava/util/concurrent/RejectedExecutionHandler;)V": function () {},
       // kotlinx looks this up reflectively (removeFutureOnCancel); a cancelled schedule() never runs
       // here regardless, so the policy is just remembered

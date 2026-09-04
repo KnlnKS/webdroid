@@ -1,6 +1,7 @@
 // java.security — MessageDigest (sync MD5/SHA-1/SHA-256: fingerprint checks at boot, cache keys), SecureRandom, AccessController.
 import { rt, JObj } from "../runtime";
 import { vcall, defineException } from "./jlang";
+import { jarray } from "../abi";
 import { JRandom, randomSeed } from "./jutil";
 
 const SHA256_K = new Uint32Array([0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -224,6 +225,31 @@ rt.register({
   methods: {
     "static doPrivileged(Ljava/security/PrivilegedAction;)Ljava/lang/Object;": doPrivileged,
     "static doPrivileged(Ljava/security/PrivilegedExceptionAction;)Ljava/lang/Object;": doPrivileged,
+  },
+});
+
+// java.security.Security's provider list. This device installs none: the crypto surface here
+// is the platform's own (jcrypto), reached through Cipher.getInstance with no provider, which
+// is also what jcrypto's getProvider() already answers with null. A caller asking for a named
+// provider gets what a device without it gives — null — and takes its own fallback.
+class JProvider extends JObj { pname = ""; }
+rt.register({
+  name: "java/security/Provider", ctor: JProvider,
+  methods: {
+    "getName()Ljava/lang/String;": function (this: JProvider) { return this.pname; },
+    "toString()Ljava/lang/String;": function (this: JProvider) { return this.pname; },
+  },
+});
+const providers: JProvider[] = [];
+rt.register({
+  name: "java/security/Security", ctor: class extends JObj {},
+  methods: {
+    "static getProvider(Ljava/lang/String;)Ljava/security/Provider;": (n: string) => providers.find((p) => p.pname === n) ?? null,
+    "static getProviders()[Ljava/security/Provider;": () => jarray(providers.slice(), "Ljava/security/Provider;"),
+    "static addProvider(Ljava/security/Provider;)I": (p: JProvider) => { providers.push(p); return providers.length; },
+    "static insertProviderAt(Ljava/security/Provider;I)I": (p: JProvider, i: number) => { providers.splice(i - 1, 0, p); return i; },
+    "static removeProvider(Ljava/lang/String;)V": (n: string) => { const i = providers.findIndex((p) => p.pname === n); if (i >= 0) providers.splice(i, 1); },
+    "static getProperty(Ljava/lang/String;)Ljava/lang/String;": () => null,
   },
 });
 

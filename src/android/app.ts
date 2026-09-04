@@ -1793,6 +1793,9 @@ rt.register({
   methods: activityMethods,
 });
 rt.register({ name: "android/view/Window$Callback", ctor: class extends JObj {} });
+// Frame metrics are reported per frame that was actually measured; a listener registered on a
+// window that never janks is one a device never calls either.
+rt.register({ name: "android/view/Window$OnFrameMetricsAvailableListener", ctor: class extends JObj {} });
 
 /** Build the decor tree for an activity based on its theme */
 export async function ensureDecor(act: JActivity) {
@@ -1902,6 +1905,8 @@ rt.register({
   methods: {
     "setStatusBarContrastEnforced(Z)V": () => {},
     "setNavigationBarContrastEnforced(Z)V": () => {},
+    "addOnFrameMetricsAvailableListener(Landroid/view/Window$OnFrameMetricsAvailableListener;Landroid/os/Handler;)V": () => {},
+    "removeOnFrameMetricsAvailableListener(Landroid/view/Window$OnFrameMetricsAvailableListener;)V": () => {},
     "isStatusBarContrastEnforced()Z": () => 0,
     "isNavigationBarContrastEnforced()Z": () => 0,
     "getDecorView()Landroid/view/View;": async function (this: JWindow) {
@@ -2486,6 +2491,24 @@ class JRunningAppProcessInfo extends JObj {
   importanceReasonCode = 0; importanceReasonPid = 0;
   importanceReasonComponent: JComponentName | null = null;
 }
+// A task the recents list would carry. Nothing produces one — this device has no recents —
+// but a class an app names as a type has to exist, or the auto-stub poisons everything that
+// touches it (see "Four gaps that turned a handled failure into a fatal one").
+class JRecentTaskInfo extends JObj {
+  id = -1; persistentId = -1; taskId = -1; numActivities = 0; isRunning = 0;
+  baseIntent: JIntent | null = null;
+  baseActivity: JComponentName | null = null; topActivity: JComponentName | null = null;
+  origActivity: JComponentName | null = null; description: string | null = null;
+}
+rt.register({
+  name: "android/app/ActivityManager$RecentTaskInfo", ctor: JRecentTaskInfo, ifaces: ["android/os/Parcelable"],
+  fields: {
+    id: "id", persistentId: "persistentId", taskId: "taskId", numActivities: "numActivities",
+    isRunning: "isRunning", baseIntent: "baseIntent", baseActivity: "baseActivity",
+    topActivity: "topActivity", origActivity: "origActivity", description: "description",
+  },
+  methods: { "<init>()V": function () {} },
+});
 rt.register({
   name: "android/app/ActivityManager$RunningAppProcessInfo", ctor: JRunningAppProcessInfo, ifaces: ["android/os/Parcelable"],
   statics: {

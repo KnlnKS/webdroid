@@ -746,10 +746,15 @@ export function complexToPx(data: number, dm: { density: number; scaledDensity: 
 // ── Choreographer (frame callbacks; shell drains queue each rAF)
 import { uiState } from "./view";
 import { intBitsToFloat } from "../jvm/abi";
-class JChoreographer extends JObj {}
+class JChoreographer extends JObj {
+  // AOSP's own field, read reflectively by anything measuring frame pacing (Sentry, Matrix,
+  // Flutter's FPS probe). It is the same nanos getFrameTimeNanos() answers.
+  get mLastFrameTimeNanos(): bigint { return uiState.frameTimeNanos; }
+}
 const theChoreographer = new JChoreographer();
 rt.register({
   name: "android/view/Choreographer", ctor: JChoreographer,
+  fields: { mLastFrameTimeNanos: "mLastFrameTimeNanos" },
   methods: {
     "static getInstance()Landroid/view/Choreographer;": () => theChoreographer,
     "postFrameCallback(Landroid/view/Choreographer$FrameCallback;)V": (cb: unknown) => {

@@ -1182,6 +1182,11 @@ rt.register({
     "totalMemory()J": () => 268435456n,
     "freeMemory()J": () => 134217728n,
     "gc()V": () => {},
+    // There is no process table behind this. A device answers for a program it cannot find the
+    // same way, and callers probing for one (root checks, getprop readers) have that catch.
+    "exec([Ljava/lang/String;)Ljava/lang/Process;": (cmd: unknown[]) => {
+      throw rt.mkThrowable("java/io/IOException", `Cannot run program "${cmd?.[0] ?? ""}": error=2, No such file or directory`);
+    },
     "loadLibrary0(Ljava/lang/Class;Ljava/lang/String;)V": async (_c: unknown, n: string) => loadLibrary(n),
   },
 });
