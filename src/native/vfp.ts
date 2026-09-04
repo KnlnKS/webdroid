@@ -3,16 +3,16 @@
 // d0–d15 aliasing s0–s31 as the hardware does), `c.si` (the same bits as int32 for VMOV).
 
 /** VFPExpandImm: the 8-bit modified-immediate of VMOV (immediate) as a number */
-function vfpImm(imm8: number, dp: boolean): number {
+export function vfpImm(imm8: number, dp: boolean): number {
   const sign = imm8 >> 7, b6 = (imm8 >> 6) & 1, frac = imm8 & 15, e = (imm8 >> 4) & 3;
   const dv = new DataView(new ArrayBuffer(8));
   if (dp) {
-    const exp = ((1 - b6) << 10) | (b6 ? 0x1fe : 0) | e;
+    const exp = ((1 - b6) << 10) | (b6 ? 0x3fc : 0) | e;   // NOT(b6):Replicate(b6,8):imm8<5:4>
     dv.setUint32(0, (sign << 31) | (exp << 20) | (frac << 16), false);
     dv.setUint32(4, 0, false);
     return dv.getFloat64(0, false);
   }
-  const exp = ((1 - b6) << 7) | (b6 ? 0x3e : 0) | e;
+  const exp = ((1 - b6) << 7) | (b6 ? 0x7c : 0) | e;       // NOT(b6):Replicate(b6,5):imm8<5:4>
   dv.setUint32(0, ((sign << 31) | (exp << 23) | (frac << 19)) >>> 0, false);
   return dv.getFloat32(0, false);
 }

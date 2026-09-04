@@ -1,0 +1,226 @@
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mem } from "./mem";
+import { setA64 } from "./cpu";
+import { run, RET, pattern } from "./a64.testkit";
+
+// Encodings from `clang -target aarch64-linux-gnu`, mnemonics from objdump. Lanes are set and read
+// through the integer views: a move must be bit-exact, and the float views cannot say so.
+beforeAll(() => setA64(true));
+afterAll(() => setA64(false));
+
+const I = (c: { si: Int32Array }, v: number) => [c.si[4 * v], c.si[4 * v + 1], c.si[4 * v + 2], c.si[4 * v + 3]];
+
+describe("a64 simd: memory", () => {
+  test("every width, addressing mode, pair, structure and replicating load", () => {
+    const buf = pattern();
+    const c = run([
+      0x3dc00120,   // ldr q0, [x9]
+      0x3dc00521,   // ldr q1, [x9, #0x10]
+      0x3d800921,   // str q1, [x9, #0x20]
+      0xfd400522,   // ldr d2, [x9, #0x8]
+      0xbd400523,   // ldr s3, [x9, #0x4]
+      0x7d400524,   // ldr h4, [x9, #0x2]
+      0x3d400525,   // ldr b5, [x9, #0x1]
+      0xfd001922,   // str d2, [x9, #0x30]
+      0xbd003923,   // str s3, [x9, #0x38]
+      0x7d007924,   // str h4, [x9, #0x3c]
+      0x3d00f925,   // str b5, [x9, #0x3e]
+      0x3cdf0126,   // ldur q6, [x9, #-0x10]
+      0x3c840126,   // stur q6, [x9, #0x40]
+      0xad402127,   // ldp q7, q8, [x9]
+      0xad02a127,   // stp q7, q8, [x9, #0x50]
+      0x6d40a929,   // ldp d9, d10, [x9, #0x8]
+      0x2d0e0d23,   // stp s3, s3, [x9, #0x70]
+      0x3ce1692b,   // ldr q11, [x9, x1]
+      0xfc61792c,   // ldr d12, [x9, x1, lsl #3]
+      0x3cc10d2d,   // ldr q13, [x9, #0x10]!
+      0x3cdf052e,   // ldr q14, [x9], #-0x10
+      0x4c40792f,   // ld1 { v15.4s }, [x9]
+      0x4c40a130,   // ld1 { v16.16b, v17.16b }, [x9]
+      0x4c9f792f,   // st1 { v15.4s }, [x9], #16
+      0x0c407932,   // ld1 { v18.2s }, [x9]
+      0x4d40c933,   // ld1r { v19.4s }, [x9]
+      0x4d409134,   // ld1 { v20.s }[3], [x9]
+      0x4d401d35,   // ld1 { v21.b }[15], [x9]
+      0x4d9f9134,   // st1 { v20.s }[3], [x9], #4
+      0x4cdf8936,   // ld2 { v22.4s, v23.4s }, [x9], #32
+      0x0c408938,   // ld2 { v24.2s, v25.2s }, [x9]
+      0x4c818936,   // st2 { v22.4s, v23.4s }, [x9], x1
+      0x4c40493a,   // ld3 { v26.4s, v27.4s, v28.4s }, [x9]
+      0x4c40013d,   // ld4 { v29.16b, v30.16b, v31.16b, v0.16b }, [x9]
+      0x0d40c923,   // ld1r { v3.2s }, [x9]
+      0x0d609124,   // ld2 { v4.s, v5.s }[1], [x9]
+      0x4d008526,   // st1 { v6.d }[1], [x9]
+      0x9c000041,   // ldr q1, +8   (the words at RET)
+      0x5c000042,   // ldr d2, +8   (the zero words past RET)
+      RET], (c) => { c.r[9] = buf + 256; c.r[1] = 24; });
+    const w = (o: number) => mem.ld32(buf + 256 + o);
+    expect(I(c, 0)).toEqual([185010975, 454497039, 2064058143, -1954053249]);
+    expect(I(c, 1)).toEqual([RET | 0, 0, 0, 0]);
+    expect(I(c, 2)).toEqual([0, 0, 0, 0]);
+    expect(I(c, 3)).toEqual([522067228, 522067228, 0, 0]);
+    expect(I(c, 4)).toEqual([770, 522067228, 0, 0]);
+    expect(I(c, 5)).toEqual([1, 185207048, 0, 0]);
+    expect(I(c, 6)).toEqual([-202182160, -134810124, -67438088, -66052]);
+    expect(I(c, 7)).toEqual([50462976, 117835012, 185207048, 252579084]);
+    expect(I(c, 8)).toEqual([319951120, 387323156, 454695192, 522067228]);
+    expect(I(c, 9)).toEqual([185207048, 252579084, 0, 0]);
+    expect(I(c, 10)).toEqual([319951120, 387323156, 0, 0]);
+    expect(I(c, 11)).toEqual([454695192, 522067228, 319951120, 387323156]);
+    expect(I(c, 12)).toEqual([-1010646592, -943274556, 0, 0]);
+    expect(I(c, 13)).toEqual([319951120, 387323156, 454695192, 522067228]);
+    expect(I(c, 14)).toEqual([319951120, 387323156, 454695192, 522067228]);
+    expect(I(c, 15)).toEqual([50462976, 117835012, 185207048, 252579084]);
+    expect(I(c, 16)).toEqual([50462976, 117835012, 185207048, 252579084]);
+    expect(I(c, 17)).toEqual([319951120, 387323156, 454695192, 522067228]);
+    expect(I(c, 18)).toEqual([319951120, 387323156, 0, 0]);
+    expect(I(c, 19)).toEqual([319951120, 319951120, 319951120, 319951120]);
+    expect(I(c, 20)).toEqual([0, 0, 0, 319951120]);
+    expect(I(c, 21)).toEqual([0, 0, 0, 268435456]);
+    expect(I(c, 22)).toEqual([387323156, 522067228, 387323156, 522067228]);
+    expect(I(c, 23)).toEqual([454695192, 319951120, 454695192, 185207048]);
+    expect(I(c, 24)).toEqual([252579084, 1057030914, 0, 0]);
+    expect(I(c, 25)).toEqual([117835012, -202182160, 0, 0]);
+    expect(I(c, 26)).toEqual([522067228, 185207048, 387323156, 117835012]);
+    expect(I(c, 27)).toEqual([185207048, 252579084, 454695192, 117835012]);
+    expect(I(c, 28)).toEqual([117835012, 319951120, 522067228, 2071624056]);
+    expect(I(c, 29)).toEqual([134481948, 403968012, 2013529116, -2004582276]);
+    expect(I(c, 30)).toEqual([151324957, 420811021, 2030372125, -1987739267]);
+    expect(I(c, 31)).toEqual([168167966, 437654030, 2047215134, -1970896258]);
+    expect([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31].map((k) => w(4 * k)))
+      .toEqual([319951120, 387323156, 454695192, 522067228, 185207048, 387323156, 454695192, 522067228, 319951120, 387323156, 454695192, -67438088, -66052, 117835012, 185207048, 252579084, 319951120, 387323156, 454695192, 522067228, 117835012, 117835012, 2071624056, 2138996092]);
+    expect(c.r[9]).toBe(buf + 332);
+    expect([w(76), w(80)]).toEqual([-67438088, -66052]);
+  });
+});
+
+describe("a64 simd: immediates, copies, permutes and bitwise ops", () => {
+  test("modified immediates expand per cmode, including the byte mask and float forms", () => {
+    const c = run([
+      0x6f00e400,   // movi v0.2d, #0
+      0x4f0307e1,   // movi v1.4s, #0x7f
+      0x0f0367e2,   // movi v2.2s, #0x7f, lsl #24
+      0x6f0327e3,   // mvni v3.4s, #0x7f, lsl #8
+      0x4f00a644,   // movi v4.8h, #0x12, lsl #8
+      0x4f05e565,   // movi v5.16b, #0xab
+      0x6f05e4a6,   // movi v6.2d, #0xff00ff0000ff00ff
+      0x2f07e607,   // movi d7, #0xffffffff00000000
+      0x4f00c648,   // movi v8.4s, #0x12, msl #8
+      0x6f00d649,   // mvni v9.4s, #0x12, msl #16
+      0x4f07f60a,   // fmov v10.4s, #-1.0
+      0x6f00f48b,   // fmov v11.2d, #2.5
+      0x0f03f40c,   // fmov v12.2s, #0.5
+      0x4f047401,   // orr v1.4s, #0x80, lsl #24
+      0x6f009421,   // bic v1.8h, #0x1
+      0x0f00e4ad,   // movi v13.8b, #0x5
+      RET], (c) => { c.si.fill(-1, 0, 128); });
+    expect(I(c, 0)).toEqual([0, 0, 0, 0]);
+    expect(I(c, 1)).toEqual([0x8000007e | 0, 0x8000007e | 0, 0x8000007e | 0, 0x8000007e | 0]);
+    expect(I(c, 2)).toEqual([0x7f000000, 0x7f000000, 0, 0]);
+    expect(I(c, 3)).toEqual([-32513, -32513, -32513, -32513]);
+    expect(I(c, 4)).toEqual([0x12001200, 0x12001200, 0x12001200, 0x12001200]);
+    expect(I(c, 5)).toEqual([0xabababab | 0, 0xabababab | 0, 0xabababab | 0, 0xabababab | 0]);
+    expect(I(c, 6)).toEqual([0x00ff00ff, 0xff00ff00 | 0, 0x00ff00ff, 0xff00ff00 | 0]);
+    expect(I(c, 7)).toEqual([0, -1, 0, 0]);
+    expect(I(c, 8)).toEqual([0x12ff, 0x12ff, 0x12ff, 0x12ff]);
+    expect(I(c, 9)).toEqual([0xffed0000 | 0, 0xffed0000 | 0, 0xffed0000 | 0, 0xffed0000 | 0]);
+    expect(I(c, 10)).toEqual([0xbf800000 | 0, 0xbf800000 | 0, 0xbf800000 | 0, 0xbf800000 | 0]);
+    expect(I(c, 11)).toEqual([0, 0x40040000, 0, 0x40040000]);
+    expect(I(c, 12)).toEqual([0x3f000000, 0x3f000000, 0, 0]);
+    expect(I(c, 13)).toEqual([0x05050505, 0x05050505, 0, 0]);
+  });
+
+  test("dup, ins, umov, smov and the scalar moves", () => {
+    const c = run([
+      0x4e080c00,   // dup v0.2d, x0
+      0x4e040c21,   // dup v1.4s, w1
+      0x4e010c22,   // dup v2.16b, w1
+      0x0e020c23,   // dup v3.4h, w1
+      0x4e0c0404,   // dup v4.4s, v0.s[1]
+      0x4e180405,   // dup v5.2d, v0.d[1]
+      0x0e010446,   // dup v6.8b, v2.b[0]
+      0x4e0c1c41,   // mov v1.s[1], w2
+      0x4e181c01,   // mov v1.d[1], x0
+      0x4e1f1c41,   // mov v1.b[15], w2
+      0x4e1e1c41,   // mov v1.h[7], w2
+      0x6e042427,   // mov v7.s[0], v1.s[1]
+      0x6e180427,   // mov v7.d[1], v1.d[0]
+      0x0e1f3c23,   // umov w3, v1.b[15]
+      0x0e1e3c24,   // umov w4, v1.h[7]
+      0x0e0c3c25,   // mov w5, v1.s[1]
+      0x4e183c26,   // mov x6, v1.d[1]
+      0x0e012c27,   // smov w7, v1.b[0]
+      0x4e022c28,   // smov x8, v1.h[0]
+      0x4e042c29,   // smov x9, v1.s[0]
+      0x4ea11c28,   // mov v8.16b, v1.16b
+      0x5e0c0429,   // mov s9, v1.s[1]
+      0x5e18042a,   // mov d10, v1.d[1]
+      0x5e1f042b,   // mov b11, v1.b[15]
+      RET], (c) => { c.r[0] = 0x55667788; c.h[0] = 0x11223344; c.r[1] = 0xdeadbeef | 0; c.r[2] = 0x99; c.si.fill(-1, 0, 128); });
+    expect(I(c, 0)).toEqual([0x55667788, 0x11223344, 0x55667788, 0x11223344]);
+    expect(I(c, 1)).toEqual([0xdeadbeef | 0, 0x99, 0x55667788, 0x00993344]);
+    expect(I(c, 2)).toEqual([0xefefefef | 0, 0xefefefef | 0, 0xefefefef | 0, 0xefefefef | 0]);
+    expect(I(c, 3)).toEqual([0xbeefbeef | 0, 0xbeefbeef | 0, 0, 0]);
+    expect(I(c, 4)).toEqual([0x11223344, 0x11223344, 0x11223344, 0x11223344]);
+    expect(I(c, 5)).toEqual([0x55667788, 0x11223344, 0x55667788, 0x11223344]);
+    expect(I(c, 6)).toEqual([0xefefefef | 0, 0xefefefef | 0, 0, 0]);
+    expect(I(c, 7)).toEqual([0x99, -1, 0xdeadbeef | 0, 0x99]);
+    expect([c.r[3], c.r[4], c.r[5]]).toEqual([0, 0x99, 0x99]);
+    expect([c.r[6], c.h[6]]).toEqual([0x55667788, 0x00993344]);
+    expect([c.r[7], c.h[7]]).toEqual([-17, 0]);
+    expect([c.r[8], c.h[8]]).toEqual([-16657, -1]);
+    expect([c.r[9], c.h[9]]).toEqual([0xdeadbeef | 0, -1]);
+    expect(I(c, 8)).toEqual(I(c, 1));
+    expect(I(c, 9)).toEqual([0x99, 0, 0, 0]);
+    expect(I(c, 10)).toEqual([0x55667788, 0x00993344, 0, 0]);
+    expect(I(c, 11)).toEqual([0, 0, 0, 0]);
+  });
+
+  test("ext, zip/uzp/trn and the bitwise three-same ops, with aliased destinations", () => {
+    const c = run([
+      0x6e022020,   // ext v0.16b, v1.16b, v2.16b, #4
+      0x6e022823,   // ext v3.16b, v1.16b, v2.16b, #5
+      0x2e021824,   // ext v4.8b, v1.8b, v2.8b, #3
+      0x6e024021,   // ext v1.16b, v1.16b, v2.16b, #8
+      0x6e024022,   // ext v2.16b, v1.16b, v2.16b, #8
+      0x4e823825,   // zip1 v5.4s, v1.4s, v2.4s
+      0x4e827826,   // zip2 v6.4s, v1.4s, v2.4s
+      0x4e421827,   // uzp1 v7.8h, v1.8h, v2.8h
+      0x4e425828,   // uzp2 v8.8h, v1.8h, v2.8h
+      0x4e022829,   // trn1 v9.16b, v1.16b, v2.16b
+      0x4ec2682a,   // trn2 v10.2d, v1.2d, v2.2d
+      0x0e82382b,   // zip1 v11.2s, v1.2s, v2.2s
+      0x4e221c2c,   // and v12.16b, v1.16b, v2.16b
+      0x4e621c2d,   // bic v13.16b, v1.16b, v2.16b
+      0x0ea21c2e,   // orr v14.8b, v1.8b, v2.8b
+      0x4ee21c2f,   // orn v15.16b, v1.16b, v2.16b
+      0x6e221c30,   // eor v16.16b, v1.16b, v2.16b
+      0x6e621c31,   // bsl v17.16b, v1.16b, v2.16b
+      0x6ea21c32,   // bit v18.16b, v1.16b, v2.16b
+      0x6ee21c33,   // bif v19.16b, v1.16b, v2.16b
+      0x6e205834,   // mvn v20.16b, v1.16b
+      0x4e823821,   // zip1 v1.4s, v1.4s, v2.4s
+      RET], (c) => { c.si.fill(0xf, 0, 128); c.si.set([1, 2, 3, 4], 4); c.si.set([5, 6, 7, 8], 8); });
+    expect(I(c, 0)).toEqual([2, 3, 4, 5]);
+    expect(I(c, 3)).toEqual([0x03000000, 0x04000000, 0x05000000, 0x06000000]);
+    expect(I(c, 4)).toEqual([512, 1280, 0, 0]);
+    expect(I(c, 2)).toEqual([5, 6, 5, 6]);
+    expect(I(c, 5)).toEqual([3, 5, 4, 6]);
+    expect(I(c, 6)).toEqual([5, 5, 6, 6]);
+    expect(I(c, 7)).toEqual([0x40003, 0x60005, 0x60005, 0x60005]);
+    expect(I(c, 8)).toEqual([0, 0, 0, 0]);
+    expect(I(c, 9)).toEqual([0x0503, 0x0604, 0x0505, 0x0606]);
+    expect(I(c, 10)).toEqual([5, 6, 5, 6]);
+    expect(I(c, 11)).toEqual([3, 5, 0, 0]);
+    expect(I(c, 12)).toEqual([1, 4, 5, 6]);
+    expect(I(c, 13)).toEqual([2, 0, 0, 0]);
+    expect(I(c, 14)).toEqual([7, 6, 0, 0]);
+    expect(I(c, 15)).toEqual([-5, -3, -1, -1]);
+    expect(I(c, 16)).toEqual([6, 2, 0, 0]);
+    expect(I(c, 17)).toEqual([3, 4, 5, 6]);
+    expect(I(c, 18)).toEqual([11, 13, 15, 15]);
+    expect(I(c, 19)).toEqual([7, 6, 5, 6]);
+    expect(I(c, 20)).toEqual([-4, -5, -6, -7]);
+    expect(I(c, 1)).toEqual([3, 5, 4, 6]);
+  });
+});

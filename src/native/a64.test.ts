@@ -1,23 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mem } from "./mem";
-import { Cpu, setA64 } from "./cpu";
-import { mainThread } from "../jvm/natives/jlang";
-import { RET_SENTINEL } from "./abi";
-
-// Encodings come from `clang -target aarch64-linux-gnu`, never hand-derived; the mnemonic beside
-// each word is objdump's own.
-function run(words: number[], setup: (c: Cpu) => void = () => {}): Cpu {
-  const at = mem.reserve((words.length * 4 + 0xfff) & ~0xfff, 0x1000);
-  for (let i = 0; i < words.length; i++) mem.u32[(at >>> 2) + i] = words[i];
-  const c = new Cpu(mainThread, "test");
-  c.ensureStack();
-  setup(c);
-  c.r[30] = RET_SENTINEL;
-  c.setPc(at);
-  while (c.runSlice(10000) !== 2) { /* spin */ }
-  return c;
-}
-const RET = 0xd65f03c0;
+import { setA64 } from "./cpu";
+import { run, RET } from "./a64.testkit";
 
 beforeAll(() => setA64(true));
 afterAll(() => setA64(false));

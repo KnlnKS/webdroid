@@ -15,25 +15,14 @@
 import { mem } from "./mem";
 import { PAGE_SIZE, PAGE_SHIFT } from "./abi";
 import { type Ins, type Fl, C, ALL, COND, COND_READS, NZ, ADDF, SUBF, hex, assemble, hoistRegs, inlineMem, selfLoop, retK } from "./flags";
+import { SP, sp, sph, zr, zrh, setX, setW, setSP, int32, sx, shl64, shr64, ror64, shiftOf, VIEWS } from "./a64regs";
+import { emitSimd, emitSimdMem } from "./a64simd";
 
 let MAX_BLOCK = 256;
 /** 1 = single-instruction blocks (the step tracer) */
 export function setMaxBlockA64(n: number): void { MAX_BLOCK = n; }
 
 interface BlockSrc { src: string; len: number; end: number; slots: number }
-
-// ── operands. x31 reads as SP in one family of instructions and as zero in the other.
-const SP = 31;
-const sp = (n: number) => `r[${n}]`;
-const sph = (n: number) => `H[${n}]`;
-const zr = (n: number) => (n === SP ? "0" : `r[${n}]`);
-const zrh = (n: number) => (n === SP ? "0" : `H[${n}]`);
-/** write a 64-bit result to a zero-register-encoded destination */
-const setX = (d: number, lo: string, hi: string) => (d === SP ? "" : `r[${d}]=${lo};H[${d}]=${hi};`);
-/** write a 32-bit result: A64 zero-extends every W write into its X register */
-const setW = (d: number, lo: string) => (d === SP ? "" : `r[${d}]=${lo};H[${d}]=0;`);
-/** write to a stack-pointer-encoded destination (ADD/SUB immediate with S=0) */
-const setSP = (d: number, lo: string, hi: string) => `r[${d}]=${lo};H[${d}]=${hi};`;
 
 // ── flags. NZCV is ARM's, so COND/COND_READS carry over unchanged; only the 64-bit forms are new.
 // the 32-bit forms are ARM's own, bit for bit: NZ/ADDF/SUBF from flags.ts. Only the 64-bit ones
@@ -55,43 +44,6 @@ const LOG64: Fl = { ...NZ64, c: "c.c=0;", v: "c.v=0;" };
 /** the add/sub cores. `a`/`ah` and `t`/`th` hold the operands; `v`/`vh` the result. */
 const ADD_CORE64 = "v=(a+t)|0;vh=(ah+th+(((a>>>0)+(t>>>0))>4294967295?1:0))|0;";
 const SUB_CORE64 = "v=(a-t)|0;vh=(ah-th-((a>>>0)<(t>>>0)?1:0))|0;";
-
-// ── constant shifts of a 64-bit value held as two expressions. Every A64 shift whose amount is
-// in the encoding is constant, so the split is resolved here and costs nothing at run time.
-function shl64(lo: string, hi: string, s: number): [string, string] {
-  if (s === 0) return [lo, hi];
-  if (s === 32) return ["0", lo];
-  if (s > 32) return ["0", `(${lo}<<${s - 32})`];
-  return [`(${lo}<<${s})`, `((${hi}<<${s})|(${lo}>>>${32 - s}))`];
-}
-function shr64(lo: string, hi: string, s: number): [string, string] {
-  if (s === 0) return [lo, hi];
-  if (s === 32) return [hi, "0"];
-  if (s > 32) return [`(${hi}>>>${s - 32})`, "0"];
-  return [`((${lo}>>>${s})|(${hi}<<${32 - s}))`, `(${hi}>>>${s})`];
-}
-function sar64(lo: string, hi: string, s: number): [string, string] {
-  if (s === 0) return [lo, hi];
-  if (s === 32) return [hi, `(${hi}>>31)`];
-  if (s > 32) return [`(${hi}>>${s - 32})`, `(${hi}>>31)`];
-  return [`((${lo}>>>${s})|(${hi}<<${32 - s}))`, `(${hi}>>${s})`];
-}
-function ror64(lo: string, hi: string, s: number): [string, string] {
-  s &= 63;
-  if (s === 0) return [lo, hi];
-  const [al, ah] = shr64(lo, hi, s);
-  const [bl, bh] = shl64(lo, hi, 64 - s);
-  return [`(${al}|${bl})`, `(${ah}|${bh})`];
-}
-/** LSL/LSR/ASR/ROR of a 64- or 32-bit operand by a constant */
-function shiftOf(lo: string, hi: string, type: number, s: number, sf: boolean): [string, string] {
-  if (sf) return type === 0 ? shl64(lo, hi, s) : type === 1 ? shr64(lo, hi, s) : type === 2 ? sar64(lo, hi, s) : ror64(lo, hi, s);
-  if (s === 0) return [lo, "0"];
-  if (type === 0) return [`(${lo}<<${s})`, "0"];
-  if (type === 1) return [`(${lo}>>>${s})`, "0"];
-  if (type === 2) return [`(${lo}>>${s})`, "0"];
-  return [`((${lo}>>>${s})|(${lo}<<${32 - s}))`, "0"];
-}
 
 /** ARM's DecodeBitMasks, evaluated here because N/imms/immr are always encoding constants.
  *  Returns null for the encodings the architecture leaves undefined. */
@@ -121,10 +73,6 @@ function bitMasks(n: number, imms: number, immr: number, sf: boolean, immediate:
 const lo32 = (v: bigint) => Number(BigInt.asIntN(32, v));
 const hi32 = (v: bigint) => Number(BigInt.asIntN(32, v >> 32n));
 
-const sx = (v: number, bits: number) => (v << (32 - bits)) >> (32 - bits);
-/** a constant bound for a register: spelled as the int32 the register file would hold, because a
- *  hoisted local keeps the literal as written and `0xffffffff` is not -1 to `>` or `===` */
-const int32 = (n: number) => String(n | 0);
 
 // System registers, keyed on the encoding's op0:op1:CRn:CRm:op2. A read the table cannot answer
 // faults by name; the ID registers read as "no optional features" so a runtime keeps to its
@@ -322,9 +270,9 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
 
   // ── loads and stores
   if (is(0x0a000000, 0x08000000)) {
+    if (w & 0x04000000) return emitSimdMem(pc, w, push, fault);
     // LDR (literal)
     if (is(0x3b000000, 0x18000000)) {
-      if (w & 0x04000000) { push(fault("LDR literal (SIMD)")); return true; }
       const opc = (w >>> 30) & 3, addr = (pc + sx((w >>> 5) & 0x7ffff, 19) * 4) | 0;
       if (opc === 0) push(setW(rd, `M.ld32(${hex(addr)})`));
       else if (opc === 1) push(`v=M.ld32(${hex(addr)});vh=M.ld32(${hex(addr)}+4);` + setX(rd, "v", "vh"));
@@ -388,7 +336,6 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
     }
     // LDR/STR immediate: unsigned offset, or unscaled / pre / post index
     const size = (w >>> 30) & 3, opc = (w >>> 22) & 3;
-    if (w & 0x04000000) { push(fault("load/store (SIMD)")); return true; }
     // atomic memory operations (LSE): the read-modify-write is direct, threads being cooperative
     if (is(0x3f200c00, 0x38200000)) {
       const rs = (w >>> 16) & 31, op = (w >>> 12) & 15;
@@ -608,6 +555,8 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
     return true;
   }
 
+  const simd = emitSimd(pc, w, push, fault);
+  if (simd !== null) return simd;
   push(fault(w === 0 ? "udf" : "unimplemented"));
   return true;
 }
@@ -636,9 +585,12 @@ export function emitA64Block(pc: number): BlockSrc {
     if (ends || k >= MAX_BLOCK || p >= pageEnd) break;
   }
   if (redirect < 0) out.push({ code: retK(slot++, k, hex(p)), fl: null, reads: 0, writes: 0 });
+  const body = hoistRegs(selfLoop(inlineMem(assemble(out)), pc, pc >>> PAGE_SHIFT), { pc: 32, hi: true, sync: "c.svc();" });
+  // the V file's views are bound only in a block that touches them
+  let views = "";
+  for (const [name, expr] of Object.entries(VIEWS)) if (new RegExp(`\\b${name}\\[`).test(body)) views += `,${name}=${expr}`;
   return {
-    src: "let t,a,ah,th,v,vh,s,m1,H=c.h;"
-      + hoistRegs(selfLoop(inlineMem(assemble(out)), pc, pc >>> PAGE_SHIFT), { pc: 32, hi: true, sync: "c.svc();" }),
+    src: `let t,a,ah,th,v,vh,s,m1,H=c.h${views};` + body,
     len: (end - pc) >> 2, end, slots: slot,
   };
 }
