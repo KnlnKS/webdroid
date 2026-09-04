@@ -8,7 +8,7 @@ import { E } from "./abi";
 import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
 import { stdioInit, readInto } from "./stdio";
-import { pthreadInit } from "./pthread";
+import { pthreadInit, futex } from "./pthread";
 import { zlibInit } from "./zlib";
 import { libmInit } from "./libm";
 import { localeInit } from "./locale";
@@ -22,7 +22,7 @@ const LAYOUT32 = {
   ST_ATIME: 72, ST_MTIME: 80, ST_CTIME: 88, ST_INO: 96,
   DIRENT_SIZE: 276, D_INO: 0, D_OFF: 8, D_RECLEN: 16, D_TYPE: 18, D_NAME: 19,
   TM_SIZE: 44, TM_GMTOFF: 36, TM_ZONE: 40, TS_SEC: 0, TS_NSEC: 4, TS_SIZE: 8, UTSNAME_FIELD: 65, JMPBUF_SIZE: 256,
-  SIGACTION_SIZE: 140, STATFS_SIZE: 88,
+  SIGACTION_SIZE: 140, SA_HANDLER: 0, SA_FLAGS: 136, STATFS_SIZE: 88,
 };
 const LAYOUT64: typeof LAYOUT32 = {
   FILE_SIZE: 152, F_P: 0, F_R: 8, F_W: 12, F_FLAGS: 16, F_FILE: 18, F_BF_BASE: 24, F_BF_SIZE: 32, F_LBFSIZE: 40, F_COOKIE: 48,
@@ -30,7 +30,7 @@ const LAYOUT64: typeof LAYOUT32 = {
   ST_ATIME: 72, ST_MTIME: 88, ST_CTIME: 104, ST_INO: 8,
   DIRENT_SIZE: 280, D_INO: 0, D_OFF: 8, D_RECLEN: 16, D_TYPE: 18, D_NAME: 19,
   TM_SIZE: 56, TM_GMTOFF: 40, TM_ZONE: 48, TS_SEC: 0, TS_NSEC: 8, TS_SIZE: 16, UTSNAME_FIELD: 65, JMPBUF_SIZE: 256,
-  SIGACTION_SIZE: 32, STATFS_SIZE: 120,
+  SIGACTION_SIZE: 32, SA_HANDLER: 8, SA_FLAGS: 0, STATFS_SIZE: 120,
 };
 export let LAYOUT = LAYOUT32;
 /** a struct timespec / timeval as milliseconds, and back (the second field is nanoseconds or microseconds) */
@@ -212,9 +212,6 @@ export function libcInit(): void {
     gettid: (cpu) => 4242 + cpu.tid,
     getuid: () => 10123, geteuid: () => 10123, getgid: () => 10123, getegid: () => 10123,
     getppid: () => 1,
-    raise: (cpu, a) => { const sig = a.i(); if (sig === 6 || sig === 11 || sig === 9) cpu.fault(`raise(${sig})`); return 0; },
-    kill: () => 0,
-    sigaction: (_c, a) => { a.i(); a.p(); const old = a.p(); if (old) mem.memset(old, 0, LAYOUT.SIGACTION_SIZE); return 0; },
     bsd_signal: () => 0, signal: () => 0, sigprocmask: () => 0, sigemptyset: () => 0, sigaddset: () => 0,
     nice: () => 0, setpriority: () => 0, getpriority: () => 0,
     sched_yield: () => 0,
@@ -261,7 +258,7 @@ export function libcInit(): void {
       if (fd !== -1 && !(flags & 0x20) && (flags & 0x1) && (prot & 2)) return failed(E.NOSYS);
       const p = mem.mapVa(n, (flags & 0x20) !== 0 && prot === 0);   // an anonymous PROT_NONE mapping is a reservation
       if (!p) return failed(E.NOMEM);
-      if (fd !== -1 && !(flags & 0x20)) { const r = readInto(cpu, fd, off, p, n); return r instanceof Promise ? r.then(() => p) : p; }
+      if (fd !== -1 && !(flags & 0x20)) { const r = readInto(cpu, fd, off, typeof p === "bigint" ? mem.txVa(p) : p, n); return r instanceof Promise ? r.then(() => p) : p; }
       return p;
     },
     mmap64: (cpu, a) => M.mmap(cpu, a),
@@ -271,8 +268,18 @@ export function libcInit(): void {
     msync: () => 0, mlock: () => 0, munlock: () => 0,
     getrlimit: (_c, a) => { a.i(); const r = a.p(); stp(r, 0x100000); stp(r + PTR, 0x100000); return 0; },
     setrlimit: () => 0,
-    syscall: (cpu) => fail(cpu, E.NOSYS),
-    prctl: () => 0,
+    // the raw syscalls a runtime issues past libc: futex is the one that must block
+    syscall: (cpu, a) => {
+      const nr = a.i();
+      if (nr === (PTR === 8 ? 98 : 240)) { const addr = a.p(), op = a.i(), val = a.i(), ts = a.p(); a.p(); return futex(cpu, addr, op, val, ts, a.i()); }
+      if (nr === (PTR === 8 ? 178 : 224)) return 4242 + cpu.tid;              // gettid
+      if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); crypto.getRandomValues(mem.bytes(buf, n)); return n; } // getrandom
+      if (nr === (PTR === 8 ? 122 : 241)) return 0;                             // sched_setaffinity: one core, nothing to pin
+      calledMissing.add("syscall " + nr);
+      return fail(cpu, E.NOSYS);
+    },
+    // PR_SET_NAME names the calling thread: what wd.native.regs shows and what a trace prefixes
+    prctl: (cpu, a) => { const op = a.i(); if (op === 15) { const s = mem.cstr(a.p(), 16); if (s) { cpu.name = s; cpu.jthread.jname = s; } } return 0; },
     cacheflush: (_c, a) => { const s = a.p(), e = a.p(); invalidateRange(s, e - s); return 0; },
     __aeabi_read_tp: (cpu) => cpu.tlsBase,
 

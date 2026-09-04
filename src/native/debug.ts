@@ -1,8 +1,10 @@
 // wd.native: modules, symbolize, traces, threads, unresolved/jniMissing, peek/poke.
-import { modules, symbolizePc } from "./dl";
-import { hostTrace, calledMissing, unresolved } from "./host";
+import { modules, symbolizePc, backtrace } from "./dl";
+import { hostTrace, calledMissing, unresolved, probed } from "./host";
+import { killLog } from "./proc";
+import { futexStats } from "./pthread";
 import { jniMissing, jniTrace, registered } from "./jni";
-import { Cpu, cpus, blockStats, stepMode, setStepMode, profile, blockAt, slice, isA64, setA64 } from "./cpu";
+import { Cpu, cpus, blockStats, stepMode, setStepMode, profile, blockAt, slice, isA64, setA64, hasProcessExited, yieldStats, sigHandlers, watchPcs, lastFault } from "./cpu";
 import { mainThread } from "../jvm/natives/jlang";
 import { mem } from "./mem";
 import { RET_SENTINEL } from "./abi";
@@ -28,9 +30,9 @@ export const native = {
     // the high halves only exist in a 64-bit process, and printing 32 zeros in a 32-bit one
     // is noise rather than information
     ...(c.a64 ? { h: [...c.h].map((v) => (v >>> 0).toString(16)) } : {}),
-    finished: c.finished, pending: !!c.pending,
+    finished: c.finished, pending: !!c.pending, parked: c.parked, depth: c.depth, state: c.state, frames: [...c.frames], loops: c.loops, sigLog: c.sigLog.slice(-40), signals: [...c.signals], handling: [...c.handling], deferred: [...c.deferred], sigWait: !!c.sigWait,
   })),
-  calledMissing, unresolved, jniMissing, registered,
+  calledMissing, unresolved, probed, jniMissing, registered, exited: hasProcessExited, sigHandlers: () => [...sigHandlers].map(([s, h]) => [s, symbolizePc(h.fn)]), yieldStats, killLog, futexStats: () => Object.fromEntries(futexStats),
   blocks: blockStats,
   /** profileReset(n) also sets the slice budget: a smaller one samples the hot pcs more finely */
   profileReset: (instr = slice.instr) => { slice.instr = instr; profile.samples.clear(); },
@@ -46,6 +48,8 @@ export const native = {
   step: (on = true) => { setStepMode(on); return stepMode; },
   stepRing: stepMode.ring, stepHits: stepMode.hits,
   mem: mem.stats, memObj: mem, cpus: () => [...cpus], blockAt,
+  /** the frame-pointer chain of a thread; a watched pc logs its registers on every entry (set before its block compiles) */
+  backtrace: (name: string) => { const c = [...cpus].find((c) => c.name === name); return c ? backtrace(c) : []; }, watchPcs, lastFault,
   peek: (a: number, n = 16) => Array.from(mem.bytes(a, n)).map((b) => b.toString(16).padStart(2, "0")).join(" "),
   cstr: (a: number) => mem.cstr(a),
   glProbe,

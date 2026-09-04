@@ -44,7 +44,7 @@ let pages: ((BlockFn | undefined)[] | undefined)[] = [];   // ARM blocks by word
 let tpages: ((BlockFn | undefined)[] | undefined)[] = [];  // Thumb blocks by halfword
 let cov: (Uint8Array | undefined)[] = [];
 function sizePages(): void {
-  NPAGES = MEM_SIZE >> PAGE_SHIFT;
+  NPAGES = MEM_SIZE >>> PAGE_SHIFT;
   pages = new Array(NPAGES).fill(undefined);
   tpages = new Array(NPAGES).fill(undefined);
   cov = new Array(NPAGES).fill(undefined);
@@ -68,6 +68,7 @@ let processExited = false;
 /** slice-boundary pc samples (one per budget exit; `slice.instr` sets how fine): a free statistical profile */
 export const profile = { on: true, samples: new Map<number, number>() };
 export function markProcessExited(): void { processExited = true; }
+export const hasProcessExited = (): boolean => processExited;
 
 mem.onCodeWrite = (addr: number) => {
   const pg = addr >>> PAGE_SHIFT;
@@ -105,10 +106,15 @@ export function setA64(on: boolean): void {
 }
 export function isA64(): boolean { return A64; }
 
+/** the register file at the first native fault, as the faulting block found it (debug) */
+export const lastFault: { regs: { cpu: string; r: number[]; h: number[] } | null } = { regs: null };
+/** pcs whose block entry logs the registers: a breakpoint that does not stop (wd.native.watch) */
+export const watchPcs = new Set<number>(((globalThis as { __wdWatch?: number[] }).__wdWatch ?? []).map((p) => p >>> 0));
 function compile(cpu: Cpu, pc: number, pg: (BlockFn | undefined)[], thumb: boolean): BlockFn {
   const t0 = performance.now();
   if (pc & (thumb ? 1 : 3)) { cpu.r[cpu.pcx] = pc; cpu.fault("misaligned pc"); }
   const b = thumb ? emitThumbBlock(pc) : A64 ? emitA64Block(pc) : emitBlock(pc);
+  if (watchPcs.has(pc >>> 0)) b.src = "c.watchHit();" + b.src;
   let fn: BlockFn;
   try { fn = new Function("c", "r", "M", "F", b.src + `\n//# sourceURL=wd/native/${(pc >>> 0).toString(16)}${thumb ? "t" : ""}.js`) as BlockFn; }
   catch (e) { throw new NativeFault(`[native] block compile failed at 0x${pc.toString(16)}: ${e}\n${b.src}`); }
@@ -163,8 +169,54 @@ export class Cpu {
   stackBase = 0; stackTop = 0;
   errnoAddr = 0;
   env = 0;
-  tls = new Map<number, number>();
+  tls = new Map<number, bigint>();
   pending: Promise<unknown> | null = null;
+  /** signals queued for this thread, delivered at its next slice boundary */
+  signals: number[] = [];
+  parked = false;                                   // awaiting a host call's promise
+  loops = 0;                                        // run loops alive on this Cpu (0: a Java thread between native calls)
+  state = "";                                       // which await the run loop is in (wd.native.regs)
+  idle: (() => void)[] = [];                        // a run loop waiting for a handler stacked above it to finish
+  sigWait: (() => void) | null = null;              // sigsuspend: released when a handler has run
+  /** a signal for this thread: a parked thread runs the handler now, on top of its host call,
+   *  as a kernel interrupts a syscall; a running one at its next slice boundary */
+  handling = new Set<number>();                     // signals whose handler is running: a repeat is held until it returns
+  deferred = new Set<number>();
+  kill(sig: number): void {
+    if (this.finished || !sigHandlers.has(sig)) return;
+    if (this.handling.has(sig)) { this.deferred.add(sig); return; }   // blocked, as sa_mask blocks a signal in its own handler
+    if (this.signals.includes(sig)) return;                            // pending already: signals do not queue up
+    if (this.parked || this.loops === 0) void this.deliver(sig);
+    else this.signals.push(sig);
+  }
+  sigLog: string[] = [];                           // wd.native.regs: what each thread was signalled and when it ran
+  /** a handler running on an otherwise idle Cpu (a Java thread between native calls): the next
+   *  entry from Java waits for it, since two unrelated call() frames cannot share one register file */
+  baseBusy: Promise<void> | null = null;
+  /** an entry from Java must not stack on a handler that owns the register file from the bottom */
+  async awaitIdleBase(): Promise<void> {
+    while (this.baseBusy || (this.loops > 0 && this.frames[0]?.startsWith("signal "))) {
+      if (this.baseBusy) await this.baseBusy;
+      else await new Promise<void>((r) => this.idle.push(r));
+    }
+  }
+  async deliver(sig: number): Promise<void> {
+    const h = sigHandlers.get(sig);
+    this.sigLog.push(`${sig}@${this.ic}${this.parked ? "p" : ""}/${this.loops}`);
+    this.handling.add(sig);
+    const base = this.loops === 0;
+    const p = (async () => { if (h) await this.call(h.fn, [sig, 0, 0], "signal " + sig); })();
+    if (base) this.baseBusy = p.catch(() => {}).finally(() => { this.baseBusy = null; });
+    try { await p; }
+    catch (e) { console.error(`[native] signal ${sig} handler on ${this.name}:`, e); throw e; }
+    finally {
+      this.sigLog.push(`~${sig}`);
+      this.handling.delete(sig);
+      if (this.deferred.delete(sig)) this.kill(sig);
+    }
+    const w = this.sigWait;
+    if (w) { this.sigWait = null; w(); }
+  }
   exc: unknown = null;
   ret1 = 0;           // r1 at the return of the last call() (64-bit results)
   args: ArgReader & { reset(cpu: Cpu): void };
@@ -193,12 +245,14 @@ export class Cpu {
   }
 
   /** run guest function `fn` to completion on this Cpu (reentrant: saves and restores the register file) */
-  async call(fn: number, args: CallArg[] = []): Promise<number> {
+  frames: string[] = [];                            // what each nested call() is for (wd.native.regs)
+  async call(fn: number, args: CallArg[] = [], label = "call"): Promise<number> {
+    this.frames.push(label);
     this.ensureStack();
     const r = this.r;
     const saved = new Int32Array(r);
     const st = this.t, sn = this.n, sz = this.z, scf = this.c, sv = this.v;
-    const spending = this.pending;
+    const spending = this.pending, sparked = this.parked, sstate = this.state;   // the frame below is parked in its host call until we return
     const savedH = this.a64 ? new Int32Array(this.h) : null;
     const savedV = this.a64 ? new Int32Array(this.si) : null;
     const sexcl = this.excl;
@@ -248,12 +302,14 @@ export class Cpu {
       return r[0];
     } finally {
       this.depth--;
+      this.frames.pop();
+      for (const w of this.idle.splice(0)) w();
       r.set(saved);
       if (savedH) this.h.set(savedH);
       if (savedV) this.si.set(savedV);
       this.t = st; this.n = sn; this.z = sz; this.c = scf; this.v = sv;
       this.excl = sexcl;
-      this.pending = spending;
+      this.pending = spending; this.parked = sparked; this.state = sstate;
     }
   }
 
@@ -263,14 +319,22 @@ export class Cpu {
 
   /** the slice driver: run until the frame returns (pc = RET_SENTINEL) or the thread finishes */
   async run(): Promise<void> {
+    this.loops++;
+    try { await this.loop(); } finally { this.loops--; }
+  }
+  private async loop(): Promise<void> {
+    const myDepth = this.depth;
     for (;;) {
       setCurThread(this.jthread);
       if (processExited) await new Promise<never>(() => {});
+      while (this.signals.length) { this.state = "deliver"; await this.deliver(this.signals.shift()!); }
       const t0 = performance.now(), ic0 = this.ic;
       let ex: SliceExit;
+      this.state = "slice";
       try { ex = this.runSlice(slice.instr); }
       catch (e) {
         if (e instanceof NativeFault) {
+          if (!lastFault.regs) lastFault.regs = { cpu: this.name, r: Array.from(this.r), h: Array.from(this.h) };   // the block's entry state (locals are not written back)
           if (!e.pc) e.pc = this.bpc >>> 0;
           if (!e.message.includes("@")) e.message += ` @ ${symbolizeHook(e.pc)} (block 0x${(this.bpc >>> 0).toString(16)}, ${this.name})`;
         }
@@ -282,12 +346,21 @@ export class Cpu {
       if (ex === SliceExit.Suspend) {
         const p = this.pending!;
         this.pending = null;
+        this.parked = true;
+        while (this.signals.length) void this.deliver(this.signals.shift()!);
+        this.state = "park";
         const v = await p;
+        // a handler delivered while we were parked may still be running on top of this frame,
+        // parked in its own host call (sigsuspend): the flag is its until it finishes
+        this.state = "idle";
+        while (this.depth > myDepth) await new Promise<void>((r) => this.idle.push(r));
+        this.parked = false;
         setCurThread(this.jthread);
         if (this.finished) return;
         hostReturn(this, v as HostRet);
         continue;
       }
+      this.state = "yield";
       await yieldToLoop();
     }
   }
@@ -693,8 +766,12 @@ export class Cpu {
     return s | ((e + 15) << 10) | m;
   }
   sat(v: number): number { if (v > 2147483647) { this.q = 1; return 2147483647; } if (v < -2147483648) { this.q = 1; return -2147483648; } return v | 0; }
+  watchHit(): void {
+    const x = (i: number) => (this.h[i] ? (this.h[i] >>> 0).toString(16) + "_" : "") + (this.r[i] >>> 0).toString(16).padStart(this.h[i] ? 8 : 1, "0");
+    console.log(`[watch-native] ${this.name} ${symbolizeHook(this.r[this.pcx] >>> 0)} x0..x7=${[0, 1, 2, 3, 4, 5, 6, 7].map(x).join(" ")} lr=${symbolizeHook(this.r[this.lrx] >>> 0)}`);
+  }
   fault(msg: string): never {
-    const e = new NativeFault(`[native] ${msg} @ ${symbolizeHook(this.r[this.pcx] >>> 0)} (${this.name})`);
+    const e = new NativeFault(`[native] ${msg} @ ${symbolizeHook(this.r[this.pcx] >>> 0)} (${this.name}, lr=${symbolizeHook(this.r[this.lrx] >>> 0)})`);
     e.pc = this.r[this.pcx] >>> 0;
     throw e;
   }
@@ -711,6 +788,8 @@ export function cpuFor(t: JThread): Cpu {
 }
 export function bindCpu(t: JThread, c: Cpu): void { byThread.set(t, c); }
 export function cpuByTid(tid: number): Cpu | undefined { for (const c of cpus) if (c.tid === tid) return c; return undefined; }
+/** sigaction's table: signal → handler (sa_handler or sa_sigaction) and flags */
+export const sigHandlers = new Map<number, { fn: number; flags: number }>();
 
 let symbolizeHook: (pc: number) => string = (pc) => "0x" + pc.toString(16);
 export function setSymbolizeHook(f: (pc: number) => string): void { symbolizeHook = f; }
@@ -720,11 +799,12 @@ export function setSymbolizeHook(f: (pc: number) => string): void { symbolizeHoo
 const chan = typeof MessageChannel !== "undefined" ? new MessageChannel() : null;
 const waiters: (() => void)[] = [];
 if (chan) {
-  chan.port1.onmessage = () => { const w = waiters.splice(0); for (const f of w) f(); };
+  chan.port1.onmessage = () => { yieldStats.fires++; const w = waiters.splice(0); for (const f of w) f(); };
   // an open port keeps a bun/node process alive after its work is done (tests, scripts)
   (chan.port1 as unknown as { unref?: () => void }).unref?.();
 }
 export function yieldToLoop(): Promise<void> {
   if (!chan) return new Promise((r) => setTimeout(r, 0));
-  return new Promise((r) => { if (waiters.push(r) === 1) chan.port2.postMessage(0); });
+  return new Promise((r) => { yieldStats.pushes++; if (waiters.push(r) === 1) chan.port2.postMessage(0); });
 }
+export const yieldStats = { pushes: 0, fires: 0, pending: () => waiters.length, kick: () => { const w = waiters.splice(0); for (const f of w) f(); return w.length; } };

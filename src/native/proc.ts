@@ -6,10 +6,12 @@
 import { mem } from "./mem";
 import { hostLib, hostData, type HostFn, PTR, stp, ldp, vaList, ARG0, ptr } from "./host";
 import { E } from "./abi";
-import type { Cpu } from "./cpu";
-import { fail, utf8, logLine } from "./libc";
+import { type Cpu, cpuByTid, sigHandlers } from "./cpu";
+import { fail, utf8, logLine, LAYOUT } from "./libc";
 import { format } from "./printf";
 import { device } from "../shell/config";
+/** wd.native.killLog: the last pthread_kill calls, who signalled whom and what the target was doing */
+export const killLog: string[] = [];
 
 let abortMessage = "";
 export function abortMessageOr(what: string): string { return abortMessage ? `${what}: ${abortMessage}` : what; }
@@ -55,10 +57,30 @@ export function procInit(): void {
     sigfillset: (_c, a) => { const s = a.p(); mem.st32(s, -1); mem.st32(s + 4, -1); return 0; },
     sigdelset: (_c, a) => { const s = a.p(), n = a.i() - 1; if (n >= 0 && n < 64) u8[s + (n >> 3)] &= ~(1 << (n & 7)); return 0; },
     sigismember: (_c, a) => { const s = a.p(), n = a.i() - 1; return n >= 0 && n < 64 && (u8[s + (n >> 3)] >> (n & 7)) & 1 ? 1 : 0; },
-    sigsuspend: () => new Promise<never>(() => {}),
+    // signals: a handler runs on the target thread, at once when it is parked in a host call
+    // (as a kernel interrupts a syscall) and at its next slice boundary when it is running
+    sigaction: (_c, a) => {
+      const sig = a.i(), act = a.p(), old = a.p(), prev = sigHandlers.get(sig);
+      if (old) { mem.memset(old, 0, LAYOUT.SIGACTION_SIZE); if (prev) { stp(old + LAYOUT.SA_HANDLER, prev.fn); mem.st32(old + LAYOUT.SA_FLAGS, prev.flags); } }
+      if (act) { const fn = ldp(act + LAYOUT.SA_HANDLER); if (fn > 1) sigHandlers.set(sig, { fn, flags: mem.ld32(act + LAYOUT.SA_FLAGS) }); else sigHandlers.delete(sig); }
+      return 0;
+    },
+    signal: (_c, a) => { const sig = a.i(), fn = a.p(), prev = sigHandlers.get(sig)?.fn ?? 0; if (fn > 1) sigHandlers.set(sig, { fn, flags: 0 }); else sigHandlers.delete(sig); return prev; },
+    // a thread that has run to its end is gone: ESRCH, which a stop-the-world collector discounts
+    pthread_kill: (c, a) => {
+      const tid = a.i(), t = cpuByTid(tid), sig = a.i(), r = !t || t.finished ? E.SRCH : 0;
+      killLog.push(`${c.name}->${t?.name ?? "tid" + tid}:${sig}=${r}${t ? `/${t.state},${t.loops},${t.parked ? "p" : ""}` : ""}`);
+      if (killLog.length > 300) killLog.splice(0, 100);
+      if (r === 0) t!.kill(sig);
+      return r;
+    },
+    tgkill: (_c, a) => { a.i(); const t = cpuByTid(a.i() - 4242), sig = a.i(); if (!t) return fail(_c, E.SRCH); t.kill(sig); return 0; },
+    raise: (cpu, a) => { const sig = a.i(); if (!sigHandlers.has(sig) && (sig === 6 || sig === 11 || sig === 9)) cpu.fault(`raise(${sig})`); cpu.kill(sig); return 0; },
+    kill: (cpu, a) => { a.i(); const sig = a.i(); if (!sigHandlers.has(sig) && (sig === 6 || sig === 11 || sig === 9)) cpu.fault(`kill(${sig})`); cpu.kill(sig); return 0; },
+    sigsuspend: (cpu) => new Promise<number>((r) => { cpu.sigWait = () => r(fail(cpu, E.INTR)); }),
     sigwait: () => new Promise<never>(() => {}),
     sigaltstack: () => 0, sigpending: (_c, a) => { const s = a.p(); mem.st32(s, 0); mem.st32(s + 4, 0); return 0; },
-    pthread_sigqueue: () => 0, tgkill: () => 0, killpg: () => 0,
+    pthread_sigqueue: () => 0, killpg: () => 0,
     openlog: () => {}, closelog: () => {},
     syslog: (_c, a) => { const prio = a.i(), f = a.str(); logLine(prio <= 3 ? 6 : prio <= 5 ? 5 : 4, "syslog", format(f, a)); },
     vsyslog: (_c, a) => { const prio = a.i(), f = a.str(); logLine(prio <= 3 ? 6 : prio <= 5 ? 5 : 4, "syslog", format(f, vaList(a.p()))); },
@@ -93,6 +115,7 @@ export function procInit(): void {
         for (let k = 0; k < out.length; k++) idx[lo + k] = out[k];
       };
       await merge(0, n);
+      const base = mem.txVa(vbase);
       const copy = mem.u8.slice(base, base + n * size);
       for (let i = 0; i < n; i++) mem.u8.set(copy.subarray(idx[i] * size, (idx[i] + 1) * size), base + i * size);
     },
@@ -115,7 +138,6 @@ export function procInit(): void {
       const pat = a.str(), str = a.str();
       const re = "^" + pat.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$";
       return new RegExp(re).test(str) ? 0 : 1;
-      const base = mem.txVa(vbase);
     },
     asctime_r: (_c, a) => { const tm = a.p(), buf = a.p(); mem.putCstr(buf, asctime(tm), 26); return ptr(buf); },
     asctime: (_c, a) => mem.hostStr(asctime(a.p())),

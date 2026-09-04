@@ -6,7 +6,7 @@ import { hostLib, NORET, type HostFn, stp, stpVa } from "./host";
 import { Cpu, bindCpu, cpuByTid, yieldToLoop } from "./cpu";
 import { RET_SENTINEL, E } from "./abi";
 import { JThread, reportUncaught } from "../jvm/natives/jlang";
-import { readTs } from "./libc";
+import { readTs, fail } from "./libc";
 
 interface Mutex { owner: number; count: number; waiters: (() => void)[] }
 const mutexes = new AddrMap<Mutex>();
@@ -29,6 +29,7 @@ function rwRelease(cpu: Cpu, l: RwLock): number {
 }
 const threads = new Map<number, { cpu: Cpu; done: Promise<void>; retval: bigint }>();
 let keySeq = 1, threadSeq = 0;
+const keyDtors = new Map<number, number>();                      // pthread key → destructor, run for the thread's non-null values at its exit
 const ETIMEDOUT = E.TIMEDOUT, EBUSY = E.BUSY;
 
 function mutexOf(a: number): Mutex {
@@ -47,12 +48,11 @@ function unlock(m: Mutex): void {
   const w = m.waiters.shift();
   if (w) w();
 }
-const sleepMs = (ms: number): Promise<number> => (ms < 1 ? yieldToLoop().then(() => 0) : new Promise((r) => setTimeout(() => r(0), ms)));
+/** setTimeout past 2^31-1 ms fires at once; a wait that long is untimed */
+const timed = (ms: number | null): number | null => (ms !== null && ms < 0x7fffffff ? ms : null);
+const sleepMs = (ms: number): Promise<number> => (ms < 1 ? yieldToLoop().then(() => 0) : new Promise((r) => setTimeout(() => r(0), Math.min(ms, 0x7ffffffe))));
 const absMs = (ts: number) => readTs(ts);
 
-function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | null): Promise<number> {
-  const m = mutexOf(mutex);
-  const count = m.count;
 // ── futex: what libc++ and an engine's own primitives wait on when they bypass pthread
 const futexes = new AddrMap<((woken: boolean) => void)[]>();
 export const futexStats = new Map<string, Record<string, number>>();
@@ -83,6 +83,9 @@ export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: numbe
   return fail(cpu, E.NOSYS);
 }
 
+function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | null): Promise<number> {
+  const m = mutexOf(mutex);
+  const count = m.count;
   m.owner = 0; m.count = 0;
   const w = m.waiters.shift();
   if (w) w();
@@ -93,7 +96,7 @@ export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: numbe
     let timer: ReturnType<typeof setTimeout> | undefined;
     const wake = (timedOut: boolean) => { if (timer !== undefined) clearTimeout(timer); res(timedOut); };
     L.push(wake);
-    if (timeoutMs !== null) timer = setTimeout(() => { const i = L.indexOf(wake); if (i >= 0) L.splice(i, 1); res(true); }, Math.max(0, timeoutMs));
+    if (timed(timeoutMs) !== null) timer = setTimeout(() => { const i = L.indexOf(wake); if (i >= 0) L.splice(i, 1); res(true); }, Math.max(0, timeoutMs!));
   }).then(async (timedOut) => {
     const r = lock(cpu, m);
     if (r instanceof Promise) await r;
@@ -102,14 +105,14 @@ export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: numbe
   });
 }
 
-function startThread(start: number, arg: number, name?: string): Cpu {
+function startThread(start: number, arg: bigint, name?: string): Cpu {
   const jt = new JThread();
   jt.jname = name ?? `pthread-${++threadSeq}`;
   jt.alive = 1;
   const cpu = new Cpu(jt, jt.jname);
   bindCpu(jt, cpu);
   cpu.ensureStack();
-  cpu.r[0] = arg; cpu.h[0] = 0;
+  cpu.r[0] = Number(arg & 0xffffffffn) | 0; cpu.h[0] = Number(arg >> 32n) | 0;
   cpu.r[cpu.lrx] = RET_SENTINEL;
   cpu.setPc(start);
   const rec = { cpu, retval: 0n, done: Promise.resolve() };
@@ -162,7 +165,6 @@ export function pthreadInit(): void {
     },
     pthread_self: (cpu) => cpu.tid,
     pthread_equal: (_c, a) => (a.i() === a.i() ? 1 : 0),
-    pthread_kill: () => 0,
     pthread_sigmask: () => 0,
     pthread_setname_np: (_c, a) => { const c = cpuByTid(a.i()); const n = a.str(); if (c) { c.name = n; c.jthread.jname = n; } return 0; },
     pthread_getschedparam: (_c, a) => { a.i(); const pol = a.p(), par = a.p(); if (pol) mem.st32(pol, 0); if (par) mem.st32(par, 0); return 0; },
@@ -191,7 +193,7 @@ export function pthreadInit(): void {
     pthread_cond_signal: (_c, a) => { const l = conds.get(a.p()); const w = l?.shift(); if (w) w(false); return 0; },
     pthread_cond_broadcast: (_c, a) => { const l = conds.get(a.p()); if (l) for (const w of l.splice(0)) w(false); return 0; },
     pthread_condattr_init: () => 0, pthread_condattr_destroy: () => 0, pthread_condattr_setclock: () => 0, pthread_condattr_setpshared: () => 0,
-    pthread_key_create: (_c, a) => { const out = a.p(); mem.st32(out, keySeq++); return 0; },
+    pthread_key_create: (_c, a) => { const out = a.p(), dtor = a.p(); if (dtor) keyDtors.set(keySeq, dtor); mem.st32(out, keySeq++); return 0; },
     pthread_rwlock_init: (_c, a) => { rwlocks.set(a.p(), { readers: 0, writer: 0, waiters: [] }); return 0; },
     pthread_rwlock_destroy: (_c, a) => { rwlocks.delete(a.p()); return 0; },
     pthread_rwlock_rdlock: (cpu, a) => rwAcquire(cpu, rwOf(a.p()), false),
@@ -227,14 +229,14 @@ export function pthreadInit(): void {
     sem_timedwait: (cpu, a) => {
       const s = semOf(a.p()), ts = a.p();
       if (s.count > 0) { s.count--; return 0; }
-      const ms = absMs(ts) - Date.now();
+      const ms = timed(absMs(ts) - Date.now());
       return new Promise<number>((r) => {
         const w = () => { clearTimeout(t); r(0); };
-        const t = setTimeout(() => { const i = s.waiters.indexOf(w); if (i >= 0) { s.waiters.splice(i, 1); mem.st32(cpu.errnoAddr, ETIMEDOUT); r(-1); } }, Math.max(0, ms));
+        const t = ms === null ? undefined : setTimeout(() => { const i = s.waiters.indexOf(w); if (i >= 0) { s.waiters.splice(i, 1); mem.st32(cpu.errnoAddr, ETIMEDOUT); r(-1); } }, Math.max(0, ms));
         s.waiters.push(w);
       });
     },
-    sem_clockwait: (cpu, a) => { const s = semOf(a.p()); a.i(); const ts = a.p(); if (s.count > 0) { s.count--; return 0; } void cpu; return new Promise<number>((r) => { setTimeout(() => r(-1), Math.max(0, absMs(ts) - Date.now())); s.waiters.push(() => r(0)); }); },
+    sem_clockwait: (cpu, a) => { const s = semOf(a.p()); a.i(); const ts = a.p(); if (s.count > 0) { s.count--; return 0; } void cpu; const ms = timed(absMs(ts) - Date.now()); return new Promise<number>((r) => { if (ms !== null) setTimeout(() => r(-1), Math.max(0, ms)); s.waiters.push(() => r(0)); }); },
     clock_nanosleep: (_c, a) => { const clk = a.i(), flags = a.i(), req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, 16); const ms = readTs(req); return sleepMs(flags & 1 ? ms - (clk === 0 ? Date.now() : performance.now() + 1000) : ms); },
     // sleeping
     usleep: (_c, a) => sleepMs(a.u() / 1000),
