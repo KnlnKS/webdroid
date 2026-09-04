@@ -12,7 +12,7 @@ import { curThread } from "../jvm/natives/jlang";
 
 export const modules: Module[] = [];
 const byName = new Map<string, Module>();
-const ABIS = ["armeabi-v7a", "armeabi"];
+
 type Handle = { mod: Module } | { lib: string };
 const handles: Handle[] = [];
 let dlerrorMsg: string | null = null;
@@ -23,7 +23,7 @@ function basename(p: string): string { return p.slice(p.lastIndexOf("/") + 1); }
 
 /** the bytes of lib<name>.so shipped in the booted apk, for any ABI the tier runs */
 function apkLibBytes(name: string): Uint8Array | null {
-  for (const a of ABIS) { const b = rt.classpath[`lib/${a}/${name}`]; if (b) return b; }
+  for (const a of rt.nativeAbis) { const b = rt.classpath[`lib/${a}/${name}`]; if (b) return b; }
   return null;
 }
 

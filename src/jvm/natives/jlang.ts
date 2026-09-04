@@ -1106,7 +1106,14 @@ function arraycopy(src: any, sp: number, dst: any, dp: number, len: number) {
   }
 }
 const loadedLibs = new Set<string>();
+/** what a device this shape carries, most-preferred first. Which of them we can EXECUTE is the
+ *  native tier's answer (rt.nativeAbis), and a library we can run beats one we cannot. */
 const ABIS = ["arm64-v8a", "armeabi-v7a", "armeabi", "x86_64", "x86"];
+/** the ABI an apk's lib/ would be loaded from: the first the tier runs, else the first present
+ *  — so the UnsatisfiedLinkError names the machine code the device would actually have used */
+function pickAbi(has: (abi: string) => boolean): string | null {
+  return rt.nativeAbis.find(has) ?? ABIS.find(has) ?? null;
+}
 const E_MACHINE: Record<number, string> = { 0xb7: "arm64-v8a", 0x28: "armeabi", 0x3e: "x86_64", 0x03: "x86" };
 /** every way this ends without the library loaded: the app is going to get an
  *  UnsatisfiedLinkError, and the shell says which machine code it would have taken. */
@@ -1134,7 +1141,7 @@ async function dlopen(lib: string, abi: () => string | null, bytes: (a: string) 
   if (a) needsNative(lib, a);
   throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${lib}" ${a ? "is " + a + " machine code" : "not found"}`);
 }
-const loadLibrary = async (n: string) => dlopen(`lib${n}.so`, () => ABIS.find((a) => rt.classpath[`lib/${a}/lib${n}.so`]) ?? null,
+const loadLibrary = async (n: string) => dlopen(`lib${n}.so`, () => pickAbi((a) => !!rt.classpath[`lib/${a}/lib${n}.so`]),
   (a) => rt.classpath[`lib/${a}/lib${n}.so`] ?? null);
 const sysProps: Record<string, string> = {
   "java.version": "0", "os.name": "Linux", "line.separator": "\n",

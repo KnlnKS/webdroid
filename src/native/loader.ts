@@ -21,8 +21,14 @@ function nativeInit(): void {
   resolveByExport((sym) => { for (const m of modules) { const a = m.exports.get(sym); if (a !== undefined) return a; } return lookupHost(sym); });
 }
 
+/** The ABIs this tier can execute, most-preferred first. The one place that knows: the ELF
+ *  loader, the dynamic linker's own lib search and System.loadLibrary's choice all read it, and
+ *  adding a backend is one edit here. */
+export const NATIVE_ABIS = ["armeabi-v7a", "armeabi"] as const;
+rt.nativeAbis = NATIVE_ABIS;
+
 export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string): Promise<void> {
-  if (abi !== "armeabi" && abi !== "armeabi-v7a") {
+  if (!(NATIVE_ABIS as readonly string[]).includes(abi)) {
     throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${name}" is ${abi} machine code`);
   }
   nativeInit();

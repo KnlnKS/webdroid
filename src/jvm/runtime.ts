@@ -220,6 +220,9 @@ export class Runtime {
   onNativeRequired: (lib: string, abi: string) => void = () => {};
   /** set by src/native/loader.ts: loads a machine-code library for an ABI it can run (loadLibrary consults it before giving up) */
   loadNativeLib: ((lib: string, bytes: Uint8Array, abi: string) => Promise<void>) | null = null;
+  /** the ABIs the native tier can actually execute, most-preferred first. Empty until
+   *  src/native/loader.ts is imported, which is the only thing that can answer it. */
+  nativeAbis: readonly string[] = [];
   /** a native method nothing registered — what calling it throws */
   ulink(cls: string, name: string, desc: string): Error {
     this.noteMissing(cls + "." + name + desc + " [native]");
