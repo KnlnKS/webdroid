@@ -171,3 +171,71 @@ describe("a64 decoder", () => {
     expect(c.r[2]).toBe(4);
   });
 });
+
+describe("a64 decoder: hints, atomics, the REV family and system registers", () => {
+  test("rev, rev16, rev32, rbit and cls, both widths, rd may be rn", () => {
+    const c = run([
+      0xd299bde0,   // mov x0, #0xcdef
+      0xf2b13560,   // movk x0, #0x89ab, lsl #16
+      0xf2c8ace0,   // movk x0, #0x4567, lsl #32
+      0xf2e02460,   // movk x0, #0x123, lsl #48
+      0x5ac00801,   // rev w1, w0
+      0xdac00c02,   // rev x2, x0
+      0x5ac00403,   // rev16 w3, w0
+      0xdac00404,   // rev16 x4, x0
+      0xdac00805,   // rev32 x5, x0
+      0x5ac00006,   // rbit w6, w0
+      0xdac00007,   // rbit x7, x0
+      0x5ac01408,   // cls w8, w0
+      0xdac01409,   // cls x9, x0
+      0x12801fea,   // mov w10, #-256
+      0x5ac0154b,   // cls w11, w10
+      0xaa0003ec,   // mov x12, x0
+      0xdac00d8c,   // rev x12, x12
+      0xdac0000d,   // rbit x13, x0
+      0xdac001ad,   // rbit x13, x13
+      RET]);
+    expect([c.r[1], c.h[1]]).toEqual([-271733879, 0]);
+    expect([c.r[2], c.h[2]]).toEqual([1732584193, -271733879]);
+    expect([c.r[3], c.h[3]]).toEqual([-1417023539, 0]);
+    expect([c.r[4], c.h[4]]).toEqual([-1417023539, 587294533]);
+    expect([c.r[5], c.h[5]]).toEqual([-271733879, 1732584193]);
+    expect([c.r[6], c.h[6]]).toEqual([-139209327, 0]);
+    expect([c.r[7], c.h[7]]).toEqual([-425540480, -139209327]);
+    expect([c.r[8], c.r[9], c.r[11]]).toEqual([0, 6, 23]);
+    expect([c.r[12], c.h[12]]).toEqual([1732584193, -271733879]);
+    expect([c.r[13], c.h[13]]).toEqual([c.r[0], c.h[0]]);
+  });
+
+  test("system registers: NZCV round-trips, FPCR is kept, the ID space reads as nothing", () => {
+    const c = run([
+      0x92800000,   // mov x0, #-1
+      0xf100001f,   // cmp x0, #0
+      0xd53b4201,   // mrs x1, NZCV
+      0xd2a80002,   // mov x2, #0x40000000
+      0xd51b4202,   // msr NZCV, x2
+      0x1a9f17ec,   // cset w12, eq
+      0xd53b4403,   // mrs x3, FPCR
+      0xd2a02004,   // mov x4, #0x1000000
+      0xd51b4404,   // msr FPCR, x4
+      0xd53b4405,   // mrs x5, FPCR
+      0xd53b00e6,   // mrs x6, DCZID_EL0
+      0xd53b0027,   // mrs x7, CTR_EL0
+      0xd53be008,   // mrs x8, CNTFRQ_EL0
+      0xd5380609,   // mrs x9, ID_AA64ISAR0_EL1
+      0xd538000a,   // mrs x10, MIDR_EL1
+      0xd53be04b,   // mrs x11, CNTVCT_EL0
+      0xd503413f,   // msr SSBS, #1
+      0xd50b7e20,   // dc civac, x0
+      0xd50b7520,   // ic ivau, x0
+      0xd51bd044,   // msr TPIDR_EL0, x4
+      0xd53bd04d,   // mrs x13, TPIDR_EL0
+      RET]);
+    expect([c.r[1], c.h[1]]).toEqual([-1610612736, 0]);
+    expect(c.r[12]).toBe(1);
+    expect([c.r[3], c.r[5]]).toEqual([0, 0x1000000]);
+    expect([c.r[6], c.r[7], c.r[8], c.r[9], c.r[10]]).toEqual([0x10, 0x8444c004 | 0, 19200000, 0, 0]);
+    expect(c.h[11]).toBeGreaterThanOrEqual(0);
+    expect(c.r[13]).toBe(0x1000000);
+  });
+});

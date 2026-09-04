@@ -122,6 +122,37 @@ const lo32 = (v: bigint) => Number(BigInt.asIntN(32, v));
 const hi32 = (v: bigint) => Number(BigInt.asIntN(32, v >> 32n));
 
 const sx = (v: number, bits: number) => (v << (32 - bits)) >> (32 - bits);
+/** a constant bound for a register: spelled as the int32 the register file would hold, because a
+ *  hoisted local keeps the literal as written and `0xffffffff` is not -1 to `>` or `===` */
+const int32 = (n: number) => String(n | 0);
+
+// System registers, keyed on the encoding's op0:op1:CRn:CRm:op2. A read the table cannot answer
+// faults by name; the ID registers read as "no optional features" so a runtime keeps to its
+// generic paths, and DCZID says DC ZVA is prohibited so memset never issues one.
+function sysRead(key: number, rd: number): string | null {
+  switch (key) {
+    case 0x5a10: return setX(rd, "((c.n<<31)|(c.z<<30)|(c.c<<29)|(c.v<<28))", "0");    // NZCV
+    case 0x5a20: return setX(rd, "c.fpcr", "0");                                        // FPCR
+    case 0x5a21: return setX(rd, "(c.fpsr|(c.q<<27))", "0");                            // FPSR
+    case 0x5e82: return setX(rd, "c.tlsBase", "0");                                     // TPIDR_EL0
+    case 0x5e83: return setX(rd, "0", "0");                                             // TPIDRRO_EL0
+    case 0x5807: return setX(rd, "0x10", "0");                                          // DCZID_EL0: DZP
+    case 0x5801: return setX(rd, int32(0x8444c004), "0");                                 // CTR_EL0: 64-byte lines
+    case 0x5f00: return setX(rd, "19200000", "0");                                      // CNTFRQ_EL0
+    case 0x5f01: case 0x5f02: return "c.cnt();" + setX(rd, "c.lo", "c.hi");             // CNTPCT_EL0 / CNTVCT_EL0
+  }
+  if ((key & 0x7f80) === 0x4000) return setX(rd, "0", "0");                             // MIDR, MPIDR, ID_AA64*
+  return null;
+}
+function sysWrite(key: number, rt: number): string | null {
+  switch (key) {
+    case 0x5a10: return `t=${zr(rt)};c.n=(t>>>31)&1;c.z=(t>>>30)&1;c.c=(t>>>29)&1;c.v=(t>>>28)&1;`;
+    case 0x5a20: return `c.fpcr=${zr(rt)};`;
+    case 0x5a21: return `t=${zr(rt)};c.fpsr=t&0x7ffffff;c.q=(t>>>27)&1;`;
+    case 0x5e82: return `c.tlsBase=${zr(rt)};`;
+  }
+  return null;
+}
 
 let redirect = -1, slot = 0;
 
@@ -144,7 +175,7 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
       const imm = (((w >>> 5) & 0x7ffff) << 2) | ((w >>> 29) & 3);
       const off = sx(imm, 21);
       const v = (w & 0x80000000) ? ((pc & ~0xfff) + off * 4096) | 0 : (pc + off) | 0;
-      push(setX(rd, hex(v), "0"));
+      push(setX(rd, int32(v), "0"));
       return false;
     }
     if (op === 2 || op === 3) {                                                      // ADD/SUB immediate
@@ -180,10 +211,10 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
       const shift = hw * 16;
       const val = shift >= 32 ? { lo: 0n, hi: BigInt(imm16) << BigInt(shift - 32) } : { lo: BigInt(imm16) << BigInt(shift), hi: 0n };
       if (opc === 0) {                                                               // MOVN: the inverse
-        const l = hex(lo32(~val.lo & 0xffffffffn)), h = hex(w64 ? lo32(~val.hi & 0xffffffffn) : 0);
+        const l = int32(lo32(~val.lo & 0xffffffffn)), h = int32(w64 ? lo32(~val.hi & 0xffffffffn) : 0);
         push(w64 ? setX(rd, l, h) : setW(rd, l));
       } else if (opc === 2) {                                                        // MOVZ
-        push(w64 ? setX(rd, hex(lo32(val.lo)), hex(lo32(val.hi))) : setW(rd, hex(lo32(val.lo))));
+        push(w64 ? setX(rd, int32(lo32(val.lo)), int32(lo32(val.hi))) : setW(rd, int32(lo32(val.lo))));
       } else {                                                                       // MOVK: keep the rest
         const keep = hex(lo32(~(0xffffn << BigInt(shift % 32)) & 0xffffffffn));
         if (shift >= 32) push(w64 ? `H[${rd}]=(H[${rd}]&${keep})|${hex(lo32(val.hi))};` : fault("MOVK hw>1 in 32-bit"));
@@ -264,18 +295,27 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
     }
     if (is(0xfffffc1f, 0xd61f0000)) { push(`c.ic+=${k};return c.look(${zr(rn)});`); return true; }  // BR
     if (is(0xffe0001f, 0xd4000001)) { push(`r[32]=${hex((pc + 4) | 0)};c.ic+=${k};c.svc();return c.look(r[32]);`); return true; } // SVC
-    if (is(0xfffff01f, 0xd503201f)) { push(""); return false; }                 // HINT (NOP/YIELD/…)
-    if (is(0xfffff01f, 0xd503301f)) { push(""); return false; }                 // DSB/DMB/ISB
-    if (is(0xfff00000, 0xd5300000)) {                                           // MRS
-      // the only system register a userspace image reads here is the thread pointer
-      if (is(0xffffffe0, 0xd53bd040)) { push(setX(rd, "c.tlsBase", "0")); return false; }
-      push(fault("MRS"));
-      return true;
-    }
-    if (is(0xfff00000, 0xd5100000)) {                                           // MSR
-      if (is(0xffffffe0, 0xd51bd040)) { push(`c.tlsBase=${zr(rd)};`); return false; }
+    if (is(0xfffff01f, 0xd503201f)) { push(""); return false; }                 // HINT (NOP/YIELD/BTI/PAC…)
+    if (is(0xfffff01f, 0xd503301f)) { push(((w >>> 5) & 7) === 2 ? "c.excl=0;" : ""); return false; }   // CLREX / DSB / DMB / ISB
+    if (is(0xfff8f01f, 0xd500401f)) { push(""); return false; }                 // MSR (immediate): SSBS/DIT/PAN
+    if (is(0xfff80000, 0xd5080000)) {                                           // SYS: dc / ic / tlbi
+      // DCZID_EL0 says DC ZVA is prohibited, so reaching one means a guest ignored it
+      if (((w >>> 5) & 0x7ff) === 0x3a1) { push(fault("dc zva")); return true; }
       push(""); return false;
     }
+    if (is(0xfff00000, 0xd5300000)) {                                           // MRS
+      const code = sysRead((w >>> 5) & 0x7fff, rd);
+      if (code === null) { push(fault("MRS")); return true; }
+      push(code, null, ALL, 0);
+      return false;
+    }
+    if (is(0xfff00000, 0xd5100000)) {                                           // MSR
+      const code = sysWrite((w >>> 5) & 0x7fff, rd);
+      if (code === null) { push(fault("MSR")); return true; }
+      push(code, null, 0, ALL);
+      return false;
+    }
+    if (is(0xffe0001f, 0xd4200000)) { push(fault("brk")); return true; }
     push(fault("branch/system"));
     return true;
   }
@@ -461,14 +501,18 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
     // data processing (1 source): CLZ and friends. Checked before the 2-source group, whose
     // encoding differs from it only in bit 30.
     if (is(0x5fff0000, 0x5ac00000)) {
-      const opc = (w >>> 10) & 0x3f;
-      if (opc === 4) {                                                               // CLZ
-        push(w64 ? setX(rd, `(${zrh(rn)}===0?32+Math.clz32(${zr(rn)}):Math.clz32(${zrh(rn)}))`, "0")
-          : setW(rd, `Math.clz32(${zr(rn)})`));
-        return false;
-      }
-      push(fault("data processing (1 source)"));
-      return true;
+      const opc = (w >>> 10) & 0x3f, lo = zr(rn), hi = zrh(rn);
+      const bs = (e: string) => `((${e}>>>24)|((${e}>>>8)&0xff00)|((${e}<<8)&0xff0000)|(${e}<<24))`;
+      const h16 = (e: string) => `(((${e}>>>8)&0xff00ff)|((${e}<<8)&0xff00ff00))`;
+      // the 64-bit forms read both halves before writing either: rd may be rn
+      if (opc === 0) push(w64 ? `v=c.rbit32(${hi});vh=c.rbit32(${lo});` + setX(rd, "v", "vh") : setW(rd, `c.rbit32(${lo})`));        // RBIT
+      else if (opc === 1) push(w64 ? `v=${h16(lo)};vh=${h16(hi)};` + setX(rd, "v", "vh") : setW(rd, h16(lo)));                 // REV16
+      else if (opc === 2) push(w64 ? `v=${bs(lo)};vh=${bs(hi)};` + setX(rd, "v", "vh") : setW(rd, bs(lo)));                    // REV32 / REV (w)
+      else if (opc === 3 && w64) push(`v=${bs(hi)};vh=${bs(lo)};` + setX(rd, "v", "vh"));                                       // REV (x)
+      else if (opc === 4) push(w64 ? setX(rd, `(${hi}===0?32+Math.clz32(${lo}):Math.clz32(${hi}))`, "0") : setW(rd, `Math.clz32(${lo})`));   // CLZ
+      else if (opc === 5) push(w64 ? setX(rd, `c.cls64(${lo},${hi})`, "0") : setW(rd, `(Math.clz32(${lo}^(${lo}>>31))-1)`));   // CLS
+      else { push(fault("data processing (1 source)")); return true; }
+      return false;
     }
     // data processing (2 source): UDIV/SDIV/LSLV/LSRV/ASRV/RORV
     if (is(0x5fe00000, 0x1ac00000)) {

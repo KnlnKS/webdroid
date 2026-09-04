@@ -129,6 +129,10 @@ export class Cpu {
   d = new Float64Array(this.s.buffer);
   si = new Int32Array(this.s.buffer);
   fpscr = 0;
+  /** A64 FPCR/FPSR: stored so a save/restore round-trips; only frint*'s rounding mode reads them */
+  fpcr = 0; fpsr = 0;
+  /** exclusive monitor: set by LDXR, consumed by STXR; a slice must not end between them */
+  excl = 0;
   tlsBase = 0;
   jthread: JThread;
   tid: number;
@@ -403,6 +407,25 @@ export class Cpu {
     if (n >= 64 || n === 32 || n > 32) { this.lo = n === 32 ? hi : hi >> Math.min(31, n - 32); this.hi = hi >> 31; return; }
     this.lo = (lo >>> n) | (hi << (32 - n));
     this.hi = hi >> n;
+  }
+  rbit32(x: number): number {
+    x = ((x >>> 1) & 0x55555555) | ((x & 0x55555555) << 1);
+    x = ((x >>> 2) & 0x33333333) | ((x & 0x33333333) << 2);
+    x = ((x >>> 4) & 0x0f0f0f0f) | ((x & 0x0f0f0f0f) << 4);
+    return ((x >>> 24) | ((x >>> 8) & 0xff00) | ((x << 8) & 0xff0000) | (x << 24)) | 0;
+  }
+  /** count leading sign bits of a 64-bit value */
+  cls64(lo: number, hi: number): number {
+    const sgn = hi >> 31;
+    const h = hi ^ sgn;
+    if (h !== 0) return Math.clz32(h) - 1;
+    return 31 + Math.clz32(lo ^ sgn);
+  }
+  /** the generic timer: CNTVCT_EL0 at CNTFRQ_EL0 = 19.2 MHz, into lo/hi */
+  cnt(): void {
+    const t = Math.floor(performance.now() * 19200);
+    this.hi = Math.floor(t / 4294967296) | 0;
+    this.lo = t | 0;
   }
   /** A64 syscall (svc #0, number in x8): the same handful a userspace runtime issues directly */
   svc(): void {
