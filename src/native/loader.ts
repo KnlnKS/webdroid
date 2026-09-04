@@ -8,6 +8,9 @@ import { dlInit, loadModule, modules } from "./dl";
 import type { Module } from "./elf";
 import { jniInit, javaVM, pushFrame, popFrame, resolveByExport } from "./jni";
 import { gles1Init } from "./gles1";
+import { gles3Init } from "./gles3";
+import { eglInit } from "./egl";
+import { ndkInit } from "./libandroid";
 import { cpuFor, setA64 } from "./cpu";
 import { lookupHost } from "./host";
 
@@ -19,6 +22,9 @@ function nativeInit(): void {
   dlInit();
   jniInit();
   gles1Init();
+  gles3Init();
+  eglInit();
+  ndkInit();
   resolveByExport((sym) => { for (const m of modules) { const a = m.exports.get(sym); if (a !== undefined) return a; } return lookupHost(sym); });
 }
 

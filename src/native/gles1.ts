@@ -6,9 +6,8 @@
 // column-major Float32Array(16) stacks; the shader takes the MVP product and the texture matrix.
 
 import { mem } from "./mem";
-import { hostLib, lookupHost, missingStub, calledMissing, type HostFn, bitsf } from "./host";
-import { gl, setGL } from "../android/gl";
-import { glSurfaces, type GlSurface } from "../android/glview";
+import { hostLib, calledMissing, type HostFn, bitsf } from "./host";
+import { gl } from "../android/gl";
 import { perf } from "../perf";
 
 type GL = WebGL2RenderingContext | WebGLRenderingContext;
@@ -540,68 +539,5 @@ export function gles1Init(): void {
       c.gl.readPixels(x, y, w, h, fmt, type, view);
     }),
   };
-  hostLib("libGLESv1_CM.so", G);
-  // the ES2 entry points share the context; only what telemetry shows the engine using is real
-  hostLib("libGLESv2.so", {
-    glGetString: G.glGetString, glGetIntegerv: G.glGetIntegerv, glGetError: G.glGetError, glViewport: G.glViewport, glClear: G.glClear, glClearColor: G.glClearColor,
-    glEnable: G.glEnable, glDisable: G.glDisable, glBlendFunc: G.glBlendFunc, glGenTextures: G.glGenTextures, glBindTexture: G.glBindTexture, glDeleteTextures: G.glDeleteTextures,
-    glTexImage2D: G.glTexImage2D, glTexSubImage2D: G.glTexSubImage2D, glTexParameteri: G.glTexParameteri, glPixelStorei: G.glPixelStorei, glScissor: G.glScissor,
-  });
-
-  // ── EGL: one display, one config, one context; the surface is the SurfaceView's
-  const EGL_SUCCESS = 0x3000;
-  let eglErr = EGL_SUCCESS;
-  const surfHandles: (GlSurface | null)[] = [null];
-  const handleFor = (s: GlSurface) => { const i = surfHandles.indexOf(s); if (i > 0) return i; surfHandles.push(s); return surfHandles.length - 1; };
-  const cfgAttr = (attr: number): number => {
-    const a = gl?.getContextAttributes();
-    switch (attr) {
-      case 0x3024: case 0x3023: case 0x3022: case 0x3021: return 8;
-      case 0x3020: return 32;                                                 // BUFFER_SIZE
-      case 0x3025: return a && !a.depth ? 0 : 16;
-      case 0x3026: return a?.stencil ? 8 : 0;
-      case 0x3031: return a?.antialias ? 4 : 0; case 0x3032: return a?.antialias ? 1 : 0;
-      case 0x3033: return 4;                                                  // SURFACE_TYPE: WINDOW_BIT
-      case 0x3040: return 1 | 4;                                              // RENDERABLE_TYPE: ES1 | ES2
-      case 0x3027: return 0x3038;                                             // CONFIG_CAVEAT: NONE
-      case 0x3028: return 1;                                                  // CONFIG_ID
-      case 0x3039: return 1; case 0x303a: return 0;                           // BIND_TO_TEXTURE_RGB/RGBA
-      case 0x303b: return 0x3038; case 0x303c: return 0x3038;                 // MIN/MAX_SWAP_INTERVAL
-      case 0x303d: return 0; case 0x303e: return 0x3038; case 0x303f: return 0x3038; // LUMINANCE/ALPHA_MASK/COLOR_BUFFER_TYPE
-      case 0x302f: return 0; case 0x302e: return 0; case 0x302d: return 0;   // TRANSPARENT_*
-      case 0x3029: return 0; case 0x302a: return 4096; case 0x302b: return 4096; case 0x302c: return 1 << 24; // LEVEL, MAX_PBUFFER_*
-      case 0x3030: return 0x3038; case 0x302e + 1: return 0;                  // NATIVE_RENDERABLE/VISUAL
-      default: return 0;
-    }
-  };
-  const E: Record<string, HostFn> = {
-    eglGetDisplay: () => 1,
-    eglInitialize: (_c, a) => { a.i(); const ma = a.p(), mi = a.p(); if (ma) mem.st32(ma, 1); if (mi) mem.st32(mi, 4); return 1; },
-    eglTerminate: () => 1,
-    eglGetError: () => { const e = eglErr; eglErr = EGL_SUCCESS; return e; },
-    eglBindAPI: () => 1, eglQueryAPI: () => 0x30a0,
-    eglQueryString: (_c, a) => { a.i(); const n = a.i(); return cstr(n === 0x3053 ? "webdroid" : n === 0x3054 ? "1.4" : n === 0x3055 ? "EGL_KHR_image_base" : n === 0x3056 ? "" : ""); },
-    eglGetConfigs: (_c, a) => { a.i(); const cfgs = a.p(), size = a.i(), num = a.p(); if (cfgs && size > 0) mem.st32(cfgs, 1); if (num) mem.st32(num, 1); return 1; },
-    eglChooseConfig: (_c, a) => { a.i(); a.p(); const cfgs = a.p(), size = a.i(), num = a.p(); if (cfgs && size > 0) mem.st32(cfgs, 1); if (num) mem.st32(num, 1); return 1; },
-    eglGetConfigAttrib: (_c, a) => { a.i(); a.i(); const attr = a.i(), out = a.p(); mem.st32(out, cfgAttr(attr)); return 1; },
-    eglCreateContext: () => 1,
-    eglDestroyContext: () => 1,
-    eglCreateWindowSurface: () => { const s = glSurfaces.primary(); if (!s) { eglErr = 0x300b; return 0; } return handleFor(s); },
-    eglCreatePbufferSurface: () => { eglErr = 0x3003; return 0; },
-    eglCreatePixmapSurface: () => { eglErr = 0x3003; return 0; },
-    eglDestroySurface: () => 1,
-    eglSurfaceAttrib: () => 1,
-    eglQuerySurface: (_c, a) => { a.i(); const h = a.i(), attr = a.i(), out = a.p(); const s = surfHandles[h]; if (!s) { eglErr = 0x300d; return 0; } mem.st32(out, attr === 0x3057 ? s.canvas.width : attr === 0x3056 ? s.canvas.height : 0); return 1; },
-    eglQueryContext: (_c, a) => { a.i(); a.i(); const attr = a.i(), out = a.p(); mem.st32(out, attr === 0x3028 ? 1 : attr === 0x3098 ? 1 : 0); return 1; },
-    eglMakeCurrent: (_c, a) => { a.i(); const draw = a.i(); const s = surfHandles[draw]; if (s) glSurfaces.makeCurrent(s); else setGL(null as unknown as GL); return 1; },
-    eglSwapBuffers: (_c, a) => { a.i(); const s = surfHandles[a.i()]; if (!s) { eglErr = 0x300d; return 0; } return glSurfaces.swap(s).then(() => 1); },
-    eglSwapInterval: () => 1,
-    eglGetCurrentContext: () => 1, eglGetCurrentDisplay: () => 1,
-    eglGetCurrentSurface: () => { const s = glSurfaces.current; return s ? handleFor(s) : 0; },
-    eglWaitGL: () => 1, eglWaitNative: () => 1, eglWaitClient: () => 1, eglReleaseThread: () => 1,
-    eglCopyBuffers: () => { eglErr = 0x3003; return 0; },
-    eglBindTexImage: () => 0, eglReleaseTexImage: () => 0, eglCreatePbufferFromClientBuffer: () => 0,
-    eglGetProcAddress: (_c, a) => { const n = a.str(); return lookupHost(n, "libGLESv1_CM.so") ?? lookupHost(n, "libEGL.so") ?? missingStub("eglGetProcAddress!" + n); },
-  };
-  hostLib("libEGL.so", E);
+  hostLib("libGLESv1_CM.so", G, { closed: true });
 }

@@ -12,21 +12,31 @@ export let gl: GL | null = null;
 // context that minted the handles, as EGL objects do: setGL re-selecting a context must keep
 // last frame's VBOs and textures, and a context seen for the first time starts empty — the
 // "EGL context lost" case renderers already reload from in onSurfaceCreated.
-type Tables = {
+export type Tables = {
   programs: (WebGLProgram | null)[]; shaders: (WebGLShader | null)[]; buffers: (WebGLBuffer | null)[];
   textures: (WebGLTexture | null)[]; uniforms: (WebGLUniformLocation | null)[];
+  vaos: (WebGLVertexArrayObject | null)[]; fbos: (WebGLFramebuffer | null)[]; rbos: (WebGLRenderbuffer | null)[];
+  samplers: (WebGLSampler | null)[]; queries: (WebGLQuery | null)[]; syncs: (WebGLSync | null)[]; tfs: (WebGLTransformFeedback | null)[];
+  ids: WeakMap<object, number>; // object → handle, for the *_BINDING queries
 };
-const freshTables = (): Tables => ({ programs: [null], shaders: [null], buffers: [null], textures: [null], uniforms: [null] });
+const freshTables = (): Tables => ({ programs: [null], shaders: [null], buffers: [null], textures: [null], uniforms: [null],
+  vaos: [null], fbos: [null], rbos: [null], samplers: [null], queries: [null], syncs: [null], tfs: [null], ids: new WeakMap() });
 const tablesOf = new WeakMap<GL, Tables>();
 let T: Tables = freshTables();
-export function setGL(ctx: GL) {
+export const tables = (): Tables => T;
+export function setGL(ctx: GL | null) {
   if (ctx === gl) return;
   gl = ctx;
+  if (!ctx) return;
   let t = tablesOf.get(ctx);
   if (!t) tablesOf.set(ctx, t = freshTables());
   T = t;
 }
-function put<O>(tbl: (O | null)[], obj: O | null): number { tbl.push(obj); return tbl.length - 1; }
+export function put<O extends object>(tbl: (O | null)[], obj: O | null): number {
+  tbl.push(obj);
+  if (obj) T.ids.set(obj, tbl.length - 1);
+  return tbl.length - 1;
+}
 
 function bytesFrom(buf: JBuffer | null): Uint8Array | null {
   if (!buf) return null;

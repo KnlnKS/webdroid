@@ -4,7 +4,7 @@
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { perf } from "../perf";
 import { device } from "../shell/config";
-import { mangleMethod, jmethod, type JMethod } from "../jvm/abi";
+import { mangleMethod, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, idHash } from "../jvm/natives/jlang";
 import { JCanvas, JRect, JPoint, setInvalidateHook, JMatrix, insetsOf, matMul, rotM } from "./graphics";
 import { csText } from "./text";
@@ -197,7 +197,7 @@ export class JView extends JObj {
   background: JDrawable | null = null;
   foreground: JDrawable | null = null;
   /** a SurfaceView's surface: composited behind the view's own drawing, like SurfaceFlinger does */
-  surfaceLayer: OffscreenCanvas | null = null;
+  surfaceLayer: OffscreenCanvas | ImageBitmap | null = null;
   alphaV = 1;
   scrollX = 0; scrollY = 0;
   translationX = 0; translationY = 0; translationZ = 0;
@@ -837,6 +837,8 @@ const viewMethods: NativeSpec["methods"] = {
   "sendAccessibilityEvent(I)V": () => {},
   "announceForAccessibility(Ljava/lang/CharSequence;)V": () => {},
   "setSystemUiVisibility(I)V": () => {},
+  // the system UI never changes underneath the app here, so the listener has nothing to hear
+  "setOnSystemUiVisibilityChangeListener(Landroid/view/View$OnSystemUiVisibilityChangeListener;)V": () => {},
   "getSystemUiVisibility()I": () => 0,
   "setFitsSystemWindows(Z)V": function (this: JView, on: number) { this.fitsSys = !!on; },
   "requestApplyInsets()V": () => { uiState.needsInsets = true; },
@@ -2069,7 +2071,9 @@ rt.register({
   statics: {
     VISIBLE: 0, INVISIBLE: 4, GONE: 8, NO_ID: -1,
     MEASURED_STATE_MASK: -0x1000000, MEASURED_SIZE_MASK: 0x00ffffff,
-    SYSTEM_UI_FLAG_VISIBLE: 0, LAYER_TYPE_NONE: 0, LAYER_TYPE_SOFTWARE: 1, LAYER_TYPE_HARDWARE: 2,
+    SYSTEM_UI_FLAG_VISIBLE: 0, SYSTEM_UI_FLAG_LOW_PROFILE: 1, SYSTEM_UI_FLAG_HIDE_NAVIGATION: 2, SYSTEM_UI_FLAG_FULLSCREEN: 4, SYSTEM_UI_FLAG_LAYOUT_STABLE: 0x100,
+    SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION: 0x200, SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN: 0x400, SYSTEM_UI_FLAG_IMMERSIVE: 0x800, SYSTEM_UI_FLAG_IMMERSIVE_STICKY: 0x1000,
+    LAYER_TYPE_NONE: 0, LAYER_TYPE_SOFTWARE: 1, LAYER_TYPE_HARDWARE: 2,
     SCROLLBARS_INSIDE_OVERLAY: 0, OVER_SCROLL_ALWAYS: 0, OVER_SCROLL_NEVER: 2,
     FOCUS_DOWN: 130, FOCUS_UP: 33, FOCUS_LEFT: 17, FOCUS_RIGHT: 66,
     TEXT_ALIGNMENT_INHERIT: 0, LAYOUT_DIRECTION_LTR: 0,
@@ -2203,6 +2207,19 @@ function fillMetrics(dm: JDisplayMetrics, heightPx: number) {
   dm.density = device.density; dm.densityDpi = device.densityDpi; dm.scaledDensity = device.density;
   dm.widthPixels = device.width; dm.heightPixels = heightPx;
 }
+// the one display mode: the panel's size at its refresh rate
+class JDisplayMode extends JObj {}
+let theMode: JDisplayMode | null = null;
+const displayMode = () => (theMode ??= new JDisplayMode());
+rt.register({
+  name: "android/view/Display$Mode", ctor: JDisplayMode,
+  methods: {
+    "getModeId()I": () => 1,
+    "getPhysicalWidth()I": () => device.width,
+    "getPhysicalHeight()I": () => device.height,
+    "getRefreshRate()F": () => 60,
+  },
+});
 rt.register({
   name: "android/view/Display", ctor: JDisplay,
   methods: {
@@ -2215,6 +2232,12 @@ rt.register({
     "getSize(Landroid/graphics/Point;)V": (p: JPoint) => { p.x = device.width; p.y = device.height - device.statusBar; },
     "getRealSize(Landroid/graphics/Point;)V": (p: JPoint) => { p.x = device.width; p.y = device.height; },
     "getRefreshRate()F": () => 60,
+    "isWideColorGamut()Z": () => 0,
+    "isHdr()Z": () => 0,
+    "getAppVsyncOffsetNanos()J": () => 0n,
+    "getPresentationDeadlineNanos()J": () => 16666667n,
+    "getMode()Landroid/view/Display$Mode;": () => displayMode(),
+    "getSupportedModes()[Landroid/view/Display$Mode;": () => jarray([displayMode()], "Landroid/view/Display$Mode;"),
     "getDisplayId()I": () => 0,
     // a rectangular framebuffer has no rounded corners; androidx asks the Display and the
     // WindowInsets for them through the same descriptor
