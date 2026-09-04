@@ -98,8 +98,8 @@ export function loadElf(name: string, bytes: Uint8Array, resolve: Resolver): Mod
     const filesz = dv.getUint32(p + f.phFilesz, true), memsz = dv.getUint32(p + f.phMemsz, true);
     if (type === PT_LOAD) {
       loads.push({ off, vaddr, filesz, memsz });
-      lo = Math.min(lo, vaddr & -PAGE_SIZE);
-      hi = Math.max(hi, (vaddr + memsz + PAGE_SIZE - 1) & -PAGE_SIZE);
+      lo = Math.min(lo, (vaddr & -PAGE_SIZE) >>> 0);
+      hi = Math.max(hi, ((vaddr + memsz + PAGE_SIZE - 1) & -PAGE_SIZE) >>> 0);
     } else if (type === PT_DYNAMIC) { dynOff = vaddr; dynSz = memsz; }
     // exidx is ARM's unwind table; AArch64 has no such segment and reuses the number
     else if (type === PT_ARM_EXIDX && cls === 1) { exidxAddr = vaddr; exidxSz = memsz; }

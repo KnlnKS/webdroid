@@ -74,3 +74,19 @@ export const zeroHi = (d: number) => `D[${2 * d + 1}]=0;`;
 export const zeroS = (d: number) => `I[${4 * d + 1}]=0;D[${2 * d + 1}]=0;`;
 /** the four words of Vn */
 export const words = (n: number) => [0, 1, 2, 3].map((i) => `I[${4 * n + i}]`);
+
+/** a 64-bit register += (lo, hi) with the carry into the high half: post/pre-index writeback */
+export const wb64 = (rn: number, lo: string | number, hi: string | number = typeof lo === "number" && lo < 0 ? -1 : 0): string =>
+  rn === SP ? `r[31]=(r[31]+${lo})|0;`
+    : `v=(${sp(rn)}+${lo})|0;${sph(rn)}=(${sph(rn)}+${hi}+(((${sp(rn)}>>>0)+(${lo}>>>0))>4294967295?1:0))|0;${sp(rn)}=v;`;
+/** an address in plane h ≠ 0 (a high half the base register carries) is translated before the access */
+export const txA = (rn: number): string => (rn === SP ? "" : `if(${sph(rn)})a=M.tx(${sph(rn)},a);`);
+/** the register-offset form: either register may carry the plane, so the sum's high half decides.
+ *  `lo` is the shifted, extended index's low word as the emitter computed it. */
+export function txAx(rn: number, rm: number, option: number, s: number, lo: string): string {
+  const x = option === 3 || option === 7;                                  // an X index; else a W one, zero- (2) or sign-extended (6)
+  const ih = !s ? (x ? zrh(rm) : option === 2 ? "0" : `(${zr(rm)}>>31)`)
+    : `(${x ? `${zrh(rm)}<<${s}` : option === 2 ? "0" : `(${zr(rm)}>>31)<<${s}`}|(${zr(rm)}>>>${32 - s}))`;
+  const carry = `(((${sp(rn)}>>>0)+(${lo}>>>0))>4294967295?1:0)`;
+  return `t=${rn === SP ? "0" : sph(rn)}+${ih}+${carry};if(t)a=M.tx(t,a);`;                    // a negative index and the carry cancel: plane 0
+}

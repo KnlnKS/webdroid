@@ -1,20 +1,20 @@
 // pthreads over cooperative Cpus: one Cpu per thread, mutex/cond/keys/once, and the sleeping calls.
 // Everything runs on one JS thread, so a "contended" lock means the acquirer parks until unlock.
 
-import { mem } from "./mem";
-import { hostLib, NORET, type HostFn, stp } from "./host";
+import { mem, AddrMap } from "./mem";
+import { hostLib, NORET, type HostFn, stp, stpVa } from "./host";
 import { Cpu, bindCpu, cpuByTid, yieldToLoop } from "./cpu";
 import { RET_SENTINEL, E } from "./abi";
 import { JThread, reportUncaught } from "../jvm/natives/jlang";
 import { readTs } from "./libc";
 
 interface Mutex { owner: number; count: number; waiters: (() => void)[] }
-const mutexes = new Map<number, Mutex>();
-const conds = new Map<number, ((timedOut: boolean) => void)[]>();
-const sems = new Map<number, { count: number; waiters: (() => void)[] }>();
+const mutexes = new AddrMap<Mutex>();
+const conds = new AddrMap<((timedOut: boolean) => void)[]>();
+const sems = new AddrMap<{ count: number; waiters: (() => void)[] }>();
 /** readers share, one writer excludes; a blocked acquirer parks and every unlock wakes them all to retry */
 interface RwLock { readers: number; writer: number; waiters: (() => void)[] }
-const rwlocks = new Map<number, RwLock>();
+const rwlocks = new AddrMap<RwLock>();
 function rwOf(a: number): RwLock { let l = rwlocks.get(a); if (!l) rwlocks.set(a, (l = { readers: 0, writer: 0, waiters: [] })); return l; }
 async function rwAcquire(cpu: Cpu, l: RwLock, write: boolean): Promise<number> {
   for (;;) {
@@ -27,7 +27,7 @@ function rwRelease(cpu: Cpu, l: RwLock): number {
   for (const w of l.waiters.splice(0)) w();
   return 0;
 }
-const threads = new Map<number, { cpu: Cpu; done: Promise<void>; retval: number }>();
+const threads = new Map<number, { cpu: Cpu; done: Promise<void>; retval: bigint }>();
 let keySeq = 1, threadSeq = 0;
 const ETIMEDOUT = E.TIMEDOUT, EBUSY = E.BUSY;
 
@@ -53,6 +53,36 @@ const absMs = (ts: number) => readTs(ts);
 function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | null): Promise<number> {
   const m = mutexOf(mutex);
   const count = m.count;
+// ── futex: what libc++ and an engine's own primitives wait on when they bypass pthread
+const futexes = new AddrMap<((woken: boolean) => void)[]>();
+export const futexStats = new Map<string, Record<string, number>>();
+const fstat = (cpu: Cpu, k: string) => { let r = futexStats.get(cpu.name); if (!r) futexStats.set(cpu.name, (r = {})); r[k] = (r[k] ?? 0) + 1; };
+export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: number, _val3: number): number | Promise<number> {
+  const cmd = op & 0x7f;
+  if (cmd === 0 || cmd === 9) {                                                 // FUTEX_WAIT (relative timeout) / FUTEX_WAIT_BITSET (absolute)
+    if (mem.ld32(addr) !== val) { fstat(cpu, "eagain"); return fail(cpu, E.AGAIN); }
+    // a delay past 2^31-1 ms overflows setTimeout and fires at once: that long is untimed
+    const raw = !ts ? null : cmd === 0 ? readTs(ts) : readTs(ts) - (op & 256 ? Date.now() : performance.now() + 1000);
+    const ms = raw !== null && raw < 0x7fffffff ? raw : null;
+    let q = futexes.get(addr);
+    if (!q) futexes.set(addr, (q = []));
+    fstat(cpu, ms === null ? "wait" : "timedwait:" + Math.round(ms));
+    return new Promise<number>((r) => {
+      const w = (woken: boolean) => { clearTimeout(id); fstat(cpu, woken ? "woken" : "timeout"); r(woken ? 0 : fail(cpu, E.TIMEDOUT)); };
+      q.push(w);
+      const id = ms === null ? undefined : setTimeout(() => { const i = q.indexOf(w); if (i >= 0) { q.splice(i, 1); w(false); } }, Math.max(0, ms));
+    });
+  }
+  if (cmd === 1 || cmd === 10) {                                                // FUTEX_WAKE / FUTEX_WAKE_BITSET
+    fstat(cpu, "wake");
+    const q = futexes.get(addr);
+    let n = 0;
+    while (q?.length && n < val) { q.shift()!(true); n++; }
+    return n;
+  }
+  return fail(cpu, E.NOSYS);
+}
+
   m.owner = 0; m.count = 0;
   const w = m.waiters.shift();
   if (w) w();
@@ -82,12 +112,24 @@ function startThread(start: number, arg: number, name?: string): Cpu {
   cpu.r[0] = arg; cpu.h[0] = 0;
   cpu.r[cpu.lrx] = RET_SENTINEL;
   cpu.setPc(start);
-  const rec = { cpu, retval: 0, done: Promise.resolve() };
+  const rec = { cpu, retval: 0n, done: Promise.resolve() };
   rec.done = new Promise<void>((resolve) => {
     setTimeout(() => {
       cpu.depth++;
-      void cpu.run().then(() => { if (!cpu.finished) rec.retval = cpu.r[0]; }, (e) => reportUncaught(e))
-        .finally(() => { cpu.finished = true; jt.alive = 0; resolve(); });
+      void cpu.run().then(async () => {
+        if (!cpu.finished) rec.retval = BigInt(cpu.h[0] >>> 0) << 32n | BigInt(cpu.r[0] >>> 0);
+        // key destructors, as many rounds as they keep setting values (Bionic stops at four)
+        for (let round = 0, again = true; again && round < 4; round++) {
+          again = false;
+          for (const [k, v] of cpu.tls) {
+            const d = keyDtors.get(k);
+            if (!v || !d) continue;
+            cpu.tls.set(k, 0n); again = true; cpu.finished = false;
+            await cpu.call(d, [v], "key destructor");
+          }
+        }
+      }, (e) => reportUncaught(e))
+        .finally(() => { cpu.finished = true; jt.alive = 0; mem.freeStack(cpu.stackBase, cpu.stackTop); resolve(); });
     }, 0);
   });
   threads.set(cpu.tid, rec);
@@ -97,22 +139,22 @@ function startThread(start: number, arg: number, name?: string): Cpu {
 export function pthreadInit(): void {
   const M: Record<string, HostFn> = {
     pthread_create: (_c, a) => {
-      const out = a.p(); a.p(); const start = a.p(), arg = a.i();
+      const out = a.p(); a.p(); const start = a.p(), arg = a.va();
       const cpu = startThread(start, arg);
       stp(out, cpu.tid);
       return 0;
     },
     pthread_join: async (_c, a) => {
-      const tid = a.i(), retp = a.p();
+      const tid = a.i(), retp = a.va();
       const t = threads.get(tid);
       if (!t) return 3; // ESRCH
       await t.done;
-      if (retp) stp(retp, t.retval);
+      if (retp) stpVa(mem.txVa(retp), t.retval);
       return 0;
     },
     pthread_detach: () => 0,
     pthread_exit: (cpu, a) => {
-      const rv = a.i();
+      const rv = a.va();
       const t = threads.get(cpu.tid);
       if (t) t.retval = rv;
       cpu.finished = true;
@@ -165,9 +207,9 @@ export function pthreadInit(): void {
     pthread_condattr_getclock: (_c, a) => { a.p(); mem.st32(a.p(), 0); return 0; },
     pthread_cond_clockwait: (cpu, a) => { const c = a.p(), m = a.p(), clk = a.i(), ts = a.p(); return condWait(cpu, c, m, absMs(ts) - (clk === 0 ? Date.now() : performance.now() + 1000)); },
     pthread_mutex_clocklock: (cpu, a) => lock(cpu, mutexOf(a.p())),
-    pthread_key_delete: () => 0,
-    pthread_getspecific: (cpu, a) => cpu.tls.get(a.i()) ?? 0,
-    pthread_setspecific: (cpu, a) => { const k = a.i(), v = a.i(); cpu.tls.set(k, v); return 0; },
+    pthread_key_delete: (_c, a) => { keyDtors.delete(a.i()); return 0; },
+    pthread_getspecific: (cpu, a) => cpu.tls.get(a.i()) ?? 0n,
+    pthread_setspecific: (cpu, a) => { const k = a.i(), v = a.va(); cpu.tls.set(k, v); return 0; },
     pthread_once: async (cpu, a) => {
       const once = a.p(), fn = a.p();
       if (mem.ld32(once) !== 0) return 0;

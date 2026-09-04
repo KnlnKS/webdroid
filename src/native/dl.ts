@@ -4,8 +4,8 @@
 
 import { loadElf, symbolize, nearestSymbol, type Module } from "./elf";
 import { mem } from "./mem";
-import { hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp } from "./host";
-import { cpuFor, setSymbolizeHook, setA64, isA64 } from "./cpu";
+import { probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp } from "./host";
+import { cpuFor, setSymbolizeHook, setA64, isA64, type Cpu } from "./cpu";
 import { trampSlot, RET_SENTINEL } from "./abi";
 import { rt } from "../jvm/runtime";
 import { curThread } from "../jvm/natives/jlang";
@@ -72,12 +72,24 @@ function resolveGlobal(sym: string, weak: boolean, _from: Module): number {
 }
 
 function moduleOf(pc: number): Module | null {
+  pc >>>= 0;                                               // a pc in a register is int32; an image above 2 GiB is not
   for (const m of modules) if (pc >= m.base && pc < m.end) return m;
   return null;
 }
 export function symbolizePc(pc: number): string {
+  pc >>>= 0;
   if (isTrampPc(pc)) return "host:" + slotName(trampSlot(pc));
   return symbolize(modules, pc);
+}
+
+/** the frame-pointer chain from x29: what called what, as module+offset (a debugging aid) */
+export function backtrace(cpu: Cpu, max = 24): string[] {
+  const out = [symbolizePc(cpu.r[cpu.pcx] >>> 0), symbolizePc(cpu.r[cpu.lrx] >>> 0)];
+  let fp = cpu.r[29] >>> 0;
+  for (let i = 0; i < max && fp; i++) {
+    try { out.push(symbolizePc(Number(mem.ld64(fp + 8) & 0xffffffffn))); fp = Number(mem.ld64(fp) & 0xffffffffn); } catch { break; }
+  }
+  return out;
 }
 
 function setErr(msg: string): void { dlerrorMsg = msg; }
@@ -116,11 +128,7 @@ export function dlInit(): void {
         if (v === undefined) { setErr(`undefined symbol: ${sym}`); return 0; }
         return v;
       }
-      const v = lookupHost(sym, hd.lib);
-      if (v !== undefined) return v;
-      // a host library answers every dlsym: the entry point logs itself in calledMissing when it is
-      // actually called, so telemetry rather than a symbol list decides what matters
-      return missingStub(hd.lib + "!" + sym);
+      return probeHost(sym, hd.lib);
     },
     dlclose: (_cpu, a) => { const hd = handles[a.i() - HANDLE_BASE]; if (hd && "mod" in hd) hd.mod.refs--; return 0; },
     dlerror: () => {
@@ -143,16 +151,18 @@ export function dlInit(): void {
     // the pointer stride — 64 bytes on LP64, 32 on ILP32. The unwinder walks this to find
     // PT_GNU_EH_FRAME, so it is the C++ throw path.
     dl_iterate_phdr: async (cpu, a) => {
-      const cb = a.p(), data = a.p();
+      const cb = a.p(), data = a.va();
       const size = PTR === 8 ? 64 : 32;
-      const info = mem.hostAlloc(size, 8);
-      for (const m of [...modules]) {
-        mem.memset(info, 0, size);
-        stp(info, m.base); stp(info + PTR, nameStr(m)); stp(info + 2 * PTR, m.phdr); mem.st16(info + 3 * PTR, m.phnum);
-        const r = await cpu.call(cb, [info, size, data]);
-        if (r) return r;
-      }
-      return 0;
+      const info = mem.malloc(size);
+      try {
+        for (const m of [...modules]) {
+          mem.memset(info, 0, size);
+          stp(info, m.base); stp(info + PTR, nameStr(m)); stp(info + 2 * PTR, m.phdr); mem.st16(info + 3 * PTR, m.phnum);
+          const r = await cpu.call(cb, [info, size, data]);
+          if (r) return r;
+        }
+        return 0;
+      } finally { mem.free(info); }
     },
     __gnu_Unwind_Find_exidx: (_cpu, a) => {
       const pc = a.p(), pcount = a.p();

@@ -8,7 +8,7 @@
 // register V32 and copies back in that case — decided at emit time, free when registers differ.
 
 import { type Fl, hex, ALL, COND, COND_READS } from "./flags";
-import { sp, sph, zr, zrh, setX, setW, int32, lane, zeroHi, zeroS, words, SCRATCH, shl64, shr64, sar64, type View } from "./a64regs";
+import { sp, zr, zrh, setX, setW, int32, lane, zeroHi, zeroS, words, SCRATCH, shl64, shr64, sar64, wb64, txA, txAx, type View } from "./a64regs";
 import { vfpImm } from "./vfp";
 import { fbits, dbits } from "./host";
 
@@ -80,14 +80,14 @@ export function emitSimdMem(pc: number, w: number, push: Push, fault: Fault): bo
     const interleaved = opcode === 0 || opcode === 4 || opcode === 8;
     if (!regs || (size === 3 && !q && interleaved)) { push(fault("ld/st multiple structures")); return true; }
     const bytes = q ? 16 : 8, es = 1 << size, count = bytes / es;
-    let body = `a=${sp(rn)}|0;`;
+    let body = `a=${sp(rn)}|0;` + txA(rn);
     for (let k = 0; k < regs; k++) {
       const t = (rt + k) & 31;
       if (!interleaved) body += L ? vload(t, bytes, k * bytes) : vstore(t, bytes, k * bytes);
       else for (let i = 0; i < count; i++) body += L ? elemLoad(t, es, i, (i * regs + k) * es) : elemStore(t, es, i, (i * regs + k) * es);
       if (L && interleaved && !q) body += zeroHi(t);
     }
-    if (post) body += `${sp(rn)}=(${sp(rn)}+${rm === 31 ? regs * bytes : zr(rm)})|0;${sph(rn)}=0;`;
+    if (post) body += rm === 31 ? wb64(rn, regs * bytes) : wb64(rn, zr(rm), zrh(rm));
     push(body);
     return false;
   }
@@ -95,7 +95,7 @@ export function emitSimdMem(pc: number, w: number, push: Push, fault: Fault): bo
   if (is(w, 0xbf9f0000, 0x0d000000) || is(w, 0xbf800000, 0x0d800000)) {
     const q = (w >>> 30) & 1, L = (w >>> 22) & 1, post = (w >>> 23) & 1, R = (w >>> 21) & 1, opcode = (w >>> 13) & 7, S = (w >>> 12) & 1, size = (w >>> 10) & 3;
     const regs = 1 + R + (opcode & 1) * 2;
-    let body = `a=${sp(rn)}|0;`;
+    let body = `a=${sp(rn)}|0;` + txA(rn);
     if (opcode >= 6) {                                                                   // LD1R..LD4R
       if (!L || S) { push(fault("ld/st single structure")); return true; }
       const es = 1 << size, count = (q ? 16 : 8) / es;
@@ -106,7 +106,7 @@ export function emitSimdMem(pc: number, w: number, push: Push, fault: Fault): bo
         for (let i = 1; i < count; i++) body += es === 8 ? `I[${4 * t + 2 * i}]=I[${4 * t}];I[${4 * t + 2 * i + 1}]=I[${4 * t + 1}];` : `${lane(es === 1 ? "B" : es === 2 ? "W" : "I", t, i)}=${src};`;
         if (!q) body += zeroHi(t);
       }
-      if (post) body += `${sp(rn)}=(${sp(rn)}+${rm === 31 ? regs * es : zr(rm)})|0;${sph(rn)}=0;`;
+      if (post) body += rm === 31 ? wb64(rn, regs * es) : wb64(rn, zr(rm), zrh(rm));
       push(body);
       return false;
     }
@@ -114,7 +114,7 @@ export function emitSimdMem(pc: number, w: number, push: Push, fault: Fault): bo
     const es = scale === 0 ? 1 : scale === 1 ? 2 : size & 1 ? 8 : 4;
     const idx = es === 1 ? (q << 3) | (S << 2) | size : es === 2 ? (q << 2) | (S << 1) | (size >> 1) : es === 4 ? (q << 1) | S : q;
     for (let k = 0; k < regs; k++) body += L ? elemLoad((rt + k) & 31, es, idx, k * es) : elemStore((rt + k) & 31, es, idx, k * es);
-    if (post) body += `${sp(rn)}=(${sp(rn)}+${rm === 31 ? regs * es : zr(rm)})|0;${sph(rn)}=0;`;
+    if (post) body += rm === 31 ? wb64(rn, regs * es) : wb64(rn, zr(rm), zrh(rm));
     push(body);
     return false;
   }
@@ -123,8 +123,8 @@ export function emitSimdMem(pc: number, w: number, push: Push, fault: Fault): bo
     const opc = (w >>> 30) & 3, L = (w >>> 22) & 1, imm7 = (((w >>> 15) & 0x7f) << 25) >> 25, rt2 = (w >>> 10) & 31, kind = (w >>> 23) & 3;
     if (opc === 3) { push(fault("LDP/STP (SIMD)")); return true; }
     const width = 4 << opc, off = imm7 * width, wb = kind === 1 || kind === 3;
-    let body = kind === 1 || off === 0 ? `a=${sp(rn)}|0;` : `a=${sp(rn)}+${off}|0;`;
-    if (wb) body += `${sp(rn)}=(${sp(rn)}+${off})|0;${sph(rn)}=0;`;
+    let body = (kind === 1 || off === 0 ? `a=${sp(rn)}|0;` : `a=${sp(rn)}+${off}|0;`) + txA(rn);
+    if (wb) body += wb64(rn, off);
     body += L ? vload(rt, width, 0) + vload(rt2, width, width) : vstore(rt, width, 0) + vstore(rt2, width, width);
     push(body);
     return false;
@@ -133,21 +133,23 @@ export function emitSimdMem(pc: number, w: number, push: Push, fault: Fault): bo
   const size = (w >>> 30) & 3, opc = (w >>> 22) & 3, L = opc & 1;
   if ((opc & 2) && size !== 0) { push(fault("load/store (SIMD) width")); return true; }
   const scale = opc & 2 ? 4 : size, width = 1 << scale;
-  let addr: string, wb = "";
+  let addr: string, wb = "", tx = txA(rn);
   if (is(w, 0x3b000000, 0x39000000)) {
     const off = ((w >>> 10) & 0xfff) << scale;
     addr = off === 0 ? `${sp(rn)}|0` : `${sp(rn)}+${off}|0`;
   } else if (is(w, 0x3b200c00, 0x38200800)) {
     const option = (w >>> 13) & 7, S = (w >>> 12) & 1;
     const idx = option === 3 || option === 7 ? zr(rm) : option === 2 ? `(${zr(rm)}>>>0)` : `(${zr(rm)}|0)`;
-    addr = `${sp(rn)}+${S && scale ? `(${idx}<<${scale})` : idx}|0`;
+    const shifted = S && scale ? `(${idx}<<${scale})` : idx;
+    addr = `${sp(rn)}+${shifted}|0`;
+    tx = txAx(rn, rm, option, S ? scale : 0, shifted);
   } else {
     const imm9 = (((w >>> 12) & 0x1ff) << 23) >> 23, kind = (w >>> 10) & 3;
     if (kind === 2) { push(fault("load/store (SIMD) form")); return true; }
     addr = kind === 1 || imm9 === 0 ? `${sp(rn)}|0` : `${sp(rn)}+${imm9}|0`;
-    if (kind === 1 || kind === 3) wb = `${sp(rn)}=(${sp(rn)}+${imm9})|0;${sph(rn)}=0;`;
+    if (kind === 1 || kind === 3) wb = wb64(rn, imm9);
   }
-  push(`a=${addr};` + wb + (L ? vload(rt, width, 0) : vstore(rt, width, 0)));
+  push(`a=${addr};` + tx + wb + (L ? vload(rt, width, 0) : vstore(rt, width, 0)));
   return false;
 }
 

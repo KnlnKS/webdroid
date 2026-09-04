@@ -1,7 +1,7 @@
 // libz streaming API (z_stream in guest memory) over fflate's streaming classes.
 
 import { Inflate, Unzlib } from "fflate";
-import { mem } from "./mem";
+import { mem, AddrMap } from "./mem";
 import { hostLib, type HostFn, PTR, stp, ldp } from "./host";
 
 // z_stream: next_in, avail_in, total_in, next_out, avail_out, total_out, msg, state, ... — pointer
@@ -11,7 +11,7 @@ let Z = { IN: 0, AVIN: 4, TIN: 8, OUT: 12, AVOUT: 16, TOUT: 20, MSG: 24, STATE: 
 const Z_OK = 0, Z_STREAM_END = 1, Z_STREAM_ERROR = -2, Z_DATA_ERROR = -3, Z_BUF_ERROR = -5;
 
 interface Stream { st: Inflate | Unzlib; out: Uint8Array[]; done: boolean; err: string | null }
-const streams = new Map<number, Stream>();
+const streams = new AddrMap<Stream>();
 let stateSeq = 1;
 
 function open(strm: number, windowBits: number): number {

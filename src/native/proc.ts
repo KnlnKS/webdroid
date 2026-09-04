@@ -4,7 +4,7 @@
 // would on a device.
 
 import { mem } from "./mem";
-import { hostLib, hostData, type HostFn, PTR, stp, vaList } from "./host";
+import { hostLib, hostData, type HostFn, PTR, stp, ldp, vaList, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { fail, utf8, logLine } from "./libc";
@@ -69,17 +69,17 @@ export function procInit(): void {
     __assert: (cpu, a) => { const file = a.str(), line = a.i(), msg = a.str(); cpu.fault(`assertion "${msg}" failed: ${file}:${line}`); },
     __register_atfork: () => 0,
     __cxa_thread_atexit_impl: () => 0,
-    __gnu_strerror_r: (_c, a) => { const e = a.i(), b = a.p(), n = a.u(); mem.putCstr(b, `error ${e}`, n); return b; },
+    __gnu_strerror_r: (_c, a) => { const e = a.i(), b = a.p(), n = a.u(); mem.putCstr(b, `error ${e}`, n); return ptr(b); },
     __cmsg_nxthdr: () => 0,
     getnameinfo: () => -4,   // EAI_FAIL
     recvmsg: (cpu) => fail(cpu, E.NETUNREACH), sendmsg: (cpu) => fail(cpu, E.NETUNREACH),
     if_nametoindex: () => 0, if_indextoname: () => 0,
     // sorting and searching call back into the guest for every comparison
     qsort: async (cpu, a) => {
-      const base = a.p(), n = a.u(), size = a.u(), cmp = a.p();
+      const vbase = a.va(), n = a.u(), size = a.u(), cmp = a.p();
       if (n < 2) return;
       const idx = [...Array(n).keys()];
-      const key = (i: number) => base + i * size;
+      const key = (i: number) => vbase + BigInt(i * size);
       // merge sort: O(n log n) guest calls, stable
       const merge = async (lo: number, hi: number): Promise<void> => {
         if (hi - lo < 2) return;
@@ -97,10 +97,10 @@ export function procInit(): void {
       for (let i = 0; i < n; i++) mem.u8.set(copy.subarray(idx[i] * size, (idx[i] + 1) * size), base + i * size);
     },
     bsearch: async (cpu, a) => {
-      const keyp = a.p(), base = a.p(), n = a.u(), size = a.u(), cmp = a.p();
+      const keyp = a.va(), base = a.va(), n = a.u(), size = a.u(), cmp = a.p();
       let lo = 0, hi = n;
       while (lo < hi) {
-        const mid = (lo + hi) >> 1, p = base + mid * size;
+        const mid = (lo + hi) >> 1, p = base + BigInt(mid * size);
         const r = (await cpu.call(cmp, [keyp, p])) | 0;
         if (r === 0) return p;
         if (r < 0) hi = mid; else lo = mid + 1;
@@ -115,23 +115,24 @@ export function procInit(): void {
       const pat = a.str(), str = a.str();
       const re = "^" + pat.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$";
       return new RegExp(re).test(str) ? 0 : 1;
+      const base = mem.txVa(vbase);
     },
-    asctime_r: (_c, a) => { const tm = a.p(), buf = a.p(); mem.putCstr(buf, asctime(tm), 26); return buf; },
+    asctime_r: (_c, a) => { const tm = a.p(), buf = a.p(); mem.putCstr(buf, asctime(tm), 26); return ptr(buf); },
     asctime: (_c, a) => mem.hostStr(asctime(a.p())),
-    ctime_r: (_c, a) => { const t = mem.ld32(a.p()), buf = a.p(); mem.putCstr(buf, new Date(t * 1000).toString().slice(0, 24) + "\n", 26); return buf; },
+    ctime_r: (_c, a) => { const t = mem.ld32(a.p()), buf = a.p(); mem.putCstr(buf, new Date(t * 1000).toString().slice(0, 24) + "\n", 26); return ptr(buf); },
     // fortified wrappers: the object size is checked, then the plain function's work is done
-    __memcpy_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); mem.memcpy(d, s, n); return d; },
-    __memmove_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); mem.memmove(d, s, n); return d; },
-    __memset_chk: (cpu, a) => { const d = a.p(), v = a.i(), n = a.u(); chk(n, a.u(), cpu); mem.memset(d, v, n); return d; },
-    __strcpy_chk: (cpu, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s) + 1; chk(n, a.u(), cpu); mem.memmove(d, s, n); return d; },
-    __stpcpy_chk: (cpu, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s) + 1; chk(n, a.u(), cpu); mem.memmove(d, s, n); return d + n - 1; },
-    __strncpy_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); strncpy(d, s, n); return d; },
-    __strncpy_chk2: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); a.u(); strncpy(d, s, n); return d; },
-    __strcat_chk: (cpu, a) => { const d = a.p(), s = a.p(); const dl = mem.strlen(d), n = mem.strlen(s) + 1; chk(dl + n, a.u(), cpu); mem.memmove(d + dl, s, n); return d; },
-    __strncat_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); const dl = mem.strlen(d); let i = 0; for (; i < n && u8[s + i]; i++) u8[d + dl + i] = u8[s + i]; u8[d + dl + i] = 0; chk(dl + i + 1, a.u(), cpu); return d; },
+    __memcpy_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); mem.memcpy(d, s, n); return ARG0; },
+    __memmove_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); mem.memmove(d, s, n); return ARG0; },
+    __memset_chk: (cpu, a) => { const d = a.p(), v = a.i(), n = a.u(); chk(n, a.u(), cpu); mem.memset(d, v, n); return ARG0; },
+    __strcpy_chk: (cpu, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s) + 1; chk(n, a.u(), cpu); mem.memmove(d, s, n); return ARG0; },
+    __stpcpy_chk: (cpu, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s) + 1; chk(n, a.u(), cpu); mem.memmove(d, s, n); return ptr(d + n - 1); },
+    __strncpy_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); strncpy(d, s, n); return ARG0; },
+    __strncpy_chk2: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); a.u(); strncpy(d, s, n); return ARG0; },
+    __strcat_chk: (cpu, a) => { const d = a.p(), s = a.p(); const dl = mem.strlen(d), n = mem.strlen(s) + 1; chk(dl + n, a.u(), cpu); mem.memmove(d + dl, s, n); return ARG0; },
+    __strncat_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); const dl = mem.strlen(d); let i = 0; for (; i < n && u8[s + i]; i++) u8[d + dl + i] = u8[s + i]; u8[d + dl + i] = 0; chk(dl + i + 1, a.u(), cpu); return ARG0; },
     __strlen_chk: (cpu, a) => { const s = a.p(); const n = mem.strlen(s); chk(n + 1, a.u(), cpu); return n; },
-    __strchr_chk: (_c, a) => { const p = a.p(), c = a.i() & 255; for (let i = p; ; i++) { if (u8[i] === c) return i; if (!u8[i]) return 0; } },
-    __strrchr_chk: (_c, a) => { const p = a.p(), c = a.i() & 255; let r = 0; for (let i = p; ; i++) { if (u8[i] === c) r = i; if (!u8[i]) return r; } },
+    __strchr_chk: (_c, a) => { const p = a.p(), c = a.i() & 255; for (let i = p; ; i++) { if (u8[i] === c) return ptr(i); if (!u8[i]) return 0; } },
+    __strrchr_chk: (_c, a) => { const p = a.p(), c = a.i() & 255; let r = 0; for (let i = p; ; i++) { if (u8[i] === c) r = i; if (!u8[i]) return ptr(r); } },
     __vsnprintf_chk: (cpu, a) => { const d = a.p(), n = a.u(); a.i(); chk(n, a.u(), cpu); const f = a.str(); return snprintfInto(d, n, format(f, vaList(a.p()))); },
     __snprintf_chk: (cpu, a) => { const d = a.p(), n = a.u(); a.i(); chk(n, a.u(), cpu); const f = a.str(); return snprintfInto(d, n, format(f, a)); },
     __vsprintf_chk: (_c, a) => { const d = a.p(); a.i(); a.u(); const f = a.str(); return mem.putCstr(d, format(f, vaList(a.p()))); },

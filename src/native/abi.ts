@@ -30,7 +30,9 @@ export const RET_SENTINEL = TRAMP_END - 8;
 /** the shared region: malloc bumps up from ARENA_BASE, ELF images bump down from the end of memory */
 export const ARENA_BASE = TRAMP_END;
 export const MEM_SIZE_A32 = 0x1000_0000;
-export const MEM_SIZE_A64 = 0x6000_0000;
+export const MEM_SIZE_A64 = 0xffff_0000; // 4 GiB less a page: the whole 32-bit space a WebAssembly memory can back
+/** above this the buffer backs the address planes' chunks rather than plane 0 itself (mem.ts) */
+export const POOL_BASE = 0xa000_0000;
 /** the live size, set by mem.init */
 export let MEM_SIZE = MEM_SIZE_A32;
 export function setMemSize(n: number): void { MEM_SIZE = n; }
@@ -42,7 +44,7 @@ export const trampSlot = (pc: number) => (pc - TRAMP_BASE) >> 3;
 
 // errno values (bionic/Linux ARM)
 export const E = {
-  PERM: 1, NOENT: 2, INTR: 4, IO: 5, BADF: 9, AGAIN: 11, NOMEM: 12, ACCES: 13, BUSY: 16, EXIST: 17,
+  PERM: 1, NOENT: 2, SRCH: 3, INTR: 4, IO: 5, BADF: 9, AGAIN: 11, NOMEM: 12, ACCES: 13, BUSY: 16, EXIST: 17,
   NOTDIR: 20, ISDIR: 21, INVAL: 22, MFILE: 24, NOSPC: 28, SPIPE: 29, RANGE: 34, DEADLK: 35, NOSYS: 38,
   NOTEMPTY: 39, NETUNREACH: 101, TIMEDOUT: 110,
 } as const;

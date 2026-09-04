@@ -2,7 +2,7 @@
 // module/stack/host-data regions, and the code-page flags that let a store into executable pages
 // invalidate the decoder. See abi.ts for the address map and why the buffer is sized lazily.
 
-import { MEM_SIZE, MEM_SIZE_A32, setMemSize, LOW, PAGE_SHIFT, PAGE_SIZE, STACK_BASE, STACK_END, ARENA_BASE, HOST_DATA, HOST_DATA_END, STACK_GUARD } from "./abi";
+import { MEM_SIZE, MEM_SIZE_A32, setMemSize, LOW, PAGE_SHIFT, PAGE_SIZE, STACK_BASE, STACK_END, ARENA_BASE, HOST_DATA, HOST_DATA_END, STACK_GUARD, POOL_BASE } from "./abi";
 
 export class NativeFault extends Error {
   pc = 0;
@@ -35,18 +35,116 @@ function classSize(n: number): number {
   const q = 1 << (k - 2);                                 // a quarter of that doubling
   return (Math.ceil(n / q) * q) | 0;
 }
-/** free page runs inside the arena, sorted by address and coalesced */
-const freePages: { addr: number; size: number }[] = [];
+/** Page states inside the arena. A reservation (an anonymous PROT_NONE mmap) holds address space,
+ *  not pages: reservations may overlap one another, as overcommit lets a process reserve far more
+ *  than it has, and a commit (mprotect to readable/writable) is what claims the pages. */
+const FREE = 0, RESERVED = 1, USED = 2;
+let pages: Uint8Array;
+const pageOf = (a: number) => a >>> PAGE_SHIFT;
+/** First run of n pages starting at a multiple of `align` pages whose every page is at most
+ *  `allow`. A reservation (`phantom`) may run past the arena's end, over the images and beyond
+ *  memory: those pages can never be committed, and a reserve-then-trim caller unmaps them at once. */
+function findRun(n: number, allow: number, align: number, phantom: boolean): number {
+  const end = pageOf(poolBase || moduleBot), top = 0x100000000 / PAGE_SIZE;   // the 32-bit space: past it the guest's pointer arithmetic wraps
+  phantom &&= !poolBase;                                          // the pool's chunks are not address space to run over
+  for (let s = (pageOf(ARENA_BASE) + align - 1) & -align; s < end && s + n <= top; s = (s + align) & -align) {
+    let j = s;
+    for (; j < s + n && j < end && pages[j] <= allow; j++);
+    if (j === s + n || (j === end && phantom)) return s * PAGE_SIZE;
+    if (j < end) s = j;                                    // skip past the page that broke the run
+  }
+  return 0;
+}
+/** grow the heap by n bytes through free pages, stepping over a mapping in its way */
+function bump(n: number): number {
+  for (let p = heapTop; ; ) {
+    const a = pageOf(p), b = pageOf(p + n + PAGE_SIZE - 1);
+    if (b > pageOf(poolBase || moduleBot)) return 0;
+    let j = a + (p & (PAGE_SIZE - 1) ? 1 : 0);              // a partial first page is the heap's own
+    while (j < b && pages[j] === FREE) j++;
+    if (j === b) {
+      heapTop = p + n;
+      if (heapTop > heapPeak) heapPeak = heapTop;
+      pages.fill(USED, a, b);
+      return p;
+    }
+    p = (j + 1) * PAGE_SIZE;
+  }
+}
+
+
+// ── Address planes. A pointer whose high half is h ≠ 0 lives in plane h: one mapping per plane,
+// starting at PLANE_LO, because a 64-bit runtime reserves address space per allocator far past
+// what a 32-bit buffer holds while committing little of it. A plane's committed prefix is one
+// contiguous run of the pool at the top of the arena, so a range in the plane is a range in the
+// buffer for host and guest alike; a commit past the run grows it in place or moves it (the
+// guest keeps its addresses; the move costs a copy of what is committed).
+const UNIT = 1 << 25, PLANES = 256, PLANE_LO = 0x10000000;
+let poolBase = 0;
+let owner = new Int16Array(0);                                   // pool unit → plane, -1 free (sized at alloc)
+const P = new Float64Array(PLANES);                              // plane → buffer offset of its run
+let moves = 0;
+const R = new Uint32Array(PLANES), S = new Uint32Array(PLANES);  // reservation and committed prefix, bytes (R = 0: plane free)
+const unitsOf = (bytes: number) => Math.ceil(bytes / UNIT);
+const poolUnits = () => Math.min(owner.length, Math.floor((moduleBot - poolBase) / UNIT));
+function freeRun(units: number, from = 0): number {
+  const top = poolUnits();
+  for (let i = from, run = 0; i < top; i++) { run = owner[i] < 0 ? run + 1 : 0; if (run === units) return i + 1 - units; }
+  return -1;
+}
+/** the start of the largest free gap that holds `units`: room to grow in place behind a new run */
+function widestRun(units: number): number {
+  const top = poolUnits();
+  let best = -1, bestLen = 0;
+  for (let i = 0; i < top; i++) {
+    if (owner[i] >= 0) continue;
+    let j = i; while (j < top && owner[j] < 0) j++;
+    if (j - i >= units && j - i > bestLen) { best = i; bestLen = j - i; }
+    i = j;
+  }
+  return best;
+}
+/** commit the plane's prefix up to `bytes`: extend the run in place, or move it to a free run */
+function grow(h: number, bytes: number): boolean {
+  const have = unitsOf(S[h]), need = unitsOf(bytes);
+  if (need > have) {
+    const at = have ? (P[h] - poolBase) / UNIT : -1;
+    const dst = at < 0 ? widestRun(need) : freeRun(need - have, at + have) === at + have ? at : freeRun(need);
+    if (dst < 0) return false;
+    if (at >= 0 && dst !== at) { u8.copyWithin(poolBase + dst * UNIT, P[h], P[h] + S[h]); owner.fill(-1, at, at + have); moves++; console.log(`[mem-native] plane ${h} moved: ${have} units at ${at} -> ${need} at ${dst}`); }
+    owner.fill(h, dst, dst + need);
+    P[h] = poolBase + dst * UNIT;
+  }
+  u8.fill(0, P[h] + S[h], P[h] + bytes);
+  S[h] = bytes;
+  return true;
+}
+function release(h: number): void { const at = (P[h] - poolBase) / UNIT; owner.fill(-1, at, at + unitsOf(S[h])); R[h] = S[h] = 0; }
+/** host state keyed by a guest object's address: the address the guest knows, which a move keeps */
+export class AddrMap<V> {
+  private m = new Map<number | bigint, V>();
+  get(a: number): V | undefined { return this.m.get(mem.va(a)); }
+  set(a: number, v: V): this { this.m.set(mem.va(a), v); return this; }
+  delete(a: number): boolean { return this.m.delete(mem.va(a)); }
+}
+const split = (va: bigint): [number, number] => [Number(va >> 32n) & 0xffffffff, Number(va & 0xffffffffn) >>> 0];
 
 // modules bump DOWN from the top of the shared arena, malloc bumps up from the bottom
 let moduleBot = MEM_SIZE, stackTop = STACK_BASE, hostTop = HOST_DATA;
+const freeStacks = new Map<number, number[]>();
 
 function alloc(size: number): void {
-  buf = new ArrayBuffer(size);
+  // Chromium refuses a plain ArrayBuffer past ~2 GiB but backs a 4 GiB WebAssembly memory, and
+  // indexing its buffer costs the same; pages are committed by the OS as they are first touched
+  buf = size > 0x7fe0_0000 ? new WebAssembly.Memory({ initial: size / 65536, maximum: size / 65536 }).buffer : new ArrayBuffer(size);
   u8 = new Uint8Array(buf); i8 = new Int8Array(buf); u16 = new Uint16Array(buf); i16 = new Int16Array(buf);
   u32 = new Uint32Array(buf); i32 = new Int32Array(buf); f32 = new Float32Array(buf); f64 = new Float64Array(buf);
   dv = new DataView(buf);
-  codePages = new Uint8Array(size >> PAGE_SHIFT);
+  codePages = new Uint8Array(size >>> PAGE_SHIFT);
+  pages = new Uint8Array(size >>> PAGE_SHIFT);
+  poolBase = size > POOL_BASE ? POOL_BASE : 0;
+  owner = new Int16Array(poolBase ? Math.floor((size - poolBase) / UNIT) : 0).fill(-1);
+  R.fill(0); S.fill(0);
   SPAN = size - LOW;
   setMemSize(size);
   Object.assign(mem, { buf, u8, i8, u16, i16, u32, i32, f32, f64, dv, codePages });
@@ -67,7 +165,7 @@ export const mem = {
     alloc(size);
     u8.set(old.subarray(0, keep));
     moduleBot = size;
-    freePages.length = 0;
+    pages.fill(USED, 0, pageOf(heapTop + PAGE_SIZE - 1));
     for (const h of mem.initHooks) h();
   },
 
@@ -116,10 +214,9 @@ export const mem = {
       if (p) bigHeads.set(cs, i32[p >>> 2]);
     }
     if (!p) {
-      p = heapTop + HDR;
-      heapTop = p + cs;
-      if (heapTop > moduleBot) { heapTop = p - HDR; return 0; }
-      if (heapTop > heapPeak) heapPeak = heapTop;
+      p = bump(cs + HDR);
+      if (!p) return 0;
+      p += HDR;
     }
     i32[(p - 8) >>> 2] = 0;
     i32[(p - 4) >>> 2] = cs;
@@ -139,33 +236,97 @@ export const mem = {
     else { i32[p >>> 2] = bigHeads.get(cs) ?? 0; bigHeads.set(cs, p); }
   },
   /** whole zeroed pages for mmap and large blocks: first fit over the free runs, else the arena's top */
-  mapPages(n: number): number {
+  /** n bytes of pages: a hole, then fresh heap, and for a reservation the uncommitted part of
+   *  other reservations. Pages of a mapping come zeroed; a reservation's are zeroed at commit. */
+  mapPages(n: number, reserve = false): number {
     n = (n + PAGE_SIZE - 1) & -PAGE_SIZE;
     if (!n) return 0;
-    for (let i = 0; i < freePages.length; i++) {
-      const r = freePages[i];
-      if (r.size < n) continue;
-      const p = r.addr;
-      if (r.size === n) freePages.splice(i, 1); else { r.addr += n; r.size -= n; }
-      u8.fill(0, p, p + n);
-      return p;
-    }
-    const p = (heapTop + PAGE_SIZE - 1) & -PAGE_SIZE;
-    if (p + n > moduleBot) return 0;
-    heapTop = p + n;
-    if (heapTop > heapPeak) heapPeak = heapTop;
+    const np = n >>> PAGE_SHIFT;
+    // a reservation of 2A is the reserve-then-trim idiom for an A-aligned block: placing it on an
+    // A boundary packs the kept blocks back to back instead of leaving an A-sized hole between them
+    const align = reserve && np >= 256 ? 1 << (31 - Math.clz32((np + 1) >> 1)) : 1;
+    const p = findRun(np, FREE, align, reserve);
+    if (!p) return 0;
+    const a = pageOf(p), b = Math.min(a + np, pageOf(moduleBot));
+    pages.fill(reserve ? RESERVED : USED, a, b);
+    if (!reserve) u8.fill(0, p, p + n);
     return p;
   },
-  /** return a page-aligned run (any sub-range of a mapping) to the free runs; false when misaligned */
+  /** return a page-aligned run (any sub-range of a mapping); false when misaligned */
   unmapPages(addr: number, n: number): boolean {
     n = (n + PAGE_SIZE - 1) & -PAGE_SIZE;
-    if (addr & (PAGE_SIZE - 1) || !n) return false;
-    let i = 0;
-    while (i < freePages.length && freePages[i].addr < addr) i++;
-    freePages.splice(i, 0, { addr, size: n });
-    if (i + 1 < freePages.length && freePages[i].addr + n === freePages[i + 1].addr) { freePages[i].size += freePages[i + 1].size; freePages.splice(i + 1, 1); }
-    if (i > 0 && freePages[i - 1].addr + freePages[i - 1].size === addr) { freePages[i - 1].size += freePages[i].size; freePages.splice(i, 1); }
+    if (addr & (PAGE_SIZE - 1) || !n || addr < ARENA_BASE) return false;   // the loader's regions are not the process's to unmap
+    pages.fill(FREE, pageOf(addr), Math.min(pageOf(addr) + (n >>> PAGE_SHIFT), pageOf(moduleBot)));
     return true;
+  },
+  /** plane h ≠ 0 address → buffer offset; past the committed prefix is a fault, as the page would be */
+  tx(h: number, lo: number): number {
+    const off = (lo - PLANE_LO) >>> 0;
+    if (h >>> 0 >= PLANES || off >= S[h]) throw new NativeFault(`[native] bad address 0x${(h >>> 0).toString(16)}_${(lo >>> 0).toString(16).padStart(8, "0")} (plane ${h >>> 0}, ${R[h & 255] ? "not committed" : "unmapped"})`);
+    return P[h] + off;
+  },
+  txVa(va: bigint): number { const [h, lo] = split(va); return h ? mem.tx(h, lo) : lo; },
+  /** a buffer offset taken before a suspension, found again after it: a plane may have moved */
+  rephys(phys: number): number { const v = mem.va(phys); return typeof v === "bigint" ? mem.txVa(v) : phys; },
+  /** buffer offset → the address the guest knows it by: itself in plane 0, else the plane's */
+  va(phys: number): number | bigint {
+    if (!poolBase || phys < poolBase) return phys;
+    const h = owner[(phys - poolBase) / UNIT | 0];
+    return h === undefined || h < 0 ? phys : (BigInt(h) << 32n) | BigInt(PLANE_LO + (phys - P[h]));
+  },
+  /** mmap: plane 0 while it has room, else a plane of its own (a reservation commits nothing yet;
+   *  a writable mapping is committed whole); 0 when neither has room */
+  mapVa(n: number, reserve: boolean): number | bigint {
+    const p = mem.mapPages(n, reserve);
+    if (p || !poolBase) return p;
+    const h = R.findIndex((r, i) => i > 0 && r === 0);
+    if (h < 0 || (!reserve && !grow(h, n))) return 0;
+    R[h] = n;
+    return (BigInt(h) << 32n) | BigInt(PLANE_LO);
+  },
+  /** unmapping the tail shortens the plane; the whole of it frees the plane; a hole is a decommit */
+  unmapVa(va: bigint, n: number): boolean {
+    const [h, lo] = split(va);
+    if (!h) return mem.unmapPages(lo, n);
+    const off = lo - PLANE_LO;
+    if (off <= 0 && n >= R[h]) release(h);
+    else if (off + n >= R[h]) { R[h] = off; mem.decommitVa(va, n); }
+    return true;
+  },
+  commitVa(va: bigint, n: number): boolean {
+    const [h, lo] = split(va);
+    if (!h) return mem.commitPages(lo, n);
+    const end = lo - PLANE_LO + n;
+    return end <= R[h] && (end <= S[h] || grow(h, end));
+  },
+  /** the prefix only shrinks from its end; a hole stays committed (its pages are the plane's) */
+  /** MADV_DONTNEED on a private anonymous mapping: what is committed of it reads back as zero */
+  dropVa(va: bigint, n: number): void {
+    const [h, lo] = split(va);
+    if (!h) { u8.fill(0, lo, lo + n); return; }
+    const off = lo - PLANE_LO;
+    if (off < S[h]) u8.fill(0, P[h] + off, P[h] + Math.min(S[h], off + n));
+  },
+  decommitVa(va: bigint, n: number): void {
+    const [h, lo] = split(va);
+    if (!h) { mem.decommitPages(lo, n); return; }
+    const off = lo - PLANE_LO;
+    if (off < S[h] && off + n >= S[h]) { owner.fill(-1, (P[h] - poolBase) / UNIT + unitsOf(off), (P[h] - poolBase) / UNIT + unitsOf(S[h])); S[h] = off; }
+  },
+  /** mprotect to accessible: a reserved page becomes a zeroed page of its own; false (ENOMEM) on
+   *  an unmapped or phantom one. Pages below the arena are the images' and the loader's own. */
+  commitPages(addr: number, n: number): boolean {
+    if (addr < ARENA_BASE) return false;
+    const a = pageOf(addr), b = pageOf(addr + n + PAGE_SIZE - 1);
+    if (b > pageOf(moduleBot)) return false;
+    for (let i = a; i < b; i++) if (pages[i] === FREE) return false;
+    for (let i = a; i < b; i++) if (pages[i] === RESERVED) { pages[i] = USED; u8.fill(0, i * PAGE_SIZE, (i + 1) * PAGE_SIZE); }
+    return true;
+  },
+  /** mprotect to PROT_NONE: the pages go back to being address space */
+  decommitPages(addr: number, n: number): void {
+    const a = Math.max(pageOf(addr), pageOf(ARENA_BASE)), b = Math.min(pageOf(addr + n + PAGE_SIZE - 1), pageOf(moduleBot));
+    for (let i = a; i < b; i++) if (pages[i] === USED) pages[i] = RESERVED;
   },
   realloc(p: number, n: number): number {
     if (!p) return mem.malloc(n);
@@ -187,8 +348,8 @@ export const mem = {
     if (align <= 16) return mem.malloc(n);
     if (align >= PAGE_SIZE && (align & (align - 1)) === 0 && align <= PAGE_SIZE) { const p = mem.mapPages(n); if (p) { bigBlocks.set(p, n); blocks++; used += n; } return p; }
     const raw = mem.malloc(n + align + HDR);
-    if (!raw || bigBlocks.has(raw)) { if (raw) { const p = (raw + align - 1) & -align; if (p === raw) return raw; bigBlocks.delete(raw); bigBlocks.set(p, n); return p; } return 0; }
-    const p = (raw + HDR + align - 1) & -align;
+    if (!raw || bigBlocks.has(raw)) { if (raw) { const p = ((raw + align - 1) & -align) >>> 0; if (p === raw) return raw; bigBlocks.delete(raw); bigBlocks.set(p, n); return p; } return 0; }
+    const p = ((raw + HDR + align - 1) & -align) >>> 0;
     i32[(p - 8) >>> 2] = raw;
     i32[(p - 4) >>> 2] = n;
     return p;
@@ -200,18 +361,21 @@ export const mem = {
   },
   /** address space for a module image: never freed, 64 KiB aligned by default */
   reserve(size: number, align = 0x10000): number {
-    const base = (moduleBot - size) & -align;
+    const base = ((moduleBot - size) & -align) >>> 0;   // int32 masking; the image region sits above 2 GiB
+    for (let i = pageOf(base); i < pageOf(moduleBot); i++) if (pages[i] === USED) throw new NativeFault(`[native] out of module address space (${(size / 1048576).toFixed(1)} MiB wanted, the pool reaches the images)`);
     if (base < heapTop) throw new NativeFault(`[native] out of module address space (${(size / 1048576).toFixed(1)} MiB wanted, ${((moduleBot - heapTop) / 1048576).toFixed(1)} free)`);
     moduleBot = base;
     return base;
   },
   allocStack(size: number): { base: number; top: number } {
-    const base = stackTop + STACK_GUARD;
+    const base = freeStacks.get(size)?.pop() ?? stackTop + STACK_GUARD;
     const top = base + size;
-    stackTop = top;
+    if (top > stackTop) stackTop = top;
     if (top > STACK_END) throw new NativeFault("[native] out of stack address space");
     return { base, top };
   },
+  /** a finished thread's stack goes back for the next thread of that size */
+  freeStack(base: number, top: number): void { let l = freeStacks.get(top - base); if (!l) freeStacks.set(top - base, (l = [])); l.push(base); },
   /** host-owned guest data (FILE structs, JNI tables, ctype tables, static strings): bump only */
   hostAlloc(n: number, align = 8): number {
     const p = (hostTop + align - 1) & -align;
@@ -262,6 +426,8 @@ export const mem = {
     u8.set(b, p); u8[p + b.length] = 0;
     return p;
   },
-  stats(): { used: number; blocks: number; peak: number; size: number; free: number } { return { used, blocks, peak: heapPeak - ARENA_BASE, size: MEM_SIZE, free: moduleBot - heapTop }; },
+  stats(): { used: number; blocks: number; peak: number; size: number; free: number; planes: number; chunks: number; moves: number } {
+    return { used, blocks, peak: heapPeak - ARENA_BASE, size: MEM_SIZE, free: moduleBot - heapTop, planes: R.filter((r) => r > 0).length, chunks: owner.filter((o) => o >= 0).length, moves };
+  },
 };
 alloc(MEM_SIZE_A32);

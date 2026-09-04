@@ -3,7 +3,7 @@
 // printf/scanf in printf.ts.
 
 import { mem, NativeFault } from "./mem";
-import { hostLib, hostData, NORET, vaList, type HostFn, retF, retD, PTR, stp, ldp } from "./host";
+import { hostLib, hostData, NORET, ARG0, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, calledMissing } from "./host";
 import { E } from "./abi";
 import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
@@ -202,7 +202,7 @@ export function libcInit(): void {
     __set_errno: (cpu, a) => { setErrno(cpu, a.i()); return -1; },
     abort: (cpu) => { cpu.fault(abortMessageOr("abort() called")); },
     exit: (cpu, a) => { console.warn("[native] exit(" + a.i() + ")"); markProcessExited(); cpu.finished = true; return new Promise<never>(() => {}); },
-    _exit: (cpu) => { markProcessExited(); cpu.finished = true; return new Promise<never>(() => {}); },
+    _exit: (cpu, a) => { console.warn(`[native] _exit(${a.i()}) from ${cpu.name} lr=${(cpu.r[cpu.lrx] >>> 0).toString(16)}`); markProcessExited(); cpu.finished = true; return new Promise<never>(() => {}); },
     atexit: () => 0,
     __cxa_atexit: () => 0,
     __cxa_finalize: () => 0,
@@ -245,7 +245,13 @@ export function libcInit(): void {
     unsetenv: (_c, a) => { delete ENV[a.str()]; return 0; },
     setlocale: (_c, a) => { a.i(); const l = a.p(); return l && mem.cstr(l) !== "" && mem.cstr(l) !== "C" && mem.cstr(l) !== "POSIX" ? 0 : cLocale; },
     localeconv: () => localeConv,
-    mprotect: (_c, a) => { const p = a.p(), n = a.u(); invalidateRange(p, n); return 0; },
+    mprotect: (cpu, a) => {
+      const va = a.va(), n = a.u(), prot = a.i();
+      if (!(va >> 32n)) invalidateRange(Number(va), n);
+      if (prot & 3) return mem.commitVa(va, n) ? 0 : fail(cpu, E.NOMEM);
+      mem.decommitVa(va, n);
+      return 0;
+    },
     // MAP_FAILED is (void*)-1 at the pointer width; MAP_FIXED is refused by name, and a file
     // mapping is a private copy (a shared writable one would be a lie: the file never sees the writes)
     mmap: (cpu, a) => {
@@ -253,15 +259,16 @@ export function libcInit(): void {
       const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
       if (flags & 0x10) return failed(E.INVAL);
       if (fd !== -1 && !(flags & 0x20) && (flags & 0x1) && (prot & 2)) return failed(E.NOSYS);
-      const p = mem.mapPages(n);
+      const p = mem.mapVa(n, (flags & 0x20) !== 0 && prot === 0);   // an anonymous PROT_NONE mapping is a reservation
       if (!p) return failed(E.NOMEM);
       if (fd !== -1 && !(flags & 0x20)) { const r = readInto(cpu, fd, off, p, n); return r instanceof Promise ? r.then(() => p) : p; }
       return p;
     },
     mmap64: (cpu, a) => M.mmap(cpu, a),
-    munmap: (cpu, a) => (mem.unmapPages(a.p(), a.u()) ? 0 : fail(cpu, E.INVAL)),
+    munmap: (cpu, a) => (mem.unmapVa(a.va(), a.u()) ? 0 : fail(cpu, E.INVAL)),
     mremap: (cpu) => { fail(cpu, E.NOSYS); return PTR === 8 ? -1n : -1; },
-    madvise: () => 0, msync: () => 0, mlock: () => 0, munlock: () => 0,
+    madvise: (_c, a) => { const va = a.va(), n = a.u(); if (a.i() === 4) mem.dropVa(va, n); return 0; },   // MADV_DONTNEED
+    msync: () => 0, mlock: () => 0, munlock: () => 0,
     getrlimit: (_c, a) => { a.i(); const r = a.p(); stp(r, 0x100000); stp(r + PTR, 0x100000); return 0; },
     setrlimit: () => 0,
     syscall: (cpu) => fail(cpu, E.NOSYS),
@@ -277,38 +284,38 @@ export function libcInit(): void {
     memalign: (_c, a) => mem.memalign(a.u(), a.u()),
     posix_memalign: (_c, a) => { const out = a.p(), al = a.u(), n = a.u(); stp(out, mem.memalign(al, n)); return 0; },
     malloc_usable_size: (_c, a) => mem.usableSize(a.p()),
-    memcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memcpy(d, s, n); return d; },
-    memmove: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n); return d; },
-    memset: (_c, a) => { const d = a.p(), v = a.i(), n = a.u(); mem.memset(d, v, n); return d; },
+    memcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memcpy(d, s, n); return ARG0; },
+    memmove: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n); return ARG0; },
+    memset: (_c, a) => { const d = a.p(), v = a.i(), n = a.u(); mem.memset(d, v, n); return ARG0; },
     memcmp: (_c, a) => {
       const x = a.p(), y = a.p(), n = a.u();
       for (let i = 0; i < n; i++) { const d = mem.u8[x + i] - mem.u8[y + i]; if (d) return d; }
       return 0;
     },
-    memchr: (_c, a) => { const p = a.p(), c = a.i() & 255, n = a.u(); const i = mem.u8.indexOf(c, p); return i >= 0 && i < p + n ? i : 0; },
-    memrchr: (_c, a) => { const p = a.p(), c = a.i() & 255, n = a.u(); for (let i = p + n - 1; i >= p; i--) if (mem.u8[i] === c) return i; return 0; },
+    memchr: (_c, a) => { const p = a.p(), c = a.i() & 255, n = a.u(); const i = mem.u8.indexOf(c, p); return i >= 0 && i < p + n ? ptr(i) : 0; },
+    memrchr: (_c, a) => { const p = a.p(), c = a.i() & 255, n = a.u(); for (let i = p + n - 1; i >= p; i--) if (mem.u8[i] === c) return ptr(i); return 0; },
     bcopy: (_c, a) => { const s = a.p(), d = a.p(), n = a.u(); mem.memmove(d, s, n); },
     bzero: (_c, a) => { const d = a.p(), n = a.u(); mem.memset(d, 0, n); },
 
     strlen: (_c, a) => mem.strlen(a.p()),
     strnlen: (_c, a) => { const p = a.p(), n = a.u(); let i = 0; while (i < n && mem.u8[p + i]) i++; return i; },
-    strcpy: (_c, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s); mem.memmove(d, s, n + 1); return d; },
+    strcpy: (_c, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s); mem.memmove(d, s, n + 1); return ARG0; },
     strncpy: (_c, a) => {
       const d = a.p(), s = a.p(), n = a.u();
       let i = 0;
       for (; i < n && mem.u8[s + i]; i++) mem.u8[d + i] = mem.u8[s + i];
       for (; i < n; i++) mem.u8[d + i] = 0;
-      return d;
+      return ARG0;
     },
-    stpcpy: (_c, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s); mem.memmove(d, s, n + 1); return d + n; },
-    strcat: (_c, a) => { const d = a.p(), s = a.p(); const dl = mem.strlen(d), n = mem.strlen(s); mem.memmove(d + dl, s, n + 1); return d; },
+    stpcpy: (_c, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s); mem.memmove(d, s, n + 1); return ptr(d + n); },
+    strcat: (_c, a) => { const d = a.p(), s = a.p(); const dl = mem.strlen(d), n = mem.strlen(s); mem.memmove(d + dl, s, n + 1); return ARG0; },
     strncat: (_c, a) => {
       const d = a.p(), s = a.p(), n = a.u();
       const dl = mem.strlen(d);
       let i = 0;
       for (; i < n && mem.u8[s + i]; i++) mem.u8[d + dl + i] = mem.u8[s + i];
       mem.u8[d + dl + i] = 0;
-      return d;
+      return ARG0;
     },
     strcmp: (_c, a) => strcmpAt(a.p(), a.p(), 0x7fffffff, false),
     strncmp: (_c, a) => strcmpAt(a.p(), a.p(), a.u(), false),
@@ -316,22 +323,22 @@ export function libcInit(): void {
     strncasecmp: (_c, a) => strcmpAt(a.p(), a.p(), a.u(), true),
     strcoll: (_c, a) => strcmpAt(a.p(), a.p(), 0x7fffffff, false),
     strxfrm: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const l = mem.strlen(s); if (n) { const k = Math.min(l, n - 1); mem.memmove(d, s, k); mem.u8[d + k] = 0; } return l; },
-    strchr: (_c, a) => { const p = a.p(), c = a.i() & 255; for (let i = p; ; i++) { if (mem.u8[i] === c) return i; if (!mem.u8[i]) return 0; } },
-    strrchr: (_c, a) => { const p = a.p(), c = a.i() & 255; let r = 0; for (let i = p; ; i++) { if (mem.u8[i] === c) r = i; if (!mem.u8[i]) return r; } },
+    strchr: (_c, a) => { const p = a.p(), c = a.i() & 255; for (let i = p; ; i++) { if (mem.u8[i] === c) return ptr(i); if (!mem.u8[i]) return 0; } },
+    strrchr: (_c, a) => { const p = a.p(), c = a.i() & 255; let r = 0; for (let i = p; ; i++) { if (mem.u8[i] === c) r = i; if (!mem.u8[i]) return ptr(r); } },
     strstr: (_c, a) => {
       const h = a.p(), n = a.p();
       const hs = mem.cstr(h), ns = mem.cstr(n);
       const i = hs.indexOf(ns);
-      return i < 0 ? 0 : h + utf8(hs.slice(0, i)).length;
+      return i < 0 ? 0 : ptr(h + utf8(hs.slice(0, i)).length);
     },
-    strcasestr: (_c, a) => { const h = a.p(), n = a.p(); const hs = mem.cstr(h).toLowerCase(), ns = mem.cstr(n).toLowerCase(); const i = hs.indexOf(ns); return i < 0 ? 0 : h + utf8(hs.slice(0, i)).length; },
-    strpbrk: (_c, a) => { const p = a.p(), set = mem.cstr(a.p()); for (let i = p; mem.u8[i]; i++) if (set.includes(String.fromCharCode(mem.u8[i]))) return i; return 0; },
+    strcasestr: (_c, a) => { const h = a.p(), n = a.p(); const hs = mem.cstr(h).toLowerCase(), ns = mem.cstr(n).toLowerCase(); const i = hs.indexOf(ns); return i < 0 ? 0 : ptr(h + utf8(hs.slice(0, i)).length); },
+    strpbrk: (_c, a) => { const p = a.p(), set = mem.cstr(a.p()); for (let i = p; mem.u8[i]; i++) if (set.includes(String.fromCharCode(mem.u8[i]))) return ptr(i); return 0; },
     strspn: (_c, a) => { const p = a.p(), set = mem.cstr(a.p()); let i = 0; while (mem.u8[p + i] && set.includes(String.fromCharCode(mem.u8[p + i]))) i++; return i; },
     strcspn: (_c, a) => { const p = a.p(), set = mem.cstr(a.p()); let i = 0; while (mem.u8[p + i] && !set.includes(String.fromCharCode(mem.u8[p + i]))) i++; return i; },
     strdup: (_c, a) => { const s = a.p(); const n = mem.strlen(s); const d = mem.malloc(n + 1); mem.memcpy(d, s, n + 1); return d; },
     strndup: (_c, a) => { const s = a.p(), n = a.u(); let l = 0; while (l < n && mem.u8[s + l]) l++; const d = mem.malloc(l + 1); mem.memcpy(d, s, l); mem.u8[d + l] = 0; return d; },
-    strtok: (cpu, a) => strtok(cpu, a.p(), a.p(), 0),
-    strtok_r: (_c, a) => { const s = a.p(), d = a.p(), save = a.p(); return strtokR(s, d, save); },
+    strtok: (cpu, a) => ptr(strtok(cpu, a.p(), a.p(), 0)),
+    strtok_r: (_c, a) => { const s = a.p(), d = a.p(), save = a.p(); return ptr(strtokR(s, d, save)); },
     strerror: (_c, a) => { mem.putCstr(strerrorBuf, ERRSTR[a.i()] ?? `Unknown error ${a.i()}`, 64); return strerrorBuf; },
     strerror_r: (_c, a) => { const e = a.i(), b = a.p(), n = a.u(); mem.putCstr(b, ERRSTR[e] ?? `Unknown error ${e}`, n); return 0; },
     // long is 64-bit on LP64
@@ -360,11 +367,11 @@ export function libcInit(): void {
 
     // ── wide chars (wchar_t is 32-bit)
     wcslen: (_c, a) => { const p = a.p(); let n = 0; while (mem.ld32(p + n * 4)) n++; return n; },
-    wmemchr: (_c, a) => { const p = a.p(), c = a.i(), n = a.u(); for (let i = 0; i < n; i++) if (mem.ld32(p + i * 4) === c) return p + i * 4; return 0; },
+    wmemchr: (_c, a) => { const p = a.p(), c = a.i(), n = a.u(); for (let i = 0; i < n; i++) if (mem.ld32(p + i * 4) === c) return ptr(p + i * 4); return 0; },
     wmemcmp: (_c, a) => { const x = a.p(), y = a.p(), n = a.u(); for (let i = 0; i < n; i++) { const d = mem.ld32(x + i * 4) - mem.ld32(y + i * 4); if (d) return d < 0 ? -1 : 1; } return 0; },
-    wmemcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memcpy(d, s, n * 4); return d; },
-    wmemmove: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n * 4); return d; },
-    wmemset: (_c, a) => { const d = a.p(), c = a.i(), n = a.u(); for (let i = 0; i < n; i++) mem.st32(d + i * 4, c); return d; },
+    wmemcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memcpy(d, s, n * 4); return ARG0; },
+    wmemmove: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n * 4); return ARG0; },
+    wmemset: (_c, a) => { const d = a.p(), c = a.i(), n = a.u(); for (let i = 0; i < n; i++) mem.st32(d + i * 4, c); return ARG0; },
     wcscoll: (_c, a) => { const x = wstr(a.p()), y = wstr(a.p()); return x < y ? -1 : x > y ? 1 : 0; },
     wcscmp: (_c, a) => { const x = wstr(a.p()), y = wstr(a.p()); return x < y ? -1 : x > y ? 1 : 0; },
     wcsxfrm: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const l = wlen(s); if (n) { const k = Math.min(l, n - 1); mem.memmove(d, s, k * 4); mem.st32(d + k * 4, 0); } return l; },
@@ -416,8 +423,8 @@ export function libcInit(): void {
     clock_getres: (_c, a) => { a.i(); const ts = a.p(); if (ts) { stp(ts + LAYOUT.TS_SEC, 0); stp(ts + LAYOUT.TS_NSEC, 1000); } return 0; },
     clock: () => Math.floor(performance.now() * 1000),
     times: () => Math.floor(performance.now() / 10),
-    localtime_r: (_c, a) => { const t = mem.ld32(a.p()), tm = a.p(); fillTm(tm, new Date(t * 1000), false); return tm; },
-    gmtime_r: (_c, a) => { const t = mem.ld32(a.p()), tm = a.p(); fillTm(tm, new Date(t * 1000), true); return tm; },
+    localtime_r: (_c, a) => { const t = mem.ld32(a.p()), tm = a.p(); fillTm(tm, new Date(t * 1000), false); return ptr(tm); },
+    gmtime_r: (_c, a) => { const t = mem.ld32(a.p()), tm = a.p(); fillTm(tm, new Date(t * 1000), true); return ptr(tm); },
     localtime: (_c, a) => { const t = mem.ld32(a.p()); fillTm(tmBuf, new Date(t * 1000), false); return tmBuf; },
     gmtime: (_c, a) => { const t = mem.ld32(a.p()); fillTm(tmBuf, new Date(t * 1000), true); return tmBuf; },
     mktime: (_c, a) => Math.floor(mktime(a.p()) / 1000),

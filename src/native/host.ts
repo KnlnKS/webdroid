@@ -7,13 +7,17 @@ import { trampAddr, TRAMP_BASE, TRAMP_END, RET_SENTINEL } from "./abi";
 import { perf } from "../perf";
 
 export const NORET: unique symbol = Symbol("noret");
+/** the result is the first argument, still in x0 (memcpy and its kin): nothing to translate back */
+export const ARG0: unique symbol = Symbol("arg0");
 /** the result is already in v0 (see retF/retD); only the return itself is left to do */
 export const VRET: unique symbol = Symbol("vret");
-export type HostRet = number | bigint | void | typeof NORET | typeof VRET;
+export type HostRet = number | bigint | void | typeof NORET | typeof VRET | typeof ARG0;
 export type HostFn = (cpu: Cpu, a: ArgReader) => HostRet | Promise<HostRet>;
 
 export interface ArgReader {
   i(): number; u(): number; p(): number; l(): bigint; ul(): bigint; f(): number; d(): number; vd(): number; str(): string;
+  /** the pointer as the guest holds it (plane and all), for what is handed back or keyed rather than dereferenced */
+  va(): bigint;
   strAt(p: number): string;
 }
 
@@ -40,6 +44,7 @@ export class Args implements ArgReader {
   }
   u(): number { return this.i() >>> 0; }
   p(): number { return this.i() >>> 0; }
+  va(): bigint { return BigInt(this.p()); }
   l(): bigint {
     if (this.n & 1) this.n++;
     if (this.n < 4) { const lo = this.cpu.r[this.n], hi = this.cpu.r[this.n + 1]; this.n += 2; return retPair(lo, hi); }
@@ -61,6 +66,7 @@ export class VaList implements ArgReader {
   i(): number { const v = mem.ld32(this.a); this.a += 4; return v; }
   u(): number { return this.i() >>> 0; }
   p(): number { return this.i() >>> 0; }
+  va(): bigint { return BigInt(this.p()); }
   l(): bigint { this.a = (this.a + 7) & ~7; const v = mem.ld64(this.a); this.a += 8; return v; }
   ul(): bigint { return BigInt.asUintN(64, this.l()); }
   f(): number { return bitsf(this.i()); }
@@ -94,6 +100,7 @@ export class VaList64 implements ArgReader {
   i(): number { return mem.ld32(this.gp()); }
   u(): number { return this.i() >>> 0; }
   p(): number { return ldp(this.gp()); }
+  va(): bigint { return mem.ld64(this.gp()); }
   l(): bigint { return mem.ld64(this.gp()); }
   ul(): bigint { return BigInt.asUintN(64, this.l()); }
   f(): number { return this.d(); }   // a float vararg is promoted to double
@@ -111,9 +118,13 @@ export function vaList(a: number): ArgReader { return PTR === 8 ? new VaList64(a
 export let PTR = 4;
 export function setPtrWidth(n: number): void { PTR = n; }
 /** store a guest pointer; the high half of an LP64 slot is always zero in this address space */
-export function stp(a: number, v: number): void { mem.st32(a, v); if (PTR === 8) mem.st32(a + 4, 0); }
+export function stp(a: number, v: number): void { const g = mem.va(v); if (typeof g === "bigint") { mem.st64(a, g); return; } mem.st32(a, v); if (PTR === 8) mem.st32(a + 4, 0); }
 /** load a guest pointer */
-export function ldp(a: number): number { return mem.ld32(a) >>> 0; }
+/** a pointer read from guest memory, translated; a pointer stored is written as the guest knows it */
+export function ldp(a: number): number { const lo = mem.ld32(a), hi = PTR === 8 ? mem.ld32(a + 4) : 0; return hi ? mem.tx(hi, lo) : lo >>> 0; }
+export function stpVa(a: number, v: number | bigint): void { if (typeof v === "bigint") mem.st64(a, v); else stp(a, v); }
+/** a pointer a host function derived from one it was given: the guest's address for it */
+export const ptr = (p: number): number | bigint => mem.va(p);
 
 const fns: HostFn[] = [];
 const names: string[] = [];
@@ -136,25 +147,33 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
   perf.nativeHostCalls++;
   const a = cpu.args;
   a.reset(cpu);
+  let traced = false;
   if (hostTrace.on) {
     const nm = names[slot];
     if (!hostTrace.filter || hostTrace.filter.test(nm)) {
+      traced = true;
       const r = cpu.r;
       let s0 = "";
       if (STR0.has(nm) && r[0]) { try { s0 = ` "${mem.cstr(r[0] >>> 0, 120)}"`; } catch { s0 = " <bad ptr>"; } }
-      hostTrace.ring.push(`${nm}(${(r[0] >>> 0).toString(16)},${(r[1] >>> 0).toString(16)},${(r[2] >>> 0).toString(16)},${(r[3] >>> 0).toString(16)})${s0} lr=${(r[14] >>> 0).toString(16)}`);
+      // a reservation's caller is two frames up (the mmap wrapper keeps its lr at sp+0x10)
+      const lr2 = nm === "mmap" && cpu.a64 ? ` lr2=${(mem.ld32((r[31] >>> 0) + 0x10) >>> 0).toString(16)}` : "";
+      const entry = `${cpu.name}:${nm}(${(r[0] >>> 0).toString(16)},${(r[1] >>> 0).toString(16)},${(r[2] >>> 0).toString(16)},${(r[3] >>> 0).toString(16)})${s0} lr=${(r[cpu.lrx] >>> 0).toString(16)}${lr2}`;
+      // a spin loop's repeats add nothing: keep the first pass through a short cycle
+      if (hostTrace.ring.slice(-4).some((e) => e.startsWith(entry))) traced = false;
+      else hostTrace.ring.push(entry);
       if (hostTrace.ring.length > hostTrace.max) hostTrace.ring.splice(0, hostTrace.ring.length - hostTrace.max);
     }
   }
   const ret = fn(cpu, a);
   if (ret instanceof Promise) { cpu.pending = ret; return; }
+  if (traced) hostTrace.ring[hostTrace.ring.length - 1] += `=${typeof ret === "number" ? (ret >>> 0).toString(16) : String(ret)}`;
   hostReturn(cpu, ret);
 }
 
 export function hostReturn(cpu: Cpu, ret: HostRet): void {
   if (ret === NORET) return;
   // AAPCS64 returns a 64-bit value in x0 alone; AAPCS32 splits it across r0/r1
-  if (ret === VRET) { /* already in v0 */ }
+  if (ret === VRET || ret === ARG0) { /* already in v0 / x0 */ }
   else if (typeof ret === "number") { cpu.r[0] = ret | 0; if (cpu.a64) cpu.h[0] = 0; }
   else if (typeof ret === "bigint") {
     cpu.r[0] = Number(ret & 0xffffffffn) | 0;
@@ -179,7 +198,12 @@ export class Args64 implements ArgReader {
     const v = mem.ld32(this.sp); this.sp += 8; return v;
   }
   u(): number { return this.i() >>> 0; }
-  p(): number { return this.i() >>> 0; }
+  p(): number {
+    if (this.n < 8) { const lo = this.cpu.r[this.n], hi = this.cpu.h[this.n]; this.n++; return hi ? mem.tx(hi, lo) : lo >>> 0; }
+    const lo = mem.ld32(this.sp), hi = mem.ld32(this.sp + 4); this.sp += 8;
+    return hi ? mem.tx(hi, lo) : lo >>> 0;
+  }
+  va(): bigint { return this.ul(); }
   l(): bigint {
     if (this.n < 8) { const lo = this.cpu.r[this.n], hi = this.cpu.h[this.n]; this.n++; return retPair(lo, hi); }
     const v = mem.ld64(this.sp); this.sp += 8; return v;
@@ -192,13 +216,29 @@ export class Args64 implements ArgReader {
   strAt(p: number): string { return mem.cstr(p); }
 }
 
+const strAddrs = new Map<string, number>();
+/** an interned host-data C string: what a guest gets back from glGetString/eglQueryString */
+export function cstr(s: string): number { let p = strAddrs.get(s); if (p === undefined) strAddrs.set(s, (p = mem.hostStr(s))); return p; }
+
 // ── virtual host libraries: name → (symbol → trampoline/data address), defined lazily
 const libs = new Map<string, Map<string, HostFn | number>>();
 const addrs = new Map<string, number>();  // "lib!sym" → address
-export function hostLib(lib: string, fnsIn: Record<string, HostFn>): void {
+const closedLibs = new Set<string>();
+/** names an image asked a closed library for and did not get ("lib!sym") */
+export const probed = new Set<string>();
+export function hostLib(lib: string, fnsIn: Record<string, HostFn>, opts?: { closed?: boolean }): void {
   let m = libs.get(lib);
   if (!m) libs.set(lib, (m = new Map()));
   for (const [k, v] of Object.entries(fnsIn)) m.set(k, v);
+  if (opts?.closed) closedLibs.add(lib);
+}
+/** dlsym on a host library. A closed library answers NULL for a name it lacks, which is how an
+ *  image feature-gates on a device; an open one (libc) mints a stub that reports itself when called. */
+export function probeHost(sym: string, lib: string): number {
+  const v = lookupHost(sym, lib);
+  if (v !== undefined) return v;
+  if (closedLibs.has(lib)) { probed.add(lib + "!" + sym); return 0; }
+  return missingStub(lib + "!" + sym);
 }
 export function hostData(lib: string, sym: string, addr: number): void {
   let m = libs.get(lib);

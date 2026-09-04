@@ -15,7 +15,7 @@
 import { mem } from "./mem";
 import { PAGE_SIZE, PAGE_SHIFT } from "./abi";
 import { type Ins, type Fl, C, ALL, COND, COND_READS, NZ, ADDF, SUBF, hex, assemble, hoistRegs, inlineMem, selfLoop, retK } from "./flags";
-import { SP, sp, sph, zr, zrh, setX, setW, setSP, int32, sx, shl64, shr64, ror64, shiftOf, VIEWS } from "./a64regs";
+import { SP, sp, sph, zr, zrh, setX, setW, setSP, int32, sx, shl64, shr64, ror64, shiftOf, VIEWS, wb64, txA, txAx } from "./a64regs";
 import { emitSimd, emitSimdMem } from "./a64simd";
 
 let MAX_BLOCK = 256;
@@ -211,38 +211,38 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
   // ── branches, exception generating, system
   if (is(0x1c000000, 0x14000000)) {
     if (is(0x7c000000, 0x14000000)) {                                           // B / BL
-      const target = (pc + sx(w & 0x3ffffff, 26) * 4) | 0;
-      if (w & 0x80000000) { push(`r[30]=${hex((pc + 4) | 0)};H[30]=0;` + ret(hex(target))); return true; }
+      const target = (pc + sx(w & 0x3ffffff, 26) * 4) >>> 0;
+      if (w & 0x80000000) { push(`r[30]=${hex((pc + 4) >>> 0)};H[30]=0;` + ret(hex(target))); return true; }
       redirect = target;
       push(`c.ic+=${k};`);
       return true;
     }
     if (is(0xff000010, 0x54000000)) {                                           // B.cond
-      const cond = w & 15, target = (pc + sx((w >>> 5) & 0x7ffff, 19) * 4) | 0;
+      const cond = w & 15, target = (pc + sx((w >>> 5) & 0x7ffff, 19) * 4) >>> 0;
       if (cond >= 14) { redirect = target; push(`c.ic+=${k};`); return true; }
-      push(`if(${COND[cond]})${ret(hex(target))}` + ret(hex((pc + 4) | 0)), null, COND_READS[cond], 0);
+      push(`if(${COND[cond]})${ret(hex(target))}` + ret(hex((pc + 4) >>> 0)), null, COND_READS[cond], 0);
       return true;
     }
     if (is(0x7e000000, 0x34000000)) {                                           // CBZ / CBNZ
-      const nz = (w >>> 24) & 1, target = (pc + sx((w >>> 5) & 0x7ffff, 19) * 4) | 0;
+      const nz = (w >>> 24) & 1, target = (pc + sx((w >>> 5) & 0x7ffff, 19) * 4) >>> 0;
       const test = w64 ? `(${zr(rd)}|${zrh(rd)})` : `${zr(rd)}`;
-      push(`if(${test}${nz ? "!==0" : "===0"})${ret(hex(target))}` + ret(hex((pc + 4) | 0)));
+      push(`if(${test}${nz ? "!==0" : "===0"})${ret(hex(target))}` + ret(hex((pc + 4) >>> 0)));
       return true;
     }
     if (is(0x7e000000, 0x36000000)) {                                           // TBZ / TBNZ
       const nz = (w >>> 24) & 1, bit = ((w >>> 26) & 0x20) | ((w >>> 19) & 0x1f);
-      const target = (pc + sx((w >>> 5) & 0x3fff, 14) * 4) | 0;
+      const target = (pc + sx((w >>> 5) & 0x3fff, 14) * 4) >>> 0;
       const test = bit >= 32 ? `((${zrh(rd)}>>>${bit - 32})&1)` : `((${zr(rd)}>>>${bit})&1)`;
-      push(`if(${test}${nz ? "!==0" : "===0"})${ret(hex(target))}` + ret(hex((pc + 4) | 0)));
+      push(`if(${test}${nz ? "!==0" : "===0"})${ret(hex(target))}` + ret(hex((pc + 4) >>> 0)));
       return true;
     }
     if (is(0xfffffc1f, 0xd65f0000)) { push(`c.ic+=${k};return c.look(r[${rn}]);`); return true; }   // RET
     if (is(0xfffffc1f, 0xd63f0000)) {                                           // BLR
-      push(`t=${zr(rn)};r[30]=${hex((pc + 4) | 0)};H[30]=0;c.ic+=${k};return c.look(t);`);
+      push(`t=${zr(rn)};r[30]=${hex((pc + 4) >>> 0)};H[30]=0;c.ic+=${k};return c.look(t);`);
       return true;
     }
     if (is(0xfffffc1f, 0xd61f0000)) { push(`c.ic+=${k};return c.look(${zr(rn)});`); return true; }  // BR
-    if (is(0xffe0001f, 0xd4000001)) { push(`r[32]=${hex((pc + 4) | 0)};c.ic+=${k};c.svc();return c.look(r[32]);`); return true; } // SVC
+    if (is(0xffe0001f, 0xd4000001)) { push(`r[32]=${hex((pc + 4) >>> 0)};c.ic+=${k};c.svc();return c.look(r[32]);`); return true; } // SVC
     if (is(0xfffff01f, 0xd503201f)) { push(""); return false; }                 // HINT (NOP/YIELD/BTI/PAC…)
     if (is(0xfffff01f, 0xd503301f)) { push(((w >>> 5) & 7) === 2 ? "c.excl=0;" : ""); return false; }   // CLREX / DSB / DMB / ISB
     if (is(0xfff8f01f, 0xd500401f)) { push(""); return false; }                 // MSR (immediate): SSBS/DIT/PAN
@@ -288,8 +288,8 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
       const wide = opc === 2, scale = wide ? 8 : 4, off = imm7 * scale;
       const wb = kind === 1 || kind === 3;
       const addr = kind === 1 ? sp(rn) : off === 0 ? sp(rn) : `${sp(rn)}+${off}`;
-      let body = `a=${addr}|0;`;
-      if (wb) body += `${sp(rn)}=(${sp(rn)}+${off})|0;${sph(rn)}=0;`;
+      let body = `a=${addr}|0;` + txA(rn);
+      if (wb) body += wb64(rn, off);
       if (L) {
         if (wide) body += `v=M.ld32(a);vh=M.ld32(a+4);t=M.ld32(a+8);th=M.ld32(a+12);` + setX(rd, "v", "vh") + setX(rt2, "t", "th");
         else if (opc === 1) body += `v=M.ld32(a);t=M.ld32(a+4);` + setX(rd, "v", "v>>31") + setX(rt2, "t", "t>>31"); // LDPSW
@@ -311,7 +311,7 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
       const st = (off: string, src: number) => size === 3 ? `M.st32(a${off},${zr(src)});M.st32(a${off}+4,${zrh(src)});`
         : size === 0 ? `M.st8(a${off},${zr(src)});` : size === 1 ? `M.st16(a${off},${zr(src)});` : `M.st32(a${off},${zr(src)});`;
       const status = setW(rs, "c.excl^1") + "c.excl=0;";
-      let body = `a=${sp(rn)}|0;`;
+      let body = `a=${sp(rn)}|0;` + txA(rn);
       if (!o1) {                                                                     // LDXR/STXR, LDAR/STLR
         if (L) body += (o2 ? "" : "c.excl=1;") + ld("", rd);
         else body += st("", rd) + (o2 ? "" : status);
@@ -340,7 +340,7 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
     if (is(0x3f200c00, 0x38200000)) {
       const rs = (w >>> 16) & 31, op = (w >>> 12) & 15;
       const S = zr(rs), SH = zrh(rs);
-      let body = `a=${sp(rn)}|0;`;
+      let body = `a=${sp(rn)}|0;` + txA(rn);
       if (size === 3) {
         body += "v=M.ld32(a);vh=M.ld32(a+4);";
         const gtS = `(vh>${SH}||(vh===${SH}&&(v>>>0)>(${S}>>>0)))`, gtU = `((vh>>>0)>(${SH}>>>0)||(vh===${SH}&&(v>>>0)>(${S}>>>0)))`;
@@ -368,7 +368,7 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
     if (size === 3 && opc === 2) { push(""); return false; }                          // PRFM / PRFUM: a hint
     const unsignedOff = is(0x3b000000, 0x39000000);
     const reg9 = is(0x3b200c00, 0x38200800);
-    let addr: string, wb = "";
+    let addr: string, wb = "", tx = txA(rn);
     if (unsignedOff) {
       const off = ((w >>> 10) & 0xfff) << size;
       addr = off === 0 ? `${sp(rn)}|0` : `${sp(rn)}+${off}|0`;
@@ -377,14 +377,15 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
       const idx = option === 3 || option === 7 ? zr(rm) : option === 2 ? `(${zr(rm)}>>>0)` : `(${zr(rm)}|0)`;
       const shifted = S ? `(${idx}<<${size})` : idx;
       addr = `${sp(rn)}+${shifted}|0`;
+      tx = txAx(rn, rm, option, S ? size : 0, shifted);
     } else {
       const imm9 = sx((w >>> 12) & 0x1ff, 9), kind = (w >>> 10) & 3;                 // 0 unscaled, 1 post, 3 pre
       if (kind === 2) { push(fault("unprivileged load/store")); return true; }
       addr = kind === 1 ? `${sp(rn)}|0` : imm9 === 0 ? `${sp(rn)}|0` : `${sp(rn)}+${imm9}|0`;
-      if (kind === 1 || kind === 3) wb = `${sp(rn)}=(${sp(rn)}+${imm9})|0;${sph(rn)}=0;`;
+      if (kind === 1 || kind === 3) wb = wb64(rn, imm9);
     }
     const load = opc !== 0 && !(size === 3 && opc === 2);
-    let body = `a=${addr};` + wb;
+    let body = `a=${addr};` + tx + wb;
     if (!load) {
       body += size === 0 ? `M.st8(a,${zr(rd)});` : size === 1 ? `M.st16(a,${zr(rd)});`
         : size === 2 ? `M.st32(a,${zr(rd)});` : `M.st32(a,${zr(rd)});M.st32(a+4,${zrh(rd)});`;
@@ -564,9 +565,10 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
 
 /** compile the basic block at `pc` to JS source */
 export function emitA64Block(pc: number): BlockSrc {
+  pc >>>= 0;                                                     // a pc arrives as int32 from a register or unsigned from a literal
   slot = 0;
   const out: Ins[] = [{ code: `c.bpc=${pc};`, fl: null, reads: 0, writes: 0 }];
-  const pageStart = pc & -PAGE_SIZE, pageEnd = pageStart + PAGE_SIZE;
+  const pageStart = (pc & -PAGE_SIZE) >>> 0, pageEnd = pageStart + PAGE_SIZE;
   const seen = new Set<number>();
   let p = pc, k = 0, end = pc;
   for (;;) {

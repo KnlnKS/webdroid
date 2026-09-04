@@ -3,7 +3,7 @@
 // trailing locale_t unread.
 
 import { mem } from "./mem";
-import { hostLib, type HostFn, retF, retD, PTR, stp, ldp } from "./host";
+import { hostLib, type HostFn, retF, retD, PTR, stp, ldp, ARG0, ptr } from "./host";
 import { utf8 } from "./libc";
 import { format } from "./printf";
 import { vaList } from "./host";
@@ -51,17 +51,17 @@ export function localeInit(): void {
     newlocale: () => cLocale, duplocale: () => cLocale, freelocale: () => {},
     uselocale: (cpu, a) => { const l = a.p(); const prev = current.get(cpu.tid) ?? -1; if (l) current.set(cpu.tid, l); return prev; },
     // wide strings
-    wcschr: (_c, a) => { const p = a.p(), c = a.i(); for (let i = p; ; i += 4) { const x = mem.ld32(i); if (x === c) return i; if (!x) return 0; } },
-    wcsrchr: (_c, a) => { const p = a.p(), c = a.i(); let r = 0; for (let i = p; ; i += 4) { const x = mem.ld32(i); if (x === c) r = i; if (!x) return r; } },
-    wcsstr: (_c, a) => { const h = a.p(), n = a.p(); const i = cps(wstr(h)).join(",").indexOf(cps(wstr(n)).join(",")); if (i < 0) return 0; const chars = cps(wstr(h)); let k = 0, pos = 0; while (pos < i) { pos += String(chars[k]).length + 1; k++; } return h + 4 * k; },
+    wcschr: (_c, a) => { const p = a.p(), c = a.i(); for (let i = p; ; i += 4) { const x = mem.ld32(i); if (x === c) return ptr(i); if (!x) return 0; } },
+    wcsrchr: (_c, a) => { const p = a.p(), c = a.i(); let r = 0; for (let i = p; ; i += 4) { const x = mem.ld32(i); if (x === c) r = i; if (!x) return ptr(r); } },
+    wcsstr: (_c, a) => { const h = a.p(), n = a.p(); const i = cps(wstr(h)).join(",").indexOf(cps(wstr(n)).join(",")); if (i < 0) return 0; const chars = cps(wstr(h)); let k = 0, pos = 0; while (pos < i) { pos += String(chars[k]).length + 1; k++; } return ptr(h + 4 * k); },
     wcsncmp: (_c, a) => { const x = a.p(), y = a.p(), n = a.u(); for (let i = 0; i < n; i++) { const p = mem.ld32(x + 4 * i), q = mem.ld32(y + 4 * i); if (p !== q) return p < q ? -1 : 1; if (!p) return 0; } return 0; },
-    wcsncpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); let i = 0; for (; i < n && mem.ld32(s + 4 * i); i++) mem.st32(d + 4 * i, mem.ld32(s + 4 * i)); for (; i < n; i++) mem.st32(d + 4 * i, 0); return d; },
-    wcscpy: (_c, a) => { const d = a.p(), s = a.p(); const n = wlen(s); mem.memmove(d, s, 4 * n + 4); return d; },
-    wcscat: (_c, a) => { const d = a.p(), s = a.p(); const dl = wlen(d), n = wlen(s); mem.memmove(d + 4 * dl, s, 4 * n + 4); return d; },
-    wcsncat: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const dl = wlen(d); let i = 0; for (; i < n && mem.ld32(s + 4 * i); i++) mem.st32(d + 4 * (dl + i), mem.ld32(s + 4 * i)); mem.st32(d + 4 * (dl + i), 0); return d; },
+    wcsncpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); let i = 0; for (; i < n && mem.ld32(s + 4 * i); i++) mem.st32(d + 4 * i, mem.ld32(s + 4 * i)); for (; i < n; i++) mem.st32(d + 4 * i, 0); return ARG0; },
+    wcscpy: (_c, a) => { const d = a.p(), s = a.p(); const n = wlen(s); mem.memmove(d, s, 4 * n + 4); return ARG0; },
+    wcscat: (_c, a) => { const d = a.p(), s = a.p(); const dl = wlen(d), n = wlen(s); mem.memmove(d + 4 * dl, s, 4 * n + 4); return ARG0; },
+    wcsncat: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const dl = wlen(d); let i = 0; for (; i < n && mem.ld32(s + 4 * i); i++) mem.st32(d + 4 * (dl + i), mem.ld32(s + 4 * i)); mem.st32(d + 4 * (dl + i), 0); return ARG0; },
     wcsnlen: (_c, a) => { const p = a.p(), n = a.u(); let i = 0; while (i < n && mem.ld32(p + 4 * i)) i++; return i; },
     wcsdup: (_c, a) => { const s = a.p(); const n = wlen(s); const d = mem.malloc(4 * n + 4); mem.memcpy(d, s, 4 * n + 4); return d; },
-    wcspbrk: (_c, a) => { const p = a.p(), set = cps(wstr(a.p())); for (let i = p; mem.ld32(i); i += 4) if (set.includes(mem.ld32(i))) return i; return 0; },
+    wcspbrk: (_c, a) => { const p = a.p(), set = cps(wstr(a.p())); for (let i = p; mem.ld32(i); i += 4) if (set.includes(mem.ld32(i))) return ptr(i); return 0; },
     wcsspn: (_c, a) => { const p = a.p(), set = cps(wstr(a.p())); let i = 0; while (mem.ld32(p + 4 * i) && set.includes(mem.ld32(p + 4 * i))) i++; return i; },
     wcscspn: (_c, a) => { const p = a.p(), set = cps(wstr(a.p())); let i = 0; while (mem.ld32(p + 4 * i) && !set.includes(mem.ld32(p + 4 * i))) i++; return i; },
     wcstol: wint(PTR === 8 ? 64 : 32, false), wcstoul: wint(PTR === 8 ? 64 : 32, true), wcstoll: wint(64, false), wcstoull: wint(64, true),

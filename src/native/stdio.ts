@@ -2,7 +2,7 @@
 // so the getc/putc macros and __srget refills work; /proc/cpuinfo and /proc/meminfo are synthesized.
 
 import { mem } from "./mem";
-import { hostLib, hostData, vaList, type HostFn, PTR, stp } from "./host";
+import { hostLib, hostData, vaList, type HostFn, PTR, stp, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { LAYOUT, fail, utf8, logLine, readTs, offArg } from "./libc";
@@ -101,7 +101,7 @@ function fdRead(cpu: Cpu, fd: number, p: number, n: number): number | Promise<nu
     if (!ready(f)) {
       if (f.rpipe?.closed) return 0;
       if (f.nonblock) return fail(cpu, EAGAIN);
-      return new Promise<void>((r) => waitOn(f, r)).then(() => fdRead(cpu, fd, p, n));
+      return new Promise<void>((r) => waitOn(f, r)).then(() => fdRead(cpu, fd, mem.rephys(p), n));
     }
     if (f.event) { const c = f.event.count; f.event.count = 0; mem.st32(p, c); mem.st32(p + 4, 0); return 8; }
     const q = f.rpipe!.q;
@@ -110,7 +110,7 @@ function fdRead(cpu: Cpu, fd: number, p: number, n: number): number | Promise<nu
     return k;
   }
   const k = Math.max(0, Math.min(n, f.len - f.pos));
-  if (k > 0) mem.u8.set(f.data.subarray(f.pos, f.pos + k), p);
+  if (k > 0) mem.write(p, f.data.subarray(f.pos, f.pos + k));
   f.pos += k;
   return k;
 }
@@ -143,8 +143,11 @@ function fdSeek(cpu: Cpu, fd: number, off: number, whence: number): number {
   f.pos = np;
   return np;
 }
-function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number): void {
+/** an inode per path: a runtime's own share table (Mono's sharing violations) keys on st_dev/st_ino */
+function inoOf(path: string): number { let h = 0x811c9dc5; for (let i = 0; i < path.length; i++) h = Math.imul(h ^ path.charCodeAt(i), 0x01000193); return (h >>> 0) || 1; }
+function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number, path: string): void {
   mem.memset(buf, 0, LAYOUT.STAT_SIZE);
+  mem.st32(buf, 1);                                                                  // st_dev
   mem.st32(buf + LAYOUT.ST_MODE, (isDir ? S_IFDIR | 0o755 : S_IFREG | 0o644));
   mem.st32(buf + LAYOUT.ST_NLINK, 1);
   mem.st32(buf + LAYOUT.ST_UID, 10123); mem.st32(buf + LAYOUT.ST_GID, 10123);
@@ -153,7 +156,7 @@ function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number): v
   mem.st32(buf + LAYOUT.ST_BLOCKS, (size + 511) >> 9);
   const sec = Math.floor(mtimeMs / 1000);
   for (const o of [LAYOUT.ST_ATIME, LAYOUT.ST_MTIME, LAYOUT.ST_CTIME]) stp(buf + o, sec);
-  mem.st32(buf + LAYOUT.ST_INO32, 1); mem.st32(buf + LAYOUT.ST_INO, 1);
+  mem.st32(buf + LAYOUT.ST_INO32, inoOf(path)); mem.st32(buf + LAYOUT.ST_INO, inoOf(path));
 }
 /** _PC_LINK_MAX 0 … NAME_MAX 4, PATH_MAX 5, PIPE_BUF 6 */
 const pathconfOf = (n: number) => (n === 4 ? 255 : n === 5 ? 4096 : n === 6 ? 4096 : n === 0 ? 127 : -1);
@@ -191,16 +194,16 @@ function epollWait(cpu: Cpu, epfd: number, events: number, max: number, timeout:
     const once = () => { if (!done) { done = true; clearTimeout(t); r(); } };
     const t = timeout < 0 ? undefined : setTimeout(once, timeout);
     for (const fd of table.keys()) { const f = fds.get(fd); if (f) waitOn(f, once); }
-  }).then(() => epollWait(cpu, epfd, events, max, 0));
+  }).then(() => epollWait(cpu, epfd, mem.rephys(events), max, 0));
 }
 function statPath(cpu: Cpu, path: string, buf: number): number {
   path = vfs.norm(path);
   const s = synth(path);
-  if (s !== null) { fillStat(buf, false, utf8(s).length, Date.now()); return 0; }
-  if (vfs.isDir(path)) { fillStat(buf, true, 4096, Date.now()); return 0; }
+  if (s !== null) { fillStat(buf, false, utf8(s).length, Date.now(), path); return 0; }
+  if (vfs.isDir(path)) { fillStat(buf, true, 4096, Date.now(), path); return 0; }
   const d = vfs.read(path);
   if (!d) return fail(cpu, E.NOENT);
-  fillStat(buf, false, d.length, Date.now());
+  fillStat(buf, false, d.length, Date.now(), path);
   return 0;
 }
 
@@ -277,7 +280,7 @@ export function stdioInit(): void {
     pwrite64: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); const save = f.pos; f.pos = off; const r = fdWrite(cpu, fd, p, n); f.pos = save; return r; },
     lseek: (cpu, a) => (PTR === 8 ? BigInt(fdSeek(cpu, a.i(), Number(a.l()), a.i())) : fdSeek(cpu, a.i(), a.i(), a.i())),
     lseek64: (cpu, a) => BigInt(fdSeek(cpu, a.i(), Number(a.l()), a.i())),
-    fstat: (cpu, a) => { const fd = a.i(), buf = a.p(); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); fillStat(buf, f.dir, f.len, Date.now()); return 0; },
+    fstat: (cpu, a) => { const fd = a.i(), buf = a.p(); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); fillStat(buf, f.dir, f.len, Date.now(), f.path); return 0; },
     stat: (cpu, a) => statPath(cpu, a.str(), a.p()),
     lstat: (cpu, a) => statPath(cpu, a.str(), a.p()),
     access: (cpu, a) => { const p = a.str(); a.i(); return vfs.exists(p) || vfs.isDir(p) || synth(vfs.norm(p)) !== null ? 0 : fail(cpu, E.NOENT); },
@@ -336,9 +339,9 @@ export function stdioInit(): void {
     },
     statfs: (_c, a) => { a.str(); fillStatfs(a.p()); return 0; },
     fstatfs: (_c, a) => { a.i(); fillStatfs(a.p()); return 0; },
-    getcwd: (_c, a) => { const b = a.p(), n = a.u(); mem.putCstr(b, "/", n); return b; },
+    getcwd: (_c, a) => { const b = a.p(), n = a.u(); mem.putCstr(b, "/", n); return ARG0; },
     chdir: () => 0,
-    realpath: (_c, a) => { const p = vfs.norm(a.str()); let out = a.p(); if (!out) out = mem.malloc(4096); mem.putCstr(out, p, 4096); return out; },
+    realpath: (_c, a) => { const p = vfs.norm(a.str()); let out = a.p(); if (!out) out = mem.malloc(4096); mem.putCstr(out, p, 4096); return ptr(out); },
     readlink: (cpu) => fail(cpu, E.INVAL),
     symlink: (cpu) => fail(cpu, E.PERM), link: (cpu) => fail(cpu, E.PERM),
     utimes: () => 0, utime: () => 0,
@@ -418,7 +421,7 @@ export function stdioInit(): void {
       }
       if (i === 0) return 0;
       mem.u8[buf + i] = 0;
-      return buf;
+      return ARG0;
     },
     fputc: (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; return fwriteBytes(cpu, fp, scratch, 1) === 1 ? c : -1; },
     putc: (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; return fwriteBytes(cpu, fp, scratch, 1) === 1 ? c : -1; },
