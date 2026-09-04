@@ -741,9 +741,9 @@ const viewMethods: NativeSpec["methods"] = {
   // layout or a Handler dispatch at every await -- the check-then-act race class that gave us
   // the double composition. It also means removeCallbacks can actually cancel.
   "scheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;J)V": function (r0: unknown, r: unknown, when: bigint) {
-    mainHandler().postRun(r, Math.max(0, Number(when) - performance.now()));
+    mainHandler().post(r, Math.max(0, Number(when) - performance.now()));
   },
-  "unscheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;)V": function (_d: unknown, r: unknown) { mainHandler().cancelRun(r); },
+  "unscheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;)V": function (_d: unknown, r: unknown) { mainHandler().cancel(r); },
   // AOSP's 1-arg form cancels everything scheduled by that drawable. Compose's
   // AndroidComposeView calls it; without the overload the whole draw pass threw.
   "unscheduleDrawable(Landroid/graphics/drawable/Drawable;)V": () => {},
@@ -755,9 +755,9 @@ const viewMethods: NativeSpec["methods"] = {
   "requestLayout()V": function (this: JView) { requestLayout(this); },
   "forceLayout()V": function (this: JView) { this.layoutRequested = true; },
   "isLayoutRequested()Z": function (this: JView) { return this.layoutRequested ? 1 : 0; },
-  "post(Ljava/lang/Runnable;)Z": function (r: unknown) { return mainHandler().postRun(r, 0); },
-  "postDelayed(Ljava/lang/Runnable;J)Z": function (r: unknown, d: bigint) { return mainHandler().postRun(r, Number(d)); },
-  "removeCallbacks(Ljava/lang/Runnable;)Z": function (r: unknown) { mainHandler().cancelRun(r); return 1; },
+  "post(Ljava/lang/Runnable;)Z": function (r: unknown) { return mainHandler().post(r, 0); },
+  "postDelayed(Ljava/lang/Runnable;J)Z": function (r: unknown, d: bigint) { return mainHandler().post(r, Number(d)); },
+  "removeCallbacks(Ljava/lang/Runnable;)Z": function (r: unknown) { mainHandler().cancel(r); return 1; },
   "postOnAnimation(Ljava/lang/Runnable;)V": function (this: JView, r: unknown) {
     uiState.frameCallbacks.push({ run: r });
   },

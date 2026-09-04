@@ -5,12 +5,28 @@ import { device } from "../shell/config";
 import { vcall, curThread, mainThread, JThread, setCurThread, reportUncaught, JEnum } from "../jvm/natives/jlang";
 export { reportUncaught };
 import { onMain } from "./mainloop";
+import { yieldToLoop } from "../native/cpu";
 import { mkFile, JInputStream, JOutputStream, vfs } from "../jvm/natives/jio";
 import { newArrayList } from "../jvm/natives/jutil";
 
 class JLooper extends JObj {
   thread: JThread;
+  q: Promise<unknown> = Promise.resolve();
   constructor(thread?: JThread) { super(); this.thread = thread ?? curThread; }
+  /** Messages run serialized on the looper's thread. The main looper is the shell's queue; any
+   *  other is its own chain with a macrotask hop between messages, so the shell, rAF and the
+   *  other loopers get the JS thread even under a self-reposting message (a game's frame loop). */
+  run<T>(job: () => Promise<T> | T): Promise<T> {
+    if (this === mainLooper) return onMain(job);
+    const p = this.q.then(async () => {
+      await yieldToLoop();
+      const prev = curThread;
+      setCurThread(this.thread);
+      try { return await job(); } finally { setCurThread(prev); }
+    });
+    this.q = p.catch(() => { /* a failed message must not poison the queue */ });
+    return p;
+  }
 }
 export const mainLooper = new JLooper(mainThread);
 mainThread.looper = mainLooper;
@@ -52,6 +68,10 @@ class JMessage extends JObj {
   what = 0; arg1 = 0; arg2 = 0; obj: unknown = null;
   callback: unknown = null; target: JHandler | null = null;
   whenMs = 0;
+  timer: ReturnType<typeof setTimeout> | undefined;
+}
+function obtain(h: JHandler | null, what = 0, obj: unknown = null, arg1 = 0, arg2 = 0, callback: unknown = null): JMessage {
+  const m = new JMessage(); m.target = h; m.what = what; m.obj = obj; m.arg1 = arg1; m.arg2 = arg2; m.callback = callback; return m;
 }
 rt.register({
   name: "android/os/Message", ctor: JMessage,
@@ -59,10 +79,13 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "static obtain()Landroid/os/Message;": () => new JMessage(),
-    "static obtain(Landroid/os/Handler;)Landroid/os/Message;": (h: JHandler) => { const m = new JMessage(); m.target = h; return m; },
-    "static obtain(Landroid/os/Handler;I)Landroid/os/Message;": (h: JHandler, w: number) => {
-      const m = new JMessage(); m.target = h; m.what = w; return m;
-    },
+    "static obtain(Landroid/os/Handler;)Landroid/os/Message;": (h: JHandler) => obtain(h),
+    "static obtain(Landroid/os/Handler;I)Landroid/os/Message;": (h: JHandler, w: number) => obtain(h, w),
+    "static obtain(Landroid/os/Handler;ILjava/lang/Object;)Landroid/os/Message;": (h: JHandler, w: number, o: unknown) => obtain(h, w, o),
+    "static obtain(Landroid/os/Handler;III)Landroid/os/Message;": (h: JHandler, w: number, a1: number, a2: number) => obtain(h, w, null, a1, a2),
+    "static obtain(Landroid/os/Handler;IIILjava/lang/Object;)Landroid/os/Message;": (h: JHandler, w: number, a1: number, a2: number, o: unknown) => obtain(h, w, o, a1, a2),
+    "static obtain(Landroid/os/Handler;Ljava/lang/Runnable;)Landroid/os/Message;": (h: JHandler, r: unknown) => obtain(h, 0, null, 0, 0, r),
+    "static obtain(Landroid/os/Message;)Landroid/os/Message;": (m: JMessage) => obtain(m.target, m.what, m.obj, m.arg1, m.arg2, m.callback),
     "setTarget(Landroid/os/Handler;)V": function (this: JMessage, h: JHandler) { this.target = h; },
     "sendToTarget()V": function (this: JMessage) { this.target?.send(this, 0); },
     "recycle()V": () => {},
@@ -76,48 +99,31 @@ let handlerSeq = 0;
 class JHandler extends JObj {
   looper: JLooper = mainLooper;
   cb: unknown = null; // Handler.Callback
-  pending = new Map<number, Set<ReturnType<typeof setTimeout>>>(); // what → timers
-  byRunnable = new Map<unknown, Set<ReturnType<typeof setTimeout>>>();
+  pending = new Map<unknown, Set<JMessage>>(); // keyed by `what`, or by the Runnable of a post
   id = handlerSeq++;
 
   send(msg: JMessage, delay: number): number {
     msg.target = this;
-    const t = setTimeout(() => this.dispatch(msg), delay);
-    let set = this.pending.get(msg.what);
-    if (!set) this.pending.set(msg.what, (set = new Set()));
-    set.add(t);
+    const key = msg.callback ?? msg.what;
+    let set = this.pending.get(key);
+    if (!set) this.pending.set(key, (set = new Set()));
+    set.add(msg);
+    // still pending until it runs, so a removeMessages/hasMessages in between sees it
+    const go = () => this.looper.run(() => { if (set.delete(msg)) return this.dispatch(msg); });
+    if (delay > 0) msg.timer = setTimeout(() => void go(), delay); else void go();
     return 1;
   }
-  postRun(r: unknown, delay: number): number {
-    const t = setTimeout(() => void onMain(async () => {
-      this.byRunnable.get(r)?.delete(t);
-      const prev = curThread;
-      setCurThread(this.looper.thread);
-      try { await vcall(r, "run", "()V"); }
-      catch (e) { reportUncaught(e); }
-      finally { setCurThread(prev); }
-    }), delay);
-    let set = this.byRunnable.get(r);
-    if (!set) this.byRunnable.set(r, (set = new Set()));
-    set.add(t);
-    return 1;
+  post(r: unknown, delay: number): number { return this.send(obtain(this, 0, null, 0, 0, r), delay); }
+  cancel(key: unknown): void {
+    for (const m of this.pending.get(key) ?? []) clearTimeout(m.timer);
+    this.pending.delete(key);
   }
-  cancelRun(r: unknown): void {
-    for (const t of this.byRunnable.get(r) ?? []) clearTimeout(t);
-    this.byRunnable.delete(r);
-  }
-  private dispatch(msg: JMessage) {
-    return onMain(async () => {
-      this.pending.get(msg.what)?.clear();
-      const prev = curThread;
-      setCurThread(this.looper.thread);
-      try {
-        if (msg.callback) await vcall(msg.callback, "run", "()V");
-        else if (this.cb && (await vcall(this.cb, "handleMessage", "(Landroid/os/Message;)Z", msg))) { /* handled */ }
-        else await vcall(this, "handleMessage", "(Landroid/os/Message;)V", msg);
-      } catch (e) { reportUncaught(e); }
-      finally { setCurThread(prev); }
-    });
+  private async dispatch(msg: JMessage): Promise<void> {
+    try {
+      if (msg.callback) await vcall(msg.callback, "run", "()V");
+      else if (this.cb && (await vcall(this.cb, "handleMessage", "(Landroid/os/Message;)Z", msg))) { /* handled */ }
+      else await vcall(this, "handleMessage", "(Landroid/os/Message;)V", msg);
+    } catch (e) { reportUncaught(e); }
   }
 }
 /** The window's handler, which View.post/postDelayed/scheduleDrawable enqueue on. Lazy so it
@@ -139,29 +145,22 @@ rt.register({
       this.looper = (curThread.looper as JLooper) ?? mainLooper; this.cb = cb;
     },
     "handleMessage(Landroid/os/Message;)V": function () {},
-    "post(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.postRun(r, 0); },
-    "postDelayed(Ljava/lang/Runnable;J)Z": function (this: JHandler, r: unknown, d: bigint) { return this.postRun(r, Number(d)); },
+    "post(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.post(r, 0); },
+    "postDelayed(Ljava/lang/Runnable;J)Z": function (this: JHandler, r: unknown, d: bigint) { return this.post(r, Number(d)); },
     "postAtTime(Ljava/lang/Runnable;J)Z": function (this: JHandler, r: unknown, at: bigint) {
-      return this.postRun(r, Math.max(0, Number(at) - performance.now()));
+      return this.post(r, Math.max(0, Number(at) - performance.now()));
     },
-    "postAtFrontOfQueue(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.postRun(r, 0); },
-    "removeCallbacks(Ljava/lang/Runnable;)V": function (this: JHandler, r: unknown) { this.cancelRun(r); },
+    "postAtFrontOfQueue(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.post(r, 0); },
+    "removeCallbacks(Ljava/lang/Runnable;)V": function (this: JHandler, r: unknown) { this.cancel(r); },
     "sendMessage(Landroid/os/Message;)Z": function (this: JHandler, m: JMessage) { return this.send(m, 0); },
     "sendMessageDelayed(Landroid/os/Message;J)Z": function (this: JHandler, m: JMessage, d: bigint) { return this.send(m, Number(d)); },
     "sendEmptyMessage(I)Z": function (this: JHandler, w: number) { const m = new JMessage(); m.what = w; return this.send(m, 0); },
     "sendEmptyMessageDelayed(IJ)Z": function (this: JHandler, w: number, d: bigint) {
       const m = new JMessage(); m.what = w; return this.send(m, Number(d));
     },
-    "removeCallbacks(Ljava/lang/Runnable;Ljava/lang/Object;)V": function (this: JHandler, r: unknown) { this.cancelRun(r); },
-    "removeMessages(I)V": function (this: JHandler, w: number) {
-      for (const t of this.pending.get(w) ?? []) clearTimeout(t);
-      this.pending.delete(w);
-    },
-    "removeCallbacksAndMessages(Ljava/lang/Object;)V": function (this: JHandler) {
-      for (const s of this.pending.values()) for (const t of s) clearTimeout(t);
-      for (const s of this.byRunnable.values()) for (const t of s) clearTimeout(t);
-      this.pending.clear(); this.byRunnable.clear();
-    },
+    "removeCallbacks(Ljava/lang/Runnable;Ljava/lang/Object;)V": function (this: JHandler, r: unknown) { this.cancel(r); },
+    "removeMessages(I)V": function (this: JHandler, w: number) { this.cancel(w); },
+    "removeCallbacksAndMessages(Ljava/lang/Object;)V": function (this: JHandler) { for (const k of [...this.pending.keys()]) this.cancel(k); },
     "hasMessages(I)Z": function (this: JHandler, w: number) { return this.pending.get(w)?.size ? 1 : 0; },
     // the object variant asks about messages carrying that obj; posts here are keyed by `what`
     "hasMessages(ILjava/lang/Object;)Z": function (this: JHandler, w: number) { return this.pending.get(w)?.size ? 1 : 0; },
@@ -1022,7 +1021,7 @@ rt.register({
       const deliver = () => vcall(this, "onReceiveResult", "(ILandroid/os/Bundle;)V", code, data);
       if (!this.handler) return deliver();
       const r = new JFnRunnable(); r.fn = deliver;
-      this.handler.postRun(r, 0);
+      this.handler.post(r, 0);
     },
     "onReceiveResult(ILandroid/os/Bundle;)V": () => {},
     "describeContents()I": () => 0,

@@ -1279,14 +1279,16 @@ rt.register({
     "interrupt()V": function (this: JThread) { this.interrupted = 1; this.wake?.(); },
     "start()V": function (this: JThread) {
       this.alive = 1;
+      // the body begins now, not after the caller's whole main-looper job: a thread that
+      // publishes its Handler has it by the time the next lifecycle call posts to it
       this.done = new Promise((resolve) => {
-        setTimeout(async () => {
+        queueMicrotask(async () => {
           const prev = curThread;
           curThread = this;
           try { await vcall(this, "run", "()V"); }
           catch (e) { console.error("[thread " + this.jname + "]", e); }
           finally { this.alive = 0; curThread = prev; resolve(); }
-        }, 0);
+        });
       });
     },
     "run()V": async function (this: JThread) {

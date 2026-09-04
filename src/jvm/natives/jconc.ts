@@ -502,24 +502,39 @@ rt.register({
   },
 });
 
-class JSemaphore extends JObj { permits = 0; q: (() => void)[] = []; }
+class JSemaphore extends JObj {
+  permits = 0;
+  q: { n: number; wake: () => void }[] = [];
+  acquire(n: number, ms?: number): number | Promise<number> {
+    if (this.permits >= n) { this.permits -= n; return 1; }
+    if (ms !== undefined && ms <= 0) return 0;
+    return new Promise<number>((r) => {
+      const w = { n, wake: () => { clearTimeout(id); r(1); } };
+      this.q.push(w);
+      const id = ms === undefined ? undefined : setTimeout(() => { this.q.splice(this.q.indexOf(w), 1); r(0); }, ms);
+    });
+  }
+  release(n: number): void {
+    this.permits += n;
+    while (this.q.length && this.q[0].n <= this.permits) { const w = this.q.shift()!; this.permits -= w.n; queueMicrotask(w.wake); }
+  }
+}
+const TU = "Ljava/util/concurrent/TimeUnit;";
 rt.register({
   name: "java/util/concurrent/Semaphore", ctor: JSemaphore,
   methods: {
     "<init>(I)V": function (this: JSemaphore, n: number) { this.permits = n; },
-    "acquire()V": function (this: JSemaphore) {
-      if (this.permits > 0) { this.permits--; return; }
-      return new Promise<void>((r) => this.q.push(r));
-    },
-    "release()V": function (this: JSemaphore) {
-      const w = this.q.shift();
-      if (w) queueMicrotask(w);
-      else this.permits++;
-    },
-    "tryAcquire()Z": function (this: JSemaphore) {
-      if (this.permits > 0) { this.permits--; return 1; }
-      return 0;
-    },
+    "<init>(IZ)V": function (this: JSemaphore, n: number) { this.permits = n; },
+    "acquire()V": function (this: JSemaphore) { return this.acquire(1); },
+    "acquire(I)V": function (this: JSemaphore, n: number) { return this.acquire(n); },
+    "acquireUninterruptibly()V": function (this: JSemaphore) { return this.acquire(1); },
+    "release()V": function (this: JSemaphore) { this.release(1); },
+    "release(I)V": function (this: JSemaphore, n: number) { this.release(n); },
+    "tryAcquire()Z": function (this: JSemaphore) { return this.acquire(1, 0); },
+    "tryAcquire(I)Z": function (this: JSemaphore, n: number) { return this.acquire(n, 0); },
+    [`tryAcquire(J${TU})Z`]: function (this: JSemaphore, t: bigint, u: JTimeUnit) { return this.acquire(1, Number(t) * u.ms); },
+    [`tryAcquire(IJ${TU})Z`]: function (this: JSemaphore, n: number, t: bigint, u: JTimeUnit) { return this.acquire(n, Number(t) * u.ms); },
+    "availablePermits()I": function (this: JSemaphore) { return this.permits; },
   },
 });
 
