@@ -176,6 +176,8 @@ export class Cpu {
     const st = this.t, sn = this.n, sz = this.z, scf = this.c, sv = this.v;
     const spending = this.pending;
     const savedH = this.a64 ? new Int32Array(this.h) : null;
+    const sexcl = this.excl;
+    this.excl = 0;
     let n = 0;
     const stack: (number | bigint)[] = [];
     const nregs = this.a64 ? 8 : 4;
@@ -216,6 +218,7 @@ export class Cpu {
       r.set(saved);
       if (savedH) this.h.set(savedH);
       this.t = st; this.n = sn; this.z = sz; this.c = scf; this.v = sv;
+      this.excl = sexcl;
       this.pending = spending;
     }
   }
@@ -281,7 +284,9 @@ export class Cpu {
         if (this.finished) return SliceExit.Exit;
         fn = this.look(r[px]);
       }
-      if (this.ic >= limit) {
+      // a CAS loop's block ends between its LDXR and STXR: another thread running there would
+      // make the unconditional-success store write a stale value, so the monitor holds the slice
+      if (this.ic >= limit && (!this.excl || this.ic >= limit + 256)) {
         r[px] = fn.pc;
         if (profile.on) profile.samples.set(fn.pc, (profile.samples.get(fn.pc) ?? 0) + 1);
         return SliceExit.Budget;

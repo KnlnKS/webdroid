@@ -324,11 +324,12 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
   if (is(0x0a000000, 0x08000000)) {
     // LDR (literal)
     if (is(0x3b000000, 0x18000000)) {
+      if (w & 0x04000000) { push(fault("LDR literal (SIMD)")); return true; }
       const opc = (w >>> 30) & 3, addr = (pc + sx((w >>> 5) & 0x7ffff, 19) * 4) | 0;
       if (opc === 0) push(setW(rd, `M.ld32(${hex(addr)})`));
       else if (opc === 1) push(`v=M.ld32(${hex(addr)});vh=M.ld32(${hex(addr)}+4);` + setX(rd, "v", "vh"));
       else if (opc === 2) push(`v=M.ld32(${hex(addr)});` + setX(rd, "v", "v>>31"));
-      else { push(fault("LDR literal (SIMD)")); return true; }
+      else push("");                                                                 // PRFM (literal)
       return false;
     }
     // LDP / STP
@@ -352,27 +353,72 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
       push(body);
       return false;
     }
-    // load/store exclusive and ordered: one thread, so an exclusive pair is a plain pair and a
-    // store-exclusive always succeeds
+    // load/store exclusive, ordered, and compare-and-swap. Threads are cooperative and a slice
+    // holds while the monitor is set (cpu.ts), so a store-exclusive succeeds iff a load-exclusive
+    // preceded it and the read-modify-write of CAS is direct.
     if (is(0x3f000000, 0x08000000)) {
-      const size = (w >>> 30) & 3, L = (w >>> 22) & 1, o2 = (w >>> 15) & 1, rs = (w >>> 16) & 31;
-      const pair = ((w >>> 21) & 1) === 1;
-      if (pair) { push(fault("load/store exclusive pair")); return true; }
-      const a = sp(rn);
-      if (L) {
-        push(size === 3 ? `a=${a}|0;v=M.ld32(a);vh=M.ld32(a+4);` + setX(rd, "v", "vh")
-          : setW(rd, size === 0 ? `M.ld8u(${a})` : size === 1 ? `M.ld16u(${a})` : `M.ld32(${a})`));
-      } else {
-        const st = size === 3 ? `a=${a}|0;M.st32(a,${zr(rd)});M.st32(a+4,${zrh(rd)});`
-          : size === 0 ? `M.st8(${a},${zr(rd)});` : size === 1 ? `M.st16(${a},${zr(rd)});` : `M.st32(${a},${zr(rd)});`;
-        // o2 distinguishes the ordered stores (STLR), which have no status register
-        push(st + (o2 ? "" : setW(rs, "0")));
+      const size = (w >>> 30) & 3, o2 = (w >>> 23) & 1, L = (w >>> 22) & 1, o1 = (w >>> 21) & 1, rs = (w >>> 16) & 31, rt2 = (w >>> 10) & 31;
+      const ld = (off: string, dst: number) => size === 3 ? `v=M.ld32(a${off});vh=M.ld32(a${off}+4);` + setX(dst, "v", "vh")
+        : setW(dst, size === 0 ? `M.ld8u(a${off})` : size === 1 ? `M.ld16u(a${off})` : `M.ld32(a${off})`);
+      const st = (off: string, src: number) => size === 3 ? `M.st32(a${off},${zr(src)});M.st32(a${off}+4,${zrh(src)});`
+        : size === 0 ? `M.st8(a${off},${zr(src)});` : size === 1 ? `M.st16(a${off},${zr(src)});` : `M.st32(a${off},${zr(src)});`;
+      const status = setW(rs, "c.excl^1") + "c.excl=0;";
+      let body = `a=${sp(rn)}|0;`;
+      if (!o1) {                                                                     // LDXR/STXR, LDAR/STLR
+        if (L) body += (o2 ? "" : "c.excl=1;") + ld("", rd);
+        else body += st("", rd) + (o2 ? "" : status);
+      } else if (!o2 && size >= 2) {                                                 // LDXP / STXP
+        const step = size === 3 ? "+8" : "+4";
+        if (L) body += "c.excl=1;" + ld("", rd) + ld(step, rt2);
+        else body += st("", rd) + st(step, rt2) + status;
+      } else if (o2) {                                                               // CAS: Rs = old, store Rt on match
+        if (size === 3) body += `v=M.ld32(a);vh=M.ld32(a+4);if(v===${zr(rs)}&&vh===${zrh(rs)}){${st("", rd)}}` + setX(rs, "v", "vh");
+        else {
+          const cmp = size === 0 ? `(${zr(rs)}&255)` : size === 1 ? `(${zr(rs)}&65535)` : zr(rs);
+          body += `v=${size === 0 ? "M.ld8u(a)" : size === 1 ? "M.ld16u(a)" : "M.ld32(a)"};if(v===${cmp}){${st("", rd)}}` + setW(rs, "v");
+        }
+      } else if (size === 1) {                                                       // CASP, 64-bit pairs
+        body += `v=M.ld32(a);vh=M.ld32(a+4);t=M.ld32(a+8);th=M.ld32(a+12);if(v===${zr(rs)}&&vh===${zrh(rs)}&&t===${zr(rs + 1)}&&th===${zrh(rs + 1)}){M.st32(a,${zr(rd)});M.st32(a+4,${zrh(rd)});M.st32(a+8,${zr(rd + 1)});M.st32(a+12,${zrh(rd + 1)});}`
+          + setX(rs, "v", "vh") + setX(rs + 1, "t", "th");
+      } else {                                                                       // CASP, 32-bit pairs
+        body += `v=M.ld32(a);t=M.ld32(a+4);if(v===${zr(rs)}&&t===${zr(rs + 1)}){M.st32(a,${zr(rd)});M.st32(a+4,${zr(rd + 1)});}` + setW(rs, "v") + setW(rs + 1, "t");
       }
+      push(body);
       return false;
     }
     // LDR/STR immediate: unsigned offset, or unscaled / pre / post index
     const size = (w >>> 30) & 3, opc = (w >>> 22) & 3;
     if (w & 0x04000000) { push(fault("load/store (SIMD)")); return true; }
+    // atomic memory operations (LSE): the read-modify-write is direct, threads being cooperative
+    if (is(0x3f200c00, 0x38200000)) {
+      const rs = (w >>> 16) & 31, op = (w >>> 12) & 15;
+      const S = zr(rs), SH = zrh(rs);
+      let body = `a=${sp(rn)}|0;`;
+      if (size === 3) {
+        body += "v=M.ld32(a);vh=M.ld32(a+4);";
+        const gtS = `(vh>${SH}||(vh===${SH}&&(v>>>0)>(${S}>>>0)))`, gtU = `((vh>>>0)>(${SH}>>>0)||(vh===${SH}&&(v>>>0)>(${S}>>>0)))`;
+        const sel = (keep: string) => `if(${keep}){t=v;th=vh;}else{t=${S};th=${SH};}`;
+        const rmw = op === 0 ? `t=(v+${S})|0;th=(vh+${SH}+(((v>>>0)+(${S}>>>0))>4294967295?1:0))|0;`
+          : op === 1 ? `t=v&~${S};th=vh&~${SH};` : op === 2 ? `t=v^${S};th=vh^${SH};` : op === 3 ? `t=v|${S};th=vh|${SH};`
+          : op === 4 ? sel(gtS) : op === 5 ? sel(`!${gtS}`) : op === 6 ? sel(gtU) : op === 7 ? sel(`!${gtU}`)
+          : op === 8 ? `t=${S};th=${SH};` : op === 12 ? "" : null;
+        if (rmw === null) { push(fault("atomic memory op")); return true; }
+        if (rmw) body += rmw + "M.st32(a,t);M.st32(a+4,th);";
+        push(body + setX(rd, "v", "vh"));
+        return false;
+      }
+      const ldx = size === 0 ? "M.ld8u(a)" : size === 1 ? "M.ld16u(a)" : "M.ld32(a)";
+      const stx = size === 0 ? "M.st8(a,t);" : size === 1 ? "M.st16(a,t);" : "M.st32(a,t);";
+      const sxv = (e: string) => size === 0 ? `((${e}<<24)>>24)` : size === 1 ? `((${e}<<16)>>16)` : e;
+      const s = size === 0 ? `(${S}&255)` : size === 1 ? `(${S}&65535)` : S;
+      const opv = op === 0 ? `(v+${s})|0` : op === 1 ? `v&~${s}` : op === 2 ? `v^${s}` : op === 3 ? `v|${s}`
+        : op === 4 ? `${sxv("v")}>${sxv(s)}?v:${s}` : op === 5 ? `${sxv("v")}<${sxv(s)}?v:${s}`
+        : op === 6 ? `(v>>>0)>(${s}>>>0)?v:${s}` : op === 7 ? `(v>>>0)<(${s}>>>0)?v:${s}` : op === 8 ? s : op === 12 ? "v" : null;
+      if (opv === null) { push(fault("atomic memory op")); return true; }
+      push(body + `v=${ldx};` + (op === 12 ? "" : `t=${opv};` + stx) + setW(rd, "v"));
+      return false;
+    }
+    if (size === 3 && opc === 2) { push(""); return false; }                          // PRFM / PRFUM: a hint
     const unsignedOff = is(0x3b000000, 0x39000000);
     const reg9 = is(0x3b200c00, 0x38200800);
     let addr: string, wb = "";
@@ -396,7 +442,6 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
       body += size === 0 ? `M.st8(a,${zr(rd)});` : size === 1 ? `M.st16(a,${zr(rd)});`
         : size === 2 ? `M.st32(a,${zr(rd)});` : `M.st32(a,${zr(rd)});M.st32(a+4,${zrh(rd)});`;
     } else if (size === 3) {
-      if (opc === 2) { push(""); return false; }                                     // PRFM
       body += `v=M.ld32(a);vh=M.ld32(a+4);` + setX(rd, "v", "vh");
     } else if (opc === 1) {                                                          // zero-extend
       body += size === 0 ? setW(rd, "M.ld8u(a)") : size === 1 ? setW(rd, "M.ld16u(a)") : setW(rd, "M.ld32(a)");

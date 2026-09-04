@@ -173,6 +173,98 @@ describe("a64 decoder", () => {
 });
 
 describe("a64 decoder: hints, atomics, the REV family and system registers", () => {
+  test("PRFM in every form is a hint, not a store", () => {
+    const buf = mem.reserve(0x1000, 0x1000);
+    const c = run([
+      0xd2824680,   // mov x0, #0x1234
+      0xd2800081,   // mov x1, #4
+      0xf9000120,   // str x0, [x9]
+      0xf9800121,   // prfm pldl1strm, [x9]
+      0xf9800921,   // prfm pldl1strm, [x9, #0x10]
+      0xf8808121,   // prfum pldl1strm, [x9, #0x8]
+      0xf8a16921,   // prfm pldl1strm, [x9, x1]
+      0xd8000001,   // prfm pldl1strm, .
+      0xf9400123,   // ldr x3, [x9]
+      RET], (c) => { c.r[9] = buf; });
+    expect(c.r[3]).toBe(0x1234);
+    expect(mem.ld32(buf + 8)).toBe(0);
+    expect(mem.ld32(buf + 16)).toBe(0);
+  });
+
+  test("LSE atomics read-modify-write the word and return the old value", () => {
+    const buf = mem.reserve(0x1000, 0x1000);
+    const c = run([
+      0x528000a1,   // mov w1, #5
+      0x5280014d,   // mov w13, #10
+      0xb900012d,   // str w13, [x9]
+      0xb8210122,   // ldadd w1, w2, [x9]
+      0xb8211123,   // ldclr w1, w3, [x9]
+      0xb8212134,   // ldeor w1, w20, [x9]
+      0xb8212134,   // ldeor w1, w20, [x9]
+      0xb8213135,   // ldset w1, w21, [x9]
+      0x12800004,   // mov w4, #-1
+      0xb8244125,   // ldsmax w4, w5, [x9]
+      0xb8246126,   // ldumax w4, w6, [x9]
+      0xb8218127,   // swp w1, w7, [x9]
+      0xb821013f,   // stadd w1, [x9]
+      0x38e10128,   // ldaddalb w1, w8, [x9]
+      0x9100212c,   // add x12, x9, #8
+      0xd280002d,   // mov x13, #1
+      0xf900018d,   // str x13, [x12]
+      0xb2407fea,   // mov x10, #0xffffffff
+      0xf8ea018b,   // ldaddal x10, x11, [x12]
+      0xf940018e,   // ldr x14, [x12]
+      0x528009af,   // mov w15, #77
+      0x88a17d2f,   // cas w1, w15, [x9]       (w1 = 5 does not match 15)
+      0x528001e1,   // mov w1, #15
+      0x88a17d2f,   // cas w1, w15, [x9]       (matches: stores 77)
+      0xb9400136,   // ldr w22, [x9]
+      0xf900058d,   // str x13, [x12, #8]
+      0xaa0e03f0,   // mov x16, x14
+      0xd2800031,   // mov x17, #1
+      0xd2800052,   // mov x18, #2
+      0xd2800073,   // mov x19, #3
+      0x48307d92,   // casp x16, x17, x18, x19, [x12]
+      0xf9400197,   // ldr x23, [x12]
+      0xf9400598,   // ldr x24, [x12, #8]
+      0xb8bfc139,   // ldapr w25, [x9]
+      RET], (c) => { c.r[9] = buf; });
+    expect([c.r[2], c.r[3], c.r[20], c.r[21], c.r[5], c.r[6], c.r[7], c.r[8]]).toEqual([10, 15, 15, 10, 15, 15, -1, 10]);
+    expect([c.r[11], c.h[11], c.r[14], c.h[14]]).toEqual([1, 0, 0, 1]);
+    expect([c.r[1], c.r[22]]).toEqual([15, 77]);
+    expect([c.r[16], c.h[16], c.r[17], c.r[23], c.r[24], c.r[25]]).toEqual([0, 1, 1, 2, 3, 77]);
+  });
+
+  test("a store-exclusive succeeds only after a load-exclusive; pairs and clrex", () => {
+    const buf = mem.reserve(0x1000, 0x1000);
+    const c = run([
+      0x5280014d,   // mov w13, #10
+      0xb900012d,   // str w13, [x9]
+      0x885f7d21,   // ldxr w1, [x9]
+      0x11000421,   // add w1, w1, #1
+      0x88027d21,   // stxr w2, w1, [x9]
+      0x88037d21,   // stxr w3, w1, [x9]       (no monitor: fails)
+      0xb940012a,   // ldr w10, [x9]
+      0x9100212c,   // add x12, x9, #8
+      0xd280002d,   // mov x13, #1
+      0xd280004e,   // mov x14, #2
+      0xa900398d,   // stp x13, x14, [x12]
+      0xc87f9584,   // ldaxp x4, x5, [x12]
+      0xc8269185,   // stlxp w6, x5, x4, [x12]
+      0xa940418f,   // ldp x15, x16, [x12]
+      0x885ffd21,   // ldaxr w1, [x9]
+      0xd5033f5f,   // clrex
+      0x8807fd21,   // stlxr w7, w1, [x9]      (cleared: fails)
+      0x88dffd31,   // ldar w17, [x9]
+      0x889ffd2e,   // stlr w14, [x9]
+      0xb9400132,   // ldr w18, [x9]
+      RET], (c) => { c.r[9] = buf; });
+    expect([c.r[2], c.r[3], c.r[10]]).toEqual([0, 1, 11]);
+    expect([c.r[4], c.r[5], c.r[6], c.r[15], c.r[16]]).toEqual([1, 2, 0, 2, 1]);
+    expect([c.r[7], c.r[17], c.r[18]]).toEqual([1, 11, 2]);
+    expect(c.excl).toBe(0);
+  });
+
   test("rev, rev16, rev32, rbit and cls, both widths, rd may be rn", () => {
     const c = run([
       0xd299bde0,   // mov x0, #0xcdef
