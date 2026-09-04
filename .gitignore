@@ -1,9 +1,9 @@
-apks/
-node_modules/
+apks
+node_modules
 *.DS_STORE
 webdroid-shots/
 tests/e2e/actual/
 tests/e2e/report/
 .worktrees/
-vendor/aosp/
+vendor/aosp
 tests/e2e/perf-rollup.json
