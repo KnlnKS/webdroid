@@ -1808,6 +1808,36 @@ rt.register({ name: "android/view/Window$Callback", ctor: class extends JObj {} 
 rt.register({ name: "android/view/Window$OnFrameMetricsAvailableListener", ctor: class extends JObj {} });
 
 /** Build the decor tree for an activity based on its theme */
+/** what a window paints behind its content, from its own theme */
+async function windowBackground(host: AppHost, theme: JTheme): Promise<JDrawable> {
+  const winBg = theme.lookup(AID("windowBackground"));
+  if (winBg) return loadDrawableRV(host.res, winBg, theme);
+  const d = new JColorDrawable();
+  d.color = -328966;
+  return d;
+}
+/** AOSP's starting window: the system resolves the launch theme out of the manifest — before
+ *  the activity class is linked, let alone run — and paints its background. Same body as the
+ *  decor's, because it is the same attribute of the same theme. */
+export async function startingWindow(host: AppHost, cls: string): Promise<{ view: JView; fullscreen: boolean }> {
+  let theme = host.theme;
+  const id = manifestActivityTheme(cls);
+  if (id) {
+    theme = new JTheme();
+    theme.res = host.res;
+    theme.styles = host.theme.styles.slice();
+    theme.apply(id);
+  }
+  const v = new JView();
+  v.jres = host.res;
+  v.theme = theme;
+  v.background = await windowBackground(host, theme);
+  v.left = v.top = 0;
+  v.right = device.width;
+  v.bottom = device.height;
+  // a *.Fullscreen launch theme takes the status bar's rows too, exactly as ensureDecor reads it
+  return { view: v, fullscreen: !!rvInt(host.res, theme.lookup(AID("windowFullscreen")), 0) };
+}
 export async function ensureDecor(act: JActivity) {
   if (act.window.decor) return;
   getInflater(act).privateFactory = act; // framework: the Activity is the private Factory2
@@ -1817,9 +1847,7 @@ export async function ensureDecor(act: JActivity) {
   decor.ctx = act;
   decor.jres = host.res;
   decor.theme = theme;
-  const winBg = theme.lookup(AID("windowBackground"));
-  if (winBg) decor.background = await loadDrawableRV(host.res, winBg, theme);
-  else decor.background = (() => { const d = new JColorDrawable(); d.color = -328966; return d; })();
+  decor.background = await windowBackground(host, theme);
   const noTitle = rvInt(host.res, themeByName(host.res, theme, "windowNoTitle"), 0);
   const actionBar = rvInt(host.res, themeByName(host.res, theme, "windowActionBar"), noTitle ? 0 : 1);
   // a *.Fullscreen theme is the same request as Window.addFlags(FLAG_FULLSCREEN): no status bar

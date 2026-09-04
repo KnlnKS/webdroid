@@ -11,7 +11,7 @@ import { loadFramework, loadFrameworkDex } from "../android/framework";
 import { parseAXML, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
 import { mkJResources, setDeviceNight, deviceConfiguration } from "../android/resnative";
-import { setAppHost, setManifest, type AppHost, JIntent, ensureDecor, JActivity, JMenu, pushMenuToBar, JContext, fireActivityLifecycle, manifestActivityTheme, APPEARANCE_LIGHT_STATUS_BARS, deliverActivityResult, activityHandlesConfig, CONFIG_UI_MODE } from "../android/app";
+import { setAppHost, setManifest, type AppHost, JIntent, ensureDecor, JActivity, JMenu, pushMenuToBar, JContext, fireActivityLifecycle, manifestActivityTheme, startingWindow, APPEARANCE_LIGHT_STATUS_BARS, deliverActivityResult, activityHandlesConfig, CONFIG_UI_MODE } from "../android/app";
 import { reportUncaught, JBundle } from "../android/os";
 import { onMain, inMainJob } from "../android/mainloop";
 import {
@@ -263,6 +263,15 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
   if (!booted) return;
   const host = booted.host;
   const cls = aliasTargets.get(component) ?? component;
+  // AOSP puts a window up from the package's own theme before the process has run a line, and
+  // it stands until the activity's decor draws. That is why a launch that dies on the way up
+  // still leaves a frame on a device, and it is the frame this shows.
+  if (!booted.stack.length) {
+    try {
+      startWin = await startingWindow(host, cls);
+      uiState.needsDraw = true;
+    } catch (e) { console.warn("[starting window]", e); }
+  }
   // Linking, <clinit> and construction are the app's code too: a static initializer that
   // throws (System.loadLibrary in one is enough) crashes the activity, exactly as on a device.
   // It must not take the boot down with it.
@@ -471,6 +480,35 @@ const M_doFrame = mangleMethod("doFrame", "(J)V");
 const M_dispatch = mangleMethod("dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z");
 let drawing = false;
 let sbColor = NaN, sbCss = "";
+/** The status band and its icons: one copy, so the starting window paints the same band the
+ *  activity's own frame does. */
+function drawStatusBar(ctx: CanvasRenderingContext2D, appearance: number, appearanceMask: number) {
+  const sb = booted!.host.statusBarColor;
+  if (sb !== sbColor) { sbColor = sb; sbCss = cssColor(sb); }
+  ctx.fillStyle = sbCss;
+  ctx.fillRect(0, 0, SCREEN_W, STATUS_H);
+  drawStatusIcons(ctx, sb, appearance, appearanceMask);
+}
+/** AOSP's starting window: the system's, painted from the package's theme before the app has
+ *  run. It is not the app drawing, so it deliberately does not count in perf.draws — corpus
+ *  reads that to mean "this apk got far enough to render", and it must keep meaning it. */
+let startWin: { view: JView; fullscreen: boolean } | null = null;
+async function drawStartWin(ctx: CanvasRenderingContext2D, w: { view: JView; fullscreen: boolean }) {
+  const contentY = w.fullscreen ? 0 : STATUS_H;
+  ctx.save();
+  try {
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+    if (contentY) drawStatusBar(ctx, 0, 0);
+    ctx.translate(0, contentY);
+    await drawView(w.view, JCanvas.wrap(ctx, SCREEN_W, SCREEN_H - contentY));
+  } catch (e) {
+    perf.drawErrors++;
+    console.error("[draw]", e);
+  } finally {
+    ctx.restore();
+  }
+}
 let clockMinute = -1, clockText = "";
 // Views committed outside a layout pass (androidx addViewInLayout, async fragment
 // commits) can leave measured != laid-out sizes with no pass scheduled. Detect and
@@ -526,7 +564,14 @@ async function tick0(ctx: CanvasRenderingContext2D) {
     }
     const act = booted?.stack[booted.stack.length - 1];
     const decor = act?.window.decor;
-    if (!decor) return;
+    if (!decor) {
+      if (startWin && uiState.needsDraw) {
+        uiState.needsDraw = false;
+        await drawStartWin(ctx, startWin);
+      }
+      return;
+    }
+    startWin = null;
     let didLayout = false;
     const contentY = contentTop(), contentH = SCREEN_H - contentY;
     // AOSP's performTraversals dispatches insets before measure, so padding a fitsSystemWindows
@@ -587,13 +632,7 @@ async function tick0(ctx: CanvasRenderingContext2D) {
       try {
         ctx.fillStyle = "#000";
         ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-        if (contentY) {
-          const sb = booted!.host.statusBarColor;
-          if (sb !== sbColor) { sbColor = sb; sbCss = cssColor(sb); }
-          ctx.fillStyle = sbCss;
-          ctx.fillRect(0, 0, SCREEN_W, STATUS_H);
-          drawStatusIcons(ctx, sb, act!.window);
-        }
+        if (contentY) drawStatusBar(ctx, act!.window.appearance, act!.window.appearanceMask);
         ctx.translate(0, contentY);
         const cv = JCanvas.wrap(ctx, SCREEN_W, contentH);
         // AOSP's performDraw() dispatches OnPreDrawListener/OnDrawListener right before the
@@ -627,10 +666,10 @@ function forceLayoutFlags(v: JView) {
   v.oldWSpec = -1;
   if (v instanceof JViewGroup) for (const c of v.children) forceLayoutFlags(c);
 }
-function drawStatusIcons(ctx: CanvasRenderingContext2D, bg: number, w: JActivity["window"]) {
+function drawStatusIcons(ctx: CanvasRenderingContext2D, bg: number, appearance: number, appearanceMask: number) {
   // AOSP: the light-status-bars appearance bit decides once the app has set or cleared it;
   // the luminance guess only stands in for an app that never asked.
-  const dark = w.appearanceMask & APPEARANCE_LIGHT_STATUS_BARS ? (w.appearance & APPEARANCE_LIGHT_STATUS_BARS) !== 0
+  const dark = appearanceMask & APPEARANCE_LIGHT_STATUS_BARS ? (appearance & APPEARANCE_LIGHT_STATUS_BARS) !== 0
     : 0.299 * ((bg >> 16) & 0xff) + 0.587 * ((bg >> 8) & 0xff) + 0.114 * (bg & 0xff) > 160;
   ctx.fillStyle = dark ? "rgba(0,0,0,0.85)" : "#ffffff";
   ctx.font = `500 ${device.dp(13)}px ${tfMedium.family}`;
