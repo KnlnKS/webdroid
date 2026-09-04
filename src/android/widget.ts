@@ -13,8 +13,7 @@ import {
   MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, makeSpec, MATCH_PARENT, WRAP_CONTENT,
   childMeasureSpec, measureChildWithMargins, measureView, layoutView,
   resolveSizeAndState, defaultSize, invalidate, requestLayout, restVelocity, initViewFromCtx,
-  lpFromAttrs, AID, findById, JMotionEvent, uiState, guardCall, setFocusHook,
-} from "./view";
+  lpFromAttrs, AID, findById, JMotionEvent, uiState, guardCall, setFocusHook, trackVelocity, SCROLL_WEIGHT, FLING } from "./view";
 import { JAttrSet, attrTable, onFramework, obtainStyled, resolveStyleValue, rvDimen, rvColor, rvInt, rvString, rvFloat, type RV, type Resources } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
@@ -507,7 +506,7 @@ const scrollMethods: NativeSpec["methods"] = {
     if (a === 2) {
       const d = this.horizontal ? this.lastX - ev.x : this.lastY - ev.y;
       const dt = Math.max(1, ev.eventTime - this.lastMoveT);
-      this.velo = 0.8 * this.velo + 0.2 * (d / dt * 16);
+      this.velo = trackVelocity(this.velo, d, dt);
       this.lastMoveT = ev.eventTime;
       if (!this.dragging) {
         const dd = this.horizontal ? Math.abs(ev.x - this.downX) : Math.abs(ev.y - this.downY);
@@ -523,8 +522,8 @@ const scrollMethods: NativeSpec["methods"] = {
       return 1;
     }
     if (a === 1 || a === 3) {
-      let v = restVelocity(this.velo, 0.8, ev.eventTime - this.lastMoveT);
-      if (this.dragging && Math.abs(v) > 2) {
+      let v = restVelocity(this.velo, SCROLL_WEIGHT, ev.eventTime - this.lastMoveT);
+      if (this.dragging && Math.abs(v) > FLING.arm) {
         const anim = () => {
           if (this.flingAnim !== anim) return false;
           if (this.horizontal) this.scrollX += v;
@@ -532,9 +531,9 @@ const scrollMethods: NativeSpec["methods"] = {
           const before = this.horizontal ? this.scrollX : this.scrollY;
           this.clampScroll();
           const after = this.horizontal ? this.scrollX : this.scrollY;
-          v *= 0.95;
+          v *= FLING.decay;
           invalidate();
-          return Math.abs(v) > 0.7 && before === after;
+          return Math.abs(v) > FLING.stop && before === after;
         };
         this.flingAnim = anim;
         uiState.animHooks.add(anim);

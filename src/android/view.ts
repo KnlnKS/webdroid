@@ -1663,6 +1663,12 @@ export { lpFromAttrs };
 export const restVelocity = (v: number, weight: number, idleMs: number) =>
   v * weight ** Math.max(0, idleMs / 16 - 1);
 
+export const SCROLL_WEIGHT = 0.8;
+/** arm a fling above this px/frame, decay it by DECAY each frame, stop below STOP */
+export const FLING = { arm: 2, decay: 0.95, stop: 0.7 };
+export const trackVelocity = (prev: number, d: number, dtMs: number) =>
+  SCROLL_WEIGHT * prev + (1 - SCROLL_WEIGHT) * (d / dtMs * 16);
+
 export class JMotionEvent extends JObj {
   action = 0;
   x = 0; y = 0;

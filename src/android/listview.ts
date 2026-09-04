@@ -4,7 +4,7 @@
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
-import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSizeAndState, invalidate, requestLayout, initViewFromCtx, inheritContext, AID, JMotionEvent, uiState, guardCall, findById, restVelocity } from "./view";
+import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSizeAndState, invalidate, requestLayout, initViewFromCtx, inheritContext, AID, JMotionEvent, uiState, guardCall, findById, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./view";
 import { JAttrSet, obtainStyled, rvDimen, rvInt, rvString, type Resources } from "./res";
 import { attr } from "./axml";
 import { JCanvas } from "./graphics";
@@ -642,7 +642,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (a === 2) {
       const d = this.lastY - ev.y;
       const dt = Math.max(1, ev.eventTime - this.lastMoveT);
-      this.velo = 0.8 * this.velo + 0.2 * (d / dt * 16);
+      this.velo = trackVelocity(this.velo, d, dt);
       this.lastMoveT = ev.eventTime;
       if (!this.dragging && Math.abs(ev.y - this.downY) > device.touchSlop) this.dragging = true;
       if (this.dragging) {
@@ -661,13 +661,13 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
           await guardCall(this, M_perfItemClick, v, this.pressTarget, await rowId(this, this.pressTarget));
         }
       }
-      let vv = restVelocity(this.velo, 0.8, ev.eventTime - this.lastMoveT);
-      if (this.dragging && Math.abs(vv) > 2) {
+      let vv = restVelocity(this.velo, SCROLL_WEIGHT, ev.eventTime - this.lastMoveT);
+      if (this.dragging && Math.abs(vv) > FLING.arm) {
         const anim = () => {
           if (this.flingAnim !== anim) return false;
           this.scrollRows(vv);
-          vv *= 0.95;
-          if (Math.abs(vv) > 0.7) return true;
+          vv *= FLING.decay;
+          if (Math.abs(vv) > FLING.stop) return true;
           this.setScrollState(0);
           return false;
         };
