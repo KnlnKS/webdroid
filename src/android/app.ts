@@ -9,7 +9,7 @@ import { vfs, mkFile, JFile } from "../jvm/natives/jio";
 const privDir = (p: string): JFile => { vfs.mkdir(p); return mkFile(p); };
 import { type Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, rvColor, rvDimen, rvInt, rvString, resString, themeOf, themeByName } from "./res";
 import { JResources, JAssetManager, mkAssetFd } from "./resnative";
-import { signatures, JActivityInfo } from "./pm";
+import { signatures, JActivityInfo, JInfoFlags } from "./pm";
 import { mkUri, type JUri } from "./net";
 import { DOCS_AUTHORITY, isDocsUri, isChildrenUri, documentId, docRow, docChildren, docDelete, docRead, docWrite, docInputStream, docOutputStream, docCells, DOC_COLUMNS } from "./documents";
 import { JView, JViewGroup, AID, requestLayout, invalidate, specSize, findById, attachView, detachView, dispatchConfigurationChanged, rootWindowInsets } from "./view";
@@ -955,8 +955,9 @@ rt.register({
       return info;
     },
     "getServiceInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ServiceInfo;": () => newObj("android/content/pm/ServiceInfo", null),
-    "getPackageInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$PackageInfoFlags;)Landroid/content/pm/PackageInfo;": function (pkg: string) {
-      return vcall(this, "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", pkg, 0);
+    // API 33's boxed-long overloads carry the same flags to the same body, never a second one
+    "getPackageInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$PackageInfoFlags;)Landroid/content/pm/PackageInfo;": function (pkg: string, f: JInfoFlags | null) {
+      return vcall(this, "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", pkg, Number(f?.value ?? 0n));
     },
     "getPackageInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;": function (pkg: string) {
       if (appHost && pkg !== appHost.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
@@ -973,6 +974,9 @@ rt.register({
       pi.reqFeatures = reqFeatures();
       pi.activities = jarray([...manifestActivities.keys()].map((n) => mkActivityInfo(n.replace(/\//g, "."))), "Landroid/content/pm/ActivityInfo;");
       return pi;
+    },
+    "getApplicationInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$ApplicationInfoFlags;)Landroid/content/pm/ApplicationInfo;": function (pkg: string, f: JInfoFlags | null) {
+      return vcall(this, "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, Number(f?.value ?? 0n));
     },
     "getApplicationInfo(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;": function (pkg: string) {
       if (appHost && pkg !== appHost.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
