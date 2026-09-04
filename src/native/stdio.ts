@@ -14,7 +14,19 @@ const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 
 const S_IFDIR = 0x4000, S_IFREG = 0x8000;
 const u8 = mem.u8;
 
-interface Fd { path: string; data: Uint8Array; len: number; pos: number; write: boolean; dirty: boolean; dir: boolean; append: boolean; line?: string; synthetic?: boolean }
+/** a pipe: byte chunks, and whoever is parked waiting for them (a reader, or an epoll_wait) */
+interface Pipe { q: Uint8Array[]; wake: (() => void)[]; closed: boolean }
+interface Fd {
+  path: string; data: Uint8Array; len: number; pos: number; write: boolean; dirty: boolean; dir: boolean; append: boolean; line?: string; synthetic?: boolean;
+  nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Map<number, { events: number; data: bigint }>;
+}
+const EPOLLIN = 1, EAGAIN = E.AGAIN;
+const newPipe = (): Pipe => ({ q: [], wake: [], closed: false });
+const ready = (f: Fd): boolean => !!(f.rpipe && (f.rpipe.q.length || f.rpipe.closed)) || !!(f.event && f.event.count > 0);
+function wakeAll(p: { wake: (() => void)[] }): void { for (const w of p.wake.splice(0)) w(); }
+/** the fd's interest in being woken: pipe readers and epoll waiters both park here */
+function waitOn(f: Fd, w: () => void): void { if (f.rpipe) f.rpipe.wake.push(w); else if (f.event) f.event.wake.push(w); }
+const fdBase = (path: string): Fd => ({ path, data: new Uint8Array(0), len: 0, pos: 0, write: false, dirty: false, dir: false, append: false });
 const fds = new Map<number, Fd>();
 let nextFd = 3;
 const files = new Map<number, number>();       // FILE* → fd
@@ -71,6 +83,8 @@ function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   }
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
+  if (f.wpipe) { f.wpipe.q.push(u8.slice(p, p + n)); wakeAll(f.wpipe); return n; }
+  if (f.event) { f.event.count += mem.ld32(p); wakeAll(f.event); return 8; }
   if (!f.write) return fail(cpu, E.BADF);
   if (f.append) f.pos = f.len;
   grow(f, f.pos + n);
@@ -80,10 +94,22 @@ function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   f.dirty = true;
   return n;
 }
-function fdRead(cpu: Cpu, fd: number, p: number, n: number): number {
+function fdRead(cpu: Cpu, fd: number, p: number, n: number): number | Promise<number> {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   if (f.dir) return fail(cpu, E.ISDIR);
+  if (f.rpipe || f.event) {
+    if (!ready(f)) {
+      if (f.rpipe?.closed) return 0;
+      if (f.nonblock) return fail(cpu, EAGAIN);
+      return new Promise<void>((r) => waitOn(f, r)).then(() => fdRead(cpu, fd, p, n));
+    }
+    if (f.event) { const c = f.event.count; f.event.count = 0; mem.st32(p, c); mem.st32(p + 4, 0); return 8; }
+    const q = f.rpipe!.q;
+    let k = 0;
+    while (k < n && q.length) { const c = q[0], take = Math.min(n - k, c.length); u8.set(c.subarray(0, take), p + k); k += take; if (take === c.length) q.shift(); else q[0] = c.subarray(take); }
+    return k;
+  }
   const k = Math.max(0, Math.min(n, f.len - f.pos));
   if (k > 0) u8.set(f.data.subarray(f.pos, f.pos + k), p);
   f.pos += k;
@@ -96,6 +122,7 @@ function fdClose(cpu: Cpu, fd: number): number {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   flushFd(f);
+  if (f.wpipe) { f.wpipe.closed = true; wakeAll(f.wpipe); }
   if (fd > 2) fds.delete(fd);
   return 0;
 }
@@ -119,12 +146,43 @@ function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number): v
   for (const o of [LAYOUT.ST_ATIME, LAYOUT.ST_MTIME, LAYOUT.ST_CTIME]) stp(buf + o, sec);
   mem.st32(buf + LAYOUT.ST_INO32, 1); mem.st32(buf + LAYOUT.ST_INO, 1);
 }
+/** _PC_LINK_MAX 0 … NAME_MAX 4, PATH_MAX 5, PIPE_BUF 6 */
+const pathconfOf = (n: number) => (n === 4 ? 255 : n === 5 ? 4096 : n === 6 ? 4096 : n === 0 ? 127 : -1);
+/** struct statvfs: eleven unsigned longs (bsize, frsize, blocks, bfree, bavail, files, ffree, favail, fsid, flag, namemax) */
+function fillStatvfs(b: number): void {
+  mem.memset(b, 0, 112);
+  const v = [4096, 4096, 0x100000, 0x80000, 0x80000, 0x10000, 0x8000, 0x8000, 0, 0, 255];
+  for (let i = 0; i < v.length; i++) stp(b + i * PTR, v[i]);
+}
 /** statfs: a fixed-size filesystem with room; the LP64 struct is all 64-bit fields at an 8-byte stride */
 function fillStatfs(b: number): void {
   mem.memset(b, 0, LAYOUT.STATFS_SIZE);
   const w = PTR, put = (i: number, v: number) => stp(b + i * w, v);
   put(1, 4096); put(2, 0x100000); put(3, 0x80000); put(4, 0x80000); put(5, 0x10000); put(6, 0x8000);
   if (PTR === 8) { put(8, 255); put(9, 4096); } else { mem.st32(b + 56, 255); mem.st32(b + 60, 4096); }
+}
+function makePipe(out: number, flags: number): number {
+  const p = newPipe(), nb = !!(flags & 0x800);
+  mem.st32(out, put({ ...fdBase("pipe"), rpipe: p, nonblock: nb }));
+  mem.st32(out + 4, put({ ...fdBase("pipe"), wpipe: p, nonblock: nb, write: true }));
+  return 0;
+}
+/** epoll_wait: report the registered fds that are readable; else sleep the timeout, or park until one is written */
+function epollWait(cpu: Cpu, epfd: number, events: number, max: number, timeout: number): number | Promise<number> {
+  const table = fds.get(epfd)?.epoll;
+  if (!table) return fail(cpu, E.BADF);
+  let n = 0;
+  for (const [fd, e] of table) {
+    const f = fds.get(fd);
+    if (n < max && f && (e.events & EPOLLIN) && ready(f)) { mem.st32(events + n * 16, EPOLLIN); mem.st64(events + n * 16 + 8, e.data); n++; }
+  }
+  if (n || timeout === 0) return n;
+  return new Promise<void>((r) => {
+    let done = false;
+    const once = () => { if (!done) { done = true; clearTimeout(t); r(); } };
+    const t = timeout < 0 ? undefined : setTimeout(once, timeout);
+    for (const fd of table.keys()) { const f = fds.get(fd); if (f) waitOn(f, once); }
+  }).then(() => epollWait(cpu, epfd, events, max, 0));
 }
 function statPath(cpu: Cpu, path: string, buf: number): number {
   path = vfs.norm(path);
@@ -227,7 +285,37 @@ export function stdioInit(): void {
     fsync: () => 0, fdatasync: () => 0, sync: () => {},
     dup: (cpu, a) => { const f = fds.get(a.i()); if (!f) return fail(cpu, E.BADF); return put({ ...f }); },
     dup2: (cpu, a) => { const f = fds.get(a.i()), to = a.i(); if (!f) return fail(cpu, E.BADF); fds.set(to, { ...f }); return to; },
-    pipe: (cpu) => fail(cpu, E.NOSYS),
+    pipe: (_c, a) => makePipe(a.p(), 0),
+    pipe2: (_c, a) => makePipe(a.p(), a.i()),
+    socketpair: (_c, a) => {
+      a.i(); const type = a.i(); a.i(); const sv = a.p();
+      const ab = newPipe(), ba = newPipe(), nb = !!(type & 0x800);
+      mem.st32(sv, put({ ...fdBase("socketpair"), rpipe: ab, wpipe: ba, nonblock: nb }));
+      mem.st32(sv + 4, put({ ...fdBase("socketpair"), rpipe: ba, wpipe: ab, nonblock: nb }));
+      return 0;
+    },
+    eventfd: (_c, a) => { const init = a.u(), flags = a.i(); return put({ ...fdBase("eventfd"), event: { count: init, wake: [] }, nonblock: !!(flags & 0x800) }); },
+    epoll_create: () => put({ ...fdBase("epoll"), epoll: new Map() }),
+    epoll_create1: () => put({ ...fdBase("epoll"), epoll: new Map() }),
+    epoll_ctl: (cpu, a) => {
+      const ep = fds.get(a.i()), op = a.i(), fd = a.i(), ev = a.p();
+      if (!ep?.epoll || !fds.has(fd)) return fail(cpu, E.BADF);
+      if (op === 2) ep.epoll.delete(fd); else ep.epoll.set(fd, { events: mem.ld32(ev), data: mem.ld64(ev + 8) });
+      return 0;
+    },
+    epoll_wait: (cpu, a) => epollWait(cpu, a.i(), a.p(), a.i(), a.i()),
+    epoll_pwait: (cpu, a) => epollWait(cpu, a.i(), a.p(), a.i(), a.i()),
+    sendfile: (cpu) => fail(cpu, E.NOSYS),
+    __read_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(); if (n > a.u()) cpu.fault("fortify: read past the buffer"); return fdRead(cpu, fd, p, n); },
+    __pread64_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); if (n > a.u()) cpu.fault("fortify: pread past the buffer"); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); const save = f.pos; f.pos = off; const r = fdRead(cpu, fd, p, n); f.pos = save; return r; },
+    __pread_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = offArg(a); if (n > a.u()) cpu.fault("fortify: pread past the buffer"); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); const save = f.pos; f.pos = off; const r = fdRead(cpu, fd, p, n); f.pos = save; return r; },
+    flock: () => 0,
+    unlinkat: (cpu, a) => { a.i(); const p = a.str(), flags = a.i(); if (flags & 0x200) { const d = vfs.norm(p); if (!vfs.isDir(d)) return fail(cpu, E.NOTDIR); vfs.rmdir(d); return 0; } return vfs.delete(p) ? 0 : fail(cpu, E.NOENT); },
+    fchmodat: () => 0, utimensat: () => 0, futimens: () => 0,
+    pathconf: (_c, a) => { a.str(); return pathconfOf(a.i()); },
+    fpathconf: (_c, a) => { a.i(); return pathconfOf(a.i()); },
+    statvfs: (_c, a) => { a.str(); fillStatvfs(a.p()); return 0; },
+    fstatvfs: (_c, a) => { a.i(); fillStatvfs(a.p()); return 0; },
     isatty: () => 0,
     ioctl: (cpu) => fail(cpu, E.NOSYS),
     select: (_c, a) => {
@@ -283,7 +371,14 @@ export function stdioInit(): void {
     tmpfile: (cpu) => { const fd = fdOpen(cpu, `/data/local/tmp/tmp${Date.now()}_${Math.floor(Math.random() * 1e6)}`, 2 | O_CREAT | O_TRUNC); return fd < 0 ? 0 : newFile(fd, F_RW); },
     fclose: (cpu, a) => { const fp = a.p(); const fd = fileFd(fp); const r = fdClose(cpu, fd); if (fp >= 0 && !isStd(fp)) { files.delete(fp); mem.free(fp); } return r; },
     fflush: (_c, a) => { const fp = a.p(); if (!fp) { for (const f of fds.values()) flushFd(f); return 0; } const f = fds.get(fileFd(fp)); if (f) flushFd(f); return 0; },
-    fread: (cpu, a) => { const p = a.p(), sz = a.u(), n = a.u(), fp = a.p(); const total = sz * n; if (!total) return 0; const r = fdRead(cpu, fileFd(fp), p, total); if (r < 0) { setFlag(fp, F_ERR); return 0; } if (r < total) setFlag(fp, F_EOF); return Math.floor(r / sz); },
+    fread: (cpu, a) => {
+      const p = a.p(), sz = a.u(), n = a.u(), fp = a.p();
+      const total = sz * n;
+      if (!total) return 0;
+      const fin = (r: number) => { if (r < 0) { setFlag(fp, F_ERR); return 0; } if (r < total) setFlag(fp, F_EOF); return Math.floor(r / sz); };
+      const r = fdRead(cpu, fileFd(fp), p, total);
+      return r instanceof Promise ? r.then(fin) : fin(r);
+    },
     fwrite: (cpu, a) => { const p = a.p(), sz = a.u(), n = a.u(), fp = a.p(); const total = sz * n; if (!total) return 0; const r = fwriteBytes(cpu, fp, p, total); return Math.floor(r / sz); },
     fseek: (cpu, a) => { const fp = a.p(), off = offArg(a), wh = a.i(); const r = fdSeek(cpu, fileFd(fp), off, wh); if (r >= 0) mem.st16(fp + LAYOUT.F_FLAGS, mem.ld16u(fp + LAYOUT.F_FLAGS) & ~F_EOF); return r < 0 ? -1 : 0; },
     fseeko: (cpu, a) => { const fp = a.p(), off = offArg(a), wh = a.i(); return fdSeek(cpu, fileFd(fp), off, wh) < 0 ? -1 : 0; },

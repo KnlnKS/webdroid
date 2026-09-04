@@ -10,6 +10,9 @@ import { format, scan } from "./printf";
 import { stdioInit } from "./stdio";
 import { pthreadInit } from "./pthread";
 import { zlibInit } from "./zlib";
+import { libmInit } from "./libm";
+import { localeInit } from "./locale";
+import { procInit, abortMessageOr } from "./proc";
 import { MONTHS, DAYS } from "../jvm/natives/jtime";
 
 /** bionic struct offsets/sizes, one block per ABI; LAYOUT is the process's, chosen in libcInit. */
@@ -198,7 +201,7 @@ export function libcInit(): void {
   const M: Record<string, HostFn> = {
     __errno: (cpu) => cpu.errnoAddr,
     __set_errno: (cpu, a) => { setErrno(cpu, a.i()); return -1; },
-    abort: (cpu) => { cpu.fault("abort() called"); },
+    abort: (cpu) => { cpu.fault(abortMessageOr("abort() called")); },
     exit: (cpu, a) => { console.warn("[native] exit(" + a.i() + ")"); markProcessExited(); cpu.finished = true; return new Promise<never>(() => {}); },
     _exit: (cpu) => { markProcessExited(); cpu.finished = true; return new Promise<never>(() => {}); },
     atexit: () => 0,
@@ -429,20 +432,6 @@ export function libcInit(): void {
     arc4random: () => (Math.random() * 4294967296) | 0,
     arc4random_uniform: (_c, a) => Math.floor(Math.random() * a.u()) | 0,
 
-    // ── math the guest might import despite softfloat helpers (values travel as bit patterns)
-    sin: (c, a) => retD(c, Math.sin(a.d())), cos: (c, a) => retD(c, Math.cos(a.d())), tan: (c, a) => retD(c, Math.tan(a.d())),
-    asin: (c, a) => retD(c, Math.asin(a.d())), acos: (c, a) => retD(c, Math.acos(a.d())), atan: (c, a) => retD(c, Math.atan(a.d())),
-    atan2: (c, a) => retD(c, Math.atan2(a.d(), a.d())), sqrt: (c, a) => retD(c, Math.sqrt(a.d())), pow: (c, a) => retD(c, Math.pow(a.d(), a.d())),
-    exp: (c, a) => retD(c, Math.exp(a.d())), log: (c, a) => retD(c, Math.log(a.d())), log10: (c, a) => retD(c, Math.log10(a.d())),
-    floor: (c, a) => retD(c, Math.floor(a.d())), ceil: (c, a) => retD(c, Math.ceil(a.d())), fmod: (c, a) => retD(c, a.d() % a.d()),
-    fabs: (c, a) => retD(c, Math.abs(a.d())), ldexp: (c, a) => retD(c, a.d() * Math.pow(2, a.i())),
-    frexp: (c, a) => { const v = a.d(), ep = a.p(); if (v === 0 || !isFinite(v)) { mem.st32(ep, 0); return retD(c, v); } const e = Math.floor(Math.log2(Math.abs(v))) + 1; mem.st32(ep, e); return retD(c, v / Math.pow(2, e)); },
-    modf: (c, a) => { const v = a.d(), ip = a.p(); const i = Math.trunc(v); mem.stf64(ip, i); return retD(c, v - i); },
-    sinf: (c, a) => retF(c, Math.sin(a.f())), cosf: (c, a) => retF(c, Math.cos(a.f())), tanf: (c, a) => retF(c, Math.tan(a.f())),
-    sqrtf: (c, a) => retF(c, Math.sqrt(a.f())), powf: (c, a) => retF(c, Math.pow(a.f(), a.f())), atan2f: (c, a) => retF(c, Math.atan2(a.f(), a.f())),
-    floorf: (c, a) => retF(c, Math.floor(a.f())), ceilf: (c, a) => retF(c, Math.ceil(a.f())), fmodf: (c, a) => retF(c, a.f() % a.f()),
-    expf: (c, a) => retF(c, Math.exp(a.f())), logf: (c, a) => retF(c, Math.log(a.f())), fabsf: (c, a) => retF(c, Math.abs(a.f())),
-
     // ── sockets: descriptors exist, the network does not
     socket: () => { const fd = nextSock++; socks.add(fd); return fd; },
     bind: (cpu) => fail(cpu, E.ACCES),
@@ -475,9 +464,14 @@ export function libcInit(): void {
     __android_log_vprint: (_c, a) => { const prio = a.i(), tag = a.str(), f = a.str(); logLine(prio, tag, format(f, vaList(a.p()))); return 1; },
     __android_log_assert: (cpu, a) => { a.p(); const tag = a.str(); const f = a.p(); cpu.fault(`assert ${tag}: ${f ? format(mem.cstr(f), a) : ""}`); },
   };
+  // the *_l variants: the base function, with the trailing locale_t never read
+  for (const n of ["strtol", "strtoul", "strtoll", "strtoull", "strtod", "strtof", "strtold", "strcoll", "strxfrm", "strftime", "wcscoll", "wcsxfrm", "wcsftime",
+    "isalpha", "isdigit", "isxdigit", "isspace", "isupper", "islower", "isalnum", "ispunct", "isprint", "iscntrl", "tolower", "toupper",
+    "iswspace", "iswdigit", "iswalpha", "iswupper", "iswlower", "towlower", "towupper", "mbrtowc", "wcrtomb", "localeconv", "strerror",
+    "sprintf", "snprintf", "vsprintf", "vsnprintf", "asprintf", "vasprintf", "sscanf", "vsscanf", "btowc", "wctob", "wctype", "iswctype"]) if (M[n]) M[n + "_l"] = M[n];
+  M.strtold = M.strtod; M.strtold_l = M.strtod;
   hostLib("libc.so", M);
   hostLib("liblog.so", { __android_log_write: M.__android_log_write, __android_log_print: M.__android_log_print, __android_log_vprint: M.__android_log_vprint, __android_log_assert: M.__android_log_assert });
-  hostLib("libm.so", Object.fromEntries(Object.entries(M).filter(([k]) => /^(sin|cos|tan|asin|acos|atan|atan2|sqrt|pow|exp|log|log10|floor|ceil|fmod|fabs|ldexp|frexp|modf)f?$/.test(k))));
   const tmBuf = mem.hostAlloc(LAYOUT.TM_SIZE);
   const inetBuf = mem.hostAlloc(20);
   const gaiStr = mem.hostStr("Temporary failure in name resolution");
@@ -487,6 +481,9 @@ export function libcInit(): void {
   stdioInit();
   pthreadInit();
   zlibInit();
+  libmInit();
+  localeInit();
+  procInit();
 }
 
 const PRIO = ["", "", "V", "D", "I", "W", "E", "F", "S"];

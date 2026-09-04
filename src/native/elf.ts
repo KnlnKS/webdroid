@@ -24,6 +24,9 @@ export interface Module {
   /** dlopen handle bookkeeping */
   refs: number;
   inited: boolean;
+  /** the program headers, copied into guest memory for dl_iterate_phdr */
+  phdr: number;
+  phnum: number;
 }
 
 type Resolver = (sym: string, weak: boolean, from: Module) => number;
@@ -108,10 +111,12 @@ export function loadElf(name: string, bytes: Uint8Array, resolve: Resolver): Mod
     mem.u8.set(bytes.subarray(l.off, l.off + l.filesz), base + l.vaddr);
     if (l.memsz > l.filesz) mem.u8.fill(0, base + l.vaddr + l.filesz, base + l.vaddr + l.memsz);
   }
+  const phdr = mem.hostAlloc(phnum * f.phEnt, 8);
+  mem.u8.set(bytes.subarray(phoff, phoff + phnum * f.phEnt), phdr);
   const mod: Module = {
     name, base, end: base + hi, w64: cls === 2, exports: new Map(), initArray: [], init: 0, needed: [],
     exidx: { addr: base + exidxAddr, count: exidxSz >> 3 }, symbols: { addr: new Uint32Array(0), names: [] },
-    refs: 1, inited: false,
+    refs: 1, inited: false, phdr, phnum,
   };
   if (!dynOff) return mod;
 
@@ -203,16 +208,19 @@ export function loadElf(name: string, bytes: Uint8Array, resolve: Resolver): Mod
   return mod;
 }
 
+/** the nearest symbol at or before `pc` in `m`, or null */
+export function nearestSymbol(m: Module, pc: number): { name: string; addr: number } | null {
+  const a = m.symbols.addr;
+  let lo = 0, hi = a.length - 1, best = -1;
+  while (lo <= hi) { const mid = (lo + hi) >> 1; if (a[mid] <= pc) { best = mid; lo = mid + 1; } else hi = mid - 1; }
+  return best >= 0 ? { name: m.symbols.names[best], addr: a[best] } : null;
+}
 /** "libfoo.so!symbol+0x12" for a guest pc, or the raw hex when no module covers it */
 export function symbolize(mods: Iterable<Module>, pc: number): string {
   for (const m of mods) {
     if (pc < m.base || pc >= m.end) continue;
-    const a = m.symbols.addr;
-    let lo = 0, hi = a.length - 1, best = -1;
-    while (lo <= hi) { const mid = (lo + hi) >> 1; if (a[mid] <= pc) { best = mid; lo = mid + 1; } else hi = mid - 1; }
-    // the nearest preceding symbol
-    const off = pc - m.base;
-    if (best >= 0) return `${m.name}!${m.symbols.names[best]}+0x${(pc - a[best]).toString(16)} (+0x${off.toString(16)})`;
+    const off = pc - m.base, s = nearestSymbol(m, pc);
+    if (s) return `${m.name}!${s.name}+0x${(pc - s.addr).toString(16)} (+0x${off.toString(16)})`;
     return `${m.name}+0x${off.toString(16)}`;
   }
   return "0x" + (pc >>> 0).toString(16);

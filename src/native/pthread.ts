@@ -12,6 +12,21 @@ interface Mutex { owner: number; count: number; waiters: (() => void)[] }
 const mutexes = new Map<number, Mutex>();
 const conds = new Map<number, ((timedOut: boolean) => void)[]>();
 const sems = new Map<number, { count: number; waiters: (() => void)[] }>();
+/** readers share, one writer excludes; a blocked acquirer parks and every unlock wakes them all to retry */
+interface RwLock { readers: number; writer: number; waiters: (() => void)[] }
+const rwlocks = new Map<number, RwLock>();
+function rwOf(a: number): RwLock { let l = rwlocks.get(a); if (!l) rwlocks.set(a, (l = { readers: 0, writer: 0, waiters: [] })); return l; }
+async function rwAcquire(cpu: Cpu, l: RwLock, write: boolean): Promise<number> {
+  for (;;) {
+    if (write ? l.writer === 0 && l.readers === 0 : l.writer === 0) { if (write) l.writer = cpu.tid; else l.readers++; return 0; }
+    await new Promise<void>((r) => l.waiters.push(r));
+  }
+}
+function rwRelease(cpu: Cpu, l: RwLock): number {
+  if (l.writer === cpu.tid) l.writer = 0; else if (l.readers > 0) l.readers--; else return E.PERM;
+  for (const w of l.waiters.splice(0)) w();
+  return 0;
+}
 const threads = new Map<number, { cpu: Cpu; done: Promise<void>; retval: number }>();
 let keySeq = 1, threadSeq = 0;
 const ETIMEDOUT = E.TIMEDOUT, EBUSY = E.BUSY;
@@ -135,6 +150,21 @@ export function pthreadInit(): void {
     pthread_cond_broadcast: (_c, a) => { const l = conds.get(a.p()); if (l) for (const w of l.splice(0)) w(false); return 0; },
     pthread_condattr_init: () => 0, pthread_condattr_destroy: () => 0, pthread_condattr_setclock: () => 0, pthread_condattr_setpshared: () => 0,
     pthread_key_create: (_c, a) => { const out = a.p(); mem.st32(out, keySeq++); return 0; },
+    pthread_rwlock_init: (_c, a) => { rwlocks.set(a.p(), { readers: 0, writer: 0, waiters: [] }); return 0; },
+    pthread_rwlock_destroy: (_c, a) => { rwlocks.delete(a.p()); return 0; },
+    pthread_rwlock_rdlock: (cpu, a) => rwAcquire(cpu, rwOf(a.p()), false),
+    pthread_rwlock_wrlock: (cpu, a) => rwAcquire(cpu, rwOf(a.p()), true),
+    pthread_rwlock_timedrdlock: (cpu, a) => rwAcquire(cpu, rwOf(a.p()), false),
+    pthread_rwlock_timedwrlock: (cpu, a) => rwAcquire(cpu, rwOf(a.p()), true),
+    pthread_rwlock_tryrdlock: (_c, a) => { const l = rwOf(a.p()); if (l.writer) return EBUSY; l.readers++; return 0; },
+    pthread_rwlock_trywrlock: (cpu, a) => { const l = rwOf(a.p()); if (l.writer || l.readers) return EBUSY; l.writer = cpu.tid; return 0; },
+    pthread_rwlock_unlock: (cpu, a) => rwRelease(cpu, rwOf(a.p())),
+    pthread_rwlockattr_init: () => 0, pthread_rwlockattr_destroy: () => 0, pthread_rwlockattr_setpshared: () => 0,
+    pthread_atfork: () => 0,
+    pthread_mutexattr_gettype: (_c, a) => { a.p(); mem.st32(a.p(), 0); return 0; },
+    pthread_condattr_getclock: (_c, a) => { a.p(); mem.st32(a.p(), 0); return 0; },
+    pthread_cond_clockwait: (cpu, a) => { const c = a.p(), m = a.p(), clk = a.i(), ts = a.p(); return condWait(cpu, c, m, absMs(ts) - (clk === 0 ? Date.now() : performance.now() + 1000)); },
+    pthread_mutex_clocklock: (cpu, a) => lock(cpu, mutexOf(a.p())),
     pthread_key_delete: () => 0,
     pthread_getspecific: (cpu, a) => cpu.tls.get(a.i()) ?? 0,
     pthread_setspecific: (cpu, a) => { const k = a.i(), v = a.i(); cpu.tls.set(k, v); return 0; },
@@ -152,6 +182,18 @@ export function pthreadInit(): void {
     sem_trywait: (cpu, a) => { const s = semOf(a.p()); if (s.count > 0) { s.count--; return 0; } mem.st32(cpu.errnoAddr, E.AGAIN); return -1; },
     sem_post: (_c, a) => { const s = semOf(a.p()); const w = s.waiters.shift(); if (w) w(); else s.count++; return 0; },
     sem_getvalue: (_c, a) => { const s = semOf(a.p()); mem.st32(a.p(), s.count); return 0; },
+    sem_timedwait: (cpu, a) => {
+      const s = semOf(a.p()), ts = a.p();
+      if (s.count > 0) { s.count--; return 0; }
+      const ms = absMs(ts) - Date.now();
+      return new Promise<number>((r) => {
+        const w = () => { clearTimeout(t); r(0); };
+        const t = setTimeout(() => { const i = s.waiters.indexOf(w); if (i >= 0) { s.waiters.splice(i, 1); mem.st32(cpu.errnoAddr, ETIMEDOUT); r(-1); } }, Math.max(0, ms));
+        s.waiters.push(w);
+      });
+    },
+    sem_clockwait: (cpu, a) => { const s = semOf(a.p()); a.i(); const ts = a.p(); if (s.count > 0) { s.count--; return 0; } void cpu; return new Promise<number>((r) => { setTimeout(() => r(-1), Math.max(0, absMs(ts) - Date.now())); s.waiters.push(() => r(0)); }); },
+    clock_nanosleep: (_c, a) => { const clk = a.i(), flags = a.i(), req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, 16); const ms = readTs(req); return sleepMs(flags & 1 ? ms - (clk === 0 ? Date.now() : performance.now() + 1000) : ms); },
     // sleeping
     usleep: (_c, a) => sleepMs(a.u() / 1000),
     sleep: (_c, a) => sleepMs(a.u() * 1000),

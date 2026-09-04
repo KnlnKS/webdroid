@@ -2,9 +2,9 @@
 // stubs), dlopen/dlsym over virtual host libs and APK-shipped libraries, exidx lookup for the
 // guest's own unwinder.
 
-import { loadElf, symbolize, type Module } from "./elf";
+import { loadElf, symbolize, nearestSymbol, type Module } from "./elf";
 import { mem } from "./mem";
-import { hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc } from "./host";
+import { hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp } from "./host";
 import { cpuFor, setSymbolizeHook, setA64, isA64 } from "./cpu";
 import { trampSlot, RET_SENTINEL } from "./abi";
 import { rt } from "../jvm/runtime";
@@ -127,7 +127,31 @@ export function dlInit(): void {
       dlerrorMsg = null;
       return dlerrorBuf;
     },
-    dladdr: () => 0,
+    // Dl_info: dli_fname, dli_fbase, dli_sname, dli_saddr
+    dladdr: (_cpu, a) => {
+      const addr = a.p(), info = a.p();
+      const m = moduleOf(addr);
+      if (!m) return 0;
+      const s = nearestSymbol(m, addr);
+      stp(info, nameStr(m)); stp(info + PTR, m.base);
+      stp(info + 2 * PTR, s ? mem.hostStr(s.name) : 0); stp(info + 3 * PTR, s ? s.addr : 0);
+      return 1;
+    },
+    // dl_phdr_info: dlpi_addr, dlpi_name, dlpi_phdr, dlpi_phnum (u16), then the counters, all at
+    // the pointer stride — 64 bytes on LP64, 32 on ILP32. The unwinder walks this to find
+    // PT_GNU_EH_FRAME, so it is the C++ throw path.
+    dl_iterate_phdr: async (cpu, a) => {
+      const cb = a.p(), data = a.p();
+      const size = PTR === 8 ? 64 : 32;
+      const info = mem.hostAlloc(size, 8);
+      for (const m of [...modules]) {
+        mem.memset(info, 0, size);
+        stp(info, m.base); stp(info + PTR, nameStr(m)); stp(info + 2 * PTR, m.phdr); mem.st16(info + 3 * PTR, m.phnum);
+        const r = await cpu.call(cb, [info, size, data]);
+        if (r) return r;
+      }
+      return 0;
+    },
     __gnu_Unwind_Find_exidx: (_cpu, a) => {
       const pc = a.p(), pcount = a.p();
       const m = moduleOf(pc);
@@ -137,6 +161,9 @@ export function dlInit(): void {
     },
   });
 }
+
+const nameStrs = new Map<Module, number>();
+function nameStr(m: Module): number { let p = nameStrs.get(m); if (!p) nameStrs.set(m, (p = mem.hostStr(`/data/app/lib/${m.w64 ? "arm64-v8a" : "armeabi-v7a"}/${m.name}`))); return p; }
 
 function resolveGlobalOrNull(sym: string): number | undefined {
   for (const m of modules) { const a = m.exports.get(sym); if (a !== undefined) return a; }
