@@ -4,16 +4,33 @@
 export const PAGE_SHIFT = 12;
 export const PAGE_SIZE = 1 << PAGE_SHIFT;
 export const MEM_SIZE = 0x1000_0000;           // 256 MiB of guest memory in one ArrayBuffer
+/** the first 64 KiB is never mapped: a null-ish pointer faults instead of reading zeros */
+export const LOW = 0x1_0000;
+
+// Each region starts where the last ended, so resizing one is a single edit and nothing can
+// drift out of step with it -- including the range test flags.ts inlines into every generated
+// load and store, which used to be a literal that a resize would have left silently wrong.
+//
+// MEM_SIZE stays 256 MiB until something needs more. A 64-bit module wants real room
+// (libil2cpp.so maps 79 MiB by itself) but the buffer is charged to the JS heap in full whether
+// it is touched or not: measured in Chrome, raising it to 1 GiB took FitNotes from 352 MB of
+// usedJSHeapSize to 1,162 MB and wedged the renderer outright on a 1.1 GB apk. Widen it when a
+// module that needs it can load, not before.
+const MODULE_SPAN = 0x00F0_0000;               // ELF images
+const STACK_SPAN = 0x0100_0000;                // thread stacks, 1 MiB + a 64 KiB guard gap each
+const HOST_SPAN = 0x0008_0000;                 // host-owned guest data: __sF, _ctype_, JNI tables, static strings
+const TRAMP_SPAN = 0x0007_0000;                // host-call trampolines, 8 bytes per slot
+
 export const MODULE_BASE = 0x0010_0000;        // ELF images, bump-allocated upward, 64 KiB aligned
-export const STACK_BASE = 0x0100_0000;         // thread stacks (1 MiB + 64 KiB guard gap each)
-export const STACK_END = 0x0200_0000;
-export const HEAP_BASE = 0x0200_0000;          // malloc arena
-export const HEAP_END = 0x0FF0_0000;
-export const HOST_DATA = 0x0FF0_0000;          // host-owned guest data: __sF, _ctype_, JNI tables, static strings
-export const HOST_DATA_END = 0x0FF8_0000;
-export const TRAMP_BASE = 0x0FF8_0000;         // host-call trampolines, 8 bytes per slot
-export const TRAMP_END = 0x0FFF_0000;
-export const RET_SENTINEL = 0x0FFF_FFF0;       // lr planted by Cpu.call; reaching it as pc ends the call
+export const STACK_BASE = MODULE_BASE + MODULE_SPAN;
+export const STACK_END = STACK_BASE + STACK_SPAN;
+export const HEAP_BASE = STACK_END;            // malloc arena
+export const TRAMP_END = MEM_SIZE - 0x1_0000;
+export const TRAMP_BASE = TRAMP_END - TRAMP_SPAN;
+export const HOST_DATA_END = TRAMP_BASE;
+export const HOST_DATA = HOST_DATA_END - HOST_SPAN;
+export const HEAP_END = HOST_DATA;
+export const RET_SENTINEL = MEM_SIZE - 0x10;   // lr planted by Cpu.call; reaching it as pc ends the call
 export const STACK_SIZE = 0x10_0000;
 export const STACK_GUARD = 0x1_0000;
 

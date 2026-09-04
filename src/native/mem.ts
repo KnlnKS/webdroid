@@ -2,7 +2,7 @@
 // regions, and the code-page flags that let a store into executable pages invalidate the decoder.
 // See abi.ts for the address map.
 
-import { MEM_SIZE, PAGE_SHIFT, PAGE_SIZE, MODULE_BASE, STACK_BASE, STACK_END, HEAP_BASE, HEAP_END, HOST_DATA, HOST_DATA_END, STACK_GUARD } from "./abi";
+import { MEM_SIZE, LOW, PAGE_SHIFT, PAGE_SIZE, MODULE_BASE, STACK_BASE, STACK_END, HEAP_BASE, HEAP_END, HOST_DATA, HOST_DATA_END, STACK_GUARD } from "./abi";
 
 export class NativeFault extends Error {
   pc = 0;
@@ -13,8 +13,7 @@ const u8 = new Uint8Array(buf), i8 = new Int8Array(buf), u16 = new Uint16Array(b
 const u32 = new Uint32Array(buf), i32 = new Int32Array(buf), f32 = new Float32Array(buf), f64 = new Float64Array(buf);
 const dv = new DataView(buf);
 const codePages = new Uint8Array(MEM_SIZE >> PAGE_SHIFT);
-// the first 64 KiB is never mapped: a null-ish pointer faults instead of reading zeros
-const LOW = 0x10000, SPAN = MEM_SIZE - LOW;
+const SPAN = MEM_SIZE - LOW;
 const enc = new TextEncoder(), dec = new TextDecoder();
 
 function checkAddr(a: number, n: number): void {

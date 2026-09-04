@@ -4,6 +4,8 @@
 // instruction (or the block's successor) can observe. Thumb-1 sets flags on nearly every ALU op
 // and reads them almost never, so this removes most of the flag traffic.
 
+import { LOW, MEM_SIZE } from "./abi";
+
 export const N = 8, Z = 4, C = 2, V = 1, ALL = 15;
 export interface Fl { n?: string; z?: string; c?: string; v?: string }
 export interface Ins { code: string; fl: Fl | null; reads: number; writes: number }
@@ -63,7 +65,8 @@ export function hoistRegs(src: string): string {
 
 // Memory access inlining: the mid-tier JIT does not inline the mem helpers, so the common case
 // (in range, aligned, not a code page) is spelled out; the helper stays as the slow/fault path.
-const A = "(m1=($1)>>>0)-65536>>>0<268369920";
+// derived, never spelled: a stale bound here does not fault, it reads the wrong word
+const A = `(m1=($1)>>>0)-${LOW}>>>0<${MEM_SIZE - LOW}`;
 export function inlineMem(src: string): string {
   return src
     .replace(/M\.ld8u\(([^()]*)\)/g, `(${A}?M.u8[m1]:M.ld8u(m1))`)
