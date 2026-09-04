@@ -7,7 +7,7 @@ import { Cpu, cpuFor, type CallArg } from "./cpu";
 import { rt, JObj, type ClassInfo } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, newPrimArray } from "../jvm/abi";
 import { curThread, JClass, stackTraceText } from "../jvm/natives/jlang";
-import { JMethod, mkMethod } from "../jvm/natives/jreflect";
+import { JCtor, JMethod, classCtors, mkMethod } from "../jvm/natives/jreflect";
 
 export const jniMissing = new Set<string>();
 export const jniTrace = { on: false };
@@ -238,11 +238,17 @@ export function jniInit(): void {
   def(4, "GetVersion", () => 0x00010006);
   def(7, "FromReflectedMethod", (_c, a) => {
     a.p(); const m = deref(a.i());
-    return m instanceof JMethod ? methodId(m.owner, m.name, m.desc, m.isStatic) : 0;
+    if (m instanceof JMethod) return methodId(m.owner, m.name, m.desc, m.isStatic);
+    return m instanceof JCtor ? methodId(m.owner, "<init>", m.desc, false) : 0;
   });
   def(9, "ToReflectedMethod", (_c, a) => {
     a.p(); a.p(); const m = methods[a.i()]; a.i();
-    return m ? toRef(mkMethod(m.info, m.name, m.desc, m.isStatic, m.isStatic ? m.info.ctor[m.mangled] : m.info.ctor.prototype[m.mangled])) : 0;
+    if (!m) return 0;
+    if (m.name === "<init>") {
+      const c = classCtors(m.info).find((ctor) => ctor.desc === m.desc);
+      return c ? toRef(c) : 0;
+    }
+    return toRef(mkMethod(m.info, m.name, m.desc, m.isStatic, m.isStatic ? m.info.ctor[m.mangled] : m.info.ctor.prototype[m.mangled]));
   });
   def(6, "FindClass", (cpu, a) => {
     a.p(); const name = a.str();

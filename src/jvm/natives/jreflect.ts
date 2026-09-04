@@ -417,14 +417,14 @@ rt.register({
 });
 // ── reflect Constructor. <init> mangles to i$<hash(desc)> with NO class component, so a
 // ctor must always be invoked through the prototype of the class that DECLARES it.
-class JCtor extends JObj {
+export class JCtor extends JObj {
   owner!: ClassInfo;
   desc = "()V";
   flags = 1;
 }
 const ctorCache = new WeakMap<ClassInfo, JCtor[]>();
 /** constructors declared by this class (dex direct <init>s / native <init>(...) keys), memoized */
-function classCtors(info: ClassInfo): JCtor[] {
+export function classCtors(info: ClassInfo): JCtor[] {
   const hit = ctorCache.get(info);
   if (hit) return hit;
   rt.ensureCompiled(info);
