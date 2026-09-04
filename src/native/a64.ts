@@ -14,7 +14,7 @@
 
 import { mem } from "./mem";
 import { PAGE_SIZE, PAGE_SHIFT } from "./abi";
-import { type Ins, type Fl, N, Z, C, V, ALL, COND, COND_READS, hex, assemble, inlineMem, selfLoop, retK } from "./flags";
+import { type Ins, type Fl, N, Z, C, V, ALL, COND, COND_READS, hex, assemble, hoistRegs, inlineMem, selfLoop, retK } from "./flags";
 
 let MAX_BLOCK = 256;
 /** 1 = single-instruction blocks (the step tracer) */
@@ -551,7 +551,8 @@ export function emitA64Block(pc: number): BlockSrc {
   }
   if (redirect < 0) out.push({ code: retK(slot++, k, hex(p)), fl: null, reads: 0, writes: 0 });
   return {
-    src: "let t,a,ah,th,v,vh,s,m1,H=c.h;" + selfLoop(inlineMem(assemble(out)), pc, pc >>> PAGE_SHIFT),
+    src: "let t,a,ah,th,v,vh,s,m1,H=c.h;"
+      + hoistRegs(selfLoop(inlineMem(assemble(out)), pc, pc >>> PAGE_SHIFT), { pc: 32, hi: true, sync: "c.svc();" }),
     len: (end - pc) >> 2, end, slots: slot,
   };
 }

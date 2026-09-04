@@ -45,22 +45,36 @@ export function assemble(ins: Ins[]): string {
 }
 
 // Register hoisting: the block works on locals (`r4`) and writes the dirty ones back to the
-// Int32Array before every exit and before anything that reads the file behind our back
-// (c.swi, c.fault). Typed-array reads/writes were the bulk of a block's cost.
-const R15 = /r\[15\]/g;
-export function hoistRegs(src: string): string {
-  const used = new Set<number>();
-  src.replace(/r\[(\d+)\]/g, (_, n: string) => { if (+n !== 15) used.add(+n); return _; });
-  if (!used.size) return src;
-  let s = src.replace(R15, "r\0").replace(/r\[(\d+)\]/g, "r$1").replace(/r\0/g, "r[15]");
-  const written = new Set<number>();
-  s.replace(/\br(\d+)=(?!=)/g, (_, n: string) => { written.add(+n); return _; });
-  const wb = [...written].sort((a, b) => a - b).map((n) => `r[${n}]=r${n};`).join("");
-  const load = [...used].sort((a, b) => a - b).map((n) => `r${n}=r[${n}]`).join(",");
-  s = s.replace(/\breturn\b/g, wb + "return");
-  s = s.replace(/c\.fault\(/g, wb + "c.fault(");
-  s = s.replace(/c\.swi\(\);/g, wb + "c.swi();" + [...used].map((n) => `r${n}=r[${n}];`).join(""));
-  return `let ${load};` + s;
+// register file before every exit and before anything that reads the file behind our back
+// (a syscall, c.fault). Typed-array reads/writes were the bulk of a block's cost.
+//
+// `pc` names the index that is the program counter and must stay in the array — ARM's r15, A64's
+// r32 — and `hi` adds the second array A64 keeps its registers' high halves in.
+export function hoistRegs(src: string, { pc = 15, hi = false, sync = "c.swi();" } = {}): string {
+  const arrays: [string, string][] = hi ? [["r", "r"], ["H", "H"]] : [["r", "r"]];
+  const used = new Map<string, Set<number>>();
+  for (const [arr] of arrays) {
+    const set = new Set<number>();
+    src.replace(new RegExp(`\\b${arr}\\[(\\d+)\\]`, "g"), (_, n: string) => { if (arr !== "r" || +n !== pc) set.add(+n); return _; });
+    used.set(arr, set);
+  }
+  if (![...used.values()].some((v) => v.size)) return src;
+  // the pc slot keeps its array form: park it behind a character no source can contain
+  let s = src.replace(new RegExp(`\\br\\[${pc}\\]`, "g"), "r\0");
+  for (const [arr] of arrays) s = s.replace(new RegExp(`\\b${arr}\\[(\\d+)\\]`, "g"), `${arr}$1`);
+  s = s.replace(/r\0/g, `r[${pc}]`);
+  const wb: string[] = [], load: string[] = [], reload: string[] = [];
+  for (const [arr] of arrays) {
+    const written = new Set<number>();
+    s.replace(new RegExp(`\\b${arr}(\\d+)=(?!=)`, "g"), (_, n: string) => { written.add(+n); return _; });
+    for (const n of [...written].sort((a, b) => a - b)) wb.push(`${arr}[${n}]=${arr}${n};`);
+    for (const n of [...used.get(arr)!].sort((a, b) => a - b)) { load.push(`${arr}${n}=${arr}[${n}]`); reload.push(`${arr}${n}=${arr}[${n}];`); }
+  }
+  const back = wb.join("");
+  s = s.replace(/\breturn\b/g, back + "return");
+  s = s.replace(/c\.fault\(/g, back + "c.fault(");
+  s = s.split(sync).join(back + sync + reload.join(""));
+  return `let ${load.join(",")};` + s;
 }
 
 // Memory access inlining: the mid-tier JIT does not inline the mem helpers, so the common case
