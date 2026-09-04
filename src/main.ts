@@ -20,10 +20,14 @@ import { overlays } from "./android/popup";
 import { openDatabase } from "./android/sqlite";
 import { setWebLayer, webViewInfo } from "./android/webkit";
 import { native } from "./native/debug";
+import { device, parseScreen, readStoredScreen, storeScreen, type Screen } from "./shell/config";
 
 const root = document.getElementById("root")!;
+
+/** the shell's own chrome, shared between the markup that declares it and the fit that subtracts it */
+const SIDE_W = 340, GAP = 20, MARGIN = 24;
 root.innerHTML = `
-<div style="display:flex;align-items:center;gap:20px;height:100%">
+<div style="display:flex;align-items:center;gap:${GAP}px;height:100%">
   <div id="phone" style="position:relative;background:#0a0a0c;border-radius:28px;padding:14px 10px;box-shadow:0 18px 60px rgba(0,0,0,.6), inset 0 0 0 2px #2a2d33">
     <div style="position:relative">
       <canvas id="screen" width="${SCREEN_W}" height="${SCREEN_H}" style="display:block;border-radius:16px;background:#000;touch-action:none"></canvas>
@@ -34,9 +38,17 @@ root.innerHTML = `
       <button class="navb" id="btn-home" title="Home">◯</button>
     </div>
   </div>
-  <div id="side" style="width:340px;max-height:92vh;overflow:auto;font:12px/1.5 ui-monospace,monospace;color:#9aa">
+  <div id="side" style="width:${SIDE_W}px;max-height:92vh;overflow:auto;font:12px/1.5 ui-monospace,monospace;color:#9aa">
     <div id="status" style="color:#7c8; margin-bottom:8px">webdroid</div>
     <div id="native" style="color:#fc6"></div>
+    <div id="screencfg">
+      <label>w <input id="cfg-w" type="number" min="1" step="1"></label>
+      <label>h <input id="cfg-h" type="number" min="1" step="1"></label>
+      <label>dpi <input id="cfg-dpi" type="number" min="1" step="1"></label>
+      <button id="cfg-apply">Apply</button>
+      <button id="cfg-reset" title="back to the built-in profile">Reset</button>
+      <div id="cfg-note"></div>
+    </div>
     <div id="launcher"></div>
     <div id="missing" style="white-space:pre-wrap"></div>
   </div>
@@ -49,6 +61,15 @@ root.innerHTML = `
   .appcard { display:flex;align-items:center;gap:10px;background:#1d2026;border:1px solid #2a2e35;border-radius:10px;
     padding:10px 12px;margin:6px 0;cursor:pointer;color:#dde }
   .appcard:hover { background:#252a32 }
+  #screencfg { display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:8px 0 10px;
+    padding:8px 10px;background:#1d2026;border:1px solid #2a2e35;border-radius:10px }
+  #screencfg label { display:flex;align-items:center;gap:4px;color:#678 }
+  #screencfg input { width:52px;background:#12141a;border:1px solid #2a2e35;border-radius:6px;
+    color:#dde;padding:3px 5px;font:inherit }
+  #screencfg button { background:#252a32;border:1px solid #343a44;border-radius:6px;color:#dde;
+    padding:3px 9px;cursor:pointer;font:inherit }
+  #screencfg button:hover { background:#2e343d }
+  #cfg-note { flex-basis:100%;color:#678 }
 </style>`;
 
 const canvas = document.getElementById("screen") as HTMLCanvasElement;
@@ -61,15 +82,53 @@ setInputElement(kbd);
 // WebViews are <iframe>s over the canvas: the framework positions them, the shell owns the layer
 setWebLayer(document.getElementById("weblayer")!);
 
-// fit canvas to viewport height
+/**
+ * Fit the framebuffer into whatever the viewport has left, at any aspect ratio or density.
+ * The bezel padding and the nav row are the stylesheet's, so measure the difference between
+ * the phone and the canvas rather than restating it as a magic constant — the old formula's
+ * `SCREEN_H / 2 * 1.2` was a 768 that only meant anything at 1280 tall and density 2, and it
+ * bounded no width at all, so a wide framebuffer pushed the sidebar off screen.
+ * Never scaled past 1 CSS px per device px: the canvas is the framebuffer, not a poster.
+ */
+const phoneEl = document.getElementById("phone")!;
 function fit() {
-  const h = Math.min(window.innerHeight - 110, SCREEN_H / 2 * 1.2);
-  const cssH = Math.max(480, h);
-  canvas.style.height = `${cssH}px`;
-  canvas.style.width = `${cssH * SCREEN_W / SCREEN_H}px`;
+  const chromeW = phoneEl.offsetWidth - canvas.offsetWidth;
+  const chromeH = phoneEl.offsetHeight - canvas.offsetHeight;
+  const availW = window.innerWidth - SIDE_W - GAP - chromeW - MARGIN;
+  const availH = window.innerHeight - chromeH - MARGIN;
+  const s = Math.max(0.1, Math.min(availW / SCREEN_W, availH / SCREEN_H, 1));
+  canvas.style.width = `${SCREEN_W * s}px`;
+  canvas.style.height = `${SCREEN_H * s}px`;
 }
 fit();
 window.addEventListener("resize", fit);
+
+// ── the screen setting. Applying reloads: the profile is read once at module init, before
+// anything that derives from it, so a reload is correct by construction and costs the frame
+// path nothing. It is also what a device does when its display size changes — it relaunches.
+const cfgW = document.getElementById("cfg-w") as HTMLInputElement;
+const cfgH = document.getElementById("cfg-h") as HTMLInputElement;
+const cfgDpi = document.getElementById("cfg-dpi") as HTMLInputElement;
+const cfgNote = document.getElementById("cfg-note")!;
+cfgW.value = String(device.width);
+cfgH.value = String(device.height);
+cfgDpi.value = String(device.densityDpi);
+const describe = () => {
+  const s = parseScreen(`${cfgW.value}x${cfgH.value}@${cfgDpi.value}`);
+  // dp size is what decides which layout an app picks, so show it rather than make it a surprise
+  cfgNote.textContent = s
+    ? `${Math.round(s.width / (s.densityDpi / 160))}×${Math.round(s.height / (s.densityDpi / 160))}dp` +
+      (readStoredScreen() ? "" : " (built-in)")
+    : "not a screen size";
+};
+describe();
+for (const el of [cfgW, cfgH, cfgDpi]) el.addEventListener("input", describe);
+const applyScreen = (s: Screen | null) => { storeScreen(s); location.reload(); };
+document.getElementById("cfg-apply")!.addEventListener("click", () => {
+  const s = parseScreen(`${cfgW.value}x${cfgH.value}@${cfgDpi.value}`);
+  if (s) applyScreen(s); else describe();
+});
+document.getElementById("cfg-reset")!.addEventListener("click", () => applyScreen(null));
 
 // missing panel
 let missingDirty = false;
@@ -317,11 +376,11 @@ setInterval(() => {
 ctx.fillStyle = "#111";
 ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
 ctx.fillStyle = "#445";
-ctx.font = "40px system-ui";
+ctx.font = `${device.dp(20)}px system-ui`;
 ctx.textAlign = "center";
-ctx.fillText("webdroid", SCREEN_W / 2, SCREEN_H / 2 - 20);
-ctx.font = "26px system-ui";
-ctx.fillText("pick an app on the right →", SCREEN_W / 2, SCREEN_H / 2 + 40);
+ctx.fillText("webdroid", SCREEN_W / 2, SCREEN_H / 2 - device.dp(10));
+ctx.font = `${device.dp(13)}px system-ui`;
+ctx.fillText("pick an app on the right →", SCREEN_W / 2, SCREEN_H / 2 + device.dp(20));
 
 // input
 attachInput(canvas, () => {
