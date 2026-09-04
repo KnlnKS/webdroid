@@ -5,7 +5,7 @@ import { Cpu } from "./cpu";
 import { ldp } from "./host";
 import { mem } from "./mem";
 import {
-  nativeConnect, nativeFreeaddrinfo, nativeGetaddrinfo, nativeGetnameinfo, nativeGetsockopt, nativePoll,
+  nativeConnect, nativeFreeaddrinfo, nativeGetaddrinfo, nativeGetnameinfo, nativeGetpeername, nativeGetsockname, nativeGetsockopt, nativePoll,
   nativeSelect, nativeSend, nativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketRead, nativeSocketWrite,
   resetNativeNetworkForTest, setNativePollProvider, setNativeRelayTransportFactoryForTest,
 } from "./net";
@@ -21,9 +21,13 @@ class FakeWebSocket implements RelayTransport {
 
   send(data: Uint8Array): void { this.sent.push(data.slice()); }
   close(): void { this.closeCalls++; this.readyState = 3; }
-  connect(): void {
+  connect(endpoint?: { family: "IPv4" | "IPv6"; address: string; port: number }): void {
     this.readyState = 1;
-    this.onmessage?.(new MessageEvent("message", { data: "ok" }));
+    const data = endpoint ? JSON.stringify({
+      type: "ready", localFamily: endpoint.family,
+      localAddress: endpoint.address, localPort: endpoint.port,
+    }) : "ok";
+    this.onmessage?.(new MessageEvent("message", { data }));
   }
   receive(data: Uint8Array): void {
     this.onmessage?.(new MessageEvent("message", { data: data.buffer }));
@@ -108,6 +112,62 @@ test("a nonblocking socket connects, polls, sends, and receives through one rela
   expect([...mem.u8.subarray(incoming, incoming + 2)]).toEqual([4, 5]);
 
   expect(nativeSocketClose(cpu, fd)).toBe(0);
+  nativeFreeaddrinfo(root);
+});
+
+test("socket names report the virtual peer and relay's real IPv4 local endpoint", async () => {
+  installFakeTransport();
+  const { root, sockaddr } = resolvedAddress("services.example", "443");
+  const fd = nativeSocket(cpu, 2, 1 | 0x800, 6);
+  const name = mem.hostAlloc(16), length = mem.hostAlloc(4);
+
+  mem.st32(length, 16);
+  expect(nativeGetsockname(cpu, fd, name, length)).toBe(0);
+  expect([...mem.u8.subarray(name, name + 8)]).toEqual([2, 0, 0, 0, 0, 0, 0, 0]);
+  expect(mem.ld32(length)).toBe(16);
+  expect(nativeGetpeername(cpu, fd, name, length)).toBe(-1);
+  expect(mem.ld32(cpu.errnoAddr)).toBe(107);
+  mem.st32(length, 0);
+  expect(nativeGetsockname(cpu, fd, 0, length)).toBe(0);
+  expect(mem.ld32(length)).toBe(16);
+  mem.st32(length, -1);
+  expect(nativeGetsockname(cpu, fd, name, length)).toBe(-1);
+  expect(mem.ld32(cpu.errnoAddr)).toBe(22);
+  mem.st32(length, 1);
+  expect(nativeGetsockname(cpu, fd, 0, length)).toBe(-1);
+  expect(mem.ld32(cpu.errnoAddr)).toBe(14);
+
+  expect(nativeConnect(cpu, fd, sockaddr, 16)).toBe(-1);
+  transports[0].connect({ family: "IPv4", address: "10.20.30.40", port: 54321 });
+  await Promise.resolve();
+
+  mem.u8.fill(0xcc, name, name + 16);
+  mem.st32(length, 4);
+  expect(nativeGetpeername(cpu, fd, name, length)).toBe(0);
+  expect([...mem.u8.subarray(name, name + 4)]).toEqual([2, 0, 1, 187]);
+  expect([...mem.u8.subarray(name + 4, name + 8)]).toEqual([0xcc, 0xcc, 0xcc, 0xcc]);
+  expect(mem.ld32(length)).toBe(16);
+
+  mem.st32(length, 16);
+  expect(nativeGetsockname(cpu, fd, name, length)).toBe(0);
+  expect([...mem.u8.subarray(name, name + 8)]).toEqual([2, 0, 0xd4, 0x31, 10, 20, 30, 40]);
+  expect(mem.ld32(length)).toBe(16);
+  nativeSocketClose(cpu, fd);
+  nativeFreeaddrinfo(root);
+});
+
+test("getsockname rejects an incompatible IPv6 relay endpoint", async () => {
+  installFakeTransport();
+  const { root, sockaddr } = resolvedAddress("services.example", "443");
+  const fd = nativeSocket(cpu, 2, 1 | 0x800, 6);
+  nativeConnect(cpu, fd, sockaddr, 16);
+  transports[0].connect({ family: "IPv6", address: "2001:db8::1", port: 54321 });
+  await Promise.resolve();
+  const name = mem.hostAlloc(16), length = mem.hostAlloc(4);
+  mem.st32(length, 16);
+  expect(nativeGetsockname(cpu, fd, name, length)).toBe(-1);
+  expect(mem.ld32(cpu.errnoAddr)).toBe(97);
+  nativeSocketClose(cpu, fd);
   nativeFreeaddrinfo(root);
 });
 

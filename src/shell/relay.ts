@@ -17,6 +17,12 @@ export interface RelayTransport {
 export type RelayTransportFactory = (url: string) => RelayTransport;
 const openWebSocket: RelayTransportFactory = (url) => new WebSocket(url);
 
+export interface RelayEndpoint {
+  family: "IPv4" | "IPv6";
+  address: string;
+  port: number;
+}
+
 /** One WebSocket carries one TCP byte stream through server.ts's /tcp relay. */
 export class Relay {
   private readonly transport: RelayTransport;
@@ -25,6 +31,7 @@ export class Relay {
   private readonly waiters = new Set<() => void>();
   connected = false;
   eof = false;
+  localEndpoint: RelayEndpoint | null = null;
   readonly ready: Promise<void>;
 
   constructor(host: string, port: number, tls: boolean, open: RelayTransportFactory = openWebSocket) {
@@ -36,7 +43,17 @@ export class Relay {
     this.ready = new Promise<void>((resolve, reject) => {
       transport.onmessage = (event) => {
         if (typeof event.data === "string") {
-          if (!settled) { settled = true; this.connected = true; resolve(); wake(); }
+          if (!settled) {
+            try {
+              const message = JSON.parse(event.data) as { type?: unknown; localFamily?: unknown; localAddress?: unknown; localPort?: unknown };
+              if (message.type === "ready" && (message.localFamily === "IPv4" || message.localFamily === "IPv6") &&
+                  typeof message.localAddress === "string" && Number.isInteger(message.localPort) &&
+                  Number(message.localPort) >= 1 && Number(message.localPort) <= 65535) {
+                this.localEndpoint = { family: message.localFamily, address: message.localAddress, port: Number(message.localPort) };
+              }
+            } catch { /* old relays send plain "ok" */ }
+            settled = true; this.connected = true; resolve(); wake();
+          }
           return;
         }
         const bytes = new Uint8Array(event.data as ArrayBuffer);

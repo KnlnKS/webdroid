@@ -463,7 +463,6 @@ export function libcInit(): void {
     bind: (cpu) => fail(cpu, E.ACCES),
     listen: (cpu) => fail(cpu, E.NETUNREACH),
     accept: (cpu) => fail(cpu, E.NETUNREACH),
-    getsockname: (cpu) => fail(cpu, E.NETUNREACH), getpeername: (cpu) => fail(cpu, E.NETUNREACH),
     gethostbyname: () => 0,
     gethostbyaddr: () => 0,
     gethostname: (_c, a) => { const b = a.p(), n = a.u(); mem.putCstr(b, "localhost", n); return 0; },

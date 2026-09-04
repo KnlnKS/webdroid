@@ -124,8 +124,10 @@ const server: Bun.Server<TcpData> = Bun.serve({
   },
   // Raw TCP over a WebSocket. A page cannot open a socket, but every Java networking stack
   // ultimately wants one, so the dev server lends it ours: one WS carries one TCP connection.
-  // TLS is terminated here because the page has no certificate store and could not handshake.
-  // A text frame "ok" means connected; a close before that means the connect failed.
+  // Java sockets can ask the relay to terminate TLS; native stacks pass their own TLS bytes
+  // through the same relay unchanged.
+  // A text control frame means connected and carries the relay's local endpoint; a close before
+  // that means the connect failed. Relay still accepts the old plain "ok" frame.
   //
   // This is an outbound proxy for whatever the emulated app asks for — the same trust boundary
   // as /proxy above, and the same reason both are dev-server-only: bound to loopback, never
@@ -145,21 +147,28 @@ const server: Bun.Server<TcpData> = Bun.serve({
     async open(ws) {
       const d = ws.data;
       // A TLS socket silently drops (returns 0 for) anything written before its handshake
-      // completes, and connect() resolves on the TCP open, not the handshake. So "ok" — the
-      // signal the page may write — goes out only once the socket can carry bytes, and anything
-      // that arrives before then is queued.
-      const ready = () => { d.ready = true; ws.send("ok"); for (const m of d.pending.splice(0)) d.sock?.write(m); };
+      // completes, and connect() resolves on the TCP open, not the handshake. The ready control
+      // frame goes out only once the socket can carry bytes, and anything that arrives before
+      // then is queued.
+      const ready = (socket: import("bun").Socket) => {
+        d.ready = true;
+        ws.send(JSON.stringify({
+          type: "ready", localFamily: socket.localFamily,
+          localAddress: socket.localAddress, localPort: socket.localPort,
+        }));
+        for (const m of d.pending.splice(0)) d.sock?.write(m);
+      };
       try {
         d.sock = await Bun.connect({
           hostname: d.host, port: d.port, tls: d.tls,
           socket: {
             data: (_s, chunk) => { ws.send(chunk); },
-            handshake: (_s, ok, err) => { if (ok) ready(); else ws.close(4001, String(err ?? "tls handshake failed").slice(0, 100)); },
+            handshake: (socket, ok, err) => { if (ok) ready(socket); else ws.close(4001, String(err ?? "tls handshake failed").slice(0, 100)); },
             close: () => ws.close(),
             error: () => ws.close(),
           },
         });
-        if (!d.tls) ready();
+        if (!d.tls) ready(d.sock);
       } catch (e) {
         ws.close(4000, String(e).slice(0, 100));
       }

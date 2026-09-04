@@ -26,8 +26,11 @@ interface NativeSocket {
   error: number;
   waiters: Set<() => void>;
   references: number;
+  peer: Ipv4Endpoint | null;
+  local: Ipv4Endpoint | null;
 }
 interface NativeSocketFd { socket: NativeSocket; cloexec: boolean }
+interface Ipv4Endpoint { address: [number, number, number, number]; port: number }
 
 const sockets = new Map<number, NativeSocketFd>();
 const syntheticHosts = new Map<number, string>();
@@ -142,7 +145,7 @@ export function nativeSocket(cpu: Cpu, domain: number, type: number, protocol: n
     cloexec: !!(type & SOCK_CLOEXEC),
     socket: {
       nonblock: !!(type & SOCK_NONBLOCK), relay: null, connecting: false, connected: false,
-      error: 0, waiters: new Set(), references: 1,
+      error: 0, waiters: new Set(), references: 1, peer: null, local: null,
     },
   });
   record(`socket fd=${fd} family=${domain} type=${type.toString(16)} protocol=${protocol}`);
@@ -158,15 +161,21 @@ export function nativeConnect(cpu: Cpu, fd: number, sockaddr: number, length: nu
   if (!sockaddr || length < 8) return fail(cpu, E.INVAL);
   if (mem.ld16u(sockaddr) !== AF_INET) return fail(cpu, E.PROTONOSUPPORT);
   const port = (mem.u8[sockaddr + 2] << 8) | mem.u8[sockaddr + 3];
-  const bytes = mem.u8.subarray(sockaddr + 4, sockaddr + 8);
+  const bytes: [number, number, number, number] = [
+    mem.u8[sockaddr + 4], mem.u8[sockaddr + 5], mem.u8[sockaddr + 6], mem.u8[sockaddr + 7],
+  ];
   const host = syntheticHosts.get(ipv4Key(bytes)) ?? ipv4Text(bytes);
   record(`connect fd=${fd} ${host}:${port} nonblock=${socket.nonblock}`);
   const relay = new Relay(host, port, false, transportFactory);
   socket.relay = relay;
   socket.connecting = true;
+  socket.peer = { address: bytes, port };
   const completion = relay.ready.then(() => {
     socket.connecting = false;
     socket.connected = true;
+    const local = relay.localEndpoint;
+    const address = local?.family === "IPv4" ? parseIpv4(local.address) : null;
+    socket.local = local && address ? { address, port: local.port } : null;
     record(`connected fd=${fd}`);
     wake(socket);
     return true;
@@ -368,6 +377,36 @@ export function nativeGetsockopt(cpu: Cpu, fd: number, level: number, option: nu
   return 0;
 }
 
+function nativeSocketName(cpu: Cpu, fd: number, address: number, length: number, peer: boolean): number {
+  const descriptor = socketFdOf(cpu, fd);
+  if (!descriptor) return -1;
+  const socket = descriptor.socket;
+  if (peer && !socket.connected) return fail(cpu, E.NOTCONN);
+  const endpoint = peer ? socket.peer : socket.connected ? socket.local : { address: [0, 0, 0, 0] as [number, number, number, number], port: 0 };
+  if (!endpoint) return fail(cpu, E.AFNOSUPPORT);
+  if (!length) return fail(cpu, E.FAULT);
+  const capacity = mem.ld32(length);
+  if (capacity < 0) return fail(cpu, E.INVAL);
+  if (capacity && !address) return fail(cpu, E.FAULT);
+
+  const sockaddr = new Uint8Array(16);
+  sockaddr[0] = AF_INET;
+  sockaddr[2] = endpoint.port >>> 8;
+  sockaddr[3] = endpoint.port & 255;
+  sockaddr.set(endpoint.address, 4);
+  mem.u8.set(sockaddr.subarray(0, Math.min(capacity, sockaddr.length)), address);
+  mem.st32(length, sockaddr.length);
+  return 0;
+}
+
+export function nativeGetsockname(cpu: Cpu, fd: number, address: number, length: number): number {
+  return nativeSocketName(cpu, fd, address, length, false);
+}
+
+export function nativeGetpeername(cpu: Cpu, fd: number, address: number, length: number): number {
+  return nativeSocketName(cpu, fd, address, length, true);
+}
+
 function copyText(text: string, destination: number, capacity: number): boolean {
   const bytes = new TextEncoder().encode(text);
   if (!destination) return capacity === 0;
@@ -432,6 +471,8 @@ export function netInit(): void {
     shutdown: (cpu, args) => { const fd = args.i(); args.i(); const descriptor = socketFdOf(cpu, fd); if (!descriptor) return -1; descriptor.socket.relay?.close(); return 0; },
     setsockopt: (cpu, args) => { const descriptor = socketFdOf(cpu, args.i()); args.i(); args.i(); args.p(); args.u(); return descriptor ? 0 : -1; },
     getsockopt: (cpu, args) => nativeGetsockopt(cpu, args.i(), args.i(), args.i(), args.p(), args.p()),
+    getsockname: (cpu, args) => nativeGetsockname(cpu, args.i(), args.p(), args.p()),
+    getpeername: (cpu, args) => nativeGetpeername(cpu, args.i(), args.p(), args.p()),
     getaddrinfo: (cpu, args) => nativeGetaddrinfo(cpu, args.p(), args.p(), args.p(), args.p()),
     freeaddrinfo: (_cpu, args) => nativeFreeaddrinfo(args.p()),
     gai_strerror: (_cpu, args) => ptr(gaiStrerror(args.i())),
