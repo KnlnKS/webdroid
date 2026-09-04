@@ -27,6 +27,10 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>   # cost, not just pixel
 # score a provenance cut — the same bundle, against itself
 WEBDROID_BYTECODE='android/graphics/Paint,android/graphics/Canvas' \
   WEBDROID_URL=http://localhost:4090 bun run e2e --test fitnotes
+
+# run at another screen. The gate stays pinned to each flow's own goldens, so this one is
+# reported as SMOKE, never scored — it measures cost, not fidelity.
+WEBDROID_SCREEN=1080x2424@480 WEBDROID_URL=http://localhost:4090 bun run e2e --test fitnotes
 ```
 
 **Use a private port.** A dev server left running in another worktree answers on 4080 and a run
@@ -56,7 +60,8 @@ then measures code you did not write.
 - **java.*** implemented as JS natives (collections over Map/Array etc). App's own dex
   (androidx, kotlin, okhttp...) runs on the VM as-is; we only supply java.*/android.*/JNI.
 - **android.***: TS reimplementation. Views render to one <canvas> framebuffer
-  (360x640dp @2x = 720x1280, `src/shell/config.ts`). Binary XML (AXML) + resources.arsc
+  (360x808dp @3x = 1080x2424 by default; the screen is a resolved SETTING, not a literal —
+  `src/shell/config.ts`). Binary XML (AXML) + resources.arsc
   parsers feed LayoutInflater/Resources. Handler/Looper on JS event loop; Choreographer = rAF.
 - **The android: resource package is real**: `vendor/framework-res.apk`, aapt2-linked at package
   id 0x01 from the SDK's own platform res tree (`bun run gen-framework-res`), fetched once per
@@ -1173,6 +1178,63 @@ not framework tree walks. They are correctness first, fitnotes layout 203ms -> 1
 derived (1232 = 1280-48, 616 = (1280-48)/2). They all read `src/shell/config.ts` now — the
 janitor pass caught the last `320` and `* 2` in drawable/graphics/widget. The profile imports
 nothing, so anything may import it.
+
+## The screen is a setting, and what that cost (default 1080x2424 @480dpi)
+The profile's screen is now **resolved** at module init, not written down: `?screen=WxH@dpi` >
+`WEBDROID_SCREEN` > `localStorage["wd:screen"]` > the built-in default — the `?bytecode=` idiom
+from `jvm/provenance.ts`, for the same reason (A/B the same bundle, no rebuild). The shell has
+a w/h/dpi panel that persists and **reloads**. A reload is not a shortcut: every consumer reads
+the profile after config.ts is evaluated, and there is exactly ONE module-level snapshot in the
+tree (`shell/device.ts:30`), so a reload is correct by construction and costs the frame path
+nothing. `input.ts` maps through `rect.width` ratios and `webkit.ts` places iframes in percent,
+so both were already resolution-agnostic — do not "fix" them.
+
+`density` is now `densityDpi / 160` (AOSP's own definition) rather than a second literal that
+could disagree, and the status/nav bars are 24dp rather than 48px.
+
+**480dpi is chosen so 1080/3 and 2424/3 are exact and `widthDp` stays 360** — the same width
+bucket every layout and `sw360dp` resource already selects. Only the shape changes: 616dp of
+activity becomes 784dp.
+
+**2.84x the pixels is very nearly free**, which "Perf: what actually costs" already predicts —
+the cost is per draw op and per layout, and neither is a function of pixel count. fitnotes,
+same flow, 720x1280 vs 1080x2424: **ms/frame 0.306 -> 0.308, ms/draw 0.275 -> 0.281**, boot
+173 -> 169ms, drawErrors 0, 39/39. `layoutMs` and `measureText` FELL, because a taller screen
+lays out different content, not more of it. Per-pixel rasterisation is the compositor's and is
+in none of these counters.
+
+**What actually broke was never a pixel count — it was ~40 bare density-2 px in the widgets we
+draw ourselves.** dialog, popup/toast/menu, listview, preference, CompoundButton, the status
+bar art, and half of ViewConfiguration (whose `getScaledMinimumFlingVelocity` returned 100 while
+`static getMinimumFlingVelocity` right beside it returned 50 — the same number times a density
+nobody had written down). All go through `device.dp()`, which is **unrounded** like `scrollUnit`:
+a stroke width and a glyph offset are legitimately fractional, and int-returning natives round at
+their own boundary.
+
+The sharpest one, and the shape to remember: **CompoundButton's `buttonW` reserved the indicator's
+width and was 64px.** The drawable itself scaled correctly and painted at its right intrinsic
+size; the reservation did not, so at density 3 the text started 32px inside a 96px indicator.
+*A drawable that scales, laid out by a number that does not, reads as a drawable bug.* Look for
+the layout constant, not the asset.
+
+**Every one of those conversions was value-preserving at density 2 on purpose**, so the pinned
+gate proves the refactor before the default moves. It did: fitnotes 43.07% and mihon-onboarding
+17.55% identical to the digit across all of it.
+
+**The harness geometry comes from the goldens, not the profile** (see `tests/e2e/README.md`).
+`types.ts` used to export `SCREEN_W = device.width`, which the driver used to denormalize taps —
+so moving the default would have silently mis-tapped every flow, and `diff.ts` would NOT have
+caught it: it checks the frame size, and the frames stay right. Each flow now navigates to its
+own manifest's `device` block. `WEBDROID_SCREEN` runs at another size and **un-scores the run**
+(it takes the smoke branch), so the gate cannot be passed at the wrong geometry by accident.
+
+**`vendor/framework-res.apk` can no longer be pre-picked for one profile.** It was linked
+`--preferred-density 320dpi`: 1457 xhdpi drawables against 100 xxhdpi, so a 480dpi profile
+resolved xhdpi and upscaled it 1.5x — right geometry, wrong art, and nothing anywhere reports
+it. Density filtering is gone (xxhdpi 100 -> 906) at +4.6MB, 7.3 -> 11.9MB. The `-c sw<N>dp`
+filter is KEPT: it degrades to the unqualified variant rather than to a wrong pixel, and it is
+what holds the package to 11.9MB instead of 18.9 — the sw600/sw720 wallpapers alone are 7.4MB
+of art nothing here draws.
 
 ## curThread is a global, so "wake it sooner" is not a free change
 LockSupport.unpark() is a no-op and parked threads only wake on their own deadline. Giving it

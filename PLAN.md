@@ -24,8 +24,9 @@ See "One build, or none" and "The delegates" in AGENTS.md.
 | Coverage | `fwtest` 295/363 graphics · `fwtest android/content/res/` 82/97 · `fwtest android/graphics/text/` 20/37 |
 | Evidence, headless | `bun run fwtest`: `new Paint/Matrix/Path`, `Bitmap.createBitmap` + pixel round-trip, three AssetManager lookups, `android:layout/alert_dialog` opened through `nativeOpenXmlAsset` and walked to END_DOCUMENT |
 | Evidence, in a page | `bun run textcmp`: AOSP's own `StaticLayout` against ours, **6/6 paragraphs break identically** |
-| e2e (last full run) | fitnotes 43.07 · mihon-onboarding 17.55 · mihon-app 76.96 · harmonic 33.80 · overall 42.85, every step rendered |
+| e2e (last full run) | fitnotes 43.07 · mihon-onboarding 17.55 · mihon-app 76.91 · harmonic 33.36 · overall 42.72, every step rendered |
 | Corpus | `bun run corpus` 9/10 render a frame; only Among Us does not (IL2CPP arm64) |
+| Screen | a resolved **setting**, default 1080x2424 @480dpi (360x808dp). `?screen=WxH@dpi`, `WEBDROID_SCREEN`, or the shell's own panel. The gate stays pinned to each flow's goldens — see "The screen is a setting" in AGENTS.md |
 
 ## What a cut costs — measured, not projected
 
