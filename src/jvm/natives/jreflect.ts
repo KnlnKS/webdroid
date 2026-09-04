@@ -486,12 +486,12 @@ function classForDesc(desc: string): unknown {
 }
 function paramClasses(desc: string, elem: string) { return jarray(parseMethodDesc(desc).params.map(classForDesc), elem); }
 function noTypeVars() { return jarray([], "Ljava/lang/reflect/TypeVariable;"); }
-function unboxArg(v: unknown): unknown {
+export function unboxArg(v: unknown): unknown {
   // reflection passes boxed primitives; unwrap to raw for native/compiled calls
   if (v !== null && typeof v === "object" && "v" in (v as object)) return (v as { v: unknown }).v;
   return v;
 }
-function boxReturn(retDesc: string, v: unknown): unknown {
+export function boxReturn(retDesc: string, v: unknown): unknown {
   switch (retDesc[0]) {
     case "V": return null;
     case "I": case "B": case "S": return boxInt(v as number);
