@@ -10,14 +10,16 @@ import { format, scan } from "./printf";
 import { vfs } from "../jvm/natives/jio";
 import { device } from "../shell/config";
 import type { FileSource } from "../shell/lazyfile";
+import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketRead, nativeSocketWrite, setNativePollProvider } from "./net";
+import { allocateFd, releaseFd, reserveFd } from "./fd";
 
-const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_DIRECTORY = 0x4000;
+const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800, O_DIRECTORY = 0x4000;
 const S_IFDIR = 0x4000, S_IFREG = 0x8000;
 
 /** a pipe: byte chunks, and whoever is parked waiting for them (a reader, or an epoll_wait) */
 interface Pipe { q: Uint8Array[]; wake: (() => void)[]; closed: boolean }
 interface Fd {
-  path: string; data: Uint8Array; len: number; pos: number; write: boolean; dirty: boolean; dir: boolean; append: boolean; line?: string; synthetic?: boolean;
+  path: string; data: Uint8Array; len: number; pos: number; write: boolean; dirty: boolean; dir: boolean; append: boolean; statusFlags: number; references: number; line?: string; synthetic?: boolean;
   source?: FileSource; readQueue?: Promise<void>; byte?: number; random?: boolean; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Map<number, { events: number; data: bigint }>;
 }
 const EPOLLIN = 1, EAGAIN = E.AGAIN;
@@ -26,12 +28,37 @@ const ready = (f: Fd): boolean => !!f.random || !!(f.rpipe && (f.rpipe.q.length 
 function wakeAll(p: { wake: (() => void)[] }): void { for (const w of p.wake.splice(0)) w(); }
 /** the fd's interest in being woken: pipe readers and epoll waiters both park here */
 function waitOn(f: Fd, w: () => void): void { if (f.rpipe) f.rpipe.wake.push(w); else if (f.event) f.event.wake.push(w); }
-const fdBase = (path: string): Fd => ({ path, data: new Uint8Array(0), len: 0, pos: 0, write: false, dirty: false, dir: false, append: false });
+const fdBase = (path: string): Fd => ({ path, data: new Uint8Array(0), len: 0, pos: 0, write: false, dirty: false, dir: false, append: false, statusFlags: 0, references: 1 });
 const fds = new Map<number, Fd>();
-let nextFd = 3;
 const files = new Map<number, number>();       // FILE* → fd
 const dirs = new Map<number, { entries: string[]; i: number; dirent: number }>();
 const cpuList = device.cpu.cores === 1 ? "0\n" : `0-${device.cpu.cores - 1}\n`;
+
+setNativePollProvider({
+  query(fd, events) {
+    const f = fds.get(fd);
+    if (!f) return null;
+    let revents = 0;
+    if (f.rpipe) {
+      if (events & 1 && (f.rpipe.q.length || f.rpipe.closed)) revents |= 1;
+      if (f.rpipe.closed) revents |= 16;
+    } else if (f.event) {
+      if (events & 1 && f.event.count > 0) revents |= 1;
+    } else if (!f.epoll && events & 1 && !f.write) revents |= 1;
+    if (f.wpipe) revents |= f.wpipe.closed ? 8 : events & 4;
+    else if (f.write && events & 4) revents |= 4;
+    return revents;
+  },
+  subscribe(fd, wake) {
+    const f = fds.get(fd);
+    const waiters = f?.rpipe?.wake ?? f?.event?.wake;
+    if (!waiters) return () => {};
+    waiters.push(wake);
+    return () => { const index = waiters.indexOf(wake); if (index >= 0) waiters.splice(index, 1); };
+  },
+  read(cpu, fd, destination, length) { return fds.has(fd) ? fdRead(cpu, fd, destination, length) : null; },
+  write(cpu, fd, source, length) { return fds.has(fd) ? fdWrite(cpu, fd, source, length) : null; },
+});
 
 function synth(path: string): string | null {
   if (path === "/proc/cpuinfo") {
@@ -53,10 +80,10 @@ function fdOpen(cpu: Cpu, path: string, flags: number): number {
     return put({ ...fdBase(path), random: true });
   }
   const s = synth(path);
-  if (s !== null) { const b = utf8(s); return put({ path, data: b, len: b.length, pos: 0, write: false, dirty: false, dir: false, append: false, synthetic: true }); }
+  if (s !== null) { const b = utf8(s); return put({ ...fdBase(path), data: b, len: b.length, synthetic: true }); }
   if (vfs.isDir(path)) {
     if (acc !== 0) return fail(cpu, E.ISDIR);
-    return put({ path, data: new Uint8Array(0), len: 0, pos: 0, write: false, dirty: false, dir: true, append: false });
+    return put({ ...fdBase(path), dir: true });
   }
   if (flags & O_DIRECTORY) return fail(cpu, E.NOTDIR);
   const found = vfs.stat(path);
@@ -70,9 +97,9 @@ function fdOpen(cpu: Cpu, path: string, flags: number): number {
     vfs.write(path, data);
   } else if (flags & O_CREAT && flags & O_EXCL) return fail(cpu, E.EXIST);
   if (flags & O_TRUNC && acc !== 0) { data = new Uint8Array(0); vfs.write(path, data); }
-  return put({ path, data: data ?? new Uint8Array(0), source: data ? undefined : found?.source, len: data?.length ?? found?.size ?? 0, pos: 0, write: acc !== 0, dirty: false, dir: false, append: !!(flags & O_APPEND) });
+  return put({ ...fdBase(path), data: data ?? new Uint8Array(0), source: data ? undefined : found?.source, len: data?.length ?? found?.size ?? 0, write: acc !== 0, append: !!(flags & O_APPEND), nonblock: !!(flags & O_NONBLOCK), statusFlags: flags & (O_ACCMODE | O_APPEND | O_NONBLOCK) });
 }
-function put(f: Fd): number { const fd = nextFd++; fds.set(fd, f); return fd; }
+function put(f: Fd): number { const fd = allocateFd(); fds.set(fd, f); return fd; }
 
 function grow(f: Fd, need: number): void {
   if (need <= f.data.length) return;
@@ -81,6 +108,7 @@ function grow(f: Fd, need: number): void {
   f.data = n;
 }
 function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
+  if (isNativeSocket(fd)) return nativeSocketWrite(cpu, fd, p, n);
   if (fd === 1 || fd === 2) {
     const s = new TextDecoder().decode(mem.u8.subarray(p, p + n));
     const f = fds.get(fd)!;
@@ -126,6 +154,7 @@ function fdReadAt(cpu: Cpu, f: Fd, p: number, n: number, off: number): number | 
   return value instanceof Promise ? value.then(done, () => fail(cpu, E.IO)) : done(value);
 }
 function fdRead(cpu: Cpu, fd: number, p: number, n: number): number | Promise<number> {
+  if (isNativeSocket(fd)) return nativeSocketRead(cpu, fd, p, n);
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   if (f.dir) return fail(cpu, E.ISDIR);
@@ -191,11 +220,14 @@ function flushFd(f: Fd): void {
   if (f.dirty && !f.synthetic) { vfs.write(f.path, f.data.slice(0, f.len)); f.dirty = false; }
 }
 function fdClose(cpu: Cpu, fd: number): number {
+  if (isNativeSocket(fd)) return nativeSocketClose(cpu, fd);
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
+  if (fd <= 2) return 0;
+  fds.delete(fd); releaseFd(fd);
+  if (--f.references > 0) return 0;
   flushFd(f);
   if (f.wpipe) { f.wpipe.closed = true; wakeAll(f.wpipe); }
-  if (fd > 2) fds.delete(fd);
   return 0;
 }
 function fdSeek(cpu: Cpu, fd: number, off: number, whence: number): number {
@@ -239,8 +271,8 @@ function fillStatfs(b: number): void {
 }
 function makePipe(out: number, flags: number): number {
   const p = newPipe(), nb = !!(flags & 0x800);
-  mem.st32(out, put({ ...fdBase("pipe"), rpipe: p, nonblock: nb }));
-  mem.st32(out + 4, put({ ...fdBase("pipe"), wpipe: p, nonblock: nb, write: true }));
+  mem.st32(out, put({ ...fdBase("pipe"), rpipe: p, nonblock: nb, statusFlags: nb ? O_NONBLOCK : 0 }));
+  mem.st32(out + 4, put({ ...fdBase("pipe"), wpipe: p, nonblock: nb, write: true, statusFlags: 1 | (nb ? O_NONBLOCK : 0) }));
   return 0;
 }
 /** epoll_wait: report the registered fds that are readable; else sleep the timeout, or park until one is written */
@@ -319,9 +351,9 @@ function fwriteStr(cpu: Cpu, fp: number, s: string): number {
 }
 
 export function stdioInit(): void {
-  fds.set(0, { path: "/dev/stdin", data: new Uint8Array(0), len: 0, pos: 0, write: false, dirty: false, dir: false, append: false });
-  fds.set(1, { path: "/dev/stdout", data: new Uint8Array(0), len: 0, pos: 0, write: true, dirty: false, dir: false, append: false });
-  fds.set(2, { path: "/dev/stderr", data: new Uint8Array(0), len: 0, pos: 0, write: true, dirty: false, dir: false, append: false });
+  fds.set(0, fdBase("/dev/stdin"));
+  fds.set(1, { ...fdBase("/dev/stdout"), write: true, statusFlags: 1 });
+  fds.set(2, { ...fdBase("/dev/stderr"), write: true, statusFlags: 1 });
   // __sF[3]: stdin/stdout/stderr FILE structs, contiguous
   const sF = mem.hostAlloc(LAYOUT.FILE_SIZE * 3);
   mem.memset(sF, 0, LAYOUT.FILE_SIZE * 3);
@@ -364,22 +396,51 @@ export function stdioInit(): void {
     ftruncate: (cpu, a) => { const f = fds.get(a.i()); const n = offArg(a); if (!f) return fail(cpu, E.BADF); grow(f, n); if (n > f.len) f.data.fill(0, f.len, n); f.len = n; f.dirty = true; return 0; },
     ftruncate64: (cpu, a) => { const f = fds.get(a.i()); const n = Number(a.l()); if (!f) return fail(cpu, E.BADF); grow(f, n); if (n > f.len) f.data.fill(0, f.len, n); f.len = n; f.dirty = true; return 0; },
     truncate: (cpu, a) => { const p = vfs.norm(a.str()), n = offArg(a); const d = vfs.read(p); if (!d) return fail(cpu, E.NOENT); const nd = new Uint8Array(n); nd.set(d.subarray(0, Math.min(n, d.length))); vfs.write(p, nd); return 0; },
-    fcntl: (cpu, a) => { const fd = a.i(), cmd = a.i(); if (!fds.has(fd)) return fail(cpu, E.BADF); return cmd === 3 ? 2 : 0; }, // F_GETFL → O_RDWR
+    fcntl: (cpu, a) => {
+      const fd = a.i(), cmd = a.i(), value = a.i();
+      if (isNativeSocket(fd)) return nativeSocketFcntl(cpu, fd, cmd, value);
+      const f = fds.get(fd);
+      if (!f) return fail(cpu, E.BADF);
+      if (cmd === 3) return f.statusFlags;
+      if (cmd === 4) {
+        f.statusFlags = (f.statusFlags & ~(O_APPEND | O_NONBLOCK)) | (value & (O_APPEND | O_NONBLOCK));
+        f.append = !!(f.statusFlags & O_APPEND);
+        f.nonblock = !!(f.statusFlags & O_NONBLOCK);
+      }
+      return 0;
+    },
     fsync: () => 0, fdatasync: () => 0, sync: () => {},
-    dup: (cpu, a) => { const f = fds.get(a.i()); if (!f) return fail(cpu, E.BADF); return put({ ...f }); },
-    dup2: (cpu, a) => { const f = fds.get(a.i()), to = a.i(); if (!f) return fail(cpu, E.BADF); fds.set(to, { ...f }); return to; },
+    dup: (cpu, a) => { const fd = a.i(); if (isNativeSocket(fd)) return nativeSocketDup(cpu, fd); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); f.references++; return put(f); },
+    dup2: (cpu, a) => {
+      const fd = a.i(), to = a.i();
+      if (to < 0) return fail(cpu, E.BADF);
+      if (fd === to) return isNativeSocket(fd) || fds.has(fd) ? fd : fail(cpu, E.BADF);
+      if (isNativeSocket(fd)) {
+        if (isNativeSocket(to)) nativeSocketClose(cpu, to);
+        else if (fds.has(to)) fdClose(cpu, to);
+        return nativeSocketDup(cpu, fd, to);
+      }
+      const f = fds.get(fd);
+      if (!f) return fail(cpu, E.BADF);
+      if (isNativeSocket(to)) nativeSocketClose(cpu, to);
+      else if (fds.has(to)) fdClose(cpu, to);
+      f.references++;
+      reserveFd(to);
+      fds.set(to, f);
+      return to;
+    },
     pipe: (_c, a) => makePipe(a.p(), 0),
     pipe2: (_c, a) => makePipe(a.p(), a.i()),
     socketpair: (_c, a) => {
       a.i(); const type = a.i(); a.i(); const sv = a.p();
       const ab = newPipe(), ba = newPipe(), nb = !!(type & 0x800);
-      mem.st32(sv, put({ ...fdBase("socketpair"), rpipe: ab, wpipe: ba, nonblock: nb }));
-      mem.st32(sv + 4, put({ ...fdBase("socketpair"), rpipe: ba, wpipe: ab, nonblock: nb }));
+      mem.st32(sv, put({ ...fdBase("socketpair"), rpipe: ab, wpipe: ba, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }));
+      mem.st32(sv + 4, put({ ...fdBase("socketpair"), rpipe: ba, wpipe: ab, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }));
       return 0;
     },
-    eventfd: (_c, a) => { const init = a.u(), flags = a.i(); return put({ ...fdBase("eventfd"), event: { count: init, wake: [] }, nonblock: !!(flags & 0x800) }); },
-    epoll_create: () => put({ ...fdBase("epoll"), epoll: new Map() }),
-    epoll_create1: () => put({ ...fdBase("epoll"), epoll: new Map() }),
+    eventfd: (_c, a) => { const init = a.u(), flags = a.i(); return put({ ...fdBase("eventfd"), event: { count: init, wake: [] }, nonblock: !!(flags & O_NONBLOCK), statusFlags: 2 | (flags & O_NONBLOCK) }); },
+    epoll_create: () => put({ ...fdBase("epoll"), epoll: new Map(), statusFlags: 2 }),
+    epoll_create1: () => put({ ...fdBase("epoll"), epoll: new Map(), statusFlags: 2 }),
     epoll_ctl: (cpu, a) => {
       const ep = fds.get(a.i()), op = a.i(), fd = a.i(), ev = a.p();
       if (!ep?.epoll || !fds.has(fd)) return fail(cpu, E.BADF);

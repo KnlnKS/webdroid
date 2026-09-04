@@ -14,6 +14,7 @@ import { zlibInit } from "./zlib";
 import { libmInit } from "./libm";
 import { localeInit } from "./locale";
 import { procInit, abortMessageOr } from "./proc";
+import { netInit } from "./net";
 import { MONTHS, DAYS } from "../jvm/natives/jtime";
 import { device } from "../shell/config";
 
@@ -513,6 +514,7 @@ export function libcInit(): void {
   libmInit();
   localeInit();
   procInit();
+  netInit();
 }
 
 const PRIO = ["", "", "V", "D", "I", "W", "E", "F", "S"];

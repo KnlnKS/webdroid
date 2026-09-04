@@ -33,3 +33,36 @@ test("fread fills complete elements across asynchronous short reads", async () =
   expect(mem.u8.slice(dst, dst + bytes.length)).toEqual(bytes);
   expect(await cpu.call(fclose!, [fp])).toBe(0);
 });
+
+test("socketpair status flags and aliases follow fd semantics", async () => {
+  const socketpair = lookupHost("socketpair", "libc.so");
+  const fcntl = lookupHost("fcntl", "libc.so");
+  const dup = lookupHost("dup", "libc.so");
+  const close = lookupHost("close", "libc.so");
+  const sendto = lookupHost("sendto", "libc.so");
+  const recvfrom = lookupHost("recvfrom", "libc.so");
+  expect(socketpair && fcntl && dup && close && sendto && recvfrom).toBeTruthy();
+
+  const pair = mem.hostAlloc(8);
+  expect(await cpu.call(socketpair!, [1, 1, 0, pair])).toBe(0);
+  const writer = mem.ld32(pair), reader = mem.ld32(pair + 4);
+  expect(await cpu.call(fcntl!, [reader, 3, 0])).toBe(2);
+  expect(await cpu.call(fcntl!, [reader, 4, 0x800])).toBe(0);
+  expect(await cpu.call(fcntl!, [reader, 3, 0])).toBe(0x802);
+
+  const alias = await cpu.call(dup!, [writer]);
+  expect(await cpu.call(close!, [writer])).toBe(0);
+  const byte = mem.hostAlloc(1);
+  expect(await cpu.call(recvfrom!, [reader, byte, 1, 0, 0, 0])).toBe(-1);
+  expect(mem.ld32(cpu.errnoAddr)).toBe(11);
+
+  mem.st8(byte, 0x5a);
+  expect(await cpu.call(sendto!, [alias, byte, 1, 0x4000, 0, 0])).toBe(1);
+  mem.st8(byte, 0);
+  expect(await cpu.call(recvfrom!, [reader, byte, 1, 0, 0, 0])).toBe(1);
+  expect(mem.u8[byte]).toBe(0x5a);
+
+  expect(await cpu.call(close!, [alias])).toBe(0);
+  expect(await cpu.call(recvfrom!, [reader, byte, 1, 0, 0, 0])).toBe(0);
+  expect(await cpu.call(close!, [reader])).toBe(0);
+});

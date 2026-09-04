@@ -13,6 +13,7 @@ import { glRing, glDebug } from "./gles3";
 import { emitBlock } from "./arm";
 import { emitA64Block } from "./a64";
 import { emitThumbBlock } from "./thumb";
+import { netDebug } from "./net";
 
 export const native = {
   modules,
@@ -53,7 +54,7 @@ export const native = {
   backtrace: (name: string) => { const c = [...cpus].find((c) => c.name === name); return c ? backtrace(c) : []; }, watchPcs, lastFault, allBlocks, invalidatedPages, invalidations, coldTier,
   peek: (a: number, n = 16) => Array.from(mem.bytes(a, n)).map((b) => b.toString(16).padStart(2, "0")).join(" "),
   cstr: (a: number) => mem.cstr(a),
-  glProbe, glRing, gl3: glDebug,
+  glProbe, glRing, gl3: glDebug, net: netDebug,
 };
 // a harness can arm the trace before boot: page.addInitScript(() => { globalThis.__wdNativeTrace = "regex" })
 const pre = (globalThis as { __wdNativeTrace?: string }).__wdNativeTrace;

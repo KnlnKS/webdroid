@@ -12,58 +12,7 @@ import { newArrayList, toJsArray, mkIter } from "./jutil";
 import { boxInt, stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { jarray } from "../abi";
 import type { JInputStream, JOutputStream } from "./jio";
-
-const relayUrl = (host: string, port: number, tls: boolean) =>
-  `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}` +
-  `/tcp?host=${encodeURIComponent(host)}&port=${port}${tls ? "&tls=1" : ""}`;
-
-/**
- * One WebSocket, one TCP connection. Reads suspend until bytes arrive, which is legal here
- * because every compiled method can suspend -- that is the whole reason a blocking
- * InputStream.read() works in this VM at all.
- */
-class Relay {
-  private ws: WebSocket;
-  private q: Uint8Array[] = [];
-  private qLen = 0;
-  eof = false;
-  private wake: (() => void) | null = null;
-  readonly ready: Promise<void>;
-
-  constructor(host: string, port: number, tls: boolean) {
-    const ws = (this.ws = new WebSocket(relayUrl(host, port, tls)));
-    ws.binaryType = "arraybuffer";
-    const done = () => { this.eof = true; const w = this.wake; this.wake = null; w?.(); };
-    this.ready = new Promise<void>((res, rej) => {
-      ws.onmessage = (e) => {
-        if (typeof e.data === "string") { res(); return; }   // the relay's "connected" marker
-        const b = new Uint8Array(e.data as ArrayBuffer);
-        this.q.push(b); this.qLen += b.length;
-        const w = this.wake; this.wake = null; w?.();
-      };
-      ws.onclose = () => { done(); rej(new Error("connect failed")); };
-      ws.onerror = () => { done(); rej(new Error("connect failed")); };
-    });
-    // once connected, a close is end-of-stream rather than a failed connect
-    this.ready.then(() => { ws.onclose = done; ws.onerror = done; }, () => { /* open() reports it */ });
-  }
-  available(): number { return this.qLen; }
-  async read(out: Uint8Array, off: number, len: number): Promise<number> {
-    while (this.qLen === 0 && !this.eof) await new Promise<void>((r) => (this.wake = r));
-    if (this.qLen === 0) return -1;
-    let n = 0;
-    while (n < len && this.q.length) {
-      const c = this.q[0];
-      const take = Math.min(len - n, c.length);
-      out.set(c.subarray(0, take), off + n);
-      n += take; this.qLen -= take;
-      if (take === c.length) this.q.shift(); else this.q[0] = c.subarray(take);
-    }
-    return n;
-  }
-  write(b: Uint8Array): void { if (this.ws.readyState === WebSocket.OPEN) this.ws.send(b); }
-  close(): void { try { this.ws.close(); } catch { /* already gone */ } this.eof = true; }
-}
+import { Relay } from "../../shell/relay";
 
 for (const marker of [
   "javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager",
