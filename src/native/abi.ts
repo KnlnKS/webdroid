@@ -11,25 +11,26 @@ export const LOW = 0x1_0000;
 // drift out of step with it -- including the range test flags.ts inlines into every generated
 // load and store, which used to be a literal that a resize would have left silently wrong.
 //
-// MEM_SIZE stays 256 MiB until something needs more. A 64-bit module wants real room
-// (libil2cpp.so maps 79 MiB by itself) but the buffer is charged to the JS heap in full whether
-// it is touched or not: measured in Chrome, raising it to 1 GiB took FitNotes from 352 MB of
-// usedJSHeapSize to 1,162 MB and wedged the renderer outright on a 1.1 GB apk. Widen it when a
-// module that needs it can load, not before.
-const MODULE_SPAN = 0x00F0_0000;               // ELF images
+// MEM_SIZE stays 256 MiB. A 64-bit module wants real room -- libil2cpp.so maps 79 MiB by itself
+// -- but the buffer is charged to the JS heap in full whether the guest touches it or not:
+// measured in Chrome, raising it to 1 GiB took FitNotes from 352 MB of usedJSHeapSize to
+// 1,162 MB and wedged the renderer outright on a 1.1 GB apk. So the room comes from sharing
+// rather than from growing: ELF images and the malloc arena are one region and grow toward each
+// other (mem.reserve bumps down, malloc bumps up), which is what a process does anyway and what
+// lets a 79 MiB image load without costing an app that has no .so at all a single byte.
 const STACK_SPAN = 0x0100_0000;                // thread stacks, 1 MiB + a 64 KiB guard gap each
 const HOST_SPAN = 0x0008_0000;                 // host-owned guest data: __sF, _ctype_, JNI tables, static strings
 const TRAMP_SPAN = 0x0007_0000;                // host-call trampolines, 8 bytes per slot
 
-export const MODULE_BASE = 0x0010_0000;        // ELF images, bump-allocated upward, 64 KiB aligned
-export const STACK_BASE = MODULE_BASE + MODULE_SPAN;
+export const STACK_BASE = 0x0010_0000;
 export const STACK_END = STACK_BASE + STACK_SPAN;
-export const HEAP_BASE = STACK_END;            // malloc arena
 export const TRAMP_END = MEM_SIZE - 0x1_0000;
 export const TRAMP_BASE = TRAMP_END - TRAMP_SPAN;
 export const HOST_DATA_END = TRAMP_BASE;
 export const HOST_DATA = HOST_DATA_END - HOST_SPAN;
-export const HEAP_END = HOST_DATA;
+/** the shared region: malloc bumps up from ARENA_BASE, ELF images bump down from ARENA_END */
+export const ARENA_BASE = STACK_END;
+export const ARENA_END = HOST_DATA;
 export const RET_SENTINEL = MEM_SIZE - 0x10;   // lr planted by Cpu.call; reaching it as pc ends the call
 export const STACK_SIZE = 0x10_0000;
 export const STACK_GUARD = 0x1_0000;

@@ -2,7 +2,7 @@
 // regions, and the code-page flags that let a store into executable pages invalidate the decoder.
 // See abi.ts for the address map.
 
-import { MEM_SIZE, LOW, PAGE_SHIFT, PAGE_SIZE, MODULE_BASE, STACK_BASE, STACK_END, HEAP_BASE, HEAP_END, HOST_DATA, HOST_DATA_END, STACK_GUARD } from "./abi";
+import { MEM_SIZE, LOW, PAGE_SHIFT, PAGE_SIZE, STACK_BASE, STACK_END, ARENA_BASE, ARENA_END, HOST_DATA, HOST_DATA_END, STACK_GUARD } from "./abi";
 
 export class NativeFault extends Error {
   pc = 0;
@@ -30,7 +30,7 @@ function badAddr(a: number): never {
 const CLASS_STEP = 16, SMALL_MAX = 1024;
 const smallHeads = new Int32Array(SMALL_MAX / CLASS_STEP + 1);
 const bigHeads = new Map<number, number>();
-let heapTop = HEAP_BASE, heapPeak = 0, blocks = 0, used = 0;
+let heapTop = ARENA_BASE, heapPeak = 0, blocks = 0, used = 0;
 function classSize(n: number): number {
   if (n <= SMALL_MAX) return Math.max(CLASS_STEP, (n + CLASS_STEP - 1) & ~(CLASS_STEP - 1));
   let s = 2048;
@@ -38,7 +38,8 @@ function classSize(n: number): number {
   return s;
 }
 
-let moduleTop = MODULE_BASE, stackTop = STACK_BASE, hostTop = HOST_DATA;
+// modules bump DOWN from the top of the shared arena, malloc bumps up from the bottom
+let moduleBot = ARENA_END, stackTop = STACK_BASE, hostTop = HOST_DATA;
 
 export const mem = {
   buf, u8, i8, u16, i16, u32, i32, f32, f64, dv, codePages,
@@ -87,7 +88,7 @@ export const mem = {
     if (!p) {
       p = heapTop + 8;
       heapTop = p + cs;
-      if (heapTop > HEAP_END) { heapTop = p - 8; return 0; }
+      if (heapTop > moduleBot) { heapTop = p - 8; return 0; }
       if (heapTop > heapPeak) heapPeak = heapTop;
     }
     i32[(p - 8) >>> 2] = 0;
@@ -137,9 +138,9 @@ export const mem = {
   },
   /** address space for a module image: never freed, 64 KiB aligned by default */
   reserve(size: number, align = 0x10000): number {
-    const base = (moduleTop + align - 1) & -align;
-    moduleTop = base + size;
-    if (moduleTop > STACK_BASE) throw new NativeFault("[native] out of module address space");
+    const base = (moduleBot - size) & -align;
+    if (base < heapTop) throw new NativeFault(`[native] out of module address space (${(size / 1048576).toFixed(1)} MiB wanted, ${((moduleBot - heapTop) / 1048576).toFixed(1)} free)`);
+    moduleBot = base;
     return base;
   },
   allocStack(size: number): { base: number; top: number } {
@@ -199,5 +200,5 @@ export const mem = {
     u8.set(b, p); u8[p + b.length] = 0;
     return p;
   },
-  stats(): { used: number; blocks: number; peak: number } { return { used, blocks, peak: heapPeak - HEAP_BASE }; },
+  stats(): { used: number; blocks: number; peak: number } { return { used, blocks, peak: heapPeak - ARENA_BASE }; },
 };
