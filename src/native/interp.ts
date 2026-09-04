@@ -1,21 +1,33 @@
 // The cold tier. Most of the code an app runs at load runs once; compiling each block of it to
 // a JS function costs more than running it and fills V8's bounded code space for the whole run.
 // So a block is interpreted until it has run coldTier.heat times: control flow and pc-relative
-// instructions are decoded here, every other word runs through one compiled function per
-// distinct instruction word (the emitter's own code for it, with every flag written), shared
-// by all the places that word appears. Semantics are the emitter's; only the dispatch differs.
+// instructions are decoded here, every other word runs through the emitter's own code for it,
+// with operand literals supplied by a descriptor so instruction words from one family share a
+// compiled handler. Semantics are the emitter's; only the dispatch differs.
 
 import { emitA64Word } from "./a64";
 import type { Cpu } from "./cpu";
 import type { mem as Mem } from "./mem";
 
-type WordFn = (c: Cpu, r: Int32Array, M: typeof Mem, H: Int32Array) => void;
-const words = new Map<number, WordFn>();
-export const coldStats = { words: 0, instr: 0 };
-function wordFn(w: number): WordFn {
-  let f = words.get(w);
-  if (!f) { f = new Function("c", "r", "M", "H", emitA64Word(w)) as WordFn; words.set(w, f); coldStats.words++; }
-  return f;
+type Operand = number | bigint;
+type WordFn = (c: Cpu, r: Int32Array, M: typeof Mem, H: Int32Array, operands: Operand[]) => void;
+interface Word { fn: WordFn; operands: Operand[] }
+const words = new Map<number, Word>(), handlers = new Map<string, WordFn>();
+export const coldStats = { words: 0, handlers: 0, instr: 0 };
+function wordFn(w: number): Word {
+  let record = words.get(w);
+  if (record) return record;
+  const { src, operands } = emitA64Word(w);
+  let fn = handlers.get(src);
+  if (!fn) {
+    fn = new Function("c", "r", "M", "H", "o", src) as WordFn;
+    handlers.set(src, fn);
+    coldStats.handlers++;
+  }
+  record = { fn, operands };
+  words.set(w, record);
+  coldStats.words++;
+  return record;
 }
 const sx = (v: number, bits: number) => (v << (32 - bits)) >> (32 - bits);
 const is = (word: number, mask: number, value: number) => ((word & mask) >>> 0) === value;
@@ -77,7 +89,8 @@ export function coldRun(c: Cpu, r: Int32Array, M: typeof Mem, H: Int32Array): nu
     }
     if (is(w, 0xffe0001f, 0xd4000001)) { r[32] = (pc + 4) | 0; c.svc(); return r[32] >>> 0; }   // SVC
     c.bpc = pc;                                                                // a fault names where
-    wordFn(w)(c, r, M, H);
+    const record = wordFn(w);
+    record.fn(c, r, M, H, record.operands);
     pc = (pc + 4) >>> 0;
   }
   return pc;

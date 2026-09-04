@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { emitA64Word } from "./a64";
 import { blockStats, coldTier, setA64 } from "./cpu";
 import { run, runCold, RET, pattern } from "./a64.testkit";
 import { mem } from "./mem";
@@ -54,6 +55,14 @@ describe("the cold tier agrees with the compiled tier", () => {
     } finally {
       coldTier.heat = saved;
     }
+  });
+
+  test("words in one instruction family share a handler", () => {
+    const first = emitA64Word(0x52826af1), second = emitA64Word(0x52848d13);
+    expect(first.src).toBe(second.src);
+    expect(first.operands).not.toEqual(second.operands);
+    const c = runCold([0x52826af1, 0x52848d13, RET]);             // mov w17,#0x1357; mov w19,#0x2468
+    expect([c.r[17], c.r[19]]).toEqual([0x1357, 0x2468]);
   });
 
   test("a hot entry promotes and a compiled block can return to the cold stub", () => {

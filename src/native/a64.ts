@@ -563,16 +563,48 @@ function emit(pc: number, w: number, out: Ins[], k: number, faultPc = String(pc)
   return true;
 }
 
-/** one instruction's JS with every flag written, for the cold tier (interp.ts): the words it asks for
- *  never depend on pc, so the same function serves the word wherever it appears */
-export function emitA64Word(w: number): string {
+export interface A64WordSrc { src: string; operands: (number | bigint)[] }
+const WORD_LITERAL = /(?:0[xX][\da-fA-F]+|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(?:n)?/y;
+
+/** Replace operand literals with array reads so instruction words from the same family share one
+ *  function. Quoted fault messages stay intact, including the exact offending word. */
+function wordOperands(src: string): A64WordSrc {
+  const operands: (number | bigint)[] = [];
+  let out = "", i = 0;
+  while (i < src.length) {
+    const quote = src[i];
+    if (quote === "\"" || quote === "'" || quote === "`") {
+      const start = i++;
+      while (i < src.length) {
+        if (src[i] === "\\") i += 2;
+        else if (src[i++] === quote) break;
+      }
+      out += src.slice(start, i);
+      continue;
+    }
+    const prev = i ? src.charCodeAt(i - 1) : 0;
+    WORD_LITERAL.lastIndex = i;
+    const match = !((prev >= 48 && prev <= 57) || (prev >= 65 && prev <= 90) || (prev >= 97 && prev <= 122) || prev === 36 || prev === 95)
+      ? WORD_LITERAL.exec(src) : null;
+    if (!match) { out += src[i++]; continue; }
+    const literal = match[0];
+    operands.push(literal.endsWith("n") ? BigInt(literal.slice(0, -1)) : Number(literal));
+    out += `o[${operands.length - 1}]`;
+    i += literal.length;
+  }
+  return { src: out, operands };
+}
+
+/** one instruction's JS with every flag written, for the cold tier (interp.ts): pc-independent
+ *  operand literals are descriptors, leaving one compiled handler per instruction shape */
+export function emitA64Word(w: number): A64WordSrc {
   slot = 0; redirect = -1;
   const out: Ins[] = [];
   emit(0, w, out, 1, "c.bpc");
   const body = assemble(out);
   let views = "";
   for (const [name, expr] of Object.entries(VIEWS)) if (new RegExp(`\\b${name}\\[`).test(body)) views += `,${name}=${expr}`;
-  return `let t,a,ah,th,v,vh,s,m1${views};${body}`;
+  return wordOperands(`let t,a,ah,th,v,vh,s,m1${views};${body}`);
 }
 
 /** compile the basic block at `pc` to JS source */
