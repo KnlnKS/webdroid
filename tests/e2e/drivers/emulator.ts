@@ -1,7 +1,7 @@
 // Emulator driver — adb + uiautomator. Imported ONLY by capture-emulator.ts.
 // Nothing on the diff path may reach this file; `bun run e2e` must work with no Android SDK.
 import { SCREEN_W, SCREEN_H, type UiNode } from "../types";
-import { sleep, sha1 } from "../lib/util";
+import { sleep, settleOn } from "../lib/util";
 
 const ADB = process.env.ADB ?? "adb";
 
@@ -31,19 +31,7 @@ async function screencap(): Promise<Buffer> {
 export async function settle(
   { stableFrames = 4, intervalMs = 350, timeoutMs = 20000 } = {},
 ): Promise<{ png: Buffer; timedOut: boolean }> {
-  const t0 = Date.now();
-  let last = "";
-  let stable = 0;
-  let png = await screencap();
-  while (Date.now() - t0 < timeoutMs) {
-    png = await screencap();
-    const h = sha1(png);
-    stable = h === last ? stable + 1 : 0;
-    last = h;
-    if (stable >= stableFrames) return { png, timedOut: false };
-    await sleep(intervalMs);
-  }
-  return { png, timedOut: true };
+  return settleOn(screencap, { stableFrames, intervalMs, timeoutMs });
 }
 
 /**

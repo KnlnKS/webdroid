@@ -113,7 +113,7 @@ export function analyseSuspend(
           virtualSites.add(site);
           edge("@" + site, self);
         }
-      } else if (op === 0x22 || op === 0x24 || op === 0x25) {    // new-instance, filled-new-array
+      } else if (op === 0x22 || op === 0x24 || op === 0x25) {    // new-instance, filled-new-array{,/range}
         initOf(descToName(dex.type(insns[pc + 1])), self);
       } else if (op >= 0x60 && op <= 0x6d) {                     // sget/sput
         initOf(descToName(dex.type(dex.field(insns[pc + 1]).cls)), self);

@@ -113,10 +113,6 @@ export function compileClassSource(R: Runtime, dex: DexFile, info: ClassInfo): s
   return out.join("\n");
 }
 
-/** `C.prototype.m$x = function(p0){ return (cell || (cell = R.lz(C, i))).call(this, p0) }`
- *  — the cell keeps already-captured references (D.dp direct-dispatch slots, interface
- *  default methods copied down) one call away, while fresh virtual dispatch finds the real
- *  function R.lz installed on the prototype. */
 /** the bootstrap a call_site links through, for the missing-API report. Best effort:
  *  a dex we cannot read the call site out of still has to compile the rest of its class. */
 function bootstrapName(dex: DexFile, callSiteIdx: number): string {
@@ -131,6 +127,10 @@ function bootstrapName(dex: DexFile, callSiteIdx: number): string {
   }
 }
 
+/** `C.prototype.m$x = function(p0){ return (cell || (cell = R.lz(C, i))).call(this, p0) }`
+ *  — the cell keeps already-captured references (D.dp direct-dispatch slots, interface
+ *  default methods copied down) one call away, while fresh virtual dispatch finds the real
+ *  function R.lz installed on the prototype. */
 function emitLazy(dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const isStatic = (m.flags & ACC.STATIC) !== 0;

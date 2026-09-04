@@ -524,7 +524,9 @@ const M_cancel = mangleMethod("cancel", "()V");
 // ── AnimatorInflater: <objectAnimator>/<set> resources, and <selector> state-list animators
 const A = attrTable(
   "propertyName", "duration", "valueFrom", "valueTo", "valueType", "startOffset", "repeatCount",
-  "ordering");function xmlAttr(res: Resources, node: XmlNode, id: number): RV | null {
+  "ordering");
+
+function xmlAttr(res: Resources, node: XmlNode, id: number): RV | null {
   const a: XmlAttr | undefined = id ? node.attrs.find((x) => x.resId === id) : undefined;
   if (!a) return null;
   return a.type === TV.STRING ? { t: T_STR, d: 0, s: a.str ?? "" } : res.resolveRefs(normRV({ t: a.type, d: a.data }));

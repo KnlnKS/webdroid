@@ -140,7 +140,7 @@ export function symbolize(mods: Iterable<Module>, pc: number): string {
     const a = m.symbols.addr;
     let lo = 0, hi = a.length - 1, best = -1;
     while (lo <= hi) { const mid = (lo + hi) >> 1; if (a[mid] <= pc) { best = mid; lo = mid + 1; } else hi = mid - 1; }
-    // the nearest preceding symbol, skipping the zero-sized aliases that share an address
+    // the nearest preceding symbol
     const off = pc - m.base;
     if (best >= 0) return `${m.name}!${m.symbols.names[best]}+0x${(pc - a[best]).toString(16)} (+0x${off.toString(16)})`;
     return `${m.name}+0x${off.toString(16)}`;

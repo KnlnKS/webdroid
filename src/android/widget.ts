@@ -713,7 +713,9 @@ const tvAttr = attrTable(
   "minLines", "lines", "singleLine", "ellipsize", "lineSpacingExtra", "lineSpacingMultiplier",
   "drawableLeft", "drawableTop", "drawableRight", "drawableBottom", "drawablePadding", "drawableStart",
   "drawableEnd", "fontFamily", "textAllCaps", "textColorHint", "inputType", "letterSpacing", "maxLength",
-  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth");async function applyTextAppearance(tv: JTextView, res: Resources, styleId: number) {
+  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth");
+
+async function applyTextAppearance(tv: JTextView, res: Resources, styleId: number) {
   if (!styleId) return;
   const look = (name: string) => resolveStyleValue(res, tv.theme, res.styleLookup(styleId, AID(name)));
   const ts = look("textSize");

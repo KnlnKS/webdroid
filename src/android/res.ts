@@ -2,6 +2,10 @@
 // resource id. Implements the full attribute-resolution cascade (XML → style → defStyle → theme).
 
 import { Arsc } from "./arsc";
+import { TV, parseAXML, type XmlNode } from "./axml";
+import { JObj } from "../jvm/runtime";
+import { JDisplayMetrics, JTypedValue, complexToPx } from "./os";
+import { mangleMethod, intBitsToFloat } from "../jvm/abi";
 
 let fwPkg: Arsc | null = null;
 const aidMemo = new Map<string, number>();
@@ -46,10 +50,6 @@ export function setFramework(a: Arsc): void {
   aidMemo.clear();
   for (const fill of deferred) fill();
 }
-import { TV, parseAXML, type XmlNode } from "./axml";
-import { JObj } from "../jvm/runtime";
-import { JDisplayMetrics, JTypedValue, complexToPx } from "./os";
-import { mangleMethod, intBitsToFloat } from "../jvm/abi";
 
 const M_getTheme = mangleMethod("getTheme", "()Landroid/content/res/Resources$Theme;");
 
