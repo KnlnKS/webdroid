@@ -55,6 +55,7 @@ export class Args implements ArgReader {
   strAt(p: number): string { return mem.cstr(p); }
 }
 
+/** the ILP32 va_list: a flat cursor over the caller's stack */
 export class VaList implements ArgReader {
   constructor(private a: number) {}
   i(): number { const v = mem.ld32(this.a); this.a += 4; return v; }
@@ -69,6 +70,40 @@ export class VaList implements ArgReader {
   strAt(p: number): string { return mem.cstr(p); }
   get addr(): number { return this.a; }
 }
+
+/** AAPCS64's va_list is a struct: {__stack, __gr_top, __vr_top, __gr_offs, __vr_offs}. A general
+ *  argument comes from the register save area at gr_top + gr_offs while gr_offs is negative, then
+ *  from 8-byte stack slots; an FP one likewise from 16-byte slots at vr_top + vr_offs. The offsets
+ *  are kept here, not written back: no caller reuses the list after a v*printf or Call*MethodV. */
+export class VaList64 implements ArgReader {
+  private stack: number; private grTop: number; private vrTop: number; private grOffs: number; private vrOffs: number;
+  constructor(a: number) { this.stack = ldp(a); this.grTop = ldp(a + 8); this.vrTop = ldp(a + 16); this.grOffs = mem.ld32(a + 24); this.vrOffs = mem.ld32(a + 32); }
+  private slot(): number { const p = (this.stack + 7) & ~7; this.stack = p + 8; return p; }
+  private gp(): number {
+    if (this.grOffs >= 0) return this.slot();
+    const p = this.grTop + this.grOffs;
+    this.grOffs += 8;
+    return this.grOffs > 0 ? this.slot() : p;
+  }
+  private fp(): number {
+    if (this.vrOffs >= 0) return this.slot();
+    const p = this.vrTop + this.vrOffs;
+    this.vrOffs += 16;
+    return this.vrOffs > 0 ? this.slot() : p;
+  }
+  i(): number { return mem.ld32(this.gp()); }
+  u(): number { return this.i() >>> 0; }
+  p(): number { return ldp(this.gp()); }
+  l(): bigint { return mem.ld64(this.gp()); }
+  ul(): bigint { return BigInt.asUintN(64, this.l()); }
+  f(): number { return this.d(); }   // a float vararg is promoted to double
+  d(): number { return mem.ldf64(this.fp()); }
+  vd(): number { return this.d(); }
+  str(): string { return mem.cstr(this.p()); }
+  strAt(p: number): string { return mem.cstr(p); }
+}
+/** the va_list the process ABI defines, over the guest pointer `a` */
+export function vaList(a: number): ArgReader { return PTR === 8 ? new VaList64(a) : new VaList(a); }
 
 /** The guest's pointer width: 8 for LP64 (arm64), 4 for ILP32 (arm). Set with the process ABI
  *  by Cpu.setAbi, and read by everything that lays out a struct or a function table for the

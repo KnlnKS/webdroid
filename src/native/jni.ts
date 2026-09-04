@@ -2,7 +2,7 @@
 // between guest natives (AAPCS words) and the JVM's value model.
 
 import { mem } from "./mem";
-import { defineHost, type HostFn, VaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet } from "./host";
+import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet } from "./host";
 import { Cpu, cpuFor, type CallArg } from "./cpu";
 import { rt, JObj, type ClassInfo } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, newPrimArray } from "../jvm/abi";
@@ -251,7 +251,7 @@ export function jniInit(): void {
     } catch (e) { pend(cpu, rt.jx(e)); return 0; }
   };
   def(28, "NewObject", newObject((m, a) => readArgs(m.params, a)));
-  def(29, "NewObjectV", newObject((m, a) => readArgs(m.params, new VaList(a.p()))));
+  def(29, "NewObjectV", newObject((m, a) => readArgs(m.params, vaList(a.p()))));
   def(30, "NewObjectA", newObject((m, a) => readJvalues(m.params, a.p())));
   def(31, "GetObjectClass", (_c, a) => { a.p(); const o = deref(a.p()); return o === null ? 0 : toRef(rt.classFor(clsName(o))); });
   def(32, "IsInstanceOf", (_c, a) => { a.p(); const o = deref(a.p()); const i = infoOf(a.p()); return o === null ? 1 : i ? rt.iof(o, i.name) : 0; });
@@ -273,7 +273,7 @@ export function jniInit(): void {
     const P = PRIM[k];
     const mk = (base: number, kind: "virtual" | "nonvirtual" | "static") => {
       const readers: ((m: MethodRec, a: ArgReader) => unknown[])[] = [
-        (m, a) => readArgs(m.params, a), (m, a) => readArgs(m.params, new VaList(a.p())), (m, a) => readJvalues(m.params, a.p()),
+        (m, a) => readArgs(m.params, a), (m, a) => readArgs(m.params, vaList(a.p())), (m, a) => readJvalues(m.params, a.p()),
       ];
       const suffix = ["", "V", "A"];
       for (let v = 0; v < 3; v++) {

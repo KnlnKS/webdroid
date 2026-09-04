@@ -1,8 +1,9 @@
-// bionic (32-bit ARM) libc surface: strings, memory, time, ctype, math, process stubs, sockets
-// that fail honestly. Struct layouts live in LAYOUT. stdio is in stdio.ts, printf/scanf in printf.ts.
+// bionic libc surface: strings, memory, time, ctype, math, process stubs, sockets that fail
+// honestly. Struct layouts live in LAYOUT, chosen by the process ABI. stdio is in stdio.ts,
+// printf/scanf in printf.ts.
 
 import { mem, NativeFault } from "./mem";
-import { hostLib, hostData, NORET, VaList, type HostFn, retF, retD, PTR } from "./host";
+import { hostLib, hostData, NORET, vaList, type HostFn, retF, retD, PTR, stp, ldp } from "./host";
 import { E } from "./abi";
 import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
@@ -11,14 +12,32 @@ import { pthreadInit } from "./pthread";
 import { zlibInit } from "./zlib";
 import { MONTHS, DAYS } from "../jvm/natives/jtime";
 
-/** bionic 32-bit ARM struct offsets/sizes (one block, see CONTRACT). */
-export const LAYOUT = {
+/** bionic struct offsets/sizes, one block per ABI; LAYOUT is the process's, chosen in libcInit. */
+const LAYOUT32 = {
   FILE_SIZE: 84, F_P: 0, F_R: 4, F_W: 8, F_FLAGS: 12, F_FILE: 14, F_BF_BASE: 16, F_BF_SIZE: 20, F_LBFSIZE: 24, F_COOKIE: 28,
   STAT_SIZE: 104, ST_INO32: 12, ST_MODE: 16, ST_NLINK: 20, ST_UID: 24, ST_GID: 28, ST_SIZE: 48, ST_BLKSIZE: 56, ST_BLOCKS: 64,
   ST_ATIME: 72, ST_MTIME: 80, ST_CTIME: 88, ST_INO: 96,
   DIRENT_SIZE: 276, D_INO: 0, D_OFF: 8, D_RECLEN: 16, D_TYPE: 18, D_NAME: 19,
-  TM_SIZE: 44, UTSNAME_FIELD: 65, JMPBUF_SIZE: 256,
-} as const;
+  TM_SIZE: 44, TM_GMTOFF: 36, TM_ZONE: 40, TS_SEC: 0, TS_NSEC: 4, TS_SIZE: 8, UTSNAME_FIELD: 65, JMPBUF_SIZE: 256,
+  SIGACTION_SIZE: 140, STATFS_SIZE: 88,
+};
+const LAYOUT64: typeof LAYOUT32 = {
+  FILE_SIZE: 152, F_P: 0, F_R: 8, F_W: 12, F_FLAGS: 16, F_FILE: 18, F_BF_BASE: 24, F_BF_SIZE: 32, F_LBFSIZE: 40, F_COOKIE: 48,
+  STAT_SIZE: 128, ST_INO32: 8, ST_MODE: 16, ST_NLINK: 20, ST_UID: 24, ST_GID: 28, ST_SIZE: 48, ST_BLKSIZE: 56, ST_BLOCKS: 64,
+  ST_ATIME: 72, ST_MTIME: 88, ST_CTIME: 104, ST_INO: 8,
+  DIRENT_SIZE: 280, D_INO: 0, D_OFF: 8, D_RECLEN: 16, D_TYPE: 18, D_NAME: 19,
+  TM_SIZE: 56, TM_GMTOFF: 40, TM_ZONE: 48, TS_SEC: 0, TS_NSEC: 8, TS_SIZE: 16, UTSNAME_FIELD: 65, JMPBUF_SIZE: 256,
+  SIGACTION_SIZE: 32, STATFS_SIZE: 120,
+};
+export let LAYOUT = LAYOUT32;
+/** a struct timespec / timeval as milliseconds, and back (the second field is nanoseconds or microseconds) */
+export function readTs(p: number, unit = 1e6): number { return mem.ld32(p + LAYOUT.TS_SEC) * 1000 + mem.ld32(p + LAYOUT.TS_NSEC) / unit; }
+export function writeTs(p: number, ms: number, unit = 1e6): void {
+  stp(p + LAYOUT.TS_SEC, Math.floor(ms / 1000));
+  stp(p + LAYOUT.TS_NSEC, Math.floor((ms % 1000) * unit));
+}
+/** an off_t argument: 64-bit on LP64, 32-bit on ILP32 */
+export const offArg = (a: { i(): number; l(): bigint }) => (PTR === 8 ? Number(a.l()) : a.i());
 
 function setErrno(cpu: Cpu, e: number): void { mem.st32(cpu.errnoAddr, e); }
 /** the common "-1 and errno" return */
@@ -59,7 +78,7 @@ function strtoNum(cpu: Cpu, s: number, endp: number, base: number, bits: 32 | 64
     v = v * BigInt(base) + BigInt(d); any = true; p++;
   }
   if (!any) p = s;
-  if (endp) mem.st32(endp, any ? p : s);
+  if (endp) stp(endp, any ? p : s);
   if (neg) v = -v;
   const max = unsigned ? (1n << BigInt(bits)) - 1n : (1n << BigInt(bits - 1)) - 1n, min = unsigned ? 0n : -(1n << BigInt(bits - 1));
   if (v > max) { setErrno(cpu, E.RANGE); return max; }
@@ -69,8 +88,8 @@ function strtoNum(cpu: Cpu, s: number, endp: number, base: number, bits: 32 | 64
 function strtodAt(s: number, endp: number): number {
   const str = mem.cstr(s, 512);
   const m = /^\s*([+-]?(?:inf(?:inity)?|nan|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|0[xX][0-9a-fA-F.]+(?:[pP][+-]?\d+)?))/i.exec(str);
-  if (!m) { if (endp) mem.st32(endp, s); return 0; }
-  if (endp) mem.st32(endp, s + utf8(m[0]).length);
+  if (!m) { if (endp) stp(endp, s); return 0; }
+  if (endp) stp(endp, s + utf8(m[0]).length);
   const t = m[1].toLowerCase();
   if (t.includes("inf")) return t[0] === "-" ? -Infinity : Infinity;
   if (t.includes("nan")) return NaN;
@@ -83,9 +102,10 @@ function fillTm(tm: number, d: Date, utc: boolean): void {
     : { s: d.getSeconds(), mi: d.getMinutes(), h: d.getHours(), md: d.getDate(), mo: d.getMonth(), y: d.getFullYear(), wd: d.getDay() };
   const jan1 = utc ? Date.UTC(g.y, 0, 1) : new Date(g.y, 0, 1).getTime();
   const yday = Math.floor(((utc ? Date.UTC(g.y, g.mo, g.md) : new Date(g.y, g.mo, g.md).getTime()) - jan1) / 86400000);
-  const f = [g.s, g.mi, g.h, g.md, g.mo, g.y - 1900, g.wd, yday, 0, utc ? 0 : tzOffsetMin() * 60];
+  const f = [g.s, g.mi, g.h, g.md, g.mo, g.y - 1900, g.wd, yday, 0];
   for (let i = 0; i < f.length; i++) mem.st32(tm + i * 4, f[i]);
-  mem.st32(tm + 40, tznames[utc ? 0 : 1]);
+  stp(tm + LAYOUT.TM_GMTOFF, utc ? 0 : tzOffsetMin() * 60);
+  stp(tm + LAYOUT.TM_ZONE, tznames[utc ? 0 : 1]);
 }
 function readTm(tm: number): number[] { const f: number[] = []; for (let i = 0; i < 9; i++) f.push(mem.ld32(tm + i * 4)); return f; }
 function strftime(fmt: string, tm: number): string {
@@ -117,15 +137,25 @@ function mktime(tm: number): number {
 }
 let tznames: number[] = [0, 0];
 
-// ── setjmp/longjmp: the register file (r4–r14) lives in the guest jmp_buf itself
+// ── setjmp/longjmp: the callee-saved registers live in the guest jmp_buf itself — r4–r14 on
+// ARM, x19–x30 + sp + d8–d15 on A64 (168 of the buffer's 256 bytes)
 function setjmp(cpu: Cpu, buf: number): number {
-  for (let i = 4; i <= 14; i++) mem.st32(buf + (i - 4) * 4, cpu.r[i]);
+  if (!cpu.a64) { for (let i = 4; i <= 14; i++) mem.st32(buf + (i - 4) * 4, cpu.r[i]); return 0; }
+  for (let i = 19; i <= 31; i++) { mem.st32(buf + (i - 19) * 8, cpu.r[i]); mem.st32(buf + (i - 19) * 8 + 4, cpu.h[i]); }
+  for (let k = 8; k <= 15; k++) { mem.st32(buf + 104 + (k - 8) * 8, cpu.si[4 * k]); mem.st32(buf + 108 + (k - 8) * 8, cpu.si[4 * k + 1]); }
   return 0;
 }
 function longjmp(cpu: Cpu, buf: number, val: number): typeof NORET {
-  for (let i = 4; i <= 14; i++) cpu.r[i] = mem.ld32(buf + (i - 4) * 4);
-  cpu.r[0] = val || 1;
-  cpu.setPc(cpu.r[14]);
+  if (!cpu.a64) {
+    for (let i = 4; i <= 14; i++) cpu.r[i] = mem.ld32(buf + (i - 4) * 4);
+    cpu.r[0] = val || 1;
+    cpu.setPc(cpu.r[14]);
+    return NORET;
+  }
+  for (let i = 19; i <= 31; i++) { cpu.r[i] = mem.ld32(buf + (i - 19) * 8); cpu.h[i] = mem.ld32(buf + (i - 19) * 8 + 4); }
+  for (let k = 8; k <= 15; k++) { cpu.si[4 * k] = mem.ld32(buf + 104 + (k - 8) * 8); cpu.si[4 * k + 1] = mem.ld32(buf + 108 + (k - 8) * 8); }
+  cpu.r[0] = val || 1; cpu.h[0] = 0;
+  cpu.setPc(cpu.r[30]);
   return NORET;
 }
 
@@ -139,17 +169,18 @@ const A48 = 0x5deece66dn, C48 = 0xbn, M48 = (1n << 48n) - 1n;
 const next48 = () => { r48 = (A48 * r48 + C48) & M48; return Number(r48 >> 17n); };
 
 export function libcInit(): void {
+  LAYOUT = PTR === 8 ? LAYOUT64 : LAYOUT32;
   // _ctype_ (257 bytes, index c+1), tzname
   const ct = mem.hostAlloc(384);
   for (let c = 0; c < 256; c++) u8[ct + 1 + c] = c < 128 ? ctypeBits(c) : 0;
   hostData("libc.so", "_ctype_", ct);
   tznames = [mem.hostStr("UTC"), mem.hostStr("UTC")];
-  const tzn = mem.hostAlloc(8);
-  mem.st32(tzn, tznames[0]); mem.st32(tzn + 4, tznames[1]);
+  const tzn = mem.hostAlloc(2 * PTR);
+  stp(tzn, tznames[0]); stp(tzn + PTR, tznames[1]);
   hostData("libc.so", "tzname", tzn);
-  hostData("libc.so", "timezone", mem.hostAlloc(4));
+  hostData("libc.so", "timezone", mem.hostAlloc(8));
   hostData("libc.so", "daylight", mem.hostAlloc(4));
-  hostData("libc.so", "environ", mem.hostAlloc(4));
+  hostData("libc.so", "environ", mem.hostAlloc(PTR));
   const optErr = mem.hostAlloc(4); hostData("libc.so", "opterr", optErr);
   const upperTab = mem.hostAlloc(384), lowerTab = mem.hostAlloc(384);
   for (let c = -128; c < 256; c++) { u8[upperTab + 128 + c] = c >= 97 && c <= 122 ? c - 32 : c & 255; u8[lowerTab + 128 + c] = c >= 65 && c <= 90 ? c + 32 : c & 255; }
@@ -181,7 +212,7 @@ export function libcInit(): void {
     getppid: () => 1,
     raise: (cpu, a) => { const sig = a.i(); if (sig === 6 || sig === 11 || sig === 9) cpu.fault(`raise(${sig})`); return 0; },
     kill: () => 0,
-    sigaction: (_c, a) => { a.i(); a.p(); const old = a.p(); if (old) mem.memset(old, 0, 140); return 0; },
+    sigaction: (_c, a) => { a.i(); a.p(); const old = a.p(); if (old) mem.memset(old, 0, LAYOUT.SIGACTION_SIZE); return 0; },
     bsd_signal: () => 0, signal: () => 0, sigprocmask: () => 0, sigemptyset: () => 0, sigaddset: () => 0,
     nice: () => 0, setpriority: () => 0, getpriority: () => 0,
     sched_yield: () => 0,
@@ -215,7 +246,7 @@ export function libcInit(): void {
     mmap: (cpu, a) => { a.p(); const n = a.u(); a.i(); a.i(); const fd = a.i(); if (fd !== -1) return fail(cpu, E.NOSYS) >>> 0; const p = mem.valloc(n); if (!p) return fail(cpu, E.NOMEM) >>> 0; mem.memset(p, 0, n); return p; },
     munmap: (_c, a) => { mem.free(a.p()); return 0; },
     madvise: () => 0, msync: () => 0,
-    getrlimit: (_c, a) => { a.i(); const r = a.p(); mem.st32(r, 0x100000); mem.st32(r + 4, 0x100000); return 0; },
+    getrlimit: (_c, a) => { a.i(); const r = a.p(); stp(r, 0x100000); stp(r + PTR, 0x100000); return 0; },
     setrlimit: () => 0,
     syscall: (cpu) => fail(cpu, E.NOSYS),
     prctl: () => 0,
@@ -228,7 +259,7 @@ export function libcInit(): void {
     realloc: (_c, a) => mem.realloc(a.p(), a.u()),
     valloc: (_c, a) => mem.valloc(a.u()),
     memalign: (_c, a) => mem.memalign(a.u(), a.u()),
-    posix_memalign: (_c, a) => { const out = a.p(), al = a.u(), n = a.u(); mem.st32(out, mem.memalign(al, n)); return 0; },
+    posix_memalign: (_c, a) => { const out = a.p(), al = a.u(), n = a.u(); stp(out, mem.memalign(al, n)); return 0; },
     malloc_usable_size: (_c, a) => mem.usableSize(a.p()),
     memcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memcpy(d, s, n); return d; },
     memmove: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n); return d; },
@@ -287,12 +318,13 @@ export function libcInit(): void {
     strtok_r: (_c, a) => { const s = a.p(), d = a.p(), save = a.p(); return strtokR(s, d, save); },
     strerror: (_c, a) => { mem.putCstr(strerrorBuf, ERRSTR[a.i()] ?? `Unknown error ${a.i()}`, 64); return strerrorBuf; },
     strerror_r: (_c, a) => { const e = a.i(), b = a.p(), n = a.u(); mem.putCstr(b, ERRSTR[e] ?? `Unknown error ${e}`, n); return 0; },
-    strtol: (cpu, a) => Number(strtoNum(cpu, a.p(), a.p(), a.i(), 32, false)),
-    strtoul: (cpu, a) => Number(strtoNum(cpu, a.p(), a.p(), a.i(), 32, true)) | 0,
+    // long is 64-bit on LP64
+    strtol: (cpu, a) => (PTR === 8 ? strtoNum(cpu, a.p(), a.p(), a.i(), 64, false) : Number(strtoNum(cpu, a.p(), a.p(), a.i(), 32, false))),
+    strtoul: (cpu, a) => (PTR === 8 ? strtoNum(cpu, a.p(), a.p(), a.i(), 64, true) : Number(strtoNum(cpu, a.p(), a.p(), a.i(), 32, true)) | 0),
     strtoll: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), 64, false),
     strtoull: (cpu, a) => strtoNum(cpu, a.p(), a.p(), a.i(), 64, true),
     atoi: (cpu, a) => Number(strtoNum(cpu, a.p(), 0, 10, 32, false)),
-    atol: (cpu, a) => Number(strtoNum(cpu, a.p(), 0, 10, 32, false)),
+    atol: (cpu, a) => (PTR === 8 ? strtoNum(cpu, a.p(), 0, 10, 64, false) : Number(strtoNum(cpu, a.p(), 0, 10, 32, false))),
     atoll: (cpu, a) => strtoNum(cpu, a.p(), 0, 10, 64, false),
     strtod: (c, a) => retD(c, strtodAt(a.p(), a.p())),
     strtof: (c, a) => retF(c, Math.fround(strtodAt(a.p(), a.p()))),
@@ -351,22 +383,21 @@ export function libcInit(): void {
     // ── formatting (printf family that lands in memory; the FILE ones live in stdio.ts)
     sprintf: (_c, a) => { const d = a.p(), f = a.str(); return mem.putCstr(d, format(f, a)); },
     snprintf: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(); const s = format(f, a); const b = utf8(s); if (n > 0) { const k = Math.min(b.length, n - 1); u8.set(b.subarray(0, k), d); u8[d + k] = 0; } return b.length; },
-    vsprintf: (_c, a) => { const d = a.p(), f = a.str(); return mem.putCstr(d, format(f, new VaList(a.p()))); },
-    vsnprintf: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(); const s = format(f, new VaList(a.p())); const b = utf8(s); if (n > 0) { const k = Math.min(b.length, n - 1); u8.set(b.subarray(0, k), d); u8[d + k] = 0; } return b.length; },
-    vasprintf: (_c, a) => { const out = a.p(), f = a.str(); const s = format(f, new VaList(a.p())); mem.st32(out, mem.strdup(s)); return utf8(s).length; },
-    asprintf: (_c, a) => { const out = a.p(), f = a.str(); const s = format(f, a); mem.st32(out, mem.strdup(s)); return utf8(s).length; },
+    vsprintf: (_c, a) => { const d = a.p(), f = a.str(); return mem.putCstr(d, format(f, vaList(a.p()))); },
+    vsnprintf: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(); const s = format(f, vaList(a.p())); const b = utf8(s); if (n > 0) { const k = Math.min(b.length, n - 1); u8.set(b.subarray(0, k), d); u8[d + k] = 0; } return b.length; },
+    vasprintf: (_c, a) => { const out = a.p(), f = a.str(); const s = format(f, vaList(a.p())); stp(out, mem.strdup(s)); return utf8(s).length; },
+    asprintf: (_c, a) => { const out = a.p(), f = a.str(); const s = format(f, a); stp(out, mem.strdup(s)); return utf8(s).length; },
     sscanf: (_c, a) => { const s = a.str(), f = a.str(); return scanInto(s, f, a); },
-    vsscanf: (_c, a) => { const s = a.str(), f = a.str(); return scanInto(s, f, new VaList(a.p())); },
+    vsscanf: (_c, a) => { const s = a.str(), f = a.str(); return scanInto(s, f, vaList(a.p())); },
 
-    time: (_c, a) => { const p = a.p(); const t = Math.floor(Date.now() / 1000); if (p) mem.st32(p, t); return t; },
-    gettimeofday: (_c, a) => { const tv = a.p(); if (tv) { const ms = Date.now(); mem.st32(tv, Math.floor(ms / 1000)); mem.st32(tv + 4, (ms % 1000) * 1000); } return 0; },
+    time: (_c, a) => { const p = a.p(); const t = Math.floor(Date.now() / 1000); if (p) stp(p, t); return t; },
+    gettimeofday: (_c, a) => { const tv = a.p(); if (tv) writeTs(tv, Date.now(), 1e3); return 0; },
     clock_gettime: (_c, a) => {
       const id = a.i(), ts = a.p();
-      const ms = id === 0 ? Date.now() : performance.now() + 1000; // MONOTONIC/BOOTTIME: never 0
-      mem.st32(ts, Math.floor(ms / 1000)); mem.st32(ts + 4, Math.floor((ms % 1000) * 1e6));
+      writeTs(ts, id === 0 ? Date.now() : performance.now() + 1000); // MONOTONIC/BOOTTIME: never 0
       return 0;
     },
-    clock_getres: (_c, a) => { a.i(); const ts = a.p(); if (ts) { mem.st32(ts, 0); mem.st32(ts + 4, 1000); } return 0; },
+    clock_getres: (_c, a) => { a.i(); const ts = a.p(); if (ts) { stp(ts + LAYOUT.TS_SEC, 0); stp(ts + LAYOUT.TS_NSEC, 1000); } return 0; },
     clock: () => Math.floor(performance.now() * 1000),
     times: () => Math.floor(performance.now() / 10),
     localtime_r: (_c, a) => { const t = mem.ld32(a.p()), tm = a.p(); fillTm(tm, new Date(t * 1000), false); return tm; },
@@ -441,7 +472,7 @@ export function libcInit(): void {
 
     __android_log_write: (_c, a) => { const prio = a.i(), tag = a.str(), msg = a.str(); logLine(prio, tag, msg); return 1; },
     __android_log_print: (_c, a) => { const prio = a.i(), tag = a.str(), f = a.str(); logLine(prio, tag, format(f, a)); return 1; },
-    __android_log_vprint: (_c, a) => { const prio = a.i(), tag = a.str(), f = a.str(); logLine(prio, tag, format(f, new VaList(a.p()))); return 1; },
+    __android_log_vprint: (_c, a) => { const prio = a.i(), tag = a.str(), f = a.str(); logLine(prio, tag, format(f, vaList(a.p()))); return 1; },
     __android_log_assert: (cpu, a) => { a.p(); const tag = a.str(); const f = a.p(); cpu.fault(`assert ${tag}: ${f ? format(mem.cstr(f), a) : ""}`); },
   };
   hostLib("libc.so", M);
@@ -451,8 +482,8 @@ export function libcInit(): void {
   const inetBuf = mem.hostAlloc(20);
   const gaiStr = mem.hostStr("Temporary failure in name resolution");
   const cLocale = mem.hostStr("C");
-  const localeConv = mem.hostAlloc(64);
-  mem.st32(localeConv, mem.hostStr(".")); mem.st32(localeConv + 4, mem.hostStr("")); mem.st32(localeConv + 8, mem.hostStr(""));
+  const localeConv = mem.hostAlloc(16 * PTR);
+  stp(localeConv, mem.hostStr(".")); stp(localeConv + PTR, mem.hostStr("")); stp(localeConv + 2 * PTR, mem.hostStr(""));
   stdioInit();
   pthreadInit();
   zlibInit();
@@ -489,9 +520,9 @@ function strtok(cpu: Cpu, s: number, delim: number, _z: number): number {
   return r.tok;
 }
 function strtokR(s: number, delim: number, save: number): number {
-  if (!s) s = mem.ld32(save);
+  if (!s) s = ldp(save);
   const r = strtokAt(s, mem.cstr(delim));
-  mem.st32(save, r.next);
+  stp(save, r.next);
   return r.tok;
 }
 function strtokAt(s: number, delim: string): { tok: number; next: number } {

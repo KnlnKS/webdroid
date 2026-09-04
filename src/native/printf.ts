@@ -1,6 +1,6 @@
 // C99 printf/scanf formatting over an ArgReader (registers+stack, a va_list, or a JS array in tests).
 
-import type { ArgReader } from "./host";
+import { PTR, type ArgReader } from "./host";
 
 function pad(s: string, width: number, left: boolean, zero: boolean): string {
   if (s.length >= width) return s;
@@ -62,7 +62,7 @@ export function format(fmt: string, args: ArgReader): string {
     let len = "";
     while ("hlLqjzt".includes(fmt[i])) { len += fmt[i]; i++; }
     const conv = fmt[i];
-    const isLL = len === "ll" || len === "L" || len === "q" || len === "j";
+    const isLL = len === "ll" || len === "L" || len === "q" || len === "j" || (PTR === 8 && (len === "l" || len === "z" || len === "t"));
     let s: string;
     switch (conv) {
       case "d": case "i": {
@@ -179,7 +179,7 @@ export function scan(input: string, fmt: string, out: ScanSink): number {
       const text = input.slice(pos, j);
       pos = j;
       if (suppress) continue;
-      const isLL = len === "ll" || len === "L" || len === "q" || len === "j";
+      const isLL = len === "ll" || len === "L" || len === "q" || len === "j" || (PTR === 8 && (len === "l" || len === "z" || len === "t"));
       const neg = text[0] === "-";
       const body = text.replace(/^[+-]/, "").replace(/^0[xX]/, "");
       let v = 0n;

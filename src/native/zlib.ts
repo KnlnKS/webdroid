@@ -2,10 +2,12 @@
 
 import { Inflate, Unzlib } from "fflate";
 import { mem } from "./mem";
-import { hostLib, type HostFn } from "./host";
+import { hostLib, type HostFn, PTR, stp, ldp } from "./host";
 
-// z_stream (32-bit): next_in 0, avail_in 4, total_in 8, next_out 12, avail_out 16, total_out 20,
-// msg 24, state 28, zalloc 32, zfree 36, opaque 40, data_type 44, adler 48, reserved 52
+// z_stream: next_in, avail_in, total_in, next_out, avail_out, total_out, msg, state, ... — pointer
+// and ulong fields, so the offsets follow the pointer width (32-bit: 0/4/8/12/16/20/24/28;
+// LP64: 0/8/16/24/32/40/48/56, 112 bytes in all)
+let Z = { IN: 0, AVIN: 4, TIN: 8, OUT: 12, AVOUT: 16, TOUT: 20, MSG: 24, STATE: 28 };
 const Z_OK = 0, Z_STREAM_END = 1, Z_STREAM_ERROR = -2, Z_DATA_ERROR = -3, Z_BUF_ERROR = -5;
 
 interface Stream { st: Inflate | Unzlib; out: Uint8Array[]; done: boolean; err: string | null }
@@ -18,15 +20,15 @@ function open(strm: number, windowBits: number): number {
   const s: Stream = { st, out: [], done: false, err: null };
   st.ondata = (d, final) => { if (d.length) s.out.push(d); if (final) s.done = true; };
   streams.set(strm, s);
-  mem.st32(strm + 28, stateSeq++);
-  mem.st32(strm + 8, 0); mem.st32(strm + 20, 0); mem.st32(strm + 24, 0);
+  stp(strm + Z.STATE, stateSeq++);
+  stp(strm + Z.TIN, 0); stp(strm + Z.TOUT, 0); stp(strm + Z.MSG, 0);
   return Z_OK;
 }
 
 function inflate(strm: number): number {
   const s = streams.get(strm);
   if (!s) return Z_STREAM_ERROR;
-  const availIn = mem.ld32(strm + 4) >>> 0, nextIn = mem.ld32(strm) >>> 0;
+  const availIn = mem.ld32(strm + Z.AVIN) >>> 0, nextIn = ldp(strm + Z.IN);
   if (availIn && !s.done) {
     try {
       const st = s.st as unknown as { push(d: Uint8Array): void; s: { f?: number; l?: unknown } };
@@ -34,10 +36,10 @@ function inflate(strm: number): number {
       // BFINAL block decoded (fflate only flags `final` on request) — see java.util.zip.Inflater
       if (st.s.f && !st.s.l) s.done = true;
     } catch (e) { s.err = String(e); return Z_DATA_ERROR; }
-    mem.st32(strm, nextIn + availIn); mem.st32(strm + 4, 0);
-    mem.st32(strm + 8, mem.ld32(strm + 8) + availIn);
+    stp(strm + Z.IN, nextIn + availIn); mem.st32(strm + Z.AVIN, 0);
+    stp(strm + Z.TIN, mem.ld32(strm + Z.TIN) + availIn);
   }
-  let availOut = mem.ld32(strm + 16) >>> 0, nextOut = mem.ld32(strm + 12) >>> 0, wrote = 0;
+  let availOut = mem.ld32(strm + Z.AVOUT) >>> 0, nextOut = ldp(strm + Z.OUT), wrote = 0;
   while (availOut > 0 && s.out.length) {
     const c = s.out[0];
     const take = Math.min(availOut, c.length);
@@ -45,8 +47,8 @@ function inflate(strm: number): number {
     nextOut += take; availOut -= take; wrote += take;
     if (take === c.length) s.out.shift(); else s.out[0] = c.subarray(take);
   }
-  mem.st32(strm + 12, nextOut); mem.st32(strm + 16, availOut);
-  mem.st32(strm + 20, mem.ld32(strm + 20) + wrote);
+  stp(strm + Z.OUT, nextOut); mem.st32(strm + Z.AVOUT, availOut);
+  stp(strm + Z.TOUT, mem.ld32(strm + Z.TOUT) + wrote);
   if (s.done && !s.out.length) return Z_STREAM_END;
   if (!wrote && !availIn) return Z_BUF_ERROR;
   return Z_OK;
@@ -67,6 +69,7 @@ function adler32(adler: number, buf: Uint8Array): number {
 }
 
 export function zlibInit(): void {
+  if (PTR === 8) Z = { IN: 0, AVIN: 8, TIN: 16, OUT: 24, AVOUT: 32, TOUT: 40, MSG: 48, STATE: 56 };
   const M: Record<string, HostFn> = {
     inflateInit_: (_c, a) => open(a.p(), 15),
     inflateInit2_: (_c, a) => { const strm = a.p(), wb = a.i(); return open(strm, wb); },
@@ -88,7 +91,7 @@ export function zlibInit(): void {
         let total = 0; for (const c of chunks) total += c.length;
         if (total > (mem.ld32(dstLen) >>> 0)) return Z_BUF_ERROR;
         let o = dst; for (const c of chunks) { mem.u8.set(c, o); o += c.length; }
-        mem.st32(dstLen, total);
+        stp(dstLen, total);
         return Z_OK;
       } catch { return Z_DATA_ERROR; }
     },

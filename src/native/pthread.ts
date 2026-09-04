@@ -2,10 +2,11 @@
 // Everything runs on one JS thread, so a "contended" lock means the acquirer parks until unlock.
 
 import { mem } from "./mem";
-import { hostLib, NORET, type HostFn } from "./host";
+import { hostLib, NORET, type HostFn, stp } from "./host";
 import { Cpu, bindCpu, cpuByTid, yieldToLoop } from "./cpu";
 import { RET_SENTINEL, E } from "./abi";
 import { JThread, reportUncaught } from "../jvm/natives/jlang";
+import { readTs } from "./libc";
 
 interface Mutex { owner: number; count: number; waiters: (() => void)[] }
 const mutexes = new Map<number, Mutex>();
@@ -32,7 +33,7 @@ function unlock(m: Mutex): void {
   if (w) w();
 }
 const sleepMs = (ms: number): Promise<number> => (ms < 1 ? yieldToLoop().then(() => 0) : new Promise((r) => setTimeout(() => r(0), ms)));
-const absMs = (ts: number) => mem.ld32(ts) * 1000 + mem.ld32(ts + 4) / 1e6;
+const absMs = (ts: number) => readTs(ts);
 
 function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | null): Promise<number> {
   const m = mutexOf(mutex);
@@ -63,8 +64,8 @@ function startThread(start: number, arg: number, name?: string): Cpu {
   const cpu = new Cpu(jt, jt.jname);
   bindCpu(jt, cpu);
   cpu.ensureStack();
-  cpu.r[0] = arg;
-  cpu.r[14] = RET_SENTINEL;
+  cpu.r[0] = arg; cpu.h[0] = 0;
+  cpu.r[cpu.lrx] = RET_SENTINEL;
   cpu.setPc(start);
   const rec = { cpu, retval: 0, done: Promise.resolve() };
   rec.done = new Promise<void>((resolve) => {
@@ -83,7 +84,7 @@ export function pthreadInit(): void {
     pthread_create: (_c, a) => {
       const out = a.p(); a.p(); const start = a.p(), arg = a.i();
       const cpu = startThread(start, arg);
-      mem.st32(out, cpu.tid);
+      stp(out, cpu.tid);
       return 0;
     },
     pthread_join: async (_c, a) => {
@@ -91,7 +92,7 @@ export function pthreadInit(): void {
       const t = threads.get(tid);
       if (!t) return 3; // ESRCH
       await t.done;
-      if (retp) mem.st32(retp, t.retval);
+      if (retp) stp(retp, t.retval);
       return 0;
     },
     pthread_detach: () => 0,
@@ -111,8 +112,8 @@ export function pthreadInit(): void {
     pthread_setschedparam: () => 0,
     pthread_attr_init: () => 0, pthread_attr_destroy: () => 0, pthread_attr_setstacksize: () => 0, pthread_attr_setstack: () => 0,
     pthread_attr_setdetachstate: () => 0, pthread_attr_setschedparam: () => 0, pthread_attr_setschedpolicy: () => 0,
-    pthread_attr_getstacksize: (_c, a) => { a.p(); mem.st32(a.p(), 0x100000); return 0; },
-    pthread_attr_getstack: (cpu, a) => { a.p(); const base = a.p(), sz = a.p(); mem.st32(base, cpu.stackBase); mem.st32(sz, cpu.stackTop - cpu.stackBase); return 0; },
+    pthread_attr_getstacksize: (_c, a) => { a.p(); stp(a.p(), 0x100000); return 0; },
+    pthread_attr_getstack: (cpu, a) => { a.p(); const base = a.p(), sz = a.p(); stp(base, cpu.stackBase); stp(sz, cpu.stackTop - cpu.stackBase); return 0; },
     pthread_getattr_np: () => 0,
     // mutex: state keyed by address, the guest word untouched
     pthread_mutex_init: (_c, a) => { mutexes.set(a.p(), { owner: 0, count: 0, waiters: [] }); return 0; },
@@ -154,7 +155,7 @@ export function pthreadInit(): void {
     // sleeping
     usleep: (_c, a) => sleepMs(a.u() / 1000),
     sleep: (_c, a) => sleepMs(a.u() * 1000),
-    nanosleep: (_c, a) => { const req = a.p(), rem = a.p(); if (rem) { mem.st32(rem, 0); mem.st32(rem + 4, 0); } return sleepMs(mem.ld32(req) * 1000 + mem.ld32(req + 4) / 1e6); },
+    nanosleep: (_c, a) => { const req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, 16); return sleepMs(readTs(req)); },
     sched_yield: () => yieldToLoop().then(() => 0),
   };
   hostLib("libc.so", M);
