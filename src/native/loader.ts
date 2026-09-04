@@ -8,7 +8,7 @@ import { dlInit, loadModule, modules } from "./dl";
 import type { Module } from "./elf";
 import { jniInit, javaVM, pushFrame, popFrame, resolveByExport } from "./jni";
 import { gles1Init } from "./gles1";
-import { cpuFor } from "./cpu";
+import { cpuFor, setA64 } from "./cpu";
 import { lookupHost } from "./host";
 
 let inited = false;
@@ -25,12 +25,13 @@ function nativeInit(): void {
 /** The ABIs this tier can execute, most-preferred first. The one place that knows: the ELF
  *  loader, the dynamic linker's own lib search and System.loadLibrary's choice all read it, and
  *  adding a backend is one edit here. */
-export const NATIVE_ABIS = ["armeabi-v7a", "armeabi"] as const;
+export const NATIVE_ABIS = ["arm64-v8a", "armeabi-v7a", "armeabi"] as const;
 rt.nativeAbis = NATIVE_ABIS;
 
 /** Load and relocate an image without executing a single instruction of it. An ABI whose
  *  emitter does not exist yet can still prove its loader: scripts/nrun.ts --load-only. */
-export async function linkNativeLib(name: string, bytes: Uint8Array): Promise<Module> {
+export async function linkNativeLib(name: string, bytes: Uint8Array, abi = ""): Promise<Module> {
+  setA64(abi === "arm64-v8a");
   nativeInit();
   return loadModule(name, bytes, true);
 }
@@ -39,6 +40,9 @@ export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string
   if (!(NATIVE_ABIS as readonly string[]).includes(abi)) {
     throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${name}" is ${abi} machine code`);
   }
+  // the ABI decides the pointer width the JNI tables are laid out at, so it has to be known
+  // before nativeInit builds them
+  setA64(abi === "arm64-v8a");
   nativeInit();
   const mod = await loadModule(name, bytes);
   const onload = mod.exports.get("JNI_OnLoad");

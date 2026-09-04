@@ -35,7 +35,7 @@ const link = args.includes("--link") || !rt.nativeAbis.includes(abi);
 const t0 = performance.now();
 try {
   if (link) {
-    const mod = await linkNativeLib(lib, rt.classpath[`lib/${abi}/${lib}`]);
+    const mod = await linkNativeLib(lib, rt.classpath[`lib/${abi}/${lib}`], abi);
     const ms = (performance.now() - t0).toFixed(0);
     console.log(`linked ${lib} (${abi}${rt.nativeAbis.includes(abi) ? "" : ", no emitter"}) in ${ms}ms`);
     console.log(`  base=0x${mod.base.toString(16)} size=0x${(mod.end - mod.base).toString(16)} ${mod.w64 ? "ELF64" : "ELF32"}`);

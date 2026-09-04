@@ -2,7 +2,7 @@
 // between guest natives (AAPCS words) and the JVM's value model.
 
 import { mem } from "./mem";
-import { defineHost, type HostFn, type Args, VaList, fbits, bitsf, dbits, bitsd, retPair } from "./host";
+import { defineHost, type HostFn, VaList, fbits, bitsf, dbits, bitsd, retPair, type ArgReader, PTR, stp, ldp } from "./host";
 import { Cpu, cpuFor } from "./cpu";
 import { rt, JObj, type ClassInfo } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, newPrimArray } from "../jvm/abi";
@@ -188,7 +188,7 @@ let envTable = 0;
 const envs = new WeakMap<Cpu, number>();
 function envFor(cpu: Cpu): number {
   let e = envs.get(cpu);
-  if (!e) { e = mem.hostAlloc(4); mem.st32(e, envTable); envs.set(cpu, e); cpu.env = e; }
+  if (!e) { e = mem.hostAlloc(8); stp(e, envTable); envs.set(cpu, e); cpu.env = e; }
   return e;
 }
 
@@ -236,7 +236,7 @@ export function jniInit(): void {
   def(25, "NewLocalRef", (_c, a) => { a.p(); return toRef(deref(a.p())); });
   def(26, "EnsureLocalCapacity", () => 0);
   def(27, "AllocObject", async (cpu, a) => { a.p(); const i = infoOf(a.p()); if (!i) return 0; const p = rt.initClass(i); if (p) await p; return toRef(new i.ctor(), cpu); });
-  const newObject = (read: (m: MethodRec, a: Args) => unknown[]) => async (cpu: Cpu, a: Args) => {
+  const newObject = (read: (m: MethodRec, a: ArgReader) => unknown[]) => async (cpu: Cpu, a: ArgReader) => {
     a.p(); const i = infoOf(a.p()); const m = methods[a.i()];
     if (!i || !m) return 0;
     try {
@@ -255,7 +255,7 @@ export function jniInit(): void {
   def(30, "NewObjectA", newObject((m, a) => readJvalues(m.params, a.p())));
   def(31, "GetObjectClass", (_c, a) => { a.p(); const o = deref(a.p()); return o === null ? 0 : toRef(rt.classFor(clsName(o))); });
   def(32, "IsInstanceOf", (_c, a) => { a.p(); const o = deref(a.p()); const i = infoOf(a.p()); return o === null ? 1 : i ? rt.iof(o, i.name) : 0; });
-  const getMethodID = (isStatic: boolean) => async (cpu: Cpu, a: Args) => {
+  const getMethodID = (isStatic: boolean) => async (cpu: Cpu, a: ArgReader) => {
     a.p(); const i = infoOf(a.p()); const name = a.str(), sig = a.str();
     if (!i) { pend(cpu, throwable("java/lang/NoClassDefFoundError", "null class")); return 0; }
     const p = rt.initClass(i); if (p) await p;
@@ -272,7 +272,7 @@ export function jniInit(): void {
   for (let k = 0; k < 10; k++) {
     const P = PRIM[k];
     const mk = (base: number, kind: "virtual" | "nonvirtual" | "static") => {
-      const readers: ((m: MethodRec, a: Args) => unknown[])[] = [
+      const readers: ((m: MethodRec, a: ArgReader) => unknown[])[] = [
         (m, a) => readArgs(m.params, a), (m, a) => readArgs(m.params, new VaList(a.p())), (m, a) => readJvalues(m.params, a.p()),
       ];
       const suffix = ["", "V", "A"];
@@ -294,7 +294,7 @@ export function jniInit(): void {
     mk(64 + k * 3, "nonvirtual");
     mk(114 + k * 3, "static");
   }
-  const getFieldID = (isStatic: boolean) => async (cpu: Cpu, a: Args) => {
+  const getFieldID = (isStatic: boolean) => async (cpu: Cpu, a: ArgReader) => {
     a.p(); const i = infoOf(a.p()); const name = a.str(), sig = a.str();
     if (!i) { pend(cpu, throwable("java/lang/NoClassDefFoundError", "null class")); return 0; }
     const p = rt.initClass(i); if (p) await p;
@@ -317,7 +317,7 @@ export function jniInit(): void {
   for (let k = 0; k < 9; k++) {
     const P = PRIM[k], D = PRIM_DESC[k];
     const fromJava = (v: unknown, cpu: Cpu): number | bigint => retWord(D, v, cpu);
-    const toJava = (a: Args): unknown => D === "J" ? a.l() : D === "F" ? a.f() : D === "D" ? a.d() : D === "L" ? deref(a.p()) : D === "Z" ? (a.i() ? 1 : 0) : a.i();
+    const toJava = (a: ArgReader): unknown => D === "J" ? a.l() : D === "F" ? a.f() : D === "D" ? a.d() : D === "L" ? deref(a.p()) : D === "Z" ? (a.i() ? 1 : 0) : a.i();
     def(95 + k, `Get${P}Field`, (cpu, a) => { a.p(); const o = deref(a.p()) as any; const f = fields[a.i()]; return o && f ? fromJava(o[f.prop], cpu) : D === "J" ? 0n : 0; });
     def(104 + k, `Set${P}Field`, (_c, a) => { a.p(); const o = deref(a.p()) as any; const f = fields[a.i()]; const v = toJava(a); if (o && f) o[f.prop] = v; });
     def(145 + k, `GetStatic${P}Field`, (cpu, a) => { a.p(); a.p(); const f = fields[a.i()]; return f ? fromJava(f.owner[f.prop], cpu) : D === "J" ? 0n : 0; });
@@ -386,7 +386,9 @@ export function jniInit(): void {
     a.p(); const i = infoOf(a.p()); const tab = a.p(), n = a.i();
     if (!i) return -1;
     for (let k = 0; k < n; k++) {
-      const name = mem.cstr(mem.ld32(tab + k * 12)), sig = mem.cstr(mem.ld32(tab + k * 12 + 4)), fn = mem.ld32(tab + k * 12 + 8) >>> 0;
+      // JNINativeMethod is three pointers: 12 bytes on ILP32, 24 on LP64
+      const rec = tab + k * PTR * 3;
+      const name = mem.cstr(ldp(rec)), sig = mem.cstr(ldp(rec + PTR)), fn = ldp(rec + PTR * 2);
       registerNative(i, name, sig, fn);
     }
     return 0;
@@ -394,7 +396,7 @@ export function jniInit(): void {
   def(216, "UnregisterNatives", () => 0);
   def(217, "MonitorEnter", () => 0);
   def(218, "MonitorExit", () => 0);
-  def(219, "GetJavaVM", (_c, a) => { a.p(); mem.st32(a.p(), javaVM.addr); return 0; });
+  def(219, "GetJavaVM", (_c, a) => { a.p(); stp(a.p(), javaVM.addr); return 0; });
   def(226, "NewWeakGlobalRef", T[21]!);
   def(227, "DeleteWeakGlobalRef", T[22]!);
   def(228, "ExceptionCheck", (cpu) => (cpu.exc ? 1 : 0));
@@ -403,26 +405,26 @@ export function jniInit(): void {
   def(231, "GetDirectBufferCapacity", () => -1);
   def(232, "GetObjectRefType", (_c, a) => { a.p(); const h = a.p(); return h === 0 ? 0 : h & GLOBAL_BIT ? 2 : 1; });
 
-  envTable = mem.hostAlloc(233 * 4);
+  envTable = mem.hostAlloc(233 * PTR);
   for (let i = 0; i < 233; i++) {
     const fn = T[i];
     const name = fn ? names[i] : `JNI#${i}`;
     const wrapped: HostFn = fn
       ? (cpu, a) => { cur = cpu; return fn(cpu, a); }
       : (cpu) => { if (!jniMissing.has(name)) { jniMissing.add(name); console.warn("[jni missing]", name); } void cpu; return 0; };
-    mem.st32(envTable + i * 4, defineHost("JNI:" + name, wrapped));
+    stp(envTable + i * PTR, defineHost("JNI:" + name, wrapped));
   }
-  const vmTable = mem.hostAlloc(8 * 4);
+  const vmTable = mem.hostAlloc(8 * PTR);
   const vmFns: [number, string, HostFn][] = [
     [3, "DestroyJavaVM", () => 0],
-    [4, "AttachCurrentThread", (cpu, a) => { a.p(); mem.st32(a.p(), envFor(cpu)); return 0; }],
+    [4, "AttachCurrentThread", (cpu, a) => { a.p(); stp(a.p(), envFor(cpu)); return 0; }],
     [5, "DetachCurrentThread", () => 0],
-    [6, "GetEnv", (cpu, a) => { a.p(); mem.st32(a.p(), envFor(cpu)); return 0; }],
-    [7, "AttachCurrentThreadAsDaemon", (cpu, a) => { a.p(); mem.st32(a.p(), envFor(cpu)); return 0; }],
+    [6, "GetEnv", (cpu, a) => { a.p(); stp(a.p(), envFor(cpu)); return 0; }],
+    [7, "AttachCurrentThreadAsDaemon", (cpu, a) => { a.p(); stp(a.p(), envFor(cpu)); return 0; }],
   ];
-  for (const [i, name, fn] of vmFns) mem.st32(vmTable + i * 4, defineHost("JavaVM:" + name, (cpu, a) => { cur = cpu; return fn(cpu, a); }));
-  javaVM.addr = mem.hostAlloc(4);
-  mem.st32(javaVM.addr, vmTable);
+  for (const [i, name, fn] of vmFns) stp(vmTable + i * PTR, defineHost("JavaVM:" + name, (cpu, a) => { cur = cpu; return fn(cpu, a); }));
+  javaVM.addr = mem.hostAlloc(8);
+  stp(javaVM.addr, vmTable);
 }
 
 function registerNative(info: ClassInfo, name: string, sig: string, fn: number): void {

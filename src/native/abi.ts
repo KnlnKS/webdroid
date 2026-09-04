@@ -18,7 +18,8 @@ export const LOW = 0x1_0000;
 // rather than from growing: ELF images and the malloc arena are one region and grow toward each
 // other (mem.reserve bumps down, malloc bumps up), which is what a process does anyway and what
 // lets a 79 MiB image load without costing an app that has no .so at all a single byte.
-const STACK_SPAN = 0x0100_0000;                // thread stacks, 1 MiB + a 64 KiB guard gap each
+const STACK_SPAN = 0x0400_0000;                // thread stacks, 1 MiB + a 64 KiB guard gap each: 60 of them,
+                                               // where 16 MiB allowed 15 and a real process has more
 const HOST_SPAN = 0x0008_0000;                 // host-owned guest data: __sF, _ctype_, JNI tables, static strings
 const TRAMP_SPAN = 0x0007_0000;                // host-call trampolines, 8 bytes per slot
 

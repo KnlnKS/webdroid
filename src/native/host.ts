@@ -8,7 +8,7 @@ import { perf } from "../perf";
 
 export const NORET: unique symbol = Symbol("noret");
 export type HostRet = number | bigint | void | typeof NORET;
-export type HostFn = (cpu: Cpu, a: Args) => HostRet | Promise<HostRet>;
+export type HostFn = (cpu: Cpu, a: ArgReader) => HostRet | Promise<HostRet>;
 
 export interface ArgReader {
   i(): number; u(): number; p(): number; l(): bigint; ul(): bigint; f(): number; d(): number; vd(): number; str(): string;
@@ -48,14 +48,6 @@ export class Args implements ArgReader {
   vd(): number { return this.d(); }
   str(): string { return mem.cstr(this.p()); }
   strAt(p: number): string { return mem.cstr(p); }
-  /** address the remaining arguments can be read from as a va_list (spills r0–r3 below sp as bionic's va_start sees them) */
-  vaList(): number {
-    if (this.n >= 4) return this.sp;
-    const base = this.cpu.r[13] - (4 - this.n) * 4;
-    for (let i = this.n; i < 4; i++) mem.st32(base + (i - this.n) * 4, this.cpu.r[i]);
-    this.n = 4;
-    return base;
-  }
 }
 
 export class VaList implements ArgReader {
@@ -72,6 +64,16 @@ export class VaList implements ArgReader {
   strAt(p: number): string { return mem.cstr(p); }
   get addr(): number { return this.a; }
 }
+
+/** The guest's pointer width: 8 for LP64 (arm64), 4 for ILP32 (arm). Set with the process ABI
+ *  by Cpu.setAbi, and read by everything that lays out a struct or a function table for the
+ *  guest — a JNIEnv vtable, a JNINativeMethod record, an out-parameter holding a pointer. */
+export let PTR = 4;
+export function setPtrWidth(n: number): void { PTR = n; }
+/** store a guest pointer; the high half of an LP64 slot is always zero in this address space */
+export function stp(a: number, v: number): void { mem.st32(a, v); if (PTR === 8) mem.st32(a + 4, 0); }
+/** load a guest pointer */
+export function ldp(a: number): number { return mem.ld32(a) >>> 0; }
 
 const fns: HostFn[] = [];
 const names: string[] = [];
@@ -111,9 +113,43 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
 
 export function hostReturn(cpu: Cpu, ret: HostRet): void {
   if (ret === NORET) return;
-  if (typeof ret === "number") cpu.r[0] = ret | 0;
-  else if (typeof ret === "bigint") { cpu.r[0] = Number(ret & 0xffffffffn) | 0; cpu.r[1] = Number((ret >> 32n) & 0xffffffffn) | 0; }
-  cpu.setPc(cpu.r[14]);
+  // AAPCS64 returns a 64-bit value in x0 alone; AAPCS32 splits it across r0/r1
+  if (typeof ret === "number") { cpu.r[0] = ret | 0; if (cpu.a64) cpu.h[0] = 0; }
+  else if (typeof ret === "bigint") {
+    cpu.r[0] = Number(ret & 0xffffffffn) | 0;
+    const hi = Number((ret >> 32n) & 0xffffffffn) | 0;
+    if (cpu.a64) cpu.h[0] = hi; else cpu.r[1] = hi;
+  }
+  cpu.setPc(cpu.r[cpu.lrx]);
+}
+
+/** AAPCS64 argument cursor: x0–x7 then the caller's stack in 8-byte slots. A 64-bit value is one
+ *  register, not an even pair, and floating-point arguments arrive in v0–v7 — hard float, unlike
+ *  the armeabi-v7a softfp ABI Args reads. Only the low 64 bits of a V register are modelled;
+ *  anything that would need the rest faults in the decoder before it gets here. */
+export class Args64 implements ArgReader {
+  private cpu!: Cpu;
+  private n = 0;      // next core register
+  private nv = 0;     // next SIMD/FP register
+  private sp = 0;     // next stack slot
+  constructor(cpu: Cpu) { this.reset(cpu); }
+  reset(cpu: Cpu): void { this.cpu = cpu; this.n = 0; this.nv = 0; this.sp = cpu.r[31] >>> 0; }
+  i(): number {
+    if (this.n < 8) return this.cpu.r[this.n++];
+    const v = mem.ld32(this.sp); this.sp += 8; return v;
+  }
+  u(): number { return this.i() >>> 0; }
+  p(): number { return this.i() >>> 0; }
+  l(): bigint {
+    if (this.n < 8) { const lo = this.cpu.r[this.n], hi = this.cpu.h[this.n]; this.n++; return retPair(lo, hi); }
+    const v = mem.ld64(this.sp); this.sp += 8; return v;
+  }
+  ul(): bigint { return BigInt.asUintN(64, this.l()); }
+  f(): number { if (this.nv < 8) return this.cpu.s[this.nv++ * 2]; const v = mem.ld32(this.sp); this.sp += 8; return bitsf(v); }
+  d(): number { if (this.nv < 8) return this.cpu.d[this.nv++]; const v = mem.ld64(this.sp); this.sp += 8; return bitsd(v); }
+  vd(): number { return this.d(); }
+  str(): string { return mem.cstr(this.p()); }
+  strAt(p: number): string { return mem.cstr(p); }
 }
 
 // ── virtual host libraries: name → (symbol → trampoline/data address), defined lazily

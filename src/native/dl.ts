@@ -5,7 +5,7 @@
 import { loadElf, symbolize, type Module } from "./elf";
 import { mem } from "./mem";
 import { hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc } from "./host";
-import { cpuFor, setSymbolizeHook } from "./cpu";
+import { cpuFor, setSymbolizeHook, setA64, isA64 } from "./cpu";
 import { trampSlot, RET_SENTINEL } from "./abi";
 import { rt } from "../jvm/runtime";
 import { curThread } from "../jvm/natives/jlang";
@@ -39,6 +39,9 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false)
     const b = bytes ?? apkLibBytes(name);
     if (!b) throw new Error(`dlopen failed: library "${name}" not found`);
     const mod = loadElf(name, b, resolveGlobal);
+    // a process is one ABI: the first image decides which emitter its code compiles with
+    if (!modules.length) setA64(mod.w64);
+    else if (mod.w64 !== isA64()) throw new Error(`${name}: ${mod.w64 ? "64" : "32"}-bit image in a ${isA64() ? "64" : "32"}-bit process`);
     modules.push(mod);
     byName.set(name, mod);
     // dependencies that are real modules in the apk load (and initialise) first; host libs need nothing

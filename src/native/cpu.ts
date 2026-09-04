@@ -6,8 +6,9 @@
 import { JThread, setCurThread } from "../jvm/natives/jlang";
 import { NativeFault, mem } from "./mem";
 import { emitBlock, setMaxBlock } from "./arm";
+import { emitA64Block, setMaxBlockA64 } from "./a64";
 import { emitThumbBlock, setMaxBlock as setMaxBlockT } from "./thumb";
-import { Args, hostDispatch, hostReturn, type HostRet } from "./host";
+import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet } from "./host";
 import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, PAGE_SHIFT, STACK_SIZE, MEM_SIZE } from "./abi";
 import { perf } from "../perf";
 export { NativeFault };
@@ -27,7 +28,7 @@ const STOP = ((c: Cpu) => { void c; return STOP; }) as unknown as BlockFn;
 const stubs: (BlockFn | undefined)[] = new Array((TRAMP_END - TRAMP_BASE) >> 3).fill(undefined);
 let retStub: BlockFn | undefined;
 function stubFor(pc: number): BlockFn {
-  const mk = () => { const f = ((c: Cpu) => { c.r[15] = pc; return STOP; }) as unknown as BlockFn; f.pc = pc; f.n = []; return f; };
+  const mk = () => { const f = ((c: Cpu) => { c.r[c.pcx] = pc; return STOP; }) as unknown as BlockFn; f.pc = pc; f.n = []; return f; };
   if (pc === RET_SENTINEL) return retStub ?? (retStub = mk());
   if (pc >= TRAMP_END) return mk();
   const i = (pc - TRAMP_BASE) >> 3;
@@ -43,7 +44,7 @@ export const blockStats = { compiled: 0, invalidated: 0, compileMs: 0 };
 export const stepMode = { on: false, ring: [] as string[], max: 40000, watch: 0, hits: [] as string[] };
 export function setStepMode(on: boolean): void {
   stepMode.on = on;
-  setMaxBlock(on ? 1 : 256); setMaxBlockT(on ? 1 : 256);
+  setMaxBlock(on ? 1 : 256); setMaxBlockT(on ? 1 : 256); setMaxBlockA64(on ? 1 : 256);
   for (const c of cpus) c.flush();
   stepMode.ring.length = 0;
 }
@@ -76,10 +77,23 @@ export function invalidateRange(addr: number, size: number): void {
   for (let pg = addr >>> PAGE_SHIFT; pg <= (addr + size - 1) >>> PAGE_SHIFT; pg++) if (pages[pg] || tpages[pg]) invalidatePage(pg);
 }
 
+/** A process is one ABI — Android never mixes 32- and 64-bit code in one image's dependency
+ *  graph — so the instruction set is a property of the process, set when its first image loads. */
+let A64 = false;
+export function setA64(on: boolean): void {
+  if (A64 === on) return;
+  A64 = on;
+  // the pointer width is a property of the process, not of a thread: set it here, because the
+  // JNI tables are laid out before the first Cpu exists
+  setPtrWidth(on ? 8 : 4);
+  for (const c of cpus) c.setAbi(on);
+}
+export function isA64(): boolean { return A64; }
+
 function compile(cpu: Cpu, pc: number, pg: (BlockFn | undefined)[], thumb: boolean): BlockFn {
   const t0 = performance.now();
-  if (pc & (thumb ? 1 : 3)) { cpu.r[15] = pc; cpu.fault("misaligned pc"); }
-  const b = thumb ? emitThumbBlock(pc) : emitBlock(pc);
+  if (pc & (thumb ? 1 : 3)) { cpu.r[cpu.pcx] = pc; cpu.fault("misaligned pc"); }
+  const b = thumb ? emitThumbBlock(pc) : A64 ? emitA64Block(pc) : emitBlock(pc);
   let fn: BlockFn;
   try { fn = new Function("c", "r", "M", "F", b.src + `\n//# sourceURL=wd/native/${(pc >>> 0).toString(16)}${thumb ? "t" : ""}.js`) as BlockFn; }
   catch (e) { throw new NativeFault(`[native] block compile failed at 0x${pc.toString(16)}: ${e}\n${b.src}`); }
@@ -98,7 +112,13 @@ function compile(cpu: Cpu, pc: number, pg: (BlockFn | undefined)[], thumb: boole
 }
 
 export class Cpu {
-  r = new Int32Array(16);
+  // 0..14 ARM / 0..30 A64, 15 = ARM's pc, 31 = A64's sp, 32 = A64's pc. One array either way, so
+  // the run loop indexes rather than branches.
+  r = new Int32Array(33);
+  /** the high halves of the A64 register file; unused by ARM (see a64.ts for why it is split) */
+  h = new Int32Array(32);
+  a64 = false;
+  pcx = 15; lrx = 14; spx = 13;
   t = 0;
   n = 0; z = 0; c = 0; v = 0; q = 0; ge = 0;
   sc = 0;             // shifter carry-out of the last register-specified shift (see arm.ts op2)
@@ -119,7 +139,7 @@ export class Cpu {
   pending: Promise<unknown> | null = null;
   exc: unknown = null;
   ret1 = 0;           // r1 at the return of the last call() (64-bit results)
-  args: Args;
+  args: ArgReader & { reset(cpu: Cpu): void };
   name: string;
   depth = 0;
   /** guest-visible thread exit (pthread_exit / thread function returned) */
@@ -129,7 +149,8 @@ export class Cpu {
     this.jthread = jthread;
     this.name = name;
     this.tid = ++tidSeq;
-    this.args = new Args(this);
+    this.args = A64 ? new Args64(this) : new Args(this);
+    this.setAbi(A64);
     this.tlsBase = mem.hostAlloc(256);
     this.errnoAddr = mem.hostAlloc(8);
     cpus.add(this);
@@ -139,7 +160,7 @@ export class Cpu {
     if (!this.stackTop) {
       const s = mem.allocStack(STACK_SIZE);
       this.stackBase = s.base; this.stackTop = s.top;
-      this.r[13] = s.top;
+      this.r[this.spx] = s.top;
     }
   }
 
@@ -150,40 +171,46 @@ export class Cpu {
     const saved = new Int32Array(r);
     const st = this.t, sn = this.n, sz = this.z, scf = this.c, sv = this.v;
     const spending = this.pending;
+    const savedH = this.a64 ? new Int32Array(this.h) : null;
     let n = 0;
     const stack: (number | bigint)[] = [];
+    const nregs = this.a64 ? 8 : 4;
     for (const a of args) {
       if (typeof a === "bigint") {
-        if (n & 1) n++;
-        if (n < 4) { r[n] = Number(a & 0xffffffffn) | 0; r[n + 1] = Number((a >> 32n) & 0xffffffffn) | 0; n += 2; }
-        else { n = 4; stack.push(a); }
-      } else if (n < 4) r[n++] = a | 0;
+        // AAPCS64 puts a 64-bit value in one register; AAPCS32 wants an even pair
+        if (!this.a64 && (n & 1)) n++;
+        if (n < nregs) {
+          r[n] = Number(a & 0xffffffffn) | 0;
+          if (this.a64) { this.h[n] = Number((a >> 32n) & 0xffffffffn) | 0; n++; }
+          else { r[n + 1] = Number((a >> 32n) & 0xffffffffn) | 0; n += 2; }
+        } else { n = nregs; stack.push(a); }
+      } else if (n < nregs) { r[n] = a | 0; if (this.a64) this.h[n] = 0; n++; }
       else stack.push(a | 0);
     }
     // a nested call (Java → native while this Cpu is parked in a host call) builds its frame below the guest's sp
-    let sp = (this.depth ? r[13] - 64 : this.stackTop) & ~7;
+    const slotSz = this.a64 ? 8 : 4, align = this.a64 ? ~15 : ~7;
+    let sp = (this.depth ? r[this.spx] - 64 : this.stackTop) & align;
     if (stack.length) {
-      let sz2 = 0;
-      for (const a of stack) sz2 += typeof a === "bigint" ? 8 : 4;
-      sp = (sp - sz2) & ~7;
+      sp = (sp - stack.length * slotSz) & align;
       let p = sp;
       for (const a of stack) {
-        if (typeof a === "bigint") { p = (p + 7) & ~7; mem.st64(p, a); p += 8; }
-        else { mem.st32(p, a); p += 4; }
+        if (typeof a === "bigint") { if (!this.a64) p = (p + 7) & ~7; mem.st64(p, a); p += 8; }
+        else { mem.st32(p, a); if (this.a64) mem.st32(p + 4, 0); p += slotSz; }
       }
     }
-    r[13] = sp;
-    r[14] = RET_SENTINEL;
+    r[this.spx] = sp;
+    r[this.lrx] = RET_SENTINEL;
     this.setPc(fn);
     this.pending = null;
     this.depth++;
     try {
       await this.run();
-      this.ret1 = r[1];
+      this.ret1 = this.a64 ? this.h[0] : r[1];
       return r[0];
     } finally {
       this.depth--;
       r.set(saved);
+      if (savedH) this.h.set(savedH);
       this.t = st; this.n = sn; this.z = sz; this.c = scf; this.v = sv;
       this.pending = spending;
     }
@@ -236,21 +263,22 @@ export class Cpu {
   runSlice(budget: number): SliceExit {
     if (stepMode.on) return this.runSliceStep(budget);
     const r = this.r;
+    const px = this.pcx;
     const limit = this.ic + budget;
-    let fn = this.look(r[15]);
+    let fn = this.look(r[px]);
     for (;;) {
       fn = fn(this, r, mem, fn);
       if (fn === STOP) {
-        const pc = r[15];
+        const pc = r[px];
         if (pc === RET_SENTINEL) return SliceExit.Exit;
         if (pc >= TRAMP_END) this.fault("pc outside any module");
         hostDispatch(this, (pc - TRAMP_BASE) >> 3);
         if (this.pending) return SliceExit.Suspend;
         if (this.finished) return SliceExit.Exit;
-        fn = this.look(r[15]);
+        fn = this.look(r[px]);
       }
       if (this.ic >= limit) {
-        r[15] = fn.pc;
+        r[px] = fn.pc;
         if (profile.on) profile.samples.set(fn.pc, (profile.samples.get(fn.pc) ?? 0) + 1);
         return SliceExit.Budget;
       }
@@ -287,7 +315,13 @@ export class Cpu {
     }
   }
 
-  setPc(addr: number): void { this.r[15] = addr & ~1; this.t = addr & 1; }
+  setAbi(on: boolean): void {
+    this.a64 = on;
+    this.pcx = on ? 32 : 15; this.lrx = on ? 30 : 14; this.spx = on ? 31 : 13;
+    if (on !== (this.args instanceof Args64)) this.args = on ? new Args64(this) : new Args(this);
+    this.flush();
+  }
+  setPc(addr: number): void { if (this.a64) this.r[32] = addr; else { this.r[15] = addr & ~1; this.t = addr & 1; } }
   /** interworking branch target (BX semantics): returns the pc to continue at */
   bx(addr: number): number { this.t = addr & 1; return addr & ~1; }
   flush(): void { for (let i = 0; i < NPAGES; i++) if (pages[i] || tpages[i]) invalidatePage(i); }
@@ -324,6 +358,61 @@ export class Cpu {
     this.lo = s | 0;
     this.hi = (this.hi + h + (s > 4294967295 ? 1 : 0)) | 0;
   }
+  /** 64-bit multiply, low half: (hi:lo) = (ah:al) * (bh:bl) */
+  mul64(al: number, ah: number, bl: number, bh: number): void {
+    this.umull(al, bl);
+    this.hi = (this.hi + Math.imul(al, bh) + Math.imul(ah, bl)) | 0;
+  }
+  /** 64x64 multiply, HIGH half — SMULH/UMULH. Exact via 32-bit limbs; BigInt would be 30x. */
+  mulh64(al: number, ah: number, bl: number, bh: number, signed: number): void {
+    let A = (BigInt(ah >>> 0) << 32n) | BigInt(al >>> 0);
+    let B = (BigInt(bh >>> 0) << 32n) | BigInt(bl >>> 0);
+    if (signed) { A = BigInt.asIntN(64, A); B = BigInt.asIntN(64, B); }
+    const p = BigInt.asIntN(64, (A * B) >> 64n);
+    this.lo = Number(BigInt.asIntN(32, p)) | 0;
+    this.hi = Number(BigInt.asIntN(32, p >> 32n)) | 0;
+  }
+  /** 64-bit divide. A64 defines division by zero as zero and INT64_MIN/-1 as INT64_MIN. */
+  div64(al: number, ah: number, bl: number, bh: number, signed: number): void {
+    const B0 = (BigInt(bh >>> 0) << 32n) | BigInt(bl >>> 0);
+    if (B0 === 0n) { this.lo = 0; this.hi = 0; return; }
+    let A = (BigInt(ah >>> 0) << 32n) | BigInt(al >>> 0), B = B0;
+    if (signed) { A = BigInt.asIntN(64, A); B = BigInt.asIntN(64, B); }
+    const q = BigInt.asIntN(64, A / B);
+    this.lo = Number(BigInt.asIntN(32, q)) | 0;
+    this.hi = Number(BigInt.asIntN(32, q >> 32n)) | 0;
+  }
+  /** 64-bit shift by a register amount (already masked to 0..63): 0 LSL, 1 LSR, 2 ASR, 3 ROR */
+  shift64(lo: number, hi: number, n: number, kind: number): void {
+    if (kind === 3) { const k = n & 63; if (k === 0) { this.lo = lo; this.hi = hi; return; } this.shift64(lo, hi, k, 1); const l1 = this.lo, h1 = this.hi; this.shift64(lo, hi, 64 - k, 0); this.lo = this.lo | l1; this.hi = this.hi | h1; return; }
+    if (n === 0) { this.lo = lo; this.hi = hi; return; }
+    if (kind === 0) {
+      if (n >= 64) { this.lo = 0; this.hi = 0; }
+      else if (n === 32) { this.lo = 0; this.hi = lo; }
+      else if (n > 32) { this.lo = 0; this.hi = lo << (n - 32); }
+      else { this.lo = lo << n; this.hi = (hi << n) | (lo >>> (32 - n)); }
+      return;
+    }
+    if (kind === 1) {
+      if (n >= 64) { this.lo = 0; this.hi = 0; }
+      else if (n === 32) { this.lo = hi; this.hi = 0; }
+      else if (n > 32) { this.lo = hi >>> (n - 32); this.hi = 0; }
+      else { this.lo = (lo >>> n) | (hi << (32 - n)); this.hi = hi >>> n; }
+      return;
+    }
+    if (n >= 64 || n === 32 || n > 32) { this.lo = n === 32 ? hi : hi >> Math.min(31, n - 32); this.hi = hi >> 31; return; }
+    this.lo = (lo >>> n) | (hi << (32 - n));
+    this.hi = hi >> n;
+  }
+  /** A64 syscall (svc #0, number in x8): the same handful a userspace runtime issues directly */
+  svc(): void {
+    const r = this.r;
+    switch (r[8] >>> 0) {
+      case 172: r[0] = 4242; return;                                                     // getpid
+      case 178: r[0] = 4242 + this.tid; return;                                           // gettid
+      default: this.fault(`svc: unsupported syscall ${r[8] >>> 0}`);
+    }
+  }
   /** EABI syscall (swi 0, number in r7): only what a userspace runtime issues directly */
   swi(): void {
     const r = this.r;
@@ -342,8 +431,8 @@ export class Cpu {
   }
   sat(v: number): number { if (v > 2147483647) { this.q = 1; return 2147483647; } if (v < -2147483648) { this.q = 1; return -2147483648; } return v | 0; }
   fault(msg: string): never {
-    const e = new NativeFault(`[native] ${msg} @ ${symbolizeHook(this.r[15] >>> 0)} (${this.name})`);
-    e.pc = this.r[15] >>> 0;
+    const e = new NativeFault(`[native] ${msg} @ ${symbolizeHook(this.r[this.pcx] >>> 0)} (${this.name})`);
+    e.pc = this.r[this.pcx] >>> 0;
     throw e;
   }
 }

@@ -4,11 +4,10 @@ import { Cpu } from "./cpu";
 import { mainThread } from "../jvm/natives/jlang";
 import { RET_SENTINEL } from "./abi";
 
-const CODE = 0x00200000;
-let codeTop = CODE;
 function run(words: number[], setup: (c: Cpu) => void = () => {}): Cpu {
-  const at = codeTop;
-  codeTop += (words.length * 4 + 0xfff) & ~0xfff;
+  // ask for the page the way a module load does, rather than picking an address that the stack
+  // allocator can march into
+  const at = mem.reserve((words.length * 4 + 0xfff) & ~0xfff, 0x1000);
   for (let i = 0; i < words.length; i++) mem.u32[(at >>> 2) + i] = words[i];
   const c = new Cpu(mainThread, "test");
   c.ensureStack();
