@@ -504,6 +504,69 @@ export class Cpu {
     this.hi = hi | 0;
     this.lo = (t - hi * 4294967296) | 0;
   }
+  /** FMULX: a zero times an infinity is ±2, otherwise the product */
+  fmulx(a: number, b: number): number {
+    const za = a === 0, zb = b === 0, ia = a === Infinity || a === -Infinity, ib = b === Infinity || b === -Infinity;
+    if ((za && ib) || (zb && ia)) return ((za ? 1 / a < 0 : a < 0) !== (zb ? 1 / b < 0 : b < 0)) ? -2 : 2;
+    return a * b;
+  }
+  /** the ARM reciprocal and reciprocal-square-root estimates (FPRecipEstimate / FPRSqrtEstimate):
+   *  a table function of the top fraction bits, not 1/x — code that uses the estimate alone would
+   *  see different low bits from an exact one, and nothing would flag it */
+  private est = new DataView(new ArrayBuffer(8));
+  recpe(x: number, dp: boolean): number {
+    if (x !== x) return NaN;
+    const neg = x < 0 || (x === 0 && 1 / x < 0);
+    if (x === Infinity || x === -Infinity) return neg ? -0 : 0;
+    if (x === 0) return neg ? -Infinity : Infinity;
+    const dv = this.est;
+    if (dp) dv.setFloat64(0, x); else dv.setFloat32(0, x);
+    const hi = dv.getUint32(0), lo = dp ? dv.getUint32(4) : 0;
+    let exp = dp ? (hi >>> 20) & 0x7ff : (hi >>> 23) & 0xff;
+    let frac = dp ? (hi & 0xfffff) * 4294967296 + lo : (hi & 0x7fffff) * 536870912;     // 52 bits
+    if (!dp && (hi & 0x7fffffff) < (1 << 21)) return neg ? -Infinity : Infinity;                // |x| < 2^-128
+    if (dp && exp === 0 && frac < 2 ** 42) return neg ? -Infinity : Infinity;                    // |x| < 2^-1024
+    if (exp === 0) { if (frac < 2 ** 51) { exp = -1; frac *= 4; } else frac *= 2; }
+    const scaled = 256 + Math.floor(frac / 2 ** 44) % 256;
+    const est = ((Math.floor((1 << 19) / (scaled * 2 + 1)) + 1) >> 1) & 0xff;
+    let rexp = (dp ? 2045 : 253) - exp;
+    let rfrac = est * 2 ** 44;
+    if (rexp === 0) rfrac = rfrac / 2 + 2 ** 51;
+    else if (rexp === -1) { rfrac = rfrac / 4 + 2 ** 50; rexp = 0; }
+    return this.pack(neg, rexp, Math.floor(rfrac), dp);
+  }
+  rsqrte(x: number, dp: boolean): number {
+    if (x !== x) return NaN;
+    if (x === 0) return 1 / x < 0 ? -Infinity : Infinity;
+    if (x < 0) return NaN;
+    if (x === Infinity) return 0;
+    const dv = this.est;
+    if (dp) dv.setFloat64(0, x); else dv.setFloat32(0, x);
+    const hi = dv.getUint32(0), lo = dp ? dv.getUint32(4) : 0;
+    let exp = dp ? (hi >>> 20) & 0x7ff : (hi >>> 23) & 0xff;
+    let frac = dp ? (hi & 0xfffff) * 4294967296 + lo : (hi & 0x7fffff) * 536870912;
+    if (exp === 0) { while (frac < 2 ** 51) { frac *= 2; exp--; } frac = (frac % 2 ** 51) * 2; }
+    const scaled = exp & 1 ? 128 + Math.floor(frac / 2 ** 45) % 128 : 256 + Math.floor(frac / 2 ** 44) % 256;
+    let a = scaled < 256 ? scaled * 2 + 1 : ((scaled >> 1) << 1) + 1 << 1;
+    let b = 512;
+    while (a * (b + 1) * (b + 1) < (1 << 28)) b++;
+    const est = ((b + 1) >> 1) & 0xff;
+    return this.pack(false, Math.trunc(((dp ? 3068 : 380) - exp) / 2), est * 2 ** 44, dp);
+  }
+  /** sign, biased exponent and a 52-bit fraction into a float of either width */
+  private pack(neg: boolean, exp: number, frac52: number, dp: boolean): number {
+    const dv = this.est;
+    if (dp) {
+      dv.setUint32(0, ((neg ? 1 : 0) << 31) | (exp << 20) | Math.floor(frac52 / 4294967296));
+      dv.setUint32(4, frac52 % 4294967296);
+      return dv.getFloat64(0);
+    }
+    dv.setUint32(0, ((neg ? 1 : 0) << 31) | (exp << 23) | Math.floor(frac52 / 536870912));
+    return dv.getFloat32(0);
+  }
+  /** population count of a byte, and the carry-less product of two bytes (PMULL) */
+  pop8(x: number): number { x = x - ((x >> 1) & 0x55); x = (x & 0x33) + ((x >> 2) & 0x33); return (x + (x >> 4)) & 15; }
+  pmul8(a: number, b: number): number { let r = 0; for (let i = 0; i < 8; i++) if ((b >> i) & 1) r ^= a << i; return r & 0xffff; }
   /** IEEE half to a number, and a number to half (round to nearest even, denormals, NaN kept quiet) */
   h2f(h: number): number {
     const s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 0x1f, m = h & 0x3ff;

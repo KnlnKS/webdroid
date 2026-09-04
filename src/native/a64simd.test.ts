@@ -317,3 +317,172 @@ describe("a64 simd: scalar floating point", () => {
     expect([c.si[56], c.si[57], c.si[58], c.si[59]]).toEqual([0, 1074003968, 0, 1074003968]);
   });
 });
+
+describe("a64 simd: vector arithmetic", () => {
+  test("integer lanes: three-same, shifts, widening, narrowing, reductions, dot", () => {
+    const c = run([
+      0x4ea28425,   // add v5.4s, v1.4s, v2.4s
+      0x6ea28426,   // sub v6.4s, v1.4s, v2.4s
+      0x4ea29c27,   // mul v7.4s, v1.4s, v2.4s
+      0x4ea29427,   // mla v7.4s, v1.4s, v2.4s
+      0x6ea28c28,   // cmeq v8.4s, v1.4s, v2.4s
+      0x4ea13449,   // cmgt v9.4s, v2.4s, v1.4s
+      0x6ea2342a,   // cmhi v10.4s, v1.4s, v2.4s
+      0x4ea13c2b,   // cmge v11.4s, v1.4s, v1.4s
+      0x4ea28c2c,   // cmtst v12.4s, v1.4s, v2.4s
+      0x4ea6642d,   // smax v13.4s, v1.4s, v6.4s
+      0x6ea66c2e,   // umin v14.4s, v1.4s, v6.4s
+      0x4ea2442f,   // sshl v15.4s, v1.4s, v2.4s
+      0x6eb14430,   // ushl v16.4s, v1.4s, v17.4s    (v17 = -1: a right shift by one)
+      0x4ea2bc32,   // addp v18.4s, v1.4s, v2.4s
+      0x0e238473,   // add v19.8b, v3.8b, v3.8b
+      0x4f245434,   // shl v20.4s, v1.4s, #4
+      0x4f1f0495,   // sshr v21.8h, v4.8h, #1
+      0x6f140496,   // ushr v22.8h, v4.8h, #12
+      0x4f3f1437,   // ssra v23.4s, v1.4s, #1
+      0x0f10a498,   // sshll v24.4s, v4.4h, #0
+      0x6f14a499,   // ushll2 v25.4s, v4.8h, #4
+      0x0e61283a,   // xtn v26.4h, v1.4s
+      0x4e61285a,   // xtn2 v26.8h, v2.4s
+      0x6ea0283b,   // uaddlp v27.2d, v1.4s
+      0x4eb1b83c,   // addv s28, v1.4s
+      0x6e71a89d,   // uminv h29, v4.8h
+      0x4e30a87e,   // smaxv b30, v3.16b
+      0x0e20587f,   // cnt v31.8b, v3.8b
+      0x4ea00820,   // rev64 v0.4s, v1.4s
+      0x6ea0b821,   // neg v1.4s, v1.4s
+      0x4e60b882,   // abs v2.8h, v4.8h
+      0x4e640c84,   // sqadd v4.8h, v4.8h, v4.8h
+      0x6e230c63,   // uqadd v3.16b, v3.16b, v3.16b
+      0x0e64c085,   // smull v5.4s, v4.4h, v4.4h
+      0x6ea1c026,   // umull2 v6.2d, v1.4s, v1.4s
+      0x0e230067,   // saddl v7.8h, v3.8b, v3.8b
+      0x0e694128,   // addhn v8.4h, v9.4s, v9.4s
+      0x4e83946a,   // sdot v10.4s, v3.16b, v3.16b
+      0x4fa2828b,   // mul v11.4s, v20.4s, v2.s[1]
+      0x4efb876c,   // add v12.2d, v27.2d, v27.2d
+      0x4eec376d,   // cmgt v13.2d, v27.2d, v12.2d
+      0x4f61576e,   // shl v14.2d, v27.2d, #33
+      0x6f7f05cf,   // ushr v15.2d, v14.2d, #1
+      RET], (c) => {
+        c.si.set([1, 2, 3, 4], 4); c.si.set([5, 6, 7, 8], 8);
+        for (let i = 0; i < 16; i++) c.vb[48 + i] = i;
+        c.vsw.set([-1, 2, -3, 4, -5, 6, -7, 8], 32);
+        c.si.set([-1, -1, -1, -1], 68); c.si.set([10, 10, 10, 10], 92);
+      });
+    expect(I(c, 6)).toEqual([9, -6, 16, -8]);
+    expect(I(c, 7)).toEqual([262144, 786440, 1310736, 1835032]);
+    expect(I(c, 8)).toEqual([-1, -1, 0, 0]);
+    expect(I(c, 9)).toEqual([-1, -1, -1, -1]);
+    expect(I(c, 10)).toEqual([56, 504, 1464, 2936]);
+    expect(I(c, 11)).toEqual([4194352, 8388704, 12583056, 16777408]);
+    expect(I(c, 12)).toEqual([6, 0, 14, 0]);
+    expect(I(c, 13)).toEqual([0, 0, 0, 0]);
+    expect(I(c, 14)).toEqual([0, 6, 0, 14]);
+    expect(I(c, 15)).toEqual([0, 3, 0, 7]);
+    expect(I(c, 16)).toEqual([0, 1, 1, 2]);
+    expect(I(c, 18)).toEqual([3, 7, 11, 15]);
+    expect(I(c, 19)).toEqual([100925952, 235670024, 0, 0]);
+    expect(I(c, 20)).toEqual([16, 32, 48, 64]);
+    expect(I(c, 21)).toEqual([131071, 196606, 262141, 327676]);
+    expect(I(c, 22)).toEqual([15, 15, 15, 15]);
+    expect(I(c, 23)).toEqual([10, 11, 11, 12]);
+    expect(I(c, 24)).toEqual([-1, 2, -3, 4]);
+    expect(I(c, 25)).toEqual([1048496, 96, 1048464, 128]);
+    expect(I(c, 26)).toEqual([131073, 262147, 393221, 524295]);
+    expect(I(c, 27)).toEqual([3, 0, 7, 0]);
+    expect(I(c, 28)).toEqual([10, 0, 0, 0]);
+    expect(I(c, 29)).toEqual([2, 0, 0, 0]);
+    expect(I(c, 30)).toEqual([15, 0, 0, 0]);
+    expect(I(c, 31)).toEqual([33620224, 50463233, 0, 0]);
+    expect(I(c, 0)).toEqual([2, 1, 4, 3]);
+    expect(I(c, 1)).toEqual([-1, -2, -3, -4]);
+    expect(I(c, 2)).toEqual([131073, 262147, 393221, 524295]);
+    expect(I(c, 4)).toEqual([327678, 589818, 851958, 1114098]);
+    expect(I(c, 3)).toEqual([100925952, 235670024, 370414096, 505158168]);
+    expect(I(c, 5)).toEqual([4, 16, 36, 64]);
+  });
+
+  test("floating-point lanes: arithmetic, compares, pairs, reductions, conversions, estimates", () => {
+    const c = run([
+      0x6e22dc24,   // fmul v4.4s, v1.4s, v2.4s
+      0x4e22d425,   // fadd v5.4s, v1.4s, v2.4s
+      0x0ea2d426,   // fsub v6.2s, v1.2s, v2.2s
+      0x6e22fc27,   // fdiv v7.4s, v1.4s, v2.4s
+      0x4e22cc28,   // fmla v8.4s, v1.4s, v2.4s
+      0x4ee3cc69,   // fmls v9.2d, v3.2d, v3.2d
+      0x6ea0f82a,   // fneg v10.4s, v1.4s
+      0x4ee0f86b,   // fabs v11.2d, v3.2d
+      0x6ea1f84c,   // fsqrt v12.4s, v2.4s
+      0x4e22f42d,   // fmax v13.4s, v1.4s, v2.4s
+      0x4eafc42e,   // fminnm v14.4s, v1.4s, v15.4s   (v15 is NaN)
+      0x6ea2e430,   // fcmgt v16.4s, v1.4s, v2.4s
+      0x4e22e451,   // fcmeq v17.4s, v2.4s, v2.4s
+      0x6e22ec32,   // facge v18.4s, v1.4s, v2.4s
+      0x4ea0e833,   // fcmlt v19.4s, v1.4s, #0.0
+      0x6e22d434,   // faddp v20.4s, v1.4s, v2.4s
+      0x2e22f435,   // fmaxp v21.2s, v1.2s, v2.2s
+      0x7e30d836,   // faddp s22, v1.2s
+      0x6e30f837,   // fmaxv s23, v1.4s
+      0x4e21db38,   // scvtf v24.4s, v25.4s
+      0x6e61db7a,   // ucvtf v26.2d, v27.2d
+      0x4ea1b83c,   // fcvtzs v28.4s, v1.4s
+      0x4e21abdd,   // fcvtns v29.4s, v30.4s
+      0x6ea1b83f,   // fcvtzu v31.4s, v1.4s
+      0x4e219bc0,   // frintm v0.4s, v30.4s
+      0x0e616861,   // fcvtn v1.2s, v3.2d
+      0x0e6178c2,   // fcvtl v2.2d, v6.2s
+      0x4f8d9883,   // fmul v3.4s, v4.4s, v13.s[2]
+      0x4f8d1085,   // fmla v5.4s, v4.4s, v13.s[0]
+      0x4ea1d9a6,   // frecpe v6.4s, v13.4s
+      0x6ea1d9a7,   // frsqrte v7.4s, v13.4s
+      0x5e21db28,   // scvtf s8, s25
+      0x5ea1b889,   // fcvtzs s9, s4
+      0x5ee1bb4a,   // fcvtzs d10, d26
+      0x5e2ddc8b,   // fmulx s11, s4, s13
+      0x4e2dfc8c,   // frecps v12.4s, v4.4s, v13.4s
+      0x5e24e48d,   // fcmeq s13, s4, s4
+      0x7efb8f6e,   // cmeq d14, d27, d27
+      0x5ef1bb6f,   // addp d15, v27.2d
+      RET], (c) => {
+        c.si.set([1069547520, -1073741824, 1082130432, 1048576000], 4);       // v1 = 1.5, -2, 4, 0.25
+        c.si.set([1073741824, 1073741824, 1073741824, 1073741824], 8);        // v2 = 2, 2, 2, 2
+        c.si.set([0, 1074266112, 0, -1074790400], 12);                        // v3 = 3.0, -1.0
+        c.si.set([1065353216, 1065353216, 1065353216, 1065353216], 32);       // v8 = 1, 1, 1, 1
+        c.si.set([0, 1076101120, 0, 1076101120], 36);                         // v9 = 10.0, 10.0
+        c.si.set([0x7fc00000, 0x7fc00000, 0x7fc00000, 0x7fc00000], 60);      // v15 = NaN
+        c.si.set([1, -2, 3, -4], 100);                                        // v25 ints
+        c.si.set([5, 0, 6, 0], 108);                                          // v27 = 5, 6 (64-bit)
+        c.si.set([1075838976, -1071644672, 1069547520, 1056964608], 120);     // v30 = 2.5, -2.5, 1.5, 0.5
+      });
+    expect(I(c, 4)).toEqual([1077936128, -1065353216, 1090519040, 1056964608]);
+    expect(I(c, 5)).toEqual([1092091904, -1056964608, 1102053376, 1078984704]);
+    expect(I(c, 6)).toEqual([1056931840, 1056931840, 1048543232, 1056931840]);
+    expect(I(c, 7)).toEqual([1060405248, 1060405248, 1056931840, 1060405248]);
+    expect(I(c, 8)).toEqual([1065353216, 0, 0, 0]);
+    expect(I(c, 9)).toEqual([3, 0, 0, 0]);
+    expect(I(c, 10)).toEqual([5, 0, 0, 0]);
+    expect(I(c, 11)).toEqual([1086324736, 0, 0, 0]);
+    expect(I(c, 12)).toEqual([-1065353216, 1092616192, -1041235968, 1065353216]);
+    expect(I(c, 13)).toEqual([-1, 0, 0, 0]);
+    expect(I(c, 14)).toEqual([-1, -1, 0, 0]);
+    expect(I(c, 15)).toEqual([11, 0, 0, 0]);
+    expect(I(c, 16)).toEqual([0, 0, -1, 0]);
+    expect(I(c, 17)).toEqual([-1, -1, -1, -1]);
+    expect(I(c, 18)).toEqual([0, -1, -1, 0]);
+    expect(I(c, 19)).toEqual([0, -1, 0, 0]);
+    expect(I(c, 20)).toEqual([-1090519040, 1082654720, 1082130432, 1082130432]);
+    expect(I(c, 21)).toEqual([1069547520, 1073741824, 0, 0]);
+    expect(I(c, 22)).toEqual([-1090519040, 0, 0, 0]);
+    expect(I(c, 23)).toEqual([1082130432, 0, 0, 0]);
+    expect(I(c, 24)).toEqual([1065353216, -1073741824, 1077936128, -1065353216]);
+    expect(I(c, 26)).toEqual([0, 1075052544, 0, 1075314688]);
+    expect(I(c, 28)).toEqual([1, -2, 4, 0]);
+    expect(I(c, 29)).toEqual([2, -2, 2, 0]);
+    expect(I(c, 31)).toEqual([1, 0, 4, 0]);
+    expect(I(c, 0)).toEqual([1073741824, -1069547520, 1065353216, 0]);
+    expect(I(c, 1)).toEqual([1077936128, -1082130432, 0, 0]);
+    expect(I(c, 2)).toEqual([0, -1075838976, 0, -1072693248]);
+    expect(I(c, 3)).toEqual([1094713344, -1048576000, 1107296256, 1073741824]);
+  });
+});

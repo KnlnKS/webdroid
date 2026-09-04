@@ -8,7 +8,7 @@
 // register V32 and copies back in that case — decided at emit time, free when registers differ.
 
 import { type Fl, hex, ALL, COND, COND_READS } from "./flags";
-import { sp, sph, zr, zrh, setX, setW, int32, lane, zeroHi, zeroS, words, SCRATCH, type View } from "./a64regs";
+import { sp, sph, zr, zrh, setX, setW, int32, lane, zeroHi, zeroS, words, SCRATCH, shl64, shr64, sar64, type View } from "./a64regs";
 import { vfpImm } from "./vfp";
 import { fbits, dbits } from "./host";
 
@@ -301,6 +301,10 @@ export function emitSimd(_pc: number, w: number, push: Push, fault: Fault): bool
     return false;
   }
 
+  // ── the vector and scalar-SIMD arithmetic families
+  const vec = emitVector(w, push, fault);
+  if (vec !== null) return vec;
+
   // ── scalar floating point (bit 28 set): the data-processing groups and the conversions
   if ((w & 0x50000000) === 0x10000000) return emitFp(w, push, fault);
 
@@ -464,4 +468,439 @@ function emitFp(w: number, push: Push, fault: Fault): boolean {
   }
   push(fault("fp"));
   return true;
+}
+
+// ── integer lanes: the view for an element size (0 b, 1 h, 2 s) and signedness
+const iv = (size: number, signed: boolean): View => (size === 0 ? (signed ? "SB" : "B") : size === 1 ? (signed ? "SW" : "W") : signed ? "I" : "U");
+const BITS = [8, 16, 32, 64];
+/** saturate expression `t` to a lane of `bits`, signed or not, raising QC */
+function sat(t: string, bits: number, signed: boolean): string {
+  const max = signed ? 2 ** (bits - 1) - 1 : 2 ** bits - 1, min = signed ? -(2 ** (bits - 1)) : 0;
+  return `(${t}>${max}?(c.q=1,${max}):${t}<${min}?(c.q=1,${min}):${t})`;
+}
+/** a 64-bit lane (word pair) of Vn */
+const lo64 = (n: number, i: number) => `I[${4 * n + 2 * i}]`, hi64 = (n: number, i: number) => `I[${4 * n + 2 * i + 1}]`;
+/** 64-bit compare of lanes i of Vn and Vm: `gt` signed / unsigned, `eq` */
+const cmp64 = (n: number, m: number, i: number, kind: "gt" | "ge" | "hi" | "hs" | "eq" | "tst") => {
+  const [al, ah, bl, bh] = [lo64(n, i), hi64(n, i), lo64(m, i), hi64(m, i)];
+  const gtS = `(${ah}>${bh}||(${ah}===${bh}&&(${al}>>>0)>(${bl}>>>0)))`, gtU = `((${ah}>>>0)>(${bh}>>>0)||(${ah}===${bh}&&(${al}>>>0)>(${bl}>>>0)))`;
+  const eq = `(${ah}===${bh}&&${al}===${bl})`;
+  return kind === "gt" ? gtS : kind === "hi" ? gtU : kind === "eq" ? eq : kind === "tst" ? `((${al}&${bl})|(${ah}&${bh}))!==0` : kind === "ge" ? `(${gtS}||${eq})` : `(${gtU}||${eq})`;
+};
+/** write every 64-bit lane i of Vd from (lo, hi) expression pairs */
+function lanes64(d: number, count: number, f: (i: number) => [string, string], q: boolean, safe = true, srcs: number[] = []): string {
+  const tgt = !safe && srcs.includes(d) ? SCRATCH : d;
+  let s = "";
+  for (let i = 0; i < count; i++) { const [l, h] = f(i); s += `t=${l};th=${h};${lo64(tgt, i)}=t;${hi64(tgt, i)}=th;`; }
+  if (tgt !== d) for (let i = 0; i < 2 * count; i++) s += `I[${4 * d + i}]=I[${4 * SCRATCH + i}];`;
+  return s + (q ? "" : zeroHi(d));
+}
+/** an integer-valued double `t` into the (lo, hi) of a 64-bit lane */
+const split64 = (t: string): [string, string] => [`${t}`, `Math.floor(${t}/4294967296)`];
+
+function emitVector(w: number, push: Push, fault: Fault): boolean | null {
+  const rd = w & 31, rn = (w >>> 5) & 31, rm = (w >>> 16) & 31, q = (w >>> 30) & 1, U = (w >>> 29) & 1, size = (w >>> 22) & 3;
+  const scalar = (w & 0x10000000) !== 0 && (w & 0x40000000) !== 0;   // 01x1: the scalar forms
+  const Q = scalar ? 0 : q;
+  const bits = BITS[size], count = scalar ? 1 : ((Q ? 128 : 64) / bits);
+  // FP element size in these families: size<0> picks single/double, size<1> the variant
+  const fdp = (size & 1) === 1, fv = (size >> 1) & 1;
+  const FV: View = fdp ? "D" : "S", fcount = scalar ? 1 : (Q ? 128 : 64) / (fdp ? 64 : 32);
+  const F = (n: number, i: number) => lane(FV, n, i);
+  const fin = (d: number, body: string) => body + (scalar ? (fdp ? zeroHi(d) : zeroS(d)) : Q ? "" : zeroHi(d));
+  const done = (body: string) => { push(body); return false; };
+  const unimpl = (what: string) => { push(fault(what)); return true; };
+  // the scalar S/H/B forms zero above the element; a 64-bit scalar zeroes the top half
+  const finI = (d: number, body: string) => body + (scalar ? (size === 3 ? zeroHi(d) : zeroS(d)) : Q ? "" : zeroHi(d));
+  /** a narrowing op writes SCRATCH's low half, then the half of Vd the Q bit names (the other half keeps its lanes) */
+  const narrowed = (body: string) => body + (Q ? `I[${4 * rd + 2}]=I[${4 * SCRATCH}];I[${4 * rd + 3}]=I[${4 * SCRATCH + 1}];` : `I[${4 * rd}]=I[${4 * SCRATCH}];I[${4 * rd + 1}]=I[${4 * SCRATCH + 1}];` + zeroHi(rd)) + (scalar ? zeroS(rd) : "");
+
+  // ── three-same (vector 0Q U 01110 size 1 Rm opcode 1, scalar 01 U 11110 ...)
+  if (is(w, 0x8f200400, 0x0e200400) && (!(w & 0x10000000) || (w & 0x40000000))) {
+    const opcode = (w >>> 11) & 31;
+    if (opcode >= 24) {                                                                  // floating point
+      if (opcode === 25 && U) return unimpl("fmlal");
+      const N = (i: number) => F(rn, i), Mm = (i: number) => F(rm, i), Dd = (i: number) => F(rd, i);
+      const each = (f: (i: number) => string, safe = true) => fin(rd, lanes(rd, fcount, FV, f, !!Q, safe, [rn, rm]));
+      const nm = (max: boolean) => `a!==a?t:t!==t?a:Math.${max ? "max" : "min"}(a,t)`;
+      const fcmp = (test: (i: number) => string) => fin(rd, [...Array(fcount)].map((_, i) => fdp ? `t=${test(i)}?-1:0;${lo64(rd, i)}=t;${hi64(rd, i)}=t;` : `I[${4 * rd + i}]=${test(i)}?-1:0;`).join(""));
+      const pair = (i: number) => (i < fcount / 2 ? [N(2 * i), N(2 * i + 1)] : [Mm(2 * i - fcount), Mm(2 * i - fcount + 1)]);
+      switch (opcode) {
+        case 24: if (!U) return done(each((i) => `(a=${N(i)},t=${Mm(i)},${nm(!fv)})`));                                 // FMAXNM / FMINNM
+          return done(each((i) => { const [x, y] = pair(i); return `(a=${x},t=${y},${nm(!fv)})`; }, false));            // FMAXNMP / FMINNMP
+        case 25: return done(each((i) => (fv ? `${Dd(i)}-${N(i)}*${Mm(i)}` : `${Dd(i)}+${N(i)}*${Mm(i)}`)));            // FMLA / FMLS
+        case 26: if (!U) return done(each((i) => `${N(i)}${fv ? "-" : "+"}${Mm(i)}`));                                  // FADD / FSUB
+          if (fv) return done(each((i) => `Math.abs(${N(i)}-${Mm(i)})`));                                               // FABD
+          return done(each((i) => { const [x, y] = pair(i); return `${x}+${y}`; }, false));                             // FADDP
+        case 27: return done(each((i) => (U ? `${N(i)}*${Mm(i)}` : `c.fmulx(${N(i)},${Mm(i)})`)));                     // FMUL / FMULX
+        case 28: return done(fcmp((i) => (!U ? `${N(i)}===${Mm(i)}` : fv ? `${N(i)}>${Mm(i)}` : `${N(i)}>=${Mm(i)}`)));   // FCMEQ / FCMGE / FCMGT
+        case 29: if (!U) return unimpl("fmlal");
+          return done(fcmp((i) => (fv ? `Math.abs(${N(i)})>Math.abs(${Mm(i)})` : `Math.abs(${N(i)})>=Math.abs(${Mm(i)})`)));   // FACGE / FACGT
+        case 30: if (!U) return done(each((i) => `Math.${fv ? "min" : "max"}(${N(i)},${Mm(i)})`));                      // FMAX / FMIN
+          return done(each((i) => { const [x, y] = pair(i); return `Math.${fv ? "min" : "max"}(${x},${y})`; }, false));   // FMAXP / FMINP
+        case 31: if (U) return done(each((i) => `${N(i)}/${Mm(i)}`));                                                    // FDIV
+          return done(each((i) => (fv ? `(3-${N(i)}*${Mm(i)})/2` : `2-${N(i)}*${Mm(i)}`)));                            // FRECPS / FRSQRTS
+      }
+    }
+    if (opcode === 3) return unimpl("three-same bitwise reached the arithmetic path");
+    if (size === 3) {                                                                    // 64-bit integer lanes
+      const each64 = (f: (i: number) => [string, string], safe = true) => finI(rd, lanes64(rd, count, f, !!Q, safe, [rn, rm]));
+      const mask = (kind: "gt" | "ge" | "hi" | "hs" | "eq" | "tst") => each64((i) => [`${cmp64(rn, rm, i, kind)}?-1:0`, "t"]);
+      switch (opcode) {
+        case 6: return done(mask(U ? "hi" : "gt"));
+        case 7: return done(mask(U ? "hs" : "ge"));
+        case 8: return done(each64((i) => [`(s=SB[${16 * rm + 8 * i}],s>=0?(c.shift64(${lo64(rn, i)},${hi64(rn, i)},s>63?64:s,0),c.lo):(c.shift64(${lo64(rn, i)},${hi64(rn, i)},-s>63?64:-s,${U ? 1 : 2}),c.lo))`, "c.hi"]));   // SSHL / USHL
+        case 16: return done(each64((i) => {
+          const [al, ah, bl, bh] = [lo64(rn, i), hi64(rn, i), lo64(rm, i), hi64(rm, i)];
+          return U ? [`(${al}-${bl})|0`, `(${ah}-${bh}-((${al}>>>0)<(${bl}>>>0)?1:0))|0`] : [`(${al}+${bl})|0`, `(${ah}+${bh}+(((${al}>>>0)+(${bl}>>>0))>4294967295?1:0))|0`];
+        }));                                                                              // ADD / SUB
+        case 17: return done(mask(U ? "eq" : "tst"));                                     // CMTST / CMEQ
+        case 23: if (U) return unimpl("three-same .2d");
+          return done(each64((i) => {                                                     // ADDP .2d (and the scalar addp d)
+            const [al, ah, bl, bh] = i === 0 ? [lo64(rn, 0), hi64(rn, 0), lo64(rn, 1), hi64(rn, 1)] : [lo64(rm, 0), hi64(rm, 0), lo64(rm, 1), hi64(rm, 1)];
+            return [`(${al}+${bl})|0`, `(${ah}+${bh}+(((${al}>>>0)+(${bl}>>>0))>4294967295?1:0))|0`];
+          }, false));
+      }
+      return unimpl("three-same .2d");
+    }
+    const sv = iv(size, true), uv = iv(size, false), V = iv(size, !U);
+    const N = (i: number) => lane(V, rn, i), Mm = (i: number) => lane(V, rm, i), Dd = (i: number) => lane(V, rd, i);
+    const each = (f: (i: number) => string, view: View = V, safe = true) => finI(rd, lanes(rd, count, view, f, !!Q, safe, [rn, rm]));
+    const wrap = (e: string) => (size === 2 ? `(${e})|0` : e);   // 8/16-bit stores truncate; a 32-bit sum must not leave int32 for a signed lane view
+    const pair = (i: number) => (i < count / 2 ? [N(2 * i), N(2 * i + 1)] : [Mm(2 * i - count), Mm(2 * i - count + 1)]);
+    switch (opcode) {
+      case 0: return done(each((i) => `Math.floor((${N(i)}+${Mm(i)})/2)`));                                             // SHADD / UHADD
+      case 1: return done(each((i) => sat(`(${N(i)}+${Mm(i)})`, bits, !U)));                                            // SQADD / UQADD
+      case 2: return done(each((i) => `Math.floor((${N(i)}+${Mm(i)}+1)/2)`));                                           // SRHADD / URHADD
+      case 4: return done(each((i) => `Math.floor((${N(i)}-${Mm(i)})/2)`));                                             // SHSUB / UHSUB
+      case 5: return done(each((i) => sat(`(${N(i)}-${Mm(i)})`, bits, !U)));                                            // SQSUB / UQSUB
+      case 6: return done(each((i) => `${N(i)}>${Mm(i)}?-1:0`, sv));                                                    // CMGT / CMHI
+      case 7: return done(each((i) => `${N(i)}>=${Mm(i)}?-1:0`, sv));                                                   // CMGE / CMHS
+      case 8: case 10: {                                                                                                  // SSHL / USHL, SRSHL / URSHL
+        const round = opcode === 10;
+        return done(each((i) => {
+          const a = N(i), sh = `SB[${16 * rm + (bits / 8) * i}]`;
+          const right = U ? (round ? `((${a}+(1<<(-s-1)))>>>-s)` : `(${a}>>>-s)`) : (round ? `((${a}+(1<<(-s-1)))>>-s)` : `(${a}>>-s)`);
+          const far = U ? "0" : `(${a}>>${bits - 1})`;
+          return `(s=${sh},s>=0?(s>=${bits}?0:${a}<<s):(s<=-${bits}?${round && !U ? "0" : far}:${right}))`;
+        }));
+      }
+      case 12: return done(each((i) => `Math.max(${N(i)},${Mm(i)})`));                                                  // SMAX / UMAX
+      case 13: return done(each((i) => `Math.min(${N(i)},${Mm(i)})`));                                                  // SMIN / UMIN
+      case 14: return done(each((i) => `Math.abs(${N(i)}-${Mm(i)})`));                                                  // SABD / UABD
+      case 15: return done(each((i) => `${Dd(i)}+Math.abs(${N(i)}-${Mm(i)})`));                                          // SABA / UABA
+      case 16: return done(each((i) => wrap(`${N(i)}${U ? "-" : "+"}${Mm(i)}`)));                                       // ADD / SUB
+      case 17: return done(each((i) => (U ? `${N(i)}===${Mm(i)}?-1:0` : `(${N(i)}&${Mm(i)})!==0?-1:0`), sv));           // CMTST / CMEQ
+      case 18: return done(each((i) => wrap(`${Dd(i)}${U ? "-" : "+"}${size === 2 ? `Math.imul(${N(i)},${Mm(i)})` : `${N(i)}*${Mm(i)}`}`)));   // MLA / MLS
+      case 19: if (U) return done(each((i) => `c.pmul8(${N(i)},${Mm(i)})`, uv));                                         // PMUL
+        return done(each((i) => (size === 2 ? `Math.imul(${N(i)},${Mm(i)})` : `${N(i)}*${Mm(i)}`)));                    // MUL
+      case 20: return done(each((i) => { const [x, y] = pair(i); return `Math.max(${x},${y})`; }, V, false));            // SMAXP / UMAXP
+      case 21: return done(each((i) => { const [x, y] = pair(i); return `Math.min(${x},${y})`; }, V, false));            // SMINP / UMINP
+      case 22: {                                                                                                          // SQDMULH / SQRDMULH
+        if (size === 0) return unimpl("sqdmulh .b");
+        const round = U ? `+${2 ** (bits - 1)}` : "";
+        return done(each((i) => sat(`Math.floor((2*${N(i)}*${Mm(i)}${round})/${2 ** bits})`, bits, true), sv));
+      }
+      case 23: if (U) return unimpl("three-same");
+        return done(each((i) => { const [x, y] = pair(i); return wrap(`${x}+${y}`); }, V, false));                       // ADDP
+    }
+    return unimpl("three-same");
+  }
+
+  // ── two-register misc (vector 0Q U 01110 size 10000 opcode 10, scalar 01 U 11110 ...)
+  if (is(w, 0x8f3e0c00, 0x0e200800) && (!(w & 0x10000000) || (w & 0x40000000))) {
+    const opcode = (w >>> 12) & 31;
+    const N = (i: number) => F(rn, i);
+    const each = (f: (i: number) => string, view: View = FV, safe = true) => fin(rd, lanes(rd, fcount, view, f, !!Q, safe, [rn]));
+    const fcmp0 = (test: (i: number) => string) => fin(rd, [...Array(fcount)].map((_, i) => fdp ? `t=${test(i)}?-1:0;${lo64(rd, i)}=t;${hi64(rd, i)}=t;` : `I[${4 * rd + i}]=${test(i)}?-1:0;`).join(""));
+    const toInts = (mode: "N" | "P" | "M" | "Z" | "A", unsigned: boolean) => fin(rd, [...Array(fcount)].map((_, i) => `t=${rounded(N(i), mode)};` + (fdp
+      ? `c.cvt64(t,${unsigned ? 0 : 1});${lo64(rd, i)}=c.lo;${hi64(rd, i)}=c.hi;`
+      : `I[${4 * rd + i}]=${unsigned ? "(t!==t||t<=0?0:t>=4294967295?-1:t|0)" : "(t!==t?0:t>=2147483647?2147483647:t<=-2147483648?-2147483648:t|0)"};`)).join(""));
+    if (opcode >= 22 || (opcode >= 12 && opcode <= 15 && fv)) {                         // floating point, size<1> picks the variant
+      switch (opcode) {
+        case 22: if (U) return unimpl("fcvtxn");
+          if (fv) return unimpl("frint32/64");
+          // FCVTN(2): .2s from .2d, or .4h from .4s
+          if (fdp) return done(narrowed(`S[${4 * SCRATCH}]=D[${2 * rn}];S[${4 * SCRATCH + 1}]=D[${2 * rn + 1}];`));
+          return done(narrowed([...Array(4)].map((_, i) => `W[${8 * SCRATCH + i}]=c.f2h(S[${4 * rn + i}]);`).join("")));
+        case 23: {                                                                       // FCVTL: .4s from .4h, .2d from .2s (upper half when Q)
+          const off = Q ? (fdp ? 2 : 4) : 0;
+          if (fdp) return done(lanes(rd, 2, "D", (i) => `S[${4 * rn + off + i}]`, true, false, [rn]));
+          return done(lanes(rd, 4, "S", (i) => `c.h2f(W[${8 * rn + off + i}])`, true, false, [rn]));
+        }
+        case 24: return done(each((i) => rounded(N(i), U ? (fv ? "X" : "A") : fv ? "P" : "N")));   // FRINTN/P, FRINTA/X
+        case 25: return done(each((i) => rounded(N(i), U ? (fv ? "X" : "X") : fv ? "Z" : "M")));   // FRINTM/Z, FRINTX/I
+        case 26: return done(toInts(fv ? "P" : "N", !!U));                              // FCVTNS/PS, FCVTNU/PU
+        case 27: return done(toInts(fv ? "Z" : "M", !!U));                              // FCVTMS/ZS, FCVTMU/ZU
+        case 28: if (!fv) return done(toInts("A", !!U));                                 // FCVTAS / FCVTAU
+          return unimpl("urecpe/ursqrte");
+        case 29: if (!fv) return done(each((i) => (fdp ? (U ? `(${hi64(rn, i)}>>>0)*4294967296+(${lo64(rn, i)}>>>0)` : `${hi64(rn, i)}*4294967296+(${lo64(rn, i)}>>>0)`) : U ? `U[${4 * rn + i}]` : `I[${4 * rn + i}]`)));   // SCVTF / UCVTF
+          return done(each((i) => `c.${U ? "rsqrte" : "recpe"}(${N(i)},${fdp})`));      // FRECPE / FRSQRTE
+        case 31: if (U) return done(each((i) => `Math.sqrt(${N(i)})`));                   // FSQRT
+          if (scalar) return done(each((i) => `1/${N(i)}`));                               // FRECPX (exact for the exponent; the fraction is zero in ARM's — documented)
+          return unimpl("two-misc");
+        case 12: return done(fcmp0((i) => (U ? `${N(i)}>=0` : `${N(i)}>0`)));          // FCMGT #0 / FCMGE #0
+        case 13: return done(fcmp0((i) => (U ? `${N(i)}<=0` : `${N(i)}===0`)));        // FCMEQ #0 / FCMLE #0
+        case 14: return done(fcmp0((i) => `${N(i)}<0`));                                // FCMLT #0
+        case 15: return done(fin(rd, [...Array(fcount)].map((_, i) => fdp
+          ? `${lo64(rd, i)}=${lo64(rn, i)};${hi64(rd, i)}=${hi64(rn, i)}${U ? "^-2147483648" : "&0x7fffffff"};`
+          : `I[${4 * rd + i}]=I[${4 * rn + i}]${U ? "^-2147483648" : "&0x7fffffff"};`).join("")));   // FABS / FNEG
+      }
+    }
+    // integer
+    const sv = iv(Math.min(size, 2), true), uv = iv(Math.min(size, 2), false);
+    const eachI = (f: (i: number) => string, view: View = sv, safe = true) => finI(rd, lanes(rd, count, view, f, !!Q, safe, [rn]));
+    const I64 = (f: (i: number) => [string, string], safe = true) => finI(rd, lanes64(rd, count, f, !!Q, safe, [rn]));
+    switch (opcode) {
+      case 0: case 1: {                                                                  // REV64 / REV32 (U) / REV16
+        const group = opcode === 1 ? 2 : U ? 4 : 8;                                      // bytes reversed within
+        if (bits / 8 >= group) return unimpl("rev");
+        const per = bits / 8, n = group / per;
+        const view = iv(size, false);
+        return done(eachI((i) => lane(view, rn, (i - (i % n)) + (n - 1 - (i % n))), view, false));
+      }
+      case 2: case 6: {                                                                  // SADDLP / UADDLP, SADALP / UADALP
+        if (size === 3) return unimpl("addlp .2d");
+        const wide = size + 1, wv = iv(Math.min(wide, 2), !U), acc = opcode === 6;
+        const wcount = count / 2;
+        if (wide === 3) return done(I64((i) => { const t = `${lane(sv, rn, 2 * i)}+${lane(sv, rn, 2 * i + 1)}` + (acc ? `+(${hi64(rd, i)}*4294967296+(${lo64(rd, i)}>>>0))` : ""); return split64(`(${t})`); }, false));
+        return done(finI(rd, lanes(rd, wcount, wv, (i) => `${acc ? `${lane(wv, rd, i)}+` : ""}${lane(sv, rn, 2 * i)}+${lane(sv, rn, 2 * i + 1)}`, !!Q, false, [rn])));
+      }
+      case 4: if (size === 3) return unimpl("cls/clz .2d");                              // CLS / CLZ
+        return done(eachI((i) => (U ? `Math.clz32(${lane(uv, rn, i)})-${32 - bits}` : `Math.clz32(${lane(sv, rn, i)}^(${lane(sv, rn, i)}>>${bits - 1}))-${32 - bits + 1}`)));
+      case 5: if (U && size === 1) return done(eachI((i) => `c.rbit32(${lane(uv, rn, i)})>>>24`, uv));   // RBIT
+        if (!U && size === 0) return done(eachI((i) => `c.pop8(${lane(uv, rn, i)})`, uv));             // CNT
+        return unimpl("two-misc");
+      case 7: if (size === 3) return unimpl("sqabs/sqneg .2d");                          // SQABS / SQNEG
+        return done(eachI((i) => sat(U ? `(-${lane(sv, rn, i)})` : `Math.abs(${lane(sv, rn, i)})`, bits, true)));
+      case 8: if (size === 3) return done(I64((i) => [`(${U ? `${hi64(rn, i)}>=0` : `${hi64(rn, i)}>0||(${hi64(rn, i)}===0&&${lo64(rn, i)}!==0)`})?-1:0`, "t"]));   // CMGT #0 / CMGE #0
+        return done(eachI((i) => `${lane(sv, rn, i)}${U ? ">=" : ">"}0?-1:0`));
+      case 9: if (size === 3) return done(I64((i) => [`(${U ? `${hi64(rn, i)}<0||(${hi64(rn, i)}===0&&${lo64(rn, i)}===0)` : `${hi64(rn, i)}===0&&${lo64(rn, i)}===0`})?-1:0`, "t"]));   // CMEQ #0 / CMLE #0
+        return done(eachI((i) => `${lane(sv, rn, i)}${U ? "<=" : "==="}0?-1:0`));
+      case 10: if (U) return unimpl("two-misc");
+        if (size === 3) return done(I64((i) => [`${hi64(rn, i)}<0?-1:0`, "t"]));         // CMLT #0
+        return done(eachI((i) => `${lane(sv, rn, i)}<0?-1:0`));
+      case 11: if (size === 3) return done(I64((i) => {                                  // ABS / NEG .2d
+        const [l, h] = [lo64(rn, i), hi64(rn, i)];
+        const neg: [string, string] = [`(-${l})|0`, `(~${h}+((${l}>>>0)===0?1:0))|0`];
+        return U ? neg : [`${h}<0?${neg[0]}:${l}`, `${h}<0?${neg[1]}:${h}`];
+      }));
+        return done(eachI((i) => (U ? `-${lane(sv, rn, i)}` : `Math.abs(${lane(sv, rn, i)})`)));
+      case 18: case 20: {                                                                // XTN(2) / SQXTUN(2) (U, 18); SQXTN(2) / UQXTN(2) (20)
+        if (size === 3) return unimpl("xtn .1q");
+        const outSigned = opcode === 20 && !U, srcSigned = !(opcode === 20 && U), outv = iv(size, outSigned);
+        const src = (i: number) => (size === 2
+          ? (srcSigned ? `(${hi64(rn, i)}*4294967296+(${lo64(rn, i)}>>>0))` : `((${hi64(rn, i)}>>>0)*4294967296+(${lo64(rn, i)}>>>0))`)
+          : lane(iv(size + 1, srcSigned), rn, i));
+        const f = (i: number) => (opcode === 18 && !U ? (size === 2 ? lo64(rn, i) : lane(iv(size + 1, false), rn, i)) : sat(src(i), bits, outSigned));
+        let body = "";
+        for (let i = 0; i < 64 / bits; i++) body += `${lane(outv, SCRATCH, i)}=${f(i)};`;
+        return done(narrowed(body));
+      }
+      case 19: {                                                                         // SHLL(2): widen and shift left by the element size
+        if (!U || size === 3) return unimpl("shll");
+        const half = 64 / bits, off = Q ? half : 0, wv = iv(Math.min(size + 1, 2), false);
+        if (size === 2) return done(lanes64(rd, half, (i) => [`0`, lane(uv, rn, off + i)], true, false, [rn]));
+        return done(lanes(rd, half, wv, (i) => `${lane(uv, rn, off + i)}<<${bits}`, true, false, [rn]));
+      }
+    }
+    return unimpl("two-misc");
+  }
+
+  // ── across lanes (0Q U 01110 size 11000 opcode 10) and the scalar pairwise forms (01 U 11110 size 11000 ...)
+  if (is(w, 0x8f3e0c00, 0x0e300800) && (!(w & 0x10000000) || (w & 0x40000000))) {
+    const opcode = (w >>> 12) & 31;
+    const vcount = (q ? 128 : 64) / bits;
+    if (scalar) {                                                                        // pairwise: two lanes of Vn into one scalar
+      if (!U && opcode === 27) return done(lanes64(rd, 1, () => [`(${lo64(rn, 0)}+${lo64(rn, 1)})|0`, `(${hi64(rn, 0)}+${hi64(rn, 1)}+(((${lo64(rn, 0)}>>>0)+(${lo64(rn, 1)}>>>0))>4294967295?1:0))|0`], false));   // ADDP d
+      if (!U) return unimpl("scalar pairwise");
+      const a = F(rn, 0), b = F(rn, 1);
+      const e = opcode === 13 ? `${a}+${b}` : opcode === 15 ? `Math.${fv ? "min" : "max"}(${a},${b})` : opcode === 12 ? `(a=${a},t=${b},a!==a?t:t!==t?a:Math.${fv ? "min" : "max"}(a,t))` : null;
+      if (e === null) return unimpl("scalar pairwise");
+      return done(fin(rd, `${F(rd, 0)}=${e};`));
+    }
+    if (U && (opcode === 12 || opcode === 15)) {                                          // FMAXNMV/FMINNMV, FMAXV/FMINV (.4s)
+      if (fdp || !q) return unimpl("fmaxv");
+      const fn = fv ? "min" : "max";
+      let body = `a=S[${4 * rn}];`;
+      for (let i = 1; i < 4; i++) body += opcode === 15 ? `a=Math.${fn}(a,S[${4 * rn + i}]);` : `t=S[${4 * rn + i}];a=a!==a?t:t!==t?a:Math.${fn}(a,t);`;
+      return done(body + `S[${4 * rd}]=a;` + zeroS(rd));
+    }
+    if (size === 3) return unimpl("across .2d");
+    const V = iv(size, !U);
+    const all = [...Array(vcount)].map((_, i) => lane(V, rn, i));
+    switch (opcode) {
+      case 3: {                                                                          // SADDLV / UADDLV: the sum, one size wider
+        const t = all.join("+");
+        if (size === 2) return done(`t=${t};I[${4 * rd}]=t;I[${4 * rd + 1}]=Math.floor(t/4294967296);` + zeroHi(rd));
+        return done(`${lane(iv(size + 1, !U), rd, 0)}=${t};` + zeroS(rd));
+      }
+      case 10: return done(`${lane(V, rd, 0)}=Math.max(${all.join(",")});` + zeroS(rd));    // SMAXV / UMAXV
+      case 26: return done(`${lane(V, rd, 0)}=Math.min(${all.join(",")});` + zeroS(rd));    // SMINV / UMINV
+      case 27: return done(`${lane(V, rd, 0)}=${all.join("+")};` + zeroS(rd));              // ADDV
+    }
+    return unimpl("across lanes");
+  }
+
+  // ── shift by immediate (0Q U 011110 immh immb opcode 1, scalar 01 U 111110 ...)
+  if ((is(w, 0x9f800400, 0x0f000400) || is(w, 0xdf800400, 0x5f000400)) && ((w >>> 19) & 15)) {
+    const immh = (w >>> 19) & 15, immb = (w >>> 16) & 7, opcode = (w >>> 11) & 31;
+    const esz = immh & 8 ? 3 : immh & 4 ? 2 : immh & 2 ? 1 : 0, ebits = BITS[esz];
+    const shr = 2 * ebits - ((immh << 3) | immb), shl = ((immh << 3) | immb) - ebits;
+    const ecount = scalar ? 1 : (Q ? 128 : 64) / ebits;
+    const finS = (d: number, body: string) => body + (scalar ? (esz === 3 ? zeroHi(d) : zeroS(d)) : Q ? "" : zeroHi(d));
+    if (esz === 3) {                                                                     // 64-bit lanes: constant shifts split at emit time
+      const each64 = (f: (i: number) => [string, string]) => finS(rd, lanes64(rd, ecount, f, !!Q));
+      const src = (i: number): [string, string] => [lo64(rn, i), hi64(rn, i)];
+      switch (opcode) {
+        case 0: return done(each64((i) => (U ? shr64(...src(i), shr) : sar64(...src(i), shr))));                        // SSHR / USHR
+        case 2: return done(each64((i) => { const [l, h] = U ? shr64(...src(i), shr) : sar64(...src(i), shr); return [`(${lo64(rd, i)}+${l})|0`, `(${hi64(rd, i)}+${h}+(((${lo64(rd, i)}>>>0)+(${l}>>>0))>4294967295?1:0))|0`]; }));   // SSRA / USRA
+        case 10: if (U) return unimpl("sli .2d");
+          return done(each64((i) => shl64(...src(i), shl)));                                                            // SHL
+        case 28: return done(fin(rd, lanes(rd, ecount, "D", (i) => `(${U ? `(${hi64(rn, i)}>>>0)` : hi64(rn, i)}*4294967296+(${lo64(rn, i)}>>>0))/${2 ** shr}`, !!Q)));   // SCVTF / UCVTF fixed .2d
+        case 31: return done(fin(rd, [...Array(ecount)].map((_, i) => `t=Math.trunc(D[${2 * rn + i}]*${2 ** shr});c.cvt64(t,${U ? 0 : 1});${lo64(rd, i)}=c.lo;${hi64(rd, i)}=c.hi;`).join("")));   // FCVTZS / FCVTZU fixed .2d
+      }
+      return unimpl("shift .2d");
+    }
+    const sv = iv(esz, true), uv = iv(esz, false), V = iv(esz, !U);
+    const N = (i: number) => lane(V, rn, i), Dd = (i: number) => lane(V, rd, i);
+    const each = (f: (i: number) => string, view: View = V, safe = true) => finS(rd, lanes(rd, ecount, view, f, !!Q, safe, [rn]));
+    const rsh = (a: string, round: boolean) => (U ? (round ? `((${a}+${2 ** (shr - 1)})>>>${shr})` : `(${a}>>>${shr})`) : (round ? `((${a}+${2 ** (shr - 1)})>>${shr})` : `(${a}>>${shr})`));
+    switch (opcode) {
+      case 0: case 4: return done(each((i) => rsh(N(i), opcode === 4)));                                                 // SSHR / USHR / SRSHR / URSHR
+      case 2: case 6: return done(each((i) => `${Dd(i)}+${rsh(N(i), opcode === 6)}`));                                   // SSRA / USRA / SRSRA / URSRA
+      case 8: if (!U) return unimpl("shift");                                                                            // SRI
+        return done(each((i) => `(${Dd(i)}&${(~(2 ** ebits - 1 >>> shr)) & (2 ** ebits - 1)})|(${N(i)}>>>${shr})`, uv));
+      case 10: if (!U) return done(each((i) => `${N(i)}<<${shl}`));                                                      // SHL
+        return done(each((i) => `(${Dd(i)}&${2 ** shl - 1})|(${N(i)}<<${shl})`, uv));                                    // SLI
+      case 12: if (!U) return unimpl("shift");
+        return done(each((i) => sat(`(${lane(sv, rn, i)}*${2 ** shl})`, ebits, false), uv));                             // SQSHLU
+      case 14: return done(each((i) => sat(`(${N(i)}*${2 ** shl})`, ebits, !U)));                                        // SQSHL / UQSHL
+      case 16: case 17: case 18: case 19: {                                                                              // SHRN/RSHRN, SQSHRUN/SQRSHRUN (U), SQSHRN/UQSHRN, SQRSHRN/UQRSHRN
+        // narrow from lanes twice as wide; the "2" form writes the upper half and keeps the lower
+        const wide = esz + 1, round = (opcode & 1) === 1, wcount = Q ? ecount / 2 : ecount;
+        if (wide === 3) return unimpl("shrn from .2d");
+        const plain = opcode <= 17 && !U, srcSigned = !(opcode >= 18 && U), outSigned = opcode >= 18 && !U;
+        const srcv = (i: number) => lane(iv(wide, plain ? false : srcSigned), rn, i);
+        const shifted = (i: number) => (round ? `Math.floor((${srcv(i)}+${2 ** (shr - 1)})/${2 ** shr})` : `Math.floor(${srcv(i)}/${2 ** shr})`);
+        const f = (i: number) => (plain ? shifted(i) : sat(shifted(i), ebits, outSigned));
+        let body = "";
+        for (let i = 0; i < wcount; i++) body += `${lane(iv(esz, outSigned), SCRATCH, i)}=${f(i)};`;
+        return done(narrowed(body));
+      }
+      case 20: {                                                                         // SSHLL / USHLL (SXTL / UXTL): widen from the low (or high, Q) half
+        const wide = esz + 1, off = Q ? ecount / 2 : 0, wcount = Q ? ecount / 2 : ecount;
+        if (wide === 3) return done(lanes64(rd, wcount, (i) => shl64(lane(V, rn, off + i), U ? "0" : `(${lane(V, rn, off + i)}>>31)`, shl), true, false, [rn]));
+        return done(lanes(rd, wcount, iv(wide, !U), (i) => `${N(off + i)}<<${shl}`, true, false, [rn]));
+      }
+      case 28: return done(fin(rd, lanes(rd, ecount, "S", (i) => `${N(i)}/${2 ** shr}`, !!Q)));                           // SCVTF / UCVTF fixed (.s)
+      case 31: return done(fin(rd, [...Array(ecount)].map((_, i) => `t=Math.trunc(S[${4 * rn + i}]*${2 ** shr});I[${4 * rd + i}]=${U ? "(t!==t||t<=0?0:t>=4294967295?-1:t|0)" : "(t!==t?0:t>=2147483647?2147483647:t<=-2147483648?-2147483648:t|0)"};`).join("")));   // FCVTZS / FCVTZU fixed
+    }
+    return unimpl("shift");
+  }
+
+  // ── by element (0Q U 01111 size L M Rm opcode H 0, scalar 01 U 11111 ...)
+  if ((is(w, 0x9f000400, 0x0f000000) || is(w, 0xdf000400, 0x5f000000))) {
+    const L = (w >>> 21) & 1, M = (w >>> 20) & 1, H = (w >>> 11) & 1, opcode = (w >>> 12) & 15, rmLow = (w >>> 16) & 15;
+    const fp = opcode === 1 || opcode === 5 || opcode === 9;
+    if (fp) {
+      if (!(size & 2)) return unimpl("fp16 by element");
+      const dp = (size & 1) === 1, idx = dp ? H : (H << 1) | L, m = (M << 4) | rmLow;
+      if (dp && L) return unimpl("by element");
+      const view: View = dp ? "D" : "S", cnt = scalar ? 1 : (Q ? 128 : 64) / (dp ? 64 : 32);
+      const pre = `t=${lane(view, m, idx)};`;
+      const f = (i: number) => (opcode === 9 ? (U ? `${lane(view, rn, i)}*t` : `c.fmulx(${lane(view, rn, i)},t)`) : opcode === 1 ? `${lane(view, rd, i)}+${lane(view, rn, i)}*t` : `${lane(view, rd, i)}-${lane(view, rn, i)}*t`);
+      return done(pre + lanes(rd, cnt, view, f, !!Q) + (scalar ? (dp ? zeroHi(rd) : zeroS(rd)) : ""));
+    }
+    if (scalar) return unimpl("scalar by element");
+    if (size !== 1 && size !== 2) return unimpl("by element");
+    const idx = size === 1 ? (H << 2) | (L << 1) | M : (H << 1) | L, m = size === 1 ? rmLow : (M << 4) | rmLow;
+    const sv = iv(size, true), uv = iv(size, false);
+    const el = `t=${lane(sv, m, idx)};`;
+    const mul = (i: number) => (size === 2 ? `Math.imul(${lane(sv, rn, i)},t)` : `${lane(sv, rn, i)}*t`);
+    switch (opcode) {
+      case 8: return done(el + finI(rd, lanes(rd, count, sv, mul, !!Q)));                                               // MUL
+      case 0: case 4: if (!U) return unimpl("by element");
+        return done(el + finI(rd, lanes(rd, count, uv, (i) => `${lane(uv, rd, i)}${opcode === 0 ? "+" : "-"}${mul(i)}`, !!Q)));   // MLA / MLS
+      case 10: case 2: case 6: {                                                         // SMULL/UMULL, SMLAL/UMLAL, SMLSL/UMLSL by element
+        const wcount = 64 / bits, off = Q ? wcount : 0, V = iv(size, !U);
+        const elv = `t=${lane(V, m, idx)};`;
+        if (size === 2) {
+          const acc = opcode === 10 ? "" : opcode === 2 ? "+" : "-";
+          return done(elv + lanes64(rd, wcount, (i) => { const p = `c.${U ? "umull" : "smull"}(${lane(V, rn, off + i)},t)`; return acc ? [`(${p},a=c.lo,ah=c.hi,(${lo64(rd, i)}${acc}a)|0)`, `(${hi64(rd, i)}${acc}ah${acc === "+" ? `+(((${lo64(rd, i)}>>>0)+(a>>>0))>4294967295?1:0)` : `-((${lo64(rd, i)}>>>0)<(a>>>0)?1:0)`})|0`] : [`(${p},c.lo)`, "c.hi"]; }, true, false, [rn]));
+        }
+        const wv = iv(2, !U);
+        return done(elv + lanes(rd, wcount, wv, (i) => (opcode === 10 ? `${lane(V, rn, off + i)}*t` : `${lane(wv, rd, i)}${opcode === 2 ? "+" : "-"}${lane(V, rn, off + i)}*t`), true, false, [rn]));
+      }
+      case 12: case 13: {                                                                // SQDMULH / SQRDMULH by element
+        const round = opcode === 13 ? `+${2 ** (bits - 1)}` : "";
+        return done(el + finI(rd, lanes(rd, count, sv, (i) => sat(`Math.floor((2*${lane(sv, rn, i)}*t${round})/${2 ** bits})`, bits, true), !!Q)));
+      }
+      case 14: {                                                                         // SDOT / UDOT by element
+        if (size !== 2) return unimpl("dot");
+        const bv = iv(0, !U);
+        return done(finI(rd, lanes(rd, count, "I", (i) => `(I[${4 * rd + i}]+${[0, 1, 2, 3].map((k) => `${lane(bv, rn, 4 * i + k)}*${lane(bv, m, 4 * idx + k)}`).join("+")})|0`, !!Q)));
+      }
+    }
+    return unimpl("by element");
+  }
+
+  // ── three-register extension: SDOT / UDOT (0Q U 01110 size 0 Rm 1001 01)
+  if (is(w, 0x9f20fc00, 0x0e009400)) {
+    if (size !== 2) return unimpl("dot");
+    const bv = iv(0, !U);
+    return done(finI(rd, lanes(rd, count, "I", (i) => `(I[${4 * rd + i}]+${[0, 1, 2, 3].map((k) => `${lane(bv, rn, 4 * i + k)}*${lane(bv, rm, 4 * i + k)}`).join("+")})|0`, !!Q)));
+  }
+
+  // ── three-different (0Q U 01110 size 1 Rm opcode 00): widening and narrowing
+  if (is(w, 0x9f200c00, 0x0e200000) && !(w & 0x10000000)) {
+    const opcode = (w >>> 12) & 15;
+    if (size === 3) return unimpl("three-different .2d");
+    const wide = size + 1, wcount = 64 / bits, off = q ? wcount : 0;
+    const narrowing = opcode === 4 || opcode === 6;
+    const V = iv(size, !U);
+    const N = (i: number) => lane(V, rn, off + i), Mm = (i: number) => lane(V, rm, off + i);
+    if (narrowing) {                                                                     // ADDHN / RADDHN / SUBHN / RSUBHN: the high half of the wide op
+      const wv = iv(Math.min(wide, 2), false), nv = iv(size, false), half = bits;
+      const rnd = U ? `+${2 ** (half - 1)}` : "";
+      const f = (i: number) => (wide === 3
+        ? `(${lo64(rn, i)}${opcode === 4 ? "+" : "-"}${lo64(rm, i)}${rnd ? "+2147483648" : ""}>>>0)>4294967295?${hi64(rn, i)}${opcode === 4 ? "+" : "-"}${hi64(rm, i)}+1:${hi64(rn, i)}${opcode === 4 ? "+" : "-"}${hi64(rm, i)}`
+        : `Math.floor(((${lane(wv, rn, i)}${opcode === 4 ? "+" : "-"}${lane(wv, rm, i)}${rnd})&${2 ** (2 * half) - 1})/${2 ** half})`);
+      let body = "";
+      for (let i = 0; i < wcount; i++) body += `${lane(nv, SCRATCH, i)}=${wide === 3 ? `((${f(i)})|0)` : f(i)};`;
+      const words2 = q ? [`I[${4 * rd + 2}]=I[${4 * SCRATCH}];`, `I[${4 * rd + 3}]=I[${4 * SCRATCH + 1}];`] : [`I[${4 * rd}]=I[${4 * SCRATCH}];`, `I[${4 * rd + 1}]=I[${4 * SCRATCH + 1}];`, zeroHi(rd)];
+      return done(body + words2.join(""));
+    }
+    if (wide === 3) {                                                                    // results are .2d
+      const each64 = (f: (i: number) => [string, string]) => lanes64(rd, wcount, f, true, false, [rn, rm]);
+      switch (opcode) {
+        case 0: return done(each64((i) => split64(`(${N(i)}+${Mm(i)})`)));                                          // SADDL / UADDL
+        case 2: return done(each64((i) => split64(`(${N(i)}-${Mm(i)})`)));                                              // SSUBL / USUBL
+        case 1: case 3: return done(each64((i) => { const [al, ah] = [lo64(rn, i), hi64(rn, i)]; const b = lane(V, rm, off + i); const sign = opcode === 1 ? "+" : "-"; return [`(${al}${sign}${b})|0`, `(${ah}${sign}${U ? "0" : `(${b}>>31)`}${sign === "+" ? `+(((${al}>>>0)+(${b}>>>0))>4294967295?1:0)` : `-((${al}>>>0)<(${b}>>>0)?1:0)`})|0`]; }));   // SADDW / UADDW / SSUBW / USUBW
+        case 7: return done(each64((i) => split64(`Math.abs(${N(i)}-${Mm(i)})`)));                                     // SABDL / UABDL
+        case 5: return done(each64((i) => { const d = `Math.abs(${N(i)}-${Mm(i)})`; return [`(${lo64(rd, i)}+${d})|0`, `(${hi64(rd, i)}+Math.floor(${d}/4294967296)+(((${lo64(rd, i)}>>>0)+(${d}%4294967296))>4294967295?1:0))|0`]; }));   // SABAL / UABAL
+        case 12: return done(each64((i) => [`(c.${U ? "umull" : "smull"}(${N(i)},${Mm(i)}),c.lo)`, "c.hi"]));         // SMULL / UMULL
+        case 8: case 10: return done(each64((i) => { const sign = opcode === 8 ? "+" : "-"; return [`(c.${U ? "umull" : "smull"}(${N(i)},${Mm(i)}),a=c.lo,ah=c.hi,(${lo64(rd, i)}${sign}a)|0)`, `(${hi64(rd, i)}${sign}ah${sign === "+" ? `+(((${lo64(rd, i)}>>>0)+(a>>>0))>4294967295?1:0)` : `-((${lo64(rd, i)}>>>0)<(a>>>0)?1:0)`})|0`]; }));   // SMLAL / UMLAL / SMLSL / UMLSL
+      }
+      return unimpl("three-different");
+    }
+    const wv = iv(wide, !U);
+    const each = (f: (i: number) => string) => lanes(rd, wcount, wv, f, true, false, [rn, rm]);
+    const Dd = (i: number) => lane(wv, rd, i);
+    switch (opcode) {
+      case 0: return done(each((i) => `${N(i)}+${Mm(i)}`));                                                             // SADDL / UADDL
+      case 1: return done(each((i) => `${lane(wv, rn, i)}+${Mm(i)}`));                                                  // SADDW / UADDW
+      case 2: return done(each((i) => `${N(i)}-${Mm(i)}`));                                                             // SSUBL / USUBL
+      case 3: return done(each((i) => `${lane(wv, rn, i)}-${Mm(i)}`));                                                  // SSUBW / USUBW
+      case 5: return done(each((i) => `${Dd(i)}+Math.abs(${N(i)}-${Mm(i)})`));                                          // SABAL / UABAL
+      case 7: return done(each((i) => `Math.abs(${N(i)}-${Mm(i)})`));                                                   // SABDL / UABDL
+      case 8: return done(each((i) => `${Dd(i)}+${N(i)}*${Mm(i)}`));                                                    // SMLAL / UMLAL
+      case 10: return done(each((i) => `${Dd(i)}-${N(i)}*${Mm(i)}`));                                                   // SMLSL / UMLSL
+      case 12: return done(each((i) => `${N(i)}*${Mm(i)}`));                                                            // SMULL / UMULL
+      case 14: if (U || size !== 0) return unimpl("pmull");
+        return done(each((i) => `c.pmul8(${N(i)},${Mm(i)})`));                                                          // PMULL .8h
+    }
+    return unimpl("three-different");
+  }
+  return null;
 }
