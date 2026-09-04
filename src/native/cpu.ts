@@ -9,7 +9,7 @@ import { emitBlock, setMaxBlock } from "./arm";
 import { emitA64Block, setMaxBlockA64 } from "./a64";
 import { emitThumbBlock, setMaxBlock as setMaxBlockT } from "./thumb";
 import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair } from "./host";
-import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, PAGE_SHIFT, STACK_SIZE, MEM_SIZE } from "./abi";
+import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, PAGE_SHIFT, STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
 export { NativeFault };
 
@@ -34,15 +34,24 @@ let retStub: BlockFn | undefined;
 function stubFor(pc: number): BlockFn {
   const mk = () => { const f = ((c: Cpu) => { c.r[c.pcx] = pc; return STOP; }) as unknown as BlockFn; f.pc = pc; f.n = []; return f; };
   if (pc === RET_SENTINEL) return retStub ?? (retStub = mk());
-  if (pc >= TRAMP_END) return mk();
   const i = (pc - TRAMP_BASE) >> 3;
   return stubs[i] ?? (stubs[i] = mk());
 }
-// dense (never sparse: a sparse JS array falls into dictionary mode and every lookup hashes)
-const NPAGES = MEM_SIZE >> PAGE_SHIFT;
-const pages: ((BlockFn | undefined)[] | undefined)[] = new Array(NPAGES).fill(undefined);   // ARM blocks by word
-const tpages: ((BlockFn | undefined)[] | undefined)[] = new Array(NPAGES).fill(undefined);  // Thumb blocks by halfword
-const cov: (Uint8Array | undefined)[] = new Array(NPAGES).fill(undefined);
+// dense (never sparse: a sparse JS array falls into dictionary mode and every lookup hashes),
+// sized from the live memory: mem.init re-creates them
+let NPAGES = 0;
+let pages: ((BlockFn | undefined)[] | undefined)[] = [];   // ARM blocks by word
+let tpages: ((BlockFn | undefined)[] | undefined)[] = [];  // Thumb blocks by halfword
+let cov: (Uint8Array | undefined)[] = [];
+function sizePages(): void {
+  NPAGES = MEM_SIZE >> PAGE_SHIFT;
+  pages = new Array(NPAGES).fill(undefined);
+  tpages = new Array(NPAGES).fill(undefined);
+  cov = new Array(NPAGES).fill(undefined);
+  allBlocks.clear();
+}
+sizePages();
+mem.initHooks.push(sizePages);
 export const blockStats = { compiled: 0, invalidated: 0, compileMs: 0 };
 /** single-step register trace: every instruction logs pc + the registers it changed (slow; debugging only) */
 export const stepMode = { on: false, ring: [] as string[], max: 40000, watch: 0, hits: [] as string[] };
@@ -52,8 +61,9 @@ export function setStepMode(on: boolean): void {
   for (const c of cpus) c.flush();
   stepMode.ring.length = 0;
 }
-const stepPrev = new Int32Array(16);
+const stepPrev = new Int32Array(33), stepPrevH = new Int32Array(32);
 const RN = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "ip", "sp", "lr", "pc"];
+const XN = [...Array(31)].map((_, i) => `x${i}`).concat(["sp", "pc"]);
 let processExited = false;
 /** slice-boundary pc samples (one per budget exit; `slice.instr` sets how fine): a free statistical profile */
 export const profile = { on: true, samples: new Map<number, number>() };
@@ -87,6 +97,7 @@ let A64 = false;
 export function setA64(on: boolean): void {
   if (A64 === on) return;
   A64 = on;
+  mem.init(on ? MEM_SIZE_A64 : MEM_SIZE_A32);
   // the pointer width is a property of the process, not of a thread: set it here, because the
   // JNI tables are laid out before the first Cpu exists
   setPtrWidth(on ? 8 : 4);
@@ -283,7 +294,7 @@ export class Cpu {
 
   /** the block for `pc` in the current instruction set (compiling it on a miss) */
   look(pc: number): BlockFn {
-    if (pc >= TRAMP_BASE) return stubFor(pc);
+    if (pc >= TRAMP_BASE && pc < TRAMP_END) return stubFor(pc);
     if (this.t) {
       let pg = tpages[pc >>> PAGE_SHIFT];
       if (pg === undefined) pg = tpages[pc >>> PAGE_SHIFT] = new Array<BlockFn | undefined>(2048).fill(undefined);
@@ -305,7 +316,6 @@ export class Cpu {
       if (fn === STOP) {
         const pc = r[px];
         if (pc === RET_SENTINEL) return SliceExit.Exit;
-        if (pc >= TRAMP_END) this.fault("pc outside any module");
         hostDispatch(this, (pc - TRAMP_BASE) >> 3);
         if (this.pending) return SliceExit.Suspend;
         if (this.finished) return SliceExit.Exit;
@@ -323,31 +333,33 @@ export class Cpu {
 
   /** the tracing variant: one instruction per block, register diffs into stepMode.ring */
   runSliceStep(budget: number): SliceExit {
-    const r = this.r;
+    const r = this.r, px = this.pcx, a64 = this.a64, names = a64 ? XN : RN, nregs = a64 ? 32 : 15;
     const limit = this.ic + budget;
-    let fn = this.look(r[15]);
+    let fn = this.look(r[px]);
     for (;;) {
       const at = fn.pc;
       stepPrev.set(r);
+      if (a64) stepPrevH.set(this.h);
       const w0 = stepMode.watch ? mem.i32[stepMode.watch >>> 2] : 0;
       fn = fn(this, r, mem, fn);
-      if (at < TRAMP_BASE) {
+      if (at < TRAMP_BASE || at >= TRAMP_END) {
         if (stepMode.watch && mem.i32[stepMode.watch >>> 2] !== w0) stepMode.hits.push(`${this.name} ${symbolizeHook(at)} wrote ${(mem.i32[stepMode.watch >>> 2] >>> 0).toString(16)} r0-3=${[0, 1, 2, 3].map((i) => (r[i] >>> 0).toString(16)).join(",")}\n    ` + stepMode.ring.slice(-40).join("\n    "));
         let d = "";
-        for (let i = 0; i < 15; i++) if (r[i] !== stepPrev[i]) d += ` ${RN[i]}=${(r[i] >>> 0).toString(16)}`;
+        for (let i = 0; i < nregs; i++) {
+          if (r[i] !== stepPrev[i] || (a64 && this.h[i] !== stepPrevH[i])) d += ` ${names[i]}=${a64 && this.h[i] ? (this.h[i] >>> 0).toString(16) + (r[i] >>> 0).toString(16).padStart(8, "0") : (r[i] >>> 0).toString(16)}`;
+        }
         stepMode.ring.push(`${this.name} ${symbolizeHook(at)}${d} [${this.n}${this.z}${this.c}${this.v}]`);
         if (stepMode.ring.length > stepMode.max) stepMode.ring.splice(0, 5000);
       }
       if (fn === STOP) {
-        const pc = r[15];
+        const pc = r[px];
         if (pc === RET_SENTINEL) return SliceExit.Exit;
-        if (pc >= TRAMP_END) this.fault("pc outside any module");
         hostDispatch(this, (pc - TRAMP_BASE) >> 3);
         if (this.pending) return SliceExit.Suspend;
         if (this.finished) return SliceExit.Exit;
-        fn = this.look(r[15]);
+        fn = this.look(r[px]);
       }
-      if (this.ic >= limit) { r[15] = fn.pc; return SliceExit.Budget; }
+      if (this.ic >= limit) { r[px] = fn.pc; return SliceExit.Budget; }
     }
   }
 

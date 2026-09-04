@@ -319,6 +319,25 @@ describe("a64 simd: scalar floating point", () => {
 });
 
 describe("a64 simd: vector arithmetic", () => {
+  test("a scalar B/H result owns its whole word: nothing of the old lane survives", () => {
+    const c = run([
+      0x9e670000,   // fmov d0, x0              (x0 = 0x10000)
+      0x0e205800,   // cnt v0.8b, v0.8b
+      0x2e303800,   // uaddlv h0, v0.8b         (popcount: 1, not 0x10001)
+      0x1e260001,   // fmov w1, s0
+      0x4e30a862,   // smaxv b2, v3.16b
+      0x5e607864,   // sqabs h4, h3
+      0x5f445465,   // shl d5, d3, #4
+      0x5e214866,   // sqxtn b6, h3
+      RET], (c) => { c.r[0] = 0x10000; c.si.fill(-1, 0, 128); c.si.set([0x80017f02 | 0, 0x10, 0x7fffffff, 0], 12); });
+    expect(I(c, 0)).toEqual([1, 0, 0, 0]);
+    expect(c.r[1]).toBe(1);
+    expect(I(c, 2)).toEqual([127, 0, 0, 0]);
+    expect(I(c, 4)).toEqual([0x7f02, 0, 0, 0]);
+    expect(I(c, 5)).toEqual([0x0017f020, 0x108, 0, 0]);
+    expect(I(c, 6)).toEqual([0x7f, 0, 0, 0]);
+  });
+
   test("integer lanes: three-same, shifts, widening, narrowing, reductions, dot", () => {
     const c = run([
       0x4ea28425,   // add v5.4s, v1.4s, v2.4s

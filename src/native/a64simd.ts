@@ -495,6 +495,8 @@ function lanes64(d: number, count: number, f: (i: number) => [string, string], q
   if (tgt !== d) for (let i = 0; i < 2 * count; i++) s += `I[${4 * d + i}]=I[${4 * SCRATCH + i}];`;
   return s + (q ? "" : zeroHi(d));
 }
+/** after a scalar B/H store into lane 0: clear the rest of that word */
+const narrowClear = (d: number, esz: number) => (esz === 0 ? `I[${4 * d}]&=255;` : esz === 1 ? `I[${4 * d}]&=65535;` : "");
 /** an integer-valued double `t` into the (lo, hi) of a 64-bit lane */
 const split64 = (t: string): [string, string] => [`${t}`, `Math.floor(${t}/4294967296)`];
 
@@ -510,10 +512,11 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
   const fin = (d: number, body: string) => body + (scalar ? (fdp ? zeroHi(d) : zeroS(d)) : Q ? "" : zeroHi(d));
   const done = (body: string) => { push(body); return false; };
   const unimpl = (what: string) => { push(fault(what)); return true; };
-  // the scalar S/H/B forms zero above the element; a 64-bit scalar zeroes the top half
-  const finI = (d: number, body: string) => body + (scalar ? (size === 3 ? zeroHi(d) : zeroS(d)) : Q ? "" : zeroHi(d));
+  // the scalar S/H/B forms zero above the element — a B or H result also clears the rest of its
+  // own word, which a byte or halfword store leaves behind; a 64-bit scalar zeroes the top half
+  const finI = (d: number, body: string) => body + (scalar ? (size === 3 ? zeroHi(d) : narrowClear(d, size) + zeroS(d)) : Q ? "" : zeroHi(d));
   /** a narrowing op writes SCRATCH's low half, then the half of Vd the Q bit names (the other half keeps its lanes) */
-  const narrowed = (body: string) => body + (Q ? `I[${4 * rd + 2}]=I[${4 * SCRATCH}];I[${4 * rd + 3}]=I[${4 * SCRATCH + 1}];` : `I[${4 * rd}]=I[${4 * SCRATCH}];I[${4 * rd + 1}]=I[${4 * SCRATCH + 1}];` + zeroHi(rd)) + (scalar ? zeroS(rd) : "");
+  const narrowed = (body: string, esz = size) => body + (Q ? `I[${4 * rd + 2}]=I[${4 * SCRATCH}];I[${4 * rd + 3}]=I[${4 * SCRATCH + 1}];` : `I[${4 * rd}]=I[${4 * SCRATCH}];I[${4 * rd + 1}]=I[${4 * SCRATCH + 1}];` + zeroHi(rd)) + (scalar ? narrowClear(rd, esz) + zeroS(rd) : "");
 
   // ── three-same (vector 0Q U 01110 size 1 Rm opcode 1, scalar 01 U 11110 ...)
   if (is(w, 0x8f200400, 0x0e200400) && (!(w & 0x10000000) || (w & 0x40000000))) {
@@ -694,7 +697,7 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
           : lane(iv(size + 1, srcSigned), rn, i));
         const f = (i: number) => (opcode === 18 && !U ? (size === 2 ? lo64(rn, i) : lane(iv(size + 1, false), rn, i)) : sat(src(i), bits, outSigned));
         let body = "";
-        for (let i = 0; i < 64 / bits; i++) body += `${lane(outv, SCRATCH, i)}=${f(i)};`;
+        for (let i = 0; i < (scalar ? 1 : 64 / bits); i++) body += `${lane(outv, SCRATCH, i)}=${f(i)};`;
         return done(narrowed(body));
       }
       case 19: {                                                                         // SHLL(2): widen and shift left by the element size
@@ -729,15 +732,17 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
     if (size === 3) return unimpl("across .2d");
     const V = iv(size, !U);
     const all = [...Array(vcount)].map((_, i) => lane(V, rn, i));
+    // a B or H result is written as its whole word, so nothing of the old word survives
+    const scalarOut = (esz: number, e: string) => (esz === 0 ? `I[${4 * rd}]=(${e})&255;` : esz === 1 ? `I[${4 * rd}]=(${e})&65535;` : `I[${4 * rd}]=${e};`) + zeroS(rd);
     switch (opcode) {
       case 3: {                                                                          // SADDLV / UADDLV: the sum, one size wider
         const t = all.join("+");
         if (size === 2) return done(`t=${t};I[${4 * rd}]=t;I[${4 * rd + 1}]=Math.floor(t/4294967296);` + zeroHi(rd));
-        return done(`${lane(iv(size + 1, !U), rd, 0)}=${t};` + zeroS(rd));
+        return done(scalarOut(size + 1, t));
       }
-      case 10: return done(`${lane(V, rd, 0)}=Math.max(${all.join(",")});` + zeroS(rd));    // SMAXV / UMAXV
-      case 26: return done(`${lane(V, rd, 0)}=Math.min(${all.join(",")});` + zeroS(rd));    // SMINV / UMINV
-      case 27: return done(`${lane(V, rd, 0)}=${all.join("+")};` + zeroS(rd));              // ADDV
+      case 10: return done(scalarOut(size, `Math.max(${all.join(",")})`));                 // SMAXV / UMAXV
+      case 26: return done(scalarOut(size, `Math.min(${all.join(",")})`));                 // SMINV / UMINV
+      case 27: return done(scalarOut(size, all.join("+")));                                 // ADDV
     }
     return unimpl("across lanes");
   }
@@ -748,7 +753,7 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
     const esz = immh & 8 ? 3 : immh & 4 ? 2 : immh & 2 ? 1 : 0, ebits = BITS[esz];
     const shr = 2 * ebits - ((immh << 3) | immb), shl = ((immh << 3) | immb) - ebits;
     const ecount = scalar ? 1 : (Q ? 128 : 64) / ebits;
-    const finS = (d: number, body: string) => body + (scalar ? (esz === 3 ? zeroHi(d) : zeroS(d)) : Q ? "" : zeroHi(d));
+    const finS = (d: number, body: string) => body + (scalar ? (esz === 3 ? zeroHi(d) : narrowClear(d, esz) + zeroS(d)) : Q ? "" : zeroHi(d));
     if (esz === 3) {                                                                     // 64-bit lanes: constant shifts split at emit time
       const each64 = (f: (i: number) => [string, string]) => finS(rd, lanes64(rd, ecount, f, !!Q));
       const src = (i: number): [string, string] => [lo64(rn, i), hi64(rn, i)];
@@ -786,7 +791,7 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
         const f = (i: number) => (plain ? shifted(i) : sat(shifted(i), ebits, outSigned));
         let body = "";
         for (let i = 0; i < wcount; i++) body += `${lane(iv(esz, outSigned), SCRATCH, i)}=${f(i)};`;
-        return done(narrowed(body));
+        return done(narrowed(body, esz));
       }
       case 20: {                                                                         // SSHLL / USHLL (SXTL / UXTL): widen from the low (or high, Q) half
         const wide = esz + 1, off = Q ? ecount / 2 : 0, wcount = Q ? ecount / 2 : ecount;
