@@ -36,6 +36,7 @@ const LAYOUT64: typeof LAYOUT32 = {
   SIGACTION_SIZE: 32, SA_HANDLER: 8, SA_FLAGS: 0, STATFS_SIZE: 120,
 };
 export let LAYOUT = LAYOUT32;
+export const clockTime = (id: number): number => id === 0 ? Date.now() : performance.now() + 1000;
 /** a struct timespec / timeval as milliseconds, and back (the second field is nanoseconds or microseconds) */
 export function readTs(p: number, unit = 1e6): number { return mem.ld32(p + LAYOUT.TS_SEC) * 1000 + mem.ld32(p + LAYOUT.TS_NSEC) / unit; }
 export function writeTs(p: number, ms: number, unit = 1e6): void {
@@ -423,7 +424,7 @@ export function libcInit(): void {
     gettimeofday: (_c, a) => { const tv = a.p(); if (tv) writeTs(tv, Date.now(), 1e3); return 0; },
     clock_gettime: (_c, a) => {
       const id = a.i(), ts = a.p();
-      writeTs(ts, id === 0 ? Date.now() : performance.now() + 1000); // MONOTONIC/BOOTTIME: never 0
+      writeTs(ts, clockTime(id)); // MONOTONIC/BOOTTIME: never 0
       return 0;
     },
     clock_getres: (_c, a) => { a.i(); const ts = a.p(); if (ts) { stp(ts + LAYOUT.TS_SEC, 0); stp(ts + LAYOUT.TS_NSEC, 1000); } return 0; },

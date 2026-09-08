@@ -8,6 +8,9 @@ import { hostLib, hostData, cstr, stp, retF, type HostFn, type ArgReader } from 
 import { deref } from "./jni";
 import { JSurface, type GlSurface } from "../android/glview";
 import type { Cpu } from "./cpu";
+import { onMain } from "../android/mainloop";
+import { mainThread, reportUncaught } from "../jvm/natives/jlang";
+import { nativePoll } from "./net";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 
 // ── ANativeWindow: a handle per surface (non-zero, as the pointer it stands for)
@@ -16,17 +19,66 @@ export function windowOf(h: number): GlSurface | null { return windows[h] ?? nul
 const W = (a: ArgReader) => windows[a.i()];
 
 // ── ALooper: one per thread; pollOnce parks the thread until a wake or its timeout
-interface Looper { woken: boolean; wake: (() => void) | null }
+interface LooperFd { ident: number; events: number; callback: number; data: bigint }
+interface Looper { cpu: Cpu; pumping: boolean; woken: boolean; wake: AbortController | null; fds: Map<number, LooperFd>; allowNonCallbacks: boolean }
 const loopers: (Looper | null)[] = [null];
 const looperOf = new WeakMap<Cpu, number>();
-const poll: HostFn = async (cpu, a) => {
-  const ms = a.i(), l = loopers[looperOf.get(cpu) ?? 0];
-  if (!l) return -4;                                                           // ALOOPER_POLL_ERROR: not a looper thread
-  if (!l.woken && ms !== 0) await new Promise<void>((r) => { l.wake = r; if (ms > 0) setTimeout(r, ms); });
-  l.wake = null;
-  const r = l.woken ? -1 : -3;                                                 // ALOOPER_POLL_WAKE / POLL_TIMEOUT
-  l.woken = false;
-  return r;
+const pollEvents = (events: number) => (events & 1) | ((events & 2) << 1);
+const looperEvents = (events: number) => (events & 1) | ((events & (4 | 8 | 16 | 32)) >> 1);
+async function pollLooper(cpu: Cpu, ms: number, fdOut: number, eventsOut: number, dataOut: number, main = false): Promise<number> {
+  const l = loopers[looperOf.get(cpu) ?? 0];
+  if (!l) return -4;
+  const entries = [...l.fds].filter(([, entry]) => !main || entry.callback), pollfds = mem.malloc(Math.max(8, entries.length * 8));
+  try {
+    for (let i = 0; i < entries.length; i++) { mem.st32(pollfds + i * 8, entries[i][0]); mem.st16(pollfds + i * 8 + 4, pollEvents(entries[i][1].events)); }
+    l.wake = new AbortController();
+    await nativePoll(cpu, pollfds, entries.length, l.woken ? 0 : ms, l.wake.signal);
+    l.wake = null;
+    const woken = l.woken;
+    l.woken = false;
+    let callbacks = false;
+    for (let i = 0; i < entries.length; i++) {
+      const [fd, entry] = entries[i], events = looperEvents(mem.ld16u(pollfds + i * 8 + 6));
+      if (!events || l.fds.get(fd) !== entry) continue;
+      if (entry.callback) {
+        callbacks = true;
+        const call = async () => {
+          if (l.fds.get(fd) !== entry) return;
+          if (!await cpu.call(entry.callback, [fd, events, entry.data], "ALooper callback") && l.fds.get(fd) === entry) l.fds.delete(fd);
+        };
+        if (main) await onMain(call); else await call();
+      }
+    }
+    if (callbacks) return -2;
+    for (let i = 0; i < entries.length; i++) {
+      const [fd, entry] = entries[i], events = looperEvents(mem.ld16u(pollfds + i * 8 + 6));
+      if (!events || entry.callback || l.fds.get(fd) !== entry) continue;
+      if (fdOut) mem.st32(mem.rephys(fdOut), fd);
+      if (eventsOut) mem.st32(mem.rephys(eventsOut), events);
+      if (dataOut) { const out = mem.rephys(dataOut); mem.st32(out, Number(entry.data & 0xffffffffn)); if (cpu.a64) mem.st32(out + 4, Number(entry.data >> 32n)); }
+      return entry.ident;
+    }
+    return woken ? -1 : -3;
+  } finally { l.wake = null; mem.free(pollfds); }
+}
+function pumpMainLooper(l: Looper): void {
+  if (l.cpu.jthread !== mainThread || l.pumping) return;
+  l.pumping = true;
+  void (async () => {
+    try {
+      while (!l.cpu.finished && [...l.fds.values()].some((entry) => entry.callback)) await pollLooper(l.cpu, -1, 0, 0, 0, true);
+    } catch (error) { reportUncaught(error); }
+    finally { l.pumping = false; }
+  })();
+}
+const poll = (all: boolean): HostFn => async (cpu, a) => {
+  const ms = a.i(), fd = a.p(), events = a.p(), data = a.p(), deadline = performance.now() + ms;
+  let remaining = ms;
+  for (;;) {
+    const result = await pollLooper(cpu, remaining, fd, events, data);
+    if (!all || result !== -2) return result;
+    remaining = ms < 0 ? -1 : Math.max(0, deadline - performance.now());
+  }
 };
 
 // ── AAsset: the apk's assets/ entries
@@ -56,15 +108,25 @@ export function ndkInit(): void {
     ANativeWindow_getFormat: () => 1,                                           // WINDOW_FORMAT_RGBA_8888
     ANativeWindow_setBuffersGeometry: () => 0, ANativeWindow_setFrameRate: () => 0, ANativeWindow_setFrameRateWithChangeStrategy: () => 0,
 
-    ALooper_prepare: (cpu) => {
+    ALooper_prepare: (cpu, a) => {
+      const options = a.i();
       let h = looperOf.get(cpu);
-      if (!h) { loopers.push({ woken: false, wake: null }); looperOf.set(cpu, (h = loopers.length - 1)); }
+      if (!h) { loopers.push({ cpu, pumping: false, woken: false, wake: null, fds: new Map(), allowNonCallbacks: !!(options & 1) }); looperOf.set(cpu, (h = loopers.length - 1)); }
       return h;
     },
     ALooper_forThread: (cpu) => looperOf.get(cpu) ?? 0,
     ALooper_acquire: () => {}, ALooper_release: () => {},
-    ALooper_wake: (_c, a) => { const l = loopers[a.i()]; if (l) { l.woken = true; l.wake?.(); } },
-    ALooper_pollOnce: poll, ALooper_pollAll: poll,
+    ALooper_wake: (_c, a) => { const l = loopers[a.i()]; if (l) { l.woken = true; l.wake?.abort(); } },
+    ALooper_addFd: (_c, a) => {
+      const l = loopers[a.i()], fd = a.i(), ident = a.i(), events = a.i(), callback = a.p(), data = a.va();
+      if (!l || fd < 0 || (!callback && (!l.allowNonCallbacks || ident < 0))) return -1;
+      l.fds.set(fd, { ident, events, callback, data });
+      l.wake?.abort();
+      pumpMainLooper(l);
+      return 1;
+    },
+    ALooper_removeFd: (_c, a) => { const l = loopers[a.i()], fd = a.i(); if (!l) return -1; const removed = l.fds.delete(fd); if (removed) l.wake?.abort(); return Number(removed); },
+    ALooper_pollOnce: poll(false), ALooper_pollAll: poll(true),
 
     // the device has no sensors (the Java SensorManager says the same)
     ASensorManager_getInstance: () => 1, ASensorManager_getInstanceForPackage: () => 1,

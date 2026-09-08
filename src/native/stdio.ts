@@ -5,7 +5,7 @@ import { mem } from "./mem";
 import { hostLib, hostData, vaList, type HostFn, PTR, stp, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
-import { LAYOUT, fail, utf8, logLine, offArg } from "./libc";
+import { LAYOUT, fail, utf8, logLine, offArg, readTs, writeTs, clockTime } from "./libc";
 import { format, scan } from "./printf";
 import { vfs } from "../jvm/natives/jio";
 import { device } from "../shell/config";
@@ -18,9 +18,10 @@ const S_IFDIR = 0x4000, S_IFREG = 0x8000;
 
 /** a pipe: byte chunks, and whoever is parked waiting for them (a reader, or an epoll_wait) */
 interface Pipe { q: Uint8Array[]; wake: (() => void)[]; closed: boolean }
+interface Timer { clock: number; next: number; interval: number; timeout?: ReturnType<typeof setTimeout> }
 interface Fd {
   path: string; data: Uint8Array; len: number; pos: number; write: boolean; dirty: boolean; dir: boolean; append: boolean; statusFlags: number; references: number; line?: string; synthetic?: boolean;
-  source?: FileSource; readQueue?: Promise<void>; byte?: number; random?: boolean; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Map<number, { events: number; data: bigint }>;
+  timer?: Timer; source?: FileSource; readQueue?: Promise<void>; byte?: number; random?: boolean; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Map<number, { events: number; data: bigint }>;
 }
 const EPOLLIN = 1, EAGAIN = E.AGAIN;
 const newPipe = (): Pipe => ({ q: [], wake: [], closed: false });
@@ -120,6 +121,7 @@ function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   if (f.wpipe) { f.wpipe.q.push(mem.u8.slice(p, p + n)); wakeAll(f.wpipe); return n; }
+  if (f.timer) return fail(cpu, E.INVAL);
   if (f.event) { f.event.count += mem.ld32(p); wakeAll(f.event); return 8; }
   if (!f.write) return fail(cpu, E.BADF);
   if (f.append) f.pos = f.len;
@@ -158,6 +160,7 @@ function fdRead(cpu: Cpu, fd: number, p: number, n: number): number | Promise<nu
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   if (f.dir) return fail(cpu, E.ISDIR);
+  if (f.event && n < 8) return fail(cpu, E.INVAL);
   if (f.rpipe || f.event) {
     if (!ready(f)) {
       if (f.rpipe?.closed) return 0;
@@ -165,7 +168,7 @@ function fdRead(cpu: Cpu, fd: number, p: number, n: number): number | Promise<nu
       const dst = mem.va(p);
       return new Promise<void>((r) => waitOn(f, r)).then(() => fdRead(cpu, fd, guestAt(dst), n));
     }
-    if (f.event) { const c = f.event.count; f.event.count = 0; mem.st32(p, c); mem.st32(p + 4, 0); return 8; }
+    if (f.event) { const c = f.event.count; f.event.count = 0; mem.st64(p, BigInt(c)); return 8; }
     const q = f.rpipe!.q;
     let k = 0;
     while (k < n && q.length) { const c = q[0], take = Math.min(n - k, c.length); mem.u8.set(c.subarray(0, take), p + k); k += take; if (take === c.length) q.shift(); else q[0] = c.subarray(take); }
@@ -227,6 +230,7 @@ function fdClose(cpu: Cpu, fd: number): number {
   fds.delete(fd); releaseFd(fd);
   if (--f.references > 0) return 0;
   flushFd(f);
+  if (f.timer) clearTimeout(f.timer.timeout);
   if (f.wpipe) { f.wpipe.closed = true; wakeAll(f.wpipe); }
   return 0;
 }
@@ -291,6 +295,25 @@ function epollWait(cpu: Cpu, epfd: number, events: number, max: number, timeout:
     const t = timeout < 0 ? undefined : setTimeout(once, timeout);
     for (const fd of table.keys()) { const f = fds.get(fd); if (f) waitOn(f, once); }
   }).then(() => epollWait(cpu, epfd, mem.rephys(events), max, 0));
+}
+function armTimer(f: Fd): void {
+  const timer = f.timer!, event = f.event!;
+  clearTimeout(timer.timeout);
+  if (!timer.next) return;
+  timer.timeout = setTimeout(() => {
+    const now = clockTime(timer.clock);
+    if (now >= timer.next) {
+      const count = timer.interval ? Math.floor((now - timer.next) / timer.interval) + 1 : 1;
+      event.count += count;
+      timer.next = timer.interval ? timer.next + count * timer.interval : 0;
+      wakeAll(event);
+    }
+    armTimer(f);
+  }, Math.min(0x7fffffff, Math.max(0, timer.next - clockTime(timer.clock))));
+}
+function timerState(timer: Timer, out: number): void {
+  writeTs(out, timer.interval);
+  writeTs(out + PTR * 2, timer.next ? Math.max(0, timer.next - clockTime(timer.clock)) : 0);
 }
 function statPath(cpu: Cpu, path: string, buf: number): number {
   path = vfs.norm(path);
@@ -439,6 +462,30 @@ export function stdioInit(): void {
       mem.st32(sv, put({ ...fdBase("socketpair"), rpipe: ab, wpipe: ba, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }));
       mem.st32(sv + 4, put({ ...fdBase("socketpair"), rpipe: ba, wpipe: ab, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }));
       return 0;
+    },
+    timerfd_create: (cpu, a) => {
+      const clock = a.i(), flags = a.i();
+      if (![0, 1, 7].includes(clock) || flags & ~(O_NONBLOCK | 0x80000)) return fail(cpu, E.INVAL);
+      return put({ ...fdBase("timerfd"), timer: { clock, next: 0, interval: 0 }, event: { count: 0, wake: [] }, nonblock: !!(flags & O_NONBLOCK), statusFlags: 2 | (flags & O_NONBLOCK) });
+    },
+    timerfd_settime: (cpu, a) => {
+      const fd = a.i(), flags = a.i(), value = a.p(), old = a.p(), f = fds.get(fd);
+      if (!f) return fail(cpu, E.BADF);
+      if (!f.timer || flags & ~1) return fail(cpu, E.INVAL);
+      const interval = readTs(value), next = readTs(value + PTR * 2);
+      if (interval < 0 || next < 0 || mem.ld32(value + PTR) < 0 || mem.ld32(value + PTR) >= 1e9 || mem.ld32(value + PTR * 3) < 0 || mem.ld32(value + PTR * 3) >= 1e9) return fail(cpu, E.INVAL);
+      if (old) timerState(f.timer, old);
+      f.timer.interval = interval;
+      f.timer.next = next ? next + (flags & 1 ? 0 : clockTime(f.timer.clock)) : 0;
+      f.event!.count = 0;
+      armTimer(f);
+      return 0;
+    },
+    timerfd_gettime: (cpu, a) => {
+      const fd = a.i(), out = a.p(), f = fds.get(fd);
+      if (!f) return fail(cpu, E.BADF);
+      if (!f.timer) return fail(cpu, E.INVAL);
+      timerState(f.timer, out); return 0;
     },
     eventfd: (_c, a) => { const init = a.u(), flags = a.i(); return put({ ...fdBase("eventfd"), event: { count: init, wake: [] }, nonblock: !!(flags & O_NONBLOCK), statusFlags: 2 | (flags & O_NONBLOCK) }); },
     epoll_create: () => put({ ...fdBase("epoll"), epoll: new Map(), statusFlags: 2 }),

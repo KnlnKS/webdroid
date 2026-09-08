@@ -480,9 +480,9 @@ function scanPoll(pollfds: number, count: number): number {
   return ready;
 }
 
-export function nativePoll(_cpu: Cpu, pollfds: number, count: number, timeout: number): number | Promise<number> {
+export function nativePoll(_cpu: Cpu, pollfds: number, count: number, timeout: number, signal?: AbortSignal): number | Promise<number> {
   const immediate = scanPoll(pollfds, count);
-  if (immediate || timeout === 0) return immediate;
+  if (immediate || timeout === 0 || signal?.aborted) return immediate;
   const target = mem.va(pollfds);
   return new Promise<number>((resolve) => {
     let finished = false;
@@ -509,6 +509,7 @@ export function nativePoll(_cpu: Cpu, pollfds: number, count: number, timeout: n
         if (!sockets.has(fd)) cleanups.push(localPollProvider.subscribe(fd, finish));
       }
     }
+    if (signal) { signal.addEventListener("abort", finish, { once: true }); cleanups.push(() => signal.removeEventListener("abort", finish)); }
     if (timeout >= 0) timer = setTimeout(finish, timeout);
   });
 }
