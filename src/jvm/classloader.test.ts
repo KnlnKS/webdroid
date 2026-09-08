@@ -50,6 +50,7 @@ test("loading classes does not initialize them and default loaders retain the sy
   const loader = await newObj("java/lang/ClassLoader");
   const parent = await vcall(loader, "getParent", "()Ljava/lang/ClassLoader;");
   expect(parent).not.toBeNull();
+  expect(await vcall(rt.link("java/lang/ClassLoader").ctor, "getSystemClassLoader", "()Ljava/lang/ClassLoader;")).toBe(parent);
   expect(await vcall(parent, "getParent", "()Ljava/lang/ClassLoader;")).toBeNull();
   expect(await vcall(loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", "test.LazyLoadTarget")).toBe(rt.classFor("test/LazyLoadTarget"));
   expect(initialized).toBe(0);

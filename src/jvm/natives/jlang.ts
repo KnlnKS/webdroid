@@ -262,6 +262,7 @@ rt.register({
   name: "java/lang/ClassLoader",
   ctor: JClassLoader,
   methods: {
+    "static getSystemClassLoader()Ljava/lang/ClassLoader;": () => bootLoader,
     "<init>()V": function (this: JClassLoader) { this.parent = bootLoader; },
     "<init>(Ljava/lang/ClassLoader;)V": function (this: JClassLoader, parent: JClassLoader | null) { this.parent = parent; },
     "getParent()Ljava/lang/ClassLoader;": function (this: JClassLoader) { return this.parent; },
