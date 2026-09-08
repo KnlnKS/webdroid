@@ -1560,6 +1560,7 @@ rt.register({
     "getMethodName()Ljava/lang/String;": function (this: JStackTraceElement) { return this.method; },
     "getFileName()Ljava/lang/String;": function (this: JStackTraceElement) { return this.file; },
     "getLineNumber()I": function (this: JStackTraceElement) { return this.line; },
+    "isNativeMethod()Z": function (this: JStackTraceElement) { return this.line === -2 ? 1 : 0; },
     "toString()Ljava/lang/String;": function (this: JStackTraceElement) { return this.declaring + "." + this.method + "(" + (this.file ?? "Unknown") + ":" + this.line + ")"; },
   },
 });
