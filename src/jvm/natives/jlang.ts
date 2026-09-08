@@ -249,15 +249,27 @@ rt.register({
   },
 });
 
-class JClassLoader extends JObj {}
-const loadClass = (n: string) => (JClass as any).$i.ctor[mangleMethod("forName", "(Ljava/lang/String;)Ljava/lang/Class;")](n);
+class JClassLoader extends JObj { parent: JClassLoader | null = null; }
+async function loadClass(this: JClassLoader, n: string): Promise<JClass> {
+  try {
+    return this.parent
+      ? await vcall(this.parent, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", n)
+      : await vcall(rt.link("java/lang/Class").ctor, "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", n, 0, null);
+  } catch (e) { if (!rt.iof(e, "java/lang/ClassNotFoundException")) throw e; }
+  return vcall(this, "findClass", "(Ljava/lang/String;)Ljava/lang/Class;", n);
+}
 rt.register({
   name: "java/lang/ClassLoader",
   ctor: JClassLoader,
   methods: {
-    "<init>()V": function () {},
-    "loadClass(Ljava/lang/String;)Ljava/lang/Class;": loadClass,
+    "<init>()V": function (this: JClassLoader) { this.parent = bootLoader; },
+    "<init>(Ljava/lang/ClassLoader;)V": function (this: JClassLoader, parent: JClassLoader | null) { this.parent = parent; },
+    "getParent()Ljava/lang/ClassLoader;": function (this: JClassLoader) { return this.parent; },
+    "loadClass(Ljava/lang/String;)Ljava/lang/Class;": function (this: JClassLoader, n: string) {
+      return vcall(this, "loadClass", "(Ljava/lang/String;Z)Ljava/lang/Class;", n, 0);
+    },
     "loadClass(Ljava/lang/String;Z)Ljava/lang/Class;": loadClass,
+    "findClass(Ljava/lang/String;)Ljava/lang/Class;": (n: string) => { throw rt.mkThrowable("java/lang/ClassNotFoundException", n); },
     "getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;": (path: string) => classpathStream(path.replace(/^\//, "")),
     // the path System.load would take for lib<name>.so, or null: dlopen resolves it by name
     "findLibrary(Ljava/lang/String;)Ljava/lang/String;": (n: string) => { const a = pickAbi((abi) => !!rt.classpath[`lib/${abi}/lib${n}.so`]); return a ? `/lib/lib${n}.so` : null; },

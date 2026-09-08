@@ -695,7 +695,7 @@ function installForName(classCtor: unknown) {
     if (linked) return !linked.stub;
     return rt.natives.has(n) || rt.dexIndex.has(n);
   };
-  const forName = async function (jn: string) {
+  const forName = async function (jn: string, initialize = 1) {
     const name = jn.replace(/\./g, "/");
     if (!loadable(name)) {
       console.debug("[webdroid] Class.forName: no such class", jn);
@@ -705,7 +705,7 @@ function installForName(classCtor: unknown) {
       rt.link("java/lang/ClassNotFoundException");
       throw rt.mkThrowable("java/lang/ClassNotFoundException", jn);
     }
-    await linkInit(name);
+    if (initialize) await linkInit(name);
     return rt.classFor(name);
   };
   const c = classCtor as Record<string, unknown>;
