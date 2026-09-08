@@ -210,54 +210,49 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   };
   setAppHost(host);
 
-  onStatus("starting app…");
-  const baseCtx = new JContext();
-  baseCtx.$host = host;
-  let appInfo;
-  try {
-    appInfo = rt.link(appCls);
-  } catch {
-    appInfo = rt.link("android/app/Application");
-  }
-  const p0 = rt.initClass(appInfo);
-  if (p0) await p0;
-  const application = new appInfo.ctor();
-  host.application = application;
-  application.$host = host;
-  try {
-    await vcall(application, "<init>", "()V");
-    await vcall(application, "attachBaseContext", "(Landroid/content/Context;)V", baseCtx);
-    // ContentProviders run before Application.onCreate (androidx-startup initializers
-    // like WorkManager live here)
-    for (const pn of providers.keys()) {
-      try {
-        const cls = pn.replace(/\./g, "/");
-        if (rt.link(cls).stub) continue;
-        const prov = await newObj(cls);
-        prov.$ctx = application;
-        await vcall(prov, "onCreate", "()Z");
-      } catch (e) { console.warn("[provider]", pn, (e as { msg?: string })?.msg ?? e); }
+  return onMain(async () => {
+    onStatus("starting app…");
+    const baseCtx = new JContext();
+    baseCtx.$host = host;
+    let appInfo;
+    try {
+      appInfo = rt.link(appCls);
+    } catch {
+      appInfo = rt.link("android/app/Application");
     }
-    await vcall(application, "onCreate", "()V");
-  } catch (e) {
-    reportUncaught(e);
-  }
+    const p0 = rt.initClass(appInfo);
+    if (p0) await p0;
+    const application = new appInfo.ctor();
+    host.application = application;
+    application.$host = host;
+    try {
+      await vcall(application, "<init>", "()V");
+      await vcall(application, "attachBaseContext", "(Landroid/content/Context;)V", baseCtx);
+      // ContentProviders run before Application.onCreate (androidx-startup initializers
+      // like WorkManager live here)
+      for (const pn of providers.keys()) {
+        try {
+          const cls = pn.replace(/\./g, "/");
+          if (rt.link(cls).stub) continue;
+          const prov = await newObj(cls);
+          prov.$ctx = application;
+          await vcall(prov, "onCreate", "()Z");
+        } catch (e) { console.warn("[provider]", pn, (e as { msg?: string })?.msg ?? e); }
+      }
+      await vcall(application, "onCreate", "()V");
+    } catch (e) {
+      reportUncaught(e);
+    }
 
-  booted = { host, mainActivityCls: mainActivity, stack: [], label };
-  onStatus("launching " + mainActivity.split("/").pop());
-  await launchActivity(mainActivity, null);
-  return booted;
+    booted = { host, mainActivityCls: mainActivity, stack: [], label };
+    onStatus("launching " + mainActivity.split("/").pop());
+    await launchActivity(mainActivity, null);
+    return booted;
+  });
 }
 
 function launchActivity(cls: string, intent: JIntent | null): Promise<void> {
-  // Activity lifecycle is main-looper work: serialize and pin the thread identity.
-  // Java-side startActivity already runs inside a main-looper job (click handlers,
-  // Handler posts); re-entering the queue there would deadlock on ourselves, so a caller
-  // that already HOLDS the queue runs inline. Holding it is not the same as being on the
-  // main thread — boot pins curThread to the main thread without taking the queue, and
-  // launching inline from there let the whole activity-start chain interleave with tick
-  // jobs at every await (Compose then created its composition twice: once from onMeasure,
-  // once from onAttachedToWindow, neither having stored the result yet).
+  // Startup and Java callbacks already hold the main queue; queuing again would deadlock.
   const run = async () => {
     const prev = curThread;
     setCurThread(mainThread);
