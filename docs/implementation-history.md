@@ -1787,3 +1787,59 @@ No new regression errors appeared, and goldens were unchanged. A visible Chrome 
 left at `1. e4 e6 2. Nf3 Nh6` throughout that run. About seven minutes later it still had
 18 live CPUs, zero finished CPUs, and exactly 7,880 host bytes, with an idle main queue
 and no native fault or new uncaught error.
+
+### Lichess: native heap reuse during computer games
+
+Moving the knight to e5 exposed a sign-extended native pointer such as
+`0xffffffff_8a4f1840`. Malloc's small-bin heads and both free-list next-pointer reads used
+signed Int32 values; an aligned block's owner pointer had the same problem. Reusing heap
+addresses above 2 GiB therefore returned a negative JavaScript number, which the native ABI
+correctly sign-extended as an integer result. Unsigned heads and pointer reads fix the source
+of corruption, including calloc zeroing, realloc copies, and aligned frees. A subprocess
+regression advances the heap past 2 GiB while touching only allocation headers, then exercises
+real A64 host malloc returns and these reuse paths without contaminating later ARM32 tests.
+
+The next longer game reached the third engine reply but then exited with
+`Failed to allocate 410MB for transposition table.` Allocation tracing showed that Stockfish
+requested 410 MiB with 2 MiB alignment. Memalign allocated 432,013,328 bytes, then discarded
+that allocation record in favor of the aligned pointer and 429,916,160-byte payload. Free
+released only the payload, leaving a hole too small for the next inflated request. Five
+successive tables occupied different addresses; the sixth allocation failed. This was not
+concurrent table growth or an engine timeout.
+
+Large aligned allocations now select an aligned page run directly, with no oversized
+intermediate allocation. Tests repeatedly reuse aligned blocks, check exact allocation
+accounting, and preserve neighboring data. A fresh Chrome game completed ten white moves
+and ten engine replies, ending at `10. d7 g5`. Every traced 410 MiB table reused address
+127,926,272, with no allocation failure; the bump-allocation high-water mark stayed near
+58.5 MB instead of 2.249 GB. Total live malloc storage was about 487 MB, including the table.
+There were 18 live CPUs, zero retained finished CPUs, no native fault, and no reached native
+or JNI misses. Optional SidecarProvider remained absent. Guest engine limits and clocks were
+unchanged.
+
+The adjacent libc handlers also now honor Android aligned-allocation semantics: POSIX failures
+return EINVAL/ENOMEM without changing the output pointer or errno, while Android memalign
+rounds arbitrary alignment upward and sets errno on allocation failure. Full-width size_t
+arguments cannot wrap oversized A64 requests into successful tiny allocations. Real host-call
+tests cover both ABIs; behavior follows Android Scudo's wrappers_c.inc.
+
+Typecheck and all 787 unit tests passed (25,144 assertions), and all eight APK/XAPK smoke
+compilations reported zero method failures. The expanded Lichess-only E2E rendered 15/15
+steps, visibly reaching `1. e4 e6 2. Nf3 c5 3. Ne5 Nc6` at level 1. The final full E2E
+rendered 111/111 steps, with zero wedges, settle timeouts, layout/draw errors, or native-required
+libraries. Its Lichess setup transition was delayed and used default level 4 instead of the
+intended level 1; the actual game still completed `1. e4 d5 2. Nf3 e6 3. Ne5 Qd6` without
+native errors. The intermediate setup capture was black, so rendered-step counts alone do
+not establish that each intended setup selection was reached.
+
+Final content differences were FitNotes 43.07%, onboarding 17.56%, Mihon app 81.16%, and
+Harmonic 35.38%. FitNotes/onboarding remained stable; Mihon's coordinate-driven settings and
+dialog transitions varied as previously documented, and Harmonic still contains live content.
+No new missing APIs appeared. Doodle Jump's intermittent null audio listener after Back
+reappeared; this error predates this work. Its game still rendered, and Flappy Bird's frame
+rates matched the preceding run. Goldens were unchanged.
+
+The dedicated visible Chrome window was reloaded with saved databases intact and left at
+`1. e4 b6 2. Nf3 g6 3. Ne5 a5 4. d4 Bb7`. The main queue was idle, with 18 live CPUs,
+zero finished CPUs, no native fault, and about 487 MB live malloc storage. Lichess's database
+remained 61,440 bytes at schema version 5.
