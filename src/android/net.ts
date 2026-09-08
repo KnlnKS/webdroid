@@ -3,7 +3,7 @@
 // simulates the network going away.
 
 import { rt, JObj } from "../jvm/runtime";
-import { vcall, curThread, stringHash } from "../jvm/natives/jlang";
+import { vcall, curThread, stringHash, mkEnumSet } from "../jvm/natives/jlang";
 import { newArrayList, newLinkedHashSet } from "../jvm/natives/jutil";
 import { jarray } from "../jvm/abi";
 import type { JFile } from "../jvm/natives/jio";
@@ -240,8 +240,11 @@ rt.register({
 const NET_TYPE = 1;
 const netUp = async (): Promise<number> =>
   (await vcall(new (rt.link("android/net/NetworkInfo").ctor)(), "isConnected", "()Z")) ? 1 : 0;
-let theNetwork: unknown = null;
-const network = () => (theNetwork ??= new (rt.link("android/net/Network").ctor)());
+class JNetwork extends JObj { id = 1; }
+let theNetwork: JNetwork | null = null;
+let boundNetwork: JNetwork | null = null;
+const network = (): JNetwork => (theNetwork ??= new (rt.link("android/net/Network").ctor)() as JNetwork);
+const knownNetwork = (n: unknown): n is JNetwork => n instanceof JNetwork && n.id === network().id;
 const netCaps = () => new (rt.link("android/net/NetworkCapabilities").ctor)();
 const netCallbacks = new Set<unknown>();
 async function fireNetAvailable(cb: unknown) {
@@ -249,7 +252,20 @@ async function fireNetAvailable(cb: unknown) {
   await vcall(cb, "onAvailable", "(Landroid/net/Network;)V", network());
   await vcall(cb, "onCapabilitiesChanged", "(Landroid/net/Network;Landroid/net/NetworkCapabilities;)V", network(), netCaps());
 }
-rt.register({ name: "android/net/Network", ctor: class extends JObj {} });
+rt.register({
+  name: "android/net/Network", ctor: JNetwork, ifaces: ["android/os/Parcelable"],
+  methods: {
+    "getNetworkHandle()J": function (this: JNetwork) { return this.id ? (BigInt(this.id) << 32n) | 0xcafed00dn : 0n; },
+    "static fromNetworkHandle(J)Landroid/net/Network;": (handle: bigint) => {
+      if (handle <= 0n || (handle & 0xffffffffn) !== 0xcafed00dn) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid network handle");
+      const n = new JNetwork(); n.id = Number(handle >> 32n); return n;
+    },
+    "equals(Ljava/lang/Object;)Z": function (this: JNetwork, other: unknown) { return other instanceof JNetwork && this.id === other.id ? 1 : 0; },
+    "hashCode()I": function (this: JNetwork) { return Math.imul(this.id, 11); },
+    "toString()Ljava/lang/String;": function (this: JNetwork) { return String(this.id); },
+  },
+});
+const networkCapabilities = new Set([11, 12, 13, 14, 15, 18, 20, 21]);
 rt.register({
   name: "android/net/NetworkCapabilities", ctor: class extends JObj {},
   statics: {
@@ -259,7 +275,7 @@ rt.register({
     NET_CAPABILITY_NOT_ROAMING: 18, NET_CAPABILITY_NOT_CONGESTED: 20, NET_CAPABILITY_NOT_SUSPENDED: 21,
     NET_CAPABILITY_TEMPORARILY_NOT_METERED: 25,
   },
-  methods: { "hasCapability(I)Z": netUp, "hasTransport(I)Z": (t: number) => (t === 1 ? 1 : 0),
+  methods: { "hasCapability(I)Z": async (c: number) => networkCapabilities.has(c) ? netUp() : 0, "hasTransport(I)Z": (t: number) => (t === NET_TYPE ? 1 : 0),
     // no bandwidth estimate: the platform's "unspecified"
     "getLinkDownstreamBandwidthKbps()I": () => 0, "getLinkUpstreamBandwidthKbps()I": () => 0, "getSignalStrength()I": () => -2147483648 },
 });
@@ -307,6 +323,13 @@ const registerCallback = (cb: unknown) => {
   netCallbacks.add(cb);
   setTimeout(() => void fireNetAvailable(cb).catch(reportUncaught), 0);
 };
+const registerOnHandler = async (cb: unknown, handler: unknown) => {
+  if (!cb || !handler) throw rt.mkThrowable("java/lang/NullPointerException", "callback and handler are required");
+  netCallbacks.add(cb);
+  const task = new (rt.link("webdroid/FnRunnable").ctor)();
+  task.fn = () => fireNetAvailable(cb);
+  await vcall(handler, "post", "(Ljava/lang/Runnable;)Z", task);
+};
 rt.register({
   name: "android/net/ConnectivityManager", ctor: class extends JObj {},
   statics: { TYPE_MOBILE: 0, TYPE_WIFI: 1, TYPE_ETHERNET: 9, TYPE_VPN: 17, RESTRICT_BACKGROUND_STATUS_DISABLED: 1 },
@@ -316,30 +339,43 @@ rt.register({
     // connected NetworkInfo reads as "no internet" to every modern connectivity check)
     "getActiveNetwork()Landroid/net/Network;": async () => (await netUp()) ? network() : null,
     "getAllNetworks()[Landroid/net/Network;": async () => jarray((await netUp()) ? [network()] : [], "Landroid/net/Network;"),
-    "getNetworkInfo(Landroid/net/Network;)Landroid/net/NetworkInfo;": (n: unknown) => n ? new (rt.link("android/net/NetworkInfo").ctor)() : null,
+    "getNetworkInfo(Landroid/net/Network;)Landroid/net/NetworkInfo;": (n: unknown) => knownNetwork(n) ? new (rt.link("android/net/NetworkInfo").ctor)() : null,
     // by network type (TYPE_WIFI/TYPE_MOBILE...): the one network we model is the active one,
     // so its own type answers and every other type has no info, as on a device without it
     "getNetworkInfo(I)Landroid/net/NetworkInfo;": async (t: number) =>
       (await netUp()) && t === NET_TYPE ? new (rt.link("android/net/NetworkInfo").ctor)() : null,
     "getLinkProperties(Landroid/net/Network;)Landroid/net/LinkProperties;": () => null,
-    "bindProcessToNetwork(Landroid/net/Network;)Z": () => 1,
-    "getBoundNetworkForProcess()Landroid/net/Network;": () => null,
+    "bindProcessToNetwork(Landroid/net/Network;)Z": (n: unknown) => {
+      if (n != null && !knownNetwork(n)) return 0;
+      boundNetwork = n ?? null; return 1;
+    },
+    "getBoundNetworkForProcess()Landroid/net/Network;": () => boundNetwork,
     "getRestrictBackgroundStatus()I": () => 1,
     "registerNetworkCallback(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;)V": (_r: unknown, cb: unknown) => registerCallback(cb),
-    "registerNetworkCallback(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;Landroid/os/Handler;)V": (_r: unknown, cb: unknown) => registerCallback(cb),
+    "registerNetworkCallback(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;Landroid/os/Handler;)V": async (_r: unknown, cb: unknown, handler: unknown) => registerOnHandler(cb, handler),
     "registerDefaultNetworkCallback(Landroid/net/ConnectivityManager$NetworkCallback;)V": registerCallback,
+    "registerDefaultNetworkCallback(Landroid/net/ConnectivityManager$NetworkCallback;Landroid/os/Handler;)V": registerOnHandler,
     "requestNetwork(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;)V": (_r: unknown, cb: unknown) => registerCallback(cb),
     "unregisterNetworkCallback(Landroid/net/ConnectivityManager$NetworkCallback;)V": (cb: unknown) => { netCallbacks.delete(cb); },
-    "getNetworkCapabilities(Landroid/net/Network;)Landroid/net/NetworkCapabilities;": () => netCaps(),
+    "getNetworkCapabilities(Landroid/net/Network;)Landroid/net/NetworkCapabilities;": (n: unknown) => knownNetwork(n) ? netCaps() : null,
     "isActiveNetworkMetered()Z": () => 0,
   },
 });
+const states = mkEnumSet("android/net/NetworkInfo$State", ["CONNECTING", "CONNECTED", "SUSPENDED", "DISCONNECTING", "DISCONNECTED", "UNKNOWN"]);
+const detailedStates = mkEnumSet("android/net/NetworkInfo$DetailedState", ["IDLE", "SCANNING", "CONNECTING", "AUTHENTICATING", "OBTAINING_IPADDR", "CONNECTED", "SUSPENDED", "DISCONNECTING", "DISCONNECTED", "FAILED", "BLOCKED", "VERIFYING_POOR_LINK", "CAPTIVE_PORTAL_CHECK"]);
 rt.register({
   name: "android/net/NetworkInfo", ctor: class extends JObj {},
   methods: {
     "isConnected()Z": () => 1,
     "isConnectedOrConnecting()Z": () => 1,
     "getType()I": () => NET_TYPE,
+    "getSubtype()I": () => 0,
+    "getTypeName()Ljava/lang/String;": () => "WIFI",
+    "getSubtypeName()Ljava/lang/String;": () => "",
+    "getExtraInfo()Ljava/lang/String;": () => null,
+    "getReason()Ljava/lang/String;": () => null,
+    "getState()Landroid/net/NetworkInfo$State;": () => { rt.link("android/net/NetworkInfo$State"); return states[1]; },
+    "getDetailedState()Landroid/net/NetworkInfo$DetailedState;": () => { rt.link("android/net/NetworkInfo$DetailedState"); return detailedStates[5]; },
     "isAvailable()Z": () => 1,
     "isRoaming()Z": () => 0,
   },

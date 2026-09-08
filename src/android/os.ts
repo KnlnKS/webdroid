@@ -1063,7 +1063,7 @@ rt.register({
 
 /** a Runnable over a JS closure, for framework code that must go through a Handler queue */
 class JFnRunnable extends JObj { fn: () => unknown = () => {}; }
-rt.register({ name: "webdroid/FnRunnable", ctor: JFnRunnable, ifaces: ["java/lang/Runnable"], methods: { "run()V": function (this: JFnRunnable) { return this.fn(); } } });
+rt.register({ name: "webdroid/FnRunnable", ctor: JFnRunnable, ifaces: ["java/lang/Runnable"], methods: { "run()V": maySuspend(function (this: JFnRunnable) { return this.fn(); }) } });
 
 // ── ResultReceiver: a callback that crosses processes on Android; here the send() lands on the
 // creating Handler's looper (or inline when made without one), exactly as the in-process path does.
