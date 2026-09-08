@@ -1870,8 +1870,34 @@ MangaDex's actual archive passes smoke compilation with zero method failures, as
 ImageDecoder now uses the existing bitmap pipeline with the Java header callback before
 target-size rasterization; a real PNG check verifies dimensions, pixels, repeated decoding,
 and unchanged ByteBuffer position. The catalog visibly renders MangaDex's icon with empty
-reached missing-API telemetry. These checks do not yet establish successful installation or
-reading.
+reached missing-API telemetry.
+
+Mihon's normal PackageInstaller flow installed MangaDex 1.4.212 and its English source
+survived reload. FileProvider needed real PackageItemInfo XML metadata, attachment before
+onCreate, and ContentResolver dispatch into its bundled bytecode. MatrixCursor reuses the
+existing cursor implementation and unboxes the provider's Long size. A real FileProvider
+test checks file bytes, filename/size queries, and rejected traversal. The notification builder
+also now preserves its own extras when setExtras receives null and copies user metadata at
+build time, matching AOSP's separate user-extras bundle.
+
+The live catalog rendered manga covers, but selecting a title initially reported
+SourceNotInstalledException. SQLite had stored source ID 2499283573021220255 as
+2499283573021220352. Preserving BigInt only at the JS boundary was insufficient: upstream
+sql.js binds BigInt as TEXT and large Number values as DOUBLE. The pinned local sql.js build
+exports sqlite3_bind_int64 and binds BigInt as INTEGER; its patch and reproducible build live
+under vendor/sql.js. Java and bundled JNI paths now preserve integer reads and scalar results.
+Tests cover signed 64-bit endpoints, INTEGER parameter type, arithmetic, and source-ID lookup;
+transaction/persistence tests still pass. Rebuilding the vendor artifacts twice gave identical
+hashes. Existing rounded database values cannot recover their discarded bits; fresh source
+queries use the correct ID.
+
+An isolated full Mihon boot loaded the real MangaDex factory and all 61 language sources.
+Its safe popular query returned 20 manga. PropertyResourceBundle and shared Java properties
+parsing then enabled translated manga details. Frieren's live English chapter feed returned
+zero chapters; The Eminence in Shadow returned 99 chapters, 37 pages for chapter 1, and a
+376,828-byte first image that decoded to 980×795. This source-level probe does not substitute
+for completing the visible reader. LocalDate.until and ChronoUnit date arithmetic unblock
+relative dates in the live details screen.
 
 Chrome automation immediately canceled its native directory chooser despite visible focus
 and live user activation. Native computer clicks also failed with no available window. The
