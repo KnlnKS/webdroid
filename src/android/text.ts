@@ -266,7 +266,6 @@ for (const [name] of [
   ["android/text/style/UnderlineSpan", {}],
   ["android/text/style/StrikethroughSpan", {}],
   ["android/text/style/RelativeSizeSpan", { size: 1 }],
-  ["android/text/style/AbsoluteSizeSpan", { size: 14 }],
   ["android/text/style/TypefaceSpan", {}],
   ["android/text/style/ImageSpan", {}],
   ["android/text/style/ClickableSpan", {}],
@@ -287,6 +286,22 @@ for (const [name] of [
     },
   });
 }
+
+class JAbsoluteSizeSpan extends JObj { size = 0; dip = 0; }
+function absoluteSize(this: JAbsoluteSizeSpan, paint: JTextPaint) {
+  return vcall(paint, "setTextSize", "(F)V", this.size * (this.dip ? paint.density : 1));
+}
+rt.register({ name: "android/text/style/AbsoluteSizeSpan", ctor: JAbsoluteSizeSpan,
+  ...spanHierarchy["android/text/style/AbsoluteSizeSpan"],
+  methods: {
+    "<init>(I)V": function (this: JAbsoluteSizeSpan, size: number) { this.size = size; },
+    "<init>(IZ)V": function (this: JAbsoluteSizeSpan, size: number, dip: number) { this.size = size; this.dip = dip; },
+    "getSize()I": function (this: JAbsoluteSizeSpan) { return this.size; },
+    "getDip()Z": function (this: JAbsoluteSizeSpan) { return this.dip; },
+    "updateMeasureState(Landroid/text/TextPaint;)V": absoluteSize,
+    "updateDrawState(Landroid/text/TextPaint;)V": absoluteSize,
+  },
+});
 
 // Paragraph-level spans: interfaces the layout would consult per paragraph (nothing in JLayout
 // walks them yet), plus the concrete Standard leading-margin span Compose uses for textIndent.
