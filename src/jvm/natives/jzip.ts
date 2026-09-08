@@ -1,9 +1,9 @@
 // java.util.zip on fflate: streaming codecs (Inflater/Deflater raw+zlib, CRC32), ZipFile over a
 // central-directory index, GZIPInputStream over a drained source.
 import { Inflate, Unzlib, Deflate, Zlib, Gzip, inflateSync, gunzipSync } from "fflate";
-import { rt, JObj } from "../runtime";
+import { rt, JObj, maySuspend } from "../runtime";
 import { mangleMethod } from "../abi";
-import { vcall, newObj, defineException } from "./jlang";
+import { vcall, vcallMaybe, newObj, defineException } from "./jlang";
 import { vfs, JFile, JInputStream, JOutputStream } from "./jio";
 import { mkIter } from "./jutil";
 import { readFully, type FileSource } from "../../shell/lazyfile";
@@ -153,7 +153,7 @@ rt.register({
     "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;I)V": dosInit,
     "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;Z)V": dosInit,
     "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;IZ)V": dosInit,
-    "write(I)V": function (this: JDeflaterOut, b: number) { return vcall(this, "write", "([BII)V", Int8Array.of(b), 0, 1); },
+    "write(I)V": maySuspend(function (this: JDeflaterOut, b: number) { return vcallMaybe(this, "write", "([BII)V", Int8Array.of(b), 0, 1); }),
     "write([BII)V": async function (this: JDeflaterOut, b: Int8Array, off: number, len: number) {
       if (this.def.done) throw rt.mkThrowable("java/io/IOException", "write beyond end of stream");
       if (len > 0) { this.def.ensure().push(new Uint8Array(b.buffer.slice(b.byteOffset + off, b.byteOffset + off + len))); await pump(this); }
@@ -161,7 +161,7 @@ rt.register({
     "finish()V": async function (this: JDeflaterOut) {
       if (!this.def.done) { this.def.ensure().push(new Uint8Array(0), true); await pump(this); }
     },
-    "flush()V": function (this: JDeflaterOut) { return vcall(this.out, "flush", "()V"); },
+    "flush()V": maySuspend(function (this: JDeflaterOut) { return vcallMaybe(this.out, "flush", "()V"); }),
     "close()V": async function (this: JDeflaterOut) {
       if (this.closed) return;
       this.closed = true;

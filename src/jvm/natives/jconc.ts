@@ -1,6 +1,6 @@
 // java.util.concurrent.* — cooperative single-JS-thread implementations.
 
-import { rt, JObj, type NativeSpec, type ClassInfo } from "../runtime";
+import { rt, JObj, maySuspend, type NativeSpec, type ClassInfo } from "../runtime";
 import { vcall, newObj, JThread, JEnum, setCurThread, curThread, park, defineException } from "./jlang";
 import { JList, newArrayList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods } from "./jutil";
 import { JRandom, randomSeed } from "./jrandom";
@@ -492,11 +492,11 @@ rt.register({
 
 type WaitingQueue = { a: unknown[]; takers: ((value: unknown) => void)[] };
 
-function takeFirst(this: WaitingQueue): unknown {
+const takeFirst = maySuspend(function (this: WaitingQueue): unknown {
   return this.a.length ? this.a.shift() : new Promise((resolve) => this.takers.push(resolve));
-}
+});
 
-function timedPoll(this: WaitingQueue, d: bigint, u: JTimeUnit): unknown {
+const timedPoll = maySuspend(function (this: WaitingQueue, d: bigint, u: JTimeUnit): unknown {
   if (this.a.length) return this.a.shift();
   return new Promise((resolve) => {
     const taker = (v: unknown) => resolve(v);
@@ -506,7 +506,7 @@ function timedPoll(this: WaitingQueue, d: bigint, u: JTimeUnit): unknown {
       if (i >= 0) { this.takers.splice(i, 1); resolve(null); }
     }, Number(d) * u.ms);
   });
-}
+});
 
 class JBlockingQueue extends JList {
   takers: ((v: unknown) => void)[] = [];

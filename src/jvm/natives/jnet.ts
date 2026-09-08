@@ -7,7 +7,7 @@
 // peer's. It carries the requested host as its only SAN, which is exactly what a hostname
 // verifier needs and nothing more, so an app that PINS a certificate will correctly fail rather
 // than be told a comforting lie.
-import { rt, JObj, type NativeSpec } from "../runtime";
+import { rt, JObj, maySuspend, type NativeSpec } from "../runtime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
 import { boxInt, stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { jarray } from "../abi";
@@ -36,7 +36,7 @@ rt.register({
   name: "javax/net/SocketFactory", ctor: JSocketFactory,
   methods: {
     "static getDefault()Ljavax/net/SocketFactory;": () => socketFactory,
-    "createSocket()Ljava/net/Socket;": () => newObj("java/net/Socket", null),
+    "createSocket()Ljava/net/Socket;": async () => newObj("java/net/Socket", null),
     "createSocket(Ljava/lang/String;I)Ljava/net/Socket;": (h: string, p: number) => dial("java/net/Socket", h, p),
   },
 });
@@ -255,12 +255,12 @@ rt.register({
       const n = await (this.s.relay?.read(b, 0, 1) ?? -1);
       return n < 0 ? -1 : b[0];
     },
-    "read([B)I": function (this: JSocketIn, out: Int8Array) {
+    "read([B)I": maySuspend(function (this: JSocketIn, out: Int8Array) {
       return this.s.relay?.read(new Uint8Array(out.buffer, out.byteOffset, out.length), 0, out.length) ?? -1;
-    },
-    "read([BII)I": function (this: JSocketIn, out: Int8Array, off: number, len: number) {
+    }),
+    "read([BII)I": maySuspend(function (this: JSocketIn, out: Int8Array, off: number, len: number) {
       return this.s.relay?.read(new Uint8Array(out.buffer, out.byteOffset, out.length), off, len) ?? -1;
-    },
+    }),
     "available()I": function (this: JSocketIn) { return this.s.relay?.available() ?? 0; },
     "close()V": function (this: JSocketIn) { this.s.relay?.close(); },
   },

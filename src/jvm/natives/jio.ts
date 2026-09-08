@@ -2,7 +2,7 @@
 
 import { rt, JObj, maySuspend, type NativeSpec } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray } from "../abi";
-import { vcall, stringHash, mkEnumSet, javaFormat } from "./jlang";
+import { vcall, vcallMaybe, after, stringHash, mkEnumSet, javaFormat } from "./jlang";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
@@ -211,33 +211,35 @@ export function streamOfSource(source: FileSource): JInputStream {
 }
 const inputStreamMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
-  "read()I": async function (this: JInputStream) {
+  "read()I": maySuspend(function (this: JInputStream) {
     if (this.source) {
-      const bytes = await this.source.read(this.pos, 1);
-      if (!bytes.length) return -1;
-      this.pos++;
-      return bytes[0];
+      return after(this.source.read(this.pos, 1), (bytes) => {
+        if (!bytes.length) return -1;
+        this.pos++;
+        return bytes[0];
+      });
     }
     return this.pos < this.buf.length ? this.buf[this.pos++] : -1;
-  },
-  "read([B)I": async function (this: JInputStream, out: Int8Array) {
-    return await (this as any)[readBII](out, 0, out.length);
-  },
-  "read([BII)I": async function (this: JInputStream, out: Int8Array, off: number, len: number) {
+  }),
+  "read([B)I": maySuspend(function (this: JInputStream, out: Int8Array) {
+    return (this as any)[readBII](out, 0, out.length);
+  }),
+  "read([BII)I": maySuspend(function (this: JInputStream, out: Int8Array, off: number, len: number) {
     if (len === 0) return 0;
     if (this.source) {
-      const bytes = await this.source.read(this.pos, len);
-      if (!bytes.length) return -1;
-      out.set(new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length), off);
-      this.pos += bytes.length;
-      return bytes.length;
+      return after(this.source.read(this.pos, len), (bytes) => {
+        if (!bytes.length) return -1;
+        out.set(new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length), off);
+        this.pos += bytes.length;
+        return bytes.length;
+      });
     }
     if (this.pos >= this.buf.length) return -1;
     const n = Math.min(len, this.buf.length - this.pos);
     out.set(new Int8Array(this.buf.buffer, this.buf.byteOffset + this.pos, n), off);
     this.pos += n;
     return n;
-  },
+  }),
   "available()I": function (this: JInputStream) { return (this.source?.size ?? this.buf.length) - this.pos; },
   "skip(J)J": function (this: JInputStream, n: bigint) {
     const k = Math.min(Number(n), (this.source?.size ?? this.buf.length) - this.pos);
@@ -250,6 +252,7 @@ const inputStreamMethods: NativeSpec["methods"] = {
   "markSupported()Z": () => 1,
 };
 const readBII = mangleMethod("read", "([BII)I");
+const writeBII = mangleMethod("write", "([BII)V");
 /**
  * Every byte an InputStream has left, through its virtual read() — the only way that works for
  * a stream that is not one of ours (okhttp hands out its own, and its bytes are on a socket,
@@ -318,47 +321,33 @@ rt.register({
   name: "java/io/DataInputStream", ctor: class extends JInputStream {}, sup: "java/io/InputStream",
   ifaces: ["java/io/DataInput"],
   methods: {
-    "<init>(Ljava/io/InputStream;)V": function (this: JInputStream, src: JInputStream) {
-      this.buf = src.buf; this.source = src.source; this.pos = src.pos;
-    },
-    "readInt()I": async function (this: JInputStream) {
-      const b = await dataBytes(this, 4);
-      return (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3];
-    },
-    "readByte()B": async function (this: JInputStream) { return (await dataBytes(this, 1))[0] << 24 >> 24; },
-    "readUnsignedByte()I": async function (this: JInputStream) { return (await dataBytes(this, 1))[0]; },
-    "readShort()S": async function (this: JInputStream) {
-      const b = await dataBytes(this, 2);
-      return ((b[0] << 8) | b[1]) << 16 >> 16;
-    },
-    "readUnsignedShort()I": async function (this: JInputStream) {
-      const b = await dataBytes(this, 2);
-      return (b[0] << 8) | b[1];
-    },
-    "readLong()J": async function (this: JInputStream) {
-      const b = await dataBytes(this, 8);
-      let v = 0n;
-      for (const byte of b) v = (v << 8n) | BigInt(byte);
-      return BigInt.asIntN(64, v);
-    },
-    "readBoolean()Z": async function (this: JInputStream) { return (await dataBytes(this, 1))[0] ? 1 : 0; },
-    "readFully([B)V": async function (this: JInputStream, out: Int8Array) {
-      const bytes = await dataBytes(this, out.length);
-      out.set(new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length));
-    },
+    "<init>(Ljava/io/InputStream;)V": adoptStream,
+    "readInt()I": dataRead(4, (b) => (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]),
+    "readByte()B": dataRead(1, (b) => b[0] << 24 >> 24),
+    "readUnsignedByte()I": dataRead(1, (b) => b[0]),
+    "readShort()S": dataRead(2, (b) => ((b[0] << 8) | b[1]) << 16 >> 16),
+    "readUnsignedShort()I": dataRead(2, (b) => (b[0] << 8) | b[1]),
+    "readLong()J": dataRead(8, (b) => new DataView(b.buffer, b.byteOffset, 8).getBigInt64(0)),
+    "readBoolean()Z": dataRead(1, (b) => (b[0] ? 1 : 0)),
+    "readFully([B)V": maySuspend(function (this: JInputStream, out: Int8Array) {
+      return after(dataBytes(this, out.length), (bytes) => { out.set(new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length)); });
+    }),
     "readUTF()Ljava/lang/String;": async function (this: JInputStream) {
       const head = await dataBytes(this, 2);
       return new TextDecoder().decode(await dataBytes(this, (head[0] << 8) | head[1]));
     },
   },
 });
-async function dataBytes(stream: JInputStream, length: number): Promise<Uint8Array> {
-  const bytes = stream.source
-    ? await readFully(stream.source, stream.pos, length)
-    : stream.buf.subarray(stream.pos, stream.pos + length);
-  if (bytes.length !== length) throw rt.mkThrowable("java/io/EOFException", null);
-  stream.pos += length;
-  return bytes;
+function dataRead(length: number, decode: (b: Uint8Array) => unknown) {
+  return maySuspend(function (this: JInputStream) { return after(dataBytes(this, length), decode); });
+}
+function dataBytes(stream: JInputStream, length: number): Uint8Array | Promise<Uint8Array> {
+  const take = (bytes: Uint8Array) => {
+    if (bytes.length !== length) throw rt.mkThrowable("java/io/EOFException", null);
+    stream.pos += length;
+    return bytes;
+  };
+  return stream.source ? readFully(stream.source, stream.pos, length).then(take) : take(stream.buf.subarray(stream.pos, stream.pos + length));
 }
 
 class JFileDescriptor extends JObj {}
@@ -374,9 +363,9 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "write(I)V": function (this: JOutputStream, b: number) { this.chunks.push(b & 0xff); },
-    "write([B)V": async function (this: JOutputStream, b: Int8Array) {
-      await vcall(this, "write", "([BII)V", b, 0, b.length);
-    },
+    "write([B)V": maySuspend(function (this: JOutputStream, b: Int8Array) {
+      return (this as any)[writeBII](b, 0, b.length);
+    }),
     "write([BII)V": function (this: JOutputStream, b: Int8Array, off: number, len: number) {
       for (let i = 0; i < len; i++) this.chunks.push(b[off + i] & 0xff);
     },
@@ -577,19 +566,19 @@ rt.register({
   fields: { out: "out" },
   methods: {
     "<init>(Ljava/io/OutputStream;)V": function (this: any, o: unknown) { this.out = o; },
-    "write(I)V": function (this: any, b: number) { return vcall(this.out, "write", "(I)V", b); },
-    "write([BII)V": function (this: any, b: Int8Array, o: number, l: number) { return vcall(this.out, "write", "([BII)V", b, o, l); },
-    "flush()V": function (this: any) { return this.out ? vcall(this.out, "flush", "()V") : undefined; },
-    "close()V": function (this: any) { return this.out ? vcall(this.out, "close", "()V") : undefined; },
+    "write(I)V": maySuspend(function (this: any, b: number) { return vcallMaybe(this.out, "write", "(I)V", b); }),
+    "write([BII)V": maySuspend(function (this: any, b: Int8Array, o: number, l: number) { return vcallMaybe(this.out, "write", "([BII)V", b, o, l); }),
+    "flush()V": maySuspend(function (this: any) { return this.out ? vcallMaybe(this.out, "flush", "()V") : undefined; }),
+    "close()V": maySuspend(function (this: any) { return this.out ? vcallMaybe(this.out, "close", "()V") : undefined; }),
   },
 });
 rt.register({
   name: "java/io/FilterInputStream", ctor: class extends JInputStream { in_: unknown = null; }, sup: "java/io/InputStream",
   fields: { in: "in_" },
   methods: {
-    "<init>(Ljava/io/InputStream;)V": function (this: any, s: unknown) {
+    "<init>(Ljava/io/InputStream;)V": function (this: any, s: JInputStream) {
       this.in_ = s;
-      if (s instanceof JInputStream) { this.buf = s.buf; this.source = s.source; this.pos = s.pos; }
+      adoptStream.call(this, s);
     },
   },
 });
@@ -776,7 +765,7 @@ rt.register({
 });
 class JWriter extends JObj { s = ""; }
 /** every Writer overload funnels through the VIRTUAL write(String) so subclasses intercept */
-const wr = (w: unknown, s: string) => vcall(w, "write", "(Ljava/lang/String;)V", s);
+const wr = (w: unknown, s: string) => vcallMaybe(w, "write", "(Ljava/lang/String;)V", s);
 const chars = (c: Uint16Array): string => charsToString(c, 0, c.length);
 rt.register({
   name: "java/io/Writer", ctor: JWriter,
@@ -788,11 +777,11 @@ rt.register({
     "append(Ljava/lang/CharSequence;)Ljava/io/Writer;": async function (this: JWriter, cs: unknown) { await vcall(this, "write", "(Ljava/lang/String;)V", String(cs ?? "null")); return this; },
     "append(Ljava/lang/CharSequence;II)Ljava/io/Writer;": async function (this: JWriter, cs: unknown, a: number, b: number) { await vcall(this, "write", "(Ljava/lang/String;)V", String(cs ?? "null").slice(a, b)); return this; },
     "append(C)Ljava/io/Writer;": async function (this: JWriter, c: number) { await vcall(this, "write", "(Ljava/lang/String;)V", String.fromCharCode(c)); return this; },
-    "write(Ljava/lang/String;II)V": function (this: JWriter, s: string, off: number, len: number) { return wr(this, s.substr(off, len)); },
-    "write(I)V": function (this: JWriter, c: number) { return wr(this, String.fromCharCode(c & 0xffff)); },
-    "write([C)V": function (this: JWriter, c: Uint16Array) { return wr(this, chars(c)); },
-    "write([CII)V": function (this: JWriter, c: Uint16Array, off: number, len: number) { return wr(this, chars(c.subarray(off, off + len))); },
-    "append(C)Ljava/lang/Appendable;": function (this: JWriter, c: number) { return wr(this, String.fromCharCode(c & 0xffff)).then(() => this); },
+    "write(Ljava/lang/String;II)V": maySuspend(function (this: JWriter, s: string, off: number, len: number) { return wr(this, s.substr(off, len)); }),
+    "write(I)V": maySuspend(function (this: JWriter, c: number) { return wr(this, String.fromCharCode(c & 0xffff)); }),
+    "write([C)V": maySuspend(function (this: JWriter, c: Uint16Array) { return wr(this, chars(c)); }),
+    "write([CII)V": maySuspend(function (this: JWriter, c: Uint16Array, off: number, len: number) { return wr(this, chars(c.subarray(off, off + len))); }),
+    "append(C)Ljava/lang/Appendable;": maySuspend(function (this: JWriter, c: number) { return after(wr(this, String.fromCharCode(c & 0xffff)), () => this); }),
     "append(Ljava/lang/CharSequence;)Ljava/lang/Appendable;": async function (this: JWriter, cs: unknown) {
       await wr(this, cs === null ? "null" : String(await vcall(cs, "toString", "()Ljava/lang/String;")));
       return this;
@@ -818,10 +807,10 @@ rt.register({
   name: "java/io/BufferedWriter", ctor: class extends JWriter { target: JWriter | null = null; }, sup: "java/io/Writer",
   methods: {
     "<init>(Ljava/io/Writer;)V": function (this: any, w: JWriter) { this.target = w; },
-    "write(Ljava/lang/String;)V": function (this: any, str: string) { return vcall(this.target, "write", "(Ljava/lang/String;)V", str); },
-    "newLine()V": function (this: any) { return vcall(this.target, "write", "(Ljava/lang/String;)V", "\n"); },
-    "flush()V": function (this: any) { return vcall(this.target, "flush", "()V"); },
-    "close()V": function (this: any) { return vcall(this.target, "close", "()V"); },
+    "write(Ljava/lang/String;)V": maySuspend(function (this: any, str: string) { return wr(this.target, str); }),
+    "newLine()V": maySuspend(function (this: any) { return wr(this.target, "\n"); }),
+    "flush()V": maySuspend(function (this: any) { return vcallMaybe(this.target, "flush", "()V"); }),
+    "close()V": maySuspend(function (this: any) { return vcallMaybe(this.target, "close", "()V"); }),
   },
 });
 // PrintWriter: every print/println overload funnels through the virtual write(String),

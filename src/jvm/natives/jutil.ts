@@ -1,7 +1,7 @@
 import { readStreamFully } from "./jio";
 import { jarray, mangleMethod, charsToString } from "../abi";
 import {
-  vcall, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, idHash, defineException,
+  vcall, vcallMaybe, after, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, idHash, defineException,
   mkCmp, fmtDouble
 } from "./jlang";
 import { JObj, rt, maySuspend, type NativeSpec, type ClassInfo } from "../runtime";
@@ -29,14 +29,14 @@ function jhash(o: unknown): number | Promise<number> {
   if (typeof o === "string") return stringHash(o);
   return vcall(o, "hashCode", "()I");
 }
-async function jcmp(cmp: unknown, a: unknown, b: unknown): Promise<number> {
-  if (cmp) return await vcall(cmp, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", a, b);
+function jcmp(cmp: unknown, a: unknown, b: unknown): number | Promise<number> {
+  if (cmp) return vcall(cmp, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", a, b);
   const t = typeof a;
   if (typeof b === t && (t === "string" || t === "number" || t === "bigint")) {
     const x = a as number, y = b as number;
     return x < y ? -1 : x > y ? 1 : 0;
   }
-  return await vcall(a, "compareTo", "(Ljava/lang/Object;)I", b);
+  return vcall(a, "compareTo", "(Ljava/lang/Object;)I", b);
 }
 
 /** Fast map key for values with value/identity semantics, or SLOW sentinel. */
@@ -179,15 +179,19 @@ export function mkIter(arr: unknown[], owner: IterOwner | null = null): JIter {
   return new JIter(arr, owner);
 }
 
-async function listBinarySearch(l: unknown, k: unknown, cmp: unknown): Promise<number> {
-  const a = await toJsArray(l);
-  let lo = 0, hi = a.length - 1;
+function arrBinarySearch(a: unknown[], k: unknown, cmp: unknown, lo = 0, hi = a.length - 1): number | Promise<number> {
   while (lo <= hi) {
     const mid = (lo + hi) >>> 1;
-    const c = await jcmp(cmp, a[mid], k);
-    if (c < 0) lo = mid + 1; else if (c > 0) hi = mid - 1; else return mid;
+    const r = jcmp(cmp, a[mid], k);
+    if (r instanceof Promise) {
+      return r.then((c) => (c < 0 ? arrBinarySearch(a, k, cmp, mid + 1, hi) : c > 0 ? arrBinarySearch(a, k, cmp, lo, mid - 1) : mid));
+    }
+    if (r < 0) lo = mid + 1; else if (r > 0) hi = mid - 1; else return mid;
   }
   return -(lo + 1);
+}
+function listBinarySearch(l: unknown, k: unknown, cmp: unknown): number | Promise<number> {
+  return after(toJsArray(l), (a) => arrBinarySearch(a, k, cmp));
 }
 /** A java.util.ArrayList over `items` — compiled code cannot use a bare JS array as a List. */
 export function newArrayList(items: unknown[] = []): JList {
@@ -312,12 +316,12 @@ export function listMethods(): Methods {
       return this.a.splice(i, 1)[0];
     },
     "remove(Ljava/lang/Object;)Z": async function (this: JList, v: unknown) {
-      const i = await indexOfAsync(this.a, v);
+      const i = await indexIn(this.a, v);
       if (i < 0) return 0;
       this.a.splice(i, 1);
       return 1;
     },
-    "indexOf(Ljava/lang/Object;)I": function (this: JList, v: unknown) { return indexOfAsync(this.a, v); },
+    "indexOf(Ljava/lang/Object;)I": maySuspend(function (this: JList, v: unknown) { return indexIn(this.a, v); }),
     "lastIndexOf(Ljava/lang/Object;)I": async function (this: JList, v: unknown) {
       for (let i = this.a.length - 1; i >= 0; i--) {
         const r = jeq(this.a[i], v);
@@ -325,9 +329,9 @@ export function listMethods(): Methods {
       }
       return -1;
     },
-    "contains(Ljava/lang/Object;)Z": async function (this: JList, v: unknown) {
-      return (await indexOfAsync(this.a, v)) >= 0 ? 1 : 0;
-    },
+    "contains(Ljava/lang/Object;)Z": maySuspend(function (this: JList, v: unknown) {
+      return after(indexIn(this.a, v), (i) => (i >= 0 ? 1 : 0));
+    }),
     // Collection default methods. They are declared on the interface, so nothing in an app
     // ever names the implementing class and a static scan cannot see them go missing.
     "removeIf(Ljava/util/function/Predicate;)Z": async function (this: JList, p: unknown) {
@@ -360,7 +364,7 @@ export function listMethods(): Methods {
       const before = this.a.length;
       for (const s of src) {
         let i: number;
-        while ((i = await indexOfAsync(this.a, s)) >= 0) this.a.splice(i, 1);
+        while ((i = await indexIn(this.a, s)) >= 0) this.a.splice(i, 1);
       }
       return this.a.length !== before ? 1 : 0;
     },
@@ -374,7 +378,7 @@ export function listMethods(): Methods {
       l.a = subView(this.a, a, b);
       return l;
     },
-    "sort(Ljava/util/Comparator;)V": function (this: JList, cmp: unknown) { return sortInPlace(this.a, cmp); },
+    "sort(Ljava/util/Comparator;)V": maySuspend(function (this: JList, cmp: unknown) { return sortInPlace(this.a, cmp); }),
     "equals(Ljava/lang/Object;)Z": async function (this: JList, o: unknown) {
       if (o === this) return 1;
       if (!(o instanceof JList) || o.a.length !== this.a.length) return 0;
@@ -384,7 +388,7 @@ export function listMethods(): Methods {
       }
       return 1;
     },
-    "hashCode()I": function (this: JList) { return hashSeq(this.a); },
+    "hashCode()I": maySuspend(function (this: JList) { return hashSeq(this.a); }),
     "toString()Ljava/lang/String;": async function (this: JList) {
       const parts: string[] = [];
       for (const e of this.a) parts.push(e === null ? "null" : String(typeof e === "object" ? await vcall(e, "toString", "()Ljava/lang/String;") : e));
@@ -420,29 +424,40 @@ export function listMethods(): Methods {
     },
   };
 }
-async function indexOfAsync(arr: unknown[], v: unknown): Promise<number> {
-  for (let i = 0; i < arr.length; i++) {
+function indexIn(arr: unknown[], v: unknown, from = 0): number | Promise<number> {
+  for (let i = from; i < arr.length; i++) {
     const r = jeq(arr[i], v);
-    if (r instanceof Promise ? await r : r) return i;
+    if (r instanceof Promise) return r.then((hit) => (hit ? i : indexIn(arr, v, i + 1)));
+    if (r) return i;
   }
   return -1;
 }
 /** Java's List.hashCode / Arrays.hashCode / Objects.hash over a sequence */
-async function hashSeq(a: unknown[]): Promise<number> {
-  let h = 1;
-  for (const e of a) {
-    const r = jhash(e);
-    h = (Math.imul(h, 31) + (r instanceof Promise ? await r : r)) | 0;
+function hashSeq(a: unknown[], h = 1, from = 0): number | Promise<number> {
+  for (let i = from; i < a.length; i++) {
+    const r = jhash(a[i]);
+    if (r instanceof Promise) return r.then((x) => hashSeq(a, (Math.imul(h, 31) + x) | 0, i + 1));
+    h = (Math.imul(h, 31) + r) | 0;
   }
   return h;
 }
+const primCmp = (x: any, y: any) => (x < y ? -1 : x > y ? 1 : 0);
 /** sort `a` where it lives: a subList view (and Arrays.sort's caller) must see the writes */
-export async function sortInPlace(a: unknown[], cmp: unknown, from = 0, to = a.length): Promise<void> {
-  const s = await sortAsync(a.slice(from, to), cmp, rt.th());
-  for (let i = 0; i < s.length; i++) a[from + i] = s[i];
+export function sortInPlace(a: unknown[], cmp: unknown, from = 0, to = a.length): void | Promise<void> {
+  if (to - from <= 1) return;
+  if (!cmp) {
+    const t = typeof a[from];
+    let i = from + 1;
+    if (t === "string" || t === "number" || t === "bigint") while (i < to && typeof a[i] === t) i++;
+    if (i === to) {
+      const s = a.slice(from, to).sort(primCmp);
+      for (let j = 0; j < s.length; j++) a[from + j] = s[j];
+      return;
+    }
+  }
+  return sortAsync(a.slice(from, to), cmp, rt.th()).then((s) => { for (let i = 0; i < s.length; i++) a[from + i] = s[i]; });
 }
 async function sortAsync(a: unknown[], cmp: unknown, thread: unknown): Promise<unknown[]> {
-  // merge sort with async comparator
   if (a.length < 2) return a;
   const mid = a.length >> 1;
   const l = await sortAsync(a.slice(0, mid), cmp, thread);
@@ -458,11 +473,14 @@ async function sortAsync(a: unknown[], cmp: unknown, thread: unknown): Promise<u
   return out;
 }
 /** any java Collection/Iterable → JS array (fast path for our native lists/sets) */
-export async function toJsArray(c: unknown): Promise<unknown[]> {
+export function toJsArray(c: unknown): unknown[] | Promise<unknown[]> {
   if (c === null || c === undefined) return [];
   if (c instanceof JList) return c.a;
   if (c instanceof JSet) return setItems(c);
   if (c instanceof JMap) return []; // maps aren't collections
+  return iterateAll(c);
+}
+async function iterateAll(c: unknown): Promise<unknown[]> {
   const out: unknown[] = [];
   const it = await vcall(c, "iterator", "()Ljava/util/Iterator;");
   while (await vcall(it, "hasNext", "()Z")) out.push(await vcall(it, "next", "()Ljava/lang/Object;"));
@@ -599,11 +617,11 @@ function mapMethods(): NativeSpec["methods"] {
       const v = await (vcall(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k));
       return v === null ? d : v;
     },
-    "containsKey(Ljava/lang/Object;)Z": function (this: JMap, k: unknown) {
+    "containsKey(Ljava/lang/Object;)Z": maySuspend(function (this: JMap, k: unknown) {
       const mk = mapKey(k);
       if (mk !== SLOW) return this.m.has(mk) ? 1 : 0;
       return slowFind(this.slow, k).then((i) => (i >= 0 ? 1 : 0));
-    },
+    }),
     "containsValue(Ljava/lang/Object;)Z": async function (this: JMap, v: unknown) {
       for (const e of allEnts(this)) {
         const r = jeq(e.v, v);
@@ -631,7 +649,7 @@ function mapMethods(): NativeSpec["methods"] {
       await vcall(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, v);
       return null;
     },
-    "remove(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMap, k: unknown) {
+    "remove(Ljava/lang/Object;)Ljava/lang/Object;": maySuspend(function (this: JMap, k: unknown) {
       const mk = mapKey(k);
       if (mk !== SLOW) {
         const e = this.m.get(mk);
@@ -640,7 +658,7 @@ function mapMethods(): NativeSpec["methods"] {
         return e.v;
       }
       return slowFind(this.slow, k).then((i) => (i >= 0 ? this.slow.splice(i, 1)[0].v : null));
-    },
+    }),
     "remove(Ljava/lang/Object;Ljava/lang/Object;)Z": maySuspend(function (this: JMap, k: unknown, value: unknown) {
       const key = mapKey(k);
       const remove = (entry: Ent | undefined) => {
@@ -710,16 +728,14 @@ rt.register({
     "size()I": function (this: JSetView) { return this.map.m.size + this.map.slow.length; },
     "isEmpty()Z": function (this: JSetView) { return this.map.m.size + this.map.slow.length ? 0 : 1; },
     "iterator()Ljava/util/Iterator;": function (this: JSetView) { return mkIter(this.snapshot()); },
-    "contains(Ljava/lang/Object;)Z": function (this: JSetView, v: unknown) {
-      if (this.kind === "k") return vcall(this.map, "containsKey", "(Ljava/lang/Object;)Z", v);
-      return indexOfAsync(this.snapshot(), v).then((i) => (i >= 0 ? 1 : 0));
-    },
-    "remove(Ljava/lang/Object;)Z": async function (this: JSetView, v: unknown) {
-      if (this.kind === "k") {
-        return (await vcall(this.map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", v)) !== null ? 1 : 0;
-      }
-      return 0;
-    },
+    "contains(Ljava/lang/Object;)Z": maySuspend(function (this: JSetView, v: unknown) {
+      if (this.kind === "k") return vcallMaybe(this.map, "containsKey", "(Ljava/lang/Object;)Z", v);
+      return after(indexIn(this.snapshot(), v), (i) => (i >= 0 ? 1 : 0));
+    }),
+    "remove(Ljava/lang/Object;)Z": maySuspend(function (this: JSetView, v: unknown) {
+      if (this.kind !== "k") return 0;
+      return after(vcallMaybe(this.map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", v), (r) => (r !== null ? 1 : 0));
+    }),
     "toArray()[Ljava/lang/Object;": function (this: JSetView) { return jarray(this.snapshot()); },
     "toArray([Ljava/lang/Object;)[Ljava/lang/Object;": function (this: JSetView, out: unknown[]) {
       return fillToArray(this.snapshot(), out);
@@ -738,7 +754,7 @@ rt.register({
       const keep = await toJsArray(c);
       let ch = 0;
       for (const k of this.snapshot()) {
-        if ((await indexOfAsync(keep, k)) < 0) {
+        if ((await indexIn(keep, k)) < 0) {
           await vcall(this.map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
           ch = 1;
         }
@@ -747,7 +763,7 @@ rt.register({
     },
     "containsAll(Ljava/util/Collection;)Z": async function (this: JSetView, c: unknown) {
       const snap = this.snapshot();
-      for (const v of await toJsArray(c)) if ((await indexOfAsync(snap, v)) < 0) return 0;
+      for (const v of await toJsArray(c)) if ((await indexIn(snap, v)) < 0) return 0;
       return 1;
     },
     "clear()V": function (this: JSetView) { this.map.m.clear(); this.map.slow.length = 0; },
@@ -825,16 +841,16 @@ function setMethods(): NativeSpec["methods"] {
     },
     "isEmpty()Z": function (this: JSet) { return this.m.size + this.slow.length ? 0 : 1; },
     "add(Ljava/lang/Object;)Z": maySuspend(function (this: JSet, v: unknown) { return addToSet(this, v); }),
-    "remove(Ljava/lang/Object;)Z": function (this: JSet, v: unknown) {
+    "remove(Ljava/lang/Object;)Z": maySuspend(function (this: JSet, v: unknown) {
       const mk = mapKey(v);
       if (mk !== SLOW) return this.m.delete(mk) ? 1 : 0;
       return slowFind(this.slow, v).then((i) => (i >= 0 ? (this.slow.splice(i, 1), 1) : 0));
-    },
-    "contains(Ljava/lang/Object;)Z": function (this: JSet, v: unknown) {
+    }),
+    "contains(Ljava/lang/Object;)Z": maySuspend(function (this: JSet, v: unknown) {
       const mk = mapKey(v);
       if (mk !== SLOW) return this.m.has(mk) ? 1 : 0;
       return slowFind(this.slow, v).then((i) => (i >= 0 ? 1 : 0));
-    },
+    }),
     "clear()V": function (this: JSet) { this.m.clear(); this.slow.length = 0; },
     "iterator()Ljava/util/Iterator;": function (this: JSet) { return mkIter(setItems(this)); },
     "addAll(Ljava/util/Collection;)Z": async function (this: JSet, c: unknown) {
@@ -889,7 +905,7 @@ function enumSetStatics() {
     return s;
   };
   return {
-    "static allOf(Ljava/lang/Class;)Ljava/util/EnumSet;": (c: JObj) => fromValues(c, true, []),
+    "static allOf(Ljava/lang/Class;)Ljava/util/EnumSet;": async (c: JObj) => fromValues(c, true, []),
     "static noneOf(Ljava/lang/Class;)Ljava/util/EnumSet;": (c: JObj) => fromValues(c, false, []),
     "static of(Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown) => fromValues(null!, false, [a]),
     "static of(Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, b: unknown) => fromValues(null!, false, [a, b]),
@@ -906,12 +922,17 @@ type Sorted = JTreeMap | JTreeSet;
 const UNB = Symbol("unbounded");
 
 /** index of k, else ~insertionPoint */
-async function bsearch(t: Sorted, k: unknown): Promise<number> {
-  let lo = 0, hi = t.slow.length;
+function bsearch(t: Sorted, k: unknown, lo = 0, hi = t.slow.length): number | Promise<number> {
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
-    let c = await jcmp(t.cmp, t.slow[mid].k, k);
-    if (t.rev) c = -c;
+    const r = jcmp(t.cmp, t.slow[mid].k, k);
+    if (r instanceof Promise) {
+      return r.then((c) => {
+        if (t.rev) c = -c;
+        return c === 0 ? mid : c < 0 ? bsearch(t, k, mid + 1, hi) : bsearch(t, k, lo, mid);
+      });
+    }
+    const c = t.rev ? -r : r;
     if (c === 0) return mid;
     if (c < 0) lo = mid + 1; else hi = mid;
   }
@@ -943,11 +964,12 @@ function keysOf(t: JTreeMap, ents: Ent[], rev: boolean): JTreeSet {
   s.cmp = t.cmp; s.rev = rev; s.slow = ents.map((e) => ({ k: e.k, v: e.k }));
   return s;
 }
-async function tadd(s: JTreeSet, v: unknown): Promise<number> {
-  const i = await bsearch(s, v);
-  if (i >= 0) return 0;
-  s.slow.splice(~i, 0, { k: v, v });
-  return 1;
+function tadd(s: JTreeSet, v: unknown): number | Promise<number> {
+  return after(bsearch(s, v), (i) => {
+    if (i >= 0) return 0;
+    s.slow.splice(~i, 0, { k: v, v });
+    return 1;
+  });
 }
 function endOf(t: Sorted, last: boolean): Ent | null {
   return t.slow.length ? t.slow[last ? t.slow.length - 1 : 0] : null;
@@ -973,21 +995,22 @@ function treeMapMethods(): NativeSpec["methods"] {
     "<init>(Ljava/util/Map;)V": async function (this: JTreeMap, m: unknown) { if (m) await copyMapInto(m, this); },
     "<init>(Ljava/util/SortedMap;)V": async function (this: JTreeMap, m: unknown) { if (m) await copyMapInto(m, this); },
     "comparator()Ljava/util/Comparator;": function (this: JTreeMap) { return this.cmp; },
-    "get(Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JTreeMap, k: unknown) {
-      const i = await bsearch(this, k); return i < 0 ? null : this.slow[i].v;
-    },
-    "containsKey(Ljava/lang/Object;)Z": async function (this: JTreeMap, k: unknown) {
-      return (await bsearch(this, k)) < 0 ? 0 : 1;
-    },
-    "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JTreeMap, k: unknown, v: unknown) {
-      const i = await bsearch(this, k);
-      if (i >= 0) { const o = this.slow[i].v; this.slow[i].v = v; return o; }
-      this.slow.splice(~i, 0, { k, v });
-      return null;
-    },
-    "remove(Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JTreeMap, k: unknown) {
-      const i = await bsearch(this, k); return i < 0 ? null : this.slow.splice(i, 1)[0].v;
-    },
+    "get(Ljava/lang/Object;)Ljava/lang/Object;": maySuspend(function (this: JTreeMap, k: unknown) {
+      return after(bsearch(this, k), (i) => (i < 0 ? null : this.slow[i].v));
+    }),
+    "containsKey(Ljava/lang/Object;)Z": maySuspend(function (this: JTreeMap, k: unknown) {
+      return after(bsearch(this, k), (i) => (i < 0 ? 0 : 1));
+    }),
+    "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": maySuspend(function (this: JTreeMap, k: unknown, v: unknown) {
+      return after(bsearch(this, k), (i) => {
+        if (i >= 0) { const o = this.slow[i].v; this.slow[i].v = v; return o; }
+        this.slow.splice(~i, 0, { k, v });
+        return null;
+      });
+    }),
+    "remove(Ljava/lang/Object;)Ljava/lang/Object;": maySuspend(function (this: JTreeMap, k: unknown) {
+      return after(bsearch(this, k), (i) => (i < 0 ? null : this.slow.splice(i, 1)[0].v));
+    }),
     "firstKey()Ljava/lang/Object;": endKey(false),
     "lastKey()Ljava/lang/Object;": endKey(true),
     "firstEntry()Ljava/util/Map$Entry;": end(false, false),
@@ -1026,13 +1049,13 @@ function treeSetMethods(): NativeSpec["methods"] {
       for (const v of await toJsArray(c)) await tadd(this, v);
     },
     "comparator()Ljava/util/Comparator;": function (this: JTreeSet) { return this.cmp; },
-    "add(Ljava/lang/Object;)Z": function (this: JTreeSet, v: unknown) { return tadd(this, v); },
-    "remove(Ljava/lang/Object;)Z": async function (this: JTreeSet, v: unknown) {
-      const i = await bsearch(this, v); return i < 0 ? 0 : (this.slow.splice(i, 1), 1);
-    },
-    "contains(Ljava/lang/Object;)Z": async function (this: JTreeSet, v: unknown) {
-      return (await bsearch(this, v)) < 0 ? 0 : 1;
-    },
+    "add(Ljava/lang/Object;)Z": maySuspend(function (this: JTreeSet, v: unknown) { return tadd(this, v); }),
+    "remove(Ljava/lang/Object;)Z": maySuspend(function (this: JTreeSet, v: unknown) {
+      return after(bsearch(this, v), (i) => (i < 0 ? 0 : (this.slow.splice(i, 1), 1)));
+    }),
+    "contains(Ljava/lang/Object;)Z": maySuspend(function (this: JTreeSet, v: unknown) {
+      return after(bsearch(this, v), (i) => (i < 0 ? 0 : 1));
+    }),
     "lower(Ljava/lang/Object;)Ljava/lang/Object;": nav(-2),
     "floor(Ljava/lang/Object;)Ljava/lang/Object;": nav(-1),
     "ceiling(Ljava/lang/Object;)Ljava/lang/Object;": nav(1),
@@ -1106,7 +1129,7 @@ rt.register({
 const concurrentListExtras: Record<string, Methods> = {
   "java/util/concurrent/CopyOnWriteArrayList": {
     "addIfAbsent(Ljava/lang/Object;)Z": async function (this: JList, v: unknown) {
-      if ((await indexOfAsync(this.a, v)) >= 0) return 0;
+      if ((await indexIn(this.a, v)) >= 0) return 0;
       this.a.push(v);
       return 1;
     },
@@ -1692,9 +1715,9 @@ rt.register({
     "static sort([III)V": taSort,
     "static sort([JII)V": taSort,
     "static sort([FII)V": taSort,
-    "static sort([Ljava/lang/Object;)V": (a: unknown[]) => sortInPlace(a, null),
-    "static sort([Ljava/lang/Object;Ljava/util/Comparator;)V": (a: unknown[], cmp: unknown) => sortInPlace(a, cmp),
-    "static sort([Ljava/lang/Object;IILjava/util/Comparator;)V": (a: unknown[], from: number, to: number, cmp: unknown) => sortInPlace(a, cmp, from, to),
+    "static sort([Ljava/lang/Object;)V": maySuspend((a: unknown[]) => sortInPlace(a, null)),
+    "static sort([Ljava/lang/Object;Ljava/util/Comparator;)V": maySuspend((a: unknown[], cmp: unknown) => sortInPlace(a, cmp)),
+    "static sort([Ljava/lang/Object;IILjava/util/Comparator;)V": maySuspend((a: unknown[], from: number, to: number, cmp: unknown) => sortInPlace(a, cmp, from, to)),
     "static fill([II)V": (a: Int32Array, v: number) => a.fill(v),
     "static fill([BB)V": (a: Int8Array, v: number) => a.fill(v),
     "static fill([ZZ)V": (a: Uint8Array, v: number) => a.fill(v),
@@ -1745,7 +1768,7 @@ rt.register({
     "static toString([Z)Ljava/lang/String;": (a: Uint8Array) => (a ? "[" + Array.from(a, (v) => (v ? "true" : "false")).join(", ") + "]" : "null"),
     "static sort([C)V": taSort,
     "static sort([S)V": taSort,
-    "static deepHashCode([Ljava/lang/Object;)I": (a: unknown[] | null) => (a ? hashSeq(a) : 0),
+    "static deepHashCode([Ljava/lang/Object;)I": maySuspend((a: unknown[] | null) => (a ? hashSeq(a) : 0)),
     "static equals([Ljava/lang/Object;[Ljava/lang/Object;)Z": async (a: unknown[], b: unknown[]) => {
       if (a === b) return 1;
       if (!a || !b || a.length !== b.length) return 0;
@@ -1755,7 +1778,7 @@ rt.register({
       }
       return 1;
     },
-    "static hashCode([Ljava/lang/Object;)I": (a: unknown[] | null) => (a ? hashSeq(a) : 0),
+    "static hashCode([Ljava/lang/Object;)I": maySuspend((a: unknown[] | null) => (a ? hashSeq(a) : 0)),
     "static hashCode([I)I": (a: Int32Array) => {
       if (!a) return 0;
       let h = 1;
@@ -1767,17 +1790,7 @@ rt.register({
     "static binarySearch([II)I": taBinarySearch,
     "static binarySearch([CC)I": taBinarySearch,
     "static binarySearch([JJ)I": taBinarySearch,
-    "static binarySearch([Ljava/lang/Object;Ljava/lang/Object;)I": async (a: unknown[], k: unknown) => {
-      let lo = 0, hi = a.length - 1;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        const c = await jcmp(null, a[mid], k);
-        if (c < 0) lo = mid + 1;
-        else if (c > 0) hi = mid - 1;
-        else return mid;
-      }
-      return -(lo + 1);
-    },
+    "static binarySearch([Ljava/lang/Object;Ljava/lang/Object;)I": maySuspend((a: unknown[], k: unknown) => arrBinarySearch(a, k, null)),
   },
 });
 // The typed-array Arrays statics: one body per operation serves every element type, because
@@ -1874,10 +1887,10 @@ rt.register({
     "static synchronizedList(Ljava/util/List;)Ljava/util/List;": (l: unknown) => l,
     "static synchronizedMap(Ljava/util/Map;)Ljava/util/Map;": (m: unknown) => m,
     "static synchronizedSet(Ljava/util/Set;)Ljava/util/Set;": (s: unknown) => s,
-    "static sort(Ljava/util/List;)V": (l: JList) => sortInPlace(l.a, null),
-    "static sort(Ljava/util/List;Ljava/util/Comparator;)V": async (l: JList, c: unknown) => sortInPlace(l.a, c),
-    "static binarySearch(Ljava/util/List;Ljava/lang/Object;)I": (l: unknown, k: unknown) => listBinarySearch(l, k, null),
-    "static binarySearch(Ljava/util/List;Ljava/lang/Object;Ljava/util/Comparator;)I": listBinarySearch,
+    "static sort(Ljava/util/List;)V": maySuspend((l: JList) => sortInPlace(l.a, null)),
+    "static sort(Ljava/util/List;Ljava/util/Comparator;)V": maySuspend((l: JList, c: unknown) => sortInPlace(l.a, c)),
+    "static binarySearch(Ljava/util/List;Ljava/lang/Object;)I": maySuspend((l: unknown, k: unknown) => listBinarySearch(l, k, null)),
+    "static binarySearch(Ljava/util/List;Ljava/lang/Object;Ljava/util/Comparator;)I": maySuspend(listBinarySearch),
     "static reverse(Ljava/util/List;)V": (l: JList) => l.a.reverse(),
     "static shuffle(Ljava/util/List;)V": (l: JList) => {
       for (let i = l.a.length - 1; i > 0; i--) {
@@ -1911,9 +1924,9 @@ class JObjects extends JObj {}
 rt.register({
   name: "java/util/Objects", ctor: JObjects,
   methods: {
-    "static equals(Ljava/lang/Object;Ljava/lang/Object;)Z": (a: unknown, b: unknown) => (a === b ? 1 : a === null || b === null ? 0 : jeq(a, b)),
+    "static equals(Ljava/lang/Object;Ljava/lang/Object;)Z": maySuspend((a: unknown, b: unknown) => (a === b ? 1 : a === null || b === null ? 0 : jeq(a, b))),
     "static hashCode(Ljava/lang/Object;)I": (o: unknown) => (o === null ? 0 : jhash(o)),
-    "static hash([Ljava/lang/Object;)I": hashSeq,
+    "static hash([Ljava/lang/Object;)I": maySuspend((a: unknown[]) => hashSeq(a)),
     "static requireNonNull(Ljava/lang/Object;)Ljava/lang/Object;": (o: unknown) => (o === null ? rt.npe() : o),
     "static requireNonNull(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;": (o: unknown, m: string) => {
       if (o === null) throw rt.mkThrowable("java/lang/NullPointerException", m);

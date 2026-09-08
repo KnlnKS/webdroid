@@ -1,16 +1,24 @@
 // java.lang.* natives. Convention: Java booleans are 0/1 numbers, longs are BigInt,
 // Strings are JS string primitives (String.prototype carries mangled Java methods).
 
-import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
+import { rt, JObj, maySuspend, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
 import { mangleMethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits } from "../abi";
 
-// dynamic virtual call from native code, with promise guard
-export async function vcall(obj: any, name: string, desc: string, ...args: unknown[]): Promise<any> {
+function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => unknown {
   const fn = obj[mangleMethod(name, desc)] ?? rt.proxyMethod?.(obj, name, desc);
   if (typeof fn !== "function") throw rt.unimplemented(`vcall ${describe(obj)}.${name}${desc}`);
-  const r = fn.apply(obj, args);
+  return fn;
+}
+// dynamic virtual call from native code, with promise guard
+export async function vcall(obj: any, name: string, desc: string, ...args: unknown[]): Promise<any> {
+  const r = findMethod(obj, name, desc).apply(obj, args);
   return r instanceof Promise ? await r : r;
 }
+export function vcallMaybe(obj: any, name: string, desc: string, ...args: unknown[]): any {
+  return findMethod(obj, name, desc).apply(obj, args);
+}
+export const after = <R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T> =>
+  (r instanceof Promise ? r.then(f) : f(r as R));
 function describe(o: unknown): string {
   return typeof o === "string" ? "String" : ((o as any)?.constructor?.$i?.name ?? String(o));
 }
@@ -1427,7 +1435,7 @@ rt.register({
 class JThreadLocal extends JObj {}
 rt.register({
   name: "webdroid/SuppliedThreadLocal", ctor: class extends JThreadLocal { supplier: unknown = null; }, sup: "java/lang/ThreadLocal",
-  methods: { "initialValue()Ljava/lang/Object;": function (this: { supplier: unknown }) { return vcall(this.supplier, "get", "()Ljava/lang/Object;"); } },
+  methods: { "initialValue()Ljava/lang/Object;": maySuspend(function (this: { supplier: unknown }) { return vcallMaybe(this.supplier, "get", "()Ljava/lang/Object;"); }) },
 });
 rt.register({
   name: "java/lang/ThreadLocal", ctor: JThreadLocal,
