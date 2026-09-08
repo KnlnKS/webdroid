@@ -314,8 +314,22 @@ export function libcInit(): void {
     calloc: (_c, a) => mem.calloc(a.u(), a.u()),
     realloc: (_c, a) => mem.realloc(a.p(), a.u()),
     valloc: (_c, a) => mem.valloc(a.u()),
-    memalign: (_c, a) => mem.memalign(a.u(), a.u()),
-    posix_memalign: (_c, a) => { const out = a.p(), al = a.u(), n = a.u(); stp(out, mem.memalign(al, n)); return 0; },
+    memalign: (cpu, a) => {
+      const al = PTR === 8 ? Number(a.ul()) : a.u(), n = PTR === 8 ? Number(a.ul()) : a.u();
+      const alignment = 2 ** Math.ceil(Math.log2(al || 1));
+      const p = alignment < mem.u8.length && n < mem.u8.length ? mem.memalign(alignment, Math.max(1, n)) : 0;
+      if (!p) setErrno(cpu, E.NOMEM);
+      return p;
+    },
+    posix_memalign: (_c, a) => {
+      const out = a.p(), al = PTR === 8 ? a.ul() : BigInt(a.u()), n = PTR === 8 ? a.ul() : BigInt(a.u());
+      if (al < BigInt(PTR) || (al & (al - 1n))) return E.INVAL;
+      if (al >= BigInt(mem.u8.length) || n >= BigInt(mem.u8.length)) return E.NOMEM;
+      const p = mem.memalign(Number(al), Math.max(1, Number(n)));
+      if (!p) return E.NOMEM;
+      stp(out, p);
+      return 0;
+    },
     malloc_usable_size: (_c, a) => mem.usableSize(a.p()),
     memcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memcpy(d, s, n); return ARG0; },
     memmove: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n); return ARG0; },

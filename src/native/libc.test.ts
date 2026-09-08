@@ -1,12 +1,60 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { JThread } from "../jvm/natives/jlang";
 import { Cpu, setA64 } from "./cpu";
-import { lookupHost } from "./host";
+import { ldp, lookupHost, PTR } from "./host";
 import { libcInit } from "./libc";
 import { mem } from "./mem";
+import { E } from "./abi";
 
 beforeAll(() => { setA64(true); libcInit(); });
 afterAll(() => setA64(false));
+
+test("posix_memalign preserves the output and errno on invalid alignment or allocation failure", async () => {
+  const fn = lookupHost("posix_memalign", "libc.so")!, sentinel = 0x123456789abcdef0n;
+  for (const a64 of [false, true]) {
+    setA64(a64);
+    const cpu = new Cpu(new JThread(), "posix_memalign test"), out = mem.malloc(8);
+    try {
+      mem.st64(out, sentinel);
+      mem.st32(cpu.errnoAddr, E.IO);
+      for (const alignment of [0, PTR / 2, 24]) {
+        expect(await cpu.call(fn, [out, alignment, 128])).toBe(E.INVAL);
+        expect(mem.ld64(out)).toBe(sentinel);
+        expect(mem.ld32(cpu.errnoAddr)).toBe(E.IO);
+      }
+      for (const size of a64 ? [0xfffff000, 0x100000001n] : [0xfffff000]) {
+        expect(await cpu.call(fn, [out, 4096, size])).toBe(E.NOMEM);
+        expect(mem.ld64(out)).toBe(sentinel);
+        expect(mem.ld32(cpu.errnoAddr)).toBe(E.IO);
+      }
+      expect(await cpu.call(fn, [out, 2 << 20, 1 << 20])).toBe(0);
+      const p = ldp(out);
+      expect(p).not.toBe(0);
+      expect(p % (2 << 20)).toBe(0);
+      mem.free(p);
+    } finally {
+      mem.free(out);
+      cpu.dispose();
+      setA64(true);
+    }
+  }
+});
+
+test("Android memalign rounds arbitrary alignment upward and reports allocation failure", async () => {
+  const cpu = new Cpu(new JThread(), "memalign test"), fn = lookupHost("memalign", "libc.so")!;
+  try {
+    for (const alignment of [0, 3, 17, 4097]) {
+      const p = await cpu.call(fn, [alignment, 128]);
+      expect(p).not.toBe(0);
+      expect(p % 2 ** Math.ceil(Math.log2(alignment || 1))).toBe(0);
+      mem.free(p);
+    }
+    expect(await cpu.call(fn, [4096, 0x100000001n])).toBe(0);
+    expect(mem.ld32(cpu.errnoAddr)).toBe(E.NOMEM);
+  } finally {
+    cpu.dispose();
+  }
+});
 
 test("mmap accepts an unmapped AArch64 address hint without dereferencing it", async () => {
   const cpu = new Cpu(new JThread(), "mmap test");
