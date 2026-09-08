@@ -259,6 +259,8 @@ rt.register({
     "static isTagEnabled(J)Z": () => 0,
     "static beginSection(Ljava/lang/String;)V": () => {},
     "static endSection()V": () => {},
+    "static beginAsyncSection(Ljava/lang/String;I)V": () => {},
+    "static endAsyncSection(Ljava/lang/String;I)V": () => {},
     "static isEnabled()Z": () => 0,
   },
 });
