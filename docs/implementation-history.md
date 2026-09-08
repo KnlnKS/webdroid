@@ -1843,3 +1843,39 @@ The dedicated visible Chrome window was reloaded with saved databases intact and
 `1. e4 b6 2. Nf3 g6 3. Ne5 a5 4. d4 Bb7`. The main queue was idle, with 18 live CPUs,
 zero finished CPUs, no native fault, and about 487 MB live malloc storage. Lichess's database
 remained 61,440 bytes at schema version 5.
+
+### Mihon: extension repository and installation
+
+The visible Chrome flow uses Mihon 0.20.4 at 1080×2424@480. Keiyoushi's real
+`index.pb` repository loads and persists. Gzip decoding initially rejected the response:
+Inflater reported compressed input length as output length, breaking Okio's ISIZE check.
+The counters now track consumed input and drained output separately, excluding the trailer.
+
+Several apparent Compose failures had platform causes. Managed popup windows were never
+attached or positioned; saved-state lists lacked Serializable; and persisted string sets
+serialized Java collection internals into unusable objects. Popup attachment now follows
+window lifecycle, Arrays.asList retains its live backing and Java interfaces, and preferences
+snapshot string sets into a validated storage representation. Old malformed set records cannot
+recover their lost strings. View focus-rectangle dispatch and inset-controller ownership now
+reach their Java entry points. The browser shell reports zero controllable system-inset types.
+
+A separate startup Optional failure was a DEX field collision: two obfuscated statics shared
+a name but had different descriptors. Qualifying only colliding static field names preserves
+ordinary fast property access while keeping reflective and inherited lookup correct.
+
+Package installation support parses actual APK manifests and resources, verifies APK v2/v3
+signatures and content digests, persists installed archives, and loads extension DEX through
+isolated class loaders with parent delegation. Service lifecycle runs on the main queue.
+MangaDex's actual archive passes smoke compilation with zero method failures, as does Mihon.
+ImageDecoder now uses the existing bitmap pipeline with the Java header callback before
+target-size rasterization; a real PNG check verifies dimensions, pixels, repeated decoding,
+and unchanged ByteBuffer position. The catalog visibly renders MangaDex's icon with empty
+reached missing-API telemetry. These checks do not yet establish successful installation or
+reading.
+
+Chrome automation immediately canceled its native directory chooser despite visible focus
+and live user activation. Native computer clicks also failed with no available window. The
+user was asked to select Downloads/untitled manually; the requested host folder remains
+unverified. Native picker cancellation now stays canceled instead of silently selecting an
+unrelated OPFS directory. OPFS fallback remains available when the browser lacks the picker
+API. No server filesystem mount was introduced to bypass this browser boundary.
