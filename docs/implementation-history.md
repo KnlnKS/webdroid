@@ -1442,3 +1442,15 @@ remain in place; this change addresses runtime language and direction selection.
 Focused tests build real binary resource chunks and exercise Java Context/Resources dispatch,
 local configuration updates, shared lazy decoding, and selector-cache isolation. Full E2E was
 reserved for the end of the Lichess investigation as requested.
+
+## Lichess: shared vertex and index buffer storage
+
+Flutter uploads geometry through COPY_WRITE_BUFFER, then uses the same GLES buffer for
+vertex attributes and element indices. WebGL rejects that reuse. The bridge now allocates
+a second backing buffer only on the first mixed bind, synchronizes subsequent uploads,
+map/copy writes and GPU writes, and restores temporary bindings. Ordinary single-purpose
+buffers retain one backing allocation. Focused tests cover both first-bind orders.
+
+A targeted headless Lichess run reached 13 draws with zero GL errors and rendered the
+Home/Puzzles/Learn/Watch/More navigation bar. Startup next failed in Java service metadata
+and process queries, followed by JNI exception aborts; rendering itself was no longer black.

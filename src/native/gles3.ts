@@ -227,12 +227,12 @@ function captureDraw(): unknown {
   return { lit: `${lit}/${grid * grid}`, vp: [...vp], fbo: !!fb, link: prog ? gl.getProgramParameter(prog, gl.LINK_STATUS) : null, attribs, uniforms, vals, vdata, va, depth: gl.isEnabled(gl.DEPTH_TEST), stencil: gl.isEnabled(gl.STENCIL_TEST), blend: gl.isEnabled(gl.BLEND), scissor: gl.isEnabled(gl.SCISSOR_TEST), cull: gl.isEnabled(gl.CULL_FACE), mask: gl.getParameter(gl.COLOR_WRITEMASK), tex: !!gl.getParameter(gl.TEXTURE_BINDING_2D), err: gl.getError() };
 }
 // ── buffer records: kind (element or not) decided at the first typed bind, data shadowed until then
-interface BufRec { gl: WebGLBuffer | null; elem: boolean | null; shadow: Uint8Array | null; usage: number }
+interface BufRec { gl: WebGLBuffer | null; other: WebGLBuffer | null; elem: boolean | null; shadow: Uint8Array | null; usage: number }
 const COPY_READ = 0x8f36, COPY_WRITE = 0x8f37, ELEM = 0x8893, ARRAY = 0x8892;
 const recOf = new WeakMap<object, BufRec>();
 const bound = new Map<number, number>();                         // target → the guest handle last bound there
 const rec = (h: number): BufRec | null => { const o = H(T().buffers, h); return o ? recOf.get(o) ?? null : null; };
-const recAt = (t: number): BufRec | null => rec(bound.get(t) ?? 0);
+const recAt = (t: number): BufRec | null => t === ELEM ? recOf.get(g().getParameter(0x8895)) ?? null : rec(bound.get(t) ?? 0);
 /** the record behind a data target while its kind is undecided: writes land in the shadow */
 const shadowed = (t: number): BufRec | null => { if (t !== COPY_READ && t !== COPY_WRITE) return null; const r = recAt(t); return r && r.elem === null ? r : null; };
 /** run an operation on a data target: a copy target stands in for the buffer's own kind, binding restored */
@@ -243,13 +243,56 @@ function withTarget<R>(t: number, fn: (tt: number) => R): R {
   g().bindBuffer(tt, r?.gl ?? null);
   try { return fn(tt); } finally { g().bindBuffer(tt, prev); }
 }
-const writeBack = (t: number, off: number, data: Uint8Array): void => { const r = shadowed(t); if (r) r.shadow!.set(data, off); else withTarget(t, (tt) => g().bufferSubData(tt, off, data)); };
-/** a buffer bound by index (uniform, transform feedback) is vertex-side: decide it and flush its shadow */
+function writeBuffers(t: number, fn: (target: number) => void): void {
+  withTarget(t, fn);
+  const r = recAt(t);
+  if (!r?.other) return;
+  const elem = t === COPY_READ || t === COPY_WRITE ? r.elem : t === ELEM;
+  const target = elem ? ARRAY : ELEM, buffer = elem === r.elem ? r.other : r.gl;
+  const prev = g().getParameter(target === ELEM ? 0x8895 : 0x8894);
+  g().bindBuffer(target, buffer);
+  try { fn(target); } finally { g().bindBuffer(target, prev); }
+}
+const writeBack = (t: number, off: number, data: Uint8Array): void => { const r = shadowed(t); if (r) r.shadow!.set(data, off); else writeBuffers(t, (tt) => g().bufferSubData(tt, off, data)); };
 function realize(t: number, h: number): WebGLBuffer | null {
   const r = rec(h);
   if (!r) return null;
-  if (r.elem === null) { r.elem = false; r.gl = g().createBuffer(); if (r.shadow) { g().bindBuffer(t, r.gl); g().bufferData(t, r.shadow, r.usage); r.shadow = null; } }
-  return r.gl;
+  if (r.elem === null) {
+    r.elem = t === ELEM; r.gl = g().createBuffer();
+    if (r.gl) { recOf.set(r.gl, r); T().ids.set(r.gl, h); }
+    g().bindBuffer(t, r.gl);
+    if (r.shadow) { g().bufferData(t, r.shadow, r.usage); r.shadow = null; }
+  }
+  if (r.elem === (t === ELEM)) return r.gl;
+  if (!r.other) {
+    // WebGL forbids sharing index and vertex storage, so copy only on the first mixed bind.
+    const target = r.elem ? ELEM : ARRAY, prev = g().getParameter(r.elem ? 0x8895 : 0x8894);
+    g().bindBuffer(target, r.gl);
+    const data = new Uint8Array(g().getBufferParameter(target, 0x8764));
+    g().getBufferSubData(target, 0, data);
+    g().bindBuffer(target, prev);
+    r.other = g().createBuffer();
+    if (r.other) { recOf.set(r.other, r); T().ids.set(r.other, h); }
+    g().bindBuffer(t, r.other); g().bufferData(t, data, r.usage);
+  }
+  return r.other;
+}
+
+function syncVertexBuffer(buffer: WebGLBuffer | null): void {
+  const r = buffer && recOf.get(buffer);
+  if (!r?.other) return;
+  const vertex = g().getParameter(0x8894), element = g().getParameter(0x8895);
+  g().bindBuffer(ARRAY, buffer);
+  const data = new Uint8Array(g().getBufferParameter(ARRAY, 0x8764));
+  g().getBufferSubData(ARRAY, 0, data);
+  g().bindBuffer(ELEM, r.elem ? r.gl : r.other);
+  g().bufferSubData(ELEM, 0, data);
+  g().bindBuffer(ARRAY, vertex); g().bindBuffer(ELEM, element);
+}
+
+function syncFeedback(): void {
+  const n = g().getParameter(0x8c8b);
+  for (let i = 0; i < n; i++) syncVertexBuffer(g().getIndexedParameter(0x8c8f, i));
 }
 
 // ── what this context can do: a WebGL extension is advertised under its ES name only when
@@ -448,37 +491,29 @@ export function gles3Init(): void {
     glGetUniformiv: (_c, a) => { const p = H(T().programs, a.i()), u = U(a.i()); out(p && u && g().getUniform(p, u), a.p(), st32, 4); },
     glGetUniformuiv: (_c, a) => { const p = H(T().programs, a.i()), u = U(a.i()); out(p && u && g().getUniform(p, u), a.p(), st32, 4); },
 
-    // ── buffers. WebGL fixes a buffer as an element or a vertex-side buffer at its first bind to
-    // ELEMENT_ARRAY_BUFFER or any other target and refuses to change it; GLES lets an engine upload
-    // through COPY_WRITE_BUFFER before it says which. So a buffer's kind is decided by its first
-    // typed bind, its data waits in a guest shadow until then, and a copy-target operation after
-    // that goes through the kind's own target with the binding put back.
-    glGenBuffers: (_c, a) => { const n = a.i(); gen(T().buffers, n, a.p(), () => { const o = {} as WebGLBuffer; recOf.set(o, { gl: null, elem: null, shadow: null, usage: 0x88e4 }); return o; }); },
-    glDeleteBuffers: (_c, a) => { const n = a.i(); del(T().buffers, n, a.p(), (o) => { const r = recOf.get(o); if (r?.gl) g().deleteBuffer(r.gl); }); },
+    // ── buffers
+    glGenBuffers: (_c, a) => { const n = a.i(); gen(T().buffers, n, a.p(), () => { const o = {} as WebGLBuffer; recOf.set(o, { gl: null, other: null, elem: null, shadow: null, usage: 0x88e4 }); return o; }); },
+    glDeleteBuffers: (_c, a) => { const n = a.i(); del(T().buffers, n, a.p(), (o) => { const r = recOf.get(o); if (r?.gl) g().deleteBuffer(r.gl); if (r?.other) g().deleteBuffer(r.other); }); },
     glIsBuffer: (_c, a) => (H(T().buffers, a.i()) ? 1 : 0),
     glBindBuffer: (_c, a) => {
       const t = a.i(), h = a.i();
       if (t === 0x88ec) unpackPbo = !!h; else if (t === 0x88eb) packPbo = !!h;      // PIXEL_UNPACK/PACK_BUFFER
       bound.set(t, h);
       if (t === COPY_READ || t === COPY_WRITE) return;
-      const r = rec(h);
-      if (!r) { g().bindBuffer(t, null); return; }
-      if (r.elem === null) { r.elem = t === ELEM; r.gl = g().createBuffer(); g().bindBuffer(t, r.gl); if (r.shadow) { g().bufferData(t, r.shadow, r.usage); r.shadow = null; } return; }
-      if (r.elem !== (t === ELEM)) { err = 0x502; calledMissing.add("gles3:buffer bound as both element and vertex data"); return; }
-      g().bindBuffer(t, r.gl);
+      g().bindBuffer(t, realize(t, h));
     },
-    glBindBufferBase: (_c, a) => { const t = a.i(), i = a.i(); g().bindBufferBase(t, i, realize(t, a.i())); },
-    glBindBufferRange: (_c, a) => { const t = a.i(), i = a.i(), gl = realize(t, a.i()); g().bindBufferRange(t, i, gl, a.i(), a.i()); },
+    glBindBufferBase: (_c, a) => { const t = a.i(), i = a.i(), h = a.i(); bound.set(t, h); g().bindBufferBase(t, i, realize(t, h)); },
+    glBindBufferRange: (_c, a) => { const t = a.i(), i = a.i(), h = a.i(); bound.set(t, h); const gl = realize(t, h); g().bindBufferRange(t, i, gl, a.i(), a.i()); },
     glBufferData: (_c, a) => {
       const t = a.i(), n = a.i(), p = a.p(), usage = a.i(), r = shadowed(t);
       if (r) { r.shadow = new Uint8Array(n); if (p) r.shadow.set(u8(p, n)); r.usage = usage; }
-      else withTarget(t, (tt) => { if (p) g().bufferData(tt, u8(p, n), usage); else g().bufferData(tt, n, usage); });
+      else { const r = recAt(t); if (r) r.usage = usage; writeBuffers(t, (tt) => { if (p) g().bufferData(tt, u8(p, n), usage); else g().bufferData(tt, n, usage); }); }
     },
-    glBufferSubData: (_c, a) => { const t = a.i(), off = a.i(), n = a.i(), p = a.p(), r = shadowed(t); if (r) r.shadow!.set(u8(p, n), off); else withTarget(t, (tt) => g().bufferSubData(tt, off, u8(p, n))); },
+    glBufferSubData: (_c, a) => { const t = a.i(), off = a.i(), n = a.i(), p = a.p(); writeBack(t, off, u8(p, n)); },
     glCopyBufferSubData: (_c, a) => {
-      const rt = a.i(), wt = a.i(), roff = a.i(), woff = a.i(), n = a.i(), rs = shadowed(rt), ws = shadowed(wt);
+      const rt = a.i(), wt = a.i(), roff = a.i(), woff = a.i(), n = a.i(), rs = shadowed(rt);
       const src = rs ? rs.shadow!.subarray(roff, roff + n) : withTarget(rt, (tt) => { const d = new Uint8Array(n); g().getBufferSubData(tt, roff, d); return d; });
-      if (ws) ws.shadow!.set(src, woff); else withTarget(wt, (tt) => g().bufferSubData(tt, woff, src));
+      writeBack(wt, woff, src);
     },
     glGetBufferParameteriv: (_c, a) => { const t = a.i(), pn = a.i(), r = shadowed(t); out(r ? (pn === 0x8765 ? r.usage : r.shadow!.length) : withTarget(t, (tt) => g().getBufferParameter(tt, pn)), a.p(), st32, 4); },
     glGetBufferParameteri64v: (_c, a) => { const t = a.i(), pn = a.i(), r = shadowed(t); out(r ? (pn === 0x8765 ? r.usage : r.shadow!.length) : withTarget(t, (tt) => g().getBufferParameter(tt, pn)), a.p(), st64, 8); },
@@ -610,7 +645,7 @@ export function gles3Init(): void {
     glReadBuffer: (_c, a) => g().readBuffer(a.i()),
     glReadPixels: (_c, a) => {
       const x = a.i(), y = a.i(), w = a.i(), h = a.i(), f = a.i(), ty = a.i(), p = a.p();
-      if (packPbo) g().readPixels(x, y, w, h, f, ty, p); else g().readPixels(x, y, w, h, f, ty, pixels(ty, p));
+      if (packPbo) { g().readPixels(x, y, w, h, f, ty, p); syncVertexBuffer(g().getParameter(0x88ed)); } else g().readPixels(x, y, w, h, f, ty, pixels(ty, p));
     },
     glGenRenderbuffers: (_c, a) => { const n = a.i(); gen(T().rbos, n, a.p(), () => g().createRenderbuffer()); },
     glDeleteRenderbuffers: (_c, a) => { const n = a.i(); del(T().rbos, n, a.p(), (o) => g().deleteRenderbuffer(o)); },
@@ -645,8 +680,8 @@ export function gles3Init(): void {
     glDeleteTransformFeedbacks: (_c, a) => { const n = a.i(); del(T().tfs, n, a.p(), (o) => g().deleteTransformFeedback(o)); },
     glIsTransformFeedback: (_c, a) => (H(T().tfs, a.i()) ? 1 : 0),
     glBindTransformFeedback: (_c, a) => g().bindTransformFeedback(a.i(), H(T().tfs, a.i())),
-    glBeginTransformFeedback: (_c, a) => g().beginTransformFeedback(a.i()), glEndTransformFeedback: () => g().endTransformFeedback(),
-    glPauseTransformFeedback: () => g().pauseTransformFeedback(), glResumeTransformFeedback: () => g().resumeTransformFeedback(),
+    glBeginTransformFeedback: (_c, a) => g().beginTransformFeedback(a.i()), glEndTransformFeedback: () => { g().endTransformFeedback(); syncFeedback(); },
+    glPauseTransformFeedback: () => { g().pauseTransformFeedback(); syncFeedback(); }, glResumeTransformFeedback: () => g().resumeTransformFeedback(),
   };
   // ── uniforms: glUniform{1..4}{f,i,ui}[v] and the nine matrix shapes
   const kinds = [["f", (a: ArgReader) => a.f(), f32], ["i", (a: ArgReader) => a.i(), i32], ["ui", (a: ArgReader) => a.u(), u32]] as const;
