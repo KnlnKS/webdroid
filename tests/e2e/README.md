@@ -166,8 +166,8 @@ a clock pinned to `PINNED_CLOCK_MS` (2026-01-02T12:00:00Z — FitNotes renders t
 and webdroid pins the same instant via `page.clock.setFixedTime`), fixed locale and font scale,
 light theme, and `pm clear` before each flow. Recording twice produces byte-identical PNGs.
 
-The soft keyboard is closed before every capture — webdroid has no IME, and a keyboard in a
-golden would floor that step near 50%. It is closed **only when actually shown**, because the
+The soft keyboard is closed before every capture — webdroid does not render Android's keyboard,
+and a keyboard in a golden would floor that step near 50%. It is closed **only when actually shown**, because the
 dismiss key also closes dialogs.
 
 ## Flows
@@ -189,7 +189,7 @@ reports fps and the per-step missing-API list rather than a diff percentage:
 
 * **flappybird** (7 steps) — splash → title → PLAY → taps flap past pipes → Game Over panel.
 * **calculatorm** (8 steps) — keys from the rendered keypad.
-* **lichess** (3 steps) — boots as far as its arm64-only libflutter.so allows.
+* **lichess** (5 steps) — Flutter home → More → Board editor → drag e2 to e4 → Back.
 * **doodlejump** (6 steps) — title → play → Back, on the ARM32 native tier.
 
 Flows are aspirational on purpose. Steps webdroid cannot reach score near 100% and *are* the

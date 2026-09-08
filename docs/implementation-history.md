@@ -1589,3 +1589,123 @@ search field; browser select-all, typing World, and Backspace left Worl in both 
 Java editable and browser control. The search action completed without new missing
 APIs. Focused IME and package tests and typecheck passed; Lichess smoke compilation
 reported zero method failures. This was targeted verification, not the final E2E run.
+
+## Lichess: playable native engine
+
+The bundled Fairy-Stockfish wrapper creates pipes and redirects descriptors 0 and 1 with
+dup2. fdWrite previously sent every write to descriptor 1 to the browser log, even after
+redirection, so Dart's reader never received the engine's UCI responses. Console output now
+belongs to the open file description and follows duplication; standard descriptors can be
+closed and reused normally. FILE pushback also preserves the underlying pipe or file bytes.
+No engine-specific transport or app bytecode replacement is involved.
+
+A fresh headless Lichess game at level 1, playing white, reached `1. e4 h5` using the actual
+ARM64 engine. Its initialization took roughly 3.1 seconds of active CPU work in a 12-second
+profile with 8.9 seconds idle. The app's five-second startup timeout did not need changing.
+The earlier timeout, cached FILE pointer, and uncalled sqrtl theories were not the cause.
+Manual Chrome checks also verified board editing, Back, real network content, emoji fallback,
+and browser text input. Authentication and account-specific features were not exercised.
+
+The automated Lichess flow now uses stable offline tools: home, More, board editor, an e2–e4
+drag, and Back. All five steps rendered, and the captured board shows the moved pawn. Java's
+remaining reached absence is the optional AndroidX SidecarProvider extension; native missing
+calls and JNI misses were empty in the targeted runs. Cronet still logs its DNS configuration
+warning, but native TLS/HTTP/WebSocket traffic succeeds. Empty reached telemetry is not a
+claim of complete API coverage.
+
+### Final regression review
+
+The first full E2E capture found FitNotes' ActionBar title and Up navigation disappearing.
+Deferring decor installation until after onCreate lets Lichess set its normal window theme,
+but Activity.getActionBar also needs to install that decor before returning the bar. Otherwise
+setTitle, setDisplayHomeAsUpEnabled and setNavigationMode silently discard their updates.
+The lazy getActionBar path now preserves those settings, with a focused regression test and
+a headless FitNotes navigation check.
+
+Review also caught two input-connection cases hidden by Flutter's custom Editable: ordinary
+EditText deletion needed to update the view's text, and its cached Editable needed linking
+before virtual span calls. A cold regression test now checks deletion, selection and rereads.
+Scoped configuration overrides now merge defined values against their source configuration;
+zero fontScale/density and empty locales mean unspecified, not zero-sized text. The merge
+preserves independent qualifier bit groups and keeps scoped display metrics in sync.
+
+A longer Mihon onboarding replay then exposed two native SQLite handles aliasing the same
+cached connection: both issued BEGIN IMMEDIATE in the same millisecond. Moving the cache
+lookup after SQLite initialization had made concurrent opens reuse that connection. Native
+opens now own separate connections over the shared file, while Java's database cache remains
+shared. Tests verify committed visibility, independent TEMP tables, writer locking, read-only
+opens, close rollback, and independent in-memory databases. Contention is reported rather
+than silently accepting a second transaction.
+
+Independent connections exposed the actual initialization race: the same Kotlin synchronized
+lazy object was entered concurrently by the main thread and a dispatcher worker while its
+value was still uninitialized, creating duplicate database pools. monitor-enter/monitor-exit
+were no-ops. The shared JVM monitor table now tracks ownership and recursion, queues contended
+entrants, and releases/reacquires locks around wait. Uncontended entry remains synchronous.
+JNI uses the same table and Java thread identity. Compiler await guards restore thread identity
+on rejected promises too, so catch-all monitor-exit runs as the thread that acquired the lock.
+Compiled DEX tests cover the lazy-initializer race and exceptional release; runtime tests cover
+notification, timeouts, interruption, recursion and Java/native contention.
+
+Both inspected APKs use explicit monitor bytecode for every declared synchronized method:
+173 in Mihon and 65 in Lichess, with no native synchronized methods. The
+[DEX access flags](https://source.android.com/docs/core/runtime/dex-format#access-flags)
+make DECLARED_SYNCHRONIZED informational; no extra method wrapper is added. A fresh 17-second
+Mihon startup probe renders Welcome without nested-transaction or database-lock failures.
+
+A fresh headless Lichess interaction check measured Play and computer setup settling in
+0.8–1.3 seconds, e2 selection rendering in 93 ms, and e4 rendering in 219 ms. Stockfish's g6
+reply appeared by 2.08 seconds. Native work still caused 120–341 ms timer pauses, so this is
+usable emulation rather than a claim of consistently smooth frames. A reached custom-equality
+Map.get suspension is now declared without wrapping its synchronous primitive-key path.
+
+The remaining new Mihon composition failure was an application-startup queue race, not a
+monitor failure. Application.onCreate ran outside onMain while its newly correct main executor
+posted DI initialization. Activity launch mistook that other job's global queue depth for its
+own ownership and ran inline. The preload finished before activity attachment, letting a frame
+job enter composition creation a second time. Application construction, providers, onCreate,
+and the initial activity now run in one main job. Before/after traces showed overlapping
+composition and four layout failures becoming ordered initialization and zero layout failures.
+Lichess still rendered Home after this change. EnumMap's typed put(Enum,Object) entry now shares
+the existing erased implementation, fixing a newly reached analytics call without another map
+backend. Local Binder attachments retain their owner and descriptor.
+
+Chrome also reached RingtoneManager.getDefaultUri(TYPE_NOTIFICATION) during local play.
+It now returns Android's symbolic settings URI, with the same mask precedence for ringtone,
+notification, and alarm types. This lookup does not invent an installed sound or claim playback.
+
+The software-rendered E2E launch initially captured a stable Flutter loading frame and sent
+later taps before their screens were ready. Its Lichess flow now allows 40 seconds for cold
+startup and two seconds after each interaction; a targeted replay visibly reached the editor
+and moved e2 to e4. These are capture dwell times, not changes to guest clocks or engine limits.
+
+### Final verification
+
+The final full E2E replay rendered all 101 steps without a wedged main queue, layout error,
+or draw error. Content differences (lower is better) were FitNotes 43.07%, Mihon onboarding
+17.56%, Mihon app 79.01%, and Harmonic 37.43%. An isolated replay of starting commit 7e557647
+gave FitNotes 43.08% and onboarding 17.55%. The prior full report had Mihon app at 96.22%
+with only 14/17 steps rendered; the final run rendered 17/17 and no longer logged Compose
+failures. Coordinate fallbacks still limit which settings screens that flow actually reaches.
+Harmonic's stable dialog/settings steps matched the prior report; its difference increase
+from 35.70% was concentrated in the final two live-content scroll captures.
+
+Per-step telemetry still reports established FitNotes FragmentManager/animation/Handler gaps,
+Flappy Bird's DexClassLoader absence, and a Doodle Jump audio callback after Back that also
+appears in the pre-work cleanup log. Mihon now reaches an optional account-class lookup;
+Harmonic and Lichess query absent AndroidX vendor extensions. Lichess's five intended screens
+were visually inspected, including the moved pawn; its only error-prefixed line was Cronet's
+DNS configuration warning. No step reported a native-required library.
+
+Against the isolated baseline, FitNotes elapsed time and draw count were essentially unchanged.
+Mihon onboarding elapsed time rose 1%; recorded layout time rose 59%, while boot time rose 6%
+and compiled classes rose 4%. Those counters include newly reached initialization and do not
+justify a claim that the broader framework changes are free. Native Flutter still has noticeable
+cold-start cost and occasional long CPU slices, as recorded above.
+
+Typecheck and the full unit suite passed (773 tests, 9,279 assertions). All eight APK/XAPK smoke
+compilations reported zero method failures; Lichess, Mihon and FitNotes were repeated after the
+last framework changes. Framework bytecode exercises passed, including text/resources, and
+textcmp broke all six paragraphs identically. The final-stage corpus rendered all eight APKs;
+targeted Lichess natcheck reported zero false-synchronous delegates. Duplicate registration and
+library-name matching checks were clean. Visual goldens were not changed.

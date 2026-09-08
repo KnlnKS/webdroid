@@ -24,6 +24,7 @@ See “One build, or none” and “The delegates” in the implementation histo
 | Regression evidence | Current scores and rendered-step counts live in `tests/e2e/report/report.json`; per-step diagnostics and costs live in `tests/e2e/actual/`. The pre-cleanup run had known Mihon scheduler/Compose failures and variable live Harmonic content; compare against the starting commit before attributing a regression. |
 | Corpus | `bun run corpus` reports current breadth. Focused Among Us testing reaches Practice; a boot-only corpus pass does not establish gameplay. |
 | Native tier | ARM32 **and AArch64**. Among Us executes Unity/IL2CPP through a shared cold interpreter and bounded hot-block compiler. Practice on The Skeld renders and accepts joystick movement, with empty reached missing-API telemetry. Controlled gameplay remains roughly 4–9 fps; online play is unverified. See "Among Us: Practice and code-cache pressure" in the implementation history. |
+| Flutter | Lichess executes its ARM64 Flutter/Dart code, renders its UI, connects over verified native TLS, and accepts board and text input. A local game reached `1. e4 h5` against its bundled Fairy-Stockfish engine. See "Lichess: playable native engine" in the implementation history; this does not establish every feature or account flow. |
 | Screen | a resolved **setting**, default 1080x2424 @480dpi (360x808dp). `?screen=WxH@dpi`, `WEBDROID_SCREEN`, or the shell's own panel. The gate stays pinned to each flow's goldens — see "The screen is a setting" in the implementation history |
 
 ## What a cut costs — measured, not projected
@@ -195,8 +196,9 @@ it has been tried three ways and measured.
   blocks compile after the configured threshold and are bounded by the compiled-code cache.
 - Practice renders and accepts movement, but gameplay is not yet smooth. Profile real play
   before changing CPU, graphics, or cache policy; preserve the hardware-oracle and cache tests.
-- Local UDP supports process-local sessions. External UDP has no relay. Remote certificate
-  trust, Google account services, and online play remain unfinished or unverified.
+- Local UDP supports process-local sessions. External UDP has no relay. Native TLS uses a
+  pinned AOSP trust store and works in Lichess. Google account services and Among Us online
+  play remain unfinished or unverified.
 - Asset packs use range-backed reads with bounded caching. Do not restore whole-pack browser
   downloads or treat asset data as the cause of the previously measured executable-code GC storm.
 - Thumb-2, symbol-version/ifunc support, and additional relocation formats are separate work;
