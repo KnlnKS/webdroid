@@ -1352,7 +1352,8 @@ export function attachView(parent: JViewGroup, child: JView, index = -1) {
 }
 export function detachView(parent: JViewGroup, child: JView) {
   const i = parent.children.indexOf(child);
-  if (i >= 0) parent.children.splice(i, 1);
+  if (i < 0) return;
+  parent.children.splice(i, 1);
   child.parent = null;
   if (parent.hierarchyChangeL) {
     void vcall(parent.hierarchyChangeL, "onChildViewRemoved", "(Landroid/view/View;Landroid/view/View;)V", parent, child);
