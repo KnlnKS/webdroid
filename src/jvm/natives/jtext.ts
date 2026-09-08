@@ -3,31 +3,30 @@
 
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { vcall, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble } from "./jlang";
-import { jarray } from "../abi";
+import { strArray, utf8, slashName, dotName } from "../abi";
 import { mkIter } from "./jutil";
-import { JDate, JCalendar, localTz, MONTHS, DAYS } from "./jtime";
+import { JDate, JCalendar, localTz, MONTHS, DAYS, pad2 } from "./jtime";
 
 export function formatDate(pattern: string, t: number): string {
   const d = new Date(t);
-  const p2 = (v: number) => String(v).padStart(2, "0");
   return pattern.replace(/'([^']*)'|([GyYMLdEaHhKkmsSzZX])\2*/g, (m, quoted) => {
     if (quoted !== undefined) return quoted || "'";
     const c = m[0], n = m.length;
     switch (c) {
-      case "y": case "Y": return n === 2 ? p2(d.getFullYear() % 100) : String(d.getFullYear());
+      case "y": case "Y": return n === 2 ? pad2(d.getFullYear() % 100) : String(d.getFullYear());
       case "M": case "L":
         if (n >= 4) return MONTHS[d.getMonth()];
         if (n === 3) return MONTHS[d.getMonth()].slice(0, 3);
-        return n === 2 ? p2(d.getMonth() + 1) : String(d.getMonth() + 1);
-      case "d": return n === 2 ? p2(d.getDate()) : String(d.getDate());
+        return n === 2 ? pad2(d.getMonth() + 1) : String(d.getMonth() + 1);
+      case "d": return n === 2 ? pad2(d.getDate()) : String(d.getDate());
       case "E": return n >= 4 ? DAYS[d.getDay()] : DAYS[d.getDay()].slice(0, 3);
       case "a": return d.getHours() < 12 ? "AM" : "PM";
-      case "H": return n === 2 ? p2(d.getHours()) : String(d.getHours());
-      case "h": { const h = d.getHours() % 12 || 12; return n === 2 ? p2(h) : String(h); }
+      case "H": return n === 2 ? pad2(d.getHours()) : String(d.getHours());
+      case "h": { const h = d.getHours() % 12 || 12; return n === 2 ? pad2(h) : String(h); }
       case "K": return String(d.getHours() % 12);
       case "k": return String(d.getHours() || 24);
-      case "m": return n === 2 ? p2(d.getMinutes()) : String(d.getMinutes());
-      case "s": return n === 2 ? p2(d.getSeconds()) : String(d.getSeconds());
+      case "m": return n === 2 ? pad2(d.getMinutes()) : String(d.getMinutes());
+      case "s": return n === 2 ? pad2(d.getSeconds()) : String(d.getSeconds());
       case "S": return String(d.getMilliseconds()).padStart(3, "0").slice(0, n);
       case "z": case "Z": case "X": return "";
       case "G": return "AD";
@@ -104,7 +103,6 @@ rt.register({
   },
 });
 defineException("java/text/ParseException", "java/lang/Exception");
-const strArray = (a: string[]) => jarray(a, "Ljava/lang/String;");
 class JDateFormatSymbols extends JObj {}
 rt.register({
   name: "java/text/DateFormatSymbols", ctor: JDateFormatSymbols,
@@ -365,18 +363,18 @@ async function serviceInstances(svcName: string): Promise<unknown[]> {
   const bytes = rt.classpath["META-INF/services/" + svcName];
   if (!bytes) return [];
   const out: unknown[] = [];
-  for (const line of new TextDecoder().decode(bytes).split(/\r?\n/)) {
+  for (const line of utf8.dec.decode(bytes).split(/\r?\n/)) {
     const cls = line.split("#")[0].trim();
     if (!cls) continue;
     try {
-      const name = cls.replace(/\./g, "/");
+      const name = slashName(cls);
       if (!rt.link(name).stub) out.push(await newObj(name));
     } catch (e) { console.warn("[ServiceLoader]", cls, e); }
   }
   return out;
 }
 const serviceLoader = (cls: { ci?: { name: string } } | null) => {
-  const l = new JServiceLoader(); l.svcName = (cls?.ci?.name ?? "").replace(/\//g, "."); return l;
+  const l = new JServiceLoader(); l.svcName = dotName(cls?.ci?.name ?? ""); return l;
 };
 rt.register({
   name: "java/util/ServiceLoader", ctor: JServiceLoader,

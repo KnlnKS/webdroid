@@ -10,7 +10,7 @@
 import { rt, JObj, maySuspend, type NativeSpec } from "../runtime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
 import { boxInt, stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
-import { jarray } from "../abi";
+import { jarray, strArray, dotName, utf8 } from "../abi";
 import { vfs, type JInputStream, type JOutputStream } from "./jio";
 import { Relay } from "../../shell/relay";
 
@@ -284,7 +284,6 @@ rt.register({
 const CIPHERS = ["TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384", "TLS_CHACHA20_POLY1305_SHA256",
   "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"];
 const PROTOCOLS = ["TLSv1.2", "TLSv1.3"];
-const strArray = (v: string[]) => jarray([...v], "Ljava/lang/String;");
 
 /**
  * The certificate an app sees for a relay-terminated connection. It is ours, and it says so:
@@ -632,7 +631,7 @@ class JURLConnection extends JObj {
     } finally { clearTimeout(timer); this.ac = null; }
     const final = r.headers.get("x-wd-final-url");
     // the proxy's own failure answer carries no final URL; a genuine upstream 502 does
-    if (r.status === 502 && !final) throw rt.mkThrowable("java/net/UnknownHostException", new TextDecoder().decode(body));
+    if (r.status === 502 && !final) throw rt.mkThrowable("java/net/UnknownHostException", utf8.dec.decode(body));
     if (final && final !== this.url.u.href) this.url = mkURL(final);   // getURL() reports where a redirect landed
     const hdrs: [string, string][] = [];
     r.headers.forEach((v, k) => { if (k !== "x-wd-final-url") hdrs.push([k, v]); });
@@ -728,7 +727,7 @@ rt.register({
     "getContentLength()I": withRes(function (r) { return this.method === "HEAD" ? -1 : r.body.length; }),
     "getContentLengthLong()J": withRes(function (r) { return BigInt(this.method === "HEAD" ? -1 : r.body.length); }),
     "toString()Ljava/lang/String;": function (this: JURLConnection) {
-      return (this.constructor as typeof JObj).$i.name.replace(/\//g, ".") + ":" + this.url.spec;
+      return dotName((this.constructor as typeof JObj).$i.name) + ":" + this.url.spec;
     },
   },
 });

@@ -2,7 +2,7 @@
 // central-directory index, GZIPInputStream over a drained source.
 import { Inflate, Unzlib, Deflate, Zlib, Gzip, inflateSync, gunzipSync } from "fflate";
 import { rt, JObj, maySuspend } from "../runtime";
-import { mangleMethod } from "../abi";
+import { mangleMethod, utf8 } from "../abi";
 import { vcall, vcallMaybe, newObj, defineException } from "./jlang";
 import { vfs, JFile, JInputStream, JOutputStream } from "./jio";
 import { mkIter } from "./jutil";
@@ -229,7 +229,7 @@ export function centralDirRecords(z: Uint8Array, entries: number): Map<string, Z
       throw rt.mkThrowable("java/util/zip/ZipException", "Invalid Central Directory entry");
     }
     const nl = v.getUint16(p + 28, true);
-    const name = new TextDecoder().decode(z.subarray(p + 46, p + 46 + nl));
+    const name = utf8.dec.decode(z.subarray(p + 46, p + 46 + nl));
     out.set(name, {
       name, method: v.getUint16(p + 10, true), time: dosTime(v.getUint16(p + 14, true), v.getUint16(p + 12, true)),
       csize: v.getUint32(p + 20, true), size: v.getUint32(p + 24, true), off: v.getUint32(p + 42, true),

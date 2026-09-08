@@ -499,7 +499,7 @@ const ldtFromDate = (dt: Date) => {
   l.time.h = dt.getHours(); l.time.mi = dt.getMinutes(); l.time.s = dt.getSeconds(); l.time.ns = dt.getMilliseconds() * 1e6;
   return l;
 };
-const pad2 = (n: number) => String(n).padStart(2, "0");
+export const pad2 = (n: number) => String(n).padStart(2, "0");
 
 rt.register({
   name: "java/time/Instant", ctor: JInstant, ifaces: ["java/lang/Comparable"],

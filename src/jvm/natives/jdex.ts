@@ -1,3 +1,4 @@
+import { slashName } from "../abi";
 import { unzipSync } from "fflate";
 import { rt } from "../runtime";
 import { dexesIn } from "../dex";
@@ -27,7 +28,7 @@ rt.register({
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V": init,
     "<init>(Ljava/lang/String;Ljava/lang/ClassLoader;)V": async function (this: JClassLoader, path: string, parent: JClassLoader | null) { await init.call(this, path, null, parent); },
     "findClass(Ljava/lang/String;)Ljava/lang/Class;": function (this: JClassLoader, n: string) {
-      const name = n.replace(/\./g, "/");
+      const name = slashName(n);
       if (!this.runtime.dexIndex.has(name)) {
         rt.link("java/lang/ClassNotFoundException");
         throw rt.mkThrowable("java/lang/ClassNotFoundException", n);

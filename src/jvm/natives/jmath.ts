@@ -19,10 +19,11 @@ const bsig = (v: bigint) => (v < 0n ? -1 : v > 0n ? 1 : 0);
 function ndigits(v: bigint): number {
   if (v === 0n) return 1;
   const a = babs(v);
-  // bit length / log2(10) is within one of the answer; correct with one table compare
-  const bits = a.toString(2).length;
-  const est = Math.max(1, Math.floor((bits - 1) * 0.30102999566398) + 1);
-  return a >= pow10(est) ? est + 1 : est;
+  // hex length bounds the bit length within 4; log2(10) puts that within two decimal digits
+  const hex = a.toString(16).length;
+  let est = Math.max(1, Math.floor((hex * 4 - 4) * 0.30102999566398) + 1);
+  while (a >= pow10(est)) est++;
+  return est;
 }
 
 // ── RoundingMode (ordinal order matches the legacy BigDecimal.ROUND_* ints)
@@ -42,16 +43,16 @@ function divRound(n: bigint, d: bigint, mode: number): bigint {
   const r = n - q * d;
   if (r === 0n) return q;
   const neg = (n < 0n) !== (d < 0n);
-  const inc = () => (neg ? q - 1n : q + 1n);
+  const inc = neg ? q - 1n : q + 1n;
   switch (mode) {
-    case 0: return inc();
+    case 0: return inc;
     case 1: return q;
-    case 2: return neg ? q : inc();
-    case 3: return neg ? inc() : q;
+    case 2: return neg ? q : inc;
+    case 3: return neg ? inc : q;
     case 7: return arith("Rounding necessary");
   }
   const c = babs(r) * 2n - babs(d);
-  if (c > 0n || (c === 0n && (mode === 4 || (mode === 6 && (q & 1n) !== 0n)))) return inc();
+  if (c > 0n || (c === 0n && (mode === 4 || (mode === 6 && (q & 1n) !== 0n)))) return inc;
   return q;
 }
 

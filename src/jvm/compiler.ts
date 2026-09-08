@@ -190,6 +190,7 @@ class MethodCompiler {
   order: number[] = [];
   leaders = new Set<number>();
   hasTries: boolean;
+  hasBackEdge = false;
   sync = true;
   src: string[] = [];
 
@@ -274,11 +275,11 @@ class MethodCompiler {
 
     const catchBody = this.hasTries ? this.emitCatch() : this.leave() + "throw $e;";
     const nameLit = JSON.stringify(this.info.name + "." + this.mname);
+    const bounded = !this.hasBackEdge && !this.hasTries;
     return `${this.sync ? "function" : "async function"}(${jsParams.join(",")}){
-${paramInit.join("")}${declStr}let $t,$u,$ex,$fu,pc=0,$lc=0;${this.sync ? "" : "const $th=R.th();let $s=0;"}
+${paramInit.join("")}${declStr}let $t,$u,$ex,$fu,pc=0${bounded ? "" : ",$lc=0"};${this.sync ? "" : "const $th=R.th();let $s=0;"}
 for(;;)try{
-if(++$lc>5000000)throw new Error("loopbomb "+${nameLit}+" pc="+pc);
-switch(pc){
+${bounded ? "" : `if(++$lc>5000000)throw new Error("loopbomb "+${nameLit}+" pc="+pc);\n`}switch(pc){
 ${blocks.join("\n")}
 default: throw new Error("bad pc "+pc);
 }
@@ -345,11 +346,14 @@ ${catchBody}
 
     // ── transfer: apply one block to a state, optionally marking consumers
     const retType = parseMethodDesc(this.desc).ret;
+    let liveDefs: Defs | null = null;
+    const mark = (reg: number, kind: "F" | "D") => {
+      const ds = liveDefs?.get(reg);
+      if (ds) for (const w of ds) if (!w.constKind) w.constKind = kind;
+    };
     const run = (lead: number, defs: Defs, arr: Arrs, doMark: boolean) => {
       let lastRet = "";
-      const mark = doMark
-        ? (reg: number, kind: "F" | "D") => { const ds = defs.get(reg); if (ds) for (const w of ds) if (!w.constKind) w.constKind = kind; }
-        : () => {};
+      liveDefs = doMark ? defs : null;
       for (const pc of body.get(lead)!) {
         const i = this.ins.get(pc)!;
         const n = i.name;
@@ -371,11 +375,9 @@ ${catchBody}
           if (ft === "F") mark(i.a, "F");
           else if (ft === "D") mark(i.a, "D");
         } else if (n.startsWith("invoke") && !n.startsWith("invoke-custom")) {
-          const mref = dex.method(i.b);
-          const proto = dex.proto(mref.proto);
           const isInstance = !n.startsWith("invoke-static");
           let ri = isInstance ? 1 : 0;
-          for (const pt of proto.params.map((t) => dex.type(t))) {
+          for (const pt of dex.protoParamTypes(dex.method(i.b).proto)) {
             if (pt === "F") mark(i.regs[ri], "F");
             else if (pt === "D") mark(i.regs[ri], "D");
             ri += isWide(pt) ? 2 : 1;
@@ -439,8 +441,8 @@ ${catchBody}
     inArrs.set(leaders[0], new Map(paramArrs));
     const work = [...leaders];
     const queued = new Set(leaders);
-    while (work.length) {
-      const lead = work.shift()!;
+    for (let wi = 0; wi < work.length; wi++) {
+      const lead = work[wi];
       queued.delete(lead);
       const st = run(lead, clone(inDefs.get(lead)!), new Map(inArrs.get(lead) ?? []), false);
       for (const t of succ.get(lead)!) {
@@ -691,6 +693,7 @@ ${catchBody}
   }
 
   private jumpStr(target: number, from: number): string {
+    if (target <= from) this.hasBackEdge = true;
     const fuel = !this.sync && target <= from ? "if(--R.fuel<0){$fu=R.refuel();if($fu){R.su();$s=1;await $fu;R.st($th);}}" : "";
     return `${fuel}pc=${target};continue;`;
   }
@@ -731,8 +734,7 @@ ${catchBody}
       return;
     }
     const mref = dex.method(i.b);
-    const proto = dex.proto(mref.proto);
-    const desc = "(" + proto.params.map((t) => dex.type(t)).join("") + ")" + dex.type(proto.ret);
+    const desc = dex.methodDesc(i.b);
     const mangled = mangleMethod(mref.name, desc);
     const clsName = descToName(dex.type(mref.cls));
     const kind = i.name.replace("/range", "");
@@ -741,7 +743,7 @@ ${catchBody}
     const isInstance = kind !== "invoke-static";
     const args: string[] = [];
     let ri = isInstance ? 1 : 0;
-    for (const p of proto.params.map((t) => dex.type(t))) {
+    for (const p of dex.protoParamTypes(mref.proto)) {
       const r = `v${i.regs[ri]}`;
       args.push(p[0] === "L" || p[0] === "[" ? `(${r}===0?null:${r})` : r);
       ri += isWide(p) ? 2 : 1;

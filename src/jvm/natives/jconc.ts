@@ -65,23 +65,17 @@ rt.register({
   },
 });
 class JAtomicRef extends JObj { v: unknown = null; }
-function checkRefStore(v: unknown, where: string) {
-  if (typeof v === "number" || typeof v === "bigint") {
-    console.warn("[atomicref] raw number stored via " + where, v, new Error().stack?.split("\n").slice(1, 6).join("\n"));
-  }
-  return v;
-}
 rt.register({
   name: "java/util/concurrent/atomic/AtomicReference", ctor: JAtomicRef,
   methods: {
     "<init>()V": function () {},
-    "<init>(Ljava/lang/Object;)V": function (this: JAtomicRef, v: unknown) { this.v = checkRefStore(v, "init"); },
+    "<init>(Ljava/lang/Object;)V": function (this: JAtomicRef, v: unknown) { this.v = v; },
     "get()Ljava/lang/Object;": function (this: JAtomicRef) { return this.v; },
-    "set(Ljava/lang/Object;)V": function (this: JAtomicRef, v: unknown) { this.v = checkRefStore(v, "set"); },
-    "lazySet(Ljava/lang/Object;)V": function (this: JAtomicRef, v: unknown) { this.v = checkRefStore(v, "lazySet"); },
+    "set(Ljava/lang/Object;)V": function (this: JAtomicRef, v: unknown) { this.v = v; },
+    "lazySet(Ljava/lang/Object;)V": function (this: JAtomicRef, v: unknown) { this.v = v; },
     "compareAndSet(Ljava/lang/Object;Ljava/lang/Object;)Z": function (this: JAtomicRef, e: unknown, v: unknown) {
       if (this.v !== e) return 0;
-      this.v = checkRefStore(v, "cas");
+      this.v = v;
       return 1;
     },
     "getAndSet(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JAtomicRef, v: unknown) { const o = this.v; this.v = v; return o; },
@@ -238,9 +232,11 @@ rt.register({
     },
   },
 });
+let futureCtor: (new () => JFuture) | null = null;
+const newFuture = () => new (futureCtor ??= rt.link("webdroid/Future").ctor as new () => JFuture)();
 function submit(ex: JExecutor, task: unknown, method: string, desc: string, delay = 0): JFuture {
   if (ex.shut) throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "executor shut down");
-  const f = new (rt.link("webdroid/Future").ctor)() as JFuture;
+  const f = newFuture();
   ex.pending++; ex.jobs.set(f, task);
   f.promise = new Promise((resolve) => {
     const entry = { task, f, method, desc, finish: () => resolve(null) };
@@ -293,7 +289,7 @@ const executorMethods: NativeSpec["methods"] = {
   "scheduleAtFixedRate(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;":
     function (this: JExecutor, r: unknown, init: bigint, period: bigint, u: JTimeUnit) {
       if (period <= 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "nonpositive period");
-      const f = new (rt.link("webdroid/Future").ctor)() as JFuture;
+      const f = newFuture();
       let next = performance.now() + Number(init) * u.ms, task: JFuture;
       f.promise = new Promise((resolve) => {
         const tick = () => {

@@ -1,7 +1,7 @@
 // java.lang.reflect.Method + annotation instances backed by DEX annotation parsing.
 
 import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
-import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, newPrimArray, PRIM_NAME, PRIM_DESC, lateMethod } from "../abi";
+import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, newPrimArray, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName } from "../abi";
 import { vcall, boxInt, box, stringHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 
@@ -41,7 +41,7 @@ function classAnno(info: ClassInfo): ClassAnno {
 function javaTypeName(d: string): string {
   let dims = 0;
   while (d[dims] === "[") dims++;
-  const base = d[dims] === "L" ? d.slice(dims + 1, -1).replace(/\//g, ".") : PRIM_NAME[d[dims]];
+  const base = d[dims] === "L" ? dotName(d.slice(dims + 1, -1)) : PRIM_NAME[d[dims]];
   return base + "[]".repeat(dims);
 }
 export class JMethod extends JObj {
@@ -195,7 +195,7 @@ function parseTypeSig(s: string, ref: { pos: number }): unknown {
     const t = new JPType();
     t.raw = rt.classFor(name);
     t.args = args;
-    t.key = name.replace(/\//g, ".") + "<" + args.map((a: any) => a?.key ?? (a?.ci?.name ?? a?.primName ?? a?.arrDesc ?? "?")).join(", ") + ">";
+    t.key = dotName(name) + "<" + args.map((a: any) => a?.key ?? (a?.ci?.name ?? a?.primName ?? a?.arrDesc ?? "?")).join(", ") + ">";
     return t;
   }
   if (c === "[") { ref.pos++; const el: any = parseTypeSig(s, ref); const d = el?.ci ? "[L" + el.ci.name + ";" : "[Ljava/lang/Object;"; return rt.classFor(d); }
@@ -380,8 +380,14 @@ function arrayIndexScale(cls: JClass): number {
   }
 }
 
+const methodsCache = new WeakMap<ClassInfo, [JMethod[] | undefined, JMethod[] | undefined]>();
 /** all public methods of a class (self + inherited), like Class.getMethods */
 function classMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
+  let c = methodsCache.get(info);
+  if (!c) methodsCache.set(info, (c = [undefined, undefined]));
+  return (c[declaredOnly ? 1 : 0] ??= collectMethods(info, declaredOnly)).slice();
+}
+function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
   rt.ensureCompiled(info);
   const out: JMethod[] = [];
   const seen = new Set<string>();
@@ -457,7 +463,7 @@ rt.register({
       const { params, ret } = parseMethodDesc(this.desc);
       const mods = this.mods || (this.isStatic ? 0x9 : 0x1);
       const words = [[1, "public"], [4, "protected"], [2, "private"], [0x400, "abstract"], [8, "static"], [0x10, "final"], [0x20, "synchronized"], [0x100, "native"]] as const;
-      return words.filter(([f]) => mods & f).map(([, w]) => w + " ").join("") + `${javaTypeName(ret)} ${this.owner.name.replace(/\//g, ".")}.${this.name}(${params.map(javaTypeName).join(",")})`;
+      return words.filter(([f]) => mods & f).map(([, w]) => w + " ").join("") + `${javaTypeName(ret)} ${dotName(this.owner.name)}.${this.name}(${params.map(javaTypeName).join(",")})`;
     },
     "equals(Ljava/lang/Object;)Z": function (this: JMethod, o: unknown) {
       return o instanceof JMethod && o.owner === this.owner && o.name === this.name && o.desc === this.desc ? 1 : 0;
@@ -498,7 +504,7 @@ rt.register({
   name: "java/lang/reflect/Constructor", ctor: JCtor,
   ifaces: ["java/lang/reflect/AnnotatedElement", "java/lang/reflect/Member", "java/lang/reflect/GenericDeclaration"],
   methods: {
-    "getName()Ljava/lang/String;": function (this: JCtor) { return this.owner.name.replace(/\//g, "."); },
+    "getName()Ljava/lang/String;": function (this: JCtor) { return dotName(this.owner.name); },
     "getTypeParameters()[Ljava/lang/reflect/TypeVariable;": noTypeVars,
     "getModifiers()I": function (this: JCtor) { return this.flags; },
     "getDeclaringClass()Ljava/lang/Class;": function (this: JCtor) { return (this.owner.owner ?? rt).classFor(this.owner.name); },
@@ -513,7 +519,7 @@ rt.register({
       const info = this.owner;
       const p = rt.initClass(info); if (p) await p;
       const fn = info.ctor?.prototype?.[mangleMethod("<init>", this.desc)];
-      if (typeof fn !== "function") throw rt.mkThrowable("java/lang/InstantiationException", info.name.replace(/\//g, ".") + ".<init>" + this.desc);
+      if (typeof fn !== "function") throw rt.mkThrowable("java/lang/InstantiationException", dotName(info.name) + ".<init>" + this.desc);
       const ps = parseMethodDesc(this.desc).params;
       const a = (args ?? []).map((v, i) => ("IJFDZBCS".includes(ps[i] ?? "L") ? unboxArg(v) : v));
       const o = new info.ctor();
@@ -587,7 +593,7 @@ function buildAnnoProto(type: string, info: ClassInfo): object {
   const p: object = Object.create(JAnnotation.prototype);
   (p as any).constructor = { $i: info };
   (p as any)[mangleMethod("annotationType", "()Ljava/lang/Class;")] = () => rt.classFor(type);
-  (p as any)[mangleMethod("toString", "()Ljava/lang/String;")] = () => "@" + type.replace(/\//g, ".");
+  (p as any)[mangleMethod("toString", "()Ljava/lang/String;")] = () => "@" + dotName(type);
   // elements a use site omits answer the type's declared defaults: dalvik/annotation/AnnotationDefault
   // on the annotation interface carries, as `value`, an annotation with one element per default.
   // On the shared proto so instances only override what they name.
@@ -704,7 +710,7 @@ function installForName(classCtor: unknown) {
       if (initialize && c.ci) await rt.initClass(c.ci);
       return c;
     }
-    const name = jn.replace(/\./g, "/");
+    const name = slashName(jn);
     if (!loadable(name)) {
       console.debug("[webdroid] Class.forName: no such class", jn);
       // link it first: an unlinked exception class has no own ClassInfo, so it inherits
@@ -756,7 +762,7 @@ export function installClassReflection() {
     const info = rt.link("java/lang/Package");
     const p = new info.ctor() as any;
     const n = this.ci?.name ?? "";
-    p.pname = n.includes("/") ? n.slice(0, n.lastIndexOf("/")).replace(/\//g, ".") : "";
+    p.pname = n.includes("/") ? dotName(n.slice(0, n.lastIndexOf("/"))) : "";
     return p;
   };
   M["getTypeParameters()[Ljava/lang/reflect/TypeVariable;"] = noTypeVars;
@@ -797,7 +803,7 @@ export function installClassReflection() {
   M["getConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;"] = function (this: JClass, params: JClass[]) {
     const want = (params ?? []).map(classDesc).join("");
     const c = (this.ci ? classCtors(this.ci) : []).find((x) => parseMethodDesc(x.desc).params.join("") === want);
-    if (!c) throw rt.mkThrowable("java/lang/NoSuchMethodException", (this.ci?.name ?? "?").replace(/\//g, ".") + ".<init>(" + want + ")");
+    if (!c) throw rt.mkThrowable("java/lang/NoSuchMethodException", dotName(this.ci?.name ?? "?") + ".<init>(" + want + ")");
     return c;
   };
   M["getDeclaredConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;"] =

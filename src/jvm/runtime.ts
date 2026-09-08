@@ -6,7 +6,7 @@
 // present when virtual dispatch happens.
 
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
-import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, defaultValue, charsToString } from "./abi";
+import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName } from "./abi";
 import { compileClassSource, compileLazyMethod, methodKey, type CompiledCtor } from "./compiler";
 import { isBytecode } from "./provenance";
 import { perf } from "../perf";
@@ -86,6 +86,8 @@ interface DexLink {
   rsf(i: number, from?: number): Promise<any> | any;   // resolve+init static field owner ctor
 }
 
+/** how long a cross-chain clinit wait runs before it is presumed a same-chain cycle */
+const CLINIT_WAIT_MS = 60;
 type NativeFn = (...a: never[]) => unknown;
 const suspendingNatives = new WeakSet<NativeFn>();
 /** Declare conditional suspension without changing a native's synchronous fast path. */
@@ -118,8 +120,6 @@ export class Runtime {
   /** the booted apk's entries: what ClassLoader.getResourceAsStream and ServiceLoader read */
   classpath: Record<string, Uint8Array> = {};
   classpathLocations = new Map<string, string>();
-  /** how long a cross-chain clinit wait runs before it is presumed a same-chain cycle */
-  clinitWaitMs = 60;
   /** set by jlang: make core exceptions without going through class init */
   mkThrowable: (cls: string, msg: string | null) => any = (cls, msg) => {
     const e = new Error(`${cls}: ${msg}`);
@@ -275,7 +275,7 @@ export class Runtime {
   /** a native method nothing registered — what calling it throws */
   ulink(cls: string, name: string, desc: string): Error {
     this.noteMissing(cls + "." + name + desc + " [native]");
-    return this.mkThrowable("java/lang/UnsatisfiedLinkError", "No implementation found for " + cls.replace(/\//g, ".") + "." + name + desc);
+    return this.mkThrowable("java/lang/UnsatisfiedLinkError", "No implementation found for " + dotName(cls) + "." + name + desc);
   }
 
   noteMissing(what: string) {
@@ -521,7 +521,7 @@ export class Runtime {
           // stopped waiting for a clinit that really was in flight) and logging a cycle
           // warning per class per boot.
           esc = setTimeout(() => { console.warn("[webdroid] clinit wait timeout (cycle?)", info.name, "waited on by", from?.name); info.assumeReentrant = true; res(); },
-                           this.clinitWaitMs);
+                           CLINIT_WAIT_MS);
         })])
       : info.initP!;
     const done = () => { if (esc !== undefined) clearTimeout(esc); clear(); };
@@ -700,7 +700,6 @@ export class Runtime {
     if (typeof e === "object" && e !== null && (e as any).$javaClass) return e;
     if (e instanceof TypeError) {
       const m = e.message;
-      if ((globalThis as { __wdJxTrace?: boolean }).__wdJxTrace) console.warn("[jx]", e.stack);
       if (/null|undefined/.test(m) && /read|call|properties/i.test(m)) {
         return this.mkThrowable("java/lang/NullPointerException", m);
       }
@@ -806,16 +805,16 @@ export class Runtime {
         return String(args[0]);
       case "([C)V": return charsToString(args[0] as Uint16Array, 0, (args[0] as Uint16Array).length);
       case "([CII)V": return charsToString(args[0] as Uint16Array, args[1] as number, args[2] as number);
-      case "([B)V": return new TextDecoder().decode(args[0] as Int8Array);
+      case "([B)V": return utf8.dec.decode(args[0] as Int8Array);
       case "([BII)V": {
         const b = args[0] as Int8Array;
-        return new TextDecoder().decode(b.subarray(args[1] as number, (args[1] as number) + (args[2] as number)));
+        return utf8.dec.decode(b.subarray(args[1] as number, (args[1] as number) + (args[2] as number)));
       }
       case "([BLjava/lang/String;)V": case "([BLjava/nio/charset/Charset;)V":
-        return new TextDecoder().decode(args[0] as Int8Array);
+        return utf8.dec.decode(args[0] as Int8Array);
       case "([BIILjava/lang/String;)V": case "([BIILjava/nio/charset/Charset;)V": {
         const b = args[0] as Int8Array;
-        return new TextDecoder().decode(b.subarray(args[1] as number, (args[1] as number) + (args[2] as number)));
+        return utf8.dec.decode(b.subarray(args[1] as number, (args[1] as number) + (args[2] as number)));
       }
       // code points, not chars: each element is a whole Unicode scalar
       case "([III)V": {

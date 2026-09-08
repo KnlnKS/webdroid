@@ -55,7 +55,7 @@ export type EncVal = number | bigint | string | boolean | null | EncVal[] |
 
 /** method_handle_item: what the handle points at, and which field/method id */
 interface MethodHandleRef { type: number; idx: number; }
-/** the four method_handle_type values that name a method rather than a field */
+const LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
 class Reader {
   constructor(public bytes: Uint8Array, public pos: number) {}
@@ -228,10 +228,20 @@ export class DexFile {
     return this.view.getUint32(this.classDefsOff + i * 32, true);
   }
 
+  private descCache: (string | undefined)[] = [];
+  private paramTypeCache: (string[] | undefined)[] = [];
   /** full descriptor "(params)ret" of method index i */
   methodDesc(i: number): string {
-    const p = this.proto(this.method(i).proto);
-    return "(" + p.params.map((t) => this.type(t)).join("") + ")" + this.type(p.ret);
+    const pi = this.method(i).proto;
+    let d = this.descCache[pi];
+    if (d === undefined) {
+      const p = this.proto(pi);
+      d = this.descCache[pi] = "(" + this.protoParamTypes(pi).join("") + ")" + this.type(p.ret);
+    }
+    return d;
+  }
+  protoParamTypes(i: number): string[] {
+    return this.paramTypeCache[i] ??= this.proto(i).params.map((t) => this.type(t));
   }
 
   classDef(i: number): ClassDef {
@@ -368,8 +378,13 @@ export class DexFile {
     const ins = v.getUint16(off + 2, true);
     const triesSize = v.getUint16(off + 6, true);
     const insnsSize = v.getUint32(off + 12, true);
-    const insns = new Uint16Array(insnsSize);
-    for (let j = 0; j < insnsSize; j++) insns[j] = v.getUint16(off + 16 + j * 2, true);
+    const at = this.bytes.byteOffset + off + 16;
+    let insns: Uint16Array;
+    if (LITTLE_ENDIAN && (at & 1) === 0) insns = new Uint16Array(this.bytes.buffer, at, insnsSize);
+    else {
+      insns = new Uint16Array(insnsSize);
+      for (let j = 0; j < insnsSize; j++) insns[j] = v.getUint16(off + 16 + j * 2, true);
+    }
     const tries: TryItem[] = [];
     if (triesSize) {
       let p = off + 16 + insnsSize * 2;

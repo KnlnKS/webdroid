@@ -1,7 +1,7 @@
 // java.io.* natives + an in-memory VFS. Nothing persists it; vfs.onWrite is the hook for a host that wants to.
 
 import { rt, JObj, maySuspend, type NativeSpec } from "../runtime";
-import { mangleStaticField, mangleMethod, charsToString, jarray } from "../abi";
+import { mangleStaticField, mangleMethod, charsToString, jarray, utf8 } from "../abi";
 import { vcall, vcallMaybe, after, stringHash, mkEnumSet, javaFormat } from "./jlang";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
 
@@ -334,7 +334,7 @@ rt.register({
     }),
     "readUTF()Ljava/lang/String;": async function (this: JInputStream) {
       const head = await dataBytes(this, 2);
-      return new TextDecoder().decode(await dataBytes(this, (head[0] << 8) | head[1]));
+      return utf8.dec.decode(await dataBytes(this, (head[0] << 8) | head[1]));
     },
   },
 });
@@ -387,7 +387,7 @@ class JBAOS extends JOutputStream {
   }
   bytes(): Uint8Array { return new Uint8Array(this.buf.buffer, this.buf.byteOffset, this.count); }
 }
-function baosString(this: JBAOS) { return new TextDecoder().decode(this.bytes()); }
+function baosString(this: JBAOS) { return utf8.dec.decode(this.bytes()); }
 rt.register({
   name: "java/io/ByteArrayOutputStream", ctor: JBAOS, sup: "java/io/OutputStream",
   fields: { buf: "buf", count: "count" },
@@ -633,7 +633,7 @@ class JPrintStream extends JOutputStream {
 async function pr(ps: JPrintStream, s: string, ln: boolean) {
   if (ps.closed) { ps.trouble = true; return; }
   if (ps.out !== null) {
-    const bytes = new TextEncoder().encode(ln ? s + "\n" : s);
+    const bytes = utf8.enc.encode(ln ? s + "\n" : s);
     await vcall(ps, "write", "([BII)V", new Int8Array(bytes.buffer), 0, bytes.length);
     return;
   }
@@ -727,7 +727,7 @@ rt.register({
   },
 });
 // UTF-8 whatever charset was asked for
-const decodeStream = function (this: JReader, s: JInputStream) { this.s = new TextDecoder().decode(s.buf.subarray(s.pos)); };
+const decodeStream = function (this: JReader, s: JInputStream) { this.s = utf8.dec.decode(s.buf.subarray(s.pos)); };
 rt.register({
   name: "java/io/InputStreamReader", ctor: class extends JReader {}, sup: "java/io/Reader",
   methods: {
@@ -741,7 +741,7 @@ rt.register({
 const openReader = function (this: JReader, p: string) {
   const d = vfs.read(p);
   if (!d) throw rt.mkThrowable("java/io/FileNotFoundException", p);
-  this.s = new TextDecoder().decode(d);
+  this.s = utf8.dec.decode(d);
 };
 rt.register({
   name: "java/io/FileReader", ctor: class extends JReader {}, sup: "java/io/InputStreamReader",
@@ -855,7 +855,7 @@ rt.register({
     "write(Ljava/lang/String;)V": function (this: JOSW, str: string) { this.s += str; },
     "flush()V": async function (this: JOSW) {
       if (this.s && this.sink) {
-        const b = new TextEncoder().encode(this.s);
+        const b = utf8.enc.encode(this.s);
         await vcall(this.sink, "write", "([BII)V", new Int8Array(b.buffer, 0, b.length), 0, b.length);
         this.s = "";
       }
@@ -888,7 +888,7 @@ rt.register({
     "writeShort(I)V": function (this: JDataOut, v: number) { this.sink?.chunks.push((v >>> 8) & 0xff, v & 0xff); },
     "writeBoolean(Z)V": function (this: JDataOut, v: number) { this.sink?.chunks.push(v ? 1 : 0); },
     "writeUTF(Ljava/lang/String;)V": function (this: JDataOut, s: string) {
-      const b = new TextEncoder().encode(s);
+      const b = utf8.enc.encode(s);
       const sink = this.sink;
       if (!sink) return;
       sink.chunks.push((b.length >>> 8) & 0xff, b.length & 0xff);
@@ -1051,16 +1051,17 @@ function nextToken(s: JScanner): string {
   s.pos += t.length;
   return t;
 }
+const scanStream = async function (this: JScanner, s: unknown) { this.text = utf8.dec.decode(await slurp(s)); };
 rt.register({
   name: "java/util/Scanner", ctor: JScanner, ifaces: ["java/util/Iterator", "java/io/Closeable"],
   methods: {
-    "<init>(Ljava/io/InputStream;)V": async function (this: JScanner, s: unknown) { this.text = new TextDecoder().decode(await slurp(s)); },
-    "<init>(Ljava/io/InputStream;Ljava/lang/String;)V": async function (this: JScanner, s: unknown) { this.text = new TextDecoder().decode(await slurp(s)); },
+    "<init>(Ljava/io/InputStream;)V": scanStream,
+    "<init>(Ljava/io/InputStream;Ljava/lang/String;)V": scanStream,
     "<init>(Ljava/lang/String;)V": function (this: JScanner, s: string) { this.text = s; },
     "<init>(Ljava/io/File;)V": function (this: JScanner, f: JFile) {
       const b = vfs.read(f.path);
       if (!b) throw rt.mkThrowable("java/io/FileNotFoundException", f.path);
-      this.text = new TextDecoder().decode(b);
+      this.text = utf8.dec.decode(b);
     },
     "useDelimiter(Ljava/lang/String;)Ljava/util/Scanner;": function (this: JScanner, p: string) { this.delim = new RegExp(p, "y"); return this; },
     "hasNext()Z": function (this: JScanner) { return peekToken(this) !== null ? 1 : 0; },

@@ -2,7 +2,7 @@
 // Strings are JS string primitives (String.prototype carries mangled Java methods).
 
 import { rt, JObj, maySuspend, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
-import { mangleMethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits } from "../abi";
+import { mangleMethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8 } from "../abi";
 
 function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => unknown {
   const fn = obj[mangleMethod(name, desc)] ?? rt.proxyMethod?.(obj, name, desc);
@@ -124,7 +124,7 @@ rt.register({
     // AccessibleObject semantics are moot here; harmless on any receiver
     "setAccessible(Z)V": () => {},
     "toString()Ljava/lang/String;": function () {
-      return jclsName(this).replace(/\//g, ".") + "@" + idHash(this).toString(16);
+      return dotName(jclsName(this)) + "@" + idHash(this).toString(16);
     },
     "getClass()Ljava/lang/Class;": function () { const info: ClassInfo | undefined = (this.constructor as typeof JObj).$i; return (info?.owner ?? rt).classFor(jclsName(this)); },
     "clone()Ljava/lang/Object;": function (this: any) {
@@ -160,6 +160,7 @@ export class JClass extends JObj {
   primName: string | null = null;
   arrDesc: string | null = null;
   componentOwner: Runtime | null = null;
+  jname: string | null = null;
 }
 const arrayClasses = new WeakMap<Runtime, Map<string, JClass>>();
 const classCache = new Map<string, JClass>();
@@ -197,8 +198,7 @@ rt.classFor = function (this: Runtime, name: string): JClass {
 
 function jclassName(c: JClass): string {
   if (c.primName) return c.primName;
-  if (c.arrDesc) return c.arrDesc.replace(/\//g, ".");
-  return c.ci!.name.replace(/\//g, ".");
+  return c.jname ??= dotName(c.arrDesc ?? c.ci!.name);
 }
 rt.register({
   name: "java/lang/Class",
@@ -239,8 +239,8 @@ rt.register({
       if (p) await p;
       // <init> mangles without a class component, so an inherited <init>()V would run the
       // SUPERclass ctor and leave every own field null — silently. Only accept our own.
-      if (info.def && !Object.prototype.hasOwnProperty.call(info.ctor.prototype, mangleMethod("<init>", "()V")))
-        throw rt.mkThrowable("java/lang/InstantiationException", info.name.replace(/\//g, "."));
+      if (info.def && !Object.hasOwn(info.ctor.prototype, mangleMethod("<init>", "()V")))
+        throw rt.mkThrowable("java/lang/InstantiationException", dotName(info.name));
       const o = new info.ctor();
       await vcall(o, "<init>", "()V");
       return o;
@@ -263,7 +263,7 @@ rt.register({
     "isEnum()Z": function (this: JClass) { return this.ci?.types.has("java/lang/Enum") ? 1 : 0; },
     "isAnnotation()Z": () => 0,
     "getTypeName()Ljava/lang/String;": function (this: JClass) {
-      return (this.ci?.name ?? this.primName ?? this.arrDesc ?? "?").replace(/\//g, ".");
+      return dotName(this.ci?.name ?? this.primName ?? this.arrDesc ?? "?");
     },
     "getGenericInterfaces()[Ljava/lang/reflect/Type;": () => jarray([], "Ljava/lang/reflect/Type;"),
     "getEnclosingClass()Ljava/lang/Class;": function (this: JClass) {
@@ -281,7 +281,7 @@ rt.register({
 
 export class JClassLoader extends JObj { parent: JClassLoader | null = null; runtime: Runtime = rt; }
 function rememberLoaded(loader: JClassLoader, name: string, cls: JClass): JClass {
-  if (loader.runtime.classLoader === loader && cls.ci?.name === name.replace(/\./g, "/")) {
+  if (loader.runtime.classLoader === loader && cls.ci?.name === slashName(name)) {
     const previous = loader.runtime.classes.get(cls.ci.name);
     if (previous && !previous.stub && previous !== cls.ci)
       throw rt.mkThrowable("java/lang/LinkageError", `Conflicting loader definition: ${name}`);
@@ -313,7 +313,7 @@ rt.register({
     },
     "loadClass(Ljava/lang/String;Z)Ljava/lang/Class;": loadClass,
     "findLoadedClass(Ljava/lang/String;)Ljava/lang/Class;": function (this: JClassLoader, n: string) {
-      const name = n.replace(/\./g, "/");
+      const name = slashName(n);
       const ci = this.runtime.classes.get(name);
       return ci && !ci.stub ? this.runtime.classFor(name) : null;
     },
@@ -361,7 +361,8 @@ class JThrowable extends JObj {
   msg: string | null = null;
   cause: JThrowable | null = null;
   suppressed: JThrowable[] = [];
-  jsStack: string | undefined = new Error().stack;
+  jsErr = new Error();
+  get jsStack(): string | undefined { return this.jsErr.stack; }
   /** memoised getStackTrace(), or what setStackTrace() was handed */
   trace: unknown[] | null = null;
 }
@@ -407,7 +408,7 @@ rt.register({
     "<init>(Ljava/lang/String;)V": function (this: JThrowable, m: string) { this.msg = m; },
     "<init>(Ljava/lang/String;Ljava/lang/Throwable;)V": function (this: JThrowable, m: string, c: JThrowable) { this.msg = m; this.cause = c; },
     "<init>(Ljava/lang/Throwable;)V": function (this: JThrowable, c: JThrowable) {
-      this.cause = c; this.msg = c ? jclsName(c).replace(/\//g, ".") + ": " + c.msg : null;
+      this.cause = c; this.msg = c ? dotName(jclsName(c)) + ": " + c.msg : null;
     },
     "<init>(Ljava/lang/String;Ljava/lang/Throwable;ZZ)V": function (this: JThrowable, m: string, c: JThrowable) { this.msg = m; this.cause = c; },
     "getMessage()Ljava/lang/String;": function (this: JThrowable) { return this.msg; },
@@ -415,7 +416,7 @@ rt.register({
     "getCause()Ljava/lang/Throwable;": function (this: JThrowable) { return this.cause; },
     "initCause(Ljava/lang/Throwable;)Ljava/lang/Throwable;": function (this: JThrowable, c: JThrowable) { this.cause = c; return this; },
     "toString()Ljava/lang/String;": function (this: JThrowable) {
-      const n = jclsName(this).replace(/\//g, ".");
+      const n = dotName(jclsName(this));
       return this.msg !== null ? n + ": " + this.msg : n;
     },
     "printStackTrace()V": function (this: JThrowable) {
@@ -430,7 +431,7 @@ rt.register({
     "printStackTrace(Ljava/io/PrintStream;)V": async function (this: JThrowable, s: unknown) {
       await vcall(s, "println", "(Ljava/lang/String;)V", await stackTraceText(this));
     },
-    "fillInStackTrace()Ljava/lang/Throwable;": function (this: JThrowable) { this.jsStack = new Error().stack; this.trace = null; return this; },
+    "fillInStackTrace()Ljava/lang/Throwable;": function (this: JThrowable) { this.jsErr = new Error(); this.trace = null; return this; },
     "getStackTrace()[Ljava/lang/StackTraceElement;": function (this: JThrowable) { return this.trace ??= jsStackTrace(this.jsStack); },
     "setStackTrace([Ljava/lang/StackTraceElement;)V": function (this: JThrowable, t: unknown[]) { this.trace = t ?? null; },
     "addSuppressed(Ljava/lang/Throwable;)V": function (this: JThrowable, t: JThrowable) { this.suppressed.push(t); },
@@ -571,7 +572,8 @@ sm("compareTo(Ljava/lang/String;)I", function (o: string) {
   }
   return this.length - o.length;
 });
-sm("compareTo(Ljava/lang/Object;)I", function (o: string) { return (this as any)[mangleMethod("compareTo", "(Ljava/lang/String;)I")](o); });
+const COMPARE_TO_STRING = mangleMethod("compareTo", "(Ljava/lang/String;)I");
+sm("compareTo(Ljava/lang/Object;)I", function (o: string) { return (this as any)[COMPARE_TO_STRING](o); });
 sm("compareToIgnoreCase(Ljava/lang/String;)I", function (o: string) {
   const a = this.toLowerCase(), b = o.toLowerCase();
   return a < b ? -1 : a > b ? 1 : 0;
@@ -612,7 +614,7 @@ sm("toCharArray()[C", function () {
 sm("getChars(II[CI)V", function (srcBegin: number, srcEnd: number, dst: Uint16Array, dstBegin: number) {
   for (let i = srcBegin; i < srcEnd; i++) dst[dstBegin + i - srcBegin] = this.charCodeAt(i);
 });
-const utf8Bytes = function (this: string) { return new Int8Array(new TextEncoder().encode(this).buffer); };
+const utf8Bytes = function (this: string) { return new Int8Array(utf8.enc.encode(this).buffer); };
 sm("getBytes()[B", utf8Bytes);
 sm("getBytes(Ljava/lang/String;)[B", utf8Bytes);
 sm("getBytes(Ljava/nio/charset/Charset;)[B", utf8Bytes);
@@ -718,9 +720,10 @@ rt.register({
   statics: { get CASE_INSENSITIVE_ORDER() { return mkCmp(caseInsensitive); } },
 });
 /** A Comparator is a plain JObj carrying `compare` — all a vcall from a sort needs. */
+const COMPARE = mangleMethod("compare", "(Ljava/lang/Object;Ljava/lang/Object;)I");
 export const mkCmp = (compare: (a: unknown, b: unknown) => unknown) => {
   const o = new (rt.link("java/util/Comparator").ctor as new () => JObj)();
-  (o as unknown as Record<string, unknown>)[mangleMethod("compare", "(Ljava/lang/Object;Ljava/lang/Object;)I")] = compare;
+  (o as unknown as Record<string, unknown>)[COMPARE] = compare;
   return o;
 };
 const caseInsensitive = (a: unknown, b: unknown) => {

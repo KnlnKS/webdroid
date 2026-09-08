@@ -55,7 +55,10 @@ export function mangleStaticField(name: string, desc?: string): string {
 }
 
 /** "(ILjava/lang/String;[J)V" → { params: ["I","Ljava/lang/String;","[J"], ret: "V" } */
+const descMemo = new Map<string, { params: string[]; ret: string }>();
 export function parseMethodDesc(desc: string): { params: string[]; ret: string } {
+  let hit = descMemo.get(desc);
+  if (hit) return hit;
   const params: string[] = [];
   let i = 1;
   while (desc[i] !== ")") {
@@ -65,8 +68,13 @@ export function parseMethodDesc(desc: string): { params: string[]; ret: string }
     i++;
     params.push(desc.slice(start, i));
   }
-  return { params, ret: desc.slice(i + 1) };
+  descMemo.set(desc, (hit = { params, ret: desc.slice(i + 1) }));
+  return hit;
 }
+
+export const dotName = (internal: string) => internal.replace(/\//g, ".");
+export const slashName = (binary: string) => binary.replace(/\./g, "/");
+export const utf8 = { enc: new TextEncoder(), dec: new TextDecoder() };
 
 export function isWide(desc: string): boolean { return desc === "J" || desc === "D"; }
 
@@ -101,6 +109,7 @@ export function jarray<T>(items: T[], elem = "Ljava/lang/Object;"): T[] {
   (items as { $t?: string }).$t = elem;
   return items;
 }
+export const strArray = (a: readonly string[]) => jarray([...a], "Ljava/lang/String;");
 
 /** code units → string, chunked to stay under the spread argument limit */
 export function charsToString(chars: Uint16Array | Uint8Array, off: number, len: number): string {

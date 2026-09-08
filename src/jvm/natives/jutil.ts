@@ -174,8 +174,9 @@ rt.register({
     },
   },
 });
+let iterLinked = false;
 export function mkIter(arr: unknown[], owner: IterOwner | null = null): JIter {
-  rt.link("webdroid/Iter");
+  if (!iterLinked) { rt.link("webdroid/Iter"); iterLinked = true; }
   return new JIter(arr, owner);
 }
 
@@ -212,9 +213,7 @@ export async function newLinkedHashSet(items: unknown[] = []): Promise<JSet> {
   return s;
 }
 
-let ioobeLogged = 0;
 function ioobe(i: number, n: number): never {
-  if (i < 0 && ioobeLogged++ < 3) console.warn("[webdroid] ioobe neg", new Error().stack);
   throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", `Index: ${i}, Size: ${n}`);
 }
 
@@ -235,8 +234,11 @@ export class JList extends JObj {
  */
 function subView(parent: unknown[], from: number, to: number): unknown[] {
   let len = to - from;
-  const idx = (p: string | symbol): number =>
-    typeof p === "string" && /^(?:0|[1-9]\d*)$/.test(p) ? +p : -1;
+  const idx = (p: string | symbol): number => {
+    if (typeof p !== "string" || p === "") return -1;
+    const n = +p;
+    return n >>> 0 === n && String(n) === p ? n : -1;
+  };
   const target: unknown[] = [];
   return new Proxy(target, {
     get(_t, p, r) {
@@ -775,7 +777,12 @@ rt.register({ name: "webdroid/BaseMap", ctor: JMap, ifaces: ["java/util/Map", "j
 // ArrayMap is a Map that also answers by index; a JS Map already keeps insertion order, so
 // the index is just its key order. The slow bucket (custom-equals keys) comes after, the way
 // mapMethods already treats it.
-const mapKeysInOrder = (m: JMap): unknown[] => [...[...m.m.values()].map((e) => e.k), ...m.slow.map((e) => e.k)];
+const mapKeysInOrder = (m: JMap): unknown[] => {
+  const out: unknown[] = [];
+  for (const e of m.m.values()) out.push(e.k);
+  for (const e of m.slow) out.push(e.k);
+  return out;
+};
 const arrayMapMethods: NativeSpec["methods"] = {
   "keyAt(I)Ljava/lang/Object;": function (this: JMap, i: number) { return mapKeysInOrder(this)[i] ?? null; },
   "valueAt(I)Ljava/lang/Object;": async function (this: JMap, i: number) {
@@ -819,7 +826,12 @@ class JSet extends JObj {
   slow: Ent[] = [];
 }
 /** the members, fast bucket first then the custom-equals ones (both must be walked) */
-function setItems(s: JSet): unknown[] { return [...s.m.values(), ...s.slow].map((e) => e.k); }
+function setItems(s: JSet): unknown[] {
+  const out: unknown[] = [];
+  for (const e of s.m.values()) out.push(e.k);
+  for (const e of s.slow) out.push(e.k);
+  return out;
+}
 function setMethods(): NativeSpec["methods"] {
   return {
     "<init>()V": function () {},
@@ -959,8 +971,9 @@ async function slice<T extends Sorted>(t: T, lo: unknown, loInc: boolean, hi: un
   const b = hi === UNB ? t.slow.length : await bound(t, hi, hiInc, true);
   return sub(t, t.slow.slice(a, Math.max(a, b)));
 }
+let treeSetCtor: (new () => JTreeSet) | null = null;
 function keysOf(t: JTreeMap, ents: Ent[], rev: boolean): JTreeSet {
-  const s = new (rt.link("java/util/TreeSet").ctor as new () => JTreeSet)();
+  const s = new (treeSetCtor ??= rt.link("java/util/TreeSet").ctor as new () => JTreeSet)();
   s.cmp = t.cmp; s.rev = rev; s.slow = ents.map((e) => ({ k: e.k, v: e.k }));
   return s;
 }
