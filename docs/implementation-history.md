@@ -1709,3 +1709,49 @@ last framework changes. Framework bytecode exercises passed, including text/reso
 textcmp broke all six paragraphs identically. The final-stage corpus rendered all eight APKs;
 targeted Lichess natcheck reported zero false-synchronous delegates. Duplicate registration and
 library-name matching checks were clean. Visual goldens were not changed.
+
+### Saved databases and the running Chrome process
+
+The last check in the original Chrome profile exposed two additional SQLite problems.
+sqflite supplies typed arguments through SQLiteDatabase.CursorFactory, passing an empty
+String array to rawQueryWithFactory. Ignoring the factory silently bound every query argument
+to null. SQLiteQuery and SQLiteStatement now share SQLiteProgram's binding methods; the real
+factory creates the cursor from its bound query. A test exercises long, double, string, blob,
+and null arguments through Java virtual dispatch.
+
+The live Lichess database also had 17 pages and user_version=5, while its saved snapshot had
+only one page and version 0. Copying the main file omitted committed WAL pages. Persistence
+now attempts a nonblocking PASSIVE checkpoint and defers snapshots when readers or a raw SQL
+transaction prevent completion. Tests cover committed rows and schema version, raw BEGIN and
+COMMIT, and preserving a prepared statement, TEMP table, and TEMP trigger. The existing browser
+database was checkpointed before reload; its subsequently saved 94,208-byte snapshot retained
+version 5. Concurrent sql.js initialization was investigated and rejected as a cause: the
+package already memoizes its initialization promise.
+
+The original Chrome process remained too slow for Lichess's five-second Stockfish startup
+deadline. It was still running 152.0.7977.64, whereas the installed browser was 152.0.7977.82.
+The same roughly 570 million guest instructions completed in 2.6 seconds in both headless
+and visible fresh instances of the installed browser, but took over 15 seconds in the original
+process. A fresh tab in that process was also slow. Foregrounding it, removing debugger
+attachment, and resetting CPU throttling did not resolve the difference; enabling the debugger
+in a fresh instance did not reproduce it. This establishes a browser-process difference,
+not proof that the version update alone caused it. Guest clocks and the app's timeout remain
+unchanged.
+
+A normal, separately launched visible Chrome 152.0.7977.82 window, without Playwright's
+launch defaults, played `1. e4 d6 2. Nf3 Bg4` and was left open. Its database persisted
+61,440 bytes at version 5; app_log had no rows, including no engine timeouts or database-lock
+warnings. Reached native/JNI misses were empty and Java reported only optional SidecarProvider.
+The existing Chrome windows and their profile were preserved. External-OES shader precompile
+diagnostics and Cronet's DNS warning still appeared without blocking ordinary rendering or play.
+
+After both SQLite changes, typecheck and all 775 unit tests passed (9,295 assertions), and
+Lichess, FitNotes, and Mihon smoke compilation again reported zero method failures. The final
+full E2E replay rendered 101/101 steps with zero main-loop wedges, layout errors, draw errors,
+or native-required libraries. Scores were FitNotes 43.07%, onboarding 17.56%, Mihon app 81.90%,
+and Harmonic 36.23%. The same established missing APIs and non-rendering errors remained.
+Lichess's editor pawn capture was inspected again. Mihon's change from the preceding 79.01%
+run was concentrated in dialog dismissal (43.78% to 96.71%): the fallback-driven flow was
+on Data and storage instead of the golden Reader settings. This limits the flow's fidelity
+claim despite complete rendering and no Compose errors. Harmonic's stable screens remained
+unchanged; its live scroll captures varied. Goldens were unchanged.
