@@ -2,6 +2,12 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mem } from "./mem";
 import { setA64 } from "./cpu";
 import { MEM_SIZE_A64 } from "./abi";
+import { spawnSync } from "node:child_process";
+
+test("allocator reuse preserves unsigned pointers above 2 GiB", () => {
+  const result = spawnSync(process.execPath, [new URL("./fixtures/high-heap.ts", import.meta.url).pathname], { encoding: "utf8" });
+  if (result.status !== 0) throw new Error(result.stderr || String(result.error));
+});
 
 // planes only exist in a 4 GiB process: the pool sits above the 2 GiB line
 beforeAll(() => { setA64(true); if (mem.u8.length < MEM_SIZE_A64) mem.init(MEM_SIZE_A64); });

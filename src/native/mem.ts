@@ -25,7 +25,7 @@ function badAddr(a: number): never {
 // as bionic guarantees: [p-8] = owning block for aligned allocations or 0, [p-4] = class size.
 // Page-sized blocks carry no header and are looked up in `bigBlocks`.
 const CLASS_STEP = 16, SMALL_MAX = 1024, PAGE_MAX = 0x40000, HDR = 16;
-const smallHeads = new Int32Array(SMALL_MAX / CLASS_STEP + 1);
+const smallHeads = new Uint32Array(SMALL_MAX / CLASS_STEP + 1);
 const bigHeads = new Map<number, number>();
 const bigBlocks = new Map<number, number>();
 let heapTop = ARENA_BASE, heapPeak = 0, blocks = 0, used = 0;
@@ -214,10 +214,10 @@ export const mem = {
     if (cs <= SMALL_MAX) {
       const ci = cs / CLASS_STEP;
       p = smallHeads[ci];
-      if (p) smallHeads[ci] = i32[p >>> 2];
+      if (p) smallHeads[ci] = u32[p >>> 2];
     } else {
       p = bigHeads.get(cs) ?? 0;
-      if (p) bigHeads.set(cs, i32[p >>> 2]);
+      if (p) bigHeads.set(cs, u32[p >>> 2]);
     }
     if (!p) {
       p = bump(cs + HDR);
@@ -233,7 +233,7 @@ export const mem = {
     if (!p) return;
     const big = bigBlocks.get(p);
     if (big !== undefined) { bigBlocks.delete(p); blocks--; used -= big; mem.unmapPages(p, big); return; }
-    const owner = i32[(p - 8) >>> 2];
+    const owner = u32[(p - 8) >>> 2];
     if (owner) p = owner;
     const cs = i32[(p - 4) >>> 2];
     if (cs <= 0 || (cs & 15)) badAddr(p);
