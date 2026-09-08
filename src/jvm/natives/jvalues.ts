@@ -39,7 +39,10 @@ rt.register({
   },
 });
 
-class JLocale extends JObj { lang = ""; country = ""; script = ""; variant = ""; }
+export class JLocale extends JObj { lang = ""; country = ""; script = ""; variant = ""; }
+export function localeTag(l: JLocale): string {
+  return [l.lang || "und", l.script, l.country, l.variant.replaceAll("_", "-")].filter(Boolean).join("-");
+}
 /** the one locale the device speaks; also the default */
 export const usLocale = Object.assign(new JLocale(), { lang: "en", country: "US" });
 rt.register({
@@ -58,7 +61,7 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JLocale) {
       return this.lang + (this.country || this.variant || this.script ? "_" + this.country : "") + (this.variant ? "_" + this.variant : "") + (this.script ? "_#" + this.script : "");
     },
-    "toLanguageTag()Ljava/lang/String;": function (this: JLocale) { return [this.lang || "und", this.script, this.country, this.variant.replaceAll("_", "-")].filter(Boolean).join("-"); },
+    "toLanguageTag()Ljava/lang/String;": function (this: JLocale) { return localeTag(this); },
     "static forLanguageTag(Ljava/lang/String;)Ljava/util/Locale;": (t: string) => {
       const l = new JLocale();
       const m = /^([a-z]{2,8})(?:-([a-z]{4}))?(?:-([a-z]{2}|\d{3}))?((?:-(?:[a-z0-9]{5,8}|\d[a-z0-9]{3}))*)/i.exec(t);

@@ -95,6 +95,16 @@ export function setResourceNight(night: boolean): void {
   }
 }
 
+export function setResourceLocale(lang: string, dir: number): void {
+  configGen++;
+  selCache.clear();
+  for (const r of allResources) {
+    r.bagCache.clear();
+    if (r.arsc) Object.assign(r.arsc.device, { lang, dir });
+  }
+  if (fwPkg) Object.assign(fwPkg.device, { lang, dir });
+}
+
 /** Re-resolve orientation and size-qualified entries in every live resource table. */
 export function setResourceOrientation(orientation: number, wdp: number, hdp: number, swdp: number): void {
   configGen++;

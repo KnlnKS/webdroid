@@ -2,12 +2,12 @@
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { device } from "../shell/config";
-import { Resources, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV } from "./res";
+import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
 import { JTypedValue } from "./os";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 import { javaFormat, defineException } from "../jvm/natives/jlang";
-import { usLocale } from "../jvm/natives/jvalues";
+import { type JLocale, localeTag, usLocale } from "../jvm/natives/jvalues";
 import { jarray } from "../jvm/abi";
 import { streamOf, streamOfSource } from "../jvm/natives/jio";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
@@ -25,6 +25,29 @@ export function mkJResources(host: Resources): JResources {
   systemRes = r;
   return r;
 }
+class JLocaleList extends JObj { values: JLocale[] = []; }
+const emptyLocaleList = new JLocaleList();
+const localeList = Object.assign(new JLocaleList(), { values: [usLocale] });
+const sameLocale = (a: JLocale | null, b: JLocale | null) => a === b || !!a && !!b &&
+  a.lang === b.lang && a.country === b.country && a.script === b.script && a.variant === b.variant;
+// ICU script metadata; Intl's text direction can ignore explicit script subtags.
+const rtlScripts = new Set("Arab Hebr Syrc Thaa Cprt Khar Hung Mand Mero Nkoo Orkh Phnx Lydi Armi Avst Mani Phli Phlp Prti Samr Sarb Mend Merc Narb Nbat Palm Hatr Adlm Rohg Sogd Sogo Elym Chrs Yezi Ougr".split(" "));
+function localeDirection(locale: JLocale | null): number {
+  if (!locale || !locale.lang && !locale.script && !locale.country) return 0;
+  try { return rtlScripts.has(locale.script || new Intl.Locale(localeTag(locale)).maximize().script || "") ? 1 : 0; }
+  catch { return 0; }
+}
+function configLocales(c: JConfiguration): JLocaleList {
+  if (!sameLocale(c.locale, c.locales.values[0] ?? null)) {
+    c.locales = c.locale ? Object.assign(new JLocaleList(), { values: [c.locale] }) : emptyLocaleList;
+  }
+  return c.locales;
+}
+function setLocales(c: JConfiguration, list: JLocaleList | null): void {
+  c.locales = list || emptyLocaleList;
+  c.locale = c.locales.values[0] ?? null;
+  c.screenLayout = (c.screenLayout & ~0xc0) | ((localeDirection(c.locale) + 1) << 6);
+}
 class JConfiguration extends JObj {
   orientation = device.orientation;
   screenWidthDp = device.widthDp; screenHeightDp = device.heightDp;
@@ -33,7 +56,8 @@ class JConfiguration extends JObj {
   fontScale = 1;
   // UI_MODE_TYPE_NORMAL | the device's night bit
   uiMode = 0x01 | (device.night ? 0x20 : 0x10);
-  locale = null;
+  locale: JLocale | null = null;
+  locales = emptyLocaleList;
   mcc = 0; mnc = 0; touchscreen = 3; keyboard = 1; keyboardHidden = 2; navigation = 1;
   navigationHidden = 2; hardKeyboardHidden = 2; screenLayout = 0x10 | 2;
   fontWeightAdjustment = 0;  // accessibility "bold text" is off, so no weight is added
@@ -46,7 +70,8 @@ const CONFIG_FIELDS = ["orientation", "screenWidthDp", "screenHeightDp", "smalle
  *  COPY of the configuration they were filled under and compare it against the live one) */
 function configEquals(a: JConfiguration, b: JConfiguration): boolean {
   for (const k of CONFIG_FIELDS) if (a[k] !== b[k]) return false;
-  return a.locale === b.locale;
+  const al = configLocales(a).values, bl = configLocales(b).values;
+  return al.length === bl.length && al.every((l, i) => sameLocale(l, bl[i]));
 }
 rt.register({
   name: "android/content/res/Configuration", ctor: JConfiguration,
@@ -73,23 +98,32 @@ rt.register({
       for (const k of CONFIG_FIELDS) h = (h * 31 + ((this as any)[k] | 0)) | 0;
       return h;
     },
-    "getLocales()Landroid/os/LocaleList;": () => localeList,
-    "getLayoutDirection()I": () => 0,
+    "getLocales()Landroid/os/LocaleList;": function (this: JConfiguration) { return configLocales(this); },
+    "setLocales(Landroid/os/LocaleList;)V": function (this: JConfiguration, list: JLocaleList | null) { setLocales(this, list); },
+    "setLocale(Ljava/util/Locale;)V": function (this: JConfiguration, locale: JLocale | null) {
+      setLocales(this, locale ? Object.assign(new JLocaleList(), { values: [locale] }) : null);
+    },
+    "setLayoutDirection(Ljava/util/Locale;)V": function (this: JConfiguration, locale: JLocale | null) {
+      this.screenLayout = (this.screenLayout & ~0xc0) | ((localeDirection(locale) + 1) << 6);
+    },
+    "getLayoutDirection()I": function (this: JConfiguration) { return (this.screenLayout & 0xc0) === 0x80 ? 1 : 0; },
     "isNightModeActive()Z": function (this: JConfiguration) { return (this.uiMode & 0x30) === 0x20 ? 1 : 0; },
   },
 });
-class JLocaleList extends JObj {}
-const localeList = new JLocaleList();
 rt.register({
   name: "android/os/LocaleList", ctor: JLocaleList,
   methods: {
-    "<init>([Ljava/util/Locale;)V": function () {},
+    "<init>([Ljava/util/Locale;)V": function (this: JLocaleList, locales: JLocale[]) {
+      if (!locales || locales.some(l => !l)) throw rt.mkThrowable("java/lang/NullPointerException", "locales");
+      this.values = locales.filter((l, i) => locales.findIndex(other => sameLocale(l, other)) === i);
+    },
     "static getDefault()Landroid/os/LocaleList;": () => localeList,
     "static getAdjustedDefault()Landroid/os/LocaleList;": () => localeList,
-    "get(I)Ljava/util/Locale;": () => usLocale,
-    "size()I": () => 1,
-    "isEmpty()Z": () => 0,
-    "toLanguageTags()Ljava/lang/String;": () => "en-US",
+    "static getEmptyLocaleList()Landroid/os/LocaleList;": () => emptyLocaleList,
+    "get(I)Ljava/util/Locale;": function (this: JLocaleList, i: number) { return this.values[i] ?? null; },
+    "size()I": function (this: JLocaleList) { return this.values.length; },
+    "isEmpty()Z": function (this: JLocaleList) { return this.values.length === 0 ? 1 : 0; },
+    "toLanguageTags()Ljava/lang/String;": function (this: JLocaleList) { return this.values.map(localeTag).join(","); },
   },
 });
 
@@ -100,12 +134,16 @@ rt.register({
  * `-night` resource qualifier and the window background all read the bit back off this object.
  */
 const theConfig = new JConfiguration();
+setLocales(theConfig, localeList);
 const isNight = () => (theConfig.uiMode & 0x30) === 0x20;
-/** Adopt a Configuration an app handed us, and re-resolve resources if the night bit moved. */
+/** Adopt a Configuration and invalidate resource selections for changed qualifiers. */
 function applyDeviceConfiguration(c: JConfiguration): void {
-  const was = isNight();
+  const was = isNight(), lang = theConfig.locale?.lang, dir = theConfig.screenLayout & 0xc0;
   Object.assign(theConfig, c);
   if (isNight() !== was) setResourceNight(isNight());
+  if (theConfig.locale?.lang !== lang || (theConfig.screenLayout & 0xc0) !== dir) {
+    setResourceLocale(theConfig.locale?.lang ?? "", theConfig.screenLayout & 0xc0);
+  }
 }
 export const deviceConfiguration = (): JConfiguration => theConfig;
 /** Keep Configuration and resource qualifiers in step with the shell framebuffer. */
