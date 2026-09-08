@@ -264,6 +264,6 @@ rt.register({
 });
 
 for (const n of ["java/security/spec/ECParameterSpec", "java/security/spec/ECGenParameterSpec",
-  "java/security/spec/AlgorithmParameterSpec", "java/security/KeyPairGenerator", "java/security/AlgorithmParameters"]) {
+  "java/security/spec/AlgorithmParameterSpec", "java/security/AlgorithmParameters"]) {
   rt.register({ name: n, ctor: class extends JObj {}, methods: { "<init>(Ljava/lang/String;)V": () => {}, "<init>()V": () => {} } });
 }

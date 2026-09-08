@@ -1395,3 +1395,19 @@ pixels as the mouse; on harmonic's RecyclerView it lands short of the drag by ex
 fling. Scores across the change: fitnotes 43.07 -> 43.07, mihon-onboarding 17.56 -> 17.56,
 mihon-app and harmonic unchanged within their run-to-run spread (two identical runs differ by
 0.5 on mihon-app, ~6 on harmonic).
+
+## Lichess: RSA secure storage
+
+Lichess DEX `p5` requests RSA from AndroidKeyStore, then wraps an AES key with
+`RSA/ECB/OAEPPadding`, SHA-256 and MGF1-SHA1. WebCrypto cannot express independent OAEP
+and MGF digests. RSA generation uses WebCrypto; node-forge 1.4.0 loads dynamically for
+OAEP and real self-signed certificate DER. Its maintained [security release](https://github.com/digitalbazaar/forge/blob/main/CHANGELOG.md#140---2026-03-24)
+fixes the published 2025/2026 advisories; its [RSA documentation](https://github.com/digitalbazaar/forge#rsa)
+explicitly covers Java's mixed-digest OAEP. Private operations use its blinded CRT path.
+Software key material persists with the existing keystore state; Java keystore private keys
+remain non-exportable and requests for hardware backing/authentication fail explicitly.
+
+Focused tests verify generated X.509 signatures independently, restore persisted keys, cross-check
+SHA-1 OAEP with Node crypto and SHA-256/MGF1-SHA1 wrapping with OpenSSL, and reject tampered
+ciphertexts. Headless Lichess startup passes this initialization and next reaches
+KeyguardManager.isDeviceSecure. This is startup progress, not a final rendering result.

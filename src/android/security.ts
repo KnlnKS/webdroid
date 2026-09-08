@@ -5,13 +5,15 @@ import { rt, JObj } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 
 const strs = (a: string[]) => jarray(a.slice(), "Ljava/lang/String;");
-class JKeyGenSpec extends JObj {
+export class JKeyGenSpec extends JObj {
   alias = ""; purposes = 0; keySize = -1;
   blockModes: string[] = []; paddings: string[] = []; digests: string[] = []; sigPaddings: string[] = [];
   userAuth = false; authSeconds = -1; randomizedEncryption = true; strongBox = false;
   keyValidityStart: unknown = null; keyValidityEnd: unknown = null; keyValidityConsumptionEnd: unknown = null;
   unlockedDeviceRequired = false; invalidatedByEnrollment = true; attestation: Int8Array | null = null;
   uid = -1;
+  certificateSubject: unknown = null; certificateSerial: unknown = null;
+  certificateNotBefore: unknown = null; certificateNotAfter: unknown = null;
 }
 const specGetters = {
   "getKeystoreAlias()Ljava/lang/String;": function (this: JKeyGenSpec) { return this.alias; },
@@ -67,10 +69,10 @@ rt.register({
     [`setKeyValidityForOriginationEnd(Ljava/util/Date;)${B}`]: set((s, d) => { s.keyValidityEnd = d; }),
     [`setKeyValidityForConsumptionEnd(Ljava/util/Date;)${B}`]: set((s, d) => { s.keyValidityConsumptionEnd = d; }),
     [`setAttestationChallenge([B)${B}`]: set((s, b) => { s.attestation = b; }),
-    [`setCertificateSubject(Ljavax/security/auth/x500/X500Principal;)${B}`]: set(() => {}),
-    [`setCertificateSerialNumber(Ljava/math/BigInteger;)${B}`]: set(() => {}),
-    [`setCertificateNotBefore(Ljava/util/Date;)${B}`]: set(() => {}),
-    [`setCertificateNotAfter(Ljava/util/Date;)${B}`]: set(() => {}),
+    [`setCertificateSubject(Ljavax/security/auth/x500/X500Principal;)${B}`]: set((s, value) => { s.certificateSubject = value; }),
+    [`setCertificateSerialNumber(Ljava/math/BigInteger;)${B}`]: set((s, value) => { s.certificateSerial = value; }),
+    [`setCertificateNotBefore(Ljava/util/Date;)${B}`]: set((s, value) => { s.certificateNotBefore = value; }),
+    [`setCertificateNotAfter(Ljava/util/Date;)${B}`]: set((s, value) => { s.certificateNotAfter = value; }),
     [`setAlgorithmParameterSpec(Ljava/security/spec/AlgorithmParameterSpec;)${B}`]: set(() => {}),
     "build()Landroid/security/keystore/KeyGenParameterSpec;": function (this: JKeyGenSpecBuilder) { return Object.assign(new JKeyGenSpec(), this.spec); },
   },

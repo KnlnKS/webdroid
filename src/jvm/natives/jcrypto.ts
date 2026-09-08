@@ -1,9 +1,11 @@
 // javax.crypto — SecretKeySpec, IvParameterSpec, Cipher (AES) and Mac (HMAC) over WebCrypto, which is
 // one-shot and async: update() buffers, doFinal() awaits the whole operation.
-import { rt, JObj } from "../runtime";
+import { rt, JObj, maySuspend } from "../runtime";
 import { defineException } from "./jlang";
 import { mkIter } from "./jutil";
 import { mangleMethod } from "../abi";
+import { JKeyGenSpec } from "../../android/security";
+import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain, rsaCrypt } from "./jrsa";
 import { type JBuffer, bufferView } from "./jnio";
 
 for (const n of ["java/security/Key", "javax/crypto/SecretKey", "java/security/spec/KeySpec"]) {
@@ -97,15 +99,23 @@ class JCipher extends JObj {
   padded = true;
   opmode = 0;
   key: CryptoKey | null = null;
+  rsa: JRsaPublicKey | JRsaPrivateKey | null = null;
+  oaep = new JOAEP();
   iv: Uint8Array<ArrayBuffer> | null = null;
   tagLength = 128;
   parts: Uint8Array[] = [];
   aad: Uint8Array[] = [];
 }
-function getCipher(t: string): JCipher {
+function getCipher(t: string, provider?: unknown): JCipher {
   const [alg, mode = "ECB", padding = "PKCS5Padding"] = t.split("/");
   const c = new JCipher();
   c.transformation = t;
+  if (alg.toUpperCase() === "RSA" && /^(ECB|NONE)$/i.test(mode)) {
+    if (typeof provider === "string" && !["AndroidKeyStoreBCWorkaround", "AndroidOpenSSL", "BC"].includes(provider)) throw rt.mkThrowable("java/security/NoSuchProviderException", provider);
+    if (!/^OAEPPadding$/i.test(padding)) throw rt.mkThrowable("javax/crypto/NoSuchPaddingException", padding);
+    c.alg = "RSA-OAEP";
+    return c;
+  }
   if (alg.toUpperCase() !== "AES" || !(c.alg = MODES[mode.toUpperCase()])) {
     throw rt.mkThrowable("java/security/NoSuchAlgorithmException", "No provider found for " + t);
   }
@@ -116,6 +126,15 @@ function getCipher(t: string): JCipher {
   return c;
 }
 async function initCipher(c: JCipher, opmode: number, key: unknown, params: unknown) {
+  if (opmode < 1 || opmode > 4) throw rt.mkThrowable("java/security/InvalidParameterException", "Invalid operation mode");
+  if (c.alg === "RSA-OAEP") {
+    const encrypt = opmode === 1 || opmode === 3;
+    if (encrypt ? !(key instanceof JRsaPublicKey) : !(key instanceof JRsaPrivateKey)) throw rt.mkThrowable("java/security/InvalidKeyException", "RSA key does not match operation");
+    if (!(key instanceof JRsaPublicKey || key instanceof JRsaPrivateKey)) throw rt.mkThrowable("java/security/InvalidKeyException", "RSA key required");
+    if (params != null && !(params instanceof JOAEP)) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "OAEP parameters required");
+    c.rsa = key; c.oaep = params ?? new JOAEP(); c.opmode = opmode; c.parts = []; c.iv = null;
+    return;
+  }
   c.key = await cryptoKey(key, c.alg === "AES-ECB" ? "AES-CBC" : c.alg, ["encrypt", "decrypt"]);
   c.opmode = opmode;
   c.parts = []; c.aad = [];
@@ -164,10 +183,12 @@ function unpad(d: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
   return d.slice(0, d.length - n);
 }
 async function doFinal(c: JCipher, b?: Int8Array, off = 0, len = b?.length): Promise<Int8Array> {
-  if (!c.key) throw rt.mkThrowable("java/lang/IllegalStateException", "Cipher not initialized");
+  if (!c.key && !c.rsa) throw rt.mkThrowable("java/lang/IllegalStateException", "Cipher not initialized");
   if (b) c.parts.push(bytes(b, off, len));
   let data = join(c.parts);
   c.parts = [];
+  if (c.rsa) return rsaCrypt(c.rsa, data, c.oaep);
+  if (!c.key) throw rt.mkThrowable("java/lang/IllegalStateException", "Cipher not initialized");
   const enc = c.opmode === 1 || c.opmode === 3;
   const op = enc ? "encrypt" : "decrypt";
   if (c.alg === "AES-CTR") return new Int8Array(await crypto.subtle[op]({ name: c.alg, counter: c.iv!, length: 128 }, c.key, data));
@@ -188,13 +209,13 @@ rt.register({
   methods: {
     "static getInstance(Ljava/lang/String;)Ljavax/crypto/Cipher;": getCipher,
     "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/Cipher;": getCipher,
-    "init(ILjava/security/Key;)V": function (this: JCipher, m: number, k: unknown) { return initCipher(this, m, k, null); },
-    "init(ILjava/security/Key;Ljava/security/SecureRandom;)V": function (this: JCipher, m: number, k: unknown) { return initCipher(this, m, k, null); },
-    "init(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JCipher, m: number, k: unknown, p: unknown) {
+    "init(ILjava/security/Key;)V": async function (this: JCipher, m: number, k: unknown) { return initCipher(this, m, k, null); },
+    "init(ILjava/security/Key;Ljava/security/SecureRandom;)V": async function (this: JCipher, m: number, k: unknown) { return initCipher(this, m, k, null); },
+    "init(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V": async function (this: JCipher, m: number, k: unknown, p: unknown) {
       return initCipher(this, m, k, p);
     },
     "init(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;Ljava/security/SecureRandom;)V":
-      function (this: JCipher, m: number, k: unknown, p: unknown) { return initCipher(this, m, k, p); },
+      async function (this: JCipher, m: number, k: unknown, p: unknown) { return initCipher(this, m, k, p); },
     "update([B)[B": function (this: JCipher, b: Int8Array) { this.parts.push(bytes(b)); return new Int8Array(0); },
     "update([BII)[B": function (this: JCipher, b: Int8Array, off: number, len: number) { this.parts.push(bytes(b, off, len)); return new Int8Array(0); },
     "update([BII[BI)I": function (this: JCipher, b: Int8Array, off: number, len: number) { this.parts.push(bytes(b, off, len)); return 0; },
@@ -205,9 +226,9 @@ rt.register({
       const u = new Uint8Array(v.ab, v.byteFromPos, bb.lim - bb.pos);
       this.aad.push(new Uint8Array(u)); bb.pos = bb.lim;
     },
-    "doFinal()[B": function (this: JCipher) { return doFinal(this); },
-    "doFinal([B)[B": function (this: JCipher, b: Int8Array) { return doFinal(this, b); },
-    "doFinal([BII)[B": function (this: JCipher, b: Int8Array, off: number, len: number) { return doFinal(this, b, off, len); },
+    "doFinal()[B": async function (this: JCipher) { return doFinal(this); },
+    "doFinal([B)[B": async function (this: JCipher, b: Int8Array) { return doFinal(this, b); },
+    "doFinal([BII)[B": async function (this: JCipher, b: Int8Array, off: number, len: number) { return doFinal(this, b, off, len); },
     "doFinal([BI)I": async function (this: JCipher, out: Int8Array, off: number) {
       const r = await doFinal(this);
       if (off + r.length > out.length) throw rt.mkThrowable("javax/crypto/ShortBufferException", "Output buffer too short");
@@ -227,9 +248,22 @@ rt.register({
       return r.length;
     },
     "static getInstance(Ljava/lang/String;Ljava/security/Provider;)Ljavax/crypto/Cipher;": getCipher,
+    "wrap(Ljava/security/Key;)[B": async function (this: JCipher, key: JSecretKeySpec) {
+      if (this.opmode !== 3) throw rt.mkThrowable("java/lang/IllegalStateException", "Cipher not initialized for wrapping");
+      if (!(key instanceof JSecretKeySpec)) throw rt.mkThrowable("java/security/InvalidKeyException", "Unsupported wrapped key");
+      return doFinal(this, new Int8Array(key.key));
+    },
+    "unwrap([BLjava/lang/String;I)Ljava/security/Key;": async function (this: JCipher, wrapped: Int8Array, algorithm: string, type: number) {
+      if (this.opmode !== 4) throw rt.mkThrowable("java/lang/IllegalStateException", "Cipher not initialized for unwrapping");
+      if (type !== 3) throw rt.mkThrowable("java/security/InvalidKeyException", "Unsupported wrapped key type");
+      return mkSecretKey(new Uint8Array(await doFinal(this, wrapped)), algorithm);
+    },
     "getParameters()Ljava/security/AlgorithmParameters;": () => null,
-    "getBlockSize()I": () => 16,
-    "getOutputSize(I)I": function (this: JCipher, n: number) { return this.parts.reduce((s, p) => s + p.length, n) + 16; },
+    "getBlockSize()I": function (this: JCipher) { return this.alg === "RSA-OAEP" ? 0 : 16; },
+    "getOutputSize(I)I": maySuspend(function (this: JCipher, n: number) {
+      if (this.rsa) return this.rsa.key().then((key) => Math.ceil(key.n.bitLength() / 8));
+      return this.parts.reduce((s, p) => s + p.length, n) + 16;
+    }),
     "getIV()[B": function (this: JCipher) { return this.iv && new Int8Array(this.iv); },
     "getAlgorithm()Ljava/lang/String;": function (this: JCipher) { return this.transformation; },
   },
@@ -273,8 +307,8 @@ rt.register({
     "update(B)V": function (this: JMac, b: number) { this.parts.push(new Uint8Array([b & 0xff])); },
     "update([B)V": function (this: JMac, b: Int8Array) { this.parts.push(bytes(b)); },
     "update([BII)V": function (this: JMac, b: Int8Array, off: number, len: number) { this.parts.push(bytes(b, off, len)); },
-    "doFinal()[B": function (this: JMac) { return macFinal(this); },
-    "doFinal([B)[B": function (this: JMac, b: Int8Array) { return macFinal(this, b); },
+    "doFinal()[B": async function (this: JMac) { return macFinal(this); },
+    "doFinal([B)[B": async function (this: JMac, b: Int8Array) { return macFinal(this, b); },
     "reset()V": function (this: JMac) { this.parts = []; },
     "getMacLength()I": function (this: JMac) { return this.len; },
     "getAlgorithm()Ljava/lang/String;": function (this: JMac) { return this.algo; },
@@ -288,11 +322,15 @@ rt.register({
 const KS_KEY = "wd:keystore:";
 class JKeyStore extends JObj {
   type = "";
-  entries = new Map<string, JSecretKeySpec>();
+  entries = new Map<string, JSecretKeySpec | JRsaPrivateKey>();
   persist() {
     if (this.type !== "AndroidKeyStore") return;
-    const o: Record<string, [string, string]> = {};
-    for (const [a, k] of this.entries) o[a] = [k.algo, btoa(String.fromCharCode(...k.key))];
+    const o: Record<string, [string, string] | { kind: "rsa"; private: string; public: string; certificate: string }> = {};
+    for (const [a, k] of this.entries) {
+      const encode = (b: Uint8Array) => btoa(String.fromCharCode(...b));
+      if (k instanceof JRsaPrivateKey) o[a] = { kind: "rsa", private: encode(k.encoded), public: encode(k.publicKey.encoded), certificate: encode(k.certificate!.encoded) };
+      else o[a] = [k.algo, encode(k.key)];
+    }
     try { globalThis.localStorage?.setItem(KS_KEY + this.type, JSON.stringify(o)); } catch { /* quota */ }
   }
   load() {
@@ -300,8 +338,14 @@ class JKeyStore extends JObj {
     try {
       const raw = globalThis.localStorage?.getItem(KS_KEY + this.type);
       if (!raw) return;
-      for (const [a, [algo, b64]] of Object.entries(JSON.parse(raw) as Record<string, [string, string]>)) {
-        this.entries.set(a, mkSecretKey(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)), algo));
+      const entries: unknown = JSON.parse(raw);
+      if (entries == null || typeof entries !== "object") return;
+      for (const [a, entry] of Object.entries(entries)) {
+        if (Array.isArray(entry) && entry.length === 2 && entry.every((v) => typeof v === "string")) {
+          this.entries.set(a, mkSecretKey(Uint8Array.from(atob(entry[1]), (c) => c.charCodeAt(0)), entry[0]));
+        } else if (entry && entry.kind === "rsa" && typeof entry.private === "string" && typeof entry.public === "string" && typeof entry.certificate === "string") {
+          this.entries.set(a, restoreRsa(entry.private, entry.public, entry.certificate));
+        }
       }
     } catch { /* corrupt */ }
   }
@@ -348,6 +392,7 @@ rt.register({
       if (!(this as any).loaded) throw notLoaded();
       const k = this.entries.get(a);
       if (!k) return null;
+      if (k instanceof JRsaPrivateKey) { const e = new JPrivateKeyEntry(); e.key = k; return e; }
       const e = new JSecretKeyEntry(); e.key = k; return e;
     },
     "setEntry(Ljava/lang/String;Ljava/security/KeyStore$Entry;Ljava/security/KeyStore$ProtectionParameter;)V": function (this: JKeyStore, a: string, e: JSecretKeyEntry) {
@@ -359,8 +404,14 @@ rt.register({
       this.entries.set(a, k); this.persist();
     },
     "deleteEntry(Ljava/lang/String;)V": function (this: JKeyStore, a: string) { this.entries.delete(a); this.persist(); },
-    "getCertificate(Ljava/lang/String;)Ljava/security/cert/Certificate;": () => null,
-    "getCertificateChain(Ljava/lang/String;)[Ljava/security/cert/Certificate;": () => null,
+    "getCertificate(Ljava/lang/String;)Ljava/security/cert/Certificate;": function (this: JKeyStore, alias: string) {
+      if (!(this as any).loaded) throw notLoaded();
+      const key = this.entries.get(alias); return key instanceof JRsaPrivateKey ? key.certificate : null;
+    },
+    "getCertificateChain(Ljava/lang/String;)[Ljava/security/cert/Certificate;": function (this: JKeyStore, alias: string) {
+      if (!(this as any).loaded) throw notLoaded();
+      const key = this.entries.get(alias); return key instanceof JRsaPrivateKey ? rsaChain(key) : null;
+    },
     "getProvider()Ljava/security/Provider;": () => null,
   },
 });
@@ -405,5 +456,49 @@ rt.register({
       if (this.alias) { const s = storeFor("AndroidKeyStore"); s.entries.set(this.alias, key); s.persist(); }
       return key;
     },
+  },
+});
+
+class JPrivateKeyEntry extends JObj { key: JRsaPrivateKey | null = null; }
+rt.register({
+  name: "java/security/KeyStore$PrivateKeyEntry", ctor: JPrivateKeyEntry, ifaces: ["java/security/KeyStore$Entry"],
+  methods: {
+    "getPrivateKey()Ljava/security/PrivateKey;": function (this: JPrivateKeyEntry) { return this.key; },
+    "getCertificate()Ljava/security/cert/Certificate;": function (this: JPrivateKeyEntry) { return this.key?.certificate ?? null; },
+    "getCertificateChain()[Ljava/security/cert/Certificate;": function (this: JPrivateKeyEntry) { return this.key && rsaChain(this.key); },
+  },
+});
+class JKeyPairGenerator extends JObj { bits = 2048; store = false; spec: JKeyGenSpec | null = null; }
+function keyPairGenerator(algorithm: string, provider: string | null = null) {
+  if (algorithm?.toUpperCase() !== "RSA") throw rt.mkThrowable("java/security/NoSuchAlgorithmException", algorithm);
+  if (provider != null && provider !== "AndroidKeyStore" && provider !== "AndroidOpenSSL" && provider !== "BC") throw rt.mkThrowable("java/security/NoSuchProviderException", provider);
+  const generator = new JKeyPairGenerator(); generator.store = provider === "AndroidKeyStore"; return generator;
+}
+function initializeKeyPair(generator: JKeyPairGenerator, spec: JKeyGenSpec) {
+  if (!(spec instanceof JKeyGenSpec) || !generator.store) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Keystore parameters required");
+  if (spec.strongBox || spec.userAuth || spec.attestation != null || spec.unlockedDeviceRequired) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Hardware-backed keys and user authentication are unavailable");
+  if (spec.keySize !== -1 && (spec.keySize < 512 || spec.keySize > 8192 || spec.keySize % 8)) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Invalid RSA key size");
+  generator.spec = spec; generator.bits = spec.keySize === -1 ? 2048 : spec.keySize;
+}
+async function generateKeyPair(this: JKeyPairGenerator) {
+  if (this.store && !this.spec) throw rt.mkThrowable("java/lang/IllegalStateException", "Not initialized");
+  const pair = await generateRsa(this.bits, this.spec);
+  if (this.spec) { const store = storeFor("AndroidKeyStore"); store.entries.set(this.spec.alias, pair.privateKey); store.persist(); }
+  return pair;
+}
+rt.register({
+  name: "java/security/KeyPairGenerator", ctor: JKeyPairGenerator,
+  methods: {
+    "static getInstance(Ljava/lang/String;)Ljava/security/KeyPairGenerator;": keyPairGenerator,
+    "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/KeyPairGenerator;": keyPairGenerator,
+    "getAlgorithm()Ljava/lang/String;": () => "RSA",
+    "initialize(I)V": function (this: JKeyPairGenerator, bits: number) {
+      if (this.store || bits < 512 || bits > 8192 || bits % 8) throw rt.mkThrowable("java/security/InvalidParameterException", "Invalid RSA key size");
+      this.bits = bits;
+    },
+    "initialize(Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JKeyPairGenerator, spec: JKeyGenSpec) { initializeKeyPair(this, spec); },
+    "initialize(Ljava/security/spec/AlgorithmParameterSpec;Ljava/security/SecureRandom;)V": function (this: JKeyPairGenerator, spec: JKeyGenSpec) { initializeKeyPair(this, spec); },
+    "generateKeyPair()Ljava/security/KeyPair;": generateKeyPair,
+    "genKeyPair()Ljava/security/KeyPair;": generateKeyPair,
   },
 });
