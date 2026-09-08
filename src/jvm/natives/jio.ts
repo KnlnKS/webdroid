@@ -1,6 +1,6 @@
 // java.io.* natives + an in-memory VFS. Nothing persists it; vfs.onWrite is the hook for a host that wants to.
 
-import { rt, JObj, type NativeSpec } from "../runtime";
+import { rt, JObj, maySuspend, type NativeSpec } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray } from "../abi";
 import { vcall, stringHash, mkEnumSet, javaFormat } from "./jlang";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
@@ -844,10 +844,10 @@ rt.register({
     "<init>(Ljava/io/Writer;Z)V": function (this: JPrintWriter, w: unknown, a: number) { this.target = w; this.auto = !!a; },
     "<init>(Ljava/io/OutputStream;)V": async function (this: JPrintWriter, o: unknown) { this.target = await mkOSW(o); },
     "<init>(Ljava/io/OutputStream;Z)V": async function (this: JPrintWriter, o: unknown, a: number) { this.target = await mkOSW(o); this.auto = !!a; },
-    "write(Ljava/lang/String;)V": function (this: JPrintWriter, s: string) {
+    "write(Ljava/lang/String;)V": maySuspend(function (this: JPrintWriter, s: string) {
       if (this.target === null) { this.s += s; return; }
       return vcall(this.target, "write", "(Ljava/lang/String;)V", s);
-    },
+    }),
     ...printMethods(pw, "java/io/PrintWriter"),
     "flush()V": function (this: JPrintWriter) { return this.target === null ? undefined : vcall(this.target, "flush", "()V"); },
     "close()V": function (this: JPrintWriter) { return this.target === null ? undefined : vcall(this.target, "close", "()V"); },

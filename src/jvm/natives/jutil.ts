@@ -1877,7 +1877,7 @@ rt.register({
       if (o === null) throw rt.mkThrowable("java/lang/NullPointerException", m);
       return o;
     },
-    "static toString(Ljava/lang/Object;)Ljava/lang/String;": (o: unknown) => (o === null ? "null" : vcall(o, "toString", "()Ljava/lang/String;")),
+    "static toString(Ljava/lang/Object;)Ljava/lang/String;": maySuspend((o: unknown) => (o === null ? "null" : vcall(o, "toString", "()Ljava/lang/String;"))),
     "static isNull(Ljava/lang/Object;)Z": (o: unknown) => (o === null ? 1 : 0),
     "static nonNull(Ljava/lang/Object;)Z": (o: unknown) => (o !== null ? 1 : 0),
   },

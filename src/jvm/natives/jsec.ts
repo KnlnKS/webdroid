@@ -217,7 +217,7 @@ rt.register({
   },
 });
 
-const doPrivileged = (a: unknown) => vcall(a, "run", "()Ljava/lang/Object;");
+const doPrivileged = async (a: unknown) => vcall(a, "run", "()Ljava/lang/Object;");
 rt.register({ name: "java/security/PrivilegedAction", ctor: class extends JObj {} });
 rt.register({ name: "java/security/PrivilegedExceptionAction", ctor: class extends JObj {} });
 rt.register({

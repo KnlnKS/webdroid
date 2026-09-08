@@ -1426,7 +1426,7 @@ const vgMethods: NativeSpec["methods"] = {
     }
     return cur;
   },
-  "addView(Landroid/view/View;)V": function (this: JViewGroup, c: JView) {
+  "addView(Landroid/view/View;)V": async function (this: JViewGroup, c: JView) {
     return addViewFunnel(this, c, -1, null);
   },
   "addView(Landroid/view/View;I)V": function (this: JViewGroup, c: JView, i: number) {

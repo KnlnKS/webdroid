@@ -1175,6 +1175,17 @@ seconds. `memchr` disappeared from sampled hotspots and the longest browser task
 The different stopping points make these work-completion measurements, not an end-to-end
 startup speedup claim.
 
+## Lichess: declared native suspension
+
+`WEBDROID_URL=http://localhost:4090 bun run natcheck lichess.apk` initially reached 17 native
+entries returning undeclared promises. Lifecycle, view, database, class-loading, writer,
+security and concurrency wrappers now declare their suspension. Map insertion retains its
+synchronous primitive-key path: `maySuspend(fn)` records conditional suspension without wrapping
+the function, and both the oracle and audit consult that declaration. Tests cover immediate
+map returns, custom Java equality, oracle classification and continued detection of unmarked
+promises. The same Lichess startup scan then reported zero undeclared promises. This is reached
+startup coverage only; the experimental sync tier remains opt-in.
+
 ## Among Us: Practice and code-cache pressure
 
 Validated on 2026-09-07: `PORT=4197 bun run dev`, then open

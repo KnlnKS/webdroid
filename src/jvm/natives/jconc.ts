@@ -191,7 +191,7 @@ rt.register({
   name: "webdroid/Future", ctor: JFuture,
   ifaces: ["java/util/concurrent/Future", "java/util/concurrent/ScheduledFuture"],
   methods: {
-    "get()Ljava/lang/Object;": function (this: JFuture) { return futureGet(this); },
+    "get()Ljava/lang/Object;": async function (this: JFuture) { return futureGet(this); },
     "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JFuture, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); },
     "isDone()Z": function (this: JFuture) { return this.done; },
     "isCancelled()Z": function (this: JFuture) { return this.cancelled; },
@@ -710,8 +710,8 @@ rt.register({
   methods: {
     "static park()V": () => parkFor(10),
     "static park(Ljava/lang/Object;)V": () => parkFor(10),
-    "static parkNanos(J)V": (n: bigint) => parkFor(Math.min(50, Number(n) / 1e6)),
-    "static parkNanos(Ljava/lang/Object;J)V": (b: unknown, n: bigint) => parkFor(Math.min(50, Number(n) / 1e6)),
+    "static parkNanos(J)V": async (n: bigint) => parkFor(Math.min(50, Number(n) / 1e6)),
+    "static parkNanos(Ljava/lang/Object;J)V": async (b: unknown, n: bigint) => parkFor(Math.min(50, Number(n) / 1e6)),
     "static unpark(Ljava/lang/Thread;)V": () => {},
   },
 });

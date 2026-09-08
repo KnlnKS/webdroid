@@ -7,7 +7,7 @@ import {
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { reportUncaught, JBundle, PARCELABLE } from "./os";
-import { type NativeSpec, rt, callSelf, JObj } from "../jvm/runtime";
+import { type NativeSpec, rt, callSelf, JObj, maySuspend } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, attachView, findById, dispatchConfigurationChanged, invalidate } from "./view";
@@ -124,9 +124,9 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "onCreate(Landroid/os/Bundle;)V": function () {},
   "onPostCreate(Landroid/os/Bundle;)V": function () {},
-  "onStart()V": function (this: JActivity) { this.started = true; return dispatchFragLifecycle(this, "onStart"); },
+  "onStart()V": async function (this: JActivity) { this.started = true; return dispatchFragLifecycle(this, "onStart"); },
   "onRestart()V": function () {},
-  "onResume()V": function (this: JActivity) { this.resumed = true; return dispatchFragLifecycle(this, "onResume"); },
+  "onResume()V": async function (this: JActivity) { this.resumed = true; return dispatchFragLifecycle(this, "onResume"); },
   "onPostResume()V": function () {},
   "onPause()V": function (this: JActivity) { this.resumed = false; return dispatchFragLifecycle(this, "onPause"); },
   "onStop()V": function (this: JActivity) { this.started = false; return dispatchFragLifecycle(this, "onStop"); },
@@ -150,12 +150,12 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "onPrepareOptionsMenu(Landroid/view/Menu;)Z": () => 1,
   // Android routes the options panel through onCreatePanelMenu/onPreparePanel/onMenuItemSelected;
   // apps (and androidx) override those, so the panel entry points must exist and delegate.
-  "onCreatePanelMenu(ILandroid/view/Menu;)Z": function (this: JActivity, f: number, menu: JMenu) {
+  "onCreatePanelMenu(ILandroid/view/Menu;)Z": maySuspend(function (this: JActivity, f: number, menu: JMenu) {
     return f === 0 ? vcall(this, "onCreateOptionsMenu", "(Landroid/view/Menu;)Z", menu) : 1;
-  },
-  "onPreparePanel(ILandroid/view/View;Landroid/view/Menu;)Z": function (this: JActivity, f: number, _v: unknown, menu: JMenu) {
+  }),
+  "onPreparePanel(ILandroid/view/View;Landroid/view/Menu;)Z": maySuspend(function (this: JActivity, f: number, _v: unknown, menu: JMenu) {
     return f === 0 ? vcall(this, "onPrepareOptionsMenu", "(Landroid/view/Menu;)Z", menu) : 1;
-  },
+  }),
   "onMenuItemSelected(ILandroid/view/MenuItem;)Z": async function (this: JActivity, f: number, item: JMenuItem) {
     if (f !== 0) return 0;
     if (await vcall(this, "onOptionsItemSelected", "(Landroid/view/MenuItem;)Z", item)) return 1;
@@ -604,7 +604,7 @@ for (const [name, methods, statics] of [
   ["android/hardware/display/DisplayManager", {
     // one fixed built-in display: unknown ids are null as in AOSP, and registered listeners
     // never fire because no display is ever added, removed or reconfigured here
-    "getDisplay(I)Landroid/view/Display;": (id: number) => (id === 0 ? display() : null),
+    "getDisplay(I)Landroid/view/Display;": maySuspend((id: number) => (id === 0 ? display() : null)),
     "getDisplays()[Landroid/view/Display;": () => jarray([display()], "Landroid/view/Display;"),
     "getDisplays(Ljava/lang/String;)[Landroid/view/Display;": (cat: string | null) => jarray(cat === null ? [display()] : [], "Landroid/view/Display;"),
     "registerDisplayListener(Landroid/hardware/display/DisplayManager$DisplayListener;Landroid/os/Handler;)V": (l: unknown) => {

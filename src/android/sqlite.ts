@@ -513,7 +513,7 @@ rt.register({
         this.name = name;
         this.version = version;
       },
-    "getWritableDatabase()Landroid/database/sqlite/SQLiteDatabase;": function (this: JSQLiteOpenHelper) {
+    "getWritableDatabase()Landroid/database/sqlite/SQLiteDatabase;": async function (this: JSQLiteOpenHelper) {
       return openHelperDb(this);
     },
     "getReadableDatabase()Landroid/database/sqlite/SQLiteDatabase;": function (this: JSQLiteOpenHelper) {

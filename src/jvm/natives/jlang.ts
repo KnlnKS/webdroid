@@ -265,7 +265,7 @@ rt.register({
     "<init>()V": function (this: JClassLoader) { this.parent = bootLoader; },
     "<init>(Ljava/lang/ClassLoader;)V": function (this: JClassLoader, parent: JClassLoader | null) { this.parent = parent; },
     "getParent()Ljava/lang/ClassLoader;": function (this: JClassLoader) { return this.parent; },
-    "loadClass(Ljava/lang/String;)Ljava/lang/Class;": function (this: JClassLoader, n: string) {
+    "loadClass(Ljava/lang/String;)Ljava/lang/Class;": async function (this: JClassLoader, n: string) {
       return vcall(this, "loadClass", "(Ljava/lang/String;Z)Ljava/lang/Class;", n, 0);
     },
     "loadClass(Ljava/lang/String;Z)Ljava/lang/Class;": loadClass,

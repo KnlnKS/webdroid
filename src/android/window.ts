@@ -200,7 +200,7 @@ class JWindowMetrics extends JObj {}
 rt.register({
   name: "android/view/WindowMetrics", ctor: JWindowMetrics,
   methods: {
-    "getBounds()Landroid/graphics/Rect;": () => newObj("android/graphics/Rect", "(IIII)V", 0, 0, device.width, device.height - device.statusBar),
+    "getBounds()Landroid/graphics/Rect;": async () => newObj("android/graphics/Rect", "(IIII)V", 0, 0, device.width, device.height - device.statusBar),
     "getDensity()F": () => 2,
     "getWindowInsets()Landroid/view/WindowInsets;": () => rootWindowInsets(),
   },
