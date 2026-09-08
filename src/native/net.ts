@@ -11,7 +11,7 @@ const AF_UNSPEC = 0, AF_INET = 2, SOCK_STREAM = 1, SOCK_DGRAM = 2, IPPROTO_TCP =
 const SOCK_NONBLOCK = 0x800, SOCK_CLOEXEC = 0x80000;
 const F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4;
 const O_RDWR = 2, O_NONBLOCK = 0x800;
-const SOL_SOCKET = 1, SO_ERROR = 4;
+const SOL_SOCKET = 1, SO_TYPE = 3, SO_ERROR = 4;
 const POLLIN = 1, POLLPRI = 2, POLLOUT = 4, POLLERR = 8, POLLHUP = 16, POLLNVAL = 32;
 const AI_PASSIVE = 1, AI_CANONNAME = 2, AI_NUMERICHOST = 4, AI_NUMERICSERV = 8, AI_ADDRCONFIG = 0x400;
 const EAI_ADDRFAMILY = 1, EAI_BADFLAGS = 3, EAI_FAMILY = 5, EAI_NONAME = 8;
@@ -581,9 +581,13 @@ export function nativeGetsockopt(cpu: Cpu, fd: number, level: number, option: nu
   if (!descriptor) return -1;
   const socket = descriptor.socket;
   if (!value || !length || mem.ld32(length) < 4) return fail(cpu, E.FAULT);
-  if (level !== SOL_SOCKET || option !== SO_ERROR) { mem.st32(value, 0); mem.st32(length, 4); return 0; }
-  mem.st32(value, socket.error);
-  socket.error = 0;
+  let result = 0;
+  if (level === SOL_SOCKET && option === SO_TYPE) result = socket.kind === "datagram" ? SOCK_DGRAM : SOCK_STREAM;
+  else if (level === SOL_SOCKET && option === SO_ERROR) {
+    result = socket.error;
+    socket.error = 0;
+  }
+  mem.st32(value, result);
   mem.st32(length, 4);
   return 0;
 }

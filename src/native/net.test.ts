@@ -330,6 +330,18 @@ test("failed connect is reported through poll and SO_ERROR", async () => {
   nativeFreeaddrinfo(root);
 });
 
+test("SO_TYPE reports the socket kind", () => {
+  const value = mem.hostAlloc(4), length = mem.hostAlloc(4);
+  for (const [type, protocol] of [[1, 6], [2, 17]]) {
+    const fd = nativeSocket(cpu, 2, type, protocol);
+    mem.st32(length, 4);
+    expect(nativeGetsockopt(cpu, fd, 1, 3, value, length)).toBe(0);
+    expect(mem.ld32(value)).toBe(type);
+    expect(mem.ld32(length)).toBe(4);
+    nativeSocketClose(cpu, fd);
+  }
+});
+
 test("duplicated socket descriptors keep the relay until the last close", async () => {
   installFakeTransport();
   const { root, sockaddr } = resolvedAddress("services.example", "443");
