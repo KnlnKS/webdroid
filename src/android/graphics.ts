@@ -915,6 +915,7 @@ export class JBitmap extends JObj {
   }
   /** a written region reaches the raster too, once there is one */
   commit(x: number, y: number, w: number, h: number): void {
+    this.genId++;
     const cx = this.cx, px = this.px;
     if (!cx || !px) return;
     let buf = px;
@@ -923,7 +924,6 @@ export class JBitmap extends JObj {
       for (let r = 0; r < h; r++) buf.set(px.subarray(((y + r) * this.w + x) * 4, ((y + r) * this.w + x + w) * 4), r * w * 4);
     }
     cx.putImageData(new ImageData(buf, w, h), x, y);
-    this.genId++;
   }
 
   static create(w: number, h: number): JBitmap {

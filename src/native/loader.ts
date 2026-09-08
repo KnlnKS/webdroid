@@ -8,6 +8,7 @@ import { gles1Init } from "./gles1";
 import { gles3Init } from "./gles3";
 import { eglInit } from "./egl";
 import { ndkInit } from "./libandroid";
+import { bitmapInit } from "./bitmap";
 import { cpuFor, setA64 } from "./cpu";
 
 let inited = false;
@@ -21,6 +22,7 @@ function nativeInit(): void {
   gles3Init();
   eglInit();
   ndkInit();
+  bitmapInit();
   resolveByExport(resolveGlobalOrNull);
 }
 
