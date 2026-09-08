@@ -250,6 +250,7 @@ const contextMethods: NativeSpec["methods"] = {
     (this as any).ownTheme = t;
   },
   "getPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
+  "getAttributionTag()Ljava/lang/String;": () => null,
   // only this package is installed, so its own name is the one context that exists; AOSP
   // throws NameNotFoundException for anything else (callers handle it — it is how they
   // discover an optional dependency is absent)
