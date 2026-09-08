@@ -289,6 +289,7 @@ rt.register({
     "static getStartElapsedRealtime()J": () => 0n,
     "static getElapsedCpuTime()J": () => BigInt(Math.round(performance.now())),
     "static isIsolated()Z": () => 0,
+    "static isSdkSandbox()Z": () => 0,
     "static myTid()I": () => 1000,
     "static myUid()I": () => 10001,
     "static getThreadPriority(I)I": () => 0,
