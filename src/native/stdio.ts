@@ -84,6 +84,13 @@ function accessPath(cpu: Cpu, path: string, mode: number): number {
   const p = vfs.norm(path);
   return vfs.exists(p) || vfs.isDir(p) || synth(p) !== null || p === "/dev/urandom" || p === "/dev/random" ? 0 : fail(cpu, E.NOENT);
 }
+function mkdirPath(cpu: Cpu, path: string): number {
+  const p = vfs.norm(path);
+  if (vfs.exists(p) || vfs.isDir(p)) return fail(cpu, E.EXIST);
+  const parent = p.slice(0, p.lastIndexOf("/")) || "/";
+  if (parent !== "/" && !vfs.isDir(parent)) return fail(cpu, E.NOENT);
+  vfs.mkdir(p); return 0;
+}
 function fdOpen(cpu: Cpu, path: string, flags: number): number {
   path = vfs.norm(path);
   const acc = flags & O_ACCMODE;
@@ -436,7 +443,8 @@ export function stdioInit(): void {
     unlink: (cpu, a) => (vfs.delete(a.str()) ? 0 : fail(cpu, E.NOENT)),
     remove: (cpu, a) => { const p = vfs.norm(a.str()); if (vfs.isDir(p)) return vfs.list(p).length ? fail(cpu, E.NOTEMPTY) : 0; return vfs.delete(p) ? 0 : fail(cpu, E.NOENT); },
     rename: (cpu, a) => { const from = vfs.norm(a.str()), to = vfs.norm(a.str()); const d = vfs.read(from); if (!d) return fail(cpu, E.NOENT); vfs.write(to, d); vfs.delete(from); return 0; },
-    mkdir: (cpu, a) => { const p = vfs.norm(a.str()); if (vfs.exists(p) || vfs.isDir(p)) return fail(cpu, E.EXIST); const parent = p.slice(0, p.lastIndexOf("/")) || "/"; if (parent !== "/" && !vfs.isDir(parent)) return fail(cpu, E.NOENT); vfs.mkdir(p); return 0; },
+    mkdir: (cpu, a) => mkdirPath(cpu, a.str()),
+    mkdirat: (cpu, a) => { const path = atPath(cpu, a.i(), a.str()); return typeof path === "string" ? mkdirPath(cpu, path) : path; },
     rmdir: (cpu, a) => { const p = vfs.norm(a.str()); if (!vfs.isDir(p)) return fail(cpu, E.NOTDIR); if (vfs.list(p).length) return fail(cpu, E.NOTEMPTY); vfs.rmdir(p); return 0; },
     ftruncate: (cpu, a) => { const f = fds.get(a.i()); const n = offArg(a); if (!f) return fail(cpu, E.BADF); grow(f, n); if (n > f.len) f.data.fill(0, f.len, n); f.len = n; f.dirty = true; return 0; },
     ftruncate64: (cpu, a) => { const f = fds.get(a.i()); const n = Number(a.l()); if (!f) return fail(cpu, E.BADF); grow(f, n); if (n > f.len) f.data.fill(0, f.len, n); f.len = n; f.dirty = true; return 0; },

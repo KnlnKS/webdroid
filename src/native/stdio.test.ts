@@ -68,12 +68,17 @@ test("socketpair status flags and aliases follow fd semantics", async () => {
 });
 
 
-test("fortified openat resolves paths from an open directory", async () => {
+test("directory-relative file operations resolve an open directory", async () => {
   vfs.mkdir("/data/openat-test");
   vfs.write("/data/openat-test/value", Uint8Array.of(42));
   const open = lookupHost("open", "libc.so")!, openat = lookupHost("__openat_2", "libc.so")!;
   const close = lookupHost("close", "libc.so")!, read = lookupHost("read", "libc.so")!;
   const dir = await cpu.call(open, [mem.hostStr("/data/openat-test"), 0x4000]);
+  const mkdir = lookupHost("mkdirat", "libc.so")!;
+  expect(await cpu.call(mkdir, [dir, mem.hostStr("child"), 0o700])).toBe(0);
+  expect(vfs.isDir("/data/openat-test/child")).toBe(true);
+  expect(await cpu.call(mkdir, [dir, mem.hostStr("child"), 0o700])).toBe(-1);
+  expect(mem.ld32(cpu.errnoAddr)).toBe(17);
   const fd = await cpu.call(openat, [dir, mem.hostStr("value"), 0]);
   const access = lookupHost("faccessat", "libc.so")!;
   expect(await cpu.call(access, [dir, mem.hostStr("value"), 4, 0])).toBe(0);
