@@ -1547,3 +1547,27 @@ are cached by the browser and bounded RangeFile cache. Lichess boot was 11,256 m
 an earlier 11,484 ms run, but that was not a controlled performance comparison. The
 lazy mount avoids charging the body transfer to applications that never open this
 native fallback; it does not reduce bytes when the font is used.
+
+
+## Android trust store restores Lichess native TLS (2026-09-08)
+
+The native socket trace reached connect completion, then fstatat64 on
+`/system/etc/security/cacerts` failed with ENOENT. Dart's
+[Android security context](https://raw.githubusercontent.com/dart-lang/sdk/main/runtime/bin/security_context_linux.cc)
+always loads that directory; [LoadRootCertCache](https://raw.githubusercontent.com/dart-lang/sdk/main/runtime/bin/security_context.cc)
+throws before the handshake if it is absent. The earlier Cronet DNS configuration
+warning and the missing VALIDATED network capability were not this failure.
+
+The shell now mounts 149 genuine AOSP certificates from pinned revision
+45c7f199cb11b08f6d1ae2b75da25e53140a0c7d. The source provenance and upstream licensing
+metadata accompany the asset. The unchanged PEM blocks occupy 222,448 bytes in one
+file; a generated filename/length index mounts slices without an initial fetch or
+HEAD request. Reads share a bounded 256 KiB range cache.
+
+A clean Lichess run now sends real TLS ClientHello, verifies the server chain,
+finishes the handshake and exchanges encrypted HTTP/WebSocket data through the TCP
+relay. Requests reach image, API and WebSocket hosts; the network warning disappears.
+No verification callback or hostname exception is installed. Native missing APIs
+remain empty, with only the optional AndroidX Sidecar class reported by Java.
+Typecheck and the asset test pass (451 assertions covering every certificate,
+manifest boundaries, the pinned digest and lazy mounting).

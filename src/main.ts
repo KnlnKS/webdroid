@@ -2,6 +2,7 @@
 
 import "./natives";
 import { RangeFile } from "./shell/lazyfile";
+import { mountSystemCertificates } from "./shell/cacerts";
 
 import { JRenderNode, SYSTEM_FONT } from "./android/graphics";
 import { setGL } from "./android/gl";
@@ -402,6 +403,8 @@ kbd.addEventListener("input", () => void editInput(kbd.value));
 kbd.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { void fireEditorAction(); }
 });
+
+mountSystemCertificates();
 
 const fontsReady = Promise.all([Promise.all([
   ["Roboto", "Roboto-Regular.ttf", "400", "normal"], ["Roboto Medium", "Roboto-Medium.ttf", "500", "normal"],
