@@ -38,8 +38,28 @@ test("ContentResolver opens the APK through Mihon's bundled FileProvider", async
       expect(await readStreamFully(stream)).toEqual(bytes);
       await vcall(stream, "close", "()V");
     }
+    const cursor = await vcall(resolver, "query", "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;", uri, null, null, null, null);
+    expect(await vcall(cursor, "moveToFirst", "()Z")).toBe(1);
+    expect(await vcall(cursor, "getString", "(I)Ljava/lang/String;", 0)).toBe("provider-test.apk");
+    expect(await vcall(cursor, "getLong", "(I)J", 1)).toBe(BigInt(bytes.length));
+    expect(await vcall(cursor, "getType", "(I)I", 1)).toBe(1);
+    await vcall(cursor, "close", "()V");
     await expect(open(mkUri("content://app.mihon.provider/cache_files/../private.apk"))).rejects.toBeDefined();
     await expect(open(mkUri("content://absent.provider/file"))).rejects.toBeDefined();
     await expect(open(mkUri("content://app.mihon.provider/cache_files/missing.apk"))).rejects.toBeDefined();
   } finally { vfs.delete(path); setAppHost(previous); }
 }, 15000);
+
+
+test("MatrixCursor copies added rows and rejects a mismatched column count", async () => {
+  const cursor = await newObj("android/database/MatrixCursor", "([Ljava/lang/String;)V", ["value"]);
+  const row = ["original"];
+  await vcall(cursor, "addRow", "([Ljava/lang/Object;)V", row);
+  row[0] = "changed";
+  await expect(vcall(cursor, "addRow", "([Ljava/lang/Object;)V", [])).rejects.toBeDefined();
+  expect(await vcall(cursor, "getCount", "()I")).toBe(1);
+  await vcall(cursor, "moveToFirst", "()Z");
+  expect(await vcall(cursor, "getString", "(I)Ljava/lang/String;", 0)).toBe("original");
+  await vcall(cursor, "close", "()V");
+  expect(await vcall(cursor, "isClosed", "()Z")).toBe(1);
+});

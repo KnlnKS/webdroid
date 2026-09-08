@@ -201,7 +201,7 @@ class JCursor extends JObj {
     if (i < 0) i = this.cols.findIndex((c) => c.toLowerCase() === name?.toLowerCase());
     return i;
   }
-  val(i: number): unknown { return this.rows[this.pos]?.[i] ?? null; }
+  val(i: number): unknown { return unbox(this.rows[this.pos]?.[i] ?? null); }
 }
 /** a cursor over rows already in hand — the one Cursor implementation in the tree */
 export function mkCursor(cols: string[], rows: unknown[][]): JCursor {
@@ -282,6 +282,7 @@ const cursorMethods: NativeSpec["methods"] = {
   "getType(I)I": function (this: JCursor, i: number) {
     const v = this.val(i);
     if (v === null) return 0;
+    if (typeof v === "bigint") return 1;
     if (typeof v === "number") return Number.isInteger(v) ? 1 : 2;
     if (typeof v === "string") return 3;
     return 4;
@@ -302,6 +303,15 @@ const cursorMethods: NativeSpec["methods"] = {
 };
 rt.register({ name: "android/database/Cursor", ctor: class extends JObj {} });
 rt.register({ name: "webdroid/Cursor", ctor: JCursor, ifaces: ["android/database/Cursor", "java/io/Closeable"], methods: cursorMethods });
+rt.register({ name: "android/database/MatrixCursor", ctor: class extends JCursor {}, ifaces: ["android/database/Cursor", "java/io/Closeable"], methods: {
+  ...cursorMethods,
+  "<init>([Ljava/lang/String;)V": function (this: JCursor, cols: string[]) { this.cols = cols; },
+  "<init>([Ljava/lang/String;I)V": function (this: JCursor, cols: string[]) { this.cols = cols; },
+  "addRow([Ljava/lang/Object;)V": function (this: JCursor, row: unknown[]) {
+    if (row.length !== this.cols.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "columnNames.length != columnValues.length");
+    this.rows.push(row.slice());
+  },
+} });
 
 class JContentValues extends JObj {
   map = new Map<string, unknown>();
