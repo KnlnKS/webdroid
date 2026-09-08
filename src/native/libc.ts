@@ -257,8 +257,8 @@ export function libcInit(): void {
       if (fd !== -1 && !(flags & 0x20) && (flags & 0x1) && (prot & 2)) return failed(E.NOSYS);
       const reserve = (flags & 0x20) !== 0 && prot === 0;
       const p = flags & 0x10 ? hint : mem.mapVa(n, reserve);
-      if (!p || (flags & 0x10 && !mem.commitVa(hint, n))) return failed(E.NOMEM);
-      if (flags & 0x10) { invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); if (reserve) mem.decommitVa(hint, n); }
+      if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return failed(E.NOMEM);
+      if (flags & 0x10 && !reserve) { invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
       if (fd !== -1 && !(flags & 0x20)) { const r = readInto(cpu, fd, off, typeof p === "bigint" ? mem.txVa(p) : p, n); return r instanceof Promise ? r.then(() => p) : p; }
       return p;
     },

@@ -316,6 +316,25 @@ export const mem = {
     }
     return true;
   },
+  reserveVa(va: bigint, n: number): boolean {
+    const ranges: [bigint, number][] = [];
+    while (n > 0) {
+      const [h, lo] = split(va), size = Math.min(n, 0x100000000 - lo);
+      if (!h) {
+        if (lo < ARENA_BASE || lo + size > (poolBase || moduleBot)) return false;
+        for (let p = pageOf(lo); p < pageOf(lo + size + PAGE_SIZE - 1); p++) if (pages[p] === FREE) return false;
+      } else if (h >= PLANES || lo < L[h] || lo - L[h] + size > R[h]) return false;
+      ranges.push([va, size]); n -= size; va += BigInt(size);
+    }
+    for (const [addr, size] of ranges) {
+      const [h, lo] = split(addr), off = lo - L[h];
+      const start = h ? P[h] + off : lo, end = h ? start + Math.max(0, Math.min(size, S[h] - off)) : lo + size;
+      for (let p = pageOf(start); p < pageOf(end + PAGE_SIZE - 1); p++) if (codePages[p]) mem.onCodeWrite(p * PAGE_SIZE);
+      if (h) mem.dropVa(addr, size);
+      mem.decommitVa(addr, size);
+    }
+    return true;
+  },
   commitVa(va: bigint, n: number): boolean {
     const [h, lo] = split(va);
     if (!h) return mem.commitPages(lo, n);

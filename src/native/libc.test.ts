@@ -27,6 +27,9 @@ test("LP64 reservations span address planes and MAP_FIXED commits their aligned 
   const munmap = lookupHost("munmap", "libc.so")!;
   if (aligned !== base) expect(await cpu.call(munmap, [base, aligned - base])).toBe(0);
   expect(await cpu.call(munmap, [aligned + 0x100000000n, base + 0x1fffff000n - aligned - 0x100000000n])).toBe(0);
+  const chunks = mem.stats().chunks;
+  expect(await cpu.call(mmap, [aligned, 0x100000000n, 0, 0x32, -1, 0])).toBe(Number(aligned & 0xffffffffn));
+  expect(mem.stats().chunks).toBe(chunks);
   expect(await cpu.call(mmap, [aligned, 0x80000, 3, 0x32, -1, 0])).toBe(Number(aligned & 0xffffffffn));
   expect(cpu.ret1 >>> 0).toBe(Number(aligned >> 32n));
   let mapped = mem.txVa(aligned);
