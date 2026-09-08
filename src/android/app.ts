@@ -7,7 +7,7 @@ import { vcall, javaFormat, newObj } from "../jvm/natives/jlang";
 import { newArrayList, newLinkedHashSet, mkIter, type JList } from "../jvm/natives/jutil";
 import { vfs, mkFile, JFile, apkPath } from "../jvm/natives/jio";
 const privDir = (p: string): JFile => { vfs.mkdir(p); return mkFile(p); };
-import { type Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, rvColor, rvDimen, rvInt, rvString, resString, themeOf, themeByName } from "./res";
+import { type Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, rvColor, rvDimen, rvInt, rvString, resString, themeOf, themeByName, normRV } from "./res";
 import { JResources, JAssetManager, mkAssetFd } from "./resnative";
 import { signatures, JActivityInfo, JInfoFlags } from "./pm";
 import { mkUri, type JUri } from "./net";
@@ -772,9 +772,22 @@ function metaData(node: XmlNode | null | undefined): JBundle {
     // android:resource stays the id; android:value is read through the app's resources, as
     // PackageParser reads it — "@string/app_id" is the string, not its id
     const rsrc = attr(md, "resource");
-    const v = attr(md, "value") ?? rsrc;
-    const str = !rsrc && v && appHost && v.type === TV.REFERENCE ? rvString(appHost.res, { t: v.type, d: v.data }) : v?.str ?? null;
-    b.map.set(k, !v ? null : str !== null ? str : v.type === TV.BOOLEAN ? (v.data ? 1 : 0) : v.data);
+    const raw = attr(md, "value") ?? rsrc;
+    if (!raw) {
+      b.map.set(k, null);
+      continue;
+    }
+    // PackageParser's TypedArray.peekValue resolves android:value references before choosing
+    // the Bundle setter. Preserve that resolved type: @integer is an int, not its string
+    // rendering. android:resource is deliberately different and stores the resource id.
+    if (rsrc) {
+      b.map.set(k, raw.data);
+      continue;
+    }
+    const direct = normRV({ t: raw.type, d: raw.data, s: raw.str ?? undefined });
+    const v = direct.t === TV.REFERENCE && appHost ? appHost.res.resolveRefs(direct) : direct;
+    const value = v.t === TV.STRING ? v.s ?? null : v.t === TV.BOOLEAN ? (v.d ? 1 : 0) : v.d;
+    b.map.set(k, value);
   }
   return b;
 }
