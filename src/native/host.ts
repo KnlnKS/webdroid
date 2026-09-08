@@ -156,8 +156,11 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
       let s0 = "";
       if (STR0.has(nm) && r[0]) { try { s0 = ` "${mem.cstr(r[0] >>> 0, 120)}"`; } catch { s0 = " <bad ptr>"; } }
       // a reservation's caller is two frames up (the mmap wrapper keeps its lr at sp+0x10)
-      const lr2 = nm === "mmap" && cpu.a64 ? ` lr2=${(mem.ld32((r[31] >>> 0) + 0x10) >>> 0).toString(16)}` : "";
-      const entry = `${cpu.name}:${nm}(${(r[0] >>> 0).toString(16)},${(r[1] >>> 0).toString(16)},${(r[2] >>> 0).toString(16)},${(r[3] >>> 0).toString(16)})${s0} lr=${(r[cpu.lrx] >>> 0).toString(16)}${lr2}`;
+      const args = Array.from({ length: cpu.a64 ? 8 : 4 }, (_, i) => {
+        const lo = (r[i] >>> 0).toString(16);
+        return cpu.a64 && cpu.h[i] ? (cpu.h[i] >>> 0).toString(16) + "_" + lo.padStart(8, "0") : lo;
+      }).join(",");
+      const entry = `${cpu.name}:${nm}(${args})${s0} lr=${(r[cpu.lrx] >>> 0).toString(16)}`;
       // a spin loop's repeats add nothing: keep the first pass through a short cycle
       if (hostTrace.ring.slice(-4).some((e) => e.startsWith(entry))) traced = false;
       else hostTrace.ring.push(entry);
