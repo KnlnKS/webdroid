@@ -1916,8 +1916,24 @@ Read/write locks use stable typed handles, per-thread hold counts, reentrant wri
 and parked contention instead of fresh no-op handles. Native image decoding then reached
 Matrix.setPolyToPoly: the existing affine solver is shared with the framework delegate and
 accepts four-point affine mappings after checking the remaining corner. True perspective
-still fails without mutating the matrix. The reached reader has no missing APIs; reopen
-logged two tile decode failures while still rendering its resumed page, under investigation.
+still fails without mutating the matrix. Confirmed taps now reach the registered gesture
+listener on main; the reader toolbar and wide-page panning respond to clicks.
+
+Two separate issues surfaced in image decoding. AsyncTask ignored its executor and overlapped
+background native calls under main-thread identity. It now uses actual executor workers with
+main-queue lifecycle callbacks; each worker runs one task through completion. A native test
+with real Java worker threads decoded overlapping tiles successfully, including recycle during
+an in-flight decode. Cancellation of an already recycled decoder throws the app's expected
+exception and does not explain the observed null bitmaps.
+
+The live fifth page exposed a second failure: an intact 394,524-byte PNG decoded in Chrome
+but returned null through the bundled native decoder. Native inflate consumed the final IDAT
+input while retaining about 95 rows internally; libpng reached IEND after only 1,676,960 of
+the required 1,784,000 filtered bytes. Input consumption now waits for its buffered output to
+drain. The exact PNG completes with Z_STREAM_END and a non-null 1114×1600 bitmap. A focused
+scanline-reader regression also verifies total input/output counts and zero-output behavior.
+Six repeated decodes pass, and all 7,129,600 full-size RGBA bytes match Chrome's decoder.
+The live reader now displays pages 5 and 6 with no decoder errors or reached missing APIs.
 
 Chrome automation immediately canceled its native directory chooser despite visible focus
 and live user activation. Native computer clicks also failed with no available window. The
