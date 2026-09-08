@@ -39,25 +39,35 @@ rt.register({
   },
 });
 
-class JLocale extends JObj { lang = "en"; country = "US"; }
+class JLocale extends JObj { lang = ""; country = ""; script = ""; variant = ""; }
 /** the one locale the device speaks; also the default */
-export const usLocale = new JLocale();
+export const usLocale = Object.assign(new JLocale(), { lang: "en", country: "US" });
 rt.register({
   name: "java/util/Locale", ctor: JLocale,
-  statics: { US: usLocale, ENGLISH: usLocale, ROOT: new JLocale() },
+  statics: { US: usLocale, ENGLISH: Object.assign(new JLocale(), { lang: "en" }), ROOT: new JLocale() },
   methods: {
-    "<init>(Ljava/lang/String;)V": function (this: JLocale, l: string) { this.lang = l; },
-    "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JLocale, l: string, c: string) { this.lang = l; this.country = c; },
+    "<init>(Ljava/lang/String;)V": function (this: JLocale, l: string) { this.lang = l.toLowerCase(); },
+    "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JLocale, l: string, c: string) { this.lang = l.toLowerCase(); this.country = c.toUpperCase(); },
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JLocale, l: string, c: string, v: string) { this.lang = l.toLowerCase(); this.country = c.toUpperCase(); this.variant = v; },
     "static getDefault()Ljava/util/Locale;": () => usLocale,
     "static setDefault(Ljava/util/Locale;)V": () => {},
     "getLanguage()Ljava/lang/String;": function (this: JLocale) { return this.lang; },
     "getCountry()Ljava/lang/String;": function (this: JLocale) { return this.country; },
-    "toString()Ljava/lang/String;": function (this: JLocale) { return this.lang + "_" + this.country; },
-    "toLanguageTag()Ljava/lang/String;": function (this: JLocale) { return this.lang + "-" + this.country; },
+    "getScript()Ljava/lang/String;": function (this: JLocale) { return this.script; },
+    "getVariant()Ljava/lang/String;": function (this: JLocale) { return this.variant; },
+    "toString()Ljava/lang/String;": function (this: JLocale) {
+      return this.lang + (this.country || this.variant || this.script ? "_" + this.country : "") + (this.variant ? "_" + this.variant : "") + (this.script ? "_#" + this.script : "");
+    },
+    "toLanguageTag()Ljava/lang/String;": function (this: JLocale) { return [this.lang || "und", this.script, this.country, this.variant.replaceAll("_", "-")].filter(Boolean).join("-"); },
     "static forLanguageTag(Ljava/lang/String;)Ljava/util/Locale;": (t: string) => {
       const l = new JLocale();
-      const [a, b] = t.split("-");
-      l.lang = a ?? "en"; l.country = b ?? "";
+      const m = /^([a-z]{2,8})(?:-([a-z]{4}))?(?:-([a-z]{2}|\d{3}))?((?:-(?:[a-z0-9]{5,8}|\d[a-z0-9]{3}))*)/i.exec(t);
+      if (m) {
+        l.lang = m[1].toLowerCase() === "und" ? "" : m[1].toLowerCase();
+        l.script = m[2] ? m[2][0].toUpperCase() + m[2].slice(1).toLowerCase() : "";
+        l.country = m[3]?.toUpperCase() ?? "";
+        l.variant = m[4].slice(1).replaceAll("-", "_");
+      }
       return l;
     },
   },
