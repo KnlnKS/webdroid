@@ -14,6 +14,38 @@ beforeAll(() => {
   cpu = new Cpu(mainThread, "stdio test");
 });
 
+test("standard descriptors honor redirection, close and lowest-free reuse", async () => {
+  const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
+  const pair = mem.malloc(8), data = mem.malloc(16);
+  try {
+    for (const fd of [1, 2]) {
+      const saved = await call("dup", fd);
+      await call("pipe2", pair, 0x800);
+      const reader = mem.ld32(pair), writer = mem.ld32(pair + 4);
+      try {
+        expect(await call("dup2", writer, fd)).toBe(fd);
+        await call("close", writer);
+        mem.putCstr(data, "ready", 16);
+        expect(await call("write", fd, data, 5)).toBe(5);
+        expect(await call("read", reader, data, 16)).toBe(5);
+        expect(mem.cstr(data)).toBe("ready");
+        if (fd === 1) {
+          expect(await call("puts", data)).toBeGreaterThanOrEqual(0);
+          expect(await call("read", reader, data, 16)).toBe(6);
+          expect(mem.u8[data + 5]).toBe(10);
+        }
+        expect(await call("close", fd)).toBe(0);
+        expect(await call("read", reader, data, 16)).toBe(0);
+        await call("pipe2", pair, 0x800);
+        expect(mem.ld32(pair)).toBe(fd);
+        await call("close", mem.ld32(pair)); await call("close", mem.ld32(pair + 4));
+      } finally {
+        await call("dup2", saved, fd); await call("close", saved); await call("close", reader);
+      }
+    }
+  } finally { mem.free(pair); mem.free(data); }
+});
+
 test("fread fills complete elements across asynchronous short reads", async () => {
   const bytes = Uint8Array.from({ length: 12 }, (_, i) => i + 1);
   vfs.mount("/data/fread-range.bin", {

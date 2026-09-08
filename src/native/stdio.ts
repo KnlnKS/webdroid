@@ -23,7 +23,7 @@ interface EpollEntry { events: number; data: bigint; pending: number; disabled: 
 interface Epoll { entries: Map<number, EpollEntry>; wake: Set<() => void> }
 interface Fd {
   path: string; data: Uint8Array; len: number; pos: number; write: boolean; dirty: boolean; dir: boolean; append: boolean; statusFlags: number; references: number; line?: string; synthetic?: boolean;
-  timer?: Timer; source?: FileSource; readQueue?: Promise<void>; byte?: number; random?: boolean; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll;
+  timer?: Timer; source?: FileSource; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll;
 }
 const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000, EAGAIN = E.AGAIN;
 const newPipe = (): Pipe => ({ q: [], wake: [], closed: false });
@@ -130,16 +130,15 @@ function grow(f: Fd, need: number): void {
 }
 function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   if (isNativeSocket(fd)) return nativeSocketWrite(cpu, fd, p, n);
-  if (fd === 1 || fd === 2) {
-    const s = new TextDecoder().decode(mem.u8.subarray(p, p + n));
-    const f = fds.get(fd)!;
-    f.line = (f.line ?? "") + s;
-    let i: number;
-    while ((i = f.line.indexOf("\n")) >= 0) { logLine(fd === 2 ? 6 : 4, fd === 2 ? "stderr" : "stdout", f.line.slice(0, i)); f.line = f.line.slice(i + 1); }
-    return n;
-  }
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
+  if (f.log) {
+    const s = new TextDecoder().decode(mem.u8.subarray(p, p + n));
+    f.line = (f.line ?? "") + s;
+    let i: number;
+    while ((i = f.line.indexOf("\n")) >= 0) { logLine(f.log, f.log === 6 ? "stderr" : "stdout", f.line.slice(0, i)); f.line = f.line.slice(i + 1); }
+    return n;
+  }
   if (f.wpipe) { f.wpipe.q.push(mem.u8.slice(p, p + n)); wakeAll(f.wpipe); return n; }
   if (f.timer) return fail(cpu, E.INVAL);
   if (f.event) { f.event.count += mem.ld32(p); wakeAll(f.event); return 8; }
@@ -246,7 +245,6 @@ function fdClose(cpu: Cpu, fd: number): number {
   if (isNativeSocket(fd)) return nativeSocketClose(cpu, fd);
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
-  if (fd <= 2) return 0;
   fds.delete(fd); releaseFd(fd);
   if (--f.references > 0) return 0;
   flushFd(f);
@@ -429,9 +427,10 @@ function fwriteStr(cpu: Cpu, fp: number, s: string): number {
 const putChar: HostFn = (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; return fwriteBytes(cpu, fp, scratch, 1) === 1 ? c : -1; };
 
 export function stdioInit(): void {
+  for (let fd = 0; fd < 3; fd++) reserveFd(fd);
   fds.set(0, fdBase("/dev/stdin"));
-  fds.set(1, { ...fdBase("/dev/stdout"), write: true, statusFlags: 1 });
-  fds.set(2, { ...fdBase("/dev/stderr"), write: true, statusFlags: 1 });
+  fds.set(1, { ...fdBase("/dev/stdout"), write: true, statusFlags: 1, log: 4 });
+  fds.set(2, { ...fdBase("/dev/stderr"), write: true, statusFlags: 1, log: 6 });
   // __sF[3]: stdin/stdout/stderr FILE structs, contiguous
   const sF = mem.hostAlloc(LAYOUT.FILE_SIZE * 3);
   mem.memset(sF, 0, LAYOUT.FILE_SIZE * 3);
