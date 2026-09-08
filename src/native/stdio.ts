@@ -397,7 +397,13 @@ export function stdioInit(): void {
   const M: Record<string, HostFn> = {
     open: (cpu, a) => fdOpen(cpu, a.str(), a.i()),
     __open_2: (cpu, a) => fdOpen(cpu, a.str(), a.i()),
-    openat: (cpu, a) => { a.i(); return fdOpen(cpu, a.str(), a.i()); },
+    openat: (cpu, a) => {
+      const dirfd = a.i(), path = a.str(), flags = a.i();
+      if (path.startsWith("/") || dirfd === -100) return fdOpen(cpu, path, flags);
+      const dir = fds.get(dirfd);
+      if (!dir) return fail(cpu, E.BADF);
+      return dir.dir ? fdOpen(cpu, dir.path + "/" + path, flags) : fail(cpu, E.NOTDIR);
+    },
     creat: (cpu, a) => fdOpen(cpu, a.str(), 1 | O_CREAT | O_TRUNC),
     close: (cpu, a) => fdClose(cpu, a.i()),
     read: (cpu, a) => fdRead(cpu, a.i(), a.p(), a.u()),
@@ -629,6 +635,7 @@ export function stdioInit(): void {
     },
     perror: (_c, a) => { const s = a.p(); logLine(6, "stderr", (s ? mem.cstr(s) + ": " : "") + "error"); },
   };
+  M.__openat_2 = M.openat;
   scratch = mem.hostAlloc(16);
   const isStd = (fp: number) => fp >= sF && fp < sF + 3 * LAYOUT.FILE_SIZE;
   hostLib("libc.so", M);

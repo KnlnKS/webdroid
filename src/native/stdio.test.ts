@@ -66,3 +66,20 @@ test("socketpair status flags and aliases follow fd semantics", async () => {
   expect(await cpu.call(recvfrom!, [reader, byte, 1, 0, 0, 0])).toBe(0);
   expect(await cpu.call(close!, [reader])).toBe(0);
 });
+
+
+test("fortified openat resolves paths from an open directory", async () => {
+  vfs.mkdir("/data/openat-test");
+  vfs.write("/data/openat-test/value", Uint8Array.of(42));
+  const open = lookupHost("open", "libc.so")!, openat = lookupHost("__openat_2", "libc.so")!;
+  const close = lookupHost("close", "libc.so")!, read = lookupHost("read", "libc.so")!;
+  const dir = await cpu.call(open, [mem.hostStr("/data/openat-test"), 0x4000]);
+  const fd = await cpu.call(openat, [dir, mem.hostStr("value"), 0]);
+  const byte = mem.hostAlloc(1);
+  expect(await cpu.call(read, [fd, byte, 1])).toBe(1);
+  expect(mem.u8[byte]).toBe(42);
+  expect(await cpu.call(openat, [fd, mem.hostStr("value"), 0])).toBe(-1);
+  expect(mem.ld32(cpu.errnoAddr)).toBe(20);
+  await cpu.call(close, [fd]);
+  await cpu.call(close, [dir]);
+});
