@@ -9,7 +9,7 @@ import {
 import { mkPfd } from "./os";
 import { vfs } from "../jvm/natives/jio";
 import { mkAssetFd } from "./resnative";
-import { newObj } from "../jvm/natives/jlang";
+import { newObj, defineException } from "../jvm/natives/jlang";
 import { mkCursor } from "./sqlite";
 import { newArrayList } from "../jvm/natives/jutil";
 
@@ -103,6 +103,7 @@ rt.register({
 // Reads go through a ContentResolver on a real device; nothing here is writable, so every
 // getter simply hands back the caller's own default. AOSP splits the same table three ways.
 const settingsUri = (table: string, name: string) => mkUri(`content://settings/${table}/${name}`);
+defineException("android/provider/Settings$SettingNotFoundException", "java/lang/Exception");
 /** ANDROID_ID: 64 random bits minted on first ask and kept for the install, as the platform does */
 function androidId(): string {
   const store = typeof localStorage === "undefined" ? null : localStorage;
@@ -131,6 +132,9 @@ for (const [cls, table] of [["Global", "global"], ["Secure", "secure"], ["System
     methods: {
       "static getFloat(Landroid/content/ContentResolver;Ljava/lang/String;F)F": (_r: unknown, _n: string, d: number) => d,
       "static getInt(Landroid/content/ContentResolver;Ljava/lang/String;I)I": (_r: unknown, _n: string, d: number) => d,
+      "static getInt(Landroid/content/ContentResolver;Ljava/lang/String;)I": (_r: unknown, n: string) => {
+        throw rt.mkThrowable("android/provider/Settings$SettingNotFoundException", n);
+      },
       "static getLong(Landroid/content/ContentResolver;Ljava/lang/String;J)J": (_r: unknown, _n: string, d: bigint) => d,
       "static getString(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;": (_r: unknown, n: string) => (n === "android_id" ? androidId() : n === "device_name" ? "webdroid" : null),
       "static getUriFor(Ljava/lang/String;)Landroid/net/Uri;": (n: string) => settingsUri(table, n),
