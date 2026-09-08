@@ -2,13 +2,14 @@
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { vcall, newObj } from "../jvm/natives/jlang";
-import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook } from "./view";
-import { restVelocity } from "./motionevent";
+import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook, copyEvent } from "./view";
+import { restVelocity, type JMotionEvent } from "./motionevent";
 import { JMatrix } from "./graphics";
 import { mangleMethod } from "../jvm/abi";
-import { onMain } from "./mainloop";
+import { onMain, inMainJob } from "./mainloop";
 import { newArrayList } from "../jvm/natives/jutil";
 import { device } from "../shell/config";
+import { reportUncaught } from "./os";
 
 // ── Scroller/OverScroller: time-based interpolated scroll values
 class JScroller extends JObj {
@@ -158,9 +159,9 @@ rt.register({
     "getScaledScrollBarSize()I": () => Math.round(device.dp(4)),
     "hasPermanentMenuKey()Z": () => 0,
     "static getScrollBarSize()I": () => 8,
-    "static getDoubleTapTimeout()I": () => 300,
+    "static getDoubleTapTimeout()I": () => DOUBLE_TAP_TIMEOUT,
     "static getTapTimeout()I": () => 100,
-    "static getLongPressTimeout()I": () => 450,
+    "static getLongPressTimeout()I": () => LONG_PRESS_TIMEOUT,
     "static getPressedStateDuration()I": () => 64,
     "static getScrollFriction()F": () => 0.015,
     // AOSP defaults: how long a scrollbar lingers before it starts fading, and for how long
@@ -491,59 +492,107 @@ rt.register({
 });
 rt.register({ name: "android/view/animation/Animation$AnimationListener", ctor: class extends JObj {} });
 
-// GestureDetector: tap/longpress/fling recognition over raw events
+const DOUBLE_TAP_TIMEOUT = 300, DOUBLE_TAP_MIN_TIME = 40, LONG_PRESS_TIMEOUT = 450;
+type PendingTap = { down: JMotionEvent; up: JMotionEvent | null; deferred: boolean; cancelled: boolean; timer: ReturnType<typeof setTimeout> };
 class JGestureDetector extends JObj {
   l: unknown = null;
-  downX = 0; downY = 0; downT = 0;
+  doubleListener: unknown = null;
+  down: JMotionEvent | null = null;
+  pending: PendingTap | null = null;
+  longTimer: ReturnType<typeof setTimeout> | null = null;
+  longEnabled = true;
+  longPressed = false;
+  double = false;
   moved = false;
   lastX = 0; lastY = 0; lastT = 0;
   vx = 0; vy = 0;
+  init(listener: unknown) {
+    this.l = listener;
+    if (rt.iof(listener, "android/view/GestureDetector$OnDoubleTapListener")) this.doubleListener = listener;
+  }
+  cancelTap() {
+    if (this.pending) { this.pending.cancelled = true; clearTimeout(this.pending.timer); this.pending = null; }
+  }
+  cancelLong() { if (this.longTimer !== null) clearTimeout(this.longTimer); this.longTimer = null; }
+  confirm(tap: PendingTap, event: JMotionEvent) {
+    if (tap.cancelled || !this.doubleListener) return 0;
+    tap.cancelled = true;
+    if (this.pending === tap) this.pending = null;
+    return vcall(this.doubleListener, "onSingleTapConfirmed", "(Landroid/view/MotionEvent;)Z", event);
+  }
+  async touch(ev: JMotionEvent): Promise<number> {
+    const action = ev.action & 0xff, now = ev.eventTime;
+    if (action === 0) {
+      const previous = this.pending;
+      const delay = previous?.up ? now - previous.up.eventTime : -1;
+      this.double = !!(this.doubleListener && previous?.up && delay >= DOUBLE_TAP_MIN_TIME && delay <= DOUBLE_TAP_TIMEOUT
+        && Math.hypot(ev.x - previous.down.x, ev.y - previous.down.y) < device.dp(100));
+      if (this.double) this.cancelTap();
+      this.down = copyEvent(ev); this.lastX = ev.x; this.lastY = ev.y; this.lastT = now;
+      this.moved = this.longPressed = false; this.vx = this.vy = 0; this.cancelLong();
+      let handled = 0;
+      if (this.double) {
+        handled |= await vcall(this.doubleListener, "onDoubleTap", "(Landroid/view/MotionEvent;)Z", previous!.down);
+        handled |= await vcall(this.doubleListener, "onDoubleTapEvent", "(Landroid/view/MotionEvent;)Z", ev);
+      } else if (this.doubleListener) {
+        const tap: PendingTap = { down: this.down, up: null, deferred: false, cancelled: false, timer: setTimeout(() => {
+          void onMain(async () => {
+            if (tap.cancelled) return;
+            if (!tap.up) tap.deferred = true; else await this.confirm(tap, tap.down);
+          }).catch(reportUncaught);
+        }, DOUBLE_TAP_TIMEOUT) };
+        this.pending = tap;
+      }
+      const down = this.down;
+      if (this.longEnabled && !this.double) this.longTimer = setTimeout(() => {
+        void onMain(async () => {
+          if (this.down !== down || this.moved) return;
+          this.longPressed = true; this.cancelTap();
+          await vcall(this.l, "onLongPress", "(Landroid/view/MotionEvent;)V", this.down);
+        }).catch(reportUncaught);
+      }, LONG_PRESS_TIMEOUT);
+      return handled | await vcall(this.l, "onDown", "(Landroid/view/MotionEvent;)Z", ev);
+    }
+    if (action === 3 || action === 5) {
+      this.cancelTap(); this.cancelLong(); this.down = null; this.double = false; return 0;
+    }
+    if (!this.down) return 0;
+    if (action === 2) {
+      if (this.longPressed) return 0;
+      if (this.double) return vcall(this.doubleListener, "onDoubleTapEvent", "(Landroid/view/MotionEvent;)Z", ev);
+      const dt = Math.max(1, now - this.lastT), dx = this.lastX - ev.x, dy = this.lastY - ev.y;
+      this.vx = 0.7 * this.vx + 0.3 * (-dx / dt * 1000); this.vy = 0.7 * this.vy + 0.3 * (-dy / dt * 1000);
+      if (!this.moved && Math.hypot(ev.x - this.down.x, ev.y - this.down.y) > device.touchSlop) {
+        this.moved = true; this.cancelTap(); this.cancelLong();
+      }
+      this.lastX = ev.x; this.lastY = ev.y; this.lastT = now;
+      return this.moved ? vcall(this.l, "onScroll", "(Landroid/view/MotionEvent;Landroid/view/MotionEvent;FF)Z", this.down, ev, dx, dy) : 0;
+    }
+    if (action === 1) {
+      this.cancelLong();
+      const down = this.down; this.down = null;
+      if (this.double) return vcall(this.doubleListener, "onDoubleTapEvent", "(Landroid/view/MotionEvent;)Z", ev);
+      if (this.longPressed) return 0;
+      if (!this.moved) {
+        const handled = await vcall(this.l, "onSingleTapUp", "(Landroid/view/MotionEvent;)Z", ev);
+        if (this.pending) { this.pending.up = copyEvent(ev); if (this.pending.deferred) await this.confirm(this.pending, ev); }
+        return handled;
+      }
+      const idle = now - this.lastT, vx = restVelocity(this.vx, 0.7, idle), vy = restVelocity(this.vy, 0.7, idle);
+      return Math.hypot(vx, vy) > 400 ? vcall(this.l, "onFling", "(Landroid/view/MotionEvent;Landroid/view/MotionEvent;FF)Z", down, ev, vx, vy) : 0;
+    }
+    return 0;
+  }
 }
 rt.register({
   name: "android/view/GestureDetector", ctor: JGestureDetector,
   methods: {
-    "<init>(Landroid/content/Context;Landroid/view/GestureDetector$OnGestureListener;)V":
-      function (this: JGestureDetector, c: unknown, l: unknown) { this.l = l; },
-    "<init>(Landroid/view/GestureDetector$OnGestureListener;)V": function (this: JGestureDetector, l: unknown) { this.l = l; },
-    "<init>(Landroid/content/Context;Landroid/view/GestureDetector$OnGestureListener;Landroid/os/Handler;)V":
-      function (this: JGestureDetector, c: unknown, l: unknown) { this.l = l; },
-    "setIsLongpressEnabled(Z)V": () => {},
-    "setOnDoubleTapListener(Landroid/view/GestureDetector$OnDoubleTapListener;)V": () => {},
-    "onTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JGestureDetector, ev: any) {
-      const a = ev.action & 0xff;
-      const now = performance.now();
-      if (a === 0) {
-        this.downX = this.lastX = ev.x; this.downY = this.lastY = ev.y;
-        this.downT = this.lastT = now;
-        this.moved = false;
-        this.vx = this.vy = 0;
-        await vcall(this.l, "onDown", "(Landroid/view/MotionEvent;)Z", ev);
-        return 1;
-      }
-      if (a === 2) {
-        const dt = Math.max(1, now - this.lastT);
-        this.vx = 0.7 * this.vx + 0.3 * ((ev.x - this.lastX) / dt * 1000);
-        this.vy = 0.7 * this.vy + 0.3 * ((ev.y - this.lastY) / dt * 1000);
-        const dx = this.lastX - ev.x, dy = this.lastY - ev.y;
-        if (!this.moved && Math.hypot(ev.x - this.downX, ev.y - this.downY) > device.touchSlop) this.moved = true;
-        if (this.moved) {
-          await vcall(this.l, "onScroll", "(Landroid/view/MotionEvent;Landroid/view/MotionEvent;FF)Z", ev, ev, dx, dy);
-        }
-        this.lastX = ev.x; this.lastY = ev.y; this.lastT = now;
-        return 1;
-      }
-      if (a === 1) {
-        const idle = now - this.lastT;
-        const vx = restVelocity(this.vx, 0.7, idle), vy = restVelocity(this.vy, 0.7, idle);
-        if (!this.moved && now - this.downT < 300) {
-          await vcall(this.l, "onSingleTapUp", "(Landroid/view/MotionEvent;)Z", ev);
-        } else if (this.moved && Math.hypot(vx, vy) > 400) {
-          await vcall(this.l, "onFling", "(Landroid/view/MotionEvent;Landroid/view/MotionEvent;FF)Z", ev, ev, vx, vy);
-        }
-        return 1;
-      }
-      return 0;
-    },
+    "<init>(Landroid/content/Context;Landroid/view/GestureDetector$OnGestureListener;)V": function (this: JGestureDetector, _c: unknown, l: unknown) { this.init(l); },
+    "<init>(Landroid/view/GestureDetector$OnGestureListener;)V": function (this: JGestureDetector, l: unknown) { this.init(l); },
+    "<init>(Landroid/content/Context;Landroid/view/GestureDetector$OnGestureListener;Landroid/os/Handler;)V": function (this: JGestureDetector, _c: unknown, l: unknown) { this.init(l); },
+    "setIsLongpressEnabled(Z)V": function (this: JGestureDetector, enabled: number) { this.longEnabled = !!enabled; if (!enabled) this.cancelLong(); },
+    "setOnDoubleTapListener(Landroid/view/GestureDetector$OnDoubleTapListener;)V": function (this: JGestureDetector, listener: unknown) { this.doubleListener = listener; if (!listener) this.cancelTap(); },
+    "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JGestureDetector, event: JMotionEvent) { return inMainJob() ? this.touch(event) : onMain(() => this.touch(event)); },
   },
 });
 rt.register({
@@ -559,6 +608,7 @@ rt.register({
     "onShowPress(Landroid/view/MotionEvent;)V": () => {},
     "onSingleTapConfirmed(Landroid/view/MotionEvent;)Z": () => 0,
     "onDoubleTap(Landroid/view/MotionEvent;)Z": () => 0,
+    "onDoubleTapEvent(Landroid/view/MotionEvent;)Z": () => 0,
   },
 });
 rt.register({ name: "android/view/GestureDetector$OnGestureListener", ctor: class extends JObj {} });
