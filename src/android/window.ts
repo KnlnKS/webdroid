@@ -6,7 +6,7 @@ import { type JDrawable, loadDrawable } from "./drawable";
 import { requestLayout, findById, invalidate, dispatchAttached, dispatchDetached, JLayoutParams, type JView } from "./view";
 import { JActivity, activityMethods } from "./app";
 import { ensureDecor } from "./decor";
-import { newObj } from "../jvm/natives/jlang";
+import { newObj, vcall } from "../jvm/natives/jlang";
 import { appHost } from "./apphost";
 import { systemService, display } from "./context";
 import { device } from "../shell/config";
@@ -156,6 +156,7 @@ rt.register({
   statics: { APPEARANCE_LOW_PROFILE_BARS: 4, APPEARANCE_LIGHT_STATUS_BARS, APPEARANCE_LIGHT_NAVIGATION_BARS: 16,
     BEHAVIOR_DEFAULT: 1, BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE: 2 },
 });
+rt.register({ name: "android/view/WindowInsetsController$OnControllableInsetsChangedListener", ctor: class extends JObj {} });
 rt.register({
   name: "webdroid/InsetsController", ctor: JInsetsController, ifaces: ["android/view/WindowInsetsController"],
   methods: {
@@ -170,7 +171,9 @@ rt.register({
     "getSystemBarsBehavior()I": function (this: JInsetsController) { return this.w.barsBehavior; },
     "show(I)V": () => {},
     "hide(I)V": () => {},
-    "addOnControllableInsetsChangedListener(Landroid/view/WindowInsetsController$OnControllableInsetsChangedListener;)V": () => {},
+    "addOnControllableInsetsChangedListener(Landroid/view/WindowInsetsController$OnControllableInsetsChangedListener;)V": function (this: JInsetsController, listener: unknown) {
+      return vcall(listener, "onControllableInsetsChanged", "(Landroid/view/WindowInsetsController;I)V", this, 0);
+    },
     "removeOnControllableInsetsChangedListener(Landroid/view/WindowInsetsController$OnControllableInsetsChangedListener;)V": () => {},
     "controlWindowInsetsAnimation(IJLandroid/view/animation/Interpolator;Landroid/os/CancellationSignal;Landroid/view/WindowInsetsAnimationControlListener;)V": () => {},
   },

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import "../natives";
-import { rt } from "../jvm/runtime";
+import { JObj, rt } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { JLayoutParams, JView, JViewGroup } from "./view";
 import { overlays } from "./popup";
@@ -27,6 +27,14 @@ test("WindowManager attaches, moves and detaches a window view", async () => {
       const controller = await vcall(view, "getWindowInsetsController", "()Landroid/view/WindowInsetsController;");
       await vcall(controller, "setSystemBarsAppearance", "(II)V", 8, 8);
       expect(await vcall(controller, "getSystemBarsAppearance", "()I")).toBe(8);
+      let controllable = -1;
+      rt.register({ name: "test/InsetsListener", ctor: class extends JObj {}, ifaces: ["android/view/WindowInsetsController$OnControllableInsetsChangedListener"], methods: {
+        "onControllableInsetsChanged(Landroid/view/WindowInsetsController;I)V": (owner: unknown, types: number) => {
+          expect(owner).toBe(controller); controllable = types;
+        },
+      } });
+      await vcall(controller, "addOnControllableInsetsChangedListener", "(Landroid/view/WindowInsetsController$OnControllableInsetsChangedListener;)V", new (rt.link("test/InsetsListener").ctor)());
+      expect(controllable).toBe(0);
       expect(overlays.find((o) => o.view === view)).toMatchObject({ x: 20, y: 30 });
       params.x = 50; params.y = 60;
       await vcall(manager, "updateViewLayout", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", view, params);
