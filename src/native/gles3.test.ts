@@ -13,7 +13,11 @@ class Buffer {
   usage = 0;
 }
 const bindings = new Map<number, Buffer | null>();
+let depthWrite = true, colorWrite: boolean[] = [], normalized = true;
 const gl = {
+  depthMask: (value: boolean) => { depthWrite = value; },
+  colorMask: (...values: boolean[]) => { colorWrite = values; },
+  vertexAttribPointer: (_i: number, _size: number, _type: number, value: boolean) => { normalized = value; },
   createBuffer: () => new Buffer(),
   readPixels: () => bindings.get(0x88eb)!.data.set([5, 6, 7, 8]),
   bindBuffer(t: number, b: Buffer | null) {
@@ -76,4 +80,16 @@ test("mixed index and vertex buffers preserve uploads, mapped writes and copy wr
       expect([...mirror.data]).toEqual([...original.data]);
     }
   } finally { mem.free(p); }
+});
+
+
+test("GLboolean arguments ignore unspecified upper register bits", async () => {
+  await call("glDepthMask", 0x100);
+  expect(depthWrite).toBe(false);
+  await call("glDepthMask", 0x101);
+  expect(depthWrite).toBe(true);
+  await call("glColorMask", 0x100, 0x101, 0xffffff00, 0xffffff80);
+  expect(colorWrite).toEqual([false, true, false, true]);
+  await call("glVertexAttribPointer", 0, 2, 0x1406, 0x100, 0, 0);
+  expect(normalized).toBe(false);
 });

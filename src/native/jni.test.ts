@@ -9,7 +9,7 @@ import { ldp, PTR } from "./host";
 import { deref, jniInit, javaVM } from "./jni";
 import { mem } from "./mem";
 
-class ConstructorTarget extends JObj { value = 0; }
+class ConstructorTarget extends JObj { value = 0; enabled = 0; }
 let cpu: Cpu;
 
 function jni(env: number, index: number): number {
@@ -20,7 +20,7 @@ beforeAll(() => {
   setA64(true);
   rt.link("java/nio/IntBuffer");
   rt.register({
-    name: "webdroid/JniConstructorTarget", ctor: ConstructorTarget,
+    name: "webdroid/JniConstructorTarget", ctor: ConstructorTarget, fields: { enabled: "enabled" }, statics: { enabled: 0 },
     methods: { "<init>(I)V": function (this: ConstructorTarget, value: number) { this.value = value; } },
   });
   jniInit();
@@ -162,4 +162,21 @@ test("JNI resolves inherited abstract interface methods and dispatches on the re
   expect(await cpu.call(jni(env, 33), [env, iface, mem.hostStr("missing"), mem.hostStr("()I")])).toBe(0);
   expect(await cpu.call(jni(env, 228), [env])).toBe(1);
   await cpu.call(jni(env, 17), [env]);
+});
+
+
+test("JNI boolean field setters consume only the low argument byte", async () => {
+  const envOut = mem.hostAlloc(PTR);
+  await cpu.call(ldp(ldp(javaVM.addr) + 6 * PTR), [javaVM.addr, envOut, 0x10006]);
+  const env = ldp(envOut), cls = await cpu.call(jni(env, 6), [env, mem.hostStr("webdroid/JniConstructorTarget")]);
+  const object = await cpu.call(jni(env, 27), [env, cls]);
+  const name = mem.hostStr("enabled"), type = mem.hostStr("Z");
+  const field = await cpu.call(jni(env, 94), [env, cls, name, type]);
+  const staticField = await cpu.call(jni(env, 144), [env, cls, name, type]);
+  for (const [value, expected] of [[0x100, 0], [0x101, 1], [0xffffff00, 0], [0xffffff80, 1]]) {
+    await cpu.call(jni(env, 105), [env, object, field, value]);
+    expect(await cpu.call(jni(env, 96), [env, object, field])).toBe(expected);
+    await cpu.call(jni(env, 155), [env, cls, staticField, value]);
+    expect(await cpu.call(jni(env, 146), [env, cls, staticField])).toBe(expected);
+  }
 });

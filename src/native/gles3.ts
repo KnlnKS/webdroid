@@ -399,14 +399,14 @@ export function gles3Init(): void {
     glBlendFunc: (_c, a) => g().blendFunc(a.i(), a.i()), glBlendFuncSeparate: (_c, a) => g().blendFuncSeparate(a.i(), a.i(), a.i(), a.i()),
     glBlendEquation: (_c, a) => g().blendEquation(a.i()), glBlendEquationSeparate: (_c, a) => g().blendEquationSeparate(a.i(), a.i()),
     glBlendColor: (_c, a) => g().blendColor(a.f(), a.f(), a.f(), a.f()),
-    glColorMask: (_c, a) => g().colorMask(!!a.i(), !!a.i(), !!a.i(), !!a.i()),
-    glDepthFunc: (_c, a) => g().depthFunc(a.i()), glDepthMask: (_c, a) => g().depthMask(!!a.i()), glDepthRangef: (_c, a) => g().depthRange(a.f(), a.f()),
+    glColorMask: (_c, a) => g().colorMask(!!(a.i() & 255), !!(a.i() & 255), !!(a.i() & 255), !!(a.i() & 255)),
+    glDepthFunc: (_c, a) => g().depthFunc(a.i()), glDepthMask: (_c, a) => g().depthMask(!!(a.i() & 255)), glDepthRangef: (_c, a) => g().depthRange(a.f(), a.f()),
     glStencilFunc: (_c, a) => g().stencilFunc(a.i(), a.i(), a.i()), glStencilFuncSeparate: (_c, a) => g().stencilFuncSeparate(a.i(), a.i(), a.i(), a.i()),
     glStencilOp: (_c, a) => g().stencilOp(a.i(), a.i(), a.i()), glStencilOpSeparate: (_c, a) => g().stencilOpSeparate(a.i(), a.i(), a.i(), a.i()),
     glStencilMask: (_c, a) => g().stencilMask(a.i()), glStencilMaskSeparate: (_c, a) => g().stencilMaskSeparate(a.i(), a.i()),
     glCullFace: (_c, a) => g().cullFace(a.i()), glFrontFace: (_c, a) => g().frontFace(a.i()),
     glPolygonOffset: (_c, a) => g().polygonOffset(a.f(), a.f()), glLineWidth: (_c, a) => g().lineWidth(a.f()),
-    glSampleCoverage: (_c, a) => g().sampleCoverage(a.f(), !!a.i()),
+    glSampleCoverage: (_c, a) => g().sampleCoverage(a.f(), !!(a.i() & 255)),
     glPixelStorei: (_c, a) => g().pixelStorei(a.i(), a.i()),
 
     // ── shaders and programs
@@ -543,7 +543,7 @@ export function gles3Init(): void {
     glBindVertexArray: (_c, a) => g().bindVertexArray(H(T().vaos, a.i())),
     glIsVertexArray: (_c, a) => (H(T().vaos, a.i()) ? 1 : 0),
     glEnableVertexAttribArray: (_c, a) => g().enableVertexAttribArray(a.i()), glDisableVertexAttribArray: (_c, a) => g().disableVertexAttribArray(a.i()),
-    glVertexAttribPointer: (_c, a) => g().vertexAttribPointer(a.i(), a.i(), a.i(), !!a.i(), a.i(), a.p()),
+    glVertexAttribPointer: (_c, a) => g().vertexAttribPointer(a.i(), a.i(), a.i(), !!(a.i() & 255), a.i(), a.p()),
     glVertexAttribIPointer: (_c, a) => g().vertexAttribIPointer(a.i(), a.i(), a.i(), a.i(), a.p()),
     glVertexAttribDivisor: (_c, a) => g().vertexAttribDivisor(a.i(), a.i()),
     glVertexAttrib1f: (_c, a) => g().vertexAttrib1f(a.i(), a.f()), glVertexAttrib2f: (_c, a) => g().vertexAttrib2f(a.i(), a.f(), a.f()),
@@ -699,7 +699,7 @@ export function gles3Init(): void {
   }
   for (const [m, e] of [["2", 4], ["3", 9], ["4", 16], ["2x3", 6], ["3x2", 6], ["2x4", 8], ["4x2", 8], ["3x4", 12], ["4x3", 12]] as const) {
     const fn = `uniformMatrix${m}fv`;
-    G[`glUniformMatrix${m}fv`] = (_c, a) => { const u = U(a.i()), cnt = a.i(), t = !!a.i(), p = a.p(); if (u) (g() as unknown as Record<string, (...v: unknown[]) => void>)[fn](u, t, f32(p, cnt * e)); };
+    G[`glUniformMatrix${m}fv`] = (_c, a) => { const u = U(a.i()), cnt = a.i(), t = !!(a.i() & 255), p = a.p(); if (u) (g() as unknown as Record<string, (...v: unknown[]) => void>)[fn](u, t, f32(p, cnt * e)); };
   }
   // the probe: after each entry point, count and name a GL error (wd.native.glProbe)
   for (const [k, f] of Object.entries(G)) {

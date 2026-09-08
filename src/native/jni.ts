@@ -365,7 +365,7 @@ export function jniInit(): void {
   for (let k = 0; k < 9; k++) {
     const P = PRIM[k], D = PRIM_DESC[k];
     const fromJava = (v: unknown, cpu: Cpu): HostRet => retWord(D, v, cpu);
-    const toJava = (a: ArgReader): unknown => D === "J" ? a.l() : D === "F" ? a.f() : D === "D" ? a.d() : D === "L" ? deref(a.p()) : D === "Z" ? (a.i() ? 1 : 0) : a.i();
+    const toJava = (a: ArgReader): unknown => D === "J" ? a.l() : D === "F" ? a.f() : D === "D" ? a.d() : D === "L" ? deref(a.p()) : D === "Z" ? (a.i() & 255 ? 1 : 0) : a.i();
     def(95 + k, `Get${P}Field`, (cpu, a) => { a.p(); const o = deref(a.p()) as any; const f = fields[a.i()]; return o && f ? fromJava(o[f.prop], cpu) : D === "J" ? 0n : 0; });
     def(104 + k, `Set${P}Field`, (_c, a) => { a.p(); const o = deref(a.p()) as any; const f = fields[a.i()]; const v = toJava(a); if (o && f) o[f.prop] = v; });
     def(145 + k, `GetStatic${P}Field`, (cpu, a) => { a.p(); a.p(); const f = fields[a.i()]; return f ? fromJava(f.owner[f.prop], cpu) : D === "J" ? 0n : 0; });

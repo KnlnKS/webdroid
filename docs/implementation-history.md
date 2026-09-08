@@ -1491,3 +1491,21 @@ After the fix, a targeted headless run presented 120 Flutter frames and 5,912 dr
 with zero GL errors, zero missing native calls and no native fault. The home header,
 greeting, customization card and Play button rendered. Remaining Java network callback,
 receiver query and SQLite overload gaps still prevented full initialization.
+
+## Lichess: invisible card contents and narrow boolean arguments
+
+More's Tools card had active hit targets but invisible rows. Glyph draws were submitted
+without GL errors. Isolated probes disabling stencil or scissor had no effect; disabling
+depth testing revealed every row. Native tracing then showed glDepthMask arguments
+0x100 and 0x101, which the bridge converted to true in both cases.
+
+[GLboolean is an unsigned byte](https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/api/GLES3/gl3.h),
+and [AAPCS64 leaves unused register bits unspecified](https://raw.githubusercontent.com/ARM-software/abi-aa/main/aapcs64/aapcs64.rst).
+Both GLES bridges now mask that byte for boolean arguments. The same correction covers
+JNI's direct boolean field setters; promoted variadic arguments remain full integers.
+This restores the engine's depth-write control during clipping. No depth, stencil or
+scissor behavior is disabled in the implementation.
+
+Clean Lichess More screenshots at 480 and 700 dpi show all Tools rows and selection
+indicators with normal graphics state and zero GL errors. Focused GLES/EGL/JNI tests
+pass 87 assertions, including the actual 0x100/0x101 argument pattern.
