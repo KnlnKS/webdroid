@@ -8,7 +8,7 @@ import { appHost, type AppHost, jclsNameOf } from "./apphost";
 import { apkPath } from "../jvm/natives/jio";
 import { DOCS_AUTHORITY } from "./documents";
 import { type JList, newArrayList, toJsArray } from "../jvm/natives/jutil";
-import { JIntent, type JComponentName, componentState } from "./intent";
+import { JIntent, type JComponentName, componentState, mkComponentName } from "./intent";
 import { csText } from "./text";
 import type { JActivity } from "./app";
 
@@ -87,9 +87,15 @@ rt.register({
   fields: { applicationInfo: "applicationInfo", authority: "authority", packageName: "packageName", metaData: "metaData", name: "name", exported: "exported", grantUriPermissions: "grantUriPermissions", multiprocess: "multiprocess" },
   methods: { "<init>()V": function () {} },
 });
+class JServiceInfo extends JObj {
+  applicationInfo: JApplicationInfo | null = null; metaData: JBundle | null = null;
+  name = ""; packageName = ""; processName = ""; permission: string | null = null;
+  enabled = 1; exported = 0; directBootAware = 0; flags = 0; foregroundServiceType = 0;
+}
 rt.register({
-  name: "android/content/pm/ServiceInfo", ctor: class extends JObj { metaData = null; name = ""; packageName = ""; },
-  fields: { metaData: "metaData", name: "name", packageName: "packageName" },
+  name: "android/content/pm/ServiceInfo", ctor: JServiceInfo,
+  fields: { applicationInfo: "applicationInfo", metaData: "metaData", name: "name", packageName: "packageName", processName: "processName",
+    permission: "permission", enabled: "enabled", exported: "exported", directBootAware: "directBootAware", flags: "flags", foregroundServiceType: "foregroundServiceType" },
   methods: { "<init>()V": function () {} },
 });
 const FAKE_SIG = new Int8Array(64).fill(-0x55);
@@ -136,10 +142,19 @@ for (const n of ["ApplicationInfoFlags", "ComponentInfoFlags", "PackageInfoFlags
 let manifestRoot: XmlNode | null = null;
 let manifestActivities = new Map<string, XmlNode>();
 let manifestProviders = new Map<string, XmlNode>();
+const manifestServices = new Map<string, XmlNode>();
+const qualifyComponent = (name: string, pkg: string) => (name.startsWith(".") ? pkg + name : name.includes(".") ? name : pkg + "." + name).replace(/\//g, ".");
 export function setManifest(root: XmlNode, activities: Map<string, XmlNode>, providers: Map<string, XmlNode>) {
   manifestRoot = root;
   manifestActivities = activities;
   manifestProviders = providers;
+  cachedAppInfo = null;
+  manifestServices.clear();
+  const pkg = attrStr(root, "package") ?? "";
+  for (const service of appNode()?.children ?? []) {
+    const name = attrStr(service, "name");
+    if (service.name === "service" && name) manifestServices.set(qualifyComponent(name, pkg), service);
+  }
 }
 const appNode = () => manifestRoot?.children.find((c) => c.name === "application") ?? null;
 /** <meta-data> children → Bundle, typed the way aapt encoded them (string / boolean / int). */
@@ -217,7 +232,8 @@ export function getAppInfo(host: AppHost): JApplicationInfo {
     const label = node ? attr(node, "label") : undefined;
     if (label?.type === TV.REFERENCE) cachedAppInfo.labelRes = label.data;
     else cachedAppInfo.nonLocalizedLabel = host.appLabel;
-    cachedAppInfo.metaData = metaData(appNode());
+    cachedAppInfo.metaData = metaData(node);
+    cachedAppInfo.enabled = node && attr(node, "enabled")?.data === 0 ? 0 : 1;
   }
   return cachedAppInfo;
 }
@@ -353,6 +369,61 @@ function resolveActivity(intent: JIntent | null): unknown {
   return ri;
 }
 
+function serviceEnabled(name: string, node: XmlNode): boolean {
+  const state = componentState.get(mkComponentName(appHost?.pkg ?? "", name));
+  return state === 1 || state === 0 && attr(node, "enabled")?.data !== 0;
+}
+function visibleService(name: string, node: XmlNode, flags: number): boolean {
+  if (flags & 0x100000) return false; // MATCH_SYSTEM_ONLY: the APK is a user-installed package.
+  if (!(flags & 0x200) && (attr(appNode()!, "enabled")?.data === 0 || !serviceEnabled(name, node))) return false;
+  const directBoot = flags & 0xc0000;
+  return !directBoot || !!(directBoot & (attr(node, "directBootAware")?.data ? 0x80000 : 0x40000));
+}
+function serviceInfo(name: string, node: XmlNode, flags: number): JServiceInfo {
+  const info = new (rt.link("android/content/pm/ServiceInfo").ctor)() as JServiceInfo;
+  const pkg = appHost?.pkg ?? "";
+  info.name = name; info.packageName = pkg; info.applicationInfo = appHost ? getAppInfo(appHost) : null;
+  info.enabled = serviceEnabled(name, node) ? 1 : 0;
+  info.exported = (attr(node, "exported")?.data ?? (node.children.some((f) => f.name === "intent-filter") ? 1 : 0)) ? 1 : 0;
+  info.permission = attrStr(node, "permission") ?? (appNode() ? attrStr(appNode()!, "permission") : null);
+  const process = attrStr(node, "process") ?? (appNode() ? attrStr(appNode()!, "process") : null) ?? pkg;
+  info.processName = process.startsWith(":") ? pkg + process : process;
+  info.directBootAware = attr(node, "directBootAware")?.data ? 1 : 0;
+  info.foregroundServiceType = attr(node, "foregroundServiceType")?.data ?? 0;
+  info.flags = (attr(node, "stopWithTask")?.data ? 1 : 0) | (attr(node, "isolatedProcess")?.data ? 2 : 0);
+  info.metaData = flags & 0x80 ? metaData(node) : null;
+  return info;
+}
+function getServiceInfo(component: JComponentName, flags: number): JServiceInfo {
+  const pkg = appHost?.pkg ?? "", name = qualifyComponent(component.cls, component.pkg);
+  const node = manifestServices.get(name);
+  if (component.pkg !== pkg || !node || !visibleService(name, node, flags)) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", component.pkg + "/" + name);
+  return serviceInfo(name, node, flags);
+}
+function queryServices(intent: JIntent | null, flags: number): JList {
+  const result = newArrayList(), pkg = appHost?.pkg ?? "";
+  if (!intent || intent.pkg && intent.pkg !== pkg || intent.componentPkg && intent.componentPkg !== pkg) return result;
+  for (const [name, node] of manifestServices) {
+    if (!visibleService(name, node, flags)) continue;
+    let priority = 0;
+    if (intent.component) { if (qualifyComponent(intent.component, pkg) !== name) continue; }
+    else {
+      if (!matchesAction(node, intent.action)) continue;
+      const filters = node.children.filter((filter) => filter.name === "intent-filter" &&
+        (!intent.action || filter.children.some((a) => a.name === "action" && attrStr(a, "name") === intent.action)) &&
+        [...intent.categories, ...(flags & 0x10000 ? ["android.intent.category.DEFAULT"] : [])].every((category) => filter.children.some((a) => a.name === "category" && attrStr(a, "name") === category)) &&
+        !intent.dataUri && !intent.typeStr && !filter.children.some((a) => a.name === "data"));
+      if (!filters.length) continue;
+      priority = Math.max(...filters.map((filter) => attr(filter, "priority")?.data ?? 0));
+    }
+    const info = new (rt.link("android/content/pm/ResolveInfo").ctor)();
+    info.serviceInfo = serviceInfo(name, node, flags); info.priority = priority;
+    result.a.push(info);
+  }
+  result.a.sort((a, b) => (b as { priority: number }).priority - (a as { priority: number }).priority);
+  return result;
+}
+
 class JInstallSourceInfo extends JObj {}
 rt.register({
   name: "android/content/pm/InstallSourceInfo", ctor: JInstallSourceInfo, ifaces: ["android/os/Parcelable"],
@@ -374,7 +445,7 @@ export function getPM(): JPackageManager {
 }
 rt.register({
   name: "android/content/pm/PackageManager", ctor: JPackageManager,
-  statics: { PERMISSION_GRANTED: 0, PERMISSION_DENIED: -1, GET_ACTIVITIES: 1, GET_META_DATA: 128, GET_SIGNATURES: 64,
+  statics: { PERMISSION_GRANTED: 0, PERMISSION_DENIED: -1, GET_ACTIVITIES: 1, GET_SERVICES: 4, MATCH_DISABLED_COMPONENTS: 0x200, MATCH_SYSTEM_ONLY: 0x100000, MATCH_DIRECT_BOOT_AWARE: 0x80000, MATCH_DIRECT_BOOT_UNAWARE: 0x40000, GET_META_DATA: 128, GET_SIGNATURES: 64,
     COMPONENT_ENABLED_STATE_DEFAULT: 0, COMPONENT_ENABLED_STATE_ENABLED: 1, COMPONENT_ENABLED_STATE_DISABLED: 2,
     DONT_KILL_APP: 1,
     FEATURE_AUDIO_LOW_LATENCY: "android.hardware.audio.low_latency", FEATURE_AUDIO_PRO: "android.hardware.audio.pro", FEATURE_TOUCHSCREEN: "android.hardware.touchscreen",
@@ -392,12 +463,13 @@ rt.register({
       info.metaData = metaData(node);
       return info;
     },
-    "getServiceInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ServiceInfo;": async () => newObj("android/content/pm/ServiceInfo", null),
+    "getServiceInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ServiceInfo;": getServiceInfo,
+    "getServiceInfo(Landroid/content/ComponentName;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Landroid/content/pm/ServiceInfo;": (c: JComponentName, f: JInfoFlags) => getServiceInfo(c, Number(f.value)),
     // API 33's boxed-long overloads carry the same flags to the same body, never a second one
     "getPackageInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$PackageInfoFlags;)Landroid/content/pm/PackageInfo;": function (pkg: string, f: JInfoFlags | null) {
       return vcall(this, "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", pkg, Number(f?.value ?? 0n));
     },
-    "getPackageInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;": function (pkg: string) {
+    "getPackageInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;": function (pkg: string, flags: number) {
       if (appHost && pkg !== appHost.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
       const pi = new JPackageInfo();
       pi.packageName = pkg;
@@ -411,6 +483,7 @@ rt.register({
       pi.signatures = signatures();
       pi.signingInfo = new (rt.link("android/content/pm/SigningInfo").ctor)();
       pi.reqFeatures = reqFeatures();
+      if (flags & 4) pi.services = jarray([...manifestServices].filter(([name, node]) => visibleService(name, node, flags)).map(([name, node]) => serviceInfo(name, node, flags)), "Landroid/content/pm/ServiceInfo;");
       pi.activities = jarray([...manifestActivities.keys()].map((n) => mkActivityInfo(n.replace(/\//g, "."))), "Landroid/content/pm/ActivityInfo;");
       return pi;
     },
@@ -432,8 +505,10 @@ rt.register({
     "queryIntentContentProviders(Landroid/content/Intent;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Ljava/util/List;": (i: { action?: string | null } | null) => queryProviders(i),
     "resolveContentProvider(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;": (a: string) => resolveProvider(a),
     "resolveContentProvider(Ljava/lang/String;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Landroid/content/pm/ProviderInfo;": (a: string) => resolveProvider(a),
-    // Only <provider> nodes are cached at boot, so no <service> filter can be matched.
-    "queryIntentServices(Landroid/content/Intent;I)Ljava/util/List;": () => newArrayList(),
+    "queryIntentServices(Landroid/content/Intent;I)Ljava/util/List;": queryServices,
+    "queryIntentServices(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Ljava/util/List;": (i: JIntent, f: JInfoFlags) => queryServices(i, Number(f.value)),
+    "resolveService(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;": (i: JIntent, f: number) => queryServices(i, f).a[0] ?? null,
+    "resolveService(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Landroid/content/pm/ResolveInfo;": (i: JIntent, f: JInfoFlags) => queryServices(i, Number(f.value)).a[0] ?? null,
     "getComponentEnabledSetting(Landroid/content/ComponentName;)I": (c: JComponentName) => componentState.get(c),
     "setComponentEnabledSetting(Landroid/content/ComponentName;II)V": (c: JComponentName, st: number) => componentState.set(c, st),
     "hasSystemFeature(Ljava/lang/String;)Z": () => 0,

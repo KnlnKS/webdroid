@@ -11,6 +11,7 @@ import { vcall } from "../jvm/natives/jlang";
 export class JIntent extends JObj {
   action: string | null = null;
   component: string | null = null; // class name dots
+  componentPkg: string | null = null;
   dataUri: string | null = null;
   typeStr: string | null = null;
   pkg: string | null = null;
@@ -25,35 +26,38 @@ const intentMethods: NativeSpec["methods"] = {
     this.action = a;
     this.dataUri = u?.uri ?? null;
   },
-  "<init>(Landroid/content/Context;Ljava/lang/Class;)V": function (this: JIntent, c: unknown, cls: any) {
+  "<init>(Landroid/content/Context;Ljava/lang/Class;)V": function (this: JIntent, c: JContext, cls: any) {
     this.component = cls?.ci?.name?.replace(/\//g, ".") ?? null;
+    this.componentPkg = c?.$host?.pkg ?? null;
   },
   "<init>(Landroid/content/Intent;)V": function (this: JIntent, o: JIntent) {
     if (o) {
-      this.action = o.action; this.component = o.component; this.dataUri = o.dataUri;
+      this.action = o.action; this.component = o.component; this.componentPkg = o.componentPkg; this.dataUri = o.dataUri;
       this.extras = new JBundle();
       this.extras.map = new Map(o.extras.map);
       this.flags = o.flags; this.pkg = o.pkg; this.typeStr = o.typeStr; this.categories = new Set(o.categories);
     }
   },
-  "setClass(Landroid/content/Context;Ljava/lang/Class;)Landroid/content/Intent;": function (this: JIntent, c: unknown, cls: any) {
+  "setClass(Landroid/content/Context;Ljava/lang/Class;)Landroid/content/Intent;": function (this: JIntent, c: JContext, cls: any) {
     this.component = cls?.ci?.name?.replace(/\//g, ".") ?? null;
+    this.componentPkg = c?.$host?.pkg ?? null;
     return this;
   },
-  "setClassName(Landroid/content/Context;Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, c: unknown, n: string) {
+  "setClassName(Landroid/content/Context;Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, c: JContext, n: string) {
     this.component = n;
+    this.componentPkg = c?.$host?.pkg ?? null;
     return this;
   },
   "setClassName(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, p: string, n: string) {
-    this.component = n;
+    this.component = n; this.componentPkg = p;
     return this;
   },
   "setComponent(Landroid/content/ComponentName;)Landroid/content/Intent;": function (this: JIntent, cn: any) {
-    this.component = cn?.cls ?? null;
+    this.component = cn?.cls ?? null; this.componentPkg = cn?.pkg ?? null;
     return this;
   },
   "getComponent()Landroid/content/ComponentName;": function (this: JIntent) {
-    return this.component ? mkComponentName(appHost?.pkg ?? "", this.component) : null;
+    return this.component ? mkComponentName(this.componentPkg ?? appHost?.pkg ?? "", this.component) : null;
   },
   "setAction(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, a: string) { this.action = a; return this; },
   "setPackage(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, p: string) { this.pkg = p; return this; },
@@ -102,7 +106,7 @@ const intentMethods: NativeSpec["methods"] = {
     const i = new JIntent();
     i.action = "android.intent.action.MAIN";
     i.categories.add("android.intent.category.LAUNCHER");
-    i.component = c?.cls ?? null;
+    i.component = c?.cls ?? null; i.componentPkg = c?.pkg ?? null;
     return i;
   },
   // Nothing here builds a ClipData or a launch rectangle, and AOSP answers null when it has none.
@@ -112,7 +116,7 @@ const intentMethods: NativeSpec["methods"] = {
   "getSelector()Landroid/content/Intent;": () => null,
   "getIdentifier()Ljava/lang/String;": () => null,
   "resolveActivity(Landroid/content/pm/PackageManager;)Landroid/content/ComponentName;": function (this: JIntent) {
-    return this.component ? mkComponentName(appHost?.pkg ?? "", this.component) : null;
+    return this.component ? mkComponentName(this.componentPkg ?? appHost?.pkg ?? "", this.component) : null;
   },
   "toString()Ljava/lang/String;": function (this: JIntent) {
     return `Intent{act=${this.action} cmp=${this.component}}`;

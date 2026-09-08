@@ -28,7 +28,7 @@ export interface AppHost {
   invalidateOptionsMenu: (activity: JActivity) => void;
 }
 export let appHost: AppHost | null = null;
-export function setAppHost(h: AppHost) { appHost = h; }
+export function setAppHost(h: AppHost | null) { appHost = h; }
 export function jclsNameOf(o: unknown): string {
   return ((o as any)?.constructor?.$i?.name ?? "unknown").replace(/\//g, ".");
 }
