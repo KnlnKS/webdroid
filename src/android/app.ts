@@ -255,7 +255,8 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     callSelf(activityMethods, "setTitle(Ljava/lang/CharSequence;)V", this, resString(this.$host.res, id));
   },
   "getTitle()Ljava/lang/CharSequence;": function (this: JActivity) { return this.titleStr; },
-  "getActionBar()Landroid/app/ActionBar;": function (this: JActivity) {
+  "getActionBar()Landroid/app/ActionBar;": async function (this: JActivity) {
+    await ensureDecor(this);
     if (!this.actionBarObj) {
       const info = rt.link("webdroid/ActionBar");
       this.actionBarObj = new info.ctor();
