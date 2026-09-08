@@ -1899,6 +1899,18 @@ zero chapters; The Eminence in Shadow returned 99 chapters, 37 pages for chapter
 for completing the visible reader. LocalDate.until and ChronoUnit date arithmetic unblock
 relative dates in the live details screen.
 
+The visible details screen now renders its blurred cover using software RenderEffect. Pixel
+checks cover unequal blur radii, a zero-radius axis, and child display-list updates. SQLite
+reads retain their numeric fast path and only reread rows containing unsafe integers with
+BigInt enabled. A 20,000-row browser benchmark measured 7.6 ms for ordinary integer rows
+versus 20.1 ms when converting every integer to BigInt; exact large-ID rows cost 25.6 ms.
+
+The saved library survives reload and opens chapter 1's 37-page reader. Reader setup needed
+Bundle identity, nullable Paint metrics, and removeView ignoring null or unrelated children.
+Browser checks verify metrics spacing without a destination object and unchanged parent,
+callbacks, and layout state when removing a non-child. Software Canvas bitmap limits match
+the paired AOSP bytecode's 32766-pixel dimensions.
+
 Chrome automation immediately canceled its native directory chooser despite visible focus
 and live user activation. Native computer clicks also failed with no available window. The
 user was asked to select Downloads/untitled manually; the requested host folder remains
