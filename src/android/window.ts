@@ -41,6 +41,7 @@ export class JWindow extends JObj {
   appearance = 0;
   appearanceMask = 0;
   barsBehavior = 1;
+  navBarDividerColor = 0;
   insetsController: JInsetsController | null = null;
 }
 export const APPEARANCE_LIGHT_STATUS_BARS = 8;
@@ -104,6 +105,8 @@ rt.register({
     },
     "getStatusBarColor()I": () => appHost?.statusBarColor ?? -16777216,
     "setNavigationBarColor(I)V": function (this: JWindow, c: number) { if (appHost) appHost.navBarColor = c; },
+    "setNavigationBarDividerColor(I)V": function (this: JWindow, c: number) { this.navBarDividerColor = c; invalidate(); },
+    "getNavigationBarDividerColor()I": function (this: JWindow) { return this.navBarDividerColor; },
     "setSoftInputMode(I)V": () => {},
     "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JWindow, d: JDrawable | null) {
       this.bg = d; this.bgSet = true;
@@ -177,10 +180,11 @@ rt.register({
     width = -1; height = -1; gravity = 0; flags = 0; format = 1; type = 2; softInputMode = 0;
     x = 0; y = 0; windowAnimations = 0; dimAmount = 0.6; alpha = 1; layoutInDisplayCutoutMode = 0;
     token: JObj | null = null;
+    preferredDisplayModeId = 0;
   },
   fields: { width: "width", height: "height", gravity: "gravity", flags: "flags", x: "x", y: "y",
     softInputMode: "softInputMode", windowAnimations: "windowAnimations", dimAmount: "dimAmount", alpha: "alpha", format: "format", type: "type",
-    layoutInDisplayCutoutMode: "layoutInDisplayCutoutMode", token: "token" },
+    layoutInDisplayCutoutMode: "layoutInDisplayCutoutMode", token: "token", preferredDisplayModeId: "preferredDisplayModeId" },
   statics: { MATCH_PARENT: -1, WRAP_CONTENT: -2, FLAG_FULLSCREEN: 1024, FLAG_KEEP_SCREEN_ON: 128, TYPE_APPLICATION: 2, SOFT_INPUT_ADJUST_RESIZE: 16, SOFT_INPUT_STATE_HIDDEN: 3,
     // no real display cutout in a fixed-viewport screen — the field just stores/reports whatever the app sets.
     LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT: 0, LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES: 1,
