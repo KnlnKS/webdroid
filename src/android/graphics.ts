@@ -1640,15 +1640,17 @@ rt.register({
   },
   methods: { "<init>()V": function () {} },
 });
-export async function decodeBytes(bytes: Uint8Array, opts: JBFOptions | null): Promise<JBitmap | null> {
+export async function decodeBytes(bytes: Uint8Array, opts: JBFOptions | null,
+  onHeader?: (width: number, height: number) => Promise<readonly [number, number]>): Promise<JBitmap | null> {
+  let img: ImageBitmap | undefined;
   try {
     const blob = new Blob([bytes as BlobPart]);
-    const img = await createImageBitmap(blob);
+    img = await createImageBitmap(blob);
     if (opts) {
       opts.outWidth = img.width;
       opts.outHeight = img.height;
       opts.outConfig = bitmapConfigs[3]; // decoder always rasterizes to ARGB_8888 (see Bitmap.getConfig)
-      if (opts.inJustDecodeBounds) { img.close(); return null; }
+      if (opts.inJustDecodeBounds) return null;
     }
     let w = img.width, h = img.height;
     if (opts && opts.inSampleSize > 1) { w = Math.max(1, w / opts.inSampleSize | 0); h = Math.max(1, h / opts.inSampleSize | 0); }
@@ -1656,13 +1658,13 @@ export async function decodeBytes(bytes: Uint8Array, opts: JBFOptions | null): P
       w = Math.round(w * opts.inTargetDensity / opts.inDensity);
       h = Math.round(h * opts.inTargetDensity / opts.inDensity);
     }
-    const b = JBitmap.fromImage(img, w, h);
-    img.close();
-    return b;
+    if (onHeader) [w, h] = await onHeader(w, h);
+    return JBitmap.fromImage(img, w, h);
   } catch (e) {
+    if (onHeader) throw e;
     console.warn("[decode]", e);
     return null;
-  }
+  } finally { img?.close(); }
 }
 rt.register({
   name: "android/graphics/BitmapFactory", ctor: class extends JObj {},
