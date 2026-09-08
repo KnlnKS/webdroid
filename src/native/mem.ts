@@ -244,13 +244,13 @@ export const mem = {
   /** whole zeroed pages for mmap and large blocks: first fit over the free runs, else the arena's top */
   /** n bytes of pages: a hole, then fresh heap, and for a reservation the uncommitted part of
    *  other reservations. Pages of a mapping come zeroed; a reservation's are zeroed at commit. */
-  mapPages(n: number, reserve = false): number {
+  mapPages(n: number, reserve = false, alignment = PAGE_SIZE): number {
     n = (n + PAGE_SIZE - 1) & -PAGE_SIZE;
     if (!n) return 0;
     const np = n >>> PAGE_SHIFT;
     // a reservation of 2A is the reserve-then-trim idiom for an A-aligned block: placing it on an
     // A boundary packs the kept blocks back to back instead of leaving an A-sized hole between them
-    const align = reserve && np >= 256 ? 1 << (31 - Math.clz32((np + 1) >> 1)) : 1;
+    const align = Math.max(alignment / PAGE_SIZE, reserve && np >= 256 ? 1 << (31 - Math.clz32((np + 1) >> 1)) : 1);
     const p = findRun(np, FREE, align, reserve);
     if (!p) return 0;
     const a = pageOf(p), b = Math.min(a + np, pageOf(moduleBot));
@@ -392,9 +392,9 @@ export const mem = {
   },
   memalign(align: number, n: number): number {
     if (align <= 16) return mem.malloc(n);
-    if (align >= PAGE_SIZE && (align & (align - 1)) === 0 && align <= PAGE_SIZE) { const p = mem.mapPages(n); if (p) { bigBlocks.set(p, n); blocks++; used += n; } return p; }
+    if (align >= PAGE_SIZE && (align & (align - 1)) === 0) { const p = mem.mapPages(n, false, align); if (p) { bigBlocks.set(p, n); blocks++; used += n; } return p; }
     const raw = mem.malloc(n + align + HDR);
-    if (!raw || bigBlocks.has(raw)) { if (raw) { const p = ((raw + align - 1) & -align) >>> 0; if (p === raw) return raw; bigBlocks.delete(raw); bigBlocks.set(p, n); return p; } return 0; }
+    if (!raw || bigBlocks.has(raw)) return raw;
     const p = ((raw + HDR + align - 1) & -align) >>> 0;
     i32[(p - 8) >>> 2] = raw;
     i32[(p - 4) >>> 2] = n;

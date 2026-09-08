@@ -14,6 +14,36 @@ beforeAll(() => { setA64(true); if (mem.u8.length < MEM_SIZE_A64) mem.init(MEM_S
 afterAll(() => setA64(false));
 
 const UNIT = 1 << 25;
+test("large aligned allocations reuse freed pages without leaking or overwriting neighbors", () => {
+  const size = 1 << 20, alignment = 2 * size, before = mem.stats();
+  let p = mem.memalign(alignment, size);
+  const first = p, neighbor = mem.memalign(4096, size);
+  expect(p).not.toBe(0);
+  expect(neighbor).not.toBe(0);
+  expect(p % alignment).toBe(0);
+  expect(p + size <= neighbor || neighbor + size <= p).toBe(true);
+  mem.u8.fill(0x5a, neighbor, neighbor + size);
+  try {
+    for (let i = 0; i < 12; i++) {
+      expect(p).toBe(first);
+      expect(mem.usableSize(p)).toBe(size);
+      expect(mem.stats().used).toBe(before.used + 2 * size);
+      mem.u8.fill(0xa5, p, p + size);
+      expect(mem.u8.subarray(neighbor, neighbor + size).every(v => v === 0x5a)).toBe(true);
+      mem.free(p);
+      p = 0;
+      expect(mem.stats().used).toBe(before.used + size);
+      expect(mem.stats().blocks).toBe(before.blocks + 1);
+      p = mem.memalign(alignment, size);
+    }
+  } finally {
+    mem.free(p);
+    mem.free(neighbor);
+  }
+  expect(mem.stats().used).toBe(before.used);
+  expect(mem.stats().blocks).toBe(before.blocks);
+});
+
 describe("address planes", () => {
   test("a reservation commits a contiguous prefix that survives a move", () => {
     const p0: number[] = [];
