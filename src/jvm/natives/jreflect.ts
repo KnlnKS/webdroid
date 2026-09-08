@@ -104,7 +104,8 @@ function classFields(info: ClassInfo, name?: string): JField[] {
         const fr = info.dex.field(ef.fieldIdx);
         if (name !== undefined && fr.name !== name) continue;
         push(fr.name, info.dex.type(fr.type), isStatic,
-          isStatic ? mangleStaticField(fr.name) : (info.fieldTable.get(fr.name) ?? mangleField(info.name, fr.name)));
+          isStatic ? info.staticFieldTable.get(fr.name + ":" + info.dex.type(fr.type))!
+            : (info.fieldTable.get(fr.name) ?? mangleField(info.name, fr.name)));
         if (name !== undefined) return out;
       }
     }

@@ -1,0 +1,30 @@
+import { expect, test } from "bun:test";
+import { DexFile } from "./dex";
+import { rt } from "./runtime";
+import { linkInit, vcall } from "./natives/jlang";
+import "./natives/jreflect";
+import "./natives/jutil";
+
+test("same-named DEX static fields retain distinct typed storage and reflection", async () => {
+  const bytes = new Uint8Array(await Bun.file(new URL("./fixtures/static-fields.dex", import.meta.url)).arrayBuffer());
+  const original = new DexFile(bytes), view = new DataView(bytes.buffer);
+  const fields = original.classDef(0).staticFields.map((f) => f.fieldIdx);
+  const same = fields.find((i) => original.field(i).name === "same")!;
+  const text = fields.find((i) => original.field(i).name === "text")!;
+  const fieldIds = view.getUint32(84, true);
+  view.setUint32(fieldIds + text * 8 + 4, view.getUint32(fieldIds + same * 8 + 4, true), true);
+  rt.loadDex(new DexFile(bytes));
+  const cls = (await linkInit("webdroid/StaticFieldsFixture")).ctor;
+  const monitor = await vcall(cls, "monitor", "()Ljava/lang/Object;");
+  expect(await vcall(cls, "read", "()Ljava/lang/String;")).toBe("initial");
+  await vcall(cls, "write", "(Ljava/lang/String;)V", "changed");
+  expect(await vcall(cls, "read", "()Ljava/lang/String;")).toBe("changed");
+  expect(await vcall(cls, "monitor", "()Ljava/lang/Object;")).toBe(monitor);
+  await linkInit("java/lang/Class");
+  await linkInit("java/lang/reflect/Field");
+  const reflected = await vcall(rt.classFor("webdroid/StaticFieldsFixture"), "getDeclaredFields", "()[Ljava/lang/reflect/Field;");
+  expect(await Promise.all(reflected.map((f: unknown) => vcall(f, "getName", "()Ljava/lang/String;")))).toEqual(["same", "same"]);
+  const values = await Promise.all(reflected.map((f: unknown) => vcall(f, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", null)));
+  expect(values).toContain(monitor);
+  expect(values).toContain("changed");
+});

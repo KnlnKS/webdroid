@@ -50,8 +50,8 @@ export function mangleField(declCls: string, name: string): string {
   return "f$" + safeName(name) + "$" + hash36(declCls);
 }
 
-export function mangleStaticField(name: string): string {
-  return "s$" + safeName(name);
+export function mangleStaticField(name: string, desc?: string): string {
+  return "s$" + safeName(name) + (desc ? "$" + hash36(desc) : "");
 }
 
 /** "(ILjava/lang/String;[J)V" → { params: ["I","Ljava/lang/String;","[J"], ret: "V" } */

@@ -38,6 +38,7 @@ export function callSelf(m: NativeSpec["methods"], sig: string, self: unknown, .
 }
 
 export class ClassInfo {
+  staticFieldTable = new Map<string, string>();
   ctor: any;
   superInfo: ClassInfo | null = null;
   interfaces: ClassInfo[] = [];
@@ -213,10 +214,9 @@ export class Runtime {
       },
       rsf(i, from) {
         const fr = dex.field(i);
-        const prop = mangleStaticField(fr.name);
         const start = this.linfo(fr.cls);
         if (start.stub) throw R.ncdfe(start.name);
-        const owner = findStaticOwner(start, prop) ?? start;
+        const owner = findStaticOwner(start, fr.name, dex.type(fr.type))?.info ?? start;
         const set = () => (owner.state === 2 ? (this.fs[i] = owner.ctor) : owner.ctor);
         if (owner.state === 2) return set();
         const p = R.initClass(owner, from === undefined ? undefined : this.linfo(from));
@@ -246,12 +246,11 @@ export class Runtime {
   /** compile-time: static field access site info */
   resolveStaticField(dex: DexFile, fieldIdx: number): { prop: string; typeIdx: number } {
     const fr = dex.field(fieldIdx);
-    const prop = mangleStaticField(fr.name);
+    let prop = mangleStaticField(fr.name);
     try {
       const start = this.link(descToName(dex.type(fr.cls)));
-      const owner = findStaticOwner(start, prop);
-      if (owner && owner === start) return { prop, typeIdx: fr.cls };
-      if (owner) return { prop, typeIdx: -1 };
+      const field = findStaticOwner(start, fr.name, dex.type(fr.type));
+      if (field) { prop = field.prop; return { prop, typeIdx: field.info === start ? fr.cls : -1 }; }
     } catch { /* class missing */ }
     return { prop, typeIdx: fr.cls }; // fails at runtime when reached, correct laziness
   }
@@ -438,9 +437,16 @@ export class Runtime {
     info.ctor = info.isInterface ? class {}
       : new Function("S", `return class extends S {constructor(){super();${fieldsInit}}}`)(info.superInfo?.ctor ?? JObj);
     info.ctor.$i = info;
+    const staticNames = new Map<string, number>();
+    for (const f of def.staticFields) {
+      const name = dex.field(f.fieldIdx).name;
+      staticNames.set(name, (staticNames.get(name) ?? 0) + 1);
+    }
     for (const f of def.staticFields) {
       const fr = dex.field(f.fieldIdx);
-      info.ctor[mangleStaticField(fr.name)] = defaultValue(dex.type(fr.type));
+      const desc = dex.type(fr.type), prop = mangleStaticField(fr.name, staticNames.get(fr.name)! > 1 ? desc : undefined);
+      info.staticFieldTable.set(fr.name + ":" + desc, prop);
+      info.ctor[prop] = defaultValue(desc);
     }
     return info;
   }
@@ -570,7 +576,7 @@ export class Runtime {
           const vals = dex.encodedArray(info.def.staticValuesOff);
           for (let i = 0; i < vals.length; i++) {
             const fr = dex.field(info.def.staticFields[i].fieldIdx);
-            info.ctor[mangleStaticField(fr.name)] = this.encToJs(dex, vals[i]);
+            info.ctor[info.staticFieldTable.get(fr.name + ":" + dex.type(fr.type))!] = this.encToJs(dex, vals[i]);
           }
         }
         // own property only: JS constructors inherit statics, and a subclass without a
@@ -666,7 +672,8 @@ export class Runtime {
       if (v.kind === "enum") {
         const fr = dex.field(v.idx);
         const info = this.link(descToName(dex.type(fr.cls)));
-        return info.ctor[mangleStaticField(fr.name)];
+        const field = findStaticOwner(info, fr.name, dex.type(fr.type));
+        return field?.info.ctor[field.prop];
       }
       return null;
     }
@@ -846,12 +853,13 @@ export class Runtime {
   }
 }
 
-function findStaticOwner(start: ClassInfo, prop: string): ClassInfo | null {
+function findStaticOwner(start: ClassInfo, name: string, desc: string): { info: ClassInfo; prop: string } | null {
   let info: ClassInfo | null = start;
   while (info) {
-    if (info.ctor && Object.prototype.hasOwnProperty.call(info.ctor, prop)) return info;
+    const prop = info.staticFieldTable.get(name + ":" + desc) ?? (info.native ? mangleStaticField(name) : null);
+    if (prop && Object.hasOwn(info.ctor, prop)) return { info, prop };
     for (const iface of info.interfaces) {
-      const r = findStaticOwner(iface, prop);
+      const r = findStaticOwner(iface, name, desc);
       if (r) return r;
     }
     info = info.superInfo;
