@@ -7,7 +7,7 @@ import { mangleMethod, jarray } from "../jvm/abi";
 import { getInflater } from "./inflate";
 import { getAppInfo, getPM } from "./pm";
 import { contentResolver } from "./contentresolver";
-import { mainLooper } from "./os";
+import { mainLooper, mainExecutor } from "./os";
 import { getPrefs } from "./sharedprefs";
 import { loadColorStateList, loadDrawable } from "./drawable";
 import { JAssetManager } from "./resnative";
@@ -121,7 +121,7 @@ export const contextMethods: NativeSpec["methods"] = {
   "getPackageManager()Landroid/content/pm/PackageManager;": function () { return getPM(); },
   "getContentResolver()Landroid/content/ContentResolver;": function () { return contentResolver(); },
   "getMainLooper()Landroid/os/Looper;": () => mainLooper,
-  "getMainExecutor()Ljava/util/concurrent/Executor;": () => new (rt.link("webdroid/Executor").ctor)(),
+  "getMainExecutor()Ljava/util/concurrent/Executor;": mainExecutor,
   "getSystemService(Ljava/lang/String;)Ljava/lang/Object;": function (this: JContext, name: string) {
     return systemService(this, name);
   },

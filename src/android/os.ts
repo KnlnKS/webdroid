@@ -136,6 +136,23 @@ export function mainHandler(): JHandler {
   return _mainHandler ?? (_mainHandler = new JHandler());
 }
 
+class JHandlerExecutor extends JObj { handler = mainHandler(); }
+let _mainExecutor: JHandlerExecutor | null = null;
+export function mainExecutor(): JHandlerExecutor { return _mainExecutor ??= new JHandlerExecutor(); }
+rt.register({
+  name: "android/os/HandlerExecutor", ctor: JHandlerExecutor, ifaces: ["java/util/concurrent/Executor"],
+  methods: {
+    "<init>(Landroid/os/Handler;)V": function (this: JHandlerExecutor, handler: JHandler) {
+      if (!handler) throw rt.mkThrowable("java/lang/NullPointerException", "handler");
+      this.handler = handler;
+    },
+    "execute(Ljava/lang/Runnable;)V": function (this: JHandlerExecutor, task: unknown) {
+      if (!task) throw rt.mkThrowable("java/lang/NullPointerException", "task");
+      if (!this.handler.post(task, 0)) throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "Handler is shutting down");
+    },
+  },
+});
+
 rt.register({
   name: "android/os/Handler", ctor: JHandler,
   methods: {
