@@ -640,7 +640,6 @@ for (const [name, methods, statics] of [
     },
     "unregisterDisplayListener(Landroid/hardware/display/DisplayManager$DisplayListener;)V": (l: unknown) => { displayListeners.delete(l); },
   }, { DISPLAY_CATEGORY_PRESENTATION: "android.hardware.display.category.PRESENTATION" }],
-  ["android/os/Binder", { "<init>()V": function () {}, "static flushPendingCommands()V": () => {} }],
 ] as [string, NativeSpec["methods"], NativeSpec["statics"]?][]) {
   rt.register({ name, ctor: class extends JObj {}, methods, statics });
 }
@@ -648,6 +647,19 @@ rt.register({ name: "android/telephony/PhoneStateListener", ctor: class extends 
 // apps `implements` this to track refresh-rate / display changes; it must link even though it never fires here
 rt.register({ name: "android/hardware/display/DisplayManager$DisplayListener", ctor: class extends JObj {} });
 rt.register({ name: "android/os/IBinder", ctor: class extends JObj {} });
+class JBinder extends JObj { owner: unknown = null; descriptor: string | null = null; }
+rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBinder"], methods: {
+  "<init>()V": function () {},
+  "static flushPendingCommands()V": () => {},
+  "attachInterface(Landroid/os/IInterface;Ljava/lang/String;)V": function (this: JBinder, owner: unknown, descriptor: string) {
+    this.owner = owner; this.descriptor = descriptor;
+  },
+  "queryLocalInterface(Ljava/lang/String;)Landroid/os/IInterface;": function (this: JBinder, descriptor: string) {
+    return this.descriptor === descriptor ? this.owner : null;
+  },
+  "getInterfaceDescriptor()Ljava/lang/String;": function (this: JBinder) { return this.descriptor; },
+  "pingBinder()Z": () => 1,
+} });
 // AccessibilityManager callback interfaces — apps `implements` these to watch for a
 // screen reader turning on; must link even though it never fires here (see above).
 for (const n of ["AccessibilityStateChangeListener", "TouchExplorationStateChangeListener"]) {
