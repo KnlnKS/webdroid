@@ -664,36 +664,105 @@ rt.register({
   },
 });
 
-// ReentrantReadWriteLock — cooperative single thread: locks are advisory no-ops
-class JRWLock extends JObj {}
-class JRWInner extends JObj {}
-rt.register({
-  name: "webdroid/RWInner", ctor: JRWInner,
-  ifaces: ["java/util/concurrent/locks/Lock"],
-  methods: {
-    "lock()V": () => {},
-    "unlock()V": () => {},
-    "tryLock()Z": () => 1,
-    "lockInterruptibly()V": () => {},
-    "newCondition()Ljava/util/concurrent/locks/Condition;": () => null,
+type RWWaiter = { thread: JThread; write: boolean; wake: () => void };
+class JRWLock extends JObj {
+  readers = new Map<JThread, number>();
+  writer: JThread | null = null;
+  writes = 0;
+  fair = false;
+  queue: RWWaiter[] = [];
+  read: JRWInner | null = null;
+  write: JRWInner | null = null;
+  acquire(thread: JThread, write: boolean, barge = false): boolean {
+    const reentrant = this.writer === thread || (!write && this.readers.has(thread));
+    if (this.writer && this.writer !== thread || write && !this.writer && this.readers.size) return false;
+    if (!barge && !reentrant && this.queue.length && (this.fair || !write && this.queue[0].write)) return false;
+    if (write) { this.writer = thread; this.writes++; }
+    else this.readers.set(thread, (this.readers.get(thread) ?? 0) + 1);
+    return true;
+  }
+  drain() {
+    while (this.queue.length) {
+      const first = this.queue[0];
+      if (!this.acquire(first.thread, first.write, true)) break;
+      this.queue.shift(); first.wake();
+    }
+  }
+  arm(thread: JThread, write: boolean, wake: () => void) {
+    const waiter = { thread, write, wake };
+    this.queue.push(waiter);
+    return () => { const i = this.queue.indexOf(waiter); if (i >= 0) this.queue.splice(i, 1); this.drain(); };
+  }
+}
+class JRWInner extends JObj {
+  owner!: JRWLock;
+  write = false;
+  lock(interruptible: boolean, timeout?: number): void | boolean | Promise<boolean> {
+    const thread = curThread;
+    if (interruptible && thread.interrupted) {
+      thread.interrupted = 0;
+      throw rt.mkThrowable("java/lang/InterruptedException", null);
+    }
+    if (this.owner.acquire(thread, this.write)) return true;
+    if (timeout !== undefined && timeout <= 0) return false;
+    return interruptible ? park(thread, (wake) => this.owner.arm(thread, this.write, wake), timeout)
+      : new Promise<boolean>((resolve) => this.owner.arm(thread, this.write, () => resolve(true)));
+  }
+}
+const rwMethods: NativeSpec["methods"] = {
+  "<init>(Ljava/util/concurrent/locks/ReentrantReadWriteLock;)V": function (this: JRWInner, owner: JRWLock) { this.owner = owner; },
+  "lock()V": function (this: JRWInner) { return this.lock(false); },
+  "lockInterruptibly()V": function (this: JRWInner) { return this.lock(true); },
+  "tryLock()Z": function (this: JRWInner) { return this.owner.acquire(curThread, this.write, true) ? 1 : 0; },
+  "tryLock(JLjava/util/concurrent/TimeUnit;)Z": async function (this: JRWInner, duration: bigint, unit: JTimeUnit) { return await this.lock(true, Number(duration) * unit.ms) ? 1 : 0; },
+  "unlock()V": function (this: JRWInner) {
+    const lock = this.owner, thread = curThread;
+    if (this.write) {
+      if (lock.writer !== thread) throw rt.mkThrowable("java/lang/IllegalMonitorStateException", "Write lock not held by current thread");
+      if (!--lock.writes) lock.writer = null;
+    } else {
+      const count = lock.readers.get(thread) ?? 0;
+      if (!count) throw rt.mkThrowable("java/lang/IllegalMonitorStateException", "Read lock not held by current thread");
+      if (count === 1) lock.readers.delete(thread); else lock.readers.set(thread, count - 1);
+    }
+    lock.drain();
   },
-});
-const rwInner = () => new (rt.link("webdroid/RWInner").ctor)();
+  "newCondition()Ljava/util/concurrent/locks/Condition;": function (this: JRWInner) {
+    if (!this.write) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+    throw rt.unimplemented("ReentrantReadWriteLock.WriteLock.newCondition");
+  },
+};
+function rwHandle(lock: JRWLock, write: boolean): JRWInner {
+  const existing = write ? lock.write : lock.read;
+  if (existing) return existing;
+  const inner: JRWInner = new (rt.link("java/util/concurrent/locks/ReentrantReadWriteLock$" + (write ? "WriteLock" : "ReadLock")).ctor)();
+  inner.owner = lock;
+  if (write) lock.write = inner; else lock.read = inner;
+  return inner;
+}
+const readLock = function (this: JRWLock) { return rwHandle(this, false); };
+const writeLock = function (this: JRWLock) { return rwHandle(this, true); };
 rt.register({
   name: "java/util/concurrent/locks/ReentrantReadWriteLock", ctor: JRWLock,
+  ifaces: ["java/util/concurrent/locks/ReadWriteLock", "java/io/Serializable"],
   methods: {
     "<init>()V": function () {},
-    "<init>(Z)V": function () {},
-    "readLock()Ljava/util/concurrent/locks/ReentrantReadWriteLock$ReadLock;": rwInner,
-    "writeLock()Ljava/util/concurrent/locks/ReentrantReadWriteLock$WriteLock;": rwInner,
-    // interface-descriptor call sites (ReadWriteLock.readLock/writeLock return Lock)
-    "readLock()Ljava/util/concurrent/locks/Lock;": rwInner,
-    "writeLock()Ljava/util/concurrent/locks/Lock;": rwInner,
+    "<init>(Z)V": function (this: JRWLock, fair: number) { this.fair = !!fair; },
+    "readLock()Ljava/util/concurrent/locks/ReentrantReadWriteLock$ReadLock;": readLock,
+    "writeLock()Ljava/util/concurrent/locks/ReentrantReadWriteLock$WriteLock;": writeLock,
+    "readLock()Ljava/util/concurrent/locks/Lock;": readLock,
+    "writeLock()Ljava/util/concurrent/locks/Lock;": writeLock,
+    "getReadHoldCount()I": function (this: JRWLock) { return this.readers.get(curThread) ?? 0; },
+    "getWriteHoldCount()I": function (this: JRWLock) { return this.writer === curThread ? this.writes : 0; },
+    "getReadLockCount()I": function (this: JRWLock) { let count = 0; for (const holds of this.readers.values()) count += holds; return count; },
+    "isWriteLocked()Z": function (this: JRWLock) { return this.writes ? 1 : 0; },
+    "isWriteLockedByCurrentThread()Z": function (this: JRWLock) { return this.writer === curThread ? 1 : 0; },
+    "isFair()Z": function (this: JRWLock) { return this.fair ? 1 : 0; },
   },
 });
-for (const n of ["java/util/concurrent/locks/ReentrantReadWriteLock$ReadLock", "java/util/concurrent/locks/ReentrantReadWriteLock$WriteLock", "java/util/concurrent/locks/Lock", "java/util/concurrent/locks/Condition"]) {
-  rt.register({ name: n, ctor: class extends JRWInner {}, sup: "webdroid/RWInner" });
-}
+rt.register({ name: "java/util/concurrent/locks/ReentrantReadWriteLock$ReadLock", ctor: class extends JRWInner {}, ifaces: ["java/util/concurrent/locks/Lock", "java/io/Serializable"], methods: rwMethods });
+rt.register({ name: "java/util/concurrent/locks/ReentrantReadWriteLock$WriteLock", ctor: class extends JRWInner { write = true; }, ifaces: ["java/util/concurrent/locks/Lock", "java/io/Serializable"], methods: rwMethods });
+for (const name of ["java/util/concurrent/locks/ReadWriteLock", "java/util/concurrent/locks/Lock", "java/util/concurrent/locks/Condition"]) rt.register({ name, ctor: class extends JObj {} });
 
 // ── ConcurrentLinkedQueue / LockSupport / FutureTask
 for (const n of ["java/util/concurrent/ConcurrentLinkedQueue", "java/util/AbstractQueue"]) {
