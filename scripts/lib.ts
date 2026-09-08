@@ -22,7 +22,9 @@ export function dexesOf(zip: Zip): DexFile[] {
 }
 
 export async function openDexes(path: string): Promise<DexFile[]> {
-  return dexesOf(await openApk(path));
+  const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
+  const zip = zipTree(bytes);
+  return dexesOf(Object.keys(zip).some((name) => DEX_RE.test(name)) ? zip : openInstall(bytes).zip);
 }
 
 export async function loadDexes(path: string): Promise<DexFile[]> {
