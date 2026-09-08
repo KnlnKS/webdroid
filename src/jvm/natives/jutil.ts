@@ -748,11 +748,13 @@ const mapExtras: Record<string, NativeSpec["methods"]> = {
 for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/concurrent/ConcurrentHashMap",
   "java/util/WeakHashMap", "java/util/IdentityHashMap", "java/util/Hashtable", "java/util/EnumMap",
   "android/util/ArrayMap"]) {
+  const methods = { ...mapMethods(), ...mapExtras[n] };
+  if (n === "java/util/EnumMap") methods["put(Ljava/lang/Enum;Ljava/lang/Object;)Ljava/lang/Object;"] = methods["put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"];
   rt.register({
     name: n, ctor: class extends JMap {},
     sup: n === "java/util/LinkedHashMap" ? "java/util/HashMap" : "java/lang/Object",
     ifaces: ["java/util/Map", "java/util/concurrent/ConcurrentMap", "java/util/SortedMap", "java/lang/Cloneable", "java/io/Serializable"],
-    methods: { ...mapMethods(), ...mapExtras[n] },
+    methods,
   });
 }
 

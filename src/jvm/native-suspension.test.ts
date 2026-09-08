@@ -1,7 +1,21 @@
 import { expect, test } from "bun:test";
 import { Runtime, JObj, rt, maySuspend } from "./runtime";
 import { mangleMethod } from "./abi";
+import { JEnum, vcall } from "./natives/jlang";
 import "./natives/jutil";
+
+test("EnumMap typed and erased put share entries, previous values, and suspension metadata", async () => {
+  const map = new (rt.link("java/util/EnumMap").ctor)(), key = new JEnum();
+  const typed = "(Ljava/lang/Enum;Ljava/lang/Object;)Ljava/lang/Object;";
+  const erased = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+  expect(await vcall(map, "put", typed, key, "first")).toBeNull();
+  expect(await vcall(map, "put", typed, key, "second")).toBe("first");
+  expect(await vcall(map, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", key)).toBe("second");
+  expect(await vcall(map, "put", erased, key, null)).toBe("second");
+  expect(await vcall(map, "put", typed, key, "third")).toBeNull();
+  expect(await vcall(map, "size", "()I")).toBe(1);
+  expect(rt.nativeOracle()("java/util/EnumMap", "put" + typed)).toBe(true);
+});
 
 test("conditional suspension declarations preserve immediate returns and reach the oracle and audit", async () => {
   const runtime = new Runtime();
