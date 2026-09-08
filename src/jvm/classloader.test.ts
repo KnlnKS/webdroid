@@ -151,3 +151,35 @@ test("Mihon's bytecode loader keeps its child-first decision for duplicate paren
   expect(child.runtime.classFor("webdroid/BindingFixture")).toBe(loaded);
   expect(loaded.ci.state).toBe(0);
 });
+
+test("array Classes retain component identity and loader across sibling DEX loaders", async () => {
+  await import("./natives/jdex");
+  await duplicateLoaderDex();
+  const a = await newObj("dalvik/system/PathClassLoader", "(Ljava/lang/String;Ljava/lang/ClassLoader;)V", "/data/app/duplicate-loader.dex", null);
+  const b = await newObj("dalvik/system/PathClassLoader", "(Ljava/lang/String;Ljava/lang/ClassLoader;)V", "/data/app/duplicate-loader.dex", null);
+  const name = "webdroid/BindingFixture", ca = a.runtime.classFor(name), cb = b.runtime.classFor(name);
+  const aa = a.runtime.classFor(`[L${name};`), ab = b.runtime.classFor(`[L${name};`);
+  expect(aa).not.toBe(ab);
+  expect(a.runtime.classFor(`[L${name};`)).toBe(aa);
+  expect(await vcall(aa, "getComponentType", "()Ljava/lang/Class;")).toBe(ca);
+  expect(await vcall(ab, "getComponentType", "()Ljava/lang/Class;")).toBe(cb);
+  expect(await vcall(aa, "getClassLoader", "()Ljava/lang/ClassLoader;")).toBe(a);
+  const matrix = a.runtime.classFor(`[[L${name};`);
+  expect(await vcall(matrix, "getComponentType", "()Ljava/lang/Class;")).toBe(aa);
+  expect(await vcall(matrix, "getClassLoader", "()Ljava/lang/ClassLoader;")).toBe(a);
+  expect(a.runtime.classFor("[Ljava/lang/String;")).toBe(rt.classFor("[Ljava/lang/String;"));
+  expect(a.runtime.classFor("[I")).toBe(b.runtime.classFor("[I"));
+  expect(await vcall(a.runtime.classFor("[I"), "getClassLoader", "()Ljava/lang/ClassLoader;")).toBeNull();
+  expect(ca.ci.state).toBe(0);
+  expect(cb.ci.state).toBe(0);
+  expect(rt.classes.has(name)).toBe(false);
+});
+
+
+test("array class descriptors do not eagerly stub optional component classes", async () => {
+  const before = new Set(rt.missing), name = "test/OptionalArrayComponent";
+  const array = rt.classFor(`[L${name};`);
+  expect(await vcall(array, "isArray", "()Z")).toBe(1);
+  expect(rt.classes.has(name)).toBe(false);
+  expect(rt.missing).toEqual(before);
+});

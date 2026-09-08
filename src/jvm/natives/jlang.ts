@@ -151,16 +151,36 @@ export class JClass extends JObj {
   ci: ClassInfo | null = null;
   primName: string | null = null;
   arrDesc: string | null = null;
+  componentOwner: Runtime | null = null;
 }
+const arrayClasses = new WeakMap<Runtime, Map<string, JClass>>();
 const classCache = new Map<string, JClass>();
+function arrayOwner(runtime: Runtime, desc: string): Runtime {
+  const element = desc.replace(/^\[+/, "");
+  if (element[0] !== "L") return rt;
+  const name = descToName(element);
+  for (;;) {
+    const owner = runtime.classes.get(name)?.owner;
+    if (owner) return owner;
+    if (!runtime.parent || !runtime.natives.has(name) && runtime.dexIndex.has(name)) return runtime;
+    runtime = runtime.parent;
+  }
+}
 rt.classFor = function (this: Runtime, name: string): JClass {
-  const special = name[0] === "[" || ["int", "long", "float", "double", "boolean", "byte", "char", "short", "void"].includes(name);
-  const ci = special ? null : this.link(name);
+  if (name[0] === "[") {
+    const owner = arrayOwner(this, name);
+    let cache = arrayClasses.get(owner);
+    if (!cache) arrayClasses.set(owner, cache = new Map());
+    let cls = cache.get(name);
+    if (!cls) { cls = new JClass(); cls.arrDesc = name; cls.componentOwner = owner; cache.set(name, cls); }
+    return cls;
+  }
+  const primitive = ["int", "long", "float", "double", "boolean", "byte", "char", "short", "void"].includes(name);
+  const ci = primitive ? null : this.link(name);
   let c: JClass | undefined = ci ? ci.jclass : classCache.get(name);
   if (c) return c;
   c = new JClass();
-  if (name[0] === "[") c.arrDesc = name;
-  else if (special) c.primName = name;
+  if (primitive) c.primName = name;
   else c.ci = ci;
   if (ci) ci.jclass = c;
   else classCache.set(name, c);
@@ -203,7 +223,7 @@ rt.register({
     "getComponentType()Ljava/lang/Class;": function (this: JClass) {
       if (!this.arrDesc) return null;
       const e = this.arrDesc.slice(1);
-      return rt.classFor(e[0] === "L" ? descToName(e) : e[0] === "[" ? e : PRIM_NAME[e]);
+      return (this.componentOwner ?? rt).classFor(e[0] === "L" ? descToName(e) : e[0] === "[" ? e : PRIM_NAME[e]);
     },
     "newInstance()Ljava/lang/Object;": async function (this: JClass) {
       const info = this.ci!;
@@ -217,7 +237,10 @@ rt.register({
       await vcall(o, "<init>", "()V");
       return o;
     },
-    "getClassLoader()Ljava/lang/ClassLoader;": function (this: JClass) { return this.ci?.owner?.classLoader ?? bootLoader; },
+    "getClassLoader()Ljava/lang/ClassLoader;": function (this: JClass) {
+      if (this.primName || this.arrDesc && !this.arrDesc.replace(/^\[+/, "").startsWith("L")) return null;
+      return (this.componentOwner ?? this.ci?.owner)?.classLoader ?? bootLoader;
+    },
     "desiredAssertionStatus()Z": function () { return 0; },
     "getInterfaces()[Ljava/lang/Class;": function (this: JClass) {
       return jarray((this.ci?.interfaces ?? []).map((i) => (i.owner ?? rt).classFor(i.name)), "Ljava/lang/Class;");
