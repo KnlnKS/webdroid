@@ -25,6 +25,7 @@ See “One build, or none” and “The delegates” in the implementation histo
 | Corpus | `bun run corpus` reports current breadth. Focused Among Us testing reaches Practice; a boot-only corpus pass does not establish gameplay. |
 | Native tier | ARM32 **and AArch64**. Among Us executes Unity/IL2CPP through a shared cold interpreter and bounded hot-block compiler. Practice on The Skeld renders and accepts joystick movement, with empty reached missing-API telemetry. Controlled gameplay remains roughly 4–9 fps; online play is unverified. See "Among Us: Practice and code-cache pressure" in the implementation history. |
 | Flutter | Lichess executes its ARM64 Flutter/Dart code, renders its UI, connects over verified native TLS, and accepts board and text input. A local game completed ten moves and ten replies from its bundled Fairy-Stockfish engine after allocator reuse fixes. See "Lichess: native heap reuse during computer games" in the implementation history; this does not establish every feature or account flow. |
+| Mihon | Keiyoushi repository and MangaDex installation persist. The visible catalog, saved library, chapter reader, page turns, and resume work. Search subscription and selection of the requested host folder remain under investigation; see the implementation history for reached APIs and native image-decoding evidence. |
 | Screen | a resolved **setting**, default 1080x2424 @480dpi (360x808dp). `?screen=WxH@dpi`, `WEBDROID_SCREEN`, or the shell's own panel. The gate stays pinned to each flow's goldens — see "The screen is a setting" in the implementation history |
 
 ## What a cut costs — measured, not projected
@@ -240,7 +241,7 @@ it has been tried three ways and measured.
    `greedyBreaks`, Path's coordinate walks into exported helpers. If a delegate needs a body
    that lives in a method table, export the table or the helper — do not copy it.
 5. **Where the backend cannot answer, do nothing rather than something wrong.** `getTextPath`
-   leaves the path empty; `setPolyToPoly` reports failure for the 4-point solve. A plausible
+   leaves the path empty; `setPolyToPoly` reports failure for true perspective mappings. A plausible
    wrong value is worse than an honest empty one, because nothing will ever flag it.
 6. **Every commit is one idea**, in the project's lowercase `area: sentence` style, and says
    what was measured.
