@@ -1941,3 +1941,43 @@ user was asked to select Downloads/untitled manually; the requested host folder 
 unverified. Native picker cancellation now stays canceled instead of silently selecting an
 unrelated OPFS directory. OPFS fallback remains available when the browser lacks the picker
 API. No server filesystem mount was introduced to bypass this browser boundary.
+
+Search exposed two independent text and scheduling issues. ReplacementSpan now measures and
+draws through the real Java callbacks, retaining indivisible span geometry and builder slices;
+plain text keeps its synchronous measurement path. This removed Mihon's PlaceholderSpan
+layout error but did not resolve the spinner. The cold search response then deadlocked while
+initializing Jsoup's EscapeMode and TagSet. Async merge sorting and Map.compute callbacks
+had lost the initiating Java thread, making initializer re-entry wait on itself. Restoring
+thread identity before those callbacks fixes the deadlock without weakening class-initialization
+serialization. A clean ViewModel probe emits paging inserts for both popular and search
+results; the visible Chrome UI now renders Frieren search results after reload with no reached
+missing APIs or errors. The saved chapter resumes visibly at page 6 of 37.
+
+Array Class objects also retain their component's defining loader, including nested arrays,
+without eagerly linking optional component classes. Sibling-loader identity and a fresh
+MangaDex factory load are checked; all 61 source instances load without missing classes.
+
+Final verification at aeeb47f: typecheck passes; 856 tests pass with 25,848 assertions and no
+failures. All eight bundled APK/XAPK inputs and the MangaDex archive compile with zero method
+failures. Framework checks pass with 295/363 declared-native delegates (81%); the six browser
+text comparisons break identically. Literal and generated registration checks find no duplicate
+class registrations or library-name matching.
+
+The final full E2E capture renders all 111 steps, including all 75 scored steps, with no
+wedges, settle timeouts, layout errors, or draw errors. Both Mihon flows reach no missing APIs
+or errors. Content difference against the unchanged goldens is FitNotes 43.22% (starting
+43.07%), Mihon onboarding 17.56% (17.56%), Mihon app 78.27% (81.16%), and Harmonic 32.88%
+(35.38%); lower is better. FitNotes has 35 pixel-identical screenshots, three blinking-caret
+differences, and one returned list preserving its earlier scroll position where the baseline
+shifted 62 pixels. That last difference explains almost all of its 0.15-point increase; its
+causal commit was not isolated. Existing FitNotes, game, and Lichess diagnostics remain.
+Harmonic additionally logs an unsupported atomic-group regular expression: its actual URL
+helper reproduces the same failure at the starting commit de745af, independent of the new
+executor implementation.
+
+Mihon app draw work fell from 6,838 to 5,874 ms and frame work from 25,502 to 21,518 ms, with
+17/17 steps still rendered. These are single-run measurements, not throughput guarantees.
+Calculator's first full-run timing rose from 18.53 to 23.34 seconds despite nearly identical
+work counters. A subsequent isolated eight-step run completes in 17.97 seconds, with no
+missing APIs or errors; the large compilation/drawing outliers do not reproduce. Its isolated
+run is now in actual/calculatorm; the scored report remains the full capture.
