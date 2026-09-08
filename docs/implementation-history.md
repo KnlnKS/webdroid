@@ -1477,3 +1477,17 @@ ordinary sigset is four bytes and sigaction is 16 bytes; kernel and *64 mask cal
 eight bytes. Targeted tests exercise both ABIs, pending coalescing, handler masks,
 sigsuspend, inherited masks, and raw syscall errors. Lichess subsequently reports no
 missing native calls at the rendered navigation screen; Java NetworkInfo gaps remain.
+
+## Lichess: Dart environment enumeration
+
+The repeated libflutter.so fault at +0x8becf4 was independent of Java exceptions.
+Disassembly loads a GOT entry at +0xb41460, whose ELF relocation is environ, then
+iterates the pointed-to string array. libc exported a zeroed pointer slot instead of
+a terminated char** array. The shared environment now exposes NAME=VALUE entries;
+getenv reads the same guest-visible representation, setenv honors overwrite, and
+unsetenv removes entries. Environment updates release replaced owned allocations.
+
+After the fix, a targeted headless run presented 120 Flutter frames and 5,912 draws
+with zero GL errors, zero missing native calls and no native fault. The home header,
+greeting, customization card and Play button rendered. Remaining Java network callback,
+receiver query and SQLite overload gaps still prevented full initialization.

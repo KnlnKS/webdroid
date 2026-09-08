@@ -182,20 +182,39 @@ export function libcInit(): void {
   hostData("libc.so", "tzname", tzn);
   hostData("libc.so", "timezone", mem.hostAlloc(8));
   hostData("libc.so", "daylight", mem.hostAlloc(4));
-  hostData("libc.so", "environ", mem.hostAlloc(PTR));
+  const environ = mem.hostAlloc(PTR);
+  hostData("libc.so", "environ", environ);
   const optErr = mem.hostAlloc(4); hostData("libc.so", "opterr", optErr);
   const upperTab = mem.hostAlloc(384), lowerTab = mem.hostAlloc(384);
   for (let c = -128; c < 256; c++) { mem.u8[upperTab + 128 + c] = c >= 97 && c <= 122 ? c - 32 : c & 255; mem.u8[lowerTab + 128 + c] = c >= 65 && c <= 90 ? c + 32 : c & 255; }
   hostData("libc.so", "_toupper_tab_", upperTab + 128); hostData("libc.so", "_tolower_tab_", lowerTab + 128);
 
   const strerrorBuf = mem.hostAlloc(64);
-  const envBuf = new Map<string, number>();
   // an Android app process's environment (init.environ.rc + the values zygote inherits)
   const ENV: Record<string, string> = {
     PATH: "/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin", LD_LIBRARY_PATH: "/vendor/lib:/system/lib", HOME: "/data",
     ANDROID_BOOTLOGO: "1", ANDROID_ROOT: "/system", ANDROID_ASSETS: "/system/app", ANDROID_DATA: "/data", ANDROID_STORAGE: "/storage",
     EXTERNAL_STORAGE: "/sdcard", ASEC_MOUNTPOINT: "/mnt/asec", LOOP_MOUNTPOINT: "/mnt/obb", TMPDIR: "/data/local/tmp",
   };
+
+  let envArray = 0;
+  const envStrings = new Set<number>();
+  const envEntries = (): number[] => {
+    const entries: number[] = [];
+    for (let p = ldp(environ), entry; p && (entry = ldp(p)); p += PTR) entries.push(entry);
+    return entries;
+  };
+  const writeEnv = (entries: number[]) => {
+    const p = mem.malloc((entries.length + 1) * PTR);
+    entries.forEach((entry, i) => stp(p + i * PTR, entry)); stp(p + entries.length * PTR, 0);
+    stp(environ, p); if (envArray) mem.free(envArray); envArray = p;
+  };
+  const envString = (s: string) => {
+    const bytes = utf8(s), p = mem.malloc(bytes.length + 1);
+    mem.u8.set(bytes, p); mem.st8(p + bytes.length, 0); envStrings.add(p); return p;
+  };
+  const envKey = (p: number) => mem.cstr(p).split("=", 1)[0];
+  writeEnv(Object.entries(ENV).map(([k, v]) => envString(k + "=" + v)));
 
   const M: Record<string, HostFn> = {
     __errno: (cpu) => cpu.errnoAddr,
@@ -230,16 +249,21 @@ export function libcInit(): void {
       for (let i = 0; i < f.length; i++) mem.putCstr(p + i * LAYOUT.UTSNAME_FIELD, f[i], LAYOUT.UTSNAME_FIELD);
       return 0;
     },
-    getenv: (_c, a) => {
-      const k = a.str();
-      const v = ENV[k];
-      if (v === undefined) return 0;
-      let p = envBuf.get(k);
-      if (!p) envBuf.set(k, (p = mem.hostStr(v)));
-      return p;
+    getenv: (_c, a) => { const k = a.str(), p = envEntries().find((p) => envKey(p) === k); return p ? p + utf8(k).length + 1 : 0; },
+    setenv: (cpu, a) => {
+      const k = a.str(), v = a.str(), overwrite = a.i();
+      if (!k || k.includes("=")) return fail(cpu, E.INVAL);
+      const entries = envEntries(), i = entries.findIndex((p) => envKey(p) === k);
+      if (i >= 0 && !overwrite) return 0;
+      const p = envString(k + "=" + v);
+      if (i < 0) entries.push(p); else { if (envStrings.delete(entries[i])) mem.free(entries[i]); entries[i] = p; }
+      writeEnv(entries); return 0;
     },
-    setenv: (_c, a) => { const k = a.str(), v = a.str(); ENV[k] = v; envBuf.delete(k); return 0; },
-    unsetenv: (_c, a) => { delete ENV[a.str()]; return 0; },
+    unsetenv: (cpu, a) => {
+      const k = a.str(); if (!k || k.includes("=")) return fail(cpu, E.INVAL);
+      writeEnv(envEntries().filter((p) => { if (envKey(p) !== k) return true; if (envStrings.delete(p)) mem.free(p); return false; }));
+      return 0;
+    },
     setlocale: (_c, a) => { a.i(); const l = a.p(); return l && mem.cstr(l) !== "" && mem.cstr(l) !== "C" && mem.cstr(l) !== "POSIX" ? 0 : cLocale; },
     localeconv: () => localeConv,
     // a protection change moves no byte: a block stays valid until a write or a cache flush says otherwise
