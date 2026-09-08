@@ -75,6 +75,10 @@ test("fortified openat resolves paths from an open directory", async () => {
   const close = lookupHost("close", "libc.so")!, read = lookupHost("read", "libc.so")!;
   const dir = await cpu.call(open, [mem.hostStr("/data/openat-test"), 0x4000]);
   const fd = await cpu.call(openat, [dir, mem.hostStr("value"), 0]);
+  const access = lookupHost("faccessat", "libc.so")!;
+  expect(await cpu.call(access, [dir, mem.hostStr("value"), 4, 0])).toBe(0);
+  expect(await cpu.call(access, [dir, mem.hostStr("absent"), 0, 0])).toBe(-1);
+  expect(mem.ld32(cpu.errnoAddr)).toBe(2);
   const byte = mem.hostAlloc(1);
   expect(await cpu.call(read, [fd, byte, 1])).toBe(1);
   expect(mem.u8[byte]).toBe(42);

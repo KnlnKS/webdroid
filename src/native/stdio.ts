@@ -73,6 +73,17 @@ function synth(path: string): string | null {
   return null;
 }
 
+function atPath(cpu: Cpu, dirfd: number, path: string): string | number {
+  if (path.startsWith("/") || dirfd === -100) return path;
+  const dir = fds.get(dirfd);
+  if (!dir) return fail(cpu, E.BADF);
+  return dir.dir ? dir.path + "/" + path : fail(cpu, E.NOTDIR);
+}
+function accessPath(cpu: Cpu, path: string, mode: number): number {
+  if (mode & ~7) return fail(cpu, E.INVAL);
+  const p = vfs.norm(path);
+  return vfs.exists(p) || vfs.isDir(p) || synth(p) !== null || p === "/dev/urandom" || p === "/dev/random" ? 0 : fail(cpu, E.NOENT);
+}
 function fdOpen(cpu: Cpu, path: string, flags: number): number {
   path = vfs.norm(path);
   const acc = flags & O_ACCMODE;
@@ -399,10 +410,8 @@ export function stdioInit(): void {
     __open_2: (cpu, a) => fdOpen(cpu, a.str(), a.i()),
     openat: (cpu, a) => {
       const dirfd = a.i(), path = a.str(), flags = a.i();
-      if (path.startsWith("/") || dirfd === -100) return fdOpen(cpu, path, flags);
-      const dir = fds.get(dirfd);
-      if (!dir) return fail(cpu, E.BADF);
-      return dir.dir ? fdOpen(cpu, dir.path + "/" + path, flags) : fail(cpu, E.NOTDIR);
+      const resolved = atPath(cpu, dirfd, path);
+      return typeof resolved === "string" ? fdOpen(cpu, resolved, flags) : resolved;
     },
     creat: (cpu, a) => fdOpen(cpu, a.str(), 1 | O_CREAT | O_TRUNC),
     close: (cpu, a) => fdClose(cpu, a.i()),
@@ -417,7 +426,12 @@ export function stdioInit(): void {
     fstat: (cpu, a) => { const fd = a.i(), buf = a.p(); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); fillStat(buf, f.dir, f.len, Date.now(), f.path); return 0; },
     stat: (cpu, a) => statPath(cpu, a.str(), a.p()),
     lstat: (cpu, a) => statPath(cpu, a.str(), a.p()),
-    access: (cpu, a) => { const p = vfs.norm(a.str()); a.i(); return vfs.exists(p) || vfs.isDir(p) || synth(p) !== null || p === "/dev/urandom" || p === "/dev/random" ? 0 : fail(cpu, E.NOENT); },
+    access: (cpu, a) => accessPath(cpu, a.str(), a.i()),
+    faccessat: (cpu, a) => {
+      const path = atPath(cpu, a.i(), a.str()), mode = a.i(), flags = a.i();
+      if (flags & ~(0x100 | 0x200)) return fail(cpu, E.INVAL);
+      return typeof path === "string" ? accessPath(cpu, path, mode) : path;
+    },
     chmod: () => 0, fchmod: () => 0, chown: () => 0, fchown: () => 0, umask: () => 0o22,
     unlink: (cpu, a) => (vfs.delete(a.str()) ? 0 : fail(cpu, E.NOENT)),
     remove: (cpu, a) => { const p = vfs.norm(a.str()); if (vfs.isDir(p)) return vfs.list(p).length ? fail(cpu, E.NOTEMPTY) : 0; return vfs.delete(p) ? 0 : fail(cpu, E.NOENT); },
