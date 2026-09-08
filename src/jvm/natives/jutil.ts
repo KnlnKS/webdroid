@@ -630,6 +630,26 @@ function mapMethods(): NativeSpec["methods"] {
       }
       return slowFind(this.slow, k).then((i) => (i >= 0 ? this.slow.splice(i, 1)[0].v : null));
     },
+    "remove(Ljava/lang/Object;Ljava/lang/Object;)Z": maySuspend(function (this: JMap, k: unknown, value: unknown) {
+      const key = mapKey(k);
+      const remove = (entry: Ent | undefined) => {
+        if (!entry) return 0;
+        const old = entry.v;
+        const finish = (equal: number) => {
+          // User equality can suspend while another operation replaces this mapping.
+          if (!equal || entry.v !== old) return 0;
+          if (key !== SLOW) return this.m.get(key) === entry && this.m.delete(key) ? 1 : 0;
+          const index = this.slow.indexOf(entry);
+          if (index < 0) return 0;
+          this.slow.splice(index, 1); return 1;
+        };
+        const equal = jeq(value, old);
+        return equal instanceof Promise ? equal.then(finish) : finish(equal);
+      };
+      if (key !== SLOW) return remove(this.m.get(key));
+      const entries = this.slow.slice();
+      return slowFind(entries, k).then((index) => remove(entries[index]));
+    }),
     "clear()V": function (this: JMap) { this.m.clear(); this.slow.length = 0; },
     "putAll(Ljava/util/Map;)V": async function (this: JMap, src: unknown) { if (src) await copyMapInto(src, this); },
     "keySet()Ljava/util/Set;": function (this: JMap) { return new JSetView(this, "k"); },
