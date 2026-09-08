@@ -1911,6 +1911,14 @@ Browser checks verify metrics spacing without a destination object and unchanged
 callbacks, and layout state when removing a non-child. Software Canvas bitmap limits match
 the paired AOSP bytecode's 32766-pixel dimensions.
 
+The visible reader now renders pages 1–3 and Back followed by Start resumes at page 3.
+Read/write locks use stable typed handles, per-thread hold counts, reentrant writes, downgrade,
+and parked contention instead of fresh no-op handles. Native image decoding then reached
+Matrix.setPolyToPoly: the existing affine solver is shared with the framework delegate and
+accepts four-point affine mappings after checking the remaining corner. True perspective
+still fails without mutating the matrix. The reached reader has no missing APIs; reopen
+logged two tile decode failures while still rendering its resumed page, under investigation.
+
 Chrome automation immediately canceled its native directory chooser despite visible focus
 and live user activation. Native computer clicks also failed with no available window. The
 user was asked to select Downloads/untitled manually; the requested host folder remains
