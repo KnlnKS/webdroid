@@ -9,6 +9,7 @@ import { usLocale } from "../jvm/natives/jvalues";
 import { readStreamFully } from "../jvm/natives/jio";
 import { JPath } from "./path";
 import { perf } from "../perf";
+import { type JRenderEffect } from "./rendereffect";
 
 export function cssColor(argb: number): string {
   const a = (argb >>> 24) / 255;
@@ -729,7 +730,7 @@ rt.register({
     },
   },
 });
-mkEnumSet("android/graphics/Shader$TileMode", ["CLAMP", "REPEAT", "MIRROR"]);
+mkEnumSet("android/graphics/Shader$TileMode", ["CLAMP", "REPEAT", "MIRROR", "DECAL"]);
 /** colour stops onto a canvas gradient; evenly spaced when `stops` is null, as Android does */
 /**
  * A ColorLong is Color.pack()'s encoding: the sRGB case (colour-space id 0, the only one this
@@ -1396,6 +1397,8 @@ export class JRenderNode extends JObj {
   // re-recorded AFTER this layer keep showing fresh content (real RenderNode semantics)
   ops: ((c: Ctx2D) => void)[] = [];
   hasDL = false;
+  effect: JRenderEffect | null = null;
+  effectInput: OffscreenCanvas | null = null;
   static all: JRenderNode[] = [];   // debug registry (capped)
   constructor() { super(); if (JRenderNode.all.length < 400) JRenderNode.all.push(this); }
 }
@@ -1446,7 +1449,16 @@ function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
   perf.rnReplay += n.ops.length;
   // The display list stays a deferred command list (recorded ops replayed against the real
   // target). A bad op must not abandon this node's save, or its clip leaks into the frame.
-  try { for (const op of n.ops) op(ctx); }
+  try {
+    if (n.effect && n.w > 0 && n.h > 0) {
+      const surface = n.effectInput ??= new OffscreenCanvas(n.w, n.h);
+      if (surface.width !== n.w) surface.width = n.w;
+      if (surface.height !== n.h) surface.height = n.h;
+      const input = surface.getContext("2d")!; input.reset();
+      for (const op of n.ops) op(input);
+      n.effect.draw(ctx, surface);
+    } else for (const op of n.ops) op(ctx);
+  }
   catch (e) { perf.drawErrors++; noteNodeError(e); }
   finally { ctx.restore(); }
 }
@@ -1522,7 +1534,12 @@ rt.register({
     "setOutline(Landroid/graphics/Outline;)Z": function (this: JRenderNode, o: JOutline | null) { this.outline = o; return 1; },
     "setAmbientShadowColor(I)Z": rn1, "setSpotShadowColor(I)Z": rn1,
     "setUseCompositingLayer(ZLandroid/graphics/Paint;)Z": rn1,
-    "setRenderEffect(Landroid/graphics/RenderEffect;)Z": rn1,
+    "setRenderEffect(Landroid/graphics/RenderEffect;)Z": function (this: JRenderNode, effect: JRenderEffect | null) {
+      if (this.effect === effect) return 0;
+      this.effect = effect;
+      if (!effect) this.effectInput = null;
+      invalidateHook?.(); return 1;
+    },
     "setHasOverlappingRendering(Z)Z": rn1,
     "isValid()Z": function (this: JRenderNode) { return this.hasDL ? 1 : 0; },
     "getMatrix(Landroid/graphics/Matrix;)V": function (this: JRenderNode, m: JMatrix) {
