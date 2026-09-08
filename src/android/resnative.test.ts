@@ -189,3 +189,14 @@ test("scoped configuration inherits unspecified metrics and qualifier bit groups
   expect(child.host.dm.scaledDensity).toBe(3);
   expect(source.host.dm.scaledDensity).toBe(2.5);
 });
+
+
+test("TextUtils and Configuration share locale direction including explicit scripts", async () => {
+  const text = rt.link("android/text/TextUtils").ctor;
+  for (const [tag, expected] of [["en-US", 0], ["ar", 1], ["he", 1], ["fa", 1], ["ar-Latn", 0], ["az-Arab", 1], ["nqo", 1], ["und", 0]] as const) {
+    expect(await vcall(text, "getLayoutDirectionFromLocale", "(Ljava/util/Locale;)I", locale(tag))).toBe(expected);
+  }
+  expect(await vcall(text, "getLayoutDirectionFromLocale", "(Ljava/util/Locale;)I", null)).toBe(0);
+  const invalid = Object.assign(new JLocale(), { lang: "not a language" });
+  expect(await vcall(text, "getLayoutDirectionFromLocale", "(Ljava/util/Locale;)I", invalid)).toBe(0);
+});

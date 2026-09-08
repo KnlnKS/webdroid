@@ -7,6 +7,7 @@ import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontT
 import { device } from "../shell/config";
 import { formatDate } from "../jvm/natives/jtext";
 import { toJsArray } from "../jvm/natives/jutil";
+import { localeDirection } from "../jvm/natives/jvalues";
 
 export class JTextPaint extends JPaint {
   linkColor = -16776961;
@@ -369,6 +370,7 @@ class JTextUtils extends JObj {}
 rt.register({
   name: "android/text/TextUtils", ctor: JTextUtils,
   methods: {
+    "static getLayoutDirectionFromLocale(Ljava/util/Locale;)I": localeDirection,
     "static isEmpty(Ljava/lang/CharSequence;)Z": (s: unknown) => (s === null || spannedString(s).length === 0 ? 1 : 0),
     // True when a run is left-to-right throughout, which lets StaticLayout skip the bidi
     // reordering entirely. It is a real scan, not an assumption: the RTL blocks are Hebrew,

@@ -7,7 +7,7 @@ import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawa
 import { JTypedValue } from "./os";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 import { javaFormat, defineException } from "../jvm/natives/jlang";
-import { type JLocale, localeTag, usLocale } from "../jvm/natives/jvalues";
+import { type JLocale, localeTag, localeDirection, usLocale } from "../jvm/natives/jvalues";
 import { jarray } from "../jvm/abi";
 import { streamOf, streamOfSource } from "../jvm/natives/jio";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
@@ -31,13 +31,6 @@ const emptyLocaleList = new JLocaleList();
 const localeList = Object.assign(new JLocaleList(), { values: [usLocale] });
 const sameLocale = (a: JLocale | null, b: JLocale | null) => a === b || !!a && !!b &&
   a.lang === b.lang && a.country === b.country && a.script === b.script && a.variant === b.variant;
-// ICU script metadata; Intl's text direction can ignore explicit script subtags.
-const rtlScripts = new Set("Arab Hebr Syrc Thaa Cprt Khar Hung Mand Mero Nkoo Orkh Phnx Lydi Armi Avst Mani Phli Phlp Prti Samr Sarb Mend Merc Narb Nbat Palm Hatr Adlm Rohg Sogd Sogo Elym Chrs Yezi Ougr".split(" "));
-function localeDirection(locale: JLocale | null): number {
-  if (!locale || !locale.lang && !locale.script && !locale.country) return 0;
-  try { return rtlScripts.has(locale.script || new Intl.Locale(localeTag(locale)).maximize().script || "") ? 1 : 0; }
-  catch { return 0; }
-}
 function configLocales(c: JConfiguration): JLocaleList {
   if (!sameLocale(c.locale, c.locales.values[0] ?? null)) {
     c.locales = c.locale ? Object.assign(new JLocaleList(), { values: [c.locale] }) : emptyLocaleList;

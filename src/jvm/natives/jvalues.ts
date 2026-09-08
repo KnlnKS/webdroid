@@ -43,6 +43,13 @@ export class JLocale extends JObj { lang = ""; country = ""; script = ""; varian
 export function localeTag(l: JLocale): string {
   return [l.lang || "und", l.script, l.country, l.variant.replaceAll("_", "-")].filter(Boolean).join("-");
 }
+// ICU script metadata; Intl's text direction can ignore explicit script subtags.
+const rtlScripts = new Set("Arab Hebr Syrc Thaa Cprt Khar Hung Mand Mero Nkoo Orkh Phnx Lydi Armi Avst Mani Phli Phlp Prti Samr Sarb Mend Merc Narb Nbat Palm Hatr Adlm Rohg Sogd Sogo Elym Chrs Yezi Ougr".split(" "));
+export function localeDirection(locale: JLocale | null): number {
+  if (!locale || !locale.lang && !locale.script && !locale.country) return 0;
+  try { return rtlScripts.has(locale.script || new Intl.Locale(localeTag(locale)).maximize().script || "") ? 1 : 0; }
+  catch { return 0; }
+}
 /** the one locale the device speaks; also the default */
 export const usLocale = Object.assign(new JLocale(), { lang: "en", country: "US" });
 const localeNames = new Map<string, Intl.DisplayNames>();
