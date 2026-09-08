@@ -3,8 +3,8 @@
  * with the File System Access API. This is the only file that touches those APIs — everything
  * Android-facing sees `FileSystemDirectoryHandle` and nothing else.
  *
- * Where the API does not exist (Firefox, Safari, a headless Chromium with no one to click the
- * dialog) the same interface is served out of the Origin Private File System, so the code
+ * Where the API does not exist (Firefox, Safari), the same interface is served out of the
+ * Origin Private File System, so the code
  * above has one path rather than two. A user who *cancels* the real picker still gets null.
  */
 
@@ -58,28 +58,10 @@ async function opfsRoot(name: string): Promise<FileSystemDirectoryHandle> {
   return (await navigator.storage.getDirectory()).getDirectoryHandle(name, { create: true });
 }
 
-/**
- * A dialog that rejects before anyone could have seen it was never shown: Chrome answers
- * AbortError both for "the user cancelled" and for "this window may not open a chooser"
- * (an unfocused or automated window, and every headless one), and the timing is the only
- * thing that tells them apart. A refusal falls through to OPFS so the app still gets a
- * directory; a real cancellation is reported as one.
- */
-const SHOWN_MS = 250;
-
 /** The picked directory, or null if the user backed out. */
 export async function pickDirectory(): Promise<FileSystemDirectoryHandle | null> {
   const show = window.showDirectoryPicker;
-  const open = async () => {
-    if (!show) return opfsRoot("storage");
-    const t0 = performance.now();
-    try {
-      return await show.call(window, { mode: "readwrite", id: "webdroid" });
-    } catch (e) {
-      if ((e as Error)?.name === "AbortError" && performance.now() - t0 < SHOWN_MS) return opfsRoot("storage");
-      throw e;
-    }
-  };
+  const open = () => show ? show.call(window, { mode: "readwrite", id: "webdroid" }) : opfsRoot("storage");
   const h = await open().catch((e: Error) =>
     // SecurityError: the gesture that led here had gone stale by the time the app asked, so
     // put the request on the next press rather than losing it.
@@ -101,11 +83,9 @@ export async function pickFiles(opts: { multiple?: boolean; save?: string; mime?
     ? () => window.showSaveFilePicker?.({ suggestedName: save }).then((h) => [h])
     : () => window.showOpenFilePicker?.({ multiple: !!opts.multiple, ...(opts.mime ? { types: [{ accept: { [opts.mime]: [] } }] } : {}) });
   if (!(save ? window.showSaveFilePicker : window.showOpenFilePicker)) return opfsPicked(save);
-  const t0 = performance.now();
   try {
     return await open() ?? null;
-  } catch (e) {
-    if ((e as Error)?.name === "AbortError" && performance.now() - t0 < SHOWN_MS) return opfsPicked(opts.save);
+  } catch {
     return null;
   }
 }
