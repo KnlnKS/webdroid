@@ -24,9 +24,9 @@ See "One build, or none" and "The delegates" in AGENTS.md.
 | Coverage | `fwtest` 295/363 graphics · `fwtest android/content/res/` 82/97 · `fwtest android/graphics/text/` 20/37 |
 | Evidence, headless | `bun run fwtest`: `new Paint/Matrix/Path`, `Bitmap.createBitmap` + pixel round-trip, three AssetManager lookups, `android:layout/alert_dialog` opened through `nativeOpenXmlAsset` and walked to END_DOCUMENT |
 | Evidence, in a page | `bun run textcmp`: AOSP's own `StaticLayout` against ours, **6/6 paragraphs break identically** |
-| e2e (last full run) | fitnotes 43.07 · mihon-onboarding 17.55 · mihon-app 78.17 · harmonic 32.11 · overall 42.73, every step rendered, `layoutErrors`/`drawErrors` 0 across all eight flows |
-| Corpus | `bun run corpus` 7/8 render a frame; only Among Us does not, and that is now honest — its launcher activity's `<clinit>` is `System.loadLibrary("EOSSDK")`, 25 MB of arm64. Its `wd.rt.missing` is empty and the one remaining ranked gap in the whole corpus is harmonic's accepted `WindowExtensionsProvider` |
-| Native tier | ARM32 **and AArch64**. All 17 arm64 images in `apks/` load and relocate; `libmain.so`/`libsentry.so` run their init arrays and `JNI_OnLoad`. `wd.native.bench()`: arm 4,196M instr/s, a64 2,852M. The wall is NEON — see "The A64 tier" and "Among Us: where the wall actually is" in AGENTS.md |
+| e2e (last full run, 2026-09-07) | fitnotes 43.07 (39/39) · mihon-onboarding 17.56 (5/5) · mihon-app 97.63 (11/17, wedged) · harmonic 37.87 (14/14). **Gate not clean**: Mihon scheduler/Compose failures also reproduce on original `f1ff695`; live Harmonic content varies. All four smoke flows complete, with the existing Lichess native Flutter failure. See `tests/e2e/report/index.html`. |
+| Corpus | Last corpus run: 7/8 render. Subsequent focused Among Us testing reaches Practice gameplay; the corpus has not been rerun. |
+| Native tier | ARM32 **and AArch64**. Among Us executes Unity/IL2CPP through a shared cold interpreter and bounded hot-block compiler. Practice on The Skeld renders and accepts joystick movement, with empty reached missing-API telemetry. Controlled gameplay remains roughly 4–9 fps; online play is unverified. See "Among Us: Practice and code-cache pressure" in AGENTS.md. |
 | Screen | a resolved **setting**, default 1080x2424 @480dpi (360x808dp). `?screen=WxH@dpi`, `WEBDROID_SCREEN`, or the shell's own panel. The gate stays pinned to each flow's goldens — see "The screen is a setting" in AGENTS.md |
 
 ## What a cut costs — measured, not projected

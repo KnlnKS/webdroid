@@ -138,14 +138,11 @@ and a `removeMessages` on something that is not our Handler.
 - [ ] harmonic remaining: the two dialog defects written up under "The dialog card that was a
       blob", plus the settings row pitch being ~3% tall and story rows having no preview
       thumbnails or favicons.
-- [x] Among Us: the whole Java layer runs and `wd.rt.missing` is EMPTY — split install merged,
-      18,889 classes compiled with 0 method failures, WorkManager/Sentry/ProfileInstaller all
-      initialised, the starting window on screen, and the only failure is the one a device would
-      not have: `libEOSSDK.so` is arm64 machine code. It now *loads* and runs 140 instructions
-      of its init arrays before an unimplemented NEON encoding. See "Among Us: where the wall
-      actually is".
-- [ ] Among Us remaining: NEON, the Bionic surface those images import (322 for libEOSSDK
-      alone), `libandroid.so`/`libGLESv3.so`/`libOpenSLES.so`, and a GLES3 host library.
+- [x] Among Us: original ARM64 Unity/IL2CPP code reaches Practice on The Skeld, renders the
+      player and joystick, and responds to movement. 18,889 classes compile with 0 method
+      failures; reached missing-API telemetry is empty. See "Among Us: Practice and code-cache pressure".
+- [ ] Among Us remaining: smooth gameplay, remote certificate trust, Google account services,
+      and external UDP transport. Online play is unverified; empty telemetry is not complete API coverage.
 
 ## Infrastructure delivered
 - DEX→JS AOT VM: compiles 4200+ classes/APK in ~400ms, 0 method failures; bodies generated lazily
@@ -1532,7 +1529,31 @@ Generic gaps this uncovered, none Flutter-specific:
   default uncaught handler now prints the `Caused by` chain (AOSP's does; it is what named the
   real fault above).
 
+## Among Us: Practice and code-cache pressure
+
+Validated on 2026-09-07: `PORT=4197 bun run dev`, then open
+`http://localhost:4197/?apk=Among%20Us.xapk`. After the user-approved notice, the game's
+Google account failure dialogs offer Continue and Close. Play → Practice → The Skeld hosts
+and joins a real process-local UDP session. The cafeteria, player, tasks and joystick render;
+joystick input moves the player and camera. Account success is not fabricated. External UDP
+has no relay and remains unsupported.
+
+ARM64 cold blocks share interpreted handlers; frequently executed entries compile after
+1,024 visits. The compiled cache retains at most roughly 24,576 blocks, evicting old pages to
+a lower watermark. Eviction must release both outgoing and incoming hot links, including
+when compiling a target evicts its active caller. `cache.test.ts` covers this and repeated
+self-modifying code. Evictions are separate from code-write invalidation telemetry.
+
+Without the cache bound, retained generated functions exhausted V8's executable space:
+366 full GCs in ~18 seconds and 87.6% of CPU samples in GC despite gigabytes of available
+ordinary heap. With the bound, GC samples fell to 8.7%, map selection reached gameplay in
+about 20 seconds instead of 110–150, and a controlled headless SwiftShader run sustained
+roughly 4–9 fps. This is a measured improvement, not smooth gameplay. Range-backed asset
+reads retain 32 × 1 MiB cache pages; they were not the source of the GC storm.
+
 ## Among Us: where the wall actually is
+Historical bring-up notes below; the current result is documented above.
+
 The whole Java layer runs. `bun run smoke "apks/Among Us.xapk"` compiles all 18,889 classes with
 0 method failures in 2.6s; a boot merges the split install, initialises WorkManager, Sentry and
 ProfileInstaller, and leaves **`wd.rt.missing` empty**. Nine APIs got it there, none of them
