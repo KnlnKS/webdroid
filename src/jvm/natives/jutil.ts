@@ -1636,13 +1636,14 @@ class JArrays extends JObj {}
 class JArraysList extends JList {}
 rt.register({
   name: "webdroid/ArraysList", ctor: JArraysList,
-  ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/RandomAccess"],
+  ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/RandomAccess", "java/io/Serializable"],
   methods: listMethods(),
 });
 rt.register({
   name: "java/util/Arrays", ctor: JArrays,
   methods: {
     "static asList([Ljava/lang/Object;)Ljava/util/List;": (arr: unknown[]) => {
+      rt.link("webdroid/ArraysList");
       const l = new JArraysList(); l.a = arr; return l;
     },
     "static sort([I)V": taSort,
