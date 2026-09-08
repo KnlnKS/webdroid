@@ -789,11 +789,14 @@ rt.register({ name: "android/app/Service", ctor: class extends JContextWrapper {
     ...contextMethods,
     "<init>()V": function () {},
     "onCreate()V": () => {},
-    "onDestroy()V": function (this: JObj) { svcStop(jclsNameOf(this)); },
-    "onStartCommand(Landroid/content/Intent;II)I": () => 1,
+    "onDestroy()V": () => {},
+    "onStart(Landroid/content/Intent;I)V": () => {},
+    "onStartCommand(Landroid/content/Intent;II)I": async function (this: JObj, intent: JIntent, _flags: number, startId: number) {
+      await vcall(this, "onStart", "(Landroid/content/Intent;I)V", intent, startId); return 1;
+    },
     "stopSelf()V": function (this: JObj) { svcStop(jclsNameOf(this)); },
-    "stopSelf(I)V": function (this: JObj) { svcStop(jclsNameOf(this)); },
-    "stopSelfResult(I)Z": function (this: JObj) { return svcStop(jclsNameOf(this)); },
+    "stopSelf(I)V": function (this: JObj, startId: number) { svcStop(jclsNameOf(this), startId); },
+    "stopSelfResult(I)Z": function (this: JObj, startId: number) { return svcStop(jclsNameOf(this), startId); },
     "startForeground(ILandroid/app/Notification;)V": function (this: JObj) { svcFg(this, true); },
     "startForeground(ILandroid/app/Notification;I)V": function (this: JObj) { svcFg(this, true); }, // the type is advisory
     "stopForeground(Z)V": function (this: JObj) { svcFg(this, false); },
