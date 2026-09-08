@@ -112,3 +112,42 @@ test("class loader resource URLs stream archive entries and preserve parent sear
   vfs.files.delete("/data/app/resources-parent.apk");
   vfs.files.delete("/data/app/resources-child.apk");
 });
+
+async function duplicateLoaderDex() {
+  const { vfs } = await import("./natives/jio");
+  const bytes = await Bun.file(new URL("./fixtures/monitor.dex", import.meta.url)).bytes();
+  const data = Buffer.from(bytes);
+  for (let offset = data.indexOf("MonitorFixture"); offset >= 0; offset = data.indexOf("MonitorFixture", offset + 1))
+    bytes.set(new TextEncoder().encode("BindingFixture"), offset);
+  vfs.write("/data/app/duplicate-loader.dex", bytes);
+}
+
+test("parent delegation binds duplicate definitions consistently for bytecode dependencies", async () => {
+  await duplicateLoaderDex();
+  const parent = await newObj("dalvik/system/PathClassLoader", "(Ljava/lang/String;Ljava/lang/ClassLoader;)V", "/data/app/duplicate-loader.dex", null);
+  const child = await newObj("dalvik/system/PathClassLoader", "(Ljava/lang/String;Ljava/lang/ClassLoader;)V", "/data/app/duplicate-loader.dex", parent);
+  const name = "webdroid/BindingFixture";
+  const loaded = await vcall(child, "loadClass", "(Ljava/lang/String;Z)Ljava/lang/Class;", name.replaceAll("/", "."), 0);
+  expect(loaded.ci.owner).toBe(parent.runtime);
+  expect(child.runtime.classFor(name)).toBe(loaded);
+  expect(await vcall(child, "findLoadedClass", "(Ljava/lang/String;)Ljava/lang/Class;", name)).toBe(loaded);
+  expect(loaded.ci.state).toBe(0);
+});
+
+test("Mihon's bytecode loader keeps its child-first decision for duplicate parent DEX", async () => {
+  const { openDexes } = await import("../../scripts/lib");
+  await duplicateLoaderDex();
+  const app = rt.fork();
+  for (const dex of await openDexes(new URL("../../apks/mihon-v0.20.4.apk", import.meta.url).pathname)) app.loadDex(dex);
+  const info = app.link("eu/kanade/tachiyomi/util/system/ChildFirstPathClassLoader");
+  await app.initClass(info);
+  const parent = await newObj("dalvik/system/PathClassLoader", "(Ljava/lang/String;Ljava/lang/ClassLoader;)V", "/data/app/duplicate-loader.dex", null);
+  const child = new info.ctor();
+  await vcall(child, "<init>", "(Ljava/lang/ClassLoader;Ljava/lang/String;)V", parent, "/data/app/duplicate-loader.dex");
+  const loaded = await vcall(child, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", "webdroid.BindingFixture");
+  const parentClass = await vcall(parent, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", "webdroid.BindingFixture");
+  expect(loaded).not.toBe(parentClass);
+  expect(loaded.ci.owner).toBe(child.runtime);
+  expect(child.runtime.classFor("webdroid/BindingFixture")).toBe(loaded);
+  expect(loaded.ci.state).toBe(0);
+});

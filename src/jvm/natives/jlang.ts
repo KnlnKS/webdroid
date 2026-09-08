@@ -249,13 +249,25 @@ rt.register({
 });
 
 export class JClassLoader extends JObj { parent: JClassLoader | null = null; runtime: Runtime = rt; }
+function rememberLoaded(loader: JClassLoader, name: string, cls: JClass): JClass {
+  if (loader.runtime.classLoader === loader && cls.ci?.name === name.replace(/\./g, "/")) {
+    const previous = loader.runtime.classes.get(cls.ci.name);
+    if (previous && !previous.stub && previous !== cls.ci)
+      throw rt.mkThrowable("java/lang/LinkageError", `Conflicting loader definition: ${name}`);
+    loader.runtime.classes.set(cls.ci.name, cls.ci);
+  }
+  return cls;
+}
 async function loadClass(this: JClassLoader, n: string): Promise<JClass> {
+  const loaded: JClass | null = await vcall(this, "findLoadedClass", "(Ljava/lang/String;)Ljava/lang/Class;", n);
+  if (loaded) return loaded;
   try {
-    return this.parent
+    const cls = this.parent
       ? await vcall(this.parent, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", n)
       : await vcall(rt.link("java/lang/Class").ctor, "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", n, 0, null);
+    return rememberLoaded(this, n, cls);
   } catch (e) { if (!rt.iof(e, "java/lang/ClassNotFoundException")) throw e; }
-  return vcall(this, "findClass", "(Ljava/lang/String;)Ljava/lang/Class;", n);
+  return rememberLoaded(this, n, await vcall(this, "findClass", "(Ljava/lang/String;)Ljava/lang/Class;", n));
 }
 rt.register({
   name: "java/lang/ClassLoader",
@@ -266,7 +278,7 @@ rt.register({
     "<init>(Ljava/lang/ClassLoader;)V": function (this: JClassLoader, parent: JClassLoader | null) { this.parent = parent; },
     "getParent()Ljava/lang/ClassLoader;": function (this: JClassLoader) { return this.parent; },
     "loadClass(Ljava/lang/String;)Ljava/lang/Class;": async function (this: JClassLoader, n: string) {
-      return vcall(this, "loadClass", "(Ljava/lang/String;Z)Ljava/lang/Class;", n, 0);
+      return rememberLoaded(this, n, await vcall(this, "loadClass", "(Ljava/lang/String;Z)Ljava/lang/Class;", n, 0));
     },
     "loadClass(Ljava/lang/String;Z)Ljava/lang/Class;": loadClass,
     "findLoadedClass(Ljava/lang/String;)Ljava/lang/Class;": function (this: JClassLoader, n: string) {
