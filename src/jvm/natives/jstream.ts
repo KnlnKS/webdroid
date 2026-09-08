@@ -9,7 +9,7 @@ class JSpliterator extends JObj { a: unknown[] = []; }
 class JStream extends JObj { a: unknown[] = []; }
 const mkStream = (a: unknown[]) => { const s = new JStream(); s.a = a; return s; };
 class JOptional extends JObj { v: unknown = null; }
-const mkOpt = (v: unknown) => { const o = new JOptional(); o.v = v ?? null; return o; };
+const mkOpt = (v: unknown) => { rt.link("java/util/Optional"); const o = new JOptional(); o.v = v ?? null; return o; };
 class JCollector extends JObj {
   make: () => unknown = () => newArrayList([]);
   add: (c: unknown, x: unknown) => unknown = () => {};
