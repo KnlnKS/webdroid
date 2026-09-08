@@ -1,6 +1,6 @@
 // java.lang.reflect.Method + annotation instances backed by DEX annotation parsing.
 
-import { rt, JObj, type ClassInfo, type NativeSpec } from "../runtime";
+import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
 import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, newPrimArray, PRIM_NAME, PRIM_DESC, lateMethod } from "../abi";
 import { vcall, boxInt, box, stringHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
@@ -129,11 +129,11 @@ rt.register({
   ifaces: ["java/lang/reflect/AnnotatedElement", "java/lang/reflect/Member"],
   methods: {
     "getName()Ljava/lang/String;": function (this: JField) { return this.fname; },
-    "getType()Ljava/lang/Class;": function (this: JField) { return classForDesc(this.desc); },
+    "getType()Ljava/lang/Class;": function (this: JField) { return classForDesc(this.desc, this.owner.owner); },
     "getModifiers()I": function (this: JField) { return (this.isStatic ? 0x8 : 0) | 0x1; },
     "setAccessible(Z)V": () => {},
     "isAccessible()Z": () => 1,
-    "getDeclaringClass()Ljava/lang/Class;": function (this: JField) { return rt.classFor(this.owner.name); },
+    "getDeclaringClass()Ljava/lang/Class;": function (this: JField) { return (this.owner.owner ?? rt).classFor(this.owner.name); },
     "get(Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JField, o: unknown) {
       const p = rt.initClass(this.owner); if (p) await p;
       const v = this.isStatic ? this.owner.ctor[this.prop] : (o as Record<string, unknown>)[this.prop];
@@ -428,10 +428,10 @@ rt.register({
     "getModifiers()I": function (this: JMethod) { return this.mods || (this.isStatic ? 0x8 : 0) | 0x1; },
     "isDefault()Z": function (this: JMethod) { return this.owner.isInterface && this.mods && !(this.mods & 0x400) ? 1 : 0; },
     "getReturnType()Ljava/lang/Class;": function (this: JMethod) {
-      return classForDesc(parseMethodDesc(this.desc).ret);
+      return classForDesc(parseMethodDesc(this.desc).ret, this.owner.owner);
     },
-    "getParameterTypes()[Ljava/lang/Class;": function (this: JMethod) { return paramClasses(this.desc, "Ljava/lang/Class;"); },
-    "getDeclaringClass()Ljava/lang/Class;": function (this: JMethod) { return rt.classFor(this.owner.name); },
+    "getParameterTypes()[Ljava/lang/Class;": function (this: JMethod) { return paramClasses(this.desc, "Ljava/lang/Class;", this.owner.owner); },
+    "getDeclaringClass()Ljava/lang/Class;": function (this: JMethod) { return (this.owner.owner ?? rt).classFor(this.owner.name); },
     "setAccessible(Z)V": () => {},
     "isAccessible()Z": () => 1,
     "isSynthetic()Z": () => 0,
@@ -447,7 +447,7 @@ rt.register({
     ...annotatedElement(function (this: JMethod) { return classAnno(this.owner).methodsByRef.get(this.name + this.desc) ?? []; }),
     "getParameterAnnotations()[[Ljava/lang/annotation/Annotation;": function (this: JMethod) { return paramAnnotations(this.owner, this.name, this.desc); },
     "getGenericReturnType()Ljava/lang/reflect/Type;": function (this: JMethod) {
-      return classForDesc(parseMethodDesc(this.desc).ret);
+      return classForDesc(parseMethodDesc(this.desc).ret, this.owner.owner);
     },
     // Java's own spelling, which a JNI caller parses for the name and parameter types
     "toString()Ljava/lang/String;": function (this: JMethod) {
@@ -498,13 +498,13 @@ rt.register({
     "getName()Ljava/lang/String;": function (this: JCtor) { return this.owner.name.replace(/\//g, "."); },
     "getTypeParameters()[Ljava/lang/reflect/TypeVariable;": noTypeVars,
     "getModifiers()I": function (this: JCtor) { return this.flags; },
-    "getDeclaringClass()Ljava/lang/Class;": function (this: JCtor) { return rt.classFor(this.owner.name); },
+    "getDeclaringClass()Ljava/lang/Class;": function (this: JCtor) { return (this.owner.owner ?? rt).classFor(this.owner.name); },
     "setAccessible(Z)V": () => {},
     "isAccessible()Z": () => 1,
     "isSynthetic()Z": () => 0,
     "isVarArgs()Z": function (this: JCtor) { return (this.flags & 0x80) ? 1 : 0; },
-    "getParameterTypes()[Ljava/lang/Class;": function (this: JCtor) { return paramClasses(this.desc, "Ljava/lang/Class;"); },
-    "getGenericParameterTypes()[Ljava/lang/reflect/Type;": function (this: JCtor) { return paramClasses(this.desc, "Ljava/lang/reflect/Type;"); },
+    "getParameterTypes()[Ljava/lang/Class;": function (this: JCtor) { return paramClasses(this.desc, "Ljava/lang/Class;", this.owner.owner); },
+    "getGenericParameterTypes()[Ljava/lang/reflect/Type;": function (this: JCtor) { return paramClasses(this.desc, "Ljava/lang/reflect/Type;", this.owner.owner); },
     "getParameterAnnotations()[[Ljava/lang/annotation/Annotation;": function (this: JCtor) { return paramAnnotations(this.owner, "<init>", this.desc); },
     "newInstance([Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JCtor, args: unknown[] | null) {
       const info = this.owner;
@@ -526,12 +526,12 @@ rt.register({
   },
 });
 
-function classForDesc(desc: string): unknown {
-  if (desc[0] === "L") return rt.classFor(descToName(desc));
-  if (desc[0] === "[") return rt.classFor(desc);
-  return rt.classFor(PRIM_NAME[desc] ?? "int");
+function classForDesc(desc: string, runtime: Runtime = rt): unknown {
+  if (desc[0] === "L") return runtime.classFor(descToName(desc));
+  if (desc[0] === "[") return runtime.classFor(desc);
+  return runtime.classFor(PRIM_NAME[desc] ?? "int");
 }
-function paramClasses(desc: string, elem: string) { return jarray(parseMethodDesc(desc).params.map(classForDesc), elem); }
+function paramClasses(desc: string, elem: string, runtime: Runtime = rt) { return jarray(parseMethodDesc(desc).params.map((d) => classForDesc(d, runtime)), elem); }
 function noTypeVars() { return jarray([], "Ljava/lang/reflect/TypeVariable;"); }
 export function unboxArg(v: unknown): unknown {
   // reflection passes boxed primitives; unwrap to raw for native/compiled calls
@@ -695,7 +695,12 @@ function installForName(classCtor: unknown) {
     if (linked) return !linked.stub;
     return rt.natives.has(n) || rt.dexIndex.has(n);
   };
-  const forName = async function (jn: string, initialize = 1) {
+  const forName = async function (jn: string, initialize = 1, loader: unknown = null) {
+    if (loader) {
+      const c: JClass = await vcall(loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", jn);
+      if (initialize && c.ci) await rt.initClass(c.ci);
+      return c;
+    }
     const name = jn.replace(/\./g, "/");
     if (!loadable(name)) {
       console.debug("[webdroid] Class.forName: no such class", jn);
@@ -736,12 +741,12 @@ export function installClassReflection() {
       const t = parseTypeSig(s, { pos });
       if (t instanceof JPType) return t;
     }
-    return rt.classFor(sup.name);
+    return (sup.owner ?? rt).classFor(sup.name);
   };
   M["getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;"] = function (this: JClass, path: string) {
     // a relative name resolves against the class's own package
     const pkg = (this.ci?.name ?? "").split("/").slice(0, -1).join("/");
-    return classpathStream(path.startsWith("/") ? path.slice(1) : (pkg ? pkg + "/" : "") + path);
+    return classpathStream(path.startsWith("/") ? path.slice(1) : (pkg ? pkg + "/" : "") + path, this.ci?.owner);
   };
   M["getEnclosingMethod()Ljava/lang/reflect/Method;"] = () => null;
   M["getPackage()Ljava/lang/Package;"] = function (this: JClass) {

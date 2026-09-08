@@ -11,7 +11,7 @@ import { rt, JObj, type NativeSpec } from "../runtime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
 import { boxInt, stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { jarray } from "../abi";
-import type { JInputStream, JOutputStream } from "./jio";
+import { vfs, type JInputStream, type JOutputStream } from "./jio";
 import { Relay } from "../../shell/relay";
 
 for (const marker of [
@@ -540,7 +540,24 @@ rt.register({
     "hashCode()I": function (this: JURL) { return stringHash(this.u.href); },
     "openConnection()Ljava/net/URLConnection;": function (this: JURL) { return this.open(); },
     "openConnection(Ljava/net/Proxy;)Ljava/net/URLConnection;": function (this: JURL) { return this.open(); },
-    "openStream()Ljava/io/InputStream;": function (this: JURL) { return vcall(this.open(), "getInputStream", "()Ljava/io/InputStream;"); },
+    "openStream()Ljava/io/InputStream;": async function (this: JURL) {
+      if (this.u.protocol === "jar:") {
+        const split = this.spec.indexOf("!/");
+        if (split < 0) throw rt.mkThrowable("java/io/IOException", this.spec);
+        const archive = new URL(this.spec.slice(4, split));
+        if (archive.protocol !== "file:") throw rt.mkThrowable("java/io/IOException", this.spec);
+        const zip = await newObj("java/util/zip/ZipFile", "(Ljava/lang/String;)V", decodeURIComponent(archive.pathname));
+        const entry = await vcall(zip, "getEntry", "(Ljava/lang/String;)Ljava/util/zip/ZipEntry;", decodeURIComponent(this.spec.slice(split + 2)));
+        if (!entry) throw rt.mkThrowable("java/io/FileNotFoundException", this.spec);
+        return vcall(zip, "getInputStream", "(Ljava/util/zip/ZipEntry;)Ljava/io/InputStream;", entry);
+      }
+      if (this.u.protocol === "file:") {
+        const bytes = await vfs.readFile(decodeURIComponent(this.u.pathname));
+        if (!bytes) throw rt.mkThrowable("java/io/FileNotFoundException", this.spec);
+        return newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length));
+      }
+      return vcall(this.open(), "getInputStream", "()Ljava/io/InputStream;");
+    },
   },
 });
 const idnAscii = (s: string) => {

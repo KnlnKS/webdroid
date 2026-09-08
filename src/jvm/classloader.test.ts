@@ -57,3 +57,58 @@ test("loading classes does not initialize them and default loaders retain the sy
   await vcall(rt.link("java/lang/Class").ctor, "forName", "(Ljava/lang/String;)Ljava/lang/Class;", "test.LazyLoadTarget");
   expect(initialized).toBe(1);
 });
+
+test("PathClassLoader keeps DEX definitions private and preserves their loader through reflection", async () => {
+  await import("./natives/jdex");
+  const { vfs } = await import("./natives/jio");
+  const bytes = new Uint8Array(await Bun.file(new URL("./fixtures/monitor.dex", import.meta.url)).arrayBuffer());
+  vfs.write("/data/app/loader-test.apk", bytes);
+  const original = rt.dexIndex.get("webdroid/MonitorFixture");
+  const a = await newObj("dalvik/system/PathClassLoader", "(Ljava/lang/String;Ljava/lang/ClassLoader;)V", "/data/app/loader-test.apk", null);
+  const b = await newObj("dalvik/system/PathClassLoader", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V", "/data/app/loader-test.apk", null, null);
+  expect(await vcall(a, "findLoadedClass", "(Ljava/lang/String;)Ljava/lang/Class;", "webdroid.MonitorFixture")).toBeNull();
+  const ca = await vcall(a, "findClass", "(Ljava/lang/String;)Ljava/lang/Class;", "webdroid.MonitorFixture");
+  const cb = await vcall(b, "findClass", "(Ljava/lang/String;)Ljava/lang/Class;", "webdroid.MonitorFixture");
+  expect(ca).not.toBe(cb);
+  expect(await vcall(ca, "isAssignableFrom", "(Ljava/lang/Class;)Z", cb)).toBe(0);
+  expect(rt.dexIndex.get("webdroid/MonitorFixture")).toBe(original);
+  expect(await vcall(ca, "getClassLoader", "()Ljava/lang/ClassLoader;")).toBe(a);
+  expect(await vcall(a, "findLoadedClass", "(Ljava/lang/String;)Ljava/lang/Class;", "webdroid.MonitorFixture")).toBe(ca);
+  expect(ca.ci.state).toBe(0);
+  const object = await vcall(ca, "newInstance", "()Ljava/lang/Object;");
+  expect(await vcall(object, "getClass", "()Ljava/lang/Class;")).toBe(ca);
+  expect(await vcall(ca, "isInstance", "(Ljava/lang/Object;)Z", object)).toBe(1);
+  expect(await vcall(cb, "isInstance", "(Ljava/lang/Object;)Z", object)).toBe(0);
+  await vcall(ca.ci.ctor, "enter", "(Ljava/lang/Object;)V", object);
+  expect(ca.ci.state).toBe(2);
+  expect(cb.ci.state).toBe(0);
+  const delegated = await vcall(b, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", "webdroid.MonitorFixture");
+  expect(await vcall(rt.link("java/lang/Class").ctor, "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", "webdroid.MonitorFixture", 1, b)).toBe(delegated);
+  expect(delegated.ci.state).toBe(2);
+  await expect(vcall(a, "findClass", "(Ljava/lang/String;)Ljava/lang/Class;", "absent.Target")).rejects.toMatchObject({ msg: "absent.Target" });
+  vfs.files.delete("/data/app/loader-test.apk");
+});
+
+test("class loader resource URLs stream archive entries and preserve parent search order", async () => {
+  await import("./natives/jdex");
+  await import("./natives/jnet");
+  await import("./natives/jzip");
+  rt.link("webdroid/Iter");
+  const { zipSync, strToU8 } = await import("fflate");
+  const { vfs, readStreamFully } = await import("./natives/jio");
+  vfs.write("/data/app/resources-parent.apk", zipSync({ "assets/message.txt": strToU8("parent") }));
+  vfs.write("/data/app/resources-child.apk", zipSync({ "assets/message.txt": strToU8("child") }));
+  const parent = await newObj("dalvik/system/PathClassLoader", "(Ljava/lang/String;Ljava/lang/ClassLoader;)V", "/data/app/resources-parent.apk", null);
+  const child = await newObj("dalvik/system/PathClassLoader", "(Ljava/lang/String;Ljava/lang/ClassLoader;)V", "/data/app/resources-child.apk", parent);
+  const stream = await vcall(child, "getResourceAsStream", "(Ljava/lang/String;)Ljava/io/InputStream;", "assets/message.txt");
+  expect(new TextDecoder().decode(await readStreamFully(stream))).toBe("parent");
+  const own = await vcall(child, "findResource", "(Ljava/lang/String;)Ljava/net/URL;", "assets/message.txt");
+  expect(new TextDecoder().decode(await readStreamFully(await vcall(own, "openStream", "()Ljava/io/InputStream;")))).toBe("child");
+  const urls = await vcall(child, "getResources", "(Ljava/lang/String;)Ljava/util/Enumeration;", "assets/message.txt");
+  const paths: string[] = [];
+  while (await vcall(urls, "hasMoreElements", "()Z")) paths.push(await vcall(await vcall(urls, "nextElement", "()Ljava/lang/Object;"), "toString", "()Ljava/lang/String;"));
+  expect(paths).toEqual(["jar:file:///data/app/resources-parent.apk!/assets/message.txt", "jar:file:///data/app/resources-child.apk!/assets/message.txt"]);
+  expect(await vcall(child, "getResource", "(Ljava/lang/String;)Ljava/net/URL;", "missing")).toBeNull();
+  vfs.files.delete("/data/app/resources-parent.apk");
+  vfs.files.delete("/data/app/resources-child.apk");
+});

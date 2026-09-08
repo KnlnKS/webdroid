@@ -1,7 +1,7 @@
 // java.lang.* natives. Convention: Java booleans are 0/1 numbers, longs are BigInt,
 // Strings are JS string primitives (String.prototype carries mangled Java methods).
 
-import { rt, JObj, type ClassInfo, type NativeSpec } from "../runtime";
+import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
 import { mangleMethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits } from "../abi";
 
 // dynamic virtual call from native code, with promise guard
@@ -118,7 +118,7 @@ rt.register({
     "toString()Ljava/lang/String;": function () {
       return jclsName(this).replace(/\//g, ".") + "@" + idHash(this).toString(16);
     },
-    "getClass()Ljava/lang/Class;": function () { return rt.classFor(jclsName(this)); },
+    "getClass()Ljava/lang/Class;": function () { const info: ClassInfo | undefined = (this.constructor as typeof JObj).$i; return (info?.owner ?? rt).classFor(jclsName(this)); },
     "clone()Ljava/lang/Object;": function (this: any) {
       if (Array.isArray(this)) { const c: unknown[] = (this as unknown[]).slice(); (c as any).$t = (this as any).$t; return c; }
       if (ArrayBuffer.isView(this)) return (this as any).slice();
@@ -153,16 +153,20 @@ export class JClass extends JObj {
   arrDesc: string | null = null;
 }
 const classCache = new Map<string, JClass>();
-rt.classFor = (name: string): JClass => {
-  let c = classCache.get(name);
+rt.classFor = function (this: Runtime, name: string): JClass {
+  const special = name[0] === "[" || ["int", "long", "float", "double", "boolean", "byte", "char", "short", "void"].includes(name);
+  const ci = special ? null : this.link(name);
+  let c: JClass | undefined = ci ? ci.jclass : classCache.get(name);
   if (c) return c;
   c = new JClass();
   if (name[0] === "[") c.arrDesc = name;
-  else if (["int", "long", "float", "double", "boolean", "byte", "char", "short", "void"].includes(name)) c.primName = name;
-  else c.ci = rt.link(name);
-  classCache.set(name, c);
+  else if (special) c.primName = name;
+  else c.ci = ci;
+  if (ci) ci.jclass = c;
+  else classCache.set(name, c);
   return c;
 };
+
 function jclassName(c: JClass): string {
   if (c.primName) return c.primName;
   if (c.arrDesc) return c.arrDesc.replace(/\//g, ".");
@@ -182,19 +186,19 @@ rt.register({
     },
     "hashCode()I": function () { return idHash(this); },
     "isInstance(Ljava/lang/Object;)Z": function (this: JClass, o: unknown) {
-      return rt.iof(o, this.ci?.name ?? this.arrDesc ?? "?");
+      return (this.ci?.owner ?? rt).iof(o, this.ci?.name ?? this.arrDesc ?? "?");
     },
     "isAssignableFrom(Ljava/lang/Class;)Z": function (this: JClass, other: JClass) {
       if (!other) rt.npe();
       if (other === this) return 1;
-      return other.ci?.types.has(this.ci?.name ?? "??") ? 1 : 0;
+      return this.ci && other.ci ? +other.ci.assignableTo(this.ci) : 0;
     },
     "isInterface()Z": function (this: JClass) { return this.ci?.isInterface ? 1 : 0; },
     "isArray()Z": function (this: JClass) { return this.arrDesc ? 1 : 0; },
     "isPrimitive()Z": function (this: JClass) { return this.primName ? 1 : 0; },
     "getSuperclass()Ljava/lang/Class;": function (this: JClass) {
       const s = this.ci?.superInfo;
-      return s ? rt.classFor(s.name) : null;
+      return s ? (s.owner ?? rt).classFor(s.name) : null;
     },
     "getComponentType()Ljava/lang/Class;": function (this: JClass) {
       if (!this.arrDesc) return null;
@@ -213,10 +217,10 @@ rt.register({
       await vcall(o, "<init>", "()V");
       return o;
     },
-    "getClassLoader()Ljava/lang/ClassLoader;": function () { return bootLoader; },
+    "getClassLoader()Ljava/lang/ClassLoader;": function (this: JClass) { return this.ci?.owner?.classLoader ?? bootLoader; },
     "desiredAssertionStatus()Z": function () { return 0; },
     "getInterfaces()[Ljava/lang/Class;": function (this: JClass) {
-      return jarray((this.ci?.interfaces ?? []).map((i) => rt.classFor(i.name)), "Ljava/lang/Class;");
+      return jarray((this.ci?.interfaces ?? []).map((i) => (i.owner ?? rt).classFor(i.name)), "Ljava/lang/Class;");
     },
     "getCanonicalName()Ljava/lang/String;": function (this: JClass) {
       return jclassName(this).replace(/\$/g, ".");
@@ -237,14 +241,14 @@ rt.register({
       return i > 0 ? rt.classFor(n.slice(0, i)) : null;
     },
     "cast(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JClass, o: unknown) {
-      return rt.cc(o, this.ci?.name ?? this.arrDesc ?? "java/lang/Object");
+      return (this.ci?.owner ?? rt).cc(o, this.ci?.name ?? this.arrDesc ?? "java/lang/Object");
     },
     "asSubclass(Ljava/lang/Class;)Ljava/lang/Class;": function (this: JClass) { return this; },
     // forName/getConstructor(s)/getDeclaredConstructor(s)/getModifiers live in jreflect (installClassReflection)
   },
 });
 
-class JClassLoader extends JObj { parent: JClassLoader | null = null; }
+export class JClassLoader extends JObj { parent: JClassLoader | null = null; runtime: Runtime = rt; }
 async function loadClass(this: JClassLoader, n: string): Promise<JClass> {
   try {
     return this.parent
@@ -265,16 +269,48 @@ rt.register({
       return vcall(this, "loadClass", "(Ljava/lang/String;Z)Ljava/lang/Class;", n, 0);
     },
     "loadClass(Ljava/lang/String;Z)Ljava/lang/Class;": loadClass,
+    "findLoadedClass(Ljava/lang/String;)Ljava/lang/Class;": function (this: JClassLoader, n: string) {
+      const name = n.replace(/\./g, "/");
+      const ci = this.runtime.classes.get(name);
+      return ci && !ci.stub ? this.runtime.classFor(name) : null;
+    },
+    "resolveClass(Ljava/lang/Class;)V": () => {},
     "findClass(Ljava/lang/String;)Ljava/lang/Class;": (n: string) => { throw rt.mkThrowable("java/lang/ClassNotFoundException", n); },
-    "getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;": (path: string) => classpathStream(path.replace(/^\//, "")),
+    "findResource(Ljava/lang/String;)Ljava/net/URL;": function (this: JClassLoader, path: string) {
+      if (!this.runtime.classpath[path]) return null;
+      const archive = this.runtime.classpathLocations.get(path) ?? "/data/app/base.apk";
+      return newObj("java/net/URL", "(Ljava/lang/String;)V", "jar:file://" + archive + "!/" + path);
+    },
+    "getResource(Ljava/lang/String;)Ljava/net/URL;": async function (this: JClassLoader, path: string) {
+      const inherited = this.parent && await vcall(this.parent, "getResource", "(Ljava/lang/String;)Ljava/net/URL;", path);
+      return inherited || vcall(this, "findResource", "(Ljava/lang/String;)Ljava/net/URL;", path);
+    },
+    "findResources(Ljava/lang/String;)Ljava/util/Enumeration;": async function (this: JClassLoader, path: string) {
+      const { mkIter } = await import("./jutil");
+      const url = await vcall(this, "findResource", "(Ljava/lang/String;)Ljava/net/URL;", path);
+      return mkIter(url ? [url] : []);
+    },
+    "getResources(Ljava/lang/String;)Ljava/util/Enumeration;": async function (this: JClassLoader, path: string) {
+      const { mkIter } = await import("./jutil");
+      const urls: unknown[] = [];
+      const inherited = this.parent && await vcall(this.parent, "getResources", "(Ljava/lang/String;)Ljava/util/Enumeration;", path);
+      if (inherited) while (await vcall(inherited, "hasMoreElements", "()Z")) urls.push(await vcall(inherited, "nextElement", "()Ljava/lang/Object;"));
+      const own = await vcall(this, "findResources", "(Ljava/lang/String;)Ljava/util/Enumeration;", path);
+      while (await vcall(own, "hasMoreElements", "()Z")) urls.push(await vcall(own, "nextElement", "()Ljava/lang/Object;"));
+      return mkIter(urls);
+    },
+    "getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;": async function (this: JClassLoader, path: string) {
+      const url = await vcall(this, "getResource", "(Ljava/lang/String;)Ljava/net/URL;", path.replace(/^\//, ""));
+      return url ? vcall(url, "openStream", "()Ljava/io/InputStream;") : null;
+    },
     // the path System.load would take for lib<name>.so, or null: dlopen resolves it by name
     "findLibrary(Ljava/lang/String;)Ljava/lang/String;": (n: string) => { const a = pickAbi((abi) => !!rt.classpath[`lib/${abi}/lib${n}.so`]); return a ? `/lib/lib${n}.so` : null; },
   },
 });
 const bootLoader = new JClassLoader();
 /** a classpath entry as an InputStream, or null when the apk has no such file */
-export async function classpathStream(path: string): Promise<unknown> {
-  const bytes = rt.classpath[path];
+export async function classpathStream(path: string, runtime: Runtime = rt): Promise<unknown> {
+  const bytes = runtime.classpath[path];
   return bytes ? newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length)) : null;
 }
 

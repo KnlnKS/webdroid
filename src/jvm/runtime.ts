@@ -58,8 +58,13 @@ export class ClassInfo {
   /** method bodies not yet generated (see compiler emitLazy); undefined when eager */
   lazy?: { m: EncodedMethod; mangled: string; isStatic: boolean; name: string; desc: string }[];
   defaultsCopied = false;         // interface default methods already copied down
-  constructor(public name: string) {}
+  constructor(public name: string, public owner?: Runtime) {}
   get isInterface(): boolean { return (this.flags & ACC.INTERFACE) !== 0; }
+  assignableTo(target: ClassInfo): boolean {
+    if (!this.types.has(target.name)) return false;
+    if (!this.owner?.parent && !target.owner?.parent) return true;
+    return this === target || !!this.superInfo?.assignableTo(target) || this.interfaces.some((i) => i.assignableTo(target));
+  }
 }
 
 interface DexLink {
@@ -111,6 +116,7 @@ export class Runtime {
   missing = new Set<string>();
   /** the booted apk's entries: what ClassLoader.getResourceAsStream and ServiceLoader read */
   classpath: Record<string, Uint8Array> = {};
+  classpathLocations = new Map<string, string>();
   /** how long a cross-chain clinit wait runs before it is presumed a same-chain cycle */
   clinitWaitMs = 60;
   /** set by jlang: make core exceptions without going through class init */
@@ -137,7 +143,25 @@ export class Runtime {
    *  Null until it has run; a method it never saw falls back to the compiler's syntactic rule. */
   syncMethods: Set<string> | null = null;
 
+  parent: Runtime | null = null;
+  classLoader: unknown = null;
+  // Share host services and thread hooks; loader definitions and compiled call sites stay private.
+  fork(): Runtime {
+    const child: Runtime = Object.create(this);
+    child.parent = this;
+    child.classes = new Map();
+    child.dexes = [];
+    child.dexIndex = new Map();
+    child.links = new Map();
+    child.refCache = new Map();
+    child.classpath = {};
+    child.classpathLocations = new Map();
+    child.syncMethods = null;
+    return child;
+  }
+
   loadDex(dex: DexFile) {
+    this.refCache.clear();
     this.dexes.push(dex);
     for (let i = 0; i < dex.classDefCount; i++) {
       const name = descToName(dex.type(dex.classDef2Type(i)));
@@ -346,8 +370,9 @@ export class Runtime {
   link(name: string): ClassInfo {
     let info = this.classes.get(name);
     if (info) return info;
+    if (this.parent && (this.natives.has(name) || !this.dexIndex.has(name))) return this.parent.link(name);
     if (name[0] === "[") return this.linkArray(name);
-    info = new ClassInfo(name);
+    info = new ClassInfo(name, this);
     this.classes.set(name, info);
 
     const native = this.natives.get(name);
@@ -499,6 +524,7 @@ export class Runtime {
 
   /** returns promise only if init work needed. `from` = class whose <clinit> performs the access */
   initClass(info: ClassInfo, from?: ClassInfo): Promise<void> | null {
+    if (info.owner && info.owner !== this) return info.owner.initClass(info, from);
     // Preparation (defining the methods) is NOT initialization: every reentrancy escape below
     // returns without running <clinit>, and a caller that then looks a method up on a
     // still-uncompiled prototype silently inherits the SUPERCLASS's method instead.
@@ -587,7 +613,8 @@ export class Runtime {
     return null;
   }
 
-  ensureCompiled(info: ClassInfo) {
+  ensureCompiled(info: ClassInfo): void {
+    if (info.owner && info.owner !== this) return info.owner.ensureCompiled(info);
     // The JS prototype chain only carries inherited methods once the super is compiled too.
     if (info.superInfo && !info.superInfo.compiled) this.ensureCompiled(info.superInfo);
     if (info.compiled || !info.def) { this.copyDefaults(info); return; }
@@ -692,7 +719,8 @@ export class Runtime {
     if (typeof v === "number" || typeof v === "bigint") return BOX_UNIVERSE.has(name) ? 1 : 0;
     if (Array.isArray(v) || ArrayBuffer.isView(v)) return this.arrayIof(v as ArrLike, name);
     const info: ClassInfo | undefined = (v as any).constructor?.$i;
-    return info?.types.has(name) ? 1 : 0;
+    if (!info?.types.has(name)) return 0;
+    return info.owner?.parent || this.parent ? +info.assignableTo(this.link(name)) : 1;
   }
 
   arrayIof(v: ArrLike, name: string): number {
