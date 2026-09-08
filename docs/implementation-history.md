@@ -1522,3 +1522,28 @@ size without consuming it. Unknown socket ioctls return ENOTTY. Targeted network
 unit tests pass, including queued chunks, partial reads, datagrams and error cases.
 The initial TLS failure is separate: Dart rejects the absent Android CA directory
 before sending its ClientHello. No network-validation success is fabricated.
+
+
+## Native emoji fallback: Noto COLRv1 without an eager download
+
+The Lichess home greeting uses U+1F319 CRESCENT MOON at night and U+2600 U+FE0F during
+the day. Both sequences are present in the APK's Dart AOT data, and the upstream home
+widget confirms their use. Its bundled icon fonts do not provide a general emoji face;
+the native fonts.xml previously contained only Roboto. Roboto has no moon glyph.
+
+Added the unmodified, officially distributed Noto Color Emoji 2.051 COLRv1 font,
+with its OFL license, pinned source revision and checksum under vendor/. It contains
+1,499 mapped codepoints and is 4,991,984 bytes, versus 10,673,480 bytes for the upstream
+CBDT font. Native Skia successfully rendered the yellow crescent through the standard
+unnamed und-Zsye Android fallback family, with no new native missing APIs. No app or
+glyph-specific replacement, font subset, or alternate rendering path was introduced.
+
+The existing RangeFile mounts the face into /system/fonts, served by the cached vendor
+route. A fresh headless launcher fetched only HEAD (300 header bytes, zero font body,
+0.9 ms locally); Roboto requests in that run took 1.4–1.9 ms. On first native use in
+Chrome, Skia opened the entire font: four 1,048,576-byte ranges and one 797,680-byte range.
+Those requests took 4.4, 4.7, 3.6, 5.3 and 2.8 ms; HEAD took 2.2 ms. The five body ranges
+are cached by the browser and bounded RangeFile cache. Lichess boot was 11,256 ms versus
+an earlier 11,484 ms run, but that was not a controlled performance comparison. The
+lazy mount avoids charging the body transfer to applications that never open this
+native fallback; it does not reduce bytes when the font is used.
