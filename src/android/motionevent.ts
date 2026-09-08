@@ -1,4 +1,5 @@
 import { JObj, rt } from "../jvm/runtime";
+import { JInputEvent } from "./hardware";
 import { obtainEvent, copyEvent } from "./view";
 
 /**
@@ -17,28 +18,41 @@ export const FLING = { arm: 2, decay: 0.95, stop: 0.7 };
 export const trackVelocity = (prev: number, d: number, dtMs: number) =>
   SCROLL_WEIGHT * prev + (1 - SCROLL_WEIGHT) * (d / dtMs * 16);
 
-export class JMotionEvent extends JObj {
-  action = 0;
+export class JMotionEvent extends JInputEvent {
+  deviceId = 1; source = 0x1002;
+  action = 0; flags = 0; edgeFlags = 0; metaState = 0; toolType = 1;
+  pressure = 1; size = 0.1; xPrecision = 1; yPrecision = 1;
+  touchMajor = 0; touchMinor = 0; toolMajor = 0; toolMinor = 0; orientation = 0;
   x = 0; y = 0;
   rawX = 0; rawY = 0;
   downTime = 0;
   eventTime = 0;
 }
+function axisValue(this: JMotionEvent, axis: number): number {
+  switch (axis) {
+    case 0: return this.x; case 1: return this.y; case 2: return this.pressure; case 3: return this.size;
+    case 4: return this.touchMajor; case 5: return this.touchMinor; case 6: return this.toolMajor;
+    case 7: return this.toolMinor; case 8: return this.orientation;
+    default: return 0;
+  }
+}
+function obtainFullEvent(dt: bigint, et: bigint, action: number, x: number, y: number, pressure: number, size: number,
+  metaState: number, xPrecision: number, yPrecision: number, deviceId: number, edgeFlags: number, source = 2, flags = 0): JMotionEvent {
+  return Object.assign(obtainEvent(dt, et, action, x, y, metaState), { pressure, size, xPrecision, yPrecision, deviceId, edgeFlags, source, flags });
+}
 rt.register({
-  name: "android/view/MotionEvent", ctor: JMotionEvent, ifaces: ["android/os/Parcelable"],
+  name: "android/view/MotionEvent", ctor: JMotionEvent, sup: "android/view/InputEvent", ifaces: ["android/os/Parcelable"],
   statics: {
     ACTION_DOWN: 0, ACTION_UP: 1, ACTION_MOVE: 2, ACTION_CANCEL: 3, ACTION_OUTSIDE: 4,
     ACTION_POINTER_DOWN: 5, ACTION_POINTER_UP: 6, ACTION_MASK: 0xff, ACTION_POINTER_INDEX_MASK: 0xff00,
     INVALID_POINTER_ID: -1,
   },
   methods: {
-    "isFromSource(I)Z": (src: number) => ((0x1002 & src) === src || (0x2 & src) === src ? 1 : 0),
-    "getAxisValue(I)F": () => 0,
-    "getAxisValue(II)F": () => 0,
-    "getFlags()I": () => 0,
-    "getDeviceId()I": () => 0,
+    "getAxisValue(I)F": axisValue,
+    "getAxisValue(II)F": axisValue,
+    "getFlags()I": function (this: JMotionEvent) { return this.flags; },
     "getClassification()I": () => 0,
-    "getPressure(I)F": () => 1,
+    "getPressure(I)F": function (this: JMotionEvent) { return this.pressure; },
     "getEventTimeNanos()J": function (this: JMotionEvent) { return BigInt(Math.floor(Number(this.eventTime) * 1e6)); },
     "getAction()I": function (this: JMotionEvent) { return this.action; },
     "getActionMasked()I": function (this: JMotionEvent) { return this.action & 0xff; },
@@ -57,30 +71,34 @@ rt.register({
     "getPointerCoords(ILandroid/view/MotionEvent$PointerCoords;)V": function (this: JMotionEvent, idx: number, out: JPointerCoords) {
       if (!out) return;
       out.x = this.x; out.y = this.y;
-      out.pressure = 1; out.size = 0.1;
-      out.orientation = 0;
-      out.touchMajor = out.touchMinor = out.toolMajor = out.toolMinor = 0;
+      out.pressure = this.pressure; out.size = this.size;
+      out.orientation = this.orientation;
+      out.touchMajor = this.touchMajor; out.touchMinor = this.touchMinor;
+      out.toolMajor = this.toolMajor; out.toolMinor = this.toolMinor;
     },
     "getDownTime()J": function (this: JMotionEvent) { return BigInt(Math.round(this.downTime)); },
     "getEventTime()J": function (this: JMotionEvent) { return BigInt(Math.round(this.eventTime)); },
     "setAction(I)V": function (this: JMotionEvent, a: number) { this.action = a; },
     "offsetLocation(FF)V": function (this: JMotionEvent, dx: number, dy: number) { this.x += dx; this.y += dy; },
     "setLocation(FF)V": function (this: JMotionEvent, x: number, y: number) { this.x = x; this.y = y; },
-    "getEdgeFlags()I": () => 0,
+    "getEdgeFlags()I": function (this: JMotionEvent) { return this.edgeFlags; },
     "transform(Landroid/graphics/Matrix;)V": () => {},
     "recycle()V": () => {},
     "getHistorySize()I": () => 0,
     "getHistoricalX(I)F": function (this: JMotionEvent) { return this.x; },
     "getHistoricalY(I)F": function (this: JMotionEvent) { return this.y; },
     "getHistoricalEventTime(I)J": function (this: JMotionEvent) { return BigInt(Math.round(this.eventTime)); },
-    "getPressure()F": () => 1,
-    "getSize()F": () => 0.1,
-    "getToolType(I)I": () => 1,
-    "getSource()I": () => 0x1002,
+    "getPressure()F": function (this: JMotionEvent) { return this.pressure; },
+    "getSize()F": function (this: JMotionEvent) { return this.size; },
+    "getSize(I)F": function (this: JMotionEvent) { return this.size; },
+    "getToolMajor(I)F": function (this: JMotionEvent) { return this.toolMajor; },
+    "getToolMinor(I)F": function (this: JMotionEvent) { return this.toolMinor; },
+    "getToolType(I)I": function (this: JMotionEvent) { return this.toolType; },
     "getButtonState()I": () => 0,
-    "getMetaState()I": () => 0,
+    "getMetaState()I": function (this: JMotionEvent) { return this.metaState; },
     "static obtain(JJIFFI)Landroid/view/MotionEvent;": obtainEvent,
-    "static obtain(JJIFFFFIFFII)Landroid/view/MotionEvent;": obtainEvent,
+    "static obtain(JJIFFFFIFFII)Landroid/view/MotionEvent;": obtainFullEvent,
+    "static obtain(JJIFFFFIFFIIII)Landroid/view/MotionEvent;": obtainFullEvent,
     "static obtainNoHistory(Landroid/view/MotionEvent;)Landroid/view/MotionEvent;": copyEvent,
     "static obtain(Landroid/view/MotionEvent;)Landroid/view/MotionEvent;": copyEvent,
   },

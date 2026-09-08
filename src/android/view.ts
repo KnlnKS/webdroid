@@ -102,14 +102,15 @@ async function attachInLayout(this: JViewGroup, c: JView, i: number, lp: JLayout
   attachView(this, c, i);
   return 1;
 }
-export function obtainEvent(dt: bigint, et: bigint, action: number, x: number, y: number) {
+export function obtainEvent(dt: bigint, et: bigint, action: number, x: number, y: number, metaState = 0) {
   const e = new JMotionEvent();
-  e.downTime = Number(dt); e.eventTime = Number(et); e.action = action; e.x = x; e.y = y;
+  e.downTime = Number(dt); e.eventTime = Number(et); e.action = action; e.x = e.rawX = x; e.y = e.rawY = y;
+  e.deviceId = 0; e.source = 2; e.size = 1; e.metaState = metaState; e.toolType = 0;
   return e;
 }
 export function copyEvent(src: JMotionEvent) {
   const e = new JMotionEvent();
-  Object.assign(e, { action: src.action, x: src.x, y: src.y, rawX: src.rawX, rawY: src.rawY, downTime: src.downTime, eventTime: src.eventTime });
+  Object.assign(e, src);
   return e;
 }
 const M_performLongClick = mangleMethod("performLongClick", "()Z");
