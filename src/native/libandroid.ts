@@ -94,6 +94,9 @@ const seek = (s: Asset, off: number, whence: number): number => {
 
 export function ndkInit(): void {
   hostLib("libandroid.so", {
+    ATrace_isEnabled: () => 0,
+    ATrace_beginSection: () => {},
+    ATrace_endSection: () => {},
     ANativeWindow_fromSurface: (cpu, a) => {
       a.p(); const s = deref(a.i(), cpu), surf = s instanceof JSurface ? s.surf : null;
       if (!surf) return 0;
