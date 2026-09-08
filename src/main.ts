@@ -190,7 +190,7 @@ window.addEventListener("unhandledrejection", (e) => logBuf.push("unhandledrejec
 async function boot(file: string) {
   try {
     statusEl.textContent = "downloading " + file + "…";
-    const install = await openInstallRemote("/apks/" + encodeURIComponent(file));
+    const [install] = await Promise.all([openInstallRemote("/apks/" + encodeURIComponent(file)), fontsReady]);
     const t0 = performance.now();
     await bootApk(install, (s) => { statusEl.textContent = s; }, file);
     perf.bootMs = performance.now() - t0;
@@ -402,15 +402,25 @@ kbd.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { void fireEditorAction(); }
 });
 
-// load Roboto
-for (const [name, file, weight] of [["Roboto", "Roboto-Regular.ttf", "400"], ["Roboto Medium", "Roboto-Medium.ttf", "500"],
-  ["Roboto", "Roboto-Bold.ttf", "700"], ["Roboto", "Roboto-Italic.ttf", "400"]] as const) {
-  const f = new FontFace(name, `url(/Roboto/${file})`, {
-    weight, style: file.includes("Italic") ? "italic" : "normal",
+const fontsReady = Promise.all([
+  ["Roboto", "Roboto-Regular.ttf", "400", "normal"], ["Roboto Medium", "Roboto-Medium.ttf", "500", "normal"],
+  ["Roboto", "Roboto-Bold.ttf", "700", "normal"], ["Roboto", "Roboto-Italic.ttf", "400", "italic"],
+].map(async ([name, file, weight, style]) => {
+  const response = await fetch(`/Roboto/${file}`);
+  if (!response.ok) throw new Error(`font ${file}: ${response.status}`);
+  const bytes = await response.arrayBuffer();
+  vfs.write(`/system/fonts/${file}`, new Uint8Array(bytes));
+  const f = new FontFace(name, bytes, {
+    weight, style,
     ascentOverride: `${SYSTEM_FONT.ascent * 100}%`, descentOverride: `${SYSTEM_FONT.descent * 100}%`,
   });
-  f.load().then((loaded) => {
-    document.fonts.add(loaded);
-    uiState.needsDraw = true;
-  }).catch(() => {});
-}
+  document.fonts.add(await f.load());
+  return `<font weight="${weight}" style="${style}">${file}</font>`;
+})).then((fonts) => {
+  // Native Skia reads the same faces through Android's system font configuration.
+  vfs.write("/system/etc/fonts.xml", new TextEncoder().encode(
+    `<?xml version="1.0"?><familyset version="23"><family name="sans-serif">${fonts.join("")}</family>` +
+    '<alias name="sans-serif-medium" to="sans-serif" weight="500"/></familyset>'));
+  uiState.needsDraw = true;
+});
+void fontsReady.catch((e) => console.error("[fonts]", e));
