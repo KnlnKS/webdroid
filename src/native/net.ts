@@ -393,6 +393,16 @@ export function nativeReceiveFrom(cpu: Cpu, fd: number, destination: number, len
 
 export function isNativeSocket(fd: number): boolean { return sockets.has(fd); }
 
+export function nativeSocketIoctl(cpu: Cpu, fd: number, request: number, argument: number): number {
+  const descriptor = socketFdOf(cpu, fd);
+  if (!descriptor) return -1;
+  if (request !== 0x541b) return fail(cpu, 25);
+  if (!argument) return fail(cpu, E.FAULT);
+  const socket = descriptor.socket;
+  mem.st32(argument, socket.kind === "stream" ? socket.relay?.available() ?? 0 : socket.queue[0]?.bytes.length ?? 0);
+  return 0;
+}
+
 export function nativeSocketClose(cpu: Cpu, fd: number): number {
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;

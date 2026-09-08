@@ -1509,3 +1509,16 @@ scissor behavior is disabled in the implementation.
 Clean Lichess More screenshots at 480 and 700 dpi show all Tools rows and selection
 indicators with normal graphics state and zero GL errors. Focused GLES/EGL/JNI tests
 pass 87 assertions, including the actual 0x100/0x101 argument pattern.
+
+
+## Lichess native socket availability (2026-09-08)
+
+Lichess connects to its image and WebSocket hosts through the native TCP relay but
+sends no TLS bytes. Connectivity DEX checks INTERNET capability 12, not VALIDATED
+16; the latter is used by WorkManager. Native connect completion reaches Dart's
+SO_ERROR query. A later EOF event exposed ioctl(FIONREAD) returning ENOSYS.
+Socket FIONREAD now reports the relay's actual queued bytes or the first UDP packet's
+size without consuming it. Unknown socket ioctls return ENOTTY. Targeted network
+unit tests pass, including queued chunks, partial reads, datagrams and error cases.
+The initial TLS failure is separate: Dart rejects the absent Android CA directory
+before sending its ClientHello. No network-validation success is fabricated.

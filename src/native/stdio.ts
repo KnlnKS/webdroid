@@ -10,7 +10,7 @@ import { format, scan } from "./printf";
 import { vfs } from "../jvm/natives/jio";
 import { device } from "../shell/config";
 import type { FileSource } from "../shell/lazyfile";
-import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd } from "./net";
+import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketIoctl, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd } from "./net";
 import { allocateFd, releaseFd, reserveFd } from "./fd";
 
 const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800, O_DIRECTORY = 0x4000;
@@ -592,7 +592,7 @@ export function stdioInit(): void {
     statvfs: (_c, a) => { a.str(); fillStatvfs(a.p()); return 0; },
     fstatvfs: (_c, a) => { a.i(); fillStatvfs(a.p()); return 0; },
     isatty: () => 0,
-    ioctl: (cpu) => fail(cpu, E.NOSYS),
+    ioctl: (cpu, a) => { const fd = a.i(), request = a.i(), argument = a.p(); return isNativeSocket(fd) ? nativeSocketIoctl(cpu, fd, request, argument) : fail(cpu, E.NOSYS); },
     statfs: (_c, a) => { a.str(); fillStatfs(a.p()); return 0; },
     fstatfs: (_c, a) => { a.i(); fillStatfs(a.p()); return 0; },
     getcwd: (_c, a) => { const b = a.p(), n = a.u(); mem.putCstr(b, "/", n); return ARG0; },

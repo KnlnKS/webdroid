@@ -6,7 +6,7 @@ import { ldp } from "./host";
 import { mem } from "./mem";
 import {
   nativeBind, nativeConnect, nativeFreeaddrinfo, nativeGetaddrinfo, nativeGetnameinfo, nativeGetpeername, nativeGetsockname, nativeGetsockopt, nativePoll,
-  nativeReceiveFrom, nativeSelect, nativeSend, nativeSendTo, nativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketRead, nativeSocketWrite,
+  nativeReceiveFrom, nativeSelect, nativeSend, nativeSendTo, nativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketIoctl, nativeSocketRead, nativeSocketWrite,
   resetNativeNetworkForTest, setNativePollProvider, setNativeRelayTransportFactoryForTest,
 } from "./net";
 
@@ -493,4 +493,42 @@ test("closing a relay wakes its pending reader and one-shot subscribers", async 
   expect(wakes).toBe(1);
   relay.close();
   expect(wakes).toBe(1);
+});
+
+
+test("socket FIONREAD reports queued stream bytes without consuming them", async () => {
+  installFakeTransport();
+  const fd = nativeSocket(cpu, 2, 1 | 0x800, 6), out = mem.hostAlloc(4);
+  expect(nativeSocketIoctl(cpu, fd, 0x541b, out)).toBe(0);
+  expect(mem.ld32(out)).toBe(0);
+  expect(nativeConnect(cpu, fd, sockaddr([127, 0, 0, 1], 443), 16)).toBe(-1);
+  transports[0].connect();
+  await Promise.resolve();
+  transports[0].receive(new Uint8Array([1, 2, 3]));
+  transports[0].receive(new Uint8Array([4, 5]));
+  expect(nativeSocketIoctl(cpu, fd, 0x541b, out)).toBe(0);
+  expect(mem.ld32(out)).toBe(5);
+  expect(await nativeSocketRead(cpu, fd, mem.hostAlloc(2), 2)).toBe(2);
+  expect(nativeSocketIoctl(cpu, fd, 0x541b, out)).toBe(0);
+  expect(mem.ld32(out)).toBe(3);
+  expect(nativeSocketIoctl(cpu, fd, 0x541b, 0)).toBe(-1);
+  expect(mem.ld32(cpu.errnoAddr)).toBe(14);
+  expect(nativeSocketIoctl(cpu, fd, 0, out)).toBe(-1);
+  expect(mem.ld32(cpu.errnoAddr)).toBe(25);
+  nativeSocketClose(cpu, fd);
+  expect(nativeSocketIoctl(cpu, fd, 0x541b, out)).toBe(-1);
+  expect(mem.ld32(cpu.errnoAddr)).toBe(9);
+});
+
+test("datagram FIONREAD reports the first packet size", () => {
+  const fd = nativeSocket(cpu, 2, 2, 17), peer = nativeSocket(cpu, 2, 2, 17);
+  const address = sockaddr([127, 0, 0, 1], 19743), data = mem.hostAlloc(9), out = mem.hostAlloc(4);
+  expect(nativeBind(cpu, fd, address, 16)).toBe(0);
+  expect(nativeSendTo(cpu, peer, data, 3, address, 16)).toBe(3);
+  expect(nativeSendTo(cpu, peer, data, 9, address, 16)).toBe(9);
+  expect(nativeSocketIoctl(cpu, fd, 0x541b, out)).toBe(0);
+  expect(mem.ld32(out)).toBe(3);
+  expect(nativeReceiveFrom(cpu, fd, data, 9, 0, 0, 0)).toBe(3);
+  expect(nativeSocketIoctl(cpu, fd, 0x541b, out)).toBe(0);
+  expect(mem.ld32(out)).toBe(9);
 });
