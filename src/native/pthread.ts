@@ -1,7 +1,7 @@
 // pthreads over cooperative Cpus: one Cpu per thread, mutex/cond/keys/once, and the sleeping calls.
 // Everything runs on one JS thread, so a "contended" lock means the acquirer parks until unlock.
 
-import { mem, AddrMap } from "./mem";
+import { mem, AddrMap, NativeFault } from "./mem";
 import { hostLib, NORET, type HostFn, stp, stpVa } from "./host";
 import { Cpu, bindCpu, cpuByTid, yieldToLoop } from "./cpu";
 import { RET_SENTINEL, E } from "./abi";
@@ -27,7 +27,7 @@ function rwRelease(cpu: Cpu, l: RwLock): number {
   for (const w of l.waiters.splice(0)) w();
   return 0;
 }
-const threads = new Map<number, { cpu: Cpu; done: Promise<void>; retval: bigint }>();
+const threads = new Map<number, { done: Promise<void>; retval: bigint; detached: boolean; joined: boolean; exited: boolean }>();
 let keySeq = 1, threadSeq = 0;
 const keyDtors = new Map<number, number>();
 const onceWaiters = new AddrMap<(() => void)[]>();                      // pthread key → destructor, run for the thread's non-null values at its exit
@@ -106,35 +106,46 @@ function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | nul
   });
 }
 
-function startThread(parent: Cpu, start: number, arg: bigint, name?: string): Cpu {
+function startThread(parent: Cpu, start: number, arg: bigint, detached: boolean): Cpu {
   const jt = new JThread();
-  jt.jname = name ?? `pthread-${++threadSeq}`;
+  jt.jname = `pthread-${++threadSeq}`;
   jt.alive = 1;
   const cpu = new Cpu(jt, jt.jname);
   cpu.signalMask = parent.signalMask;
   bindCpu(jt, cpu);
-  cpu.ensureStack();
+  try { cpu.ensureStack(); } catch (e) { cpu.dispose(); throw e; }
   cpu.r[0] = Number(arg & 0xffffffffn) | 0; cpu.h[0] = Number(arg >> 32n) | 0;
   cpu.r[cpu.lrx] = RET_SENTINEL;
   cpu.setPc(start);
-  const rec = { cpu, retval: 0n, done: Promise.resolve() };
+  const rec = { retval: 0n, done: Promise.resolve(), detached, joined: false, exited: false };
   rec.done = new Promise<void>((resolve) => {
     setTimeout(() => {
       cpu.depth++;
-      void cpu.run().then(async () => {
-        if (!cpu.finished) rec.retval = BigInt(cpu.h[0] >>> 0) << 32n | BigInt(cpu.r[0] >>> 0);
-        // key destructors, as many rounds as they keep setting values (Bionic stops at four)
-        for (let round = 0, again = true; again && round < 4; round++) {
-          again = false;
-          for (const [k, v] of cpu.tls) {
-            const d = keyDtors.get(k);
-            if (!v || !d) continue;
-            cpu.tls.set(k, 0n); again = true; cpu.finished = false;
-            await cpu.call(d, [v], "key destructor");
+      void (async () => {
+        try {
+          await cpu.run();
+          if (!cpu.finished) rec.retval = (cpu.a64 ? BigInt(cpu.h[0] >>> 0) << 32n : 0n) | BigInt(cpu.r[0] >>> 0);
+          // key destructors, as many rounds as they keep setting values (Bionic stops at four)
+          for (let round = 0, again = true; again && round < 4; round++) {
+            again = false;
+            for (const [k, v] of cpu.tls) {
+              const d = keyDtors.get(k);
+              if (!v || !d) continue;
+              cpu.tls.set(k, 0n); again = true; cpu.finished = false;
+              await cpu.call(d, [v], "key destructor");
+            }
           }
+        } catch (e) { reportUncaught(e); }
+        finally {
+          cpu.signals.length = 0;
+          await cpu.awaitIdleBase();
+          cpu.depth--; cpu.finished = true; cpu.signals.length = 0;
+          jt.alive = 0; rec.exited = true;
+          cpu.dispose();
+          if (rec.detached) threads.delete(cpu.tid);
+          resolve();
         }
-      }, (e) => reportUncaught(e))
-        .finally(() => { cpu.finished = true; jt.alive = 0; mem.freeStack(cpu.stackBase, cpu.stackTop); resolve(); });
+      })();
     }, 0);
   });
   threads.set(cpu.tid, rec);
@@ -143,21 +154,40 @@ function startThread(parent: Cpu, start: number, arg: bigint, name?: string): Cp
 
 export function pthreadInit(): void {
   const M: Record<string, HostFn> = {
-    pthread_create: (_c, a) => {
-      const out = a.p(); a.p(); const start = a.p(), arg = a.va();
-      const cpu = startThread(_c, start, arg);
-      stp(out, cpu.tid);
-      return 0;
+    pthread_create: (parent, a) => {
+      const out = a.p(), attr = a.p(), start = a.p(), arg = a.va();
+      try {
+        const cpu = startThread(parent, start, arg, !!attr && !!(mem.ld32(attr) & 1));
+        stp(out, cpu.tid);
+        return 0;
+      } catch (e) {
+        if (e instanceof NativeFault && (e.message === "[native] out of stack address space" || e.message === "[native] out of memory for thread data")) return E.AGAIN;
+        throw e;
+      }
     },
-    pthread_join: async (_c, a) => {
+    pthread_join: async (cpu, a) => {
       const tid = a.i(), retp = a.va();
+      if (tid === cpu.tid) return E.DEADLK;
       const t = threads.get(tid);
-      if (!t) return 3; // ESRCH
+      if (!t) return E.SRCH;
+      if (t.detached || t.joined) return E.INVAL;
+      t.joined = true;
       await t.done;
-      if (retp) stpVa(mem.txVa(retp), t.retval);
+      if (retp) {
+        if (cpu.a64) stpVa(mem.txVa(retp), t.retval);
+        else mem.st32(mem.txVa(retp), Number(t.retval));
+      }
+      threads.delete(tid);
       return 0;
     },
-    pthread_detach: () => 0,
+    pthread_detach: (_c, a) => {
+      const tid = a.i(), t = threads.get(tid);
+      if (!t) return E.SRCH;
+      if (t.detached || t.joined) return E.INVAL;
+      t.detached = true;
+      if (t.exited) threads.delete(tid);
+      return 0;
+    },
     pthread_exit: (cpu, a) => {
       const rv = a.va();
       const t = threads.get(cpu.tid);
@@ -172,8 +202,16 @@ export function pthreadInit(): void {
     pthread_setname_np: (_c, a) => { const c = cpuByTid(a.i()); const n = a.str(); if (c) { c.name = n; c.jthread.jname = n; } return 0; },
     pthread_getschedparam: (_c, a) => { a.i(); const pol = a.p(), par = a.p(); if (pol) mem.st32(pol, 0); if (par) mem.st32(par, 0); return 0; },
     pthread_setschedparam: () => 0,
-    pthread_attr_init: () => 0, pthread_attr_destroy: () => 0, pthread_attr_setstacksize: () => 0, pthread_attr_setstack: () => 0,
-    pthread_attr_setdetachstate: () => 0, pthread_attr_setschedparam: () => 0, pthread_attr_setschedpolicy: () => 0,
+    pthread_attr_init: (_c, a) => { mem.st32(a.p(), 0); return 0; },
+    pthread_attr_destroy: () => 0, pthread_attr_setstacksize: () => 0, pthread_attr_setstack: () => 0,
+    pthread_attr_setdetachstate: (_c, a) => {
+      const attr = a.p(), state = a.i();
+      if (state !== 0 && state !== 1) return E.INVAL;
+      mem.st32(attr, (mem.ld32(attr) & ~1) | state);
+      return 0;
+    },
+    pthread_attr_getdetachstate: (_c, a) => { const attr = a.p(); mem.st32(a.p(), mem.ld32(attr) & 1); return 0; },
+    pthread_attr_setschedparam: () => 0, pthread_attr_setschedpolicy: () => 0,
     pthread_attr_getstacksize: (_c, a) => { a.p(); stp(a.p(), 0x100000); return 0; },
     pthread_attr_getstack: (cpu, a) => { a.p(); const base = a.p(), sz = a.p(); stp(base, cpu.stackBase); stp(sz, cpu.stackTop - cpu.stackBase); return 0; },
     pthread_getattr_np: () => 0,

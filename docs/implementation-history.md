@@ -1755,3 +1755,27 @@ run was concentrated in dialog dismissal (43.78% to 96.71%): the fallback-driven
 on Data and storage instead of the golden Reader settings. This limits the flow's fidelity
 claim despite complete rendering and no Compose errors. Harmonic's stable screens remained
 unchanged; its live scroll captures varied. Goldens were unchanged.
+
+### Lichess: reclaiming short-lived native threads
+
+A longer-lived game exhausted the 512 KiB host-data arena in Cpu construction. A controlled
+120-second idle replay added 92 finished DartWorkers while live threads stayed at 18. Host
+usage increased by exactly 24,288 bytes: 264 bytes of TLS and errno storage per worker.
+Stacks were recycled, but thread data was bump-allocated forever and both CPU and pthread
+registries retained completed threads. This was ordinary thread churn, not growing concurrency.
+
+TLS/errno and JNI environments now use reclaimable allocations. Exit runs TLS destructors
+and waits for active signal handlers before releasing storage and CPU bindings. Join records
+retain only completion/result state and disappear on join or detached completion. Detach
+attributes use Bionic's flags word; ARM32 joins write one pointer rather than eight bytes.
+Allocation failures leave fixed-arena cursors unchanged, and exhausted thread resources return
+EAGAIN without retaining a partially constructed CPU. Guest-set TLS pointers do not transfer
+ownership of the original allocation.
+
+The matching corrected idle replay stayed at 18 live CPUs, zero retained finished CPUs, and
+7,880 host bytes for all 120 seconds. It then played `2. Nf3 d5` after `1. e4 h5`.
+Idle malloc growth was similar before and after (947,456 versus 926,480 bytes); the host-data
+leak disappeared. Tests include 3,000 CPU/JNI lifetimes, actual ARM32/A64 pthread churn,
+join/detach results, destructor rounds/failures, and a parked signal during thread exit.
+All 783 unit tests and typecheck passed; all eight APK/XAPK smoke compilations had zero
+method failures.

@@ -430,8 +430,8 @@ export const mem = {
   allocStack(size: number): { base: number; top: number } {
     const base = freeStacks.get(size)?.pop() ?? stackTop + STACK_GUARD;
     const top = base + size;
-    if (top > stackTop) stackTop = top;
     if (top > STACK_END) throw new NativeFault("[native] out of stack address space");
+    if (top > stackTop) stackTop = top;
     return { base, top };
   },
   /** a finished thread's stack goes back for the next thread of that size */
@@ -439,8 +439,8 @@ export const mem = {
   /** host-owned guest data (FILE structs, JNI tables, ctype tables, static strings): bump only */
   hostAlloc(n: number, align = 8): number {
     const p = (hostTop + align - 1) & -align;
+    if (p + n > HOST_DATA_END) throw new NativeFault("[native] out of host data space");
     hostTop = p + n;
-    if (hostTop > HOST_DATA_END) throw new NativeFault("[native] out of host data space");
     return p;
   },
 

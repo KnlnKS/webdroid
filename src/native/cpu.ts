@@ -224,6 +224,7 @@ export class Cpu {
   /** exclusive monitor: set by LDXR, consumed by STXR; a slice must not end between them */
   excl = 0;
   tlsBase = 0;
+  private threadData = 0;
   jthread: JThread;
   tid: number;
   stackBase = 0; stackTop = 0;
@@ -270,7 +271,7 @@ export class Cpu {
    *  a running loop takes its queue at its next slice boundary. A handler parked in its own host call
    *  (sigsuspend) is a parked frame like any other: the next signal runs on top of it. */
   pump(): void {
-    queueMicrotask(() => { if (this.parked || this.loops === 0) { const sig = this.takeSignal(); if (sig) void this.deliver(sig); } });
+    queueMicrotask(() => { if (!this.finished && (this.parked || this.loops === 0)) { const sig = this.takeSignal(); if (sig) void this.deliver(sig); } });
   }
   sigLog: string[] = [];                           // wd.native.regs: what each thread was signalled and when it ran
   /** a handler running on an otherwise idle Cpu (a Java thread between native calls): the next
@@ -319,9 +320,22 @@ export class Cpu {
     this.tid = ++tidSeq;
     this.args = A64 ? new Args64(this) : new Args(this);
     this.setAbi(A64);
-    this.tlsBase = mem.hostAlloc(256);
-    this.errnoAddr = mem.hostAlloc(8);
+    this.threadData = mem.calloc(1, 264);
+    if (!this.threadData) throw new NativeFault("[native] out of memory for thread data");
+    this.tlsBase = this.threadData;
+    this.errnoAddr = this.threadData + 256;
     cpus.add(this);
+  }
+
+  dispose(): void {
+    if (this.loops) throw new Error("[native] cannot dispose a running thread");
+    this.finished = true;
+    if (this.stackTop) mem.freeStack(this.stackBase, this.stackTop);
+    mem.free(this.threadData); mem.free(this.env);
+    this.threadData = this.tlsBase = this.errnoAddr = this.env = this.stackBase = this.stackTop = 0;
+    this.tls.clear(); this.signals.length = 0;
+    cpus.delete(this);
+    if (byThread.get(this.jthread) === this) byThread.delete(this.jthread);
   }
 
   ensureStack(): void {

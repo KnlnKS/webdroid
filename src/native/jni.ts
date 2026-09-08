@@ -215,11 +215,13 @@ async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unk
 }
 
 let envTable = 0;
-const envs = new WeakMap<Cpu, number>();
 function envFor(cpu: Cpu): number {
-  let e = envs.get(cpu);
-  if (!e) { e = mem.hostAlloc(8); stp(e, envTable); envs.set(cpu, e); cpu.env = e; }
-  return e;
+  if (!cpu.env) {
+    cpu.env = mem.calloc(1, 8);
+    if (!cpu.env) cpu.fault("out of memory for JNI environment");
+    stp(cpu.env, envTable);
+  }
+  return cpu.env;
 }
 
 const PRIM = ["Object", "Boolean", "Byte", "Char", "Short", "Int", "Long", "Float", "Double", "Void"];
