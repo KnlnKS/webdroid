@@ -3,7 +3,7 @@ import { mangleMethod } from "../jvm/abi";
 import type { JFrameLayout } from "./layouts";
 import type { JActionBarView } from "./menu";
 import { type JDrawable, loadDrawable } from "./drawable";
-import { requestLayout, findById, invalidate, type JView } from "./view";
+import { requestLayout, findById, invalidate, dispatchAttached, dispatchDetached, JLayoutParams, type JView } from "./view";
 import { JActivity, activityMethods } from "./app";
 import { ensureDecor } from "./decor";
 import { newObj } from "../jvm/natives/jlang";
@@ -11,7 +11,7 @@ import { appHost } from "./apphost";
 import { systemService, display } from "./context";
 import { device } from "../shell/config";
 import { rootWindowInsets } from "./windowinsets";
-import { addOverlay, removeOverlay } from "./popup";
+import { addOverlay, removeOverlay, overlays } from "./popup";
 
 // ── Window + decor + ActionBar-lite
 /** PhoneWindow's own content handling, not the Dialog subclass's override: appcompat's
@@ -176,10 +176,11 @@ rt.register({
   },
 });
 rt.register({
-  name: "android/view/WindowManager$LayoutParams", ctor: class extends JObj {
+  name: "android/view/WindowManager$LayoutParams", sup: "android/view/ViewGroup$LayoutParams", ctor: class extends JLayoutParams {
     width = -1; height = -1; gravity = 0; flags = 0; format = 1; type = 2; softInputMode = 0;
     x = 0; y = 0; windowAnimations = 0; dimAmount = 0.6; alpha = 1; layoutInDisplayCutoutMode = 0;
     token: JObj | null = null;
+    title: unknown = "";
     preferredDisplayModeId = 0;
   },
   fields: { width: "width", height: "height", gravity: "gravity", flags: "flags", x: "x", y: "y",
@@ -193,6 +194,8 @@ rt.register({
     "<init>()V": function () {},
     "<init>(IIIII)V": function () {},
     "copyFrom(Landroid/view/WindowManager$LayoutParams;)I": () => 0,
+    "setTitle(Ljava/lang/CharSequence;)V": function (this: { title: unknown }, title: unknown) { this.title = title ?? ""; },
+    "getTitle()Ljava/lang/CharSequence;": function (this: { title: unknown }) { return this.title; },
   },
 });
 rt.register({ name: "android/view/WindowManager", ctor: class extends JObj {} });
@@ -211,15 +214,24 @@ rt.register({
     "getDefaultDisplay()Landroid/view/Display;": display,
     "getCurrentWindowMetrics()Landroid/view/WindowMetrics;": () => new JWindowMetrics(),
     "getMaximumWindowMetrics()Landroid/view/WindowMetrics;": () => new JWindowMetrics(),
-    "addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": async (v: JView, lp: unknown) => {
-      addOverlay(v);
+    "addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": async (v: JView, lp: JLayoutParams & { x?: number; y?: number }) => {
+      v.lp = lp;
+      addOverlay(v, lp.x ?? 0, lp.y ?? 0);
+      await dispatchAttached(v);
     },
     "removeView(Landroid/view/View;)V": async (v: JView) => {
       removeOverlay(v);
+      await dispatchDetached(v);
     },
     "removeViewImmediate(Landroid/view/View;)V": async (v: JView) => {
       removeOverlay(v);
+      await dispatchDetached(v);
     },
-    "updateViewLayout(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": () => {},
+    "updateViewLayout(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": (v: JView, lp: JLayoutParams & { x?: number; y?: number }) => {
+      v.lp = lp;
+      const o = overlays.find((o) => o.view === v);
+      if (o) { o.x = lp.x ?? 0; o.y = lp.y ?? 0; }
+      requestLayout(v);
+    },
   },
 });
