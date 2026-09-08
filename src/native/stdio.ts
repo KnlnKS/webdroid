@@ -577,6 +577,11 @@ export function stdioInit(): void {
     epoll_pwait: (cpu, a) => epollWait(cpu, a.i(), a.va(), a.i(), a.i()),
     sendfile: (cpu) => fail(cpu, E.NOSYS),
     __read_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(); if (n > a.u()) cpu.fault("fortify: read past the buffer"); return fdRead(cpu, fd, p, n); },
+    __write_chk: (cpu, a) => {
+      const fd = a.i(), p = a.p(), n = a.va(), size = a.va();
+      if (n > size || n > (PTR === 8 ? 0x7fffffffffffffffn : 0x7fffffffn)) cpu.fault("fortify: write past the buffer");
+      return fdWrite(cpu, fd, p, Number(n));
+    },
     __pread64_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); if (n > a.u()) cpu.fault("fortify: pread past the buffer"); const f = fds.get(fd); return f ? fdReadAt(cpu, f, p, n, off) : fail(cpu, E.BADF); },
     __pread_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = offArg(a); if (n > a.u()) cpu.fault("fortify: pread past the buffer"); const f = fds.get(fd); return f ? fdReadAt(cpu, f, p, n, off) : fail(cpu, E.BADF); },
     flock: () => 0,
