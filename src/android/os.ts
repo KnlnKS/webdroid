@@ -12,6 +12,15 @@ import { yieldToLoop } from "../native/cpu";
 import { mkFile, JInputStream, JOutputStream, vfs } from "../jvm/natives/jio";
 import { newArrayList } from "../jvm/natives/jutil";
 
+rt.register({
+  name: "android/os/SystemProperties", ctor: class extends JObj {},
+  methods: {
+    // No property service is installed; use the caller's default, as the framework delegates do.
+    "static get(Ljava/lang/String;)Ljava/lang/String;": () => "",
+    "static get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (_key: string, fallback: string | null) => fallback ?? "",
+  },
+});
+
 class JLooper extends JObj {
   thread: JThread;
   q: Promise<unknown> = Promise.resolve();
