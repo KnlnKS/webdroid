@@ -27,6 +27,7 @@ interface Stream {
   check: number;
   size: number;
   error: number;
+  heldInput: number;
 }
 const streams = new AddrMap<Stream>();
 let stateSeq = 1;
@@ -88,7 +89,7 @@ function makeStream(windowBits: number): Stream | null {
   if (wrapper === undefined) return null;
   const s: Stream = {
     windowBits, wrapper, phase: wrapper === "raw" ? "body" : "header", st: null,
-    pending: empty, out: [], check: wrapper === "gzip" ? 0 : 1, size: 0, error: Z_OK,
+    pending: empty, out: [], check: wrapper === "gzip" ? 0 : 1, size: 0, error: Z_OK, heldInput: 0,
   };
   if (wrapper === "raw") startBody(s);
   return s;
@@ -213,13 +214,25 @@ function drain(s: Stream, strm: number): number {
   return wrote;
 }
 
+function consumeInput(s: Stream, strm: number): void {
+  const consumed = s.heldInput;
+  if (!consumed) return;
+  stp(strm + Z.IN, ldp(strm + Z.IN) + consumed);
+  mem.st32(strm + Z.AVIN, (mem.ld32(strm + Z.AVIN) >>> 0) - consumed);
+  storeUlong(strm + Z.TIN, loadUlong(strm + Z.TIN) + consumed);
+  s.heldInput = 0;
+}
+
 function inflate(strm: number, _flush: number): number {
   const s = streams.get(strm);
   if (!s) return Z_STREAM_ERROR;
+  if (!mem.ld32(strm + Z.AVOUT)) return Z_BUF_ERROR;
   let wrote = drain(s, strm);
   if (s.out.length) return wrote ? Z_OK : Z_BUF_ERROR;
+  consumeInput(s, strm);
   if (s.phase === "error") return s.error;
   if (s.phase === "done") return Z_STREAM_END;
+  if (!mem.ld32(strm + Z.AVOUT)) return Z_OK;
 
   const availIn = mem.ld32(strm + Z.AVIN) >>> 0, nextIn = ldp(strm + Z.IN);
   let consumed = 0, code = Z_OK;
@@ -229,12 +242,14 @@ function inflate(strm: number, _flush: number): number {
     const phase = s.phase as Phase;
     const extra = phase === "done" || phase === "error" ? Math.min(availIn, s.pending.length) : 0;
     consumed = availIn - extra;
-    stp(strm + Z.IN, nextIn + consumed); mem.st32(strm + Z.AVIN, availIn - consumed);
-    storeUlong(strm + Z.TIN, loadUlong(strm + Z.TIN) + consumed);
+    // Keep input available until its buffered output drains: scanline readers otherwise
+    // advance past their final compressed chunk before receiving all image rows.
+    s.heldInput = consumed;
     storeUlong(strm + Z.ADLER, s.check);
   }
-  if (code < Z_OK || code === Z_NEED_DICT) return code;
+  if (code < Z_OK || code === Z_NEED_DICT) { consumeInput(s, strm); return code; }
   wrote += drain(s, strm);
+  if (!s.out.length) consumeInput(s, strm);
   if ((s.phase as Phase) === "done" && !s.out.length) return Z_STREAM_END;
   return consumed || wrote ? Z_OK : Z_BUF_ERROR;
 }

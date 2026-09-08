@@ -131,6 +131,29 @@ test("negative windowBits decodes a chunked raw DEFLATE stream", async () => {
   expect(await cpu.call(end, [strm])).toBe(Z_OK);
 });
 
+test("scanline readers receive buffered rows before compressed input is exhausted", async () => {
+  const pixels = Uint8Array.from({ length: 1115 * 8 }, (_, i) => i % 251);
+  const compressed = zlibSync(pixels), strm = await initialized(15);
+  const source = mem.hostAlloc(compressed.length), destination = mem.hostAlloc(1115);
+  mem.u8.set(compressed, source);
+  stp(strm + IN, source); mem.st32(strm + AVAIL_IN, compressed.length);
+  stp(strm + OUT, destination); mem.st32(strm + AVAIL_OUT, 0);
+  expect(await cpu.call(inflate, [strm, 0])).toBe(Z_BUF_ERROR);
+  expect(mem.ld32(strm + AVAIL_IN)).toBe(compressed.length);
+  const rows: Uint8Array[] = [];
+  let status = Z_OK;
+  while (mem.ld32(strm + AVAIL_IN) && rows.length < 9) {
+    stp(strm + OUT, destination); mem.st32(strm + AVAIL_OUT, 1115);
+    status = await cpu.call(inflate, [strm, 0]);
+    rows.push(mem.u8.slice(destination, destination + 1115 - mem.ld32(strm + AVAIL_OUT)));
+  }
+  expect(status).toBe(Z_STREAM_END);
+  expect(bytes(rows)).toEqual(pixels);
+  expect(mem.ld64(strm + 16)).toBe(BigInt(compressed.length));
+  expect(mem.ld64(strm + 40)).toBe(BigInt(pixels.length));
+  expect(await cpu.call(end, [strm])).toBe(Z_OK);
+});
+
 test("crc32 returns an unsigned z_ulong on both ABIs", async () => {
   const crc = lookupHost("crc32", "libz.so")!;
   const source = mem.hostStr("123456789");
