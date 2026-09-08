@@ -45,6 +45,25 @@ export function localeTag(l: JLocale): string {
 }
 /** the one locale the device speaks; also the default */
 export const usLocale = Object.assign(new JLocale(), { lang: "en", country: "US" });
+const localeNames = new Map<string, Intl.DisplayNames>();
+function displayPart(value: string, type: "language" | "script" | "region", tag: string): string {
+  if (!value) return "";
+  const key = tag + ":" + type;
+  let names = localeNames.get(key);
+  if (!names) {
+    try { names = new Intl.DisplayNames([tag], { type, languageDisplay: "standard" }); }
+    catch { names = new Intl.DisplayNames([localeTag(usLocale)], { type, languageDisplay: "standard" }); }
+    if (localeNames.size >= 64) localeNames.delete(localeNames.keys().next().value!);
+    localeNames.set(key, names);
+  }
+  try { return names.of(value) ?? value; } catch { return value; }
+}
+function displayName(this: JLocale, displayLocale: JLocale): string {
+  if (!displayLocale) throw rt.mkThrowable("java/lang/NullPointerException", "displayLocale");
+  const tag = localeTag(displayLocale);
+  return this.lang ? displayPart(localeTag(this), "language", tag)
+    : [displayPart(this.script, "script", tag), displayPart(this.country, "region", tag), this.variant].filter(Boolean).join(", ");
+}
 rt.register({
   name: "java/util/Locale", ctor: JLocale,
   statics: { US: usLocale, ENGLISH: Object.assign(new JLocale(), { lang: "en" }), ROOT: new JLocale() },
@@ -54,6 +73,8 @@ rt.register({
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JLocale, l: string, c: string, v: string) { this.lang = l.toLowerCase(); this.country = c.toUpperCase(); this.variant = v; },
     "static getDefault()Ljava/util/Locale;": () => usLocale,
     "static setDefault(Ljava/util/Locale;)V": () => {},
+    "getDisplayName()Ljava/lang/String;": function (this: JLocale) { return displayName.call(this, usLocale); },
+    "getDisplayName(Ljava/util/Locale;)Ljava/lang/String;": displayName,
     "getLanguage()Ljava/lang/String;": function (this: JLocale) { return this.lang; },
     "getCountry()Ljava/lang/String;": function (this: JLocale) { return this.country; },
     "getScript()Ljava/lang/String;": function (this: JLocale) { return this.script; },
