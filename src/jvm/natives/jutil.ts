@@ -438,18 +438,21 @@ async function hashSeq(a: unknown[]): Promise<number> {
 }
 /** sort `a` where it lives: a subList view (and Arrays.sort's caller) must see the writes */
 export async function sortInPlace(a: unknown[], cmp: unknown, from = 0, to = a.length): Promise<void> {
-  const s = await sortAsync(a.slice(from, to), cmp);
+  const s = await sortAsync(a.slice(from, to), cmp, rt.th());
   for (let i = 0; i < s.length; i++) a[from + i] = s[i];
 }
-async function sortAsync(a: unknown[], cmp: unknown): Promise<unknown[]> {
+async function sortAsync(a: unknown[], cmp: unknown, thread: unknown): Promise<unknown[]> {
   // merge sort with async comparator
   if (a.length < 2) return a;
   const mid = a.length >> 1;
-  const l = await sortAsync(a.slice(0, mid), cmp);
-  const r = await sortAsync(a.slice(mid), cmp);
+  const l = await sortAsync(a.slice(0, mid), cmp, thread);
+  const r = await sortAsync(a.slice(mid), cmp, thread);
   const out: unknown[] = [];
   let i = 0, j = 0;
-  while (i < l.length && j < r.length) out.push((await jcmp(cmp, l[i], r[j])) <= 0 ? l[i++] : r[j++]);
+  while (i < l.length && j < r.length) {
+    rt.st(thread);
+    out.push((await jcmp(cmp, l[i], r[j])) <= 0 ? l[i++] : r[j++]);
+  }
   while (i < l.length) out.push(l[i++]);
   while (j < r.length) out.push(r[j++]);
   return out;
@@ -564,16 +567,22 @@ function mapMethods(): NativeSpec["methods"] {
     "isEmpty()Z": function (this: JMap) { return this.m.size + this.slow.length === 0 ? 1 : 0; },
     "compute(Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;": async function (this: JMap, k: unknown, fn: unknown) {
       if (fn === null) rt.npe();
+      const thread = rt.th();
       const old = await vcall(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
+      rt.st(thread);
       const value = await vcall(fn, "apply", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, old);
+      rt.st(thread);
       if (value == null) await vcall(this, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
       else await vcall(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, value);
       return value ?? null;
     },
     "computeIfAbsent(Ljava/lang/Object;Ljava/util/function/Function;)Ljava/lang/Object;": async function (this: JMap, k: unknown, fn: unknown) {
+      const thread = rt.th();
       const cur = await vcall(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
       if (cur !== null && cur !== undefined) return cur;
+      rt.st(thread);
       const v = await vcall(fn, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
+      rt.st(thread);
       if (v !== null && v !== undefined) await vcall(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, v);
       return v ?? null;
     },

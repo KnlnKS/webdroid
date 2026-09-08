@@ -80,3 +80,51 @@ test("conditional map removal uses Java equality and cannot delete a value repla
   expect(await pending).toBe(0);
   expect(await vcall(map, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "key")).toBe("replacement");
 });
+
+test("sorting preserves the initiating thread across comparator suspensions", async () => {
+  const { JThread, curThread, setCurThread } = await import("./jlang");
+  const { sortInPlace } = await import("./jutil");
+  const previous = curThread, owner = new JThread(), other = new JThread();
+  const callers: unknown[] = [];
+  rt.register({ name: "webdroid/ThreadComparator", ctor: class extends JObj {}, methods: {
+    "compare(Ljava/lang/Object;Ljava/lang/Object;)I": async (a: number, b: number) => {
+      callers.push(rt.th());
+      await Promise.resolve(); setCurThread(other);
+      return a - b;
+    },
+  } });
+  const comparator = await newObj("webdroid/ThreadComparator", null), values = [4, 1, 3, 2];
+  try {
+    setCurThread(owner);
+    const pending = sortInPlace(values, comparator);
+    queueMicrotask(() => setCurThread(other));
+    await pending;
+    expect(values).toEqual([1, 2, 3, 4]);
+    expect(callers.length).toBeGreaterThan(1);
+    expect(callers.every((thread) => thread === owner)).toBe(true);
+  } finally { setCurThread(previous); }
+});
+
+test("map computation preserves the caller for mapping and overridable writes", async () => {
+  const { JThread, curThread, setCurThread } = await import("./jlang");
+  const previous = curThread, owner = new JThread(), other = new JThread();
+  const callers: unknown[] = [];
+  const Base = rt.link("java/util/HashMap").ctor;
+  rt.register({ name: "webdroid/ThreadMap", ctor: class extends Base {}, sup: "java/util/HashMap", methods: {
+    "get(Ljava/lang/Object;)Ljava/lang/Object;": async () => { await Promise.resolve(); setCurThread(other); return null; },
+    "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": () => { callers.push(rt.th()); return null; },
+  } });
+  const apply = async () => { callers.push(rt.th()); await Promise.resolve(); setCurThread(other); return "mapped"; };
+  rt.register({ name: "webdroid/ThreadMapping", ctor: class extends JObj {}, methods: {
+    "apply(Ljava/lang/Object;)Ljava/lang/Object;": apply,
+    "apply(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": apply,
+  } });
+  const map = await newObj("webdroid/ThreadMap"), fn = await newObj("webdroid/ThreadMapping", null);
+  try {
+    for (const [name, type] of [["compute", "BiFunction"], ["computeIfAbsent", "Function"]]) {
+      setCurThread(owner);
+      expect(await vcall(map, name, `(Ljava/lang/Object;Ljava/util/function/${type};)Ljava/lang/Object;`, "key", fn)).toBe("mapped");
+    }
+    expect(callers).toEqual([owner, owner, owner, owner]);
+  } finally { setCurThread(previous); }
+});
