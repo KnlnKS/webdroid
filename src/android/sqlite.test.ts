@@ -19,6 +19,57 @@ async function value(db: unknown, sql: string) {
 }
 
 const prefix = "/data/data/sqlite-test/" + crypto.randomUUID();
+function native(owner: string, signature: string, ...args: unknown[]): unknown {
+  const method = rt.jni.get("androidx/sqlite/driver/bundled/" + owner + "|" + signature);
+  if (!method) throw new Error(signature);
+  return Reflect.apply(method, null, args);
+}
+const nativeOpen = (path: string, flags = 6) => native("BundledSQLiteDriverKt", "nativeOpen(Ljava/lang/String;I)J", path, flags);
+const nativeClose = (db: unknown) => native("BundledSQLiteConnectionKt", "nativeClose(J)V", db);
+async function nativeSql(db: unknown, sql: string): Promise<bigint[]> {
+  const stmt = native("BundledSQLiteConnectionKt", "nativePrepare(JLjava/lang/String;)J", db, sql), rows: bigint[] = [];
+  try {
+    while (await native("BundledSQLiteStatementKt", "nativeStep(J)Z", stmt)) {
+      const value = native("BundledSQLiteStatementKt", "nativeGetLong(JI)J", stmt, 0);
+      if (typeof value !== "bigint") throw new Error("Expected integer column");
+      rows.push(value);
+    }
+    return rows;
+  } finally { native("BundledSQLiteStatementKt", "nativeClose(J)V", stmt); }
+}
+
+test("native SQLite opens own separate connections over one live database file", async () => {
+  const path = prefix + "-native", first = await nativeOpen(path), second = await nativeOpen(path, 2);
+  try {
+    await nativeSql(first, "CREATE TABLE items(value INTEGER)");
+    await nativeSql(first, "INSERT INTO items VALUES(1)");
+    await nativeSql(first, "CREATE TEMP TABLE local(value INTEGER)");
+    await expect(nativeSql(second, "SELECT value FROM local")).rejects.toThrow("no such table");
+    await nativeSql(first, "BEGIN IMMEDIATE");
+    await nativeSql(first, "INSERT INTO items VALUES(2)");
+    expect(await nativeSql(second, "SELECT value FROM items")).toEqual([1n]);
+    await expect(nativeSql(second, "BEGIN IMMEDIATE")).rejects.toThrow("database is locked");
+    await nativeSql(first, "COMMIT");
+    expect(await nativeSql(second, "SELECT value FROM items")).toEqual([1n, 2n]);
+    const reader = await nativeOpen(path, 1);
+    try { await expect(nativeSql(reader, "INSERT INTO items VALUES(3)")).rejects.toThrow("readonly"); }
+    finally { nativeClose(reader); }
+    nativeClose(first);
+    expect(await nativeSql(second, "SELECT value FROM items")).toEqual([1n, 2n]);
+    await nativeSql(second, "BEGIN IMMEDIATE");
+    await nativeSql(second, "INSERT INTO items VALUES(4)");
+  } finally { nativeClose(first); nativeClose(second); }
+  expect(await value(await open(path, 0), "SELECT sum(value) FROM items")).toBe(3n);
+  await expect(nativeOpen(prefix + "-native-missing", 2)).rejects.toBeTruthy();
+});
+
+test("native SQLite memory databases are independent for every open", async () => {
+  const first = await nativeOpen(":memory:"), second = await nativeOpen(":memory:");
+  try {
+    await nativeSql(first, "CREATE TABLE private(value INTEGER)");
+    await expect(nativeSql(second, "SELECT value FROM private")).rejects.toThrow("no such table");
+  } finally { nativeClose(first); nativeClose(second); }
+});
 test("openDatabase flags distinguish existing databases from create requests", async () => {
   const error = rt.link("android/database/sqlite/SQLiteCantOpenDatabaseException").ctor;
   await expect(open(prefix + "-missing", 0)).rejects.toBeInstanceOf(error);

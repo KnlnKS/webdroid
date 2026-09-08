@@ -77,12 +77,17 @@ class JSQLiteDatabase extends JObj {
 }
 const dbCache = new Map<string, JSQLiteDatabase>();
 const readOnlyCache = new Map<string, JSQLiteDatabase>();
-function readOnlyConnection(sql: NonNullable<typeof SQL>, source: Database): Database {
+function sharedConnection(sql: NonNullable<typeof SQL>, source: Database): Database {
   const db = vfsDb(new sql.Database()), own = db.filename;
   db.filename = vfsDb(source).filename;
   try { db.export(); }
   catch (e) { db.filename = own; db.close(); throw e; }
-  finally { db.filename = own; }
+  const close = db.close.bind(db);
+  db.close = () => { db.filename = own; close(); };
+  return db;
+}
+function readOnlyConnection(sql: NonNullable<typeof SQL>, source: Database): Database {
+  const db = sharedConnection(sql, source);
   const exec = db.exec.bind(db), prepare = db.prepare.bind(db);
   const protect = (stmt: Statement): Statement => {
     const step = stmt.step.bind(stmt), reset = stmt.reset.bind(stmt);
@@ -642,7 +647,7 @@ interface BStmt {
   row: unknown[] | null;
   names: string[];
 }
-interface BConn { jdb: JSQLiteDatabase; tx: number; }
+interface BConn { jdb: JSQLiteDatabase; db: Database; tx: number; }
 let nextHandle = 1n;
 const bConns = new Map<bigint, BConn>();
 const bStmts = new Map<bigint, BStmt>();
@@ -655,21 +660,38 @@ const jni = (cls: string, sig: string, fn: (...a: never[]) => unknown) =>
   rt.registerJni("androidx/sqlite/driver/bundled/" + cls, sig, fn);
 rt.claimNativeLib("sqliteJni");
 jni("BundledSQLiteDriverKt", "nativeThreadSafeMode()I", () => 0);
-jni("BundledSQLiteDriverKt", "nativeOpen(Ljava/lang/String;I)J", (async (name: string) => {
-  const jdb = await openDatabase(name && name !== ":memory:" ? name : ":memory:");
+jni("BundledSQLiteDriverKt", "nativeOpen(Ljava/lang/String;I)J", (async (name: string, flags: number) => {
+  const mode = flags & 3;
+  if (mode !== 1 && mode !== 2) throw rt.mkThrowable("android/database/sqlite/SQLiteCantOpenDatabaseException", "Invalid SQLite open flags");
+  const sql = await ensureSql();
+  let jdb: JSQLiteDatabase, db: Database;
+  if (!name || name === ":memory:") {
+    jdb = new JSQLiteDatabase(); jdb.db = db = new sql.Database();
+  } else {
+    jdb = await openDatabase(name, mode === 2 && flags & 4 ? 0x10000000 : 0);
+    db = mode === 1 ? readOnlyConnection(sql, jdb.db!) : sharedConnection(sql, jdb.db!);
+  }
   const h = nextHandle++;
-  bConns.set(h, { jdb, tx: 0 });
+  bConns.set(h, { jdb, db, tx: 0 });
   return h;
 }) as (...a: never[]) => unknown);
 jni("BundledSQLiteConnectionKt", "nativePrepare(JLjava/lang/String;)J", ((db: bigint, sql: string) => {
   const conn = bConns.get(db);
   if (!conn?.jdb.db) throw rt.mkThrowable("android/database/sqlite/SQLiteException", "connection closed");
-  const st = conn.jdb.db.prepare(sql);
+  const st = conn.db.prepare(sql);
   const h = nextHandle++;
   bStmts.set(h, { st, sql, conn, params: [], bound: false, row: null, names: st.getColumnNames() });
   return h;
 }) as (...a: never[]) => unknown);
-jni("BundledSQLiteConnectionKt", "nativeClose(J)V", ((db: bigint) => { bConns.delete(db); }) as (...a: never[]) => unknown);
+jni("BundledSQLiteConnectionKt", "nativeClose(J)V", ((db: bigint) => {
+  const conn = bConns.get(db);
+  if (!conn) return;
+  for (const [handle, stmt] of bStmts) if (stmt.conn === conn) { stmt.st.free(); bStmts.delete(handle); }
+  conn.db.close();
+  conn.jdb.txDepth = Math.max(0, conn.jdb.txDepth - conn.tx);
+  if (conn.jdb.path !== ":memory:") conn.jdb.scheduleSave();
+  bConns.delete(db);
+}) as (...a: never[]) => unknown);
 jni("BundledSQLiteConnectionKt", "nativeInTransaction(J)Z", ((db: bigint) => (bConns.get(db)?.tx ? 1 : 0)) as (...a: never[]) => unknown);
 jni("BundledSQLiteConnectionKt", "nativeLoadExtension(JLjava/lang/String;Ljava/lang/String;)V", (() => {
   throw rt.mkThrowable("android/database/sqlite/SQLiteException", "extensions unsupported");
