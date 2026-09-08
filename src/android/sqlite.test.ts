@@ -20,6 +20,21 @@ async function value(db: unknown, sql: string) {
 
 const prefix = "/data/data/sqlite-test/" + crypto.randomUUID();
 
+test("Java SQLite binds and reads signed 64-bit integers without rounding or text coercion", async () => {
+  const db = await open(":memory:", 0x10000000);
+  await exec(db, "CREATE TABLE exact_ids(id INTEGER PRIMARY KEY)");
+  const insert = await vcall(db, "compileStatement", "(Ljava/lang/String;)Landroid/database/sqlite/SQLiteStatement;", "INSERT INTO exact_ids VALUES(?)");
+  const scalar = await vcall(db, "compileStatement", "(Ljava/lang/String;)Landroid/database/sqlite/SQLiteStatement;", "SELECT ?");
+  const type = await vcall(db, "compileStatement", "(Ljava/lang/String;)Landroid/database/sqlite/SQLiteStatement;", "SELECT typeof(?)");
+  for (const id of [2499283573021220255n, 9223372036854775807n, -9223372036854775808n]) {
+    for (const stmt of [insert, scalar, type]) await vcall(stmt, "bindLong", "(IJ)V", 1, id);
+    expect(await vcall(insert, "executeInsert", "()J")).toBe(id);
+    expect(await vcall(scalar, "simpleQueryForLong", "()J")).toBe(id);
+    expect(await vcall(type, "simpleQueryForString", "()Ljava/lang/String;")).toBe("integer");
+    expect(await value(db, `SELECT id FROM exact_ids WHERE id = ${id}`)).toBe(id);
+  }
+});
+
 test("WAL persistence includes committed pages and defers raw SQL transactions without losing TEMP state", async () => {
   const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage"), saved = new Map<string, string>();
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => saved.set(key, value) } });
@@ -86,6 +101,22 @@ function native(owner: string, signature: string, ...args: unknown[]): unknown {
 }
 const nativeOpen = (path: string, flags = 6) => native("BundledSQLiteDriverKt", "nativeOpen(Ljava/lang/String;I)J", path, flags);
 const nativeClose = (db: unknown) => native("BundledSQLiteConnectionKt", "nativeClose(J)V", db);
+test("bundled SQLite preserves 64-bit binding types and arithmetic", async () => {
+  const db = await nativeOpen(":memory:");
+  const stmt = native("BundledSQLiteConnectionKt", "nativePrepare(JLjava/lang/String;)J", db, "SELECT ?, typeof(?), ? + 1");
+  const owner = "BundledSQLiteStatementKt";
+  try {
+    for (const id of [2499283573021220255n, -9223372036854775808n]) {
+      for (let i = 1; i <= 3; i++) native(owner, "nativeBindLong(JIJ)V", stmt, i, id);
+      expect(await native(owner, "nativeStep(J)Z", stmt)).toBe(1);
+      expect(native(owner, "nativeGetColumnType(JI)I", stmt, 0)).toBe(1);
+      expect(native(owner, "nativeGetLong(JI)J", stmt, 0)).toBe(id);
+      expect(native(owner, "nativeGetText(JI)Ljava/lang/String;", stmt, 1)).toBe("integer");
+      expect(native(owner, "nativeGetLong(JI)J", stmt, 2)).toBe(id + 1n);
+      native(owner, "nativeReset(J)V", stmt);
+    }
+  } finally { native(owner, "nativeClose(J)V", stmt); nativeClose(db); }
+});
 async function nativeSql(db: unknown, sql: string): Promise<bigint[]> {
   const stmt = native("BundledSQLiteConnectionKt", "nativePrepare(JLjava/lang/String;)J", db, sql), rows: bigint[] = [];
   try {

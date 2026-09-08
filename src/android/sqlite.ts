@@ -176,16 +176,16 @@ export async function openDatabase(path: string, flags = 0x10000000): Promise<JS
   return jdb;
 }
 
-function bindArgs(args: unknown[] | null): (string | number | Uint8Array | null)[] {
+function bindArgs(args: unknown[] | null): (string | number | bigint | Uint8Array | null)[] {
   if (!args) return [];
   return args.map((a) => {
     if (a === null || a === undefined) return null;
-    if (typeof a === "bigint") return Number(a);
+    if (typeof a === "bigint") return a;
     if (typeof a === "number" || typeof a === "string") return a;
     if (a instanceof Int8Array) return new Uint8Array(a.buffer, a.byteOffset, a.length);
     if (typeof a === "object" && "v" in (a as object)) {
       const v = (a as { v: unknown }).v;
-      return typeof v === "bigint" ? Number(v) : (v as number);
+      return v as number | bigint;
     }
     return String(a);
   });
@@ -211,6 +211,10 @@ export function mkCursor(cols: string[], rows: unknown[][]): JCursor {
   c.rows = rows;
   return c;
 }
+function integerRow(stmt: Statement): unknown[] {
+  return (stmt.get as (params: undefined, config: { useBigInt: boolean }) => unknown[])(undefined, { useBigInt: true });
+}
+const longValue = (v: unknown): bigint => typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v ?? 0)));
 function runQuery(jdb: JSQLiteDatabase, sqlStr: string, args: unknown[] | null): JCursor {
   const c = mkCursor([], []);
   try {
@@ -218,7 +222,7 @@ function runQuery(jdb: JSQLiteDatabase, sqlStr: string, args: unknown[] | null):
     try {
       stmt.bind(bindArgs(args) as never);
       c.cols = stmt.getColumnNames();
-      while (stmt.step()) c.rows.push(stmt.get());
+      while (stmt.step()) c.rows.push(integerRow(stmt));
     } finally { stmt.free(); }
   } catch (e) {
     throw sqliteExc(String(e), sqlStr);
@@ -268,7 +272,7 @@ const cursorMethods: NativeSpec["methods"] = {
   "getInt(I)I": function (this: JCursor, i: number) { return Math.trunc(Number(this.val(i) ?? 0)) | 0; },
   "getLong(I)J": function (this: JCursor, i: number) {
     const v = this.val(i);
-    return typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v ?? 0)));
+    return longValue(v);
   },
   "getDouble(I)D": function (this: JCursor, i: number) { return Number(this.val(i) ?? 0); },
   "getFloat(I)F": function (this: JCursor, i: number) { return Math.fround(Number(this.val(i) ?? 0)); },
@@ -283,7 +287,7 @@ const cursorMethods: NativeSpec["methods"] = {
     const v = this.val(i);
     if (v === null) return 0;
     if (typeof v === "bigint") return 1;
-    if (typeof v === "number") return Number.isInteger(v) ? 1 : 2;
+    if (typeof v === "number") return typeof v === "bigint" || Number.isInteger(v) ? 1 : 2;
     if (typeof v === "string") return 3;
     return 4;
   },
@@ -511,8 +515,7 @@ function doInsert(jdb: JSQLiteDatabase, table: string, cv: JContentValues, or: s
     return -1n;
   }
   jdb.scheduleSave();
-  const r = jdb.db!.exec("SELECT last_insert_rowid()");
-  return BigInt(Number(r[0]?.values[0]?.[0] ?? -1));
+  return longValue(runQuery(jdb, "SELECT last_insert_rowid()", null).rows[0]?.[0] ?? -1);
 }
 class JSQLiteProgram extends JObj {
   jdb: JSQLiteDatabase | null = null;
@@ -556,8 +559,7 @@ rt.register({
     "executeInsert()J": function (this: JSQLiteStatement) {
       try { this.jdb!.db!.run(this.sql, bindArgs(this.binds) as never); } catch (e) { throw sqliteExc(String(e), this.sql); }
       this.jdb!.scheduleSave();
-      const r = this.jdb!.db!.exec("SELECT last_insert_rowid()");
-      return BigInt(Number(r[0]?.values[0]?.[0] ?? -1));
+      return longValue(runQuery(this.jdb!, "SELECT last_insert_rowid()", null).rows[0]?.[0] ?? -1);
     },
     "executeUpdateDelete()I": function (this: JSQLiteStatement) {
       try { this.jdb!.db!.run(this.sql, bindArgs(this.binds) as never); } catch (e) { throw sqliteExc(String(e), this.sql); }
@@ -566,7 +568,7 @@ rt.register({
     },
     "simpleQueryForLong()J": function (this: JSQLiteStatement) {
       const c = runQuery(this.jdb!, this.sql, this.binds);
-      return c.rows.length ? BigInt(Math.trunc(Number(c.rows[0][0] ?? 0))) : 0n;
+      return c.rows.length ? longValue(c.rows[0][0]) : 0n;
     },
     "simpleQueryForString()Ljava/lang/String;": function (this: JSQLiteStatement) {
       const c = runQuery(this.jdb!, this.sql, this.binds);
@@ -601,12 +603,12 @@ rt.register({
   methods: {
     "static queryNumEntries(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;)J": (db: JSQLiteDatabase, table: string) => {
       const c = runQuery(db, `SELECT COUNT(*) FROM "${table}"`, null);
-      return BigInt(Number(c.rows[0]?.[0] ?? 0));
+      return longValue(c.rows[0]?.[0]);
     },
     "static longForQuery(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;[Ljava/lang/String;)J":
       (db: JSQLiteDatabase, sql: string, args: unknown[]) => {
         const c = runQuery(db, sql, args);
-        return BigInt(Math.trunc(Number(c.rows[0]?.[0] ?? 0)));
+        return longValue(c.rows[0]?.[0]);
       },
     "static stringForQuery(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;[Ljava/lang/String;)Ljava/lang/String;":
       (db: JSQLiteDatabase, sql: string, args: unknown[]) => {
@@ -686,7 +688,7 @@ interface BStmt {
   st: import("sql.js").Statement;
   sql: string;
   conn: BConn;
-  params: (string | number | Uint8Array | null)[];
+  params: (string | number | bigint | Uint8Array | null)[];
   bound: boolean;
   row: unknown[] | null;
   names: string[];
@@ -745,18 +747,18 @@ const stJni: Record<string, (...a: never[]) => unknown> = {
     bstmt(h).params[i - 1] = new Uint8Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.length));
   }) as (...a: never[]) => unknown,
   "nativeBindDouble(JID)V": ((h: bigint, i: number, v: number) => { bstmt(h).params[i - 1] = v; }) as (...a: never[]) => unknown,
-  "nativeBindLong(JIJ)V": ((h: bigint, i: number, v: bigint) => { bstmt(h).params[i - 1] = Number(v); }) as (...a: never[]) => unknown,
+  "nativeBindLong(JIJ)V": ((h: bigint, i: number, v: bigint) => { bstmt(h).params[i - 1] = v; }) as (...a: never[]) => unknown,
   "nativeBindNull(JI)V": ((h: bigint, i: number) => { bstmt(h).params[i - 1] = null; }) as (...a: never[]) => unknown,
   "nativeBindText(JILjava/lang/String;)V": ((h: bigint, i: number, v: string) => { bstmt(h).params[i - 1] = v; }) as (...a: never[]) => unknown,
   "nativeClearBindings(J)V": ((h: bigint) => { const s = bstmt(h); s.params = []; s.bound = false; }) as (...a: never[]) => unknown,
   "nativeStep(J)Z": ((h: bigint) => {
     const s = bstmt(h);
     if (!s.bound) {
-      if (s.params.length) s.st.bind(s.params.map((p) => p === undefined ? null : p));
+      if (s.params.length) s.st.bind(s.params.map((p) => p === undefined ? null : p) as never);
       s.bound = true;
     }
     const has = s.st.step();
-    s.row = has ? s.st.get() : null;
+    s.row = has ? integerRow(s.st) : null;
     if (!has) {
       const head = s.sql.trimStart().slice(0, 8).toUpperCase();
       // txDepth on the JSQLiteDatabase is what gates persistence; every path that opens a
@@ -779,9 +781,9 @@ const stJni: Record<string, (...a: never[]) => unknown> = {
     if (v === null || v === undefined) return 5;
     if (v instanceof Uint8Array) return 4;
     if (typeof v === "string") return 3;
-    return Number.isInteger(v) ? 1 : 2;
+    return typeof v === "bigint" || Number.isInteger(v) ? 1 : 2;
   }) as (...a: never[]) => unknown,
-  "nativeGetLong(JI)J": ((h: bigint, i: number) => BigInt(Math.trunc(Number(bstmt(h).row?.[i] ?? 0)))) as (...a: never[]) => unknown,
+  "nativeGetLong(JI)J": ((h: bigint, i: number) => longValue(bstmt(h).row?.[i])) as (...a: never[]) => unknown,
   "nativeGetDouble(JI)D": ((h: bigint, i: number) => Number(bstmt(h).row?.[i] ?? 0)) as (...a: never[]) => unknown,
   "nativeGetText(JI)Ljava/lang/String;": ((h: bigint, i: number) => {
     const v = bstmt(h).row?.[i];
