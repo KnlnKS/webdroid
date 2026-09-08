@@ -1460,3 +1460,20 @@ and process queries, followed by JNI exception aborts; rendering itself was no l
 The reached nextafterf import now steps the IEEE float32 representation by one ULP,
 including signed zeros, subnormals, infinities and NaNs. A native ARM64 test exercises
 16 boundary cases through the host ABI.
+
+## Lichess: thread signal masks
+
+Cronet reached rt_sigprocmask through syscall. The [Linux ARM64 table](https://raw.githubusercontent.com/torvalds/linux/v6.12/include/uapi/asm-generic/unistd.h)
+and [ARM table](https://raw.githubusercontent.com/torvalds/linux/master/arch/arm/tools/syscall.tbl)
+assign it 135 and 175 respectively. Both raw instruction dispatch and libc syscall now
+apply per-thread masks, retain blocked pending signals, and dispatch after unblocking.
+Pthread masks preserve errno on failure and new pthreads inherit their creator's mask.
+Handlers apply sa_mask and their own signal mask (unless SA_NODEFER), restoring the previous
+mask when they return; sigsuspend temporarily replaces that mask.
+
+[AOSP signal types](https://raw.githubusercontent.com/aosp-mirror/platform_bionic/master/libc/include/bits/signal_types.h)
+also exposed incorrect ARM32 sigaction offsets and oversized sigset writes. ARM32's
+ordinary sigset is four bytes and sigaction is 16 bytes; kernel and *64 mask calls use
+eight bytes. Targeted tests exercise both ABIs, pending coalescing, handler masks,
+sigsuspend, inherited masks, and raw syscall errors. Lichess subsequently reports no
+missing native calls at the rendered navigation screen; Java NetworkInfo gaps remain.

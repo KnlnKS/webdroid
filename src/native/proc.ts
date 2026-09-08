@@ -73,16 +73,12 @@ export function procInit(): void {
     execl: (cpu) => fail(cpu, E.NOSYS), execlp: (cpu) => fail(cpu, E.NOSYS), execv: (cpu) => fail(cpu, E.NOSYS), execve: (cpu) => fail(cpu, E.NOSYS), execvp: (cpu) => fail(cpu, E.NOSYS),
     waitpid: (cpu) => fail(cpu, E.NOSYS), wait: (cpu) => fail(cpu, E.NOSYS),
     ptrace: (cpu) => fail(cpu, E.PERM),
-    // signals: a set is a 64-bit mask; no signal is ever delivered, so waiting for one parks the thread
-    sigfillset: (_c, a) => { const s = a.p(); mem.st32(s, -1); mem.st32(s + 4, -1); return 0; },
-    sigdelset: (_c, a) => { const s = a.p(), n = a.i() - 1; if (n >= 0 && n < 64) u8[s + (n >> 3)] &= ~(1 << (n & 7)); return 0; },
-    sigismember: (_c, a) => { const s = a.p(), n = a.i() - 1; return n >= 0 && n < 64 && (u8[s + (n >> 3)] >> (n & 7)) & 1 ? 1 : 0; },
     // signals: a handler runs on the target thread, at once when it is parked in a host call
     // (as a kernel interrupts a syscall) and at its next slice boundary when it is running
     sigaction: (_c, a) => {
       const sig = a.i(), act = a.p(), old = a.p(), prev = sigHandlers.get(sig);
-      if (old) { mem.memset(old, 0, LAYOUT.SIGACTION_SIZE); if (prev) { stp(old + LAYOUT.SA_HANDLER, prev.fn); mem.st32(old + LAYOUT.SA_FLAGS, prev.flags); } }
-      if (act) { const fn = ldp(act + LAYOUT.SA_HANDLER); if (fn > 1) sigHandlers.set(sig, { fn, flags: mem.ld32(act + LAYOUT.SA_FLAGS) }); else sigHandlers.delete(sig); }
+      if (old) { mem.memset(old, 0, LAYOUT.SIGACTION_SIZE); if (prev) { stp(old + LAYOUT.SA_HANDLER, prev.fn); mem.st32(old + LAYOUT.SA_FLAGS, prev.flags); if (PTR === 8) mem.st64(old + 16, prev.mask ?? 0n); else mem.st32(old + 4, Number((prev.mask ?? 0n) & 0xffffffffn)); } }
+      if (act) { const fn = ldp(act + LAYOUT.SA_HANDLER); if (fn > 1) sigHandlers.set(sig, { fn, flags: mem.ld32(act + LAYOUT.SA_FLAGS), mask: PTR === 8 ? mem.ld64(act + 16) : BigInt(mem.ld32(act + 4) >>> 0) }); else sigHandlers.delete(sig); }
       return 0;
     },
     signal: (_c, a) => { const sig = a.i(), fn = a.p(), prev = sigHandlers.get(sig)?.fn ?? 0; if (fn > 1) sigHandlers.set(sig, { fn, flags: 0 }); else sigHandlers.delete(sig); return prev; },
@@ -97,9 +93,11 @@ export function procInit(): void {
     tgkill: (_c, a) => { a.i(); const t = cpuByTid(a.i() - 4242), sig = a.i(); if (!t) return fail(_c, E.SRCH); t.kill(sig); return 0; },
     raise: (cpu, a) => { const sig = a.i(); if (!sigHandlers.has(sig) && (sig === 6 || sig === 11 || sig === 9)) cpu.fault(`raise(${sig})`); cpu.kill(sig); return 0; },
     kill: (cpu, a) => { a.i(); const sig = a.i(); if (!sigHandlers.has(sig) && (sig === 6 || sig === 11 || sig === 9)) cpu.fault(`kill(${sig})`); cpu.kill(sig); return 0; },
-    sigsuspend: (cpu) => new Promise<number>((r) => { cpu.sigWait = () => r(fail(cpu, E.INTR)); }),
+    sigprocmask: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), PTR); return e ? fail(cpu, e) : 0; },
+    sigprocmask64: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 8); return e ? fail(cpu, e) : 0; },
+    sigsuspend: (cpu, a) => { const mask = cpu.signalMask; cpu.sigmask(2, a.p(), 0, PTR); return new Promise<number>((r) => { cpu.sigWait = () => { cpu.signalMask = mask; cpu.pump(); r(fail(cpu, E.INTR)); }; }); },
     sigwait: () => new Promise<never>(() => {}),
-    sigaltstack: () => 0, sigpending: (_c, a) => { const s = a.p(); mem.st32(s, 0); mem.st32(s + 4, 0); return 0; },
+    sigaltstack: () => 0, sigpending: (cpu, a) => { const mask = cpu.signals.reduce((v, sig) => v | 1n << BigInt(sig - 1), 0n); const p = a.p(); if (PTR === 8) mem.st64(p, mask); else mem.st32(p, Number(mask & 0xffffffffn)); return 0; },
     pthread_sigqueue: () => 0, killpg: () => 0,
     openlog: () => {}, closelog: () => {},
     syslog: (_c, a) => { const prio = a.i(), f = a.str(); logLine(prio <= 3 ? 6 : prio <= 5 ? 5 : 4, "syslog", format(f, a)); },
@@ -184,6 +182,18 @@ export function procInit(): void {
     __FD_CLR_chk: (_c, a) => { const fd = a.i(), set = a.p(); u8[set + (fd >> 3)] &= ~(1 << (fd & 7)); },
     __FD_ISSET_chk: (_c, a) => { const fd = a.i(), set = a.p(); return (u8[set + (fd >> 3)] >> (fd & 7)) & 1; },
   };
+  for (const suffix of ["", "64"]) {
+    M["sigemptyset" + suffix] = (_c, a) => { mem.memset(a.p(), 0, suffix ? 8 : PTR); return 0; };
+    M["sigfillset" + suffix] = (_c, a) => { mem.memset(a.p(), 255, suffix ? 8 : PTR); return 0; };
+    for (const op of ["add", "del", "ismember"]) M[(op === "ismember" ? "sigismember" : "sig" + op + "set") + suffix] = (cpu, a) => {
+      const p = a.p(), n = a.i() - 1;
+      if (n < 0 || n >= (suffix ? 8 : PTR) * 8) return fail(cpu, E.INVAL);
+      const at = p + (n >> 3), bit = 1 << (n & 7);
+      if (op === "ismember") return mem.u8[at] & bit ? 1 : 0;
+      if (op === "add") mem.u8[at] |= bit; else mem.u8[at] &= ~bit;
+      return 0;
+    };
+  }
   hostLib("libc.so", M);
 }
 function strncpy(d: number, s: number, n: number): void {

@@ -233,6 +233,23 @@ export class Cpu {
   pending: Promise<unknown> | null = null;
   /** signals queued for this thread, delivered at its next slice boundary */
   signals: number[] = [];
+  signalMask = 0n;
+  // SIGKILL and SIGSTOP cannot be masked.
+  sigmask(how: number, set: number, old: number, size: number): number {
+    if (size !== 4 && size !== 8 || set && (how < 0 || how > 2)) return 22;
+    const mask = set ? (size === 8 ? mem.ld64(set) : BigInt(mem.ld32(set) >>> 0)) : 0n;
+    if (old) { if (size === 8) mem.st64(old, this.signalMask); else mem.st32(old, Number(this.signalMask & 0xffffffffn)); }
+    if (set) {
+      this.signalMask = (how === 0 ? this.signalMask | mask : how === 1 ? this.signalMask & ~mask : mask) & 0xfffffffffffbfeffn;
+      this.pump();
+    }
+    return 0;
+  }
+  private takeSignal(): number {
+    if (!this.signals.length) return 0;
+    const i = this.signals.findIndex((sig) => !(this.signalMask & 1n << BigInt(sig - 1)));
+    return i < 0 ? 0 : this.signals.splice(i, 1)[0];
+  }
   /** the depth of the run loop awaiting a host call's promise, -1 for none: the Cpu is parked only when that
    *  loop is the innermost one — a nested frame in its teardown, or a handler above, owns the register file */
   parkedAt = -1;
@@ -243,11 +260,9 @@ export class Cpu {
   sigWait: (() => void) | null = null;              // sigsuspend: released when a handler has run
   /** a signal for this thread: a parked thread runs the handler now, on top of its host call,
    *  as a kernel interrupts a syscall; a running one at its next slice boundary */
-  handling = new Set<number>();                     // signals whose handler is running: a repeat is held until it returns
-  deferred = new Set<number>();
+  handling = new Set<number>();                     // signals whose handler is running
   kill(sig: number): void {
     if (this.finished || !sigHandlers.has(sig)) return;
-    if (this.handling.has(sig)) { this.deferred.add(sig); return; }   // blocked, as sa_mask blocks a signal in its own handler
     if (!this.signals.includes(sig)) this.signals.push(sig);           // pending already: signals do not queue up
     this.pump();
   }
@@ -255,7 +270,7 @@ export class Cpu {
    *  a running loop takes its queue at its next slice boundary. A handler parked in its own host call
    *  (sigsuspend) is a parked frame like any other: the next signal runs on top of it. */
   pump(): void {
-    queueMicrotask(() => { if ((this.parked || this.loops === 0) && this.signals.length) void this.deliver(this.signals.shift()!); });
+    queueMicrotask(() => { if (this.parked || this.loops === 0) { const sig = this.takeSignal(); if (sig) void this.deliver(sig); } });
   }
   sigLog: string[] = [];                           // wd.native.regs: what each thread was signalled and when it ran
   /** a handler running on an otherwise idle Cpu (a Java thread between native calls): the next
@@ -272,6 +287,8 @@ export class Cpu {
     const h = sigHandlers.get(sig);
     if (callLog && this.name === callLog) console.log(`[call-native] ${this.name} deliver ${sig} depth=${this.depth} loops=${this.loops} parked=${this.parked} state=${this.state}`);
     this.sigLog.push(`${sig}@${this.ic}${this.parked ? "p" : ""}/${this.loops}`);
+    const mask = this.signalMask, handling = this.handling.has(sig);
+    this.signalMask = (mask | (h?.mask ?? 0n) | (h && h.flags & 0x40000000 ? 0n : 1n << BigInt(sig - 1))) & 0xfffffffffffbfeffn;
     this.handling.add(sig);
     const base = this.loops === 0;
     const p = (async () => { if (h) await this.call(h.fn, [sig, 0, 0], "signal " + sig); })();
@@ -280,8 +297,9 @@ export class Cpu {
     catch (e) { console.error(`[native] signal ${sig} handler on ${this.name}:`, e); throw e; }
     finally {
       this.sigLog.push(`~${sig}`);
-      this.handling.delete(sig);
-      if (this.deferred.delete(sig)) this.kill(sig);
+      this.signalMask = mask;
+      if (!handling) this.handling.delete(sig);
+      this.pump();
     }
     const w = this.sigWait;
     if (w) { this.sigWait = null; w(); }
@@ -406,7 +424,7 @@ export class Cpu {
     for (;;) {
       setCurThread(this.jthread);
       if (processExited) await new Promise<never>(() => {});
-      while (this.signals.length) { this.state = "deliver"; await this.deliver(this.signals.shift()!); }
+      for (let sig; (sig = this.takeSignal());) { this.state = "deliver"; await this.deliver(sig); }
       const t0 = performance.now(), ic0 = this.ic;
       let ex: SliceExit;
       this.state = "slice";
@@ -649,6 +667,11 @@ export class Cpu {
   svc(): void {
     const r = this.r;
     switch (r[8] >>> 0) {
+      case 135: {
+        const set = this.h[1] ? mem.tx(this.h[1], r[1] >>> 0) : r[1] >>> 0, old = this.h[2] ? mem.tx(this.h[2], r[2] >>> 0) : r[2] >>> 0;
+        const result = r[3] === 8 ? this.sigmask(r[0], set, old, 8) : 22;
+        r[0] = -result; this.h[0] = result ? -1 : 0; return;
+      }
       case 172: r[0] = 4242; return;                                                     // getpid
       case 178: r[0] = 4242 + this.tid; return;                                           // gettid
       default: this.fault(`svc: unsupported syscall ${r[8] >>> 0}`);
@@ -660,6 +683,7 @@ export class Cpu {
     switch (r[7] >>> 0) {
       case 0xf0002: invalidateRange(r[0] >>> 0, (r[1] - r[0]) >>> 0, "cacheflush"); r[0] = 0; return;   // __ARM_NR_cacheflush
       case 0xf0005: this.tlsBase = r[0]; r[0] = 0; return;                                   // __ARM_NR_set_tls
+      case 175: r[0] = -(r[3] === 8 ? this.sigmask(r[0], r[1] >>> 0, r[2] >>> 0, 8) : 22); return;
       case 20: r[0] = 4242; return;                                                          // getpid
       case 224: r[0] = 4242 + this.tid; return;                                              // gettid
       default: this.fault(`swi: unsupported syscall ${r[7] >>> 0}`);
@@ -890,7 +914,7 @@ export function cpuFor(t: JThread): Cpu {
 export function bindCpu(t: JThread, c: Cpu): void { byThread.set(t, c); }
 export function cpuByTid(tid: number): Cpu | undefined { for (const c of cpus) if (c.tid === tid) return c; return undefined; }
 /** sigaction's table: signal → handler (sa_handler or sa_sigaction) and flags */
-export const sigHandlers = new Map<number, { fn: number; flags: number }>();
+export const sigHandlers = new Map<number, { fn: number; flags: number; mask?: bigint }>();
 
 let symbolizeHook: (pc: number) => string = (pc) => "0x" + pc.toString(16);
 export function setSymbolizeHook(f: (pc: number) => string): void { symbolizeHook = f; }

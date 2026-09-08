@@ -25,7 +25,7 @@ const LAYOUT32 = {
   ST_ATIME: 72, ST_MTIME: 80, ST_CTIME: 88, ST_INO: 96,
   DIRENT_SIZE: 276, D_INO: 0, D_OFF: 8, D_RECLEN: 16, D_TYPE: 18, D_NAME: 19,
   TM_SIZE: 44, TM_GMTOFF: 36, TM_ZONE: 40, TS_SEC: 0, TS_NSEC: 4, TS_SIZE: 8, UTSNAME_FIELD: 65, JMPBUF_SIZE: 256,
-  SIGACTION_SIZE: 140, SA_HANDLER: 0, SA_FLAGS: 136, STATFS_SIZE: 88,
+  SIGACTION_SIZE: 16, SA_HANDLER: 0, SA_FLAGS: 8, STATFS_SIZE: 88,
 };
 const LAYOUT64: typeof LAYOUT32 = {
   FILE_SIZE: 152, F_P: 0, F_R: 8, F_W: 12, F_FLAGS: 16, F_FILE: 18, F_BF_BASE: 24, F_BF_SIZE: 32, F_LBFSIZE: 40, F_COOKIE: 48,
@@ -212,7 +212,7 @@ export function libcInit(): void {
     gettid: (cpu) => 4242 + cpu.tid,
     getuid: () => 10123, geteuid: () => 10123, getgid: () => 10123, getegid: () => 10123,
     getppid: () => 1,
-    bsd_signal: () => 0, signal: () => 0, sigprocmask: () => 0, sigemptyset: () => 0, sigaddset: () => 0,
+    bsd_signal: () => 0,
     nice: () => 0, setpriority: () => 0, getpriority: () => 0,
     sched_yield: () => 0,
     // Bionic's numbering: _SC_PAGESIZE/_SC_PAGE_SIZE 0x27/0x28, _SC_NPROCESSORS_CONF/ONLN 0x60/0x61, _SC_PHYS_PAGES 0x62
@@ -273,6 +273,7 @@ export function libcInit(): void {
     syscall: (cpu, a) => {
       const nr = a.i();
       if (nr === (PTR === 8 ? 98 : 240)) { const addr = a.p(), op = a.i(), val = a.i(), ts = a.p(); a.p(); return futex(cpu, addr, op, val, ts, a.i()); }
+      if (nr === (PTR === 8 ? 135 : 175)) { const how = a.i(), set = a.p(), old = a.p(), size = a.u(); const e = size === 8 ? cpu.sigmask(how, set, old, 8) : E.INVAL; return e ? fail(cpu, e) : 0; }
       if (nr === (PTR === 8 ? 178 : 224)) return 4242 + cpu.tid;              // gettid
       if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); crypto.getRandomValues(mem.bytes(buf, n)); return n; } // getrandom
       if (nr === (PTR === 8 ? 122 : 241)) return 0;                             // sched_setaffinity: one core, nothing to pin

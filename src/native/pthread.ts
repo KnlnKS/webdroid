@@ -106,11 +106,12 @@ function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | nul
   });
 }
 
-function startThread(start: number, arg: bigint, name?: string): Cpu {
+function startThread(parent: Cpu, start: number, arg: bigint, name?: string): Cpu {
   const jt = new JThread();
   jt.jname = name ?? `pthread-${++threadSeq}`;
   jt.alive = 1;
   const cpu = new Cpu(jt, jt.jname);
+  cpu.signalMask = parent.signalMask;
   bindCpu(jt, cpu);
   cpu.ensureStack();
   cpu.r[0] = Number(arg & 0xffffffffn) | 0; cpu.h[0] = Number(arg >> 32n) | 0;
@@ -144,7 +145,7 @@ export function pthreadInit(): void {
   const M: Record<string, HostFn> = {
     pthread_create: (_c, a) => {
       const out = a.p(); a.p(); const start = a.p(), arg = a.va();
-      const cpu = startThread(start, arg);
+      const cpu = startThread(_c, start, arg);
       stp(out, cpu.tid);
       return 0;
     },
@@ -166,7 +167,8 @@ export function pthreadInit(): void {
     },
     pthread_self: (cpu) => cpu.tid,
     pthread_equal: (_c, a) => (a.i() === a.i() ? 1 : 0),
-    pthread_sigmask: () => 0,
+    pthread_sigmask: (cpu, a) => cpu.sigmask(a.i(), a.p(), a.p(), cpu.a64 ? 8 : 4),
+    pthread_sigmask64: (cpu, a) => cpu.sigmask(a.i(), a.p(), a.p(), 8),
     pthread_setname_np: (_c, a) => { const c = cpuByTid(a.i()); const n = a.str(); if (c) { c.name = n; c.jthread.jname = n; } return 0; },
     pthread_getschedparam: (_c, a) => { a.i(); const pol = a.p(), par = a.p(); if (pol) mem.st32(pol, 0); if (par) mem.st32(par, 0); return 0; },
     pthread_setschedparam: () => 0,

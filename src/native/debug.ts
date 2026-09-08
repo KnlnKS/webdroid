@@ -32,7 +32,7 @@ export const native = {
     // the high halves only exist in a 64-bit process, and printing 32 zeros in a 32-bit one
     // is noise rather than information
     ...(c.a64 ? { h: [...c.h].map((v) => (v >>> 0).toString(16)) } : {}),
-    finished: c.finished, pending: !!c.pending, parked: c.parked, depth: c.depth, state: c.state, frames: [...c.frames], loops: c.loops, sigLog: c.sigLog.slice(-40), signals: [...c.signals], handling: [...c.handling], deferred: [...c.deferred], sigWait: !!c.sigWait,
+    finished: c.finished, pending: !!c.pending, parked: c.parked, depth: c.depth, state: c.state, frames: [...c.frames], loops: c.loops, sigLog: c.sigLog.slice(-40), signals: [...c.signals], handling: [...c.handling], sigWait: !!c.sigWait,
   })),
   calledMissing, unresolved, probed, jniMissing, registered, exited: hasProcessExited, sigHandlers: () => [...sigHandlers].map(([s, h]) => [s, symbolizePc(h.fn)]), yieldStats, killLog, futexStats: () => Object.fromEntries(futexStats),
   blocks: blockStats,
