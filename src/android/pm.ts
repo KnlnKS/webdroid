@@ -352,6 +352,20 @@ function resolveActivity(intent: JIntent | null): unknown {
   return ri;
 }
 
+class JInstallSourceInfo extends JObj {}
+rt.register({
+  name: "android/content/pm/InstallSourceInfo", ctor: JInstallSourceInfo, ifaces: ["android/os/Parcelable"],
+  // APK loading has no Android installer of record or installer-supplied source metadata.
+  methods: {
+    "getInitiatingPackageName()Ljava/lang/String;": () => null,
+    "getInitiatingPackageSigningInfo()Landroid/content/pm/SigningInfo;": () => null,
+    "getOriginatingPackageName()Ljava/lang/String;": () => null,
+    "getInstallingPackageName()Ljava/lang/String;": () => null,
+    "getUpdateOwnerPackageName()Ljava/lang/String;": () => null,
+    "getPackageSource()I": () => 0,
+    "describeContents()I": () => 0,
+  },
+});
 class JPackageManager extends JObj {}
 let cachedPM: JPackageManager | null = null;
 export function getPM(): JPackageManager {
@@ -424,6 +438,10 @@ rt.register({
     "hasSystemFeature(Ljava/lang/String;)Z": () => 0,
     "checkPermission(Ljava/lang/String;Ljava/lang/String;)I": () => 0,
     "getInstallerPackageName(Ljava/lang/String;)Ljava/lang/String;": () => null,
+    "getInstallSourceInfo(Ljava/lang/String;)Landroid/content/pm/InstallSourceInfo;": (pkg: string) => {
+      if (!appHost || pkg !== appHost.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
+      return new JInstallSourceInfo();
+    },
     // "Install unknown apps" is off until the user turns it on in Settings, which is what an
     // app checks before offering to sideload its own updates.
     "canRequestPackageInstalls()Z": () => 0,
