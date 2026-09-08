@@ -1937,8 +1937,9 @@ The live reader now displays pages 5 and 6 with no decoder errors or reached mis
 
 Chrome automation immediately canceled its native directory chooser despite visible focus
 and live user activation. Native computer clicks also failed with no available window. The
-user was asked to select Downloads/untitled manually; the requested host folder remains
-unverified. Native picker cancellation now stays canceled instead of silently selecting an
+user was asked to select Downloads/untitled manually. After the user completed that step,
+Mihon's visible storage location changed to the `untitled folder` document tree, confirming
+the selection. Native picker cancellation now stays canceled instead of silently selecting an
 unrelated OPFS directory. OPFS fallback remains available when the browser lacks the picker
 API. No server filesystem mount was introduced to bypass this browser boundary.
 
