@@ -15,6 +15,7 @@ class JInflater extends JObj {
   out: Uint8Array[] = [];
   done = false;
   fed = 0;
+  written = 0;
   /** input bytes not consumed: what sits past the final block (a gzip trailer) */
   rem = 0;
   ensure() {
@@ -36,7 +37,6 @@ class JInflater extends JObj {
   // per-refill loop and feeds the codec duplicate input, which surfaces far away as
   // "invalid distance" / "invalid block type" out of a gzipped HTTP response.
   feed(b: Uint8Array) {
-    this.fed += b.length;
     if (this.done) { this.rem = b.length; return; }
     const st = this.ensure() as any;
     st.push(b);
@@ -46,6 +46,12 @@ class JInflater extends JObj {
     // is concerned, and counting it as remaining puts the caller one byte early into the gzip
     // trailer — which reads as a CRC that is the real one shifted left by eight bits.
     this.rem = this.done ? Math.max(0, (st.p?.length ?? 0) - ((st.s.p & 7) ? 1 : 0)) : 0;
+    this.fed += b.length - this.rem;
+  }
+  inflate(b: Int8Array, off: number, len: number) {
+    const n = drain(this, b, off, len);
+    this.written += n;
+    return n;
   }
 }
 function drain(z: JInflater, b: Int8Array, off: number, len: number): number {
@@ -70,8 +76,8 @@ rt.register({
     "setInput([B)V": function (this: JInflater, b: Int8Array) {
       this.feed(new Uint8Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.length)));
     },
-    "inflate([BII)I": function (this: JInflater, b: Int8Array, off: number, len: number) { return drain(this, b, off, len); },
-    "inflate([B)I": function (this: JInflater, b: Int8Array) { return drain(this, b, 0, b.length); },
+    "inflate([BII)I": function (this: JInflater, b: Int8Array, off: number, len: number) { return this.inflate(b, off, len); },
+    "inflate([B)I": function (this: JInflater, b: Int8Array) { return this.inflate(b, 0, b.length); },
     "needsInput()Z": function (this: JInflater) { return this.out.length ? 0 : 1; },
     "needsDictionary()Z": () => 0,
     // end of stream = the BFINAL block has been fully decoded (fflate only flags `final` when
@@ -83,8 +89,8 @@ rt.register({
     },
     "getRemaining()I": function (this: JInflater) { return this.rem; },
     "getBytesRead()J": function (this: JInflater) { return BigInt(this.fed); },
-    "getBytesWritten()J": function (this: JInflater) { return BigInt(this.fed); },
-    "reset()V": function (this: JInflater) { this.st = null; this.out = []; this.done = false; this.fed = 0; this.rem = 0; },
+    "getBytesWritten()J": function (this: JInflater) { return BigInt(this.written); },
+    "reset()V": function (this: JInflater) { this.st = null; this.out = []; this.done = false; this.fed = 0; this.written = 0; this.rem = 0; },
     "end()V": function (this: JInflater) { this.st = null; this.out = []; },
   },
 });
