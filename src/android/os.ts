@@ -1,7 +1,7 @@
 import { newStringSet } from "../jvm/natives/jutil";
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
@@ -226,6 +226,30 @@ rt.register({
     "static elapsedRealtimeNanos()J": () => BigInt(Math.floor(performance.now() * 1e6)),
     "static currentThreadTimeMillis()J": () => BigInt(Math.floor(performance.now())),
     "static sleep(J)V": (ms: bigint) => new Promise((r) => setTimeout(r, Number(ms))),
+  },
+});
+class JConditionVariable extends JObj {
+  opened = false;
+  waiters = new Set<() => void>();
+  block(ms = 0): number | Promise<number> {
+    if (this.opened) return 1;
+    if (ms < 0) return 0;
+    return new Promise((resolve) => {
+      const done = () => { clearTimeout(timer); this.waiters.delete(done); resolve(this.opened ? 1 : 0); };
+      const timer = ms === 0 ? undefined : setTimeout(done, ms);
+      this.waiters.add(done);
+    });
+  }
+}
+rt.register({
+  name: "android/os/ConditionVariable", ctor: JConditionVariable,
+  methods: {
+    "<init>()V": function (this: JConditionVariable) { this.opened = false; },
+    "<init>(Z)V": function (this: JConditionVariable, state: number) { this.opened = !!state; },
+    "open()V": function (this: JConditionVariable) { this.opened = true; for (const wake of this.waiters) wake(); },
+    "close()V": function (this: JConditionVariable) { this.opened = false; },
+    "block()V": maySuspend(function (this: JConditionVariable) { return this.block(); }),
+    "block(J)Z": maySuspend(function (this: JConditionVariable, ms: bigint) { return this.block(Number(ms)); }),
   },
 });
 class JBuild extends JObj {}
