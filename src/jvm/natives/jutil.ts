@@ -1899,6 +1899,12 @@ rt.register({
     "<init>()V": function (this: JRandom) { this.setSeed(BigInt(Date.now()) ^ BigInt((Math.random() * 1e9) | 0)); },
     "<init>(J)V": function (this: JRandom, s: bigint) { this.setSeed(s); },
     "setSeed(J)V": function (this: JRandom, s: bigint) { this.setSeed(s); },
+    "nextBytes([B)V": async function (this: JRandom, bytes: Int8Array) {
+      for (let i = 0; i < bytes.length;) {
+        let value = await vcall(this, "nextInt", "()I");
+        for (let n = Math.min(bytes.length - i, 4); n-- > 0; value >>= 8) bytes[i++] = value;
+      }
+    },
     "nextInt()I": function (this: JRandom) { return this.next(32); },
     "nextInt(I)I": function (this: JRandom, bound: number) {
       if (bound <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "bound must be positive");
