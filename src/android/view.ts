@@ -1694,6 +1694,8 @@ function getVTO(v: JView): JVTO {
 /** fire-and-forget: scroll setters are synchronous void natives, same shape as refreshDrawableState */
 function fireScrollChanged(v: JView) { void getVTO(v).dispatchScrollChanged(); }
 class JA11yAction extends JObj { actionId = 0; label: string | null = null; }
+rt.register({ name: "android/view/accessibility/AccessibilityNodeInfo", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable"] });
+rt.register({ name: "android/view/accessibility/AccessibilityRecord", ctor: class extends JObj {} });
 rt.register({
   name: "android/view/accessibility/AccessibilityNodeInfo$AccessibilityAction", ctor: JA11yAction,
   methods: {
