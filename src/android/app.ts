@@ -316,6 +316,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "getCallingActivity()Landroid/content/ComponentName;": () => null,
   "getCallingPackage()Ljava/lang/String;": () => null,
   "overridePendingTransition(II)V": () => {},
+  "startPostponedEnterTransition()V": () => {},
   "getPreferences(I)Landroid/content/SharedPreferences;": function (this: JActivity) {
     return getPrefs(this.$host.pkg, jclsNameOf(this));
   },

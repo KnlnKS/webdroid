@@ -32,6 +32,7 @@ export class JWindow extends JObj {
   backDispatcher(): JObj { return this.backD ??= new (rt.link("android/window/OnBackInvokedDispatcher").ctor)(); }
   /** WindowManager.LayoutParams flags; the shell reads FLAG_FULLSCREEN off the top activity. */
   flags = 0;
+  screenBrightness = -1;
   /** WindowManager.LayoutParams width/height/gravity/dimAmount, which size and place a dialog
    *  window; `bg` is an explicit setBackgroundDrawable (a dialog window draws it as its frame). */
   layoutW = -2; layoutH = -2; gravity = 0; dimAmount = Number.NaN;
@@ -122,10 +123,11 @@ rt.register({
     "getAttributes()Landroid/view/WindowManager$LayoutParams;": function (this: JWindow) {
       const lp = new (rt.link("android/view/WindowManager$LayoutParams").ctor)();
       lp.flags = this.flags;
+      lp.screenBrightness = this.screenBrightness;
       return lp;
     },
-    "setAttributes(Landroid/view/WindowManager$LayoutParams;)V": function (this: JWindow, lp: { flags: number } | null) {
-      if (lp) setWindowFlags(this, lp.flags);
+    "setAttributes(Landroid/view/WindowManager$LayoutParams;)V": function (this: JWindow, lp: { flags: number; screenBrightness: number } | null) {
+      if (lp) { this.screenBrightness = lp.screenBrightness; setWindowFlags(this, lp.flags); }
     },
     "getCallback()Landroid/view/Window$Callback;": function (this: JWindow) { return this.callbackObj ?? this.activity; },
     "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JWindow) { return this.backDispatcher(); },
@@ -185,10 +187,11 @@ rt.register({
     token: JObj | null = null;
     title: unknown = "";
     preferredDisplayModeId = 0;
+    screenBrightness = -1;
   },
   fields: { width: "width", height: "height", gravity: "gravity", flags: "flags", x: "x", y: "y",
     softInputMode: "softInputMode", windowAnimations: "windowAnimations", dimAmount: "dimAmount", alpha: "alpha", format: "format", type: "type",
-    layoutInDisplayCutoutMode: "layoutInDisplayCutoutMode", token: "token", preferredDisplayModeId: "preferredDisplayModeId" },
+    layoutInDisplayCutoutMode: "layoutInDisplayCutoutMode", token: "token", preferredDisplayModeId: "preferredDisplayModeId", screenBrightness: "screenBrightness" },
   statics: { MATCH_PARENT: -1, WRAP_CONTENT: -2, FLAG_FULLSCREEN: 1024, FLAG_KEEP_SCREEN_ON: 128, TYPE_APPLICATION: 2, SOFT_INPUT_ADJUST_RESIZE: 16, SOFT_INPUT_STATE_HIDDEN: 3,
     // no real display cutout in a fixed-viewport screen — the field just stores/reports whatever the app sets.
     LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT: 0, LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES: 1,
