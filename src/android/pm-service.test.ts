@@ -78,6 +78,15 @@ test("broadcast receiver queries and PackageInfo expose only installed matching 
   expect(matches[0].activityInfo.applicationInfo.packageName).toBe(installed.pkg);
   expect(matches[0].activityInfo.metaData.map.get("version")).toBe(2);
   expect((await query(0x200)).a.length).toBe(2);
+  const receiver = (pkg: string, cls: string, flags = 0) => vcall(pm, "getReceiverInfo", "(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;", mkComponentName(pkg, cls), flags);
+  expect((await receiver(installed.pkg, ".Push", 0x80)).metaData.map.get("version")).toBe(2);
+  expect((await receiver(installed.pkg, "test/services/Push")).name).toBe("test.services.Push");
+  expect((await receiver(installed.pkg, ".Push")).metaData).toBeNull();
+  await expect(receiver(installed.pkg, ".Disabled")).rejects.toBeDefined();
+  expect((await receiver(installed.pkg, ".Disabled", 0x200)).enabled).toBe(0);
+  await expect(receiver("other.package", ".Push")).rejects.toBeDefined();
+  await expect(receiver(installed.pkg, ".Service")).rejects.toBeDefined();
+
   intent.categories.add("absent"); expect((await query()).a).toEqual([]); intent.categories.clear();
   intent.pkg = "external.package"; expect((await query()).a).toEqual([]); intent.pkg = null;
   const get = (flags: number) => vcall(pm, "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", installed.pkg, flags);

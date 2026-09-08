@@ -158,7 +158,10 @@ let manifestActivities = new Map<string, XmlNode>();
 let manifestProviders = new Map<string, XmlNode>();
 const manifestServices = new Map<string, XmlNode>();
 const manifestReceivers = new Map<string, XmlNode>();
-const qualifyComponent = (name: string, pkg: string) => (name.startsWith(".") ? pkg + name : name.includes(".") ? name : pkg + "." + name).replace(/\//g, ".");
+const qualifyComponent = (name: string, pkg: string) => {
+  name = name.replace(/\//g, ".");
+  return name.startsWith(".") ? pkg + name : name.includes(".") ? name : pkg + "." + name;
+};
 export function setManifest(root: XmlNode, activities: Map<string, XmlNode>, providers: Map<string, XmlNode>) {
   manifestRoot = root;
   manifestActivities = activities;
@@ -508,6 +511,12 @@ rt.register({
       info.name = cls;
       info.metaData = metaData(node);
       return info;
+    },
+    "getReceiverInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;": (component: JComponentName, flags: number) => {
+      const name = qualifyComponent(component.cls, component.pkg), node = manifestReceivers.get(name);
+      if (component.pkg !== appHost?.pkg || !node || !visibleComponent(name, node, flags))
+        throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", component.pkg + "/" + name);
+      return receiverInfo(name, node, flags);
     },
     "getServiceInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ServiceInfo;": getServiceInfo,
     "getServiceInfo(Landroid/content/ComponentName;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Landroid/content/pm/ServiceInfo;": (c: JComponentName, f: JInfoFlags) => getServiceInfo(c, Number(f.value)),
