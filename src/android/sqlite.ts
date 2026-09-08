@@ -1,7 +1,7 @@
 import { newStringSet } from "../jvm/natives/jutil";
 // android.database.* over sql.js (in-memory, persisted to localStorage per db).
 
-import initSqlJs, { type Database } from "sql.js";
+import initSqlJs, { type Database, type Statement } from "sql.js";
 import { mangleMethod, charsToString } from "../jvm/abi";
 import { rt, JObj, type NativeSpec, callSelf } from "../jvm/runtime";
 import { vcall, boxInt, box, JLong } from "../jvm/natives/jlang";
@@ -28,7 +28,10 @@ function unb64(s: string): Uint8Array {
 }
 
 /** sql.js keeps each Database's bytes in an Emscripten VFS file; @types/sql.js omits the name. */
-type VfsDb = Database & { filename: string };
+function vfsDb(db: Database): Database & { filename: string } {
+  if (!("filename" in db) || typeof db.filename !== "string") throw new Error("sql.js database filename unavailable");
+  return Object.assign(db, { filename: db.filename });
+}
 // sql.js's Database.export() CLOSES and re-opens the connection (its own doc says so), which
 // destroys everything that lives on a connection rather than in the file: the TEMP schema, the
 // PRAGMAs, and every live prepared statement. A debounced save therefore deleted Room's TEMP
@@ -37,9 +40,9 @@ type VfsDb = Database & { filename: string };
 // THROWAWAY connection instead: point its filename at ours so its export() reads our bytes
 // while closing only its own handle, then restore the name so its close() unlinks its own file.
 function snapshotBytes(sql: NonNullable<typeof SQL>, db: Database): Uint8Array {
-  const shadow = new sql.Database() as VfsDb;
+  const shadow = vfsDb(new sql.Database());
   const own = shadow.filename;
-  shadow.filename = (db as VfsDb).filename;
+  shadow.filename = vfsDb(db).filename;
   try {
     return shadow.export();
   } finally {
@@ -53,11 +56,12 @@ class JSQLiteDatabase extends JObj {
   path = ":memory:";
   version = 0;
   open = true;
+  readOnly = false;
   txDepth = 0;
   txOk = false;
   saveTimer: ReturnType<typeof setTimeout> | null = null;
   scheduleSave() {
-    if (this.path === ":memory:") return;
+    if (this.readOnly || this.path === ":memory:") return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
@@ -72,6 +76,54 @@ class JSQLiteDatabase extends JObj {
   }
 }
 const dbCache = new Map<string, JSQLiteDatabase>();
+const readOnlyCache = new Map<string, JSQLiteDatabase>();
+function readOnlyConnection(sql: NonNullable<typeof SQL>, source: Database): Database {
+  const db = vfsDb(new sql.Database()), own = db.filename;
+  db.filename = vfsDb(source).filename;
+  try { db.export(); }
+  catch (e) { db.filename = own; db.close(); throw e; }
+  finally { db.filename = own; }
+  const exec = db.exec.bind(db), prepare = db.prepare.bind(db);
+  const protect = (stmt: Statement): Statement => {
+    const step = stmt.step.bind(stmt), reset = stmt.reset.bind(stmt);
+    let fresh = true;
+    stmt.reset = () => { fresh = true; return reset(); };
+    stmt.step = () => {
+      if (!fresh) { const more = step(); fresh = !more; return more; }
+      exec("PRAGMA query_only=ON");
+      try { const more = step(); fresh = !more; return more; } finally { exec("PRAGMA query_only=ON"); }
+    };
+    exec("PRAGMA query_only=ON");
+    return stmt;
+  };
+  db.prepare = (text, args) => {
+    exec("PRAGMA query_only=ON");
+    try { return protect(prepare(text, args)); } finally { exec("PRAGMA query_only=ON"); }
+  };
+  db.exec = (text, args) => {
+    exec("PRAGMA query_only=ON");
+    const out: ReturnType<Database["exec"]> = [], statements = db.iterateStatements(text);
+    try {
+      for (const stmt of statements) {
+        protect(stmt);
+        if (args) stmt.bind(args);
+        let result: ReturnType<Database["exec"]>[number] | null = null;
+        while (stmt.step()) {
+          if (!result) out.push(result = { columns: stmt.getColumnNames(), values: [] });
+          result.values.push(stmt.get());
+        }
+      }
+      return out;
+    } finally {
+      // sql.js's iterator has no return(); drain it to release its SQL buffer after a failed step.
+      try { while (!statements.next().done) exec("PRAGMA query_only=ON"); } catch { /* */ }
+      exec("PRAGMA query_only=ON");
+    }
+  };
+  db.run = (text, args) => { db.exec(text, args); return db; };
+  exec("PRAGMA query_only=ON");
+  return db;
+}
 /** ContextImpl.getDatabasePath: an absolute name is the path itself (Room/WorkManager hand
  *  over `<noBackupFilesDir>/x.db`); a relative one lives in databases/ and may not contain '/' */
 export function dbPath(pkg: string, name: string): string {
@@ -79,10 +131,22 @@ export function dbPath(pkg: string, name: string): string {
   if (name.includes("/")) throw rt.mkThrowable("java/lang/IllegalArgumentException", `File ${name} contains a path separator`);
   return `/data/data/${pkg}/databases/${name}`;
 }
-export async function openDatabase(path: string): Promise<JSQLiteDatabase> {
-  let jdb = dbCache.get(path);
-  if (jdb?.open) return jdb;
+export async function openDatabase(path: string, flags = 0x10000000): Promise<JSQLiteDatabase> {
+  if (!path) throw rt.mkThrowable("java/lang/IllegalArgumentException", "path must not be empty");
+  const readOnly = (flags & 1) !== 0;
   const sql = await ensureSql();
+  let jdb = dbCache.get(path);
+  if (readOnly) {
+    const writer = await openDatabase(path, flags & ~1 & ~0x10000000);
+    const cached = readOnlyCache.get(path);
+    if (cached?.open) return cached;
+    const reader = new JSQLiteDatabase();
+    reader.path = path; reader.readOnly = true;
+    reader.db = readOnlyConnection(sql, writer.db!);
+    readOnlyCache.set(path, reader);
+    return reader;
+  }
+  if (jdb?.open) return jdb;
   jdb = new JSQLiteDatabase();
   jdb.path = path;
   let data: Uint8Array | null = null;
@@ -90,6 +154,9 @@ export async function openDatabase(path: string): Promise<JSQLiteDatabase> {
     const raw = globalThis.localStorage?.getItem("wd:db:" + path);
     if (raw) data = unb64(raw);
   } catch { /* */ }
+  if (!data && path !== ":memory:" && !(flags & 0x10000000)) {
+    throw rt.mkThrowable("android/database/sqlite/SQLiteCantOpenDatabaseException", "Database does not exist: " + path);
+  }
   jdb.db = data ? new sql.Database(data) : new sql.Database();
   jdb.db.exec("PRAGMA user_version");
   dbCache.set(path, jdb);
@@ -125,19 +192,21 @@ class JCursor extends JObj {
 }
 /** a cursor over rows already in hand — the one Cursor implementation in the tree */
 export function mkCursor(cols: string[], rows: unknown[][]): JCursor {
+  rt.link("webdroid/Cursor");
   const c = new JCursor();
   c.cols = cols;
   c.rows = rows;
   return c;
 }
 function runQuery(jdb: JSQLiteDatabase, sqlStr: string, args: unknown[] | null): JCursor {
-  const c = new JCursor();
+  const c = mkCursor([], []);
   try {
     const stmt = jdb.db!.prepare(sqlStr);
-    stmt.bind(bindArgs(args) as never);
-    c.cols = stmt.getColumnNames();
-    while (stmt.step()) c.rows.push(stmt.get());
-    stmt.free();
+    try {
+      stmt.bind(bindArgs(args) as never);
+      c.cols = stmt.getColumnNames();
+      while (stmt.step()) c.rows.push(stmt.get());
+    } finally { stmt.free(); }
   } catch (e) {
     throw sqliteExc(String(e), sqlStr);
   }
@@ -145,7 +214,7 @@ function runQuery(jdb: JSQLiteDatabase, sqlStr: string, args: unknown[] | null):
 }
 function sqliteExc(msg: string, sql: string): unknown {
   console.warn("[sqlite]", msg, "SQL:", sql.slice(0, 200));
-  return rt.mkThrowable("android/database/sqlite/SQLiteException", msg + " while executing: " + sql.slice(0, 120));
+  return rt.mkThrowable("android/database/sqlite/" + (msg.includes("readonly") ? "SQLiteReadOnlyDatabaseException" : "SQLiteException"), msg + " while executing: " + sql.slice(0, 120));
 }
 
 const cursorMethods: NativeSpec["methods"] = {
@@ -269,6 +338,10 @@ function unbox(v: unknown): unknown {
 }
 
 const dbMethods: NonNullable<NativeSpec["methods"]> = {
+  "static openDatabase(Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;I)Landroid/database/sqlite/SQLiteDatabase;":
+    async (path: string, _factory: unknown, flags: number) => openDatabase(path, flags),
+  "static openDatabase(Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;ILandroid/database/DatabaseErrorHandler;)Landroid/database/sqlite/SQLiteDatabase;":
+    async (path: string, _factory: unknown, flags: number, _errorHandler: unknown) => openDatabase(path, flags),
   "execSQL(Ljava/lang/String;)V": function (this: JSQLiteDatabase, sql: string) {
     try { this.db!.exec(sql); } catch (e) { throw sqliteExc(String(e), sql); }
     this.scheduleSave();
@@ -350,7 +423,10 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "inTransaction()Z": function (this: JSQLiteDatabase) { return this.txDepth > 0 ? 1 : 0; },
   "isOpen()Z": function (this: JSQLiteDatabase) { return this.open ? 1 : 0; },
-  "close()V": function (this: JSQLiteDatabase) { this.scheduleSave(); },
+  "close()V": function (this: JSQLiteDatabase) {
+    if (this.readOnly) { if (this.open) this.db!.close(); this.open = false; }
+    else this.scheduleSave();
+  },
   "getVersion()I": function (this: JSQLiteDatabase) {
     const r = this.db!.exec("PRAGMA user_version");
     return Number(r[0]?.values[0]?.[0] ?? 0);
@@ -365,7 +441,7 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
     p.first = "main"; p.second = this.path;
     return newArrayList([p]);
   },
-  "isReadOnly()Z": () => 0,
+  "isReadOnly()Z": function (this: JSQLiteDatabase) { return this.readOnly ? 1 : 0; },
   "isDbLockedByCurrentThread()Z": () => 0,
   "setForeignKeyConstraintsEnabled(Z)V": function (this: JSQLiteDatabase, on: number) {
     this.db!.exec("PRAGMA foreign_keys = " + (on ? "ON" : "OFF"));
@@ -375,6 +451,7 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
   "setLocale(Ljava/util/Locale;)V": () => {},
   "setMaximumSize(J)J": (v: bigint) => v,
   "compileStatement(Ljava/lang/String;)Landroid/database/sqlite/SQLiteStatement;": function (this: JSQLiteDatabase, sql: string) {
+    rt.link("android/database/sqlite/SQLiteStatement");
     const st = new JSQLiteStatement();
     st.jdb = this;
     st.sql = sql;
@@ -450,7 +527,7 @@ rt.register({
   },
 });
 rt.register({ name: "android/database/sqlite/SQLiteDatabase", ctor: JSQLiteDatabase, ifaces: ["java/io/Closeable"],
-  statics: { CONFLICT_NONE: 0, CONFLICT_ROLLBACK: 1, CONFLICT_ABORT: 2, CONFLICT_FAIL: 3, CONFLICT_IGNORE: 4, CONFLICT_REPLACE: 5 },
+  statics: { OPEN_READONLY: 1, OPEN_READWRITE: 0, CREATE_IF_NECESSARY: 0x10000000, ENABLE_WRITE_AHEAD_LOGGING: 0x20000000, NO_LOCALIZED_COLLATORS: 0x10, CONFLICT_NONE: 0, CONFLICT_ROLLBACK: 1, CONFLICT_ABORT: 2, CONFLICT_FAIL: 3, CONFLICT_IGNORE: 4, CONFLICT_REPLACE: 5 },
   methods: dbMethods });
 {
   const p = rt.link("java/lang/RuntimeException").ctor;
@@ -462,7 +539,7 @@ rt.register({ name: "android/database/sqlite/SQLiteDatabase", ctor: JSQLiteDatab
 }
 {
   const p = rt.link("android/database/sqlite/SQLiteException").ctor;
-  for (const n of ["SQLiteConstraintException", "SQLiteDatabaseLockedException", "SQLiteFullException", "SQLiteAbortException"]) {
+  for (const n of ["SQLiteConstraintException", "SQLiteDatabaseLockedException", "SQLiteFullException", "SQLiteAbortException", "SQLiteCantOpenDatabaseException", "SQLiteReadOnlyDatabaseException"]) {
     rt.register({ name: "android/database/sqlite/" + n, ctor: class extends p {}, sup: "android/database/sqlite/SQLiteException" });
   }
 }
@@ -516,7 +593,7 @@ rt.register({
     "getWritableDatabase()Landroid/database/sqlite/SQLiteDatabase;": async function (this: JSQLiteOpenHelper) {
       return openHelperDb(this);
     },
-    "getReadableDatabase()Landroid/database/sqlite/SQLiteDatabase;": function (this: JSQLiteOpenHelper) {
+    "getReadableDatabase()Landroid/database/sqlite/SQLiteDatabase;": async function (this: JSQLiteOpenHelper) {
       return openHelperDb(this);
     },
     "getDatabaseName()Ljava/lang/String;": function (this: JSQLiteOpenHelper) { return this.name; },
