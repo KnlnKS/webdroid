@@ -60,3 +60,31 @@ test("service metadata and resolution honor the installed manifest and query fla
   setManifest(node("manifest", { package: installed.pkg }, [node("application")]), new Map(), new Map());
   expect((await query(0x200)).a).toEqual([]);
 });
+
+test("broadcast receiver queries and PackageInfo expose only installed matching receivers", async () => {
+  const installed = host(); setAppHost(installed);
+  const filter = node("intent-filter", {}, [node("action", { name: "test.PUSH" }), node("category", { name: "test.CATEGORY" })]);
+  setManifest(node("manifest", { package: installed.pkg }, [node("application", {}, [
+    node("receiver", { name: ".Push", exported: 1 }, [filter, node("meta-data", { name: "version", value: 2 })]),
+    node("receiver", { name: ".Disabled", enabled: 0 }, [filter]),
+    node("service", { name: ".Service" }, [filter]),
+  ])]), new Map(), new Map());
+  const pm = await newObj("android/content/pm/PackageManager"), intent = await newObj("android/content/Intent");
+  intent.action = "test.PUSH";
+  const query = (flags = 0) => vcall(pm, "queryBroadcastReceivers", "(Landroid/content/Intent;I)Ljava/util/List;", intent, flags);
+  const matches = (await query(0x80)).a;
+  expect(matches.length).toBe(1); expect(matches[0].serviceInfo).toBeNull();
+  expect(matches[0].activityInfo.name).toBe("test.services.Push");
+  expect(matches[0].activityInfo.applicationInfo.packageName).toBe(installed.pkg);
+  expect(matches[0].activityInfo.metaData.map.get("version")).toBe(2);
+  expect((await query(0x200)).a.length).toBe(2);
+  intent.categories.add("absent"); expect((await query()).a).toEqual([]); intent.categories.clear();
+  intent.pkg = "external.package"; expect((await query()).a).toEqual([]); intent.pkg = null;
+  const get = (flags: number) => vcall(pm, "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", installed.pkg, flags);
+  expect((await get(0)).receivers).toBeNull();
+  const receivers = (await get(2)).receivers;
+  expect(receivers.$t).toBe("Landroid/content/pm/ActivityInfo;"); expect(receivers.map((a: { name: string }) => a.name)).toEqual(["test.services.Push"]);
+  expect((await get(0x202)).receivers.length).toBe(2);
+  setManifest(node("manifest", { package: installed.pkg }, [node("application")]), new Map(), new Map());
+  expect((await query()).a).toEqual([]);
+});
