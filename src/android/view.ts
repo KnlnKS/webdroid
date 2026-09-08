@@ -203,6 +203,7 @@ export class JView extends JObj {
   clickable = false; longClickable = false;
   enabled = true; pressed = false; selected = false; activated = false; focused = false;
   focusable = false; focusableInTouchMode = false;
+  autoHandwritingEnabled = true;
   clickL: unknown = null; longClickL: unknown = null; touchL: unknown = null; keyL: unknown = null; focusL: unknown = null;
   insetsL: unknown = null; a11yDelegate: unknown = null; dragL: unknown = null;
   fitsSys = false;
@@ -271,7 +272,7 @@ const AT = attrTable(
   "clickable", "enabled", "minWidth", "minHeight", "alpha", "focusable", "scaleType", "src",
   "contentDescription", "weightSum", "divider", "showDividers", "dividerPadding", "fillViewport",
   "scrollbars", "fadeScrollbars", "clipToPadding", "clipChildren", "descendantFocusability",
-  "foreground", "duplicateParentState", "baselineAligned");
+  "foreground", "duplicateParentState", "baselineAligned", "autoHandwritingEnabled");
 // ── ViewOverlay: a drawing layer over the host's content. AOSP keeps an internal ViewGroup for
 // it; ours holds the two lists the host's draw pass walks, which is all anything reads back.
 class JViewOverlay extends JObj {
@@ -330,7 +331,7 @@ async function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0) 
   const ta = obtainStyled(res, v.theme, set, [
     AT.id, AT.background, AT.padding, AT.paddingLeft, AT.paddingTop, AT.paddingRight, AT.paddingBottom,
     AT.visibility, AT.clickable, AT.enabled, AT.minWidth, AT.minHeight, AT.alpha, AT.focusable,
-    AT.paddingStart, AT.paddingEnd, AT.tag, AT.contentDescription,
+    AT.paddingStart, AT.paddingEnd, AT.tag, AT.contentDescription, AT.autoHandwritingEnabled,
   ], defStyleAttr, 0);
   const g = (i: number) => ta.vals[i];
   if (g(0)) v.idNum = g(0)!.d;
@@ -354,6 +355,7 @@ async function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0) 
   if (g(12)) v.alphaV = Math.max(0, Math.min(1, (g(12)!.t === 4 ? g(12)!.d : 1)));
   if (g(16)) v.tag = rvString(res, g(16));
   if (g(17)) v.contentDesc = rvString(res, g(17));
+  if (g(18)) v.autoHandwritingEnabled = !!rvInt(res, g(18), 1);
 }
 
 export function defaultSize(size: number, spec: number): number {
@@ -658,6 +660,8 @@ const viewMethods: NativeSpec["methods"] = {
   "hasFocus()Z": function (this: JView) { return this.focused ? 1 : 0; },
   "setFocusable(Z)V": function (this: JView, f: number) { this.focusable = !!f; },
   "setFocusableInTouchMode(Z)V": function (this: JView, f: number) { this.focusableInTouchMode = !!f; },
+  "setAutoHandwritingEnabled(Z)V": function (this: JView, enabled: number) { this.autoHandwritingEnabled = !!enabled; },
+  "isAutoHandwritingEnabled()Z": function (this: JView) { return this.autoHandwritingEnabled ? 1 : 0; },
   "requestFocus()Z": function (this: JView) { return takeFocus(this); },
   "findFocus()Landroid/view/View;": function (this: JView) { return this.focused ? this : null; },
   "clearFocus()V": function (this: JView) { this.focused = false; focusHook(this, false); },

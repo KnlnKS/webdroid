@@ -11,12 +11,31 @@
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
+import { newArrayList } from "../jvm/natives/jutil";
+import { jarray } from "../jvm/abi";
 import { JEditable, JSpannable, csText } from "./text";
 import { JView, invalidate } from "./view";
 import { JMatrix } from "./graphics";
 import { JTextView, JEditText, focusedEdit, focusEditText } from "./textview";
 import { PARCELABLE } from "./os";
 
+rt.register({ name: "android/view/textservice/SpellCheckerSession$SpellCheckerSessionListener", ctor: class extends JObj {} });
+rt.register({
+  name: "android/view/textservice/TextServicesManager", ctor: class extends JObj {},
+  methods: {
+    "isSpellCheckerEnabled()Z": () => 0,
+    "getEnabledSpellCheckerInfos()Ljava/util/List;": () => newArrayList(),
+    "getEnabledSpellCheckers()[Landroid/view/textservice/SpellCheckerInfo;": () => jarray([], "Landroid/view/textservice/SpellCheckerInfo;"),
+    "getCurrentSpellCheckerInfo()Landroid/view/textservice/SpellCheckerInfo;": () => null,
+    "getCurrentSpellCheckerSubtype(Z)Landroid/view/textservice/SpellCheckerSubtype;": () => null,
+    "newSpellCheckerSession(Landroid/os/Bundle;Ljava/util/Locale;Landroid/view/textservice/SpellCheckerSession$SpellCheckerSessionListener;Z)Landroid/view/textservice/SpellCheckerSession;":
+      (_bundle: unknown, locale: unknown, listener: unknown, referToSettings: number) => {
+        if (!listener) throw rt.mkThrowable("java/lang/NullPointerException", "listener");
+        if (!referToSettings && !locale) throw rt.mkThrowable("java/lang/IllegalArgumentException", "locale");
+        return null;
+      },
+  },
+});
 
 class JEditorInfo extends JObj {
   inputType = 0;
