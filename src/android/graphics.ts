@@ -1127,6 +1127,8 @@ export const canvasMethods: NativeSpec["methods"] = {
   },
   "getWidth()I": function (this: JCanvas) { return this.w; },
   "getHeight()I": function (this: JCanvas) { return this.h; },
+  "getMaximumBitmapWidth()I": () => 32766,
+  "getMaximumBitmapHeight()I": () => 32766,
   "getDensity()I": () => device.densityDpi,
   "getMatrix(Landroid/graphics/Matrix;)V": function (this: JCanvas, m: JMatrix) {
     const t = this.ctx.getTransform();
