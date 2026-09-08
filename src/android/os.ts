@@ -174,6 +174,12 @@ rt.register({
     "obtainMessage(ILjava/lang/Object;)Landroid/os/Message;": function (this: JHandler, w: number, o: unknown) {
       const m = new JMessage(); m.target = this; m.what = w; m.obj = o; return m;
     },
+    "obtainMessage(III)Landroid/os/Message;": function (this: JHandler, w: number, a1: number, a2: number) {
+      return obtain(this, w, null, a1, a2);
+    },
+    "obtainMessage(IIILjava/lang/Object;)Landroid/os/Message;": function (this: JHandler, w: number, a1: number, a2: number, obj: unknown) {
+      return obtain(this, w, obj, a1, a2);
+    },
     "static createAsync(Landroid/os/Looper;)Landroid/os/Handler;": (l: JLooper) => {
       const h = new JHandler(); h.looper = l ?? mainLooper; return h;
     },
