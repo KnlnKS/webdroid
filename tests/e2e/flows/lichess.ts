@@ -1,26 +1,21 @@
-// lichess (Flutter): the whole UI is a Dart AOT snapshot run by an arm64 engine the JVM
-// cannot execute, so this is an HONEST-BOOT target — the launch theme's windowBackground
-// paints (androidx Theme.SplashScreen over Theme.DeviceDefault.DayNight: #fafafa; the icon
-// splash it describes is the system starting window, not modelled), System.loadLibrary
-// ("flutter") surfaces as UnsatisfiedLinkError, Flutter's ensureInitializationComplete
-// rethrows it as the one RuntimeException in newErrors, nothing wedges. The androidx.startup
-// initializers (WorkManager: Room db under no_backup/, SystemJobService enabled; ProfileInstaller;
-// EmojiCompat — "font provider not available", as on any device without one) and the lifecycle
-// verbs after the failed onCreate (FlutterActivity's own "called after detach" early-outs, Back
-// included) all complete; a second boot on the persisted state is identical.
-// Expected nativeRequired: libflutter.so (arm64-v8a). No framework API may be in newMissing.
+// Flutter's native framebuffer has no host view text anchors. Exercise stable offline tools.
 import type { Flow } from "../types";
+import { device } from "../../../src/shell/config";
+
+const boardY = (ranks: number) => 0.5 + ranks * device.width / (8 * device.height);
 
 export const lichess: Flow = {
   app: "lichess",
   pkg: "org.lichess.mobileV2",
   activity: "org.lichess.mobileV2.MainActivity",
   apk: "lichess.apk",
-  // no goldens (smoke run): the status bar stays in the frame, only the nav strip is cropped
   crop: { top: 0, bottom: 48, left: 0, right: 0 },
+  liveClock: true,
   steps: [
-    { id: "launch", label: "Launch — launch theme splash", action: { type: "launch" }, settleDelayMs: 4000 },
-    { id: "splash", label: "Splash settled (engine load fails honestly)", action: { type: "settle" } },
-    { id: "back", label: "Back", action: { type: "back" } },
+    { id: "launch", label: "Launch — Flutter home", action: { type: "launch" }, settleDelayMs: 6000 },
+    { id: "tools", label: "More — tools", action: { type: "tapAt", x: 0.9, y: 1 - device.dp(64) / device.height }, settleDelayMs: 500 },
+    { id: "editor", label: "Board editor", action: { type: "tapAt", x: 0.5, y: device.dp(324) / device.height }, settleDelayMs: 500 },
+    { id: "pawn", label: "Drag e2 pawn to e4", action: { type: "swipe", from: [0.5625, boardY(2.5)], to: [0.5625, boardY(0.5)], ms: 300 }, settleDelayMs: 500 },
+    { id: "back", label: "Back to tools", action: { type: "back" }, settleDelayMs: 500 },
   ],
 };
