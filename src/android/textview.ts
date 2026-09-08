@@ -150,7 +150,7 @@ export class JTextView extends JView {
     }
   }
   getEditable(): JEditable {
-    if (!this.editObj) this.editObj = new JEditable();
+    if (!this.editObj) this.editObj = new (rt.link("webdroid/Editable").ctor)() as JEditable;
     this.editObj.text = this.text;
     return this.editObj;
   }

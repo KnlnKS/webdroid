@@ -262,6 +262,8 @@ rt.register({
         if (right > b) await vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", b, right, "", 0, 0);
         if (a > left) await vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", left, a, "", 0, 0);
         await setTextSelection(editable, start - (a - left), end - (a - left));
+        if (this.full && this.view instanceof JTextView) await vcall(this.view, "setText", "(Ljava/lang/CharSequence;)V", await csText(editable));
+        invalidate();
       } finally { await vcall(this, "endBatchEdit", "()Z"); }
       return 1;
     },

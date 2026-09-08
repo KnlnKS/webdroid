@@ -89,3 +89,19 @@ test("browser typing preserves the existing EditText path", async () => {
   expect(editor.text).toBe("ordinary field"); expect(editor.rawText).toBe("ordinary field");
   await vcall(manager, "hideSoftInputFromWindow", "(Landroid/os/IBinder;I)Z", null, 0);
 });
+
+test("EditText input connections retain deletions in the view and its linked editable", async () => {
+  const editor = await newObj("android/widget/EditText");
+  await vcall(editor, "setText", "(Ljava/lang/CharSequence;)V", "abcde");
+  const connection = await newObj("android/view/inputmethod/BaseInputConnection", "(Landroid/view/View;Z)V", editor, 1);
+  const editable = await vcall(connection, "getEditable", "()Landroid/text/Editable;");
+  expect(rt.iof(editable, "android/text/Editable")).toBe(1);
+  await vcall(connection, "setSelection", "(II)Z", 2, 3);
+  await vcall(connection, "deleteSurroundingText", "(II)Z", 1, 1);
+  expect(editor.text).toBe("ace"); expect(editor.rawText).toBe("ace");
+  expect(await vcall(connection, "getEditable", "()Landroid/text/Editable;")).toBe(editable);
+  expect(editable.text).toBe("ace"); expect(await textSelection(editable)).toEqual([1, 2]);
+  expect(await vcall(connection, "getTextBeforeCursor", "(II)Ljava/lang/CharSequence;", 10, 0)).toBe("a");
+  expect(await vcall(connection, "getSelectedText", "(I)Ljava/lang/CharSequence;", 0)).toBe("c");
+  expect(await vcall(connection, "getTextAfterCursor", "(II)Ljava/lang/CharSequence;", 10, 0)).toBe("e");
+});
