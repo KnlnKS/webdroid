@@ -244,27 +244,28 @@ export function libcInit(): void {
     localeconv: () => localeConv,
     // a protection change moves no byte: a block stays valid until a write or a cache flush says otherwise
     mprotect: (cpu, a) => {
-      const va = a.va(), n = a.u(), prot = a.i();
+      const va = a.va(), n = Number(a.va()), prot = a.i();
       if (prot & 3) return mem.commitVa(va, n) ? 0 : fail(cpu, E.NOMEM);
       mem.decommitVa(va, n);
       return 0;
     },
-    // MAP_FAILED is (void*)-1 at the pointer width; MAP_FIXED is refused by name, and a file
-    // mapping is a private copy (a shared writable one would be a lie: the file never sees the writes)
+    // File mappings are private copies; shared writable mappings cannot persist guest stores.
     mmap: (cpu, a) => {
-      a.va(); const n = a.u(), prot = a.i(), flags = a.i(), fd = a.i(), off = offArg(a);
+      const hint = a.va(), n = Number(a.va()), prot = a.i(), flags = a.i(), fd = a.i(), off = offArg(a);
       const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
-      if (flags & 0x10) return failed(E.INVAL);
+      if (!Number.isSafeInteger(n) || n <= 0 || (flags & 0x10 && (hint & 4095n))) return failed(E.INVAL);
       if (fd !== -1 && !(flags & 0x20) && (flags & 0x1) && (prot & 2)) return failed(E.NOSYS);
-      const p = mem.mapVa(n, (flags & 0x20) !== 0 && prot === 0);   // an anonymous PROT_NONE mapping is a reservation
-      if (!p) return failed(E.NOMEM);
+      const reserve = (flags & 0x20) !== 0 && prot === 0;
+      const p = flags & 0x10 ? hint : mem.mapVa(n, reserve);
+      if (!p || (flags & 0x10 && !mem.commitVa(hint, n))) return failed(E.NOMEM);
+      if (flags & 0x10) { invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); if (reserve) mem.decommitVa(hint, n); }
       if (fd !== -1 && !(flags & 0x20)) { const r = readInto(cpu, fd, off, typeof p === "bigint" ? mem.txVa(p) : p, n); return r instanceof Promise ? r.then(() => p) : p; }
       return p;
     },
     mmap64: (cpu, a) => M.mmap(cpu, a),
-    munmap: (cpu, a) => (mem.unmapVa(a.va(), a.u()) ? 0 : fail(cpu, E.INVAL)),
+    munmap: (cpu, a) => (mem.unmapVa(a.va(), Number(a.va())) ? 0 : fail(cpu, E.INVAL)),
     mremap: (cpu) => { fail(cpu, E.NOSYS); return PTR === 8 ? -1n : -1; },
-    madvise: (_c, a) => { const va = a.va(), n = a.u(); if (a.i() === 4) mem.dropVa(va, n); return 0; },   // MADV_DONTNEED
+    madvise: (_c, a) => { const va = a.va(), n = Number(a.va()); if (a.i() === 4) mem.dropVa(va, n); return 0; },   // MADV_DONTNEED
     msync: () => 0, mlock: () => 0, munlock: () => 0,
     getrlimit: (_c, a) => { a.i(); const r = a.p(); stp(r, 0x100000); stp(r + PTR, 0x100000); return 0; },
     setrlimit: () => 0,

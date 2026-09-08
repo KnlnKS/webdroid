@@ -74,7 +74,8 @@ function bump(n: number): number {
 
 
 // ── Address planes. A pointer whose high half is h ≠ 0 lives in plane h: one mapping per plane,
-// starting at PLANE_LO, because a 64-bit runtime reserves address space per allocator far past
+// normally starting at PLANE_LO; large reservations span consecutive planes from offset zero.
+// A 64-bit runtime reserves address space per allocator far past
 // what a 32-bit buffer holds while committing little of it. A plane's committed prefix is one
 // contiguous run of the pool at the top of the arena, so a range in the plane is a range in the
 // buffer for host and guest alike; a commit past the run grows it in place or moves it (the
@@ -84,7 +85,7 @@ let poolBase = 0;
 let owner = new Int16Array(0);                                   // pool unit → plane, -1 free (sized at alloc)
 const P = new Float64Array(PLANES);                              // plane → buffer offset of its run
 let moves = 0;
-const R = new Uint32Array(PLANES), S = new Uint32Array(PLANES);  // reservation and committed prefix, bytes (R = 0: plane free)
+const R = new Float64Array(PLANES), S = new Uint32Array(PLANES), L = new Uint32Array(PLANES);  // reservation, committed prefix, and low base (R = 0: plane free)
 const unitsOf = (bytes: number) => Math.ceil(bytes / UNIT);
 const poolUnits = () => Math.min(owner.length, Math.floor((moduleBot - poolBase) / UNIT));
 function freeRun(units: number, from = 0): number {
@@ -149,7 +150,7 @@ function alloc(size: number): void {
   pages = new Uint8Array(size >>> PAGE_SHIFT);
   poolBase = size > POOL_BASE ? POOL_BASE : 0;
   owner = new Int16Array(poolBase ? Math.floor((size - poolBase) / UNIT) : 0).fill(-1);
-  R.fill(0); S.fill(0);
+  R.fill(0); S.fill(0); L.fill(PLANE_LO);
   SPAN = size - LOW;
   setMemSize(size);
   Object.assign(mem, { buf, u8, i8, u16, i16, u32, i32, f32, f64, dv, codePages });
@@ -266,7 +267,7 @@ export const mem = {
   },
   /** plane h ≠ 0 address → buffer offset; past the committed prefix is a fault, as the page would be */
   tx(h: number, lo: number): number {
-    const off = (lo - PLANE_LO) >>> 0;
+    const off = (lo - L[h]) >>> 0;
     if (h >>> 0 >= PLANES || off >= S[h]) throw new NativeFault(`[native] bad address 0x${(h >>> 0).toString(16)}_${(lo >>> 0).toString(16).padStart(8, "0")} (plane ${h >>> 0}, ${R[h & 255] ? "not committed" : "unmapped"})`);
     return P[h] + off;
   },
@@ -277,32 +278,49 @@ export const mem = {
   va(phys: number): number | bigint {
     if (!poolBase || phys < poolBase) return phys;
     const h = owner[(phys - poolBase) / UNIT | 0];
-    return h === undefined || h < 0 ? phys : (BigInt(h) << 32n) | BigInt(PLANE_LO + (phys - P[h]));
+    return h === undefined || h < 0 ? phys : (BigInt(h) << 32n) | BigInt(L[h] + (phys - P[h]));
   },
   /** mmap: plane 0 while it has room, else a plane of its own (a reservation commits nothing yet;
    *  a writable mapping is committed whole); 0 when neither has room */
   mapVa(n: number, reserve: boolean): number | bigint {
+    if (!Number.isSafeInteger(n) || n <= 0) return 0;
+    if (n > 0x100000000 - PLANE_LO) {
+      if (!reserve || !poolBase) return 0;
+      const count = Math.ceil(n / 0x100000000);
+      for (let h = 1; h + count <= PLANES; h++) {
+        if (R.subarray(h, h + count).some((r) => r !== 0)) continue;
+        for (let i = 0; i < count; i++) { L[h + i] = 0; R[h + i] = Math.min(0x100000000, n - i * 0x100000000); }
+        return BigInt(h) << 32n;
+      }
+      return 0;
+    }
     const p = mem.mapPages(n, reserve);
     if (p || !poolBase) return p;
     const h = R.findIndex((r, i) => i > 0 && r === 0);
     if (h < 0 || (!reserve && !grow(h, n))) return 0;
-    R[h] = n;
-    return (BigInt(h) << 32n) | BigInt(PLANE_LO);
+    L[h] = PLANE_LO; R[h] = n;
+    return (BigInt(h) << 32n) | BigInt(L[h]);
   },
   /** unmapping the tail shortens the plane; the whole of it frees the plane; a hole is a decommit */
   unmapVa(va: bigint, n: number): boolean {
-    const [h, lo] = split(va);
-    if (!h) return mem.unmapPages(lo, n);
-    const off = lo - PLANE_LO;
-    if (off <= 0 && n >= R[h]) release(h);
-    else if (off + n >= R[h]) { R[h] = off; mem.decommitVa(va, n); }
+    if (va & BigInt(PAGE_SIZE - 1) || !Number.isSafeInteger(n) || n <= 0) return false;
+    while (n > 0) {
+      const [h, lo] = split(va), size = Math.min(n, 0x100000000 - lo);
+      if (!h) { if (!mem.unmapPages(lo, size)) return false; }
+      else if (h < PLANES && R[h]) {
+        const off = lo - L[h];
+        if (off <= 0 && size >= R[h]) release(h);
+        else if (off + size >= R[h]) { R[h] = off; mem.decommitVa(va, size); }
+      }
+      n -= size; va += BigInt(size);
+    }
     return true;
   },
   commitVa(va: bigint, n: number): boolean {
     const [h, lo] = split(va);
     if (!h) return mem.commitPages(lo, n);
-    const end = lo - PLANE_LO + n;
-    return end <= R[h] && (end <= S[h] || grow(h, end));
+    const end = lo - L[h] + n;
+    return h < PLANES && lo >= L[h] && end <= R[h] && (end <= S[h] || grow(h, end));
   },
   /** the prefix only shrinks from its end; a hole stays committed (its pages are the plane's) */
   /** MADV_DONTNEED on a private anonymous mapping: what is committed of it reads back as zero */
@@ -313,13 +331,13 @@ export const mem = {
       if (lo < ARENA_BASE || lo + n > (poolBase || moduleBot)) { console.warn(`[mem-native] madvise(DONTNEED) outside the arena ignored: 0x${lo.toString(16)}+0x${n.toString(16)}`); return; }
       u8.fill(0, lo, lo + n); return;
     }
-    const off = lo - PLANE_LO;
+    const off = lo - L[h];
     if (off < S[h]) u8.fill(0, P[h] + off, P[h] + Math.min(S[h], off + n));
   },
   decommitVa(va: bigint, n: number): void {
     const [h, lo] = split(va);
     if (!h) { mem.decommitPages(lo, n); return; }
-    const off = lo - PLANE_LO;
+    const off = lo - L[h];
     if (off < S[h] && off + n >= S[h]) { owner.fill(-1, (P[h] - poolBase) / UNIT + unitsOf(off), (P[h] - poolBase) / UNIT + unitsOf(S[h])); S[h] = off; }
   },
   /** mprotect to accessible: a reserved page becomes a zeroed page of its own; false (ENOMEM) on
