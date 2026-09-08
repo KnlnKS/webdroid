@@ -10,6 +10,7 @@ import { JIntent } from "./intent";
 import { onMain } from "./mainloop";
 import { mangleMethod } from "../jvm/abi";
 import type { JBundle } from "./os";
+import { appHost, setAppHost, type AppHost } from "./apphost";
 
 const path = "/data/local/tmp/package-test.apk";
 const bytes = new Uint8Array(await Bun.file(new URL("../../apks/mihon-v0.20.4.apk", import.meta.url)).arrayBuffer());
@@ -87,4 +88,36 @@ test("failed install sessions report failure and cannot be committed twice", asy
   expect(received[0]?.extras.map.get("android.content.pm.extra.PACKAGE_NAME")).toBeUndefined();
   await expect(vcall(session, "commit", "(Landroid/content/IntentSender;)V", sender)).rejects.toBeDefined();
   await vcall(context, "unregisterReceiver", "(Landroid/content/BroadcastReceiver;)V", receiver);
+});
+
+
+test("running-package replacement reports failure and preserves the installed archive", async () => {
+  const previousHost = appHost, previousBytes = vfs.read("/data/app/app.mihon/base.apk");
+  const context = new JContext();
+  const receiver = await newObj("android/content/BroadcastReceiver");
+  let result: JBundle | undefined;
+  receiver[mangleMethod("onReceive", "(Landroid/content/Context;Landroid/content/Intent;)V")] = (_context: JContext, intent: JIntent) => { result = intent.extras; };
+  const filter = await newObj("android/content/IntentFilter", "(Ljava/lang/String;)V", "test.RUNNING");
+  await vcall(context, "registerReceiver", "(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;)Landroid/content/Intent;", receiver, filter);
+  try {
+    setAppHost({ ...previousHost, pkg: "app.mihon" } as AppHost);
+    const intent = new JIntent(); intent.action = "test.RUNNING";
+    const pending = await vcall(rt.link("android/app/PendingIntent").ctor, "getBroadcast", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 3, intent, 0x2000000);
+    const sender = await vcall(pending, "getIntentSender", "()Landroid/content/IntentSender;");
+    const installer = await vcall(getPM(), "getPackageInstaller", "()Landroid/content/pm/PackageInstaller;");
+    const params = await newObj("android/content/pm/PackageInstaller$SessionParams", "(I)V", 1);
+    const id = await vcall(installer, "createSession", "(Landroid/content/pm/PackageInstaller$SessionParams;)I", params);
+    const session = await vcall(installer, "openSession", "(I)Landroid/content/pm/PackageInstaller$Session;", id);
+    const output = await vcall(session, "openWrite", "(Ljava/lang/String;JJ)Ljava/io/OutputStream;", "base.apk", 0n, BigInt(bytes.length));
+    await vcall(output, "write", "([BII)V", new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length), 0, bytes.length);
+    await vcall(session, "commit", "(Landroid/content/IntentSender;)V", sender);
+    for (let i = 0; i < 100 && !result; i++) { await Bun.sleep(5); await onMain(() => {}); }
+    expect(result?.map.get("android.content.pm.extra.STATUS")).toBe(4);
+    expect(result?.map.get("android.content.pm.extra.STATUS_MESSAGE")).toBe("Replacing the running package is unsupported");
+    expect(result?.map.get("android.content.pm.extra.PACKAGE_NAME")).toBeUndefined();
+    expect(vfs.read("/data/app/app.mihon/base.apk")).toBe(previousBytes);
+  } finally {
+    setAppHost(previousHost);
+    await vcall(context, "unregisterReceiver", "(Landroid/content/BroadcastReceiver;)V", receiver);
+  }
 });
