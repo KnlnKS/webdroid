@@ -4,11 +4,11 @@ import { type JContext, JContextWrapper } from "./context";
 import { appHost, jclsNameOf } from "./apphost";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { onMain } from "./mainloop";
-import { reportUncaught } from "./os";
+import { reportUncaught, PROCESS_PID, PROCESS_UID } from "./os";
 
 class JRunningServiceInfo extends JObj {
   service: JComponentName | null = null;
-  pid = 1000; uid = 10001; process = ""; foreground = 0; started = 0; flags = 0;
+  pid = PROCESS_PID; uid = PROCESS_UID; process = ""; foreground = 0; started = 0; flags = 0;
   activeSince = 0n; lastActivityTime = 0n; restarting = 0n;
   activeCount = 0; clientCount = 0; crashCount = 0;
   instance: JContextWrapper | null = null;

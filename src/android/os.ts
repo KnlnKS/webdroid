@@ -286,11 +286,12 @@ rt.register({ name: "android/os/Build$VERSION_CODES", ctor: class extends JObj {
     ["S", 31], ["S_V2", 32], ["TIRAMISU", 33], ["UPSIDE_DOWN_CAKE", 34], ["VANILLA_ICE_CREAM", 35],
   ]),
 });
+export const PROCESS_PID = 1000, PROCESS_UID = 10001;
 rt.register({
   name: "android/os/Process", ctor: class extends JObj {},
   statics: { THREAD_PRIORITY_BACKGROUND: 10, THREAD_PRIORITY_DEFAULT: 0, THREAD_PRIORITY_URGENT_DISPLAY: -8 },
   methods: {
-    "static myPid()I": () => 1000,
+    "static myPid()I": () => PROCESS_PID,
     "static killProcess(I)V": (pid: number) => { console.warn("Process.killProcess", pid); markProcessExited(); },
     // androidx's startup tracing asks how long ago this process began; there is no earlier
     // moment here than the page's own timeOrigin
@@ -300,7 +301,7 @@ rt.register({
     "static isIsolated()Z": () => 0,
     "static isSdkSandbox()Z": () => 0,
     "static myTid()I": () => 1000,
-    "static myUid()I": () => 10001,
+    "static myUid()I": () => PROCESS_UID,
     "static getThreadPriority(I)I": () => 0,
     "static setThreadPriority(I)V": () => {},
     "static setThreadPriority(II)V": () => {},

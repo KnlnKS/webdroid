@@ -6,7 +6,7 @@ import {
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { mangleMethod, jarray } from "../jvm/abi";
-import { reportUncaught, JBundle, PARCELABLE } from "./os";
+import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID } from "./os";
 import { type NativeSpec, rt, callSelf, JObj, maySuspend } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
@@ -651,6 +651,8 @@ class JBinder extends JObj { owner: unknown = null; descriptor: string | null = 
 rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBinder"], methods: {
   "<init>()V": function () {},
   "static flushPendingCommands()V": () => {},
+  "static getCallingUid()I": () => PROCESS_UID,
+  "static getCallingPid()I": () => PROCESS_PID,
   "attachInterface(Landroid/os/IInterface;Ljava/lang/String;)V": function (this: JBinder, owner: unknown, descriptor: string) {
     this.owner = owner; this.descriptor = descriptor;
   },
@@ -672,7 +674,7 @@ rt.register({
   methods: { "<init>()V": function () {} },
 });
 class JRunningAppProcessInfo extends JObj {
-  processName = ""; pid = 1000; uid = 10001; pkgList: string[] = [];
+  processName = ""; pid = PROCESS_PID; uid = PROCESS_UID; pkgList: string[] = [];
   importance = 100; lru = 0; lastTrimLevel = 0;
   importanceReasonCode = 0; importanceReasonPid = 0;
   importanceReasonComponent: JComponentName | null = null;
