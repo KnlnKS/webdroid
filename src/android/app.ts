@@ -23,11 +23,36 @@ import { newArrayList, mkIter } from "../jvm/natives/jutil";
 import { runningServices, svcStop, svcFg } from "./runningservices";
 import { isMusicActive, outputSampleRate } from "./media";
 import { device } from "../shell/config";
+import type { JBitmap } from "./graphics";
 
+class JTaskDescription extends JObj {
+  label: string | null = null;
+  icon: JBitmap | null = null;
+  iconResource = 0;
+  primaryColor = 0;
+  init(label: string | null, icon: JBitmap | number | null, color: number): void {
+    if (color !== 0 && (color >>> 24) !== 255) throw rt.mkThrowable("java/lang/IllegalArgumentException", "primary color must be opaque");
+    this.label = label; this.primaryColor = color;
+    this.icon = typeof icon === "number" ? null : icon;
+    this.iconResource = typeof icon === "number" ? icon : 0;
+  }
+}
+rt.register({
+  name: "android/app/ActivityManager$TaskDescription", ctor: JTaskDescription, ifaces: ["android/os/Parcelable"],
+  methods: {
+    "<init>(Ljava/lang/String;II)V": function (this: JTaskDescription, label: string | null, icon: number, color: number) { this.init(label, icon, color); },
+    "<init>(Ljava/lang/String;Landroid/graphics/Bitmap;I)V": function (this: JTaskDescription, label: string | null, icon: JBitmap | null, color: number) { this.init(label, icon, color); },
+    "getLabel()Ljava/lang/String;": function (this: JTaskDescription) { return this.label; },
+    "getIcon()Landroid/graphics/Bitmap;": function (this: JTaskDescription) { return this.icon; },
+    "getIconResource()I": function (this: JTaskDescription) { return this.iconResource; },
+    "getPrimaryColor()I": function (this: JTaskDescription) { return this.primaryColor; },
+  },
+});
 export class JActivity extends JContextWrapper {
   window = new JWindow();
   intent: JIntent | null = null;
   titleStr = "";
+  taskDescription: JTaskDescription | null = null;
   finished = false;
   resumed = false;
   started = false;
@@ -83,6 +108,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "getWindow()Landroid/view/Window;": function (this: JActivity) { return this.window; },
   "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JActivity) { return this.window.backDispatcher(); },
   "getApplication()Landroid/app/Application;": function (this: JActivity) { return this.$host.application; },
+  "setTaskDescription(Landroid/app/ActivityManager$TaskDescription;)V": function (this: JActivity, d: JTaskDescription | null) { this.taskDescription = d; },
   ...lifecycleCbMethods,
   "getWindowManager()Landroid/view/WindowManager;": function (this: JActivity) { return systemService(this, "window"); },
   "getIntent()Landroid/content/Intent;": function (this: JActivity) { return this.intent ?? (this.intent = new JIntent()); },
