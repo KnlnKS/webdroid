@@ -174,7 +174,12 @@ bodies cannot suspend; it is off (`?sync=1`) because 67 of our natives return a 
 being `async` (`HashMap.get` runs a user `hashCode`). Assuming every native suspends is sound
 and yields 13.7%, which the existing syntactic rule already gets.
 
-**The one move that unblocks it: make the native layer able to state re-entry.** Not a list —
+`maySuspend(fn)` now lets a native declare conditional suspension without wrapping the function
+or changing its synchronous returns. The oracle and `natcheck` honor it; map insertion uses it.
+The declaration audit is incomplete, so a clean Lichess startup scan does not justify enabling
+the sync tier globally.
+
+**The move that unblocks it: finish declaring native re-entry.** Not a generated list —
 lists are coverage-dependent and were measured failing. Options worth designing:
 - Route every re-entry through one helper and mark the natives that use it at registration.
 - Split re-entrant natives into a declared category in `NativeSpec`.

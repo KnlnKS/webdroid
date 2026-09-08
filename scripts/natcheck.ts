@@ -1,8 +1,7 @@
-// Which of our natives return a promise without being declared async.
+// Which of our natives return a promise without declaring suspension.
 //
-// The suspension analysis takes `fn.constructor.name === "AsyncFunction"` as the truth about
-// a native, because that is the only statement a function makes about itself. One that
-// returns a promise anyway makes its callers compile sync and then hands them a promise.
+// The suspension analysis recognizes async functions and maySuspend declarations. An unmarked
+// native that returns a promise makes its callers compile sync and then hands them a promise.
 //
 //   bun scripts/natcheck.ts [apk ...]          # needs `bun run dev` on :4080
 import { BASE_URL } from "../tests/e2e/lib/util";
@@ -22,5 +21,5 @@ for (const apk of apks) {
   await page.close();
 }
 await browser.close();
-console.log(`\n${liars.size} natives return a promise without saying async:`);
+console.log(`\n${liars.size} natives return a promise without declaring suspension:`);
 for (const l of [...liars].sort()) console.log("  " + l);

@@ -7,8 +7,8 @@
 // has to come from the call graph.
 //
 // It is a backward closure over that graph. A method suspends if it can reach one that does.
-// The leaves are our own TS natives, and whether one of those suspends is not a matter of
-// annotation — it is `fn.constructor.name === "AsyncFunction"`. Touching a class runs its
+// The leaves are our own TS natives, declared async or marked for conditional suspension.
+// Touching a class runs its
 // <clinit>, which is a method in the graph like any other. Anything unresolvable is assumed
 // to suspend, so being wrong makes a method slow, never wrong.
 //

@@ -3,7 +3,7 @@ import {
   vcall, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, idHash, defineException,
   mkCmp, fmtDouble
 } from "./jlang";
-import { JObj, rt, type NativeSpec, type ClassInfo } from "../runtime";
+import { JObj, rt, maySuspend, type NativeSpec, type ClassInfo } from "../runtime";
 
 /** Java toArray(T[]) contract: fill the GIVEN array when it fits (callers may
  * ignore the return value), null-terminating; else return a new one. */
@@ -592,7 +592,7 @@ function mapMethods(): NativeSpec["methods"] {
       }
       return 0;
     },
-    "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMap, k: unknown, v: unknown) {
+    "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": maySuspend(function (this: JMap, k: unknown, v: unknown) {
       const mk = mapKey(k);
       if (mk !== SLOW) {
         const e = this.m.get(mk);
@@ -605,7 +605,7 @@ function mapMethods(): NativeSpec["methods"] {
         this.slow.push({ k, v });
         return null;
       });
-    },
+    }),
     "putIfAbsent(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JMap, k: unknown, v: unknown) {
       const cur = await vcall(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
       if (cur !== null) return cur;

@@ -80,6 +80,10 @@ interface DexLink {
 }
 
 type NativeFn = (...a: never[]) => unknown;
+const suspendingNatives = new WeakSet<NativeFn>();
+/** Declare conditional suspension without changing a native's synchronous fast path. */
+export function maySuspend<F extends NativeFn>(fn: F): F { suspendingNatives.add(fn); return fn; }
+const canSuspend = (fn: NativeFn) => fn.constructor.name === "AsyncFunction" || suspendingNatives.has(fn);
 
 export class Runtime {
   classes = new Map<string, ClassInfo>();
@@ -261,8 +265,7 @@ export class Runtime {
   }
 
   /** Whether a call that leaves the dex can suspend. Our own natives are the leaves of the
-   *  suspension analysis, and whether one suspends is not a matter of annotation: it is
-   *  `fn.constructor.name === "AsyncFunction"`.
+   *  suspension analysis: async functions and explicitly marked conditional callbacks suspend.
    *
    *  Dispatch is on the runtime receiver, not the declared type, so the answer has to cover
    *  every registered class assignable to it — an interface registered as an empty marker
@@ -286,7 +289,7 @@ export class Runtime {
       // and it belongs to that exact class rather than to anything assignable to it
       if (sig === "<clinit>()V") {
         const c = this.natives.get(cls)?.clinit;
-        return c ? c.constructor.name === "AsyncFunction" : this.natives.has(cls) ? false : null;
+        return c ? canSuspend(c) : this.natives.has(cls) ? false : null;
       }
       const l = subs.get(cls);
       const paren = sig.indexOf("(");
@@ -294,21 +297,19 @@ export class Runtime {
       const mangled = mangleMethod(sig.slice(0, paren), sig.slice(paren));
       for (const info of l) {
         const fn = info.ctor.prototype[mangled] ?? info.ctor[mangled];
-        if (typeof fn === "function" && fn.constructor.name === "AsyncFunction") return true;
+        if (typeof fn === "function" && canSuspend(fn)) return true;
       }
       // either every implementation is sync, or there is none and the call throws
       return false;
     };
   }
 
-  /** `?natcheck=1`: report natives that return a promise without being declared async.
-   *  The suspension analysis takes `fn.constructor.name === "AsyncFunction"` as the truth
-   *  about a native, so one that returns a promise without saying so makes a caller compile
-   *  sync and then hand it a promise. Off by default — it costs a call frame per native. */
+  /** `?natcheck=1`: report promises from natives lacking an async or maySuspend declaration.
+   *  Off by default — it costs a call frame per native. */
   auditNatives = false;
   nativeLiars = new Set<string>();
   private auditWrap(cls: string, key: string, fn: NativeFn): NativeFn {
-    if (fn.constructor.name === "AsyncFunction") return fn;
+    if (canSuspend(fn)) return fn;
     const rt = this;
     return function (this: unknown, ...a: unknown[]) {
       const r = (fn as (...x: unknown[]) => unknown).apply(this, a);
