@@ -20,6 +20,39 @@ async function value(db: unknown, sql: string) {
 
 const prefix = "/data/data/sqlite-test/" + crypto.randomUUID();
 
+test("WAL persistence includes committed pages and defers raw SQL transactions without losing TEMP state", async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage"), saved = new Map<string, string>();
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => saved.set(key, value) } });
+  const db = await open(prefix + "-wal", 0x10000000), key = "wd:db:" + db.path;
+  const sql = await initSqlJs();
+  const waitSave = () => new Promise((resolve) => setTimeout(resolve, 450));
+  const restored = () => new sql.Database(Uint8Array.from(atob(saved.get(key)!), (c) => c.charCodeAt(0)));
+  try {
+    await exec(db, "PRAGMA journal_mode=WAL; CREATE TABLE items(value); INSERT INTO items VALUES(1); PRAGMA user_version=5; CREATE TEMP TABLE changes(n); INSERT INTO changes VALUES(0); CREATE TEMP TRIGGER changed AFTER INSERT ON items BEGIN UPDATE changes SET n=n+1; END");
+    const statement = db.db.prepare("SELECT n FROM changes");
+    await waitSave();
+    const first = saved.get(key), snapshot = restored();
+    expect(snapshot.exec("PRAGMA user_version")[0].values).toEqual([[5]]);
+    expect(snapshot.exec("SELECT * FROM items")[0].values).toEqual([[1]]);
+    snapshot.close();
+    await exec(db, "BEGIN IMMEDIATE; INSERT INTO items VALUES(2); PRAGMA user_version=6");
+    await waitSave();
+    expect(saved.get(key)).toBe(first);
+    await exec(db, "COMMIT");
+    await waitSave();
+    const committed = restored();
+    expect(committed.exec("PRAGMA user_version")[0].values).toEqual([[6]]);
+    expect(committed.exec("SELECT * FROM items")[0].values).toEqual([[1], [2]]);
+    committed.close();
+    expect(statement.step()).toBe(true);
+    expect(statement.get()).toEqual([1]);
+    statement.free();
+  } finally {
+    if (db.saveTimer) clearTimeout(db.saveTimer);
+    if (original) Object.defineProperty(globalThis, "localStorage", original); else Reflect.deleteProperty(globalThis, "localStorage");
+  }
+});
+
 test("cursor factories bind typed SQLiteQuery arguments before creating the returned cursor", async () => {
   const db = await open(prefix + "-factory", 0x10000000);
   let calls = 0;

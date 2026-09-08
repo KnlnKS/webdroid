@@ -39,7 +39,10 @@ function vfsDb(db: Database): Database & { filename: string } {
 // landing inside a transaction rolled that transaction back. Snapshot the file through a
 // THROWAWAY connection instead: point its filename at ours so its export() reads our bytes
 // while closing only its own handle, then restore the name so its close() unlinks its own file.
-function snapshotBytes(sql: NonNullable<typeof SQL>, db: Database): Uint8Array {
+function snapshotBytes(sql: NonNullable<typeof SQL>, db: Database): Uint8Array | null {
+  // The main file alone omits WAL pages; a reader can prevent a complete checkpoint.
+  const checkpoint = db.exec("PRAGMA wal_checkpoint(PASSIVE)")[0]?.values[0];
+  if (checkpoint && (checkpoint[0] || checkpoint[1] !== checkpoint[2])) return null;
   const shadow = vfsDb(new sql.Database());
   const own = shadow.filename;
   shadow.filename = vfsDb(db).filename;
@@ -70,8 +73,13 @@ class JSQLiteDatabase extends JObj {
       if (this.txDepth > 0) { this.scheduleSave(); return; }
       if (!SQL || !this.db) return;
       try {
-        globalThis.localStorage?.setItem("wd:db:" + this.path, b64(snapshotBytes(SQL, this.db)));
-      } catch (e) { console.warn("[sqlite] persist failed", e); }
+        const bytes = snapshotBytes(SQL, this.db);
+        if (bytes) globalThis.localStorage?.setItem("wd:db:" + this.path, b64(bytes));
+        else this.scheduleSave();
+      } catch (e) {
+        if (e instanceof Error && e.message.includes("locked")) this.scheduleSave();
+        else console.warn("[sqlite] persist failed", e);
+      }
     }, 400);
   }
 }
