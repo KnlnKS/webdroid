@@ -1,4 +1,5 @@
-import { jarray, mangleMethod } from "../abi";
+import { readStreamFully } from "./jio";
+import { jarray, mangleMethod, charsToString } from "../abi";
 import {
   vcall, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, idHash, defineException,
   mkCmp, fmtDouble
@@ -174,6 +175,7 @@ rt.register({
   },
 });
 export function mkIter(arr: unknown[], owner: IterOwner | null = null): JIter {
+  rt.link("webdroid/Iter");
   return new JIter(arr, owner);
 }
 
@@ -1914,8 +1916,51 @@ rt.register({
   },
 });
 
-// Properties: string-keyed map + load(InputStream) for .properties text
+const propertyEscapes: Record<string, string> = { t: "\t", r: "\r", n: "\n", f: "\f" };
+function propertyText(text: string): Map<string, string> {
+  const result = new Map<string, string>();
+  const unescape = (value: string) => value.replace(/\\(u[0-9a-fA-F]{4}|u|[\s\S])/g, (_match, escaped: string) => {
+    if (escaped === "u") throw rt.mkThrowable("java/lang/IllegalArgumentException", "Malformed property Unicode escape");
+    if (escaped[0] === "u") return String.fromCharCode(parseInt(escaped.slice(1), 16));
+    return propertyEscapes[escaped] ?? escaped;
+  });
+  let pending = "", continued = false;
+  for (const natural of text.split(/\r\n|\r|\n/)) {
+    const part = natural.replace(/^[ \t\f]+/, "");
+    if (!continued && (!part || /^[#!]/.test(part))) continue;
+    const line = pending + part;
+    const trailing = /\\+$/.exec(line)?.[0].length ?? 0;
+    if (trailing % 2) { pending = line.slice(0, -1); continued = true; continue; }
+    pending = ""; continued = false;
+    let end = 0;
+    while (end < line.length && !/[=: \t\f]/.test(line[end])) {
+      if (line[end] === "\\") end++;
+      end++;
+    }
+    let value = end;
+    while (/[ \t\f]/.test(line[value] ?? "")) value++;
+    if (line[value] === "=" || line[value] === ":") value++;
+    while (/[ \t\f]/.test(line[value] ?? "")) value++;
+    result.set(unescape(line.slice(0, end)), unescape(line.slice(value)));
+  }
+  if (pending) for (const [key, value] of propertyText(pending)) result.set(key, value);
+  return result;
+}
+async function readerProperties(reader: unknown): Promise<Map<string, string>> {
+  const buffer = new Uint16Array(8192), parts: string[] = [];
+  for (;;) {
+    const count: number = await vcall(reader, "read", "([CII)I", buffer, 0, buffer.length);
+    if (count < 0) break;
+    parts.push(charsToString(buffer, 0, count));
+  }
+  return propertyText(parts.join(""));
+}
+async function streamProperties(stream: unknown): Promise<Map<string, string>> {
+  const bytes = await readStreamFully(stream);
+  return propertyText(charsToString(bytes, 0, bytes.length));
+}
 class JProps extends JMap {}
+const setProperties = (props: JProps, entries: Map<string, string>) => { for (const [k, v] of entries) props.m.set(k, { k, v }); };
 rt.register({
   name: "java/util/Properties", ctor: JProps, sup: "java/util/HashMap",
   methods: {
@@ -1925,20 +1970,44 @@ rt.register({
     "setProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;": function (this: JProps, k: string, v: string) {
       const old = this.m.get(k)?.v ?? null; this.m.set(k, { k, v }); return old;
     },
-    "load(Ljava/io/InputStream;)V": async function (this: JProps, s: unknown) {
-      const bytes: Int8Array | undefined = (s as { buf?: Int8Array })?.buf;
-      if (!bytes) return;
-      const text = new TextDecoder().decode(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length));
-      for (const line of text.split(/\r?\n/)) {
-        const t = line.trim();
-        if (!t || t.startsWith("#") || t.startsWith("!")) continue;
-        const eq = t.search(/[=:]/);
-        if (eq < 0) continue;
-        this.m.set(t.slice(0, eq).trim(), { k: t.slice(0, eq).trim(), v: t.slice(eq + 1).trim() });
-      }
-    },
+    "load(Ljava/io/InputStream;)V": async function (this: JProps, stream: unknown) { setProperties(this, await streamProperties(stream)); },
+    "load(Ljava/io/Reader;)V": async function (this: JProps, reader: unknown) { setProperties(this, await readerProperties(reader)); },
   },
 });
+defineException("java/util/MissingResourceException", "java/lang/RuntimeException");
+class JResourceBundle extends JObj { values = new Map<string, string>(); parent: JResourceBundle | null = null; }
+rt.register({ name: "java/util/ResourceBundle", ctor: JResourceBundle, fields: { parent: "parent" }, methods: {
+  "<init>()V": function () {},
+  "setParent(Ljava/util/ResourceBundle;)V": function (this: JResourceBundle, parent: JResourceBundle) { this.parent = parent; },
+  "handleGetObject(Ljava/lang/String;)Ljava/lang/Object;": function (this: JResourceBundle, key: string) { if (key == null) rt.npe(); return this.values.get(key) ?? null; },
+  "getObject(Ljava/lang/String;)Ljava/lang/Object;": async function (this: JResourceBundle, key: string) {
+    const value = await vcall(this, "handleGetObject", "(Ljava/lang/String;)Ljava/lang/Object;", key);
+    if (value != null) return value;
+    if (this.parent) return vcall(this.parent, "getObject", "(Ljava/lang/String;)Ljava/lang/Object;", key);
+    throw rt.mkThrowable("java/util/MissingResourceException", key);
+  },
+  "getString(Ljava/lang/String;)Ljava/lang/String;": async function (this: JResourceBundle, key: string) {
+    const value = await vcall(this, "getObject", "(Ljava/lang/String;)Ljava/lang/Object;", key);
+    if (typeof value !== "string") throw rt.mkThrowable("java/lang/ClassCastException", key);
+    return value;
+  },
+  "containsKey(Ljava/lang/String;)Z": async function (this: JResourceBundle, key: string) {
+    return await vcall(this, "handleGetObject", "(Ljava/lang/String;)Ljava/lang/Object;", key) != null ? 1
+      : this.parent ? vcall(this.parent, "containsKey", "(Ljava/lang/String;)Z", key) : 0;
+  },
+  "getKeys()Ljava/util/Enumeration;": async function (this: JResourceBundle) {
+    const keys = new Set(this.values.keys());
+    if (this.parent) {
+      const inherited = await vcall(this.parent, "getKeys", "()Ljava/util/Enumeration;");
+      while (await vcall(inherited, "hasMoreElements", "()Z")) keys.add(await vcall(inherited, "nextElement", "()Ljava/lang/Object;"));
+    }
+    return mkIter([...keys]);
+  },
+} });
+rt.register({ name: "java/util/PropertyResourceBundle", ctor: class extends JResourceBundle {}, sup: "java/util/ResourceBundle", methods: {
+  "<init>(Ljava/io/Reader;)V": async function (this: JResourceBundle, reader: unknown) { this.values = await readerProperties(reader); },
+  "<init>(Ljava/io/InputStream;)V": async function (this: JResourceBundle, stream: unknown) { this.values = await streamProperties(stream); },
+} });
 
 // Universal toArray fallback: some dex collection classes (R8-pruned bridges)
 // lack toArray; route through their iterator.
