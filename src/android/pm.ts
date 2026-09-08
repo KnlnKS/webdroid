@@ -436,6 +436,7 @@ rt.register({
     "getComponentEnabledSetting(Landroid/content/ComponentName;)I": (c: JComponentName) => componentState.get(c),
     "setComponentEnabledSetting(Landroid/content/ComponentName;II)V": (c: JComponentName, st: number) => componentState.set(c, st),
     "hasSystemFeature(Ljava/lang/String;)Z": () => 0,
+    "getSystemAvailableFeatures()[Landroid/content/pm/FeatureInfo;": () => jarray([], "Landroid/content/pm/FeatureInfo;"),
     "checkPermission(Ljava/lang/String;Ljava/lang/String;)I": () => 0,
     "getInstallerPackageName(Ljava/lang/String;)Ljava/lang/String;": () => null,
     "getInstallSourceInfo(Ljava/lang/String;)Landroid/content/pm/InstallSourceInfo;": (pkg: string) => {

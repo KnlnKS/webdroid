@@ -2,6 +2,7 @@ import { newStringSet } from "../jvm/natives/jutil";
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { jarray } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { vcall, curThread, mainThread, JThread, setCurThread, reportUncaught, JEnum } from "../jvm/natives/jlang";
@@ -235,13 +236,15 @@ rt.register({
     PRODUCT: "webdroid", HARDWARE: "browser", FINGERPRINT: "google/webdroid/1.0",
     SERIAL: "unknown", ID: "WD1A", DISPLAY: "webdroid 1.0", TAGS: "release-keys", TYPE: "user",
     BOARD: "web", BOOTLOADER: "unknown", HOST: "localhost", USER: "web", TIME: 0n,
-    SUPPORTED_ABIS: (() => { const a = ["arm64-v8a", "armeabi-v7a"]; (a as any).$t = "Ljava/lang/String;"; return a; })(),
+    SUPPORTED_ABIS: jarray(["arm64-v8a", "armeabi-v7a"], "Ljava/lang/String;"),
+    SUPPORTED_32_BIT_ABIS: jarray(["armeabi-v7a"], "Ljava/lang/String;"),
+    SUPPORTED_64_BIT_ABIS: jarray(["arm64-v8a"], "Ljava/lang/String;"),
   },
 });
 class JBuildVersion extends JObj {}
 rt.register({
   name: "android/os/Build$VERSION", ctor: JBuildVersion,
-  statics: { SDK_INT: device.sdk, RELEASE: device.release, CODENAME: "REL", INCREMENTAL: "1", SECURITY_PATCH: "2023-01-01", SDK: String(device.sdk) },
+  statics: { SDK_INT: device.sdk, RELEASE: device.release, CODENAME: "REL", INCREMENTAL: "1", SECURITY_PATCH: "2023-01-01", SDK: String(device.sdk), BASE_OS: "", PREVIEW_SDK_INT: 0 },
 });
 rt.register({ name: "android/os/Build$VERSION_CODES", ctor: class extends JObj {},
   statics: Object.fromEntries([
