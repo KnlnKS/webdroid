@@ -15,6 +15,7 @@ import { setAppHost, type AppHost } from "../android/apphost";
 import { setManifest, manifestActivityTheme, manifestActivityOrientation, activityHandlesConfig, CONFIG_UI_MODE } from "../android/pm";
 import { JIntent, deliverActivityResult } from "../android/intent";
 import { ensureDecor, startingWindow } from "../android/decor";
+import { getInflater } from "../android/inflate";
 import { JActivity, fireActivityLifecycle } from "../android/app";
 import { JMenu, pushMenuToBar } from "../android/menu";
 import { JContext } from "../android/context";
@@ -303,13 +304,15 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
   try {
     await vcall(act, "<init>", "()V");
     act.window.activity = act;
+    getInflater(act).privateFactory = act;
     act.intent = intent;
     const prev = booted.stack[booted.stack.length - 1];
     if (prev?.resumed) { await pauseActivity(prev); await windowFocus(prev, false); }
     booted.stack.push(act);
-    await ensureDecor(act);
     try { await vcall(act, "onCreate", "(Landroid/os/Bundle;)V", saved); }
     catch (e) { reportUncaught(e); }
+    // onCreate may set the window theme before its first getDecorView/setContentView.
+    await ensureDecor(act);
     await fireActivityLifecycle(act, "Created", saved);
     // Android dispatches onAttachedToWindow after onCreate, before onStart — and it must
     // happen even if a later lifecycle callback throws (androidx ViewPager.populate needs it).

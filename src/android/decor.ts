@@ -6,7 +6,6 @@ import { JView, attachView } from "./view";
 import { manifestActivityTheme } from "./pm";
 import { device } from "../shell/config";
 import type { JActivity } from "./app";
-import { getInflater } from "./inflate";
 import { JFrameLayout, JLinearLayout } from "./layouts";
 import { rt } from "../jvm/runtime";
 import { JActionBarView } from "./menu";
@@ -45,7 +44,6 @@ export async function startingWindow(host: AppHost, cls: string): Promise<{ view
 }
 export async function ensureDecor(act: JActivity) {
   if (act.window.decor) return;
-  getInflater(act).privateFactory = act; // framework: the Activity is the private Factory2
   const host = act.$host;
   const theme: JTheme = themeOf(act) ?? host.theme;
   const decor = new JFrameLayout();
