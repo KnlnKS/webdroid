@@ -252,7 +252,7 @@ export function libcInit(): void {
     // MAP_FAILED is (void*)-1 at the pointer width; MAP_FIXED is refused by name, and a file
     // mapping is a private copy (a shared writable one would be a lie: the file never sees the writes)
     mmap: (cpu, a) => {
-      a.p(); const n = a.u(), prot = a.i(), flags = a.i(), fd = a.i(), off = offArg(a);
+      a.va(); const n = a.u(), prot = a.i(), flags = a.i(), fd = a.i(), off = offArg(a);
       const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
       if (flags & 0x10) return failed(E.INVAL);
       if (fd !== -1 && !(flags & 0x20) && (flags & 0x1) && (prot & 2)) return failed(E.NOSYS);
