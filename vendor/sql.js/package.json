@@ -1,0 +1,13 @@
+{
+  "name": "sql.js",
+  "version": "1.14.2-webdroid.1",
+  "license": "MIT",
+  "main": "./dist/sql-wasm.js",
+  "exports": {
+    ".": {
+      "browser": "./dist/sql-wasm-browser.js",
+      "default": "./dist/sql-wasm.js"
+    },
+    "./dist/*": "./dist/*"
+  }
+}

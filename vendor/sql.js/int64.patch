@@ -1,0 +1,27 @@
+diff --git a/src/api.js b/src/api.js
+index 126baf1..d423a73 100644
+--- a/src/api.js
++++ b/src/api.js
+@@ -605,8 +605,8 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized() {
+             case "number":
+                 return this.bindNumber(val + 0, pos);
+             case "bigint":
+-                // BigInt is not fully supported yet at WASM level.
+-                return this.bindString(val.toString(), pos);
++                this.db.handleError(Module["_sqlite3_bind_int64"](this.stmt, pos, val));
++                return true;
+             case "boolean":
+                 return this.bindNumber(val + 0, pos);
+             case "object":
+diff --git a/src/exported_functions.json b/src/exported_functions.json
+index 3be2595..684bed9 100644
+--- a/src/exported_functions.json
++++ b/src/exported_functions.json
+@@ -13,6 +13,7 @@
+ "_sqlite3_bind_blob",
+ "_sqlite3_bind_double",
+ "_sqlite3_bind_int",
++"_sqlite3_bind_int64",
+ "_sqlite3_bind_parameter_index",
+ "_sqlite3_step",
+ "_sqlite3_column_count",
