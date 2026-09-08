@@ -9,14 +9,15 @@
 // declares `implements InputConnection`, and an unregistered interface makes Runtime.link
 // auto-stub it — which poisons every class that names it.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { jarray } from "../jvm/abi";
-import { JEditable, JSpannable, csText } from "./text";
+import { JEditable, JSpannable, csText, textSelection, setTextSelection } from "./text";
 import { JView, invalidate } from "./view";
 import { JMatrix } from "./graphics";
-import { JTextView, JEditText, focusedEdit, focusEditText } from "./textview";
+import { JTextView, JEditText, focusedEdit, focusEditText, inputEl, editInput, fireEditorAction } from "./textview";
+import { inMainJob, onMain } from "./mainloop";
 import { PARCELABLE } from "./os";
 
 rt.register({ name: "android/view/textservice/SpellCheckerSession$SpellCheckerSessionListener", ctor: class extends JObj {} });
@@ -181,45 +182,36 @@ rt.register({
   },
 });
 
-// BaseInputConnection: a real edit surface over the target view's Editable. `fullEditor`
-// false means "no editable of our own to show the IME" in AOSP too — it still accepts text
-// and forwards key events, which is exactly the path Compose uses for backspace fallback.
+const composing = new JObj();
 class JBaseInputConnection extends JObj {
-  view: JView | null = null;
-  full = 0;
-  own: JEditable | null = null;
-  sel = 0; selEnd = 0;
-  compStart = -1; compEnd = -1;
-  batch = 0;
-
+  view: JView | null = null; full = 0; own: JEditable | null = null; batch = 0;
   editable(): JEditable {
-    const v = this.view;
-    if (this.full && v instanceof JTextView) return v.getEditable();
-    return this.own ?? (this.own = new JEditable());
+    if (this.full && this.view instanceof JTextView) return this.view.getEditable();
+    return this.own ??= new (rt.link("webdroid/Editable").ctor)() as JEditable;
   }
-  /** Write text back through the view so TextWatchers fire, exactly as a real editor does. */
-  async setText(s: string) {
-    const v = this.view;
-    if (this.full && v instanceof JTextView) await vcall(v, "setText", "(Ljava/lang/CharSequence;)V", s);
-    else this.editable().text = s;
-    invalidate();
-  }
-  /** The range the next commit replaces: the composing region if one is active, else the selection. */
-  target(): [number, number] {
-    return this.compStart >= 0 ? [this.compStart, this.compEnd] : [Math.min(this.sel, this.selEnd), Math.max(this.sel, this.selEnd)];
-  }
-  clamp(len: number) {
-    this.sel = Math.max(0, Math.min(len, this.sel));
-    this.selEnd = Math.max(0, Math.min(len, this.selEnd));
+  async content() {
+    const editable = await vcall(this, "getEditable", "()Landroid/text/Editable;");
+    const text = await csText(editable), [start, end] = await textSelection(editable);
+    return { editable, text, start: Math.max(0, start), end: Math.max(0, end) };
   }
 }
-async function replaceAt(ic: JBaseInputConnection, a: number, b: number, ins: string, newCursor: number) {
-  const t = ic.editable().text;
-  a = Math.max(0, Math.min(t.length, a)); b = Math.max(a, Math.min(t.length, b));
-  await ic.setText(t.slice(0, a) + ins + t.slice(b));
-  // newCursorPosition > 0 counts from the END of the inserted text, <= 0 from its start.
-  ic.sel = ic.selEnd = newCursor > 0 ? a + ins.length + (newCursor - 1) : a + newCursor;
-  ic.clamp(ic.editable().text.length);
+async function replaceAt(ic: JBaseInputConnection, ins: string, newCursor: number, compose: boolean) {
+  const { editable, text, start, end } = await ic.content();
+  if (!editable) return 0;
+  let a = await vcall(editable, "getSpanStart", "(Ljava/lang/Object;)I", composing);
+  let b = await vcall(editable, "getSpanEnd", "(Ljava/lang/Object;)I", composing);
+  if (a < 0 || b < 0) { a = Math.min(start, end); b = Math.max(start, end); }
+  await vcall(ic, "beginBatchEdit", "()Z");
+  try {
+    await vcall(editable, "removeSpan", "(Ljava/lang/Object;)V", composing);
+    await vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", a, b, ins, 0, ins.length);
+    const cursor = Math.max(0, Math.min(text.length - (b - a) + ins.length, newCursor > 0 ? a + ins.length + newCursor - 1 : a + newCursor));
+    await setTextSelection(editable, cursor, cursor);
+    if (compose) await vcall(editable, "setSpan", "(Ljava/lang/Object;III)V", composing, a, a + ins.length, 0x121);
+    if (ic.full && ic.view instanceof JTextView) await vcall(ic.view, "setText", "(Ljava/lang/CharSequence;)V", await csText(editable));
+    invalidate();
+  } finally { await vcall(ic, "endBatchEdit", "()Z"); }
+  return 1;
 }
 rt.register({
   name: "android/view/inputmethod/BaseInputConnection", ctor: JBaseInputConnection,
@@ -227,69 +219,62 @@ rt.register({
   methods: {
     "<init>(Landroid/view/View;Z)V": function (this: JBaseInputConnection, v: JView, full: number) {
       this.view = v; this.full = full;
-      const len = v instanceof JTextView ? v.text.length : 0;
-      this.sel = this.selEnd = len;
     },
     "getEditable()Landroid/text/Editable;": function (this: JBaseInputConnection) { return this.editable(); },
     "beginBatchEdit()Z": function (this: JBaseInputConnection) { this.batch++; return 1; },
     "endBatchEdit()Z": function (this: JBaseInputConnection) { this.batch = Math.max(0, this.batch - 1); return this.batch > 0 ? 1 : 0; },
-    "getTextBeforeCursor(II)Ljava/lang/CharSequence;": function (this: JBaseInputConnection, n: number) {
-      const a = Math.min(this.sel, this.selEnd);
-      return this.editable().text.slice(Math.max(0, a - n), a);
+    "getTextBeforeCursor(II)Ljava/lang/CharSequence;": async function (this: JBaseInputConnection, n: number) {
+      const { text, start, end } = await this.content(), a = Math.min(start, end);
+      return text.slice(Math.max(0, a - n), a);
     },
-    "getTextAfterCursor(II)Ljava/lang/CharSequence;": function (this: JBaseInputConnection, n: number) {
-      const b = Math.max(this.sel, this.selEnd);
-      return this.editable().text.slice(b, b + n);
+    "getTextAfterCursor(II)Ljava/lang/CharSequence;": async function (this: JBaseInputConnection, n: number) {
+      const { text, start, end } = await this.content(), b = Math.max(start, end);
+      return text.slice(b, b + n);
     },
-    "getSelectedText(I)Ljava/lang/CharSequence;": function (this: JBaseInputConnection) {
-      const [a, b] = [Math.min(this.sel, this.selEnd), Math.max(this.sel, this.selEnd)];
-      return a === b ? null : this.editable().text.slice(a, b);
+    "getSelectedText(I)Ljava/lang/CharSequence;": async function (this: JBaseInputConnection) {
+      const { text, start, end } = await this.content();
+      return start === end ? null : text.slice(Math.min(start, end), Math.max(start, end));
     },
-    "getExtractedText(Landroid/view/inputmethod/ExtractedTextRequest;I)Landroid/view/inputmethod/ExtractedText;":
-      function (this: JBaseInputConnection) {
-        const e = new JExtractedText();
-        e.text = this.editable().text;
-        e.selectionStart = Math.min(this.sel, this.selEnd);
-        e.selectionEnd = Math.max(this.sel, this.selEnd);
-        return e;
-      },
+    "getExtractedText(Landroid/view/inputmethod/ExtractedTextRequest;I)Landroid/view/inputmethod/ExtractedText;": async function (this: JBaseInputConnection) {
+      const { text, start, end } = await this.content(), extracted = new (rt.link("android/view/inputmethod/ExtractedText").ctor)() as JExtractedText;
+      extracted.text = text; extracted.selectionStart = start; extracted.selectionEnd = end; return extracted;
+    },
     "getCursorCapsMode(I)I": () => 0,
     "commitText(Ljava/lang/CharSequence;I)Z": async function (this: JBaseInputConnection, cs: unknown, pos: number) {
-      const [a, b] = this.target();
-      this.compStart = this.compEnd = -1;
-      await replaceAt(this, a, b, await csText(cs), pos);
-      return 1;
+      return replaceAt(this, await csText(cs), pos, false);
     },
     "setComposingText(Ljava/lang/CharSequence;I)Z": async function (this: JBaseInputConnection, cs: unknown, pos: number) {
-      const [a, b] = this.target();
-      const s = await csText(cs);
-      await replaceAt(this, a, b, s, pos);
-      this.compStart = a; this.compEnd = a + s.length;
+      return replaceAt(this, await csText(cs), pos, true);
+    },
+    "setComposingRegion(II)Z": async function (this: JBaseInputConnection, a: number, b: number) {
+      const { editable, text } = await this.content();
+      await vcall(editable, "setSpan", "(Ljava/lang/Object;III)V", composing, Math.max(0, Math.min(text.length, a, b)), Math.max(0, Math.min(text.length, Math.max(a, b))), 0x121);
       return 1;
     },
-    "setComposingRegion(II)Z": function (this: JBaseInputConnection, a: number, b: number) {
-      this.compStart = Math.min(a, b); this.compEnd = Math.max(a, b);
-      return 1;
+    "finishComposingText()Z": async function (this: JBaseInputConnection) {
+      await vcall(await vcall(this, "getEditable", "()Landroid/text/Editable;"), "removeSpan", "(Ljava/lang/Object;)V", composing); return 1;
     },
-    "finishComposingText()Z": function (this: JBaseInputConnection) { this.compStart = this.compEnd = -1; return 1; },
     "deleteSurroundingText(II)Z": async function (this: JBaseInputConnection, before: number, after: number) {
-      const t = this.editable().text;
-      const a = Math.max(0, Math.min(this.sel, this.selEnd) - before);
-      const b = Math.min(t.length, Math.max(this.sel, this.selEnd) + after);
-      const keepFrom = Math.min(this.sel, this.selEnd), keepTo = Math.max(this.sel, this.selEnd);
-      await this.setText(t.slice(0, a) + t.slice(keepFrom, keepTo) + t.slice(b));
-      this.sel = a; this.selEnd = a + (keepTo - keepFrom);
-      this.compStart = this.compEnd = -1;
+      const { editable, text, start, end } = await this.content(), a = Math.min(start, end), b = Math.max(start, end);
+      const left = Math.max(0, a - Math.max(0, before)), right = Math.min(text.length, b + Math.max(0, after));
+      await vcall(this, "beginBatchEdit", "()Z");
+      try {
+        if (right > b) await vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", b, right, "", 0, 0);
+        if (a > left) await vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", left, a, "", 0, 0);
+        await setTextSelection(editable, start - (a - left), end - (a - left));
+      } finally { await vcall(this, "endBatchEdit", "()Z"); }
       return 1;
     },
-    // Our text is a JS string (UTF-16); code points only differ across surrogate pairs,
-    // which no editable path here produces, so the count maps straight through.
-    "deleteSurroundingTextInCodePoints(II)Z": function (this: JBaseInputConnection, a: number, b: number) {
-      return vcall(this, "deleteSurroundingText", "(II)Z", a, b);
+    "deleteSurroundingTextInCodePoints(II)Z": async function (this: JBaseInputConnection, before: number, after: number) {
+      const { text, start, end } = await this.content(), a = Math.min(start, end), b = Math.max(start, end);
+      const left = Array.from(text.slice(0, a)).slice(-Math.max(0, before)).join("").length;
+      const right = Array.from(text.slice(b)).slice(0, Math.max(0, after)).join("").length;
+      return vcall(this, "deleteSurroundingText", "(II)Z", before > 0 ? left : 0, right);
     },
-    "setSelection(II)Z": function (this: JBaseInputConnection, a: number, b: number) {
-      this.sel = a; this.selEnd = b; this.clamp(this.editable().text.length);
-      return 1;
+    "setSelection(II)Z": async function (this: JBaseInputConnection, a: number, b: number) {
+      const { editable, text } = await this.content();
+      if (a < 0 || b < 0 || a > text.length || b > text.length) return 0;
+      await setTextSelection(editable, a, b); return 1;
     },
     "sendKeyEvent(Landroid/view/KeyEvent;)Z": async function (this: JBaseInputConnection, ev: unknown) {
       if (this.view) await vcall(this.view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", ev);
@@ -313,19 +298,19 @@ rt.register({
     "performHandwritingGesture(Landroid/view/inputmethod/HandwritingGesture;Ljava/util/concurrent/Executor;Ljava/util/function/IntConsumer;)V": () => {},
     "previewHandwritingGesture(Landroid/view/inputmethod/PreviewableHandwritingGesture;Landroid/os/CancellationSignal;)Z": () => 0,
     // TextAttribute only carries IME styling hints; the text edit is identical.
-    "commitText(Ljava/lang/CharSequence;ILandroid/view/inputmethod/TextAttribute;)Z": function (this: JBaseInputConnection, cs: unknown, p: number) {
+    "commitText(Ljava/lang/CharSequence;ILandroid/view/inputmethod/TextAttribute;)Z": async function (this: JBaseInputConnection, cs: unknown, p: number) {
       return vcall(this, "commitText", "(Ljava/lang/CharSequence;I)Z", cs, p);
     },
-    "setComposingText(Ljava/lang/CharSequence;ILandroid/view/inputmethod/TextAttribute;)Z": function (this: JBaseInputConnection, cs: unknown, p: number) {
+    "setComposingText(Ljava/lang/CharSequence;ILandroid/view/inputmethod/TextAttribute;)Z": async function (this: JBaseInputConnection, cs: unknown, p: number) {
       return vcall(this, "setComposingText", "(Ljava/lang/CharSequence;I)Z", cs, p);
     },
-    "setComposingRegion(IILandroid/view/inputmethod/TextAttribute;)Z": function (this: JBaseInputConnection, a: number, b: number) {
+    "setComposingRegion(IILandroid/view/inputmethod/TextAttribute;)Z": async function (this: JBaseInputConnection, a: number, b: number) {
       return vcall(this, "setComposingRegion", "(II)Z", a, b);
     },
-    "closeConnection()V": function (this: JBaseInputConnection) { this.compStart = this.compEnd = -1; },
-    "static removeComposingSpans(Landroid/text/Spannable;)V": () => {},
-    "static getComposingSpanStart(Landroid/text/Spannable;)I": () => -1,
-    "static getComposingSpanEnd(Landroid/text/Spannable;)I": () => -1,
+    "closeConnection()V": async function (this: JBaseInputConnection) { await vcall(this, "finishComposingText", "()Z"); },
+    "static removeComposingSpans(Landroid/text/Spannable;)V": async (text: unknown) => { await vcall(text, "removeSpan", "(Ljava/lang/Object;)V", composing); },
+    "static getComposingSpanStart(Landroid/text/Spannable;)I": async (text: unknown) => vcall(text, "getSpanStart", "(Ljava/lang/Object;)I", composing),
+    "static getComposingSpanEnd(Landroid/text/Spannable;)I": async (text: unknown) => vcall(text, "getSpanEnd", "(Ljava/lang/Object;)I", composing),
   },
 });
 
@@ -342,9 +327,9 @@ for (const sig of IC_SIGS) {
   const { name, desc } = splitSig(sig);
   const ret = desc.slice(desc.indexOf(")") + 1);
   const miss = ret === "V" ? undefined : ret === "Z" || ret === "I" ? 0 : null;
-  wrapMethods[sig] = function (this: JICWrapper, ...a: unknown[]) {
+  wrapMethods[sig] = maySuspend(function (this: JICWrapper, ...a: unknown[]) {
     return this.targetIc === null ? miss : vcall(this.targetIc, name, desc, ...a);
-  };
+  });
 }
 rt.register({
   name: "android/view/inputmethod/InputConnectionWrapper", ctor: JICWrapper,
@@ -352,8 +337,6 @@ rt.register({
   methods: wrapMethods as NativeSpec["methods"],
 });
 
-// Value types the connection surface passes around. They only ever arrive FROM an IME, and
-// there is no IME here — but a class that names them must still link.
 class JCompletionInfo extends JObj { id = 0n; position = 0; text: unknown = null; label: unknown = null; }
 rt.register({
   name: "android/view/inputmethod/CompletionInfo", ctor: JCompletionInfo, ifaces: ["android/os/Parcelable"],
@@ -434,8 +417,8 @@ rt.register({
       this.info.selStart = a; this.info.selEnd = b;
       return this;
     },
-    [`setComposingText(ILjava/lang/CharSequence;)${CAB}`]: function (this: JCursorAnchorInfoBuilder, i: number, t: unknown) {
-      this.info.compStart = t === null ? -1 : i; this.info.compText = t === null ? null : csText(t);
+    [`setComposingText(ILjava/lang/CharSequence;)${CAB}`]: async function (this: JCursorAnchorInfoBuilder, i: number, t: unknown) {
+      this.info.compStart = t === null ? -1 : i; this.info.compText = t === null ? null : await csText(t);
       return this;
     },
     [`setInsertionMarkerLocation(FFFFI)${CAB}`]: function (this: JCursorAnchorInfoBuilder, x: number, t: number, bl: number, b: number, f: number) {
@@ -469,21 +452,111 @@ rt.register({
   },
 });
 
-// ── InputMethodManager. With no IME attached the editor-side notifications are sinks, but they
-// must exist — a TextView tells the manager about every selection change it makes.
+type InputSession = { view: JView; connection: unknown; info: JEditorInfo; text: string; offset: number; start: number; end: number; compStart: number; compEnd: number };
+let served: InputSession | null = null;
+let imeVisible = false;
+let editing = false;
+const imeMain = <T>(fn: () => T | Promise<T>) => inMainJob() ? Promise.resolve(fn()) : onMain(fn);
+function mirrorInput() {
+  if (!inputEl || !served || focusedEdit || editing) return;
+  inputEl.value = served.text;
+  inputEl.setSelectionRange(served.start - served.offset, served.end - served.offset);
+}
+async function extractedInput(session: InputSession, extracted: JExtractedText) {
+  const text = await csText(extracted.text);
+  if (extracted.partialStartOffset < 0) { session.text = text; session.offset = extracted.startOffset; }
+  else session.text = session.text.slice(0, extracted.partialStartOffset - session.offset) + text + session.text.slice(extracted.partialEndOffset - session.offset);
+  session.start = extracted.selectionStart + extracted.startOffset; session.end = extracted.selectionEnd + extracted.startOffset;
+  mirrorInput();
+}
+async function connectInput(view: JView) {
+  if (served) {
+    const previous = served; served = null;
+    await vcall(previous.connection, "closeConnection", "()V");
+  }
+  if (view instanceof JEditText) { focusEditText(view); return true; }
+  focusEditText(null);
+  const info = new (rt.link("android/view/inputmethod/EditorInfo").ctor)() as JEditorInfo;
+  const connection = await vcall(view, "onCreateInputConnection", "(Landroid/view/inputmethod/EditorInfo;)Landroid/view/inputmethod/InputConnection;", info);
+  if (!connection) return false;
+  const session = { view, connection, info, text: info.surrounding, offset: info.surroundingStart, start: Math.max(0, info.initialSelStart), end: Math.max(0, info.initialSelEnd), compStart: -1, compEnd: -1 };
+  served = session;
+  const request = new (rt.link("android/view/inputmethod/ExtractedTextRequest").ctor)();
+  const extracted = await vcall(connection, "getExtractedText", "(Landroid/view/inputmethod/ExtractedTextRequest;I)Landroid/view/inputmethod/ExtractedText;", request, 1);
+  if (extracted) await extractedInput(session, extracted);
+  mirrorInput(); return true;
+}
+export const imeActive = () => !!focusedEdit || !!served && imeVisible;
+export const imeHasAction = () => !!focusedEdit || !!served && !(served.info.imeOptions & 0x40000000) && (served.info.imeOptions & 0xff) !== 1;
+export function imeInput(text: string, start = text.length, end = start, composing = false) {
+  return onMain(async () => {
+    if (focusedEdit) { await editInput(text); return; }
+    const session = served;
+    if (!session) return;
+    const ic = session.connection, previous = session.text;
+    let a = 0, b = previous.length, c = text.length;
+    while (a < b && a < c && previous[a] === text[a]) a++;
+    while (b > a && c > a && previous[b - 1] === text[c - 1]) { b--; c--; }
+    if (session.compStart >= 0) {
+      a = Math.min(a, session.compStart); b = Math.max(b, session.compEnd); c = text.length - (previous.length - b);
+    }
+    await vcall(ic, "beginBatchEdit", "()Z");
+    editing = true;
+    try {
+      await vcall(ic, "finishComposingText", "()Z");
+      if (b > a && c === a) {
+        await vcall(ic, "setSelection", "(II)Z", b + session.offset, b + session.offset);
+        await vcall(ic, "deleteSurroundingText", "(II)Z", b - a, 0);
+      } else if (b > a || c > a) {
+        await vcall(ic, "setSelection", "(II)Z", a + session.offset, b + session.offset);
+        await vcall(ic, composing ? "setComposingText" : "commitText", "(Ljava/lang/CharSequence;I)Z", text.slice(a, c), 1);
+      }
+      await vcall(ic, "setSelection", "(II)Z", start + session.offset, end + session.offset);
+      session.text = text; session.start = start + session.offset; session.end = end + session.offset;
+      session.compStart = composing ? a : -1; session.compEnd = composing ? c : -1;
+    } finally { try { await vcall(ic, "endBatchEdit", "()Z"); } finally { editing = false; } }
+    mirrorInput(); invalidate();
+  });
+}
+export function imeSelection(start: number, end: number) {
+  return onMain(async () => {
+    const session = served;
+    if (!session || focusedEdit || start + session.offset === session.start && end + session.offset === session.end) return;
+    await vcall(session.connection, "setSelection", "(II)Z", start + session.offset, end + session.offset);
+    session.start = start + session.offset; session.end = end + session.offset;
+  });
+}
+export const imeFinishComposition = () => onMain(async () => {
+  if (served && !focusedEdit) { await vcall(served.connection, "finishComposingText", "()Z"); served.compStart = served.compEnd = -1; }
+});
+export const imeAction = () => onMain(async () => {
+  if (focusedEdit) return fireEditorAction();
+  if (!served) return false;
+  return !!(await vcall(served.connection, "performEditorAction", "(I)Z", served.info.actionId || served.info.imeOptions & 0xff));
+});
 rt.register({
   name: "android/view/inputmethod/InputMethodManager", ctor: class extends JObj {},
   methods: {
-    "hideSoftInputFromWindow(Landroid/os/IBinder;I)Z": () => { focusEditText(null); return 1; },
-    "showSoftInput(Landroid/view/View;I)Z": () => 1,
-    "toggleSoftInput(II)V": () => {},
-    "isActive()Z": () => 0,
-    "isActive(Landroid/view/View;)Z": (v: unknown) => (v !== null && v === focusedEdit ? 1 : 0),
-    "restartInput(Landroid/view/View;)V": () => {},
-    "updateSelection(Landroid/view/View;IIII)V": () => {},
-    "updateExtractedText(Landroid/view/View;ILandroid/view/inputmethod/ExtractedText;)V": () => {},
+    "hideSoftInputFromWindow(Landroid/os/IBinder;I)Z": async () => imeMain(async () => {
+      if (served) await vcall(served.connection, "finishComposingText", "()Z");
+      imeVisible = false; focusEditText(null); inputEl?.blur(); return 1;
+    }),
+    "showSoftInput(Landroid/view/View;I)Z": async (view: JView) => imeMain(async () => {
+      if (!view || served?.view !== view && !await connectInput(view)) return 0;
+      imeVisible = true; mirrorInput(); inputEl?.focus(); return 1;
+    }),
+    "toggleSoftInput(II)V": () => { imeVisible = !imeVisible; if (imeVisible) inputEl?.focus(); else inputEl?.blur(); },
+    "isActive()Z": () => served || focusedEdit ? 1 : 0,
+    "isActive(Landroid/view/View;)Z": (view: unknown) => view != null && (view === served?.view || view === focusedEdit) ? 1 : 0,
+    "restartInput(Landroid/view/View;)V": async (view: JView) => imeMain(async () => { if (view) await connectInput(view); }),
+    "updateSelection(Landroid/view/View;IIII)V": (view: JView, start: number, end: number) => {
+      if (served?.view === view) { served.start = start; served.end = end; mirrorInput(); }
+    },
+    "updateExtractedText(Landroid/view/View;ILandroid/view/inputmethod/ExtractedText;)V": async (view: JView, _token: number, extracted: JExtractedText) => {
+      if (served?.view === view) await extractedInput(served, extracted);
+    },
     "updateCursorAnchorInfo(Landroid/view/View;Landroid/view/inputmethod/CursorAnchorInfo;)V": () => {},
-    "dispatchKeyEventFromInputMethod(Landroid/view/View;Landroid/view/KeyEvent;)V": () => {},
+    "dispatchKeyEventFromInputMethod(Landroid/view/View;Landroid/view/KeyEvent;)V": async (view: JView, event: unknown) => imeMain(async () => { await vcall(view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", event); }),
     "startStylusHandwriting(Landroid/view/View;)V": () => {},
   },
 });

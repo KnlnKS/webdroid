@@ -1571,3 +1571,21 @@ No verification callback or hostname exception is installed. Native missing APIs
 remain empty, with only the optional AndroidX Sidecar class reported by Java.
 Typecheck and the asset test pass (451 assertions covering every certificate,
 manifest boundaries, the pinned digest and lazy mounting).
+
+### Browser input and Flutter editing connections
+
+Lichess's Import PGN field is deliberately read-only and reads the clipboard on tap
+(`lib/src/view/more/import_pgn_screen.dart` in the upstream lichess-org/mobile source).
+Its empty TextInputPlugin client was not evidence of lost platform messages. After
+native TLS could validate certificates, Watch → Broadcasts → Search provided a real
+editable field. That path reached DynamicLayout while creating the app's InputConnection.
+
+Browser input now requests the served view's real InputConnection and delivers edits,
+composition, selection, and editor actions on the main queue. BaseInputConnection uses
+virtual getEditable/replace calls and selection spans, preserving Flutter's editable
+listeners. DynamicLayout reuses the existing layout engine and refreshes after text
+changes. In a private Lichess browser run, typing Candidates rendered in the Flutter
+search field; browser select-all, typing World, and Backspace left Worl in both the
+Java editable and browser control. The search action completed without new missing
+APIs. Focused IME and package tests and typecheck passed; Lichess smoke compilation
+reported zero method failures. This was targeted verification, not the final E2E run.

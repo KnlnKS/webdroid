@@ -17,7 +17,8 @@ import { clearRoots } from "./shell/hostfs";
 import { perf, perfReset } from "./perf";
 import { uiState, measureView, makeSpec } from "./android/view";
 import { onMain, mainDbg } from "./android/mainloop";
-import { editInput, fireEditorAction, focusedEdit, setInputElement } from "./android/textview";
+import { imeInput, imeAction, imeActive, imeHasAction, imeSelection, imeFinishComposition } from "./android/ime";
+import { setInputElement } from "./android/textview";
 import { overlays } from "./android/popup";
 import { openDatabase } from "./android/sqlite";
 import { setWebLayer, webViewInfo } from "./android/webkit";
@@ -58,7 +59,7 @@ root.innerHTML = `
     <div id="missing" style="white-space:pre-wrap"></div>
   </div>
 </div>
-<input id="kbd" style="position:absolute;left:-9999px;top:0" autocomplete="off">
+<textarea id="kbd" style="position:absolute;left:-9999px;top:0" autocomplete="off"></textarea>
 <style>
   html, body { overscroll-behavior: none }
   .navb { background:none;border:none;color:#9aa;font-size:20px;cursor:pointer;padding:2px 26px;border-radius:8px }
@@ -82,7 +83,7 @@ const ctx = canvas.getContext("2d")!;
 const statusEl = document.getElementById("status")!;
 const missingEl = document.getElementById("missing")!;
 const launcherEl = document.getElementById("launcher")!;
-const kbd = document.getElementById("kbd") as HTMLInputElement;
+const kbd = document.getElementById("kbd") as HTMLTextAreaElement;
 setInputElement(kbd);
 // WebViews are <iframe>s over the canvas: the framework positions them, the shell owns the layer
 setWebLayer(document.getElementById("weblayer")!);
@@ -346,11 +347,11 @@ const wd = {
   },
   type: async (s: string) => {
     kbd.value = s;
-    await editInput(s);
+    await imeInput(s);
     return "typed " + s;
   },
   /** the IME action key — what a search field is waiting for after wd.type */
-  enter: () => fireEditorAction(),
+  enter: () => imeAction(),
   measure: (v: any, w: number, wm: number, h: number, hm: number) =>
     measureView(v, makeSpec(w, wm), makeSpec(h, hm)).then(() => [v.measuredW, v.measuredH]),
   querydb: async (sql: string) => {
@@ -393,15 +394,16 @@ ctx.fillText("pick an app on the right →", SCREEN_W / 2, SCREEN_H / 2 + device
 
 // input
 attachInput(canvas, () => {
-  // refocus hidden input if an EditText is active
-  if (focusedEdit) setTimeout(() => kbd.focus(), 0);
+  if (imeActive()) setTimeout(() => kbd.focus(), 0);
 });
 document.getElementById("btn-back")!.addEventListener("click", () => void pressBack());
 document.getElementById("btn-home")!.addEventListener("click", () => location.reload());
 
-kbd.addEventListener("input", () => void editInput(kbd.value));
+kbd.addEventListener("input", (event) => void imeInput(kbd.value, kbd.selectionStart, kbd.selectionEnd, event instanceof InputEvent && event.isComposing));
+kbd.addEventListener("select", () => void imeSelection(kbd.selectionStart, kbd.selectionEnd));
+kbd.addEventListener("compositionend", () => void imeFinishComposition());
 kbd.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { void fireEditorAction(); }
+  if (e.key === "Enter" && !e.isComposing && imeHasAction()) { e.preventDefault(); void imeAction(); }
 });
 
 mountSystemCertificates();

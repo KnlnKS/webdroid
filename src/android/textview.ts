@@ -679,9 +679,9 @@ rt.register({
   },
 });
 export let focusedEdit: JEditText | null = null;
-/** the shell's hidden <input>: the focused EditText mirrors into it so the soft keyboard shows */
-let inputEl: HTMLInputElement | null = null;
-export function setInputElement(el: HTMLInputElement) { inputEl = el; }
+/** The shell's hidden text control mirrors the focused EditText. */
+export let inputEl: HTMLInputElement | HTMLTextAreaElement | null = null;
+export function setInputElement(el: HTMLInputElement | HTMLTextAreaElement) { inputEl = el; }
 setFocusHook((v, on) => {
   if (v instanceof JEditText) focusEditText(on ? v : null);
   else if (on && focusedEdit) focusEditText(null);

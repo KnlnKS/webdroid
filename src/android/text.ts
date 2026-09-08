@@ -1,6 +1,6 @@
 // android.text.* — TextPaint, TextUtils, Spannable/Editable (spans stored, minimally styled).
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { vcall, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import { type JDate } from "../jvm/natives/jtime";
 import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances } from "./graphics";
@@ -74,7 +74,9 @@ const spanMethods: NativeSpec["methods"] = {
     return out;
   },
   "setSpan(Ljava/lang/Object;III)V": function (this: JSpannable, span: unknown, start: number, end: number, flags: number) {
-    this.spans.push({ span, start, end, flags });
+    const existing = this.spans.find((r) => r.span === span);
+    if (existing) Object.assign(existing, { start, end, flags });
+    else this.spans.push({ span, start, end, flags });
   },
   "removeSpan(Ljava/lang/Object;)V": function (this: JSpannable, span: unknown) {
     this.spans = this.spans.filter((s) => s.span !== span);
@@ -111,13 +113,48 @@ export async function csText(cs: unknown): Promise<string> {
   if (cs instanceof JSpannable) return cs.text;
   return String(await vcall(cs, "toString", "()Ljava/lang/String;"));
 }
+const selectionStart = new JObj(), selectionEnd = new JObj();
+export async function textSelection(text: unknown): Promise<[number, number]> {
+  if (!text || typeof text === "string") return [-1, -1];
+  return [await vcall(text, "getSpanStart", "(Ljava/lang/Object;)I", selectionStart), await vcall(text, "getSpanStart", "(Ljava/lang/Object;)I", selectionEnd)];
+}
+export async function setTextSelection(text: unknown, start: number, end: number) {
+  await vcall(text, "setSpan", "(Ljava/lang/Object;III)V", selectionStart, start, start, 0x222);
+  await vcall(text, "setSpan", "(Ljava/lang/Object;III)V", selectionEnd, end, end, 0x22);
+}
+rt.register({ name: "android/text/Selection", ctor: class extends JObj {},
+  statics: { SELECTION_START: selectionStart, SELECTION_END: selectionEnd },
+  methods: {
+    "static getSelectionStart(Ljava/lang/CharSequence;)I": async (text: unknown) => (await textSelection(text))[0],
+    "static getSelectionEnd(Ljava/lang/CharSequence;)I": async (text: unknown) => (await textSelection(text))[1],
+    "static setSelection(Landroid/text/Spannable;II)V": setTextSelection,
+    "static setSelection(Landroid/text/Spannable;I)V": async (text: unknown, index: number) => setTextSelection(text, index, index),
+    "static selectAll(Landroid/text/Spannable;)V": async (text: unknown) => setTextSelection(text, 0, (await csText(text)).length),
+    "static removeSelection(Landroid/text/Spannable;)V": async (text: unknown) => {
+      await vcall(text, "removeSpan", "(Ljava/lang/Object;)V", selectionStart);
+      await vcall(text, "removeSpan", "(Ljava/lang/Object;)V", selectionEnd);
+    },
+  },
+});
+
 /** replace/insert/delete for the editable text classes. A method mangles with its RETURN type,
  *  so SpannableStringBuilder declares these both as returning itself and as returning Editable,
  *  or an interface-typed call misses. */
 function editMutators(ret: string): NonNullable<NativeSpec["methods"]> {
   return {
     [`replace(IILjava/lang/CharSequence;)L${ret};`]: async function (this: JSpannable, a: number, b: number, cs: unknown) {
-      this.text = this.text.slice(0, a) + (await csText(cs)) + this.text.slice(b);
+      const text = await csText(cs);
+      return vcall(this, "replace", "(IILjava/lang/CharSequence;II)L" + ret + ";", a, b, cs, 0, text.length);
+    },
+    [`replace(IILjava/lang/CharSequence;II)L${ret};`]: async function (this: JSpannable, a: number, b: number, cs: unknown, start: number, end: number) {
+      const text = (await csText(cs)).slice(start, end), delta = text.length - (b - a);
+      this.text = this.text.slice(0, a) + text + this.text.slice(b);
+      const moved = (position: number, mode: number) => position < a ? position : position > b ? position + delta :
+        position === b && b > a || mode === 2 ? a + text.length : a;
+      for (const span of this.spans) {
+        span.start = moved(span.start, span.flags >> 4 & 0xf);
+        span.end = moved(span.end, span.flags & 0xf);
+      }
       return this;
     },
     [`insert(ILjava/lang/CharSequence;)L${ret};`]: async function (this: JSpannable, i: number, cs: unknown) {
@@ -620,12 +657,12 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
     return Math.max(0, Math.min(this.lines.length - 1, Math.floor((y - this.padTop) / this.lineHeight())));
   },
   "getLineForOffset(I)I": function (this: JLayout, off: number) {
-    for (let i = 0; i < this.lines.length; i++) if (off <= this.lines[i].end) return i;
+    for (let i = 0; i < this.lines.length; i++) if (off < this.lines[i].end || i === this.lines.length - 1) return i;
     return this.lines.length - 1;
   },
   "getPrimaryHorizontal(I)F": function (this: JLayout, off: number) {
     for (const l of this.lines) {
-      if (off >= l.start && off <= l.end) return measureText(this.paint, l.text.slice(0, off - l.start));
+      if (off >= l.start && (off < l.end || off === this.text.length)) return measureText(this.paint, l.text.slice(0, off - l.start));
     }
     return 0;
   },
@@ -661,6 +698,30 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   },
 };
 rt.register({ name: "android/text/Layout", ctor: JLayout, methods: layoutMethods });
+
+class JDynamicLayout extends JLayout {
+  refresh() {
+    const text = spannedString(this.src);
+    if (this.lines.length && text === this.text) return;
+    this.text = text; this.layoutLines();
+    return this.applyLineHeightSpans();
+  }
+}
+const dynamicMethods: NonNullable<NativeSpec["methods"]> = {
+  "<init>(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFZ)V": async function (this: JDynamicLayout, source: unknown, paint: JTextPaint, width: number, _alignment: unknown, mult: number, add: number, pad: number) {
+    this.src = source; this.paint = paint; this.width = width; this.spacingMult = mult; this.spacingAdd = add; this.includePad = !!pad;
+    await this.refresh();
+  },
+};
+for (const [signature, method] of Object.entries(layoutMethods)) {
+  if (signature.startsWith("static ") || typeof method !== "function") continue;
+  dynamicMethods[signature] = maySuspend(function (this: JDynamicLayout, ...args: never[]) {
+    const pending = this.refresh();
+    return pending ? pending.then(() => method.apply(this, args)) : method.apply(this, args);
+  });
+}
+dynamicMethods["getText()Ljava/lang/CharSequence;"] = function (this: JDynamicLayout) { return this.src; };
+rt.register({ name: "android/text/DynamicLayout", ctor: JDynamicLayout, sup: "android/text/Layout", methods: dynamicMethods });
 
 class JBoringMetrics extends JObj {
   // Paint.FontMetricsInt fields + width (accessed as plain JS props via fieldTable)
