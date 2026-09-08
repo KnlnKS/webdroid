@@ -189,7 +189,8 @@ reports fps and the per-step missing-API list rather than a diff percentage:
 
 * **flappybird** (7 steps) — splash → title → PLAY → taps flap past pipes → Game Over panel.
 * **calculatorm** (8 steps) — keys from the rendered keypad.
-* **lichess** (5 steps) — Flutter home → More → Board editor → drag e2 to e4 → Back.
+* **lichess** (15 steps) — Flutter home → Board editor → drag e2 to e4 → level-1 computer
+  game as White → e4, Nf3, and Ne5 with native Stockfish replies.
 * **doodlejump** (6 steps) — title → play → Back, on the ARM32 native tier.
 
 Flows are aspirational on purpose. Steps webdroid cannot reach score near 100% and *are* the
