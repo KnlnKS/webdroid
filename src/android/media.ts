@@ -11,6 +11,39 @@ import { reportUncaught } from "./os";
 
 rt.register({ name: "android/media/Image", ctor: class extends JObj {}, ifaces: ["java/lang/AutoCloseable"] });
 
+class JAudioAttributes extends JObj { usage = 0; contentType = 0; }
+rt.register({
+  name: "android/media/AudioAttributes", ctor: JAudioAttributes, ifaces: ["android/os/Parcelable"],
+  methods: {
+    "getUsage()I": function (this: JAudioAttributes) { return this.usage; },
+    "getContentType()I": function (this: JAudioAttributes) { return this.contentType; },
+    "equals(Ljava/lang/Object;)Z": function (this: JAudioAttributes, other: unknown) {
+      return other instanceof JAudioAttributes && this.usage === other.usage && this.contentType === other.contentType ? 1 : 0;
+    },
+    "hashCode()I": function (this: JAudioAttributes) { return (this.contentType * 31 + this.usage) | 0; },
+  },
+});
+class JAudioAttributesBuilder extends JObj { attrs = new JAudioAttributes(); }
+rt.register({
+  name: "android/media/AudioAttributes$Builder", ctor: JAudioAttributesBuilder,
+  methods: {
+    "<init>()V": function () {},
+    "setUsage(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, usage: number) {
+      if (usage < 0 || usage > 16) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid usage " + usage);
+      this.attrs.usage = usage; return this;
+    },
+    "setContentType(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, type: number) {
+      if (type < 0 || type > 4) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid content type " + type);
+      this.attrs.contentType = type; return this;
+    },
+    "build()Landroid/media/AudioAttributes;": function (this: JAudioAttributesBuilder) {
+      const attrs = Object.assign(new JAudioAttributes(), this.attrs);
+      if (attrs.usage >= 7 && attrs.usage <= 9) attrs.usage = 5;
+      return attrs;
+    },
+  },
+});
+
 const players = new Set<JMediaPlayer>();
 const pools = new Set<JSoundPool>();
 /** AudioManager.isMusicActive: a MediaPlayer or a SoundPool stream is sounding right now. */
@@ -92,6 +125,7 @@ let actx: AudioContext | null = null;
 type Stream = { src: AudioBufferSourceNode; gain: GainNode; prio: number; rate: number };
 class JSoundPool extends JObj {
   maxStreams = 1;
+  audioAttributes = new JAudioAttributes();
   sounds = new Map<number, AudioBuffer | null>();
   streams = new Map<number, Stream>();
   nextId = 1;
@@ -174,14 +208,20 @@ rt.register({
     "setOnLoadCompleteListener(Landroid/media/SoundPool$OnLoadCompleteListener;)V": function (this: JSoundPool, l: unknown) { this.loadL = l; },
   },
 });
-class JSoundPoolBuilder extends JObj { max = 1; }
+class JSoundPoolBuilder extends JObj { max = 1; attrs: JAudioAttributes | null = null; }
 rt.register({
   name: "android/media/SoundPool$Builder", ctor: JSoundPoolBuilder,
   methods: {
     "<init>()V": function () {},
     "setMaxStreams(I)Landroid/media/SoundPool$Builder;": function (this: JSoundPoolBuilder, n: number) { this.max = n; return this; },
+    "setAudioAttributes(Landroid/media/AudioAttributes;)Landroid/media/SoundPool$Builder;": function (this: JSoundPoolBuilder, attrs: JAudioAttributes | null) {
+      if (!attrs) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid null AudioAttributes");
+      this.attrs = attrs; return this;
+    },
     "build()Landroid/media/SoundPool;": function (this: JSoundPoolBuilder) {
-      const p = new JSoundPool(); p.maxStreams = this.max; pools.add(p); return p;
+      const p = new JSoundPool(); p.maxStreams = this.max;
+      if (this.attrs) p.audioAttributes = this.attrs; else p.audioAttributes.usage = 1;
+      pools.add(p); return p;
     },
   },
 });
