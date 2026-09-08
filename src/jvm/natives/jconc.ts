@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec, type ClassInfo } from "../runtime";
 import { vcall, newObj, JThread, JEnum, setCurThread, curThread, park, defineException } from "./jlang";
-import { JList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods } from "./jutil";
+import { JList, newArrayList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods } from "./jutil";
 import { JRandom, randomSeed } from "./jrandom";
 
 // ── atomics (single-threaded: trivial)
@@ -145,25 +145,58 @@ rt.register({
   },
 });
 
-// ── Executors: queue tasks as macrotasks, mark thread context
+// ── Executors: each worker owns one Java thread and runs one task through completion.
 class JExecutor extends JObj {
   shut = false;
   pending = 0;
   removeOnCancel = 0;
-  queue: JObj | null = null;
-  thread = new JThread();
+  queue: JList | null = null;
+  limit = 1;
+  factory: unknown = null;
+  workers: { thread: JThread | null; busy: boolean }[] = [];
+  jobs = new Map<JFuture, unknown>();
+  tasks: { task: unknown; f: JFuture; method: string; desc: string; finish: () => void }[] = [];
 }
-/** run one task on the executor's thread; a submitted task's outcome lands on its Future */
-async function runTask(ex: JExecutor, task: unknown, f: JFuture | null = null, method = "run", desc = "()V") {
-  ex.pending++;
-  const prev = curThread;
-  setCurThread(ex.thread);
-  try { const v = await vcall(task, method, desc); if (f && v !== undefined) f.value = v; }
-  catch (e) {
-    // AOSP: the failure belongs to the Future (get() rethrows it); an execute()d task has no owner
-    if (f) f.error = rt.jx(e);
-    else { const je = rt.jx(e); console.error("[executor]", (je as any).msg ?? je, (e as any)?.stack ?? ""); }
-  } finally { setCurThread(prev); ex.pending--; if (f) f.done = 1; }
+function drainExecutor(ex: JExecutor) {
+  while (ex.tasks.length) {
+    let worker = ex.workers.find((w) => !w.busy);
+    if (!worker) {
+      if (ex.workers.length >= ex.limit) return;
+      worker = { thread: null, busy: false }; ex.workers.push(worker);
+    }
+    const task = ex.tasks.shift()!;
+    ex.queue?.a.shift();
+    worker.busy = true;
+    void runTask(ex, worker, task);
+  }
+}
+async function runTask(ex: JExecutor, worker: JExecutor["workers"][number], entry: JExecutor["tasks"][number]) {
+  const { task, f, method, desc } = entry;
+  try {
+    if (f.cancelled) return;
+    if (!worker.thread) {
+      worker.thread = ex.factory ? await vcall(ex.factory, "newThread", "(Ljava/lang/Runnable;)Ljava/lang/Thread;", task) : new (rt.link("java/lang/Thread").ctor)();
+      if (!worker.thread) throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "ThreadFactory returned null");
+    }
+    if (f.cancelled) return;
+    worker.thread.alive = 1;
+    worker.thread.interrupted = 0;
+    f.thread = worker.thread;
+    const prev = curThread;
+    setCurThread(worker.thread);
+    let running: Promise<unknown>;
+    try { running = vcall(task, method, desc); } finally { setCurThread(prev); }
+    const value = await running;
+    if (!f.cancelled && value !== undefined) f.value = value;
+  } catch (e) {
+    if (!f.cancelled) f.error = rt.jx(e);
+  } finally {
+    ex.pending--; ex.jobs.delete(f); worker.busy = false;
+    f.done = 1; f.thread = null;
+    entry.finish();
+    if (ex.tasks.length) setTimeout(() => drainExecutor(ex), 0);
+    else if (ex.shut) for (const w of ex.workers) if (!w.busy && w.thread) w.thread.alive = 0;
+  }
 }
 class JFuture extends JObj {
   promise: Promise<unknown> | null = null;
@@ -171,6 +204,8 @@ class JFuture extends JObj {
   error: unknown = null;
   done = 0;
   cancelled = 0;
+  thread: JThread | null = null;
+  cancel: ((interrupt: number) => void) | null = null;
 }
 /** get(): the value, or the task's throwable as ExecutionException (cause = it, message = its toString) */
 async function futureGet(f: JFuture) {
@@ -195,18 +230,40 @@ rt.register({
     "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JFuture, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); },
     "isDone()Z": function (this: JFuture) { return this.done; },
     "isCancelled()Z": function (this: JFuture) { return this.cancelled; },
-    "cancel(Z)Z": function (this: JFuture) { this.cancelled = 1; return 1; },
+    "cancel(Z)Z": function (this: JFuture, interrupt: number) {
+      if (this.done) return 0;
+      this.cancelled = this.done = 1;
+      if (interrupt && this.thread) { this.thread.interrupted = 1; this.thread.wake?.(); }
+      this.cancel?.(interrupt); return 1;
+    },
   },
 });
-function submit(ex: JExecutor, task: unknown, method: string, desc: string): JFuture {
-  const f = new JFuture();
-  f.promise = new Promise((resolve) => setTimeout(() => runTask(ex, task, f, method, desc).then(resolve), 0));
+function submit(ex: JExecutor, task: unknown, method: string, desc: string, delay = 0): JFuture {
+  if (ex.shut) throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "executor shut down");
+  const f = new (rt.link("webdroid/Future").ctor)() as JFuture;
+  ex.pending++; ex.jobs.set(f, task);
+  f.promise = new Promise((resolve) => {
+    const entry = { task, f, method, desc, finish: () => resolve(null) };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const enqueue = () => {
+      timer = undefined; ex.tasks.push(entry); ex.queue?.a.push(task);
+      setTimeout(() => drainExecutor(ex), 0);
+    };
+    if (delay > 0) timer = setTimeout(enqueue, delay); else enqueue();
+    f.cancel = () => {
+      const index = ex.tasks.indexOf(entry);
+      if (index >= 0) { ex.tasks.splice(index, 1); ex.queue?.a.splice(index, 1); ex.pending--; ex.jobs.delete(f); }
+      else if (timer !== undefined) { clearTimeout(timer); timer = undefined; ex.pending--; ex.jobs.delete(f); }
+      resolve(null);
+    };
+  });
   return f;
 }
 const executorMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "execute(Ljava/lang/Runnable;)V": function (this: JExecutor, r: unknown) {
-    setTimeout(() => void runTask(this, r), 0);
+    const f = submit(this, r, "run", "()V");
+    void f.promise!.then(() => { if (f.error) console.error("[executor]", (f.error as any).msg ?? f.error); });
   },
   "submit(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown) {
     return submit(this, r, "run", "()V");
@@ -215,29 +272,59 @@ const executorMethods: NativeSpec["methods"] = {
     return submit(this, c, "call", "()Ljava/lang/Object;");
   },
   "shutdown()V": function (this: JExecutor) { this.shut = true; },
-  "shutdownNow()Ljava/util/List;": function (this: JExecutor) { this.shut = true; return new JList(); },
+  "shutdownNow()Ljava/util/List;": function (this: JExecutor) {
+    this.shut = true;
+    const result = newArrayList();
+    for (const [future, task] of this.jobs) {
+      if (!future.thread) result.a.push(task);
+      future.cancelled = future.done = 1;
+      if (future.thread) { future.thread.interrupted = 1; future.thread.wake?.(); }
+      future.cancel?.(1);
+    }
+    return result;
+  },
   "isShutdown()Z": function (this: JExecutor) { return this.shut ? 1 : 0; },
   "isTerminated()Z": function (this: JExecutor) { return this.shut && this.pending === 0 ? 1 : 0; },
   "awaitTermination(JLjava/util/concurrent/TimeUnit;)Z": () => 1,
   "schedule(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;":
     function (this: JExecutor, r: unknown, d: bigint, u: JTimeUnit) {
-      const f = new JFuture();
-      f.promise = new Promise((resolve) =>
-        setTimeout(() => (f.cancelled ? resolve(null) : runTask(this, r, f).then(resolve)), Number(d) * u.ms));
-      return f;
+      return submit(this, r, "run", "()V", Number(d) * u.ms);
     },
   "scheduleAtFixedRate(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;":
     function (this: JExecutor, r: unknown, init: bigint, period: bigint, u: JTimeUnit) {
-      const f = new JFuture();
-      const tick = () => {
-        if (f.cancelled || this.shut) return;
-        void runTask(this, r);
-        setTimeout(tick, Number(period) * u.ms);
-      };
-      setTimeout(tick, Number(init) * u.ms);
+      if (period <= 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "nonpositive period");
+      const f = new (rt.link("webdroid/Future").ctor)() as JFuture;
+      let next = performance.now() + Number(init) * u.ms, task: JFuture;
+      f.promise = new Promise((resolve) => {
+        const tick = () => {
+          if (f.cancelled || this.shut) { f.done = 1; resolve(null); return; }
+          task = submit(this, r, "run", "()V", next - performance.now());
+          void task.promise!.then(() => {
+            if (task.error) { f.error = task.error; f.done = 1; resolve(null); }
+            else { next += Number(period) * u.ms; tick(); }
+          });
+        };
+        f.cancel = (interrupt) => {
+          if (task) {
+            task.cancelled = task.done = 1;
+            if (interrupt && task.thread) { task.thread.interrupted = 1; task.thread.wake?.(); }
+            task.cancel?.(interrupt);
+          }
+          resolve(null);
+        };
+        tick();
+      });
       return f;
     },
 };
+function initScheduled(this: JExecutor, core: number, factory: unknown = null) {
+  if (core < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative pool size");
+  this.limit = Math.max(1, core); this.factory = factory;
+}
+function initPool(this: JExecutor, core: number, max: number, keep: bigint, unit: JTimeUnit, queue: JList, factory: unknown = null) {
+  if (core < 0 || max <= 0 || max < core || keep < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid pool size");
+  this.limit = rt.iof(queue, "java/util/concurrent/SynchronousQueue") ? max : Math.max(1, core); this.queue = queue; this.factory = factory;
+}
 for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurrent/ScheduledThreadPoolExecutor",
   "webdroid/Executor"]) {
   rt.register({
@@ -249,19 +336,18 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
     sup: "java/util/concurrent/AbstractExecutorService",
     methods: {
       ...executorMethods,
-      "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V": function () {},
-      "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/ThreadFactory;)V": function () {},
-      "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/RejectedExecutionHandler;)V": function () {},
-      "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": function () {},
-      "<init>(I)V": function () {},
-      "<init>(ILjava/util/concurrent/ThreadFactory;)V": function () {},
-      "<init>(ILjava/util/concurrent/RejectedExecutionHandler;)V": function () {},
-      "<init>(ILjava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": function () {},
+      "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V": initPool,
+      "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/ThreadFactory;)V": initPool,
+      "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, core: number, max: number, keep: bigint, unit: JTimeUnit, queue: JList) { initPool.call(this, core, max, keep, unit, queue); },
+      "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": initPool,
+      "<init>(I)V": initScheduled,
+      "<init>(ILjava/util/concurrent/ThreadFactory;)V": initScheduled,
+      "<init>(ILjava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, core: number) { initScheduled.call(this, core); },
+      "<init>(ILjava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": initScheduled,
       "allowCoreThreadTimeOut(Z)V": function () {},
-      // Our tasks go straight to setTimeout and nothing ever waits, so the work queue is the
-      // one an idle pool reports: real, and empty. Sentry asks it whether it may still submit.
       "getQueue()Ljava/util/concurrent/BlockingQueue;": function (this: JExecutor) {
-        return this.queue ??= new (rt.link("java/util/concurrent/LinkedBlockingQueue").ctor)();
+        if (!this.queue) { this.queue = new (rt.link("java/util/concurrent/LinkedBlockingQueue").ctor)() as JList; this.queue.a = this.tasks.map((t) => t.task); }
+        return this.queue;
       },
       "purge()V": function () {},
       "setRejectedExecutionHandler(Ljava/util/concurrent/RejectedExecutionHandler;)V": function () {},
@@ -278,9 +364,10 @@ rt.register({
   methods: executorMethods,
 });
 class JExecutors extends JObj {}
-function mkExec(): JExecutor {
-  const info = rt.link("webdroid/Executor");
-  return new info.ctor();
+export function mkExecutor(count = 1, factory: unknown = null): JExecutor {
+  if (count <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "nonpositive pool size");
+  const ex: JExecutor = new (rt.link("webdroid/Executor").ctor)();
+  ex.limit = count; ex.factory = factory; return ex;
 }
 // Executors.defaultThreadFactory()/callable() must hand back REAL objects: callers wrap them and
 // invoke newThread()/call() themselves, so the auto-stubbed interfaces are not enough.
@@ -316,16 +403,16 @@ rt.register({
         c.r = r; c.result = result;
         return c;
       },
-    "static newSingleThreadExecutor()Ljava/util/concurrent/ExecutorService;": mkExec,
-    "static newSingleThreadExecutor(Ljava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ExecutorService;": mkExec,
-    "static newFixedThreadPool(I)Ljava/util/concurrent/ExecutorService;": mkExec,
-    "static newFixedThreadPool(ILjava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ExecutorService;": mkExec,
-    "static newCachedThreadPool()Ljava/util/concurrent/ExecutorService;": mkExec,
-    "static newCachedThreadPool(Ljava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ExecutorService;": mkExec,
-    "static newScheduledThreadPool(I)Ljava/util/concurrent/ScheduledExecutorService;": mkExec,
-    "static newScheduledThreadPool(ILjava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ScheduledExecutorService;": mkExec,
-    "static newSingleThreadScheduledExecutor()Ljava/util/concurrent/ScheduledExecutorService;": mkExec,
-    "static newSingleThreadScheduledExecutor(Ljava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ScheduledExecutorService;": mkExec,
+    "static newSingleThreadExecutor()Ljava/util/concurrent/ExecutorService;": mkExecutor,
+    "static newSingleThreadExecutor(Ljava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ExecutorService;": (factory: unknown) => mkExecutor(1, factory),
+    "static newFixedThreadPool(I)Ljava/util/concurrent/ExecutorService;": mkExecutor,
+    "static newFixedThreadPool(ILjava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ExecutorService;": mkExecutor,
+    "static newCachedThreadPool()Ljava/util/concurrent/ExecutorService;": () => mkExecutor(Infinity),
+    "static newCachedThreadPool(Ljava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ExecutorService;": (factory: unknown) => mkExecutor(Infinity, factory),
+    "static newScheduledThreadPool(I)Ljava/util/concurrent/ScheduledExecutorService;": mkExecutor,
+    "static newScheduledThreadPool(ILjava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ScheduledExecutorService;": mkExecutor,
+    "static newSingleThreadScheduledExecutor()Ljava/util/concurrent/ScheduledExecutorService;": mkExecutor,
+    "static newSingleThreadScheduledExecutor(Ljava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ScheduledExecutorService;": (factory: unknown) => mkExecutor(1, factory),
     "static unconfigurableExecutorService(Ljava/util/concurrent/ExecutorService;)Ljava/util/concurrent/ExecutorService;": (e: unknown) => e,
   },
 });
