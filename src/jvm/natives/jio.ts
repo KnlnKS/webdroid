@@ -627,8 +627,8 @@ function printMethods<T>(sink: (self: T, s: string, ln: boolean) => unknown, sel
     m[`println(${desc})V`] = async function (this: T, v: unknown) { return sink(this, await str(v), true); };
   }
   // printf/format are String.format into the same sink, and both return the stream
-  const fmt = function (this: T, f: string, a: unknown[]) { sink(this, javaFormat(f, a), false); return this; };
-  const fmtL = function (this: T, _l: unknown, f: string, a: unknown[]) { sink(this, javaFormat(f, a), false); return this; };
+  const fmt = async function (this: T, f: string, a: unknown[]) { await sink(this, javaFormat(f, a), false); return this; };
+  const fmtL = async function (this: T, _l: unknown, f: string, a: unknown[]) { await sink(this, javaFormat(f, a), false); return this; };
   for (const name of ["printf", "format"]) {
     m[`${name}(Ljava/lang/String;[Ljava/lang/Object;)L${self};`] = fmt;
     m[`${name}(Ljava/util/Locale;Ljava/lang/String;[Ljava/lang/Object;)L${self};`] = fmtL;
@@ -636,21 +636,61 @@ function printMethods<T>(sink: (self: T, s: string, ln: boolean) => unknown, sel
   return m;
 }
 
-// ── PrintStream → console
-class JPrintStream extends JObj { line = ""; err = false; }
-function pr(ps: JPrintStream, s: string, ln: boolean) {
-  if (!ln) { ps.line += s; return; }
-  const line = ps.line + s;
-  ps.line = "";
-  (ps.err ? console.error : console.log)("[java]", line);
+// ── PrintStream; the unwrapped System streams feed the console.
+class JPrintStream extends JOutputStream {
+  out: unknown = null; auto = false; closed = false; trouble = false;
+  line = ""; err = false; decoder = new TextDecoder();
 }
+async function pr(ps: JPrintStream, s: string, ln: boolean) {
+  if (ps.closed) { ps.trouble = true; return; }
+  if (ps.out !== null) {
+    const bytes = new TextEncoder().encode(ln ? s + "\n" : s);
+    await vcall(ps, "write", "([BII)V", new Int8Array(bytes.buffer), 0, bytes.length);
+    return;
+  }
+  ps.line += s + (ln ? "\n" : "");
+  let end: number;
+  while ((end = ps.line.indexOf("\n")) >= 0) {
+    (ps.err ? console.error : console.log)("[java]", ps.line.slice(0, end));
+    ps.line = ps.line.slice(end + 1);
+  }
+}
+async function printCall(p: JPrintStream, name: string, desc: string, ...args: unknown[]) {
+  if (p.closed) { p.trouble = true; return; }
+  try { await vcall(p.out, name, desc, ...args); }
+  catch (e) { if (!(e instanceof rt.link("java/io/IOException").ctor)) throw e; p.trouble = true; }
+}
+const initPrint = function (this: JPrintStream, out: unknown, auto = 0) {
+  if (out == null) throw rt.mkThrowable("java/lang/NullPointerException", "Null output stream");
+  this.out = out; this.auto = !!auto;
+};
 rt.register({
   name: "java/io/PrintStream", ctor: JPrintStream, sup: "java/io/FilterOutputStream",
   methods: {
+    "<init>(Ljava/io/OutputStream;)V": initPrint,
+    "<init>(Ljava/io/OutputStream;Z)V": initPrint,
     ...printMethods(pr, "java/io/PrintStream"),
-    "flush()V": function () {},
-    "close()V": function () {},
-    "write(I)V": function (this: JPrintStream, b: number) { pr(this, String.fromCharCode(b), false); },
+    "flush()V": function (this: JPrintStream) { return this.out !== null ? printCall(this, "flush", "()V") : this.line ? pr(this, "", true) : undefined; },
+    "close()V": async function (this: JPrintStream) {
+      if (this.closed) return;
+      await vcall(this, "flush", "()V");
+      if (this.out !== null) await printCall(this, "close", "()V");
+      this.closed = true;
+    },
+    "checkError()Z": async function (this: JPrintStream) {
+      if (!this.closed) await vcall(this, "flush", "()V");
+      return this.trouble || this.out instanceof JPrintStream && await vcall(this.out, "checkError", "()Z") ? 1 : 0;
+    },
+    "write(I)V": async function (this: JPrintStream, b: number) {
+      if (this.out === null) { await pr(this, this.decoder.decode(Uint8Array.of(b), { stream: true }), false); return; }
+      await printCall(this, "write", "(I)V", b);
+      if (this.auto && (b & 255) === 10) await vcall(this, "flush", "()V");
+    },
+    "write([BII)V": async function (this: JPrintStream, bytes: Int8Array, off: number, len: number) {
+      if (this.out === null) { await pr(this, this.decoder.decode(bytes.subarray(off, off + len), { stream: true }), false); return; }
+      await printCall(this, "write", "([BII)V", bytes, off, len);
+      if (this.auto) await vcall(this, "flush", "()V");
+    },
   },
 });
 // System.out/err
