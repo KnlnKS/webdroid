@@ -15,6 +15,7 @@ import { dbPath } from "./sqlite";
 import { type JIntent, launchIntent } from "./intent";
 import { svcStart, svcStop } from "./runningservices";
 import { TV } from "./axml";
+import { registerReceiver, unregisterReceiver, sendBroadcast } from "./broadcast";
 
 const privDir = (p: string): JFile => { vfs.mkdir(p); return mkFile(p); };
 
@@ -203,12 +204,12 @@ export const contextMethods: NativeSpec["methods"] = {
   "checkCallingPermission(Ljava/lang/String;)I": () => 0,
   "checkCallingOrSelfPermission(Ljava/lang/String;)I": () => 0,
   "enforceCallingOrSelfPermission(Ljava/lang/String;Ljava/lang/String;)V": () => {},
-  "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;)Landroid/content/Intent;": () => null,
-  "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;I)Landroid/content/Intent;": () => null,
-  "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;Ljava/lang/String;Landroid/os/Handler;)Landroid/content/Intent;": () => null,
-  "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;Ljava/lang/String;Landroid/os/Handler;I)Landroid/content/Intent;": () => null,
-  "unregisterReceiver(Landroid/content/BroadcastReceiver;)V": () => {},
-  "sendBroadcast(Landroid/content/Intent;)V": () => {},
+  "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;)Landroid/content/Intent;": function (this: JContext, receiver: JObj | null, filter: { actions: string[] }) { return registerReceiver(this, receiver, filter); },
+  "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;I)Landroid/content/Intent;": function (this: JContext, receiver: JObj | null, filter: { actions: string[] }) { return registerReceiver(this, receiver, filter); },
+  "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;Ljava/lang/String;Landroid/os/Handler;)Landroid/content/Intent;": function (this: JContext, receiver: JObj | null, filter: { actions: string[] }, _permission: string, handler: unknown) { return registerReceiver(this, receiver, filter, handler); },
+  "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;Ljava/lang/String;Landroid/os/Handler;I)Landroid/content/Intent;": function (this: JContext, receiver: JObj | null, filter: { actions: string[] }, _permission: string, handler: unknown) { return registerReceiver(this, receiver, filter, handler); },
+  "unregisterReceiver(Landroid/content/BroadcastReceiver;)V": unregisterReceiver,
+  "sendBroadcast(Landroid/content/Intent;)V": function (this: JContext, intent: JIntent) { sendBroadcast(this, intent); },
   "startService(Landroid/content/Intent;)Landroid/content/ComponentName;": function (this: JContext, intent: JIntent) {
     return svcStart(this, intent, false);
   },

@@ -758,7 +758,7 @@ rt.register({
   methods: { "<init>()V": function () {} },
 });
 rt.register({
-  name: "android/content/IntentFilter", ctor: class extends JObj { actions: string[] = []; },
+  name: "android/content/IntentFilter", ctor: class extends JObj { actions: string[] = []; schemes: string[] = []; },
   methods: {
     "<init>()V": function () {},
     "<init>(Ljava/lang/String;)V": function (this: any, a: string) { this.actions.push(a); },
@@ -768,19 +768,7 @@ rt.register({
     "hasAction(Ljava/lang/String;)Z": function (this: any, a: string) { return this.actions.includes(a) ? 1 : 0; },
     "actionsIterator()Ljava/util/Iterator;": function (this: any) { return mkIter(this.actions.slice()); },
     "addCategory(Ljava/lang/String;)V": () => {},
-    "addDataScheme(Ljava/lang/String;)V": () => {},
-  },
-});
-class JPendingIntent extends JObj {}
-const pendingIntent = () => new JPendingIntent();
-rt.register({
-  name: "android/app/PendingIntent", ctor: JPendingIntent, ifaces: ["android/os/Parcelable"],
-  methods: {
-    "static getActivity(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": pendingIntent,
-    "static getBroadcast(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": pendingIntent,
-    "static getService(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": pendingIntent,
-    "cancel()V": () => {},
-    "send()V": () => {},
+    "addDataScheme(Ljava/lang/String;)V": function (this: { schemes: string[] }, scheme: string) { this.schemes.push(scheme); },
   },
 });
 rt.register({ name: "android/app/Service", ctor: class extends JContextWrapper {}, sup: "android/content/ContextWrapper",

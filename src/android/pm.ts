@@ -3,9 +3,14 @@ import { jarray } from "../jvm/abi";
 import type { JBundle } from "./os";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { type XmlNode, attrStr, attr, TV } from "./axml";
-import { normRV } from "./res";
+import { normRV, resString, type Resources } from "./res";
+import { apkCertificates, parsePackageArchive, type PackageArchive } from "./packagearchive";
+import { loadDrawable } from "./drawable";
+import { getPackageInstaller } from "./packageinstaller";
+import { verifyApkSignature } from "./apksignature";
+import { persistPackage, restorePackages } from "../shell/packages";
 import { appHost, type AppHost, jclsNameOf } from "./apphost";
-import { apkPath } from "../jvm/natives/jio";
+import { apkPath, vfs } from "../jvm/natives/jio";
 import { DOCS_AUTHORITY } from "./documents";
 import { type JList, newArrayList, toJsArray } from "../jvm/natives/jutil";
 import { JIntent, type JComponentName, componentState, mkComponentName } from "./intent";
@@ -32,7 +37,10 @@ rt.register({
     },
   },
 });
-export const signatures = () => jarray([new (rt.link("android/content/pm/Signature").ctor)()], "Landroid/content/pm/Signature;");
+export const signatures = (certificates: Uint8Array[] = []) => {
+  rt.link("android/content/pm/Signature");
+  return jarray(certificates.map((bytes) => Object.assign(new JSignature(), { bytes: new Int8Array(bytes) })), "Landroid/content/pm/Signature;");
+};
 rt.register({
   name: "android/content/pm/PackageManager$NameNotFoundException",
   ctor: (() => { const p = rt.link("java/lang/Exception").ctor; return class extends p {}; })(),
@@ -99,25 +107,30 @@ rt.register({
     permission: "permission", enabled: "enabled", exported: "exported", directBootAware: "directBootAware", flags: "flags", foregroundServiceType: "foregroundServiceType" },
   methods: { "<init>()V": function () {} },
 });
-const FAKE_SIG = new Int8Array(64).fill(-0x55);
+class JSignature extends JObj { bytes = new Int8Array(0); }
+class JSigningInfo extends JObj { certificates: Uint8Array[] = []; }
+function signingInfo(certificates: Uint8Array[]): JSigningInfo {
+  rt.link("android/content/pm/SigningInfo");
+  return Object.assign(new JSigningInfo(), { certificates });
+}
 rt.register({
-  name: "android/content/pm/Signature", ctor: class extends JObj {},
+  name: "android/content/pm/Signature", ctor: JSignature,
   methods: {
-    "<init>()V": function () {},
-    "toByteArray()[B": () => FAKE_SIG.slice(),
-    "toCharsString()Ljava/lang/String;": () => "ab".repeat(64),
-    "hashCode()I": () => 0xabab,
-    "equals(Ljava/lang/Object;)Z": function (o: unknown) { return o === this ? 1 : 0; },
+    "<init>([B)V": function (this: JSignature, bytes: Int8Array) { this.bytes = bytes.slice(); },
+    "toByteArray()[B": function (this: JSignature) { return this.bytes.slice(); },
+    "toCharsString()Ljava/lang/String;": function (this: JSignature) { return [...this.bytes].map((b) => (b & 255).toString(16).padStart(2, "0")).join(""); },
+    "hashCode()I": function (this: JSignature) { return this.bytes.reduce((hash, byte) => Math.imul(hash, 31) + byte | 0, 1); },
+    "equals(Ljava/lang/Object;)Z": function (this: JSignature, o: unknown) { return o instanceof JSignature && o.bytes.length === this.bytes.length && o.bytes.every((b, i) => b === this.bytes[i]) ? 1 : 0; },
   },
 });
 rt.register({
-  name: "android/content/pm/SigningInfo", ctor: class extends JObj {},
+  name: "android/content/pm/SigningInfo", ctor: JSigningInfo,
   methods: {
     "<init>()V": function () {},
-    "hasMultipleSigners()Z": () => 0,
+    "hasMultipleSigners()Z": function (this: JSigningInfo) { return this.certificates.length > 1 ? 1 : 0; },
     "hasPastSigningCertificates()Z": () => 0,
-    "getApkContentsSigners()[Landroid/content/pm/Signature;": signatures,
-    "getSigningCertificateHistory()[Landroid/content/pm/Signature;": signatures,
+    "getApkContentsSigners()[Landroid/content/pm/Signature;": function (this: JSigningInfo) { return signatures(this.certificates); },
+    "getSigningCertificateHistory()[Landroid/content/pm/Signature;": function (this: JSigningInfo) { return this.certificates.length > 1 ? null : signatures(this.certificates); },
   },
 });
 /** API 33 replaced every int flags parameter with a boxed long, one class per getter family.
@@ -161,7 +174,7 @@ export function setManifest(root: XmlNode, activities: Map<string, XmlNode>, pro
 }
 const appNode = () => manifestRoot?.children.find((c) => c.name === "application") ?? null;
 /** <meta-data> children → Bundle, typed the way aapt encoded them (string / boolean / int). */
-function metaData(node: XmlNode | null | undefined): JBundle {
+function metaData(node: XmlNode | null | undefined, res = appHost?.res): JBundle {
   const b = new (rt.link("android/os/Bundle").ctor)() as JBundle;
   for (const md of node?.children ?? []) {
     if (md.name !== "meta-data") continue;
@@ -183,14 +196,27 @@ function metaData(node: XmlNode | null | undefined): JBundle {
       continue;
     }
     const direct = normRV({ t: raw.type, d: raw.data, s: raw.str ?? undefined });
-    const v = direct.t === TV.REFERENCE && appHost ? appHost.res.resolveRefs(direct) : direct;
+    const v = direct.t === TV.REFERENCE && res ? res.resolveRefs(direct) : direct;
     const value = v.t === TV.STRING ? v.s ?? null : v.t === TV.BOOLEAN ? (v.d ? 1 : 0) : v.d;
     b.map.set(k, value);
   }
   return b;
 }
 
-class JApplicationInfo extends JObj {
+class JPackageItemInfo extends JObj {
+  archiveResources: Resources | null = null;
+  name = ""; packageName = ""; labelRes = 0; nonLocalizedLabel: string | null = null; icon = 0; metaData: JBundle | null = null;
+}
+rt.register({
+  name: "android/content/pm/PackageItemInfo", ctor: JPackageItemInfo,
+  fields: { name: "name", packageName: "packageName", labelRes: "labelRes", nonLocalizedLabel: "nonLocalizedLabel", icon: "icon", metaData: "metaData" },
+  methods: {
+    "<init>()V": function () {},
+    "loadLabel(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;": function (this: JPackageItemInfo) { return applicationLabel(this); },
+    "loadIcon(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;": function (this: JPackageItemInfo) { return this.archiveResources && this.icon ? loadDrawable(this.archiveResources, this.icon, null) : null; },
+  },
+});
+class JApplicationInfo extends JPackageItemInfo {
   packageName = ""; sourceDir = ""; dataDir = ""; nativeLibraryDir = "/lib";
   flags = 0; targetSdkVersion = 33; minSdkVersion = 21; theme = 0; labelRes = 0; icon = 0;
   // AOSP fills exactly one of these from <application android:label>: the resource id when it
@@ -203,7 +229,7 @@ class JApplicationInfo extends JObj {
   sharedLibraryFiles: string[] | null = null;
 }
 rt.register({
-  name: "android/content/pm/ApplicationInfo", ctor: JApplicationInfo, ifaces: ["android/os/Parcelable"],
+  name: "android/content/pm/ApplicationInfo", ctor: JApplicationInfo, sup: "android/content/pm/PackageItemInfo", ifaces: ["android/os/Parcelable"],
   fields: {
     packageName: "packageName", sourceDir: "sourceDir", dataDir: "dataDir", nativeLibraryDir: "nativeLibraryDir",
     flags: "flags", targetSdkVersion: "targetSdkVersion", minSdkVersion: "minSdkVersion", theme: "theme",
@@ -212,7 +238,7 @@ rt.register({
     splitNames: "splitNames", splitSourceDirs: "splitSourceDirs", splitPublicSourceDirs: "splitPublicSourceDirs",
     sharedLibraryFiles: "sharedLibraryFiles",
   },
-  methods: { "<init>()V": function () {}, "loadLabel(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;": function (this: JApplicationInfo) { return appHost?.appLabel ?? this.packageName; } },
+  methods: { "<init>()V": function () {} },
 });
 let cachedAppInfo: JApplicationInfo | null = null;
 export function getAppInfo(host: AppHost): JApplicationInfo {
@@ -267,8 +293,8 @@ function installTime(pkg: string): bigint {
 }
 
 /** The manifest's <uses-feature> set, as FeatureInfo[] — what PackageInfo.reqFeatures is. */
-function reqFeatures(): unknown[] | null {
-  const nodes = (manifestRoot?.children ?? []).filter((c) => c.name === "uses-feature");
+function reqFeatures(root = manifestRoot): unknown[] | null {
+  const nodes = (root?.children ?? []).filter((c) => c.name === "uses-feature");
   if (!nodes.length) return null;
   const fi = rt.link("android/content/pm/FeatureInfo").ctor;
   const out = nodes.map((c) => {
@@ -460,7 +486,8 @@ rt.register({
 class JPackageManager extends JObj {}
 let cachedPM: JPackageManager | null = null;
 export function getPM(): JPackageManager {
-  return cachedPM ?? (cachedPM = new JPackageManager());
+  if (!cachedPM) { rt.link("android/content/pm/PackageManager"); cachedPM = new JPackageManager(); }
+  return cachedPM;
 }
 rt.register({
   name: "android/content/pm/PackageManager", ctor: JPackageManager,
@@ -488,7 +515,9 @@ rt.register({
     "getPackageInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$PackageInfoFlags;)Landroid/content/pm/PackageInfo;": async function (pkg: string, f: JInfoFlags | null) {
       return vcall(this, "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", pkg, Number(f?.value ?? 0n));
     },
-    "getPackageInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;": function (pkg: string, flags: number) {
+    "getPackageInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;": async function (pkg: string, flags: number) {
+      const installed = await installedPackage(pkg);
+      if (installed) return archiveInfo(installed.archive, installed.path, flags);
       if (appHost && pkg !== appHost.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
       const pi = new JPackageInfo();
       pi.packageName = pkg;
@@ -499,8 +528,17 @@ rt.register({
       pi.applicationInfo = appHost ? getAppInfo(appHost) : null;
       pi.splitNames = pi.applicationInfo?.splitNames ?? null;
       pi.firstInstallTime = pi.lastUpdateTime = installTime(pkg);
-      pi.signatures = signatures();
-      pi.signingInfo = new (rt.link("android/content/pm/SigningInfo").ctor)();
+      if (flags & (64 | 0x8000000)) {
+        const bytes = await vfs.readFile(apkPath());
+        let certificates: Uint8Array[] = [];
+        if (bytes) {
+          let pending = certificateCache.get(bytes);
+          if (!pending) certificateCache.set(bytes, pending = apkCertificates(bytes, appHost?.zip ?? {}));
+          certificates = await pending;
+        }
+        if (flags & 64) pi.signatures = signatures(certificates);
+        if (flags & 0x8000000) pi.signingInfo = signingInfo(certificates);
+      }
       pi.reqFeatures = reqFeatures();
       if (flags & 2) pi.receivers = jarray([...manifestReceivers].filter(([name, node]) => visibleComponent(name, node, flags)).map(([name, node]) => receiverInfo(name, node, flags)), "Landroid/content/pm/ActivityInfo;");
       if (flags & 4) pi.services = jarray([...manifestServices].filter(([name, node]) => visibleComponent(name, node, flags)).map(([name, node]) => serviceInfo(name, node, flags)), "Landroid/content/pm/ServiceInfo;");
@@ -510,11 +548,15 @@ rt.register({
     "getApplicationInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$ApplicationInfoFlags;)Landroid/content/pm/ApplicationInfo;": async function (pkg: string, f: JInfoFlags | null) {
       return vcall(this, "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, Number(f?.value ?? 0n));
     },
-    "getApplicationInfo(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;": function (pkg: string) {
+    "getApplicationInfo(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;": async function (pkg: string, flags: number) {
+      const installed = await installedPackage(pkg);
+      if (installed) return archiveInfo(installed.archive, installed.path, flags).applicationInfo;
       if (appHost && pkg !== appHost.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
       return appHost ? getAppInfo(appHost) : new JApplicationInfo();
     },
-    "getApplicationLabel(Landroid/content/pm/ApplicationInfo;)Ljava/lang/CharSequence;": () => appHost?.appLabel ?? "App",
+    "getApplicationLabel(Landroid/content/pm/ApplicationInfo;)Ljava/lang/CharSequence;": applicationLabel,
+    "getPackageArchiveInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;": async (path: string, flags: number) => { const archive = await readArchive(path); return archive ? archiveInfo(archive, path, flags) : null; },
+    "getPackageArchiveInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$PackageInfoFlags;)Landroid/content/pm/PackageInfo;": async (path: string, flags: JInfoFlags) => { const archive = await readArchive(path); return archive ? archiveInfo(archive, path, Number(flags.value)) : null; },
     "resolveActivity(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;": (i: JIntent | null) => resolveActivity(i),
     "resolveActivity(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Landroid/content/pm/ResolveInfo;": (i: JIntent | null) => resolveActivity(i),
     "queryIntentActivities(Landroid/content/Intent;I)Ljava/util/List;": queryActivities,
@@ -539,16 +581,15 @@ rt.register({
       if (!appHost || pkg !== appHost.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
       return new JInstallSourceInfo();
     },
-    // "Install unknown apps" is off until the user turns it on in Settings, which is what an
-    // app checks before offering to sideload its own updates.
-    "canRequestPackageInstalls()Z": () => 0,
+    "getPackageInstaller()Landroid/content/pm/PackageInstaller;": getPackageInstaller,
+    "canRequestPackageInstalls()Z": () => 1,
     "isInstantApp()Z": () => 0,
     "isInstantApp(Ljava/lang/String;)Z": () => 0,
     // one package is installed and it owns every uid this process can ask about
     "getNameForUid(I)Ljava/lang/String;": () => appHost?.pkg ?? null,
     "getPackagesForUid(I)[Ljava/lang/String;": () => jarray([appHost?.pkg ?? ""], "Ljava/lang/String;"),
-    "getInstalledPackages(I)Ljava/util/List;": () => newArrayList(),
-    "getInstalledPackages(Landroid/content/pm/PackageManager$PackageInfoFlags;)Ljava/util/List;": () => newArrayList(),
+    "getInstalledPackages(I)Ljava/util/List;": installedPackages,
+    "getInstalledPackages(Landroid/content/pm/PackageManager$PackageInfoFlags;)Ljava/util/List;": (flags: JInfoFlags) => installedPackages(Number(flags.value)),
     "getActivityInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;": (comp: any) =>
       mkActivityInfo(String(comp?.cls ?? "")),
     // only this package is installed; its launcher activity is the one carrying the LAUNCHER category
@@ -687,3 +728,74 @@ rt.register({
     "isRequestPinShortcutSupported()Z": () => 0,
   },
 });
+
+function applicationLabel(info: JPackageItemInfo): string {
+  return info.nonLocalizedLabel ?? (info.labelRes && info.archiveResources ? resString(info.archiveResources, info.labelRes) : null) ?? (info.packageName === appHost?.pkg ? appHost.appLabel : info.packageName);
+}
+const archiveCache = new WeakMap<Uint8Array, Promise<PackageArchive>>();
+const certificateCache = new WeakMap<Uint8Array, Promise<Uint8Array[]>>();
+async function readArchive(path: string): Promise<PackageArchive | null> {
+  const bytes = await vfs.readFile(path);
+  if (!bytes) return null;
+  let archive = archiveCache.get(bytes);
+  if (!archive) archiveCache.set(bytes, archive = parsePackageArchive(bytes));
+  try { return await archive; } catch { return null; }
+}
+function archiveInfo(archive: PackageArchive, path: string, flags: number): JPackageInfo {
+  const { root, pkg, res, certificates } = archive;
+  const app = root.children.find((c) => c.name === "application");
+  rt.link("android/content/pm/PackageInfo"); rt.link("android/content/pm/ApplicationInfo");
+  const info = new JPackageInfo(), ai = new JApplicationInfo();
+  info.packageName = ai.packageName = pkg;
+  info.versionCode = attr(root, "versionCode")?.data ?? 0;
+  info.longVersionCode = BigInt(info.versionCode >>> 0) | BigInt(attr(root, "versionCodeMajor")?.data ?? 0) << 32n;
+  const version = attr(root, "versionName");
+  info.versionName = version?.type === TV.REFERENCE ? resString(res, version.data) : version?.str ?? "";
+  ai.sourceDir = ai.publicSourceDir = path; ai.dataDir = `/data/data/${pkg}`;
+  ai.archiveResources = res; ai.processName = pkg;
+  const label = app && attr(app, "label");
+  ai.labelRes = label?.type === TV.REFERENCE ? label.data : 0;
+  ai.nonLocalizedLabel = label?.str ?? null;
+  ai.icon = app && attr(app, "icon")?.data || 0;
+  ai.className = app && attrStr(app, "name") || null;
+  const sdk = root.children.find((c) => c.name === "uses-sdk");
+  ai.minSdkVersion = sdk && attr(sdk, "minSdkVersion")?.data || 1;
+  ai.targetSdkVersion = sdk && attr(sdk, "targetSdkVersion")?.data || ai.minSdkVersion;
+  if (flags & 128) ai.metaData = metaData(app, res);
+  info.applicationInfo = ai; info.reqFeatures = reqFeatures(root);
+  if (flags & 64) info.signatures = signatures(certificates);
+  if (flags & 0x8000000) info.signingInfo = signingInfo(certificates);
+  return info;
+}
+const installedPath = (pkg: string) => `/data/app/${pkg}/base.apk`;
+async function installedPackage(pkg: string) {
+  await restorePackages();
+  const path = installedPath(pkg), archive = await readArchive(path);
+  return archive ? { path, archive } : null;
+}
+async function installedPackages(flags: number): Promise<JList> {
+  await restorePackages();
+  const result = newArrayList();
+  if (appHost) result.a.push(await vcall(getPM(), "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", appHost.pkg, flags));
+  for (const path of vfs.files.keys()) {
+    if (!/^\/data\/app\/[^/]+\/base\.apk$/.test(path)) continue;
+    const archive = await readArchive(path);
+    if (archive && archive.pkg !== appHost?.pkg) result.a.push(archiveInfo(archive, path, flags));
+  }
+  return result;
+}
+export async function installPackageArchive(bytes: Uint8Array, expectedPackage: string | null = null): Promise<string> {
+  await verifyApkSignature(bytes);
+  const archive = await parsePackageArchive(bytes);
+  if (expectedPackage && expectedPackage !== archive.pkg) throw new Error("Session package name differs from APK");
+  if (!archive.certificates.length) throw new Error("APK is unsigned");
+  const previous = await installedPackage(archive.pkg);
+  if (previous && archiveInfo(archive, "", 0).longVersionCode < archiveInfo(previous.archive, previous.path, 0).longVersionCode)
+    throw new Error("APK version is older than installed package");
+  if (previous && (previous.archive.certificates.length !== archive.certificates.length || previous.archive.certificates.some((cert, i) => {
+    const next = archive.certificates[i]; return !next || cert.length !== next.length || cert.some((b, j) => b !== next[j]);
+  }))) throw new Error("APK signing certificate differs from installed package");
+  await persistPackage(installedPath(archive.pkg), bytes);
+  vfs.write(installedPath(archive.pkg), bytes);
+  return archive.pkg;
+}
