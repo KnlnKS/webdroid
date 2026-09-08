@@ -467,18 +467,16 @@ const paintMethods: NativeSpec["methods"] = {
     fillFontMetrics(this, fm, false);
     return fm;
   },
-  "getFontMetrics(Landroid/graphics/Paint$FontMetrics;)F": function (this: JPaint, fm: JFontMetrics) {
-    fillFontMetrics(this, fm, false);
-    return fm.descent - fm.ascent;
+  "getFontMetrics(Landroid/graphics/Paint$FontMetrics;)F": function (this: JPaint, fm: JFontMetrics | null) {
+    return fillFontMetrics(this, fm, false);
   },
   "getFontMetricsInt()Landroid/graphics/Paint$FontMetricsInt;": function (this: JPaint) {
     const fm = new JFontMetricsInt();
     fillFontMetrics(this, fm, true);
     return fm;
   },
-  "getFontMetricsInt(Landroid/graphics/Paint$FontMetricsInt;)I": function (this: JPaint, fm: JFontMetricsInt) {
-    fillFontMetrics(this, fm, true);
-    return Math.round(fm.descent - fm.ascent);
+  "getFontMetricsInt(Landroid/graphics/Paint$FontMetricsInt;)I": function (this: JPaint, fm: JFontMetricsInt | null) {
+    return fillFontMetrics(this, fm, true);
   },
   "getFontSpacing()F": function (this: JPaint) { return this.textSize * 1.17; },
   "ascent()F": function (this: JPaint) { return fontAscent(this); },
@@ -614,14 +612,17 @@ export function fontAscent(p: JPaint): number { return vmetrics(p).a; }
 export function fontDescent(p: JPaint): number { return vmetrics(p).d; }
 export function fontTop(p: JPaint): number { const m = metricsOf(p); return vmetrics(p).a * (m.top / m.ascent); }
 export function fontBottom(p: JPaint): number { const m = metricsOf(p); return vmetrics(p).d * (m.bottom / m.descent); }
-export function fillFontMetrics(p: JPaint, fm: { top: number; ascent: number; descent: number; bottom: number; leading: number }, int: boolean) {
+export function fillFontMetrics(p: JPaint, fm: { top: number; ascent: number; descent: number; bottom: number; leading: number } | null, int: boolean) {
   const a = fontAscent(p), d = fontDescent(p);
-  const top = fontTop(p), bottom = fontBottom(p);
-  fm.ascent = int ? Math.round(a) : a;
-  fm.descent = int ? Math.round(d) : d;
-  fm.top = int ? Math.round(top) : top;
-  fm.bottom = int ? Math.round(bottom) : bottom;
-  fm.leading = 0;
+  const ascent = int ? Math.round(a) : a, descent = int ? Math.round(d) : d;
+  if (fm) {
+    const top = fontTop(p), bottom = fontBottom(p);
+    fm.ascent = ascent; fm.descent = descent;
+    fm.top = int ? Math.round(top) : top;
+    fm.bottom = int ? Math.round(bottom) : bottom;
+    fm.leading = 0;
+  }
+  return descent - ascent;
 }
 
 const paintStyleEnum = mkEnumSet("android/graphics/Paint$Style", ["FILL", "STROKE", "FILL_AND_STROKE"]);
