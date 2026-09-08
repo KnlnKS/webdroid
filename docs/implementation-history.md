@@ -1779,3 +1779,11 @@ leak disappeared. Tests include 3,000 CPU/JNI lifetimes, actual ARM32/A64 pthrea
 join/detach results, destructor rounds/failures, and a parked signal during thread exit.
 All 783 unit tests and typecheck passed; all eight APK/XAPK smoke compilations had zero
 method failures.
+
+The final full E2E rendered 101/101 steps with zero wedges, layout/draw errors, or
+native-required libraries. FitNotes stayed at 43.07%, onboarding at 17.56%, Mihon app was
+75.34%, and Harmonic 37.14%; Harmonic's differences remained confined to live content.
+No new regression errors appeared, and goldens were unchanged. A visible Chrome game was
+left at `1. e4 e6 2. Nf3 Nh6` throughout that run. About seven minutes later it still had
+18 live CPUs, zero finished CPUs, and exactly 7,880 host bytes, with an idle main queue
+and no native fault or new uncaught error.
