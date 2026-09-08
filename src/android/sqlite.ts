@@ -212,6 +212,8 @@ export function mkCursor(cols: string[], rows: unknown[][]): JCursor {
   return c;
 }
 function integerRow(stmt: Statement): unknown[] {
+  const row = stmt.get();
+  if (!row.some((v) => typeof v === "number" && Math.abs(v) > Number.MAX_SAFE_INTEGER)) return row;
   return (stmt.get as (params: undefined, config: { useBigInt: boolean }) => unknown[])(undefined, { useBigInt: true });
 }
 const longValue = (v: unknown): bigint => typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v ?? 0)));
