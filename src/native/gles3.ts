@@ -13,6 +13,7 @@ import { glProbe } from "./gles1";
 import { rewriteTextureSwizzles, visibleUniforms, type SwizzleRewrite, type VisibleUniforms } from "./swizzle";
 /** the last GL entry points, while the probe is on (wd.native.glRing) */
 export const glRing: string[] = [];
+export let gles3Procs: Record<string, HostFn> = {};
 /** wd.native.gl3: the live context and the objects behind guest handles (debug) */
 export const glDebug = { gl: () => current, buf: (h: number) => rec(h), tex: (h: number) => T().textures[h], prog: (h: number) => T().programs[h] };
 
@@ -679,6 +680,7 @@ export function gles3Init(): void {
       return r;
     };
   }
+  gles3Procs = G;
   hostLib("libGLESv2.so", G, { closed: true });
   hostLib("libGLESv3.so", G, { closed: true });
 }

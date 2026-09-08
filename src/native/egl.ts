@@ -4,14 +4,17 @@
 // implement is NULL from eglGetProcAddress.
 
 import { mem } from "./mem";
-import { hostLib, lookupHost, probed, cstr, type HostFn } from "./host";
+import { hostLib, lookupHost, defineHost, probed, cstr, type HostFn } from "./host";
 import { EglContext, glSurfaces, eglConfigAttrib, type GlSurface } from "../android/glview";
 import { setGL } from "../android/gl";
 import { windowOf } from "./libandroid";
+import { gles1Procs } from "./gles1";
+import { gles3Procs } from "./gles3";
 
 const EGL_SUCCESS = 0x3000, EGL_BAD_ALLOC = 0x3003, EGL_BAD_CONTEXT = 0x3006, EGL_BAD_MATCH = 0x3009, EGL_BAD_NATIVE_WINDOW = 0x300b, EGL_BAD_SURFACE = 0x300d;
 let err = EGL_SUCCESS;
 const surfaces: (GlSurface | null)[] = [null], contexts: (EglContext | null)[] = [null];
+const procs = new Map<string, number>();
 const handle = <T>(tbl: (T | null)[], o: T): number => { const i = tbl.indexOf(o); if (i > 0) return i; tbl.push(o); return tbl.length - 1; };
 /** an EGL_NONE-terminated list of EGLint pairs */
 function attrs(p: number): Map<number, number> {
@@ -92,7 +95,18 @@ export function eglInit(): void {
     eglWaitGL: () => 1, eglWaitNative: () => 1, eglWaitClient: () => 1,
     eglCopyBuffers: () => { err = EGL_BAD_ALLOC; return 0; },
     eglBindTexImage: () => 0, eglReleaseTexImage: () => 0,
-    eglGetProcAddress: (_c, a) => { const n = a.str(), v = lookupHost(n); if (v === undefined) probed.add("eglGetProcAddress!" + n); return v ?? 0; },
+    eglGetProcAddress: (_c, a) => {
+      const n = a.str();
+      let p = procs.get(n);
+      if (p !== undefined) return p;
+      const one = Object.hasOwn(gles1Procs, n) ? gles1Procs[n] : undefined;
+      const two = Object.hasOwn(gles3Procs, n) ? gles3Procs[n] : undefined;
+      // Proc addresses survive context switches; overlapping ES1/ES3 names dispatch at call time.
+      if (one && two) p = defineHost(n, (cpu, args) => (glSurfaces.current?.major === 1 ? one : two)(cpu, args));
+      else p = lookupHost(n, one ? "libGLESv1_CM.so" : two ? "libGLESv2.so" : "libEGL.so");
+      if (p !== undefined) { procs.set(n, p); return p; }
+      probed.add("eglGetProcAddress!" + n); return 0;
+    },
   };
   // eglGetError reports the last call: every entry point starts with a clean slate, as EGL does
   for (const [k, f] of Object.entries(E)) if (k !== "eglGetError") E[k] = (c, a) => { err = EGL_SUCCESS; return f(c, a); };

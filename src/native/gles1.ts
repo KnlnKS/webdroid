@@ -249,6 +249,7 @@ function decodeEtc1(src: Uint8Array, w: number, h: number): Uint8Array {
 }
 
 const EXTENSIONS = "GL_OES_blend_subtract GL_OES_blend_func_separate GL_OES_blend_equation_separate GL_OES_texture_npot GL_OES_compressed_ETC1_RGB8_texture GL_OES_read_format GL_OES_point_size_array GL_OES_point_sprite GL_OES_single_precision";
+export let gles1Procs: Record<string, HostFn> = {};
 
 export function gles1Init(): void {
   const strs = new Map<string, number>();
@@ -530,5 +531,6 @@ export function gles1Init(): void {
       c.gl.readPixels(x, y, w, h, fmt, type, view);
     }),
   };
+  gles1Procs = G;
   hostLib("libGLESv1_CM.so", G, { closed: true });
 }
