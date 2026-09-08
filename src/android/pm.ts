@@ -6,7 +6,7 @@ import { type XmlNode, attrStr, attr, TV } from "./axml";
 import { normRV, resString, type Resources } from "./res";
 import { apkCertificates, parsePackageArchive, type PackageArchive } from "./packagearchive";
 import { loadDrawable } from "./drawable";
-import { mkXmlParser } from "./resnative";
+import { mkJResources, mkXmlParser } from "./resnative";
 import { getPackageInstaller } from "./packageinstaller";
 import { verifyApkSignature } from "./apksignature";
 import { persistPackage, restorePackages } from "../shell/packages";
@@ -518,6 +518,15 @@ rt.register({
       const cls = qualifyComponent(comp.cls, comp.pkg), node = manifestProviders.get(cls);
       if (comp.pkg !== appHost?.pkg || !node) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", comp.pkg + "/" + cls);
       return mkProviderInfo(cls, node, flags);
+    },
+    "getResourcesForApplication(Ljava/lang/String;)Landroid/content/res/Resources;": async function (pkg: string) {
+      const info = await vcall(this, "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 0);
+      return vcall(this, "getResourcesForApplication", "(Landroid/content/pm/ApplicationInfo;)Landroid/content/res/Resources;", info);
+    },
+    "getResourcesForApplication(Landroid/content/pm/ApplicationInfo;)Landroid/content/res/Resources;": async (info: JApplicationInfo) => {
+      const res = info.archiveResources ?? (info.packageName === appHost?.pkg ? appHost.res : (await installedPackage(info.packageName))?.archive.res);
+      if (!res) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", info.packageName);
+      return res.jobj ?? mkJResources(res, false);
     },
     "getXml(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/content/res/XmlResourceParser;": async (pkg: string, id: number, info: JApplicationInfo | null) => {
       const res = info?.archiveResources ?? (pkg === appHost?.pkg ? appHost.res : (await installedPackage(pkg))?.archive.res);

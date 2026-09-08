@@ -25,6 +25,9 @@ test("archive queries resolve their own metadata and real signing certificates w
   expect(info.packageName).toBe("app.mihon");
   expect(info.versionName).toBe("0.20.4");
   expect(await vcall(getPM(), "getApplicationLabel", "(Landroid/content/pm/ApplicationInfo;)Ljava/lang/CharSequence;", info.applicationInfo)).toBe("Mihon");
+  const resources = await vcall(getPM(), "getResourcesForApplication", "(Landroid/content/pm/ApplicationInfo;)Landroid/content/res/Resources;", info.applicationInfo);
+  expect(await vcall(resources, "getString", "(I)Ljava/lang/String;", info.applicationInfo.labelRes)).toBe("Mihon");
+  expect(await vcall(getPM(), "getResourcesForApplication", "(Landroid/content/pm/ApplicationInfo;)Landroid/content/res/Resources;", info.applicationInfo)).toBe(resources);
   const signers = await vcall(info.signingInfo, "getApkContentsSigners", "()[Landroid/content/pm/Signature;");
   expect(new Uint8Array(await vcall(signers[0], "toByteArray", "()[B"))).toEqual(archive.certificates[0]);
   const without = await vcall(getPM(), "getPackageArchiveInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", path, 0);

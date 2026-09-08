@@ -19,11 +19,12 @@ export class JResources extends JObj {
 }
 /** the app's Resources double as the system ones: framework attrs resolve through the same table */
 let systemRes: JResources | null = null;
-export function mkJResources(host: Resources): JResources {
+export function mkJResources(host: Resources, system = true): JResources {
+  rt.link("android/content/res/Resources");
   const r = new JResources();
   r.host = host;
   host.jobj = r;
-  systemRes = r;
+  if (system) systemRes = r;
   return r;
 }
 class JLocaleList extends JObj { values: JLocale[] = []; }
