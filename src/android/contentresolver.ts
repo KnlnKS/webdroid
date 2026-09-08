@@ -1,6 +1,6 @@
-import { services } from "./context";
+import { services, type JContext } from "./context";
 import { rt, type NativeSpec, JObj } from "../jvm/runtime";
-import { appHost } from "./apphost";
+import { appHost, type AppHost } from "./apphost";
 import { type JUri, mkUri } from "./net";
 import {
   isDocsUri, documentId, docRead, docWrite, docInputStream, docOutputStream, docRow, isChildrenUri, docChildren,
@@ -9,9 +9,40 @@ import {
 import { mkPfd } from "./os";
 import { vfs } from "../jvm/natives/jio";
 import { mkAssetFd } from "./resnative";
-import { newObj, defineException } from "../jvm/natives/jlang";
+import { newObj, defineException, vcall } from "../jvm/natives/jlang";
 import { mkCursor } from "./sqlite";
 import { newArrayList } from "../jvm/natives/jutil";
+import { getPM } from "./pm";
+import { inMainJob, onMain } from "./mainloop";
+
+type ProviderInfo = { name: string; authority: string; packageName: string };
+const providers = new WeakMap<AppHost, Map<string, Promise<unknown>>>();
+export function attachProvider(ctx: JContext, info: ProviderInfo): Promise<unknown> {
+  let local = providers.get(ctx.$host);
+  if (!local) providers.set(ctx.$host, local = new Map());
+  const authorities = info.authority.split(";");
+  const existing = local.get(authorities[0]);
+  if (existing) return existing;
+  const create = async () => {
+    const provider = await newObj(info.name.replace(/\./g, "/"));
+    await vcall(provider, "attachInfo", "(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V", ctx, info);
+    return provider;
+  };
+  const ready = (inMainJob() ? create() : onMain(create)).catch((error) => {
+    for (const authority of authorities) local.delete(authority);
+    throw error;
+  });
+  for (const authority of authorities) local.set(authority, ready);
+  return ready;
+}
+async function contentProvider(uri: JUri): Promise<unknown> {
+  const authority = /^content:\/\/([^/?#]+)/.exec(uri.uri)?.[1];
+  if (!authority || !appHost?.application) return null;
+  const existing = providers.get(appHost)?.get(authority);
+  if (existing) return existing;
+  const info: ProviderInfo | null = await vcall(getPM(), "resolveContentProvider", "(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;", authority, 128);
+  return info?.packageName === appHost.pkg ? attachProvider(appHost.application, info) : null;
+}
 
 export function contentResolver(): unknown {
   let s = services.get("$content");
@@ -31,7 +62,12 @@ const uriGrants = {
 const fileOf = (u: JUri) => u.uri.replace(/^file:\/\//, "");
 /** A descriptor carries the document's current bytes and writes them back when it is closed. */
 async function openPfd(u: JUri, mode: string) {
-  if (!isDocsUri(u)) return mkPfd(vfs.read(fileOf(u)) ?? new Uint8Array(0), (b) => vfs.write(fileOf(u), b));
+  if (!isDocsUri(u)) {
+    const provider = await contentProvider(u);
+    if (provider) return vcall(provider, "openFile", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", u, mode);
+    if (u.uri.startsWith("content:")) throw rt.mkThrowable("java/io/FileNotFoundException", u.uri);
+    return mkPfd(vfs.read(fileOf(u)) ?? new Uint8Array(0), (b) => vfs.write(fileOf(u), b));
+  }
   const id = documentId(u, true);
   const write = (mode ?? "r").includes("w");
   return mkPfd(write && (mode ?? "").includes("t") ? new Uint8Array(0) : await docRead(id),
@@ -45,8 +81,9 @@ const resolverMethods: NativeSpec["methods"] = {
   "notifyChange(Landroid/net/Uri;Landroid/database/ContentObserver;)V": () => {},
   "registerContentObserver(Landroid/net/Uri;ZLandroid/database/ContentObserver;)V": () => {},
   "unregisterContentObserver(Landroid/database/ContentObserver;)V": () => {},
-  "openInputStream(Landroid/net/Uri;)Ljava/io/InputStream;": (u: JUri) =>
+  "openInputStream(Landroid/net/Uri;)Ljava/io/InputStream;": async (u: JUri) =>
     isDocsUri(u) ? docInputStream(documentId(u, true))
+      : u.uri.startsWith("content:") ? newObj("android/os/ParcelFileDescriptor$AutoCloseInputStream", "(Landroid/os/ParcelFileDescriptor;)V", await openPfd(u, "r"))
       : newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", fileOf(u)),
   "openOutputStream(Landroid/net/Uri;)Ljava/io/OutputStream;": (u: JUri) =>
     isDocsUri(u) ? docOutputStream(documentId(u, true), false)
@@ -55,11 +92,17 @@ const resolverMethods: NativeSpec["methods"] = {
   "openOutputStream(Landroid/net/Uri;Ljava/lang/String;)Ljava/io/OutputStream;": (u: JUri, mode: string) =>
     isDocsUri(u) ? docOutputStream(documentId(u, true), (mode ?? "w").includes("a"))
       : newObj("java/io/FileOutputStream", "(Ljava/lang/String;Z)V", fileOf(u), (mode ?? "w").includes("a") ? 1 : 0),
-  "getType(Landroid/net/Uri;)Ljava/lang/String;": async (u: JUri) =>
-    isDocsUri(u) ? (await docRow(documentId(u, true)))?.mime ?? null : null,
+  "getType(Landroid/net/Uri;)Ljava/lang/String;": async (u: JUri) => {
+    if (isDocsUri(u)) return (await docRow(documentId(u, true)))?.mime ?? null;
+    const provider = await contentProvider(u);
+    return provider ? vcall(provider, "getType", "(Landroid/net/Uri;)Ljava/lang/String;", u) : null;
+  },
   "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
-    async (u: JUri, proj: string[] | null) => {
-      if (!isDocsUri(u)) return null;
+    async (u: JUri, proj: string[] | null, selection: string | null, args: string[] | null, sort: string | null) => {
+      if (!isDocsUri(u)) {
+        const provider = await contentProvider(u);
+        return provider ? vcall(provider, "query", "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;", u, proj, selection, args, sort) : null;
+      }
       const id = documentId(u, true);
       const row = isChildrenUri(u) ? null : await docRow(id);
       const rows = isChildrenUri(u) ? await docChildren(id) : row ? [row] : [];

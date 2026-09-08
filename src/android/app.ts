@@ -751,7 +751,11 @@ rt.register({
     "<init>()V": function () {},
     "onCreate()Z": () => 1,
     "getContext()Landroid/content/Context;": function (this: any) { return this.$ctx ?? appHost?.application ?? null; },
-    "attachInfo(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V": function (this: any, c: unknown) { this.$ctx = c; },
+    "attachInfo(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V": async function (this: { $ctx: unknown }, c: unknown) {
+      if (this.$ctx) return;
+      this.$ctx = c;
+      await vcall(this, "onCreate", "()Z");
+    },
   },
 });
 

@@ -5,20 +5,21 @@ import { rt } from "../jvm/runtime";
 import { analyseProgram } from "../jvm/analyse";
 import { vfs, apkPath } from "../jvm/natives/jio";
 import { openInstall, type Install } from "./install";
-import { vcall, curThread, mainThread, setCurThread, newObj } from "../jvm/natives/jlang";
+import { vcall, curThread, mainThread, setCurThread } from "../jvm/natives/jlang";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadFrameworkDex } from "../android/framework";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
 import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguration } from "../android/resnative";
 import { setAppHost, type AppHost } from "../android/apphost";
-import { setManifest, manifestActivityTheme, manifestActivityOrientation, activityHandlesConfig, CONFIG_UI_MODE } from "../android/pm";
+import { setManifest, manifestActivityTheme, manifestActivityOrientation, activityHandlesConfig, CONFIG_UI_MODE, getPM } from "../android/pm";
 import { JIntent, deliverActivityResult } from "../android/intent";
 import { ensureDecor, startingWindow } from "../android/decor";
 import { getInflater } from "../android/inflate";
 import { JActivity, fireActivityLifecycle } from "../android/app";
 import { JMenu, pushMenuToBar } from "../android/menu";
 import { JContext } from "../android/context";
+import { attachProvider } from "../android/contentresolver";
 import { APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
 import { reportUncaught, JBundle } from "../android/os";
 import { onMain, inMainJob } from "../android/mainloop";
@@ -230,13 +231,14 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
       await vcall(application, "attachBaseContext", "(Landroid/content/Context;)V", baseCtx);
       // ContentProviders run before Application.onCreate (androidx-startup initializers
       // like WorkManager live here)
-      for (const pn of providers.keys()) {
+      for (const [pn, node] of providers) {
         try {
           const cls = pn.replace(/\./g, "/");
           if (rt.link(cls).stub) continue;
-          const prov = await newObj(cls);
-          prov.$ctx = application;
-          await vcall(prov, "onCreate", "()Z");
+          const authority = attrStr(node, "authorities")?.split(";")[0];
+          if (!authority) continue;
+          const info = await vcall(getPM(), "resolveContentProvider", "(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;", authority, 128);
+          if (info) await attachProvider(application, info);
         } catch (e) { console.warn("[provider]", pn, (e as { msg?: string })?.msg ?? e); }
       }
       await vcall(application, "onCreate", "()V");
