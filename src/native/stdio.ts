@@ -34,6 +34,7 @@ function waitOn(f: Fd, w: () => void): void { if (f.rpipe) f.rpipe.wake.push(w);
 const fdBase = (path: string): Fd => ({ path, data: new Uint8Array(0), len: 0, pos: 0, write: false, dirty: false, dir: false, append: false, statusFlags: 0, references: 1 });
 const fds = new Map<number, Fd>();
 const files = new Map<number, number>();       // FILE* → fd
+const pushback = new Map<number, number[]>();
 const dirs = new Map<number, { entries: string[]; i: number; dirent: number }>();
 const cpuList = device.cpu.cores === 1 ? "0\n" : `0-${device.cpu.cores - 1}\n`;
 
@@ -256,7 +257,8 @@ function fdClose(cpu: Cpu, fd: number): number {
 function fdSeek(cpu: Cpu, fd: number, off: number, whence: number): number {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
-  if (f.random) return fail(cpu, E.SPIPE);
+  if (f.random || f.rpipe || f.wpipe) return fail(cpu, E.SPIPE);
+  if (whence < 0 || whence > 2) return fail(cpu, E.INVAL);
   const np = whence === 0 ? off : whence === 1 ? f.pos + off : f.len + off;
   if (np < 0) return fail(cpu, E.INVAL);
   f.pos = np;
@@ -390,6 +392,17 @@ function newFile(fd: number, flags: number): number {
   return fp;
 }
 function fileFd(fp: number): number { return files.get(fp) ?? mem.ld16s(fp + LAYOUT.F_FILE); }
+function fileSeek(cpu: Cpu, fp: number, off: number, whence: number): number {
+  const r = fdSeek(cpu, fileFd(fp), off - (whence === 1 ? pushback.get(fp)?.length ?? 0 : 0), whence);
+  if (r < 0) return -1;
+  pushback.delete(fp);
+  mem.st16(fp + LAYOUT.F_FLAGS, mem.ld16u(fp + LAYOUT.F_FLAGS) & ~F_EOF);
+  return 0;
+}
+function fileTell(cpu: Cpu, fp: number): number {
+  const pos = fdSeek(cpu, fileFd(fp), 0, 1);
+  return pos < 0 ? -1 : pos - (pushback.get(fp)?.length ?? 0);
+}
 function setFlag(fp: number, f: number): void { mem.st16(fp + LAYOUT.F_FLAGS, mem.ld16u(fp + LAYOUT.F_FLAGS) | f); }
 function modeFlags(mode: string): { o: number; f: number } {
   const plus = mode.includes("+");
@@ -399,6 +412,8 @@ function modeFlags(mode: string): { o: number; f: number } {
 }
 let scratch = 0;
 function fgetc(cpu: Cpu, fp: number): number | Promise<number> {
+  const pending = pushback.get(fp), c = pending?.pop();
+  if (c !== undefined) { if (!pending?.length) pushback.delete(fp); return c; }
   const fd = fileFd(fp);
   const f = fds.get(fd);
   if (!f) { setFlag(fp, F_ERR); return -1; }
@@ -634,26 +649,31 @@ export function stdioInit(): void {
       return newFile(fd, f);
     },
     fdopen: (_c, a) => { const fd = a.i(), mode = a.str(); return fds.has(fd) ? newFile(fd, modeFlags(mode).f) : 0; },
-    freopen: (cpu, a) => { const path = a.str(), mode = a.str(), fp = a.p(); const { o, f } = modeFlags(mode); fdClose(cpu, fileFd(fp)); const fd = fdOpen(cpu, path, o); if (fd < 0) return 0; files.set(fp, fd); mem.st16(fp + LAYOUT.F_FILE, fd); mem.st16(fp + LAYOUT.F_FLAGS, f); return fp; },
+    freopen: (cpu, a) => { const path = a.str(), mode = a.str(), fp = a.p(); const { o, f } = modeFlags(mode); pushback.delete(fp); fdClose(cpu, fileFd(fp)); const fd = fdOpen(cpu, path, o); if (fd < 0) return 0; files.set(fp, fd); mem.st16(fp + LAYOUT.F_FILE, fd); mem.st16(fp + LAYOUT.F_FLAGS, f); return fp; },
     tmpfile: (cpu) => { const fd = fdOpen(cpu, `/data/local/tmp/tmp${Date.now()}_${Math.floor(Math.random() * 1e6)}`, 2 | O_CREAT | O_TRUNC); return fd < 0 ? 0 : newFile(fd, F_RW); },
-    fclose: (cpu, a) => { const fp = a.p(); const fd = fileFd(fp); const r = fdClose(cpu, fd); if (fp >= 0 && !isStd(fp)) { files.delete(fp); mem.free(fp); } return r; },
+    fclose: (cpu, a) => { const fp = a.p(); pushback.delete(fp); const fd = fileFd(fp); const r = fdClose(cpu, fd); if (fp >= 0 && !isStd(fp)) { files.delete(fp); mem.free(fp); } return r; },
     fflush: (_c, a) => { const fp = a.p(); if (!fp) { for (const f of fds.values()) flushFd(f); return 0; } const f = fds.get(fileFd(fp)); if (f) flushFd(f); return 0; },
     fread: (cpu, a) => {
       const p = a.p(), sz = a.u(), n = a.u(), fp = a.p();
       const total = sz * n;
       if (!total) return 0;
-      const fin = (r: number) => { if (r < 0) { setFlag(fp, F_ERR); return 0; } if (r < total) setFlag(fp, F_EOF); return Math.floor(r / sz); };
-      const r = fdReadFully(cpu, fileFd(fp), p, total);
+      const pending = pushback.get(fp);
+      let used = 0;
+      while (used < total && pending?.length) mem.u8[p + used++] = pending.pop()!;
+      if (!pending?.length) pushback.delete(fp);
+      if (used === total) return n;
+      const fin = (r: number) => { if (r < 0) setFlag(fp, F_ERR); else if (r + used < total) setFlag(fp, F_EOF); return Math.floor((used + Math.max(0, r)) / sz); };
+      const r = fdReadFully(cpu, fileFd(fp), p + used, total - used);
       return r instanceof Promise ? r.then(fin) : fin(r);
     },
     fwrite: (cpu, a) => { const p = a.p(), sz = a.u(), n = a.u(), fp = a.p(); const total = sz * n; if (!total) return 0; const r = fwriteBytes(cpu, fp, p, total); return Math.floor(r / sz); },
-    fseek: (cpu, a) => { const fp = a.p(), off = offArg(a), wh = a.i(); const r = fdSeek(cpu, fileFd(fp), off, wh); if (r >= 0) mem.st16(fp + LAYOUT.F_FLAGS, mem.ld16u(fp + LAYOUT.F_FLAGS) & ~F_EOF); return r < 0 ? -1 : 0; },
-    fseeko: (cpu, a) => { const fp = a.p(), off = offArg(a), wh = a.i(); return fdSeek(cpu, fileFd(fp), off, wh) < 0 ? -1 : 0; },
-    ftell: (_c, a) => { const f = fds.get(fileFd(a.p())); return f ? f.pos : -1; },
-    ftello: (_c, a) => { const f = fds.get(fileFd(a.p())); return f ? f.pos : -1; },
-    rewind: (cpu, a) => { const fp = a.p(); fdSeek(cpu, fileFd(fp), 0, 0); mem.st16(fp + LAYOUT.F_FLAGS, mem.ld16u(fp + LAYOUT.F_FLAGS) & ~(F_EOF | F_ERR)); },
-    fgetpos: (_c, a) => { const f = fds.get(fileFd(a.p())); const pos = a.p(); if (!f) return -1; stp(pos, f.pos); return 0; },
-    fsetpos: (cpu, a) => { const fp = a.p(), pos = a.p(); return fdSeek(cpu, fileFd(fp), mem.ld32(pos), 0) < 0 ? -1 : 0; },
+    fseek: (cpu, a) => { const fp = a.p(), off = offArg(a); return fileSeek(cpu, fp, off, a.i()); },
+    fseeko: (cpu, a) => { const fp = a.p(), off = offArg(a); return fileSeek(cpu, fp, off, a.i()); },
+    ftell: (cpu, a) => fileTell(cpu, a.p()),
+    ftello: (cpu, a) => fileTell(cpu, a.p()),
+    rewind: (cpu, a) => { const fp = a.p(); fileSeek(cpu, fp, 0, 0); mem.st16(fp + LAYOUT.F_FLAGS, mem.ld16u(fp + LAYOUT.F_FLAGS) & ~F_ERR); },
+    fgetpos: (cpu, a) => { const fp = a.p(), pos = a.p(), value = fileTell(cpu, fp); if (value < 0) return -1; stp(pos, value); return 0; },
+    fsetpos: (cpu, a) => { const fp = a.p(), pos = a.p(); return fileSeek(cpu, fp, mem.ld32(pos), 0); },
     feof: (_c, a) => (mem.ld16u(a.p() + LAYOUT.F_FLAGS) & F_EOF ? 1 : 0),
     ferror: (_c, a) => (mem.ld16u(a.p() + LAYOUT.F_FLAGS) & F_ERR ? 1 : 0),
     clearerr: (_c, a) => { const fp = a.p(); mem.st16(fp + LAYOUT.F_FLAGS, mem.ld16u(fp + LAYOUT.F_FLAGS) & ~(F_EOF | F_ERR)); },
@@ -663,7 +683,15 @@ export function stdioInit(): void {
     getc: (cpu, a) => fgetc(cpu, a.p()),
     __srget: (cpu, a) => fgetc(cpu, a.p()),
     getchar: () => -1,
-    ungetc: (_c, a) => { const c = a.i(), fp = a.p(); const f = fds.get(fileFd(fp)); if (!f || f.pos === 0) return -1; f.pos--; if (f.data[f.pos] !== c && !f.synthetic && !f.source && !f.random) { f.data[f.pos] = c; } return c; },
+    ungetc: (_c, a) => {
+      const c = a.i(), fp = a.p();
+      if (c === -1 || !(mem.ld16u(fp + LAYOUT.F_FLAGS) & (F_RD | F_RW))) return -1;
+      let pending = pushback.get(fp);
+      if (!pending) pushback.set(fp, pending = []);
+      pending.push(c & 255);
+      mem.st16(fp + LAYOUT.F_FLAGS, mem.ld16u(fp + LAYOUT.F_FLAGS) & ~F_EOF);
+      return c & 255;
+    },
     fgets: async (cpu, a) => {
       const buf = a.p(), n = a.i(), fp = a.p();
       if (n <= 0) return 0;
@@ -693,7 +721,15 @@ export function stdioInit(): void {
       const fd = fileFd(fp), fo = fds.get(fd);
       if (!fo) return -1;
       // scan the rest of the file as text, then advance by how much the conversions consumed
-      const text = new TextDecoder().decode(fo.data.subarray(fo.pos, Math.min(fo.len, fo.pos + 65536)));
+      const pending = pushback.get(fp);
+      let data = fo.data.subarray(fo.pos, Math.min(fo.len, fo.pos + 65536));
+      if (pending?.length) {
+        const combined = new Uint8Array(pending.length + data.length);
+        for (let i = 0; i < pending.length; i++) combined[i] = pending[pending.length - i - 1];
+        combined.set(data, pending.length);
+        data = combined;
+      }
+      const text = new TextDecoder().decode(data);
       let consumed = 0;
       const r = scan(text + "", f + "%n", (kind, v) => {
         if (kind === "n") { consumed = v as number; return 0; }
@@ -704,7 +740,9 @@ export function stdioInit(): void {
         else if (kind === "s") mem.putCstr(dst, v as string);
         return 0;
       });
-      fo.pos += utf8(text.slice(0, consumed)).length;
+      const bytes = utf8(text.slice(0, consumed)).length, used = Math.min(bytes, pending?.length ?? 0);
+      if (pending) { pending.length -= used; if (!pending.length) pushback.delete(fp); }
+      fo.pos += bytes - used;
       if (r < 0) setFlag(fp, F_EOF);
       return r;
     },

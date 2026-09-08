@@ -66,6 +66,76 @@ test("fread fills complete elements across asynchronous short reads", async () =
   expect(await cpu.call(fclose!, [fp])).toBe(0);
 });
 
+test("FILE pushback is local to a stream and works on pipes through EOF", async () => {
+  const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
+  const pair = mem.malloc(8), data = mem.malloc(8);
+  await call("pipe", pair);
+  const reader = mem.ld32(pair), writer = mem.ld32(pair + 4);
+  const fp = await call("fdopen", reader, mem.hostStr("r"));
+  try {
+    expect(await call("ungetc", 0x158, fp)).toBe(88);
+    expect(await call("fseek", fp, 0, 0)).toBe(-1);
+    expect(mem.ld32(cpu.errnoAddr)).toBe(29);
+    expect(await call("getc", fp)).toBe(88);
+    mem.putCstr(data, "abc", 8);
+    expect(await call("write", writer, data, 3)).toBe(3);
+    expect(await call("getc", fp)).toBe(97);
+    expect(await call("ungetc", 88, fp)).toBe(88);
+    expect(await call("read", reader, data, 1)).toBe(1);
+    expect(mem.u8[data]).toBe(98);
+    expect(await call("ungetc", 89, fp)).toBe(89);
+    expect(await call("fread", data, 1, 3, fp)).toBe(3);
+    expect(mem.u8.slice(data, data + 3)).toEqual(Uint8Array.of(89, 88, 99));
+    await call("close", writer);
+    expect(await call("getc", fp)).toBe(-1);
+    expect(await call("feof", fp)).toBe(1);
+    expect(await call("ungetc", -1, fp)).toBe(-1);
+    expect(await call("feof", fp)).toBe(1);
+    expect(await call("ungetc", 90, fp)).toBe(90);
+    expect(await call("feof", fp)).toBe(0);
+    expect(await call("__srget", fp)).toBe(90);
+    expect(await call("getc", fp)).toBe(-1);
+  } finally { await call("fclose", fp); mem.free(pair); mem.free(data); }
+});
+
+test("FILE pushback leaves file bytes unchanged and participates in positioning", async () => {
+  const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
+  const path = "/data/stdio-pushback.bin", bytes = Uint8Array.of(97, 98, 99, 100);
+  vfs.write(path, bytes);
+  const fp = await call("fopen", mem.hostStr(path), mem.hostStr("rb"));
+  const data = mem.malloc(8), pos = mem.malloc(8);
+  try {
+    expect(await call("getc", fp)).toBe(97);
+    expect(await call("ungetc", 88, fp)).toBe(88);
+    expect(await call("ftell", fp)).toBe(0);
+    expect(await call("fread", data, 2, 2, fp)).toBe(2);
+    expect(mem.u8.slice(data, data + 4)).toEqual(Uint8Array.of(88, 98, 99, 100));
+    expect(await call("ungetc", 89, fp)).toBe(89);
+    expect(await call("ftell", fp)).toBe(3);
+    expect(await call("fgetpos", fp, pos)).toBe(0);
+    expect(mem.ld32(pos)).toBe(3);
+    expect(await call("fseek", fp, 0, 1)).toBe(0);
+    expect(await call("getc", fp)).toBe(100);
+    expect(await call("ungetc", 90, fp)).toBe(90);
+    expect(await call("fsetpos", fp, pos)).toBe(0);
+    expect(await call("getc", fp)).toBe(100);
+    expect(await call("ungetc", 90, fp)).toBe(90);
+    await call("rewind", fp);
+    expect(await call("getc", fp)).toBe(97);
+    expect(await call("ungetc", 90, fp)).toBe(90);
+    expect(await call("freopen", mem.hostStr(path), mem.hostStr("rb"), fp)).toBe(fp);
+    expect(await call("getc", fp)).toBe(97);
+    expect(await call("ungetc", 90, fp)).toBe(90);
+    expect(await call("fseeko", fp, 2, 0)).toBe(0);
+    expect(await call("getc", fp)).toBe(99);
+    expect(await call("ungetc", 57, fp)).toBe(57);
+    expect(await call("fscanf", fp, mem.hostStr("%d"), data)).toBe(1);
+    expect(mem.ld32(data)).toBe(9);
+    expect(await call("getc", fp)).toBe(100);
+  } finally { await call("fclose", fp); mem.free(data); mem.free(pos); }
+  expect(vfs.read(path)).toEqual(bytes);
+});
+
 test("socketpair status flags and aliases follow fd semantics", async () => {
   const socketpair = lookupHost("socketpair", "libc.so");
   const fcntl = lookupHost("fcntl", "libc.so");
