@@ -184,15 +184,25 @@ rt.register({
 // values only have to survive to build().
 class JNBuilder extends JObj {
   n = new JNotification();
+  extras = mkBundle();
   style: JNStyle | null = null;
 }
 const B = "Landroid/app/Notification$Builder;";
+function buildNotification(this: JNBuilder) {
+  rt.link("android/app/Notification");
+  for (const [k, v] of this.extras.map) this.n.extras.map.set(k, v);
+  return this.n;
+}
 const bMethods: Record<string, Impl> = {
   "<init>(Landroid/content/Context;)V": function () {},
   "<init>(Landroid/content/Context;Ljava/lang/String;)V": function (this: JNBuilder, _c: unknown, ch: string) { this.n.channelId = ch; },
-  "build()Landroid/app/Notification;": function (this: JNBuilder) { return this.n; },
-  "getNotification()Landroid/app/Notification;": function (this: JNBuilder) { return this.n; },
-  "getExtras()Landroid/os/Bundle;": function (this: JNBuilder) { return this.n.extras as JBundle; },
+  "build()Landroid/app/Notification;": buildNotification,
+  "getNotification()Landroid/app/Notification;": buildNotification,
+  "getExtras()Landroid/os/Bundle;": function (this: JNBuilder) { return this.extras; },
+  ["setExtras(Landroid/os/Bundle;)" + B]: function (this: JNBuilder, b: JBundle | null) {
+    if (b) this.extras = b;
+    return this;
+  },
   "getStyle()Landroid/app/Notification$Style;": function (this: JNBuilder) { return this.style; },
   ["setStyle(Landroid/app/Notification$Style;)" + B]: function (this: JNBuilder, s: JNStyle) {
     this.style = s; if (s) s.builder = this; return this;
@@ -254,7 +264,6 @@ for (const [sig, f] of Object.entries({
   "setLargeIcon(Landroid/graphics/drawable/Icon;)": "largeIcon",
   "setSmallIcon(Landroid/graphics/drawable/Icon;)": "smallIcon",
   "setPublicVersion(Landroid/app/Notification;)": "publicVersion",
-  "setExtras(Landroid/os/Bundle;)": "extras",
   "setGroup(Ljava/lang/String;)": "group",
   "setSortKey(Ljava/lang/String;)": "sortKey",
   "setChannelId(Ljava/lang/String;)": "channelId",
