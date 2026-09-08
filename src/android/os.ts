@@ -374,14 +374,22 @@ rt.register({
   });
 }
 
-export class JBundle extends JObj {
+class JBaseBundle extends JObj {
   map = new Map<string, unknown>();
   loader: unknown = null;
+}
+export class JBundle extends JBaseBundle {
+  constructor() { super(); rt.link("android/os/Bundle"); }
 }
 const bundleMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "<init>(I)V": function () {},
-  "<init>(Landroid/os/Bundle;)V": function (this: JBundle, b: JBundle) { if (b) this.map = new Map(b.map); },
+  "<init>(Landroid/os/Bundle;)V": function (this: JBundle, b: JBundle) { if (b) { this.map = new Map(b.map); this.loader = b.loader; } },
+  "clone()Ljava/lang/Object;": function (this: JBundle) {
+    const copy = new (this.constructor as typeof JBundle)();
+    copy.map = new Map(this.map); copy.loader = this.loader;
+    return copy;
+  },
   "size()I": function (this: JBundle) { return this.map.size; },
   "get(Ljava/lang/String;)Ljava/lang/Object;": function (this: JBundle, k: string) { return this.map.get(k) ?? null; },
   "isEmpty()Z": function (this: JBundle) { return this.map.size ? 0 : 1; },
@@ -432,10 +440,10 @@ for (const [t, d] of [["Parcelable", "Ljava/lang/Object;"], ["Serializable", "Lj
     return this.map.get(k) ?? null;
   };
 }
-rt.register({ name: "android/os/BaseBundle", ctor: JBundle, methods: bundleMethods });
-rt.register({ name: "android/os/Bundle", ctor: class extends JBundle {}, sup: "android/os/BaseBundle",
+rt.register({ name: "android/os/BaseBundle", ctor: JBaseBundle, methods: bundleMethods });
+rt.register({ name: "android/os/Bundle", ctor: JBundle, sup: "android/os/BaseBundle",
   ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], methods: bundleMethods });
-rt.register({ name: "android/os/PersistableBundle", ctor: class extends JBundle {}, sup: "android/os/BaseBundle",
+rt.register({ name: "android/os/PersistableBundle", ctor: class extends JBaseBundle {}, sup: "android/os/BaseBundle",
   ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], methods: bundleMethods });
 
 export const PARCELABLE = {
