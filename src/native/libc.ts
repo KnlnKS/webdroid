@@ -299,7 +299,7 @@ export function libcInit(): void {
       for (let i = 0; i < n; i++) { const d = mem.u8[x + i] - mem.u8[y + i]; if (d) return d; }
       return 0;
     },
-    memchr: (_c, a) => { const p = a.p(), c = a.i() & 255, n = a.u(); const i = mem.u8.indexOf(c, p); return i >= 0 && i < p + n ? ptr(i) : 0; },
+    memchr: (_c, a) => { const p = a.p(), c = a.i() & 255, n = a.u(); const i = mem.u8.subarray(p, p + n).indexOf(c); return i >= 0 ? ptr(p + i) : 0; },
     memrchr: (_c, a) => { const p = a.p(), c = a.i() & 255, n = a.u(); for (let i = p + n - 1; i >= p; i--) if (mem.u8[i] === c) return ptr(i); return 0; },
     bcopy: (_c, a) => { const s = a.p(), d = a.p(), n = a.u(); mem.memmove(d, s, n); },
     bzero: (_c, a) => { const d = a.p(), n = a.u(); mem.memset(d, 0, n); },

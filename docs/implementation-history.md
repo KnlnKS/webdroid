@@ -1158,6 +1158,23 @@ Generic gaps this uncovered, none Flutter-specific:
   default uncaught handler now prints the `Caused by` chain (AOSP's does; it is what named the
   real fault above).
 
+## Lichess: bounded native byte searches
+
+A headless Chrome CPU profile of Lichess startup at `6813448` spent 8.605 seconds in
+`libc.memchr`, between 0.608 and 9.222 seconds after navigation. The implementation searched
+from the input pointer to the end of the entire 4 GiB guest buffer, then checked whether the
+match fell within the requested length. Short unsuccessful searches consequently scanned
+gigabytes without advancing guest instruction counters. Restricting `indexOf` to the requested
+byte span removes that work while preserving the first-match address and unsigned-byte rules.
+The focused native test covers empty spans, excluded boundary matches, and nonzero offsets.
+This profile ended at Dart's `virtual_memory_posix.cc:723` commit failure; it does not establish
+successful application startup.
+With the bounded search and the concurrent fixed-mapping work, a second run executed 105.77M
+native instructions in 1.57 seconds of native time and reached a later JNI exception at 2.04
+seconds. `memchr` disappeared from sampled hotspots and the longest browser task was 130ms.
+The different stopping points make these work-completion measurements, not an end-to-end
+startup speedup claim.
+
 ## Among Us: Practice and code-cache pressure
 
 Validated on 2026-09-07: `PORT=4197 bun run dev`, then open
