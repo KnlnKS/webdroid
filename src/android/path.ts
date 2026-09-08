@@ -25,6 +25,42 @@ export class JPath extends JObj {
     return this.p2d;
   }
   add(op: PathOp) { this.ops.push(op); this.dirty = true; }
+  conicTo(x1: number, y1: number, x2: number, y2: number, w: number, relative = false) {
+    const last = this.ops.at(-1);
+    let x = 0, y = 0;
+    if (last?.[0] === "m" || last?.[0] === "l") { x = last[1]; y = last[2]; }
+    else if (last?.[0] === "q") { x = last[3]; y = last[4]; }
+    else if (last?.[0] === "c") { x = last[5]; y = last[6]; }
+    else if (last) {
+      let sx = 0, sy = 0;
+      for (const v of pathVerbs(this.ops)) {
+        if (v[0] === MOVE) { sx = v[1]; sy = v[2]; }
+        if (v[0] === CLOSE) { x = sx; y = sy; }
+        else { x = v[v.length - 2]; y = v[v.length - 1]; }
+      }
+    }
+    if (relative) { x1 += x; y1 += y; x2 += x; y2 += y; }
+    if (!last || last[0] === "z") this.add(["m", x, y]);
+    if (w <= 0) this.add(["l", x2, y2]);
+    else if (w === 1) this.add(["q", x1, y1, x2, y2]);
+    else if (!Number.isFinite(w)) { this.add(["l", x1, y1]); this.add(["l", x2, y2]); }
+    else {
+      // Subdivide rational quadratics with Skia's error estimate and bounded depth; path consumers
+      // can then share the existing quadratic representation.
+      const chop = (a: number, b: number, c: number, d: number, e: number, f: number, weight: number, depth: number) => {
+        const error = Math.abs((weight - 1) / (4 * (weight + 1))) * Math.hypot(a - 2 * c + e, b - 2 * d + f);
+        if (!(error > 0.25) || depth === 5) { this.add(["q", c, d, e, f]); return; }
+        const s = 1 / (1 + weight), ws = weight * s;
+        const ax = a * s + c * ws, ay = b * s + d * ws;
+        const bx = e * s + c * ws, by = f * s + d * ws;
+        const mx = (ax + bx) / 2, my = (ay + by) / 2, next = Math.sqrt((1 + weight) / 2);
+        chop(a, b, ax, ay, mx, my, next, depth + 1);
+        chop(mx, my, bx, by, e, f, next, depth + 1);
+      };
+      chop(x, y, x1, y1, x2, y2, w, 0);
+    }
+    this.curX = x2; this.curY = y2;
+  }
 }
 /**
  * The eight radii of an "rrect" op (tl.x,tl.y,tr.x,tr.y,br.x,br.y,bl.x,bl.y), shrunk by the one
@@ -387,6 +423,8 @@ rt.register({
     "lineTo(FF)V": function (this: JPath, x: number, y: number) { this.add(["l", x, y]); this.curX = x; this.curY = y; },
     "rLineTo(FF)V": function (this: JPath, x: number, y: number) { this.add(["l", this.curX + x, this.curY + y]); this.curX += x; this.curY += y; },
     "quadTo(FFFF)V": function (this: JPath, a: number, b: number, c: number, d: number) { this.add(["q", a, b, c, d]); this.curX = c; this.curY = d; },
+    "conicTo(FFFFF)V": function (this: JPath, a: number, b: number, c: number, d: number, w: number) { this.conicTo(a, b, c, d, w); },
+    "rConicTo(FFFFF)V": function (this: JPath, a: number, b: number, c: number, d: number, w: number) { this.conicTo(a, b, c, d, w, true); },
     "rQuadTo(FFFF)V": function (this: JPath, a: number, b: number, c: number, d: number) {
       this.add(["q", this.curX + a, this.curY + b, this.curX + c, this.curY + d]);
       this.curX += c; this.curY += d;

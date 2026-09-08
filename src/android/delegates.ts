@@ -503,11 +503,7 @@ delegate("android/graphics/Path", {
   "nCubicTo(JFFFFFF)V": (h: bigint, a: number, b: number, c: number, d: number, e: number, f: number) => {
     const p = path(h); p.add(["c", a, b, c, d, e, f]); p.curX = e; p.curY = f;
   },
-  // a conic is a rational quadratic; at the weights Skia uses for round joins the plain
-  // quadratic through the same control points is within a fraction of a pixel
-  "nConicTo(JFFFFF)V": (h: bigint, x1: number, y1: number, x2: number, y2: number) => {
-    const p = path(h); p.add(["q", x1, y1, x2, y2]); p.curX = x2; p.curY = y2;
-  },
+  "nConicTo(JFFFFF)V": (h: bigint, x1: number, y1: number, x2: number, y2: number, w: number) => path(h).conicTo(x1, y1, x2, y2, w),
   // the relative forms are the same ops taken from the current point
   "nRMoveTo(JFF)V": (h: bigint, dx: number, dy: number) => { const p = path(h); p.add(["m", p.curX += dx, p.curY += dy]); },
   "nRLineTo(JFF)V": (h: bigint, dx: number, dy: number) => { const p = path(h); p.add(["l", p.curX += dx, p.curY += dy]); },
@@ -521,11 +517,7 @@ delegate("android/graphics/Path", {
     p.add(["c", p.curX + a, p.curY + b, p.curX + c, p.curY + d, p.curX + e, p.curY + f]);
     p.curX += e; p.curY += f;
   },
-  "nRConicTo(JFFFFF)V": (h: bigint, a: number, b: number, c: number, d: number) => {
-    const p = path(h);
-    p.add(["q", p.curX + a, p.curY + b, p.curX + c, p.curY + d]);
-    p.curX += c; p.curY += d;
-  },
+  "nRConicTo(JFFFFF)V": (h: bigint, a: number, b: number, c: number, d: number, w: number) => path(h).conicTo(a, b, c, d, w, true),
   "nClose(J)V": (h: bigint) => { path(h).add(["z"]); },
   "nSetLastPoint(JFF)V": (h: bigint, x: number, y: number) => { const p = path(h); p.curX = x; p.curY = y; },
 
