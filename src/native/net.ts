@@ -455,27 +455,34 @@ export function nativeSocketWrite(cpu: Cpu, fd: number, source: number, length: 
   return socket.relay.write(mem.u8.slice(source, source + length)) ? length : fail(cpu, E.NOTCONN);
 }
 
+export function nativePollEvents(fd: number, events: number): number {
+  const socket = sockets.get(fd)?.socket;
+  if (!socket) return localPollProvider?.query(fd, events) ?? POLLNVAL;
+  let ready = socket.error ? POLLERR : 0;
+  if (socket.kind === "datagram") {
+    ready |= events & POLLOUT;
+    if (socket.queue.length) ready |= events & POLLIN;
+  } else {
+    if (socket.connected || socket.relay?.connected) ready |= events & POLLOUT;
+    if (socket.relay && (socket.relay.available() || socket.relay.eof)) ready |= events & POLLIN;
+    if (socket.relay?.eof) ready |= POLLHUP | (events & 0x2000);
+  }
+  return ready;
+}
+export function watchNativeFd(fd: number, wake: () => void): () => void {
+  const socket = sockets.get(fd)?.socket;
+  if (!socket) return localPollProvider?.subscribe(fd, wake) ?? (() => {});
+  socket.waiters.add(wake);
+  const remove = socket.kind === "stream" ? socket.relay?.subscribe(wake) : undefined;
+  return () => { socket.waiters.delete(wake); remove?.(); };
+}
 function scanPoll(pollfds: number, count: number): number {
   let ready = 0;
   for (let i = 0; i < count; i++) {
-    const entry = pollfds + i * 8, fd = mem.ld32(entry), events = mem.ld16u(entry + 4);
-    if (fd < 0) { mem.st16(entry + 6, 0); continue; }
-    const socket = sockets.get(fd)?.socket;
-    let revents = 0;
-    if (!socket) revents = localPollProvider?.query(fd, events) ?? POLLNVAL;
-    else {
-      if (socket.error) revents |= POLLERR;
-      if (socket.kind === "datagram") {
-        if (events & POLLOUT) revents |= POLLOUT;
-        if (socket.queue.length && events & POLLIN) revents |= POLLIN;
-      } else {
-        if ((socket.connected || socket.relay?.connected) && events & POLLOUT) revents |= POLLOUT;
-        if (socket.relay && (socket.relay.available() || socket.relay.eof) && events & POLLIN) revents |= POLLIN;
-        if (socket.relay?.eof) revents |= POLLHUP;
-      }
-    }
-    mem.st16(entry + 6, revents);
-    if (revents) ready++;
+    const entry = pollfds + i * 8, fd = mem.ld32(entry);
+    const events = fd < 0 ? 0 : nativePollEvents(fd, mem.ld16u(entry + 4));
+    mem.st16(entry + 6, events);
+    if (events) ready++;
   }
   return ready;
 }
@@ -496,19 +503,7 @@ export function nativePoll(_cpu: Cpu, pollfds: number, count: number, timeout: n
       const current = typeof target === "bigint" ? mem.txVa(target) : target;
       resolve(scanPoll(current, count));
     };
-    for (let i = 0; i < count; i++) {
-      const socket = sockets.get(mem.ld32(pollfds + i * 8))?.socket;
-      if (!socket) continue;
-      socket.waiters.add(finish);
-      cleanups.push(() => socket.waiters.delete(finish));
-      if (socket.kind === "stream" && socket.relay) cleanups.push(socket.relay.subscribe(finish));
-    }
-    if (localPollProvider) {
-      for (let i = 0; i < count; i++) {
-        const fd = mem.ld32(pollfds + i * 8);
-        if (!sockets.has(fd)) cleanups.push(localPollProvider.subscribe(fd, finish));
-      }
-    }
+    for (let i = 0; i < count; i++) cleanups.push(watchNativeFd(mem.ld32(pollfds + i * 8), finish));
     if (signal) { signal.addEventListener("abort", finish, { once: true }); cleanups.push(() => signal.removeEventListener("abort", finish)); }
     if (timeout >= 0) timer = setTimeout(finish, timeout);
   });

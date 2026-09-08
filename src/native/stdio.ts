@@ -10,7 +10,7 @@ import { format, scan } from "./printf";
 import { vfs } from "../jvm/natives/jio";
 import { device } from "../shell/config";
 import type { FileSource } from "../shell/lazyfile";
-import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketRead, nativeSocketWrite, setNativePollProvider } from "./net";
+import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd } from "./net";
 import { allocateFd, releaseFd, reserveFd } from "./fd";
 
 const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800, O_DIRECTORY = 0x4000;
@@ -19,11 +19,13 @@ const S_IFDIR = 0x4000, S_IFREG = 0x8000;
 /** a pipe: byte chunks, and whoever is parked waiting for them (a reader, or an epoll_wait) */
 interface Pipe { q: Uint8Array[]; wake: (() => void)[]; closed: boolean }
 interface Timer { clock: number; next: number; interval: number; timeout?: ReturnType<typeof setTimeout> }
+interface EpollEntry { events: number; data: bigint; pending: number; disabled: boolean; cancel: () => void }
+interface Epoll { entries: Map<number, EpollEntry>; wake: Set<() => void> }
 interface Fd {
   path: string; data: Uint8Array; len: number; pos: number; write: boolean; dirty: boolean; dir: boolean; append: boolean; statusFlags: number; references: number; line?: string; synthetic?: boolean;
-  timer?: Timer; source?: FileSource; readQueue?: Promise<void>; byte?: number; random?: boolean; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Map<number, { events: number; data: bigint }>;
+  timer?: Timer; source?: FileSource; readQueue?: Promise<void>; byte?: number; random?: boolean; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll;
 }
-const EPOLLIN = 1, EAGAIN = E.AGAIN;
+const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000, EAGAIN = E.AGAIN;
 const newPipe = (): Pipe => ({ q: [], wake: [], closed: false });
 const ready = (f: Fd): boolean => !!f.random || !!(f.rpipe && (f.rpipe.q.length || f.rpipe.closed)) || !!(f.event && f.event.count > 0);
 function wakeAll(p: { wake: (() => void)[] }): void { for (const w of p.wake.splice(0)) w(); }
@@ -249,6 +251,7 @@ function fdClose(cpu: Cpu, fd: number): number {
   if (--f.references > 0) return 0;
   flushFd(f);
   if (f.timer) clearTimeout(f.timer.timeout);
+  if (f.epoll) { for (const e of f.epoll.entries.values()) e.cancel(); for (const wake of f.epoll.wake) wake(); }
   if (f.wpipe) { f.wpipe.closed = true; wakeAll(f.wpipe); }
   return 0;
 }
@@ -297,22 +300,48 @@ function makePipe(out: number, flags: number): number {
   mem.st32(out + 4, put({ ...fdBase("pipe"), wpipe: p, nonblock: nb, write: true, statusFlags: 1 | (nb ? O_NONBLOCK : 0) }));
   return 0;
 }
-/** epoll_wait: report the registered fds that are readable; else sleep the timeout, or park until one is written */
-function epollWait(cpu: Cpu, epfd: number, events: number, max: number, timeout: number): number | Promise<number> {
-  const table = fds.get(epfd)?.epoll;
-  if (!table) return fail(cpu, E.BADF);
-  let n = 0;
-  for (const [fd, e] of table) {
-    const f = fds.get(fd);
-    if (n < max && f && (e.events & EPOLLIN) && ready(f)) { mem.st32(events + n * 16, EPOLLIN); mem.st64(events + n * 16 + 8, e.data); n++; }
+function epollWatch(ep: Epoll, fd: number, events: number, data: bigint): EpollEntry {
+  const entry: EpollEntry = { events, data, pending: nativePollEvents(fd, events), disabled: false, cancel: () => {} };
+  let active = true, remove = () => {};
+  const watch = () => {
+    if (!active) return;
+    remove = watchNativeFd(fd, () => {
+      remove();
+      entry.pending |= nativePollEvents(fd, entry.events);
+      for (const wake of ep.wake) wake();
+      queueMicrotask(watch);
+    });
+  };
+  entry.cancel = () => { active = false; remove(); };
+  watch();
+  return entry;
+}
+async function epollWait(cpu: Cpu, epfd: number, events: bigint, max: number, timeout: number): Promise<number> {
+  const ep = fds.get(epfd)?.epoll, deadline = performance.now() + timeout;
+  if (!ep) return fail(cpu, E.BADF);
+  if (max <= 0) return fail(cpu, E.INVAL);
+  for (;;) {
+    let n = 0;
+    for (const [fd, e] of ep.entries) {
+      if (!fds.has(fd) && !isNativeSocket(fd)) { e.cancel(); ep.entries.delete(fd); continue; }
+      if (e.disabled) continue;
+      const ready = nativePollEvents(fd, e.events) & (e.events & EPOLLET ? e.pending : -1);
+      if (!ready || n === max) continue;
+      const out = mem.txVa(events) + n++ * 16;
+      mem.st32(out, ready); mem.st64(out + 8, e.data);
+      e.pending &= ~ready;
+      if (e.events & EPOLLONESHOT) e.disabled = true;
+    }
+    if (n || timeout === 0) return n;
+    const remaining = deadline - performance.now();
+    if (timeout > 0 && remaining <= 0) return 0;
+    await new Promise<void>((resolve) => {
+      const done = () => { ep.wake.delete(done); clearTimeout(timer); resolve(); };
+      const timer = timeout < 0 ? undefined : setTimeout(done, remaining);
+      ep.wake.add(done);
+    });
+    if (fds.get(epfd)?.epoll !== ep) return fail(cpu, E.BADF);
   }
-  if (n || timeout === 0) return n;
-  return new Promise<void>((r) => {
-    let done = false;
-    const once = () => { if (!done) { done = true; clearTimeout(t); r(); } };
-    const t = timeout < 0 ? undefined : setTimeout(once, timeout);
-    for (const fd of table.keys()) { const f = fds.get(fd); if (f) waitOn(f, once); }
-  }).then(() => epollWait(cpu, epfd, mem.rephys(events), max, 0));
 }
 function armTimer(f: Fd): void {
   const timer = f.timer!, event = f.event!;
@@ -529,16 +558,23 @@ export function stdioInit(): void {
       timerState(f.timer, out); return 0;
     },
     eventfd: (_c, a) => { const init = a.u(), flags = a.i(); return put({ ...fdBase("eventfd"), event: { count: init, wake: [] }, nonblock: !!(flags & O_NONBLOCK), statusFlags: 2 | (flags & O_NONBLOCK) }); },
-    epoll_create: () => put({ ...fdBase("epoll"), epoll: new Map(), statusFlags: 2 }),
-    epoll_create1: () => put({ ...fdBase("epoll"), epoll: new Map(), statusFlags: 2 }),
+    epoll_create: () => put({ ...fdBase("epoll"), epoll: { entries: new Map(), wake: new Set() }, statusFlags: 2 }),
+    epoll_create1: () => put({ ...fdBase("epoll"), epoll: { entries: new Map(), wake: new Set() }, statusFlags: 2 }),
     epoll_ctl: (cpu, a) => {
-      const ep = fds.get(a.i()), op = a.i(), fd = a.i(), ev = a.p();
-      if (!ep?.epoll || !fds.has(fd)) return fail(cpu, E.BADF);
-      if (op === 2) ep.epoll.delete(fd); else ep.epoll.set(fd, { events: mem.ld32(ev), data: mem.ld64(ev + 8) });
+      const epfd = a.i(), ep = fds.get(epfd)?.epoll, op = a.i(), fd = a.i(), ev = a.p();
+      if (fd === epfd) return fail(cpu, E.INVAL);
+      if (!ep || (!fds.has(fd) && !isNativeSocket(fd))) return fail(cpu, E.BADF);
+      const old = ep.entries.get(fd);
+      if (op === 1 && old) return fail(cpu, E.EXIST);
+      if ((op === 2 || op === 3) && !old) return fail(cpu, E.NOENT);
+      if (op < 1 || op > 3) return fail(cpu, E.INVAL);
+      old?.cancel();
+      if (op === 2) ep.entries.delete(fd); else ep.entries.set(fd, epollWatch(ep, fd, mem.ld32(ev), mem.ld64(ev + 8)));
+      for (const wake of ep.wake) wake();
       return 0;
     },
-    epoll_wait: (cpu, a) => epollWait(cpu, a.i(), a.p(), a.i(), a.i()),
-    epoll_pwait: (cpu, a) => epollWait(cpu, a.i(), a.p(), a.i(), a.i()),
+    epoll_wait: (cpu, a) => epollWait(cpu, a.i(), a.va(), a.i(), a.i()),
+    epoll_pwait: (cpu, a) => epollWait(cpu, a.i(), a.va(), a.i(), a.i()),
     sendfile: (cpu) => fail(cpu, E.NOSYS),
     __read_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(); if (n > a.u()) cpu.fault("fortify: read past the buffer"); return fdRead(cpu, fd, p, n); },
     __pread64_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); if (n > a.u()) cpu.fault("fortify: pread past the buffer"); const f = fds.get(fd); return f ? fdReadAt(cpu, f, p, n, off) : fail(cpu, E.BADF); },
