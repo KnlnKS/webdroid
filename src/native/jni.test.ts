@@ -1,11 +1,12 @@
 import { DexFile } from "../jvm/dex";
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mainThread, vcall } from "../jvm/natives/jlang";
+import { JThread, mainThread, vcall } from "../jvm/natives/jlang";
 import { JBuffer, bufferView } from "../jvm/natives/jnio";
 import { JCtor } from "../jvm/natives/jreflect";
 import { JObj, rt } from "../jvm/runtime";
 import { Cpu, setA64 } from "./cpu";
-import { ldp, PTR } from "./host";
+import { hostDispatch, ldp, PTR } from "./host";
+import { trampSlot } from "./abi";
 import { deref, jniInit, javaVM } from "./jni";
 import { mem } from "./mem";
 
@@ -27,6 +28,49 @@ beforeAll(() => {
   cpu = new Cpu(mainThread, "jni constructor test");
 });
 afterAll(() => setA64(false));
+
+test("JNI monitors share Java ownership, suspend only under contention, and pend invalid exits", async () => {
+  const envOut = mem.hostAlloc(PTR);
+  await cpu.call(ldp(ldp(javaVM.addr) + 6 * PTR), [javaVM.addr, envOut, 0x10006]);
+  const env = ldp(envOut);
+  const local = await cpu.call(jni(env, 167), [env, mem.hostStr("JNI monitor")]);
+  const ref = await cpu.call(jni(env, 21), [env, local]);
+  const obj = deref(ref);
+  if (typeof obj !== "string") throw new Error("NewStringUTF did not return a string");
+  const thread = new JThread(), native = new Cpu(thread, "JNI monitor test"), java = new JThread();
+  const call = (index: number, object = ref) => {
+    native.r[0] = env; native.r[1] = object; native.h[0] = native.h[1] = 0;
+    hostDispatch(native, trampSlot(jni(env, index)));
+    return native.pending ?? native.r[0];
+  };
+  try {
+    expect(call(217)).toBe(0);
+    expect(call(217)).toBe(0);
+    expect(rt.monitors.holds(obj, thread)).toBe(true);
+    const entered = rt.monitors.enter(obj, java);
+    expect(entered).toBeInstanceOf(Promise);
+    expect(call(218)).toBe(0);
+    expect(rt.monitors.holds(obj, thread)).toBe(true);
+    expect(call(218)).toBe(0);
+    await entered;
+    expect(rt.monitors.holds(obj, java)).toBe(true);
+    expect(call(218)).toBe(-1);
+    expect(native.exc).toBeInstanceOf(rt.link("java/lang/IllegalMonitorStateException").ctor);
+    native.exc = null;
+    const pending = call(217);
+    expect(pending).toBeInstanceOf(Promise);
+    rt.monitors.exit(obj, java);
+    expect(await pending).toBe(0);
+    native.pending = null;
+    expect(rt.monitors.holds(obj, thread)).toBe(true);
+    expect(call(218)).toBe(0);
+    expect(call(217, 0)).toBe(-1);
+    expect(native.exc).toBeInstanceOf(rt.link("java/lang/NullPointerException").ctor);
+  } finally {
+    native.exc = null;
+    await cpu.call(jni(env, 22), [env, ref]);
+  }
+});
 
 test("JNI direct buffers share native writes with Java slices and typed views", async () => {
   const envOut = mem.hostAlloc(PTR);

@@ -442,8 +442,16 @@ export function jniInit(): void {
     return 0;
   });
   def(216, "UnregisterNatives", () => 0);
-  def(217, "MonitorEnter", () => 0);
-  def(218, "MonitorExit", () => 0);
+  for (const [index, name, enter] of [[217, "MonitorEnter", true], [218, "MonitorExit", false]] satisfies [number, string, boolean][]) {
+    def(index, name, (cpu, a) => {
+      a.p(); const obj = deref(a.p());
+      try {
+        if (typeof obj !== "object" && typeof obj !== "string") throw throwable("java/lang/NullPointerException", "JNI monitor reference");
+        const pending = enter ? rt.monitors.enter(obj, cpu.jthread) : rt.monitors.exit(obj, cpu.jthread);
+        return pending ? pending.then(() => 0, (e) => { pend(cpu, e); return -1; }) : 0;
+      } catch (e) { pend(cpu, e); return -1; }
+    });
+  }
   def(219, "GetJavaVM", (_c, a) => { a.p(); stp(a.p(), javaVM.addr); return 0; });
   def(226, "NewWeakGlobalRef", T[21]!);
   def(227, "DeleteWeakGlobalRef", T[22]!);
