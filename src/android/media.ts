@@ -8,6 +8,19 @@ rt.register({ name: "android/media/AudioManager$OnAudioFocusChangeListener", cto
 export const outputSampleRate = (): number => actx?.sampleRate ?? 44100;
 import { onMain } from "./mainloop";
 import { reportUncaught } from "./os";
+import { mkUri } from "./net";
+
+rt.register({ name: "android/media/RingtoneManager", ctor: class extends JObj {},
+  statics: { TYPE_RINGTONE: 1, TYPE_NOTIFICATION: 2, TYPE_ALARM: 4, TYPE_ALL: 7 },
+  methods: {
+    "static getDefaultUri(I)Landroid/net/Uri;": (type: number) => {
+      const setting = type & 1 ? "ringtone" : type & 2 ? "notification_sound" : type & 4 ? "alarm_alert" : null;
+      if (!setting) return null;
+      rt.link("android/net/Uri");
+      return mkUri("content://settings/system/" + setting);
+    },
+  },
+});
 
 rt.register({ name: "android/media/Image", ctor: class extends JObj {}, ifaces: ["java/lang/AutoCloseable"] });
 

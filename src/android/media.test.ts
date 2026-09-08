@@ -2,6 +2,17 @@ import { expect, test } from "bun:test";
 import "../natives";
 import { rt } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
+import { mangleMethod } from "../jvm/abi";
+
+test("default ringtone URIs identify settings with Android type-mask precedence", async () => {
+  const manager = rt.link("android/media/RingtoneManager").ctor;
+  const get = manager[mangleMethod("getDefaultUri", "(I)Landroid/net/Uri;")];
+  for (const [type, setting] of [[1, "ringtone"], [2, "notification_sound"], [4, "alarm_alert"], [7, "ringtone"], [6, "notification_sound"]] as const) {
+    const uri = get(type);
+    expect(await vcall(uri, "toString", "()Ljava/lang/String;")).toBe("content://settings/system/" + setting);
+  }
+  expect(get(0)).toBeNull(); expect(get(8)).toBeNull();
+});
 
 test("audio attribute builds are independent values with normalized notification usage", async () => {
   rt.link("android/media/AudioAttributes");
