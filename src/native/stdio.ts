@@ -344,6 +344,12 @@ function statPath(cpu: Cpu, path: string, buf: number): number {
   fillStat(buf, false, file.size, Date.now(), path);
   return 0;
 }
+function statFd(cpu: Cpu, fd: number, buf: number): number {
+  const f = fds.get(fd);
+  if (!f) return fail(cpu, E.BADF);
+  fillStat(buf, f.dir, f.len, Date.now(), f.path);
+  return 0;
+}
 
 // ── FILE* layer: the struct is real (guest code inspects _flags/_file through macros), the
 // buffering is ours (_r = _w = 0 so getc/putc always take the function path).
@@ -430,9 +436,16 @@ export function stdioInit(): void {
     pwrite64: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(), off = Number(a.l()); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); const save = f.pos; f.pos = off; const r = fdWrite(cpu, fd, p, n); f.pos = save; return r; },
     lseek: (cpu, a) => (PTR === 8 ? BigInt(fdSeek(cpu, a.i(), Number(a.l()), a.i())) : fdSeek(cpu, a.i(), a.i(), a.i())),
     lseek64: (cpu, a) => BigInt(fdSeek(cpu, a.i(), Number(a.l()), a.i())),
-    fstat: (cpu, a) => { const fd = a.i(), buf = a.p(); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); fillStat(buf, f.dir, f.len, Date.now(), f.path); return 0; },
+    fstat: (cpu, a) => statFd(cpu, a.i(), a.p()),
     stat: (cpu, a) => statPath(cpu, a.str(), a.p()),
     lstat: (cpu, a) => statPath(cpu, a.str(), a.p()),
+    fstatat: (cpu, a) => {
+      const fd = a.i(), name = a.str(), buf = a.p(), flags = a.i();
+      if (flags & ~(0x100 | 0x1000)) return fail(cpu, E.INVAL);
+      if (!name) return flags & 0x1000 ? statFd(cpu, fd, buf) : fail(cpu, E.NOENT);
+      const path = atPath(cpu, fd, name);
+      return typeof path === "string" ? statPath(cpu, path, buf) : path;
+    },
     access: (cpu, a) => accessPath(cpu, a.str(), a.i()),
     faccessat: (cpu, a) => {
       const path = atPath(cpu, a.i(), a.str()), mode = a.i(), flags = a.i();
@@ -658,6 +671,7 @@ export function stdioInit(): void {
     perror: (_c, a) => { const s = a.p(); logLine(6, "stderr", (s ? mem.cstr(s) + ": " : "") + "error"); },
   };
   M.__openat_2 = M.openat;
+  for (const name of ["stat", "fstat", "lstat", "fstatat"]) M[name + "64"] = M[name];
   scratch = mem.hostAlloc(16);
   const isStd = (fp: number) => fp >= sF && fp < sF + 3 * LAYOUT.FILE_SIZE;
   hostLib("libc.so", M);

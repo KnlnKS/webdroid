@@ -80,6 +80,13 @@ test("directory-relative file operations resolve an open directory", async () =>
   expect(await cpu.call(mkdir, [dir, mem.hostStr("child"), 0o700])).toBe(-1);
   expect(mem.ld32(cpu.errnoAddr)).toBe(17);
   const fd = await cpu.call(openat, [dir, mem.hostStr("value"), 0]);
+  const stat = lookupHost("fstatat64", "libc.so")!, info = mem.hostAlloc(128);
+  expect(await cpu.call(stat, [dir, mem.hostStr("value"), info, 0])).toBe(0);
+  expect(mem.ld64(info + 48)).toBe(1n);
+  expect(await cpu.call(stat, [fd, mem.hostStr(""), info, 0x1000])).toBe(0);
+  expect(mem.ld64(info + 48)).toBe(1n);
+  expect(await cpu.call(stat, [fd, mem.hostStr("value"), info, 0])).toBe(-1);
+  expect(mem.ld32(cpu.errnoAddr)).toBe(20);
   const access = lookupHost("faccessat", "libc.so")!;
   expect(await cpu.call(access, [dir, mem.hostStr("value"), 4, 0])).toBe(0);
   expect(await cpu.call(access, [dir, mem.hostStr("absent"), 0, 0])).toBe(-1);
