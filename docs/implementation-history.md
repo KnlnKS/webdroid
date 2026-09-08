@@ -1411,3 +1411,34 @@ Focused tests verify generated X.509 signatures independently, restore persisted
 SHA-1 OAEP with Node crypto and SHA-256/MGF1-SHA1 wrapping with OpenSSL, and reject tampered
 ciphertexts. Headless Lichess startup passes this initialization and next reaches
 KeyguardManager.isDeviceSecure. This is startup progress, not a final rendering result.
+
+
+## Scoped locales: retain encoded variants, decode on first use
+
+Lichess's localization channel constructs a Configuration and calls
+Context.createConfigurationContext before looking up a string. Returning the original context
+lost that locale. Scoped resource views now share parsed tables and archive data while owning
+configuration, metrics, themes, and selector/bag caches. They are not added to the device resource
+registry; repeated localization requests can be collected. The framework table is scoped too.
+
+Removing language/direction parse-time pruning eagerly was rejected after isolated Bun parsing
+of Lichess and the paired framework resources. Five warm parses plus a retained-heap measurement
+after GC gave these representative results (heapUsed, not process RSS):
+
+| Table | Original median / heap | Eager locales median / heap | Lazy locales median / heap |
+| --- | --- | --- | --- |
+| Lichess | 0.44–0.46 ms / 0.69 MB | 0.58 ms / 1.10 MB | 0.45 ms / 0.74 MB |
+| Framework | 21.90–22.03 ms / 25.78 MB | 25.92 ms / 54.05 MB | 21.78 ms / 27.33 MB |
+
+Eager decoding retained 230,674 framework entries instead of 37,099. Lazy chunks retain their
+source buffer and name pools, decode only a requested locale/direction/type, and share decoded
+entries and cached chunk selections across scoped views. Default decoded entry counts remain
+37,099 for the framework and 2,529 for Lichess. First French selection across sampled types took
+0.48 ms and 0.08 ms respectively. A single 100,000-lookup microbenchmark measured 28.5 ms versus
+27.3 ms for framework defaults and 6.8 ms versus 6.5 ms for Lichess; these small differences need
+longer controlled runs before interpretation. Other parse-time size/UI-type viability rules
+remain in place; this change addresses runtime language and direction selection.
+
+Focused tests build real binary resource chunks and exercise Java Context/Resources dispatch,
+local configuration updates, shared lazy decoding, and selector-cache isolation. Full E2E was
+reserved for the end of the Lichess investigation as requested.

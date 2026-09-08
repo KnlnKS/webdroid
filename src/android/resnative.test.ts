@@ -5,7 +5,9 @@ import { mangleMethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { JLocale } from "../jvm/natives/jvalues";
 import { Arsc } from "./arsc";
-import { Resources } from "./res";
+import { Resources, JTheme, rvColor } from "./res";
+import { JContext } from "./context";
+import type { AppHost } from "./apphost";
 import { JResources, deviceConfiguration } from "./resnative";
 
 function locale(tag: string): JLocale {
@@ -86,4 +88,79 @@ test("Resources applies language qualifiers only when accepting a configuration"
     await vcall(resources, "updateConfiguration", "(Landroid/content/res/Configuration;Landroid/util/DisplayMetrics;)V", saved, null);
   }
   expect(resources.host.ref(0x7f010000).d).toBe(1);
+});
+
+
+function localizedTable(): Arsc {
+  const pool = (strings: string[]) => {
+    const encoded = strings.map(s => new TextEncoder().encode(s));
+    const start = 28 + strings.length * 4, size = (start + encoded.reduce((n, b) => n + b.length + 3, 0) + 3) & ~3;
+    const bytes = new Uint8Array(size), v = new DataView(bytes.buffer);
+    v.setUint16(0, 1, true); v.setUint16(2, 28, true); v.setUint32(4, size, true);
+    v.setUint32(8, strings.length, true); v.setUint32(16, 0x100, true); v.setUint32(20, start, true);
+    let offset = start;
+    for (let i = 0; i < strings.length; i++) {
+      v.setUint32(28 + i * 4, offset - start, true);
+      bytes[offset++] = strings[i].length; bytes[offset++] = encoded[i].length;
+      bytes.set(encoded[i], offset); offset += encoded[i].length + 1;
+    }
+    return bytes;
+  };
+  const types = pool(["string", "drawable"]), keys = pool(["greeting"]), values = pool(["Hello", "Bonjour", "مرحبا"]);
+  const chunks: Uint8Array[] = [];
+  for (const [language, direction, value] of [["", 0, 0], ["fr", 0, 1], ["ar", 0x80, 2]] as const) {
+    for (const id of [1, 2]) {
+      const bytes = new Uint8Array(72), v = new DataView(bytes.buffer);
+      v.setUint16(0, 0x201, true); v.setUint16(2, 52, true); v.setUint32(4, 72, true);
+      bytes[8] = id; v.setUint32(12, 1, true); v.setUint32(16, 56, true); v.setUint32(20, 32, true);
+      if (language) { bytes[28] = language.charCodeAt(0); bytes[29] = language.charCodeAt(1); }
+      bytes[48] = direction; v.setUint16(56, 8, true); v.setUint16(64, 8, true);
+      bytes[67] = id === 1 ? 3 : 0x1c; v.setUint32(68, id === 1 ? value : 0xff001100 + value, true);
+      chunks.push(bytes);
+    }
+  }
+  const packageSize = 288 + types.length + keys.length + chunks.reduce((n, b) => n + b.length, 0);
+  const bytes = new Uint8Array(12 + values.length + packageSize), v = new DataView(bytes.buffer);
+  v.setUint16(0, 2, true); v.setUint16(2, 12, true); v.setUint32(4, bytes.length, true); v.setUint32(8, 1, true);
+  bytes.set(values, 12);
+  const base = 12 + values.length;
+  v.setUint16(base, 0x200, true); v.setUint16(base + 2, 288, true); v.setUint32(base + 4, packageSize, true);
+  v.setUint32(base + 8, 0x7f, true); v.setUint32(base + 268, 288, true); v.setUint32(base + 276, 288 + types.length, true);
+  let offset = base + 288;
+  for (const chunk of [types, keys, ...chunks]) { bytes.set(chunk, offset); offset += chunk.length; }
+  return new Arsc(bytes);
+}
+
+test("scoped contexts lazily share localized entries without changing other contexts or caches", async () => {
+  const table = localizedTable(), resources = new JResources(), theme = new JTheme();
+  rt.link("android/content/Context"); rt.link("android/content/res/Resources");
+  resources.host = new Resources(table, {}); theme.res = resources.host;
+  const unused = () => { throw new Error("unexpected app lifecycle call"); };
+  const host: AppHost = { res: resources.host, jresources: resources, theme, pkg: "test", apkFile: "", appLabel: "", themeResId: 0,
+    iconRes: 0, zip: {}, splits: [], application: null, statusBarColor: 0, navBarColor: 0, launch: unused,
+    finishActivity: unused, recreateActivity: unused, setRequestedOrientation: unused, currentActivity: () => null, invalidateOptionsMenu: unused };
+  const context = new JContext(); context.$host = host;
+  const french = newConfig();
+  await vcall(french, "setLocale", "(Ljava/util/Locale;)V", locale("fr"));
+  const scoped = await vcall(context, "createConfigurationContext", "(Landroid/content/res/Configuration;)Landroid/content/Context;", french);
+  const scopedRes = await vcall(scoped, "getResources", "()Landroid/content/res/Resources;");
+  const decoded = () => [...table.types.values()].flat().filter(c => c.entries.size).length;
+  expect(decoded()).toBe(2);
+  expect(await vcall(scoped, "getString", "(I)Ljava/lang/String;", 0x7f010000)).toBe("Bonjour");
+  expect(decoded()).toBe(3);
+  expect(await vcall(context, "getString", "(I)Ljava/lang/String;", 0x7f010000)).toBe("Hello");
+  const second = await vcall(context, "createConfigurationContext", "(Landroid/content/res/Configuration;)Landroid/content/Context;", french);
+  expect(await vcall(second, "getString", "(I)Ljava/lang/String;", 0x7f010000)).toBe("Bonjour");
+  expect(decoded()).toBe(3);
+  expect(rvColor(resources.host, { t: 1, d: 0x7f020000 })).toBe(0xff001100 | 0);
+  expect(rvColor(scoped.$host.res, { t: 1, d: 0x7f020000 })).toBe(0xff001101 | 0);
+  expect(rvColor(resources.host, { t: 1, d: 0x7f020000 })).toBe(0xff001100 | 0);
+  await vcall(french, "setLocale", "(Ljava/util/Locale;)V", locale("ar"));
+  expect(await vcall(scoped, "getString", "(I)Ljava/lang/String;", 0x7f010000)).toBe("Bonjour");
+  await vcall(scopedRes, "updateConfiguration", "(Landroid/content/res/Configuration;Landroid/util/DisplayMetrics;)V", french, null);
+  expect(await vcall(scoped, "getString", "(I)Ljava/lang/String;", 0x7f010000)).toBe("مرحبا");
+  expect(rvColor(scoped.$host.res, { t: 1, d: 0x7f020000 })).toBe(0xff001102 | 0);
+  expect(await vcall(second, "getString", "(I)Ljava/lang/String;", 0x7f010000)).toBe("Bonjour");
+  expect(deviceConfiguration().locale?.lang).toBe("en");
+  expect(await vcall(scoped, "getTheme", "()Landroid/content/res/Resources$Theme;")).not.toBe(theme);
 });

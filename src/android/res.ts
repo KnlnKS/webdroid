@@ -85,9 +85,8 @@ const allResources: Resources[] = [];
 export function currentResources(): Resources | null { return allResources[allResources.length - 1] ?? null; }
 export function setResourceNight(night: boolean): void {
   configGen++;
-  selCache.clear();
   for (const r of allResources) {
-    r.bagCache.clear();
+    r.invalidate();
     if (r.arsc) r.arsc.device.night = night ? 1 : 0;
   }
   if (fwPkg) {
@@ -97,9 +96,8 @@ export function setResourceNight(night: boolean): void {
 
 export function setResourceLocale(lang: string, dir: number): void {
   configGen++;
-  selCache.clear();
   for (const r of allResources) {
-    r.bagCache.clear();
+    r.invalidate();
     if (r.arsc) Object.assign(r.arsc.device, { lang, dir });
   }
   if (fwPkg) Object.assign(fwPkg.device, { lang, dir });
@@ -108,10 +106,9 @@ export function setResourceLocale(lang: string, dir: number): void {
 /** Re-resolve orientation and size-qualified entries in every live resource table. */
 export function setResourceOrientation(orientation: number, wdp: number, hdp: number, swdp: number): void {
   configGen++;
-  selCache.clear();
   const update = (a: Arsc) => Object.assign(a.device, { orientation, wdp, hdp, swdp });
   for (const r of allResources) {
-    r.bagCache.clear();
+    r.invalidate();
     if (r.arsc) update(r.arsc);
   }
   if (fwPkg) update(fwPkg);
@@ -135,17 +132,29 @@ export class Resources {
   lazyEntries: Map<string, FileSource>;
   dm = new JDisplayMetrics();
   bagCache = new Map<number, Bag | null>();
+  selectorCache = new Map<number, number>();
+  private framework: Arsc | null | undefined;
   jobj: any = null; // android.content.res.Resources instance
 
-  constructor(arsc: Arsc | null, zip: Record<string, Uint8Array>, lazyEntries = new Map<string, FileSource>()) {
+  constructor(arsc: Arsc | null, zip: Record<string, Uint8Array>, lazyEntries = new Map<string, FileSource>(), scoped = false) {
     this.arsc = arsc;
     this.zip = zip;
     this.lazyEntries = lazyEntries;
-    allResources.push(this);
+    if (!scoped) allResources.push(this);
+  }
+
+  invalidate(): void { this.bagCache.clear(); this.selectorCache.clear(); configGen++; }
+
+  scoped(qualifiers: Partial<Arsc["device"]>): Resources {
+    const copy = (table: Arsc | null): Arsc | null => table && Object.assign(Object.create(table), { device: { ...table.device, ...qualifiers } });
+    const res = new Resources(copy(this.arsc), this.zip, this.lazyEntries, true);
+    res.framework = copy(this.tbl(0x01000000));
+    Object.assign(res.dm, this.dm);
+    return res;
   }
 
   /** the table a resource id belongs to: package 0x01 is the framework, anything else the app */
-  tbl(resId: number): Arsc | null { return resId >>> 24 === 0x01 ? fwPkg : this.arsc; }
+  tbl(resId: number): Arsc | null { return resId >>> 24 === 0x01 ? (this.framework === undefined ? fwPkg : this.framework) : this.arsc; }
 
   /** the archive path a file resource names, the package that owns it, and the id the
    *  reference chain ended on — everything but the bytes, which cost an inflate */
@@ -388,8 +397,8 @@ export function rvColor(res: Resources, v: RV | null, dflt = 0, depth = 0): numb
   if (v.t === T_STR && v.s?.startsWith("#")) return parseColor(v.s);
   return dflt;
 }
-const selCache = new Map<number, number>();
 function colorFromSelector(res: Resources, resId: number, dflt: number): number {
+  const selCache = res.selectorCache;
   const c = selCache.get(resId);
   if (c !== undefined) return c;
   selCache.set(resId, dflt); // guard against re-entry

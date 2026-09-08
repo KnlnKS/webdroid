@@ -10,7 +10,7 @@ import { contentResolver } from "./contentresolver";
 import { mainLooper, mainExecutor } from "./os";
 import { getPrefs } from "./sharedprefs";
 import { loadColorStateList, loadDrawable } from "./drawable";
-import { JAssetManager } from "./resnative";
+import { JAssetManager, type JConfiguration, scopedResources } from "./resnative";
 import { dbPath } from "./sqlite";
 import { type JIntent, launchIntent } from "./intent";
 import { svcStart, svcStop } from "./runningservices";
@@ -60,6 +60,7 @@ const SERVICE_CLASS: Record<string, string> = {
   autofill: "android/view/autofill/AutofillManager",
   textservices: "android/view/textservice/TextServicesManager",
   user: "android/os/UserManager",
+  shortcut: "android/content/pm/ShortcutManager",
   permission_controller: "android/permission/PermissionControllerManager",
 };
 const SERVICE_NAME = new Map(Object.entries(SERVICE_CLASS).map(([n, c]) => [c, n]));
@@ -250,7 +251,14 @@ export const contextMethods: NativeSpec["methods"] = {
     });
     return ta;
   },
-  "createConfigurationContext(Landroid/content/res/Configuration;)Landroid/content/Context;": function (this: JContext) { return this; },
+  "createConfigurationContext(Landroid/content/res/Configuration;)Landroid/content/Context;": function (this: JContext, config: JConfiguration) {
+    const jresources = scopedResources(this.$host.res, config), theme = new JTheme();
+    theme.res = jresources.host;
+    theme.styles = (themeOf(this) ?? this.$host.theme).styles.slice();
+    const context = new JContext();
+    context.$host = Object.assign(Object.create(this.$host), { res: jresources.host, jresources, theme });
+    return context;
+  },
   "createDeviceProtectedStorageContext()Landroid/content/Context;": function (this: JContext) { return this; },
   "isDeviceProtectedStorage()Z": () => 0,
   "isRestricted()Z": () => 0,

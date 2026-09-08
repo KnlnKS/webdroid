@@ -8,7 +8,7 @@ const config = (orientation: number, wdp = 0, hdp = 0) => ({
 
 describe("resource orientation", () => {
   test("selects a retained -land entry after either axis swap", () => {
-    const table: Arsc = Object.create(Arsc.prototype);
+    const table = new Arsc(new Uint8Array([2, 0, 8, 0, 8, 0, 0, 0]));
     table.pkgId = 0x7f;
     table.types = new Map();
     table.device = {

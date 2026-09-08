@@ -15,6 +15,7 @@ import { fontResource } from "./fonts";
 
 export class JResources extends JObj {
   host!: Resources;
+  config: JConfiguration | null = null;
 }
 /** the app's Resources double as the system ones: framework attrs resolve through the same table */
 let systemRes: JResources | null = null;
@@ -48,7 +49,7 @@ function setLocales(c: JConfiguration, list: JLocaleList | null): void {
   c.locale = c.locales.values[0] ?? null;
   c.screenLayout = (c.screenLayout & ~0xc0) | ((localeDirection(c.locale) + 1) << 6);
 }
-class JConfiguration extends JObj {
+export class JConfiguration extends JObj {
   orientation = device.orientation;
   screenWidthDp = device.widthDp; screenHeightDp = device.heightDp;
   smallestScreenWidthDp = device.smallestWidthDp;
@@ -144,6 +145,23 @@ function applyDeviceConfiguration(c: JConfiguration): void {
   if (theConfig.locale?.lang !== lang || (theConfig.screenLayout & 0xc0) !== dir) {
     setResourceLocale(theConfig.locale?.lang ?? "", theConfig.screenLayout & 0xc0);
   }
+}
+function configurationQualifiers(c: JConfiguration) {
+  return { lang: c.locale?.lang ?? "", dir: c.screenLayout & 0xc0, night: (c.uiMode & 0x30) === 0x20 ? 1 : 0,
+    orientation: c.orientation, density: c.densityDpi, wdp: c.screenWidthDp, hdp: c.screenHeightDp,
+    swdp: c.smallestScreenWidthDp, size: c.screenLayout & 0xf, uiType: c.uiMode & 0xf };
+}
+export function scopedResources(source: Resources, config: JConfiguration): JResources {
+  if (!config) throw rt.mkThrowable("java/lang/IllegalArgumentException", "overrideConfiguration must not be null");
+  const r = new JResources();
+  r.config = Object.assign(new JConfiguration(), config);
+  configLocales(r.config);
+  r.host = source.scoped(configurationQualifiers(r.config));
+  r.host.jobj = r;
+  r.host.dm.densityDpi = config.densityDpi;
+  r.host.dm.density = config.densityDpi / 160;
+  r.host.dm.scaledDensity = r.host.dm.density * config.fontScale;
+  return r;
 }
 export const deviceConfiguration = (): JConfiguration => theConfig;
 /** Keep Configuration and resource qualifiers in step with the shell framebuffer. */
@@ -292,7 +310,7 @@ const resMethods: NativeSpec["methods"] = {
       return this.host.idFor(type, n, pkg);
     },
   "getDisplayMetrics()Landroid/util/DisplayMetrics;": function (this: JResources) { return this.host.dm; },
-  "getConfiguration()Landroid/content/res/Configuration;": () => theConfig,
+  "getConfiguration()Landroid/content/res/Configuration;": function (this: JResources) { return this.config ?? theConfig; },
   "newTheme()Landroid/content/res/Resources$Theme;": function (this: JResources) {
     const t = new JTheme();
     t.res = this.host;
@@ -314,7 +332,15 @@ const resMethods: NativeSpec["methods"] = {
   "getLayout(I)Landroid/content/res/XmlResourceParser;": xmlParser,
   "getXml(I)Landroid/content/res/XmlResourceParser;": xmlParser,
   "getAnimation(I)Landroid/content/res/XmlResourceParser;": xmlParser,
-  "updateConfiguration(Landroid/content/res/Configuration;Landroid/util/DisplayMetrics;)V": (c: JConfiguration | null) => { if (c) applyDeviceConfiguration(c); },
+  "updateConfiguration(Landroid/content/res/Configuration;Landroid/util/DisplayMetrics;)V": function (this: JResources, c: JConfiguration | null) {
+    if (!c) return;
+    if (!this.config) { applyDeviceConfiguration(c); return; }
+    Object.assign(this.config, c);
+    configLocales(this.config);
+    const qualifiers = configurationQualifiers(this.config);
+    for (const table of [this.host.arsc, this.host.tbl(0x01000000)]) if (table) Object.assign(table.device, qualifiers);
+    this.host.invalidate();
+  },
   "getFont(I)Landroid/graphics/Typeface;": async function (this: JResources, id: number) {
     const t = await fontResource(this.host, id);
     if (!t) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Font resource ID #0x" + (id >>> 0).toString(16));

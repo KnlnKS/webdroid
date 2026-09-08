@@ -16,6 +16,13 @@ interface TypeChunk {
   name: string;
   config: Config;
   entries: Map<number, ResEntry>;
+  load?: () => void;
+}
+
+interface ResourceProfile {
+  lang: string; dir: number;
+  types: Map<number, TypeChunk[]>;
+  names: Map<string, Map<string, number>>;
 }
 
 interface Config {
@@ -44,7 +51,8 @@ export class Arsc {
   device = { density: dev.densityDpi, sdk: dev.sdk, orientation: dev.orientation, night: dev.night ? 1 : 0,
     wdp: dev.widthDp, hdp: dev.screenHeightDp, swdp: dev.smallestWidthDp, lang: dev.lang,
     size: sizeClass(dev.smallestWidthDp), dir: 0x40, uiType: 1 };
-  private byType = new Map<string, Map<string, number>>();
+  private profiles = new Map<string, ResourceProfile>();
+  private active: ResourceProfile | null = null;
 
   constructor(bytes: Uint8Array, readonly files: Files = () => null) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -85,11 +93,7 @@ export class Arsc {
   }
 
   private parseType(view: DataView, base: number, typeNames: StringPool, keyNames: StringPool) {
-    const headerSize = view.getUint16(base + 2, true);
     const id = view.getUint8(base + 8);
-    const flags = view.getUint8(base + 9);
-    const entryCount = view.getUint32(base + 12, true);
-    const entriesStart = view.getUint32(base + 16, true);
     const cfgSize = view.getUint32(base + 20, true);
     const cfg: Config = { ...defaultConfig };
     const c = base + 20;
@@ -112,10 +116,20 @@ export class Arsc {
       cfg.wdp = view.getUint16(c + 32, true);
       cfg.hdp = view.getUint16(c + 34, true);
     }
-    // A config the device can never select costs only memory: an apk carries 75+ locales.
-    // Keep both display axes, though: Activity orientation can change after this table is parsed.
+    // Keep other locales as encoded chunks until a scoped resource lookup selects them.
     if (this.skipAtParse(cfg)) return;
     const chunk: TypeChunk = { id, name: typeNames.get(id - 1), config: cfg, entries: new Map() };
+    if (cfg.lang && cfg.lang !== this.device.lang || cfg.dir && cfg.dir !== this.device.dir) {
+      chunk.load = () => this.parseEntries(view, base, keyNames, chunk);
+    } else this.parseEntries(view, base, keyNames, chunk);
+    let list = this.types.get(id);
+    if (!list) this.types.set(id, (list = []));
+    list.push(chunk);
+  }
+
+  private parseEntries(view: DataView, base: number, keyNames: StringPool, chunk: TypeChunk): void {
+    const headerSize = view.getUint16(base + 2, true), flags = view.getUint8(base + 9);
+    const entryCount = view.getUint32(base + 12, true), entriesStart = view.getUint32(base + 16, true);
     const offBase = base + headerSize;
     const sparse = (flags & 0x01) !== 0;
     const eBase = base + entriesStart;
@@ -171,9 +185,29 @@ export class Arsc {
         if (off !== 0xffffffff) readEntry(i, off);
       }
     }
-    let list = this.types.get(id);
-    if (!list) this.types.set(id, (list = []));
-    list.push(chunk);
+    chunk.load = undefined;
+  }
+
+  private profile() {
+    const { lang, dir } = this.device;
+    if (this.active?.lang !== lang || this.active.dir !== dir) {
+      const key = lang + ":" + dir;
+      let profile = this.profiles.get(key);
+      if (!profile) this.profiles.set(key, profile = { lang, dir, types: new Map(), names: new Map() });
+      this.active = profile;
+    }
+    return this.active;
+  }
+
+  private chunksFor(typeId: number): TypeChunk[] {
+    const profile = this.profile();
+    let chunks = profile.types.get(typeId);
+    if (!chunks) {
+      chunks = (this.types.get(typeId) ?? []).filter(ch => (!ch.config.lang || ch.config.lang === profile.lang) && (!ch.config.dir || ch.config.dir === profile.dir));
+      for (const chunk of chunks) chunk.load?.();
+      profile.types.set(typeId, chunks);
+    }
+    return chunks;
   }
 
   typeName(typeId: number): string { return this.types.get(typeId)?.[0]?.name ?? "?"; }
@@ -190,8 +224,7 @@ export class Arsc {
     if ((resId >>> 24) !== this.pkgId) return null;
     const typeId = (resId >> 16) & 0xff;
     const entryIdx = resId & 0xffff;
-    const chunks = this.types.get(typeId);
-    if (!chunks) return null;
+    const chunks = this.chunksFor(typeId);
     let best: ResEntry | null = null;
     let bestScore = -1;
     for (const ch of chunks) {
@@ -207,9 +240,9 @@ export class Arsc {
   private skipAtParse(c: Config): boolean {
     const d = this.device;
     const fitsEitherAxis = (c.wdp <= d.wdp && c.hdp <= d.hdp) || (c.wdp <= d.hdp && c.hdp <= d.wdp);
-    return c.sdk > d.sdk || (!!c.lang && c.lang !== d.lang)
+    return c.sdk > d.sdk
       || c.swdp > d.swdp || !fitsEitherAxis
-      || c.size > d.size || (c.dir !== 0 && c.dir !== d.dir) || (c.uiType !== 0 && c.uiType !== d.uiType);
+      || c.size > d.size || (c.uiType !== 0 && c.uiType !== d.uiType);
   }
 
   /** Match the current Configuration. Unlike parse-time viability, the current axes are exact. */
@@ -244,15 +277,16 @@ export class Arsc {
 
   /** every entry name of a type → its id, built once per type */
   names(typeName: string): Map<string, number> {
-    let m = this.byType.get(typeName);
+    const names = this.profile().names;
+    let m = names.get(typeName);
     if (m) return m;
-    this.byType.set(typeName, m = new Map());
+    names.set(typeName, m = new Map());
     // A resource still being staged is emitted twice: once at its finalized id and once under a
     // staging type id, which is allocated high. Ascending type id, first name wins, so the
     // finalized id is the one a name resolves to.
     for (const tid of [...this.types.keys()].sort((a, b) => a - b)) {
-      for (const ch of this.types.get(tid)!) {
-        if (ch.name !== typeName) continue;
+      if (this.typeName(tid) !== typeName) continue;
+      for (const ch of this.chunksFor(tid)) {
         for (const [idx, e] of ch.entries) if (!m.has(e.key)) m.set(e.key, (this.pkgId << 24) | (tid << 16) | idx);
       }
     }
