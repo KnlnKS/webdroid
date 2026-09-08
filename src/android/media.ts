@@ -9,6 +9,8 @@ export const outputSampleRate = (): number => actx?.sampleRate ?? 44100;
 import { onMain } from "./mainloop";
 import { reportUncaught } from "./os";
 
+rt.register({ name: "android/media/Image", ctor: class extends JObj {}, ifaces: ["java/lang/AutoCloseable"] });
+
 const players = new Set<JMediaPlayer>();
 const pools = new Set<JSoundPool>();
 /** AudioManager.isMusicActive: a MediaPlayer or a SoundPool stream is sounding right now. */
