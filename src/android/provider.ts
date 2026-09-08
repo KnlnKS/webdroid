@@ -5,7 +5,8 @@
 // authoritiesOf) lives with PackageManager in app.ts; DocumentsContract reads it from there.
 
 import { rt, JObj } from "../jvm/runtime";
-import { isDocumentsProvider, registerSystemActivity, mkResultIntent } from "./app";
+import { isDocumentsProvider } from "./pm";
+import { registerSystemActivity, mkResultIntent } from "./intent";
 import { mkUri } from "./net";
 import { docCreate, docDelete, docRename, pickTree, pickDocument, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
 

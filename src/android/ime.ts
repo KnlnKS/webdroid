@@ -14,7 +14,7 @@ import { vcall } from "../jvm/natives/jlang";
 import { JEditable, JSpannable, csText } from "./text";
 import { JView, invalidate } from "./view";
 import { JMatrix } from "./graphics";
-import { JTextView, JEditText, focusedEdit, focusEditText } from "./widget";
+import { JTextView, JEditText, focusedEdit, focusEditText } from "./textview";
 import { PARCELABLE } from "./os";
 
 

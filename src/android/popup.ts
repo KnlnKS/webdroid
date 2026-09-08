@@ -4,11 +4,9 @@ import { rt, JObj, type NativeSpec, callSelf } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
-import {
-  JView, JFrameLP, JMotionEvent, invalidate, requestLayout, locationOnScreen, attachView, detachView,
-  dispatchAttached, dispatchDetached, measureView, makeSpec, specSize, MS_EXACTLY, MS_AT_MOST,
-} from "./view";
-import { JFrameLayout } from "./widget";
+import { JView, JFrameLP, invalidate, requestLayout, locationOnScreen, attachView, detachView, dispatchAttached, dispatchDetached, measureView, makeSpec, specSize, MS_EXACTLY, MS_AT_MOST } from "./view";
+import { JMotionEvent } from "./motionevent";
+import { JFrameLayout } from "./layouts";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { AID, obtainStyled, rvDimen, rvInt, themeOf, type Resources, type JTheme, type JAttrSet } from "./res";
 import { TV } from "./axml";
@@ -144,7 +142,7 @@ rt.register({
     "<init>(Landroid/content/Context;Landroid/view/View;)V": async function (this: JPopupMenu, c: unknown, anchor: JView) {
       this.jctx = c;
       this.anchor = anchor;
-      const { JMenu } = await import("./app");
+      const { JMenu } = await import("./menu");
       this.menu = new JMenu();
     },
     "getMenu()Landroid/view/Menu;": function (this: JPopupMenu) { return this.menu; },

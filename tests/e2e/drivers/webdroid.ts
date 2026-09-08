@@ -25,7 +25,6 @@ function pageUrl(screen?: Screen): string {
 }
 
 declare global {
-  // eslint-disable-next-line no-var
   var wd: any;
 }
 

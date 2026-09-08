@@ -34,7 +34,6 @@ export function box<T extends { v: unknown }>(Ctor: new () => T, v: T["v"]): T {
   return b;
 }
 
-// identity hash
 let hashCounter = 1;
 const hashes = new WeakMap<object, number>();
 export function idHash(o: unknown): number {
@@ -1467,7 +1466,6 @@ const scriptEnums = mkEnumSet("java/lang/Character$UnicodeScript", SCRIPT_NAMES,
   },
 });
 
-// java.lang.ref basics
 class JRef extends JObj { referent: unknown = null; }
 rt.register({
   name: "java/lang/ref/Reference", ctor: JRef,

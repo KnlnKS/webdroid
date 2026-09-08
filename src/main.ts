@@ -15,7 +15,7 @@ import { clearRoots } from "./shell/hostfs";
 import { perf, perfReset } from "./perf";
 import { uiState, measureView, makeSpec } from "./android/view";
 import { onMain, mainDbg } from "./android/mainloop";
-import { editInput, fireEditorAction, focusedEdit, setInputElement } from "./android/widget";
+import { editInput, fireEditorAction, focusedEdit, setInputElement } from "./android/textview";
 import { overlays } from "./android/popup";
 import { openDatabase } from "./android/sqlite";
 import { setWebLayer, webViewInfo } from "./android/webkit";
@@ -138,7 +138,6 @@ document.getElementById("cfg-apply")!.addEventListener("click", () => {
 });
 document.getElementById("cfg-reset")!.addEventListener("click", () => applyScreen(null));
 
-// missing panel
 let missingDirty = false;
 rt.onMissing = () => { missingDirty = true; };
 setInterval(() => {

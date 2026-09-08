@@ -21,8 +21,7 @@ BYTECODE.push(...(CUTS.length ? CUTS : [
 ]));
 
 // imported AFTER the policy is set: rt.register consults it, so the specs never land
-const { rt } = await import("../src/jvm/runtime");
-const { ACC } = await import("../src/jvm/runtime");
+const { rt, ACC } = await import("../src/jvm/runtime");
 const { loadJarDexes } = await import("./lib");
 await import("../src/natives");
 

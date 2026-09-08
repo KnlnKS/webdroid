@@ -12,8 +12,11 @@ import { JAlertDialog } from "./dialog";
 import { JLinearLP, attachView, requestLayout, invalidate, initViewFromCtx, inheritContext } from "./view";
 import { tfMedium } from "./graphics";
 import { JAttrSet } from "./res";
-import { JLinearLayout, JTextView, themeAccent, G } from "./widget";
-import type { JContext } from "./app";
+import { JLinearLayout } from "./layouts";
+import { JTextView } from "./textview";
+import { themeAccent } from "./widget";
+import { G } from "./gravity";
+import type { JContext } from "./context";
 
 // ── TimePicker: hour/minute steppers with an optional AM/PM column.
 class JTimePicker extends JLinearLayout {

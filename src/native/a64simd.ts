@@ -402,7 +402,6 @@ function emitFp(w: number, push: Push, fault: Fault): boolean {
     return true;
   }
   if (sf) { push(fault("fp")); return true; }
-  // 1-source
   if (is(w, 0x5f207c00, 0x1e204000)) {
     const opcode = (w >>> 15) & 0x3f;
     if (opcode >= 4 && opcode <= 7) {                                                    // FCVT between widths
@@ -430,14 +429,12 @@ function emitFp(w: number, push: Push, fault: Fault): boolean {
     return true;
   }
   if (half) { push(fault("fp16")); return true; }
-  // compare
   if (is(w, 0x5f203c00, 0x1e202000)) {
     const opcode2 = w & 31;
     if (opcode2 & 7) { push(fault("fcmp")); return true; }
     push(`a=${S(rn)};t=${opcode2 & 8 ? "0" : S(rm)};\0F`, FCMP, 0, ALL);
     return false;
   }
-  // immediate
   if (is(w, 0x5f201c00, 0x1e201000)) {
     const imm8 = (w >>> 13) & 0xff;
     if (dp) {
@@ -446,14 +443,12 @@ function emitFp(w: number, push: Push, fault: Fault): boolean {
     } else push(`I[${4 * rd}]=${int32(fbits(vfpImm(imm8, false)))};` + zeroS(rd));
     return false;
   }
-  // conditional compare
   if (is(w, 0x5f200c00, 0x1e200400)) {
     const cond = (w >>> 12) & 15, nzcv = w & 15;
     const setNzcv = `c.n=${(nzcv >> 3) & 1};c.z=${(nzcv >> 2) & 1};c.c=${(nzcv >> 1) & 1};c.v=${nzcv & 1};`;
     push(`if(${COND[cond]}){a=${S(rn)};t=${S(rm)};${FCMP_ALL}}else{${setNzcv}}`, null, COND_READS[cond], ALL);
     return false;
   }
-  // 2-source
   if (is(w, 0x5f200c00, 0x1e200800)) {
     const opcode = (w >>> 12) & 15, a = S(rn), b = S(rm);
     const e = opcode === 0 ? `${a}*${b}` : opcode === 1 ? `${a}/${b}` : opcode === 2 ? `${a}+${b}` : opcode === 3 ? `${a}-${b}`
@@ -467,7 +462,6 @@ function emitFp(w: number, push: Push, fault: Fault): boolean {
     push(fault("fp 2-source"));
     return true;
   }
-  // conditional select
   if (is(w, 0x5f200c00, 0x1e200c00)) {
     const cond = (w >>> 12) & 15;
     push(dp ? `if(${COND[cond]}){I[${4 * rd}]=I[${4 * rn}];I[${4 * rd + 1}]=I[${4 * rn + 1}];}else{I[${4 * rd}]=I[${4 * rm}];I[${4 * rd + 1}]=I[${4 * rm + 1}];}` + zeroHi(rd)
@@ -672,7 +666,6 @@ function emitVector(w: number, push: Push, fault: Fault): boolean | null {
           : `I[${4 * rd + i}]=I[${4 * rn + i}]${U ? "^-2147483648" : "&0x7fffffff"};`).join("")));   // FABS / FNEG
       }
     }
-    // integer
     const sv = iv(Math.min(size, 2), true), uv = iv(Math.min(size, 2), false);
     const eachI = (f: (i: number) => string, view: View = sv, safe = true) => finI(rd, lanes(rd, count, view, f, !!Q, safe, [rn]));
     const I64 = (f: (i: number) => [string, string], safe = true) => finI(rd, lanes64(rd, count, f, !!Q, safe, [rn]));

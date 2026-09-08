@@ -1,10 +1,7 @@
-// The System.loadLibrary hook for lib/{armeabi,armeabi-v7a}/lib<name>.so: registers the host
-// libraries once, loads + relocates the module, runs its init arrays and JNI_OnLoad.
-
 import { rt } from "../jvm/runtime";
 import { curThread } from "../jvm/natives/jlang";
 import { libcInit } from "./libc";
-import { dlInit, loadModule, modules } from "./dl";
+import { dlInit, loadModule, resolveGlobalOrNull } from "./dl";
 import type { Module } from "./elf";
 import { jniInit, javaVM, pushFrame, popFrame, resolveByExport } from "./jni";
 import { gles1Init } from "./gles1";
@@ -12,7 +9,6 @@ import { gles3Init } from "./gles3";
 import { eglInit } from "./egl";
 import { ndkInit } from "./libandroid";
 import { cpuFor, setA64 } from "./cpu";
-import { lookupHost } from "./host";
 
 let inited = false;
 function nativeInit(): void {
@@ -25,7 +21,7 @@ function nativeInit(): void {
   gles3Init();
   eglInit();
   ndkInit();
-  resolveByExport((sym) => { for (const m of modules) { const a = m.exports.get(sym); if (a !== undefined) return a; } return lookupHost(sym); });
+  resolveByExport(resolveGlobalOrNull);
 }
 
 /** The ABIs this tier can execute, most-preferred first. The one place that knows: the ELF

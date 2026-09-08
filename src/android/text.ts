@@ -313,7 +313,6 @@ rt.register({
   },
 });
 
-// Editable for EditText
 export class JEditable extends JSpannable {}
 rt.register({
   name: "webdroid/Editable", ctor: JEditable,
@@ -401,7 +400,6 @@ rt.register({
 });
 mkEnumSet("android/text/TextUtils$TruncateAt", ["START", "MIDDLE", "END", "MARQUEE"]);
 
-// Html.fromHtml minimal
 class JHtml extends JObj {}
 rt.register({
   name: "android/text/Html", ctor: JHtml,
@@ -451,7 +449,6 @@ function htmlToSpan(s: string): JSpannable {
   return sp;
 }
 
-// InputType constants holder
 rt.register({
   name: "android/text/InputType", ctor: class extends JObj {},
   statics: {

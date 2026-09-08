@@ -204,7 +204,6 @@ class MethodCompiler {
   compile(): string {
     const { code } = this;
     const insns = code.insns;
-    // decode all
     let pc = 0;
     while (pc < insns.length) {
       const u = insns[pc];
@@ -215,7 +214,6 @@ class MethodCompiler {
       this.order.push(pc);
       pc += ins.len;
     }
-    // leaders
     this.leaders.add(0);
     for (const pc2 of this.order) {
       const i = this.ins.get(pc2)!;
@@ -246,7 +244,6 @@ class MethodCompiler {
     }
     if (this.sync) perf.syncMethods++; else perf.asyncMethods++;
 
-    // emit blocks
     const blocks: string[] = [];
     let cur: string[] | null = null;
     for (const pc2 of this.order) {
@@ -356,7 +353,6 @@ ${catchBody}
       for (const pc of body.get(lead)!) {
         const i = this.ins.get(pc)!;
         const n = i.name;
-        // consumers
         if (FLOAT_OP_RE.test(n) || n === "neg-float" || n.startsWith("cmpl-float") || n.startsWith("cmpg-float") ||
             n === "float-to-int" || n === "float-to-long" || n === "float-to-double") {
           if (n.endsWith("/2addr")) { mark(i.a, "F"); mark(i.b, "F"); }
@@ -525,7 +521,6 @@ ${catchBody}
     return this.mname === "<clinit>" && this.info.def ? `,${this.info.def.typeIdx}` : "";
   }
 
-  // shorthand emit helpers
   private guard(expr: string, out: string[], assignTo = "$t") {
     // A sync frame cannot await. If the analysis was wrong the value arrives as a promise,
     // and saying so is the only honest thing left — proceeding would hand a promise on as
@@ -795,7 +790,6 @@ ${catchBody}
   private emitArith(i: Ins, out: string[]) {
     const A = `v${i.a}`, B = `v${i.b}`, C = `v${i.c}`;
     const n = i.name;
-    // unops
     switch (n) {
       case "neg-int": out.push(`${A}=(-${B})|0;`); return;
       case "not-int": out.push(`${A}=~${B};`); return;
@@ -816,7 +810,6 @@ ${catchBody}
       case "int-to-char": out.push(`${A}=${B}&0xffff;`); return;
       case "int-to-short": out.push(`${A}=(${B}<<16)>>16;`); return;
     }
-    // binops
     const two = n.endsWith("/2addr");
     const lit = n.includes("/lit") || n === "rsub-int"; // 0xd1 is 22s (literal) despite the bare name
     const base = n.replace("/2addr", "").replace("/lit16", "").replace("/lit8", "");

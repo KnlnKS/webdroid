@@ -306,7 +306,6 @@ delegate("android/graphics/Paint", {
   "nReset(J)V": (h: bigint) => { replace(h, new JPaint()); },
   "nSet(JJ)V": (h: bigint, src: bigint) => copyPaint(paint(src), paint(h)),
 
-  // colour and geometry
   "nSetColor(JI)V": (h: bigint, c: number) => { paint(h).color = c; },
   "nSetColor(JJJ)V": (h: bigint, _cs: bigint, c: bigint) => { paint(h).color = argbOfColorLong(c); },
   "nSetAlpha(JI)V": (h: bigint, a: number) => { const p = paint(h); p.color = (p.color & 0xffffff) | ((a & 0xff) << 24); },
@@ -348,7 +347,6 @@ delegate("android/graphics/Paint", {
   "nSetShadowLayer(JFFFJJ)V": () => {},
   "nHasShadowLayer(J)Z": () => 0,
 
-  // text
   "nSetTypeface(JJ)V": (h: bigint, t: bigint) => { paint(h).tf = deref<JTypeface>(t) ?? tfDefault; },
   "nSetTextSize(JF)V": (h: bigint, v: number) => { paint(h).textSize = v; },
   "nGetTextSize(J)F": (h: bigint) => paint(h).textSize,

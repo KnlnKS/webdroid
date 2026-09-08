@@ -7,9 +7,12 @@ should go down as webdroid improves.
 ## The two commands
 
 ```bash
-bun run dev      # webdroid dev server on :4080 — required by `e2e`
-bun run e2e      # capture webdroid, diff against the committed goldens, write the report
+PORT=4090 bun run server.ts
+WEBDROID_URL=http://localhost:4090 bun run e2e
 ```
+
+Use a private port and set `WEBDROID_URL` for every capture command. Another checkout may
+already be serving the default port. Run captures sequentially: they share output directories.
 
 `bun run e2e` **never touches an emulator** and does not need the Android SDK installed —
 `adb` may be absent from `PATH` entirely. It reads `golden/`, drives webdroid over Playwright,

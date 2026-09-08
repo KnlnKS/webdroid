@@ -7,7 +7,7 @@ import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawa
 import { JTypedValue } from "./os";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 import { javaFormat, defineException } from "../jvm/natives/jlang";
-import { usLocale } from "../jvm/natives/jutil";
+import { usLocale } from "../jvm/natives/jvalues";
 import { jarray } from "../jvm/abi";
 import { streamOf, streamOfSource } from "../jvm/natives/jio";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
@@ -285,14 +285,7 @@ const resMethods: NativeSpec["methods"] = {
   "static getSystem()Landroid/content/res/Resources;": () => systemRes,
 };
 rt.register({ name: "android/content/res/Resources", ctor: JResources, methods: resMethods });
-rt.register({
-  name: "android/content/res/Resources$NotFoundException",
-  ctor: (() => {
-    const parent = rt.link("java/lang/RuntimeException").ctor;
-    return class extends parent {};
-  })(),
-  sup: "java/lang/RuntimeException",
-});
+
 
 function xmlParser(this: JResources, id: number) { return mkXmlParser(this.host, id); }
 function arrayValues(res: Resources, id: number): RV[] {

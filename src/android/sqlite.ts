@@ -1,3 +1,4 @@
+import { newStringSet } from "../jvm/natives/jutil";
 // android.database.* over sql.js (in-memory, persisted to localStorage per db).
 
 import initSqlJs, { type Database } from "sql.js";
@@ -238,10 +239,7 @@ rt.register({
       "clear()V": function (this: JContentValues) { this.map.clear(); },
       "get(Ljava/lang/String;)Ljava/lang/Object;": function (this: JContentValues, k: string) { return this.map.get(k) ?? null; },
       "keySet()Ljava/util/Set;": function (this: JContentValues) {
-        const info = rt.link("java/util/HashSet");
-        const s = new info.ctor();
-        for (const k of this.map.keys()) s.m.set(k, { k, v: k });
-        return s;
+        return newStringSet(this.map.keys());
       },
       "getAsString(Ljava/lang/String;)Ljava/lang/String;": function (this: JContentValues, k: string) {
         const v = this.map.get(k);
@@ -270,7 +268,6 @@ function unbox(v: unknown): unknown {
   return v;
 }
 
-// SQLiteDatabase
 const dbMethods: NonNullable<NativeSpec["methods"]> = {
   "execSQL(Ljava/lang/String;)V": function (this: JSQLiteDatabase, sql: string) {
     try { this.db!.exec(sql); } catch (e) { throw sqliteExc(String(e), sql); }

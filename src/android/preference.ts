@@ -11,10 +11,15 @@ import { attr, TV, parseAXML, type XmlNode } from "./axml";
 import { JAttrSet, normRV, resString, rvString, type Resources, type RV, JTheme } from "./res";
 import { JView, JLinearLP, attachView } from "./view";
 import { tfMedium } from "./graphics";
-import { JLinearLayout, JTextView, themeAccent, G } from "./widget";
+import { JLinearLayout } from "./layouts";
+import { JTextView } from "./textview";
+import { themeAccent } from "./widget";
+import { G } from "./gravity";
 import { JBaseAdapter, JListView, baseAdapterMethods } from "./listview";
 import { reportUncaught } from "./os";
-import { getPrefs, JFragment, fragMethods, type JContext } from "./app";
+import { getPrefs } from "./sharedprefs";
+import { JFragment, fragMethods } from "./fragment";
+import { type JContext } from "./context";
 import { device } from "../shell/config";
 
 // ── attribute resolution: mirrors res.ts's own value-resolution helpers (obtainStyled etc.),

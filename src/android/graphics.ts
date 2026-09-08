@@ -5,7 +5,7 @@ import { mangleMethod, charsToString, intBitsToFloat } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle } from "./handles";
 import { vcall, mkEnumSet, JSimpleEnum, linkInit, stringHash } from "../jvm/natives/jlang";
-import { usLocale } from "../jvm/natives/jutil";
+import { usLocale } from "../jvm/natives/jvalues";
 import { readStreamFully } from "../jvm/natives/jio";
 import { JPath } from "./path";
 import { perf } from "../perf";
@@ -940,11 +940,11 @@ export class JBitmap extends JObj {
 /** Exported for the same reason canvasMethods is: AOSP's own Bitmap bytecode reaches these
  *  bodies through its native* delegates (src/android/delegates.ts), not a second copy. */
 export const bitmapMethods: NativeSpec["methods"] = {
-    "static createBitmap(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;": blankBitmap,
+    "static createBitmap(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;": JBitmap.create,
     "static createBitmap(Landroid/util/DisplayMetrics;IILandroid/graphics/Bitmap$Config;ZLandroid/graphics/ColorSpace;)Landroid/graphics/Bitmap;":
       (_dm: unknown, w: number, h: number) => JBitmap.create(w, h),
-    "static createBitmap(IILandroid/graphics/Bitmap$Config;Z)Landroid/graphics/Bitmap;": blankBitmap,
-    "static createBitmap(IILandroid/graphics/Bitmap$Config;ZLandroid/graphics/ColorSpace;)Landroid/graphics/Bitmap;": blankBitmap,
+    "static createBitmap(IILandroid/graphics/Bitmap$Config;Z)Landroid/graphics/Bitmap;": JBitmap.create,
+    "static createBitmap(IILandroid/graphics/Bitmap$Config;ZLandroid/graphics/ColorSpace;)Landroid/graphics/Bitmap;": JBitmap.create,
     "static createBitmap(Landroid/graphics/Bitmap;)Landroid/graphics/Bitmap;": (src: JBitmap) => cropBitmap(src, 0, 0, src.w, src.h),
     "static createBitmap(Landroid/graphics/Bitmap;IIII)Landroid/graphics/Bitmap;": cropBitmap,
     "static createBitmap(Landroid/graphics/Bitmap;IIIILandroid/graphics/Matrix;Z)Landroid/graphics/Bitmap;": cropBitmap,
@@ -1108,7 +1108,6 @@ function drawBitmapRect(this: JCanvas, b: JBitmap, src: JRect | null, dst: JRect
   this.ctx.drawImage(tintedBmp(b, p?.filterColor ?? null), s.left, s.top, s.right - s.left, s.bottom - s.top,
     dst.left, dst.top, dst.right - dst.left, dst.bottom - dst.top);
 }
-function blankBitmap(w: number, h: number) { return JBitmap.create(w, h); }
 /** the (x, y, w, h) region of `src` as a new bitmap, through `m` when given */
 function cropBitmap(src: JBitmap, x: number, y: number, w: number, h: number, m: JMatrix | null = null) {
   const b = JBitmap.create(w, h);

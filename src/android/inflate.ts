@@ -6,7 +6,7 @@ import { vcall, newObj } from "../jvm/natives/jlang";
 import { parseAXML, TV, type XmlNode } from "./axml";
 import { JAttrSet, askTheme, themeOf, noteAttrsRead, noteUnreadAttrs } from "./res";
 import { JView, JViewGroup, guardCall, guardMaybe } from "./view";
-import type { JContext } from "./app";
+import type { JContext } from "./context";
 
 class JLayoutInflater extends JObj {
   jctx: JContext | null = null;

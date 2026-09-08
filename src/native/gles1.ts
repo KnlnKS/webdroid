@@ -41,7 +41,6 @@ interface Ctx {
   vbos: WebGLBuffer[]; ebo: WebGLBuffer;
   textures: (TexRec | null)[];
   buffers: (WebGLBuffer | null)[];
-  // fixed-function state
   mode: number;
   mv: M4[]; pr: M4[]; tx: M4[][];
   vert: ArrayState; col: ArrayState; tex: ArrayState[]; norm: ArrayState;
@@ -155,7 +154,6 @@ function prepareDraw(c: Ctx, first: number, count: number): boolean {
   const g = c.gl;
   if (!c.vert.on) return false;
   g.useProgram(c.prog);
-  // MVP
   const mv = c.mv[c.mv.length - 1], pr = c.pr[c.pr.length - 1];
   mul(pr, mv, tmpB);
   g.uniformMatrix4fv(c.u.uMVP, false, tmpB);
@@ -391,7 +389,6 @@ export function gles1Init(): void {
   };
 
   const G: Record<string, HostFn> = {
-    // matrices
     glMatrixMode: W("glMatrixMode", (c, a) => { c.mode = a.i(); }),
     glLoadIdentity: W("glLoadIdentity", (c) => { top(c).set(ident()); }),
     glLoadMatrixf: W("glLoadMatrixf", (c, a) => { top(c).set(m4(a, false)); }),
@@ -410,7 +407,6 @@ export function gles1Init(): void {
     glScalex: W("glScalex", (c, a) => scale(c, Xa(a), Xa(a), Xa(a))),
     glRotatef: W("glRotatef", (c, a) => rotate(c, F(a), F(a), F(a), F(a))),
     glRotatex: W("glRotatex", (c, a) => rotate(c, Xa(a), Xa(a), Xa(a), Xa(a))),
-    // client arrays
     glVertexPointer: setArr((c) => c.vert),
     glColorPointer: setArr((c) => c.col),
     glTexCoordPointer: setArr((c) => c.tex[c.clientUnit]),
@@ -422,7 +418,6 @@ export function gles1Init(): void {
     glActiveTexture: W("glActiveTexture", (c, a) => { c.unit = (a.i() - 0x84c0) & 1; }),
     glDrawArrays: W("glDrawArrays", (c, a) => { const mode = a.i(), first = a.i(), count = a.i(); draw(c, mode, count, null, first); }),
     glDrawElements: W("glDrawElements", (c, a) => { const mode = a.i(), count = a.i(), type = a.i(), ptr = a.p(); draw(c, mode, count, { type, ptr }, 0); }),
-    // current values
     glColor4f: W("glColor4f", (c, a) => { c.color[0] = F(a); c.color[1] = F(a); c.color[2] = F(a); c.color[3] = F(a); }),
     glColor4x: W("glColor4x", (c, a) => { c.color[0] = Xa(a); c.color[1] = Xa(a); c.color[2] = Xa(a); c.color[3] = Xa(a); }),
     glColor4ub: W("glColor4ub", (c, a) => { c.color[0] = (a.i() & 255) / 255; c.color[1] = (a.i() & 255) / 255; c.color[2] = (a.i() & 255) / 255; c.color[3] = (a.i() & 255) / 255; }),
@@ -431,7 +426,6 @@ export function gles1Init(): void {
     glPointSize: W("glPointSize", (c, a) => { c.gl.useProgram(c.prog); c.gl.uniform1f(c.u.uPointSize, F(a)); }),
     glPointSizex: W("glPointSizex", (c, a) => { c.gl.useProgram(c.prog); c.gl.uniform1f(c.u.uPointSize, Xa(a)); }),
     glLineWidth: W("glLineWidth", (c, a) => c.gl.lineWidth(F(a))), glLineWidthx: W("glLineWidthx", (c, a) => c.gl.lineWidth(Xa(a))),
-    // texturing
     glGenTextures: W("glGenTextures", (c, a) => { const n = a.i(), out = a.p(); for (let i = 0; i < n; i++) { c.textures.push({ tex: c.gl.createTexture(), hasAlpha: true, genMip: false }); mem.st32(out + i * 4, c.textures.length - 1); } }),
     glDeleteTextures: W("glDeleteTextures", (c, a) => { const n = a.i(), p = a.p(); for (let i = 0; i < n; i++) { const id = mem.ld32(p + i * 4); const r = c.textures[id]; if (r) { c.gl.deleteTexture(r.tex); c.textures[id] = null; } for (let u = 0; u < 2; u++) if (c.bound[u] === id) c.bound[u] = 0; } }),
     glBindTexture: W("glBindTexture", (c, a) => { a.i(); const id = a.i(); c.bound[c.unit] = id; if (id && !c.textures[id]) { while (c.textures.length <= id) c.textures.push(null); c.textures[id] = { tex: c.gl.createTexture(), hasAlpha: true, genMip: false }; } c.gl.activeTexture(c.gl.TEXTURE0 + c.unit); c.gl.bindTexture(c.gl.TEXTURE_2D, id ? c.textures[id]!.tex : null); }),
@@ -462,14 +456,12 @@ export function gles1Init(): void {
     glTexEnvfv: W("glTexEnvfv", (c, a) => { a.i(); const pn = a.i(), p = a.p(); if (pn === 0x2200) c.texEnv[c.unit] = mem.ldf32(p) | 0; }),
     glPixelStorei: W("glPixelStorei", (c, a) => { const pn = a.i(), v = a.i(); if (pn === 0x0cf5) c.unpackAlign = v; else c.gl.pixelStorei(pn, v); }),
     glGenerateMipmapOES: W("glGenerateMipmapOES", (c, a) => c.gl.generateMipmap(a.i())),
-    // buffers
     glGenBuffers: W("glGenBuffers", (c, a) => { const n = a.i(), out = a.p(); for (let i = 0; i < n; i++) { c.buffers.push(c.gl.createBuffer()); mem.st32(out + i * 4, c.buffers.length - 1); } }),
     glDeleteBuffers: W("glDeleteBuffers", (c, a) => { const n = a.i(), p = a.p(); for (let i = 0; i < n; i++) { const id = mem.ld32(p + i * 4); const b = c.buffers[id]; if (b) { c.gl.deleteBuffer(b); c.buffers[id] = null; } if (c.arrayBuf === id) c.arrayBuf = 0; if (c.elemBuf === id) c.elemBuf = 0; } }),
     glBindBuffer: W("glBindBuffer", (c, a) => { const t = a.i(), id = a.i(); if (id && !c.buffers[id]) { while (c.buffers.length <= id) c.buffers.push(null); c.buffers[id] = c.gl.createBuffer(); } if (t === 0x8892) c.arrayBuf = id; else c.elemBuf = id; c.gl.bindBuffer(t, id ? c.buffers[id] : null); }),
     glBufferData: W("glBufferData", (c, a) => { const t = a.i(), n = a.i(), p = a.p(), usage = a.i(); const id = t === 0x8892 ? c.arrayBuf : c.elemBuf; c.gl.bindBuffer(t, c.buffers[id]!); if (p) c.gl.bufferData(t, mem.u8.subarray(p, p + n), usage); else c.gl.bufferData(t, n, usage); }),
     glBufferSubData: W("glBufferSubData", (c, a) => { const t = a.i(), off = a.i(), n = a.i(), p = a.p(); const id = t === 0x8892 ? c.arrayBuf : c.elemBuf; c.gl.bindBuffer(t, c.buffers[id]!); c.gl.bufferSubData(t, off, mem.u8.subarray(p, p + n)); }),
     glIsBuffer: W("glIsBuffer", (c, a) => (c.buffers[a.i()] ? 1 : 0)),
-    // state
     glEnable: W("glEnable", (c, a) => capSet(c, a.i(), true)),
     glDisable: W("glDisable", (c, a) => capSet(c, a.i(), false)),
     glIsEnabled: W("glIsEnabled", (c, a) => isOn(c, a.i())),
@@ -514,7 +506,6 @@ export function gles1Init(): void {
     glFogf: W("glFogf", () => {}), glFogx: W("glFogx", () => {}), glFogfv: W("glFogfv", () => {}), glFogxv: W("glFogxv", () => {}),
     glClipPlanef: W("glClipPlanef", (c) => once(c, "glClipPlanef")), glClipPlanex: W("glClipPlanex", (c) => once(c, "glClipPlanex")),
     glPointParameterf: W("glPointParameterf", () => {}), glPointParameterx: W("glPointParameterx", () => {}), glPointParameterfv: W("glPointParameterfv", () => {}), glPointParameterxv: W("glPointParameterxv", () => {}),
-    // queries
     glGetError: W("glGetError", (c) => { const e = c.err || c.gl.getError(); c.err = 0; return e; }),
     glGetString: W("glGetString", (c, a) => {
       const n = a.i();

@@ -2,7 +2,8 @@
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { vcall, newObj } from "../jvm/natives/jlang";
-import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook, restVelocity } from "./view";
+import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook } from "./view";
+import { restVelocity } from "./motionevent";
 import { JMatrix } from "./graphics";
 import { mangleMethod } from "../jvm/abi";
 import { onMain } from "./mainloop";

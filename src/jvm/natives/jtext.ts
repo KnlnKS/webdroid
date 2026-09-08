@@ -121,7 +121,6 @@ rt.register({
   },
 });
 
-// NumberFormat / DecimalFormat
 class JNumberFormat extends JObj {
   maxFrac = 3; minFrac = 0; grouping = true; pattern: string | null = null;
   fmt(v: number): string {

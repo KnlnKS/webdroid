@@ -8,7 +8,6 @@ import { device } from "../shell/config";
 import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, normRV } from "./res";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 
-// state constants
 export const ST = {
   pressed: 0x010100a7, enabled: 0x0101009e, selected: 0x010100a1, checked: 0x010100a0,
   focused: 0x0101009c, activated: 0x010102fe, window_focused: 0x0101009d, checkable: 0x0101009f,

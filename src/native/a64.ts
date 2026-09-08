@@ -285,7 +285,6 @@ function emit(pc: number, w: number, out: Ins[], k: number, faultPc = String(pc)
       else push("");                                                                 // PRFM (literal)
       return false;
     }
-    // LDP / STP
     if (is(0x3a000000, 0x28000000)) {
       const opc = (w >>> 30) & 3, L = (w >>> 22) & 1, imm7 = sx((w >>> 15) & 0x7f, 7);
       const rt2 = (w >>> 10) & 31, kind = (w >>> 23) & 3;                            // 1 post, 2 offset, 3 pre
@@ -450,7 +449,6 @@ function emit(pc: number, w: number, out: Ins[], k: number, faultPc = String(pc)
       }
       return false;
     }
-    // add/sub with carry
     if (is(0x1fe00000, 0x1a000000)) {
       const sub = (w >>> 30) & 1, S = (w >>> 29) & 1;
       if (w64) {
@@ -479,7 +477,6 @@ function emit(pc: number, w: number, out: Ins[], k: number, faultPc = String(pc)
       push(`if(${COND[cond]}){${cmp}${upd}}else{${setNzcv}}`, null, COND_READS[cond], ALL);
       return false;
     }
-    // conditional select
     if (is(0x1fe00000, 0x1a800000)) {
       const cond = (w >>> 12) & 15, op2 = (w >>> 10) & 3, opc = (w >>> 30) & 1;
       const els = opc === 0

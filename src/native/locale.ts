@@ -50,7 +50,6 @@ export function localeInit(): void {
   const M: Record<string, HostFn> = {
     newlocale: () => cLocale, duplocale: () => cLocale, freelocale: () => {},
     uselocale: (cpu, a) => { const l = a.p(); const prev = current.get(cpu.tid) ?? -1; if (l) current.set(cpu.tid, l); return prev; },
-    // wide strings
     wcschr: (_c, a) => { const p = a.p(), c = a.i(); for (let i = p; ; i += 4) { const x = mem.ld32(i); if (x === c) return ptr(i); if (!x) return 0; } },
     wcsrchr: (_c, a) => { const p = a.p(), c = a.i(); let r = 0; for (let i = p; ; i += 4) { const x = mem.ld32(i); if (x === c) r = i; if (!x) return ptr(r); } },
     wcsstr: (_c, a) => { const h = a.p(), n = a.p(); const i = cps(wstr(h)).join(",").indexOf(cps(wstr(n)).join(",")); if (i < 0) return 0; const chars = cps(wstr(h)); let k = 0, pos = 0; while (pos < i) { pos += String(chars[k]).length + 1; k++; } return ptr(h + 4 * k); },

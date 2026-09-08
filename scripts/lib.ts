@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { dexesIn, DexFile } from "../src/jvm/dex";
+import { zipTree } from "../src/jvm/natives/jzip";
 import { openInstall } from "../src/shell/install";
 import { rt } from "../src/jvm/runtime";
 import type { XmlNode } from "../src/android/axml";
@@ -32,7 +33,10 @@ export async function loadDexes(path: string): Promise<DexFile[]> {
 
 export async function loadJarDexes(path: string): Promise<DexFile[]> {
   if (!existsSync(path)) throw new Error(`no ${path} — run \`bun run gen-framework\` with the reference AVD booted`);
-  return loadDexes(path);
+  const zip = zipTree(new Uint8Array(await Bun.file(path).arrayBuffer()));
+  const dexes = dexesOf(zip);
+  for (const dex of dexes) rt.loadDex(dex);
+  return dexes;
 }
 
 export function dumpXml(n: XmlNode, depth: number, out: string[], maxDepth = Infinity): string[] {

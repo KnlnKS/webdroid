@@ -2,7 +2,8 @@
 
 import { rt, JObj, type NativeSpec, type ClassInfo } from "../runtime";
 import { vcall, newObj, JThread, JEnum, setCurThread, curThread, park, defineException } from "./jlang";
-import { JList, JRandom, listMethods, randomSeed, JPriorityQueue, pqInsert, priorityQueueMethods } from "./jutil";
+import { JList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods } from "./jutil";
+import { JRandom, randomSeed } from "./jrandom";
 
 // ── atomics (single-threaded: trivial)
 class JAtomicInt extends JObj { v = 0; }
@@ -402,7 +403,24 @@ rt.register({
   },
 });
 
-// blocking queue (async take)
+type WaitingQueue = { a: unknown[]; takers: ((value: unknown) => void)[] };
+
+function takeFirst(this: WaitingQueue): unknown {
+  return this.a.length ? this.a.shift() : new Promise((resolve) => this.takers.push(resolve));
+}
+
+function timedPoll(this: WaitingQueue, d: bigint, u: JTimeUnit): unknown {
+  if (this.a.length) return this.a.shift();
+  return new Promise((resolve) => {
+    const taker = (v: unknown) => resolve(v);
+    this.takers.push(taker);
+    setTimeout(() => {
+      const i = this.takers.indexOf(taker);
+      if (i >= 0) { this.takers.splice(i, 1); resolve(null); }
+    }, Number(d) * u.ms);
+  });
+}
+
 class JBlockingQueue extends JList {
   takers: ((v: unknown) => void)[] = [];
   /** hand the value to a parked take(), else queue it */
@@ -418,9 +436,7 @@ const dequeMethods = (): NonNullable<NativeSpec["methods"]> => ({
   "offerFirst(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.a.unshift(v); return 1; },
   "putLast(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); },
   "offerLast(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
-  "takeFirst()Ljava/lang/Object;": function (this: JBlockingQueue) {
-    return this.a.length ? this.a.shift() : new Promise((r) => this.takers.push(r));
-  },
+  "takeFirst()Ljava/lang/Object;": takeFirst,
   "takeLast()Ljava/lang/Object;": function (this: JBlockingQueue) {
     return this.a.length ? this.a.pop() : new Promise((r) => this.takers.push(r));
   },
@@ -441,21 +457,8 @@ const mkBlockingQueue = (name: string, deque = false) => rt.register({
     "<init>(I)V": function () {},
     "put(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); },
     "offer(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
-    "take()Ljava/lang/Object;": function (this: JBlockingQueue) {
-      if (this.a.length) return this.a.shift();
-      return new Promise((r) => this.takers.push(r));
-    },
-    "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JBlockingQueue, d: bigint, u: JTimeUnit) {
-      if (this.a.length) return this.a.shift();
-      return new Promise((resolve) => {
-        const taker = (v: unknown) => resolve(v);
-        this.takers.push(taker);
-        setTimeout(() => {
-          const i = this.takers.indexOf(taker);
-          if (i >= 0) { this.takers.splice(i, 1); resolve(null); }
-        }, Number(d) * u.ms);
-      });
-    },
+    "take()Ljava/lang/Object;": takeFirst,
+    "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": timedPoll,
   },
 });
 for (const qn of ["java/util/concurrent/LinkedBlockingQueue", "java/util/concurrent/SynchronousQueue", "java/util/concurrent/ArrayBlockingQueue"]) mkBlockingQueue(qn);
@@ -478,21 +481,8 @@ rt.register({
     "offer(Ljava/lang/Object;)Z": pbqPut,
     "add(Ljava/lang/Object;)Z": pbqPut,
     "offer(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z": pbqPut,
-    "take()Ljava/lang/Object;": function (this: JPriorityBlockingQueue) {
-      if (this.a.length) return this.a.shift();
-      return new Promise((r) => this.takers.push(r));
-    },
-    "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JPriorityBlockingQueue, d: bigint, u: JTimeUnit) {
-      if (this.a.length) return this.a.shift();
-      return new Promise((resolve) => {
-        const taker = (v: unknown) => resolve(v);
-        this.takers.push(taker);
-        setTimeout(() => {
-          const i = this.takers.indexOf(taker);
-          if (i >= 0) { this.takers.splice(i, 1); resolve(null); }
-        }, Number(d) * u.ms);
-      });
-    },
+    "take()Ljava/lang/Object;": takeFirst,
+    "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": timedPoll,
     "remainingCapacity()I": () => 0x7fffffff,
     "drainTo(Ljava/util/Collection;)I": async function (this: JPriorityBlockingQueue, c: unknown) {
       const n = this.a.length;
@@ -538,7 +528,6 @@ rt.register({
   },
 });
 
-// marker interfaces
 for (const i of ["java/util/concurrent/Executor", "java/util/concurrent/ExecutorService",
   "java/util/concurrent/ScheduledExecutorService", "java/util/concurrent/Future",
   "java/util/concurrent/ScheduledFuture", "java/util/concurrent/Callable", "java/util/concurrent/ThreadFactory",

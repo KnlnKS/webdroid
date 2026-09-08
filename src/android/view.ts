@@ -1,20 +1,18 @@
-// android.view.View/ViewGroup: measure→layout→draw pipeline + touch dispatch.
-// Canvas coordinates: draw() runs with ctx translated to the view's top-left.
-
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { perf } from "../perf";
-import { device } from "../shell/config";
+import { setInvalidateHook, JRect, JCanvas, JMatrix, matMul, rotM, type JPoint } from "./graphics";
 import { mangleMethod, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, idHash } from "../jvm/natives/jlang";
-import { JCanvas, JRect, JPoint, setInvalidateHook, JMatrix, insetsOf, matMul, rotM } from "./graphics";
+import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor } from "./drawable";
+import { JMotionEvent } from "./motionevent";
+import { JObj, rt, type NativeSpec } from "../jvm/runtime";
+import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme } from "./res";
+import { mainHandler, reportUncaught, type JDisplayMetrics } from "./os";
 import { csText } from "./text";
-import { JDrawable, ST, loadDrawableRV, JColorDrawable, loadDrawable, type JColorStateList, cslColor } from "./drawable";
-import { reportUncaught, mainHandler, type JDisplayMetrics } from "./os";
+import { device } from "../shell/config";
+import { rootWindowInsets, type JWindowInsets, sysIns } from "./windowinsets";
+import { mkVPA } from "./viewanimator";
+import type { JContext } from "./context";
 import { onMain } from "./mainloop";
-import { type Resources, JTheme, JAttrSet, AID, attrTable, obtainStyled, rvDimen, rvInt, rvString, askTheme } from "./res";
-import type { JContext } from "./app";
-
-export { AID };
 
 // MeasureSpec
 export const MS_EXACTLY = 0x40000000;
@@ -45,8 +43,6 @@ export const uiState = {
 };
 export function invalidate() { perf.invalidates++; uiState.needsDraw = true; }
 setInvalidateHook(invalidate);
-/** widget.ts owns which editable view the keyboard types into; a programmatic requestFocus()
- *  has to reach it, or an app that opens its own search field gets a caret and no input. */
 let focusHook: (v: JView, on: boolean) => void = () => {};
 export const setFocusHook = (h: typeof focusHook) => { focusHook = h; };
 /** compat.ts owns android.view.animation; View.startAnimation hands it the view to drive */
@@ -106,12 +102,12 @@ async function attachInLayout(this: JViewGroup, c: JView, i: number, lp: JLayout
   attachView(this, c, i);
   return 1;
 }
-function obtainEvent(dt: bigint, et: bigint, action: number, x: number, y: number) {
+export function obtainEvent(dt: bigint, et: bigint, action: number, x: number, y: number) {
   const e = new JMotionEvent();
   e.downTime = Number(dt); e.eventTime = Number(et); e.action = action; e.x = x; e.y = y;
   return e;
 }
-function copyEvent(src: JMotionEvent) {
+export function copyEvent(src: JMotionEvent) {
   const e = new JMotionEvent();
   Object.assign(e, { action: src.action, x: src.x, y: src.y, rawX: src.rawX, rawY: src.rawY, downTime: src.downTime, eventTime: src.eventTime });
   return e;
@@ -522,6 +518,11 @@ function noteDrawError(v: JView, e: unknown) {
   if (drawErrSeen.has(k)) return;
   drawErrSeen.add(k);
   console.error("[draw]", k, e);
+}
+
+function drawingRect(this: JView, r: JRect) {
+  r.left = this.scrollX; r.top = this.scrollY;
+  r.right = this.scrollX + this.width(); r.bottom = this.scrollY + this.height();
 }
 
 const viewMethods: NativeSpec["methods"] = {
@@ -1146,12 +1147,8 @@ const viewMethods: NativeSpec["methods"] = {
   },
   "setBackgroundTintMode(Landroid/graphics/PorterDuff$Mode;)V": () => {},
   "getBackgroundTintMode()Landroid/graphics/PorterDuff$Mode;": () => null,
-  "getDrawingRect(Landroid/graphics/Rect;)V": function (this: JView, r: JRect) {
-    r.left = this.scrollX; r.top = this.scrollY; r.right = this.scrollX + this.width(); r.bottom = this.scrollY + this.height();
-  },
-  "getFocusedRect(Landroid/graphics/Rect;)V": function (this: JView, r: JRect) {
-    r.left = this.scrollX; r.top = this.scrollY; r.right = this.scrollX + this.width(); r.bottom = this.scrollY + this.height();
-  },
+  "getDrawingRect(Landroid/graphics/Rect;)V": drawingRect,
+  "getFocusedRect(Landroid/graphics/Rect;)V": drawingRect,
   "getGlobalVisibleRect(Landroid/graphics/Rect;Landroid/graphics/Point;)Z": function (this: JView, r: JRect, off: { x: number; y: number } | null) {
     const [x, y] = locationOnScreen(this);
     r.left = x; r.top = y; r.right = x + this.width(); r.bottom = y + this.height();
@@ -1622,7 +1619,7 @@ const vgMethods: NativeSpec["methods"] = {
   },
 };
 
-function lpFromAttrs<T extends JLayoutParams>(lp: T, res: Resources, set: JAttrSet | null): T {
+export function lpFromAttrs<T extends JLayoutParams>(lp: T, res: Resources, set: JAttrSet | null): T {
   if (!set?.node) return lp;
   const ta = obtainStyled(res, set.theme, set, [
     AT.layout_width, AT.layout_height, AT.layout_margin, AT.layout_marginLeft, AT.layout_marginTop,
@@ -1654,268 +1651,6 @@ function lpFromAttrs<T extends JLayoutParams>(lp: T, res: Resources, set: JAttrS
   }
   return lp;
 }
-export { lpFromAttrs };
-
-/**
- * The scrollers keep velocity as an EWMA over one sample per frame. A finger that stops moving
- * but stays down produces no samples at all, so the last move's speed survives to the UP and
- * flings a gesture the user had already brought to rest. Those frames did have a velocity —
- * zero — so feed it to them: n missing frames is the same weight applied n times. One frame of
- * silence is the normal cadence between a move and the up that follows it, and costs nothing.
- */
-export const restVelocity = (v: number, weight: number, idleMs: number) =>
-  v * weight ** Math.max(0, idleMs / 16 - 1);
-
-export const SCROLL_WEIGHT = 0.8;
-/** arm a fling above this px/frame, decay it by DECAY each frame, stop below STOP */
-export const FLING = { arm: 2, decay: 0.95, stop: 0.7 };
-export const trackVelocity = (prev: number, d: number, dtMs: number) =>
-  SCROLL_WEIGHT * prev + (1 - SCROLL_WEIGHT) * (d / dtMs * 16);
-
-export class JMotionEvent extends JObj {
-  action = 0;
-  x = 0; y = 0;
-  rawX = 0; rawY = 0;
-  downTime = 0;
-  eventTime = 0;
-}
-rt.register({
-  name: "android/view/MotionEvent", ctor: JMotionEvent, ifaces: ["android/os/Parcelable"],
-  statics: {
-    ACTION_DOWN: 0, ACTION_UP: 1, ACTION_MOVE: 2, ACTION_CANCEL: 3, ACTION_OUTSIDE: 4,
-    ACTION_POINTER_DOWN: 5, ACTION_POINTER_UP: 6, ACTION_MASK: 0xff, ACTION_POINTER_INDEX_MASK: 0xff00,
-    INVALID_POINTER_ID: -1,
-  },
-  methods: {
-    "isFromSource(I)Z": (src: number) => ((0x1002 & src) === src || (0x2 & src) === src ? 1 : 0),
-    "getAxisValue(I)F": () => 0,
-    "getAxisValue(II)F": () => 0,
-    "getFlags()I": () => 0,
-    "getDeviceId()I": () => 0,
-    "getClassification()I": () => 0,
-    "getPressure(I)F": () => 1,
-    "getEventTimeNanos()J": function (this: JMotionEvent) { return BigInt(Math.floor(Number(this.eventTime) * 1e6)); },
-    "getAction()I": function (this: JMotionEvent) { return this.action; },
-    "getActionMasked()I": function (this: JMotionEvent) { return this.action & 0xff; },
-    "getActionIndex()I": () => 0,
-    "getX()F": function (this: JMotionEvent) { return this.x; },
-    "getY()F": function (this: JMotionEvent) { return this.y; },
-    "getX(I)F": function (this: JMotionEvent) { return this.x; },
-    "getY(I)F": function (this: JMotionEvent) { return this.y; },
-    "getRawX()F": function (this: JMotionEvent) { return this.rawX; },
-    "getRawY()F": function (this: JMotionEvent) { return this.rawY; },
-    "getPointerCount()I": () => 1,
-    "getPointerId(I)I": () => 0,
-    "findPointerIndex(I)I": () => 0,
-    // Single-pointer model (matches getX(I)/getY(I) above): every index reuses this event's
-    // one tracked position, so PointerCoords is filled from the same backing fields.
-    "getPointerCoords(ILandroid/view/MotionEvent$PointerCoords;)V": function (this: JMotionEvent, idx: number, out: JPointerCoords) {
-      if (!out) return;
-      out.x = this.x; out.y = this.y;
-      out.pressure = 1; out.size = 0.1;
-      out.orientation = 0;
-      out.touchMajor = out.touchMinor = out.toolMajor = out.toolMinor = 0;
-    },
-    "getDownTime()J": function (this: JMotionEvent) { return BigInt(Math.round(this.downTime)); },
-    "getEventTime()J": function (this: JMotionEvent) { return BigInt(Math.round(this.eventTime)); },
-    "setAction(I)V": function (this: JMotionEvent, a: number) { this.action = a; },
-    "offsetLocation(FF)V": function (this: JMotionEvent, dx: number, dy: number) { this.x += dx; this.y += dy; },
-    "setLocation(FF)V": function (this: JMotionEvent, x: number, y: number) { this.x = x; this.y = y; },
-    "getEdgeFlags()I": () => 0,
-    "transform(Landroid/graphics/Matrix;)V": () => {},
-    "recycle()V": () => {},
-    "getHistorySize()I": () => 0,
-    "getHistoricalX(I)F": function (this: JMotionEvent) { return this.x; },
-    "getHistoricalY(I)F": function (this: JMotionEvent) { return this.y; },
-    "getHistoricalEventTime(I)J": function (this: JMotionEvent) { return BigInt(Math.round(this.eventTime)); },
-    "getPressure()F": () => 1,
-    "getSize()F": () => 0.1,
-    "getToolType(I)I": () => 1,
-    "getSource()I": () => 0x1002,
-    "getButtonState()I": () => 0,
-    "getMetaState()I": () => 0,
-    "static obtain(JJIFFI)Landroid/view/MotionEvent;": obtainEvent,
-    "static obtain(JJIFFFFIFFII)Landroid/view/MotionEvent;": obtainEvent,
-    "static obtainNoHistory(Landroid/view/MotionEvent;)Landroid/view/MotionEvent;": copyEvent,
-    "static obtain(Landroid/view/MotionEvent;)Landroid/view/MotionEvent;": copyEvent,
-  },
-});
-
-// MotionEvent$PointerCoords: a per-pointer snapshot filled in by getPointerCoords(int, PointerCoords).
-// x/y are public Java fields (direct iget/iput from app code), not getter methods.
-class JPointerCoords extends JObj {
-  x = 0; y = 0; pressure = 0; size = 0;
-  orientation = 0; toolMajor = 0; toolMinor = 0; touchMajor = 0; touchMinor = 0;
-}
-rt.register({
-  name: "android/view/MotionEvent$PointerCoords", ctor: JPointerCoords,
-  fields: {
-    x: "x", y: "y", pressure: "pressure", size: "size", orientation: "orientation",
-    toolMajor: "toolMajor", toolMinor: "toolMinor", touchMajor: "touchMajor", touchMinor: "touchMinor",
-  },
-  methods: {
-    "<init>()V": () => {},
-    "<init>(Landroid/view/MotionEvent$PointerCoords;)V": function (this: JPointerCoords, o: JPointerCoords | null) {
-      if (o) Object.assign(this, o);
-    },
-    "clear()V": function (this: JPointerCoords) {
-      this.x = this.y = this.pressure = this.size = this.orientation = 0;
-      this.toolMajor = this.toolMinor = this.touchMajor = this.touchMinor = 0;
-    },
-    "copyFrom(Landroid/view/MotionEvent$PointerCoords;)V": function (this: JPointerCoords, o: JPointerCoords | null) {
-      if (o) Object.assign(this, o);
-    },
-  },
-});
-
-// DragEvent: no drag-and-drop gesture pipeline exists (nothing ever starts a drag), but the
-// class must exist for View$OnDragListener.onDrag(View, DragEvent) and app code that reads
-// DragEvent.ACTION_* constants to link.
-class JDragEvent extends JObj {
-  action = 0; x = 0; y = 0; resultV = false;
-  clipData: unknown = null; clipDescription: unknown = null; localState: unknown = null;
-}
-rt.register({
-  name: "android/view/DragEvent", ctor: JDragEvent, ifaces: ["android/os/Parcelable"],
-  statics: {
-    ACTION_DRAG_STARTED: 1, ACTION_DRAG_LOCATION: 2, ACTION_DROP: 3,
-    ACTION_DRAG_ENDED: 4, ACTION_DRAG_ENTERED: 5, ACTION_DRAG_EXITED: 6,
-  },
-  methods: {
-    "getAction()I": function (this: JDragEvent) { return this.action; },
-    "getX()F": function (this: JDragEvent) { return this.x; },
-    "getY()F": function (this: JDragEvent) { return this.y; },
-    "getResult()Z": function (this: JDragEvent) { return this.resultV ? 1 : 0; },
-    "getClipData()Landroid/content/ClipData;": function (this: JDragEvent) { return this.clipData; },
-    "getClipDescription()Landroid/content/ClipDescription;": function (this: JDragEvent) { return this.clipDescription; },
-    "getLocalState()Ljava/lang/Object;": function (this: JDragEvent) { return this.localState; },
-    "toString()Ljava/lang/String;": () => "DragEvent",
-  },
-});
-
-// ViewPropertyAnimator: the view's transform/alpha properties animated together from the frame
-// loop. As on AOSP the animation starts on the next frame unless start() is called, runs
-// duration+delay with the (default accelerate/decelerate) interpolator, and reports through the
-// AnimatorListener / AnimatorUpdateListener / withStart|EndAction hooks.
-function mkVPA(v: JView): any {
-  const info = rt.link("android/view/ViewPropertyAnimator");
-  const o = new info.ctor();
-  o.view = v;
-  return o;
-}
-type VpaProp = "alphaV" | "translationX" | "translationY" | "translationZ" | "scaleXv" | "scaleYv" | "rotationV";
-const VPA_PROPS: Record<string, VpaProp> = {
-  alpha: "alphaV", translationX: "translationX", translationY: "translationY", translationZ: "translationZ",
-  scaleX: "scaleXv", scaleY: "scaleYv", rotation: "rotationV",
-};
-class JVPA extends JObj {
-  view: JView | null = null;
-  pending = new Map<VpaProp, { to: number; by: boolean }>();
-  from = new Map<VpaProp, number>();
-  to = new Map<VpaProp, number>();
-  durationMs = 300; delayMs = 0;
-  interp: unknown = null;
-  listener: unknown = null; updateL: unknown = null;
-  startAction: unknown = null; endAction: unknown = null;
-  running = false; startT = 0; scheduled = false;
-  /** the animation object handed to listeners: a ValueAnimator whose fraction tracks ours */
-  anim: unknown = null;
-}
-function vpaSet(this: JVPA, prop: VpaProp, v: number, by = false) {
-  this.pending.set(prop, { to: v, by });
-  if (!this.scheduled && !this.running) {
-    // AOSP: starts on the next frame unless start() is called first
-    this.scheduled = true;
-    void onMain(async () => { if (this.scheduled) await vpaStart.call(this); });
-  }
-  return this;
-}
-async function vpaStart(this: JVPA) {
-  this.scheduled = false;
-  const v = this.view;
-  if (!v || !this.pending.size) return;
-  if (this.running) await vpaEnd.call(this, true);
-  this.from.clear(); this.to.clear();
-  for (const [p, { to, by }] of this.pending) { this.from.set(p, v[p]); this.to.set(p, by ? v[p] + to : to); }
-  this.pending.clear();
-  this.running = true;
-  this.startT = performance.now();
-  if (this.startAction) { const r = this.startAction; this.startAction = null; try { await vcall(r, "run", "()V"); } catch (e) { reportUncaught(e); } }
-  if (this.listener) try { await vcall(this.listener, "onAnimationStart", "(Landroid/animation/Animator;)V", vpaAnim(this)); } catch (e) { reportUncaught(e); }
-  const self = this;
-  // the tick is a main-looper job of its own: two animations ending in one frame must not
-  // interleave their end callbacks (RecyclerView's item animator re-enters on that)
-  let inflight = false;
-  uiState.animHooks.add(function hook() {
-    if (!self.running) return false;
-    if (!inflight) { inflight = true; void onMain(() => vpaTick.call(self)).finally(() => { inflight = false; }); }
-    return self.running;
-  });
-  invalidate();
-}
-const accelDecelV = (t: number) => Math.cos((t + 1) * Math.PI) / 2 + 0.5;
-async function vpaTick(this: JVPA) {
-  const v = this.view!;
-  const el = performance.now() - this.startT - this.delayMs;
-  const t = el <= 0 ? 0 : this.durationMs <= 0 ? 1 : Math.min(1, el / this.durationMs);
-  const it = this.interp ? Math.fround(await vcall(this.interp, "getInterpolation", "(F)F", Math.fround(t))) : accelDecelV(t);
-  for (const [p, to] of this.to) v[p] = this.from.get(p)! + (to - this.from.get(p)!) * it;
-  if (this.updateL) try { await vcall(this.updateL, "onAnimationUpdate", "(Landroid/animation/ValueAnimator;)V", vpaAnim(this)); } catch (e) { reportUncaught(e); }
-  invalidate();
-  if (t >= 1) await vpaEnd.call(this, false);
-}
-async function vpaEnd(this: JVPA, cancelled: boolean) {
-  if (!this.running) return;
-  this.running = false;
-  const v = this.view!;
-  if (!cancelled) for (const [p, to] of this.to) v[p] = to;
-  invalidate();
-  if (this.listener) {
-    try {
-      if (cancelled) await vcall(this.listener, "onAnimationCancel", "(Landroid/animation/Animator;)V", vpaAnim(this));
-      await vcall(this.listener, "onAnimationEnd", "(Landroid/animation/Animator;)V", vpaAnim(this));
-    } catch (e) { reportUncaught(e); }
-  }
-  if (this.endAction && !cancelled) { const r = this.endAction; this.endAction = null; try { await vcall(r, "run", "()V"); } catch (e) { reportUncaught(e); } }
-  else if (cancelled) this.endAction = null;
-}
-function vpaAnim(a: JVPA): unknown {
-  if (!a.anim) {
-    const o = new (rt.link("android/animation/ValueAnimator").ctor)();
-    o.durationMs = a.durationMs; o.delayMs = a.delayMs;
-    a.anim = o;
-  }
-  return a.anim;
-}
-const VPA = "Landroid/view/ViewPropertyAnimator;";
-const vpaMethods: NonNullable<NativeSpec["methods"]> = {
-  [`setDuration(J)${VPA}`]: function (this: JVPA, d: bigint) { this.durationMs = Number(d); return this; },
-  "getDuration()J": function (this: JVPA) { return BigInt(this.durationMs); },
-  [`setStartDelay(J)${VPA}`]: function (this: JVPA, d: bigint) { this.delayMs = Number(d); return this; },
-  "getStartDelay()J": function (this: JVPA) { return BigInt(this.delayMs); },
-  [`setInterpolator(Landroid/animation/TimeInterpolator;)${VPA}`]: function (this: JVPA, i: unknown) { this.interp = i; return this; },
-  [`setInterpolator(Landroid/view/animation/Interpolator;)${VPA}`]: function (this: JVPA, i: unknown) { this.interp = i; return this; },
-  "getInterpolator()Landroid/animation/TimeInterpolator;": function (this: JVPA) { return this.interp; },
-  [`setListener(Landroid/animation/Animator$AnimatorListener;)${VPA}`]: function (this: JVPA, l: unknown) { this.listener = l; return this; },
-  [`setUpdateListener(Landroid/animation/ValueAnimator$AnimatorUpdateListener;)${VPA}`]: function (this: JVPA, l: unknown) { this.updateL = l; return this; },
-  [`withStartAction(Ljava/lang/Runnable;)${VPA}`]: function (this: JVPA, r: unknown) { this.startAction = r; return this; },
-  [`withEndAction(Ljava/lang/Runnable;)${VPA}`]: function (this: JVPA, r: unknown) { this.endAction = r; return this; },
-  [`withLayer()${VPA}`]: function (this: JVPA) { return this; },
-  "start()V": function (this: JVPA) { return vpaStart.call(this); },
-  "cancel()V": function (this: JVPA) { this.pending.clear(); this.scheduled = false; return vpaEnd.call(this, true); },
-  // x/y are absolute: the translation that puts the view's left/top there
-  [`x(F)${VPA}`]: function (this: JVPA, x: number) { return vpaSet.call(this, "translationX", x - (this.view?.left ?? 0)); },
-  [`y(F)${VPA}`]: function (this: JVPA, y: number) { return vpaSet.call(this, "translationY", y - (this.view?.top ?? 0)); },
-  [`xBy(F)${VPA}`]: function (this: JVPA, x: number) { return vpaSet.call(this, "translationX", x, true); },
-  [`yBy(F)${VPA}`]: function (this: JVPA, y: number) { return vpaSet.call(this, "translationY", y, true); },
-};
-for (const [name, prop] of Object.entries(VPA_PROPS)) {
-  vpaMethods[`${name}(F)${VPA}`] = function (this: JVPA, v: number) { return vpaSet.call(this, prop, v); };
-  vpaMethods[`${name}By(F)${VPA}`] = function (this: JVPA, v: number) { return vpaSet.call(this, prop, v, true); };
-}
-vpaMethods[`rotationX(F)${VPA}`] = vpaMethods[`rotationY(F)${VPA}`] = function (this: JVPA) { return this; };
-vpaMethods[`rotationXBy(F)${VPA}`] = vpaMethods[`rotationYBy(F)${VPA}`] = function (this: JVPA) { return this; };
-rt.register({ name: "android/view/ViewPropertyAnimator", ctor: JVPA, methods: vpaMethods });
 
 // ViewTreeObserver
 class JVTO extends JObj {
@@ -2259,180 +1994,5 @@ rt.register({
     "disable()V": function (this: JOrientationEventListener) { this.enabled = 0; },
     "canDetectOrientation()Z": () => 1,
     "onOrientationChanged(I)V": () => {},
-  },
-});
-
-// ── WindowInsets. AOSP keeps one Insets value per Type bit and dispatches the window's insets
-// down the tree on every traversal; androidx's WindowInsetsCompat is a thin wrapper over it, and
-// a Material app reads its bar heights (and often its own "the view is ready" signal) from there.
-type Ins = { left: number; top: number; right: number; bottom: number };
-/** android.view.WindowInsets.Type bit positions */
-const IT_STATUS = 0, IT_NAV = 1, IT_CAPTION = 2, IT_IME = 3, IT_GESTURES = 4,
-  IT_MANDATORY = 5, IT_TAPPABLE = 6, IT_CUTOUT = 7, IT_OVERLAYS = 8, IT_TYPES = 9;
-const TYPE_BARS = (1 << IT_STATUS) | (1 << IT_NAV) | (1 << IT_CAPTION);
-
-class JWindowInsets extends JObj {
-  ins: (Ins | null)[] = new Array(IT_TYPES).fill(null);
-  /** per-type visibility, as AOSP's mVisible bitmask */
-  vis = ~0;
-  consumedV = false;
-  copy(): JWindowInsets {
-    const w = new JWindowInsets();
-    w.ins = this.ins.slice(); w.vis = this.vis; w.consumedV = this.consumedV;
-    return w;
-  }
-}
-/** AOSP unions the requested types side by side (max), skipping invisible ones */
-function insUnion(w: JWindowInsets, mask: number, ignoreVis: boolean) {
-  let l = 0, t = 0, r = 0, b = 0;
-  for (let i = 0; i < IT_TYPES; i++) {
-    if (!(mask & (1 << i))) continue;
-    if (!ignoreVis && !(w.vis & (1 << i))) continue;
-    const s = w.ins[i];
-    if (!s) continue;
-    if (s.left > l) l = s.left; if (s.top > t) t = s.top;
-    if (s.right > r) r = s.right; if (s.bottom > b) b = s.bottom;
-  }
-  return insetsOf(l, t, r, b);
-}
-const insShrink = (s: Ins | null, l: number, t: number, r: number, b: number): Ins | null =>
-  !s ? null : { left: Math.max(0, s.left - l), top: Math.max(0, s.top - t), right: Math.max(0, s.right - r), bottom: Math.max(0, s.bottom - b) };
-/** the bars as one rect, the shape the deprecated system-window API and fitSystemWindows use */
-const sysIns = (w: JWindowInsets) => insUnion(w, TYPE_BARS, false);
-
-let rootIns: JWindowInsets | null = null;
-/**
- * The window's insets. The shell lays the decor out at `contentTop()` — BELOW the status bar —
- * so the bar never overlaps the app and `statusBars()` is genuinely zero; the window's bottom
- * edge is the physical bottom, so the gesture bar is the one inset an app has to pad for.
- * (The mihon golden is the proof: its bottom nav sits 48px higher than ours drew it.)
- * Cached: it only changes when the device profile does.
- */
-export function rootWindowInsets(): JWindowInsets {
-  if (rootIns) return rootIns;
-  const w = new JWindowInsets();
-  const bar = { left: 0, top: 0, right: 0, bottom: device.navBar };
-  w.ins[IT_NAV] = w.ins[IT_GESTURES] = w.ins[IT_MANDATORY] = bar;
-  // no soft keyboard, no cutout, no freeform caption: those types exist but are never shown
-  w.vis = ~((1 << IT_IME) | (1 << IT_CUTOUT) | (1 << IT_CAPTION));
-  return (rootIns = w);
-}
-/** AOSP's ViewRootImpl traversal: hand the window's insets to the decor, which walks them down */
-export async function dispatchWindowInsets(root: JView) {
-  await vcall(root, "dispatchApplyWindowInsets",
-    "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", rootWindowInsets());
-}
-
-const wiMethods: NativeSpec["methods"] = {
-  "<init>(Landroid/view/WindowInsets;)V": function (this: JWindowInsets, o: JWindowInsets | null) {
-    if (o) { this.ins = o.ins.slice(); this.vis = o.vis; this.consumedV = o.consumedV; }
-  },
-  "getInsets(I)Landroid/graphics/Insets;": function (this: JWindowInsets, m: number) { return insUnion(this, m, false); },
-  "getInsetsIgnoringVisibility(I)Landroid/graphics/Insets;": function (this: JWindowInsets, m: number) { return insUnion(this, m, true); },
-  "isVisible(I)Z": function (this: JWindowInsets, m: number) { return (this.vis & m) === m ? 1 : 0; },
-  "getSystemWindowInsets()Landroid/graphics/Insets;": function (this: JWindowInsets) { return sysIns(this); },
-  "getStableInsets()Landroid/graphics/Insets;": function (this: JWindowInsets) { return sysIns(this); },
-  "getSystemGestureInsets()Landroid/graphics/Insets;": function (this: JWindowInsets) { return insUnion(this, 1 << IT_GESTURES, true); },
-  "getMandatorySystemGestureInsets()Landroid/graphics/Insets;": function (this: JWindowInsets) { return insUnion(this, 1 << IT_MANDATORY, true); },
-  "getTappableElementInsets()Landroid/graphics/Insets;": function (this: JWindowInsets) { return insUnion(this, 1 << IT_TAPPABLE, true); },
-  "getSystemWindowInsetLeft()I": function (this: JWindowInsets) { return sysIns(this).left; },
-  "getSystemWindowInsetTop()I": function (this: JWindowInsets) { return sysIns(this).top; },
-  "getSystemWindowInsetRight()I": function (this: JWindowInsets) { return sysIns(this).right; },
-  "getSystemWindowInsetBottom()I": function (this: JWindowInsets) { return sysIns(this).bottom; },
-  "getStableInsetLeft()I": function (this: JWindowInsets) { return sysIns(this).left; },
-  "getStableInsetTop()I": function (this: JWindowInsets) { return sysIns(this).top; },
-  "getStableInsetRight()I": function (this: JWindowInsets) { return sysIns(this).right; },
-  "getStableInsetBottom()I": function (this: JWindowInsets) { return sysIns(this).bottom; },
-  "hasSystemWindowInsets()Z": function (this: JWindowInsets) { const s = sysIns(this); return s.left || s.top || s.right || s.bottom ? 1 : 0; },
-  "hasStableInsets()Z": function (this: JWindowInsets) { const s = sysIns(this); return s.left || s.top || s.right || s.bottom ? 1 : 0; },
-  "hasInsets()Z": function (this: JWindowInsets) { return this.ins.some((i) => i) ? 1 : 0; },
-  "isConsumed()Z": function (this: JWindowInsets) { return this.consumedV ? 1 : 0; },
-  "isRound()Z": () => 0,
-  "getDisplayCutout()Landroid/view/DisplayCutout;": () => null,
-  "getRoundedCorner(I)Landroid/view/RoundedCorner;": () => null,
-  "getPrivacyIndicatorBounds()Landroid/graphics/Rect;": () => null,
-  "consumeDisplayCutout()Landroid/view/WindowInsets;": function (this: JWindowInsets) { return this; },
-  "consumeStableInsets()Landroid/view/WindowInsets;": function (this: JWindowInsets) { return this; },
-  // Consuming the bars is how a parent tells the rest of the tree "I have handled these": AOSP's
-  // ViewGroup stops walking down as soon as the returned insets report themselves consumed.
-  "consumeSystemWindowInsets()Landroid/view/WindowInsets;": function (this: JWindowInsets) {
-    const w = this.copy();
-    for (let i = 0; i < IT_TYPES; i++) if (TYPE_BARS & (1 << i)) w.ins[i] = null;
-    w.consumedV = true;
-    return w;
-  },
-  "replaceSystemWindowInsets(IIII)Landroid/view/WindowInsets;": function (this: JWindowInsets, l: number, t: number, r: number, b: number) {
-    const w = this.copy();
-    w.ins[IT_STATUS] = { left: l, top: t, right: r, bottom: 0 };
-    w.ins[IT_NAV] = { left: 0, top: 0, right: 0, bottom: b };
-    return w;
-  },
-  "inset(IIII)Landroid/view/WindowInsets;": function (this: JWindowInsets, l: number, t: number, r: number, b: number) {
-    const w = this.copy();
-    w.ins = w.ins.map((s) => insShrink(s, l, t, r, b));
-    return w;
-  },
-  "equals(Ljava/lang/Object;)Z": function (this: JWindowInsets, o: unknown) {
-    if (!(o instanceof JWindowInsets) || o.vis !== this.vis || o.consumedV !== this.consumedV) return 0;
-    return this.ins.every((s, i) => {
-      const t = o.ins[i];
-      return !s || !t ? s === t : s.left === t.left && s.top === t.top && s.right === t.right && s.bottom === t.bottom;
-    }) ? 1 : 0;
-  },
-  "hashCode()I": function (this: JWindowInsets) { const s = sysIns(this); return (s.left * 31 + s.top) * 31 + s.bottom; },
-  "toString()Ljava/lang/String;": function (this: JWindowInsets) { return `WindowInsets{${sysIns(this)}}`; },
-};
-const CONSUMED_INSETS = new JWindowInsets();
-CONSUMED_INSETS.consumedV = true;
-rt.register({
-  name: "android/view/WindowInsets", ctor: JWindowInsets,
-  statics: { CONSUMED: CONSUMED_INSETS },
-  methods: { "<init>()V": () => {}, ...wiMethods },
-});
-rt.register({
-  name: "android/view/WindowInsets$Type", ctor: class extends JObj {},
-  methods: {
-    "static statusBars()I": () => 1 << IT_STATUS,
-    "static navigationBars()I": () => 1 << IT_NAV,
-    "static captionBar()I": () => 1 << IT_CAPTION,
-    "static ime()I": () => 1 << IT_IME,
-    "static systemGestures()I": () => 1 << IT_GESTURES,
-    "static mandatorySystemGestures()I": () => 1 << IT_MANDATORY,
-    "static tappableElement()I": () => 1 << IT_TAPPABLE,
-    "static displayCutout()I": () => 1 << IT_CUTOUT,
-    "static systemBars()I": () => TYPE_BARS,
-    "static systemOverlays()I": () => 1 << IT_OVERLAYS,
-    "static all()I": () => -1,
-  },
-});
-class JWIBuilder extends JObj { w = new JWindowInsets(); }
-/** one Type bit at a time, as AOSP's Builder does (a mask with several bits is a hidden error) */
-const wibSet = function (this: JWIBuilder, mask: number, i: Ins | null) {
-  for (let b = 0; b < IT_TYPES; b++) if (mask & (1 << b)) this.w.ins[b] = i;
-  return this;
-};
-rt.register({
-  name: "android/view/WindowInsets$Builder", ctor: JWIBuilder,
-  methods: {
-    "<init>()V": function (this: JWIBuilder) { this.w = new JWindowInsets(); },
-    "<init>(Landroid/view/WindowInsets;)V": function (this: JWIBuilder, o: JWindowInsets | null) { this.w = o ? o.copy() : new JWindowInsets(); },
-    "setInsets(ILandroid/graphics/Insets;)Landroid/view/WindowInsets$Builder;": wibSet,
-    "setInsetsIgnoringVisibility(ILandroid/graphics/Insets;)Landroid/view/WindowInsets$Builder;": wibSet,
-    "setVisible(IZ)Landroid/view/WindowInsets$Builder;": function (this: JWIBuilder, mask: number, on: number) {
-      this.w.vis = on ? this.w.vis | mask : this.w.vis & ~mask;
-      return this;
-    },
-    // the deprecated whole-window setters: split the rect back into the bars it describes
-    "setSystemWindowInsets(Landroid/graphics/Insets;)Landroid/view/WindowInsets$Builder;": function (this: JWIBuilder, i: Ins) {
-      this.w.ins[IT_STATUS] = { left: i.left, top: i.top, right: i.right, bottom: 0 };
-      this.w.ins[IT_NAV] = { left: 0, top: 0, right: 0, bottom: i.bottom };
-      return this;
-    },
-    "setStableInsets(Landroid/graphics/Insets;)Landroid/view/WindowInsets$Builder;": function (this: JWIBuilder) { return this; },
-    "setSystemGestureInsets(Landroid/graphics/Insets;)Landroid/view/WindowInsets$Builder;": function (this: JWIBuilder, i: Ins) { this.w.ins[IT_GESTURES] = i; return this; },
-    "setMandatorySystemGestureInsets(Landroid/graphics/Insets;)Landroid/view/WindowInsets$Builder;": function (this: JWIBuilder, i: Ins) { this.w.ins[IT_MANDATORY] = i; return this; },
-    "setTappableElementInsets(Landroid/graphics/Insets;)Landroid/view/WindowInsets$Builder;": function (this: JWIBuilder, i: Ins) { this.w.ins[IT_TAPPABLE] = i; return this; },
-    "setDisplayCutout(Landroid/view/DisplayCutout;)Landroid/view/WindowInsets$Builder;": function (this: JWIBuilder) { return this; },
-    "build()Landroid/view/WindowInsets;": function (this: JWIBuilder) { return this.w; },
   },
 });

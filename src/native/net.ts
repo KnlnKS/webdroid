@@ -455,11 +455,6 @@ export function nativeSocketWrite(cpu: Cpu, fd: number, source: number, length: 
   return socket.relay.write(mem.u8.slice(source, source + length)) ? length : fail(cpu, E.NOTCONN);
 }
 
-export function pollHasNativeSocket(pollfds: number, count: number): boolean {
-  for (let i = 0; i < count; i++) if (sockets.has(mem.ld32(pollfds + i * 8))) return true;
-  return false;
-}
-
 function scanPoll(pollfds: number, count: number): number {
   let ready = 0;
   for (let i = 0; i < count; i++) {

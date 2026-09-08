@@ -64,8 +64,7 @@ async function runInit(mod: Module): Promise<void> {
 }
 
 function resolveGlobal(sym: string, weak: boolean, _from: Module): number {
-  for (const m of modules) { const a = m.exports.get(sym); if (a !== undefined) return a; }
-  const h = lookupHost(sym);
+  const h = resolveGlobalOrNull(sym);
   if (h !== undefined) return h;
   if (weak) return 0;
   return missingStub(sym);
@@ -177,7 +176,7 @@ export function dlInit(): void {
 const nameStrs = new Map<Module, number>();
 function nameStr(m: Module): number { let p = nameStrs.get(m); if (!p) nameStrs.set(m, (p = mem.hostStr(`/data/app/lib/${m.w64 ? "arm64-v8a" : "armeabi-v7a"}/${m.name}`))); return p; }
 
-function resolveGlobalOrNull(sym: string): number | undefined {
+export function resolveGlobalOrNull(sym: string): number | undefined {
   for (const m of modules) { const a = m.exports.get(sym); if (a !== undefined) return a; }
   return lookupHost(sym);
 }

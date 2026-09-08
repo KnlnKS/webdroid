@@ -1,8 +1,8 @@
 # PLAN — running AOSP's own framework instead of writing it
 
-Work queue for the framework-bytecode effort. **Read `AGENTS.md` first** — it holds the
-project's invariants and the negative results, and this file does not repeat them. Sections
-named below in quotes are AGENTS.md sections.
+Work queue for the framework-bytecode effort. **Read `AGENTS.md` first** — it holds current project invariants and verification commands. Historical investigations
+and negative results live in [the implementation history](docs/implementation-history.md);
+quoted investigation titles below refer to that document.
 
 ## Why this exists
 
@@ -12,7 +12,7 @@ the work queue is driven by whichever apk crashed last. AOSP's boundary *is* clo
 **zero** native methods — the layer that costs the most to hand-write is pure Java sitting on
 a fixed JNI line. Run AOSP's bytecode; own only that line.
 
-See "One build, or none" and "The delegates" in AGENTS.md.
+See “One build, or none” and “The delegates” in the implementation history.
 
 ## Where this stands
 
@@ -20,19 +20,16 @@ See "One build, or none" and "The delegates" in AGENTS.md.
 |---|---|
 | Framework provenance | `bun run gen-framework` pulls the jar + res pair off the reference AVD and proves the ids agree (0 wrong paired, 3,582 wrong against a relinked table) |
 | Policy | `src/jvm/provenance.ts`. `BYTECODE` is empty by default; `?bytecode=<prefix,...>` on the shell URL and `WEBDROID_BYTECODE=` for the e2e driver cut a subtree over **for one run**, no rebuild |
-| Delegates | `src/android/delegates.ts` — Paint 86/86, Canvas 33/33, BaseCanvas 32/32, Matrix 40/40, Path 43/43, Typeface 17/17, Bitmap 42/46, AssetManager 55/55, XmlBlock 22/22, StringBlock 5/5, LineBreaker 10/10, MeasuredText 5/6 + Builder 5/5 |
-| Coverage | `fwtest` 295/363 graphics · `fwtest android/content/res/` 82/97 · `fwtest android/graphics/text/` 20/37 |
-| Evidence, headless | `bun run fwtest`: `new Paint/Matrix/Path`, `Bitmap.createBitmap` + pixel round-trip, three AssetManager lookups, `android:layout/alert_dialog` opened through `nativeOpenXmlAsset` and walked to END_DOCUMENT |
-| Evidence, in a page | `bun run textcmp`: AOSP's own `StaticLayout` against ours, **6/6 paragraphs break identically** |
-| e2e (last full run, 2026-09-07) | fitnotes 43.07 (39/39) · mihon-onboarding 17.56 (5/5) · mihon-app 97.63 (11/17, wedged) · harmonic 37.87 (14/14). **Gate not clean**: Mihon scheduler/Compose failures also reproduce on original `f1ff695`; live Harmonic content varies. All four smoke flows complete, with the existing Lichess native Flutter failure. See `tests/e2e/report/index.html`. |
-| Corpus | Last corpus run: 7/8 render. Subsequent focused Among Us testing reaches Practice gameplay; the corpus has not been rerun. |
-| Native tier | ARM32 **and AArch64**. Among Us executes Unity/IL2CPP through a shared cold interpreter and bounded hot-block compiler. Practice on The Skeld renders and accepts joystick movement, with empty reached missing-API telemetry. Controlled gameplay remains roughly 4–9 fps; online play is unverified. See "Among Us: Practice and code-cache pressure" in AGENTS.md. |
-| Screen | a resolved **setting**, default 1080x2424 @480dpi (360x808dp). `?screen=WxH@dpi`, `WEBDROID_SCREEN`, or the shell's own panel. The gate stays pinned to each flow's goldens — see "The screen is a setting" in AGENTS.md |
+| Delegates | `src/android/delegates.ts` routes framework natives into the same graphics/resource/text implementations used by TS. `fwtest` reports current coverage and real-bytecode evidence. |
+| Regression evidence | Current scores and rendered-step counts live in `tests/e2e/report/report.json`; per-step diagnostics and costs live in `tests/e2e/actual/`. The pre-cleanup run had known Mihon scheduler/Compose failures and variable live Harmonic content; compare against the starting commit before attributing a regression. |
+| Corpus | `bun run corpus` reports current breadth. Focused Among Us testing reaches Practice; a boot-only corpus pass does not establish gameplay. |
+| Native tier | ARM32 **and AArch64**. Among Us executes Unity/IL2CPP through a shared cold interpreter and bounded hot-block compiler. Practice on The Skeld renders and accepts joystick movement, with empty reached missing-API telemetry. Controlled gameplay remains roughly 4–9 fps; online play is unverified. See "Among Us: Practice and code-cache pressure" in the implementation history. |
+| Screen | a resolved **setting**, default 1080x2424 @480dpi (360x808dp). `?screen=WxH@dpi`, `WEBDROID_SCREEN`, or the shell's own panel. The gate stays pinned to each flow's goldens — see "The screen is a setting" in the implementation history |
 
 ## What a cut costs — measured, not projected
 
 This is the thing that changed the plan, and the next reader should start here. Full write-up:
-"What a cut costs, measured" in AGENTS.md.
+"What a cut costs, measured" in the implementation history.
 
 With `android/graphics/{Paint,Canvas,BaseCanvas,Matrix,Path,Typeface,Bitmap}` served by
 `vendor/aosp/framework.jar`, **fitnotes runs its whole 39-step flow**: 43.33% content diff
@@ -149,7 +146,7 @@ every AIDL service, no transaction codes.
 **Verify:** an exercise asking a real `ContextImpl` for a service and getting a local object.
 **Traps:** `SystemServiceRegistry` is the machine-readable list of what exists — read it rather
 than enumerating by hand. An unmodelled service must be **null**, not a stand-in: see
-"Generality: what a device without the thing reports" in AGENTS.md.
+"Generality: what a device without the thing reports" in the implementation history.
 
 ### 3.2 Parcel — 57 natives. **Decide before building.**
 Needed for `Bundle`, `Parcelable` and saved instance state, *not* for services if 3.1 lands. A
@@ -170,7 +167,7 @@ not, the cut costs 277 more natives and the plan changes.
 ## 4. Performance — the sync tier is the largest number in the tree
 
 **Blocked, and not on the analysis.** Read "The sync tier is worth 24x, and we cannot have it
-yet" in AGENTS.md in full before touching this.
+yet" in the implementation history in full before touching this.
 
 Summary: 490M sync calls/s against 20M async; the analysis works and says 40% of reachable
 bodies cannot suspend; it is off (`?sync=1`) because 67 of our natives return a promise without
@@ -186,40 +183,24 @@ lists are coverage-dependent and were measured failing. Options worth designing:
 `bun run natcheck` is the instrument. **Do not attempt the tier without solving this first** —
 it has been tried three ways and measured.
 
-## 5. Native tier **[parallel]** — what the remaining apks need
+## 5. Native tier — remaining work
 
-- **NEON is unimplemented and is now the wall.** `vfp.ts` is VFPv3 scalar; there is no SIMD at
-  all. Every large arm64 image in the corpus — libc++_shared, libEOSSDK, libunity, libil2cpp —
-  stops at its first NEON encoding, each one named in the fault. Measured over `libil2cpp.so`'s
-  11.2M instructions, SIMD is 2.4% of the image; over `libunity.so` it is 10.6%. **Do not guess
-  lane order or saturation**: a wrong lane is a plausible number nothing will flag (rule 5).
-- **The Bionic surface those images want.** `bun scripts/nrun.ts <apk> <lib> --link` prints the
-  unresolved imports per image: 322 for libEOSSDK, 346 for libunity. That list is the queue, and
-  it is mostly `_l` locale variants, `__*_chk` fortified wrappers, `pthread_rwlock_*`,
-  `dl_iterate_phdr`, `getauxval` and `__system_property_get`.
-- **`libandroid.so`, `libOpenSLES.so`, `libmediandk.so` do not exist here at all**, and
-  `libGLESv3.so` is what Unity's renderer needs. A programmable-pipeline GLES host library is
-  roughly `gles1.ts`'s size and is **independent of the CPU work** — do not entangle them.
-- **Thumb-2 is still unimplemented** (`thumb.ts` faults on every 32-bit T32 encoding). It is
-  orthogonal to the arm64 work: lichess and Among Us ship arm64 only, so no amount of Thumb-2
-  reaches them. mihon's v7a libs are all claimed by TS shims before the tier sees them.
-- **`Build.SUPPORTED_ABIS` still advertises arm64-v8a.** That is now true of the *device* and
-  true of the *tier* for loading, and `rt.nativeAbis` is the separate fact about what executes.
-  Deliberately not changed: the device profile is a modern phone, and reporting v7a-only would
-  make a ReLinker-style app extract a v7a library Thumb-2 cannot run in preference to reporting
-  the honest arm64 requirement.
-- No ifuncs, no symbol versioning, no `DT_RELR` — all three measured absent from every arm64
-  image in the corpus, and `DT_RELR`/`DT_ANDROID_RELA` are now *refused by name* rather than
-  skipped, because relocations silently never applied crash somewhere unrelated.
-- Direct `ByteBuffer` unsupported; no `libjnigraphics.so`.
-- **wasm as the backend** (the open question above): not yet, and the measurements say why. The
-  JS backend's floor is ~800M instr/s on all-64-bit code and its ceiling ~4.3G on 32-bit code.
-  wasm's advantage is i64 as a native type, which buys the floor — real, but it costs the whole
-  `flags.ts` string-pass architecture, `selfLoop`, block invalidation and the `new Function`
-  compile model, and it cannot be staged. Revisit only if a profile shows an app spending its
-  time in 64-bit arithmetic.
+- A64 SIMD/FP, JNI, Bionic host services, EGL/GLES3, and NDK libraries are implemented far
+  enough for Among Us Practice on The Skeld. Cold instruction families share handlers; hot
+  blocks compile after the configured threshold and are bounded by the compiled-code cache.
+- Practice renders and accepts movement, but gameplay is not yet smooth. Profile real play
+  before changing CPU, graphics, or cache policy; preserve the hardware-oracle and cache tests.
+- Local UDP supports process-local sessions. External UDP has no relay. Remote certificate
+  trust, Google account services, and online play remain unfinished or unverified.
+- Asset packs use range-backed reads with bounded caching. Do not restore whole-pack browser
+  downloads or treat asset data as the cause of the previously measured executable-code GC storm.
+- Thumb-2, symbol-version/ifunc support, and additional relocation formats are separate work;
+  inspect actual library requirements before extending them. Unsupported relocations must
+  continue to fail explicitly.
+- A different execution backend remains a measured architectural decision, not cleanup work.
+  Preserve split low/high registers, lazy compilation, shared cold handlers, and invalidation.
 
-## 6. Corpus and coverage **[parallel]**
+## 6. Corpus and coverage
 
 - **`gen-framework` should also pull `core-icu4j.jar`** from the i18n apex. Framework bytecode
   on any locale path needs `android/icu/*`, and it is not in `framework.jar`.
@@ -256,12 +237,11 @@ it has been tried three ways and measured.
    wrong value is worse than an honest empty one, because nothing will ever flag it.
 6. **Every commit is one idea**, in the project's lowercase `area: sentence` style, and says
    what was measured.
-7. **Negative results get written into AGENTS.md and the code deleted.**
+7. **Negative results get recorded in the implementation history and rejected code deleted.**
 
 # How to verify anything
 
-The commands, the janitor greps and the private-port rule live in **AGENTS.md's "Verify"
-section** — run them from there, so there is one copy to keep true. The cut-scoring form is
+The commands, the janitor greps and the private-port rule live in **AGENTS.md's "Verify" section** — run them from there, so there is one copy to keep true. The cut-scoring form is
 the one thing specific to this file:
 
 ```bash
@@ -270,9 +250,9 @@ WEBDROID_BYTECODE='android/graphics/Paint,android/graphics/Canvas' \
 ```
 
 **Reading the scores.** fitnotes and mihon-onboarding are repeatable to the digit; mihon-app
-spreads ~1.4 (measured over seven runs -- see "Harness notes" in AGENTS.md), so only fitnotes is
+spreads ~1.4 (measured over seven runs -- see "Harness notes" in the implementation history), so only fitnotes is
 a tight gate. **harmonic spreads ~6 points run to run on identical code**
-because it renders live Hacker News — see "Harness notes" in AGENTS.md for the measurements, and
+because it renders live Hacker News — see "Harness notes" in the implementation history for the measurements, and
 A/B against the parent commit before believing anything. Read `draws`/`drawMs` beside the
 per-step content diff, never alone.
 

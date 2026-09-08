@@ -153,7 +153,6 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
       body = w & (1 << 22) ? `r[${rd}]=(r[${rd}]&0xffff)|${imm16 << 16};` : `r[${rd}]=${imm16};`;
     }
     else {
-      // data processing
       const op = (w >>> 21) & 15, S = w & (1 << 20);
       const o = op2(w, pc);
       const isLogical = op === 0 || op === 1 || op === 8 || op === 9 || op === 12 || op === 13 || op === 14 || op === 15;
@@ -209,7 +208,6 @@ function emit(pc: number, w: number, out: Ins[], k: number): boolean {
       }
     }
   } else if (top === 4) {
-    // LDM/STM
     const P = w & (1 << 24), U = w & (1 << 23), W = w & (1 << 21), L = w & (1 << 20);
     const list = w & 0xffff;
     let n = 0;

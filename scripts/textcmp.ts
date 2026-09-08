@@ -32,7 +32,7 @@ async function layouts(cut: boolean) {
   const resp = await page.goto(cut ? `${BASE_URL}/?bytecode=${encodeURIComponent(CUT)}` : BASE_URL, { waitUntil: "domcontentloaded" });
   if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE_URL} — run \`bun run dev\``);
   await page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
-  await page.evaluate(() => (document as any).fonts.ready);
+  await page.evaluate(() => document.fonts.ready);
   // BOTH sides boot. Native specs get their mangled methods at rt.link, which boot is what
   // runs (see "Native classes need rt.link() before direct TS instantiation" in AGENTS.md), and
   // the framework dex a cut resolves against is fetched by the same boot.

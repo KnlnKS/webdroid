@@ -11,14 +11,19 @@ import { loadFramework, loadFrameworkDex } from "../android/framework";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
 import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguration } from "../android/resnative";
-import { setAppHost, setManifest, type AppHost, JIntent, ensureDecor, JActivity, JMenu, pushMenuToBar, JContext, fireActivityLifecycle, manifestActivityTheme, manifestActivityOrientation, startingWindow, APPEARANCE_LIGHT_STATUS_BARS, deliverActivityResult, activityHandlesConfig, CONFIG_UI_MODE } from "../android/app";
+import { setAppHost, type AppHost } from "../android/apphost";
+import { setManifest, manifestActivityTheme, manifestActivityOrientation, activityHandlesConfig, CONFIG_UI_MODE } from "../android/pm";
+import { JIntent, deliverActivityResult } from "../android/intent";
+import { ensureDecor, startingWindow } from "../android/decor";
+import { JActivity, fireActivityLifecycle } from "../android/app";
+import { JMenu, pushMenuToBar } from "../android/menu";
+import { JContext } from "../android/context";
+import { APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
 import { reportUncaught, JBundle } from "../android/os";
 import { onMain, inMainJob } from "../android/mainloop";
-import {
-  JView, JViewGroup, uiState, measureView, layoutView, drawView, makeSpec, MS_EXACTLY,
-  JMotionEvent, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall,
-  dispatchWindowInsets,
-} from "../android/view";
+import { JView, JViewGroup, uiState, measureView, layoutView, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
+import { JMotionEvent } from "../android/motionevent";
+import { dispatchWindowInsets } from "../android/windowinsets";
 import { JCanvas, cssColor, tfMedium } from "../android/graphics";
 import { overlays, drawToasts, dismissOverlay } from "../android/popup";
 import { webLayerSweep } from "../android/webkit";
@@ -138,7 +143,6 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   const themeAttr = appNode?.attrs.find((a) => a.name === "theme");
   const labelAttr = appNode?.attrs.find((a) => a.name === "label");
   const iconAttr = appNode?.attrs.find((a) => a.name === "icon");
-  // find launcher activity
   let mainActivity: string | null = null;
   aliasTargets.clear();
   const activities = new Map<string, XmlNode>();
@@ -736,7 +740,6 @@ async function dispatchPointer0(action: number, x: number, y: number, t: number)
   const ly = y - contentTop();
   try {
     if (action === 0) {
-      // hit-test overlays topmost first
       for (let i = overlays.length - 1; i >= 0; i--) {
         const o = overlays[i];
         const v = o.view;

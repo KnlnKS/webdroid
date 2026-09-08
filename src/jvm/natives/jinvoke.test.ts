@@ -4,38 +4,21 @@ import { boxInt, newObj, vcall } from "./jlang";
 import { mkMethod } from "./jreflect";
 import "./jinvoke";
 
-test("unreflectSpecial invokes the declaring implementation on a bound receiver", async () => {
+for (const bound of [true, false]) test(`${bound ? "bound" : "unbound"} special handle uses its receiver`, async () => {
   const owner = rt.link("java/lang/Object");
-  const method = mkMethod(owner, "plus", "(I)I", false, function (this: unknown, n: unknown) {
-    if (typeof this !== "object" || this === null || !("base" in this) || typeof this.base !== "number" || typeof n !== "number")
-      throw new TypeError("expected a numeric receiver and argument");
+  const method = mkMethod(owner, "plus", "(I)I", false, function (this: { base: number }, n: unknown) {
+    if (typeof n !== "number") throw new TypeError("expected an unboxed number");
     return this.base + n;
   });
   const cls = rt.classFor(owner.name);
   const lookup = await newObj("java/lang/invoke/MethodHandles$Lookup", "(Ljava/lang/Class;I)V", cls, -1);
   const direct = await vcall(lookup, "unreflectSpecial", "(Ljava/lang/reflect/Method;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;", method, cls);
-  const receiver = new owner.ctor() as { base: number };
-  receiver.base = 7;
-  const bound = await vcall(direct, "bindTo", "(Ljava/lang/Object;)Ljava/lang/invoke/MethodHandle;", receiver);
-  const result = await vcall(bound, "invokeWithArguments", "([Ljava/lang/Object;)Ljava/lang/Object;", [boxInt(5)]);
+  const receiver = Object.assign(new owner.ctor(), { base: 7 });
+  const handle = bound ? await vcall(direct, "bindTo", "(Ljava/lang/Object;)Ljava/lang/invoke/MethodHandle;", receiver) : direct;
+  const args = bound ? [boxInt(5)] : [receiver, boxInt(5)];
+  const result = await vcall(handle, "invokeWithArguments", "([Ljava/lang/Object;)Ljava/lang/Object;", args);
   expect(result.v).toBe(12);
   expect(rt.link("java/lang/invoke/MethodHandles$Lookup").stub).toBe(false);
-});
-
-test("an unbound special handle consumes its receiver as the first argument", async () => {
-  const owner = rt.link("java/lang/Object");
-  const method = mkMethod(owner, "plus", "(I)I", false, function (this: unknown, n: unknown) {
-    if (typeof this !== "object" || this === null || !("base" in this) || typeof this.base !== "number" || typeof n !== "number")
-      throw new TypeError("expected a numeric receiver and argument");
-    return this.base + n;
-  });
-  const cls = rt.classFor(owner.name);
-  const lookup = await newObj("java/lang/invoke/MethodHandles$Lookup", "(Ljava/lang/Class;I)V", cls, -1);
-  const direct = await vcall(lookup, "unreflectSpecial", "(Ljava/lang/reflect/Method;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;", method, cls);
-  const receiver = new owner.ctor() as { base: number };
-  receiver.base = 4;
-  const result = await vcall(direct, "invokeWithArguments", "([Ljava/lang/Object;)Ljava/lang/Object;", [receiver, boxInt(6)]);
-  expect(result.v).toBe(10);
 });
 
 test("a null bound receiver fails when the instance handle is invoked", async () => {

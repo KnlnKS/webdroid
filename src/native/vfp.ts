@@ -85,7 +85,6 @@ export function emitVfp(pc: number, w: number): string | null {
     }
     return null;
   }
-  // data processing
   const opc1 = (w >>> 20) & 0xb;
   const o6 = (w >>> 6) & 1;
   switch (opc1) {

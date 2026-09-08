@@ -1,3 +1,4 @@
+import { newStringSet } from "../jvm/natives/jutil";
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
@@ -331,10 +332,7 @@ const bundleMethods: NativeSpec["methods"] = {
   "remove(Ljava/lang/String;)V": function (this: JBundle, k: string) { this.map.delete(k); },
   "clear()V": function (this: JBundle) { this.map.clear(); },
   "keySet()Ljava/util/Set;": function (this: JBundle) {
-    const info = rt.link("java/util/HashSet");
-    const s = new info.ctor();
-    for (const k of this.map.keys()) s.m.set(k, { k, v: k });
-    return s;
+    return newStringSet(this.map.keys());
   },
   "putAll(Landroid/os/Bundle;)V": function (this: JBundle, b: JBundle) { for (const [k, v] of b.map) this.map.set(k, v); },
   "setClassLoader(Ljava/lang/ClassLoader;)V": function (this: JBundle, cl: unknown) { this.loader = cl; },
@@ -383,7 +381,6 @@ rt.register({ name: "android/os/Bundle", ctor: class extends JBundle {}, sup: "a
 rt.register({ name: "android/os/PersistableBundle", ctor: class extends JBundle {}, sup: "android/os/BaseBundle",
   ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], methods: bundleMethods });
 
-// Parcelable/Parcel markers
 export const PARCELABLE = {
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": () => {},

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { rt } from "../runtime";
 import { newObj, vcall } from "./jlang";
-import "./jutil";
+import "./jrandom";
 
 test("Random.nextBytes matches Java across partial words and preserves generator state", async () => {
   const random = await newObj("java/util/Random", "(J)V", 0n);

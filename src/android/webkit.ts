@@ -10,7 +10,7 @@ import { vcall, mkEnumSet, type JSimpleEnum } from "../jvm/natives/jlang";
 import { JViewGroup, initViewFromCtx, defaultSize, type JView } from "./view";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
-import { type JContext } from "./app";
+import { type JContext } from "./context";
 import { mkUri } from "./net";
 import { WEB_INJECT } from "../shell/webinject";
 

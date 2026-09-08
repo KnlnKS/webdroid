@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { JList } from "../jvm/natives/jutil";
-import { JContextWrapper } from "./app";
+import { JContextWrapper } from "./context";
 
 class JJobInfo extends JObj { p: Record<string, any> = { id: 0, svc: null, triggers: [] as unknown[] }; }
 class JJobInfoBuilder extends JObj { j = new JJobInfo(); }

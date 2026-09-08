@@ -20,22 +20,23 @@ const ASSET_TYPE: Record<string, string> = {
   html: "text/html", js: "text/javascript", css: "text/css", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
   svg: "image/svg+xml", json: "application/json", txt: "text/plain", woff2: "font/woff2", pdf: "application/pdf",
 };
-// assets/ of each apk inflated once: an article page pulls several files and the apk is 100MB
 function serveVendor(path: string): Response {
   if (!/^(aosp\/)?[\w.-]+$/.test(path)) return new Response("nope", { status: 400 });
   return new Response(Bun.file(`vendor/${path}`), { headers: { "cache-control": "max-age=31536000, immutable" } });
 }
 
-const assetCache = new Map<string, Record<string, Uint8Array>>();
+const assetCache = new Map<string, Promise<Record<string, Uint8Array>>>();
 /** The apk's assets/ tree, through the same merge the shell boots: a split install's assets
  *  live in its splits, so filtering the container's own entries finds nothing. */
-async function apkAssets(apk: string): Promise<Record<string, Uint8Array>> {
-  let a = assetCache.get(apk);
-  if (!a) {
-    const bytes = new Uint8Array(await Bun.file(`apks/${apk}`).arrayBuffer());
-    assetCache.set(apk, a = openInstall(bytes).zip);
+function apkAssets(apk: string): Promise<Record<string, Uint8Array>> {
+  let pending = assetCache.get(apk);
+  if (!pending) {
+    pending = Bun.file(`apks/${apk}`).arrayBuffer()
+      .then((bytes) => openInstall(new Uint8Array(bytes)).zip)
+      .catch((error: unknown) => { assetCache.delete(apk); throw error; });
+    assetCache.set(apk, pending);
   }
-  return a;
+  return pending;
 }
 
 const server: Bun.Server<TcpData> = Bun.serve({

@@ -1,10 +1,16 @@
+import { AID } from "./res";
 // AdapterView/ListView/GridView + framework adapters (BaseAdapter/ArrayAdapter).
 // Non-recycling: materializes all item views (fine at app scale), scrolls internally.
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
-import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSizeAndState, invalidate, requestLayout, initViewFromCtx, inheritContext, AID, JMotionEvent, uiState, guardCall, findById, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./view";
+import {
+  JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY,
+  MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize,
+  resolveSizeAndState, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById
+} from "./view";
+import { JMotionEvent, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
 import { JAttrSet, obtainStyled, rvDimen, rvInt, rvString, type Resources } from "./res";
 import { attr } from "./axml";
 import { JCanvas } from "./graphics";
@@ -12,12 +18,11 @@ import { JDrawable, loadDrawableRV } from "./drawable";
 import { reportUncaught } from "./os";
 import { onMain } from "./mainloop";
 import { toJsArray } from "../jvm/natives/jutil";
-import { JTextView } from "./widget";
+import { JTextView } from "./textview";
 import { inflateLayout } from "./inflate";
 import { addOverlay, removeOverlay } from "./popup";
 import { device } from "../shell/config";
 
-// marker interfaces
 for (const i of ["android/widget/Adapter", "android/widget/ListAdapter", "android/widget/SpinnerAdapter",
   "android/widget/AdapterView$OnItemClickListener", "android/widget/AdapterView$OnItemLongClickListener",
   "android/widget/AdapterView$OnItemSelectedListener", "android/widget/AbsListView$SelectionBoundsAdjuster"]) {
@@ -222,7 +227,6 @@ export class JListView extends JViewGroup {
   itemViews: JView[] = [];
   dirty = true;
   building = false;
-  // touch state
   dragging = false;
   downY = 0; lastY = 0; velo = 0; lastMoveT = 0;
   flingAnim: (() => boolean) | null = null;

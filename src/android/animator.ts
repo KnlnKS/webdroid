@@ -9,7 +9,7 @@ import { reportUncaught, stateSetMatches } from "./os";
 import { onMain } from "./mainloop";
 import { parseAXML, TV, type XmlNode, type XmlAttr } from "./axml";
 import { type Resources, type RV, attrTable, T_STR, normRV, rvFloat, rvInt } from "./res";
-import type { JContext } from "./app";
+import type { JContext } from "./context";
 
 // ── ValueAnimator/ObjectAnimator (time-driven via animHooks)
 class JValueAnimator extends JObj {

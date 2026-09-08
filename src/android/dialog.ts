@@ -1,10 +1,16 @@
+import { AID } from "./res";
 // android.app.Dialog / AlertDialog rendered as overlays (scrim + centered card).
 
 import { rt, JObj, type NativeSpec, callSelf } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
-import { JView, JFrameLP, JLinearLP, attachView, requestLayout, AID, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, specSize, findById, guardCall, dispatchAttached, dispatchDetached } from "./view";
-import { JFrameLayout, JLinearLayout, JTextView, themeAccent } from "./widget";
+import {
+  JView, JFrameLP, JLinearLP, attachView, requestLayout, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST,
+  specSize, findById, guardCall, dispatchAttached, dispatchDetached
+} from "./view";
+import { JFrameLayout, JLinearLayout } from "./layouts";
+import { JTextView } from "./textview";
+import { themeAccent } from "./widget";
 import { JCanvas, tfMedium , JRect } from "./graphics";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
@@ -14,7 +20,7 @@ import { TV } from "./axml";
 import { device } from "../shell/config";
 import { inflateLayout, getInflater } from "./inflate";
 import { csText } from "./text";
-import type { JWindow } from "./app";
+import type { JWindow } from "./window";
 
 const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
 const M_onCreate = mangleMethod("onCreate", "(Landroid/os/Bundle;)V");

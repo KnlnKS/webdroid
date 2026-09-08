@@ -350,6 +350,8 @@ function fwriteStr(cpu: Cpu, fp: number, s: string): number {
   return r < b.length ? -1 : b.length;
 }
 
+const putChar: HostFn = (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; return fwriteBytes(cpu, fp, scratch, 1) === 1 ? c : -1; };
+
 export function stdioInit(): void {
   fds.set(0, fdBase("/dev/stdin"));
   fds.set(1, { ...fdBase("/dev/stdout"), write: true, statusFlags: 1 });
@@ -548,9 +550,9 @@ export function stdioInit(): void {
       mem.u8[buf + i] = 0;
       return ARG0;
     },
-    fputc: (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; return fwriteBytes(cpu, fp, scratch, 1) === 1 ? c : -1; },
-    putc: (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; return fwriteBytes(cpu, fp, scratch, 1) === 1 ? c : -1; },
-    __swbuf: (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; return fwriteBytes(cpu, fp, scratch, 1) === 1 ? c : -1; },
+    fputc: putChar,
+    putc: putChar,
+    __swbuf: putChar,
     putchar: (cpu, a) => { const c = a.i() & 255; mem.u8[scratch] = c; return fwriteBytes(cpu, stdoutFp, scratch, 1) === 1 ? c : -1; },
     fputs: (cpu, a) => { const s = a.str(), fp = a.p(); return fwriteStr(cpu, fp, s) < 0 ? -1 : 0; },
     puts: (cpu, a) => fwriteStr(cpu, stdoutFp, a.str() + "\n"),

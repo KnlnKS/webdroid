@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, expect, test } from "bun:test";
 import { mainThread } from "../jvm/natives/jlang";
-import type { RelayTransport } from "../shell/relay";
+import { Relay, type RelayTransport } from "../shell/relay";
 import { Cpu } from "./cpu";
 import { ldp } from "./host";
 import { mem } from "./mem";
@@ -454,4 +454,43 @@ test("stream send delegates to a local socketpair descriptor", () => {
   } finally {
     restore();
   }
+});
+
+test("relay reads retain partial chunks across compaction and drain before EOF", async () => {
+  const transport = new FakeWebSocket();
+  const relay = new Relay("services.example", 443, false, () => transport);
+  transport.connect();
+  await relay.ready;
+  for (let i = 0; i < 3000; i++) transport.receive(Uint8Array.of(i & 255, (i + 1) & 255));
+  const out = new Uint8Array(6002).fill(255);
+  expect(await relay.read(out, 1, 1)).toBe(1);
+  expect(await relay.read(out, 2, 3500)).toBe(3500);
+  transport.fail();
+  expect(await relay.read(out, 3502, 2500)).toBe(2499);
+  expect(relay.available()).toBe(0);
+  expect(out[0]).toBe(255);
+  expect(out[6001]).toBe(255);
+  for (let i = 0; i < 3000; i++) {
+    expect(out[1 + i * 2]).toBe(i & 255);
+    expect(out[2 + i * 2]).toBe((i + 1) & 255);
+  }
+  expect(await relay.read(out, 0, 0)).toBe(0);
+  expect(await relay.read(out, 0, 1)).toBe(-1);
+});
+
+test("closing a relay wakes its pending reader and one-shot subscribers", async () => {
+  const transport = new FakeWebSocket();
+  const relay = new Relay("services.example", 443, false, () => transport);
+  transport.connect();
+  await relay.ready;
+  const pending = relay.read(new Uint8Array(1), 0, 1);
+  let wakes = 0;
+  relay.subscribe(() => wakes++);
+  const unsubscribe = relay.subscribe(() => wakes += 10);
+  unsubscribe();
+  relay.close();
+  expect(await pending).toBe(-1);
+  expect(wakes).toBe(1);
+  relay.close();
+  expect(wakes).toBe(1);
 });

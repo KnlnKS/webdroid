@@ -1,3 +1,5 @@
+const EMPTY_CHUNK = new Uint8Array(0);
+
 const relayUrl = (host: string, port: number, tls: boolean) => {
   const page = typeof location === "undefined" ? { protocol: "http:", host: "localhost" } : location;
   return `${page.protocol === "https:" ? "wss" : "ws"}://${page.host}` +
@@ -26,7 +28,8 @@ export interface RelayEndpoint {
 /** One WebSocket carries one TCP byte stream through server.ts's /tcp relay. */
 export class Relay {
   private readonly transport: RelayTransport;
-  private readonly q: Uint8Array[] = [];
+  private q: Uint8Array[] = [];
+  private qHead = 0;
   private qLen = 0;
   private readonly waiters = new Set<() => void>();
   connected = false;
@@ -87,14 +90,21 @@ export class Relay {
     while (this.qLen === 0 && !this.eof) await this.waitForChange();
     if (this.qLen === 0) return -1;
     let n = 0;
-    while (n < len && this.q.length) {
-      const chunk = this.q[0];
+    while (n < len && this.qLen) {
+      const chunk = this.q[this.qHead];
       const take = Math.min(len - n, chunk.length);
       out.set(chunk.subarray(0, take), off + n);
       n += take;
       this.qLen -= take;
-      if (take === chunk.length) this.q.shift();
-      else this.q[0] = chunk.subarray(take);
+      if (take === chunk.length) this.q[this.qHead++] = EMPTY_CHUNK;
+      else this.q[this.qHead] = chunk.subarray(take);
+    }
+    if (this.qHead === this.q.length) {
+      this.q.length = 0;
+      this.qHead = 0;
+    } else if (this.qHead >= 1024 && this.qHead * 2 >= this.q.length) {
+      this.q = this.q.slice(this.qHead);
+      this.qHead = 0;
     }
     return n;
   }
