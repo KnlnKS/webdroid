@@ -1,4 +1,4 @@
-// Bionic's IPv4 stream-socket surface over the shared browser WebSocket → TCP relay.
+// Bionic IPv4 sockets: TCP over the browser WebSocket relay, plus process-local UDP.
 
 import { Relay, type RelayTransportFactory } from "../shell/relay";
 import { E } from "./abi";
@@ -7,7 +7,7 @@ import { hostLib, PTR, stp, type HostFn, type HostRet, ptr } from "./host";
 import { mem } from "./mem";
 import { allocateFd, releaseFd, reserveFd } from "./fd";
 
-const AF_UNSPEC = 0, AF_INET = 2, SOCK_STREAM = 1, IPPROTO_TCP = 6;
+const AF_UNSPEC = 0, AF_INET = 2, SOCK_STREAM = 1, SOCK_DGRAM = 2, IPPROTO_TCP = 6, IPPROTO_UDP = 17;
 const SOCK_NONBLOCK = 0x800, SOCK_CLOEXEC = 0x80000;
 const F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4;
 const O_RDWR = 2, O_NONBLOCK = 0x800;
@@ -17,11 +17,13 @@ const AI_PASSIVE = 1, AI_CANONNAME = 2, AI_NUMERICHOST = 4, AI_NUMERICSERV = 8, 
 const EAI_ADDRFAMILY = 1, EAI_BADFLAGS = 3, EAI_FAMILY = 5, EAI_NONAME = 8;
 const EAI_SERVICE = 9, EAI_SOCKTYPE = 10, EAI_SYSTEM = 11, EAI_PROTOCOL = 13, EAI_OVERFLOW = 14;
 const NI_NUMERICHOST = 2, NI_NAMEREQD = 4;
+const MSG_PEEK = 0x2, MSG_TRUNC = 0x20, MSG_DONTWAIT = 0x40;
+const E_DESTADDRREQ = 89, E_MSGSIZE = 90, E_OPNOTSUPP = 95, E_ADDRINUSE = 98;
+const UDP_MAX_PAYLOAD = 65_507;
+const UDP_QUEUE_PACKETS = 256, UDP_QUEUE_BYTES = 1 << 20;
 
-interface NativeSocket {
+interface SocketState {
   nonblock: boolean;
-  relay: Relay | null;
-  connecting: boolean;
   connected: boolean;
   error: number;
   waiters: Set<() => void>;
@@ -29,13 +31,30 @@ interface NativeSocket {
   peer: Ipv4Endpoint | null;
   local: Ipv4Endpoint | null;
 }
+interface NativeStreamSocket extends SocketState {
+  kind: "stream";
+  relay: Relay | null;
+  connecting: boolean;
+}
+interface Datagram {
+  bytes: Uint8Array;
+  source: Ipv4Endpoint;
+}
+interface NativeDatagramSocket extends SocketState {
+  kind: "datagram";
+  queue: Datagram[];
+  queuedBytes: number;
+}
+type NativeSocket = NativeStreamSocket | NativeDatagramSocket;
 interface NativeSocketFd { socket: NativeSocket; cloexec: boolean }
 interface Ipv4Endpoint { address: [number, number, number, number]; port: number }
 
 const sockets = new Map<number, NativeSocketFd>();
+const datagramBindings = new Set<NativeDatagramSocket>();
 const syntheticHosts = new Map<number, string>();
 const syntheticAddresses = new Map<string, [number, number, number, number]>();
 let nextSynthetic = 1;
+let nextDatagramPort = 49_152;
 let transportFactory: RelayTransportFactory | undefined;
 export const netDebug = { events: [] as string[] };
 function record(event: string): void {
@@ -56,11 +75,28 @@ export function setNativePollProvider(provider: NativePollProvider): () => void 
 }
 
 const fail = (cpu: Cpu, errno: number): number => { mem.st32(cpu.errnoAddr, errno); return -1; };
-const wake = (socket: NativeSocket): void => { for (const waiter of socket.waiters) waiter(); socket.waiters.clear(); };
+const wake = (socket: NativeSocket): void => {
+  const waiters = [...socket.waiters];
+  socket.waiters.clear();
+  for (const waiter of waiters) waiter();
+};
 const socketFdOf = (cpu: Cpu, fd: number): NativeSocketFd | null => sockets.get(fd) ?? (fail(cpu, E.BADF), null);
 const ipv4Key = (bytes: ArrayLike<number>): number =>
   (bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24)) >>> 0;
 const ipv4Text = (bytes: ArrayLike<number>): string => `${bytes[0]}.${bytes[1]}.${bytes[2]}.${bytes[3]}`;
+const sameAddress = (a: ArrayLike<number>, b: ArrayLike<number>): boolean =>
+  a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+const isAnyAddress = (address: ArrayLike<number>): boolean => ipv4Key(address) === 0;
+const isLoopback = (address: ArrayLike<number>): boolean => address[0] === 127;
+
+function readEndpoint(cpu: Cpu, sockaddr: number, length: number): Ipv4Endpoint | null {
+  if (!sockaddr || length < 8) { fail(cpu, E.INVAL); return null; }
+  if (mem.ld16u(sockaddr) !== AF_INET) { fail(cpu, E.AFNOSUPPORT); return null; }
+  return {
+    port: (mem.u8[sockaddr + 2] << 8) | mem.u8[sockaddr + 3],
+    address: [mem.u8[sockaddr + 4], mem.u8[sockaddr + 5], mem.u8[sockaddr + 6], mem.u8[sockaddr + 7]],
+  };
+}
 
 function parseIpv4(text: string): [number, number, number, number] | null {
   const match = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
@@ -96,8 +132,9 @@ export function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number,
   record(`getaddrinfo ${node}:${service} flags=${flags.toString(16)} family=${family} type=${socktype} protocol=${protocol}`);
   if (flags & ~(AI_PASSIVE | AI_CANONNAME | AI_NUMERICHOST | AI_NUMERICSERV | AI_ADDRCONFIG)) return EAI_BADFLAGS;
   if (family !== AF_UNSPEC && family !== AF_INET) return EAI_FAMILY;
-  if (socktype !== 0 && socktype !== SOCK_STREAM) return EAI_SOCKTYPE;
-  if (protocol !== 0 && protocol !== IPPROTO_TCP) return EAI_PROTOCOL;
+  if (socktype !== 0 && socktype !== SOCK_STREAM && socktype !== SOCK_DGRAM) return EAI_SOCKTYPE;
+  if (protocol !== 0 && protocol !== IPPROTO_TCP && protocol !== IPPROTO_UDP) return EAI_PROTOCOL;
+  if ((socktype === SOCK_STREAM && protocol === IPPROTO_UDP) || (socktype === SOCK_DGRAM && protocol === IPPROTO_TCP)) return EAI_SOCKTYPE;
   if (!nodePtr && !servicePtr) return EAI_NONAME;
 
   const numeric = parseIpv4(node);
@@ -105,6 +142,8 @@ export function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number,
   let port = /^\d+$/.test(service) ? Number(service) : service === "http" && !(flags & AI_NUMERICSERV) ? 80 : service === "https" && !(flags & AI_NUMERICSERV) ? 443 : -1;
   if (!Number.isInteger(port) || port < 0 || port > 65535) return EAI_SERVICE;
 
+  const resultType = socktype || (protocol === IPPROTO_UDP ? SOCK_DGRAM : SOCK_STREAM);
+  const resultProtocol = protocol || (resultType === SOCK_DGRAM ? IPPROTO_UDP : IPPROTO_TCP);
   const bytes = numeric ?? addressFor(node);
   const layout = addrinfoLayout();
   const sockaddr = layout.size;
@@ -114,8 +153,8 @@ export function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number,
   mem.memset(allocation, 0, layout.size + 16 + (canonBytes ? canonBytes.length + 1 : 0));
   mem.st32(allocation, flags);
   mem.st32(allocation + 4, AF_INET);
-  mem.st32(allocation + 8, SOCK_STREAM);
-  mem.st32(allocation + 12, IPPROTO_TCP);
+  mem.st32(allocation + 8, resultType);
+  mem.st32(allocation + 12, resultProtocol);
   mem.st32(allocation + 16, 16);
   stp(allocation + layout.addr, allocation + sockaddr);
   stp(allocation + layout.next, 0);
@@ -138,15 +177,20 @@ export function nativeFreeaddrinfo(address: number): void { if (address) mem.fre
 export function nativeSocket(cpu: Cpu, domain: number, type: number, protocol: number): number {
   const baseType = type & 0xf;
   if (domain !== AF_INET) return fail(cpu, E.PROTONOSUPPORT);
-  if (baseType !== SOCK_STREAM) return fail(cpu, E.SOCKTNOSUPPORT);
-  if (protocol !== 0 && protocol !== IPPROTO_TCP) return fail(cpu, E.PROTONOSUPPORT);
+  if (baseType !== SOCK_STREAM && baseType !== SOCK_DGRAM) return fail(cpu, E.SOCKTNOSUPPORT);
+  const expectedProtocol = baseType === SOCK_DGRAM ? IPPROTO_UDP : IPPROTO_TCP;
+  if (protocol !== 0 && protocol !== expectedProtocol) return fail(cpu, E.PROTONOSUPPORT);
   const fd = allocateFd();
+  const common: SocketState = {
+    nonblock: !!(type & SOCK_NONBLOCK), connected: false, error: 0,
+    waiters: new Set(), references: 1, peer: null, local: null,
+  };
+  const socket: NativeSocket = baseType === SOCK_DGRAM
+    ? { ...common, kind: "datagram", queue: [], queuedBytes: 0 }
+    : { ...common, kind: "stream", relay: null, connecting: false };
   sockets.set(fd, {
     cloexec: !!(type & SOCK_CLOEXEC),
-    socket: {
-      nonblock: !!(type & SOCK_NONBLOCK), relay: null, connecting: false, connected: false,
-      error: 0, waiters: new Set(), references: 1, peer: null, local: null,
-    },
+    socket,
   });
   record(`socket fd=${fd} family=${domain} type=${type.toString(16)} protocol=${protocol}`);
   return fd;
@@ -156,14 +200,26 @@ export function nativeConnect(cpu: Cpu, fd: number, sockaddr: number, length: nu
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
   const socket = descriptor.socket;
+  if (socket.kind === "datagram") {
+    if (!sockaddr || length < 2) return fail(cpu, E.INVAL);
+    if (mem.ld16u(sockaddr) === AF_UNSPEC) {
+      socket.peer = null;
+      socket.connected = false;
+      return 0;
+    }
+    const endpoint = readEndpoint(cpu, sockaddr, length);
+    if (!endpoint) return -1;
+    if (!endpoint.port) return fail(cpu, E.INVAL);
+    if (!socket.local && !bindDatagram(cpu, socket, { address: [0, 0, 0, 0], port: 0 })) return -1;
+    socket.peer = endpoint;
+    socket.connected = true;
+    return 0;
+  }
   if (socket.connected) return fail(cpu, E.ISCONN);
   if (socket.connecting) return fail(cpu, E.ALREADY);
-  if (!sockaddr || length < 8) return fail(cpu, E.INVAL);
-  if (mem.ld16u(sockaddr) !== AF_INET) return fail(cpu, E.PROTONOSUPPORT);
-  const port = (mem.u8[sockaddr + 2] << 8) | mem.u8[sockaddr + 3];
-  const bytes: [number, number, number, number] = [
-    mem.u8[sockaddr + 4], mem.u8[sockaddr + 5], mem.u8[sockaddr + 6], mem.u8[sockaddr + 7],
-  ];
+  const endpoint = readEndpoint(cpu, sockaddr, length);
+  if (!endpoint) return -1;
+  const { address: bytes, port } = endpoint;
   const host = syntheticHosts.get(ipv4Key(bytes)) ?? ipv4Text(bytes);
   record(`connect fd=${fd} ${host}:${port} nonblock=${socket.nonblock}`);
   const relay = new Relay(host, port, false, transportFactory);
@@ -190,6 +246,151 @@ export function nativeConnect(cpu: Cpu, fd: number, sockaddr: number, length: nu
   return completion.then((connected) => connected ? 0 : fail(cpu, socket.error));
 }
 
+function bindingConflicts(socket: NativeDatagramSocket, endpoint: Ipv4Endpoint): boolean {
+  for (const other of datagramBindings) {
+    if (other === socket || other.local?.port !== endpoint.port) continue;
+    if (isAnyAddress(other.local.address) || isAnyAddress(endpoint.address) || sameAddress(other.local.address, endpoint.address)) return true;
+  }
+  return false;
+}
+
+function ephemeralEndpoint(socket: NativeDatagramSocket, address: Ipv4Endpoint["address"]): Ipv4Endpoint | null {
+  for (let attempts = 0; attempts < 16_384; attempts++) {
+    const port = nextDatagramPort++;
+    if (nextDatagramPort > 65_535) nextDatagramPort = 49_152;
+    const endpoint = { address, port };
+    if (!bindingConflicts(socket, endpoint)) return endpoint;
+  }
+  return null;
+}
+
+function bindDatagram(cpu: Cpu, socket: NativeDatagramSocket, requested: Ipv4Endpoint): boolean {
+  if (socket.local) { fail(cpu, E.INVAL); return false; }
+  const endpoint = requested.port ? requested : ephemeralEndpoint(socket, requested.address);
+  if (!endpoint) { fail(cpu, E_ADDRINUSE); return false; }
+  if (bindingConflicts(socket, endpoint)) { fail(cpu, E_ADDRINUSE); return false; }
+  socket.local = endpoint;
+  datagramBindings.add(socket);
+  return true;
+}
+
+export function nativeBind(cpu: Cpu, fd: number, sockaddr: number, length: number): number {
+  const descriptor = socketFdOf(cpu, fd);
+  if (!descriptor) return -1;
+  const socket = descriptor.socket;
+  if (socket.kind !== "datagram") return fail(cpu, E_OPNOTSUPP);
+  const endpoint = readEndpoint(cpu, sockaddr, length);
+  if (!endpoint) return -1;
+  return bindDatagram(cpu, socket, endpoint) ? 0 : -1;
+}
+
+function datagramRecipients(sender: NativeDatagramSocket, destination: Ipv4Endpoint): NativeDatagramSocket[] {
+  const loopback = isLoopback(destination.address);
+  const source = sender.local ? datagramSource(sender.local) : null;
+  const recipients: NativeDatagramSocket[] = [];
+  for (const candidate of datagramBindings) {
+    const local = candidate.local;
+    if (!local || local.port !== destination.port) continue;
+    const addressMatches = sameAddress(local.address, destination.address) || (loopback && isAnyAddress(local.address));
+    const peerMatches = !candidate.peer || !!source && candidate.peer.port === source.port && sameAddress(candidate.peer.address, source.address);
+    if (addressMatches && peerMatches) recipients.push(candidate);
+  }
+  return recipients;
+}
+
+function datagramSource(local: Ipv4Endpoint): Ipv4Endpoint {
+  return isAnyAddress(local.address)
+    ? { address: [127, 0, 0, 1], port: local.port }
+    : local;
+}
+
+export function nativeSendTo(cpu: Cpu, fd: number, source: number, length: number, destination: number, destinationLength: number): number {
+  const descriptor = socketFdOf(cpu, fd);
+  if (!descriptor) return -1;
+  const socket = descriptor.socket;
+  if (socket.kind === "stream") {
+    if (destination || destinationLength) return fail(cpu, E.ISCONN);
+    return nativeSocketWrite(cpu, fd, source, length);
+  }
+  if (length && !source) return fail(cpu, E.FAULT);
+  if (length > UDP_MAX_PAYLOAD) return fail(cpu, E_MSGSIZE);
+  const endpoint = destination || destinationLength
+    ? readEndpoint(cpu, destination, destinationLength)
+    : socket.peer;
+  if (!endpoint) return destination || destinationLength ? -1 : fail(cpu, E_DESTADDRREQ);
+  if (!endpoint.port) return fail(cpu, E.INVAL);
+  if (!socket.local && !bindDatagram(cpu, socket, { address: [0, 0, 0, 0], port: 0 })) return -1;
+  const recipients = datagramRecipients(socket, endpoint);
+  if (!isLoopback(endpoint.address) && !recipients.length) return fail(cpu, E.NETUNREACH);
+  const local = socket.local;
+  if (!local) return fail(cpu, E.IO);
+  const bytes = mem.u8.slice(source, source + length);
+  const datagram = { bytes, source: datagramSource(local) };
+  for (const recipient of recipients) {
+    if (recipient.queue.length >= UDP_QUEUE_PACKETS || recipient.queuedBytes + bytes.length > UDP_QUEUE_BYTES) continue;
+    recipient.queue.push(datagram);
+    recipient.queuedBytes += bytes.length;
+    wake(recipient);
+  }
+  return length;
+}
+
+function writeDatagramAddress(endpoint: Ipv4Endpoint, address: number, length: number): void {
+  const capacity = mem.ld32(length);
+  const sockaddr = new Uint8Array(16);
+  sockaddr[0] = AF_INET;
+  sockaddr[2] = endpoint.port >>> 8;
+  sockaddr[3] = endpoint.port & 255;
+  sockaddr.set(endpoint.address, 4);
+  if (capacity > 0) mem.u8.set(sockaddr.subarray(0, Math.min(capacity, sockaddr.length)), address);
+  mem.st32(length, sockaddr.length);
+}
+
+export function nativeReceiveFrom(cpu: Cpu, fd: number, destination: number, length: number, flags: number, source: number, sourceLength: number): number | Promise<number> {
+  const descriptor = socketFdOf(cpu, fd);
+  if (!descriptor) return -1;
+  const socket = descriptor.socket;
+  if (socket.kind === "stream") {
+    if (source) return fail(cpu, E.NOTCONN);
+    return nativeSocketRead(cpu, fd, destination, length, !!(flags & MSG_DONTWAIT));
+  }
+  if (length && !destination) return fail(cpu, E.FAULT);
+  if (source && !sourceLength) return fail(cpu, E.FAULT);
+  if (source && mem.ld32(sourceLength) < 0) return fail(cpu, E.INVAL);
+  const destinationVa = destination ? mem.va(destination) : 0;
+  const sourceVa = source ? mem.va(source) : 0;
+  const sourceLengthVa = sourceLength ? mem.va(sourceLength) : 0;
+  const receive = (): number | null => {
+    const datagram = socket.queue[0];
+    if (!datagram) return null;
+    if (!(flags & MSG_PEEK)) {
+      socket.queue.shift();
+      socket.queuedBytes -= datagram.bytes.length;
+    }
+    const currentDestination = typeof destinationVa === "bigint" ? mem.txVa(destinationVa) : destinationVa;
+    const copied = Math.min(length, datagram.bytes.length);
+    if (copied) mem.write(currentDestination, datagram.bytes.subarray(0, copied));
+    if (sourceVa && sourceLengthVa) {
+      const currentSource = typeof sourceVa === "bigint" ? mem.txVa(sourceVa) : sourceVa;
+      const currentLength = typeof sourceLengthVa === "bigint" ? mem.txVa(sourceLengthVa) : sourceLengthVa;
+      writeDatagramAddress(datagram.source, currentSource, currentLength);
+    }
+    return flags & MSG_TRUNC ? datagram.bytes.length : copied;
+  };
+  const immediate = receive();
+  if (immediate !== null) return immediate;
+  if (socket.nonblock || flags & MSG_DONTWAIT) return fail(cpu, E.AGAIN);
+  return new Promise<number>((resolve) => {
+    const retry = () => {
+      const result = receive();
+      if (result !== null) resolve(result);
+      else if (!socket.references) resolve(fail(cpu, E.BADF));
+      else socket.waiters.add(retry);
+    };
+    socket.waiters.add(retry);
+  });
+}
+
 export function isNativeSocket(fd: number): boolean { return sockets.has(fd); }
 
 export function nativeSocketClose(cpu: Cpu, fd: number): number {
@@ -198,7 +399,10 @@ export function nativeSocketClose(cpu: Cpu, fd: number): number {
   const socket = descriptor.socket;
   sockets.delete(fd);
   releaseFd(fd);
-  if (--socket.references === 0) socket.relay?.close();
+  if (--socket.references === 0) {
+    if (socket.kind === "stream") socket.relay?.close();
+    else datagramBindings.delete(socket);
+  }
   wake(socket);
   return 0;
 }
@@ -228,6 +432,7 @@ export function nativeSocketRead(cpu: Cpu, fd: number, destination: number, leng
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
   const socket = descriptor.socket;
+  if (socket.kind === "datagram") return nativeReceiveFrom(cpu, fd, destination, length, nonblock ? MSG_DONTWAIT : 0, 0, 0);
   if (!socket.connected || !socket.relay) return fail(cpu, socket.error || E.NOTCONN);
   if (!length) return 0;
   if (!socket.relay.available() && !socket.relay.eof && (socket.nonblock || nonblock)) return fail(cpu, E.AGAIN);
@@ -244,6 +449,7 @@ export function nativeSocketWrite(cpu: Cpu, fd: number, source: number, length: 
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
   const socket = descriptor.socket;
+  if (socket.kind === "datagram") return nativeSendTo(cpu, fd, source, length, 0, 0);
   if (!socket.connected || !socket.relay) return fail(cpu, socket.error || E.NOTCONN);
   if (!length) return 0;
   return socket.relay.write(mem.u8.slice(source, source + length)) ? length : fail(cpu, E.NOTCONN);
@@ -264,9 +470,14 @@ function scanPoll(pollfds: number, count: number): number {
     if (!socket) revents = localPollProvider?.query(fd, events) ?? POLLNVAL;
     else {
       if (socket.error) revents |= POLLERR;
-      if ((socket.connected || socket.relay?.connected) && events & POLLOUT) revents |= POLLOUT;
-      if (socket.relay && (socket.relay.available() || socket.relay.eof) && events & POLLIN) revents |= POLLIN;
-      if (socket.relay?.eof) revents |= POLLHUP;
+      if (socket.kind === "datagram") {
+        if (events & POLLOUT) revents |= POLLOUT;
+        if (socket.queue.length && events & POLLIN) revents |= POLLIN;
+      } else {
+        if ((socket.connected || socket.relay?.connected) && events & POLLOUT) revents |= POLLOUT;
+        if (socket.relay && (socket.relay.available() || socket.relay.eof) && events & POLLIN) revents |= POLLIN;
+        if (socket.relay?.eof) revents |= POLLHUP;
+      }
     }
     mem.st16(entry + 6, revents);
     if (revents) ready++;
@@ -295,7 +506,7 @@ export function nativePoll(_cpu: Cpu, pollfds: number, count: number, timeout: n
       if (!socket) continue;
       socket.waiters.add(finish);
       cleanups.push(() => socket.waiters.delete(finish));
-      if (socket.relay) cleanups.push(socket.relay.subscribe(finish));
+      if (socket.kind === "stream" && socket.relay) cleanups.push(socket.relay.subscribe(finish));
     }
     if (localPollProvider) {
       for (let i = 0; i < count; i++) {
@@ -382,7 +593,8 @@ function nativeSocketName(cpu: Cpu, fd: number, address: number, length: number,
   if (!descriptor) return -1;
   const socket = descriptor.socket;
   if (peer && !socket.connected) return fail(cpu, E.NOTCONN);
-  const endpoint = peer ? socket.peer : socket.connected ? socket.local : { address: [0, 0, 0, 0] as [number, number, number, number], port: 0 };
+  const unbound: Ipv4Endpoint = { address: [0, 0, 0, 0], port: 0 };
+  const endpoint = peer ? socket.peer : socket.local ?? (socket.kind === "datagram" || !socket.connected ? unbound : null);
   if (!endpoint) return fail(cpu, E.AFNOSUPPORT);
   if (!length) return fail(cpu, E.FAULT);
   const capacity = mem.ld32(length);
@@ -454,21 +666,35 @@ export function netInit(): void {
   const functions: Record<string, HostFn> = {
     socket: (cpu, args) => nativeSocket(cpu, args.i(), args.i(), args.i()),
     connect: (cpu, args) => nativeConnect(cpu, args.i(), args.p(), args.u()),
+    bind: (cpu, args) => nativeBind(cpu, args.i(), args.p(), args.u()),
     send: (cpu, args) => { const fd = args.i(), source = args.p(), length = args.u(); args.i(); return nativeSend(cpu, fd, source, length); },
     sendto: (cpu, args) => {
       const fd = args.i(), source = args.p(), length = args.u();
       args.i(); const destination = args.p(), destinationLength = args.u();
+      if (isNativeSocket(fd)) return nativeSendTo(cpu, fd, source, length, destination, destinationLength);
       if (destination || destinationLength) return fail(cpu, E.ISCONN);
       return nativeSend(cpu, fd, source, length);
     },
-    recv: (cpu, args) => { const fd = args.i(), destination = args.p(), length = args.u(), flags = args.i(); return nativeReceive(cpu, fd, destination, length, !!(flags & 0x40)); },
+    recv: (cpu, args) => {
+      const fd = args.i(), destination = args.p(), length = args.u(), flags = args.i();
+      return isNativeSocket(fd)
+        ? nativeReceiveFrom(cpu, fd, destination, length, flags, 0, 0)
+        : localPollProvider?.read(cpu, fd, destination, length) ?? fail(cpu, E.BADF);
+    },
     recvfrom: (cpu, args) => {
       const fd = args.i(), destination = args.p(), length = args.u(), flags = args.i();
       const source = args.p(), sourceLength = args.p();
+      if (isNativeSocket(fd)) return nativeReceiveFrom(cpu, fd, destination, length, flags, source, sourceLength);
       if (source || sourceLength) return fail(cpu, E.NOTCONN);
-      return nativeReceive(cpu, fd, destination, length, !!(flags & 0x40));
+      return nativeReceive(cpu, fd, destination, length, !!(flags & MSG_DONTWAIT));
     },
-    shutdown: (cpu, args) => { const fd = args.i(); args.i(); const descriptor = socketFdOf(cpu, fd); if (!descriptor) return -1; descriptor.socket.relay?.close(); return 0; },
+    shutdown: (cpu, args) => {
+      const fd = args.i(); args.i();
+      const descriptor = socketFdOf(cpu, fd);
+      if (!descriptor) return -1;
+      if (descriptor.socket.kind === "stream") descriptor.socket.relay?.close();
+      return 0;
+    },
     setsockopt: (cpu, args) => { const descriptor = socketFdOf(cpu, args.i()); args.i(); args.i(); args.p(); args.u(); return descriptor ? 0 : -1; },
     getsockopt: (cpu, args) => nativeGetsockopt(cpu, args.i(), args.i(), args.i(), args.p(), args.p()),
     getsockname: (cpu, args) => nativeGetsockname(cpu, args.i(), args.p(), args.p()),
@@ -489,11 +715,13 @@ export function setNativeRelayTransportFactoryForTest(factory: RelayTransportFac
 export function resetNativeNetworkForTest(): void {
   const states = new Set<NativeSocket>();
   for (const [fd, descriptor] of sockets) { states.add(descriptor.socket); releaseFd(fd); }
-  for (const socket of states) socket.relay?.close();
+  for (const socket of states) if (socket.kind === "stream") socket.relay?.close();
   sockets.clear();
+  datagramBindings.clear();
   syntheticHosts.clear();
   syntheticAddresses.clear();
   nextSynthetic = 1;
+  nextDatagramPort = 49_152;
   transportFactory = undefined;
   netDebug.events.length = 0;
 }

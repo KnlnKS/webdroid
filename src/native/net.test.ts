@@ -5,8 +5,8 @@ import { Cpu } from "./cpu";
 import { ldp } from "./host";
 import { mem } from "./mem";
 import {
-  nativeConnect, nativeFreeaddrinfo, nativeGetaddrinfo, nativeGetnameinfo, nativeGetpeername, nativeGetsockname, nativeGetsockopt, nativePoll,
-  nativeSelect, nativeSend, nativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketRead, nativeSocketWrite,
+  nativeBind, nativeConnect, nativeFreeaddrinfo, nativeGetaddrinfo, nativeGetnameinfo, nativeGetpeername, nativeGetsockname, nativeGetsockopt, nativePoll,
+  nativeReceiveFrom, nativeSelect, nativeSend, nativeSendTo, nativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketRead, nativeSocketWrite,
   resetNativeNetworkForTest, setNativePollProvider, setNativeRelayTransportFactoryForTest,
 } from "./net";
 
@@ -71,6 +71,16 @@ function resolvedAddress(host: string, port: string): { root: number; sockaddr: 
   return { root, sockaddr: ldp(root + 24) };
 }
 
+function sockaddr(address: [number, number, number, number], port: number): number {
+  const result = mem.hostAlloc(16);
+  mem.memset(result, 0, 16);
+  mem.st16(result, 2);
+  mem.u8[result + 2] = port >>> 8;
+  mem.u8[result + 3] = port & 255;
+  mem.u8.set(address, result + 4);
+  return result;
+}
+
 test("getaddrinfo builds a Bionic IPv4 stream result", () => {
   const { root, sockaddr } = resolvedAddress("services.example", "443");
   expect(mem.ld32(root + 4)).toBe(2);
@@ -80,6 +90,131 @@ test("getaddrinfo builds a Bionic IPv4 stream result", () => {
   expect(mem.ld16u(sockaddr)).toBe(2);
   expect([...mem.u8.subarray(sockaddr + 2, sockaddr + 4)]).toEqual([1, 187]);
   nativeFreeaddrinfo(root);
+});
+
+test("getaddrinfo and socket preserve UDP type and protocol", () => {
+  const node = mem.hostStr("127.0.0.1"), service = mem.hostStr("9000"), hints = mem.hostAlloc(16), result = mem.hostAlloc(8);
+  mem.memset(hints, 0, 16);
+  mem.st32(hints + 4, 2);
+  mem.st32(hints + 8, 2);
+  mem.st32(hints + 12, 17);
+  expect(nativeGetaddrinfo(cpu, node, service, hints, result)).toBe(0);
+  const root = ldp(result);
+  expect(mem.ld32(root + 8)).toBe(2);
+  expect(mem.ld32(root + 12)).toBe(17);
+  nativeFreeaddrinfo(root);
+
+  const fd = nativeSocket(cpu, 2, 2, 17);
+  expect(fd).toBeGreaterThanOrEqual(0);
+  expect(nativeSocket(cpu, 2, 2, 1)).toBe(-1);
+  expect(mem.ld32(cpu.errnoAddr)).toBe(93);
+  nativeSocketClose(cpu, fd);
+});
+
+test("UDP bind, sendto, poll, and recvfrom preserve datagram boundaries and source", () => {
+  const receiver = nativeSocket(cpu, 2, 2 | 0x800, 17);
+  const sender = nativeSocket(cpu, 2, 2, 17);
+  const destination = sockaddr([127, 0, 0, 1], 19_001);
+  expect(nativeBind(cpu, receiver, destination, 16)).toBe(0);
+
+  const duplicate = nativeSocket(cpu, 2, 2, 17);
+  expect(nativeBind(cpu, duplicate, destination, 16)).toBe(-1);
+  expect(mem.ld32(cpu.errnoAddr)).toBe(98);
+  nativeSocketClose(cpu, duplicate);
+
+  const outgoing = mem.hostAlloc(5);
+  mem.u8.set([1, 2, 3, 4, 5], outgoing);
+  expect(nativeSendTo(cpu, sender, outgoing, 5, destination, 16)).toBe(5);
+
+  const pollfds = mem.hostAlloc(16);
+  mem.st32(pollfds, receiver); mem.st16(pollfds + 4, 1);
+  mem.st32(pollfds + 8, sender); mem.st16(pollfds + 12, 4);
+  expect(nativePoll(cpu, pollfds, 2, 0)).toBe(2);
+  expect(mem.ld16u(pollfds + 6)).toBe(1);
+  expect(mem.ld16u(pollfds + 14)).toBe(4);
+
+  const readSet = mem.hostAlloc(128), writeSet = mem.hostAlloc(128), timeout = mem.hostAlloc(16);
+  mem.memset(readSet, 0, 128); mem.memset(writeSet, 0, 128); mem.memset(timeout, 0, 16);
+  mem.u8[readSet + (receiver >>> 3)] |= 1 << (receiver & 7);
+  mem.u8[writeSet + (receiver >>> 3)] |= 1 << (receiver & 7);
+  expect(nativeSelect(cpu, receiver + 1, readSet, writeSet, 0, timeout)).toBe(2);
+  expect(mem.u8[readSet + (receiver >>> 3)] & (1 << (receiver & 7))).not.toBe(0);
+  expect(mem.u8[writeSet + (receiver >>> 3)] & (1 << (receiver & 7))).not.toBe(0);
+
+  const peek = mem.hostAlloc(1);
+  expect(nativeReceiveFrom(cpu, receiver, peek, 1, 0x2, 0, 0)).toBe(1);
+  expect(mem.u8[peek]).toBe(1);
+  expect(nativePoll(cpu, pollfds, 1, 0)).toBe(1);
+
+  const incoming = mem.hostAlloc(3), source = mem.hostAlloc(16), sourceLength = mem.hostAlloc(4);
+  mem.st32(sourceLength, 16);
+  expect(nativeReceiveFrom(cpu, receiver, incoming, 3, 0, source, sourceLength)).toBe(3);
+  expect([...mem.u8.subarray(incoming, incoming + 3)]).toEqual([1, 2, 3]);
+  expect([...mem.u8.subarray(source + 4, source + 8)]).toEqual([127, 0, 0, 1]);
+  const senderPort = (mem.u8[source + 2] << 8) | mem.u8[source + 3];
+  expect(senderPort).toBeGreaterThanOrEqual(49_152);
+  expect(mem.ld32(sourceLength)).toBe(16);
+  expect(nativeReceiveFrom(cpu, receiver, incoming, 3, 0x40, 0, 0)).toBe(-1);
+  expect(mem.ld32(cpu.errnoAddr)).toBe(11);
+
+  const senderName = mem.hostAlloc(16), senderNameLength = mem.hostAlloc(4);
+  mem.st32(senderNameLength, 16);
+  expect(nativeGetsockname(cpu, sender, senderName, senderNameLength)).toBe(0);
+  expect((mem.u8[senderName + 2] << 8) | mem.u8[senderName + 3]).toBe(senderPort);
+  nativeSocketClose(cpu, receiver);
+  nativeSocketClose(cpu, sender);
+});
+
+test("connected UDP is writable, reports its peer, and rejects unrelayed external sends", () => {
+  const fd = nativeSocket(cpu, 2, 2, 17);
+  const external = sockaddr([203, 0, 113, 10], 7777);
+  expect(nativeConnect(cpu, fd, external, 16)).toBe(0);
+  const peer = mem.hostAlloc(16), peerLength = mem.hostAlloc(4);
+  mem.st32(peerLength, 16);
+  expect(nativeGetpeername(cpu, fd, peer, peerLength)).toBe(0);
+  expect([...mem.u8.subarray(peer + 2, peer + 8)]).toEqual([0x1e, 0x61, 203, 0, 113, 10]);
+  const byte = mem.hostAlloc(1);
+  mem.st8(byte, 9);
+  expect(nativeSocketWrite(cpu, fd, byte, 1)).toBe(-1);
+  expect(mem.ld32(cpu.errnoAddr)).toBe(101);
+  nativeSocketClose(cpu, fd);
+});
+
+test("UDP recvfrom waits for a complete zero-length datagram", async () => {
+  const receiver = nativeSocket(cpu, 2, 2, 17);
+  const sender = nativeSocket(cpu, 2, 2, 17);
+  const destination = sockaddr([127, 0, 0, 1], 19_002);
+  expect(nativeBind(cpu, receiver, destination, 16)).toBe(0);
+  const waiting = nativeReceiveFrom(cpu, receiver, 0, 0, 0, 0, 0);
+  expect(waiting).toBeInstanceOf(Promise);
+  expect(nativeSendTo(cpu, sender, 0, 0, destination, 16)).toBe(0);
+  expect(await waiting).toBe(0);
+  nativeSocketClose(cpu, receiver);
+  nativeSocketClose(cpu, sender);
+});
+
+test("one UDP datagram wakes one blocked receiver and leaves the other armed", async () => {
+  const receiver = nativeSocket(cpu, 2, 2, 17);
+  const sender = nativeSocket(cpu, 2, 2, 17);
+  const destination = sockaddr([127, 0, 0, 1], 19_003);
+  expect(nativeBind(cpu, receiver, destination, 16)).toBe(0);
+  const firstByte = mem.hostAlloc(1), secondByte = mem.hostAlloc(1), outgoing = mem.hostAlloc(1);
+  const first = nativeReceiveFrom(cpu, receiver, firstByte, 1, 0, 0, 0);
+  const second = nativeReceiveFrom(cpu, receiver, secondByte, 1, 0, 0, 0);
+  mem.st8(outgoing, 7);
+  expect(nativeSendTo(cpu, sender, outgoing, 1, destination, 16)).toBe(1);
+  expect(await first).toBe(1);
+  let secondFinished = false;
+  void Promise.resolve(second).then(() => { secondFinished = true; });
+  await Promise.resolve();
+  expect(secondFinished).toBe(false);
+  mem.st8(outgoing, 8);
+  expect(nativeSendTo(cpu, sender, outgoing, 1, destination, 16)).toBe(1);
+  expect(await second).toBe(1);
+  expect(mem.u8[firstByte]).toBe(7);
+  expect(mem.u8[secondByte]).toBe(8);
+  nativeSocketClose(cpu, receiver);
+  nativeSocketClose(cpu, sender);
 });
 
 test("a nonblocking socket connects, polls, sends, and receives through one relay", async () => {
