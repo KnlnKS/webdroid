@@ -909,6 +909,8 @@ const viewMethods: NativeSpec["methods"] = {
     return await guardCall(this, M_onTouchEvent, ev);
   },
   "onInterceptTouchEvent(Landroid/view/MotionEvent;)Z": () => 0,
+  // Pointer events already enter the main queue as they arrive, without frame batching.
+  "requestUnbufferedDispatch(Landroid/view/MotionEvent;)V": () => {},
   "requestDisallowInterceptTouchEvent(Z)V": function (this: JView, dis: number) {
     let v: JView | null = this.parent;
     while (v) { (v as any).disallowIntercept = !!dis; v = v.parent; }
