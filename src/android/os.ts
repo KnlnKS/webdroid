@@ -2,12 +2,13 @@ import { newStringSet } from "../jvm/natives/jutil";
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
 import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
-import { jarray } from "../jvm/abi";
+import { jarray, mangleMethod } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
-import { vcall, curThread, mainThread, JThread, setCurThread, reportUncaught, JEnum } from "../jvm/natives/jlang";
+import { vcall, curThread, mainThread, JThread, setCurThread, reportUncaught, JEnum, mkEnumSet, newObj } from "../jvm/natives/jlang";
 export { reportUncaught };
-import { onMain } from "./mainloop";
+import { onMain, inMainJob } from "./mainloop";
+import { mkExecutor } from "../jvm/natives/jconc";
 import { yieldToLoop } from "../native/cpu";
 import { mkFile, JInputStream, JOutputStream, vfs } from "../jvm/natives/jio";
 import { newArrayList } from "../jvm/natives/jutil";
@@ -943,67 +944,80 @@ rt.register({
 });
 
 class JAsyncTask extends JObj {
-  status = 0; // PENDING/RUNNING/FINISHED
+  status = 0;
   cancelled = 0;
+  completed = false;
+  worker: JThread | null = null;
+  result: unknown = null;
+  error: unknown = null;
+  done: Promise<void> | null = null;
 }
+const taskStatuses = mkEnumSet("android/os/AsyncTask$Status", ["PENDING", "RUNNING", "FINISHED"]);
+const serialTaskExecutor = () => (rt.link("android/os/AsyncTask").ctor as Record<string, unknown>).s$SERIAL_EXECUTOR;
 rt.register({
   name: "android/os/AsyncTask", ctor: JAsyncTask,
-  // the two executors AOSP publishes; app code hands them to executeOnExecutor or uses them
-  // directly as a background Executor
   statics: { THREAD_POOL_EXECUTOR: null, SERIAL_EXECUTOR: null },
   clinit: () => {
+    rt.link("android/os/AsyncTask$Status");
     const c = rt.link("android/os/AsyncTask").ctor as Record<string, unknown>;
-    c.s$THREAD_POOL_EXECUTOR = new (rt.link("webdroid/Executor").ctor)();
-    c.s$SERIAL_EXECUTOR = new (rt.link("webdroid/Executor").ctor)();
+    c.s$THREAD_POOL_EXECUTOR = mkExecutor(Math.max(2, Math.min(globalThis.navigator?.hardwareConcurrency ?? 2, 4)));
+    c.s$SERIAL_EXECUTOR = mkExecutor(1);
   },
   methods: {
     "<init>()V": function () {},
     "execute([Ljava/lang/Object;)Landroid/os/AsyncTask;": function (this: JAsyncTask, params: unknown[]) {
-      return runAsyncTask(this, params);
+      return runAsyncTask.call(this, serialTaskExecutor(), params);
     },
-    "executeOnExecutor(Ljava/util/concurrent/Executor;[Ljava/lang/Object;)Landroid/os/AsyncTask;":
-      function (this: JAsyncTask, ex: unknown, params: unknown[]) {
-        return runAsyncTask(this, params);
-      },
-    "cancel(Z)Z": function (this: JAsyncTask) { this.cancelled = 1; return 1; },
+    "executeOnExecutor(Ljava/util/concurrent/Executor;[Ljava/lang/Object;)Landroid/os/AsyncTask;": runAsyncTask,
+    "cancel(Z)Z": function (this: JAsyncTask, interrupt: number) {
+      if (this.cancelled || this.completed) return 0;
+      this.cancelled = 1;
+      if (interrupt && this.worker) { this.worker.interrupted = 1; this.worker.wake?.(); }
+      return 1;
+    },
     "isCancelled()Z": function (this: JAsyncTask) { return this.cancelled; },
-    "getStatus()Landroid/os/AsyncTask$Status;": () => null,
+    "getStatus()Landroid/os/AsyncTask$Status;": function (this: JAsyncTask) { return taskStatuses[this.status]; },
     "doInBackground([Ljava/lang/Object;)Ljava/lang/Object;": () => null,
-    "onPreExecute()V": function () {},
-    "onPostExecute(Ljava/lang/Object;)V": function () {},
-    "onProgressUpdate([Ljava/lang/Object;)V": function () {},
-    "onCancelled()V": function () {},
-    "onCancelled(Ljava/lang/Object;)V": function () {},
+    "onPreExecute()V": () => {},
+    "onPostExecute(Ljava/lang/Object;)V": () => {},
+    "onProgressUpdate([Ljava/lang/Object;)V": () => {},
+    "onCancelled()V": () => {},
+    "onCancelled(Ljava/lang/Object;)V": function (this: JAsyncTask) { return vcall(this, "onCancelled", "()V"); },
     "publishProgress([Ljava/lang/Object;)V": function (this: JAsyncTask, values: unknown[]) {
-      setTimeout(() => {
-        void vcall(this, "onProgressUpdate", "([Ljava/lang/Object;)V", values).catch(reportUncaught);
-      }, 0);
+      if (!this.cancelled) void onMain(() => this.cancelled ? undefined : vcall(this, "onProgressUpdate", "([Ljava/lang/Object;)V", values)).catch(reportUncaught);
     },
-    "get()Ljava/lang/Object;": function () { return null; },
-    "static execute(Ljava/lang/Runnable;)V": (r: unknown) => {
-      setTimeout(() => void vcall(r, "run", "()V").catch(reportUncaught), 0);
+    "get()Ljava/lang/Object;": async function (this: JAsyncTask) {
+      if (!this.cancelled && this.done) await this.done;
+      if (this.cancelled) throw rt.mkThrowable("java/util/concurrent/CancellationException", null);
+      if (this.error) throw await newObj("java/util/concurrent/ExecutionException", "(Ljava/lang/Throwable;)V", this.error);
+      return this.result;
     },
+    "static execute(Ljava/lang/Runnable;)V": (r: unknown) => vcall(serialTaskExecutor(), "execute", "(Ljava/lang/Runnable;)V", r),
   },
 });
-function runAsyncTask(t: JAsyncTask, params: unknown[]): JAsyncTask {
-  t.status = 1;
-  void (async () => {
+async function runAsyncTask(this: JAsyncTask, executor: unknown, params: unknown[]): Promise<JAsyncTask> {
+  if (this.status !== 0) throw rt.mkThrowable("java/lang/IllegalStateException", "Task has already been executed");
+  this.status = 1;
+  let finish!: () => void;
+  this.done = new Promise(resolve => { finish = resolve; });
+  const pre = () => vcall(this, "onPreExecute", "()V");
+  if (curThread === mainThread && inMainJob()) await pre(); else await onMain(pre);
+  const runnable = new JObj();
+  Object.assign(runnable, { [mangleMethod("run", "()V")]: async () => {
+    this.worker = curThread;
     try {
-      await vcall(t, "onPreExecute", "()V");
-      // cooperative model: keep main-thread identity so Looper-based asserts in app code pass
-      const result: unknown = await vcall(t, "doInBackground", "([Ljava/lang/Object;)Ljava/lang/Object;", params ?? []);
-      t.status = 2;
-      if (t.cancelled) {
-        await vcall(t, "onCancelled", "(Ljava/lang/Object;)V", result);
-        await vcall(t, "onCancelled", "()V");
-      } else {
-        await vcall(t, "onPostExecute", "(Ljava/lang/Object;)V", result);
-      }
-    } catch (e) { reportUncaught(e); }
-  })();
-  return t;
+      if (!this.cancelled) this.result = await vcall(this, "doInBackground", "([Ljava/lang/Object;)Ljava/lang/Object;", params ?? []);
+    } catch (error) { if (!this.cancelled) { this.error = rt.jx(error); reportUncaught(this.error); } }
+    finally { this.worker = null; this.completed = true; finish(); }
+    void onMain(async () => {
+      try {
+        if (!this.error) await vcall(this, this.cancelled ? "onCancelled" : "onPostExecute", "(Ljava/lang/Object;)V", this.result);
+      } finally { this.status = 2; }
+    }).catch(reportUncaught);
+  } });
+  await vcall(executor, "execute", "(Ljava/lang/Runnable;)V", runnable);
+  return this;
 }
-rt.register({ name: "android/os/AsyncTask$Status", ctor: class extends JObj {}, sup: "java/lang/Enum" });
 
 class JCountDownTimer extends JObj {
   totalMs = 0n;
