@@ -1,31 +1,134 @@
 // org.json over plain JS objects/arrays.
 
 import { rt, JObj } from "../runtime";
-import { defineException, boxInt, box, JLong, JDouble, TRUE, FALSE } from "./jlang";
+import { defineException, boxInt, box, JLong, JDouble, JBool, TRUE, FALSE } from "./jlang";
 import { mkIter, newLinkedHashSet } from "./jutil";
 
-class JJSONObject extends JObj { o: Record<string, unknown> = {}; }
+class JJSONObject extends JObj { o: Record<string, unknown> = Object.create(null); }
 class JJSONArray extends JObj { a: unknown[] = []; }
+class JJSONTokener extends JObj {
+  source = ""; pos = 0;
+  init(source: string) { this.source = source?.charCodeAt(0) === 0xfeff ? source.slice(1) : source; this.pos = 0; }
+  error(message: string): never { throw rt.mkThrowable("org/json/JSONException", `${message} at character ${this.pos} of ${this.source}`); }
+  clean(): string {
+    while (this.pos < this.source.length) {
+      const c = this.source[this.pos++], next = this.source[this.pos];
+      if (" \t\r\n".includes(c)) continue;
+      if (c === "/" && next === "*") {
+        const end = this.source.indexOf("*/", this.pos + 1);
+        if (end < 0) this.error("Unterminated comment");
+        this.pos = end + 2; continue;
+      }
+      if (c === "#" || c === "/" && next === "/") {
+        while (this.pos < this.source.length && !"\r\n".includes(this.source[this.pos])) this.pos++;
+        continue;
+      }
+      return c;
+    }
+    return "";
+  }
+  string(quote: string): string {
+    let out = "", start = this.pos;
+    while (this.pos < this.source.length) {
+      const c = this.source[this.pos++];
+      if (c === quote) return out + this.source.slice(start, this.pos - 1);
+      if (c !== "\\") continue;
+      out += this.source.slice(start, this.pos - 1);
+      if (this.pos === this.source.length) this.error("Unterminated escape sequence");
+      const e = this.source[this.pos++];
+      if (e === "u") {
+        const hex = this.source.slice(this.pos, this.pos + 4);
+        if (!/^[\da-f]{4}$/i.test(hex)) this.error("Invalid unicode escape");
+        out += String.fromCharCode(parseInt(hex, 16)); this.pos += 4;
+      } else out += e === "b" ? "\b" : e === "f" ? "\f" : e === "n" ? "\n" : e === "r" ? "\r" : e === "t" ? "\t" : e;
+      start = this.pos;
+    }
+    return this.error("Unterminated string");
+  }
+  value(): unknown {
+    const c = this.clean();
+    if (!c) this.error("End of input");
+    if (c === '"' || c === "'") return this.string(c);
+    if (c === "{") {
+      const o: Record<string, unknown> = Object.create(null);
+      const first = this.clean();
+      if (first === "}") return o;
+      if (!first) this.error("Unterminated object");
+      this.pos--;
+      for (;;) {
+        const name = this.value();
+        if (typeof name !== "string") this.error("Names must be strings");
+        const separator = this.clean();
+        if (separator !== ":" && separator !== "=") this.error("Expected ':' after " + name);
+        if (this.source[this.pos] === ">") this.pos++;
+        o[name] = this.value();
+        const end = this.clean();
+        if (end === "}") return o;
+        if (end !== "," && end !== ";") this.error("Unterminated object");
+      }
+    }
+    if (c === "[") {
+      const a: unknown[] = [];
+      let trailing = false;
+      for (;;) {
+        const next = this.clean();
+        if (!next) this.error("Unterminated array");
+        if (next === "]") { if (trailing) a.push(null); return a; }
+        if (next === "," || next === ";") { a.push(null); trailing = true; continue; }
+        this.pos--; a.push(this.value());
+        const end = this.clean();
+        if (end === "]") return a;
+        if (end !== "," && end !== ";") this.error("Unterminated array");
+        trailing = true;
+      }
+    }
+    const start = --this.pos;
+    while (this.pos < this.source.length && !"{}[]/\\:,=;# \t\f\r\n".includes(this.source[this.pos])) this.pos++;
+    const literal = this.source.slice(start, this.pos), lower = literal.toLowerCase();
+    if (!literal) this.error("Expected literal value");
+    if (lower === "null") return null;
+    if (lower === "true" || lower === "false") return lower === "true";
+    if (/^0x[\da-f]+$/i.test(literal)) return parseInt(literal.slice(2), 16);
+    if (/^0[0-7]+$/.test(literal)) return parseInt(literal, 8);
+    const n = Number(literal);
+    return Number.isNaN(n) ? literal : n;
+  }
+}
+function parseJSON(source: string): unknown { const t = new JJSONTokener(); t.init(source); return t.value(); }
+rt.register({
+  name: "org/json/JSONTokener", ctor: JJSONTokener,
+  methods: {
+    "<init>(Ljava/lang/String;)V": function (this: JJSONTokener, source: string) { this.init(source); },
+    "nextValue()Ljava/lang/Object;": function (this: JJSONTokener) { return jsonWrap(this.value()); },
+    "more()Z": function (this: JJSONTokener) { return this.pos < this.source.length ? 1 : 0; },
+  },
+});
 /** get()/opt() hand out Java objects: numbers box the way org.json parses them (Integer when it
  *  fits, else Long, else Double), booleans box, strings are already Java strings */
 function jsonWrap(v: unknown): unknown {
   if (v === null || v === undefined) return null;
   if (typeof v === "object") {
-    if (Array.isArray(v)) { const a = new JJSONArray(); a.a = v; return a; }
+    if (Array.isArray(v)) { rt.link("org/json/JSONArray"); const a = new JJSONArray(); a.a = v; return a; }
     if (v instanceof JObj) return v;
-    const o = new JJSONObject(); o.o = v as Record<string, unknown>; return o;
+    rt.link("org/json/JSONObject"); const o = new JJSONObject(); o.o = v as Record<string, unknown>; return o;
   }
   if (typeof v === "number") {
-    if (Number.isInteger(v)) return v >= -2147483648 && v <= 2147483647 ? boxInt(v) : box(JLong, BigInt(v));
+    if (Number.isInteger(v)) {
+      const small = v >= -2147483648 && v <= 2147483647;
+      rt.link(small ? "java/lang/Integer" : "java/lang/Long");
+      return small ? boxInt(v) : box(JLong, BigInt(v));
+    }
+    rt.link("java/lang/Double");
     return box(JDouble, v);
   }
-  if (typeof v === "bigint") return box(JLong, v);
-  if (typeof v === "boolean") return v ? TRUE : FALSE;
+  if (typeof v === "bigint") { rt.link("java/lang/Long"); return box(JLong, v); }
+  if (typeof v === "boolean") { rt.link("java/lang/Boolean"); return v ? TRUE : FALSE; }
   return v;
 }
 function jsonUnwrap(v: unknown): unknown {
   if (v instanceof JJSONObject) return v.o;
   if (v instanceof JJSONArray) return v.a;
+  if (v instanceof JBool) return !!v.v;
   if (typeof v === "object" && v !== null && "v" in v) return jsonUnwrap((v as { v: unknown }).v);
   // a boxed Long arrives as a bigint, which JSON.stringify refuses; org.json stores the value,
   // and every read path (getLong/optLong) boxes it back
@@ -38,9 +141,11 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "<init>(Ljava/lang/String;)V": function (this: JJSONObject, s: string) {
-      try { this.o = JSON.parse(s); }
-      catch (e) { throw rt.mkThrowable("org/json/JSONException", String(e)); }
+      const value = parseJSON(s);
+      if (typeof value !== "object" || value === null || Array.isArray(value)) throw rt.mkThrowable("org/json/JSONException", "Value is not an object");
+      this.o = value as Record<string, unknown>;
     },
+    "static quote(Ljava/lang/String;)Ljava/lang/String;": (s: string | null) => JSON.stringify(s ?? "").replaceAll("/", "\\/"),
     "put(Ljava/lang/String;Ljava/lang/Object;)Lorg/json/JSONObject;": function (this: JJSONObject, k: string, v: unknown) {
       this.o[k] = jsonUnwrap(v);
       return this;
@@ -132,8 +237,9 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "<init>(Ljava/lang/String;)V": function (this: JJSONArray, s: string) {
-      try { this.a = JSON.parse(s); }
-      catch (e) { throw rt.mkThrowable("org/json/JSONException", String(e)); }
+      const value = parseJSON(s);
+      if (!Array.isArray(value)) throw rt.mkThrowable("org/json/JSONException", "Value is not an array");
+      this.a = value;
     },
     "put(Ljava/lang/Object;)Lorg/json/JSONArray;": function (this: JJSONArray, v: unknown) { this.a.push(jsonUnwrap(v)); return this; },
     "put(I)Lorg/json/JSONArray;": function (this: JJSONArray, v: number) { this.a.push(v); return this; },
