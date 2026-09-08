@@ -318,6 +318,8 @@ rt.register({
   },
 });
 
+rt.register({ name: "android/net/ConnectivityManager$OnNetworkActiveListener", ctor: class extends JObj {} });
+const activeListeners = new Set<unknown>();
 const registerCallback = (cb: unknown) => {
   if (!cb) return;
   netCallbacks.add(cb);
@@ -359,6 +361,12 @@ rt.register({
     "unregisterNetworkCallback(Landroid/net/ConnectivityManager$NetworkCallback;)V": (cb: unknown) => { netCallbacks.delete(cb); },
     "getNetworkCapabilities(Landroid/net/Network;)Landroid/net/NetworkCapabilities;": (n: unknown) => knownNetwork(n) ? netCaps() : null,
     "isActiveNetworkMetered()Z": () => 0,
+    // The relay has no radio power-saving transitions while its network is available.
+    "isDefaultNetworkActive()Z": async () => (await netUp()) ? 1 : 0,
+    "addDefaultNetworkActiveListener(Landroid/net/ConnectivityManager$OnNetworkActiveListener;)V": (listener: unknown) => { activeListeners.add(listener); },
+    "removeDefaultNetworkActiveListener(Landroid/net/ConnectivityManager$OnNetworkActiveListener;)V": (listener: unknown) => {
+      if (!activeListeners.delete(listener)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Listener not registered");
+    },
   },
 });
 const states = mkEnumSet("android/net/NetworkInfo$State", ["CONNECTING", "CONNECTED", "SUSPENDED", "DISCONNECTING", "DISCONNECTED", "UNKNOWN"]);
