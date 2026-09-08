@@ -586,7 +586,7 @@ for (const [name, methods, statics] of [
     "setNightMode(I)V": () => {},
     "getCurrentModeType()I": () => 1,
   }],
-  ["android/app/KeyguardManager", { "isKeyguardLocked()Z": () => 0, "inKeyguardRestrictedInputMode()Z": () => 0 }],
+  ["android/app/KeyguardManager", { "isKeyguardLocked()Z": () => 0, "inKeyguardRestrictedInputMode()Z": () => 0, "isDeviceSecure()Z": () => 0 }],
   ["android/hardware/SensorManager", { "getDefaultSensor(I)Landroid/hardware/Sensor;": () => null, "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z": () => 0, "unregisterListener(Landroid/hardware/SensorEventListener;)V": () => {} }],
   // No location provider exists on this device, so requests register nothing and never fire.
   ["android/location/LocationManager", {
