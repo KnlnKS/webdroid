@@ -425,7 +425,7 @@ export function gles3Init(): void {
     glUniformBlockBinding: (_c, a) => { const p = H(T().programs, a.i()); const i = a.i(), b = a.i(); if (p) g().uniformBlockBinding(p, i, b); },
     glGetActiveUniformBlockiv: (_c, a) => {
       const p = H(T().programs, a.i()); const i = a.i(), pn = a.i(), rec = p && programRecs.get(p);
-      let value = p && g().getActiveUniformBlockParameter(p, i, pn);
+      let value = p && (pn === 0x8a41 ? (g().getActiveUniformBlockName(p, i)?.length ?? 0) + 1 : g().getActiveUniformBlockParameter(p, i, pn));
       if (pn === 0x8a43 && rec && value && typeof value === "object" && "length" in value) {
         value = Uint32Array.from(value as ArrayLike<number>, (web) => rec.uniforms.webToGuest[web] >= 0 ? rec.uniforms.webToGuest[web] : 0xffffffff);
       }
