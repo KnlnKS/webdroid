@@ -75,17 +75,14 @@ rt.register({ name: "android/content/pm/ComponentInfo", ctor: JComponentInfo, su
   methods: { "<init>()V": function () {} },
 });
 export class JActivityInfo extends JComponentInfo {
-  applicationInfo: JApplicationInfo | null = null; enabled = 1; directBootAware = 0; processName = "";
-  theme = 0; name = ""; packageName = ""; configChanges = 0; screenOrientation = -1; exported = 0;
-  permission: string | null = null;
-  parentActivityName: string | null = null; metaData: JBundle | null = null;
+  theme = 0; configChanges = 0; screenOrientation = -1;
+  parentActivityName: string | null = null;
 }
 rt.register({
   name: "android/content/pm/ActivityInfo", ctor: JActivityInfo, sup: "android/content/pm/ComponentInfo", ifaces: ["android/os/Parcelable"],
   fields: {
-    theme: "theme", name: "name", packageName: "packageName", configChanges: "configChanges", screenOrientation: "screenOrientation",
-    exported: "exported", permission: "permission", applicationInfo: "applicationInfo", enabled: "enabled", directBootAware: "directBootAware", processName: "processName",
-    parentActivityName: "parentActivityName", metaData: "metaData",
+    theme: "theme", configChanges: "configChanges", screenOrientation: "screenOrientation",
+    permission: "permission", parentActivityName: "parentActivityName",
   },
   statics: { SCREEN_ORIENTATION_PORTRAIT: 1, SCREEN_ORIENTATION_UNSPECIFIED: -1, SCREEN_ORIENTATION_LANDSCAPE: 0, SCREEN_ORIENTATION_USER: 2, SCREEN_ORIENTATION_BEHIND: 3,
     SCREEN_ORIENTATION_SENSOR: 4, SCREEN_ORIENTATION_NOSENSOR: 5, SCREEN_ORIENTATION_SENSOR_LANDSCAPE: 6, SCREEN_ORIENTATION_SENSOR_PORTRAIT: 7,
@@ -120,19 +117,16 @@ rt.register({
   },
 });
 rt.register({
-  name: "android/content/pm/ProviderInfo", sup: "android/content/pm/ComponentInfo", ctor: class extends JComponentInfo { applicationInfo = null; authority = ""; packageName = ""; metaData = null; name = ""; exported = 0; grantUriPermissions = 0; multiprocess = 0; },
-  fields: { applicationInfo: "applicationInfo", authority: "authority", packageName: "packageName", metaData: "metaData", name: "name", exported: "exported", grantUriPermissions: "grantUriPermissions", multiprocess: "multiprocess" },
+  name: "android/content/pm/ProviderInfo", sup: "android/content/pm/ComponentInfo", ctor: class extends JComponentInfo { authority = ""; grantUriPermissions = 0; multiprocess = 0; },
+  fields: { authority: "authority", grantUriPermissions: "grantUriPermissions", multiprocess: "multiprocess" },
   methods: { "<init>()V": function () {} },
 });
 class JServiceInfo extends JComponentInfo {
-  applicationInfo: JApplicationInfo | null = null; metaData: JBundle | null = null;
-  name = ""; packageName = ""; processName = ""; permission: string | null = null;
-  enabled = 1; exported = 0; directBootAware = 0; flags = 0; foregroundServiceType = 0;
+  flags = 0; foregroundServiceType = 0;
 }
 rt.register({
   name: "android/content/pm/ServiceInfo", ctor: JServiceInfo, sup: "android/content/pm/ComponentInfo",
-  fields: { applicationInfo: "applicationInfo", metaData: "metaData", name: "name", packageName: "packageName", processName: "processName",
-    permission: "permission", enabled: "enabled", exported: "exported", directBootAware: "directBootAware", flags: "flags", foregroundServiceType: "foregroundServiceType" },
+  fields: { permission: "permission", flags: "flags", foregroundServiceType: "foregroundServiceType" },
   methods: { "<init>()V": function () {} },
 });
 class JSignature extends JObj { bytes = new Int8Array(0); }
