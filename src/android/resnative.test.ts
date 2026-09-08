@@ -8,7 +8,7 @@ import { Arsc } from "./arsc";
 import { Resources, JTheme, rvColor } from "./res";
 import { JContext } from "./context";
 import type { AppHost } from "./apphost";
-import { JResources, deviceConfiguration } from "./resnative";
+import { JResources, deviceConfiguration, scopedResources } from "./resnative";
 
 function locale(tag: string): JLocale {
   return rt.link("java/util/Locale").ctor[mangleMethod("forLanguageTag", "(Ljava/lang/String;)Ljava/util/Locale;")](tag);
@@ -163,4 +163,29 @@ test("scoped contexts lazily share localized entries without changing other cont
   expect(await vcall(second, "getString", "(I)Ljava/lang/String;", 0x7f010000)).toBe("Bonjour");
   expect(deviceConfiguration().locale?.lang).toBe("en");
   expect(await vcall(scoped, "getTheme", "()Landroid/content/res/Resources$Theme;")).not.toBe(theme);
+});
+
+test("scoped configuration inherits unspecified metrics and qualifier bit groups", async () => {
+  const base = newConfig();
+  await vcall(base, "setLocale", "(Ljava/util/Locale;)V", locale("ar"));
+  base.fontScale = 1.25; base.densityDpi = 320; base.orientation = 2;
+  base.uiMode = 0x23; base.screenLayout = 0x282;
+  const source = scopedResources(new Resources(null, {}), base), override = newConfig();
+  override.fontScale = 0; override.densityDpi = 0; override.orientation = 0;
+  override.screenWidthDp = 0; override.screenHeightDp = 0; override.smallestScreenWidthDp = 0;
+  override.uiMode = 0x10; override.screenLayout = 3; override.colorMode = 0;
+  const child = scopedResources(source.host, override);
+  expect(child.host.dm.scaledDensity).toBe(2.5);
+  expect(child.host.dm.densityDpi).toBe(320);
+  expect(child.config?.fontScale).toBe(1.25);
+  expect(child.config?.orientation).toBe(2);
+  expect(child.config?.uiMode).toBe(0x13);
+  expect(child.config?.screenLayout).toBe(0x293);
+  expect(child.config?.locale?.lang).toBe("ar");
+  expect(override.fontScale).toBe(0);
+  expect(source.config?.uiMode).toBe(0x23);
+  override.fontScale = 1.5;
+  await vcall(child, "updateConfiguration", "(Landroid/content/res/Configuration;Landroid/util/DisplayMetrics;)V", override, null);
+  expect(child.host.dm.scaledDensity).toBe(3);
+  expect(source.host.dm.scaledDensity).toBe(2.5);
 });

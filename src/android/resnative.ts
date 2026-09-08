@@ -151,16 +151,34 @@ function configurationQualifiers(c: JConfiguration) {
     orientation: c.orientation, density: c.densityDpi, wdp: c.screenWidthDp, hdp: c.screenHeightDp,
     swdp: c.smallestScreenWidthDp, size: c.screenLayout & 0xf, uiType: c.uiMode & 0xf };
 }
+function mergeConfiguration(base: JConfiguration, delta: JConfiguration): void {
+  for (const key of CONFIG_FIELDS) {
+    if (key === "uiMode" || key === "screenLayout" || key === "colorMode") continue;
+    if (key === "orientation") { if (delta.orientation) base.orientation = delta.orientation; continue; }
+    const value = delta[key];
+    if (key === "fontScale" ? value > 0 : key === "fontWeightAdjustment" ? value !== 0x7fffffff : value !== 0) base[key] = value;
+  }
+  const locales = configLocales(delta);
+  if (locales.values.length) setLocales(base, locales);
+  for (const [key, masks] of [["uiMode", [0xf, 0x30]], ["screenLayout", [0xf, 0x30, 0xc0, 0x300]], ["colorMode", [3, 12]]] as const) {
+    for (const mask of masks) if (delta[key] & mask) base[key] = (base[key] & ~mask) | (delta[key] & mask);
+  }
+  if (delta.screenLayout) base.screenLayout = (base.screenLayout & ~0x10000000) | (delta.screenLayout & 0x10000000);
+}
+function configurationMetrics(resources: JResources): void {
+  const config = resources.config!;
+  resources.host.dm.densityDpi = config.densityDpi;
+  resources.host.dm.density = config.densityDpi / 160;
+  resources.host.dm.scaledDensity = resources.host.dm.density * config.fontScale;
+}
 export function scopedResources(source: Resources, config: JConfiguration): JResources {
   if (!config) throw rt.mkThrowable("java/lang/IllegalArgumentException", "overrideConfiguration must not be null");
   const r = new JResources();
-  r.config = Object.assign(new JConfiguration(), config);
-  configLocales(r.config);
+  r.config = Object.assign(new JConfiguration(), source.jobj instanceof JResources ? source.jobj.config ?? theConfig : theConfig);
+  mergeConfiguration(r.config, config);
   r.host = source.scoped(configurationQualifiers(r.config));
   r.host.jobj = r;
-  r.host.dm.densityDpi = config.densityDpi;
-  r.host.dm.density = config.densityDpi / 160;
-  r.host.dm.scaledDensity = r.host.dm.density * config.fontScale;
+  configurationMetrics(r);
   return r;
 }
 export const deviceConfiguration = (): JConfiguration => theConfig;
@@ -335,10 +353,10 @@ const resMethods: NativeSpec["methods"] = {
   "updateConfiguration(Landroid/content/res/Configuration;Landroid/util/DisplayMetrics;)V": function (this: JResources, c: JConfiguration | null) {
     if (!c) return;
     if (!this.config) { applyDeviceConfiguration(c); return; }
-    Object.assign(this.config, c);
-    configLocales(this.config);
+    mergeConfiguration(this.config, c);
     const qualifiers = configurationQualifiers(this.config);
     for (const table of [this.host.arsc, this.host.tbl(0x01000000)]) if (table) Object.assign(table.device, qualifiers);
+    configurationMetrics(this);
     this.host.invalidate();
   },
   "getFont(I)Landroid/graphics/Typeface;": async function (this: JResources, id: number) {
