@@ -54,6 +54,12 @@ export function spannedString(s: unknown): string {
   if (s instanceof JEditable) return s.text;
   return String(s);
 }
+function sliceSpanned(cs: unknown, start: number, end: number): unknown {
+  if (!(cs instanceof JSpannable)) return spannedString(cs).slice(start, end);
+  const out = new (cs.constructor as new () => JSpannable)(); out.text = cs.text.slice(start, end);
+  for (const r of cs.spans) if (r.end > start && r.start < end) out.spans.push({ ...r, start: Math.max(0, r.start - start), end: Math.min(end, r.end) - start });
+  return out;
+}
 const spanMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "<init>(Ljava/lang/CharSequence;)V": function (this: JSpannable, cs: unknown) {
@@ -65,15 +71,7 @@ const spanMethods: NativeSpec["methods"] = {
   "toString()Ljava/lang/String;": function (this: JSpannable) { return this.text; },
   // AOSP returns a Spanned (SpannableStringBuilder), not a String: app code trims a Spanned and
   // casts the result straight back, so handing out a bare String is a ClassCastException later.
-  "subSequence(II)Ljava/lang/CharSequence;": function (this: JSpannable, a: number, b: number) {
-    const out = new (this.constructor as new () => JSpannable)();
-    out.text = this.text.slice(a, b);
-    for (const r of this.spans) {
-      if (r.end <= a || r.start >= b) continue;
-      out.spans.push({ ...r, start: Math.max(0, r.start - a), end: Math.min(b, r.end) - a });
-    }
-    return out;
-  },
+  "subSequence(II)Ljava/lang/CharSequence;": function (this: JSpannable, a: number, b: number) { return sliceSpanned(this, a, b); },
   "setSpan(Ljava/lang/Object;III)V": function (this: JSpannable, span: unknown, start: number, end: number, flags: number) {
     const existing = this.spans.find((r) => r.span === span);
     if (existing) Object.assign(existing, { start, end, flags });
@@ -514,6 +512,34 @@ rt.register({
 });
 
 // ── android.text layout stack (BoringLayout/StaticLayout) — what Compose ui-text draws through.
+type SpanMetrics = { top: number; ascent: number; descent: number; bottom: number; leading: number };
+type Replacement = SpanRec & { width: number; metrics: SpanMetrics; paint: JTextPaint };
+function replacementSpans(cs: unknown): SpanRec[] {
+  return cs instanceof JSpannable ? cs.spans.filter((s) => s.end > s.start && rt.iof(s.span, "android/text/style/ReplacementSpan")).sort((a, b) => a.start - b.start) : [];
+}
+async function measureReplacements(cs: unknown, paint: JTextPaint, spans = replacementSpans(cs)): Promise<Replacement[]> {
+  const result: Replacement[] = [];
+  for (const span of spans) {
+    const p = new JTextPaint(); copyPaint(paint, p); p.density = paint.density;
+    if (cs instanceof JSpannable) for (const style of cs.spans) {
+      if (style.end <= span.start || style.start >= span.end || rt.iof(style.span, "android/text/style/ReplacementSpan")) continue;
+      if (rt.iof(style.span, "android/text/style/MetricAffectingSpan")) await vcall(style.span, "updateMeasureState", "(Landroid/text/TextPaint;)V", p);
+    }
+    const metrics: SpanMetrics = await newObj("android/graphics/Paint$FontMetricsInt"); fillFontMetrics(p, metrics, true);
+    const width = await vcall(span.span, "getSize", "(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I", p, cs, span.start, span.end, metrics);
+    result.push({ ...span, width, metrics, paint: p });
+  }
+  return result;
+}
+function replacementWidth(text: string, paint: JTextPaint, replacements: Replacement[], start: number, end: number): number {
+  let x = 0, position = start;
+  for (const span of replacements) {
+    if (span.end <= position || span.start >= end) continue;
+    if (span.start > position) x += measureText(paint, text.slice(position, span.start));
+    x += span.width; position = span.end;
+  }
+  return x + (position < end ? measureText(paint, text.slice(position, end)) : 0);
+}
 export interface TLine { start: number; end: number; text: string; width: number; }
 
 /**
@@ -526,7 +552,7 @@ export interface TLine { start: number; end: number; text: string; width: number
  * AOSP's ParagraphConstraints. Exported so its own LineBreaker bytecode reaches this body
  * through the delegate rather than a second copy of it.
  */
-export function greedyBreaks(text: string, p: JTextPaint, first: number, firstCount: number, rest: number, maxLines = Number.MAX_SAFE_INTEGER): TLine[] {
+export function greedyBreaks(text: string, p: JTextPaint, first: number, firstCount: number, rest: number, maxLines = Number.MAX_SAFE_INTEGER, rangeWidth?: (start: number, end: number) => number, breakAt?: (start: number, end: number) => number): TLine[] {
   const out: TLine[] = [];
   const paras = text.split("\n");
   let pos = 0;
@@ -540,17 +566,18 @@ export function greedyBreaks(text: string, p: JTextPaint, first: number, firstCo
       while (left.length && out.length < maxLines) {
         const width = out.length < firstCount ? first : rest;
         let n = left.length;
-        if (measureText(p, left) > width) {
+        if ((rangeWidth ? rangeWidth(pos + off, pos + para.length) : measureText(p, left)) > width) {
           let lo = 1, hi = left.length;
           while (lo < hi) {
             const mid = (lo + hi + 1) >> 1;
-            if (measureText(p, left.slice(0, mid)) <= width) lo = mid; else hi = mid - 1;
+            if ((rangeWidth ? rangeWidth(pos + off, pos + off + mid) : measureText(p, left.slice(0, mid))) <= width) lo = mid; else hi = mid - 1;
           }
           const sp = left.lastIndexOf(" ", Math.min(lo, left.length - 2));
           n = sp > 0 ? sp : lo;
         }
+        if (breakAt) n = breakAt(pos + off, pos + off + n) - pos - off;
         const chunk = left.slice(0, n);
-        out.push({ start: pos + off, end: pos + off + n, text: chunk, width: measureText(p, chunk) });
+        out.push({ start: pos + off, end: pos + off + n, text: chunk, width: rangeWidth ? rangeWidth(pos + off, pos + off + n) : measureText(p, chunk) });
         off += n;
         if (left[n] === " ") { n++; off++; }
         left = left.slice(n);
@@ -572,6 +599,7 @@ class JLayout extends JObj {
   paint!: JTextPaint;
   width = 0;
   lines: TLine[] = [];
+  replacements: Replacement[] = [];
   spacingMult = 1; spacingAdd = 0;
   includePad = true;
   asc = 0; desc = 0; padTop = 0; padBottom = 0;
@@ -584,7 +612,14 @@ class JLayout extends JObj {
     // last one's down to its `bottom`; the space between lines stays ascent..descent.
     this.padTop = this.includePad ? Math.round(this.asc - fontTop(p)) : 0;
     this.padBottom = this.includePad ? Math.round(fontBottom(p) - this.desc) : 0;
-    this.lines = greedyBreaks(this.text, p, this.width, 0, this.width, maxLines);
+    this.lines = this.replacements.length ? greedyBreaks(this.text, p, this.width, 0, this.width, maxLines,
+      (start, end) => this.rangeWidth(start, end), (start, end) => {
+        const span = this.replacements.find((s) => s.start < end && s.end > end);
+        return span ? span.start > start ? span.start : span.end : end;
+      }) : greedyBreaks(this.text, p, this.width, 0, this.width, maxLines);
+  }
+  rangeWidth(start: number, end: number): number {
+    return this.replacements.length ? replacementWidth(this.text, this.paint, this.replacements, start, end) : measureText(this.paint, this.text.slice(start, end));
   }
   /**
    * AOSP StaticLayout hands every line's font metrics to the LineHeightSpans covering it and
@@ -596,13 +631,17 @@ class JLayout extends JObj {
     const src = this.src;
     if (!(src instanceof JSpannable)) return;
     const spans = src.spans.filter((s) => rt.iof(s.span, "android/text/style/LineHeightSpan"));
-    if (!spans.length) return;
+    if (!spans.length && !this.replacements.length) return;
     const fm = new (rt.link("android/graphics/Paint$FontMetricsInt").ctor as new () => { top: number; ascent: number; descent: number; bottom: number; leading: number })();
     const tops: number[] = [], bases: number[] = [];
     let v = 0;
     for (let i = 0; i < this.lines.length; i++) {
       const l = this.lines[i];
       fillFontMetrics(this.paint, fm, true);
+      for (const span of this.replacements) if (span.start < l.end && span.end > l.start) {
+        fm.ascent = Math.min(fm.ascent, span.metrics.ascent); fm.descent = Math.max(fm.descent, span.metrics.descent);
+        fm.top = Math.min(fm.top, span.metrics.top); fm.bottom = Math.max(fm.bottom, span.metrics.bottom);
+      }
       if (i === 0) fm.ascent -= this.padTop;
       if (i === this.lines.length - 1) fm.descent += this.padBottom;
       for (const s of spans) {
@@ -625,16 +664,21 @@ class JLayout extends JObj {
   }
 }
 /** AOSP Layout.getDesiredWidth: widest paragraph, unwrapped. */
-function desiredWidth(text: string, p: JTextPaint): number {
-  let max = 0;
-  for (const para of text.split("\n")) max = Math.max(max, measureText(p, para));
-  return max;
+function desiredWidth(cs: unknown, p: JTextPaint): number | Promise<number> {
+  const text = spannedString(cs), spans = replacementSpans(cs);
+  const width = (replacements: Replacement[]) => {
+    let max = 0, start = 0;
+    for (const para of text.split("\n")) {
+      max = Math.max(max, replacements.length ? replacementWidth(text, p, replacements, start, start + para.length) : measureText(p, para));
+      start += para.length + 1;
+    }
+    return max;
+  };
+  return spans.length ? measureReplacements(cs, p, spans).then(width) : width([]);
 }
 const layoutMethods: NonNullable<NativeSpec["methods"]> = {
-  "static getDesiredWidth(Ljava/lang/CharSequence;Landroid/text/TextPaint;)F":
-    (cs: unknown, p: JTextPaint) => desiredWidth(spannedString(cs), p),
-  "static getDesiredWidth(Ljava/lang/CharSequence;IILandroid/text/TextPaint;)F":
-    (cs: unknown, s: number, e: number, p: JTextPaint) => desiredWidth(spannedString(cs).slice(s, e), p),
+  "static getDesiredWidth(Ljava/lang/CharSequence;Landroid/text/TextPaint;)F": maySuspend((cs: unknown, p: JTextPaint) => desiredWidth(cs, p)),
+  "static getDesiredWidth(Ljava/lang/CharSequence;IILandroid/text/TextPaint;)F": maySuspend((cs: unknown, s: number, e: number, p: JTextPaint) => desiredWidth(sliceSpanned(cs, s, e), p)),
   "getLineCount()I": function (this: JLayout) { return this.lines.length; },
   "isFallbackLineSpacingEnabled()Z": () => 0,
   "getSpacingMultiplier()F": function (this: JLayout) { return this.spacingMult; },
@@ -645,8 +689,8 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "getLineBottom(I)I": function (this: JLayout, i: number) { return this.lineTop(Math.min(i, this.lines.length - 1) + 1); },
   "getLineBottom(IZ)I": function (this: JLayout, i: number) { return this.lineTop(Math.min(i, this.lines.length - 1) + 1); },
   "getLineBaseline(I)I": function (this: JLayout, i: number) { return this.baseline(i); },
-  "getLineAscent(I)I": function (this: JLayout) { return Math.round(this.asc); },
-  "getLineDescent(I)I": function (this: JLayout) { return Math.round(this.desc); },
+  "getLineAscent(I)I": function (this: JLayout, i: number) { return this.tops ? this.lineTop(i) - this.baseline(i) : Math.round(this.asc); },
+  "getLineDescent(I)I": function (this: JLayout, i: number) { return this.tops ? this.lineTop(i + 1) - this.baseline(i) : Math.round(this.desc); },
   "getLineStart(I)I": function (this: JLayout, i: number) { return this.lines[Math.min(i, this.lines.length - 1)]?.start ?? 0; },
   "getLineEnd(I)I": function (this: JLayout, i: number) { return this.lines[Math.min(i, this.lines.length - 1)]?.end ?? 0; },
   // the end WITHOUT the trailing newline the line owns, which is what AOSP reports
@@ -660,7 +704,7 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "getLineMax(I)F": function (this: JLayout, i: number) { return this.lines[i]?.width ?? 0; },
   "getHeight()I": function (this: JLayout) { return this.tops ? this.tops[this.tops.length - 1] : this.lines.length * this.lineHeight() + this.padTop + this.padBottom; },
   "getWidth()I": function (this: JLayout) { return this.width; },
-  "getText()Ljava/lang/CharSequence;": function (this: JLayout) { return this.text; },
+  "getText()Ljava/lang/CharSequence;": function (this: JLayout) { return this.src ?? this.text; },
   "getPaint()Landroid/text/TextPaint;": function (this: JLayout) { return this.paint; },
   "getEllipsisStart(I)I": () => 0,
   "getEllipsisCount(I)I": () => 0,
@@ -679,7 +723,7 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "getPrimaryHorizontal(I)F": function (this: JLayout, off: number) {
     for (const l of this.lines) {
-      if (off >= l.start && (off < l.end || off === this.text.length)) return measureText(this.paint, l.text.slice(0, off - l.start));
+      if (off >= l.start && (off < l.end || off === this.text.length)) return this.rangeWidth(l.start, this.replacements.find((s) => s.start < off && s.end > off)?.start ?? off);
     }
     return 0;
   },
@@ -691,9 +735,11 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
     if (!l) return 0;
     let acc = 0;
     for (let i = 0; i < l.text.length; i++) {
-      const w = measureText(this.paint, l.text[i]);
+      const replacement = this.replacements.find((s) => s.start <= l.start + i && s.end > l.start + i);
+      const w = replacement?.width ?? measureText(this.paint, l.text[i]);
       if (acc + w / 2 > x) return l.start + i;
       acc += w;
+      if (replacement) i = replacement.end - l.start - 1;
     }
     return l.end;
   },
@@ -702,12 +748,20 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
     return this.baseline(i);
   },
   "draw(Landroid/graphics/Canvas;)V": async function (this: JLayout, c: JCanvas) {
-    // c may be a dex Canvas wrapper (Compose TextAndroidCanvas) — dispatch virtually
     for (let i = 0; i < this.lines.length; i++) {
-      if (this.lines[i].text) {
-        await vcall(c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V",
-          this.lines[i].text, 0, this.baseline(i), this.paint);
+      const line = this.lines[i], end = line.start + line.text.length, baseline = this.baseline(i);
+      let position = line.start, x = 0;
+      for (const span of this.replacements) {
+        if (span.end <= position || span.start >= end) continue;
+        if (span.start > position) {
+          const text = this.text.slice(position, span.start);
+          await vcall(c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text, x, baseline, this.paint);
+          x += measureText(this.paint, text);
+        }
+        await vcall(span.span, "draw", "(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V", c, this.src, span.start, span.end, x, this.lineTop(i), baseline, this.lineTop(i + 1), span.paint);
+        x += span.width; position = span.end;
       }
+      if (position < end) await vcall(c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", this.text.slice(position, end), x, baseline, this.paint);
     }
   },
   "draw(Landroid/graphics/Canvas;Landroid/graphics/Path;Landroid/graphics/Paint;I)V": function (this: JLayout, c: JCanvas) {
@@ -720,8 +774,9 @@ class JDynamicLayout extends JLayout {
   refresh() {
     const text = spannedString(this.src);
     if (this.lines.length && text === this.text) return;
-    this.text = text; this.layoutLines();
-    return this.applyLineHeightSpans();
+    this.text = text; this.replacements = [];
+    const finish = () => { this.layoutLines(); return this.applyLineHeightSpans(); };
+    return replacementSpans(this.src).length ? measureReplacements(this.src, this.paint).then((spans) => { this.replacements = spans; return finish(); }) : finish();
   }
 }
 const dynamicMethods: NonNullable<NativeSpec["methods"]> = {
@@ -761,17 +816,19 @@ class JBoringLayout extends JLayout {
   async setup(cs: unknown, p: JTextPaint, w: number, smult: number, sadd: number, incl = this.includePad): Promise<this> {
     this.text = spannedString(cs); this.src = cs; this.paint = p; this.width = w;
     this.spacingMult = smult; this.spacingAdd = sadd; this.includePad = incl;
+    const spans = replacementSpans(cs);
+    this.replacements = spans.length ? await measureReplacements(cs, p, spans) : [];
     this.layoutLines(1);
     await this.applyLineHeightSpans();
     return this;
   }
 }
-const boringInit = function (this: JBoringLayout, cs: unknown, p: JTextPaint, w: number, _al: unknown, smult: number, sadd: number) {
-  this.setup(cs, p, w, smult, sadd);
-};
-const boringMake = (cs: unknown, p: JTextPaint, w: number, _al: unknown, smult: number, sadd: number, _m: unknown, incl: number) =>
-  new JBoringLayout().setup(cs, p, w, smult, sadd, !!incl);
-const isBoring = (cs: unknown, p: JTextPaint) => boringMetrics(spannedString(cs), p);
+const boringInit = maySuspend(function (this: JBoringLayout, cs: unknown, p: JTextPaint, w: number, _al: unknown, smult: number, sadd: number) {
+  return this.setup(cs, p, w, smult, sadd);
+});
+const boringMake = maySuspend((cs: unknown, p: JTextPaint, w: number, _al: unknown, smult: number, sadd: number, _m: unknown, incl: number) =>
+  new JBoringLayout().setup(cs, p, w, smult, sadd, !!incl));
+const isBoring = (cs: unknown, p: JTextPaint) => replacementSpans(cs).length ? null : boringMetrics(spannedString(cs), p);
 rt.register({
   name: "android/text/BoringLayout", ctor: JBoringLayout, sup: "android/text/Layout",
   methods: {
@@ -799,7 +856,7 @@ rt.register({
     "static obtain(Ljava/lang/CharSequence;IILandroid/text/TextPaint;I)Landroid/text/StaticLayout$Builder;":
       (cs: unknown, start: number, end: number, p: JTextPaint, w: number) => {
         const b = new JSLBuilder();
-        b.cs = start === 0 && end === spannedString(cs).length ? cs : spannedString(cs).slice(start, end);
+        b.cs = start === 0 && end === spannedString(cs).length ? cs : sliceSpanned(cs, start, end);
         b.p = p; b.w = w;
         return b;
       },
@@ -821,6 +878,8 @@ rt.register({
       const l = new JStaticLayout();
       l.text = spannedString(this.cs); l.src = this.cs; l.paint = this.p; l.width = this.w;
       l.spacingMult = this.smult; l.spacingAdd = this.sadd; l.includePad = this.incl;
+      const spans = replacementSpans(this.cs);
+      if (spans.length) l.replacements = await measureReplacements(this.cs, this.p, spans);
       l.layoutLines(this.maxLines);
       await l.applyLineHeightSpans();
       return l;
