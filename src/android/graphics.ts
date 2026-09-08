@@ -795,6 +795,36 @@ export function matMul(a: number[], b: number[]): [number, number, number, numbe
     a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5],
   ];
 }
+export function affineFromPoints(src: Float32Array, si: number, dst: Float32Array, di: number, count: number): JMatrix["m"] | null {
+  if (!count) return [1, 0, 0, 1, 0, 0];
+  const x = src[si], y = src[si + 1], u = dst[di], v = dst[di + 1];
+  if (count === 1) return [1, 0, 0, 1, u - x, v - y];
+  const sx = src[si + 2] - x, sy = src[si + 3] - y;
+  const dx = dst[di + 2] - u, dy = dst[di + 3] - v;
+  let a: number, b: number, c: number, d: number;
+  if (count === 2) {
+    const det = sx * sx + sy * sy;
+    if (!det) return null;
+    a = d = (dx * sx + dy * sy) / det; b = (dy * sx - dx * sy) / det; c = -b;
+  } else {
+    let third = 4, sx2 = src[si + third] - x, sy2 = src[si + third + 1] - y;
+    let det = sx * sy2 - sx2 * sy;
+    if (!det && count === 4) { third = 6; sx2 = src[si + third] - x; sy2 = src[si + third + 1] - y; det = sx * sy2 - sx2 * sy; }
+    if (!det) return null;
+    const dx2 = dst[di + third] - u, dy2 = dst[di + third + 1] - v;
+    a = (dx * sy2 - dx2 * sy) / det; c = (dx2 * sx - dx * sx2) / det;
+    b = (dy * sy2 - dy2 * sy) / det; d = (dy2 * sx - dy * sx2) / det;
+  }
+  const tx = u - a * x - c * y, ty = v - b * x - d * y;
+  const matrix: JMatrix["m"] = [a, b, c, d, tx, ty];
+  if (!matrix.every(Number.isFinite)) return null;
+  if (count === 4) for (let i = 2; i < 4; i++) {
+    const px = src[si + i * 2], py = src[si + i * 2 + 1], qx = dst[di + i * 2], qy = dst[di + i * 2 + 1];
+    const tolerance = 1e-6 * Math.max(1, Math.abs(qx), Math.abs(qy), Math.abs(a * px), Math.abs(c * py), Math.abs(b * px), Math.abs(d * py), Math.abs(tx), Math.abs(ty));
+    if (Math.abs(a * px + c * py + tx - qx) > tolerance || Math.abs(b * px + d * py + ty - qy) > tolerance) return null;
+  }
+  return matrix;
+}
 rt.register({
   name: "android/graphics/Matrix", ctor: JMatrix,
   methods: {
@@ -805,6 +835,13 @@ rt.register({
     "isIdentity()Z": function (this: JMatrix) {
       const m = this.m;
       return m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0 ? 1 : 0;
+    },
+    "setPolyToPoly([FI[FII)Z": function (this: JMatrix, src: Float32Array, si: number, dst: Float32Array, di: number, count: number) {
+      if (count > 4) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+      if (count < 0 || si < 0 || di < 0 || si + count * 2 > src.length || di + count * 2 > dst.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
+      const matrix = affineFromPoints(src, si, dst, di, count);
+      if (!matrix) return 0;
+      this.m = matrix; return 1;
     },
     "setTranslate(FF)V": function (this: JMatrix, x: number, y: number) { this.m = [1, 0, 0, 1, x, y]; },
     "setScale(FF)V": function (this: JMatrix, sx: number, sy: number) { this.m = [sx, 0, 0, sy, 0, 0]; },

@@ -18,7 +18,7 @@ import { handle, deref, replace, release } from "./handles";
 import {
   JPaint, JTypeface, tfDefault, mkTypeface, measureText,
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
-  JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, colorLongOfArgb,
+  JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, colorLongOfArgb, affineFromPoints,
 } from "./graphics";
 import { newObj } from "../jvm/natives/jlang";
 import { charsToString, floatToIntBits } from "../jvm/abi";
@@ -205,40 +205,11 @@ delegate("android/graphics/Matrix", {
     replace(h, Float64Array.of(sx, 0, tx, 0, sy, ty, 0, 0, 1));
     return 1;
   },
-  // 1 point is a translation, 2 a similarity, 3 a full affine. 4 is a perspective solve we
-  // do not do: reporting failure is what a caller checks for, and is not a wrong transform.
   "nSetPolyToPoly(J[FI[FII)Z": (h: bigint, src: Float32Array, si: number, dst: Float32Array, di: number, n: number) => {
-    const sp = (i: number) => [src[si + i * 2], src[si + i * 2 + 1]] as const;
-    const dp = (i: number) => [dst[di + i * 2], dst[di + i * 2 + 1]] as const;
-    if (n === 0) { replace(h, identity()); return 1; }
-    if (n === 1) { replace(h, translateM(dp(0)[0] - sp(0)[0], dp(0)[1] - sp(0)[1])); return 1; }
-    if (n === 2) {
-      const [s0, s1] = [sp(0), sp(1)], [d0, d1] = [dp(0), dp(1)];
-      const sdx = s1[0] - s0[0], sdy = s1[1] - s0[1];
-      const ddx = d1[0] - d0[0], ddy = d1[1] - d0[1];
-      const den = sdx * sdx + sdy * sdy;
-      if (!den) return 0;
-      const a = (ddx * sdx + ddy * sdy) / den, b = (ddy * sdx - ddx * sdy) / den;
-      const m = Float64Array.of(a, -b, 0, b, a, 0, 0, 0, 1);
-      const [mx, my] = mapPoint(m, s0[0], s0[1]);
-      m[2] = d0[0] - mx; m[5] = d0[1] - my;
-      replace(h, m);
-      return 1;
-    }
-    if (n === 3) {
-      const [s0, s1, s2] = [sp(0), sp(1), sp(2)], [d0, d1, d2] = [dp(0), dp(1), dp(2)];
-      const det = (s1[0] - s0[0]) * (s2[1] - s0[1]) - (s2[0] - s0[0]) * (s1[1] - s0[1]);
-      if (!det) return 0;
-      const solve = (v0: number, v1: number, v2: number) => [
-        ((v1 - v0) * (s2[1] - s0[1]) - (v2 - v0) * (s1[1] - s0[1])) / det,
-        ((v2 - v0) * (s1[0] - s0[0]) - (v1 - v0) * (s2[0] - s0[0])) / det,
-      ];
-      const [a, c] = solve(d0[0], d1[0], d2[0]);
-      const [b, d] = solve(d0[1], d1[1], d2[1]);
-      replace(h, Float64Array.of(a, c, d0[0] - a * s0[0] - c * s0[1], b, d, d0[1] - b * s0[0] - d * s0[1], 0, 0, 1));
-      return 1;
-    }
-    return 0;
+    const m = affineFromPoints(src, si, dst, di, n);
+    if (!m) return 0;
+    replace(h, Float64Array.of(m[0], m[2], m[4], m[1], m[3], m[5], 0, 0, 1));
+    return 1;
   },
   "nMapRadius(JF)F": (h: bigint, r: number) => {
     const m = deref<Mat>(h);
