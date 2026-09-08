@@ -21,6 +21,11 @@ function unsafeCall(name: string, descriptor: string, ...args: unknown[]): unkno
   return unsafe[mangleMethod(name, descriptor)](...args);
 }
 
+test("Unsafe.getUnsafe returns the same instance exposed through theUnsafe", () => {
+  const cls = rt.link("sun/misc/Unsafe").ctor;
+  expect(cls[mangleMethod("getUnsafe", "()Lsun/misc/Unsafe;")]()).toBe(cls[mangleStaticField("theUnsafe")]);
+});
+
 beforeAll(() => {
   address = mem.malloc(32);
   memoryClass = rt.link("libcore/io/Memory").ctor;

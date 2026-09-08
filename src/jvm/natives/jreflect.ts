@@ -257,10 +257,12 @@ rt.register({
 
 // ── sun.misc.Unsafe: enough for kotlinx-coroutines' artificial stack frames
 class JUnsafe extends JObj {}
+const unsafe = new JUnsafe();
 rt.register({
   name: "sun/misc/Unsafe", ctor: JUnsafe,
-  statics: { theUnsafe: new JUnsafe() },
+  statics: { theUnsafe: unsafe },
   methods: {
+    "static getUnsafe()Lsun/misc/Unsafe;": () => unsafe,
     "allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;": async (cls: JClass) => {
       const info = cls.ci!;
       const p = rt.initClass(info); if (p) await p;
