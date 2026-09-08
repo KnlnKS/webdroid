@@ -27,7 +27,7 @@ test("conditional suspension declarations preserve immediate returns and reach t
   expect([...runtime.nativeLiars]).toEqual(["test/ConditionalNative undeclared()I"]);
 });
 
-test("map and set insertions keep immediate primitive keys while custom equality can suspend", async () => {
+test("map operations and set insertions keep immediate primitive keys while custom equality can suspend", async () => {
   rt.register({
     name: "test/SuspendingMapKey", ctor: class extends JObj {},
     methods: { "equals(Ljava/lang/Object;)Z": async () => 1 },
@@ -43,6 +43,12 @@ test("map and set insertions keep immediate primitive keys while custom equality
   expect(await first).toBeNull();
   expect(await put.call(map, new Key(), 4)).toBe(3);
   expect(rt.nativeOracle()("java/util/LinkedHashMap", signature)).toBe(true);
+  const get = map[mangleMethod("get", "(Ljava/lang/Object;)Ljava/lang/Object;")];
+  expect(get.call(map, "key")).toBe(2);
+  const lookup = get.call(map, new Key());
+  expect(lookup).toBeInstanceOf(Promise);
+  expect(await lookup).toBe(4);
+  expect(rt.nativeOracle()("java/util/LinkedHashMap", "get(Ljava/lang/Object;)Ljava/lang/Object;")).toBe(true);
   const set = new (rt.link("java/util/LinkedHashSet").ctor)();
   const add = set[mangleMethod("add", "(Ljava/lang/Object;)Z")];
   expect(add.call(set, "key")).toBe(1);

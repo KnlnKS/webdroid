@@ -567,7 +567,7 @@ function mapMethods(): NativeSpec["methods"] {
       if (v !== null && v !== undefined) await vcall(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, v);
       return v ?? null;
     },
-    "get(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMap, k: unknown) {
+    "get(Ljava/lang/Object;)Ljava/lang/Object;": maySuspend(function (this: JMap, k: unknown) {
       const mk = mapKey(k);
       if (mk !== SLOW) {
         const e = this.m.get(mk);
@@ -575,7 +575,7 @@ function mapMethods(): NativeSpec["methods"] {
         return e ? e.v : null;
       }
       return slowFind(this.slow, k).then((i) => (i >= 0 ? this.slow[i].v : null));
-    },
+    }),
     "getOrDefault(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JMap, k: unknown, d: unknown) {
       const v = await (vcall(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k));
       return v === null ? d : v;
