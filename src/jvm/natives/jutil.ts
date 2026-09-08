@@ -560,6 +560,14 @@ function mapMethods(): NativeSpec["methods"] {
     },
     "size()I": function (this: JMap) { return this.m.size + this.slow.length; },
     "isEmpty()Z": function (this: JMap) { return this.m.size + this.slow.length === 0 ? 1 : 0; },
+    "compute(Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;": async function (this: JMap, k: unknown, fn: unknown) {
+      if (fn === null) rt.npe();
+      const old = await vcall(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
+      const value = await vcall(fn, "apply", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, old);
+      if (value == null) await vcall(this, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
+      else await vcall(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, value);
+      return value ?? null;
+    },
     "computeIfAbsent(Ljava/lang/Object;Ljava/util/function/Function;)Ljava/lang/Object;": async function (this: JMap, k: unknown, fn: unknown) {
       const cur = await vcall(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
       if (cur !== null && cur !== undefined) return cur;
