@@ -7,8 +7,9 @@ import { normRV } from "./res";
 import { appHost, type AppHost, jclsNameOf } from "./apphost";
 import { apkPath } from "../jvm/natives/jio";
 import { DOCS_AUTHORITY } from "./documents";
-import { type JList, newArrayList } from "../jvm/natives/jutil";
+import { type JList, newArrayList, toJsArray } from "../jvm/natives/jutil";
 import { JIntent, type JComponentName, componentState } from "./intent";
+import { csText } from "./text";
 import type { JActivity } from "./app";
 
 class JFeatureInfo extends JObj {
@@ -502,3 +503,92 @@ function mkActivityInfo(cls: string): JActivityInfo {
   a.metaData = metaData(node);
   return a;
 }
+
+class JShortcutInfo extends JObj {
+  id = ""; pkg = ""; shortLabel = ""; longLabel: string | null = null; disabledMessage: string | null = null;
+  intents: JIntent[] = []; icon: unknown = null; extras: JBundle | null = null;
+  rank = 0; excluded = 0; longLived = false; dynamic = false;
+}
+async function copyShortcut(info: JShortcutInfo): Promise<JShortcutInfo> {
+  const copy = Object.assign(new (rt.link("android/content/pm/ShortcutInfo").ctor)(), info);
+  copy.intents = await Promise.all(info.intents.map((intent) => newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent)));
+  if (info.extras) {
+    copy.extras = Object.assign(new (rt.link("android/os/PersistableBundle").ctor)(), info.extras);
+    copy.extras.map = new Map(info.extras.map);
+  }
+  return copy;
+}
+rt.register({
+  name: "android/content/pm/ShortcutInfo", ctor: JShortcutInfo, ifaces: ["android/os/Parcelable"],
+  statics: { SURFACE_LAUNCHER: 1 },
+  methods: {
+    "getId()Ljava/lang/String;": function (this: JShortcutInfo) { return this.id; },
+    "getPackage()Ljava/lang/String;": function (this: JShortcutInfo) { return this.pkg; },
+    "getShortLabel()Ljava/lang/CharSequence;": function (this: JShortcutInfo) { return this.shortLabel; },
+    "getLongLabel()Ljava/lang/CharSequence;": function (this: JShortcutInfo) { return this.longLabel; },
+    "getDisabledMessage()Ljava/lang/CharSequence;": function (this: JShortcutInfo) { return this.disabledMessage; },
+    "getRank()I": function (this: JShortcutInfo) { return this.rank; },
+    "getExtras()Landroid/os/PersistableBundle;": async function (this: JShortcutInfo) { return (await copyShortcut(this)).extras; },
+    "getIntent()Landroid/content/Intent;": async function (this: JShortcutInfo) { return (await copyShortcut(this)).intents.at(-1) ?? null; },
+    "getIntents()[Landroid/content/Intent;": async function (this: JShortcutInfo) { return jarray((await copyShortcut(this)).intents, "Landroid/content/Intent;"); },
+    "isDynamic()Z": function (this: JShortcutInfo) { return this.dynamic ? 1 : 0; },
+    "isLongLived()Z": function (this: JShortcutInfo) { return this.longLived ? 1 : 0; },
+    "isExcludedFromSurfaces(I)Z": function (this: JShortcutInfo, surfaces: number) { return this.excluded & surfaces ? 1 : 0; },
+    "isPinned()Z": () => 0,
+    "isDeclaredInManifest()Z": () => 0,
+    "isEnabled()Z": () => 1,
+  },
+});
+class JShortcutBuilder extends JObj { info = new JShortcutInfo(); }
+const shortcutBuilder = "Landroid/content/pm/ShortcutInfo$Builder;";
+rt.register({
+  name: "android/content/pm/ShortcutInfo$Builder", ctor: JShortcutBuilder,
+  methods: {
+    "<init>(Landroid/content/Context;Ljava/lang/String;)V": async function (this: JShortcutBuilder, context: unknown, id: string) {
+      if (context == null || id == null) throw rt.mkThrowable("java/lang/NullPointerException", "Shortcut context and id required");
+      if (!id) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut id must not be empty");
+      this.info.id = id; this.info.pkg = await vcall(context, "getPackageName", "()Ljava/lang/String;");
+    },
+    [`setShortLabel(Ljava/lang/CharSequence;)${shortcutBuilder}`]: async function (this: JShortcutBuilder, label: unknown) {
+      const text = await csText(label);
+      if (!text) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut label must not be empty");
+      this.info.shortLabel = text; return this;
+    },
+    [`setLongLabel(Ljava/lang/CharSequence;)${shortcutBuilder}`]: async function (this: JShortcutBuilder, label: unknown) { this.info.longLabel = await csText(label); return this; },
+    [`setDisabledMessage(Ljava/lang/CharSequence;)${shortcutBuilder}`]: async function (this: JShortcutBuilder, label: unknown) { this.info.disabledMessage = await csText(label); return this; },
+    [`setIntent(Landroid/content/Intent;)${shortcutBuilder}`]: function (this: JShortcutBuilder, intent: JIntent) { this.info.intents = [intent]; return this; },
+    [`setIntents([Landroid/content/Intent;)${shortcutBuilder}`]: function (this: JShortcutBuilder, intents: JIntent[]) { this.info.intents = intents.slice(); return this; },
+    [`setIcon(Landroid/graphics/drawable/Icon;)${shortcutBuilder}`]: function (this: JShortcutBuilder, icon: unknown) { this.info.icon = icon; return this; },
+    [`setExtras(Landroid/os/PersistableBundle;)${shortcutBuilder}`]: function (this: JShortcutBuilder, extras: JBundle) { this.info.extras = extras; return this; },
+    [`setRank(I)${shortcutBuilder}`]: function (this: JShortcutBuilder, rank: number) {
+      if (rank < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Rank must not be negative");
+      this.info.rank = rank; return this;
+    },
+    [`setLongLived(Z)${shortcutBuilder}`]: function (this: JShortcutBuilder, value: number) { this.info.longLived = !!value; return this; },
+    [`setExcludedFromSurfaces(I)${shortcutBuilder}`]: function (this: JShortcutBuilder, value: number) { this.info.excluded = value; return this; },
+    "build()Landroid/content/pm/ShortcutInfo;": async function (this: JShortcutBuilder) {
+      if (!this.info.shortLabel || !this.info.intents.length || this.info.intents.some((intent) => !intent?.action)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut label and intents with actions are required");
+      return copyShortcut(this.info);
+    },
+  },
+});
+class JShortcutManager extends JObj { packages = new Map<string, Map<string, JShortcutInfo>>(); }
+rt.register({
+  name: "android/content/pm/ShortcutManager", ctor: JShortcutManager,
+  methods: {
+    "setDynamicShortcuts(Ljava/util/List;)Z": async function (this: JShortcutManager, list: unknown) {
+      const pkg = appHost?.pkg ?? "", shortcuts = new Map<string, JShortcutInfo>();
+      for (const info of await toJsArray(list)) {
+        if (!(info instanceof JShortcutInfo) || info.pkg !== pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut belongs to another package");
+        const copy = await copyShortcut(info); copy.dynamic = true; shortcuts.set(copy.id, copy);
+      }
+      this.packages.set(pkg, shortcuts); return 1;
+    },
+    "getDynamicShortcuts()Ljava/util/List;": async function (this: JShortcutManager) {
+      const list = newArrayList(); list.a = await Promise.all([...(this.packages.get(appHost?.pkg ?? "")?.values() ?? [])].map(copyShortcut)); return list;
+    },
+    "removeAllDynamicShortcuts()V": function (this: JShortcutManager) { this.packages.delete(appHost?.pkg ?? ""); },
+    "reportShortcutUsed(Ljava/lang/String;)V": (id: string) => { if (id == null) throw rt.mkThrowable("java/lang/NullPointerException", "shortcutId"); },
+    "isRequestPinShortcutSupported()Z": () => 0,
+  },
+});

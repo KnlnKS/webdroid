@@ -33,7 +33,7 @@ const intentMethods: NativeSpec["methods"] = {
       this.action = o.action; this.component = o.component; this.dataUri = o.dataUri;
       this.extras = new JBundle();
       this.extras.map = new Map(o.extras.map);
-      this.flags = o.flags;
+      this.flags = o.flags; this.pkg = o.pkg; this.typeStr = o.typeStr; this.categories = new Set(o.categories);
     }
   },
   "setClass(Landroid/content/Context;Ljava/lang/Class;)Landroid/content/Intent;": function (this: JIntent, c: unknown, cls: any) {
