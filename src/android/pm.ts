@@ -392,7 +392,7 @@ rt.register({
       info.metaData = metaData(node);
       return info;
     },
-    "getServiceInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ServiceInfo;": () => newObj("android/content/pm/ServiceInfo", null),
+    "getServiceInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ServiceInfo;": async () => newObj("android/content/pm/ServiceInfo", null),
     // API 33's boxed-long overloads carry the same flags to the same body, never a second one
     "getPackageInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$PackageInfoFlags;)Landroid/content/pm/PackageInfo;": function (pkg: string, f: JInfoFlags | null) {
       return vcall(this, "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", pkg, Number(f?.value ?? 0n));

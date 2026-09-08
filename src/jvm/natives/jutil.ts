@@ -783,7 +783,7 @@ function setMethods(): NativeSpec["methods"] {
       return a[a.length - 1];
     },
     "isEmpty()Z": function (this: JSet) { return this.m.size + this.slow.length ? 0 : 1; },
-    "add(Ljava/lang/Object;)Z": function (this: JSet, v: unknown) { return addToSet(this, v); },
+    "add(Ljava/lang/Object;)Z": maySuspend(function (this: JSet, v: unknown) { return addToSet(this, v); }),
     "remove(Ljava/lang/Object;)Z": function (this: JSet, v: unknown) {
       const mk = mapKey(v);
       if (mk !== SLOW) return this.m.delete(mk) ? 1 : 0;
@@ -1833,7 +1833,7 @@ rt.register({
     "static synchronizedMap(Ljava/util/Map;)Ljava/util/Map;": (m: unknown) => m,
     "static synchronizedSet(Ljava/util/Set;)Ljava/util/Set;": (s: unknown) => s,
     "static sort(Ljava/util/List;)V": (l: JList) => sortInPlace(l.a, null),
-    "static sort(Ljava/util/List;Ljava/util/Comparator;)V": (l: JList, c: unknown) => sortInPlace(l.a, c),
+    "static sort(Ljava/util/List;Ljava/util/Comparator;)V": async (l: JList, c: unknown) => sortInPlace(l.a, c),
     "static binarySearch(Ljava/util/List;Ljava/lang/Object;)I": (l: unknown, k: unknown) => listBinarySearch(l, k, null),
     "static binarySearch(Ljava/util/List;Ljava/lang/Object;Ljava/util/Comparator;)I": listBinarySearch,
     "static reverse(Ljava/util/List;)V": (l: JList) => l.a.reverse(),
