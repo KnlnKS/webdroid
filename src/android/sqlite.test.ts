@@ -1,9 +1,9 @@
 import { beforeAll, expect, test } from "bun:test";
 import initSqlJs from "sql.js";
 import "../natives";
-import { rt } from "../jvm/runtime";
+import { JObj, rt } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
-import { vcall } from "../jvm/natives/jlang";
+import { newObj, vcall } from "../jvm/natives/jlang";
 
 beforeAll(async () => {
   await initSqlJs({ locateFile: () => new URL("../../node_modules/sql.js/dist/sql-wasm.wasm", import.meta.url).pathname });
@@ -19,6 +19,33 @@ async function value(db: unknown, sql: string) {
 }
 
 const prefix = "/data/data/sqlite-test/" + crypto.randomUUID();
+
+test("cursor factories bind typed SQLiteQuery arguments before creating the returned cursor", async () => {
+  const db = await open(prefix + "-factory", 0x10000000);
+  let calls = 0;
+  rt.register({ name: "test/TypedCursorFactory", ctor: class extends JObj {}, ifaces: ["android/database/sqlite/SQLiteDatabase$CursorFactory"], methods: {
+    "newCursor(Landroid/database/sqlite/SQLiteDatabase;Landroid/database/sqlite/SQLiteCursorDriver;Ljava/lang/String;Landroid/database/sqlite/SQLiteQuery;)Landroid/database/Cursor;": async (database: unknown, driver: unknown, table: string, query: unknown) => {
+      calls++; expect(database).toBe(db); expect(table).toBe("items");
+      await vcall(query, "bindLong", "(IJ)V", 1, 42n);
+      await vcall(query, "bindDouble", "(ID)V", 2, 1.25);
+      await vcall(query, "bindString", "(ILjava/lang/String;)V", 3, "bound");
+      await vcall(query, "bindBlob", "(I[B)V", 4, new Int8Array([1, -1]));
+      await vcall(query, "bindNull", "(I)V", 5);
+      return newObj("android/database/sqlite/SQLiteCursor", "(Landroid/database/sqlite/SQLiteCursorDriver;Ljava/lang/String;Landroid/database/sqlite/SQLiteQuery;)V", driver, table, query);
+    },
+  } });
+  const factory = new (rt.link("test/TypedCursorFactory").ctor)();
+  const cursor = await vcall(db, "rawQueryWithFactory", "(Landroid/database/sqlite/SQLiteDatabase$CursorFactory;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;", factory, "SELECT ? AS i,? AS d,? AS s,? AS b,? AS n", [], "items");
+  expect(calls).toBe(1);
+  expect(await vcall(cursor, "moveToFirst", "()Z")).toBe(1);
+  expect(await vcall(cursor, "getLong", "(I)J", 0)).toBe(42n);
+  expect(await vcall(cursor, "getDouble", "(I)D", 1)).toBe(1.25);
+  expect(await vcall(cursor, "getString", "(I)Ljava/lang/String;", 2)).toBe("bound");
+  expect(await vcall(cursor, "getBlob", "(I)[B", 3)).toEqual(new Int8Array([1, -1]));
+  expect(await vcall(cursor, "isNull", "(I)Z", 4)).toBe(1);
+  await vcall(cursor, "close", "()V");
+});
+
 function native(owner: string, signature: string, ...args: unknown[]): unknown {
   const method = rt.jni.get("androidx/sqlite/driver/bundled/" + owner + "|" + signature);
   if (!method) throw new Error(signature);

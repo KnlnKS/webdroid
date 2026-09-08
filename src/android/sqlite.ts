@@ -2,7 +2,7 @@ import { newStringSet } from "../jvm/natives/jutil";
 // android.database.* over sql.js (in-memory, persisted to localStorage per db).
 
 import initSqlJs, { type Database, type Statement } from "sql.js";
-import { mangleMethod, charsToString } from "../jvm/abi";
+import { charsToString } from "../jvm/abi";
 import { rt, JObj, type NativeSpec, callSelf } from "../jvm/runtime";
 import { vcall, boxInt, box, JLong } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
@@ -356,8 +356,13 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
     this.scheduleSave();
   },
   "rawQueryWithFactory(Landroid/database/sqlite/SQLiteDatabase$CursorFactory;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
-    function (this: JSQLiteDatabase, _f: unknown, sql: string, args: unknown[] | null) {
-      return (this as any)[mangleMethod("rawQuery", "(Ljava/lang/String;[Ljava/lang/String;)Landroid/database/Cursor;")](sql, args);
+    async function (this: JSQLiteDatabase, factory: unknown, sql: string, args: unknown[] | null, editTable: string | null) {
+      if (!factory) return runQuery(this, sql, args);
+      rt.link("android/database/sqlite/SQLiteQuery");
+      rt.link("android/database/sqlite/SQLiteDirectCursorDriver");
+      const query = new JSQLiteQuery(), driver = new JSQLiteCursorDriver();
+      query.jdb = this; query.sql = sql; query.binds = args?.slice() ?? []; driver.query = query;
+      return vcall(factory, "newCursor", "(Landroid/database/sqlite/SQLiteDatabase;Landroid/database/sqlite/SQLiteCursorDriver;Ljava/lang/String;Landroid/database/sqlite/SQLiteQuery;)Landroid/database/Cursor;", this, driver, editTable, query);
     },
   "setMaxSqlCacheSize(I)V": () => {},
   "isWriteAheadLoggingEnabled()Z": () => 0,
@@ -491,20 +496,41 @@ function doInsert(jdb: JSQLiteDatabase, table: string, cv: JContentValues, or: s
   const r = jdb.db!.exec("SELECT last_insert_rowid()");
   return BigInt(Number(r[0]?.values[0]?.[0] ?? -1));
 }
-class JSQLiteStatement extends JObj {
+class JSQLiteProgram extends JObj {
   jdb: JSQLiteDatabase | null = null;
   sql = "";
   binds: unknown[] = [];
 }
 rt.register({
-  name: "android/database/sqlite/SQLiteStatement", ctor: JSQLiteStatement,
+  name: "android/database/sqlite/SQLiteProgram", ctor: JSQLiteProgram,
   methods: {
-    "bindString(ILjava/lang/String;)V": function (this: JSQLiteStatement, i: number, v: string) { this.binds[i - 1] = v; },
-    "bindLong(IJ)V": function (this: JSQLiteStatement, i: number, v: bigint) { this.binds[i - 1] = v; },
-    "bindDouble(ID)V": function (this: JSQLiteStatement, i: number, v: number) { this.binds[i - 1] = v; },
-    "bindNull(I)V": function (this: JSQLiteStatement, i: number) { this.binds[i - 1] = null; },
-    "bindBlob(I[B)V": function (this: JSQLiteStatement, i: number, v: Int8Array) { this.binds[i - 1] = v; },
-    "clearBindings()V": function (this: JSQLiteStatement) { this.binds = []; },
+    "bindString(ILjava/lang/String;)V": function (this: JSQLiteProgram, i: number, v: string) { this.binds[i - 1] = v; },
+    "bindLong(IJ)V": function (this: JSQLiteProgram, i: number, v: bigint) { this.binds[i - 1] = v; },
+    "bindDouble(ID)V": function (this: JSQLiteProgram, i: number, v: number) { this.binds[i - 1] = v; },
+    "bindNull(I)V": function (this: JSQLiteProgram, i: number) { this.binds[i - 1] = null; },
+    "bindBlob(I[B)V": function (this: JSQLiteProgram, i: number, v: Int8Array) { this.binds[i - 1] = v; },
+    "clearBindings()V": function (this: JSQLiteProgram) { this.binds = []; },
+    "close()V": () => {},
+  },
+});
+class JSQLiteQuery extends JSQLiteProgram {}
+class JSQLiteCursorDriver extends JObj { query: JSQLiteQuery | null = null; }
+rt.register({ name: "android/database/sqlite/SQLiteQuery", ctor: JSQLiteQuery, sup: "android/database/sqlite/SQLiteProgram" });
+rt.register({ name: "android/database/sqlite/SQLiteCursorDriver", ctor: class extends JObj {} });
+rt.register({ name: "android/database/sqlite/SQLiteDirectCursorDriver", ctor: JSQLiteCursorDriver, ifaces: ["android/database/sqlite/SQLiteCursorDriver"], methods: {
+  "setBindArguments([Ljava/lang/String;)V": function (this: JSQLiteCursorDriver, args: string[]) { if (this.query) this.query.binds = args.slice(); },
+} });
+rt.register({ name: "android/database/sqlite/SQLiteCursor", ctor: class extends JCursor {}, ifaces: ["android/database/Cursor"], methods: {
+  ...cursorMethods,
+  "<init>(Landroid/database/sqlite/SQLiteCursorDriver;Ljava/lang/String;Landroid/database/sqlite/SQLiteQuery;)V": function (this: JCursor, _driver: unknown, _editTable: string | null, query: JSQLiteQuery) {
+    const cursor = runQuery(query.jdb!, query.sql, query.binds);
+    this.cols = cursor.cols; this.rows = cursor.rows;
+  },
+} });
+class JSQLiteStatement extends JSQLiteProgram {}
+rt.register({
+  name: "android/database/sqlite/SQLiteStatement", ctor: JSQLiteStatement, sup: "android/database/sqlite/SQLiteProgram",
+  methods: {
     "execute()V": function (this: JSQLiteStatement) {
       try { this.jdb!.db!.run(this.sql, bindArgs(this.binds) as never); } catch (e) { throw sqliteExc(String(e), this.sql); }
       this.jdb!.scheduleSave();
