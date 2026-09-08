@@ -74,3 +74,39 @@ test("main-thread native fd callbacks enter the Java main queue", async () => {
   await called;
   await cpu.call(host("close"), [fd]);
 });
+
+test("ALooper retains guest output addresses across memory plane relocation", async () => {
+  const cpu = new Cpu(new JThread(), "relocating poll"), writer = new Cpu(new JThread(), "poll writer");
+  const looper = await cpu.call(host("ALooper_prepare"), [1]);
+  const fd = await cpu.call(host("eventfd"), [0, 0x800]);
+  await cpu.call(host("ALooper_addFd"), [looper, fd, 7, 1, 0, 0x123456789n]);
+  const reservations: (number | bigint)[] = [];
+  const plane = () => {
+    for (;;) {
+      const address = mem.mapVa(0x1ffff000, true);
+      if (!address) throw new Error("native reservation failed");
+      reservations.push(address);
+      if (typeof address === "bigint") return address;
+    }
+  };
+  try {
+    const address = plane(), blocker = plane();
+    expect(mem.commitVa(address, 4096)).toBe(true);
+    const previous = mem.txVa(address);
+    mem.bytes(previous, 16).fill(0);
+    const pending = cpu.call(host("ALooper_pollOnce"), [1000, address, address + 4n, address + 8n]);
+    expect(mem.commitVa(blocker, 1 << 25)).toBe(true);
+    expect(mem.commitVa(address, 2 << 25)).toBe(true);
+    const current = mem.txVa(address);
+    expect(current).not.toBe(previous);
+    const value = mem.hostAlloc(8); mem.st64(value, 1n);
+    await writer.call(host("write"), [fd, value, 8]);
+    expect(await pending).toBe(7);
+    expect(mem.ld32(current)).toBe(fd);
+    expect(mem.ld32(current + 4)).toBe(1);
+    expect(mem.ld64(current + 8)).toBe(0x123456789n);
+  } finally {
+    await cpu.call(host("close"), [fd]);
+    for (const address of reservations) mem.unmapVa(BigInt(address), 0x1ffff000);
+  }
+});

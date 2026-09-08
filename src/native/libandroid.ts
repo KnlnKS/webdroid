@@ -25,7 +25,7 @@ const loopers: (Looper | null)[] = [null];
 const looperOf = new WeakMap<Cpu, number>();
 const pollEvents = (events: number) => (events & 1) | ((events & 2) << 1);
 const looperEvents = (events: number) => (events & 1) | ((events & (4 | 8 | 16 | 32)) >> 1);
-async function pollLooper(cpu: Cpu, ms: number, fdOut: number, eventsOut: number, dataOut: number, main = false): Promise<number> {
+async function pollLooper(cpu: Cpu, ms: number, fdOut: bigint, eventsOut: bigint, dataOut: bigint, main = false): Promise<number> {
   const l = loopers[looperOf.get(cpu) ?? 0];
   if (!l) return -4;
   const entries = [...l.fds].filter(([, entry]) => !main || entry.callback), pollfds = mem.malloc(Math.max(8, entries.length * 8));
@@ -53,9 +53,9 @@ async function pollLooper(cpu: Cpu, ms: number, fdOut: number, eventsOut: number
     for (let i = 0; i < entries.length; i++) {
       const [fd, entry] = entries[i], events = looperEvents(mem.ld16u(pollfds + i * 8 + 6));
       if (!events || entry.callback || l.fds.get(fd) !== entry) continue;
-      if (fdOut) mem.st32(mem.rephys(fdOut), fd);
-      if (eventsOut) mem.st32(mem.rephys(eventsOut), events);
-      if (dataOut) { const out = mem.rephys(dataOut); mem.st32(out, Number(entry.data & 0xffffffffn)); if (cpu.a64) mem.st32(out + 4, Number(entry.data >> 32n)); }
+      if (fdOut) mem.st32(mem.txVa(fdOut), fd);
+      if (eventsOut) mem.st32(mem.txVa(eventsOut), events);
+      if (dataOut) { const out = mem.txVa(dataOut); mem.st32(out, Number(entry.data & 0xffffffffn)); if (cpu.a64) mem.st32(out + 4, Number(entry.data >> 32n)); }
       return entry.ident;
     }
     return woken ? -1 : -3;
@@ -66,13 +66,13 @@ function pumpMainLooper(l: Looper): void {
   l.pumping = true;
   void (async () => {
     try {
-      while (!l.cpu.finished && [...l.fds.values()].some((entry) => entry.callback)) await pollLooper(l.cpu, -1, 0, 0, 0, true);
+      while (!l.cpu.finished && [...l.fds.values()].some((entry) => entry.callback)) await pollLooper(l.cpu, -1, 0n, 0n, 0n, true);
     } catch (error) { reportUncaught(error); }
     finally { l.pumping = false; }
   })();
 }
 const poll = (all: boolean): HostFn => async (cpu, a) => {
-  const ms = a.i(), fd = a.p(), events = a.p(), data = a.p(), deadline = performance.now() + ms;
+  const ms = a.i(), fd = a.va(), events = a.va(), data = a.va(), deadline = performance.now() + ms;
   let remaining = ms;
   for (;;) {
     const result = await pollLooper(cpu, remaining, fd, events, data);
