@@ -1454,3 +1454,9 @@ buffers retain one backing allocation. Focused tests cover both first-bind order
 A targeted headless Lichess run reached 13 draws with zero GL errors and rendered the
 Home/Puzzles/Learn/Watch/More navigation bar. Startup next failed in Java service metadata
 and process queries, followed by JNI exception aborts; rendering itself was no longer black.
+
+## Lichess: adjacent float values
+
+The reached nextafterf import now steps the IEEE float32 representation by one ULP,
+including signed zeros, subnormals, infinities and NaNs. A native ARM64 test exercises
+16 boundary cases through the host ABI.
