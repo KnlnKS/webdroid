@@ -2,10 +2,24 @@
 
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { defineException, vcall } from "./jlang";
+import { mem } from "../../native/mem";
+
+type BufferStorage = { kind: "heap"; ab: ArrayBuffer } | { kind: "direct"; ab: ArrayBuffer } | { kind: "native"; address: number | bigint };
+const directBuffers = new FinalizationRegistry<number>((address) => mem.free(address));
 
 export class JBuffer extends JObj {
-  ab!: ArrayBuffer;
-  dv!: DataView;
+  backing!: { storage: BufferStorage };
+  byteOffset = 0;
+  private view: DataView | null = null;
+  get ab(): ArrayBuffer { const s = this.backing.storage; return s.kind === "native" ? mem.buf : s.ab; }
+  get direct(): boolean { return this.backing.storage.kind !== "heap"; }
+  get dv(): DataView {
+    const s = this.backing.storage;
+    const offset = this.byteOffset + (s.kind === "native" ? typeof s.address === "bigint" ? mem.txVa(s.address) : s.address : 0);
+    const ab = this.ab;
+    if (!this.view || this.view.buffer !== ab || this.view.byteOffset !== offset) this.view = new DataView(ab, offset, this.cap * 2 ** this.elemShift);
+    return this.view;
+  }
   pos = 0;
   lim = 0;
   cap = 0;
@@ -46,7 +60,7 @@ function bufferBaseMethods(): NativeSpec["methods"] {
     "limit()I": function (this: JBuffer) { return this.lim; },
     "remaining()I": function (this: JBuffer) { return this.lim - this.pos; },
     "hasRemaining()Z": function (this: JBuffer) { return this.pos < this.lim ? 1 : 0; },
-    "isDirect()Z": () => 1,
+    "isDirect()Z": function (this: JBuffer) { return this.direct ? 1 : 0; },
     "isReadOnly()Z": () => 0,
     "hasArray()Z": () => 0,
     "arrayOffset()I": () => 0,
@@ -65,7 +79,7 @@ rt.register({
   methods: {
     ...bufferBaseMethods(),
     ...chaining("Ljava/nio/ByteBuffer;"),
-    "static allocateDirect(I)Ljava/nio/ByteBuffer;": (cap: number) => mkByteBuffer(cap),
+    "static allocateDirect(I)Ljava/nio/ByteBuffer;": (cap: number) => mkByteBuffer(cap, true),
     "static allocate(I)Ljava/nio/ByteBuffer;": (cap: number) => mkByteBuffer(cap),
     "static wrap([B)Ljava/nio/ByteBuffer;": (arr: Int8Array) => wrapArray(JByteBuffer, arr, 0),
     "static wrap([BII)Ljava/nio/ByteBuffer;": (arr: Int8Array, off: number, len: number) => wrapArray(JByteBuffer, arr, 0, off, len),
@@ -125,13 +139,14 @@ rt.register({
     "asLongBuffer()Ljava/nio/LongBuffer;": function (this: JByteBuffer) { return viewBuffer(this, JLongBuffer, 3); },
     "slice()Ljava/nio/ByteBuffer;": function (this: JByteBuffer) {
       const b = new JByteBuffer();
-      b.ab = this.ab; b.dv = new DataView(this.ab, this.dv.byteOffset + this.pos, this.lim - this.pos);
+      b.backing = this.backing; b.byteOffset = this.byteOffset + this.pos;
       b.cap = b.lim = this.lim - this.pos; b.pos = 0; b.little = this.little;
       return b;
     },
     "duplicate()Ljava/nio/ByteBuffer;": function (this: JByteBuffer) {
       const b = new JByteBuffer();
-      b.ab = this.ab; b.dv = this.dv; b.cap = this.cap; b.lim = this.lim; b.pos = this.pos; b.little = this.little;
+      b.backing = this.backing; b.byteOffset = this.byteOffset;
+      b.cap = this.cap; b.lim = this.lim; b.pos = this.pos; b.mark = this.mark; b.little = this.little;
       return b;
     },
     "compact()Ljava/nio/ByteBuffer;": function (this: JByteBuffer) {
@@ -143,13 +158,35 @@ rt.register({
     "array()[B": function (this: JByteBuffer) { return bytes(this); },
   },
 });
-function mkByteBuffer(cap: number): JByteBuffer {
+function mkByteBuffer(cap: number, direct = false): JByteBuffer {
+  if (cap < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative buffer capacity");
   const b = new JByteBuffer();
-  b.ab = new ArrayBuffer(Math.max(0, cap));
-  b.dv = new DataView(b.ab);
+  b.backing = { storage: { kind: direct ? "direct" : "heap", ab: new ArrayBuffer(cap) } };
   b.cap = b.lim = cap;
   b.pos = 0;
   return b;
+}
+
+export function nativeByteBuffer(address: number, cap: number): JBuffer {
+  rt.link("java/nio/ByteBuffer");
+  const b = new JByteBuffer();
+  b.backing = { storage: { kind: "native", address: mem.va(address) } };
+  b.cap = b.lim = cap;
+  return b;
+}
+
+export function directBufferAddress(b: JBuffer): number | bigint {
+  let s = b.backing.storage;
+  if (s.kind === "heap") return 0;
+  if (s.kind === "direct") {
+    // Promotion waits for native ABI selection and updates every existing slice/view together.
+    const address = mem.malloc(s.ab.byteLength);
+    if (!address) throw rt.mkThrowable("java/lang/OutOfMemoryError", "direct buffer");
+    mem.u8.set(new Uint8Array(s.ab), address);
+    s = b.backing.storage = { kind: "native", address };
+    directBuffers.register(b.backing, address);
+  }
+  return typeof s.address === "bigint" ? s.address + BigInt(b.byteOffset) : s.address + b.byteOffset;
 }
 // A wrapped or sliced buffer does not start at byte 0 of its ArrayBuffer.
 function bytes(b: JByteBuffer): Int8Array {
@@ -160,8 +197,8 @@ function bytes(b: JByteBuffer): Int8Array {
 // too); ByteBuffer.wrap keeps Java's big-endian default.
 function wrapArray<T extends JBuffer>(Ctor: new () => T, arr: Int8Array | Int16Array | Int32Array | Float32Array, shift: number, off = 0, len = arr.length): T {
   const b = new Ctor();
-  b.ab = arr.buffer as ArrayBuffer;
-  b.dv = new DataView(b.ab, arr.byteOffset, arr.byteLength);
+  b.backing = { storage: { kind: "heap", ab: arr.buffer as ArrayBuffer } };
+  b.byteOffset = arr.byteOffset;
   b.elemShift = shift; b.little = shift > 0;
   b.cap = arr.length; b.pos = off; b.lim = off + len;
   return b;
@@ -177,9 +214,8 @@ class JDoubleBuffer extends JBuffer {}
 
 function viewBuffer<T extends JBuffer>(src: JByteBuffer, Ctor: new () => T, shift: number): T {
   const b = new Ctor();
-  const byteOff = src.dv.byteOffset + src.pos;
-  b.ab = src.ab;
-  b.dv = new DataView(src.ab, byteOff);
+  b.backing = src.backing;
+  b.byteOffset = src.byteOffset + src.pos;
   b.elemShift = shift;
   b.little = src.little;
   b.cap = b.lim = (src.lim - src.pos) >> shift;

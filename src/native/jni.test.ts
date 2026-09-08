@@ -1,6 +1,7 @@
 import { DexFile } from "../jvm/dex";
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mainThread } from "../jvm/natives/jlang";
+import { mainThread, vcall } from "../jvm/natives/jlang";
+import { JBuffer, bufferView } from "../jvm/natives/jnio";
 import { JCtor } from "../jvm/natives/jreflect";
 import { JObj, rt } from "../jvm/runtime";
 import { Cpu, setA64 } from "./cpu";
@@ -17,6 +18,7 @@ function jni(env: number, index: number): number {
 
 beforeAll(() => {
   setA64(true);
+  rt.link("java/nio/IntBuffer");
   rt.register({
     name: "webdroid/JniConstructorTarget", ctor: ConstructorTarget,
     methods: { "<init>(I)V": function (this: ConstructorTarget, value: number) { this.value = value; } },
@@ -25,6 +27,105 @@ beforeAll(() => {
   cpu = new Cpu(mainThread, "jni constructor test");
 });
 afterAll(() => setA64(false));
+
+test("JNI direct buffers share native writes with Java slices and typed views", async () => {
+  const envOut = mem.hostAlloc(PTR);
+  await cpu.call(ldp(ldp(javaVM.addr) + 6 * PTR), [javaVM.addr, envOut, 0x10006]);
+  const env = ldp(envOut), address = mem.malloc(16);
+  try {
+    const ref = await cpu.call(jni(env, 229), [env, address, 16n]);
+    const b = deref(ref, cpu);
+    if (!(b instanceof JBuffer)) throw new Error("NewDirectByteBuffer did not return a buffer");
+    expect(await cpu.call(jni(env, 230), [env, ref])).toBe(address);
+    expect(await cpu.call(jni(env, 231), [env, ref])).toBe(16);
+    expect(cpu.ret1).toBe(0);
+    mem.st8(address + 3, 42);
+    expect(await vcall(b, "get", "(I)B", 3)).toBe(42);
+    b.pos = 4; b.lim = 12;
+    const slice = await vcall(b, "slice", "()Ljava/nio/ByteBuffer;");
+    await vcall(slice, "put", "(IB)Ljava/nio/ByteBuffer;", 2, 77);
+    expect(mem.ld8u(address + 6)).toBe(77);
+    const ints = await vcall(b, "asIntBuffer", "()Ljava/nio/IntBuffer;");
+    await vcall(ints, "put", "(II)Ljava/nio/IntBuffer;", 1, 0x01020304);
+    expect([...mem.u8.subarray(address + 8, address + 12)]).toEqual([1, 2, 3, 4]);
+    expect(b.pos).toBe(4);
+    expect(await cpu.call(jni(env, 230), [env, ref])).toBe(address);
+  } finally { mem.free(address); }
+});
+
+test("JNI lazily promotes direct allocations with preexisting views and rejects heap buffers", async () => {
+  const envOut = mem.hostAlloc(PTR);
+  await cpu.call(ldp(ldp(javaVM.addr) + 6 * PTR), [javaVM.addr, envOut, 0x10006]);
+  const env = ldp(envOut);
+  const cls = await cpu.call(jni(env, 6), [env, mem.hostStr("java/nio/ByteBuffer")]);
+  for (const allocation of ["allocateDirect", "allocate"]) {
+    const method = await cpu.call(jni(env, 113), [env, cls, mem.hostStr(allocation), mem.hostStr("(I)Ljava/nio/ByteBuffer;")]);
+    const ref = await cpu.call(jni(env, 114), [env, cls, method, 20]);
+    const b = deref(ref, cpu);
+    if (!(b instanceof JBuffer)) throw new Error("allocation did not return a buffer");
+    expect(b.ab).not.toBe(mem.buf);
+    await vcall(b, "put", "(IB)Ljava/nio/ByteBuffer;", 9, 55);
+    b.pos = 4; b.lim = 16;
+    const sliceId = await cpu.call(jni(env, 33), [env, cls, mem.hostStr("slice"), mem.hostStr("()Ljava/nio/ByteBuffer;")]);
+    const sliceRef = await cpu.call(jni(env, 34), [env, ref, sliceId]);
+    const slice = deref(sliceRef, cpu);
+    if (!(slice instanceof JBuffer)) throw new Error("slice did not return a buffer");
+    const ints = await vcall(slice, "asIntBuffer", "()Ljava/nio/IntBuffer;");
+    const duplicate = await vcall(b, "duplicate", "()Ljava/nio/ByteBuffer;");
+    const address = await cpu.call(jni(env, 230), [env, sliceRef]);
+    if (allocation === "allocate") {
+      expect(address).toBe(0);
+      expect(await cpu.call(jni(env, 231), [env, ref])).toBe(-1);
+      expect(cpu.ret1).toBe(-1);
+      expect(await vcall(slice, "isDirect", "()Z")).toBe(0);
+      continue;
+    }
+    expect(address).toBeGreaterThan(0);
+    expect(await cpu.call(jni(env, 230), [env, ref])).toBe(address - 4);
+    expect(await cpu.call(jni(env, 231), [env, sliceRef])).toBe(12);
+    expect(mem.ld8u(address + 5)).toBe(55);
+    mem.st8(address + 2, 91);
+    expect(await vcall(duplicate, "get", "(I)B", 6)).toBe(91);
+    await vcall(ints, "put", "(II)Ljava/nio/IntBuffer;", 2, 0x05060708);
+    expect([...mem.u8.subarray(address + 8, address + 12)]).toEqual([5, 6, 7, 8]);
+    expect(bufferView(slice)).toEqual({ ab: mem.buf, byteOffset: address, byteFromPos: address });
+    expect(await vcall(slice, "isDirect", "()Z")).toBe(1);
+  }
+});
+
+test("native direct buffers retain guest addresses when an arm64 memory plane moves", async () => {
+  const reservations: (number | bigint)[] = [];
+  const plane = () => {
+    for (;;) {
+      const address = mem.mapVa(0x1ffff000, true);
+      if (!address) throw new Error("native reservation failed");
+      reservations.push(address);
+      if (typeof address === "bigint") return address;
+    }
+  };
+  try {
+    const address = plane(), blocker = plane();
+    expect(mem.commitVa(address, 0x1000)).toBe(true);
+    const envOut = mem.hostAlloc(PTR);
+    await cpu.call(ldp(ldp(javaVM.addr) + 6 * PTR), [javaVM.addr, envOut, 0x10006]);
+    const env = ldp(envOut);
+    const ref = await cpu.call(jni(env, 229), [env, address, 16n]);
+    const b = deref(ref, cpu);
+    if (!(b instanceof JBuffer)) throw new Error("NewDirectByteBuffer did not return a buffer");
+    const previous = b.dv;
+    previous.setInt8(0, 61);
+    expect(mem.commitVa(blocker, 1 << 25)).toBe(true);
+    expect(mem.commitVa(address, 2 << 25)).toBe(true);
+    expect(b.dv.byteOffset).not.toBe(previous.byteOffset);
+    expect(await vcall(b, "get", "(I)B", 0)).toBe(61);
+    await vcall(b, "put", "(IB)Ljava/nio/ByteBuffer;", 1, 62);
+    expect(mem.ld8u(mem.txVa(address) + 1)).toBe(62);
+    const low = await cpu.call(jni(env, 230), [env, ref]);
+    expect((BigInt(cpu.ret1) << 32n) | BigInt(low >>> 0)).toBe(address);
+  } finally {
+    for (const address of reservations) mem.unmapVa(BigInt(address), 0x1ffff000);
+  }
+});
 
 test("reflected constructors preserve their canonical method ID and construct through NewObjectA", async () => {
   const envOut = mem.hostAlloc(PTR);

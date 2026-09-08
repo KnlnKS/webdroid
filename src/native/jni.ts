@@ -8,6 +8,7 @@ import { rt, JObj, type ClassInfo } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, newPrimArray } from "../jvm/abi";
 import { curThread, JClass, stackTraceText } from "../jvm/natives/jlang";
 import { JCtor, JMethod, classCtors, mkMethod } from "../jvm/natives/jreflect";
+import { JBuffer, directBufferAddress, nativeByteBuffer } from "../jvm/natives/jnio";
 
 export const jniMissing = new Set<string>();
 export const jniTrace = { on: false };
@@ -447,9 +448,19 @@ export function jniInit(): void {
   def(226, "NewWeakGlobalRef", T[21]!);
   def(227, "DeleteWeakGlobalRef", T[22]!);
   def(228, "ExceptionCheck", (cpu) => (cpu.exc ? 1 : 0));
-  def(229, "NewDirectByteBuffer", () => 0);
-  def(230, "GetDirectBufferAddress", () => 0);
-  def(231, "GetDirectBufferCapacity", () => -1);
+  def(229, "NewDirectByteBuffer", (_cpu, a) => {
+    a.p(); const address = a.p(), cap = a.l();
+    return cap < 0n || cap > 0x7fffffffn ? 0 : toRef(nativeByteBuffer(address, Number(cap)));
+  });
+  def(230, "GetDirectBufferAddress", (cpu, a) => {
+    a.p(); const b = deref(a.p());
+    try { return b instanceof JBuffer ? directBufferAddress(b) : 0; }
+    catch (e) { pend(cpu, e); return 0; }
+  });
+  def(231, "GetDirectBufferCapacity", (_cpu, a) => {
+    a.p(); const b = deref(a.p());
+    return b instanceof JBuffer && b.direct ? BigInt(b.cap) : -1n;
+  });
   def(232, "GetObjectRefType", (_c, a) => { a.p(); const h = a.p(); return h === 0 ? 0 : h & GLOBAL_BIT ? 2 : 1; });
 
   envTable = mem.hostAlloc(233 * PTR);
