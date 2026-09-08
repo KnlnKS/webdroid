@@ -267,7 +267,7 @@ rt.register({
     },
     "objectFieldOffset(Ljava/lang/reflect/Field;)J": fieldOffset,
     "arrayBaseOffset(Ljava/lang/Class;)I": () => 0,
-    "arrayIndexScale(Ljava/lang/Class;)I": () => 1,
+    "arrayIndexScale(Ljava/lang/Class;)I": (cls: JClass) => arrayIndexScale(cls),
     "getObject(Ljava/lang/Object;J)Ljava/lang/Object;": uGet,
     "getObjectVolatile(Ljava/lang/Object;J)Ljava/lang/Object;": uGet,
     "putObject(Ljava/lang/Object;JLjava/lang/Object;)V": uPut,
@@ -280,37 +280,45 @@ rt.register({
         o[k] = val; return 1;
       },
     "compareAndSwapLong(Ljava/lang/Object;JJJ)Z": (o: any, off: bigint, exp: bigint, val: bigint) => {
-      const k = uKey(o, off);
-      if ((o[k] ?? 0n) !== exp) return 0;
-      o[k] = val; return 1;
+      if (uGetLong(o, off) !== exp) return 0;
+      uPutLong(o, off, val); return 1;
     },
     "compareAndSwapInt(Ljava/lang/Object;JII)Z": (o: any, off: bigint, exp: number, val: number) => {
-      const k = uKey(o, off);
-      if ((o[k] ?? 0) !== exp) return 0;
-      o[k] = val; return 1;
+      if (uGetInt(o, off) !== exp) return 0;
+      uPutInt(o, off, val); return 1;
     },
-    "getInt(Ljava/lang/Object;J)I": (o: any, off: bigint) => o[uKey(o, off)] ?? 0,
-    "putInt(Ljava/lang/Object;JI)V": (o: any, off: bigint, v: number) => { o[uKey(o, off)] = v; },
-    "getLong(Ljava/lang/Object;J)J": (o: any, off: bigint) => o[uKey(o, off)] ?? 0n,
-    "putLong(Ljava/lang/Object;JJ)V": (o: any, off: bigint, v: bigint) => { o[uKey(o, off)] = v; },
-    "getBoolean(Ljava/lang/Object;J)Z": (o: any, off: bigint) => (o[uKey(o, off)] ? 1 : 0),
-    "putBoolean(Ljava/lang/Object;JZ)V": (o: any, off: bigint, v: number) => { o[uKey(o, off)] = v; },
-    "getByte(Ljava/lang/Object;J)B": (o: any, off: bigint) => o[uKey(o, off)] ?? 0,
-    "putByte(Ljava/lang/Object;JB)V": (o: any, off: bigint, v: number) => { o[uKey(o, off)] = v; },
-    "getFloat(Ljava/lang/Object;J)F": (o: any, off: bigint) => o[uKey(o, off)] ?? 0,
-    "putFloat(Ljava/lang/Object;JF)V": (o: any, off: bigint, v: number) => { o[uKey(o, off)] = v; },
-    "getDouble(Ljava/lang/Object;J)D": (o: any, off: bigint) => o[uKey(o, off)] ?? 0,
-    "putDouble(Ljava/lang/Object;JD)V": (o: any, off: bigint, v: number) => { o[uKey(o, off)] = v; },
+    "getInt(Ljava/lang/Object;J)I": uGetInt,
+    "putInt(Ljava/lang/Object;JI)V": uPutInt,
+    "getLong(Ljava/lang/Object;J)J": uGetLong,
+    "putLong(Ljava/lang/Object;JJ)V": uPutLong,
+    "getBoolean(Ljava/lang/Object;J)Z": (o: any, off: bigint) => {
+      const view = uView(o); return view ? (view.getUint8(Number(off)) ? 1 : 0) : (o[uKey(o, off)] ? 1 : 0);
+    },
+    "putBoolean(Ljava/lang/Object;JZ)V": (o: any, off: bigint, v: number) => {
+      const view = uView(o); if (view) view.setUint8(Number(off), v ? 1 : 0); else o[uKey(o, off)] = v;
+    },
+    "getByte(Ljava/lang/Object;J)B": (o: any, off: bigint) => uView(o)?.getInt8(Number(off)) ?? o[uKey(o, off)] ?? 0,
+    "putByte(Ljava/lang/Object;JB)V": (o: any, off: bigint, v: number) => {
+      const view = uView(o); if (view) view.setInt8(Number(off), v); else o[uKey(o, off)] = v;
+    },
+    "getFloat(Ljava/lang/Object;J)F": (o: any, off: bigint) => uView(o)?.getFloat32(Number(off), true) ?? o[uKey(o, off)] ?? 0,
+    "putFloat(Ljava/lang/Object;JF)V": (o: any, off: bigint, v: number) => {
+      const view = uView(o); if (view) view.setFloat32(Number(off), v, true); else o[uKey(o, off)] = v;
+    },
+    "getDouble(Ljava/lang/Object;J)D": (o: any, off: bigint) => uView(o)?.getFloat64(Number(off), true) ?? o[uKey(o, off)] ?? 0,
+    "putDouble(Ljava/lang/Object;JD)V": (o: any, off: bigint, v: number) => {
+      const view = uView(o); if (view) view.setFloat64(Number(off), v, true); else o[uKey(o, off)] = v;
+    },
     "staticFieldOffset(Ljava/lang/reflect/Field;)J": fieldOffset,
     "staticFieldBase(Ljava/lang/reflect/Field;)Ljava/lang/Object;": (f: JField) => f.owner.ctor,
-    "getLongVolatile(Ljava/lang/Object;J)J": (o: any, off: bigint) => o[uKey(o, off)] ?? 0n,
-    "getIntVolatile(Ljava/lang/Object;J)I": (o: any, off: bigint) => o[uKey(o, off)] ?? 0,
-    "putIntVolatile(Ljava/lang/Object;JI)V": (o: any, off: bigint, v: number) => { o[uKey(o, off)] = v; },
-    "getAndAddInt(Ljava/lang/Object;JI)I": (o: any, off: bigint, d: number) => { const k = uKey(o, off); const old = o[k] ?? 0; o[k] = (old + d) | 0; return old; },
-    "getAndAddLong(Ljava/lang/Object;JJ)J": (o: any, off: bigint, d: bigint) => { const k = uKey(o, off); const old = o[k] ?? 0n; o[k] = BigInt.asIntN(64, old + d); return old; },
-    "getAndSetInt(Ljava/lang/Object;JI)I": (o: any, off: bigint, v: number) => { const k = uKey(o, off); const old = o[k] ?? 0; o[k] = v; return old; },
-    "putLongVolatile(Ljava/lang/Object;JJ)V": (o: any, off: bigint, v: bigint) => { o[uKey(o, off)] = v; },
-    "putOrderedLong(Ljava/lang/Object;JJ)V": (o: any, off: bigint, v: bigint) => { o[uKey(o, off)] = v; },
+    "getLongVolatile(Ljava/lang/Object;J)J": uGetLong,
+    "getIntVolatile(Ljava/lang/Object;J)I": uGetInt,
+    "putIntVolatile(Ljava/lang/Object;JI)V": uPutInt,
+    "getAndAddInt(Ljava/lang/Object;JI)I": (o: any, off: bigint, d: number) => { const old = uGetInt(o, off); uPutInt(o, off, (old + d) | 0); return old; },
+    "getAndAddLong(Ljava/lang/Object;JJ)J": (o: any, off: bigint, d: bigint) => { const old = uGetLong(o, off); uPutLong(o, off, BigInt.asIntN(64, old + d)); return old; },
+    "getAndSetInt(Ljava/lang/Object;JI)I": (o: any, off: bigint, v: number) => { const old = uGetInt(o, off); uPutInt(o, off, v); return old; },
+    "putLongVolatile(Ljava/lang/Object;JJ)V": uPutLong,
+    "putOrderedLong(Ljava/lang/Object;JJ)V": uPutLong,
     "getAndSetObject(Ljava/lang/Object;JLjava/lang/Object;)Ljava/lang/Object;": (o: any, off: bigint, v: unknown) => {
       const k = uKey(o, off); const old = o[k] ?? null; o[k] = v; return old;
     },
@@ -329,6 +337,45 @@ function uKey(o: unknown, off: bigint): string | number {
 }
 function uGet(o: any, off: bigint) { return o[uKey(o, off)] ?? null; }
 function uPut(o: any, off: bigint, v: unknown) { o[uKey(o, off)] = v; }
+const unsafeViews = new WeakMap<object, DataView>();
+function uView(o: unknown): DataView | null {
+  if (!ArrayBuffer.isView(o)) return null;
+  let view = unsafeViews.get(o);
+  if (!view) { view = new DataView(o.buffer, o.byteOffset, o.byteLength); unsafeViews.set(o, view); }
+  return view;
+}
+function uGetInt(o: any, off: bigint): number {
+  const view = uView(o);
+  if (!view) return o[uKey(o, off)] ?? 0;
+  const offset = Number(off);
+  if (offset + 4 <= view.byteLength) return view.getInt32(offset, true);
+  if (offset < 0 || offset >= view.byteLength) return view.getInt32(offset, true);
+  let value = 0;
+  for (let i = 0; offset + i < view.byteLength; i++) value |= view.getUint8(offset + i) << (i * 8);
+  return value | 0;
+}
+function uPutInt(o: any, off: bigint, value: number): void {
+  const view = uView(o);
+  if (!view) { o[uKey(o, off)] = value; return; }
+  const offset = Number(off);
+  if (offset + 4 <= view.byteLength) { view.setInt32(offset, value, true); return; }
+  if (offset < 0 || offset >= view.byteLength) { view.setInt32(offset, value, true); return; }
+  for (let i = 0; offset + i < view.byteLength; i++) view.setUint8(offset + i, value >>> (i * 8));
+}
+function uGetLong(o: any, off: bigint): bigint {
+  return uView(o)?.getBigInt64(Number(off), true) ?? o[uKey(o, off)] ?? 0n;
+}
+function uPutLong(o: any, off: bigint, value: bigint): void {
+  const view = uView(o); if (view) view.setBigInt64(Number(off), value, true); else o[uKey(o, off)] = value;
+}
+function arrayIndexScale(cls: JClass): number {
+  switch (cls.arrDesc?.[1]) {
+    case "C": case "S": return 2;
+    case "F": case "I": return 4;
+    case "D": case "J": return 8;
+    default: return 1;
+  }
+}
 
 /** all public methods of a class (self + inherited), like Class.getMethods */
 function classMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
