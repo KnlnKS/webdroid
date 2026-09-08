@@ -50,5 +50,5 @@ export async function parsePackageArchive(bytes: Uint8Array): Promise<PackageArc
   const root = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(root, "package");
   if (!pkg || !/^[\w]+(?:\.[\w]+)+$/.test(pkg)) throw new Error("invalid APK package name");
-  return { bytes, root, pkg, res: new Resources(zip["resources.arsc"] ? new Arsc(zip["resources.arsc"]) : null, zip, undefined, true), certificates: await apkCertificates(bytes, zip) };
+  return { bytes, root, pkg, res: new Resources(zip["resources.arsc"] ? new Arsc(zip["resources.arsc"], (path) => zip[path] ?? null) : null, zip, undefined, true), certificates: await apkCertificates(bytes, zip) };
 }

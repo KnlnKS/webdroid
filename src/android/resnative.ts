@@ -571,7 +571,8 @@ class JXmlParser extends JObj {
   set = new JAttrSet();
   get node(): XmlNode | null { return this.events[this.pos]?.node ?? null; }
 }
-function mkXmlParser(res: Resources, id: number): JXmlParser {
+export function mkXmlParser(res: Resources, id: number): JXmlParser {
+  rt.link("android/content/res/XmlResourceParser");
   const bytes = id ? res.fileOf(id)?.bytes : null;
   if (!bytes) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "xml resource 0x" + id.toString(16));
   const p = new JXmlParser();

@@ -1,12 +1,13 @@
 import { afterAll, expect, test } from "bun:test";
 import "../natives";
 import { vcall, newObj } from "../jvm/natives/jlang";
-import { type XmlNode, TV } from "./axml";
+import { type XmlNode, TV, attrStr } from "./axml";
 import { Arsc } from "./arsc";
 import { Resources, JTheme } from "./res";
 import { JResources } from "./resnative";
 import { type AppHost, appHost, setAppHost } from "./apphost";
 import { setManifest } from "./pm";
+import { parsePackageArchive } from "./packagearchive";
 import { mkComponentName } from "./intent";
 
 const previousHost = appHost;
@@ -96,4 +97,29 @@ test("broadcast receiver queries and PackageInfo expose only installed matching 
   expect((await get(0x202)).receivers.length).toBe(2);
   setManifest(node("manifest", { package: installed.pkg }, [node("application")]), new Map(), new Map());
   expect((await query()).a).toEqual([]);
+});
+
+
+test("provider XML metadata loads the manifest resource through PackageItemInfo", async () => {
+  const archive = await parsePackageArchive(new Uint8Array(await Bun.file(new URL("../../apks/mihon-v0.20.4.apk", import.meta.url)).arrayBuffer()));
+  const installed = host(); installed.pkg = archive.pkg; installed.res = archive.res; setAppHost(installed);
+  const nodes = archive.root.children.find((child) => child.name === "application")!.children.filter((child) => child.name === "provider");
+  const providers = new Map(nodes.map((child) => [attrStr(child, "name")!, child]));
+  setManifest(archive.root, new Map(), providers);
+  const pm = await newObj("android/content/pm/PackageManager");
+  const info = await vcall(pm, "resolveContentProvider", "(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;", "app.mihon.provider", 128);
+  expect(info.applicationInfo.packageName).toBe(archive.pkg);
+  const parser = await vcall(info, "loadXmlMetaData", "(Landroid/content/pm/PackageManager;Ljava/lang/String;)Landroid/content/res/XmlResourceParser;", pm, "android.support.FILE_PROVIDER_PATHS");
+  expect(await vcall(parser, "next", "()I")).toBe(0);
+  expect(await vcall(parser, "next", "()I")).toBe(2);
+  expect(await vcall(parser, "getName", "()Ljava/lang/String;")).toBe("paths");
+  expect(await vcall(parser, "next", "()I")).toBe(2);
+  expect(await vcall(parser, "getName", "()Ljava/lang/String;")).toBe("cache-path");
+  expect(await vcall(parser, "getAttributeValue", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", null, "name")).toBe("cache_files");
+  expect(await vcall(info, "loadXmlMetaData", "(Landroid/content/pm/PackageManager;Ljava/lang/String;)Landroid/content/res/XmlResourceParser;", pm, "missing")).toBeNull();
+  expect(await vcall(pm, "getXml", "(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/content/res/XmlResourceParser;", archive.pkg, 0x7fffffff, info.applicationInfo)).toBeNull();
+  const without = await vcall(pm, "getProviderInfo", "(Landroid/content/ComponentName;I)Landroid/content/pm/ProviderInfo;", mkComponentName(archive.pkg, info.name), 0);
+  expect(without.metaData).toBeNull();
+  const direct = await vcall(pm, "getProviderInfo", "(Landroid/content/ComponentName;I)Landroid/content/pm/ProviderInfo;", mkComponentName(archive.pkg, info.name), 128);
+  expect(direct.metaData.map.get("android.support.FILE_PROVIDER_PATHS")).toBe(info.metaData.map.get("android.support.FILE_PROVIDER_PATHS"));
 });

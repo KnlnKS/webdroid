@@ -6,6 +6,7 @@ import { type XmlNode, attrStr, attr, TV } from "./axml";
 import { normRV, resString, type Resources } from "./res";
 import { apkCertificates, parsePackageArchive, type PackageArchive } from "./packagearchive";
 import { loadDrawable } from "./drawable";
+import { mkXmlParser } from "./resnative";
 import { getPackageInstaller } from "./packageinstaller";
 import { verifyApkSignature } from "./apksignature";
 import { persistPackage, restorePackages } from "../shell/packages";
@@ -46,14 +47,41 @@ rt.register({
   ctor: (() => { const p = rt.link("java/lang/Exception").ctor; return class extends p {}; })(),
   sup: "java/lang/Exception",
 });
-export class JActivityInfo extends JObj {
+class JPackageItemInfo extends JObj {
+  archiveResources: Resources | null = null;
+  name = ""; packageName = ""; labelRes = 0; nonLocalizedLabel: string | null = null; icon = 0; metaData: JBundle | null = null;
+}
+rt.register({
+  name: "android/content/pm/PackageItemInfo", ctor: JPackageItemInfo,
+  fields: { name: "name", packageName: "packageName", labelRes: "labelRes", nonLocalizedLabel: "nonLocalizedLabel", icon: "icon", metaData: "metaData" },
+  methods: {
+    "<init>()V": function () {},
+    "loadXmlMetaData(Landroid/content/pm/PackageManager;Ljava/lang/String;)Landroid/content/res/XmlResourceParser;": function (this: JPackageItemInfo, pm: JPackageManager, name: string) {
+      const id = this.metaData?.map.get(name);
+      if (typeof id !== "number" || !id) return null;
+      const info = this instanceof JComponentInfo ? this.applicationInfo : this instanceof JApplicationInfo ? this : null;
+      return vcall(pm, "getXml", "(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/content/res/XmlResourceParser;", this.packageName, id, info);
+    },
+    "loadLabel(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;": function (this: JPackageItemInfo) { return applicationLabel(this); },
+    "loadIcon(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;": function (this: JPackageItemInfo) { return this.archiveResources && this.icon ? loadDrawable(this.archiveResources, this.icon, null) : null; },
+  },
+});
+class JComponentInfo extends JPackageItemInfo {
+  applicationInfo: JApplicationInfo | null = null;
+  processName = ""; permission: string | null = null; enabled = 1; exported = 0; directBootAware = 0;
+}
+rt.register({ name: "android/content/pm/ComponentInfo", ctor: JComponentInfo, sup: "android/content/pm/PackageItemInfo",
+  fields: { applicationInfo: "applicationInfo", processName: "processName", enabled: "enabled", exported: "exported", directBootAware: "directBootAware" },
+  methods: { "<init>()V": function () {} },
+});
+export class JActivityInfo extends JComponentInfo {
   applicationInfo: JApplicationInfo | null = null; enabled = 1; directBootAware = 0; processName = "";
   theme = 0; name = ""; packageName = ""; configChanges = 0; screenOrientation = -1; exported = 0;
   permission: string | null = null;
   parentActivityName: string | null = null; metaData: JBundle | null = null;
 }
 rt.register({
-  name: "android/content/pm/ActivityInfo", ctor: JActivityInfo, ifaces: ["android/os/Parcelable"],
+  name: "android/content/pm/ActivityInfo", ctor: JActivityInfo, sup: "android/content/pm/ComponentInfo", ifaces: ["android/os/Parcelable"],
   fields: {
     theme: "theme", name: "name", packageName: "packageName", configChanges: "configChanges", screenOrientation: "screenOrientation",
     exported: "exported", permission: "permission", applicationInfo: "applicationInfo", enabled: "enabled", directBootAware: "directBootAware", processName: "processName",
@@ -92,17 +120,17 @@ rt.register({
   },
 });
 rt.register({
-  name: "android/content/pm/ProviderInfo", ctor: class extends JObj { applicationInfo = null; authority = ""; packageName = ""; metaData = null; name = ""; exported = 0; grantUriPermissions = 0; multiprocess = 0; },
+  name: "android/content/pm/ProviderInfo", sup: "android/content/pm/ComponentInfo", ctor: class extends JComponentInfo { applicationInfo = null; authority = ""; packageName = ""; metaData = null; name = ""; exported = 0; grantUriPermissions = 0; multiprocess = 0; },
   fields: { applicationInfo: "applicationInfo", authority: "authority", packageName: "packageName", metaData: "metaData", name: "name", exported: "exported", grantUriPermissions: "grantUriPermissions", multiprocess: "multiprocess" },
   methods: { "<init>()V": function () {} },
 });
-class JServiceInfo extends JObj {
+class JServiceInfo extends JComponentInfo {
   applicationInfo: JApplicationInfo | null = null; metaData: JBundle | null = null;
   name = ""; packageName = ""; processName = ""; permission: string | null = null;
   enabled = 1; exported = 0; directBootAware = 0; flags = 0; foregroundServiceType = 0;
 }
 rt.register({
-  name: "android/content/pm/ServiceInfo", ctor: JServiceInfo,
+  name: "android/content/pm/ServiceInfo", ctor: JServiceInfo, sup: "android/content/pm/ComponentInfo",
   fields: { applicationInfo: "applicationInfo", metaData: "metaData", name: "name", packageName: "packageName", processName: "processName",
     permission: "permission", enabled: "enabled", exported: "exported", directBootAware: "directBootAware", flags: "flags", foregroundServiceType: "foregroundServiceType" },
   methods: { "<init>()V": function () {} },
@@ -206,19 +234,6 @@ function metaData(node: XmlNode | null | undefined, res = appHost?.res): JBundle
   return b;
 }
 
-class JPackageItemInfo extends JObj {
-  archiveResources: Resources | null = null;
-  name = ""; packageName = ""; labelRes = 0; nonLocalizedLabel: string | null = null; icon = 0; metaData: JBundle | null = null;
-}
-rt.register({
-  name: "android/content/pm/PackageItemInfo", ctor: JPackageItemInfo,
-  fields: { name: "name", packageName: "packageName", labelRes: "labelRes", nonLocalizedLabel: "nonLocalizedLabel", icon: "icon", metaData: "metaData" },
-  methods: {
-    "<init>()V": function () {},
-    "loadLabel(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;": function (this: JPackageItemInfo) { return applicationLabel(this); },
-    "loadIcon(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;": function (this: JPackageItemInfo) { return this.archiveResources && this.icon ? loadDrawable(this.archiveResources, this.icon, null) : null; },
-  },
-});
 class JApplicationInfo extends JPackageItemInfo {
   packageName = ""; sourceDir = ""; dataDir = ""; nativeLibraryDir = "/lib";
   flags = 0; targetSdkVersion = 33; minSdkVersion = 21; theme = 0; labelRes = 0; icon = 0;
@@ -349,25 +364,27 @@ function matchesAction(n: XmlNode, action: string | null): boolean {
     f.children.some((a) => a.name === "action" && attrStr(a, "name") === action));
 }
 
-function providerInfo(cls: string, pkg: string, authority: string, n: XmlNode | null): unknown {
+function providerInfo(cls: string, pkg: string, authority: string, n: XmlNode | null, flags = 0): unknown {
   const pi = new (rt.link("android/content/pm/ProviderInfo").ctor)() as Record<string, unknown>;
   pi.name = cls;
   pi.packageName = pkg;
   pi.authority = authority;
+  pi.applicationInfo = appHost?.pkg === pkg ? getAppInfo(appHost) : null;
+  pi.metaData = flags & 128 ? metaData(n) : null;
   pi.exported = !n || attr(n, "exported")?.data ? 1 : 0;
   pi.grantUriPermissions = !n || attr(n, "grantUriPermissions")?.data ? 1 : 0;
   return pi;
 }
-const mkProviderInfo = (cls: string, n: XmlNode) =>
-  providerInfo(cls, appHost?.pkg ?? "", authoritiesOf(n).join(";"), n);
+const mkProviderInfo = (cls: string, n: XmlNode, flags = 0) =>
+  providerInfo(cls, appHost?.pkg ?? "", authoritiesOf(n).join(";"), n, flags);
 const sysProviderInfo = ([auth, cls]: [string, string, string]) =>
   providerInfo(cls, cls.slice(0, cls.lastIndexOf(".")), auth, null);
 
-function queryProviders(intent: { action?: string | null } | null): JList {
+function queryProviders(intent: { action?: string | null } | null, flags = 0): JList {
   const action = intent?.action ?? null;
   return newArrayList([
     ...systemProviders.filter(([, , act]) => !action || act === action).map(sysProviderInfo),
-    ...providerNodes().filter(([, n]) => matchesAction(n, action)).map(([c, n]) => mkProviderInfo(c, n)),
+    ...providerNodes().filter(([, n]) => matchesAction(n, action)).map(([c, n]) => mkProviderInfo(c, n, flags)),
   ].map((pi) => {
     const ri = new (rt.link("android/content/pm/ResolveInfo").ctor)() as Record<string, unknown>;
     ri.providerInfo = pi;
@@ -375,10 +392,10 @@ function queryProviders(intent: { action?: string | null } | null): JList {
   }));
 }
 
-function resolveProvider(authority: string): unknown {
+function resolveProvider(authority: string, flags = 0): unknown {
   const sys = systemProviders.find(([a]) => a === authority);
   if (sys) return sysProviderInfo(sys);
-  for (const [c, n] of providerNodes()) if (authoritiesOf(n).includes(authority)) return mkProviderInfo(c, n);
+  for (const [c, n] of providerNodes()) if (authoritiesOf(n).includes(authority)) return mkProviderInfo(c, n, flags);
   return null;
 }
 
@@ -503,14 +520,16 @@ rt.register({
     FEATURE_LOCATION_GPS: "android.hardware.location.gps", FEATURE_MICROPHONE: "android.hardware.microphone", FEATURE_WIFI: "android.hardware.wifi", FEATURE_BLUETOOTH: "android.hardware.bluetooth",
     FEATURE_VR_MODE: "android.software.vr.mode", FEATURE_TELEPHONY: "android.hardware.telephony", FEATURE_LEANBACK: "android.software.leanback" },
   methods: {
-    "getProviderInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ProviderInfo;": (comp: any) => {
-      const cls = String(comp?.cls ?? comp?.className ?? "");
-      const node = manifestProviders.get(cls.replace(/\//g, "."));
-      const info = new (rt.link("android/content/pm/ProviderInfo").ctor)() as any;
-      info.packageName = appHost?.pkg ?? "";
-      info.name = cls;
-      info.metaData = metaData(node);
-      return info;
+    "getProviderInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ProviderInfo;": (comp: JComponentName, flags: number) => {
+      const cls = qualifyComponent(comp.cls, comp.pkg), node = manifestProviders.get(cls);
+      if (comp.pkg !== appHost?.pkg || !node) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", comp.pkg + "/" + cls);
+      return mkProviderInfo(cls, node, flags);
+    },
+    "getXml(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/content/res/XmlResourceParser;": async (pkg: string, id: number, info: JApplicationInfo | null) => {
+      const res = info?.archiveResources ?? (pkg === appHost?.pkg ? appHost.res : (await installedPackage(pkg))?.archive.res);
+      if (!res) return null;
+      try { return mkXmlParser(res, id); }
+      catch (error) { if (error instanceof rt.link("android/content/res/Resources$NotFoundException").ctor) return null; throw error; }
     },
     "getReceiverInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;": (component: JComponentName, flags: number) => {
       const name = qualifyComponent(component.cls, component.pkg), node = manifestReceivers.get(name);
@@ -570,10 +589,10 @@ rt.register({
     "resolveActivity(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Landroid/content/pm/ResolveInfo;": (i: JIntent | null) => resolveActivity(i),
     "queryIntentActivities(Landroid/content/Intent;I)Ljava/util/List;": queryActivities,
     "queryIntentActivities(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Ljava/util/List;": queryActivities,
-    "queryIntentContentProviders(Landroid/content/Intent;I)Ljava/util/List;": (i: { action?: string | null } | null) => queryProviders(i),
-    "queryIntentContentProviders(Landroid/content/Intent;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Ljava/util/List;": (i: { action?: string | null } | null) => queryProviders(i),
-    "resolveContentProvider(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;": (a: string) => resolveProvider(a),
-    "resolveContentProvider(Ljava/lang/String;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Landroid/content/pm/ProviderInfo;": (a: string) => resolveProvider(a),
+    "queryIntentContentProviders(Landroid/content/Intent;I)Ljava/util/List;": queryProviders,
+    "queryIntentContentProviders(Landroid/content/Intent;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Ljava/util/List;": (i: { action?: string | null } | null, flags: JInfoFlags) => queryProviders(i, Number(flags.value)),
+    "resolveContentProvider(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;": resolveProvider,
+    "resolveContentProvider(Ljava/lang/String;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Landroid/content/pm/ProviderInfo;": (a: string, flags: JInfoFlags) => resolveProvider(a, Number(flags.value)),
     "queryBroadcastReceivers(Landroid/content/Intent;I)Ljava/util/List;": (i: JIntent, f: number) => queryComponents(i, f, true),
     "queryBroadcastReceivers(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Ljava/util/List;": (i: JIntent, f: JInfoFlags) => queryComponents(i, Number(f.value), true),
     "queryIntentServices(Landroid/content/Intent;I)Ljava/util/List;": queryComponents,
