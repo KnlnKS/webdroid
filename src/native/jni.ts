@@ -61,6 +61,12 @@ function methodId(info: ClassInfo, name: string, desc: string, isStatic: boolean
   }
   return id;
 }
+function hasAbstractMethod(info: ClassInfo, name: string, desc: string): boolean {
+  const { dex, def } = info;
+  if (dex && def?.virtualMethods.some((m) => (m.flags & 0x400) !== 0 && dex.method(m.methodIdx).name === name && dex.methodDesc(m.methodIdx) === desc)) return true;
+  return !!info.superInfo && hasAbstractMethod(info.superInfo, name, desc)
+    || info.interfaces.some((i) => hasAbstractMethod(i, name, desc));
+}
 const fields: FieldRec[] = [null as unknown as FieldRec];
 
 interface Registered { cls: string; name: string; sig: string; fn: number; isStatic: boolean }
@@ -302,6 +308,7 @@ export function jniInit(): void {
     // an interface the framework only marks (its methods live on the implementations) answers for
     // what the app's own bytecode calls on it; the receiver dispatches at call time as always
     const have = isStatic ? typeof i.ctor[mangled] === "function" : typeof i.ctor.prototype?.[mangled] === "function" || (i.name === "java/lang/String" && typeof (String.prototype as any)[mangled] === "function")
+      || hasAbstractMethod(i, name, sig)
       || (!i.dex && !isStatic && (rt.methodRefs(i.name).has(name + sig) || !Object.keys(rt.natives.get(i.name)?.methods ?? {}).length));
     if (!have) { pend(cpu, throwable("java/lang/NoSuchMethodError", `${i.name}.${name}${sig}`)); jniMissing.add(`${isStatic ? "static " : ""}${i.name}.${name}${sig}`); return 0; }
     return methodId(i, name, sig, isStatic);

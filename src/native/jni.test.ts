@@ -1,3 +1,4 @@
+import { DexFile } from "../jvm/dex";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mainThread } from "../jvm/natives/jlang";
 import { JCtor } from "../jvm/natives/jreflect";
@@ -42,4 +43,22 @@ test("reflected constructors preserve their canonical method ID and construct th
   const object = deref(await cpu.call(jni(env, 30), [env, cls, id, args]), cpu) as ConstructorTarget;
   expect(object).toBeInstanceOf(ConstructorTarget);
   expect(object.value).toBe(42);
+});
+
+
+test("JNI resolves inherited abstract interface methods and dispatches on the receiver", async () => {
+  rt.loadDex(new DexFile(new Uint8Array(await Bun.file(new URL("./fixtures/jni-abstract.dex", import.meta.url)).arrayBuffer())));
+  const envOut = mem.hostAlloc(PTR);
+  await cpu.call(ldp(ldp(javaVM.addr) + 6 * PTR), [javaVM.addr, envOut, 0x10006]);
+  const env = ldp(envOut);
+  const find = (name: string) => cpu.call(jni(env, 6), [env, mem.hostStr(name)]);
+  const cls = await find("webdroid/JniAbstractTarget"), iface = await find("webdroid/JniChild");
+  const ctor = await cpu.call(jni(env, 33), [env, cls, mem.hostStr("<init>"), mem.hostStr("()V")]);
+  const object = await cpu.call(jni(env, 28), [env, cls, ctor]);
+  const id = await cpu.call(jni(env, 33), [env, iface, mem.hostStr("value"), mem.hostStr("()I")]);
+  expect(id).toBeGreaterThan(0);
+  expect(await cpu.call(jni(env, 49), [env, object, id])).toBe(42);
+  expect(await cpu.call(jni(env, 33), [env, iface, mem.hostStr("missing"), mem.hostStr("()I")])).toBe(0);
+  expect(await cpu.call(jni(env, 228), [env])).toBe(1);
+  await cpu.call(jni(env, 17), [env]);
 });
