@@ -288,6 +288,7 @@ export class Cpu {
   }
   exc: unknown = null;
   ret1 = 0;           // r1 at the return of the last call() (64-bit results)
+  private retFp0 = 0; private retFp1 = 0;
   args: ArgReader & { reset(cpu: Cpu): void };
   name: string;
   depth = 0;
@@ -373,6 +374,8 @@ export class Cpu {
     try {
       await this.run();
       this.ret1 = this.a64 ? this.h[0] : r[1];
+      this.retFp0 = this.a64 ? this.si[0] : r[0];
+      this.retFp1 = this.a64 ? this.si[1] : r[1];
       return r[0];
     } finally {
       if (callLog && this.name === callLog) console.log(`[call-native] ${this.name} leave ${label} depth=${this.depth} loops=${this.loops} pc=${symbolizeHook(r[this.pcx] >>> 0)} r0=${(r[0] >>> 0).toString(16)} restoring lr=${symbolizeHook(saved[this.lrx] >>> 0)} pc=${symbolizeHook(saved[this.pcx] >>> 0)}`);
@@ -390,8 +393,8 @@ export class Cpu {
   }
 
   /** the float/double a call() just returned, wherever the ABI put it */
-  retF(): number { return this.a64 ? this.s[0] : bitsf(this.r[0]); }
-  retD(): number { return this.a64 ? this.d[0] : bitsd(retPair(this.r[0], this.ret1)); }
+  retF(): number { return bitsf(this.retFp0); }
+  retD(): number { return bitsd(retPair(this.retFp0, this.retFp1)); }
 
   /** the slice driver: run until the frame returns (pc = RET_SENTINEL) or the thread finishes */
   async run(): Promise<void> {
