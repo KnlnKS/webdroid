@@ -26,7 +26,7 @@ export const slice = { instr: SLICE_INSTR };
 export type CallArg = number | bigint | { f: number } | { d: number };
 
 /** a compiled block: runs, then returns the next block (F.n caches constant successors; c.look resolves the rest) */
-type BlockFn = ((c: Cpu, r: Int32Array, M: typeof mem, F: BlockFn) => BlockFn) & { pc: number; n: (BlockFn | undefined)[]; links: number[] };
+type BlockFn = ((c: Cpu, r: Int32Array, M: typeof mem, F: BlockFn) => BlockFn) & { pc: number; n: (BlockFn | undefined)[]; links: number[]; last: number };
 export const allBlocks = new Set<BlockFn>();
 /** pc reached a trampoline / the return sentinel: r[15] holds it, the run loop decides */
 const STOP = ((c: Cpu) => { void c; return STOP; }) as unknown as BlockFn;
@@ -46,6 +46,7 @@ let tpages: ((BlockFn | undefined)[] | undefined)[] = [];  // Thumb blocks by ha
 let cov: (Uint8Array | undefined)[] = [];
 let heat: (Uint16Array | undefined)[] = [];
 let refs: (Set<BlockFn> | undefined)[] = [];
+let cacheEpoch = 0;
 function sizePages(): void {
   NPAGES = MEM_SIZE >>> PAGE_SHIFT;
   pages = new Array(NPAGES).fill(undefined);
@@ -53,11 +54,12 @@ function sizePages(): void {
   cov = new Array(NPAGES).fill(undefined);
   heat = new Array(NPAGES).fill(undefined);
   refs = new Array(NPAGES).fill(undefined);
+  cacheEpoch = 0;
   allBlocks.clear();
 }
 sizePages();
 mem.initHooks.push(sizePages);
-export const blockStats = { compiled: 0, invalidated: 0, compileMs: 0 };
+export const blockStats = { compiled: 0, invalidated: 0, evicted: 0, compileMs: 0 };
 /** single-step register trace: every instruction logs pc + the registers it changed (slow; debugging only) */
 export const stepMode = { on: false, ring: [] as string[], max: 40000, watch: 0, hits: [] as string[] };
 export function setStepMode(on: boolean): void {
@@ -83,30 +85,52 @@ mem.onCodeWrite = (addr: number) => {
 let why = "", running: Cpu | null = null;
 /** why code pages were invalidated, by cause and page (wd.native.invalidations) */
 export const invalidations = new Map<string, number>();
-function invalidatePage(pg: number): void {
-  const drop = (arr: (BlockFn | undefined)[] | undefined) => { if (arr) for (const f of arr) if (f) { allBlocks.delete(f); for (const p of f.links) refs[p]?.delete(f); } };
-  invalidatedPages.set(pg, (invalidatedPages.get(pg) ?? 0) + 1);
-  const k = `${why} → ${symbolizeHook(pg << PAGE_SHIFT >>> 0)}`; invalidations.set(k, (invalidations.get(k) ?? 0) + 1);
-  drop(pages[pg]); drop(tpages[pg]);
-  pages[pg] = undefined;
-  tpages[pg] = undefined;
+function clearLinks(f: BlockFn): void {
+  for (const p of f.links) refs[p]?.delete(f);
+  f.links.length = 0;
+  f.n.fill(undefined);
+}
+function dropPage(pg: number): void {
+  for (const arr of [pages[pg], tpages[pg]]) if (arr) for (const f of arr) if (f) {
+    allBlocks.delete(f);
+    clearLinks(f);
+  }
+  pages[pg] = tpages[pg] = undefined;
   cov[pg] = undefined;
   heat[pg] = undefined;
   mem.codePages[pg] = 0;
-  blockStats.invalidated++;
-  // the blocks whose successor caches point into this page forget them; nothing else is touched
-  for (const f of refs[pg] ?? []) f.n.fill(undefined);
+  for (const f of refs[pg] ?? []) clearLinks(f);
   refs[pg] = undefined;
 }
-/** page → the blocks whose successor cache holds a block in it (what an invalidation must clear) */
+function invalidatePage(pg: number): void {
+  invalidatedPages.set(pg, (invalidatedPages.get(pg) ?? 0) + 1);
+  const k = `${why} → ${symbolizeHook(pg << PAGE_SHIFT >>> 0)}`; invalidations.set(k, (invalidations.get(k) ?? 0) + 1);
+  dropPage(pg);
+  blockStats.invalidated++;
+}
+function pruneCode(keep: number): void {
+  const max = coldTier.maxBlocks;
+  if (!A64 || stepMode.on || max <= 0 || allBlocks.size < max) return;
+  const ages = new Map<number, number>();
+  for (const f of allBlocks) {
+    const page = f.pc >>> PAGE_SHIFT;
+    if (page !== keep) ages.set(page, Math.max(ages.get(page) ?? 0, f.last));
+  }
+  const before = allBlocks.size, low = Math.floor(max * 5 / 6);
+  for (const [page] of [...ages].sort((a, b) => a[1] - b[1])) {
+    dropPage(page);
+    if (allBlocks.size <= low) break;
+  }
+  blockStats.evicted += before - allBlocks.size;
+}
 /** the cold tier (interp.ts): how many times a block entry runs interpreted before it is compiled; 0 compiles at once */
-export const coldTier = { heat: 1024, stats: coldStats };
+export const coldTier = { heat: 1024, maxBlocks: 24_576, stats: coldStats };
 /** the shared stub that interprets one basic block from r[32] and hands the next pc back to the dispatcher */
 const cold: BlockFn = Object.assign(function (c: Cpu, r: Int32Array, M: typeof mem): BlockFn {
   const next = coldRun(c, r, M, c.h);
   r[32] = next;
   return c.look(next);
-}, { pc: -1, n: [] as (BlockFn | undefined)[], links: [] as number[] });
+}, { pc: -1, n: [] as (BlockFn | undefined)[], links: [] as number[], last: 0 });
 /** page → how often it was invalidated (wd.native.invalidatedPages): a page written and executed */
 export const invalidatedPages = new Map<number, number>();
 /** an already-compiled block (either instruction set) for debug tooling */
@@ -143,7 +167,9 @@ export const watchPcs = new Set<number>(((globalThis as { __wdWatch?: number[] }
 function compile(cpu: Cpu, pc: number, pg: (BlockFn | undefined)[], thumb: boolean): BlockFn {
   const t0 = performance.now();
   if (pc & (thumb ? 1 : 3)) { cpu.r[cpu.pcx] = pc; cpu.fault("misaligned pc"); }
+  pruneCode(pc >>> PAGE_SHIFT);
   const b = thumb ? emitThumbBlock(pc) : A64 ? emitA64Block(pc) : emitBlock(pc);
+  if (A64) b.src = "F.last=c.epoch;" + b.src;
   if (watchPcs.has(pc >>> 0)) b.src = "c.watchHit();" + b.src;
   if (countExec) b.src = "F.x=(F.x|0)+1;" + b.src;
   let fn: BlockFn;
@@ -152,6 +178,7 @@ function compile(cpu: Cpu, pc: number, pg: (BlockFn | undefined)[], thumb: boole
   fn.pc = pc;
   fn.n = new Array<BlockFn | undefined>(b.slots).fill(undefined);
   fn.links = [];
+  fn.last = cpu.epoch;
   allBlocks.add(fn);
   pg[thumb ? (pc >>> 1) & 2047 : (pc >>> 2) & 1023] = fn;
   const page = pc >>> PAGE_SHIFT;
@@ -176,6 +203,7 @@ export class Cpu {
   n = 0; z = 0; c = 0; v = 0; q = 0; ge = 0;
   sc = 0;             // shifter carry-out of the last register-specified shift (see arm.ts op2)
   lo = 0; hi = 0;     // 64-bit multiply results
+  epoch = 0;
   ic = 0;             // instructions executed
   bpc = 0;            // start of the block being executed (fault attribution)
   // The SIMD&FP register file: A64's V0..V31 (Vn.S[i] = s[4n+i], Vn.D[i] = d[2n+i], bytes at
@@ -421,7 +449,7 @@ export class Cpu {
   /** a block fills its successor cache: the target page remembers who points into it */
   link(F: BlockFn, i: number, pc: number): BlockFn {
     const b = this.look(pc), pg = pc >>> PAGE_SHIFT;
-    if (b === cold) return b;                                                  // not a block yet: nothing to cache
+    if (b === cold || !allBlocks.has(F)) return b;                                                  // not a block yet: nothing to cache
     (refs[pg] ??= new Set()).add(F);
     F.links.push(pg);
     return (F.n[i] = b);
@@ -452,6 +480,7 @@ export class Cpu {
     const r = this.r;
     const px = this.pcx;
     const limit = this.ic + budget;
+    this.epoch = ++cacheEpoch;
     running = this;
     let fn = this.look(r[px]);
     for (;;) {
