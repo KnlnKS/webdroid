@@ -126,30 +126,25 @@ rt.register({
       Object.assign(c, this);
       return c;
     },
-    "notify()V": function () { monNotify(this, false); },
-    "notifyAll()V": function () { monNotify(this, true); },
-    "wait()V": function () { return monWait(this, 0); },
-    "wait(J)V": function (ms: bigint) { return monWait(this, Number(ms)); },
-    "wait(JI)V": function (ms: bigint, ns: number) { return monWait(this, Number(ms) + (ns > 0 ? 1 : 0)); },
+    "notify()V": function () { rt.monitors.notify(this, curThread, false); },
+    "notifyAll()V": function () { rt.monitors.notify(this, curThread, true); },
+    "wait()V": async function () { return monWait(this, 0); },
+    "wait(J)V": async function (ms: bigint) { return monWait(this, Number(ms)); },
+    "wait(JI)V": async function (ms: bigint, ns: number) {
+      if (ms < 0n || ns < 0 || ns > 999999) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout");
+      return monWait(this, Number(ms) + (ns > 0 ? 1 : 0));
+    },
   },
 });
 
-// wait/notify on cooperative threads
-const waiters = new WeakMap<object, (() => void)[]>();
-function monWait(obj: object, ms: number): Promise<boolean> {
-  let list = waiters.get(obj);
-  if (!list) waiters.set(obj, (list = []));
-  const l = list;
-  return park(curThread, (wake) => {
-    l.push(wake);
-    return () => { const i = l.indexOf(wake); if (i >= 0) l.splice(i, 1); };
-  }, ms > 0 ? ms : undefined);
-}
-function monNotify(obj: object, all: boolean) {
-  const list = waiters.get(obj);
-  if (!list?.length) return;
-  const picked = all ? list.splice(0) : list.splice(0, 1);
-  for (const w of picked) queueMicrotask(w);
+function monWait(obj: object, ms: number): Promise<void> {
+  if (ms < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout");
+  const thread = curThread;
+  if (thread.interrupted && rt.monitors.holds(obj, thread)) {
+    thread.interrupted = 0;
+    return Promise.reject(rt.mkThrowable("java/lang/InterruptedException", null));
+  }
+  return rt.monitors.wait(obj, thread, (arm) => park(thread, arm, ms > 0 ? ms : undefined));
 }
 
 export class JClass extends JObj {

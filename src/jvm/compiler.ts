@@ -236,7 +236,7 @@ class MethodCompiler {
       for (const pc2 of this.order) {
         const i = this.ins.get(pc2)!;
         if (i.name.startsWith("invoke") || i.name.startsWith("sget") || i.name.startsWith("sput") ||
-            i.name === "new-instance" || i.name === "filled-new-array" || i.name === "filled-new-array/range") {
+            i.name === "monitor-enter" || i.name === "new-instance" || i.name === "filled-new-array" || i.name === "filled-new-array/range") {
           this.sync = false;
           break;
         }
@@ -528,7 +528,7 @@ ${catchBody}
     if (this.sync) { out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise)throw R.nosusp(${JSON.stringify(this.info.name + "." + this.mname + this.desc)});`); return; }
     // re-pin the frame's thread identity after every suspension: other chains set
     // the global current-thread while we were parked (continuation-local restore)
-    out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise){R.su();$s=1;${assignTo}=await ${assignTo};R.st($th);}`);
+    out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise){R.su();$s=1;try{${assignTo}=await ${assignTo};}finally{R.st($th);}}`);
   }
 
   private fieldProp(fieldIdx: number): string {
@@ -569,7 +569,8 @@ ${catchBody}
         out.push(`${A}=D.s[${i.b}]??D.gs(${i.b});`); break;
       case "const-class":
         out.push(`${A}=R.classForIdx(D,${i.b});`); break;
-      case "monitor-enter": case "monitor-exit": break; // cooperative single-thread: no-op
+      case "monitor-enter": this.guard(`R.me(v${i.a})`, out); break;
+      case "monitor-exit": out.push(`R.mx(v${i.a});`); break;
       case "check-cast":
         out.push(`R.cc(${A},${JSON.stringify(descToName(dex.type(i.b)))});`); break;
       case "instance-of":
@@ -761,7 +762,7 @@ ${catchBody}
         // resolve against the superclass prototype; an interface-default super call
         // (Iface.super.m()) instead resolves on the declared interface's prototype
         out.push(`$t=(S.prototype.${mangled}??(D.cl[${mref.cls}]??D.link(${mref.cls})).prototype.${mangled}??R.nsm(${JSON.stringify(clsName + "." + mref.name + desc + " (super)")})).call(${recv}${argStr ? "," + argStr : ""});`);
-        if (!this.sync) out.push(`if($t instanceof Promise){R.su();$s=1;$t=await $t;R.st($th);}`);
+        if (!this.sync) out.push(`if($t instanceof Promise){R.su();$s=1;try{$t=await $t;}finally{R.st($th);}}`);
         break;
       }
       case "invoke-direct": {

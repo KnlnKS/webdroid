@@ -10,6 +10,7 @@ import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, d
 import { compileClassSource, compileLazyMethod, methodKey, type CompiledCtor } from "./compiler";
 import { isBytecode } from "./provenance";
 import { perf } from "../perf";
+import { Monitors } from "./monitor";
 
 export const ACC = { STATIC: 0x8, NATIVE: 0x100, INTERFACE: 0x200 } as const;
 
@@ -123,6 +124,9 @@ export class Runtime {
    *  (st) and releases it when it suspends (su), so a parked worker never leaves its identity
    *  behind for the native main-thread drivers that resume next */
   th: () => unknown = () => null;
+  monitors = new Monitors((name) => this.mkThrowable("java/lang/" + name, null));
+  me(obj: object | string | null | 0) { return this.monitors.enter(obj, this.th()); }
+  mx(obj: object | string | null | 0) { this.monitors.exit(obj, this.th()); }
   /** set by jreflect: a reflect.Proxy answers a method it has not materialised yet from the name and descriptor the caller holds */
   proxyMethod: ((obj: unknown, name: string, desc: string) => ((...a: unknown[]) => unknown) | null) | null = null;
   st: (t: unknown) => void = () => {};

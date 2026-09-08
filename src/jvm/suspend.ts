@@ -98,6 +98,7 @@ export function analyseSuspend(
     scanned++;
     for (let pc = 0; pc < insns.length; ) {
       const op = insns[pc] & 0xff;
+      if (op === 0x1d) mark(self); // monitor-enter can contend across cooperative threads
       if (INVOKE_EXACT[op]) {
         const mIdx = insns[pc + 1];
         const owner = descToName(dex.type(dex.method(mIdx).cls));
