@@ -13,6 +13,7 @@ import { rootWindowInsets, type JWindowInsets, sysIns } from "./windowinsets";
 import { mkVPA } from "./viewanimator";
 import type { JContext } from "./context";
 import { onMain } from "./mainloop";
+import type { JWindow } from "./window";
 
 // MeasureSpec
 export const MS_EXACTLY = 0x40000000;
@@ -169,6 +170,7 @@ export class JView extends JObj {
   theme: JTheme | null = null;
   parent: JView | null = null;
   attached = false;
+  windowOwner: JWindow | null = null;
 
   idNum = -1;
   /** android:contentDescription — the label an icon-only control answers to */
@@ -1004,7 +1006,18 @@ const viewMethods: NativeSpec["methods"] = {
   "setKeepScreenOn(Z)V": () => {},
   "setRequestedFrameRate(F)V": () => {},
   "getKeepScreenOn()Z": () => 0,
-  "requestRectangleOnScreen(Landroid/graphics/Rect;)Z": () => 0,
+  "requestRectangleOnScreen(Landroid/graphics/Rect;)Z": function (this: JView, rect: JRect) {
+    return vcall(this, "requestRectangleOnScreen", "(Landroid/graphics/Rect;Z)Z", rect, 0);
+  },
+  "requestRectangleOnScreen(Landroid/graphics/Rect;Z)Z": async function (this: JView, rect: JRect, immediate: number) {
+    let scrolled = 0;
+    for (let child: JView = this, parent = child.parent; parent; child = parent, parent = parent.parent) {
+      scrolled |= await vcall(parent, "requestChildRectangleOnScreen", "(Landroid/view/View;Landroid/graphics/Rect;Z)Z", child, rect, immediate);
+      const x = child.left - child.scrollX, y = child.top - child.scrollY;
+      rect.left += x; rect.right += x; rect.top += y; rect.bottom += y;
+    }
+    return scrolled;
+  },
   "getMatrix()Landroid/graphics/Matrix;": function (this: JView) {
     const m = new JMatrix();
     const px = this.pivotXv ?? this.width() / 2, py = this.pivotYv ?? this.height() / 2;
@@ -1074,6 +1087,12 @@ const viewMethods: NativeSpec["methods"] = {
   "getOverlay()Landroid/view/ViewGroupOverlay;": overlayOf,
   "getWindowId()Landroid/view/WindowId;": function (this: JView) { return this.attached ? WINDOW_ID : null; },
   "getRootWindowInsets()Landroid/view/WindowInsets;": () => rootWindowInsets(),
+  "getWindowInsetsController()Landroid/view/WindowInsetsController;": function (this: JView) {
+    if (!this.attached) return null;
+    let root: JView = this;
+    while (root.parent) root = root.parent;
+    return root.windowOwner ? vcall(root.windowOwner, "getInsetsController", "()Landroid/view/WindowInsetsController;") : null;
+  },
   // AOSP: a view that fits system windows turns the bars into padding and consumes them; one
   // that does not still offers them to the deprecated fitSystemWindows(Rect) an app may override.
   "onApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": async function (this: JView, ins: JWindowInsets) {

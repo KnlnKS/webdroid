@@ -142,7 +142,7 @@ rt.register({
     "setFeatureInt(II)V": () => {},
     "hasFeature(I)Z": function (this: JWindow, f: number) { return this.features.has(f) ? 1 : 0; },
     "getInsetsController()Landroid/view/WindowInsetsController;": function (this: JWindow) {
-      if (!this.insetsController) { this.insetsController = new JInsetsController(); this.insetsController.w = this; }
+      if (!this.insetsController) { rt.link("webdroid/InsetsController"); this.insetsController = new JInsetsController(); this.insetsController.w = this; }
       return this.insetsController;
     },
     "setDecorFitsSystemWindows(Z)V": () => {},
@@ -216,6 +216,7 @@ rt.register({
     "getMaximumWindowMetrics()Landroid/view/WindowMetrics;": () => new JWindowMetrics(),
     "addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": async (v: JView, lp: JLayoutParams & { x?: number; y?: number }) => {
       v.lp = lp;
+      v.windowOwner ??= new (rt.link("android/view/Window").ctor)();
       addOverlay(v, lp.x ?? 0, lp.y ?? 0);
       await dispatchAttached(v);
     },

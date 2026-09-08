@@ -327,6 +327,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
       this.win.dialog = this;
     }
     this.win.decor = this.ensureRoot();
+    this.win.decor.windowOwner = this.win;
     return this.win;
   },
   "requestWindowFeature(I)Z": () => 1,

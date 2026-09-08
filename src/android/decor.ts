@@ -125,6 +125,7 @@ export async function ensureDecor(act: JActivity) {
   }
   attachView(decor, root);
   act.window.decor = decor;
+  decor.windowOwner = act.window;
   act.window.contentParent = content;
 }
 type RVLike = { t: number; d: number };
