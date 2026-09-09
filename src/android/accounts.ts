@@ -93,6 +93,18 @@ rt.register({
   fields: { type: "type", packageName: "packageName", labelId: "labelId", iconId: "iconId", smallIconId: "smallIconId", accountPreferencesId: "accountPreferencesId", customTokens: "customTokens" },
   methods: { "describeContents()I": () => 0 },
 });
+/** the app's authenticator: its binder is the object itself, which is what a local bind hands back */
+class JAuthenticator extends JObj { binder: JObj | null = null; }
+rt.register({
+  name: "android/accounts/AbstractAccountAuthenticator", ctor: JAuthenticator,
+  methods: {
+    "<init>(Landroid/content/Context;)V": function () {},
+    "getIBinder()Landroid/os/IBinder;": function (this: JAuthenticator) {
+      if (!this.binder) { this.binder = new (rt.link("android/os/Binder").ctor)() as JObj; (this.binder as any).owner = this; }
+      return this.binder;
+    },
+  },
+});
 /** the manifest's authenticator services, each described by its <account-authenticator> resource */
 function authenticators(): JAuthenticatorDescription[] {
   const host = appHost!, out: JAuthenticatorDescription[] = [];

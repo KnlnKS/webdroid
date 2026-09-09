@@ -287,7 +287,7 @@ rt.register({
   name: "android/os/Build", ctor: JBuild,
   statics: {
     MODEL: "webdroid", MANUFACTURER: "webdroid", BRAND: "google", DEVICE: "webdroid",
-    PRODUCT: "webdroid", HARDWARE: "browser", FINGERPRINT: "google/webdroid/1.0",
+    PRODUCT: "webdroid", HARDWARE: "browser", FINGERPRINT: "google/webdroid/1.0", SOC_MANUFACTURER: "unknown", SOC_MODEL: "unknown", SKU: "unknown", ODM_SKU: "unknown",
     SERIAL: "unknown", ID: "WD1A", DISPLAY: "webdroid 1.0", TAGS: "release-keys", TYPE: "user",
     BOARD: "web", BOOTLOADER: "unknown", HOST: "localhost", USER: "web", TIME: 0n,
     SUPPORTED_ABIS: jarray(["arm64-v8a", "armeabi-v7a"], "Ljava/lang/String;"),
@@ -376,24 +376,19 @@ rt.register({
   };
   rt.register({ name: "android/os/StrictMode$ThreadPolicy", ctor: class extends JObj {} });
   rt.register({ name: "android/os/StrictMode$VmPolicy", ctor: class extends JObj {} });
+  // every detect*/permit*/penalty* of the API-34 builders: nothing is enforced, so each returns the builder
+  const TB = "Landroid/os/StrictMode$ThreadPolicy$Builder;", VB = "Landroid/os/StrictMode$VmPolicy$Builder;";
+  const flags = (ret: string, kinds: string[], extra: string[]) => [...kinds.map((k) => `${k}()${ret}`), ...extra.map((e) => e + ret)];
   chain("android/os/StrictMode$ThreadPolicy$Builder",
-    ["detectAll()Landroid/os/StrictMode$ThreadPolicy$Builder;",
-      "detectDiskReads()Landroid/os/StrictMode$ThreadPolicy$Builder;",
-      "detectDiskWrites()Landroid/os/StrictMode$ThreadPolicy$Builder;",
-      "detectNetwork()Landroid/os/StrictMode$ThreadPolicy$Builder;",
-      "detectResourceMismatches()Landroid/os/StrictMode$ThreadPolicy$Builder;",
-      "detectUnbufferedIo()Landroid/os/StrictMode$ThreadPolicy$Builder;",
-      "penaltyLog()Landroid/os/StrictMode$ThreadPolicy$Builder;",
-      "penaltyDeath()Landroid/os/StrictMode$ThreadPolicy$Builder;",
-      "permitAll()Landroid/os/StrictMode$ThreadPolicy$Builder;",
-      "permitDiskReads()Landroid/os/StrictMode$ThreadPolicy$Builder;",
-      "permitDiskWrites()Landroid/os/StrictMode$ThreadPolicy$Builder;"],
+    flags(TB, ["All", "CustomSlowCalls", "DiskReads", "DiskWrites", "ExplicitGc", "Network", "ResourceMismatches", "UnbufferedIo"].flatMap((k) => ["detect" + k, "permit" + k]),
+      ["penaltyDeath()", "penaltyDeathOnNetwork()", "penaltyDialog()", "penaltyDropBox()", "penaltyFlashScreen()", "penaltyLog()",
+        "penaltyListener(Ljava/util/concurrent/Executor;Landroid/os/StrictMode$OnThreadViolationListener;)"]),
     "android/os/StrictMode$ThreadPolicy");
   chain("android/os/StrictMode$VmPolicy$Builder",
-    ["detectAll()Landroid/os/StrictMode$VmPolicy$Builder;",
-      "detectLeakedClosableObjects()Landroid/os/StrictMode$VmPolicy$Builder;",
-      "penaltyLog()Landroid/os/StrictMode$VmPolicy$Builder;",
-      "permitUnsafeIntentLaunch()Landroid/os/StrictMode$VmPolicy$Builder;"],
+    flags(VB, ["ActivityLeaks", "All", "CleartextNetwork", "ContentUriWithoutPermission", "CredentialProtectedWhileLocked", "FileUriExposure", "ImplicitDirectBoot",
+      "IncorrectContextUse", "LeakedClosableObjects", "LeakedRegistrationObjects", "LeakedSqlLiteObjects", "NonSdkApiUsage", "UnsafeIntentLaunch", "UntaggedSockets"].map((k) => "detect" + k),
+      ["permitNonSdkApiUsage()", "permitUnsafeIntentLaunch()", "penaltyDeath()", "penaltyDeathOnCleartextNetwork()", "penaltyDeathOnFileUriExposure()", "penaltyDropBox()", "penaltyLog()",
+        "penaltyListener(Ljava/util/concurrent/Executor;Landroid/os/StrictMode$OnVmViolationListener;)", "setClassInstanceLimit(Ljava/lang/Class;I)"]),
     "android/os/StrictMode$VmPolicy");
   const threadPolicy = () => new (rt.link("android/os/StrictMode$ThreadPolicy").ctor)();
   rt.register({
@@ -421,6 +416,7 @@ const bundleMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "<init>(I)V": function () {},
   "<init>(Landroid/os/Bundle;)V": function (this: JBundle, b: JBundle) { if (b) { this.map = new Map(b.map); this.loader = b.loader; } },
+  "<init>(Ljava/lang/ClassLoader;)V": function (this: JBundle, cl: unknown) { this.loader = cl; },
   "clone()Ljava/lang/Object;": function (this: JBundle) {
     const copy = new (this.constructor as typeof JBundle)();
     copy.map = new Map(this.map); copy.loader = this.loader;

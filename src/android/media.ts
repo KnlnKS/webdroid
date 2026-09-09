@@ -415,6 +415,15 @@ rt.register({
 });
 rt.register({ name: "android/media/MediaCodec$Callback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 rt.register({ name: "android/media/metrics/LogSessionId", ctor: class extends JObj {}, methods: { "getStringId()Ljava/lang/String;": () => "" } });
+class JBufferInfo extends JObj { offset = 0; size = 0; presentationTimeUs = 0n; flags = 0; }
+rt.register({
+  name: "android/media/MediaCodec$BufferInfo", ctor: JBufferInfo,
+  fields: { offset: "offset", size: "size", presentationTimeUs: "presentationTimeUs", flags: "flags" },
+  methods: {
+    "<init>()V": function () {},
+    "set(IIJI)V": function (this: JBufferInfo, o: number, s: number, t: bigint, f: number) { this.offset = o; this.size = s; this.presentationTimeUs = t; this.flags = f; },
+  },
+});
 class JCryptoInfo extends JObj { pattern: unknown = null; }
 rt.register({
   name: "android/media/MediaCodec$CryptoInfo", ctor: JCryptoInfo,

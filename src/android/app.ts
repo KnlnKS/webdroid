@@ -19,7 +19,8 @@ import { onMain } from "./mainloop";
 import { getPrefs } from "./sharedprefs";
 import { csText, spannedString } from "./text";
 import { showToast } from "./popup";
-import { newArrayList, mkIter } from "../jvm/natives/jutil";
+import { newArrayList, mkIter, toJsArray } from "../jvm/natives/jutil";
+import type { JUri } from "./net";
 import { runningServices, svcStop, svcFg } from "./runningservices";
 import { isMusicActive, outputSampleRate } from "./media";
 import { device } from "../shell/config";
@@ -592,6 +593,7 @@ for (const [name, methods, statics] of [
     // IS the correct behavior for this state, not a stub shortcut.
     "isEnabled()Z": () => 0,
     "isTouchExplorationEnabled()Z": () => 0,
+    "getRecommendedTimeoutMillis(II)I": (orig: number) => orig,
     "addAccessibilityStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityStateChangeListener;)Z": () => 1,
     "removeAccessibilityStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityStateChangeListener;)Z": () => 1,
     "addTouchExplorationStateChangeListener(Landroid/view/accessibility/AccessibilityManager$TouchExplorationStateChangeListener;)Z": () => 1,
@@ -763,8 +765,29 @@ rt.register({
   name: "android/content/BroadcastReceiver", ctor: class extends JObj {},
   methods: { "<init>()V": function () {} },
 });
+class JIntentFilter extends JObj {
+  actions: string[] = []; schemes: string[] = []; types: string[] = []; categories: string[] = [];
+  /** AOSP's matchData, without authorities and paths: a type matches its own wildcard forms */
+  matchData(type: string | null, scheme: string | null, data: JUri | null): number {
+    if (!this.types.length && !this.schemes.length) return type === null && data === null ? 0x100000 + 0x8000 : -2;
+    let match = 0x100000;
+    if (this.schemes.length) {
+      if (scheme === null || !this.schemes.includes(scheme)) return -2;
+      match = 0x200000;
+    } else if (scheme !== null && scheme !== "" && scheme !== "content" && scheme !== "file") return -2;
+    if (this.types.length) {
+      if (type === null) return -1;
+      const slash = type.indexOf("/"), base = slash < 0 ? type : type.slice(0, slash);
+      if (!this.types.some((t) => t === type || t === "*/*" || t === base + "/*" || t === base)) return -1;
+      return 0x600000 + 0x8000;
+    }
+    return type !== null ? -1 : match + 0x8000;
+  }
+}
 rt.register({
-  name: "android/content/IntentFilter", ctor: class extends JObj { actions: string[] = []; schemes: string[] = []; },
+  name: "android/content/IntentFilter", ctor: JIntentFilter,
+  statics: { MATCH_CATEGORY_MASK: 0xfff0000, MATCH_ADJUSTMENT_MASK: 0xffff, MATCH_ADJUSTMENT_NORMAL: 0x8000, MATCH_CATEGORY_EMPTY: 0x100000, MATCH_CATEGORY_SCHEME: 0x200000,
+    MATCH_CATEGORY_TYPE: 0x600000, NO_MATCH_TYPE: -1, NO_MATCH_DATA: -2, NO_MATCH_ACTION: -3, NO_MATCH_CATEGORY: -4 },
   methods: {
     "<init>()V": function () {},
     "<init>(Ljava/lang/String;)V": function (this: any, a: string) { this.actions.push(a); },
@@ -773,8 +796,30 @@ rt.register({
     "getAction(I)Ljava/lang/String;": function (this: any, i: number) { return this.actions[i] ?? null; },
     "hasAction(Ljava/lang/String;)Z": function (this: any, a: string) { return this.actions.includes(a) ? 1 : 0; },
     "actionsIterator()Ljava/util/Iterator;": function (this: any) { return mkIter(this.actions.slice()); },
-    "addCategory(Ljava/lang/String;)V": () => {},
+    "addCategory(Ljava/lang/String;)V": function (this: JIntentFilter, c: string) { this.categories.push(c); },
+    "hasCategory(Ljava/lang/String;)Z": function (this: JIntentFilter, c: string) { return this.categories.includes(c) ? 1 : 0; },
+    "countCategories()I": function (this: JIntentFilter) { return this.categories.length; },
+    "countDataSchemes()I": function (this: JIntentFilter) { return this.schemes.length; },
+    "countDataTypes()I": function (this: JIntentFilter) { return this.types.length; },
+    "matchAction(Ljava/lang/String;)Z": function (this: JIntentFilter, a: string | null) { return a !== null && this.actions.includes(a) ? 1 : 0; },
+    "matchCategories(Ljava/util/Set;)Ljava/lang/String;": async function (this: JIntentFilter, cats: unknown) {
+      for (const c of cats ? await toJsArray(cats) as string[] : []) if (!this.categories.includes(c)) return c;
+      return null;
+    },
+    "matchData(Ljava/lang/String;Ljava/lang/String;Landroid/net/Uri;)I": function (this: JIntentFilter, type: string | null, scheme: string | null, data: JUri | null) {
+      return this.matchData(type, scheme, data);
+    },
+    "match(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/net/Uri;Ljava/util/Set;Ljava/lang/String;)I":
+    async function (this: JIntentFilter, action: string | null, type: string | null, scheme: string | null, data: JUri | null, cats: unknown) {
+      if (action !== null && !this.actions.includes(action)) return -3;
+      const r = this.matchData(type, scheme, data);
+      if (r < 0) return r;
+      for (const c of cats ? await toJsArray(cats) as string[] : []) if (!this.categories.includes(c)) return -4;
+      return r;
+    },
     "addDataScheme(Ljava/lang/String;)V": function (this: { schemes: string[] }, scheme: string) { this.schemes.push(scheme); },
+    "addDataType(Ljava/lang/String;)V": function (this: { types: string[] }, type: string) { this.types.push(type); },
+    "hasDataType(Ljava/lang/String;)Z": function (this: { types: string[] }, type: string) { return this.types.includes(type) ? 1 : 0; },
   },
 });
 rt.register({ name: "android/app/Service", ctor: class extends JContextWrapper {}, sup: "android/content/ContextWrapper",

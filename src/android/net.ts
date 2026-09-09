@@ -38,6 +38,36 @@ function uriParts(u: JUri): UriParts {
   }
   return (u.p = { scheme, ssp: rest, hier, authority, path, query, fragment });
 }
+class UriNode { code = -1; exact = new Map<string, UriNode>(); num: UriNode | null = null; text: UriNode | null = null; }
+class JUriMatcher extends JObj { root = new UriNode(); }
+rt.register({
+  name: "android/content/UriMatcher", ctor: JUriMatcher,
+  statics: { NO_MATCH: -1 },
+  methods: {
+    "<init>(I)V": function (this: JUriMatcher, code: number) { this.root.code = code; },
+    "addURI(Ljava/lang/String;Ljava/lang/String;I)V": function (this: JUriMatcher, authority: string, path: string | null, code: number) {
+      const segs = [authority, ...(path ?? "").split("/").filter(Boolean)];
+      let n = this.root;
+      for (const s of segs) {
+        if (s === "#") n = n.num ??= new UriNode();
+        else if (s === "*") n = n.text ??= new UriNode();
+        else { let c = n.exact.get(s); if (!c) n.exact.set(s, (c = new UriNode())); n = c; }
+      }
+      n.code = code;
+    },
+    "match(Landroid/net/Uri;)I": function (this: JUriMatcher, u: JUri | null) {
+      const p = u ? uriParts(u) : null;
+      if (!p || p.authority === null) return this.root.code;
+      const segs = [uriDecode(p.authority)!, ...p.path.split("/").filter(Boolean).map((x) => uriDecode(x)!)];
+      let n: UriNode | null = this.root;
+      for (const s of segs) {
+        n = n.exact.get(s) ?? (n.num && /^\d+$/.test(s) ? n.num : n.text);
+        if (!n) return -1;
+      }
+      return n.code;
+    },
+  },
+});
 const URI_ALLOWED = /[A-Za-z0-9_\-!.~'()*]/;
 function uriEncode(s: string | null, allow = ""): string | null {
   if (s === null) return null;
