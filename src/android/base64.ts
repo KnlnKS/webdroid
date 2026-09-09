@@ -6,7 +6,7 @@
 // throws on any code unit above 0xff and atob hands back a string whose chars must still be
 // re-signed. Everything below works on numbers and masks with 0xff.
 
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, maySuspend } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { JOutputStream } from "../jvm/natives/jio";
 
@@ -108,7 +108,7 @@ rt.register({
     "write([BII)V": function (this: JB64OS, b: Int8Array, o: number, l: number) {
       for (let i = 0; i < l; i++) this.chunks.push(b[o + i] & 0xff);
     },
-    "flush()V": function (this: JB64OS) { return this.out ? vcall(this.out, "flush", "()V") : undefined; },
+    "flush()V": maySuspend(function (this: JB64OS) { return this.out ? vcall(this.out, "flush", "()V") : undefined; }),
     "close()V": async function (this: JB64OS) {
       const body = toBytes(enc(Int8Array.from(this.chunks), 0, this.chunks.length, this.flags));
       this.chunks.length = 0;

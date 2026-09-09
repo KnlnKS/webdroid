@@ -2,7 +2,7 @@ import { AID } from "./res";
 // AdapterView/ListView/GridView + framework adapters (BaseAdapter/ArrayAdapter).
 // Non-recycling: materializes all item views (fine at app scale), scrolls internally.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSizeAndState, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom } from "./view";
@@ -57,10 +57,10 @@ export const baseAdapterMethods: NonNullable<NativeSpec["methods"]> = {
   "isEmpty()Z": async function (this: JBaseAdapter) {
     return (await vcall(this, "getCount", "()I")) === 0 ? 1 : 0;
   },
-  "getDropDownView(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;":
+  "getDropDownView(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;":maySuspend(
     function (this: JBaseAdapter, pos: number, cv: unknown, parent: unknown) {
       return vcall(this, "getView", "(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;", pos, cv, parent);
-    },
+    }),
 };
 rt.register({
   name: "android/widget/BaseAdapter", ctor: JBaseAdapter,

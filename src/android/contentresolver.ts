@@ -1,5 +1,5 @@
 import { services, type JContext } from "./context";
-import { rt, type NativeSpec, JObj } from "../jvm/runtime";
+import { rt, type NativeSpec, JObj, maySuspend } from "../jvm/runtime";
 import { appHost, type AppHost } from "./apphost";
 import { type JUri, mkUri } from "./net";
 import {
@@ -85,13 +85,13 @@ const resolverMethods: NativeSpec["methods"] = {
     isDocsUri(u) ? docInputStream(documentId(u, true))
       : u.uri.startsWith("content:") ? newObj("android/os/ParcelFileDescriptor$AutoCloseInputStream", "(Landroid/os/ParcelFileDescriptor;)V", await openPfd(u, "r"))
       : newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", fileOf(u)),
-  "openOutputStream(Landroid/net/Uri;)Ljava/io/OutputStream;": (u: JUri) =>
+  "openOutputStream(Landroid/net/Uri;)Ljava/io/OutputStream;": maySuspend((u: JUri) =>
     isDocsUri(u) ? docOutputStream(documentId(u, true), false)
-      : newObj("java/io/FileOutputStream", "(Ljava/lang/String;)V", fileOf(u)),
+      : newObj("java/io/FileOutputStream", "(Ljava/lang/String;)V", fileOf(u))),
   // AOSP's modes: "w" truncates, "wa" appends, "rw"/"rwt" keep or truncate in place.
-  "openOutputStream(Landroid/net/Uri;Ljava/lang/String;)Ljava/io/OutputStream;": (u: JUri, mode: string) =>
+  "openOutputStream(Landroid/net/Uri;Ljava/lang/String;)Ljava/io/OutputStream;": maySuspend((u: JUri, mode: string) =>
     isDocsUri(u) ? docOutputStream(documentId(u, true), (mode ?? "w").includes("a"))
-      : newObj("java/io/FileOutputStream", "(Ljava/lang/String;Z)V", fileOf(u), (mode ?? "w").includes("a") ? 1 : 0),
+      : newObj("java/io/FileOutputStream", "(Ljava/lang/String;Z)V", fileOf(u), (mode ?? "w").includes("a") ? 1 : 0)),
   "getType(Landroid/net/Uri;)Ljava/lang/String;": async (u: JUri) => {
     if (isDocsUri(u)) return (await docRow(documentId(u, true)))?.mime ?? null;
     const provider = await contentProvider(u);

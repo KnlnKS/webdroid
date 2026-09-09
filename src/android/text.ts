@@ -927,8 +927,8 @@ rt.register({
   name: "android/text/format/DateFormat", ctor: class extends JObj {},
   methods: {
     "static is24HourFormat(Landroid/content/Context;)Z": () => 0,
-    "static getDateFormat(Landroid/content/Context;)Ljava/text/DateFormat;": () => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "M/d/yy"),
-    "static getTimeFormat(Landroid/content/Context;)Ljava/text/DateFormat;": () => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "h:mm a"),
+    "static getDateFormat(Landroid/content/Context;)Ljava/text/DateFormat;": maySuspend(() => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "M/d/yy")),
+    "static getTimeFormat(Landroid/content/Context;)Ljava/text/DateFormat;": maySuspend(() => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "h:mm a")),
     "static format(Ljava/lang/CharSequence;J)Ljava/lang/CharSequence;": (fmt: unknown, t: bigint) => formatDate(spannedString(fmt), Number(t)),
     "static format(Ljava/lang/CharSequence;Ljava/util/Date;)Ljava/lang/CharSequence;": (fmt: unknown, d: JDate | null) => formatDate(spannedString(fmt), d?.t ?? Date.now()),
   },

@@ -3,9 +3,9 @@
 
 import { mem, AddrMap, NativeFault } from "./mem";
 import { hostLib, NORET, type HostFn, stp, stpVa } from "./host";
-import { Cpu, bindCpu, cpuByTid, yieldToLoop } from "./cpu";
+import { Cpu, bindCpu, cpuByTid, cpuOf, yieldToLoop } from "./cpu";
 import { RET_SENTINEL, E } from "./abi";
-import { JThread, reportUncaught } from "../jvm/natives/jlang";
+import { JThread, reportUncaught, threadExit } from "../jvm/natives/jlang";
 import { readTs, fail } from "./libc";
 
 interface Mutex { owner: number; count: number; waiters: (() => void)[] }
@@ -30,6 +30,26 @@ function rwRelease(cpu: Cpu, l: RwLock): number {
 const threads = new Map<number, { done: Promise<void>; retval: bigint; detached: boolean; joined: boolean; exited: boolean }>();
 let keySeq = 1, threadSeq = 0;
 const keyDtors = new Map<number, number>();
+/** key destructors, as many rounds as they keep setting values (Bionic stops at four) */
+async function runKeyDestructors(cpu: Cpu): Promise<void> {
+  for (let round = 0, again = true; again && round < 4; round++) {
+    again = false;
+    for (const [k, v] of cpu.tls) {
+      const d = keyDtors.get(k);
+      if (!v || !d) continue;
+      cpu.tls.set(k, 0n); again = true; cpu.finished = false;
+      await cpu.call(d, [v], "key destructor");
+    }
+  }
+}
+// A Java thread that ends has no native frame left. Its thread-locals get their destructors,
+// as a pthread exit gives them, and the stack goes back to the pool: OkHttp runs one thread
+// per call, and each call that crossed JNI otherwise kept a stack for good.
+threadExit.hook = (t) => {
+  const cpu = cpuOf(t);
+  if (!cpu || cpu.loops || cpu.depth) return;
+  void runKeyDestructors(cpu).catch(reportUncaught).finally(() => { if (!cpu.loops) cpu.dispose(); });
+};
 const onceWaiters = new AddrMap<(() => void)[]>();                      // pthread key → destructor, run for the thread's non-null values at its exit
 const ETIMEDOUT = E.TIMEDOUT, EBUSY = E.BUSY;
 
@@ -125,16 +145,7 @@ function startThread(parent: Cpu, start: number, arg: bigint, detached: boolean)
         try {
           await cpu.run();
           if (!cpu.finished) rec.retval = (cpu.a64 ? BigInt(cpu.h[0] >>> 0) << 32n : 0n) | BigInt(cpu.r[0] >>> 0);
-          // key destructors, as many rounds as they keep setting values (Bionic stops at four)
-          for (let round = 0, again = true; again && round < 4; round++) {
-            again = false;
-            for (const [k, v] of cpu.tls) {
-              const d = keyDtors.get(k);
-              if (!v || !d) continue;
-              cpu.tls.set(k, 0n); again = true; cpu.finished = false;
-              await cpu.call(d, [v], "key destructor");
-            }
-          }
+          await runKeyDestructors(cpu);
         } catch (e) { reportUncaught(e); }
         finally {
           cpu.signals.length = 0;

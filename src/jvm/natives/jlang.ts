@@ -718,9 +718,9 @@ rt.register({
       if (this.out) await vcall(this.out, "append", "(Ljava/lang/CharSequence;)Ljava/lang/Appendable;", s); else this.s += s;
       return this;
     },
-    "format(Ljava/util/Locale;Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/Formatter;": function (this: JFormatter, _l: unknown, fmt: string, args: unknown[]) {
+    "format(Ljava/util/Locale;Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/Formatter;": maySuspend(function (this: JFormatter, _l: unknown, fmt: string, args: unknown[]) {
       return vcall(this, "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/Formatter;", fmt, args);
-    },
+    }),
     "out()Ljava/lang/Appendable;": function (this: JFormatter) { return this.out; },
     "toString()Ljava/lang/String;": function (this: JFormatter) { return this.out ? vcall(this.out, "toString", "()Ljava/lang/String;") : this.s; },
     "flush()V": () => {},
@@ -738,8 +738,8 @@ rt.register({
     "static valueOf(D)Ljava/lang/String;": (v: number) => fmtDouble(v),
     "static valueOf(Z)Ljava/lang/String;": (v: number) => (v ? "true" : "false"),
     "static valueOf(C)Ljava/lang/String;": (v: number) => String.fromCharCode(v),
-    "static valueOf(Ljava/lang/Object;)Ljava/lang/String;": (v: unknown) =>
-      v === null ? "null" : vcall(v, "toString", "()Ljava/lang/String;"),
+    "static valueOf(Ljava/lang/Object;)Ljava/lang/String;": maySuspend((v: unknown) =>
+      v === null ? "null" : vcall(v, "toString", "()Ljava/lang/String;")),
     "static valueOf([C)Ljava/lang/String;": (v: Uint16Array) => charsToString(v, 0, v.length),
     "static valueOf([CII)Ljava/lang/String;": (v: Uint16Array, o: number, n: number) => charsToString(v, o, n),
     "static format(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;": (f: string, a: unknown[]) => javaFormat(f, a),
@@ -975,9 +975,19 @@ rt.register({
     "static signum(I)I": (v: number) => Math.sign(v),
   },
 });
-function parseLongJ(s: string): bigint {
-  if (typeof s !== "string" || !/^[+-]?\d+$/.test(s)) nfe(s);
-  const v = BigInt(s);
+function parseLongJ(s: string, radix = 10): bigint {
+  if (typeof s !== "string" || !s.length || radix < 2 || radix > 36) nfe(s);
+  let i = 0, neg = false;
+  if (s[0] === "-" || s[0] === "+") { neg = s[0] === "-"; i = 1; }
+  if (i === s.length) nfe(s);
+  let v = 0n;
+  const R = BigInt(radix);
+  for (; i < s.length; i++) {
+    const d = parseInt(s[i], 36);
+    if (Number.isNaN(d) || d >= radix) nfe(s);
+    v = v * R + BigInt(d);
+  }
+  if (neg) v = -v;
   if (v > 9223372036854775807n || v < -9223372036854775808n) nfe(s);
   return v;
 }
@@ -994,6 +1004,7 @@ rt.register({
     "static valueOf(J)Ljava/lang/Long;": (v: bigint) => box(JLong, v),
     "static valueOf(Ljava/lang/String;)Ljava/lang/Long;": (s: string) => box(JLong, parseLongJ(s)),
     "static parseLong(Ljava/lang/String;)J": parseLongJ,
+    "static parseLong(Ljava/lang/String;I)J": parseLongJ,
     "static lowestOneBit(J)J": (v: bigint) => v & -v,
     "static numberOfLeadingZeros(J)I": (v: bigint) => { const x = BigInt.asUintN(64, v); const hi = Number(x >> 32n); return hi ? Math.clz32(hi) : 32 + Math.clz32(Number(x & 0xffffffffn)); },
     "static toString(JI)Ljava/lang/String;": (v: bigint, radix: number) => v.toString(radix),
@@ -1469,8 +1480,8 @@ rt.register({
     "getUncaughtExceptionHandler()Ljava/lang/Thread$UncaughtExceptionHandler;": () => defaultUEH,
     "setUncaughtExceptionHandler(Ljava/lang/Thread$UncaughtExceptionHandler;)V": () => {},
     "static setDefaultUncaughtExceptionHandler(Ljava/lang/Thread$UncaughtExceptionHandler;)V": (h: unknown) => { defaultUEH = h; },
-    "static sleep(J)V": (ms: bigint) => park(curThread, () => () => {}, Number(ms)),
-    "static yield()V": () => new Promise((r) => setTimeout(r, 0)),
+    "static sleep(J)V": maySuspend((ms: bigint) => park(curThread, () => () => {}, Number(ms))),
+    "static yield()V": maySuspend(() => new Promise((r) => setTimeout(r, 0))),
     "static interrupted()Z": () => { const v = curThread.interrupted; curThread.interrupted = 0; return v; },
   },
 });
@@ -1560,7 +1571,7 @@ function enumValueOf<T extends JEnum>(values: T[], name: string): T {
 }
 /**
  * A Java enum with nothing behind it but its constants: registers the class (a fresh ctor per
- * enum, so each has its own statics and ClassInfo), and returns the constants in declaration
+ * enum, so each has its own statics and ClassInfo)), and returns the constants in declaration
  * order. `extra` adds methods a specific enum needs beyond Enum's own (name/ordinal/toString/
  * compareTo come from java/lang/Enum via the prototype chain).
  */

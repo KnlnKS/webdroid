@@ -1,4 +1,4 @@
-import { JObj, rt, type NativeSpec } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { findById, type JViewGroup, type JView, attachView, detachView, requestLayout, removeFrom } from "./view";
 import { getInflater } from "./inflate";
@@ -131,18 +131,18 @@ export const fragMethods: NonNullable<NativeSpec["methods"]> = {
   "onAttach(Landroid/content/Context;)V": function (this: JFragment, a: unknown) { this.act = a; },
   "getActivity()Landroid/app/Activity;": function (this: JFragment) { return this.act; },
   "getContext()Landroid/content/Context;": function (this: JFragment) { return this.act; },
-  "getResources()Landroid/content/res/Resources;": function (this: JFragment) {
+  "getResources()Landroid/content/res/Resources;": maySuspend(function (this: JFragment) {
     return this.act ? vcall(this.act, "getResources", "()Landroid/content/res/Resources;") : null;
-  },
-  "getString(I)Ljava/lang/String;": function (this: JFragment, id: number) {
+  }),
+  "getString(I)Ljava/lang/String;": maySuspend(function (this: JFragment, id: number) {
     return this.act ? vcall(this.act, "getString", "(I)Ljava/lang/String;", id) : null;
-  },
-  "startActivity(Landroid/content/Intent;)V": function (this: JFragment, i: unknown) {
+  }),
+  "startActivity(Landroid/content/Intent;)V": maySuspend(function (this: JFragment, i: unknown) {
     return this.act ? vcall(this.act, "startActivity", "(Landroid/content/Intent;)V", i) : undefined;
-  },
-  "getFragmentManager()Landroid/app/FragmentManager;": function (this: JFragment) {
+  }),
+  "getFragmentManager()Landroid/app/FragmentManager;": maySuspend(function (this: JFragment) {
     return this.act ? vcall(this.act, "getFragmentManager", "()Landroid/app/FragmentManager;") : null;
-  },
+  }),
   "getArguments()Landroid/os/Bundle;": function (this: JFragment) { return this.args; },
   "setArguments(Landroid/os/Bundle;)V": function (this: JFragment, b: unknown) { this.args = b; },
   "onCreateView(Landroid/view/LayoutInflater;Landroid/view/ViewGroup;Landroid/os/Bundle;)Landroid/view/View;": () => null,

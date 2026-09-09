@@ -80,22 +80,22 @@ rt.register({
     "findViewById(I)Landroid/view/View;": function (this: JWindow, id: number) {
       return this.decor ? findById(this.decor, id) : null;
     },
-    "setContentView(I)V": function (this: JWindow, id: number) {
+    "setContentView(I)V": maySuspend(function (this: JWindow, id: number) {
       if (this.dialog) return dialogNative("setContentView", "(I)V").call(this.dialog, id);
       return callSelf(activityMethods, "setContentView(I)V", this.activity, id);
-    },
+    }),
     "setContentView(Landroid/view/View;)V": maySuspend(function (this: JWindow, v: unknown) {
       if (this.dialog) return dialogNative("setContentView", "(Landroid/view/View;)V").call(this.dialog, v);
       return callSelf(activityMethods, "setContentView(Landroid/view/View;)V", this.activity, v);
     }),
-    "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JWindow, v: unknown, lp: unknown) {
+    "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": maySuspend(function (this: JWindow, v: unknown, lp: unknown) {
       if (this.dialog) return dialogNative("setContentView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V").call(this.dialog, v, lp);
       return callSelf(activityMethods, "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", this.activity, v, lp);
-    },
-    "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JWindow, v: unknown, lp: unknown) {
+    }),
+    "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": maySuspend(function (this: JWindow, v: unknown, lp: unknown) {
       if (this.dialog) return dialogNative("addContentView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V").call(this.dialog, v, lp);
       return callSelf(activityMethods, "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", this.activity, v, lp);
-    },
+    }),
     "setFlags(II)V": function (this: JWindow, flags: number, mask: number) { setWindowFlags(this, (this.flags & ~mask) | (flags & mask)); },
     "addFlags(I)V": function (this: JWindow, f: number) { setWindowFlags(this, this.flags | f); },
     "clearFlags(I)V": function (this: JWindow, f: number) { setWindowFlags(this, this.flags & ~f); },
@@ -133,9 +133,9 @@ rt.register({
     "getCallback()Landroid/view/Window$Callback;": function (this: JWindow) { return this.callbackObj ?? this.activity; },
     "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JWindow) { return this.backDispatcher(); },
     "setCallback(Landroid/view/Window$Callback;)V": function (this: JWindow, cb: unknown) { this.callbackObj = cb; },
-    "setTitle(Ljava/lang/CharSequence;)V": function (this: JWindow, t: unknown) {
+    "setTitle(Ljava/lang/CharSequence;)V": maySuspend(function (this: JWindow, t: unknown) {
       if (this.activity) callSelf(activityMethods, "setTitle(Ljava/lang/CharSequence;)V", this.activity, t);
-    },
+    }),
     "getContext()Landroid/content/Context;": function (this: JWindow) { return this.activity ?? (this.dialog as { jctx?: unknown } | null)?.jctx ?? null; },
     "setWindowAnimations(I)V": () => {},
     "setLayout(II)V": function (this: JWindow, w: number, h: number) { this.layoutW = w; this.layoutH = h; requestLayout(this.decor); },
@@ -174,9 +174,9 @@ rt.register({
     "getSystemBarsBehavior()I": function (this: JInsetsController) { return this.w.barsBehavior; },
     "show(I)V": () => {},
     "hide(I)V": () => {},
-    "addOnControllableInsetsChangedListener(Landroid/view/WindowInsetsController$OnControllableInsetsChangedListener;)V": function (this: JInsetsController, listener: unknown) {
+    "addOnControllableInsetsChangedListener(Landroid/view/WindowInsetsController$OnControllableInsetsChangedListener;)V": maySuspend(function (this: JInsetsController, listener: unknown) {
       return vcall(listener, "onControllableInsetsChanged", "(Landroid/view/WindowInsetsController;I)V", this, 0);
-    },
+    }),
     "removeOnControllableInsetsChangedListener(Landroid/view/WindowInsetsController$OnControllableInsetsChangedListener;)V": () => {},
     "controlWindowInsetsAnimation(IJLandroid/view/animation/Interpolator;Landroid/os/CancellationSignal;Landroid/view/WindowInsetsAnimationControlListener;)V": () => {},
   },

@@ -1,6 +1,6 @@
 // android.media: MediaPlayer over HTMLAudioElement, SoundPool over Web Audio.
 
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, maySuspend } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { vfs } from "../jvm/natives/jio";
@@ -117,9 +117,9 @@ rt.register({
     "setOnCompletionListener(Landroid/media/MediaPlayer$OnCompletionListener;)V": function (this: JMediaPlayer, l: unknown) {
       this.completionL = l;
     },
-    "setOnPreparedListener(Landroid/media/MediaPlayer$OnPreparedListener;)V": function (this: JMediaPlayer, l: unknown) {
+    "setOnPreparedListener(Landroid/media/MediaPlayer$OnPreparedListener;)V": maySuspend(function (this: JMediaPlayer, l: unknown) {
       setTimeout(() => void vcall(l, "onPrepared", "(Landroid/media/MediaPlayer;)V", this).catch(reportUncaught), 10);
-    },
+    }),
     "setOnErrorListener(Landroid/media/MediaPlayer$OnErrorListener;)V": () => {},
     "setWakeMode(Landroid/content/Context;I)V": () => {},
     "getDuration()I": function (this: JMediaPlayer) { return Math.round((this.audio?.duration ?? 0) * 1000); },
@@ -359,13 +359,13 @@ rt.register({
 rt.register({
   name: "android/media/MediaScannerConnection", ctor: class extends JObj {},
   methods: {
-    "static scanFile(Landroid/content/Context;[Ljava/lang/String;[Ljava/lang/String;Landroid/media/MediaScannerConnection$OnScanCompletedListener;)V":
+    "static scanFile(Landroid/content/Context;[Ljava/lang/String;[Ljava/lang/String;Landroid/media/MediaScannerConnection$OnScanCompletedListener;)V":maySuspend(
       (_c: unknown, paths: string[] | null, _m: unknown, l: unknown) => {
         if (!l) return;
         for (const p of paths ?? []) {
           void onMain(() => vcall(l, "onScanCompleted", "(Ljava/lang/String;Landroid/net/Uri;)V", p, null)).catch(reportUncaught);
         }
-      },
+      }),
   },
 });
 rt.register({ name: "android/media/MediaScannerConnection$OnScanCompletedListener", ctor: class extends JObj {} });

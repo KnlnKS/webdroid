@@ -1,4 +1,4 @@
-import { JObj, rt } from "../runtime";
+import { JObj, rt, maySuspend } from "../runtime";
 import { newArrayList, toJsArray, sortInPlace, type JList } from "./jutil";
 import { vcall } from "./jlang";
 
@@ -75,11 +75,11 @@ rt.register({
 });
 rt.register({ name: "java/util/stream/Collector", ctor: JCollector,
   methods: {
-    "static of(Ljava/util/function/Supplier;Ljava/util/function/BiConsumer;Ljava/util/function/BinaryOperator;Ljava/util/function/Function;[Ljava/util/stream/Collector$Characteristics;)Ljava/util/stream/Collector;":
+    "static of(Ljava/util/function/Supplier;Ljava/util/function/BiConsumer;Ljava/util/function/BinaryOperator;Ljava/util/function/Function;[Ljava/util/stream/Collector$Characteristics;)Ljava/util/stream/Collector;":maySuspend(
       (sup: unknown, acc: unknown, _comb: unknown, fin: unknown) => mkCollector(
         () => vcall(sup, "get", "()Ljava/lang/Object;"),
         (box, x) => vcall(acc, "accept", "(Ljava/lang/Object;Ljava/lang/Object;)V", box, x),
-        fin ? (box) => apply1(fin, box) : null),
+        fin ? (box) => apply1(fin, box) : null)),
   },
 });
 rt.register({
@@ -89,9 +89,9 @@ rt.register({
   name: "java/util/stream/Collectors", ctor: class extends JObj {},
   methods: {
     "static toList()Ljava/util/stream/Collector;": () => mkCollector(() => newArrayList([]), (box, x) => { (box as JList).a.push(x); }),
-    "static toCollection(Ljava/util/function/Supplier;)Ljava/util/stream/Collector;": (sup: unknown) => mkCollector(
+    "static toCollection(Ljava/util/function/Supplier;)Ljava/util/stream/Collector;": maySuspend((sup: unknown) => mkCollector(
       () => vcall(sup, "get", "()Ljava/lang/Object;"),
-      (box, x) => vcall(box, "add", "(Ljava/lang/Object;)Z", x)),
+      (box, x) => vcall(box, "add", "(Ljava/lang/Object;)Z", x))),
     "static collectingAndThen(Ljava/util/stream/Collector;Ljava/util/function/Function;)Ljava/util/stream/Collector;":
       (c: JCollector, fin: unknown) => mkCollector(c.make, c.add, async (box) => apply1(fin, c.fin ? await c.fin(box) : box)),
   },
@@ -109,7 +109,7 @@ rt.register({
       return this.v;
     },
     "orElse(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JOptional, d: unknown) { return this.v ?? d; },
-    "orElseGet(Ljava/util/function/Supplier;)Ljava/lang/Object;": function (this: JOptional, s: unknown) { return this.v ?? vcall(s, "get", "()Ljava/lang/Object;"); },
+    "orElseGet(Ljava/util/function/Supplier;)Ljava/lang/Object;": maySuspend(function (this: JOptional, s: unknown) { return this.v ?? vcall(s, "get", "()Ljava/lang/Object;"); }),
     "orElseThrow()Ljava/lang/Object;": function (this: JOptional) {
       if (this.v === null) throw rt.mkThrowable("java/util/NoSuchElementException", "No value present");
       return this.v;
@@ -124,17 +124,17 @@ rt.register({
     "flatMap(Ljava/util/function/Function;)Ljava/util/Optional;": async function (this: JOptional, f: unknown) {
       return this.v === null ? this : apply1(f, this.v);
     },
-    "ifPresentOrElse(Ljava/util/function/Consumer;Ljava/lang/Runnable;)V": function (this: JOptional, c: unknown, r: unknown) {
+    "ifPresentOrElse(Ljava/util/function/Consumer;Ljava/lang/Runnable;)V": maySuspend(function (this: JOptional, c: unknown, r: unknown) {
       return this.v === null ? vcall(r, "run", "()V") : vcall(c, "accept", "(Ljava/lang/Object;)V", this.v);
-    },
+    }),
     "equals(Ljava/lang/Object;)Z": async function (this: JOptional, o: unknown) {
       return o instanceof JOptional && (o.v === this.v || o.v !== null && this.v !== null && !!await vcall(this.v, "equals", "(Ljava/lang/Object;)Z", o.v)) ? 1 : 0;
     },
     "map(Ljava/util/function/Function;)Ljava/util/Optional;": async function (this: JOptional, f: unknown) {
       return this.v === null ? this : mkOpt(await apply1(f, this.v));
     },
-    "ifPresent(Ljava/util/function/Consumer;)V": function (this: JOptional, c: unknown) {
+    "ifPresent(Ljava/util/function/Consumer;)V": maySuspend(function (this: JOptional, c: unknown) {
       return this.v === null ? undefined : vcall(c, "accept", "(Ljava/lang/Object;)V", this.v);
-    },
+    }),
   },
 });

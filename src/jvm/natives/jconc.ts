@@ -659,10 +659,10 @@ for (const [n, run] of [["AbortPolicy", 0], ["CallerRunsPolicy", 1], ["DiscardPo
     ifaces: ["java/util/concurrent/RejectedExecutionHandler"],
     methods: {
       "<init>()V": function () {},
-      "rejectedExecution(Ljava/lang/Runnable;Ljava/util/concurrent/ThreadPoolExecutor;)V": (r: unknown) => {
+      "rejectedExecution(Ljava/lang/Runnable;Ljava/util/concurrent/ThreadPoolExecutor;)V": maySuspend((r: unknown) => {
         if (run) return vcall(r, "run", "()V");
         if (n === "AbortPolicy") throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "rejected");
-      },
+      }),
     },
   });
 }

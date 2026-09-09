@@ -203,12 +203,12 @@ export const contextMethods: NativeSpec["methods"] = {
     privDir(`/data/data/${this.$host.pkg}/files`);
     return mkFile(`/data/data/${this.$host.pkg}/files/${name}`);
   },
-  "openFileInput(Ljava/lang/String;)Ljava/io/FileInputStream;": function (this: JContext, name: string) {
+  "openFileInput(Ljava/lang/String;)Ljava/io/FileInputStream;": maySuspend(function (this: JContext, name: string) {
     return newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", `/data/data/${this.$host.pkg}/files/${name}`);
-  },
-  "openFileOutput(Ljava/lang/String;I)Ljava/io/FileOutputStream;": function (this: JContext, name: string) {
+  }),
+  "openFileOutput(Ljava/lang/String;I)Ljava/io/FileOutputStream;": maySuspend(function (this: JContext, name: string) {
     return newObj("java/io/FileOutputStream", "(Ljava/lang/String;)V", `/data/data/${this.$host.pkg}/files/${name}`);
-  },
+  }),
   "deleteFile(Ljava/lang/String;)Z": function (this: JContext, name: string) {
     return vfs.delete(`/data/data/${this.$host.pkg}/files/${name}`) ? 1 : 0;
   },
@@ -305,9 +305,9 @@ rt.register({
   methods: {
     ...wrapperMethods,
     "<init>(Landroid/content/Context;)V": attachBase,
-    "<init>(Landroid/content/Context;I)V": function (this: JContextWrapper, base: JContext, themeId: number) {
+    "<init>(Landroid/content/Context;I)V": maySuspend(function (this: JContextWrapper, base: JContext, themeId: number) {
       attachBase.call(this, base);
       if (themeId) callSelf(contextMethods, "setTheme(I)V", this, themeId);
-    },
+    }),
   },
 });

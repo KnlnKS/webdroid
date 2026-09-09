@@ -3,7 +3,7 @@
 // (each member a FontFace with its own weight/style, which is exactly how CSS selects within a
 // family); a Typeface names that family (plus fallbacks) with a weight and slant.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { parseAXML, attr } from "./axml";
@@ -246,11 +246,11 @@ rt.register({
     "getAxes()[Landroid/graphics/fonts/FontVariationAxis;": function (this: JFont) { return axisArray(this.axes); },
     "getFile()Ljava/io/File;": function (this: JFont) { return this.file; },
     "getSourceIdentifier()I": function (this: JFont) { return this.srcId; },
-    "getBuffer()Ljava/nio/ByteBuffer;": function (this: JFont) {
+    "getBuffer()Ljava/nio/ByteBuffer;": maySuspend(function (this: JFont) {
       const b = this.bytes ?? new Uint8Array(0);
       return vcall(rt.link("java/nio/ByteBuffer").ctor, "wrap", "([B)Ljava/nio/ByteBuffer;", new Int8Array(b.buffer, b.byteOffset, b.byteLength));
-    },
-    "getLocaleList()Landroid/os/LocaleList;": () => vcall(rt.link("android/os/LocaleList").ctor, "getDefault", "()Landroid/os/LocaleList;"),
+    }),
+    "getLocaleList()Landroid/os/LocaleList;": maySuspend(() => vcall(rt.link("android/os/LocaleList").ctor, "getDefault", "()Landroid/os/LocaleList;")),
     "equals(Ljava/lang/Object;)Z": function (this: JFont, o: unknown) {
       return o instanceof JFont && o.bytes === this.bytes && o.ttcIndex === this.ttcIndex && o.style.weight === this.style.weight && o.style.slant === this.style.slant ? 1 : 0;
     },

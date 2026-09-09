@@ -129,9 +129,9 @@ rt.register({
     "getName()Ljava/lang/String;": function (this: JProperty) { return this.name; },
     "getType()Ljava/lang/Class;": function (this: JProperty) { return this.type; },
     "isReadOnly()Z": () => 0,
-    "set(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JProperty) {
+    "set(Ljava/lang/Object;Ljava/lang/Object;)V": maySuspend(function (this: JProperty) {
       throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Property " + this.name + " is read-only");
-    },
+    }),
   },
 });
 for (const [name, desc, cls, unbox] of [

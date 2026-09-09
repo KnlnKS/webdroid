@@ -66,11 +66,11 @@ const mainQueue = new JMessageQueue();
 rt.register({
   name: "android/os/MessageQueue", ctor: JMessageQueue,
   methods: {
-    "addIdleHandler(Landroid/os/MessageQueue$IdleHandler;)V": (h: unknown) => {
+    "addIdleHandler(Landroid/os/MessageQueue$IdleHandler;)V": maySuspend((h: unknown) => {
       setTimeout(() => void onMain(async () => {
         try { await vcall(h, "queueIdle", "()Z"); } catch (e) { console.error("[idle]", e); }
       }), 50);
-    },
+    }),
     "removeIdleHandler(Landroid/os/MessageQueue$IdleHandler;)V": () => {},
   },
 });
@@ -123,7 +123,7 @@ rt.register({
       if (!this.handler) throw rt.mkThrowable("android/os/DeadObjectException", null);
       this.handler.send(m, 0);
     },
-    "getBinder()Landroid/os/IBinder;": () => newObj("android/os/Binder"),
+    "getBinder()Landroid/os/IBinder;": maySuspend(() => newObj("android/os/Binder")),
     "describeContents()I": () => 0,
   },
 });
@@ -206,6 +206,9 @@ rt.register({
     "sendMessageAtFrontOfQueue(Landroid/os/Message;)Z": function (this: JHandler, m: JMessage) { return this.send(m, 0); },
     "sendMessageDelayed(Landroid/os/Message;J)Z": function (this: JHandler, m: JMessage, d: bigint) { return this.send(m, Number(d)); },
     "sendEmptyMessage(I)Z": function (this: JHandler, w: number) { const m = new JMessage(); m.what = w; return this.send(m, 0); },
+    "sendEmptyMessageAtTime(IJ)Z": function (this: JHandler, w: number, at: bigint) {
+      const m = new JMessage(); m.what = w; return this.send(m, Math.max(0, Number(at) - performance.now()));
+    },
     "sendEmptyMessageDelayed(IJ)Z": function (this: JHandler, w: number, d: bigint) {
       const m = new JMessage(); m.what = w; return this.send(m, Number(d));
     },
@@ -825,17 +828,17 @@ rt.register({
     "onPostExecute(Ljava/lang/Object;)V": () => {},
     "onProgressUpdate([Ljava/lang/Object;)V": () => {},
     "onCancelled()V": () => {},
-    "onCancelled(Ljava/lang/Object;)V": function (this: JAsyncTask) { return vcall(this, "onCancelled", "()V"); },
-    "publishProgress([Ljava/lang/Object;)V": function (this: JAsyncTask, values: unknown[]) {
+    "onCancelled(Ljava/lang/Object;)V": maySuspend(function (this: JAsyncTask) { return vcall(this, "onCancelled", "()V"); }),
+    "publishProgress([Ljava/lang/Object;)V": maySuspend(function (this: JAsyncTask, values: unknown[]) {
       if (!this.cancelled) void onMain(() => this.cancelled ? undefined : vcall(this, "onProgressUpdate", "([Ljava/lang/Object;)V", values)).catch(reportUncaught);
-    },
+    }),
     "get()Ljava/lang/Object;": async function (this: JAsyncTask) {
       if (!this.cancelled && this.done) await this.done;
       if (this.cancelled) throw rt.mkThrowable("java/util/concurrent/CancellationException", null);
       if (this.error) throw await newObj("java/util/concurrent/ExecutionException", "(Ljava/lang/Throwable;)V", this.error);
       return this.result;
     },
-    "static execute(Ljava/lang/Runnable;)V": (r: unknown) => vcall(serialTaskExecutor(), "execute", "(Ljava/lang/Runnable;)V", r),
+    "static execute(Ljava/lang/Runnable;)V": maySuspend((r: unknown) => vcall(serialTaskExecutor(), "execute", "(Ljava/lang/Runnable;)V", r)),
   },
 });
 async function runAsyncTask(this: JAsyncTask, executor: unknown, params: unknown[]): Promise<JAsyncTask> {
@@ -875,7 +878,7 @@ rt.register({
       this.totalMs = total;
       this.intervalMs = interval;
     },
-    "start()Landroid/os/CountDownTimer;": function (this: JCountDownTimer) {
+    "start()Landroid/os/CountDownTimer;": maySuspend(function (this: JCountDownTimer) {
       this.endAt = performance.now() + Number(this.totalMs);
       if (this.timer) clearInterval(this.timer);
       this.timer = setInterval(() => {
@@ -889,7 +892,7 @@ rt.register({
         }
       }, Math.max(50, Number(this.intervalMs)));
       return this;
-    },
+    }),
     "cancel()V": function (this: JCountDownTimer) {
       if (this.timer) { clearInterval(this.timer); this.timer = null; }
     },
@@ -909,12 +912,12 @@ rt.register({
   name: "android/os/ResultReceiver", ctor: JResultReceiver, ifaces: ["android/os/Parcelable"],
   methods: {
     "<init>(Landroid/os/Handler;)V": function (this: JResultReceiver, h: JHandler | null) { this.handler = h; },
-    "send(ILandroid/os/Bundle;)V": function (this: JResultReceiver, code: number, data: unknown) {
+    "send(ILandroid/os/Bundle;)V": maySuspend(function (this: JResultReceiver, code: number, data: unknown) {
       const deliver = () => vcall(this, "onReceiveResult", "(ILandroid/os/Bundle;)V", code, data);
       if (!this.handler) return deliver();
       const r = new JFnRunnable(); r.fn = deliver;
       this.handler.post(r, 0);
-    },
+    }),
     "onReceiveResult(ILandroid/os/Bundle;)V": () => {},
     "describeContents()I": () => 0,
     "writeToParcel(Landroid/os/Parcel;I)V": () => {},

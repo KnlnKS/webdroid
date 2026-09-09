@@ -289,9 +289,9 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   // AOSP routes every setText through the two-arg form, and that is the one apps override:
   // Material's Chip hands the text to its ChipDrawable there and nowhere else, and without it
   // the drawable measures itself with no text at all.
-  "setText(Ljava/lang/CharSequence;)V": function (this: JTextView, cs: unknown) {
+  "setText(Ljava/lang/CharSequence;)V": maySuspend(function (this: JTextView, cs: unknown) {
     return vcall(this, "setText", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", cs, bufferTypes[0]);
-  },
+  }),
   "setText(I)V": async function (this: JTextView, id: number) {
     const s = this.jres ? rvString(this.jres, this.jres.resolveRefs({ t: TV.REFERENCE, d: id })) ?? "" : "";
     await guardCall(this, mangleMethod("setText", "(Ljava/lang/CharSequence;)V"), s);
@@ -401,9 +401,9 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getCompoundDrawablesRelative()[Landroid/graphics/drawable/Drawable;": compoundDrawables,
   "setCompoundDrawablesRelative(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
   "setCompoundDrawablesRelativeWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
-  "setCompoundDrawablesRelativeWithIntrinsicBounds(IIII)V": function (this: JTextView, l: number, t: number, r: number, b: number) {
+  "setCompoundDrawablesRelativeWithIntrinsicBounds(IIII)V": maySuspend(function (this: JTextView, l: number, t: number, r: number, b: number) {
     return callSelf(textViewMethods, "setCompoundDrawablesWithIntrinsicBounds(IIII)V", this, l, t, r, b);
-  },
+  }),
   "setCompoundDrawableTintList(Landroid/content/res/ColorStateList;)V": function (this: JTextView, csl: JColorStateList | null) {
     this.drawableTint = csl;
     for (const d of [this.drawableL, this.drawableT, this.drawableR, this.drawableB]) if (d) d.tint = csl ? cslColor(csl, d.stateSet) : null;

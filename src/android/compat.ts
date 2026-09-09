@@ -1,6 +1,6 @@
 // Scrolling physics, view configuration, legacy animation classes, misc widgets' helpers.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook, copyEvent } from "./view";
 import { restVelocity, type JMotionEvent } from "./motionevent";
@@ -624,7 +624,7 @@ rt.register({
     "load(Ljava/io/InputStream;)V": () => {},
     "load(Ljava/io/InputStream;Z)V": () => {},
     "save(Ljava/io/OutputStream;)V": () => {},
-    "getGestureEntries()Ljava/util/Set;": () => newObj("java/util/HashSet", null),
+    "getGestureEntries()Ljava/util/Set;": maySuspend(() => newObj("java/util/HashSet", null)),
     "recognize(Landroid/gesture/Gesture;)Ljava/util/ArrayList;": () => newArrayList(),
     "addGesture(Ljava/lang/String;Landroid/gesture/Gesture;)V": () => {},
   },

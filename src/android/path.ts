@@ -476,6 +476,11 @@ rt.register({
       this.add(["circle", x, y, r, d?.ord ?? 0]);
     },
     "addPath(Landroid/graphics/Path;)V": function (this: JPath, o: JPath) { this.ops.push(...o.ops); this.dirty = true; },
+    "addPath(Landroid/graphics/Path;FF)V": function (this: JPath, o: JPath, dx: number, dy: number) {
+      const t = new JPath(); t.ops = o.ops.map((op) => op.slice() as typeof op);
+      pathTransform(t, [1, 0, 0, 1, dx, dy]);
+      this.ops.push(...t.ops); this.dirty = true;
+    },
     "arcTo(Landroid/graphics/RectF;FF)V": function (this: JPath, r: JRectF, start: number, sweep: number) {
       this.add(["arc", r.left, r.top, r.right, r.bottom, start, sweep, 0]);
     },

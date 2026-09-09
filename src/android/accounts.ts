@@ -1,4 +1,4 @@
-import { JObj, rt, type NativeSpec } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { defineException, stringHash, vcall } from "../jvm/natives/jlang";
 import { appHost } from "./apphost";
@@ -186,14 +186,14 @@ const methods: NativeSpec["methods"] = {
   [`getAuthTokenByFeatures(${S}${S}[${S}Landroid/app/Activity;Landroid/os/Bundle;Landroid/os/Bundle;${CB}${H})${F}`]: unsupported,
   [`addAccount(${S}${S}[${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: unsupported,
   "getAuthenticatorTypes()[Landroid/accounts/AuthenticatorDescription;": () => jarray(authenticators(), "Landroid/accounts/AuthenticatorDescription;"),
-  [`addOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;${H}Z)V`]: (l: unknown, _h: unknown, now: number) => {
+  [`addOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;${H}Z)V`]: maySuspend((l: unknown, _h: unknown, now: number) => {
     listeners.add(l);
     if (now) void onMain(() => vcall(l, "onAccountsUpdated", "([Landroid/accounts/Account;)V", allAccounts()));
-  },
-  [`addOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;${H}Z[${S})V`]: (l: unknown, _h: unknown, now: number) => {
+  }),
+  [`addOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;${H}Z[${S})V`]: maySuspend((l: unknown, _h: unknown, now: number) => {
     listeners.add(l);
     if (now) void onMain(() => vcall(l, "onAccountsUpdated", "([Landroid/accounts/Account;)V", allAccounts()));
-  },
+  }),
   "removeOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;)V": (l: unknown) => { listeners.delete(l); },
   [`notifyAccountAuthenticated(${ACC})Z`]: () => 1,
 };

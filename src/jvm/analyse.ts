@@ -28,7 +28,10 @@ export function analyseProgram(manifest: Uint8Array, services: Record<string, st
   for (const d of rt.dexes) p.add(d);
   const roots = rootsOf(manifest, p, services);
   const r = reach(p, roots.methods, [...roots.classes, ...reflectiveRoots(p, rt.dexes)]);
-  const { suspends, syncSites, syncInits } = analyseSuspend(p, r.methods, subtypeIndex(p, r.instantiated), rt.nativeOracle());
+  // class-hierarchy subtypes, not RTA's instantiated set: reflection and our own natives make
+  // instances the reachability pass never saw, and a site that dispatched to one of them
+  // would hand a sync frame a promise
+  const { suspends, syncSites, syncInits } = analyseSuspend(p, r.methods, subtypeIndex(p, p.names()), rt.nativeOracle());
   const sync = new Set<string>();
   for (const k of r.methods) if (!suspends.has(k)) sync.add(k);
   rt.syncMethods = sync;

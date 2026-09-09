@@ -201,9 +201,9 @@ const socketMethods: NativeSpec["methods"] = {
   },
   "connect(Ljava/net/SocketAddress;)V": socketConnect,
   "connect(Ljava/net/SocketAddress;I)V": socketConnect,
-  "getInputStream()Ljava/io/InputStream;": function (this: JSocket) {
+  "getInputStream()Ljava/io/InputStream;": maySuspend(function (this: JSocket) {
     const o = new (rt.link("webdroid/SocketInputStream").ctor)() as JSocketIn; o.s = this; return o;
-  },
+  }),
   "getOutputStream()Ljava/io/OutputStream;": function (this: JSocket) {
     const o = new (rt.link("webdroid/SocketOutputStream").ctor)() as JSocketOut; o.s = this; return o;
   },
@@ -474,7 +474,7 @@ rt.register({
     "getAuthority()Ljava/lang/String;": function (this: JURL) { const ui = userInfo(this.u); return (ui ? ui + "@" : "") + this.u.host; },
     "toExternalForm()Ljava/lang/String;": function (this: JURL) { return this.spec; },
     "toString()Ljava/lang/String;": function (this: JURL) { return this.spec; },
-    "toURI()Ljava/net/URI;": function (this: JURL) { return newObj("java/net/URI", "(Ljava/lang/String;)V", this.spec); },
+    "toURI()Ljava/net/URI;": maySuspend(function (this: JURL) { return newObj("java/net/URI", "(Ljava/lang/String;)V", this.spec); }),
     "equals(Ljava/lang/Object;)Z": function (this: JURL, o: unknown) { return o instanceof JURL && o.u.href === this.u.href ? 1 : 0; },
     "sameFile(Ljava/net/URL;)Z": function (this: JURL, o: JURL | null) { return o && noRef(o.u) === noRef(this.u) ? 1 : 0; },
     // over the normalised form, not the spec, so equal URLs hash alike as Object requires

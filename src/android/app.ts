@@ -111,7 +111,7 @@ const lifecycleCbMethods: NativeSpec["methods"] = {
 };
 export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   ...contextMethods,
-  "<init>()V": function (this: JActivity) { this.window.activity = this; },
+  "<init>()V": maySuspend(function (this: JActivity) { this.window.activity = this; }),
   "getWindow()Landroid/view/Window;": function (this: JActivity) { return this.window; },
   "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JActivity) { return this.window.backDispatcher(); },
   "getApplication()Landroid/app/Application;": function (this: JActivity) { return this.$host.application; },
@@ -211,9 +211,9 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     await vcall(this, "finish", "()V");
     return 1;
   },
-  "onNavigateUpFromChild(Landroid/app/Activity;)Z": function (this: JActivity) {
+  "onNavigateUpFromChild(Landroid/app/Activity;)Z": maySuspend(function (this: JActivity) {
     return vcall(this, "onNavigateUp", "()Z");
-  },
+  }),
   "onActivityResult(IILandroid/content/Intent;)V": function () {},
   "onRequestPermissionsResult(I[Ljava/lang/String;[I)V": function () {},
   /** AOSP forwards the new Configuration into the window's view hierarchy. */
@@ -258,9 +258,9 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     this.titleStr = spannedString(t);
     if (this.window.actionBarView) { this.window.actionBarView.titleStr = this.titleStr; invalidate(); }
   },
-  "setTitle(I)V": function (this: JActivity, id: number) {
+  "setTitle(I)V": maySuspend(function (this: JActivity, id: number) {
     callSelf(activityMethods, "setTitle(Ljava/lang/CharSequence;)V", this, resString(this.$host.res, id));
-  },
+  }),
   "getTitle()Ljava/lang/CharSequence;": function (this: JActivity) { return this.titleStr; },
   "getActionBar()Landroid/app/ActionBar;": async function (this: JActivity) {
     await ensureDecor(this);
@@ -271,17 +271,17 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     }
     return this.actionBarObj;
   },
-  "runOnUiThread(Ljava/lang/Runnable;)V": function (this: JActivity, r: unknown) {
+  "runOnUiThread(Ljava/lang/Runnable;)V": maySuspend(function (this: JActivity, r: unknown) {
     void onMain(() => vcall(r, "run", "()V").catch(reportUncaught));
-  },
+  }),
   "finish()V": function (this: JActivity) {
     if (!this.finished) {
       this.finished = true;
       appHost?.finishActivity(this);
     }
   },
-  "finishAffinity()V": function (this: JActivity) { callSelf(activityMethods, "finish()V", this); },
-  "finishAfterTransition()V": function (this: JActivity) { callSelf(activityMethods, "finish()V", this); },
+  "finishAffinity()V": maySuspend(function (this: JActivity) { callSelf(activityMethods, "finish()V", this); }),
+  "finishAfterTransition()V": maySuspend(function (this: JActivity) { callSelf(activityMethods, "finish()V", this); }),
   "isFinishing()Z": function (this: JActivity) { return this.finished ? 1 : 0; },
   "isDestroyed()Z": function (this: JActivity) { return this.finished ? 1 : 0; },
   "isTaskRoot()Z": () => 1,
@@ -303,9 +303,9 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   // ActivityCompat — and so every androidx ActivityResultRegistry launcher — calls the options
   // overload, which must funnel into the body above rather than carry a second copy of it.
-  "startActivityForResult(Landroid/content/Intent;ILandroid/os/Bundle;)V": function (this: JActivity, intent: JIntent, code: number) {
+  "startActivityForResult(Landroid/content/Intent;ILandroid/os/Bundle;)V": maySuspend(function (this: JActivity, intent: JIntent, code: number) {
     return callSelf(activityMethods, "startActivityForResult(Landroid/content/Intent;I)V", this, intent, code);
-  },
+  }),
   "setResult(I)V": function (this: JActivity, c: number) { this.resultCode = c; },
   "setResult(ILandroid/content/Intent;)V": function (this: JActivity, c: number, d: JIntent) {
     this.resultCode = c;
@@ -352,12 +352,12 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "getChangingConfigurations()I": () => 0,
   "getTaskId()I": () => 1,
   "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z": () => 0,
-  "requestPermissions([Ljava/lang/String;I)V": function (this: JActivity, perms: string[], code: number) {
+  "requestPermissions([Ljava/lang/String;I)V": maySuspend(function (this: JActivity, perms: string[], code: number) {
     const granted = new Int32Array(perms.length); // all granted (0)
     setTimeout(() => {
       void vcall(this, "onRequestPermissionsResult", "(I[Ljava/lang/String;[I)V", code, perms, granted).catch(reportUncaught);
     }, 0);
-  },
+  }),
   "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": () => 0,
   "setVolumeControlStream(I)V": () => {},
   "getVolumeControlStream()I": () => 3,

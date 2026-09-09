@@ -1,5 +1,5 @@
 import { JObj, rt } from "../runtime";
-import { mangleMethod } from "../abi";
+import { mangleMethod, jarray } from "../abi";
 
 class JStringJoiner extends JObj { sep = ","; pre = ""; suf = ""; parts: string[] = []; }
 rt.register({
@@ -98,6 +98,7 @@ rt.register({
     "getDisplayName(Ljava/util/Locale;)Ljava/lang/String;": displayName,
     "getLanguage()Ljava/lang/String;": function (this: JLocale) { return this.lang; },
     "getISO3Language()Ljava/lang/String;": function (this: JLocale) { return ISO3[this.lang] ?? this.lang; },
+    "static getISOLanguages()[Ljava/lang/String;": () => jarray(Object.keys(ISO3).sort(), "Ljava/lang/String;"),
     "getISO3Country()Ljava/lang/String;": function (this: JLocale) { return ISO3_COUNTRY[this.country] ?? this.country; },
     "getCountry()Ljava/lang/String;": function (this: JLocale) { return this.country; },
     "getScript()Ljava/lang/String;": function (this: JLocale) { return this.script; },

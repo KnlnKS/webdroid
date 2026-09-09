@@ -1,4 +1,4 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, maySuspend } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { device } from "../shell/config";
 import type { JBundle } from "./os";
@@ -57,12 +57,12 @@ rt.register({
   fields: { name: "name", packageName: "packageName", labelRes: "labelRes", nonLocalizedLabel: "nonLocalizedLabel", icon: "icon", metaData: "metaData" },
   methods: {
     "<init>()V": function () {},
-    "loadXmlMetaData(Landroid/content/pm/PackageManager;Ljava/lang/String;)Landroid/content/res/XmlResourceParser;": function (this: JPackageItemInfo, pm: JPackageManager, name: string) {
+    "loadXmlMetaData(Landroid/content/pm/PackageManager;Ljava/lang/String;)Landroid/content/res/XmlResourceParser;": maySuspend(function (this: JPackageItemInfo, pm: JPackageManager, name: string) {
       const id = this.metaData?.map.get(name);
       if (typeof id !== "number" || !id) return null;
       const info = this instanceof JComponentInfo ? this.applicationInfo : this instanceof JApplicationInfo ? this : null;
       return vcall(pm, "getXml", "(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/content/res/XmlResourceParser;", this.packageName, id, info);
-    },
+    }),
     "loadLabel(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;": function (this: JPackageItemInfo) { return applicationLabel(this); },
     "loadIcon(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;": function (this: JPackageItemInfo) { return this.archiveResources && this.icon ? loadDrawable(this.archiveResources, this.icon, null) : null; },
   },

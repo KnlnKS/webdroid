@@ -2,7 +2,7 @@ import { AID } from "./res";
 import { JViewGroup, specSize, JView, invalidate, requestLayout } from "./view";
 import { type JDrawable, loadDrawable, loadDrawableRV } from "./drawable";
 import { type JCanvas, tfMedium } from "./graphics";
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { showPopupMenu } from "./popup";
 import { appHost, type AppHost } from "./apphost";
@@ -303,17 +303,17 @@ rt.register({
   methods: {
     "<init>(Landroid/content/Context;)V": function () {},
     "onCreateActionView()Landroid/view/View;": () => null,
-    "onCreateActionView(Landroid/view/MenuItem;)Landroid/view/View;": function (this: JActionProvider) {
+    "onCreateActionView(Landroid/view/MenuItem;)Landroid/view/View;": maySuspend(function (this: JActionProvider) {
       return vcall(this, "onCreateActionView", "()Landroid/view/View;");
-    },
+    }),
     "onPerformDefaultAction()Z": () => 0,
     "hasSubMenu()Z": () => 0,
     "onPrepareSubMenu(Landroid/view/SubMenu;)V": () => {},
     "overridesItemVisibility()Z": () => 0,
     "isVisible()Z": () => 1,
-    "refreshVisibility(Z)V": function (this: JActionProvider, v: number) {
+    "refreshVisibility(Z)V": maySuspend(function (this: JActionProvider, v: number) {
       if (this.visL) void vcall(this.visL, "onActionProviderVisibilityChanged", "(Z)V", v);
-    },
+    }),
     "setVisibilityListener(Landroid/view/ActionProvider$VisibilityListener;)V": function (this: JActionProvider, l: unknown) { this.visL = l; },
   },
 });

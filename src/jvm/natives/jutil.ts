@@ -308,10 +308,10 @@ export function listMethods(): Methods {
       if (i >>> 0 >= this.a.length) ioobe(i, this.a.length);
       return this.a[i];
     },
-    "set(ILjava/lang/Object;)Ljava/lang/Object;": function (this: JList, i: number, v: unknown) {
+    "set(ILjava/lang/Object;)Ljava/lang/Object;": maySuspend(function (this: JList, i: number, v: unknown) {
       if (i >>> 0 >= this.a.length) ioobe(i, this.a.length);
       const o = this.a[i]; this.a[i] = v; return o;
-    },
+    }),
     "add(Ljava/lang/Object;)Z": function (this: JList, v: unknown) { this.a.push(v); return 1; },
     "add(ILjava/lang/Object;)V": function (this: JList, i: number, v: unknown) {
       if (i >>> 0 > this.a.length) ioobe(i, this.a.length);
@@ -1784,17 +1784,17 @@ rt.register({
       (f: unknown) => keyed(f, "applyAsDouble", "(Ljava/lang/Object;)D"),
     "static comparing(Ljava/util/function/Function;)Ljava/util/Comparator;":
       (f: unknown) => keyed(f, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;"),
-    "static naturalOrder()Ljava/util/Comparator;": () => mkCmp((a, b) => vcall(a, "compareTo", "(Ljava/lang/Object;)I", b)),
-    "static reverseOrder()Ljava/util/Comparator;": () => mkCmp((a, b) => vcall(b, "compareTo", "(Ljava/lang/Object;)I", a)),
-    "reversed()Ljava/util/Comparator;": function (this: unknown) {
+    "static naturalOrder()Ljava/util/Comparator;": maySuspend(() => mkCmp((a, b) => vcall(a, "compareTo", "(Ljava/lang/Object;)I", b))),
+    "static reverseOrder()Ljava/util/Comparator;": maySuspend(() => mkCmp((a, b) => vcall(b, "compareTo", "(Ljava/lang/Object;)I", a))),
+    "reversed()Ljava/util/Comparator;": maySuspend(function (this: unknown) {
       return mkCmp((a, b) => vcall(this, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", b, a));
-    },
-    "thenComparing(Ljava/util/Comparator;)Ljava/util/Comparator;": function (this: unknown, next: unknown) {
+    }),
+    "thenComparing(Ljava/util/Comparator;)Ljava/util/Comparator;": maySuspend(function (this: unknown, next: unknown) {
       return mkCmp(async (a, b) => {
         const r = await vcall(this, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", a, b);
         return r !== 0 ? r : await vcall(next, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", a, b);
       });
-    },
+    }),
   },
 });
 rt.register({ name: "java/util/ListIterator", ctor: class extends JObj {}, ifaces: ["java/util/Iterator"] });

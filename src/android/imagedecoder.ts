@@ -1,4 +1,4 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, maySuspend } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { type JFile, readStreamFully } from "../jvm/natives/jio";
 import type { JBuffer } from "../jvm/natives/jnio";
@@ -44,14 +44,14 @@ rt.register({ name: "android/graphics/ImageDecoder$ImageInfo", ctor: JImageInfo,
 for (const name of ["OnHeaderDecodedListener", "OnPartialImageListener"])
   rt.register({ name: "android/graphics/ImageDecoder$" + name, ctor: class extends JObj {} });
 rt.register({ name: "android/graphics/ImageDecoder", ctor: JImageDecoder, methods: {
-  "static createSource(Ljava/io/File;)Landroid/graphics/ImageDecoder$Source;": (file: JFile) =>
-    streamSource(() => newObj("java/io/FileInputStream", "(Ljava/io/File;)V", file)),
-  "static createSource(Landroid/content/res/Resources;I)Landroid/graphics/ImageDecoder$Source;": (res: unknown, id: number) =>
-    streamSource(() => vcall(res, "openRawResource", "(I)Ljava/io/InputStream;", id)),
-  "static createSource(Landroid/content/res/AssetManager;Ljava/lang/String;)Landroid/graphics/ImageDecoder$Source;": (assets: unknown, path: string) =>
-    streamSource(() => vcall(assets, "open", "(Ljava/lang/String;)Ljava/io/InputStream;", path)),
-  "static createSource(Ljava/util/concurrent/Callable;)Landroid/graphics/ImageDecoder$Source;": (callable: unknown) =>
-    streamSource(async () => vcall(await vcall(callable, "call", "()Ljava/lang/Object;"), "createInputStream", "()Ljava/io/FileInputStream;")),
+  "static createSource(Ljava/io/File;)Landroid/graphics/ImageDecoder$Source;": maySuspend((file: JFile) =>
+    streamSource(() => newObj("java/io/FileInputStream", "(Ljava/io/File;)V", file))),
+  "static createSource(Landroid/content/res/Resources;I)Landroid/graphics/ImageDecoder$Source;": maySuspend((res: unknown, id: number) =>
+    streamSource(() => vcall(res, "openRawResource", "(I)Ljava/io/InputStream;", id))),
+  "static createSource(Landroid/content/res/AssetManager;Ljava/lang/String;)Landroid/graphics/ImageDecoder$Source;": maySuspend((assets: unknown, path: string) =>
+    streamSource(() => vcall(assets, "open", "(Ljava/lang/String;)Ljava/io/InputStream;", path))),
+  "static createSource(Ljava/util/concurrent/Callable;)Landroid/graphics/ImageDecoder$Source;": maySuspend((callable: unknown) =>
+    streamSource(async () => vcall(await vcall(callable, "call", "()Ljava/lang/Object;"), "createInputStream", "()Ljava/io/FileInputStream;"))),
   "static createSource(Ljava/nio/ByteBuffer;)Landroid/graphics/ImageDecoder$Source;": (buffer: JBuffer) => {
     const view = buffer.dv, bytes = new Uint8Array(view.buffer, view.byteOffset + buffer.pos, buffer.lim - buffer.pos);
     const source = new (rt.link("android/graphics/ImageDecoder$Source").ctor)() as JImageSource;

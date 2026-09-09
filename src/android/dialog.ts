@@ -1,7 +1,7 @@
 import { AID } from "./res";
 // android.app.Dialog / AlertDialog rendered as overlays (scrim + centered card).
 
-import { rt, JObj, type NativeSpec, callSelf } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf, maySuspend } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import {
@@ -268,10 +268,10 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     root.setContent(v);
     requestLayout();
   },
-  "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
+  "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": maySuspend(function (this: JDialog, v: JView, lp: any) {
     v.lp = lp;
     callSelf(dialogMethods, "setContentView(Landroid/view/View;)V", this, v);
-  },
+  }),
   "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
     v.lp = lp;
     attachView(this.ensureRoot().content, v);

@@ -2,7 +2,7 @@
 // only knows RSA keys, and CDN leaves are EC), signatures checked with WebCrypto, and chains
 // built against the system CA store the shell mounts. Cronet asks Java for exactly this.
 import type { asn1 } from "node-forge";
-import { JObj, rt } from "../runtime";
+import { JObj, rt, maySuspend } from "../runtime";
 import { jarray } from "../abi";
 import { boxInt, defineException, newObj, stringHash, vcall } from "./jlang";
 import { newArrayList, mkIter } from "./jutil";
@@ -193,7 +193,7 @@ rt.register({
       k.encoded = this.spki;
       return k;
     },
-    "getSerialNumber()Ljava/math/BigInteger;": function (this: JX509) { return this.der.length ? newObj("java/math/BigInteger", "(Ljava/lang/String;I)V", this.serial, 16) : null; },
+    "getSerialNumber()Ljava/math/BigInteger;": maySuspend(function (this: JX509) { return this.der.length ? newObj("java/math/BigInteger", "(Ljava/lang/String;I)V", this.serial, 16) : null; }),
     "getVersion()I": function (this: JX509) { return this.version; },
     "getNotBefore()Ljava/util/Date;": function (this: JX509) { return date(this.notBefore); },
     "getNotAfter()Ljava/util/Date;": function (this: JX509) { return date(this.notAfter); },
@@ -214,7 +214,7 @@ rt.register({
       const oids: Record<string, string> = { serverAuth: "1.3.6.1.5.5.7.3.1", clientAuth: "1.3.6.1.5.5.7.3.2", codeSigning: "1.3.6.1.5.5.7.3.3", emailProtection: "1.3.6.1.5.5.7.3.4", timeStamping: "1.3.6.1.5.5.7.3.8" };
       return newArrayList(Object.keys(oids).filter((k) => e[k]).map((k) => oids[k]));
     },
-    "getCriticalExtensionOIDs()Ljava/util/Set;": function (this: JX509) { return vcall(rt.link("java/util/HashSet").ctor, "<init>", "()V"); },
+    "getCriticalExtensionOIDs()Ljava/util/Set;": maySuspend(function (this: JX509) { return vcall(rt.link("java/util/HashSet").ctor, "<init>", "()V"); }),
     "hasUnsupportedCriticalExtension()Z": () => 0,
     "verify(Ljava/security/PublicKey;)V": async function (this: JX509, key: JRsaPublicKey | JX509Key) {
       const issuer = new JX509(); issuer.spki = key.encoded; issuer.keyOid = key instanceof JRsaPublicKey ? RSA_OID : EC_OID;

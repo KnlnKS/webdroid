@@ -1,4 +1,4 @@
-import { JObj, type NativeSpec, rt } from "../jvm/runtime";
+import { JObj, type NativeSpec, rt, maySuspend } from "../jvm/runtime";
 import { JBundle, reportUncaught } from "./os";
 import { appHost, type AppHost } from "./apphost";
 import { mkUri } from "./net";
@@ -26,10 +26,10 @@ const intentMethods: NativeSpec["methods"] = {
     this.action = a;
     this.dataUri = u?.uri ?? null;
   },
-  "<init>(Landroid/content/Context;Ljava/lang/Class;)V": function (this: JIntent, c: JContext, cls: any) {
+  "<init>(Landroid/content/Context;Ljava/lang/Class;)V": maySuspend(function (this: JIntent, c: JContext, cls: any) {
     this.component = cls?.ci?.name?.replace(/\//g, ".") ?? null;
     this.componentPkg = c?.$host?.pkg ?? null;
-  },
+  }),
   "<init>(Landroid/content/Intent;)V": function (this: JIntent, o: JIntent) {
     if (o) {
       this.action = o.action; this.component = o.component; this.componentPkg = o.componentPkg; this.dataUri = o.dataUri;

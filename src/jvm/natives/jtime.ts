@@ -794,9 +794,9 @@ defineException("java/time/format/DateTimeParseException", "java/time/DateTimeEx
 defineException("java/time/temporal/UnsupportedTemporalTypeException", "java/time/DateTimeException");
 const chronoUnits = mkEnumSet("java/time/temporal/ChronoUnit", ["NANOS", "MICROS", "MILLIS", "SECONDS", "MINUTES", "HOURS",
   "HALF_DAYS", "DAYS", "WEEKS", "MONTHS", "YEARS", "DECADES", "CENTURIES", "MILLENNIA", "ERAS", "FOREVER"], {
-  "between(Ljava/time/temporal/Temporal;Ljava/time/temporal/Temporal;)J": function (this: JSimpleEnum, start: JObj, end: JObj) {
+  "between(Ljava/time/temporal/Temporal;Ljava/time/temporal/Temporal;)J": maySuspend(function (this: JSimpleEnum, start: JObj, end: JObj) {
     return vcall(start, "until", "(Ljava/time/temporal/Temporal;Ljava/time/temporal/TemporalUnit;)J", end, this);
-  },
+  }),
 }, ["java/time/temporal/TemporalUnit"]);
 class JDateTimeFormatter extends JObj { pattern = "yyyy-MM-dd"; zone: unknown = null; }
 const fmtOf = (pattern: string) => { const f = new JDateTimeFormatter(); f.pattern = pattern; return f; };

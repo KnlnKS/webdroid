@@ -75,15 +75,17 @@ rt.register({
     "nextTag()I": function (this: JXmlPull) {
       if (this.i < this.events.length - 1) this.i++;
       if (this.cur.t === TEXT && /^\s*$/.test(this.cur.text) && this.i < this.events.length - 1) this.i++;
-      if (this.cur.t !== START_TAG && this.cur.t !== END_TAG) throw rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "expected START_TAG or END_TAG");
-      return this.cur.t;
+      const t: number = this.cur.t;
+      if (t !== START_TAG && t !== END_TAG) throw rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "expected START_TAG or END_TAG");
+      return t;
     },
     [`nextText()${S}`]: function (this: JXmlPull) {
-      if (this.cur.t !== START_TAG) throw notFound(this);
+      const at = (): number => this.cur.t;
+      if (at() !== START_TAG) throw notFound(this);
       this.i++;
       let text = "";
-      if (this.cur.t === TEXT) { text = this.cur.text; this.i++; }
-      if ((this.cur.t as number) !== END_TAG) throw rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "expected END_TAG");
+      if (at() === TEXT) { text = this.cur.text; this.i++; }
+      if (at() !== END_TAG) throw rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "expected END_TAG");
       return text;
     },
     [`require(I${S}${S})V`]: function (this: JXmlPull, t: number, ns: string | null, name: string | null) {

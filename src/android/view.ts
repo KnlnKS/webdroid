@@ -1003,14 +1003,14 @@ const viewMethods: NativeSpec["methods"] = {
   "setImportantForContentCapture(I)V": () => {},
   "getContentCaptureSession()Landroid/view/contentcapture/ContentCaptureSession;": () => null,
   "getUniqueDrawingId()J": function (this: JView) { return BigInt((this as unknown as { $udid?: number }).$udid ??= ++JView.$nextDrawingId); },
-  "transformMatrixToGlobal(Landroid/graphics/Matrix;)V": function (this: JView, m: unknown) {
+  "transformMatrixToGlobal(Landroid/graphics/Matrix;)V": maySuspend(function (this: JView, m: unknown) {
     const [tx, ty] = windowOffset(this);
     void vcall(m, "postTranslate", "(FF)Z", tx, ty);
-  },
-  "transformMatrixToLocal(Landroid/graphics/Matrix;)V": function (this: JView, m: unknown) {
+  }),
+  "transformMatrixToLocal(Landroid/graphics/Matrix;)V": maySuspend(function (this: JView, m: unknown) {
     const [tx, ty] = windowOffset(this);
     void vcall(m, "postTranslate", "(FF)Z", -tx, -ty);
-  },
+  }),
   "setFocusedByDefault(Z)V": () => {},
   "getImportantForAutofill()I": () => 0,
   "getAutofillId()Landroid/view/autofill/AutofillId;": () => new (rt.link("android/view/autofill/AutofillId").ctor)(),
@@ -1540,7 +1540,7 @@ const vgMethods: NativeSpec["methods"] = {
   "setChildrenDrawingOrderEnabled(Z)V": function (this: JViewGroup, e: number) { this.drawingOrderEnabled = !!e; },
   "isChildrenDrawingOrderEnabled()Z": function (this: JViewGroup) { return this.drawingOrderEnabled ? 1 : 0; },
   "getChildDrawingOrder(II)I": (_n: number, i: number) => i,
-  "getChildDrawingOrder(I)I": function (this: JViewGroup, i: number) { return vcall(this, "getChildDrawingOrder", "(II)I", this.children.length, i); },
+  "getChildDrawingOrder(I)I": maySuspend(function (this: JViewGroup, i: number) { return vcall(this, "getChildDrawingOrder", "(II)I", this.children.length, i); }),
   "onMeasure(II)V": async function (this: JViewGroup, w: number, h: number) {
     // default: act like FrameLayout-lite
     let mw = 0, mh = 0;
@@ -1895,15 +1895,15 @@ rt.register({
   name: "android/view/View$AccessibilityDelegate", ctor: class extends JObj {},
   methods: {
     "<init>()V": () => {},
-    "sendAccessibilityEvent(Landroid/view/View;I)V": (h: unknown, t: number) => vcall(h, "sendAccessibilityEvent", "(I)V", t),
+    "sendAccessibilityEvent(Landroid/view/View;I)V": maySuspend((h: unknown, t: number) => vcall(h, "sendAccessibilityEvent", "(I)V", t)),
     "sendAccessibilityEventUnchecked(Landroid/view/View;Landroid/view/accessibility/AccessibilityEvent;)V": () => {},
     "onPopulateAccessibilityEvent(Landroid/view/View;Landroid/view/accessibility/AccessibilityEvent;)V": () => {},
-    "onInitializeAccessibilityEvent(Landroid/view/View;Landroid/view/accessibility/AccessibilityEvent;)V": (h: unknown, e: unknown) =>
-      vcall(h, "onInitializeAccessibilityEvent", "(Landroid/view/accessibility/AccessibilityEvent;)V", e),
-    "onInitializeAccessibilityNodeInfo(Landroid/view/View;Landroid/view/accessibility/AccessibilityNodeInfo;)V": (h: unknown, i: unknown) =>
-      vcall(h, "onInitializeAccessibilityNodeInfo", "(Landroid/view/accessibility/AccessibilityNodeInfo;)V", i),
-    "dispatchPopulateAccessibilityEvent(Landroid/view/View;Landroid/view/accessibility/AccessibilityEvent;)Z": (h: unknown, e: unknown) =>
-      vcall(h, "dispatchPopulateAccessibilityEvent", "(Landroid/view/accessibility/AccessibilityEvent;)Z", e),
+    "onInitializeAccessibilityEvent(Landroid/view/View;Landroid/view/accessibility/AccessibilityEvent;)V": maySuspend((h: unknown, e: unknown) =>
+      vcall(h, "onInitializeAccessibilityEvent", "(Landroid/view/accessibility/AccessibilityEvent;)V", e)),
+    "onInitializeAccessibilityNodeInfo(Landroid/view/View;Landroid/view/accessibility/AccessibilityNodeInfo;)V": maySuspend((h: unknown, i: unknown) =>
+      vcall(h, "onInitializeAccessibilityNodeInfo", "(Landroid/view/accessibility/AccessibilityNodeInfo;)V", i)),
+    "dispatchPopulateAccessibilityEvent(Landroid/view/View;Landroid/view/accessibility/AccessibilityEvent;)Z": maySuspend((h: unknown, e: unknown) =>
+      vcall(h, "dispatchPopulateAccessibilityEvent", "(Landroid/view/accessibility/AccessibilityEvent;)Z", e)),
     "onRequestSendAccessibilityEvent(Landroid/view/ViewGroup;Landroid/view/View;Landroid/view/accessibility/AccessibilityEvent;)Z": () => 1,
     "getAccessibilityNodeProvider(Landroid/view/View;)Landroid/view/accessibility/AccessibilityNodeProvider;": () => null,
     "performAccessibilityAction(Landroid/view/View;ILandroid/os/Bundle;)Z": () => 0,

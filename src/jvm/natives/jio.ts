@@ -247,7 +247,7 @@ const inputStreamMethods: NativeSpec["methods"] = {
     this.pos += k;
     return BigInt(k);
   },
-  "close()V": function () {},
+  "close()V": maySuspend(function () {}),
   "mark(I)V": function (this: JInputStream) { (this as any).markPos = this.pos; },
   "reset()V": function (this: JInputStream) { this.pos = (this as any).markPos ?? 0; },
   "markSupported()Z": () => 1,
@@ -370,7 +370,7 @@ rt.register({
     "write([BII)V": function (this: JOutputStream, b: Int8Array, off: number, len: number) {
       for (let i = 0; i < len; i++) this.chunks.push(b[off + i] & 0xff);
     },
-    "flush()V": function () {},
+    "flush()V": maySuspend(function () {}),
     "close()V": function () {},
   },
 });

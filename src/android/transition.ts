@@ -3,7 +3,7 @@
 // listeners, duration — and beginDelayedTransition lets the next layout land while still
 // telling listeners the transition started and ended, on the main queue.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { onMain } from "./mainloop";
@@ -59,12 +59,12 @@ const transitionMethods: NonNullable<NativeSpec["methods"]> = {
   "getTargetIds()Ljava/util/List;": function (this: JTransition) { return this.targetIds; },
   "getTargetNames()Ljava/util/List;": function (this: JTransition) { return this.targetNames; },
   "getTargetTypes()Ljava/util/List;": function (this: JTransition) { return this.targetTypes; },
-  "getName()Ljava/lang/String;": function (this: JTransition) { return this.name || (this.constructor as any).$i?.name?.replace(/\//g, ".") || "android.transition.Transition"; },
+  "getName()Ljava/lang/String;": maySuspend(function (this: JTransition) { return this.name || (this.constructor as any).$i?.name?.replace(/\//g, ".") || "android.transition.Transition"; }),
   "setEpicenterCallback(Landroid/transition/Transition$EpicenterCallback;)V": function (this: JTransition, c: unknown) { this.epicenterCb = c; },
   "getEpicenterCallback()Landroid/transition/Transition$EpicenterCallback;": function (this: JTransition) { return this.epicenterCb; },
-  "getEpicenter()Landroid/graphics/Rect;": function (this: JTransition) {
+  "getEpicenter()Landroid/graphics/Rect;": maySuspend(function (this: JTransition) {
     return this.epicenterCb ? vcall(this.epicenterCb, "onGetEpicenter", "(Landroid/transition/Transition;)Landroid/graphics/Rect;", this) : null;
-  },
+  }),
   "setPathMotion(Landroid/transition/PathMotion;)V": function (this: JTransition, p: unknown) { this.pathMotion = p; },
   "getPathMotion()Landroid/transition/PathMotion;": function (this: JTransition) { return this.pathMotion; },
   "setPropagation(Landroid/transition/TransitionPropagation;)V": function (this: JTransition, p: unknown) { this.propagation = p; },
@@ -75,11 +75,11 @@ const transitionMethods: NonNullable<NativeSpec["methods"]> = {
   "captureEndValues(Landroid/transition/TransitionValues;)V": () => {},
   "createAnimator(Landroid/view/ViewGroup;Landroid/transition/TransitionValues;Landroid/transition/TransitionValues;)Landroid/animation/Animator;": () => null,
   "canRemoveViews()Z": () => 0,
-  "clone()Landroid/transition/Transition;": function (this: JTransition) {
+  "clone()Landroid/transition/Transition;": maySuspend(function (this: JTransition) {
     const c = new (this.constructor as any)() as JTransition;
     Object.assign(c, this, { listeners: [], targets: newArrayList([...this.targets.a]), targetIds: newArrayList([...this.targetIds.a]) });
     return c;
-  },
+  }),
   "toString()Ljava/lang/String;": function (this: JTransition) { return "Transition@" + this.durationMs; },
 };
 rt.register({ name: "android/transition/Transition", ctor: JTransition, ifaces: ["java/lang/Cloneable"], methods: transitionMethods });
@@ -162,9 +162,9 @@ rt.register({
     "static beginDelayedTransition(Landroid/view/ViewGroup;)V": () => beginDelayed(null),
     "static beginDelayedTransition(Landroid/view/ViewGroup;Landroid/transition/Transition;)V": (_root: unknown, t: JTransition | null) => beginDelayed(t),
     "static endTransitions(Landroid/view/ViewGroup;)V": () => {},
-    "static go(Landroid/transition/Scene;)V": (s: unknown) => vcall(s, "enter", "()V"),
-    "static go(Landroid/transition/Scene;Landroid/transition/Transition;)V": (s: unknown, t: JTransition | null) => { beginDelayed(t); return vcall(s, "enter", "()V"); },
+    "static go(Landroid/transition/Scene;)V": maySuspend((s: unknown) => vcall(s, "enter", "()V")),
+    "static go(Landroid/transition/Scene;Landroid/transition/Transition;)V": maySuspend((s: unknown, t: JTransition | null) => { beginDelayed(t); return vcall(s, "enter", "()V"); }),
     "setTransition(Landroid/transition/Scene;Landroid/transition/Transition;)V": () => {},
-    "transitionTo(Landroid/transition/Scene;)V": (s: unknown) => vcall(s, "enter", "()V"),
+    "transitionTo(Landroid/transition/Scene;)V": maySuspend((s: unknown) => vcall(s, "enter", "()V")),
   },
 });
