@@ -199,12 +199,14 @@ export class WebdroidDriver {
                     to[0] * this.screen.width, to[1] * this.screen.height, ms);
   }
 
-  /** Exact framebuffer pixels — sidesteps the CSS-scaling trap the implementation history's "Harness notes" warns about. */
+  /** Exact framebuffer pixels — sidesteps the CSS-scaling trap the implementation history's "Harness notes" warns about.
+   *  toBlob, not toDataURL: the screen holds a transferred bitmap, which toDataURL reads back in
+   *  hundreds of milliseconds under SwiftShader while toBlob takes single digits. */
   async capture(): Promise<Buffer> {
-    const dataUrl = await this.page.evaluate(() => {
+    const dataUrl = await this.page.evaluate(() => new Promise<string>((resolve) => {
       const c = document.getElementById("screen") as HTMLCanvasElement;
-      return c.toDataURL("image/png");
-    });
+      c.toBlob((b) => { const r = new FileReader(); r.onload = () => resolve(r.result as string); r.readAsDataURL(b!); }, "image/png");
+    }));
     return Buffer.from(dataUrl.split(",")[1], "base64");
   }
 

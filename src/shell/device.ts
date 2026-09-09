@@ -40,6 +40,8 @@ let displayChanged = () => {};
 export function setDisplayChangeHandler(handler: () => void): void { displayChanged = handler; }
 // Frames are composed off screen and presented whole. A task boundary inside a draw (a bytecode
 // yield, an image decode) would otherwise let the browser composite the half-painted canvas.
+// The bitmap transfer is a zero-copy swap; a drawImage blit cost a software rasteriser ~10 ms
+// a frame. Read the screen back with toBlob: toDataURL on a transferred bitmap stalls.
 let fb = new OffscreenCanvas(SCREEN_W, SCREEN_H);
 export let frame = fb.getContext("2d")!;
 let screen: ImageBitmapRenderingContext | null = null;

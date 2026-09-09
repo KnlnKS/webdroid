@@ -1982,3 +1982,41 @@ Calculator's first full-run timing rose from 18.53 to 23.34 seconds despite near
 work counters. A subsequent isolated eight-step run completes in 17.97 seconds, with no
 missing APIs or errors; the large compilation/drawing outliers do not reproduce. Its isolated
 run is now in actual/calculatorm; the scored report remains the full capture.
+
+## Presented frames and drawable callbacks
+
+Typing in Calculator M3 (Compose + Material 3) flashed the screen white. Every frame was painted
+straight into the visible canvas, and a draw pass runs app bytecode whose compiled loops yield
+to the browser through `refuel()` at most every 8 ms. That yield is a task boundary, so the
+compositor showed whatever had landed: for Compose, the decor's white window background before
+the app's dark surface. Capturing the visible canvas at each in-draw yield reproduced it headless;
+the calculator's keypress frames cost about 20 ms of bytecode draw and yielded once or twice
+each, Mihon's cost the same, FitNotes' 0.3 ms draws never did. An image decode or class
+initialisation inside a draw has the same effect.
+
+Frames are now composed in an OffscreenCanvas and blitted into the 2D screen canvas once the
+pass ends, a GPU-side copy measured at 0.01 ms per frame under SwiftShader and about 0.5 ms
+with a GPU. The zero-copy alternative, a `bitmaprenderer` screen canvas fed by
+`transferToImageBitmap`, presented at 0.01 ms too but reading the transferred bitmap back with
+`toDataURL` took 450 ms to 3.6 s under SwiftShader against 150 ms before, which doubled every
+flappybird E2E step; the harness's capture and settle polling depend on that readback.
+With nothing presented until a pass ends, an in-draw yield only costs a macrotask
+and lets unrelated timers run on the frame's clock, so the frame loop stretches the yield gap
+to 50 ms while drawing. Boot draws stopped absorbing about 60 ms of other work each, and the
+calculator's "=" frames fell from roughly 10 to 2 ms of wall time.
+
+Ripples stuck at full strength on the calculator's buttons whenever the frame loop ran slowly,
+which is what the earlier isolated E2E capture had recorded. Two causes. `setBackground` and
+ImageView never set a drawable's callback, so `invalidateSelf` reached nobody and Compose's
+RippleHostView only appeared to animate while Compose's own press state layer re-recorded the
+button for other reasons. And the ripple invalidated from inside its own draw: Compose records
+a layer with its dirty flag already set and clears it after the record, so an invalidate raised
+mid-record is dropped and the frozen display list replays until something else re-records the
+layer. AOSP's ripple is driven by animators that invalidate from the Choreographer. Views now
+own their drawables' callbacks and the animating ripple queues its invalidate behind the frame
+job. A 6× CPU-throttled harness loop that reproduced the stuck ripples now settles clean.
+
+The calculatorm flow normalised its taps against a 720×1280 layout while running at 1080×2424;
+Compose does not scale the keypad proportionally, so the 7 tap landed on backspace. The
+calculator reaches no missing APIs or errors across the keypad, the function row, the error
+path, the history sheet, and Back.
