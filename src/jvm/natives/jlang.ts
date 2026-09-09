@@ -1354,8 +1354,13 @@ mainThread.jname = "main";
 mainThread.alive = 1;
 export let curThread = mainThread;
 rt.th = () => curThread;
-rt.st = (t) => { curThread = t as JThread; };
-rt.su = () => { curThread = mainThread; };
+/** wd.suspends.on records, per thread, the JS stack at its latest suspension: the answer to "what is this thread waiting in" */
+export const suspendTrace = { on: false, last: new Map<JThread, string>(), count: new Map<JThread, number>() };
+rt.st = (t) => { curThread = t as JThread; if (suspendTrace.on) suspendTrace.last.delete(t as JThread); };
+rt.su = (t) => {
+  if (suspendTrace.on) { suspendTrace.last.set(t as JThread, new Error().stack ?? ""); suspendTrace.count.set(t as JThread, (suspendTrace.count.get(t as JThread) ?? 0) + 1); }
+  curThread = mainThread;
+};
 class JDefaultUEH extends JObj {}
 rt.register({
   name: "webdroid/DefaultUEH", ctor: JDefaultUEH, ifaces: ["java/lang/Thread$UncaughtExceptionHandler"],
@@ -1632,14 +1637,9 @@ rt.register({ name: "java/lang/ref/ReferenceQueue", ctor: class extends JObj {},
 
 rt.register({
   name: "java/lang/reflect/Modifier", ctor: class extends JObj {},
-  statics: { PUBLIC: 1, PRIVATE: 2, PROTECTED: 4, STATIC: 8, FINAL: 16, ABSTRACT: 1024 },
-  methods: {
-    "static isPublic(I)Z": (m: number) => (m & 1 ? 1 : 0),
-    "static isStatic(I)Z": (m: number) => (m & 8 ? 1 : 0),
-    "static isAbstract(I)Z": (m: number) => (m & 1024 ? 1 : 0),
-    "static isFinal(I)Z": (m: number) => (m & 16 ? 1 : 0),
-    "static isPrivate(I)Z": (m: number) => (m & 2 ? 1 : 0),
-  },
+  statics: { PUBLIC: 1, PRIVATE: 2, PROTECTED: 4, STATIC: 8, FINAL: 16, SYNCHRONIZED: 32, VOLATILE: 64, TRANSIENT: 128, NATIVE: 256, INTERFACE: 512, ABSTRACT: 1024, STRICT: 2048 },
+  methods: Object.fromEntries([["Public", 1], ["Private", 2], ["Protected", 4], ["Static", 8], ["Final", 16], ["Synchronized", 32], ["Volatile", 64],
+    ["Transient", 128], ["Native", 256], ["Interface", 512], ["Abstract", 1024], ["Strict", 2048]].map(([n, bit]) => [`static is${n}(I)Z`, (m: number) => (m & (bit as number) ? 1 : 0)])),
 });
 
 class JStackTraceElement extends JObj { declaring = ""; method = ""; file: string | null = null; line = 0; }

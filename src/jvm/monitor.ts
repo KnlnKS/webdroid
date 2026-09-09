@@ -8,7 +8,12 @@ interface Monitor {
 export class Monitors {
   private objects = new WeakMap<object, Monitor>();
   private strings = new Map<string, Monitor>();
+  /** threads parked on a contended enter, and what they wait for: the answer to "who holds the lock main wants" */
+  private waiting = new Map<unknown, object | string>();
   constructor(private exception: (name: string) => unknown) {}
+  blocked(): { thread: unknown; obj: object | string; owner: unknown }[] {
+    return [...this.waiting].map(([thread, obj]) => ({ thread, obj, owner: this.get(obj).owner }));
+  }
 
   private get(obj: object | string | null | 0): Monitor {
     if (obj == null || obj === 0) throw this.exception("NullPointerException");
@@ -28,7 +33,8 @@ export class Monitors {
   enter(obj: object | string | null | 0, thread: unknown): void | Promise<void> {
     const monitor = this.get(obj);
     if (!monitor.depth || monitor.owner === thread) { monitor.owner = thread; monitor.depth++; return; }
-    return new Promise((resolve) => monitor.entrants.push(() => { monitor.owner = thread; monitor.depth = 1; resolve(); }));
+    this.waiting.set(thread, obj as object | string);
+    return new Promise((resolve) => monitor.entrants.push(() => { monitor.owner = thread; monitor.depth = 1; this.waiting.delete(thread); resolve(); }));
   }
   exit(obj: object | string | null | 0, thread: unknown): void {
     this.release(obj, this.owned(obj, thread));

@@ -8,7 +8,8 @@ import { curThread, setCurThread, mainThread } from "../jvm/natives/jlang";
 let q: Promise<unknown> = Promise.resolve();
 
 /** Debug: set true to record where the job that is currently hogging the queue came from. */
-export const mainDbg = { trace: false, running: "", started: 0, depth: 0 };
+/** phase: which stage of the frame the main job is in, so a stuck frame names it */
+export const mainDbg = { trace: false, running: "", started: 0, depth: 0, phase: "" };
 
 /**
  * Are we running inside a main-looper job right now? Thread identity is NOT the same

@@ -137,7 +137,7 @@ export class Runtime {
   /** set by jreflect: a reflect.Proxy answers a method it has not materialised yet from the name and descriptor the caller holds */
   proxyMethod: ((obj: unknown, name: string, desc: string) => ((...a: unknown[]) => unknown) | null) | null = null;
   st: (t: unknown) => void = () => {};
-  su: () => void = () => {};
+  su: (t: unknown) => void = () => {};
   onUncaught: ((e: unknown) => void) | null = null;
   fuel = 4096;
   /** methods the suspension analysis proved cannot suspend, so they compile without `async`.

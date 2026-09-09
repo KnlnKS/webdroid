@@ -22,7 +22,7 @@ import { JContext } from "../android/context";
 import { attachProvider } from "../android/contentresolver";
 import { APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
 import { reportUncaught, JBundle } from "../android/os";
-import { onMain, inMainJob } from "../android/mainloop";
+import { onMain, inMainJob, mainDbg } from "../android/mainloop";
 import { JView, JViewGroup, uiState, measureView, layoutView, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
 import { dispatchWindowInsets } from "../android/windowinsets";
@@ -591,12 +591,14 @@ async function tick0() {
     uiState.frameTimeNanos = BigInt(Math.floor(performance.now() * 1e6));
     const cbs = uiState.frameCallbacks.length ? uiState.frameCallbacks.splice(0) : [];
     for (const cb of cbs as { frame?: any; run?: any }[]) {
+      mainDbg.phase = "frame:" + ((cb.frame ?? cb.run)?.constructor?.$i?.name ?? "?");
       try {
         if (cb.frame) await guardCall(cb.frame, M_doFrame, uiState.frameTimeNanos);
         else if (cb.run) await vcall(cb.run, "run", "()V");
       } catch (e) { reportUncaught(e); }
     }
 
+    mainDbg.phase = "anim";
     if (uiState.animHooks.size) {
       for (const hook of [...uiState.animHooks]) if (!hook()) uiState.animHooks.delete(hook);
     }
@@ -618,6 +620,7 @@ async function tick0() {
     // means a listener's own requestApplyInsets() re-arms the next frame instead of recursing.
     if (uiState.needsInsets && decor.right > 0) {
       uiState.needsInsets = false;
+      mainDbg.phase = "insets";
       try { await dispatchWindowInsets(decor); } catch (e) { console.error("[insets]", e); }
       uiState.needsLayout = true;
     }
@@ -632,8 +635,11 @@ async function tick0() {
         // it could not name; otherwise requestLayout(view) has already marked the path to the
         // root and measureView reuses everything else.
         if (uiState.forceAll) { uiState.forceAll = false; forceLayoutFlags(decor); }
+        mainDbg.phase = "measure";
         await measureView(decor, makeSpec(SCREEN_W, MS_EXACTLY), makeSpec(contentH, MS_EXACTLY));
+        mainDbg.phase = "layout";
         await layoutView(decor, 0, 0, SCREEN_W, contentH);
+        mainDbg.phase = "overlays";
         for (const o of overlays) {
           o.view.layoutRequested = true;
           await measureView(o.view, makeSpec(SCREEN_W, 0x80000000 | 0), makeSpec(contentH, 0x80000000 | 0));
@@ -645,6 +651,7 @@ async function tick0() {
           o.y = Math.max(0, Math.min(o.y, contentH - o.view.measuredH));
           await layoutView(o.view, o.x, o.y, o.x + o.view.measuredW, o.y + o.view.measuredH);
         }
+        mainDbg.phase = "globalLayout";
         await fireGlobalLayout(decor);
       } catch (e) {
         // A subtree that cannot measure costs a frame, not the session: fall through and draw
@@ -677,8 +684,11 @@ async function tick0() {
         // AOSP's performDraw() dispatches OnPreDrawListener/OnDrawListener right before the
         // tree draw, on every draw pass -- not only ones that also ran a layout.
         try {
+          mainDbg.phase = "preDraw";
           await fireDrawPass(decor);
+          mainDbg.phase = "draw";
           await drawView(decor, cv);
+          mainDbg.phase = "drawOverlays";
           for (const o of overlays) await drawView(o.view, cv);
           drawToasts(ctx, SCREEN_W, contentH);
         } catch (e) {
@@ -700,6 +710,7 @@ async function tick0() {
   } catch (e) {
     console.error("[tick]", e);
   }
+  mainDbg.phase = "";
 }
 function forceLayoutFlags(v: JView) {
   v.layoutRequested = true;

@@ -294,7 +294,7 @@ ${catchBody}
    *  caller: a compiled caller re-pins its own thread, and shell code on the main looper expects
    *  the main thread. Leaving curThread on this method's thread would hand the caller's next
    *  synchronous work (a Thread.currentThread check, a fresh vcall) the wrong identity. */
-  private leave(): string { return this.sync ? "" : "if($s)R.su();"; }
+  private leave(): string { return this.sync ? "" : "if($s)R.su($th);"; }
 
   /**
    * Reaching definitions over the block CFG: type the const instructions whose value is
@@ -532,7 +532,7 @@ ${catchBody}
     // current-thread while we were parked. A rejected await re-pins in the method's catch
     // instead of a finally here: one handler per method, not one per call site, is what keeps
     // the bytecode small enough for V8 to hold every compiled body.
-    out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise){R.su();$s=1;${assignTo}=await ${assignTo};R.st($th);}`);
+    out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise){R.su($th);$s=1;${assignTo}=await ${assignTo};R.st($th);}`);
   }
 
   private fieldProp(fieldIdx: number): string {
@@ -696,7 +696,7 @@ ${catchBody}
 
   private jumpStr(target: number, from: number): string {
     if (target <= from) this.hasBackEdge = true;
-    const fuel = !this.sync && target <= from ? "if(--R.fuel<0){$fu=R.refuel();if($fu){R.su();$s=1;await $fu;R.st($th);}}" : "";
+    const fuel = !this.sync && target <= from ? "if(--R.fuel<0){$fu=R.refuel();if($fu){R.su($th);$s=1;await $fu;R.st($th);}}" : "";
     return `${fuel}pc=${target};continue;`;
   }
 
@@ -766,7 +766,7 @@ ${catchBody}
         // resolve against the superclass prototype; an interface-default super call
         // (Iface.super.m()) instead resolves on the declared interface's prototype
         out.push(`$t=(S.prototype.${mangled}??(D.cl[${mref.cls}]??D.link(${mref.cls})).prototype.${mangled}??R.nsm(${JSON.stringify(clsName + "." + mref.name + desc + " (super)")})).call(${recv}${argStr ? "," + argStr : ""});`);
-        if (!this.sync) out.push(`if($t instanceof Promise){R.su();$s=1;$t=await $t;R.st($th);}`);
+        if (!this.sync) out.push(`if($t instanceof Promise){R.su($th);$s=1;$t=await $t;R.st($th);}`);
         break;
       }
       case "invoke-direct": {
