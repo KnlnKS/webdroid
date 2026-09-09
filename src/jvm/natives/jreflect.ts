@@ -131,6 +131,10 @@ rt.register({
   methods: {
     "getName()Ljava/lang/String;": function (this: JField) { return this.fname; },
     "getType()Ljava/lang/Class;": function (this: JField) { return classForDesc(this.desc, this.owner.owner); },
+    "getGenericType()Ljava/lang/reflect/Type;": function (this: JField) {
+      const s = signatureOf(classAnno(this.owner).fieldsByName.get(this.fname));
+      return s ? parseTypeSig(s, { pos: 0 }) : classForDesc(this.desc, this.owner.owner);
+    },
     "getModifiers()I": function (this: JField) { return (this.isStatic ? 0x8 : 0) | 0x1; },
     "setAccessible(Z)V": () => {},
     "isAccessible()Z": () => 1,
@@ -175,7 +179,42 @@ rt.register({
     "equals(Ljava/lang/Object;)Z": function (this: JPType, o: unknown) { return o instanceof JPType && o.key === this.key ? 1 : 0; },
   },
 });
-/** parse one type signature at ref.pos; returns JClass or JPType */
+class JTypeVar extends JObj { name = ""; key = ""; }
+class JWildcard extends JObj { upper: unknown[] = []; lower: unknown[] = []; key = ""; }
+class JGenericArray extends JObj { component: unknown = null; key = ""; }
+const typeKey = (a: any): string => a?.key ?? (a?.ci ? dotName(a.ci.name) : a?.primName ?? a?.arrDesc ?? "?");
+const types = (a: unknown[]) => jarray(a.slice(), "Ljava/lang/reflect/Type;");
+const typeEquality = <T extends { key: string }>(C: new () => T) => ({
+  "toString()Ljava/lang/String;": function (this: T) { return this.key; },
+  "hashCode()I": function (this: T) { return stringHash(this.key); },
+  "equals(Ljava/lang/Object;)Z": function (this: T, o: unknown) { return o instanceof C && o.key === this.key ? 1 : 0; },
+});
+for (const n of ["java/lang/reflect/TypeVariable", "java/lang/reflect/WildcardType", "java/lang/reflect/GenericArrayType"]) rt.register({ name: n, ctor: class extends JObj {}, ifaces: ["java/lang/reflect/Type"] });
+rt.register({
+  name: "webdroid/TypeVar", ctor: JTypeVar, ifaces: ["java/lang/reflect/TypeVariable", "java/lang/reflect/Type"],
+  methods: {
+    "getName()Ljava/lang/String;": function (this: JTypeVar) { return this.name; },
+    "getBounds()[Ljava/lang/reflect/Type;": () => types([rt.classFor("java/lang/Object")]),
+    "getGenericDeclaration()Ljava/lang/reflect/GenericDeclaration;": () => null,
+    ...typeEquality(JTypeVar),
+  },
+});
+rt.register({
+  name: "webdroid/Wildcard", ctor: JWildcard, ifaces: ["java/lang/reflect/WildcardType", "java/lang/reflect/Type"],
+  methods: {
+    "getUpperBounds()[Ljava/lang/reflect/Type;": function (this: JWildcard) { return types(this.upper); },
+    "getLowerBounds()[Ljava/lang/reflect/Type;": function (this: JWildcard) { return types(this.lower); },
+    ...typeEquality(JWildcard),
+  },
+});
+rt.register({
+  name: "webdroid/GenericArray", ctor: JGenericArray, ifaces: ["java/lang/reflect/GenericArrayType", "java/lang/reflect/Type"],
+  methods: {
+    "getGenericComponentType()Ljava/lang/reflect/Type;": function (this: JGenericArray) { return this.component; },
+    ...typeEquality(JGenericArray),
+  },
+});
+/** parse one type signature at ref.pos: a JClass, or one of the generic Type objects above */
 function parseTypeSig(s: string, ref: { pos: number }): unknown {
   const c = s[ref.pos];
   if (c === "L") {
@@ -195,15 +234,62 @@ function parseTypeSig(s: string, ref: { pos: number }): unknown {
     const t = new JPType();
     t.raw = rt.classFor(name);
     t.args = args;
-    t.key = dotName(name) + "<" + args.map((a: any) => a?.key ?? (a?.ci?.name ?? a?.primName ?? a?.arrDesc ?? "?")).join(", ") + ">";
+    t.key = dotName(name) + "<" + args.map(typeKey).join(", ") + ">";
     return t;
   }
-  if (c === "[") { ref.pos++; const el: any = parseTypeSig(s, ref); const d = el?.ci ? "[L" + el.ci.name + ";" : "[Ljava/lang/Object;"; return rt.classFor(d); }
-  if (c === "T") { while (ref.pos < s.length && s[ref.pos] !== ";") ref.pos++; ref.pos++; return rt.classFor("java/lang/Object"); }
-  if (c === "+" || c === "-") { ref.pos++; return parseTypeSig(s, ref); }
-  if (c === "*") { ref.pos++; return rt.classFor("java/lang/Object"); }
+  if (c === "[") {
+    ref.pos++;
+    const el: any = parseTypeSig(s, ref);
+    if (el?.ci || el?.primName || el?.arrDesc) return rt.classFor("[" + (el.ci ? "L" + el.ci.name + ";" : el.arrDesc ?? PRIM_DESC[el.primName]));
+    const g = new JGenericArray(); g.component = el; g.key = typeKey(el) + "[]";
+    return g;
+  }
+  if (c === "T") {
+    const v = new JTypeVar();
+    ref.pos++;
+    while (ref.pos < s.length && s[ref.pos] !== ";") v.name += s[ref.pos++];
+    ref.pos++;
+    v.key = v.name;
+    return v;
+  }
+  if (c === "+" || c === "-" || c === "*") {
+    const w = new JWildcard();
+    ref.pos++;
+    const bound = c === "*" ? null : parseTypeSig(s, ref);
+    w.upper = [c === "+" ? bound : rt.classFor("java/lang/Object")];
+    if (c === "-") w.lower = [bound];
+    w.key = c === "*" ? "?" : (c === "+" ? "? extends " : "? super ") + typeKey(bound);
+    return w;
+  }
   ref.pos++; // primitive
   return rt.classFor(PRIM_NAME[c] ?? "int");
+}
+/** a member's dalvik.annotation.Signature, joined; null when the member is not generic */
+function signatureOf(annos: EncAnnotation[] | undefined): string | null {
+  const sig = annos?.find((a) => a.type === "dalvik/annotation/Signature");
+  if (!sig) return null;
+  const parts = sig.elements["value"];
+  return Array.isArray(parts) ? parts.join("") : String(parts ?? "");
+}
+/** skip a leading <type parameters> block */
+function skipTypeParams(s: string): number {
+  let pos = 0;
+  if (s[0] === "<") { let d = 0; while (pos < s.length) { if (s[pos] === "<") d++; else if (s[pos] === ">") d--; pos++; if (!d) break; } }
+  return pos;
+}
+/** the generic parameter and return types of a method, falling back to its erased descriptor.
+ *  A signature that lists fewer parameters than the descriptor (synthetic outer/mask params)
+ *  answers with the erased list, which is what ART does too. */
+function genericMethodTypes(owner: ClassInfo, name: string, desc: string): { params: unknown[]; ret: unknown } {
+  const erased = () => ({ params: parseMethodDesc(desc).params.map((d) => classForDesc(d, owner.owner)), ret: classForDesc(parseMethodDesc(desc).ret, owner.owner) });
+  const s = signatureOf(classAnno(owner).methodsByRef.get(name + desc));
+  if (!s) return erased();
+  const ref = { pos: skipTypeParams(s) + 1 }; // past '('
+  const params: unknown[] = [];
+  while (ref.pos < s.length && s[ref.pos] !== ")") params.push(parseTypeSig(s, ref));
+  ref.pos++;
+  if (params.length !== parseMethodDesc(desc).params.length) return erased();
+  return { params, ret: parseTypeSig(s, ref) };
 }
 
 /** an array of `len` elements whose component type is `cls` — what both
@@ -440,6 +526,7 @@ rt.register({
       return classForDesc(parseMethodDesc(this.desc).ret, this.owner.owner);
     },
     "getParameterTypes()[Ljava/lang/Class;": function (this: JMethod) { return paramClasses(this.desc, "Ljava/lang/Class;", this.owner.owner); },
+    "getGenericParameterTypes()[Ljava/lang/reflect/Type;": function (this: JMethod) { return types(genericMethodTypes(this.owner, this.name, this.desc).params); },
     "getDeclaringClass()Ljava/lang/Class;": function (this: JMethod) { return (this.owner.owner ?? rt).classFor(this.owner.name); },
     "setAccessible(Z)V": () => {},
     "isAccessible()Z": () => 1,
@@ -455,9 +542,7 @@ rt.register({
     },
     ...annotatedElement(function (this: JMethod) { return classAnno(this.owner).methodsByRef.get(this.name + this.desc) ?? []; }),
     "getParameterAnnotations()[[Ljava/lang/annotation/Annotation;": function (this: JMethod) { return paramAnnotations(this.owner, this.name, this.desc); },
-    "getGenericReturnType()Ljava/lang/reflect/Type;": function (this: JMethod) {
-      return classForDesc(parseMethodDesc(this.desc).ret, this.owner.owner);
-    },
+    "getGenericReturnType()Ljava/lang/reflect/Type;": function (this: JMethod) { return genericMethodTypes(this.owner, this.name, this.desc).ret; },
     // Java's own spelling, which a JNI caller parses for the name and parameter types
     "toString()Ljava/lang/String;": function (this: JMethod) {
       const { params, ret } = parseMethodDesc(this.desc);
@@ -513,7 +598,7 @@ rt.register({
     "isSynthetic()Z": () => 0,
     "isVarArgs()Z": function (this: JCtor) { return (this.flags & 0x80) ? 1 : 0; },
     "getParameterTypes()[Ljava/lang/Class;": function (this: JCtor) { return paramClasses(this.desc, "Ljava/lang/Class;", this.owner.owner); },
-    "getGenericParameterTypes()[Ljava/lang/reflect/Type;": function (this: JCtor) { return paramClasses(this.desc, "Ljava/lang/reflect/Type;", this.owner.owner); },
+    "getGenericParameterTypes()[Ljava/lang/reflect/Type;": function (this: JCtor) { return types(genericMethodTypes(this.owner, "<init>", this.desc).params); },
     "getParameterAnnotations()[[Ljava/lang/annotation/Annotation;": function (this: JCtor) { return paramAnnotations(this.owner, "<init>", this.desc); },
     "newInstance([Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JCtor, args: unknown[] | null) {
       const info = this.owner;
@@ -741,13 +826,9 @@ export function installClassReflection() {
     const sup = ci?.superInfo;
     if (!sup) return null;
     // dalvik.annotation.Signature carries the generic class signature
-    const sig = ci!.def ? classAnno(ci!).cls.find((a) => a.type === "dalvik/annotation/Signature") : undefined;
-    if (sig) {
-      const parts = sig.elements["value"];
-      const s = Array.isArray(parts) ? parts.join("") : String(parts ?? "");
-      let pos = 0;
-      if (s[0] === "<") { let d = 0; while (pos < s.length) { if (s[pos] === "<") d++; else if (s[pos] === ">") d--; pos++; if (!d) break; } }
-      const t = parseTypeSig(s, { pos });
+    const s = ci!.def ? signatureOf(classAnno(ci!).cls) : null;
+    if (s) {
+      const t = parseTypeSig(s, { pos: skipTypeParams(s) });
       if (t instanceof JPType) return t;
     }
     return (sup.owner ?? rt).classFor(sup.name);
