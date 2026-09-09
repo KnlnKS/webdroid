@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Arsc } from "./arsc";
 
 const config = (orientation: number, wdp = 0, hdp = 0) => ({
-  density: 0, sdk: 0, orientation, night: 0, lang: "", swdp: 0, wdp, hdp,
+  density: 0, sdk: 0, orientation, night: 0, lang: "", region: "", swdp: 0, wdp, hdp,
   size: 0, dir: 0, uiType: 0, score: 0,
 });
 
@@ -13,7 +13,7 @@ describe("resource orientation", () => {
     table.types = new Map();
     table.device = {
       density: 480, sdk: 35, orientation: 1, night: 0,
-      wdp: 360, hdp: 808, swdp: 360, lang: "en", size: 2, dir: 0x40, uiType: 1,
+      wdp: 360, hdp: 808, swdp: 360, lang: "en", region: "US", size: 2, dir: 0x40, uiType: 1,
     };
     table.types.set(1, [
       { id: 1, name: "string", config: config(0), entries: new Map([[0, { key: "mode", value: { type: 0x10, data: 1 } }]]) },

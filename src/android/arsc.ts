@@ -27,7 +27,7 @@ interface ResourceProfile {
 
 interface Config {
   density: number; sdk: number; orientation: number; night: number;
-  lang: string; swdp: number; wdp: number; hdp: number;
+  lang: string; region: string; swdp: number; wdp: number; hdp: number;
   /** screenLayout: size class (0=any…4=xlarge) and layout direction (0x40 ltr, 0x80 rtl) */
   size: number; dir: number;
   /** uiMode type: 0=any, 1=normal, 3=car, 4=television, 6=watch … */
@@ -35,7 +35,7 @@ interface Config {
   score: number; // computed match score
 }
 
-const defaultConfig: Config = { density: 0, sdk: 0, orientation: 0, night: 0, lang: "", swdp: 0, wdp: 0, hdp: 0, size: 0, dir: 0, uiType: 0, score: 0 };
+const defaultConfig: Config = { density: 0, sdk: 0, orientation: 0, night: 0, lang: "", region: "", swdp: 0, wdp: 0, hdp: 0, size: 0, dir: 0, uiType: 0, score: 0 };
 
 /** a split table's string index → its slot in the base pool */
 type Remap = ((i: number) => number) | null;
@@ -51,7 +51,7 @@ export class Arsc {
   pkgName = "";
   types = new Map<number, TypeChunk[]>();   // typeId → chunks (one per config)
   device = { density: dev.densityDpi, sdk: dev.sdk, orientation: dev.orientation, night: dev.night ? 1 : 0,
-    wdp: dev.widthDp, hdp: dev.screenHeightDp, swdp: dev.smallestWidthDp, lang: dev.lang,
+    wdp: dev.widthDp, hdp: dev.screenHeightDp, swdp: dev.smallestWidthDp, lang: dev.lang, region: dev.region,
     size: sizeClass(dev.smallestWidthDp), dir: 0x40, uiType: 1 };
   private profiles = new Map<string, ResourceProfile>();
   private active: ResourceProfile | null = null;
@@ -110,8 +110,10 @@ export class Arsc {
     const cfg: Config = { ...defaultConfig };
     const c = base + 20;
     if (cfgSize >= 16) {
-      const l1 = view.getUint8(c + 8), l2 = view.getUint8(c + 9);
+      const l1 = view.getUint8(c + 8), l2 = view.getUint8(c + 9), r1 = view.getUint8(c + 10), r2 = view.getUint8(c + 11);
       if (l1) cfg.lang = String.fromCharCode(l1, l2);
+      // a pseudolocale (en-XA) or a regional variant answers only for its own region
+      if (r1 && !(r1 & 0x80)) cfg.region = String.fromCharCode(r1, r2);
       cfg.orientation = view.getUint8(c + 12);
       cfg.density = view.getUint16(c + 14, true);
     }
@@ -257,7 +259,7 @@ export class Arsc {
   /** Match the current Configuration. Unlike parse-time viability, the current axes are exact. */
   private skipCurrent(c: Config): boolean {
     const d = this.device;
-    return c.sdk > d.sdk || (!!c.lang && c.lang !== d.lang) || (!!c.orientation && c.orientation !== d.orientation)
+    return c.sdk > d.sdk || (!!c.lang && c.lang !== d.lang) || (!!c.region && c.region !== d.region) || (!!c.orientation && c.orientation !== d.orientation)
       || c.swdp > d.swdp || c.wdp > d.wdp || c.hdp > d.hdp
       || c.size > d.size || (c.dir !== 0 && c.dir !== d.dir) || (c.uiType !== 0 && c.uiType !== d.uiType);
   }
@@ -268,6 +270,7 @@ export class Arsc {
     if (c.night !== 0 && c.night !== (d.night ? 1 : -1)) return -1;
     let s = 0;
     if (c.lang) s += 1 << 20;
+    if (c.region) s += 1 << 18;
     if (c.dir) s += 1 << 19;
     if (c.swdp) s += (1 << 14) + c.swdp;
     if (c.wdp || c.hdp) s += (1 << 13) + c.wdp;

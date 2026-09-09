@@ -69,7 +69,7 @@ test("Configuration copies preserve lists and repair direct legacy locale writes
 
 test("Resources applies language qualifiers only when accepting a configuration", async () => {
   const table = new Arsc(new Uint8Array([2, 0, 8, 0, 8, 0, 0, 0]));
-  const qualifiers = { density: 0, sdk: 0, orientation: 0, night: 0, lang: "", swdp: 0, wdp: 0, hdp: 0, size: 0, dir: 0, uiType: 0, score: 0 };
+  const qualifiers = { density: 0, sdk: 0, orientation: 0, night: 0, lang: "", region: "", swdp: 0, wdp: 0, hdp: 0, size: 0, dir: 0, uiType: 0, score: 0 };
   table.types.set(1, [
     { id: 1, name: "integer", config: qualifiers, entries: new Map([[0, { key: "value", value: { type: 0x10, data: 1 } }]]) },
     { id: 1, name: "integer", config: { ...qualifiers, lang: "ar", dir: 0x80 }, entries: new Map([[0, { key: "value", value: { type: 0x10, data: 2 } }]]) },

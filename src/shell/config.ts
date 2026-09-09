@@ -97,6 +97,7 @@ export const device = {
   sdk: 33,
   release: "13",
   lang: "en",
+  region: "US",
   /** Whether the device is in dark mode. There is no device setting to read but there is a real
    *  answer: the browser's, which is the user's own system preference. Live, because it changes
    *  under a running app exactly as a device's does (see setDeviceNight). */
