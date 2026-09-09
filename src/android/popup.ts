@@ -41,7 +41,7 @@ export function showToast(text: string) {
   toasts.push({ text, until: performance.now() + 2500 });
   invalidate();
 }
-export function drawToasts(ctx: CanvasRenderingContext2D, w: number, h: number) {
+export function drawToasts(ctx: OffscreenCanvasRenderingContext2D, w: number, h: number) {
   const now = performance.now();
   for (let i = toasts.length - 1; i >= 0; i--) {
     if (toasts[i].until < now) toasts.splice(i, 1);

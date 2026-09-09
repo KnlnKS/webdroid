@@ -38,6 +38,13 @@ export let SCREEN_W = device.width, SCREEN_H = device.height;
 const STATUS_H = device.statusBar;
 let displayChanged = () => {};
 export function setDisplayChangeHandler(handler: () => void): void { displayChanged = handler; }
+// Frames are composed off screen and presented whole. A task boundary inside a draw (a bytecode
+// yield, an image decode) would otherwise let the browser composite the half-painted canvas.
+let fb = new OffscreenCanvas(SCREEN_W, SCREEN_H);
+export let frame = fb.getContext("2d")!;
+let screen: ImageBitmapRenderingContext | null = null;
+export function setScreenCanvas(c: HTMLCanvasElement): void { screen = c.getContext("bitmaprenderer"); }
+export function present(): void { screen?.transferFromImageBitmap(fb.transferToImageBitmap()); }
 
 /** Apply one of ActivityInfo's fixed orientations; all other requests retain the current axes. */
 function applyOrientationRequest(request: number): boolean {
@@ -45,6 +52,8 @@ function applyOrientationRequest(request: number): boolean {
   if (!orientation || !setDeviceOrientation(orientation)) return false;
   SCREEN_W = device.width;
   SCREEN_H = device.height;
+  fb = new OffscreenCanvas(SCREEN_W, SCREEN_H);
+  frame = fb.getContext("2d")!;
   syncDeviceOrientation();
   displayChanged();
   return true;
@@ -502,7 +511,7 @@ let drawing = false;
 let sbColor = NaN, sbCss = "";
 /** The status band and its icons: one copy, so the starting window paints the same band the
  *  activity's own frame does. */
-function drawStatusBar(ctx: CanvasRenderingContext2D, appearance: number, appearanceMask: number) {
+function drawStatusBar(ctx: OffscreenCanvasRenderingContext2D, appearance: number, appearanceMask: number) {
   const sb = booted!.host.statusBarColor;
   if (sb !== sbColor) { sbColor = sb; sbCss = cssColor(sb); }
   ctx.fillStyle = sbCss;
@@ -513,8 +522,8 @@ function drawStatusBar(ctx: CanvasRenderingContext2D, appearance: number, appear
  *  run. It is not the app drawing, so it deliberately does not count in perf.draws — corpus
  *  reads that to mean "this apk got far enough to render", and it must keep meaning it. */
 let startWin: { view: JView; fullscreen: boolean } | null = null;
-async function drawStartWin(ctx: CanvasRenderingContext2D, w: { view: JView; fullscreen: boolean }) {
-  const contentY = w.fullscreen ? 0 : STATUS_H;
+async function drawStartWin(w: { view: JView; fullscreen: boolean }) {
+  const contentY = w.fullscreen ? 0 : STATUS_H, ctx = frame;
   ctx.save();
   try {
     ctx.fillStyle = "#000";
@@ -528,6 +537,7 @@ async function drawStartWin(ctx: CanvasRenderingContext2D, w: { view: JView; ful
   } finally {
     ctx.restore();
   }
+  present();
 }
 let clockMinute = -1, clockText = "";
 // Views committed outside a layout pass (androidx addViewInLayout, async fragment
@@ -558,14 +568,15 @@ function settleWatch(root: any): void {
 }
 
 
-export async function tick(ctx: CanvasRenderingContext2D) {
+export async function tick() {
   if (drawing) return;
   drawing = true;
   // AOSP clears mIsInTraversal in a finally: a rejected frame must not latch the guard on
   // and stop every later frame.
-  try { await onMain(() => tick0(ctx)); } finally { drawing = false; }
+  try { await onMain(tick0); } finally { drawing = false; }
 }
-async function tick0(ctx: CanvasRenderingContext2D) {
+async function tick0() {
+  const ctx = frame;
   try {
     // choreographer + animation callbacks. One timestamp for the whole frame, as AOSP's
     // doFrame does: every callback here awaits, so recomputing it per callback let two
@@ -587,7 +598,7 @@ async function tick0(ctx: CanvasRenderingContext2D) {
     if (!decor) {
       if (startWin && uiState.needsDraw) {
         uiState.needsDraw = false;
-        await drawStartWin(ctx, startWin);
+        await drawStartWin(startWin);
       }
       return;
     }
@@ -669,6 +680,7 @@ async function tick0(ctx: CanvasRenderingContext2D) {
       } finally {
         ctx.restore();
       }
+      present();
       perf.drawMs += performance.now() - t0;
       // WebView frames are DOM over the canvas: show the ones this pass drew, hide the rest
       webLayerSweep(contentY, overlays.length > 0);
@@ -686,7 +698,7 @@ function forceLayoutFlags(v: JView) {
   v.oldWSpec = -1;
   if (v instanceof JViewGroup) for (const c of v.children) forceLayoutFlags(c);
 }
-function drawStatusIcons(ctx: CanvasRenderingContext2D, bg: number, appearance: number, appearanceMask: number) {
+function drawStatusIcons(ctx: OffscreenCanvasRenderingContext2D, bg: number, appearance: number, appearanceMask: number) {
   // AOSP: the light-status-bars appearance bit decides once the app has set or cleared it;
   // the luminance guess only stands in for an app that never asked.
   const dark = appearanceMask & APPEARANCE_LIGHT_STATUS_BARS ? (appearance & APPEARANCE_LIGHT_STATUS_BARS) !== 0

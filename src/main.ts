@@ -11,7 +11,7 @@ import { newObj, vcall, linkInit } from "./jvm/natives/jlang";
 import { mangleMethod } from "./jvm/abi";
 import { loadFramework } from "./android/framework";
 import { unreadAttrs } from "./android/res";
-import { bootApk, tick, dispatchPointer, pressBack, currentApp, contentTop, SCREEN_W, SCREEN_H, setDisplayChangeHandler } from "./shell/device";
+import { bootApk, tick, dispatchPointer, pressBack, currentApp, contentTop, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas, frame, present } from "./shell/device";
 import { attachInput, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { perf, perfReset } from "./perf";
@@ -79,7 +79,7 @@ root.innerHTML = `
 </style>`;
 
 const canvas = document.getElementById("screen") as HTMLCanvasElement;
-const ctx = canvas.getContext("2d")!;
+setScreenCanvas(canvas);
 const statusEl = document.getElementById("status")!;
 const missingEl = document.getElementById("missing")!;
 const launcherEl = document.getElementById("launcher")!;
@@ -371,7 +371,7 @@ function doTick() {
   wd.ticks++;
   lastTick = performance.now();
   perf.frames++;
-  void tick(ctx).then(() => { perf.frameMs += performance.now() - lastTick; }).finally(() => { ticking = false; });
+  void tick().then(() => { perf.frameMs += performance.now() - lastTick; }).finally(() => { ticking = false; });
 }
 function loop() {
   doTick();
@@ -382,14 +382,15 @@ setInterval(() => {
   if (performance.now() - lastTick > 40) doTick();
 }, 33);
 
-ctx.fillStyle = "#111";
-ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-ctx.fillStyle = "#445";
-ctx.font = `${device.dp(20)}px system-ui`;
-ctx.textAlign = "center";
-ctx.fillText("webdroid", SCREEN_W / 2, SCREEN_H / 2 - device.dp(10));
-ctx.font = `${device.dp(13)}px system-ui`;
-ctx.fillText("pick an app on the right →", SCREEN_W / 2, SCREEN_H / 2 + device.dp(20));
+frame.fillStyle = "#111";
+frame.fillRect(0, 0, SCREEN_W, SCREEN_H);
+frame.fillStyle = "#445";
+frame.font = `${device.dp(20)}px system-ui`;
+frame.textAlign = "center";
+frame.fillText("webdroid", SCREEN_W / 2, SCREEN_H / 2 - device.dp(10));
+frame.font = `${device.dp(13)}px system-ui`;
+frame.fillText("pick an app on the right →", SCREEN_W / 2, SCREEN_H / 2 + device.dp(20));
+present();
 
 attachInput(canvas, () => {
   if (imeActive()) setTimeout(() => kbd.focus(), 0);
