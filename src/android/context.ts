@@ -7,7 +7,7 @@ import { mangleMethod, jarray } from "../jvm/abi";
 import { getInflater } from "./inflate";
 import { getAppInfo, getPM } from "./pm";
 import { contentResolver } from "./contentresolver";
-import { mainLooper, mainExecutor } from "./os";
+import { mainLooper, mainExecutor, PROCESS_PID, PROCESS_UID } from "./os";
 import { getPrefs } from "./sharedprefs";
 import { loadColorStateList, loadDrawable } from "./drawable";
 import { JAssetManager, type JConfiguration, scopedResources } from "./resnative";
@@ -63,6 +63,7 @@ const SERVICE_CLASS: Record<string, string> = {
   user: "android/os/UserManager",
   shortcut: "android/content/pm/ShortcutManager",
   permission_controller: "android/permission/PermissionControllerManager",
+  locale: "android/app/LocaleManager",
 };
 const SERVICE_NAME = new Map(Object.entries(SERVICE_CLASS).map(([n, c]) => [c, n]));
 SERVICE_NAME.set("android/view/WindowManager", "window");
@@ -78,6 +79,21 @@ export function systemService(jctx: JContext, name: string): unknown {
   services.set(name, s);
   return s;
 }
+
+// API 31: one process, one caller, so one AttributionSource describes every context
+let attribution: unknown;
+rt.register({
+  name: "android/content/AttributionSource", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable"],
+  methods: {
+    "getUid()I": () => PROCESS_UID,
+    "getPid()I": () => PROCESS_PID,
+    "getPackageName()Ljava/lang/String;": () => appHost!.pkg,
+    "getAttributionTag()Ljava/lang/String;": () => null,
+    "getNext()Landroid/content/AttributionSource;": () => null,
+    "isTrusted(Landroid/content/Context;)Z": () => 1,
+    "describeContents()I": () => 0,
+  },
+});
 
 // ── Context methods (shared by Context/ContextWrapper/Activity/Application)
 export const contextMethods: NativeSpec["methods"] = {
@@ -99,6 +115,7 @@ export const contextMethods: NativeSpec["methods"] = {
   },
   "getPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
   "getAttributionTag()Ljava/lang/String;": () => null,
+  "getAttributionSource()Landroid/content/AttributionSource;": function (this: JContext) { return attribution ??= newObj("android/content/AttributionSource", null); },
   // only this package is installed, so its own name is the one context that exists; AOSP
   // throws NameNotFoundException for anything else (callers handle it — it is how they
   // discover an optional dependency is absent)

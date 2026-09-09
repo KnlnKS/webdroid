@@ -37,8 +37,9 @@ class JSparseArray extends JObj {
   del(k: number) { if (this.m.delete(k)) this.sorted = null; }
   reset() { this.m.clear(); this.sorted = null; }
 }
-const sparseMethods = (valDesc: string, dflt: unknown): NativeSpec["methods"] => ({
+const sparseMethods = (valDesc: string, dflt: unknown, cls = "android/util/SparseArray"): NativeSpec["methods"] => ({
   "<init>()V": function () {},
+  [`clone()L${cls};`]: function (this: JSparseArray) { const c = new (this.constructor as new () => JSparseArray)(); for (const [k, v] of this.m) c.set(k, v); return c; },
   "<init>(I)V": function () {},
   [`get(I)${valDesc}`]: function (this: JSparseArray, k: number) { return this.m.get(k) ?? dflt; },
   [`get(I${valDesc})${valDesc}`]: function (this: JSparseArray, k: number, d: unknown) { return this.m.has(k) ? this.m.get(k) : d; },
@@ -55,9 +56,9 @@ const sparseMethods = (valDesc: string, dflt: unknown): NativeSpec["methods"] =>
   [`indexOfValue(${valDesc})I`]: function (this: JSparseArray, v: unknown) { return [...this.m.values()].indexOf(v); },
 });
 rt.register({ name: "android/util/SparseArray", ctor: JSparseArray, methods: sparseMethods("Ljava/lang/Object;", null) });
-rt.register({ name: "android/util/SparseIntArray", ctor: class extends JSparseArray {}, methods: sparseMethods("I", 0) });
-rt.register({ name: "android/util/SparseBooleanArray", ctor: class extends JSparseArray {}, methods: sparseMethods("Z", 0) });
-rt.register({ name: "android/util/SparseLongArray", ctor: class extends JSparseArray {}, methods: sparseMethods("J", 0n) });
+rt.register({ name: "android/util/SparseIntArray", ctor: class extends JSparseArray {}, methods: sparseMethods("I", 0, "android/util/SparseIntArray") });
+rt.register({ name: "android/util/SparseBooleanArray", ctor: class extends JSparseArray {}, methods: sparseMethods("Z", 0, "android/util/SparseBooleanArray") });
+rt.register({ name: "android/util/SparseLongArray", ctor: class extends JSparseArray {}, methods: sparseMethods("J", 0n, "android/util/SparseLongArray") });
 rt.register({ name: "android/util/LongSparseArray", ctor: class extends JSparseArray {},
   methods: {
     "<init>()V": function () {},
@@ -390,5 +391,56 @@ rt.register({
         else if (t === undefined) break;
       } while (depth > 0);
     },
+  },
+});
+
+// ── android.util.JsonWriter: the streaming writer paired with JsonReader. Text reaches the
+// Writer through its VIRTUAL write so an app's own subclass sees it.
+class JJsonWriter extends JObj { out: unknown = null; scopes: { array: boolean; n: number; named: boolean }[] = []; }
+const JW = "Landroid/util/JsonWriter;";
+/** a value or a name: separated from its predecessor by a comma, except a value after its name */
+async function jsonEmit(w: JJsonWriter, s: string) {
+  const top = w.scopes[w.scopes.length - 1];
+  if (top && !top.named && top.n++) s = "," + s;
+  if (top) top.named = false;
+  await vcall(w.out, "write", "(Ljava/lang/String;)V", s);
+  return w;
+}
+const jsonOpen = (array: boolean) => async function (this: JJsonWriter) {
+  await jsonEmit(this, array ? "[" : "{");
+  this.scopes.push({ array, n: 0, named: false });
+  return this;
+};
+const jsonClose = (c: string) => async function (this: JJsonWriter) {
+  this.scopes.pop();
+  await vcall(this.out, "write", "(Ljava/lang/String;)V", c);
+  return this;
+};
+const jsonValue = (f: (v: any) => string) => function (this: JJsonWriter, v: unknown) { return jsonEmit(this, f(v)); };
+rt.register({
+  name: "android/util/JsonWriter", ctor: JJsonWriter, ifaces: ["java/io/Closeable", "java/io/Flushable"],
+  methods: {
+    "<init>(Ljava/io/Writer;)V": function (this: JJsonWriter, out: unknown) { this.out = out; },
+    "setIndent(Ljava/lang/String;)V": () => {},
+    "setLenient(Z)V": () => {},
+    "isLenient()Z": () => 0,
+    [`beginArray()${JW}`]: jsonOpen(true),
+    [`endArray()${JW}`]: jsonClose("]"),
+    [`beginObject()${JW}`]: jsonOpen(false),
+    [`endObject()${JW}`]: jsonClose("}"),
+    [`name(Ljava/lang/String;)${JW}`]: async function (this: JJsonWriter, n: string) {
+      await jsonEmit(this, JSON.stringify(n) + ":");
+      this.scopes[this.scopes.length - 1].named = true;
+      return this;
+    },
+    [`nullValue()${JW}`]: function (this: JJsonWriter) { return jsonEmit(this, "null"); },
+    [`value(Ljava/lang/String;)${JW}`]: jsonValue((v) => v === null ? "null" : JSON.stringify(v)),
+    [`value(Z)${JW}`]: jsonValue((v) => v ? "true" : "false"),
+    [`value(Ljava/lang/Boolean;)${JW}`]: jsonValue((v) => v === null ? "null" : v.v ? "true" : "false"),
+    [`value(D)${JW}`]: jsonValue((v) => String(v)),
+    [`value(J)${JW}`]: jsonValue((v) => String(v)),
+    [`value(Ljava/lang/Number;)${JW}`]: jsonValue((v) => v === null ? "null" : String(v.v ?? v)),
+    "flush()V": function (this: JJsonWriter) { return vcall(this.out, "flush", "()V"); },
+    "close()V": function (this: JJsonWriter) { return vcall(this.out, "close", "()V"); },
   },
 });

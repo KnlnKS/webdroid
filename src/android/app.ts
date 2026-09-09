@@ -93,6 +93,12 @@ export async function fireActivityLifecycle(act: JActivity, phase: "Created" | "
     }
   }
 }
+// the API 29 Pre/Post hooks are interface defaults: an implementer's super call must find them
+rt.register({
+  name: "android/app/Application$ActivityLifecycleCallbacks", ctor: class extends JObj {},
+  methods: Object.fromEntries(["Created", "Started", "Resumed", "Paused", "Stopped", "SaveInstanceState", "Destroyed"].flatMap((phase) => ["Pre", "Post"].map((when) =>
+    [`onActivity${when}${phase}(Landroid/app/Activity;${phase === "Created" || phase === "SaveInstanceState" ? "Landroid/os/Bundle;" : ""})V`, () => {}]))),
+});
 /** Activity (API 29+) and Application both keep their own ActivityLifecycleCallbacks list */
 const lifecycleCbMethods: NativeSpec["methods"] = {
   "registerActivityLifecycleCallbacks(Landroid/app/Application$ActivityLifecycleCallbacks;)V": function (this: { lifecycleCbs: unknown[] | null }, cb: unknown) {
@@ -274,6 +280,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     }
   },
   "finishAffinity()V": function (this: JActivity) { callSelf(activityMethods, "finish()V", this); },
+  "finishAfterTransition()V": function (this: JActivity) { callSelf(activityMethods, "finish()V", this); },
   "isFinishing()Z": function (this: JActivity) { return this.finished ? 1 : 0; },
   "isDestroyed()Z": function (this: JActivity) { return this.finished ? 1 : 0; },
   "isTaskRoot()Z": () => 1,
@@ -425,9 +432,6 @@ rt.register({
   },
 });
 
-// Pure interface: implementors are dispatched dynamically by fireActivityLifecycle, which
-// probes each of the plain/Pre*/Post* variants, so no default bodies belong here.
-rt.register({ name: "android/app/Application$ActivityLifecycleCallbacks", ctor: class extends JObj {} });
 rt.register({ name: "android/content/ComponentCallbacks", ctor: class extends JObj {} });
 rt.register({ name: "android/content/ComponentCallbacks2", ctor: class extends JObj {} });
 
@@ -646,6 +650,7 @@ rt.register({ name: "android/telephony/PhoneStateListener", ctor: class extends 
 // apps `implements` this to track refresh-rate / display changes; it must link even though it never fires here
 rt.register({ name: "android/hardware/display/DisplayManager$DisplayListener", ctor: class extends JObj {} });
 rt.register({ name: "android/os/IBinder", ctor: class extends JObj {} });
+rt.register({ name: "android/os/IBinder$DeathRecipient", ctor: class extends JObj {} });
 class JBinder extends JObj { owner: unknown = null; descriptor: string | null = null; }
 rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBinder"], methods: {
   "<init>()V": function () {},

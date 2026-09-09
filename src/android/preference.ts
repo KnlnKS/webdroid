@@ -85,6 +85,7 @@ rt.register({
   name: "android/preference/PreferenceManager", ctor: JPreferenceManager,
   methods: {
     "static getDefaultSharedPreferences(Landroid/content/Context;)Landroid/content/SharedPreferences;": (c: any) => prefsOf(c),
+    "static getDefaultSharedPreferencesName(Landroid/content/Context;)Ljava/lang/String;": (c: any) => c.$host.pkg + "_preferences",
     "static setDefaultValues(Landroid/content/Context;IZ)V": () => {},
     "getSharedPreferences()Landroid/content/SharedPreferences;": function (this: JPreferenceManager) { return prefsOf(this.jctx); },
     "getContext()Landroid/content/Context;": function (this: JPreferenceManager) { return this.jctx; },

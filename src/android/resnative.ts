@@ -105,6 +105,17 @@ rt.register({
     "isNightModeActive()Z": function (this: JConfiguration) { return (this.uiMode & 0x30) === 0x20 ? 1 : 0; },
   },
 });
+// API 33: no per-app locale override is ever set here, so the app's locales are the system's
+rt.register({
+  name: "android/app/LocaleManager", ctor: class extends JObj {},
+  methods: {
+    "getApplicationLocales()Landroid/os/LocaleList;": () => emptyLocaleList,
+    "getApplicationLocales(Ljava/lang/String;)Landroid/os/LocaleList;": () => emptyLocaleList,
+    "setApplicationLocales(Landroid/os/LocaleList;)V": () => {},
+    "getSystemLocales()Landroid/os/LocaleList;": () => localeList,
+    "getOverrideLocaleConfig()Landroid/app/LocaleConfig;": () => null,
+  },
+});
 rt.register({
   name: "android/os/LocaleList", ctor: JLocaleList,
   methods: {
@@ -385,6 +396,7 @@ rt.register({
   name: "android/content/res/Resources$Theme", ctor: JTheme,
   methods: {
     "applyStyle(IZ)V": function (this: JTheme, id: number) { this.apply(id); },
+    "rebase()V": function (this: JTheme) { this.cache.clear(); },
     "resolveAttribute(ILandroid/util/TypedValue;Z)Z": function (this: JTheme, attr: number, tv: JTypedValue) {
       const v = this.lookup(attr);
       if (!v) return 0;

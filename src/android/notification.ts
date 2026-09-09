@@ -458,6 +458,8 @@ rt.register({
     "cancel(I)V": () => {},
     "cancel(Ljava/lang/String;I)V": () => {},
     "cancelAll()V": () => {},
+    "setNotificationDelegate(Ljava/lang/String;)V": () => {},
+    "getNotificationDelegate()Ljava/lang/String;": () => null,
     "createNotificationChannel(Landroid/app/NotificationChannel;)V": () => {},
     "createNotificationChannels(Ljava/util/List;)V": () => {},
     "createNotificationChannelGroup(Landroid/app/NotificationChannelGroup;)V": () => {},

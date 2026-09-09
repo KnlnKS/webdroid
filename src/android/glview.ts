@@ -308,6 +308,7 @@ rt.register({
 });
 rt.register({ name: "android/view/SurfaceHolder$Callback", ctor: class extends JObj {} });
 rt.register({ name: "android/view/SurfaceHolder$Callback2", ctor: class extends JObj {}, ifaces: ["android/view/SurfaceHolder$Callback"] });
+rt.register({ name: "android/view/TextureView$SurfaceTextureListener", ctor: class extends JObj {} });
 /** the Java Surface: one stable handle onto its holder's live surface, which ANativeWindow_fromSurface derefs */
 export class JSurface extends JObj {
   holder: JSurfaceHolder | null = null;

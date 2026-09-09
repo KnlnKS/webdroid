@@ -1,6 +1,7 @@
 // android.media: MediaPlayer over HTMLAudioElement, SoundPool over Web Audio.
 
 import { rt, JObj } from "../jvm/runtime";
+import { jarray } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { vfs } from "../jvm/natives/jio";
 rt.register({ name: "android/media/AudioManager$OnAudioFocusChangeListener", ctor: class extends JObj {} });
@@ -398,3 +399,20 @@ rt.register({
     "isEnabled()Z": () => 1,
   },
 });
+
+// no hardware codec is enumerable here: an empty list is what a device without one reports
+rt.register({ name: "android/media/MediaCodecInfo", ctor: class extends JObj {} });
+rt.register({
+  name: "android/media/MediaCodecList", ctor: class extends JObj {},
+  statics: { REGULAR_CODECS: 0, ALL_CODECS: 1 },
+  methods: {
+    "<init>(I)V": function () {},
+    "getCodecInfos()[Landroid/media/MediaCodecInfo;": () => jarray([], "Landroid/media/MediaCodecInfo;"),
+    "static getCodecCount()I": () => 0,
+    "findDecoderForFormat(Landroid/media/MediaFormat;)Ljava/lang/String;": () => null,
+    "findEncoderForFormat(Landroid/media/MediaFormat;)Ljava/lang/String;": () => null,
+  },
+});
+rt.register({ name: "android/media/MediaCodec$Callback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
+rt.register({ name: "android/media/metrics/LogSessionId", ctor: class extends JObj {}, methods: { "getStringId()Ljava/lang/String;": () => "" } });
+rt.register({ name: "android/media/MediaCodec$CryptoInfo", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });

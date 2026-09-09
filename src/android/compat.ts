@@ -136,6 +136,7 @@ rt.register({
   name: "android/view/ViewConfiguration", ctor: JViewConfiguration,
   methods: {
     "static get(Landroid/content/Context;)Landroid/view/ViewConfiguration;": () => vc,
+    "static getZoomControlsTimeout()J": () => 10000n,
     "getScaledTouchSlop()I": () => device.touchSlop,
     "getScaledPagingTouchSlop()I": () => device.touchSlop * 2,
     "getScaledMinimumFlingVelocity()I": () => Math.round(device.dp(50)),

@@ -106,6 +106,7 @@ rt.register({
     },
     "getStatusBarColor()I": () => appHost?.statusBarColor ?? -16777216,
     "setNavigationBarColor(I)V": function (this: JWindow, c: number) { if (appHost) appHost.navBarColor = c; },
+    "setSharedElementsUseOverlay(Z)V": () => {},
     "setNavigationBarDividerColor(I)V": function (this: JWindow, c: number) { this.navBarDividerColor = c; invalidate(); },
     "getNavigationBarDividerColor()I": function (this: JWindow) { return this.navBarDividerColor; },
     "setSoftInputMode(I)V": () => {},

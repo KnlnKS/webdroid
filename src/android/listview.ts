@@ -698,6 +698,16 @@ rt.register({ name: "android/widget/AbsListView", ctor: class extends JListView 
   methods: listViewMethods });
 rt.register({ name: "android/widget/ListView", ctor: JListView, sup: "android/widget/AbsListView", methods: listViewMethods });
 rt.register({
+  name: "android/widget/ExpandableListView", ctor: class extends JListView {}, sup: "android/widget/ListView",
+  methods: {
+    "static getPackedPositionForChild(II)J": (group: number, child: number) => (1n << 63n) | (BigInt(group >>> 0) << 32n) | BigInt(child >>> 0),
+    "static getPackedPositionForGroup(I)J": (group: number) => BigInt(group >>> 0) << 32n,
+    "static getPackedPositionType(J)I": (p: bigint) => p === -1n ? 2 : p < 0n ? 1 : 0,
+    "static getPackedPositionGroup(J)I": (p: bigint) => p === -1n ? -1 : Number((p >> 32n) & 0x7fffffffn),
+    "static getPackedPositionChild(J)I": (p: bigint) => p < 0n && p !== -1n ? Number(p & 0xffffffffn) : -1,
+  },
+});
+rt.register({
   name: "android/widget/AbsListView$LayoutParams", ctor: class extends JLayoutParams {}, sup: "android/view/ViewGroup$LayoutParams",
   methods: {
     "<init>(II)V": function (this: JLayoutParams, w: number, h: number) { this.width = w; this.height = h; },

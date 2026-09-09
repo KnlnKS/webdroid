@@ -77,6 +77,7 @@ const intentMethods: NativeSpec["methods"] = {
   "setFlags(I)Landroid/content/Intent;": function (this: JIntent, f: number) { this.flags = f; return this; },
   "getFlags()I": function (this: JIntent) { return this.flags; },
   "addCategory(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, c: string) { this.categories.add(c); return this; },
+  "hasCategory(Ljava/lang/String;)Z": function (this: JIntent, c: string) { return this.categories.has(c) ? 1 : 0; },
   "getExtras()Landroid/os/Bundle;": function (this: JIntent) { return this.extras.map.size ? this.extras : null; },
   "putExtras(Landroid/os/Bundle;)Landroid/content/Intent;": function (this: JIntent, b: JBundle) {
     if (b) for (const [k, v] of b.map) this.extras.map.set(k, v);

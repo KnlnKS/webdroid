@@ -420,6 +420,10 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
     function (this: JSQLiteDatabase, table: string, nullCol: string | null, cv: JContentValues) {
       return doInsert(this, table, cv, " OR REPLACE");
     },
+  "replaceOrThrow(Ljava/lang/String;Ljava/lang/String;Landroid/content/ContentValues;)J":
+    function (this: JSQLiteDatabase, table: string, nullCol: string | null, cv: JContentValues) {
+      return doInsert(this, table, cv, " OR REPLACE", true);
+    },
   "update(Ljava/lang/String;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I":
     function (this: JSQLiteDatabase, table: string, cv: JContentValues, where: string | null, args: unknown[] | null) {
       const sets = [...cv.map.keys()].map((k) => `"${k}"=?`).join(",");
@@ -605,6 +609,10 @@ rt.register({
   methods: {
     "static queryNumEntries(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;)J": (db: JSQLiteDatabase, table: string) => {
       const c = runQuery(db, `SELECT COUNT(*) FROM "${table}"`, null);
+      return longValue(c.rows[0]?.[0]);
+    },
+    "static queryNumEntries(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)J": (db: JSQLiteDatabase, table: string, where: string | null, args: unknown[]) => {
+      const c = runQuery(db, `SELECT COUNT(*) FROM "${table}"` + (where ? " WHERE " + where : ""), args);
       return longValue(c.rows[0]?.[0]);
     },
     "static longForQuery(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;[Ljava/lang/String;)J":

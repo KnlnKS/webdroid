@@ -119,3 +119,33 @@ rt.register({
     },
   },
 });
+
+// java.util.Base64: the same codec behind the fixed-flag Encoder/Decoder pairs it hands out
+class JB64Codec extends JObj { flags = NO_WRAP; }
+const codec = (flags: number) => { const c = new JB64Codec(); c.flags = flags; return c; };
+rt.register({
+  name: "java/util/Base64", ctor: class extends JObj {},
+  methods: {
+    "static getEncoder()Ljava/util/Base64$Encoder;": () => codec(NO_WRAP),
+    "static getUrlEncoder()Ljava/util/Base64$Encoder;": () => codec(NO_WRAP | URL_SAFE),
+    "static getMimeEncoder()Ljava/util/Base64$Encoder;": () => codec(CRLF),
+    "static getDecoder()Ljava/util/Base64$Decoder;": () => codec(NO_WRAP),
+    "static getUrlDecoder()Ljava/util/Base64$Decoder;": () => codec(NO_WRAP | URL_SAFE),
+    "static getMimeDecoder()Ljava/util/Base64$Decoder;": () => codec(CRLF),
+  },
+});
+rt.register({
+  name: "java/util/Base64$Encoder", ctor: JB64Codec,
+  methods: {
+    "encodeToString([B)Ljava/lang/String;": function (this: JB64Codec, b: Int8Array) { return toStr(enc(b, 0, b.length, this.flags)); },
+    "encode([B)[B": function (this: JB64Codec, b: Int8Array) { return toBytes(enc(b, 0, b.length, this.flags)); },
+    "withoutPadding()Ljava/util/Base64$Encoder;": function (this: JB64Codec) { return codec(this.flags | NO_PADDING); },
+  },
+});
+rt.register({
+  name: "java/util/Base64$Decoder", ctor: JB64Codec,
+  methods: {
+    "decode(Ljava/lang/String;)[B": (s: string) => { const c = strCodes(s); return dec(c, 0, c.length); },
+    "decode([B)[B": (b: Int8Array) => dec(b, 0, b.length),
+  },
+});
