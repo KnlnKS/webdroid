@@ -454,3 +454,12 @@ rt.register({
   },
 });
 rt.register({ name: "android/media/Spatializer$OnSpatializerStateChangedListener", ctor: class extends JObj {} });
+
+rt.register({
+  name: "android/media/AudioDeviceCallback", ctor: class extends JObj {},
+  methods: {
+    "<init>()V": function () {},
+    "onAudioDevicesAdded([Landroid/media/AudioDeviceInfo;)V": () => {},
+    "onAudioDevicesRemoved([Landroid/media/AudioDeviceInfo;)V": () => {},
+  },
+});

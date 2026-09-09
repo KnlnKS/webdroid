@@ -541,6 +541,8 @@ for (const [name, methods, statics] of [
     "isWiredHeadsetOn()Z": () => 0,
     // the output path is the Web Audio context: its rate is real, its buffer size is not a fixed number of frames
     "getProperty(Ljava/lang/String;)Ljava/lang/String;": (k: string) => (k === "android.media.property.OUTPUT_SAMPLE_RATE" ? String(outputSampleRate()) : null),
+    "registerAudioDeviceCallback(Landroid/media/AudioDeviceCallback;Landroid/os/Handler;)V": () => {},
+    "unregisterAudioDeviceCallback(Landroid/media/AudioDeviceCallback;)V": () => {},
     "getDevices(I)[Landroid/media/AudioDeviceInfo;": () => jarray([], "Landroid/media/AudioDeviceInfo;"),
   }, {
     MODE_NORMAL: 0, MODE_RINGTONE: 1, MODE_IN_CALL: 2, MODE_IN_COMMUNICATION: 3,
