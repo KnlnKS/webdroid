@@ -95,7 +95,7 @@ function mkdirPath(cpu: Cpu, path: string): number {
   if (parent !== "/" && !vfs.isDir(parent)) return fail(cpu, E.NOENT);
   vfs.mkdir(p); return 0;
 }
-function fdOpen(cpu: Cpu, path: string, flags: number): number {
+function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
   path = vfs.norm(path);
   const acc = flags & O_ACCMODE;
   if (path === "/dev/urandom" || path === "/dev/random") {
@@ -123,6 +123,9 @@ function fdOpen(cpu: Cpu, path: string, flags: number): number {
   return put({ ...fdBase(path), data: data ?? new Uint8Array(0), source: data ? undefined : found?.source, len: data?.length ?? found?.size ?? 0, write: acc !== 0, append: !!(flags & O_APPEND), nonblock: !!(flags & O_NONBLOCK), statusFlags: flags & (O_ACCMODE | O_APPEND | O_NONBLOCK) });
 }
 function put(f: Fd): number { const fd = allocateFd(); fds.set(fd, f); return fd; }
+/** a Java-side open into the same descriptor table native code reads, so a fd handed across JNI is live */
+export const javaOpenFd = (path: string, flags: number): number => fdOpen(null, path, flags);
+export const javaCloseFd = (fd: number): void => { fdClose(null, fd); };
 
 function grow(f: Fd, need: number): void {
   if (need <= f.data.length) return;
@@ -243,8 +246,8 @@ async function readIntoAsync(cpu: Cpu, f: Fd, off: number, dst: number, n: numbe
 function flushFd(f: Fd): void {
   if (f.dirty && !f.synthetic) { vfs.write(f.path, f.data.slice(0, f.len)); f.dirty = false; }
 }
-function fdClose(cpu: Cpu, fd: number): number {
-  if (isNativeSocket(fd)) return nativeSocketClose(cpu, fd);
+function fdClose(cpu: Cpu | null, fd: number): number {
+  if (isNativeSocket(fd)) return cpu ? nativeSocketClose(cpu, fd) : fail(cpu, E.BADF);
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   fds.delete(fd); releaseFd(fd);

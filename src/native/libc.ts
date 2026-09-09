@@ -48,7 +48,7 @@ export const offArg = (a: { i(): number; l(): bigint }) => (PTR === 8 ? Number(a
 
 function setErrno(cpu: Cpu, e: number): void { mem.st32(cpu.errnoAddr, e); }
 /** the common "-1 and errno" return */
-export function fail(cpu: Cpu, e: number): number { setErrno(cpu, e); return -1; }
+export function fail(cpu: Cpu | null, e: number): number { if (cpu) setErrno(cpu, e); return -1; }
 
 const enc = new TextEncoder(), dec = new TextDecoder();
 export const utf8 = (s: string) => enc.encode(s);
@@ -273,12 +273,12 @@ export function libcInit(): void {
       mem.decommitVa(va, n);
       return 0;
     },
-    // File mappings are private copies; shared writable mappings cannot persist guest stores.
+    // File mappings are private copies, shared ones included: one process sees its own stores
+    // through the mapping, and nothing persists them to the file.
     mmap: (cpu, a) => {
       const hint = a.va(), n = Number(a.va()), prot = a.i(), flags = a.i(), fd = a.i(), off = offArg(a);
       const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
       if (!Number.isSafeInteger(n) || n <= 0 || (flags & 0x10 && (hint & 4095n))) return failed(E.INVAL);
-      if (fd !== -1 && !(flags & 0x20) && (flags & 0x1) && (prot & 2)) return failed(E.NOSYS);
       const reserve = (flags & 0x20) !== 0 && prot === 0;
       const p = flags & 0x10 ? hint : mem.mapVa(n, reserve);
       if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return failed(E.NOMEM);

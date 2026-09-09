@@ -4,13 +4,14 @@ import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
-import { vcall, curThread, mainThread, JThread, setCurThread, reportUncaught, mkEnumSet, newObj } from "../jvm/natives/jlang";
+import { vcall, curThread, mainThread, JThread, setCurThread, reportUncaught, mkEnumSet, newObj, defineException } from "../jvm/natives/jlang";
 export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
 import { uiState } from "./view";
 import { mkExecutor } from "../jvm/natives/jconc";
 import { yieldToLoop } from "../native/cpu";
 import { mkFile, JInputStream, JOutputStream, vfs } from "../jvm/natives/jio";
+import { javaOpenFd, javaCloseFd } from "../native/stdio";
 import { newArrayList, newStringSet } from "../jvm/natives/jutil";
 
 rt.register({
@@ -108,6 +109,24 @@ rt.register({
 });
 
 rt.register({ name: "android/os/Handler$Callback", ctor: class extends JObj {} });
+
+defineException("android/os/RemoteException", "java/lang/Exception");
+defineException("android/os/DeadObjectException", "android/os/RemoteException");
+// a Messenger over a Handler delivers in-process; one over a foreign binder has no process behind it
+class JMessenger extends JObj { handler: JHandler | null = null; }
+rt.register({
+  name: "android/os/Messenger", ctor: JMessenger, ifaces: ["android/os/Parcelable"],
+  methods: {
+    "<init>(Landroid/os/Handler;)V": function (this: JMessenger, h: JHandler) { this.handler = h; },
+    "<init>(Landroid/os/IBinder;)V": function () {},
+    "send(Landroid/os/Message;)V": function (this: JMessenger, m: JMessage) {
+      if (!this.handler) throw rt.mkThrowable("android/os/DeadObjectException", null);
+      this.handler.send(m, 0);
+    },
+    "getBinder()Landroid/os/IBinder;": () => newObj("android/os/Binder"),
+    "describeContents()I": () => 0,
+  },
+});
 
 let handlerSeq = 0;
 class JHandler extends JObj {
@@ -443,7 +462,7 @@ for (const [t, d] of [["Parcelable", "Ljava/lang/Object;"], ["Serializable", "Lj
 }
 rt.register({ name: "android/os/BaseBundle", ctor: JBaseBundle, methods: bundleMethods });
 rt.register({ name: "android/os/Bundle", ctor: JBundle, sup: "android/os/BaseBundle",
-  ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], methods: bundleMethods });
+  ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], statics: { get EMPTY() { return new JBundle(); } }, methods: bundleMethods });
 rt.register({ name: "android/os/PersistableBundle", ctor: class extends JBaseBundle {}, sup: "android/os/BaseBundle",
   ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], methods: bundleMethods });
 
@@ -453,7 +472,6 @@ export const PARCELABLE = {
 } as const;
 rt.register({ name: "android/os/Parcelable", ctor: class extends JObj {} });
 rt.register({ name: "android/os/Parcelable$Creator", ctor: class extends JObj {} });
-rt.register({ name: "android/os/Parcel", ctor: class extends JObj {} });
 rt.register({
   name: "android/os/CancellationSignal", ctor: class extends JObj { cancelled = 0; },
   methods: {
@@ -475,6 +493,14 @@ rt.register({
 class JParcelFileDescriptor extends JObj {
   bytes: Uint8Array = new Uint8Array(0);
   sink: ((b: Uint8Array) => unknown) | null = null;
+  path = "";
+  flags = 0;
+  fd = -1;
+}
+/** the native descriptor, opened on first request: only a fd that crosses JNI needs one */
+function pfdFd(p: JParcelFileDescriptor): number {
+  if (p.fd < 0 && p.path) p.fd = javaOpenFd(p.path, p.flags);
+  return p.fd;
 }
 export function mkPfd(bytes: Uint8Array, sink: ((b: Uint8Array) => unknown) | null): JParcelFileDescriptor {
   const p = new JParcelFileDescriptor();
@@ -493,17 +519,24 @@ rt.register({
     "static open(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;": (f: { path: string }, mode: number) => {
       const path = f?.path ?? "";
       if (!vfs.exists(path) && !(mode & 0x08000000)) throw rt.mkThrowable("java/io/FileNotFoundException", path);
-      return mkPfd(vfs.read(path) ?? new Uint8Array(0), (b) => vfs.write(path, b));
+      if (mode & 0x04000000) vfs.write(path, new Uint8Array(0));
+      const p = mkPfd(vfs.read(path) ?? new Uint8Array(0), (b) => vfs.write(path, b));
+      p.path = path;
+      // MODE_* bits → O_* flags: the access mode, then create/truncate/append
+      p.flags = ((mode >>> 28) & 3) - 1 + (mode & 0x08000000 ? 0x40 : 0) + (mode & 0x04000000 ? 0x200 : 0) + (mode & 0x02000000 ? 0x400 : 0);
+      return p;
     },
     "static parseMode(Ljava/lang/String;)I": (m: string) =>
       (m?.includes("w") ? 0x28000000 : 0x10000000) | (m?.includes("t") || m === "w" ? 0x04000000 : 0)
       | (m?.includes("a") ? 0x02000000 : 0),
     "getFileDescriptor()Ljava/io/FileDescriptor;": () => new (rt.link("java/io/FileDescriptor").ctor)(),
-    "getFd()I": () => -1,
-    "detachFd()I": () => -1,
-    "dup()Landroid/os/ParcelFileDescriptor;": function (this: JParcelFileDescriptor) { return mkPfd(this.bytes, this.sink); },
+    "getFd()I": function (this: JParcelFileDescriptor) { return pfdFd(this); },
+    "static adoptFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd }),
+    "static fromFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd }),
+    "detachFd()I": function (this: JParcelFileDescriptor) { const fd = pfdFd(this); this.fd = -1; return fd; },
+    "dup()Landroid/os/ParcelFileDescriptor;": function (this: JParcelFileDescriptor) { return Object.assign(mkPfd(this.bytes, this.sink), { path: this.path, flags: this.flags }); },
     "getStatSize()J": function (this: JParcelFileDescriptor) { return BigInt(this.bytes.length); },
-    "close()V": () => {},
+    "close()V": function (this: JParcelFileDescriptor) { if (this.fd >= 0) javaCloseFd(this.fd); this.fd = -1; },
     "checkError()V": () => {},
   },
 });
@@ -603,11 +636,13 @@ class JKeyEvent extends JObj { action = 0; keyCode = 0; }
 rt.register({
   name: "android/view/KeyEvent", ctor: JKeyEvent, ifaces: ["android/os/Parcelable"],
   statics: {
-    ACTION_DOWN: 0, ACTION_UP: 1, KEYCODE_BACK: 4, KEYCODE_ENTER: 66, KEYCODE_DEL: 67,
+    ACTION_DOWN: 0, ACTION_UP: 1, KEYCODE_BACK: 4, KEYCODE_ENTER: 66, KEYCODE_DEL: 67, MAX_KEYCODE: 84,
     KEYCODE_DPAD_UP: 19, KEYCODE_DPAD_DOWN: 20, KEYCODE_MENU: 82, KEYCODE_VOLUME_UP: 24, KEYCODE_VOLUME_DOWN: 25,
   },
   methods: {
     "<init>(II)V": function (this: JKeyEvent, a: number, k: number) { this.action = a; this.keyCode = k; },
+    "static getMaxKeyCode()I": () => 316,
+    "static getModifierMetaStateMask()I": () => 0x770ff,
     "getAction()I": function (this: JKeyEvent) { return this.action; },
     "getKeyCode()I": function (this: JKeyEvent) { return this.keyCode; },
     "getRepeatCount()I": () => 0,
