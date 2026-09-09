@@ -628,6 +628,12 @@ function mapMethods(): NativeSpec["methods"] {
       if (mk !== SLOW) return this.m.has(mk) ? 1 : 0;
       return slowFind(this.slow, k).then((i) => (i >= 0 ? 1 : 0));
     }),
+    "forEach(Ljava/util/function/BiConsumer;)V": async function (this: JMap, fn: unknown) {
+      for (const e of [...allEnts(this)]) await vcall(fn, "accept", "(Ljava/lang/Object;Ljava/lang/Object;)V", e.k, e.v);
+    },
+    "replaceAll(Ljava/util/function/BiFunction;)V": async function (this: JMap, fn: unknown) {
+      for (const e of allEnts(this)) e.v = await vcall(fn, "apply", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", e.k, e.v);
+    },
     "containsValue(Ljava/lang/Object;)Z": async function (this: JMap, v: unknown) {
       for (const e of allEnts(this)) {
         const r = jeq(e.v, v);

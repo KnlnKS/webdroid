@@ -302,9 +302,24 @@ function newArrayOf(cls: JClass | null, len: number): unknown {
   return rt.oa(len, elem);
 }
 
+/** the element descriptor an array of `cls` carries; the outer levels of a multi-dim array prefix it with '[' */
+function elemDescOf(cls: JClass | null): string {
+  const prim = cls?.primName;
+  return prim && PRIM_DESC[prim] ? PRIM_DESC[prim] : cls?.arrDesc ? "[" + cls.arrDesc : cls?.ci ? "L" + cls.ci.name + ";" : "Ljava/lang/Object;";
+}
+function newMultiArray(cls: JClass | null, dims: Int32Array, i: number): unknown {
+  if (i === dims.length - 1) return newArrayOf(cls, dims[i]);
+  const a = rt.oa(dims[i], "[".repeat(dims.length - 1 - i) + elemDescOf(cls)) as unknown[];
+  for (let k = 0; k < a.length; k++) a[k] = newMultiArray(cls, dims, i + 1);
+  return a;
+}
 rt.register({
   name: "java/lang/reflect/Array", ctor: class extends JObj {},
   methods: {
+    "static newInstance(Ljava/lang/Class;[I)Ljava/lang/Object;": (cls: JClass | null, dims: Int32Array) => {
+      if (!dims.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Dimensions cannot be empty");
+      return newMultiArray(cls, dims, 0);
+    },
     "static newInstance(Ljava/lang/Class;I)Ljava/lang/Object;": (cls: JClass | null, len: number) => newArrayOf(cls, len),
     "static getLength(Ljava/lang/Object;)I": (a: ArrayLike<unknown> | null) => a?.length ?? 0,
     "static get(Ljava/lang/Object;I)Ljava/lang/Object;": (a: ArrayLike<unknown>, i: number) => a[i],
