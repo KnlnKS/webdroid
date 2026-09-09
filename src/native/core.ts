@@ -47,7 +47,11 @@ export interface Core {
   invalidate_all(): void;
   cpu_stat(i: number): number;
   set_max_block(n: number): void;
+  host_bind(slot: number, id: number): void;
+  host_bypass(on: number): void;
 }
+/** the libc calls the core serves itself, by the id libc.zig gives them */
+export const CORE_LIBC: Record<string, number> = { memcpy: 1, memmove: 2, memset: 3, memcmp: 4, memchr: 5, strlen: 6, strnlen: 7, strcmp: 8, strncmp: 9, malloc: 10, free: 11, calloc: 12, realloc: 13, memalign: 14, posix_memalign: 15, malloc_usable_size: 16 };
 
 export const memory = new WebAssembly.Memory({ initial: MEM_SIZE_A32 / 65536, maximum: MEM_SIZE_A64 / 65536 });
 

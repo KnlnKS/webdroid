@@ -24,7 +24,7 @@ export type CallArg = number | bigint | { f: number } | { d: number };
 
 // the struct layout, from the core rather than spelled twice
 const L = (i: number) => core.layout(i);
-const SIZE = L(0), OFF_X = L(1), OFF_PC = L(2), OFF_V = L(3), OFF_CPSR = L(4), OFF_FPCR = L(5), OFF_FPSR = L(6), OFF_EXCL = L(7), OFF_TLS = L(8), OFF_IC = L(9), OFF_BPC = L(10), OFF_A64 = L(12), OFF_EXIT = L(13), OFF_WORD = L(14), OFF_ADDR = L(15);
+const SIZE = L(0), OFF_X = L(1), OFF_PC = L(2), OFF_V = L(3), OFF_CPSR = L(4), OFF_FPCR = L(5), OFF_FPSR = L(6), OFF_EXCL = L(7), OFF_TLS = L(8), OFF_IC = L(9), OFF_BPC = L(10), OFF_A64 = L(12), OFF_EXIT = L(13), OFF_WORD = L(14), OFF_ADDR = L(15), OFF_ERRNO = L(17);
 /** the architectural state a nested call saves and restores: registers, pc, V file, flags, monitor */
 const ARCH_SIZE = L(16);
 const FAULTS = ["unimplemented", "undefined", "bad address", "misaligned pc", "dc zva", "brk", "svc: unsupported syscall", "system register", "null page"];
@@ -112,6 +112,7 @@ export class Cpu {
     if (!this.threadData) throw new NativeFault("[native] out of memory for thread data");
     this.tlsBase = this.threadData;
     this.errnoAddr = this.threadData + 256;
+    this.u32[OFF_ERRNO >> 2] = this.errnoAddr;
     cpus.add(this);
   }
   private views(): void {

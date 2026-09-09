@@ -5,6 +5,7 @@ import type { Cpu } from "./cpu";
 import { mem } from "./mem";
 import { trampAddr, TRAMP_BASE, TRAMP_END, RET_SENTINEL } from "./abi";
 import { perf } from "../perf";
+import { core, CORE_LIBC } from "./core";
 
 export const NORET: unique symbol = Symbol("noret");
 /** the result is the first argument, still in x0 (memcpy and its kin): nothing to translate back */
@@ -132,6 +133,7 @@ export function defineHost(name: string, fn: HostFn): number {
   const slot = fns.length;
   if (trampAddr(slot) >= RET_SENTINEL) throw new Error("out of trampoline slots");
   fns.push(fn); names.push(name);
+  if (CORE_LIBC[name]) core.host_bind(slot, CORE_LIBC[name]);
   // `bx lr` at the slot so a guest that reads its own code (or a disassembler) sees something sane
   mem.u32[trampAddr(slot) >>> 2] = 0xe12fff1e;
   return trampAddr(slot);

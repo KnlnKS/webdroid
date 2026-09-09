@@ -7,6 +7,7 @@ const abi = @import("abi.zig");
 const mem = @import("mem.zig");
 const a64 = @import("a64.zig");
 const arm = @import("arm.zig");
+const libc = @import("libc.zig");
 
 pub const Cpu = extern struct {
     // the architectural state Cpu.call saves and restores: everything up to `tls`
@@ -29,6 +30,8 @@ pub const Cpu = extern struct {
     exit: u32,
     fault_word: u32,
     fault_addr: u32,
+    /// the thread's errno, for calls served in the core
+    errno_addr: u32,
 
     pub inline fn n(c: *Cpu) u32 {
         return c.cpsr >> 31;
@@ -85,6 +88,7 @@ export fn layout(i: u32) u32 {
         14 => @offsetOf(Cpu, "fault_word"),
         15 => @offsetOf(Cpu, "fault_addr"),
         16 => @offsetOf(Cpu, "tls"), // the end of the saved state
+        17 => @offsetOf(Cpu, "errno_addr"),
         else => 0xffff_ffff,
     };
 }
@@ -155,7 +159,11 @@ export fn invalidate_all() void {
     while (pg < (abi.MEM_SIZE_A64 >> abi.PAGE_SHIFT)) : (pg += 1) dropPage(pg);
 }
 export fn cpu_stat(i: u32) u32 {
-    return if (i == 0) stats.pages else stats.invalidated;
+    return switch (i) {
+        0 => stats.pages,
+        1 => stats.invalidated,
+        else => libc.calls,
+    };
 }
 /// instructions per interpreted block; 1 makes every instruction a slice boundary (the step tracer)
 pub var max_block: u32 = 256;
@@ -176,8 +184,24 @@ export fn run_slice(cp: u32, budget: u32) u32 {
         const pc: u32 = @truncate(c.pc);
         if (isTramp(pc)) {
             if (pc == abi.RET_SENTINEL) return @intFromEnum(Exit.ret);
-            c.exit = (pc - abi.TRAMP_BASE) >> 3;
-            return @intFromEnum(Exit.host);
+            const slot = (pc - abi.TRAMP_BASE) >> 3;
+            const id = libc.slot_fn[slot];
+            if (id == 0 or libc.bypass) {
+                c.exit = slot;
+                return @intFromEnum(Exit.host);
+            }
+            if (!libc.call(c, id)) {
+                c.exit = @intFromEnum(Fault.bad_address);
+                c.fault_word = 0;
+                return @intFromEnum(Exit.fault);
+            }
+            // return as the host would: to lr, interworking on ARM32
+            const lr: u32 = @truncate(c.x[if (c.a64 != 0) 30 else 14]);
+            if (c.a64 != 0) c.pc = lr else {
+                c.cpsr = (c.cpsr & ~@as(u32, 1 << 5)) | ((lr & 1) << 5);
+                c.pc = lr & ~@as(u32, 1);
+            }
+            continue;
         }
         const st = if (c.a64 != 0) a64.block(c, pc) else arm.block(c, pc);
         switch (st) {

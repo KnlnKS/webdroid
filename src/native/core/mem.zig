@@ -106,7 +106,7 @@ fn bump(n: u32) u32 {
     }
 }
 
-export fn malloc(n: u32) u32 {
+pub export fn malloc(n: u32) u32 {
     if (n > PAGE_MAX) {
         const p = map_pages(n, 0, PAGE_SIZE);
         if (p != 0) {
@@ -163,12 +163,12 @@ pub export fn free(p_in: u32) u32 {
     }
     return 1;
 }
-export fn usable_size(p: u32) u32 {
+pub export fn usable_size(p: u32) u32 {
     if (p == 0) return 0;
     if (p & (PAGE_SIZE - 1) == 0 and big_len[pageOf(p)] != 0) return big_len[pageOf(p)];
     return ld32(p - 4);
 }
-export fn realloc(p: u32, n: u32) u32 {
+pub export fn realloc(p: u32, n: u32) u32 {
     if (p == 0) return malloc(n);
     if (n == 0) {
         _ = free(p);
@@ -190,7 +190,7 @@ pub export fn calloc(n: u32, m: u32) u32 {
     if (p != 0) fill(p, 0, @intCast(total));
     return p;
 }
-export fn memalign(alignment: u32, n: u32) u32 {
+pub export fn memalign(alignment: u32, n: u32) u32 {
     if (alignment <= 16) return malloc(n);
     if (alignment >= PAGE_SIZE and (alignment & (alignment - 1)) == 0) {
         const p = map_pages(n, 0, alignment);
@@ -372,7 +372,7 @@ export fn plane_reserved(h: u32) u32 {
     return @intFromBool(R[h & 255] != 0);
 }
 /// buffer offset → the address the guest knows it by: itself in plane 0, else the plane's
-export fn va(phys: u32) u64 {
+pub export fn va(phys: u32) u64 {
     if (pool_base == 0 or phys < pool_base) return phys;
     const u = (phys - pool_base) / UNIT;
     if (u >= owner_len or owner[u] < 0) return phys;

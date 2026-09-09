@@ -16,7 +16,7 @@ export const LOW = 0x1_0000;
 const STACK_SPAN = 0x0400_0000;                // thread stacks, 1 MiB + a 64 KiB guard gap each: 60 of them
 const HOST_SPAN = 0x0008_0000;                 // host-owned guest data: __sF, _ctype_, JNI tables, static strings, program headers
 const TRAMP_SPAN = 0x0007_0000;                // host-call trampolines, 8 bytes per slot
-const KERN_SPAN = 0x00a0_0000;                 // the core's page tables (mem.zig, cpu.zig)
+const KERN_SPAN = 0x00b0_0000;                 // the core's page tables (mem.zig, cpu.zig)
 
 export const STACK_BASE = 0x0010_0000;
 export const STACK_END = STACK_BASE + STACK_SPAN;

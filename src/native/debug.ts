@@ -7,6 +7,7 @@ import { jniMissing, jniTrace, registered } from "./jni";
 import { Cpu, cpus, codeStats, stepMode, setStepMode, profile, slice, isA64, setA64, hasProcessExited, yieldStats, sigHandlers, watchPcs, lastFault, invalidations } from "./cpu";
 import { mainThread } from "../jvm/natives/jlang";
 import { mem } from "./mem";
+import { core } from "./core";
 import { glProbe } from "./gles1";
 import { glRing, glDebug } from "./gles3";
 import { netDebug } from "./net";
@@ -17,6 +18,7 @@ export const native = {
   /** host-call trace: trace(true), trace(/^gl/), trace(false); the ring is trace.ring */
   trace(on: boolean | RegExp = true) {
     hostTrace.on = !!on;
+    core.host_bypass(on ? 1 : 0);
     hostTrace.filter = on instanceof RegExp ? on : null;
     if (!on) hostTrace.ring.length = 0;
     return hostTrace;
