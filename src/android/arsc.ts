@@ -37,6 +37,8 @@ interface Config {
 
 const defaultConfig: Config = { density: 0, sdk: 0, orientation: 0, night: 0, lang: "", swdp: 0, wdp: 0, hdp: 0, size: 0, dir: 0, uiType: 0, score: 0 };
 
+/** a split table's string index → its slot in the base pool */
+type Remap = ((i: number) => number) | null;
 /** the archive an Arsc was parsed from: a res/… path to its bytes, or null */
 export type Files = (path: string) => Uint8Array | null;
 
@@ -54,22 +56,32 @@ export class Arsc {
   private profiles = new Map<string, ResourceProfile>();
   private active: ResourceProfile | null = null;
 
-  constructor(bytes: Uint8Array, readonly files: Files = () => null) {
+  constructor(bytes: Uint8Array, readonly files: Files = () => null) { this.parse(bytes, false); }
+
+  /** A config split's table: the same package, carrying only its configs' entries. Its value
+   *  strings are appended past the base pool so every entry keeps indexing one pool. */
+  add(bytes: Uint8Array): void { this.parse(bytes, true); }
+
+  private parse(bytes: Uint8Array, split: boolean) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     if (view.getUint16(0, true) !== 0x0002) throw new Error("not arsc");
     let pos = view.getUint16(2, true);
     const total = view.getUint32(4, true);
+    let remap: Remap = null;
     while (pos < total) {
       const type = view.getUint16(pos, true);
       const headerSize = view.getUint16(pos + 2, true);
       const size = view.getUint32(pos + 4, true);
-      if (type === 0x0001) this.values = new StringPool(view, pos);
-      else if (type === 0x0200) this.parsePackage(view, pos, headerSize, size);
+      if (type === 0x0001) {
+        const pool = new StringPool(view, pos);
+        if (!split) this.values = pool;
+        else { const at = this.values.strings.length; this.values.strings.push(...pool.strings); remap = (i) => i === 0xffffffff ? i : at + i; }
+      } else if (type === 0x0200) this.parsePackage(view, pos, headerSize, size, remap);
       pos += size;
     }
   }
 
-  private parsePackage(view: DataView, base: number, headerSize: number, size: number) {
+  private parsePackage(view: DataView, base: number, headerSize: number, size: number, remap: Remap) {
     this.pkgId = view.getUint32(base + 8, true);
     let name = "";
     for (let i = 0; i < 128; i++) {
@@ -87,12 +99,12 @@ export class Arsc {
     while (pos < end) {
       const ctype = view.getUint16(pos, true);
       const csize = view.getUint32(pos + 4, true);
-      if (ctype === 0x0201) this.parseType(view, pos, typeNames, keyNames);
+      if (ctype === 0x0201) this.parseType(view, pos, typeNames, keyNames, remap);
       pos += csize;
     }
   }
 
-  private parseType(view: DataView, base: number, typeNames: StringPool, keyNames: StringPool) {
+  private parseType(view: DataView, base: number, typeNames: StringPool, keyNames: StringPool, remap: Remap) {
     const id = view.getUint8(base + 8);
     const cfgSize = view.getUint32(base + 20, true);
     const cfg: Config = { ...defaultConfig };
@@ -120,14 +132,15 @@ export class Arsc {
     if (this.skipAtParse(cfg)) return;
     const chunk: TypeChunk = { id, name: typeNames.get(id - 1), config: cfg, entries: new Map() };
     if (cfg.lang && cfg.lang !== this.device.lang || cfg.dir && cfg.dir !== this.device.dir) {
-      chunk.load = () => this.parseEntries(view, base, keyNames, chunk);
-    } else this.parseEntries(view, base, keyNames, chunk);
+      chunk.load = () => this.parseEntries(view, base, keyNames, chunk, remap);
+    } else this.parseEntries(view, base, keyNames, chunk, remap);
     let list = this.types.get(id);
     if (!list) this.types.set(id, (list = []));
     list.push(chunk);
   }
 
-  private parseEntries(view: DataView, base: number, keyNames: StringPool, chunk: TypeChunk): void {
+  private parseEntries(view: DataView, base: number, keyNames: StringPool, chunk: TypeChunk, remap: Remap): void {
+    const str = (type: number, data: number) => type === 0x03 && remap ? remap(data) : data;
     const headerSize = view.getUint16(base + 2, true), flags = view.getUint8(base + 9);
     const entryCount = view.getUint32(base + 12, true), entriesStart = view.getUint32(base + 16, true);
     const offBase = base + headerSize;
@@ -139,10 +152,8 @@ export class Arsc {
       const eflags = view.getUint16(p + 2, true);
       if (eflags & 0x0008) {
         // FLAG_COMPACT: word0 = key(u16) + flags(u16, high byte = dataType), word1 = data
-        const ent: ResEntry = {
-          key: keyNames.get(sizeOrKey),
-          value: { type: (eflags >> 8) & 0xff, data: view.getInt32(p + 4, true) },
-        };
+        const type = (eflags >> 8) & 0xff;
+        const ent: ResEntry = { key: keyNames.get(sizeOrKey), value: { type, data: str(type, view.getInt32(p + 4, true)) } };
         chunk.entries.set(entryIdx, ent);
         return;
       }
@@ -155,15 +166,13 @@ export class Arsc {
         const map: [number, number, number][] = [];
         for (let j = 0; j < count; j++) {
           const mp = p + 16 + j * 12;
-          map.push([
-            view.getUint32(mp, true),
-            view.getUint8(mp + 7),
-            view.getInt32(mp + 8, true),
-          ]);
+          const vt = view.getUint8(mp + 7);
+          map.push([view.getUint32(mp, true), vt, str(vt, view.getInt32(mp + 8, true))]);
         }
         ent.bag = { parent, map };
       } else {
-        ent.value = { type: view.getUint8(p + size + 3), data: view.getInt32(p + size + 4, true) };
+        const type = view.getUint8(p + size + 3);
+        ent.value = { type, data: str(type, view.getInt32(p + size + 4, true)) };
       }
       chunk.entries.set(entryIdx, ent);
     };

@@ -177,9 +177,10 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     if (hasLauncher && !mainActivity) mainActivity = n.replace(/\./g, "/");
   }
   if (!mainActivity) throw new Error("no launcher activity found");
+  // ActivityThread installs providers by descending initOrder, manifest order breaking ties
   const providers = new Map<string, XmlNode>();
-  for (const c of appNode?.children ?? []) {
-    if (c.name !== "provider") continue;
+  const providerNodes = (appNode?.children ?? []).filter((c) => c.name === "provider");
+  for (const c of providerNodes.sort((a, b) => (attr(b, "initOrder")?.data ?? 0) - (attr(a, "initOrder")?.data ?? 0))) {
     const n = attrStr(c, "name") ?? "";
     providers.set(n.startsWith(".") ? pkg + n : n, c);
   }
@@ -187,6 +188,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
 
   onStatus("resources…");
   const arsc = new Arsc(zip["resources.arsc"], (p) => zip[p] ?? null);
+  for (const sp of install.splits) if (sp.resources) arsc.add(sp.resources);
   const res = new Resources(arsc, zip, install.lazyEntries);
   const jres = mkJResources(res);
   const themeResId = themeAttr?.data ?? 0;
@@ -303,14 +305,17 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
   }
   act.$host = host;
   act.requestedOrientation = requestedOrientation;
-  // AOSP applies the manifest's android:theme before onCreate, so an app's own setTheme layers
-  // on top of it rather than replacing it
-  const actTheme = manifestActivityTheme(cls);
-  if (actTheme) vcall(act, "setTheme", "(I)V", actTheme);
   act.lastNonConfig = relaunch?.nonConfig ?? null;
   const saved = relaunch?.state ?? null;
   try {
     await vcall(act, "<init>", "()V");
+    // Activity.attach(): the base context arrives before the manifest theme, which AOSP applies
+    // before onCreate so an app's own setTheme layers on top of it rather than replacing it
+    const baseCtx = new JContext();
+    baseCtx.$host = host;
+    await vcall(act, "attachBaseContext", "(Landroid/content/Context;)V", baseCtx);
+    const actTheme = manifestActivityTheme(cls);
+    if (actTheme) vcall(act, "setTheme", "(I)V", actTheme);
     act.window.activity = act;
     getInflater(act).privateFactory = act;
     act.intent = intent;

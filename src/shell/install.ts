@@ -16,7 +16,8 @@ export interface Install {
   lazyEntries: Map<string, FileSource>;
   /** the base apk's own bytes: what sourceDir names and what ZipFile(sourceDir) must open */
   base: Uint8Array;
-  splits: { name: string; source: FileSource; bytes: Uint8Array | null }[];
+  /** a resident config split keeps its own resource table: the entries for its configs only */
+  splits: { name: string; source: FileSource; bytes: Uint8Array | null; resources: Uint8Array | null }[];
 }
 type OpenedApk = { source: FileSource; split: string | null; hasManifest: boolean } & (
   { kind: "resident"; bytes: Uint8Array; zip: Record<string, Uint8Array> }
@@ -43,7 +44,7 @@ function mergeInstall(opened: OpenedApk[]): Install {
       delete merged[path];
       lazyEntries.set(path, new ZipEntryFile(o.source, entry));
     }
-    if (o.split) splits.push({ name: o.split, source: o.source, bytes: o.bytes });
+    if (o.split) splits.push({ name: o.split, source: o.source, bytes: o.bytes, resources: o.kind === "resident" ? o.zip["resources.arsc"] ?? null : null });
     console.log("[webdroid] split", o.split ?? "(unnamed)", o.kind === "resident" ? Object.keys(o.zip).length : "lazy", "entries");
   }
   return { zip: merged, lazyEntries, base: base.bytes, splits };
