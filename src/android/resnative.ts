@@ -4,7 +4,7 @@ import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
-import { JTypedValue } from "./os";
+import { JTypedValue } from "./util";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 import { javaFormat, defineException } from "../jvm/natives/jlang";
 import { type JLocale, localeTag, localeDirection, usLocale } from "../jvm/natives/jvalues";

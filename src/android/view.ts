@@ -6,7 +6,8 @@ import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawabl
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec } from "../jvm/runtime";
 import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme } from "./res";
-import { mainHandler, reportUncaught, type JDisplayMetrics } from "./os";
+import { mainHandler, reportUncaught } from "./os";
+import type { JDisplayMetrics } from "./util";
 import { csText } from "./text";
 import { device } from "../shell/config";
 import { rootWindowInsets, type JWindowInsets, sysIns } from "./windowinsets";

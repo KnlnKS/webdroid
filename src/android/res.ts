@@ -4,7 +4,7 @@
 import { Arsc } from "./arsc";
 import { TV, parseAXML, type XmlNode } from "./axml";
 import { JObj } from "../jvm/runtime";
-import { JDisplayMetrics, JTypedValue, complexToPx } from "./os";
+import { JDisplayMetrics, JTypedValue, complexToPx } from "./util";
 import { mangleMethod, intBitsToFloat } from "../jvm/abi";
 import type { FileSource } from "../shell/lazyfile";
 
