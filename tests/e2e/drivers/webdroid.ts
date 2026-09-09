@@ -36,6 +36,7 @@ const LAUNCH_ARGS = [
   "--font-render-hinting=none", "--disable-lcd-text",
   "--force-device-scale-factor=1", "--hide-scrollbars",
   "--disable-partial-raster", "--disable-skia-runtime-opts",
+  ...(process.env.WEBDROID_JS_FLAGS ? [`--js-flags=${process.env.WEBDROID_JS_FLAGS}`] : []),
 ];
 export const CONTEXT_OPTS = {
   viewport: { width: 1400, height: 1500 },

@@ -33,6 +33,30 @@ bun run e2e --shots                   # also save every distinct frame per step 
 
 `--test` works the same way on `e2e:record` and `e2e:diff`.
 
+### Authenticated Reddit diagnostic
+
+With `REDDIT_USERNAME` and `REDDIT_PASSWORD` supplied in the environment, run:
+
+```bash
+WEBDROID_URL=http://localhost:4090 bun tests/e2e/reddit.ts
+```
+
+This separate, opt-in smoke run signs in and exercises the feed, navigation drawer, Back,
+and a post with comments and an empty composer at 1080×2424 @480dpi. It saves only post-login screenshots and
+redacted text/telemetry to `actual/reddit/`; it never records credential screens. Run it
+sequentially with the main suite. Live feed content can move the post target or select an
+image lightbox, so a timeout is a diagnostic failure to inspect, not proof of an emulator bug.
+
+Completion requires newly presented canvas text: post detail must draw "Join the
+conversation", scrolling must reach "Reply", and Back must remove the detail marker. A stable white pixel or
+an attached container cannot pass. The diagnostic hook observes synchronous canvas calls,
+including Compose replay; clipping and occlusion still require screenshot inspection.
+It neither votes nor submits comments.
+
+`WEBDROID_JS_FLAGS='--no-sparkplug --no-maglev'` opts either webdroid driver into a controlled
+V8-tier experiment. The Reddit run records the supplied flags. Leave it unset when measuring
+stock-browser behavior.
+
 A flow with no `golden/<flow>/manifest.json` runs in **smoke mode**: every step still executes,
 `actual/<flow>/run.json` records rendered/wedged/`newMissing`/`newErrors`/perf/fps per step,
 the console prints a smoke summary, and nothing is scored or written to the report. A step
