@@ -31,7 +31,9 @@ export class Monitors {
     return new Promise((resolve) => monitor.entrants.push(() => { monitor.owner = thread; monitor.depth = 1; resolve(); }));
   }
   exit(obj: object | string | null | 0, thread: unknown): void {
-    const monitor = this.owned(obj, thread);
+    this.release(obj, this.owned(obj, thread));
+  }
+  private release(obj: object | string | null | 0, monitor: Monitor): void {
     if (--monitor.depth) return;
     monitor.owner = null;
     monitor.entrants.shift()?.();
@@ -52,7 +54,7 @@ export class Monitors {
       return () => { const i = monitor.waiters.indexOf(wake); if (i >= 0) monitor.waiters.splice(i, 1); };
     });
     monitor.depth = 1;
-    this.exit(obj, thread);
+    this.release(obj, monitor);
     try { await parked; }
     finally {
       const entered = this.enter(obj, thread);

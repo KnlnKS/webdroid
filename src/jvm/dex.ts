@@ -159,6 +159,9 @@ export class DexFile {
     }
   }
 
+  stringLen(i: number): number {
+    return new Reader(this.bytes, this.view.getUint32(this.stringIdsOff + i * 4, true)).uleb();
+  }
   string(i: number): string {
     let s = this.stringCache[i];
     if (s === undefined) {

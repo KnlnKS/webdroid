@@ -15,7 +15,6 @@ import { perf } from "../perf";
 interface Analysis {
   reachable: number;
   sync: number;
-  suspending: number;
   ms: number;
 }
 
@@ -23,17 +22,17 @@ interface Analysis {
  * @param manifest the apk's AndroidManifest.xml, for the roots the platform enters through
  * @param services META-INF/services entries, for what ServiceLoader instantiates by name
  */
-export function analyseProgram(manifest: Uint8Array, services: Record<string, string>): Analysis | null {
+export function analyseProgram(manifest: Uint8Array, services: Record<string, string>): Analysis {
   const t0 = performance.now();
   const p = new Program();
   for (const d of rt.dexes) p.add(d);
   const roots = rootsOf(manifest, p, services);
   const r = reach(p, roots.methods, [...roots.classes, ...reflectiveRoots(p, rt.dexes)]);
-  const s = analyseSuspend(p, r.methods, subtypeIndex(p, r.instantiated), rt.nativeOracle());
+  const suspends = analyseSuspend(p, r.methods, subtypeIndex(p, r.instantiated), rt.nativeOracle());
   const sync = new Set<string>();
-  for (const k of r.methods) if (!s.suspends.has(k)) sync.add(k);
+  for (const k of r.methods) if (!suspends.has(k)) sync.add(k);
   rt.syncMethods = sync;
   const ms = performance.now() - t0;
   perf.analyseMs = ms;
-  return { reachable: r.methods.size, sync: sync.size, suspending: s.suspends.size, ms };
+  return { reachable: r.methods.size, sync: sync.size, ms };
 }

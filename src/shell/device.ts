@@ -136,7 +136,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
       if (n.startsWith("META-INF/services/")) services[n] = new TextDecoder().decode(zip[n]);
     }
     const a = analyseProgram(zip["AndroidManifest.xml"], services);
-    if (a) console.log(`[webdroid] ${a.reachable} reachable methods, ${a.sync} cannot suspend, in ${a.ms.toFixed(0)}ms`);
+    console.log(`[webdroid] ${a.reachable} reachable methods, ${a.sync} cannot suspend, in ${a.ms.toFixed(0)}ms`);
   }
   const manifest = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(manifest, "package") ?? "app";

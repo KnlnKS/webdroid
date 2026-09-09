@@ -126,18 +126,20 @@ export class Program {
   }
 
   hasField(start: string, name: string): boolean {
-    for (const c of [start, ...this.supers(start)]) {
-      const rec = this.byName.get(c);
-      const def = rec && this.def(c);
-      if (!rec || !def) continue;
-      if (!rec.fields) {
-        rec.fields = new Set();
-        for (const f of def.instanceFields) rec.fields.add(rec.loc.dex.field(f.fieldIdx).name);
-        for (const f of def.staticFields) rec.fields.add(rec.loc.dex.field(f.fieldIdx).name);
-      }
-      if (rec.fields.has(name)) return true;
-    }
+    if (this.declaresField(start, name)) return true;
+    for (const c of this.supers(start)) if (this.declaresField(c, name)) return true;
     return false;
+  }
+  private declaresField(c: string, name: string): boolean {
+    const rec = this.byName.get(c);
+    const def = rec && this.def(c);
+    if (!rec || !def) return false;
+    if (!rec.fields) {
+      rec.fields = new Set();
+      for (const f of def.instanceFields) rec.fields.add(rec.loc.dex.field(f.fieldIdx).name);
+      for (const f of def.staticFields) rec.fields.add(rec.loc.dex.field(f.fieldIdx).name);
+    }
+    return rec.fields.has(name);
   }
 }
 
@@ -179,15 +181,17 @@ export function reach(p: Program, roots: MemberKey[], rootClasses: string[] = []
     r.instantiated.add(name);
     touchClass(name);
     if (!p.has(name)) return;
-    for (const s of [name, ...p.supers(name)]) {
-      let list = instancesBySuper.get(s);
-      if (!list) instancesBySuper.set(s, (list = []));
-      list.push(name);
-      const sigs = sitesBySuper.get(s);
-      if (sigs) for (const sig of sigs) {
-        const hit = p.resolve(name, sig);
-        if (hit?.m.codeOff) addMethod(hit.cls, sig);
-      }
+    instanceOf(name, name);
+    for (const s of p.supers(name)) instanceOf(name, s);
+  }
+  function instanceOf(name: string, s: string) {
+    let list = instancesBySuper.get(s);
+    if (!list) instancesBySuper.set(s, (list = []));
+    list.push(name);
+    const sigs = sitesBySuper.get(s);
+    if (sigs) for (const sig of sigs) {
+      const hit = p.resolve(name, sig);
+      if (hit?.m.codeOff) addMethod(hit.cls, sig);
     }
   }
 

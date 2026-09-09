@@ -82,13 +82,15 @@ export function rootsOf(manifestBytes: Uint8Array, p: Program, services: Record<
  *  purpose — it does not check that the string reaches Class.forName — because a missed
  *  root silently shrinks the work queue, while a spurious one only adds code that compiles.
  *  This is what covers reflection, DI graphs and ServiceLoader lookups spelled in code. */
-export function reflectiveRoots(p: Program, dexes: { stringCount: number; string(i: number): string }[]): string[] {
+export function reflectiveRoots(p: Program, dexes: { stringCount: number; stringLen(i: number): number; string(i: number): string }[]): string[] {
   const out = new Set<string>();
   for (const dex of dexes) {
     for (let i = 0; i < dex.stringCount; i++) {
+      // "a.b.C" or "a.b.C$D" — cheap shape test before the decode and the map lookup
+      const len = dex.stringLen(i);
+      if (len < 5 || len > 200) continue;
       const s = dex.string(i);
-      // "a.b.C" or "a.b.C$D" — cheap shape test before the map lookup
-      if (s.length < 5 || s.length > 200 || s.charCodeAt(0) > 122 || !s.includes(".")) continue;
+      if (s.charCodeAt(0) > 122 || !s.includes(".")) continue;
       if (!/^[a-z][\w.]*\.[A-Z][\w$]*$/.test(s)) continue;
       const n = slashName(s);
       if (p.has(n)) out.add(n);

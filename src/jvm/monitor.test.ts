@@ -74,7 +74,7 @@ test("compiled catch-all releases its monitor after an awaited exception on a wo
 test("monitor-enter is a suspending leaf in both compiler and call graph", async () => {
   const program = new Program(); program.add(dex);
   const key = "webdroid/MonitorFixture.enter(Ljava/lang/Object;)V";
-  expect(analyseSuspend(program, [key], new Map(), () => false).suspends.has(key)).toBe(true);
+  expect(analyseSuspend(program, [key], new Map(), () => false).has(key)).toBe(true);
   const ctor = (await newObj("webdroid/MonitorFixture")).constructor;
   const obj = {}, worker = new JThread();
   rt.me(obj);
