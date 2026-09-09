@@ -529,16 +529,19 @@ const timedPoll = maySuspend(function (this: WaitingQueue, d: bigint, u: JTimeUn
 class JBlockingQueue extends JList {
   takers: ((v: unknown) => void)[] = [];
   /** hand the value to a parked take(), else queue it */
-  enqueue(v: unknown) {
+  enqueue(v: unknown, front = false) {
     const t = this.takers.shift();
     if (t) queueMicrotask(() => t(v));
+    else if (front) this.a.unshift(v);
     else this.a.push(v);
   }
 }
 /** BlockingDeque's ends: a parked taker still receives whatever arrives next, either end. */
 const dequeMethods = (): NonNullable<NativeSpec["methods"]> => ({
-  "putFirst(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.a.unshift(v); },
-  "offerFirst(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.a.unshift(v); return 1; },
+  "putFirst(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v, true); },
+  "offerFirst(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v, true); return 1; },
+  "addFirst(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v, true); },
+  "addLast(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); },
   "putLast(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); },
   "offerLast(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
   "takeFirst()Ljava/lang/Object;": takeFirst,
@@ -562,6 +565,8 @@ const mkBlockingQueue = (name: string, deque = false) => rt.register({
     "<init>(I)V": function () {},
     "put(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); },
     "offer(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
+    "offer(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
+    "add(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
     "take()Ljava/lang/Object;": takeFirst,
     "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": timedPoll,
   },
@@ -889,8 +894,8 @@ rt.register({
   methods: {
     "static park()V": () => parkThread(curThread),
     "static park(Ljava/lang/Object;)V": () => parkThread(curThread),
-    "static parkNanos(J)V": (n: bigint) => parkThread(curThread, Math.min(1000, Number(n) / 1e6)),
-    "static parkNanos(Ljava/lang/Object;J)V": (_b: unknown, n: bigint) => parkThread(curThread, Math.min(1000, Number(n) / 1e6)),
+    "static parkNanos(J)V": (n: bigint) => parkThread(curThread, Number(n) / 1e6),
+    "static parkNanos(Ljava/lang/Object;J)V": (_b: unknown, n: bigint) => parkThread(curThread, Number(n) / 1e6),
     "static unpark(Ljava/lang/Thread;)V": (t: JThread | null) => { if (!t) return; if (t.unpark) { t.unpark(); t.unpark = null; } else t.permit = true; },
   },
 });
