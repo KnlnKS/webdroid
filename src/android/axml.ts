@@ -173,7 +173,12 @@ export function parseAXMLDoc(bytes: Uint8Array, events = false): XmlDoc {
   return { pool: pool!, root: root.children[0] ?? root, events: evs };
 }
 
-export function parseAXML(bytes: Uint8Array): XmlNode { return parseAXMLDoc(bytes).root; }
+const trees = new WeakMap<Uint8Array, XmlNode>();
+export function parseAXML(bytes: Uint8Array): XmlNode {
+  let root = trees.get(bytes);
+  if (!root) trees.set(bytes, (root = parseAXMLDoc(bytes).root));
+  return root;
+}
 
 export function attr(node: XmlNode, name: string): XmlAttr | undefined {
   return node.attrs.find((a) => a.name === name);

@@ -561,23 +561,27 @@ rt.register({
 
 class JSparseArray extends JObj {
   m = new Map<number, unknown>();
+  sorted: number[] | null = null;
   /** keys in index order (Android keeps them sorted ascending) */
-  keys(): number[] { return [...this.m.keys()].sort((a, b) => a - b); }
+  keys(): number[] { return this.sorted ??= [...this.m.keys()].sort((a, b) => a - b); }
+  set(k: number, v: unknown) { if (!this.m.has(k)) this.sorted = null; this.m.set(k, v); }
+  del(k: number) { if (this.m.delete(k)) this.sorted = null; }
+  reset() { this.m.clear(); this.sorted = null; }
 }
 const sparseMethods = (valDesc: string, dflt: unknown): NativeSpec["methods"] => ({
   "<init>()V": function () {},
   "<init>(I)V": function () {},
   [`get(I)${valDesc}`]: function (this: JSparseArray, k: number) { return this.m.get(k) ?? dflt; },
   [`get(I${valDesc})${valDesc}`]: function (this: JSparseArray, k: number, d: unknown) { return this.m.has(k) ? this.m.get(k) : d; },
-  [`put(I${valDesc})V`]: function (this: JSparseArray, k: number, v: unknown) { this.m.set(k, v); },
-  [`append(I${valDesc})V`]: function (this: JSparseArray, k: number, v: unknown) { this.m.set(k, v); },
+  [`put(I${valDesc})V`]: function (this: JSparseArray, k: number, v: unknown) { this.set(k, v); },
+  [`append(I${valDesc})V`]: function (this: JSparseArray, k: number, v: unknown) { this.set(k, v); },
   "size()I": function (this: JSparseArray) { return this.m.size; },
   "keyAt(I)I": function (this: JSparseArray, i: number) { return this.keys()[i]; },
   [`valueAt(I)${valDesc}`]: function (this: JSparseArray, i: number) { return this.m.get(this.keys()[i]) ?? dflt; },
-  "delete(I)V": function (this: JSparseArray, k: number) { this.m.delete(k); },
-  "remove(I)V": function (this: JSparseArray, k: number) { this.m.delete(k); },
-  "removeAt(I)V": function (this: JSparseArray, i: number) { this.m.delete(this.keys()[i]); },
-  "clear()V": function (this: JSparseArray) { this.m.clear(); },
+  "delete(I)V": function (this: JSparseArray, k: number) { this.del(k); },
+  "remove(I)V": function (this: JSparseArray, k: number) { this.del(k); },
+  "removeAt(I)V": function (this: JSparseArray, i: number) { this.del(this.keys()[i]); },
+  "clear()V": function (this: JSparseArray) { this.reset(); },
   "indexOfKey(I)I": function (this: JSparseArray, k: number) { return this.keys().indexOf(k); },
   [`indexOfValue(${valDesc})I`]: function (this: JSparseArray, v: unknown) { return [...this.m.values()].indexOf(v); },
 });
@@ -589,9 +593,9 @@ rt.register({ name: "android/util/LongSparseArray", ctor: class extends JSparseA
   methods: {
     "<init>()V": function () {},
     "get(J)Ljava/lang/Object;": function (this: JSparseArray, k: bigint) { return this.m.get(k as any) ?? null; },
-    "put(JLjava/lang/Object;)V": function (this: JSparseArray, k: bigint, v: unknown) { this.m.set(k as any, v); },
+    "put(JLjava/lang/Object;)V": function (this: JSparseArray, k: bigint, v: unknown) { this.set(k as any, v); },
     "size()I": function (this: JSparseArray) { return this.m.size; },
-    "delete(J)V": function (this: JSparseArray, k: bigint) { this.m.delete(k as any); },
+    "delete(J)V": function (this: JSparseArray, k: bigint) { this.del(k as any); },
   } });
 
 // android.util.StateSet: a spec lists the state ids a drawable/color entry needs (negative =
@@ -798,10 +802,11 @@ rt.register({
   },
 });
 const NO_DM = { density: 1, scaledDensity: 1 };
+const RADIX_MULT = [2 ** -8, 2 ** -15, 2 ** -23, 2 ** -31];
 export function complexToPx(data: number, dm: { density: number; scaledDensity: number }): number {
   const unit = data & 0xf;
   const mantissa = (data & 0xffffff00) | 0; // signed
-  const mult = [2 ** -8, 2 ** -15, 2 ** -23, 2 ** -31][(data >> 4) & 3];
+  const mult = RADIX_MULT[(data >> 4) & 3];
   const v = mantissa * mult;
   switch (unit) {
     case 0: return v;                      // px
