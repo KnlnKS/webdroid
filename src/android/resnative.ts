@@ -6,7 +6,7 @@ import { Resources, setResourceLocale, setResourceNight, setResourceOrientation,
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
 import { JTypedValue } from "./util";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
-import { javaFormat, defineException } from "../jvm/natives/jlang";
+import { javaFormat, defineException, vcall } from "../jvm/natives/jlang";
 import { type JLocale, localeTag, localeDirection, usLocale } from "../jvm/natives/jvalues";
 import { jarray } from "../jvm/abi";
 import { streamOf, streamOfSource } from "../jvm/natives/jio";
@@ -126,6 +126,11 @@ rt.register({
     "static getDefault()Landroid/os/LocaleList;": () => localeList,
     "static getAdjustedDefault()Landroid/os/LocaleList;": () => localeList,
     "static getEmptyLocaleList()Landroid/os/LocaleList;": () => emptyLocaleList,
+    "static forLanguageTags(Ljava/lang/String;)Landroid/os/LocaleList;": async (tags: string | null) => {
+      const list = new JLocaleList();
+      for (const t of (tags ?? "").split(",").filter(Boolean)) list.values.push(await vcall(rt.link("java/util/Locale").ctor, "forLanguageTag", "(Ljava/lang/String;)Ljava/util/Locale;", t.trim()));
+      return list;
+    },
     "get(I)Ljava/util/Locale;": function (this: JLocaleList, i: number) { return this.values[i] ?? null; },
     "size()I": function (this: JLocaleList) { return this.values.length; },
     "isEmpty()Z": function (this: JLocaleList) { return this.values.length === 0 ? 1 : 0; },

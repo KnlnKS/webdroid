@@ -450,7 +450,8 @@ const SUBCLASS: Record<string, {
 };
 for (const n of Object.keys(SUBCLASS)) {
   const spec = SUBCLASS[n];
-  const methods: NativeSpec["methods"] = { ...animMethods, ...spec.ctors,
+  const methods: NativeSpec["methods"] = { ...animMethods,
+    ...Object.fromEntries(Object.entries(spec.ctors).map(([d, f]) => ["<init>" + d, function (this: JAnimation, ...args: number[]) { f(this, ...args); }])),
     "applyTransformation(FLandroid/view/animation/Transformation;)V": function (this: JAnimation, t: number, out: JTransformation) { spec.apply(this, t, out); },
   };
   if (spec.init) {

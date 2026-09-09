@@ -418,6 +418,9 @@ defineException("java/net/MalformedURLException", "java/io/IOException");
 // the abstract socket implementation an app may subclass to reach a socket's descriptor
 rt.register({ name: "java/net/SocketImpl", ctor: class extends JObj { fd: unknown = null; }, fields: { fd: "fd" }, methods: { "<init>()V": function () {} } });
 defineException("java/net/ProtocolException", "java/io/IOException");
+defineException("javax/net/ssl/SSLException", "java/io/IOException");
+defineException("javax/net/ssl/SSLHandshakeException", "javax/net/ssl/SSLException");
+defineException("javax/net/ssl/SSLPeerUnverifiedException", "javax/net/ssl/SSLException");
 defineException("java/net/URISyntaxException", "java/lang/Exception");
 
 const SCHEMES = /^(https?|ftp|file|jar):$/;       // what Android's URL has a handler for
