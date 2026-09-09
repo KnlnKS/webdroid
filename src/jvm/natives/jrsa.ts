@@ -31,7 +31,7 @@ class JRsaCertificate extends JObj {
   encoded = new Uint8Array(0);
   publicKey = new JRsaPublicKey();
 }
-export class JRsaKeyPair extends JObj {
+class JRsaKeyPair extends JObj {
   publicKey = new JRsaPublicKey();
   privateKey = new JRsaPrivateKey();
 }

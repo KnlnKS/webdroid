@@ -11,8 +11,8 @@ export const apkPath = (split?: string) => split ? `/data/app/split_${split}.apk
 
 // marker interface — apps implement this to opt into custom serialization; writeExternal/
 // readExternal dispatch isn't needed by anything exercised so far, so this just stops the
-// interface from auto-stubbing when an app class implements it directly (see AGENTS.md
-// "VM and framework lessons").
+// interface from auto-stubbing when an app class implements it directly (see "VM and
+// framework lessons" in the implementation history).
 rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
 
 // ── VFS: path → bytes. Directories implicit.
@@ -560,7 +560,6 @@ rt.register({
   },
 });
 
-// Filter streams: delegate to wrapped
 rt.register({
   name: "java/io/FilterOutputStream", ctor: class extends JOutputStream { out: unknown = null; }, sup: "java/io/OutputStream",
   fields: { out: "out" },
@@ -682,7 +681,6 @@ rt.register({
     },
   },
 });
-// System.out/err
 {
   const sysInfo = rt.link("java/lang/System");
   const out = new JPrintStream();
