@@ -339,10 +339,25 @@ rt.register({
     "static isEnabled()Z": () => 0,
   },
 });
+// the process's memory as the one heap the page has: no separate native, dalvik or graphics accounting
+rt.register({
+  name: "android/os/Debug$MemoryInfo", ctor: class extends JObj { dalvikPss = 0; nativePss = 0; otherPss = 0; },
+  fields: { dalvikPss: "dalvikPss", nativePss: "nativePss", otherPss: "otherPss" },
+  methods: {
+    "<init>()V": function () {},
+    "getTotalPss()I": () => ((performance as any).memory?.usedJSHeapSize ?? 0) / 1024 | 0,
+    "getTotalPrivateDirty()I": () => 0,
+    "getTotalSharedDirty()I": () => 0,
+    "getMemoryStat(Ljava/lang/String;)Ljava/lang/String;": () => "0",
+  },
+});
 rt.register({
   name: "android/os/Debug", ctor: class extends JObj {},
   methods: {
     "static isDebuggerConnected()Z": () => 0,
+    "static getNativeHeapAllocatedSize()J": () => BigInt(((performance as any).memory?.usedJSHeapSize ?? 0) | 0),
+    "static getNativeHeapSize()J": () => BigInt(((performance as any).memory?.totalJSHeapSize ?? 0) | 0),
+    "static getNativeHeapFreeSize()J": () => 0n,
     "static waitingForDebugger()Z": () => 0,
   },
 });

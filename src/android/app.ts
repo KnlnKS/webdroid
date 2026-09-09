@@ -464,6 +464,7 @@ for (const [name, methods, statics] of [
     "getLargeMemoryClass()I": () => 512,
     "isLowRamDevice()Z": () => 0,
     "getRunningAppProcesses()Ljava/util/List;": () => newArrayList([myProcess()]),
+    "getProcessMemoryInfo([I)[Landroid/os/Debug$MemoryInfo;": (pids: Int32Array) => jarray(Array.from(pids, () => new (rt.link("android/os/Debug$MemoryInfo").ctor)()), "Landroid/os/Debug$MemoryInfo;"),
     "getHistoricalProcessExitReasons(Ljava/lang/String;II)Ljava/util/List;": () => newArrayList(),
     "getRunningServices(I)Ljava/util/List;": (max: number) => {
       const all = [...runningServices.values()];

@@ -246,6 +246,7 @@ rt.register({
       if (!Array.isArray(value)) throw rt.mkThrowable("org/json/JSONException", "Value is not an array");
       this.a = value;
     },
+    "<init>(Ljava/util/Collection;)V": async function (this: JJSONArray, c: unknown) { this.a = c === null ? [] : (await toJsArray(c)).map(jsonUnwrap); },
     "put(Ljava/lang/Object;)Lorg/json/JSONArray;": function (this: JJSONArray, v: unknown) { this.a.push(jsonUnwrap(v)); return this; },
     "put(I)Lorg/json/JSONArray;": function (this: JJSONArray, v: number) { this.a.push(v); return this; },
     "put(D)Lorg/json/JSONArray;": function (this: JJSONArray, v: number) { this.a.push(v); return this; },

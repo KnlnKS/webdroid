@@ -184,6 +184,7 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
     if (this.clickL) await vcall(this.clickL, "onClick", "(Landroid/view/View;)V", this);
     return 1;
   },
+  "getButtonDrawable()Landroid/graphics/drawable/Drawable;": function (this: JCompoundButton) { return this.buttonD; },
   "setButtonDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JCompoundButton, d: JDrawable | null) {
     this.buttonD = d;
     this.buttonW = d ? (kind === "switch" ? device.dp(52) : device.dp(32)) : 0;
