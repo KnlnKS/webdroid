@@ -1,4 +1,4 @@
-export interface SwizzleMap {
+interface SwizzleMap {
   sampler: string;
   mapUniform: string;
   size: number;
@@ -29,6 +29,7 @@ const sampleFns = new Set([
   "textureLodOffset", "textureGrad", "textureGradOffset", "textureProjGrad",
   "textureProjGradOffset", "texelFetch", "texelFetchOffset",
 ]);
+const SAMPLE_RE = [...sampleFns].map((fn) => [fn, new RegExp(`\\b${fn}\\s*\\(`)] as const);
 
 function hashKey(value: string): string {
   let hash = 0x811c9dc5;
@@ -69,7 +70,7 @@ function scan(source: string, unsupported: string[]): Token[] {
         if (source.charCodeAt(p) !== 92) break;
       } while (i < source.length);
       const directive = source.slice(start, i);
-      for (const fn of sampleFns) if (new RegExp(`\\b${fn}\\s*\\(`).test(directive)) unsupported.push(`preprocessor:${fn}`);
+      for (const [fn, re] of SAMPLE_RE) if (re.test(directive)) unsupported.push(`preprocessor:${fn}`);
       lineStart = true;
       continue;
     }

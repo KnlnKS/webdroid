@@ -9,6 +9,7 @@ import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, newPrimArray 
 import { curThread, JClass, stackTraceText } from "../jvm/natives/jlang";
 import { JCtor, JMethod, classCtors, mkMethod } from "../jvm/natives/jreflect";
 import { JBuffer, directBufferAddress, nativeByteBuffer } from "../jvm/natives/jnio";
+const enc = new TextEncoder();
 
 export const jniMissing = new Set<string>();
 export const jniTrace = { on: false };
@@ -242,7 +243,7 @@ export function jniInit(): void {
   const T: (HostFn | null)[] = new Array(233).fill(null);
   const names: string[] = new Array(233).fill("?");
   const def = (i: number, name: string, fn: HostFn) => { T[i] = fn; names[i] = name; };
-  const utf8Len = (s: string) => new TextEncoder().encode(s).length;
+  const utf8Len = (s: string) => enc.encode(s).length;
 
   def(4, "GetVersion", () => 0x00010006);
   def(7, "FromReflectedMethod", (_c, a) => {

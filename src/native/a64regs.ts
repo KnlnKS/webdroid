@@ -64,7 +64,7 @@ export function shiftOf(lo: string, hi: string, type: number, s: number, sf: boo
 // `I`/`U` words, `W`/`SW` halfwords, `B`/`SB` bytes) only when a block uses them. Vn starts at
 // lane n*PER[view]; V32/V33 are the emitter's scratch.
 export type View = "S" | "D" | "I" | "U" | "W" | "SW" | "B" | "SB";
-export const PER: Record<View, number> = { S: 4, D: 2, I: 4, U: 4, W: 8, SW: 8, B: 16, SB: 16 };
+const PER: Record<View, number> = { S: 4, D: 2, I: 4, U: 4, W: 8, SW: 8, B: 16, SB: 16 };
 export const VIEWS: Record<View, string> = { S: "c.s", D: "c.d", I: "c.si", U: "c.vu", W: "c.vw", SW: "c.vsw", B: "c.vb", SB: "c.vsb" };
 export const SCRATCH = 32;
 export const lane = (v: View, n: number, i: number) => `${v}[${n * PER[v] + i}]`;

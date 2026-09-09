@@ -61,7 +61,7 @@ export class Args implements ArgReader {
 }
 
 /** the ILP32 va_list: a flat cursor over the caller's stack */
-export class VaList implements ArgReader {
+class VaList implements ArgReader {
   constructor(private a: number) {}
   i(): number { const v = mem.ld32(this.a); this.a += 4; return v; }
   u(): number { return this.i() >>> 0; }

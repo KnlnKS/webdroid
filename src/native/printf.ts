@@ -40,8 +40,12 @@ function fmtFloat(v: number, conv: string, prec: number, alt: boolean): string {
 export function format(fmt: string, args: ArgReader): string {
   let out = "";
   for (let i = 0; i < fmt.length; i++) {
-    const ch = fmt[i];
-    if (ch !== "%") { out += ch; continue; }
+    if (fmt[i] !== "%") {
+      const j = fmt.indexOf("%", i);
+      if (j < 0) { out += fmt.slice(i); break; }
+      out += fmt.slice(i, j);
+      i = j;
+    }
     i++;
     if (fmt[i] === "%") { out += "%"; continue; }
     let left = false, plus = false, space = false, alt = false, zero = false;
@@ -69,19 +73,20 @@ export function format(fmt: string, args: ArgReader): string {
         const v = isLL ? args.l() : len === "h" ? (args.i() << 16) >> 16 : len === "hh" ? (args.i() << 24) >> 24 : args.i();
         const neg = v < 0;
         let digits = (neg ? -v : v).toString();
-        if (typeof v === "bigint") digits = (neg ? -v : v).toString();
         if (prec >= 0) { digits = digits.padStart(prec, "0"); if (prec === 0 && digits === "0") digits = ""; zero = false; }
         s = (neg ? "-" : plus ? "+" : space ? " " : "") + digits;
         break;
       }
       case "u": case "x": case "X": case "o": {
-        let v: bigint = isLL ? BigInt.asUintN(64, args.l()) : BigInt(args.i() >>> 0);
-        if (len === "h") v &= 0xffffn; else if (len === "hh") v &= 0xffn;
+        let v: bigint | number = isLL ? BigInt.asUintN(64, args.l()) : args.i() >>> 0;
+        if (typeof v === "number") { if (len === "h") v &= 0xffff; else if (len === "hh") v &= 0xff; }
+        else if (len === "h") v &= 0xffffn; else if (len === "hh") v &= 0xffn;
         const radix = conv === "u" ? 10 : conv === "o" ? 8 : 16;
+        const isZero = typeof v === "number" ? v === 0 : v === 0n;
         let digits = v.toString(radix);
         if (conv === "X") digits = digits.toUpperCase();
-        if (prec >= 0) { digits = digits.padStart(prec, "0"); if (prec === 0 && v === 0n) digits = ""; zero = false; }
-        if (alt && v !== 0n) digits = (conv === "o" ? "0" : conv === "x" ? "0x" : "0X") + digits;
+        if (prec >= 0) { digits = digits.padStart(prec, "0"); if (prec === 0 && isZero) digits = ""; zero = false; }
+        if (alt && !isZero) digits = (conv === "o" ? "0" : conv === "x" ? "0x" : "0X") + digits;
         s = digits;
         break;
       }
@@ -113,12 +118,13 @@ export function format(fmt: string, args: ArgReader): string {
 type ScanSink = (kind: "i" | "h" | "b" | "l" | "f" | "d" | "s" | "n", value: number | bigint | string) => number;
 
 /** sscanf core: parses `input` per `fmt`, calling `out` per conversion (kind, value); returns the count */
+const WS = /\s/;
 export function scan(input: string, fmt: string, out: ScanSink): number {
   let pos = 0, count = 0;
-  const skipWs = () => { while (pos < input.length && /\s/.test(input[pos])) pos++; };
+  const skipWs = () => { while (pos < input.length && WS.test(input[pos])) pos++; };
   for (let i = 0; i < fmt.length; i++) {
     const ch = fmt[i];
-    if (/\s/.test(ch)) { skipWs(); continue; }
+    if (WS.test(ch)) { skipWs(); continue; }
     if (ch !== "%") { if (input[pos] !== ch) return count; pos++; continue; }
     i++;
     if (fmt[i] === "%") { skipWs(); if (input[pos] !== "%") return count; pos++; continue; }
@@ -160,7 +166,7 @@ export function scan(input: string, fmt: string, out: ScanSink): number {
     if (pos >= input.length) return count === 0 ? -1 : count;
     const start = pos;
     if (conv === "s") {
-      while (pos < input.length && pos - start < lim && !/\s/.test(input[pos])) pos++;
+      while (pos < input.length && pos - start < lim && !WS.test(input[pos])) pos++;
       if (!suppress) { out("s", input.slice(start, pos)); count++; }
       continue;
     }

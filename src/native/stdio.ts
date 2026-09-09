@@ -12,6 +12,7 @@ import { device } from "../shell/config";
 import type { FileSource } from "../shell/lazyfile";
 import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketIoctl, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd } from "./net";
 import { allocateFd, releaseFd, reserveFd } from "./fd";
+const dec = new TextDecoder();
 
 const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800, O_DIRECTORY = 0x4000;
 const S_IFDIR = 0x4000, S_IFREG = 0x8000;
@@ -134,7 +135,7 @@ function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   if (f.log) {
-    const s = new TextDecoder().decode(mem.u8.subarray(p, p + n));
+    const s = dec.decode(mem.u8.subarray(p, p + n));
     f.line = (f.line ?? "") + s;
     let i: number;
     while ((i = f.line.indexOf("\n")) >= 0) { logLine(f.log, f.log === 6 ? "stderr" : "stdout", f.line.slice(0, i)); f.line = f.line.slice(i + 1); }
@@ -729,7 +730,7 @@ export function stdioInit(): void {
         combined.set(data, pending.length);
         data = combined;
       }
-      const text = new TextDecoder().decode(data);
+      const text = dec.decode(data);
       let consumed = 0;
       const r = scan(text + "", f + "%n", (kind, v) => {
         if (kind === "n") { consumed = v as number; return 0; }

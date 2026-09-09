@@ -6,6 +6,7 @@ import type { Cpu } from "./cpu";
 import { hostLib, PTR, stp, type HostFn, type HostRet, ptr } from "./host";
 import { mem } from "./mem";
 import { allocateFd, releaseFd, reserveFd } from "./fd";
+const enc = new TextEncoder();
 
 const AF_UNSPEC = 0, AF_INET = 2, SOCK_STREAM = 1, SOCK_DGRAM = 2, IPPROTO_TCP = 6, IPPROTO_UDP = 17;
 const SOCK_NONBLOCK = 0x800, SOCK_CLOEXEC = 0x80000;
@@ -147,7 +148,7 @@ export function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number,
   const bytes = numeric ?? addressFor(node);
   const layout = addrinfoLayout();
   const sockaddr = layout.size;
-  const canonBytes = flags & AI_CANONNAME ? new TextEncoder().encode(node) : null;
+  const canonBytes = flags & AI_CANONNAME ? enc.encode(node) : null;
   const allocation = mem.malloc(layout.size + 16 + (canonBytes ? canonBytes.length + 1 : 0));
   if (!allocation) { fail(cpu, E.NOMEM); return EAI_SYSTEM; }
   mem.memset(allocation, 0, layout.size + 16 + (canonBytes ? canonBytes.length + 1 : 0));
@@ -625,7 +626,7 @@ export function nativeGetpeername(cpu: Cpu, fd: number, address: number, length:
 }
 
 function copyText(text: string, destination: number, capacity: number): boolean {
-  const bytes = new TextEncoder().encode(text);
+  const bytes = enc.encode(text);
   if (!destination) return capacity === 0;
   if (bytes.length + 1 > capacity) return false;
   mem.u8.set(bytes, destination);
@@ -648,20 +649,21 @@ export function nativeSend(cpu: Cpu, fd: number, source: number, length: number)
   return localPollProvider?.write(cpu, fd, source, length) ?? fail(cpu, E.BADF);
 }
 
-export function nativeReceive(cpu: Cpu, fd: number, destination: number, length: number, nonblock = false): number | Promise<number> {
+function nativeReceive(cpu: Cpu, fd: number, destination: number, length: number, nonblock = false): number | Promise<number> {
   if (isNativeSocket(fd)) return nativeSocketRead(cpu, fd, destination, length, nonblock);
   return localPollProvider?.read(cpu, fd, destination, length) ?? fail(cpu, E.BADF);
 }
 
 const gaiStrings = new Map<number, number>();
+const GAI_TEXT = new Map<number, string>([
+  [EAI_ADDRFAMILY, "address family for hostname not supported"], [2, "temporary failure in name resolution"],
+  [EAI_BADFLAGS, "invalid value for ai_flags"], [EAI_FAMILY, "ai_family not supported"],
+  [EAI_NONAME, "hostname nor servname provided, or not known"], [EAI_SERVICE, "servname not supported"],
+  [EAI_SOCKTYPE, "ai_socktype not supported"], [EAI_SYSTEM, "system error"], [EAI_PROTOCOL, "resolved protocol is unknown"],
+  [EAI_OVERFLOW, "argument buffer overflow"],
+]);
 function gaiStrerror(code: number): number {
-  const text = new Map<number, string>([
-    [EAI_ADDRFAMILY, "address family for hostname not supported"], [2, "temporary failure in name resolution"],
-    [EAI_BADFLAGS, "invalid value for ai_flags"], [EAI_FAMILY, "ai_family not supported"],
-    [EAI_NONAME, "hostname nor servname provided, or not known"], [EAI_SERVICE, "servname not supported"],
-    [EAI_SOCKTYPE, "ai_socktype not supported"], [EAI_SYSTEM, "system error"], [EAI_PROTOCOL, "resolved protocol is unknown"],
-    [EAI_OVERFLOW, "argument buffer overflow"],
-  ]).get(code) ?? "unknown error";
+  const text = GAI_TEXT.get(code) ?? "unknown error";
   let address = gaiStrings.get(code);
   if (address === undefined) { address = mem.hostStr(text); gaiStrings.set(code, address); }
   return address;

@@ -272,8 +272,6 @@ export const mem = {
     return P[h] + off;
   },
   txVa(va: bigint): number { const [h, lo] = split(va); return h ? mem.tx(h, lo) : lo; },
-  /** a buffer offset taken before a suspension, found again after it: a plane may have moved */
-  rephys(phys: number): number { const v = mem.va(phys); return typeof v === "bigint" ? mem.txVa(v) : phys; },
   /** buffer offset → the address the guest knows it by: itself in plane 0, else the plane's */
   va(phys: number): number | bigint {
     if (!poolBase || phys < poolBase) return phys;
@@ -465,13 +463,12 @@ export const mem = {
   strlen(a: number): number {
     checkAddr(a, 1);
     let e = a >>> 0;
-    while (u8[e] !== 0) e++;
+    while (e < MEM_SIZE && u8[e] !== 0) e++;
     return e - (a >>> 0);
   },
   bytes(a: number, n: number): Uint8Array { checkAddr(a, n); return u8.subarray(a >>> 0, (a >>> 0) + n); },
   write(a: number, src: Uint8Array | ArrayLike<number>): void { checkAddr(a, src.length); u8.set(src, a >>> 0); },
-  memcpy(d: number, s: number, n: number): void { if (n <= 0) return; checkAddr(d, n); checkAddr(s, n); u8.copyWithin(d >>> 0, s >>> 0, (s >>> 0) + n); },
-  memmove(d: number, s: number, n: number): void { mem.memcpy(d, s, n); },
+  memmove(d: number, s: number, n: number): void { if (n <= 0) return; checkAddr(d, n); checkAddr(s, n); u8.copyWithin(d >>> 0, s >>> 0, (s >>> 0) + n); },
   memset(d: number, v: number, n: number): void { if (n <= 0) return; checkAddr(d, n); u8.fill(v & 0xff, d >>> 0, (d >>> 0) + n); },
   strdup(s: string): number {
     const b = enc.encode(s);

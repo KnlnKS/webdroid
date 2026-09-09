@@ -11,6 +11,7 @@ import { yieldToLoop } from "./cpu";
 import { perf } from "../perf";
 import { glProbe } from "./gles1";
 import { rewriteTextureSwizzles, visibleUniforms, type SwizzleRewrite, type VisibleUniforms } from "./swizzle";
+const dec = new TextDecoder();
 /** the last GL entry points, while the probe is on (wd.native.glRing) */
 export const glRing: string[] = [];
 export let gles3Procs: Record<string, HostFn> = {};
@@ -418,7 +419,7 @@ export function gles3Init(): void {
       let src = "";
       for (let i = 0; i < n; i++) {
         const p = ldp(pp + i * PTR), len = lp ? mem.ld32(lp + 4 * i) : -1;
-        src += len < 0 ? mem.cstr(p) : new TextDecoder().decode(mem.bytes(p, len));
+        src += len < 0 ? mem.cstr(p) : dec.decode(mem.bytes(p, len));
       }
       if (s) {
         const rewrite = rewriteTextureSwizzles(src, handle);

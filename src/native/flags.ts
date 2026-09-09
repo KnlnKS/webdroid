@@ -50,23 +50,29 @@ export function assemble(ins: Ins[]): string {
 //
 // `pc` names the index that is the program counter and must stay in the array — ARM's r15, A64's
 // r32 — and `hi` adds the second array A64 keeps its registers' high halves in.
+const SLOT_RE = { r: /\br\[(\d+)\]/g, H: /\bH\[(\d+)\]/g };
+const WRITE_RE = { r: /\br(\d+)=(?!=)/g, H: /\bH(\d+)=(?!=)/g };
+const PC_RE = new Map<number, RegExp>();
+const ARRAYS_R: ("r" | "H")[] = ["r"], ARRAYS_RH: ("r" | "H")[] = ["r", "H"];
 export function hoistRegs(src: string, { pc = 15, hi = false, sync = "c.swi();" } = {}): string {
-  const arrays: [string, string][] = hi ? [["r", "r"], ["H", "H"]] : [["r", "r"]];
+  const arrays = hi ? ARRAYS_RH : ARRAYS_R;
   const used = new Map<string, Set<number>>();
-  for (const [arr] of arrays) {
+  for (const arr of arrays) {
     const set = new Set<number>();
-    src.replace(new RegExp(`\\b${arr}\\[(\\d+)\\]`, "g"), (_, n: string) => { if (arr !== "r" || +n !== pc) set.add(+n); return _; });
+    src.replace(SLOT_RE[arr], (_, n: string) => { if (arr !== "r" || +n !== pc) set.add(+n); return _; });
     used.set(arr, set);
   }
   if (![...used.values()].some((v) => v.size)) return src;
   // the pc slot keeps its array form: park it behind a character no source can contain
-  let s = src.replace(new RegExp(`\\br\\[${pc}\\]`, "g"), "r\0");
-  for (const [arr] of arrays) s = s.replace(new RegExp(`\\b${arr}\\[(\\d+)\\]`, "g"), `${arr}$1`);
+  let pcRe = PC_RE.get(pc);
+  if (!pcRe) PC_RE.set(pc, (pcRe = new RegExp(`\\br\\[${pc}\\]`, "g")));
+  let s = src.replace(pcRe, "r\0");
+  for (const arr of arrays) s = s.replace(SLOT_RE[arr], `${arr}$1`);
   s = s.replace(/r\0/g, `r[${pc}]`);
   const wb: string[] = [], load: string[] = [], reload: string[] = [];
-  for (const [arr] of arrays) {
+  for (const arr of arrays) {
     const written = new Set<number>();
-    s.replace(new RegExp(`\\b${arr}(\\d+)=(?!=)`, "g"), (_, n: string) => { written.add(+n); return _; });
+    s.replace(WRITE_RE[arr], (_, n: string) => { written.add(+n); return _; });
     for (const n of [...written].sort((a, b) => a - b)) wb.push(`${arr}[${n}]=${arr}${n};`);
     for (const n of [...used.get(arr)!].sort((a, b) => a - b)) { load.push(`${arr}${n}=${arr}[${n}]`); reload.push(`${arr}${n}=${arr}[${n}];`); }
   }

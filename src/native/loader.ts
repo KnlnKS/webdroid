@@ -29,7 +29,7 @@ function nativeInit(): void {
 /** The ABIs this tier can execute, most-preferred first. The one place that knows: the ELF
  *  loader, the dynamic linker's own lib search and System.loadLibrary's choice all read it, and
  *  adding a backend is one edit here. */
-export const NATIVE_ABIS = ["arm64-v8a", "armeabi-v7a", "armeabi"] as const;
+const NATIVE_ABIS = ["arm64-v8a", "armeabi-v7a", "armeabi"] as const;
 rt.nativeAbis = NATIVE_ABIS;
 
 /** Load and relocate an image without executing a single instruction of it. An ABI whose

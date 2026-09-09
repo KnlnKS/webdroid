@@ -17,7 +17,7 @@ import { netDebug } from "./net";
 
 export const native = {
   modules,
-  symbolize: (pc: number) => symbolizePc(pc),
+  symbolize: symbolizePc,
   /** host-call trace: trace(true), trace(/^gl/), trace(false); the ring is trace.ring */
   trace(on: boolean | RegExp = true) {
     hostTrace.on = !!on;
@@ -53,7 +53,7 @@ export const native = {
   /** the frame-pointer chain of a thread; a watched pc logs its registers on every entry (set before its block compiles) */
   backtrace: (name: string) => { const c = [...cpus].find((c) => c.name === name); return c ? backtrace(c) : []; }, watchPcs, lastFault, allBlocks, invalidatedPages, invalidations, coldTier,
   peek: (a: number, n = 16) => Array.from(mem.bytes(a, n)).map((b) => b.toString(16).padStart(2, "0")).join(" "),
-  cstr: (a: number) => mem.cstr(a),
+  cstr: mem.cstr,
   glProbe, glRing, gl3: glDebug, net: netDebug,
 };
 // a harness can arm the trace before boot: page.addInitScript(() => { globalThis.__wdNativeTrace = "regex" })

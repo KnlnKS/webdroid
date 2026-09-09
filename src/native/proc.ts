@@ -66,7 +66,7 @@ export function procInit(): void {
     sched_getscheduler: () => 0, sched_setscheduler: () => 0, sched_getparam: (_c, a) => { a.i(); mem.st32(a.p(), 0); return 0; },
     capget: (cpu, a) => capget(cpu, a.p(), a.p()),
     getpwuid: () => pw,
-    getpwuid_r: (_c, a) => { a.i(); const out = a.p(); a.p(); a.p(); const res = a.p(); mem.memcpy(out, pw, 8 * PTR); stp(res, out); return 0; },
+    getpwuid_r: (_c, a) => { a.i(); const out = a.p(); a.p(); a.p(); const res = a.p(); mem.memmove(out, pw, 8 * PTR); stp(res, out); return 0; },
     getpwnam: () => pw,
     setuid: () => 0, setgid: () => 0, seteuid: () => 0, setegid: () => 0, setgroups: () => 0, initgroups: () => 0, setsid: () => 4242,
     fork: (cpu) => fail(cpu, E.NOSYS), vfork: (cpu) => fail(cpu, E.NOSYS),
@@ -161,7 +161,7 @@ export function procInit(): void {
     asctime: (_c, a) => mem.hostStr(asctime(a.p())),
     ctime_r: (_c, a) => { const t = mem.ld32(a.p()), buf = a.p(); mem.putCstr(buf, new Date(t * 1000).toString().slice(0, 24) + "\n", 26); return ptr(buf); },
     // fortified wrappers: the object size is checked, then the plain function's work is done
-    __memcpy_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); mem.memcpy(d, s, n); return ARG0; },
+    __memcpy_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); mem.memmove(d, s, n); return ARG0; },
     __memmove_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); mem.memmove(d, s, n); return ARG0; },
     __memset_chk: (cpu, a) => { const d = a.p(), v = a.i(), n = a.u(); chk(n, a.u(), cpu); mem.memset(d, v, n); return ARG0; },
     __strcpy_chk: (cpu, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s) + 1; chk(n, a.u(), cpu); mem.memmove(d, s, n); return ARG0; },

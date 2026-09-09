@@ -599,14 +599,19 @@ function wordOperands(src: string): A64WordSrc {
 
 /** one instruction's JS with every flag written, for the cold tier (interp.ts): pc-independent
  *  operand literals are descriptors, leaving one compiled handler per instruction shape */
+const VIEW_DECLS = Object.entries(VIEWS).map(([name, expr]) => [new RegExp(`\\b${name}\\[`), `,${name}=${expr}`] as const);
+/** the V file's views are bound only in a block that touches them */
+function viewPrologue(body: string): string {
+  let views = "";
+  for (const [re, decl] of VIEW_DECLS) if (re.test(body)) views += decl;
+  return views;
+}
 export function emitA64Word(w: number): A64WordSrc {
   slot = 0; redirect = -1;
   const out: Ins[] = [];
   emit(0, w, out, 1, "c.bpc");
   const body = assemble(out);
-  let views = "";
-  for (const [name, expr] of Object.entries(VIEWS)) if (new RegExp(`\\b${name}\\[`).test(body)) views += `,${name}=${expr}`;
-  return wordOperands(`let t,a,ah,th,v,vh,s,m1${views};${body}`);
+  return wordOperands(`let t,a,ah,th,v,vh,s,m1${viewPrologue(body)};${body}`);
 }
 
 /** compile the basic block at `pc` to JS source */
@@ -635,11 +640,8 @@ export function emitA64Block(pc: number): BlockSrc {
   }
   if (redirect < 0) out.push({ code: retK(slot++, k, hex(p)), fl: null, reads: 0, writes: 0 });
   const body = hoistRegs(selfLoop(inlineMem(assemble(out)), pc, pc >>> PAGE_SHIFT), { pc: 32, hi: true, sync: "c.svc();" });
-  // the V file's views are bound only in a block that touches them
-  let views = "";
-  for (const [name, expr] of Object.entries(VIEWS)) if (new RegExp(`\\b${name}\\[`).test(body)) views += `,${name}=${expr}`;
   return {
-    src: `let t,a,ah,th,v,vh,s,m1,H=c.h${views};` + body,
+    src: `let t,a,ah,th,v,vh,s,m1,H=c.h${viewPrologue(body)};` + body,
     len: (end - pc) >> 2, end, slots: slot,
   };
 }

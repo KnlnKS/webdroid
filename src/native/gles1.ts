@@ -17,6 +17,7 @@ export const glProbe = { on: false, capture: 0 };
 
 type M4 = Float32Array;
 const ident = (): M4 => { const m = new Float32Array(16); m[0] = m[5] = m[10] = m[15] = 1; return m; };
+const IDENTITY = ident();
 function mul(a: M4, b: M4, out: M4): void {
   const t = tmpM;
   for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
@@ -52,7 +53,6 @@ interface Ctx {
   caps: Set<number>;
   err: number;
   unpackAlign: number;
-  mvpDirty: boolean;
   scratch: Float32Array;
   warned: Set<string>;
 }
@@ -97,7 +97,7 @@ function ctxFor(g: GL): Ctx {
     vert: newArr(4), col: newArr(4), tex: [newArr(4), newArr(4)], norm: newArr(3),
     clientUnit: 0, unit: 0, texOn: [false, false], texEnv: [0x2100, 0x2100], bound: [0, 0],
     color: new Float32Array([1, 1, 1, 1]), alphaTest: false, alphaFunc: 0x207, alphaRef: 0,
-    arrayBuf: 0, elemBuf: 0, caps: new Set(), err: 0, unpackAlign: 4, mvpDirty: true, scratch: new Float32Array(4096), warned: new Set(),
+    arrayBuf: 0, elemBuf: 0, caps: new Set(), err: 0, unpackAlign: 4, scratch: new Float32Array(4096), warned: new Set(),
   };
   g.useProgram(prog);
   g.uniform1i(u.uTex, 0);
@@ -263,7 +263,8 @@ export function gles1Init(): void {
     if (glProbe.on) { const e = c.gl.getError(); if (e) { perf.glErrors++; console.warn("[gles1] error", e.toString(16), "after", name); } }
     return r === undefined ? 0 : r;
   };
-  const m4 = (a: { i(): number }, fixed: boolean): M4 => { const p = a.i(); const m = new Float32Array(16); for (let i = 0; i < 16; i++) m[i] = fixed ? mem.i32[(p >>> 2) + i] / 65536 : mem.f32[(p >>> 2) + i]; return m; };
+  const m4Scratch = new Float32Array(16);
+  const m4 = (a: { i(): number }, fixed: boolean): M4 => { const p = a.i(), m = m4Scratch; for (let i = 0; i < 16; i++) m[i] = fixed ? mem.i32[(p >>> 2) + i] / 65536 : mem.f32[(p >>> 2) + i]; return m; };
   const F = (a: { i(): number }) => bitsf(a.i());
   const Xa = (a: { i(): number }) => X(a.i());
   const translate = (c: Ctx, x: number, y: number, z: number) => { const m = ident(); m[12] = x; m[13] = y; m[14] = z; mulRight(top(c), m); };
@@ -391,7 +392,7 @@ export function gles1Init(): void {
 
   const G: Record<string, HostFn> = {
     glMatrixMode: W("glMatrixMode", (c, a) => { c.mode = a.i(); }),
-    glLoadIdentity: W("glLoadIdentity", (c) => { top(c).set(ident()); }),
+    glLoadIdentity: W("glLoadIdentity", (c) => { top(c).set(IDENTITY); }),
     glLoadMatrixf: W("glLoadMatrixf", (c, a) => { top(c).set(m4(a, false)); }),
     glLoadMatrixx: W("glLoadMatrixx", (c, a) => { top(c).set(m4(a, true)); }),
     glMultMatrixf: W("glMultMatrixf", (c, a) => { mulRight(top(c), m4(a, false)); }),

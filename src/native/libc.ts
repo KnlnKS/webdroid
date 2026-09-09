@@ -50,7 +50,7 @@ function setErrno(cpu: Cpu, e: number): void { mem.st32(cpu.errnoAddr, e); }
 /** the common "-1 and errno" return */
 export function fail(cpu: Cpu, e: number): number { setErrno(cpu, e); return -1; }
 
-const enc = new TextEncoder();
+const enc = new TextEncoder(), dec = new TextDecoder();
 export const utf8 = (s: string) => enc.encode(s);
 
 // ── ctype: BSD _ctype_ table (index c+1), the bit values bionic's <ctype.h> macros test
@@ -331,7 +331,7 @@ export function libcInit(): void {
       return 0;
     },
     malloc_usable_size: (_c, a) => mem.usableSize(a.p()),
-    memcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memcpy(d, s, n); return ARG0; },
+    memcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n); return ARG0; },
     memmove: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n); return ARG0; },
     memset: (_c, a) => { const d = a.p(), v = a.i(), n = a.u(); mem.memset(d, v, n); return ARG0; },
     memcmp: (_c, a) => {
@@ -382,8 +382,8 @@ export function libcInit(): void {
     strpbrk: (_c, a) => { const p = a.p(), set = mem.cstr(a.p()); for (let i = p; mem.u8[i]; i++) if (set.includes(String.fromCharCode(mem.u8[i]))) return ptr(i); return 0; },
     strspn: (_c, a) => { const p = a.p(), set = mem.cstr(a.p()); let i = 0; while (mem.u8[p + i] && set.includes(String.fromCharCode(mem.u8[p + i]))) i++; return i; },
     strcspn: (_c, a) => { const p = a.p(), set = mem.cstr(a.p()); let i = 0; while (mem.u8[p + i] && !set.includes(String.fromCharCode(mem.u8[p + i]))) i++; return i; },
-    strdup: (_c, a) => { const s = a.p(); const n = mem.strlen(s); const d = mem.malloc(n + 1); mem.memcpy(d, s, n + 1); return d; },
-    strndup: (_c, a) => { const s = a.p(), n = a.u(); let l = 0; while (l < n && mem.u8[s + l]) l++; const d = mem.malloc(l + 1); mem.memcpy(d, s, l); mem.u8[d + l] = 0; return d; },
+    strdup: (_c, a) => { const s = a.p(); const n = mem.strlen(s); const d = mem.malloc(n + 1); mem.memmove(d, s, n + 1); return d; },
+    strndup: (_c, a) => { const s = a.p(), n = a.u(); let l = 0; while (l < n && mem.u8[s + l]) l++; const d = mem.malloc(l + 1); mem.memmove(d, s, l); mem.u8[d + l] = 0; return d; },
     strtok: (cpu, a) => ptr(strtok(cpu, a.p(), a.p(), 0)),
     strtok_r: (_c, a) => { const s = a.p(), d = a.p(), save = a.p(); return ptr(strtokR(s, d, save)); },
     strerror: (_c, a) => { mem.putCstr(strerrorBuf, ERRSTR[a.i()] ?? `Unknown error ${a.i()}`, 64); return strerrorBuf; },
@@ -416,7 +416,7 @@ export function libcInit(): void {
     wcslen: (_c, a) => { const p = a.p(); let n = 0; while (mem.ld32(p + n * 4)) n++; return n; },
     wmemchr: (_c, a) => { const p = a.p(), c = a.i(), n = a.u(); for (let i = 0; i < n; i++) if (mem.ld32(p + i * 4) === c) return ptr(p + i * 4); return 0; },
     wmemcmp: (_c, a) => { const x = a.p(), y = a.p(), n = a.u(); for (let i = 0; i < n; i++) { const d = mem.ld32(x + i * 4) - mem.ld32(y + i * 4); if (d) return d < 0 ? -1 : 1; } return 0; },
-    wmemcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memcpy(d, s, n * 4); return ARG0; },
+    wmemcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n * 4); return ARG0; },
     wmemmove: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n * 4); return ARG0; },
     wmemset: (_c, a) => { const d = a.p(), c = a.i(), n = a.u(); for (let i = 0; i < n; i++) mem.st32(d + i * 4, c); return ARG0; },
     wcscoll: (_c, a) => { const x = wstr(a.p()), y = wstr(a.p()); return x < y ? -1 : x > y ? 1 : 0; },
@@ -440,7 +440,7 @@ export function libcInit(): void {
       const b0 = mem.u8[s];
       const len = b0 < 0x80 ? 1 : b0 >= 0xf0 ? 4 : b0 >= 0xe0 ? 3 : b0 >= 0xc0 ? 2 : 1;
       if (n < len) return -2;
-      const cp = new TextDecoder().decode(mem.u8.subarray(s, s + len)).codePointAt(0) ?? 0;
+      const cp = dec.decode(mem.u8.subarray(s, s + len)).codePointAt(0) ?? 0;
       if (pwc) mem.st32(pwc, cp);
       return b0 === 0 ? 0 : len;
     },
@@ -558,8 +558,12 @@ function strcmpAt(x: number, y: number, n: number, ci: boolean): number {
   }
   return 0;
 }
-function wlen(p: number): number { let n = 0; while (mem.ld32(p + n * 4)) n++; return n; }
-function wstr(p: number): string { let s = ""; for (let i = 0; ; i++) { const c = mem.ld32(p + i * 4); if (!c) return s; s += String.fromCodePoint(c >>> 0 > 0x10ffff ? 0xfffd : c >>> 0); } }
+export function wlen(p: number): number { let n = 0; while (mem.ld32(p + n * 4)) n++; return n; }
+export function wstr(p: number, max = 0x7fffffff): string {
+  let s = "";
+  for (let i = 0; i < max; i++) { const c = mem.ld32(p + i * 4); if (!c) return s; s += String.fromCodePoint(c >>> 0 > 0x10ffff ? 0xfffd : c >>> 0); }
+  return s;
+}
 const WCTYPES = ["alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space", "upper", "xdigit"];
 const WCTEST: Record<string, RegExp> = {
   alnum: /[\p{L}\p{N}]/u, alpha: /\p{L}/u, blank: /[ \t]/, cntrl: /\p{Cc}/u, digit: /\d/, graph: /[^\s\p{Cc}]/u, lower: /\p{Ll}/u,
