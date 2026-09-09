@@ -18,10 +18,10 @@ export const ENV_SCREEN = process.env.WEBDROID_SCREEN;
 /** Compose the query rather than concatenating it: `?bytecode=x` + `?screen=y` silently drops
  *  the second parameter, and the run then measures the wrong geometry against the right pixels. */
 function pageUrl(screen?: Screen): string {
-  const q = new URLSearchParams();
-  if (CUT) q.set("bytecode", CUT);
-  if (screen) q.set("screen", screenParam(screen));
-  return q.size ? `${BASE_URL}/?${q}` : BASE_URL;
+  const u = new URL(BASE_URL);
+  if (CUT) u.searchParams.set("bytecode", CUT);
+  if (screen) u.searchParams.set("screen", screenParam(screen));
+  return u.href;
 }
 
 declare global {
