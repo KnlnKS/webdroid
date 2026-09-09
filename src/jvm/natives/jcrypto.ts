@@ -304,7 +304,7 @@ rt.register({
       [m.hash, m.len] = h;
       return m;
     },
-    "init(Ljava/security/Key;)V": function (this: JMac, k: unknown) { return initMac(this, k); },
+    "init(Ljava/security/Key;)V": maySuspend(function (this: JMac, k: unknown) { return initMac(this, k); }),
     "init(Ljava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JMac, k: unknown) { return initMac(this, k); },
     "update(B)V": function (this: JMac, b: number) { this.parts.push(new Uint8Array([b & 0xff])); },
     "update([B)V": function (this: JMac, b: Int8Array) { this.parts.push(bytes(b)); },

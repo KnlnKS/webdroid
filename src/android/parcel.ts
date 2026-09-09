@@ -1,7 +1,7 @@
 // android.os.Parcel: AOSP's wire layout (4-byte cells, UTF-16 strings, BNDL bundles) so
 // dataSize/dataPosition agree with what an app measured on a device. What has no byte
 // form here — a Serializable, a binder — rides in a side table keyed by its position.
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, maySuspend } from "../jvm/runtime";
 import { dotName, slashName, jarray, mangleStaticField } from "../jvm/abi";
 import { newObj, vcall, JInt, JLong, JFloat, JDouble, JBool, JByte, JShort, JChar, box } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, type JList } from "../jvm/natives/jutil";
@@ -292,7 +292,7 @@ rt.register({
     "writeValue(Ljava/lang/Object;)V": function (this: JParcel, v: unknown) { return writeValue(this, v); },
     "writeList(Ljava/util/List;)V": function (this: JParcel, l: unknown) { return writeList(this, l); },
     "writeMap(Ljava/util/Map;)V": function (this: JParcel, m: unknown) { return writeMap(this, m); },
-    "writeBundle(Landroid/os/Bundle;)V": function (this: JParcel, b: JBundle | null) { return writeBundle(this, b); },
+    "writeBundle(Landroid/os/Bundle;)V": maySuspend(function (this: JParcel, b: JBundle | null) { return writeBundle(this, b); }),
     "writeParcelable(Landroid/os/Parcelable;I)V": function (this: JParcel, o: JObj | null, flags: number) { return writeParcelable(this, o, flags); },
     "writeTypedList(Ljava/util/List;)V": async function (this: JParcel, l: unknown) { return writeTyped(this, l === null ? null : await toJsArray(l), 0); },
     "writeTypedList(Ljava/util/List;I)V": async function (this: JParcel, l: unknown, flags: number) { return writeTyped(this, l === null ? null : await toJsArray(l), flags); },

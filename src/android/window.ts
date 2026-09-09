@@ -1,4 +1,4 @@
-import { rt, JObj, callSelf } from "../jvm/runtime";
+import { rt, JObj, callSelf, maySuspend } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import type { JFrameLayout } from "./layouts";
 import type { JActionBarView } from "./menu";
@@ -84,10 +84,10 @@ rt.register({
       if (this.dialog) return dialogNative("setContentView", "(I)V").call(this.dialog, id);
       return callSelf(activityMethods, "setContentView(I)V", this.activity, id);
     },
-    "setContentView(Landroid/view/View;)V": function (this: JWindow, v: unknown) {
+    "setContentView(Landroid/view/View;)V": maySuspend(function (this: JWindow, v: unknown) {
       if (this.dialog) return dialogNative("setContentView", "(Landroid/view/View;)V").call(this.dialog, v);
       return callSelf(activityMethods, "setContentView(Landroid/view/View;)V", this.activity, v);
-    },
+    }),
     "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JWindow, v: unknown, lp: unknown) {
       if (this.dialog) return dialogNative("setContentView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V").call(this.dialog, v, lp);
       return callSelf(activityMethods, "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", this.activity, v, lp);

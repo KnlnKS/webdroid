@@ -1,6 +1,6 @@
 // Java-facing android.content.res.* on top of res.ts + drawable.ts
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
@@ -283,10 +283,10 @@ const resMethods: NativeSpec["methods"] = {
   "getColorStateList(I)Landroid/content/res/ColorStateList;": function (this: JResources, id: number) {
     return loadColorStateList(this.host, id, null);
   },
-  "getColorStateList(ILandroid/content/res/Resources$Theme;)Landroid/content/res/ColorStateList;":
+  "getColorStateList(ILandroid/content/res/Resources$Theme;)Landroid/content/res/ColorStateList;":maySuspend(
     function (this: JResources, id: number, theme: JTheme | null) {
       return loadColorStateList(this.host, id, theme);
-    },
+    }),
   "getDimension(I)F": function (this: JResources, id: number) { return rvDimen(this.host, this.host.ref(id), 0); },
   "getDimensionPixelSize(I)I": function (this: JResources, id: number) { return Math.round(rvDimen(this.host, this.host.ref(id), 0)); },
   "getDimensionPixelOffset(I)I": function (this: JResources, id: number) { return Math.trunc(rvDimen(this.host, this.host.ref(id), 0)); },
@@ -296,10 +296,10 @@ const resMethods: NativeSpec["methods"] = {
   "getDrawable(I)Landroid/graphics/drawable/Drawable;": function (this: JResources, id: number) {
     return loadDrawable(this.host, id, null);
   },
-  "getDrawable(ILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;":
+  "getDrawable(ILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;":maySuspend(
     function (this: JResources, id: number, t: JTheme | null) {
       return loadDrawable(this.host, id, t);
-    },
+    }),
   "getStringArray(I)[Ljava/lang/String;": function (this: JResources, id: number) { return jarray(stringArray(this.host, id), "Ljava/lang/String;"); },
   "getTextArray(I)[Ljava/lang/CharSequence;": function (this: JResources, id: number) { return jarray(stringArray(this.host, id), "Ljava/lang/CharSequence;"); },
   "getIntArray(I)[I": function (this: JResources, id: number) {

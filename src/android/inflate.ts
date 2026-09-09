@@ -1,6 +1,6 @@
 // LayoutInflater: binary layout XML → View tree, with Factory2 support (fragments/appcompat).
 
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, maySuspend } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { parseAXML, TV, type XmlNode } from "./axml";
@@ -176,12 +176,12 @@ rt.register({
   name: "android/view/LayoutInflater", ctor: JLayoutInflater,
   methods: {
     "static from(Landroid/content/Context;)Landroid/view/LayoutInflater;": (jctx: unknown) => getInflater(jctx),
-    "inflate(ILandroid/view/ViewGroup;)Landroid/view/View;": function (this: JLayoutInflater, id: number, root: unknown) {
+    "inflate(ILandroid/view/ViewGroup;)Landroid/view/View;": maySuspend(function (this: JLayoutInflater, id: number, root: unknown) {
       return inflateLayout(this.jctx, id, root, !!root);
-    },
-    "inflate(ILandroid/view/ViewGroup;Z)Landroid/view/View;": function (this: JLayoutInflater, id: number, root: unknown, attach: number) {
+    }),
+    "inflate(ILandroid/view/ViewGroup;Z)Landroid/view/View;": maySuspend(function (this: JLayoutInflater, id: number, root: unknown, attach: number) {
       return inflateLayout(this.jctx, id, root, !!attach);
-    },
+    }),
     "inflate(Landroid/content/res/XmlResourceParser;Landroid/view/ViewGroup;Z)Landroid/view/View;":
       async function (this: JLayoutInflater, parser: any, root: unknown, attach: number) {
         // parser events built from XmlNode; find its root node

@@ -1,5 +1,5 @@
 import { type JFile, vfs, mkFile } from "../jvm/natives/jio";
-import { JObj, rt, type NativeSpec, callSelf } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec, callSelf, maySuspend } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
 import { resString, themeOf, JTheme, rvColor, obtainStyled, type JAttrSet, JTypedArray } from "./res";
 import { newObj, javaFormat } from "../jvm/natives/jlang";
@@ -115,7 +115,7 @@ export const contextMethods: NativeSpec["methods"] = {
   },
   "getPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
   "getAttributionTag()Ljava/lang/String;": () => null,
-  "getAttributionSource()Landroid/content/AttributionSource;": function (this: JContext) { return attribution ??= newObj("android/content/AttributionSource", null); },
+  "getAttributionSource()Landroid/content/AttributionSource;": maySuspend(function (this: JContext) { return attribution ??= newObj("android/content/AttributionSource", null); }),
   // only this package is installed, so its own name is the one context that exists; AOSP
   // throws NameNotFoundException for anything else (callers handle it — it is how they
   // discover an optional dependency is absent)
@@ -161,9 +161,9 @@ export const contextMethods: NativeSpec["methods"] = {
   "getColorStateList(I)Landroid/content/res/ColorStateList;": async function (this: JContext, id: number) {
     return loadColorStateList(this.$host.res, id, themeOf(this));
   },
-  "getDrawable(I)Landroid/graphics/drawable/Drawable;": function (this: JContext, id: number) {
+  "getDrawable(I)Landroid/graphics/drawable/Drawable;": maySuspend(function (this: JContext, id: number) {
     return loadDrawable(this.$host.res, id, themeOf(this));
-  },
+  }),
   "getAssets()Landroid/content/res/AssetManager;": function (this: JContext) {
     const a = new JAssetManager();
     a.host = this.$host.res;

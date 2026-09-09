@@ -249,7 +249,7 @@ rt.register({
   ifaces: ["java/util/concurrent/Future", "java/util/concurrent/ScheduledFuture"],
   methods: {
     "get()Ljava/lang/Object;": async function (this: JFuture) { return futureGet(this); },
-    "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JFuture, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); },
+    "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": maySuspend(function (this: JFuture, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); }),
     "isDone()Z": function (this: JFuture) { return this.done; },
     "isCancelled()Z": function (this: JFuture) { return this.cancelled; },
     "cancel(Z)Z": function (this: JFuture, interrupt: number) {
@@ -501,7 +501,7 @@ rt.register({
       if (this.n === 0) return;
       return new Promise<void>((r) => this.waiters.push(r));
     },
-    "await(JLjava/util/concurrent/TimeUnit;)Z": function (this: JCountDownLatch, d: bigint, u: JTimeUnit) {
+    "await(JLjava/util/concurrent/TimeUnit;)Z": maySuspend(function (this: JCountDownLatch, d: bigint, u: JTimeUnit) {
       if (this.n === 0) return 1;
       return new Promise<number>((resolve) => {
         const done = () => resolve(1);
@@ -511,7 +511,7 @@ rt.register({
           if (i >= 0) { this.waiters.splice(i, 1); resolve(0); }
         }, Number(d) * u.ms);
       });
-    },
+    }),
   },
 });
 
@@ -899,10 +899,10 @@ function parkThread(t: JThread, timeoutMs = 1000): void | Promise<void> {
 rt.register({
   name: "java/util/concurrent/locks/LockSupport", ctor: class extends JObj {},
   methods: {
-    "static park()V": () => parkThread(curThread),
-    "static park(Ljava/lang/Object;)V": () => parkThread(curThread),
-    "static parkNanos(J)V": (n: bigint) => parkThread(curThread, Number(n) / 1e6),
-    "static parkNanos(Ljava/lang/Object;J)V": (_b: unknown, n: bigint) => parkThread(curThread, Number(n) / 1e6),
+    "static park()V": maySuspend(() => parkThread(curThread)),
+    "static park(Ljava/lang/Object;)V": maySuspend(() => parkThread(curThread)),
+    "static parkNanos(J)V": maySuspend((n: bigint) => parkThread(curThread, Number(n) / 1e6)),
+    "static parkNanos(Ljava/lang/Object;J)V": maySuspend((_b: unknown, n: bigint) => parkThread(curThread, Number(n) / 1e6)),
     "static unpark(Ljava/lang/Thread;)V": (t: JThread | null) => { if (!t) return; if (t.unpark) { t.unpark(); t.unpark = null; } else t.permit = true; },
   },
 });
@@ -953,7 +953,7 @@ rt.register({
       this.wake(null);
     },
     "get()Ljava/lang/Object;": function (this: JFutureTask) { return futureGet(this); },
-    "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JFutureTask, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); },
+    "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": maySuspend(function (this: JFutureTask, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); }),
     "isDone()Z": function (this: JFutureTask) { return this.done; },
     "isCancelled()Z": () => 0,
     "cancel(Z)Z": () => 0,

@@ -4,7 +4,7 @@ import { mangleMethod, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, idHash } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor } from "./drawable";
 import { JMotionEvent } from "./motionevent";
-import { JObj, rt, type NativeSpec } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme } from "./res";
 import { mainHandler, reportUncaught } from "./os";
 import type { JDisplayMetrics } from "./util";
@@ -714,7 +714,7 @@ const viewMethods: NativeSpec["methods"] = {
   },
   "performHapticFeedback(I)Z": () => 1,
   "playSoundEffect(I)V": () => {},
-  "measure(II)V": function (this: JView, w: number, h: number) { return measureView(this, w, h); },
+  "measure(II)V": maySuspend(function (this: JView, w: number, h: number) { return measureView(this, w, h); }),
   "onMeasure(II)V": function (this: JView, wSpec: number, hSpec: number) {
     const bw = Math.max(this.minW, this.background?.intrinsicW() ?? 0);
     const bh = Math.max(this.minH, this.background?.intrinsicH() ?? 0);
@@ -731,21 +731,21 @@ const viewMethods: NativeSpec["methods"] = {
   "setMeasuredDimension(II)V": function (this: JView, w: number, h: number) {
     this.measuredW = w & 0xffffff; this.measuredH = h & 0xffffff;
   },
-  "layout(IIII)V": function (this: JView, l: number, t: number, r: number, b: number) {
+  "layout(IIII)V": maySuspend(function (this: JView, l: number, t: number, r: number, b: number) {
     return layoutView(this, l, t, r, b);
-  },
+  }),
   "onLayout(ZIIII)V": function () {},
   "onSizeChanged(IIII)V": function () {},
   "onDraw(Landroid/graphics/Canvas;)V": function () {},
   "dispatchDraw(Landroid/graphics/Canvas;)V": function () {},
-  "draw(Landroid/graphics/Canvas;)V": function (this: JView, cv: JCanvas) {
+  "draw(Landroid/graphics/Canvas;)V": maySuspend(function (this: JView, cv: JCanvas) {
     // explicit draw of the subtree at current canvas origin (used by app code occasionally)
     const saveL = this.left, saveT = this.top;
     this.left = 0; this.top = 0;
     const p = drawView(this, cv);
     this.left = saveL; this.top = saveT;
     return p;
-  },
+  }),
   "invalidate()V": function () { invalidate(); },
   "invalidate(IIII)V": function () { invalidate(); },
   "invalidate(Landroid/graphics/Rect;)V": function () { invalidate(); },
@@ -1019,9 +1019,9 @@ const viewMethods: NativeSpec["methods"] = {
   "setKeepScreenOn(Z)V": () => {},
   "setRequestedFrameRate(F)V": () => {},
   "getKeepScreenOn()Z": () => 0,
-  "requestRectangleOnScreen(Landroid/graphics/Rect;)Z": function (this: JView, rect: JRect) {
+  "requestRectangleOnScreen(Landroid/graphics/Rect;)Z": maySuspend(function (this: JView, rect: JRect) {
     return vcall(this, "requestRectangleOnScreen", "(Landroid/graphics/Rect;Z)Z", rect, 0);
-  },
+  }),
   "requestRectangleOnScreen(Landroid/graphics/Rect;Z)Z": async function (this: JView, rect: JRect, immediate: number) {
     let scrolled = 0;
     for (let child: JView = this, parent = child.parent; parent; child = parent, parent = parent.parent) {
@@ -1100,12 +1100,12 @@ const viewMethods: NativeSpec["methods"] = {
   "getOverlay()Landroid/view/ViewGroupOverlay;": overlayOf,
   "getWindowId()Landroid/view/WindowId;": function (this: JView) { return this.attached ? WINDOW_ID : null; },
   "getRootWindowInsets()Landroid/view/WindowInsets;": () => rootWindowInsets(),
-  "getWindowInsetsController()Landroid/view/WindowInsetsController;": function (this: JView) {
+  "getWindowInsetsController()Landroid/view/WindowInsetsController;": maySuspend(function (this: JView) {
     if (!this.attached) return null;
     let root: JView = this;
     while (root.parent) root = root.parent;
     return root.windowOwner ? vcall(root.windowOwner, "getInsetsController", "()Landroid/view/WindowInsetsController;") : null;
-  },
+  }),
   // AOSP: a view that fits system windows turns the bars into padding and consumes them; one
   // that does not still offers them to the deprecated fitSystemWindows(Rect) an app may override.
   "onApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": async function (this: JView, ins: JWindowInsets) {
@@ -1464,18 +1464,18 @@ const vgMethods: NativeSpec["methods"] = {
   "addView(Landroid/view/View;)V": async function (this: JViewGroup, c: JView) {
     return addViewFunnel(this, c, -1, null);
   },
-  "addView(Landroid/view/View;I)V": function (this: JViewGroup, c: JView, i: number) {
+  "addView(Landroid/view/View;I)V": maySuspend(function (this: JViewGroup, c: JView, i: number) {
     return addViewFunnel(this, c, i, null);
-  },
-  "addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JViewGroup, c: JView, lp: JLayoutParams) {
+  }),
+  "addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": maySuspend(function (this: JViewGroup, c: JView, lp: JLayoutParams) {
     return addViewFunnel(this, c, -1, lp);
-  },
+  }),
   "addView(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V": addView3,
-  "addView(Landroid/view/View;II)V": function (this: JViewGroup, c: JView, w: number, h: number) {
+  "addView(Landroid/view/View;II)V": maySuspend(function (this: JViewGroup, c: JView, w: number, h: number) {
     const lp = new JLayoutParams();
     lp.width = w; lp.height = h;
     return addViewFunnel(this, c, -1, lp);
-  },
+  }),
   "removeView(Landroid/view/View;)V": removeChild,
   "removeViewInLayout(Landroid/view/View;)V": removeChild,
   "removeViewAt(I)V": function (this: JViewGroup, i: number) {
@@ -1559,9 +1559,9 @@ const vgMethods: NativeSpec["methods"] = {
       await layoutView(c, this.padL, this.padT, this.padL + c.measuredW, this.padT + c.measuredH);
     }
   },
-  "measureChildWithMargins(Landroid/view/View;IIII)V": function (this: JViewGroup, c: JView, ws: number, wu: number, hs: number, hu: number) {
+  "measureChildWithMargins(Landroid/view/View;IIII)V": maySuspend(function (this: JViewGroup, c: JView, ws: number, wu: number, hs: number, hu: number) {
     return measureChildWithMargins(this, c, ws, wu, hs, hu);
-  },
+  }),
   "measureChild(Landroid/view/View;II)V": async function (this: JViewGroup, c: JView, ws: number, hs: number) {
     await measureView(c,
       childMeasureSpec(ws, this.padL + this.padR, c.lp?.width ?? WRAP_CONTENT),
@@ -1783,7 +1783,7 @@ rt.register({
     "addOnDrawListener(Landroid/view/ViewTreeObserver$OnDrawListener;)V": function (this: JVTO, l: unknown) { this.drawLs.push(l); },
     "removeOnDrawListener(Landroid/view/ViewTreeObserver$OnDrawListener;)V": function (this: JVTO, l: unknown) { removeFrom(this.drawLs, l); },
     "isAlive()Z": () => 1,
-    "dispatchOnGlobalLayout()V": function (this: JVTO) { return this.dispatchGlobalLayout(); },
+    "dispatchOnGlobalLayout()V": maySuspend(function (this: JVTO) { return this.dispatchGlobalLayout(); }),
   },
 });
 /** layout pass: OnGlobalLayoutListener fires when the tree's layout actually ran */

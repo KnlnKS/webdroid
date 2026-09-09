@@ -207,7 +207,7 @@ rt.register({
       for (let i = 0; i < len; i++) { a = (a + (buf[off + i] & 0xff)) % 65521; b = (b + a) % 65521; }
       this.a = a; this.b = b;
     },
-    "update([B)V": function (this: JAdler32, buf: Int8Array) { return vcall(this, "update", "([BII)V", buf, 0, buf.length); },
+    "update([B)V": maySuspend(function (this: JAdler32, buf: Int8Array) { return vcall(this, "update", "([BII)V", buf, 0, buf.length); }),
     "update(I)V": function (this: JAdler32, v: number) { this.a = (this.a + (v & 0xff)) % 65521; this.b = (this.b + this.a) % 65521; },
     "getValue()J": function (this: JAdler32) { return BigInt(((this.b << 16) | this.a) >>> 0); },
     "reset()V": function (this: JAdler32) { this.a = 1; this.b = 0; },

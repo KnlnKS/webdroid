@@ -483,7 +483,7 @@ const ordering = (desc: string, cmp: (a: any, b: any) => number): NativeSpec["me
   [`isBefore(${desc})Z`]: function (this: JObj, o: unknown) { return cmp(this, o) < 0 ? 1 : 0; },
   [`isEqual(${desc})Z`]: function (this: JObj, o: unknown) { return cmp(this, o) === 0 ? 1 : 0; },
 });
-const formatWith = function (this: JObj, f: unknown) { return vcall(f, "format", "(Ljava/time/temporal/TemporalAccessor;)Ljava/lang/String;", this); };
+const formatWith = maySuspend(function (this: JObj, f: unknown) { return vcall(f, "format", "(Ljava/time/temporal/TemporalAccessor;)Ljava/lang/String;", this); });
 const temporalMs = (t: any): number => t instanceof JInstant || t instanceof JZonedDateTime ? t.ms
   : t instanceof JLocalDateTime ? localMs(t) : t instanceof JLocalDate ? new Date(t.y, t.mo - 1, t.d).getTime()
   : t instanceof JDate ? t.t : Date.now();

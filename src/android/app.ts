@@ -161,9 +161,9 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "onRestart()V": function () {},
   "onResume()V": async function (this: JActivity) { this.resumed = true; return dispatchFragLifecycle(this, "onResume"); },
   "onPostResume()V": function () {},
-  "onPause()V": function (this: JActivity) { this.resumed = false; return dispatchFragLifecycle(this, "onPause"); },
-  "onStop()V": function (this: JActivity) { this.started = false; return dispatchFragLifecycle(this, "onStop"); },
-  "onDestroy()V": function (this: JActivity) { return dispatchFragLifecycle(this, "onDestroy"); },
+  "onPause()V": maySuspend(function (this: JActivity) { this.resumed = false; return dispatchFragLifecycle(this, "onPause"); }),
+  "onStop()V": maySuspend(function (this: JActivity) { this.started = false; return dispatchFragLifecycle(this, "onStop"); }),
+  "onDestroy()V": maySuspend(function (this: JActivity) { return dispatchFragLifecycle(this, "onDestroy"); }),
   /**
    * AOSP Activity.onBackPressed: collapse an expanded action view, then pop the fragment
    * back stack, and only if neither consumed the press, finish. androidx apps land here as

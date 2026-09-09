@@ -18,7 +18,7 @@ import {
 } from "./res";
 import { TV } from "./axml";
 import { fontResource } from "./fonts";
-import { type NativeSpec, callSelf, rt, JObj } from "../jvm/runtime";
+import { type NativeSpec, callSelf, rt, JObj, maySuspend } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { usLocale } from "../jvm/natives/jvalues";
 
@@ -274,7 +274,7 @@ export function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v:
   return {
     "<init>(Landroid/content/Context;)V": function (this: T, c: unknown) { return init(this, c, null); },
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: T, c: unknown, set: JAttrSet | null) { return init(this, c, set); },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": function (this: T, c: unknown, set: JAttrSet | null, dsa: number) { return init(this, c, set, dsa); },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": maySuspend(function (this: T, c: unknown, set: JAttrSet | null, dsa: number) { return init(this, c, set, dsa); }),
   };
 }
 function compoundDrawables(this: JTextView) {

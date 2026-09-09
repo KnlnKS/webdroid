@@ -1,7 +1,7 @@
 // android.util.* natives: Log, the sparse arrays, StateSet, Property, DisplayMetrics, LruCache,
 // TypedValue, Size, FloatMath and JsonReader.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { intBitsToFloat } from "../jvm/abi";
 import { device } from "../shell/config";
 import { vcall, JEnum } from "../jvm/natives/jlang";
@@ -362,8 +362,8 @@ rt.register({
     "close()V": function (this: JJsonReader) { this.ev = null; },
     "beginArray()V": function (this: JJsonReader) { return jsonNext(this, "BEGIN_ARRAY").then(() => {}); },
     "endArray()V": function (this: JJsonReader) { return jsonNext(this, "END_ARRAY").then(() => {}); },
-    "beginObject()V": function (this: JJsonReader) { return jsonNext(this, "BEGIN_OBJECT").then(() => {}); },
-    "endObject()V": function (this: JJsonReader) { return jsonNext(this, "END_OBJECT").then(() => {}); },
+    "beginObject()V": maySuspend(function (this: JJsonReader) { return jsonNext(this, "BEGIN_OBJECT").then(() => {}); }),
+    "endObject()V": maySuspend(function (this: JJsonReader) { return jsonNext(this, "END_OBJECT").then(() => {}); }),
     "nextName()Ljava/lang/String;": async function (this: JJsonReader) { return (await jsonNext(this, "NAME")).v as string; },
     // AOSP coerces between the scalar types, so a number read as a string is legal and common
     "nextString()Ljava/lang/String;": async function (this: JJsonReader) { return String((await jsonNext(this)).v); },
@@ -434,13 +434,13 @@ rt.register({
       return this;
     },
     [`nullValue()${JW}`]: function (this: JJsonWriter) { return jsonEmit(this, "null"); },
-    [`value(Ljava/lang/String;)${JW}`]: jsonValue((v) => v === null ? "null" : JSON.stringify(v)),
-    [`value(Z)${JW}`]: jsonValue((v) => v ? "true" : "false"),
+    [`value(Ljava/lang/String;)${JW}`]: maySuspend(jsonValue((v) => v === null ? "null" : JSON.stringify(v))),
+    [`value(Z)${JW}`]: maySuspend(jsonValue((v) => v ? "true" : "false")),
     [`value(Ljava/lang/Boolean;)${JW}`]: jsonValue((v) => v === null ? "null" : v.v ? "true" : "false"),
-    [`value(D)${JW}`]: jsonValue((v) => String(v)),
-    [`value(J)${JW}`]: jsonValue((v) => String(v)),
+    [`value(D)${JW}`]: maySuspend(jsonValue((v) => String(v))),
+    [`value(J)${JW}`]: maySuspend(jsonValue((v) => String(v))),
     [`value(Ljava/lang/Number;)${JW}`]: jsonValue((v) => v === null ? "null" : String(v.v ?? v)),
-    "flush()V": function (this: JJsonWriter) { return vcall(this.out, "flush", "()V"); },
-    "close()V": function (this: JJsonWriter) { return vcall(this.out, "close", "()V"); },
+    "flush()V": maySuspend(function (this: JJsonWriter) { return vcall(this.out, "flush", "()V"); }),
+    "close()V": maySuspend(function (this: JJsonWriter) { return vcall(this.out, "close", "()V"); }),
   },
 });
