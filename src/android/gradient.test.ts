@@ -7,7 +7,7 @@ test("sweep gradients start at the right and preserve stops and shader matrices"
     build.onResolve({ filter: /^gradient-probe$/ }, () => ({ path: "probe", namespace: "probe" }));
     build.onLoad({ filter: /.*/, namespace: "probe" }, () => ({ loader: "ts", contents: `
       import ${JSON.stringify(path("../natives.ts"))};
-      import ${JSON.stringify(path("../jvm/runtime.ts"))};
+      import {rt} from ${JSON.stringify(path("../jvm/runtime.ts"))};
       import ${JSON.stringify(path("../jvm/abi.ts"))};
       import {newObj,vcall} from ${JSON.stringify(path("../jvm/natives/jlang.ts"))};
       const canvas=await newObj("android/graphics/Canvas"), paint=await newObj("android/graphics/Paint");
@@ -25,7 +25,19 @@ test("sweep gradients start at the right and preserve stops and shader matrices"
       await vcall(canvas,"drawRect","(FFFFLandroid/graphics/Paint;)V",0,0,100,100,paint);
       let rejected=false;
       try { await newObj("android/graphics/SweepGradient","(FF[I[F)V",0,0,colors,Float32Array.of(0,1)); } catch { rejected=true; }
-      globalThis.result={samples,rotated:pixel(50,90),rejected};` }));
+      const rotated=pixel(50,90);
+      const normal=rt.link("android/graphics/BlurMaskFilter$Blur").ctor.s$NORMAL;
+      const blur=await newObj("android/graphics/BlurMaskFilter","(FLandroid/graphics/BlurMaskFilter$Blur;)V",6,normal);
+      await vcall(paint,"setShader","(Landroid/graphics/Shader;)Landroid/graphics/Shader;",null);
+      await vcall(paint,"setMaskFilter","(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;",blur);
+      const copy=await newObj("android/graphics/Paint","(Landroid/graphics/Paint;)V",paint);
+      canvas.ctx.clearRect(0,0,100,100);
+      await vcall(canvas,"drawRect","(FFFFLandroid/graphics/Paint;)V",30,30,70,70,copy);
+      const fringe=pixel(27,50)[3], center=pixel(50,50)[3], restored=canvas.ctx.filter;
+      await vcall(copy,"setMaskFilter","(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;",null);
+      canvas.ctx.clearRect(0,0,100,100);
+      await vcall(canvas,"drawRect","(FFFFLandroid/graphics/Paint;)V",30,30,70,70,copy);
+      globalThis.result={samples,rotated,rejected,fringe,center,restored,sharp:pixel(27,50)[3]};` }));
   } }] });
   if (!bundle.success) throw new Error(bundle.logs.join("\n"));
   const server = Bun.serve({ port: 0, fetch: (r) => new URL(r.url).pathname === "/probe.js"
@@ -42,5 +54,10 @@ test("sweep gradients start at the right and preserve stops and shader matrices"
     }
     expect(result.rotated[0]).toBeGreaterThan(245);
     expect(result.rejected).toBe(true);
+    expect(result.fringe).toBeGreaterThan(0);
+    expect(result.fringe).toBeLessThan(128);
+    expect(result.center).toBeGreaterThan(245);
+    expect(result.restored).toBe("none");
+    expect(result.sharp).toBe(0);
   } finally { await browser.close(); server.stop(true); }
 }, 30000);

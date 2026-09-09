@@ -292,6 +292,7 @@ export class JPaint extends JObj {
   alphaMul = 1;   // via setAlpha on top of color? android: setAlpha replaces color alpha
   shader: CanvasGradient | CanvasPattern | null = null;
   shaderObj: JShader | null = null;
+  maskFilter: JBlurMaskFilter | null = null;
   strokeCapN: CanvasLineCap = "butt";
   strokeJoinN: CanvasLineJoin = "miter";
   dash: number[] | null = null;
@@ -383,8 +384,8 @@ const paintMethods: NativeSpec["methods"] = {
     this.blend = m ? COMPOSITE[m.ename] ?? null : null;
   },
   "getBlendMode()Landroid/graphics/BlendMode;": function (this: JPaint) { return this.blendMode; },
-  "getMaskFilter()Landroid/graphics/MaskFilter;": () => null,
-  "setMaskFilter(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;": () => null,
+  "getMaskFilter()Landroid/graphics/MaskFilter;": function (this: JPaint) { return this.maskFilter; },
+  "setMaskFilter(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;": function (this: JPaint, f: JBlurMaskFilter | null) { return this.maskFilter = f; },
   "getColor()I": function (this: JPaint) { return this.color; },
   "setAlpha(I)V": function (this: JPaint, a: number) { this.color = ((a << 24) | (this.color & 0xffffff)) | 0; },
   "getAlpha()I": function (this: JPaint) { return this.color >>> 24; },
@@ -499,6 +500,7 @@ export function copyPaint(src: JPaint, dst: JPaint) {
   dst.color = src.color; dst.style = src.style; dst.strokeWidth = src.strokeWidth;
   dst.textSize = src.textSize; dst.tf = src.tf; dst.antiAlias = src.antiAlias;
   dst.textAlignN = src.textAlignN; dst.shader = src.shader; dst.shaderObj = src.shaderObj; dst.dash = src.dash;
+  dst.maskFilter = src.maskFilter;
   dst.filterColor = src.filterColor; dst.filterObj = src.filterObj; dst.underline = src.underline; dst.fakeBold = src.fakeBold;
   dst.letterSpacingEm = src.letterSpacingEm;
   dst.blend = src.blend; dst.xfermode = src.xfermode; dst.blendMode = src.blendMode;
@@ -708,6 +710,18 @@ rt.register({ name: "android/graphics/PathEffect", ctor: class extends JObj {} }
 rt.register({ name: "android/graphics/CornerPathEffect", ctor: class extends JObj {}, sup: "android/graphics/PathEffect",
   methods: { "<init>(F)V": function () {} } });
 mkEnumSet("android/graphics/BlurMaskFilter$Blur", ["NORMAL", "SOLID", "OUTER", "INNER"]);
+class JBlurMaskFilter extends JObj { sigma = 0; }
+rt.register({ name: "android/graphics/MaskFilter", ctor: class extends JObj {} });
+rt.register({
+  name: "android/graphics/BlurMaskFilter", ctor: JBlurMaskFilter, sup: "android/graphics/MaskFilter",
+  methods: {
+    "<init>(FLandroid/graphics/BlurMaskFilter$Blur;)V": function (this: JBlurMaskFilter, radius: number, style: JSimpleEnum) {
+      if (!(radius > 0)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "radius must be > 0");
+      if (style.ename !== "NORMAL") throw rt.mkThrowable("java/lang/UnsupportedOperationException", "unsupported blur mask style " + style.ename);
+      this.sigma = radius * 0.57735 + 0.5;
+    },
+  },
+});
 
 class JShader extends JObj {
   grad: CanvasGradient | CanvasPattern | null = null;
@@ -1095,16 +1109,25 @@ export class JCanvas extends JObj {
     // A blended paint owns the composite op only for its own ops — restore it straight after,
     // so a CLEAR fill can never leak into the next drawImage/drawText and erase it.
     const prev = p.blend ? this.ctx.globalCompositeOperation : null;
-    if (p.blend) this.ctx.globalCompositeOperation = p.blend;
-    if (p.style === 0 || p.style === 2) {
-      this.prep(p, false);
-      const lm = p.shaderObj?.local;
-      // a gradient with a local matrix: Canvas2D gradients have no transform of their own, so
-      // clip to the shape and fill the plane under the matrix instead
-      fill(lm && !(p.shader instanceof CanvasPattern) ? this.shaderClipCtx(lm) : this.ctx);
+    const filter = p.maskFilter ? this.ctx.filter : null;
+    if (p.maskFilter) {
+      const m = this.ctx.getTransform();
+      this.ctx.filter = `blur(${p.maskFilter.sigma * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c))}px)`;
     }
-    if (p.style === 1 || p.style === 2) { this.prep(p, true); stroke(this.ctx); }
-    if (prev) this.ctx.globalCompositeOperation = prev;
+    try {
+      if (p.blend) this.ctx.globalCompositeOperation = p.blend;
+      if (p.style === 0 || p.style === 2) {
+        this.prep(p, false);
+        const lm = p.shaderObj?.local;
+        // a gradient with a local matrix: Canvas2D gradients have no transform of their own, so
+        // clip to the shape and fill the plane under the matrix instead
+        fill(lm && !(p.shader instanceof CanvasPattern) ? this.shaderClipCtx(lm) : this.ctx);
+      }
+      if (p.style === 1 || p.style === 2) { this.prep(p, true); stroke(this.ctx); }
+    } finally {
+      if (prev) this.ctx.globalCompositeOperation = prev;
+      if (filter !== null) this.ctx.filter = filter;
+    }
   }
   private shaderCtx: (typeof this.ctx) | null = null;
   private shaderCtxLm: number[] | null = null;
