@@ -980,6 +980,7 @@ pub fn block(c: *Cpu, start: u32) Status {
     while (n < cpu.max_block) : (n += 1) {
         if (pc < abi.LOW) return fault(c, .bad_address, pc, pc);
         c.ic += 1;
+        cpu.stats.interp += 1;
         const st_ = if (thumb) execThumb(c, pc) else execArm(c, pc);
         if (st_ != .next) return st_;
         pc = @truncate(c.pc);

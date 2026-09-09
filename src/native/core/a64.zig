@@ -970,6 +970,7 @@ pub fn block(c: *Cpu, start: u32, entry: *cpu.Page) Status {
             page.cov[i >> 3] |= @as(u8, 1) << @intCast(i & 7);
         }
         c.ic += 1;
+        cpu.stats.interp += 1;
         const st_ = exec(c, o, pc);
         switch (st_) {
             .next => {

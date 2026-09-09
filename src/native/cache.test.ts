@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { codeStats, invalidateRange, setA64 } from "./cpu";
 import { mem } from "./mem";
 import { RET, run } from "./a64.testkit";
+import { JIT_HEAT, jitEvict, jitStats } from "./core";
 
 const movW0 = (v: number) => 0x52800000 | (v << 5);
 
@@ -36,6 +37,20 @@ describe("the decode cache", () => {
     expect(mem.ld32(at + 0x800)).toBe(0x12345678);
   });
 
+  test("an evicted region re-heats and comes back", () => {
+    const at = mem.reserve(0x1000, 0x1000);
+    mem.u32[at >>> 2] = movW0(9); mem.u32[(at >>> 2) + 1] = RET;
+    const c = run([RET]);
+    const heat = () => { for (let i = 0; i <= JIT_HEAT; i++) { c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ } } };
+    let before = jitStats.regions;
+    heat();
+    expect(jitStats.regions).toBe(before + 1);
+    while (jitStats.modules) jitEvict();
+    before = jitStats.regions;
+    heat();
+    expect(jitStats.regions).toBe(before + 1);
+    expect(c.w[0]).toBe(9);
+  });
   test("cacheflush drops every page in the range", () => {
     const a = mem.reserve(0x2000, 0x1000);
     mem.u32[a >>> 2] = RET; mem.u32[(a + 0x1000) >>> 2] = RET;

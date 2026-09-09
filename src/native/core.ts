@@ -47,6 +47,7 @@ export interface Core {
   invalidate_range(addr: number, size: number): void;
   invalidate_all(): void;
   cpu_stat(i: number): number;
+  interp_ic(): number;
   set_max_block(n: number): void;
   host_bind(slot: number, id: number): void;
   host_bypass(on: number): void;
@@ -60,7 +61,8 @@ export interface Core {
   jit_fallback(lo: number, hi: number): void;
   jit_install(i: number, slot: number): void;
   jit_done(): void;
-  jit_flush(): void;
+  jit_kill(slot: number): void;
+  jit_evict(): void;
   jit_stat(i: number): number;
   exec_word32(cpu: number, pc: number): number;
 }
@@ -95,30 +97,32 @@ if (core.__heap_base.value > STACK_BASE) throw new Error("[native] the core's da
 const JIT_CAP = 1 << 20; // the last MiB of the KERN region (abi.ts)
 const jitImports = { env: { memory, exec: core.exec_word, exec32: core.exec_word32, tx: core.tx_addr, store: core.on_store } };
 let nextSlot = JIT_SLOT0;
+const freeSlots: number[] = [];
 /** whether this engine compiles synchronously (bun does; Chrome's main thread refuses past 4 KB) */
 let syncCompile: boolean | null = null;
-const instances: WebAssembly.Instance[] = [];
+/** the linked batches, oldest first, each with the table slots it holds */
+const instances: { inst: WebAssembly.Instance; slots: number[] }[] = [];
 /** entries of a block before the JIT takes it (jit.zig) */
 export const JIT_HEAT = 48;
-export const jitStats = { get regions(): number { return core.jit_stat(0); }, get batches(): number { return core.jit_stat(1); }, get skipped(): number { return core.jit_stat(2); }, get bytes(): number { return core.jit_stat(3); }, get modules(): number { return instances.length; }, flushes: 0, async: 0, on: true };
-/** every region goes: the table's slots are reclaimed and the pages re-heat */
-export function jitFlush(): void {
-  core.jit_flush();
-  for (let s = JIT_SLOT0; s < nextSlot; s++) table.set(s, null);
-  instances.length = 0;
-  nextSlot = JIT_SLOT0;
-  jitStats.flushes++;
+export const jitStats = { get regions(): number { return core.jit_stat(0); }, get batches(): number { return core.jit_stat(1); }, get skipped(): number { return core.jit_stat(2); }, get bytes(): number { return core.jit_stat(3); }, get modules(): number { return instances.length; }, evictions: 0, async: 0, on: true };
+/** the table is full: the oldest half of the batches go, and a region still hot re-heats and comes back */
+export function jitEvict(): void {
+  for (const { slots } of instances.splice(0, Math.ceil(instances.length / 2))) for (const s of slots) { table.set(s, null); core.jit_kill(s); freeSlots.push(s); }
+  core.jit_evict();
+  jitStats.evictions++;
 }
 /** debug: only regions whose entry lies in one of the [lo, hi) ranges are installed (set __wdJit before load: bisects a miscompile) */
 function jitLink(inst: WebAssembly.Instance, n: number, t0: number): void {
-  if (nextSlot + n > TABLE_SIZE) jitFlush();
+  if (nextSlot + n > TABLE_SIZE && freeSlots.length < n) jitEvict();
   const jitRanges = (globalThis as { __wdJit?: [number, number][] }).__wdJit;
+  const slots: number[] = [];
   for (let i = 0; i < n; i++) {
     const pc = core.jit_entry(i) >>> 0;
     if (jitRanges && !jitRanges.some(([lo, hi]) => pc >= lo && pc < hi)) continue;
-    table.set(nextSlot, inst.exports["r" + i] as (...a: unknown[]) => unknown); core.jit_install(i, nextSlot++);
+    const slot = freeSlots.pop() ?? nextSlot++;
+    table.set(slot, inst.exports["r" + i] as (...a: unknown[]) => unknown); core.jit_install(i, slot); slots.push(slot);
   }
-  instances.push(inst);
+  instances.push({ inst, slots });
   core.jit_done();
   perf.jitRegions += n; perf.jitMs += performance.now() - t0;
 }

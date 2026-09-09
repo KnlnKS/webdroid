@@ -29,7 +29,7 @@ const SIZE = L(0), OFF_X = L(1), OFF_PC = L(2), OFF_V = L(3), OFF_CPSR = L(4), O
 const ARCH_SIZE = L(16);
 const FAULTS = ["unimplemented", "undefined", "bad address", "misaligned pc", "dc zva", "brk", "svc: unsupported syscall", "system register", "null page"];
 
-export const codeStats = { get pages(): number { return core.cpu_stat(0); }, get invalidated(): number { return core.cpu_stat(1); } };
+export const codeStats = { get pages(): number { return core.cpu_stat(0); }, get invalidated(): number { return core.cpu_stat(1); }, /** instructions the interpreter ran (the rest ran in regions) */ get interp(): number { return core.interp_ic(); } };
 /** single-step register trace: every instruction logs pc + the registers it changed (slow; debugging only) */
 export const stepMode = { on: false, ring: [] as string[], max: 40000, watch: 0, hits: [] as string[] };
 export function setStepMode(on: boolean): void {

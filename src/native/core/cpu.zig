@@ -125,7 +125,7 @@ pub const Page = extern struct {
 const PAGE_BLOCK = (@sizeOf(Page) + abi.PAGE_SIZE - 1) & ~@as(u32, abi.PAGE_SIZE - 1);
 /// page number → its decode block (0: none), sized for the largest memory
 const decoded: [*]u32 = @ptrFromInt(abi.KERN_BASE + 0x60_0000);
-pub var stats = extern struct { pages: u32 = 0, invalidated: u32 = 0 }{};
+pub var stats = extern struct { pages: u32 = 0, invalidated: u32 = 0, interp: u64 = 0 }{};
 var epoch: u32 = 0;
 
 pub fn decodedPage(pg: u32) ?*Page {
@@ -160,14 +160,22 @@ pub fn pageFor(pc: u32) ?*Page {
     }
     return @ptrFromInt(p);
 }
-/// every region's slot map entry goes: the host dropped the compiled modules
-export fn jit_flush() void {
+/// table slots whose regions the host dropped, until `jit_evict` takes their entries out
+const dead: [*]u8 = @ptrFromInt(abi.KERN_BASE + 0xa4_0000);
+export fn jit_kill(slot: u32) void {
+    dead[slot] = 1;
+}
+/// every slot-map entry of a killed slot goes, and its block re-heats from zero
+export fn jit_evict() void {
     var pg: u32 = 0;
     while (pg < (abi.MEM_SIZE_A64 >> abi.PAGE_SHIFT)) : (pg += 1) if (decoded[pg] != 0) {
         const page: *Page = @ptrFromInt(decoded[pg]);
-        @memset(&page.slot, 0);
-        @memset(&page.heat, 0);
+        for (&page.slot, &page.heat) |*s, *h| if (s.* != 0 and dead[s.* >> 8] != 0) {
+            s.* = 0;
+            h.* = 0;
+        };
     };
+    @memset(dead[0..65536], 0);
 }
 
 // ── the JIT's helpers, imported by every region module
@@ -261,6 +269,10 @@ export fn invalidate_all() void {
 pub fn reset() void {
     invalidate_all();
     nfree = 0;
+}
+/// instructions the interpreter ran: against `ic`, the JIT's coverage
+export fn interp_ic() f64 {
+    return @floatFromInt(stats.interp);
 }
 export fn cpu_stat(i: u32) u32 {
     return switch (i) {

@@ -194,7 +194,8 @@ it has been tried three ways and measured.
 
 - A64 SIMD/FP, JNI, Bionic host services, EGL/GLES3, and NDK libraries are implemented far
   enough for Among Us Practice on The Skeld. The core interprets from a decode cache; hot
-  regions compile to wasm and the table's slots are reclaimed with a flush when it fills.
+  regions compile to wasm; when the table fills, the oldest batches are evicted and a region
+  still hot re-heats and comes back.
 - Practice renders and accepts movement, but gameplay is not yet smooth. Profile real play
   before changing CPU, graphics, or cache policy; preserve the hardware-oracle and cache tests.
 - Local UDP supports process-local sessions. External UDP has no relay. Native TLS uses a

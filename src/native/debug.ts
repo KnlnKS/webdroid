@@ -58,21 +58,25 @@ if ((globalThis as { __wdNativeStep?: boolean }).__wdNativeStep) { setStepMode(t
 /** microbenchmark: the classic byte-copy loop, 20M iterations on a scratch Cpu, on both
  *  instruction sets so the two are quoted in one unit. The A64 form is the same six instructions
  *  (`clang -target aarch64-linux-gnu`). It runs on the slice loop, as guest code does. */
-let benchBufs: { src: number; dst: number } | null = null;
+let benchBufs: { src: number; dst: number; code: number[] } | null = null;
 async function bench(): Promise<string> {
   const N = 20_000_000;
   // reserved once: the arena bump-allocates and never frees, so a second call must not take
-  // another 40 MiB out of it
-  benchBufs ??= { src: mem.reserve(N + 0x1000, 0x1000), dst: mem.reserve(N + 0x1000, 0x1000) };
+  // another 40 MiB out of it. The code pages come from the arena, which survives the ABI
+  // switch (the image region does not), so a second call runs the regions the first compiled
+  // (the engine's tiered-up code, on Chrome) rather than compiling afresh
+  benchBufs ??= { src: mem.reserve(N + 0x1000, 0x1000), dst: mem.reserve(N + 0x1000, 0x1000), code: [] };
   const { src, dst } = benchBufs;
   const A32 = [0xe7d1c003, 0xe2422001, 0xe7c0c003, 0xe2833001, 0xe3520000, 0x1afffffa, 0xe12fff1e];
   const A64 = [0x3863682c, 0xd1000442, 0x3823680c, 0x91000463, 0xb5ffff82, 0xd65f03c0];
   const was = isA64();
   const one = async (words: number[], a64: boolean) => {
     setA64(a64);
-    const code = mem.reserve(0x1000, 0x1000);
+    const code = (benchBufs!.code[a64 ? 1 : 0] ??= mem.memalign(0x1000, 0x1000));
     for (let i = 0; i < words.length; i++) mem.u32[(code >>> 2) + i] = words[i];
     const c = new Cpu(mainThread, "bench");
+    // twice: the first pass compiles the region, the second is the steady state
+    await c.call(code, [dst, src, N, 0]);
     const t0 = performance.now(), ic0 = c.ic;
     await c.call(code, [dst, src, N, 0]);
     const ms = performance.now() - t0;
