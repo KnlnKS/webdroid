@@ -470,7 +470,7 @@ function condPark(c: JCondition, ms?: number) {
 rt.register({
   name: "webdroid/Condition", ctor: JCondition, ifaces: ["java/util/concurrent/locks/Condition"],
   methods: {
-    "await()V": function (this: JCondition) { return condPark(this); },
+    "await()V": maySuspend(function (this: JCondition) { return condPark(this); }),
     "awaitUninterruptibly()V": function (this: JCondition) { return new Promise<void>((r) => this.q.push(r)); },
     "await(JLjava/util/concurrent/TimeUnit;)Z": async function (this: JCondition, d: bigint, u: JTimeUnit) {
       return (await condPark(this, Number(d) * u.ms)) ? 1 : 0;
@@ -497,10 +497,10 @@ rt.register({
       if (this.n > 0 && --this.n === 0) for (const w of this.waiters.splice(0)) queueMicrotask(w);
     },
     "getCount()J": function (this: JCountDownLatch) { return BigInt(this.n); },
-    "await()V": function (this: JCountDownLatch) {
+    "await()V": maySuspend(function (this: JCountDownLatch) {
       if (this.n === 0) return;
       return new Promise<void>((r) => this.waiters.push(r));
-    },
+    }),
     "await(JLjava/util/concurrent/TimeUnit;)Z": maySuspend(function (this: JCountDownLatch, d: bigint, u: JTimeUnit) {
       if (this.n === 0) return 1;
       return new Promise<number>((resolve) => {
