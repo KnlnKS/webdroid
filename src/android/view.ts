@@ -1998,6 +1998,7 @@ rt.register({
     "onNestedFling(Landroid/view/View;FFZ)Z": (_t: JView, _vx: number, _vy: number, consumed: number) => (consumed ? 0 : 1),
     "onNestedPreFling(Landroid/view/View;FF)Z": () => 0,
     "getNestedScrollAxes()I": function (this: JViewGroup) { return this.nestedAxes; },
+    "cleanupLayoutState(Landroid/view/View;)V": (c: JView) => { c.layoutRequested = false; },
     ...viewMethods, ...vgMethods },
 });
 rt.register({ name: "android/view/ViewParent", ctor: class extends JObj {} });

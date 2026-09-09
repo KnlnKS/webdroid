@@ -2078,3 +2078,56 @@ declares its system features (a touchscreen, both orientations, a WebView) inste
 no to everything, and names its WebView provider. The login request then reaches Reddit and the
 server answers "Invalid username or password" for the test credentials, which is the app
 working. The feed itself needs an account, which this session did not have.
+
+## Reddit: past the feed
+
+**The community drawer.** Opening it gave a drawer container 0 wide with a NaN offset: Reddit
+sizes it as a fraction of the screen, read through `TypedValue.getFloat`, which reinterprets
+`data` as IEEE bits; a float resource was filled with the number itself, so every fraction read
+that way was 0. With the width right the drawer opened onto a white pane: its RecyclerView, 0dp
+wide with start/end constraints, measured 0. ConstraintLayout maps start/end to left/right in
+`LayoutParams.resolveLayoutDirection`, which Android calls from `setLayoutParams` (so from
+`addView` and a detached inflate); nothing called it, and the compiled override also needs the
+MarginLayoutParams super and `getLayoutDirection`. Sized, the list stayed empty. Its screen's
+presenter never attached: Conductor's ViewAttachHandler registers an attach listener on the
+screen's root view, and at the root's attach a one-shot listener registered ahead of it removed
+itself from the list being iterated, so the for-of skipped the handler. Attach, layout-change and
+animator listeners now dispatch over a snapshot, as AOSP's copy-on-write lists do. The same fault
+had left the post detail screen blank.
+
+**A screen that never painted.** A text post opens a Compose screen inside a `ScreenPager`
+hosted by Compose's `AndroidViewHolder`. It composed 318 layout nodes and drew nothing, and the
+draw pass never reached the hosted subtree: a hosted view is baked into the display list of the
+Compose layer around it, and the layer is re-recorded only when the child's invalidate reaches
+`AndroidViewHolder.onDescendantInvalidated`. `View.invalidate` was a global flag and the native
+`requestLayout` walk skipped compiled overrides of the parent's `requestLayout`, which Android
+calls virtually. Both walks now hand off to an overriding ancestor, which resumes them through
+super; the base walks on. The comment sheet's content view stayed 0x0 for another reason: its
+`requestLayout` came during a layout pass, stopped at an ancestor the pass had flagged and then
+cleared, and the pass cleared the requester's own flag on its way down. As
+`ViewRootImpl.mLayoutRequesters` does, requests made mid-pass are recorded, their paths' flags
+cleared, and the requests made again after the pass.
+
+**Sixty threads.** With the detail screen visible, every GraphQL call failed with "out of stack
+address space". The fixed stack span holds sixty 1 MiB stacks; Reddit's coroutine dispatcher,
+OkHttp pool, Glide and Cronet threads pass that even with finished threads' stacks reclaimed. A
+stack past the span is page-mapped arena memory, so the thread count is bounded by memory, as in
+a process. 68 were alive after a drawer, a post and some scrolling.
+
+**A native fault that was the tooling's.** Image requests through Cronet failed intermittently
+with a fault at address 0x8 inside `setHttpMethod`, then "Invalid http method GET" and "Invalid
+header" from the Java side. A fault now records a frame-pointer backtrace and the calls in
+progress: the main Cpu had two nested `setHttpMethod` calls with no upcall between them, so two
+Java threads were sharing it. The OkHttp outcome hook used for these sessions awaited a Java call
+before invoking the method it wrapped, and app code then continued as whichever thread had last
+resumed, usually main; `Thread.currentThread()` said so. A wrapper that awaits must restore the
+thread it was entered on (`rt.st`). With the hook fixed, a login plus drawer, post and scrolling
+produced no fault and no failed image request. Compiled code is not exposed to this: each method
+captures its thread at entry and restores it after every await.
+
+**Opening a post took 9.5 s** on the no-JIT driver, 9.3 s of it inside the tap's dispatch, with
+the page 42% idle in a CPU profile: the main thread was in ConstraintLayout's solver yielding at
+back edges every 8 ms through `setTimeout(0)`, which Chrome clamps to 4 ms once nested. The
+native tier's MessageChannel yield has no clamp and is now the back-edge yield too. The effect is
+not measured yet: the run meant to time it hit a post whose detail threw on the then-missing
+`Html.escapeHtml`, and the pixel probe had caught the feed's own white before the screen changed.

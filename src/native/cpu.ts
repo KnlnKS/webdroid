@@ -940,17 +940,5 @@ export const sigHandlers = new Map<number, { fn: number; flags: number; mask?: b
 let symbolizeHook: (pc: number) => string = (pc) => "0x" + pc.toString(16);
 export function setSymbolizeHook(f: (pc: number) => string): void { symbolizeHook = f; }
 
-// A macrotask boundary so the main looper, rAF and other cooperative threads get the JS thread.
-// MessageChannel is not subject to the nested-setTimeout clamp.
-const chan = typeof MessageChannel !== "undefined" ? new MessageChannel() : null;
-const waiters: (() => void)[] = [];
-if (chan) {
-  chan.port1.onmessage = () => { yieldStats.fires++; const w = waiters.splice(0); for (const f of w) f(); };
-  // an open port keeps a bun/node process alive after its work is done (tests, scripts)
-  (chan.port1 as unknown as { unref?: () => void }).unref?.();
-}
-export function yieldToLoop(): Promise<void> {
-  if (!chan) return new Promise((r) => setTimeout(r, 0));
-  return new Promise((r) => { yieldStats.pushes++; if (waiters.push(r) === 1) chan.port2.postMessage(0); });
-}
-export const yieldStats = { pushes: 0, fires: 0, pending: () => waiters.length, kick: () => { const w = waiters.splice(0); for (const f of w) f(); return w.length; } };
+import { yieldToLoop, yieldStats } from "../jvm/yield";
+export { yieldToLoop, yieldStats };

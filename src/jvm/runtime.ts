@@ -5,6 +5,7 @@
 // run <clinit>). Instances only exist after init, so prototype methods are always
 // present when virtual dispatch happens.
 
+import { yieldToLoop } from "./yield";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle } from "./abi";
 import { compileClassSource, compileLazyMethod, methodKey, type CompiledCtor } from "./compiler";
@@ -799,7 +800,7 @@ export class Runtime {
     const now = performance.now();
     if (now - this.lastYield < this.yieldGap) return null;
     this.lastYield = now;
-    return new Promise((r) => setTimeout(r, 0));
+    return yieldToLoop();
   }
   /** java.lang.Class for the type at dex typeIdx (compiled const-class) */
   classForIdx(D: DexLink, typeIdx: number): unknown {
