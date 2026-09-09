@@ -284,7 +284,7 @@ ${blocks.join("\n")}
 default: throw new Error("bad pc "+pc);
 }
 }catch($e){
-$e=R.jx($e);
+${this.sync ? "" : "R.st($th);"}$e=R.jx($e);
 ${catchBody}
 }
 }`;
@@ -528,9 +528,11 @@ ${catchBody}
     // and saying so is the only honest thing left — proceeding would hand a promise on as
     // if it were the result.
     if (this.sync) { out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise)throw R.nosusp(${JSON.stringify(this.info.name + "." + this.mname + this.desc)});`); return; }
-    // re-pin the frame's thread identity after every suspension: other chains set
-    // the global current-thread while we were parked (continuation-local restore)
-    out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise){R.su();$s=1;try{${assignTo}=await ${assignTo};}finally{R.st($th);}}`);
+    // re-pin the frame's thread identity after every suspension: other chains set the global
+    // current-thread while we were parked. A rejected await re-pins in the method's catch
+    // instead of a finally here: one handler per method, not one per call site, is what keeps
+    // the bytecode small enough for V8 to hold every compiled body.
+    out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise){R.su();$s=1;${assignTo}=await ${assignTo};R.st($th);}`);
   }
 
   private fieldProp(fieldIdx: number): string {
@@ -764,7 +766,7 @@ ${catchBody}
         // resolve against the superclass prototype; an interface-default super call
         // (Iface.super.m()) instead resolves on the declared interface's prototype
         out.push(`$t=(S.prototype.${mangled}??(D.cl[${mref.cls}]??D.link(${mref.cls})).prototype.${mangled}??R.nsm(${JSON.stringify(clsName + "." + mref.name + desc + " (super)")})).call(${recv}${argStr ? "," + argStr : ""});`);
-        if (!this.sync) out.push(`if($t instanceof Promise){R.su();$s=1;try{$t=await $t;}finally{R.st($th);}}`);
+        if (!this.sync) out.push(`if($t instanceof Promise){R.su();$s=1;$t=await $t;R.st($th);}`);
         break;
       }
       case "invoke-direct": {
