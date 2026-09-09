@@ -488,7 +488,7 @@ rt.register({
     },
     "read([B)I": async function (this: JRAF, b: Int8Array) { return await rafRead(this, b, 0, b.length); },
     "read([BII)I": async function (this: JRAF, b: Int8Array, off: number, len: number) { return await rafRead(this, b, off, len); },
-    "readFully([B)V": function (this: JRAF, b: Int8Array) { return rafReadFully(this, b, 0, b.length); },
+    "readFully([B)V": maySuspend(function (this: JRAF, b: Int8Array) { return rafReadFully(this, b, 0, b.length); }),
     "readFully([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { return rafReadFully(this, b, off, len); },
     ...Object.fromEntries(([["readInt()I", 4, (v: DataView) => v.getInt32(0)], ["readLong()J", 8, (v: DataView) => v.getBigInt64(0)], ["readShort()S", 2, (v: DataView) => v.getInt16(0)],
       ["readUnsignedShort()I", 2, (v: DataView) => v.getUint16(0)], ["readByte()B", 1, (v: DataView) => v.getInt8(0)], ["readUnsignedByte()I", 1, (v: DataView) => v.getUint8(0)],
@@ -577,14 +577,23 @@ rt.register({
     "close()V": maySuspend(function (this: any) { return this.out ? vcallMaybe(this.out, "close", "()V") : undefined; }),
   },
 });
+// every method forwards to the wrapped stream, as the JDK's does: a Java subclass's super.read()
+// reaches the stream it wrapped, whether that is one of ours or app code over a socket
+class JFilterInputStream extends JInputStream { in_: unknown = null; }
+const fwd = (name: string, desc: string) => maySuspend(function (this: JFilterInputStream, ...a: unknown[]) { return vcallMaybe(this.in_, name, desc, ...a); });
 rt.register({
-  name: "java/io/FilterInputStream", ctor: class extends JInputStream { in_: unknown = null; }, sup: "java/io/InputStream",
+  name: "java/io/FilterInputStream", ctor: JFilterInputStream, sup: "java/io/InputStream",
   fields: { in: "in_" },
   methods: {
-    "<init>(Ljava/io/InputStream;)V": function (this: any, s: JInputStream) {
-      this.in_ = s;
-      adoptStream.call(this, s);
-    },
+    "<init>(Ljava/io/InputStream;)V": function (this: JFilterInputStream, s: unknown) { this.in_ = s; },
+    "read()I": fwd("read", "()I"),
+    "read([BII)I": fwd("read", "([BII)I"),
+    "available()I": fwd("available", "()I"),
+    "skip(J)J": fwd("skip", "(J)J"),
+    "close()V": fwd("close", "()V"),
+    "mark(I)V": fwd("mark", "(I)V"),
+    "reset()V": fwd("reset", "()V"),
+    "markSupported()Z": fwd("markSupported", "()Z"),
   },
 });
 class JBufferedOut extends JOutputStream { out: unknown = null; }
@@ -712,9 +721,9 @@ rt.register({
       this.pos += n;
       return n;
     },
-    "read([C)I": function (this: JReader, out: Uint16Array) {
+    "read([C)I": maySuspend(function (this: JReader, out: Uint16Array) {
       return vcall(this, "read", "([CII)I", out, 0, out.length);
-    },
+    }),
     "ready()Z": function (this: JReader) { return this.pos < this.s.length ? 1 : 0; },
     "skip(J)J": function (this: JReader, n: bigint) {
       const k = Math.min(Number(n), this.s.length - this.pos);
