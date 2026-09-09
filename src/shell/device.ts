@@ -660,6 +660,7 @@ async function tick0() {
       perf.draws++;
       const laidOut = didLayout;
       ctx.save();
+      rt.yieldGap = 50;
       try {
         ctx.fillStyle = "#000";
         ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
@@ -679,6 +680,7 @@ async function tick0() {
         }
       } finally {
         ctx.restore();
+        rt.yieldGap = 8;
       }
       present();
       perf.drawMs += performance.now() - t0;

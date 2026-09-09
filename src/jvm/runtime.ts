@@ -781,6 +781,9 @@ export class Runtime {
   }
   /** fuel check target — yields to the browser event loop */
   private lastYield = 0;
+  /** ms between back-edge yields. The frame loop stretches it while a draw pass is in flight:
+   *  a yield there only costs a macrotask, since nothing is presented until the pass ends. */
+  yieldGap = 8;
   /** Back-edge yield. fuel is a GLOBAL counter, so it trips far more often than once per
    *  100k iterations of any one loop, and each trip was a macrotask (4ms once the chain is
    *  nested) taken while holding the main-looper job. Only actually yield if we have not
@@ -788,7 +791,7 @@ export class Runtime {
   refuel(): Promise<void> | null {
     this.fuel = 4096;   // a loop of native calls costs tens of µs an iteration: check the clock often enough to yield within ~10 ms
     const now = performance.now();
-    if (now - this.lastYield < 8) return null;
+    if (now - this.lastYield < this.yieldGap) return null;
     this.lastYield = now;
     return new Promise((r) => setTimeout(r, 0));
   }
