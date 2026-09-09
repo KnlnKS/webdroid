@@ -1994,13 +1994,16 @@ the calculator's keypress frames cost about 20 ms of bytecode draw and yielded o
 each, Mihon's cost the same, FitNotes' 0.3 ms draws never did. An image decode or class
 initialisation inside a draw has the same effect.
 
-Frames are now composed in an OffscreenCanvas and blitted into the 2D screen canvas once the
-pass ends, a GPU-side copy measured at 0.01 ms per frame under SwiftShader and about 0.5 ms
-with a GPU. The zero-copy alternative, a `bitmaprenderer` screen canvas fed by
-`transferToImageBitmap`, presented at 0.01 ms too but reading the transferred bitmap back with
-`toDataURL` took 450 ms to 3.6 s under SwiftShader against 150 ms before, which doubled every
-flappybird E2E step; the harness's capture and settle polling depend on that readback.
-With nothing presented until a pass ends, an in-draw yield only costs a macrotask
+Frames are now composed in an OffscreenCanvas and handed to a `bitmaprenderer` screen canvas
+with `transferToImageBitmap`, a zero-copy swap. In the E2E's SwiftShader browser a synthetic
+frame (fills, arcs, text, a WebGL canvas) presents in 8 ms this way against 30 ms drawn straight
+into the visible canvas and 35 ms with a drawImage blit; the blit variant cost flappybird a
+fifth of its fps. The transfer's one cost is readback: `toDataURL` on the transferred bitmap
+takes 300 ms to 3.6 s there, so the harness captures with `toBlob`, which reads the same pixels
+in single-digit milliseconds once warm. The first capture after a step's dwell in the GL game
+flows still waits about a second on the software compositor, which the per-step wall time in
+`run.json` reflects while the fps counts stay at their earlier values. A real GPU has neither
+cost. With nothing presented until a pass ends, an in-draw yield only costs a macrotask
 and lets unrelated timers run on the frame's clock, so the frame loop stretches the yield gap
 to 50 ms while drawing. Boot draws stopped absorbing about 60 ms of other work each, and the
 calculator's "=" frames fell from roughly 10 to 2 ms of wall time.
