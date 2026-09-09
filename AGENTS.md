@@ -133,6 +133,10 @@ Do not retry attribute-index caching or drawable-padding changes without new mea
 - `scripts/nrun.ts`, `scripts/ndbg.ts`, `scripts/wheel.ts`, `scripts/perfsum.ts`: native bring-up,
   native tracing, real DOM input, and per-step performance comparisons.
 - `gen-framework-res` and `gen-framework`: rebuild relinked resources or pull a paired AOSP build.
+- `scripts/simd-oracle.ts`: regenerate the AArch64 hardware-oracle fixture on real hardware.
+- `__wdNativeTrace`, `__wdNativeStep`, `__wdNativeWatch`, `__wdCallLog`, `__wdJniTrace`,
+  `__wdJniCalls`, `__wdLogTrap`, `__wdSlowMs`, `__wdCount`, `__wdWatch`, `__wdIfaces`: browser
+  globals that switch on the matching trace; `scripts/ndbg.ts` sets the native ones.
 
 The browser exposes `wd` from `src/main.ts`: runtime, tree/input helpers, logs, perf, native
 telemetry, and main-loop diagnostics. Missing APIs are `wd.rt.missing`, not `wd.missing`.

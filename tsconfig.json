@@ -6,7 +6,6 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "strict": true,
     "noUnusedLocals": true,
-    "noUncheckedIndexedAccess": false,
     "noEmit": true,
     "skipLibCheck": true,
     "types": ["@types/bun"]

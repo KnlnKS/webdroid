@@ -1572,7 +1572,7 @@ remain empty, with only the optional AndroidX Sidecar class reported by Java.
 Typecheck and the asset test pass (451 assertions covering every certificate,
 manifest boundaries, the pinned digest and lazy mounting).
 
-### Browser input and Flutter editing connections
+## Browser input and Flutter editing connections
 
 Lichess's Import PGN field is deliberately read-only and reads the clipboard on tap
 (`lib/src/view/more/import_pgn_screen.dart` in the upstream lichess-org/mobile source).
@@ -1613,7 +1613,7 @@ calls and JNI misses were empty in the targeted runs. Cronet still logs its DNS 
 warning, but native TLS/HTTP/WebSocket traffic succeeds. Empty reached telemetry is not a
 claim of complete API coverage.
 
-### Final regression review
+## Regression review
 
 The first full E2E capture found FitNotes' ActionBar title and Up navigation disappearing.
 Deferring decor installation until after onCreate lets Lichess set its normal window theme,
@@ -1679,7 +1679,7 @@ later taps before their screens were ready. Its Lichess flow now allows 40 secon
 startup and two seconds after each interaction; a targeted replay visibly reached the editor
 and moved e2 to e4. These are capture dwell times, not changes to guest clocks or engine limits.
 
-### Final verification
+## Verification
 
 The final full E2E replay rendered all 101 steps without a wedged main queue, layout error,
 or draw error. Content differences (lower is better) were FitNotes 43.07%, Mihon onboarding
@@ -1710,7 +1710,7 @@ textcmp broke all six paragraphs identically. The final-stage corpus rendered al
 targeted Lichess natcheck reported zero false-synchronous delegates. Duplicate registration and
 library-name matching checks were clean. Visual goldens were not changed.
 
-### Saved databases and the running Chrome process
+## Saved databases and the running Chrome process
 
 The last check in the original Chrome profile exposed two additional SQLite problems.
 sqflite supplies typed arguments through SQLiteDatabase.CursorFactory, passing an empty
@@ -1756,7 +1756,7 @@ on Data and storage instead of the golden Reader settings. This limits the flow'
 claim despite complete rendering and no Compose errors. Harmonic's stable screens remained
 unchanged; its live scroll captures varied. Goldens were unchanged.
 
-### Lichess: reclaiming short-lived native threads
+## Lichess: reclaiming short-lived native threads
 
 A longer-lived game exhausted the 512 KiB host-data arena in Cpu construction. A controlled
 120-second idle replay added 92 finished DartWorkers while live threads stayed at 18. Host
@@ -1788,7 +1788,7 @@ left at `1. e4 e6 2. Nf3 Nh6` throughout that run. About seven minutes later it 
 18 live CPUs, zero finished CPUs, and exactly 7,880 host bytes, with an idle main queue
 and no native fault or new uncaught error.
 
-### Lichess: native heap reuse during computer games
+## Lichess: native heap reuse during computer games
 
 Moving the knight to e5 exposed a sign-extended native pointer such as
 `0xffffffff_8a4f1840`. Malloc's small-bin heads and both free-list next-pointer reads used
@@ -1844,7 +1844,7 @@ The dedicated visible Chrome window was reloaded with saved databases intact and
 zero finished CPUs, no native fault, and about 487 MB live malloc storage. Lichess's database
 remained 61,440 bytes at schema version 5.
 
-### Mihon: extension repository and installation
+## Mihon: extension repository and installation
 
 The visible Chrome flow uses Mihon 0.20.4 at 1080×2424@480. Keiyoushi's real
 `index.pb` repository loads and persists. Gzip decoding initially rejected the response:

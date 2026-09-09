@@ -1,6 +1,6 @@
 apks
 node_modules
-*.DS_STORE
+.DS_Store
 webdroid-shots/
 tests/e2e/actual/
 tests/e2e/report/
