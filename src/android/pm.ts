@@ -1,5 +1,6 @@
 import { JObj, rt } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
+import { device } from "../shell/config";
 import type { JBundle } from "./os";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { type XmlNode, attrStr, attr, TV } from "./axml";
@@ -607,8 +608,10 @@ rt.register({
     "resolveService(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Landroid/content/pm/ResolveInfo;": (i: JIntent, f: JInfoFlags) => queryComponents(i, Number(f.value)).a[0] ?? null,
     "getComponentEnabledSetting(Landroid/content/ComponentName;)I": (c: JComponentName) => componentState.get(c),
     "setComponentEnabledSetting(Landroid/content/ComponentName;II)V": (c: JComponentName, st: number) => componentState.set(c, st),
-    "hasSystemFeature(Ljava/lang/String;)Z": () => 0,
-    "getSystemAvailableFeatures()[Landroid/content/pm/FeatureInfo;": () => jarray([], "Landroid/content/pm/FeatureInfo;"),
+    "hasSystemFeature(Ljava/lang/String;)Z": (name: string) => device.features.includes(name) ? 1 : 0,
+    "hasSystemFeature(Ljava/lang/String;I)Z": (name: string) => device.features.includes(name) ? 1 : 0,
+    "getSystemAvailableFeatures()[Landroid/content/pm/FeatureInfo;": () =>
+      jarray(device.features.map((name) => Object.assign(new JFeatureInfo(), { name })), "Landroid/content/pm/FeatureInfo;"),
     "checkPermission(Ljava/lang/String;Ljava/lang/String;)I": () => 0,
     "getInstallerPackageName(Ljava/lang/String;)Ljava/lang/String;": () => null,
     "getInstallSourceInfo(Ljava/lang/String;)Landroid/content/pm/InstallSourceInfo;": (pkg: string) => {

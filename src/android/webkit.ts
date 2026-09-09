@@ -351,7 +351,13 @@ rt.register({
     "static setDataDirectorySuffix(Ljava/lang/String;)V": () => {},
     "static disableWebView()V": () => {},
     // no WebView apk is installed here; androidx.webkit reads null as "framework features only"
-    "static getCurrentWebViewPackage()Landroid/content/pm/PackageInfo;": () => null,
+    // the provider is this frame layer, at the version the user agent already claims
+    "static getCurrentWebViewPackage()Landroid/content/pm/PackageInfo;": () => {
+      const pi = inst<{ packageName: string; versionName: string; versionCode: number; longVersionCode: bigint }>("android/content/pm/PackageInfo");
+      pi.packageName = "com.android.webview"; pi.versionName = /Chrome\/([\d.]+)/.exec(UA)![1];
+      pi.versionCode = parseInt(pi.versionName); pi.longVersionCode = BigInt(pi.versionCode);
+      return pi;
+    },
     "static getWebViewClassLoader()Ljava/lang/ClassLoader;": () => rt.link("java/lang/Class").ctor.prototype[mangleMethod("getClassLoader", "()Ljava/lang/ClassLoader;")](),
   },
 });

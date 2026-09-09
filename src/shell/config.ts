@@ -104,6 +104,11 @@ export const device = {
   get night(): boolean { return globalThis.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false; },
   /** what /proc/cpuinfo, /proc/meminfo and uname report to native code: an ARMv7 with VFPv3 and
    *  no NEON (the ARM32 tier implements VFP, not the SIMD extension) */
+  /** PackageManager.hasSystemFeature: what this device can back — touch, both orientations,
+   *  a network, a WebView — and nothing it cannot (no camera, GPS, telephony or sensors) */
+  features: ["android.hardware.touchscreen", "android.hardware.touchscreen.multitouch", "android.hardware.touchscreen.multitouch.distinct",
+    "android.hardware.faketouch", "android.hardware.screen.portrait", "android.hardware.screen.landscape", "android.hardware.wifi",
+    "android.software.webview", "android.software.input_methods", "android.software.home_screen", "android.software.app_widgets"],
   cpu: { cores: 4, features: "swp half thumb fastmult vfp edsp thumbee vfpv3 tls", hardware: "webdroid", memKb: 2 * 1024 * 1024 },
   /** the system bar in framebuffer px. It and every metric below is a dp scaled by the density,
    *  so a profile at any density stays self-consistent. */
