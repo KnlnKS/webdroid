@@ -34,12 +34,26 @@ rt.register({
       const h = (v: bigint, n: number) => BigInt.asUintN(n * 4, v).toString(16).padStart(n, "0");
       return `${h(this.hi >> 32n, 8)}-${h(this.hi >> 16n, 4)}-${h(this.hi, 4)}-${h(this.lo >> 48n, 4)}-${h(this.lo, 12)}`;
     },
+    "static fromString(Ljava/lang/String;)Ljava/util/UUID;": (s: string) => {
+      const parts = s.split("-");
+      if (parts.length !== 5) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid UUID string: " + s);
+      const u = new JUUID(), h = parts.map((p) => BigInt("0x" + p));
+      u.hi = BigInt.asIntN(64, (h[0] << 32n) | (h[1] << 16n) | h[2]);
+      u.lo = BigInt.asIntN(64, (h[3] << 48n) | h[4]);
+      return u;
+    },
+    "equals(Ljava/lang/Object;)Z": function (this: JUUID, o: unknown) { return o instanceof JUUID && o.hi === this.hi && o.lo === this.lo ? 1 : 0; },
+    "hashCode()I": function (this: JUUID) { const x = this.hi ^ this.lo; return Number(BigInt.asIntN(32, (x >> 32n) ^ x)); },
+    "compareTo(Ljava/lang/Object;)I": function (this: JUUID, o: JUUID) { return this.hi < o.hi ? -1 : this.hi > o.hi ? 1 : this.lo < o.lo ? -1 : this.lo > o.lo ? 1 : 0; },
     "getMostSignificantBits()J": function (this: JUUID) { return this.hi; },
     "getLeastSignificantBits()J": function (this: JUUID) { return this.lo; },
   },
 });
 
 export class JLocale extends JObj { lang = ""; country = ""; script = ""; variant = ""; }
+// the two-letter codes an app's bundled locales use, in ISO 639-2/3166-alpha3 form
+const ISO3: Record<string, string> = { en: "eng", de: "deu", fr: "fra", es: "spa", it: "ita", pt: "por", ru: "rus", ja: "jpn", ko: "kor", zh: "zho", ar: "ara", hi: "hin", id: "ind", in: "ind", th: "tha", tr: "tur", vi: "vie", nl: "nld", pl: "pol", sv: "swe" };
+const ISO3_COUNTRY: Record<string, string> = { US: "USA", GB: "GBR", DE: "DEU", FR: "FRA", ES: "ESP", IT: "ITA", BR: "BRA", RU: "RUS", JP: "JPN", KR: "KOR", CN: "CHN", IN: "IND", CA: "CAN", AU: "AUS", MX: "MEX", NL: "NLD", TR: "TUR" };
 export function localeTag(l: JLocale): string {
   return [l.lang || "und", l.script, l.country, l.variant.replaceAll("_", "-")].filter(Boolean).join("-");
 }
@@ -83,9 +97,14 @@ rt.register({
     "getDisplayName()Ljava/lang/String;": function (this: JLocale) { return displayName.call(this, usLocale); },
     "getDisplayName(Ljava/util/Locale;)Ljava/lang/String;": displayName,
     "getLanguage()Ljava/lang/String;": function (this: JLocale) { return this.lang; },
+    "getISO3Language()Ljava/lang/String;": function (this: JLocale) { return ISO3[this.lang] ?? this.lang; },
+    "getISO3Country()Ljava/lang/String;": function (this: JLocale) { return ISO3_COUNTRY[this.country] ?? this.country; },
     "getCountry()Ljava/lang/String;": function (this: JLocale) { return this.country; },
     "getScript()Ljava/lang/String;": function (this: JLocale) { return this.script; },
     "getVariant()Ljava/lang/String;": function (this: JLocale) { return this.variant; },
+    "getUnicodeLocaleType(Ljava/lang/String;)Ljava/lang/String;": () => null,
+    "stripExtensions()Ljava/util/Locale;": function (this: JLocale) { return this; },
+    "getExtension(C)Ljava/lang/String;": () => null,
     "toString()Ljava/lang/String;": function (this: JLocale) {
       return this.lang + (this.country || this.variant || this.script ? "_" + this.country : "") + (this.variant ? "_" + this.variant : "") + (this.script ? "_#" + this.script : "");
     },

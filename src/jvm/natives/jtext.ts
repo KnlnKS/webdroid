@@ -74,6 +74,7 @@ const dateFormatMethods: NativeSpec["methods"] = {
     return d;
   },
   "setTimeZone(Ljava/util/TimeZone;)V": () => {},
+  "setCalendar(Ljava/util/Calendar;)V": () => {},
   "getTimeZone()Ljava/util/TimeZone;": () => localTz,
   "setLenient(Z)V": () => {},
   "toPattern()Ljava/lang/String;": function (this: JDateFormat) { return this.pattern; },
@@ -185,6 +186,7 @@ rt.register({
     "<init>()V": function () {},
     "<init>(Ljava/util/Locale;)V": function () {},
     "static getInstance()Ljava/text/DecimalFormatSymbols;": () => new (rt.link("java/text/DecimalFormatSymbols").ctor)(),
+    "static getInstance(Ljava/util/Locale;)Ljava/text/DecimalFormatSymbols;": () => new (rt.link("java/text/DecimalFormatSymbols").ctor)(),
     "setDecimalSeparator(C)V": () => {},
     "getDecimalSeparator()C": () => 46,
     "getGroupingSeparator()C": () => 44,

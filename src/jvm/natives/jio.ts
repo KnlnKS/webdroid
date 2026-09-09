@@ -2,7 +2,7 @@
 
 import { rt, JObj, maySuspend, type NativeSpec } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray, utf8 } from "../abi";
-import { vcall, vcallMaybe, after, stringHash, mkEnumSet, javaFormat } from "./jlang";
+import { vcall, vcallMaybe, after, stringHash, mkEnumSet, javaFormat, newObj } from "./jlang";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
@@ -142,6 +142,7 @@ rt.register({
     "isFile()Z": function (this: JFile) { return vfs.stat(this.path) ? 1 : 0; },
     "length()J": function (this: JFile) { return BigInt(vfs.stat(this.path)?.size ?? 0); },
     "lastModified()J": function () { return BigInt(Date.now()); },
+    "setLastModified(J)Z": () => 1,
     "mkdir()Z": function (this: JFile) { dirs.add(this.path); return 1; },
     "mkdirs()Z": function (this: JFile) { dirs.add(this.path); return 1; },
     "createNewFile()Z": function (this: JFile) {
@@ -468,6 +469,7 @@ rt.register({
   methods: {
     "<init>(Ljava/lang/String;Ljava/lang/String;)V": rafOpen,
     "<init>(Ljava/io/File;Ljava/lang/String;)V": function (this: JRAF, f: JFile, m: string) { rafOpen.call(this, f.path, m); },
+    "getChannel()Ljava/nio/channels/FileChannel;": fileChannel,
     "length()J": function (this: JRAF) { return BigInt(this.source?.size ?? this.buf.length); },
     "getFilePointer()J": function (this: JRAF) { return BigInt(this.pos); },
     "seek(J)V": function (this: JRAF, p: bigint) { this.pos = Number(p); },
@@ -488,6 +490,10 @@ rt.register({
     "read([BII)I": async function (this: JRAF, b: Int8Array, off: number, len: number) { return await rafRead(this, b, off, len); },
     "readFully([B)V": function (this: JRAF, b: Int8Array) { return rafReadFully(this, b, 0, b.length); },
     "readFully([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { return rafReadFully(this, b, off, len); },
+    ...Object.fromEntries(([["readInt()I", 4, (v: DataView) => v.getInt32(0)], ["readLong()J", 8, (v: DataView) => v.getBigInt64(0)], ["readShort()S", 2, (v: DataView) => v.getInt16(0)],
+      ["readUnsignedShort()I", 2, (v: DataView) => v.getUint16(0)], ["readByte()B", 1, (v: DataView) => v.getInt8(0)], ["readUnsignedByte()I", 1, (v: DataView) => v.getUint8(0)],
+      ["readBoolean()Z", 1, (v: DataView) => v.getUint8(0) ? 1 : 0], ["readDouble()D", 8, (v: DataView) => v.getFloat64(0)], ["readFloat()F", 4, (v: DataView) => v.getFloat32(0)]] as const)
+      .map(([key, n, get]) => [key, async function (this: JRAF) { const b = new Int8Array(n); await rafReadFully(this, b, 0, n); return get(new DataView(b.buffer)); }])),
     "write(I)V": function (this: JRAF, v: number) {
       rafGrow(this, this.pos + 1);
       this.buf[this.pos++] = v & 0xff;
@@ -866,6 +872,19 @@ rt.register({
   },
 });
 
+const openWriter = async function (this: JOSW, f: JFile | string, append = 0) {
+  this.sink = await newObj("java/io/FileOutputStream", "(Ljava/lang/String;Z)V", typeof f === "string" ? f : f.path, append);
+};
+rt.register({
+  name: "java/io/FileWriter", ctor: class extends JOSW {}, sup: "java/io/OutputStreamWriter",
+  methods: {
+    "<init>(Ljava/lang/String;)V": openWriter,
+    "<init>(Ljava/lang/String;Z)V": openWriter,
+    "<init>(Ljava/io/File;)V": openWriter,
+    "<init>(Ljava/io/File;Z)V": openWriter,
+  },
+});
+
 class JDataOut extends JOutputStream { sink: JOutputStream | null = null; }
 rt.register({
   name: "java/io/DataOutputStream", ctor: JDataOut, sup: "java/io/OutputStream",
@@ -909,6 +928,8 @@ rt.register({
     "position()J": () => 0n,
     "force(Z)V": () => {},
     "tryLock()Ljava/nio/channels/FileLock;": fileLock,
+    "tryLock(JJZ)Ljava/nio/channels/FileLock;": fileLock,
+    "lock(JJZ)Ljava/nio/channels/FileLock;": fileLock,
     "lock()Ljava/nio/channels/FileLock;": fileLock,
   },
 });

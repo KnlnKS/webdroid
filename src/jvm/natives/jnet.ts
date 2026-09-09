@@ -244,7 +244,7 @@ const socketMethods: NativeSpec["methods"] = {
   "setSendBufferSize(I)V": () => {}, "setReceiveBufferSize(I)V": () => {},
   "getSoTimeout()I": () => 0,
 };
-rt.register({ name: "java/net/Socket", ctor: JSocket, ifaces: ["java/io/Closeable"], methods: socketMethods });
+rt.register({ name: "java/net/Socket", ctor: JSocket, ifaces: ["java/io/Closeable"], methods: { ...socketMethods, "<init>(Ljava/net/SocketImpl;)V": function () {} } });
 
 rt.register({
   name: "webdroid/SocketInputStream", ctor: JSocketIn, sup: "java/io/InputStream",
@@ -479,6 +479,8 @@ rt.register({
 // raw HTTP to another origin. The proxy forwards `x-wd-*` request headers with the prefix
 // stripped, follows redirects itself and reports the final URL in x-wd-final-url.
 defineException("java/net/MalformedURLException", "java/io/IOException");
+// the abstract socket implementation an app may subclass to reach a socket's descriptor
+rt.register({ name: "java/net/SocketImpl", ctor: class extends JObj { fd: unknown = null; }, fields: { fd: "fd" }, methods: { "<init>()V": function () {} } });
 defineException("java/net/ProtocolException", "java/io/IOException");
 defineException("java/net/URISyntaxException", "java/lang/Exception");
 

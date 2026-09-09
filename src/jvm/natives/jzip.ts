@@ -197,6 +197,23 @@ rt.register({
   },
 });
 
+class JAdler32 extends JObj { a = 1; b = 0; }
+rt.register({
+  name: "java/util/zip/Adler32", ctor: JAdler32,
+  methods: {
+    "<init>()V": function () {},
+    "update([BII)V": function (this: JAdler32, buf: Int8Array, off: number, len: number) {
+      let { a, b } = this;
+      for (let i = 0; i < len; i++) { a = (a + (buf[off + i] & 0xff)) % 65521; b = (b + a) % 65521; }
+      this.a = a; this.b = b;
+    },
+    "update([B)V": function (this: JAdler32, buf: Int8Array) { return vcall(this, "update", "([BII)V", buf, 0, buf.length); },
+    "update(I)V": function (this: JAdler32, v: number) { this.a = (this.a + (v & 0xff)) % 65521; this.b = (this.b + this.a) % 65521; },
+    "getValue()J": function (this: JAdler32) { return BigInt(((this.b << 16) | this.a) >>> 0); },
+    "reset()V": function (this: JAdler32) { this.a = 1; this.b = 0; },
+  },
+});
+
 defineException("java/util/zip/ZipException", "java/io/IOException");
 
 // ── ZipFile / ZipEntry: index the central directory, inflate an entry only when it is read

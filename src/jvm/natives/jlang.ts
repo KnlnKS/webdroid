@@ -695,6 +695,29 @@ export function javaFormat(fmt: string, args: unknown[]): string {
       return s;
     });
 }
+class JFormatter extends JObj { out: unknown = null; s = ""; }
+const formatterInit = function (this: JFormatter, ...a: unknown[]) { this.out = a.find((x) => x !== null && !rt.iof(x, "java/util/Locale")) ?? null; };
+rt.register({
+  name: "java/util/Formatter", ctor: JFormatter, ifaces: ["java/io/Closeable", "java/io/Flushable"],
+  methods: {
+    "<init>()V": formatterInit,
+    "<init>(Ljava/lang/Appendable;)V": formatterInit,
+    "<init>(Ljava/util/Locale;)V": formatterInit,
+    "<init>(Ljava/lang/Appendable;Ljava/util/Locale;)V": formatterInit,
+    "format(Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/Formatter;": async function (this: JFormatter, fmt: string, args: unknown[]) {
+      const s = javaFormat(fmt, args ?? []);
+      if (this.out) await vcall(this.out, "append", "(Ljava/lang/CharSequence;)Ljava/lang/Appendable;", s); else this.s += s;
+      return this;
+    },
+    "format(Ljava/util/Locale;Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/Formatter;": function (this: JFormatter, _l: unknown, fmt: string, args: unknown[]) {
+      return vcall(this, "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/Formatter;", fmt, args);
+    },
+    "out()Ljava/lang/Appendable;": function (this: JFormatter) { return this.out; },
+    "toString()Ljava/lang/String;": function (this: JFormatter) { return this.out ? vcall(this.out, "toString", "()Ljava/lang/String;") : this.s; },
+    "flush()V": () => {},
+    "close()V": () => {},
+  },
+});
 rt.register({
   name: "java/lang/String",
   ctor: JStringStatics, // statics holder; instances are JS primitives
@@ -1064,6 +1087,7 @@ rt.register({
     ...numCommon("B"),
     "static valueOf(B)Ljava/lang/Byte;": (v: number) => box(JByte, v),
     "static parseByte(Ljava/lang/String;)B": (s: string) => parseIntJ(s) << 24 >> 24,
+    "static parseByte(Ljava/lang/String;I)B": (s: string, r: number) => parseIntJ(s, r) << 24 >> 24,
     "equals(Ljava/lang/Object;)Z": function (this: JByte, o: unknown) { return o instanceof JByte && o.v === this.v ? 1 : 0; },
   },
 });
@@ -1091,6 +1115,7 @@ rt.register({
     "static valueOf(Z)Ljava/lang/Boolean;": (v: number) => (v ? TRUE : FALSE),
     "static valueOf(Ljava/lang/String;)Ljava/lang/Boolean;": (s: string) => (s?.toLowerCase() === "true" ? TRUE : FALSE),
     "static parseBoolean(Ljava/lang/String;)Z": (s: string) => (s?.toLowerCase() === "true" ? 1 : 0),
+    "static getBoolean(Ljava/lang/String;)Z": (k: string) => (sysProps[k]?.toLowerCase() === "true" ? 1 : 0),
     "static toString(Z)Ljava/lang/String;": (v: number) => (v ? "true" : "false"),
     "static hashCode(Z)I": (v: number) => (v ? 1231 : 1237),
     "compareTo(Ljava/lang/Boolean;)I": cmpV,
@@ -1170,6 +1195,8 @@ rt.register({
     "static floorMod(JJ)J": (a: bigint, b: bigint) => ((a % b) + b) % b,
     "static atan2(DD)D": (a: number, b: number) => Math.atan2(a, b),
     "static hypot(DD)D": (a: number, b: number) => Math.hypot(a, b),
+    "static scalb(DI)D": (v: number, n: number) => v * Math.pow(2, n),
+    "static scalb(FI)F": (v: number, n: number) => Math.fround(v * Math.pow(2, n)),
     "static random()D": () => Math.random(),
     // Math.round SATURATES at the type's bounds and maps NaN to 0 (JLS 15.1.4); `|0` wraps,
     // and BigInt(NaN) throws. Compose reaches these through Dp.roundToPx on infinite
@@ -1407,6 +1434,11 @@ rt.register({
     "setContextClassLoader(Ljava/lang/ClassLoader;)V": () => {},
     "getStackTrace()[Ljava/lang/StackTraceElement;": () => jsStackTrace(new Error().stack),
     "static currentThread()Ljava/lang/Thread;": () => curThread,
+    "static getAllStackTraces()Ljava/util/Map;": async () => {
+      const m = await newObj("java/util/HashMap");
+      await vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", curThread, jsStackTrace(new Error().stack));
+      return m;
+    },
     "static getDefaultUncaughtExceptionHandler()Ljava/lang/Thread$UncaughtExceptionHandler;": () => defaultUEH,
     "getUncaughtExceptionHandler()Ljava/lang/Thread$UncaughtExceptionHandler;": () => defaultUEH,
     "setUncaughtExceptionHandler(Ljava/lang/Thread$UncaughtExceptionHandler;)V": () => {},
@@ -1581,7 +1613,12 @@ rt.register({
     "<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V": function (this: JRef, o: unknown) { this.referent = o; },
   },
 });
-rt.register({ name: "java/lang/ref/ReferenceQueue", ctor: class extends JObj {}, methods: { "<init>()V": function () {}, "poll()Ljava/lang/ref/Reference;": () => null } });
+rt.register({ name: "java/lang/ref/ReferenceQueue", ctor: class extends JObj {}, methods: {
+  "<init>()V": function () {},
+  "poll()Ljava/lang/ref/Reference;": () => null,
+  "remove()Ljava/lang/ref/Reference;": () => park(curThread, () => () => {}).then(() => null),
+  "remove(J)Ljava/lang/ref/Reference;": (ms: bigint) => park(curThread, () => () => {}, Number(ms)).then(() => null),
+} });
 
 rt.register({
   name: "java/lang/reflect/Modifier", ctor: class extends JObj {},

@@ -1,8 +1,8 @@
 // org.json over plain JS objects/arrays.
 
 import { rt, JObj } from "../runtime";
-import { defineException, boxInt, box, JLong, JDouble, JBool, TRUE, FALSE } from "./jlang";
-import { mkIter, newLinkedHashSet } from "./jutil";
+import { defineException, boxInt, box, JLong, JDouble, JBool, TRUE, FALSE, vcall } from "./jlang";
+import { mkIter, newLinkedHashSet, toJsArray } from "./jutil";
 
 class JJSONObject extends JObj { o: Record<string, unknown> = Object.create(null); }
 class JJSONArray extends JObj { a: unknown[] = []; }
@@ -144,6 +144,11 @@ rt.register({
       const value = parseJSON(s);
       if (typeof value !== "object" || value === null || Array.isArray(value)) throw rt.mkThrowable("org/json/JSONException", "Value is not an object");
       this.o = value as Record<string, unknown>;
+    },
+    "<init>(Ljava/util/Map;)V": async function (this: JJSONObject, m: unknown) {
+      for (const e of await toJsArray(await vcall(m, "entrySet", "()Ljava/util/Set;"))) {
+        this.o[String(await vcall(e, "getKey", "()Ljava/lang/Object;"))] = jsonUnwrap(await vcall(e, "getValue", "()Ljava/lang/Object;"));
+      }
     },
     "static quote(Ljava/lang/String;)Ljava/lang/String;": (s: string | null) => JSON.stringify(s ?? "").replaceAll("/", "\\/"),
     "put(Ljava/lang/String;Ljava/lang/Object;)Lorg/json/JSONObject;": function (this: JJSONObject, k: string, v: unknown) {

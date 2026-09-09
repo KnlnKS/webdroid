@@ -85,6 +85,10 @@ class JSimpleImmutableEntry extends JObj {
   e: Ent = { k: null, v: null };
 }
 rt.register({
+  name: "java/util/AbstractMap$SimpleEntry", ctor: class extends JSimpleImmutableEntry {}, sup: "java/util/AbstractMap$SimpleImmutableEntry",
+  methods: { "setValue(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JSimpleImmutableEntry, v: unknown) { const o = this.e.v; this.e.v = v; return o; } },
+});
+rt.register({
   name: "java/util/AbstractMap$SimpleImmutableEntry", ctor: JSimpleImmutableEntry, ifaces: ["java/util/Map$Entry"],
   methods: {
     "<init>(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JSimpleImmutableEntry, k: unknown, v: unknown) { this.e = { k, v }; },
@@ -806,6 +810,10 @@ const arrayMapMethods: NativeSpec["methods"] = {
 const mapExtras: Record<string, NativeSpec["methods"]> = {
   "java/util/EnumMap": { "<init>(Ljava/lang/Class;)V": function () {} },
   "android/util/ArrayMap": arrayMapMethods,
+  "java/util/concurrent/ConcurrentHashMap": {
+    "static newKeySet()Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": () => new (rt.link("java/util/concurrent/ConcurrentHashMap$KeySetView").ctor)(),
+    "static newKeySet(I)Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": () => new (rt.link("java/util/concurrent/ConcurrentHashMap$KeySetView").ctor)(),
+  },
 };
 for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/concurrent/ConcurrentHashMap",
   "java/util/WeakHashMap", "java/util/IdentityHashMap", "java/util/Hashtable", "java/util/EnumMap",
@@ -853,6 +861,11 @@ function setMethods(): NativeSpec["methods"] {
     },
     "isEmpty()Z": function (this: JSet) { return this.m.size + this.slow.length ? 0 : 1; },
     "add(Ljava/lang/Object;)Z": maySuspend(function (this: JSet, v: unknown) { return addToSet(this, v); }),
+    "removeIf(Ljava/util/function/Predicate;)Z": async function (this: JSet, p: unknown) {
+      let changed = 0;
+      for (const v of setItems(this)) if (await vcall(p, "test", "(Ljava/lang/Object;)Z", v)) { await vcall(this, "remove", "(Ljava/lang/Object;)Z", v); changed = 1; }
+      return changed;
+    },
     "remove(Ljava/lang/Object;)Z": maySuspend(function (this: JSet, v: unknown) {
       const mk = mapKey(v);
       if (mk !== SLOW) return this.m.delete(mk) ? 1 : 0;
@@ -896,7 +909,7 @@ function addToSet(s: JSet, v: unknown): number | Promise<number> {
 }
 rt.register({ name: "webdroid/BaseSet", ctor: JSet, ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"], methods: setMethods() });
 for (const n of ["java/util/HashSet", "java/util/LinkedHashSet",
-  "java/util/concurrent/CopyOnWriteArraySet", "java/util/EnumSet"]) {
+  "java/util/concurrent/CopyOnWriteArraySet", "java/util/EnumSet", "java/util/concurrent/ConcurrentHashMap$KeySetView"]) {
   rt.register({
     name: n, ctor: class extends JSet {},
     sup: n === "java/util/LinkedHashSet" ? "java/util/HashSet" : "java/lang/Object",
@@ -1432,6 +1445,14 @@ rt.register({
 const absCollection: Methods = {
   "<init>()V": function () {},
   "isEmpty()Z": async function (this: JObj) { return (await size(this)) === 0 ? 1 : 0; },
+  "removeIf(Ljava/util/function/Predicate;)Z": async function (this: JObj, p: unknown) {
+    const it = await iterOf(this);
+    let changed = 0;
+    while (await vcall(it, "hasNext", "()Z")) {
+      if (await vcall(p, "test", "(Ljava/lang/Object;)Z", await vcall(it, "next", "()Ljava/lang/Object;"))) { await vcall(it, "remove", "()V"); changed = 1; }
+    }
+    return changed;
+  },
   "add(Ljava/lang/Object;)Z": uoe,
   "contains(Ljava/lang/Object;)Z": async function (this: JObj, o: unknown) {
     for (const x of await toJsArray(this)) if (await aeq(x, o)) return 1;
@@ -1703,7 +1724,7 @@ rt.register({ name: "java/util/ListIterator", ctor: class extends JObj {}, iface
 // vcall() the selector by name. Only the marker registration is needed.
 for (const f of ["Supplier", "Function", "BiFunction", "Consumer", "BiConsumer", "Predicate",
   "BiPredicate", "ToIntFunction", "ToLongFunction", "ToDoubleFunction", "IntFunction",
-  "UnaryOperator", "BinaryOperator"]) {
+  "UnaryOperator", "BinaryOperator", "IntUnaryOperator", "LongUnaryOperator", "IntBinaryOperator", "LongBinaryOperator"]) {
   rt.register({ name: "java/util/function/" + f, ctor: class extends JObj {} });
 }
 
@@ -1930,6 +1951,18 @@ rt.register({
       for (let i = 1; i < a.length; i++) if ((await jcmp(null, a[i], best)) < 0) best = a[i];
       return best;
     },
+    "static max(Ljava/util/Collection;Ljava/util/Comparator;)Ljava/lang/Object;": async (c: unknown, cmp: unknown) => {
+      const a = await toJsArray(c);
+      let best = a[0];
+      for (let i = 1; i < a.length; i++) if ((await jcmp(cmp, a[i], best)) > 0) best = a[i];
+      return best;
+    },
+    "static min(Ljava/util/Collection;Ljava/util/Comparator;)Ljava/lang/Object;": async (c: unknown, cmp: unknown) => {
+      const a = await toJsArray(c);
+      let best = a[0];
+      for (let i = 1; i < a.length; i++) if ((await jcmp(cmp, a[i], best)) < 0) best = a[i];
+      return best;
+    },
   },
 });
 
@@ -2056,3 +2089,26 @@ for (const [key, fn] of [
     Object.defineProperty(JObj.prototype, key, { value: fn, writable: true, configurable: true, enumerable: false });
   }
 }
+
+// java.util.Observable: the legacy observer pair, still constructed by analytics SDKs
+class JObservable extends JObj { observers: unknown[] = []; changed = 0; }
+rt.register({ name: "java/util/Observer", ctor: class extends JObj {} });
+rt.register({
+  name: "java/util/Observable", ctor: JObservable,
+  methods: {
+    "<init>()V": function () {},
+    "addObserver(Ljava/util/Observer;)V": function (this: JObservable, o: unknown) { if (!this.observers.includes(o)) this.observers.push(o); },
+    "deleteObserver(Ljava/util/Observer;)V": function (this: JObservable, o: unknown) { this.observers = this.observers.filter((x) => x !== o); },
+    "deleteObservers()V": function (this: JObservable) { this.observers = []; },
+    "countObservers()I": function (this: JObservable) { return this.observers.length; },
+    "setChanged()V": function (this: JObservable) { this.changed = 1; },
+    "clearChanged()V": function (this: JObservable) { this.changed = 0; },
+    "hasChanged()Z": function (this: JObservable) { return this.changed; },
+    "notifyObservers()V": function (this: JObservable) { return vcall(this, "notifyObservers", "(Ljava/lang/Object;)V", null); },
+    "notifyObservers(Ljava/lang/Object;)V": async function (this: JObservable, arg: unknown) {
+      if (!this.changed) return;
+      this.changed = 0;
+      for (const o of this.observers.slice().reverse()) await vcall(o, "update", "(Ljava/util/Observable;Ljava/lang/Object;)V", this, arg);
+    },
+  },
+});

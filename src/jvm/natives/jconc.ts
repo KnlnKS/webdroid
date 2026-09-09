@@ -47,6 +47,25 @@ rt.register({
       this.v = v; return 1;
     },
     "getAndSet(J)J": function (this: JAtomicLong, v: bigint) { const o = this.v; this.v = v; return o; },
+    "getAndUpdate(Ljava/util/function/LongUnaryOperator;)J": async function (this: JAtomicLong, f: unknown) { const o = this.v; this.v = await vcall(f, "applyAsLong", "(J)J", o); return o; },
+    "updateAndGet(Ljava/util/function/LongUnaryOperator;)J": async function (this: JAtomicLong, f: unknown) { return (this.v = await vcall(f, "applyAsLong", "(J)J", this.v)); },
+    "accumulateAndGet(JLjava/util/function/LongBinaryOperator;)J": async function (this: JAtomicLong, x: bigint, f: unknown) { return (this.v = await vcall(f, "applyAsLong", "(JJ)J", this.v, x)); },
+  },
+});
+class JAtomicMarkable extends JObj { v: unknown = null; mark = 0; }
+rt.register({
+  name: "java/util/concurrent/atomic/AtomicMarkableReference", ctor: JAtomicMarkable,
+  methods: {
+    "<init>(Ljava/lang/Object;Z)V": function (this: JAtomicMarkable, v: unknown, m: number) { this.v = v; this.mark = m; },
+    "getReference()Ljava/lang/Object;": function (this: JAtomicMarkable) { return this.v; },
+    "isMarked()Z": function (this: JAtomicMarkable) { return this.mark; },
+    "get([Z)Ljava/lang/Object;": function (this: JAtomicMarkable, out: Uint8Array) { out[0] = this.mark; return this.v; },
+    "set(Ljava/lang/Object;Z)V": function (this: JAtomicMarkable, v: unknown, m: number) { this.v = v; this.mark = m; },
+    "compareAndSet(Ljava/lang/Object;Ljava/lang/Object;ZZ)Z": function (this: JAtomicMarkable, e: unknown, v: unknown, em: number, m: number) {
+      if (this.v !== e || this.mark !== em) return 0;
+      this.v = v; this.mark = m; return 1;
+    },
+    "attemptMark(Ljava/lang/Object;Z)Z": function (this: JAtomicMarkable, e: unknown, m: number) { if (this.v !== e) return 0; this.mark = m; return 1; },
   },
 });
 class JAtomicBool extends JObj { v = 0; }
@@ -79,6 +98,8 @@ rt.register({
       return 1;
     },
     "getAndSet(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JAtomicRef, v: unknown) { const o = this.v; this.v = v; return o; },
+    "getAndUpdate(Ljava/util/function/UnaryOperator;)Ljava/lang/Object;": async function (this: JAtomicRef, f: unknown) { const o = this.v; this.v = await vcall(f, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", o); return o; },
+    "updateAndGet(Ljava/util/function/UnaryOperator;)Ljava/lang/Object;": async function (this: JAtomicRef, f: unknown) { return (this.v = await vcall(f, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", this.v)); },
   },
 });
 
@@ -259,7 +280,7 @@ const executorMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "execute(Ljava/lang/Runnable;)V": function (this: JExecutor, r: unknown) {
     const f = submit(this, r, "run", "()V");
-    void f.promise!.then(() => { if (f.error) console.error("[executor]", (f.error as any).msg ?? f.error); });
+    void f.promise!.then(() => { if (f.error) console.error("[executor]", (f.error as any).msg ?? f.error, (f.error as any).jsStack ?? ""); });
   },
   "submit(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown) {
     return submit(this, r, "run", "()V");
@@ -341,6 +362,7 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       "<init>(ILjava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, core: number) { initScheduled.call(this, core); },
       "<init>(ILjava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": initScheduled,
       "allowCoreThreadTimeOut(Z)V": function () {},
+      "setKeepAliveTime(JLjava/util/concurrent/TimeUnit;)V": function () {},
       "getQueue()Ljava/util/concurrent/BlockingQueue;": function (this: JExecutor) {
         if (!this.queue) { this.queue = new (rt.link("java/util/concurrent/LinkedBlockingQueue").ctor)() as JList; this.queue.a = this.tasks.map((t) => t.task); }
         return this.queue;
@@ -611,11 +633,11 @@ rt.register({
   },
 });
 
-for (const i of ["java/util/concurrent/Executor", "java/util/concurrent/ExecutorService",
-  "java/util/concurrent/ScheduledExecutorService", "java/util/concurrent/Future",
-  "java/util/concurrent/ScheduledFuture", "java/util/concurrent/Callable", "java/util/concurrent/ThreadFactory",
-  "java/util/concurrent/RejectedExecutionHandler"]) {
-  rt.register({ name: i, ctor: class extends JObj {} });
+for (const [i, ...ifaces] of [["java/util/concurrent/Executor"], ["java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"],
+  ["java/util/concurrent/ScheduledExecutorService", "java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"], ["java/util/concurrent/Future"],
+  ["java/util/concurrent/ScheduledFuture", "java/util/concurrent/Future"], ["java/util/concurrent/Callable"], ["java/util/concurrent/ThreadFactory"],
+  ["java/util/concurrent/RejectedExecutionHandler"]]) {
+  rt.register({ name: i, ctor: class extends JObj {}, ifaces });
 }
 // ThreadPoolExecutor's four saturation policies. Our executors never saturate, so the policy is
 // only ever constructed and handed over — but a pool built with one must not fail to link.
@@ -867,6 +889,26 @@ rt.register({
     "static unpark(Ljava/lang/Thread;)V": () => {},
   },
 });
+// CompletableFuture: completed from outside, so the promise is armed by the constructor
+class JCompletable extends JFuture { settle: () => void = () => {}; }
+const completable = () => { const f = new JCompletable(); f.promise = new Promise<void>((r) => { f.settle = r; }); return f; };
+const settleWith = (f: JCompletable, value: unknown, error: unknown) => { if (f.done) return 0; f.value = value; f.error = error; f.done = 1; f.settle(); return 1; };
+rt.register({
+  name: "java/util/concurrent/CompletableFuture", ctor: JCompletable, sup: "webdroid/Future",
+  ifaces: ["java/util/concurrent/Future", "java/util/concurrent/CompletionStage"],
+  methods: {
+    "<init>()V": function (this: JCompletable) { this.promise = new Promise<void>((r) => { this.settle = r; }); },
+    "static completedFuture(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;": (v: unknown) => { const f = completable(); settleWith(f, v, null); return f; },
+    "complete(Ljava/lang/Object;)Z": function (this: JCompletable, v: unknown) { return settleWith(this, v, null); },
+    "completeExceptionally(Ljava/lang/Throwable;)Z": function (this: JCompletable, t: unknown) { return settleWith(this, null, t); },
+    "join()Ljava/lang/Object;": function (this: JCompletable) { return futureGet(this); },
+    "getNow(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JCompletable, d: unknown) { return this.done && !this.error ? this.value : d; },
+    "isCompletedExceptionally()Z": function (this: JCompletable) { return this.done && this.error ? 1 : 0; },
+    "cancel(Z)Z": function (this: JCompletable) { if (this.done) return 0; this.cancelled = this.done = 1; this.settle(); return 1; },
+  },
+});
+rt.register({ name: "java/util/concurrent/CompletionStage", ctor: class extends JObj {} });
+
 class JFutureTask extends JFuture {
   callable: unknown = null;
   wake: (v: unknown) => void = () => {};
