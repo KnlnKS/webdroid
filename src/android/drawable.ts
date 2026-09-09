@@ -463,6 +463,55 @@ class JStateListDrawable extends JDrawable {
   intrinsicW(): number { return this.items.reduce((a, i) => Math.max(a, i.d.intrinsicW()), -1); }
   intrinsicH(): number { return this.items.reduce((a, i) => Math.max(a, i.d.intrinsicH()), -1); }
 }
+class JAnimationDrawable extends JDrawable {
+  frames: { d: JDrawable; ms: number }[] = [];
+  cur = 0; oneShot = false; running = false; run = 0;
+  target(): JDrawable | null {
+    const c = this.frames[this.cur]?.d ?? null;
+    if (c) { copyBounds(this, c); c.alpha = this.alpha; c.tint = c.tint ?? this.tint; }
+    return c;
+  }
+  paint(cv: JCanvas) { this.target()?.paint(cv); }
+  intrinsicW(): number { return this.frames.reduce((a, f) => Math.max(a, f.d.intrinsicW()), -1); }
+  intrinsicH(): number { return this.frames.reduce((a, f) => Math.max(a, f.d.intrinsicH()), -1); }
+  /** AOSP schedules each frame on the looper for its duration; the run token cancels a stale timer */
+  start() {
+    if (this.running || !this.frames.length) return;
+    this.running = true;
+    this.cur = 0;
+    const run = ++this.run;
+    const step = () => setTimeout(() => {
+      if (!this.running || run !== this.run) return;
+      if (this.cur + 1 >= this.frames.length) {
+        if (this.oneShot) { this.running = false; return; }
+        this.cur = 0;
+      } else this.cur++;
+      invalidateSelf.call(this);
+      step();
+    }, this.frames[this.cur].ms);
+    step();
+    invalidateSelf.call(this);
+  }
+}
+rt.register({
+  name: "android/graphics/drawable/AnimationDrawable", ctor: JAnimationDrawable, sup: "android/graphics/drawable/Drawable",
+  ifaces: ["android/graphics/drawable/Animatable", "java/lang/Runnable"],
+  methods: {
+    "<init>()V": function () {},
+    "draw(Landroid/graphics/Canvas;)V": function (this: JAnimationDrawable, cv: JCanvas) { const c = this.target(); return c ? drawChild(c, cv) : undefined; },
+    "addFrame(Landroid/graphics/drawable/Drawable;I)V": function (this: JAnimationDrawable, d: JDrawable, ms: number) { this.frames.push({ d, ms }); },
+    "getNumberOfFrames()I": function (this: JAnimationDrawable) { return this.frames.length; },
+    "getFrame(I)Landroid/graphics/drawable/Drawable;": function (this: JAnimationDrawable, i: number) { return this.frames[i]?.d ?? null; },
+    "getDuration(I)I": function (this: JAnimationDrawable, i: number) { return this.frames[i]?.ms ?? 0; },
+    "getCurrent()Landroid/graphics/drawable/Drawable;": function (this: JAnimationDrawable) { return this.frames[this.cur]?.d ?? null; },
+    "setOneShot(Z)V": function (this: JAnimationDrawable, b: number) { this.oneShot = !!b; },
+    "isOneShot()Z": function (this: JAnimationDrawable) { return this.oneShot ? 1 : 0; },
+    "isRunning()Z": function (this: JAnimationDrawable) { return this.running ? 1 : 0; },
+    "start()V": function (this: JAnimationDrawable) { this.start(); },
+    "stop()V": function (this: JAnimationDrawable) { this.running = false; },
+    "run()V": function (this: JAnimationDrawable) { this.start(); },
+  },
+});
 rt.register({
   name: "android/graphics/drawable/StateListDrawable", ctor: JStateListDrawable, sup: "android/graphics/drawable/Drawable",
   methods: {
@@ -1032,7 +1081,7 @@ const AT = attrTable(
   "endColor", "angle", "type", "gradientRadius", "src", "alpha", "tint", "viewportWidth",
   "viewportHeight", "pathData", "fillColor", "strokeColor", "strokeWidth", "fillAlpha", "fillType",
   "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id",
-  "gravity");
+  "gravity", "oneshot", "duration");
 async function loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): Promise<JDrawable> {
   const root = parseAXML(bytes);
   return inflateDrawableNode(res, root, theme);
@@ -1226,7 +1275,18 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
       d.color = colorOf(get(AT.color), 0);
       return d;
     }
-    case "animated-selector": case "transition": case "level-list": case "animation-list": {
+    case "animation-list": {
+      const d = new JAnimationDrawable();
+      d.oneShot = !!nodeAttr(res, node, AT.oneshot)?.d;
+      for (const c of node.children) {
+        if (c.name !== "item") continue;
+        const da = nodeAttr(res, c, AT.drawable);
+        const child = da ? await loadDrawableRV(res, da, theme) : c.children.length ? await inflateDrawableNode(res, c.children[0], theme) : null;
+        if (child) d.frames.push({ d: child, ms: nodeAttr(res, c, AT.duration)?.d ?? 0 });
+      }
+      return d;
+    }
+    case "animated-selector": case "transition": case "level-list": {
       for (const c of node.children) {
         if (c.name === "item") {
           const da = nodeAttr(res, c, AT.drawable);
