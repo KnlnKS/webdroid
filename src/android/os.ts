@@ -10,8 +10,8 @@ import { onMain, inMainJob } from "./mainloop";
 import { uiState } from "./view";
 import { mkExecutor } from "../jvm/natives/jconc";
 import { yieldToLoop } from "../native/cpu";
-import { mkFile, JInputStream, JOutputStream, vfs } from "../jvm/natives/jio";
-import { javaOpenFd, javaCloseFd } from "../native/stdio";
+import { mkFile, JInputStream, JOutputStream, vfs, type JFileDescriptor } from "../jvm/natives/jio";
+import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd } from "../native/stdio";
 import { newArrayList, newStringSet } from "../jvm/natives/jutil";
 
 rt.register({
@@ -545,7 +545,11 @@ rt.register({
     "static parseMode(Ljava/lang/String;)I": (m: string) =>
       (m?.includes("w") ? 0x28000000 : 0x10000000) | (m?.includes("t") || m === "w" ? 0x04000000 : 0)
       | (m?.includes("a") ? 0x02000000 : 0),
-    "getFileDescriptor()Ljava/io/FileDescriptor;": () => new (rt.link("java/io/FileDescriptor").ctor)(),
+    "getFileDescriptor()Ljava/io/FileDescriptor;": function (this: JParcelFileDescriptor) {
+      const d = new (rt.link("java/io/FileDescriptor").ctor)() as JFileDescriptor;
+      d.fd = pfdFd(this);
+      return d;
+    },
     "getFd()I": function (this: JParcelFileDescriptor) { return pfdFd(this); },
     "static adoptFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd }),
     "static fromFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd }),
@@ -732,6 +736,45 @@ rt.register({
   },
 });
 
+// android.system.Os: the libcore syscall surface over the same descriptor table native code uses
+defineException("android/system/ErrnoException", "java/lang/Exception");
+const errno = (fn: string, e: number) => { const x = rt.mkThrowable("android/system/ErrnoException", fn) as JObj & { errno: number }; x.errno = e; return x; };
+class JStructStat extends JObj { st_dev = 0n; st_ino = 0n; st_mode = 0; st_nlink = 1n; st_uid = 0; st_gid = 0; st_size = 0n; st_atime = 0n; st_mtime = 0n; st_ctime = 0n; st_blksize = 4096n; st_blocks = 0n; }
+rt.register({
+  name: "android/system/StructStat", ctor: JStructStat,
+  fields: { st_dev: "st_dev", st_ino: "st_ino", st_mode: "st_mode", st_nlink: "st_nlink", st_uid: "st_uid", st_gid: "st_gid", st_size: "st_size", st_atime: "st_atime", st_mtime: "st_mtime", st_ctime: "st_ctime", st_blksize: "st_blksize", st_blocks: "st_blocks" },
+});
+const FD = "Ljava/io/FileDescriptor;";
+rt.register({
+  name: "android/system/Os", ctor: class extends JObj {},
+  methods: {
+    [`static lseek(${FD}JI)J`]: (d: JFileDescriptor, off: bigint, whence: number) => {
+      const r = javaSeekFd(d.fd, Number(off), whence);
+      if (r < 0) throw errno("lseek", 9);
+      return BigInt(r);
+    },
+    [`static close(${FD})V`]: (d: JFileDescriptor) => { javaCloseFd(d.fd); d.fd = -1; },
+    [`static dup(${FD})${FD}`]: (d: JFileDescriptor) => {
+      const n = new (rt.link("java/io/FileDescriptor").ctor)() as JFileDescriptor;
+      n.fd = javaDupFd(d.fd);
+      if (n.fd < 0) throw errno("dup", 9);
+      return n;
+    },
+    "static gettid()I": () => PROCESS_PID,
+    "static getpid()I": () => PROCESS_PID,
+    "static stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {
+      const st = vfs.stat(path);
+      if (!st && !vfs.isDir(path)) throw errno("stat", 2);
+      const s = new JStructStat();
+      s.st_mode = st ? 0o100644 : 0o40755;
+      s.st_size = BigInt(st?.size ?? 0);
+      s.st_mtime = s.st_atime = s.st_ctime = BigInt(Math.floor(Date.now() / 1000));
+      s.st_blocks = (s.st_size + 511n) / 512n;
+      return s;
+    },
+    "static readlink(Ljava/lang/String;)Ljava/lang/String;": () => { throw errno("readlink", 22); },
+  },
+});
 // android.system.OsConstants: static int fields naming POSIX/bionic constants.
 // Only the fields real APKs have actually asked for are implemented (checked via
 // scripts/audit.ts-style field scan of the dex) — not the full table AOSP ships.
@@ -740,8 +783,9 @@ rt.register({
   statics: {
     PROT_READ: 0x1,
     MAP_PRIVATE: 0x02,
-    SEEK_SET: 0,
+    SEEK_SET: 0, SEEK_CUR: 1, SEEK_END: 2,
     SIGKILL: 9,
+    S_IFMT: 0o170000, S_IFREG: 0o100000, S_IFDIR: 0o40000,
   },
 });
 

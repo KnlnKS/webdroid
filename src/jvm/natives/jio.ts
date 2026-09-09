@@ -351,10 +351,10 @@ function dataBytes(stream: JInputStream, length: number): Uint8Array | Promise<U
   return stream.source ? readFully(stream.source, stream.pos, length).then(take) : take(stream.buf.subarray(stream.pos, stream.pos + length));
 }
 
-class JFileDescriptor extends JObj {}
+export class JFileDescriptor extends JObj { fd = -1; }
 rt.register({
   name: "java/io/FileDescriptor", ctor: JFileDescriptor,
-  methods: { "<init>()V": () => {}, "sync()V": () => {}, "valid()Z": () => 1 },
+  methods: { "<init>()V": () => {}, "sync()V": () => {}, "valid()Z": function (this: JFileDescriptor) { return this.fd >= 0 ? 1 : 0; } },
 });
 export class JOutputStream extends JObj {
   chunks: number[] = [];
