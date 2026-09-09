@@ -432,6 +432,7 @@ class JURL extends JObj {
   spec = ""; u!: URL;
   open(): JURLConnection {
     const https = this.u.protocol === "https:";
+    if (this.u.protocol === "jar:") { const c = new (rt.link("java/net/JarURLConnection").ctor)() as JURLConnection; c.url = this; return c; }
     if (!https && this.u.protocol !== "http:") throw rt.unimplemented("URL.openConnection " + this.u.protocol);
     const c = new (rt.link(https ? "javax/net/ssl/HttpsURLConnection" : "java/net/HttpURLConnection").ctor)() as JURLConnection;
     c.url = this;
@@ -600,6 +601,18 @@ function withRes<A extends unknown[]>(f: (this: JURLConnection, r: HttpRes, ...a
   return async function (this: JURLConnection, ...a: A) { return f.call(this, await this.connect(), ...a); };
 }
 const asLong = (v: string | null, d: bigint) => v && /^\s*-?\d+\s*$/.test(v) ? BigInt(v.trim()) : d;
+// a jar: URL names an entry of an archive on the class path; the stream is the URL's own openStream
+rt.register({
+  name: "java/net/JarURLConnection", ctor: class extends JURLConnection {}, sup: "java/net/URLConnection",
+  methods: {
+    "connect()V": () => {},
+    "getInputStream()Ljava/io/InputStream;": function (this: JURLConnection) { return vcall(this.url, "openStream", "()Ljava/io/InputStream;"); },
+    "getContentLength()I": () => -1,
+    "getContentLengthLong()J": () => -1n,
+    "getContentType()Ljava/lang/String;": () => null,
+    "getHeaderField(Ljava/lang/String;)Ljava/lang/String;": () => null,
+  },
+});
 rt.register({
   name: "java/net/URLConnection", ctor: JURLConnection,
   methods: {

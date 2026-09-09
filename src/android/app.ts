@@ -459,6 +459,7 @@ rt.register({
   },
 });
 
+let audioSession = 0;
 for (const [name, methods, statics] of [
   ["android/app/ActivityManager", {
     "getMemoryClass()I": () => 256,
@@ -519,6 +520,7 @@ for (const [name, methods, statics] of [
     "getStreamMaxVolume(I)I": () => 10,
     "setStreamVolume(III)V": () => {},
     "requestAudioFocus(Landroid/media/AudioManager$OnAudioFocusChangeListener;II)I": () => 1,
+    "generateAudioSessionId()I": () => ++audioSession,
     "abandonAudioFocus(Landroid/media/AudioManager$OnAudioFocusChangeListener;)I": () => 1,
     "getRingerMode()I": () => 2,
     "getMode()I": () => 0,

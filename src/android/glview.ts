@@ -309,6 +309,25 @@ rt.register({
 rt.register({ name: "android/view/SurfaceHolder$Callback", ctor: class extends JObj {} });
 rt.register({ name: "android/view/SurfaceHolder$Callback2", ctor: class extends JObj {}, ifaces: ["android/view/SurfaceHolder$Callback"] });
 rt.register({ name: "android/view/TextureView$SurfaceTextureListener", ctor: class extends JObj {} });
+// no surface texture is ever produced here: the view reports itself unavailable, as one does
+// before its surface exists, and Compose only ever asks whether a child is one
+class JTextureView extends JView { listener: unknown = null; }
+rt.register({
+  name: "android/view/TextureView", ctor: JTextureView, sup: "android/view/View",
+  methods: {
+    "<init>(Landroid/content/Context;)V": async function (this: JTextureView, c: unknown) { await initViewFromCtx(this, c, null); },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JTextureView, c: unknown, set: any) { await initViewFromCtx(this, c, set); },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": async function (this: JTextureView, c: unknown, set: any) { await initViewFromCtx(this, c, set); },
+    "setSurfaceTextureListener(Landroid/view/TextureView$SurfaceTextureListener;)V": function (this: JTextureView, l: unknown) { this.listener = l; },
+    "getSurfaceTextureListener()Landroid/view/TextureView$SurfaceTextureListener;": function (this: JTextureView) { return this.listener; },
+    "getSurfaceTexture()Landroid/graphics/SurfaceTexture;": () => null,
+    "isAvailable()Z": () => 0,
+    "setOpaque(Z)V": () => {},
+    "isOpaque()Z": () => 1,
+    "lockCanvas()Landroid/graphics/Canvas;": () => null,
+    "getBitmap()Landroid/graphics/Bitmap;": () => null,
+  },
+});
 /** the Java Surface: one stable handle onto its holder's live surface, which ANativeWindow_fromSurface derefs */
 export class JSurface extends JObj {
   holder: JSurfaceHolder | null = null;

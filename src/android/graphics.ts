@@ -1156,9 +1156,7 @@ function cropBitmap(src: JBitmap, x: number, y: number, w: number, h: number, m:
  *  delegates (src/android/delegates.ts) rather than a second copy of each. */
 export const canvasMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
-  "<init>(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap) {
-    this.ctx = b.ctx; this.w = b.w; this.h = b.h; this.bmp = b;
-  },
+  "<init>(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
   "getWidth()I": function (this: JCanvas) { return this.w; },
   "getHeight()I": function (this: JCanvas) { return this.h; },
   "getMaximumBitmapWidth()I": () => 32766,
@@ -1333,10 +1331,15 @@ export const canvasMethods: NativeSpec["methods"] = {
   "drawPicture(Landroid/graphics/Picture;)V": () => {},
   "isHardwareAccelerated()Z": () => 1,
   "setDrawFilter(Landroid/graphics/DrawFilter;)V": () => {},
-  "setBitmap(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap) {
-    this.ctx = b.ctx; this.w = b.w; this.h = b.h; this.bmp = b;
-  },
+  "setBitmap(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
 };
+/** AOSP: a canvas without a bitmap accepts and discards draws; one detached 1x1 surface takes them */
+let noBitmap: OffscreenCanvasRenderingContext2D | null = null;
+function setCanvasBitmap(cv: JCanvas, b: JBitmap | null) {
+  if (b) { cv.ctx = b.ctx; cv.w = b.w; cv.h = b.h; cv.bmp = b; return; }
+  cv.ctx = noBitmap ??= new OffscreenCanvas(1, 1).getContext("2d")!;
+  cv.w = cv.h = 0; cv.bmp = null;
+}
 const drawColorKey = mangleMethod("drawColor", "(I)V");
 export const CAPS = ["butt", "round", "square"] as const;
 export const JOINS = ["miter", "round", "bevel"] as const;

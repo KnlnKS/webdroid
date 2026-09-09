@@ -203,6 +203,7 @@ rt.register({
     "postAtFrontOfQueue(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.post(r, 0); },
     "removeCallbacks(Ljava/lang/Runnable;)V": function (this: JHandler, r: unknown) { this.cancel(r); },
     "sendMessage(Landroid/os/Message;)Z": function (this: JHandler, m: JMessage) { return this.send(m, 0); },
+    "sendMessageAtFrontOfQueue(Landroid/os/Message;)Z": function (this: JHandler, m: JMessage) { return this.send(m, 0); },
     "sendMessageDelayed(Landroid/os/Message;J)Z": function (this: JHandler, m: JMessage, d: bigint) { return this.send(m, Number(d)); },
     "sendEmptyMessage(I)Z": function (this: JHandler, w: number) { const m = new JMessage(); m.what = w; return this.send(m, 0); },
     "sendEmptyMessageDelayed(IJ)Z": function (this: JHandler, w: number, d: bigint) {
