@@ -11,7 +11,7 @@ afterAll(() => setA64(false));
 const call = (cpu: Cpu, name: string, ...args: CallArg[]) => cpu.call(lookupHost(name, "libc.so")!, args);
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-for (const a64 of [true]) test(`${a64 ? "A64" : "ARM32"} pthread churn reclaims CPUs and preserves pointer-width join results`, async () => {
+for (const a64 of [false, true]) test(`${a64 ? "A64" : "ARM32"} pthread churn reclaims CPUs and preserves pointer-width join results`, async () => {
   setA64(a64); libcInit();
   const cpu = new Cpu(new JThread(), "pthread parent"), p = mem.malloc(96), baseline = cpus.size;
   const start = p + 80, value = a64 ? 0x123456789abcdef0n : 0x9abcdef0n;

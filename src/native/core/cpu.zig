@@ -6,6 +6,7 @@
 const abi = @import("abi.zig");
 const mem = @import("mem.zig");
 const a64 = @import("a64.zig");
+const arm = @import("arm.zig");
 
 pub const Cpu = extern struct {
     // the architectural state Cpu.call saves and restores: everything up to `tls`
@@ -144,7 +145,7 @@ pub export fn code_write(addr: u32) u32 {
     dropPage(pg);
     return 1;
 }
-export fn invalidate_range(addr: u32, size: u32) void {
+pub export fn invalidate_range(addr: u32, size: u32) void {
     var pg = addr >> abi.PAGE_SHIFT;
     const end = (addr +% size -% 1) >> abi.PAGE_SHIFT;
     while (pg <= end) : (pg += 1) dropPage(pg);
@@ -178,12 +179,9 @@ export fn run_slice(cp: u32, budget: u32) u32 {
             c.exit = (pc - abi.TRAMP_BASE) >> 3;
             return @intFromEnum(Exit.host);
         }
-        const st = if (c.a64 != 0) a64.block(c, pc) else Status.fault;
+        const st = if (c.a64 != 0) a64.block(c, pc) else arm.block(c, pc);
         switch (st) {
-            .fault => {
-                if (c.a64 == 0) c.exit = @intFromEnum(Fault.unimplemented);
-                return @intFromEnum(Exit.fault);
-            },
+            .fault => return @intFromEnum(Exit.fault),
             .syscall => return @intFromEnum(Exit.syscall),
             else => {},
         }

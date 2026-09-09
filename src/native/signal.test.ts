@@ -95,7 +95,7 @@ test("pthread creation inherits the parent's signal mask", async () => {
   } finally { mem.free(p); }
 });
 
-for (const a64 of [true]) test(`${a64 ? "svc" : "swi"} rt_sigprocmask uses kernel mask size and negative errors`, async () => {
+for (const a64 of [false, true]) test(`${a64 ? "svc" : "swi"} rt_sigprocmask uses kernel mask size and negative errors`, async () => {
   setA64(a64);
   const cpu = new Cpu(new JThread(), "raw signal syscall"), p = mem.malloc(16), code = mem.reserve(0x1000, 0x1000);
   // mov x8/r7, #nr; svc/swi #0; ret

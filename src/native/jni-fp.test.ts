@@ -6,7 +6,7 @@ import { defineHost, retD } from "./host";
 import { jniInit, resolveByExport } from "./jni";
 import { mem } from "./mem";
 
-for (const a64 of [true]) test(`JNI ${a64 ? "A64" : "ARM32"} floating results survive caller restoration and nested calls`, async () => {
+for (const a64 of [false, true]) test(`JNI ${a64 ? "A64" : "ARM32"} floating results survive caller restoration and nested calls`, async () => {
   setA64(a64); jniInit();
   const thread = new JThread(), cpu = cpuFor(thread);
   const oldResolver = rt.jniResolver;
