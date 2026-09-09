@@ -258,7 +258,20 @@ function fdClose(cpu: Cpu | null, fd: number): number {
   if (f.wpipe) { f.wpipe.closed = true; wakeAll(f.wpipe); }
   return 0;
 }
-function fdSeek(cpu: Cpu, fd: number, off: number, whence: number): number {
+/** mkstemp's contract: the six trailing X's become the name in place, and the file is created exclusively */
+function fdTemp(cpu: Cpu, tpl: number, flags: number, dir: boolean): number {
+  const t = mem.cstr(tpl);
+  if (!t.endsWith("XXXXXX")) return fail(cpu, E.INVAL);
+  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  for (let attempt = 0; attempt < 100; attempt++) {
+    let name = t.slice(0, -6);
+    for (let i = 0; i < 6; i++) name += chars[(Math.random() * chars.length) | 0];
+    const r = dir ? (vfs.exists(name) ? fail(cpu, E.EXIST) : mkdirPath(cpu, name)) : fdOpen(cpu, name, (flags & ~O_ACCMODE) | 2 | O_CREAT | O_EXCL);
+    if (r >= 0) { mem.write(tpl, utf8(name)); return r; }
+  }
+  return fail(cpu, E.EXIST);
+}
+function fdSeek(cpu: Cpu | null, fd: number, off: number, whence: number): number {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   if (f.random || f.rpipe || f.wpipe) return fail(cpu, E.SPIPE);
@@ -474,6 +487,9 @@ export function stdioInit(): void {
       return typeof resolved === "string" ? fdOpen(cpu, resolved, flags) : resolved;
     },
     creat: (cpu, a) => fdOpen(cpu, a.str(), 1 | O_CREAT | O_TRUNC),
+    mkstemp: (cpu, a) => fdTemp(cpu, a.p(), 0, false),
+    mkostemp: (cpu, a) => fdTemp(cpu, a.p(), a.i(), false),
+    mkdtemp: (cpu, a) => { const p = a.p(); return fdTemp(cpu, p, 0, true) < 0 ? 0 : p; },
     close: (cpu, a) => fdClose(cpu, a.i()),
     read: (cpu, a) => fdRead(cpu, a.i(), a.p(), a.u()),
     write: (cpu, a) => fdWrite(cpu, a.i(), a.p(), a.u()),
