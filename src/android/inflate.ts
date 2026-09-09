@@ -5,7 +5,7 @@ import { mangleMethod } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { parseAXML, TV, type XmlNode } from "./axml";
 import { JAttrSet, askTheme, themeOf, noteAttrsRead, noteUnreadAttrs } from "./res";
-import { JView, JViewGroup, guardCall, guardMaybe } from "./view";
+import { JView, JViewGroup, guardCall, guardMaybe, resolveLp } from "./view";
 import type { JContext } from "./context";
 
 class JLayoutInflater extends JObj {
@@ -134,7 +134,7 @@ async function inflateNode(jctx: unknown, root: XmlNode, parent: JViewGroup | nu
   if (parent) {
     const lp = await guardCall(parent, M_generateLP, set);
     if (attach) await guardCall(parent, M_addView, v, lp);
-    else v.lp = lp;
+    else { v.lp = lp; await resolveLp(lp); }
   }
   if (v instanceof JViewGroup && root.children.length) {
     await inflateChildren(inf, root, v, rctx);

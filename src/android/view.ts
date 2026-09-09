@@ -408,7 +408,7 @@ function setBound(v: JView, l: number, t: number, r: number, b: number) {
   v.left = l; v.top = t; v.right = r; v.bottom = b;
   invalidate();
   if (r - l !== ow || b - t !== oh) void guardMaybe(v, M_onSizeChanged, r - l, b - t, ow, oh);
-  for (const ll of v.layoutChangeLs) {
+  for (const ll of [...v.layoutChangeLs]) {
     void vcall(ll, "onLayoutChange", "(Landroid/view/View;IIIIIIII)V", v, l, t, r, b, oldL, oldT, oldR, oldB);
   }
 }
@@ -431,7 +431,7 @@ export async function layoutView(v: JView, l: number, t: number, r: number, b: n
   v.layoutRequested = false;
   // AOSP only notifies OnLayoutChangeListener when the bounds actually moved
   if (changed) {
-    for (const ll of v.layoutChangeLs) {
+    for (const ll of [...v.layoutChangeLs]) {
       await vcall(ll, "onLayoutChange", "(Landroid/view/View;IIIIIIII)V", v, l, t, r, b, oldL, oldT, oldR, oldB);
     }
   }
@@ -594,10 +594,11 @@ const viewMethods: NativeSpec["methods"] = {
   "getMinimumWidth()I": function (this: JView) { return this.minW; },
   "getMinimumHeight()I": function (this: JView) { return this.minH; },
   "getLayoutParams()Landroid/view/ViewGroup$LayoutParams;": function (this: JView) { return this.lp; },
-  "setLayoutParams(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JView, lp: JLayoutParams) {
+  "setLayoutParams(Landroid/view/ViewGroup$LayoutParams;)V": maySuspend(function (this: JView, lp: JLayoutParams) {
     this.lp = lp;
     requestLayout(this);
-  },
+    return resolveLp(lp);
+  }),
   "getVisibility()I": function (this: JView) { return this.visibility; },
   "setVisibility(I)V": function (this: JView, v: number) {
     if (this.visibility !== v) { this.visibility = v; requestLayout(this); }
@@ -1378,7 +1379,8 @@ export async function dispatchAttached(v: JView) {
   if (v.attached) return;
   v.attached = true;
   try { await guardMaybe(v, M_onAttached); } catch (e) { reportUncaught(e); }
-  for (const l of v.attachLs) {
+  // a snapshot, as AOSP's copy-on-write list: a one-shot listener removing itself must not skip the next
+  for (const l of [...v.attachLs]) {
     try { await vcall(l, "onViewAttachedToWindow", "(Landroid/view/View;)V", v); } catch (e) { reportUncaught(e); }
   }
   // one child's failure must not prevent its siblings from attaching (e.g. ViewPager populate)
@@ -1401,7 +1403,7 @@ export async function dispatchDetached(v: JView) {
   v.attached = false;
   if (v instanceof JViewGroup) for (const c of [...v.children]) await dispatchDetached(c);
   await guardMaybe(v, M_onDetached);
-  for (const l of v.attachLs) await vcall(l, "onViewDetachedFromWindow", "(Landroid/view/View;)V", v);
+  for (const l of [...v.attachLs]) await vcall(l, "onViewDetachedFromWindow", "(Landroid/view/View;)V", v);
 }
 
 /** AOSP getChildMeasureSpec */
@@ -1429,12 +1431,16 @@ const M_checkLp = mangleMethod("checkLayoutParams", "(Landroid/view/ViewGroup$La
 const M_generateLp = mangleMethod("generateLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;");
 const M_addView3 = mangleMethod("addView", "(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V");
 const M_genDefaultLP = mangleMethod("generateDefaultLayoutParams", "()Landroid/view/ViewGroup$LayoutParams;");
+const M_resolveLD = mangleMethod("resolveLayoutDirection", "(I)V");
+/** AOSP View.resolveLayoutParams: start/end constraints and margins become left/right here */
+export function resolveLp(lp: JLayoutParams): unknown { return (jmethod(lp, M_resolveLD) as JMethod).call(lp, 0); }
 
 /** the native terminal: every other overload reaches the tree through here */
 async function addView3(this: JViewGroup, c: JView, i: number, lp: JLayoutParams | null) {
   c.lp = lp ? await convertLp(this, lp)
     : c.lp ? await convertLp(this, c.lp)
     : await guardCall(this, M_genDefaultLP);
+  await resolveLp(c.lp!);
   attachView(this, c, i);
 }
 /**
@@ -1814,6 +1820,7 @@ rt.register({
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JLayoutParams, c: unknown, set: JAttrSet) {
       lpFromAttrs(this, set.res, set);
     },
+    "resolveLayoutDirection(I)V": () => {},
   },
 });
 rt.register({
@@ -1846,6 +1853,8 @@ rt.register({
     "setMarginEnd(I)V": function (this: JMarginLP, v: number) { this.marginR = v; },
     "getMarginStart()I": function (this: JMarginLP) { return this.marginL; },
     "getMarginEnd()I": function (this: JMarginLP) { return this.marginR; },
+    "getLayoutDirection()I": () => 0,
+    "setLayoutDirection(I)V": () => {},
   },
 });
 

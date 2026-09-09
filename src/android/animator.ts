@@ -87,13 +87,13 @@ async function animTick(a: JValueAnimator): Promise<boolean> {
       else await applyAnimProp(a.target, a.propName, a.cur as number);
     }
   }
-  for (const l of a.updateLs) {
+  for (const l of [...a.updateLs]) {
     try { await vcall(l, "onAnimationUpdate", "(Landroid/animation/ValueAnimator;)V", a); } catch (e) { reportUncaught(e); }
   }
   invalidate();
   if (done) {
     a.running = false;
-    for (const l of a.animLs) {
+    for (const l of [...a.animLs]) {
       try { await vcall(l, "onAnimationEnd", "(Landroid/animation/Animator;)V", a); } catch (e) { reportUncaught(e); }
     }
     if (a.next) await guardCall(a.next, M_start);
@@ -326,7 +326,7 @@ const vaMethods: NativeSpec["methods"] = {
     this.startReversed = false;
     this.startT = performance.now();
     this.running = true;
-    for (const l of this.animLs) {
+    for (const l of [...this.animLs]) {
       try { await vcall(l, "onAnimationStart", "(Landroid/animation/Animator;)V", this); } catch (e) { reportUncaught(e); }
     }
     const self = this;
@@ -342,7 +342,7 @@ const vaMethods: NativeSpec["methods"] = {
   },
   "cancel()V": async function (this: JValueAnimator) {
     this.running = false;
-    for (const l of this.animLs) {
+    for (const l of [...this.animLs]) {
       try { await vcall(l, "onAnimationCancel", "(Landroid/animation/Animator;)V", this); } catch (e) { reportUncaught(e); }
     }
   },
@@ -454,7 +454,7 @@ rt.register({
         : Math.max(0, ...this.anims.map((a) => a.delayMs + a.durationMs));
       setTimeout(() => {
         this.running = false;
-        for (const l of this.animLs) void vcall(l, "onAnimationEnd", "(Landroid/animation/Animator;)V", this).catch(reportUncaught);
+        for (const l of [...this.animLs]) void vcall(l, "onAnimationEnd", "(Landroid/animation/Animator;)V", this).catch(reportUncaught);
         if (this.next) void guardCall(this.next, M_start);
       }, total);
     },
