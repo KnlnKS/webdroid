@@ -468,6 +468,54 @@ const odt = (ms: number, zone: JZoneId | null = null) => Object.assign(new (rt.l
 const localMs = (l: JLocalDateTime) => new Date(l.date.y, l.date.mo - 1, l.date.d, l.time.h, l.time.mi, l.time.s).getTime();
 
 const mkInstant = (ms: number) => { const i = new JInstant(); i.ms = ms; return i; };
+/** java.time.Period: a date-based amount, years/months/days kept apart as the API keeps them */
+class JPeriod extends JObj { y = 0; m = 0; d = 0; }
+const periodOf = (y: number, m: number, d: number) => { const p = new JPeriod(); p.y = y; p.m = m; p.d = d; return p; };
+rt.register({
+  name: "java/time/Period", ctor: JPeriod,
+  clinit: () => { (rt.link("java/time/Period").ctor as any).s$ZERO = periodOf(0, 0, 0); },
+  methods: {
+    "static of(III)Ljava/time/Period;": periodOf,
+    "static ofDays(I)Ljava/time/Period;": (d: number) => periodOf(0, 0, d),
+    "static ofMonths(I)Ljava/time/Period;": (m: number) => periodOf(0, m, 0),
+    "static ofYears(I)Ljava/time/Period;": (y: number) => periodOf(y, 0, 0),
+    "static ofWeeks(I)Ljava/time/Period;": (w: number) => periodOf(0, 0, w * 7),
+    "static between(Ljava/time/LocalDate;Ljava/time/LocalDate;)Ljava/time/Period;": (a: JLocalDate, b: JLocalDate) => {
+      // java.time: whole months first, then the day remainder, borrowing a month when the end day is earlier
+      let months = (b.y - a.y) * 12 + (b.mo - a.mo), days = b.d - a.d;
+      if (months > 0 && days < 0) { months--; days = new Date(b.y, b.mo - 1, 0).getDate() - a.d + b.d; }
+      else if (months < 0 && days > 0) { months++; days -= new Date(b.y, b.mo, 0).getDate(); }
+      return periodOf(Math.trunc(months / 12), months % 12, days);
+    },
+    "getYears()I": function (this: JPeriod) { return this.y; },
+    "getMonths()I": function (this: JPeriod) { return this.m; },
+    "getDays()I": function (this: JPeriod) { return this.d; },
+    "toTotalMonths()J": function (this: JPeriod) { return BigInt(this.y * 12 + this.m); },
+    "isZero()Z": function (this: JPeriod) { return this.y || this.m || this.d ? 0 : 1; },
+    "isNegative()Z": function (this: JPeriod) { return this.y < 0 || this.m < 0 || this.d < 0 ? 1 : 0; },
+    "equals(Ljava/lang/Object;)Z": function (this: JPeriod, o: unknown) { return o instanceof JPeriod && o.y === this.y && o.m === this.m && o.d === this.d ? 1 : 0; },
+    "hashCode()I": function (this: JPeriod) { return this.y + (this.m << 8) + (this.d << 16); },
+    "toString()Ljava/lang/String;": function (this: JPeriod) { return this.y || this.m || this.d ? `P${this.y ? this.y + "Y" : ""}${this.m ? this.m + "M" : ""}${this.d ? this.d + "D" : ""}` : "P0D"; },
+  },
+});
+/** java.time.Clock: the system clock in a zone, or a fixed instant */
+class JClock extends JObj { zone: JZoneId | null = null; fixed: number | null = null; }
+const clockIn = (zone: JZoneId, fixed: number | null = null) => { const c = new JClock(); c.zone = zone; c.fixed = fixed; return c; };
+const zoneOf = (id: string) => { const z = new JZoneId(); z.id = id; return z; };
+rt.register({
+  name: "java/time/Clock", ctor: JClock,
+  methods: {
+    "static systemUTC()Ljava/time/Clock;": () => clockIn(zoneOf("UTC")),
+    "static systemDefaultZone()Ljava/time/Clock;": () => clockIn(zoneOf(Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC")),
+    "static system(Ljava/time/ZoneId;)Ljava/time/Clock;": (z: JZoneId) => clockIn(z),
+    "static fixed(Ljava/time/Instant;Ljava/time/ZoneId;)Ljava/time/Clock;": (i: JInstant, z: JZoneId) => clockIn(z, i.ms),
+    "static offset(Ljava/time/Clock;Ljava/time/Duration;)Ljava/time/Clock;": (c: JClock, d: { ms: number }) => clockIn(c.zone!, c.fixed === null ? null : c.fixed + d.ms),
+    "instant()Ljava/time/Instant;": function (this: JClock) { return mkInstant(this.fixed ?? Date.now()); },
+    "millis()J": function (this: JClock) { return BigInt(this.fixed ?? Date.now()); },
+    "getZone()Ljava/time/ZoneId;": function (this: JClock) { return this.zone; },
+    "withZone(Ljava/time/ZoneId;)Ljava/time/Clock;": function (this: JClock, z: JZoneId) { return clockIn(z, this.fixed); },
+  },
+});
 /** the epoch millis of an ISO-8601 text; date-only and zone-less forms read as local time */
 function parseIso(s: string): number {
   const text = String(s).trim();

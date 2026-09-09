@@ -942,6 +942,8 @@ export class JBitmap extends JObj {
     return this.cv;
   }
   get ctx(): OffscreenCanvasRenderingContext2D { void this.canvas; return this.cx!; }
+  /** AOSP reconfigure: the same object with new dimensions and undefined contents */
+  reconfigure(w: number, h: number) { this.w = w; this.h = h; this.cv = null; this.cx = null; this.px = null; this.genId++; }
 
   /** RGBA bytes. Until a raster exists these ARE the bitmap; after that they are a memo of it,
    *  which is what makes a run of getPixel one readback instead of one per pixel. */
@@ -975,6 +977,7 @@ export class JBitmap extends JObj {
 /** Exported for the same reason canvasMethods is: AOSP's own Bitmap bytecode reaches these
  *  bodies through its native* delegates (src/android/delegates.ts), not a second copy. */
 export const bitmapMethods: NativeSpec["methods"] = {
+    "reconfigure(IILandroid/graphics/Bitmap$Config;)V": function (this: JBitmap, w: number, h: number) { this.reconfigure(w, h); },
     "static createBitmap(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;": JBitmap.create,
     "static createBitmap(Landroid/util/DisplayMetrics;IILandroid/graphics/Bitmap$Config;ZLandroid/graphics/ColorSpace;)Landroid/graphics/Bitmap;":
       (_dm: unknown, w: number, h: number) => JBitmap.create(w, h),

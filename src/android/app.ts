@@ -378,6 +378,16 @@ rt.register({
   statics: { RESULT_OK: -1, RESULT_CANCELED: 0, DEFAULT_KEYS_DISABLE: 0 },
   methods: activityMethods,
 });
+// ListActivity: an Activity whose content is one ListView; the app's own layout supplies it
+rt.register({
+  name: "android/app/ListActivity", ctor: class extends JActivity { adapter: unknown = null; }, sup: "android/app/Activity",
+  methods: {
+    "<init>()V": function (this: JActivity) { return callSelf(activityMethods, "<init>()V", this); },
+    "setListAdapter(Landroid/widget/ListAdapter;)V": function (this: JActivity & { adapter: unknown }, a: unknown) { this.adapter = a; },
+    "getListAdapter()Landroid/widget/ListAdapter;": function (this: JActivity & { adapter: unknown }) { return this.adapter; },
+    "getListView()Landroid/widget/ListView;": function (this: JActivity) { return this.window.decor ? findById(this.window.decor, 0x102000a) : null; },
+  },
+});
 rt.register({ name: "android/view/Window$Callback", ctor: class extends JObj {} });
 // Frame metrics are reported per frame that was actually measured; a listener registered on a
 // window that never janks is one a device never calls either.

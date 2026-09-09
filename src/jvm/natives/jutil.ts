@@ -1680,7 +1680,7 @@ rt.register({ name: "java/util/AbstractMap", ctor: class extends JObj {}, ifaces
 // java/util/Set must satisfy casts to java/util/Collection)
 // The interfaces' Java 8 default methods, phrased over the abstract operations, so a class that
 // implements the interface without extending our Abstract* bases still has them.
-const O = "Ljava/lang/Object;", GET = `get(${O})${O}`, PUT = `put(${O}${O})${O}`, HAS = `containsKey(${O})Z`;
+const O = "Ljava/lang/Object;", GET = `(${O})${O}`, PUT = `(${O}${O})${O}`, HAS = `(${O})Z`;
 const mapDefaults: Methods = {
   "getOrDefault(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": absMap["getOrDefault(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"],
   "forEach(Ljava/util/function/BiConsumer;)V": async function (this: JObj, fn: unknown) {

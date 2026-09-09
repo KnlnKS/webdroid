@@ -463,9 +463,19 @@ rt.register({
   },
 });
 for (const n of ["android/text/Html$ImageGetter", "android/text/Html$TagHandler",
-  "org/xml/sax/ContentHandler", "org/xml/sax/XMLReader", "org/xml/sax/Attributes"]) {
+  "org/xml/sax/ContentHandler", "org/xml/sax/XMLReader", "org/xml/sax/Attributes", "org/xml/sax/DTDHandler", "org/xml/sax/EntityResolver", "org/xml/sax/ErrorHandler"]) {
   rt.register({ name: n, ctor: class extends JObj {} });
 }
+// the SAX adapter every callback of which does nothing: app handlers extend it and override a few
+rt.register({
+  name: "org/xml/sax/helpers/DefaultHandler", ctor: class extends JObj {},
+  ifaces: ["org/xml/sax/ContentHandler", "org/xml/sax/DTDHandler", "org/xml/sax/EntityResolver", "org/xml/sax/ErrorHandler"],
+  methods: Object.fromEntries(["<init>()V", "startDocument()V", "endDocument()V", "characters([CII)V", "ignorableWhitespace([CII)V",
+    "startElement(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/xml/sax/Attributes;)V", "endElement(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+    "startPrefixMapping(Ljava/lang/String;Ljava/lang/String;)V", "endPrefixMapping(Ljava/lang/String;)V", "processingInstruction(Ljava/lang/String;Ljava/lang/String;)V",
+    "setDocumentLocator(Lorg/xml/sax/Locator;)V", "skippedEntity(Ljava/lang/String;)V", "notationDecl(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+    "unparsedEntityDecl(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", "warning(Lorg/xml/sax/SAXParseException;)V", "error(Lorg/xml/sax/SAXParseException;)V"].map((m) => [m, () => {}])),
+});
 /** AOSP parses the markup and emits spans; the browser already has the parser, so use it —
  *  a stripper loses the bold/italic/link/quote structure AND every named entity. */
 const HTML_BLOCK = /^(P|DIV|LI|UL|OL|BLOCKQUOTE|H[1-6]|PRE|TABLE|TR)$/;
