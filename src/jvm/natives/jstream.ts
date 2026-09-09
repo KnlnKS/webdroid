@@ -109,6 +109,27 @@ rt.register({
       return this.v;
     },
     "orElse(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JOptional, d: unknown) { return this.v ?? d; },
+    "orElseGet(Ljava/util/function/Supplier;)Ljava/lang/Object;": function (this: JOptional, s: unknown) { return this.v ?? vcall(s, "get", "()Ljava/lang/Object;"); },
+    "orElseThrow()Ljava/lang/Object;": function (this: JOptional) {
+      if (this.v === null) throw rt.mkThrowable("java/util/NoSuchElementException", "No value present");
+      return this.v;
+    },
+    "orElseThrow(Ljava/util/function/Supplier;)Ljava/lang/Object;": async function (this: JOptional, s: unknown) {
+      if (this.v === null) throw await vcall(s, "get", "()Ljava/lang/Object;");
+      return this.v;
+    },
+    "filter(Ljava/util/function/Predicate;)Ljava/util/Optional;": async function (this: JOptional, p: unknown) {
+      return this.v === null || await vcall(p, "test", "(Ljava/lang/Object;)Z", this.v) ? this : mkOpt(null);
+    },
+    "flatMap(Ljava/util/function/Function;)Ljava/util/Optional;": async function (this: JOptional, f: unknown) {
+      return this.v === null ? this : apply1(f, this.v);
+    },
+    "ifPresentOrElse(Ljava/util/function/Consumer;Ljava/lang/Runnable;)V": function (this: JOptional, c: unknown, r: unknown) {
+      return this.v === null ? vcall(r, "run", "()V") : vcall(c, "accept", "(Ljava/lang/Object;)V", this.v);
+    },
+    "equals(Ljava/lang/Object;)Z": async function (this: JOptional, o: unknown) {
+      return o instanceof JOptional && (o.v === this.v || o.v !== null && this.v !== null && !!await vcall(this.v, "equals", "(Ljava/lang/Object;)Z", o.v)) ? 1 : 0;
+    },
     "map(Ljava/util/function/Function;)Ljava/util/Optional;": async function (this: JOptional, f: unknown) {
       return this.v === null ? this : mkOpt(await apply1(f, this.v));
     },

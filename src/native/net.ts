@@ -177,7 +177,7 @@ export function nativeFreeaddrinfo(address: number): void { if (address) mem.fre
 
 export function nativeSocket(cpu: Cpu, domain: number, type: number, protocol: number): number {
   const baseType = type & 0xf;
-  if (domain !== AF_INET) return fail(cpu, E.PROTONOSUPPORT);
+  if (domain !== AF_INET) return fail(cpu, E.AFNOSUPPORT);
   if (baseType !== SOCK_STREAM && baseType !== SOCK_DGRAM) return fail(cpu, E.SOCKTNOSUPPORT);
   const expectedProtocol = baseType === SOCK_DGRAM ? IPPROTO_UDP : IPPROTO_TCP;
   if (protocol !== 0 && protocol !== expectedProtocol) return fail(cpu, E.PROTONOSUPPORT);
