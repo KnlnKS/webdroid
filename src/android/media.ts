@@ -415,4 +415,18 @@ rt.register({
 });
 rt.register({ name: "android/media/MediaCodec$Callback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 rt.register({ name: "android/media/metrics/LogSessionId", ctor: class extends JObj {}, methods: { "getStringId()Ljava/lang/String;": () => "" } });
-rt.register({ name: "android/media/MediaCodec$CryptoInfo", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
+class JCryptoInfo extends JObj { pattern: unknown = null; }
+rt.register({
+  name: "android/media/MediaCodec$CryptoInfo", ctor: JCryptoInfo,
+  methods: { "<init>()V": function () {}, "setPattern(Landroid/media/MediaCodec$CryptoInfo$Pattern;)V": function (this: JCryptoInfo, p: unknown) { this.pattern = p; } },
+});
+class JCryptoPattern extends JObj { encrypt = 0; skip = 0; }
+rt.register({
+  name: "android/media/MediaCodec$CryptoInfo$Pattern", ctor: JCryptoPattern,
+  methods: {
+    "<init>(II)V": function (this: JCryptoPattern, e: number, s: number) { this.encrypt = e; this.skip = s; },
+    "set(II)V": function (this: JCryptoPattern, e: number, s: number) { this.encrypt = e; this.skip = s; },
+    "getEncryptBlocks()I": function (this: JCryptoPattern) { return this.encrypt; },
+    "getSkipBlocks()I": function (this: JCryptoPattern) { return this.skip; },
+  },
+});
