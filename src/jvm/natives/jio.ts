@@ -566,8 +566,9 @@ rt.register({
   },
 });
 
+class JFilterOutputStream extends JOutputStream { out: unknown = null; }
 rt.register({
-  name: "java/io/FilterOutputStream", ctor: class extends JOutputStream { out: unknown = null; }, sup: "java/io/OutputStream",
+  name: "java/io/FilterOutputStream", ctor: JFilterOutputStream, sup: "java/io/OutputStream",
   fields: { out: "out" },
   methods: {
     "<init>(Ljava/io/OutputStream;)V": function (this: any, o: unknown) { this.out = o; },
@@ -596,20 +597,38 @@ rt.register({
     "markSupported()Z": fwd("markSupported", "()Z"),
   },
 });
-class JBufferedOut extends JOutputStream { out: unknown = null; }
-async function drain(s: JBufferedOut) {
-  if (!s.chunks.length) return;
-  await vcall(s.out, "write", "([BII)V", new Int8Array(s.chunks), 0, s.chunks.length);
-  s.chunks.length = 0;
+class JBufferedOut extends JFilterOutputStream { buf = new Int8Array(8192); count = 0; }
+function drain(s: JBufferedOut) {
+  if (!s.count) return;
+  return after(vcallMaybe(s.out, "write", "([BII)V", s.buf, 0, s.count), () => { s.count = 0; });
 }
-const wrapOut = function (this: JBufferedOut, o: unknown) { this.out = o; };
+const wrapOut = function (this: JBufferedOut, o: unknown, size = 8192) {
+  if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Buffer size <= 0");
+  this.out = o;
+  if (size !== this.buf.length) this.buf = new Int8Array(size);
+  this.count = 0;
+};
 rt.register({
-  name: "java/io/BufferedOutputStream", ctor: JBufferedOut, sup: "java/io/OutputStream",
+  name: "java/io/BufferedOutputStream", ctor: JBufferedOut, sup: "java/io/FilterOutputStream",
+  fields: { buf: "buf", count: "count" },
   methods: {
     "<init>(Ljava/io/OutputStream;)V": wrapOut,
     "<init>(Ljava/io/OutputStream;I)V": wrapOut,
-    "flush()V": async function (this: JBufferedOut) { await drain(this); await vcall(this.out, "flush", "()V"); },
-    "close()V": async function (this: JBufferedOut) { await drain(this); await vcall(this.out, "close", "()V"); },
+    "write(I)V": maySuspend(function (this: JBufferedOut, b: number) {
+      return after(this.count === this.buf.length ? drain(this) : undefined, () => { this.buf[this.count++] = b; });
+    }),
+    "write([BII)V": maySuspend(function (this: JBufferedOut, b: Int8Array, off: number, len: number) {
+      if (off < 0 || len < 0 || off + len > b.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      if (len >= this.buf.length) return after(drain(this), () => vcallMaybe(this.out, "write", "([BII)V", b, off, len));
+      return after(len > this.buf.length - this.count ? drain(this) : undefined, () => {
+        this.buf.set(b.subarray(off, off + len), this.count);
+        this.count += len;
+      });
+    }),
+    "flush()V": maySuspend(function (this: JBufferedOut) { return after(drain(this), () => vcallMaybe(this.out, "flush", "()V")); }),
+    "close()V": async function (this: JBufferedOut) {
+      try { await vcall(this, "flush", "()V"); } finally { await vcall(this.out, "close", "()V"); }
+    },
   },
 });
 
