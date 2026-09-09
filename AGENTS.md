@@ -72,7 +72,10 @@ An alternate `WEBDROID_SCREEN=1080x2424@480` runs as smoke when it differs from 
   that the host links into the core's table. What the emitter does not inline calls the
   interpreter for that word: semantics live once, in `a64.zig`/`simd.zig`/`arm.zig`. Hot libc
   is served in the core (`libc.zig`). One process uses one ABI. The test kits run every
-  program in both tiers and demand the same register file.
+  program in both tiers and demand the same register file. A miscompile in an app is
+  bisected, not read: `?jit=0` runs the interpreter alone, `__wdJit` (ranges of entry pcs)
+  installs only some regions, `core.jit_fallback(lo, hi)` hands a pc range inside a region
+  to the interpreter, and a wasm trap names the function and offset that raised it.
 - APK/XAPK installation is shared by shell, server, and scripts. Asset packs can use range
   reads with bounded caching. Preserve split precedence and distinct DEX entries.
 - `src/natives.ts` is the central registration list. Import the owning module directly for

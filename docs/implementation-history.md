@@ -2118,6 +2118,32 @@ differs from its first (it reads the counter, or memory it rewrote) is exempt, a
 put back so the test asserts on a fresh run. The sweep found the subtraction overflow flag
 using the addition formula and the reversed operands of `select` in register-specified shifts.
 
+**The first app run.** DoodleJump's loader thread trapped where the unit tests were green.
+Two causes were the core's own: decode blocks came from the guest arena, and the loader wrote
+through a pointer it had freed and kept, straight into a block (a use-after-free that a real
+libc survives); the blocks moved to the image region. The rest were ARM32 emitter bugs no
+test program had reached: Thumb MVN, an STM that wrote its base back before storing it
+(`push {sp, lr}`, which __aeabi_uldivmod's helper reads back), a register-specified shift whose
+amount landed in Rn's temporary (`orr r8, r2, r1, lsl r3` inside __divdi3), and a fallback
+that jumped and then spilled stale locals over the interpreter's result. None was found by
+reading: the tools that found them are worth more than the fixes. `?jit=0` separates the
+tiers; `__wdJit` installs only regions whose entry lies in given ranges, so a headless run
+bisects 1,000 regions to one in ten launches; `jit_fallback` hands a pc range inside that region
+to the interpreter, so a bun test over the library's own bytes bisects the region to one
+instruction in a few seconds; and a wasm trap reports the function and offset, which named
+`on_store` rather than the region. A hang in the middle of that bisection was the fallback
+path itself: the ARM interpreter reports a taken branch through pc alone, so the fallback
+had continued past it.
+
+**In the browser.** Chrome runs the same byte-copy regions at 1.25G instr/s where bun runs
+them at 3.9G (`wd.native.bench()` now reports the second pass, after the region compiled).
+Among Us reaches The Skeld with 98.5% of its instructions in regions and still runs ~120M
+instr/s: IL2CPP code is thousands of small functions, every call and return leaves a region
+through the dispatcher with a spill and a reload, and it makes 26k host calls a second on top.
+The next win there is region-to-region chaining, not coverage. Its 55,000 regions in two
+minutes also reached the table's end, where the first cut flushed everything; the table now
+evicts its oldest half of batches (a region still hot re-heats within 48 entries).
+
 **Negative results.** `@mulAdd` on wasm32 goes through compiler-rt's `fma` libcall and returned
 a NaN with payload 1 for finite operands in the hardware-oracle cases; the fused ops use the
 Dekker/TwoSum software form instead, which the oracle accepts. The decoded-op cache is not
