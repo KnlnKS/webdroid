@@ -31,14 +31,22 @@ const SUSPENDS = "\0suspends";   // the node every unresolvable target reports t
  * @param methods  the bodies to consider — the reachable set, not the whole apk
  * @param subtypes declared type -> concrete types a site on it may dispatch to
  */
-/** the method keys that can suspend */
+export interface Suspension {
+  /** the method keys that can suspend */
+  suspends: Set<string>;
+  /** call sites as the compiler names them ("@owner.sig" virtual, "owner.sig" exact) whose every target cannot suspend */
+  syncSites: Set<string>;
+  /** classes whose whole initialization chain cannot suspend */
+  syncInits: Set<string>;
+}
 export function analyseSuspend(
   p: Program, methods: Iterable<string>, subtypes: Map<string, string[]>, nativeSuspends: NativeOracle,
-): Set<string> {
+): Suspension {
   const suspends = new Set<string>([SUSPENDS]);
   const callers = new Map<string, string[]>();   // node -> nodes that depend on it
   const queue: string[] = [SUSPENDS];
   const virtualSites = new Set<string>();        // "declared/Type.sig", expanded once at the end
+  const inits = new Set<string>();               // every class whose initialization some body triggers
 
   const mark = (k: string) => { if (!suspends.has(k)) { suspends.add(k); queue.push(k); } };
   const edge = (from: string, to: string) => {
@@ -73,6 +81,7 @@ export function analyseSuspend(
    *  <clinit> the way a call resolves is wrong twice over: it would attribute a superclass's
    *  initializer to a subclass that has none, and miss the supers of one that does. */
   function initOf(cls: string, caller: string) {
+    inits.add(cls);
     initOne(cls, caller);
     for (const c of p.supers(cls)) initOne(c, caller);
   }
@@ -132,8 +141,14 @@ export function analyseSuspend(
     const k = queue.pop()!;
     for (const c of callers.get(k) ?? []) mark(c);
   }
+  const syncSites = new Set<string>();
+  for (const [q, d] of resolved) if (d !== SUSPENDS && (!d || !suspends.has(d))) syncSites.add(q);
+  for (const site of virtualSites) if (!suspends.has("@" + site)) syncSites.add("@" + site);
+  const initSync = (c: string) => p.declares(c, CLINIT) ? !suspends.has(c + "." + CLINIT) : p.has(c) || nativeSuspends(c, CLINIT) === false;
+  const syncInits = new Set<string>();
+  for (const cls of inits) if (initSync(cls) && p.supers(cls).every(initSync)) syncInits.add(cls);
   suspends.delete(SUSPENDS);
-  return suspends;
+  return { suspends, syncSites, syncInits };
 }
 
 /** declared type -> the concrete types a virtual site on it may reach, from RTA's instantiated set */

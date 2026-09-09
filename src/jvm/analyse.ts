@@ -28,10 +28,12 @@ export function analyseProgram(manifest: Uint8Array, services: Record<string, st
   for (const d of rt.dexes) p.add(d);
   const roots = rootsOf(manifest, p, services);
   const r = reach(p, roots.methods, [...roots.classes, ...reflectiveRoots(p, rt.dexes)]);
-  const suspends = analyseSuspend(p, r.methods, subtypeIndex(p, r.instantiated), rt.nativeOracle());
+  const { suspends, syncSites, syncInits } = analyseSuspend(p, r.methods, subtypeIndex(p, r.instantiated), rt.nativeOracle());
   const sync = new Set<string>();
   for (const k of r.methods) if (!suspends.has(k)) sync.add(k);
   rt.syncMethods = sync;
+  rt.syncSites = syncSites;
+  rt.syncInits = syncInits;
   const ms = performance.now() - t0;
   perf.analyseMs = ms;
   return { reachable: r.methods.size, sync: sync.size, ms };

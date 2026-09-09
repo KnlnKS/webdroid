@@ -143,6 +143,9 @@ export class Runtime {
   /** methods the suspension analysis proved cannot suspend, so they compile without `async`.
    *  Null until it has run; a method it never saw falls back to the compiler's syntactic rule. */
   syncMethods: Set<string> | null = null;
+  /** call sites and class initializations the analysis proved cannot suspend: their guards need no await */
+  syncSites: Set<string> | null = null;
+  syncInits: Set<string> | null = null;
 
   parent: Runtime | null = null;
   classLoader: unknown = null;
@@ -158,6 +161,8 @@ export class Runtime {
     child.classpath = {};
     child.classpathLocations = new Map();
     child.syncMethods = null;
+    child.syncSites = null;
+    child.syncInits = null;
     return child;
   }
 
