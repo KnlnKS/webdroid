@@ -47,7 +47,7 @@ export async function readFully(source: FileSource, offset = 0, length = source.
   return pos === out.length ? out : out.slice(0, pos);
 }
 
-export interface RangeFileStats {
+interface RangeFileStats {
   requests: number;
   fetched: number;
   hits: number;

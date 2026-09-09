@@ -11,6 +11,7 @@ import { appString } from "./context";
 import { parseAXML, TV } from "./axml";
 import { rvString } from "./res";
 import type { JActivity } from "./app";
+import { spannedString } from "./text";
 
 function firstText(v: JView | null): string | null {
   if (!v) return null;
@@ -219,7 +220,6 @@ export async function showMenuPopup(anchor: JView, items: JMenuItem[]) {
     (i) => { void performMenuItem(anchor, vis[i]); });
 }
 
-// Menu natives (filled by MenuInflater)
 export class JMenu extends JObj {
   bar: JActionBarView | null = null;
   items: JMenuItem[] = [];
@@ -247,7 +247,7 @@ const menuItemMethods: NativeSpec["methods"] = {
   "getItemId()I": function (this: JMenuItem) { return this.id; },
   "getTitle()Ljava/lang/CharSequence;": function (this: JMenuItem) { return this.title; },
   "setTitle(Ljava/lang/CharSequence;)Landroid/view/MenuItem;": function (this: JMenuItem, t: unknown) {
-    this.title = String(t ?? "");
+    this.title = spannedString(t);
     return this;
   },
   "setTitle(I)Landroid/view/MenuItem;": function (this: JMenuItem, id: number) {
@@ -437,9 +437,9 @@ class JActionBar extends JObj {
 rt.register({
   name: "webdroid/ActionBar", ctor: JActionBar, sup: "android/app/ActionBar",
   methods: {
-    "setTitle(Ljava/lang/CharSequence;)V": function (this: JActionBar, t: unknown) { this.bar((b) => { b.titleStr = String(t ?? ""); }); },
+    "setTitle(Ljava/lang/CharSequence;)V": function (this: JActionBar, t: unknown) { this.bar((b) => { b.titleStr = spannedString(t); }); },
     "setTitle(I)V": function (this: JActionBar, id: number) { this.bar((b) => { b.titleStr = appString(id); }); },
-    "setSubtitle(Ljava/lang/CharSequence;)V": function (this: JActionBar, t: unknown) { this.bar((b) => { b.subtitleStr = t ? String(t) : null; }); },
+    "setSubtitle(Ljava/lang/CharSequence;)V": function (this: JActionBar, t: unknown) { this.bar((b) => { b.subtitleStr = t ? spannedString(t) : null; }); },
     "getTitle()Ljava/lang/CharSequence;": function (this: JActionBar) { return this.act?.window.actionBarView?.titleStr ?? ""; },
     "setHomeAsUpIndicator(Landroid/graphics/drawable/Drawable;)V": () => {},
     "setHomeAsUpIndicator(I)V": () => {},

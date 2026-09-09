@@ -382,7 +382,6 @@ setInterval(() => {
   if (performance.now() - lastTick > 40) doTick();
 }, 33);
 
-// draw idle screen
 ctx.fillStyle = "#111";
 ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
 ctx.fillStyle = "#445";
@@ -392,7 +391,6 @@ ctx.fillText("webdroid", SCREEN_W / 2, SCREEN_H / 2 - device.dp(10));
 ctx.font = `${device.dp(13)}px system-ui`;
 ctx.fillText("pick an app on the right →", SCREEN_W / 2, SCREEN_H / 2 + device.dp(20));
 
-// input
 attachInput(canvas, () => {
   if (imeActive()) setTimeout(() => kbd.focus(), 0);
 });

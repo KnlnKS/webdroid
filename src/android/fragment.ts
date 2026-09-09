@@ -1,6 +1,6 @@
 import { JObj, rt, type NativeSpec } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
-import { findById, type JViewGroup, type JView, attachView, detachView, requestLayout } from "./view";
+import { findById, type JViewGroup, type JView, attachView, detachView, requestLayout, removeFrom } from "./view";
 import { getInflater } from "./inflate";
 import type { JActivity } from "./app";
 import { reportUncaught } from "./os";
@@ -42,8 +42,7 @@ async function runFragmentAdd(fm: JFragmentManager, frag: JFragment, containerId
   if (act?.resumed) await vcall(frag, "onResume", "()V");
 }
 async function runFragmentRemove(fm: JFragmentManager, frag: JFragment) {
-  const i = fm.active.indexOf(frag);
-  if (i >= 0) fm.active.splice(i, 1);
+  removeFrom(fm.active, frag);
   await vcall(frag, "onPause", "()V");
   await vcall(frag, "onStop", "()V");
   await vcall(frag, "onDestroyView", "()V");

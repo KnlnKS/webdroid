@@ -1,8 +1,5 @@
 import { AID } from "./res";
-import {
-  JView, requestLayout, initViewFromCtx, guardCall, invalidate, specMode, specSize, MS_UNSPEC, MS_EXACTLY,
-  MS_AT_MOST, resolveSizeAndState, setFocusHook
-} from "./view";
+import { JView, requestLayout, initViewFromCtx, guardCall, invalidate, specMode, specSize, MS_UNSPEC, MS_EXACTLY, MS_AT_MOST, resolveSizeAndState, setFocusHook, removeFrom } from "./view";
 import {
   type JColorStateList, mkCsl, type JDrawable, loadColorStateList, loadDrawableRV, cslColor, loadDrawable,
   drawChild
@@ -391,8 +388,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setSpannableFactory(Landroid/text/Spannable$Factory;)V": function (this: JTextView, f: unknown) { this.spannableFactory = f; },
   "addTextChangedListener(Landroid/text/TextWatcher;)V": function (this: JTextView, w: unknown) { this.watchers.push(w); },
   "removeTextChangedListener(Landroid/text/TextWatcher;)V": function (this: JTextView, w: unknown) {
-    const i = this.watchers.indexOf(w);
-    if (i >= 0) this.watchers.splice(i, 1);
+    removeFrom(this.watchers, w);
   },
   "setInputType(I)V": function (this: JTextView, t: number) { this.inputTypeV = t; },
   "getInputType()I": function (this: JTextView) { return this.inputTypeV; },
@@ -569,7 +565,6 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const drW = this.drawableR ? Math.max(0, this.drawableR.intrinsicW()) : 0;
     const contentL = this.padL + (dlW ? dlW + this.drawablePad : 0);
     const contentR = this.width() - this.padR - (drW ? drW + this.drawablePad : 0);
-    // compound drawables (vertically centered)
     if (this.drawableL) {
       const dh = Math.max(0, this.drawableL.intrinsicH());
       this.drawableL.bounds.left = this.padL;
@@ -740,7 +735,7 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "filter(Ljava/lang/CharSequence;IILandroid/text/Spanned;II)Ljava/lang/CharSequence;":
-      function (this: JObj, src: unknown) { return src == null ? null : String(src).toUpperCase(); },
+      function (this: JObj, src: unknown) { return src == null ? null : spannedString(src).toUpperCase(); },
   },
 });
 

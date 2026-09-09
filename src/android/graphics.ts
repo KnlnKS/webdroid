@@ -728,7 +728,6 @@ rt.register({
   },
 });
 mkEnumSet("android/graphics/Shader$TileMode", ["CLAMP", "REPEAT", "MIRROR", "DECAL"]);
-/** colour stops onto a canvas gradient; evenly spaced when `stops` is null, as Android does */
 /**
  * A ColorLong is Color.pack()'s encoding: the sRGB case (colour-space id 0, the only one this
  * canvas has) is the ARGB int in the top 32 bits, which is what getColorLong writes.
@@ -1677,7 +1676,6 @@ rt.register({
   },
 });
 
-// BitmapFactory
 class JBFOptions extends JObj {
   inJustDecodeBounds = 0; inSampleSize = 1; outWidth = 0; outHeight = 0;
   inDensity = 0; inTargetDensity = 0; inScaled = 1; inPreferredConfig: unknown = null;

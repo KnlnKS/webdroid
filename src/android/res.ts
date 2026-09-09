@@ -366,7 +366,6 @@ export function resolveStyleValue(res: Resources, theme: JTheme | null | undefin
   return v && v.t !== TV.NULL ? res.resolveRefs(v) : null;
 }
 
-// value coercion helpers
 /** the string resource `id` names, "" when it is not one */
 export const resString = (res: Resources, id: number): string => rvString(res, res.ref(id)) ?? "";
 export function rvString(res: Resources, v: RV | null): string | null {
@@ -434,12 +433,6 @@ function colorFromSelector(res: Resources, resId: number, dflt: number): number 
   }
   return dflt;
 }
-/**
- * The theme a Context resolves against: its own if setTheme/ContextThemeWrapper gave it one,
- * else its base context's (AOSP's ContextWrapper delegates rather than jumping to the
- * application), else the application's. Material wraps every widget's context in a
- * ThemeOverlay, so a view that reads the application theme gets none of its own styling.
- */
 /**
  * The theme the Context itself reports, memoized as its ownTheme so the synchronous themeOf()
  * agrees from then on. appcompat's ContextThemeWrapper is app dex holding its own

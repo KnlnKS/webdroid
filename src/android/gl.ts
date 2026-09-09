@@ -12,7 +12,7 @@ export let gl: GL | null = null;
 // context that minted the handles, as EGL objects do: setGL re-selecting a context must keep
 // last frame's VBOs and textures, and a context seen for the first time starts empty — the
 // "EGL context lost" case renderers already reload from in onSurfaceCreated.
-export type Tables = {
+type Tables = {
   programs: (WebGLProgram | null)[]; shaders: (WebGLShader | null)[]; buffers: (WebGLBuffer | null)[];
   textures: (WebGLTexture | null)[]; uniforms: (WebGLUniformLocation | null)[];
   vaos: (WebGLVertexArrayObject | null)[]; fbos: (WebGLFramebuffer | null)[]; rbos: (WebGLRenderbuffer | null)[];

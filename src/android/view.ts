@@ -74,7 +74,7 @@ const M_onMeasure = mangleMethod("onMeasure", "(II)V");
 const M_performClick = mangleMethod("performClick", "()Z");
 
 /** drop one registration of `l` (Android listener lists are identity sets) */
-function removeFrom(ls: unknown[], l: unknown) {
+export function removeFrom(ls: unknown[], l: unknown) {
   const i = ls.indexOf(l);
   if (i >= 0) ls.splice(i, 1);
 }
@@ -159,7 +159,7 @@ export async function guardMaybe(self: unknown, mangled: string, ...args: unknow
   return r instanceof Promise ? await r : r;
 }
 
-export async function guardApply(fn: JMethod, self: unknown, ...args: unknown[]): Promise<any> {
+async function guardApply(fn: JMethod, self: unknown, ...args: unknown[]): Promise<any> {
   const r = fn.apply(self, args);
   return r instanceof Promise ? await r : r;
 }
@@ -1401,7 +1401,6 @@ export function childMeasureSpec(spec: number, padding: number, childDim: number
     if (mode === MS_AT_MOST) return makeSpec(size, MS_AT_MOST);
     return makeSpec(size, MS_UNSPEC);
   }
-  // WRAP_CONTENT
   return mode === MS_UNSPEC ? makeSpec(size, MS_UNSPEC) : makeSpec(size, MS_AT_MOST);
 }
 export async function measureChildWithMargins(vg: JViewGroup, child: JView, wSpec: number, wUsed: number, hSpec: number, hUsed: number) {
@@ -1604,7 +1603,6 @@ const vgMethods: NativeSpec["methods"] = {
       if (r) return 1;
     }
     if (action === 0) { this.touchTarget = null; this.disallowIntercept = false; }
-    // intercept?
     let intercepted = false;
     if (!this.disallowIntercept && (action === 0 || this.touchTarget)) {
       intercepted = !!(await guardCall(this, M_onIntercept, ev));

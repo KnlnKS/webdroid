@@ -51,7 +51,6 @@ export function spannedString(s: unknown): string {
   if (s === null || s === undefined) return "";
   if (typeof s === "string") return s;
   if (s instanceof JSpannable) return s.text;
-  if (s instanceof JEditable) return s.text;
   return String(s);
 }
 function sliceSpanned(cs: unknown, start: number, end: number): unknown {
@@ -202,10 +201,9 @@ rt.register({
 // bridge (and any app-level span styling) subclasses; a Kotlin/DEX span class that
 // extends one of these needs it to link with the real AOSP superclass/interfaces so
 // instanceof checks and getSpans(SomeBase.class) filtering (used to decide "does this
-// span need a TextPaint rebuild") actually match. Nothing in our Layout engine walks
-// spans yet (see AGENTS.md "Infrastructure delivered"), so update*State/chooseHeight/
-// getSize/draw are abstract here exactly as in real Android — concrete leaf spans
-// (below, or any app-defined subclass) provide the bodies.
+// span need a TextPaint rebuild") actually match. update*State/chooseHeight/getSize/draw
+// are abstract here exactly as in real Android — concrete leaf spans (below, or any
+// app-defined subclass) provide the bodies.
 class JCharacterStyle extends JObj {}
 rt.register({
   name: "android/text/style/CharacterStyle", ctor: JCharacterStyle,
@@ -222,9 +220,8 @@ rt.register({
   sup: "android/text/style/CharacterStyle", ifaces: ["android/text/style/UpdateAppearance"],
   methods: { "<init>()V": function () {} },
 });
-// Interface only (no ParagraphStyle registered yet to extend) — gives real span
-// classes a correct type to implement for chooseHeight-based line-height adjustment,
-// even though nothing in JLayout walks it today.
+// Interface only (no ParagraphStyle registered yet to extend): the type real span classes
+// implement for the chooseHeight line-height adjustment applyLineHeightSpans applies.
 rt.register({ name: "android/text/style/LineHeightSpan", ctor: class extends JObj {} });
 class JReplacementSpan extends JMetricAffectingSpan {}
 rt.register({
@@ -676,6 +673,29 @@ function desiredWidth(cs: unknown, p: JTextPaint): number | Promise<number> {
   };
   return spans.length ? measureReplacements(cs, p, spans).then(width) : width([]);
 }
+function primaryHorizontal(this: JLayout, off: number) {
+    for (const l of this.lines) {
+      if (off >= l.start && (off < l.end || off === this.text.length)) return this.rangeWidth(l.start, this.replacements.find((s) => s.start < off && s.end > off)?.start ?? off);
+    }
+    return 0;
+}
+async function drawLayout(this: JLayout, c: JCanvas) {
+    for (let i = 0; i < this.lines.length; i++) {
+      const line = this.lines[i], end = line.start + line.text.length, baseline = this.baseline(i);
+      let position = line.start, x = 0;
+      for (const span of this.replacements) {
+        if (span.end <= position || span.start >= end) continue;
+        if (span.start > position) {
+          const text = this.text.slice(position, span.start);
+          await vcall(c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text, x, baseline, this.paint);
+          x += measureText(this.paint, text);
+        }
+        await vcall(span.span, "draw", "(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V", c, this.src, span.start, span.end, x, this.lineTop(i), baseline, this.lineTop(i + 1), span.paint);
+        x += span.width; position = span.end;
+      }
+      if (position < end) await vcall(c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", this.text.slice(position, end), x, baseline, this.paint);
+    }
+}
 const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "static getDesiredWidth(Ljava/lang/CharSequence;Landroid/text/TextPaint;)F": maySuspend((cs: unknown, p: JTextPaint) => desiredWidth(cs, p)),
   "static getDesiredWidth(Ljava/lang/CharSequence;IILandroid/text/TextPaint;)F": maySuspend((cs: unknown, s: number, e: number, p: JTextPaint) => desiredWidth(sliceSpanned(cs, s, e), p)),
@@ -721,15 +741,8 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
     for (let i = 0; i < this.lines.length; i++) if (off < this.lines[i].end || i === this.lines.length - 1) return i;
     return this.lines.length - 1;
   },
-  "getPrimaryHorizontal(I)F": function (this: JLayout, off: number) {
-    for (const l of this.lines) {
-      if (off >= l.start && (off < l.end || off === this.text.length)) return this.rangeWidth(l.start, this.replacements.find((s) => s.start < off && s.end > off)?.start ?? off);
-    }
-    return 0;
-  },
-  "getSecondaryHorizontal(I)F": function (this: JLayout, off: number) {
-    return (layoutMethods["getPrimaryHorizontal(I)F"] as (this: JLayout, o: number) => number).call(this, off);
-  },
+  "getPrimaryHorizontal(I)F": primaryHorizontal,
+  "getSecondaryHorizontal(I)F": primaryHorizontal,
   "getOffsetForHorizontal(IF)I": function (this: JLayout, line: number, x: number) {
     const l = this.lines[Math.min(line, this.lines.length - 1)];
     if (!l) return 0;
@@ -747,26 +760,8 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
     r.left = 0; r.right = this.lines[i]?.width ?? 0; r.top = this.lineTop(i); r.bottom = this.lineTop(i + 1);
     return this.baseline(i);
   },
-  "draw(Landroid/graphics/Canvas;)V": async function (this: JLayout, c: JCanvas) {
-    for (let i = 0; i < this.lines.length; i++) {
-      const line = this.lines[i], end = line.start + line.text.length, baseline = this.baseline(i);
-      let position = line.start, x = 0;
-      for (const span of this.replacements) {
-        if (span.end <= position || span.start >= end) continue;
-        if (span.start > position) {
-          const text = this.text.slice(position, span.start);
-          await vcall(c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text, x, baseline, this.paint);
-          x += measureText(this.paint, text);
-        }
-        await vcall(span.span, "draw", "(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V", c, this.src, span.start, span.end, x, this.lineTop(i), baseline, this.lineTop(i + 1), span.paint);
-        x += span.width; position = span.end;
-      }
-      if (position < end) await vcall(c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", this.text.slice(position, end), x, baseline, this.paint);
-    }
-  },
-  "draw(Landroid/graphics/Canvas;Landroid/graphics/Path;Landroid/graphics/Paint;I)V": function (this: JLayout, c: JCanvas) {
-    return (layoutMethods["draw(Landroid/graphics/Canvas;)V"] as (this: JLayout, c: JCanvas) => void).call(this, c);
-  },
+  "draw(Landroid/graphics/Canvas;)V": drawLayout,
+  "draw(Landroid/graphics/Canvas;Landroid/graphics/Path;Landroid/graphics/Paint;I)V": drawLayout,
 };
 rt.register({ name: "android/text/Layout", ctor: JLayout, methods: layoutMethods });
 
@@ -924,14 +919,15 @@ rt.register({
     "static is24HourFormat(Landroid/content/Context;)Z": () => 0,
     "static getDateFormat(Landroid/content/Context;)Ljava/text/DateFormat;": () => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "M/d/yy"),
     "static getTimeFormat(Landroid/content/Context;)Ljava/text/DateFormat;": () => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "h:mm a"),
-    "static format(Ljava/lang/CharSequence;J)Ljava/lang/CharSequence;": (fmt: unknown, t: bigint) => formatDate(String(fmt), Number(t)),
-    "static format(Ljava/lang/CharSequence;Ljava/util/Date;)Ljava/lang/CharSequence;": (fmt: unknown, d: JDate | null) => formatDate(String(fmt), d?.t ?? Date.now()),
+    "static format(Ljava/lang/CharSequence;J)Ljava/lang/CharSequence;": (fmt: unknown, t: bigint) => formatDate(spannedString(fmt), Number(t)),
+    "static format(Ljava/lang/CharSequence;Ljava/util/Date;)Ljava/lang/CharSequence;": (fmt: unknown, d: JDate | null) => formatDate(spannedString(fmt), d?.t ?? Date.now()),
   },
 });
 
 // ── android.text.format.Formatter: SI units and the 900 roll-over, as API 26+ formats them
+const BYTE_UNITS = ["B", "kB", "MB", "GB", "TB", "PB"];
 const fmtBytes = (n: bigint, short: boolean) => {
-  const units = ["B", "kB", "MB", "GB", "TB", "PB"];
+  const units = BYTE_UNITS;
   let v = Math.abs(Number(n)), i = 0;
   while (v > 900 && i < units.length - 1) { v /= 1000; i++; }
   const dec = i === 0 ? 0 : v < 1 ? 2 : v < 10 ? (short ? 1 : 2) : v < 100 ? (short ? 0 : 2) : 0;

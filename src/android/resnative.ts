@@ -381,7 +381,6 @@ function pluralString(res: Resources, id: number, n: number): string | null {
   return v ? rvString(res, res.resolveRefs(v)) : null;
 }
 
-// Theme java class
 rt.register({
   name: "android/content/res/Resources$Theme", ctor: JTheme,
   methods: {
@@ -422,7 +421,6 @@ rt.register({
 
 defineException("android/content/res/Resources$NotFoundException", "java/lang/RuntimeException");
 
-// TypedArray java class
 rt.register({
   name: "android/content/res/TypedArray", ctor: JTypedArray,
   methods: {
@@ -513,7 +511,6 @@ rt.register({
   },
 });
 
-// AttributeSet java-facing
 rt.register({
   name: "android/util/AttributeSet", ctor: class extends JObj {},
 });

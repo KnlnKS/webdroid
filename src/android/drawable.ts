@@ -1222,7 +1222,6 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
       return d;
     }
     case "animated-selector": case "transition": case "level-list": case "animation-list": {
-      // static fallback: first item
       for (const c of node.children) {
         if (c.name === "item") {
           const da = nodeAttr(res, c, AT.drawable);

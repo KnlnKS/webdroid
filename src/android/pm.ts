@@ -74,7 +74,7 @@ rt.register({ name: "android/content/pm/ComponentInfo", ctor: JComponentInfo, su
   fields: { applicationInfo: "applicationInfo", processName: "processName", enabled: "enabled", exported: "exported", directBootAware: "directBootAware" },
   methods: { "<init>()V": function () {} },
 });
-export class JActivityInfo extends JComponentInfo {
+class JActivityInfo extends JComponentInfo {
   theme = 0; configChanges = 0; screenOrientation = -1;
   parentActivityName: string | null = null;
 }
@@ -157,7 +157,7 @@ rt.register({
 });
 /** API 33 replaced every int flags parameter with a boxed long, one class per getter family.
  *  Registered from a loop, so the janitor's `name: "..."` grep cannot see these four. */
-export class JInfoFlags extends JObj { value = 0n; }
+class JInfoFlags extends JObj { value = 0n; }
 for (const n of ["ApplicationInfoFlags", "ComponentInfoFlags", "PackageInfoFlags", "ResolveInfoFlags"]) {
   const name = "android/content/pm/PackageManager$" + n;
   rt.register({

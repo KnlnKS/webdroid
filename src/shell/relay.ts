@@ -19,7 +19,7 @@ export interface RelayTransport {
 export type RelayTransportFactory = (url: string) => RelayTransport;
 const openWebSocket: RelayTransportFactory = (url) => new WebSocket(url);
 
-export interface RelayEndpoint {
+interface RelayEndpoint {
   family: "IPv4" | "IPv6";
   address: string;
   port: number;

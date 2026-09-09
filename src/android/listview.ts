@@ -5,11 +5,7 @@ import { AID } from "./res";
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
-import {
-  JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY,
-  MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize,
-  resolveSizeAndState, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById
-} from "./view";
+import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSizeAndState, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom } from "./view";
 import { JMotionEvent, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
 import { JAttrSet, obtainStyled, rvDimen, rvInt, rvString, type Resources } from "./res";
 import { attr } from "./axml";
@@ -22,6 +18,7 @@ import { JTextView } from "./textview";
 import { inflateLayout } from "./inflate";
 import { addOverlay, removeOverlay } from "./popup";
 import { device } from "../shell/config";
+import { spannedString } from "./text";
 
 for (const i of ["android/widget/Adapter", "android/widget/ListAdapter", "android/widget/SpinnerAdapter",
   "android/widget/AdapterView$OnItemClickListener", "android/widget/AdapterView$OnItemLongClickListener",
@@ -39,8 +36,7 @@ export const baseAdapterMethods: NonNullable<NativeSpec["methods"]> = {
     this.observers.push(o);
   },
   "unregisterDataSetObserver(Landroid/database/DataSetObserver;)V": function (this: JBaseAdapter, o: unknown) {
-    const i = this.observers.indexOf(o);
-    if (i >= 0) this.observers.splice(i, 1);
+    removeFrom(this.observers, o);
   },
   "notifyDataSetChanged()V": async function (this: JBaseAdapter) {
     for (const o of [...this.observers]) {
@@ -188,12 +184,12 @@ rt.register({
       return inf;
     },
     "setTitle(Ljava/lang/CharSequence;)V": function (this: JActionMode, t: unknown) {
-      this.title = t === null || t === undefined ? "" : String(t);
+      this.title = spannedString(t);
     },
     "setTitle(I)V": function (this: JActionMode, id: number) { jmethod(this, M_amSetTitle)!.call(this, amString(this, id)); },
     "getTitle()Ljava/lang/CharSequence;": function (this: JActionMode) { return this.title; },
     "setSubtitle(Ljava/lang/CharSequence;)V": function (this: JActionMode, t: unknown) {
-      this.subtitle = t === null || t === undefined ? "" : String(t);
+      this.subtitle = spannedString(t);
     },
     "setSubtitle(I)V": function (this: JActionMode, id: number) { jmethod(this, M_amSetSubtitle)!.call(this, amString(this, id)); },
     "getSubtitle()Ljava/lang/CharSequence;": function (this: JActionMode) { return this.subtitle; },
@@ -398,6 +394,20 @@ async function themeDivider(list: JListView) {
 }
 function addHeader(this: JListView, v: JView) { this.headers.push(v); this.viewsCache = null; this.dirty = true; void this.rebuild(); }
 function addFooter(this: JListView, v: JView) { this.footers.push(v); this.viewsCache = null; this.dirty = true; void this.rebuild(); }
+async function measureListView(this: JListView, wSpec: number, hSpec: number) {
+    const w = defaultSize(specSize(wSpec), wSpec);
+    const availW = Math.max(0, w - this.padL - this.padR);
+    let totalH = this.padT + this.padB;
+    for (const v of this.allViews()) {
+      const lp = v.lp;
+      await measureView(v,
+        childMeasureSpec(makeSpec(availW, MS_EXACTLY), 0, lp?.width ?? MATCH_PARENT),
+        childMeasureSpec(makeSpec(Math.max(0, specSize(hSpec)), MS_UNSPEC), 0, lp?.height ?? WRAP_CONTENT));
+      totalH += v.measuredH + this.divH;
+    }
+    this.measuredW = w;
+    this.measuredH = specMode(hSpec) === MS_EXACTLY ? specSize(hSpec) : resolveSizeAndState(totalH, hSpec);
+}
 const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JListView, c: unknown, set: JAttrSet | null) {
     await initViewFromCtx(this, c, set);
@@ -576,20 +586,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setTranscriptMode(I)V": () => {},
   "setStackFromBottom(Z)V": () => {},
   "invalidateViews()V": function (this: JListView) { this.dirty = true; void this.rebuild(); },
-  "onMeasure(II)V": async function (this: JListView, wSpec: number, hSpec: number) {
-    const w = defaultSize(specSize(wSpec), wSpec);
-    const availW = Math.max(0, w - this.padL - this.padR);
-    let totalH = this.padT + this.padB;
-    for (const v of this.allViews()) {
-      const lp = v.lp;
-      await measureView(v,
-        childMeasureSpec(makeSpec(availW, MS_EXACTLY), 0, lp?.width ?? MATCH_PARENT),
-        childMeasureSpec(makeSpec(Math.max(0, specSize(hSpec)), MS_UNSPEC), 0, lp?.height ?? WRAP_CONTENT));
-      totalH += v.measuredH + this.divH;
-    }
-    this.measuredW = w;
-    this.measuredH = specMode(hSpec) === MS_EXACTLY ? specSize(hSpec) : resolveSizeAndState(totalH, hSpec);
-  },
+  "onMeasure(II)V": measureListView,
   "onLayout(ZIIII)V": async function (this: JListView) {
     let y = this.padT;
     for (const v of this.allViews()) {
@@ -781,8 +778,7 @@ rt.register({
       return lp;
     },
     "onMeasure(II)V": function (this: JSpinnerPopup) {
-      return (listViewMethods["onMeasure(II)V"] as (this: JSpinnerPopup, w: number, h: number) => unknown)
-        .call(this, makeSpec(this.popW, MS_EXACTLY), makeSpec(this.popH, MS_AT_MOST));
+      return measureListView.call(this, makeSpec(this.popW, MS_EXACTLY), makeSpec(this.popH, MS_AT_MOST));
     },
   },
 });

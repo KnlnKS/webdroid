@@ -21,6 +21,7 @@ import { getPrefs } from "./sharedprefs";
 import { JFragment, fragMethods } from "./fragment";
 import { type JContext } from "./context";
 import { device } from "../shell/config";
+import { spannedString } from "./text";
 
 // ── attribute resolution: mirrors res.ts's own value-resolution helpers (obtainStyled etc.),
 // just driven off a raw AXML attribute instead of a styleable index. ──
@@ -132,10 +133,10 @@ const preferenceMethods: NonNullable<NativeSpec["methods"]> = {
   "getKey()Ljava/lang/String;": function (this: JPreference) { return this.keyStr; },
   "setKey(Ljava/lang/String;)V": function (this: JPreference, k: string) { this.keyStr = k; },
   "getTitle()Ljava/lang/CharSequence;": function (this: JPreference) { return this.titleStr; },
-  "setTitle(Ljava/lang/CharSequence;)V": function (this: JPreference, t: unknown) { this.titleStr = t == null ? "" : String(t); notifyChanged(this); },
+  "setTitle(Ljava/lang/CharSequence;)V": function (this: JPreference, t: unknown) { this.titleStr = spannedString(t); notifyChanged(this); },
   "setTitle(I)V": function (this: JPreference, id: number) { this.titleStr = ctxString(this.jctx, id); notifyChanged(this); },
   "getSummary()Ljava/lang/CharSequence;": function (this: JPreference) { return this.summaryStr; },
-  "setSummary(Ljava/lang/CharSequence;)V": function (this: JPreference, t: unknown) { this.summaryStr = t == null ? "" : String(t); notifyChanged(this); },
+  "setSummary(Ljava/lang/CharSequence;)V": function (this: JPreference, t: unknown) { this.summaryStr = spannedString(t); notifyChanged(this); },
   "setSummary(I)V": function (this: JPreference, id: number) { this.summaryStr = ctxString(this.jctx, id); notifyChanged(this); },
   "isEnabled()Z": function (this: JPreference) { return this.enabled ? 1 : 0; },
   "setEnabled(Z)V": function (this: JPreference, e: number) { this.enabled = !!e; notifyChanged(this); },
@@ -312,7 +313,7 @@ rt.register({ name: "android/preference/PreferenceScreen", ctor: JPreferenceScre
 rt.register({ name: "android/preference/CheckBoxPreference", ctor: JCheckBoxPreference, sup: "android/preference/Preference", methods: checkBoxMethods });
 rt.register({ name: "android/preference/ListPreference", ctor: JListPreference, sup: "android/preference/Preference", methods: listPrefMethods });
 // pure callback interfaces — apps implement these; left unregistered they'd auto-stub in
-// Runtime.link and poison downstream linking (see AGENTS.md "VM and framework lessons"),
+// Runtime.link and poison downstream linking (see "VM and framework lessons" in the implementation history),
 // same fix as dialog.ts:256.
 for (const n of ["OnPreferenceClickListener", "OnPreferenceChangeListener"]) {
   rt.register({ name: "android/preference/Preference$" + n, ctor: class extends JObj {} });

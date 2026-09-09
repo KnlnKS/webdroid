@@ -35,7 +35,7 @@ import { device, orientationForRequest, setDeviceOrientation } from "./config";
 import { restoreRoots } from "./hostfs";
 
 export let SCREEN_W = device.width, SCREEN_H = device.height;
-export const STATUS_H = device.statusBar;
+const STATUS_H = device.statusBar;
 let displayChanged = () => {};
 export function setDisplayChangeHandler(handler: () => void): void { displayChanged = handler; }
 
@@ -71,7 +71,7 @@ function launcherOrientation(root: XmlNode): number {
 }
 
 /** `?sync=1` opts into the sync tier. Off by default: see "The sync tier is worth 24x and we
- *  cannot have it yet" in AGENTS.md — the analysis is sound, our natives are not. */
+ *  cannot have it yet" in the implementation history — the analysis is sound, our natives are not. */
 const SYNC_TIER = typeof location !== "undefined" && new URLSearchParams(location.search).get("sync") === "1";
 
 interface BootedApp {

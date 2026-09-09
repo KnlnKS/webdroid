@@ -35,7 +35,7 @@ rt.register({
 class JInputDevice extends JObj {}
 class JMotionRange extends JObj { axis = 0; max = 0; }
 const touchscreen = new JInputDevice();
-export function inputDevice(id: number): JInputDevice | null {
+function inputDevice(id: number): JInputDevice | null {
   if (id !== 1) return null;
   rt.link("android/view/InputDevice");
   return touchscreen;

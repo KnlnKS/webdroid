@@ -18,10 +18,10 @@
 const DENSITY_DEFAULT = 160;
 
 /** what the shell persists a user-chosen screen under. Not app state: `wd.reset()` leaves it. */
-export const SCREEN_KEY = "wd:screen";
+const SCREEN_KEY = "wd:screen";
 
 export type Screen = { width: number; height: number; densityDpi: number };
-export type DeviceOrientation = 1 | 2; // Configuration.ORIENTATION_PORTRAIT / LANDSCAPE
+type DeviceOrientation = 1 | 2; // Configuration.ORIENTATION_PORTRAIT / LANDSCAPE
 
 /** Fixed ActivityInfo requests. Sensor/user/unspecified requests keep the display as it is. */
 export function orientationForRequest(request: number): DeviceOrientation | null {
@@ -53,7 +53,7 @@ export function parseScreen(s: string | null | undefined): Screen | null {
   return width > 0 && height > 0 && densityDpi > 0 ? { width, height, densityDpi } : null;
 }
 
-export const formatScreen = (s: Screen): string => `${s.width}x${s.height}@${s.densityDpi}`;
+const formatScreen = (s: Screen): string => `${s.width}x${s.height}@${s.densityDpi}`;
 
 /** localStorage throws outright in some privacy modes, so every touch of it is guarded. */
 export function readStoredScreen(): Screen | null {

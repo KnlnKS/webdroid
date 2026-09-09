@@ -1,17 +1,17 @@
-import { newStringSet } from "../jvm/natives/jutil";
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
 import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
-import { jarray, mangleMethod } from "../jvm/abi";
+import { jarray, mangleMethod, intBitsToFloat } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { vcall, curThread, mainThread, JThread, setCurThread, reportUncaught, JEnum, mkEnumSet, newObj } from "../jvm/natives/jlang";
 export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
+import { uiState } from "./view";
 import { mkExecutor } from "../jvm/natives/jconc";
 import { yieldToLoop } from "../native/cpu";
 import { mkFile, JInputStream, JOutputStream, vfs } from "../jvm/natives/jio";
-import { newArrayList } from "../jvm/natives/jutil";
+import { newArrayList, newStringSet } from "../jvm/natives/jutil";
 
 rt.register({
   name: "android/os/SystemProperties", ctor: class extends JObj {},
@@ -820,8 +820,6 @@ export function complexToPx(data: number, dm: { density: number; scaledDensity: 
 }
 
 // ── Choreographer (frame callbacks; shell drains queue each rAF)
-import { uiState } from "./view";
-import { intBitsToFloat } from "../jvm/abi";
 class JChoreographer extends JObj {
   // AOSP's own field, read reflectively by anything measuring frame pacing (Sentry, Matrix,
   // Flutter's FPS probe). It is the same nanos getFrameTimeNanos() answers.

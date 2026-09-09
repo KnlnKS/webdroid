@@ -17,7 +17,7 @@ import { appHost, jclsNameOf } from "./apphost";
 import { resString } from "./res";
 import { onMain } from "./mainloop";
 import { getPrefs } from "./sharedprefs";
-import { csText } from "./text";
+import { csText, spannedString } from "./text";
 import { showToast } from "./popup";
 import { newArrayList, mkIter } from "../jvm/natives/jutil";
 import { runningServices, svcStop, svcFg } from "./runningservices";
@@ -248,7 +248,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "closeOptionsMenu()V": function () {},
   "setTitle(Ljava/lang/CharSequence;)V": function (this: JActivity, t: unknown) {
-    this.titleStr = String(t ?? "");
+    this.titleStr = spannedString(t);
     if (this.window.actionBarView) { this.window.actionBarView.titleStr = this.titleStr; invalidate(); }
   },
   "setTitle(I)V": function (this: JActivity, id: number) {
@@ -344,7 +344,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "getChangingConfigurations()I": () => 0,
   "getTaskId()I": () => 1,
   "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z": () => 0,
-  "requestPermissions([Ljava/lang/String;I)V": async function (this: JActivity, perms: string[], code: number) {
+  "requestPermissions([Ljava/lang/String;I)V": function (this: JActivity, perms: string[], code: number) {
     const granted = new Int32Array(perms.length); // all granted (0)
     setTimeout(() => {
       void vcall(this, "onRequestPermissionsResult", "(I[Ljava/lang/String;[I)V", code, perms, granted).catch(reportUncaught);
@@ -446,9 +446,7 @@ rt.register({
       toast.text = c?.$host ? resString(c.$host.res, id) : "";
       return toast;
     },
-    "show()V": async function (this: JToast) {
-      showToast(this.text);
-    },
+    "show()V": function (this: JToast) { showToast(this.text); },
     "setText(Ljava/lang/CharSequence;)V": async function (this: JToast, t: unknown) { this.text = await csText(t); },
     "setGravity(III)V": () => {},
     "setDuration(I)V": () => {},

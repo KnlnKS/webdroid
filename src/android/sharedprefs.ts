@@ -1,6 +1,7 @@
 import { JObj, rt, type NativeSpec } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { newStringSet, toJsArray } from "../jvm/natives/jutil";
+import { removeFrom } from "./view";
 
 export class JSharedPrefs extends JObj {
   name = "";
@@ -113,8 +114,7 @@ rt.register({
         function (this: JSharedPrefs, l: unknown) { this.listeners.push(l); },
       "unregisterOnSharedPreferenceChangeListener(Landroid/content/SharedPreferences$OnSharedPreferenceChangeListener;)V":
         function (this: JSharedPrefs, l: unknown) {
-          const i = this.listeners.indexOf(l);
-          if (i >= 0) this.listeners.splice(i, 1);
+          removeFrom(this.listeners, l);
         },
     };
     for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "J"], ["Float", "F"], ["Boolean", "Z"], ["StringSet", "Ljava/util/Set;"]] as const) {
