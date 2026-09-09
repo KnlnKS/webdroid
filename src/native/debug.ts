@@ -7,7 +7,7 @@ import { jniMissing, jniTrace, registered } from "./jni";
 import { Cpu, cpus, codeStats, stepMode, setStepMode, profile, slice, isA64, setA64, hasProcessExited, yieldStats, sigHandlers, watchPcs, lastFault, invalidations } from "./cpu";
 import { mainThread } from "../jvm/natives/jlang";
 import { mem } from "./mem";
-import { core } from "./core";
+import { core, jitStats } from "./core";
 import { glProbe } from "./gles1";
 import { glRing, glDebug } from "./gles3";
 import { netDebug } from "./net";
@@ -33,7 +33,7 @@ export const native = {
     finished: c.finished, pending: !!c.pending, parked: c.parked, depth: c.depth, state: c.state, frames: [...c.frames], loops: c.loops, sigLog: c.sigLog.slice(-40), signals: [...c.signals], handling: [...c.handling], sigWait: !!c.sigWait,
   })),
   calledMissing, unresolved, probed, jniMissing, registered, exited: hasProcessExited, sigHandlers: () => [...sigHandlers].map(([s, h]) => [s, symbolizePc(h.fn)]), yieldStats, killLog, futexStats: () => Object.fromEntries(futexStats),
-  blocks: codeStats,
+  blocks: codeStats, jit: jitStats,
   /** profileReset(n) also sets the slice budget: a smaller one samples the hot pcs more finely */
   profileReset: (instr = slice.instr) => { slice.instr = instr; profile.samples.clear(); },
   /** top pcs at slice boundaries, symbolised (share of all samples) */

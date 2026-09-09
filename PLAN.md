@@ -23,7 +23,7 @@ See “One build, or none” and “The delegates” in the implementation histo
 | Delegates | `src/android/delegates.ts` routes framework natives into the same graphics/resource/text implementations used by TS. `fwtest` reports current coverage and real-bytecode evidence. |
 | Regression evidence | A local `bun run e2e` writes current scores and rendered-step counts to `tests/e2e/report/report.json` and per-step diagnostics and costs to `tests/e2e/actual/`. The pre-cleanup run had known Mihon scheduler/Compose failures and variable live Harmonic content; compare against the starting commit before attributing a regression. |
 | Corpus | `bun run corpus` reports current breadth. Focused Among Us testing reaches Practice; a boot-only corpus pass does not establish gameplay. |
-| Native tier | ARM32 **and AArch64**. Among Us executes Unity/IL2CPP through a shared cold interpreter and bounded hot-block compiler. Practice on The Skeld renders and accepts joystick movement, with empty reached missing-API telemetry. Controlled gameplay remains roughly 4–9 fps; online play is unverified. See "Among Us: Practice and code-cache pressure" in the implementation history. |
+| Native tier | ARM32 **and AArch64**, in the wasm core: a Zig interpreter with a per-page decode cache and a JIT that compiles hot regions to wasm functions. Among Us executes Unity/IL2CPP through it. Practice on The Skeld renders and accepts joystick movement, with empty reached missing-API telemetry. Controlled gameplay remains roughly 4–9 fps; online play is unverified. See "Among Us: Practice and code-cache pressure" in the implementation history. |
 | Flutter | Lichess executes its ARM64 Flutter/Dart code, renders its UI, connects over verified native TLS, and accepts board and text input. A local game completed ten moves and ten replies from its bundled Fairy-Stockfish engine after allocator reuse fixes. See "Lichess: native heap reuse during computer games" in the implementation history; this does not establish every feature or account flow. |
 | Mihon | Keiyoushi repository and MangaDex installation persist. The visible catalog, search, saved library, chapter reader, page turns, and resume work. The user selected Downloads/untitled folder through Chrome's native picker, and Mihon's storage location reflects that selection; see the implementation history for reached APIs and native image-decoding evidence. |
 | Screen | a resolved **setting**, default 1080x2424 @480dpi (360x808dp). `?screen=WxH@dpi`, `WEBDROID_SCREEN`, or the shell's own panel. The gate stays pinned to each flow's goldens — see "The screen is a setting" in the implementation history |
@@ -193,8 +193,8 @@ it has been tried three ways and measured.
 ## 5. Native tier — remaining work
 
 - A64 SIMD/FP, JNI, Bionic host services, EGL/GLES3, and NDK libraries are implemented far
-  enough for Among Us Practice on The Skeld. Cold instruction families share handlers; hot
-  blocks compile after the configured threshold and are bounded by the compiled-code cache.
+  enough for Among Us Practice on The Skeld. The core interprets from a decode cache; hot
+  regions compile to wasm and the table's slots are reclaimed with a flush when it fills.
 - Practice renders and accepts movement, but gameplay is not yet smooth. Profile real play
   before changing CPU, graphics, or cache policy; preserve the hardware-oracle and cache tests.
 - Local UDP supports process-local sessions. External UDP has no relay. Native TLS uses a
@@ -205,8 +205,9 @@ it has been tried three ways and measured.
 - Thumb-2, symbol-version/ifunc support, and additional relocation formats are separate work;
   inspect actual library requirements before extending them. Unsupported relocations must
   continue to fail explicitly.
-- A different execution backend remains a measured architectural decision, not cleanup work.
-  Preserve split low/high registers, lazy compilation, shared cold handlers, and invalidation.
+- The execution backend is the wasm core: see "The wasm core" in the implementation history for
+  what was measured. Scalar FP and the vector ops still go through the interpreter fallback in
+  JIT'd regions; inline them when a profile of real play names them.
 
 ## 6. Corpus and coverage
 

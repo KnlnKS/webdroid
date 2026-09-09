@@ -2078,3 +2078,51 @@ declares its system features (a touchscreen, both orientations, a WebView) inste
 no to everything, and names its WebView provider. The login request then reaches Reddit and the
 server answers "Invalid username or password" for the test credentials, which is the app
 working. The feed itself needs an account, which this session did not have.
+
+## The wasm core
+
+The native tier's CPU and memory moved from TypeScript into a Zig core compiled to wasm32
+(`src/native/core/`). The measurements that decided the shape, and what did not work.
+
+**Why.** The JS tier's hot blocks were fast — `wd.native.bench()` quoted arm 4,196M and a64
+2,852M instr/s under bun, doodlejump sustained ~707M — but its cold A64 tier ran ~50M instr/s
+and was the whole of Lichess's 4 s native boot (200M instructions, 640k host calls), every
+64-bit op paid the split lo/hi register file, NEON was unrolled per lane in JS, and the block
+cache was bounded because `new Function` code exhausted V8's executable space. wasm has i64,
+f32, v128 and its own code space.
+
+**Shape.** The core imports the guest memory, so a guest address is a linear-memory offset and
+every `mem.u8`/`ld32`/`st32` in the host tier is unchanged; one memory starts at the 32-bit
+size and grows in place on the A64 switch, so nothing is copied at `mem.init`. The register
+file is an `extern struct` per thread in that memory (`layout()` exports the offsets; a test
+reads them) with x0..x30 as u64: the lo/hi split was a JS workaround, not something to carry.
+Interpretation is a per-page cache of decoded ops for A64 and direct decode for ARM32; the
+SIMD&FP space executes by lane through comptime element types. Hot libc (memcpy, memset,
+strlen, malloc and kin) is bound to its trampoline slot and served without leaving the core:
+Lichess's JNI_OnLoad went from 9,730 host calls to 446. A block entered 48 times becomes a
+region — the blocks reachable from it through direct branches inside the page — emitted as one
+wasm function with registers in locals and a br_table between blocks, so loops stay inside the
+function. What the emitter does not inline spills and calls the interpreter for that word, so
+semantics have one home. Batches compile synchronously where the engine allows (bun, so tests
+are deterministic) and in the background on Chrome's main thread, which refuses synchronous
+compiles past 4 KB. Region functions link into the core's imported table above its own
+entries; the page's slot map routes the dispatcher.
+
+**Measured (bun, byte-copy loop).** Interpreter: a64 208M instr/s, arm 290M. JIT: a64 3.8G,
+arm 3.8G, against the JS tier's 2.85G and 4.2G. The core is 160 KB stripped: the name section
+Zig emits by default was 1.1 MB of the 1.3 MB binary.
+
+**Parity as a test.** The test kits run every decoder program in the interpreter, then past
+the heat threshold, and demand the same register file; a program whose second interpreter run
+differs from its first (it reads the counter, or memory it rewrote) is exempt, and memory is
+put back so the test asserts on a fresh run. The sweep found the subtraction overflow flag
+using the addition formula and the reversed operands of `select` in register-specified shifts.
+
+**Negative results.** `@mulAdd` on wasm32 goes through compiler-rt's `fma` libcall and returned
+a NaN with payload 1 for finite operands in the hardware-oracle cases; the fused ops use the
+Dekker/TwoSum software form instead, which the oracle accepts. The decoded-op cache is not
+the win it looked: the direct-decoding ARM32 interpreter runs faster than the cached A64 one,
+so the cache exists for the JIT's region discovery more than for interpretation. Nothing else
+in the tree is worth wasm: graphics and text are Canvas2D-bound, SQLite and crypto are already
+native, DEX and resource parsing produce JS objects; the only right-shaped candidates (the
+synchronous digests, the box blur) have no measured cost.

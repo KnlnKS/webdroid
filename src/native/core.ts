@@ -3,6 +3,7 @@
 // and grows on the switch to a 64-bit process (mem.init), so nothing is ever copied or rebuilt.
 
 import { MEM_SIZE_A32, MEM_SIZE_A64, STACK_BASE } from "./abi";
+import { perf } from "../perf";
 
 export class NativeFault extends Error {
   pc = 0;
@@ -106,26 +107,28 @@ export function jitFlush(): void {
   nextSlot = JIT_SLOT0;
   jitStats.flushes++;
 }
-function jitLink(inst: WebAssembly.Instance, n: number): void {
+function jitLink(inst: WebAssembly.Instance, n: number, t0: number): void {
   if (nextSlot + n > TABLE_SIZE) jitFlush();
   for (let i = 0; i < n; i++) { table.set(nextSlot, inst.exports["r" + i] as (...a: unknown[]) => unknown); core.jit_install(i, nextSlot++); }
   instances.push(inst);
   core.jit_done();
+  perf.jitRegions += n; perf.jitMs += performance.now() - t0;
 }
 /** compile and link what turned hot since the last drain; called at every exit from the core */
 export function jitDrain(): void {
   if (!core.jit_pending()) return;
+  const t0 = performance.now();
   if (!jitBuf) jitBuf = core.map_pages(JIT_CAP, 0, 4096) >>> 0;
   const len = core.jit_emit(jitBuf, JIT_CAP);
   if (!len) return;
   const bytes = new Uint8Array(memory.buffer, jitBuf, len).slice(), n = core.jit_count();
   if (syncCompile !== false) {
-    try { jitLink(new WebAssembly.Instance(new WebAssembly.Module(bytes), jitImports), n); syncCompile = true; return; }
+    try { jitLink(new WebAssembly.Instance(new WebAssembly.Module(bytes), jitImports), n, t0); syncCompile = true; return; }
     catch (e) {
       if (!(e instanceof RangeError)) { core.jit_done(); throw e; }
       syncCompile = false;
     }
   }
   jitStats.async++;
-  WebAssembly.instantiate(bytes, jitImports).then(({ instance }) => jitLink(instance, n), (e) => { console.warn("[jit] compile failed:", e); core.jit_done(); });
+  WebAssembly.instantiate(bytes, jitImports).then(({ instance }) => jitLink(instance, n, t0), (e) => { console.warn("[jit] compile failed:", e); core.jit_done(); });
 }
