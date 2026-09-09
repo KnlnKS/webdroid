@@ -2,7 +2,7 @@
 // CharacterIterator, BreakIterator, Normalizer. Formatting is en-only and pattern-driven.
 
 import { rt, JObj, type NativeSpec } from "../runtime";
-import { vcall, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble } from "./jlang";
+import { vcall, vcallMaybe, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble } from "./jlang";
 import { strArray, utf8, slashName, dotName } from "../abi";
 import { mkIter } from "./jutil";
 import { JDate, JCalendar, localTz, MONTHS, DAYS, pad2 } from "./jtime";
@@ -130,7 +130,10 @@ const nfMethods: NativeSpec["methods"] = {
   "format(D)Ljava/lang/String;": function (this: JNumberFormat, v: number) { return this.fmt(v); },
   "format(J)Ljava/lang/String;": function (this: JNumberFormat, v: bigint) { return this.fmt(Number(v)); },
   "format(Ljava/lang/Object;)Ljava/lang/String;": function (this: JNumberFormat, o: unknown) {
-    return this.fmt(typeof o === "bigint" ? Number(o) : Number((o as any)?.v ?? o ?? 0));
+    if (typeof o === "number" || typeof o === "bigint") return this.fmt(Number(o));
+    if (!rt.iof(o, "java/lang/Number")) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Cannot format given Object as a Number");
+    const n = vcallMaybe(o, "doubleValue", "()D");
+    return n instanceof Promise ? n.then((v: number) => this.fmt(v)) : this.fmt(n);
   },
   "parse(Ljava/lang/String;)Ljava/lang/Number;": function (this: JNumberFormat, s: string) {
     const v = parseFloat(s.replace(/,/g, ""));
