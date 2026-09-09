@@ -147,7 +147,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unkno
   const info = C.$i;
   const rec = info.lazy![i];
   const target = rec.isStatic ? C : C.prototype;
-  const src = emitMethod(R, info.dex!, info, rec.m);
+  const src = emitMethod(R, info.dex!, info, rec.m) + `\n//# sourceURL=wd/${info.name}/${rec.name}.js`;
   const mk = new Function("C", "D", "R", "S", src);
   mk(C, R.dexLink(info.dex!), R, info.superInfo?.ctor ?? undefined);
   return target[rec.mangled];
