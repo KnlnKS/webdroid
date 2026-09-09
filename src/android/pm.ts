@@ -358,6 +358,9 @@ function matchesAction(n: XmlNode, action: string | null): boolean {
     f.children.some((a) => a.name === "action" && attrStr(a, "name") === action));
 }
 
+/** the manifest's services answering `action`, with their <meta-data> */
+export const servicesMatching = (action: string) => [...manifestServices.values()].filter((n) => matchesAction(n, action)).map((node) => ({ node, meta: metaData(node) }));
+
 function providerInfo(cls: string, pkg: string, authority: string, n: XmlNode | null, flags = 0): unknown {
   const pi = new (rt.link("android/content/pm/ProviderInfo").ctor)() as Record<string, unknown>;
   pi.name = cls;
@@ -755,6 +758,8 @@ rt.register({
       const list = newArrayList(); list.a = await Promise.all([...(this.packages.get(appHost?.pkg ?? "")?.values() ?? [])].map(copyShortcut)); return list;
     },
     "removeAllDynamicShortcuts()V": function (this: JShortcutManager) { this.packages.delete(appHost?.pkg ?? ""); },
+    "getMaxShortcutCountPerActivity()I": () => 15,
+    "isRateLimitingActive()Z": () => 0,
     "reportShortcutUsed(Ljava/lang/String;)V": (id: string) => { if (id == null) throw rt.mkThrowable("java/lang/NullPointerException", "shortcutId"); },
     "isRequestPinShortcutSupported()Z": () => 0,
   },
