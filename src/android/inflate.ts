@@ -24,12 +24,15 @@ async function createViewByName(name: string, jctx: unknown, set: JAttrSet): Pro
   // <view class="a.b.C"/> is how AOSP writes a tag whose class name is not a legal element
   // name -- an inner class, above all. The framework's own layouts use it.
   const asClass = name === "view" ? set.node?.attrs.find((a) => a.name === "class" && !a.ns)?.str : null;
-  if (asClass) clsName = asClass.replace(/\./g, "/");
+  if (asClass) clsName = asClass.replaceAll(".", "/");
   else if (name === "view" || name === "View") clsName = "android/view/View";
-  else if (name.includes(".")) clsName = name.replace(/\./g, "/");
-  // Probe the registry rather than link()ing each candidate: linking a name we do
-  // not implement auto-stubs it and reports a miss that was never real.
-  else clsName = TAG_PREFIXES.map((p) => p + name).find((n) => rt.natives.has(n)) ?? "android/widget/" + name;
+  else if (name.includes(".")) clsName = name.replaceAll(".", "/");
+  else {
+    // Probe the registry rather than link()ing each candidate: linking a name we do
+    // not implement auto-stubs it and reports a miss that was never real.
+    clsName = "android/widget/" + name;
+    for (const p of TAG_PREFIXES) if (rt.natives.has(p + name)) { clsName = p + name; break; }
+  }
   return newObj(clsName, "(Landroid/content/Context;Landroid/util/AttributeSet;)V", jctx, set);
 }
 

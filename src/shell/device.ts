@@ -571,7 +571,7 @@ async function tick0(ctx: CanvasRenderingContext2D) {
     // doFrame does: every callback here awaits, so recomputing it per callback let two
     // callbacks in the SAME frame see times hundreds of ms apart during boot.
     uiState.frameTimeNanos = BigInt(Math.floor(performance.now() * 1e6));
-    const cbs = uiState.frameCallbacks.splice(0);
+    const cbs = uiState.frameCallbacks.length ? uiState.frameCallbacks.splice(0) : [];
     for (const cb of cbs as { frame?: any; run?: any }[]) {
       try {
         if (cb.frame) await guardCall(cb.frame, M_doFrame, uiState.frameTimeNanos);
@@ -579,8 +579,8 @@ async function tick0(ctx: CanvasRenderingContext2D) {
       } catch (e) { reportUncaught(e); }
     }
 
-    for (const hook of [...uiState.animHooks]) {
-      if (!hook()) uiState.animHooks.delete(hook);
+    if (uiState.animHooks.size) {
+      for (const hook of [...uiState.animHooks]) if (!hook()) uiState.animHooks.delete(hook);
     }
     const act = booted?.stack[booted.stack.length - 1];
     const decor = act?.window.decor;

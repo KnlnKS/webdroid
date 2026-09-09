@@ -280,6 +280,13 @@ export function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v:
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": function (this: T, c: unknown, set: JAttrSet | null, dsa: number) { return init(this, c, set, dsa); },
   };
 }
+function compoundDrawables(this: JTextView) {
+  return jarray([this.drawableL, this.drawableT, this.drawableR, this.drawableB], "Landroid/graphics/drawable/Drawable;");
+}
+function compoundPadL(this: JTextView) { return this.padL + (this.drawableL ? this.drawableL.intrinsicW() + this.drawablePad : 0); }
+function compoundPadR(this: JTextView) { return this.padR + (this.drawableR ? this.drawableR.intrinsicW() + this.drawablePad : 0); }
+function compoundPadT(this: JTextView) { return this.padT + (this.drawableT ? this.drawableT.intrinsicH() + this.drawablePad : 0); }
+function compoundPadB(this: JTextView) { return this.padB + (this.drawableB ? this.drawableB.intrinsicH() + this.drawablePad : 0); }
 export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   ...textViewCtors("textViewStyle"),
   // AOSP routes every setText through the two-arg form, and that is the one apps override:
@@ -371,15 +378,13 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setCompoundDrawablesWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
   "setCompoundDrawables(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
-  "getCompoundDrawables()[Landroid/graphics/drawable/Drawable;": function (this: JTextView) {
-    return jarray([this.drawableL, this.drawableT, this.drawableR, this.drawableB], "Landroid/graphics/drawable/Drawable;");
-  },
+  "getCompoundDrawables()[Landroid/graphics/drawable/Drawable;": compoundDrawables,
   "setCompoundDrawablePadding(I)V": function (this: JTextView, p: number) { this.drawablePad = p; requestLayout(this); },
   "getCompoundDrawablePadding()I": function (this: JTextView) { return this.drawablePad; },
-  "getCompoundPaddingLeft()I": function (this: JTextView) { return this.padL + (this.drawableL ? this.drawableL.intrinsicW() + this.drawablePad : 0); },
-  "getCompoundPaddingRight()I": function (this: JTextView) { return this.padR + (this.drawableR ? this.drawableR.intrinsicW() + this.drawablePad : 0); },
-  "getCompoundPaddingTop()I": function (this: JTextView) { return this.padT + (this.drawableT ? this.drawableT.intrinsicH() + this.drawablePad : 0); },
-  "getCompoundPaddingBottom()I": function (this: JTextView) { return this.padB + (this.drawableB ? this.drawableB.intrinsicH() + this.drawablePad : 0); },
+  "getCompoundPaddingLeft()I": compoundPadL,
+  "getCompoundPaddingRight()I": compoundPadR,
+  "getCompoundPaddingTop()I": compoundPadT,
+  "getCompoundPaddingBottom()I": compoundPadB,
   // the factories only matter to a TextView that hands its buffer to the app (emoji2 wraps
   // them to intercept the Editable); kept so getters round-trip
   "setEditableFactory(Landroid/text/Editable$Factory;)V": function (this: JTextView, f: unknown) { this.editableFactory = f; },
@@ -397,9 +402,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getKeyListener()Landroid/text/method/KeyListener;": function (this: JTextView) { return this.keyListener; },
   "setMovementMethod(Landroid/text/method/MovementMethod;)V": function (this: JTextView, m: unknown) { this.movementMethod = m; },
   "getMovementMethod()Landroid/text/method/MovementMethod;": function (this: JTextView) { return this.movementMethod; },
-  "getCompoundDrawablesRelative()[Landroid/graphics/drawable/Drawable;": function (this: JTextView) {
-    return jarray([this.drawableL, this.drawableT, this.drawableR, this.drawableB], "Landroid/graphics/drawable/Drawable;");
-  },
+  "getCompoundDrawablesRelative()[Landroid/graphics/drawable/Drawable;": compoundDrawables,
   "setCompoundDrawablesRelative(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
   "setCompoundDrawablesRelativeWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
   "setCompoundDrawablesRelativeWithIntrinsicBounds(IIII)V": function (this: JTextView, l: number, t: number, r: number, b: number) {
@@ -424,10 +427,10 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getBreakStrategy()I": function (this: JTextView) { return this.breakStrategy; },
   "setHyphenationFrequency(I)V": function (this: JTextView, h: number) { this.hyphenation = h; },
   "getHyphenationFrequency()I": function (this: JTextView) { return this.hyphenation; },
-  "getTotalPaddingLeft()I": function (this: JTextView) { return this.padL + (this.drawableL ? this.drawableL.intrinsicW() + this.drawablePad : 0); },
-  "getTotalPaddingRight()I": function (this: JTextView) { return this.padR + (this.drawableR ? this.drawableR.intrinsicW() + this.drawablePad : 0); },
-  "getTotalPaddingTop()I": function (this: JTextView) { return this.padT + (this.drawableT ? this.drawableT.intrinsicH() + this.drawablePad : 0); },
-  "getTotalPaddingBottom()I": function (this: JTextView) { return this.padB + (this.drawableB ? this.drawableB.intrinsicH() + this.drawablePad : 0); },
+  "getTotalPaddingLeft()I": compoundPadL,
+  "getTotalPaddingRight()I": compoundPadR,
+  "getTotalPaddingTop()I": compoundPadT,
+  "getTotalPaddingBottom()I": compoundPadB,
   "isHorizontallyScrollable()Z": () => 0,
   "setWidth(I)V": function (this: JTextView, w: number) { this.minW = w; this.maxW = w; requestLayout(this); },
   "setMinEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.paintT.textSize); },
@@ -447,7 +450,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   // AOSP: an explicit line height is applied as extra spacing over the font's own line height
   "setLineHeight(I)V": function (this: JTextView, h: number) { this.lineSpacingMult = 1; this.lineSpacingExtra = h - this.lineHeight() + this.lineSpacingExtra; requestLayout(this); },
   "setLineHeight(IF)V": function (this: JTextView, unit: number, h: number) {
-    const px = unit === 1 ? h * device.density : unit === 2 ? h * device.density : h;
+    const px = unit === 1 || unit === 2 ? h * device.density : h;
     this.lineSpacingMult = 1; this.lineSpacingExtra = px - this.lineHeight() + this.lineSpacingExtra; requestLayout(this);
   },
   "setFirstBaselineToTopHeight(I)V": function (this: JTextView, h: number) {
@@ -551,9 +554,9 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       if (finalAvail < availText) this.lines = this.wrap(finalAvail);
     }
     const lineCount = Math.max(this.lines.length, display || this.hint ? 1 : 0, this.minLinesV);
-    const dHeights = [this.drawableL ? this.drawableL.intrinsicH() : 0, this.drawableR ? this.drawableR.intrinsicH() : 0];
-    let h = this.textHeight(lineCount) + this.padT + this.padB + dtH;
-    h = Math.max(h, this.minH, ...dHeights.map((x) => x + this.padT + this.padB));
+    const vPad = this.padT + this.padB;
+    let h = this.textHeight(lineCount) + vPad + dtH;
+    h = Math.max(h, this.minH, (this.drawableL ? this.drawableL.intrinsicH() : 0) + vPad, (this.drawableR ? this.drawableR.intrinsicH() : 0) + vPad);
     this.measuredW = w;
     this.measuredH = resolveSizeAndState(h, hSpec);
     this.layoutWidthFor = w;

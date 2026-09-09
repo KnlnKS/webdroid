@@ -107,6 +107,14 @@ export class JLinearLayout extends JViewGroup {
   gravity = 48 | G.START;
   weightSum = 0;
 }
+function mainMargin(c: JView, vertical: boolean): number {
+  const m = c.lp instanceof JMarginLP ? c.lp : null;
+  return m ? (vertical ? m.marginT + m.marginB : m.marginL + m.marginR) : 0;
+}
+function crossMargin(c: JView, vertical: boolean): number {
+  const m = c.lp instanceof JMarginLP ? c.lp : null;
+  return m ? (vertical ? m.marginL + m.marginR : m.marginT + m.marginB) : 0;
+}
 export const linearMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JLinearLayout, c: unknown, set: JAttrSet | null) {
     await initViewFromCtx(this, c, set);
@@ -141,16 +149,9 @@ export const linearMethods: NativeSpec["methods"] = {
     const mainPad = vertical ? this.padT + this.padB : this.padL + this.padR;
     const crossPad = vertical ? this.padL + this.padR : this.padT + this.padB;
     const kids = this.children.filter((c) => c.visibility !== 8);
-    const mainOf = (c: JView) => (vertical ? c.measuredH : c.measuredW);
-    const crossOf = (c: JView) => (vertical ? c.measuredW : c.measuredH);
-    const marginsOf = (c: JView): [number, number] => {
-      const m = c.lp instanceof JMarginLP ? c.lp : null;
-      if (!m) return [0, 0];
-      return vertical ? [m.marginT + m.marginB, m.marginL + m.marginR] : [m.marginL + m.marginR, m.marginT + m.marginB];
-    };
     let totalMain = 0, maxCross = 0, totalWeight = 0, consumed = 0, skipped = false;
     for (const c of kids) {
-      const [mMain, mCross] = marginsOf(c);
+      const mMain = mainMargin(c, vertical), mCross = crossMargin(c, vertical);
       const weight = c.lp instanceof JLinearLP ? c.lp.weight : 0;
       const excessOnly = weight > 0 && (vertical ? c.lp!.height : c.lp!.width) === 0;
       totalWeight += weight;
@@ -161,9 +162,9 @@ export const linearMethods: NativeSpec["methods"] = {
       const used = totalWeight > 0 ? 0 : totalMain;
       if (excessOnly) { if (vertical) c.lp!.height = WRAP_CONTENT; else c.lp!.width = WRAP_CONTENT; }
       await measureChildWithMargins(this, c, wSpec, vertical ? 0 : used, hSpec, vertical ? used : 0);
-      if (excessOnly) { if (vertical) c.lp!.height = 0; else c.lp!.width = 0; consumed += mainOf(c); }
-      totalMain += mainOf(c) + mMain;
-      maxCross = Math.max(maxCross, crossOf(c) + mCross);
+      if (excessOnly) { if (vertical) c.lp!.height = 0; else c.lp!.width = 0; consumed += vertical ? c.measuredH : c.measuredW; }
+      totalMain += (vertical ? c.measuredH : c.measuredW) + mMain;
+      maxCross = Math.max(maxCross, (vertical ? c.measuredW : c.measuredH) + mCross);
     }
     const size = resolveSizeAndState(totalMain + mainPad, mainSpec);
     let excess = size - totalMain - mainPad + consumed;
@@ -171,18 +172,18 @@ export const linearMethods: NativeSpec["methods"] = {
       let wsum = this.weightSum > 0 ? this.weightSum : totalWeight;
       totalMain = 0;
       for (const c of kids) {
-        const [mMain, mCross] = marginsOf(c);
+        const mMain = mainMargin(c, vertical), mCross = crossMargin(c, vertical);
         const weight = c.lp instanceof JLinearLP ? c.lp.weight : 0;
         if (weight > 0) {
           const share = Math.trunc(weight * excess / wsum);
           excess -= share; wsum -= weight;
           const dim = vertical ? c.lp!.height : c.lp!.width;
-          const target = Math.max(0, (dim === 0 ? 0 : mainOf(c)) + share);
+          const target = Math.max(0, (dim === 0 ? 0 : vertical ? c.measuredH : c.measuredW) + share);
           const crossSpec = childMeasureSpec(vertical ? wSpec : hSpec, crossPad + mCross, vertical ? c.lp!.width : c.lp!.height);
           await measureView(c, vertical ? crossSpec : makeSpec(target, MS_EXACTLY), vertical ? makeSpec(target, MS_EXACTLY) : crossSpec);
         }
-        totalMain += mainOf(c) + mMain;
-        maxCross = Math.max(maxCross, crossOf(c) + mCross);
+        totalMain += (vertical ? c.measuredH : c.measuredW) + mMain;
+        maxCross = Math.max(maxCross, (vertical ? c.measuredW : c.measuredH) + mCross);
       }
     }
     const finalCross = resolveSizeAndState(Math.max(maxCross + crossPad, vertical ? this.minW : this.minH), vertical ? wSpec : hSpec);
@@ -191,8 +192,7 @@ export const linearMethods: NativeSpec["methods"] = {
     for (const c of kids) {
       const crossDim = vertical ? c.lp?.width ?? WRAP_CONTENT : c.lp?.height ?? WRAP_CONTENT;
       if (crossDim === MATCH_PARENT) {
-        const mlp = c.lp instanceof JMarginLP ? c.lp : null;
-        const mCross = mlp ? (vertical ? mlp.marginL + mlp.marginR : mlp.marginT + mlp.marginB) : 0;
+        const mCross = crossMargin(c, vertical);
         const cw = Math.max(0, (vertical ? this.measuredW : this.measuredH) - crossPad - mCross);
         await measureView(c,
           vertical ? makeSpec(cw, MS_EXACTLY) : makeSpec(Math.max(0, c.measuredW), MS_EXACTLY),
@@ -204,10 +204,7 @@ export const linearMethods: NativeSpec["methods"] = {
     const vertical = this.orientation === 1;
     const kids = this.children.filter((c) => c.visibility !== 8);
     let used = 0;
-    for (const c of kids) {
-      const mlp = c.lp instanceof JMarginLP ? c.lp : null;
-      used += (vertical ? c.measuredH : c.measuredW) + (mlp ? (vertical ? mlp.marginT + mlp.marginB : mlp.marginL + mlp.marginR) : 0);
-    }
+    for (const c of kids) used += (vertical ? c.measuredH : c.measuredW) + mainMargin(c, vertical);
     const gm = this.gravity;
     let pos = vertical
       ? (gravityV(gm) === 16 ? this.padT + ((this.height() - this.padT - this.padB - used) >> 1)
@@ -526,6 +523,7 @@ class JRelativeLayout extends JViewGroup {
   rlPos = new Map<JView, { l: number; t: number }>();
   gravityR = 0;
 }
+const NO_MARGIN = { marginL: 0, marginT: 0, marginR: 0, marginB: 0 };
 const relativeMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JRelativeLayout, c: unknown, set: JAttrSet | null) {
     await initViewFromCtx(this, c, set);
@@ -562,10 +560,11 @@ const relativeMethods: NativeSpec["methods"] = {
     pos.clear();
     const byId = new Map<number, JView>();
     for (const c of kids) if (c.idNum > 0) byId.set(c.idNum, c);
+    const anchorPos = (v: JView) => pos.get(v) ?? { l: v.left, t: v.top };
     let maxR = 0, maxB = 0;
     for (const c of kids) {
       const lp = c.lp instanceof JRelativeLP ? c.lp : null;
-      const m = c.lp instanceof JMarginLP ? c.lp : new JMarginLP();
+      const m = c.lp instanceof JMarginLP ? c.lp : NO_MARGIN;
       let l = this.padL + m.marginL;
       let t = this.padT + m.marginT;
       if (lp) {
@@ -573,7 +572,6 @@ const relativeMethods: NativeSpec["methods"] = {
           const id = lp.rules.get(verb);
           return id && id > 0 ? byId.get(id) ?? null : null;
         };
-        const anchorPos = (v: JView) => pos.get(v) ?? { l: v.left, t: v.top };
         if (lp.rules.get(RL.ALIGN_PARENT_RIGHT)) l = availW - this.padR - c.measuredW - m.marginR;
         if (lp.rules.get(RL.CENTER_HORIZONTAL) || lp.rules.get(RL.CENTER_IN_PARENT)) l = (availW - c.measuredW) >> 1;
         if (lp.rules.get(RL.ALIGN_PARENT_BOTTOM)) t = availH - this.padB - c.measuredH - m.marginB;
@@ -605,7 +603,7 @@ const relativeMethods: NativeSpec["methods"] = {
     this.measuredH = resolveSizeAndState(maxB + this.padB, hSpec);
     for (const c of kids) {
       if (c.lp?.width === MATCH_PARENT || c.lp?.height === MATCH_PARENT) {
-        const m = c.lp instanceof JMarginLP ? c.lp : new JMarginLP();
+        const m = c.lp instanceof JMarginLP ? c.lp : NO_MARGIN;
         const w = c.lp.width === MATCH_PARENT ? this.measuredW - this.padL - this.padR - m.marginL - m.marginR : c.measuredW;
         const h = c.lp.height === MATCH_PARENT ? this.measuredH - this.padT - this.padB - m.marginT - m.marginB : c.measuredH;
         await measureView(c, makeSpec(Math.max(0, w), MS_EXACTLY), makeSpec(Math.max(0, h), MS_EXACTLY));

@@ -405,12 +405,8 @@ const paintMethods: NativeSpec["methods"] = {
   "getTypeface()Landroid/graphics/Typeface;": function (this: JPaint) { return this.tf; },
   "setTextAlign(Landroid/graphics/Paint$Align;)V": function (this: JPaint, a: { ord: number }) { this.textAlignN = a?.ord ?? 0; },
   "getTextAlign()Landroid/graphics/Paint$Align;": function (this: JPaint) { return paintAlignEnum[this.textAlignN]; },
-  "setStrokeCap(Landroid/graphics/Paint$Cap;)V": function (this: JPaint, c: { ord: number }) {
-    this.strokeCapN = (["butt", "round", "square"] as const)[c?.ord ?? 0];
-  },
-  "setStrokeJoin(Landroid/graphics/Paint$Join;)V": function (this: JPaint, j: { ord: number }) {
-    this.strokeJoinN = (["miter", "round", "bevel"] as const)[j?.ord ?? 0];
-  },
+  "setStrokeCap(Landroid/graphics/Paint$Cap;)V": function (this: JPaint, c: { ord: number }) { this.strokeCapN = CAPS[c?.ord ?? 0]; },
+  "setStrokeJoin(Landroid/graphics/Paint$Join;)V": function (this: JPaint, j: { ord: number }) { this.strokeJoinN = JOINS[j?.ord ?? 0]; },
   "setStrokeMiter(F)V": function () {},
   "setShader(Landroid/graphics/Shader;)Landroid/graphics/Shader;": function (this: JPaint, s: JShader | null) {
     this.shader = s?.grad ?? null;
@@ -878,13 +874,13 @@ rt.register({
       return 1;
     },
     "mapRect(Landroid/graphics/RectF;)Z": function (this: JMatrix, r: JRectF) {
-      const m = this.m;
-      const pts = [[r.left, r.top], [r.right, r.top], [r.left, r.bottom], [r.right, r.bottom]]
-        .map(([x, y]) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]);
-      r.left = Math.min(...pts.map((p) => p[0]));
-      r.right = Math.max(...pts.map((p) => p[0]));
-      r.top = Math.min(...pts.map((p) => p[1]));
-      r.bottom = Math.max(...pts.map((p) => p[1]));
+      const m = this.m, l = r.left, t = r.top, rt_ = r.right, b = r.bottom;
+      const x0 = m[0] * l + m[2] * t + m[4], y0 = m[1] * l + m[3] * t + m[5];
+      const x1 = m[0] * rt_ + m[2] * t + m[4], y1 = m[1] * rt_ + m[3] * t + m[5];
+      const x2 = m[0] * l + m[2] * b + m[4], y2 = m[1] * l + m[3] * b + m[5];
+      const x3 = m[0] * rt_ + m[2] * b + m[4], y3 = m[1] * rt_ + m[3] * b + m[5];
+      r.left = Math.min(x0, x1, x2, x3); r.right = Math.max(x0, x1, x2, x3);
+      r.top = Math.min(y0, y1, y2, y3); r.bottom = Math.max(y0, y1, y2, y3);
       return 1;
     },
     "mapPoints([F)V": function (this: JMatrix, pts: Float32Array) {
@@ -1125,9 +1121,10 @@ function aboutPivot(ctx: JCanvas["ctx"], px: number, py: number, f: () => void) 
   ctx.translate(px, py); f(); ctx.translate(-px, -py);
 }
 function clipRect(this: JCanvas, l: number, t: number, r: number, b: number) {
-  const p = new Path2D();
-  p.rect(l, t, r - l, b - t);
-  this.ctx.clip(p);
+  const ctx = this.ctx;
+  ctx.beginPath();
+  ctx.rect(l, t, r - l, b - t);
+  ctx.clip();
   return 1;
 }
 function drawRect(this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
@@ -1341,6 +1338,8 @@ export const canvasMethods: NativeSpec["methods"] = {
   },
 };
 const drawColorKey = mangleMethod("drawColor", "(I)V");
+export const CAPS = ["butt", "round", "square"] as const;
+export const JOINS = ["miter", "round", "bevel"] as const;
 function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
   const ctx = cv.ctx;
   ctx.font = p.font();
@@ -1351,7 +1350,7 @@ function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
   ctx.fillText(s, x, y);
   if (p.letterSpacingEm && "letterSpacing" in ctx) (ctx as any).letterSpacing = "0px";
   if (p.underline) {
-    const w = ctx.measureText(s).width;
+    const w = measureText(p, s);
     const sx = p.textAlignN === 1 ? x - w / 2 : p.textAlignN === 2 ? x - w : x;
     ctx.fillRect(sx, y + p.textSize * 0.08, w, Math.max(1, p.textSize / 16));
   }

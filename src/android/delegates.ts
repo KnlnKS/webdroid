@@ -18,7 +18,7 @@ import { handle, deref, replace, release } from "./handles";
 import {
   JPaint, JTypeface, tfDefault, mkTypeface, measureText,
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
-  JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, colorLongOfArgb, affineFromPoints,
+  JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, colorLongOfArgb, affineFromPoints, CAPS, JOINS,
 } from "./graphics";
 import { newObj } from "../jvm/natives/jlang";
 import { charsToString, floatToIntBits } from "../jvm/abi";
@@ -185,10 +185,10 @@ delegate("android/graphics/Matrix", {
   },
   "nMapRect(JLandroid/graphics/RectF;Landroid/graphics/RectF;)Z": (h: bigint, dst: Rect, src: Rect) => {
     const m = deref<Mat>(h);
-    const pts = [[src.left, src.top], [src.right, src.top], [src.right, src.bottom], [src.left, src.bottom]]
-      .map(([x, y]) => mapPoint(m, x, y));
-    dst.left = Math.min(...pts.map((p) => p[0])); dst.right = Math.max(...pts.map((p) => p[0]));
-    dst.top = Math.min(...pts.map((p) => p[1])); dst.bottom = Math.max(...pts.map((p) => p[1]));
+    const [x0, y0] = mapPoint(m, src.left, src.top), [x1, y1] = mapPoint(m, src.right, src.top);
+    const [x2, y2] = mapPoint(m, src.right, src.bottom), [x3, y3] = mapPoint(m, src.left, src.bottom);
+    dst.left = Math.min(x0, x1, x2, x3); dst.right = Math.max(x0, x1, x2, x3);
+    dst.top = Math.min(y0, y1, y2, y3); dst.bottom = Math.max(y0, y1, y2, y3);
     return isIdentity(m) || (m[1] === 0 && m[3] === 0) ? 1 : 0;
   },
   "nSetRectToRect(JLandroid/graphics/RectF;Landroid/graphics/RectF;I)Z": (h: bigint, src: Rect, dst: Rect, stf: number) => {
@@ -259,8 +259,6 @@ delegate("android/graphics/Typeface", {
 // resolution and the letter spacing, and this is the same state under AOSP's names.
 const paint = (h: bigint) => deref<JPaint>(h);
 
-const CAPS = ["butt", "round", "square"] as const;
-const JOINS = ["miter", "round", "bevel"] as const;
 /** the boolean flag setters AOSP spells one per flag beside nSetFlags */
 function flag(set: (p: JPaint, v: boolean) => void) {
   return (h: bigint, v: number) => set(paint(h), !!v);

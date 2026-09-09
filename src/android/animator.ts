@@ -135,13 +135,22 @@ async function readAnimProp(target: unknown, prop: string): Promise<number> {
 const VIEW_ANIM_PROPS: Record<string, keyof JView & ("alphaV" | "translationX" | "translationY" | "scaleXv" | "scaleYv" | "rotationV")> = {
   alpha: "alphaV", translationX: "translationX", translationY: "translationY", scaleX: "scaleXv", scaleY: "scaleYv", rotation: "rotationV",
 };
+const setterDescs = new WeakMap<object, Map<string, string>>();
 async function applyAnimProp(target: unknown, prop: string, v: number) {
   const field = VIEW_ANIM_PROPS[prop];
   if (field && target instanceof JView) { target[field] = v; return; }
   const setter = "set" + prop[0].toUpperCase() + prop.slice(1);
-  try { await vcall(target, setter, "(F)V", v); }
+  const ctor = (target as { constructor?: object } | null)?.constructor;
+  let descs = ctor && setterDescs.get(ctor);
+  if (ctor && !descs) setterDescs.set(ctor, (descs = new Map()));
+  const known = descs?.get(prop);
+  if (known) {
+    try { await vcall(target, setter, known, known === "(I)V" ? Math.round(v) : v); } catch { /* */ }
+    return;
+  }
+  try { await vcall(target, setter, "(F)V", v); descs?.set(prop, "(F)V"); }
   catch {
-    try { await vcall(target, setter, "(I)V", Math.round(v)); } catch { /* */ }
+    try { await vcall(target, setter, "(I)V", Math.round(v)); descs?.set(prop, "(I)V"); } catch { /* */ }
   }
 }
 /** one value = animate from the property's current value to it (AOSP: from is read at start) */

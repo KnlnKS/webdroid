@@ -13,6 +13,7 @@ export const ST = {
   focused: 0x0101009c, activated: 0x010102fe, window_focused: 0x0101009d, checkable: 0x0101009f,
   hovered: 0x01010367,
 };
+const ST_IDS = new Set(Object.values(ST));
 
 export class JDrawable extends JObj {
   bounds = new JRect();
@@ -259,36 +260,48 @@ function drawNinePatch(
   sw: number, sh: number, xDivs: number[], yDivs: number[],
   dx: number, dy: number, dw: number, dh: number,
 ) {
-  // build segments [start, end, stretchable]
-  const segs = (divs: number[], total: number) => {
-    const out: [number, number, boolean][] = [];
-    let pos = 0, stretch = false;
-    const pts = [...divs, total];
-    for (const p of pts) {
-      if (p > pos) out.push([pos, p, stretch]);
-      pos = p;
-      stretch = !stretch;
-    }
-    return out;
-  };
-  const xs = segs(xDivs, sw), ys = segs(yDivs, sh);
-  const fixedW = xs.filter((s) => !s[2]).reduce((a, s) => a + s[1] - s[0], 0);
-  const stretchW = xs.filter((s) => s[2]).reduce((a, s) => a + s[1] - s[0], 0) || 1;
-  const fixedH = ys.filter((s) => !s[2]).reduce((a, s) => a + s[1] - s[0], 0);
-  const stretchH = ys.filter((s) => s[2]).reduce((a, s) => a + s[1] - s[0], 0) || 1;
+  const { xs, ys, fixedW, stretchW, fixedH, stretchH } = ninePatchSegs(xDivs, yDivs, sw, sh);
   const xScale = Math.max(0, dw - fixedW) / stretchW;
   const yScale = Math.max(0, dh - fixedH) / stretchH;
   let destY = dy;
-  for (const [y0, y1, sy] of ys) {
-    const segH = sy ? (y1 - y0) * yScale : y1 - y0;
+  for (let j = 0; j < ys.length; j += 3) {
+    const y0 = ys[j], y1 = ys[j + 1];
+    const segH = ys[j + 2] ? (y1 - y0) * yScale : y1 - y0;
     let destX = dx;
-    for (const [x0, x1, sx] of xs) {
-      const segW = sx ? (x1 - x0) * xScale : x1 - x0;
+    for (let i = 0; i < xs.length; i += 3) {
+      const x0 = xs[i], x1 = xs[i + 1];
+      const segW = xs[i + 2] ? (x1 - x0) * xScale : x1 - x0;
       if (segW > 0 && segH > 0) ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0, destX, destY, segW, segH);
       destX += segW;
     }
     destY += segH;
   }
+}
+interface NinePatchSegs { sw: number; sh: number; xs: number[]; ys: number[]; fixedW: number; stretchW: number; fixedH: number; stretchH: number }
+const ninePatchSegCache = new WeakMap<number[], NinePatchSegs>();
+function ninePatchSegs(xDivs: number[], yDivs: number[], sw: number, sh: number): NinePatchSegs {
+  let s = ninePatchSegCache.get(xDivs);
+  if (!s || s.sw !== sw || s.sh !== sh) {
+    const xs: number[] = [], ys: number[] = [];
+    const [fixedW, stretchW] = segments(xDivs, sw, xs);
+    const [fixedH, stretchH] = segments(yDivs, sh, ys);
+    ninePatchSegCache.set(xDivs, (s = { sw, sh, xs, ys, fixedW, stretchW, fixedH, stretchH }));
+  }
+  return s;
+}
+/** [start, end, stretchable] triples into `out`; returns the fixed and stretchable extents */
+function segments(divs: number[], total: number, out: number[]): [number, number] {
+  let pos = 0, stretch = 0, fixed = 0, stretched = 0;
+  for (let i = 0; i <= divs.length; i++) {
+    const p = i < divs.length ? divs[i] : total;
+    if (p > pos) {
+      out.push(pos, p, stretch);
+      if (stretch) stretched += p - pos; else fixed += p - pos;
+    }
+    pos = p;
+    stretch ^= 1;
+  }
+  return [fixed, stretched || 1];
 }
 /** parse npTc chunk from a compiled 9-patch png */
 function parseNinePatchChunk(png: Uint8Array): { xDivs: number[]; yDivs: number[]; padding: number[] } | null {
@@ -1085,7 +1098,7 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
         const states: number[] = [], neg: number[] = [];
         let child: JDrawable | null = null;
         for (const a of c.attrs) {
-          if (a.resId >= 0x0101009c && a.resId <= 0x010102fe && Object.values(ST).includes(a.resId)) {
+          if (ST_IDS.has(a.resId)) {
             (a.data ? states : neg).push(a.resId);
           } else if (a.resId === AT.drawable) {
             child = await loadDrawableRV(res, attrRV(res, a), theme);
@@ -1329,7 +1342,7 @@ function parseCslXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): J
     const states: number[] = [], neg: number[] = [];
     let color = -16777216, alphaMul = 1;
     for (const a of c.attrs) {
-      if (Object.values(ST).includes(a.resId)) (a.data ? states : neg).push(a.resId);
+      if (ST_IDS.has(a.resId)) (a.data ? states : neg).push(a.resId);
       else if (a.resId === AT.color) {
         let v: RV | null = attrRV(res, a);
         if (v.t === TV.ATTRIBUTE) v = theme?.lookup(v.d) ?? null;
