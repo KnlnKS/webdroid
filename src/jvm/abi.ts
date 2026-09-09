@@ -42,6 +42,7 @@ export function mangleMethod(name: string, desc: string): string {
   return m;
 }
 const demangled = new Map<string, [string, string]>();
+export const demangle = (mangled: string): [string, string] | undefined => demangled.get(mangled);
 /** a reflect.Proxy materialises a method on first use; set by jreflect, consulted by jmethod */
 export const lateMethod = { find: null as ((o: unknown, name: string, desc: string) => JMethod | undefined) | null };
 

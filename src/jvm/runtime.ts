@@ -6,7 +6,7 @@
 // present when virtual dispatch happens.
 
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
-import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName } from "./abi";
+import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle } from "./abi";
 import { compileClassSource, compileLazyMethod, methodKey, type CompiledCtor } from "./compiler";
 import { isBytecode } from "./provenance";
 import { perf } from "../perf";
@@ -704,7 +704,8 @@ export class Runtime {
         return this.mkThrowable("java/lang/NullPointerException", m);
       }
       if (/is not a function/.test(m)) {
-        this.noteMissing(m);
+        const nd = demangle(/\.(\S+) is not a function/.exec(m)?.[1] ?? "");
+        this.noteMissing(nd ? `${nd[0]}${nd[1]} is not a function` : m);
         return this.mkThrowable("java/lang/NoSuchMethodError", m);
       }
     }
