@@ -707,6 +707,7 @@ rt.register({
 rt.register({ name: "android/graphics/PathEffect", ctor: class extends JObj {} });
 rt.register({ name: "android/graphics/CornerPathEffect", ctor: class extends JObj {}, sup: "android/graphics/PathEffect",
   methods: { "<init>(F)V": function () {} } });
+mkEnumSet("android/graphics/BlurMaskFilter$Blur", ["NORMAL", "SOLID", "OUTER", "INNER"]);
 
 class JShader extends JObj {
   grad: CanvasGradient | CanvasPattern | null = null;
@@ -737,9 +738,27 @@ export const argbOfColorLong = (v: bigint) => Number(BigInt.asUintN(32, v >> 32n
 export const colorLongOfArgb = (c: number) => BigInt.asIntN(64, BigInt(c >>> 0) << 32n);
 
 function gradientStops(g: CanvasGradient, colors: ArrayLike<number>, stops: ArrayLike<number> | null): CanvasGradient {
+  if (colors.length < 2 || (stops && stops.length !== colors.length)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid gradient colors or positions");
   for (let i = 0; i < colors.length; i++) g.addColorStop(stops ? stops[i] : i / (colors.length - 1), cssColor(colors[i]));
   return g;
 }
+rt.register({
+  name: "android/graphics/SweepGradient", ctor: class extends JShader {}, sup: "android/graphics/Shader",
+  methods: {
+    "<init>(FFII)V": function (this: JShader, x: number, y: number, a: number, b: number) {
+      this.grad = gradientStops(measureCtx().createConicGradient(0, x, y), [a, b], null);
+    },
+    "<init>(FF[I[F)V": function (this: JShader, x: number, y: number, colors: Int32Array, stops: Float32Array | null) {
+      this.grad = gradientStops(measureCtx().createConicGradient(0, x, y), colors, stops);
+    },
+    "<init>(FFJJ)V": function (this: JShader, x: number, y: number, a: bigint, b: bigint) {
+      this.grad = gradientStops(measureCtx().createConicGradient(0, x, y), [argbOfColorLong(a), argbOfColorLong(b)], null);
+    },
+    "<init>(FF[J[F)V": function (this: JShader, x: number, y: number, colors: BigInt64Array, stops: Float32Array | null) {
+      this.grad = gradientStops(measureCtx().createConicGradient(0, x, y), Array.from(colors, argbOfColorLong), stops);
+    },
+  },
+});
 rt.register({
   name: "android/graphics/LinearGradient", ctor: class extends JShader {}, sup: "android/graphics/Shader",
   methods: {
