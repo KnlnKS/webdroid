@@ -425,7 +425,10 @@ export class Cpu {
   }
   private trap(e: unknown): NativeFault {
     if (e instanceof NativeFault) return e;
-    const f = new NativeFault(`[native] ${e instanceof Error ? e.message : String(e)} @ ${symbolizeHook(this.bpc)} (block 0x${this.bpc.toString(16)}, ${this.name})`);
+    this.snapshot();
+    // the wasm frame (region function and byte offset) says which emitted code trapped
+    const frame = e instanceof Error ? /wasm-function\[\d+\]:0x[0-9a-f]+/.exec(e.stack ?? "") : null;
+    const f = new NativeFault(`[native] ${e instanceof Error ? e.message : String(e)}${frame ? ` in ${frame[0]}` : ""} @ ${symbolizeHook(this.bpc)} (block 0x${this.bpc.toString(16)}, ${this.name})`);
     f.pc = this.bpc;
     return f;
   }
@@ -454,8 +457,12 @@ export class Cpu {
     const x = (i: number) => (this.w[2 * i + 1] ? (this.w[2 * i + 1] >>> 0).toString(16) + "_" : "") + (this.w[2 * i] >>> 0).toString(16).padStart(this.w[2 * i + 1] ? 8 : 1, "0");
     console.log(`[watch-native] ${this.name} ${symbolizeHook(this.pc)} x0..x7=${[0, 1, 2, 3, 4, 5, 6, 7].map(x).join(" ")} lr=${symbolizeHook(this.lr >>> 0)}`);
   }
-  fault(msg: string): never {
+  /** the register file at the first fault, for wd.native.lastFault */
+  private snapshot(): void {
     if (!lastFault.regs) lastFault.regs = { cpu: this.name, r: [...Array(32)].map((_, i) => this.w[2 * i]), h: [...Array(32)].map((_, i) => this.w[2 * i + 1]) };
+  }
+  fault(msg: string): never {
+    this.snapshot();
     const e = new NativeFault(`[native] ${msg} @ ${symbolizeHook(this.pc)} (block 0x${this.bpc.toString(16)}, ${this.name}, lr=${symbolizeHook(this.lr >>> 0)})`);
     e.pc = this.pc;
     throw e;

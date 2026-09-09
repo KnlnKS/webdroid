@@ -47,6 +47,7 @@ export function sweep(run1: (at: number, setup: (c: Cpu) => void) => Cpu, at: nu
     expect(state(c)).toEqual(s1);
   }
   mem.u8.set(image, bot); mem.u8.set(stack, c0.stackBase);
+  core.invalidate_all(); // the image region holds the decode blocks too
   return run1(at, setup);
 }
 export function run(words: number[], setup: (c: Cpu) => void = () => {}): Cpu {

@@ -83,11 +83,21 @@ pub fn request(pc: u32, isa: Isa) void {
     request_isa[nrequests] = isa;
     nrequests += 1;
 }
+/// debug: instructions in [fb_lo, fb_hi) go to the interpreter (bisects a miscompile within a region)
+var fb_lo: u32 = 0;
+var fb_hi: u32 = 0;
+export fn jit_fallback(lo: u32, hi: u32) void {
+    fb_lo = lo;
+    fb_hi = hi;
+}
 export fn jit_pending() u32 {
     return if (in_flight) 0 else nrequests;
 }
 export fn jit_count() u32 {
     return nregions;
+}
+export fn jit_entry(i: u32) u32 {
+    return regions[i].entry;
 }
 export fn jit_stat(i: u32) u32 {
     return switch (i) {
@@ -1275,21 +1285,16 @@ fn emitRegion(b: *Buf, r: *Region, page: *cpu.Page) void {
         var j: u32 = 0;
         var ended = false;
         while (j < blk.n) : (j += 1) {
-            switch (r.isa) {
-                .a64 => {
-                    ended = e.emitOp(&page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2], pc, j + 1);
-                    pc += 4;
-                },
-                .arm => {
-                    ended = jit32.emitArm(&e, pc, j + 1);
-                    pc += 4;
-                },
-                .thumb => {
-                    const len: u32 = if ((mem.ptr(u16, pc).* & 0xf800) == 0xf000) 4 else 2;
-                    ended = jit32.emitThumb(&e, pc, j + 1);
-                    pc += len;
-                },
+            const len: u32 = if (r.isa == .thumb and (mem.ptr(u16, pc).* & 0xf800) != 0xf000) 2 else 4;
+            if (pc -% fb_lo < fb_hi -% fb_lo) {
+                e.fallback(pc, j + 1);
+                ended = false;
+            } else switch (r.isa) {
+                .a64 => ended = e.emitOp(&page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2], pc, j + 1),
+                .arm => ended = jit32.emitArm(&e, pc, j + 1),
+                .thumb => ended = jit32.emitThumb(&e, pc, j + 1),
             }
+            pc += len;
             if (ended) break;
         }
         if (!ended) e.transfer(blk.fall, if (r.isa == .thumb) pc | 1 else pc, blk.n);

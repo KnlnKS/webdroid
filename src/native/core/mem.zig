@@ -33,6 +33,7 @@ pub fn move(d: u32, s: u32, n: u32) void {
 const FREE = 0;
 const RESERVED = 1;
 const USED = 2;
+const IMAGE = 3;
 const pages: [*]u8 = @ptrFromInt(abi.KERN_BASE);
 /// bit 0: a page holding compiled code (a store into it invalidates); bit 1: never mapped
 pub const page_flags: [*]u8 = @ptrFromInt(abi.KERN_BASE + 0x10_0000);
@@ -482,7 +483,7 @@ export fn err() u32 {
 }
 /// address space for a module image: never freed. 0 with `err` set: 0x100|h (the pool holds
 /// plane h), 2 (the pool reaches the images), 3 (the heap does)
-export fn reserve(size: u32, alignment: u32) u32 {
+pub export fn reserve(size: u32, alignment: u32) u32 {
     const base = (module_bot - size) & ~(alignment - 1);
     // the pool's top units become the image's: a plane run up there moves down first
     if (pool_base != 0) {
@@ -518,6 +519,8 @@ export fn reserve(size: u32, alignment: u32) u32 {
         last_err = 3;
         return 0;
     }
+    // the image's pages stay the image's, whatever the memory is later sized to
+    @memset(pages[pageOf(base)..pageOf(module_bot)], IMAGE);
     module_bot = base;
     return base;
 }
@@ -564,6 +567,10 @@ export fn mem_init(size: u32) void {
     @memset(&S, 0);
     @memset(&L, PLANE_LO);
     @memset(pages[0..pageOf(heap_top + PAGE_SIZE - 1)], USED);
+    for (pageOf(heap_top)..MAX_PAGES) |i| if (pages[i] == IMAGE) {
+        pages[i] = FREE;
+    };
+    @import("cpu.zig").reset();
     @memset(page_flags[0..pageOf(abi.LOW)], 2);
 }
 export fn flags_ptr() u32 {

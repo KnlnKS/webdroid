@@ -132,11 +132,25 @@ pub fn decodedPage(pg: u32) ?*Page {
     const p = decoded[pg];
     return if (p == 0) null else @ptrFromInt(p);
 }
+// Decode blocks come from the image region, which the guest never owns: a block taken from
+// the arena could be written through a pointer the guest freed and kept.
+var free_blocks: [4096]u32 = undefined;
+var nfree: u32 = 0;
+fn allocBlock() u32 {
+    var p: u32 = 0;
+    if (nfree > 0) {
+        nfree -= 1;
+        p = free_blocks[nfree];
+    } else p = mem.reserve(PAGE_BLOCK, abi.PAGE_SIZE);
+    // a resized memory hands out the same addresses again: never trust a block to be clean
+    if (p != 0) @memset(mem.bytes(p)[0..PAGE_BLOCK], 0);
+    return p;
+}
 pub fn pageFor(pc: u32) ?*Page {
     const pg = pc >> abi.PAGE_SHIFT;
     var p = decoded[pg];
     if (p == 0) {
-        p = mem.map_pages(PAGE_BLOCK, 0, abi.PAGE_SIZE);
+        p = allocBlock();
         if (p == 0) return null;
         decoded[pg] = p;
         mem.page_flags[pg] |= 1;
@@ -215,7 +229,10 @@ fn dropPage(pg: u32) void {
     if (p == 0) return;
     decoded[pg] = 0;
     mem.page_flags[pg] &= ~@as(u8, 1);
-    _ = mem.unmap_pages(p, PAGE_BLOCK);
+    if (nfree < free_blocks.len) {
+        free_blocks[nfree] = p;
+        nfree += 1;
+    }
     stats.invalidated += 1;
 }
 /// a store into a page holding decoded code: the page is dropped if the word was decoded
@@ -237,6 +254,11 @@ pub export fn invalidate_range(addr: u32, size: u32) void {
 export fn invalidate_all() void {
     var pg: u32 = 0;
     while (pg < (abi.MEM_SIZE_A64 >> abi.PAGE_SHIFT)) : (pg += 1) dropPage(pg);
+}
+/// the memory was sized anew: every block address is stale
+pub fn reset() void {
+    invalidate_all();
+    nfree = 0;
 }
 export fn cpu_stat(i: u32) u32 {
     return switch (i) {

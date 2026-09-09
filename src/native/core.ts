@@ -2,7 +2,7 @@
 // into the memory it imports. One instance per process; the memory starts at the 32-bit size
 // and grows on the switch to a 64-bit process (mem.init), so nothing is ever copied or rebuilt.
 
-import { MEM_SIZE_A32, MEM_SIZE_A64, STACK_BASE } from "./abi";
+import { JIT_BUF, MEM_SIZE_A32, MEM_SIZE_A64, STACK_BASE } from "./abi";
 import { perf } from "../perf";
 
 export class NativeFault extends Error {
@@ -56,6 +56,8 @@ export interface Core {
   jit_pending(): number;
   jit_emit(out: number, cap: number): number;
   jit_count(): number;
+  jit_entry(i: number): number;
+  jit_fallback(lo: number, hi: number): void;
   jit_install(i: number, slot: number): void;
   jit_done(): void;
   jit_flush(): void;
@@ -90,15 +92,15 @@ if (core.__heap_base.value > STACK_BASE) throw new Error("[native] the core's da
 
 // ── the JIT: the core emits a module per batch of hot regions; each region function is linked
 // into the table and the core's slot maps route the dispatcher to it
-const JIT_CAP = 1 << 20;
+const JIT_CAP = 1 << 20; // the last MiB of the KERN region (abi.ts)
 const jitImports = { env: { memory, exec: core.exec_word, exec32: core.exec_word32, tx: core.tx_addr, store: core.on_store } };
-let jitBuf = 0, nextSlot = JIT_SLOT0;
+let nextSlot = JIT_SLOT0;
 /** whether this engine compiles synchronously (bun does; Chrome's main thread refuses past 4 KB) */
 let syncCompile: boolean | null = null;
 const instances: WebAssembly.Instance[] = [];
 /** entries of a block before the JIT takes it (jit.zig) */
 export const JIT_HEAT = 48;
-export const jitStats = { get regions(): number { return core.jit_stat(0); }, get batches(): number { return core.jit_stat(1); }, get skipped(): number { return core.jit_stat(2); }, get bytes(): number { return core.jit_stat(3); }, get modules(): number { return instances.length; }, flushes: 0, async: 0 };
+export const jitStats = { get regions(): number { return core.jit_stat(0); }, get batches(): number { return core.jit_stat(1); }, get skipped(): number { return core.jit_stat(2); }, get bytes(): number { return core.jit_stat(3); }, get modules(): number { return instances.length; }, flushes: 0, async: 0, on: true };
 /** every region goes: the table's slots are reclaimed and the pages re-heat */
 export function jitFlush(): void {
   core.jit_flush();
@@ -107,21 +109,26 @@ export function jitFlush(): void {
   nextSlot = JIT_SLOT0;
   jitStats.flushes++;
 }
+/** debug: only regions whose entry lies in one of the [lo, hi) ranges are installed (set __wdJit before load: bisects a miscompile) */
 function jitLink(inst: WebAssembly.Instance, n: number, t0: number): void {
   if (nextSlot + n > TABLE_SIZE) jitFlush();
-  for (let i = 0; i < n; i++) { table.set(nextSlot, inst.exports["r" + i] as (...a: unknown[]) => unknown); core.jit_install(i, nextSlot++); }
+  const jitRanges = (globalThis as { __wdJit?: [number, number][] }).__wdJit;
+  for (let i = 0; i < n; i++) {
+    const pc = core.jit_entry(i) >>> 0;
+    if (jitRanges && !jitRanges.some(([lo, hi]) => pc >= lo && pc < hi)) continue;
+    table.set(nextSlot, inst.exports["r" + i] as (...a: unknown[]) => unknown); core.jit_install(i, nextSlot++);
+  }
   instances.push(inst);
   core.jit_done();
   perf.jitRegions += n; perf.jitMs += performance.now() - t0;
 }
 /** compile and link what turned hot since the last drain; called at every exit from the core */
 export function jitDrain(): void {
-  if (!core.jit_pending()) return;
+  if (!jitStats.on || !core.jit_pending()) return;
   const t0 = performance.now();
-  if (!jitBuf) jitBuf = core.map_pages(JIT_CAP, 0, 4096) >>> 0;
-  const len = core.jit_emit(jitBuf, JIT_CAP);
+  const len = core.jit_emit(JIT_BUF, JIT_CAP);
   if (!len) return;
-  const bytes = new Uint8Array(memory.buffer, jitBuf, len).slice(), n = core.jit_count();
+  const bytes = new Uint8Array(memory.buffer, JIT_BUF, len).slice(), n = core.jit_count();
   if (syncCompile !== false) {
     try { jitLink(new WebAssembly.Instance(new WebAssembly.Module(bytes), jitImports), n, t0); syncCompile = true; return; }
     catch (e) {

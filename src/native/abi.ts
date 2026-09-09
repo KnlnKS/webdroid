@@ -16,7 +16,7 @@ export const LOW = 0x1_0000;
 const STACK_SPAN = 0x0400_0000;                // thread stacks, 1 MiB + a 64 KiB guard gap each: 60 of them
 const HOST_SPAN = 0x0008_0000;                 // host-owned guest data: __sF, _ctype_, JNI tables, static strings, program headers
 const TRAMP_SPAN = 0x0007_0000;                // host-call trampolines, 8 bytes per slot
-const KERN_SPAN = 0x00b0_0000;                 // the core's page tables (mem.zig, cpu.zig)
+const KERN_SPAN = 0x00c0_0000;                 // the core's page tables and JIT buffer (mem.zig, cpu.zig, jit.zig)
 
 export const STACK_BASE = 0x0010_0000;
 export const STACK_END = STACK_BASE + STACK_SPAN;
@@ -28,6 +28,7 @@ export const TRAMP_END = TRAMP_BASE + TRAMP_SPAN;
 export const RET_SENTINEL = TRAMP_END - 8;
 export const KERN_BASE = TRAMP_END;
 export const KERN_END = KERN_BASE + KERN_SPAN;
+export const JIT_BUF = KERN_END - 0x0010_0000;
 /** the shared region: malloc bumps up from ARENA_BASE, ELF images bump down from the end of memory */
 export const ARENA_BASE = KERN_END;
 export const MEM_SIZE_A32 = 0x1000_0000;
