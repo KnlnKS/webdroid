@@ -9,7 +9,13 @@ import { type JAttrSet, obtainStyled, rvInt, rvColor } from "./res";
 import type { JBitmap, JCanvas } from "./graphics";
 
 export class JImageView extends JView {
-  drawable: JDrawable | null = null;
+  private dr: JDrawable | null = null;
+  get drawable(): JDrawable | null { return this.dr; }
+  set drawable(d: JDrawable | null) {
+    if (this.dr) this.dr.callback = null;
+    this.dr = d;
+    if (d) d.callback = this;
+  }
   scaleType = 3; // FIT_CENTER
   adjustBounds = false;
   tintCsl: JColorStateList | null = null;

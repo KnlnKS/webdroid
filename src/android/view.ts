@@ -85,10 +85,11 @@ async function performClick(this: JView) {
   return 1;
 }
 function setBackground(this: JView, d: JDrawable | null) {
+  if (this.background) this.background.callback = null;
   this.background = d;
   // AOSP hands a fresh background the view's current state; without it a stateful drawable
   // paints its "no state at all" entry until something else happens to the view
-  if (d) void this.refreshDrawableState();
+  if (d) { d.callback = this; void this.refreshDrawableState(); }
   invalidate();
 }
 /** this view's origin in window coordinates */
