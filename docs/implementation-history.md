@@ -2023,3 +2023,58 @@ The calculatorm flow normalised its taps against a 720×1280 layout while runnin
 Compose does not scale the keypad proportionally, so the 7 tap landed on backspace. The
 calculator reaches no missing APIs or errors across the keypad, the function row, the error
 path, the history sheet, and Back.
+
+## Reddit: boot, and a login that reaches the server
+
+Reddit is a split APK (base plus `config.*` splits) with Compose screens, Cronet, Tink and
+reCAPTCHA. Getting it from a wedged boot to a login the server answers took the following,
+each verified against the app rather than assumed.
+
+**Boot.** androidx.startup's provider ran before the ones it depends on: providers are now
+started in `initOrder` order like the framework does. Activities never received
+`attachBaseContext`, so a theme lookup on the base context found nothing. The drawables and
+English strings live in the splits, whose `resources.arsc` are merged into the base table with
+their string pools remapped; the config matcher also learned regions, without which the
+pseudolocale entries won. `getResourceId` on a resolved attribute answered the value rather
+than the id it came from, which Reddit's own button style asked for. `Bundle.EMPTY`, Moshi's
+generic reflection, a real `Parcel`, `AccountManager` persistence and X.509 verification for
+Cronet's handshakes were the remaining boot blockers.
+
+**A GC storm from generated code.** With the welcome screen up, V8 spent 9.3 s of a 12 s window
+in major GCs ("allocation failure", nothing freed, heap around 590 MB of which 350 MB code
+objects for 39k compiled bodies) and tapping a text field took 14 s to connect an input session.
+The storm disappears under `--jitless`, `--no-sparkplug`, `--no-maglev` and
+`--no-flush-bytecode`; a larger old space, 1 GB of guest memory, no backgrounding, no memory
+reducer and the code-range flag change nothing. It is a flush-and-recompile loop over
+machine code, so the lever is the size of the bodies. The one change that mattered: every
+suspension point was `try { $t = await $t } finally { R.st($th) }`, a handler per call site.
+Re-pinning the thread once in the method's own catch instead leaves the same 12 s window with
+40 ms of GC, the input session connects in 1 ms, and frames more than double. Mihon's E2E
+content diff moved from 61% to 59% on the same change. The heap is still large; the sync tier
+remains the next lever, unchanged from its own section above.
+
+**Cronet responses that arrived after their timeout.** After the first body chunk nothing
+crossed the JNI boundary for 23 s while the main thread sat idle. Not epoll (its one-shot relay
+subscription re-arms), not executor starvation (no pool had a task queued behind a busy worker),
+but `BlockingQueue.add`: it was the plain list push, so a result added to a queue whose
+`poll(timeout)` was already parked waited out the whole timeout. `add`, the timed `offer` and
+the deque's `addFirst/addLast` now hand the element to a parked taker like `put` does.
+`parkNanos` parks for its real duration instead of polling every second, which had 44 coroutine
+workers waking each second.
+
+**Unsafe and protobuf.** protobuf's Android accessor reads a double field with `getLong` and a
+float with `getInt`, and rounds the offset down to a word; the offsets were table indices, so
+the rounding hit a different field and the wide read returned the raw double, which
+`Double.longBitsToDouble` then refused. Offsets stride by 8 and an access wider or narrower than
+the field's declared type moves the bits.
+
+**Login.** With the network right, Continue still failed inside the app without a request.
+Tracing every call in `com/reddit/auth` at the tap showed the login use case waiting on a
+reCAPTCHA token whose client job was already cancelled: reCAPTCHA's Tink keyset had failed at
+boot on `java.security.KeyFactory`, then `RSAPublicKeySpec`, then `BigInteger.modPow`. EC keys
+on the NIST curves, `KeyFactory` for EC and RSA specs and encodings, ECDH key agreement that
+matches WebCrypto bit for bit, and the RSA key interfaces cover that chain. The device also now
+declares its system features (a touchscreen, both orientations, a WebView) instead of answering
+no to everything, and names its WebView provider. The login request then reaches Reddit and the
+server answers "Invalid username or password" for the test credentials, which is the app
+working. The feed itself needs an account, which this session did not have.
