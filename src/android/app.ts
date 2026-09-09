@@ -609,6 +609,9 @@ for (const [name, methods, statics] of [
     "setPrimaryClip(Landroid/content/ClipData;)V": () => {},
     "getPrimaryClip()Landroid/content/ClipData;": () => null,
     "hasPrimaryClip()Z": () => 0,
+    "getPrimaryClipDescription()Landroid/content/ClipDescription;": () => null,
+    "addPrimaryClipChangedListener(Landroid/content/ClipboardManager$OnPrimaryClipChangedListener;)V": () => {},
+    "removePrimaryClipChangedListener(Landroid/content/ClipboardManager$OnPrimaryClipChangedListener;)V": () => {},
   }],
   // UI_MODE_TYPE_NORMAL: a handset, not a car/desk/TV dock (Configuration.uiMode agrees).
   // getNightMode reports the device's own setting, which is not this app's to change.
