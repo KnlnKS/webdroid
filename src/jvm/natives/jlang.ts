@@ -1338,6 +1338,8 @@ rt.register({
   },
 });
 
+/** the native tier releases a finished thread's Cpu and stack through this */
+export const threadExit = { hook: null as ((t: JThread) => void) | null };
 export class JThread extends JObj {
   jname = "Thread";
   daemon = 0;
@@ -1443,7 +1445,7 @@ rt.register({
           curThread = this;
           try { await vcall(this, "run", "()V"); }
           catch (e) { console.error("[thread " + this.jname + "]", e); }
-          finally { this.alive = 0; curThread = prev; resolve(); }
+          finally { this.alive = 0; curThread = prev; threadExit.hook?.(this); resolve(); }
         });
       });
     },

@@ -352,9 +352,9 @@ export class Runtime {
 
   /** a frame compiled sync got a promise anyway: the analysis was wrong about something it
    *  could reach. It cannot await, and handing the promise on as a value would be silent. */
-  nosusp(what: string): Error {
-    this.noteMissing(`${what} suspended in a sync frame`);
-    return this.mkThrowable("java/lang/IllegalStateException", `webdroid: ${what} suspended in a frame compiled sync`);
+  nosusp(what: string, site = ""): Error {
+    this.noteMissing(`${what} suspended in a sync frame at ${site}`);
+    return this.mkThrowable("java/lang/IllegalStateException", `webdroid: ${what} suspended in a frame compiled sync at ${site}`);
   }
 
   unimplemented(what: string): Error {

@@ -2,6 +2,7 @@
 
 import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { device } from "../shell/config";
+import { newXmlPullParser } from "./xmlpull";
 import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
 import { JTypedValue } from "./util";
@@ -651,10 +652,9 @@ rt.register({
   methods: {
     // our XmlResourceParser already implements AttributeSet
     "static asAttributeSet(Lorg/xmlpull/v1/XmlPullParser;)Landroid/util/AttributeSet;": (p: unknown) => p,
+    "static newPullParser()Lorg/xmlpull/v1/XmlPullParser;": () => newXmlPullParser(),
   },
 });
-rt.register({ name: "org/xmlpull/v1/XmlPullParser", ctor: class extends JObj {},
-  statics: { START_DOCUMENT: 0, END_DOCUMENT: 1, START_TAG: 2, END_TAG: 3, TEXT: 4 } });
 
 // Implemented by app/library code, never handed out by us — it only has to exist so a
 // class declaring `implements NamespaceContext` links instead of being auto-stubbed.

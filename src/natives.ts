@@ -40,6 +40,7 @@ import "./android/path";
 import "./android/text";
 import "./android/drawable";
 import "./android/resnative";
+import "./android/xmlpull";
 import "./android/motionevent";
 import "./android/windowinsets";
 import "./android/view";

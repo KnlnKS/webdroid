@@ -1033,6 +1033,7 @@ export const bitmapMethods: NativeSpec["methods"] = {
     "getConfig()Landroid/graphics/Bitmap$Config;": () => bitmapConfigs[3],
     "hasAlpha()Z": function (this: JBitmap) { return this.hasAlpha ? 1 : 0; },
     "setHasAlpha(Z)V": function (this: JBitmap, v: number) { this.hasAlpha = !!v; },
+    "setPremultiplied(Z)V": function (this: JBitmap, v: number) { this.premultiplied = !!v; },
     "isMutable()Z": function (this: JBitmap) { return this.immutable ? 0 : 1; },
     "getByteCount()I": function (this: JBitmap) { return this.w * this.h * 4; },
     "getAllocationByteCount()I": function (this: JBitmap) { return this.w * this.h * 4; },
