@@ -23,7 +23,7 @@ import { attachProvider } from "../android/contentresolver";
 import { APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
 import { reportUncaught, JBundle } from "../android/os";
 import { onMain, inMainJob, mainDbg } from "../android/mainloop";
-import { JView, JViewGroup, uiState, measureView, layoutView, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
+import { JView, JViewGroup, uiState, layoutPass, replayLayoutRequests, measureView, layoutView, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
 import { dispatchWindowInsets } from "../android/windowinsets";
 import { JCanvas, cssColor, tfMedium } from "../android/graphics";
@@ -630,6 +630,7 @@ async function tick0() {
       const t0 = performance.now();
       perf.layoutPasses++;
       decor.layoutRequested = true;
+      layoutPass.active = true;
       try {
         // Only blow the whole tree's cached measurements away when a caller dirtied something
         // it could not name; otherwise requestLayout(view) has already marked the path to the
@@ -660,6 +661,8 @@ async function tick0() {
         perf.layoutErrors++;
         console.error("[layout]", e);
       }
+      layoutPass.active = false;
+      replayLayoutRequests();
       perf.layoutMs += performance.now() - t0;
       uiState.needsDraw = true;
       // stateful app views (ViewPager etc.) may cache specs mid-build: settle with extra passes

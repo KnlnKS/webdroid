@@ -426,11 +426,15 @@ export const mem = {
     return base;
   },
   allocStack(size: number): { base: number; top: number } {
-    const base = freeStacks.get(size)?.pop() ?? stackTop + STACK_GUARD;
-    const top = base + size;
-    if (top > STACK_END) throw new NativeFault("[native] out of stack address space");
-    if (top > stackTop) stackTop = top;
-    return { base, top };
+    let base = freeStacks.get(size)?.pop() ?? stackTop + STACK_GUARD;
+    if (base + size > STACK_END) {
+      // the fixed span is full: a stack past it is page-mapped arena memory, so the thread count
+      // is bounded by memory, as in a process (an app's dispatcher, http and image pools alone
+      // pass sixty threads)
+      base = mem.mapPages(size + STACK_GUARD) + STACK_GUARD;
+      if (base === STACK_GUARD) throw new NativeFault("[native] out of stack address space");
+    } else if (base + size > stackTop) stackTop = base + size;
+    return { base, top: base + size };
   },
   /** a finished thread's stack goes back for the next thread of that size */
   freeStack(base: number, top: number): void { let l = freeStacks.get(top - base); if (!l) freeStacks.set(top - base, (l = [])); l.push(base); },

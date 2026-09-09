@@ -15,7 +15,7 @@ export const LOW = 0x1_0000;
 // grow toward each other (malloc bumps up, mem.reserve bumps down), which is what a process
 // does anyway. The range test flags.ts inlines into every generated load and store is derived
 // from the live size, never spelled.
-const STACK_SPAN = 0x0400_0000;                // thread stacks, 1 MiB + a 64 KiB guard gap each: 60 of them
+const STACK_SPAN = 0x0400_0000;                // thread stacks, 1 MiB + a 64 KiB guard gap each: 60 of them, then arena pages
 const HOST_SPAN = 0x0008_0000;                 // host-owned guest data: __sF, _ctype_, JNI tables, static strings, program headers
 const TRAMP_SPAN = 0x0007_0000;                // host-call trampolines, 8 bytes per slot
 

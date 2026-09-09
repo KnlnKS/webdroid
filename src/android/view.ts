@@ -43,7 +43,25 @@ export const uiState = {
    *  to all withFrameNanos awaiters, so animations desync if callbacks see different times. */
   frameTimeNanos: 0n,
 };
-export function invalidate() { perf.invalidates++; uiState.needsDraw = true; }
+export function invalidate(v?: JView) {
+  perf.invalidates++; uiState.needsDraw = true;
+  if (v) descendantInvalidated(v, v);
+}
+const M_onDescInv = mangleMethod("onDescendantInvalidated", "(Landroid/view/View;Landroid/view/View;)V");
+const M_requestLayout = mangleMethod("requestLayout", "()V");
+/**
+ * AOSP View.invalidate: parent.onDescendantInvalidated(child, target), each ViewGroup passing it
+ * up. Only an overriding ancestor needs the call (Compose's AndroidViewHolder re-records the layer
+ * its hosted view is baked into); the base walks on.
+ */
+function descendantInvalidated(child: JView, target: JView) {
+  for (let p = child.parent; p; child = p, p = p.parent) {
+    const f = jmethod(p, M_onDescInv);
+    if (f !== nativeOnDescInv) { void guardApply(f as JMethod, p, child, target); return; }
+  }
+}
+function nativeOnDescInv(this: JViewGroup, _child: JView, target: JView) { invalidate(); descendantInvalidated(this, target); }
+function nativeRequestLayout(this: JView) { requestLayout(this); }
 setInvalidateHook(invalidate);
 let focusHook: (v: JView, on: boolean) => void = () => {};
 export const setFocusHook = (h: typeof focusHook) => { focusHook = h; };
@@ -75,11 +93,29 @@ function focusMoved(v: JView, now: JView | null) {
 export function requestLayout(v?: JView | null) {
   uiState.needsLayout = true; uiState.needsDraw = true; uiState.settle = 3;
   if (!v) { uiState.forceAll = true; return; }
+  if (layoutPass.active) layoutPass.requesters.push(v);
   for (let p: JView | null = v; p; p = p.parent) {
     if (p.layoutRequested) break;
     p.layoutRequested = true;
     p.oldWSpec = -1;
+    // AOSP calls the parent's requestLayout() virtually: an override (Compose's AndroidViewHolder
+    // asks its layout node to remeasure, DrawerLayout declines mid-layout) resumes the walk itself
+    const par = p.parent, f = par && jmethod(par, M_requestLayout);
+    if (f && f !== nativeRequestLayout) { void guardApply(f as JMethod, par); break; }
   }
+}
+/**
+ * AOSP ViewRootImpl.mLayoutRequesters: a requestLayout() made during a pass stops at an ancestor
+ * the pass has already flagged and then cleared, and the pass clears the requester's own flag on
+ * its way down, so the request would vanish. After the pass the flags on each requester's path are
+ * cleared and the request is made again, which marks the path to the root for the next pass.
+ */
+export const layoutPass = { active: false, requesters: [] as JView[] };
+export function replayLayoutRequests() {
+  const rs = layoutPass.requesters;
+  if (!rs.length) return;
+  for (const r of rs) for (let p: JView | null = r; p; p = p.parent) p.layoutRequested = false;
+  for (const r of rs.splice(0)) requestLayout(r);
 }
 
 const M_onMeasure = mangleMethod("onMeasure", "(II)V");
@@ -601,7 +637,7 @@ const viewMethods: NativeSpec["methods"] = {
   }),
   "getVisibility()I": function (this: JView) { return this.visibility; },
   "setVisibility(I)V": function (this: JView, v: number) {
-    if (this.visibility !== v) { this.visibility = v; requestLayout(this); }
+    if (this.visibility !== v) { this.visibility = v; requestLayout(this); invalidate(this); }
   },
   "isShown()Z": function (this: JView) {
     let v: JView | null = this;
@@ -747,11 +783,11 @@ const viewMethods: NativeSpec["methods"] = {
     this.left = saveL; this.top = saveT;
     return p;
   }),
-  "invalidate()V": function () { invalidate(); },
-  "invalidate(IIII)V": function () { invalidate(); },
-  "invalidate(Landroid/graphics/Rect;)V": function () { invalidate(); },
-  "postInvalidate()V": function () { invalidate(); },
-  "postInvalidateOnAnimation()V": function () { invalidate(); },
+  "invalidate()V": function (this: JView) { invalidate(this); },
+  "invalidate(IIII)V": function (this: JView) { invalidate(this); },
+  "invalidate(Landroid/graphics/Rect;)V": function (this: JView) { invalidate(this); },
+  "postInvalidate()V": function (this: JView) { invalidate(this); },
+  "postInvalidateOnAnimation()V": function (this: JView) { invalidate(this); },
   // The region is only a hint in AOSP and there is no dirty-region tracking here.
   "postInvalidate(IIII)V": function () { invalidate(); },
   "postInvalidateOnAnimation(IIII)V": function () { invalidate(); },
@@ -774,7 +810,7 @@ const viewMethods: NativeSpec["methods"] = {
   // branch instead, forcing a full-tree re-measure -- on every androidx/Compose relayout,
   // which is the one path that reaches here. Do NOT pre-set layoutRequested: the helper's
   // walk breaks at the first marked node, so marking `this` first would skip the ancestors.
-  "requestLayout()V": function (this: JView) { requestLayout(this); },
+  "requestLayout()V": nativeRequestLayout,
   "forceLayout()V": function (this: JView) { this.layoutRequested = true; },
   "isLayoutRequested()Z": function (this: JView) { return this.layoutRequested ? 1 : 0; },
   "post(Ljava/lang/Runnable;)Z": function (r: unknown) { return mainHandler().post(r, 0); },
@@ -1363,6 +1399,7 @@ export function attachView(parent: JViewGroup, child: JView, index = -1) {
   // composition installs a snapshot read observer that must not see foreign reads).
   if (parent.attached) void onMain(() => dispatchAttached(child));
   requestLayout(parent);
+  invalidate(parent);
 }
 export function detachView(parent: JViewGroup, child: JView) {
   const i = parent.children.indexOf(child);
@@ -1374,6 +1411,7 @@ export function detachView(parent: JViewGroup, child: JView) {
   }
   if (child.attached) void onMain(() => dispatchDetached(child));
   requestLayout(parent);
+  invalidate(parent);
 }
 export async function dispatchAttached(v: JView) {
   if (v.attached) return;
@@ -1947,7 +1985,7 @@ rt.register({
   name: "android/view/ViewGroup", ctor: JViewGroup, sup: "android/view/View",
   ifaces: ["android/view/ViewParent", "android/view/ViewManager"],
   methods: {
-    "onDescendantInvalidated(Landroid/view/View;Landroid/view/View;)V": () => { invalidate(); },
+    "onDescendantInvalidated(Landroid/view/View;Landroid/view/View;)V": nativeOnDescInv,
     "shouldDelayChildPressedState()Z": () => 0,
     // ── nested scrolling, parent half (AOSP ViewGroup). The base declines and passes nothing
     // on; a subclass that wants the scroll (CoordinatorLayout, SwipeRefreshLayout) overrides
