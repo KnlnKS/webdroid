@@ -938,9 +938,9 @@ function enumSetStatics() {
   return {
     "static allOf(Ljava/lang/Class;)Ljava/util/EnumSet;": async (c: JObj) => fromValues(c, true, []),
     "static noneOf(Ljava/lang/Class;)Ljava/util/EnumSet;": (c: JObj) => fromValues(c, false, []),
-    "static of(Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown) => fromValues(null!, false, [a]),
+    "static of(Ljava/lang/Enum;)Ljava/util/EnumSet;": maySuspend((a: unknown) => fromValues(null!, false, [a])),
     "static of(Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, b: unknown) => fromValues(null!, false, [a, b]),
-    "static of(Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, b: unknown, c: unknown) => fromValues(null!, false, [a, b, c]),
+    "static of(Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": maySuspend((a: unknown, b: unknown, c: unknown) => fromValues(null!, false, [a, b, c])),
     "static copyOf(Ljava/util/Collection;)Ljava/util/EnumSet;": async (c: JObj) => fromValues(null!, false, await toJsArray(c)),
   };
 }
@@ -1423,10 +1423,10 @@ rt.register({
   name: "webdroid/AbstractSubList", ctor: JAbsSubList, sup: "java/util/AbstractList",
   methods: {
     "size()I": function (this: JAbsSubList) { return this.n; },
-    "get(I)Ljava/lang/Object;": function (this: JAbsSubList, i: number) {
+    "get(I)Ljava/lang/Object;": maySuspend(function (this: JAbsSubList, i: number) {
       if (i < 0 || i >= this.n) ioobe(i, this.n);
       return getAt(this.parent, this.off + i);
-    },
+    }),
     "set(ILjava/lang/Object;)Ljava/lang/Object;": function (this: JAbsSubList, i: number, v: unknown) {
       if (i < 0 || i >= this.n) ioobe(i, this.n);
       return vcall(this.parent, "set", "(ILjava/lang/Object;)Ljava/lang/Object;", this.off + i, v);
@@ -1678,8 +1678,76 @@ rt.register({ name: "java/util/AbstractMap", ctor: class extends JObj {}, ifaces
 // collection interfaces as markers — with their real extends-hierarchy so
 // check-cast/instanceof through superinterfaces works (dex classes implementing
 // java/util/Set must satisfy casts to java/util/Collection)
-rt.register({ name: "java/util/Collection", ctor: class extends JObj {}, ifaces: ["java/lang/Iterable"] });
-rt.register({ name: "java/util/List", ctor: class extends JObj {}, ifaces: ["java/util/Collection"] });
+// The interfaces' Java 8 default methods, phrased over the abstract operations, so a class that
+// implements the interface without extending our Abstract* bases still has them.
+const O = "Ljava/lang/Object;", GET = `get(${O})${O}`, PUT = `put(${O}${O})${O}`, HAS = `containsKey(${O})Z`;
+const mapDefaults: Methods = {
+  "getOrDefault(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": absMap["getOrDefault(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"],
+  "forEach(Ljava/util/function/BiConsumer;)V": async function (this: JObj, fn: unknown) {
+    for (const e of await mapEntries(this)) await vcall(fn, "accept", `(${O}${O})V`, await entryKey(e), await entryVal(e));
+  },
+  "putIfAbsent(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JObj, k: unknown, v: unknown) {
+    const cur = await vcall(this, "get", GET, k);
+    if (cur !== null && cur !== undefined) return cur;
+    await vcall(this, "put", PUT, k, v);
+    return null;
+  },
+  "computeIfAbsent(Ljava/lang/Object;Ljava/util/function/Function;)Ljava/lang/Object;": async function (this: JObj, k: unknown, fn: unknown) {
+    const cur = await vcall(this, "get", GET, k);
+    if (cur !== null && cur !== undefined) return cur;
+    const v = await vcall(fn, "apply", `(${O})${O}`, k);
+    if (v !== null && v !== undefined) await vcall(this, "put", PUT, k, v);
+    return v ?? null;
+  },
+  "computeIfPresent(Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;": async function (this: JObj, k: unknown, fn: unknown) {
+    const cur = await vcall(this, "get", GET, k);
+    if (cur === null || cur === undefined) return null;
+    const v = await vcall(fn, "apply", `(${O}${O})${O}`, k, cur);
+    if (v === null || v === undefined) await vcall(this, "remove", `(${O})${O}`, k); else await vcall(this, "put", PUT, k, v);
+    return v ?? null;
+  },
+  "compute(Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;": async function (this: JObj, k: unknown, fn: unknown) {
+    const cur = await vcall(this, "get", GET, k);
+    const v = await vcall(fn, "apply", `(${O}${O})${O}`, k, cur ?? null);
+    if (v === null || v === undefined) { if (cur !== null && cur !== undefined) await vcall(this, "remove", `(${O})${O}`, k); }
+    else await vcall(this, "put", PUT, k, v);
+    return v ?? null;
+  },
+  "merge(Ljava/lang/Object;Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;": async function (this: JObj, k: unknown, v: unknown, fn: unknown) {
+    const cur = await vcall(this, "get", GET, k);
+    const nv = cur === null || cur === undefined ? v : await vcall(fn, "apply", `(${O}${O})${O}`, cur, v);
+    if (nv === null || nv === undefined) await vcall(this, "remove", `(${O})${O}`, k); else await vcall(this, "put", PUT, k, nv);
+    return nv ?? null;
+  },
+  "replaceAll(Ljava/util/function/BiFunction;)V": async function (this: JObj, fn: unknown) {
+    for (const e of await mapEntries(this)) await vcall(e, "setValue", `(${O})${O}`, await vcall(fn, "apply", `(${O}${O})${O}`, await entryKey(e), await entryVal(e)));
+  },
+  "remove(Ljava/lang/Object;Ljava/lang/Object;)Z": async function (this: JObj, k: unknown, v: unknown) {
+    if (!(await vcall(this, "containsKey", HAS, k)) || !(await aeq(await vcall(this, "get", GET, k), v))) return 0;
+    await vcall(this, "remove", `(${O})${O}`, k);
+    return 1;
+  },
+  "replace(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JObj, k: unknown, v: unknown) {
+    return (await vcall(this, "containsKey", HAS, k)) ? vcall(this, "put", PUT, k, v) : null;
+  },
+};
+const collDefaults: Methods = {
+  "removeIf(Ljava/util/function/Predicate;)Z": absCollection["removeIf(Ljava/util/function/Predicate;)Z"],
+  "toArray()[Ljava/lang/Object;": absCollection["toArray()[Ljava/lang/Object;"],
+};
+const listDefaults: Methods = {
+  "sort(Ljava/util/Comparator;)V": async function (this: JObj, cmp: unknown) {
+    const a = (await toJsArray(this)).slice();
+    await sortInPlace(a, cmp);
+    for (let i = 0; i < a.length; i++) await vcall(this, "set", `(I${O})${O}`, i, a[i]);
+  },
+  "replaceAll(Ljava/util/function/UnaryOperator;)V": async function (this: JObj, fn: unknown) {
+    const n = await vcall(this, "size", "()I") as number;
+    for (let i = 0; i < n; i++) await vcall(this, "set", `(I${O})${O}`, i, await vcall(fn, "apply", `(${O})${O}`, await vcall(this, "get", `(I)${O}`, i)));
+  },
+};
+rt.register({ name: "java/util/Collection", ctor: class extends JObj {}, ifaces: ["java/lang/Iterable"], methods: collDefaults });
+rt.register({ name: "java/util/List", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], methods: listDefaults });
 rt.register({ name: "java/util/Set", ctor: class extends JObj {}, ifaces: ["java/util/Collection"] });
 rt.register({ name: "java/util/Queue", ctor: class extends JObj {}, ifaces: ["java/util/Collection"] });
 rt.register({ name: "java/util/Deque", ctor: class extends JObj {}, ifaces: ["java/util/Queue"] });
@@ -1688,10 +1756,17 @@ rt.register({ name: "java/util/NavigableSet", ctor: class extends JObj {}, iface
 rt.register({ name: "java/util/SortedMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"] });
 rt.register({ name: "java/util/NavigableMap", ctor: class extends JObj {}, ifaces: ["java/util/SortedMap"] });
 rt.register({ name: "java/util/concurrent/ConcurrentMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"] });
-for (const i of ["java/util/Map", "java/util/RandomAccess", "java/util/Iterator",
-  "java/util/Enumeration"]) {
-  rt.register({ name: i, ctor: class extends JObj {} });
-}
+rt.register({ name: "java/util/Map", ctor: class extends JObj {}, methods: mapDefaults });
+rt.register({
+  name: "java/util/Iterator", ctor: class extends JObj {},
+  methods: {
+    "remove()V": () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", "remove"); },
+    "forEachRemaining(Ljava/util/function/Consumer;)V": async function (this: JObj, c: unknown) {
+      while (await vcall(this, "hasNext", "()Z")) await vcall(c, "accept", `(${O})V`, await vcall(this, "next", `()${O}`));
+    },
+  },
+});
+for (const i of ["java/util/RandomAccess", "java/util/Enumeration"]) rt.register({ name: i, ctor: class extends JObj {} });
 // Comparator is an interface whose STATICS and defaults apps really do call.
 const keyed = (fn: unknown, sel: string, desc: string) =>
   mkCmp(async (a, b) => {
@@ -2110,7 +2185,7 @@ rt.register({
     "setChanged()V": function (this: JObservable) { this.changed = 1; },
     "clearChanged()V": function (this: JObservable) { this.changed = 0; },
     "hasChanged()Z": function (this: JObservable) { return this.changed; },
-    "notifyObservers()V": function (this: JObservable) { return vcall(this, "notifyObservers", "(Ljava/lang/Object;)V", null); },
+    "notifyObservers()V": maySuspend(function (this: JObservable) { return vcall(this, "notifyObservers", "(Ljava/lang/Object;)V", null); }),
     "notifyObservers(Ljava/lang/Object;)V": async function (this: JObservable, arg: unknown) {
       if (!this.changed) return;
       this.changed = 0;

@@ -319,11 +319,11 @@ rt.register({
     },
     "resolveClass(Ljava/lang/Class;)V": () => {},
     "findClass(Ljava/lang/String;)Ljava/lang/Class;": (n: string) => { throw rt.mkThrowable("java/lang/ClassNotFoundException", n); },
-    "findResource(Ljava/lang/String;)Ljava/net/URL;": function (this: JClassLoader, path: string) {
+    "findResource(Ljava/lang/String;)Ljava/net/URL;": maySuspend(function (this: JClassLoader, path: string) {
       if (!this.runtime.classpath[path]) return null;
       const archive = this.runtime.classpathLocations.get(path) ?? "/data/app/base.apk";
       return newObj("java/net/URL", "(Ljava/lang/String;)V", "jar:file://" + archive + "!/" + path);
-    },
+    }),
     "getResource(Ljava/lang/String;)Ljava/net/URL;": async function (this: JClassLoader, path: string) {
       const inherited = this.parent && await vcall(this.parent, "getResource", "(Ljava/lang/String;)Ljava/net/URL;", path);
       return inherited || vcall(this, "findResource", "(Ljava/lang/String;)Ljava/net/URL;", path);
@@ -519,8 +519,17 @@ rt.mkThrowable = (cls: string, msg: string | null) => {
 // Closeable extends AutoCloseable, and that inheritance is load-bearing: R8 merges every
 // close-this-thing helper into one method that tests `instanceof AutoCloseable` first, so a
 // Closeable that is not one falls off the end of the chain into its throw.
+rt.register({
+  name: "java/lang/Iterable", ctor: class extends JObj {},
+  methods: {
+    "forEach(Ljava/util/function/Consumer;)V": async function (this: JObj, c: unknown) {
+      const it = await vcall(this, "iterator", "()Ljava/util/Iterator;");
+      while (await vcall(it, "hasNext", "()Z")) await vcall(c, "accept", "(Ljava/lang/Object;)V", await vcall(it, "next", "()Ljava/lang/Object;"));
+    },
+  },
+});
 for (const [i, ext] of [["java/lang/Runnable"], ["java/lang/Comparable"], ["java/lang/CharSequence"],
-  ["java/lang/Cloneable"], ["java/lang/Iterable"], ["java/lang/Appendable"], ["java/lang/AutoCloseable"],
+  ["java/lang/Cloneable"], ["java/lang/Appendable"], ["java/lang/AutoCloseable"],
   ["java/io/Serializable"], ["java/io/Closeable", "java/lang/AutoCloseable"], ["java/io/Flushable"],
   ["java/io/DataInput"], ["java/io/DataOutput"]] as const) {
   rt.register({ name: i, ctor: class extends JObj {}, ifaces: ext ? [ext] : undefined });
@@ -1631,7 +1640,7 @@ rt.register({
 rt.register({ name: "java/lang/ref/ReferenceQueue", ctor: class extends JObj {}, methods: {
   "<init>()V": function () {},
   "poll()Ljava/lang/ref/Reference;": () => null,
-  "remove()Ljava/lang/ref/Reference;": () => park(curThread, () => () => {}).then(() => null),
+  "remove()Ljava/lang/ref/Reference;": maySuspend(() => park(curThread, () => () => {}).then(() => null)),
   "remove(J)Ljava/lang/ref/Reference;": (ms: bigint) => park(curThread, () => () => {}, Number(ms)).then(() => null),
 } });
 
