@@ -53,7 +53,18 @@ export const setViewAnimHook = (h: typeof startViewAnim) => { startViewAnim = h;
 function takeFocus(v: JView) {
   v.focused = true;
   focusHook(v, true);
+  focusMoved(v, v);
   return 1;
+}
+/** AOSP reports every focus transition to the root's observer; the tree-walk only runs when someone listens */
+function focusMoved(v: JView, now: JView | null) {
+  let root: JView = v;
+  while (root.parent) root = root.parent;
+  const o = vtoMap.get(root);
+  if (!o || !o.focusLs.length) return;
+  const old = o.focused === now ? null : o.focused;
+  o.focused = now;
+  void o.dispatchFocusChanged(old, now);
 }
 /**
  * Schedule a layout pass. Pass the view whose measurement went stale so the pass can skip
@@ -669,7 +680,7 @@ const viewMethods: NativeSpec["methods"] = {
   "isAutoHandwritingEnabled()Z": function (this: JView) { return this.autoHandwritingEnabled ? 1 : 0; },
   "requestFocus()Z": function (this: JView) { return takeFocus(this); },
   "findFocus()Landroid/view/View;": function (this: JView) { return this.focused ? this : null; },
-  "clearFocus()V": function (this: JView) { this.focused = false; focusHook(this, false); },
+  "clearFocus()V": function (this: JView) { this.focused = false; focusHook(this, false); focusMoved(this, null); },
   "isInTouchMode()Z": () => 1,
   "setOnClickListener(Landroid/view/View$OnClickListener;)V": function (this: JView, l: unknown) {
     this.clickL = l;
@@ -1685,6 +1696,13 @@ class JVTO extends JObj {
   preDrawLs: unknown[] = [];
   drawLs: unknown[] = [];
   scrollLs: unknown[] = [];
+  focusLs: unknown[] = [];
+  focused: JView | null = null;
+  async dispatchFocusChanged(old: JView | null, now: JView | null) {
+    for (const l of [...this.focusLs]) {
+      try { await vcall(l, "onGlobalFocusChanged", "(Landroid/view/View;Landroid/view/View;)V", old, now); } catch (e) { console.error("[vto]", e); }
+    }
+  }
   async dispatchGlobalLayout() {
     for (const l of [...this.globalLayoutLs]) {
       try { await vcall(l, "onGlobalLayout", "()V"); } catch (e) { console.error("[vto]", e); }
@@ -1742,7 +1760,7 @@ rt.register({
 // AndroidComposeView registers OnPreDrawListener/OnScrollChangedListener itself, for one).
 for (const n of [
   "OnGlobalLayoutListener", "OnScrollChangedListener", "OnTouchModeChangeListener",
-  "OnPreDrawListener", "OnWindowFocusChangeListener", "OnDrawListener",
+  "OnPreDrawListener", "OnWindowFocusChangeListener", "OnDrawListener", "OnGlobalFocusChangeListener",
 ]) rt.register({ name: "android/view/ViewTreeObserver$" + n, ctor: class extends JObj {} });
 rt.register({
   name: "android/view/ViewTreeObserver", ctor: JVTO,
@@ -1753,6 +1771,8 @@ rt.register({
     "removeOnWindowFocusChangeListener(Landroid/view/ViewTreeObserver$OnWindowFocusChangeListener;)V": () => {},
     "addOnTouchModeChangeListener(Landroid/view/ViewTreeObserver$OnTouchModeChangeListener;)V": () => {},
     "removeOnTouchModeChangeListener(Landroid/view/ViewTreeObserver$OnTouchModeChangeListener;)V": () => {},
+    "addOnGlobalFocusChangeListener(Landroid/view/ViewTreeObserver$OnGlobalFocusChangeListener;)V": function (this: JVTO, l: unknown) { this.focusLs.push(l); },
+    "removeOnGlobalFocusChangeListener(Landroid/view/ViewTreeObserver$OnGlobalFocusChangeListener;)V": function (this: JVTO, l: unknown) { removeFrom(this.focusLs, l); },
     "addOnScrollChangedListener(Landroid/view/ViewTreeObserver$OnScrollChangedListener;)V": function (this: JVTO, l: unknown) { this.scrollLs.push(l); },
     "removeOnScrollChangedListener(Landroid/view/ViewTreeObserver$OnScrollChangedListener;)V": function (this: JVTO, l: unknown) { removeFrom(this.scrollLs, l); },
     "addOnGlobalLayoutListener(Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;)V": function (this: JVTO, l: unknown) { this.globalLayoutLs.push(l); },
