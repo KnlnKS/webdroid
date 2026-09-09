@@ -55,14 +55,21 @@ export function analyseSuspend(
     l.push(to);
   };
 
-  // the same (declared type, sig) is asked once per call site; it always answers the same
+  // the same (declared type, sig) is asked once per call site; it always answers the same.
+  // A body outside the reachable set is never scanned, so nothing is known about it: it
+  // suspends, as far as any site that reaches it after all is concerned.
+  const scanned = new Set<string>();
+  for (const key of methods) {
+    const dot = key.indexOf("."), hit = p.resolve(key.slice(0, dot), key.slice(dot + 1));
+    if (hit?.m.codeOff) scanned.add(hit.cls + key.slice(dot));
+  }
   const resolved = new Map<string, string>();
   function definitionOf(cls: string, sig: string): string {
     const q = cls + "." + sig;
     let d = resolved.get(q);
     if (d === undefined) {
       const hit = p.resolve(cls, sig);
-      d = hit?.m.codeOff ? hit.cls + "." + sig
+      d = hit?.m.codeOff ? (scanned.has(hit.cls + "." + sig) ? hit.cls + "." + sig : SUSPENDS)
         : nativeSuspends(hit?.cls ?? cls, sig) === false ? "" : SUSPENDS;
       resolved.set(q, d);
     }

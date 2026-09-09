@@ -292,9 +292,9 @@ const executorMethods: NativeSpec["methods"] = {
   "submit(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown) {
     return submit(this, r, "run", "()V");
   },
-  "submit(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;": function (this: JExecutor, c: unknown) {
+  "submit(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;": maySuspend(function (this: JExecutor, c: unknown) {
     return submit(this, c, "call", "()Ljava/lang/Object;");
-  },
+  }),
   "shutdown()V": function (this: JExecutor) { this.shut = true; },
   "shutdownNow()Ljava/util/List;": function (this: JExecutor) {
     this.shut = true;

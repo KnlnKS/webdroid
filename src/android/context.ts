@@ -106,13 +106,14 @@ export const contextMethods: NativeSpec["methods"] = {
   },
   // AOSP layers the style over whatever theme this context already resolves to, so a
   // ThemeOverlay on an already-themed context keeps everything underneath it
-  "setTheme(I)V": function (this: JContext, id: number) {
+  "setTheme(I)V": maySuspend(function (this: JContext, id: number) {
     const t = new JTheme();
     t.res = this.$host.res;
     t.styles = (themeOf(this) ?? this.$host.theme).styles.slice();
-    t.apply(id);
+    const applied = t.apply(id);
     (this as any).ownTheme = t;
-  },
+    return applied;
+  }),
   "getPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
   "getAttributionTag()Ljava/lang/String;": () => null,
   "getAttributionSource()Landroid/content/AttributionSource;": maySuspend(function (this: JContext) { return attribution ??= newObj("android/content/AttributionSource", null); }),

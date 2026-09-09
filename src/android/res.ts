@@ -5,7 +5,7 @@ import { Arsc } from "./arsc";
 import { TV, parseAXML, type XmlNode } from "./axml";
 import { JObj } from "../jvm/runtime";
 import { JDisplayMetrics, JTypedValue, complexToPx } from "./util";
-import { mangleMethod, intBitsToFloat } from "../jvm/abi";
+import { mangleMethod, intBitsToFloat, floatToIntBits } from "../jvm/abi";
 import type { FileSource } from "../shell/lazyfile";
 
 let fwPkg: Arsc | null = null;
@@ -488,7 +488,8 @@ export function fillTypedValue(res: Resources, v: RV | null, tv: JTypedValue): n
   if (v.t === T_PX) { tv.type = TV.DIMENSION; tv.data = pxToComplex(v.d); return 1; }
   if (v.t === T_STR) { tv.type = TV.STRING; tv.string = v.s ?? null; return 1; }
   tv.type = v.t;
-  tv.data = v.d;
+  // a normalized RV carries a float as a number; TypedValue.data holds the IEEE bits, as getFloat reads them
+  tv.data = v.t === TV.FLOAT ? floatToIntBits(v.d) : v.d;
   if (v.r) tv.resourceId = v.r;
   if (v.t === TV.STRING) tv.string = v.s ?? null;
   if (v.t === TV.REFERENCE) {
