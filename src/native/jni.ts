@@ -336,7 +336,7 @@ export function jniInit(): void {
           const m = methods[a.i()];
           if (!m) { pend(cpu, throwable("java/lang/NoSuchMethodError", "bad methodID")); return 0; }
           const args = read(m, a);
-          if (jniTrace.on) console.log("[jni] ←", m.info.name, m.name, m.desc);
+          if (jniTrace.on) console.log("[jni] ←", m.info.name, m.name, m.desc, args.map((v) => typeof v === "string" ? JSON.stringify(v.slice(0, 200)) : Array.isArray(v) ? `[${v.length}]` : String(v)).join(" "));
           return invoke(cpu, m, self, args, kind === "nonvirtual");
         });
       }
