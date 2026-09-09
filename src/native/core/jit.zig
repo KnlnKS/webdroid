@@ -346,15 +346,17 @@ pub const Emit = struct {
             b.i32c(@bitCast(pc));
             b.call(F_EXEC32);
         }
-        b.tee(L_R);
+        b.set(L_R);
+        // reload first: an exit spills the locals, which must be what the interpreter left
+        e.loadRegs();
+        e.loadFlags();
+        b.get(L_R);
         e.ifv();
         e.countIc(k);
         b.get(L_R);
         b.set(L_RET);
         e.exit();
         e.endif();
-        e.loadRegs();
-        e.loadFlags();
     }
     /// pops an i64 address; leaves the translated i32 in L_A or exits with a fault
     fn address(e: *Emit) void {

@@ -351,6 +351,13 @@ pub fn emitArm(e: *Emit, pc: u32, k: u32) bool {
     }
     return ends;
 }
+/// the LDM/STM base after the transfer: L_B holds its value before
+fn blockWriteback(e: *Emit, rn: u32, U: bool, n: u32) void {
+    e.b.get(jit.L_B);
+    e.b.i32c(@intCast(4 * n));
+    e.b.op(if (U) O.i32_add else O.i32_sub);
+    setR(e, rn);
+}
 fn armBody(e: *Emit, w: u32, pc: u32, k: u32) bool {
     const b = e.b;
     const rn = bits(w, 16, 4);
@@ -422,12 +429,8 @@ fn armBody(e: *Emit, w: u32, pc: u32, k: u32) bool {
                 b.op(O.i32_sub);
             }
             b.set(jit.L_A);
-            if (W) {
-                b.get(jit.L_B);
-                b.i32c(@intCast(4 * n));
-                b.op(if (U) O.i32_add else O.i32_sub);
-                setR(e, rn);
-            }
+            // a loaded base wins over the writeback; a stored base is the value before it
+            if (W and Ld) blockWriteback(e, rn, U, n);
             var off: u32 = 0;
             var i: u5 = 0;
             while (true) : (i += 1) {
@@ -448,6 +451,7 @@ fn armBody(e: *Emit, w: u32, pc: u32, k: u32) bool {
                 }
                 if (i == 15) break;
             }
+            if (W and !Ld) blockWriteback(e, rn, U, n);
             return false;
         },
         7 => {
@@ -616,11 +620,12 @@ fn dataProcessing(e: *Emit, w: u32, pc: u32, k: u32, top: u32, rn: u32, rd: u32,
     const S = w & (1 << 20) != 0;
     const logical = o == 0 or o == 1 or o == 8 or o == 9 or o >= 12;
     const compare = o >= 8 and o <= 11;
-    // a = Rn, t = operand2 (with its carry when a logical S op wants it)
-    getR(e, rn, pc, false);
-    b.set(jit.L_A);
+    // B = operand2 (with its carry when a logical S op wants it), then A = Rn: a register
+    // shift computes through A and B itself
     op2(e, w, pc, S and logical);
     b.set(jit.L_B);
+    getR(e, rn, pc, false);
+    b.set(jit.L_A);
     switch (o) {
         0, 8 => {
             b.get(jit.L_A);
@@ -862,13 +867,13 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                 b.set(jit.L_B);
                 switch (o) {
                     0, 1, 8, 12, 14, 15 => {
-                        b.get(jit.L_A);
+                        if (o != 15) b.get(jit.L_A);
                         b.get(jit.L_B);
                         if (o == 14 or o == 15) {
                             b.i32c(-1);
                             b.op(O.i32_xor);
                         }
-                        if (o == 15) b.op(O.drop) else b.op(switch (o) {
+                        if (o != 15) b.op(switch (o) {
                             0, 8, 14 => O.i32_and,
                             1 => O.i32_xor,
                             else => O.i32_or,

@@ -196,8 +196,10 @@ export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
 export fn exec_word32(cp: u32, pc: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
     c.bpc = pc;
+    // the ARM interpreter reports a taken branch through pc alone
+    const len: u32 = if (c.cpsr & (1 << 5) != 0 and (mem.ptr(u16, pc).* & 0xf800) != 0xf000) 2 else 4;
     return switch (arm.step(c, pc)) {
-        .next => 0,
+        .next => @intFromBool(@as(u32, @truncate(c.pc)) != pc +% len),
         .jump => 1,
         .fault => 2,
         .syscall => 3,
