@@ -22,7 +22,7 @@ import { showToast } from "./popup";
 import { newArrayList, mkIter, toJsArray } from "../jvm/natives/jutil";
 import type { JUri } from "./net";
 import { runningServices, svcStop, svcFg } from "./runningservices";
-import { isMusicActive, outputSampleRate } from "./media";
+import { isMusicActive, outputSampleRate, JSpatializer } from "./media";
 import { device } from "../shell/config";
 import type { JBitmap } from "./graphics";
 
@@ -526,6 +526,7 @@ for (const [name, methods, statics] of [
     "areEffectsSupported([I)[I": (ids: Int32Array) => new Int32Array(ids.length).fill(2),
   }],
   ["android/media/AudioManager", {
+    "getSpatializer()Landroid/media/Spatializer;": () => { rt.link("android/media/Spatializer"); return new JSpatializer(); },
     "getStreamVolume(I)I": () => 5,
     "getStreamMaxVolume(I)I": () => 10,
     "setStreamVolume(III)V": () => {},

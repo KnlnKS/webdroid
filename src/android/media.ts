@@ -439,3 +439,18 @@ rt.register({
     "getSkipBlocks()I": function (this: JCryptoPattern) { return this.skip; },
   },
 });
+
+export class JSpatializer extends JObj {}
+rt.register({
+  name: "android/media/Spatializer", ctor: JSpatializer,
+  statics: { SPATIALIZER_IMMERSIVE_LEVEL_NONE: 0 },
+  methods: {
+    "getImmersiveAudioLevel()I": () => 0,
+    "isAvailable()Z": () => 0,
+    "isEnabled()Z": () => 0,
+    "canBeSpatialized(Landroid/media/AudioAttributes;Landroid/media/AudioFormat;)Z": () => 0,
+    "addOnSpatializerStateChangedListener(Ljava/util/concurrent/Executor;Landroid/media/Spatializer$OnSpatializerStateChangedListener;)V": () => {},
+    "removeOnSpatializerStateChangedListener(Landroid/media/Spatializer$OnSpatializerStateChangedListener;)V": () => {},
+  },
+});
+rt.register({ name: "android/media/Spatializer$OnSpatializerStateChangedListener", ctor: class extends JObj {} });
