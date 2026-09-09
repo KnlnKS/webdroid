@@ -124,6 +124,10 @@ fn op2(c: *Cpu, w: u32, pc: u32) Shifted {
 }
 
 // ── A32
+/// one instruction, for the JIT's fallback
+pub fn step(c: *Cpu, pc: u32) Status {
+    return if (c.cpsr & (1 << 5) != 0) execThumb(c, pc) else execArm(c, pc);
+}
 fn execArm(c: *Cpu, pc: u32) Status {
     const w = ld(u32, pc);
     const cc = w >> 28;

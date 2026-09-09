@@ -1,11 +1,14 @@
 // The harness the A64 tests share: a code page reserved through mem.reserve (never an address
 // the stack allocator can march into), a fresh Cpu, and the slice loop run to the return
 // sentinel. Encodings in the tests come from `clang -target aarch64-linux-gnu`, never hand-derived.
+// Every program also runs past the heat threshold so its region compiles (synchronously under
+// bun), and the JIT's register file must agree with the interpreter's.
+import { expect } from "bun:test";
 import { mem } from "./mem";
 import { Cpu } from "./cpu";
-import { jitStats, JIT_HEAT } from "./core";
+import { core, jitStats, JIT_HEAT } from "./core";
 import { mainThread } from "../jvm/natives/jlang";
-import { RET_SENTINEL } from "./abi";
+import { MEM_SIZE, RET_SENTINEL } from "./abi";
 
 export const RET = 0xd65f03c0;
 
@@ -28,16 +31,34 @@ function place(words: number[]): number {
   for (let i = 0; i < words.length; i++) mem.u32[(at >>> 2) + i] = words[i];
   return at;
 }
-/** the interpreter: a program's first run */
-export function run(words: number[], setup: (c: Cpu) => void = () => {}): Cpu {
-  return execute(place(words), setup);
+const state = (c: Cpu) => [Array.from(c.w), Array.from(c.si), c.cpsr];
+/** The program's first run, the one the test's expectations describe. A program whose second
+ *  run reproduces the first (no time, no memory it rewrites) then runs to the JIT, which must
+ *  agree; memory is put back so the test sees the first run's. */
+export function sweep(run1: (at: number, setup: (c: Cpu) => void) => Cpu, at: number, setup: (c: Cpu) => void): Cpu {
+  const bot = core.stat(8), image = mem.u8.slice(bot, MEM_SIZE);
+  const c0 = run1(at, setup), stack = mem.u8.slice(c0.stackBase, c0.stackTop);
+  const s1 = state(c0);
+  if (JSON.stringify(state(run1(at, setup))) === JSON.stringify(s1)) {
+    const before = jitStats.regions;
+    for (let i = 0; i < JIT_HEAT; i++) run1(at, setup);
+    const c = run1(at, setup);
+    expect(jitStats.regions).toBeGreaterThan(before);
+    expect(state(c)).toEqual(s1);
+  }
+  mem.u8.set(image, bot); mem.u8.set(stack, c0.stackBase);
+  return run1(at, setup);
 }
-/** the JIT: the same program past the heat threshold, so its region compiles (synchronously under bun) and runs */
+export function run(words: number[], setup: (c: Cpu) => void = () => {}): Cpu {
+  return sweep(execute, place(words), setup);
+}
+/** the JIT tier alone: for a fixture that decides its own comparison */
 export function runJit(words: number[], setup: (c: Cpu) => void = () => {}): Cpu {
   const at = place(words);
+  const before = jitStats.regions;
   for (let i = 0; i < JIT_HEAT; i++) execute(at, setup);
   const c = execute(at, setup);
-  if (!jitStats.regions) throw new Error("the program did not compile");
+  if (jitStats.regions === before) throw new Error("the program did not compile");
   return c;
 }
 

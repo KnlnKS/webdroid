@@ -1,21 +1,28 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { mem } from "./mem";
 import { Cpu, setA64 } from "./cpu";
+import { sweep } from "./a64.testkit";
 import { mainThread } from "../jvm/natives/jlang";
 import { RET_SENTINEL } from "./abi";
 
-function run(words: number[], setup: (c: Cpu) => void = () => {}): Cpu {
-  // ask for the page the way a module load does, rather than picking an address that the stack
-  // allocator can march into
-  const at = mem.reserve((words.length * 4 + 0xfff) & ~0xfff, 0x1000);
-  for (let i = 0; i < words.length; i++) mem.u32[(at >>> 2) + i] = words[i];
-  const c = new Cpu(mainThread, "test");
+let shared: Cpu | null = null;
+function execute(at: number, setup: (c: Cpu) => void): Cpu {
+  const c = (shared ??= new Cpu(mainThread, "test"));
+  c.w.fill(0); c.cpsr = 0;
   c.ensureStack();
+  c.w[26] = c.stackTop;
   setup(c);
   c.w[28] = RET_SENTINEL;
   c.setPc(at);
   while (c.runSlice(1000) !== 2) { /* spin */ }
   return c;
+}
+function run(words: number[], setup: (c: Cpu) => void = () => {}): Cpu {
+  // ask for the page the way a module load does, rather than picking an address that the stack
+  // allocator can march into
+  const at = mem.reserve((words.length * 4 + 0xfff) & ~0xfff, 0x1000);
+  for (let i = 0; i < words.length; i++) mem.u32[(at >>> 2) + i] = words[i];
+  return sweep(execute, at, setup);
 }
 const BXLR = 0xe12fff1e;
 

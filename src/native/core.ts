@@ -59,6 +59,7 @@ export interface Core {
   jit_done(): void;
   jit_flush(): void;
   jit_stat(i: number): number;
+  exec_word32(cpu: number, pc: number): number;
 }
 /** the libc calls the core serves itself, by the id libc.zig gives them */
 export const CORE_LIBC: Record<string, number> = { memcpy: 1, memmove: 2, memset: 3, memcmp: 4, memchr: 5, strlen: 6, strnlen: 7, strcmp: 8, strncmp: 9, malloc: 10, free: 11, calloc: 12, realloc: 13, memalign: 14, posix_memalign: 15, malloc_usable_size: 16 };
@@ -89,7 +90,7 @@ if (core.__heap_base.value > STACK_BASE) throw new Error("[native] the core's da
 // ── the JIT: the core emits a module per batch of hot regions; each region function is linked
 // into the table and the core's slot maps route the dispatcher to it
 const JIT_CAP = 1 << 20;
-const jitImports = { env: { memory, exec: core.exec_word, tx: core.tx_addr, store: core.on_store } };
+const jitImports = { env: { memory, exec: core.exec_word, exec32: core.exec_word32, tx: core.tx_addr, store: core.on_store } };
 let jitBuf = 0, nextSlot = JIT_SLOT0;
 /** whether this engine compiles synchronously (bun does; Chrome's main thread refuses past 4 KB) */
 let syncCompile: boolean | null = null;

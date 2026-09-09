@@ -587,6 +587,7 @@ export fn stat(i: u32) f64 {
             break :blk @floatFromInt(n);
         },
         7 => @floatFromInt(moves),
+        8 => @floatFromInt(module_bot),
         else => 0,
     };
 }

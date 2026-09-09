@@ -116,10 +116,10 @@ pub const Page = extern struct {
     cov: [OPS_PER_PAGE / 8]u8,
     /// which allocation of this page's block: a region compiled against an older one is stale
     epoch: u32,
-    /// entries of this page executed, until the JIT takes the block
-    heat: [OPS_PER_PAGE]u16,
+    /// entries of this page executed, until the JIT takes the block (by halfword: Thumb blocks)
+    heat: [2 * OPS_PER_PAGE]u16,
     /// table slot << 8 | block index of the region holding the block starting here (0: none)
-    slot: [OPS_PER_PAGE]u32,
+    slot: [2 * OPS_PER_PAGE]u32,
     ops: [OPS_PER_PAGE]a64.Op,
 };
 const PAGE_BLOCK = (@sizeOf(Page) + abi.PAGE_SIZE - 1) & ~@as(u32, abi.PAGE_SIZE - 1);
@@ -177,6 +177,17 @@ export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
         },
         .syscall => return 3,
     }
+}
+/// the ARM32 interpreter runs one instruction for a region: the same statuses as exec_word
+export fn exec_word32(cp: u32, pc: u32) u32 {
+    const c: *Cpu = @ptrFromInt(cp);
+    c.bpc = pc;
+    return switch (arm.step(c, pc)) {
+        .next => 0,
+        .jump => 1,
+        .fault => 2,
+        .syscall => 3,
+    };
 }
 /// a plane address for a region: 0 when it does not translate (the fault is set)
 export fn tx_addr(cp: u32, va: u64) u32 {
@@ -274,29 +285,33 @@ export fn run_slice(cp: u32, budget: u32) u32 {
             continue;
         }
         var st: Status = .jump;
-        if (c.a64 != 0) {
-            const page = pageFor(pc) orelse {
-                c.exit = @intFromEnum(Fault.bad_address);
-                c.fault_word = pc;
-                return @intFromEnum(Exit.fault);
-            };
-            const i = (pc & (abi.PAGE_SIZE - 1)) >> 2;
-            const s = page.slot[i];
-            if (s != 0) {
-                const f: *const fn (u32, u32) callconv(.c) u32 = @ptrFromInt(s >> 8);
-                const r = f(cp, s & 255);
-                if (r >= jit.STATUS_MAX) c.pc = r else switch (r) {
-                    2 => return @intFromEnum(Exit.fault),
-                    3 => return @intFromEnum(Exit.syscall),
-                    else => {},
+        const page = pageFor(pc) orelse {
+            c.exit = @intFromEnum(Fault.bad_address);
+            c.fault_word = pc;
+            return @intFromEnum(Exit.fault);
+        };
+        const i = (pc & (abi.PAGE_SIZE - 1)) >> 1;
+        const s = page.slot[i];
+        if (s != 0) {
+            const f: *const fn (u32, u32) callconv(.c) u32 = @ptrFromInt(s >> 8);
+            const r = f(cp, s & 255);
+            if (r >= jit.STATUS_MAX) {
+                // an ARM32 region leaves with an interworking target
+                if (c.a64 != 0) c.pc = r else {
+                    c.cpsr = (c.cpsr & ~@as(u32, 1 << 5)) | ((r & 1) << 5);
+                    c.pc = r & ~@as(u32, 1);
                 }
-            } else {
-                const h = page.heat[i] +% 1;
-                page.heat[i] = h;
-                if (h == jit.HEAT) jit.request(pc);
-                st = a64.block(c, pc, page);
+            } else switch (r) {
+                2 => return @intFromEnum(Exit.fault),
+                3 => return @intFromEnum(Exit.syscall),
+                else => {},
             }
-        } else st = arm.block(c, pc);
+        } else {
+            const h = page.heat[i] +% 1;
+            page.heat[i] = h;
+            if (h == jit.HEAT) jit.request(pc, if (c.a64 != 0) .a64 else if (c.cpsr & (1 << 5) != 0) .thumb else .arm);
+            st = if (c.a64 != 0) a64.block(c, pc, page) else arm.block(c, pc);
+        }
         switch (st) {
             .fault => return @intFromEnum(Exit.fault),
             .syscall => return @intFromEnum(Exit.syscall),
