@@ -30,6 +30,7 @@ import "./android/glview";
 import "./android/os";
 import "./android/util";
 import "./android/accounts";
+import "./android/parcel";
 import "./android/graphics";
 import "./android/rendereffect";
 import "./android/imagedecoder";
