@@ -55,7 +55,8 @@ export function setFramework(a: Arsc): void {
 const M_getTheme = mangleMethod("getTheme", "()Landroid/content/res/Resources$Theme;");
 
 // resolved value: binary Res_value types + internal PX (0xfe) and STR (0xfd)
-export interface RV { t: number; d: number; s?: string }
+/** r: the resource whose entry a resolved value came from — what getResourceId still reports */
+export interface RV { t: number; d: number; s?: string; r?: number }
 export const T_PX = 0xfe, T_STR = 0xfd;
 const NULL_RV: RV = { t: TV.NULL, d: 0 };
 /** binary Res_value → RV with FLOAT bits decoded to a JS number */
@@ -212,7 +213,7 @@ export class Resources {
       if (nv.t === TV.REFERENCE && nv.d === v.d) break;
       // color/dimen entries whose value is a file reference (color selector xml)
       if (nv.t === TV.STRING && nv.s?.endsWith(".xml")) { v = { t: TV.REFERENCE, d: v.d, s: nv.s }; break; }
-      v = nv;
+      v = { ...nv, r: v.d };
     }
     return v;
   }
@@ -488,6 +489,7 @@ export function fillTypedValue(res: Resources, v: RV | null, tv: JTypedValue): n
   if (v.t === T_STR) { tv.type = TV.STRING; tv.string = v.s ?? null; return 1; }
   tv.type = v.t;
   tv.data = v.d;
+  if (v.r) tv.resourceId = v.r;
   if (v.t === TV.STRING) tv.string = v.s ?? null;
   if (v.t === TV.REFERENCE) {
     // a reference that resolveRefs kept (a file resource) is, once resolved as AOSP does it,

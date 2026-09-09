@@ -504,7 +504,7 @@ rt.register({
     },
     "getResourceId(II)I": function (this: JTypedArray, i: number, d: number) {
       const v = this.vals[i];
-      return v && (v.t === TV.REFERENCE || v.t === TV.ATTRIBUTE) ? v.d : v && v.t >= TV.INT_DEC ? d : d;
+      return v && (v.t === TV.REFERENCE || v.t === TV.ATTRIBUTE) ? v.d : v?.r ?? d;
     },
     "getDrawable(I)Landroid/graphics/drawable/Drawable;": async function (this: JTypedArray, i: number) {
       const v = this.vals[i];
