@@ -877,16 +877,21 @@ for (const n of ["java/util/concurrent/ConcurrentLinkedQueue", "java/util/Abstra
     methods: listMethods(),
   });
 }
-// unpark() is a no-op, so a parked thread only wakes on its own deadline (see "curThread is a global" in the implementation history)
-const parkFor = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// A parked thread wakes on its permit, its deadline, or an interrupt. The wake is a macrotask
+// so the unparker's own chain runs to its next await first, and an untimed park still polls,
+// as Java's spurious wakeups allow, so a permit lost to a stale thread identity cannot hang it.
+function parkThread(t: JThread, timeoutMs = 1000): void | Promise<void> {
+  if (t.permit) { t.permit = false; return; }
+  return park(t, (wake) => { t.unpark = () => setTimeout(wake, 0); return () => { t.unpark = null; }; }, timeoutMs).then(() => { t.permit = false; });
+}
 rt.register({
   name: "java/util/concurrent/locks/LockSupport", ctor: class extends JObj {},
   methods: {
-    "static park()V": () => parkFor(10),
-    "static park(Ljava/lang/Object;)V": () => parkFor(10),
-    "static parkNanos(J)V": async (n: bigint) => parkFor(Math.min(50, Number(n) / 1e6)),
-    "static parkNanos(Ljava/lang/Object;J)V": async (b: unknown, n: bigint) => parkFor(Math.min(50, Number(n) / 1e6)),
-    "static unpark(Ljava/lang/Thread;)V": () => {},
+    "static park()V": () => parkThread(curThread),
+    "static park(Ljava/lang/Object;)V": () => parkThread(curThread),
+    "static parkNanos(J)V": (n: bigint) => parkThread(curThread, Math.min(1000, Number(n) / 1e6)),
+    "static parkNanos(Ljava/lang/Object;J)V": (_b: unknown, n: bigint) => parkThread(curThread, Math.min(1000, Number(n) / 1e6)),
+    "static unpark(Ljava/lang/Thread;)V": (t: JThread | null) => { if (!t) return; if (t.unpark) { t.unpark(); t.unpark = null; } else t.permit = true; },
   },
 });
 // CompletableFuture: completed from outside, so the promise is armed by the constructor

@@ -1334,6 +1334,9 @@ export class JThread extends JObj {
   locals = new Map<object, unknown>();
   interrupted = 0;
   wake: (() => void) | null = null;
+  /** LockSupport: a permit delivered while not parked, or the wake of a park in progress */
+  permit = false;
+  unpark: (() => void) | null = null;
   done: Promise<void> | null = null;
   looper: unknown = null;   // android Looper, set by android/os
   /** native calls in progress on this thread: its looper cannot dispatch while it is inside one */
