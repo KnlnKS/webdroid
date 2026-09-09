@@ -5,6 +5,7 @@ import { vcall, mkEnumSet } from "../jvm/natives/jlang";
 import { mangleMethod, jmethod, intBitsToFloat } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, insetsOf } from "./graphics";
 import { device } from "../shell/config";
+import { onMain } from "./mainloop";
 import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, normRV } from "./res";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 
@@ -707,7 +708,11 @@ class JRippleDrawable extends JLayerDrawable {
     ctx.arc(cx, cy, this.radius() * grow, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
-    if (animating) invalidateSelf.call(this);
+    // AOSP drives the ripple from animators, so its invalidates arrive from the Choreographer,
+    // never from inside draw(). Compose clears a layer's dirty flag after recording it, so an
+    // invalidate raised mid-record is lost and the frozen display list replays until something
+    // else re-records the layer. Queue it behind the frame job instead.
+    if (animating) void onMain(() => invalidateSelf.call(this));
   }
   onStateChange(): boolean {
     const active = this.stateSet.includes(ST.pressed) && this.stateSet.includes(ST.enabled);
