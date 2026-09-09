@@ -4,7 +4,7 @@
 
 import { JThread, setCurThread } from "../jvm/natives/jlang";
 import { NativeFault, mem } from "./mem";
-import { core } from "./core";
+import { core, jitDrain } from "./core";
 import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs } from "./host";
 import { RET_SENTINEL, TRAMP_BASE, STACK_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
@@ -392,6 +392,7 @@ export class Cpu {
       try { ex = core.run_slice(this.base, Math.max(stepMode.on ? 1 : 0, limit - this.ic)); }
       catch (e) { throw this.trap(e); }
       if (stepMode.on) this.step();
+      jitDrain();
       switch (ex) {
         case CoreExit.Budget:
           if (profile.on) profile.samples.set(this.pc, (profile.samples.get(this.pc) ?? 0) + 1);

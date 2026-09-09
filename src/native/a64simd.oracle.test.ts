@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { setA64 } from "./cpu";
-import { run, runCold, RET } from "./a64.testkit";
+import { run, runJit, RET } from "./a64.testkit";
 import { INSTRUCTIONS, CASES, INPUT_BYTES, inputs } from "./a64simd.oracle.cases";
 
 // The emitter against a real AArch64 core: scripts/simd-oracle.ts ran every instruction in
@@ -13,7 +13,7 @@ afterAll(() => setA64(false));
 const fixture = Bun.gunzipSync(new Uint8Array(await Bun.file(new URL("./fixtures/a64simd.bin.gz", import.meta.url)).arrayBuffer()));
 const dv = new DataView(fixture.buffer, fixture.byteOffset, fixture.byteLength);
 const count = dv.getUint32(4, true), cases = dv.getUint32(8, true);
-const tiers: [string, typeof run][] = [["compiled", run], ["cold", runCold]];
+const tiers: [string, typeof run][] = [["jit", runJit], ["interp", run]];
 
 function sameLane(exp: Uint8Array, got: Uint8Array, o: number, n: number): boolean {
   for (let i = 0; i < n; i++) if (exp[o + i] !== got[o + i]) return false;

@@ -956,9 +956,9 @@ fn svc(c: *Cpu) Status {
 }
 
 /// interpret from c.pc to the first control transfer (or 256 instructions); the pc is left in c.pc
-pub fn block(c: *Cpu, start: u32) Status {
+pub fn block(c: *Cpu, start: u32, entry: *cpu.Page) Status {
     if (start & 3 != 0) return fault(c, .misaligned_pc, start);
-    var page = cpu.pageFor(start) orelse return fault(c, .bad_address, start);
+    var page = entry;
     c.bpc = start;
     var pc = start;
     var n: u32 = 0;

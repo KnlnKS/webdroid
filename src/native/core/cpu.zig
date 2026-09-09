@@ -8,6 +8,7 @@ const mem = @import("mem.zig");
 const a64 = @import("a64.zig");
 const arm = @import("arm.zig");
 const libc = @import("libc.zig");
+const jit = @import("jit.zig");
 
 pub const Cpu = extern struct {
     // the architectural state Cpu.call saves and restores: everything up to `tls`
@@ -32,6 +33,8 @@ pub const Cpu = extern struct {
     fault_addr: u32,
     /// the thread's errno, for calls served in the core
     errno_addr: u32,
+    /// the slice's instruction budget, for a region to leave at a block boundary
+    ic_limit: i64,
 
     pub inline fn n(c: *Cpu) u32 {
         return c.cpsr >> 31;
@@ -111,13 +114,24 @@ export fn cpu_free(p: u32) void {
 pub const OPS_PER_PAGE = abi.PAGE_SIZE / 4;
 pub const Page = extern struct {
     cov: [OPS_PER_PAGE / 8]u8,
+    /// which allocation of this page's block: a region compiled against an older one is stale
+    epoch: u32,
+    /// entries of this page executed, until the JIT takes the block
+    heat: [OPS_PER_PAGE]u16,
+    /// table slot << 8 | block index of the region holding the block starting here (0: none)
+    slot: [OPS_PER_PAGE]u32,
     ops: [OPS_PER_PAGE]a64.Op,
 };
 const PAGE_BLOCK = (@sizeOf(Page) + abi.PAGE_SIZE - 1) & ~@as(u32, abi.PAGE_SIZE - 1);
 /// page number → its decode block (0: none), sized for the largest memory
 const decoded: [*]u32 = @ptrFromInt(abi.KERN_BASE + 0x60_0000);
 pub var stats = extern struct { pages: u32 = 0, invalidated: u32 = 0 }{};
+var epoch: u32 = 0;
 
+pub fn decodedPage(pg: u32) ?*Page {
+    const p = decoded[pg];
+    return if (p == 0) null else @ptrFromInt(p);
+}
 pub fn pageFor(pc: u32) ?*Page {
     const pg = pc >> abi.PAGE_SHIFT;
     var p = decoded[pg];
@@ -127,8 +141,63 @@ pub fn pageFor(pc: u32) ?*Page {
         decoded[pg] = p;
         mem.page_flags[pg] |= 1;
         stats.pages += 1;
+        epoch += 1;
+        @as(*Page, @ptrFromInt(p)).epoch = epoch;
     }
     return @ptrFromInt(p);
+}
+/// every region's slot map entry goes: the host dropped the compiled modules
+export fn jit_flush() void {
+    var pg: u32 = 0;
+    while (pg < (abi.MEM_SIZE_A64 >> abi.PAGE_SHIFT)) : (pg += 1) if (decoded[pg] != 0) {
+        const page: *Page = @ptrFromInt(decoded[pg]);
+        @memset(&page.slot, 0);
+        @memset(&page.heat, 0);
+    };
+}
+
+// ── the JIT's helpers, imported by every region module
+/// the interpreter runs one word for a region: 0 next, 1 jump (pc set), 2 fault, 3 syscall
+export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
+    const c: *Cpu = @ptrFromInt(cp);
+    const page = pageFor(pc) orelse return 2;
+    const i = (pc & (abi.PAGE_SIZE - 1)) >> 2;
+    const o = &page.ops[i];
+    if (o.kind == .raw) {
+        o.* = a64.decode(w, pc);
+        page.cov[i >> 3] |= @as(u8, 1) << @intCast(i & 7);
+    }
+    c.bpc = pc;
+    switch (a64.exec(c, o, pc)) {
+        .next => return 0,
+        .jump => return 1,
+        .fault => {
+            c.pc = pc;
+            return 2;
+        },
+        .syscall => return 3,
+    }
+}
+/// a plane address for a region: 0 when it does not translate (the fault is set)
+export fn tx_addr(cp: u32, va: u64) u32 {
+    const c: *Cpu = @ptrFromInt(cp);
+    if (a64.addr(c, va)) |a| return a;
+    c.exit = @intFromEnum(Fault.bad_address);
+    c.fault_word = 0;
+    return 0;
+}
+/// a store into a flagged page: code goes stale, the null page faults
+export fn on_store(cp: u32, a: u32) u32 {
+    const c: *Cpu = @ptrFromInt(cp);
+    const f = mem.page_flags[a >> abi.PAGE_SHIFT];
+    if (f & 2 != 0) {
+        c.exit = @intFromEnum(Fault.bad_address);
+        c.fault_word = 0;
+        c.fault_addr = a;
+        return 1;
+    }
+    _ = code_write(a);
+    return 0;
 }
 fn dropPage(pg: u32) void {
     const p = decoded[pg];
@@ -180,6 +249,7 @@ pub inline fn isTramp(pc: u32) bool {
 export fn run_slice(cp: u32, budget: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
     const limit = c.ic + budget;
+    c.ic_limit = limit;
     while (true) {
         const pc: u32 = @truncate(c.pc);
         if (isTramp(pc)) {
@@ -203,7 +273,30 @@ export fn run_slice(cp: u32, budget: u32) u32 {
             }
             continue;
         }
-        const st = if (c.a64 != 0) a64.block(c, pc) else arm.block(c, pc);
+        var st: Status = .jump;
+        if (c.a64 != 0) {
+            const page = pageFor(pc) orelse {
+                c.exit = @intFromEnum(Fault.bad_address);
+                c.fault_word = pc;
+                return @intFromEnum(Exit.fault);
+            };
+            const i = (pc & (abi.PAGE_SIZE - 1)) >> 2;
+            const s = page.slot[i];
+            if (s != 0) {
+                const f: *const fn (u32, u32) callconv(.c) u32 = @ptrFromInt(s >> 8);
+                const r = f(cp, s & 255);
+                if (r >= jit.STATUS_MAX) c.pc = r else switch (r) {
+                    2 => return @intFromEnum(Exit.fault),
+                    3 => return @intFromEnum(Exit.syscall),
+                    else => {},
+                }
+            } else {
+                const h = page.heat[i] +% 1;
+                page.heat[i] = h;
+                if (h == jit.HEAT) jit.request(pc);
+                st = a64.block(c, pc, page);
+            }
+        } else st = arm.block(c, pc);
         switch (st) {
             .fault => return @intFromEnum(Exit.fault),
             .syscall => return @intFromEnum(Exit.syscall),

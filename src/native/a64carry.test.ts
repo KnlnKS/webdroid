@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, test } from "bun:test";
 import { setA64, type Cpu } from "./cpu";
-import { run, runCold, RET } from "./a64.testkit";
+import { run, runJit, RET } from "./a64.testkit";
 
 beforeAll(() => setA64(true));
 afterAll(() => setA64(false));
 
-const tiers = [["compiled", run], ["cold", runCold]] as const;
+const tiers = [["jit", runJit], ["interp", run]] as const;
 const edges = [0n, 1n, 0xffffffffn, 0x100000000n, 0x7fffffffffffffffn, 0x8000000000000000n, 0xfffffffffffffffen, 0xffffffffffffffffn];
 let seed = 0x6d2b79f5;
 const word = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return seed >>> 0; };
