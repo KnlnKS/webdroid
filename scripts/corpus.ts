@@ -18,7 +18,7 @@ import { BASE_URL } from "../tests/e2e/lib/util";
 import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
 
 // the e2e driver's convention: a server left running in another worktree answers on 4080 and a
-// run then measures code you did not write (see "Harness notes" in AGENTS.md)
+// run then measures code you did not write (see "Harness notes" in the implementation history)
 
 
 const args = process.argv.slice(2);

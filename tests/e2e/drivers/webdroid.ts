@@ -199,7 +199,7 @@ export class WebdroidDriver {
                     to[0] * this.screen.width, to[1] * this.screen.height, ms);
   }
 
-  /** Exact framebuffer pixels — sidesteps the CSS-scaling trap AGENTS.md "Harness notes" warns about. */
+  /** Exact framebuffer pixels — sidesteps the CSS-scaling trap the implementation history's "Harness notes" warns about. */
   async capture(): Promise<Buffer> {
     const dataUrl = await this.page.evaluate(() => {
       const c = document.getElementById("screen") as HTMLCanvasElement;

@@ -34,7 +34,8 @@ async function layouts(cut: boolean) {
   await page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
   await page.evaluate(() => document.fonts.ready);
   // BOTH sides boot. Native specs get their mangled methods at rt.link, which boot is what
-  // runs (see "Native classes need rt.link() before direct TS instantiation" in AGENTS.md), and
+  // runs (see "Native classes need rt.link() before direct TS instantiation" in the implementation
+  // history), and
   // the framework dex a cut resolves against is fetched by the same boot.
   await page.evaluate(() => void (globalThis as any).wd.boot("FitNotes.apk"));
   await page.waitForFunction(() => (globalThis as any).wd.perf.bootMs > 0, null, { timeout: 120_000 });
