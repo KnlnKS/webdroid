@@ -758,6 +758,7 @@ rt.register({
   name: "java/io/BufferedReader", ctor: class extends JReader {}, sup: "java/io/Reader",
   methods: {
     "<init>(Ljava/io/Reader;)V": function (this: JReader, r: JReader) { this.s = r.s; this.pos = r.pos; },
+    "<init>(Ljava/io/Reader;I)V": function (this: JReader, r: JReader) { this.s = r.s; this.pos = r.pos; },
     "readLine()Ljava/lang/String;": function (this: JReader) {
       if (this.pos >= this.s.length) return null;
       const i = this.s.indexOf("\n", this.pos);
