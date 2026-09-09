@@ -4,6 +4,7 @@
 const std = @import("std");
 pub const abi = @import("abi.zig");
 pub const mem = @import("mem.zig");
+pub const cpu = @import("cpu.zig");
 
 extern "env" fn js_panic(ptr: [*]const u8, len: usize) noreturn;
 pub const panic = std.debug.FullPanic(struct {
@@ -15,4 +16,5 @@ pub const panic = std.debug.FullPanic(struct {
 comptime {
     _ = abi;
     _ = mem;
+    _ = cpu;
 }

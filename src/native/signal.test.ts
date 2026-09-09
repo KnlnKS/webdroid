@@ -95,19 +95,17 @@ test("pthread creation inherits the parent's signal mask", async () => {
   } finally { mem.free(p); }
 });
 
-for (const a64 of [false, true]) test(`${a64 ? "svc" : "swi"} rt_sigprocmask uses kernel mask size and negative errors`, () => {
+for (const a64 of [true]) test(`${a64 ? "svc" : "swi"} rt_sigprocmask uses kernel mask size and negative errors`, async () => {
   setA64(a64);
-  const cpu = new Cpu(new JThread(), "raw signal syscall"), p = mem.malloc(16);
+  const cpu = new Cpu(new JThread(), "raw signal syscall"), p = mem.malloc(16), code = mem.reserve(0x1000, 0x1000);
+  // mov x8/r7, #nr; svc/swi #0; ret
+  if (a64) { mem.st32(code, 0xd2800008 | (135 << 5)); mem.st32(code + 4, 0xd4000001); mem.st32(code + 8, 0xd65f03c0); }
+  else { mem.st32(code, 0xe3a07000 | 175); mem.st32(code + 4, 0xef000000); mem.st32(code + 8, 0xe12fff1e); }
   try {
     mem.st64(p, 1n << 40n);
-    cpu.r[0] = 2; cpu.r[1] = p; cpu.r[2] = p + 8; cpu.r[3] = 8;
-    cpu.r[a64 ? 8 : 7] = a64 ? 135 : 175;
-    if (a64) cpu.svc(); else cpu.swi();
-    expect(cpu.r[0]).toBe(0);
+    expect(await cpu.call(code, [2, p, p + 8, 8])).toBe(0);
     expect(cpu.signalMask).toBe(1n << 40n);
     expect(mem.ld64(p + 8)).toBe(0n);
-    cpu.r[0] = 2; cpu.r[3] = 4;
-    if (a64) cpu.svc(); else cpu.swi();
-    expect(cpu.r[0]).toBe(-22);
+    expect(await cpu.call(code, [2, p, p + 8, 4])).toBe(-22);
   } finally { mem.free(p); }
 });

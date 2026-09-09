@@ -146,22 +146,24 @@ let tznames: number[] = [0, 0];
 // ── setjmp/longjmp: the callee-saved registers live in the guest jmp_buf itself — r4–r14 on
 // ARM, x19–x30 + sp + d8–d15 on A64 (168 of the buffer's 256 bytes)
 function setjmp(cpu: Cpu, buf: number): number {
-  if (!cpu.a64) { for (let i = 4; i <= 14; i++) mem.st32(buf + (i - 4) * 4, cpu.r[i]); return 0; }
-  for (let i = 19; i <= 31; i++) { mem.st32(buf + (i - 19) * 8, cpu.r[i]); mem.st32(buf + (i - 19) * 8 + 4, cpu.h[i]); }
+  const w = cpu.w;
+  if (!cpu.a64) { for (let i = 4; i <= 14; i++) mem.st32(buf + (i - 4) * 4, w[2 * i]); return 0; }
+  for (let i = 19; i <= 31; i++) { mem.st32(buf + (i - 19) * 8, w[2 * i]); mem.st32(buf + (i - 19) * 8 + 4, w[2 * i + 1]); }
   for (let k = 8; k <= 15; k++) { mem.st32(buf + 104 + (k - 8) * 8, cpu.si[4 * k]); mem.st32(buf + 108 + (k - 8) * 8, cpu.si[4 * k + 1]); }
   return 0;
 }
 function longjmp(cpu: Cpu, buf: number, val: number): typeof NORET {
+  const w = cpu.w;
   if (!cpu.a64) {
-    for (let i = 4; i <= 14; i++) cpu.r[i] = mem.ld32(buf + (i - 4) * 4);
-    cpu.r[0] = val || 1;
-    cpu.setPc(cpu.r[14]);
+    for (let i = 4; i <= 14; i++) w[2 * i] = mem.ld32(buf + (i - 4) * 4);
+    w[0] = val || 1;
+    cpu.setPc(w[28]);
     return NORET;
   }
-  for (let i = 19; i <= 31; i++) { cpu.r[i] = mem.ld32(buf + (i - 19) * 8); cpu.h[i] = mem.ld32(buf + (i - 19) * 8 + 4); }
+  for (let i = 19; i <= 31; i++) { w[2 * i] = mem.ld32(buf + (i - 19) * 8); w[2 * i + 1] = mem.ld32(buf + (i - 19) * 8 + 4); }
   for (let k = 8; k <= 15; k++) { cpu.si[4 * k] = mem.ld32(buf + 104 + (k - 8) * 8); cpu.si[4 * k + 1] = mem.ld32(buf + 108 + (k - 8) * 8); }
-  cpu.r[0] = val || 1; cpu.h[0] = 0;
-  cpu.setPc(cpu.r[30]);
+  w[0] = val || 1; w[1] = 0;
+  cpu.setPc(w[60]);
   return NORET;
 }
 
@@ -221,7 +223,7 @@ export function libcInit(): void {
     __set_errno: (cpu, a) => { setErrno(cpu, a.i()); return -1; },
     abort: (cpu) => { cpu.fault(abortMessageOr("abort() called")); },
     exit: (cpu, a) => { console.warn("[native] exit(" + a.i() + ")"); markProcessExited(); cpu.finished = true; return new Promise<never>(() => {}); },
-    _exit: (cpu, a) => { console.warn(`[native] _exit(${a.i()}) from ${cpu.name} lr=${(cpu.r[cpu.lrx] >>> 0).toString(16)}`); markProcessExited(); cpu.finished = true; return new Promise<never>(() => {}); },
+    _exit: (cpu, a) => { console.warn(`[native] _exit(${a.i()}) from ${cpu.name} lr=${(cpu.lr >>> 0).toString(16)}`); markProcessExited(); cpu.finished = true; return new Promise<never>(() => {}); },
     atexit: () => 0,
     __cxa_atexit: () => 0,
     __cxa_finalize: () => 0,

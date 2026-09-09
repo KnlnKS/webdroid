@@ -38,6 +38,15 @@ export interface Core {
   alloc_stack(size: number): number;
   free_stack(base: number, size: number): void;
   host_alloc(n: number, align: number): number;
+  layout(i: number): number;
+  cpu_alloc(tid: number, a64: number): number;
+  cpu_free(p: number): void;
+  run_slice(cpu: number, budget: number): number;
+  code_write(addr: number): number;
+  invalidate_range(addr: number, size: number): void;
+  invalidate_all(): void;
+  cpu_stat(i: number): number;
+  set_max_block(n: number): void;
 }
 
 export const memory = new WebAssembly.Memory({ initial: MEM_SIZE_A32 / 65536, maximum: MEM_SIZE_A64 / 65536 });
@@ -50,6 +59,7 @@ async function load(): Promise<WebAssembly.Module> {
 const instance = await WebAssembly.instantiate(await load(), {
   env: {
     memory,
+    now_ms: () => performance.now(),
     js_panic(ptr: number, len: number): never {
       throw new NativeFault("[native] core: " + new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len)));
     },

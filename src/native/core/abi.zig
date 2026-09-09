@@ -12,7 +12,7 @@ pub const TRAMP_END: u32 = TRAMP_BASE + 0x0007_0000;
 pub const RET_SENTINEL: u32 = TRAMP_END - 8;
 /// the core's page tables: page state, page flags, and the length of page-run blocks
 pub const KERN_BASE: u32 = TRAMP_END;
-pub const KERN_END: u32 = KERN_BASE + 0x0060_0000;
+pub const KERN_END: u32 = KERN_BASE + 0x00a0_0000;
 pub const ARENA_BASE: u32 = KERN_END;
 pub const MEM_SIZE_A32: u32 = 0x1000_0000;
 pub const MEM_SIZE_A64: u32 = 0xffff_0000;

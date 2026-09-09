@@ -7,6 +7,17 @@ import type { Cpu } from "./cpu";
 
 /** a long result: 64-bit on LP64 */
 const retLong = (x: number) => (PTR === 8 ? BigInt(Math.trunc(x)) : Math.trunc(x) | 0);
+/** round to nearest, ties away from zero (C's round) */
+const rna = (x: number) => (x < 0 ? -Math.round(-x) : Math.round(x));
+/** round in FPCR's current mode: 0 nearest-even, 1 +inf, 2 -inf, 3 zero */
+function rint(c: Cpu, x: number): number {
+  switch ((c.fpcr >>> 22) & 3) {
+    case 1: return Math.ceil(x);
+    case 2: return Math.floor(x);
+    case 3: return Math.trunc(x);
+    default: { const r = Math.round(x); return r % 2 !== 0 && Math.abs(x - Math.trunc(x)) === 0.5 ? r - 1 : r; }
+  }
+}
 
 export function libmInit(): void {
   const d1 = (f: (x: number) => number): HostFn => (c, a) => retD(c, f(a.d()));
@@ -42,13 +53,13 @@ export function libmInit(): void {
       if (x === 0) return bitsf(y < 0 ? 0x80000001 : 1);
       return bitsf(fbits(x) + ((y > x) === (x > 0) ? 1 : -1));
     }),
-    round: (c, a) => retD(c, c.rna(a.d())), roundf: (c, a) => retF(c, c.rna(a.f())),
-    rint: (c, a) => retD(c, c.rint(a.d())), rintf: (c, a) => retF(c, c.rint(a.f())),
-    nearbyint: (c, a) => retD(c, c.rint(a.d())), nearbyintf: (c, a) => retF(c, c.rint(a.f())),
-    lround: (c, a) => retLong(c.rna(a.d())), lroundf: (c, a) => retLong(c.rna(a.f())),
-    llround: (c, a) => BigInt(Math.trunc(c.rna(a.d()))), llroundf: (c, a) => BigInt(Math.trunc(c.rna(a.f()))),
-    lrint: (c, a) => retLong(c.rint(a.d())), lrintf: (c, a) => retLong(c.rint(a.f())),
-    llrint: (c, a) => BigInt(Math.trunc(c.rint(a.d()))), llrintf: (c, a) => BigInt(Math.trunc(c.rint(a.f()))),
+    round: (c, a) => retD(c, rna(a.d())), roundf: (c, a) => retF(c, rna(a.f())),
+    rint: (c, a) => retD(c, rint(c, a.d())), rintf: (c, a) => retF(c, rint(c, a.f())),
+    nearbyint: (c, a) => retD(c, rint(c, a.d())), nearbyintf: (c, a) => retF(c, rint(c, a.f())),
+    lround: (c, a) => retLong(rna(a.d())), lroundf: (c, a) => retLong(rna(a.f())),
+    llround: (c, a) => BigInt(Math.trunc(rna(a.d()))), llroundf: (c, a) => BigInt(Math.trunc(rna(a.f()))),
+    lrint: (c, a) => retLong(rint(c, a.d())), lrintf: (c, a) => retLong(rint(c, a.f())),
+    llrint: (c, a) => BigInt(Math.trunc(rint(c, a.d()))), llrintf: (c, a) => BigInt(Math.trunc(rint(c, a.f()))),
     ldexp: (c, a) => retD(c, a.d() * 2 ** a.i()), ldexpf: (c, a) => retF(c, a.f() * 2 ** a.i()),
     scalbn: (c, a) => retD(c, a.d() * 2 ** a.i()), scalbnf: (c, a) => retF(c, a.f() * 2 ** a.i()),
     scalbln: (c, a) => retD(c, a.d() * 2 ** Number(PTR === 8 ? a.l() : a.i())),
@@ -87,8 +98,8 @@ function lldiv(cpu: Cpu, a: { l(): bigint; p(): number }): ReturnType<HostFn> {
   }
   const n = a.l(), d = a.l();
   const q = d === 0n ? 0n : n / d, r = n - q * d;
-  cpu.r[0] = Number(q & 0xffffffffn) | 0; cpu.h[0] = Number((q >> 32n) & 0xffffffffn) | 0;
-  cpu.r[1] = Number(r & 0xffffffffn) | 0; cpu.h[1] = Number((r >> 32n) & 0xffffffffn) | 0;
+  cpu.w[0] = Number(q & 0xffffffffn) | 0; cpu.w[1] = Number((q >> 32n) & 0xffffffffn) | 0;
+  cpu.w[2] = Number(r & 0xffffffffn) | 0; cpu.w[3] = Number((r >> 32n) & 0xffffffffn) | 0;
   return VRET;
 }
 

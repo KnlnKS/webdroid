@@ -38,7 +38,6 @@ export const mem = {
   buf: null as unknown as ArrayBuffer, u8: null as unknown as Uint8Array, i8: null as unknown as Int8Array, u16: null as unknown as Uint16Array, i16: null as unknown as Int16Array,
   u32: null as unknown as Uint32Array, i32: null as unknown as Int32Array, f32: null as unknown as Float32Array, f64: null as unknown as Float64Array,
   dv: null as unknown as DataView, codePages: null as unknown as Uint8Array,
-  onCodeWrite: (_addr: number): void => {},
   /** run after the memory is resized: the block cache's page tables are sized from it */
   initHooks: [] as (() => void)[],
   /** size the process's memory: grown in place, so everything allocated so far carries over;
@@ -60,17 +59,17 @@ export const mem = {
   st32(a: number, v: number): void {
     if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) badAddr(a);
     if ((a & 3) === 0) i32[a >>> 2] = v; else dv.setInt32(a >>> 0, v, true);
-    if (codePages[a >>> PAGE_SHIFT] & 1) mem.onCodeWrite(a);
+    if (codePages[a >>> PAGE_SHIFT] & 1) core.code_write(a >>> 0);
   },
   st16(a: number, v: number): void {
     if (((a >>> 0) - LOW) >>> 0 > SPAN - 2) badAddr(a);
     if ((a & 1) === 0) u16[a >>> 1] = v; else dv.setUint16(a >>> 0, v, true);
-    if (codePages[a >>> PAGE_SHIFT] & 1) mem.onCodeWrite(a);
+    if (codePages[a >>> PAGE_SHIFT] & 1) core.code_write(a >>> 0);
   },
   st8(a: number, v: number): void {
     if (((a >>> 0) - LOW) >>> 0 > SPAN - 1) badAddr(a);
     u8[a >>> 0] = v;
-    if (codePages[a >>> PAGE_SHIFT] & 1) mem.onCodeWrite(a);
+    if (codePages[a >>> PAGE_SHIFT] & 1) core.code_write(a >>> 0);
   },
   ldf32(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) badAddr(a); return (a & 3) === 0 ? f32[a >>> 2] : dv.getFloat32(a >>> 0, true); },
   stf32(a: number, v: number): void { if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) badAddr(a); if ((a & 3) === 0) f32[a >>> 2] = v; else dv.setFloat32(a >>> 0, v, true); },
@@ -118,7 +117,7 @@ export const mem = {
     for (const [addr, size] of ranges) {
       const [h, lo] = split(addr);
       const start = (h ? core.tx(h, lo) : lo) >>> 0;
-      if (start) for (let p = start >>> PAGE_SHIFT, end = (start + size + PAGE_SIZE - 1) >>> PAGE_SHIFT; p < end; p++) if (codePages[p] & 1) mem.onCodeWrite(p * PAGE_SIZE);
+      if (start) core.invalidate_range(start, size);
       if (h) mem.dropVa(addr, size);
       mem.decommitVa(addr, size);
     }

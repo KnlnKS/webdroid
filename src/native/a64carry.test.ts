@@ -12,12 +12,12 @@ const word = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
 const random = Array.from({ length: 64 }, () => (BigInt(word()) << 32n) | BigInt(word()));
 
 function setX(cpu: Cpu, register: number, value: bigint): void {
-  cpu.r[register] = Number(value & 0xffffffffn) | 0;
-  cpu.h[register] = Number((value >> 32n) & 0xffffffffn) | 0;
+  cpu.w[2 * register] = Number(value & 0xffffffffn) | 0;
+  cpu.w[2 * register + 1] = Number((value >> 32n) & 0xffffffffn) | 0;
 }
 
 function result(cpu: Cpu, width: number): bigint {
-  return width === 64 ? (BigInt(cpu.h[2] >>> 0) << 32n) | BigInt(cpu.r[2] >>> 0) : BigInt(cpu.r[2] >>> 0);
+  return width === 64 ? (BigInt(cpu.w[5] >>> 0) << 32n) | BigInt(cpu.w[4] >>> 0) : BigInt(cpu.w[4] >>> 0);
 }
 
 function oracle(width: number, a0: bigint, b0: bigint, carryIn: number, subtract: boolean): { value: bigint; flags: number[] } {
@@ -39,9 +39,9 @@ describe("A64 add/subtract with carry", () => {
     for (const [name, instruction] of Object.entries(instructions)) for (const [a, b] of pairs) for (const carry of [0, 1]) {
       const want = oracle(width, a, b, carry, name === "SBCS");
       for (const [tier, execute] of tiers) {
-        const cpu = execute([instruction, RET], (c) => { setX(c, 0, a); setX(c, 1, b); c.h[2] = -1; c.c = carry; });
+        const cpu = execute([instruction, RET], (c) => { setX(c, 0, a); setX(c, 1, b); c.w[5] = -1; c.c = carry; });
         const gotFlags = [cpu.n, cpu.z, cpu.c, cpu.v];
-        if (result(cpu, width) !== want.value || gotFlags.some((flag, i) => flag !== want.flags[i]) || (width === 32 && cpu.h[2] !== 0)) {
+        if (result(cpu, width) !== want.value || gotFlags.some((flag, i) => flag !== want.flags[i]) || (width === 32 && cpu.w[5] !== 0)) {
           throw new Error(`${name}/${width}/${tier} a=${a.toString(16)} b=${b.toString(16)} carry=${carry}: value=${result(cpu, width).toString(16)} flags=${gotFlags}; expected=${want.value.toString(16)} flags=${want.flags}`);
         }
       }

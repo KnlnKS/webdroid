@@ -37,9 +37,9 @@ export class Args implements ArgReader {
   private n = 0;      // next core register
   private sp = 0;     // next stack slot
   constructor(cpu: Cpu) { this.reset(cpu); }
-  reset(cpu: Cpu): void { this.cpu = cpu; this.n = 0; this.sp = cpu.r[13]; }
+  reset(cpu: Cpu): void { this.cpu = cpu; this.n = 0; this.sp = cpu.w[26]; }
   i(): number {
-    if (this.n < 4) return this.cpu.r[this.n++];
+    if (this.n < 4) return this.cpu.w[2 * this.n++];
     const v = mem.ld32(this.sp); this.sp += 4; return v;
   }
   u(): number { return this.i() >>> 0; }
@@ -47,7 +47,7 @@ export class Args implements ArgReader {
   va(): bigint { return BigInt(this.p()); }
   l(): bigint {
     if (this.n & 1) this.n++;
-    if (this.n < 4) { const lo = this.cpu.r[this.n], hi = this.cpu.r[this.n + 1]; this.n += 2; return retPair(lo, hi); }
+    if (this.n < 4) { const lo = this.cpu.w[2 * this.n], hi = this.cpu.w[2 * this.n + 2]; this.n += 2; return retPair(lo, hi); }
     this.n = 4;
     this.sp = (this.sp + 7) & ~7;
     const v = mem.ld64(this.sp); this.sp += 8; return v;
@@ -152,15 +152,15 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
     const nm = names[slot];
     if (!hostTrace.filter || hostTrace.filter.test(nm)) {
       traced = true;
-      const r = cpu.r;
+      const w = cpu.w;
       let s0 = "";
-      if (STR0.has(nm) && r[0]) { try { s0 = ` "${mem.cstr(r[0] >>> 0, 120)}"`; } catch { s0 = " <bad ptr>"; } }
+      if (STR0.has(nm) && w[0]) { try { s0 = ` "${mem.cstr(w[0] >>> 0, 120)}"`; } catch { s0 = " <bad ptr>"; } }
       // a reservation's caller is two frames up (the mmap wrapper keeps its lr at sp+0x10)
       const args = Array.from({ length: cpu.a64 ? 8 : 4 }, (_, i) => {
-        const lo = (r[i] >>> 0).toString(16);
-        return cpu.a64 && cpu.h[i] ? (cpu.h[i] >>> 0).toString(16) + "_" + lo.padStart(8, "0") : lo;
+        const lo = (w[2 * i] >>> 0).toString(16);
+        return cpu.a64 && w[2 * i + 1] ? (w[2 * i + 1] >>> 0).toString(16) + "_" + lo.padStart(8, "0") : lo;
       }).join(",");
-      const entry = `${cpu.name}:${nm}(${args})${s0} lr=${(r[cpu.lrx] >>> 0).toString(16)}`;
+      const entry = `${cpu.name}:${nm}(${args})${s0} lr=${(cpu.lr >>> 0).toString(16)}`;
       // a spin loop's repeats add nothing: keep the first pass through a short cycle
       if (hostTrace.ring.slice(-4).some((e) => e.startsWith(entry))) traced = false;
       else hostTrace.ring.push(entry);
@@ -169,7 +169,7 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
   }
   const t0 = slowMs ? performance.now() : 0;
   const ret = fn(cpu, a);
-  if (slowMs && performance.now() - t0 > slowMs) console.warn(`[slow-native] ${cpu.name}:${names[slot]}(${(cpu.r[0] >>> 0).toString(16)},${(cpu.r[1] >>> 0).toString(16)},${(cpu.r[2] >>> 0).toString(16)}) ${(performance.now() - t0).toFixed(0)}ms`);
+  if (slowMs && performance.now() - t0 > slowMs) console.warn(`[slow-native] ${cpu.name}:${names[slot]}(${(cpu.w[0] >>> 0).toString(16)},${(cpu.w[2] >>> 0).toString(16)},${(cpu.w[4] >>> 0).toString(16)}) ${(performance.now() - t0).toFixed(0)}ms`);
   if (ret instanceof Promise) { cpu.pending = ret; return; }
   if (traced) hostTrace.ring[hostTrace.ring.length - 1] += `=${typeof ret === "number" ? (ret >>> 0).toString(16) : String(ret)}`;
   hostReturn(cpu, ret);
@@ -183,13 +183,13 @@ export function hostReturn(cpu: Cpu, ret: HostRet): void {
   if (ret === VRET || ret === ARG0) { /* already in v0 / x0 */ }
   // a negative number is an error or count the caller may read as a 64-bit ssize_t/long: sign-extend it;
   // a pointer is a positive number, and an int result's upper half is unspecified either way
-  else if (typeof ret === "number") { cpu.r[0] = ret | 0; if (cpu.a64) cpu.h[0] = ret < 0 ? -1 : 0; }
+  else if (typeof ret === "number") { cpu.w[0] = ret | 0; cpu.w[1] = ret < 0 ? -1 : 0; }
   else if (typeof ret === "bigint") {
-    cpu.r[0] = Number(ret & 0xffffffffn) | 0;
+    cpu.w[0] = Number(ret & 0xffffffffn) | 0;
     const hi = Number((ret >> 32n) & 0xffffffffn) | 0;
-    if (cpu.a64) cpu.h[0] = hi; else cpu.r[1] = hi;
+    if (cpu.a64) cpu.w[1] = hi; else cpu.w[2] = hi;
   }
-  cpu.setPc(cpu.r[cpu.lrx]);
+  cpu.setPc(cpu.lr);
 }
 
 /** AAPCS64 argument cursor: x0–x7 then the caller's stack in 8-byte slots. A 64-bit value is one
@@ -201,20 +201,20 @@ export class Args64 implements ArgReader {
   private nv = 0;     // next SIMD/FP register
   private sp = 0;     // next stack slot
   constructor(cpu: Cpu) { this.reset(cpu); }
-  reset(cpu: Cpu): void { this.cpu = cpu; this.n = 0; this.nv = 0; this.sp = cpu.r[31] >>> 0; }
+  reset(cpu: Cpu): void { this.cpu = cpu; this.n = 0; this.nv = 0; this.sp = cpu.w[62] >>> 0; }
   i(): number {
-    if (this.n < 8) return this.cpu.r[this.n++];
+    if (this.n < 8) return this.cpu.w[2 * this.n++];
     const v = mem.ld32(this.sp); this.sp += 8; return v;
   }
   u(): number { return this.i() >>> 0; }
   p(): number {
-    if (this.n < 8) { const lo = this.cpu.r[this.n], hi = this.cpu.h[this.n]; this.n++; return hi ? mem.tx(hi, lo) : lo >>> 0; }
+    if (this.n < 8) { const lo = this.cpu.w[2 * this.n], hi = this.cpu.w[2 * this.n + 1]; this.n++; return hi ? mem.tx(hi, lo) : lo >>> 0; }
     const lo = mem.ld32(this.sp), hi = mem.ld32(this.sp + 4); this.sp += 8;
     return hi ? mem.tx(hi, lo) : lo >>> 0;
   }
   va(): bigint { return this.ul(); }
   l(): bigint {
-    if (this.n < 8) { const lo = this.cpu.r[this.n], hi = this.cpu.h[this.n]; this.n++; return retPair(lo, hi); }
+    if (this.n < 8) { const lo = this.cpu.w[2 * this.n], hi = this.cpu.w[2 * this.n + 1]; this.n++; return retPair(lo, hi); }
     const v = mem.ld64(this.sp); this.sp += 8; return v;
   }
   ul(): bigint { return BigInt.asUintN(64, this.l()); }

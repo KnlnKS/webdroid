@@ -11,7 +11,7 @@ afterAll(() => setA64(false));
 test("nextafterf steps one float32 ULP, including signed zero and infinities", async () => {
   const cpu = new Cpu(mainThread, "nextafterf test"), fn = lookupHost("nextafterf", "libm.so")!;
   const run = async (x: number, y: number) => {
-    cpu.ensureStack(); cpu.r[30] = RET_SENTINEL; cpu.s[0] = x; cpu.s[4] = y; cpu.setPc(fn);
+    cpu.ensureStack(); cpu.w[60] = RET_SENTINEL; cpu.s[0] = x; cpu.s[4] = y; cpu.setPc(fn);
     await cpu.run();
   };
   const cases = [

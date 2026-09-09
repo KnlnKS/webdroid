@@ -137,7 +137,7 @@ export fn malloc(n: u32) u32 {
     return p;
 }
 /// 0 for a corrupt header
-export fn free(p_in: u32) u32 {
+pub export fn free(p_in: u32) u32 {
     if (p_in == 0) return 1;
     var p = p_in;
     if (p & (PAGE_SIZE - 1) == 0 and big_len[pageOf(p)] != 0) {
@@ -183,7 +183,7 @@ export fn realloc(p: u32, n: u32) u32 {
     _ = free(p);
     return q;
 }
-export fn calloc(n: u32, m: u32) u32 {
+pub export fn calloc(n: u32, m: u32) u32 {
     const total = @as(u64, n) * m;
     if (total > 0xffff_ffff) return 0;
     const p = malloc(@intCast(total));
@@ -215,7 +215,7 @@ export fn memalign(alignment: u32, n: u32) u32 {
 
 /// n bytes of pages: a hole, then fresh heap, and for a reservation the uncommitted part of
 /// other reservations. Pages of a mapping come zeroed; a reservation's are zeroed at commit.
-export fn map_pages(n_in: u32, rsv: u32, alignment: u32) u32 {
+pub export fn map_pages(n_in: u32, rsv: u32, alignment: u32) u32 {
     const n = (n_in +% (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
     if (n == 0) return 0;
     const np = n >> PAGE_SHIFT;
@@ -233,10 +233,12 @@ export fn map_pages(n_in: u32, rsv: u32, alignment: u32) u32 {
     return p;
 }
 /// return a page-aligned run (any sub-range of a mapping); 0 when misaligned
-export fn unmap_pages(addr: u32, n_in: u32) u32 {
+pub export fn unmap_pages(addr: u32, n_in: u32) u32 {
     const n = (n_in +% (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
     if (addr & (PAGE_SIZE - 1) != 0 or n == 0 or addr < abi.ARENA_BASE) return 0;
-    @memset(pages[pageOf(addr)..@min(pageOf(addr) + (n >> PAGE_SHIFT), pageOf(module_bot))], FREE);
+    const a = pageOf(addr);
+    const b = @min(a + (n >> PAGE_SHIFT), pageOf(module_bot));
+    if (b > a) @memset(pages[a..b], FREE);
     return 1;
 }
 /// mprotect to accessible: a reserved page becomes a zeroed page of its own; 0 (ENOMEM) on an
@@ -361,7 +363,7 @@ inline fn lo(v: u64) u32 {
 }
 
 /// plane h ≠ 0 address → buffer offset; 0 past the committed prefix, as the page would fault
-export fn tx(h: u32, l: u32) u32 {
+pub export fn tx(h: u32, l: u32) u32 {
     const off = l -% L[h & 255];
     if (h >= PLANES or off >= S[h]) return 0;
     return P[h] + off;

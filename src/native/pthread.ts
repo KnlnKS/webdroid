@@ -114,8 +114,8 @@ function startThread(parent: Cpu, start: number, arg: bigint, detached: boolean)
   cpu.signalMask = parent.signalMask;
   bindCpu(jt, cpu);
   try { cpu.ensureStack(); } catch (e) { cpu.dispose(); throw e; }
-  cpu.r[0] = Number(arg & 0xffffffffn) | 0; cpu.h[0] = Number(arg >> 32n) | 0;
-  cpu.r[cpu.lrx] = RET_SENTINEL;
+  cpu.w[0] = Number(arg & 0xffffffffn) | 0; cpu.w[1] = Number(arg >> 32n) | 0;
+  cpu.w[2 * cpu.lrx] = RET_SENTINEL; cpu.w[2 * cpu.lrx + 1] = 0;
   cpu.setPc(start);
   const rec = { retval: 0n, done: Promise.resolve(), detached, joined: false, exited: false };
   rec.done = new Promise<void>((resolve) => {
@@ -124,7 +124,7 @@ function startThread(parent: Cpu, start: number, arg: bigint, detached: boolean)
       void (async () => {
         try {
           await cpu.run();
-          if (!cpu.finished) rec.retval = (cpu.a64 ? BigInt(cpu.h[0] >>> 0) << 32n : 0n) | BigInt(cpu.r[0] >>> 0);
+          if (!cpu.finished) rec.retval = (cpu.a64 ? BigInt(cpu.w[1] >>> 0) << 32n : 0n) | BigInt(cpu.w[0] >>> 0);
           // key destructors, as many rounds as they keep setting values (Bionic stops at four)
           for (let round = 0, again = true; again && round < 4; round++) {
             again = false;
