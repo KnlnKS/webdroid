@@ -102,6 +102,21 @@ describe("libcore.io.Memory", () => {
     }
   });
 
+  test("moves the bits of a double or float field accessed as a long or int", async () => {
+    const holder = new (rt.link("java/lang/Object").ctor)() as Record<string, unknown>;
+    const field = (desc: string, prop: string) => Object.assign(new (rt.link("java/lang/reflect/Field").ctor)(), { desc, prop });
+    const d = unsafeCall("objectFieldOffset", "(Ljava/lang/reflect/Field;)J", field("D", "f$d$t")) as bigint;
+    const f = unsafeCall("objectFieldOffset", "(Ljava/lang/reflect/Field;)J", field("F", "f$f$t")) as bigint;
+    expect(Number(d) % 8).toBe(0);
+    holder["f$d$t"] = 1.5;
+    expect(unsafeCall("getLong", "(Ljava/lang/Object;J)J", holder, d)).toBe(0x3ff8000000000000n);
+    unsafeCall("putLong", "(Ljava/lang/Object;JJ)V", holder, d, 0x4000000000000000n);
+    expect(holder["f$d$t"]).toBe(2);
+    unsafeCall("putInt", "(Ljava/lang/Object;JI)V", holder, f, 0x3fc00000);
+    expect(holder["f$f$t"]).toBe(1.5);
+    expect(unsafeCall("getInt", "(Ljava/lang/Object;J)I", holder, f)).toBe(0x3fc00000);
+  });
+
   test("checks byte array arguments", () => {
     expect(() => call("peekByteArray", "(J[BII)V", BigInt(address), null, 0, 1)).toThrow();
     expect(() => call("pokeByteArray", "(J[BII)V", BigInt(address), new Int8Array(2), 1, 2)).toThrow();

@@ -1,7 +1,7 @@
 // java.lang.reflect.Method + annotation instances backed by DEX annotation parsing.
 
 import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
-import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, newPrimArray, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName } from "../abi";
+import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, newPrimArray, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat } from "../abi";
 import { vcall, boxInt, box, stringHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 
@@ -413,16 +413,20 @@ rt.register({
     },
   },
 });
-// Unsafe "offsets" are indices into this table of mangled property names.
-const unsafeProps: string[] = [];
+// Unsafe "offsets" index this table of fields, with a stride of 8 so the word arithmetic
+// protobuf's Android accessor applies to them (offset & ~3, (offset & 3) << 3) is an identity.
+// An access wider or narrower than the field's own type moves the bits, as memory would: that
+// same accessor reads a double as getLong and a float as getInt.
+const unsafeFields: { prop: string; desc: string }[] = [];
 const unsafeIndex = new Map<string, number>();
 function fieldOffset(f: JField): bigint {
   let i = unsafeIndex.get(f.prop);
-  if (i === undefined) { i = unsafeProps.length; unsafeProps.push(f.prop); unsafeIndex.set(f.prop, i); }
-  return BigInt(i);
+  if (i === undefined) { i = unsafeFields.length; unsafeFields.push({ prop: f.prop, desc: f.desc }); unsafeIndex.set(f.prop, i); }
+  return BigInt(i * 8);
 }
+const isRaw = (o: unknown) => Array.isArray(o) || ArrayBuffer.isView(o);
 function uKey(o: unknown, off: bigint): string | number {
-  return Array.isArray(o) || ArrayBuffer.isView(o) ? Number(off) : unsafeProps[Number(off)];
+  return isRaw(o) ? Number(off) : unsafeFields[Number(off) / 8].prop;
 }
 function uGet(o: any, off: bigint) { return o[uKey(o, off)] ?? null; }
 function uPut(o: any, off: bigint, v: unknown) { o[uKey(o, off)] = v; }
@@ -435,7 +439,7 @@ function uView(o: unknown): DataView | null {
 }
 function uGetInt(o: any, off: bigint): number {
   const view = uView(o);
-  if (!view) return o[uKey(o, off)] ?? 0;
+  if (!view) { const f = unsafeFields[Number(off) / 8], v = o[f.prop] ?? 0; return f.desc === "F" ? floatToIntBits(v) : v; }
   const offset = Number(off);
   if (offset + 4 <= view.byteLength) return view.getInt32(offset, true);
   if (offset < 0 || offset >= view.byteLength) return view.getInt32(offset, true);
@@ -445,17 +449,22 @@ function uGetInt(o: any, off: bigint): number {
 }
 function uPutInt(o: any, off: bigint, value: number): void {
   const view = uView(o);
-  if (!view) { o[uKey(o, off)] = value; return; }
+  if (!view) { const f = unsafeFields[Number(off) / 8]; o[f.prop] = f.desc === "F" ? intBitsToFloat(value) : value; return; }
   const offset = Number(off);
   if (offset + 4 <= view.byteLength) { view.setInt32(offset, value, true); return; }
   if (offset < 0 || offset >= view.byteLength) { view.setInt32(offset, value, true); return; }
   for (let i = 0; offset + i < view.byteLength; i++) view.setUint8(offset + i, value >>> (i * 8));
 }
 function uGetLong(o: any, off: bigint): bigint {
-  return uView(o)?.getBigInt64(Number(off), true) ?? o[uKey(o, off)] ?? 0n;
+  const view = uView(o);
+  if (view) return view.getBigInt64(Number(off), true);
+  const f = unsafeFields[Number(off) / 8], v = o[f.prop];
+  return f.desc === "D" ? doubleToLongBits(v ?? 0) : v ?? 0n;
 }
 function uPutLong(o: any, off: bigint, value: bigint): void {
-  const view = uView(o); if (view) view.setBigInt64(Number(off), value, true); else o[uKey(o, off)] = value;
+  const view = uView(o);
+  if (view) view.setBigInt64(Number(off), value, true);
+  else { const f = unsafeFields[Number(off) / 8]; o[f.prop] = f.desc === "D" ? longBitsToDouble(value) : value; }
 }
 function arrayIndexScale(cls: JClass): number {
   switch (cls.arrDesc?.[1]) {
