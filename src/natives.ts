@@ -23,6 +23,7 @@ import "./jvm/natives/jinvoke";
 import "./jvm/natives/jnio";
 import "./jvm/natives/jsec";
 import "./jvm/natives/jcrypto";
+import "./jvm/natives/jec";
 import "./jvm/natives/jnet";
 import "./jvm/natives/jzip";
 import "./android/gl";

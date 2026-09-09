@@ -6,6 +6,7 @@ import { mkIter } from "./jutil";
 import { mangleMethod } from "../abi";
 import { JKeyGenSpec } from "../../android/security";
 import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain, rsaCrypt } from "./jrsa";
+import { generateEc, isEcCurve, curveOfParams } from "./jec";
 import { caStoreMethods } from "./jx509";
 import { type JBuffer, bufferView } from "./jnio";
 
@@ -470,19 +471,30 @@ rt.register({
     "getCertificateChain()[Ljava/security/cert/Certificate;": function (this: JPrivateKeyEntry) { return this.key && rsaChain(this.key); },
   },
 });
-class JKeyPairGenerator extends JObj { bits = 2048; store = false; spec: JKeyGenSpec | null = null; }
+class JKeyPairGenerator extends JObj { bits = 2048; store = false; spec: JKeyGenSpec | null = null; curve: string | null = null; }
 function keyPairGenerator(algorithm: string, provider: string | null = null) {
-  if (algorithm?.toUpperCase() !== "RSA") throw rt.mkThrowable("java/security/NoSuchAlgorithmException", algorithm);
+  const algo = algorithm?.toUpperCase();
+  if (algo !== "RSA" && algo !== "EC") throw rt.mkThrowable("java/security/NoSuchAlgorithmException", algorithm);
   if (provider != null && provider !== "AndroidKeyStore" && provider !== "AndroidOpenSSL" && provider !== "BC") throw rt.mkThrowable("java/security/NoSuchProviderException", provider);
-  const generator = new JKeyPairGenerator(); generator.store = provider === "AndroidKeyStore"; return generator;
+  const generator = new JKeyPairGenerator(); generator.store = provider === "AndroidKeyStore";
+  if (algo === "EC") generator.curve = "P-256";
+  return generator;
 }
 function initializeKeyPair(generator: JKeyPairGenerator, spec: JKeyGenSpec) {
+  if (generator.curve && !generator.store) {
+    if (rt.iof(spec, "java/security/spec/ECGenParameterSpec")) generator.curve = (spec as unknown as { name: string }).name;
+    else if (rt.iof(spec, "java/security/spec/ECParameterSpec")) generator.curve = curveOfParams(spec).names[0];
+    else throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "EC parameters required");
+    if (!isEcCurve(generator.curve)) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "unsupported curve " + generator.curve);
+    return;
+  }
   if (!(spec instanceof JKeyGenSpec) || !generator.store) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Keystore parameters required");
   if (spec.strongBox || spec.userAuth || spec.attestation != null || spec.unlockedDeviceRequired) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Hardware-backed keys and user authentication are unavailable");
   if (spec.keySize !== -1 && (spec.keySize < 512 || spec.keySize > 8192 || spec.keySize % 8)) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Invalid RSA key size");
   generator.spec = spec; generator.bits = spec.keySize === -1 ? 2048 : spec.keySize;
 }
 async function generateKeyPair(this: JKeyPairGenerator) {
+  if (this.curve && !this.store) return generateEc(this.curve);
   if (this.store && !this.spec) throw rt.mkThrowable("java/lang/IllegalStateException", "Not initialized");
   const pair = await generateRsa(this.bits, this.spec);
   if (this.spec) { const store = storeFor("AndroidKeyStore"); store.entries.set(this.spec.alias, pair.privateKey); store.persist(); }
@@ -493,8 +505,9 @@ rt.register({
   methods: {
     "static getInstance(Ljava/lang/String;)Ljava/security/KeyPairGenerator;": keyPairGenerator,
     "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/KeyPairGenerator;": keyPairGenerator,
-    "getAlgorithm()Ljava/lang/String;": () => "RSA",
+    "getAlgorithm()Ljava/lang/String;": function (this: JKeyPairGenerator) { return this.curve ? "EC" : "RSA"; },
     "initialize(I)V": function (this: JKeyPairGenerator, bits: number) {
+      if (this.curve) { if (!isEcCurve(String(bits))) throw rt.mkThrowable("java/security/InvalidParameterException", "Invalid EC key size"); this.curve = String(bits); return; }
       if (this.store || bits < 512 || bits > 8192 || bits % 8) throw rt.mkThrowable("java/security/InvalidParameterException", "Invalid RSA key size");
       this.bits = bits;
     },

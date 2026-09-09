@@ -2,6 +2,7 @@ import type { pki } from "node-forge";
 import { JObj, rt } from "../runtime";
 import { jarray } from "../abi";
 import { vcall } from "./jlang";
+import { mkBI } from "./jmath";
 import { JKeyGenSpec } from "../../android/security";
 
 const forge = () => import("node-forge").then((m) => m.default);
@@ -38,19 +39,25 @@ class JRsaKeyPair extends JObj {
 for (const name of ["java/security/PublicKey", "java/security/PrivateKey"]) {
   rt.register({ name, ctor: class extends JObj {}, ifaces: ["java/security/Key"] });
 }
+for (const name of ["java/security/interfaces/RSAKey", "java/security/interfaces/RSAPublicKey", "java/security/interfaces/RSAPrivateKey"]) rt.register({ name, ctor: class extends JObj {} });
+const bigInt = (v: { toString(radix: number): string }) => mkBI(BigInt("0x" + v.toString(16)));
 rt.register({
-  name: "webdroid/RsaPublicKey", ctor: JRsaPublicKey, ifaces: ["java/security/PublicKey", "java/security/Key"],
+  name: "webdroid/RsaPublicKey", ctor: JRsaPublicKey, ifaces: ["java/security/interfaces/RSAPublicKey", "java/security/interfaces/RSAKey", "java/security/PublicKey", "java/security/Key"],
   methods: {
     "getAlgorithm()Ljava/lang/String;": () => "RSA",
     "getFormat()Ljava/lang/String;": () => "X.509",
     "getEncoded()[B": function (this: JRsaPublicKey) { return new Int8Array(this.encoded); },
+    "getModulus()Ljava/math/BigInteger;": async function (this: JRsaPublicKey) { return bigInt((await this.key()).n); },
+    "getPublicExponent()Ljava/math/BigInteger;": async function (this: JRsaPublicKey) { return bigInt((await this.key()).e); },
     "equals(Ljava/lang/Object;)Z": function (this: JRsaPublicKey, o: unknown) { return o instanceof JRsaPublicKey && o.encoded.length === this.encoded.length && o.encoded.every((b, i) => b === this.encoded[i]) ? 1 : 0; },
     "hashCode()I": function (this: JRsaPublicKey) { let h = 0; for (const b of this.encoded) h = (Math.imul(h, 31) + b) | 0; return h; },
   },
 });
 rt.register({
-  name: "webdroid/RsaPrivateKey", ctor: JRsaPrivateKey, ifaces: ["java/security/PrivateKey", "java/security/Key"],
+  name: "webdroid/RsaPrivateKey", ctor: JRsaPrivateKey, ifaces: ["java/security/interfaces/RSAPrivateKey", "java/security/interfaces/RSAKey", "java/security/PrivateKey", "java/security/Key"],
   methods: {
+    "getModulus()Ljava/math/BigInteger;": async function (this: JRsaPrivateKey) { return bigInt((await this.key()).n); },
+    "getPrivateExponent()Ljava/math/BigInteger;": async function (this: JRsaPrivateKey) { return bigInt((await this.key()).d); },
     "getAlgorithm()Ljava/lang/String;": () => "RSA",
     "getFormat()Ljava/lang/String;": function (this: JRsaPrivateKey) { return this.stored ? null : "PKCS#8"; },
     "getEncoded()[B": function (this: JRsaPrivateKey) { return this.stored ? null : new Int8Array(this.encoded); },

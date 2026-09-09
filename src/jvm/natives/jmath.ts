@@ -416,8 +416,31 @@ function divScaled(a: JBigDecimal, b: JBigDecimal, sc: number, mode: number): JB
   return mkBD(shift >= 0 ? divRound(a.u * pow10(shift), b.u, mode) : divRound(a.u, b.u * pow10(-shift), mode), sc);
 }
 
-class JBigInteger extends JObj { v = 0n; }
-function mkBI(v: bigint): JBigInteger { const b = new JBigInteger(); b.v = v; return b; }
+export class JBigInteger extends JObj { v = 0n; }
+function modInverse(a: bigint, m: bigint): bigint {
+  let [r0, r1, t0, t1] = [((a % m) + m) % m, m, 1n, 0n];
+  while (r0 !== 0n) { const q = r1 / r0; [r0, r1] = [r1 - q * r0, r0]; [t0, t1] = [t1 - q * t0, t0]; }
+  if (r1 !== 1n) throw rt.mkThrowable("java/lang/ArithmeticException", "BigInteger not invertible.");
+  return ((t1 % m) + m) % m;
+}
+// Miller-Rabin on the first primes as witnesses: exact below 3.3e24, and past that the
+// error chance is far below any certainty an app asks for
+function isProbablePrime(n: bigint): boolean {
+  if (n < 2n) return false;
+  const bases = [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n, 41n];
+  for (const b of bases) if (n === b) return true; else if (n % b === 0n) return false;
+  let d = n - 1n, r = 0;
+  while (!(d & 1n)) { d >>= 1n; r++; }
+  const pow = (b: bigint, e: bigint) => { let x = 1n; for (b %= n; e > 0n; e >>= 1n, b = b * b % n) if (e & 1n) x = x * b % n; return x; };
+  witness: for (const a of bases) {
+    let x = pow(a, d);
+    if (x === 1n || x === n - 1n) continue;
+    for (let i = 1; i < r; i++) { x = x * x % n; if (x === n - 1n) continue witness; }
+    return false;
+  }
+  return true;
+}
+export function mkBI(v: bigint): JBigInteger { const b = new JBigInteger(); b.v = v; return b; }
 function bytesToBig(b: Int8Array): bigint { let v = 0n; for (const x of b) v = (v << 8n) | BigInt(x & 0xff); return v; }
 // Java's bitLength: bits of the minimal two's-complement form, sign bit excluded.
 function bitLength(v: bigint): number { const m = v < 0n ? ~v : v; return m === 0n ? 0 : m.toString(2).length; }
@@ -483,6 +506,24 @@ rt.register({
     "pow(I)Ljava/math/BigInteger;": function (this: JBigInteger, n: number) {
       if (n < 0) arith("Negative exponent");
       return mkBI(this.v ** BigInt(n));
+    },
+    "modPow(Ljava/math/BigInteger;Ljava/math/BigInteger;)Ljava/math/BigInteger;": function (this: JBigInteger, e: JBigInteger, m: JBigInteger) {
+      if (m.v <= 0n) throw rt.mkThrowable("java/lang/ArithmeticException", "BigInteger: modulus not positive");
+      let base = e.v < 0n ? modInverse(this.v, m.v) : ((this.v % m.v) + m.v) % m.v, exp = e.v < 0n ? -e.v : e.v, r = 1n % m.v;
+      for (; exp > 0n; exp >>= 1n, base = base * base % m.v) if (exp & 1n) r = r * base % m.v;
+      return mkBI(r);
+    },
+    "modInverse(Ljava/math/BigInteger;)Ljava/math/BigInteger;": function (this: JBigInteger, m: JBigInteger) {
+      if (m.v <= 0n) throw rt.mkThrowable("java/lang/ArithmeticException", "BigInteger: modulus not positive");
+      return mkBI(modInverse(this.v, m.v));
+    },
+    "isProbablePrime(I)Z": function (this: JBigInteger) { return isProbablePrime(this.v < 0n ? -this.v : this.v) ? 1 : 0; },
+    "sqrt()Ljava/math/BigInteger;": function (this: JBigInteger) {
+      if (this.v < 0n) throw rt.mkThrowable("java/lang/ArithmeticException", "negative BigInteger");
+      let x = BigInt(Math.floor(Math.sqrt(Number(this.v)))) + 1n;
+      for (let y = (x + this.v / x) >> 1n; y < x; y = (x + this.v / x) >> 1n) x = y;
+      while (x * x > this.v) x--;
+      return mkBI(x);
     },
     "gcd(Ljava/math/BigInteger;)Ljava/math/BigInteger;": function (this: JBigInteger, o: JBigInteger) {
       let a = babs(this.v), b = babs(o.v);
