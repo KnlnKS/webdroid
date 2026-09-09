@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { mangleMethod, jarray } from "../jvm/abi";
-import { vcall, boxInt, box, JFloat } from "../jvm/natives/jlang";
+import { vcall, vcallMaybe, boxInt, box, JFloat } from "../jvm/natives/jlang";
 import { toJsArray, newArrayList } from "../jvm/natives/jutil";
 import { uiState, invalidate, JView, guardCall } from "./view";
 import { reportUncaught } from "./os";
@@ -11,6 +11,7 @@ import { onMain } from "./mainloop";
 import { parseAXML, TV, type XmlNode, type XmlAttr } from "./axml";
 import { type Resources, type RV, attrTable, T_STR, normRV, rvFloat, rvInt } from "./res";
 import type { JContext } from "./context";
+import { JRect } from "./graphics";
 
 // ── ValueAnimator/ObjectAnimator (time-driven via animHooks)
 class JValueAnimator extends JObj {
@@ -198,6 +199,26 @@ rt.register({
   },
 });
 rt.register({ name: "android/animation/TypeEvaluator", ctor: class extends JObj {} });
+class JRectEvaluator extends JObj { rect: JRect | null = null; }
+function evaluateRect(this: JRectEvaluator, f: number, a: JRect, b: JRect): JRect {
+  const edge = (x: number, y: number) => (x + rt.f2i(Math.fround(Math.fround((y - x) | 0) * f))) | 0;
+  const left = edge(a.left, b.left), top = edge(a.top, b.top);
+  const right = edge(a.right, b.right), bottom = edge(a.bottom, b.bottom);
+  const r = this.rect ?? new JRect();
+  r.left = left; r.top = top; r.right = right; r.bottom = bottom;
+  return r;
+}
+rt.register({
+  name: "android/animation/RectEvaluator", ctor: JRectEvaluator, ifaces: ["android/animation/TypeEvaluator"],
+  methods: {
+    "<init>()V": function () {},
+    "<init>(Landroid/graphics/Rect;)V": function (this: JRectEvaluator, r: JRect | null) { this.rect = r; },
+    "evaluate(FLandroid/graphics/Rect;Landroid/graphics/Rect;)Landroid/graphics/Rect;": evaluateRect,
+    "evaluate(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (this: JRectEvaluator, f: number, a: JRect, b: JRect) {
+      return vcallMaybe(this, "evaluate", "(FLandroid/graphics/Rect;Landroid/graphics/Rect;)Landroid/graphics/Rect;", f, a, b);
+    },
+  },
+});
 const lerp = (f: number, a: number, b: number) => a + (b - a) * f;
 rt.register({
   name: "android/animation/FloatEvaluator", ctor: class extends JObj {}, ifaces: ["android/animation/TypeEvaluator"],
