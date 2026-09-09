@@ -5,7 +5,7 @@
 import { loadElf, symbolize, nearestSymbol, type Module } from "./elf";
 import { mem } from "./mem";
 import { probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp } from "./host";
-import { cpuFor, setSymbolizeHook, setA64, isA64, type Cpu } from "./cpu";
+import { cpuFor, setSymbolizeHook, setBacktraceHook, setA64, isA64, type Cpu } from "./cpu";
 import { trampSlot, RET_SENTINEL } from "./abi";
 import { rt } from "../jvm/runtime";
 import { curThread } from "../jvm/natives/jlang";
@@ -82,6 +82,7 @@ export function symbolizePc(pc: number): string {
 }
 
 /** the frame-pointer chain from x29: what called what, as module+offset (a debugging aid) */
+setBacktraceHook((cpu) => backtrace(cpu));
 export function backtrace(cpu: Cpu, max = 24): string[] {
   const out = [symbolizePc(cpu.r[cpu.pcx] >>> 0), symbolizePc(cpu.r[cpu.lrx] >>> 0)];
   let fp = cpu.r[29] >>> 0;

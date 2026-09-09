@@ -157,7 +157,9 @@ export function setA64(on: boolean): void {
 export function isA64(): boolean { return A64; }
 
 /** the register file at the first native fault, as the faulting block found it (debug) */
-export const lastFault: { regs: { cpu: string; r: number[]; h: number[] } | null } = { regs: null };
+export const lastFault: { regs: { cpu: string; r: number[]; h: number[]; bt: string[]; frames: string[] } | null } = { regs: null };
+let backtraceHook: (cpu: Cpu) => string[] = () => [];
+export function setBacktraceHook(f: (cpu: Cpu) => string[]): void { backtraceHook = f; }
 /** pcs whose block entry logs the registers: a breakpoint that does not stop (wd.native.watch) */
 /** log every call() frame on the named thread (debug: set __wdCallLog to the thread name before load) */
 const callLog = (globalThis as { __wdCallLog?: string }).__wdCallLog ?? "";
@@ -449,7 +451,7 @@ export class Cpu {
       try { ex = this.runSlice(slice.instr); }
       catch (e) {
         if (e instanceof NativeFault) {
-          if (!lastFault.regs) lastFault.regs = { cpu: this.name, r: Array.from(this.r), h: Array.from(this.h) };   // the block's entry state (locals are not written back)
+          if (!lastFault.regs) lastFault.regs = { cpu: this.name, r: Array.from(this.r), h: Array.from(this.h), bt: backtraceHook(this), frames: [...this.frames] };   // the block's entry state (locals are not written back)
           if (!e.pc) e.pc = this.bpc >>> 0;
           if (!e.message.includes("@")) e.message += ` @ ${symbolizeHook(e.pc)} (block 0x${(this.bpc >>> 0).toString(16)}, ${this.name})`;
         }
