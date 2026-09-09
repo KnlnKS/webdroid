@@ -6,18 +6,17 @@ export const PAGE_SIZE = 1 << PAGE_SHIFT;
 /** the first 64 KiB is never mapped: a null-ish pointer faults instead of reading zeros */
 export const LOW = 0x1_0000;
 
-// Every fixed region sits at the bottom, each starting where the last ended, so the buffer can
-// be sized for the process without moving anything: a 32-bit process keeps 256 MiB, a 64-bit one
-// gets 1.5 GiB (the largest a plain ArrayBuffer allocates in Chrome — 2 GiB throws — and every
-// address stays below 2^31). It is charged to the JS heap in full, so it is sized once, lazily,
-// by the first image loaded (mem.init from setA64), not at import: an app with no .so pays
-// nothing. Above the fixed regions the malloc arena and the ELF images share one region and
-// grow toward each other (malloc bumps up, mem.reserve bumps down), which is what a process
-// does anyway. The range test flags.ts inlines into every generated load and store is derived
-// from the live size, never spelled.
+// Every fixed region sits at the bottom, each starting where the last ended, so the memory can
+// grow for the process without moving anything: a 32-bit process keeps 256 MiB, a 64-bit one
+// gets the whole 32-bit space a wasm memory can back, grown in place by the first image loaded
+// (mem.init from setA64). Above the fixed regions the malloc arena and the ELF images share one
+// region and grow toward each other (malloc bumps up, mem.reserve bumps down), which is what a
+// process does anyway. The range test flags.ts inlines into every generated load and store is
+// derived from the live size, never spelled.
 const STACK_SPAN = 0x0400_0000;                // thread stacks, 1 MiB + a 64 KiB guard gap each: 60 of them
 const HOST_SPAN = 0x0008_0000;                 // host-owned guest data: __sF, _ctype_, JNI tables, static strings, program headers
 const TRAMP_SPAN = 0x0007_0000;                // host-call trampolines, 8 bytes per slot
+const KERN_SPAN = 0x0060_0000;                 // the core's page tables (mem.zig)
 
 export const STACK_BASE = 0x0010_0000;
 export const STACK_END = STACK_BASE + STACK_SPAN;
@@ -27,8 +26,10 @@ export const TRAMP_BASE = HOST_DATA_END;
 export const TRAMP_END = TRAMP_BASE + TRAMP_SPAN;
 /** lr planted by Cpu.call; reaching it as pc ends the call. The last trampoline slot, never defined. */
 export const RET_SENTINEL = TRAMP_END - 8;
+export const KERN_BASE = TRAMP_END;
+export const KERN_END = KERN_BASE + KERN_SPAN;
 /** the shared region: malloc bumps up from ARENA_BASE, ELF images bump down from the end of memory */
-export const ARENA_BASE = TRAMP_END;
+export const ARENA_BASE = KERN_END;
 export const MEM_SIZE_A32 = 0x1000_0000;
 export const MEM_SIZE_A64 = 0xffff_0000; // 4 GiB less a page: the whole 32-bit space a WebAssembly memory can back
 /** above this the buffer backs the address planes' chunks rather than plane 0 itself (mem.ts) */
