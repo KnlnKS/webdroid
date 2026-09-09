@@ -285,7 +285,8 @@ class JAudioTrack extends JObj {
     this.timer = setInterval(() => {
       if (this.playState !== 3 || !this.listener) return;
       // refill until ~3 periods are queued; each callback is one write of one period
-      if (this.queuedSec() < 3 * this.period / this.rate) void onMain(() => vcall(this.listener, "onPeriodicNotification", D_periodic, this)).catch(reportUncaught);
+      // the listener is read again on the main thread: a release() can land between the two
+      if (this.queuedSec() < 3 * this.period / this.rate) void onMain(() => this.listener && vcall(this.listener, "onPeriodicNotification", D_periodic, this)).catch(reportUncaught);
     }, periodMs / 2);
   }
   stopTimer(): void { if (this.timer) { clearInterval(this.timer); this.timer = null; } }
