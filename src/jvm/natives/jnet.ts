@@ -9,7 +9,8 @@
 // than be told a comforting lie.
 import { rt, JObj, maySuspend, type NativeSpec } from "../runtime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
-import { boxInt, stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
+import { stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
+import { JX509, mkPrincipal } from "./jx509";
 import { jarray, strArray, dotName, utf8 } from "../abi";
 import { vfs, type JInputStream, type JOutputStream } from "./jio";
 import { Relay } from "../../shell/relay";
@@ -89,24 +90,6 @@ rt.register({
 });
 rt.register({ name: "java/net/Authenticator$RequestorType", ctor: class extends JObj {} });
 
-class JTMF extends JObj {}
-rt.register({
-  name: "javax/net/ssl/TrustManagerFactory", ctor: JTMF,
-  methods: {
-    "static getDefaultAlgorithm()Ljava/lang/String;": () => "PKIX",
-    "static getInstance(Ljava/lang/String;)Ljavax/net/ssl/TrustManagerFactory;": () => new JTMF(),
-    "init(Ljava/security/KeyStore;)V": () => {},
-    "getTrustManagers()[Ljavax/net/ssl/TrustManager;": () => jarray([new (rt.link("webdroid/X509TM").ctor)()], "Ljavax/net/ssl/TrustManager;"),
-  },
-});
-rt.register({
-  name: "webdroid/X509TM", ctor: class extends JObj {}, ifaces: ["javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager"],
-  methods: {
-    "checkClientTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;)V": () => {},
-    "checkServerTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;)V": () => {},
-    "getAcceptedIssuers()[Ljava/security/cert/X509Certificate;": () => jarray([], "Ljava/security/cert/X509Certificate;"),
-  },
-});
 class JSSLContext extends JObj {}
 rt.register({
   name: "javax/net/ssl/SSLContext", ctor: JSSLContext,
@@ -284,53 +267,6 @@ rt.register({
 const CIPHERS = ["TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384", "TLS_CHACHA20_POLY1305_SHA256",
   "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"];
 const PROTOCOLS = ["TLSv1.2", "TLSv1.3"];
-
-/**
- * The certificate an app sees for a relay-terminated connection. It is ours, and it says so:
- * the only thing it asserts is the host that was asked for, as a dNSName SAN, which is all a
- * hostname verifier reads. Anything that wants to check a signature or a pin gets nothing to
- * check and fails, which is the honest outcome.
- */
-class JX509 extends JObj { host = ""; }
-rt.register({
-  name: "java/security/cert/Certificate", ctor: class extends JObj {},
-  methods: { "getType()Ljava/lang/String;": () => "X.509" },
-});
-rt.register({
-  name: "java/security/cert/X509Certificate", ctor: JX509, sup: "java/security/cert/Certificate",
-  methods: {
-    "getSubjectAlternativeNames()Ljava/util/Collection;": function (this: JX509) {
-      const entry = newArrayList();
-      // Collection<List<?>> whose first element is an INTEGER, not an int: Kotlin's
-      // Intrinsics.areEqual calls .equals() on it, and a raw JS number has no such method.
-      entry.a = [boxInt(2), this.host];         // GeneralName type 2 = dNSName
-      const all = newArrayList();
-      all.a = [entry];
-      return all;
-    },
-    "getSubjectDN()Ljava/security/Principal;": function (this: JX509) { return mkPrincipal("CN=" + this.host); },
-    "getIssuerDN()Ljava/security/Principal;": () => mkPrincipal("CN=webdroid relay"),
-    "getSubjectX500Principal()Ljavax/security/auth/x500/X500Principal;": function (this: JX509) { return mkPrincipal("CN=" + this.host); },
-    "getEncoded()[B": () => new Int8Array(0),
-    "getPublicKey()Ljava/security/PublicKey;": () => null,
-    "getSerialNumber()Ljava/math/BigInteger;": () => null,
-    "checkValidity()V": () => {},
-    "checkValidity(Ljava/util/Date;)V": () => {},
-    "getType()Ljava/lang/String;": () => "X.509",
-    "toString()Ljava/lang/String;": function (this: JX509) { return "CN=" + this.host + " (webdroid relay)"; },
-  },
-});
-class JPrincipal extends JObj { name = ""; }
-function mkPrincipal(name: string): JPrincipal { const p = new (rt.link("javax/security/auth/x500/X500Principal").ctor)() as JPrincipal; p.name = name; return p; }
-rt.register({ name: "java/security/Principal", ctor: class extends JObj {} });
-rt.register({
-  name: "javax/security/auth/x500/X500Principal", ctor: JPrincipal, ifaces: ["java/security/Principal"],
-  methods: {
-    "<init>(Ljava/lang/String;)V": function (this: JPrincipal, dn: string) { this.name = dn; },
-    "getName()Ljava/lang/String;": function (this: JPrincipal) { return this.name; },
-    "toString()Ljava/lang/String;": function (this: JPrincipal) { return this.name; },
-  },
-});
 
 /** SSLSocket is a Socket that dials with TLS; the handshake happens at the relay, so
  *  startHandshake just makes sure the connection is actually up before anyone reads. */

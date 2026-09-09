@@ -44,6 +44,8 @@ rt.register({
     "getAlgorithm()Ljava/lang/String;": () => "RSA",
     "getFormat()Ljava/lang/String;": () => "X.509",
     "getEncoded()[B": function (this: JRsaPublicKey) { return new Int8Array(this.encoded); },
+    "equals(Ljava/lang/Object;)Z": function (this: JRsaPublicKey, o: unknown) { return o instanceof JRsaPublicKey && o.encoded.length === this.encoded.length && o.encoded.every((b, i) => b === this.encoded[i]) ? 1 : 0; },
+    "hashCode()I": function (this: JRsaPublicKey) { let h = 0; for (const b of this.encoded) h = (Math.imul(h, 31) + b) | 0; return h; },
   },
 });
 rt.register({

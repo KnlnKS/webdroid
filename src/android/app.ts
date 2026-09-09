@@ -742,14 +742,6 @@ rt.register({
 });
 rt.register({ name: "android/window/OnBackInvokedCallback", ctor: class extends JObj {} });
 rt.register({
-  name: "android/net/http/X509TrustManagerExtensions", ctor: class extends JObj {},
-  methods: {
-    "<init>(Ljavax/net/ssl/X509TrustManager;)V": function () {},
-    "checkServerTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;Ljava/lang/String;)Ljava/util/List;":
-      () => newArrayList(),
-  },
-});
-rt.register({
   name: "android/content/ContentProvider", ctor: class extends JObj { $ctx: unknown = null; },
   methods: {
     "<init>()V": function () {},

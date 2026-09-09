@@ -6,6 +6,7 @@ import { mkIter } from "./jutil";
 import { mangleMethod } from "../abi";
 import { JKeyGenSpec } from "../../android/security";
 import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain, rsaCrypt } from "./jrsa";
+import { caStoreMethods } from "./jx509";
 import { type JBuffer, bufferView } from "./jnio";
 
 for (const n of ["java/security/Key", "javax/crypto/SecretKey", "java/security/spec/KeySpec"]) {
@@ -355,9 +356,10 @@ class JKeyStore extends JObj {
 const stores = new Map<string, JKeyStore>();
 function storeFor(type: string): JKeyStore {
   let s = stores.get(type);
-  if (!s) { s = new JKeyStore(); s.type = type; s.load(); stores.set(type, s); }
+  if (!s) { s = new (type === "AndroidCAStore" ? rt.link("webdroid/CAStore").ctor as typeof JKeyStore : JKeyStore)(); s.type = type; s.load(); stores.set(type, s); }
   return s;
 }
+rt.register({ name: "webdroid/CAStore", ctor: class extends JKeyStore {}, sup: "java/security/KeyStore", methods: caStoreMethods });
 class JSecretKeyEntry extends JObj { key: JSecretKeySpec | null = null; }
 rt.register({ name: "java/security/KeyStore$Entry", ctor: class extends JObj {} });
 rt.register({ name: "java/security/KeyStore$LoadStoreParameter", ctor: class extends JObj {} });

@@ -136,30 +136,6 @@ defineException("java/security/cert/CRLException", "java/security/GeneralSecurit
 defineException("java/security/cert/CertPathValidatorException", "java/security/GeneralSecurityException");
 defineException("java/security/cert/CertPathBuilderException", "java/security/GeneralSecurityException");
 rt.register({ name: "java/security/cert/CertPath", ctor: class extends JObj {} });
-rt.register({ name: "java/security/cert/CertificateFactorySpi", ctor: class extends JObj {} });
-function certFactory(type: string) {
-  if (type?.toUpperCase() !== "X.509") throw rt.mkThrowable("java/security/cert/CertificateException", type + " not available");
-  return new (rt.link("java/security/cert/CertificateFactory").ctor)();
-}
-/**
- * There is no X.509 parser here and no store to validate against, so a factory exists (its
- * absence is a NoClassDefFoundError nothing can catch) and answers the way a provider handed
- * bytes it cannot make sense of does: a catchable CertificateException.
- */
-rt.register({
-  name: "java/security/cert/CertificateFactory", ctor: class extends JObj {},
-  methods: {
-    "static getInstance(Ljava/lang/String;)Ljava/security/cert/CertificateFactory;": certFactory,
-    "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/cert/CertificateFactory;": certFactory,
-    "getType()Ljava/lang/String;": () => "X.509",
-    "generateCertificate(Ljava/io/InputStream;)Ljava/security/cert/Certificate;": () => {
-      throw rt.mkThrowable("java/security/cert/CertificateException", "no certificate parser");
-    },
-    "generateCertificates(Ljava/io/InputStream;)Ljava/util/Collection;": () => {
-      throw rt.mkThrowable("java/security/cert/CertificateException", "no certificate parser");
-    },
-  },
-});
 rt.register({
   name: "java/security/cert/CertPathValidator", ctor: class extends JObj {},
   methods: {
@@ -267,3 +243,22 @@ for (const n of ["java/security/spec/ECParameterSpec", "java/security/spec/ECGen
   "java/security/spec/AlgorithmParameterSpec", "java/security/AlgorithmParameters"]) {
   rt.register({ name: n, ctor: class extends JObj {}, methods: { "<init>(Ljava/lang/String;)V": () => {}, "<init>()V": () => {} } });
 }
+
+// java.security.spec's EC value classes: plain data an app's own curve math hands around
+const ecData = (name: string, fields: string[], ctorDesc: string, getters: [string, string][]) => rt.register({
+  name, ctor: class extends JObj {}, ifaces: name.endsWith("ECFieldFp") ? ["java/security/spec/ECField"] : name.endsWith("Spec") ? ["java/security/spec/AlgorithmParameterSpec", "java/security/spec/KeySpec"] : [],
+  methods: {
+    [`<init>${ctorDesc}`]: function (this: Record<string, unknown>, ...a: unknown[]) { fields.forEach((f, i) => { this[f] = a[i]; }); },
+    ...Object.fromEntries(getters.map(([m, f]) => [m, function (this: Record<string, unknown>) { return this[f] ?? null; }])),
+  },
+});
+rt.register({ name: "java/security/spec/ECField", ctor: class extends JObj {} });
+ecData("java/security/spec/ECFieldFp", ["p"], "(Ljava/math/BigInteger;)V", [["getP()Ljava/math/BigInteger;", "p"], ["getFieldSize()I", "size"]]);
+ecData("java/security/spec/ECPoint", ["x", "y"], "(Ljava/math/BigInteger;Ljava/math/BigInteger;)V", [["getAffineX()Ljava/math/BigInteger;", "x"], ["getAffineY()Ljava/math/BigInteger;", "y"]]);
+ecData("java/security/spec/EllipticCurve", ["field", "a", "b"], "(Ljava/security/spec/ECField;Ljava/math/BigInteger;Ljava/math/BigInteger;)V",
+  [["getField()Ljava/security/spec/ECField;", "field"], ["getA()Ljava/math/BigInteger;", "a"], ["getB()Ljava/math/BigInteger;", "b"]]);
+ecData("java/security/spec/ECParameterSpec", ["curve", "g", "n", "h"], "(Ljava/security/spec/EllipticCurve;Ljava/security/spec/ECPoint;Ljava/math/BigInteger;I)V",
+  [["getCurve()Ljava/security/spec/EllipticCurve;", "curve"], ["getGenerator()Ljava/security/spec/ECPoint;", "g"], ["getOrder()Ljava/math/BigInteger;", "n"], ["getCofactor()I", "h"]]);
+ecData("java/security/spec/ECPublicKeySpec", ["w", "params"], "(Ljava/security/spec/ECPoint;Ljava/security/spec/ECParameterSpec;)V", [["getW()Ljava/security/spec/ECPoint;", "w"], ["getParams()Ljava/security/spec/ECParameterSpec;", "params"]]);
+ecData("java/security/spec/ECPrivateKeySpec", ["s", "params"], "(Ljava/math/BigInteger;Ljava/security/spec/ECParameterSpec;)V", [["getS()Ljava/math/BigInteger;", "s"], ["getParams()Ljava/security/spec/ECParameterSpec;", "params"]]);
+ecData("java/security/spec/ECGenParameterSpec", ["name"], "(Ljava/lang/String;)V", [["getName()Ljava/lang/String;", "name"]]);
