@@ -927,6 +927,13 @@ export function installClassReflection() {
     const ic = innerAnno(this.ci);
     return ic && ic.elements["name"] != null ? 1 : 0;
   };
+  // member classes are listed by the dalvik.annotation.MemberClasses system annotation
+  M["getDeclaredClasses()[Ljava/lang/Class;"] = function (this: JClass) {
+    const ci = this.ci, mc = ci?.def ? classAnno(ci).cls.find((x) => x.type === "dalvik/annotation/MemberClasses") : undefined;
+    const v = mc?.elements["value"];
+    const out = Array.isArray(v) ? v.map((e) => (e && typeof e === "object" && "idx" in e ? (ci!.owner ?? rt).classFor(descToName(ci!.dex!.type(e.idx))) : null)).filter(Boolean) : [];
+    return jarray(out, "Ljava/lang/Class;");
+  };
   M["getDeclaredMethods()[Ljava/lang/reflect/Method;"] = function (this: JClass) {
     return jarray(this.ci ? classMethods(this.ci, true) : [], "Ljava/lang/reflect/Method;");
   };

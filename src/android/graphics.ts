@@ -1,12 +1,13 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle } from "./handles";
 import { vcall, mkEnumSet, JSimpleEnum, linkInit, stringHash } from "../jvm/natives/jlang";
 import { usLocale } from "../jvm/natives/jvalues";
 import { readStreamFully } from "../jvm/natives/jio";
+import { jclsNameOf } from "./apphost";
 import { JPath } from "./path";
 import { perf } from "../perf";
 import { type JRenderEffect } from "./rendereffect";
@@ -446,10 +447,10 @@ const paintMethods: NativeSpec["methods"] = {
   "measureText([CII)F": function (this: JPaint, c: Uint16Array, off: number, n: number) {
     return measureText(this, charsToString(c, off, n));
   },
-  "getTextBounds(Ljava/lang/CharSequence;IILandroid/graphics/Rect;)V": function (this: JPaint, cs: unknown, a: number, b: number, r: JRect) {
+  "getTextBounds(Ljava/lang/CharSequence;IILandroid/graphics/Rect;)V": maySuspend(function (this: JPaint, cs: unknown, a: number, b: number, r: JRect) {
     const str = typeof cs === "string" ? cs : ((cs as { text?: string })?.text ?? String(cs ?? ""));
     return vcall(this, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", str, a, b, r);
-  },
+  }),
   "getTextBounds(Ljava/lang/String;IILandroid/graphics/Rect;)V": function (this: JPaint, s: string, a: number, b: number, r: JRect) {
     const ctx = measureCtx(this.font());
     const m = ctx.measureText(s.slice(a, b));
@@ -1042,7 +1043,7 @@ export const bitmapMethods: NativeSpec["methods"] = {
     "prepareToDraw()V": () => {},
 };
 rt.register({ name: "android/graphics/Bitmap", ctor: JBitmap, ifaces: ["android/os/Parcelable"], methods: bitmapMethods });
-const bitmapConfigs = mkEnumSet("android/graphics/Bitmap$Config", ["ALPHA_8", "RGB_565", "ARGB_4444", "ARGB_8888"]);
+const bitmapConfigs = mkEnumSet("android/graphics/Bitmap$Config", ["ALPHA_8", "RGB_565", "ARGB_4444", "ARGB_8888", "RGBA_F16", "HARDWARE", "RGBA_1010102"]);
 mkEnumSet("android/graphics/Bitmap$CompressFormat", ["JPEG", "PNG", "WEBP"]);
 
 export class JCanvas extends JObj {
@@ -1681,6 +1682,8 @@ class JBFOptions extends JObj {
   inDensity = 0; inTargetDensity = 0; inScaled = 1; inPreferredConfig: unknown = null;
   inBitmap: unknown = null; inMutable = 0; outMimeType: string | null = null;
   inPreferredColorSpace: unknown = null; inPremultiplied = 1; outConfig: unknown = null;
+  inTempStorage: unknown = null; inDither = 0; outColorSpace: unknown = null; inPreferQualityOverSpeed = 0;
+  inInputShareable = 0; inPurgeable = 0; inScreenDensity = 0; mCancel = 0;
 }
 rt.register({
   name: "android/graphics/BitmapFactory$Options", ctor: JBFOptions,
@@ -1690,10 +1693,18 @@ rt.register({
     inTargetDensity: "inTargetDensity", inScaled: "inScaled", inPreferredConfig: "inPreferredConfig",
     inBitmap: "inBitmap", inMutable: "inMutable", outMimeType: "outMimeType",
     inPreferredColorSpace: "inPreferredColorSpace", inPremultiplied: "inPremultiplied",
-    outConfig: "outConfig",
+    outConfig: "outConfig", inTempStorage: "inTempStorage", inDither: "inDither", outColorSpace: "outColorSpace",
+    inPreferQualityOverSpeed: "inPreferQualityOverSpeed", inInputShareable: "inInputShareable", inPurgeable: "inPurgeable",
+    inScreenDensity: "inScreenDensity", mCancel: "mCancel",
   },
   methods: { "<init>()V": function () {} },
 });
+/** an empty stream is a loader bug upstream of the decoder, so name the stream class rather than the decode failure */
+async function streamBytes(s: unknown): Promise<Uint8Array> {
+  const b = await readStreamFully(s);
+  if (!b.length) console.warn("[decode] empty stream from", jclsNameOf(s));
+  return b;
+}
 export async function decodeBytes(bytes: Uint8Array, opts: JBFOptions | null,
   onHeader?: (width: number, height: number) => Promise<readonly [number, number]>): Promise<JBitmap | null> {
   let img: ImageBitmap | undefined;
@@ -1728,10 +1739,9 @@ rt.register({
     "static decodeByteArray([BIILandroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;":
       (b: Int8Array, off: number, len: number, o: JBFOptions) =>
         decodeBytes(new Uint8Array(b.buffer, b.byteOffset + off, len), o),
-    "static decodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;": async (s: unknown) =>
-      decodeBytes(await readStreamFully(s), null),
+    "static decodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;": async (s: unknown) => decodeBytes(await streamBytes(s), null),
     "static decodeStream(Ljava/io/InputStream;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;":
-      async (s: unknown, r: unknown, o: JBFOptions) => decodeBytes(await readStreamFully(s), o),
+      async (s: unknown, r: unknown, o: JBFOptions) => decodeBytes(await streamBytes(s), o),
     // decodeResource/decodeFile wired by res.ts / vfs
   },
 });
