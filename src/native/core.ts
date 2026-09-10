@@ -18,6 +18,8 @@ export interface Core {
   malloc(n: number): number;
   free(p: number): number;
   calloc(n: number, m: number): number;
+  realloc(p: number, n: number): number;
+  usable_size(p: number): number;
   memalign(align: number, n: number): number;
   map_pages(n: number, reserve: number, align: number): number;
   unmap_pages(addr: number, n: number): number;

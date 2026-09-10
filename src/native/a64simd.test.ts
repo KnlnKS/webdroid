@@ -53,7 +53,7 @@ describe("a64 simd: memory", () => {
       0x4d008526,   // st1 { v6.d }[1], [x9]
       0x9c000041,   // ldr q1, +8   (the words at RET)
       0x5c000042,   // ldr d2, +8   (the zero words past RET)
-      RET], (c) => { c.r[9] = buf + 256; c.r[1] = 24; });
+      RET], (c) => { c.w[18] = buf + 256; c.w[2] = 24; });
     const w = (o: number) => mem.ld32(buf + 256 + o);
     expect(I(c, 0)).toEqual([185010975, 454497039, 2064058143, -1954053249]);
     expect(I(c, 1)).toEqual([RET | 0, 0, 0, 0]);
@@ -89,7 +89,7 @@ describe("a64 simd: memory", () => {
     expect(I(c, 31)).toEqual([168167966, 437654030, 2047215134, -1970896258]);
     expect([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31].map((k) => w(4 * k)))
       .toEqual([319951120, 387323156, 454695192, 522067228, 185207048, 387323156, 454695192, 522067228, 319951120, 387323156, 454695192, -67438088, -66052, 117835012, 185207048, 252579084, 319951120, 387323156, 454695192, 522067228, 117835012, 117835012, 2071624056, 2138996092]);
-    expect(c.r[9] >>> 0).toBe(buf + 332);
+    expect(c.w[18] >>> 0).toBe(buf + 332);
     expect([w(76), w(80)]).toEqual([-67438088, -66052]);
   });
 });
@@ -142,21 +142,21 @@ describe("a64 simd: immediates, copies, permutes and bitwise ops", () => {
       0x4e0c1c41,   // mov v1.s[1], w2
       0x4e181c01,   // mov v1.d[1], x0
       0x4e1f1c41,   // mov v1.b[15], w2
-      0x4e1e1c41,   // mov v1.h[7], w2
+      0x4e1e1c41,   // mov v1.w[15], w2
       0x6e042427,   // mov v7.s[0], v1.s[1]
       0x6e180427,   // mov v7.d[1], v1.d[0]
       0x0e1f3c23,   // umov w3, v1.b[15]
-      0x0e1e3c24,   // umov w4, v1.h[7]
+      0x0e1e3c24,   // umov w4, v1.w[15]
       0x0e0c3c25,   // mov w5, v1.s[1]
       0x4e183c26,   // mov x6, v1.d[1]
       0x0e012c27,   // smov w7, v1.b[0]
-      0x4e022c28,   // smov x8, v1.h[0]
+      0x4e022c28,   // smov x8, v1.w[1]
       0x4e042c29,   // smov x9, v1.s[0]
       0x4ea11c28,   // mov v8.16b, v1.16b
       0x5e0c0429,   // mov s9, v1.s[1]
       0x5e18042a,   // mov d10, v1.d[1]
       0x5e1f042b,   // mov b11, v1.b[15]
-      RET], (c) => { c.r[0] = 0x55667788; c.h[0] = 0x11223344; c.r[1] = 0xdeadbeef | 0; c.r[2] = 0x99; c.si.fill(-1, 0, 128); });
+      RET], (c) => { c.w[0] = 0x55667788; c.w[1] = 0x11223344; c.w[2] = 0xdeadbeef | 0; c.w[4] = 0x99; c.si.fill(-1, 0, 128); });
     expect(I(c, 0)).toEqual([0x55667788, 0x11223344, 0x55667788, 0x11223344]);
     expect(I(c, 1)).toEqual([0xdeadbeef | 0, 0x99, 0x55667788, 0x00993344]);
     expect(I(c, 2)).toEqual([0xefefefef | 0, 0xefefefef | 0, 0xefefefef | 0, 0xefefefef | 0]);
@@ -165,11 +165,11 @@ describe("a64 simd: immediates, copies, permutes and bitwise ops", () => {
     expect(I(c, 5)).toEqual([0x55667788, 0x11223344, 0x55667788, 0x11223344]);
     expect(I(c, 6)).toEqual([0xefefefef | 0, 0xefefefef | 0, 0, 0]);
     expect(I(c, 7)).toEqual([0x99, -1, 0xdeadbeef | 0, 0x99]);
-    expect([c.r[3], c.r[4], c.r[5]]).toEqual([0, 0x99, 0x99]);
-    expect([c.r[6], c.h[6]]).toEqual([0x55667788, 0x00993344]);
-    expect([c.r[7], c.h[7]]).toEqual([-17, 0]);
-    expect([c.r[8], c.h[8]]).toEqual([-16657, -1]);
-    expect([c.r[9], c.h[9]]).toEqual([0xdeadbeef | 0, -1]);
+    expect([c.w[6], c.w[8], c.w[10]]).toEqual([0, 0x99, 0x99]);
+    expect([c.w[12], c.w[13]]).toEqual([0x55667788, 0x00993344]);
+    expect([c.w[14], c.w[15]]).toEqual([-17, 0]);
+    expect([c.w[16], c.w[17]]).toEqual([-16657, -1]);
+    expect([c.w[18], c.w[19]]).toEqual([0xdeadbeef | 0, -1]);
     expect(I(c, 8)).toEqual(I(c, 1));
     expect(I(c, 9)).toEqual([0x99, 0, 0, 0]);
     expect(I(c, 10)).toEqual([0x55667788, 0x00993344, 0, 0]);
@@ -236,9 +236,9 @@ describe("a64 simd: vector arithmetic", () => {
       0x5e607864,   // sqabs h4, h3
       0x5f445465,   // shl d5, d3, #4
       0x5e214866,   // sqxtn b6, h3
-      RET], (c) => { c.r[0] = 0x10000; c.si.fill(-1, 0, 128); c.si.set([0x80017f02 | 0, 0x10, 0x7fffffff, 0], 12); });
+      RET], (c) => { c.w[0] = 0x10000; c.si.fill(-1, 0, 128); c.si.set([0x80017f02 | 0, 0x10, 0x7fffffff, 0], 12); });
     expect(I(c, 0)).toEqual([1, 0, 0, 0]);
-    expect(c.r[1]).toBe(1);
+    expect(c.w[2]).toBe(1);
     expect(I(c, 2)).toEqual([127, 0, 0, 0]);
     expect(I(c, 4)).toEqual([0x7f02, 0, 0, 0]);
     expect(I(c, 5)).toEqual([0x0017f020, 0x108, 0, 0]);

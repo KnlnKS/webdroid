@@ -23,23 +23,23 @@ for (const a64 of [false, true]) test(`JNI ${a64 ? "A64" : "ARM32"} floating res
   rt.jniResolver!(name, "floatValue(F)F"); rt.jniResolver!(name, "doubleValue(D)D");
   setCurThread(thread);
   try {
-    cpu.r[0] = 0x12345678; cpu.r[1] = 0x23456789; cpu.d[0] = 987.5;
+    cpu.w[0] = 0x12345678; cpu.w[2] = 0x23456789; cpu.d[0] = 987.5;
     expect(await vcall(object, "floatValue", "(F)F", -1.25)).toBe(-1.25);
-    expect(cpu.r[0]).toBe(0x12345678); expect(cpu.r[1]).toBe(0x23456789);
+    expect(cpu.w[0]).toBe(0x12345678); expect(cpu.w[2]).toBe(0x23456789);
     expect(cpu.d[0]).toBe(987.5);
     expect(await vcall(object, "doubleValue", "(D)D", Math.PI)).toBe(Math.PI);
     expect(await vcall(object, "floatValue", "(F)F", -0)).toBe(-0);
     expect(await vcall(object, "doubleValue", "(D)D", -0)).toBe(-0);
     const nested = defineHost("test:nested-fp", async (c) => {
-      c.r[0] = 37; c.r[1] = 41; c.d[0] = 73.5;
+      c.w[0] = 37; c.w[2] = 41; c.d[0] = 73.5;
       expect(await vcall(object, "doubleValue", "(D)D", 1.125)).toBe(1.125);
       expect(await vcall(object, "floatValue", "(F)F", -2.5)).toBe(-2.5);
-      expect(c.r[0]).toBe(37); expect(c.r[1]).toBe(41); expect(c.d[0]).toBe(73.5);
+      expect(c.w[0]).toBe(37); expect(c.w[2]).toBe(41); expect(c.d[0]).toBe(73.5);
       return retD(c, 9.75);
     });
     await cpu.call(nested);
     expect(cpu.retD()).toBe(9.75);
-    expect(cpu.r[0]).toBe(0x12345678); if (a64) expect(cpu.d[0]).toBe(987.5);
+    expect(cpu.w[0]).toBe(0x12345678); if (a64) expect(cpu.d[0]).toBe(987.5);
   } finally {
     rt.jniResolver = oldResolver; setCurThread(mainThread); mem.free(code); setA64(false);
   }

@@ -84,8 +84,8 @@ export function symbolizePc(pc: number): string {
 /** the frame-pointer chain from x29: what called what, as module+offset (a debugging aid) */
 setBacktraceHook((cpu) => backtrace(cpu));
 export function backtrace(cpu: Cpu, max = 24): string[] {
-  const out = [symbolizePc(cpu.r[cpu.pcx] >>> 0), symbolizePc(cpu.r[cpu.lrx] >>> 0)];
-  let fp = cpu.r[29] >>> 0;
+  const out = [symbolizePc(cpu.pc), symbolizePc(cpu.lr >>> 0)];
+  let fp = cpu.w[58] >>> 0;
   for (let i = 0; i < max && fp; i++) {
     try { out.push(symbolizePc(Number(mem.ld64(fp + 8) & 0xffffffffn))); fp = Number(mem.ld64(fp) & 0xffffffffn); } catch { break; }
   }

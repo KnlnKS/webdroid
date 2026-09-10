@@ -1,117 +1,64 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { RET_SENTINEL } from "./abi";
-import { allBlocks, blockAt, blockStats, coldTier, Cpu, invalidateRange, setA64 } from "./cpu";
-import { mainThread } from "../jvm/natives/jlang";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { codeStats, invalidateRange, setA64 } from "./cpu";
 import { mem } from "./mem";
+import { RET, run } from "./a64.testkit";
+import { JIT_HEAT, jitEvict, jitStats } from "./core";
 
-const RET = 0xd65f03c0;
-const PAGE = 0x1000;
-const defaultHeat = coldTier.heat;
-const defaultMaxBlocks = coldTier.maxBlocks;
-let allocated: number[] = [];
+const movW0 = (v: number) => 0x52800000 | (v << 5);
 
-function page(): number {
-  const at = mem.reserve(PAGE, PAGE);
-  allocated.push(at);
-  return at;
-}
+beforeAll(() => setA64(true));
+afterAll(() => setA64(false));
 
-function write(at: number, words: number[]): void {
-  for (let i = 0; i < words.length; i++) mem.u32[(at >>> 2) + i] = words[i];
-}
-
-function branch(from: number, to: number): number {
-  const words = (to - from) / 4;
-  return (0x14000000 | (words & 0x03ffffff)) >>> 0;
-}
-
-function runAt(cpu: Cpu, at: number): void {
-  cpu.r.fill(0);
-  cpu.h.fill(0);
-  cpu.r[30] = RET_SENTINEL;
-  cpu.setPc(at);
-  while (cpu.runSlice(10_000) !== 2) { /* spin */ }
-}
-
-beforeAll(() => {
-  setA64(true);
-  coldTier.heat = 0;
-});
-
-afterEach(() => {
-  for (const at of allocated) invalidateRange(at, PAGE, "cache test cleanup");
-  allocated = [];
-  coldTier.heat = 0;
-  coldTier.maxBlocks = defaultMaxBlocks;
-});
-
-afterAll(() => {
-  coldTier.heat = defaultHeat;
-  coldTier.maxBlocks = defaultMaxBlocks;
-  setA64(false);
-});
-
-describe("A64 compiled block cache", () => {
-  test("evicts the least recently executed page down to the low watermark", () => {
-    coldTier.maxBlocks = 3;
-    const cpu = new Cpu(mainThread, "cache-lru");
-    const [a, b, c, d] = [page(), page(), page(), page()];
-    for (const at of [a, b, c, d]) write(at, [RET]);
-
-    runAt(cpu, a);
-    runAt(cpu, b);
-    runAt(cpu, a); // A is newer than B despite having been compiled first.
-    runAt(cpu, c);
-    const aBlock = blockAt(a);
-    const evictedBefore = blockStats.evicted;
-    runAt(cpu, d);
-
-    expect(blockAt(a)).toBe(aBlock);
-    expect(blockAt(b)).toBeUndefined();
-    expect(blockAt(c)).toBeDefined();
-    expect(blockAt(d)).toBeDefined();
-    expect(allBlocks.size).toBe(3);
-    expect(blockStats.evicted - evictedBefore).toBe(1);
-  });
-
-  test("does not restore a hot link on a caller evicted while its target compiles", () => {
-    coldTier.maxBlocks = 1;
-    const cpu = new Cpu(mainThread, "cache-active-caller");
-    const caller = page(), target = page();
-    write(caller, [branch(caller, target)]);
-    write(target, [RET]);
-    const oldCaller = cpu.look(caller);
-
-    runAt(cpu, caller);
-
-    expect(blockAt(caller)).toBeUndefined();
-    expect(blockAt(target)).toBeDefined();
-    expect(allBlocks.has(oldCaller)).toBeFalse();
-    expect(oldCaller.n.every((next) => next === undefined)).toBeTrue();
-    expect(oldCaller.links).toHaveLength(0);
-  });
-
-  test("repeated cross-page code writes clear and rebuild one predecessor link", () => {
-    coldTier.maxBlocks = 0;
-    const cpu = new Cpu(mainThread, "cache-self-modifying");
-    const caller = page(), target = page();
-    write(caller, [branch(caller, target)]);
-    write(target, [0x52800020, RET]); // mov w0, #1
-
-    runAt(cpu, caller);
-    const callerBlock = cpu.look(caller);
-    expect(cpu.r[0]).toBe(1);
-    expect(callerBlock.links).toHaveLength(1);
-
+describe("the decode cache", () => {
+  test("a store into an executed word drops the page and the new code runs", () => {
+    const at = mem.reserve(0x1000, 0x1000);
+    mem.u32[at >>> 2] = movW0(1); mem.u32[(at >>> 2) + 1] = RET;
+    let c = run([RET]);
+    c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ }
+    expect(c.w[0]).toBe(1);
     for (let value = 2; value <= 6; value++) {
-      mem.st32(target, 0x52800000 | (value << 5));
-      expect(blockAt(target)).toBeUndefined();
-      expect(callerBlock.n.every((next) => next === undefined)).toBeTrue();
-      expect(callerBlock.links).toHaveLength(0);
-
-      runAt(cpu, caller);
-      expect(cpu.r[0]).toBe(value);
-      expect(callerBlock.links).toHaveLength(1);
+      const before = codeStats.invalidated;
+      mem.st32(at, movW0(value));
+      expect(codeStats.invalidated).toBe(before + 1);
+      c = run([RET]);
+      c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ }
+      expect(c.w[0]).toBe(value);
     }
+  });
+
+  test("a store into the page's data leaves its decoded code alone", () => {
+    const at = mem.reserve(0x1000, 0x1000);
+    mem.u32[at >>> 2] = movW0(7); mem.u32[(at >>> 2) + 1] = RET;
+    const c = run([RET]);
+    c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ }
+    const before = codeStats.invalidated;
+    mem.st32(at + 0x800, 0x12345678);
+    expect(codeStats.invalidated).toBe(before);
+    expect(mem.ld32(at + 0x800)).toBe(0x12345678);
+  });
+
+  test("an evicted region re-heats and comes back", () => {
+    const at = mem.reserve(0x1000, 0x1000);
+    mem.u32[at >>> 2] = movW0(9); mem.u32[(at >>> 2) + 1] = RET;
+    const c = run([RET]);
+    const heat = () => { for (let i = 0; i <= JIT_HEAT; i++) { c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ } } };
+    let before = jitStats.regions;
+    heat();
+    expect(jitStats.regions).toBe(before + 1);
+    while (jitStats.modules) jitEvict();
+    before = jitStats.regions;
+    heat();
+    expect(jitStats.regions).toBe(before + 1);
+    expect(c.w[0]).toBe(9);
+  });
+  test("cacheflush drops every page in the range", () => {
+    const a = mem.reserve(0x2000, 0x1000);
+    mem.u32[a >>> 2] = RET; mem.u32[(a + 0x1000) >>> 2] = RET;
+    const c = run([RET]);
+    c.setPc(a); while (c.runSlice(10000) !== 2) { /* spin */ }
+    c.setPc(a + 0x1000); while (c.runSlice(10000) !== 2) { /* spin */ }
+    const before = codeStats.invalidated;
+    invalidateRange(a, 0x2000, "test");
+    expect(codeStats.invalidated).toBe(before + 2);
   });
 });

@@ -473,7 +473,13 @@ export fn alloc_stack(size: u32) u32 {
     };
     const base = stack_top +% abi.STACK_GUARD;
     const top = @as(u64, base) + size;
-    if (top > abi.STACK_END) return 0;
+    if (top > abi.STACK_END) {
+        // the fixed span holds sixty stacks; past that a stack is page-mapped arena memory, so
+        // the thread count is bounded by memory, as in a process (an app's dispatcher, http and
+        // image pools alone pass sixty threads)
+        const p = map_pages(size +% abi.STACK_GUARD, 0, PAGE_SIZE);
+        return if (p == 0) 0 else p + abi.STACK_GUARD;
+    }
     stack_top = @intCast(top);
     return base;
 }
@@ -481,7 +487,11 @@ export fn free_stack(base: u32, size: u32) void {
     if (free_stack_count < free_stacks.len) {
         free_stacks[free_stack_count] = .{ base, size };
         free_stack_count += 1;
+        return;
     }
+    // the table is full, which only overflow stacks can do: give the address space back rather
+    // than lose it, since a mapped stack is reachable again through map_pages
+    if (base >= abi.ARENA_BASE) _ = unmap_pages(base - abi.STACK_GUARD, size +% abi.STACK_GUARD);
 }
 export fn host_alloc(n: u32, alignment: u32) u32 {
     const p = (host_top + alignment - 1) & ~(alignment - 1);

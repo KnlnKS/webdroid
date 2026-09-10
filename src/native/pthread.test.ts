@@ -8,6 +8,9 @@ import { libcInit } from "./libc";
 import { mem } from "./mem";
 
 afterAll(() => setA64(false));
+/** a thread's pthread key values live in guest memory, where the core serves them from */
+const tls = (c: Cpu, key: number): bigint => mem.ld64(c.tlsTab + 8 * key);
+const setTls = (c: Cpu, key: number, v: bigint): void => mem.st64(c.tlsTab + 8 * key, v);
 const call = (cpu: Cpu, name: string, ...args: CallArg[]) => cpu.call(lookupHost(name, "libc.so")!, args);
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -73,10 +76,10 @@ test("pthread exit values survive TLS destructor rounds and destructor failures 
   const cpu = new Cpu(new JThread(), "destructor parent"), p = mem.malloc(24), seen: bigint[] = [];
   let key = 0;
   const dtor = defineHost("pthread_test_destructor", (child, args) => {
-    seen.push(args.va()); expect(child.tls.get(key)).toBe(0n);
-    child.tls.set(key, 7n);
+    seen.push(args.va()); expect(tls(child, key)).toBe(0n);
+    setTls(child, key, 7n);
   });
-  const start = defineHost("pthread_test_tls", (child) => { child.tls.set(key, 3n); return 99; });
+  const start = defineHost("pthread_test_tls", (child) => { setTls(child, key, 3n); return 99; });
   try {
     await call(cpu, "pthread_key_create", p, dtor); key = mem.ld32(p);
     await call(cpu, "pthread_create", p + 8, 0, start, 0);
@@ -118,7 +121,7 @@ test("pthread cleanup waits for a signal handler started by its final destructor
   });
   sigHandlers.set(10, { fn: handler, flags: 0 });
   const dtor = defineHost("pthread_signal_destructor", (child) => { child.signals.push(10); });
-  const start = defineHost("pthread_signal_entry", (child) => { child.tls.set(key, 1n); return 42; });
+  const start = defineHost("pthread_signal_entry", (child) => { setTls(child, key, 1n); return 42; });
   try {
     await call(cpu, "pthread_key_create", p, dtor); key = mem.ld32(p);
     await call(cpu, "pthread_create", p + 8, 0, start, 0);

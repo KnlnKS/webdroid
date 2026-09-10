@@ -39,9 +39,9 @@ test("JNI monitors share Java ownership, suspend only under contention, and pend
   if (typeof obj !== "string") throw new Error("NewStringUTF did not return a string");
   const thread = new JThread(), native = new Cpu(thread, "JNI monitor test"), java = new JThread();
   const call = (index: number, object = ref) => {
-    native.r[0] = env; native.r[1] = object; native.h[0] = native.h[1] = 0;
+    native.w[0] = env; native.w[2] = object; native.w[1] = native.w[3] = 0;
     hostDispatch(native, trampSlot(jni(env, index)));
-    return native.pending ?? native.r[0];
+    return native.pending ?? native.w[0];
   };
   try {
     expect(call(217)).toBe(0);
