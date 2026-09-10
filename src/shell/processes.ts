@@ -57,7 +57,7 @@ export class ProcessBroker {
   private nextPid = 1001;
   private foregroundPid = 0;
   private nextActivity = 1;
-  private activities: { id: number; pid: number; caller: number; request: number }[] = [];
+  private activities: { id: number; pid: number; caller: number; previous: number; request: number }[] = [];
   private activityQueue: Promise<void> = Promise.resolve();
   private booted = false;
 
@@ -71,9 +71,9 @@ export class ProcessBroker {
   foreground(pid: number): void { this.foregroundPid = pid; }
   launchActivity(caller: number, pkg: string, process: string, component: string, intent: IntentData, request: number, callingClass: string | null = null): Promise<void> {
     const source = this.entry(caller);
-    const target = this.connect(pkg, process), activity = { id: this.nextActivity++, pid: target.pid, caller, request };
+    const target = this.connect(pkg, process), activity = { id: this.nextActivity++, pid: target.pid, caller, previous: 0, request };
     return this.queueActivity(async () => {
-      const previous = this.entry(this.foregroundPid || caller);
+      const previous = this.entry(this.foregroundPid || caller); activity.previous = previous.pid;
       await this.request(previous, (endpoint) => endpoint.activity({ kind: "visibility", phase: "pause" }));
       this.activities.push(activity);
       try {
@@ -87,8 +87,8 @@ export class ProcessBroker {
       }
     });
   }
-  finishActivity(pid: number, id: number, code: number, data: IntentData | null): void {
-    this.queueActivity(async () => {
+  finishActivity(pid: number, id: number, code: number, data: IntentData | null): Promise<void> {
+    return this.queueActivity(async () => {
       const index = this.activities.findIndex((a) => a.pid === pid && a.id === id);
       if (index < 0) return;
       const [activity] = this.activities.splice(index, 1);
@@ -105,11 +105,13 @@ export class ProcessBroker {
     this.activityQueue = this.activityQueue.then(run).catch((error) => console.error("[activity process]", error));
     return this.activityQueue;
   }
-  private async restore(activity: { caller: number; request: number }, code: number, data: IntentData | null): Promise<void> {
-    if (!this.alive(activity.caller)) return;
-    await this.request(this.entry(activity.caller), (endpoint) => endpoint.activity({ kind: "visibility", phase: "resume" }));
-    this.show(activity.caller);
-    await this.result(activity, code, data);
+  private async restore(activity: { caller: number; previous: number; request: number }, code: number, data: IntentData | null): Promise<void> {
+    const target = this.alive(activity.previous) ? activity.previous : activity.caller;
+    if (this.alive(target)) {
+      await this.request(this.entry(target), (endpoint) => endpoint.activity({ kind: "visibility", phase: "resume" }));
+      this.show(target);
+    }
+    if (this.alive(activity.caller)) await this.result(activity, code, data);
   }
   private result(activity: { caller: number; request: number }, code: number, data: IntentData | null): Promise<void> {
     return this.request(this.entry(activity.caller), (endpoint) => endpoint.activity({ kind: "result", request: activity.request, code, data }));

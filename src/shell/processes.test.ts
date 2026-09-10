@@ -107,3 +107,32 @@ test("device boot reaches eligible non-exported receivers once", async () => {
     expect(reached).toEqual([names[0] + ".Receiver"]);
   } finally { for (const [i, pkg] of names.entries()) { broker.fail(32000 + i, "Fixture complete"); packages.delete(pkg); } }
 });
+
+test("an activity launched by a background service restores the previous foreground process", async () => {
+  const broker = new ProcessBroker(), names = ["test.foreground.app", "test.background.service", "test.permission.activity"], events: string[] = [];
+  for (const [i, pkg] of names.entries()) {
+    const root: XmlNode = { name: "manifest", attrs: [{ name: "package", ns: "", resId: 0, type: TV.STRING, data: 0, str: pkg }], children: [] };
+    packages.set(pkg, new PackageRecord(root, new Resources(null, {}), "/" + pkg, 25000 + i, async () => []));
+    broker.connect(pkg, pkg, 35000 + i);
+  }
+  const data = { bytes: new Uint8Array(), objects: [] }, finished = Promise.withResolvers<void>();
+  let activityId = 0;
+  for (let pid = 35000; pid <= 35002; pid++) broker.ready(pid, {
+    service: async () => null, provider: async () => { throw new Error("unused"); },
+    transact: async () => ({ handled: 0, data }), broadcast: async (_i, _c, _o, result) => result,
+    activity: async request => {
+      events.push(pid + ":" + (request.kind === "visibility" ? request.phase : request.kind));
+      if (request.kind === "launch") activityId = request.id;
+      if (request.kind === "result") finished.resolve();
+    },
+  });
+  try {
+    broker.foreground(35000);
+    const intent = { action: "test", component: null, componentPkg: null, dataUri: null, typeStr: null, pkg: null, flags: 0, categories: [], extras: data };
+    await broker.launchActivity(35001, names[2], names[2], "test.PermissionActivity", intent, 7);
+    await broker.finishActivity(35002, activityId, -1, null);
+    await finished.promise;
+    expect(events).toEqual(["35000:pause", "35002:launch", "35000:stop", "35000:resume", "35001:result"]);
+    expect(broker.back(35000)).toBe(false);
+  } finally { for (const [i, pkg] of names.entries()) { broker.fail(35000 + i, "fixture complete"); packages.delete(pkg); } }
+});
