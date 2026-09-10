@@ -4,6 +4,7 @@ import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
+import { androidGroupId } from "./identity";
 import { vcall, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
 export { reportUncaught };
@@ -328,6 +329,10 @@ rt.register({
     "static isSdkSandbox()Z": () => 0,
     "static myTid()I": () => 1000,
     "static myUid()I": () => PROCESS_UID,
+    "static getGidForName(Ljava/lang/String;)I": (name: string | null) => {
+      if (name === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      return androidGroupId(name);
+    },
     "static getThreadPriority(I)I": () => 0,
     "static setThreadPriority(I)V": () => {},
     "static setThreadPriority(II)V": () => {},
