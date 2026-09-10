@@ -2320,3 +2320,21 @@ the ceiling was 2.6% GC, with 155 MiB executable allocation and 185 MiB committe
 a profile was dominated by `transferToImageBitmap` (84.5%), with GC below 0.1%; a detailed memory
 dump timed out, so there is no final executable-allocation measurement at the ceiling. The
 source limit constrains admission, not V8's exact allocation or reclamation policy.
+
+### BitmapShader and mutable bitmap drawing
+
+Reddit's fullscreen video path reached the missing BitmapShader constructor. DEX references
+use CLAMP/CLAMP in `uhj0.d`, `ar8.c` and `tly.b`, and REPEAT/CLAMP in `xsp0.O`; the platform
+implementation accepts independent CLAMP, REPEAT, MIRROR and DECAL modes. Bitmap fills clip
+the original shape and draw cached source/edge patterns, avoiding a viewport-sized atlas per
+fill. Stroke/text use a pattern bounded to the target canvas. The shared shader local matrix
+continues to map shader coordinates into canvas coordinates.
+
+`WEBDROID_URL=http://localhost:4098 bun scripts/bitmap-shader-test.ts` passed 4,807 checks in
+Chrome: all sixteen mode pairs, negative coordinates, rotated/reset local matrices, circle
+clipping, stroked shapes, bitmap pixel changes, Canvas source mutations and reused Canvas
+targets. Testing also exposed a preexisting stale pixel memo after a retained Canvas drew into
+a bitmap. Bitmap-backed context writes now invalidate that memo and advance the generation
+used by shader caches; ordinary framebuffer contexts do not acquire this tracking wrapper.
+Constructor errors follow [AOSP BitmapShader](https://android.googlesource.com/platform/frameworks/base/+/master/graphics/java/android/graphics/BitmapShader.java)
+and [Bitmap.checkRecycled](https://android.googlesource.com/platform/frameworks/base/+/master/graphics/java/android/graphics/Bitmap.java).

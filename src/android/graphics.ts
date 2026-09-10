@@ -319,7 +319,8 @@ export class JPaint extends JObj {
     this.fTf = this.tf; this.fSize = this.textSize; this.fBold = this.fakeBold;
     return (this.fCache = `${it}${w} ${this.textSize}px ${this.tf.family}`);
   }
-  fillStyle(): string | CanvasGradient | CanvasPattern {
+  fillStyle(ctx?: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): string | CanvasGradient | CanvasPattern {
+    if (this.shaderObj instanceof JBitmapShader && ctx) return this.shaderObj.pattern(ctx);
     if (this.shader) return this.shader;
     const f = this.filterColor;
     // PorterDuff/BlendMode SRC_IN — how Material tints every shape it draws: the filter's
@@ -729,6 +730,7 @@ class JShader extends JObj {
   local: [number, number, number, number, number, number] | null = null;
 }
 const isIdentityM = (m: number[]) => m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0;
+const shaderIdentity: [number, number, number, number, number, number] = [1, 0, 0, 1, 0, 0];
 rt.register({
   name: "android/graphics/Shader", ctor: JShader,
   methods: {
@@ -744,6 +746,69 @@ rt.register({
   },
 });
 mkEnumSet("android/graphics/Shader$TileMode", ["CLAMP", "REPEAT", "MIRROR", "DECAL"]);
+class JBitmapShader extends JShader {
+  bitmap!: JBitmap;
+  tileX = 0; tileY = 0;
+  private generation = -1;
+  private tiles = new Map<string, CanvasPattern>();
+  private cached: CanvasPattern | null = null;
+  private cacheKey = "";
+  draw(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): void {
+    const bitmap = this.bitmap;
+    if (this.generation !== bitmap.genId) { this.generation = bitmap.genId; this.tiles.clear(); this.cached = null; }
+    const inverse = ctx.getTransform().inverse();
+    const corners = [[0, 0], [ctx.canvas.width, 0], [0, ctx.canvas.height], [ctx.canvas.width, ctx.canvas.height]]
+      .map(([x, y]) => inverse.transformPoint({ x, y }));
+    if (!corners.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))) return;
+    const segments = (mode: number, size: number, lo: number, hi: number): [number, number, number, number][] => {
+      if (mode === 1 || mode === 2) return [[lo, hi, 0, size]];
+      const result: [number, number, number, number][] = [[Math.max(0, lo), Math.min(size, hi), 0, size]];
+      if (mode === 0) result.push([lo, Math.min(0, hi), 0, 1], [Math.max(size, lo), hi, size - 1, 1]);
+      return result;
+    };
+    const xs = segments(this.tileX, bitmap.w, Math.min(...corners.map(p => p.x)), Math.max(...corners.map(p => p.x)));
+    const ys = segments(this.tileY, bitmap.h, Math.min(...corners.map(p => p.y)), Math.max(...corners.map(p => p.y)));
+    for (const [x0, x1, sx, sw] of xs) for (const [y0, y1, sy, sh] of ys) {
+      if (x1 <= x0 || y1 <= y0) continue;
+      const key = `${sx},${sy},${sw},${sh}`;
+      let pattern = this.tiles.get(key);
+      if (!pattern) {
+        const nx = this.tileX === 2 ? 2 : 1, ny = this.tileY === 2 ? 2 : 1;
+        const tile = new OffscreenCanvas(sw * nx, sh * ny), c = tile.getContext("2d")!;
+        for (let x = 0; x < nx; x++) for (let y = 0; y < ny; y++) {
+          c.setTransform(x ? -1 : 1, 0, 0, y ? -1 : 1, x ? sw * 2 : 0, y ? sh * 2 : 0);
+          c.drawImage(bitmap.canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+        }
+        pattern = ctx.createPattern(tile, "repeat")!;
+        this.tiles.set(key, pattern);
+      }
+      ctx.fillStyle = pattern;
+      ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+    }
+  }
+  pattern(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): CanvasPattern {
+    const matrix = ctx.getTransform(), local = this.local;
+    const key = `${this.bitmap.genId}:${ctx.canvas.width},${ctx.canvas.height}:${matrix.toString()}:${local}`;
+    if (this.cached && key === this.cacheKey) return this.cached;
+    // Strokes and text cannot clip a Canvas2D path to its stroked outline.
+    const surface = new OffscreenCanvas(ctx.canvas.width, ctx.canvas.height), c = surface.getContext("2d")!;
+    c.setTransform(matrix);
+    if (local) c.transform(...local);
+    this.draw(c);
+    const pattern = ctx.createPattern(surface, "no-repeat")!;
+    pattern.setTransform(matrix.inverse());
+    this.cacheKey = key;
+    return this.cached = pattern;
+  }
+}
+rt.register({ name: "android/graphics/BitmapShader", ctor: JBitmapShader, sup: "android/graphics/Shader", methods: {
+  "<init>(Landroid/graphics/Bitmap;Landroid/graphics/Shader$TileMode;Landroid/graphics/Shader$TileMode;)V": function (this: JBitmapShader, bitmap: JBitmap, x: JSimpleEnum, y: JSimpleEnum) {
+    if (!x || !y) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    if (!bitmap) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Bitmap must be non-null");
+    if (bitmap.recycled) throw rt.mkThrowable("java/lang/IllegalStateException", "Cannot create BitmapShader for recycled bitmap");
+    this.bitmap = bitmap; this.tileX = x.ord; this.tileY = y.ord;
+  },
+} });
 /**
  * A ColorLong is Color.pack()'s encoding: the sRGB case (colour-space id 0, the only one this
  * canvas has) is the ARGB int in the top 32 bits, which is what getColorLong writes.
@@ -960,6 +1025,7 @@ export class JBitmap extends JObj {
   genId = 0;
   private cv: OffscreenCanvas | null = null;
   private cx: OffscreenCanvasRenderingContext2D | null = null;
+  private drawingCtx: OffscreenCanvasRenderingContext2D | null = null;
   private px: RGBA | null = null;
 
   /** The raster, made on demand. A bitmap that is only written and read as pixels never needs
@@ -974,9 +1040,31 @@ export class JBitmap extends JObj {
     this.px = null;
     return this.cv;
   }
-  get ctx(): OffscreenCanvasRenderingContext2D { void this.canvas; return this.cx!; }
+  get ctx(): OffscreenCanvasRenderingContext2D {
+    void this.canvas;
+    if (!this.drawingCtx) {
+      // Canvas retains this context across draws, after pixel readbacks and shader snapshots.
+      const methods = new Map<PropertyKey, unknown>();
+      this.drawingCtx = new Proxy(this.cx!, {
+        get: (ctx, key) => {
+          const value = Reflect.get(ctx, key, ctx);
+          if (typeof value !== "function") return value;
+          if (!methods.has(key)) {
+            const writes = /^(?:draw|fill|stroke|clearRect|putImageData|reset$)/.test(String(key));
+            methods.set(key, (...args: unknown[]) => {
+              if (writes) { this.px = null; this.genId++; }
+              return Reflect.apply(value, ctx, args);
+            });
+          }
+          return methods.get(key);
+        },
+        set: (ctx, key, value) => Reflect.set(ctx, key, value, ctx),
+      });
+    }
+    return this.drawingCtx;
+  }
   /** AOSP reconfigure: the same object with new dimensions and undefined contents */
-  reconfigure(w: number, h: number) { this.w = w; this.h = h; this.cv = null; this.cx = null; this.px = null; this.genId++; }
+  reconfigure(w: number, h: number) { this.w = w; this.h = h; this.cv = null; this.cx = null; this.drawingCtx = null; this.px = null; this.genId++; }
 
   /** RGBA bytes. Until a raster exists these ARE the bitmap; after that they are a memo of it,
    *  which is what makes a run of getPixel one readback instead of one per pixel. */
@@ -1096,13 +1184,13 @@ export class JCanvas extends JObj {
   prep(p: JPaint, stroke: boolean) {
     const ctx = this.ctx;
     if (stroke) {
-      ctx.strokeStyle = p.fillStyle() as string;
+      ctx.strokeStyle = p.fillStyle(ctx) as string;
       ctx.lineWidth = Math.max(p.strokeWidth, 0.75);
       ctx.lineCap = p.strokeCapN;
       ctx.lineJoin = p.strokeJoinN;
       ctx.setLineDash(p.dash ?? []);
     } else {
-      ctx.fillStyle = p.fillStyle() as string;
+      ctx.fillStyle = p.fillStyle(ctx) as string;
     }
   }
   drawShape(p: JPaint, fill: (ctx: typeof this.ctx) => void, stroke: (ctx: typeof this.ctx) => void) {
@@ -1117,11 +1205,14 @@ export class JCanvas extends JObj {
     try {
       if (p.blend) this.ctx.globalCompositeOperation = p.blend;
       if (p.style === 0 || p.style === 2) {
-        this.prep(p, false);
         const lm = p.shaderObj?.local;
-        // a gradient with a local matrix: Canvas2D gradients have no transform of their own, so
-        // clip to the shape and fill the plane under the matrix instead
-        fill(lm && !(p.shader instanceof CanvasPattern) ? this.shaderClipCtx(lm) : this.ctx);
+        if (p.shaderObj instanceof JBitmapShader) fill(this.shaderClipCtx(lm ?? shaderIdentity, p.shaderObj));
+        else {
+          this.prep(p, false);
+          // a gradient with a local matrix: Canvas2D gradients have no transform of their own, so
+          // clip to the shape and fill the plane under the matrix instead
+          fill(lm && !(p.shader instanceof CanvasPattern) ? this.shaderClipCtx(lm) : this.ctx);
+        }
       }
       if (p.style === 1 || p.style === 2) { this.prep(p, true); stroke(this.ctx); }
     } finally {
@@ -1130,18 +1221,23 @@ export class JCanvas extends JObj {
     }
   }
   private shaderCtx: (typeof this.ctx) | null = null;
+  private shaderBaseCtx: (typeof this.ctx) | null = null;
   private shaderCtxLm: number[] | null = null;
-  shaderClipCtx(lm: [number, number, number, number, number, number]): typeof this.ctx {
+  private bitmapShader: JBitmapShader | undefined;
+  shaderClipCtx(lm: [number, number, number, number, number, number], bitmap?: JBitmapShader): typeof this.ctx {
     const ctx = this.ctx;
     const under = (clip: (c: typeof ctx) => void) => {
       ctx.save();
       clip(ctx);
       ctx.transform(lm[0], lm[1], lm[2], lm[3], lm[4], lm[5]);
-      ctx.fillRect(-1e5, -1e5, 2e5, 2e5);
+      if (bitmap) bitmap.draw(ctx);
+      else ctx.fillRect(-1e5, -1e5, 2e5, 2e5);
       ctx.restore();
     };
-    if (!this.shaderCtx || this.shaderCtxLm !== lm) {
+    if (!this.shaderCtx || this.shaderBaseCtx !== ctx || this.shaderCtxLm !== lm || this.bitmapShader !== bitmap) {
+      this.shaderBaseCtx = ctx;
       this.shaderCtxLm = lm;
+      this.bitmapShader = bitmap;
       const over: Record<string, unknown> = {
         fill: (a?: Path2D | CanvasFillRule, b?: CanvasFillRule) => under((c) => { if (a instanceof Path2D) c.clip(a, b); else c.clip(a); }),
         fillRect: (x: number, y: number, w: number, h: number) => under((c) => { c.beginPath(); c.rect(x, y, w, h); c.clip(); }),
@@ -1394,7 +1490,7 @@ export const JOINS = ["miter", "round", "bevel"] as const;
 function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
   const ctx = cv.ctx;
   ctx.font = p.font();
-  ctx.fillStyle = p.fillStyle() as string;
+  ctx.fillStyle = p.fillStyle(ctx) as string;
   ctx.textAlign = p.textAlignN === 1 ? "center" : p.textAlignN === 2 ? "right" : "left";
   ctx.textBaseline = "alphabetic";
   if (p.letterSpacingEm && "letterSpacing" in ctx) (ctx as any).letterSpacing = `${p.letterSpacingEm * p.textSize}px`;
