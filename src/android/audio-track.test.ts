@@ -36,3 +36,41 @@ test("AudioTrack builder retains PCM format and consumes sliced native-order buf
   track.state = 0;
   expect(await vcall(track, "write", "(Ljava/nio/ByteBuffer;II)I", buffer, 4, 1)).toBe(-3);
 });
+
+test("AudioTrack buffers before play, freezes the clock on pause, and discards flushed audio", async () => {
+  let now = 0;
+  const starts: [number, number][] = [];
+  let stopped = 0;
+  const context = {
+    get currentTime() { return now; },
+    resume: async () => {},
+    createBuffer: (channels: number, length: number) => {
+      const data = Array.from({ length: channels }, () => new Float32Array(length));
+      return { length, getChannelData: (channel: number) => data[channel] };
+    },
+    createGain: () => ({ gain: { value: 1 }, connect() {}, disconnect() {} }),
+    createBufferSource: () => ({ connect() {}, disconnect() {}, start(time: number, offset: number) { starts.push([time, offset]); }, stop() { stopped++; } }),
+  } as unknown as AudioContext;
+  const track = await newObj("android/media/AudioTrack", "(IIIIII)V", 3, 8000, 4, 2, 1600, 1) as { ctx(): AudioContext; push(samples: Int16Array, frames: number): void };
+  track.ctx = () => context;
+  track.push(new Int16Array(800), 800);
+  expect(starts).toEqual([]);
+  expect(await vcall(track, "getPlaybackHeadPosition", "()I")).toBe(0);
+  await vcall(track, "play", "()V");
+  expect(starts).toEqual([[0.02, 0]]);
+  now = 0.07;
+  expect(await vcall(track, "getPlaybackHeadPosition", "()I")).toBe(400);
+  await vcall(track, "pause", "()V");
+  expect(stopped).toBe(1);
+  now = 1;
+  expect(await vcall(track, "getPlaybackHeadPosition", "()I")).toBe(400);
+  await vcall(track, "play", "()V");
+  expect(starts[1][0]).toBe(1.02);
+  expect(starts[1][1]).toBeCloseTo(0.05);
+  await vcall(track, "pause", "()V");
+  await vcall(track, "flush", "()V");
+  expect(await vcall(track, "getPlaybackHeadPosition", "()I")).toBe(0);
+  await vcall(track, "play", "()V");
+  expect(starts).toHaveLength(2);
+  await vcall(track, "release", "()V");
+});

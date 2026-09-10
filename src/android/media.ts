@@ -266,13 +266,47 @@ class JAudioTrack extends JObj {
   rate = 44100; channels = 2; bytesPerSample = 2; bufBytes = 0;
   sessionId = 0; attributes: unknown = null;
   state = 1; playState = 1;          // STATE_INITIALIZED; PLAYSTATE_STOPPED
-  nextTime = 0; written = 0; underruns = 0;
+  nextTime = 0; written = 0; played = 0; underruns = 0;
+  queue: { buffer: AudioBuffer; offset: number; start: number; source: AudioBufferSourceNode | null }[] = [];
   period = 0; listener: unknown = null; timer: ReturnType<typeof setInterval> | null = null;
   gain: GainNode | null = null;
   vol = 1;
   ctx(): AudioContext { return (actx ??= new AudioContext()); }
   frameBytes(): number { return this.channels * this.bytesPerSample; }
-  queuedSec(): number { return Math.max(0, this.nextTime - this.ctx().currentTime); }
+  head(): number {
+    const now = this.queue.length ? this.ctx().currentTime : 0;
+    return this.played + this.queue.reduce((frames, entry) => frames + Math.min(entry.buffer.length,
+      entry.offset + (entry.source ? Math.max(0, now - entry.start) * this.rate : 0)), 0);
+  }
+  queuedSec(): number { return Math.max(0, this.written - this.head()) / this.rate; }
+  schedule(): void {
+    const ctx = this.ctx();
+    if (!this.gain) { this.gain = ctx.createGain(); this.gain.gain.value = this.vol; this.gain.connect(ctx.destination); }
+    for (const entry of this.queue) {
+      if (entry.source) continue;
+      const source = entry.source = ctx.createBufferSource();
+      source.buffer = entry.buffer; source.connect(this.gain);
+      entry.start = Math.max(this.nextTime, ctx.currentTime + 0.02);
+      source.onended = () => {
+        const index = this.queue.indexOf(entry);
+        if (index < 0) return;
+        this.queue.splice(index, 1); this.played += entry.buffer.length; source.disconnect();
+        if (!this.queue.length && this.playState === 1) this.played = this.written = 0;
+      };
+      source.start(entry.start, entry.offset / this.rate);
+      this.nextTime = entry.start + (entry.buffer.length - entry.offset) / this.rate;
+    }
+  }
+  pauseQueue(): void {
+    const now = this.queue.length ? this.ctx().currentTime : 0;
+    for (const entry of this.queue) {
+      if (!entry.source) continue;
+      entry.offset = Math.min(entry.buffer.length, entry.offset + Math.max(0, now - entry.start) * this.rate);
+      entry.source.onended = null; entry.source.stop(); entry.source.disconnect(); entry.source = null;
+    }
+    this.nextTime = 0;
+  }
+  clearQueue(): void { this.pauseQueue(); this.queue = []; this.written = this.played = 0; }
   /** a streaming write blocks while the track's buffer is full, which is what paces a writer
    *  loop; the wait is the excess over one buffer's worth of queued audio */
   wrote(n: number): number | Promise<number> {
@@ -290,15 +324,10 @@ class JAudioTrack extends JObj {
       else if (samples instanceof Int16Array) for (let i = 0; i < frames; i++) ch[i] = samples[i * this.channels + c] / 32768;
       else for (let i = 0; i < frames; i++) ch[i] = ((samples[i * this.channels + c] & 0xff) - 128) / 128;
     }
-    if (!this.gain) { this.gain = ctx.createGain(); this.gain.gain.value = this.vol; this.gain.connect(ctx.destination); }
-    const src = ctx.createBufferSource();
-    src.buffer = buf;
-    src.connect(this.gain);
-    if (this.playState === 3 && this.written && this.nextTime < ctx.currentTime) this.underruns++;
-    const at = Math.max(this.nextTime, ctx.currentTime + 0.02);
-    src.start(at);
-    this.nextTime = at + frames / this.rate;
+    if (this.playState === 3 && this.written && this.queuedSec() === 0) this.underruns++;
+    this.queue.push({ buffer: buf, offset: 0, start: 0, source: null });
     this.written += frames;
+    if (this.playState === 3) this.schedule();
   }
   writeBuffer(buffer: JBuffer, n: number, mode: number): number | Promise<number> {
     if (this.state !== 1) return -3;
@@ -348,7 +377,7 @@ rt.register({
     "getPlayState()I": function (this: JAudioTrack) { return this.playState; },
     "getSampleRate()I": function (this: JAudioTrack) { return this.rate; },
     "getChannelCount()I": function (this: JAudioTrack) { return this.channels; },
-    "getPlaybackHeadPosition()I": function (this: JAudioTrack) { return Math.max(0, Math.min(this.written, Math.floor(this.written - this.queuedSec() * this.rate))) | 0; },
+    "getPlaybackHeadPosition()I": function (this: JAudioTrack) { return Math.floor(this.head()) | 0; },
     "setStereoVolume(FF)I": function (this: JAudioTrack, l: number, r: number) { this.vol = (l + r) / 2; if (this.gain) this.gain.gain.value = this.vol; return 0; },
     "setVolume(F)I": function (this: JAudioTrack, v: number) { this.vol = v; if (this.gain) this.gain.gain.value = v; return 0; },
     "setPlaybackRate(I)I": () => 0,
@@ -356,11 +385,11 @@ rt.register({
     "setPlaybackPositionUpdateListener(Landroid/media/AudioTrack$OnPlaybackPositionUpdateListener;Landroid/os/Handler;)V": function (this: JAudioTrack, l: unknown) { this.listener = l; if (!l) this.stopTimer(); else if (this.playState === 3) this.startTimer(); },
     "setPositionNotificationPeriod(I)I": function (this: JAudioTrack, p: number) { this.period = p; return 0; },
     "setNotificationMarkerPosition(I)I": () => 0,
-    "play()V": function (this: JAudioTrack) { this.playState = 3; void this.ctx().resume(); this.nextTime = Math.max(this.nextTime, this.ctx().currentTime); this.startTimer(); },
-    "pause()V": function (this: JAudioTrack) { this.playState = 2; this.stopTimer(); },
-    "stop()V": function (this: JAudioTrack) { this.playState = 1; this.stopTimer(); },
-    "flush()V": function (this: JAudioTrack) { this.nextTime = 0; },
-    "release()V": function (this: JAudioTrack) { this.stopTimer(); this.state = 0; this.listener = null; },
+    "play()V": function (this: JAudioTrack) { this.playState = 3; void this.ctx().resume(); this.schedule(); this.startTimer(); },
+    "pause()V": function (this: JAudioTrack) { this.playState = 2; this.pauseQueue(); this.stopTimer(); },
+    "stop()V": function (this: JAudioTrack) { if (this.playState !== 3 || !this.queue.length) this.clearQueue(); this.playState = 1; this.stopTimer(); },
+    "flush()V": function (this: JAudioTrack) { if (this.playState !== 3) this.clearQueue(); },
+    "release()V": function (this: JAudioTrack) { this.stopTimer(); this.clearQueue(); this.gain?.disconnect(); this.gain = null; this.state = 0; this.listener = null; },
     "write([SII)I": function (this: JAudioTrack, data: Int16Array, off: number, n: number) {
       if (this.state !== 1) return -3;
       this.push(data.subarray(off, off + n), Math.floor(n / this.channels));
