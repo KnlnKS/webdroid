@@ -101,6 +101,10 @@ pub const Page = extern struct {
     ops: [OPS_PER_PAGE]a64.Op,
 };
 pub fn cover(page: *Page, from: u32, to: u32) void {
+    // Both ends are masked to the page below, so a range that runs backwards or leaves the page
+    // marks nothing at all and says so to nobody.
+    assert(to >= from);
+    assert(from >> abi.PAGE_SHIFT == to >> abi.PAGE_SHIFT);
     var i = (from & (abi.PAGE_SIZE - 1)) >> 2;
     const end = (to & (abi.PAGE_SIZE - 1)) >> 2;
     while (i <= end) : (i = (i | 7) + 1) {
