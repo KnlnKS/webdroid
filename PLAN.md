@@ -13,11 +13,11 @@ reuse complete bundles without downloading or reprocessing the source APKs.
 ## Milestones
 
 - [x] Clean Resy baseline and verified upstream APK downloads.
-- [ ] Pinned system packages, unified package registry, scoped signature grants.
+- [x] Pinned system packages, unified package registry, scoped signature grants.
 - [ ] Isolated process realms and package contexts/class loaders.
 - [ ] Binder, service lifecycle, provider/broadcast routing and shared storage.
-- [ ] Automatic microG provisioning; Resy passes real availability checks.
-- [ ] Android reference with the same microG build and SDK test clients.
+- [x] Automatic microG provisioning; Resy passes real availability checks.
+- [x] Android reference with the same microG build and SDK test clients.
 - [ ] Authentication, FCM receipt, location and interactive maps at Android parity.
 - [ ] Full regression and performance comparisons; focused commits.
 
@@ -193,3 +193,38 @@ TEMP state and one canonical persistent owner. Processes and bytecode start on d
   no undeclared suspension and empty main queues. Eight focused tests and typecheck pass.
   Evidence: /tmp/webdroid-service-reconnect-browser.{json,log}. Account Parcel round-trips
   also preserve Android 13's name, type and access ID. Broader crash-loop policy remains open.
+
+## Completion verification at 260ca78
+
+- Typecheck passes; full units: 984 passed, zero failed, 47,106 assertions. Resy, microG and
+  SDK-client smoke compilation each report zero method failures. Framework checks remain
+  295/363 delegates (81%), with all executable probes passing; text comparison passes 6/6.
+- Serialized E2E rendered 75/75 scored steps: FitNotes 39/39, Mihon app 17/17, Harmonic 14/14,
+  onboarding 5/5. Content differences were 40.89%, 56.40%, 36.20%, 17.56% (overall 37.76%).
+  Existing fragment/layout exceptions remain. DoodleJump minimum was 36 fps; Flappy Bird's
+  six FPS failures also reproduce on b567197. Lichess remains on a loading screen despite
+  responsive navigation. Goldens are unchanged; artifacts: /tmp/webdroid-completion-260ca78-e2e-*.
+  The matching b567197 run rendered the same scored steps (overall 38.02%). Harmonic's launch
+  exception was intermittent: four exact-launch repeats reproduced it once on completion and
+  twice on baseline. The captured baseline stack shows background-thread identity during layout.
+- Both completion and b567197 corpus runs rendered 13/14 APKs; TikTok failed on both. No new
+  missing APIs were reported by completion. Corpus evidence establishes first-frame launch,
+  not complete application behavior or secondary-process API coverage.
+- Real MCS process-death recovery now passes without accelerating timers: the original
+  five-minute alarm restarted microG and MCS logged in at 306.815 seconds. All three reached
+  runtimes subsequently had empty missing-API/suspension sets and main queues. This test
+  establishes delayed reconnect, not immediate sticky-service restart or another receipt.
+- Three matched FitNotes cold/warm pairs measured median foreground CPU +4.76%/+5.48%.
+  Profiling attributed extra early idle work to delayed microG startup/class compilation;
+  steady-idle work was similar in one later pair. A separate settled nine-step interaction
+  pair used 636.6 → 585.4 ms CPU and 129.0 → 137.5 MB live JS heap. These limited samples do
+  not establish a general speedup; Wasm/external memory is excluded from that heap measure.
+  Full inputs and caveats are recorded in the implementation history.
+- Resy's remaining “Unable to configure device for notifications” dialog reproduces on the
+  dedicated Android reference. Both platforms report Firebase HTTP 400 and invalid configuration
+  for this APK, separately from the resolved Play Services availability checks. The dedicated
+  SDK project's successful FCM receipt does not fix Resy's Firebase configuration. Evidence:
+  /tmp/webdroid-resy-final-{android,browser}.{png,json}. No app-specific success is fabricated.
+- Google authentication remains unverified: the existing Chrome sign-in tab is back at the
+  email step and awaits interactive completion. Authenticator request dispatch, broader activity
+  recreation/crash-loop semantics, balanced-power location and full map parity remain open.

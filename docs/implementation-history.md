@@ -35,7 +35,8 @@ the completion worktree starts from b567197.
 - The dedicated Firebase project is webdroid-microg-test, Android client org.webdroid.gmsclient,
   free Spark plan. Configuration, browser state, credentials and registration tokens stay outside
   Git/reports. Upstream HTTP-form logs contain authorization values even without the word token:
-  exclude the whole tag. Full final regression/corpus and controlled CPU/memory/IPC checks remain open.
+  exclude the whole tag. The 260ca78 verification checkpoint below records regression/performance
+  evidence; interactive Google authentication remains unverified.
 
 ### Messaging and process recovery
 
@@ -64,6 +65,57 @@ replacement, cancellation and missed repeating occurrences. A browser fixture de
 SDK-client creator iframe and observed a replacement deliver exactly one ALARM_COUNT=1 broadcast
 (/tmp/webdroid-system-intents-browser.{json,log}). Raw IIntentSender transactions beyond descriptor
 queries remain unsupported. An alarm restart is not proof of MCS reconnect.
+
+At 260ca78, an unaccelerated process-death test did establish MCS recovery. After the persistent
+microG process was destroyed, the original five-minute alarm restarted it; MCS connected at
+306.563 s and logged in at 306.815 s. Three reached runtimes had empty missing-API/undeclared-
+suspension sets and main queues at 351.645 s. This is delayed recovery, not immediate sticky-
+service restart or a new message receipt (/tmp/webdroid-mcs-death-check.{json,log}). A separate
+genuine microG common-service binding observed connected → disconnected → connected with a
+new PID. BIND_AUTO_CREATE clients reconnect and caller death releases remote bindings;
+START_STICKY/START_REDELIVER_INTENT restart policy and crash-loop backoff remain unimplemented.
+
+### Resy configuration and completion measurements at 260ca78
+
+Resy 1.18.0-687 (version code 180) displays “Unable to configure device for notifications” on
+both webdroid and the dedicated Android reference with the same pinned microG build. Both
+report Firebase HTTP 400, invalid-configuration diagnostics and a rejected installation.
+This is separate from the resolved Play Services availability dialog. The SDK test project's
+successful real FCM receipt does not repair Resy's embedded Firebase configuration. Evidence:
+/tmp/webdroid-resy-final-{android,browser}.{png,json}. No app-specific response was substituted.
+Resy's six root-runtime suspension annotation gaps also reproduce on b567197; all three
+completion microG runtimes were reached and reported none. Baseline child telemetry was absent,
+so it cannot establish their coverage.
+
+Three serial cold/warm FitNotes pairs against b567197 used the completion driver, matching
+headless Chromium flags and renderer-thread CDP CPU counters. Median first-eight-step CPU was
+1205.8 → 1263.2 ms cold (+4.76%) and 1047.4 → 1104.8 ms after harness reset (+5.48%). The first
+ten seconds after the flow used about 80 ms more CPU; profiles located delayed microG startup
+and class compilation there. That interval was not steady idle. At 20–30 seconds after the
+flow, one pair measured 321 → 310 ms cold and 315 → 328 ms warm over ten seconds. No polling
+loop was added to hide the startup cost. Broker call counts in the first pair rose 10 → 42,
+mostly provider requests; overlapping request latency is not CPU time.
+
+A separate pair waited 30 seconds, collected garbage, then drove nine more FitNotes steps.
+All text actions hit, with no new errors/missing APIs: CPU was 636.6 → 585.4 ms; live JavaScript
+heap was 129.0 → 137.5 MB with three processes on each build. This single pair does not establish
+a general speedup. Early uncollected heap samples were roughly 164–170 MB, with one 274 MB
+completion outlier; do not equate them with live heap. CDP JS heap excludes Wasm/external/GPU
+memory; the root native buffer reserves 256 MiB in both builds. Warm reset is the harness's
+existing reset, not a full browser-storage/cache reset. Inputs and profiles are retained in
+/tmp/webdroid-perf-{baseline,completion}-{1,2,3}.json, /tmp/webdroid-idle-*.cpuprofile and
+/tmp/webdroid-steady-{baseline,completion}.json.
+
+The matching complete E2E runs rendered 75/75 scored steps (content difference 38.02% baseline,
+37.76% completion); corpus first-frame coverage was 13/14 on both, with TikTok failing and no
+new completion gaps. A single full baseline run and one targeted Harmonic rerun did not emit
+the observed null-Looper layout error. Four exact E2E launch repeats then reproduced it once
+on completion and twice on b567197. Baseline's stack enters ns1.a through drawable state changes;
+the active thread was named “Thread” while the main queue was in overlay layout. Plain APK
+launches did not reproduce it. This establishes an intermittent baseline failure, not its
+root cause (/tmp/webdroid-harmonic-launch-{baseline,completion}.json). Final full captures live
+under /tmp/webdroid-{baseline-b567197,completion-260ca78}-e2e-{actual,report}; working reports
+were restored to the completion capture after comparisons.
 
 ### Maps, location and wire formats
 
