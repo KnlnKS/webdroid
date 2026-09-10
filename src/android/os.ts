@@ -119,7 +119,8 @@ export class JHandler extends JObj {
  *  is built after boot has linked the native classes. */
 let _mainHandler: JHandler | null = null;
 export function mainHandler(): JHandler {
-  return _mainHandler ?? (_mainHandler = new JHandler());
+  if (!_mainHandler) { rt.link("android/os/Handler"); _mainHandler = new JHandler(); }
+  return _mainHandler;
 }
 
 class JHandlerExecutor extends JObj { handler = mainHandler(); }
