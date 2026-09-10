@@ -114,16 +114,19 @@ async function applyAnimObj(target: unknown, prop: string, v: unknown) {
   }
   try { await vcall(target, setter, "(Ljava/lang/Object;)V", v); } catch { /* */ }
 }
+// A holder that names neither a Property nor a property has nothing to set: its value is read
+// back through getAnimatedValue, which is what a plain ValueAnimator is for.
 async function applyHolder(target: unknown, h: JPVH, t: number) {
   if (h.objKeys) {
     h.cur = await objAt(h, t);
     if (h.prop) return vcall(h.prop, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", target, h.cur);
-    return applyAnimObj(target, h.name, h.cur);
+    if (h.name) return applyAnimObj(target, h.name, h.cur);
+    return;
   }
   const v = keyAt(h.keys ?? [0, 1], t);
   h.cur = h.isInt ? Math.round(v) : v;
   if (h.prop) return vcall(h.prop, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", target, boxedCur(h));
-  return applyAnimProp(target, h.name, h.cur as number);
+  if (h.name) return applyAnimProp(target, h.name, h.cur as number);
 }
 /** the property's value now: what an XML animator with no valueFrom (or no valueTo) starts from */
 async function readAnimProp(target: unknown, prop: string): Promise<number> {
