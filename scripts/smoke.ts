@@ -7,7 +7,8 @@ import "../src/jvm/natives/jlang";
 import { descToName } from "../src/jvm/abi";
 
 // this script exists to surface compile failures, so every body must actually be generated
-setLazyMethods(false);
+const cold = process.argv.includes("--cold");
+setLazyMethods(cold);
 
 const path = process.argv[2] ?? "apks/FitNotes.apk";
 await loadDexes(path);
@@ -29,6 +30,7 @@ for (const dex of rt.dexes) {
     try {
       const info = rt.link(name);
       rt.ensureCompiled(info);
+      if (cold) for (let j = 0; j < (info.lazy?.length ?? 0); j++) rt.lz(info.ctor, j);
       ok++;
     } catch (e) {
       console.error("class-level failure", name, e);

@@ -1,5 +1,5 @@
-// DEX bytecode → JS source. One `new Function` per class attaching methods to the
-// linked ctor shell. Control flow: `for(;;) switch(pc)` over basic blocks; DEX try
+// DEX bytecode → shared cold handlers and specialized hot methods.
+// Control flow: `for(;;) switch(pc)` over basic blocks; DEX try
 // ranges → JS catch with pc-range dispatch. All methods async except provably-sync
 // leaves (no invokes / static ops / allocations); call sites guard dynamically:
 // `$t instanceof Promise ? await $t : $t`.
@@ -9,6 +9,7 @@ import { OPS, FMT_LEN, insnLen, type Fmt } from "./opcodes";
 import { mangleMethod, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble } from "./abi";
 import { ACC, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
+import { coldOp, runCold, type ColdMethod } from "./cold";
 
 const s4 = (v: number) => (v << 28) >> 28;
 const s8 = (v: number) => (v << 24) >> 24;
@@ -144,13 +145,36 @@ function emitLazy(dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
 /** Compile one lazily-emitted method and install it. */
 export type CompiledCtor = { $i: ClassInfo; prototype: Record<string, unknown> } & Record<string, unknown>;
 export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unknown {
-  const info = C.$i;
-  const rec = info.lazy![i];
+  const info = C.$i, rec = info.lazy![i], dex = info.dex!;
   const target = rec.isStatic ? C : C.prototype;
-  const src = emitMethod(R, info.dex!, info, rec.m) + `\n//# sourceURL=wd/${info.name}/${rec.name}.js`;
-  const mk = new Function("C", "D", "R", "S", src);
-  mk(C, R.dexLink(info.dex!), R, info.superInfo?.ctor ?? undefined);
-  return target[rec.mangled];
+  const source = () => emitMethod(R, dex, info, rec.m, !cold) + `\n//# sourceURL=wd/${info.name}/${rec.name}.js`;
+  const compile = (src = source()) => {
+    new Function("C", "D", "R", "S", src)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined);
+    return target[rec.mangled];
+  };
+  const compiler = new MethodCompiler(R, dex, info, dex.code(rec.m.codeOff), rec.isStatic, rec.desc, rec.name);
+  let cold = compiler.compileCold();
+  if (!cold) return compile();
+  // Captured direct/interface entries keep this cell; new virtual calls find the hot body.
+  let calls = 0, hot: Function | undefined;
+  let owner = R;
+  while (owner.parent) owner = owner.parent;
+  return target[rec.mangled] = function(this: unknown, ...args: unknown[]) {
+    if (hot) return hot.apply(this, args);
+    if (++calls < 32) return runCold(cold!, this, args);
+    const start = performance.now(), src = source();
+    if (owner.hotSourceBytes + src.length > 32 * 1024 * 1024) {
+      calls = -Infinity;
+      perf.compileMs += performance.now() - start;
+      return runCold(cold!, this, args);
+    }
+    const compiled = compile(src);
+    owner.hotSourceBytes += src.length;
+    perf.compileMs += performance.now() - start;
+    if (typeof compiled !== "function") throw new Error("invalid compiled method");
+    hot = compiled; cold = null; perf.hotMethods++;
+    return hot.apply(this, args);
+  };
 }
 
 export function methodKey(dex: DexFile, methodIdx: number): { name: string; desc: string; mangled: string } {
@@ -171,12 +195,12 @@ function emitNativeStub(dex: DexFile, info: ClassInfo, m: EncodedMethod): string
     `return ${v}.call(this${ps ? "," + ps : ""})};`;
 }
 
-function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
+function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, count = true): string {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const code = dex.code(m.codeOff);
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   try {
-    const body = new MethodCompiler(R, dex, info, code, isStatic, desc, name).compile();
+    const body = new MethodCompiler(R, dex, info, code, isStatic, desc, name).compile(count);
     return `${isStatic ? "C" : "C.prototype"}.${mangled} = ${body};`;
   } catch (e) {
     const msg = `compile error ${info.name}.${name}${desc}: ${e}`;
@@ -202,7 +226,10 @@ class MethodCompiler {
     this.hasTries = code.tries.length > 0;
   }
 
-  compile(): string {
+  private resumes = 0;
+  private cold = false;
+
+  private prepare(): void {
     const { code } = this;
     const insns = code.insns;
     let pc = 0;
@@ -243,8 +270,33 @@ class MethodCompiler {
         }
       }
     }
-    if (this.sync) perf.syncMethods++; else perf.asyncMethods++;
+  }
 
+  compileCold(): ColdMethod | null {
+    this.prepare();
+    if (this.sync) return null;
+    perf.asyncMethods++;
+    this.cold = true;
+    const ops = new Map<number, ReturnType<typeof coldOp>>();
+    for (const pc of this.order) {
+      const ins = this.ins.get(pc)!, out: string[] = [];
+      this.emitIns(ins, out);
+      let source = out.join("\n");
+      if (ins.name.startsWith("return")) source = source === "return;" ? "F.done=true;" : source.replace("return ", "F.done=true;F.value=");
+      const op = coldOp(source, pc + ins.len);
+      if (ins.name.startsWith("invoke") && !ins.name.startsWith("invoke-custom")) op.method = ins.b;
+      ops.set(pc, op);
+    }
+    return { R: this.R, D: this.R.dexLink(this.dex), S: this.info.superInfo?.ctor,
+      regs: this.code.regs, first: this.code.regs - this.code.ins, instance: !this.isStatic,
+      widths: parseMethodDesc(this.desc).params.map((p) => isWide(p) ? 2 : 1), ops,
+      catches: this.code.tries.map((t) => ({ start: t.start, end: t.end, all: t.catchAllAddr,
+        handlers: t.handlers.map(([type, pc]) => [descToName(this.dex.type(type)), pc]) })) };
+  }
+
+  compile(count = true): string {
+    this.prepare();
+    if (count) { if (this.sync) perf.syncMethods++; else perf.asyncMethods++; }
     const blocks: string[] = [];
     let cur: string[] | null = null;
     for (const pc2 of this.order) {
@@ -277,14 +329,15 @@ class MethodCompiler {
     const nameLit = JSON.stringify(this.info.name + "." + this.mname);
     const bounded = !this.hasBackEdge && !this.hasTries;
     return `${this.sync ? "function" : "async function"}(${jsParams.join(",")}){
-${paramInit.join("")}${declStr}let $t,$u,$ex,$fu,pc=0${bounded ? "" : ",$lc=0"};${this.sync ? "" : "const $th=R.th();let $s=0;"}
+${paramInit.join("")}${declStr}let $t,$u,$ex,$fu,pc=0${bounded ? "" : ",$lc=0"};${this.sync ? "" : "const $th=R.th();let $s=0,$resume=0,$p;"}
 for(;;)try{
-${bounded ? "" : `if(++$lc>5000000)throw new Error("loopbomb "+${nameLit}+" pc="+pc);\n`}switch(pc){
+${bounded ? "" : `if(++$lc>5000000)throw new Error("loopbomb "+${nameLit}+" pc="+pc);\n`}${this.sync ? "switch(pc)" : "$dispatch:switch($resume>0?-$resume:pc)"}{
 ${blocks.join("\n")}
 default: throw new Error("bad pc "+pc);
 }
+${this.sync ? "" : "R.su($th);$s=1;$p=await $p;R.st($th);if($resume<0){pc=-$resume-1;$resume=0;}"}
 }catch($e){
-${this.sync ? "" : "R.st($th);"}$e=R.jx($e);
+${this.sync ? "" : "R.st($th);$resume=0;"}$e=R.jx($e);
 ${catchBody}
 }
 }`;
@@ -294,7 +347,7 @@ ${catchBody}
    *  caller: a compiled caller re-pins its own thread, and shell code on the main looper expects
    *  the main thread. Leaving curThread on this method's thread would hand the caller's next
    *  synchronous work (a Thread.currentThread check, a fresh vcall) the wrong identity. */
-  private leave(): string { return this.sync ? "" : "if($s)R.su($th);"; }
+  private leave(): string { return this.sync || this.cold ? "" : "if($s)R.su($th);"; }
 
   /**
    * Reaching definitions over the block CFG: type the const instructions whose value is
@@ -531,11 +584,14 @@ ${catchBody}
     // and saying so is the only honest thing left — proceeding would hand a promise on as
     // if it were the result. Naming the site is what makes the wrong answer findable.
     if (this.sync || siteSync) { out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise)throw R.nosusp(${JSON.stringify(this.info.name + "." + this.mname + this.desc)},${JSON.stringify(site)});`); return; }
-    // re-pin the frame's thread identity after every suspension: other chains set the global
-    // current-thread while we were parked. A rejected await re-pins in the method's catch
-    // instead of a finally here: one handler per method, not one per call site, is what keeps
-    // the bytecode small enough for V8 to hold every compiled body.
-    out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise){R.su($th);$s=1;${assignTo}=await ${assignTo};R.st($th);}`);
+    out.push(`${assignTo}=${expr};${this.suspend(assignTo)}`);
+  }
+
+  // One await per hot method avoids repeating V8's register spills at every call site.
+  private suspend(value: string): string {
+    if (this.cold) return `if(${value} instanceof Promise){R.su($th);$s=1;${value}=await ${value};R.st($th);}`;
+    const resume = ++this.resumes;
+    return `if(${value} instanceof Promise){$p=${value};$resume=${resume};break $dispatch;}case -${resume}:if($resume){${value}=$p;$resume=0;}`;
   }
 
   private siteSync(key: string): boolean { return this.R.syncSites?.has(key) ?? false; }
@@ -702,8 +758,9 @@ ${catchBody}
 
   private jumpStr(target: number, from: number): string {
     if (target <= from) this.hasBackEdge = true;
-    const fuel = !this.sync && target <= from ? "if(--R.fuel<0){$fu=R.refuel();if($fu){R.su($th);$s=1;await $fu;R.st($th);}}" : "";
-    return `${fuel}pc=${target};continue;`;
+    const suspend = this.cold ? "R.su($th);$s=1;await $fu;R.st($th);" : `$p=$fu;$resume=${-target-1};break $dispatch;`;
+    const fuel = !this.sync && target <= from ? `if(--R.fuel<0){$fu=R.refuel();if($fu){${suspend}}}` : "";
+    return `${fuel}pc=${target};${this.cold ? "return" : "continue"};`;
   }
 
   private emitIf(cond: string, i: Ins, out: string[]) {
@@ -774,7 +831,7 @@ ${catchBody}
         // (Iface.super.m()) instead resolves on the declared interface's prototype
         out.push(`$t=(S.prototype.${mangled}??(D.cl[${mref.cls}]??D.link(${mref.cls})).prototype.${mangled}??R.nsm(${JSON.stringify(clsName + "." + mref.name + desc + " (super)")})).call(${recv}${argStr ? "," + argStr : ""});`);
         if (!this.sync) out.push(this.siteSync(clsName + "." + mref.name + desc) ? `if($t instanceof Promise)throw R.nosusp(${JSON.stringify(this.info.name + "." + this.mname + this.desc)},${JSON.stringify(clsName + "." + mref.name + desc)});`
-          : `if($t instanceof Promise){R.su($th);$s=1;$t=await $t;R.st($th);}`);
+          : this.suspend("$t"));
         break;
       }
       case "invoke-direct": {

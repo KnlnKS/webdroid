@@ -16,6 +16,7 @@ export const perf = {
   // method bodies emitted without `async` because the suspension analysis proved they cannot
   // suspend, against those that can. A sync call is ~24x cheaper in the shape we emit.
   syncMethods: 0, asyncMethods: 0, analyseMs: 0,
+  coldCalls: 0, coldHandlers: 0, hotMethods: 0,
   // GL surfaces: Renderer frames and their wall time; glSkipped = ticks where the previous
   // GL frame was still in flight (a renderer that awaits its engine spans ticks).
   glFrames: 0, glFrameMs: 0, glSkipped: 0,

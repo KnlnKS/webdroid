@@ -149,6 +149,7 @@ export class Runtime {
   syncSites: Set<string> | null = null;
   syncInits: Set<string> | null = null;
 
+  hotSourceBytes = 0;
   parent: Runtime | null = null;
   classLoader: unknown = null;
   // Share host services and thread hooks; loader definitions and compiled call sites stay private.

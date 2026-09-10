@@ -2131,3 +2131,53 @@ back edges every 8 ms through `setTimeout(0)`, which Chrome clamps to 4 ms once 
 native tier's MessageChannel yield has no clamp and is now the back-edge yield too. The effect is
 not measured yet: the run meant to time it hit a post whose detail threw on the then-missing
 `Html.escapeHtml`, and the pixel probe had caught the feed's own white before the screen changed.
+
+## Reddit: shared cold bytecode execution
+
+Stock arm64 Chrome still exhausted its executable-code range after login. Moving all awaits
+in a method to one continuation point let the login form remain responsive, but the feed
+again spent 80% of a 13.9-second CPU profile in GC with 211 MiB of executable code allocated
+and about 237 MiB committed. A generator per Java method had failed earlier, at the form
+(84% GC). The small welcome-screen working set was not a sufficient test.
+
+Other rejected paths: a clock cache retaining 8 MiB of generated method source, stable lazy
+entries and releasable compiled bodies churned through 200k compilations and still reached
+215 MiB executable allocation. Retaining emitted source and raising the cache to 16 MiB
+reduced recompilation work, but login still entered a long GC storm before eventually
+settling. A heap snapshot then found only 44 MiB of live instruction streams: keeping fewer
+JavaScript function references does not adequately control V8's code reclamation timing.
+Sharing complete small method templates removed many duplicate bodies, but also failed at
+the feed. None of those caches or method-template experiments remain.
+
+Cold methods now execute shared instruction handlers made from the existing compiler's
+emission, with register operands and constants in a per-instruction pool. There is one opcode
+implementation, including float reaching definitions, Java calls, array stores and resource
+references. A central runner owns the instruction PC, catch ranges and thread identity.
+Handlers that may suspend are shared generators: an async helper would insert a suspension
+even when all its calls returned synchronously, which broke lifecycle ordering at boot.
+The generator only yields for an actual promise. After 32 calls a method gets its ordinary
+specialized body; captured direct/interface entries follow the same promotion cell, while
+fresh virtual calls find the body directly. A root runtime admits at most 32 MiB of specialized
+async source (measured in code units); its classloader children share the budget. A denied
+method remains cold without repeatedly generating source. This favors earlier hot methods;
+synchronous bodies and shared handler code are outside this admission bound. The reached
+post used 24.1 MB of specialized async source; broader navigation reached 24.7 MB.
+Syntactically synchronous methods remain direct.
+Hot bodies share one await site per method, preserving the DEX throwing PC separately from
+the continuation index. Missing targets in pooled instructions retain their DEX owner and
+descriptor in diagnostics.
+
+On stock Chrome 152 arm64, the reached Reddit feed rendered text and images with 106 MiB of
+executable code allocated and 122 MiB committed, roughly half the failing working set.
+A settled 10.1-second profile was 65% idle, with GC below 0.3%. Opening a long text post grew
+the loaded set to 18.8k classes; its content and composer rendered with no draw/layout errors,
+and the following 7.2-second profile still had GC below 0.5%. These are reached-flow results,
+not a guarantee that an arbitrarily large hot working set fits V8's code range.
+
+The compiler fixture exercises synchronous effects before the first actual suspension,
+mixed synchronous/asynchronous calls, throwing and fuel-refill continuations, catch ranges,
+wide and floating arrays, object arrays, captured entries across promotion, and repeated calls after denied promotion. Pool tests
+cover escaped strings containing compiler tokens and `await `, exponent numbers, bigint,
+negative zero, and distinct field/method constant pools. `smoke --cold` lowers every method
+through the shared handlers without running app code; ordinary smoke still checks every
+specialized body. `coldCalls`, `coldHandlers` and `hotMethods` expose the execution split.
