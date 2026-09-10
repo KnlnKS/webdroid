@@ -2409,3 +2409,9 @@ references, declares conditional suspension with maySuspend, and keeps literal/d
 synchronous. A selector fixture checks distinct themes against real framework attribute IDs.
 The full unit suite and typecheck passed; a fresh screenshot confirmed both visible selected
 tab text and saved content (`/tmp/harness-saved-theme-fixed.png`).
+
+The codec adapter still has two unobserved limitations: streams needing more than eight
+submitted access units before any decoded output may require admission based on WebCodecs
+decodeQueueSize rather than output callbacks, and midstream decoded format changes do not yet
+produce revised output-format notifications. Neither occurred in the verified clip; no
+speculative queue rewrite was included before final verification.
