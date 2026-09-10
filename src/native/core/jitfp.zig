@@ -195,6 +195,16 @@ fn vput(e: *Emit, d: u8, q: bool) void {
     if (q) return e.b.emit(.{vm(S.store, voff(d))});
     e.b.emit(.{ vm(S.store64_lane, voff(d)), 0, get(L_CPU), c64(0), mo(O.i64_store, voff(d) + 8) });
 }
+fn shuffle(e: *Emit, rn: u8, rm: u8, lanes: *const [16]u8) void {
+    e.b.get(L_CPU);
+    vget(e, rn);
+    vget(e, rm);
+    e.b.emit(.{sv(S.shuffle)});
+    e.b.bytes(lanes);
+}
+inline fn narrowByte(k: usize, es: usize) usize {
+    return (k / es) * 2 * es + k % es;
+}
 fn lane(tab: [4]u8, esz: u32) ?u8 {
     return if (tab[esz] == 0) null else tab[esz];
 }
@@ -270,6 +280,32 @@ fn emitVector(e: *Emit, w: u32) bool {
             },
             else => return false,
         }
+        return true;
+    }
+    if (is(w, 0xbfe0_8400, 0x2e00_0000)) {
+        const imm = bits(w, 11, 4);
+        if (!q and imm > 7) return false;
+        var lanes: [16]u8 = undefined;
+        for (0..16) |i| {
+            const j = imm + i;
+            lanes[i] = @intCast(if (q or j < 8) j else 8 + j);
+        }
+        shuffle(e, rn, rm, &lanes);
+        vput(e, rd, q);
+        return true;
+    }
+    if (is(w, 0xbf20_8c00, 0x0e00_0800)) {
+        const opcode = bits(w, 12, 3);
+        if (opcode == 0 or opcode == 4 or (size == 3 and !q)) return false;
+        const es: usize = @as(usize, 1) << @intCast(size);
+        const count: usize = (if (q) @as(usize, 16) else 8) / es;
+        var lanes: [16]u8 = [_]u8{0} ** 16;
+        for (0..count) |el| {
+            const src = simd.permuteIndex(opcode, count, el);
+            for (0..es) |k| lanes[el * es + k] = @intCast((if (src.m) @as(usize, 16) else 0) + src.i * es + k);
+        }
+        shuffle(e, rn, rm, &lanes);
+        vput(e, rd, q);
         return true;
     }
     if (is(w, 0x9f20_fc00, 0x0e20_1c00)) {
@@ -383,6 +419,40 @@ fn emitVector(e: *Emit, w: u32) bool {
             b.get(L_CPU);
             vget(e, rn);
             b.emit(.{sv(if (U) S.neg[size] else S.neg[size] - 1)});
+            vput(e, rd, q);
+            return true;
+        }
+        const es: usize = @as(usize, 1) << @intCast(size);
+        var lanes: [16]u8 = undefined;
+        if (opcode <= 1) {
+            const group: usize = if (opcode == 1) 2 else if (U) 4 else 8;
+            if (es >= group) return false;
+            const per = group / es;
+            for (0..16) |i| {
+                const el = i / es;
+                const r = el % per;
+                lanes[i] = @intCast((el - r + (per - 1 - r)) * es + i % es);
+            }
+            shuffle(e, rn, rn, &lanes);
+            vput(e, rd, q);
+            return true;
+        }
+        if (opcode == 18 and !U and size != 3) {
+            for (0..16) |i| lanes[i] = @intCast(if (i < 8) (if (q) 16 + i else narrowByte(i, es)) else if (q) narrowByte(i - 8, es) else 0);
+            shuffle(e, rn, rd, &lanes);
+            vput(e, rd, q);
+            return true;
+        }
+        if (opcode == 22 and !U and size == 1) {
+            b.get(L_CPU);
+            vget(e, rn);
+            b.emit(.{sv(S.f32x4_demote_f64x2_zero)});
+            if (q) {
+                for (0..16) |i| lanes[i] = @intCast(if (i < 8) 16 + i else i - 8);
+                vget(e, rd);
+                b.emit(.{sv(S.shuffle)});
+                b.bytes(&lanes);
+            }
             vput(e, rd, q);
             return true;
         }

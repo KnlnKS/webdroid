@@ -437,19 +437,24 @@ pub fn exec(c: *Cpu, w: u32) Status {
     return fault(c, w);
 }
 
+pub const Lane = struct { m: bool, i: usize };
+pub fn permuteIndex(opcode: u32, count: usize, e: usize) Lane {
+    const half = count / 2;
+    return switch (opcode) {
+        1 => if (e < half) .{ .m = false, .i = 2 * e } else .{ .m = true, .i = 2 * (e - half) },
+        5 => if (e < half) .{ .m = false, .i = 2 * e + 1 } else .{ .m = true, .i = 2 * (e - half) + 1 },
+        2 => if (e & 1 != 0) .{ .m = true, .i = e - 1 } else .{ .m = false, .i = e },
+        6 => if (e & 1 != 0) .{ .m = true, .i = e } else .{ .m = false, .i = e + 1 },
+        3 => .{ .m = e & 1 != 0, .i = e >> 1 },
+        else => .{ .m = e & 1 != 0, .i = half + (e >> 1) },
+    };
+}
 fn permute(comptime T: type, c: *Cpu, rd: u8, rn: u8, rm: u8, q: bool, opcode: u32) Status {
     const count: usize = (if (q) @as(usize, 16) else 8) / @sizeOf(T);
-    const half = count / 2;
     var out: V align(16) = @splat(0);
     for (0..count) |e| {
-        L(T, &out)[e] = switch (opcode) {
-            1 => if (e < half) get(T, c, rn, 2 * e) else get(T, c, rm, 2 * (e - half)),
-            5 => if (e < half) get(T, c, rn, 2 * e + 1) else get(T, c, rm, 2 * (e - half) + 1),
-            2 => if (e & 1 != 0) get(T, c, rm, e - 1) else get(T, c, rn, e),
-            6 => if (e & 1 != 0) get(T, c, rm, e) else get(T, c, rn, e + 1),
-            3 => if (e & 1 != 0) get(T, c, rm, e >> 1) else get(T, c, rn, e >> 1),
-            else => if (e & 1 != 0) get(T, c, rm, half + (e >> 1)) else get(T, c, rn, half + (e >> 1)),
-        };
+        const s = permuteIndex(opcode, count, e);
+        L(T, &out)[e] = get(T, c, if (s.m) rm else rn, s.i);
     }
     write(c, rd, out, q);
     return .next;
