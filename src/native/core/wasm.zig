@@ -215,6 +215,7 @@ pub const Call = struct { f: u32 };
 pub const Br = struct { depth: u32 };
 pub const BrIf = struct { depth: u32 };
 pub const Vop = struct { op: u8 };
+pub const Vm = struct { op: u8, off: u32 };
 pub fn get(l: u32) Get {
     return .{ .l = l };
 }
@@ -244,6 +245,9 @@ pub fn brIf(depth: u32) BrIf {
 }
 pub fn simd(op: u8) Vop {
     return .{ .op = op };
+}
+pub fn vm(op: u8, off: u32) Vm {
+    return .{ .op = op, .off = off };
 }
 
 pub const Buf = struct {
@@ -332,11 +336,14 @@ pub const Buf = struct {
                 b.byte(Simd.prefix);
                 b.u(x.op);
             },
+            Vm => {
+                b.byte(Simd.prefix);
+                b.u(x.op);
+                b.u(0);
+                b.u(x.off);
+            },
             else => @compileError("emit: " ++ @typeName(@TypeOf(x))),
         };
-    }
-    pub fn op(b: *Buf, o: u8) void {
-        b.byte(o);
     }
     pub fn i32c(b: *Buf, x: i32) void {
         b.emit(.{c32(x)});
@@ -365,9 +372,6 @@ pub const Buf = struct {
     }
     pub fn br(b: *Buf, depth: u32) void {
         b.emit(.{Br{ .depth = depth }});
-    }
-    pub fn brIf(b: *Buf, depth: u32) void {
-        b.emit(.{BrIf{ .depth = depth }});
     }
     pub fn blockStart(b: *Buf, kind: u8, ty: u8) void {
         b.emit(.{ kind, ty });
