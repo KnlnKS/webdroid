@@ -2220,3 +2220,64 @@ instructions between transfers it is at most 6% of core time, and multi-page reg
 their own invalidation. It waits for a measurement that names it. A hang was seen once during a
 boot on the precise-spill build (UnityMain in `pthread_cond_wait`, every worker parked) and did
 not reproduce in eight later boots; if it returns, `?jit=0` and `__wdJit` still bisect it.
+
+## The wasm core, janitor pass
+
+The core went from 8,992 to 7,270 lines with the same guest semantics: the parity kits, the
+540-instruction hardware oracle in both tiers, and the cache test pass unchanged, the scored
+e2e flows repeat their scores (fitnotes 40.88%, mihon-onboarding 17.56%, mihon-app 60.70%,
+harmonic 32.87%), doodlejump renders 6/6 at 42 fps minimum and lichess 15/15, with the same
+instruction counts as the previous rollup (10.94G and 200.7M). What changed and what it was
+worth.
+
+**Shape.** One `bits.zig` holds the field helpers five files each carried; `cpu.st`, `cpu.raise`
+and `cpu.setPc32` are the one page-checked store, fault and interworking write. The interpreters
+fold their u64/u32 twins into comptime-typed bodies (`a64.addsub`, `adc`, `ccmp`, `extr`,
+`one`, `two`), ARM32 shares one `logic` between A32 and Thumb and one `vreg` accessor for the
+VFP file, and the SIMD lane loops compute pairwise operands, absolute differences and rounded
+shifts only in the arms that read them, with the narrowing paths taking their variants at
+comptime so a 32-bit lane never widens to i128. The JIT emits through `Buf.emit`, a tuple of
+opcodes and operand structs, so an instruction's wasm reads as one line; `wasm.W` maps an i32
+opcode to its i64 twin by the table's fixed distances, and `Emit(comptime wide)` instantiates
+the emitter per width, which is what let `flags`, `flagsNZ`, the spills and the division
+sequence be written once. The FP thunks and their import names come from one comptime list.
+The three JIT files went from 3,814 to 2,521 lines.
+
+**Hot paths.** A block counts `ic` once at its end and no longer reloads its page per
+instruction (the loop already returns on a page crossing or a dropped page). Regions check the
+budget only on back edges: every cycle has one, a forward path is bounded by the region, so
+the worst overrun past `ic_limit` is one region (359 instructions) instead of one block. A
+store's page check computes its address once and a 16-byte store makes one check over both
+halves; `bpc` is written on the fault path rather than per block, so an engine trap inside a
+region now names the last interpreted block, with the wasm frame text still naming the
+function. Permutes (ZIP, UZP, TRN), EXT, REV16/32/64, XTN/XTN2 and FCVTN/FCVTN2 on doubles
+emit as `i8x16.shuffle` and `f32x4.demote_f64x2_zero`, the lane maps coming from the same
+`permuteIndex` the interpreter's `permute` uses.
+
+**Measured.** Among Us on The Skeld, a 27 s sample after the map loaded: 593M instr/s of core
+time (7.08G instructions in 11.9 s of core) at 16 fps, against 540–560M before; boot to the map
+raised no fault. The doodlejump and lichess flows ran in 28% and 21% less core time than the
+previous rollup (which predates the pthread keys served in the core, so the host-call fall of
+81–86% is mostly that commit). `wd.native.bench()` in Chrome is a wash, as the loops it times
+are transfer-bound: arm 5.2G, a64 5.0G, the call loop 0.95G on both builds.
+
+**Removed.** The fallback histograms and the interpreted-instruction counter cost work on
+every fallback and every interpreted instruction and were read only by `wd.native.jit`; they
+went with `abi_const` and the unused `jit_stat` arms. `?jit=0`, `__wdJit`, `jit_fallback`,
+`perf.nativeHostMs` and `wd.native.hostCalls()` remain. The host tests that only needed a Cpu
+to run TS (lifetime, mem, jni-fp, pthread, signal, libc, libm, fortify, stdio, epoll,
+environment, proc, host) went too; the kits, the oracle and the cache test are the core's
+proof. `wd.native.bench()` switches the process ABI and resets the image region, so it is not
+to be run while an app is live: doing so faulted the game's timer thread at pc 0 during this
+pass.
+
+**Reasons that used to be comments.** Fused FP uses the Dekker/TwoSum form because
+`@mulAdd` on wasm32 goes through compiler-rt and returned a NaN for finite operands. A
+fallback spills everything it reloads so an over-named write set cannot reload stale memory
+over a dirty local. The slice holds up to 256 instructions past its budget while the exclusive
+monitor is set so a CAS loop's block never straddles a slice. A refused batch request
+decrements heat so the block asks again at its next entry. A region installs only against the
+page epoch it was emitted for. Decode blocks come from the image region and are zeroed on
+reuse because the guest can write through a freed arena pointer and a resized memory hands the
+same addresses back. `emitVector` emits nothing before returning false. A V-file write below Q
+zeroes the top of the register.
