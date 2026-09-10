@@ -381,6 +381,30 @@ rt.register({
   name: "android/text/TextUtils", ctor: JTextUtils,
   methods: {
     "static getLayoutDirectionFromLocale(Ljava/util/Locale;)I": localeDirection,
+    "static getCapsMode(Ljava/lang/CharSequence;II)I": async (cs: unknown, off: number, requested: number) => {
+      if (off < 0) return 0;
+      const mode = requested & 0x1000;
+      if (!(requested & 0x6000)) return mode;
+      const text = await csText(cs);
+      if (off > text.length) throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", String(off));
+      let i = off;
+      while (i > 0 && /["'\p{Ps}]/u.test(text[i - 1])) i--;
+      let j = i;
+      while (j > 0 && (text[j - 1] === " " || text[j - 1] === "\t")) j--;
+      if (j === 0 || text[j - 1] === "\n") return mode | 0x2000;
+      if (!(requested & 0x4000)) return mode | (i !== j ? 0x2000 : 0);
+      if (i === j) return mode;
+      while (j > 0 && /["'\p{Pe}]/u.test(text[j - 1])) j--;
+      const end = text[j - 1];
+      if (end !== "." && end !== "?" && end !== "!") return mode;
+      if (end === ".") {
+        for (let k = j - 2; k >= 0; k--) {
+          if (text[k] === ".") return mode;
+          if (!/\p{L}/u.test(text[k])) break;
+        }
+      }
+      return mode | 0x4000;
+    },
     "static isEmpty(Ljava/lang/CharSequence;)Z": (s: unknown) => (s === null || spannedString(s).length === 0 ? 1 : 0),
     // True when a run is left-to-right throughout, which lets StaticLayout skip the bidi
     // reordering entirely. It is a real scan, not an assumption: the RTL blocks are Hebrew,
