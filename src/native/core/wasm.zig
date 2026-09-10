@@ -13,6 +13,7 @@ pub const Op = struct {
     pub const br_table = 0x0e;
     pub const return_ = 0x0f;
     pub const call = 0x10;
+    pub const return_call_indirect = 0x13;
     pub const drop = 0x1a;
     pub const select = 0x1b;
     pub const local_get = 0x20;

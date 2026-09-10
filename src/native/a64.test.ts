@@ -347,4 +347,13 @@ describe("a64 decoder: hints, atomics, the REV family and system registers", () 
     expect(c.w[23]).toBeGreaterThanOrEqual(0);
     expect(c.w[26]).toBe(0x1000000);
   });
+
+  test("a call through a register and its return hand off between regions", () => {
+    // f on its own page: `add x0, x0, #1; ret`; the caller loops `blr x3; subs x2, x2, #1; b.ne`
+    const f = mem.reserve(0x1000, 0x1000);
+    mem.u32[f >>> 2] = 0x91000400; mem.u32[(f >>> 2) + 1] = RET;
+    const c = run([0xaa1e03e4, 0xd63f0060, 0xf1000442, 0x54ffffc1, 0xd65f0080], (c) => { c.w[4] = 100; c.w[6] = f; });
+    expect(c.w[0]).toBe(100);
+    expect(c.w[4]).toBe(0);
+  });
 });

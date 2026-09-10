@@ -124,7 +124,8 @@ pub const Page = extern struct {
 };
 const PAGE_BLOCK = (@sizeOf(Page) + abi.PAGE_SIZE - 1) & ~@as(u32, abi.PAGE_SIZE - 1);
 /// page number → its decode block (0: none), sized for the largest memory
-const decoded: [*]u32 = @ptrFromInt(abi.KERN_BASE + 0x60_0000);
+pub const DECODED = abi.KERN_BASE + 0x60_0000;
+const decoded: [*]u32 = @ptrFromInt(DECODED);
 pub var stats = extern struct { pages: u32 = 0, invalidated: u32 = 0, interp: u64 = 0 }{};
 var epoch: u32 = 0;
 

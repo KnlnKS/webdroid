@@ -55,7 +55,13 @@ const OFF_LIMIT = @offsetOf(Cpu, "ic_limit");
 const OFF_BPC = @offsetOf(Cpu, "bpc");
 const OFF_EXCL = @offsetOf(Cpu, "excl");
 const OFF_V = @offsetOf(Cpu, "v");
+const OFF_SLOT = @offsetOf(cpu.Page, "slot");
 const FLAGS_BASE = abi.KERN_BASE + 0x10_0000;
+/// regions hand off to the next region by tail call (the engine has return_call_indirect)
+var chain: bool = false;
+export fn jit_config(c: u32) void {
+    chain = c != 0;
+}
 
 pub const Isa = enum(u8) { a64 = 0, arm = 1, thumb = 2 };
 pub const Block = struct { pc: u32, n: u32, taken: i32, fall: i32 };
@@ -104,7 +110,8 @@ export fn jit_stat(i: u32) u32 {
         0 => stats.regions,
         1 => stats.batches,
         2 => stats.skipped,
-        else => stats.bytes,
+        3 => stats.bytes,
+        else => @intFromBool(chain),
     };
 }
 /// the region's blocks get the slot the host linked it into; a page dropped since emission keeps none
@@ -1305,8 +1312,70 @@ fn emitRegion(b: *Buf, r: *Region, page: *cpu.Page) void {
     b.op(O.end); // exit
     e.spillRegs();
     e.spillFlags();
+    if (chain) chainTo(&e);
     b.get(L_RET);
     b.op(O.end); // function
+}
+/// the epilogue's hand-off: a pc in L_RET whose block has a region, within the budget, is entered
+/// by tail call; anything else returns to the dispatcher
+fn chainTo(e: *Emit) void {
+    const b = e.b;
+    b.blockStart(O.block, wasm.VOID);
+    b.get(L_RET);
+    b.i32c(STATUS_MAX);
+    b.op(O.i32_lt_u);
+    b.brIf(0);
+    e.loadIc();
+    b.get(L_CPU);
+    b.memop(O.i64_load, OFF_LIMIT);
+    b.op(O.i64_ge_s);
+    b.brIf(0);
+    b.get(L_RET);
+    b.i32c(abi.PAGE_SHIFT - 2);
+    b.op(O.i32_shr_u);
+    b.i32c(-4);
+    b.op(O.i32_and);
+    b.memop(O.i32_load, cpu.DECODED);
+    b.tee(L_A);
+    b.op(O.i32_eqz);
+    b.brIf(0);
+    b.get(L_A);
+    b.get(L_RET);
+    b.i32c(if (e.r.isa == .a64) abi.PAGE_SIZE - 1 else abi.PAGE_SIZE - 2);
+    b.op(O.i32_and);
+    b.i32c(1);
+    b.op(O.i32_shl);
+    b.op(O.i32_add);
+    b.memop(O.i32_load, OFF_SLOT);
+    b.tee(L_B);
+    b.op(O.i32_eqz);
+    b.brIf(0);
+    if (e.r.isa != .a64) {
+        // the interworking target's T bit, as the dispatcher's bx would set it
+        b.get(L_CPU);
+        b.get(L_CPU);
+        b.memop(O.i32_load, OFF_CPSR);
+        b.i32c(~@as(i32, 1 << 5));
+        b.op(O.i32_and);
+        b.get(L_RET);
+        b.i32c(1);
+        b.op(O.i32_and);
+        b.i32c(5);
+        b.op(O.i32_shl);
+        b.op(O.i32_or);
+        b.memop(O.i32_store, OFF_CPSR);
+    }
+    b.get(L_CPU);
+    b.get(L_B);
+    b.i32c(255);
+    b.op(O.i32_and);
+    b.get(L_B);
+    b.i32c(8);
+    b.op(O.i32_shr_u);
+    b.op(O.return_call_indirect);
+    b.u(0);
+    b.u(0);
+    b.op(O.end);
 }
 
 /// build one module holding a function per pending request; returns the byte length
@@ -1336,13 +1405,15 @@ export fn jit_emit(out: u32, cap: u32) u32 {
     b.bytes(&[_]u8{ 0x60, 3, wasm.I32, wasm.I32, wasm.I32, 1, wasm.I32 });
     b.bytes(&[_]u8{ 0x60, 2, wasm.I32, wasm.I64, 1, wasm.I32 });
     b.patch(type_len, b.len - type_start);
-    // import section: memory, exec, tx, store
+    // import section: memory, the core's table (for the hand-off), exec, tx, store, exec32
     b.byte(2);
     const imp_len = b.reserve();
     const imp_start = b.len;
-    b.u(5);
+    b.u(6);
     importName(&b, "memory");
     b.bytes(&[_]u8{ 0x02, 0x00, 1 });
+    importName(&b, "__indirect_function_table");
+    b.bytes(&[_]u8{ 0x01, 0x70, 0x00, 0 });
     importName(&b, "exec");
     b.bytes(&[_]u8{ 0x00, 1 });
     importName(&b, "tx");

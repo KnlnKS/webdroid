@@ -66,6 +66,7 @@ export interface Core {
   jit_stat(i: number): number;
   exec_word32(cpu: number, pc: number): number;
   fb_count(i: number): number;
+  jit_config(chain: number): void;
 }
 /** the libc calls the core serves itself, by the id libc.zig gives them */
 export const CORE_LIBC: Record<string, number> = { memcpy: 1, memmove: 2, memset: 3, memcmp: 4, memchr: 5, strlen: 6, strnlen: 7, strcmp: 8, strncmp: 9, malloc: 10, free: 11, calloc: 12, realloc: 13, memalign: 14, posix_memalign: 15, malloc_usable_size: 16 };
@@ -96,7 +97,10 @@ if (core.__heap_base.value > STACK_BASE) throw new Error("[native] the core's da
 // ── the JIT: the core emits a module per batch of hot regions; each region function is linked
 // into the table and the core's slot maps route the dispatcher to it
 const JIT_CAP = 1 << 20; // the last MiB of the KERN region (abi.ts)
-const jitImports = { env: { memory, exec: core.exec_word, exec32: core.exec_word32, tx: core.tx_addr, store: core.on_store } };
+const jitImports = { env: { memory, __indirect_function_table: table, exec: core.exec_word, exec32: core.exec_word32, tx: core.tx_addr, store: core.on_store } };
+/** whether the engine has wasm tail calls: a region then hands off to the next region without returning to the dispatcher */
+const TAIL = WebAssembly.validate(new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 1, 5, 1, 0x60, 0, 1, 0x7f, 3, 2, 1, 0, 10, 6, 1, 4, 0, 0x12, 0, 0x0b]));
+core.jit_config(TAIL ? 1 : 0);
 let nextSlot = JIT_SLOT0;
 const freeSlots: number[] = [];
 /** whether this engine compiles synchronously (bun does; Chrome's main thread refuses past 4 KB) */
@@ -108,7 +112,7 @@ export const JIT_HEAT = 48;
 /** a64.zig's Kind, in order, for the fallback histogram */
 const KINDS = "raw fault nop adr addsub logic movw bfm extr b bcond cbz tbz br svc clrex mrs msr ldrlit ldp excl atomic ldst adc ccmp csel one two three simd vldrlit vmem".split(" ");
 export const jitStats = {
-  get regions(): number { return core.jit_stat(0); }, get batches(): number { return core.jit_stat(1); }, get skipped(): number { return core.jit_stat(2); }, get bytes(): number { return core.jit_stat(3); }, get modules(): number { return instances.length; }, evictions: 0, async: 0, on: true,
+  get regions(): number { return core.jit_stat(0); }, get batches(): number { return core.jit_stat(1); }, get skipped(): number { return core.jit_stat(2); }, get bytes(): number { return core.jit_stat(3); }, get modules(): number { return instances.length; }, evictions: 0, async: 0, on: true, chain: TAIL,
   /** what regions handed to the interpreter, most often first: an op kind, or `simd:<top byte>` of the word */
   fallbacks(n = 20): string[] {
     const rows: [string, number][] = [];
