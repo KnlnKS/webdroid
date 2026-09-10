@@ -21,7 +21,7 @@ test("Inflater counts delivered output separately from compressed input and trai
     const output: number[] = [];
     for (let pos = 0; pos < input.length; pos += chunkSize) {
       await vcall(z, "setInput", "([BII)V", input, pos, Math.min(chunkSize, input.length - pos));
-      while (!await vcall(z, "needsInput", "()Z")) {
+      while (!await vcall(z, "needsInput", "()Z") && !await vcall(z, "finished", "()Z")) {
         const b = new Int8Array(137);
         const n = await vcall(z, "inflate", "([BII)I", b, 1, b.length - 2);
         output.push(...new Uint8Array(b.buffer, 1, n));

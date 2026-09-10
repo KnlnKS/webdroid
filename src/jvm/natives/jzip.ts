@@ -78,7 +78,10 @@ rt.register({
     },
     "inflate([BII)I": function (this: JInflater, b: Int8Array, off: number, len: number) { return this.inflate(b, off, len); },
     "inflate([B)I": function (this: JInflater, b: Int8Array) { return this.inflate(b, 0, b.length); },
-    "needsInput()Z": function (this: JInflater) { return this.out.length ? 0 : 1; },
+    // The input is consumed eagerly, so "the input buffer is empty" is only true once the
+    // output it produced has been drained too. Unconsumed input past the stream (a gzip
+    // trailer) also counts: okio's refill treats needsInput as a promise that getRemaining is 0.
+    "needsInput()Z": function (this: JInflater) { return this.out.length || this.rem ? 0 : 1; },
     "needsDictionary()Z": () => 0,
     // end of stream = the BFINAL block has been fully decoded (fflate only flags `final` when
     // the caller says so, which a chunked Java feeder never does) — Inflater.finished() is what
