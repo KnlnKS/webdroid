@@ -330,8 +330,8 @@ class MethodCompiler {
     const bounded = !this.hasBackEdge && !this.hasTries;
     return `${this.sync ? "function" : "async function"}(${jsParams.join(",")}){
 ${paramInit.join("")}${declStr}let $t,$u,$ex,$fu,pc=0${bounded ? "" : ",$lc=0"};${this.sync ? "" : "const $th=R.th();let $s=0,$resume=0,$p;"}
-for(;;)try{
-${bounded ? "" : `if(++$lc>5000000)throw new Error("loopbomb "+${nameLit}+" pc="+pc);\n`}${this.sync ? "switch(pc)" : "$dispatch:switch($resume>0?-$resume:pc)"}{
+for(;;){
+${bounded ? "" : `if(++$lc>5000000){${this.leave()}throw new Error("loopbomb "+${nameLit}+" pc="+pc);}\n`}try{${this.sync ? "switch(pc)" : "$dispatch:switch($resume>0?-$resume:pc)"}{
 ${blocks.join("\n")}
 default: throw new Error("bad pc "+pc);
 }
@@ -339,6 +339,7 @@ ${this.sync ? "" : "R.su($th);$s=1;$p=await $p;R.st($th);if($resume<0){pc=-$resu
 }catch($e){
 ${this.sync ? "" : "R.st($th);$resume=0;"}$e=R.jx($e);
 ${catchBody}
+}
 }
 }`;
   }

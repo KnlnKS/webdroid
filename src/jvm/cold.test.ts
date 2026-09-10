@@ -23,3 +23,9 @@ test("cold handlers keep field and method pools distinct across matching instruc
   expect(await runCold(a, null, [{ f$value$a: 7, m$read$a: (n: number) => n + 1 }])).toBe(8);
   expect(await runCold(b, null, [{ f$value$b: 11, m$read$b: (n: number) => n + 2 }])).toBe(13);
 });
+
+test("cold loop limit escapes a catch range covering its own handler", async () => {
+  const body = method("pc=0;return;");
+  body.catches = [{ start: 0, end: 1, handlers: [], all: 0 }];
+  await expect(runCold(body, null, [])).rejects.toThrow("loopbomb pc=0");
+});
