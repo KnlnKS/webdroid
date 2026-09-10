@@ -95,6 +95,40 @@ rt.register({
     },
   },
 });
+/**
+ * AbsSeekBar/SeekBar/RatingBar over ProgressBar's state. A rating is a progress in steps, which
+ * is how AOSP stores it; the stars themselves come from a progressDrawable this does not build,
+ * so the widget holds and reports its rating without painting one.
+ */
+class JRatingBar extends JProgressBar { stars = 5; step = 0.5; ratingL: unknown = null; }
+const seekBarMethods: NativeSpec["methods"] = {
+  "setKeyProgressIncrement(I)V": () => {},
+  "setThumb(Landroid/graphics/drawable/Drawable;)V": () => {},
+  "setOnSeekBarChangeListener(Landroid/widget/SeekBar$OnSeekBarChangeListener;)V": function (this: JRatingBar, l: unknown) { this.ratingL = l; },
+};
+for (const [name, sup] of [["android/widget/AbsSeekBar", "android/widget/ProgressBar"],
+  ["android/widget/SeekBar", "android/widget/AbsSeekBar"]] as const) {
+  rt.register({ name, ctor: class extends JRatingBar {}, sup, methods: seekBarMethods });
+}
+rt.register({ name: "android/widget/SeekBar$OnSeekBarChangeListener", ctor: class extends JObj {} });
+rt.register({ name: "android/widget/RatingBar$OnRatingBarChangeListener", ctor: class extends JObj {} });
+rt.register({
+  name: "android/widget/RatingBar", ctor: JRatingBar, sup: "android/widget/AbsSeekBar",
+  methods: {
+    ...seekBarMethods,
+    "setNumStars(I)V": function (this: JRatingBar, n: number) { this.stars = n; this.max = Math.round(n / this.step); },
+    "getNumStars()I": function (this: JRatingBar) { return this.stars; },
+    "setStepSize(F)V": function (this: JRatingBar, s: number) { this.step = s || 1; this.max = Math.round(this.stars / this.step); },
+    "getStepSize()F": function (this: JRatingBar) { return this.step; },
+    "setRating(F)V": function (this: JRatingBar, r: number) { this.progress = Math.round(r / this.step); invalidate(); },
+    "getRating()F": function (this: JRatingBar) { return Math.fround(this.progress * this.step); },
+    "setIsIndicator(Z)V": () => {},
+    "isIndicator()Z": () => 1,
+    "setOnRatingBarChangeListener(Landroid/widget/RatingBar$OnRatingBarChangeListener;)V": function (this: JRatingBar, l: unknown) { this.ratingL = l; },
+    "getOnRatingBarChangeListener()Landroid/widget/RatingBar$OnRatingBarChangeListener;": function (this: JRatingBar) { return this.ratingL; },
+  },
+});
+
 export function themeAccent(v: JView): number {
   const rv = v.theme?.lookup(AID("colorAccent")) ?? v.theme?.lookup(AID("colorPrimary"));
   return rv && v.jres ? rvColor(v.jres, rv, -10011977) : -10011977;

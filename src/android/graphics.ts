@@ -1628,6 +1628,24 @@ function mkRecorder(node: JRenderNode): Ctx2D {
   }) as unknown as Ctx2D;
 }
 /** replay a node's display list into ctx with its transform props applied */
+// android.graphics.Picture is the same recording the render node already does, without the
+// transform properties: what it recorded is replayed into whatever canvas is drawing it.
+class JPicture extends JObj { node = new JRenderNode(); }
+rt.register({
+  name: "android/graphics/Picture", ctor: JPicture,
+  methods: {
+    "<init>()V": function () {},
+    "beginRecording(II)Landroid/graphics/Canvas;": maySuspend(function (this: JPicture, w: number, h: number) {
+      return vcall(this.node, "beginRecording", "(II)Landroid/graphics/RecordingCanvas;", w, h);
+    }),
+    "endRecording()V": maySuspend(function (this: JPicture) { return vcall(this.node, "endRecording", "()V"); }),
+    "getWidth()I": function (this: JPicture) { return this.node.w; },
+    "getHeight()I": function (this: JPicture) { return this.node.h; },
+    "draw(Landroid/graphics/Canvas;)V": function (this: JPicture, cv: JCanvas) {
+      if (this.node.hasDL) for (const op of this.node.ops) op(cv.ctx);
+    },
+  },
+});
 function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
   if (!n.hasDL) return;
   ctx.save();
