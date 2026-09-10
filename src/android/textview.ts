@@ -60,6 +60,8 @@ export class JTextView extends JView {
   editable = false;
   editObj: JEditable | null = null;
   cursorVisible = true;
+  /** when the caret last restarted its blink: focus and every edit, as AOSP's Editor.Blink does */
+  blinkStart = 0;
   lines: string[] = [];
   layoutWidthFor = -1;
   inputTypeV = 1;
@@ -608,7 +610,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       }
       y += lh;
     }
-    if (this.editable && this.focused && this.cursorVisible && Math.floor(performance.now() / 530) % 2 === 0) {
+    if (this.editable && this.focused && this.cursorVisible && Math.floor((performance.now() - this.blinkStart) / 500) % 2 === 0) {
       const lastLine = lines[lines.length - 1] ?? "";
       const cw = measureText(this.paintT, lastLine);
       const cx = (hg === 1 ? x + cw / 2 : hg === 5 ? x : x + cw) + 1;
@@ -699,7 +701,7 @@ export function focusEditText(et: JEditText | null) {
   if (focusedEdit === et) return;
   if (focusedEdit) focusedEdit.focused = false;
   focusedEdit = et;
-  if (et) et.focused = true;
+  if (et) { et.focused = true; et.blinkStart = performance.now(); }
   if (inputEl) {
     if (et) {
       inputEl.value = et.text;
@@ -713,6 +715,7 @@ export async function editInput(text: string) {
   focusedEdit.text = text;
   focusedEdit.rawText = text;
   focusedEdit.layoutWidthFor = -1;
+  focusedEdit.blinkStart = performance.now();
   requestLayout(focusedEdit);
   await focusedEdit.notifyWatchers();
 }
