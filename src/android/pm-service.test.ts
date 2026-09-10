@@ -181,7 +181,7 @@ test("activity resolution and launch share manifest data, categories, and visibi
   expect((await vcall(intent, "resolveActivity", "(Landroid/content/pm/PackageManager;)Landroid/content/ComponentName;", pm)).cls).toBe("test.services.Web");
   const launches: unknown[] = []; installed.launch = async (...args) => { launches.push(args); };
   await launchIntent(installed, intent);
-  expect(launches).toEqual([["test/services/Web", intent]]); expect(intent.component).toBeNull();
+  expect(launches).toEqual([["test/services/Web", intent, { caller: null, result: undefined }]]); expect(intent.component).toBeNull();
   intent.categories.add("missing"); expect(await query()).toEqual([]); intent.categories.clear();
   intent.pkg = "other"; expect(await query()).toEqual([]); intent.pkg = null;
   for (const uri of ["https://sub.example.test/posts/a", "https://example.test:8443/posts/a", "HTTPS://sub.example.test:8443/posts/a", "https://sub.example.test:8443/other"]) {
