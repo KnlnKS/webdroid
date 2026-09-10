@@ -3,7 +3,7 @@
 // printf/scanf in printf.ts.
 
 import { mem, NativeFault } from "./mem";
-import { hostLib, hostData, NORET, ARG0, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, calledMissing } from "./host";
+import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, calledMissing } from "./host";
 import { E } from "./abi";
 import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
 import { backtrace } from "./dl";
@@ -311,43 +311,14 @@ export function libcInit(): void {
     cacheflush: (_c, a) => { const s = a.p(), e = a.p(); invalidateRange(s, e - s, "cacheflush"); return 0; },
     __aeabi_read_tp: (cpu) => cpu.tlsBase,
 
-    malloc: (_c, a) => mem.malloc(a.u()),
-    free: (_c, a) => { mem.free(a.p()); },
-    calloc: (_c, a) => mem.calloc(a.u(), a.u()),
-    realloc: (_c, a) => mem.realloc(a.p(), a.u()),
+    malloc: SERVED, free: SERVED, calloc: SERVED, realloc: SERVED, memalign: SERVED, posix_memalign: SERVED, malloc_usable_size: SERVED,
     valloc: (_c, a) => mem.valloc(a.u()),
-    memalign: (cpu, a) => {
-      const al = PTR === 8 ? Number(a.ul()) : a.u(), n = PTR === 8 ? Number(a.ul()) : a.u();
-      const alignment = 2 ** Math.ceil(Math.log2(al || 1));
-      const p = alignment < mem.u8.length && n < mem.u8.length ? mem.memalign(alignment, Math.max(1, n)) : 0;
-      if (!p) setErrno(cpu, E.NOMEM);
-      return p;
-    },
-    posix_memalign: (_c, a) => {
-      const out = a.p(), al = PTR === 8 ? a.ul() : BigInt(a.u()), n = PTR === 8 ? a.ul() : BigInt(a.u());
-      if (al < BigInt(PTR) || (al & (al - 1n))) return E.INVAL;
-      if (al >= BigInt(mem.u8.length) || n >= BigInt(mem.u8.length)) return E.NOMEM;
-      const p = mem.memalign(Number(al), Math.max(1, Number(n)));
-      if (!p) return E.NOMEM;
-      stp(out, p);
-      return 0;
-    },
-    malloc_usable_size: (_c, a) => mem.usableSize(a.p()),
-    memcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n); return ARG0; },
-    memmove: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n); return ARG0; },
-    memset: (_c, a) => { const d = a.p(), v = a.i(), n = a.u(); mem.memset(d, v, n); return ARG0; },
-    memcmp: (_c, a) => {
-      const x = a.p(), y = a.p(), n = a.u();
-      for (let i = 0; i < n; i++) { const d = mem.u8[x + i] - mem.u8[y + i]; if (d) return d; }
-      return 0;
-    },
-    memchr: (_c, a) => { const p = a.p(), c = a.i() & 255, n = a.u(); const i = mem.u8.subarray(p, p + n).indexOf(c); return i >= 0 ? ptr(p + i) : 0; },
+    memcpy: SERVED, memmove: SERVED, memset: SERVED, memcmp: SERVED, memchr: SERVED,
     memrchr: (_c, a) => { const p = a.p(), c = a.i() & 255, n = a.u(); for (let i = p + n - 1; i >= p; i--) if (mem.u8[i] === c) return ptr(i); return 0; },
     bcopy: (_c, a) => { const s = a.p(), d = a.p(), n = a.u(); mem.memmove(d, s, n); },
     bzero: (_c, a) => { const d = a.p(), n = a.u(); mem.memset(d, 0, n); },
 
-    strlen: (_c, a) => mem.strlen(a.p()),
-    strnlen: (_c, a) => { const p = a.p(), n = a.u(); let i = 0; while (i < n && mem.u8[p + i]) i++; return i; },
+    strlen: SERVED, strnlen: SERVED,
     strcpy: (_c, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s); mem.memmove(d, s, n + 1); return ARG0; },
     strncpy: (_c, a) => {
       const d = a.p(), s = a.p(), n = a.u();
@@ -366,8 +337,7 @@ export function libcInit(): void {
       mem.u8[d + dl + i] = 0;
       return ARG0;
     },
-    strcmp: (_c, a) => strcmpAt(a.p(), a.p(), 0x7fffffff, false),
-    strncmp: (_c, a) => strcmpAt(a.p(), a.p(), a.u(), false),
+    strcmp: SERVED, strncmp: SERVED,
     strcasecmp: (_c, a) => strcmpAt(a.p(), a.p(), 0x7fffffff, true),
     strncasecmp: (_c, a) => strcmpAt(a.p(), a.p(), a.u(), true),
     strcoll: (_c, a) => strcmpAt(a.p(), a.p(), 0x7fffffff, false),

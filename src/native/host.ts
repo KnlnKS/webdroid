@@ -10,6 +10,8 @@ import { core, CORE_LIBC } from "./core";
 export const NORET: unique symbol = Symbol("noret");
 /** the result is the first argument, still in x0 (memcpy and its kin): nothing to translate back */
 export const ARG0: unique symbol = Symbol("arg0");
+/** a name the core serves (CORE_LIBC): the host has no body, the tracer goes through libc_call */
+export const SERVED: HostFn = (cpu) => cpu.fault("a core-served call reached the host");
 /** the result is already in v0 (see retF/retD); only the return itself is left to do */
 export const VRET: unique symbol = Symbol("vret");
 export type HostRet = number | bigint | void | typeof NORET | typeof VRET | typeof ARG0;
@@ -129,11 +131,12 @@ export const ptr = (p: number): number | bigint => mem.va(p);
 
 const fns: HostFn[] = [];
 const names: string[] = [];
+const bound: number[] = [];
 export function defineHost(name: string, fn: HostFn): number {
   const slot = fns.length;
   if (trampAddr(slot) >= RET_SENTINEL) throw new Error("out of trampoline slots");
   fns.push(fn); names.push(name);
-  if (CORE_LIBC[name]) core.host_bind(slot, CORE_LIBC[name]);
+  if (CORE_LIBC[name]) core.host_bind(slot, (bound[slot] = CORE_LIBC[name]));
   // `bx lr` at the slot so a guest that reads its own code (or a disassembler) sees something sane
   mem.u32[trampAddr(slot) >>> 2] = 0xe12fff1e;
   return trampAddr(slot);
@@ -174,7 +177,9 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
   }
   const timed = slowMs > 0 || hostTrace.on;
   const t0 = timed ? performance.now() : 0;
-  const ret = fn(cpu, a);
+  const served = hostTrace.on && bound[slot] ? core.libc_call(cpu.base, bound[slot]) : 2;
+  if (served === 1) cpu.fault("bad address in a core-served call");
+  const ret = served === 0 ? ARG0 : fn(cpu, a);
   const dt = timed ? performance.now() - t0 : 0;
   perf.nativeHostMs += dt;
   if (slowMs && dt > slowMs) console.warn(`[slow-native] ${cpu.name}:${names[slot]}(${(cpu.w[0] >>> 0).toString(16)},${(cpu.w[2] >>> 0).toString(16)},${(cpu.w[4] >>> 0).toString(16)}) ${dt.toFixed(0)}ms`);

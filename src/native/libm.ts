@@ -2,7 +2,7 @@
 // (bionic exports both). A float result leaves through retF/retD so it lands in v0 on AAPCS64.
 
 import { mem } from "./mem";
-import { hostLib, type HostFn, retF, retD, PTR, VRET, fbits, bitsf } from "./host";
+import { hostLib, type HostFn, retF, retD, PTR, VRET, SERVED, fbits, bitsf } from "./host";
 import type { Cpu } from "./cpu";
 
 /** a long result: 64-bit on LP64 */
@@ -26,6 +26,7 @@ export function libmInit(): void {
   const f2 = (f: (x: number, y: number) => number): HostFn => (c, a) => retF(c, f(a.f(), a.f()));
   const both = (name: string, f1d: (x: number) => number, f1f = f1d): [string, HostFn][] => [[name, d1(f1d)], [name + "f", f1(f1f)]];
   const both2 = (name: string, f: (x: number, y: number) => number): [string, HostFn][] => [[name, d2(f)], [name + "f", f2(f)]];
+  const served = (...names: string[]): [string, HostFn][] => names.flatMap((n) => [[n, SERVED], [n + "f", SERVED]]);
   const logb = (x: number) => (x === 0 ? -Infinity : !isFinite(x) ? Infinity : Math.floor(Math.log2(Math.abs(x))));
   const frexp = (v: number, ep: number): number => {
     if (v === 0 || !isFinite(v)) { mem.st32(ep, 0); return v; }
@@ -34,14 +35,14 @@ export function libmInit(): void {
     return v / 2 ** e;
   };
   const M: Record<string, HostFn> = Object.fromEntries([
-    ...both("sin", Math.sin), ...both("cos", Math.cos), ...both("tan", Math.tan),
+    ...served("sin", "cos", "tan", "exp", "log", "sqrt", "pow", "atan2", "fmod", "sincos"),
     ...both("asin", Math.asin), ...both("acos", Math.acos), ...both("atan", Math.atan),
     ...both("sinh", Math.sinh), ...both("cosh", Math.cosh), ...both("tanh", Math.tanh),
     ...both("asinh", Math.asinh), ...both("acosh", Math.acosh), ...both("atanh", Math.atanh),
-    ...both("sqrt", Math.sqrt), ...both("cbrt", Math.cbrt), ...both("exp", Math.exp), ...both("exp2", (x) => 2 ** x), ...both("expm1", Math.expm1),
-    ...both("log", Math.log), ...both("log2", Math.log2), ...both("log10", Math.log10), ...both("log1p", Math.log1p), ...both("logb", logb),
+    ...both("cbrt", Math.cbrt), ...both("exp2", (x) => 2 ** x), ...both("expm1", Math.expm1),
+    ...both("log2", Math.log2), ...both("log10", Math.log10), ...both("log1p", Math.log1p), ...both("logb", logb),
     ...both("floor", Math.floor), ...both("ceil", Math.ceil), ...both("trunc", Math.trunc), ...both("fabs", Math.abs),
-    ...both2("atan2", Math.atan2), ...both2("pow", Math.pow), ...both2("fmod", (x, y) => x % y), ...both2("hypot", Math.hypot),
+    ...both2("hypot", Math.hypot),
     ...both2("fmax", Math.max), ...both2("fmin", Math.min), ...both2("fdim", (x, y) => (x > y ? x - y : 0)),
     ...both2("copysign", (x, y) => (y < 0 || (y === 0 && 1 / y < 0) ? -Math.abs(x) : Math.abs(x))),
     ...both2("remainder", (x, y) => x - y * Math.round(x / y)),
@@ -69,8 +70,6 @@ export function libmInit(): void {
     frexpf: (c, a) => { const v = a.f(), ep = a.p(); return retF(c, frexp(v, ep)); },
     modf: (c, a) => { const v = a.d(), ip = a.p(); const i = Math.trunc(v); mem.stf64(ip, i); return retD(c, v - i); },
     modff: (c, a) => { const v = a.f(), ip = a.p(); const i = Math.trunc(v); mem.stf32(ip, i); return retF(c, v - i); },
-    sincos: (_c, a) => { const x = a.d(), s = a.p(), co = a.p(); mem.stf64(s, Math.sin(x)); mem.stf64(co, Math.cos(x)); },
-    sincosf: (_c, a) => { const x = a.f(), s = a.p(), co = a.p(); mem.stf32(s, Math.sin(x)); mem.stf32(co, Math.cos(x)); },
     fma: (c, a) => retD(c, a.d() * a.d() + a.d()), fmaf: (c, a) => retF(c, a.f() * a.f() + a.f()),
     nan: (c) => retD(c, NaN), nanf: (c) => retF(c, NaN),
     erf: (c, a) => retD(c, erf(a.d())), erff: (c, a) => retF(c, erf(a.f())),

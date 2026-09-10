@@ -278,9 +278,16 @@ export fn run_slice(cp: u32, budget: u32) u32 {
                 c.exit = slot;
                 return @intFromEnum(Exit.host);
             }
-            if (!libc.call(c, id)) {
-                _ = raise(c, .bad_address, 0);
-                return @intFromEnum(Exit.fault);
+            switch (libc.call(c, id)) {
+                .fault => {
+                    _ = raise(c, .bad_address, 0);
+                    return @intFromEnum(Exit.fault);
+                },
+                .host => {
+                    c.exit = slot;
+                    return @intFromEnum(Exit.host);
+                },
+                .done => {},
             }
             const lr: u32 = @truncate(c.x[if (c.a64 != 0) 30 else 14]);
             if (c.a64 != 0) c.pc = lr else setPc32(c, lr);

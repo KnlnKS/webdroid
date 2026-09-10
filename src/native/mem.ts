@@ -80,11 +80,9 @@ export const mem = {
 
   malloc: (n: number): number => core.malloc(n >>> 0) >>> 0,
   free(p: number): void { if (p && !core.free(p >>> 0)) badAddr(p); },
-  realloc: (p: number, n: number): number => core.realloc(p >>> 0, n >>> 0) >>> 0,
   calloc: (n: number, m: number): number => core.calloc(n >>> 0, m >>> 0) >>> 0,
   memalign: (align: number, n: number): number => core.memalign(align >>> 0, n >>> 0) >>> 0,
   valloc: (n: number): number => core.memalign(PAGE_SIZE, n >>> 0) >>> 0,
-  usableSize: (p: number): number => core.usable_size(p >>> 0) >>> 0,
   /** n bytes of pages: a hole, then fresh heap, and for a reservation the uncommitted part of
    *  other reservations. Pages of a mapping come zeroed; a reservation's are zeroed at commit. */
   mapPages: (n: number, reserve = false, alignment = PAGE_SIZE): number => core.map_pages(n >>> 0, reserve ? 1 : 0, alignment) >>> 0,

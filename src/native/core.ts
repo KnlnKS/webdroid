@@ -17,8 +17,6 @@ export interface Core {
   err(): number;
   malloc(n: number): number;
   free(p: number): number;
-  usable_size(p: number): number;
-  realloc(p: number, n: number): number;
   calloc(n: number, m: number): number;
   memalign(align: number, n: number): number;
   map_pages(n: number, reserve: number, align: number): number;
@@ -49,6 +47,7 @@ export interface Core {
   set_max_block(n: number): void;
   host_bind(slot: number, id: number): void;
   host_bypass(on: number): void;
+  libc_call(cpu: number, id: number): number;
   exec_word(cpu: number, word: number, pc: number): number;
   tx_addr(cpu: number, addr: bigint): number;
   on_store(cpu: number, addr: number): number;
@@ -75,7 +74,7 @@ export interface Core {
   jit_fma64(a: number, b: number, c: number): number;
 }
 /** the libc calls the core serves itself, by the id libc.zig gives them */
-export const CORE_LIBC: Record<string, number> = { memcpy: 1, memmove: 2, memset: 3, memcmp: 4, memchr: 5, strlen: 6, strnlen: 7, strcmp: 8, strncmp: 9, malloc: 10, free: 11, calloc: 12, realloc: 13, memalign: 14, posix_memalign: 15, malloc_usable_size: 16, pthread_self: 17, pthread_getspecific: 18, pthread_setspecific: 19 };
+export const CORE_LIBC: Record<string, number> = Object.fromEntries("memcpy memmove memset memcmp memchr strlen strnlen strcmp strncmp malloc free calloc realloc memalign posix_memalign malloc_usable_size pthread_self pthread_getspecific pthread_setspecific pthread_mutex_lock pthread_mutex_trylock pthread_mutex_unlock sinf cosf tanf expf logf sqrtf sin cos tan exp log sqrt powf atan2f fmodf pow atan2 fmod sincosf sincos".split(" ").map((n, i) => [n, i + 1]));
 /** pthread keys per thread, the size of the table each Cpu carries (libc.zig) */
 export const TLS_KEYS = 256;
 
