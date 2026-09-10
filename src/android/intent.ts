@@ -18,6 +18,14 @@ export class JIntent extends JObj {
   extras = new JBundle();
   flags = 0;
   categories = new Set<string>();
+  copyFrom(o: JIntent) {
+    if (o) {
+      this.action = o.action; this.component = o.component; this.componentPkg = o.componentPkg; this.dataUri = o.dataUri;
+      this.extras = new JBundle();
+      this.extras.map = new Map(o.extras.map);
+      this.flags = o.flags; this.pkg = o.pkg; this.typeStr = o.typeStr; this.categories = new Set(o.categories);
+    }
+  }
 }
 const intentMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
@@ -36,12 +44,7 @@ const intentMethods: NativeSpec["methods"] = {
     this.componentPkg = context.$host?.pkg ?? null;
   },
   "<init>(Landroid/content/Intent;)V": function (this: JIntent, o: JIntent) {
-    if (o) {
-      this.action = o.action; this.component = o.component; this.componentPkg = o.componentPkg; this.dataUri = o.dataUri;
-      this.extras = new JBundle();
-      this.extras.map = new Map(o.extras.map);
-      this.flags = o.flags; this.pkg = o.pkg; this.typeStr = o.typeStr; this.categories = new Set(o.categories);
-    }
+    this.copyFrom(o);
   },
   "setClass(Landroid/content/Context;Ljava/lang/Class;)Landroid/content/Intent;": function (this: JIntent, c: JContext, cls: any) {
     this.component = cls?.ci?.name?.replace(/\//g, ".") ?? null;
