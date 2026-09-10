@@ -212,6 +212,7 @@ class JMediaCodec extends JObj {
       this.decoder = new AudioDecoder({ error: e => { if (epoch === this.epoch) this.fail(e); }, output: audio => {
         if (epoch !== this.epoch) { audio.close(); return; }
         const buffer = mkByteBuffer(audio.numberOfFrames * audio.numberOfChannels * 2, true);
+        buffer.little = true;
         const pcm = new Int16Array(buffer.ab), plane = new Float32Array(audio.numberOfFrames);
         for (let channel = 0; channel < audio.numberOfChannels; channel++) {
           audio.copyTo(plane, { planeIndex: channel, format: "f32-planar" });
@@ -224,7 +225,7 @@ class JMediaCodec extends JObj {
     }
     const capacity = numberValue(this.format, "max-input-size", this.info.definition.kind === "video" ? Math.ceil(numberValue(this.format, "width", 640) * numberValue(this.format, "height", 360) * 1.5) : 65536);
     rt.link("java/nio/ByteBuffer"); rt.link("android/media/MediaCodec$BufferInfo"); rt.link("android/media/MediaFormat");
-    if (this.inputs.length !== 4 || this.inputs[0].cap !== capacity) this.inputs = Array.from({ length: 4 }, () => mkByteBuffer(capacity, true));
+    if (this.inputs.length !== 4 || this.inputs[0].cap !== capacity) this.inputs = Array.from({ length: 4 }, () => { const buffer = mkByteBuffer(capacity, true); buffer.little = true; return buffer; });
     this.available = new Set([0, 1, 2, 3]); this.changed(outputFormat); this.pump();
   }
   queue(index: number, offset: number, size: number, timestamp: bigint, flags: number): void {
