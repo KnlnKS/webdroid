@@ -13,8 +13,10 @@ const enum V { NULL = -1, STRING = 0, INTEGER = 1, MAP = 2, BUNDLE = 3, PARCELAB
   BYTE = 20, SERIALIZABLE = 21, BOOLEANARRAY = 23, DOUBLEARRAY = 28, CHAR = 29, SHORTARRAY = 30, CHARARRAY = 31, FLOATARRAY = 32 }
 const BNDL = 0x4c444e42;
 const P = "Landroid/os/Parcel;";
+const EXCEPTIONS = ["java/lang/SecurityException", "android/os/BadParcelableException", "java/lang/IllegalArgumentException",
+  "java/lang/NullPointerException", "java/lang/IllegalStateException", "android/os/NetworkOnMainThreadException", "java/lang/UnsupportedOperationException"];
 
-class JParcel extends JObj {
+export class JParcel extends JObj {
   buf = new Uint8Array(256);
   view = new DataView(this.buf.buffer);
   pos = 0;
@@ -302,6 +304,13 @@ rt.register({
     "writeStrongBinder(Landroid/os/IBinder;)V": function (this: JParcel, b: unknown) { writeObject(this, b); },
     [`writeInterfaceToken(${S})V`]: function (this: JParcel, s: string) { writeString(this, s); },
     "writeNoException()V": function (this: JParcel) { writeInt(this, 0); },
+    "writeException(Ljava/lang/Exception;)V": async function (this: JParcel, error: unknown) {
+      const index = EXCEPTIONS.findIndex((cls) => rt.iof(error, cls));
+      if (index < 0) throw error;
+      writeInt(this, -index - 1);
+      writeString(this, await vcall(error, "getMessage", "()Ljava/lang/String;"));
+      writeInt(this, 0);
+    },
     "readInt()I": function (this: JParcel) { return readInt(this); },
     "readLong()J": function (this: JParcel) { return readLong(this); },
     "readFloat()F": function (this: JParcel) { return readFloat(this); },
@@ -347,9 +356,18 @@ rt.register({
     "readStrongBinder()Landroid/os/IBinder;": function (this: JParcel) { return readObject(this); },
     "readException()V": function (this: JParcel) {
       const code = readInt(this);
-      if (code) throw rt.mkThrowable("java/lang/RuntimeException", readString(this));
+      if (code) {
+        const message = readString(this), stack = readInt(this);
+        if (stack) this.pos += stack - 4;
+        throw rt.mkThrowable(EXCEPTIONS[-code - 1] ?? "java/lang/RuntimeException", message);
+      }
     },
-    "enforceInterface(Ljava/lang/String;)V": function (this: JParcel) { readString(this); },
+    "enforceInterface(Ljava/lang/String;)V": function (this: JParcel, descriptor: string) {
+      if (readString(this) !== descriptor) throw rt.mkThrowable("java/lang/SecurityException", "Binder interface mismatch");
+    },
+    "enforceNoDataAvail()V": function (this: JParcel) {
+      if (this.pos !== this.size) throw rt.mkThrowable("android/os/BadParcelableException", "Parcel data not fully consumed");
+    },
     "hasFileDescriptors()Z": () => 0,
   },
 });
