@@ -1167,6 +1167,7 @@ rt.register({
     "static isSupplementaryCodePoint(I)Z": (cp: number) => (cp >= 0x10000 ? 1 : 0),
     "static isHighSurrogate(C)Z": (c: number) => (c >= 0xd800 && c <= 0xdbff ? 1 : 0),
     "static isLowSurrogate(C)Z": (c: number) => (c >= 0xdc00 && c <= 0xdfff ? 1 : 0),
+    "static isSurrogatePair(CC)Z": (high: number, low: number) => +(high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff),
     "static isSurrogate(C)Z": (c: number) => (c >= 0xd800 && c <= 0xdfff ? 1 : 0),
     "static toCodePoint(CC)I": (h: number, l: number) => ((h - 0xd800) << 10) + (l - 0xdc00) + 0x10000,
     "static isISOControl(I)Z": (c: number) => ((c >= 0 && c <= 0x1f) || (c >= 0x7f && c <= 0x9f) ? 1 : 0),
