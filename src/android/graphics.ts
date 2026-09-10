@@ -982,6 +982,19 @@ rt.register({
       this.m = matMul(o.m, this.m);
       return 1;
     },
+    "preConcat(Landroid/graphics/Matrix;)Z": function (this: JMatrix, o: JMatrix) {
+      this.m = matMul(this.m, o.m);
+      return 1;
+    },
+    "preRotate(FFF)Z": function (this: JMatrix, deg: number, px: number, py: number) { this.m = matMul(this.m, rotM(deg, px, py)); return 1; },
+    "preScale(FFFF)Z": function (this: JMatrix, sx: number, sy: number, px: number, py: number) {
+      this.m = matMul(this.m, [sx, 0, 0, sy, px - sx * px, py - sy * py]);
+      return 1;
+    },
+    "setConcat(Landroid/graphics/Matrix;Landroid/graphics/Matrix;)Z": function (this: JMatrix, a: JMatrix, b: JMatrix) {
+      this.m = matMul(a.m, b.m);
+      return 1;
+    },
     "mapRect(Landroid/graphics/RectF;)Z": function (this: JMatrix, r: JRectF) {
       const m = this.m, l = r.left, t = r.top, rt_ = r.right, b = r.bottom;
       const x0 = m[0] * l + m[2] * t + m[4], y0 = m[1] * l + m[3] * t + m[5];
@@ -1352,6 +1365,12 @@ export const canvasMethods: NativeSpec["methods"] = {
   },
   "setMatrix(Landroid/graphics/Matrix;)V": function (this: JCanvas, m: JMatrix | null) {
     this.ctx.setTransform(...(m?.m ?? [1, 0, 0, 1, 0, 0]));
+  },
+  "getMatrix()Landroid/graphics/Matrix;": function (this: JCanvas) {
+    const t = this.ctx.getTransform();
+    const m = new (rt.link("android/graphics/Matrix").ctor)() as JMatrix;
+    m.m = [t.a, t.b, t.c, t.d, t.e, t.f];
+    return m;
   },
   "clipRect(FFFF)Z": clipRect,
   "clipRect(IIII)Z": clipRect,

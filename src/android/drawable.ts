@@ -981,6 +981,25 @@ class JShapeDrawable extends JDrawable {
   intrinsicW(): number { return this.iw; }
   intrinsicH(): number { return this.ih; }
 }
+// PictureDrawable replays a recorded Picture inside its bounds.
+class JPictureDrawable extends JDrawable { picture: unknown = null; }
+rt.register({
+  name: "android/graphics/drawable/PictureDrawable", ctor: JPictureDrawable, sup: "android/graphics/drawable/Drawable",
+  methods: {
+    "<init>(Landroid/graphics/Picture;)V": function (this: JPictureDrawable, p: unknown) { this.picture = p; },
+    "setPicture(Landroid/graphics/Picture;)V": function (this: JPictureDrawable, p: unknown) { this.picture = p; invalidateSelf.call(this); },
+    "getPicture()Landroid/graphics/Picture;": function (this: JPictureDrawable) { return this.picture; },
+    "draw(Landroid/graphics/Canvas;)V": maySuspend(function (this: JPictureDrawable, cv: unknown) {
+      return this.picture ? vcall(this.picture, "draw", "(Landroid/graphics/Canvas;)V", cv) : undefined;
+    }),
+    "getIntrinsicWidth()I": maySuspend(function (this: JPictureDrawable) {
+      return this.picture ? vcall(this.picture, "getWidth", "()I") : -1;
+    }),
+    "getIntrinsicHeight()I": maySuspend(function (this: JPictureDrawable) {
+      return this.picture ? vcall(this.picture, "getHeight", "()I") : -1;
+    }),
+  },
+});
 rt.register({
   name: "android/graphics/drawable/ShapeDrawable", ctor: JShapeDrawable, sup: "android/graphics/drawable/Drawable",
   methods: {
