@@ -390,23 +390,23 @@ rt.register({
     "stop()V": function (this: JAudioTrack) { if (this.playState !== 3 || !this.queue.length) this.clearQueue(); this.playState = 1; this.stopTimer(); },
     "flush()V": function (this: JAudioTrack) { if (this.playState !== 3) this.clearQueue(); },
     "release()V": function (this: JAudioTrack) { this.stopTimer(); this.clearQueue(); this.gain?.disconnect(); this.gain = null; this.state = 0; this.listener = null; },
-    "write([SII)I": function (this: JAudioTrack, data: Int16Array, off: number, n: number) {
+    "write([SII)I": maySuspend(function (this: JAudioTrack, data: Int16Array, off: number, n: number) {
       if (this.state !== 1) return -3;
       this.push(data.subarray(off, off + n), Math.floor(n / this.channels));
       return this.wrote(n);
-    },
-    "write([BIII)I": function (this: JAudioTrack, data: Int8Array, off: number, n: number, mode: number) {
+    }),
+    "write([BIII)I": maySuspend(function (this: JAudioTrack, data: Int8Array, off: number, n: number, mode: number) {
       if (this.state !== 1) return -3;
       if (this.bytesPerSample === 2) this.push(new Int16Array(data.buffer.slice(data.byteOffset + off, data.byteOffset + off + (n & ~1))), Math.floor(n / this.frameBytes()));
       else this.push(data.subarray(off, off + n), Math.floor(n / this.channels));
       return mode === 1 ? n : this.wrote(n);   // WRITE_NON_BLOCKING
-    },
-    "write([BII)I": function (this: JAudioTrack, data: Int8Array, off: number, n: number) {
+    }),
+    "write([BII)I": maySuspend(function (this: JAudioTrack, data: Int8Array, off: number, n: number) {
       if (this.state !== 1) return -3;
       if (this.bytesPerSample === 2) this.push(new Int16Array(data.buffer.slice(data.byteOffset + off, data.byteOffset + off + (n & ~1))), Math.floor(n / this.frameBytes()));
       else this.push(data.subarray(off, off + n), Math.floor(n / this.channels));
       return this.wrote(n);
-    },
+    }),
     "getAudioSessionId()I": function (this: JAudioTrack) { return this.sessionId; },
     "getBufferSizeInFrames()I": function (this: JAudioTrack) { return Math.floor(this.bufBytes / this.frameBytes()); },
     "getBufferCapacityInFrames()I": function (this: JAudioTrack) { return Math.floor(this.bufBytes / this.frameBytes()); },
@@ -418,8 +418,8 @@ rt.register({
     "getRoutedDevice()Landroid/media/AudioDeviceInfo;": () => null,
     "addOnRoutingChangedListener(Landroid/media/AudioRouting$OnRoutingChangedListener;Landroid/os/Handler;)V": () => {},
     "removeOnRoutingChangedListener(Landroid/media/AudioRouting$OnRoutingChangedListener;)V": () => {},
-    "write(Ljava/nio/ByteBuffer;II)I": function (this: JAudioTrack, buffer: JBuffer, n: number, mode: number) { return this.writeBuffer(buffer, n, mode); },
-    "write(Ljava/nio/ByteBuffer;IIJ)I": function (this: JAudioTrack, buffer: JBuffer, n: number, mode: number) { return this.writeBuffer(buffer, n, mode); },
+    "write(Ljava/nio/ByteBuffer;II)I": maySuspend(function (this: JAudioTrack, buffer: JBuffer, n: number, mode: number) { return this.writeBuffer(buffer, n, mode); }),
+    "write(Ljava/nio/ByteBuffer;IIJ)I": maySuspend(function (this: JAudioTrack, buffer: JBuffer, n: number, mode: number) { return this.writeBuffer(buffer, n, mode); }),
   },
 });
 let nextAudioSession = 1;
