@@ -758,31 +758,75 @@ rt.register({
 }
 
 rt.register({ name: "java/lang/Readable", ctor: class extends JObj {} });
-class JReader extends JObj { s = ""; pos = 0; }
+class JReader extends JObj {
+  s = ""; pos = 0;
+  /** the stream or reader still to be decoded into `s`; null once the text is complete */
+  src: unknown = null;
+  srcChars = false;   // src reads chars (a Reader) rather than bytes (an InputStream)
+  dec: TextDecoder | null = null;
+}
+const READ_CHUNK = 8192;
+/**
+ * One chunk out of the wrapped source, through its VIRTUAL read: an app's own InputStream or
+ * Reader is bytecode, and reading the native class's byte buffer off it finds an empty one.
+ */
+function fill(r: JReader): void | Promise<void> {
+  const src = r.src;
+  if (!src) return;
+  if (r.pos > 0) { r.s = r.s.slice(r.pos); r.pos = 0; }
+  if (r.srcChars) {
+    const out = new Uint16Array(READ_CHUNK);
+    return after(vcall(src, "read", "([CII)I", out, 0, READ_CHUNK), (n: number) => {
+      if (n > 0) r.s += charsToString(out, 0, n); else if (n < 0) r.src = null;
+    });
+  }
+  const out = new Int8Array(READ_CHUNK);
+  return after(vcall(src, "read", "([BII)I", out, 0, READ_CHUNK), (n: number) => {
+    const dec = (r.dec ??= new TextDecoder());
+    if (n > 0) r.s += dec.decode(new Uint8Array(out.buffer, 0, n), { stream: true });
+    else if (n < 0) { r.s += dec.decode(); r.src = null; }
+  });
+}
+/** decode until a character is available or the source ends */
+function need(r: JReader): void | Promise<void> {
+  while (r.pos >= r.s.length && r.src) {
+    const p = fill(r);
+    if (p) return p.then(() => need(r));
+  }
+}
 // Every Reader here is the same model — a decoded string and a cursor — so the whole read
 // surface lives on the base and the subclasses inherit it instead of each re-declaring read().
 rt.register({
   name: "java/io/Reader", ctor: JReader, ifaces: ["java/io/Closeable", "java/lang/Readable"],
   methods: {
     "<init>()V": function () {},
-    "close()V": function () {},
-    "read()I": function (this: JReader) { return this.pos < this.s.length ? this.s.charCodeAt(this.pos++) : -1; },
-    "read([CII)I": function (this: JReader, out: Uint16Array, off: number, len: number) {
-      if (this.pos >= this.s.length) return len === 0 ? 0 : -1;
-      const n = Math.min(len, this.s.length - this.pos);
-      for (let i = 0; i < n; i++) out[off + i] = this.s.charCodeAt(this.pos + i);
-      this.pos += n;
-      return n;
-    },
+    "close()V": function (this: JReader) { this.src = null; },
+    "read()I": maySuspend(function (this: JReader) {
+      return after(need(this), () => (this.pos < this.s.length ? this.s.charCodeAt(this.pos++) : -1));
+    }),
+    "read([CII)I": maySuspend(function (this: JReader, out: Uint16Array, off: number, len: number) {
+      if (len === 0) return 0;
+      return after(need(this), () => {
+        if (this.pos >= this.s.length) return -1;
+        const n = Math.min(len, this.s.length - this.pos);
+        for (let i = 0; i < n; i++) out[off + i] = this.s.charCodeAt(this.pos + i);
+        this.pos += n;
+        return n;
+      });
+    }),
     "read([C)I": maySuspend(function (this: JReader, out: Uint16Array) {
       return vcall(this, "read", "([CII)I", out, 0, out.length);
     }),
     "ready()Z": function (this: JReader) { return this.pos < this.s.length ? 1 : 0; },
-    "skip(J)J": function (this: JReader, n: bigint) {
-      const k = Math.min(Number(n), this.s.length - this.pos);
-      this.pos += k;
-      return BigInt(k);
-    },
+    "skip(J)J": maySuspend(function (this: JReader, n: bigint) {
+      let left = Number(n), skipped = 0;
+      const step = (): number | Promise<number> => {
+        const k = Math.min(left, this.s.length - this.pos);
+        this.pos += k; left -= k; skipped += k;
+        return left > 0 && this.src ? after(fill(this), step) : skipped;
+      };
+      return after(step(), BigInt);
+    }),
     "markSupported()Z": () => 0,
   },
 });
@@ -793,7 +837,7 @@ rt.register({
   },
 });
 // UTF-8 whatever charset was asked for
-const decodeStream = function (this: JReader, s: JInputStream) { this.s = utf8.dec.decode(s.buf.subarray(s.pos)); };
+const decodeStream = function (this: JReader, s: unknown) { this.src = s; };
 rt.register({
   name: "java/io/InputStreamReader", ctor: class extends JReader {}, sup: "java/io/Reader",
   methods: {
@@ -816,18 +860,24 @@ rt.register({
     "<init>(Ljava/io/File;)V": function (this: JReader, f: JFile) { openReader.call(this, f.path); },
   },
 });
+/** A buffering Reader over another Reader, which may be the app's own subclass. */
+const wrapReader = function (this: JReader, r: JReader) { this.src = r; this.srcChars = true; };
 rt.register({
   name: "java/io/BufferedReader", ctor: class extends JReader {}, sup: "java/io/Reader",
   methods: {
-    "<init>(Ljava/io/Reader;)V": function (this: JReader, r: JReader) { this.s = r.s; this.pos = r.pos; },
-    "<init>(Ljava/io/Reader;I)V": function (this: JReader, r: JReader) { this.s = r.s; this.pos = r.pos; },
-    "readLine()Ljava/lang/String;": function (this: JReader) {
-      if (this.pos >= this.s.length) return null;
-      const i = this.s.indexOf("\n", this.pos);
-      const line = i < 0 ? this.s.slice(this.pos) : this.s.slice(this.pos, i);
-      this.pos = i < 0 ? this.s.length : i + 1;
-      return line.endsWith("\r") ? line.slice(0, -1) : line;
-    },
+    "<init>(Ljava/io/Reader;)V": wrapReader,
+    "<init>(Ljava/io/Reader;I)V": wrapReader,
+    "readLine()Ljava/lang/String;": maySuspend(function (this: JReader) {
+      const step = (): string | null | Promise<string | null> => {
+        const i = this.s.indexOf("\n", this.pos);
+        if (i < 0 && this.src) return after(fill(this), step);
+        if (this.pos >= this.s.length) return null;
+        const line = i < 0 ? this.s.slice(this.pos) : this.s.slice(this.pos, i);
+        this.pos = i < 0 ? this.s.length : i + 1;
+        return line.endsWith("\r") ? line.slice(0, -1) : line;
+      };
+      return step();
+    }),
   },
 });
 class JWriter extends JObj { s = ""; }
