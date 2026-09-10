@@ -164,3 +164,20 @@ test("activity resolution and launch share manifest data, categories, and visibi
   intent.component = ".Web"; intent.action = "unrelated"; expect(await query()).toEqual(["test.services.Web"]);
   intent.component = ".Missing"; expect(await query()).toEqual([]);
 });
+
+test("package permissions come from applicable manifest declarations only when requested", async () => {
+  const installed = host(); setAppHost(installed);
+  setManifest(node("manifest", { package: installed.pkg }, [node("application"),
+    node("uses-permission", { name: "test.ONE" }), node("uses-permission", { name: "test.ONE" }),
+    node("uses-permission", { name: "test.OLD", maxSdkVersion: 22 }),
+    node("uses-permission-sdk-23", { name: "test.NEW" }),
+  ]), new Map(), new Map());
+  const pm = await newObj("android/content/pm/PackageManager");
+  const get = (flags: number) => vcall(pm, "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", installed.pkg, flags);
+  expect((await get(0)).requestedPermissions).toBeNull();
+  const permissions = (await get(0x1000)).requestedPermissions;
+  expect([...permissions]).toEqual(["test.ONE", "test.NEW"]); expect(permissions.$t).toBe("Ljava/lang/String;");
+  const intent = await newObj("android/content/Intent", "(Ljava/lang/String;Landroid/net/Uri;Landroid/content/Context;Ljava/lang/Class;)V", "test.OPEN", { uri: "https://example.test" }, { $host: installed }, { ci: { name: "test/services/Activity" } });
+  expect(intent.action).toBe("test.OPEN"); expect(intent.dataUri).toBe("https://example.test");
+  expect(intent.component).toBe("test.services.Activity"); expect(intent.componentPkg).toBe(installed.pkg);
+});

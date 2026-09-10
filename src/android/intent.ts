@@ -30,6 +30,11 @@ const intentMethods: NativeSpec["methods"] = {
     this.component = cls?.ci?.name?.replace(/\//g, ".") ?? null;
     this.componentPkg = c?.$host?.pkg ?? null;
   }),
+  "<init>(Ljava/lang/String;Landroid/net/Uri;Landroid/content/Context;Ljava/lang/Class;)V": function (this: JIntent, action: string, uri: { uri: string } | null, context: JContext, cls: { ci: { name: string } }) {
+    this.action = action; this.dataUri = uri?.uri ?? null;
+    this.component = cls.ci.name.replace(/\//g, ".");
+    this.componentPkg = context.$host?.pkg ?? null;
+  },
   "<init>(Landroid/content/Intent;)V": function (this: JIntent, o: JIntent) {
     if (o) {
       this.action = o.action; this.component = o.component; this.componentPkg = o.componentPkg; this.dataUri = o.dataUri;

@@ -287,6 +287,7 @@ class JPackageInfo extends JObj {
   firstInstallTime = 0n; lastUpdateTime = 0n;
   signatures: unknown = null; signingInfo: unknown = null;
   reqFeatures: unknown = null;
+  requestedPermissions: string[] | null = null;
   activities: unknown = null; receivers: unknown = null; services: unknown = null; providers: unknown = null;
 }
 /**
@@ -321,12 +322,24 @@ function reqFeatures(root = manifestRoot): unknown[] | null {
   (out as { $t?: string }).$t = "Landroid/content/pm/FeatureInfo;";
   return out;
 }
+function requestedPermissions(root = manifestRoot): string[] | null {
+  const names = new Set<string>();
+  for (const node of root?.children ?? []) {
+    if (node.name !== "uses-permission" && node.name !== "uses-permission-sdk-23" && node.name !== "uses-permission-sdk-m") continue;
+    if (node.name !== "uses-permission" && device.sdk < 23) continue;
+    const max = attr(node, "maxSdkVersion")?.data ?? 0;
+    if (max && max < device.sdk) continue;
+    const name = attrStr(node, "name");
+    if (name) names.add(name);
+  }
+  return names.size ? jarray([...names], "Ljava/lang/String;") : null;
+}
 rt.register({
   name: "android/content/pm/PackageInfo", ctor: JPackageInfo, ifaces: ["android/os/Parcelable"],
   fields: {
     packageName: "packageName", versionName: "versionName", versionCode: "versionCode", splitNames: "splitNames",
     applicationInfo: "applicationInfo", firstInstallTime: "firstInstallTime", lastUpdateTime: "lastUpdateTime",
-    signatures: "signatures", signingInfo: "signingInfo", reqFeatures: "reqFeatures",
+    signatures: "signatures", signingInfo: "signingInfo", reqFeatures: "reqFeatures", requestedPermissions: "requestedPermissions",
     activities: "activities", receivers: "receivers", services: "services", providers: "providers",
   },
   methods: {
@@ -568,6 +581,7 @@ rt.register({
         if (flags & 0x8000000) pi.signingInfo = signingInfo(certificates);
       }
       pi.reqFeatures = reqFeatures();
+      if (flags & 0x1000) pi.requestedPermissions = requestedPermissions();
       if (flags & 2) pi.receivers = jarray([...manifestReceivers].filter(([name, node]) => visibleComponent(name, node, flags)).map(([name, node]) => receiverInfo(name, node, flags)), "Landroid/content/pm/ActivityInfo;");
       if (flags & 4) pi.services = jarray([...manifestServices].filter(([name, node]) => visibleComponent(name, node, flags)).map(([name, node]) => serviceInfo(name, node, flags)), "Landroid/content/pm/ServiceInfo;");
       pi.activities = jarray([...manifestActivities.keys()].map((n) => mkActivityInfo(n.replace(/\//g, "."))), "Landroid/content/pm/ActivityInfo;");
@@ -795,6 +809,7 @@ function archiveInfo(archive: PackageArchive, path: string, flags: number): JPac
   ai.targetSdkVersion = sdk && attr(sdk, "targetSdkVersion")?.data || ai.minSdkVersion;
   if (flags & 128) ai.metaData = metaData(app, res);
   info.applicationInfo = ai; info.reqFeatures = reqFeatures(root);
+  if (flags & 0x1000) info.requestedPermissions = requestedPermissions(root);
   if (flags & 64) info.signatures = signatures(certificates);
   if (flags & 0x8000000) info.signingInfo = signingInfo(certificates);
   return info;
