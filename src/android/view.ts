@@ -57,7 +57,7 @@ const M_requestLayout = mangleMethod("requestLayout", "()V");
 function descendantInvalidated(child: JView, target: JView) {
   for (let p = child.parent; p; child = p, p = p.parent) {
     const f = jmethod(p, M_onDescInv);
-    if (f !== nativeOnDescInv) { void guardApply(f as JMethod, p, child, target); return; }
+    if (f && f !== nativeOnDescInv) { void guardApply(f as JMethod, p, child, target); return; }
   }
 }
 function nativeOnDescInv(this: JViewGroup, _child: JView, target: JView) { invalidate(); descendantInvalidated(this, target); }
