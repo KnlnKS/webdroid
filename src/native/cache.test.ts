@@ -81,3 +81,35 @@ describe("region discovery", () => {
     expect(jitStats.regions).toBeGreaterThan(before);
   });
 });
+
+describe("a branch to a null pointer", () => {
+  // Below LOW lies the core's own stack, not anything the guest may run, and a region hands its
+  // target back to run_slice as a bare number: a null target has to fault in both tiers rather
+  // than be decoded, or be read as a status and leave the pc where it was.
+  const brX0 = 0xd61f0000;
+  test("faults in the interpreter", () => {
+    const at = mem.reserve(0x1000, 0x1000);
+    mem.u32[at >>> 2] = brX0;
+    const c = run([RET]);
+    c.w[0] = 0; c.w[1] = 0;
+    c.setPc(at);
+    expect(() => { while (c.runSlice(10000) !== 2) { /* spin */ } }).toThrow(/null page/);
+  });
+  test("faults out of a compiled region", () => {
+    // a fault never drains the JIT, so the region has to compile against a real target first
+    const at = mem.reserve(0x1000, 0x1000), land = mem.reserve(0x1000, 0x1000);
+    mem.u32[at >>> 2] = brX0;
+    mem.u32[land >>> 2] = RET;
+    const c = run([RET]);
+    const before = jitStats.regions;
+    for (let i = 0; i < JIT_HEAT + 2; i++) {
+      c.w[0] = land; c.w[1] = 0;
+      c.setPc(at);
+      while (c.runSlice(10000) !== 2) { /* spin */ }
+    }
+    expect(jitStats.regions).toBeGreaterThan(before);
+    c.w[0] = 0; c.w[1] = 0;
+    c.setPc(at);
+    expect(() => { while (c.runSlice(10000) !== 2) { /* spin */ } }).toThrow(/null page/);
+  });
+});

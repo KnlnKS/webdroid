@@ -306,6 +306,14 @@ export fn run_slice(cp: u32, budget: u32) u32 {
             if (c.a64 != 0) c.pc = lr else setPc32(c, lr);
             continue;
         }
+        // The first 64 KiB is never mapped, and below it lies the core's own stack rather than
+        // anything the guest may run: a null-ish branch target faults here instead of being
+        // decoded. arm.block tested this for itself; a64.block never did.
+        if (pc < abi.LOW) {
+            c.fault_addr = pc;
+            _ = raise(c, .null_page, pc);
+            return @intFromEnum(Exit.fault);
+        }
         var status: Status = .jump;
         const page = pageFor(pc) orelse {
             _ = raise(c, .bad_address, pc);
@@ -316,12 +324,20 @@ export fn run_slice(cp: u32, budget: u32) u32 {
         if (s != 0) {
             const f: *const fn (u32, u32) callconv(.c) u32 = @ptrFromInt(s >> 8);
             const r = f(cp, s & 255);
-            if (r >= jit.STATUS_MAX) {
+            // A region returns either the pc to go on at or one of the statuses below. Telling them
+            // apart by LOW rather than by a bound of their own is what keeps a wild target from
+            // being read as a status and leaving the pc where it was, which advances nothing.
+            if (r >= abi.LOW) {
                 if (c.a64 != 0) c.pc = r else setPc32(c, r);
             } else switch (r) {
+                1 => {},
                 2 => return @intFromEnum(Exit.fault),
                 3 => return @intFromEnum(Exit.syscall),
-                else => {},
+                else => {
+                    c.fault_addr = r;
+                    _ = raise(c, .null_page, r);
+                    return @intFromEnum(Exit.fault);
+                },
             }
         } else {
             const h = page.heat[i] +% 1;

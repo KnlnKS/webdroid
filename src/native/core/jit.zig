@@ -100,14 +100,9 @@ comptime {
     for ([_]type{ f32, f64 }, [_][]const u8{ "32", "64" }) |F, sfx| for (0..4) |k| @export(fpThunk(F, @intCast(k)), .{ .name = "jit_" ++ FP_NAMES[k] ++ sfx });
     @export(&fma64, .{ .name = "jit_fma64" });
 }
-pub const STATUS_MAX = 16;
-
 comptime {
     // jit_install packs the block index into the low byte of page.slot, the table slot above it.
     assert(MAX_BLOCKS <= 256);
-    // run_slice tells a returned status from a returned pc by magnitude; nothing below LOW is
-    // executable, so the status codes have to stay under it.
-    assert(STATUS_MAX <= abi.LOW);
 }
 
 const OFF_X = @offsetOf(Cpu, "x");
@@ -1164,7 +1159,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
 }
 fn chainTo(comptime wide: bool, e: *Emit(wide)) void {
     const b = e.b;
-    b.emit(.{ O.block, wasm.VOID, get(L_RET), c32(STATUS_MAX), O.i32_lt_u, wasm.brIf(0), get(L_IC), get(L_LIMIT), O.i64_ge_s, wasm.brIf(0), get(L_RET), c32(abi.PAGE_SHIFT - 2), O.i32_shr_u, c32(-4), O.i32_and, mo(O.i32_load, cpu.DECODED), tee(L_A), O.i32_eqz, wasm.brIf(0), get(L_A), get(L_RET), c32(if (wide) abi.PAGE_SIZE - 1 else abi.PAGE_SIZE - 2), O.i32_and, c32(1), O.i32_shl, O.i32_add, mo(O.i32_load, OFF_SLOT), tee(L_B), O.i32_eqz, wasm.brIf(0) });
+    b.emit(.{ O.block, wasm.VOID, get(L_RET), c32(abi.LOW), O.i32_lt_u, wasm.brIf(0), get(L_IC), get(L_LIMIT), O.i64_ge_s, wasm.brIf(0), get(L_RET), c32(abi.PAGE_SHIFT - 2), O.i32_shr_u, c32(-4), O.i32_and, mo(O.i32_load, cpu.DECODED), tee(L_A), O.i32_eqz, wasm.brIf(0), get(L_A), get(L_RET), c32(if (wide) abi.PAGE_SIZE - 1 else abi.PAGE_SIZE - 2), O.i32_and, c32(1), O.i32_shl, O.i32_add, mo(O.i32_load, OFF_SLOT), tee(L_B), O.i32_eqz, wasm.brIf(0) });
     if (!wide) b.emit(.{ get(L_CPU), get(L_CPU), mo(O.i32_load, OFF_CPSR), c32(~@as(i32, 1 << 5)), O.i32_and, get(L_RET), c32(1), O.i32_and, c32(5), O.i32_shl, O.i32_or, mo(O.i32_store, OFF_CPSR) });
     b.emit(.{ get(L_CPU), get(L_B), c32(255), O.i32_and, get(L_B), c32(8), O.i32_shr_u, O.return_call_indirect, 0, 0, O.end });
 }
