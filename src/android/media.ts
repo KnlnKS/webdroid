@@ -4,6 +4,7 @@ import { rt, JObj, maySuspend } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { vfs } from "../jvm/natives/jio";
+import type { JBuffer } from "../jvm/natives/jnio";
 rt.register({ name: "android/media/AudioManager$OnAudioFocusChangeListener", ctor: class extends JObj {} });
 /** the rate the Web Audio output actually runs at */
 export const outputSampleRate = (): number => actx?.sampleRate ?? 44100;
@@ -263,8 +264,9 @@ rt.register({
 const D_periodic = "(Landroid/media/AudioTrack;)V";
 class JAudioTrack extends JObj {
   rate = 44100; channels = 2; bytesPerSample = 2; bufBytes = 0;
+  sessionId = 0; attributes: unknown = null;
   state = 1; playState = 1;          // STATE_INITIALIZED; PLAYSTATE_STOPPED
-  nextTime = 0; written = 0;
+  nextTime = 0; written = 0; underruns = 0;
   period = 0; listener: unknown = null; timer: ReturnType<typeof setInterval> | null = null;
   gain: GainNode | null = null;
   vol = 1;
@@ -278,23 +280,42 @@ class JAudioTrack extends JObj {
     return excess > 0.005 ? new Promise((r) => setTimeout(() => r(n), excess * 1000)) : n;
   }
   /** interleaved 16-bit (or 8-bit unsigned) PCM → one scheduled buffer */
-  push(samples: Int16Array | Int8Array, frames: number): void {
+  push(samples: Int16Array | Int8Array | Float32Array, frames: number): void {
     if (frames <= 0) return;
     const ctx = this.ctx();
     const buf = ctx.createBuffer(this.channels, frames, this.rate);
     for (let c = 0; c < this.channels; c++) {
       const ch = buf.getChannelData(c);
-      if (samples instanceof Int16Array) for (let i = 0; i < frames; i++) ch[i] = samples[i * this.channels + c] / 32768;
+      if (samples instanceof Float32Array) for (let i = 0; i < frames; i++) ch[i] = samples[i * this.channels + c];
+      else if (samples instanceof Int16Array) for (let i = 0; i < frames; i++) ch[i] = samples[i * this.channels + c] / 32768;
       else for (let i = 0; i < frames; i++) ch[i] = ((samples[i * this.channels + c] & 0xff) - 128) / 128;
     }
     if (!this.gain) { this.gain = ctx.createGain(); this.gain.gain.value = this.vol; this.gain.connect(ctx.destination); }
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.connect(this.gain);
+    if (this.playState === 3 && this.written && this.nextTime < ctx.currentTime) this.underruns++;
     const at = Math.max(this.nextTime, ctx.currentTime + 0.02);
     src.start(at);
     this.nextTime = at + frames / this.rate;
     this.written += frames;
+  }
+  writeBuffer(buffer: JBuffer, n: number, mode: number): number | Promise<number> {
+    if (this.state !== 1) return -3;
+    if (!buffer || n < 0 || n > buffer.lim - buffer.pos || (mode !== 0 && mode !== 1)) return -2;
+    const available = mode === 1 ? Math.max(0, this.bufBytes - Math.ceil(this.queuedSec() * this.rate) * this.frameBytes()) : n;
+    n = Math.floor(Math.min(n, available) / this.frameBytes()) * this.frameBytes();
+    if (!n) return 0;
+    const data = new DataView(buffer.ab, buffer.dv.byteOffset + buffer.pos, n);
+    const count = n / this.bytesPerSample;
+    // AudioTrack consumes native-order PCM, independently of ByteBuffer.order().
+    const SampleArray = this.bytesPerSample === 4 ? Float32Array : this.bytesPerSample === 2 ? Int16Array : Int8Array;
+    const aligned = data.byteOffset % this.bytesPerSample === 0;
+    const samples = aligned ? new SampleArray(data.buffer, data.byteOffset, count) : new SampleArray(count);
+    if (!aligned) for (let i = 0; i < count; i++) samples[i] = this.bytesPerSample === 4 ? data.getFloat32(i * 4, true) : data.getInt16(i * 2, true);
+    this.push(samples, n / this.frameBytes());
+    buffer.pos += n;
+    return mode === 1 ? n : this.wrote(n);
   }
   startTimer(): void {
     if (this.timer || !this.listener || !this.period) return;
@@ -327,7 +348,7 @@ rt.register({
     "getPlayState()I": function (this: JAudioTrack) { return this.playState; },
     "getSampleRate()I": function (this: JAudioTrack) { return this.rate; },
     "getChannelCount()I": function (this: JAudioTrack) { return this.channels; },
-    "getPlaybackHeadPosition()I": function (this: JAudioTrack) { return Math.min(this.written, Math.floor((this.written - this.queuedSec() * this.rate))) | 0; },
+    "getPlaybackHeadPosition()I": function (this: JAudioTrack) { return Math.max(0, Math.min(this.written, Math.floor(this.written - this.queuedSec() * this.rate))) | 0; },
     "setStereoVolume(FF)I": function (this: JAudioTrack, l: number, r: number) { this.vol = (l + r) / 2; if (this.gain) this.gain.gain.value = this.vol; return 0; },
     "setVolume(F)I": function (this: JAudioTrack, v: number) { this.vol = v; if (this.gain) this.gain.gain.value = v; return 0; },
     "setPlaybackRate(I)I": () => 0,
@@ -357,9 +378,74 @@ rt.register({
       else this.push(data.subarray(off, off + n), Math.floor(n / this.channels));
       return this.wrote(n);
     },
-    "getAudioSessionId()I": () => 1,
+    "getAudioSessionId()I": function (this: JAudioTrack) { return this.sessionId; },
+    "getBufferSizeInFrames()I": function (this: JAudioTrack) { return Math.floor(this.bufBytes / this.frameBytes()); },
+    "getBufferCapacityInFrames()I": function (this: JAudioTrack) { return Math.floor(this.bufBytes / this.frameBytes()); },
+    "getAudioAttributes()Landroid/media/AudioAttributes;": function (this: JAudioTrack) { return this.attributes; },
+    "isOffloadedPlayback()Z": () => 0,
+    "getTimestamp(Landroid/media/AudioTimestamp;)Z": () => 0,
+    "getUnderrunCount()I": function (this: JAudioTrack) { return this.underruns; },
+    "setPreferredDevice(Landroid/media/AudioDeviceInfo;)Z": (_device: unknown) => 0,
+    "getRoutedDevice()Landroid/media/AudioDeviceInfo;": () => null,
+    "addOnRoutingChangedListener(Landroid/media/AudioRouting$OnRoutingChangedListener;Landroid/os/Handler;)V": () => {},
+    "removeOnRoutingChangedListener(Landroid/media/AudioRouting$OnRoutingChangedListener;)V": () => {},
+    "write(Ljava/nio/ByteBuffer;II)I": function (this: JAudioTrack, buffer: JBuffer, n: number, mode: number) { return this.writeBuffer(buffer, n, mode); },
+    "write(Ljava/nio/ByteBuffer;IIJ)I": function (this: JAudioTrack, buffer: JBuffer, n: number, mode: number) { return this.writeBuffer(buffer, n, mode); },
   },
 });
+let nextAudioSession = 1;
+class JAudioTrackBuilder extends JObj {
+  format: JAudioFormat | null = null;
+  attributes: unknown = null;
+  mode = 1; bufferSize = 0; sessionId = 0; offload = false;
+}
+rt.register({
+  name: "android/media/AudioTrack$Builder", ctor: JAudioTrackBuilder,
+  methods: {
+    "<init>()V": () => {},
+    "setAudioFormat(Landroid/media/AudioFormat;)Landroid/media/AudioTrack$Builder;": function (this: JAudioTrackBuilder, format: JAudioFormat) {
+      if (!format) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      this.format = format; return this;
+    },
+    "setAudioAttributes(Landroid/media/AudioAttributes;)Landroid/media/AudioTrack$Builder;": function (this: JAudioTrackBuilder, attributes: unknown) {
+      if (!attributes) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      this.attributes = attributes; return this;
+    },
+    "setTransferMode(I)Landroid/media/AudioTrack$Builder;": function (this: JAudioTrackBuilder, mode: number) {
+      if (mode !== 0 && mode !== 1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid transfer mode");
+      this.mode = mode; return this;
+    },
+    "setBufferSizeInBytes(I)Landroid/media/AudioTrack$Builder;": function (this: JAudioTrackBuilder, size: number) {
+      if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid buffer size");
+      this.bufferSize = size; return this;
+    },
+    "setSessionId(I)Landroid/media/AudioTrack$Builder;": function (this: JAudioTrackBuilder, id: number) {
+      if (id < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid session ID");
+      this.sessionId = id; return this;
+    },
+    "setOffloadedPlayback(Z)Landroid/media/AudioTrack$Builder;": function (this: JAudioTrackBuilder, offload: number) { this.offload = !!offload; return this; },
+    "setContext(Landroid/content/Context;)Landroid/media/AudioTrack$Builder;": function (this: JAudioTrackBuilder) { return this; },
+    "build()Landroid/media/AudioTrack;": function (this: JAudioTrackBuilder) {
+      if (this.offload || this.mode !== 1) rt.unimplemented("AudioTrack non-streaming output");
+      const format = this.format, encoding = format?.encoding || 2;
+      if (encoding !== 2 && encoding !== 3 && encoding !== 4) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Unsupported PCM encoding");
+      const track = new (rt.link("android/media/AudioTrack").ctor)() as JAudioTrack;
+      track.rate = format?.sampleRate || outputSampleRate();
+      if (track.rate < 3000 || track.rate > 384000) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid sample rate");
+      let mask = format?.channelIndexMask || format?.channelMask || 12, channels = 0;
+      for (; mask; mask &= mask - 1) channels++;
+      track.channels = channels;
+      track.bytesPerSample = encoding === 4 ? 4 : encoding === 3 ? 1 : 2;
+      track.bufBytes = this.bufferSize || Math.max(1024, Math.ceil(track.rate / 10)) * track.frameBytes();
+      if (track.bufBytes % track.frameBytes()) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Buffer size must contain whole frames");
+      track.attributes = this.attributes;
+      track.sessionId = this.sessionId || nextAudioSession++;
+      return track;
+    },
+  },
+});
+rt.register({ name: "android/media/AudioRouting$OnRoutingChangedListener", ctor: class extends JObj {} });
+rt.register({ name: "android/media/AudioTimestamp", ctor: class extends JObj { framePosition = 0n; nanoTime = 0n; }, fields: { framePosition: "framePosition", nanoTime: "nanoTime" }, methods: { "<init>()V": () => {} } });
 rt.register({ name: "android/media/AudioTrack$OnPlaybackPositionUpdateListener", ctor: class extends JObj {} });
 rt.register({ name: "android/media/AudioRecord$OnRecordPositionUpdateListener", ctor: class extends JObj {} });
 class JAudioFormat extends JObj { encoding = 0; sampleRate = 0; channelMask = 0; channelIndexMask = 0; }
