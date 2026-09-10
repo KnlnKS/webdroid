@@ -86,6 +86,7 @@ import "./android/webkit";
 import "./android/cookies";
 import "./android/hardware";
 import "./android/location";
+import "./android/worksource";
 import "./android/job";
 import "./android/service";
 import "./android/documents";
