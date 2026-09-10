@@ -2382,7 +2382,7 @@ post after switching tabs, and the Custom Feed picker. Create loaded the account
 communities; choosing a community with required body text kept Post disabled for a title alone
 and enabled it after entering body text. The draft was explicitly discarded. No vote, comment,
 post, subscription or account-setting change was submitted. The initial Saved population issue
-was subsequently fixed below; the separate deep-link exception and final E2E remain pending.
+was subsequently fixed below, followed by the startup Intent getter and final verification.
 
 
 ### Saved: queued attachment and themed tab colors
@@ -2423,3 +2423,71 @@ PackageManager. Restoring the synchronous explicit-component-or-null getter fixe
 error; the regression also checks setPackage alone, explicit class, cleared component and linked
 ComponentName metadata. The later direct package-manager query was valid, so neither DEX
 register handling nor package resolution needed a workaround.
+
+
+### Reddit: final verification and baseline comparison
+
+Verification completed on 2026-09-09 (report timestamp 2026-09-10 UTC), after commit `339de96`.
+The authenticated standalone smoke passed all ten steps: feed, drawer/back, post, two comment
+scrolls, comments, empty composer/back and post/back. It recorded no Java/page errors, native
+faults, main-loop wedges, or layout/draw/GL errors. Its nine reached missing queries are optional
+OEM/AppsFlyer reflection probes, ObjectStreamClass/MemberClasses and the absent captioning and
+media_metrics services; they do not establish complete API coverage. Chromium's embedded DNS
+WARNING remains in the raw logs and separate warning field. Credentials are redacted.
+
+The smoke now uses a running wall clock, waits for the input connection before typing, and
+observes completion of each swipe before continuing. The earlier failed login/composer attempts
+were harness races, not grounds for app-specific runtime patches. Content latency and screenshot
+latency are separate. Artifacts are in `tests/e2e/actual/reddit`; changing video frames and the
+unmuted PCM/clock observations are preserved in `tests/e2e/actual/reddit-media`.
+
+Full verification: typecheck passed; 924 unit tests passed with 26,646 assertions; all twelve
+APKs compiled with zero method failures. Framework verification reported 295/363 declarations
+(81%) and passed its executable checks; browser text comparison matched all six paragraphs.
+The duplicate literal registration-name grep was empty, with no library-name suffix matching.
+No visual goldens changed.
+
+The final full E2E rendered all eight flows (111 steps). Content differences below compare
+against the unchanged device goldens, not against the starting commit's images:
+
+| Flow | Starting `fcc3d0c` | Final | Rendered |
+|---|---:|---:|---:|
+| FitNotes | 40.88% | 40.88% | 39/39 |
+| Mihon onboarding | 17.56% | 17.56% | 5/5 |
+| Mihon app | 60.85% | 59.51% | 17/17 |
+| Harmonic | 33.08% | 31.84% | 14/14 |
+
+Both full captures reproduce FitNotes' one destroyed-FragmentManager exception and Lichess'
+missing PhantomReference failure. Lichess stays on its initial Flutter screen: its 15 rendered
+steps do not prove a game was played. Harmonic's content is live. No final step reported a native
+requirement/fault, main-loop wedge, layout error or draw error. Flappy Bird rendered seven steps,
+Calculator eight, and Doodle Jump six; Doodle's active play measured roughly 40–43 fps.
+
+Doodle's Back step exposed an existing queued AudioTrack notification race (one baseline error,
+23 in the earlier current run). The timer checked its listener before enqueueing but read it
+again after release cleared it. AOSP retains the original listener for queued messages. Capturing
+that listener and setting playback state to stopped on release removes the null receiver without
+cancelling already queued events. A regression holds the real main queue across listener
+replacement/release; the final full Doodle flow has no errors or missing APIs.
+
+An earlier current Mihon run scored 79.55% after a 45-pixel scroll offset moved the recorded
+fallback tap above the rotation row, cascading into wrong screens. Two bounded repeats on each
+revision opened the dialog, as did the final full run. All observed swipes completed about
+3.4 seconds before capture; a generic gesture-acknowledgement change was therefore rejected.
+This shows intermittent scroll/fallback sensitivity, not a measured change in its probability.
+The baseline and current timings and screenshots remain under `/tmp/mihon-gesture-*` and
+`/tmp/mihon-{baseline,current}-*`.
+
+The boot-only corpus rendered frames for 11/12 APKs on both revisions. TikTok failed before a
+frame with the same executor queue/Keva gaps; ChatGPT reached the same missing device configuration
+API, and Resy the same AppOps/Koin failures. These are existing breadth limits, not successful
+application flows. Per-step performance rollups preserve work/render counts alongside costs;
+full-flow elapsed times remained within roughly 2% of baseline, but this includes settling and
+capture and is not an isolated CPU benchmark. The rollup script does not parse the standalone
+Reddit schema, so its zero Reddit row is not a performance measurement.
+
+The report is `tests/e2e/report/index.html`, with per-step telemetry under `tests/e2e/actual`.
+The baseline archive, corpus JSONs and command logs remain in `/tmp/webdroid-*`. Push notification
+delivery, every media variant, and submitted votes/posts/replies remain unverified; no external
+content or account-setting mutations were submitted. The reached Reddit handoff flows, stock
+Chrome code-pressure problem, valid post timing and real video/audio path are verified above.

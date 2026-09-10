@@ -1,5 +1,9 @@
 # Hand-off: Reddit on webdroid
 
+Follow-up: the reached handoff flows and final regression verification are complete. See
+[final verification and remaining limits](implementation-history.md#reddit-final-verification-and-baseline-comparison).
+The notes below preserve the original investigation state.
+
 State of the work as of commit `90f7af8` on `main`. The task: log into Reddit
 (`therealalanableson` / `hero310usa`), make everything past the login work, implement missing
 APIs, fix bugs, keep code minimal and generalizable, then run the full e2e suite at the end.
