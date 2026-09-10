@@ -5,7 +5,7 @@ import { JBuffer, bufferView } from "../jvm/natives/jnio";
 import { JCtor } from "../jvm/natives/jreflect";
 import { JObj, rt } from "../jvm/runtime";
 import { Cpu, setA64 } from "./cpu";
-import { hostDispatch, ldp, PTR } from "./host";
+import { hostDispatch, defineHost, ldp, stp, PTR } from "./host";
 import { trampSlot } from "./abi";
 import { deref, jniInit, javaVM } from "./jni";
 import { mem } from "./mem";
@@ -217,10 +217,52 @@ test("JNI boolean field setters consume only the low argument byte", async () =>
   const name = mem.hostStr("enabled"), type = mem.hostStr("Z");
   const field = await cpu.call(jni(env, 94), [env, cls, name, type]);
   const staticField = await cpu.call(jni(env, 144), [env, cls, name, type]);
+  expect(await cpu.call(jni(env, 94), [env, cls, name, type])).toBe(field);
+  expect(await cpu.call(jni(env, 144), [env, cls, name, type])).toBe(staticField);
   for (const [value, expected] of [[0x100, 0], [0x101, 1], [0xffffff00, 0], [0xffffff80, 1]]) {
     await cpu.call(jni(env, 105), [env, object, field, value]);
     expect(await cpu.call(jni(env, 96), [env, object, field])).toBe(expected);
     await cpu.call(jni(env, 155), [env, cls, staticField, value]);
     expect(await cpu.call(jni(env, 146), [env, cls, staticField])).toBe(expected);
   }
+});
+
+
+test("JNI lookup, method IDs and native registrations retain sibling loader identity", async () => {
+  const dex = new DexFile(await Bun.file(new URL("./fixtures/jni-abstract.dex", import.meta.url)).bytes());
+  const a = rt.fork(), b = rt.fork();
+  a.loadDex(dex); b.loadDex(dex);
+  const name = "webdroid/JniAbstractTarget", envOut = mem.hostAlloc(PTR);
+  await cpu.call(ldp(ldp(javaVM.addr) + 6 * PTR), [javaVM.addr, envOut, 0x10006]);
+  const env = ldp(envOut), refs: number[] = [], ids: number[] = [];
+  try {
+    for (const owner of [a, b]) {
+      cpu.nativeRuntime = owner;
+      const cls = await cpu.call(jni(env, 6), [env, mem.hostStr(name)]);
+      expect(deref(cls, cpu)).toBe(owner.classFor(name));
+      const id = await cpu.call(jni(env, 33), [env, cls, mem.hostStr("value"), mem.hostStr("()I")]);
+      expect(await cpu.call(jni(env, 33), [env, cls, mem.hostStr("value"), mem.hostStr("()I")])).toBe(id);
+      ids.push(id); refs.push(cls);
+      const object = await cpu.call(jni(env, 27), [env, cls]);
+      expect(deref(await cpu.call(jni(env, 31), [env, object]), cpu)).toBe(owner.classFor(name));
+      const target = defineHost("test:jni-loader-" + refs.length, async (native) => {
+        expect(native.nativeRuntime).toBe(owner);
+        const found = await native.call(jni(env, 6), [env, mem.hostStr(name)]);
+        expect(deref(found, native)).toBe(owner.classFor(name));
+        return owner === a ? 17 : 29;
+      });
+      const table = mem.hostAlloc(3 * PTR);
+      stp(table, mem.hostStr("value")); stp(table + PTR, mem.hostStr("()I")); stp(table + 2 * PTR, target);
+      expect(await cpu.call(jni(env, 215), [env, cls, table, 1])).toBe(0);
+      expect(owner.jni.has(name + "|value()I")).toBe(true);
+    }
+    expect(ids[0]).not.toBe(ids[1]);
+    expect(await cpu.call(jni(env, 11), [env, refs[0], refs[1]])).toBe(0);
+    expect(rt.jni.has(name + "|value()I")).toBe(false);
+    cpu.nativeRuntime = null;
+    for (const owner of [a, b]) {
+      expect(await vcall(new (owner.link(name).ctor)(), "value", "()I")).toBe(owner === a ? 17 : 29);
+    }
+    expect(cpu.nativeRuntime).toBeNull();
+  } finally { cpu.nativeRuntime = null; }
 });

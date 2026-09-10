@@ -2,6 +2,7 @@
 // (cpu.zig), and the async call driver that runs slices, suspends on host promises, delivers
 // signals and yields between slices. The core executes; this decides what happens at its exits.
 
+import type { Runtime } from "../jvm/runtime";
 import { JThread, setCurThread } from "../jvm/natives/jlang";
 import { NativeFault, mem } from "./mem";
 import { core, jitDrain, TLS_KEYS } from "./core";
@@ -76,6 +77,7 @@ const callLog = (globalThis as { __wdCallLog?: string }).__wdCallLog ?? "";
 export const watchPcs = new Set<number>(((globalThis as { __wdWatch?: number[] }).__wdWatch ?? []).map((p) => p >>> 0));
 
 export class Cpu {
+  nativeRuntime: Runtime | null = null;
   /** the state struct's address in guest memory */
   readonly base: number;
   /** the registers as int32 halves: w[2i] is the low half of x[i] (r[i] on ARM32), w[2i+1] the high; x31 is sp */

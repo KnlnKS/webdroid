@@ -175,6 +175,7 @@ export class Runtime {
     child.dexIndex = new Map();
     child.links = new Map();
     child.refCache = new Map();
+    child.jni = new Map();
     child.classpath = {};
     child.classpathLocations = new Map();
     child.syncMethods = null;
@@ -306,7 +307,7 @@ export class Runtime {
   nativeRequired = new Map<string, string>();
   onNativeRequired: (lib: string, abi: string) => void = () => {};
   /** set by src/native/loader.ts: loads a machine-code library for an ABI it can run (loadLibrary consults it before giving up) */
-  loadNativeLib: ((lib: string, bytes: Uint8Array, abi: string) => Promise<void>) | null = null;
+  loadNativeLib: ((lib: string, bytes: Uint8Array, abi: string, owner?: Runtime) => Promise<void>) | null = null;
   /** the ABIs the native tier can actually execute, most-preferred first. Empty until
    *  src/native/loader.ts is imported, which is the only thing that can answer it. */
   nativeAbis: readonly string[] = [];

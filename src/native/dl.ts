@@ -7,7 +7,7 @@ import { mem } from "./mem";
 import { probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp } from "./host";
 import { cpuFor, setSymbolizeHook, setBacktraceHook, setA64, isA64, type Cpu } from "./cpu";
 import { trampSlot, RET_SENTINEL } from "./abi";
-import { rt } from "../jvm/runtime";
+import { rt, type Runtime } from "../jvm/runtime";
 import { curThread } from "../jvm/natives/jlang";
 
 export const modules: Module[] = [];
@@ -24,21 +24,21 @@ const inflight = new Map<string, Promise<Module>>();
 function basename(p: string): string { return p.slice(p.lastIndexOf("/") + 1); }
 
 /** the bytes of lib<name>.so shipped in the booted apk, for any ABI the tier runs */
-function apkLibPath(name: string): string | null {
-  for (const a of rt.nativeAbis) { const path = `lib/${a}/${name}`; if (rt.hasClasspath(path)) return path; }
+function apkLibPath(name: string, owner: Runtime = rt): string | null {
+  for (const a of rt.nativeAbis) { const path = `lib/${a}/${name}`; if (owner.hasClasspath(path)) return path; }
   return null;
 }
 
 /** `link` loads and relocates without executing anything — no init array, no JNI_OnLoad. It is
  *  what an image whose machine code the tier cannot run yet can still be proved to do. */
-export async function loadModule(name: string, bytes?: Uint8Array, link = false): Promise<Module> {
+export async function loadModule(name: string, bytes?: Uint8Array, link = false, owner: Runtime = rt): Promise<Module> {
   name = basename(name);
   const have = byName.get(name);
   if (have) { have.refs++; return have; }
   const p = inflight.get(name);
   if (p) return p;
   const q = (async () => {
-    const path = apkLibPath(name), b = bytes ?? (path ? await rt.readClasspath(path) : null);
+    const path = apkLibPath(name, owner), b = bytes ?? (path ? await owner.readClasspath(path) : null);
     if (!b) throw new Error(`dlopen failed: library "${name}" not found`);
     const mod = loadElf(name, b, resolveGlobal);
     // a process is one ABI: the first image decides which emitter its code compiles with
@@ -47,7 +47,7 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false)
     modules.push(mod);
     byName.set(name, mod);
     // dependencies that are real modules in the apk load (and initialise) first; host libs need nothing
-    for (const n of mod.needed) if (!hostLibNames().includes(n) && !byName.has(n) && apkLibPath(n)) await loadModule(n, undefined, link);
+    for (const n of mod.needed) if (!hostLibNames().includes(n) && !byName.has(n) && apkLibPath(n, owner)) await loadModule(n, undefined, link, owner);
     if (!link) await runInit(mod);
     return mod;
   })();
@@ -104,14 +104,14 @@ export function dlInit(): void {
   setSymbolizeHook(symbolizePc);
   dlerrorBuf = mem.hostAlloc(256);
   hostLib("libdl.so", {
-    dlopen: async (_cpu, a) => {
+    dlopen: async (cpu, a) => {
       const path = a.p(), name = path ? basename(mem.cstr(path)) : "";
       if (!name) return 1; // the main program
       if (hostLibNames().includes(name)) return handleOf({ lib: name });
       const have = byName.get(name);
       if (have) { have.refs++; return handleOf({ mod: have }); }
-      if (!apkLibPath(name)) { setErr(`dlopen failed: library "${name}" not found`); return 0; }
-      try { return handleOf({ mod: await loadModule(name) }); }
+      if (!apkLibPath(name, cpu.nativeRuntime ?? rt)) { setErr(`dlopen failed: library "${name}" not found`); return 0; }
+      try { return handleOf({ mod: await loadModule(name, undefined, false, cpu.nativeRuntime ?? rt) }); }
       catch (e) { setErr(String((e as Error).message ?? e)); return 0; }
     },
     dlsym: (_cpu, a) => {

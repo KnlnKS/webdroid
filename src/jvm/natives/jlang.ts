@@ -1283,7 +1283,7 @@ function arraycopy(src: any, sp: number, dst: any, dp: number, len: number) {
     for (let i = 0; i < len; i++) dst[dp + i] = src[sp + i];
   }
 }
-const loadedLibs = new Set<string>();
+const loadedLibs = new Map<string, { owner: Runtime; thread: JThread; pending: Promise<void> }>();
 /** what a device this shape carries, most-preferred first. Which of them we can EXECUTE is the
  *  native tier's answer (rt.nativeAbis), and a library we can run beats one we cannot. */
 const ABIS = ["arm64-v8a", "armeabi-v7a", "armeabi", "x86_64", "x86"];
@@ -1299,28 +1299,30 @@ function needsNative(lib: string, abi: string): void {
   rt.nativeRequired.set(lib, abi);
   rt.onNativeRequired(lib, abi);
 }
-/** dlopen: a lib whose natives a TS shim claims loads; anything else is machine code we cannot run, said so */
-async function dlopen(lib: string, abi: () => string | null, bytes: (a: string) => Uint8Array | null | Promise<Uint8Array | null> = () => null): Promise<void> {
-  if (rt.nativeLibs.has(lib.replace(/^lib|\.so$/g, "")) || loadedLibs.has(lib)) {
-    if (!loadedLibs.has(lib)) { loadedLibs.add(lib); console.log("[webdroid] loadLibrary", lib); }
-    return;
+async function dlopen(owner: Runtime, lib: string, abi: () => string | null, bytes: (a: string) => Uint8Array | null | Promise<Uint8Array | null>): Promise<void> {
+  if (owner.nativeLibs.has(lib.replace(/^lib|\.so$/g, ""))) return;
+  const have = loadedLibs.get(lib);
+  if (have) {
+    if (have.owner !== owner) throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `Library ${lib} already loaded by another ClassLoader`);
+    if (have.thread === curThread) return;
+    return have.pending;
   }
-  const a = abi();
-  // an ABI the native tier can run (src/native/loader.ts) loads for real; the rest is honest
-  const b = a && rt.loadNativeLib ? await bytes(a) : null;
-  if (a && b && rt.loadNativeLib) {
-    loadedLibs.add(lib);
-    console.log("[webdroid] loadLibrary", lib, a);
-    // a load that faults part-way is machine code we could not run too, whatever the reason:
-    // an ABI the tier rejects, an instruction it cannot decode, a symbol it cannot resolve
-    try { return await rt.loadNativeLib(lib, b, a); }
-    catch (e) { loadedLibs.delete(lib); needsNative(lib, a); throw e; }
-  }
-  if (a) needsNative(lib, a);
-  throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${lib}" ${a ? "is " + a + " machine code" : "not found"}`);
+  const thread = curThread;
+  const pending = (async () => {
+    const a = abi(), b = a && owner.loadNativeLib ? await bytes(a) : null;
+    if (a && b && owner.loadNativeLib) {
+      try { return await owner.loadNativeLib(lib, b, a, owner); }
+      catch (e) { needsNative(lib, a); throw e; }
+    }
+    if (a) needsNative(lib, a);
+    throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${lib}" ${a ? "is " + a + " machine code" : "not found"}`);
+  })();
+  loadedLibs.set(lib, { owner, thread, pending });
+  try { await pending; }
+  catch (error) { loadedLibs.delete(lib); throw error; }
 }
-const loadLibrary = async (n: string) => dlopen(`lib${n}.so`, () => pickAbi((a) => rt.hasClasspath(`lib/${a}/lib${n}.so`)),
-  (a) => rt.readClasspath(`lib/${a}/lib${n}.so`));
+const loadLibrary = async (n: string, owner: Runtime = rt) => dlopen(owner, `lib${n}.so`, () => pickAbi((a) => owner.hasClasspath(`lib/${a}/lib${n}.so`)),
+  (a) => owner.readClasspath(`lib/${a}/lib${n}.so`));
 /** Integer.getInteger/Long.getLong: a system property decoded the way Integer.decode does,
  *  null when it is unset or not a number — the value a caller falls back from. */
 function sysLong(prop: string): bigint | null {
@@ -1335,6 +1337,7 @@ const sysProps: Record<string, string> = {
 };
 rt.register({
   name: "java/lang/System", ctor: JSystem,
+  callerSensitive: ["loadLibrary(Ljava/lang/String;)V", "load(Ljava/lang/String;)V"],
   statics: { out: null, err: null, "in": null }, // filled by jio
   methods: {
     "static arraycopy(Ljava/lang/Object;ILjava/lang/Object;II)V": arraycopy,
@@ -1355,10 +1358,10 @@ rt.register({
     "static gc()V": () => {},
     "static exit(I)V": (c: number) => { console.warn("System.exit", c); },
     "static loadLibrary(Ljava/lang/String;)V": loadLibrary,
-    "static load(Ljava/lang/String;)V": async (path: string) => {
+    "static load(Ljava/lang/String;)V": async (path: string, owner: Runtime = rt) => {
       // jio imports this module, so its vfs is reached lazily rather than through a static cycle
       const { vfs } = await import("./jio");
-      await dlopen(path.slice(path.lastIndexOf("/") + 1), () => {
+      await dlopen(owner, path.slice(path.lastIndexOf("/") + 1), () => {
         const b = vfs.read(path);
         return b ? E_MACHINE[b[18] | (b[19] << 8)] ?? "unknown" : null;
       }, () => vfs.read(path));
@@ -1388,7 +1391,7 @@ rt.register({
     "exec([Ljava/lang/String;)Ljava/lang/Process;": (cmd: unknown[]) => {
       throw rt.mkThrowable("java/io/IOException", `Cannot run program "${cmd?.[0] ?? ""}": error=2, No such file or directory`);
     },
-    "loadLibrary0(Ljava/lang/Class;Ljava/lang/String;)V": async (_c: unknown, n: string) => loadLibrary(n),
+    "loadLibrary0(Ljava/lang/Class;Ljava/lang/String;)V": async (c: JClass | null, n: string) => loadLibrary(n, c?.ci?.owner ?? rt),
   },
 });
 

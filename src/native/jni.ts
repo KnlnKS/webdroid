@@ -4,7 +4,7 @@
 import { mem } from "./mem";
 import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet, hostTrace } from "./host";
 import { Cpu, cpuFor, type CallArg } from "./cpu";
-import { rt, JObj, type ClassInfo } from "../jvm/runtime";
+import { rt, JObj, type ClassInfo, type Runtime } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, newPrimArray } from "../jvm/abi";
 import { curThread, JClass, stackTraceText } from "../jvm/natives/jlang";
 import { JCtor, JMethod, classCtors, mkMethod } from "../jvm/natives/jreflect";
@@ -50,16 +50,18 @@ export function popFrame(cpu: Cpu): void { const l = locals(cpu); const m = l.fr
 interface MethodRec { info: ClassInfo; name: string; desc: string; mangled: string; isStatic: boolean; params: string[]; ret: string }
 interface FieldRec { prop: string; type: string; isStatic: boolean; owner: any }
 const methods: MethodRec[] = [null as unknown as MethodRec];
-const methodIds = new Map<string, number>();
+const methodIds = new WeakMap<ClassInfo, Map<string, number>>();
 /** a jmethodID is canonical: the same method looked up twice, or reached through a reflected
  *  Method, is the same id (an engine caches ids per proxy method and matches by identity) */
 function methodId(info: ClassInfo, name: string, desc: string, isStatic: boolean): number {
-  const key = (isStatic ? "static " : "") + info.name + "." + name + desc;
-  let id = methodIds.get(key);
+  const key = (isStatic ? "static " : "") + name + desc;
+  let ids = methodIds.get(info);
+  if (!ids) methodIds.set(info, ids = new Map());
+  let id = ids.get(key);
   if (id === undefined) {
     const { params, ret } = parseMethodDesc(desc);
     methods.push({ info, name, desc, mangled: mangleMethod(name, desc), isStatic, params, ret });
-    methodIds.set(key, (id = methods.length - 1));
+    ids.set(key, (id = methods.length - 1));
   }
   return id;
 }
@@ -70,8 +72,21 @@ function hasAbstractMethod(info: ClassInfo, name: string, desc: string): boolean
     || info.interfaces.some((i) => hasAbstractMethod(i, name, desc));
 }
 const fields: FieldRec[] = [null as unknown as FieldRec];
+const fieldIds = new WeakMap<ClassInfo, Map<string, number>>();
 
-interface Registered { cls: string; name: string; sig: string; fn: number; isStatic: boolean }
+function fieldId(info: ClassInfo, prop: string, type: string, isStatic: boolean): number {
+  let ids = fieldIds.get(info);
+  if (!ids) fieldIds.set(info, ids = new Map());
+  const key = (isStatic ? "static " : "") + prop + type;
+  let id = ids.get(key);
+  if (id === undefined) {
+    fields.push({ prop, type, isStatic, owner: isStatic ? info.ctor : null });
+    ids.set(key, id = fields.length - 1);
+  }
+  return id;
+}
+
+interface Registered { info: ClassInfo; cls: string; name: string; sig: string; fn: number; isStatic: boolean }
 export const registered: Registered[] = [];
 
 const clsName = (o: unknown): string => {
@@ -146,7 +161,7 @@ async function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], no
   try {
     let fn: any;
     if (m.isStatic) {
-      const p = rt.initClass(m.info); if (p) await p;
+      const p = (m.info.owner ?? rt).initClass(m.info); if (p) await p;
       fn = m.info.ctor[m.mangled];
       if (typeof fn !== "function") throw throwable("java/lang/NoSuchMethodError", m.name + m.desc);
       const r = fn.apply(m.info.ctor, args);
@@ -169,50 +184,51 @@ async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unk
   const { params, ret } = parseMethodDesc(r.sig);
   if (jniCalls && !r.name.startsWith("fmod")) console.log(`[jni-call] ${cpu.name}: ${r.cls.split("/").pop()}.${r.name}(${args.map((x) => (typeof x === "object" && x ? x.constructor.name : String(x)).slice(0, 24)).join(",")})`);
   await cpu.awaitIdleBase();
-  const prevCur = cur;
+  const prevCur = cur, previousRuntime = cpu.nativeRuntime;
+  cpu.nativeRuntime = r.info.owner ?? rt;
   cur = cpu;
   pushFrame(cpu);
-  const list: CallArg[] = [envFor(cpu), toRef(r.isStatic ? rt.classFor(r.cls) : self)];
-  for (let i = 0; i < params.length; i++) {
-    const t = params[i], v = args[i];
-    switch (t[0]) {
-      case "J": list.push(v as bigint); break;
-      case "F": list.push({ f: v as number }); break;
-      case "D": list.push({ d: v as number }); break;
-      case "L": case "[": list.push(toRef(v)); break;
-      default: list.push((v as number) | 0);
-    }
-  }
-  if (jniTrace.on) console.log("[jni] →", r.cls, r.name, r.sig);
-  let r0: number, r1: number;
-  const jt = cpu.jthread;
-  jt.inNative++;
   try {
-    r0 = await cpu.call(r.fn, list, r.cls.split("/").pop() + "." + r.name);
-    r1 = cpu.ret1;
-  } finally { cur = cpu; if (--jt.inNative === 0) for (const w of jt.nativeIdle.splice(0)) w(); }
-  let out: unknown;
-  switch (ret[0]) {
-    case "V": out = undefined; break;
-    case "Z": out = r0 & 0xff ? 1 : 0; break;
-    case "B": out = (r0 << 24) >> 24; break;
-    case "C": out = r0 & 0xffff; break;
-    case "S": out = (r0 << 16) >> 16; break;
-    case "I": out = r0; break;
-    case "J": out = retPair(r0, r1); break;
-    case "F": out = cpu.retF(); break;
-    case "D": out = cpu.retD(); break;
-    default: out = deref(r0);
-  }
-  if (jniCalls && !r.name.startsWith("fmod")) {
-    console.log(`[jni-ret] ${cpu.name}: ${r.name} = ${typeof out === "object" ? (out ? out.constructor.name : "null") : String(out)}${cpu.exc ? " exc=" + (cpu.exc as { constructor: { name: string } }).constructor.name : ""}`);
-    if (r.name === "nativeRender" && hostTrace.on) console.log("[jni-ret-trace] " + hostTrace.ring.filter((l) => l.startsWith(cpu.name + ":")).slice(-40).join(" | "));
-  }
-  popFrame(cpu);
-  cur = prevCur;
-  const exc = cpu.exc;
-  if (exc) { cpu.exc = null; throw exc; }
-  return out;
+    const list: CallArg[] = [envFor(cpu), toRef(r.isStatic ? cpu.nativeRuntime.classFor(r.cls) : self)];
+    for (let i = 0; i < params.length; i++) {
+      const t = params[i], v = args[i];
+      switch (t[0]) {
+        case "J": list.push(v as bigint); break;
+        case "F": list.push({ f: v as number }); break;
+        case "D": list.push({ d: v as number }); break;
+        case "L": case "[": list.push(toRef(v)); break;
+        default: list.push((v as number) | 0);
+      }
+    }
+    if (jniTrace.on) console.log("[jni] →", r.cls, r.name, r.sig);
+    let r0: number, r1: number;
+    const jt = cpu.jthread;
+    jt.inNative++;
+    try {
+      r0 = await cpu.call(r.fn, list, r.cls.split("/").pop() + "." + r.name);
+      r1 = cpu.ret1;
+    } finally { cur = cpu; if (--jt.inNative === 0) for (const w of jt.nativeIdle.splice(0)) w(); }
+    let out: unknown;
+    switch (ret[0]) {
+      case "V": out = undefined; break;
+      case "Z": out = r0 & 0xff ? 1 : 0; break;
+      case "B": out = (r0 << 24) >> 24; break;
+      case "C": out = r0 & 0xffff; break;
+      case "S": out = (r0 << 16) >> 16; break;
+      case "I": out = r0; break;
+      case "J": out = retPair(r0, r1); break;
+      case "F": out = cpu.retF(); break;
+      case "D": out = cpu.retD(); break;
+      default: out = deref(r0);
+    }
+    if (jniCalls && !r.name.startsWith("fmod")) {
+      console.log(`[jni-ret] ${cpu.name}: ${r.name} = ${typeof out === "object" ? (out ? out.constructor.name : "null") : String(out)}${cpu.exc ? " exc=" + (cpu.exc as { constructor: { name: string } }).constructor.name : ""}`);
+      if (r.name === "nativeRender" && hostTrace.on) console.log("[jni-ret-trace] " + hostTrace.ring.filter((l) => l.startsWith(cpu.name + ":")).slice(-40).join(" | "));
+    }
+    const exc = cpu.exc;
+    if (exc) { cpu.exc = null; throw exc; }
+    return out;
+  } finally { popFrame(cpu); cpu.nativeRuntime = previousRuntime; cur = prevCur; }
 }
 
 let envTable = 0;
@@ -263,12 +279,12 @@ export function jniInit(): void {
   def(6, "FindClass", (cpu, a) => {
     a.p(); const name = a.str();
     const n = name.replace(/\./g, "/");
-    const info = rt.link(n);
+    const owner = cpu.nativeRuntime ?? rt, info = owner.link(n);
     if (info.stub) { pend(cpu, rt.ncdfe(n)); return 0; }
-    return toRef(rt.classFor(n));
+    return toRef(owner.classFor(n), cpu);
   });
-  def(10, "GetSuperclass", (_c, a) => { a.p(); const i = infoOf(a.p()); return i?.superInfo ? toRef(rt.classFor(i.superInfo.name)) : 0; });
-  def(11, "IsAssignableFrom", (_c, a) => { a.p(); const s = infoOf(a.p()), t = infoOf(a.p()); return s && t && s.types.has(t.name) ? 1 : 0; });
+  def(10, "GetSuperclass", (_c, a) => { a.p(); const i = infoOf(a.p()); return i?.superInfo ? toRef((i.superInfo.owner ?? rt).classFor(i.superInfo.name)) : 0; });
+  def(11, "IsAssignableFrom", (_c, a) => { a.p(); const s = infoOf(a.p()), t = infoOf(a.p()); return s && t && s.assignableTo(t) ? 1 : 0; });
   def(13, "Throw", (cpu, a) => { a.p(); pend(cpu, deref(a.p())); return 0; });
   def(14, "ThrowNew", (cpu, a) => { a.p(); const i = infoOf(a.p()); const msg = a.p(); pend(cpu, throwable(i?.name ?? "java/lang/Error", msg ? mem.cstr(msg) : "")); return 0; });
   def(15, "ExceptionOccurred", (cpu) => toRef(cpu.exc));
@@ -283,12 +299,12 @@ export function jniInit(): void {
   def(24, "IsSameObject", (_c, a) => { a.p(); return deref(a.p()) === deref(a.p()) ? 1 : 0; });
   def(25, "NewLocalRef", (_c, a) => { a.p(); return toRef(deref(a.p())); });
   def(26, "EnsureLocalCapacity", () => 0);
-  def(27, "AllocObject", async (cpu, a) => { a.p(); const i = infoOf(a.p()); if (!i) return 0; const p = rt.initClass(i); if (p) await p; return toRef(new i.ctor(), cpu); });
+  def(27, "AllocObject", async (cpu, a) => { a.p(); const i = infoOf(a.p()); if (!i) return 0; const p = (i.owner ?? rt).initClass(i); if (p) await p; return toRef(new i.ctor(), cpu); });
   const newObject = (read: (m: MethodRec, a: ArgReader) => unknown[]) => async (cpu: Cpu, a: ArgReader) => {
     a.p(); const i = infoOf(a.p()); const m = methods[a.i()];
     if (!i || !m) return 0;
     try {
-      const p = rt.initClass(i); if (p) await p;
+      const p = (i.owner ?? rt).initClass(i); if (p) await p;
       const args = read(m, a);
       if (i.name === "java/lang/String") return toRef(rt.newStr(m.desc, args), cpu);   // a Java string is a JS string, built by the runtime's own constructor table
       const o = new i.ctor();
@@ -302,12 +318,12 @@ export function jniInit(): void {
   def(28, "NewObject", newObject((m, a) => readArgs(m.params, a)));
   def(29, "NewObjectV", newObject((m, a) => readArgs(m.params, vaList(a.p()))));
   def(30, "NewObjectA", newObject((m, a) => readJvalues(m.params, a.p())));
-  def(31, "GetObjectClass", (_c, a) => { a.p(); const o = deref(a.p()); return o === null ? 0 : toRef(rt.classFor(clsName(o))); });
-  def(32, "IsInstanceOf", (_c, a) => { a.p(); const o = deref(a.p()); const i = infoOf(a.p()); return o === null ? 1 : i ? rt.iof(o, i.name) : 0; });
+  def(31, "GetObjectClass", (_c, a) => { a.p(); const o = deref(a.p()); const info = o instanceof JObj ? (o.constructor as typeof JObj).$i : null; return o === null ? 0 : toRef((info?.owner ?? rt).classFor(clsName(o))); });
+  def(32, "IsInstanceOf", (_c, a) => { a.p(); const o = deref(a.p()); const i = infoOf(a.p()); return o === null ? 1 : i ? (i.owner ?? rt).iof(o, i.name) : 0; });
   const getMethodID = (isStatic: boolean) => async (cpu: Cpu, a: ArgReader) => {
     a.p(); const i = infoOf(a.p()); const name = a.str(), sig = a.str();
     if (!i) { pend(cpu, throwable("java/lang/NoClassDefFoundError", "null class")); return 0; }
-    const p = rt.initClass(i); if (p) await p;
+    const p = (i.owner ?? rt).initClass(i); if (p) await p;
     const mangled = mangleMethod(name, sig);
     // an interface the framework only marks (its methods live on the implementations) answers for
     // what the app's own bytecode calls on it; the receiver dispatches at call time as always
@@ -348,20 +364,18 @@ export function jniInit(): void {
   const getFieldID = (isStatic: boolean) => async (cpu: Cpu, a: ArgReader) => {
     a.p(); const i = infoOf(a.p()); const name = a.str(), sig = a.str();
     if (!i) { pend(cpu, throwable("java/lang/NoClassDefFoundError", "null class")); return 0; }
-    const p = rt.initClass(i); if (p) await p;
+    const p = (i.owner ?? rt).initClass(i); if (p) await p;
     if (isStatic) {
       const prop = mangleStaticField(name);
       let owner: ClassInfo | null = i;
       while (owner && !Object.prototype.hasOwnProperty.call(owner.ctor, prop)) owner = owner.superInfo;
       if (!owner) { pend(cpu, throwable("java/lang/NoSuchFieldError", `${i.name}.${name}`)); jniMissing.add(`static field ${i.name}.${name}`); return 0; }
-      fields.push({ prop, type: sig, isStatic: true, owner: owner.ctor });
-      return fields.length - 1;
+      return fieldId(owner, prop, sig, true);
     }
     let info: ClassInfo | null = i, prop: string | undefined;
     while (info && !(prop = info.fieldTable.get(name))) info = info.superInfo;
     if (!prop) { pend(cpu, throwable("java/lang/NoSuchFieldError", `${i.name}.${name}`)); jniMissing.add(`field ${i.name}.${name}`); return 0; }
-    fields.push({ prop, type: sig, isStatic: false, owner: null });
-    return fields.length - 1;
+    return fieldId(info!, prop, sig, false);
   };
   def(94, "GetFieldID", getFieldID(false));
   def(144, "GetStaticFieldID", getFieldID(true));
@@ -503,9 +517,9 @@ function registerNative(info: ClassInfo, name: string, sig: string, fn: number):
   if (def && dex) {
     for (const m of def.directMethods) { const mr = dex.method(m.methodIdx); if (mr.name === name && dex.methodDesc(m.methodIdx) === sig) { isStatic = (m.flags & 0x8) !== 0; break; } }
   }
-  const rec: Registered = { cls: info.name, name, sig, fn, isStatic };
+  const rec: Registered = { info, cls: info.name, name, sig, fn, isStatic };
   registered.push(rec);
-  rt.registerJni(info.name, name + sig, function (this: unknown, ...args: unknown[]) {
+  (info.owner ?? rt).registerJni(info.name, name + sig, function (this: unknown, ...args: unknown[]) {
     return callGuestNative(cpuFor(curThread), rec, this, args);
   } as (...a: never[]) => unknown);
   // the compiled stub memoised a miss before JNI_OnLoad ran: re-point it (see compiler emitNativeStub)
@@ -518,14 +532,14 @@ function registerNative(info: ClassInfo, name: string, sig: string, fn: number):
 
 /** natives with no RegisterNatives entry resolve by the JNI short-name export `Java_pkg_Cls_method` */
 export function resolveByExport(lookup: (sym: string) => number | undefined): void {
-  rt.jniResolver = (cls: string, sig: string) => {
+  rt.jniResolver = function (this: Runtime, cls: string, sig: string) {
     const name = sig.slice(0, sig.indexOf("(")), desc = sig.slice(sig.indexOf("("));
     const mangle = (s: string) => s.replace(/_/g, "_1").replace(/;/g, "_2").replace(/\[/g, "_3").replace(/\//g, "_").replace(/[^A-Za-z0-9_]/g, (c) => "_0" + c.charCodeAt(0).toString(16).padStart(4, "0"));
     const short = "Java_" + mangle(cls) + "_" + mangle(name);
     const fn = lookup(short) ?? lookup(short + "__" + mangle(desc.slice(1, desc.indexOf(")"))));
     if (fn === undefined) return null;
-    const info = rt.link(cls);
+    const info = this.link(cls);
     registerNative(info, name, desc, fn);
-    return rt.jni.get(cls + "|" + sig) ?? null;
+    return (info.owner ?? this).jni.get(cls + "|" + sig) ?? null;
   };
 }

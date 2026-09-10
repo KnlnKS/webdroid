@@ -119,3 +119,6 @@ TEMP state and one canonical persistent owner. Processes and bytecode start on d
   lookup and native registration; exercise duplicate-loader fixtures and real maps.
 - Existing authorized test account supplied interactively. Firebase project reference
   remains needed for live message delivery; credentials stay outside artifacts.
+- Defining-loader native loading and JNI lookup/registration now pass 19 targeted tests
+  and typecheck. The SDK map client passes native connectivity initialization and reaches
+  GL viewport setup and FrameLayout parameter conversion; maps are not yet rendered.

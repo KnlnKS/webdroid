@@ -1,4 +1,4 @@
-import { rt } from "../jvm/runtime";
+import { rt, type Runtime } from "../jvm/runtime";
 import { curThread } from "../jvm/natives/jlang";
 import { libcInit } from "./libc";
 import { dlInit, loadModule, resolveGlobalOrNull } from "./dl";
@@ -40,7 +40,7 @@ export async function linkNativeLib(name: string, bytes: Uint8Array, abi = ""): 
   return loadModule(name, bytes, true);
 }
 
-export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string): Promise<void> {
+export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string, owner: Runtime = rt): Promise<void> {
   if (!(NATIVE_ABIS as readonly string[]).includes(abi)) {
     throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${name}" is ${abi} machine code`);
   }
@@ -48,13 +48,15 @@ export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string
   // before nativeInit builds them
   setA64(abi === "arm64-v8a");
   nativeInit();
-  const mod = await loadModule(name, bytes);
+  const mod = await loadModule(name, bytes, false, owner);
   const onload = mod.exports.get("JNI_OnLoad");
   if (onload) {
     const cpu = cpuFor(curThread);
+    const previous = cpu.nativeRuntime;
+    cpu.nativeRuntime = owner;
     pushFrame(cpu);
     try { await cpu.call(onload, [javaVM.addr, 0]); }
-    finally { popFrame(cpu); }
+    finally { popFrame(cpu); cpu.nativeRuntime = previous; }
   }
 }
 
