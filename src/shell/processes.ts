@@ -49,6 +49,14 @@ export class ProcessBroker {
   private nextActivity = 1;
   private activities: { id: number; pid: number; caller: number; request: number }[] = [];
   private activityQueue: Promise<void> = Promise.resolve();
+  private booted = false;
+
+  async boot(): Promise<void> {
+    if (this.booted) return;
+    this.booted = true;
+    const intent = new JIntent(); intent.action = "android.intent.action.BOOT_COMPLETED";
+    await this.broadcast(null, await encodeIntent(intent), "android.permission.RECEIVE_BOOT_COMPLETED", false);
+  }
 
   foreground(pid: number): void { this.foregroundPid = pid; }
   launchActivity(caller: number, pkg: string, process: string, component: string, intent: IntentData, request: number, callingClass: string | null = null): Promise<void> {
@@ -167,15 +175,15 @@ export class ProcessBroker {
       throw new Error("Provider permission denied: " + permission);
     return this.request(this.connect(pkg, process), (endpoint) => endpoint.provider(request, { uid: caller.uid, pid }));
   }
-  async broadcast(pid: number, data: IntentData, permission: string | null, ordered: boolean): Promise<void> {
-    const caller = this.entry(pid), intent = await decodeIntent(data, false);
+  async broadcast(pid: number | null, data: IntentData, permission: string | null, ordered: boolean): Promise<void> {
+    const caller = pid === null ? null : this.entry(pid), intent = await decodeIntent(data, false);
     const list = await vcall(getPM(), "queryBroadcastReceivers", "(Landroid/content/Intent;I)Ljava/util/List;", intent, 0);
     const targets: { entry: Entry; component: string | null; priority: number }[] = [...this.entries.values()].filter((e) => !e.dead).map((entry) => ({ entry, component: null, priority: 0 }));
     for (const resolved of await toJsArray(list)) {
       if (!(resolved instanceof JResolveInfo)) continue;
       const info = resolved.activityInfo;
-      if (!info || !info.exported && info.packageName !== caller.pkg) continue;
-      if (info.permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", info.permission, caller.pkg) !== 0) continue;
+      if (!info || caller && !info.exported && info.packageName !== caller.pkg) continue;
+      if (caller && info.permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", info.permission, caller.pkg) !== 0) continue;
       targets.push({ entry: this.connect(info.packageName, info.processName), component: info.name, priority: resolved.priority ?? 0 });
     }
     targets.sort((a, b) => b.priority - a.priority);
@@ -209,6 +217,7 @@ export function processBroker(): ProcessBroker {
   return root.__wdProcesses ??= new ProcessBroker();
 }
 async function encodeIntent(intent: JIntent): Promise<IntentData> {
+  rt.link("android/os/Parcel");
   const parcel = new JParcel();
   await vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", intent.extras);
   return { action: intent.action, component: intent.component, componentPkg: intent.componentPkg, dataUri: intent.dataUri,

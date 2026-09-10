@@ -78,3 +78,32 @@ test("remote activity lifecycle and Back return a serialized result to the calle
     expect(broker.back(31000)).toBe(false);
   } finally { for (const [i, pkg] of names.entries()) { broker.fail(31000 + i, "Fixture complete"); packages.delete(pkg); } }
 });
+
+test("device boot reaches eligible non-exported receivers once", async () => {
+  const broker = new ProcessBroker(), names = ["test.boot.allowed", "test.boot.denied"], reached: string[] = [];
+  for (const [i, pkg] of names.entries()) {
+    const attribute = (name: string, str: string) => ({ name, ns: "", resId: 0, type: TV.STRING, data: 0, str });
+    const receiver: XmlNode = { name: "receiver", attrs: [attribute("name", pkg + ".Receiver"), { name: "exported", ns: "", resId: 0, type: TV.BOOLEAN, data: 0, str: null }], children: [
+      { name: "intent-filter", attrs: [], children: [{ name: "action", attrs: [attribute("name", "android.intent.action.BOOT_COMPLETED")], children: [] }] },
+    ] };
+    const root: XmlNode = { name: "manifest", attrs: [attribute("package", pkg)], children: [
+      { name: "application", attrs: [], children: [receiver] },
+      ...(i ? [] : [{ name: "uses-permission", attrs: [attribute("name", "android.permission.RECEIVE_BOOT_COMPLETED")], children: [] }]),
+    ] };
+    packages.set(pkg, new PackageRecord(root, new Resources(null, {}), "/" + pkg, 22000 + i, async () => []));
+    broker.connect(pkg, pkg, 32000 + i);
+    broker.ready(32000 + i, {
+      activity: async () => {}, service: async () => null, provider: async () => { throw new Error("Unused provider"); },
+      transact: async () => ({ handled: 0, data: { bytes: new Uint8Array(), objects: [] } }),
+      broadcast: async (intent, component, _ordered, result) => {
+        expect(intent.action).toBe("android.intent.action.BOOT_COMPLETED");
+        if (component) reached.push(component);
+        return result;
+      },
+    });
+  }
+  try {
+    await broker.boot(); await broker.boot();
+    expect(reached).toEqual([names[0] + ".Receiver"]);
+  } finally { for (const [i, pkg] of names.entries()) { broker.fail(32000 + i, "Fixture complete"); packages.delete(pkg); } }
+});
