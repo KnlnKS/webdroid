@@ -38,7 +38,7 @@ export interface ClassDef {
 }
 
 // `dex` because element values reference types/enums by index into the dex they came from
-export interface EncAnnotation { type: string; elements: Record<string, EncVal>; dex: DexFile; }
+export interface EncAnnotation { visibility: number; type: string; elements: Record<string, EncVal>; dex: DexFile; }
 
 interface TryItem { start: number; end: number; handlers: [number, number][]; catchAllAddr: number; }
 
@@ -328,7 +328,7 @@ export class DexFile {
       const itemOff = v.getUint32(off + 4 + i * 4, true);
       // annotation_item: visibility(u8) + encoded_annotation
       const r = new Reader(this.bytes, itemOff + 1);
-      out.push(this.encodedAnnotation(r));
+      const annotation = this.encodedAnnotation(r); annotation.visibility = this.bytes[itemOff]; out.push(annotation);
     }
     return out;
   }
@@ -341,7 +341,7 @@ export class DexFile {
       const nameIdx = r.uleb();
       elements[this.string(nameIdx)] = this.encodedValue(r);
     }
-    return { type: descToName(this.type(typeIdx)), elements, dex: this };
+    return { visibility: 1, type: descToName(this.type(typeIdx)), elements, dex: this };
   }
 
   /** map_list entry for a TYPE_* code, or undefined. The header stops at class_defs, so

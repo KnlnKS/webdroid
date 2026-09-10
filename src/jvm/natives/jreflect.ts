@@ -64,20 +64,20 @@ function paramAnnotations(owner: ClassInfo, name: string, desc: string) {
   const per = classAnno(owner).paramsByRef.get(name + desc) ?? [];
   const n = parseMethodDesc(desc).params.length;
   const out = [];
-  for (let i = 0; i < n; i++) out.push(jarray((per[i] ?? []).map(mkAnnotation), "Ljava/lang/annotation/Annotation;"));
+  for (let i = 0; i < n; i++) out.push(jarray((per[i] ?? []).filter((an) => an.visibility === 1).map((an) => mkAnnotation(an, owner.owner)), "Ljava/lang/annotation/Annotation;"));
   return jarray(out, "[Ljava/lang/annotation/Annotation;");
 }
 
 /** getAnnotation/isAnnotationPresent/getAnnotations/getDeclaredAnnotations over the receiver's own annotation list */
-function annotatedElement<T>(annosOf: (this: T) => EncAnnotation[]): NonNullable<NativeSpec["methods"]> {
-  const all = function (this: T) { return jarray(annosOf.call(this).map(mkAnnotation), "Ljava/lang/annotation/Annotation;"); };
+function annotatedElement<T extends { owner: ClassInfo }>(annosOf: (this: T) => EncAnnotation[]): NonNullable<NativeSpec["methods"]> {
+  const all = function (this: T) { return jarray(annosOf.call(this).filter((an) => an.visibility === 1).map((an) => mkAnnotation(an, this.owner.owner)), "Ljava/lang/annotation/Annotation;"); };
   return {
     "getAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;": function (this: T, cls: JClass) {
-      const found = annosOf.call(this).find((an) => an.type === cls?.ci?.name);
-      return found ? mkAnnotation(found) : null;
+      const found = annosOf.call(this).find((an) => an.visibility === 1 && an.type === cls?.ci?.name && (this.owner.owner ?? rt).link(an.type) === cls.ci);
+      return found ? mkAnnotation(found, this.owner.owner) : null;
     },
     "isAnnotationPresent(Ljava/lang/Class;)Z": function (this: T, cls: JClass) {
-      return annosOf.call(this).some((an) => an.type === cls?.ci?.name) ? 1 : 0;
+      return annosOf.call(this).some((an) => an.visibility === 1 && an.type === cls?.ci?.name && (this.owner.owner ?? rt).link(an.type) === cls.ci) ? 1 : 0;
     },
     "getAnnotations()[Ljava/lang/annotation/Annotation;": all,
     "getDeclaredAnnotations()[Ljava/lang/annotation/Annotation;": all,
@@ -734,37 +734,36 @@ export function boxReturn(retDesc: string, v: unknown): unknown {
 class JAnnotation extends JObj {
   anno!: EncAnnotation;
 }
-const annoProtoCache = new Map<string, object>();
-function mkAnnotation(anno: EncAnnotation): JAnnotation {
-  let info: ClassInfo;
-  try { info = rt.link(anno.type); } catch { info = rt.link("java/lang/Object"); }
+const annoProtoCache = new WeakMap<ClassInfo, object>();
+function mkAnnotation(anno: EncAnnotation, runtime: Runtime = rt): JAnnotation {
+  const info = runtime.link(anno.type);
   const proto = buildAnnoProto(anno.type, info);
   const inst: JAnnotation = Object.create(proto);
   inst.anno = anno;
-  installElements(inst, info, anno);
+  installElements(inst, info, anno, runtime);
   return inst;
 }
-function installElements(target: object, info: ClassInfo, anno: EncAnnotation) {
+function installElements(target: object, info: ClassInfo, anno: EncAnnotation, runtime: Runtime = rt) {
   for (const [name, val] of Object.entries(anno.elements)) {
     const key = mangleMethod(name, elementDesc(info, name));
-    const resolved = resolveEncVal(val, anno.dex);
+    const resolved = resolveEncVal(val, anno.dex, runtime);
     (target as any)[key] = () => resolved;
   }
 }
 function buildAnnoProto(type: string, info: ClassInfo): object {
-  const cached = annoProtoCache.get(type);
+  const cached = annoProtoCache.get(info);
   if (cached) return cached;
   // proto whose constructor.$i is the annotation interface, so R.iof / casts resolve
   const p: object = Object.create(JAnnotation.prototype);
   (p as any).constructor = { $i: info };
-  (p as any)[mangleMethod("annotationType", "()Ljava/lang/Class;")] = () => rt.classFor(type);
+  (p as any)[mangleMethod("annotationType", "()Ljava/lang/Class;")] = () => (info.owner ?? rt).classFor(type);
   (p as any)[mangleMethod("toString", "()Ljava/lang/String;")] = () => "@" + dotName(type);
   // elements a use site omits answer the type's declared defaults: dalvik/annotation/AnnotationDefault
   // on the annotation interface carries, as `value`, an annotation with one element per default.
   // On the shared proto so instances only override what they name.
   const d = classAnno(info).cls.find((a) => a.type === "dalvik/annotation/AnnotationDefault")?.elements.value;
-  if (d && typeof d === "object" && !Array.isArray(d) && d.kind === "annotation") installElements(p, info, d.anno);
-  annoProtoCache.set(type, p);
+  if (d && typeof d === "object" && !Array.isArray(d) && d.kind === "annotation") installElements(p, info, d.anno, info.owner);
+  annoProtoCache.set(info, p);
   return p;
 }
 /** find the return descriptor of annotation element `name` from the interface's abstract method */
@@ -785,18 +784,18 @@ function elementDesc(info: ClassInfo, name: string): string {
   }
   return "()Ljava/lang/String;"; // common default
 }
-function resolveEncVal(v: EncVal, dex: DexFile): unknown {
-  if (Array.isArray(v)) return v.map((x) => resolveEncVal(x, dex));
+function resolveEncVal(v: EncVal, dex: DexFile, runtime: Runtime): unknown {
+  if (Array.isArray(v)) return v.map((x) => resolveEncVal(x, dex, runtime));
   if (v !== null && typeof v === "object") {
-    if (v.kind === "annotation") return mkAnnotation(v.anno);
+    if (v.kind === "annotation") return mkAnnotation(v.anno, runtime);
     // an enum constant is a static of its class, which exists only once <clinit> has run;
     // compiled callers await a promise-valued element like any other call result
     if (v.kind === "enum") {
-      const p = rt.initClass(rt.link(descToName(dex.type(dex.field(v.idx).cls))));
-      if (p) return p.then(() => rt.encToJs(dex, v));
+      const p = runtime.initClass(runtime.link(descToName(dex.type(dex.field(v.idx).cls))));
+      if (p) return p.then(() => runtime.encToJs(dex, v));
     }
   }
-  return rt.encToJs(dex, v);
+  return runtime.encToJs(dex, v);
 }
 
 // ── core reflection marker interfaces: real classes (Method/Field/Class here, and any
@@ -1000,15 +999,15 @@ export function installClassReflection() {
     M["getMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;"];
   M["getAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;"] = function (this: JClass, cls: JClass) {
     if (!this.ci) return null;
-    const found = classAnno(this.ci).cls.find((an) => an.type === cls?.ci?.name);
-    return found ? mkAnnotation(found) : null;
+    const found = classAnno(this.ci).cls.find((an) => an.visibility === 1 && an.type === cls?.ci?.name && (this.ci!.owner ?? rt).link(an.type) === cls.ci);
+    return found ? mkAnnotation(found, this.ci.owner) : null;
   };
   M["isAnnotationPresent(Ljava/lang/Class;)Z"] = function (this: JClass, cls: JClass) {
     if (!this.ci) return 0;
-    return classAnno(this.ci).cls.some((an) => an.type === cls?.ci?.name) ? 1 : 0;
+    return classAnno(this.ci).cls.some((an) => an.visibility === 1 && an.type === cls?.ci?.name && (this.ci!.owner ?? rt).link(an.type) === cls.ci) ? 1 : 0;
   };
   M["getDeclaredAnnotations()[Ljava/lang/annotation/Annotation;"] = function (this: JClass) {
-    return jarray(this.ci ? classAnno(this.ci).cls.map(mkAnnotation) : [], "Ljava/lang/annotation/Annotation;");
+    return jarray(this.ci ? classAnno(this.ci).cls.filter((an) => an.visibility === 1).map((an) => mkAnnotation(an, this.ci!.owner)) : [], "Ljava/lang/annotation/Annotation;");
   };
   // attach with proper mangled keys onto the live prototype
   for (const [sig, fn] of Object.entries(M)) {

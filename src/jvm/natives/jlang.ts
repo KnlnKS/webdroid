@@ -1597,7 +1597,7 @@ rt.register({
     "getDeclaringClass()Ljava/lang/Class;": function (this: JEnum) {
       let i: ClassInfo | undefined = (this.constructor as any).$i;
       while (i && i.superInfo && i.superInfo.name !== "java/lang/Enum") i = i.superInfo;
-      return rt.classFor(i?.name ?? "java/lang/Enum");
+      return (i?.owner ?? rt).classFor(i?.name ?? "java/lang/Enum");
     },
     "static valueOf(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;": async function (cls: JClass, n: string) {
       const info = cls.ci!;
