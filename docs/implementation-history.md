@@ -2381,5 +2381,31 @@ Read-only navigation also reached History's explicit empty state, saved comments
 post after switching tabs, and the Custom Feed picker. Create loaded the account's actual
 communities; choosing a community with required body text kept Post disabled for a title alone
 and enabled it after entering body text. The draft was explicitly discarded. No vote, comment,
-post, subscription or account-setting change was submitted. Initial Saved population and a
-separate deep-link exception still required investigation at this point.
+post, subscription or account-setting change was submitted. The initial Saved population issue
+was subsequently fixed below; the separate deep-link exception and final E2E remain pending.
+
+
+### Saved: queued attachment and themed tab colors
+
+Saved initially measured and laid out its ViewPager before attachment. The real ViewPager
+population method returned while getWindowToken was null; its later onAttachedToWindow reset
+firstLayout, but another measurement never followed. An ordinary requestLayout populated the
+saved posts. Read-only callback observations confirmed measure/layout and an empty draw before
+attachment, then repeated empty draws without another measurement. The earlier hosted-display
+invalidation fix refreshed drawing but could not restart this attachment-dependent population.
+
+Queued attachment now marks newly attached descendants for measurement during the existing
+linear traversal and requests layout once at the subtree root. It retains the hosted-display
+invalidation and does not walk ancestors for each descendant. A regression verifies that a
+child measured without attachment is measured again with identical specs after attachment, then
+uses the measurement cache normally. Fresh source-only navigation populated Saved on its first
+open, with actual post text and an image, without switching tabs or manually invalidating views.
+
+The selected Posts label separately had color zero. Material TabLayout called
+TypedArray.getColor on a selector whose color referred to a theme attribute; the old unthemed
+selector fallback returned transparent. Reading the same value through getColorStateList
+resolved the intended dark color. TypedArray.getColor now shares that theme-aware loader for
+references, declares conditional suspension with maySuspend, and keeps literal/default reads
+synchronous. A selector fixture checks distinct themes against real framework attribute IDs.
+The full unit suite and typecheck passed; a fresh screenshot confirmed both visible selected
+tab text and saved content (`/tmp/harness-saved-theme-fixed.png`).
