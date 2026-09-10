@@ -8,6 +8,7 @@ const jit32 = @import("jit32.zig");
 const jitfp = @import("jitfp.zig");
 const fp = @import("fp.zig");
 const bt = @import("bits.zig");
+const assert = std.debug.assert;
 const Cpu = cpu.Cpu;
 const Op = a64.Op;
 const Buf = wasm.Buf;
@@ -101,6 +102,14 @@ comptime {
 }
 pub const STATUS_MAX = 16;
 
+comptime {
+    // jit_install packs the block index into the low byte of page.slot, the table slot above it.
+    assert(MAX_BLOCKS <= 256);
+    // run_slice tells a returned status from a returned pc by magnitude; nothing below LOW is
+    // executable, so the status codes have to stay under it.
+    assert(STATUS_MAX <= abi.LOW);
+}
+
 const OFF_X = @offsetOf(Cpu, "x");
 const OFF_CPSR = @offsetOf(Cpu, "cpsr");
 const OFF_IC = @offsetOf(Cpu, "ic");
@@ -112,7 +121,7 @@ const OFF_FAULT_ADDR = @offsetOf(Cpu, "fault_addr");
 const OFF_EXCL = @offsetOf(Cpu, "excl");
 const OFF_TLS = @offsetOf(Cpu, "tls");
 const OFF_SLOT = @offsetOf(cpu.Page, "slot");
-const FLAGS_BASE = abi.KERN_BASE + 0x10_0000;
+const FLAGS_BASE = @intFromPtr(mem.page_flags);
 var chain: bool = false;
 export fn jit_config(c: u32) void {
     chain = c != 0;
@@ -356,7 +365,7 @@ pub fn Emit(comptime wide: bool) type {
         pub fn settle(e: *Self, mask: u4) void {
             const m = mask & e.pdirty;
             if (m == 0) return;
-            std.debug.assert(e.nest == 0 or e.term);
+            assert(e.nest == 0 or e.term);
             e.emitPending(m);
         }
         fn drop(e: *Self, mask: u4) void {
@@ -509,8 +518,8 @@ pub fn Emit(comptime wide: bool) type {
             const b = e.b;
             const a: u32 = if (off != 0) L_NEXT else L_A;
             if (off != 0) b.emit(.{ get(L_A), c32(@bitCast(off)), O.i32_add, set(L_NEXT) });
-            b.emit(.{ get(a), c32(12), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE) });
-            if (two) b.emit(.{ get(a), c32(8), O.i32_add, c32(12), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE), O.i32_or });
+            b.emit(.{ get(a), c32(abi.PAGE_SHIFT), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE) });
+            if (two) b.emit(.{ get(a), c32(8), O.i32_add, c32(abi.PAGE_SHIFT), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE), O.i32_or });
             e.ifv();
             for (0..@as(u32, 1) + @intFromBool(two)) |h| {
                 b.emit(.{ get(L_CPU), get(a) });

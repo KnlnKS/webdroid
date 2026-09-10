@@ -1,4 +1,6 @@
+const std = @import("std");
 const abi = @import("abi.zig");
+const assert = std.debug.assert;
 const mem = @import("mem.zig");
 const a64 = @import("a64.zig");
 const arm = @import("arm.zig");
@@ -60,7 +62,18 @@ pub const Fault = enum(u32) {
     null_page = 8,
 };
 
-const FIELDS = [_][]const u8{ "x", "pc", "v", "cpsr", "fpcr", "fpsr", "excl", "tls", "ic", "bpc", "tid", "a64", "exit", "fault_word", "fault_addr", "tls", "errno_addr", "tls_tab" };
+/// The guest-visible state is the run of fields up to `tls`; src/native/cpu.ts reads it through
+/// layout slot 16 as ARCH_SIZE and snapshots that many bytes across a nested call.
+const ARCH_END_FIELD = "tls";
+pub const ARCH_SIZE = @offsetOf(Cpu, ARCH_END_FIELD);
+const FIELDS = [_][]const u8{ "x", "pc", "v", "cpsr", "fpcr", "fpsr", "excl", "tls", "ic", "bpc", "tid", "a64", "exit", "fault_word", "fault_addr", ARCH_END_FIELD, "errno_addr", "tls_tab" };
+comptime {
+    // Slot 16 is a size, not a field: it is `tls`'s offset only while every architectural field is
+    // declared above `tls`. Moving one below would shrink the snapshot and lose it silently.
+    for ([_][]const u8{ "x", "pc", "v", "cpsr", "fpcr", "fpsr", "excl" }) |f| {
+        assert(@offsetOf(Cpu, f) + @sizeOf(@FieldType(Cpu, f)) <= ARCH_SIZE);
+    }
+}
 export fn layout(i: u32) u32 {
     if (i == 0) return @sizeOf(Cpu);
     inline for (FIELDS, 1..) |name, k| if (i == k) return @offsetOf(Cpu, name);
@@ -99,8 +112,11 @@ inline fn blockSize(comptime T: type) u32 {
     return (@sizeOf(T) + abi.PAGE_SIZE - 1) & ~@as(u32, abi.PAGE_SIZE - 1);
 }
 pub var page_block: u32 = blockSize(Page);
-pub const DECODED = abi.KERN_BASE + 0x60_0000;
+pub const DECODED = abi.KERN_DECODED;
 const decoded: [*]u32 = @ptrFromInt(DECODED);
+comptime {
+    assert(@sizeOf(@TypeOf(decoded[0])) * abi.PAGE_INDEX_MAX <= abi.KERN_SLOT_FN - abi.KERN_DECODED);
+}
 pub var stats = extern struct { pages: u32 = 0, invalidated: u32 = 0 }{};
 var epoch: u32 = 0;
 
@@ -133,7 +149,10 @@ pub fn pageFor(pc: u32) ?*Page {
     }
     return @ptrFromInt(p);
 }
-const dead: [*]u8 = @ptrFromInt(abi.KERN_BASE + 0xa4_0000);
+const dead: [*]u8 = @ptrFromInt(abi.KERN_DEAD);
+comptime {
+    assert(@sizeOf(@TypeOf(dead[0])) * abi.JIT_SLOTS <= abi.KERN_DEAD_END - abi.KERN_DEAD);
+}
 export fn jit_kill(slot: u32) void {
     dead[slot] = 1;
 }
@@ -146,7 +165,7 @@ export fn jit_evict() void {
             h.* = 0;
         };
     };
-    @memset(dead[0 .. 1 << 18], 0);
+    @memset(dead[0..abi.JIT_SLOTS], 0);
 }
 
 export fn exec_word(cp: u32, w: u32, pc: u32) u32 {

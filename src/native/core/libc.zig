@@ -1,5 +1,6 @@
 const std = @import("std");
 const abi = @import("abi.zig");
+const assert = std.debug.assert;
 const mem = @import("mem.zig");
 const cpu = @import("cpu.zig");
 const a64 = @import("a64.zig");
@@ -55,7 +56,12 @@ export fn libc_call(cp: u32, id: u32) u32 {
     return @intFromEnum(call(@ptrFromInt(cp), @intCast(id)));
 }
 pub const TLS_KEYS = 256;
-pub const slot_fn: [*]u8 = @ptrFromInt(abi.KERN_BASE + 0xa0_0000);
+pub const slot_fn: [*]u8 = @ptrFromInt(abi.KERN_SLOT_FN);
+comptime {
+    assert(@sizeOf(@TypeOf(slot_fn[0])) * abi.TRAMP_SLOTS <= abi.KERN_DEAD - abi.KERN_SLOT_FN);
+    // An id is stored as one byte per slot, so the table has to stay addressable by that byte.
+    assert(@typeInfo(Fn).@"enum".fields.len <= 256);
+}
 pub var bypass: bool = false;
 export fn host_bind(slot: u32, id: u32) void {
     slot_fn[slot] = @intCast(id);
