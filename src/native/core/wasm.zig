@@ -1,168 +1,158 @@
-// A wasm binary emitter: LEB128, sections, and the opcodes the JIT uses, over a byte buffer in
-// guest memory that the host reads out to compile.
-
 pub const Op = struct {
-    pub const unreachable_ = 0x00;
-    pub const block = 0x02;
-    pub const loop = 0x03;
-    pub const if_ = 0x04;
-    pub const else_ = 0x05;
-    pub const end = 0x0b;
-    pub const br = 0x0c;
-    pub const br_if = 0x0d;
-    pub const br_table = 0x0e;
-    pub const return_ = 0x0f;
-    pub const call = 0x10;
-    pub const return_call_indirect = 0x13;
-    pub const drop = 0x1a;
-    pub const select = 0x1b;
-    pub const local_get = 0x20;
-    pub const local_set = 0x21;
-    pub const local_tee = 0x22;
-    pub const i32_load = 0x28;
-    pub const i64_load = 0x29;
-    pub const f32_load = 0x2a;
-    pub const f64_load = 0x2b;
-    pub const i32_load8_s = 0x2c;
-    pub const i32_load8_u = 0x2d;
-    pub const i32_load16_s = 0x2e;
-    pub const i32_load16_u = 0x2f;
-    pub const i64_load8_s = 0x30;
-    pub const i64_load8_u = 0x31;
-    pub const i64_load16_s = 0x32;
-    pub const i64_load16_u = 0x33;
-    pub const i64_load32_s = 0x34;
-    pub const i64_load32_u = 0x35;
-    pub const i32_store = 0x36;
-    pub const i64_store = 0x37;
-    pub const f32_store = 0x38;
-    pub const f64_store = 0x39;
-    pub const i32_store8 = 0x3a;
-    pub const i32_store16 = 0x3b;
-    pub const i64_store8 = 0x3c;
-    pub const i64_store16 = 0x3d;
-    pub const i64_store32 = 0x3e;
-    pub const i32_const = 0x41;
-    pub const i64_const = 0x42;
-    pub const f32_const = 0x43;
-    pub const f64_const = 0x44;
-    pub const i32_eqz = 0x45;
-    pub const i32_eq = 0x46;
-    pub const i32_ne = 0x47;
-    pub const i32_lt_s = 0x48;
-    pub const i32_lt_u = 0x49;
-    pub const i32_gt_s = 0x4a;
-    pub const i32_gt_u = 0x4b;
-    pub const i32_le_s = 0x4c;
-    pub const i32_le_u = 0x4d;
-    pub const i32_ge_s = 0x4e;
-    pub const i32_ge_u = 0x4f;
-    pub const i64_eqz = 0x50;
-    pub const i64_eq = 0x51;
-    pub const i64_ne = 0x52;
-    pub const i64_lt_s = 0x53;
-    pub const i64_lt_u = 0x54;
-    pub const i64_gt_s = 0x55;
-    pub const i64_gt_u = 0x56;
-    pub const i64_le_s = 0x57;
-    pub const i64_le_u = 0x58;
-    pub const i64_ge_s = 0x59;
-    pub const i64_ge_u = 0x5a;
-    pub const f32_eq = 0x5b;
-    pub const f32_ne = 0x5c;
-    pub const f32_lt = 0x5d;
-    pub const f32_gt = 0x5e;
-    pub const f32_le = 0x5f;
-    pub const f32_ge = 0x60;
-    pub const f64_eq = 0x61;
-    pub const f64_ne = 0x62;
-    pub const f64_lt = 0x63;
-    pub const f64_gt = 0x64;
-    pub const f64_le = 0x65;
-    pub const f64_ge = 0x66;
-    pub const i32_clz = 0x67;
-    pub const i32_add = 0x6a;
-    pub const i32_sub = 0x6b;
-    pub const i32_mul = 0x6c;
-    pub const i32_div_s = 0x6d;
-    pub const i32_div_u = 0x6e;
-    pub const i32_and = 0x71;
-    pub const i32_or = 0x72;
-    pub const i32_xor = 0x73;
-    pub const i32_shl = 0x74;
-    pub const i32_shr_s = 0x75;
-    pub const i32_shr_u = 0x76;
-    pub const i32_rotr = 0x78;
-    pub const i64_clz = 0x79;
-    pub const i64_add = 0x7c;
-    pub const i64_sub = 0x7d;
-    pub const i64_mul = 0x7e;
-    pub const i64_div_s = 0x7f;
-    pub const i64_div_u = 0x80;
-    pub const i64_and = 0x83;
-    pub const i64_or = 0x84;
-    pub const i64_xor = 0x85;
-    pub const i64_shl = 0x86;
-    pub const i64_shr_s = 0x87;
-    pub const i64_shr_u = 0x88;
-    pub const i64_rotr = 0x8a;
-    pub const f32_abs = 0x8b;
-    pub const f32_neg = 0x8c;
-    pub const f32_ceil = 0x8d;
-    pub const f32_floor = 0x8e;
-    pub const f32_trunc = 0x8f;
-    pub const f32_nearest = 0x90;
-    pub const f32_sqrt = 0x91;
-    pub const f32_add = 0x92;
-    pub const f32_sub = 0x93;
-    pub const f32_mul = 0x94;
-    pub const f32_div = 0x95;
-    pub const f64_abs = 0x99;
-    pub const f64_neg = 0x9a;
-    pub const f64_ceil = 0x9b;
-    pub const f64_floor = 0x9c;
-    pub const f64_trunc = 0x9d;
-    pub const f64_nearest = 0x9e;
-    pub const f64_sqrt = 0x9f;
-    pub const f64_add = 0xa0;
-    pub const f64_sub = 0xa1;
-    pub const f64_mul = 0xa2;
-    pub const f64_div = 0xa3;
-    pub const i32_wrap_i64 = 0xa7;
-    pub const i64_extend_i32_s = 0xac;
-    pub const i64_extend_i32_u = 0xad;
-    /// the four conversions from i32 s, i32 u, i64 s, i64 u follow in that order
-    pub const f32_convert_i32_s = 0xb2;
-    pub const f32_demote_f64 = 0xb6;
-    pub const f64_convert_i32_s = 0xb7;
-    pub const f64_promote_f32 = 0xbb;
-    /// the saturating truncations: i32 from f32 s/u, f64 s/u, then i64 likewise
-    pub const fc_prefix = 0xfc;
-    pub const i32_extend8_s = 0xc0;
-    pub const i32_extend16_s = 0xc1;
-    pub const i64_extend8_s = 0xc2;
-    pub const i64_extend16_s = 0xc3;
-    pub const i64_extend32_s = 0xc4;
+    pub const block: u8 = 0x02;
+    pub const loop: u8 = 0x03;
+    pub const if_: u8 = 0x04;
+    pub const else_: u8 = 0x05;
+    pub const end: u8 = 0x0b;
+    pub const br: u8 = 0x0c;
+    pub const br_if: u8 = 0x0d;
+    pub const br_table: u8 = 0x0e;
+    pub const return_: u8 = 0x0f;
+    pub const call: u8 = 0x10;
+    pub const return_call_indirect: u8 = 0x13;
+    pub const drop: u8 = 0x1a;
+    pub const select: u8 = 0x1b;
+    pub const local_get: u8 = 0x20;
+    pub const local_set: u8 = 0x21;
+    pub const local_tee: u8 = 0x22;
+    pub const i32_load: u8 = 0x28;
+    pub const i64_load: u8 = 0x29;
+    pub const f32_load: u8 = 0x2a;
+    pub const f64_load: u8 = 0x2b;
+    pub const i32_load8_s: u8 = 0x2c;
+    pub const i32_load8_u: u8 = 0x2d;
+    pub const i32_load16_s: u8 = 0x2e;
+    pub const i32_load16_u: u8 = 0x2f;
+    pub const i64_load8_s: u8 = 0x30;
+    pub const i64_load8_u: u8 = 0x31;
+    pub const i64_load16_s: u8 = 0x32;
+    pub const i64_load16_u: u8 = 0x33;
+    pub const i64_load32_s: u8 = 0x34;
+    pub const i64_load32_u: u8 = 0x35;
+    pub const i32_store: u8 = 0x36;
+    pub const i64_store: u8 = 0x37;
+    pub const f32_store: u8 = 0x38;
+    pub const f64_store: u8 = 0x39;
+    pub const i32_store8: u8 = 0x3a;
+    pub const i32_store16: u8 = 0x3b;
+    pub const i64_store8: u8 = 0x3c;
+    pub const i64_store16: u8 = 0x3d;
+    pub const i64_store32: u8 = 0x3e;
+    pub const i32_const: u8 = 0x41;
+    pub const i64_const: u8 = 0x42;
+    pub const f64_const: u8 = 0x44;
+    pub const i32_eqz: u8 = 0x45;
+    pub const i32_eq: u8 = 0x46;
+    pub const i32_lt_u: u8 = 0x49;
+    pub const i32_le_u: u8 = 0x4d;
+    pub const i32_ge_u: u8 = 0x4f;
+    pub const i64_eqz: u8 = 0x50;
+    pub const i64_eq: u8 = 0x51;
+    pub const i64_lt_u: u8 = 0x54;
+    pub const i64_ge_s: u8 = 0x59;
+    pub const i64_ge_u: u8 = 0x5a;
+    pub const f64_eq: u8 = 0x61;
+    pub const f64_ne: u8 = 0x62;
+    pub const f64_lt: u8 = 0x63;
+    pub const i32_clz: u8 = 0x67;
+    pub const i32_add: u8 = 0x6a;
+    pub const i32_sub: u8 = 0x6b;
+    pub const i32_mul: u8 = 0x6c;
+    pub const i32_div_s: u8 = 0x6d;
+    pub const i32_div_u: u8 = 0x6e;
+    pub const i32_and: u8 = 0x71;
+    pub const i32_or: u8 = 0x72;
+    pub const i32_xor: u8 = 0x73;
+    pub const i32_shl: u8 = 0x74;
+    pub const i32_shr_s: u8 = 0x75;
+    pub const i32_shr_u: u8 = 0x76;
+    pub const i32_rotr: u8 = 0x78;
+    pub const i64_clz: u8 = 0x79;
+    pub const i64_add: u8 = 0x7c;
+    pub const i64_sub: u8 = 0x7d;
+    pub const i64_mul: u8 = 0x7e;
+    pub const i64_div_s: u8 = 0x7f;
+    pub const i64_div_u: u8 = 0x80;
+    pub const i64_and: u8 = 0x83;
+    pub const i64_or: u8 = 0x84;
+    pub const i64_xor: u8 = 0x85;
+    pub const i64_shl: u8 = 0x86;
+    pub const i64_shr_s: u8 = 0x87;
+    pub const i64_shr_u: u8 = 0x88;
+    pub const i64_rotr: u8 = 0x8a;
+    pub const f32_abs: u8 = 0x8b;
+    pub const f32_neg: u8 = 0x8c;
+    pub const f32_ceil: u8 = 0x8d;
+    pub const f32_sqrt: u8 = 0x91;
+    pub const f32_add: u8 = 0x92;
+    pub const f32_sub: u8 = 0x93;
+    pub const f32_mul: u8 = 0x94;
+    pub const f32_div: u8 = 0x95;
+    pub const f64_abs: u8 = 0x99;
+    pub const f64_neg: u8 = 0x9a;
+    pub const f64_ceil: u8 = 0x9b;
+    pub const f64_sqrt: u8 = 0x9f;
+    pub const f64_add: u8 = 0xa0;
+    pub const f64_sub: u8 = 0xa1;
+    pub const f64_mul: u8 = 0xa2;
+    pub const f64_div: u8 = 0xa3;
+    pub const i32_wrap_i64: u8 = 0xa7;
+    pub const i64_extend_i32_s: u8 = 0xac;
+    pub const i64_extend_i32_u: u8 = 0xad;
+    pub const f32_convert_i32_s: u8 = 0xb2;
+    pub const f32_demote_f64: u8 = 0xb6;
+    pub const f64_convert_i32_s: u8 = 0xb7;
+    pub const f64_promote_f32: u8 = 0xbb;
+    pub const fc_prefix: u8 = 0xfc;
+    pub const i32_extend8_s: u8 = 0xc0;
+    pub const i32_extend16_s: u8 = 0xc1;
+    pub const i64_extend8_s: u8 = 0xc2;
+    pub const i64_extend16_s: u8 = 0xc3;
+    pub const i64_extend32_s: u8 = 0xc4;
 };
-/// the simd128 opcodes the emitter uses, after the 0xfd prefix; a lane-typed family lists its
-/// i8x16, i16x8, i32x4, i64x2 (or f32x4, f64x2) members in that order
+pub inline fn W(comptime wide: bool, comptime op32: u8) u8 {
+    if (!wide) return op32;
+    return switch (op32) {
+        Op.i32_eqz...Op.i32_ge_u => op32 + 0x0b,
+        Op.i32_clz...Op.i32_rotr => op32 + 0x12,
+        Op.i32_load, Op.i32_store, Op.i32_const => op32 + 1,
+        Op.i32_load8_s...Op.i32_load16_u => op32 + 4,
+        Op.i32_store8, Op.i32_store16, Op.i32_extend8_s, Op.i32_extend16_s => op32 + 2,
+        else => @compileError("no i64 twin"),
+    };
+}
+pub const F = struct {
+    pub const load = [2]u8{ Op.f32_load, Op.f64_load };
+    pub const store = [2]u8{ Op.f32_store, Op.f64_store };
+    pub const abs = [2]u8{ Op.f32_abs, Op.f64_abs };
+    pub const neg = [2]u8{ Op.f32_neg, Op.f64_neg };
+    pub const sqrt = [2]u8{ Op.f32_sqrt, Op.f64_sqrt };
+    pub const add = [2]u8{ Op.f32_add, Op.f64_add };
+    pub const sub = [2]u8{ Op.f32_sub, Op.f64_sub };
+    pub const mul = [2]u8{ Op.f32_mul, Op.f64_mul };
+    pub const div = [2]u8{ Op.f32_div, Op.f64_div };
+    pub const ceil = [2]u8{ Op.f32_ceil, Op.f64_ceil };
+    pub const convert_i32_s = [2]u8{ Op.f32_convert_i32_s, Op.f64_convert_i32_s };
+    pub const cvt = [2]u8{ Op.f64_promote_f32, Op.f32_demote_f64 };
+    pub const iload = [2]u8{ Op.i32_load, Op.i64_load };
+    pub const istore = [2]u8{ Op.i32_store, Op.i64_store };
+};
 pub const Simd = struct {
-    pub const prefix = 0xfd;
-    pub const load = 0x00;
-    pub const store = 0x0b;
-    pub const const_ = 0x0c;
-    pub const load8_splat = 0x07;
-    pub const load32_zero = 0x5c;
-    pub const load64_zero = 0x5d;
-    pub const load8_lane = 0x54;
-    pub const store8_lane = 0x58;
+    pub const prefix: u8 = 0xfd;
+    pub const load: u8 = 0x00;
+    pub const store: u8 = 0x0b;
+    pub const const_: u8 = 0x0c;
+    pub const shuffle: u8 = 0x0d;
+    pub const load8_splat: u8 = 0x07;
+    pub const load8_lane: u8 = 0x54;
+    pub const store8_lane: u8 = 0x58;
+    pub const store64_lane: u8 = 0x5b;
     pub const splat = [_]u8{ 0x0f, 0x10, 0x11, 0x12 };
     pub const fsplat = [_]u8{ 0x13, 0x14 };
     pub const extract_s = [_]u8{ 0x15, 0x18, 0x1b, 0x1d };
     pub const extract_u = [_]u8{ 0x16, 0x19, 0x1b, 0x1d };
     pub const fextract = [_]u8{ 0x1f, 0x21 };
     pub const replace = [_]u8{ 0x17, 0x1a, 0x1c, 0x1e };
-    pub const freplace = [_]u8{ 0x20, 0x22 };
     pub const eq = [_]u8{ 0x23, 0x2d, 0x37, 0xd6 };
     pub const ne = [_]u8{ 0x24, 0x2e, 0x38, 0xd7 };
     pub const gt_s = [_]u8{ 0x27, 0x31, 0x3b, 0xd9 };
@@ -172,14 +162,14 @@ pub const Simd = struct {
     pub const feq = [_]u8{ 0x41, 0x47 };
     pub const fgt = [_]u8{ 0x44, 0x4a };
     pub const fge = [_]u8{ 0x46, 0x4c };
-    pub const not = 0x4d;
-    pub const and_ = 0x4e;
-    pub const andnot = 0x4f;
-    pub const or_ = 0x50;
-    pub const xor = 0x51;
-    pub const bitselect = 0x52;
+    pub const not: u8 = 0x4d;
+    pub const and_: u8 = 0x4e;
+    pub const andnot: u8 = 0x4f;
+    pub const or_: u8 = 0x50;
+    pub const xor: u8 = 0x51;
+    pub const bitselect: u8 = 0x52;
+    pub const f32x4_demote_f64x2_zero: u8 = 0x5e;
     pub const neg = [_]u8{ 0x61, 0x81, 0xa1, 0xc1 };
-    /// extend_low_s of the next width, by source width; +1 high, +2 unsigned
     pub const extend_low_s = [_]u8{ 0x87, 0xa7, 0xc7 };
     pub const shl = [_]u8{ 0x6b, 0x8b, 0xab, 0xcb };
     pub const shr_s = [_]u8{ 0x6c, 0x8c, 0xac, 0xcc };
@@ -204,16 +194,57 @@ pub const Simd = struct {
     pub const ffloor = [_]u8{ 0x68, 0x75 };
     pub const ftrunc = [_]u8{ 0x69, 0x7a };
     pub const fnearest = [_]u8{ 0x6a, 0x94 };
-    pub const i32x4_trunc_sat_f32x4_s = 0xf8;
-    pub const i32x4_trunc_sat_f32x4_u = 0xf9;
-    pub const f32x4_convert_i32x4_s = 0xfa;
-    pub const f32x4_convert_i32x4_u = 0xfb;
+    pub const i32x4_trunc_sat_f32x4_s: u8 = 0xf8;
+    pub const i32x4_trunc_sat_f32x4_u: u8 = 0xf9;
+    pub const f32x4_convert_i32x4_s: u8 = 0xfa;
+    pub const f32x4_convert_i32x4_u: u8 = 0xfb;
 };
 pub const I32: u8 = 0x7f;
 pub const I64: u8 = 0x7e;
 pub const F32: u8 = 0x7d;
 pub const F64: u8 = 0x7c;
 pub const VOID: u8 = 0x40;
+
+pub const Get = struct { l: u32 };
+pub const Set = struct { l: u32 };
+pub const Tee = struct { l: u32 };
+pub const C32 = struct { v: i32 };
+pub const C64 = struct { v: i64 };
+pub const Mo = struct { op: u8, off: u32 };
+pub const Call = struct { f: u32 };
+pub const Br = struct { depth: u32 };
+pub const BrIf = struct { depth: u32 };
+pub const Vop = struct { op: u8 };
+pub fn get(l: u32) Get {
+    return .{ .l = l };
+}
+pub fn set(l: u32) Set {
+    return .{ .l = l };
+}
+pub fn tee(l: u32) Tee {
+    return .{ .l = l };
+}
+pub fn c32(v: i32) C32 {
+    return .{ .v = v };
+}
+pub fn c64(v: i64) C64 {
+    return .{ .v = v };
+}
+pub fn mo(op: u8, off: u32) Mo {
+    return .{ .op = op, .off = off };
+}
+pub fn call(f: u32) Call {
+    return .{ .f = f };
+}
+pub fn br(depth: u32) Br {
+    return .{ .depth = depth };
+}
+pub fn brIf(depth: u32) BrIf {
+    return .{ .depth = depth };
+}
+pub fn simd(op: u8) Vop {
+    return .{ .op = op };
+}
 
 pub const Buf = struct {
     p: [*]u8,
@@ -224,23 +255,23 @@ pub const Buf = struct {
     pub fn init(base: u32, cap: u32) Buf {
         return .{ .p = @ptrFromInt(base), .len = 0, .cap = cap };
     }
-    pub fn byte(b: *Buf, v: u8) void {
+    pub fn byte(b: *Buf, x: u8) void {
         if (b.len >= b.cap) {
             b.overflow = true;
             return;
         }
-        b.p[b.len] = v;
+        b.p[b.len] = x;
         b.len += 1;
     }
     pub fn bytes(b: *Buf, str: []const u8) void {
-        for (str) |v| b.byte(v);
+        for (str) |x| b.byte(x);
     }
     pub fn u(b: *Buf, v_in: u64) void {
-        var v = v_in;
+        var x = v_in;
         while (true) {
-            const seven: u8 = @truncate(v & 0x7f);
-            v >>= 7;
-            if (v == 0) {
+            const seven: u8 = @truncate(x & 0x7f);
+            x >>= 7;
+            if (x == 0) {
                 b.byte(seven);
                 return;
             }
@@ -248,80 +279,110 @@ pub const Buf = struct {
         }
     }
     pub fn s(b: *Buf, v_in: i64) void {
-        var v = v_in;
+        var x = v_in;
         while (true) {
-            const seven: u8 = @truncate(@as(u64, @bitCast(v)) & 0x7f);
-            v >>= 7;
-            const done = (v == 0 and seven & 0x40 == 0) or (v == -1 and seven & 0x40 != 0);
+            const seven: u8 = @truncate(@as(u64, @bitCast(x)) & 0x7f);
+            x >>= 7;
+            const done = (x == 0 and seven & 0x40 == 0) or (x == -1 and seven & 0x40 != 0);
             b.byte(if (done) seven else seven | 0x80);
             if (done) return;
         }
     }
+    pub fn emit(b: *Buf, ops: anytype) void {
+        inline for (ops) |x| switch (@TypeOf(x)) {
+            comptime_int, u8 => b.byte(x),
+            Get => {
+                b.byte(Op.local_get);
+                b.u(x.l);
+            },
+            Set => {
+                b.byte(Op.local_set);
+                b.u(x.l);
+            },
+            Tee => {
+                b.byte(Op.local_tee);
+                b.u(x.l);
+            },
+            C32 => {
+                b.byte(Op.i32_const);
+                b.s(x.v);
+            },
+            C64 => {
+                b.byte(Op.i64_const);
+                b.s(x.v);
+            },
+            Mo => {
+                b.byte(x.op);
+                b.u(0);
+                b.u(x.off);
+            },
+            Call => {
+                b.byte(Op.call);
+                b.u(x.f);
+            },
+            Br => {
+                b.byte(Op.br);
+                b.u(x.depth);
+            },
+            BrIf => {
+                b.byte(Op.br_if);
+                b.u(x.depth);
+            },
+            Vop => {
+                b.byte(Simd.prefix);
+                b.u(x.op);
+            },
+            else => @compileError("emit: " ++ @typeName(@TypeOf(x))),
+        };
+    }
     pub fn op(b: *Buf, o: u8) void {
         b.byte(o);
     }
-    pub fn i32c(b: *Buf, v: i32) void {
-        b.byte(Op.i32_const);
-        b.s(v);
+    pub fn i32c(b: *Buf, x: i32) void {
+        b.emit(.{c32(x)});
     }
-    pub fn i64c(b: *Buf, v: i64) void {
-        b.byte(Op.i64_const);
-        b.s(v);
+    pub fn i64c(b: *Buf, x: i64) void {
+        b.emit(.{c64(x)});
     }
-    pub fn f64c(b: *Buf, v: f64) void {
+    pub fn f64c(b: *Buf, x: f64) void {
         b.byte(Op.f64_const);
-        const raw: [8]u8 = @bitCast(v);
-        b.bytes(&raw);
+        b.bytes(&@as([8]u8, @bitCast(x)));
     }
     pub fn get(b: *Buf, l: u32) void {
-        b.byte(Op.local_get);
-        b.u(l);
+        b.emit(.{Get{ .l = l }});
     }
     pub fn set(b: *Buf, l: u32) void {
-        b.byte(Op.local_set);
-        b.u(l);
+        b.emit(.{Set{ .l = l }});
     }
     pub fn tee(b: *Buf, l: u32) void {
-        b.byte(Op.local_tee);
-        b.u(l);
+        b.emit(.{Tee{ .l = l }});
     }
-    /// a load or store with an alignment hint of 1 and the given offset
-    pub fn memop(b: *Buf, o: u8, offset: u32) void {
-        b.byte(o);
-        b.u(0);
-        b.u(offset);
+    pub fn memop(b: *Buf, o: u8, off: u32) void {
+        b.emit(.{mo(o, off)});
     }
     pub fn call(b: *Buf, f: u32) void {
-        b.byte(Op.call);
-        b.u(f);
+        b.emit(.{Call{ .f = f }});
     }
     pub fn br(b: *Buf, depth: u32) void {
-        b.byte(Op.br);
-        b.u(depth);
+        b.emit(.{Br{ .depth = depth }});
     }
     pub fn brIf(b: *Buf, depth: u32) void {
-        b.byte(Op.br_if);
-        b.u(depth);
+        b.emit(.{BrIf{ .depth = depth }});
     }
     pub fn blockStart(b: *Buf, kind: u8, ty: u8) void {
-        b.byte(kind);
-        b.byte(ty);
+        b.emit(.{ kind, ty });
     }
-    /// reserve a 5-byte LEB for a length filled in later
     pub fn reserve(b: *Buf) u32 {
         const at = b.len;
-        var i: u32 = 0;
-        while (i < 5) : (i += 1) b.byte(0x80);
-        if (b.len > at) b.p[b.len - 1] = 0;
+        b.bytes(&[_]u8{ 0x80, 0x80, 0x80, 0x80, 0 });
         return at;
     }
     pub fn patch(b: *Buf, at: u32, v_in: u32) void {
         if (at + 5 > b.cap) return;
-        var v = v_in;
-        var i: u32 = 0;
-        while (i < 5) : (i += 1) {
-            const seven: u8 = @truncate(v & 0x7f);
-            v >>= 7;
+        var x = v_in;
+        for (0..5) |i| {
+            const seven: u8 = @truncate(x & 0x7f);
+            x >>= 7;
             b.p[at + i] = if (i == 4) seven else seven | 0x80;
         }
     }
