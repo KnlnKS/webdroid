@@ -36,7 +36,6 @@ pub const TLS_KEYS = 256;
 /// trampoline slot → Fn
 pub const slot_fn: [*]u8 = @ptrFromInt(abi.KERN_BASE + 0xa0_0000);
 pub var bypass: bool = false;
-pub var calls: u32 = 0;
 export fn host_bind(slot: u32, id: u32) void {
     slot_fn[slot] = @intCast(id);
 }
@@ -72,7 +71,6 @@ inline fn size() u64 {
 
 /// run the bound call; false for a bad address (the fault is set), leaving x0 as the result
 pub fn call(c: *Cpu, id: u8) bool {
-    calls += 1;
     switch (@as(Fn, @enumFromInt(id))) {
         .none => unreachable,
         .memcpy, .memmove => {

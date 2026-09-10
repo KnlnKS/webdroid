@@ -867,6 +867,5 @@ pub fn block(c: *Cpu, start: u32, page: *cpu.Page) Status {
         }
     }
     c.ic += n;
-    cpu.stats.interp += n;
     return s;
 }

@@ -939,6 +939,5 @@ pub fn block(c: *Cpu, start: u32) Status {
         pc = @truncate(c.pc);
     }
     c.ic += n;
-    cpu.stats.interp += n;
     return if (s == .next) .jump else s;
 }

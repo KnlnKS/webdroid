@@ -108,7 +108,7 @@ var requests: [MAX_REGIONS]u32 = undefined;
 var request_isa: [MAX_REGIONS]Isa = undefined;
 var nrequests: u32 = 0;
 var in_flight: bool = false;
-pub var stats = struct { regions: u32 = 0, batches: u32 = 0, skipped: u32 = 0, bytes: u32 = 0 }{};
+pub var regions_installed: u32 = 0;
 
 pub fn request(pc: u32, isa: Isa) bool {
     if (nrequests >= MAX_REGIONS) return false;
@@ -133,21 +133,15 @@ export fn jit_count() u32 {
 export fn jit_entry(i: u32) u32 {
     return regions[i].entry;
 }
-export fn jit_stat(i: u32) u32 {
-    return switch (i) {
-        0 => stats.regions,
-        1 => stats.batches,
-        2 => stats.skipped,
-        3 => stats.bytes,
-        else => @intFromBool(chain),
-    };
+export fn jit_stat() u32 {
+    return regions_installed;
 }
 export fn jit_install(i: u32, slot: u32) void {
     const r = &regions[i];
     const page = cpu.decodedPage(r.page) orelse return;
     if (page.epoch != r.epoch) return;
     for (r.blocks[0..r.nblocks], 0..) |b, k| page.slot[(b.pc & (abi.PAGE_SIZE - 1)) >> 1] = (slot << 8) | @as(u32, @intCast(k));
-    stats.regions += 1;
+    regions_installed += 1;
 }
 export fn jit_done() void {
     in_flight = false;
@@ -1043,12 +1037,9 @@ export fn jit_emit(out: u32, cap: u32) u32 {
     }
     b.patch(code_len, b.len - code_start);
     if (b.overflow) {
-        stats.skipped += nregions;
         nregions = 0;
         return 0;
     }
     in_flight = true;
-    stats.batches += 1;
-    stats.bytes += b.len;
     return b.len;
 }

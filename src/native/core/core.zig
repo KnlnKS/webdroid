@@ -2,7 +2,6 @@
 // imported so a guest address is a linear-memory offset. Built by scripts/build-core.ts.
 
 const std = @import("std");
-pub const abi = @import("abi.zig");
 pub const mem = @import("mem.zig");
 pub const cpu = @import("cpu.zig");
 pub const libc = @import("libc.zig");
@@ -16,7 +15,6 @@ pub const panic = std.debug.FullPanic(struct {
 }.f);
 
 comptime {
-    _ = abi;
     _ = mem;
     _ = cpu;
     _ = libc;

@@ -206,10 +206,10 @@ it has been tried three ways and measured.
 - Thumb-2, symbol-version/ifunc support, and additional relocation formats are separate work;
   inspect actual library requirements before extending them. Unsupported relocations must
   continue to fail explicitly.
-- The execution backend is the wasm core: see "The wasm core" and "The wasm core, second pass"
-  in the implementation history for what was measured. `wd.native.jit.fallbacks()`,
-  `fallbackWords()` and `wd.native.hostCalls()` name what still leaves a region; inline or serve
-  in the core only what a profile of real play names.
+- The execution backend is the wasm core: see "The wasm core", "The wasm core, second pass"
+  and "The wasm core, janitor pass" in the implementation history for what was measured.
+  `?jit=0`, `__wdJit`, `jit_fallback`, `perf.nativeHostMs` and `wd.native.hostCalls()` are the
+  instruments left; inline or serve in the core only what a profile of real play names.
 
 ## 6. Corpus and coverage
 

@@ -11,7 +11,6 @@ export class NativeFault extends Error {
 
 export interface Core {
   __heap_base: WebAssembly.Global;
-  abi_const(i: number): number;
   mem_init(size: number): void;
   flags_ptr(): number;
   stat(i: number): number;
@@ -47,7 +46,6 @@ export interface Core {
   invalidate_range(addr: number, size: number): void;
   invalidate_all(): void;
   cpu_stat(i: number): number;
-  interp_ic(): number;
   set_max_block(n: number): void;
   host_bind(slot: number, id: number): void;
   host_bypass(on: number): void;
@@ -63,11 +61,8 @@ export interface Core {
   jit_done(): void;
   jit_kill(slot: number): void;
   jit_evict(): void;
-  jit_stat(i: number): number;
+  jit_stat(): number;
   exec_word32(cpu: number, pc: number): number;
-  fb_count(i: number): number;
-  fb_word(i: number): number;
-  fb_wcount(i: number): number;
   jit_config(chain: number): void;
   jit_fmax32(a: number, b: number): number;
   jit_fmin32(a: number, b: number): number;
@@ -122,22 +117,8 @@ let syncCompile: boolean | null = null;
 const instances: { inst: WebAssembly.Instance; slots: number[] }[] = [];
 /** entries of a block before the JIT takes it (jit.zig) */
 export const JIT_HEAT = 48;
-/** a64.zig's Kind, in order, for the fallback histogram */
-const KINDS = "raw fault nop adr addsub logic movw bfm extr b bcond cbz tbz br svc clrex mrs msr ldrlit ldp excl atomic ldst adc ccmp csel one two three simd vldrlit vmem".split(" ");
 export const jitStats = {
-  get regions(): number { return core.jit_stat(0); }, get batches(): number { return core.jit_stat(1); }, get skipped(): number { return core.jit_stat(2); }, get bytes(): number { return core.jit_stat(3); }, get modules(): number { return instances.length; }, evictions: 0, async: 0, on: true, chain: TAIL,
-  /** what regions handed to the interpreter, most often first: an op kind, or `simd:<top 12 bits>` of the word */
-  fallbacks(n = 20): string[] {
-    const rows: [string, number][] = [];
-    for (let i = 0; i < 256 + 4096; i++) { const k = core.fb_count(i); if (k) rows.push([i === 255 ? "arm32" : i < 256 ? KINDS[i] ?? `kind${i}` : `simd:${(i - 256).toString(16).padStart(3, "0")}`, k]); }
-    return rows.sort((a, b) => b[1] - a[1]).slice(0, n).map(([nm, k]) => `${k} ${nm}`);
-  },
-  /** the SIMD&FP words handed to the interpreter, register fields masked, most often first */
-  fallbackWords(n = 30): string[] {
-    const rows: [number, number][] = [];
-    for (let i = 0; i < 4096; i++) { const k = core.fb_wcount(i); if (k) rows.push([core.fb_word(i) >>> 0, k]); }
-    return rows.sort((a, b) => b[1] - a[1]).slice(0, n).map(([w, k]) => `${k} ${w.toString(16).padStart(8, "0")}`);
-  },
+  get regions(): number { return core.jit_stat(); }, get modules(): number { return instances.length; }, evictions: 0, async: 0, on: true, chain: TAIL,
 };
 /** the table is full: the oldest half of the batches go, and a region still hot re-heats and comes back */
 export function jitEvict(): void {

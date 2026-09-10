@@ -19,23 +19,3 @@ pub const MEM_SIZE_A64: u32 = 0xffff_0000;
 pub const POOL_BASE: u32 = 0xa000_0000;
 pub const STACK_SIZE: u32 = 0x10_0000;
 pub const STACK_GUARD: u32 = 0x1_0000;
-
-export fn abi_const(i: u32) u32 {
-    return switch (i) {
-        0 => LOW,
-        1 => STACK_BASE,
-        2 => STACK_END,
-        3 => HOST_DATA,
-        4 => HOST_DATA_END,
-        5 => TRAMP_BASE,
-        6 => TRAMP_END,
-        7 => KERN_BASE,
-        8 => ARENA_BASE,
-        9 => MEM_SIZE_A32,
-        10 => MEM_SIZE_A64,
-        11 => POOL_BASE,
-        12 => STACK_SIZE,
-        13 => STACK_GUARD,
-        else => 0xffff_ffff,
-    };
-}

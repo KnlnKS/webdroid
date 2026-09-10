@@ -129,7 +129,7 @@ const PAGE_BLOCK = (@sizeOf(Page) + abi.PAGE_SIZE - 1) & ~@as(u32, abi.PAGE_SIZE
 /// page number → its decode block (0: none), sized for the largest memory
 pub const DECODED = abi.KERN_BASE + 0x60_0000;
 const decoded: [*]u32 = @ptrFromInt(DECODED);
-pub var stats = extern struct { pages: u32 = 0, invalidated: u32 = 0, interp: u64 = 0 }{};
+pub var stats = extern struct { pages: u32 = 0, invalidated: u32 = 0 }{};
 var epoch: u32 = 0;
 
 pub fn decodedPage(pg: u32) ?*Page {
@@ -182,38 +182,6 @@ export fn jit_evict() void {
     @memset(dead[0 .. 1 << 18], 0);
 }
 
-// ── the JIT's helpers, imported by every region module
-/// what regions hand to the interpreter: by op kind, and by the word's top 12 bits for the
-/// SIMD&FP space (256 + those); ARM32 words count under 255
-var fb_hist: [256 + 4096]u32 = [_]u32{0} ** (256 + 4096);
-export fn fb_count(i: u32) u32 {
-    return fb_hist[i % fb_hist.len];
-}
-/// the SIMD&FP words themselves, register fields masked off: what the space's histogram cannot name
-const FB_WORDS = 4096;
-var fb_words: [FB_WORDS]u32 = [_]u32{0} ** FB_WORDS;
-var fb_wcounts: [FB_WORDS]u32 = [_]u32{0} ** FB_WORDS;
-fn countWord(w: u32) void {
-    // rd and rn go; rm too, but only where bits 16-20 are a register (the three-register forms)
-    const key = (w & (if (w & 0x0020_0400 == 0x0020_0400) @as(u32, 0xffe0_fc00) else 0xffff_fc00)) | 1;
-    var i = (key *% 0x9e37_79b9) >> 20;
-    var probes: u32 = 0;
-    while (probes < 8) : (probes += 1) {
-        if (fb_words[i] == key or fb_words[i] == 0) {
-            fb_words[i] = key;
-            fb_wcounts[i] += 1;
-            return;
-        }
-        i = (i + 1) & (FB_WORDS - 1);
-    }
-}
-export fn fb_word(i: u32) u32 {
-    return fb_words[i & (FB_WORDS - 1)] & ~@as(u32, 1);
-}
-export fn fb_wcount(i: u32) u32 {
-    return fb_wcounts[i & (FB_WORDS - 1)];
-}
-/// the interpreter runs one word for a region: 0 next, 1 jump (pc set), 2 fault, 3 syscall
 export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
     const page = pageFor(pc) orelse return 2;
@@ -223,13 +191,6 @@ export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
         o.* = a64.decode(w, pc);
         page.cov[i >> 3] |= @as(u8, 1) << @intCast(i & 7);
     }
-    fb_hist[switch (o.kind) {
-        .simd, .vmem, .vldrlit => blk: {
-            countWord(w);
-            break :blk 256 + (w >> 20);
-        },
-        else => @intFromEnum(o.kind),
-    }] += 1;
     c.bpc = pc;
     switch (a64.exec(c, o, pc)) {
         .next => return 0,
@@ -244,7 +205,6 @@ export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
 /// the ARM32 interpreter runs one instruction for a region: the same statuses as exec_word
 export fn exec_word32(cp: u32, pc: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
-    fb_hist[255] += 1;
     c.bpc = pc;
     // the ARM interpreter reports a taken branch through pc alone
     const len: u32 = if (c.cpsr & (1 << 5) != 0 and (mem.ptr(u16, pc).* & 0xf800) != 0xf000) 2 else 4;
@@ -330,16 +290,8 @@ pub fn reset() void {
     invalidate_all();
     nfree = 0;
 }
-/// instructions the interpreter ran: against `ic`, the JIT's coverage
-export fn interp_ic() f64 {
-    return @floatFromInt(stats.interp);
-}
 export fn cpu_stat(i: u32) u32 {
-    return switch (i) {
-        0 => stats.pages,
-        1 => stats.invalidated,
-        else => libc.calls,
-    };
+    return if (i == 0) stats.pages else stats.invalidated;
 }
 /// instructions per interpreted block; 1 makes every instruction a slice boundary (the step tracer)
 pub var max_block: u32 = 256;
