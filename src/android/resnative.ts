@@ -242,6 +242,8 @@ const assetOpen = function (this: JAssetManager, p: string) {
 rt.register({
   name: "android/content/res/AssetManager", ctor: JAssetManager,
   methods: {
+    "getLocales()[Ljava/lang/String;": function (this: JAssetManager) { return jarray([...new Set([...this.host.tbl(0x01000000)?.locales ?? [], ...this.host.arsc?.locales ?? []])], "Ljava/lang/String;"); },
+    "getNonSystemLocales()[Ljava/lang/String;": function (this: JAssetManager) { return jarray([...this.host.arsc?.locales ?? []], "Ljava/lang/String;"); },
     "open(Ljava/lang/String;)Ljava/io/InputStream;": assetOpen,
     "open(Ljava/lang/String;I)Ljava/io/InputStream;": assetOpen,
     "openFd(Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;": async function (this: JAssetManager, p: string) {

@@ -36,6 +36,8 @@ interface Config {
 }
 
 const defaultConfig: Config = { density: 0, sdk: 0, orientation: 0, night: 0, lang: "", region: "", swdp: 0, wdp: 0, hdp: 0, size: 0, dir: 0, uiType: 0, score: 0 };
+const localePart = (a: number, b: number, base: number) => !a ? "" : a & 0x80
+  ? String.fromCharCode(base + (b & 31), base + ((b >> 5) | ((a & 3) << 3)), base + ((a >> 2) & 31)) : String.fromCharCode(a, b);
 
 /** a split table's string index → its slot in the base pool */
 type Remap = ((i: number) => number) | null;
@@ -50,6 +52,7 @@ export class Arsc {
   pkgId = 0x7f;
   pkgName = "";
   types = new Map<number, TypeChunk[]>();   // typeId → chunks (one per config)
+  locales = new Set<string>();
   device = { density: dev.densityDpi, sdk: dev.sdk, orientation: dev.orientation, night: dev.night ? 1 : 0,
     wdp: dev.widthDp, hdp: dev.screenHeightDp, swdp: dev.smallestWidthDp, lang: dev.lang, region: dev.region,
     size: sizeClass(dev.smallestWidthDp), dir: 0x40, uiType: 1 };
@@ -111,9 +114,9 @@ export class Arsc {
     const c = base + 20;
     if (cfgSize >= 16) {
       const l1 = view.getUint8(c + 8), l2 = view.getUint8(c + 9), r1 = view.getUint8(c + 10), r2 = view.getUint8(c + 11);
-      if (l1) cfg.lang = String.fromCharCode(l1, l2);
+      cfg.lang = localePart(l1, l2, 97);
       // a pseudolocale (en-XA) or a regional variant answers only for its own region
-      if (r1 && !(r1 & 0x80)) cfg.region = String.fromCharCode(r1, r2);
+      cfg.region = localePart(r1, r2, 48);
       cfg.orientation = view.getUint8(c + 12);
       cfg.density = view.getUint16(c + 14, true);
     }
@@ -129,6 +132,11 @@ export class Arsc {
       cfg.swdp = view.getUint16(c + 30, true);
       cfg.wdp = view.getUint16(c + 32, true);
       cfg.hdp = view.getUint16(c + 34, true);
+    }
+    if (cfg.lang) {
+      const script = cfgSize >= 48 ? String.fromCharCode(...new Uint8Array(view.buffer, view.byteOffset + c + 36, 4)).replace(/\0.*$/, "") : "";
+      const variant = cfgSize >= 48 ? String.fromCharCode(...new Uint8Array(view.buffer, view.byteOffset + c + 40, 8)).replace(/\0.*$/, "") : "";
+      this.locales.add([cfg.lang, script, cfg.region, variant].filter(Boolean).join("-"));
     }
     // Keep other locales as encoded chunks until a scoped resource lookup selects them.
     if (this.skipAtParse(cfg)) return;
