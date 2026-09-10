@@ -657,13 +657,6 @@ for (const [name, methods, statics] of [
     "removeTouchExplorationStateChangeListener(Landroid/view/accessibility/AccessibilityManager$TouchExplorationStateChangeListener;)Z": () => 1,
     "getEnabledAccessibilityServiceList(I)Ljava/util/List;": () => newArrayList(),
   }],
-  ["android/app/AlarmManager", {
-    "set(IJLandroid/app/PendingIntent;)V": () => {},
-    "setExact(IJLandroid/app/PendingIntent;)V": () => {},
-    "setExactAndAllowWhileIdle(IJLandroid/app/PendingIntent;)V": () => {},
-    "cancel(Landroid/app/PendingIntent;)V": () => {},
-    "canScheduleExactAlarms()Z": () => 1,
-  }],
   ["android/content/ClipboardManager", {
     "setPrimaryClip(Landroid/content/ClipData;)V": () => {},
     "getPrimaryClip()Landroid/content/ClipData;": () => null,

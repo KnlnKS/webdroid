@@ -91,11 +91,14 @@ class JIntentToken extends JBinder {
   operation: { kind: "activity" | "broadcast" | "service"; context: JContext; intent: JIntent; immutable: boolean; oneShot: boolean } | null = null;
   key = "";
   canceled = false;
+  cancellations = new Set<() => void>();
 }
 const intentTokens = new Map<string, JIntentToken>();
 function cancelToken(token: JIntentToken) {
   token.canceled = true;
   if (intentTokens.get(token.key) === token) intentTokens.delete(token.key);
+  for (const notify of token.cancellations) notify();
+  token.cancellations.clear();
 }
 class JIntentSender extends JObj {
   target: JObj | null = null;
@@ -129,6 +132,13 @@ rt.register({ name: "android/content/IntentSender", ctor: JIntentSender, ifaces:
   },
 });
 export class JPendingIntent extends JObj { sender = new JIntentSender(); }
+export function watchPendingIntent(intent: JPendingIntent, canceled: () => void): (() => void) | null {
+  const target = intent.sender.target;
+  if (!(target instanceof JIntentToken)) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "remote intent cancellation unavailable");
+  if (target.canceled) return null;
+  target.cancellations.add(canceled);
+  return () => { target.cancellations.delete(canceled); };
+}
 function pending(kind: "activity" | "broadcast" | "service", context: JContext, code: number, intent: JIntent, flags: number): JPendingIntent | null {
   if (!intent) throw rt.mkThrowable("java/lang/NullPointerException", "intent");
   if ((flags & 0x6000000) === 0x6000000) throw rt.mkThrowable("java/lang/IllegalArgumentException", "PendingIntent cannot be both mutable and immutable");
