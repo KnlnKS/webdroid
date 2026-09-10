@@ -95,12 +95,13 @@ export function requestLayout(v?: JView | null) {
   if (!v) { uiState.forceAll = true; return; }
   if (layoutPass.active) layoutPass.requesters.push(v);
   for (let p: JView | null = v; p; p = p.parent) {
-    if (p.layoutRequested) break;
     p.layoutRequested = true;
     p.oldWSpec = -1;
     // AOSP calls the parent's requestLayout() virtually: an override (Compose's AndroidViewHolder
     // asks its layout node to remeasure, DrawerLayout declines mid-layout) resumes the walk itself
-    const par = p.parent, f = par && jmethod(par, M_requestLayout);
+    const par = p.parent;
+    if (!par || par.layoutRequested) break;
+    const f = jmethod(par, M_requestLayout);
     if (f && f !== nativeRequestLayout) { void guardApply(f as JMethod, par); break; }
   }
 }
