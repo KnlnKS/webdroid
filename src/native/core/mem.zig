@@ -104,26 +104,29 @@ fn bump(n: u32) u32 {
     }
 }
 
+inline fn isBig(p: u32) ?u32 {
+    const n = big_len[pageOf(p)];
+    return if (p & (PAGE_SIZE - 1) == 0 and n != 0) n else null;
+}
+fn mapBig(n: u32, alignment: u32) u32 {
+    const p = map_pages(n, 0, alignment);
+    if (p != 0) {
+        big_len[pageOf(p)] = n;
+        blocks += 1;
+        used += n;
+    }
+    return p;
+}
+inline fn headFor(cs: u32) *u32 {
+    return if (cs <= SMALL_MAX) &small_heads[cs / CLASS_STEP] else &big_heads[bigIdx(cs)];
+}
+
 pub export fn malloc(n: u32) u32 {
-    if (n > PAGE_MAX) {
-        const p = map_pages(n, 0, PAGE_SIZE);
-        if (p != 0) {
-            big_len[pageOf(p)] = n;
-            blocks += 1;
-            used += n;
-        }
-        return p;
-    }
+    if (n > PAGE_MAX) return mapBig(n, PAGE_SIZE);
     const cs = classSize(n);
-    var p: u32 = 0;
-    if (cs <= SMALL_MAX) {
-        p = small_heads[cs / CLASS_STEP];
-        if (p != 0) small_heads[cs / CLASS_STEP] = ld(u32, p);
-    } else {
-        p = big_heads[bigIdx(cs)];
-        if (p != 0) big_heads[bigIdx(cs)] = ld(u32, p);
-    }
-    if (p == 0) {
+    const head = headFor(cs);
+    var p = head.*;
+    if (p != 0) head.* = ld(u32, p) else {
         p = bump(cs + HDR);
         if (p == 0) return 0;
         p += HDR;
@@ -138,8 +141,7 @@ pub export fn malloc(n: u32) u32 {
 pub export fn free(p_in: u32) u32 {
     if (p_in == 0) return 1;
     var p = p_in;
-    if (p & (PAGE_SIZE - 1) == 0 and big_len[pageOf(p)] != 0) {
-        const n = big_len[pageOf(p)];
+    if (isBig(p)) |n| {
         big_len[pageOf(p)] = 0;
         blocks -= 1;
         used -= n;
@@ -152,19 +154,14 @@ pub export fn free(p_in: u32) u32 {
     if (cs == 0 or cs > PAGE_MAX or (cs & 15) != 0) return 0;
     blocks -= 1;
     used -= cs;
-    if (cs <= SMALL_MAX) {
-        ptr(u32, p).* = small_heads[cs / CLASS_STEP];
-        small_heads[cs / CLASS_STEP] = p;
-    } else {
-        ptr(u32, p).* = big_heads[bigIdx(cs)];
-        big_heads[bigIdx(cs)] = p;
-    }
+    const head = headFor(cs);
+    ptr(u32, p).* = head.*;
+    head.* = p;
     return 1;
 }
 pub export fn usable_size(p: u32) u32 {
     if (p == 0) return 0;
-    if (p & (PAGE_SIZE - 1) == 0 and big_len[pageOf(p)] != 0) return big_len[pageOf(p)];
-    return ld(u32, p - 4);
+    return isBig(p) orelse ld(u32, p - 4);
 }
 pub export fn realloc(p: u32, n: u32) u32 {
     if (p == 0) return malloc(n);
@@ -173,8 +170,7 @@ pub export fn realloc(p: u32, n: u32) u32 {
         return 0;
     }
     const cur = usable_size(p);
-    const big = p & (PAGE_SIZE - 1) == 0 and big_len[pageOf(p)] != 0;
-    if (n <= cur and n >= cur >> 2 and !big) return p;
+    if (n <= cur and n >= cur >> 2 and isBig(p) == null) return p;
     const q = malloc(n);
     if (q == 0) return 0;
     move(q, p, @min(n, cur));
@@ -190,17 +186,9 @@ pub export fn calloc(n: u32, m: u32) u32 {
 }
 pub export fn memalign(alignment: u32, n: u32) u32 {
     if (alignment <= 16) return malloc(n);
-    if (alignment >= PAGE_SIZE and (alignment & (alignment - 1)) == 0) {
-        const p = map_pages(n, 0, alignment);
-        if (p != 0) {
-            big_len[pageOf(p)] = n;
-            blocks += 1;
-            used += n;
-        }
-        return p;
-    }
+    if (alignment >= PAGE_SIZE and (alignment & (alignment - 1)) == 0) return mapBig(n, alignment);
     const raw = malloc(n + alignment + HDR);
-    if (raw == 0 or (raw & (PAGE_SIZE - 1) == 0 and big_len[pageOf(raw)] != 0)) return raw;
+    if (raw == 0 or isBig(raw) != null) return raw;
     const p = (raw + HDR + alignment - 1) & ~(alignment - 1);
     ptr(u32, p - 8).* = raw;
     ptr(u32, p - 4).* = n;

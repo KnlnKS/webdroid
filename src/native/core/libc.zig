@@ -2,6 +2,7 @@
 // these, so memcpy and malloc never leave the core. Semantics are libc.ts's; the host keeps the
 // rest, and switching the tracer on routes every call back to it.
 
+const std = @import("std");
 const abi = @import("abi.zig");
 const mem = @import("mem.zig");
 const cpu = @import("cpu.zig");
@@ -56,6 +57,9 @@ inline fn ret(c: *Cpu, v: u64) void {
 inline fn va(p: u32) u64 {
     return mem.va(p);
 }
+fn wrote(d: u32, n: u32) void {
+    if (mem.page_flags[d >> abi.PAGE_SHIFT] | mem.page_flags[(d + n - 1) >> abi.PAGE_SHIFT] != 0) cpu.invalidate_range(d, n);
+}
 fn stp(c: *Cpu, a: u32, v: u64) bool {
     return if (c.a64 != 0) cpu.st(u64, c, a, v) else cpu.st(u32, c, a, @truncate(v));
 }
@@ -77,7 +81,7 @@ pub fn call(c: *Cpu, id: u8) bool {
                 const d = ptr(c, 0) orelse return false;
                 const s = ptr(c, 1) orelse return false;
                 mem.move(d, s, n);
-                if (mem.page_flags[d >> abi.PAGE_SHIFT] | mem.page_flags[(d + n - 1) >> abi.PAGE_SHIFT] != 0) cpu.invalidate_range(d, n);
+                wrote(d, n);
             }
         },
         .memset => {
@@ -85,7 +89,7 @@ pub fn call(c: *Cpu, id: u8) bool {
             if (n != 0) {
                 const d = ptr(c, 0) orelse return false;
                 @memset(mem.bytes(d)[0..n], @truncate(arg(c, 1)));
-                if (mem.page_flags[d >> abi.PAGE_SHIFT] | mem.page_flags[(d + n - 1) >> abi.PAGE_SHIFT] != 0) cpu.invalidate_range(d, n);
+                wrote(d, n);
             }
         },
         .memcmp => {
@@ -94,12 +98,7 @@ pub fn call(c: *Cpu, id: u8) bool {
             if (n != 0) {
                 const x = ptr(c, 0) orelse return false;
                 const y = ptr(c, 1) orelse return false;
-                const xs = mem.bytes(x)[0..n];
-                const ys = mem.bytes(y)[0..n];
-                for (xs, ys) |p, q| if (p != q) {
-                    r = @as(i32, p) - @as(i32, q);
-                    break;
-                };
+                if (std.mem.findDiff(u8, mem.bytes(x)[0..n], mem.bytes(y)[0..n])) |i| r = @as(i32, mem.bytes(x)[i]) - @as(i32, mem.bytes(y)[i]);
             }
             ret(c, @bitCast(@as(i64, r)));
         },
@@ -109,25 +108,18 @@ pub fn call(c: *Cpu, id: u8) bool {
             var found: u64 = 0;
             if (n != 0) {
                 const p = ptr(c, 0) orelse return false;
-                for (mem.bytes(p)[0..n], 0..) |b, i| if (b == ch) {
-                    found = va(p + @as(u32, @intCast(i)));
-                    break;
-                };
+                if (std.mem.findScalar(u8, mem.bytes(p)[0..n], ch)) |i| found = va(p + @as(u32, @intCast(i)));
             }
             ret(c, found);
         },
         .strlen => {
             const p = ptr(c, 0) orelse return false;
-            var e = p;
-            while (mem.bytes(e)[0] != 0) e += 1;
-            ret(c, e - p);
+            ret(c, std.mem.findSentinel(u8, 0, @as([*:0]const u8, @ptrFromInt(p))));
         },
         .strnlen => {
             const n: u32 = @truncate(arg(c, 1));
             const p = ptr(c, 0) orelse return false;
-            var i: u32 = 0;
-            while (i < n and mem.bytes(p)[i] != 0) i += 1;
-            ret(c, i);
+            ret(c, std.mem.findScalar(u8, mem.bytes(p)[0..n], 0) orelse n);
         },
         .strcmp, .strncmp => {
             const n: u32 = if (id == @intFromEnum(Fn.strncmp)) @truncate(arg(c, 2)) else 0x7fff_ffff;

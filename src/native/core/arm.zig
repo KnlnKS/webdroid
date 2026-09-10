@@ -336,8 +336,8 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
             if (Ld) {
                 switch (sh) {
                     1 => set(c, rd, ld(u16, a)),
-                    2 => set(c, rd, @bitCast(@as(i32, ld(i8, a)))),
-                    3 => set(c, rd, @bitCast(@as(i32, ld(i16, a)))),
+                    2 => set(c, rd, sxb(ld(u8, a))),
+                    3 => set(c, rd, sxh(ld(u16, a))),
                     else => return fault(c, .unimplemented, w, pc),
                 }
             } else switch (sh) {
@@ -368,46 +368,40 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
     const setf = w & (1 << 20) != 0;
     const t = op2(c, w, pc);
     const a = reg(c, rn, pc);
-    var v: u32 = undefined;
-    var logical = false;
-    switch (o) {
-        0, 8 => {
-            v = a & t.v;
-            logical = true;
-        },
-        1, 9 => {
-            v = a ^ t.v;
-            logical = true;
-        },
-        12 => {
-            v = a | t.v;
-            logical = true;
-        },
-        14 => {
-            v = a & ~t.v;
-            logical = true;
-        },
-        13 => {
-            v = t.v;
-            logical = true;
-        },
-        15 => {
-            v = ~t.v;
-            logical = true;
-        },
-        2, 10 => v = if (setf) subFlags(c, a, t.v, 1) else a -% t.v,
-        3 => v = if (setf) subFlags(c, t.v, a, 1) else t.v -% a,
-        4, 11 => v = if (setf) addFlags(c, a, t.v, 0) else a +% t.v,
-        5 => v = if (setf) addFlags(c, a, t.v, @intCast(cf(c))) else a +% t.v +% cf(c),
-        6 => v = if (setf) subFlags(c, a, t.v, @intCast(cf(c))) else a -% t.v -% 1 +% cf(c),
-        else => v = if (setf) subFlags(c, t.v, a, @intCast(cf(c))) else t.v -% a -% 1 +% cf(c),
-    }
+    const logical = o < 2 or o == 8 or o == 9 or o >= 12;
+    const v: u32 = if (logical) logic(o, a, t.v) else switch (o) {
+        2, 10 => if (setf) subFlags(c, a, t.v, 1) else a -% t.v,
+        3 => if (setf) subFlags(c, t.v, a, 1) else t.v -% a,
+        4, 11 => if (setf) addFlags(c, a, t.v, 0) else a +% t.v,
+        5 => if (setf) addFlags(c, a, t.v, @intCast(cf(c))) else a +% t.v +% cf(c),
+        6 => if (setf) subFlags(c, a, t.v, @intCast(cf(c))) else a -% t.v -% 1 +% cf(c),
+        else => if (setf) subFlags(c, t.v, a, @intCast(cf(c))) else t.v -% a -% 1 +% cf(c),
+    };
     if (setf and logical) setNZC(c, v, t.carry);
     if (o < 8 or o > 11) {
         if (rd == 15) return bx(c, v);
         set(c, rd, v);
     }
     return .next;
+}
+fn logic(o: u32, a: u32, t: u32) u32 {
+    return switch (o & 7) {
+        0 => a & t,
+        1 => a ^ t,
+        4 => a | t,
+        5 => t,
+        6 => a & ~t,
+        else => ~t,
+    };
+}
+inline fn sxb(v: u32) u32 {
+    return @bitCast(@as(i32, @as(i8, @bitCast(@as(u8, @truncate(v))))));
+}
+inline fn sxh(v: u32) u32 {
+    return @bitCast(@as(i32, @as(i16, @bitCast(@as(u16, @truncate(v))))));
+}
+inline fn rev16(v: u32) u32 {
+    return ((v & 0xff00ff) << 8) | ((v >> 8) & 0xff00ff);
 }
 fn sat32(c: *Cpu, v: i64) i64 {
     if (v > std.math.maxInt(i32)) {
@@ -451,11 +445,11 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
         const rotated = std.math.rotr(u32, RM, rot);
         const add: u32 = if (rn == 15) 0 else RN;
         const v: u32 = switch (op1) {
-            10 => add +% @as(u32, @bitCast(@as(i32, @as(i8, @bitCast(@as(u8, @truncate(rotated))))))),
-            11 => add +% @as(u32, @bitCast(@as(i32, @as(i16, @bitCast(@as(u16, @truncate(rotated))))))),
+            10 => add +% sxb(rotated),
+            11 => add +% sxh(rotated),
             14 => add +% (rotated & 255),
             15 => add +% (rotated & 65535),
-            8 => (@as(u32, @bitCast(@as(i32, @as(i8, @bitCast(@as(u8, @truncate(rotated))))))) & 0xffff) | (@as(u32, @bitCast(@as(i32, @as(i8, @bitCast(@as(u8, @truncate(rotated >> 16))))))) << 16),
+            8 => (sxb(rotated) & 0xffff) | (sxb(rotated >> 16) << 16),
             12 => rotated & 0xff00ff,
             else => return fault(c, .unimplemented, w, pc),
         };
@@ -467,11 +461,11 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
         return .next;
     }
     if ((w & 0x0fff0ff0) == 0x06bf0fb0) { // REV16
-        set(c, rd, ((RM & 0xff00ff) << 8) | ((RM >> 8) & 0xff00ff));
+        set(c, rd, rev16(RM));
         return .next;
     }
     if ((w & 0x0fff0ff0) == 0x06ff0fb0) { // REVSH
-        set(c, rd, @bitCast(@as(i32, @as(i16, @bitCast(@as(u16, @byteSwap(@as(u16, @truncate(RM)))))))));
+        set(c, rd, sxh(@byteSwap(@as(u16, @truncate(RM)))));
         return .next;
     }
     if ((w & 0x0ff00ff0) == 0x06800fb0) { // SEL
@@ -554,14 +548,9 @@ fn swi(c: *Cpu, pc: u32) Status {
 }
 
 // ── VFP
-inline fn S(c: *Cpu, n: u32) *align(4) f32 {
-    return @ptrCast(@alignCast(&c.v[n >> 2][(n & 3) * 4]));
-}
-inline fn D(c: *Cpu, n: u32) *align(8) f64 {
-    return @ptrCast(@alignCast(&c.v[n >> 1][(n & 1) * 8]));
-}
-inline fn SI(c: *Cpu, n: u32) *align(4) u32 {
-    return @ptrCast(@alignCast(&c.v[n >> 2][(n & 3) * 4]));
+inline fn vreg(comptime T: type, c: *Cpu, n: u32) *align(@sizeOf(T)) T {
+    const per = 16 / @sizeOf(T);
+    return @ptrCast(@alignCast(&c.v[n / per][(n % per) * @sizeOf(T)]));
 }
 /// one VFP instruction (ARM encoding, cond already handled); null when not VFP
 fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
@@ -590,11 +579,11 @@ fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
             const rt2 = bits(w, 16, 4);
             const lo = if (dp) m * 2 else m;
             if (Ld) {
-                set(c, rt, SI(c, lo).*);
-                set(c, rt2, SI(c, lo + 1).*);
+                set(c, rt, vreg(u32, c, lo).*);
+                set(c, rt2, vreg(u32, c, lo + 1).*);
             } else {
-                SI(c, lo).* = r(c, rt);
-                SI(c, lo + 1).* = r(c, rt2);
+                vreg(u32, c, lo).* = r(c, rt);
+                vreg(u32, c, lo + 1).* = r(c, rt2);
             }
             return .next;
         }
@@ -602,11 +591,11 @@ fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
             const base = if (rn == 15) (pc +% 8) & ~@as(u32, 3) else r(c, rn);
             const a = addr(c, if (U) base +% imm8 * 4 else base -% imm8 * 4) orelse return badAddr(c, w, pc);
             if (Ld) {
-                if (dp) SI(c, d * 2).* = ld(u32, a) else SI(c, d).* = ld(u32, a);
-                if (dp) SI(c, d * 2 + 1).* = ld(u32, a + 4);
+                if (dp) vreg(u32, c, d * 2).* = ld(u32, a) else vreg(u32, c, d).* = ld(u32, a);
+                if (dp) vreg(u32, c, d * 2 + 1).* = ld(u32, a + 4);
             } else {
-                if (!st(u32, c, a, SI(c, if (dp) d * 2 else d).*)) return badAddr(c, w, pc);
-                if (dp and !st(u32, c, a + 4, SI(c, d * 2 + 1).*)) return badAddr(c, w, pc);
+                if (!st(u32, c, a, vreg(u32, c, if (dp) d * 2 else d).*)) return badAddr(c, w, pc);
+                if (dp and !st(u32, c, a + 4, vreg(u32, c, d * 2 + 1).*)) return badAddr(c, w, pc);
             }
             return .next;
         }
@@ -620,7 +609,7 @@ fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
             var k: u32 = 0;
             while (k < words) : (k += 1) {
                 const slot = if (dp) (d + i) * 2 + k else d + i;
-                if (Ld) SI(c, slot).* = ld(u32, a) else if (!st(u32, c, a, SI(c, slot).*)) return badAddr(c, w, pc);
+                if (Ld) vreg(u32, c, slot).* = ld(u32, a) else if (!st(u32, c, a, vreg(u32, c, slot).*)) return badAddr(c, w, pc);
                 a += 4;
             }
         }
@@ -633,7 +622,7 @@ fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
         const o = bits(w, 21, 3);
         const Ld = bits(w, 20, 1) != 0;
         if (o == 0 and !dp) {
-            if (Ld) set(c, rt, SI(c, n).*) else SI(c, n).* = reg(c, rt, pc);
+            if (Ld) set(c, rt, vreg(u32, c, n).*) else vreg(u32, c, n).* = reg(c, rt, pc);
             return .next;
         }
         if (o == 7 and !dp) { // VMRS / VMSR: FPSCR is register 1; FPSID/MVFR read as constants
@@ -646,7 +635,7 @@ fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
         }
         if (dp and (o == 0 or o == 1) and (w & 0x60) == 0) { // VMOV scalar ↔ core, the 32-bit lane form
             const lane = n * 2 + (o & 1);
-            if (Ld) set(c, rt, SI(c, lane).*) else SI(c, lane).* = reg(c, rt, pc);
+            if (Ld) set(c, rt, vreg(u32, c, lane).*) else vreg(u32, c, lane).* = reg(c, rt, pc);
             return .next;
         }
         return null;
@@ -655,53 +644,46 @@ fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
 }
 fn vfpArith(comptime F: type, c: *Cpu, w: u32, d: u32, n: u32, m: u32) ?Status {
     const dp = F == f64;
-    const get = struct {
-        fn f(cc: *Cpu, i: u32) F {
-            return if (dp) D(cc, i).* else S(cc, i).*;
-        }
-    }.f;
-    const put = struct {
-        fn f(cc: *Cpu, i: u32, v: F) void {
-            if (dp) D(cc, i).* = v else S(cc, i).* = v;
-        }
-    }.f;
     const opc1 = bits(w, 20, 4) & 0xb;
     const o6 = bits(w, 6, 1) != 0;
-    const vd = get(c, d);
-    const vn = get(c, n);
-    const vm = get(c, m);
+    const vd = vreg(F, c, d).*;
+    const vn = vreg(F, c, n).*;
+    const vm = vreg(F, c, m).*;
     switch (opc1) {
-        0x0 => put(c, d, if (o6) vd - vn * vm else vd + vn * vm),
-        0x1 => put(c, d, if (o6) -vd - vn * vm else -vd + vn * vm),
-        0x2 => put(c, d, if (o6) -(vn * vm) else vn * vm),
-        0x3 => put(c, d, if (o6) vn - vm else vn + vm),
-        0x8 => if (o6) return null else put(c, d, vn / vm),
-        0x9 => put(c, d, if (o6) fp.fma(F, -vn, vm, -vd) else fp.fma(F, vn, vm, -vd)),
-        0xa => put(c, d, if (o6) fp.fma(F, -vn, vm, vd) else fp.fma(F, vn, vm, vd)),
+        0x0 => vreg(F, c, d).* = if (o6) vd - vn * vm else vd + vn * vm,
+        0x1 => vreg(F, c, d).* = if (o6) -vd - vn * vm else -vd + vn * vm,
+        0x2 => vreg(F, c, d).* = if (o6) -(vn * vm) else vn * vm,
+        0x3 => vreg(F, c, d).* = if (o6) vn - vm else vn + vm,
+        0x8 => {
+            if (o6) return null;
+            vreg(F, c, d).* = vn / vm;
+        },
+        0x9 => vreg(F, c, d).* = if (o6) fp.fma(F, -vn, vm, -vd) else fp.fma(F, vn, vm, -vd),
+        0xa => vreg(F, c, d).* = if (o6) fp.fma(F, -vn, vm, vd) else fp.fma(F, vn, vm, vd),
         0xb => {
             if (!o6) { // VMOV (immediate)
                 const imm = @import("simd.zig").vfpImm(bits(w, 16, 4) << 4 | (w & 15), dp);
-                if (dp) SI(c, d * 2).* = @truncate(imm) else SI(c, d).* = @truncate(imm);
-                if (dp) SI(c, d * 2 + 1).* = @intCast(imm >> 32);
+                if (dp) vreg(u32, c, d * 2).* = @truncate(imm) else vreg(u32, c, d).* = @truncate(imm);
+                if (dp) vreg(u32, c, d * 2 + 1).* = @intCast(imm >> 32);
                 return .next;
             }
             const opc2 = bits(w, 16, 4);
             const o7 = bits(w, 7, 1) != 0;
             switch (opc2) {
-                0 => put(c, d, if (o7) @abs(vm) else vm),
-                1 => put(c, d, if (o7) @sqrt(vm) else -vm),
+                0 => vreg(F, c, d).* = if (o7) @abs(vm) else vm,
+                1 => vreg(F, c, d).* = if (o7) @sqrt(vm) else -vm,
                 4, 5 => c.fpcr = (c.fpcr & 0x0fff_ffff) | fp.fcmp(vd, if (opc2 == 5) @as(F, 0) else vm),
                 7 => { // VCVT between single and double
                     if (!o7) return null;
-                    if (dp) S(c, (bits(w, 12, 4) << 1) | bits(w, 22, 1)).* = @floatCast(vm) else D(c, (bits(w, 22, 1) << 4) | bits(w, 12, 4)).* = S(c, m).*;
+                    if (dp) vreg(f32, c, (bits(w, 12, 4) << 1) | bits(w, 22, 1)).* = @floatCast(vm) else vreg(f64, c, (bits(w, 22, 1) << 4) | bits(w, 12, 4)).* = vreg(f32, c, m).*;
                 },
                 8 => { // VCVT from int (o7: signed)
-                    const src = SI(c, (bits(w, 0, 4) << 1) | bits(w, 5, 1)).*;
-                    put(c, d, if (o7) @floatFromInt(@as(i32, @bitCast(src))) else @floatFromInt(src));
+                    const src = vreg(u32, c, (bits(w, 0, 4) << 1) | bits(w, 5, 1)).*;
+                    vreg(F, c, d).* = if (o7) @floatFromInt(@as(i32, @bitCast(src))) else @floatFromInt(src);
                 },
                 12, 13 => { // VCVT to int (12 unsigned, 13 signed); o7: round toward zero
                     const t = if (o7) @trunc(vm) else fp.rne(F, vm);
-                    const dst = SI(c, (bits(w, 12, 4) << 1) | bits(w, 22, 1));
+                    const dst = vreg(u32, c, (bits(w, 12, 4) << 1) | bits(w, 22, 1));
                     dst.* = if (opc2 == 13) @bitCast(fp.toInt(i32, t)) else fp.toInt(u32, t);
                 },
                 else => return null,
@@ -754,13 +736,10 @@ fn execThumb(c: *Cpu, pc: u32) Status {
                 const R = r(c, rd);
                 const Mv = r(c, rn);
                 switch (o) {
-                    0 => {
-                        set(c, rd, R & Mv);
-                        setNZ(c, R & Mv);
-                    },
-                    1 => {
-                        set(c, rd, R ^ Mv);
-                        setNZ(c, R ^ Mv);
+                    0, 1, 8, 12, 14, 15 => {
+                        const v = logic(o, R, Mv);
+                        if (o != 8) set(c, rd, v);
+                        setNZ(c, v);
                     },
                     2, 3, 4, 7 => {
                         const s = shiftReg(c, if (o == 7) 3 else o - 2, R, Mv & 255);
@@ -769,25 +748,12 @@ fn execThumb(c: *Cpu, pc: u32) Status {
                     },
                     5 => set(c, rd, addFlags(c, R, Mv, @intCast(cf(c)))),
                     6 => set(c, rd, subFlags(c, R, Mv, @intCast(cf(c)))),
-                    8 => setNZ(c, R & Mv),
                     9 => set(c, rd, subFlags(c, 0, Mv, 1)),
                     10 => _ = subFlags(c, R, Mv, 1),
                     11 => _ = addFlags(c, R, Mv, 0),
-                    12 => {
-                        set(c, rd, R | Mv);
-                        setNZ(c, R | Mv);
-                    },
-                    13 => {
+                    else => {
                         set(c, rd, R *% Mv);
                         setNZ(c, R *% Mv);
-                    },
-                    14 => {
-                        set(c, rd, R & ~Mv);
-                        setNZ(c, R & ~Mv);
-                    },
-                    else => {
-                        set(c, rd, ~Mv);
-                        setNZ(c, ~Mv);
                     },
                 }
                 return .next;
@@ -823,11 +789,11 @@ fn execThumb(c: *Cpu, pc: u32) Status {
                 0 => if (!st(u32, c, a, r(c, rd))) return badAddr(c, h, pc),
                 1 => if (!st(u16, c, a, @truncate(r(c, rd)))) return badAddr(c, h, pc),
                 2 => if (!st(u8, c, a, @truncate(r(c, rd)))) return badAddr(c, h, pc),
-                3 => set(c, rd, @bitCast(@as(i32, ld(i8, a)))),
+                3 => set(c, rd, sxb(ld(u8, a))),
                 4 => set(c, rd, ld(u32, a)),
                 5 => set(c, rd, ld(u16, a)),
                 6 => set(c, rd, ld(u8, a)),
-                else => set(c, rd, @bitCast(@as(i32, ld(i16, a)))),
+                else => set(c, rd, sxh(ld(u16, a))),
             }
         },
         6, 7 => {
@@ -934,13 +900,13 @@ fn thumbMisc(c: *Cpu, h: u32, pc: u32, rd: u32, rn: u32) Status {
     if ((h & 0xff00) == 0xbf00 or (h & 0xffe8) == 0xb660) return .next; // hints, CPS
     const t = r(c, rn);
     switch (h & 0xffc0) {
-        0xb200 => set(c, rd, @bitCast(@as(i32, @as(i16, @bitCast(@as(u16, @truncate(t))))))),
-        0xb240 => set(c, rd, @bitCast(@as(i32, @as(i8, @bitCast(@as(u8, @truncate(t))))))),
+        0xb200 => set(c, rd, sxh(t)),
+        0xb240 => set(c, rd, sxb(t)),
         0xb280 => set(c, rd, t & 0xffff),
         0xb2c0 => set(c, rd, t & 255),
         0xba00 => set(c, rd, @byteSwap(t)),
-        0xba40 => set(c, rd, ((t & 0xff00ff) << 8) | ((t >> 8) & 0xff00ff)),
-        0xbac0 => set(c, rd, @bitCast(@as(i32, @as(i16, @bitCast(@as(u16, @byteSwap(@as(u16, @truncate(t))))))))),
+        0xba40 => set(c, rd, rev16(t)),
+        0xbac0 => set(c, rd, sxh(@byteSwap(@as(u16, @truncate(t))))),
         else => {
             if ((h & 0xf500) == 0xb100) { // CBZ / CBNZ
                 const imm = ((h >> 3) & 31) * 2 + ((h & 0x200) >> 3);

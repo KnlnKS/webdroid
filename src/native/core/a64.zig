@@ -471,26 +471,7 @@ pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
         .fault => return raise(c, @enumFromInt(o.a), ld(u32, pc)),
         .nop => {},
         .adr => setX(c, o.rd, o.imm),
-        .addsub => {
-            const sub = o.a & 1 != 0;
-            const S = o.a & 2 != 0;
-            const sf = o.a & 4 != 0;
-            const base = if (o.b == 1) zr(c, o.rn) else c.x[o.rn];
-            const t = operand2(c, o);
-            if (sf) {
-                const r = if (sub) subc(u64, base, t, 1) else addc(u64, base, t, 0);
-                if (S) {
-                    c.setNZCV(r.f);
-                    setX(c, o.rd, r.r);
-                } else c.x[o.rd] = r.r;
-            } else {
-                const r = if (sub) subc(u32, @truncate(base), @truncate(t), 1) else addc(u32, @truncate(base), @truncate(t), 0);
-                if (S) {
-                    c.setNZCV(r.f);
-                    setW(c, o.rd, r.r);
-                } else c.x[o.rd] = r.r;
-            }
-        },
+        .addsub => if (o.a & 4 != 0) addsub(u64, c, o) else addsub(u32, c, o),
         .logic => {
             const opc = o.a & 3;
             const sf = o.a & 4 != 0;
@@ -537,18 +518,7 @@ pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
             if (!sf) v &= 0xffff_ffff;
             setX(c, o.rd, v);
         },
-        .extr => {
-            const lsb: u32 = o.b;
-            if (o.a != 0) {
-                const hi = zr(c, o.rn);
-                const lo = zr(c, o.rm);
-                setX(c, o.rd, if (lsb == 0) lo else (lo >> @intCast(lsb)) | (hi << @intCast(64 - lsb)));
-            } else {
-                const hi: u32 = @truncate(zr(c, o.rn));
-                const lo: u32 = @truncate(zr(c, o.rm));
-                setW(c, o.rd, if (lsb == 0) lo else (lo >> @intCast(lsb)) | (hi << @intCast(32 - lsb)));
-            }
-        },
+        .extr => if (o.a != 0) extr(u64, c, o) else extr(u32, c, o),
         .b => {
             if (o.a != 0) c.x[30] = pc + 4;
             c.pc = o.imm;
@@ -608,29 +578,16 @@ pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
         },
         .ldp => {
             const kind = o.a & 3;
-            const L = o.a & 4 != 0;
             const opc = o.a >> 3;
-            const off: u64 = o.imm;
-            const base = if (kind == 1) c.x[o.rn] else c.x[o.rn] +% off;
+            const base = if (kind == 1) c.x[o.rn] else c.x[o.rn] +% o.imm;
             const a = addr(c, base) orelse return badAddr(c, pc);
-            if (kind == 1 or kind == 3) c.x[o.rn] +%= off;
-            if (L) {
-                if (opc == 2) {
-                    const v = ld(u64, a);
-                    const t = ld(u64, a + 8);
-                    setX(c, o.rd, v);
-                    setX(c, o.rm, t);
-                } else if (opc == 1) {
-                    setX(c, o.rd, @bitCast(@as(i64, ld(i32, a))));
-                    setX(c, o.rm, @bitCast(@as(i64, ld(i32, a + 4))));
-                } else {
-                    setW(c, o.rd, ld(u32, a));
-                    setW(c, o.rm, ld(u32, a + 4));
-                }
-            } else if (opc == 2) {
-                if (!st(u64, c, a, zr(c, o.rd)) or !st(u64, c, a + 8, zr(c, o.rm))) return badAddr(c, pc);
-            } else {
-                if (!st(u32, c, a, @truncate(zr(c, o.rd))) or !st(u32, c, a + 4, @truncate(zr(c, o.rm)))) return badAddr(c, pc);
+            if (kind == 1 or kind == 3) c.x[o.rn] +%= o.imm;
+            for ([_]u8{ o.rd, o.rm }, 0..) |t, k| {
+                const ea = a + (if (opc == 2) @as(u32, 8) else 4) * @as(u32, @intCast(k));
+                if (o.a & 4 != 0) {
+                    const v = if (opc == 2) ld(u64, ea) else ld(u32, ea);
+                    setX(c, t, if (opc == 1) bt.sxw(v) else v);
+                } else if (!(if (opc == 2) st(u64, c, ea, zr(c, t)) else st(u32, c, ea, @truncate(zr(c, t))))) return badAddr(c, pc);
             }
         },
         .excl => return exclusive(c, o, pc),
@@ -651,14 +608,7 @@ pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
             if (o.a == 1 or o.a == 2) c.x[o.rn] = if (o.a == 1) base +% o.imm else base;
             const load = opc != 0 and !(size == 3 and opc == 2);
             if (!load) {
-                const v = zr(c, o.rd);
-                const ok = switch (size) {
-                    0 => st(u8, c, a, @truncate(v)),
-                    1 => st(u16, c, a, @truncate(v)),
-                    2 => st(u32, c, a, @truncate(v)),
-                    else => st(u64, c, a, v),
-                };
-                if (!ok) return badAddr(c, pc);
+                if (!stSized(c, a, size, zr(c, o.rd))) return badAddr(c, pc);
             } else {
                 const v = ldSized(a, size);
                 const shl: u6 = @intCast(64 - (@as(u32, 8) << size));
@@ -666,29 +616,8 @@ pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
                 setX(c, o.rd, if (opc == 1 or size == 3) v else if (opc == 2) s else s & 0xffff_ffff);
             }
         },
-        .adc => {
-            const sub = o.a & 1 != 0;
-            const S = o.a & 2 != 0;
-            const cin: u1 = @intCast(c.cf());
-            if (o.a & 4 != 0) {
-                const r = addc(u64, zr(c, o.rn), if (sub) ~zr(c, o.rm) else zr(c, o.rm), cin);
-                if (S) c.setNZCV(r.f);
-                setX(c, o.rd, r.r);
-            } else {
-                const m: u32 = @truncate(zr(c, o.rm));
-                const r = addc(u32, @truncate(zr(c, o.rn)), if (sub) ~m else m, cin);
-                if (S) c.setNZCV(r.f);
-                setW(c, o.rd, r.r);
-            }
-        },
-        .ccmp => {
-            if (cond(c, o.b)) {
-                const sub = o.a & 1 != 0;
-                const rhs = if (o.a & 8 != 0) o.imm else zr(c, o.rm);
-                const f = if (o.a & 4 != 0) (if (sub) subc(u64, zr(c, o.rn), rhs, 1) else addc(u64, zr(c, o.rn), rhs, 0)).f else (if (sub) subc(u32, @truncate(zr(c, o.rn)), @truncate(rhs), 1) else addc(u32, @truncate(zr(c, o.rn)), @truncate(rhs), 0)).f;
-                c.setNZCV(f);
-            } else c.setNZCV(@as(u32, o.ra) << 28);
-        },
+        .adc => if (o.a & 4 != 0) adc(u64, c, o) else adc(u32, c, o),
+        .ccmp => if (!cond(c, o.b)) c.setNZCV(@as(u32, o.ra) << 28) else if (o.a & 4 != 0) ccmp(u64, c, o) else ccmp(u32, c, o),
         .csel => {
             const opc = o.a & 1;
             const op2 = (o.a >> 1) & 1;
@@ -700,55 +629,8 @@ pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
             }
             setX(c, o.rd, if (sf) v else v & 0xffff_ffff);
         },
-        .one => {
-            const opc = o.a & 7;
-            const sf = o.a & 8 != 0;
-            const x = zr(c, o.rn);
-            if (sf) {
-                const v: u64 = switch (opc) {
-                    0 => @bitReverse(x),
-                    1 => @bitCast(@byteSwap(@as(@Vector(4, u16), @bitCast(x)))),
-                    2 => @bitCast(@byteSwap(@as(@Vector(2, u32), @bitCast(x)))),
-                    3 => @byteSwap(x),
-                    4 => @clz(x),
-                    else => @clz(x ^ @as(u64, @bitCast(@as(i64, @bitCast(x)) >> 63))) - 1,
-                };
-                setX(c, o.rd, v);
-            } else {
-                const w: u32 = @truncate(x);
-                const v: u32 = switch (opc) {
-                    0 => @bitReverse(w),
-                    1 => @bitCast(@byteSwap(@as(@Vector(2, u16), @bitCast(w)))),
-                    2 => @byteSwap(w),
-                    4 => @clz(w),
-                    else => @clz(w ^ @as(u32, @bitCast(@as(i32, @bitCast(w)) >> 31))) - 1,
-                };
-                setW(c, o.rd, v);
-            }
-        },
-        .two => {
-            const opc = o.a & 63;
-            const sf = o.a & 64 != 0;
-            const a = zr(c, o.rn);
-            const m = zr(c, o.rm);
-            if (sf) {
-                const v: u64 = switch (opc) {
-                    2 => if (m == 0) 0 else a / m,
-                    3 => if (m == 0) 0 else @bitCast(@divTrunc(@as(i64, @bitCast(a)), @as(i64, @bitCast(m)))),
-                    else => shift(u64, a, o.a - 8, @intCast(m & 63)),
-                };
-                setX(c, o.rd, v);
-            } else {
-                const a32: u32 = @truncate(a);
-                const m32: u32 = @truncate(m);
-                const v: u32 = switch (opc) {
-                    2 => if (m32 == 0) 0 else a32 / m32,
-                    3 => if (m32 == 0) 0 else @bitCast(@divTrunc(@as(i32, @bitCast(a32)), @as(i32, @bitCast(m32)))),
-                    else => shift(u32, a32, o.a - 8, m32 & 31),
-                };
-                setW(c, o.rd, v);
-            }
-        },
+        .one => if (o.a & 8 != 0) one(u64, c, o) else one(u32, c, o),
+        .two => if (o.a & 64 != 0) two(u64, c, o) else two(u32, c, o),
         .three => {
             const op31 = o.a & 7;
             const o0 = o.a & 8 != 0;
@@ -772,11 +654,64 @@ pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
                 },
             }
         },
-        .simd => return simd.exec(c, @truncate(o.imm), pc),
-        .vldrlit => simd.ldrLit(c, o.rd, o.b, @truncate(o.imm)),
-        .vmem => return simd.memop(c, @truncate(o.imm), pc),
+        .simd => return simd.exec(c, @truncate(o.imm)),
+        .vldrlit => simd.vload(c, o.rd, @truncate(o.imm), @as(usize, 4) << @intCast(o.b)),
+        .vmem => return simd.memop(c, @truncate(o.imm)),
     }
     return .next;
+}
+
+fn Signed(comptime T: type) type {
+    return std.meta.Int(.signed, @bitSizeOf(T));
+}
+fn addsub(comptime T: type, c: *Cpu, o: *const Op) void {
+    const base: T = @truncate(if (o.b == 1) zr(c, o.rn) else c.x[o.rn]);
+    const t: T = @truncate(operand2(c, o));
+    const r = if (o.a & 1 != 0) subc(T, base, t, 1) else addc(T, base, t, 0);
+    if (o.a & 2 != 0) {
+        c.setNZCV(r.f);
+        setX(c, o.rd, r.r);
+    } else c.x[o.rd] = r.r;
+}
+fn extr(comptime T: type, c: *Cpu, o: *const Op) void {
+    const hi: T = @truncate(zr(c, o.rn));
+    const lo: T = @truncate(zr(c, o.rm));
+    setX(c, o.rd, if (o.b == 0) lo else (lo >> @intCast(o.b)) | (hi << @intCast(@bitSizeOf(T) - o.b)));
+}
+fn adc(comptime T: type, c: *Cpu, o: *const Op) void {
+    const m: T = @truncate(zr(c, o.rm));
+    const r = addc(T, @truncate(zr(c, o.rn)), if (o.a & 1 != 0) ~m else m, @intCast(c.cf()));
+    if (o.a & 2 != 0) c.setNZCV(r.f);
+    setX(c, o.rd, r.r);
+}
+fn ccmp(comptime T: type, c: *Cpu, o: *const Op) void {
+    const n: T = @truncate(zr(c, o.rn));
+    const rhs: T = @truncate(if (o.a & 8 != 0) o.imm else zr(c, o.rm));
+    c.setNZCV(if (o.a & 1 != 0) subc(T, n, rhs, 1).f else addc(T, n, rhs, 0).f);
+}
+fn one(comptime T: type, c: *Cpu, o: *const Op) void {
+    const x: T = @truncate(zr(c, o.rn));
+    const v: T = switch (o.a & 7) {
+        0 => @bitReverse(x),
+        1 => @bitCast(@byteSwap(@as(@Vector(@sizeOf(T) / 2, u16), @bitCast(x)))),
+        2 => if (T == u64) @bitCast(@byteSwap(@as(@Vector(2, u32), @bitCast(x)))) else @byteSwap(x),
+        3 => @byteSwap(x),
+        4 => @clz(x),
+        else => @clz(x ^ @as(T, @bitCast(@as(Signed(T), @bitCast(x)) >> (@bitSizeOf(T) - 1)))) - 1,
+    };
+    setX(c, o.rd, v);
+}
+fn two(comptime T: type, c: *Cpu, o: *const Op) void {
+    const a: T = @truncate(zr(c, o.rn));
+    const m: T = @truncate(zr(c, o.rm));
+    const as: Signed(T) = @bitCast(a);
+    const ms: Signed(T) = @bitCast(m);
+    const v: T = switch (o.a & 63) {
+        2 => if (m == 0) 0 else a / m,
+        3 => if (m == 0) 0 else if (ms == -1) 0 -% a else @bitCast(@divTrunc(as, ms)),
+        else => shift(T, a, o.a - 8, @intCast(m & (@bitSizeOf(T) - 1))),
+    };
+    setX(c, o.rd, v);
 }
 
 /// load/store exclusive, ordered, and compare-and-swap. Threads are cooperative and a slice

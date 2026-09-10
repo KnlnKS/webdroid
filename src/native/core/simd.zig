@@ -82,13 +82,7 @@ pub fn vfpImm(imm8: u32, dp: bool) u64 {
 }
 
 // ── memory
-pub fn ldrLit(c: *Cpu, rt: u8, opc: u8, a: u32) void {
-    var out: V align(16) = @splat(0);
-    const width: usize = @as(usize, 4) << @intCast(opc);
-    @memcpy(out[0..width], mem.bytes(a)[0..width]);
-    c.v[rt] = out;
-}
-inline fn vload(c: *Cpu, t: u8, a: u32, width: usize) void {
+pub inline fn vload(c: *Cpu, t: u8, a: u32, width: usize) void {
     var out: V align(16) = @splat(0);
     @memcpy(out[0..width], mem.bytes(a)[0..width]);
     c.v[t] = out;
@@ -108,8 +102,7 @@ inline fn vstore(c: *Cpu, t: u8, a: u32, width: usize) bool {
 inline fn wb(c: *Cpu, rn: u8, rm: u8, imm: u64) void {
     c.x[rn] +%= if (rm == 31) imm else a64.zr(c, rm);
 }
-pub fn memop(c: *Cpu, w: u32, pc: u32) Status {
-    _ = pc;
+pub fn memop(c: *Cpu, w: u32) Status {
     const rt: u8 = @intCast(w & 31);
     const rn: u8 = @intCast(bits(w, 5, 5));
     const rm: u8 = @intCast(bits(w, 16, 5));
@@ -286,8 +279,7 @@ pub fn expandImm(o: u32, cmode: u32, o2: u32, imm8: u32) ?struct { v: u64, kind:
     return .{ .v = vfpImm(imm8, true), .kind = .fmov };
 }
 
-pub fn exec(c: *Cpu, w: u32, pc: u32) Status {
-    _ = pc;
+pub fn exec(c: *Cpu, w: u32) Status {
     const rd: u8 = @intCast(w & 31);
     const rn: u8 = @intCast(bits(w, 5, 5));
     const rm: u8 = @intCast(bits(w, 16, 5));
@@ -404,10 +396,8 @@ pub fn exec(c: *Cpu, w: u32, pc: u32) Status {
         const opcode = bits(w, 12, 3);
         if (opcode == 0 or opcode == 4 or (size == 3 and !q)) return fault(c, w);
         return switch (size) {
-            0 => permute(u8, c, w, rd, rn, rm, q, opcode),
-            1 => permute(u16, c, w, rd, rn, rm, q, opcode),
-            2 => permute(u32, c, w, rd, rn, rm, q, opcode),
-            else => permute(u64, c, w, rd, rn, rm, q, opcode),
+            inline 0...3 => |sz| permute(std.meta.Int(.unsigned, 8 << sz), c, rd, rn, rm, q, opcode),
+            else => unreachable,
         };
     }
     // ── three-same, bitwise: AND/BIC/ORR/ORN, EOR/BSL/BIT/BIF
@@ -447,8 +437,7 @@ pub fn exec(c: *Cpu, w: u32, pc: u32) Status {
     return fault(c, w);
 }
 
-fn permute(comptime T: type, c: *Cpu, w: u32, rd: u8, rn: u8, rm: u8, q: bool, opcode: u32) Status {
-    _ = w;
+fn permute(comptime T: type, c: *Cpu, rd: u8, rn: u8, rm: u8, q: bool, opcode: u32) Status {
     const count: usize = (if (q) @as(usize, 16) else 8) / @sizeOf(T);
     const half = count / 2;
     var out: V align(16) = @splat(0);
@@ -474,18 +463,13 @@ const Ctx = struct {
     rd: u8,
     rn: u8,
     rm: u8,
-    q: bool, // the destination's Q (false for a scalar form)
+    q: bool,
     scalar: bool,
     U: bool,
     size: u32,
-    /// finish a vector or scalar integer result (a scalar B/H/S zeroes above its element)
+    fv: bool,
     fn finish(x: Ctx, comptime T: type, out: V) void {
-        if (x.scalar) {
-            var tmp: V align(16) = out;
-            var o: V align(16) = @splat(0);
-            L(T, &o)[0] = L(T, &tmp)[0];
-            x.c.v[x.rd] = o;
-        } else write(x.c, x.rd, out, x.q);
+        if (x.scalar) writeScalar(x.c, x.rd, T, std.mem.bytesToValue(T, out[0..@sizeOf(T)])) else write(x.c, x.rd, out, x.q);
     }
 };
 
@@ -500,6 +484,7 @@ fn vector(c: *Cpu, w: u32) ?Status {
         .q = (w & 0x10000000) == 0 and bits(w, 30, 1) != 0,
         .U = bits(w, 29, 1) != 0,
         .size = bits(w, 22, 2),
+        .fv = bits(w, 23, 1) != 0,
     };
     const vecOrScalar = (w & 0x10000000) == 0 or (w & 0x40000000) != 0;
     if (is(w, 0x8f200400, 0x0e200400) and vecOrScalar) return threeSame(x);
@@ -512,11 +497,6 @@ fn vector(c: *Cpu, w: u32) ?Status {
     return null;
 }
 
-inline fn intType(size: u32, signed: bool) type {
-    _ = size;
-    _ = signed;
-    return void;
-}
 /// dispatch on the element size to a comptime-typed body: body(T) where T is the lane type
 inline fn bySize(comptime f: anytype, x: Ctx, size: u32, signed: bool) Status {
     return switch (size) {
@@ -551,7 +531,6 @@ fn threeSame(x: Ctx) Status {
 fn threeSameF(comptime F: type, x: Ctx) Status {
     const c = x.c;
     const opcode = bits(x.w, 11, 5);
-    const fv = (x.size >> 1) & 1 != 0;
     const count = laneCount(x, F);
     var out: V align(16) = old(c, x.rd);
     const O = L(F, &out);
@@ -563,29 +542,29 @@ fn threeSameF(comptime F: type, x: Ctx) Status {
         const d = get(F, c, x.rd, i);
         const mask: U = std.math.maxInt(U);
         switch (opcode) {
-            24 => O[i] = if (!x.U) fp.fnm(F, n, m, !fv) else blk: {
+            24 => O[i] = if (!x.U) fp.fnm(F, n, m, !x.fv) else blk: {
                 const p = pair(F, x, i);
-                break :blk fp.fnm(F, p[0], p[1], !fv);
+                break :blk fp.fnm(F, p[0], p[1], !x.fv);
             },
             25 => {
                 if (x.U) return fault(c, x.w);
-                O[i] = fp.fma(F, if (fv) -n else n, m, d);
+                O[i] = fp.fma(F, if (x.fv) -n else n, m, d);
             },
-            26 => O[i] = if (!x.U) (if (fv) n - m else n + m) else if (fv) @abs(n - m) else blk: {
+            26 => O[i] = if (!x.U) (if (x.fv) n - m else n + m) else if (x.fv) @abs(n - m) else blk: {
                 const p = pair(F, x, i);
                 break :blk p[0] + p[1];
             },
             27 => O[i] = if (x.U) n * m else fp.fmulx(F, n, m),
-            28 => OU[i] = if (if (!x.U) n == m else if (fv) n > m else n >= m) mask else 0,
+            28 => OU[i] = if (if (!x.U) n == m else if (x.fv) n > m else n >= m) mask else 0,
             29 => {
                 if (!x.U) return fault(c, x.w);
-                OU[i] = if (if (fv) @abs(n) > @abs(m) else @abs(n) >= @abs(m)) mask else 0;
+                OU[i] = if (if (x.fv) @abs(n) > @abs(m) else @abs(n) >= @abs(m)) mask else 0;
             },
-            30 => O[i] = if (!x.U) (if (fv) fp.fmin(F, n, m) else fp.fmax(F, n, m)) else blk: {
+            30 => O[i] = if (!x.U) (if (x.fv) fp.fmin(F, n, m) else fp.fmax(F, n, m)) else blk: {
                 const p = pair(F, x, i);
-                break :blk if (fv) fp.fmin(F, p[0], p[1]) else fp.fmax(F, p[0], p[1]);
+                break :blk if (x.fv) fp.fmin(F, p[0], p[1]) else fp.fmax(F, p[0], p[1]);
             },
-            else => O[i] = if (x.U) n / m else if (fv) fp.fma(F, -n, m, 3) / 2 else fp.fma(F, -n, m, 2),
+            else => O[i] = if (x.U) n / m else if (x.fv) fp.fma(F, -n, m, 3) / 2 else fp.fma(F, -n, m, 2),
         }
     }
     x.finish(F, out);
@@ -665,8 +644,7 @@ fn threeSameI(comptime T: type, x: Ctx) Status {
 
 fn twoMisc(x: Ctx) Status {
     const opcode = bits(x.w, 12, 5);
-    const fv = (x.size >> 1) & 1 != 0;
-    if (opcode >= 22 or (opcode >= 12 and opcode <= 15 and fv)) return byFloat(twoMiscF, x);
+    if (opcode >= 22 or (opcode >= 12 and opcode <= 15 and x.fv)) return byFloat(twoMiscF, x);
     return bySize(twoMiscI, x, x.size, !x.U);
 }
 inline fn roundMode(comptime F: type, c: *Cpu, v: F, mode: u8) F {
@@ -682,7 +660,6 @@ inline fn roundMode(comptime F: type, c: *Cpu, v: F, mode: u8) F {
 fn twoMiscF(comptime F: type, x: Ctx) Status {
     const c = x.c;
     const opcode = bits(x.w, 12, 5);
-    const fv = (x.size >> 1) & 1 != 0;
     const count = laneCount(x, F);
     const U = std.meta.Int(.unsigned, @bitSizeOf(F));
     const I = std.meta.Int(.signed, @bitSizeOf(F));
@@ -693,13 +670,13 @@ fn twoMiscF(comptime F: type, x: Ctx) Status {
     const mask: U = std.math.maxInt(U);
     switch (opcode) {
         22 => {
-            if (x.U or fv) return fault(c, x.w);
+            if (x.U or x.fv) return fault(c, x.w);
             // FCVTN(2): .2s from .2d, or .4h from .4s
             var narrow: [8]u8 align(8) = undefined;
             if (F == f64) {
                 for (0..2) |i| @as(*align(4) [2]f32, @ptrCast(&narrow))[i] = @floatCast(get(f64, c, x.rn, i));
             } else {
-                for (0..4) |i| @as(*align(2) [4]u16, @ptrCast(&narrow))[i] = fp.f2hs(get(u32, c, x.rn, i));
+                for (0..4) |i| @as(*align(2) [4]u16, @ptrCast(&narrow))[i] = fp.f2hb(f32, get(u32, c, x.rn, i));
             }
             return narrowed(x, narrow, if (F == f64) 4 else 2);
         },
@@ -719,15 +696,15 @@ fn twoMiscF(comptime F: type, x: Ctx) Status {
     for (0..count) |i| {
         const n = get(F, c, x.rn, i);
         switch (opcode) {
-            24 => O[i] = roundMode(F, c, n, if (x.U) (if (fv) 'X' else 'A') else if (fv) 'P' else 'N'),
-            25 => O[i] = roundMode(F, c, n, if (x.U) 'X' else if (fv) 'Z' else 'M'),
+            24 => O[i] = roundMode(F, c, n, if (x.U) (if (x.fv) 'X' else 'A') else if (x.fv) 'P' else 'N'),
+            25 => O[i] = roundMode(F, c, n, if (x.U) 'X' else if (x.fv) 'Z' else 'M'),
             26, 27, 28 => {
-                if (opcode == 28 and fv) return fault(c, x.w);
-                const mode: u8 = if (opcode == 26) (if (fv) 'P' else 'N') else if (opcode == 27) (if (fv) 'Z' else 'M') else 'A';
+                if (opcode == 28 and x.fv) return fault(c, x.w);
+                const mode: u8 = if (opcode == 26) (if (x.fv) 'P' else 'N') else if (opcode == 27) (if (x.fv) 'Z' else 'M') else 'A';
                 const r = roundMode(F, c, n, mode);
                 if (x.U) OU[i] = fp.toInt(U, r) else OI[i] = fp.toInt(I, r);
             },
-            29 => O[i] = if (!fv) (if (x.U) @floatFromInt(get(U, c, x.rn, i)) else @floatFromInt(get(I, c, x.rn, i))) else if (x.U) fp.rsqrte(F, n) else fp.recpe(F, n),
+            29 => O[i] = if (!x.fv) (if (x.U) @floatFromInt(get(U, c, x.rn, i)) else @floatFromInt(get(I, c, x.rn, i))) else if (x.U) fp.rsqrte(F, n) else fp.recpe(F, n),
             31 => {
                 if (x.U) O[i] = @sqrt(n) else if (x.scalar) O[i] = fp.recpx(F, n) else return fault(c, x.w);
             },
@@ -866,7 +843,6 @@ fn twoMiscI(comptime T: type, x: Ctx) Status {
 fn across(x: Ctx) Status {
     const c = x.c;
     const opcode = bits(x.w, 12, 5);
-    const fv = (x.size >> 1) & 1 != 0;
     if (x.scalar) {
         // pairwise: two lanes of Vn into one scalar
         if (!x.U and opcode == 27) {
@@ -879,7 +855,7 @@ fn across(x: Ctx) Status {
     if (x.U and (opcode == 12 or opcode == 15)) {
         if (x.size & 1 != 0 or !x.q) return fault(c, x.w);
         var a = get(f32, c, x.rn, 0);
-        for (1..4) |i| a = if (opcode == 15) (if (fv) fp.fmin(f32, a, get(f32, c, x.rn, i)) else fp.fmax(f32, a, get(f32, c, x.rn, i))) else fp.fnm(f32, a, get(f32, c, x.rn, i), !fv);
+        for (1..4) |i| a = if (opcode == 15) (if (x.fv) fp.fmin(f32, a, get(f32, c, x.rn, i)) else fp.fmax(f32, a, get(f32, c, x.rn, i))) else fp.fnm(f32, a, get(f32, c, x.rn, i), !x.fv);
         writeScalar(c, x.rd, f32, a);
         return .next;
     }
@@ -889,13 +865,12 @@ fn across(x: Ctx) Status {
 fn pairwiseF(comptime F: type, x: Ctx) Status {
     const c = x.c;
     const opcode = bits(x.w, 12, 5);
-    const fv = (x.size >> 1) & 1 != 0;
     const a = get(F, c, x.rn, 0);
     const b = get(F, c, x.rn, 1);
     const r: F = switch (opcode) {
-        12 => fp.fnm(F, a, b, !fv),
+        12 => fp.fnm(F, a, b, !x.fv),
         13 => a + b,
-        15 => if (fv) fp.fmin(F, a, b) else fp.fmax(F, a, b),
+        15 => if (x.fv) fp.fmin(F, a, b) else fp.fmax(F, a, b),
         else => return fault(c, x.w),
     };
     writeScalar(c, x.rd, F, r);
@@ -916,21 +891,7 @@ fn acrossI(comptime T: type, x: Ctx) Status {
             else => return fault(c, x.w),
         };
     }
-    switch (opcode) {
-        3 => {
-            if (@bitSizeOf(T) == 32) writeScalar(c, x.rd, W, acc) else writeScalar(c, x.rd, W, acc);
-            if (@bitSizeOf(W) < 32) {
-                var o: V align(16) = @splat(0);
-                L(u32, &o)[0] = @as(Unsigned(W), @bitCast(acc));
-                c.v[x.rd] = o;
-            }
-        },
-        else => {
-            var o: V align(16) = @splat(0);
-            if (@bitSizeOf(T) < 32) L(u32, &o)[0] = @as(Unsigned(T), @bitCast(@as(T, @truncate(acc)))) else L(T, &o)[0] = @truncate(acc);
-            c.v[x.rd] = o;
-        },
-    }
+    if (opcode == 3) writeScalar(c, x.rd, Unsigned(W), @bitCast(acc)) else writeScalar(c, x.rd, Unsigned(T), @truncate(@as(Unsigned(W), @bitCast(acc))));
     return .next;
 }
 
@@ -1147,12 +1108,7 @@ fn threeDifferentT(comptime T: type, x: Ctx) Status {
             const r: WU = (if (opcode == 4) n +% m else n -% m) +% (if (x.U) @as(WU, 1) << (bitsT - 1) else 0);
             LN(Unsigned(T), &narrow)[i] = @truncate(r >> bitsT);
         }
-        if (q) @memcpy(c.v[x.rd][8..16], &narrow) else {
-            var o: V align(16) = @splat(0);
-            @memcpy(o[0..8], &narrow);
-            c.v[x.rd] = o;
-        }
-        return .next;
+        return narrowed(x, narrow, @sizeOf(T));
     }
     const O = L(W, &out);
     for (0..wcount) |i| {
@@ -1217,7 +1173,6 @@ fn fpT(comptime F: type, c: *Cpu, w: u32) Status {
     const sf = w >> 31 != 0;
     const dp = F == f64;
     const U = std.meta.Int(.unsigned, @bitSizeOf(F));
-    const I = std.meta.Int(.signed, @bitSizeOf(F));
     const n = get(F, c, rn, 0);
     const m = get(F, c, rm, 0);
     // FP <-> integer conversion, and the FMOV general forms
@@ -1236,9 +1191,7 @@ fn fpT(comptime F: type, c: *Cpu, w: u32) Status {
             return .next;
         }
         if (opcode == 2 or opcode == 3) {
-            const src = a64.zr(c, rn);
-            const v: F = if (sf) (if (opcode == 2) @floatFromInt(@as(i64, @bitCast(src))) else @floatFromInt(src)) else (if (opcode == 2) @floatFromInt(@as(i32, @truncate(@as(i64, @bitCast(src))))) else @floatFromInt(@as(u32, @truncate(src))));
-            writeScalar(c, rd, F, v);
+            writeScalar(c, rd, F, cvtInt(F, a64.zr(c, rn), sf, opcode == 2));
             return .next;
         }
         if (opcode <= 1 or opcode == 4 or opcode == 5) {
@@ -1256,9 +1209,7 @@ fn fpT(comptime F: type, c: *Cpu, w: u32) Status {
         const fbits: i32 = 64 - @as(i32, @intCast(bits(w, 10, 6)));
         const scale = std.math.ldexp(@as(F, 1), fbits);
         if (rmode == 0 and (opcode == 2 or opcode == 3)) {
-            const src = a64.zr(c, rn);
-            const v: F = if (sf) (if (opcode == 2) @floatFromInt(@as(i64, @bitCast(src))) else @floatFromInt(src)) else (if (opcode == 2) @floatFromInt(@as(i32, @truncate(@as(i64, @bitCast(src))))) else @floatFromInt(@as(u32, @truncate(src))));
-            writeScalar(c, rd, F, v / scale);
+            writeScalar(c, rd, F, cvtInt(F, a64.zr(c, rn), sf, opcode == 2) / scale);
             return .next;
         }
         if (rmode == 3 and opcode <= 1) {
@@ -1275,7 +1226,7 @@ fn fpT(comptime F: type, c: *Cpu, w: u32) Status {
             switch (to) {
                 0 => if (dp) writeScalar(c, rd, f32, @floatCast(n)) else return fault(c, w),
                 1 => if (!dp) writeScalar(c, rd, f64, n) else return fault(c, w),
-                3 => writeScalar(c, rd, u16, if (dp) fp.f2hd(@bitCast(n)) else fp.f2hs(@bitCast(n))),
+                3 => writeScalar(c, rd, u16, fp.f2hb(F, @bitCast(n))),
                 else => return fault(c, w),
             }
             return .next;
@@ -1349,10 +1300,12 @@ fn fpT(comptime F: type, c: *Cpu, w: u32) Status {
         writeScalar(c, rd, F, v);
         return .next;
     }
-    _ = I;
     return fault(c, w);
 }
-/// an integer-valued float into Wd/Xd, saturating; NaN is 0
+fn cvtInt(comptime F: type, src: u64, sf: bool, signed: bool) F {
+    if (sf) return if (signed) @floatFromInt(@as(i64, @bitCast(src))) else @floatFromInt(src);
+    return if (signed) @floatFromInt(@as(i32, @truncate(@as(i64, @bitCast(src))))) else @floatFromInt(@as(u32, @truncate(src)));
+}
 fn toIntReg(c: *Cpu, rd: u8, sf: bool, unsigned: bool, t: anytype) void {
     if (sf) {
         a64.setX(c, rd, if (unsigned) fp.toInt(u64, t) else @bitCast(fp.toInt(i64, t)));

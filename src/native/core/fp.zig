@@ -192,15 +192,11 @@ pub fn f2h(x0: f64) u16 {
     if (e > 15) return s | 0x7c00;
     return s | (@as(u16, @intCast(e + 15)) << 10) | @as(u16, @intFromFloat(m));
 }
-/// a float's bits to half: a NaN keeps its sign and top payload bits, quieted
-pub fn f2hs(b: u32) u16 {
-    if ((b & 0x7fff_ffff) > 0x7f80_0000) return @intCast(((b >> 16) & 0x8000) | 0x7e00 | ((b >> 13) & 0x1ff));
-    return f2h(@as(f32, @bitCast(b)));
-}
-pub fn f2hd(b: u64) u16 {
-    const hi: u32 = @intCast(b >> 32);
-    if ((hi & 0x7fff_ffff) > 0x7ff0_0000 or ((hi & 0x7fff_ffff) == 0x7ff0_0000 and @as(u32, @truncate(b)) != 0)) return @intCast(((hi >> 16) & 0x8000) | 0x7e00 | ((hi >> 10) & 0x1ff));
-    return f2h(@as(f64, @bitCast(b)));
+pub fn f2hb(comptime F: type, b: std.meta.Int(.unsigned, @bitSizeOf(F))) u16 {
+    const x: F = @bitCast(b);
+    if (!isNan(x)) return f2h(x);
+    const hi: u32 = @intCast(b >> (@bitSizeOf(F) - 32));
+    return @intCast(((hi >> 16) & 0x8000) | 0x7e00 | ((hi >> (if (F == f32) 13 else 10)) & 0x1ff));
 }
 /// the flags FCMP leaves: less 1000, equal 0110, greater 0010, unordered 0011
 pub fn fcmp(a: anytype, b: @TypeOf(a)) u32 {
