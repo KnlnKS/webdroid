@@ -9,7 +9,7 @@ let q: Promise<unknown> = Promise.resolve();
 
 /** Debug: set true to record where the job that is currently hogging the queue came from. */
 /** phase: which stage of the frame the main job is in, so a stuck frame names it */
-export const mainDbg = { trace: false, running: "", started: 0, depth: 0, phase: "" };
+export const mainDbg = { trace: false, running: "", started: 0, depth: 0, queued: 0, phase: "" };
 
 /**
  * Are we running inside a main-looper job right now? Thread identity is NOT the same
@@ -21,10 +21,12 @@ export function inMainJob(): boolean { return mainDbg.depth > 0; }
 
 export function onMain<T>(job: () => Promise<T> | T): Promise<T> {
   const site = mainDbg.trace ? new Error().stack ?? "" : "";
+  mainDbg.queued++;
   const p = q.then(async () => {
     await mainThread.untilIdle();                                               // main blocked in a native call dispatches nothing until it returns
     const prev = curThread;
     setCurThread(mainThread);
+    mainDbg.queued--;
     mainDbg.depth++;
     if (mainDbg.trace) { mainDbg.running = site; mainDbg.started = Date.now(); }
     try {

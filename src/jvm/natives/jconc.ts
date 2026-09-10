@@ -1,6 +1,7 @@
 // java.util.concurrent.* — cooperative single-JS-thread implementations.
 
 import { rt, JObj, maySuspend, type NativeSpec, type ClassInfo } from "../runtime";
+import { parkTimeout, unparkTimeout } from "../yield";
 import { vcall, newObj, JThread, JEnum, setCurThread, curThread, park, defineException } from "./jlang";
 import { JList, newArrayList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods } from "./jutil";
 import { JRandom, randomSeed } from "./jrandom";
@@ -239,7 +240,7 @@ async function futureGet(f: JFuture) {
 async function futureGetTimed(f: JFuture, d: bigint, u: JTimeUnit) {
   if (!f.done && f.promise) {
     const late = {};
-    const first = await Promise.race([f.promise, new Promise((r) => setTimeout(() => r(late), Number(d) * u.ms))]);
+    const first = await Promise.race([f.promise, new Promise((r) => parkTimeout(() => r(late), Number(d) * u.ms))]);
     if (first === late && !f.done) throw rt.mkThrowable("java/util/concurrent/TimeoutException", null);
   }
   return futureGet(f);
@@ -616,9 +617,9 @@ class JSemaphore extends JObj {
     if (this.permits >= n) { this.permits -= n; return 1; }
     if (ms !== undefined && ms <= 0) return 0;
     return new Promise<number>((r) => {
-      const w = { n, wake: () => { clearTimeout(id); r(1); } };
+      const w = { n, wake: () => { unparkTimeout(id); r(1); } };
       this.q.push(w);
-      const id = ms === undefined ? undefined : setTimeout(() => { this.q.splice(this.q.indexOf(w), 1); r(0); }, ms);
+      const id = ms === undefined ? undefined : parkTimeout(() => { this.q.splice(this.q.indexOf(w), 1); r(0); }, ms);
     });
   }
   release(n: number): void {
@@ -990,18 +991,18 @@ rt.register({
     "acquireSharedInterruptibly(I)V": function (this: JAQS, a: number) { return aqsAcquire(this, a, true); },
     "tryAcquireNanos(IJ)Z": async function (this: JAQS, a: number, ns: bigint) {
       let done = false;
-      const t = setTimeout(() => { done = true; for (const w of this.q.splice(0)) w(); }, Number(ns) / 1e6);
+      const t = parkTimeout(() => { done = true; for (const w of this.q.splice(0)) w(); }, Number(ns) / 1e6);
       for (;;) {
-        if (await vcall(this, "tryAcquire", D_TA, a)) { clearTimeout(t); return 1; }
+        if (await vcall(this, "tryAcquire", D_TA, a)) { unparkTimeout(t); return 1; }
         if (done) return 0;
         await new Promise<void>((r) => this.q.push(r));
       }
     },
     "tryAcquireSharedNanos(IJ)Z": async function (this: JAQS, a: number, ns: bigint) {
       let done = false;
-      const t = setTimeout(() => { done = true; for (const w of this.q.splice(0)) w(); }, Number(ns) / 1e6);
+      const t = parkTimeout(() => { done = true; for (const w of this.q.splice(0)) w(); }, Number(ns) / 1e6);
       for (;;) {
-        if (((await vcall(this, "tryAcquireShared", D_TAS, a)) as number) >= 0) { clearTimeout(t); for (const w of this.q.splice(0)) w(); return 1; }
+        if (((await vcall(this, "tryAcquireShared", D_TAS, a)) as number) >= 0) { unparkTimeout(t); for (const w of this.q.splice(0)) w(); return 1; }
         if (done) return 0;
         await new Promise<void>((r) => this.q.push(r));
       }

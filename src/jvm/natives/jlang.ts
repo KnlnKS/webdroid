@@ -2,6 +2,7 @@
 // Strings are JS string primitives (String.prototype carries mangled Java methods).
 
 import { rt, JObj, maySuspend, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
+import { parkTimeout, unparkTimeout } from "../yield";
 import { directionality } from "../bidi";
 import { encodeString } from "../charset";
 import { javaClassSets } from "../regex-sets";
@@ -1419,10 +1420,10 @@ export function park(t: JThread, arm: (wake: () => void) => () => void, timeoutM
   if (t.interrupted) { t.interrupted = 0; return Promise.reject(ie()); }
   return new Promise<boolean>((resolve, reject) => {
     let id: ReturnType<typeof setTimeout> | undefined;
-    const disarm = arm(() => { t.wake = null; clearTimeout(id); resolve(true); });
+    const disarm = arm(() => { t.wake = null; unparkTimeout(id); resolve(true); });
     // a delay past 2^31-1 ms overflows setTimeout and fires at once; treat it as untimed
-    if (timeoutMs !== undefined && timeoutMs < 0x7fffffff) id = setTimeout(() => { disarm(); t.wake = null; resolve(false); }, timeoutMs);
-    t.wake = () => { disarm(); t.wake = null; clearTimeout(id); t.interrupted = 0; reject(ie()); };
+    if (timeoutMs !== undefined && timeoutMs < 0x7fffffff) id = parkTimeout(() => { disarm(); t.wake = null; resolve(false); }, timeoutMs);
+    t.wake = () => { disarm(); t.wake = null; unparkTimeout(id); t.interrupted = 0; reject(ie()); };
   });
 }
 
@@ -1430,8 +1431,8 @@ function join(t: JThread, ms: number): Promise<void> | undefined {
   const done = t.done;
   if (!done || ms <= 0) return done ?? undefined;
   return new Promise((resolve) => {
-    const id = setTimeout(resolve, ms);
-    void done.then(() => { clearTimeout(id); resolve(); });
+    const id = parkTimeout(resolve, ms);
+    void done.then(() => { unparkTimeout(id); resolve(); });
   });
 }
 

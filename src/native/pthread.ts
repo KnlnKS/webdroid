@@ -4,6 +4,7 @@
 import { mem, AddrMap, NativeFault } from "./mem";
 import { hostLib, NORET, type HostFn, stp, stpVa } from "./host";
 import { Cpu, bindCpu, cpuByTid, cpuOf, yieldToLoop } from "./cpu";
+import { parkTimeout, unparkTimeout } from "../jvm/yield";
 import { RET_SENTINEL, E } from "./abi";
 import { JThread, reportUncaught, threadExit } from "../jvm/natives/jlang";
 import { readTs, fail } from "./libc";
@@ -89,9 +90,9 @@ export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: numbe
     if (!q) futexes.set(addr, (q = []));
     fstat(cpu, ms === null ? "wait" : "timedwait:" + Math.round(ms));
     return new Promise<number>((r) => {
-      const w = (woken: boolean) => { clearTimeout(id); fstat(cpu, woken ? "woken" : "timeout"); r(woken ? 0 : fail(cpu, E.TIMEDOUT)); };
+      const w = (woken: boolean) => { unparkTimeout(id); fstat(cpu, woken ? "woken" : "timeout"); r(woken ? 0 : fail(cpu, E.TIMEDOUT)); };
       q.push(w);
-      const id = ms === null ? undefined : setTimeout(() => { const i = q.indexOf(w); if (i >= 0) { q.splice(i, 1); w(false); } }, Math.max(0, ms));
+      const id = ms === null ? undefined : parkTimeout(() => { const i = q.indexOf(w); if (i >= 0) { q.splice(i, 1); w(false); } }, Math.max(0, ms));
     });
   }
   if (cmd === 1 || cmd === 10) {                                                // FUTEX_WAKE / FUTEX_WAKE_BITSET
@@ -115,9 +116,9 @@ function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | nul
   const L = list;
   return new Promise<boolean>((res) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const wake = (timedOut: boolean) => { if (timer !== undefined) clearTimeout(timer); res(timedOut); };
+    const wake = (timedOut: boolean) => { unparkTimeout(timer); res(timedOut); };
     L.push(wake);
-    if (timed(timeoutMs) !== null) timer = setTimeout(() => { const i = L.indexOf(wake); if (i >= 0) L.splice(i, 1); res(true); }, Math.max(0, timeoutMs!));
+    if (timed(timeoutMs) !== null) timer = parkTimeout(() => { const i = L.indexOf(wake); if (i >= 0) L.splice(i, 1); res(true); }, Math.max(0, timeoutMs!));
   }).then(async (timedOut) => {
     const r = lock(cpu, m);
     if (r instanceof Promise) await r;
@@ -285,12 +286,12 @@ export function pthreadInit(): void {
       if (s.count > 0) { s.count--; return 0; }
       const ms = timed(absMs(ts) - Date.now());
       return new Promise<number>((r) => {
-        const w = () => { clearTimeout(t); r(0); };
-        const t = ms === null ? undefined : setTimeout(() => { const i = s.waiters.indexOf(w); if (i >= 0) { s.waiters.splice(i, 1); mem.st32(cpu.errnoAddr, ETIMEDOUT); r(-1); } }, Math.max(0, ms));
+        const w = () => { unparkTimeout(t); r(0); };
+        const t = ms === null ? undefined : parkTimeout(() => { const i = s.waiters.indexOf(w); if (i >= 0) { s.waiters.splice(i, 1); mem.st32(cpu.errnoAddr, ETIMEDOUT); r(-1); } }, Math.max(0, ms));
         s.waiters.push(w);
       });
     },
-    sem_clockwait: (cpu, a) => { const s = semOf(a.p()); a.i(); const ts = a.p(); if (s.count > 0) { s.count--; return 0; } void cpu; const ms = timed(absMs(ts) - Date.now()); return new Promise<number>((r) => { if (ms !== null) setTimeout(() => r(-1), Math.max(0, ms)); s.waiters.push(() => r(0)); }); },
+    sem_clockwait: (cpu, a) => { const s = semOf(a.p()); a.i(); const ts = a.p(); if (s.count > 0) { s.count--; return 0; } void cpu; const ms = timed(absMs(ts) - Date.now()); return new Promise<number>((r) => { if (ms !== null) parkTimeout(() => r(-1), Math.max(0, ms)); s.waiters.push(() => r(0)); }); },
     clock_nanosleep: (_c, a) => { const clk = a.i(), flags = a.i(), req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, 16); const ms = readTs(req); return sleepMs(flags & 1 ? ms - (clk === 0 ? Date.now() : performance.now() + 1000) : ms); },
     // sleeping
     usleep: (_c, a) => sleepMs(a.u() / 1000),

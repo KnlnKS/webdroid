@@ -28,6 +28,7 @@ import { allSurfaces, probeSurface } from "./android/glview";
 import { device, parseScreen, readStoredScreen, storeScreen, type Screen } from "./shell/config";
 import { openInstallRemote } from "./shell/install";
 import { vfs } from "./jvm/natives/jio";
+import { yieldStats, timedParks } from "./jvm/yield";
 
 const root = document.getElementById("root")!;
 
@@ -229,7 +230,7 @@ const tap = async (x: number, y: number) => {
 rt.auditNatives = new URLSearchParams(location.search).get("natcheck") === "1";
 
 const wd = {
-  rt, uiState, overlays, perf, perfReset, mainDbg, suspends: suspendTrace, setGL, logs: logBuf, ticks: 0, native, vfs,
+  rt, uiState, overlays, perf, perfReset, mainDbg, yields: yieldStats, timedParks, suspends: suspendTrace, setGL, logs: logBuf, ticks: 0, native, vfs,
   surfaces: () => allSurfaces.map((s) => ({ view: s.view?.constructor.name, width: s.width, height: s.height, frames: s.frames, present: !!s.present })), probeSurface,
   // The JVM's own entry points, so a script can drive real bytecode from the page the way
   // scripts/fwtest.ts drives it headless. That is the only way to exercise anything needing
