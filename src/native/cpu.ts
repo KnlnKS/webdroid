@@ -4,7 +4,7 @@
 
 import { JThread, setCurThread } from "../jvm/natives/jlang";
 import { NativeFault, mem } from "./mem";
-import { core, jitDrain } from "./core";
+import { core, jitDrain, TLS_KEYS } from "./core";
 import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs } from "./host";
 import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
@@ -24,7 +24,7 @@ export type CallArg = number | bigint | { f: number } | { d: number };
 
 // the struct layout, from the core rather than spelled twice
 const L = (i: number) => core.layout(i);
-const SIZE = L(0), OFF_X = L(1), OFF_PC = L(2), OFF_V = L(3), OFF_CPSR = L(4), OFF_FPCR = L(5), OFF_FPSR = L(6), OFF_EXCL = L(7), OFF_TLS = L(8), OFF_IC = L(9), OFF_BPC = L(10), OFF_A64 = L(12), OFF_EXIT = L(13), OFF_WORD = L(14), OFF_ADDR = L(15), OFF_ERRNO = L(17);
+const SIZE = L(0), OFF_X = L(1), OFF_PC = L(2), OFF_V = L(3), OFF_CPSR = L(4), OFF_FPCR = L(5), OFF_FPSR = L(6), OFF_EXCL = L(7), OFF_TLS = L(8), OFF_IC = L(9), OFF_BPC = L(10), OFF_A64 = L(12), OFF_EXIT = L(13), OFF_WORD = L(14), OFF_ADDR = L(15), OFF_ERRNO = L(17), OFF_TLSTAB = L(18);
 /** the architectural state a nested call saves and restores: registers, pc, V file, flags, monitor */
 const ARCH_SIZE = L(16);
 const FAULTS = ["unimplemented", "undefined", "bad address", "misaligned pc", "dc zva", "brk", "svc: unsupported syscall", "system register", "null page"];
@@ -92,7 +92,8 @@ export class Cpu {
   stackBase = 0; stackTop = 0;
   errnoAddr = 0;
   env = 0;
-  tls = new Map<number, bigint>();
+  /** the pthread key table: TLS_KEYS guest pointers, read and written by the core */
+  tlsTab = 0;
   pending: Promise<unknown> | null = null;
   /** signals queued for this thread, delivered at its next slice boundary */
   signals: number[] = [];
@@ -108,11 +109,14 @@ export class Cpu {
     mem.initHooks.push(() => this.views());
     this.args = A64 ? new Args64(this) : new Args(this);
     this.setAbi(A64);
-    this.threadData = mem.calloc(1, 264);
+    // the TLS block, errno, then the pthread key table the core serves lookups from
+    this.threadData = mem.calloc(1, 264 + 8 * TLS_KEYS);
     if (!this.threadData) throw new NativeFault("[native] out of memory for thread data");
     this.tlsBase = this.threadData;
     this.errnoAddr = this.threadData + 256;
     this.u32[OFF_ERRNO >> 2] = this.errnoAddr;
+    this.tlsTab = this.threadData + 264;
+    this.u32[OFF_TLSTAB >> 2] = this.tlsTab;
     cpus.add(this);
   }
   private views(): void {
@@ -247,7 +251,7 @@ export class Cpu {
     if (this.stackTop) mem.freeStack(this.stackBase, this.stackTop);
     mem.free(this.threadData); mem.free(this.env);
     this.threadData = this.errnoAddr = this.env = this.stackBase = this.stackTop = 0;
-    this.tls.clear(); this.signals.length = 0;
+    this.signals.length = 0;
     cpus.delete(this);
     if (byThread.get(this.jthread) === this) byThread.delete(this.jthread);
     core.cpu_free(this.base);

@@ -4,6 +4,7 @@
 import { mem, AddrMap, NativeFault } from "./mem";
 import { hostLib, NORET, type HostFn, stp, stpVa } from "./host";
 import { Cpu, bindCpu, cpuByTid, yieldToLoop } from "./cpu";
+import { TLS_KEYS } from "./core";
 import { RET_SENTINEL, E } from "./abi";
 import { JThread, reportUncaught } from "../jvm/natives/jlang";
 import { readTs, fail } from "./libc";
@@ -128,10 +129,10 @@ function startThread(parent: Cpu, start: number, arg: bigint, detached: boolean)
           // key destructors, as many rounds as they keep setting values (Bionic stops at four)
           for (let round = 0, again = true; again && round < 4; round++) {
             again = false;
-            for (const [k, v] of cpu.tls) {
-              const d = keyDtors.get(k);
-              if (!v || !d) continue;
-              cpu.tls.set(k, 0n); again = true; cpu.finished = false;
+            for (const [k, d] of keyDtors) {
+              const v = mem.ld64(cpu.tlsTab + 8 * k);
+              if (!v) continue;
+              mem.st64(cpu.tlsTab + 8 * k, 0n); again = true; cpu.finished = false;
               await cpu.call(d, [v], "key destructor");
             }
           }
@@ -234,7 +235,7 @@ export function pthreadInit(): void {
     pthread_cond_signal: (_c, a) => { const l = conds.get(a.p()); const w = l?.shift(); if (w) w(false); return 0; },
     pthread_cond_broadcast: (_c, a) => { const l = conds.get(a.p()); if (l) for (const w of l.splice(0)) w(false); return 0; },
     pthread_condattr_init: () => 0, pthread_condattr_destroy: () => 0, pthread_condattr_setclock: () => 0, pthread_condattr_setpshared: () => 0,
-    pthread_key_create: (_c, a) => { const out = a.p(), dtor = a.p(); if (dtor) keyDtors.set(keySeq, dtor); mem.st32(out, keySeq++); return 0; },
+    pthread_key_create: (_c, a) => { const out = a.p(), dtor = a.p(); if (keySeq >= TLS_KEYS) return E.AGAIN; if (dtor) keyDtors.set(keySeq, dtor); mem.st32(out, keySeq++); return 0; },
     pthread_rwlock_init: (_c, a) => { rwlocks.set(a.p(), { readers: 0, writer: 0, waiters: [] }); return 0; },
     pthread_rwlock_destroy: (_c, a) => { rwlocks.delete(a.p()); return 0; },
     pthread_rwlock_rdlock: (cpu, a) => rwAcquire(cpu, rwOf(a.p()), false),
@@ -251,8 +252,9 @@ export function pthreadInit(): void {
     pthread_cond_clockwait: (cpu, a) => { const c = a.p(), m = a.p(), clk = a.i(), ts = a.p(); return condWait(cpu, c, m, absMs(ts) - (clk === 0 ? Date.now() : performance.now() + 1000)); },
     pthread_mutex_clocklock: (cpu, a) => lock(cpu, mutexOf(a.p())),
     pthread_key_delete: (_c, a) => { keyDtors.delete(a.i()); return 0; },
-    pthread_getspecific: (cpu, a) => cpu.tls.get(a.i()) ?? 0n,
-    pthread_setspecific: (cpu, a) => { const k = a.i(), v = a.va(); cpu.tls.set(k, v); return 0; },
+    // the core serves these from the same table (libc.zig); the host keeps them for the tracer
+    pthread_getspecific: (cpu, a) => { const k = a.i(); return k < TLS_KEYS ? mem.ld64(cpu.tlsTab + 8 * k) : 0n; },
+    pthread_setspecific: (cpu, a) => { const k = a.i(), v = a.va(); if (k >= TLS_KEYS) return E.INVAL; mem.st64(cpu.tlsTab + 8 * k, typeof v === "bigint" ? v : BigInt(v >>> 0)); return 0; },
     // the control word: 0 untouched, 1 running (callers wait), 2 done — no caller returns before the initializer has
     pthread_once: async (cpu, a) => {
       const once = a.p(), fn = a.p();

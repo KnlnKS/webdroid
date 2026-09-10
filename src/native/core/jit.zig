@@ -91,6 +91,7 @@ const OFF_IC = @offsetOf(Cpu, "ic");
 const OFF_LIMIT = @offsetOf(Cpu, "ic_limit");
 const OFF_BPC = @offsetOf(Cpu, "bpc");
 const OFF_EXCL = @offsetOf(Cpu, "excl");
+const OFF_TLS = @offsetOf(Cpu, "tls");
 const OFF_V = @offsetOf(Cpu, "v");
 const OFF_SLOT = @offsetOf(cpu.Page, "slot");
 const FLAGS_BASE = abi.KERN_BASE + 0x10_0000;
@@ -1130,6 +1131,82 @@ pub const Emit = struct {
                 }
                 e.setX(o.rd);
             },
+            .excl => {
+                const size: u5 = @intCast(o.a);
+                const o2 = o.b & 4 != 0;
+                const L = o.b & 2 != 0;
+                const o1 = o.b & 1 != 0;
+                // the pair forms keep to the interpreter
+                if (o1 and !o2) {
+                    e.fallback(pc, k);
+                    return false;
+                }
+                const ld: u8 = switch (size) {
+                    0 => O.i64_load8_u,
+                    1 => O.i64_load16_u,
+                    2 => O.i64_load32_u,
+                    else => O.i64_load,
+                };
+                const st: u8 = switch (size) {
+                    0 => O.i64_store8,
+                    1 => O.i64_store16,
+                    2 => O.i64_store32,
+                    else => O.i64_store,
+                };
+                e.getSP(o.rn);
+                e.address();
+                if (o1) {
+                    // CAS: the read-modify-write is direct, threads being cooperative
+                    b.get(L_A);
+                    b.memop(ld, 0);
+                    b.set(L_T0);
+                    b.get(L_T0);
+                    e.getX(o.rm);
+                    if (size < 3) {
+                        b.i64c(@bitCast((@as(u64, 1) << (@as(u6, 8) << @as(u2, @intCast(size)))) - 1));
+                        b.op(O.i64_and);
+                    }
+                    b.op(O.i64_eq);
+                    e.ifv();
+                    e.storeCheck(0);
+                    b.get(L_A);
+                    e.getX(o.rd);
+                    b.memop(st, 0);
+                    e.endif();
+                    b.get(L_T0);
+                    e.setX(o.rm);
+                } else if (L) {
+                    if (!o2) {
+                        b.get(L_CPU);
+                        b.i32c(1);
+                        b.memop(O.i32_store, OFF_EXCL);
+                    }
+                    b.get(L_A);
+                    b.memop(ld, 0);
+                    e.setX(o.rd);
+                } else {
+                    e.storeCheck(0);
+                    b.get(L_A);
+                    e.getX(o.rd);
+                    b.memop(st, 0);
+                    if (!o2) {
+                        // the status is 0 when a load-exclusive preceded; the monitor clears
+                        b.get(L_CPU);
+                        b.memop(O.i32_load, OFF_EXCL);
+                        b.i32c(1);
+                        b.op(O.i32_xor);
+                        e.setW(o.rm);
+                        b.get(L_CPU);
+                        b.i32c(0);
+                        b.memop(O.i32_store, OFF_EXCL);
+                    }
+                }
+            },
+            .mrs => if (o.imm == 0x5e82) {
+                b.get(L_CPU);
+                b.memop(O.i64_load, OFF_TLS);
+                e.setX(o.rd);
+            } else e.fallback(pc, k),
             .one => {
                 const opc = o.a & 7;
                 const sf = o.a & 8 != 0;

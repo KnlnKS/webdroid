@@ -35,6 +35,8 @@ pub const Cpu = extern struct {
     errno_addr: u32,
     /// the slice's instruction budget, for a region to leave at a block boundary
     ic_limit: i64,
+    /// the thread's pthread key values, TLS_KEYS of them (libc.zig serves the lookups)
+    tls_tab: u32,
 
     pub inline fn n(c: *Cpu) u32 {
         return c.cpsr >> 31;
@@ -92,6 +94,7 @@ export fn layout(i: u32) u32 {
         15 => @offsetOf(Cpu, "fault_addr"),
         16 => @offsetOf(Cpu, "tls"), // the end of the saved state
         17 => @offsetOf(Cpu, "errno_addr"),
+        18 => @offsetOf(Cpu, "tls_tab"),
         else => 0xffff_ffff,
     };
 }
@@ -180,11 +183,34 @@ export fn jit_evict() void {
 }
 
 // ── the JIT's helpers, imported by every region module
-/// what regions hand to the interpreter: by op kind, and by the word's top byte for the SIMD&FP
-/// space (256 + byte); ARM32 words count under 255
-var fb_hist: [512]u32 = [_]u32{0} ** 512;
+/// what regions hand to the interpreter: by op kind, and by the word's top 12 bits for the
+/// SIMD&FP space (256 + those); ARM32 words count under 255
+var fb_hist: [256 + 4096]u32 = [_]u32{0} ** (256 + 4096);
 export fn fb_count(i: u32) u32 {
-    return fb_hist[i & 511];
+    return fb_hist[i % fb_hist.len];
+}
+/// the SIMD&FP words themselves, register fields masked off: what the space's histogram cannot name
+const FB_WORDS = 4096;
+var fb_words: [FB_WORDS]u32 = [_]u32{0} ** FB_WORDS;
+var fb_wcounts: [FB_WORDS]u32 = [_]u32{0} ** FB_WORDS;
+fn countWord(w: u32) void {
+    const key = (w & 0xffe0_fc00) | 1;
+    var i = (key *% 0x9e37_79b9) >> 20;
+    var probes: u32 = 0;
+    while (probes < 8) : (probes += 1) {
+        if (fb_words[i] == key or fb_words[i] == 0) {
+            fb_words[i] = key;
+            fb_wcounts[i] += 1;
+            return;
+        }
+        i = (i + 1) & (FB_WORDS - 1);
+    }
+}
+export fn fb_word(i: u32) u32 {
+    return fb_words[i & (FB_WORDS - 1)] & ~@as(u32, 1);
+}
+export fn fb_wcount(i: u32) u32 {
+    return fb_wcounts[i & (FB_WORDS - 1)];
 }
 /// the interpreter runs one word for a region: 0 next, 1 jump (pc set), 2 fault, 3 syscall
 export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
@@ -197,7 +223,10 @@ export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
         page.cov[i >> 3] |= @as(u8, 1) << @intCast(i & 7);
     }
     fb_hist[switch (o.kind) {
-        .simd, .vmem, .vldrlit => 256 + (w >> 24),
+        .simd, .vmem, .vldrlit => blk: {
+            countWord(w);
+            break :blk 256 + (w >> 20);
+        },
         else => @intFromEnum(o.kind),
     }] += 1;
     c.bpc = pc;

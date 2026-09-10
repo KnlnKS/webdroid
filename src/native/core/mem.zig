@@ -420,7 +420,8 @@ export fn unmap_va(va_in: u64, n_in: u64) u32 {
             if (unmap_pages(l, @intCast(@min(size, 0xffff_ffff))) == 0) return 0;
         } else if (h < PLANES and R[h] != 0) {
             const off: i64 = @as(i64, l) - L[h];
-            if (off <= 0 and size >= R[h]) release(h) else if (off + @as(i64, @intCast(size)) >= @as(i64, @intCast(R[h]))) {
+            // a range ending inside the plane but starting before it is a hole, not a tail
+            if (off <= 0 and size >= R[h]) release(h) else if (off > 0 and off + @as(i64, @intCast(size)) >= @as(i64, @intCast(R[h]))) {
                 R[h] = @intCast(off);
                 decommit_va(v, size);
             }

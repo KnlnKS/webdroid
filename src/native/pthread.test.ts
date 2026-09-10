@@ -73,10 +73,10 @@ test("pthread exit values survive TLS destructor rounds and destructor failures 
   const cpu = new Cpu(new JThread(), "destructor parent"), p = mem.malloc(24), seen: bigint[] = [];
   let key = 0;
   const dtor = defineHost("pthread_test_destructor", (child, args) => {
-    seen.push(args.va()); expect(child.tls.get(key)).toBe(0n);
-    child.tls.set(key, 7n);
+    seen.push(args.va()); expect(mem.ld64(child.tlsTab + 8 * key)).toBe(0n);
+    mem.st64(child.tlsTab + 8 * key, 7n);
   });
-  const start = defineHost("pthread_test_tls", (child) => { child.tls.set(key, 3n); return 99; });
+  const start = defineHost("pthread_test_tls", (child) => { mem.st64(child.tlsTab + 8 * key, 3n); return 99; });
   try {
     await call(cpu, "pthread_key_create", p, dtor); key = mem.ld32(p);
     await call(cpu, "pthread_create", p + 8, 0, start, 0);
@@ -118,7 +118,7 @@ test("pthread cleanup waits for a signal handler started by its final destructor
   });
   sigHandlers.set(10, { fn: handler, flags: 0 });
   const dtor = defineHost("pthread_signal_destructor", (child) => { child.signals.push(10); });
-  const start = defineHost("pthread_signal_entry", (child) => { child.tls.set(key, 1n); return 42; });
+  const start = defineHost("pthread_signal_entry", (child) => { mem.st64(child.tlsTab + 8 * key, 1n); return 42; });
   try {
     await call(cpu, "pthread_key_create", p, dtor); key = mem.ld32(p);
     await call(cpu, "pthread_create", p + 8, 0, start, 0);

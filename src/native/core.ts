@@ -66,6 +66,8 @@ export interface Core {
   jit_stat(i: number): number;
   exec_word32(cpu: number, pc: number): number;
   fb_count(i: number): number;
+  fb_word(i: number): number;
+  fb_wcount(i: number): number;
   jit_config(chain: number): void;
   jit_fmax32(a: number, b: number): number;
   jit_fmin32(a: number, b: number): number;
@@ -78,7 +80,9 @@ export interface Core {
   jit_fma64(a: number, b: number, c: number): number;
 }
 /** the libc calls the core serves itself, by the id libc.zig gives them */
-export const CORE_LIBC: Record<string, number> = { memcpy: 1, memmove: 2, memset: 3, memcmp: 4, memchr: 5, strlen: 6, strnlen: 7, strcmp: 8, strncmp: 9, malloc: 10, free: 11, calloc: 12, realloc: 13, memalign: 14, posix_memalign: 15, malloc_usable_size: 16 };
+export const CORE_LIBC: Record<string, number> = { memcpy: 1, memmove: 2, memset: 3, memcmp: 4, memchr: 5, strlen: 6, strnlen: 7, strcmp: 8, strncmp: 9, malloc: 10, free: 11, calloc: 12, realloc: 13, memalign: 14, posix_memalign: 15, malloc_usable_size: 16, pthread_self: 17, pthread_getspecific: 18, pthread_setspecific: 19 };
+/** pthread keys per thread, the size of the table each Cpu carries (libc.zig) */
+export const TLS_KEYS = 256;
 
 export const memory = new WebAssembly.Memory({ initial: MEM_SIZE_A32 / 65536, maximum: MEM_SIZE_A64 / 65536 });
 /** the core's function table, which JIT regions are linked into above the core's own entries */
@@ -122,11 +126,17 @@ export const JIT_HEAT = 48;
 const KINDS = "raw fault nop adr addsub logic movw bfm extr b bcond cbz tbz br svc clrex mrs msr ldrlit ldp excl atomic ldst adc ccmp csel one two three simd vldrlit vmem".split(" ");
 export const jitStats = {
   get regions(): number { return core.jit_stat(0); }, get batches(): number { return core.jit_stat(1); }, get skipped(): number { return core.jit_stat(2); }, get bytes(): number { return core.jit_stat(3); }, get modules(): number { return instances.length; }, evictions: 0, async: 0, on: true, chain: TAIL,
-  /** what regions handed to the interpreter, most often first: an op kind, or `simd:<top byte>` of the word */
+  /** what regions handed to the interpreter, most often first: an op kind, or `simd:<top 12 bits>` of the word */
   fallbacks(n = 20): string[] {
     const rows: [string, number][] = [];
-    for (let i = 0; i < 512; i++) { const k = core.fb_count(i); if (k) rows.push([i === 255 ? "arm32" : i < 256 ? KINDS[i] ?? `kind${i}` : `simd:${(i - 256).toString(16).padStart(2, "0")}`, k]); }
+    for (let i = 0; i < 256 + 4096; i++) { const k = core.fb_count(i); if (k) rows.push([i === 255 ? "arm32" : i < 256 ? KINDS[i] ?? `kind${i}` : `simd:${(i - 256).toString(16).padStart(3, "0")}`, k]); }
     return rows.sort((a, b) => b[1] - a[1]).slice(0, n).map(([nm, k]) => `${k} ${nm}`);
+  },
+  /** the SIMD&FP words handed to the interpreter, register fields masked, most often first */
+  fallbackWords(n = 30): string[] {
+    const rows: [number, number][] = [];
+    for (let i = 0; i < 4096; i++) { const k = core.fb_wcount(i); if (k) rows.push([core.fb_word(i) >>> 0, k]); }
+    return rows.sort((a, b) => b[1] - a[1]).slice(0, n).map(([w, k]) => `${k} ${w.toString(16).padStart(8, "0")}`);
   },
 };
 /** the table is full: the oldest half of the batches go, and a region still hot re-heats and comes back */

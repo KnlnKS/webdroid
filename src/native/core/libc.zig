@@ -26,7 +26,12 @@ pub const Fn = enum(u8) {
     memalign,
     posix_memalign,
     malloc_usable_size,
+    pthread_self,
+    pthread_getspecific,
+    pthread_setspecific,
 };
+/// pthread keys per thread: the table in Cpu.tls_tab (cpu.ts sizes it, pthread.ts caps the keys)
+pub const TLS_KEYS = 256;
 /// trampoline slot → Fn
 pub const slot_fn: [*]u8 = @ptrFromInt(abi.KERN_BASE + 0xa0_0000);
 pub var bypass: bool = false;
@@ -188,6 +193,18 @@ pub fn call(c: *Cpu, id: u8) bool {
         .malloc_usable_size => {
             const p: u32 = if (arg(c, 0) == 0) 0 else (ptr(c, 0) orelse return false);
             ret(c, mem.usable_size(p));
+        },
+        .pthread_self => ret(c, c.tid),
+        .pthread_getspecific => {
+            const k: u32 = @truncate(arg(c, 0));
+            ret(c, if (k < TLS_KEYS) mem.ptr(u64, c.tls_tab + 8 * k).* else 0);
+        },
+        .pthread_setspecific => {
+            const k: u32 = @truncate(arg(c, 0));
+            if (k < TLS_KEYS) {
+                mem.ptr(u64, c.tls_tab + 8 * k).* = arg(c, 1);
+                ret(c, 0);
+            } else ret(c, 22);
         },
     }
     return true;
