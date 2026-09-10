@@ -1,7 +1,7 @@
 import { perf } from "../perf";
 import { setInvalidateHook, JRect, JCanvas, JMatrix, matMul, rotM, type JPoint } from "./graphics";
 import { mangleMethod, jmethod, type JMethod, jarray } from "../jvm/abi";
-import { vcall, idHash } from "../jvm/natives/jlang";
+import { vcall, vcallMaybe, after, idHash } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor } from "./drawable";
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, maySuspend } from "../jvm/runtime";
@@ -167,6 +167,7 @@ export function copyEvent(src: JMotionEvent) {
 }
 const M_performLongClick = mangleMethod("performLongClick", "()Z");
 const M_onLayout = mangleMethod("onLayout", "(ZIIII)V");
+const M_draw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
 const M_onDraw = mangleMethod("onDraw", "(Landroid/graphics/Canvas;)V");
 const M_dispatchDraw = mangleMethod("dispatchDraw", "(Landroid/graphics/Canvas;)V");
 const M_onSizeChanged = mangleMethod("onSizeChanged", "(IIII)V");
@@ -539,7 +540,7 @@ export async function drawView(v: JView, cv: JCanvas, parent?: JViewGroup) {
       ctx.beginPath();
       ctx.rect(0, 0, w, h);
       ctx.clip();
-      await drawContent(v, cv);
+      await drawSelf(v, cv);
     }
   } catch (e) {
     perf.drawErrors++;
@@ -559,10 +560,20 @@ async function drawLayered(v: JView, cv: JCanvas, w: number, h: number) {
   lctx.globalAlpha = 1;
   lctx.clearRect(0, 0, w, h);
   const lcv = JCanvas.wrap(lctx, w, h);
-  await drawContent(v, lcv);
+  await drawSelf(v, lcv);
   cv.ctx.drawImage(layer, 0, 0);
 }
 
+/**
+ * AOSP's View.draw(Canvas) is a public method widgets override — TextInputLayout paints its
+ * label and box there and calls super — so the traversal goes through the override when there
+ * is one, and straight to the base body when there is not.
+ */
+const baseDraw = maySuspend(function (this: JView, cv: JCanvas) { return drawContent(this, cv); });
+function drawSelf(v: JView, cv: JCanvas): Promise<void> {
+  const fn = jmethod(v, M_draw);
+  return fn && fn !== baseDraw ? guardApply(fn, v, cv) : drawContent(v, cv);
+}
 /** the view's own painting, in its own coordinate space: background, content, children, overlay */
 async function drawContent(v: JView, cv: JCanvas) {
   const ctx = cv.ctx;
@@ -807,14 +818,9 @@ const viewMethods: NativeSpec["methods"] = {
   "onSizeChanged(IIII)V": function () {},
   "onDraw(Landroid/graphics/Canvas;)V": function () {},
   "dispatchDraw(Landroid/graphics/Canvas;)V": function () {},
-  "draw(Landroid/graphics/Canvas;)V": maySuspend(function (this: JView, cv: JCanvas) {
-    // explicit draw of the subtree at current canvas origin (used by app code occasionally)
-    const saveL = this.left, saveT = this.top;
-    this.left = 0; this.top = 0;
-    const p = drawView(this, cv);
-    this.left = saveL; this.top = saveT;
-    return p;
-  }),
+  // AOSP's own body: background, content, children, foreground — at the canvas origin, with
+  // the transform and clip left to whoever is drawing this view.
+  "draw(Landroid/graphics/Canvas;)V": baseDraw,
   "invalidate()V": function (this: JView) { invalidate(this); },
   "invalidate(IIII)V": function (this: JView) { invalidate(this); },
   "invalidate(Landroid/graphics/Rect;)V": function (this: JView) { invalidate(this); },
@@ -928,6 +934,22 @@ const viewMethods: NativeSpec["methods"] = {
   "setForegroundGravity(I)V": () => {},
   "sendAccessibilityEvent(I)V": () => {},
   "announceForAccessibility(Ljava/lang/CharSequence;)V": () => {},
+  // AOSP asks the delegate first, then performs the standard actions itself. The two
+  // accessibility-focus actions belong to a running accessibility service; there is none here,
+  // so they report the same false a device with the screen reader off reports.
+  "performAccessibilityAction(ILandroid/os/Bundle;)Z": maySuspend(function (this: JView, action: number, args: unknown) {
+    if (this.a11yDelegate) {
+      return vcall(this.a11yDelegate, "performAccessibilityAction", "(Landroid/view/View;ILandroid/os/Bundle;)Z", this, action, args);
+    }
+    switch (action) {
+      case 0x01: return this.focusable && !this.focused ? takeFocus(this) : 0;   // ACTION_FOCUS
+      case 0x02: if (!this.focused) return 0; return after(vcallMaybe(this, "clearFocus", "()V"), () => 1);
+      case 0x04: case 0x08: return after(vcallMaybe(this, "setSelected", "(Z)V", action === 0x04 ? 1 : 0), () => 1);
+      case 0x10: return this.clickable ? guardCall(this, M_performClick) : 0;
+      case 0x20: return this.longClickable ? vcall(this, "performLongClick", "()Z") : 0;
+    }
+    return 0;
+  }),
   "setSystemUiVisibility(I)V": () => {},
   // the system UI never changes underneath the app here, so the listener has nothing to hear
   "setOnSystemUiVisibilityChangeListener(Landroid/view/View$OnSystemUiVisibilityChangeListener;)V": () => {},
