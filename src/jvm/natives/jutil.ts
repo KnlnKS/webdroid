@@ -1784,6 +1784,7 @@ rt.register({ name: "java/util/SortedSet", ctor: class extends JObj {}, ifaces: 
 rt.register({ name: "java/util/NavigableSet", ctor: class extends JObj {}, ifaces: ["java/util/SortedSet"], typeVars: "E" });
 rt.register({ name: "java/util/SortedMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"], typeVars: "K,V" });
 rt.register({ name: "java/util/NavigableMap", ctor: class extends JObj {}, ifaces: ["java/util/SortedMap"], typeVars: "K,V" });
+rt.register({ name: "java/util/concurrent/ConcurrentNavigableMap", ctor: class extends JObj {}, ifaces: ["java/util/NavigableMap", "java/util/concurrent/ConcurrentMap"], typeVars: "K,V" });
 rt.register({ name: "java/util/concurrent/ConcurrentMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"], typeVars: "K,V" });
 rt.register({ name: "java/util/Map", ctor: class extends JObj {}, typeVars: "K,V", methods: mapDefaults });
 rt.register({

@@ -436,6 +436,7 @@ function modifiedUtf8(b: Uint8Array): string {
   }
   return out;
 }
+defineException("java/io/StreamCorruptedException", "java/io/IOException");
 const noGraph = (): never => { throw rt.mkThrowable("java/io/StreamCorruptedException", "object graph serialization is not available"); };
 rt.register({
   name: "java/io/ObjectInputStream", ctor: JObjectIn, sup: "java/io/InputStream",

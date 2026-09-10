@@ -3,7 +3,7 @@
 
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { vcall, vcallMaybe, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble } from "./jlang";
-import { strArray, utf8, slashName, dotName } from "../abi";
+import { strArray, jarray, utf8, slashName, dotName } from "../abi";
 import { mkIter } from "./jutil";
 import { JDate, JCalendar, localTz, MONTHS, DAYS, pad2 } from "./jtime";
 
@@ -90,8 +90,10 @@ rt.register({
     "static getDateInstance(ILjava/util/Locale;)Ljava/text/DateFormat;": dateInstance,
     "static getTimeInstance()Ljava/text/DateFormat;": () => withPattern("h:mm a"),
     "static getTimeInstance(I)Ljava/text/DateFormat;": () => withPattern("h:mm a"),
+    "static getTimeInstance(ILjava/util/Locale;)Ljava/text/DateFormat;": () => withPattern("h:mm a"),
     "static getDateTimeInstance()Ljava/text/DateFormat;": () => withPattern("MMM d, yyyy h:mm a"),
     "static getDateTimeInstance(II)Ljava/text/DateFormat;": () => withPattern("MMM d, yyyy h:mm a"),
+    "static getDateTimeInstance(IILjava/util/Locale;)Ljava/text/DateFormat;": () => withPattern("MMM d, yyyy h:mm a"),
   },
 });
 rt.register({
@@ -117,6 +119,10 @@ rt.register({
     "getWeekdays()[Ljava/lang/String;": () => strArray(["", ...DAYS]),
     "getShortWeekdays()[Ljava/lang/String;": () => strArray(["", ...DAYS.map((d) => d.slice(0, 3))]),
     "getAmPmStrings()[Ljava/lang/String;": () => strArray(["AM", "PM"]),
+    "getEras()[Ljava/lang/String;": () => strArray(["BC", "AD"]),
+    // the per-zone display names a formatter would look up; none is offered, as on a device
+    // whose locale data carries no zone strings
+    "getZoneStrings()[[Ljava/lang/String;": () => jarray([], "[Ljava/lang/String;"),
   },
 });
 

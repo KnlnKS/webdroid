@@ -325,6 +325,12 @@ for (const [name] of [
       "<init>(I)V": function (this: any, v: number) { this.color = v; this.style = v; this.size = v; },
       "<init>(F)V": function (this: any, v: number) { this.size = v; },
       "<init>(Ljava/lang/String;)V": function (this: any, v: string) { this.url = v; },
+      // ImageSpan's drawable forms: nothing here draws a replacement image, but the span still
+      // has to construct or the text it decorates never gets built
+      "<init>(Landroid/content/Context;II)V": function () {},
+      "<init>(Landroid/content/Context;I)V": function () {},
+      "<init>(Landroid/graphics/drawable/Drawable;)V": function () {},
+      "<init>(Landroid/graphics/drawable/Drawable;I)V": function () {},
       "getURL()Ljava/lang/String;": function (this: any) { return this.url; },
       "getForegroundColor()I": function (this: any) { return this.color; },
       "getStyle()I": function (this: any) { return this.style; },

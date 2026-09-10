@@ -376,7 +376,7 @@ rt.register({
 rt.register({ name: "android/content/DialogInterface", ctor: class extends JObj {},
   statics: { BUTTON_POSITIVE: -1, BUTTON_NEGATIVE: -2, BUTTON_NEUTRAL: -3 } });
 // pure callback interfaces — apps implement these; dispatch is by mangled name (see vcall)
-for (const n of ["OnClickListener", "OnCancelListener", "OnDismissListener", "OnKeyListener"]) {
+for (const n of ["OnClickListener", "OnCancelListener", "OnDismissListener", "OnKeyListener", "OnShowListener", "OnMultiChoiceClickListener"]) {
   rt.register({ name: "android/content/DialogInterface$" + n, ctor: class extends JObj {} });
 }
 
