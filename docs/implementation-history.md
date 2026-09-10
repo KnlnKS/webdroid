@@ -2185,9 +2185,10 @@ specialized body. `coldCalls`, `coldHandlers` and `hotMethods` expose the execut
 ## Reddit: text, collections, and navigation after login
 
 A fresh stock-V8 Playwright Chromium run renders the profile, settings, and account settings.
-Search renders its trending topics, typed suggestions, and community results. Community headers
-render, but their post list remains under investigation; these observations do not establish
-complete subreddit, Inbox, or video behavior. The opt-in `tests/e2e/reddit.ts` diagnostic keeps
+Search renders its trending topics, typed suggestions, and community results. A later fresh run
+renders the community post list after the copy-on-write iterator correction below. These
+observations do not establish every subreddit or video behavior; profile-return and Inbox
+evidence is recorded separately below. The opt-in `tests/e2e/reddit.ts` diagnostic keeps
 credentials in environment variables, avoids credential screenshots, and records rendered text
 and per-step telemetry. It is separate from the golden flows. Final regression captures remain
 pending while these investigations continue.
@@ -2265,3 +2266,37 @@ escape, not the sorted-collection repair.
 With the collection fix, fresh stock Chrome 152 arm64 rendered profile, settings, account
 settings, both Back transitions and Inbox without errors. Specialized async source grew to
 28.29 MB, below the admission limit. The successful run used no runtime method probes.
+
+
+## Reddit: cached media, surfaces, and listener snapshots
+
+Community navigation exposed another listener-removal failure. A Java CopyOnWriteArrayList
+iterator traversed the live list, so a callback removing itself shifted the next listener behind
+the cursor. The skipped visibility callback left the community presenter detached. Snapshot
+iterators now retain their original elements and reject mutation, including listIterator. A
+fresh source-only run rendered r/Android's post headlines, comments, images and ad. An implicit
+ACTION_VIEW link also opened an actual post and its comments; that particular live post had
+been removed by a moderator, so it was unsuitable as a video reference.
+
+The video data path reads cached DASH manifests and segments through RandomAccessFile. Its
+read-only open check incorrectly rejected a present byte array when no lazy asset source
+existed. Correcting that check admitted real manifests and cached segments. FileChannel's
+read-only mapping then supplied direct, read-only ByteBuffer views over file ranges, restoring
+feed thumbnails. Read-only status propagates through slices, duplicates and typed views;
+writable mappings remain explicitly unsupported. ErrnoException retains typed errno and
+functionName fields and preserves its cause when rethrown. The generic throwable factory now
+links cached exception classes before constructing them, preserving Java catch identity.
+
+TextureView previously reported permanent unavailability. It now creates a software surface
+when attached with positive bounds, dispatches availability, size, update and destruction
+callbacks on the main looper, and honors listener-retained SurfaceTexture ownership. Surface
+handles release independently of their producer. EGL and decoded-video presentation share the
+same framebuffer layer, accepting ImageBitmap or VideoFrame without an extra bitmap copy.
+AudioTrack's builder and positioned ByteBuffer PCM input retain format, buffer capacity and
+session identity, with nonblocking writes respecting queued capacity. These primitives are
+unit-tested; their existence alone does not establish working video playback.
+
+Process.getGidForName uses a generated Android 15 identity table and bionic's numeric, OEM and
+multi-user group conventions. Unknown names return -1; there is no app-specific name rule.
+The full unit suite passed after the surface, identity and collection changes; final regression
+captures remain pending until the media integration is complete.
