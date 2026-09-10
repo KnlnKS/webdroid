@@ -60,29 +60,11 @@ pub const Fault = enum(u32) {
     null_page = 8,
 };
 
+const FIELDS = [_][]const u8{ "x", "pc", "v", "cpsr", "fpcr", "fpsr", "excl", "tls", "ic", "bpc", "tid", "a64", "exit", "fault_word", "fault_addr", "tls", "errno_addr", "tls_tab" };
 export fn layout(i: u32) u32 {
-    return switch (i) {
-        0 => @sizeOf(Cpu),
-        1 => @offsetOf(Cpu, "x"),
-        2 => @offsetOf(Cpu, "pc"),
-        3 => @offsetOf(Cpu, "v"),
-        4 => @offsetOf(Cpu, "cpsr"),
-        5 => @offsetOf(Cpu, "fpcr"),
-        6 => @offsetOf(Cpu, "fpsr"),
-        7 => @offsetOf(Cpu, "excl"),
-        8 => @offsetOf(Cpu, "tls"),
-        9 => @offsetOf(Cpu, "ic"),
-        10 => @offsetOf(Cpu, "bpc"),
-        11 => @offsetOf(Cpu, "tid"),
-        12 => @offsetOf(Cpu, "a64"),
-        13 => @offsetOf(Cpu, "exit"),
-        14 => @offsetOf(Cpu, "fault_word"),
-        15 => @offsetOf(Cpu, "fault_addr"),
-        16 => @offsetOf(Cpu, "tls"),
-        17 => @offsetOf(Cpu, "errno_addr"),
-        18 => @offsetOf(Cpu, "tls_tab"),
-        else => 0xffff_ffff,
-    };
+    if (i == 0) return @sizeOf(Cpu);
+    inline for (FIELDS, 1..) |name, k| if (i == k) return @offsetOf(Cpu, name);
+    return 0xffff_ffff;
 }
 
 export fn cpu_alloc(tid: u32, is64: u32) u32 {
