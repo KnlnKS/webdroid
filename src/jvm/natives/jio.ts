@@ -619,15 +619,22 @@ rt.register({
     }),
     "write([BII)V": maySuspend(function (this: JBufferedOut, b: Int8Array, off: number, len: number) {
       if (off < 0 || len < 0 || off + len > b.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
-      if (len >= this.buf.length) return after(drain(this), () => vcallMaybe(this.out, "write", "([BII)V", b, off, len));
+      if (len >= this.buf.length) {
+        const t = rt.th();
+        return after(drain(this), () => { rt.st(t); return vcallMaybe(this.out, "write", "([BII)V", b, off, len); });
+      }
       return after(len > this.buf.length - this.count ? drain(this) : undefined, () => {
         this.buf.set(b.subarray(off, off + len), this.count);
         this.count += len;
       });
     }),
-    "flush()V": maySuspend(function (this: JBufferedOut) { return after(drain(this), () => vcallMaybe(this.out, "flush", "()V")); }),
+    "flush()V": maySuspend(function (this: JBufferedOut) {
+      const t = rt.th();
+      return after(drain(this), () => { rt.st(t); return vcallMaybe(this.out, "flush", "()V"); });
+    }),
     "close()V": async function (this: JBufferedOut) {
-      try { await vcall(this, "flush", "()V"); } finally { await vcall(this.out, "close", "()V"); }
+      const t = rt.th();
+      try { await vcall(this, "flush", "()V"); } finally { rt.st(t); await vcall(this.out, "close", "()V"); }
     },
   },
 });
