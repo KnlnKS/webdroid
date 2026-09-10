@@ -313,10 +313,12 @@ pub fn Emit(comptime wide: bool) type {
         pub fn transfer(e: *Self, target: i32, pc: u32, k: u32) void {
             e.countIc(k);
             if (target < 0) return e.exitTo(pc);
-            e.b.emit(.{ get(L_IC), get(L_LIMIT), O.i64_ge_s });
-            e.ifv();
-            e.exitTo(pc);
-            e.endif();
+            if (target <= @as(i32, @intCast(e.blk))) {
+                e.b.emit(.{ get(L_IC), get(L_LIMIT), O.i64_ge_s });
+                e.ifv();
+                e.exitTo(pc);
+                e.endif();
+            }
             e.b.emit(.{ c32(target), set(L_NEXT) });
             e.b.br(e.top_depth + e.nest);
         }
@@ -334,19 +336,31 @@ pub fn Emit(comptime wide: bool) type {
             e.exit();
             e.endif();
         }
+        fn faultExit(e: *Self) void {
+            e.b.emit(.{ get(L_CPU), c32(@bitCast(e.r.blocks[e.blk].pc)), mo(O.i32_store, OFF_BPC) });
+            e.exitStatus(2);
+        }
         pub fn address(e: *Self) void {
             e.b.emit(.{ tee(L_T0), c64(32), O.i64_shr_u, O.i64_eqz, O.if_, wasm.I32, get(L_T0), O.i32_wrap_i64, O.else_, get(L_CPU), get(L_T0), call(F_TX), O.end, tee(L_A), O.i32_eqz });
             e.ifv();
-            e.exitStatus(2);
+            e.faultExit();
             e.endif();
         }
-        pub fn storeCheck(e: *Self, off: u32) void {
-            e.b.emit(.{ get(L_A), c32(@bitCast(off)), O.i32_add, c32(12), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE) });
+        pub fn storeCheck(e: *Self, off: u32, two: bool) void {
+            const b = e.b;
+            const a: u32 = if (off != 0) L_NEXT else L_A;
+            if (off != 0) b.emit(.{ get(L_A), c32(@bitCast(off)), O.i32_add, set(L_NEXT) });
+            b.emit(.{ get(a), c32(12), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE) });
+            if (two) b.emit(.{ get(a), c32(8), O.i32_add, c32(12), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE), O.i32_or });
             e.ifv();
-            e.b.emit(.{ get(L_CPU), get(L_A), c32(@bitCast(off)), O.i32_add, call(F_STORE) });
-            e.ifv();
-            e.exitStatus(2);
-            e.endif();
+            for (0..@as(u32, 1) + @intFromBool(two)) |h| {
+                b.emit(.{ get(L_CPU), get(a) });
+                if (h == 1) b.emit(.{ c32(8), O.i32_add });
+                b.emit(.{call(F_STORE)});
+                e.ifv();
+                e.faultExit();
+                e.endif();
+            }
             e.endif();
         }
         pub fn cond(e: *Self, cc: u8) void {
@@ -613,7 +627,7 @@ pub fn Emit(comptime wide: bool) type {
                             b.emit(.{ get(L_A), mo(LD[sz][@intFromBool(opc == 1)], off) });
                             e.setX(t);
                         } else {
-                            e.storeCheck(off);
+                            e.storeCheck(off, false);
                             b.get(L_A);
                             e.getX(t);
                             b.memop(ST[sz], off);
@@ -650,7 +664,7 @@ pub fn Emit(comptime wide: bool) type {
                         e.setSP(o.rn);
                     }
                     if (opc == 0 or (size == 3 and opc == 2)) {
-                        e.storeCheck(0);
+                        e.storeCheck(0, false);
                         b.get(L_A);
                         e.getX(o.rd);
                         b.memop(ST[size], 0);
@@ -711,7 +725,7 @@ pub fn Emit(comptime wide: bool) type {
                         if (size < 3) b.emit(.{ c64(@bitCast((@as(u64, 1) << (@as(u6, 8) << size)) - 1)), O.i64_and });
                         b.byte(O.i64_eq);
                         e.ifv();
-                        e.storeCheck(0);
+                        e.storeCheck(0, false);
                         b.get(L_A);
                         e.getX(o.rd);
                         b.memop(ST[size], 0);
@@ -723,7 +737,7 @@ pub fn Emit(comptime wide: bool) type {
                         b.emit(.{ get(L_A), mo(LD[size][0], 0) });
                         e.setX(o.rd);
                     } else {
-                        e.storeCheck(0);
+                        e.storeCheck(0, false);
                         b.get(L_A);
                         e.getX(o.rd);
                         b.memop(ST[size], 0);
@@ -913,7 +927,6 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
         e.chain_depth = n - @as(u32, @intCast(i));
         e.exit_depth = e.chain_depth + 1;
         e.wcur = wb[i];
-        b.emit(.{ get(L_CPU), c32(@bitCast(blk.pc)), mo(O.i32_store, OFF_BPC) });
         var pc = blk.pc;
         var j: u32 = 0;
         var ended = false;

@@ -169,7 +169,7 @@ fn load(e: *Emit, o: u8, off: u32) void {
 }
 fn store(e: *Emit, o: u8, off: u32) void {
     e.b.set(L_R);
-    e.storeCheck(off);
+    e.storeCheck(off, false);
     e.b.emit(.{ get(L_A), get(L_R), mo(o, off) });
 }
 
