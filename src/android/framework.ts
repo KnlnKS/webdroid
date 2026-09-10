@@ -32,7 +32,7 @@ export function loadFrameworkDex(): Promise<void> {
     const jar = new Uint8Array(await res.arrayBuffer());
     const dir = centralDir(jar);
     for (const name of [...dir.keys()].filter((n) => /^classes\d*\.dex$/.test(n)).sort()) {
-      for (const d of dexesIn(entryBytes(jar, dir.get(name)!), `framework:${name}`)) rt.loadDex(d);
+      for (const d of dexesIn(entryBytes(jar, dir.get(name)!), `framework:${name}`)) rt.loadDex(d, true);
     }
   })();
 }

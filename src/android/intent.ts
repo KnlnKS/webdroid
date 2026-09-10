@@ -202,6 +202,7 @@ rt.register({
     "getClassName()Ljava/lang/String;": function (this: JComponentName) { return this.cls; },
     "getPackageName()Ljava/lang/String;": function (this: JComponentName) { return this.pkg; },
     "flattenToString()Ljava/lang/String;": function (this: JComponentName) { return this.pkg + "/" + this.cls; },
+    "flattenToShortString()Ljava/lang/String;": function (this: JComponentName) { return this.pkg + "/" + (this.cls.startsWith(this.pkg + ".") ? this.cls.slice(this.pkg.length) : this.cls); },
   },
 });
 

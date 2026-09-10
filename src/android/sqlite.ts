@@ -1,18 +1,22 @@
-import { newStringSet } from "../jvm/natives/jutil";
+import { JMap } from "../jvm/natives/jutil";
 // android.database.* over sql.js (in-memory, persisted to localStorage per db).
 
 import initSqlJs, { type Database, type Statement } from "sql.js";
 import { charsToString } from "../jvm/abi";
 import { rt, JObj, type NativeSpec, callSelf, maySuspend } from "../jvm/runtime";
-import { vcall, boxInt, box, JLong } from "../jvm/natives/jlang";
+import { vcall, boxInt, box, JLong, JBool } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { JBundle } from "./os";
 
-let SQL: Awaited<ReturnType<typeof initSqlJs>> | null = null;
+type SqlJs = Awaited<ReturnType<typeof initSqlJs>>;
+let SQL: SqlJs | null = null;
+type SharedDatabase = { db: Database; transactions: Set<() => boolean> };
+type SQLiteStore = { sql: () => Promise<NonNullable<typeof SQL>>; files: Map<string, SharedDatabase> };
+let sqlReady: Promise<SqlJs> | null = null;
+export let sqliteStore: SQLiteStore = { files: new Map(), sql: () => sqlReady ??= initSqlJs({ locateFile: (f: string) => "/sqljs/" + f }) };
+export function useSQLiteStore(store: SQLiteStore): void { sqliteStore = store; }
 async function ensureSql(): Promise<NonNullable<typeof SQL>> {
-  if (!SQL) {
-    SQL = await initSqlJs({ locateFile: (f: string) => "/sqljs/" + f });
-  }
+  if (!SQL) SQL = await sqliteStore.sql();
   return SQL;
 }
 
@@ -70,7 +74,7 @@ class JSQLiteDatabase extends JObj {
       this.saveTimer = null;
       // Mid-transaction the file can hold spilled uncommitted pages whose undo lives in the
       // journal we do not copy; wait for the commit instead of persisting a torn snapshot.
-      if (this.txDepth > 0) { this.scheduleSave(); return; }
+      if (this.txDepth > 0 || [...sqliteStore.files.get(this.path)?.transactions ?? []].some((active) => active())) { this.scheduleSave(); return; }
       if (!SQL || !this.db) return;
       try {
         const bytes = snapshotBytes(SQL, this.db);
@@ -163,14 +167,22 @@ export async function openDatabase(path: string, flags = 0x10000000): Promise<JS
   jdb = new JSQLiteDatabase();
   jdb.path = path;
   let data: Uint8Array | null = null;
+  const shared = path === ":memory:" ? undefined : sqliteStore.files.get(path);
   try {
     const raw = globalThis.localStorage?.getItem("wd:db:" + path);
     if (raw) data = unb64(raw);
   } catch { /* */ }
-  if (!data && path !== ":memory:" && !(flags & 0x10000000)) {
+  if (!shared && !data && path !== ":memory:" && !(flags & 0x10000000)) {
     throw rt.mkThrowable("android/database/sqlite/SQLiteCantOpenDatabaseException", "Database does not exist: " + path);
   }
-  jdb.db = data ? new sql.Database(data) : new sql.Database();
+  if (path === ":memory:") jdb.db = new sql.Database();
+  else {
+    const file = shared ?? { db: data ? new sql.Database(data) : new sql.Database(), transactions: new Set<() => boolean>() };
+    sqliteStore.files.set(path, file);
+    jdb.db = sharedConnection(sql, file.db);
+    const connection = jdb;
+    file.transactions.add(() => connection.txDepth > 0);
+  }
   jdb.db.exec("PRAGMA user_version");
   dbCache.set(path, jdb);
   return jdb;
@@ -309,18 +321,34 @@ const cursorMethods: NativeSpec["methods"] = {
 };
 rt.register({ name: "android/database/Cursor", ctor: class extends JObj {} });
 rt.register({ name: "webdroid/Cursor", ctor: JCursor, ifaces: ["android/database/Cursor", "java/io/Closeable"], methods: cursorMethods });
+class JRowBuilder extends JObj { cursor!: JCursor; row!: unknown[]; index = 0; }
+rt.register({ name: "android/database/MatrixCursor$RowBuilder", ctor: JRowBuilder, methods: {
+  "add(Ljava/lang/Object;)Landroid/database/MatrixCursor$RowBuilder;": function (this: JRowBuilder, value: unknown) {
+    if (this.index === this.row.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "No more columns left");
+    this.row[this.index++] = value; return this;
+  },
+  "add(Ljava/lang/String;Ljava/lang/Object;)Landroid/database/MatrixCursor$RowBuilder;": function (this: JRowBuilder, name: string, value: unknown) {
+    for (let i = 0; i < this.cursor.cols.length; i++) if (this.cursor.cols[i] === name) this.row[i] = value;
+    return this;
+  },
+} });
 rt.register({ name: "android/database/MatrixCursor", ctor: class extends JCursor {}, ifaces: ["android/database/Cursor", "java/io/Closeable"], methods: {
   ...cursorMethods,
   "<init>([Ljava/lang/String;)V": function (this: JCursor, cols: string[]) { this.cols = cols; },
   "<init>([Ljava/lang/String;I)V": function (this: JCursor, cols: string[]) { this.cols = cols; },
+  "newRow()Landroid/database/MatrixCursor$RowBuilder;": function (this: JCursor) {
+    rt.link("android/database/MatrixCursor$RowBuilder");
+    const builder = new JRowBuilder(); builder.cursor = this; builder.row = Array(this.cols.length).fill(null);
+    this.rows.push(builder.row); return builder;
+  },
   "addRow([Ljava/lang/Object;)V": function (this: JCursor, row: unknown[]) {
     if (row.length !== this.cols.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "columnNames.length != columnValues.length");
     this.rows.push(row.slice());
   },
 } });
 
-class JContentValues extends JObj {
-  map = new Map<string, unknown>();
+export class JContentValues extends JObj {
+  data = new JMap();
 }
 rt.register({
   name: "android/content/ContentValues", ctor: JContentValues, ifaces: ["android/os/Parcelable"],
@@ -328,35 +356,39 @@ rt.register({
     const m: NativeSpec["methods"] = {
       "<init>()V": function () {},
       "<init>(Landroid/content/ContentValues;)V": function (this: JContentValues, o: JContentValues) {
-        if (o) this.map = new Map(o.map);
+        if (o) this.data.m = new Map([...o.data.m].map(([k, e]) => [k, { ...e }]));
       },
-      "putNull(Ljava/lang/String;)V": function (this: JContentValues, k: string) { this.map.set(k, null); },
-      "size()I": function (this: JContentValues) { return this.map.size; },
-      "containsKey(Ljava/lang/String;)Z": function (this: JContentValues, k: string) { return this.map.has(k) ? 1 : 0; },
-      "remove(Ljava/lang/String;)V": function (this: JContentValues, k: string) { this.map.delete(k); },
-      "clear()V": function (this: JContentValues) { this.map.clear(); },
-      "get(Ljava/lang/String;)Ljava/lang/Object;": function (this: JContentValues, k: string) { return this.map.get(k) ?? null; },
-      "keySet()Ljava/util/Set;": function (this: JContentValues) {
-        return newStringSet(this.map.keys());
+      "putNull(Ljava/lang/String;)V": function (this: JContentValues, k: string) { this.data.m.set(k, { k, v: null }); },
+      "size()I": function (this: JContentValues) { return this.data.m.size; },
+      "containsKey(Ljava/lang/String;)Z": function (this: JContentValues, k: string) { return this.data.m.has(k) ? 1 : 0; },
+      "remove(Ljava/lang/String;)V": function (this: JContentValues, k: string) { this.data.m.delete(k); },
+      "clear()V": function (this: JContentValues) { this.data.m.clear(); },
+      "get(Ljava/lang/String;)Ljava/lang/Object;": function (this: JContentValues, k: string) { return this.data.m.get(k)?.v ?? null; },
+      "keySet()Ljava/util/Set;": async function (this: JContentValues) { return vcall(this.data, "keySet", "()Ljava/util/Set;"); },
+      "valueSet()Ljava/util/Set;": async function (this: JContentValues) { return vcall(this.data, "entrySet", "()Ljava/util/Set;"); },
+      "getAsBoolean(Ljava/lang/String;)Ljava/lang/Boolean;": function (this: JContentValues, k: string) {
+        const v = unbox(this.data.m.get(k)?.v);
+        if (v === null || v === undefined) return null;
+        return box(JBool, typeof v === "string" ? (v.toLowerCase() === "true" || v === "1" ? 1 : 0) : v ? 1 : 0);
       },
       "getAsString(Ljava/lang/String;)Ljava/lang/String;": function (this: JContentValues, k: string) {
-        const v = this.map.get(k);
+        const v = this.data.m.get(k)?.v;
         return v === null || v === undefined ? null : String(unbox(v));
       },
       "getAsLong(Ljava/lang/String;)Ljava/lang/Long;": function (this: JContentValues, k: string) {
-        const v = unbox(this.map.get(k));
+        const v = unbox(this.data.m.get(k)?.v);
         if (v === null || v === undefined) return null;
         return box(JLong, typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v))));
       },
       "getAsInteger(Ljava/lang/String;)Ljava/lang/Integer;": async function (this: JContentValues, k: string) {
-        const v = unbox(this.map.get(k));
+        const v = unbox(this.data.m.get(k)?.v);
         if (v === null || v === undefined) return null;
         return boxInt(Math.trunc(Number(v)) | 0);
       },
     };
     for (const t of ["Ljava/lang/String;", "Ljava/lang/Byte;", "Ljava/lang/Short;", "Ljava/lang/Integer;", "Ljava/lang/Long;",
       "Ljava/lang/Float;", "Ljava/lang/Double;", "Ljava/lang/Boolean;", "[B"]) {
-      m[`put(Ljava/lang/String;${t})V`] = function (this: JContentValues, k: string, v: unknown) { this.map.set(k, v); };
+      m[`put(Ljava/lang/String;${t})V`] = function (this: JContentValues, k: string, v: unknown) { this.data.m.set(k, { k, v }); };
     }
     return m;
   })(),
@@ -426,9 +458,9 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
     },
   "update(Ljava/lang/String;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I":
     function (this: JSQLiteDatabase, table: string, cv: JContentValues, where: string | null, args: unknown[] | null) {
-      const sets = [...cv.map.keys()].map((k) => `"${k}"=?`).join(",");
+      const sets = [...cv.data.m.keys()].map((k) => `"${k}"=?`).join(",");
       const sql = `UPDATE "${table}" SET ${sets}${where ? " WHERE " + where : ""}`;
-      const vals = [...cv.map.values()].map(unbox);
+      const vals = [...cv.data.m.values()].map((e) => unbox(e.v));
       try {
         this.db!.run(sql, bindArgs([...vals, ...(args ?? [])]) as never);
       } catch (e) { throw sqliteExc(String(e), sql); }
@@ -509,12 +541,12 @@ function buildQuery(table: string, cols: string[] | null, sel: string | null, gr
   return sql;
 }
 function doInsert(jdb: JSQLiteDatabase, table: string, cv: JContentValues, or: string, doThrow = false): bigint {
-  const keys = [...cv.map.keys()];
+  const keys = [...cv.data.m.keys()];
   const sql = keys.length
     ? `INSERT${or} INTO "${table}" (${keys.map((k) => `"${k}"`).join(",")}) VALUES (${keys.map(() => "?").join(",")})`
     : `INSERT${or} INTO "${table}" DEFAULT VALUES`;
   try {
-    jdb.db!.run(sql, bindArgs([...cv.map.values()].map(unbox)) as never);
+    jdb.db!.run(sql, bindArgs([...cv.data.m.values()].map((e) => unbox(e.v))) as never);
   } catch (e) {
     if (doThrow) throw sqliteExc(String(e), sql);
     console.warn("[sqlite insert]", e);

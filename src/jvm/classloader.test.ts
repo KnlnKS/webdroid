@@ -89,6 +89,24 @@ test("PathClassLoader keeps DEX definitions private and preserves their loader t
   vfs.files.delete("/data/app/loader-test.apk");
 });
 
+test("package loaders isolate overlapping APK classes while sharing platform types", async () => {
+  const { vfs } = await import("./natives/jio");
+  const { dexesIn } = await import("./dex");
+  const bytes = new Uint8Array(await Bun.file(new URL("./fixtures/monitor.dex", import.meta.url)).arrayBuffer());
+  vfs.write("/data/app/package-loader.dex", bytes);
+  for (const dex of dexesIn(bytes)) rt.loadDex(dex);
+  const first = await newObj("webdroid/PackageClassLoader", "(Ljava/lang/String;)V", "/data/app/package-loader.dex");
+  const second = await newObj("webdroid/PackageClassLoader", "(Ljava/lang/String;)V", "/data/app/package-loader.dex");
+  const load = (loader: unknown, name: string) => vcall(loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", name);
+  const a = await load(first, "webdroid.MonitorFixture"), b = await load(second, "webdroid.MonitorFixture");
+  expect(a).not.toBe(b);
+  expect(a.ci).not.toBe(rt.link("webdroid/MonitorFixture"));
+  expect(await vcall(a, "isAssignableFrom", "(Ljava/lang/Class;)Z", b)).toBe(0);
+  expect(await load(first, "java.lang.Object")).toBe(await load(second, "java.lang.Object"));
+  expect(await vcall(a, "getClassLoader", "()Ljava/lang/ClassLoader;")).toBe(first);
+  vfs.files.delete("/data/app/package-loader.dex");
+});
+
 test("class loader resource URLs stream archive entries and preserve parent search order", async () => {
   await import("./natives/jdex");
   await import("./natives/jnet");

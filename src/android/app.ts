@@ -6,7 +6,7 @@ import {
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { mangleMethod, jarray } from "../jvm/abi";
-import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID } from "./os";
+import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "./os";
 import { type NativeSpec, rt, callSelf, JObj, maySuspend } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
@@ -21,10 +21,14 @@ import { csText, spannedString } from "./text";
 import { showToast } from "./popup";
 import { newArrayList, mkIter, toJsArray } from "../jvm/natives/jutil";
 import type { JUri } from "./net";
-import { runningServices, svcStop, svcFg } from "./runningservices";
+import { JService, runningServices, svcStop, svcFg } from "./runningservices";
 import { isMusicActive, outputSampleRate, JSpatializer } from "./media";
 import { device } from "../shell/config";
 import type { JBitmap } from "./graphics";
+import { JConfigurationInfo } from "./pm";
+import { deviceConfiguration } from "./resnative";
+import { transactionCaller } from "./binder";
+import { packages } from "./packages";
 
 class JTaskDescription extends JObj {
   label: string | null = null;
@@ -425,7 +429,7 @@ rt.register({
   methods: {
     ...wrapperMethods,
     "<init>()V": function () {},
-    "static getProcessName()Ljava/lang/String;": () => appHost?.pkg ?? "app",
+    "static getProcessName()Ljava/lang/String;": () => PROCESS_NAME || appHost?.pkg || "app",
     "onCreate()V": function () {},
     "onTerminate()V": function () {},
     "onLowMemory()V": function () {},
@@ -453,7 +457,7 @@ rt.register({
     "getApplication()Landroid/app/Application;": currentApplication,
     "static currentApplication()Landroid/app/Application;": currentApplication,
     "static currentPackageName()Ljava/lang/String;": () => appHost?.pkg ?? null,
-    "static currentProcessName()Ljava/lang/String;": () => appHost?.pkg ?? null,
+    "static currentProcessName()Ljava/lang/String;": () => PROCESS_NAME || appHost?.pkg || null,
     "static getIntCoreSetting(Ljava/lang/String;I)I": intCoreSetting,
   },
 });
@@ -507,6 +511,12 @@ for (const [name, methods, statics] of [
     },
     "getMemoryInfo(Landroid/app/ActivityManager$MemoryInfo;)V": (mi: any) => {
       if (mi) { mi.totalMem = 4n * 1024n * 1024n * 1024n; mi.availMem = 2n * 1024n * 1024n * 1024n; mi.lowMemory = 0; mi.threshold = 128n * 1024n * 1024n; }
+    },
+    "getDeviceConfigurationInfo()Landroid/content/pm/ConfigurationInfo;": () => {
+      rt.link("android/content/pm/ConfigurationInfo");
+      const info = new JConfigurationInfo(), config = deviceConfiguration();
+      info.reqTouchScreen = config.touchscreen; info.reqKeyboardType = config.keyboard; info.reqNavigation = config.navigation;
+      info.reqGlEsVersion = 0x30000; return info;
     },
     "static getMyMemoryState(Landroid/app/ActivityManager$RunningAppProcessInfo;)V": (info: JRunningAppProcessInfo) => {
       if (info) fillProc(info);
@@ -735,23 +745,6 @@ rt.register({
 // apps `implements` this to track refresh-rate / display changes; it must link even though it never fires here
 rt.register({ name: "android/hardware/display/DisplayManager$DisplayListener", ctor: class extends JObj {} });
 rt.register({ name: "android/app/AppOpsManager$OnOpChangedListener", ctor: class extends JObj {} });
-rt.register({ name: "android/os/IBinder", ctor: class extends JObj {} });
-rt.register({ name: "android/os/IBinder$DeathRecipient", ctor: class extends JObj {} });
-class JBinder extends JObj { owner: unknown = null; descriptor: string | null = null; }
-rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBinder"], methods: {
-  "<init>()V": function () {},
-  "static flushPendingCommands()V": () => {},
-  "static getCallingUid()I": () => PROCESS_UID,
-  "static getCallingPid()I": () => PROCESS_PID,
-  "attachInterface(Landroid/os/IInterface;Ljava/lang/String;)V": function (this: JBinder, owner: unknown, descriptor: string) {
-    this.owner = owner; this.descriptor = descriptor;
-  },
-  "queryLocalInterface(Ljava/lang/String;)Landroid/os/IInterface;": function (this: JBinder, descriptor: string) {
-    return this.descriptor === descriptor ? this.owner : null;
-  },
-  "getInterfaceDescriptor()Ljava/lang/String;": function (this: JBinder) { return this.descriptor; },
-  "pingBinder()Z": () => 1,
-} });
 // AccessibilityManager callback interfaces — apps `implements` these to watch for a
 // screen reader turning on; must link even though it never fires here (see above).
 for (const n of ["AccessibilityStateChangeListener", "TouchExplorationStateChangeListener"]) {
@@ -806,7 +799,7 @@ rt.register({
 let procInfo: JRunningAppProcessInfo | null = null;
 function fillProc<T extends JRunningAppProcessInfo>(p: T): T {
   const pkg = appHost?.pkg ?? "";
-  p.processName = pkg; p.pkgList = [pkg];
+  p.processName = PROCESS_NAME || pkg; p.pkgList = [pkg];
   p.importance = appHost?.currentActivity() ? 100 : runningServices.size ? 300 : 400;
   return p;
 }
@@ -830,6 +823,11 @@ rt.register({ name: "android/window/OnBackInvokedCallback", ctor: class extends 
 rt.register({
   name: "android/content/ContentProvider", ctor: class extends JObj { $ctx: unknown = null; },
   methods: {
+    "getCallingPackage()Ljava/lang/String;": () => {
+      const caller = transactionCaller();
+      if (caller) for (const record of packages.values()) if (record.uid === caller.uid) return record.pkg;
+      return null;
+    },
     "<init>()V": function () {},
     "onCreate()Z": () => 1,
     "getContext()Landroid/content/Context;": function (this: any) { return this.$ctx ?? appHost?.application ?? null; },
@@ -841,10 +839,6 @@ rt.register({
   },
 });
 
-rt.register({
-  name: "android/content/BroadcastReceiver", ctor: class extends JObj {},
-  methods: { "<init>()V": function () {} },
-});
 class JIntentFilter extends JObj {
   actions: string[] = []; schemes: string[] = []; types: string[] = []; categories: string[] = [];
   /** AOSP's matchData, without authorities and paths: a type matches its own wildcard forms */
@@ -902,13 +896,15 @@ rt.register({
     "hasDataType(Ljava/lang/String;)Z": function (this: { types: string[] }, type: string) { return this.types.includes(type) ? 1 : 0; },
   },
 });
-rt.register({ name: "android/app/Service", ctor: class extends JContextWrapper {}, sup: "android/content/ContextWrapper",
+rt.register({ name: "android/app/Service", ctor: JService, sup: "android/content/ContextWrapper",
   ifaces: ["android/content/ComponentCallbacks2", "android/content/ComponentCallbacks"],
   methods: {
     ...contextMethods,
     "<init>()V": function () {},
     "onCreate()V": () => {},
     "onDestroy()V": () => {},
+    "onUnbind(Landroid/content/Intent;)Z": () => 0,
+    "onRebind(Landroid/content/Intent;)V": () => {},
     "onStart(Landroid/content/Intent;I)V": () => {},
     "onStartCommand(Landroid/content/Intent;II)I": async function (this: JObj, intent: JIntent, _flags: number, startId: number) {
       await vcall(this, "onStart", "(Landroid/content/Intent;I)V", intent, startId); return 1;

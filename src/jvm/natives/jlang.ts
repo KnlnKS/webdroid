@@ -326,7 +326,7 @@ rt.register({
     "resolveClass(Ljava/lang/Class;)V": () => {},
     "findClass(Ljava/lang/String;)Ljava/lang/Class;": (n: string) => { throw rt.mkThrowable("java/lang/ClassNotFoundException", n); },
     "findResource(Ljava/lang/String;)Ljava/net/URL;": maySuspend(function (this: JClassLoader, path: string) {
-      if (!this.runtime.classpath[path]) return null;
+      if (!this.runtime.hasClasspath(path)) return null;
       const archive = this.runtime.classpathLocations.get(path) ?? "/data/app/base.apk";
       return newObj("java/net/URL", "(Ljava/lang/String;)V", "jar:file://" + archive + "!/" + path);
     }),
@@ -353,13 +353,13 @@ rt.register({
       return url ? vcall(url, "openStream", "()Ljava/io/InputStream;") : null;
     },
     // the path System.load would take for lib<name>.so, or null: dlopen resolves it by name
-    "findLibrary(Ljava/lang/String;)Ljava/lang/String;": (n: string) => { const a = pickAbi((abi) => !!rt.classpath[`lib/${abi}/lib${n}.so`]); return a ? `/lib/lib${n}.so` : null; },
+    "findLibrary(Ljava/lang/String;)Ljava/lang/String;": (n: string) => { const a = pickAbi((abi) => rt.hasClasspath(`lib/${abi}/lib${n}.so`)); return a ? `/lib/lib${n}.so` : null; },
   },
 });
 const bootLoader = new JClassLoader();
 /** a classpath entry as an InputStream, or null when the apk has no such file */
 export async function classpathStream(path: string, runtime: Runtime = rt): Promise<unknown> {
-  const bytes = runtime.classpath[path];
+  const bytes = await runtime.readClasspath(path);
   return bytes ? newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length)) : null;
 }
 
@@ -1299,14 +1299,14 @@ function needsNative(lib: string, abi: string): void {
   rt.onNativeRequired(lib, abi);
 }
 /** dlopen: a lib whose natives a TS shim claims loads; anything else is machine code we cannot run, said so */
-async function dlopen(lib: string, abi: () => string | null, bytes: (a: string) => Uint8Array | null = () => null): Promise<void> {
+async function dlopen(lib: string, abi: () => string | null, bytes: (a: string) => Uint8Array | null | Promise<Uint8Array | null> = () => null): Promise<void> {
   if (rt.nativeLibs.has(lib.replace(/^lib|\.so$/g, "")) || loadedLibs.has(lib)) {
     if (!loadedLibs.has(lib)) { loadedLibs.add(lib); console.log("[webdroid] loadLibrary", lib); }
     return;
   }
   const a = abi();
   // an ABI the native tier can run (src/native/loader.ts) loads for real; the rest is honest
-  const b = a && rt.loadNativeLib ? bytes(a) : null;
+  const b = a && rt.loadNativeLib ? await bytes(a) : null;
   if (a && b && rt.loadNativeLib) {
     loadedLibs.add(lib);
     console.log("[webdroid] loadLibrary", lib, a);
@@ -1318,8 +1318,8 @@ async function dlopen(lib: string, abi: () => string | null, bytes: (a: string) 
   if (a) needsNative(lib, a);
   throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${lib}" ${a ? "is " + a + " machine code" : "not found"}`);
 }
-const loadLibrary = async (n: string) => dlopen(`lib${n}.so`, () => pickAbi((a) => !!rt.classpath[`lib/${a}/lib${n}.so`]),
-  (a) => rt.classpath[`lib/${a}/lib${n}.so`] ?? null);
+const loadLibrary = async (n: string) => dlopen(`lib${n}.so`, () => pickAbi((a) => rt.hasClasspath(`lib/${a}/lib${n}.so`)),
+  (a) => rt.readClasspath(`lib/${a}/lib${n}.so`));
 /** Integer.getInteger/Long.getLong: a system property decoded the way Integer.decode does,
  *  null when it is unset or not a number — the value a caller falls back from. */
 function sysLong(prop: string): bigint | null {

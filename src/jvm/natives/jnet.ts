@@ -587,7 +587,7 @@ class JURLConnection extends JObj {
     if (r.status === 502 && !final) throw rt.mkThrowable("java/net/UnknownHostException", utf8.dec.decode(body));
     if (final && final !== this.url.u.href) this.url = mkURL(final);   // getURL() reports where a redirect landed
     const hdrs: [string, string][] = [];
-    r.headers.forEach((v, k) => { if (k !== "x-wd-final-url") hdrs.push([k, v]); });
+    r.headers.forEach((v, k) => { if (k !== "x-wd-final-url") hdrs.push([k === "x-wd-content-encoding" ? "content-encoding" : k, v]); });
     return (this.res = { status: r.status, msg: r.statusText, hdrs, body });
   }
   /** case-insensitive; the last value wins, as URLConnection documents */

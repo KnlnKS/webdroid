@@ -85,6 +85,7 @@ function annotatedElement<T>(annosOf: (this: T) => EncAnnotation[]): NonNullable
 }
 
 class JField extends JObj {
+  accessible = 0;
   owner!: ClassInfo;
   fname = "";
   desc = "";
@@ -145,8 +146,8 @@ rt.register({
     "getModifiers()I": function (this: JField) { return this.flags; },
     "isSynthetic()Z": function (this: JField) { return (this.flags >> 12) & 1; },
     "isEnumConstant()Z": function (this: JField) { return (this.flags >> 14) & 1; },
-    "setAccessible(Z)V": () => {},
-    "isAccessible()Z": () => 1,
+    "setAccessible(Z)V": function (this: JField, value: number) { this.accessible = value ? 1 : 0; },
+    "isAccessible()Z": function (this: JField) { return this.accessible; },
     "getDeclaringClass()Ljava/lang/Class;": function (this: JField) { return (this.owner.owner ?? rt).classFor(this.owner.name); },
     "get(Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JField, o: unknown) {
       return boxReturn(this.desc, await readField.call(this, o));

@@ -5,7 +5,6 @@ import { Resources } from "./res";
 import { apkSigningBlock, signingSequence as sequence } from "./apksignature";
 
 export interface PackageArchive {
-  bytes: Uint8Array;
   root: XmlNode;
   pkg: string;
   res: Resources;
@@ -46,9 +45,12 @@ export async function apkCertificates(bytes: Uint8Array, zip: Record<string, Uin
 }
 export async function parsePackageArchive(bytes: Uint8Array): Promise<PackageArchive> {
   const zip = zipTree(bytes);
+  return packageArchive(zip, await apkCertificates(bytes, zip));
+}
+export function packageArchive(zip: Record<string, Uint8Array>, certificates: Uint8Array[]): PackageArchive {
   if (!zip["AndroidManifest.xml"]) throw new Error("APK has no AndroidManifest.xml");
   const root = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(root, "package");
   if (!pkg || !/^[\w]+(?:\.[\w]+)+$/.test(pkg)) throw new Error("invalid APK package name");
-  return { bytes, root, pkg, res: new Resources(zip["resources.arsc"] ? new Arsc(zip["resources.arsc"], (path) => zip[path] ?? null) : null, zip, undefined, true), certificates: await apkCertificates(bytes, zip) };
+  return { root, pkg, res: new Resources(zip["resources.arsc"] ? new Arsc(zip["resources.arsc"], (path) => zip[path] ?? null) : null, zip, undefined, true), certificates };
 }

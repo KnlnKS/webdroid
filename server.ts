@@ -1,6 +1,10 @@
 import index from "./index.html";
+import processIndex from "./process.html";
 import { WEB_INJECT } from "./src/shell/webinject";
 import { openInstall } from "./src/shell/install";
+import { prepareSystemPackages } from "./scripts/system-packages";
+
+await prepareSystemPackages();
 
 type TcpData = { host: string; port: number; tls: boolean; sock: import("bun").Socket | null; ready: boolean; pending: (Uint8Array | Buffer)[] };
 
@@ -44,6 +48,7 @@ const server: Bun.Server<TcpData> = Bun.serve({
   development: { hmr: false },
   routes: {
     "/": index,
+    "/process": processIndex,
     "/proxy": async (req) => {
       const q = new URL(req.url).searchParams;
       const url = q.get("url");
@@ -55,11 +60,13 @@ const server: Bun.Server<TcpData> = Bun.serve({
         req.headers.forEach((v, k) => {
           if (k.startsWith("x-wd-")) headers.set(k.slice(5), v);
         });
+        const encoded = !frame && headers.has("accept-encoding");
         const upstream = await fetch(url, {
           method: req.method === "HEAD" ? "HEAD" : req.method,
           headers,
           body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
           redirect: "follow",
+          decompress: !encoded,
         });
         const h = new Headers();
         upstream.headers.forEach((v, k) => {
@@ -67,6 +74,7 @@ const server: Bun.Server<TcpData> = Bun.serve({
         });
         h.set("Access-Control-Allow-Origin", "*");
         h.set("x-wd-final-url", upstream.url);
+        if (encoded && upstream.headers.has("content-encoding")) h.set("x-wd-content-encoding", upstream.headers.get("content-encoding")!);
         if (frame && upstream.body && /^text\/html/i.test(upstream.headers.get("content-type") ?? "")) {
           // Served from our origin so the shell can script it; <base> keeps its subresources and
           // links resolving against the real one. text() re-encodes as UTF-8, so say so.
@@ -112,6 +120,13 @@ const server: Bun.Server<TcpData> = Bun.serve({
     // when the device profile does, so let the browser keep them across reloads.
     "/vendor/:file": (req) => serveVendor(req.params.file),
     "/vendor/aosp/:file": (req) => serveVendor(`aosp/${req.params.file}`),
+    "/vendor/microg/:file": (req) => {
+      const file = req.params.file;
+      if (!/^[\w.-]+$/.test(file)) return new Response("not found", { status: 404 });
+      const headers: Record<string, string> = { "cache-control": file.endsWith(".json") ? "no-cache" : "public, max-age=31536000, immutable" };
+      if (file.endsWith(".gz") && !new URL(req.url).searchParams.has("raw")) headers["content-encoding"] = "gzip";
+      return new Response(Bun.file("vendor/microg/" + file), { headers });
+    },
     "/apks": async () => {
       const names: string[] = [];
       for await (const f of new Bun.Glob("*.{apk,xapk}").scan("apks")) names.push(f);

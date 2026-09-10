@@ -15,7 +15,7 @@ export interface Install {
   zip: Record<string, Uint8Array>;
   lazyEntries: Map<string, FileSource>;
   /** the base apk's own bytes: what sourceDir names and what ZipFile(sourceDir) must open */
-  base: Uint8Array;
+  base: Uint8Array | FileSource;
   /** a resident config split keeps its own resource table: the entries for its configs only */
   splits: { name: string; source: FileSource; bytes: Uint8Array | null; resources: Uint8Array | null }[];
 }

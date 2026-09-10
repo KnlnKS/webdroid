@@ -14,8 +14,10 @@ import { mkCursor } from "./sqlite";
 import { newArrayList } from "../jvm/natives/jutil";
 import { getPM } from "./pm";
 import { inMainJob, onMain } from "./mainloop";
+import { PROCESS_NAME } from "./os";
 
-type ProviderInfo = { name: string; authority: string; packageName: string };
+type ProviderInfo = { name: string; authority: string; packageName: string; processName?: string };
+export const providerTransport: { acquire: (info: ProviderInfo) => Promise<unknown> } = { acquire: async () => null };
 const providers = new WeakMap<AppHost, Map<string, Promise<unknown>>>();
 export function attachProvider(ctx: JContext, info: ProviderInfo): Promise<unknown> {
   let local = providers.get(ctx.$host);
@@ -41,7 +43,9 @@ async function contentProvider(uri: JUri): Promise<unknown> {
   const existing = providers.get(appHost)?.get(authority);
   if (existing) return existing;
   const info: ProviderInfo | null = await vcall(getPM(), "resolveContentProvider", "(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;", authority, 128);
-  return info?.packageName === appHost.pkg ? attachProvider(appHost.application, info) : null;
+  if (!info) return null;
+  return info.packageName === appHost.pkg && (!info.processName || info.processName === (PROCESS_NAME || appHost.pkg))
+    ? attachProvider(appHost.application, info) : providerTransport.acquire(info);
 }
 
 export function contentResolver(): unknown {
@@ -116,9 +120,19 @@ const resolverMethods: NativeSpec["methods"] = {
   "openFileDescriptor(Landroid/net/Uri;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/os/ParcelFileDescriptor;": openPfd,
   "openAssetFileDescriptor(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;": openAfd,
   "openTypedAssetFile(Landroid/net/Uri;Ljava/lang/String;Landroid/os/Bundle;Landroid/os/CancellationSignal;)Landroid/content/res/AssetFileDescriptor;": openAfd,
-  "insert(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;": () => null,
-  "delete(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I": async (u: JUri) =>
-    isDocsUri(u) && await docDelete(documentId(u, true)) ? 1 : 0,
+  "insert(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;": async (u: JUri, values: unknown) => {
+    const provider = await contentProvider(u);
+    return provider ? vcall(provider, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", u, values) : null;
+  },
+  "update(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I": async (u: JUri, values: unknown, where: string | null, args: string[] | null) => {
+    const provider = await contentProvider(u);
+    return provider ? vcall(provider, "update", "(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I", u, values, where, args) : 0;
+  },
+  "delete(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I": async (u: JUri, where: string | null, args: string[] | null) => {
+    if (isDocsUri(u)) return await docDelete(documentId(u, true)) ? 1 : 0;
+    const provider = await contentProvider(u);
+    return provider ? vcall(provider, "delete", "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I", u, where, args) : 0;
+  },
   // A grant we cannot refuse: nothing here revokes URI access, so the app keeps what it took.
   "takePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri) => {
     const all = uriGrants.all();
