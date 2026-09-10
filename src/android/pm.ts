@@ -16,6 +16,7 @@ import { apkPath, vfs } from "../jvm/natives/jio";
 import { DOCS_AUTHORITY } from "./documents";
 import { type JList, newArrayList, toJsArray } from "../jvm/natives/jutil";
 import { JIntent, type JComponentName, componentState, mkComponentName } from "./intent";
+import { matchesIntentFilter } from "./intent-filter";
 import { csText } from "./text";
 import type { JActivity } from "./app";
 
@@ -397,8 +398,6 @@ function resolveProvider(authority: string, flags = 0): unknown {
   return null;
 }
 
-/** An explicit intent resolves to its own manifest entry, as on any device; with nothing else
- *  installed an implicit one honestly resolves to nothing. */
 /** the manifest's launcher activity (dotted), the entry point PackageManager hands out */
 function launcherActivity(): string | null {
   for (const [name, node] of manifestActivities) {
@@ -408,17 +407,11 @@ function launcherActivity(): string | null {
   }
   return null;
 }
-function resolveActivity(intent: JIntent | null): unknown {
-  const cls = intent?.component;
-  if (!cls || !manifestActivities.has(cls.replace(/\./g, "/"))) return null;
-  const ri = new (rt.link("android/content/pm/ResolveInfo").ctor)() as Record<string, unknown>;
-  ri.activityInfo = mkActivityInfo(cls);
-  return ri;
+function resolveActivity(intent: JIntent | null, flags: number): unknown {
+  return queryActivities(intent, flags).a[0] ?? null;
 }
-
-function queryActivities(intent: JIntent | null): JList {
-  const info = resolveActivity(intent);
-  return newArrayList(info ? [info] : []);
+function queryActivities(intent: JIntent | null, flags: number): JList {
+  return queryComponents(intent, flags, "activity");
 }
 
 function componentEnabled(name: string, node: XmlNode): boolean {
@@ -461,24 +454,24 @@ function getServiceInfo(component: JComponentName, flags: number): JServiceInfo 
   if (component.pkg !== pkg || !node || !visibleComponent(name, node, flags)) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", component.pkg + "/" + name);
   return serviceInfo(name, node, flags);
 }
-function queryComponents(intent: JIntent | null, flags: number, receiver = false): JList {
+function queryComponents(intent: JIntent | null, flags: number, kind: "service" | "receiver" | "activity" = "service"): JList {
   const result = newArrayList(), pkg = appHost?.pkg ?? "";
   if (!intent || intent.pkg && intent.pkg !== pkg || intent.componentPkg && intent.componentPkg !== pkg) return result;
-  for (const [name, node] of receiver ? manifestReceivers : manifestServices) {
+  for (const [rawName, node] of kind === "activity" ? manifestActivities : kind === "receiver" ? manifestReceivers : manifestServices) {
+    const name = qualifyComponent(rawName, pkg);
     if (!visibleComponent(name, node, flags)) continue;
     let priority = 0;
     if (intent.component) { if (qualifyComponent(intent.component, pkg) !== name) continue; }
     else {
-      if (!matchesAction(node, intent.action)) continue;
-      const filters = node.children.filter((filter) => filter.name === "intent-filter" &&
-        (!intent.action || filter.children.some((a) => a.name === "action" && attrStr(a, "name") === intent.action)) &&
-        [...intent.categories, ...(flags & 0x10000 ? ["android.intent.category.DEFAULT"] : [])].every((category) => filter.children.some((a) => a.name === "category" && attrStr(a, "name") === category)) &&
-        !intent.dataUri && !intent.typeStr && !filter.children.some((a) => a.name === "data"));
+      const filters = node.children.filter((filter) => filter.name === "intent-filter" && matchesIntentFilter(filter, intent, !!(flags & 0x10000)));
       if (!filters.length) continue;
       priority = Math.max(...filters.map((filter) => attr(filter, "priority")?.data ?? 0));
     }
     const info = new (rt.link("android/content/pm/ResolveInfo").ctor)();
-    if (receiver) info.activityInfo = receiverInfo(name, node, flags);
+    if (kind === "activity") {
+      info.activityInfo = mkActivityInfo(name);
+      componentInfo(info.activityInfo, name, node, flags);
+    } else if (kind === "receiver") info.activityInfo = receiverInfo(name, node, flags);
     else info.serviceInfo = serviceInfo(name, node, flags);
     info.priority = priority;
     result.a.push(info);
@@ -592,16 +585,16 @@ rt.register({
     "getApplicationLabel(Landroid/content/pm/ApplicationInfo;)Ljava/lang/CharSequence;": applicationLabel,
     "getPackageArchiveInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;": async (path: string, flags: number) => { const archive = await readArchive(path); return archive ? archiveInfo(archive, path, flags) : null; },
     "getPackageArchiveInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$PackageInfoFlags;)Landroid/content/pm/PackageInfo;": async (path: string, flags: JInfoFlags) => { const archive = await readArchive(path); return archive ? archiveInfo(archive, path, Number(flags.value)) : null; },
-    "resolveActivity(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;": (i: JIntent | null) => resolveActivity(i),
-    "resolveActivity(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Landroid/content/pm/ResolveInfo;": (i: JIntent | null) => resolveActivity(i),
+    "resolveActivity(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;": resolveActivity,
+    "resolveActivity(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Landroid/content/pm/ResolveInfo;": (i: JIntent | null, f: JInfoFlags) => resolveActivity(i, Number(f.value)),
     "queryIntentActivities(Landroid/content/Intent;I)Ljava/util/List;": queryActivities,
-    "queryIntentActivities(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Ljava/util/List;": queryActivities,
+    "queryIntentActivities(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Ljava/util/List;": (i: JIntent, f: JInfoFlags) => queryActivities(i, Number(f.value)),
     "queryIntentContentProviders(Landroid/content/Intent;I)Ljava/util/List;": queryProviders,
     "queryIntentContentProviders(Landroid/content/Intent;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Ljava/util/List;": (i: { action?: string | null } | null, flags: JInfoFlags) => queryProviders(i, Number(flags.value)),
     "resolveContentProvider(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;": resolveProvider,
     "resolveContentProvider(Ljava/lang/String;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Landroid/content/pm/ProviderInfo;": (a: string, flags: JInfoFlags) => resolveProvider(a, Number(flags.value)),
-    "queryBroadcastReceivers(Landroid/content/Intent;I)Ljava/util/List;": (i: JIntent, f: number) => queryComponents(i, f, true),
-    "queryBroadcastReceivers(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Ljava/util/List;": (i: JIntent, f: JInfoFlags) => queryComponents(i, Number(f.value), true),
+    "queryBroadcastReceivers(Landroid/content/Intent;I)Ljava/util/List;": (i: JIntent, f: number) => queryComponents(i, f, "receiver"),
+    "queryBroadcastReceivers(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Ljava/util/List;": (i: JIntent, f: JInfoFlags) => queryComponents(i, Number(f.value), "receiver"),
     "queryIntentServices(Landroid/content/Intent;I)Ljava/util/List;": queryComponents,
     "queryIntentServices(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Ljava/util/List;": (i: JIntent, f: JInfoFlags) => queryComponents(i, Number(f.value)),
     "resolveService(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;": (i: JIntent, f: number) => queryComponents(i, f).a[0] ?? null,

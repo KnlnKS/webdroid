@@ -6,7 +6,7 @@ import { newLinkedHashSet } from "../jvm/natives/jutil";
 import type { JContext } from "./context";
 import type { JActivity } from "./app";
 import { onMain } from "./mainloop";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, defineException } from "../jvm/natives/jlang";
 
 export class JIntent extends JObj {
   action: string | null = null;
@@ -56,8 +56,10 @@ const intentMethods: NativeSpec["methods"] = {
     this.component = cn?.cls ?? null; this.componentPkg = cn?.pkg ?? null;
     return this;
   },
-  "getComponent()Landroid/content/ComponentName;": function (this: JIntent) {
-    return this.component ? mkComponentName(this.componentPkg ?? appHost?.pkg ?? "", this.component) : null;
+  "getComponent()Landroid/content/ComponentName;": async function (this: JIntent, pm: unknown) {
+    if (this.component) return mkComponentName(this.componentPkg ?? appHost?.pkg ?? "", this.component);
+    const resolved = await vcall(pm, "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", this, 0x10000);
+    return resolved?.activityInfo ? mkComponentName(resolved.activityInfo.packageName, resolved.activityInfo.name) : null;
   },
   "setAction(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, a: string) { this.action = a; return this; },
   "setPackage(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, p: string) { this.pkg = p; return this; },
@@ -116,8 +118,10 @@ const intentMethods: NativeSpec["methods"] = {
   "getSourceBounds()Landroid/graphics/Rect;": () => null,
   "getSelector()Landroid/content/Intent;": () => null,
   "getIdentifier()Ljava/lang/String;": () => null,
-  "resolveActivity(Landroid/content/pm/PackageManager;)Landroid/content/ComponentName;": function (this: JIntent) {
-    return this.component ? mkComponentName(this.componentPkg ?? appHost?.pkg ?? "", this.component) : null;
+  "resolveActivity(Landroid/content/pm/PackageManager;)Landroid/content/ComponentName;": async function (this: JIntent, pm: unknown) {
+    if (this.component) return mkComponentName(this.componentPkg ?? appHost?.pkg ?? "", this.component);
+    const resolved = await vcall(pm, "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", this, 0x10000);
+    return resolved?.activityInfo ? mkComponentName(resolved.activityInfo.packageName, resolved.activityInfo.name) : null;
   },
   "toString()Ljava/lang/String;": function (this: JIntent) {
     return `Intent{act=${this.action} cmp=${this.component}}`;
@@ -197,12 +201,12 @@ rt.register({
   },
 });
 
+defineException("android/content/ActivityNotFoundException", "java/lang/RuntimeException");
 export async function launchIntent(host: AppHost, intent: JIntent) {
-  if (intent?.component) {
-    await host.launch(intent.component.replace(/\./g, "/"), intent);
-  } else {
-    console.log("[webdroid] implicit intent ignored:", intent?.action, intent?.dataUri);
-  }
+  const { getPM } = await import("./pm");
+  const resolved = await vcall(getPM(), "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", intent, 0x10000);
+  if (!resolved?.activityInfo) throw rt.mkThrowable("android/content/ActivityNotFoundException", "No activity found for " + intent.action);
+  await host.launch(resolved.activityInfo.name.replace(/\./g, "/"), intent);
 }
 
 export const RESULT_OK = -1, RESULT_CANCELED = 0;

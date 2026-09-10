@@ -8,7 +8,7 @@ import { JResources } from "./resnative";
 import { type AppHost, appHost, setAppHost } from "./apphost";
 import { setManifest } from "./pm";
 import { parsePackageArchive } from "./packagearchive";
-import { mkComponentName } from "./intent";
+import { mkComponentName, launchIntent } from "./intent";
 
 const previousHost = appHost;
 afterAll(() => setAppHost(previousHost));
@@ -122,4 +122,45 @@ test("provider XML metadata loads the manifest resource through PackageItemInfo"
   expect(without.metaData).toBeNull();
   const direct = await vcall(pm, "getProviderInfo", "(Landroid/content/ComponentName;I)Landroid/content/pm/ProviderInfo;", mkComponentName(archive.pkg, info.name), 128);
   expect(direct.metaData.map.get("android.support.FILE_PROVIDER_PATHS")).toBe(info.metaData.map.get("android.support.FILE_PROVIDER_PATHS"));
+});
+
+test("activity resolution and launch share manifest data, categories, and visibility", async () => {
+  const installed = host(); setAppHost(installed);
+  const filter = (priority: number, data: XmlNode[], categories = ["android.intent.category.DEFAULT"]) => node("intent-filter", { priority }, [
+    node("action", { name: "android.intent.action.VIEW" }), ...categories.map((name) => node("category", { name })), ...data,
+  ]);
+  const activities = [
+    node("activity", { name: ".Web" }, [filter(2, [node("data", { scheme: "https" }), node("data", { host: "*.example.test", port: "8443", pathPrefix: "/posts/" })])]),
+    node("activity", { name: ".Disabled", enabled: 0 }, [filter(5, [node("data", { scheme: "https" })])]),
+    node("activity", { name: ".NonDefault" }, [filter(9, [node("data", { scheme: "https" })], [])]),
+    node("activity", { name: ".Image" }, [filter(1, [node("data", { mimeType: "image/*" })])]),
+    node("activity", { name: ".Glob" }, [filter(1, [node("data", { scheme: "custom", host: "host", pathPattern: "/.*ab" })])]),
+  ];
+  setManifest(node("manifest", { package: installed.pkg }, [node("application", {}, activities)]),
+    new Map(activities.map((n) => [(installed.pkg + attrStr(n, "name")).replace(/\./g, "/"), n])), new Map());
+  const pm = await newObj("android/content/pm/PackageManager"), intent = await newObj("android/content/Intent");
+  intent.action = "android.intent.action.VIEW"; intent.dataUri = "https://SUB.example.test:8443/posts/a%20b";
+  const query = async (flags = 0x10000) => (await vcall(pm, "queryIntentActivities", "(Landroid/content/Intent;I)Ljava/util/List;", intent, flags)).a.map((r: { activityInfo: { name: string } }) => r.activityInfo.name);
+  expect(await query()).toEqual(["test.services.Web"]);
+  expect(await query(0)).toEqual(["test.services.NonDefault", "test.services.Web"]);
+  expect(await query(0x10200)).toEqual(["test.services.Disabled", "test.services.Web"]);
+  expect((await vcall(intent, "resolveActivity", "(Landroid/content/pm/PackageManager;)Landroid/content/ComponentName;", pm)).cls).toBe("test.services.Web");
+  const launches: unknown[] = []; installed.launch = async (...args) => { launches.push(args); };
+  await launchIntent(installed, intent);
+  expect(launches).toEqual([["test/services/Web", intent]]); expect(intent.component).toBeNull();
+  intent.categories.add("missing"); expect(await query()).toEqual([]); intent.categories.clear();
+  intent.pkg = "other"; expect(await query()).toEqual([]); intent.pkg = null;
+  for (const uri of ["https://sub.example.test/posts/a", "https://example.test:8443/posts/a", "HTTPS://sub.example.test:8443/posts/a", "https://sub.example.test:8443/other"]) {
+    intent.dataUri = uri; expect(await query()).toEqual([]);
+  }
+  await expect(launchIntent(installed, intent)).rejects.toMatchObject({ msg: "No activity found for android.intent.action.VIEW" });
+  intent.typeStr = "image/png"; intent.dataUri = "content://media/photo";
+  expect(await query()).toEqual(["test.services.Image"]);
+  intent.dataUri = "file:///photo"; expect(await query()).toEqual(["test.services.Image"]);
+  intent.dataUri = "https://media/photo"; expect(await query()).toEqual([]);
+  intent.dataUri = null; expect(await query()).toEqual(["test.services.Image"]);
+  intent.typeStr = null; intent.dataUri = "custom://host/ab"; expect(await query()).toEqual(["test.services.Glob"]);
+  intent.dataUri = "custom://host/aab"; expect(await query()).toEqual([]);
+  intent.component = ".Web"; intent.action = "unrelated"; expect(await query()).toEqual(["test.services.Web"]);
+  intent.component = ".Missing"; expect(await query()).toEqual([]);
 });

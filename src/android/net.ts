@@ -15,7 +15,7 @@ import { reportUncaught } from "./os";
 export class JUri extends JObj { uri = ""; p: UriParts | null = null; }
 type UriParts = { scheme: string | null; ssp: string; hier: boolean; authority: string | null; path: string; query: string | null; fragment: string | null };
 export function mkUri(s: string): JUri { const u = new JUri(); u.uri = s; return u; }
-function uriParts(u: JUri): UriParts {
+export function uriParts(u: JUri): UriParts {
   if (u.p) return u.p;
   const s = u.uri;
   let scheme: string | null = null, rest = s;
@@ -79,7 +79,7 @@ function uriEncode(s: string | null, allow = ""): string | null {
   return out;
 }
 // AOSP decodes leniently: a malformed escape stays literal, and '+' is NOT a space.
-function uriDecode(s: string | null): string | null {
+export function uriDecode(s: string | null): string | null {
   if (s === null) return null;
   if (!s.includes("%")) return s;
   return s.replace(/(?:%[0-9A-Fa-f]{2})+/g, (m) => {
