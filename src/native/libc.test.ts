@@ -9,6 +9,17 @@ import { E } from "./abi";
 beforeAll(() => { setA64(true); libcInit(); });
 afterAll(() => setA64(false));
 
+test("bionic exports a pointer to the ctype table on both ABIs", () => {
+  for (const a64 of [false, true]) {
+    setA64(a64); libcInit();
+    const table = ldp(lookupHost("_ctype_", "libc.so")!);
+    expect(mem.ld8u(table)).toBe(0);
+    for (const [char, bits] of [[0, 0x20], [9, 0x28], [32, 0x88], [48, 0x44], [65, 0x41], [97, 0x42], [255, 0]]) {
+      expect(mem.ld8u(table + char + 1)).toBe(bits);
+    }
+  }
+});
+
 test("posix_memalign preserves the output and errno on invalid alignment or allocation failure", async () => {
   const fn = lookupHost("posix_memalign", "libc.so")!, sentinel = 0x123456789abcdef0n;
   for (const a64 of [false, true]) {

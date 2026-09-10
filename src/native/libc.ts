@@ -177,7 +177,9 @@ export function libcInit(): void {
   // _ctype_ (257 bytes, index c+1), tzname
   const ct = mem.hostAlloc(384);
   for (let c = 0; c < 256; c++) mem.u8[ct + 1 + c] = c < 128 ? ctypeBits(c) : 0;
-  hostData("libc.so", "_ctype_", ct);
+  const ctype = mem.hostAlloc(PTR);
+  stp(ctype, ct);
+  hostData("libc.so", "_ctype_", ctype);
   tznames = [mem.hostStr("UTC"), mem.hostStr("UTC")];
   const tzn = mem.hostAlloc(2 * PTR);
   stp(tzn, tznames[0]); stp(tzn + PTR, tznames[1]);
