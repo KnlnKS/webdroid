@@ -170,7 +170,7 @@ pub fn h2f(h: u16) f64 {
     const m: f64 = @floatFromInt(h & 0x3ff);
     if (e == 0) return s * m * 0x1p-24;
     if (e == 31) return if (m != 0) std.math.nan(f64) else s * std.math.inf(f64);
-    return s * (1 + m / 1024) * std.math.pow(f64, 2, @floatFromInt(e - 15));
+    return std.math.ldexp(s * (1 + m / 1024), e - 15);
 }
 /// a double to half: round to nearest even, denormals, NaN kept quiet
 pub fn f2h(x0: f64) u16 {
@@ -184,7 +184,7 @@ pub fn f2h(x0: f64) u16 {
         const m = rne(f64, x * 0x1p24);
         return if (m >= 1024) s | 0x0400 else s | @as(u16, @intFromFloat(m));
     }
-    var m = rne(f64, (x / std.math.pow(f64, 2, @floatFromInt(e)) - 1) * 1024);
+    var m = rne(f64, (std.math.ldexp(x, -e) - 1) * 1024);
     if (m == 1024) {
         m = 0;
         e += 1;

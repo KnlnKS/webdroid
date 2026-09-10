@@ -532,6 +532,15 @@ inline fn byFloat(comptime f: anytype, x: Ctx) Status {
 inline fn laneCount(x: Ctx, comptime T: type) usize {
     return if (x.scalar) 1 else (if (x.q) @as(usize, 16) else 8) / @sizeOf(T);
 }
+inline fn pair(comptime T: type, x: Ctx, i: usize) [2]T {
+    const count = laneCount(x, T);
+    const half = @max(count / 2, 1);
+    return if (i < half) .{ get(T, x.c, x.rn, 2 * i), get(T, x.c, x.rn, 2 * i + 1) } else .{ get(T, x.c, x.rm, 2 * i - count), get(T, x.c, x.rm, 2 * i + 1 - count) };
+}
+inline fn absDiff(comptime T: type, n: T, m: T) T {
+    const W = std.meta.Int(.signed, @bitSizeOf(T) * 2);
+    return @bitCast(@as(Unsigned(T), @truncate(@abs(@as(W, n) - @as(W, m)))));
+}
 
 fn threeSame(x: Ctx) Status {
     const opcode = bits(x.w, 11, 5);
@@ -552,25 +561,30 @@ fn threeSameF(comptime F: type, x: Ctx) Status {
         const n = get(F, c, x.rn, i);
         const m = get(F, c, x.rm, i);
         const d = get(F, c, x.rd, i);
-        // a pairwise op reads Vn:Vm as one sequence (a scalar form has no pairs)
-        const half = @max(count / 2, 1);
-        const p0: F = if (i < half) get(F, c, x.rn, 2 * i) else get(F, c, x.rm, 2 * i - count);
-        const p1: F = if (i < half) get(F, c, x.rn, 2 * i + 1) else get(F, c, x.rm, 2 * i + 1 - count);
         const mask: U = std.math.maxInt(U);
         switch (opcode) {
-            24 => O[i] = if (!x.U) fp.fnm(F, n, m, !fv) else fp.fnm(F, p0, p1, !fv),
+            24 => O[i] = if (!x.U) fp.fnm(F, n, m, !fv) else blk: {
+                const p = pair(F, x, i);
+                break :blk fp.fnm(F, p[0], p[1], !fv);
+            },
             25 => {
                 if (x.U) return fault(c, x.w);
                 O[i] = fp.fma(F, if (fv) -n else n, m, d);
             },
-            26 => O[i] = if (!x.U) (if (fv) n - m else n + m) else if (fv) @abs(n - m) else p0 + p1,
+            26 => O[i] = if (!x.U) (if (fv) n - m else n + m) else if (fv) @abs(n - m) else blk: {
+                const p = pair(F, x, i);
+                break :blk p[0] + p[1];
+            },
             27 => O[i] = if (x.U) n * m else fp.fmulx(F, n, m),
             28 => OU[i] = if (if (!x.U) n == m else if (fv) n > m else n >= m) mask else 0,
             29 => {
                 if (!x.U) return fault(c, x.w);
                 OU[i] = if (if (fv) @abs(n) > @abs(m) else @abs(n) >= @abs(m)) mask else 0;
             },
-            30 => O[i] = if (!x.U) (if (fv) fp.fmin(F, n, m) else fp.fmax(F, n, m)) else if (fv) fp.fmin(F, p0, p1) else fp.fmax(F, p0, p1),
+            30 => O[i] = if (!x.U) (if (fv) fp.fmin(F, n, m) else fp.fmax(F, n, m)) else blk: {
+                const p = pair(F, x, i);
+                break :blk if (fv) fp.fmin(F, p[0], p[1]) else fp.fmax(F, p[0], p[1]);
+            },
             else => O[i] = if (x.U) n / m else if (fv) fp.fma(F, -n, m, 3) / 2 else fp.fma(F, -n, m, 2),
         }
     }
@@ -598,11 +612,6 @@ fn threeSameI(comptime T: type, x: Ctx) Status {
         const d = get(T, c, x.rd, i);
         const wn: W = n;
         const wm: W = m;
-        const half = @max(count / 2, 1);
-        const p0: T = if (i < half) get(T, c, x.rn, 2 * i) else get(T, c, x.rm, 2 * i - count);
-        const p1: T = if (i < half) get(T, c, x.rn, 2 * i + 1) else get(T, c, x.rm, 2 * i + 1 - count);
-        // an absolute difference is taken modulo the lane width, as the hardware does
-        const abd: Un = @truncate(@abs(wn - wm));
         switch (opcode) {
             0 => O[i] = @intCast(@divFloor(wn + wm, 2)),
             1 => O[i] = sat(T, c, wn + wm),
@@ -625,14 +634,16 @@ fn threeSameI(comptime T: type, x: Ctx) Status {
             },
             12 => O[i] = @max(n, m),
             13 => O[i] = @min(n, m),
-            14 => O[i] = @bitCast(abd),
-            15 => O[i] = d +% @as(T, @bitCast(abd)),
+            14 => O[i] = absDiff(T, n, m),
+            15 => O[i] = d +% absDiff(T, n, m),
             16 => O[i] = if (x.U) n -% m else n +% m,
             17 => OS[i] = if (if (x.U) n == m else (n & m) != 0) -1 else 0,
             18 => O[i] = if (x.U) d -% (n *% m) else d +% (n *% m),
             19 => O[i] = if (x.U) (if (T == u8) @truncate(fp.pmul8(@bitCast(n), @bitCast(m))) else return fault(c, x.w)) else n *% m,
-            20 => O[i] = @max(p0, p1),
-            21 => O[i] = @min(p0, p1),
+            20, 21 => {
+                const p = pair(T, x, i);
+                O[i] = if (opcode == 20) @max(p[0], p[1]) else @min(p[0], p[1]);
+            },
             22 => {
                 if (bitsT == 8) return fault(c, x.w);
                 const round: W = if (x.U) @as(W, 1) << (bitsT - 1) else 0;
@@ -642,7 +653,8 @@ fn threeSameI(comptime T: type, x: Ctx) Status {
             },
             23 => {
                 if (x.U) return fault(c, x.w);
-                O[i] = p0 +% p1;
+                const p = pair(T, x, i);
+                O[i] = p[0] +% p[1];
             },
             else => return fault(c, x.w),
         }
@@ -732,7 +744,7 @@ fn twoMiscF(comptime F: type, x: Ctx) Status {
 inline fn LN(comptime T: type, r: *align(8) [8]u8) *align(8) [8 / @sizeOf(T)]T {
     return @ptrCast(r);
 }
-fn xtn(comptime Src: type, comptime N: type, x: Ctx, saturate: bool) Status {
+fn xtn(comptime Src: type, comptime N: type, x: Ctx, comptime saturate: bool) Status {
     var narrow: [8]u8 align(8) = undefined;
     for (0..(if (x.scalar) 1 else 8 / @sizeOf(N))) |i| {
         const v = get(Src, x.c, x.rn, i);
@@ -741,15 +753,16 @@ fn xtn(comptime Src: type, comptime N: type, x: Ctx, saturate: bool) Status {
     return narrowed(x, narrow, @sizeOf(N));
 }
 /// SHRN/RSHRN, SQSHRUN/SQRSHRUN, SQSHRN/UQSHRN, SQRSHRN/UQRSHRN: narrow from lanes twice as wide
-fn shrn(comptime N: type, x: Ctx, shr: u32, round: bool, plain: bool, srcSigned: bool) Status {
+fn shrn(comptime N: type, x: Ctx, shr: u32, comptime round: bool, comptime plain: bool, comptime srcSigned: bool) Status {
     const WS = std.meta.Int(.signed, @bitSizeOf(N) * 2);
     const WU = std.meta.Int(.unsigned, @bitSizeOf(N) * 2);
+    const R = std.meta.Int(.signed, @bitSizeOf(N) * 4);
     var narrow: [8]u8 align(8) = undefined;
     for (0..(if (x.scalar) 1 else 8 / @sizeOf(N))) |i| {
         const raw = get(WU, x.c, x.rn, i);
-        const v: i128 = if (srcSigned and !plain) @as(WS, @bitCast(raw)) else raw;
-        const shifted: i128 = if (round) (v + (@as(i128, 1) << @intCast(shr - 1))) >> @intCast(shr) else v >> @intCast(shr);
-        LN(N, &narrow)[i] = if (plain) @bitCast(@as(Unsigned(N), @truncate(@as(u128, @bitCast(shifted))))) else sat(N, x.c, shifted);
+        const v: R = if (srcSigned and !plain) @as(WS, @bitCast(raw)) else raw;
+        const shifted: R = if (round) (v + (@as(R, 1) << @intCast(shr - 1))) >> @intCast(shr) else v >> @intCast(shr);
+        LN(N, &narrow)[i] = if (plain) @bitCast(@as(Unsigned(N), @truncate(@as(Unsigned(R), @bitCast(shifted))))) else sat(N, x.c, shifted);
     }
     return narrowed(x, narrow, @sizeOf(N));
 }
@@ -942,13 +955,11 @@ fn shiftImmT(comptime T: type, x: Ctx) Status {
     const O = L(T, &out);
     const OU = L(Un, &out);
     switch (opcode) {
-        16, 17, 18, 19 => {
+        inline 16, 17, 18, 19 => |op| {
             if (bitsT == 64) return fault(c, x.w);
-            const round = opcode & 1 != 0;
-            const plain = opcode <= 17 and !x.U;
-            const srcSigned = !(opcode >= 18 and x.U);
-            if (opcode >= 18 and !x.U) return shrn(Signed(T), x, shr, round, plain, srcSigned);
-            return shrn(Unsigned(T), x, shr, round, plain, srcSigned);
+            const round = op & 1 != 0;
+            if (op <= 17) return if (x.U) shrn(Un, x, shr, round, false, true) else shrn(Un, x, shr, round, true, true);
+            return if (x.U) shrn(Un, x, shr, round, false, false) else shrn(S, x, shr, round, false, true);
         },
         20 => {
             // SSHLL / USHLL (SXTL / UXTL): widen from the low (or high, Q) half
@@ -967,13 +978,15 @@ fn shiftImmT(comptime T: type, x: Ctx) Status {
         const d = get(T, c, x.rd, i);
         const nu: Un = @bitCast(n);
         const du: Un = @bitCast(d);
-        const rs: T = if (shr >= bitsT) (if (@typeInfo(T).int.signedness == .signed) n >> (bitsT - 1) else 0) else n >> @intCast(shr);
-        const rounded: T = @intCast((@as(W, n) + (@as(W, 1) << @intCast(shr - 1))) >> @intCast(shr));
         switch (opcode) {
-            0 => O[i] = rs,
-            2 => O[i] = d +% rs,
-            4 => O[i] = rounded,
-            6 => O[i] = d +% rounded,
+            0, 2 => {
+                const rs: T = if (shr >= bitsT) (if (@typeInfo(T).int.signedness == .signed) n >> (bitsT - 1) else 0) else n >> @intCast(shr);
+                O[i] = if (opcode == 0) rs else d +% rs;
+            },
+            4, 6 => {
+                const rounded: T = @intCast((@as(W, n) + (@as(W, 1) << @intCast(shr - 1))) >> @intCast(shr));
+                O[i] = if (opcode == 4) rounded else d +% rounded;
+            },
             8 => {
                 if (!x.U) return fault(c, x.w);
                 const keep: Un = ~(@as(Un, std.math.maxInt(Un)) >> @intCast(shr));
@@ -989,11 +1002,11 @@ fn shiftImmT(comptime T: type, x: Ctx) Status {
             14 => O[i] = sat(T, c, @as(W, n) << @intCast(shl)),
             28 => {
                 const F = if (bitsT == 64) f64 else f32;
-                L(F, &out)[i] = @as(F, @floatFromInt(n)) / std.math.pow(F, 2, @floatFromInt(shr));
+                L(F, &out)[i] = std.math.ldexp(@as(F, @floatFromInt(n)), -@as(i32, @intCast(shr)));
             },
             31 => {
                 const F = if (bitsT == 64) f64 else f32;
-                const t = @trunc(get(F, c, x.rn, i) * std.math.pow(F, 2, @floatFromInt(shr)));
+                const t = @trunc(std.math.ldexp(get(F, c, x.rn, i), @intCast(shr)));
                 O[i] = fp.toInt(T, t);
             },
             else => return fault(c, x.w),
@@ -1141,28 +1154,26 @@ fn threeDifferentT(comptime T: type, x: Ctx) Status {
         }
         return .next;
     }
-    // the arithmetic is signed and twice the wide lane, so unsigned differences are representable
-    const D = std.meta.Int(.signed, @bitSizeOf(W) * 2);
     const O = L(W, &out);
     for (0..wcount) |i| {
-        const n: D = get(T, c, x.rn, off + i);
-        const m: D = get(T, c, x.rm, off + i);
-        const wn: D = get(W, c, x.rn, i);
-        const d: D = get(W, c, x.rd, i);
-        const r: D = switch (opcode) {
-            0 => n + m,
-            1 => wn + m,
-            2 => n - m,
-            3 => wn - m,
-            5 => d + @as(D, @intCast(@abs(n - m))),
-            7 => @intCast(@abs(n - m)),
-            8 => d + n * m,
-            10 => d - n * m,
-            12 => n * m,
-            14 => if (x.U or bitsT != 8) return fault(c, x.w) else fp.pmul8(@truncate(@as(Unsigned(D), @bitCast(n))), @truncate(@as(Unsigned(D), @bitCast(m)))),
+        const n: W = get(T, c, x.rn, off + i);
+        const m: W = get(T, c, x.rm, off + i);
+        const wn: W = get(W, c, x.rn, i);
+        const d: W = get(W, c, x.rd, i);
+        const ad: W = if (n > m) n - m else m - n;
+        O[i] = switch (opcode) {
+            0 => n +% m,
+            1 => wn +% m,
+            2 => n -% m,
+            3 => wn -% m,
+            5 => d +% ad,
+            7 => ad,
+            8 => d +% n *% m,
+            10 => d -% n *% m,
+            12 => n *% m,
+            14 => if (x.U or bitsT != 8) return fault(c, x.w) else @bitCast(fp.pmul8(@truncate(@as(Unsigned(W), @bitCast(n))), @truncate(@as(Unsigned(W), @bitCast(m))))),
             else => return fault(c, x.w),
         };
-        O[i] = @bitCast(@as(Signed(W), @truncate(r)));
     }
     write(c, x.rd, out, true);
     return .next;
@@ -1243,7 +1254,7 @@ fn fpT(comptime F: type, c: *Cpu, w: u32) Status {
         const rmode = bits(w, 19, 2);
         const opcode = bits(w, 16, 3);
         const fbits: i32 = 64 - @as(i32, @intCast(bits(w, 10, 6)));
-        const scale = std.math.pow(F, 2, @floatFromInt(fbits));
+        const scale = std.math.ldexp(@as(F, 1), fbits);
         if (rmode == 0 and (opcode == 2 or opcode == 3)) {
             const src = a64.zr(c, rn);
             const v: F = if (sf) (if (opcode == 2) @floatFromInt(@as(i64, @bitCast(src))) else @floatFromInt(src)) else (if (opcode == 2) @floatFromInt(@as(i32, @truncate(@as(i64, @bitCast(src))))) else @floatFromInt(@as(u32, @truncate(src))));

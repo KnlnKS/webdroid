@@ -356,17 +356,22 @@ pub inline fn setW(c: *Cpu, n: u8, v: u32) void {
     if (n != 31) c.x[n] = v;
 }
 pub fn cond(c: *Cpu, cc: u8) bool {
+    const f = c.cpsr;
+    const n = f >> 31 != 0;
+    const z = f & (1 << 30) != 0;
+    const cy = f & (1 << 29) != 0;
+    const v = f & (1 << 28) != 0;
     const r = switch (cc >> 1) {
-        0 => c.z() == 1,
-        1 => c.cf() == 1,
-        2 => c.n() == 1,
-        3 => c.vf() == 1,
-        4 => c.cf() == 1 and c.z() == 0,
-        5 => c.n() == c.vf(),
-        6 => c.z() == 0 and c.n() == c.vf(),
+        0 => z,
+        1 => cy,
+        2 => n,
+        3 => v,
+        4 => cy and !z,
+        5 => n == v,
+        6 => !z and n == v,
         else => return true,
     };
-    return if (cc & 1 != 0) !r else r;
+    return r != (cc & 1 != 0);
 }
 pub inline fn nz(comptime T: type, v: T) u32 {
     const bitsT = @typeInfo(T).int.bits;
@@ -900,42 +905,33 @@ fn svc(c: *Cpu) Status {
 }
 
 /// interpret from c.pc to the first control transfer (or 256 instructions); the pc is left in c.pc
-pub fn block(c: *Cpu, start: u32, entry: *cpu.Page) Status {
+pub fn block(c: *Cpu, start: u32, page: *cpu.Page) Status {
     if (start & 3 != 0) return raise(c, .misaligned_pc, start);
-    var page = entry;
     c.bpc = start;
     var pc = start;
     var n: u32 = 0;
-    while (n < cpu.max_block) : (n += 1) {
+    var s: Status = .next;
+    while (true) {
         const i = (pc & (abi.PAGE_SIZE - 1)) >> 2;
         const o = &page.ops[i];
         if (o.kind == .raw) {
             o.* = decode(ld(u32, pc), pc);
             page.cov[i >> 3] |= @as(u8, 1) << @intCast(i & 7);
         }
-        c.ic += 1;
-        cpu.stats.interp += 1;
-        const st_ = exec(c, o, pc);
-        switch (st_) {
-            .next => {
-                pc += 4;
-                if (pc & (abi.PAGE_SIZE - 1) == 0) {
-                    c.pc = pc;
-                    return .jump;
-                }
-                // a store into this page may have dropped its decode block
-                if (mem.page_flags[pc >> abi.PAGE_SHIFT] & 1 == 0) {
-                    c.pc = pc;
-                    return .jump;
-                }
-                page = cpu.pageFor(pc) orelse return raise(c, .bad_address, pc);
-            },
-            else => {
-                if (st_ == .fault) c.pc = pc;
-                return st_;
-            },
+        n += 1;
+        s = exec(c, o, pc);
+        if (s != .next) {
+            if (s == .fault) c.pc = pc;
+            break;
+        }
+        pc += 4;
+        if (n >= cpu.max_block or pc & (abi.PAGE_SIZE - 1) == 0 or mem.page_flags[pc >> abi.PAGE_SHIFT] & 1 == 0) {
+            c.pc = pc;
+            s = .jump;
+            break;
         }
     }
-    c.pc = pc;
-    return .jump;
+    c.ic += n;
+    cpu.stats.interp += n;
+    return s;
 }

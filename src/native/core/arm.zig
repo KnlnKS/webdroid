@@ -961,13 +961,18 @@ pub fn block(c: *Cpu, start: u32) Status {
     c.bpc = start | @intFromBool(thumb);
     var pc = start;
     var n: u32 = 0;
-    while (n < cpu.max_block) : (n += 1) {
-        if (pc < abi.LOW) return fault(c, .bad_address, pc, pc);
-        c.ic += 1;
-        cpu.stats.interp += 1;
-        const st_ = if (thumb) execThumb(c, pc) else execArm(c, pc);
-        if (st_ != .next) return st_;
+    var s: Status = .next;
+    while (n < cpu.max_block) {
+        if (pc < abi.LOW) {
+            s = fault(c, .bad_address, pc, pc);
+            break;
+        }
+        n += 1;
+        s = if (thumb) execThumb(c, pc) else execArm(c, pc);
+        if (s != .next) break;
         pc = @truncate(c.pc);
     }
-    return .jump;
+    c.ic += n;
+    cpu.stats.interp += n;
+    return if (s == .next) .jump else s;
 }
