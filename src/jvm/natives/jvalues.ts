@@ -15,7 +15,15 @@ rt.register({
   },
 });
 
-class JUUID extends JObj { hi = 0n; lo = 0n; }
+export class JUUID extends JObj { hi = 0n; lo = 0n; }
+export function uuidFromString(s: string): JUUID {
+  const parts = s.split("-");
+  if (parts.length !== 5) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid UUID string: " + s);
+  const u = new JUUID(), h = parts.map((p) => BigInt("0x" + p));
+  u.hi = BigInt.asIntN(64, (h[0] << 32n) | (h[1] << 16n) | h[2]);
+  u.lo = BigInt.asIntN(64, (h[3] << 48n) | h[4]);
+  return u;
+}
 rt.register({
   name: "java/util/UUID", ctor: JUUID, ifaces: ["java/io/Serializable", "java/lang/Comparable"],
   methods: {
@@ -34,14 +42,7 @@ rt.register({
       const h = (v: bigint, n: number) => BigInt.asUintN(n * 4, v).toString(16).padStart(n, "0");
       return `${h(this.hi >> 32n, 8)}-${h(this.hi >> 16n, 4)}-${h(this.hi, 4)}-${h(this.lo >> 48n, 4)}-${h(this.lo, 12)}`;
     },
-    "static fromString(Ljava/lang/String;)Ljava/util/UUID;": (s: string) => {
-      const parts = s.split("-");
-      if (parts.length !== 5) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid UUID string: " + s);
-      const u = new JUUID(), h = parts.map((p) => BigInt("0x" + p));
-      u.hi = BigInt.asIntN(64, (h[0] << 32n) | (h[1] << 16n) | h[2]);
-      u.lo = BigInt.asIntN(64, (h[3] << 48n) | h[4]);
-      return u;
-    },
+    "static fromString(Ljava/lang/String;)Ljava/util/UUID;": uuidFromString,
     "equals(Ljava/lang/Object;)Z": function (this: JUUID, o: unknown) { return o instanceof JUUID && o.hi === this.hi && o.lo === this.lo ? 1 : 0; },
     "hashCode()I": function (this: JUUID) { const x = this.hi ^ this.lo; return Number(BigInt.asIntN(32, (x >> 32n) ^ x)); },
     "compareTo(Ljava/lang/Object;)I": function (this: JUUID, o: JUUID) { return this.hi < o.hi ? -1 : this.hi > o.hi ? 1 : this.lo < o.lo ? -1 : this.lo > o.lo ? 1 : 0; },

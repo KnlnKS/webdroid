@@ -6,6 +6,7 @@ import { jarray, mangleMethod } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
+import { uuidFromString } from "../jvm/natives/jvalues";
 import { vcall, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
 export { reportUncaught };
@@ -495,6 +496,26 @@ export const PARCELABLE = {
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": () => {},
 } as const;
+// ParcelUuid is a Parcelable box around java.util.UUID and nothing else; it carries device and
+// session identifiers across intents, so a class that is merely absent poisons the caller.
+class JParcelUuid extends JObj { uuid: unknown = null; }
+rt.register({
+  name: "android/os/ParcelUuid", ctor: JParcelUuid, ifaces: ["android/os/Parcelable"],
+  methods: {
+    ...PARCELABLE,
+    "<init>(Ljava/util/UUID;)V": function (this: JParcelUuid, u: unknown) { this.uuid = u; },
+    "static fromString(Ljava/lang/String;)Landroid/os/ParcelUuid;": (s: string) => {
+      rt.link("java/util/UUID");
+      return Object.assign(new JParcelUuid(), { uuid: uuidFromString(s) });
+    },
+    "getUuid()Ljava/util/UUID;": function (this: JParcelUuid) { return this.uuid; },
+    "toString()Ljava/lang/String;": maySuspend(function (this: JParcelUuid) { return vcall(this.uuid, "toString", "()Ljava/lang/String;"); }),
+    "equals(Ljava/lang/Object;)Z": maySuspend(function (this: JParcelUuid, o: unknown) {
+      return o instanceof JParcelUuid ? vcall(this.uuid, "equals", "(Ljava/lang/Object;)Z", o.uuid) : 0;
+    }),
+    "hashCode()I": maySuspend(function (this: JParcelUuid) { return vcall(this.uuid, "hashCode", "()I"); }),
+  },
+});
 rt.register({ name: "android/os/Parcelable", ctor: class extends JObj {} });
 rt.register({ name: "android/os/Parcelable$Creator", ctor: class extends JObj {} });
 rt.register({

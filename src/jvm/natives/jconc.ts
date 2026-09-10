@@ -84,6 +84,7 @@ rt.register({
     "<init>(Z)V": function (this: JAtomicBool, v: number) { this.v = v; },
     "get()Z": function (this: JAtomicBool) { return this.v; },
     "set(Z)V": function (this: JAtomicBool, v: number) { this.v = v; },
+    "lazySet(Z)V": function (this: JAtomicBool, v: number) { this.v = v; },
     "compareAndSet(ZZ)Z": function (this: JAtomicBool, e: number, v: number) {
       if (this.v !== e) return 0;
       this.v = v; return 1;
@@ -144,25 +145,32 @@ rt.register({
 });
 
 // ── TimeUnit (enum-like native)
-class JTimeUnit extends JEnum { ms = 1; }
-function tu(name: string, ord: number, ms: number): JTimeUnit {
-  const t = new JTimeUnit(); t.ename = name; t.ord = ord; t.ms = ms; return t;
-}
-const TUS = {
-  NANOSECONDS: tu("NANOSECONDS", 0, 1e-6), MICROSECONDS: tu("MICROSECONDS", 1, 1e-3),
-  MILLISECONDS: tu("MILLISECONDS", 2, 1), SECONDS: tu("SECONDS", 3, 1000),
-  MINUTES: tu("MINUTES", 4, 60000), HOURS: tu("HOURS", 5, 3600000), DAYS: tu("DAYS", 6, 86400000),
+class JTimeUnit extends JEnum { ms = 1; ns = 1000000n; }
+// enum constant, ordinal, the to* method's name, one unit in nanoseconds
+const TU_DEFS: [string, string, bigint][] = [
+  ["NANOSECONDS", "Nanos", 1n], ["MICROSECONDS", "Micros", 1000n], ["MILLISECONDS", "Millis", 1000000n],
+  ["SECONDS", "Seconds", 1000000000n], ["MINUTES", "Minutes", 60000000000n],
+  ["HOURS", "Hours", 3600000000000n], ["DAYS", "Days", 86400000000000n],
+];
+const MAX_LONG = 9223372036854775807n, MIN_LONG = -9223372036854775808n;
+/** Java truncates toward zero and saturates instead of overflowing */
+const tuConvert = (v: bigint, from: bigint, to: bigint) => {
+  const r = (v * from) / to;
+  return r > MAX_LONG ? MAX_LONG : r < MIN_LONG ? MIN_LONG : r;
 };
+const TUS = Object.fromEntries(TU_DEFS.map(([name, , ns], ord) => {
+  const t = new JTimeUnit();
+  t.ename = name; t.ord = ord; t.ns = ns; t.ms = Number(ns) / 1e6;
+  return [name, t];
+})) as Record<string, JTimeUnit>;
 rt.register({
   name: "java/util/concurrent/TimeUnit", ctor: JTimeUnit, sup: "java/lang/Enum",
   statics: { ...TUS },
   methods: {
-    "toMillis(J)J": function (this: JTimeUnit, v: bigint) { return BigInt(Math.round(Number(v) * this.ms)); },
-    "toSeconds(J)J": function (this: JTimeUnit, v: bigint) { return BigInt(Math.floor(Number(v) * this.ms / 1000)); },
-    "toNanos(J)J": function (this: JTimeUnit, v: bigint) { return BigInt(Math.round(Number(v) * this.ms * 1e6)); },
-    "toMinutes(J)J": function (this: JTimeUnit, v: bigint) { return BigInt(Math.floor(Number(v) * this.ms / 60000)); },
+    ...Object.fromEntries(TU_DEFS.map(([, method, ns]) =>
+      [`to${method}(J)J`, function (this: JTimeUnit, v: bigint) { return tuConvert(v, this.ns, ns); }])),
     "convert(JLjava/util/concurrent/TimeUnit;)J": function (this: JTimeUnit, v: bigint, src: JTimeUnit) {
-      return BigInt(Math.floor(Number(v) * src.ms / this.ms));
+      return tuConvert(v, src.ns, this.ns);
     },
     "sleep(J)V": function (this: JTimeUnit, v: bigint) { return park(curThread, () => () => {}, Number(v) * this.ms); },
   },
