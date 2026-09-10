@@ -571,3 +571,41 @@ method in real microG. Location now shares one cached WGS84 inverse calculation 
 bearing and distanceBetween, matching Android's float results for six oracle cases including
 polar/dateline and antipodal coordinates. Four tests pass with 79 assertions; typecheck and
 updated SDK smoke compilation pass. Oracle: /tmp/webdroid-location-oracle/output.txt.
+
+## Final profile verification at a780ce4
+
+Typecheck and the full unit suite pass: 1,002 tests, 47,229 assertions. Resy, pinned microG
+and the rebuilt SDK client compile with zero method failures. Framework coverage remains
+295/363 declared natives with executable probes passing; text comparison passes 6/6.
+Serialized E2E renders all 75 scored steps, overall content difference 37.40%, with unchanged
+goldens. No main-loop wedges, settle timeouts, native-required entries or newly reached
+missing APIs appear relative to b567197. FitNotes's fragment exception persists; Harmonic's
+layout exception has the separately recorded exact-launch baseline reproduction. Flappy has
+the same six FPS failures (minimum 21); Lichess remains loading despite responsive navigation.
+DoodleJump renders 6/6, minimum 34 fps, without missing APIs/errors. Corpus renders 13/14;
+TikTok fails again. Its 22 distinct gaps introduce none beyond the preceding checkpoint.
+
+Three serial matched FitNotes cold/reset pairs use the same headless driver and CDP
+renderer-thread CPU counters. Median CPU is 1231.083 → 1275.325 ms cold (+3.59%) and
+1050.920 → 1109.336 ms after reset (+5.56%). All runs compile 600 root classes with
+comparable layout/draw work. The ten-second early-idle medians are 265.166 → 355.266 ms
+and 248.088 → 339.513 ms. Broker calls remain 10 → 42 (provider calls 4 → 32), matching
+the startup activity identified by the earlier CPU profiles; accumulated overlapping IPC
+latency is not CPU. These windows include delayed service initialization, not steady idle.
+
+Three separate pairs wait 30 seconds, collect garbage, then drive nine more interactions.
+All text actions hit; every step renders without new errors or missing APIs. CPU samples
+are baseline [628.713, 617.403, 640.868] and completion [709.117, 628.129, 630.113] ms
+(rounded samples; median +0.22%). The initial +12.8% result did not repeat and is retained,
+not discarded. Median live JS heap is 128.986 → 137.622 MB. Both root native buffers reserve
+256 MiB; CDP JS heap does not include Wasm/external/GPU memory. These checks do not establish
+performance for every APK or hide the measured startup cost.
+
+Artifacts: /tmp/webdroid-profile-final-{unit,fwtest,textcmp,resy-smoke,microg-smoke,e2e,corpus}.log;
+/tmp/webdroid-location-final-{typecheck,smoke}.log;
+/tmp/webdroid-profile-final-e2e-{actual,report}; /tmp/webdroid-profile-final-comparison.json;
+/tmp/webdroid-profile-perf-{baseline,final}-{1,2,3}.json;
+/tmp/webdroid-profile-steady-{baseline,final}{,-2,-3}.json;
+/tmp/webdroid-profile-final-perfsum.log. The corpus log reports launch/gap coverage; the previous
+checkpoint retains detailed per-APK error JSON. The preserved Google sign-in tab is still at
+the email step; no authenticated account result has been observed.

@@ -5,6 +5,7 @@ Completion now continues from `b567197` in `codex/microg-completion`, in the
 `../webdroid-microg-completion` worktree at the user’s request.
 Run genuine microG and client APK bytecode; add Android platform behavior, never
 app-specific substitutes. Keep comments and dependencies minimal.
+The evidence below is chronological; the final checkpoint records current verification.
 
 Generated microG bundles belong in ignored `vendor/microg/`. Commit the preparation
 script and pinned metadata only. Generate missing files during setup/server startup;
@@ -19,7 +20,7 @@ reuse complete bundles without downloading or reprocessing the source APKs.
 - [x] Automatic microG provisioning; Resy passes real availability checks.
 - [x] Android reference with the same microG build and SDK test clients.
 - [ ] Authentication, FCM receipt, location and interactive maps at Android parity.
-- [ ] Full regression and performance comparisons; focused commits.
+- [x] Full regression and performance comparisons; focused commits.
 
 ## Acceptance
 
@@ -258,3 +259,27 @@ TEMP state and one canonical persistent owner. Processes and bytecode start on d
 - Interactive Google authentication, full map parity, task affinity/launch-mode policies
   and broader crash-loop behavior remain open. Final profile regression/performance checks
   are in progress.
+
+## Final verification at a780ce4
+
+- Typecheck passes. Full units: 1,002 passed, zero failed, 47,229 assertions. Resy,
+  microG and the rebuilt SDK client each smoke-compile with zero method failures. Framework
+  coverage is 295/363 (81%), executable probes pass, and text comparison passes 6/6.
+- Serialized E2E renders 75/75 scored steps: FitNotes 39/39, Mihon app 17/17, Harmonic
+  14/14, onboarding 5/5. Content differences are 40.89%, 57.09%, 34.07%, 17.56%
+  (overall 37.40%). No flow wedges or times out; no newly reached missing APIs relative
+  to b567197. Goldens are unchanged. Existing FitNotes/Harmonic exceptions remain, as do
+  six Flappy FPS failures and Lichess's loading screen. DoodleJump passes 6/6 at minimum
+  34 fps. Corpus renders 13/14 APKs, with no new gaps versus the preceding checkpoint.
+- Three matched cold/reset pairs measure median foreground CPU 1,231.1 → 1,275.3 ms
+  (+3.59%) and 1,050.9 → 1,109.3 ms (+5.56%). The extra startup work remains; broker
+  calls rise 10 → 42, largely provider requests, consistent with the earlier startup
+  profile. Three later nine-step interaction pairs measure median 628.7 → 630.1 ms
+  (+0.22%). A first +12.8% interaction pair did not repeat. Median live JS heap after
+  collection is 129.0 → 137.6 MB, excluding Wasm/external memory. No general speedup
+  or zero-overhead claim is made. Details and artifacts are in the implementation history.
+- Interactive Google authentication remains pending in the preserved Chrome sign-in tab.
+  Resy's remaining Firebase configuration error still has matching Android evidence; no
+  runtime change can establish success for that rejected configuration. Broader account
+  sessions, task-affinity/launch-mode behavior, sticky-service crash policy and full map
+  parity are still open. This is a verified integration checkpoint, not full Android parity.
