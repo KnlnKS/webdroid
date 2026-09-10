@@ -1218,6 +1218,8 @@ export const canvasMethods: NativeSpec["methods"] = {
   // layers are drawn straight through: a saveLayer is just a save
   "saveLayer(Landroid/graphics/RectF;Landroid/graphics/Paint;)I": canvasSave,
   "saveLayer(FFFFLandroid/graphics/Paint;)I": canvasSave,
+  "saveLayer(FFFFLandroid/graphics/Paint;I)I": canvasSave,
+  "saveLayer(Landroid/graphics/RectF;Landroid/graphics/Paint;I)I": canvasSave,
   "saveLayerAlpha(FFFFI)I": function (this: JCanvas, l: number, t: number, r: number, b: number, a: number) {
     this.ctx.save();
     this.ctx.globalAlpha *= a / 255;
