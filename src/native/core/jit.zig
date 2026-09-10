@@ -21,7 +21,7 @@ const O = wasm.Op;
 pub const HEAT = 48;
 const MAX_BLOCKS = 40;
 const MAX_INSTR = 320;
-const MAX_REGIONS = 24;
+const MAX_REGIONS = 64;
 
 // ── locals: the parameters, then a fixed layout every region shares
 pub const L_CPU = 0;
@@ -120,12 +120,13 @@ var nrequests: u32 = 0;
 var in_flight: bool = false;
 pub var stats = struct { regions: u32 = 0, batches: u32 = 0, skipped: u32 = 0, bytes: u32 = 0 }{};
 
-pub fn request(pc: u32, isa: Isa) void {
-    if (nrequests >= MAX_REGIONS) return;
-    for (requests[0..nrequests]) |r| if (r == pc) return;
+pub fn request(pc: u32, isa: Isa) bool {
+    if (nrequests >= MAX_REGIONS) return false;
+    for (requests[0..nrequests]) |r| if (r == pc) return true;
     requests[nrequests] = pc;
     request_isa[nrequests] = isa;
     nrequests += 1;
+    return true;
 }
 /// debug: instructions in [fb_lo, fb_hi) go to the interpreter (bisects a miscompile within a region)
 var fb_lo: u32 = 0;

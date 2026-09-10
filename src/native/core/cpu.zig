@@ -179,7 +179,7 @@ export fn jit_evict() void {
             h.* = 0;
         };
     };
-    @memset(dead[0..65536], 0);
+    @memset(dead[0 .. 1 << 18], 0);
 }
 
 // ── the JIT's helpers, imported by every region module
@@ -387,7 +387,8 @@ export fn run_slice(cp: u32, budget: u32) u32 {
         } else {
             const h = page.heat[i] +% 1;
             page.heat[i] = h;
-            if (h == jit.HEAT) jit.request(pc, if (c.a64 != 0) .a64 else if (c.cpsr & (1 << 5) != 0) .thumb else .arm);
+            // a request the queue has no room for is asked again at the block's next entry
+            if (h == jit.HEAT and !jit.request(pc, if (c.a64 != 0) .a64 else if (c.cpsr & (1 << 5) != 0) .thumb else .arm)) page.heat[i] = h - 1;
             st = if (c.a64 != 0) a64.block(c, pc, page) else arm.block(c, pc);
         }
         switch (st) {
