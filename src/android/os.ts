@@ -6,7 +6,7 @@ import { jarray, mangleMethod } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
-import { vcall, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException } from "../jvm/natives/jlang";
+import { vcall, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
 export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
@@ -434,7 +434,9 @@ const bundleMethods: NativeSpec["methods"] = {
     return copy;
   },
   "size()I": function (this: JBundle) { return this.map.size; },
-  "get(Ljava/lang/String;)Ljava/lang/Object;": function (this: JBundle, k: string) { return this.map.get(k) ?? null; },
+  // A Bundle holds boxed values: `get` is the only reader that lost the declared width, and a
+  // caller that reaches for Object then calls toString()/instanceof Number needs the box.
+  "get(Ljava/lang/String;)Ljava/lang/Object;": function (this: JBundle, k: string) { return boxObject(this.map.get(k) ?? null); },
   "isEmpty()Z": function (this: JBundle) { return this.map.size ? 0 : 1; },
   "containsKey(Ljava/lang/String;)Z": function (this: JBundle, k: string) { return this.map.has(k) ? 1 : 0; },
   "remove(Ljava/lang/String;)V": function (this: JBundle, k: string) { this.map.delete(k); },
@@ -447,7 +449,7 @@ const bundleMethods: NativeSpec["methods"] = {
   "getClassLoader()Ljava/lang/ClassLoader;": function (this: JBundle) { return this.loader; },
   "getParcelable(Ljava/lang/String;)Landroid/os/Parcelable;": function (this: JBundle, k: string) { return this.map.get(k) ?? null; },
   "putParcelable(Ljava/lang/String;Landroid/os/Parcelable;)V": function (this: JBundle, k: string, v: unknown) { this.map.set(k, v); },
-  "getSerializable(Ljava/lang/String;)Ljava/io/Serializable;": function (this: JBundle, k: string) { return this.map.get(k) ?? null; },
+  "getSerializable(Ljava/lang/String;)Ljava/io/Serializable;": function (this: JBundle, k: string) { return boxObject(this.map.get(k) ?? null); },
   "putSerializable(Ljava/lang/String;Ljava/io/Serializable;)V": function (this: JBundle, k: string, v: unknown) { this.map.set(k, v); },
   "getStringArrayList(Ljava/lang/String;)Ljava/util/ArrayList;": function (this: JBundle, k: string) { return this.map.get(k) ?? null; },
   "putStringArrayList(Ljava/lang/String;Ljava/util/ArrayList;)V": function (this: JBundle, k: string, v: unknown) { this.map.set(k, v); },
@@ -480,7 +482,7 @@ for (const [t, d] of [["Parcelable", "Ljava/lang/Object;"], ["Serializable", "Lj
   ["ParcelableArrayList", "Ljava/util/ArrayList;"], ["ParcelableArray", "[Ljava/lang/Object;"],
   ["SparseParcelableArray", "Landroid/util/SparseArray;"]] as const) {
   bundleMethods[`get${t}(Ljava/lang/String;Ljava/lang/Class;)${d}`] = function (this: JBundle, k: string) {
-    return this.map.get(k) ?? null;
+    return boxObject(this.map.get(k) ?? null);
   };
 }
 rt.register({ name: "android/os/BaseBundle", ctor: JBaseBundle, methods: bundleMethods });

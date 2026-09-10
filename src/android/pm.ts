@@ -74,7 +74,10 @@ class JComponentInfo extends JPackageItemInfo {
 }
 rt.register({ name: "android/content/pm/ComponentInfo", ctor: JComponentInfo, sup: "android/content/pm/PackageItemInfo",
   fields: { applicationInfo: "applicationInfo", processName: "processName", enabled: "enabled", exported: "exported", directBootAware: "directBootAware" },
-  methods: { "<init>()V": function () {} },
+  methods: {
+    "<init>()V": function () {},
+    "isEnabled()Z": function (this: JComponentInfo) { return this.enabled && (this.applicationInfo?.enabled ?? 1) ? 1 : 0; },
+  },
 });
 class JActivityInfo extends JComponentInfo {
   theme = 0; configChanges = 0; screenOrientation = -1;

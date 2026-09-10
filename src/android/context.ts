@@ -62,6 +62,7 @@ const SERVICE_CLASS: Record<string, string> = {
   textservices: "android/view/textservice/TextServicesManager",
   user: "android/os/UserManager",
   shortcut: "android/content/pm/ShortcutManager",
+  appops: "android/app/AppOpsManager",
   permission_controller: "android/permission/PermissionControllerManager",
   locale: "android/app/LocaleManager",
 };

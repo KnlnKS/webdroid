@@ -606,6 +606,21 @@ for (const [name, methods, statics] of [
   ["android/os/ext/SdkExtensions", {
     "static getExtensionVersion(I)I": () => 0,
   }],
+  // No app-ops daemon here, so no permission carries an op and every note is allowed: a caller
+  // that maps a permission to an op takes the same branch a device takes when the op is unset.
+  ["android/app/AppOpsManager", {
+    "static permissionToOp(Ljava/lang/String;)Ljava/lang/String;": () => null,
+    "noteOp(Ljava/lang/String;ILjava/lang/String;)I": () => 0,
+    "noteOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": () => 0,
+    "noteProxyOp(Ljava/lang/String;Ljava/lang/String;)I": () => 0,
+    "noteProxyOpNoThrow(Ljava/lang/String;Ljava/lang/String;)I": () => 0,
+    "checkOp(Ljava/lang/String;ILjava/lang/String;)I": () => 0,
+    "checkOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": () => 0,
+    "unsafeCheckOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": () => 0,
+    "checkPackage(ILjava/lang/String;)V": () => {},
+    "startWatchingMode(Ljava/lang/String;Ljava/lang/String;Landroid/app/AppOpsManager$OnOpChangedListener;)V": () => {},
+    "stopWatchingMode(Landroid/app/AppOpsManager$OnOpChangedListener;)V": () => {},
+  }, { MODE_ALLOWED: 0, MODE_IGNORED: 1, MODE_ERRORED: 2, MODE_DEFAULT: 3 }],
   ["android/webkit/CookieManager", {
     "static getInstance()Landroid/webkit/CookieManager;": () => {
       const i = rt.link("android/webkit/CookieManager");
@@ -692,6 +707,7 @@ for (const [name, methods, statics] of [
 rt.register({ name: "android/telephony/PhoneStateListener", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 // apps `implements` this to track refresh-rate / display changes; it must link even though it never fires here
 rt.register({ name: "android/hardware/display/DisplayManager$DisplayListener", ctor: class extends JObj {} });
+rt.register({ name: "android/app/AppOpsManager$OnOpChangedListener", ctor: class extends JObj {} });
 rt.register({ name: "android/os/IBinder", ctor: class extends JObj {} });
 rt.register({ name: "android/os/IBinder$DeathRecipient", ctor: class extends JObj {} });
 class JBinder extends JObj { owner: unknown = null; descriptor: string | null = null; }
