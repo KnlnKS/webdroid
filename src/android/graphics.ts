@@ -1794,3 +1794,18 @@ rt.register({
     // decodeResource/decodeFile wired by res.ts / vfs
   },
 });
+
+const imageFormats = {
+  UNKNOWN: [0, -1], RGB_565: [4, 16], YV12: [0x32315659, 12], Y8: [0x20203859, 8], Y16: [0x20363159, 16],
+  YCBCR_P010: [0x36, 24], NV16: [0x10, 16], NV21: [0x11, 12], YUY2: [0x14, 16], JPEG: [0x100, -1],
+  DEPTH_JPEG: [0x69656963, -1], JPEG_R: [0x1005, -1], YUV_420_888: [0x23, 12], YUV_422_888: [0x27, 16],
+  YUV_444_888: [0x28, 24], FLEX_RGB_888: [0x29, 24], FLEX_RGBA_8888: [0x2a, 32], RAW_SENSOR: [0x20, 16],
+  RAW_PRIVATE: [0x24, -1], RAW10: [0x25, 10], RAW12: [0x26, 12], DEPTH16: [0x44363159, 16],
+  DEPTH_POINT_CLOUD: [0x101, -1], RAW_DEPTH: [0x1002, 16], RAW_DEPTH10: [0x1003, 10], PRIVATE: [0x22, -1], HEIC: [0x48454946, -1],
+} satisfies Record<string, [number, number]>;
+const imageBits = new Map(Object.values(imageFormats));
+rt.register({
+  name: "android/graphics/ImageFormat", ctor: class extends JObj {},
+  statics: Object.fromEntries(Object.entries(imageFormats).map(([name, [value]]) => [name, value])),
+  methods: { "static getBitsPerPixel(I)I": (format: number) => imageBits.get(format) ?? -1 },
+});
