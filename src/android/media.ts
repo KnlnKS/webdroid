@@ -361,9 +361,10 @@ class JAudioTrack extends JObj {
     if (this.timer || !this.listener || !this.period) return;
     const periodMs = Math.max(5, this.period / this.rate * 1000);
     this.timer = setInterval(() => {
-      if (this.playState !== 3 || !this.listener) return;
+      const listener = this.listener;
+      if (this.playState !== 3 || !listener) return;
       // refill until ~3 periods are queued; each callback is one write of one period
-      if (this.queuedSec() < 3 * this.period / this.rate) void onMain(() => vcall(this.listener, "onPeriodicNotification", D_periodic, this)).catch(reportUncaught);
+      if (this.queuedSec() < 3 * this.period / this.rate) void onMain(() => vcall(listener, "onPeriodicNotification", D_periodic, this)).catch(reportUncaught);
     }, periodMs / 2);
   }
   stopTimer(): void { if (this.timer) { clearInterval(this.timer); this.timer = null; } }
@@ -400,7 +401,7 @@ rt.register({
     "pause()V": function (this: JAudioTrack) { this.playState = 2; this.pauseQueue(); this.stopTimer(); },
     "stop()V": function (this: JAudioTrack) { if (this.playState !== 3 || !this.queue.length) this.clearQueue(); this.playState = 1; this.resetHead = true; this.stopTimer(); },
     "flush()V": function (this: JAudioTrack) { if (this.playState !== 3) this.clearQueue(); },
-    "release()V": function (this: JAudioTrack) { this.stopTimer(); this.clearQueue(); this.gain?.disconnect(); this.gain = null; this.state = 0; this.listener = null; },
+    "release()V": function (this: JAudioTrack) { this.stopTimer(); this.clearQueue(); this.gain?.disconnect(); this.gain = null; this.state = 0; this.playState = 1; this.listener = null; },
     "write([SII)I": maySuspend(function (this: JAudioTrack, data: Int16Array, off: number, n: number) {
       if (this.state !== 1) return -3;
       this.push(data.subarray(off, off + n), Math.floor(n / this.channels));

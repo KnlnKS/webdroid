@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import "../natives";
 import { newObj, vcall } from "../jvm/natives/jlang";
-import { rt } from "../jvm/runtime";
+import { JObj, rt } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import type { JBuffer } from "../jvm/natives/jnio";
+import { inMainJob, onMain } from "./mainloop";
 
 test("AudioTrack builder retains PCM format and consumes sliced native-order buffers", async () => {
   const formatBuilder = await newObj("android/media/AudioFormat$Builder");
@@ -98,4 +99,48 @@ test("blocking PCM buffer writes wait for capacity and retain the unconsumed pos
   expect(await write).toBe(8);
   expect(buffer.pos).toBe(8);
   expect(calls).toBe(2);
+});
+
+class PositionListener extends JObj {
+  calls = 0;
+}
+rt.register({ name: "webdroid/AudioTrackPositionListener", ctor: PositionListener, methods: {
+  "onPeriodicNotification(Landroid/media/AudioTrack;)V": function (this: PositionListener) {
+    expect(inMainJob()).toBe(true); this.calls++;
+  },
+} });
+
+test("queued AudioTrack notifications retain their listener across replacement and release", async () => {
+  await rt.initClass(rt.link("webdroid/AudioTrackPositionListener"));
+  for (const release of [false, true]) {
+    const track = await newObj("android/media/AudioTrack", "(IIIIII)V", 3, 8000, 4, 2, 1600, 1) as {
+      playState: number; queuedSec(): number; startTimer(): void; stopTimer(): void;
+    };
+    const original = new PositionListener(), replacement = new PositionListener();
+    const entered = Promise.withResolvers<void>(), gate = Promise.withResolvers<void>(), tick = Promise.withResolvers<void>();
+    const active = onMain(async () => { entered.resolve(); await gate.promise; });
+    await entered.promise;
+    try {
+      await vcall(track, "setPlaybackPositionUpdateListener", "(Landroid/media/AudioTrack$OnPlaybackPositionUpdateListener;)V", original);
+      await vcall(track, "setPositionNotificationPeriod", "(I)I", 80);
+      track.queuedSec = () => { track.stopTimer(); tick.resolve(); return 0; };
+      track.playState = 3; track.startTimer();
+      await tick.promise;
+      expect(original.calls).toBe(0);
+      if (release) {
+        await vcall(track, "release", "()V");
+        expect(await vcall(track, "getState", "()I")).toBe(0);
+        expect(await vcall(track, "getPlayState", "()I")).toBe(1);
+      } else {
+        await vcall(track, "setPlaybackPositionUpdateListener", "(Landroid/media/AudioTrack$OnPlaybackPositionUpdateListener;)V", replacement);
+        track.stopTimer();
+      }
+      gate.resolve(); await active; await onMain(() => {});
+      expect(original.calls).toBe(1);
+      expect(replacement.calls).toBe(0);
+    } finally {
+      track.stopTimer(); gate.resolve(); await active;
+      await vcall(track, "release", "()V");
+    }
+  }
 });
