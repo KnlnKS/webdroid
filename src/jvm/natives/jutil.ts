@@ -1749,7 +1749,7 @@ const collDefaults: Methods = {
 };
 const listDefaults: Methods = {
   "sort(Ljava/util/Comparator;)V": async function (this: JObj, cmp: unknown) {
-    const a = (await toJsArray(this)).slice();
+    const a = await vcall(this, "toArray", "()[Ljava/lang/Object;") as unknown[];
     await sortInPlace(a, cmp);
     for (let i = 0; i < a.length; i++) await vcall(this, "set", `(I${O})${O}`, i, a[i]);
   },
@@ -2014,8 +2014,8 @@ rt.register({
     "static synchronizedList(Ljava/util/List;)Ljava/util/List;": (l: unknown) => l,
     "static synchronizedMap(Ljava/util/Map;)Ljava/util/Map;": (m: unknown) => m,
     "static synchronizedSet(Ljava/util/Set;)Ljava/util/Set;": (s: unknown) => s,
-    "static sort(Ljava/util/List;)V": maySuspend((l: JList) => sortInPlace(l.a, null)),
-    "static sort(Ljava/util/List;Ljava/util/Comparator;)V": maySuspend((l: JList, c: unknown) => sortInPlace(l.a, c)),
+    "static sort(Ljava/util/List;)V": maySuspend((l: unknown) => vcallMaybe(l, "sort", "(Ljava/util/Comparator;)V", null)),
+    "static sort(Ljava/util/List;Ljava/util/Comparator;)V": maySuspend((l: unknown, c: unknown) => vcallMaybe(l, "sort", "(Ljava/util/Comparator;)V", c)),
     "static binarySearch(Ljava/util/List;Ljava/lang/Object;)I": maySuspend((l: unknown, k: unknown) => listBinarySearch(l, k, null)),
     "static binarySearch(Ljava/util/List;Ljava/lang/Object;Ljava/util/Comparator;)I": maySuspend(listBinarySearch),
     "static reverse(Ljava/util/List;)V": (l: JList) => l.a.reverse(),

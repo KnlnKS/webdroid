@@ -5,6 +5,25 @@ import { linkInit, newObj, vcall } from "./jlang";
 import "./jutil";
 import "./jreflect";
 
+test("Collections.sort dispatches to custom list storage and overrides", async () => {
+  class SortList extends JObj { values: unknown[] = ["c", "a", "b"]; }
+  rt.register({ name: "webdroid/SortList", ctor: SortList, ifaces: ["java/util/List"], methods: {
+    "toArray()[Ljava/lang/Object;": function (this: SortList) { return this.values.slice(); },
+    "set(ILjava/lang/Object;)Ljava/lang/Object;": function (this: SortList, i: number, value: unknown) {
+      const old = this.values[i]; this.values[i] = value; return old;
+    },
+  } });
+  const list = await newObj("webdroid/SortList", null);
+  const collections = (await linkInit("java/util/Collections")).ctor;
+  await collections[mangleMethod("sort", "(Ljava/util/List;)V")](list);
+  expect(list.values).toEqual(["a", "b", "c"]);
+  let received: unknown;
+  list[mangleMethod("sort", "(Ljava/util/Comparator;)V")] = async (cmp: unknown) => { received = cmp; };
+  const cmp = new JObj();
+  await collections[mangleMethod("sort", "(Ljava/util/List;Ljava/util/Comparator;)V")](list, cmp);
+  expect(received).toBe(cmp);
+});
+
 test("map view iterator removal unlinks fast and custom-equality entries", async () => {
   let comparisons = 0;
   class ViewKey extends JObj {}
