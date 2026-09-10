@@ -86,3 +86,20 @@ test("attachment remeasures descendants previously measured without a window tok
   });
   expect(measurements).toEqual([false, true]);
 });
+
+
+test("platform layouts convert foreign child parameters and preserve accepted instances", async () => {
+  for (const name of ["FrameLayout", "LinearLayout", "RelativeLayout"]) {
+    const parent = await newObj("android/widget/" + name, null), child = await newObj("android/view/View", null);
+    const source = await newObj("android/view/ViewGroup$MarginLayoutParams", "(II)V", 120, 80);
+    source.marginL = 7; source.marginT = 11; source.marginR = 13; source.marginB = 17;
+    await vcall(parent, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", child, source);
+    const params = child.lp;
+    expect(rt.iof(params, "android/widget/" + name + "$LayoutParams")).toBe(1);
+    expect([params.width, params.height, params.marginL, params.marginT, params.marginR, params.marginB]).toEqual([120, 80, 7, 11, 13, 17]);
+    expect(await vcall(parent, "checkLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)Z", null)).toBe(0);
+    await vcall(parent, "removeView", "(Landroid/view/View;)V", child);
+    await vcall(parent, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", child, params);
+    expect(child.lp).toBe(params);
+  }
+});

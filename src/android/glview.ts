@@ -464,8 +464,9 @@ rt.register({
   },
 });
 
-// ── the fake GL10 passed to Renderer callbacks (AndEngine ignores it, uses GLES20 statics)
-rt.register({ name: "webdroid/GL10", ctor: class extends JObj {}, ifaces: ["javax/microedition/khronos/opengles/GL10", "javax/microedition/khronos/opengles/GL"] });
+rt.register({ name: "webdroid/GL10", ctor: class extends JObj {}, ifaces: ["javax/microedition/khronos/opengles/GL10", "javax/microedition/khronos/opengles/GL"],
+  methods: { "glViewport(IIII)V": (x: number, y: number, w: number, h: number) => gl?.viewport(x, y, w, h) },
+});
 for (const i of ["javax/microedition/khronos/opengles/GL", "javax/microedition/khronos/opengles/GL10",
   "javax/microedition/khronos/opengles/GL11", "javax/microedition/khronos/egl/EGLConfig",
   "javax/microedition/khronos/egl/EGLDisplay", "javax/microedition/khronos/egl/EGL"]) {

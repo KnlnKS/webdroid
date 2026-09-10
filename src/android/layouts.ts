@@ -36,6 +36,7 @@ const frameMethods: NativeSpec["methods"] = {
     return lpFromAttrs(new JFrameLP(), this.jres!, set);
   },
   "generateLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;": (lp: JLayoutParams) => adoptLp(JFrameLP, lp),
+  "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z": (lp: unknown) => +(lp instanceof JFrameLP),
   "onMeasure(II)V": async function (this: JFrameLayout, wSpec: number, hSpec: number) {
     let mw = 0, mh = 0;
     for (const c of this.children) {
@@ -86,6 +87,7 @@ const frameMethods: NativeSpec["methods"] = {
 };
 rt.register({
   name: "android/widget/FrameLayout", ctor: JFrameLayout, sup: "android/view/ViewGroup",
+  clinit: () => { rt.link("android/widget/FrameLayout$LayoutParams"); },
   methods: frameMethods,
 });
 rt.register({
@@ -145,6 +147,7 @@ export const linearMethods: NativeSpec["methods"] = {
     return lpFromAttrs(new JLinearLP(), this.jres!, set);
   },
   "generateLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;": (lp: JLayoutParams) => adoptLp(JLinearLP, lp),
+  "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z": (lp: unknown) => +(lp instanceof JLinearLP),
   "onMeasure(II)V": async function (this: JLinearLayout, wSpec: number, hSpec: number) {
     const vertical = this.orientation === 1;
     const mainSpec = vertical ? hSpec : wSpec;
@@ -239,6 +242,7 @@ export const linearMethods: NativeSpec["methods"] = {
 };
 rt.register({
   name: "android/widget/LinearLayout", ctor: JLinearLayout, sup: "android/view/ViewGroup",
+  clinit: () => { rt.link("android/widget/LinearLayout$LayoutParams"); },
   statics: { HORIZONTAL: 0, VERTICAL: 1, SHOW_DIVIDER_NONE: 0, SHOW_DIVIDER_MIDDLE: 2 },
   methods: linearMethods,
 });
@@ -554,6 +558,7 @@ const relativeMethods: NativeSpec["methods"] = {
     return new JRelativeLP();
   },
   "generateLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;": (lp: JLayoutParams) => adoptLp(JRelativeLP, lp),
+  "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z": (lp: unknown) => +(lp instanceof JRelativeLP),
   "onMeasure(II)V": async function (this: JRelativeLayout, wSpec: number, hSpec: number) {
     const availW = specSize(wSpec), availH = specSize(hSpec);
     const kids = this.children.filter((c) => c.visibility !== 8);
@@ -622,6 +627,7 @@ const relativeMethods: NativeSpec["methods"] = {
   },
 };
 rt.register({ name: "android/widget/RelativeLayout", ctor: JRelativeLayout, sup: "android/view/ViewGroup",
+  clinit: () => { rt.link("android/widget/RelativeLayout$LayoutParams"); },
   statics: { TRUE: -1 },
   methods: relativeMethods });
 rt.register({
