@@ -492,7 +492,11 @@ rt.register({
       return complexToFraction(value.d, base, pbase);
     },
     "getFloat(IF)F": function (this: JTypedArray, i: number, d: number) { return this.vals[i] ? rvFloat(this.res, this.vals[i], d) : d; },
-    "getColor(II)I": function (this: JTypedArray, i: number, d: number) { return this.vals[i] ? rvColor(this.res, this.vals[i], d) : d; },
+    "getColor(II)I": maySuspend(function (this: JTypedArray, i: number, d: number) {
+      const v = this.vals[i];
+      if (v?.t === TV.REFERENCE) return loadColorStateList(this.res, v.d, this.theme).then(c => c.defColor);
+      return rvColor(this.res, v, d);
+    }),
     "getColorStateList(I)Landroid/content/res/ColorStateList;": function (this: JTypedArray, i: number) {
       const v = this.vals[i];
       if (!v) return null;

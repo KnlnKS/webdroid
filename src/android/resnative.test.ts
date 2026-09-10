@@ -1,11 +1,13 @@
 import { expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { zipTree } from "../jvm/natives/jzip";
 import "../natives";
 import { rt } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { JLocale } from "../jvm/natives/jvalues";
 import { Arsc } from "./arsc";
-import { Resources, JTheme, rvColor } from "./res";
+import { Resources, JTheme, JTypedArray, rvColor, setFramework } from "./res";
 import { JContext } from "./context";
 import type { AppHost } from "./apphost";
 import { JResources, deviceConfiguration, scopedResources } from "./resnative";
@@ -91,7 +93,7 @@ test("Resources applies language qualifiers only when accepting a configuration"
 });
 
 
-function localizedTable(): Arsc {
+function localizedTable(files: (path: string) => Uint8Array | null = () => null): Arsc {
   const pool = (strings: string[]) => {
     const encoded = strings.map(s => new TextEncoder().encode(s));
     const start = 28 + strings.length * 4, size = (start + encoded.reduce((n, b) => n + b.length + 3, 0) + 3) & ~3;
@@ -128,7 +130,7 @@ function localizedTable(): Arsc {
   v.setUint32(base + 8, 0x7f, true); v.setUint32(base + 268, 288, true); v.setUint32(base + 276, 288 + types.length, true);
   let offset = base + 288;
   for (const chunk of [types, keys, ...chunks]) { bytes.set(chunk, offset); offset += chunk.length; }
-  return new Arsc(bytes);
+  return new Arsc(bytes, files);
 }
 
 test("scoped contexts lazily share localized entries without changing other contexts or caches", async () => {
@@ -211,4 +213,27 @@ test("TypedArray fractions use their base and reject non-fraction values", async
   expect(await fraction(2)).toBe(7);
   await expect(fraction(3)).rejects.toThrow();
   expect(await fraction(4)).toBe(0);
+});
+
+
+const frameworkApk = new URL("../../vendor/aosp/framework-res.apk", import.meta.url);
+test.skipIf(!existsSync(frameworkApk))("TypedArray getColor resolves selector attributes in its own theme", async () => {
+  const framework = zipTree(new Uint8Array(await Bun.file(frameworkApk).arrayBuffer()));
+  setFramework(new Arsc(framework["resources.arsc"]));
+  // <selector><item android:color="?android:attr/textColorPrimary"/></selector>
+  const xml = Uint8Array.from(Buffer.from("AwAIAOwAAAABABwARAAAAAMAAAAAAAAAAAEAACgAAAAAAAAAAAAAAAsAAAASAAAACAhzZWxlY3RvcgAEBGl0ZW0ABQVjb2xvcgAAAIABCAAUAAAAAAAAAAAAAAClAQEBAgEQACQAAAABAAAA//////////8AAAAAFAAUAAAAAAAAAAAAAgEQADgAAAABAAAA//////////8BAAAAFAAUAAEAAAAAAAAA/////wIAAAD/////CAAAAjYAAQEDARAAGAAAAAEAAAD//////////wEAAAADARAAGAAAAAEAAAD//////////wAAAAA=", "base64"));
+  const table = localizedTable(() => xml), res = new Resources(table, {});
+  const entry = table.entry(0x7f020000)!;
+  entry.value = { type: 3, data: 0 };
+  table.values.strings[0] = "res/color/selector.xml";
+  rt.link("android/content/res/TypedArray");
+  for (const color of [-16776961, -65536]) {
+    const theme = new JTheme(); theme.res = res;
+    theme.cache.set(0x1010036, { t: 0x1c, d: color });
+    const ta = new JTypedArray(); ta.res = res; ta.theme = theme;
+    ta.vals = [{ t: 1, d: 0x7f020000 }, { t: 0x1c, d: color }, null];
+    expect(await vcall(ta, "getColor", "(II)I", 0, 0)).toBe(color);
+    expect(await vcall(ta, "getColor", "(II)I", 1, 0)).toBe(color);
+    expect(await vcall(ta, "getColor", "(II)I", 2, 123)).toBe(123);
+  }
 });
