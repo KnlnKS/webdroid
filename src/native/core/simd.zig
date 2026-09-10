@@ -13,12 +13,9 @@ const Cpu = cpu.Cpu;
 const Status = cpu.Status;
 
 const V = [16]u8;
-inline fn is(w: u32, mask: u32, val: u32) bool {
-    return (w & mask) == val;
-}
-inline fn bits(w: u32, lo: u5, n: u6) u32 {
-    return (w >> lo) & (@as(u32, 0xffff_ffff) >> @intCast(32 - @as(u32, n)));
-}
+const bt = @import("bits.zig");
+const is = bt.is;
+const bits = bt.bits;
 inline fn L(comptime T: type, r: *align(16) V) *align(16) [16 / @sizeOf(T)]T {
     return @ptrCast(r);
 }
@@ -39,15 +36,11 @@ inline fn writeScalar(c: *Cpu, d: u8, comptime T: type, v: T) void {
     L(T, &out)[0] = v;
     c.v[d] = out;
 }
-fn fault(c: *Cpu, w: u32) Status {
-    c.exit = @intFromEnum(cpu.Fault.unimplemented);
-    c.fault_word = w;
-    return .fault;
+inline fn fault(c: *Cpu, w: u32) Status {
+    return cpu.raise(c, .unimplemented, w);
 }
-fn badAddr(c: *Cpu, w: u32) Status {
-    c.exit = @intFromEnum(cpu.Fault.bad_address);
-    c.fault_word = w;
-    return .fault;
+inline fn badAddr(c: *Cpu, w: u32) Status {
+    return cpu.raise(c, .bad_address, w);
 }
 fn Unsigned(comptime T: type) type {
     return std.meta.Int(.unsigned, @bitSizeOf(T));
@@ -104,10 +97,10 @@ inline fn vstore(c: *Cpu, t: u8, a: u32, width: usize) bool {
     var i: usize = 0;
     while (i < width) : (i += 8) {
         if (width - i >= 8) {
-            if (!a64.st(u64, c, a + @as(u32, @intCast(i)), @as(*align(1) u64, @ptrCast(&c.v[t][i])).*)) return false;
+            if (!cpu.st(u64, c, a + @as(u32, @intCast(i)), @as(*align(1) u64, @ptrCast(&c.v[t][i])).*)) return false;
         } else {
             var j = i;
-            while (j < width) : (j += 1) if (!a64.st(u8, c, a + @as(u32, @intCast(j)), c.v[t][j])) return false;
+            while (j < width) : (j += 1) if (!cpu.st(u8, c, a + @as(u32, @intCast(j)), c.v[t][j])) return false;
         }
     }
     return true;
@@ -152,7 +145,7 @@ pub fn memop(c: *Cpu, w: u32, pc: u32) Status {
                     const off = a + (i * regs + k) * es;
                     if (Ld) @memcpy(out[i * es ..][0..es], mem.bytes(off)[0..es]) else {
                         var j: u32 = 0;
-                        while (j < es) : (j += 1) if (!a64.st(u8, c, off + j, out[i * es + j])) return badAddr(c, w);
+                        while (j < es) : (j += 1) if (!cpu.st(u8, c, off + j, out[i * es + j])) return badAddr(c, w);
                     }
                 }
                 if (Ld) c.v[t] = out;
@@ -194,7 +187,7 @@ pub fn memop(c: *Cpu, w: u32, pc: u32) Status {
             const t: u8 = @intCast((rt + k) & 31);
             if (Ld) @memcpy(c.v[t][idx * es ..][0..es], mem.bytes(a + k * es)[0..es]) else {
                 var j: u32 = 0;
-                while (j < es) : (j += 1) if (!a64.st(u8, c, a + k * es + j, c.v[t][idx * es + j])) return badAddr(c, w);
+                while (j < es) : (j += 1) if (!cpu.st(u8, c, a + k * es + j, c.v[t][idx * es + j])) return badAddr(c, w);
             }
         }
         if (post) wb(c, rn, rm, regs * es);
@@ -204,7 +197,7 @@ pub fn memop(c: *Cpu, w: u32, pc: u32) Status {
     if (is(w, 0x3a000000, 0x28000000)) {
         const opc = bits(w, 30, 2);
         const Ld = bits(w, 22, 1) != 0;
-        const imm7: i64 = a64Sx(bits(w, 15, 7), 7);
+        const imm7: i64 = bt.sx(i64, bits(w, 15, 7), 7);
         const rt2: u8 = @intCast(bits(w, 10, 5));
         const kind = bits(w, 23, 2);
         if (opc == 3) return fault(c, w);
@@ -234,11 +227,10 @@ pub fn memop(c: *Cpu, w: u32, pc: u32) Status {
     } else if (is(w, 0x3b200c00, 0x38200800)) {
         const option = bits(w, 13, 3);
         const S = bits(w, 12, 1);
-        const m = a64.zr(c, rm);
-        const idx: u64 = if (option == 2) m & 0xffff_ffff else if (option == 6) @bitCast(@as(i64, @as(i32, @bitCast(@as(u32, @truncate(m)))))) else m;
+        const idx = bt.extend(a64.zr(c, rm), option);
         base +%= if (S != 0) idx << scale else idx;
     } else {
-        const imm9: u64 = @bitCast(a64Sx(bits(w, 12, 9), 9));
+        const imm9: u64 = @bitCast(bt.sx(i64, bits(w, 12, 9), 9));
         const kind = bits(w, 10, 2);
         if (kind == 2) return fault(c, w);
         if (kind == 1) post = imm9 else base +%= imm9;
@@ -249,10 +241,6 @@ pub fn memop(c: *Cpu, w: u32, pc: u32) Status {
     if (post != 0) c.x[rn] = base +% post;
     if (Ld) vload(c, rt, a, width) else if (!vstore(c, rt, a, width)) return badAddr(c, w);
     return .next;
-}
-inline fn a64Sx(v: u32, n: u5) i64 {
-    const sh: u5 = @intCast(32 - @as(u32, n));
-    return @as(i32, @bitCast(v << sh)) >> sh;
 }
 
 // ── AdvSIMD modified immediate: the 64-bit pattern a cmode/op/imm8 triple expands to

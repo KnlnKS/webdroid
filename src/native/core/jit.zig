@@ -17,6 +17,8 @@ const Cpu = cpu.Cpu;
 const Op = a64.Op;
 const Buf = wasm.Buf;
 const O = wasm.Op;
+const ones = @import("bits.zig").ones;
+const bit = @import("bits.zig").bit;
 
 pub const HEAT = 48;
 const MAX_BLOCKS = 40;
@@ -184,7 +186,7 @@ fn opAt(page: *cpu.Page, pc: u32) *Op {
     const i = (pc & (abi.PAGE_SIZE - 1)) >> 2;
     const o = &page.ops[i];
     if (o.kind == .raw) {
-        o.* = a64.decode(mem.ld32(pc), pc);
+        o.* = a64.decode(mem.ld(u32, pc), pc);
         page.cov[i >> 3] |= @as(u8, 1) << @intCast(i & 7);
     }
     return o;
@@ -407,7 +409,7 @@ pub const Emit = struct {
         if (e.rw.fr or e.rw.fw) e.spillFlags();
         b.get(L_CPU);
         if (e.r.isa == .a64) {
-            b.i32c(@bitCast(mem.ld32(pc)));
+            b.i32c(@bitCast(mem.ld(u32, pc)));
             b.i32c(@bitCast(pc));
             b.call(F_EXEC);
         } else {
@@ -1353,9 +1355,6 @@ pub const Emit = struct {
         return false;
     }
 };
-inline fn ones(k: u32) u64 {
-    return if (k >= 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(k)) - 1;
-}
 
 /// what an op reads and writes; an op the interpreter runs names what it may touch, and the
 /// kinds that can touch anything say so
@@ -1420,9 +1419,6 @@ fn simdRw(w: u32) RW {
     // DUP and INS from a general register read it; SMOV and UMOV write one
     if (w & 0x9fe0_8400 == 0x0e00_0400 and w & 0x800 != 0) return if (w & 0x2000 != 0) .{ .r = 0, .w = bit(rd) } else .{ .r = bit(rn), .w = 0 };
     return .{ .r = 0, .w = 0 };
-}
-inline fn bit(n: u8) u32 {
-    return @as(u32, 1) << @intCast(n & 31);
 }
 
 /// emit the region's function body into `b`

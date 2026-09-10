@@ -57,16 +57,14 @@ pub const Op = extern struct {
     imm: u64,
 };
 
-inline fn is(w: u32, mask: u32, val: u32) bool {
-    return (w & mask) == val;
-}
-inline fn bits(w: u32, lo: u5, n: u6) u32 {
-    return (w >> lo) & (@as(u32, 0xffff_ffff) >> @intCast(32 - @as(u32, n)));
-}
-inline fn sx(v: u32, n: u5) i32 {
-    const sh: u5 = @intCast(32 - @as(u32, n));
-    return @as(i32, @bitCast(v << sh)) >> sh;
-}
+const std = @import("std");
+const bt = @import("bits.zig");
+const is = bt.is;
+const bits = bt.bits;
+const ones = bt.ones;
+const raise = cpu.raise;
+const st = cpu.st;
+const ld = mem.ld;
 fn op(kind: Kind, w: u32) Op {
     return .{ .kind = kind, .rd = @intCast(w & 31), .rn = @intCast((w >> 5) & 31), .rm = @intCast((w >> 16) & 31), .ra = @intCast((w >> 10) & 31), .a = 0, .b = 0, .imm = 0 };
 }
@@ -92,9 +90,6 @@ fn bitMasks(n: u32, imms: u32, immr: u32, sf: bool, immediate: bool) ?Masks {
     const rot = if (r == 0) welem else ((welem >> @intCast(r)) | (welem << @intCast(esize - r))) & ones(esize);
     return .{ .wmask = replicate(rot, esize, width), .tmask_ones = @intCast(d + 1), .esize_log = len };
 }
-inline fn ones(k: u32) u64 {
-    return if (k >= 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(k)) - 1;
-}
 /// a value of `esize` bits repeated across `width` bits
 pub inline fn replicate(v: u64, esize: u32, width: u32) u64 {
     const unit = if (esize >= 64) 1 else (~@as(u64, 0) / ones(esize));
@@ -109,7 +104,7 @@ pub fn decode(w: u32, pc: u32) Op {
         switch (o) {
             0, 1 => {
                 var r = op(.adr, w);
-                const imm = sx((bits(w, 5, 19) << 2) | bits(w, 29, 2), 21);
+                const imm = bt.sx(i32, (bits(w, 5, 19) << 2) | bits(w, 29, 2), 21);
                 r.imm = if (w & 0x80000000 != 0) (pc & ~@as(u32, 0xfff)) +% @as(u32, @bitCast(imm)) *% 4096 else pc +% @as(u32, @bitCast(imm));
                 return r;
             },
@@ -164,26 +159,26 @@ pub fn decode(w: u32, pc: u32) Op {
         if (is(w, 0x7c000000, 0x14000000)) {
             var r = op(.b, w);
             r.a = @intCast(w >> 31);
-            r.imm = pc +% @as(u32, @bitCast(sx(w & 0x3ffffff, 26) *% 4));
+            r.imm = pc +% @as(u32, @bitCast(bt.sx(i32, w & 0x3ffffff, 26) *% 4));
             return r;
         }
         if (is(w, 0xff000010, 0x54000000)) {
             var r = op(.bcond, w);
             r.a = @intCast(w & 15);
-            r.imm = pc +% @as(u32, @bitCast(sx(bits(w, 5, 19), 19) *% 4));
+            r.imm = pc +% @as(u32, @bitCast(bt.sx(i32, bits(w, 5, 19), 19) *% 4));
             return r;
         }
         if (is(w, 0x7e000000, 0x34000000)) {
             var r = op(.cbz, w);
             r.a = @intCast(sf | (bits(w, 24, 1) << 1));
-            r.imm = pc +% @as(u32, @bitCast(sx(bits(w, 5, 19), 19) *% 4));
+            r.imm = pc +% @as(u32, @bitCast(bt.sx(i32, bits(w, 5, 19), 19) *% 4));
             return r;
         }
         if (is(w, 0x7e000000, 0x36000000)) {
             var r = op(.tbz, w);
             r.a = @intCast(bits(w, 24, 1));
             r.b = @intCast((bits(w, 31, 1) << 5) | bits(w, 19, 5));
-            r.imm = pc +% @as(u32, @bitCast(sx(bits(w, 5, 14), 14) *% 4));
+            r.imm = pc +% @as(u32, @bitCast(bt.sx(i32, bits(w, 5, 14), 14) *% 4));
             return r;
         }
         if (is(w, 0xff9ffc1f, 0xd61f0000)) {
@@ -216,7 +211,7 @@ pub fn decode(w: u32, pc: u32) Op {
                 if (bits(w, 30, 2) == 3) return faultOp(.undefined);
                 var r = op(.vldrlit, w);
                 r.b = @intCast(bits(w, 30, 2));
-                r.imm = pc +% @as(u32, @bitCast(sx(bits(w, 5, 19), 19) *% 4));
+                r.imm = pc +% @as(u32, @bitCast(bt.sx(i32, bits(w, 5, 19), 19) *% 4));
                 return r;
             }
             var r = op(.vmem, w);
@@ -226,7 +221,7 @@ pub fn decode(w: u32, pc: u32) Op {
         if (is(w, 0x3b000000, 0x18000000)) {
             var r = op(.ldrlit, w);
             r.b = @intCast(bits(w, 30, 2));
-            r.imm = pc +% @as(u32, @bitCast(sx(bits(w, 5, 19), 19) *% 4));
+            r.imm = pc +% @as(u32, @bitCast(bt.sx(i32, bits(w, 5, 19), 19) *% 4));
             return r;
         }
         if (is(w, 0x3a000000, 0x28000000)) {
@@ -235,7 +230,7 @@ pub fn decode(w: u32, pc: u32) Op {
             var r = op(.ldp, w);
             r.a = @intCast(bits(w, 23, 2) | (bits(w, 22, 1) << 2) | (opc << 3));
             r.rm = @intCast(bits(w, 10, 5));
-            r.imm = @bitCast(@as(i64, sx(bits(w, 15, 7), 7)) * @as(i64, if (opc == 2) 8 else 4));
+            r.imm = @bitCast(@as(i64, bt.sx(i32, bits(w, 15, 7), 7)) * @as(i64, if (opc == 2) 8 else 4));
             return r;
         }
         if (is(w, 0x3f000000, 0x08000000)) {
@@ -266,7 +261,7 @@ pub fn decode(w: u32, pc: u32) Op {
             const kind = bits(w, 10, 2);
             if (kind == 2) return faultOp(.unimplemented); // unprivileged
             r.a = @as(u8, if (kind == 1) 1 else if (kind == 3) 2 else 0);
-            r.imm = @bitCast(@as(i64, sx(bits(w, 12, 9), 9)));
+            r.imm = @bitCast(@as(i64, bt.sx(i32, bits(w, 12, 9), 9)));
         }
         return r;
     }
@@ -373,7 +368,7 @@ pub fn cond(c: *Cpu, cc: u8) bool {
     };
     return if (cc & 1 != 0) !r else r;
 }
-inline fn nz(comptime T: type, v: T) u32 {
+pub inline fn nz(comptime T: type, v: T) u32 {
     const bitsT = @typeInfo(T).int.bits;
     return (@as(u32, @intCast(v >> (bitsT - 1))) << 31) | (@as(u32, @intFromBool(v == 0)) << 30);
 }
@@ -381,7 +376,7 @@ inline fn nz(comptime T: type, v: T) u32 {
 fn Flagged(comptime T: type) type {
     return struct { r: T, f: u32 };
 }
-fn addc(comptime T: type, a: T, b: T, cin: u1) Flagged(T) {
+pub fn addc(comptime T: type, a: T, b: T, cin: u1) Flagged(T) {
     const r1 = @addWithOverflow(a, b);
     const r2 = @addWithOverflow(r1[0], @as(T, cin));
     const res = r2[0];
@@ -405,7 +400,6 @@ inline fn shift(comptime T: type, v: T, kind: u8, amt: u32) T {
         else => if (k == 0) v else (v >> s) | (v << @intCast(bitsT - k)),
     };
 }
-const std = @import("std");
 /// the second operand of a register-form data-processing op, 64-bit wide
 fn operand2(c: *Cpu, o: *const Op) u64 {
     switch (o.b) {
@@ -415,19 +409,7 @@ fn operand2(c: *Cpu, o: *const Op) u64 {
             return if (o.ra & 4 != 0) ~v else v;
         },
         else => {
-            const m = zr(c, o.rm);
-            const option = o.ra;
-            const e: u64 = switch (option) {
-                0 => m & 255,
-                1 => m & 65535,
-                2 => m & 0xffff_ffff,
-                3 => m,
-                4 => @bitCast(@as(i64, @as(i8, @bitCast(@as(u8, @truncate(m)))))),
-                5 => @bitCast(@as(i64, @as(i16, @bitCast(@as(u16, @truncate(m)))))),
-                6 => @bitCast(@as(i64, @as(i32, @bitCast(@as(u32, @truncate(m)))))),
-                else => m,
-            };
-            return e << @intCast(o.imm);
+            return bt.extend(zr(c, o.rm), o.ra) << @intCast(o.imm);
         },
     }
 }
@@ -451,29 +433,8 @@ pub inline fn addr(c: *Cpu, va: u64) ?u32 {
     }
     return lo;
 }
-pub inline fn ld(comptime T: type, a: u32) T {
-    return mem.ptr(T, a).*;
-}
-/// a store, with the page check that catches self-modifying code and null-page writes
-pub inline fn st(comptime T: type, c: *Cpu, a: u32, v: T) bool {
-    const f = mem.page_flags[a >> abi.PAGE_SHIFT];
-    if (f != 0) {
-        if (f & 2 != 0) {
-            c.fault_addr = a;
-            return false;
-        }
-        _ = cpu.code_write(a);
-    }
-    mem.ptr(T, a).* = v;
-    return true;
-}
-inline fn fault(c: *Cpu, code: Fault, w: u32) Status {
-    c.exit = @intFromEnum(code);
-    c.fault_word = w;
-    return .fault;
-}
-inline fn badAddr(c: *Cpu, w: u32) Status {
-    return fault(c, .bad_address, w);
+inline fn badAddr(c: *Cpu, pc: u32) Status {
+    return raise(c, .bad_address, ld(u32, pc));
 }
 
 // ── system registers, keyed on op0:op1:CRn:CRm:op2. The ID registers read as "no optional
@@ -502,7 +463,7 @@ fn cnt() u64 {
 pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
     switch (o.kind) {
         .raw => unreachable,
-        .fault => return fault(c, @enumFromInt(o.a), ld(u32, pc)),
+        .fault => return raise(c, @enumFromInt(o.a), ld(u32, pc)),
         .nop => {},
         .adr => setX(c, o.rd, o.imm),
         .addsub => {
@@ -620,7 +581,7 @@ pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
             return svc(c);
         },
         .clrex => c.excl = 0,
-        .mrs => setX(c, o.rd, sysRead(c, o.imm) orelse return fault(c, .sysreg, ld(u32, pc))),
+        .mrs => setX(c, o.rd, sysRead(c, o.imm) orelse return raise(c, .sysreg, ld(u32, pc))),
         .msr => {
             const t = zr(c, o.rd);
             switch (o.imm) {
@@ -628,7 +589,7 @@ pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
                 0x5a20 => c.fpcr = @truncate(t),
                 0x5a21 => c.fpsr = @truncate(t),
                 0x5e82 => c.tls = t,
-                else => return fault(c, .sysreg, ld(u32, pc)),
+                else => return raise(c, .sysreg, ld(u32, pc)),
             }
         },
         .ldrlit => {
@@ -646,7 +607,7 @@ pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
             const opc = o.a >> 3;
             const off: u64 = o.imm;
             const base = if (kind == 1) c.x[o.rn] else c.x[o.rn] +% off;
-            const a = addr(c, base) orelse return badAddr(c, ld(u32, pc));
+            const a = addr(c, base) orelse return badAddr(c, pc);
             if (kind == 1 or kind == 3) c.x[o.rn] +%= off;
             if (L) {
                 if (opc == 2) {
@@ -662,9 +623,9 @@ pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
                     setW(c, o.rm, ld(u32, a + 4));
                 }
             } else if (opc == 2) {
-                if (!st(u64, c, a, zr(c, o.rd)) or !st(u64, c, a + 8, zr(c, o.rm))) return badAddr(c, ld(u32, pc));
+                if (!st(u64, c, a, zr(c, o.rd)) or !st(u64, c, a + 8, zr(c, o.rm))) return badAddr(c, pc);
             } else {
-                if (!st(u32, c, a, @truncate(zr(c, o.rd))) or !st(u32, c, a + 4, @truncate(zr(c, o.rm)))) return badAddr(c, ld(u32, pc));
+                if (!st(u32, c, a, @truncate(zr(c, o.rd))) or !st(u32, c, a + 4, @truncate(zr(c, o.rm)))) return badAddr(c, pc);
             }
         },
         .excl => return exclusive(c, o, pc),
@@ -676,18 +637,12 @@ pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
             switch (o.a) {
                 0, 2 => base +%= o.imm,
                 3 => {
-                    const m = zr(c, o.rm);
-                    const option = o.ra >> 1;
-                    const idx: u64 = switch (option) {
-                        2 => m & 0xffff_ffff,
-                        6 => @bitCast(@as(i64, @as(i32, @bitCast(@as(u32, @truncate(m)))))),
-                        else => m,
-                    };
+                    const idx = bt.extend(zr(c, o.rm), o.ra >> 1);
                     base +%= if (o.ra & 1 != 0) idx << size else idx;
                 },
                 else => {},
             }
-            const a = addr(c, base) orelse return badAddr(c, ld(u32, pc));
+            const a = addr(c, base) orelse return badAddr(c, pc);
             if (o.a == 1 or o.a == 2) c.x[o.rn] = if (o.a == 1) base +% o.imm else base;
             const load = opc != 0 and !(size == 3 and opc == 2);
             if (!load) {
@@ -698,22 +653,12 @@ pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
                     2 => st(u32, c, a, @truncate(v)),
                     else => st(u64, c, a, v),
                 };
-                if (!ok) return badAddr(c, ld(u32, pc));
-            } else if (size == 3) {
-                setX(c, o.rd, ld(u64, a));
-            } else if (opc == 1) {
-                setX(c, o.rd, switch (size) {
-                    0 => ld(u8, a),
-                    1 => ld(u16, a),
-                    else => ld(u32, a),
-                });
+                if (!ok) return badAddr(c, pc);
             } else {
-                const v: i64 = switch (size) {
-                    0 => ld(i8, a),
-                    1 => ld(i16, a),
-                    else => ld(i32, a),
-                };
-                setX(c, o.rd, if (opc == 2) @bitCast(v) else @as(u64, @as(u32, @bitCast(@as(i32, @truncate(v))))));
+                const v = ldSized(a, size);
+                const shl: u6 = @intCast(64 - (@as(u32, 8) << size));
+                const s: u64 = @bitCast(@as(i64, @bitCast(v << shl)) >> shl);
+                setX(c, o.rd, if (opc == 1 or size == 3) v else if (opc == 2) s else s & 0xffff_ffff);
             }
         },
         .adc => {
@@ -837,14 +782,13 @@ fn exclusive(c: *Cpu, o: *const Op, pc: u32) Status {
     const o2 = o.b & 4 != 0;
     const L = o.b & 2 != 0;
     const o1 = o.b & 1 != 0;
-    const a = addr(c, c.x[o.rn]) orelse return badAddr(c, ld(u32, pc));
-    const w = ld(u32, pc);
+    const a = addr(c, c.x[o.rn]) orelse return badAddr(c, pc);
     if (!o1) {
         if (L) {
             if (!o2) c.excl = 1;
             setX(c, o.rd, ldSized(a, size));
         } else {
-            if (!stSized(c, a, size, zr(c, o.rd))) return badAddr(c, w);
+            if (!stSized(c, a, size, zr(c, o.rd))) return badAddr(c, pc);
             if (!o2) {
                 setW(c, o.rm, c.excl ^ 1);
                 c.excl = 0;
@@ -857,20 +801,20 @@ fn exclusive(c: *Cpu, o: *const Op, pc: u32) Status {
             setX(c, o.rd, ldSized(a, size));
             setX(c, o.ra, ldSized(a + step, size));
         } else {
-            if (!stSized(c, a, size, zr(c, o.rd)) or !stSized(c, a + step, size, zr(c, o.ra))) return badAddr(c, w);
+            if (!stSized(c, a, size, zr(c, o.rd)) or !stSized(c, a + step, size, zr(c, o.ra))) return badAddr(c, pc);
             setW(c, o.rm, c.excl ^ 1);
             c.excl = 0;
         }
     } else if (o2) {
         const v = ldSized(a, size);
         const cmp = zr(c, o.rm) & sizeMask(size);
-        if (v == cmp) if (!stSized(c, a, size, zr(c, o.rd))) return badAddr(c, w);
+        if (v == cmp) if (!stSized(c, a, size, zr(c, o.rd))) return badAddr(c, pc);
         setX(c, o.rm, v);
     } else if (size == 1) {
         const v = ld(u64, a);
         const t = ld(u64, a + 8);
         if (v == zr(c, o.rm) and t == zr(c, o.rm + 1)) {
-            if (!st(u64, c, a, zr(c, o.rd)) or !st(u64, c, a + 8, zr(c, o.rd + 1))) return badAddr(c, w);
+            if (!st(u64, c, a, zr(c, o.rd)) or !st(u64, c, a + 8, zr(c, o.rd + 1))) return badAddr(c, pc);
         }
         setX(c, o.rm, v);
         setX(c, o.rm + 1, t);
@@ -878,7 +822,7 @@ fn exclusive(c: *Cpu, o: *const Op, pc: u32) Status {
         const v = ld(u32, a);
         const t = ld(u32, a + 4);
         if (v == @as(u32, @truncate(zr(c, o.rm))) and t == @as(u32, @truncate(zr(c, o.rm + 1)))) {
-            if (!st(u32, c, a, @truncate(zr(c, o.rd))) or !st(u32, c, a + 4, @truncate(zr(c, o.rd + 1)))) return badAddr(c, w);
+            if (!st(u32, c, a, @truncate(zr(c, o.rd))) or !st(u32, c, a + 4, @truncate(zr(c, o.rd + 1)))) return badAddr(c, pc);
         }
         setW(c, o.rm, v);
         setW(c, o.rm + 1, t);
@@ -912,7 +856,7 @@ inline fn stSized(c: *Cpu, a: u32, size: u8, v: u64) bool {
 /// atomic memory operations (LSE): the read-modify-write is direct, threads being cooperative
 fn atomic(c: *Cpu, o: *const Op, pc: u32) Status {
     const size = o.a;
-    const a = addr(c, c.x[o.rn]) orelse return badAddr(c, ld(u32, pc));
+    const a = addr(c, c.x[o.rn]) orelse return badAddr(c, pc);
     const v = ldSized(a, size);
     const s = zr(c, o.rm) & sizeMask(size);
     const shl: u6 = @intCast(64 - (@as(u32, 8) << @intCast(size)));
@@ -929,9 +873,9 @@ fn atomic(c: *Cpu, o: *const Op, pc: u32) Status {
         7 => if (v < s) v else s,
         8 => s,
         12 => null,
-        else => return fault(c, .unimplemented, ld(u32, pc)),
+        else => return raise(c, .unimplemented, ld(u32, pc)),
     };
-    if (t) |nv| if (!stSized(c, a, size, nv & sizeMask(size))) return badAddr(c, ld(u32, pc));
+    if (t) |nv| if (!stSized(c, a, size, nv & sizeMask(size))) return badAddr(c, pc);
     setX(c, o.rd, v);
     return .next;
 }
@@ -957,7 +901,7 @@ fn svc(c: *Cpu) Status {
 
 /// interpret from c.pc to the first control transfer (or 256 instructions); the pc is left in c.pc
 pub fn block(c: *Cpu, start: u32, entry: *cpu.Page) Status {
-    if (start & 3 != 0) return fault(c, .misaligned_pc, start);
+    if (start & 3 != 0) return raise(c, .misaligned_pc, start);
     var page = entry;
     c.bpc = start;
     var pc = start;
@@ -984,7 +928,7 @@ pub fn block(c: *Cpu, start: u32, entry: *cpu.Page) Status {
                     c.pc = pc;
                     return .jump;
                 }
-                page = cpu.pageFor(pc) orelse return fault(c, .bad_address, pc);
+                page = cpu.pageFor(pc) orelse return raise(c, .bad_address, pc);
             },
             else => {
                 if (st_ == .fault) c.pc = pc;

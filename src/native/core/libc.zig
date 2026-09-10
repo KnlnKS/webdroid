@@ -57,10 +57,10 @@ inline fn va(p: u32) u64 {
     return mem.va(p);
 }
 fn stp(c: *Cpu, a: u32, v: u64) bool {
-    return if (c.a64 != 0) a64.st(u64, c, a, v) else a64.st(u32, c, a, @truncate(v));
+    return if (c.a64 != 0) cpu.st(u64, c, a, v) else cpu.st(u32, c, a, @truncate(v));
 }
 fn setErrno(c: *Cpu, e: u32) void {
-    mem.st32(c.errno_addr, e);
+    mem.ptr(u32, c.errno_addr).* = e;
 }
 inline fn size() u64 {
     return @as(u64, @wasmMemorySize(0)) * 65536;

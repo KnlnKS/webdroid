@@ -16,11 +16,8 @@ pub inline fn ptr(comptime T: type, a: u32) *align(1) T {
 pub inline fn bytes(a: u32) [*]u8 {
     return @ptrFromInt(a);
 }
-pub inline fn ld32(a: u32) u32 {
-    return ptr(u32, a).*;
-}
-pub inline fn st32(a: u32, v: u32) void {
-    ptr(u32, a).* = v;
+pub inline fn ld(comptime T: type, a: u32) T {
+    return ptr(T, a).*;
 }
 fn fill(a: u32, v: u8, n: u32) void {
     @memset(bytes(a)[0..n], v);
@@ -121,18 +118,18 @@ pub export fn malloc(n: u32) u32 {
     var p: u32 = 0;
     if (cs <= SMALL_MAX) {
         p = small_heads[cs / CLASS_STEP];
-        if (p != 0) small_heads[cs / CLASS_STEP] = ld32(p);
+        if (p != 0) small_heads[cs / CLASS_STEP] = ld(u32, p);
     } else {
         p = big_heads[bigIdx(cs)];
-        if (p != 0) big_heads[bigIdx(cs)] = ld32(p);
+        if (p != 0) big_heads[bigIdx(cs)] = ld(u32, p);
     }
     if (p == 0) {
         p = bump(cs + HDR);
         if (p == 0) return 0;
         p += HDR;
     }
-    st32(p - 8, 0);
-    st32(p - 4, cs);
+    ptr(u32, p - 8).* = 0;
+    ptr(u32, p - 4).* = cs;
     blocks += 1;
     used += cs;
     return p;
@@ -149,17 +146,17 @@ pub export fn free(p_in: u32) u32 {
         _ = unmap_pages(p, n);
         return 1;
     }
-    const own = ld32(p - 8);
+    const own = ld(u32, p - 8);
     if (own != 0) p = own;
-    const cs = ld32(p - 4);
+    const cs = ld(u32, p - 4);
     if (cs == 0 or cs > PAGE_MAX or (cs & 15) != 0) return 0;
     blocks -= 1;
     used -= cs;
     if (cs <= SMALL_MAX) {
-        st32(p, small_heads[cs / CLASS_STEP]);
+        ptr(u32, p).* = small_heads[cs / CLASS_STEP];
         small_heads[cs / CLASS_STEP] = p;
     } else {
-        st32(p, big_heads[bigIdx(cs)]);
+        ptr(u32, p).* = big_heads[bigIdx(cs)];
         big_heads[bigIdx(cs)] = p;
     }
     return 1;
@@ -167,7 +164,7 @@ pub export fn free(p_in: u32) u32 {
 pub export fn usable_size(p: u32) u32 {
     if (p == 0) return 0;
     if (p & (PAGE_SIZE - 1) == 0 and big_len[pageOf(p)] != 0) return big_len[pageOf(p)];
-    return ld32(p - 4);
+    return ld(u32, p - 4);
 }
 pub export fn realloc(p: u32, n: u32) u32 {
     if (p == 0) return malloc(n);
@@ -205,8 +202,8 @@ pub export fn memalign(alignment: u32, n: u32) u32 {
     const raw = malloc(n + alignment + HDR);
     if (raw == 0 or (raw & (PAGE_SIZE - 1) == 0 and big_len[pageOf(raw)] != 0)) return raw;
     const p = (raw + HDR + alignment - 1) & ~(alignment - 1);
-    st32(p - 8, raw);
-    st32(p - 4, n);
+    ptr(u32, p - 8).* = raw;
+    ptr(u32, p - 4).* = n;
     return p;
 }
 

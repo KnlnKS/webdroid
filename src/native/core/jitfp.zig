@@ -14,16 +14,9 @@ const O = wasm.Op;
 const L_CPU = jit.L_CPU;
 const OFF_V = @offsetOf(cpu.Cpu, "v");
 
-inline fn is(w: u32, mask: u32, val: u32) bool {
-    return (w & mask) == val;
-}
-inline fn bits(w: u32, lo: u5, n: u6) u32 {
-    return (w >> lo) & (@as(u32, 0xffff_ffff) >> @intCast(32 - @as(u32, n)));
-}
-inline fn sx(v: u32, n: u5) i64 {
-    const sh: u5 = @intCast(32 - @as(u32, n));
-    return @as(i32, @bitCast(v << sh)) >> sh;
-}
+const bt = @import("bits.zig");
+const is = bt.is;
+const bits = bt.bits;
 inline fn voff(n: u8) u32 {
     return OFF_V + 16 * @as(u32, n);
 }
@@ -767,7 +760,7 @@ pub fn emitVmem(e: *Emit, w: u32, pc: u32, k: u32) void {
         if (opc == 3) return e.fallback(pc, k);
         const Ld = bits(w, 22, 1) != 0;
         const width = @as(u32, 4) << @intCast(opc);
-        const off: i64 = sx(bits(w, 15, 7), 7) * width;
+        const off: i64 = bt.sx(i64, bits(w, 15, 7), 7) * width;
         const kind = bits(w, 23, 2);
         const rt2: u8 = @intCast(bits(w, 10, 5));
         e.getSP(rn);
@@ -825,7 +818,7 @@ pub fn emitVmem(e: *Emit, w: u32, pc: u32, k: u32) void {
         }
         b.op(O.i64_add);
     } else {
-        const imm9 = sx(bits(w, 12, 9), 9);
+        const imm9 = bt.sx(i64, bits(w, 12, 9), 9);
         if (kind == 1) post = imm9 else if (imm9 != 0) {
             b.i64c(imm9);
             b.op(O.i64_add);

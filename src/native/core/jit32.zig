@@ -12,19 +12,14 @@ const Emit = jit.Emit;
 const Region = jit.Region;
 const O = wasm.Op;
 
-inline fn bits(w: u32, lo: u5, n: u6) u32 {
-    return (w >> lo) & (@as(u32, 0xffff_ffff) >> @intCast(32 - @as(u32, n)));
-}
-inline fn sx(v: u32, n: u5) i32 {
-    const sh: u5 = @intCast(32 - @as(u32, n));
-    return @as(i32, @bitCast(v << sh)) >> sh;
-}
+const bt = @import("bits.zig");
+const bits = bt.bits;
 
 pub const Scan = struct { len: u32, ends: bool };
 
 /// one A32 instruction's shape for region discovery
 pub fn scanArm(r: *Region, i: u32, pc: u32) Scan {
-    const w = mem.ld32(pc);
+    const w = mem.ld(u32, pc);
     const cc = w >> 28;
     const next = pc + 4;
     const b = &r.blocks[i];
@@ -80,13 +75,13 @@ pub fn scanThumb(r: *Region, i: u32, pc: u32) Scan {
         13 => {
             const cc = (h >> 8) & 15;
             if (cc >= 14) return .{ .len = 2, .ends = true };
-            b.taken = jit.blockFor(r, pc +% 4 +% @as(u32, @bitCast(sx(h & 255, 8) * 2)));
+            b.taken = jit.blockFor(r, pc +% 4 +% @as(u32, @bitCast(bt.sx(i32, h & 255, 8) * 2)));
             b.fall = if (next & (abi.PAGE_SIZE - 1) != 0) jit.blockFor(r, next) else -1;
             return .{ .len = 2, .ends = true };
         },
         14 => {
             if (h & (1 << 11) != 0) return .{ .len = 2, .ends = true };
-            b.taken = jit.blockFor(r, pc +% 4 +% @as(u32, @bitCast(sx(h & 0x7ff, 11) * 2)));
+            b.taken = jit.blockFor(r, pc +% 4 +% @as(u32, @bitCast(bt.sx(i32, h & 0x7ff, 11) * 2)));
             return .{ .len = 2, .ends = true };
         },
         15 => return .{ .len = if ((h & 0xf800) == 0xf000) 4 else 2, .ends = true },
@@ -324,7 +319,7 @@ fn store(e: *Emit, o: u8, off: u32) void {
 // ── A32
 pub fn emitArm(e: *Emit, pc: u32, k: u32) bool {
     const b = e.b;
-    const w = mem.ld32(pc);
+    const w = mem.ld(u32, pc);
     const cc = w >> 28;
     if (cc == 15) {
         if ((w & 0x0e000000) == 0x0a000000) { // BLX (immediate): to Thumb
@@ -1113,7 +1108,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                 e.fallback(pc, k);
                 return true;
             }
-            const target = pc +% 4 +% @as(u32, @bitCast(sx(h & 255, 8) * 2));
+            const target = pc +% 4 +% @as(u32, @bitCast(bt.sx(i32, h & 255, 8) * 2));
             e.cond(@intCast(cc));
             e.ifv();
             e.transfer(e.r.blocks[e.blk].taken, target | 1, k);
@@ -1126,7 +1121,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                 e.fallback(pc, k);
                 return true;
             }
-            const target = pc +% 4 +% @as(u32, @bitCast(sx(h & 0x7ff, 11) * 2));
+            const target = pc +% 4 +% @as(u32, @bitCast(bt.sx(i32, h & 0x7ff, 11) * 2));
             e.transfer(e.r.blocks[e.blk].taken, target | 1, k);
             return true;
         },

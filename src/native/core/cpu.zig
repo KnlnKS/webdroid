@@ -255,22 +255,40 @@ export fn exec_word32(cp: u32, pc: u32) u32 {
         .syscall => 3,
     };
 }
+pub inline fn raise(c: *Cpu, code: Fault, w: u32) Status {
+    c.exit = @intFromEnum(code);
+    c.fault_word = w;
+    return .fault;
+}
+pub inline fn setPc32(c: *Cpu, target: u32) void {
+    c.cpsr = (c.cpsr & ~@as(u32, 1 << 5)) | ((target & 1) << 5);
+    c.pc = target & ~@as(u32, 1);
+}
+pub inline fn st(comptime T: type, c: *Cpu, a: u32, v: T) bool {
+    const f = mem.page_flags[a >> abi.PAGE_SHIFT];
+    if (f != 0) {
+        if (f & 2 != 0) {
+            c.fault_addr = a;
+            return false;
+        }
+        _ = code_write(a);
+    }
+    mem.ptr(T, a).* = v;
+    return true;
+}
 /// a plane address for a region: 0 when it does not translate (the fault is set)
 export fn tx_addr(cp: u32, va: u64) u32 {
     const c: *Cpu = @ptrFromInt(cp);
     if (a64.addr(c, va)) |a| return a;
-    c.exit = @intFromEnum(Fault.bad_address);
-    c.fault_word = 0;
+    _ = raise(c, .bad_address, 0);
     return 0;
 }
 /// a store into a flagged page: code goes stale, the null page faults
 export fn on_store(cp: u32, a: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
-    const f = mem.page_flags[a >> abi.PAGE_SHIFT];
-    if (f & 2 != 0) {
-        c.exit = @intFromEnum(Fault.bad_address);
-        c.fault_word = 0;
+    if (mem.page_flags[a >> abi.PAGE_SHIFT] & 2 != 0) {
         c.fault_addr = a;
+        _ = raise(c, .bad_address, 0);
         return 1;
     }
     _ = code_write(a);
@@ -350,22 +368,17 @@ export fn run_slice(cp: u32, budget: u32) u32 {
                 return @intFromEnum(Exit.host);
             }
             if (!libc.call(c, id)) {
-                c.exit = @intFromEnum(Fault.bad_address);
-                c.fault_word = 0;
+                _ = raise(c, .bad_address, 0);
                 return @intFromEnum(Exit.fault);
             }
             // return as the host would: to lr, interworking on ARM32
             const lr: u32 = @truncate(c.x[if (c.a64 != 0) 30 else 14]);
-            if (c.a64 != 0) c.pc = lr else {
-                c.cpsr = (c.cpsr & ~@as(u32, 1 << 5)) | ((lr & 1) << 5);
-                c.pc = lr & ~@as(u32, 1);
-            }
+            if (c.a64 != 0) c.pc = lr else setPc32(c, lr);
             continue;
         }
-        var st: Status = .jump;
+        var status: Status = .jump;
         const page = pageFor(pc) orelse {
-            c.exit = @intFromEnum(Fault.bad_address);
-            c.fault_word = pc;
+            _ = raise(c, .bad_address, pc);
             return @intFromEnum(Exit.fault);
         };
         const i = (pc & (abi.PAGE_SIZE - 1)) >> 1;
@@ -375,10 +388,7 @@ export fn run_slice(cp: u32, budget: u32) u32 {
             const r = f(cp, s & 255);
             if (r >= jit.STATUS_MAX) {
                 // an ARM32 region leaves with an interworking target
-                if (c.a64 != 0) c.pc = r else {
-                    c.cpsr = (c.cpsr & ~@as(u32, 1 << 5)) | ((r & 1) << 5);
-                    c.pc = r & ~@as(u32, 1);
-                }
+                if (c.a64 != 0) c.pc = r else setPc32(c, r);
             } else switch (r) {
                 2 => return @intFromEnum(Exit.fault),
                 3 => return @intFromEnum(Exit.syscall),
@@ -389,9 +399,9 @@ export fn run_slice(cp: u32, budget: u32) u32 {
             page.heat[i] = h;
             // a request the queue has no room for is asked again at the block's next entry
             if (h == jit.HEAT and !jit.request(pc, if (c.a64 != 0) .a64 else if (c.cpsr & (1 << 5) != 0) .thumb else .arm)) page.heat[i] = h - 1;
-            st = if (c.a64 != 0) a64.block(c, pc, page) else arm.block(c, pc);
+            status = if (c.a64 != 0) a64.block(c, pc, page) else arm.block(c, pc);
         }
-        switch (st) {
+        switch (status) {
             .fault => return @intFromEnum(Exit.fault),
             .syscall => return @intFromEnum(Exit.syscall),
             else => {},

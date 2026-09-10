@@ -13,9 +13,9 @@ const Cpu = cpu.Cpu;
 const Status = cpu.Status;
 const Fault = cpu.Fault;
 
-inline fn bits(w: u32, lo: u5, n: u6) u32 {
-    return (w >> lo) & (@as(u32, 0xffff_ffff) >> @intCast(32 - @as(u32, n)));
-}
+const bits = @import("bits.zig").bits;
+const ld = mem.ld;
+const st = cpu.st;
 inline fn r(c: *Cpu, n: u32) u32 {
     return @truncate(c.x[n]);
 }
@@ -29,32 +29,23 @@ inline fn reg(c: *Cpu, n: u32, pc: u32) u32 {
 inline fn cf(c: *Cpu) u32 {
     return (c.cpsr >> 29) & 1;
 }
-inline fn flagsNZ(v: u32) u32 {
-    return (v & 0x8000_0000) | (@as(u32, @intFromBool(v == 0)) << 30);
-}
 inline fn setNZ(c: *Cpu, v: u32) void {
-    c.cpsr = (c.cpsr & 0x3fff_ffff) | flagsNZ(v);
+    c.cpsr = (c.cpsr & 0x3fff_ffff) | a64.nz(u32, v);
 }
 inline fn setNZC(c: *Cpu, v: u32, carry: u32) void {
-    c.cpsr = (c.cpsr & 0x1fff_ffff) | flagsNZ(v) | (carry << 29);
+    c.cpsr = (c.cpsr & 0x1fff_ffff) | a64.nz(u32, v) | (carry << 29);
 }
 fn addFlags(c: *Cpu, a: u32, b: u32, cin: u1) u32 {
-    const r1 = @addWithOverflow(a, b);
-    const r2 = @addWithOverflow(r1[0], @as(u32, cin));
-    const v = r2[0];
-    const carry: u32 = r1[1] | r2[1];
-    const ov: u32 = ((a ^ v) & (b ^ v)) >> 31;
-    c.cpsr = (c.cpsr & 0x0fff_ffff) | flagsNZ(v) | (carry << 29) | (ov << 28);
-    return v;
+    const f = a64.addc(u32, a, b, cin);
+    c.setNZCV(f.f);
+    return f.r;
 }
 inline fn subFlags(c: *Cpu, a: u32, b: u32, cin: u1) u32 {
     return addFlags(c, a, ~b, cin);
 }
-fn fault(c: *Cpu, code: Fault, w: u32, pc: u32) Status {
-    c.exit = @intFromEnum(code);
-    c.fault_word = w;
+inline fn fault(c: *Cpu, code: Fault, w: u32, pc: u32) Status {
     c.pc = pc;
-    return .fault;
+    return cpu.raise(c, code, w);
 }
 inline fn badAddr(c: *Cpu, w: u32, pc: u32) Status {
     return fault(c, .bad_address, w, pc);
@@ -66,16 +57,9 @@ inline fn addr(c: *Cpu, a: u32) ?u32 {
     }
     return a;
 }
-inline fn ld(comptime T: type, a: u32) T {
-    return mem.ptr(T, a).*;
-}
-inline fn st(comptime T: type, c: *Cpu, a: u32, v: T) bool {
-    return a64.st(T, c, a, v);
-}
 /// interworking branch: the low bit selects the instruction set
 inline fn bx(c: *Cpu, target: u32) Status {
-    c.cpsr = (c.cpsr & ~@as(u32, 1 << 5)) | ((target & 1) << 5);
-    c.pc = target & ~@as(u32, 1);
+    cpu.setPc32(c, target);
     return .jump;
 }
 inline fn jump(c: *Cpu, target: u32) Status {

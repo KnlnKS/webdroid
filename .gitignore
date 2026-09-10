@@ -8,3 +8,4 @@ tests/e2e/report/
 vendor/aosp
 tests/e2e/perf-rollup.json
 scripts/simd-oracle/build/
+.zig-cache/
