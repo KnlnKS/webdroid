@@ -198,6 +198,7 @@ rt.register({
 export class JInputStream extends JObj {
   buf: Uint8Array = new Uint8Array(0);
   source: FileSource | null = null;
+  wrapped: unknown = null;   // a bytecode InputStream this one reads through
   pos = 0;
 }
 /** a plain InputStream over bytes already in hand */
@@ -215,6 +216,7 @@ const inputStreamMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "read()I": maySuspend(function (this: JInputStream) {
     checkFileOpen(this);
+    if (this.wrapped) return vcall(this.wrapped, "read", "()I");
     if (this.source) {
       return after(this.source.read(this.pos, 1), (bytes) => {
         if (!bytes.length) return -1;
@@ -230,6 +232,7 @@ const inputStreamMethods: NativeSpec["methods"] = {
   "read([BII)I": maySuspend(function (this: JInputStream, out: Int8Array, off: number, len: number) {
     checkFileOpen(this);
     if (len === 0) return 0;
+    if (this.wrapped) return vcall(this.wrapped, "read", "([BII)I", out, off, len);
     if (this.source) {
       return after(this.source.read(this.pos, len), (bytes) => {
         if (!bytes.length) return -1;
@@ -311,9 +314,11 @@ rt.register({
     "close()V": function (this: JInputStream) { closeFile(this); },
   },
 });
-/** a wrapping stream shares the source's bytes and cursor */
+/** a wrapping stream shares the source's bytes and cursor, or — when the source is an app's own
+ *  stream — reads through the source's virtual read, which is the only way in */
 function adoptStream(this: JInputStream, src: JInputStream) {
   if (src instanceof JInputStream) { this.buf = src.buf; this.source = src.source; this.pos = src.pos; }
+  else this.wrapped = src;
 }
 rt.register({
   name: "java/io/BufferedInputStream", ctor: class extends JInputStream {}, sup: "java/io/InputStream",
@@ -352,7 +357,19 @@ function dataBytes(stream: JInputStream, length: number): Uint8Array | Promise<U
     stream.pos += length;
     return bytes;
   };
+  if (stream.wrapped) return wrappedBytes(stream, length).then(take);
   return stream.source ? readFully(stream.source, stream.pos, length).then(take) : take(stream.buf.subarray(stream.pos, stream.pos + length));
+}
+/** as many of `length` bytes as the wrapped stream has, one virtual read at a time */
+async function wrappedBytes(stream: JInputStream, length: number): Promise<Uint8Array> {
+  const out = new Int8Array(length);
+  let got = 0;
+  while (got < length) {
+    const n: number = await vcall(stream.wrapped, "read", "([BII)I", out, got, length - got);
+    if (n <= 0) break;
+    got += n;
+  }
+  return new Uint8Array(out.buffer, 0, got);
 }
 
 export class JFileDescriptor extends JObj { fd = -1; }
@@ -378,6 +395,129 @@ rt.register({
     "close()V": function () {},
   },
 });
+// ── java.io.Object{Input,Output}Stream, over the serialization stream's BLOCK-DATA layer only.
+// A primitive written outside writeObject travels in TC_BLOCKDATA records, which is the whole
+// protocol Externalizable bodies (libphonenumber's metadata, for one) use. An object graph needs
+// the class-descriptor and back-reference machinery, which is not modelled: readObject says so.
+const STREAM_MAGIC = 0xaced, STREAM_VERSION = 5, TC_BLOCKDATA = 0x77, TC_BLOCKDATALONG = 0x7a;
+class JObjectIn extends JInputStream { blockEnd = 0; }
+/** `n` bytes of block data, crossing record boundaries the way a long writeUTF body does */
+async function blockBytes(s: JObjectIn, n: number): Promise<Uint8Array> {
+  const out = new Uint8Array(n);
+  for (let got = 0; got < n;) {
+    while (s.blockEnd <= s.pos) {
+      const tag = (await dataBytes(s, 1))[0];
+      if (tag === TC_BLOCKDATA) s.blockEnd = s.pos + (await dataBytes(s, 1))[0];
+      else if (tag === TC_BLOCKDATALONG) {
+        const len = await dataBytes(s, 4);
+        s.blockEnd = s.pos + new DataView(len.buffer, len.byteOffset, 4).getUint32(0);
+      }
+      else throw rt.mkThrowable("java/io/StreamCorruptedException", "unsupported serialization tag 0x" + tag.toString(16));
+    }
+    const take = Math.min(n - got, s.blockEnd - s.pos);
+    out.set(await dataBytes(s, take), got);
+    got += take;
+  }
+  return out;
+}
+const blockRead = (n: number, decode: (v: DataView) => unknown) =>
+  maySuspend(async function (this: JObjectIn) {
+    const b = await blockBytes(this, n);
+    return decode(new DataView(b.buffer, b.byteOffset, n));
+  });
+/** modified UTF-8: NUL is two bytes and a supplementary character is two three-byte halves */
+function modifiedUtf8(b: Uint8Array): string {
+  let out = "";
+  for (let i = 0; i < b.length;) {
+    const c = b[i++];
+    if (c < 0x80) out += String.fromCharCode(c);
+    else if ((c & 0xe0) === 0xc0) out += String.fromCharCode(((c & 0x1f) << 6) | (b[i++] & 0x3f));
+    else out += String.fromCharCode(((c & 0x0f) << 12) | ((b[i++] & 0x3f) << 6) | (b[i++] & 0x3f));
+  }
+  return out;
+}
+const noGraph = (): never => { throw rt.mkThrowable("java/io/StreamCorruptedException", "object graph serialization is not available"); };
+rt.register({
+  name: "java/io/ObjectInputStream", ctor: JObjectIn, sup: "java/io/InputStream",
+  ifaces: ["java/io/ObjectInput", "java/io/DataInput"],
+  methods: {
+    "<init>(Ljava/io/InputStream;)V": maySuspend(async function (this: JObjectIn, src: JInputStream) {
+      adoptStream.call(this, src);
+      const head = await dataBytes(this, 4);
+      const magic = (head[0] << 8) | head[1], version = (head[2] << 8) | head[3];
+      if (magic !== STREAM_MAGIC || version !== STREAM_VERSION) {
+        throw rt.mkThrowable("java/io/StreamCorruptedException", "invalid stream header");
+      }
+    }),
+    "readInt()I": blockRead(4, (v) => v.getInt32(0)),
+    "readShort()S": blockRead(2, (v) => v.getInt16(0)),
+    "readUnsignedShort()I": blockRead(2, (v) => v.getUint16(0)),
+    "readByte()B": blockRead(1, (v) => v.getInt8(0)),
+    "readUnsignedByte()I": blockRead(1, (v) => v.getUint8(0)),
+    "readBoolean()Z": blockRead(1, (v) => (v.getUint8(0) ? 1 : 0)),
+    "readChar()C": blockRead(2, (v) => v.getUint16(0)),
+    "readLong()J": blockRead(8, (v) => v.getBigInt64(0)),
+    "readFloat()F": blockRead(4, (v) => v.getFloat32(0)),
+    "readDouble()D": blockRead(8, (v) => v.getFloat64(0)),
+    "readUTF()Ljava/lang/String;": maySuspend(async function (this: JObjectIn) {
+      const head = await blockBytes(this, 2);
+      return modifiedUtf8(await blockBytes(this, (head[0] << 8) | head[1]));
+    }),
+    "readFully([B)V": maySuspend(async function (this: JObjectIn, out: Int8Array) {
+      const b = await blockBytes(this, out.length);
+      out.set(new Int8Array(b.buffer, b.byteOffset, b.length));
+    }),
+    "readObject()Ljava/lang/Object;": noGraph,
+    "defaultReadObject()V": noGraph,
+    "close()V": function () {},
+  },
+});
+class JObjectOut extends JOutputStream {}
+/** every primitive write is its own TC_BLOCKDATA record, which reads back identically */
+function blockWrite(o: JObjectOut, bytes: Uint8Array): void {
+  o.chunks.push(TC_BLOCKDATA, bytes.length);
+  for (const b of bytes) o.chunks.push(b);
+}
+const blockPut = (n: number, encode: (v: DataView, x: never) => void) =>
+  function (this: JObjectOut, x: never) {
+    const b = new Uint8Array(n);
+    encode(new DataView(b.buffer), x);
+    blockWrite(this, b);
+  };
+rt.register({
+  name: "java/io/ObjectOutputStream", ctor: JObjectOut, sup: "java/io/OutputStream",
+  ifaces: ["java/io/ObjectOutput", "java/io/DataOutput"],
+  methods: {
+    "<init>(Ljava/io/OutputStream;)V": function (this: JObjectOut, out: JOutputStream) {
+      (this as unknown as { target: unknown }).target = out;
+      this.chunks.push(STREAM_MAGIC >> 8, STREAM_MAGIC & 0xff, 0, STREAM_VERSION);
+    },
+    "writeInt(I)V": blockPut(4, (v, x: number) => v.setInt32(0, x)),
+    "writeShort(I)V": blockPut(2, (v, x: number) => v.setInt16(0, x)),
+    "writeByte(I)V": blockPut(1, (v, x: number) => v.setInt8(0, x)),
+    "writeBoolean(Z)V": blockPut(1, (v, x: number) => v.setUint8(0, x ? 1 : 0)),
+    "writeChar(I)V": blockPut(2, (v, x: number) => v.setUint16(0, x)),
+    "writeLong(J)V": blockPut(8, (v, x: bigint) => v.setBigInt64(0, x)),
+    "writeFloat(F)V": blockPut(4, (v, x: number) => v.setFloat32(0, x)),
+    "writeDouble(D)V": blockPut(8, (v, x: number) => v.setFloat64(0, x)),
+    "writeUTF(Ljava/lang/String;)V": function (this: JObjectOut, str: string) {
+      const body = utf8.enc.encode(str);
+      const b = new Uint8Array(body.length + 2);
+      b[0] = body.length >> 8; b[1] = body.length & 0xff;
+      b.set(body, 2);
+      blockWrite(this, b);
+    },
+    "writeObject(Ljava/lang/Object;)V": noGraph,
+    "flush()V": maySuspend(function (this: JObjectOut) {
+      const target = (this as unknown as { target: unknown }).target;
+      const bytes = Int8Array.from(this.chunks);
+      this.chunks = [];
+      return target ? vcall(target, "write", "([BII)V", bytes, 0, bytes.length) : undefined;
+    }),
+    "close()V": maySuspend(function (this: JObjectOut) { return vcall(this, "flush", "()V"); }),
+  },
+});
+
 // ByteArrayOutputStream keeps AOSP's protected `buf`/`count` as real fields: subclasses (pooled
 // buffers, size probes) swap the array and read the count directly, so the bytes live in the
 // Int8Array itself rather than in the base stream's chunk list.

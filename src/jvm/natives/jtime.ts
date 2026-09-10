@@ -1,7 +1,7 @@
 // java.util.Calendar/Date/TimeZone + java.text formatters + java.util.regex.
 
 import { rt, JObj, maySuspend, type NativeSpec } from "../runtime";
-import { javaMatches, javaRegex, mkEnumSet, defineException, vcall, type JSimpleEnum, type JSB } from "./jlang";
+import { javaMatches, javaRegex, jToString, mkEnumSet, defineException, vcall, type JSimpleEnum, type JSB } from "./jlang";
 import { jarray } from "../abi";
 
 export class JDate extends JObj { t = Date.now(); }
@@ -310,6 +310,9 @@ class JMatcher extends JObj {
   regionE = -1;    // -1 = input.length
   rEnd(): number { return this.regionE < 0 ? this.input.length : this.regionE; }
   sticky(): RegExp { return javaRegex(this.re.source, this.re.flags.replace(/[gy]/g, "") + "y"); }
+  /** both ends anchored, so the engine backtracks into another alternative instead of settling
+   *  for the first branch that matched a prefix */
+  anchored(): RegExp { return javaRegex("(?:" + this.re.source + ")$", this.re.flags.replace(/[gy]/g, "") + "y"); }
 }
 function appendRepl(m: JMatcher, sb: JSB, r: string): JMatcher {
   if (!m.m) throw rt.mkThrowable("java/lang/IllegalStateException", "No match available");
@@ -359,17 +362,17 @@ rt.register({
       return pt;
     },
     "static quote(Ljava/lang/String;)Ljava/lang/String;": (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-    "static matches(Ljava/lang/String;Ljava/lang/CharSequence;)Z": (p: string, s: unknown) => javaMatches(p, String(s)),
+    "static matches(Ljava/lang/String;Ljava/lang/CharSequence;)Z": (p: string, s: unknown) => javaMatches(p, jToString(s)),
     "matcher(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;": function (this: JPattern, s: unknown) {
       const m = new JMatcher();
       m.re = toJsRegex(this.flags & 16 ? this.src.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : this.src, this.flags, true);
-      m.input = String(s ?? "");
+      m.input = s == null ? "" : jToString(s);
       return m;
     },
     "pattern()Ljava/lang/String;": function (this: JPattern) { return this.src; },
     "toString()Ljava/lang/String;": function (this: JPattern) { return this.src; },
     "split(Ljava/lang/CharSequence;)[Ljava/lang/String;": function (this: JPattern, s: unknown) {
-      const out = String(s).split(toJsRegex(this.src, this.flags, false));
+      const out = jToString(s).split(toJsRegex(this.src, this.flags, false));
       while (out.length > 1 && out[out.length - 1] === "") out.pop();
       return jarray(out, "Ljava/lang/String;");
     },
@@ -389,10 +392,9 @@ rt.register({
       return 0;
     },
     "matches()Z": function (this: JMatcher) {
-      const re = this.sticky();
+      const re = this.anchored();
       re.lastIndex = this.regionS;
-      const m = re.exec(this.input);
-      this.m = m && m.index + m[0].length === this.rEnd() ? m : null;
+      this.m = re.exec(this.input.slice(0, this.rEnd()));
       return this.m ? 1 : 0;
     },
     "lookingAt()Z": function (this: JMatcher) {

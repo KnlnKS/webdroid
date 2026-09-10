@@ -6,7 +6,7 @@ import { parkTimeout, unparkTimeout } from "../yield";
 import { directionality } from "../bidi";
 import { encodeString } from "../charset";
 import { javaClassSets } from "../regex-sets";
-import { mangleMethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8 } from "../abi";
+import { mangleMethod, jmethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8 } from "../abi";
 
 function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => unknown {
   const fn = obj[mangleMethod(name, desc)] ?? rt.proxyMethod?.(obj, name, desc);
@@ -538,7 +538,8 @@ rt.register({
 for (const [i, ext] of [["java/lang/Runnable"], ["java/lang/Comparable"], ["java/lang/CharSequence"],
   ["java/lang/Cloneable"], ["java/lang/Appendable"], ["java/lang/AutoCloseable"],
   ["java/io/Serializable"], ["java/io/Closeable", "java/lang/AutoCloseable"], ["java/io/Flushable"],
-  ["java/io/DataInput"], ["java/io/DataOutput"]] as const) {
+  ["java/io/DataInput"], ["java/io/DataOutput"],
+  ["java/io/ObjectInput", "java/io/DataInput"], ["java/io/ObjectOutput", "java/io/DataOutput"]] as const) {
   rt.register({ name: i, ctor: class extends JObj {}, ifaces: ext ? [ext] : undefined });
 }
 
@@ -614,7 +615,7 @@ sm("subSequence(II)Ljava/lang/CharSequence;", function (a: number, b: number) { 
 sm("startsWith(Ljava/lang/String;)Z", function (s: string) { return this.startsWith(s) ? 1 : 0; });
 sm("startsWith(Ljava/lang/String;I)Z", function (s: string, i: number) { return this.startsWith(s, i) ? 1 : 0; });
 sm("endsWith(Ljava/lang/String;)Z", function (s: string) { return this.endsWith(s) ? 1 : 0; });
-sm("contains(Ljava/lang/CharSequence;)Z", function (s: unknown) { return this.includes(String(s)) ? 1 : 0; });
+sm("contains(Ljava/lang/CharSequence;)Z", function (s: unknown) { return this.includes(jToString(s)) ? 1 : 0; });
 sm("trim()Ljava/lang/String;", function () { return this.trim(); });
 sm("strip()Ljava/lang/String;", function () { return this.trim(); });
 sm("toLowerCase()Ljava/lang/String;", function () { return this.toLowerCase(); });
@@ -652,7 +653,7 @@ sm("regionMatches(ZILjava/lang/String;II)Z", function (ignore: number, toff: num
   const a = this.substr(toff, len), b = o.substr(ooff, len);
   return (ignore ? a.toLowerCase() === b.toLowerCase() : a === b) ? 1 : 0;
 });
-sm("contentEquals(Ljava/lang/CharSequence;)Z", function (o: unknown) { return (this as string) === String(o) ? 1 : 0; });
+sm("contentEquals(Ljava/lang/CharSequence;)Z", function (o: unknown) { return (this as string) === jToString(o) ? 1 : 0; });
 sm("codePointCount(II)I", function (a: number, b: number) { return b - a; });
 sm("offsetByCodePoints(II)I", function (i: number, n: number) { return i + n; });
 sm("chars()Ljava/util/stream/IntStream;", function () { throw rt.unimplemented("String.chars"); });
@@ -673,6 +674,16 @@ function javaSplit(s: string, pattern: string, limit: number): string[] {
 sm("split(Ljava/lang/String;)[Ljava/lang/String;", function (p: string) { return javaSplit(this as string, p, 0); });
 sm("split(Ljava/lang/String;I)[Ljava/lang/String;", function (p: string, l: number) { return javaSplit(this as string, p, l); });
 
+const M_TO_STRING = mangleMethod("toString", "()Ljava/lang/String;");
+/** A value's OWN toString — %s prints that, and so does every CharSequence a synchronous
+ *  native is handed. A body that suspends cannot be awaited here and falls back to JS. */
+export function jToString(v: unknown): string {
+  if (v === null || v === undefined) return "null";
+  if (typeof v !== "object") return String(v);
+  const f = jmethod(v, M_TO_STRING);
+  const r = f && f.call(v);
+  return typeof r === "string" ? r : String(v);
+}
 class JStringStatics extends JObj {}
 export function javaFormat(fmt: string, args: unknown[]): string {
   let ai = 0;
@@ -703,7 +714,7 @@ export function javaFormat(fmt: string, args: unknown[]): string {
         case "c": s = String.fromCharCode(Number(v)); break;
         case "b": s = v === null || v === 0 ? "false" : "true"; break;
         case "h": s = v === null ? "null" : idHash(v).toString(16); break;
-        default: s = v === null ? "null" : String(v);
+        default: s = jToString(v);
           if (prec) s = s.slice(0, parseInt(prec));
       }
       if (width) {
@@ -837,7 +848,7 @@ function sbSpec(name: string): NativeSpec {
       "<init>()V": function () {},
       "<init>(I)V": function () {},
       "<init>(Ljava/lang/String;)V": function (this: JSB, s: string) { this.s = s; },
-      "<init>(Ljava/lang/CharSequence;)V": function (this: JSB, s: unknown) { this.s = String(s); },
+      "<init>(Ljava/lang/CharSequence;)V": function (this: JSB, s: unknown) { this.s = jToString(s); },
       [`append(Ljava/lang/String;)${L}`]: app(function (v) { this.s += v === null ? "null" : v; }),
       [`append(Ljava/lang/Object;)${L}`]: appendObj,
       [`append(Ljava/lang/CharSequence;)${L}`]: appendObj,
@@ -1176,7 +1187,7 @@ rt.register({
     "static getDirectionality(C)B": directionality,
     "static getDirectionality(I)B": directionality,
     "static toChars(I)[C": (cp: number) => { const str = String.fromCodePoint(cp); const a = new Uint16Array(str.length); for (let k = 0; k < str.length; k++) a[k] = str.charCodeAt(k); return a; },
-    "static codePointAt(Ljava/lang/CharSequence;I)I": (cs: unknown, i2: number) => String(cs).codePointAt(i2) ?? 0,
+    "static codePointAt(Ljava/lang/CharSequence;I)I": (cs: unknown, i2: number) => jToString(cs).codePointAt(i2) ?? 0,
     "static isSupplementaryCodePoint(I)Z": (cp: number) => (cp >= 0x10000 ? 1 : 0),
     "static isHighSurrogate(C)Z": (c: number) => (c >= 0xd800 && c <= 0xdbff ? 1 : 0),
     "static isLowSurrogate(C)Z": (c: number) => (c >= 0xdc00 && c <= 0xdfff ? 1 : 0),

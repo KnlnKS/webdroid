@@ -1930,7 +1930,10 @@ rt.register({
       return h;
     },
     "static toString([I)Ljava/lang/String;": (a: Int32Array) => (a ? "[" + a.join(", ") + "]" : "null"),
-    "static toString([Ljava/lang/Object;)Ljava/lang/String;": (a: unknown[]) => (a ? "[" + a.map((x) => (x === null ? "null" : x)).join(", ") + "]" : "null"),
+    // each element through ITS OWN toString: a boxed Character prints its character, and a
+    // library that builds a character class out of a key set depends on it
+    "static toString([Ljava/lang/Object;)Ljava/lang/String;": maySuspend(async (a: unknown[]) =>
+      a ? "[" + (await Promise.all(a.map((x) => (x === null ? "null" : vcall(x, "toString", "()Ljava/lang/String;"))))).join(", ") + "]" : "null"),
     "static binarySearch([II)I": taBinarySearch,
     "static binarySearch([CC)I": taBinarySearch,
     "static binarySearch([JJ)I": taBinarySearch,
