@@ -1,5 +1,5 @@
 import { mangleMethod } from "../jvm/abi";
-import { JObj, rt, callSelf, type NativeSpec } from "../jvm/runtime";
+import { JObj, rt, callSelf, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { defineException, newObj, vcall } from "../jvm/natives/jlang";
 import type { JContext } from "./context";
 import { JIntent, launchIntent } from "./intent";
@@ -118,7 +118,7 @@ rt.register({ name: "android/content/IntentSender", ctor: JIntentSender, ifaces:
     const sender = new JIntentSender(); sender.target = target; return sender;
   }); } }, methods: {
     "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JIntentSender, p: JParcel) { return vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.target); },
+    "writeToParcel(Landroid/os/Parcel;I)V": maySuspend(function (this: JIntentSender, p: JParcel) { return vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.target); }),
   },
 });
 class JPendingIntent extends JObj { sender = new JIntentSender(); }
@@ -140,12 +140,12 @@ rt.register({
     "static getService(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, _code: number, intent: JIntent, flags: number) => pending("service", context, intent, flags),
     "getIntentSender()Landroid/content/IntentSender;": function (this: JPendingIntent) { return this.sender; },
     "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JPendingIntent, p: JParcel) { return vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.sender.target); },
+    "writeToParcel(Landroid/os/Parcel;I)V": maySuspend(function (this: JPendingIntent, p: JParcel) { return vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.sender.target); }),
     "equals(Ljava/lang/Object;)Z": function (this: JPendingIntent, other: unknown) { return +(other instanceof JPendingIntent && this.sender.target === other.sender.target); },
     "cancel()V": function (this: JPendingIntent) {
       if (!(this.sender.target instanceof JIntentToken)) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "remote intent cancellation unavailable");
       this.sender.target.canceled = true;
     },
-    "send()V": async function (this: JPendingIntent) { return sendIntent(this.sender); },
+    "send()V": maySuspend(function (this: JPendingIntent) { return sendIntent(this.sender); }),
   },
 });

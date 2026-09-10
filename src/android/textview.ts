@@ -274,8 +274,8 @@ export function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v:
     await then?.(v);
   };
   return {
-    "<init>(Landroid/content/Context;)V": function (this: T, c: unknown) { return init(this, c, null); },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: T, c: unknown, set: JAttrSet | null) { return init(this, c, set); },
+    "<init>(Landroid/content/Context;)V": maySuspend(function (this: T, c: unknown) { return init(this, c, null); }),
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": maySuspend(function (this: T, c: unknown, set: JAttrSet | null) { return init(this, c, set); }),
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": maySuspend(function (this: T, c: unknown, set: JAttrSet | null, dsa: number) { return init(this, c, set, dsa); }),
   };
 }

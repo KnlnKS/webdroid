@@ -85,7 +85,7 @@ rt.register({
       function (this: JFragmentTransaction, id: number, f: JFragment) { this.ops.push({ kind: "replace", containerId: id, frag: f }); return this; },
     "addToBackStack(Ljava/lang/String;)Landroid/app/FragmentTransaction;": function (this: JFragmentTransaction) { return this; },
     "commit()I": async function (this: JFragmentTransaction) { return runFragmentTransaction(this); },
-    "commitAllowingStateLoss()I": function (this: JFragmentTransaction) { return runFragmentTransaction(this); },
+    "commitAllowingStateLoss()I": maySuspend(function (this: JFragmentTransaction) { return runFragmentTransaction(this); }),
   },
 });
 rt.register({

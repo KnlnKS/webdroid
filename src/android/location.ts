@@ -1,4 +1,4 @@
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { JBundle, uptimeMillis } from "./os";
 import { parcelCreator, type JParcel } from "./parcel";
 import { newObj, vcall } from "../jvm/natives/jlang";
@@ -31,8 +31,8 @@ const optional = [
 ] as const;
 const locMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Ljava/lang/String;)V": function (this: JLocation, p: string) { this.provider = p; },
-  "<init>(Landroid/location/Location;)V": async function (this: JLocation, source: JLocation) { return this.set(source); },
-  "set(Landroid/location/Location;)V": async function (this: JLocation, source: JLocation) { return this.set(source); },
+  "<init>(Landroid/location/Location;)V": maySuspend(function (this: JLocation, source: JLocation) { return this.set(source); }),
+  "set(Landroid/location/Location;)V": maySuspend(function (this: JLocation, source: JLocation) { return this.set(source); }),
   "reset()V": function (this: JLocation) {
     this.provider = null; this.lat = this.lon = 0; this.time = this.elapsed = 0n;
     this.mock = false; this.opt = {}; this.extras = null;

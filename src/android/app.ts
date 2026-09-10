@@ -625,19 +625,19 @@ for (const [name, methods, statics] of [
   ["android/app/AppOpsManager", {
     "static permissionToOp(Ljava/lang/String;)Ljava/lang/String;": () => null,
     "noteOp(Ljava/lang/String;ILjava/lang/String;)I": () => 0,
-    "noteOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": async function (this: JObj, op: string, uid: number, pkg: string) {
+    "noteOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": maySuspend(function (this: JObj, op: string, uid: number, pkg: string) {
       return vcall(this, "checkOpNoThrow", "(Ljava/lang/String;ILjava/lang/String;)I", op, uid, pkg);
-    },
-    "noteOpNoThrow(Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I": async function (this: JObj, op: string, uid: number, pkg: string) {
+    }),
+    "noteOpNoThrow(Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I": maySuspend(function (this: JObj, op: string, uid: number, pkg: string) {
       return vcall(this, "noteOpNoThrow", "(Ljava/lang/String;ILjava/lang/String;)I", op, uid, pkg);
-    },
+    }),
     "noteProxyOp(Ljava/lang/String;Ljava/lang/String;)I": () => 0,
     "noteProxyOpNoThrow(Ljava/lang/String;Ljava/lang/String;)I": () => 0,
     "checkOp(Ljava/lang/String;ILjava/lang/String;)I": () => 0,
     "checkOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": (_op: string, uid: number, pkg: string) => packages.get(pkg)?.uid === uid ? 0 : 2,
-    "startOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": async function (this: JObj, op: string, uid: number, pkg: string) {
+    "startOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": maySuspend(function (this: JObj, op: string, uid: number, pkg: string) {
       return vcall(this, "checkOpNoThrow", "(Ljava/lang/String;ILjava/lang/String;)I", op, uid, pkg);
-    },
+    }),
     "finishOp(Ljava/lang/String;ILjava/lang/String;)V": () => {},
     "unsafeCheckOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": () => 0,
     "checkPackage(ILjava/lang/String;)V": () => {},
