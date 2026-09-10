@@ -154,6 +154,7 @@ rt.register({
     "static getMaximumFlingVelocity()I": () => 8000,
     "getScaledOverscrollDistance()I": () => 0,
     "getScaledOverflingDistance()I": () => Math.round(device.dp(6)),
+    "static getEdgeSlop()I": () => 12,
     "getScaledEdgeSlop()I": () => Math.round(device.dp(12)),
     "getScaledWindowTouchSlop()I": () => device.touchSlop * 2,
     "getScaledDoubleTapSlop()I": () => Math.round(device.dp(100)),
