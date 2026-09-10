@@ -401,10 +401,34 @@ rt.register({
   },
 });
 
+async function adjacentTextOffset(cs: unknown, offset: number, after: boolean): Promise<number> {
+  if (!after && (offset === 0 || offset === 1)) return 0;
+  if (cs == null) return rt.npe();
+  const thread = rt.th(), text = await csText(cs); rt.st(thread);
+  if (offset < 0 || offset > text.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(offset));
+  if (after && offset >= text.length - 1) return text.length;
+  const a = text.charCodeAt(after ? offset : offset - 2), b = text.charCodeAt(after ? offset + 1 : offset - 1);
+  offset += (after ? 1 : -1) * (a >= 0xd800 && a <= 0xdbff && b >= 0xdc00 && b <= 0xdfff ? 2 : 1);
+  if (cs instanceof JSpanned) {
+    const spans = cs.spans.filter(s => s.start < offset && s.end > offset && rt.iof(s.span, "android/text/style/ReplacementSpan"));
+    for (const span of spans) if (span.start < offset && span.end > offset) offset = after ? span.end : span.start;
+  } else if (rt.iof(cs, "android/text/Spanned")) {
+    const spans = await vcall(cs, "getSpans", "(IILjava/lang/Class;)[Ljava/lang/Object;", offset, offset, rt.classFor("android/text/style/ReplacementSpan")); rt.st(thread);
+    for (const span of spans) {
+      const start = await vcall(cs, "getSpanStart", "(Ljava/lang/Object;)I", span); rt.st(thread);
+      const end = await vcall(cs, "getSpanEnd", "(Ljava/lang/Object;)I", span); rt.st(thread);
+      if (start < offset && end > offset) offset = after ? end : start;
+    }
+  }
+  return offset;
+}
+
 class JTextUtils extends JObj {}
 rt.register({
   name: "android/text/TextUtils", ctor: JTextUtils,
   methods: {
+    "static getOffsetBefore(Ljava/lang/CharSequence;I)I": async (cs: unknown, offset: number) => adjacentTextOffset(cs, offset, false),
+    "static getOffsetAfter(Ljava/lang/CharSequence;I)I": async (cs: unknown, offset: number) => adjacentTextOffset(cs, offset, true),
     "static getLayoutDirectionFromLocale(Ljava/util/Locale;)I": localeDirection,
     "static getCapsMode(Ljava/lang/CharSequence;II)I": async (cs: unknown, off: number, requested: number) => {
       if (off < 0) return 0;

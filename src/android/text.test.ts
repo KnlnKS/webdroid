@@ -48,3 +48,38 @@ test("absolute size spans share density-aware measurement and drawing", async ()
   await vcall(pixels, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
   expect(await vcall(paint, "getTextSize", "()F")).toBe(17);
 });
+
+test("text offsets step over surrogate pairs and replacement spans", async () => {
+  const cls = rt.link("android/text/TextUtils").ctor;
+  const before = cls[mangleMethod("getOffsetBefore", "(Ljava/lang/CharSequence;I)I")];
+  const after = cls[mangleMethod("getOffsetAfter", "(Ljava/lang/CharSequence;I)I")];
+  const text = "a😀bc";
+  for (const [offset, previous, next] of [[0, 0, 1], [1, 0, 3], [3, 1, 4], [5, 4, 5]]) {
+    expect(await before(text, offset)).toBe(previous);
+    expect(await after(text, offset)).toBe(next);
+  }
+  expect(await after("\ud800x", 0)).toBe(1);
+  expect(await before("x\udc00", 2)).toBe(1);
+  const spanned = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "abcdef");
+  const span = await newObj("android/text/style/ImageSpan");
+  await vcall(spanned, "setSpan", "(Ljava/lang/Object;III)V", span, 1, 5, 33);
+  expect(await after(spanned, 1)).toBe(5);
+  expect(await before(spanned, 5)).toBe(1);
+  expect(await after(spanned, 0)).toBe(1);
+  expect(await before(spanned, 6)).toBe(5);
+});
+
+test("text offsets use Java CharSequence and custom Spanned boundaries", async () => {
+  class Sequence extends (rt.link("java/lang/Object").ctor) {}
+  const marker = {};
+  rt.register({ name: "test/OffsetSpanned", ctor: Sequence, ifaces: ["android/text/Spanned", "java/lang/CharSequence"], methods: {
+    "toString()Ljava/lang/String;": () => "ab😀ef",
+    "getSpans(IILjava/lang/Class;)[Ljava/lang/Object;": () => [marker],
+    "getSpanStart(Ljava/lang/Object;)I": () => 1,
+    "getSpanEnd(Ljava/lang/Object;)I": () => 5,
+  } });
+  const cs = new (rt.link("test/OffsetSpanned").ctor)();
+  const cls = rt.link("android/text/TextUtils").ctor;
+  expect(await cls[mangleMethod("getOffsetBefore", "(Ljava/lang/CharSequence;I)I")](cs, 5)).toBe(1);
+  expect(await cls[mangleMethod("getOffsetAfter", "(Ljava/lang/CharSequence;I)I")](cs, 1)).toBe(5);
+});
