@@ -60,3 +60,18 @@ test("audio attribute policies preserve flags and immutable build snapshots", as
   await expect(vcall(builder, "setAllowedCapturePolicy", "(I)Landroid/media/AudioAttributes$Builder;", 0)).rejects.toMatchObject({ msg: "Invalid capture policy 0" });
   await expect(vcall(builder, "setSpatializationBehavior", "(I)Landroid/media/AudioAttributes$Builder;", 2)).rejects.toMatchObject({ msg: "Invalid spatialization behavior 2" });
 });
+
+test("audio formats retain independent encoding and channel layout snapshots", async () => {
+  rt.link("android/media/AudioFormat");
+  const builder = await newObj("android/media/AudioFormat$Builder");
+  for (const [method, value] of [["setEncoding", 1], ["setSampleRate", 48000], ["setChannelMask", 12]] as const) {
+    await vcall(builder, method, "(I)Landroid/media/AudioFormat$Builder;", value);
+  }
+  const stereo = await vcall(builder, "build", "()Landroid/media/AudioFormat;");
+  await vcall(builder, "setChannelMask", "(I)Landroid/media/AudioFormat$Builder;", 4);
+  const mono = await vcall(builder, "build", "()Landroid/media/AudioFormat;");
+  expect(await vcall(stereo, "getEncoding", "()I")).toBe(2);
+  expect(await vcall(stereo, "getSampleRate", "()I")).toBe(48000);
+  expect(await vcall(stereo, "getChannelCount", "()I")).toBe(2);
+  expect(await vcall(mono, "getChannelCount", "()I")).toBe(1);
+});

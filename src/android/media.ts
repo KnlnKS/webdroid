@@ -361,10 +361,35 @@ rt.register({
 });
 rt.register({ name: "android/media/AudioTrack$OnPlaybackPositionUpdateListener", ctor: class extends JObj {} });
 rt.register({ name: "android/media/AudioRecord$OnRecordPositionUpdateListener", ctor: class extends JObj {} });
+class JAudioFormat extends JObj { encoding = 0; sampleRate = 0; channelMask = 0; channelIndexMask = 0; }
 rt.register({
-  name: "android/media/AudioFormat", ctor: class extends JObj {},
+  name: "android/media/AudioFormat", ctor: JAudioFormat,
   statics: { CHANNEL_CONFIGURATION_MONO: 2, CHANNEL_CONFIGURATION_STEREO: 3, CHANNEL_OUT_MONO: 4, CHANNEL_OUT_STEREO: 12, CHANNEL_IN_MONO: 16, CHANNEL_IN_STEREO: 12,
     ENCODING_PCM_16BIT: 2, ENCODING_PCM_8BIT: 3, ENCODING_PCM_FLOAT: 4, ENCODING_DEFAULT: 1, ENCODING_INVALID: 0 },
+  methods: {
+    "getEncoding()I": function (this: JAudioFormat) { return this.encoding; },
+    "getSampleRate()I": function (this: JAudioFormat) { return this.sampleRate; },
+    "getChannelMask()I": function (this: JAudioFormat) { return this.channelMask; },
+    "getChannelIndexMask()I": function (this: JAudioFormat) { return this.channelIndexMask; },
+    "getChannelCount()I": function (this: JAudioFormat) {
+      let mask = this.channelMask || this.channelIndexMask, n = 0;
+      for (; mask; mask &= mask - 1) n++;
+      return n;
+    },
+  },
+});
+class JAudioFormatBuilder extends JObj { format = new JAudioFormat(); }
+rt.register({
+  name: "android/media/AudioFormat$Builder", ctor: JAudioFormatBuilder,
+  methods: {
+    "<init>()V": function () {},
+    "<init>(Landroid/media/AudioFormat;)V": function (this: JAudioFormatBuilder, format: JAudioFormat) { Object.assign(this.format, format); },
+    "setEncoding(I)Landroid/media/AudioFormat$Builder;": function (this: JAudioFormatBuilder, encoding: number) { this.format.encoding = encoding === 1 ? 2 : encoding; return this; },
+    "setSampleRate(I)Landroid/media/AudioFormat$Builder;": function (this: JAudioFormatBuilder, rate: number) { this.format.sampleRate = rate; return this; },
+    "setChannelMask(I)Landroid/media/AudioFormat$Builder;": function (this: JAudioFormatBuilder, mask: number) { this.format.channelMask = mask; return this; },
+    "setChannelIndexMask(I)Landroid/media/AudioFormat$Builder;": function (this: JAudioFormatBuilder, mask: number) { this.format.channelIndexMask = mask; return this; },
+    "build()Landroid/media/AudioFormat;": function (this: JAudioFormatBuilder) { return Object.assign(new JAudioFormat(), this.format); },
+  },
 });
 
 /**
