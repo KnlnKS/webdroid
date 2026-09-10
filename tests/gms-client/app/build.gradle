@@ -1,0 +1,21 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'org.webdroid.gmsclient'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'org.webdroid.gmsclient'
+        minSdk 26
+        targetSdk 33
+        versionCode 1
+        versionName '1.0'
+        manifestPlaceholders = [mapsKey: System.getenv('WEBDROID_MAPS_KEY') ?: '']
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}
+dependencies {
+    implementation 'com.google.android.gms:play-services-auth:21.4.0'
+    implementation 'com.google.android.gms:play-services-location:21.3.0'
+    implementation 'com.google.android.gms:play-services-maps:19.2.0'
+    implementation 'com.google.firebase:firebase-messaging:24.1.2'
+}

@@ -7,6 +7,10 @@ tests/e2e/report/
 .worktrees/
 vendor/aosp
 vendor/microg/
+tests/gms-client/.gradle/
+tests/gms-client/build/
+tests/gms-client/app/build/
+tests/gms-client/local.properties
 tests/e2e/perf-rollup.json
 scripts/simd-oracle/build/
 .zig-cache/
