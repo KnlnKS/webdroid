@@ -5,7 +5,7 @@ import { JContentValues, mkCursor } from "./sqlite";
 import { JBundle } from "./os";
 import { JParcel } from "./parcel";
 import { exportParcel, importParcel, withCallingIdentity, type ParcelData, type Caller } from "./binder";
-import { attachProvider, providerTransport } from "./contentresolver";
+import { attachProvider, providerTransport, providerOperations } from "./contentresolver";
 import { getPM } from "./pm";
 import { appHost } from "./apphost";
 
@@ -27,16 +27,8 @@ async function decode(value: Value): Promise<unknown> {
   if (!(decoded instanceof JBundle)) throw rt.mkThrowable("android/os/BadParcelableException", "Expected ContentValues");
   const values = new JContentValues(); values.data.m = new Map([...decoded.map].map(([k, v]) => [k, { k, v }])); return values;
 }
-const operations = {
-  query: "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
-  insert: "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;",
-  update: "(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I",
-  delete: "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I",
-  getType: "(Landroid/net/Uri;)Ljava/lang/String;",
-  call: "(Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;",
-};
 class JRemoteProvider extends JObj { pkg = ""; process = ""; authority = ""; call!: ProviderCall; }
-rt.register({ name: "webdroid/RemoteContentProvider", ctor: JRemoteProvider, methods: Object.fromEntries(Object.entries(operations).map(([name, desc]) => [name + desc,
+rt.register({ name: "webdroid/RemoteContentProvider", ctor: JRemoteProvider, methods: Object.fromEntries(Object.entries(providerOperations).map(([name, desc]) => [name + desc,
   async function (this: JRemoteProvider, ...args: unknown[]) {
     const result = await this.call(this.pkg, this.process, { authority: this.authority, name, desc, args: await Promise.all(args.map(encode)) });
     if (result.kind === "value") {
@@ -54,7 +46,7 @@ export function connectProviders(call: ProviderCall): void {
   };
 }
 export async function receiveProvider(request: ProviderRequest, caller: Caller): Promise<ProviderReply> {
-  if (!Object.entries(operations).some(([name, desc]) => name === request.name && desc === request.desc)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown provider operation");
+  if (!Object.entries(providerOperations).some(([name, desc]) => name === request.name && desc === request.desc)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown provider operation");
   const info = await vcall(getPM(), "resolveContentProvider", "(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;", request.authority, 128);
   const host = appHost;
   if (!info || !host?.application || info.packageName !== host.pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Provider unavailable: " + request.authority);

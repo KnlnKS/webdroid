@@ -48,6 +48,39 @@ async function contentProvider(uri: JUri): Promise<unknown> {
     ? attachProvider(appHost.application, info) : providerTransport.acquire(info);
 }
 
+export const providerOperations = {
+  query: "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
+  insert: "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;",
+  update: "(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I",
+  delete: "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I",
+  getType: "(Landroid/net/Uri;)Ljava/lang/String;",
+  call: "(Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;",
+};
+class JProviderClient extends JObj { provider: unknown = null; closed = false; }
+function releaseClient(this: JProviderClient): number {
+  if (this.closed) return 0;
+  this.closed = true; this.provider = null; return 1;
+}
+async function acquireClient(uri: JUri): Promise<JProviderClient | null> {
+  const provider = await contentProvider(uri);
+  if (!provider) return null;
+  rt.link("android/content/ContentProviderClient");
+  const client = new JProviderClient(); client.provider = provider; return client;
+}
+rt.register({ name: "android/content/ContentProviderClient", ctor: JProviderClient, ifaces: ["java/lang/AutoCloseable"], methods: {
+  "release()Z": releaseClient,
+  "close()V": function (this: JProviderClient) { releaseClient.call(this); },
+  "getLocalContentProvider()Landroid/content/ContentProvider;": function (this: JProviderClient) {
+    return rt.iof(this.provider, "android/content/ContentProvider") ? this.provider : null;
+  },
+  ...Object.fromEntries(Object.entries(providerOperations).map(([name, desc]) => [name + desc,
+    async function (this: JProviderClient, ...args: unknown[]) {
+      if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "ContentProviderClient is closed");
+      return vcall(this.provider, name, desc, ...args);
+    },
+  ])),
+} });
+
 export function contentResolver(): unknown {
   let s = services.get("$content");
   if (!s) {
@@ -82,6 +115,10 @@ const openAfd = async (u: JUri, mode: string) => {
   return mkAssetFd(pfd.bytes, pfd);
 };
 const resolverMethods: NativeSpec["methods"] = {
+  ...Object.fromEntries(["acquireContentProviderClient", "acquireUnstableContentProviderClient"].flatMap((name) => [
+    [name + "(Landroid/net/Uri;)Landroid/content/ContentProviderClient;", acquireClient],
+    [name + "(Ljava/lang/String;)Landroid/content/ContentProviderClient;", async (authority: string) => acquireClient(mkUri("content://" + authority))],
+  ])),
   "notifyChange(Landroid/net/Uri;Landroid/database/ContentObserver;)V": () => {},
   "registerContentObserver(Landroid/net/Uri;ZLandroid/database/ContentObserver;)V": () => {},
   "unregisterContentObserver(Landroid/database/ContentObserver;)V": () => {},

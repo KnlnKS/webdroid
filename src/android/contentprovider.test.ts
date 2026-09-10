@@ -44,6 +44,18 @@ test("ContentResolver opens the APK through Mihon's bundled FileProvider", async
     expect(await vcall(cursor, "getLong", "(I)J", 1)).toBe(BigInt(bytes.length));
     expect(await vcall(cursor, "getType", "(I)I", 1)).toBe(1);
     await vcall(cursor, "close", "()V");
+    const client = await vcall(resolver, "acquireUnstableContentProviderClient", "(Landroid/net/Uri;)Landroid/content/ContentProviderClient;", uri);
+    expect(client).not.toBeNull();
+    const local = await vcall(client, "getLocalContentProvider", "()Landroid/content/ContentProvider;");
+    expect(rt.iof(local, "android/content/ContentProvider")).toBe(1);
+    const result = await vcall(client, "query", "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;", uri, null, null, null, null);
+    expect(await vcall(client, "release", "()Z")).toBe(1);
+    expect(await vcall(client, "release", "()Z")).toBe(0);
+    expect(await vcall(result, "moveToFirst", "()Z")).toBe(1);
+    expect(await vcall(result, "getString", "(I)Ljava/lang/String;", 0)).toBe("provider-test.apk");
+    await vcall(result, "close", "()V");
+    await vcall(client, "close", "()V");
+    expect(await vcall(resolver, "acquireContentProviderClient", "(Ljava/lang/String;)Landroid/content/ContentProviderClient;", "absent.provider")).toBeNull();
     await expect(open(mkUri("content://app.mihon.provider/cache_files/../private.apk"))).rejects.toBeDefined();
     await expect(open(mkUri("content://absent.provider/file"))).rejects.toBeDefined();
     await expect(open(mkUri("content://app.mihon.provider/cache_files/missing.apk"))).rejects.toBeDefined();
