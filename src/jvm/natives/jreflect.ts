@@ -2,7 +2,7 @@
 
 import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
 import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, newPrimArray, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat } from "../abi";
-import { vcall, boxInt, box, stringHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit } from "./jlang";
+import { vcall, boxInt, box, boxObject, stringHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 
 // ── annotation cache per class: methodIdx (within its dex) → EncAnnotation[]
@@ -90,12 +90,19 @@ class JField extends JObj {
   desc = "";
   prop = "";        // mangled property (on instance or ctor)
   isStatic = false;
+  flags = 0;        // the declaration's own access flags; serializers read transient/synthetic off them
+}
+/** A static read is also the class's first use: a constant that has not been initialized yet
+ *  reads as undefined, which is the zero the caller then takes for the field's real value. */
+async function readField(this: JField, o: unknown): Promise<unknown> {
+  const p = rt.initClass(this.owner); if (p) await p;
+  return this.isStatic ? this.owner.ctor[this.prop] : (o as Record<string, unknown>)[this.prop];
 }
 function classFields(info: ClassInfo, name?: string): JField[] {
   const out: JField[] = [];
-  const push = (fname: string, desc: string, isStatic: boolean, prop: string) => {
+  const push = (fname: string, desc: string, isStatic: boolean, prop: string, flags = isStatic ? 0x9 : 0x1) => {
     const f = new JField();
-    f.owner = info; f.fname = fname; f.desc = desc; f.isStatic = isStatic; f.prop = prop;
+    f.owner = info; f.fname = fname; f.desc = desc; f.isStatic = isStatic; f.prop = prop; f.flags = flags;
     out.push(f);
   };
   if (info.def && info.dex) {
@@ -105,7 +112,7 @@ function classFields(info: ClassInfo, name?: string): JField[] {
         if (name !== undefined && fr.name !== name) continue;
         push(fr.name, info.dex.type(fr.type), isStatic,
           isStatic ? info.staticFieldTable.get(fr.name + ":" + info.dex.type(fr.type))!
-            : (info.fieldTable.get(fr.name) ?? mangleField(info.name, fr.name)));
+            : (info.fieldTable.get(fr.name) ?? mangleField(info.name, fr.name)), ef.flags);
         if (name !== undefined) return out;
       }
     }
@@ -135,14 +142,14 @@ rt.register({
       const s = signatureOf(classAnno(this.owner).fieldsByName.get(this.fname));
       return s ? parseTypeSig(s, { pos: 0 }) : classForDesc(this.desc, this.owner.owner);
     },
-    "getModifiers()I": function (this: JField) { return (this.isStatic ? 0x8 : 0) | 0x1; },
+    "getModifiers()I": function (this: JField) { return this.flags; },
+    "isSynthetic()Z": function (this: JField) { return (this.flags >> 12) & 1; },
+    "isEnumConstant()Z": function (this: JField) { return (this.flags >> 14) & 1; },
     "setAccessible(Z)V": () => {},
     "isAccessible()Z": () => 1,
     "getDeclaringClass()Ljava/lang/Class;": function (this: JField) { return (this.owner.owner ?? rt).classFor(this.owner.name); },
     "get(Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JField, o: unknown) {
-      const p = rt.initClass(this.owner); if (p) await p;
-      const v = this.isStatic ? this.owner.ctor[this.prop] : (o as Record<string, unknown>)[this.prop];
-      return boxReturn(this.desc, v);
+      return boxReturn(this.desc, await readField.call(this, o));
     },
     "set(Ljava/lang/Object;Ljava/lang/Object;)V": async function (this: JField, o: unknown, v: unknown) {
       const p = rt.initClass(this.owner); if (p) await p;
@@ -150,12 +157,8 @@ rt.register({
       if (this.isStatic) this.owner.ctor[this.prop] = raw;
       else (o as Record<string, unknown>)[this.prop] = raw;
     },
-    "getLong(Ljava/lang/Object;)J": function (this: JField, o: unknown) {
-      return this.isStatic ? this.owner.ctor[this.prop] : (o as Record<string, unknown>)[this.prop];
-    },
-    "getInt(Ljava/lang/Object;)I": function (this: JField, o: unknown) {
-      return this.isStatic ? this.owner.ctor[this.prop] : (o as Record<string, unknown>)[this.prop];
-    },
+    ...Object.fromEntries((["Int I", "Long J", "Boolean Z", "Float F", "Double D", "Byte B", "Short S", "Char C"])
+      .map((t) => [`get${t.slice(0, -2)}(Ljava/lang/Object;)${t.slice(-1)}`, readField])),
     "toString()Ljava/lang/String;": function (this: JField) { return this.owner.name + "." + this.fname; },
     ...annotatedElement(function (this: JField) { return classAnno(this.owner).fieldsByName.get(this.fname) ?? []; }),
   },
@@ -665,12 +668,9 @@ export function boxReturn(retDesc: string, v: unknown): unknown {
     case "D": return box(JDouble, v as number);
     case "Z": return (JBool as any)[mangleStaticField(v ? "TRUE" : "FALSE")];
     case "C": return box(JChar, v as number);
-    default:
-      // native (TS) classes declare their fields as Object, so a primitive read through them must
-      // still come back boxed — a bare JS number has no toString()/hashCode() for the caller
-      if (typeof v === "number") return Number.isInteger(v) ? boxInt(v) : box(JDouble, v);
-      if (typeof v === "bigint") return box(JLong, v);
-      return v;
+    // native (TS) classes declare their fields as Object, so a primitive read through them
+    // must still come back boxed
+    default: return boxObject(v);
   }
 }
 
