@@ -2,8 +2,9 @@
 
 import { rt, JObj, maySuspend, type NativeSpec } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray, utf8 } from "../abi";
-import { vcall, vcallMaybe, after, stringHash, mkEnumSet, javaFormat, newObj } from "./jlang";
+import { vcall, vcallMaybe, after, stringHash, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
+import { mappedReadOnlyBuffer } from "./jnio";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
  *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
@@ -953,15 +954,46 @@ rt.register({
   },
 });
 
-// FileChannel stubs (okio probes them; no real file locking here)
+// File locks remain advisory; byte mappings retain the opened stream's storage.
 const fileLock = () => new (rt.link("java/nio/channels/FileLock").ctor)();
-function fileChannel() { return new (rt.link("java/nio/channels/FileChannel").ctor)(); }
+class JFileChannel extends JObj {
+  file!: JObj;
+  open = true;
+  readable(): JInputStream | JRAF {
+    if (!this.open) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
+    if (this.file instanceof JInputStream || this.file instanceof JRAF) return this.file;
+    throw rt.mkThrowable("java/nio/channels/NonReadableChannelException", null);
+  }
+}
+const fileChannels = new WeakMap<JObj, JFileChannel>();
+function fileChannel(this: JObj): JFileChannel {
+  let channel = fileChannels.get(this);
+  if (!channel) {
+    rt.link("java/nio/channels/FileChannel");
+    channel = new JFileChannel(); channel.file = this; fileChannels.set(this, channel);
+  }
+  return channel;
+}
 rt.register({
-  name: "java/nio/channels/FileChannel", ctor: class extends JObj {},
+  name: "java/nio/channels/FileChannel", ctor: JFileChannel,
   methods: {
-    "close()V": () => {},
-    "size()J": () => 0n,
-    "position()J": () => 0n,
+    "close()V": maySuspend(function (this: JFileChannel) { this.open = false; return vcallMaybe(this.file, "close", "()V"); }),
+    "isOpen()Z": function (this: JFileChannel) { return +this.open; },
+    "size()J": function (this: JFileChannel) { const file = this.readable(); return BigInt(file.source?.size ?? file.buf.length); },
+    "position()J": function (this: JFileChannel) { return BigInt(this.readable().pos); },
+    "position(J)Ljava/nio/channels/FileChannel;": function (this: JFileChannel, position: bigint) {
+      if (position < 0n || position > BigInt(Number.MAX_SAFE_INTEGER)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "position");
+      this.readable().pos = Number(position); return this;
+    },
+    "map(Ljava/nio/channels/FileChannel$MapMode;JJ)Ljava/nio/MappedByteBuffer;": maySuspend(function (this: JFileChannel, mode: JSimpleEnum | null, position: bigint, size: bigint) {
+      const file = this.readable();
+      if (!mode) return rt.npe();
+      if (position < 0n || size < 0n || size > 0x7fffffffn) throw rt.mkThrowable("java/lang/IllegalArgumentException", "position/size");
+      if (mode.ename !== "READ_ONLY") throw rt.unimplemented("FileChannel writable mappings");
+      if (position + size > BigInt(file.source?.size ?? file.buf.length)) throw rt.mkThrowable("java/io/IOException", "mapping exceeds file size");
+      const start = Number(position), length = Number(size);
+      return file.source ? readFully(file.source, start, length).then(mappedReadOnlyBuffer) : mappedReadOnlyBuffer(file.buf.subarray(start, start + length));
+    }),
     "force(Z)V": () => {},
     "tryLock()Ljava/nio/channels/FileLock;": fileLock,
     "tryLock(JJZ)Ljava/nio/channels/FileLock;": fileLock,
@@ -974,8 +1006,9 @@ rt.register({
   methods: { "release()V": () => {}, "close()V": () => {}, "isValid()Z": () => 1 },
 });
 
-// FileChannel.MapMode: three singletons with a name — no map() backs them (see the FileChannel stub above).
 mkEnumSet("java/nio/channels/FileChannel$MapMode", ["READ_ONLY", "READ_WRITE", "PRIVATE"]);
+defineException("java/nio/channels/ClosedChannelException", "java/io/IOException");
+defineException("java/nio/channels/NonReadableChannelException", "java/lang/IllegalStateException");
 
 // ── java.nio.file minimal (datastore atomic-write path)
 class JNioPath extends JObj { p = ""; }

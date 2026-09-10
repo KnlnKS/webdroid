@@ -27,7 +27,9 @@ export class JBuffer extends JObj {
   mark = -1;
   little = false;         // byte order (default big-endian per Java)
   elemShift = 0;          // log2(bytes per element): byte=0, short/char=1, int/float=2, long/double=3
+  readOnly = false;
   clampPut(need: number) {
+    if (this.readOnly) throw rt.mkThrowable("java/nio/ReadOnlyBufferException", null);
     if (this.pos + need > this.lim) throw rt.mkThrowable("java/nio/BufferOverflowException", null);
   }
   clampGet(need: number) {
@@ -62,7 +64,7 @@ function bufferBaseMethods(): NativeSpec["methods"] {
     "remaining()I": function (this: JBuffer) { return this.lim - this.pos; },
     "hasRemaining()Z": function (this: JBuffer) { return this.pos < this.lim ? 1 : 0; },
     "isDirect()Z": function (this: JBuffer) { return this.direct ? 1 : 0; },
-    "isReadOnly()Z": () => 0,
+    "isReadOnly()Z": function (this: JBuffer) { return +this.readOnly; },
     "hasArray()Z": () => 0,
     "arrayOffset()I": () => 0,
   };
@@ -89,7 +91,7 @@ rt.register({
     },
     "order()Ljava/nio/ByteOrder;": function (this: JByteBuffer) { return this.little ? byteOrderLE : byteOrderBE; },
     "put(B)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(1); this.dv.setInt8(this.pos++, v); return this; },
-    "put(IB)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.dv.setInt8(i, v); return this; },
+    "put(IB)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setInt8(i, v); return this; },
     "put([B)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, arr: Int8Array) {
       this.clampPut(arr.length);
       bytes(this).set(arr, this.pos); this.pos += arr.length; return this;
@@ -115,19 +117,19 @@ rt.register({
       arr.set(bytes(this).subarray(this.pos, this.pos + len), off); this.pos += len; return this;
     },
     "putShort(S)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(2); this.dv.setInt16(this.pos, v, this.little); this.pos += 2; return this; },
-    "putShort(IS)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.dv.setInt16(i, v, this.little); return this; },
+    "putShort(IS)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setInt16(i, v, this.little); return this; },
     "getShort()S": function (this: JByteBuffer) { this.clampGet(2); const v = this.dv.getInt16(this.pos, this.little); this.pos += 2; return v; },
     "getShort(I)S": function (this: JByteBuffer, i: number) { return this.dv.getInt16(i, this.little); },
     "putChar(C)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(2); this.dv.setUint16(this.pos, v, this.little); this.pos += 2; return this; },
     "getChar()C": function (this: JByteBuffer) { this.clampGet(2); const v = this.dv.getUint16(this.pos, this.little); this.pos += 2; return v; },
     "putInt(I)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(4); this.dv.setInt32(this.pos, v, this.little); this.pos += 4; return this; },
-    "putInt(II)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.dv.setInt32(i, v, this.little); return this; },
+    "putInt(II)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setInt32(i, v, this.little); return this; },
     "getInt()I": function (this: JByteBuffer) { this.clampGet(4); const v = this.dv.getInt32(this.pos, this.little); this.pos += 4; return v; },
     "getInt(I)I": function (this: JByteBuffer, i: number) { return this.dv.getInt32(i, this.little); },
     "putLong(J)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: bigint) { this.clampPut(8); this.dv.setBigInt64(this.pos, v, this.little); this.pos += 8; return this; },
     "getLong()J": function (this: JByteBuffer) { this.clampGet(8); const v = this.dv.getBigInt64(this.pos, this.little); this.pos += 8; return v; },
     "putFloat(F)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(4); this.dv.setFloat32(this.pos, v, this.little); this.pos += 4; return this; },
-    "putFloat(IF)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.dv.setFloat32(i, v, this.little); return this; },
+    "putFloat(IF)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setFloat32(i, v, this.little); return this; },
     "getFloat()F": function (this: JByteBuffer) { this.clampGet(4); const v = this.dv.getFloat32(this.pos, this.little); this.pos += 4; return v; },
     "getFloat(I)F": function (this: JByteBuffer, i: number) { return this.dv.getFloat32(i, this.little); },
     "putDouble(D)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(8); this.dv.setFloat64(this.pos, v, this.little); this.pos += 8; return this; },
@@ -141,24 +143,47 @@ rt.register({
     "slice()Ljava/nio/ByteBuffer;": function (this: JByteBuffer) {
       const b = new JByteBuffer();
       b.backing = this.backing; b.byteOffset = this.byteOffset + this.pos;
-      b.cap = b.lim = this.lim - this.pos; b.pos = 0; b.little = this.little;
+      b.cap = b.lim = this.lim - this.pos; b.pos = 0; b.little = this.little; b.readOnly = this.readOnly;
       return b;
     },
     "duplicate()Ljava/nio/ByteBuffer;": function (this: JByteBuffer) {
-      const b = new JByteBuffer();
-      b.backing = this.backing; b.byteOffset = this.byteOffset;
-      b.cap = this.cap; b.lim = this.lim; b.pos = this.pos; b.mark = this.mark; b.little = this.little;
-      return b;
+      return duplicateBuffer(this);
     },
+    "asReadOnlyBuffer()Ljava/nio/ByteBuffer;": function (this: JByteBuffer) { const b = duplicateBuffer(this); b.readOnly = true; return b; },
     "compact()Ljava/nio/ByteBuffer;": function (this: JByteBuffer) {
+      this.clampPut(0);
       const n = this.lim - this.pos;
       bytes(this).copyWithin(0, this.pos, this.lim);
       this.pos = n; this.lim = this.cap;
       return this;
     },
-    "array()[B": function (this: JByteBuffer) { return bytes(this); },
+    "array()[B": function (this: JByteBuffer) { if (this.readOnly) throw rt.mkThrowable("java/nio/ReadOnlyBufferException", null); return bytes(this); },
   },
 });
+function duplicateBuffer(source: JByteBuffer): JByteBuffer {
+  const b = new JByteBuffer();
+  b.backing = source.backing; b.byteOffset = source.byteOffset;
+  b.cap = source.cap; b.lim = source.lim; b.pos = source.pos; b.mark = source.mark; b.little = source.little; b.readOnly = source.readOnly;
+  return b;
+}
+defineException("java/nio/ReadOnlyBufferException", "java/lang/UnsupportedOperationException");
+class JMappedByteBuffer extends JByteBuffer {}
+rt.register({
+  name: "java/nio/MappedByteBuffer", ctor: JMappedByteBuffer, sup: "java/nio/ByteBuffer",
+  methods: {
+    ...chaining("Ljava/nio/MappedByteBuffer;"),
+    "isLoaded()Z": () => 1,
+    "load()Ljava/nio/MappedByteBuffer;": function (this: JMappedByteBuffer) { return this; },
+    "force()Ljava/nio/MappedByteBuffer;": function (this: JMappedByteBuffer) { return this; },
+  },
+});
+export function mappedReadOnlyBuffer(data: Uint8Array): JBuffer {
+  rt.link("java/nio/MappedByteBuffer");
+  const buffer = new JMappedByteBuffer();
+  buffer.backing = { storage: { kind: "direct", ab: data.buffer as ArrayBuffer } };
+  buffer.byteOffset = data.byteOffset; buffer.cap = buffer.lim = data.length; buffer.readOnly = true;
+  return buffer;
+}
 function mkByteBuffer(cap: number, direct = false): JByteBuffer {
   if (cap < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative buffer capacity");
   const b = new JByteBuffer();
@@ -216,6 +241,7 @@ class JDoubleBuffer extends JBuffer {}
 function viewBuffer<T extends JBuffer>(src: JByteBuffer, Ctor: new () => T, shift: number): T {
   const b = new Ctor();
   b.backing = src.backing;
+  b.readOnly = src.readOnly;
   b.byteOffset = src.byteOffset + src.pos;
   b.elemShift = shift;
   b.little = src.little;
@@ -233,7 +259,7 @@ rt.register({
     "static allocate(I)Ljava/nio/FloatBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 4), JFloatBuffer, 2),
     "static wrap([F)Ljava/nio/FloatBuffer;": (arr: Float32Array) => wrapArray(JFloatBuffer, arr, 2),
     "put(F)Ljava/nio/FloatBuffer;": function (this: JFloatBuffer, v: number) { this.clampPut(1); this.dv.setFloat32(this.pos++ << 2, v, this.little); return this; },
-    "put(IF)Ljava/nio/FloatBuffer;": function (this: JFloatBuffer, i: number, v: number) { this.dv.setFloat32(i << 2, v, this.little); return this; },
+    "put(IF)Ljava/nio/FloatBuffer;": function (this: JFloatBuffer, i: number, v: number) { this.clampPut(0); this.dv.setFloat32(i << 2, v, this.little); return this; },
     "put([F)Ljava/nio/FloatBuffer;": function (this: JFloatBuffer, arr: Float32Array) { return putFloats(this, arr, 0, arr.length); },
     "put([FII)Ljava/nio/FloatBuffer;": function (this: JFloatBuffer, arr: Float32Array, off: number, len: number) { return putFloats(this, arr, off, len); },
     "get()F": function (this: JFloatBuffer) { this.clampGet(1); return this.dv.getFloat32(this.pos++ << 2, this.little); },
@@ -261,7 +287,7 @@ function intBufferMethods(): NativeSpec["methods"] {
     "static allocate(I)Ljava/nio/IntBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 4), JIntBuffer, 2),
     "static wrap([I)Ljava/nio/IntBuffer;": (arr: Int32Array) => wrapArray(JIntBuffer, arr, 2),
     "put(I)Ljava/nio/IntBuffer;": function (this: JIntBuffer, v: number) { this.clampPut(1); this.dv.setInt32(this.pos++ << 2, v, this.little); return this; },
-    "put(II)Ljava/nio/IntBuffer;": function (this: JIntBuffer, i: number, v: number) { this.dv.setInt32(i << 2, v, this.little); return this; },
+    "put(II)Ljava/nio/IntBuffer;": function (this: JIntBuffer, i: number, v: number) { this.clampPut(0); this.dv.setInt32(i << 2, v, this.little); return this; },
     "put([I)Ljava/nio/IntBuffer;": function (this: JIntBuffer, arr: Int32Array) {
       this.clampPut(arr.length);
       for (let i = 0; i < arr.length; i++) this.dv.setInt32((this.pos + i) << 2, arr[i], this.little);
