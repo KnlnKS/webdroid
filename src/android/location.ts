@@ -18,10 +18,10 @@ export class JLocation extends JObj {
   }
 }
 // AOSP iterates Vincenty on WGS84; haversine is within 0.5% and enough for an app's proximity checks.
-function distanceM(a: JLocation, b: JLocation) {
-  const r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLon = (b.lon - a.lon) * r;
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLon / 2) ** 2;
-  return 2 * 6371000 * Math.asin(Math.sqrt(h));
+export function distanceM(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const r = Math.PI / 180, dLat = (lat2 - lat1) * r, dLon = (lon2 - lon1) * r;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(Math.min(1, h)));
 }
 const optional = [
   ["ElapsedRealtimeUncertaintyNanos", "", "D", 256], ["Altitude", "", "D", 1],
@@ -59,7 +59,7 @@ const locMethods: NonNullable<NativeSpec["methods"]> = {
   "setLongitude(D)V": function (this: JLocation, v: number) { this.lon = v; },
   "getTime()J": function (this: JLocation) { return this.time; },
   "setTime(J)V": function (this: JLocation, t: bigint) { this.time = t; },
-  "distanceTo(Landroid/location/Location;)F": function (this: JLocation, o: JLocation) { return Math.fround(distanceM(this, o)); },
+  "distanceTo(Landroid/location/Location;)F": function (this: JLocation, o: JLocation) { return Math.fround(distanceM(this.lat, this.lon, o.lat, o.lon)); },
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JLocation, p: JParcel) {
     await vcall(p, "writeString8", "(Ljava/lang/String;)V", this.provider);

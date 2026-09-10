@@ -87,6 +87,7 @@ import "./android/cookies";
 import "./android/hardware";
 import "./android/location";
 import "./android/locationrequest";
+import "./android/locationmanager";
 import "./android/worksource";
 import "./android/job";
 import "./android/service";

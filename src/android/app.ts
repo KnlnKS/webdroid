@@ -681,18 +681,6 @@ for (const [name, methods, statics] of [
   }],
   ["android/app/KeyguardManager", { "isKeyguardLocked()Z": () => 0, "inKeyguardRestrictedInputMode()Z": () => 0, "isDeviceSecure()Z": () => 0 }],
   ["android/hardware/SensorManager", { "getDefaultSensor(I)Landroid/hardware/Sensor;": () => null, "getSensorList(I)Ljava/util/List;": () => newArrayList(), "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z": () => 0, "unregisterListener(Landroid/hardware/SensorEventListener;)V": () => {} }],
-  // No location provider exists on this device, so requests register nothing and never fire.
-  ["android/location/LocationManager", {
-    "getLastKnownLocation(Ljava/lang/String;)Landroid/location/Location;": () => null,
-    "getBestProvider(Landroid/location/Criteria;Z)Ljava/lang/String;": () => null,
-    "getProvider(Ljava/lang/String;)Landroid/location/LocationProvider;": () => null,
-    "getProviders(Z)Ljava/util/List;": () => newArrayList(),
-    "getAllProviders()Ljava/util/List;": () => newArrayList(),
-    "isProviderEnabled(Ljava/lang/String;)Z": () => 0,
-    "requestLocationUpdates(Ljava/lang/String;JFLandroid/location/LocationListener;)V": () => {},
-    "requestLocationUpdates(Ljava/lang/String;JFLandroid/location/LocationListener;Landroid/os/Looper;)V": () => {},
-    "removeUpdates(Landroid/location/LocationListener;)V": () => {},
-  }, { GPS_PROVIDER: "gps", NETWORK_PROVIDER: "network", PASSIVE_PROVIDER: "passive" }],
   ["android/os/BatteryManager", { "getIntProperty(I)I": () => 80, "isCharging()Z": () => 1 }],
   ["android/hardware/display/DisplayManager", {
     // one fixed built-in display: unknown ids are null as in AOSP, and registered listeners

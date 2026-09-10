@@ -20,6 +20,8 @@ import { preferenceStore, usePreferenceStore } from "../android/sharedprefs";
 import { rt } from "../jvm/runtime";
 import { useWebCookies } from "../android/cookies";
 import type { WebCookies } from "./webcookies";
+import { BrowserLocation } from "./geolocation";
+import { locationTransport } from "../android/locationmanager";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives, type PackedArchive } from "./packedarchive";
 
@@ -45,6 +47,7 @@ type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HT
   watchers: Set<() => void>; pending: Set<(error: unknown) => void> };
 export class ProcessBroker {
   readonly files = new PrivateFiles();
+  readonly location = new BrowserLocation();
   readonly permissions = new PermissionStore();
   private cookieStores = new Map<string, Promise<WebCookies>>();
   cookies(pkg: string): Promise<WebCookies> {
@@ -164,7 +167,7 @@ export class ProcessBroker {
     for (const reject of entry.pending) reject(error);
     entry.pending.clear();
     for (const watcher of entry.watchers) { try { watcher(); } catch (error) { console.error("[process death]", error); } }
-    entry.watchers.clear(); entry.frame?.remove(); this.files.detach(pid);
+    entry.watchers.clear(); entry.frame?.remove(); this.files.detach(pid); this.location.remove(pid);
     for (const activity of this.activities.filter((a) => a.pid === pid)) this.finishActivity(pid, activity.id, 0, null);
   }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
@@ -283,6 +286,11 @@ export function connectProcess(): ProcessEndpoint {
   usePreferenceStore(broker.preferences);
   usePermissionStore(broker.permissions);
   useWebCookies((pkg) => broker.cookies(pkg));
+  locationTransport.available = () => broker.location.available;
+  locationTransport.enabled = () => broker.location.enabled;
+  locationTransport.last = () => broker.location.last;
+  locationTransport.subscribe = (id, high, active, receive) => broker.location.subscribe(PROCESS_PID, id, high, active, receive);
+  locationTransport.remove = id => broker.location.remove(PROCESS_PID, id);
   connectProviders((pkg, process, request) => remote(broker.provider(PROCESS_PID, pkg, process, request)));
   broadcastTransport.send = async (intent, permission, ordered) => remote(broker.broadcast(PROCESS_PID, await encodeIntent(intent), permission, ordered));
   binderTransport.transact = (request) => remote(broker.transact(PROCESS_PID, request));
