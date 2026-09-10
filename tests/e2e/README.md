@@ -46,6 +46,9 @@ and a post with comments and an empty composer at 1080×2424 @480dpi. It saves o
 redacted text/telemetry to `actual/reddit/`; it never records credential screens. Run it
 sequentially with the main suite. Live feed content can move the post target or select an
 image lightbox, so a timeout is a diagnostic failure to inspect, not proof of an emulator bug.
+`REDDIT_OUT_DIR` selects a separate diagnostic directory. Login uses a running wall clock and
+waits for the IME input connection before typing; pre-login failures record redacted drawn text,
+logs, missing APIs and performance data without screenshots.
 
 Completion requires newly presented canvas text: post detail must draw "Join the
 conversation" plus two new prose strings of at least 24 characters, scrolling must reach
@@ -56,7 +59,9 @@ replay, but clipping and occlusion still require screenshot inspection.
 
 The run fails on new Java/page errors, native faults, layout/draw/GL errors or a wedged main
 loop. Missing API queries are recorded without automatically failing: optional platform
-queries can be legitimate. A host-side ten-minute deadline closes the browser even when a
+queries can be legitimate. Explicit Chromium-style WARNING/INFO/DEBUG messages sent to stderr
+remain in the warning and raw-log records. Comment swipes complete before subsequent gestures,
+and the view settles before opening the composer. A host-side ten-minute deadline closes the browser even when a
 renderer evaluation is stuck; `REDDIT_TIMEOUT_MS` overrides it. Failure details and host page
 errors still reach `run.json` when page-side diagnostics cannot finish.
 
