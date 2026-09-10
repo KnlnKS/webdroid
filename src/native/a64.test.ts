@@ -348,6 +348,33 @@ describe("a64 decoder: hints, atomics, the REV family and system registers", () 
     expect(c.w[26]).toBe(0x1000000);
   });
 
+  test("an exit spills what its own path wrote", () => {
+    // one path writes x1 before the shared block, the other does not
+    const words = [
+      0xb4000060,   // cbz x0, +12
+      0xd28000e1,   // mov x1, #7
+      0x91000442,   // add x2, x2, #1
+      0x91000442,   // add x2, x2, #1
+      RET];
+    const a = run(words, (c) => { c.w[0] = 0; c.w[2] = 5; c.w[4] = 1; });
+    expect([a.w[2], a.w[4]]).toEqual([5, 2]);
+    const b = run(words, (c) => { c.w[0] = 1; c.w[2] = 5; c.w[4] = 1; });
+    expect([b.w[2], b.w[4]]).toEqual([7, 3]);
+  });
+
+  test("a word the interpreter runs leaves the region's other registers alone", () => {
+    // x0 is dirty in the region when scvtf d0 (a V destination numbered like it) falls back
+    const c = run([
+      0xd28000a0,   // mov x0, #5
+      0xd28000c1,   // mov x1, #6
+      0x1e620020,   // scvtf d0, w1
+      0x9e660002,   // fmov x2, d0
+      0x0e020c23,   // dup v3.8b, w1
+      0x0e023c64,   // umov w4, v3.b[1]
+      RET]);
+    expect([c.w[0], c.w[2], c.w[4], c.w[5], c.w[8]]).toEqual([5, 6, 0, 0x40180000, 6]);
+  });
+
   test("a call through a register and its return hand off between regions", () => {
     // f on its own page: `add x0, x0, #1; ret`; the caller loops `blr x3; subs x2, x2, #1; b.ne`
     const f = mem.reserve(0x1000, 0x1000);

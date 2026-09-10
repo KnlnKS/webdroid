@@ -106,7 +106,7 @@ inline fn setR(e: *Emit, n: u32) void {
 fn bxExit(e: *Emit, k: u32) void {
     e.b.set(jit.L_RET);
     e.countIc(k);
-    e.exit();
+    e.exitRet();
 }
 fn setNZ(e: *Emit) void {
     const b = e.b;

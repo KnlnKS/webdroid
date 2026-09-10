@@ -39,6 +39,8 @@ pub const L_R = 44;
 pub const L_NEXT = 45;
 pub const L_RET = 46;
 pub const L_SC = 47;
+pub const L_IC = 48;
+pub const L_LIMIT = 49;
 // imported functions
 const F_EXEC = 0; // exec_word(cpu, word, pc) -> status
 const F_TX = 1; // tx_addr(cpu, addr i64) -> i32 (0: fault)
@@ -163,7 +165,7 @@ fn scanA64(r: *Region, i: u32, page: *cpu.Page, pc: u32) jit32.Scan {
             r.blocks[i].fall = if (next & (abi.PAGE_SIZE - 1) != 0) blockFor(r, next) else -1;
             break :blk true;
         },
-        .br, .svc, .fault, .mrs, .msr, .excl, .atomic => true,
+        .br, .svc, .fault => true,
         else => false,
     };
     return .{ .len = 4, .ends = ends };
@@ -196,17 +198,28 @@ fn discover(r: *Region, page: *cpu.Page) bool {
 }
 
 // ── emission
+/// the registers an op reads and writes, and whether it reads or writes NZCV
+pub const RW = struct { r: u32, w: u32, fr: bool = false, fw: bool = false };
+const ALL = RW{ .r = 0xffff_ffff, .w = 0xffff_ffff, .fr = true, .fw = true };
+const ALL32 = RW{ .r = 0x7fff, .w = 0x7fff, .fr = true, .fw = true };
+
 pub const Emit = struct {
     b: *Buf,
     r: *Region,
     page: *cpu.Page,
     blk: u32,
-    /// registers the region reads or writes, for the prologue and the spills
+    /// every register the region reads or writes (the prologue loads them), every one it
+    /// writes (the status exit spills them), and what may have been written on the way to the
+    /// op being emitted (all a transfer exit spills)
     used: u32,
     written: u32,
-    /// the depth of the exit block and the loop from the current block body, and how many
-    /// if-blocks the emitter is inside at the moment
+    wcur: u32,
+    /// what the op being emitted touches: a fallback spills and reloads only that
+    rw: RW,
+    /// the depth of the status exit, the hand-off and the loop from the current block body,
+    /// and how many if-blocks the emitter is inside at the moment
     exit_depth: u32,
+    chain_depth: u32,
     top_depth: u32,
     nest: u32,
 
@@ -237,32 +250,32 @@ pub const Emit = struct {
         e.b.op(O.i64_extend_i32_u);
         e.setX(n);
     }
-    fn loadIc(e: *Emit) void {
-        e.b.get(L_CPU);
-        e.b.memop(O.i64_load, OFF_IC);
-    }
     /// ic += k
     pub fn countIc(e: *Emit, k: u32) void {
-        e.b.get(L_CPU);
-        e.loadIc();
+        e.b.get(L_IC);
         e.b.i64c(k);
         e.b.op(O.i64_add);
+        e.b.set(L_IC);
+    }
+    fn storeIc(e: *Emit) void {
+        e.b.get(L_CPU);
+        e.b.get(L_IC);
         e.b.memop(O.i64_store, OFF_IC);
     }
     /// an ARM32 region's registers are the low words, in i32 locals
-    fn spillRegs(e: *Emit) void {
+    fn spillRegs(e: *Emit, mask: u32) void {
         const wide = e.r.isa == .a64;
         var n: u8 = 0;
-        while (n < 32) : (n += 1) if (e.written & (@as(u32, 1) << @intCast(n)) != 0) {
+        while (n < 32) : (n += 1) if (mask & bit(n) != 0) {
             e.b.get(L_CPU);
             e.b.get(L_X + n);
             e.b.memop(if (wide) O.i64_store else O.i32_store, OFF_X + 8 * @as(u32, n));
         };
     }
-    fn loadRegs(e: *Emit) void {
+    fn loadRegs(e: *Emit, mask: u32) void {
         const wide = e.r.isa == .a64;
         var n: u8 = 0;
-        while (n < 32) : (n += 1) if (e.used & (@as(u32, 1) << @intCast(n)) != 0) {
+        while (n < 32) : (n += 1) if (mask & bit(n) != 0) {
             e.b.get(L_CPU);
             e.b.memop(if (wide) O.i64_load else O.i32_load, OFF_X + 8 * @as(u32, n));
             e.b.set(L_X + n);
@@ -295,25 +308,35 @@ pub const Emit = struct {
     }
     fn loadFlags(e: *Emit) void {
         const b = e.b;
+        b.get(L_CPU);
+        b.memop(O.i32_load, OFF_CPSR);
+        b.set(L_A);
         const shifts = [_]u8{ 31, 30, 29, 28 };
         for (shifts, 0..) |s, i| {
-            b.get(L_CPU);
-            b.memop(O.i32_load, OFF_CPSR);
+            b.get(L_A);
             b.i32c(s);
             b.op(O.i32_shr_u);
-            b.i32c(1);
-            b.op(O.i32_and);
+            if (s != 31) {
+                b.i32c(1);
+                b.op(O.i32_and);
+            }
             b.set(L_N + @as(u32, @intCast(i)));
         }
     }
-    /// leave with `ret` already in L_RET
+    /// leave with a status already in L_RET: the epilogue spills everything the region writes
     pub fn exit(e: *Emit) void {
         e.b.br(e.exit_depth + e.nest);
+    }
+    /// leave for the pc already in L_RET: what this path may have written is spilled here
+    pub fn exitRet(e: *Emit) void {
+        e.spillRegs(e.wcur);
+        e.spillFlags();
+        e.b.br(e.chain_depth + e.nest);
     }
     pub fn exitTo(e: *Emit, pc: u32) void {
         e.b.i32c(@bitCast(pc));
         e.b.set(L_RET);
-        e.exit();
+        e.exitRet();
     }
     pub fn exitStatus(e: *Emit, s: u32) void {
         e.b.i32c(@intCast(s));
@@ -328,9 +351,8 @@ pub const Emit = struct {
             return;
         }
         // the budget: leave at the boundary, the dispatcher decides
-        e.loadIc();
-        e.b.get(L_CPU);
-        e.b.memop(O.i64_load, OFF_LIMIT);
+        e.b.get(L_IC);
+        e.b.get(L_LIMIT);
         e.b.op(O.i64_ge_s);
         e.ifv();
         e.exitTo(pc);
@@ -339,11 +361,13 @@ pub const Emit = struct {
         e.b.set(L_NEXT);
         e.b.br(e.top_depth + e.nest);
     }
-    /// the interpreter runs this word: everything spills first and reloads after
+    /// the interpreter runs this word: what it reads spills first, what it writes reloads after.
+    /// What reloads spills too: a register the classifier over-names as written must not come
+    /// back stale from memory.
     pub fn fallback(e: *Emit, pc: u32, k: u32) void {
         const b = e.b;
-        e.spillRegs();
-        e.spillFlags();
+        e.spillRegs(e.rw.r | e.rw.w);
+        if (e.rw.fr or e.rw.fw) e.spillFlags();
         b.get(L_CPU);
         if (e.r.isa == .a64) {
             b.i32c(@bitCast(mem.ld32(pc)));
@@ -355,8 +379,8 @@ pub const Emit = struct {
         }
         b.set(L_R);
         // reload first: an exit spills the locals, which must be what the interpreter left
-        e.loadRegs();
-        e.loadFlags();
+        e.loadRegs(e.rw.w);
+        if (e.rw.fw) e.loadFlags();
         b.get(L_R);
         e.ifv();
         e.countIc(k);
@@ -831,7 +855,7 @@ pub const Emit = struct {
                     e.setX(30);
                 }
                 e.countIc(k);
-                e.exit();
+                e.exitRet();
                 return true;
             },
             .ldrlit => {
@@ -1217,20 +1241,69 @@ inline fn ones(k: u32) u64 {
     return if (k >= 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(k)) - 1;
 }
 
-/// the registers an op touches, for the prologue and spills (conservative: every field that
-/// can name a register)
-fn regsOf(o: *const Op) u32 {
+/// what an op reads and writes; an op the interpreter runs names what it may touch, and the
+/// kinds that can touch anything say so
+fn rwOf(o: *const Op) RW {
     return switch (o.kind) {
-        .nop, .clrex, .bcond => 0,
-        .b => if (o.a != 0) bit(30) else 0,
-        .adr, .movw, .ldrlit, .cbz, .tbz => bit(o.rd),
-        .br => bit(o.rn) | bit(30),
-        .ldp => bit(o.rd) | bit(o.rm) | bit(o.rn),
-        .three => bit(o.rd) | bit(o.rn) | bit(o.rm) | bit(o.ra),
-        .addsub, .logic, .bfm, .extr, .ldst, .adc, .ccmp, .csel, .one, .two => bit(o.rd) | bit(o.rn) | bit(o.rm),
-        // the interpreter runs these: it may touch anything
-        else => 0xffff_ffff,
+        .nop, .clrex, .fault, .vldrlit => .{ .r = 0, .w = 0 },
+        .bcond => .{ .r = 0, .w = 0, .fr = true },
+        .adr, .ldrlit => .{ .r = 0, .w = bit(o.rd) },
+        .movw => .{ .r = if (o.a & 3 == 3) bit(o.rd) else 0, .w = bit(o.rd) },
+        .cbz, .tbz => .{ .r = bit(o.rd), .w = 0 },
+        .b => .{ .r = 0, .w = if (o.a != 0) bit(30) else 0 },
+        .br => .{ .r = bit(o.rn), .w = if (o.a == 1) bit(30) else 0 },
+        .ldp => blk: {
+            const wb: u32 = if (o.a & 1 != 0) bit(o.rn) else 0;
+            const pair = bit(o.rd) | bit(o.rm);
+            break :blk if (o.a & 4 != 0) .{ .r = bit(o.rn), .w = pair | wb } else .{ .r = bit(o.rn) | pair, .w = wb };
+        },
+        .ldst => blk: {
+            const load = o.b & 3 != 0 and !(o.b >> 2 == 3 and o.b & 3 == 2);
+            const wb: u32 = if (o.a == 1 or o.a == 2) bit(o.rn) else 0;
+            const base = bit(o.rn) | (if (o.a == 3) bit(o.rm) else 0);
+            break :blk if (load) .{ .r = base, .w = bit(o.rd) | wb } else .{ .r = base | bit(o.rd), .w = wb };
+        },
+        .addsub => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd), .fw = o.a & 2 != 0 },
+        .logic => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd), .fw = o.a & 3 == 3 },
+        .bfm => .{ .r = bit(o.rn) | (if (o.a & 3 == 1) bit(o.rd) else 0), .w = bit(o.rd) },
+        .extr, .two => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd) },
+        .one => .{ .r = bit(o.rn), .w = bit(o.rd) },
+        .three => .{ .r = bit(o.rn) | bit(o.rm) | bit(o.ra), .w = bit(o.rd) },
+        .adc => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd), .fr = true, .fw = o.a & 2 != 0 },
+        .ccmp => .{ .r = bit(o.rn) | bit(o.rm), .w = 0, .fr = true, .fw = true },
+        .csel => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd), .fr = true },
+        .excl => blk: {
+            const m = bit(o.rd) | bit(o.rd + 1) | bit(o.rn) | bit(o.rm) | bit(o.rm + 1) | bit(o.ra);
+            break :blk .{ .r = m, .w = m };
+        },
+        .atomic => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd) },
+        .mrs => .{ .r = 0, .w = bit(o.rd), .fr = o.imm == 0x5a10 },
+        .msr => .{ .r = bit(o.rd), .w = 0, .fw = o.imm == 0x5a10 },
+        .vmem => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rn) },
+        .simd => simdRw(@truncate(o.imm)),
+        .svc, .raw => ALL,
     };
+}
+/// the SIMD&FP space touches a general register only through the conversions, the general
+/// moves and the general-register lane copies, and NZCV only through the compares and selects
+fn simdRw(w: u32) RW {
+    const rd: u8 = @intCast(w & 31);
+    const rn: u8 = @intCast((w >> 5) & 31);
+    if (w & 0x5f00_0000 == 0x1e00_0000) {
+        // the fixed-point and integer conversions: SCVTF/UCVTF (opcode 2, 3) and FMOV to a V
+        // register (7) read the general register, the rest write it
+        if (w & 0x5f20_0000 == 0x1e00_0000 or w & 0x5f20_fc00 == 0x1e20_0000) {
+            const opcode = (w >> 16) & 7;
+            return if (opcode == 2 or opcode == 3 or opcode == 7) .{ .r = bit(rn), .w = 0 } else .{ .r = 0, .w = bit(rd) };
+        }
+        if (w & 0x5f20_3c00 == 0x1e20_2000) return .{ .r = 0, .w = 0, .fw = true };
+        if (w & 0x5f20_0c00 == 0x1e20_0400) return .{ .r = 0, .w = 0, .fr = true, .fw = true };
+        if (w & 0x5f20_0c00 == 0x1e20_0c00) return .{ .r = 0, .w = 0, .fr = true };
+        return .{ .r = 0, .w = 0 };
+    }
+    // DUP and INS from a general register read it; SMOV and UMOV write one
+    if (w & 0x9fe0_8400 == 0x0e00_0400 and w & 0x800 != 0) return if (w & 0x2000 != 0) .{ .r = 0, .w = bit(rd) } else .{ .r = bit(rn), .w = 0 };
+    return .{ .r = 0, .w = 0 };
 }
 inline fn bit(n: u8) u32 {
     return @as(u32, 1) << @intCast(n & 31);
@@ -1238,39 +1311,70 @@ inline fn bit(n: u8) u32 {
 
 /// emit the region's function body into `b`
 fn emitRegion(b: *Buf, r: *Region, page: *cpu.Page) void {
-    var e = Emit{ .b = b, .r = r, .page = page, .blk = 0, .used = 0, .written = 0, .exit_depth = 0, .top_depth = 0, .nest = 0 };
-    if (r.isa == .a64) {
-        for (r.blocks[0..r.nblocks]) |blk| {
+    const wide = r.isa == .a64;
+    var e = Emit{ .b = b, .r = r, .page = page, .blk = 0, .used = 0, .written = 0, .wcur = 0, .rw = if (wide) ALL else ALL32, .exit_depth = 0, .chain_depth = 0, .top_depth = 0, .nest = 0 };
+    const n = r.nblocks;
+    // what each block writes, and what may have been written before it is entered: the union
+    // over its predecessors, to a fixed point (an entry from the dispatcher has written nothing)
+    var W: [MAX_BLOCKS]u32 = undefined;
+    var wb: [MAX_BLOCKS]u32 = undefined;
+    if (wide) {
+        for (r.blocks[0..n], 0..) |blk, i| {
+            W[i] = 0;
+            wb[i] = 0;
             var pc = blk.pc;
-            var i: u32 = 0;
-            while (i < blk.n) : (i += 1) {
-                const o = &page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2];
-                const regs = regsOf(o);
-                e.used |= regs;
-                e.written |= regs;
+            var j: u32 = 0;
+            while (j < blk.n) : (j += 1) {
+                const rw = rwOf(&page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2]);
+                W[i] |= rw.w;
+                e.used |= rw.r | rw.w;
                 pc += 4;
+            }
+            e.written |= W[i];
+        }
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (r.blocks[0..n], 0..) |blk, i| {
+                const out = wb[i] | W[i];
+                for ([_]i32{ blk.taken, blk.fall }) |t| if (t >= 0) {
+                    const j: usize = @intCast(t);
+                    if (wb[j] | out != wb[j]) {
+                        wb[j] |= out;
+                        changed = true;
+                    }
+                };
             }
         }
     } else {
         e.used = 0x7fff;
         e.written = 0x7fff;
+        @memset(wb[0..n], 0x7fff);
     }
-    // locals: 32 registers, 4 i32 flags, 4 i64 temps, 6 i32 temps
-    b.u(4);
+    // locals: 32 registers, 4 i32 flags, 4 i64 temps, 6 i32 temps, ic and its limit
+    b.u(5);
     b.u(32);
-    b.byte(if (r.isa == .a64) wasm.I64 else wasm.I32);
+    b.byte(if (wide) wasm.I64 else wasm.I32);
     b.u(4);
     b.byte(wasm.I32);
     b.u(4);
     b.byte(wasm.I64);
     b.u(6);
     b.byte(wasm.I32);
-    e.loadRegs();
+    b.u(2);
+    b.byte(wasm.I64);
+    e.loadRegs(e.used);
     e.loadFlags();
+    b.get(L_CPU);
+    b.memop(O.i64_load, OFF_IC);
+    b.set(L_IC);
+    b.get(L_CPU);
+    b.memop(O.i64_load, OFF_LIMIT);
+    b.set(L_LIMIT);
     b.get(L_ENTRY);
     b.set(L_NEXT);
-    const n = r.nblocks;
-    b.blockStart(O.block, wasm.VOID); // exit
+    b.blockStart(O.block, wasm.VOID); // exit: a status
+    b.blockStart(O.block, wasm.VOID); // chain: a pc
     b.blockStart(O.loop, wasm.VOID); // top
     var i: u32 = n;
     while (i > 0) : (i -= 1) b.blockStart(O.block, wasm.VOID);
@@ -1285,7 +1389,9 @@ fn emitRegion(b: *Buf, r: *Region, page: *cpu.Page) void {
         b.op(O.end); // block i's label: its body follows
         e.blk = i;
         e.top_depth = n - 1 - i;
-        e.exit_depth = n - i;
+        e.chain_depth = n - i;
+        e.exit_depth = n - i + 1;
+        e.wcur = wb[i];
         const blk = r.blocks[i];
         b.get(L_CPU);
         b.i32c(@bitCast(blk.pc));
@@ -1295,11 +1401,16 @@ fn emitRegion(b: *Buf, r: *Region, page: *cpu.Page) void {
         var ended = false;
         while (j < blk.n) : (j += 1) {
             const len: u32 = if (r.isa == .thumb and (mem.ptr(u16, pc).* & 0xf800) != 0xf000) 2 else 4;
+            const o = &page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2];
+            if (wide) {
+                e.rw = rwOf(o);
+                e.wcur |= e.rw.w;
+            }
             if (pc -% fb_lo < fb_hi -% fb_lo) {
                 e.fallback(pc, j + 1);
                 ended = false;
             } else switch (r.isa) {
-                .a64 => ended = e.emitOp(&page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2], pc, j + 1),
+                .a64 => ended = e.emitOp(o, pc, j + 1),
                 .arm => ended = jit32.emitArm(&e, pc, j + 1),
                 .thumb => ended = jit32.emitThumb(&e, pc, j + 1),
             }
@@ -1309,10 +1420,15 @@ fn emitRegion(b: *Buf, r: *Region, page: *cpu.Page) void {
         if (!ended) e.transfer(blk.fall, if (r.isa == .thumb) pc | 1 else pc, blk.n);
     }
     b.op(O.end); // loop
-    b.op(O.end); // exit
-    e.spillRegs();
-    e.spillFlags();
+    b.op(O.end); // chain
+    e.storeIc();
     if (chain) chainTo(&e);
+    b.get(L_RET);
+    b.op(O.return_);
+    b.op(O.end); // exit
+    e.spillRegs(e.written);
+    e.spillFlags();
+    e.storeIc();
     b.get(L_RET);
     b.op(O.end); // function
 }
@@ -1325,9 +1441,8 @@ fn chainTo(e: *Emit) void {
     b.i32c(STATUS_MAX);
     b.op(O.i32_lt_u);
     b.brIf(0);
-    e.loadIc();
-    b.get(L_CPU);
-    b.memop(O.i64_load, OFF_LIMIT);
+    b.get(L_IC);
+    b.get(L_LIMIT);
     b.op(O.i64_ge_s);
     b.brIf(0);
     b.get(L_RET);
