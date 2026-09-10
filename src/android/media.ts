@@ -321,6 +321,7 @@ rt.register({
       return frames * (chanCfg === 12 || chanCfg === 3 ? 2 : 1) * (fmt === 3 ? 1 : 2);
     },
     "static getNativeOutputSampleRate(I)I": () => outputSampleRate(),
+    "static isDirectPlaybackSupported(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)Z": () => 0,
     "static getMaxVolume()F": () => 1, "static getMinVolume()F": () => 0,
     "getState()I": function (this: JAudioTrack) { return this.state; },
     "getPlayState()I": function (this: JAudioTrack) { return this.playState; },
