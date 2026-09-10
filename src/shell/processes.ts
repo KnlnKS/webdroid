@@ -17,6 +17,8 @@ import { attrStr } from "../android/axml";
 import { sqliteStore, useSQLiteStore } from "../android/sqlite";
 import { preferenceStore, usePreferenceStore } from "../android/sharedprefs";
 import { rt } from "../jvm/runtime";
+import { useWebCookies } from "../android/cookies";
+import type { WebCookies } from "./webcookies";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives, type PackedArchive } from "./packedarchive";
 
@@ -42,6 +44,12 @@ type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HT
   watchers: Set<() => void>; pending: Set<(error: unknown) => void> };
 export class ProcessBroker {
   readonly files = new PrivateFiles();
+  private cookieStores = new Map<string, Promise<WebCookies>>();
+  cookies(pkg: string): Promise<WebCookies> {
+    let store = this.cookieStores.get(pkg);
+    if (!store) { store = import("./webcookies").then(({ WebCookies }) => new WebCookies(pkg)); this.cookieStores.set(pkg, store); }
+    return store;
+  }
   readonly databases = sqliteStore;
   readonly preferences = preferenceStore;
   private entries = new Map<number, Entry>();
@@ -269,6 +277,7 @@ export function connectProcess(): ProcessEndpoint {
   broker.files.attach(PROCESS_PID, vfs);
   useSQLiteStore(broker.databases);
   usePreferenceStore(broker.preferences);
+  useWebCookies((pkg) => broker.cookies(pkg));
   connectProviders((pkg, process, request) => remote(broker.provider(PROCESS_PID, pkg, process, request)));
   broadcastTransport.send = async (intent, permission, ordered) => remote(broker.broadcast(PROCESS_PID, await encodeIntent(intent), permission, ordered));
   binderTransport.transact = (request) => remote(broker.transact(PROCESS_PID, request));

@@ -11,6 +11,7 @@ function call(body) {
   if (result.error) throw Error(result.error);
   return result.value;
 }
+Object.defineProperty(document, "cookie", {get: () => call({kind: "cookie"}), set: value => call({kind: "cookie", value: String(value)})});
 const interfaces = call({kind: "describe"});
 for (const [name, methods] of Object.entries(interfaces)) {
   const object = Object.create(null);
@@ -36,32 +37,81 @@ addEventListener("message", event => {
 });
 })()</script>`;
 
-export const WEB_FRAME = `<!doctype html><script>
+export const WEB_FRAME = `<!doctype html><script>(function(){
 const id = new URL(location.href).searchParams.get("bridge");
 addEventListener("message", async event => {
-  if (event.source !== parent || event.data?.bridge !== id || event.data.kind !== "load") return;
+  if (!event.isTrusted || event.source !== parent || event.data?.bridge !== id || event.data.kind !== "load" || !event.ports[0]) return;
   try {
-    const service = navigator.serviceWorker;
+    const port = event.ports[0], send = port.postMessage.bind(port), service = navigator.serviceWorker;
+    const stop = Event.prototype.stopImmediatePropagation;
+    const controller = Object.getOwnPropertyDescriptor(ServiceWorkerContainer.prototype, "controller").get.bind(service);
+    service.addEventListener("message", event => {
+      if (!event.isTrusted || event.source !== controller() || event.data?.kind !== "webcookies" || !event.ports[0]) return;
+      stop.call(event); send(event.data, [event.ports[0]]);
+    }, {capture: true});
     await service.register("/webview-worker.js");
     await service.ready;
     if (!service.controller) await new Promise(resolve => service.addEventListener("controllerchange", resolve, {once: true}));
-    const html = event.data.doc ?? await (await fetch(event.data.src)).text();
+    const html = event.data.doc ?? await (await fetch(event.data.src, {headers: {"x-wd-user-agent": event.data.userAgent}})).text();
     document.open(); document.write(html); document.close();
   } catch { parent.postMessage({bridge: id, kind: "loaded", error: "WebView document transport failed"}, "*"); }
 }, {once: true});
 parent.postMessage({bridge: id, kind: "ready"}, "*");
-</script>`;
+})()</script>`;
 
 export const WEB_PROXY_WORKER = `
 self.addEventListener("install", event => event.waitUntil(self.skipWaiting()));
 self.addEventListener("activate", event => event.waitUntil(self.clients.claim()));
+function cookies(client, url, values) {
+  return new Promise((resolve, reject) => {
+    const channel = new MessageChannel();
+    const timer = setTimeout(() => { channel.port1.close(); reject(Error("WebView cookie owner unavailable")); }, 10000);
+    channel.port1.onmessage = event => { clearTimeout(timer); channel.port1.close(); resolve(event.data); };
+    client.postMessage({kind: "webcookies", url, values}, [channel.port2]);
+  });
+}
 self.addEventListener("fetch", event => {
-  const request = event.request;
-  if (request.destination !== "script" || new URL(request.url).origin === self.location.origin) return;
+  const request = event.request, original = new URL(request.url);
+  const localProxy = original.origin === self.location.origin && original.pathname === "/proxy";
+  if (original.origin === self.location.origin && !localProxy) return;
   event.respondWith((async () => {
-    const client = await self.clients.get(event.clientId);
-    const url = client && new URL(client.url);
+    const client = await self.clients.get(event.clientId), url = client && new URL(client.url);
     if (!url || (url.pathname !== "/webview" && (url.pathname !== "/proxy" || url.searchParams.get("frame") !== "1"))) return fetch(request);
-    return fetch("/proxy?url=" + encodeURIComponent(request.url), { credentials: "omit" });
+    const isolated = url.pathname === "/webview";
+    const headers = new Headers();
+    request.headers.forEach((value, name) => headers.set(name.startsWith("x-wd-") ? name : "x-wd-" + name, value));
+    const page = url.searchParams.get("url"), agent = url.searchParams.get("ua");
+    if (agent) headers.set("x-wd-user-agent", agent);
+    let target = localProxy ? original.searchParams.get("url") : request.url;
+    if (page && /^https?:/.test(page)) {
+      const source = new URL(page);
+      if (request.mode === "cors") headers.set("x-wd-origin", source.origin);
+      if (request.referrerPolicy !== "no-referrer") headers.set("x-wd-referer", source.origin === new URL(target).origin ? source.href : source.origin + "/");
+    }
+    let method = request.method, body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
+    for (let redirects = 0; redirects <= 20; redirects++) {
+      const include = isolated && (localProxy || request.credentials === "include" || request.credentials === "same-origin" && page && new URL(page).origin === new URL(target).origin);
+      headers.delete("x-wd-cookie");
+      if (include) {
+        const value = await cookies(client, target);
+        if (value) headers.set("x-wd-cookie", value); else headers.delete("x-wd-cookie");
+      }
+      const frame = localProxy && original.searchParams.get("frame") === "1";
+      const response = await fetch("/proxy?manual=1&url=" + encodeURIComponent(target) + (frame ? "&frame=1" : ""), { method, headers, body, credentials: "omit" });
+      const values = response.headers.get("x-wd-set-cookie");
+      if (include && values) await cookies(client, target, JSON.parse(values));
+      const status = Number(response.headers.get("x-wd-status") || response.status), location = response.headers.get("location");
+      if (![301,302,303,307,308].includes(status) || !location) {
+        const clean = new Headers(response.headers);
+        clean.delete("x-wd-set-cookie"); clean.delete("x-wd-status");
+        return new Response(response.body, {status: response.status, statusText: response.statusText, headers: clean});
+      }
+      await response.body?.cancel();
+      if (status === 303 && method !== "HEAD" || (status === 301 || status === 302) && method === "POST") { method = "GET"; body = undefined; headers.delete("x-wd-content-type"); }
+      const next = new URL(location, target).href;
+      if (new URL(next).origin !== new URL(target).origin) headers.delete("x-wd-authorization");
+      target = next;
+    }
+    throw Error("Too many WebView redirects");
   })());
 });`;

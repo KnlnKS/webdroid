@@ -12,7 +12,7 @@ import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, attachView, findById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragmentManager } from "./fragment";
-import { vcall, box, JBool } from "../jvm/natives/jlang";
+import { vcall } from "../jvm/natives/jlang";
 import { appHost, jclsNameOf } from "./apphost";
 import { resString } from "./res";
 import { onMain } from "./mainloop";
@@ -637,28 +637,6 @@ for (const [name, methods, statics] of [
     "startWatchingMode(Ljava/lang/String;Ljava/lang/String;Landroid/app/AppOpsManager$OnOpChangedListener;)V": () => {},
     "stopWatchingMode(Landroid/app/AppOpsManager$OnOpChangedListener;)V": () => {},
   }, { MODE_ALLOWED: 0, MODE_IGNORED: 1, MODE_ERRORED: 2, MODE_DEFAULT: 3 }],
-  ["android/webkit/CookieManager", {
-    "static getInstance()Landroid/webkit/CookieManager;": () => {
-      const i = rt.link("android/webkit/CookieManager");
-      return ((i.ctor as any).$inst ??= new i.ctor());
-    },
-    // no cookie jar: a WebView frame's cookies live in the browser and are not readable here
-    "getCookie(Ljava/lang/String;)Ljava/lang/String;": () => null,
-    "setCookie(Ljava/lang/String;Ljava/lang/String;)V": () => {},
-    "setCookie(Ljava/lang/String;Ljava/lang/String;Landroid/webkit/ValueCallback;)V": () => {},
-    "setAcceptCookie(Z)V": () => {},
-    "acceptCookie()Z": () => 1,
-    "setAcceptThirdPartyCookies(Landroid/webkit/WebView;Z)V": () => {},
-    "acceptThirdPartyCookies(Landroid/webkit/WebView;)Z": () => 0,
-    "hasCookies()Z": () => 0,
-    "removeAllCookies(Landroid/webkit/ValueCallback;)V": maySuspend((callback: unknown) => {
-      if (callback) void onMain(() => vcall(callback, "onReceiveValue", "(Ljava/lang/Object;)V", box(JBool, 0))).catch(reportUncaught);
-    }),
-    "removeSessionCookies(Landroid/webkit/ValueCallback;)V": maySuspend(function (this: JObj, callback: unknown) {
-      return vcall(this, "removeAllCookies", "(Landroid/webkit/ValueCallback;)V", callback);
-    }),
-    "flush()V": () => {},
-  }],
   ["android/view/accessibility/AccessibilityManager", {
     // No real accessibility service runs here — a device with accessibility off reports
     // both flags false. Listeners register (so `implements` links) but never fire, which

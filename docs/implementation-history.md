@@ -3036,3 +3036,32 @@ Google subsequently rejected the normal-Chrome sign-in flow with HTTP 403 (`rrk=
 password entry. This does not establish user authentication. Navigation, cookie behavior and
 the upstream rejection still need investigation. Captures remain under
 /tmp/webdroid-gms-completion-signin-web and /tmp/webdroid-webview-bridge-check.
+
+
+## WebView cookie and request ownership
+
+The Google `rrk=32` branch checks whether a document can store cookies; it was not an
+upstream account rejection. WebView cookies now have one browser-side owner per package,
+shared by Android CookieManager, document.cookie and network requests. The maintained
+`tough-cookie` parser supplies domain/public-suffix, path, expiry, prefix and HttpOnly
+semantics. Persistent cookies use localStorage; session cookies stay in memory. Parsing
+loads when a package first uses its cookie store.
+
+A private MessagePort established before page scripts connects the service worker directly
+to the cookie owner. Trusted worker events transfer reply ports without exposing HttpOnly
+values to page script; this also survives a worker restart without storing Java/account
+state on the relay. The proxy preserves request methods, bodies and configured user agents.
+Manual redirect metadata lets the browser apply Set-Cookie before each next hop, and cookie
+metadata is stripped before the response reaches page script. Cross-origin redirects drop
+the previous cookie and authorization headers. Public proxy scripts cannot register as
+service workers.
+
+Typecheck and three focused tests pass (31 assertions). The real browser fixture verifies
+redirect cookies, POST bodies, Android user agents, synchronous Java calls, HttpOnly
+isolation, worker restart, destruction and persistent-only cookies after browser reopen.
+Capture/log: /tmp/webdroid-webview-cookie-check. A hidden fixture iframe initially timed
+out because its assertion polled requestAnimationFrame; explicit polling observes the
+completed request without requiring the view to be painted. Google now gets
+past its cookie check and performs account lookup, but its RPC returns an internal error.
+The same microG build on emulator-5580 reaches the password screen with the test account,
+so that remaining browser failure must not be classified as an upstream limitation.

@@ -63,9 +63,10 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
     },
     "/webview-worker.js": () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } }),
     "/proxy": async (req) => {
+      if (req.headers.get("service-worker") === "script") return new Response("invalid worker", { status: 403 });
       const q = new URL(req.url).searchParams;
       const url = q.get("url");
-      const frame = q.get("frame") === "1";
+      const frame = q.get("frame") === "1", manual = q.get("manual") === "1";
       if (!url || !/^https?:\/\//.test(url)) return new Response("bad url", { status: 400 });
       try {
         const headers = new Headers();
@@ -78,7 +79,7 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
           method: req.method === "HEAD" ? "HEAD" : req.method,
           headers,
           body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
-          redirect: "follow",
+          redirect: manual ? "manual" : "follow",
           decompress: !encoded,
         });
         const h = new Headers();
@@ -87,6 +88,12 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
         });
         h.set("Access-Control-Allow-Origin", "*");
         h.set("x-wd-final-url", upstream.url);
+        if (manual) {
+          h.set("x-wd-status", String(upstream.status));
+          const cookies = upstream.headers.getSetCookie();
+          if (cookies.length) h.set("x-wd-set-cookie", JSON.stringify(cookies));
+          if ([301, 302, 303, 307, 308].includes(upstream.status)) return new Response(null, { headers: h });
+        }
         if (encoded && upstream.headers.has("content-encoding")) h.set("x-wd-content-encoding", upstream.headers.get("content-encoding")!);
         if (frame && upstream.body && /^text\/html/i.test(upstream.headers.get("content-type") ?? "")) {
           // Served from our origin so the shell can script it; <base> keeps its subresources and

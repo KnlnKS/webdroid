@@ -9,6 +9,8 @@ import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { type JContext } from "./context";
 import { mkUri } from "./net";
+import { appHost } from "./apphost";
+import { webCookies, thirdPartyCookies } from "./cookies";
 import { WebBridge, type WebInterfaces } from "../shell/webbridge";
 import { WEB_INJECT } from "../shell/webinject";
 
@@ -181,21 +183,33 @@ class JWebView extends JViewGroup {
   private remote: WebBridge | null = null;
   private remoteOrigin = "";
   private remoteHeight = 0;
+  private cookiePort: MessagePort | null = null;
   private nextEval = 0;
   private evaluations = new Map<number, (value: string) => void>();
   private message = (event: MessageEvent) => {
     if (event.source !== this.el?.contentWindow || event.origin !== this.remoteOrigin || event.data?.bridge !== this.remote?.id) return;
     const data = event.data;
-    if (data.kind === "ready") this.send({ kind: "load", src: this.hist[this.idx]?.src, doc: this.hist[this.idx]?.doc });
+    if (data.kind === "ready" && !this.cookiePort) {
+      const channel = new MessageChannel(), cookies = webCookies(appHost?.pkg ?? "");
+      this.cookiePort = channel.port1;
+      channel.port1.onmessage = async ({ data, ports }) => {
+        if (!ports[0] || typeof data?.url !== "string") return;
+        const jar = await cookies;
+        const values = Array.isArray(data.values) ? data.values.filter((value: unknown): value is string => typeof value === "string") : [];
+        ports[0].postMessage(jar.network(data.url, this.url ?? "", values, thirdPartyCookies.has(this))); ports[0].close();
+      };
+      this.send({ kind: "load", src: this.hist[this.idx]?.src, doc: this.hist[this.idx]?.doc, userAgent: this.settings.v.userAgentString }, [channel.port2]);
+    }
     else if (data.kind === "loaded") {
       this.remoteHeight = typeof data.height === "number" ? data.height : 0;
       this.finishLoad(typeof data.url === "string" ? data.url : null, typeof data.title === "string" ? data.title : "", typeof data.error === "string" ? data.error : null);
     } else if (data.kind === "navigate" && typeof data.url === "string") this.navigate(data.url);
     else if (data.kind === "evaluated" && typeof data.seq === "number" && typeof data.value === "string") this.evaluations.get(data.seq)?.(data.value);
   };
-  private send(data: object) { this.el?.contentWindow?.postMessage({ ...data, bridge: this.remote?.id }, this.remoteOrigin); }
+  private send(data: object, transfer: Transferable[] = []) { this.el?.contentWindow?.postMessage({ ...data, bridge: this.remote?.id }, this.remoteOrigin, transfer); }
   private closeBridge() {
     this.remote?.close(); this.remote = null; this.remoteOrigin = "";
+    this.cookiePort?.close(); this.cookiePort = null;
     window.removeEventListener("message", this.message);
     for (const done of this.evaluations.values()) done("null");
   }
@@ -229,12 +243,12 @@ class JWebView extends JViewGroup {
       };
       this.closeBridge();
       if (Object.keys(this.ifaces).length) {
-        const remote = this.remote = new WebBridge({ ...this.ifaces });
+        const remote = this.remote = new WebBridge({ ...this.ifaces }, webCookies(appHost?.pkg ?? ""), () => this.url);
         window.addEventListener("message", this.message);
         void remote.ready.then((origin) => {
           if (this.gen !== g) return;
           this.remoteOrigin = origin;
-          el.removeAttribute("srcdoc"); el.src = origin + "/webview?bridge=" + remote.id;
+          el.removeAttribute("srcdoc"); el.src = origin + "/webview?bridge=" + remote.id + "&url=" + encodeURIComponent(e.url) + "&ua=" + encodeURIComponent(String(this.settings.v.userAgentString));
         }).catch(() => { if (this.gen === g) this.finishLoad(null, "", "WebView bridge unavailable"); });
       } else if (e.src?.startsWith("/proxy?")) void webProxy().then(load).catch((error) => { console.error("[webview transport]", error); load(); });
       else load();
@@ -385,9 +399,8 @@ rt.register({
     "goBackOrForward(I)V": function (this: JWebView, n: number) { this.step(n); },
     // Chromium prunes every entry but the current one
     "clearHistory()V": function (this: JWebView) { if (this.idx >= 0) { this.hist = [this.hist[this.idx]]; this.idx = 0; } },
-    "evaluateJavascript(Ljava/lang/String;Landroid/webkit/ValueCallback;)V": maySuspend(async function (this: JWebView, js: string, cb: unknown) {
-      const r = await this.evalJs(js);
-      if (cb) void onMain(() => vcall(cb, "onReceiveValue", "(Ljava/lang/Object;)V", r));
+    "evaluateJavascript(Ljava/lang/String;Landroid/webkit/ValueCallback;)V": maySuspend(function (this: JWebView, js: string, cb: unknown) {
+      void Promise.resolve(this.evalJs(js)).then((r) => cb && onMain(() => vcall(cb, "onReceiveValue", "(Ljava/lang/Object;)V", r)));
     }),
     "addJavascriptInterface(Ljava/lang/Object;Ljava/lang/String;)V": function (this: JWebView, o: JObj, name: string) { this.ifaces[name] = bridge(o, this.bridgeThread); },
     "removeJavascriptInterface(Ljava/lang/String;)V": function (this: JWebView, name: string) { delete this.ifaces[name]; },

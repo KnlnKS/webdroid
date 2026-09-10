@@ -1,3 +1,5 @@
+import type { WebCookies } from "./webcookies";
+
 export type WebInterfaces = Record<string, Record<string, (...args: unknown[]) => Promise<unknown>>>;
 
 let frameOrigin: Promise<string> | null = null;
@@ -7,7 +9,7 @@ export class WebBridge {
   private socket: WebSocket;
   private queue = Promise.resolve();
 
-  constructor(ifaces: WebInterfaces) {
+  constructor(ifaces: WebInterfaces, cookies: Promise<WebCookies>, documentURL: () => string | null) {
     const url = new URL("/webview-socket", location.href);
     url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
     url.searchParams.set("id", this.id);
@@ -35,7 +37,10 @@ export class WebBridge {
           const call: unknown = JSON.parse(body);
           if (!call || typeof call !== "object" || !("kind" in call)) throw new Error("Invalid bridge call");
           if (call.kind === "describe") reply = { value: Object.fromEntries(Object.entries(ifaces).map(([name, methods]) => [name, Object.keys(methods)])) };
-          else {
+          else if (call.kind === "cookie") {
+            const jar = await cookies, url = documentURL() ?? "";
+            reply = { value: "value" in call && typeof call.value === "string" ? jar.set(url, call.value, false) : jar.get(url, false) };
+          } else {
             if (call.kind !== "invoke" || !("object" in call) || typeof call.object !== "string" || !("method" in call) || typeof call.method !== "string" || !("args" in call) || !Array.isArray(call.args)) throw new Error("Invalid bridge invocation");
             const methods = Object.hasOwn(ifaces, call.object) ? ifaces[call.object] : undefined;
             if (!methods || !Object.hasOwn(methods, call.method)) throw new Error("Unknown JavaScript interface method");
