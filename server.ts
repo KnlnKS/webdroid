@@ -1,6 +1,6 @@
 import index from "./index.html";
 import processIndex from "./process.html";
-import { WEB_INJECT } from "./src/shell/webinject";
+import { WEB_INJECT, WEB_PROXY_WORKER } from "./src/shell/webinject";
 import { openInstall } from "./src/shell/install";
 import { prepareSystemPackages } from "./scripts/system-packages";
 
@@ -49,6 +49,7 @@ const server: Bun.Server<TcpData> = Bun.serve({
   routes: {
     "/": index,
     "/process": processIndex,
+    "/webview-worker.js": () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } }),
     "/proxy": async (req) => {
       const q = new URL(req.url).searchParams;
       const url = q.get("url");

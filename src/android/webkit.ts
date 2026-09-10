@@ -87,6 +87,15 @@ rt.register({
 
 // ── the frame layer (shell-owned) and the per-frame sweep
 let layer: HTMLElement | null = null;
+let proxyReady: Promise<void> | null = null;
+function webProxy(): Promise<void> {
+  return proxyReady ??= (async () => {
+    const service = navigator.serviceWorker;
+    await service.register("/webview-worker.js");
+    await service.ready;
+    if (!service.controller) await new Promise<void>((resolve) => service.addEventListener("controllerchange", () => resolve(), { once: true }));
+  })();
+}
 /** the shell's <div> that sits exactly over the canvas; without one every WebView stays inert */
 export function setWebLayer(el: HTMLElement) { layer = el; }
 let frame = 1;
@@ -193,8 +202,13 @@ class JWebView extends JViewGroup {
     this.url = e.url; this.loaded = false; this.progress = 10; this.title = "";
     const g = ++this.gen, el = this.frame();
     if (el) {
-      if (e.doc !== undefined) el.srcdoc = e.doc;
-      else { el.removeAttribute("srcdoc"); el.src = e.src!; }
+      const load = () => {
+        if (this.gen !== g) return;
+        if (e.doc !== undefined) el.srcdoc = e.doc;
+        else { el.removeAttribute("srcdoc"); el.src = e.src!; }
+      };
+      if (e.src?.startsWith("/proxy?")) void webProxy().then(load).catch((error) => { console.error("[webview transport]", error); load(); });
+      else load();
     }
     void onMain(() => this.gen === g && vcall(this.client, "onPageStarted", "(Landroid/webkit/WebView;Ljava/lang/String;Landroid/graphics/Bitmap;)V", this, e.url, null));
   }
