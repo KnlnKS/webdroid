@@ -8,6 +8,7 @@ import { newArrayList, newLinkedHashSet } from "../jvm/natives/jutil";
 import { jarray } from "../jvm/abi";
 import type { JFile } from "../jvm/natives/jio";
 import { reportUncaught } from "./os";
+import { type JParcel, parcelCreator } from "./parcel";
 
 // android.net.Uri: one string, split lazily the way AOSP's StringUri does (scheme, then
 // hierarchical authority/path/query or an opaque scheme-specific part, then fragment).
@@ -96,10 +97,44 @@ function* queryPairs(q: string | null): Generator<[string, string]> {
     yield e < 0 ? [kv, ""] : [kv.slice(0, e), kv.slice(e + 1)];
   }
 }
+export async function readUri(p: JParcel): Promise<JUri | null> {
+  const kind = await vcall(p, "readInt", "()I");
+  if (!kind) return null;
+  if (kind < 1 || kind > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown URI type: " + kind);
+  const text = await vcall(p, "readString8", "()Ljava/lang/String;");
+  rt.link("android/net/Uri");
+  if (kind === 1) {
+    if (text === null) throw rt.mkThrowable("java/lang/NullPointerException", "uriString");
+    return mkUri(text);
+  }
+  const part = async (allow = ""): Promise<string | null> => {
+    const representation = await vcall(p, "readInt", "()I");
+    if (representation !== 1 && representation !== 2) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown URI representation: " + representation);
+    const value = await vcall(p, "readString8", "()Ljava/lang/String;");
+    if (representation === 1) return value;
+    return uriEncode(value, allow);
+  };
+  if (kind === 2) {
+    const ssp = await part(), fragment = await part();
+    return mkUri(text + ":" + ssp + (fragment ? "#" + fragment : ""));
+  }
+  const authority = await part();
+  let path = await part("/");
+  if ((text || authority) && path && !path.startsWith("/")) path = "/" + path;
+  const query = await part(), fragment = await part();
+  return mkUri((text === null ? "" : text + ":") + (authority === null ? "" : "//" + authority) + (path ?? "") +
+    (query ? "?" + query : "") + (fragment ? "#" + fragment : ""));
+}
+export async function writeUri(p: JParcel, uri: JUri | null): Promise<void> {
+  await vcall(p, "writeInt", "(I)V", uri ? 1 : 0);
+  if (uri) await vcall(p, "writeString8", "(Ljava/lang/String;)V", uri.uri);
+}
 rt.register({
   name: "android/net/Uri", ctor: JUri, ifaces: ["android/os/Parcelable", "java/lang/Comparable"],
-  statics: { get EMPTY() { return mkUri(""); } },
+  statics: { get EMPTY() { return mkUri(""); }, get CREATOR() { return parcelCreator("android/net/Uri", readUri); } },
   methods: {
+    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JUri, p: JParcel) { await writeUri(p, this); },
+    "static writeToParcel(Landroid/os/Parcel;Landroid/net/Uri;)V": writeUri,
     "static parse(Ljava/lang/String;)Landroid/net/Uri;": (s: string) => mkUri(s),
     "static fromFile(Ljava/io/File;)Landroid/net/Uri;": (f: JFile) => mkUri("file://" + uriEncode(f.path, "/")),
     "static fromParts(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/net/Uri;": (scheme: string | null, ssp: string | null, frag: string | null) => {

@@ -119,6 +119,13 @@ were restored to the completion capture after comparisons.
 
 ### Maps, location and wire formats
 
+- The reference AVD and paired framework are API 35; webdroid currently advertises API 33.
+  Intent/Uri oracle work exposed real wire differences: API 35 Intent adds an extended-flags
+  word, and all private Uri types write a full String8. Follow the advertised API 33 source
+  contract, not an unlabelled newer-device fixture. StringUri's unchanged bytes match the
+  reference; API 33 opaque/hierarchical part fixtures verify encoding and absolute paths.
+  Uri Parcelable round-trip and invalid-type checks pass with typecheck. The oracle lives in
+  /tmp/webdroid-intent-oracle; it needs app_process, since bare dalvikvm lacks Parcel JNI.
 - The unchanged maps SDK renders real tiles/labels and reports loaded/camera-idle after panning
   (/tmp/webdroid-gms-completion-{trace,pan}.png). Full map parity remains open. On Android, missing
   libmapbox-gl.so was an installation error: unchanged ARM64 libraries needed extraction beneath
