@@ -2,9 +2,22 @@
 // TypedValue, Size, FloatMath and JsonReader.
 
 import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
-import { intBitsToFloat } from "../jvm/abi";
+import { intBitsToFloat, mangleStaticField } from "../jvm/abi";
 import { device } from "../shell/config";
-import { vcall, JEnum } from "../jvm/natives/jlang";
+import { vcall, JEnum, linkInit } from "../jvm/natives/jlang";
+import { PATTERNS } from "./pattern-data";
+
+rt.register({
+  name: "android/util/Patterns", ctor: class extends JObj {},
+  statics: Object.fromEntries(Object.keys(PATTERNS).map((name) => [name, null])),
+  clinit: async () => {
+    const cls = rt.link("android/util/Patterns").ctor;
+    const pattern = (await linkInit("java/util/regex/Pattern")).ctor;
+    for (const [name, source] of Object.entries(PATTERNS)) {
+      Reflect.set(cls, mangleStaticField(name), await vcall(pattern, "compile", "(Ljava/lang/String;)Ljava/util/regex/Pattern;", source));
+    }
+  },
+});
 
 class JLog extends JObj {}
 const logFn = (lvl: string) => (tag: string, msg: string, tr?: unknown) => {

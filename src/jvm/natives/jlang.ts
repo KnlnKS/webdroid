@@ -4,6 +4,7 @@
 import { rt, JObj, maySuspend, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
 import { directionality } from "../bidi";
 import { encodeString } from "../charset";
+import { javaClassSets } from "../regex-sets";
 import { mangleMethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8 } from "../abi";
 
 function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => unknown {
@@ -94,7 +95,10 @@ export function javaRegex(source: string, flags: string): RegExp {
       let f = flags;
       for (const c of extra) if (!f.includes(c)) f += c;
       try { re = new RegExp(js, f); }
-      catch { re = new RegExp(js, f.replace("u", "")); }
+      catch {
+        try { re = new RegExp(javaClassSets(js), f.replace(/[uv]/g, "") + "v"); }
+        catch { re = new RegExp(js, f.replace("u", "")); }
+      }
     }
     regexMemo.set(key, re);
   }
