@@ -887,7 +887,7 @@ function installForName(classCtor: unknown) {
     return rt.classFor(name);
   };
   const c = classCtor as Record<string, unknown>;
-  c[mangleMethod("forName", "(Ljava/lang/String;)Ljava/lang/Class;")] = forName;
+  c[mangleMethod("forName", "(Ljava/lang/String;)Ljava/lang/Class;")] = (name: string, caller: Runtime = rt) => forName(name, 1, caller.classLoader);
   c[mangleMethod("forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;")] = forName;
 }
 

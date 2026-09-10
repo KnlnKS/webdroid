@@ -38,6 +38,8 @@ export interface NativeSpec {
    *  reported parameterized with as many of them as that interface declares — which is how a
    *  serializer walking List<Foo> up to Collection<E> finds Foo. */
   typeVars?: string;
+  /** Static native entries receiving the calling runtime as a final host-only argument. */
+  callerSensitive?: string[];
 }
 
 export function callSelf(m: NativeSpec["methods"], sig: string, self: unknown, ...args: unknown[]): unknown {

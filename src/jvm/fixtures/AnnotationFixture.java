@@ -5,6 +5,7 @@ import java.lang.annotation.RetentionPolicy;
 
 @AnnotationFixture.Tag(type = AnnotationFixture.class, nested = @AnnotationFixture.Nested(9))
 public class AnnotationFixture {
+    public static Class<?> lookup(String name) throws ClassNotFoundException { return Class.forName(name); }
     public enum Mode { FIRST, SECOND }
     @Retention(RetentionPolicy.RUNTIME)
     public @interface Nested { int value(); }

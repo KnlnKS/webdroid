@@ -850,7 +850,8 @@ ${catchBody}
       case "invoke-static": {
         if (clsName === this.info.name) out.push(`$u=D.cl[${mref.cls}]??D.link(${mref.cls});`);
         else this.guard(`D.ic[${mref.cls}]??D.init(${mref.cls}${this.fromArg})`, out, "$u", this.initSync(clsName), "init " + clsName);
-        this.guard(`$u.${mangled}(${argStr})`, out, "$t", this.siteSync(clsName + "." + mref.name + desc), clsName + "." + mref.name + desc);
+        const args = this.R.natives.get(clsName)?.callerSensitive?.includes(mref.name + desc) ? argStr + (argStr ? ",R" : "R") : argStr;
+        this.guard(`$u.${mangled}(${args})`, out, "$t", this.siteSync(clsName + "." + mref.name + desc), clsName + "." + mref.name + desc);
         break;
       }
       // invoke-polymorphic (MethodHandle.invoke/invokeExact) lands here

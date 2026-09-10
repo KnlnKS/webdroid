@@ -17,6 +17,9 @@ test("annotations and their values retain the defining loader across duplicate D
     for (const loader of [first, second]) {
       const cls = await load(loader, name), tag = await load(loader, tagName);
       const annotation = (element: unknown, type = tag) => vcall(element, "getAnnotation", "(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;", type);
+      await rt.initClass(cls.ci);
+      for (let i = 0; i < 40; i++)
+        expect(await vcall(cls.ci.ctor, "lookup", "(Ljava/lang/String;)Ljava/lang/Class;", tagName)).toBe(tag);
       const value = await annotation(cls);
       expect(await vcall(value, "annotationType", "()Ljava/lang/Class;")).toBe(tag);
       expect(await vcall(value, "type", "()Ljava/lang/Class;")).toBe(cls);
@@ -31,7 +34,9 @@ test("annotations and their values retain the defining loader across duplicate D
       const declared = await vcall(cls, "getDeclaredAnnotations", "()[Ljava/lang/annotation/Annotation;");
       expect(declared.length).toBe(1);
       expect(await vcall(declared[0], "annotationType", "()Ljava/lang/Class;")).toBe(tag);
-      const method = (await vcall(cls, "getDeclaredMethods", "()[Ljava/lang/reflect/Method;"))[0];
+      const methods = await vcall(cls, "getDeclaredMethods", "()[Ljava/lang/reflect/Method;");
+      let method: unknown;
+      for (const candidate of methods) if (await vcall(candidate, "getName", "()Ljava/lang/String;") === "method") method = candidate;
       expect(await vcall(await annotation(method), "annotationType", "()Ljava/lang/Class;")).toBe(tag);
       const parameters = await vcall(method, "getParameterAnnotations", "()[[Ljava/lang/annotation/Annotation;");
       expect(await vcall(parameters[0][0], "annotationType", "()Ljava/lang/Class;")).toBe(tag);

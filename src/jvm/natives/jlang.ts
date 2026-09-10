@@ -209,6 +209,7 @@ function jclassName(c: JClass): string {
 }
 rt.register({
   name: "java/lang/Class",
+  callerSensitive: ["forName(Ljava/lang/String;)Ljava/lang/Class;"],
   ctor: JClass,
   ifaces: ["java/io/Serializable", "java/lang/reflect/Type", "java/lang/reflect/GenericDeclaration", "java/lang/reflect/AnnotatedElement"],
   methods: {
