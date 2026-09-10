@@ -12,7 +12,7 @@ test("ActionBar configuration before setContentView survives decor installation"
   theme.res = res; jresources.host = res;
   const act = new JActivity(), unused = () => { throw new Error("unexpected lifecycle call"); };
   act.$host = { res, theme, jresources, pkg: "test.decor", apkFile: "", appLabel: "App", themeResId: 0, iconRes: 0,
-    zip: {}, splits: [], application: null, statusBarColor: 0, navBarColor: 0, launch: unused, finishActivity: unused,
+    zip: {}, splits: [], application: null, statusBarColor: 0, navBarColor: 0, launch: unused, roundTrip: unused, finishActivity: unused,
     recreateActivity: unused, setRequestedOrientation: unused, currentActivity: () => act, invalidateOptionsMenu: unused };
   act.window.activity = act;
   expect(act.window.decor).toBeNull();

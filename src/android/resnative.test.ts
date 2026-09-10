@@ -140,7 +140,7 @@ test("scoped contexts lazily share localized entries without changing other cont
   const unused = () => { throw new Error("unexpected app lifecycle call"); };
   const host: AppHost = { res: resources.host, jresources: resources, theme, pkg: "test", apkFile: "", appLabel: "", themeResId: 0,
     iconRes: 0, zip: {}, splits: [], application: null, statusBarColor: 0, navBarColor: 0, launch: unused,
-    finishActivity: unused, recreateActivity: unused, setRequestedOrientation: unused, currentActivity: () => null, invalidateOptionsMenu: unused };
+    roundTrip: unused, finishActivity: unused, recreateActivity: unused, setRequestedOrientation: unused, currentActivity: () => null, invalidateOptionsMenu: unused };
   const context = new JContext(); context.$host = host;
   const french = newConfig();
   await vcall(french, "setLocale", "(Ljava/util/Locale;)V", locale("fr"));

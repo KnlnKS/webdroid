@@ -1,4 +1,4 @@
-import { JContextWrapper, contextMethods, systemService, wrapperMethods, display, displayListeners } from "./context";
+import { JContextWrapper, contextMethods, systemService, wrapperMethods, display, displayListeners, grantPermissions } from "./context";
 import { JWindow } from "./window";
 import {
   JIntent, systemActivities, deliverActivityResult, RESULT_OK, RESULT_CANCELED, launchIntent, mkComponentName,
@@ -369,10 +369,16 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "getChangingConfigurations()I": () => 0,
   "getTaskId()I": () => 1,
   "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z": () => 0,
+  // The system's dialog goes in front of the activity: it pauses, the answer is recorded, and
+  // it resumes before the result is delivered. Nobody is here to tap, so asking is what grants
+  // — but an app that re-reads the permission in onResume must see the grant by then.
   "requestPermissions([Ljava/lang/String;I)V": maySuspend(function (this: JActivity, perms: string[], code: number) {
-    const granted = new Int32Array(perms.length); // all granted (0)
     setTimeout(() => {
-      void vcall(this, "onRequestPermissionsResult", "(I[Ljava/lang/String;[I)V", code, perms, granted).catch(reportUncaught);
+      void onMain(async () => {
+        const granted = grantPermissions(perms);
+        await this.$host.roundTrip(this);
+        await vcall(this, "onRequestPermissionsResult", "(I[Ljava/lang/String;[I)V", code, perms, granted);
+      }).catch(reportUncaught);
     }, 0);
   }),
   "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": () => 0,

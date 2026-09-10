@@ -35,6 +35,30 @@ export const displayListeners = new Set<unknown>();
 /** the one loader Class.getClassLoader() hands out, so `ctx.getClassLoader() == X.class.getClassLoader()` holds */
 let loader: unknown;
 const bootLoader = () => loader ??= rt.link("java/lang/Class").ctor.prototype[mangleMethod("getClassLoader", "()Ljava/lang/ClassLoader;")]();
+/**
+ * A runtime permission is DENIED until the app asks for it, which is the state a freshly
+ * installed app is in — reporting a blanket grant sends an app straight past the fallback it
+ * was written to take. Install-time permissions stay granted, as the platform grants them.
+ * AOSP's dangerous groups, by their permission names.
+ */
+const RUNTIME_PERMISSIONS = new Set(["READ_CALENDAR", "WRITE_CALENDAR", "READ_CALL_LOG", "WRITE_CALL_LOG",
+  "PROCESS_OUTGOING_CALLS", "CAMERA", "READ_CONTACTS", "WRITE_CONTACTS", "GET_ACCOUNTS",
+  "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION", "RECORD_AUDIO",
+  "READ_PHONE_STATE", "READ_PHONE_NUMBERS", "CALL_PHONE", "ANSWER_PHONE_CALLS", "ADD_VOICEMAIL",
+  "USE_SIP", "ACCEPT_HANDOVER", "BODY_SENSORS", "ACTIVITY_RECOGNITION", "SEND_SMS", "RECEIVE_SMS",
+  "READ_SMS", "RECEIVE_WAP_PUSH", "RECEIVE_MMS", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE",
+  "READ_MEDIA_IMAGES", "READ_MEDIA_VIDEO", "READ_MEDIA_AUDIO", "POST_NOTIFICATIONS",
+  "BLUETOOTH_SCAN", "BLUETOOTH_CONNECT", "BLUETOOTH_ADVERTISE", "NEARBY_WIFI_DEVICES"]
+  .map((n) => "android.permission." + n));
+const grantedPermissions = new Set<string>();
+export const permissionState = (name: string) =>
+  RUNTIME_PERMISSIONS.has(name) && !grantedPermissions.has(name) ? -1 : 0;
+/** what a user tapping "Allow" leaves behind; the results a caller reads back */
+export function grantPermissions(names: string[]): Int32Array {
+  for (const n of names) grantedPermissions.add(n);
+  return new Int32Array(names.length);
+}
+
 // Context.XXX_SERVICE name → the manager class; getSystemService(Class) walks it backwards.
 const SERVICE_CLASS: Record<string, string> = {
   window: "android/view/WindowManagerImpl",
@@ -217,11 +241,11 @@ export const contextMethods: NativeSpec["methods"] = {
   "deleteDatabase(Ljava/lang/String;)Z": function (this: JContext, name: string) {
     return vfs.delete(dbPath(this.$host.pkg, name)) ? 1 : 0;
   },
-  "checkSelfPermission(Ljava/lang/String;)I": () => 0,
-  "checkPermission(Ljava/lang/String;)I": () => 0,
-  "checkPermission(Ljava/lang/String;II)I": () => 0,
-  "checkCallingPermission(Ljava/lang/String;)I": () => 0,
-  "checkCallingOrSelfPermission(Ljava/lang/String;)I": () => 0,
+  "checkSelfPermission(Ljava/lang/String;)I": (p: string) => permissionState(p),
+  "checkPermission(Ljava/lang/String;)I": (p: string) => permissionState(p),
+  "checkPermission(Ljava/lang/String;II)I": (p: string) => permissionState(p),
+  "checkCallingPermission(Ljava/lang/String;)I": (p: string) => permissionState(p),
+  "checkCallingOrSelfPermission(Ljava/lang/String;)I": (p: string) => permissionState(p),
   "enforceCallingOrSelfPermission(Ljava/lang/String;Ljava/lang/String;)V": () => {},
   "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;)Landroid/content/Intent;": function (this: JContext, receiver: JObj | null, filter: { actions: string[] }) { return registerReceiver(this, receiver, filter); },
   "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;I)Landroid/content/Intent;": function (this: JContext, receiver: JObj | null, filter: { actions: string[] }) { return registerReceiver(this, receiver, filter); },

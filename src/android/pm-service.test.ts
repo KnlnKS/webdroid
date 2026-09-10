@@ -21,7 +21,7 @@ function host(): AppHost {
   theme.res = res; jresources.host = res;
   const unused = () => { throw new Error("unexpected lifecycle call"); };
   return { res, theme, jresources, pkg: "test.services", apkFile: "", appLabel: "Service Test", themeResId: 0, iconRes: 0,
-    zip: {}, splits: [], application: null, statusBarColor: 0, navBarColor: 0, launch: unused, finishActivity: unused,
+    zip: {}, splits: [], application: null, statusBarColor: 0, navBarColor: 0, launch: unused, roundTrip: unused, finishActivity: unused,
     recreateActivity: unused, setRequestedOrientation: unused, currentActivity: () => null, invalidateOptionsMenu: unused };
 }
 

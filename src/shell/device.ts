@@ -217,6 +217,11 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     // finish() only requests: AOSP delivers the pause/stop/destroy chain as later main-thread
     // messages, so it queues as a main job rather than running detached alongside the caller
     finishActivity: (a) => { void onMain(() => finishActivity(a)); },
+    roundTrip: async (a) => {
+      if (a.resumed) { await pauseActivity(a); await windowFocus(a, false); }
+      await resumeActivity(a);
+      await windowFocus(a, true);
+    },
     recreateActivity: (a) => { recreateActivity(a); },
     setRequestedOrientation: (a, orientation) => { changeActivityOrientation(a, orientation); },
     currentActivity: () => booted?.stack[booted.stack.length - 1] ?? null,

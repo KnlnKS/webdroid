@@ -21,6 +21,8 @@ export interface AppHost {
   statusBarColor: number;
   navBarColor: number;
   launch: (component: string, intent: JIntent | null) => Promise<void>;
+  /** the pause/resume a modal system window (the permission dialog) leaves behind */
+  roundTrip: (activity: JActivity) => Promise<void>;
   finishActivity: (activity: JActivity) => void;
   recreateActivity: (activity: JActivity) => void;
   setRequestedOrientation: (activity: JActivity, orientation: number) => void;

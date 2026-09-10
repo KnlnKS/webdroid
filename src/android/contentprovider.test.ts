@@ -20,7 +20,7 @@ test("ContentResolver opens the APK through Mihon's bundled FileProvider", async
   const theme = new JTheme(), jresources = new JResources(); theme.res = archive.res; jresources.host = archive.res;
   const unused = () => { throw new Error("unexpected activity lifecycle"); };
   const host: AppHost = { res: archive.res, theme, jresources, pkg: archive.pkg, apkFile: "", appLabel: "Mihon", themeResId: 0, iconRes: 0,
-    zip: archive.res.zip, splits: [], application: null, statusBarColor: 0, navBarColor: 0, launch: unused, finishActivity: unused,
+    zip: archive.res.zip, splits: [], application: null, statusBarColor: 0, navBarColor: 0, launch: unused, roundTrip: unused, finishActivity: unused,
     recreateActivity: unused, setRequestedOrientation: unused, currentActivity: () => null, invalidateOptionsMenu: unused };
   const path = `/data/data/${archive.pkg}/cache/provider-test.apk`, bytes = new Uint8Array([80, 75, 3, 4, 7, 9]);
   try {
