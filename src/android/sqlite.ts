@@ -355,6 +355,7 @@ rt.register({
   methods: (() => {
     const m: NativeSpec["methods"] = {
       "<init>()V": function () {},
+      "<init>(I)V": function (capacity: number) { if (capacity < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative capacity"); },
       "<init>(Landroid/content/ContentValues;)V": function (this: JContentValues, o: JContentValues) {
         if (o) this.data.m = new Map([...o.data.m].map(([k, e]) => [k, { ...e }]));
       },
