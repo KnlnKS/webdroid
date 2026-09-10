@@ -50,6 +50,7 @@ export type ProcessEndpoint = {
 };
 type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
+  bindings: Map<string, { pkg: string; process: string }>;
   watchers: Set<() => void>; pending: Set<(error: unknown) => void> };
 export class ProcessBroker {
   readonly files = new PrivateFiles();
@@ -57,7 +58,7 @@ export class ProcessBroker {
   readonly intents = new PendingIntents(async (operation, fill, alarmCount) => {
     if (packages.get(operation.pkg)?.uid !== operation.uid)
       throw rt.mkThrowable("android/app/PendingIntent$CanceledException", "Creator package is unavailable");
-    await this.service(operation.pkg, operation.process, { kind: "pending", operation, fill, alarmCount });
+    await this.service(null, operation.pkg, operation.process, { kind: "pending", operation, fill, alarmCount });
   });
   readonly alarms = new Alarms(this.intents, uptimeMillis, reportUncaught);
   createPending(pid: number, pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: IntentData): number | null {
@@ -158,7 +159,7 @@ export class ProcessBroker {
     const owner = packages.get(pkg);
     if (!owner) throw new Error("Package not installed: " + pkg);
     let resolve!: Entry["resolve"], reject!: Entry["reject"];
-    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? this.nextPid++, frame: null, dead: false, watchers: new Set(), pending: new Set(),
+    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? this.nextPid++, frame: null, dead: false, bindings: new Map(), watchers: new Set(), pending: new Set(),
       ready: new Promise((yes, no) => { resolve = yes; reject = no; }), resolve, reject };
     void entry.ready.catch(() => {});
     this.entries.set(entry.pid, entry); this.byName.set(key, entry);
@@ -193,6 +194,9 @@ export class ProcessBroker {
     entry.dead = true; entry.reject(error);
     for (const reject of entry.pending) reject(error);
     entry.pending.clear();
+    for (const [key, binding] of entry.bindings)
+      void this.service(null, binding.pkg, binding.process, { kind: "unbind", key }).catch(reportUncaught);
+    entry.bindings.clear();
     for (const watcher of entry.watchers) { try { watcher(); } catch (error) { console.error("[process death]", error); } }
     entry.watchers.clear(); entry.frame?.remove(); this.files.detach(pid); this.location.remove(pid);
     for (const activity of this.activities.filter((a) => a.pid === pid)) this.finishActivity(pid, activity.id, 0, null);
@@ -213,10 +217,21 @@ export class ProcessBroker {
     const target = this.entry(request.handle.pid);
     return this.request(target, (endpoint) => endpoint.transact(request, { pid: caller.pid, uid: caller.uid }));
   }
-  async service(pkg: string, process: string, request: ServiceRequest): Promise<BinderHandle | null> {
+  async service(pid: number | null, pkg: string, process: string, request: ServiceRequest): Promise<BinderHandle | null> {
+    const caller = pid === null ? null : this.entry(pid);
+    if (request.kind === "unbind") caller?.bindings.delete(request.key);
     const entry = request.kind === "unbind" ? this.byName.get(pkg + "/" + process) : this.connect(pkg, process);
     if (!entry || entry.dead) return null;
-    return this.request(entry, (endpoint) => endpoint.service(request));
+    const binding = request.kind === "bind" ? { pkg, process } : null;
+    if (request.kind === "bind" && binding) caller?.bindings.set(request.key, binding);
+    try {
+      const result = await this.request(entry, endpoint => endpoint.service(request));
+      if (caller?.dead) throw rt.mkThrowable("android/os/DeadObjectException", "Service caller died");
+      return result;
+    } catch (error) {
+      if (request.kind === "bind" && caller?.bindings.get(request.key) === binding) caller.bindings.delete(request.key);
+      throw error;
+    }
   }
   async provider(pid: number, pkg: string, process: string, request: ProviderRequest): Promise<ProviderReply> {
     const caller = this.entry(pid);
@@ -329,9 +344,9 @@ export function connectProcess(): ProcessEndpoint {
   pendingTransport.send = (id, fill) => remote(broker.intents.send(id, fill));
   alarmTransport.schedule = (id, type, at, interval) => broker.alarms.schedule(id, type, at, interval);
   alarmTransport.cancel = id => broker.alarms.cancel(id);
-  serviceTransport.bind = async (owner, process, intent, key) => importBinder(await remote(broker.service(owner.pkg, process, { kind: "bind", intent: await encodeIntent(intent), key })));
-  serviceTransport.unbind = async (owner, process, key) => { await remote(broker.service(owner.pkg, process, { kind: "unbind", key })); };
-  serviceTransport.start = async (owner, process, intent, foreground) => { await remote(broker.service(owner.pkg, process, { kind: "start", intent: await encodeIntent(intent), foreground })); };
+  serviceTransport.bind = async (owner, process, intent, key) => importBinder(await remote(broker.service(PROCESS_PID, owner.pkg, process, { kind: "bind", intent: await encodeIntent(intent), key })));
+  serviceTransport.unbind = async (owner, process, key) => { await remote(broker.service(PROCESS_PID, owner.pkg, process, { kind: "unbind", key })); };
+  serviceTransport.start = async (owner, process, intent, foreground) => { await remote(broker.service(PROCESS_PID, owner.pkg, process, { kind: "start", intent: await encodeIntent(intent), foreground })); };
   return {
     activity: async (request) => {
       if (request.kind === "back") return (await import("./device")).pressBack();

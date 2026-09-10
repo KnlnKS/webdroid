@@ -7,6 +7,7 @@ import { onMain, inMainJob } from "./mainloop";
 import { reportUncaught, PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "./os";
 import { packages, qualifyComponent, type PackageRecord } from "./packages";
 import { getPM } from "./pm";
+import { binderTransport, exportBinder } from "./binder";
 export class JService extends JContextWrapper {}
 
 class JRunningServiceInfo extends JObj {
@@ -123,7 +124,8 @@ export function unbindLocalService(key: string): Promise<void> {
   };
   return inMainJob() ? run() : onMain(run);
 }
-const connections = new Map<unknown, { key: string; owner: PackageRecord; process: string; remote: boolean }>();
+type Connection = { key: string; owner: PackageRecord; process: string; remote: boolean; cancelDeath: (() => void) | null };
+const connections = new Map<unknown, Connection>();
 let nextConnection = 1;
 export async function svcBind(ctx: JContext, intent: JIntent, connection: unknown, flags: number): Promise<number> {
   const resolved = await vcall(getPM(), "resolveService", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", intent, 0);
@@ -136,20 +138,38 @@ export async function svcBind(ctx: JContext, intent: JIntent, connection: unknow
   const key = PROCESS_PID + ":" + nextConnection++, remote = owner.pkg !== ctx.$host.pkg || info.processName !== (PROCESS_NAME || ctx.$host.pkg);
   const bound: JIntent = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
   bound.component = info.name; bound.componentPkg = owner.pkg;
-  const record = { key, owner, process: info.processName, remote }; connections.set(connection, record);
-  const ready = remote ? serviceTransport.bind(owner, info.processName, bound, key) : onMain(() => bindLocalService(ctx, bound, key));
-  void ready.then((binder) => onMain(async () => {
-    if (connections.get(connection) !== record) return;
-    const component = mkComponentName(owner.pkg, info.name);
-    if (binder) await vcall(connection, "onServiceConnected", "(Landroid/content/ComponentName;Landroid/os/IBinder;)V", component, binder);
-    else await vcall(connection, "onNullBinding", "(Landroid/content/ComponentName;)V", component);
-  })).catch(reportUncaught);
+  const record: Connection = { key, owner, process: info.processName, remote, cancelDeath: null }; connections.set(connection, record);
+  const connect = () => {
+    const ready = remote ? serviceTransport.bind(owner, info.processName, bound, key) : onMain(() => bindLocalService(ctx, bound, key));
+    void ready.then(binder => {
+      if (connections.get(connection) !== record) return;
+      const component = mkComponentName(owner.pkg, info.name), handle = remote ? exportBinder(binder) : null;
+      if (handle) record.cancelDeath = binderTransport.watch(handle.pid, () => {
+        record.cancelDeath = null;
+        void onMain(async () => {
+          if (connections.get(connection) !== record) return;
+          await vcall(connection, "onServiceDisconnected", "(Landroid/content/ComponentName;)V", component);
+          if (connections.get(connection) === record && flags & 1) connect();
+        }).catch(reportUncaught);
+      });
+      return onMain(async () => {
+        if (connections.get(connection) !== record) return;
+        if (binder) await vcall(connection, "onServiceConnected", "(Landroid/content/ComponentName;Landroid/os/IBinder;)V", component, binder);
+        else await vcall(connection, "onNullBinding", "(Landroid/content/ComponentName;)V", component);
+      });
+    }).catch(error => {
+      if (connections.get(connection) !== record) return;
+      void onMain(() => vcall(connection, "onBindingDied", "(Landroid/content/ComponentName;)V", mkComponentName(owner.pkg, info.name))).catch(reportUncaught);
+      reportUncaught(error);
+    });
+  };
+  connect();
   return 1;
 }
 export function svcUnbind(connection: unknown): void {
   const record = connections.get(connection);
   if (!record) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Service not registered");
-  connections.delete(connection);
+  connections.delete(connection); record.cancelDeath?.();
   void (record.remote ? serviceTransport.unbind(record.owner, record.process, record.key) : onMain(() => unbindLocalService(record.key))).catch(reportUncaught);
 }
 export function svcFg(svc: unknown, fg: boolean) {

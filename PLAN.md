@@ -187,3 +187,9 @@ TEMP state and one canonical persistent owner. Processes and bytecode start on d
   identity does not grant token access. Real-browser fixtures verify cross-process writes,
   reload persistence and microG metadata ownership. This does not establish Google login;
   interactive authentication and authenticator Binder request routing remain incomplete.
+- Service death now notifies surviving clients and reconnects BIND_AUTO_CREATE bindings;
+  client death releases its remote bindings. A real-browser microG common-service fixture
+  observed connected → disconnected → connected with a new process PID, no missing APIs,
+  no undeclared suspension and empty main queues. Eight focused tests and typecheck pass.
+  Evidence: /tmp/webdroid-service-reconnect-browser.{json,log}. Account Parcel round-trips
+  also preserve Android 13's name, type and access ID. Broader crash-loop policy remains open.

@@ -185,3 +185,25 @@ test("system PendingIntents and alarms survive creator death and retain creator 
     for (const pkg of names) packages.delete(pkg);
   }
 });
+
+test("client process death releases remote service bindings", async () => {
+  const broker = new ProcessBroker(), names = ["test.binding.client", "test.binding.server"], events: string[] = [];
+  const released = Promise.withResolvers<void>(), data = { bytes: new Uint8Array(), objects: [] };
+  for (const [i, pkg] of names.entries()) {
+    const root: XmlNode = { name: "manifest", attrs: [{ name: "package", ns: "", resId: 0, type: TV.STRING, data: 0, str: pkg }], children: [] };
+    packages.set(pkg, new PackageRecord(root, new Resources(null, {}), "/" + pkg, 28000 + i, async () => []));
+    broker.connect(pkg, pkg, 38000 + i);
+    broker.ready(38000 + i, {
+      activity: async () => {}, provider: async () => { throw new Error("unused"); },
+      transact: async () => ({ handled: 0, data }), broadcast: async (_i, _c, _o, result) => result,
+      service: async request => { events.push(request.kind); if (request.kind === "unbind") setTimeout(released.resolve, 0); return null; },
+    });
+  }
+  try {
+    const intent = { action: "test.BIND", component: null, componentPkg: null, dataUri: null, typeStr: null, pkg: null, flags: 0, categories: [], extras: data };
+    await broker.service(38000, names[1], names[1], { kind: "bind", key: "38000:1", intent });
+    broker.fail(38000, "client stopped");
+    await released.promise;
+    expect(events).toEqual(["bind", "unbind"]); expect(broker.alive(38001)).toBe(true);
+  } finally { for (const [i, pkg] of names.entries()) { broker.fail(38000 + i, "fixture complete"); packages.delete(pkg); } }
+});
