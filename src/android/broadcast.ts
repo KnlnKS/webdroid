@@ -1,12 +1,14 @@
 import { mangleMethod } from "../jvm/abi";
 import { JObj, rt, callSelf, type NativeSpec } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { defineException, newObj, vcall } from "../jvm/natives/jlang";
 import type { JContext } from "./context";
 import { JIntent, launchIntent } from "./intent";
 import { onMain } from "./mainloop";
 import { reportUncaught } from "./os";
 import { svcStart } from "./runningservices";
 import { JBundle } from "./os";
+import { JBinder } from "./binder";
+import { JParcel, parcelCreator } from "./parcel";
 
 interface Filter { actions: string[]; schemes?: string[]; priority?: number; }
 export type BroadcastResult = { code: number; data: string | null; extras: JBundle | null; aborted: boolean };
@@ -85,11 +87,21 @@ rt.register({ name: "android/content/BroadcastReceiver", ctor: class extends JOb
     return callSelf(resultMethods, signature, pending, ...args);
   }])),
 } });
-class JIntentSender extends JObj {
+class JIntentToken extends JBinder {
   operation: { kind: "activity" | "broadcast" | "service"; context: JContext; intent: JIntent; immutable: boolean } | null = null;
   canceled = false;
 }
+class JIntentSender extends JObj {
+  target: JObj | null = null;
+  get operation() { return this.target instanceof JIntentToken ? this.target.operation : null; }
+}
+defineException("android/util/AndroidException", "java/lang/Exception");
+defineException("android/app/PendingIntent$CanceledException", "android/util/AndroidException");
 export async function sendIntent(sender: JIntentSender, fill?: JIntent): Promise<void> {
+  if (!(sender.target instanceof JIntentToken)) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "remote intent sending unavailable");
+  return sendOperation(sender.target, fill);
+}
+async function sendOperation(sender: JIntentToken, fill?: JIntent): Promise<void> {
   const operation = sender.operation;
   if (sender.canceled || !operation) throw rt.mkThrowable("android/app/PendingIntent$CanceledException", null);
   const intent = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", operation.intent) as JIntent;
@@ -98,19 +110,42 @@ export async function sendIntent(sender: JIntentSender, fill?: JIntent): Promise
   else if (operation.kind === "activity") await launchIntent(operation.context.$host, intent);
   else await svcStart(operation.context, intent, false);
 }
-rt.register({ name: "android/content/IntentSender", ctor: JIntentSender, ifaces: ["android/os/Parcelable"] });
+rt.register({ name: "webdroid/IntentToken", ctor: JIntentToken, sup: "android/os/Binder" });
+rt.register({ name: "android/content/IntentSender", ctor: JIntentSender, ifaces: ["android/os/Parcelable"],
+  statics: { get CREATOR() { return parcelCreator("android/content/IntentSender", async p => {
+    const target = await vcall(p, "readStrongBinder", "()Landroid/os/IBinder;");
+    if (!target) return null;
+    const sender = new JIntentSender(); sender.target = target; return sender;
+  }); } }, methods: {
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JIntentSender, p: JParcel) { return vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.target); },
+  },
+});
 class JPendingIntent extends JObj { sender = new JIntentSender(); }
 function pending(kind: "activity" | "broadcast" | "service", context: JContext, intent: JIntent, flags: number): JPendingIntent {
-  const result = new JPendingIntent(); result.sender.operation = { kind, context, intent, immutable: !!(flags & 0x4000000) }; return result;
+  rt.link("webdroid/IntentToken");
+  const result = new JPendingIntent(), target = new JIntentToken();
+  target.operation = { kind, context, intent, immutable: !!(flags & 0x4000000) }; result.sender.target = target; return result;
 }
 rt.register({
   name: "android/app/PendingIntent", ctor: JPendingIntent, ifaces: ["android/os/Parcelable"],
+  statics: { get CREATOR() { return parcelCreator("android/app/PendingIntent", async p => {
+    const target = await vcall(p, "readStrongBinder", "()Landroid/os/IBinder;");
+    if (!target) return null;
+    const pending = new JPendingIntent(); pending.sender.target = target; return pending;
+  }); } },
   methods: {
     "static getActivity(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, _code: number, intent: JIntent, flags: number) => pending("activity", context, intent, flags),
     "static getBroadcast(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, _code: number, intent: JIntent, flags: number) => pending("broadcast", context, intent, flags),
     "static getService(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, _code: number, intent: JIntent, flags: number) => pending("service", context, intent, flags),
     "getIntentSender()Landroid/content/IntentSender;": function (this: JPendingIntent) { return this.sender; },
-    "cancel()V": function (this: JPendingIntent) { this.sender.canceled = true; },
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JPendingIntent, p: JParcel) { return vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.sender.target); },
+    "equals(Ljava/lang/Object;)Z": function (this: JPendingIntent, other: unknown) { return +(other instanceof JPendingIntent && this.sender.target === other.sender.target); },
+    "cancel()V": function (this: JPendingIntent) {
+      if (!(this.sender.target instanceof JIntentToken)) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "remote intent cancellation unavailable");
+      this.sender.target.canceled = true;
+    },
     "send()V": function (this: JPendingIntent) { return sendIntent(this.sender); },
   },
 });
