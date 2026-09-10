@@ -586,10 +586,19 @@ rt.register({
     "set(IIJI)V": function (this: JBufferInfo, o: number, s: number, t: bigint, f: number) { this.offset = o; this.size = s; this.presentationTimeUs = t; this.flags = f; },
   },
 });
-class JCryptoInfo extends JObj { pattern: unknown = null; }
+class JCryptoInfo extends JObj {
+  numSubSamples = 0; numBytesOfClearData: Int32Array | null = null; numBytesOfEncryptedData: Int32Array | null = null;
+  key: Int8Array | null = null; iv: Int8Array | null = null; mode = 0; pattern: unknown = null;
+}
 rt.register({
   name: "android/media/MediaCodec$CryptoInfo", ctor: JCryptoInfo,
-  methods: { "<init>()V": function () {}, "setPattern(Landroid/media/MediaCodec$CryptoInfo$Pattern;)V": function (this: JCryptoInfo, p: unknown) { this.pattern = p; } },
+  fields: { numSubSamples: "numSubSamples", numBytesOfClearData: "numBytesOfClearData", numBytesOfEncryptedData: "numBytesOfEncryptedData", key: "key", iv: "iv", mode: "mode" },
+  methods: {
+    "<init>()V": function () {},
+    "set(I[I[I[B[BI)V": function (this: JCryptoInfo, count: number, clear: Int32Array | null, encrypted: Int32Array | null, key: Int8Array | null, iv: Int8Array | null, mode: number) {
+      this.numSubSamples = count; this.numBytesOfClearData = clear; this.numBytesOfEncryptedData = encrypted; this.key = key; this.iv = iv; this.mode = mode;
+    },
+    "setPattern(Landroid/media/MediaCodec$CryptoInfo$Pattern;)V": function (this: JCryptoInfo, p: unknown) { this.pattern = p; } },
 });
 class JCryptoPattern extends JObj { encrypt = 0; skip = 0; }
 rt.register({
