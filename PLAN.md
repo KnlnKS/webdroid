@@ -4,6 +4,10 @@ Branch `codex/microg-integration`, based on `82e1afb`. Existing work in the orig
 checkout is excluded. Run genuine microG and client APK bytecode; add Android platform
 behavior, never app-specific substitutes. Keep comments and dependencies minimal.
 
+Generated microG bundles belong in ignored `vendor/microg/`. Commit the preparation
+script and pinned metadata only. Generate missing files during setup/server startup;
+reuse complete bundles without downloading or reprocessing the source APKs.
+
 ## Milestones
 
 - [x] Clean Resy baseline and verified upstream APK downloads.

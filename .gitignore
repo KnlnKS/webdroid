@@ -6,6 +6,7 @@ tests/e2e/actual/
 tests/e2e/report/
 .worktrees/
 vendor/aosp
+vendor/microg/
 tests/e2e/perf-rollup.json
 scripts/simd-oracle/build/
 .zig-cache/

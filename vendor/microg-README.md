@@ -2,10 +2,23 @@
 
 Upstream: https://github.com/microg/GmsCore/tree/v0.3.16.252432
 
-Release URLs and SHA-256 digests are pinned in `src/shell/system-packages.ts`.
-`bun scripts/system-packages.ts` verifies/downloads the unmodified upstream APKs to
-`~/.cache/webdroid/packages` (`WEBDROID_PACKAGE_CACHE` overrides the directory).
-The APKs are served as static assets and executed in the browser, never on the server.
+Source URLs, APK SHA-256 digests and generated-index digests are pinned in
+`src/shell/system-packages.ts`. Generated files live in `vendor/microg/`, which is
+ignored by Git. Do not commit the generated indexes, entries or APKs.
+
+`bun scripts/system-packages.ts [source-directory]` generates missing bundles.
+Server startup runs the same preparation automatically. Complete bundles require no
+upstream request or regeneration. Missing entries are regenerated from the cached
+APK, downloading the pinned release only if that source is absent or invalid.
+The source cache defaults to `~/.cache/webdroid/packages`; `WEBDROID_PACKAGE_CACHE`
+or the script's directory argument overrides it.
+
+Preparation verifies APK signatures and hashes, groups resources into a startup
+bundle, and separates DEX and native entries for demand loading. Gzip objects use
+browser-native decompression. Original deflate streams, ZIP headers and signing
+blocks are retained so file reads reconstruct the exact signed APK. Content hashes
+verify decoded entries and reconstructed source fragments. No bytecode or native
+library is patched. Android execution remains entirely in the browser.
 
 microG is Copyright 2013–2025 microG Project Team, Apache License 2.0.
 Upstream license: https://github.com/microg/GmsCore/blob/v0.3.16.252432/LICENSE
