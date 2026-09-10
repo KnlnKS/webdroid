@@ -495,12 +495,19 @@ export async function layoutView(v: JView, l: number, t: number, r: number, b: n
 const M_computeScroll = mangleMethod("computeScroll", "()V");
 const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
 const noopComputeScroll = () => {};
-export async function drawView(v: JView, cv: JCanvas) {
+/** AOSP drawChild: a child the parent's clip rejects is not drawn at all, unless a transform or
+ *  an animation could move it into view. An off-screen ViewPager page never runs its onDraw, so
+ *  a spinner on it cannot keep the whole window repainting. */
+const clipRejects = (p: JViewGroup, v: JView): boolean =>
+  p.clipChildren && !v.jAnim && !v.animTf && !v.translationX && !v.translationY && !v.rotationV && v.scaleXv === 1 && v.scaleYv === 1 &&
+  (v.right - p.scrollX <= 0 || v.bottom - p.scrollY <= 0 || v.left - p.scrollX >= p.width() || v.top - p.scrollY >= p.height());
+export async function drawView(v: JView, cv: JCanvas, parent?: JViewGroup) {
   if (v.visibility !== 0) return;
   // Android calls computeScroll() before drawing each child — drives Scroller
   // animations (ViewPager page snaps, OverScroller flings)
   const cs = jmethod(v, M_computeScroll);
   if (cs && cs !== noopComputeScroll) await guardApply(cs, v);
+  if (parent && clipRejects(parent, v)) return;
   const ctx = cv.ctx;
   // AOSP View.draw() brackets the whole thing with getSaveCount()/restoreToCount(): a view
   // that throws between save() and restore() must not leave its clip on the shared context,
@@ -1609,11 +1616,11 @@ const vgMethods: NativeSpec["methods"] = {
   "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z": () => 1,
   "dispatchDraw(Landroid/graphics/Canvas;)V": async function (this: JViewGroup, cv: JCanvas) {
     const n = this.children.length;
-    if (!this.drawingOrderEnabled) { for (const c of this.children) await drawView(c, cv); return; }
+    if (!this.drawingOrderEnabled) { for (const c of this.children) await drawView(c, cv, this); return; }
     // a subclass's getChildDrawingOrder picks which child paints at each z step (AOSP buildOrderedChildList)
     for (let i = 0; i < n; i++) {
       const c = this.children[await vcall(this, "getChildDrawingOrder", "(II)I", n, i)];
-      if (c) await drawView(c, cv);
+      if (c) await drawView(c, cv, this);
     }
   },
   "setChildrenDrawingOrderEnabled(Z)V": function (this: JViewGroup, e: number) { this.drawingOrderEnabled = !!e; },
@@ -1674,7 +1681,7 @@ const vgMethods: NativeSpec["methods"] = {
   "removeDetachedView(Landroid/view/View;Z)V": removeChild,
   "detachViewFromParent(Landroid/view/View;)V": removeChild,
   "drawChild(Landroid/graphics/Canvas;Landroid/view/View;J)Z": async function (this: JViewGroup, cv: JCanvas, c: JView) {
-    await drawView(c, cv);
+    await drawView(c, cv, this);
     return 0;
   },
   "static getChildMeasureSpec(III)I": (spec: number, padding: number, dim: number) => childMeasureSpec(spec, padding, dim),
