@@ -329,3 +329,32 @@ describe("a64 simd: vector arithmetic", () => {
     expect(I(c, 5)).toEqual([4, 16, 36, 64]);
   });
 });
+
+// frsqrte had no coverage of any kind, here or in the hardware oracle. The architecture fixes the
+// estimate's precision rather than its bits, so the check is the guarantee itself -- eight bits of
+// 1/sqrt(x) -- plus the values the spec pins exactly.
+describe("a64 simd: reciprocal square root estimate", () => {
+  const dupV1 = 0x4e040c01, frsqrteV0V1 = 0x6ea1d820; // dup v1.4s, w0 ; frsqrte v0.4s, v1.4s
+  const estimate = (bits: number): number => {
+    const c = run([dupV1, frsqrteV0V1, RET], (cpu) => { cpu.w[0] = bits | 0; });
+    const out = I(c, 0);
+    expect(out[1]).toBe(out[0]); // every lane took the same input
+    return new Float32Array(new Int32Array([out[0]]).buffer)[0];
+  };
+  const f32 = (v: number): number => new Int32Array(new Float32Array([v]).buffer)[0];
+
+  test("is within eight bits of 1/sqrt(x) across the exponent range", () => {
+    for (const v of [0.25, 0.5, 1, 1.5, 2, 3, 4, 7.9, 16, 100, 1e-30, 1e30, 3.4e38, 1.4e-45]) {
+      const got = estimate(f32(v)), want = 1 / Math.sqrt(v);
+      expect(Math.abs(got - want) / want).toBeLessThan(2 ** -8);
+    }
+  });
+  test("pins the values the architecture fixes", () => {
+    expect(estimate(f32(0))).toBe(Infinity);
+    expect(estimate(f32(-0))).toBe(-Infinity);
+    expect(estimate(f32(Infinity))).toBe(0);
+    expect(estimate(f32(-1))).toBeNaN();
+    expect(estimate(f32(-Infinity))).toBeNaN();
+    expect(estimate(f32(NaN))).toBeNaN();
+  });
+});
