@@ -57,6 +57,7 @@ import "./android/searchview";
 import "./android/inflate";
 import "./android/pm";
 import "./android/broadcast";
+import "./android/pendingintent";
 import "./android/alarm";
 import "./android/packageinstaller";
 import "./android/net";

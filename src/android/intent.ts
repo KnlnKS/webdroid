@@ -86,6 +86,19 @@ const intentMethods: NativeSpec["methods"] = {
   "getFlags()I": function (this: JIntent) { return this.flags; },
   "addCategory(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, c: string) { this.categories.add(c); return this; },
   "hasCategory(Ljava/lang/String;)Z": function (this: JIntent, c: string) { return this.categories.has(c) ? 1 : 0; },
+  "fillIn(Landroid/content/Intent;I)I": function (this: JIntent, other: JIntent, flags: number) {
+    let changed = 0;
+    if (other.action !== null && (this.action === null || flags & 1)) { this.action = other.action; changed |= 1; }
+    if ((other.dataUri !== null || other.typeStr !== null) && (this.dataUri === null && this.typeStr === null || flags & 2)) {
+      this.dataUri = other.dataUri; this.typeStr = other.typeStr; changed |= 2;
+    }
+    if (other.categories.size && (!this.categories.size || flags & 4)) { this.categories = new Set(other.categories); changed |= 4; }
+    if (other.component !== null && flags & 8) { this.component = other.component; this.componentPkg = other.componentPkg; changed |= 8; }
+    if (other.pkg !== null && (this.pkg === null || flags & 16)) { this.pkg = other.pkg; changed |= 16; }
+    this.flags |= other.flags;
+    if (other.extras.map.size) this.extras.map = new Map([...other.extras.map, ...this.extras.map]);
+    return changed;
+  },
   "getExtras()Landroid/os/Bundle;": function (this: JIntent) { return this.extras.map.size ? this.extras : null; },
   "putExtras(Landroid/os/Bundle;)Landroid/content/Intent;": function (this: JIntent, b: JBundle) {
     if (b) for (const [k, v] of b.map) this.extras.map.set(k, v);

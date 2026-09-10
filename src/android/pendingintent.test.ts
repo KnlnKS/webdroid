@@ -34,7 +34,7 @@ test("PendingIntent identity ignores extras and supports update, cancellation an
   expect(await vcall(same, "equals", "(Ljava/lang/Object;)Z", original)).toBe(1);
   expect(await vcall(same, "hashCode", "()I")).toBe(await vcall(original, "hashCode", "()I"));
   const received: unknown[] = [], receiver = await newObj("android/content/BroadcastReceiver");
-  receiver[mangleMethod("onReceive", "(Landroid/content/Context;Landroid/content/Intent;)V")] = (_context: JContext, sent: JIntent) => { received.push(sent.extras.map.get("value")); };
+  receiver[mangleMethod("onReceive", "(Landroid/content/Context;Landroid/content/Intent;)V")] = async (_context: JContext, sent: JIntent) => { received.push(await vcall(sent.extras, "getInt", "(Ljava/lang/String;)I", "value")); };
   registerReceiver(context, receiver, { actions: [intent.action] });
   try {
     await vcall(original, "send", "()V"); await onMain(() => {});
@@ -51,4 +51,30 @@ test("PendingIntent identity ignores extras and supports update, cancellation an
   await vcall(once, "send", "()V");
   expect(await get(0x64000000, 24)).toBeNull();
   await expect(vcall(once, "send", "()V")).rejects.toMatchObject({ msg: null });
+});
+
+test("mutable PendingIntent fill preserves fixed fields and immutable operations reject fill", async () => {
+  const context = new JContext(), intent = await newObj("android/content/Intent") as JIntent;
+  intent.action = "test.FILL"; intent.extras.map.set("fixed", 7);
+  const fill = new JIntent(); fill.action = "test.REPLACED"; fill.component = "test/Injected";
+  fill.extras.map.set("fixed", 9); fill.extras.map.set("added", 11);
+  const received: JIntent[] = [], receiver = await newObj("android/content/BroadcastReceiver");
+  receiver[mangleMethod("onReceive", "(Landroid/content/Context;Landroid/content/Intent;)V")] = (_c: JContext, delivered: JIntent) => { received.push(delivered); };
+  registerReceiver(context, receiver, { actions: [intent.action] });
+  const { sendIntent } = await import("./pendingintent");
+  try {
+    for (const flags of [0x2000000, 0x4000000]) {
+      const pending = await vcall(rt.link("android/app/PendingIntent").ctor, "getBroadcast", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 39, intent, flags);
+      await sendIntent(await vcall(pending, "getIntentSender", "()Landroid/content/IntentSender;"), fill);
+      await onMain(() => {});
+      await vcall(pending, "cancel", "()V");
+    }
+    expect(received).toHaveLength(2);
+    for (const delivered of received) {
+      expect(delivered.component).toBeNull();
+      expect(await vcall(delivered, "getIntExtra", "(Ljava/lang/String;I)I", "fixed", 0)).toBe(7);
+    }
+    expect(await vcall(received[0], "getIntExtra", "(Ljava/lang/String;I)I", "added", 0)).toBe(11);
+    expect(await vcall(received[1], "getIntExtra", "(Ljava/lang/String;I)I", "added", 0)).toBe(0);
+  } finally { unregisterReceiver(receiver); }
 });

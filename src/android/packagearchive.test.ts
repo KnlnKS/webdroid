@@ -60,9 +60,9 @@ test("installer commits written APK bytes and delivers status through a mutable 
   await vcall(output, "close", "()V");
   await vcall(session, "commit", "(Landroid/content/IntentSender;)V", sender);
   for (let i = 0; i < 100 && !received.length; i++) { await Bun.sleep(5); await onMain(() => {}); }
-  expect(received[0]?.map.get("android.content.pm.extra.STATUS")).toBe(0);
-  expect(received[0]?.map.get("android.content.pm.extra.SESSION_ID")).toBe(id);
-  expect(received[0]?.map.get("original")).toBe(7);
+  expect(await vcall(received[0], "getInt", "(Ljava/lang/String;)I", "android.content.pm.extra.STATUS")).toBe(0);
+  expect(await vcall(received[0], "getInt", "(Ljava/lang/String;)I", "android.content.pm.extra.SESSION_ID")).toBe(id);
+  expect(await vcall(received[0], "getInt", "(Ljava/lang/String;)I", "original")).toBe(7);
   expect(vfs.read("/data/app/app.mihon/base.apk")).toEqual(bytes);
   const installed = await vcall(getPM(), "getInstalledPackages", "(I)Ljava/util/List;", 0x8000000);
   expect(installed.a.some((info: { packageName: string }) => info.packageName === "app.mihon")).toBe(true);
@@ -84,7 +84,7 @@ test("failed install sessions report failure and cannot be committed twice", asy
   const session = await vcall(installer, "openSession", "(I)Landroid/content/pm/PackageInstaller$Session;", id);
   await vcall(session, "commit", "(Landroid/content/IntentSender;)V", sender);
   for (let i = 0; i < 100 && !received.length; i++) { await Bun.sleep(5); await onMain(() => {}); }
-  expect(received[0]?.extras.map.get("android.content.pm.extra.STATUS")).toBe(4);
+  expect(await vcall(received[0].extras, "getInt", "(Ljava/lang/String;)I", "android.content.pm.extra.STATUS")).toBe(4);
   expect(received[0]?.extras.map.get("android.content.pm.extra.PACKAGE_NAME")).toBeUndefined();
   await expect(vcall(session, "commit", "(Landroid/content/IntentSender;)V", sender)).rejects.toBeDefined();
   await vcall(context, "unregisterReceiver", "(Landroid/content/BroadcastReceiver;)V", receiver);
@@ -112,7 +112,7 @@ test("running-package replacement reports failure and preserves the installed ar
     await vcall(output, "write", "([BII)V", new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length), 0, bytes.length);
     await vcall(session, "commit", "(Landroid/content/IntentSender;)V", sender);
     for (let i = 0; i < 100 && !result; i++) { await Bun.sleep(5); await onMain(() => {}); }
-    expect(result?.map.get("android.content.pm.extra.STATUS")).toBe(4);
+    expect(await vcall(result, "getInt", "(Ljava/lang/String;)I", "android.content.pm.extra.STATUS")).toBe(4);
     expect(result?.map.get("android.content.pm.extra.STATUS_MESSAGE")).toBe("Replacing the running package is unsupported");
     expect(result?.map.get("android.content.pm.extra.PACKAGE_NAME")).toBeUndefined();
     expect(vfs.read("/data/app/app.mihon/base.apk")).toBe(previousBytes);

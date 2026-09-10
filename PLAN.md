@@ -173,3 +173,8 @@ TEMP state and one canonical persistent owner. Processes and bytecode start on d
   and received HeartbeatAck 61 ms later without a reconnect. Missing APIs and main queues
   were empty across three processes; the reached Looper suspension annotation was corrected.
   System ownership across process death and broader reconnection tests remain incomplete.
+- PendingIntent records and alarms now have a browser-broker owner and data-only payloads.
+  A real-browser alarm test destroyed the creator iframe, restarted its package process,
+  and delivered exactly one broadcast. Creator-UID checks, cancellation, immutable fills
+  and focused tests pass. Raw IIntentSender transactions beyond descriptor queries remain
+  unsupported; actual MCS recovery after process death still needs verification.

@@ -3,7 +3,9 @@ import { newObj, vcall } from "../jvm/natives/jlang";
 import { jarray } from "../jvm/abi";
 import { installPackageArchive } from "./pm";
 import { JIntent } from "./intent";
-import { sendIntent, sendBroadcast } from "./broadcast";
+import { sendBroadcast } from "./broadcast";
+import { sendIntent } from "./pendingintent";
+import { appHost } from "./apphost";
 import { reportUncaught } from "./os";
 
 class JSessionParams extends JObj { mode = 1; size = -1n; packageName: string | null = null; requireUserAction = 0; }
@@ -52,10 +54,8 @@ rt.register({ name: "android/content/pm/PackageInstaller$Session", ctor: JSessio
           const stream = this.entries.values().next().value;
           const data: Int8Array = await vcall(stream, "toByteArray", "()[B");
           const pkg = await installPackageArchive(new Uint8Array(data.buffer, data.byteOffset, data.length), this.params.packageName);
-          if (sender.operation) {
-            const added = new JIntent(); added.action = "android.intent.action.PACKAGE_ADDED"; added.dataUri = `package:${pkg}`;
-            sendBroadcast(sender.operation.context, added);
-          }
+          const added = new JIntent(); added.action = "android.intent.action.PACKAGE_ADDED"; added.dataUri = `package:${pkg}`;
+          sendBroadcast(appHost?.application ?? await newObj("android/content/Context"), added);
           result.extras.map.set("android.content.pm.extra.PACKAGE_NAME", pkg);
           result.extras.map.set("android.content.pm.extra.STATUS", 0);
         } catch (error) {

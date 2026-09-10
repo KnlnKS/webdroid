@@ -1,3 +1,8 @@
+import { PendingIntents, type PendingOperation } from "./pendingintents";
+import { Alarms } from "./alarms";
+import { executePendingIntent, pendingTransport } from "../android/pendingintent";
+import { alarmTransport } from "../android/alarm";
+import { encodeIntent, decodeIntent, type IntentData } from "../android/intentipc";
 import { PermissionStore, usePermissionStore } from "../android/context";
 import { packages } from "../android/packages";
 import { appHost } from "../android/apphost";
@@ -5,7 +10,7 @@ import { binderTransport, receiveTransaction, exportBinder, importBinder, export
 import { JParcel } from "../android/parcel";
 import { JIntent, activityTransport, deliverActivityResult, type ActivityResultTarget } from "../android/intent";
 import { onMain } from "../android/mainloop";
-import { JBundle, PROCESS_PID } from "../android/os";
+import { PROCESS_PID, uptimeMillis, reportUncaught } from "../android/os";
 import { bindLocalService, unbindLocalService, svcStart, serviceTransport } from "../android/runningservices";
 import { vcall } from "../jvm/natives/jlang";
 import { vfs } from "../jvm/natives/jio";
@@ -25,10 +30,9 @@ import { locationTransport } from "../android/locationmanager";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives, type PackedArchive } from "./packedarchive";
 
-type IntentData = { action: string | null; component: string | null; componentPkg: string | null; dataUri: string | null;
-  typeStr: string | null; pkg: string | null; flags: number; categories: string[]; extras: ParcelData };
 type ServiceRequest = { kind: "bind"; intent: IntentData; key: string } | { kind: "unbind"; key: string }
-  | { kind: "start"; intent: IntentData; foreground: boolean };
+  | { kind: "start"; intent: IntentData; foreground: boolean }
+  | { kind: "pending"; operation: PendingOperation; fill: IntentData | null; alarmCount: number };
 type BroadcastData = { code: number; data: string | null; extras: ParcelData; aborted: boolean };
 type ActivityRequest = { kind: "launch"; id: number; component: string; intent: IntentData; caller: { pkg: string; cls: string } | null }
   | { kind: "visibility"; phase: "pause" | "stop" | "resume" }
@@ -47,6 +51,22 @@ type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HT
   watchers: Set<() => void>; pending: Set<(error: unknown) => void> };
 export class ProcessBroker {
   readonly files = new PrivateFiles();
+  readonly intents = new PendingIntents(async (operation, fill, alarmCount) => {
+    if (packages.get(operation.pkg)?.uid !== operation.uid)
+      throw rt.mkThrowable("android/app/PendingIntent$CanceledException", "Creator package is unavailable");
+    await this.service(operation.pkg, operation.process, { kind: "pending", operation, fill, alarmCount });
+  });
+  readonly alarms = new Alarms(this.intents, uptimeMillis, reportUncaught);
+  createPending(pid: number, pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: IntentData): number | null {
+    const caller = this.entry(pid), owner = packages.get(pkg);
+    if (!owner || owner.uid !== caller.uid) throw rt.mkThrowable("java/lang/SecurityException", "PendingIntent creator does not match caller");
+    return this.intents.create({ pkg, kind, code, flags, intent, uid: caller.uid, process: caller.process });
+  }
+  cancelPending(pid: number, id: number): void {
+    const operation = this.intents.get(id);
+    if (operation && operation.uid !== this.entry(pid).uid) throw rt.mkThrowable("java/lang/SecurityException", "Only the creator may cancel a PendingIntent");
+    this.intents.cancel(id);
+  }
   readonly location = new BrowserLocation();
   readonly permissions = new PermissionStore();
   private cookieStores = new Map<string, Promise<WebCookies>>();
@@ -179,7 +199,15 @@ export class ProcessBroker {
     const entry = this.entry(pid); entry.watchers.add(died); return () => { entry.watchers.delete(died); };
   }
   async transact(callerPid: number, request: Transaction): Promise<TransactionReply> {
-    const caller = this.entry(callerPid), target = this.entry(request.handle.pid);
+    const caller = this.entry(callerPid);
+    if (request.handle.pid === 0) {
+      if (!this.intents.known(request.handle.id)) throw rt.mkThrowable("android/os/DeadObjectException", "Unknown system Binder");
+      rt.link("android/os/Parcel");
+      const reply = new JParcel(), handled = +(request.code === 0x5f4e5446);
+      if (handled) await vcall(reply, "writeString", "(Ljava/lang/String;)V", "android.content.IIntentSender");
+      return { handled, data: exportParcel(reply) };
+    }
+    const target = this.entry(request.handle.pid);
     return this.request(target, (endpoint) => endpoint.transact(request, { pid: caller.pid, uid: caller.uid }));
   }
   async service(pkg: string, process: string, request: ServiceRequest): Promise<BinderHandle | null> {
@@ -241,31 +269,18 @@ export function processBroker(): ProcessBroker {
   }
   return root.__wdProcesses;
 }
-async function encodeIntent(intent: JIntent): Promise<IntentData> {
-  rt.link("android/os/Parcel");
-  const parcel = new JParcel();
-  await vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", intent.extras);
-  return { action: intent.action, component: intent.component, componentPkg: intent.componentPkg, dataUri: intent.dataUri,
-    typeStr: intent.typeStr, pkg: intent.pkg, flags: intent.flags, categories: [...intent.categories], extras: exportParcel(parcel) };
-}
-async function decodeIntent(data: IntentData, extras = true): Promise<JIntent> {
-  const intent = new JIntent();
-  Object.assign(intent, data, { categories: new Set(data.categories), extras: new JBundle() });
-  if (extras) intent.extras = await vcall(importParcel(data.extras), "readBundle", "()Landroid/os/Bundle;");
-  return intent;
+function remoteError(error: unknown): never {
+  if (error && typeof error === "object") {
+    const ctor: unknown = Reflect.get(error, "constructor"), info: unknown = typeof ctor === "function" ? Reflect.get(ctor, "$i") : null;
+    if (info && typeof info === "object" && "name" in info && typeof info.name === "string") {
+      const message: unknown = Reflect.get(error, "msg");
+      throw rt.mkThrowable(info.name, typeof message === "string" ? message : null);
+    }
+  }
+  throw error;
 }
 async function remote<T>(pending: Promise<T>): Promise<T> {
-  try { return await pending; }
-  catch (error) {
-    if (error && typeof error === "object") {
-      const ctor: unknown = Reflect.get(error, "constructor"), info: unknown = typeof ctor === "function" ? Reflect.get(ctor, "$i") : null;
-      if (info && typeof info === "object" && "name" in info && typeof info.name === "string") {
-        const message: unknown = Reflect.get(error, "msg");
-        throw rt.mkThrowable(info.name, typeof message === "string" ? message : null);
-      }
-    }
-    throw error;
-  }
+  try { return await pending; } catch (error) { return remoteError(error); }
 }
 export function connectProcess(): ProcessEndpoint {
   const broker = processBroker();
@@ -298,8 +313,17 @@ export function connectProcess(): ProcessEndpoint {
   connectProviders((pkg, process, request) => remote(broker.provider(PROCESS_PID, pkg, process, request)));
   broadcastTransport.send = async (intent, permission, ordered) => remote(broker.broadcast(PROCESS_PID, await encodeIntent(intent), permission, ordered));
   binderTransport.transact = (request) => remote(broker.transact(PROCESS_PID, request));
-  binderTransport.alive = (pid) => broker.alive(pid);
-  binderTransport.watch = (pid, died) => broker.watch(pid, died);
+  binderTransport.alive = (pid) => pid === 0 || broker.alive(pid);
+  binderTransport.watch = (pid, died) => pid === 0 ? () => {} : broker.watch(pid, died);
+  pendingTransport.create = (pkg, kind, code, flags, intent) => {
+    try { return broker.createPending(PROCESS_PID, pkg, kind, code, flags, intent); } catch (error) { return remoteError(error); }
+  };
+  pendingTransport.cancel = id => {
+    try { broker.cancelPending(PROCESS_PID, id); } catch (error) { remoteError(error); }
+  };
+  pendingTransport.send = (id, fill) => remote(broker.intents.send(id, fill));
+  alarmTransport.schedule = (id, type, at, interval) => broker.alarms.schedule(id, type, at, interval);
+  alarmTransport.cancel = id => broker.alarms.cancel(id);
   serviceTransport.bind = async (owner, process, intent, key) => importBinder(await remote(broker.service(owner.pkg, process, { kind: "bind", intent: await encodeIntent(intent), key })));
   serviceTransport.unbind = async (owner, process, key) => { await remote(broker.service(owner.pkg, process, { kind: "unbind", key })); };
   serviceTransport.start = async (owner, process, intent, foreground) => { await remote(broker.service(owner.pkg, process, { kind: "start", intent: await encodeIntent(intent), foreground })); };
@@ -338,6 +362,7 @@ export function connectProcess(): ProcessEndpoint {
     },
     service: async (request) => {
       if (request.kind === "unbind") { await unbindLocalService(request.key); return null; }
+      if (request.kind === "pending") { await executePendingIntent(request.operation, request.fill, request.alarmCount); return null; }
       const context = appHost?.application;
       if (!context) throw new Error("Process has no application");
       const intent = await decodeIntent(request.intent);

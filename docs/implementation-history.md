@@ -3169,3 +3169,19 @@ The audit also identified Looper.loop's undeclared suspension; the following com
 both delegates without adding Promise wrappers. Only event labels/timings were retained in
 /tmp/webdroid-mcs-idle-check.{json,log}; no message bodies or credentials were recorded.
 This verifies one idle heartbeat interval, not process-death recovery or indefinite uptime.
+
+### PendingIntent ownership across process death
+
+PendingIntent records and alarm timers now belong to the browser broker. Records contain
+serialized intent values and creator identity; delivery decodes them in the creator's
+process, restarting that process when needed. Parcel handles refer to the system owner,
+so creator death does not invalidate them. Cancellation requires the creator UID; stale
+operations cannot execute under a replacement package UID. Intent fill-in follows fixed
+field and extras precedence, and immutable operations ignore the supplied fill.
+
+Typecheck and 13 focused tests passed (82 assertions). A real-browser fixture created an
+alarm through Android delegates in a secondary SDK-client process, destroyed its iframe,
+and observed a new process deliver exactly one broadcast with ALARM_COUNT=1. The root
+reported no missing APIs. Evidence: /tmp/webdroid-system-intents-browser.{json,log}.
+System Binder descriptor queries work; unsupported raw IIntentSender transactions remain
+unhandled. This fixture establishes process restart and delivery, not MCS reconnection.

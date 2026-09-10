@@ -136,3 +136,52 @@ test("an activity launched by a background service restores the previous foregro
     expect(broker.back(35000)).toBe(false);
   } finally { for (const [i, pkg] of names.entries()) { broker.fail(35000 + i, "fixture complete"); packages.delete(pkg); } }
 });
+
+test("system PendingIntents and alarms survive creator death and retain creator identity", async () => {
+  const broker = new ProcessBroker(), names = ["test.pending.creator", "test.pending.holder"];
+  for (const [i, pkg] of names.entries()) {
+    const root: XmlNode = { name: "manifest", attrs: [{ name: "package", ns: "", resId: 0, type: TV.STRING, data: 0, str: pkg }], children: [] };
+    packages.set(pkg, new PackageRecord(root, new Resources(null, {}), "/" + pkg, 26000 + i, async () => []));
+    broker.connect(pkg, pkg, 36000 + i);
+  }
+  const data = { bytes: new Uint8Array(), objects: [] }, delivered = Promise.withResolvers<void>();
+  const intent = { action: "test.PENDING", component: null, componentPkg: null, dataUri: null, typeStr: null, pkg: null, flags: 0, categories: [], extras: data };
+  const endpoint: ProcessEndpoint = {
+    activity: async () => {}, provider: async () => { throw new Error("unused"); },
+    transact: async () => ({ handled: 0, data }), broadcast: async (_i, _c, _o, result) => result,
+    service: async request => {
+      if (request.kind !== "pending") throw new Error("unexpected service request");
+      expect(request.operation.uid).toBe(26000);
+      expect(request.operation.pkg).toBe(names[0]);
+      expect(request.operation.intent.action).toBe("test.PENDING");
+      expect(request.alarmCount).toBe(1);
+      delivered.resolve(); return null;
+    },
+  };
+  let restarted = 0;
+  try {
+    broker.ready(36000, endpoint); broker.ready(36001, endpoint);
+    expect(() => broker.createPending(36001, names[0], "broadcast", 1, 0, intent)).toThrow();
+    const id = broker.createPending(36000, names[0], "broadcast", 1, 0, intent)!;
+    expect(() => broker.cancelPending(36001, id)).toThrow();
+    intent.action = "changed after creation";
+    broker.alarms.schedule(id, 1, Date.now(), 0);
+    broker.fail(36000, "creator stopped");
+    const descriptor = await broker.transact(36001, { handle: { pid: 0, id }, code: 0x5f4e5446, flags: 0, data });
+    expect(descriptor.handled).toBe(1);
+    expect(await broker.transact(36001, { handle: { pid: 0, id }, code: 42, flags: 0, data })).toEqual({ handled: 0, data });
+    const replacement = broker.connect(names[0], names[0], 36002); restarted = replacement.pid;
+    expect(restarted).not.toBe(36000);
+    broker.ready(restarted, endpoint);
+    await delivered.promise;
+    broker.cancelPending(restarted, id);
+    expect(await broker.intents.send(id)).toBe(false);
+    const stale = broker.createPending(restarted, names[0], "broadcast", 2, 0, intent)!;
+    packages.delete(names[0]);
+    await expect(broker.intents.send(stale)).rejects.toBeTruthy();
+    broker.intents.cancel(stale);
+  } finally {
+    for (const pid of [36000, 36001, restarted]) if (pid) broker.fail(pid, "fixture complete");
+    for (const pkg of names) packages.delete(pkg);
+  }
+});
