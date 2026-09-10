@@ -3077,3 +3077,22 @@ WebViewClient before loading the next proxied document, retaining the package co
 The unchanged microG flow now reaches the Google password screen in webdroid, matching
 emulator-5580. This is not yet authenticated-account evidence. Typecheck and the browser
 cookie/bridge fixture pass; screenshot: /tmp/webdroid-gms-completion-signin-next.png.
+
+### Android 13 location Parcel evidence
+
+The completion worktree's full pre-location suite passed 970 tests with 46,978 assertions.
+Google accepted the authorized test password in microG's unchanged login WebView and
+reached its interactive second-factor challenge; account authentication remains incomplete.
+
+An `app_process` Java probe on the separate `emulator-5580` reference generated required-only
+and full `Location.writeToParcel` payloads. API 33 writes the provider as String8, a presence
+mask, wall/elapsed timestamps, optional elapsed uncertainty, coordinates, optional measurements,
+and extras. The old Location delegate wrote nothing. The new reader/writer matches both
+reference payloads byte for byte; copies detach optional fields and Bundle maps.
+
+String8 was incorrectly an alias for UTF-16. A reference probe with null, empty, ASCII,
+accented/supplementary text, embedded NUL and an unpaired surrogate established ART's
+encoding: NUL uses C0 80, paired supplementary characters use four bytes, unpaired surrogates
+use three. The regression fixture checks reference bytes, padding and the next integer.
+Reference probe source and output are under `/tmp/webdroid-location-oracle/`; wire fixtures
+are retained in `src/android/parcel.test.ts` and `src/android/location.test.ts`.
