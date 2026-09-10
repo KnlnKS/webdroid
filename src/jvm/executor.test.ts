@@ -14,6 +14,19 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
 const submit = (executor: unknown, body: () => unknown) => vcall(executor, "submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;", task(body));
 const get = (future: unknown) => vcall(future, "get", "()Ljava/lang/Object;");
 
+test("unconfigurable scheduled executors retain scheduling and shutdown semantics", async () => {
+  const delegate = mkExecutor(), unit = new (rt.link("java/util/concurrent/TimeUnit").ctor)();
+  const wrapper = await vcall(rt.link("java/util/concurrent/Executors").ctor, "unconfigurableScheduledExecutorService", "(Ljava/util/concurrent/ScheduledExecutorService;)Ljava/util/concurrent/ScheduledExecutorService;", delegate);
+  expect(wrapper).not.toBe(delegate);
+  expect(rt.iof(wrapper, "java/util/concurrent/ScheduledExecutorService")).toBe(1);
+  expect(rt.iof(wrapper, "java/util/concurrent/ThreadPoolExecutor")).toBe(0);
+  const result = await vcall(wrapper, "schedule", "(Ljava/util/concurrent/Callable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;", task(() => "scheduled"), 1n, unit);
+  expect(await get(result)).toBe("scheduled");
+  await vcall(wrapper, "shutdown", "()V");
+  expect(await vcall(delegate, "isShutdown", "()Z")).toBe(1);
+  await expect(submit(wrapper, () => null)).rejects.toMatchObject({ msg: "executor shut down" });
+});
+
 test("single executor serializes suspended work on one reusable worker", async () => {
   const executor = mkExecutor(), starts: JThread[] = [];
   let release!: () => void;

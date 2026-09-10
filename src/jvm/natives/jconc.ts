@@ -402,6 +402,15 @@ rt.register({
   methods: executorMethods,
 });
 class JExecutors extends JObj {}
+class JDelegatedExecutor extends JObj { delegate: unknown = null; }
+const delegated: NativeSpec["methods"] = {};
+for (const signature of Object.keys(executorMethods)) {
+  const at = signature.indexOf("("), name = signature.slice(0, at), desc = signature.slice(at);
+  if (name === "<init>") continue;
+  delegated[signature] = async function (this: JDelegatedExecutor, ...args: unknown[]) { return vcall(this.delegate, name, desc, ...args); };
+}
+rt.register({ name: "webdroid/DelegatedScheduledExecutor", ctor: JDelegatedExecutor,
+  ifaces: ["java/util/concurrent/ScheduledExecutorService", "java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"], methods: delegated });
 export function mkExecutor(count = 1, factory: unknown = null): JExecutor {
   if (count <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "nonpositive pool size");
   const ex: JExecutor = new (rt.link("webdroid/Executor").ctor)();
@@ -459,6 +468,11 @@ rt.register({
     "static newSingleThreadScheduledExecutor()Ljava/util/concurrent/ScheduledExecutorService;": mkExecutor,
     "static newSingleThreadScheduledExecutor(Ljava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ScheduledExecutorService;": (factory: unknown) => mkExecutor(1, factory),
     "static unconfigurableExecutorService(Ljava/util/concurrent/ExecutorService;)Ljava/util/concurrent/ExecutorService;": (e: unknown) => e,
+    "static unconfigurableScheduledExecutorService(Ljava/util/concurrent/ScheduledExecutorService;)Ljava/util/concurrent/ScheduledExecutorService;": (executor: unknown) => {
+      if (executor == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      rt.link("webdroid/DelegatedScheduledExecutor");
+      const wrapper = new JDelegatedExecutor(); wrapper.delegate = executor; return wrapper;
+    },
   },
 });
 
