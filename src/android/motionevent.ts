@@ -40,6 +40,12 @@ function obtainFullEvent(dt: bigint, et: bigint, action: number, x: number, y: n
   metaState: number, xPrecision: number, yPrecision: number, deviceId: number, edgeFlags: number, source = 2, flags = 0): JMotionEvent {
   return Object.assign(obtainEvent(dt, et, action, x, y, metaState), { pressure, size, xPrecision, yPrecision, deviceId, edgeFlags, source, flags });
 }
+const axisNames = [
+  ..."X Y PRESSURE SIZE TOUCH_MAJOR TOUCH_MINOR TOOL_MAJOR TOOL_MINOR ORIENTATION VSCROLL HSCROLL Z RX RY RZ HAT_X HAT_Y LTRIGGER RTRIGGER THROTTLE RUDDER WHEEL GAS BRAKE DISTANCE TILT SCROLL RELATIVE_X RELATIVE_Y".split(" "),
+  undefined, undefined, undefined,
+  ...Array.from({ length: 16 }, (_, i) => `GENERIC_${i + 1}`),
+  ..."GESTURE_X_OFFSET GESTURE_Y_OFFSET GESTURE_SCROLL_X_DISTANCE GESTURE_SCROLL_Y_DISTANCE GESTURE_PINCH_SCALE_FACTOR GESTURE_SWIPE_FINGER_COUNT".split(" "),
+];
 rt.register({
   name: "android/view/MotionEvent", ctor: JMotionEvent, sup: "android/view/InputEvent", ifaces: ["android/os/Parcelable"],
   statics: {
@@ -48,6 +54,16 @@ rt.register({
     INVALID_POINTER_ID: -1,
   },
   methods: {
+    "static axisFromString(Ljava/lang/String;)I": (name: string) => {
+      if (name == null) return rt.npe();
+      if (name.startsWith("AXIS_")) {
+        name = name.slice(5);
+        const axis = axisNames.indexOf(name);
+        if (axis >= 0) return axis;
+      }
+      const value = Number(name);
+      return /^[+-]?\d+$/.test(name) && value >= -2147483648 && value <= 2147483647 ? value : -1;
+    },
     "getAxisValue(I)F": axisValue,
     "getAxisValue(II)F": axisValue,
     "getFlags()I": function (this: JMotionEvent) { return this.flags; },
