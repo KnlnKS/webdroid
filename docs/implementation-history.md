@@ -2181,3 +2181,60 @@ cover escaped strings containing compiler tokens and `await `, exponent numbers,
 negative zero, and distinct field/method constant pools. `smoke --cold` lowers every method
 through the shared handlers without running app code; ordinary smoke still checks every
 specialized body. `coldCalls`, `coldHandlers` and `hotMethods` expose the execution split.
+
+## Reddit: text, collections, and navigation after login
+
+A fresh stock-V8 Playwright Chromium run renders the profile, settings, and account settings.
+Search renders its trending topics, typed suggestions, and community results. Community headers
+render, but their post list remains under investigation; these observations do not establish
+complete subreddit, Inbox, or video behavior. The opt-in `tests/e2e/reddit.ts` diagnostic keeps
+credentials in environment variables, avoids credential screenshots, and records rendered text
+and per-step telemetry. It is separate from the golden flows. Final regression captures remain
+pending while these investigations continue.
+
+Two collection failures were platform bugs. Glide's obfuscated cache-eviction loop (`gwe.f`)
+creates an entry iterator, removes its first entry, then schedules that resource for recycling.
+The map view iterator removed only its snapshot, leaving the backing entry available to every
+new iterator. Tests reproduced repeated eviction of the same resource; removal now unlinks the
+owning fast or custom-equality entry. A fresh session completed 49 feed swipes without the
+previous recycled-resource errors. Separately, search drawing called `Collections.sort` on a
+Compose-owned List. Accessing native `l.a` threw on its different storage. Collections now
+invokes overridable `List.sort`; the default implementation obtains `toArray` and writes through
+`set`. A test covers custom storage and an overridden sorting method.
+
+The deep-link parser's binary index was corrupted by `String.getBytes(Charset)` always encoding
+UTF-8. Latin-1 must preserve byte values 0x80–0xff, including the C1 control range that web
+TextDecoder's Latin-1 alias maps differently. Shared standard-charset conversion now handles
+that distinction, ASCII replacement, UTF-16 byte order and BOMs, and the byte String constructor
+overloads. The deprecated high-byte constructor combines each unsigned byte with its high byte.
+A real deep-link index parses after the correction. Manifest activity resolution now handles
+implicit action/category/data queries and launch, using separate scheme/host/path declarations
+as Android does, with enabled/package/default filters and priority. Unsupported advanced path
+filters fail closed. Unknown activities raise ActivityNotFoundException.
+
+Other reached fixes include Java Number formatting via its numeric virtual method, Character
+Unicode directionality, paired-framework Patterns expressions, Java regex character-class
+unions/intersections, RectEvaluator, SweepGradient, normal BlurMaskFilter shape rendering,
+PointerIcon values, FrameLayout's covariant default layout-parameter entry, TextUtils capitalization
+and bounded searches, locale display language, permission metadata, immutable SpannedString
+snapshots, and reflective IOException constructor discovery. Blur modes beyond NORMAL remain
+unsupported; text/bitmap mask filtering is not established by the shape test. ActivityOptions
+uses Android's default animation when the source window has not enabled activity transitions;
+shared-element animation with that feature enabled remains explicitly unsupported.
+
+Diagnostic pitfalls: enabling suspension stack tracing (`wd.suspends.on`) made Error.stack
+capture dominate CPU and turned a working post into an apparent multi-minute stall. Turning it
+off recovered the content and comments. The old scratch driver's space-split RD_FLAGS passed
+`--no-maglev` as a Chromium flag instead of part of V8's `--js-flags`; its label was not proof
+both tiers were disabled. Use the test driver's single WEBDROID_JS_FLAGS argument for that
+experiment. `wd.tap` is asynchronous through DOWN and UP; awaiting an unrelated settle between
+them can observe the previous screen. Await the complete tap when diagnosing input. Rendered
+text observation avoids stale white-pixel matches but does not account for all clipping and
+occlusion, so screenshots still establish what is visible.
+
+A warm text-post reopening with suspension tracing off reached the detail-only rendered marker
+and visible content after 3.528 seconds and settled after 12.106 seconds. That run used the old
+scratch browser with Sparkplug disabled, before shared cold execution. It is a valid reached
+transition, but is not a controlled speed comparison against the earlier 9.5-second measurement:
+network content, warmed classes, and browser flags differ. No reply or post was submitted during
+composer testing; a typed draft was discarded through the app's discard prompt.
