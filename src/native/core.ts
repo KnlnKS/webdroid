@@ -65,6 +65,7 @@ export interface Core {
   jit_evict(): void;
   jit_stat(i: number): number;
   exec_word32(cpu: number, pc: number): number;
+  fb_count(i: number): number;
 }
 /** the libc calls the core serves itself, by the id libc.zig gives them */
 export const CORE_LIBC: Record<string, number> = { memcpy: 1, memmove: 2, memset: 3, memcmp: 4, memchr: 5, strlen: 6, strnlen: 7, strcmp: 8, strncmp: 9, malloc: 10, free: 11, calloc: 12, realloc: 13, memalign: 14, posix_memalign: 15, malloc_usable_size: 16 };
@@ -104,7 +105,17 @@ let syncCompile: boolean | null = null;
 const instances: { inst: WebAssembly.Instance; slots: number[] }[] = [];
 /** entries of a block before the JIT takes it (jit.zig) */
 export const JIT_HEAT = 48;
-export const jitStats = { get regions(): number { return core.jit_stat(0); }, get batches(): number { return core.jit_stat(1); }, get skipped(): number { return core.jit_stat(2); }, get bytes(): number { return core.jit_stat(3); }, get modules(): number { return instances.length; }, evictions: 0, async: 0, on: true };
+/** a64.zig's Kind, in order, for the fallback histogram */
+const KINDS = "raw fault nop adr addsub logic movw bfm extr b bcond cbz tbz br svc clrex mrs msr ldrlit ldp excl atomic ldst adc ccmp csel one two three simd vldrlit vmem".split(" ");
+export const jitStats = {
+  get regions(): number { return core.jit_stat(0); }, get batches(): number { return core.jit_stat(1); }, get skipped(): number { return core.jit_stat(2); }, get bytes(): number { return core.jit_stat(3); }, get modules(): number { return instances.length; }, evictions: 0, async: 0, on: true,
+  /** what regions handed to the interpreter, most often first: an op kind, or `simd:<top byte>` of the word */
+  fallbacks(n = 20): string[] {
+    const rows: [string, number][] = [];
+    for (let i = 0; i < 512; i++) { const k = core.fb_count(i); if (k) rows.push([i === 255 ? "arm32" : i < 256 ? KINDS[i] ?? `kind${i}` : `simd:${(i - 256).toString(16).padStart(2, "0")}`, k]); }
+    return rows.sort((a, b) => b[1] - a[1]).slice(0, n).map(([nm, k]) => `${k} ${nm}`);
+  },
+};
 /** the table is full: the oldest half of the batches go, and a region still hot re-heats and comes back */
 export function jitEvict(): void {
   for (const { slots } of instances.splice(0, Math.ceil(instances.length / 2))) for (const s of slots) { table.set(s, null); core.jit_kill(s); freeSlots.push(s); }

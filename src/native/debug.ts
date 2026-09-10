@@ -1,6 +1,6 @@
 // wd.native: modules, symbolize, traces, threads, unresolved/jniMissing, peek/poke.
 import { modules, symbolizePc, backtrace } from "./dl";
-import { hostTrace, calledMissing, unresolved, probed } from "./host";
+import { hostTrace, calledMissing, unresolved, probed, hostCounts, slotName } from "./host";
 import { killLog } from "./proc";
 import { futexStats } from "./pthread";
 import { jniMissing, jniTrace, registered } from "./jni";
@@ -34,6 +34,8 @@ export const native = {
   })),
   calledMissing, unresolved, probed, jniMissing, registered, exited: hasProcessExited, sigHandlers: () => [...sigHandlers].map(([s, h]) => [s, symbolizePc(h.fn)]), yieldStats, killLog, futexStats: () => Object.fromEntries(futexStats),
   blocks: codeStats, jit: jitStats,
+  /** the host calls made, most often first */
+  hostCalls: (n = 20) => [...hostCounts].map((k, i) => [k, i]).filter(([k]) => k).sort((a, b) => b[0] - a[0]).slice(0, n).map(([k, i]) => `${k} ${slotName(i)}`),
   /** profileReset(n) also sets the slice budget: a smaller one samples the hot pcs more finely */
   profileReset: (instr = slice.instr) => { slice.instr = instr; profile.samples.clear(); },
   /** top pcs at slice boundaries, symbolised (share of all samples) */
@@ -69,21 +71,24 @@ async function bench(): Promise<string> {
   const { src, dst } = benchBufs;
   const A32 = [0xe7d1c003, 0xe2422001, 0xe7c0c003, 0xe2833001, 0xe3520000, 0x1afffffa, 0xe12fff1e];
   const A64 = [0x3863682c, 0xd1000442, 0x3823680c, 0x91000463, 0xb5ffff82, 0xd65f03c0];
+  // the transfer cost: `mov x4, x30; loop: blr x3; subs x2, x2, #1; b.ne loop; ret x4` calling `f: add x0, x0, #1; ret`
+  const CALL = [0xaa1e03e4, 0xd63f0060, 0xf1000442, 0x54ffffc1, 0xd65f0080, 0x91000400, 0xd65f03c0];
   const was = isA64();
-  const one = async (words: number[], a64: boolean) => {
+  const one = async (words: number[], a64: boolean, slot: number, args: (code: number) => number[]) => {
     setA64(a64);
-    const code = (benchBufs!.code[a64 ? 1 : 0] ??= mem.memalign(0x1000, 0x1000));
+    const code = (benchBufs!.code[slot] ??= mem.memalign(0x1000, 0x1000));
     for (let i = 0; i < words.length; i++) mem.u32[(code >>> 2) + i] = words[i];
     const c = new Cpu(mainThread, "bench");
     // twice: the first pass compiles the region, the second is the steady state
-    await c.call(code, [dst, src, N, 0]);
+    await c.call(code, args(code));
     const t0 = performance.now(), ic0 = c.ic;
-    await c.call(code, [dst, src, N, 0]);
+    await c.call(code, args(code));
     const ms = performance.now() - t0;
     return `${((c.ic - ic0) / ms / 1000).toFixed(0)}M instr/s (${c.ic - ic0} in ${ms.toFixed(0)}ms)`;
   };
-  const arm = await one(A32, false), a64 = await one(A64, true);
+  const copy = () => [dst, src, N, 0];
+  const arm = await one(A32, false, 0, copy), a64 = await one(A64, true, 1, copy), call = await one(CALL, true, 2, (code) => [0, 0, N, code + 20]);
   setA64(was);
-  return `arm: ${arm} · a64: ${a64}`;
+  return `arm: ${arm} · a64: ${a64} · a64 call: ${call}`;
 }
 (native as unknown as { bench: () => Promise<string> }).bench = bench;

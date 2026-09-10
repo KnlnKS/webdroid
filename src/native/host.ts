@@ -139,6 +139,8 @@ export function defineHost(name: string, fn: HostFn): number {
   return trampAddr(slot);
 }
 export function slotName(slot: number): string { return names[slot] ?? `slot${slot}`; }
+/** calls per trampoline slot (wd.native.hostCalls) */
+export const hostCounts = new Uint32Array((TRAMP_END - TRAMP_BASE) >>> 3);
 const STR0 = new Set(["fopen", "open", "access", "stat", "lstat", "mkdir", "opendir", "getenv", "unlink", "rename", "remove", "rmdir", "dlopen", "strlen", "strcmp", "strncmp", "strcpy", "strncpy", "strstr", "strchr", "atoi", "strtol", "strdup", "sprintf", "snprintf", "puts", "printf"]);
 export const hostTrace = { on: false, ring: [] as string[], max: 256, filter: null as RegExp | null };
 
@@ -147,6 +149,7 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
   const fn = fns[slot];
   if (!fn) cpu.fault(`call to undefined trampoline slot ${slot}`);
   perf.nativeHostCalls++;
+  hostCounts[slot]++;
   const a = cpu.args;
   a.reset(cpu);
   let traced = false;

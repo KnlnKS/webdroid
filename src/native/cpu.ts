@@ -6,7 +6,7 @@ import { JThread, setCurThread } from "../jvm/natives/jlang";
 import { NativeFault, mem } from "./mem";
 import { core, jitDrain } from "./core";
 import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs } from "./host";
-import { RET_SENTINEL, TRAMP_BASE, STACK_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
+import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
 export { NativeFault };
 
@@ -435,7 +435,7 @@ export class Cpu {
   /** the tracing variant's record: pc + the registers the last instruction changed, into stepMode.ring */
   private step(): void {
     const a64 = this.a64, names = a64 ? XN : RN, nregs = a64 ? 32 : 15, at = this.bpc, w = this.w;
-    if (at >= TRAMP_BASE) return;
+    if (at >= TRAMP_BASE && at < TRAMP_END) return;
     let d = "";
     for (let i = 0; i < nregs; i++) {
       if (w[2 * i] !== stepPrev[2 * i] || (a64 && w[2 * i + 1] !== stepPrev[2 * i + 1])) d += ` ${names[i]}=${a64 && w[2 * i + 1] ? (w[2 * i + 1] >>> 0).toString(16) + (w[2 * i] >>> 0).toString(16).padStart(8, "0") : (w[2 * i] >>> 0).toString(16)}`;

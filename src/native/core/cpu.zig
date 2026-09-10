@@ -179,6 +179,12 @@ export fn jit_evict() void {
 }
 
 // ── the JIT's helpers, imported by every region module
+/// what regions hand to the interpreter: by op kind, and by the word's top byte for the SIMD&FP
+/// space (256 + byte); ARM32 words count under 255
+var fb_hist: [512]u32 = [_]u32{0} ** 512;
+export fn fb_count(i: u32) u32 {
+    return fb_hist[i & 511];
+}
 /// the interpreter runs one word for a region: 0 next, 1 jump (pc set), 2 fault, 3 syscall
 export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
@@ -189,6 +195,10 @@ export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
         o.* = a64.decode(w, pc);
         page.cov[i >> 3] |= @as(u8, 1) << @intCast(i & 7);
     }
+    fb_hist[switch (o.kind) {
+        .simd, .vmem, .vldrlit => 256 + (w >> 24),
+        else => @intFromEnum(o.kind),
+    }] += 1;
     c.bpc = pc;
     switch (a64.exec(c, o, pc)) {
         .next => return 0,
@@ -203,6 +213,7 @@ export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
 /// the ARM32 interpreter runs one instruction for a region: the same statuses as exec_word
 export fn exec_word32(cp: u32, pc: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
+    fb_hist[255] += 1;
     c.bpc = pc;
     // the ARM interpreter reports a taken branch through pc alone
     const len: u32 = if (c.cpsr & (1 << 5) != 0 and (mem.ptr(u16, pc).* & 0xf800) != 0xf000) 2 else 4;
