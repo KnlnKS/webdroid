@@ -2,8 +2,21 @@ import { expect, test } from "bun:test";
 import "../natives";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { dispatchAttached, JView, JViewGroup, requestLayout, uiState } from "./view";
-import { mangleMethod } from "../jvm/abi";
+import { mangleMethod, mangleStaticField } from "../jvm/abi";
 import { onMain } from "./mainloop";
+import { rt } from "../jvm/runtime";
+
+test("inherited View state arrays construct selected and default tab colors", async () => {
+  const ctor = rt.link("android/widget/HorizontalScrollView").ctor;
+  const selected = ctor[mangleStaticField("SELECTED_STATE_SET")];
+  const empty = ctor[mangleStaticField("EMPTY_STATE_SET")];
+  expect(selected).toEqual(Int32Array.of(0x10100a1));
+  expect(empty).toEqual(new Int32Array(0));
+  const colors = await newObj("android/content/res/ColorStateList", "([[I[I)V",
+    [selected, empty], Int32Array.of(0xff0000ff, 0xff000000));
+  expect(await vcall(colors, "getColorForState", "([II)I", selected, 0)).toBe(-16776961);
+  expect(await vcall(colors, "getColorForState", "([II)I", empty, 0)).toBe(-16777216);
+});
 
 test("requestLayout propagates a locally forced view to its clean ancestors", async () => {
   const root = new JView(), parent = new JView();
