@@ -3,6 +3,7 @@
 import { rt, JObj } from "../jvm/runtime";
 import { JBuffer, bufferView } from "../jvm/natives/jnio";
 import { JBitmap } from "./graphics";
+import { gles1String } from "../native/gles1";
 
 // ── The active GL context (one GLSurfaceView at a time is typical)
 type GL = WebGL2RenderingContext | WebGLRenderingContext;
@@ -58,6 +59,9 @@ function getActive(query: (p: WebGLProgram, i: number) => WebGLActiveInfo | null
   };
 }
 
+rt.register({ name: "android/opengl/GLES10", ctor: class extends JObj {}, methods: {
+  "static glGetString(I)Ljava/lang/String;": (name: number) => gl ? gles1String(gl, name) : null,
+} });
 rt.register({
   name: "android/opengl/GLES20", ctor: class extends JObj {},
   statics: {

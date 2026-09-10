@@ -11,6 +11,15 @@ import { gl } from "../android/gl";
 import { perf } from "../perf";
 
 type GL = WebGL2RenderingContext | WebGLRenderingContext;
+export function gles1String(context: GL, name: number): string | null {
+  switch (name) {
+    case 0x1f00: return "webdroid";
+    case 0x1f01: return String(context.getParameter(context.RENDERER) ?? "WebGL");
+    case 0x1f02: return "OpenGL ES-CM 1.1";
+    case 0x1f03: return EXTENSIONS;
+    default: return null;
+  }
+}
 
 /** getError probe after every GL entry point (perf.glErrors counts) */
 export const glProbe = { on: false, capture: 0 };
@@ -510,14 +519,9 @@ export function gles1Init(): void {
     glPointParameterf: W("glPointParameterf", () => {}), glPointParameterx: W("glPointParameterx", () => {}), glPointParameterfv: W("glPointParameterfv", () => {}), glPointParameterxv: W("glPointParameterxv", () => {}),
     glGetError: W("glGetError", (c) => { const e = c.err || c.gl.getError(); c.err = 0; return e; }),
     glGetString: W("glGetString", (c, a) => {
-      const n = a.i();
-      switch (n) {
-        case 0x1f00: return cstr("webdroid");
-        case 0x1f01: return cstr(String(c.gl.getParameter(c.gl.RENDERER) ?? "WebGL"));
-        case 0x1f02: return cstr("OpenGL ES-CM 1.1");
-        case 0x1f03: return cstr(EXTENSIONS);
-        default: c.err = 0x500; return 0;
-      }
+      const value = gles1String(c.gl, a.i());
+      if (value === null) { c.err = 0x500; return 0; }
+      return cstr(value);
     }),
     glGetIntegerv: getInto("i"), glGetFloatv: getInto("f"), glGetFixedv: getInto("x"), glGetBooleanv: getInto("b"),
     glGetPointerv: W("glGetPointerv", (c, a) => { const pn = a.i(), out = a.p(); const s = pn === 0x808e ? c.vert : pn === 0x8090 ? c.col : pn === 0x8092 ? c.tex[c.clientUnit] : c.norm; mem.st32(out, s.ptr); }),
