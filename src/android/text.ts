@@ -9,6 +9,31 @@ import { formatDate } from "../jvm/natives/jtext";
 import { toJsArray } from "../jvm/natives/jutil";
 import { localeDirection } from "../jvm/natives/jvalues";
 
+class JAnnotation extends JObj { key: string | null = null; value: string | null = null; }
+async function writeAnnotation(this: JAnnotation, parcel: JObj) {
+  const thread = rt.th();
+  await vcall(parcel, "writeString", "(Ljava/lang/String;)V", this.key); rt.st(thread);
+  await vcall(parcel, "writeString", "(Ljava/lang/String;)V", this.value);
+}
+rt.register({
+  name: "android/text/Annotation", ctor: JAnnotation, ifaces: ["android/text/ParcelableSpan"],
+  methods: {
+    "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JAnnotation, key: string | null, value: string | null) { this.key = key; this.value = value; },
+    "<init>(Landroid/os/Parcel;)V": async function (this: JAnnotation, parcel: JObj) {
+      const thread = rt.th();
+      this.key = await vcall(parcel, "readString", "()Ljava/lang/String;"); rt.st(thread);
+      this.value = await vcall(parcel, "readString", "()Ljava/lang/String;");
+    },
+    "getKey()Ljava/lang/String;": function (this: JAnnotation) { return this.key; },
+    "getValue()Ljava/lang/String;": function (this: JAnnotation) { return this.value; },
+    "getSpanTypeId()I": () => 18,
+    "getSpanTypeIdInternal()I": () => 18,
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": writeAnnotation,
+    "writeToParcelInternal(Landroid/os/Parcel;I)V": writeAnnotation,
+  },
+});
+
 export class JTextPaint extends JPaint {
   linkColor = -16776961;
   /** AOSP's StaticLayout reads these off the paint directly, so they are real fields rather

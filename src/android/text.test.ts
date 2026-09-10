@@ -92,3 +92,14 @@ test("CharSequence search overloads preserve start and end boundaries", async ()
   expect(await cls[mangleMethod("indexOf", "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;I)I")](text, needle, 1)).toBe(4);
   expect(await cls[mangleMethod("indexOf", "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;II)I")](text, needle, 1, 6)).toBe(-1);
 });
+
+test("Annotation retains nullable metadata and its Parcel representation", async () => {
+  const annotation = await newObj("android/text/Annotation", "(Ljava/lang/String;Ljava/lang/String;)V", "language", null);
+  const parcel = rt.link("android/os/Parcel").ctor[mangleMethod("obtain", "()Landroid/os/Parcel;")]();
+  await vcall(annotation, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
+  await vcall(parcel, "setDataPosition", "(I)V", 0);
+  const copy = await newObj("android/text/Annotation", "(Landroid/os/Parcel;)V", parcel);
+  expect(await vcall(copy, "getKey", "()Ljava/lang/String;")).toBe("language");
+  expect(await vcall(copy, "getValue", "()Ljava/lang/String;")).toBeNull();
+  expect(await vcall(copy, "getSpanTypeId", "()I")).toBe(18);
+});
