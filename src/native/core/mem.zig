@@ -503,7 +503,7 @@ export fn mem_init(size: u32) void {
     for (pageOf(heap_top)..MAX_PAGES) |i| if (pages[i] == IMAGE) {
         pages[i] = FREE;
     };
-    @import("cpu.zig").reset();
+    @import("cpu.zig").reset(size > abi.MEM_SIZE_A32);
     @memset(page_flags[0..pageOf(abi.LOW)], 2);
 }
 export fn flags_ptr() u32 {

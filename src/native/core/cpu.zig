@@ -83,11 +83,22 @@ pub const OPS_PER_PAGE = abi.PAGE_SIZE / 4;
 pub const Page = extern struct {
     cov: [OPS_PER_PAGE / 8]u8,
     epoch: u32,
-    heat: [2 * OPS_PER_PAGE]u16,
+    heat: [2 * OPS_PER_PAGE]u8,
     slot: [2 * OPS_PER_PAGE]u32,
     ops: [OPS_PER_PAGE]a64.Op,
 };
-const PAGE_BLOCK = (@sizeOf(Page) + abi.PAGE_SIZE - 1) & ~@as(u32, abi.PAGE_SIZE - 1);
+pub fn cover(page: *Page, from: u32, to: u32) void {
+    var i = (from & (abi.PAGE_SIZE - 1)) >> 2;
+    const end = (to & (abi.PAGE_SIZE - 1)) >> 2;
+    while (i <= end) : (i = (i | 7) + 1) {
+        const hi: u4 = @intCast(@min(end - (i & ~@as(u32, 7)), 7));
+        page.cov[i >> 3] |= @truncate((@as(u16, 0xff) >> (7 - hi)) & (@as(u16, 0xff) << @as(u4, @intCast(i & 7))));
+    }
+}
+inline fn blockSize(comptime T: type) u32 {
+    return (@sizeOf(T) + abi.PAGE_SIZE - 1) & ~@as(u32, abi.PAGE_SIZE - 1);
+}
+pub var page_block: u32 = blockSize(Page);
 pub const DECODED = abi.KERN_BASE + 0x60_0000;
 const decoded: [*]u32 = @ptrFromInt(DECODED);
 pub var stats = extern struct { pages: u32 = 0, invalidated: u32 = 0 }{};
@@ -104,8 +115,8 @@ fn allocBlock() u32 {
     if (nfree > 0) {
         nfree -= 1;
         p = free_blocks[nfree];
-    } else p = mem.reserve(PAGE_BLOCK, abi.PAGE_SIZE);
-    if (p != 0) @memset(mem.bytes(p)[0..PAGE_BLOCK], 0);
+    } else p = mem.reserve(page_block, abi.PAGE_SIZE);
+    if (p != 0) @memset(mem.bytes(p)[0..page_block], 0);
     return p;
 }
 pub fn pageFor(pc: u32) ?*Page {
@@ -145,7 +156,7 @@ export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
     const o = &page.ops[i];
     if (o.kind == .raw) {
         o.* = a64.decode(w, pc);
-        page.cov[i >> 3] |= @as(u8, 1) << @intCast(i & 7);
+        cover(page, pc, pc);
     }
     c.bpc = pc;
     switch (a64.exec(c, o, pc)) {
@@ -236,9 +247,10 @@ export fn invalidate_all() void {
     var pg: u32 = 0;
     while (pg < (abi.MEM_SIZE_A64 >> abi.PAGE_SHIFT)) : (pg += 1) dropPage(pg);
 }
-pub fn reset() void {
+pub fn reset(is64: bool) void {
     invalidate_all();
     nfree = 0;
+    page_block = if (is64) blockSize(Page) else blockSize(extern struct { cov: [OPS_PER_PAGE / 8]u8, epoch: u32, heat: [2 * OPS_PER_PAGE]u8, slot: [2 * OPS_PER_PAGE]u32 });
 }
 export fn cpu_stat(i: u32) u32 {
     return if (i == 0) stats.pages else stats.invalidated;
@@ -295,7 +307,7 @@ export fn run_slice(cp: u32, budget: u32) u32 {
             const h = page.heat[i] +% 1;
             page.heat[i] = h;
             if (h == jit.HEAT and !jit.request(pc, if (c.a64 != 0) .a64 else if (c.cpsr & (1 << 5) != 0) .thumb else .arm)) page.heat[i] = h - 1;
-            status = if (c.a64 != 0) a64.block(c, pc, page) else arm.block(c, pc);
+            status = if (c.a64 != 0) a64.block(c, pc, page) else arm.block(c, pc, page);
         }
         switch (status) {
             .fault => return @intFromEnum(Exit.fault),

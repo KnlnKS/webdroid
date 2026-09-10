@@ -160,7 +160,7 @@ fn opAt(page: *cpu.Page, pc: u32) *Op {
     const o = &page.ops[i];
     if (o.kind == .raw) {
         o.* = a64.decode(mem.ld(u32, pc), pc);
-        page.cov[i >> 3] |= @as(u8, 1) << @intCast(i & 7);
+        cpu.cover(page, pc, pc);
     }
     return o;
 }
@@ -191,8 +191,8 @@ fn discover(r: *Region, page: *cpu.Page) bool {
         while (true) {
             const s = switch (r.isa) {
                 .a64 => scanA64(r, i, page, pc),
-                .arm => jit32.scanArm(r, i, pc),
-                .thumb => jit32.scanThumb(r, i, pc),
+                .arm => jit32.scanArm(r, i, page, pc),
+                .thumb => jit32.scanThumb(r, i, page, pc),
             };
             n += 1;
             total += 1;

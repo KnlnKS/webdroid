@@ -1,5 +1,6 @@
 const abi = @import("abi.zig");
 const mem = @import("mem.zig");
+const cpu = @import("cpu.zig");
 const jit = @import("jit.zig");
 const wasm = @import("wasm.zig");
 const bt = @import("bits.zig");
@@ -21,7 +22,8 @@ const L_SC = jit.L_SC;
 
 pub const Scan = struct { len: u32, ends: bool };
 
-pub fn scanArm(r: *Region, i: u32, pc: u32) Scan {
+pub fn scanArm(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
+    cpu.cover(page, pc, pc);
     const w = mem.ld(u32, pc);
     const cc = w >> 28;
     const next = pc + 4;
@@ -56,7 +58,8 @@ pub fn scanArm(r: *Region, i: u32, pc: u32) Scan {
     if (ends and cc != 14) b.fall = if (next & (abi.PAGE_SIZE - 1) != 0) jit.blockFor(r, next) else -1;
     return .{ .len = 4, .ends = ends };
 }
-pub fn scanThumb(r: *Region, i: u32, pc: u32) Scan {
+pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
+    cpu.cover(page, pc, pc);
     const h: u32 = mem.ld(u16, pc);
     const b = &r.blocks[i];
     const next = pc + 2;

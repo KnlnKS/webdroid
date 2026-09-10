@@ -903,11 +903,12 @@ fn thumbMisc(c: *Cpu, h: u32, pc: u32, rd: u32, rn: u32) Status {
     return .next;
 }
 
-pub fn block(c: *Cpu, start: u32) Status {
+pub fn block(c: *Cpu, start: u32, page: *cpu.Page) Status {
     const thumb = c.cpsr & (1 << 5) != 0;
     if (start & (if (thumb) @as(u32, 1) else 3) != 0) return fault(c, .misaligned_pc, start, start);
     c.bpc = start | @intFromBool(thumb);
     var pc = start;
+    var last = start;
     var n: u32 = 0;
     var s: Status = .next;
     while (n < cpu.max_block) {
@@ -916,10 +917,12 @@ pub fn block(c: *Cpu, start: u32) Status {
             break;
         }
         n += 1;
+        last = pc;
         s = if (thumb) execThumb(c, pc) else execArm(c, pc);
         if (s != .next) break;
         pc = @truncate(c.pc);
     }
+    cpu.cover(page, start, last);
     c.ic += n;
     return if (s == .next) .jump else s;
 }

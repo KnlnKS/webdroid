@@ -823,7 +823,7 @@ pub fn block(c: *Cpu, start: u32, page: *cpu.Page) Status {
         const o = &page.ops[i];
         if (o.kind == .raw) {
             o.* = decode(ld(u32, pc), pc);
-            page.cov[i >> 3] |= @as(u8, 1) << @intCast(i & 7);
+            cpu.cover(page, pc, pc);
         }
         n += 1;
         s = exec(c, o, pc);
