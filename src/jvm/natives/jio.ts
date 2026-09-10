@@ -214,6 +214,7 @@ export function streamOfSource(source: FileSource): JInputStream {
 const inputStreamMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "read()I": maySuspend(function (this: JInputStream) {
+    checkFileOpen(this);
     if (this.source) {
       return after(this.source.read(this.pos, 1), (bytes) => {
         if (!bytes.length) return -1;
@@ -227,6 +228,7 @@ const inputStreamMethods: NativeSpec["methods"] = {
     return (this as any)[readBII](out, 0, out.length);
   }),
   "read([BII)I": maySuspend(function (this: JInputStream, out: Int8Array, off: number, len: number) {
+    checkFileOpen(this);
     if (len === 0) return 0;
     if (this.source) {
       return after(this.source.read(this.pos, len), (bytes) => {
@@ -306,6 +308,7 @@ rt.register({
     "getChannel()Ljava/nio/channels/FileChannel;": fileChannel,
     "<init>(Ljava/io/File;)V": function (this: JInputStream, f: JFile) { openRead.call(this, f.path); },
     "<init>(Ljava/lang/String;)V": openRead,
+    "close()V": function (this: JInputStream) { closeFile(this); },
   },
 });
 /** a wrapping stream shares the source's bytes and cursor */
@@ -420,29 +423,47 @@ rt.register({
   },
 });
 
+class JFOS extends JOutputStream {
+  fpath = "";
+  append = false;
+  offset = 0;
+  get pos() { return (this.append && this.chunks.length ? vfs.read(this.fpath)?.length ?? 0 : this.offset) + this.chunks.length; }
+  set pos(value: number) { flushFOS(this); this.offset = value; }
+}
+function openWrite(this: JFOS, path: string, append = 0) {
+  this.fpath = vfs.norm(path);
+  this.append = !!append;
+  if (!this.append || !vfs.read(this.fpath)) vfs.write(this.fpath, new Uint8Array(0));
+  this.offset = this.append ? vfs.read(this.fpath)!.length : 0;
+}
 rt.register({
-  name: "java/io/FileOutputStream", ctor: class extends JOutputStream { fpath = ""; append = false; }, sup: "java/io/OutputStream",
+  name: "java/io/FileOutputStream", ctor: JFOS, sup: "java/io/OutputStream",
   methods: {
     "getFD()Ljava/io/FileDescriptor;": () => new JFileDescriptor(),
     "getChannel()Ljava/nio/channels/FileChannel;": fileChannel,
-    "<init>(Ljava/io/File;)V": function (this: any, f: JFile) { this.fpath = f.path; },
-    "<init>(Ljava/io/File;Z)V": function (this: any, f: JFile, app: number) { this.fpath = f.path; this.append = !!app; },
-    "<init>(Ljava/lang/String;)V": function (this: any, p: string) { this.fpath = vfs.norm(p); },
-    "<init>(Ljava/lang/String;Z)V": function (this: any, p: string, app: number) { this.fpath = vfs.norm(p); this.append = !!app; },
-    "flush()V": function (this: any) { flushFOS(this); },
-    "close()V": function (this: any) { flushFOS(this); },
+    "<init>(Ljava/io/File;)V": function (this: JFOS, f: JFile) { openWrite.call(this, f.path); },
+    "<init>(Ljava/io/File;Z)V": function (this: JFOS, f: JFile, app: number) { openWrite.call(this, f.path, app); },
+    "<init>(Ljava/lang/String;)V": openWrite,
+    "<init>(Ljava/lang/String;Z)V": openWrite,
+    "write(I)V": function (this: JFOS, b: number) { checkFileOpen(this); this.chunks.push(b & 0xff); },
+    "write([BII)V": function (this: JFOS, b: Int8Array, off: number, len: number) {
+      checkFileOpen(this);
+      if (off < 0 || len < 0 || len > b.length - off) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      for (let i = 0; i < len; i++) this.chunks.push(b[off + i] & 0xff);
+    },
+    "flush()V": function (this: JFOS) { checkFileOpen(this); flushFOS(this); },
+    "close()V": function (this: JFOS) { if (!closedFiles.has(this)) { flushFOS(this); closeFile(this); } },
   },
 });
-function flushFOS(s: { fpath: string; append: boolean; chunks: number[] }) {
-  const nw = new Uint8Array(s.chunks);
-  if (s.append) {
-    const old = vfs.read(s.fpath) ?? new Uint8Array(0);
-    const merged = new Uint8Array(old.length + nw.length);
-    merged.set(old); merged.set(nw, old.length);
-    vfs.write(s.fpath, merged);
-  } else {
-    vfs.write(s.fpath, nw);
-  }
+function flushFOS(s: JFOS) {
+  if (!s.chunks.length) return;
+  const old = vfs.read(s.fpath) ?? new Uint8Array(0);
+  const start = s.append ? old.length : s.offset;
+  const merged = new Uint8Array(Math.max(old.length, start + s.chunks.length));
+  merged.set(old); merged.set(s.chunks, start);
+  vfs.write(s.fpath, merged);
+  s.offset = start + s.chunks.length;
+  s.chunks.length = 0;
 }
 
 // RandomAccessFile: the whole file in memory with a cursor, written back as it grows. The
@@ -471,9 +492,9 @@ rt.register({
     "<init>(Ljava/lang/String;Ljava/lang/String;)V": rafOpen,
     "<init>(Ljava/io/File;Ljava/lang/String;)V": function (this: JRAF, f: JFile, m: string) { rafOpen.call(this, f.path, m); },
     "getChannel()Ljava/nio/channels/FileChannel;": fileChannel,
-    "length()J": function (this: JRAF) { return BigInt(this.source?.size ?? this.buf.length); },
-    "getFilePointer()J": function (this: JRAF) { return BigInt(this.pos); },
-    "seek(J)V": function (this: JRAF, p: bigint) { this.pos = Number(p); },
+    "length()J": function (this: JRAF) { checkFileOpen(this); return BigInt(this.source?.size ?? this.buf.length); },
+    "getFilePointer()J": function (this: JRAF) { checkFileOpen(this); return BigInt(this.pos); },
+    "seek(J)V": function (this: JRAF, p: bigint) { checkFileOpen(this); this.pos = Number(p); },
     "skipBytes(I)I": function (this: JRAF, n: number) {
       const step = Math.max(0, Math.min(n, (this.source?.size ?? this.buf.length) - this.pos));
       this.pos += step;
@@ -481,6 +502,7 @@ rt.register({
     },
     "getFD()Ljava/io/FileDescriptor;": () => new JFileDescriptor(),
     "read()I": async function (this: JRAF) {
+      checkFileOpen(this);
       if (!this.source) return this.pos < this.buf.length ? this.buf[this.pos++] : -1;
       const bytes = await this.source.read(this.pos, 1);
       if (!bytes.length) return -1;
@@ -496,6 +518,7 @@ rt.register({
       ["readBoolean()Z", 1, (v: DataView) => v.getUint8(0) ? 1 : 0], ["readDouble()D", 8, (v: DataView) => v.getFloat64(0)], ["readFloat()F", 4, (v: DataView) => v.getFloat32(0)]] as const)
       .map(([key, n, get]) => [key, async function (this: JRAF) { const b = new Int8Array(n); await rafReadFully(this, b, 0, n); return get(new DataView(b.buffer)); }])),
     "write(I)V": function (this: JRAF, v: number) {
+      checkFileOpen(this);
       rafGrow(this, this.pos + 1);
       this.buf[this.pos++] = v & 0xff;
       vfs.write(this.path, this.buf);
@@ -511,16 +534,18 @@ rt.register({
     "writeDouble(D)V": function (this: JRAF, v: number) { rafWrite(this, new Int8Array(Float64Array.of(v).buffer).reverse(), 0, 8); },
     "writeFloat(F)V": function (this: JRAF, v: number) { rafWrite(this, new Int8Array(Float32Array.of(v).buffer).reverse(), 0, 4); },
     "setLength(J)V": function (this: JRAF, n: bigint) {
+      checkFileOpen(this);
       const len = Number(n);
       if (len <= this.buf.length) this.buf = this.buf.slice(0, len);
       else rafGrow(this, len);
       if (this.pos > len) this.pos = len;
       vfs.write(this.path, this.buf);
     },
-    "close()V": function (this: JRAF) { if (this.write) vfs.write(this.path, this.buf); },
+    "close()V": function (this: JRAF) { if (!closedFiles.has(this)) { if (this.write) vfs.write(this.path, this.buf); closeFile(this); } },
   },
 });
 function rafRead(f: JRAF, b: Int8Array, off: number, len: number): number | Promise<number> {
+  checkFileOpen(f);
   if (len === 0) return 0;
   if (f.source) {
     const value = f.source.read(f.pos, len);
@@ -547,6 +572,7 @@ async function rafReadFully(f: JRAF, b: Int8Array, off: number, len: number): Pr
   }
 }
 function rafWrite(f: JRAF, b: Int8Array, off: number, len: number) {
+  checkFileOpen(f);
   rafGrow(f, f.pos + len);
   f.buf.set(new Uint8Array(b.buffer, b.byteOffset + off, len), f.pos);
   f.pos += len;
@@ -957,33 +983,51 @@ rt.register({
 // File locks remain advisory; byte mappings retain the opened stream's storage.
 const fileLock = () => new (rt.link("java/nio/channels/FileLock").ctor)();
 class JFileChannel extends JObj {
-  file!: JObj;
+  file!: JInputStream | JRAF | JFOS;
   open = true;
+  opened() {
+    if (!this.open || closedFiles.has(this.file)) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
+    return this.file;
+  }
   readable(): JInputStream | JRAF {
-    if (!this.open) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
+    this.opened();
     if (this.file instanceof JInputStream || this.file instanceof JRAF) return this.file;
     throw rt.mkThrowable("java/nio/channels/NonReadableChannelException", null);
   }
 }
 const fileChannels = new WeakMap<JObj, JFileChannel>();
-function fileChannel(this: JObj): JFileChannel {
+const closedFiles = new WeakSet<JObj>();
+function closeFile(file: JObj) {
+  closedFiles.add(file);
+  const channel = fileChannels.get(file);
+  if (channel) channel.open = false;
+}
+function checkFileOpen(file: JObj) {
+  if (closedFiles.has(file)) throw rt.mkThrowable("java/io/IOException", "Stream closed");
+}
+function fileChannel(this: JInputStream | JRAF | JFOS): JFileChannel {
   let channel = fileChannels.get(this);
   if (!channel) {
     rt.link("java/nio/channels/FileChannel");
-    channel = new JFileChannel(); channel.file = this; fileChannels.set(this, channel);
+    channel = new JFileChannel(); channel.file = this; channel.open = !closedFiles.has(this); fileChannels.set(this, channel);
   }
   return channel;
 }
 rt.register({
   name: "java/nio/channels/FileChannel", ctor: JFileChannel,
   methods: {
-    "close()V": maySuspend(function (this: JFileChannel) { this.open = false; return vcallMaybe(this.file, "close", "()V"); }),
+    "close()V": maySuspend(function (this: JFileChannel) { if (this.open) { this.open = false; return vcallMaybe(this.file, "close", "()V"); } }),
     "isOpen()Z": function (this: JFileChannel) { return +this.open; },
-    "size()J": function (this: JFileChannel) { const file = this.readable(); return BigInt(file.source?.size ?? file.buf.length); },
-    "position()J": function (this: JFileChannel) { return BigInt(this.readable().pos); },
+    "size()J": function (this: JFileChannel) {
+      const file = this.opened();
+      return BigInt(file instanceof JFOS
+        ? Math.max(vfs.read(file.fpath)?.length ?? 0, file.chunks.length ? file.pos : 0)
+        : file.source?.size ?? file.buf.length);
+    },
+    "position()J": function (this: JFileChannel) { return BigInt(this.opened().pos); },
     "position(J)Ljava/nio/channels/FileChannel;": function (this: JFileChannel, position: bigint) {
       if (position < 0n || position > BigInt(Number.MAX_SAFE_INTEGER)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "position");
-      this.readable().pos = Number(position); return this;
+      this.opened().pos = Number(position); return this;
     },
     "map(Ljava/nio/channels/FileChannel$MapMode;JJ)Ljava/nio/MappedByteBuffer;": maySuspend(function (this: JFileChannel, mode: JSimpleEnum | null, position: bigint, size: bigint) {
       const file = this.readable();
