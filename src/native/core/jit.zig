@@ -1,10 +1,4 @@
-// The JIT: a hot A64 region — the blocks reachable from an entry through direct branches
-// inside its page — becomes one wasm function over the decoded ops. Registers live in i64
-// locals, NZCV in four i32 locals, and blocks dispatch through a br_table so loops stay inside
-// the function. What the emitter does not inline calls the interpreter for that one word after
-// spilling, so semantics have one home (a64.zig). The host compiles the batch and links each
-// region into the function table; the page's slot map then routes the dispatcher to it.
-
+const std = @import("std");
 const abi = @import("abi.zig");
 const mem = @import("mem.zig");
 const cpu = @import("cpu.zig");
@@ -13,22 +7,29 @@ const wasm = @import("wasm.zig");
 const jit32 = @import("jit32.zig");
 const jitfp = @import("jitfp.zig");
 const fp = @import("fp.zig");
+const bt = @import("bits.zig");
 const Cpu = cpu.Cpu;
 const Op = a64.Op;
 const Buf = wasm.Buf;
 const O = wasm.Op;
-const ones = @import("bits.zig").ones;
-const bit = @import("bits.zig").bit;
+const W = wasm.W;
+const get = wasm.get;
+const set = wasm.set;
+const tee = wasm.tee;
+const c32 = wasm.c32;
+const c64 = wasm.c64;
+const mo = wasm.mo;
+const call = wasm.call;
+const bit = bt.bit;
 
 pub const HEAT = 48;
 const MAX_BLOCKS = 40;
 const MAX_INSTR = 320;
 const MAX_REGIONS = 64;
 
-// ── locals: the parameters, then a fixed layout every region shares
 pub const L_CPU = 0;
 const L_ENTRY = 1;
-pub const L_X = 2; // x0..x31 (x31 is sp)
+pub const L_X = 2;
 pub const L_N = 34;
 pub const L_Z = 35;
 pub const L_C = 36;
@@ -47,44 +48,34 @@ pub const L_IC = 48;
 pub const L_LIMIT = 49;
 pub const L_F0 = 50;
 pub const L_F1 = 51;
-// imported functions
-const F_EXEC = 0; // exec_word(cpu, word, pc) -> status
-const F_TX = 1; // tx_addr(cpu, addr i64) -> i32 (0: fault)
-const F_STORE = 2; // on_store(cpu, addr) -> i32 (0 ok)
-const F_EXEC32 = 3; // exec_word32(cpu, pc) -> status
-/// FMAX, FMIN, FMAXNM, FMINNM on singles then doubles, and the fused double multiply-add
+const F_EXEC = 0;
+const F_TX = 1;
+const F_STORE = 2;
+const F_EXEC32 = 3;
 pub const F_FMAX32 = 4;
 pub const F_FMAX64 = 8;
 pub const F_FMA64 = 12;
 const N_IMPORTS = 13;
-export fn jit_fmax32(a: f32, b: f32) f32 {
-    return fp.fmax(f32, a, b);
+const FP_NAMES = [_][]const u8{ "fmax", "fmin", "fmaxnm", "fminnm" };
+fn fpThunk(comptime F: type, comptime k: u2) *const fn (F, F) callconv(.c) F {
+    return &struct {
+        fn g(a: F, b: F) callconv(.c) F {
+            return switch (k) {
+                0 => fp.fmax(F, a, b),
+                1 => fp.fmin(F, a, b),
+                2 => fp.fnm(F, a, b, true),
+                else => fp.fnm(F, a, b, false),
+            };
+        }
+    }.g;
 }
-export fn jit_fmin32(a: f32, b: f32) f32 {
-    return fp.fmin(f32, a, b);
-}
-export fn jit_fmaxnm32(a: f32, b: f32) f32 {
-    return fp.fnm(f32, a, b, true);
-}
-export fn jit_fminnm32(a: f32, b: f32) f32 {
-    return fp.fnm(f32, a, b, false);
-}
-export fn jit_fmax64(a: f64, b: f64) f64 {
-    return fp.fmax(f64, a, b);
-}
-export fn jit_fmin64(a: f64, b: f64) f64 {
-    return fp.fmin(f64, a, b);
-}
-export fn jit_fmaxnm64(a: f64, b: f64) f64 {
-    return fp.fnm(f64, a, b, true);
-}
-export fn jit_fminnm64(a: f64, b: f64) f64 {
-    return fp.fnm(f64, a, b, false);
-}
-export fn jit_fma64(a: f64, b: f64, c: f64) f64 {
+fn fma64(a: f64, b: f64, c: f64) callconv(.c) f64 {
     return fp.fma(f64, a, b, c);
 }
-/// a region function's return: a status below this, else the next pc
+comptime {
+    for ([_]type{ f32, f64 }, [_][]const u8{ "32", "64" }) |F, sfx| for (0..4) |k| @export(fpThunk(F, @intCast(k)), .{ .name = "jit_" ++ FP_NAMES[k] ++ sfx });
+    @export(&fma64, .{ .name = "jit_fma64" });
+}
 pub const STATUS_MAX = 16;
 
 const OFF_X = @offsetOf(Cpu, "x");
@@ -94,10 +85,8 @@ const OFF_LIMIT = @offsetOf(Cpu, "ic_limit");
 const OFF_BPC = @offsetOf(Cpu, "bpc");
 const OFF_EXCL = @offsetOf(Cpu, "excl");
 const OFF_TLS = @offsetOf(Cpu, "tls");
-const OFF_V = @offsetOf(Cpu, "v");
 const OFF_SLOT = @offsetOf(cpu.Page, "slot");
 const FLAGS_BASE = abi.KERN_BASE + 0x10_0000;
-/// regions hand off to the next region by tail call (the engine has return_call_indirect)
 var chain: bool = false;
 export fn jit_config(c: u32) void {
     chain = c != 0;
@@ -118,7 +107,6 @@ var nregions: u32 = 0;
 var requests: [MAX_REGIONS]u32 = undefined;
 var request_isa: [MAX_REGIONS]Isa = undefined;
 var nrequests: u32 = 0;
-/// a batch handed to the host waits for its install; requests queue behind it
 var in_flight: bool = false;
 pub var stats = struct { regions: u32 = 0, batches: u32 = 0, skipped: u32 = 0, bytes: u32 = 0 }{};
 
@@ -130,7 +118,6 @@ pub fn request(pc: u32, isa: Isa) bool {
     nrequests += 1;
     return true;
 }
-/// debug: instructions in [fb_lo, fb_hi) go to the interpreter (bisects a miscompile within a region)
 var fb_lo: u32 = 0;
 var fb_hi: u32 = 0;
 export fn jit_fallback(lo: u32, hi: u32) void {
@@ -155,7 +142,6 @@ export fn jit_stat(i: u32) u32 {
         else => @intFromBool(chain),
     };
 }
-/// the region's blocks get the slot the host linked it into; a page dropped since emission keeps none
 export fn jit_install(i: u32, slot: u32) void {
     const r = &regions[i];
     const page = cpu.decodedPage(r.page) orelse return;
@@ -168,15 +154,8 @@ export fn jit_done() void {
     nregions = 0;
 }
 
-// ── region discovery
-fn findBlock(r: *Region, pc: u32) i32 {
-    for (r.blocks[0..r.nblocks], 0..) |b, i| if (b.pc == pc) return @intCast(i);
-    return -1;
-}
-/// the block index for `pc`, adding it (unfinished) when the region has room
 pub fn blockFor(r: *Region, pc: u32) i32 {
-    const i = findBlock(r, pc);
-    if (i >= 0) return i;
+    for (r.blocks[0..r.nblocks], 0..) |b, i| if (b.pc == pc) return @intCast(i);
     if (r.nblocks >= MAX_BLOCKS or (pc >> abi.PAGE_SHIFT) != r.page) return -1;
     r.blocks[r.nblocks] = .{ .pc = pc, .n = 0, .taken = -1, .fall = -1 };
     r.nblocks += 1;
@@ -223,11 +202,9 @@ fn discover(r: *Region, page: *cpu.Page) bool {
             };
             n += 1;
             total += 1;
-            const ends = s.ends;
-            const next = pc + s.len;
-            pc = next;
-            if (ends or n >= MAX_INSTR or total >= MAX_INSTR or (pc & (abi.PAGE_SIZE - 1)) == 0) {
-                if (!ends) r.blocks[i].fall = if ((pc & (abi.PAGE_SIZE - 1)) != 0 and total < MAX_INSTR) blockFor(r, pc) else -1;
+            pc += s.len;
+            if (s.ends or n >= MAX_INSTR or total >= MAX_INSTR or (pc & (abi.PAGE_SIZE - 1)) == 0) {
+                if (!s.ends) r.blocks[i].fall = if ((pc & (abi.PAGE_SIZE - 1)) != 0 and total < MAX_INSTR) blockFor(r, pc) else -1;
                 break;
             }
         }
@@ -236,1128 +213,588 @@ fn discover(r: *Region, page: *cpu.Page) bool {
     return r.nblocks > 0;
 }
 
-// ── emission
-/// the registers an op reads and writes, and whether it reads or writes NZCV
 pub const RW = struct { r: u32, w: u32, fr: bool = false, fw: bool = false };
 const ALL = RW{ .r = 0xffff_ffff, .w = 0xffff_ffff, .fr = true, .fw = true };
 const ALL32 = RW{ .r = 0x7fff, .w = 0x7fff, .fr = true, .fw = true };
-
-pub const Emit = struct {
-    b: *Buf,
-    r: *Region,
-    page: *cpu.Page,
-    blk: u32,
-    /// every register the region reads or writes (the prologue loads them), every one it
-    /// writes (the status exit spills them), and what may have been written on the way to the
-    /// op being emitted (all a transfer exit spills)
-    used: u32,
-    written: u32,
-    wcur: u32,
-    /// what the op being emitted touches: a fallback spills and reloads only that
-    rw: RW,
-    /// the depth of the status exit, the hand-off and the loop from the current block body,
-    /// and how many if-blocks the emitter is inside at the moment
-    exit_depth: u32,
-    chain_depth: u32,
-    top_depth: u32,
-    nest: u32,
-
-    pub fn ifv(e: *Emit) void {
-        e.b.blockStart(O.if_, wasm.VOID);
-        e.nest += 1;
-    }
-    pub fn endif(e: *Emit) void {
-        e.b.op(O.end);
-        e.nest -= 1;
-    }
-
-    pub fn getX(e: *Emit, n: u8) void {
-        if (n == 31) e.b.i64c(0) else e.b.get(L_X + n);
-    }
-    pub fn getSP(e: *Emit, n: u8) void {
-        e.b.get(L_X + n);
-    }
-    /// pops an i64 into Xn (a zero-register write is dropped)
-    pub fn setX(e: *Emit, n: u8) void {
-        if (n == 31) e.b.op(O.drop) else e.b.set(L_X + n);
-    }
-    pub fn setSP(e: *Emit, n: u8) void {
-        e.b.set(L_X + n);
-    }
-    /// pops an i32, zero-extends it into Xn
-    pub fn setW(e: *Emit, n: u8) void {
-        e.b.op(O.i64_extend_i32_u);
-        e.setX(n);
-    }
-    /// ic += k
-    pub fn countIc(e: *Emit, k: u32) void {
-        e.b.get(L_IC);
-        e.b.i64c(k);
-        e.b.op(O.i64_add);
-        e.b.set(L_IC);
-    }
-    fn storeIc(e: *Emit) void {
-        e.b.get(L_CPU);
-        e.b.get(L_IC);
-        e.b.memop(O.i64_store, OFF_IC);
-    }
-    /// an ARM32 region's registers are the low words, in i32 locals
-    fn spillRegs(e: *Emit, mask: u32) void {
-        const wide = e.r.isa == .a64;
-        var n: u8 = 0;
-        while (n < 32) : (n += 1) if (mask & bit(n) != 0) {
-            e.b.get(L_CPU);
-            e.b.get(L_X + n);
-            e.b.memop(if (wide) O.i64_store else O.i32_store, OFF_X + 8 * @as(u32, n));
-        };
-    }
-    fn loadRegs(e: *Emit, mask: u32) void {
-        const wide = e.r.isa == .a64;
-        var n: u8 = 0;
-        while (n < 32) : (n += 1) if (mask & bit(n) != 0) {
-            e.b.get(L_CPU);
-            e.b.memop(if (wide) O.i64_load else O.i32_load, OFF_X + 8 * @as(u32, n));
-            e.b.set(L_X + n);
-        };
-    }
-    fn spillFlags(e: *Emit) void {
-        const b = e.b;
-        b.get(L_CPU);
-        b.get(L_CPU);
-        b.memop(O.i32_load, OFF_CPSR);
-        b.i32c(0x0fff_ffff);
-        b.op(O.i32_and);
-        b.get(L_N);
-        b.i32c(31);
-        b.op(O.i32_shl);
-        b.op(O.i32_or);
-        b.get(L_Z);
-        b.i32c(30);
-        b.op(O.i32_shl);
-        b.op(O.i32_or);
-        b.get(L_C);
-        b.i32c(29);
-        b.op(O.i32_shl);
-        b.op(O.i32_or);
-        b.get(L_V);
-        b.i32c(28);
-        b.op(O.i32_shl);
-        b.op(O.i32_or);
-        b.memop(O.i32_store, OFF_CPSR);
-    }
-    fn loadFlags(e: *Emit) void {
-        const b = e.b;
-        b.get(L_CPU);
-        b.memop(O.i32_load, OFF_CPSR);
-        b.set(L_A);
-        const shifts = [_]u8{ 31, 30, 29, 28 };
-        for (shifts, 0..) |s, i| {
-            b.get(L_A);
-            b.i32c(s);
-            b.op(O.i32_shr_u);
-            if (s != 31) {
-                b.i32c(1);
-                b.op(O.i32_and);
-            }
-            b.set(L_N + @as(u32, @intCast(i)));
-        }
-    }
-    /// leave with a status already in L_RET: the epilogue spills everything the region writes
-    pub fn exit(e: *Emit) void {
-        e.b.br(e.exit_depth + e.nest);
-    }
-    /// leave for the pc already in L_RET: what this path may have written is spilled here
-    pub fn exitRet(e: *Emit) void {
-        e.spillRegs(e.wcur);
-        e.spillFlags();
-        e.b.br(e.chain_depth + e.nest);
-    }
-    pub fn exitTo(e: *Emit, pc: u32) void {
-        e.b.i32c(@bitCast(pc));
-        e.b.set(L_RET);
-        e.exitRet();
-    }
-    pub fn exitStatus(e: *Emit, s: u32) void {
-        e.b.i32c(@intCast(s));
-        e.b.set(L_RET);
-        e.exit();
-    }
-    /// go to a block of the region, or out to a pc; `k` instructions of the current block ran
-    pub fn transfer(e: *Emit, target: i32, pc: u32, k: u32) void {
-        e.countIc(k);
-        if (target < 0) {
-            e.exitTo(pc);
-            return;
-        }
-        // the budget: leave at the boundary, the dispatcher decides
-        e.b.get(L_IC);
-        e.b.get(L_LIMIT);
-        e.b.op(O.i64_ge_s);
-        e.ifv();
-        e.exitTo(pc);
-        e.endif();
-        e.b.i32c(target);
-        e.b.set(L_NEXT);
-        e.b.br(e.top_depth + e.nest);
-    }
-    /// the interpreter runs this word: what it reads spills first, what it writes reloads after.
-    /// What reloads spills too: a register the classifier over-names as written must not come
-    /// back stale from memory.
-    pub fn fallback(e: *Emit, pc: u32, k: u32) void {
-        const b = e.b;
-        e.spillRegs(e.rw.r | e.rw.w);
-        if (e.rw.fr or e.rw.fw) e.spillFlags();
-        b.get(L_CPU);
-        if (e.r.isa == .a64) {
-            b.i32c(@bitCast(mem.ld(u32, pc)));
-            b.i32c(@bitCast(pc));
-            b.call(F_EXEC);
-        } else {
-            b.i32c(@bitCast(pc));
-            b.call(F_EXEC32);
-        }
-        b.set(L_R);
-        // reload first: an exit spills the locals, which must be what the interpreter left
-        e.loadRegs(e.rw.w);
-        if (e.rw.fw) e.loadFlags();
-        b.get(L_R);
-        e.ifv();
-        e.countIc(k);
-        b.get(L_R);
-        b.set(L_RET);
-        e.exit();
-        e.endif();
-    }
-    /// pops an i64 address; leaves the translated i32 in L_A or exits with a fault
-    pub fn address(e: *Emit) void {
-        const b = e.b;
-        b.tee(L_T0);
-        b.i64c(32);
-        b.op(O.i64_shr_u);
-        b.op(O.i64_eqz);
-        b.blockStart(O.if_, wasm.I32);
-        b.get(L_T0);
-        b.op(O.i32_wrap_i64);
-        b.op(O.else_);
-        b.get(L_CPU);
-        b.get(L_T0);
-        b.call(F_TX);
-        b.op(O.end);
-        b.tee(L_A);
-        b.op(O.i32_eqz);
-        e.ifv();
-        e.exitStatus(2);
-        e.endif();
-    }
-    /// the page check before a store at L_A (+off)
-    pub fn storeCheck(e: *Emit, off: u32) void {
-        const b = e.b;
-        b.get(L_A);
-        b.i32c(@bitCast(off));
-        b.op(O.i32_add);
-        b.i32c(12);
-        b.op(O.i32_shr_u);
-        b.memop(O.i32_load8_u, FLAGS_BASE);
-        e.ifv();
-        b.get(L_CPU);
-        b.get(L_A);
-        b.i32c(@bitCast(off));
-        b.op(O.i32_add);
-        b.call(F_STORE);
-        e.ifv();
-        e.exitStatus(2);
-        e.endif();
-        e.endif();
-    }
-    pub fn cond(e: *Emit, cc: u8) void {
-        const b = e.b;
-        switch (cc >> 1) {
-            0 => b.get(L_Z),
-            1 => b.get(L_C),
-            2 => b.get(L_N),
-            3 => b.get(L_V),
-            4 => {
-                b.get(L_C);
-                b.get(L_Z);
-                b.op(O.i32_eqz);
-                b.op(O.i32_and);
-            },
-            5 => {
-                b.get(L_N);
-                b.get(L_V);
-                b.op(O.i32_eq);
-            },
-            6 => {
-                b.get(L_Z);
-                b.op(O.i32_eqz);
-                b.get(L_N);
-                b.get(L_V);
-                b.op(O.i32_eq);
-                b.op(O.i32_and);
-            },
-            else => {
-                b.i32c(1);
-                return;
-            },
-        }
-        if (cc & 1 != 0) b.op(O.i32_eqz);
-    }
-    /// NZCV of a + b + cin (T0 = a, T1 = b, T2 = result already computed; cin in L_R for adc)
-    fn flagsAdd64(e: *Emit, carry_in: bool, sub: bool) void {
-        const b = e.b;
-        b.get(L_T2);
-        b.i64c(63);
-        b.op(O.i64_shr_u);
-        b.op(O.i32_wrap_i64);
-        b.set(L_N);
-        b.get(L_T2);
-        b.op(O.i64_eqz);
-        b.set(L_Z);
-        if (!carry_in) {
-            if (sub) {
-                b.get(L_T0);
-                b.get(L_T1);
-                b.op(O.i64_ge_u);
-            } else {
-                b.get(L_T2);
-                b.get(L_T0);
-                b.op(O.i64_lt_u);
-            }
-        } else {
-            // t = a + b; r = t + cin: a carry out of either step
-            b.get(L_T0);
-            b.get(L_T1);
-            b.op(O.i64_add);
-            b.tee(L_T3);
-            b.get(L_T0);
-            b.op(O.i64_lt_u);
-            b.get(L_T2);
-            b.get(L_T3);
-            b.op(O.i64_lt_u);
-            b.op(O.i32_or);
-        }
-        b.set(L_C);
-        // overflow: the operands agree in sign and the result does not (a subtraction's operands disagree)
-        b.get(L_T0);
-        b.get(if (sub) L_T1 else L_T2);
-        b.op(O.i64_xor);
-        b.get(if (sub) L_T0 else L_T1);
-        b.get(L_T2);
-        b.op(O.i64_xor);
-        b.op(O.i64_and);
-        b.i64c(63);
-        b.op(O.i64_shr_u);
-        b.op(O.i32_wrap_i64);
-        b.set(L_V);
-    }
-    pub fn flagsAdd32(e: *Emit, carry_in: bool, sub: bool) void {
-        const b = e.b;
-        b.get(L_R);
-        b.i32c(31);
-        b.op(O.i32_shr_u);
-        b.set(L_N);
-        b.get(L_R);
-        b.op(O.i32_eqz);
-        b.set(L_Z);
-        if (!carry_in) {
-            if (sub) {
-                b.get(L_A);
-                b.get(L_B);
-                b.op(O.i32_ge_u);
-            } else {
-                b.get(L_R);
-                b.get(L_A);
-                b.op(O.i32_lt_u);
-            }
-        } else {
-            b.get(L_A);
-            b.get(L_B);
-            b.op(O.i32_add);
-            b.tee(L_NEXT);
-            b.get(L_A);
-            b.op(O.i32_lt_u);
-            b.get(L_R);
-            b.get(L_NEXT);
-            b.op(O.i32_lt_u);
-            b.op(O.i32_or);
-        }
-        b.set(L_C);
-        b.get(L_A);
-        b.get(if (sub) L_B else L_R);
-        b.op(O.i32_xor);
-        b.get(if (sub) L_A else L_B);
-        b.get(L_R);
-        b.op(O.i32_xor);
-        b.op(O.i32_and);
-        b.i32c(31);
-        b.op(O.i32_shr_u);
-        b.set(L_V);
-    }
-    fn flagsLogic(e: *Emit, sf: bool) void {
-        const b = e.b;
-        if (sf) {
-            b.get(L_T2);
-            b.i64c(63);
-            b.op(O.i64_shr_u);
-            b.op(O.i32_wrap_i64);
-            b.set(L_N);
-            b.get(L_T2);
-            b.op(O.i64_eqz);
-            b.set(L_Z);
-        } else {
-            b.get(L_R);
-            b.i32c(31);
-            b.op(O.i32_shr_u);
-            b.set(L_N);
-            b.get(L_R);
-            b.op(O.i32_eqz);
-            b.set(L_Z);
-        }
-        b.i32c(0);
-        b.set(L_C);
-        b.i32c(0);
-        b.set(L_V);
-    }
-    /// the second operand of a register-form op as an i64 on the stack
-    fn operand2(e: *Emit, o: *const Op) void {
-        const b = e.b;
-        const sf = o.a & 4 != 0;
-        switch (o.b) {
-            0 => b.i64c(@bitCast(o.imm)),
-            1 => {
-                const amt: u32 = @intCast(o.imm);
-                e.getX(o.rm);
-                if (!sf) {
-                    b.op(O.i32_wrap_i64);
-                    if (amt != 0) {
-                        b.i32c(@intCast(amt));
-                        b.op(switch (o.ra & 3) {
-                            0 => O.i32_shl,
-                            1 => O.i32_shr_u,
-                            2 => O.i32_shr_s,
-                            else => O.i32_rotr,
-                        });
-                    }
-                    if (o.ra & 4 != 0) {
-                        b.i32c(-1);
-                        b.op(O.i32_xor);
-                    }
-                    b.op(O.i64_extend_i32_u);
-                } else {
-                    if (amt != 0) {
-                        b.i64c(amt);
-                        b.op(switch (o.ra & 3) {
-                            0 => O.i64_shl,
-                            1 => O.i64_shr_u,
-                            2 => O.i64_shr_s,
-                            else => O.i64_rotr,
-                        });
-                    }
-                    if (o.ra & 4 != 0) {
-                        b.i64c(-1);
-                        b.op(O.i64_xor);
-                    }
-                }
-            },
-            else => {
-                e.getX(o.rm);
-                switch (o.ra) {
-                    0 => {
-                        b.i64c(255);
-                        b.op(O.i64_and);
-                    },
-                    1 => {
-                        b.i64c(65535);
-                        b.op(O.i64_and);
-                    },
-                    2 => {
-                        b.i64c(0xffff_ffff);
-                        b.op(O.i64_and);
-                    },
-                    4 => b.op(O.i64_extend8_s),
-                    5 => b.op(O.i64_extend16_s),
-                    6 => b.op(O.i64_extend32_s),
-                    else => {},
-                }
-                if (o.imm != 0) {
-                    b.i64c(@intCast(o.imm));
-                    b.op(O.i64_shl);
-                }
-            },
-        }
-    }
-
-    /// emit one op; true when it ended the block (a transfer was emitted)
-    fn emitOp(e: *Emit, o: *const Op, pc: u32, k: u32) bool {
-        const b = e.b;
-        switch (o.kind) {
-            .nop => {},
-            .adr => {
-                b.i64c(@bitCast(o.imm));
-                e.setX(o.rd);
-            },
-            .addsub => {
-                const sub = o.a & 1 != 0;
-                const S = o.a & 2 != 0;
-                const sf = o.a & 4 != 0;
-                if (o.b == 1) e.getX(o.rn) else e.getSP(o.rn);
-                if (sf) {
-                    b.set(L_T0);
-                    e.operand2(o);
-                    b.set(L_T1);
-                    b.get(L_T0);
-                    b.get(L_T1);
-                    b.op(if (sub) O.i64_sub else O.i64_add);
-                    b.tee(L_T2);
-                    if (S) {
-                        e.flagsAdd64(false, sub);
-                        e.setX(o.rd);
-                    } else e.setSP(o.rd);
-                } else {
-                    b.op(O.i32_wrap_i64);
-                    b.set(L_A);
-                    e.operand2(o);
-                    b.op(O.i32_wrap_i64);
-                    b.set(L_B);
-                    b.get(L_A);
-                    b.get(L_B);
-                    b.op(if (sub) O.i32_sub else O.i32_add);
-                    b.tee(L_R);
-                    if (S) {
-                        e.flagsAdd32(false, sub);
-                        e.setW(o.rd);
-                    } else {
-                        b.op(O.i64_extend_i32_u);
-                        e.setSP(o.rd);
-                    }
-                }
-            },
-            .logic => {
-                const opc = o.a & 3;
-                const sf = o.a & 4 != 0;
-                e.getX(o.rn);
-                e.operand2(o);
-                b.op(switch (opc) {
-                    0, 3 => O.i64_and,
-                    1 => O.i64_or,
-                    else => O.i64_xor,
-                });
-                if (!sf) {
-                    b.op(O.i32_wrap_i64);
-                    b.tee(L_R);
-                    b.op(O.i64_extend_i32_u);
-                } else b.tee(L_T2);
-                if (opc == 3) {
-                    e.flagsLogic(sf);
-                    e.setX(o.rd);
-                } else if (o.a & 8 != 0) e.setX(o.rd) else e.setSP(o.rd);
-            },
-            .movw => {
-                const sf = o.a & 4 != 0;
-                const sh: u6 = @intCast(o.b);
-                const val = o.imm << sh;
-                switch (o.a & 3) {
-                    0 => b.i64c(@bitCast(if (sf) ~val else ~val & 0xffff_ffff)),
-                    2 => b.i64c(@bitCast(val)),
-                    else => {
-                        e.getX(o.rd);
-                        b.i64c(@bitCast(~(@as(u64, 0xffff) << sh) & (if (sf) ~@as(u64, 0) else 0xffff_ffff)));
-                        b.op(O.i64_and);
-                        b.i64c(@bitCast(val));
-                        b.op(O.i64_or);
-                    },
-                }
-                e.setX(o.rd);
-            },
-            .bfm => {
-                const opc = o.a & 3;
-                const sf = o.a & 4 != 0;
-                const width: u32 = if (sf) 64 else 32;
-                const rot: u32 = o.b;
-                const wmask = o.imm;
-                const tmask = a64.replicate(ones(o.rm), @as(u32, 1) << @intCast(o.a >> 3), width);
-                // src, rotated right by immr within the width
-                e.getX(o.rn);
-                if (!sf) {
-                    b.op(O.i32_wrap_i64);
-                    if (rot != 0) {
-                        b.i32c(@intCast(rot));
-                        b.op(O.i32_rotr);
-                    }
-                    b.op(O.i64_extend_i32_u);
-                } else if (rot != 0) {
-                    b.i64c(rot);
-                    b.op(O.i64_rotr);
-                }
-                b.i64c(@bitCast(wmask));
-                b.op(O.i64_and);
-                if (opc == 1) {
-                    e.getX(o.rd);
-                    b.i64c(@bitCast(~wmask));
-                    b.op(O.i64_and);
-                    b.op(O.i64_or);
-                }
-                b.i64c(@bitCast(tmask));
-                b.op(O.i64_and);
-                b.set(L_T2);
-                // the top: the sign bit replicated (SBFM), the destination (BFM), or zero
-                if (opc == 0) {
-                    e.getX(o.rn);
-                    b.i64c(63 - @as(i64, o.ra));
-                    b.op(O.i64_shl);
-                    b.i64c(63);
-                    b.op(O.i64_shr_s);
-                    b.i64c(@bitCast(~tmask));
-                    b.op(O.i64_and);
-                    b.get(L_T2);
-                    b.op(O.i64_or);
-                } else if (opc == 1) {
-                    e.getX(o.rd);
-                    b.i64c(@bitCast(~tmask));
-                    b.op(O.i64_and);
-                    b.get(L_T2);
-                    b.op(O.i64_or);
-                } else b.get(L_T2);
-                if (!sf) {
-                    b.i64c(0xffff_ffff);
-                    b.op(O.i64_and);
-                }
-                e.setX(o.rd);
-            },
-            .extr => {
-                const lsb: u32 = o.b;
-                if (o.a != 0) {
-                    e.getX(o.rm);
-                    if (lsb != 0) {
-                        b.i64c(lsb);
-                        b.op(O.i64_shr_u);
-                        e.getX(o.rn);
-                        b.i64c(64 - @as(i64, lsb));
-                        b.op(O.i64_shl);
-                        b.op(O.i64_or);
-                    }
-                    e.setX(o.rd);
-                } else {
-                    e.getX(o.rm);
-                    b.op(O.i32_wrap_i64);
-                    if (lsb != 0) {
-                        b.i32c(@intCast(lsb));
-                        b.op(O.i32_shr_u);
-                        e.getX(o.rn);
-                        b.op(O.i32_wrap_i64);
-                        b.i32c(32 - @as(i32, @intCast(lsb)));
-                        b.op(O.i32_shl);
-                        b.op(O.i32_or);
-                    }
-                    e.setW(o.rd);
-                }
-            },
-            .b => {
-                if (o.a != 0) {
-                    b.i64c(pc + 4);
-                    e.setX(30);
-                    e.transfer(-1, @truncate(o.imm), k);
-                } else e.transfer(e.r.blocks[e.blk].taken, @truncate(o.imm), k);
-                return true;
-            },
-            .bcond, .cbz, .tbz => {
-                switch (o.kind) {
-                    .bcond => e.cond(o.a),
-                    .cbz => {
-                        e.getX(o.rd);
-                        if (o.a & 1 == 0) b.op(O.i32_wrap_i64);
-                        b.op(if (o.a & 1 == 0) O.i32_eqz else O.i64_eqz);
-                        if (o.a & 2 != 0) b.op(O.i32_eqz);
-                    },
-                    else => {
-                        e.getX(o.rd);
-                        b.i64c(o.b);
-                        b.op(O.i64_shr_u);
-                        b.op(O.i32_wrap_i64);
-                        b.i32c(1);
-                        b.op(O.i32_and);
-                        if (o.a == 0) b.op(O.i32_eqz);
-                    },
-                }
-                e.ifv();
-                e.transfer(e.r.blocks[e.blk].taken, @truncate(o.imm), k);
-                e.endif();
-                e.transfer(e.r.blocks[e.blk].fall, pc + 4, k);
-                return true;
-            },
-            .br => {
-                e.getX(o.rn);
-                b.op(O.i32_wrap_i64);
-                b.set(L_RET);
-                if (o.a == 1) {
-                    b.i64c(pc + 4);
-                    e.setX(30);
-                }
-                e.countIc(k);
-                e.exitRet();
-                return true;
-            },
-            .ldrlit => {
-                const a: u32 = @truncate(o.imm);
-                switch (o.b) {
-                    0 => {
-                        b.i32c(0);
-                        b.memop(O.i64_load32_u, a);
-                        e.setX(o.rd);
-                    },
-                    1 => {
-                        b.i32c(0);
-                        b.memop(O.i64_load, a);
-                        e.setX(o.rd);
-                    },
-                    2 => {
-                        b.i32c(0);
-                        b.memop(O.i64_load32_s, a);
-                        e.setX(o.rd);
-                    },
-                    else => {},
-                }
-            },
-            .ldp => {
-                const kind = o.a & 3;
-                const Ld = o.a & 4 != 0;
-                const opc = o.a >> 3;
-                e.getSP(o.rn);
-                if (kind != 1 and o.imm != 0) {
-                    b.i64c(@bitCast(o.imm));
-                    b.op(O.i64_add);
-                }
-                e.address();
-                if (kind == 1 or kind == 3) {
-                    e.getSP(o.rn);
-                    b.i64c(@bitCast(o.imm));
-                    b.op(O.i64_add);
-                    e.setSP(o.rn);
-                }
-                const step: u32 = if (opc == 2) 8 else 4;
-                const regs = [_]u8{ o.rd, o.rm };
-                if (Ld) {
-                    for (regs, 0..) |t, i| {
-                        b.get(L_A);
-                        b.memop(if (opc == 2) O.i64_load else if (opc == 1) O.i64_load32_s else O.i64_load32_u, step * @as(u32, @intCast(i)));
-                        e.setX(t);
-                    }
-                } else {
-                    for (regs, 0..) |t, i| {
-                        e.storeCheck(step * @as(u32, @intCast(i)));
-                        b.get(L_A);
-                        e.getX(t);
-                        b.memop(if (opc == 2) O.i64_store else O.i64_store32, step * @as(u32, @intCast(i)));
-                    }
-                }
-            },
-            .ldst => {
-                const size: u5 = @intCast(o.b >> 2);
-                const opc = o.b & 3;
-                e.getSP(o.rn);
-                switch (o.a) {
-                    0, 2 => if (o.imm != 0) {
-                        b.i64c(@bitCast(o.imm));
-                        b.op(O.i64_add);
-                    },
-                    3 => {
-                        e.getX(o.rm);
-                        switch (o.ra >> 1) {
-                            2 => {
-                                b.i64c(0xffff_ffff);
-                                b.op(O.i64_and);
-                            },
-                            6 => b.op(O.i64_extend32_s),
-                            else => {},
-                        }
-                        if (o.ra & 1 != 0 and size != 0) {
-                            b.i64c(size);
-                            b.op(O.i64_shl);
-                        }
-                        b.op(O.i64_add);
-                    },
-                    else => {},
-                }
-                if (o.a == 2) {
-                    b.tee(L_T0);
-                    e.setSP(o.rn);
-                    b.get(L_T0);
-                }
-                e.address();
-                if (o.a == 1) {
-                    e.getSP(o.rn);
-                    b.i64c(@bitCast(o.imm));
-                    b.op(O.i64_add);
-                    e.setSP(o.rn);
-                }
-                const load = opc != 0 and !(size == 3 and opc == 2);
-                if (!load) {
-                    e.storeCheck(0);
-                    b.get(L_A);
-                    e.getX(o.rd);
-                    b.memop(switch (size) {
-                        0 => O.i64_store8,
-                        1 => O.i64_store16,
-                        2 => O.i64_store32,
-                        else => O.i64_store,
-                    }, 0);
-                } else {
-                    b.get(L_A);
-                    if (size == 3) {
-                        b.memop(O.i64_load, 0);
-                    } else if (opc == 1) {
-                        b.memop(switch (size) {
-                            0 => O.i64_load8_u,
-                            1 => O.i64_load16_u,
-                            else => O.i64_load32_u,
-                        }, 0);
-                    } else {
-                        b.memop(switch (size) {
-                            0 => O.i64_load8_s,
-                            1 => O.i64_load16_s,
-                            else => O.i64_load32_s,
-                        }, 0);
-                        if (opc == 3) {
-                            b.i64c(0xffff_ffff);
-                            b.op(O.i64_and);
-                        }
-                    }
-                    e.setX(o.rd);
-                }
-            },
-            .adc => {
-                const sub = o.a & 1 != 0;
-                const S = o.a & 2 != 0;
-                if (o.a & 4 != 0) {
-                    e.getX(o.rn);
-                    b.set(L_T0);
-                    e.getX(o.rm);
-                    if (sub) {
-                        b.i64c(-1);
-                        b.op(O.i64_xor);
-                    }
-                    b.set(L_T1);
-                    b.get(L_T0);
-                    b.get(L_T1);
-                    b.op(O.i64_add);
-                    b.get(L_C);
-                    b.op(O.i64_extend_i32_u);
-                    b.op(O.i64_add);
-                    b.tee(L_T2);
-                    if (S) e.flagsAdd64(true, false);
-                    e.setX(o.rd);
-                } else {
-                    e.getX(o.rn);
-                    b.op(O.i32_wrap_i64);
-                    b.set(L_A);
-                    e.getX(o.rm);
-                    b.op(O.i32_wrap_i64);
-                    if (sub) {
-                        b.i32c(-1);
-                        b.op(O.i32_xor);
-                    }
-                    b.set(L_B);
-                    b.get(L_A);
-                    b.get(L_B);
-                    b.op(O.i32_add);
-                    b.get(L_C);
-                    b.op(O.i32_add);
-                    b.tee(L_R);
-                    if (S) e.flagsAdd32(true, false);
-                    e.setW(o.rd);
-                }
-            },
-            .ccmp => {
-                const sub = o.a & 1 != 0;
-                const sf = o.a & 4 != 0;
-                e.cond(o.b);
-                b.blockStart(O.if_, wasm.VOID);
-                if (sf) {
-                    e.getX(o.rn);
-                    b.set(L_T0);
-                    if (o.a & 8 != 0) b.i64c(@bitCast(o.imm)) else e.getX(o.rm);
-                    b.set(L_T1);
-                    b.get(L_T0);
-                    b.get(L_T1);
-                    b.op(if (sub) O.i64_sub else O.i64_add);
-                    b.set(L_T2);
-                    e.flagsAdd64(false, sub);
-                } else {
-                    e.getX(o.rn);
-                    b.op(O.i32_wrap_i64);
-                    b.set(L_A);
-                    if (o.a & 8 != 0) b.i32c(@intCast(o.imm)) else {
-                        e.getX(o.rm);
-                        b.op(O.i32_wrap_i64);
-                    }
-                    b.set(L_B);
-                    b.get(L_A);
-                    b.get(L_B);
-                    b.op(if (sub) O.i32_sub else O.i32_add);
-                    b.set(L_R);
-                    e.flagsAdd32(false, sub);
-                }
-                b.op(O.else_);
-                b.i32c((o.ra >> 3) & 1);
-                b.set(L_N);
-                b.i32c((o.ra >> 2) & 1);
-                b.set(L_Z);
-                b.i32c((o.ra >> 1) & 1);
-                b.set(L_C);
-                b.i32c(o.ra & 1);
-                b.set(L_V);
-                b.op(O.end);
-            },
-            .csel => {
-                const opc = o.a & 1;
-                const op2 = (o.a >> 1) & 1;
-                const sf = o.a & 4 != 0;
-                e.getX(o.rn);
-                e.getX(o.rm);
-                if (opc == 0 and op2 == 1) {
-                    b.i64c(1);
-                    b.op(O.i64_add);
-                } else if (opc == 1 and op2 == 0) {
-                    b.i64c(-1);
-                    b.op(O.i64_xor);
-                } else if (opc == 1) {
-                    b.set(L_T0);
-                    b.i64c(0);
-                    b.get(L_T0);
-                    b.op(O.i64_sub);
-                }
-                e.cond(o.b);
-                b.op(O.select);
-                if (!sf) {
-                    b.i64c(0xffff_ffff);
-                    b.op(O.i64_and);
-                }
-                e.setX(o.rd);
-            },
-            .excl => {
-                const size: u5 = @intCast(o.a);
-                const o2 = o.b & 4 != 0;
-                const L = o.b & 2 != 0;
-                const o1 = o.b & 1 != 0;
-                // the pair forms keep to the interpreter
-                if (o1 and !o2) {
-                    e.fallback(pc, k);
-                    return false;
-                }
-                const ld: u8 = switch (size) {
-                    0 => O.i64_load8_u,
-                    1 => O.i64_load16_u,
-                    2 => O.i64_load32_u,
-                    else => O.i64_load,
-                };
-                const st: u8 = switch (size) {
-                    0 => O.i64_store8,
-                    1 => O.i64_store16,
-                    2 => O.i64_store32,
-                    else => O.i64_store,
-                };
-                e.getSP(o.rn);
-                e.address();
-                if (o1) {
-                    // CAS: the read-modify-write is direct, threads being cooperative
-                    b.get(L_A);
-                    b.memop(ld, 0);
-                    b.set(L_T0);
-                    b.get(L_T0);
-                    e.getX(o.rm);
-                    if (size < 3) {
-                        b.i64c(@bitCast((@as(u64, 1) << (@as(u6, 8) << @as(u2, @intCast(size)))) - 1));
-                        b.op(O.i64_and);
-                    }
-                    b.op(O.i64_eq);
-                    e.ifv();
-                    e.storeCheck(0);
-                    b.get(L_A);
-                    e.getX(o.rd);
-                    b.memop(st, 0);
-                    e.endif();
-                    b.get(L_T0);
-                    e.setX(o.rm);
-                } else if (L) {
-                    if (!o2) {
-                        b.get(L_CPU);
-                        b.i32c(1);
-                        b.memop(O.i32_store, OFF_EXCL);
-                    }
-                    b.get(L_A);
-                    b.memop(ld, 0);
-                    e.setX(o.rd);
-                } else {
-                    e.storeCheck(0);
-                    b.get(L_A);
-                    e.getX(o.rd);
-                    b.memop(st, 0);
-                    if (!o2) {
-                        // the status is 0 when a load-exclusive preceded; the monitor clears
-                        b.get(L_CPU);
-                        b.memop(O.i32_load, OFF_EXCL);
-                        b.i32c(1);
-                        b.op(O.i32_xor);
-                        e.setW(o.rm);
-                        b.get(L_CPU);
-                        b.i32c(0);
-                        b.memop(O.i32_store, OFF_EXCL);
-                    }
-                }
-            },
-            .mrs => if (o.imm == 0x5e82) {
-                b.get(L_CPU);
-                b.memop(O.i64_load, OFF_TLS);
-                e.setX(o.rd);
-            } else e.fallback(pc, k),
-            .one => {
-                const opc = o.a & 7;
-                const sf = o.a & 8 != 0;
-                if (opc == 4) {
-                    e.getX(o.rn);
-                    if (sf) {
-                        b.op(O.i64_clz);
-                        e.setX(o.rd);
-                    } else {
-                        b.op(O.i32_wrap_i64);
-                        b.op(O.i32_clz);
-                        e.setW(o.rd);
-                    }
-                } else {
-                    e.fallback(pc, k);
-                }
-            },
-            .two => {
-                const opc = o.a & 63;
-                const sf = o.a & 64 != 0;
-                if (opc == 2 or opc == 3) {
-                    // a zero divisor gives zero; INT_MIN / -1 gives INT_MIN, which wasm's division traps on
-                    e.getX(o.rn);
-                    e.getX(o.rm);
-                    if (sf) {
-                        b.set(L_T1);
-                        b.set(L_T0);
-                        b.get(L_T1);
-                        b.op(O.i64_eqz);
-                        b.blockStart(O.if_, wasm.I64);
-                        b.i64c(0);
-                        b.op(O.else_);
-                        if (opc == 3) {
-                            b.get(L_T1);
-                            b.i64c(-1);
-                            b.op(O.i64_eq);
-                            b.blockStart(O.if_, wasm.I64);
-                            b.i64c(0);
-                            b.get(L_T0);
-                            b.op(O.i64_sub);
-                            b.op(O.else_);
-                            b.get(L_T0);
-                            b.get(L_T1);
-                            b.op(O.i64_div_s);
-                            b.op(O.end);
-                        } else {
-                            b.get(L_T0);
-                            b.get(L_T1);
-                            b.op(O.i64_div_u);
-                        }
-                        b.op(O.end);
-                        e.setX(o.rd);
-                    } else {
-                        b.op(O.i32_wrap_i64);
-                        b.set(L_B);
-                        b.op(O.i32_wrap_i64);
-                        b.set(L_A);
-                        b.get(L_B);
-                        b.op(O.i32_eqz);
-                        b.blockStart(O.if_, wasm.I32);
-                        b.i32c(0);
-                        b.op(O.else_);
-                        if (opc == 3) {
-                            b.get(L_B);
-                            b.i32c(-1);
-                            b.op(O.i32_eq);
-                            b.blockStart(O.if_, wasm.I32);
-                            b.i32c(0);
-                            b.get(L_A);
-                            b.op(O.i32_sub);
-                            b.op(O.else_);
-                            b.get(L_A);
-                            b.get(L_B);
-                            b.op(O.i32_div_s);
-                            b.op(O.end);
-                        } else {
-                            b.get(L_A);
-                            b.get(L_B);
-                            b.op(O.i32_div_u);
-                        }
-                        b.op(O.end);
-                        e.setW(o.rd);
-                    }
-                } else {
-                    const kind = opc - 8;
-                    e.getX(o.rn);
-                    if (sf) {
-                        e.getX(o.rm);
-                        b.op(switch (kind) {
-                            0 => O.i64_shl,
-                            1 => O.i64_shr_u,
-                            2 => O.i64_shr_s,
-                            else => O.i64_rotr,
-                        });
-                        e.setX(o.rd);
-                    } else {
-                        b.op(O.i32_wrap_i64);
-                        e.getX(o.rm);
-                        b.op(O.i32_wrap_i64);
-                        b.op(switch (kind) {
-                            0 => O.i32_shl,
-                            1 => O.i32_shr_u,
-                            2 => O.i32_shr_s,
-                            else => O.i32_rotr,
-                        });
-                        e.setW(o.rd);
-                    }
-                }
-            },
-            .three => {
-                const op31 = o.a & 7;
-                const o0 = o.a & 8 != 0;
-                const sf = o.a & 16 != 0;
-                if (op31 == 0) {
-                    e.getX(o.ra);
-                    e.getX(o.rn);
-                    e.getX(o.rm);
-                    b.op(O.i64_mul);
-                    b.op(if (o0) O.i64_sub else O.i64_add);
-                    if (!sf) {
-                        b.i64c(0xffff_ffff);
-                        b.op(O.i64_and);
-                    }
-                    e.setX(o.rd);
-                } else if (op31 == 1 or op31 == 5) {
-                    e.getX(o.ra);
-                    e.getX(o.rn);
-                    b.op(O.i32_wrap_i64);
-                    b.op(if (op31 == 1) O.i64_extend_i32_s else O.i64_extend_i32_u);
-                    e.getX(o.rm);
-                    b.op(O.i32_wrap_i64);
-                    b.op(if (op31 == 1) O.i64_extend_i32_s else O.i64_extend_i32_u);
-                    b.op(O.i64_mul);
-                    b.op(if (o0) O.i64_sub else O.i64_add);
-                    e.setX(o.rd);
-                } else e.fallback(pc, k);
-            },
-            .simd => jitfp.emitSimd(e, @truncate(o.imm), pc, k),
-            .vmem => jitfp.emitVmem(e, @truncate(o.imm), pc, k),
-            .vldrlit => jitfp.emitVldrlit(e, o),
-            else => e.fallback(pc, k),
-        }
-        return false;
-    }
+pub const LD = [4][2]u8{
+    .{ O.i64_load8_u, O.i64_load8_s },
+    .{ O.i64_load16_u, O.i64_load16_s },
+    .{ O.i64_load32_u, O.i64_load32_s },
+    .{ O.i64_load, O.i64_load },
 };
+pub const ST = [4]u8{ O.i64_store8, O.i64_store16, O.i64_store32, O.i64_store };
+const Regs = struct { a: u32, b: u32, r: u32, t: u32 };
+inline fn regs(comptime wide: bool) Regs {
+    return if (wide) .{ .a = L_T0, .b = L_T1, .r = L_T2, .t = L_T3 } else .{ .a = L_A, .b = L_B, .r = L_R, .t = L_NEXT };
+}
+fn topBit(b: *Buf, comptime wide: bool) void {
+    if (wide) b.emit(.{ c64(63), O.i64_shr_u, O.i32_wrap_i64 }) else b.emit(.{ c32(31), O.i32_shr_u });
+}
+inline fn cW(comptime wide: bool, v: i32) if (wide) wasm.C64 else wasm.C32 {
+    return if (wide) c64(v) else c32(v);
+}
 
-/// what an op reads and writes; an op the interpreter runs names what it may touch, and the
-/// kinds that can touch anything say so
+pub fn Emit(comptime wide: bool) type {
+    return struct {
+        const Self = @This();
+        b: *Buf,
+        r: *Region,
+        blk: u32,
+        used: u32,
+        written: u32,
+        wcur: u32,
+        rw: RW,
+        exit_depth: u32,
+        chain_depth: u32,
+        top_depth: u32,
+        nest: u32,
+
+        pub fn ifv(e: *Self) void {
+            e.b.blockStart(O.if_, wasm.VOID);
+            e.nest += 1;
+        }
+        pub fn endif(e: *Self) void {
+            e.b.byte(O.end);
+            e.nest -= 1;
+        }
+        pub fn getX(e: *Self, n: u8) void {
+            if (n == 31) e.b.i64c(0) else e.b.get(L_X + n);
+        }
+        pub fn getSP(e: *Self, n: u8) void {
+            e.b.get(L_X + n);
+        }
+        pub fn setX(e: *Self, n: u8) void {
+            if (n == 31) e.b.byte(O.drop) else e.b.set(L_X + n);
+        }
+        pub fn setSP(e: *Self, n: u8) void {
+            e.b.set(L_X + n);
+        }
+        pub fn setW(e: *Self, n: u8) void {
+            e.b.byte(O.i64_extend_i32_u);
+            e.setX(n);
+        }
+        pub fn countIc(e: *Self, k: u32) void {
+            e.b.emit(.{ get(L_IC), c64(k), O.i64_add, set(L_IC) });
+        }
+        fn storeIc(e: *Self) void {
+            e.b.emit(.{ get(L_CPU), get(L_IC), mo(O.i64_store, OFF_IC) });
+        }
+        fn spillRegs(e: *Self, mask: u32) void {
+            var n: u8 = 0;
+            while (n < 32) : (n += 1) if (mask & bit(n) != 0) e.b.emit(.{ get(L_CPU), get(L_X + n), mo(W(wide, O.i32_store), OFF_X + 8 * @as(u32, n)) });
+        }
+        fn loadRegs(e: *Self, mask: u32) void {
+            var n: u8 = 0;
+            while (n < 32) : (n += 1) if (mask & bit(n) != 0) e.b.emit(.{ get(L_CPU), mo(W(wide, O.i32_load), OFF_X + 8 * @as(u32, n)), set(L_X + n) });
+        }
+        fn spillFlags(e: *Self) void {
+            e.b.emit(.{ get(L_CPU), get(L_CPU), mo(O.i32_load, OFF_CPSR), c32(0x0fff_ffff), O.i32_and, get(L_N), c32(31), O.i32_shl, O.i32_or, get(L_Z), c32(30), O.i32_shl, O.i32_or, get(L_C), c32(29), O.i32_shl, O.i32_or, get(L_V), c32(28), O.i32_shl, O.i32_or, mo(O.i32_store, OFF_CPSR) });
+        }
+        fn loadFlags(e: *Self) void {
+            e.b.emit(.{ get(L_CPU), mo(O.i32_load, OFF_CPSR), set(L_A), get(L_A), c32(31), O.i32_shr_u, set(L_N) });
+            for ([_]u8{ 30, 29, 28 }, L_Z..L_V + 1) |s, l| e.b.emit(.{ get(L_A), c32(s), O.i32_shr_u, c32(1), O.i32_and, set(@intCast(l)) });
+        }
+        pub fn exit(e: *Self) void {
+            e.b.br(e.exit_depth + e.nest);
+        }
+        pub fn exitRet(e: *Self) void {
+            e.spillRegs(e.wcur);
+            e.spillFlags();
+            e.b.br(e.chain_depth + e.nest);
+        }
+        pub fn exitTo(e: *Self, pc: u32) void {
+            e.b.emit(.{ c32(@bitCast(pc)), set(L_RET) });
+            e.exitRet();
+        }
+        pub fn exitStatus(e: *Self, s: u32) void {
+            e.b.emit(.{ c32(@intCast(s)), set(L_RET) });
+            e.exit();
+        }
+        pub fn transfer(e: *Self, target: i32, pc: u32, k: u32) void {
+            e.countIc(k);
+            if (target < 0) return e.exitTo(pc);
+            e.b.emit(.{ get(L_IC), get(L_LIMIT), O.i64_ge_s });
+            e.ifv();
+            e.exitTo(pc);
+            e.endif();
+            e.b.emit(.{ c32(target), set(L_NEXT) });
+            e.b.br(e.top_depth + e.nest);
+        }
+        pub fn fallback(e: *Self, pc: u32, k: u32) void {
+            const b = e.b;
+            e.spillRegs(e.rw.r | e.rw.w);
+            if (e.rw.fr or e.rw.fw) e.spillFlags();
+            if (wide) b.emit(.{ get(L_CPU), c32(@bitCast(mem.ld(u32, pc))), c32(@bitCast(pc)), call(F_EXEC), set(L_R) }) else b.emit(.{ get(L_CPU), c32(@bitCast(pc)), call(F_EXEC32), set(L_R) });
+            e.loadRegs(e.rw.w);
+            if (e.rw.fw) e.loadFlags();
+            b.get(L_R);
+            e.ifv();
+            e.countIc(k);
+            b.emit(.{ get(L_R), set(L_RET) });
+            e.exit();
+            e.endif();
+        }
+        pub fn address(e: *Self) void {
+            e.b.emit(.{ tee(L_T0), c64(32), O.i64_shr_u, O.i64_eqz, O.if_, wasm.I32, get(L_T0), O.i32_wrap_i64, O.else_, get(L_CPU), get(L_T0), call(F_TX), O.end, tee(L_A), O.i32_eqz });
+            e.ifv();
+            e.exitStatus(2);
+            e.endif();
+        }
+        pub fn storeCheck(e: *Self, off: u32) void {
+            e.b.emit(.{ get(L_A), c32(@bitCast(off)), O.i32_add, c32(12), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE) });
+            e.ifv();
+            e.b.emit(.{ get(L_CPU), get(L_A), c32(@bitCast(off)), O.i32_add, call(F_STORE) });
+            e.ifv();
+            e.exitStatus(2);
+            e.endif();
+            e.endif();
+        }
+        pub fn cond(e: *Self, cc: u8) void {
+            const b = e.b;
+            switch (cc >> 1) {
+                0 => b.get(L_Z),
+                1 => b.get(L_C),
+                2 => b.get(L_N),
+                3 => b.get(L_V),
+                4 => b.emit(.{ get(L_C), get(L_Z), O.i32_eqz, O.i32_and }),
+                5 => b.emit(.{ get(L_N), get(L_V), O.i32_eq }),
+                6 => b.emit(.{ get(L_Z), O.i32_eqz, get(L_N), get(L_V), O.i32_eq, O.i32_and }),
+                else => return b.i32c(1),
+            }
+            if (cc & 1 != 0) b.byte(O.i32_eqz);
+        }
+        pub fn flagsNZ(e: *Self, comptime w: bool) void {
+            const R = regs(w);
+            e.b.get(R.r);
+            topBit(e.b, w);
+            e.b.emit(.{ set(L_N), get(R.r), W(w, O.i32_eqz), set(L_Z) });
+        }
+        pub fn flagsLogic(e: *Self, comptime w: bool) void {
+            e.flagsNZ(w);
+            e.b.emit(.{ c32(0), set(L_C), c32(0), set(L_V) });
+        }
+        pub fn flags(e: *Self, comptime w: bool, carry_in: bool, sub: bool) void {
+            const R = regs(w);
+            const b = e.b;
+            e.flagsNZ(w);
+            if (!carry_in) {
+                if (sub) b.emit(.{ get(R.a), get(R.b), W(w, O.i32_ge_u) }) else b.emit(.{ get(R.r), get(R.a), W(w, O.i32_lt_u) });
+            } else b.emit(.{ get(R.a), get(R.b), W(w, O.i32_add), tee(R.t), get(R.a), W(w, O.i32_lt_u), get(R.r), get(R.t), W(w, O.i32_lt_u), O.i32_or });
+            b.emit(.{ set(L_C), get(R.a), get(if (sub) R.b else R.r), W(w, O.i32_xor), get(if (sub) R.a else R.b), get(R.r), W(w, O.i32_xor), W(w, O.i32_and) });
+            topBit(b, w);
+            b.set(L_V);
+        }
+        fn shiftOp(comptime w: bool, kind: u8) u8 {
+            return switch (kind & 3) {
+                0 => W(w, O.i32_shl),
+                1 => W(w, O.i32_shr_u),
+                2 => W(w, O.i32_shr_s),
+                else => W(w, O.i32_rotr),
+            };
+        }
+        fn operand2(e: *Self, o: *const Op) void {
+            const b = e.b;
+            switch (o.b) {
+                0 => b.i64c(@bitCast(o.imm)),
+                1 => {
+                    const amt: i32 = @intCast(o.imm);
+                    e.getX(o.rm);
+                    if (o.a & 4 != 0) {
+                        if (amt != 0) b.emit(.{ c64(amt), shiftOp(true, o.ra) });
+                        if (o.ra & 4 != 0) b.emit(.{ c64(-1), O.i64_xor });
+                    } else {
+                        b.byte(O.i32_wrap_i64);
+                        if (amt != 0) b.emit(.{ c32(amt), shiftOp(false, o.ra) });
+                        if (o.ra & 4 != 0) b.emit(.{ c32(-1), O.i32_xor });
+                        b.byte(O.i64_extend_i32_u);
+                    }
+                },
+                else => {
+                    e.getX(o.rm);
+                    switch (o.ra) {
+                        0 => b.emit(.{ c64(255), O.i64_and }),
+                        1 => b.emit(.{ c64(65535), O.i64_and }),
+                        2 => b.emit(.{ c64(0xffff_ffff), O.i64_and }),
+                        4 => b.byte(O.i64_extend8_s),
+                        5 => b.byte(O.i64_extend16_s),
+                        6 => b.byte(O.i64_extend32_s),
+                        else => {},
+                    }
+                    if (o.imm != 0) b.emit(.{ c64(@intCast(o.imm)), O.i64_shl });
+                },
+            }
+        }
+        fn arith(e: *Self, comptime w: bool, o: *const Op, sub: bool, carry: bool, flag: bool) void {
+            const b = e.b;
+            const R = regs(w);
+            if (carry) {
+                e.getX(o.rn);
+                if (!w) b.byte(O.i32_wrap_i64);
+                b.set(R.a);
+                e.getX(o.rm);
+                if (!w) b.byte(O.i32_wrap_i64);
+                if (sub) b.emit(.{ cW(w, -1), W(w, O.i32_xor) });
+                b.emit(.{ set(R.b), get(R.a), get(R.b), W(w, O.i32_add), get(L_C) });
+                if (w) b.byte(O.i64_extend_i32_u);
+                b.emit(.{ W(w, O.i32_add), tee(R.r) });
+                if (flag) e.flags(w, true, false);
+            } else {
+                if (o.b == 1) e.getX(o.rn) else e.getSP(o.rn);
+                if (!w) b.byte(O.i32_wrap_i64);
+                b.set(R.a);
+                e.operand2(o);
+                if (!w) b.byte(O.i32_wrap_i64);
+                b.emit(.{ set(R.b), get(R.a), get(R.b), if (sub) W(w, O.i32_sub) else W(w, O.i32_add), tee(R.r) });
+                if (flag) e.flags(w, false, sub);
+            }
+            if (flag or carry) {
+                if (w) e.setX(o.rd) else e.setW(o.rd);
+            } else {
+                if (!w) b.byte(O.i64_extend_i32_u);
+                e.setSP(o.rd);
+            }
+        }
+        fn divide(e: *Self, comptime w: bool, signed: bool) void {
+            const b = e.b;
+            const R = regs(w);
+            if (!w) b.byte(O.i32_wrap_i64);
+            b.set(R.b);
+            if (!w) b.byte(O.i32_wrap_i64);
+            b.emit(.{ set(R.a), get(R.b), W(w, O.i32_eqz), O.if_, if (w) wasm.I64 else wasm.I32, cW(w, 0), O.else_ });
+            if (signed) b.emit(.{ get(R.b), cW(w, -1), W(w, O.i32_eq), O.if_, if (w) wasm.I64 else wasm.I32, cW(w, 0), get(R.a), W(w, O.i32_sub), O.else_, get(R.a), get(R.b), W(w, O.i32_div_s), O.end }) else b.emit(.{ get(R.a), get(R.b), W(w, O.i32_div_u) });
+            b.byte(O.end);
+        }
+        fn emitOp(e: *Self, o: *const Op, pc: u32, k: u32) bool {
+            const b = e.b;
+            switch (o.kind) {
+                .nop => {},
+                .adr => {
+                    b.i64c(@bitCast(o.imm));
+                    e.setX(o.rd);
+                },
+                .addsub => if (o.a & 4 != 0) e.arith(true, o, o.a & 1 != 0, false, o.a & 2 != 0) else e.arith(false, o, o.a & 1 != 0, false, o.a & 2 != 0),
+                .adc => if (o.a & 4 != 0) e.arith(true, o, o.a & 1 != 0, true, o.a & 2 != 0) else e.arith(false, o, o.a & 1 != 0, true, o.a & 2 != 0),
+                .logic => {
+                    const opc = o.a & 3;
+                    const sf = o.a & 4 != 0;
+                    e.getX(o.rn);
+                    e.operand2(o);
+                    b.byte(switch (opc) {
+                        0, 3 => O.i64_and,
+                        1 => O.i64_or,
+                        else => O.i64_xor,
+                    });
+                    if (!sf) b.emit(.{ O.i32_wrap_i64, tee(L_R), O.i64_extend_i32_u }) else b.tee(L_T2);
+                    if (opc == 3) {
+                        if (sf) e.flagsLogic(true) else e.flagsLogic(false);
+                        e.setX(o.rd);
+                    } else if (o.a & 8 != 0) e.setX(o.rd) else e.setSP(o.rd);
+                },
+                .movw => {
+                    const sf = o.a & 4 != 0;
+                    const sh: u6 = @intCast(o.b);
+                    const val = o.imm << sh;
+                    switch (o.a & 3) {
+                        0 => b.i64c(@bitCast(if (sf) ~val else ~val & 0xffff_ffff)),
+                        2 => b.i64c(@bitCast(val)),
+                        else => {
+                            e.getX(o.rd);
+                            b.emit(.{ c64(@bitCast(~(@as(u64, 0xffff) << sh) & (if (sf) ~@as(u64, 0) else 0xffff_ffff))), O.i64_and, c64(@bitCast(val)), O.i64_or });
+                        },
+                    }
+                    e.setX(o.rd);
+                },
+                .bfm => {
+                    const opc = o.a & 3;
+                    const sf = o.a & 4 != 0;
+                    const rot: u32 = o.b;
+                    const wmask = o.imm;
+                    const tmask = a64.replicate(bt.ones(o.rm), @as(u32, 1) << @intCast(o.a >> 3), if (sf) 64 else 32);
+                    e.getX(o.rn);
+                    if (!sf) {
+                        b.byte(O.i32_wrap_i64);
+                        if (rot != 0) b.emit(.{ c32(@intCast(rot)), O.i32_rotr });
+                        b.byte(O.i64_extend_i32_u);
+                    } else if (rot != 0) b.emit(.{ c64(rot), O.i64_rotr });
+                    b.emit(.{ c64(@bitCast(wmask)), O.i64_and });
+                    if (opc == 1) {
+                        e.getX(o.rd);
+                        b.emit(.{ c64(@bitCast(~wmask)), O.i64_and, O.i64_or });
+                    }
+                    b.emit(.{ c64(@bitCast(tmask)), O.i64_and, set(L_T2) });
+                    if (opc == 0) {
+                        e.getX(o.rn);
+                        b.emit(.{ c64(63 - @as(i64, o.ra)), O.i64_shl, c64(63), O.i64_shr_s, c64(@bitCast(~tmask)), O.i64_and, get(L_T2), O.i64_or });
+                    } else if (opc == 1) {
+                        e.getX(o.rd);
+                        b.emit(.{ c64(@bitCast(~tmask)), O.i64_and, get(L_T2), O.i64_or });
+                    } else b.get(L_T2);
+                    if (!sf) b.emit(.{ c64(0xffff_ffff), O.i64_and });
+                    e.setX(o.rd);
+                },
+                .extr => {
+                    const lsb: i32 = o.b;
+                    e.getX(o.rm);
+                    if (o.a != 0) {
+                        if (lsb != 0) {
+                            b.emit(.{ c64(lsb), O.i64_shr_u });
+                            e.getX(o.rn);
+                            b.emit(.{ c64(64 - lsb), O.i64_shl, O.i64_or });
+                        }
+                        e.setX(o.rd);
+                    } else {
+                        b.byte(O.i32_wrap_i64);
+                        if (lsb != 0) {
+                            b.emit(.{ c32(lsb), O.i32_shr_u });
+                            e.getX(o.rn);
+                            b.emit(.{ O.i32_wrap_i64, c32(32 - lsb), O.i32_shl, O.i32_or });
+                        }
+                        e.setW(o.rd);
+                    }
+                },
+                .b => {
+                    if (o.a != 0) {
+                        b.i64c(pc + 4);
+                        e.setX(30);
+                        e.transfer(-1, @truncate(o.imm), k);
+                    } else e.transfer(e.r.blocks[e.blk].taken, @truncate(o.imm), k);
+                    return true;
+                },
+                .bcond, .cbz, .tbz => {
+                    switch (o.kind) {
+                        .bcond => e.cond(o.a),
+                        .cbz => {
+                            e.getX(o.rd);
+                            if (o.a & 1 == 0) b.emit(.{ O.i32_wrap_i64, O.i32_eqz }) else b.byte(O.i64_eqz);
+                            if (o.a & 2 != 0) b.byte(O.i32_eqz);
+                        },
+                        else => {
+                            e.getX(o.rd);
+                            b.emit(.{ c64(o.b), O.i64_shr_u, O.i32_wrap_i64, c32(1), O.i32_and });
+                            if (o.a == 0) b.byte(O.i32_eqz);
+                        },
+                    }
+                    e.ifv();
+                    e.transfer(e.r.blocks[e.blk].taken, @truncate(o.imm), k);
+                    e.endif();
+                    e.transfer(e.r.blocks[e.blk].fall, pc + 4, k);
+                    return true;
+                },
+                .br => {
+                    e.getX(o.rn);
+                    b.emit(.{ O.i32_wrap_i64, set(L_RET) });
+                    if (o.a == 1) {
+                        b.i64c(pc + 4);
+                        e.setX(30);
+                    }
+                    e.countIc(k);
+                    e.exitRet();
+                    return true;
+                },
+                .ldrlit => if (o.b <= 2) {
+                    b.emit(.{ c32(0), mo(if (o.b == 1) O.i64_load else LD[2][o.b >> 1], @truncate(o.imm)) });
+                    e.setX(o.rd);
+                },
+                .ldp => {
+                    const kind = o.a & 3;
+                    const opc = o.a >> 3;
+                    e.getSP(o.rn);
+                    if (kind != 1 and o.imm != 0) b.emit(.{ c64(@bitCast(o.imm)), O.i64_add });
+                    e.address();
+                    if (kind == 1 or kind == 3) {
+                        e.getSP(o.rn);
+                        b.emit(.{ c64(@bitCast(o.imm)), O.i64_add });
+                        e.setSP(o.rn);
+                    }
+                    const sz: u32 = if (opc == 2) 3 else 2;
+                    for ([_]u8{ o.rd, o.rm }, 0..) |t, i| {
+                        const off = (@as(u32, 1) << @intCast(sz)) * @as(u32, @intCast(i));
+                        if (o.a & 4 != 0) {
+                            b.emit(.{ get(L_A), mo(LD[sz][@intFromBool(opc == 1)], off) });
+                            e.setX(t);
+                        } else {
+                            e.storeCheck(off);
+                            b.get(L_A);
+                            e.getX(t);
+                            b.memop(ST[sz], off);
+                        }
+                    }
+                },
+                .ldst => {
+                    const size: u5 = @intCast(o.b >> 2);
+                    const opc = o.b & 3;
+                    e.getSP(o.rn);
+                    switch (o.a) {
+                        0, 2 => if (o.imm != 0) b.emit(.{ c64(@bitCast(o.imm)), O.i64_add }),
+                        3 => {
+                            e.getX(o.rm);
+                            switch (o.ra >> 1) {
+                                2 => b.emit(.{ c64(0xffff_ffff), O.i64_and }),
+                                6 => b.byte(O.i64_extend32_s),
+                                else => {},
+                            }
+                            if (o.ra & 1 != 0 and size != 0) b.emit(.{ c64(size), O.i64_shl });
+                            b.byte(O.i64_add);
+                        },
+                        else => {},
+                    }
+                    if (o.a == 2) {
+                        b.tee(L_T0);
+                        e.setSP(o.rn);
+                        b.get(L_T0);
+                    }
+                    e.address();
+                    if (o.a == 1) {
+                        e.getSP(o.rn);
+                        b.emit(.{ c64(@bitCast(o.imm)), O.i64_add });
+                        e.setSP(o.rn);
+                    }
+                    if (opc == 0 or (size == 3 and opc == 2)) {
+                        e.storeCheck(0);
+                        b.get(L_A);
+                        e.getX(o.rd);
+                        b.memop(ST[size], 0);
+                    } else {
+                        b.emit(.{ get(L_A), mo(LD[size][@intFromBool(opc != 1)], 0) });
+                        if (opc == 3 and size < 3) b.emit(.{ c64(0xffff_ffff), O.i64_and });
+                        e.setX(o.rd);
+                    }
+                },
+                .ccmp => {
+                    e.cond(o.b);
+                    b.blockStart(O.if_, wasm.VOID);
+                    if (o.a & 4 != 0) {
+                        e.getX(o.rn);
+                        b.set(L_T0);
+                        if (o.a & 8 != 0) b.i64c(@bitCast(o.imm)) else e.getX(o.rm);
+                        b.emit(.{ set(L_T1), get(L_T0), get(L_T1), if (o.a & 1 != 0) O.i64_sub else O.i64_add, set(L_T2) });
+                        e.flags(true, false, o.a & 1 != 0);
+                    } else {
+                        e.getX(o.rn);
+                        b.emit(.{ O.i32_wrap_i64, set(L_A) });
+                        if (o.a & 8 != 0) b.i32c(@intCast(o.imm)) else {
+                            e.getX(o.rm);
+                            b.byte(O.i32_wrap_i64);
+                        }
+                        b.emit(.{ set(L_B), get(L_A), get(L_B), if (o.a & 1 != 0) O.i32_sub else O.i32_add, set(L_R) });
+                        e.flags(false, false, o.a & 1 != 0);
+                    }
+                    b.byte(O.else_);
+                    for ([_]u32{ L_N, L_Z, L_C, L_V }, 0..) |l, i| b.emit(.{ c32((o.ra >> @intCast(3 - i)) & 1), set(l) });
+                    b.byte(O.end);
+                },
+                .csel => {
+                    const opc = o.a & 1;
+                    const op2 = (o.a >> 1) & 1;
+                    e.getX(o.rn);
+                    e.getX(o.rm);
+                    if (opc == 0 and op2 == 1) b.emit(.{ c64(1), O.i64_add }) else if (opc == 1 and op2 == 0) b.emit(.{ c64(-1), O.i64_xor }) else if (opc == 1) b.emit(.{ set(L_T0), c64(0), get(L_T0), O.i64_sub });
+                    e.cond(o.b);
+                    b.byte(O.select);
+                    if (o.a & 4 == 0) b.emit(.{ c64(0xffff_ffff), O.i64_and });
+                    e.setX(o.rd);
+                },
+                .excl => {
+                    const size: u2 = @intCast(o.a);
+                    const o2 = o.b & 4 != 0;
+                    const L = o.b & 2 != 0;
+                    const o1 = o.b & 1 != 0;
+                    if (o1 and !o2) {
+                        e.fallback(pc, k);
+                        return false;
+                    }
+                    e.getSP(o.rn);
+                    e.address();
+                    if (o1) {
+                        b.emit(.{ get(L_A), mo(LD[size][0], 0), set(L_T0), get(L_T0) });
+                        e.getX(o.rm);
+                        if (size < 3) b.emit(.{ c64(@bitCast((@as(u64, 1) << (@as(u6, 8) << size)) - 1)), O.i64_and });
+                        b.byte(O.i64_eq);
+                        e.ifv();
+                        e.storeCheck(0);
+                        b.get(L_A);
+                        e.getX(o.rd);
+                        b.memop(ST[size], 0);
+                        e.endif();
+                        b.get(L_T0);
+                        e.setX(o.rm);
+                    } else if (L) {
+                        if (!o2) b.emit(.{ get(L_CPU), c32(1), mo(O.i32_store, OFF_EXCL) });
+                        b.emit(.{ get(L_A), mo(LD[size][0], 0) });
+                        e.setX(o.rd);
+                    } else {
+                        e.storeCheck(0);
+                        b.get(L_A);
+                        e.getX(o.rd);
+                        b.memop(ST[size], 0);
+                        if (!o2) {
+                            b.emit(.{ get(L_CPU), mo(O.i32_load, OFF_EXCL), c32(1), O.i32_xor });
+                            e.setW(o.rm);
+                            b.emit(.{ get(L_CPU), c32(0), mo(O.i32_store, OFF_EXCL) });
+                        }
+                    }
+                },
+                .mrs => if (o.imm == 0x5e82) {
+                    b.emit(.{ get(L_CPU), mo(O.i64_load, OFF_TLS) });
+                    e.setX(o.rd);
+                } else e.fallback(pc, k),
+                .one => if (o.a & 7 == 4) {
+                    e.getX(o.rn);
+                    if (o.a & 8 != 0) {
+                        b.byte(O.i64_clz);
+                        e.setX(o.rd);
+                    } else {
+                        b.emit(.{ O.i32_wrap_i64, O.i32_clz });
+                        e.setW(o.rd);
+                    }
+                } else e.fallback(pc, k),
+                .two => {
+                    const opc = o.a & 63;
+                    const sf = o.a & 64 != 0;
+                    e.getX(o.rn);
+                    if (opc == 2 or opc == 3) {
+                        e.getX(o.rm);
+                        if (sf) e.divide(true, opc == 3) else e.divide(false, opc == 3);
+                    } else if (sf) {
+                        e.getX(o.rm);
+                        b.byte(shiftOp(true, @intCast(opc - 8)));
+                    } else {
+                        b.byte(O.i32_wrap_i64);
+                        e.getX(o.rm);
+                        b.emit(.{ O.i32_wrap_i64, shiftOp(false, @intCast(opc - 8)) });
+                    }
+                    if (sf) e.setX(o.rd) else e.setW(o.rd);
+                },
+                .three => {
+                    const op31 = o.a & 7;
+                    const o0 = o.a & 8 != 0;
+                    if (op31 == 0) {
+                        e.getX(o.ra);
+                        e.getX(o.rn);
+                        e.getX(o.rm);
+                        b.emit(.{ O.i64_mul, if (o0) O.i64_sub else O.i64_add });
+                        if (o.a & 16 == 0) b.emit(.{ c64(0xffff_ffff), O.i64_and });
+                        e.setX(o.rd);
+                    } else if (op31 == 1 or op31 == 5) {
+                        const ext: u8 = if (op31 == 1) O.i64_extend_i32_s else O.i64_extend_i32_u;
+                        e.getX(o.ra);
+                        e.getX(o.rn);
+                        b.emit(.{ O.i32_wrap_i64, ext });
+                        e.getX(o.rm);
+                        b.emit(.{ O.i32_wrap_i64, ext, O.i64_mul, if (o0) O.i64_sub else O.i64_add });
+                        e.setX(o.rd);
+                    } else e.fallback(pc, k);
+                },
+                .simd => jitfp.emitSimd(e, @truncate(o.imm), pc, k),
+                .vmem => jitfp.emitVmem(e, @truncate(o.imm), pc, k),
+                .vldrlit => jitfp.emitVldrlit(e, o),
+                else => e.fallback(pc, k),
+            }
+            return false;
+        }
+    };
+}
+
 fn rwOf(o: *const Op) RW {
     return switch (o.kind) {
         .nop, .clrex, .fault, .vldrlit => .{ .r = 0, .w = 0 },
@@ -1399,14 +836,10 @@ fn rwOf(o: *const Op) RW {
         .svc, .raw => ALL,
     };
 }
-/// the SIMD&FP space touches a general register only through the conversions, the general
-/// moves and the general-register lane copies, and NZCV only through the compares and selects
 fn simdRw(w: u32) RW {
     const rd: u8 = @intCast(w & 31);
     const rn: u8 = @intCast((w >> 5) & 31);
     if (w & 0x5f00_0000 == 0x1e00_0000) {
-        // the fixed-point and integer conversions: SCVTF/UCVTF (opcode 2, 3) and FMOV to a V
-        // register (7) read the general register, the rest write it
         if (w & 0x5f20_0000 == 0x1e00_0000 or w & 0x5f20_fc00 == 0x1e20_0000) {
             const opcode = (w >> 16) & 7;
             return if (opcode == 2 or opcode == 3 or opcode == 7) .{ .r = bit(rn), .w = 0 } else .{ .r = 0, .w = bit(rd) };
@@ -1416,39 +849,40 @@ fn simdRw(w: u32) RW {
         if (w & 0x5f20_0c00 == 0x1e20_0c00) return .{ .r = 0, .w = 0, .fr = true };
         return .{ .r = 0, .w = 0 };
     }
-    // DUP and INS from a general register read it; SMOV and UMOV write one
     if (w & 0x9fe0_8400 == 0x0e00_0400 and w & 0x800 != 0) return if (w & 0x2000 != 0) .{ .r = 0, .w = bit(rd) } else .{ .r = bit(rn), .w = 0 };
     return .{ .r = 0, .w = 0 };
 }
 
-/// emit the region's function body into `b`
 fn emitRegion(b: *Buf, r: *Region, page: *cpu.Page) void {
-    const wide = r.isa == .a64;
-    var e = Emit{ .b = b, .r = r, .page = page, .blk = 0, .used = 0, .written = 0, .wcur = 0, .rw = if (wide) ALL else ALL32, .exit_depth = 0, .chain_depth = 0, .top_depth = 0, .nest = 0 };
+    switch (r.isa) {
+        inline else => |isa| emitRegionAs(isa, b, r, page),
+    }
+}
+fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
+    const wide = isa == .a64;
+    var e = Emit(wide){ .b = b, .r = r, .blk = 0, .used = 0, .written = 0, .wcur = 0, .rw = if (wide) ALL else ALL32, .exit_depth = 0, .chain_depth = 0, .top_depth = 0, .nest = 0 };
     const n = r.nblocks;
-    // what each block writes, and what may have been written before it is entered: the union
-    // over its predecessors, to a fixed point (an entry from the dispatcher has written nothing)
-    var W: [MAX_BLOCKS]u32 = undefined;
+    var writes: [MAX_BLOCKS]u32 = undefined;
     var wb: [MAX_BLOCKS]u32 = undefined;
     if (wide) {
         for (r.blocks[0..n], 0..) |blk, i| {
-            W[i] = 0;
+            writes[i] = 0;
             wb[i] = 0;
             var pc = blk.pc;
             var j: u32 = 0;
             while (j < blk.n) : (j += 1) {
                 const rw = rwOf(&page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2]);
-                W[i] |= rw.w;
+                writes[i] |= rw.w;
                 e.used |= rw.r | rw.w;
                 pc += 4;
             }
-            e.written |= W[i];
+            e.written |= writes[i];
         }
         var changed = true;
         while (changed) {
             changed = false;
             for (r.blocks[0..n], 0..) |blk, i| {
-                const out = wb[i] | W[i];
+                const out = wb[i] | writes[i];
                 for ([_]i32{ blk.taken, blk.fall }) |t| if (t >= 0) {
                     const j: usize = @intCast(t);
                     if (wb[j] | out != wb[j]) {
@@ -1463,58 +897,28 @@ fn emitRegion(b: *Buf, r: *Region, page: *cpu.Page) void {
         e.written = 0x7fff;
         @memset(wb[0..n], 0x7fff);
     }
-    // locals: 32 registers, 4 i32 flags, 4 i64 temps, 6 i32 temps, ic and its limit, 2 f64 temps
-    b.u(6);
-    b.u(32);
-    b.byte(if (wide) wasm.I64 else wasm.I32);
-    b.u(4);
-    b.byte(wasm.I32);
-    b.u(4);
-    b.byte(wasm.I64);
-    b.u(6);
-    b.byte(wasm.I32);
-    b.u(2);
-    b.byte(wasm.I64);
-    b.u(2);
-    b.byte(wasm.F64);
+    b.emit(.{ 6, 32, if (wide) wasm.I64 else wasm.I32, 4, wasm.I32, 4, wasm.I64, 6, wasm.I32, 2, wasm.I64, 2, wasm.F64 });
     e.loadRegs(e.used);
     e.loadFlags();
-    b.get(L_CPU);
-    b.memop(O.i64_load, OFF_IC);
-    b.set(L_IC);
-    b.get(L_CPU);
-    b.memop(O.i64_load, OFF_LIMIT);
-    b.set(L_LIMIT);
-    b.get(L_ENTRY);
-    b.set(L_NEXT);
-    b.blockStart(O.block, wasm.VOID); // exit: a status
-    b.blockStart(O.block, wasm.VOID); // chain: a pc
-    b.blockStart(O.loop, wasm.VOID); // top
-    var i: u32 = n;
-    while (i > 0) : (i -= 1) b.blockStart(O.block, wasm.VOID);
-    b.get(L_NEXT);
-    b.op(O.br_table);
+    b.emit(.{ get(L_CPU), mo(O.i64_load, OFF_IC), set(L_IC), get(L_CPU), mo(O.i64_load, OFF_LIMIT), set(L_LIMIT), get(L_ENTRY), set(L_NEXT), O.block, wasm.VOID, O.block, wasm.VOID, O.loop, wasm.VOID });
+    for (0..n) |_| b.blockStart(O.block, wasm.VOID);
+    b.emit(.{ get(L_NEXT), O.br_table });
     b.u(n);
-    i = 0;
-    while (i < n) : (i += 1) b.u(i);
+    for (0..n) |i| b.u(i);
     b.u(0);
-    i = 0;
-    while (i < n) : (i += 1) {
-        b.op(O.end); // block i's label: its body follows
-        e.blk = i;
-        e.top_depth = n - 1 - i;
-        e.chain_depth = n - i;
-        e.exit_depth = n - i + 1;
+    for (r.blocks[0..n], 0..) |blk, i| {
+        b.byte(O.end);
+        e.blk = @intCast(i);
+        e.top_depth = n - 1 - @as(u32, @intCast(i));
+        e.chain_depth = n - @as(u32, @intCast(i));
+        e.exit_depth = e.chain_depth + 1;
         e.wcur = wb[i];
-        const blk = r.blocks[i];
-        b.get(L_CPU);
-        b.i32c(@bitCast(blk.pc));
-        b.memop(O.i32_store, OFF_BPC);
+        b.emit(.{ get(L_CPU), c32(@bitCast(blk.pc)), mo(O.i32_store, OFF_BPC) });
         var pc = blk.pc;
         var j: u32 = 0;
         var ended = false;
         while (j < blk.n) : (j += 1) {
-            const len: u32 = if (r.isa == .thumb and (mem.ptr(u16, pc).* & 0xf800) != 0xf000) 2 else 4;
+            const len: u32 = if (isa == .thumb and (mem.ld(u16, pc) & 0xf800) != 0xf000) 2 else 4;
             const o = &page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2];
             if (wide) {
                 e.rw = rwOf(o);
@@ -1523,96 +927,43 @@ fn emitRegion(b: *Buf, r: *Region, page: *cpu.Page) void {
             if (pc -% fb_lo < fb_hi -% fb_lo) {
                 e.fallback(pc, j + 1);
                 ended = false;
-            } else switch (r.isa) {
-                .a64 => ended = e.emitOp(o, pc, j + 1),
-                .arm => ended = jit32.emitArm(&e, pc, j + 1),
-                .thumb => ended = jit32.emitThumb(&e, pc, j + 1),
-            }
+            } else ended = switch (isa) {
+                .a64 => e.emitOp(o, pc, j + 1),
+                .arm => jit32.emitArm(&e, pc, j + 1),
+                .thumb => jit32.emitThumb(&e, pc, j + 1),
+            };
             pc += len;
             if (ended) break;
         }
-        if (!ended) e.transfer(blk.fall, if (r.isa == .thumb) pc | 1 else pc, blk.n);
+        if (!ended) e.transfer(blk.fall, if (isa == .thumb) pc | 1 else pc, blk.n);
     }
-    b.op(O.end); // loop
-    b.op(O.end); // chain
+    b.emit(.{ O.end, O.end });
     e.storeIc();
-    if (chain) chainTo(&e);
-    b.get(L_RET);
-    b.op(O.return_);
-    b.op(O.end); // exit
+    if (chain) chainTo(wide, &e);
+    b.emit(.{ get(L_RET), O.return_, O.end });
     e.spillRegs(e.written);
     e.spillFlags();
     e.storeIc();
-    b.get(L_RET);
-    b.op(O.end); // function
+    b.emit(.{ get(L_RET), O.end });
 }
-/// the epilogue's hand-off: a pc in L_RET whose block has a region, within the budget, is entered
-/// by tail call; anything else returns to the dispatcher
-fn chainTo(e: *Emit) void {
+fn chainTo(comptime wide: bool, e: *Emit(wide)) void {
     const b = e.b;
-    b.blockStart(O.block, wasm.VOID);
-    b.get(L_RET);
-    b.i32c(STATUS_MAX);
-    b.op(O.i32_lt_u);
-    b.brIf(0);
-    b.get(L_IC);
-    b.get(L_LIMIT);
-    b.op(O.i64_ge_s);
-    b.brIf(0);
-    b.get(L_RET);
-    b.i32c(abi.PAGE_SHIFT - 2);
-    b.op(O.i32_shr_u);
-    b.i32c(-4);
-    b.op(O.i32_and);
-    b.memop(O.i32_load, cpu.DECODED);
-    b.tee(L_A);
-    b.op(O.i32_eqz);
-    b.brIf(0);
-    b.get(L_A);
-    b.get(L_RET);
-    b.i32c(if (e.r.isa == .a64) abi.PAGE_SIZE - 1 else abi.PAGE_SIZE - 2);
-    b.op(O.i32_and);
-    b.i32c(1);
-    b.op(O.i32_shl);
-    b.op(O.i32_add);
-    b.memop(O.i32_load, OFF_SLOT);
-    b.tee(L_B);
-    b.op(O.i32_eqz);
-    b.brIf(0);
-    if (e.r.isa != .a64) {
-        // the interworking target's T bit, as the dispatcher's bx would set it
-        b.get(L_CPU);
-        b.get(L_CPU);
-        b.memop(O.i32_load, OFF_CPSR);
-        b.i32c(~@as(i32, 1 << 5));
-        b.op(O.i32_and);
-        b.get(L_RET);
-        b.i32c(1);
-        b.op(O.i32_and);
-        b.i32c(5);
-        b.op(O.i32_shl);
-        b.op(O.i32_or);
-        b.memop(O.i32_store, OFF_CPSR);
-    }
-    b.get(L_CPU);
-    b.get(L_B);
-    b.i32c(255);
-    b.op(O.i32_and);
-    b.get(L_B);
-    b.i32c(8);
-    b.op(O.i32_shr_u);
-    b.op(O.return_call_indirect);
-    b.u(0);
-    b.u(0);
-    b.op(O.end);
+    b.emit(.{ O.block, wasm.VOID, get(L_RET), c32(STATUS_MAX), O.i32_lt_u, wasm.brIf(0), get(L_IC), get(L_LIMIT), O.i64_ge_s, wasm.brIf(0), get(L_RET), c32(abi.PAGE_SHIFT - 2), O.i32_shr_u, c32(-4), O.i32_and, mo(O.i32_load, cpu.DECODED), tee(L_A), O.i32_eqz, wasm.brIf(0), get(L_A), get(L_RET), c32(if (wide) abi.PAGE_SIZE - 1 else abi.PAGE_SIZE - 2), O.i32_and, c32(1), O.i32_shl, O.i32_add, mo(O.i32_load, OFF_SLOT), tee(L_B), O.i32_eqz, wasm.brIf(0) });
+    if (!wide) b.emit(.{ get(L_CPU), get(L_CPU), mo(O.i32_load, OFF_CPSR), c32(~@as(i32, 1 << 5)), O.i32_and, get(L_RET), c32(1), O.i32_and, c32(5), O.i32_shl, O.i32_or, mo(O.i32_store, OFF_CPSR) });
+    b.emit(.{ get(L_CPU), get(L_B), c32(255), O.i32_and, get(L_B), c32(8), O.i32_shr_u, O.return_call_indirect, 0, 0, O.end });
 }
 
-/// build one module holding a function per pending request; returns the byte length
+fn importFn(b: *Buf, name: []const u8, ty: u8) void {
+    b.u(3);
+    b.bytes("env");
+    b.u(@intCast(name.len));
+    b.bytes(name);
+    b.emit(.{ 0, ty });
+}
 export fn jit_emit(out: u32, cap: u32) u32 {
     if (in_flight) return 0;
     var b = Buf.init(out, cap);
     nregions = 0;
-    // discover first: a request whose page has gone, or that yields nothing, is dropped
     var q: u32 = 0;
     while (q < nrequests) : (q += 1) {
         const pc = requests[q];
@@ -1624,85 +975,57 @@ export fn jit_emit(out: u32, cap: u32) u32 {
     }
     nrequests = 0;
     if (nregions == 0) return 0;
-    b.bytes(&[_]u8{ 0, 'a', 's', 'm', 1, 0, 0, 0 });
-    // type section: 0 (i32,i32)->i32 region and store, 1 (i32,i32,i32)->i32 exec, 2 (i32,i64)->i32 tx,
-    // 3 (f32,f32)->f32, 4 (f64,f64)->f64, 5 (f64,f64,f64)->f64
-    b.byte(1);
+    b.bytes(&[_]u8{ 0, 'a', 's', 'm', 1, 0, 0, 0, 1 });
     const type_len = b.reserve();
     const type_start = b.len;
-    b.u(6);
-    b.bytes(&[_]u8{ 0x60, 2, wasm.I32, wasm.I32, 1, wasm.I32 });
-    b.bytes(&[_]u8{ 0x60, 3, wasm.I32, wasm.I32, wasm.I32, 1, wasm.I32 });
-    b.bytes(&[_]u8{ 0x60, 2, wasm.I32, wasm.I64, 1, wasm.I32 });
-    b.bytes(&[_]u8{ 0x60, 2, wasm.F32, wasm.F32, 1, wasm.F32 });
-    b.bytes(&[_]u8{ 0x60, 2, wasm.F64, wasm.F64, 1, wasm.F64 });
-    b.bytes(&[_]u8{ 0x60, 3, wasm.F64, wasm.F64, wasm.F64, 1, wasm.F64 });
+    b.bytes(&[_]u8{ 6, 0x60, 2, wasm.I32, wasm.I32, 1, wasm.I32, 0x60, 3, wasm.I32, wasm.I32, wasm.I32, 1, wasm.I32, 0x60, 2, wasm.I32, wasm.I64, 1, wasm.I32, 0x60, 2, wasm.F32, wasm.F32, 1, wasm.F32, 0x60, 2, wasm.F64, wasm.F64, 1, wasm.F64, 0x60, 3, wasm.F64, wasm.F64, wasm.F64, 1, wasm.F64 });
     b.patch(type_len, b.len - type_start);
-    // import section: memory, the core's table (for the hand-off), then the functions in F_ order
     b.byte(2);
     const imp_len = b.reserve();
     const imp_start = b.len;
     b.u(2 + N_IMPORTS);
-    importName(&b, "memory");
-    b.bytes(&[_]u8{ 0x02, 0x00, 1 });
-    importName(&b, "__indirect_function_table");
+    b.u(3);
+    b.bytes("env");
+    b.u(6);
+    b.bytes("memory");
+    b.bytes(&[_]u8{ 0x02, 0x00, 1, 3 });
+    b.bytes("env");
+    b.u(25);
+    b.bytes("__indirect_function_table");
     b.bytes(&[_]u8{ 0x01, 0x70, 0x00, 0 });
-    const fns = [_]struct { []const u8, u8 }{ .{ "exec", 1 }, .{ "tx", 2 }, .{ "store", 0 }, .{ "exec32", 0 }, .{ "fmax32", 3 }, .{ "fmin32", 3 }, .{ "fmaxnm32", 3 }, .{ "fminnm32", 3 }, .{ "fmax64", 4 }, .{ "fmin64", 4 }, .{ "fmaxnm64", 4 }, .{ "fminnm64", 4 }, .{ "fma64", 5 } };
-    for (fns) |f| {
-        importName(&b, f[0]);
-        b.bytes(&[_]u8{ 0x00, f[1] });
-    }
+    importFn(&b, "exec", 1);
+    importFn(&b, "tx", 2);
+    importFn(&b, "store", 0);
+    importFn(&b, "exec32", 0);
+    inline for ([_][]const u8{ "32", "64" }, 3..) |sfx, ty| inline for (FP_NAMES) |nm| importFn(&b, nm ++ sfx, ty);
+    importFn(&b, "fma64", 5);
     b.patch(imp_len, b.len - imp_start);
-    // function section
     b.byte(3);
     b.u(1 + nregions);
     b.u(nregions);
-    var i: u32 = 0;
-    while (i < nregions) : (i += 1) b.u(0);
-    // export section: r0..rN
+    for (0..nregions) |_| b.byte(0);
     b.byte(7);
     const exp_len = b.reserve();
     const exp_start = b.len;
     b.u(nregions);
-    i = 0;
-    while (i < nregions) : (i += 1) {
+    for (0..nregions) |i| {
         var name: [8]u8 = undefined;
-        var len: u32 = 0;
         name[0] = 'r';
-        len = 1;
-        var v = i;
-        var digits: [8]u8 = undefined;
-        var nd: u32 = 0;
-        if (v == 0) {
-            digits[0] = '0';
-            nd = 1;
-        }
-        while (v > 0) : (v /= 10) {
-            digits[nd] = @intCast('0' + v % 10);
-            nd += 1;
-        }
-        while (nd > 0) : (nd -= 1) {
-            name[len] = digits[nd - 1];
-            len += 1;
-        }
+        const len = 1 + std.fmt.printInt(name[1..], i, 10, .lower, .{});
         b.u(len);
         b.bytes(name[0..len]);
-        b.byte(0x00);
+        b.byte(0);
         b.u(N_IMPORTS + i);
     }
     b.patch(exp_len, b.len - exp_start);
-    // code section
     b.byte(10);
     const code_len = b.reserve();
     const code_start = b.len;
     b.u(nregions);
-    i = 0;
-    while (i < nregions) : (i += 1) {
+    for (regions[0..nregions]) |*r| {
         const body_len = b.reserve();
         const body_start = b.len;
-        const r = &regions[i];
-        const page = cpu.decodedPage(r.page) orelse unreachable;
-        emitRegion(&b, r, page);
+        emitRegion(&b, r, cpu.decodedPage(r.page) orelse unreachable);
         b.patch(body_len, b.len - body_start);
     }
     b.patch(code_len, b.len - code_start);
@@ -1715,10 +1038,4 @@ export fn jit_emit(out: u32, cap: u32) u32 {
     stats.batches += 1;
     stats.bytes += b.len;
     return b.len;
-}
-fn importName(b: *Buf, name: []const u8) void {
-    b.u(3);
-    b.bytes("env");
-    b.u(@intCast(name.len));
-    b.bytes(name);
 }

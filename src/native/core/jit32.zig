@@ -8,7 +8,7 @@ const mem = @import("mem.zig");
 const cpu = @import("cpu.zig");
 const jit = @import("jit.zig");
 const wasm = @import("wasm.zig");
-const Emit = jit.Emit;
+const Emit = jit.Emit(false);
 const Region = jit.Region;
 const O = wasm.Op;
 
@@ -704,9 +704,9 @@ fn dataProcessing(e: *Emit, w: u32, pc: u32, k: u32, top: u32, rn: u32, rd: u32,
     b.set(jit.L_R);
     if (S) {
         if (logical) setNZC(e) else switch (o) {
-            2, 10, 3 => e.flagsAdd32(false, true),
-            4, 11 => e.flagsAdd32(false, false),
-            else => e.flagsAdd32(true, false),
+            2, 10, 3 => e.flags(false, false, true),
+            4, 11 => e.flags(false, false, false),
+            else => e.flags(false, true, false),
         }
     }
     if (!compare) {
@@ -808,7 +808,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                 b.op(if (sub) O.i32_sub else O.i32_add);
                 b.tee(jit.L_R);
                 setR(e, rd);
-                e.flagsAdd32(false, sub);
+                e.flags(false, false, sub);
             } else {
                 const n = (h >> 6) & 31;
                 b.get(jit.L_X + rn);
@@ -846,7 +846,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                 b.get(jit.L_B);
                 b.op(if (o == 2) O.i32_add else O.i32_sub);
                 b.set(jit.L_R);
-                e.flagsAdd32(false, o != 2);
+                e.flags(false, false, o != 2);
                 if (o != 1) {
                     b.get(jit.L_R);
                     setR(e, r8);
@@ -898,7 +898,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                         b.op(O.i32_add);
                         b.tee(jit.L_R);
                         setR(e, rd);
-                        e.flagsAdd32(true, false);
+                        e.flags(false, true, false);
                     },
                     6 => {
                         b.get(jit.L_B);
@@ -912,7 +912,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                         b.op(O.i32_add);
                         b.tee(jit.L_R);
                         setR(e, rd);
-                        e.flagsAdd32(true, false);
+                        e.flags(false, true, false);
                     },
                     9 => { // NEG: 0 - Rn
                         b.i32c(0);
@@ -922,14 +922,14 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                         b.op(O.i32_sub);
                         b.tee(jit.L_R);
                         setR(e, rd);
-                        e.flagsAdd32(false, true);
+                        e.flags(false, false, true);
                     },
                     10, 11 => {
                         b.get(jit.L_A);
                         b.get(jit.L_B);
                         b.op(if (o == 10) O.i32_sub else O.i32_add);
                         b.set(jit.L_R);
-                        e.flagsAdd32(false, o == 10);
+                        e.flags(false, false, o == 10);
                     },
                     else => {
                         b.get(jit.L_A);
@@ -980,7 +980,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                         b.get(jit.L_B);
                         b.op(O.i32_sub);
                         b.set(jit.L_R);
-                        e.flagsAdd32(false, true);
+                        e.flags(false, false, true);
                     },
                     else => {
                         if (d == 15) {
