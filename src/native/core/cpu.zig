@@ -1,4 +1,6 @@
+const std = @import("std");
 const abi = @import("abi.zig");
+const assert = std.debug.assert;
 const mem = @import("mem.zig");
 const a64 = @import("a64.zig");
 const arm = @import("arm.zig");
@@ -60,7 +62,18 @@ pub const Fault = enum(u32) {
     null_page = 8,
 };
 
-const FIELDS = [_][]const u8{ "x", "pc", "v", "cpsr", "fpcr", "fpsr", "excl", "tls", "ic", "bpc", "tid", "a64", "exit", "fault_word", "fault_addr", "tls", "errno_addr", "tls_tab" };
+/// The guest-visible state is the run of fields up to `tls`; src/native/cpu.ts reads it through
+/// layout slot 16 as ARCH_SIZE and snapshots that many bytes across a nested call.
+const ARCH_END_FIELD = "tls";
+pub const ARCH_SIZE = @offsetOf(Cpu, ARCH_END_FIELD);
+const FIELDS = [_][]const u8{ "x", "pc", "v", "cpsr", "fpcr", "fpsr", "excl", "tls", "ic", "bpc", "tid", "a64", "exit", "fault_word", "fault_addr", ARCH_END_FIELD, "errno_addr", "tls_tab" };
+comptime {
+    // Slot 16 is a size, not a field: it is `tls`'s offset only while every architectural field is
+    // declared above `tls`. Moving one below would shrink the snapshot and lose it silently.
+    for ([_][]const u8{ "x", "pc", "v", "cpsr", "fpcr", "fpsr", "excl" }) |f| {
+        assert(@offsetOf(Cpu, f) + @sizeOf(@FieldType(Cpu, f)) <= ARCH_SIZE);
+    }
+}
 export fn layout(i: u32) u32 {
     if (i == 0) return @sizeOf(Cpu);
     inline for (FIELDS, 1..) |name, k| if (i == k) return @offsetOf(Cpu, name);
@@ -88,6 +101,10 @@ pub const Page = extern struct {
     ops: [OPS_PER_PAGE]a64.Op,
 };
 pub fn cover(page: *Page, from: u32, to: u32) void {
+    // Both ends are masked to the page below, so a range that runs backwards or leaves the page
+    // marks nothing at all and says so to nobody.
+    assert(to >= from);
+    assert(from >> abi.PAGE_SHIFT == to >> abi.PAGE_SHIFT);
     var i = (from & (abi.PAGE_SIZE - 1)) >> 2;
     const end = (to & (abi.PAGE_SIZE - 1)) >> 2;
     while (i <= end) : (i = (i | 7) + 1) {
@@ -99,8 +116,11 @@ inline fn blockSize(comptime T: type) u32 {
     return (@sizeOf(T) + abi.PAGE_SIZE - 1) & ~@as(u32, abi.PAGE_SIZE - 1);
 }
 pub var page_block: u32 = blockSize(Page);
-pub const DECODED = abi.KERN_BASE + 0x60_0000;
+pub const DECODED = abi.KERN_DECODED;
 const decoded: [*]u32 = @ptrFromInt(DECODED);
+comptime {
+    assert(@sizeOf(@TypeOf(decoded[0])) * abi.PAGE_INDEX_MAX <= abi.KERN_SLOT_FN - abi.KERN_DECODED);
+}
 pub var stats = extern struct { pages: u32 = 0, invalidated: u32 = 0 }{};
 var epoch: u32 = 0;
 
@@ -133,8 +153,12 @@ pub fn pageFor(pc: u32) ?*Page {
     }
     return @ptrFromInt(p);
 }
-const dead: [*]u8 = @ptrFromInt(abi.KERN_BASE + 0xa4_0000);
+const dead: [*]u8 = @ptrFromInt(abi.KERN_DEAD);
+comptime {
+    assert(@sizeOf(@TypeOf(dead[0])) * abi.JIT_SLOTS <= abi.KERN_DEAD_END - abi.KERN_DEAD);
+}
 export fn jit_kill(slot: u32) void {
+    abi.require(slot < abi.JIT_SLOTS, "jit_kill: table slot out of range");
     dead[slot] = 1;
 }
 export fn jit_evict() void {
@@ -146,7 +170,7 @@ export fn jit_evict() void {
             h.* = 0;
         };
     };
-    @memset(dead[0 .. 1 << 18], 0);
+    @memset(dead[0..abi.JIT_SLOTS], 0);
 }
 
 export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
@@ -251,6 +275,8 @@ export fn cpu_stat(i: u32) u32 {
 }
 pub var max_block: u32 = 256;
 export fn set_max_block(n: u32) void {
+    // A block never leaves the page it started on, so a page of instructions is the whole range.
+    abi.require(n >= 1 and n <= OPS_PER_PAGE, "set_max_block: out of range");
     max_block = n;
 }
 
@@ -287,6 +313,14 @@ export fn run_slice(cp: u32, budget: u32) u32 {
             if (c.a64 != 0) c.pc = lr else setPc32(c, lr);
             continue;
         }
+        // The first 64 KiB is never mapped, and below it lies the core's own stack rather than
+        // anything the guest may run: a null-ish branch target faults here instead of being
+        // decoded. arm.block tested this for itself; a64.block never did.
+        if (pc < abi.LOW) {
+            c.fault_addr = pc;
+            _ = raise(c, .null_page, pc);
+            return @intFromEnum(Exit.fault);
+        }
         var status: Status = .jump;
         const page = pageFor(pc) orelse {
             _ = raise(c, .bad_address, pc);
@@ -297,12 +331,20 @@ export fn run_slice(cp: u32, budget: u32) u32 {
         if (s != 0) {
             const f: *const fn (u32, u32) callconv(.c) u32 = @ptrFromInt(s >> 8);
             const r = f(cp, s & 255);
-            if (r >= jit.STATUS_MAX) {
+            // A region returns either the pc to go on at or one of the statuses below. Telling them
+            // apart by LOW rather than by a bound of their own is what keeps a wild target from
+            // being read as a status and leaving the pc where it was, which advances nothing.
+            if (r >= abi.LOW) {
                 if (c.a64 != 0) c.pc = r else setPc32(c, r);
             } else switch (r) {
+                1 => {},
                 2 => return @intFromEnum(Exit.fault),
                 3 => return @intFromEnum(Exit.syscall),
-                else => {},
+                else => {
+                    c.fault_addr = r;
+                    _ = raise(c, .null_page, r);
+                    return @intFromEnum(Exit.fault);
+                },
             }
         } else {
             const h = page.heat[i] +% 1;

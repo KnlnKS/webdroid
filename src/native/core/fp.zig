@@ -134,17 +134,26 @@ pub fn rsqrte(comptime F: type, x: F) F {
     var exp = p.exp;
     var frac = p.frac;
     if (exp == 0) {
-        while (frac < (1 << 51)) {
-            frac *= 2;
-            exp -= 1;
-        }
+        // Normalise the subnormal in one step rather than doubling until bit 51 is set. frac is
+        // non-zero here (x == 0 returned above) and under 2^52, so the count is 12..51.
+        const shift: u6 = @intCast(@clz(frac) - 12);
+        frac <<= shift;
+        exp -= @as(i32, shift);
         frac = (frac % (1 << 51)) * 2;
     }
     const scaled: u64 = if (exp & 1 != 0) 128 + (frac >> 45) % 128 else 256 + (frac >> 44) % 256;
     const a: u64 = if (scaled < 256) scaled * 2 + 1 else (((scaled >> 1) << 1) + 1) << 1;
-    var b: u64 = 512;
-    while (a * (b + 1) * (b + 1) < (1 << 28)) b += 1;
-    const est: u64 = ((b + 1) >> 1) & 0xff;
+    // The reference walks b up from 512 while a * (b+1)^2 < 2^28, which is up to five hundred
+    // 64-bit multiplies for one lane -- and jitfp does not emit frsqrte, so a compiled region pays
+    // it too. The predicate is monotonic in b, so bisect for the same answer in nine steps.
+    // `scaled` puts `a` in [257, 1022], so 1024 always satisfies it and 513 is where b starts.
+    var lo: u64 = 513;
+    var hi: u64 = 1024;
+    while (lo < hi) {
+        const mid = (lo + hi) / 2;
+        if (a * mid * mid >= (1 << 28)) hi = mid else lo = mid + 1;
+    }
+    const est: u64 = (lo >> 1) & 0xff;
     return pack(F, false, @divTrunc((if (F == f64) @as(i32, 3068) else 380) - exp, 2), est << 44);
 }
 pub fn h2f(h: u16) f64 {

@@ -8,6 +8,7 @@ const jit32 = @import("jit32.zig");
 const jitfp = @import("jitfp.zig");
 const fp = @import("fp.zig");
 const bt = @import("bits.zig");
+const assert = std.debug.assert;
 const Cpu = cpu.Cpu;
 const Op = a64.Op;
 const Buf = wasm.Buf;
@@ -99,7 +100,10 @@ comptime {
     for ([_]type{ f32, f64 }, [_][]const u8{ "32", "64" }) |F, sfx| for (0..4) |k| @export(fpThunk(F, @intCast(k)), .{ .name = "jit_" ++ FP_NAMES[k] ++ sfx });
     @export(&fma64, .{ .name = "jit_fma64" });
 }
-pub const STATUS_MAX = 16;
+comptime {
+    // jit_install packs the block index into the low byte of page.slot, the table slot above it.
+    assert(MAX_BLOCKS <= 256);
+}
 
 const OFF_X = @offsetOf(Cpu, "x");
 const OFF_CPSR = @offsetOf(Cpu, "cpsr");
@@ -112,7 +116,7 @@ const OFF_FAULT_ADDR = @offsetOf(Cpu, "fault_addr");
 const OFF_EXCL = @offsetOf(Cpu, "excl");
 const OFF_TLS = @offsetOf(Cpu, "tls");
 const OFF_SLOT = @offsetOf(cpu.Page, "slot");
-const FLAGS_BASE = abi.KERN_BASE + 0x10_0000;
+const FLAGS_BASE = @intFromPtr(mem.page_flags);
 var chain: bool = false;
 export fn jit_config(c: u32) void {
     chain = c != 0;
@@ -157,16 +161,25 @@ export fn jit_count() u32 {
     return nregions;
 }
 export fn jit_entry(i: u32) u32 {
+    abi.require(i < nregions, "jit_entry: region index out of range");
     return regions[i].entry;
 }
 export fn jit_stat() u32 {
     return regions_installed;
 }
 export fn jit_install(i: u32, slot: u32) void {
+    abi.require(i < nregions, "jit_install: region index out of range");
+    // The slot is packed above the block index here and read back as an index into cpu.zig's dead
+    // map, which is sized for the host's table.
+    abi.require(slot < abi.JIT_SLOTS, "jit_install: table slot out of range");
     const r = &regions[i];
     const page = cpu.decodedPage(r.page) orelse return;
     if (page.epoch != r.epoch) return;
-    for (r.blocks[0..r.nblocks], 0..) |b, k| page.slot[(b.pc & (abi.PAGE_SIZE - 1)) >> 1] = (slot << 8) | @as(u32, @intCast(k));
+    // An empty block only exits to its own pc, so installing one would hand that pc straight back
+    // to a region that cannot advance it.
+    for (r.blocks[0..r.nblocks], 0..) |b, k| if (b.n != 0) {
+        page.slot[(b.pc & (abi.PAGE_SIZE - 1)) >> 1] = (slot << 8) | @as(u32, @intCast(k));
+    };
     regions_installed += 1;
 }
 export fn jit_done() void {
@@ -211,7 +224,11 @@ fn scanA64(r: *Region, i: u32, page: *cpu.Page, pc: u32) jit32.Scan {
 fn discover(r: *Region, page: *cpu.Page) bool {
     var total: u32 = 0;
     var i: u32 = 0;
-    while (i < r.nblocks) : (i += 1) {
+    // Scanning a block registers its successors, so r.nblocks grows underneath this loop. Stopping
+    // on the budget here and not only inside the inner loop is what keeps the instructions across
+    // every block down to MAX_INSTR: a block reached after it is exhausted keeps blockFor's n = 0
+    // and emits nothing, and jit_install leaves its pc to the interpreter.
+    while (i < r.nblocks and total < MAX_INSTR) : (i += 1) {
         var pc = r.blocks[i].pc;
         var n: u32 = 0;
         while (true) {
@@ -356,7 +373,7 @@ pub fn Emit(comptime wide: bool) type {
         pub fn settle(e: *Self, mask: u4) void {
             const m = mask & e.pdirty;
             if (m == 0) return;
-            std.debug.assert(e.nest == 0 or e.term);
+            assert(e.nest == 0 or e.term);
             e.emitPending(m);
         }
         fn drop(e: *Self, mask: u4) void {
@@ -509,8 +526,8 @@ pub fn Emit(comptime wide: bool) type {
             const b = e.b;
             const a: u32 = if (off != 0) L_NEXT else L_A;
             if (off != 0) b.emit(.{ get(L_A), c32(@bitCast(off)), O.i32_add, set(L_NEXT) });
-            b.emit(.{ get(a), c32(12), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE) });
-            if (two) b.emit(.{ get(a), c32(8), O.i32_add, c32(12), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE), O.i32_or });
+            b.emit(.{ get(a), c32(abi.PAGE_SHIFT), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE) });
+            if (two) b.emit(.{ get(a), c32(8), O.i32_add, c32(abi.PAGE_SHIFT), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE), O.i32_or });
             e.ifv();
             for (0..@as(u32, 1) + @intFromBool(two)) |h| {
                 b.emit(.{ get(L_CPU), get(a) });
@@ -761,13 +778,20 @@ pub fn Emit(comptime wide: bool) type {
                         e.setSP(o.rn);
                     }
                     const sz: u32 = if (opc == 2) 3 else 2;
+                    const load = o.a & 4 != 0;
+                    // A 64-bit pair writes exactly the two words storeCheck's paired form tests, so
+                    // both halves cost one page lookup and one branch instead of two. jitfp.vstore
+                    // already stores 16 bytes this way. The 32-bit pair is 4 bytes apart, which the
+                    // paired form does not describe, so it keeps a check per half.
+                    const paired = !load and sz == 3;
+                    if (paired) e.storeCheck(0, true);
                     for ([_]u8{ o.rd, o.rm }, 0..) |t, i| {
                         const off = (@as(u32, 1) << @intCast(sz)) * @as(u32, @intCast(i));
-                        if (o.a & 4 != 0) {
+                        if (load) {
                             b.emit(.{ get(L_A), mo(LD[sz][@intFromBool(opc == 1)], off) });
                             e.setX(t);
                         } else {
-                            e.storeCheck(off, false);
+                            if (!paired) e.storeCheck(off, false);
                             b.get(L_A);
                             e.getX(t);
                             b.memop(ST[sz], off);
@@ -853,7 +877,7 @@ pub fn Emit(comptime wide: bool) type {
                 .excl => {
                     const size: u2 = @intCast(o.a);
                     const o2 = o.b & 4 != 0;
-                    const L = o.b & 2 != 0;
+                    const load = o.b & 2 != 0;
                     const o1 = o.b & 1 != 0;
                     if (o1 and !o2) {
                         e.fallback(pc, k);
@@ -874,7 +898,7 @@ pub fn Emit(comptime wide: bool) type {
                         e.endif();
                         b.get(L_T0);
                         e.setX(o.rm);
-                    } else if (L) {
+                    } else if (load) {
                         if (!o2) b.emit(.{ get(L_CPU), c32(1), mo(O.i32_store, OFF_EXCL) });
                         b.emit(.{ get(L_A), mo(LD[size][0], 0) });
                         e.setX(o.rd);
@@ -1042,6 +1066,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
             if (pc -% fb_lo < fb_hi -% fb_lo) rw = if (wide) ALL else ALL32;
             writes[i] |= rw.w;
             e.used |= rw.r | rw.w;
+            assert(t < fr.len);
             fr[t] = rw.fr;
             fk[t] = if (rw.cond) 0 else rw.fw;
             t += 1;
@@ -1146,7 +1171,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
 }
 fn chainTo(comptime wide: bool, e: *Emit(wide)) void {
     const b = e.b;
-    b.emit(.{ O.block, wasm.VOID, get(L_RET), c32(STATUS_MAX), O.i32_lt_u, wasm.brIf(0), get(L_IC), get(L_LIMIT), O.i64_ge_s, wasm.brIf(0), get(L_RET), c32(abi.PAGE_SHIFT - 2), O.i32_shr_u, c32(-4), O.i32_and, mo(O.i32_load, cpu.DECODED), tee(L_A), O.i32_eqz, wasm.brIf(0), get(L_A), get(L_RET), c32(if (wide) abi.PAGE_SIZE - 1 else abi.PAGE_SIZE - 2), O.i32_and, c32(1), O.i32_shl, O.i32_add, mo(O.i32_load, OFF_SLOT), tee(L_B), O.i32_eqz, wasm.brIf(0) });
+    b.emit(.{ O.block, wasm.VOID, get(L_RET), c32(abi.LOW), O.i32_lt_u, wasm.brIf(0), get(L_IC), get(L_LIMIT), O.i64_ge_s, wasm.brIf(0), get(L_RET), c32(abi.PAGE_SHIFT - 2), O.i32_shr_u, c32(-4), O.i32_and, mo(O.i32_load, cpu.DECODED), tee(L_A), O.i32_eqz, wasm.brIf(0), get(L_A), get(L_RET), c32(if (wide) abi.PAGE_SIZE - 1 else abi.PAGE_SIZE - 2), O.i32_and, c32(1), O.i32_shl, O.i32_add, mo(O.i32_load, OFF_SLOT), tee(L_B), O.i32_eqz, wasm.brIf(0) });
     if (!wide) b.emit(.{ get(L_CPU), get(L_CPU), mo(O.i32_load, OFF_CPSR), c32(~@as(i32, 1 << 5)), O.i32_and, get(L_RET), c32(1), O.i32_and, c32(5), O.i32_shl, O.i32_or, mo(O.i32_store, OFF_CPSR) });
     b.emit(.{ get(L_CPU), get(L_B), c32(255), O.i32_and, get(L_B), c32(8), O.i32_shr_u, O.return_call_indirect, 0, 0, O.end });
 }

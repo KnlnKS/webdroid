@@ -696,11 +696,11 @@ fn two(comptime T: type, c: *Cpu, o: *const Op) void {
 fn exclusive(c: *Cpu, o: *const Op, pc: u32) Status {
     const size = o.a;
     const o2 = o.b & 4 != 0;
-    const L = o.b & 2 != 0;
+    const load = o.b & 2 != 0;
     const o1 = o.b & 1 != 0;
     const a = addr(c, c.x[o.rn]) orelse return badAddr(c, pc);
     if (!o1) {
-        if (L) {
+        if (load) {
             if (!o2) c.excl = 1;
             setX(c, o.rd, ldSized(a, size));
         } else {
@@ -712,7 +712,7 @@ fn exclusive(c: *Cpu, o: *const Op, pc: u32) Status {
         }
     } else if (!o2 and size >= 2) {
         const step: u32 = if (size == 3) 8 else 4;
-        if (L) {
+        if (load) {
             c.excl = 1;
             setX(c, o.rd, ldSized(a, size));
             setX(c, o.ra, ldSized(a + step, size));

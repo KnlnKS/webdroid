@@ -921,6 +921,10 @@ pub fn block(c: *Cpu, start: u32, page: *cpu.Page) Status {
         s = if (thumb) execThumb(c, pc) else execArm(c, pc);
         if (s != .next) break;
         pc = @truncate(c.pc);
+        // Stay on the page the caller looked up. a64.block already stops here; this one ran on and
+        // then handed cover() a range that left the page, which marked nothing -- so a store into a
+        // word this block had executed did not drop the page.
+        if (pc >> abi.PAGE_SHIFT != start >> abi.PAGE_SHIFT) break;
     }
     cpu.cover(page, start, last);
     c.ic += n;

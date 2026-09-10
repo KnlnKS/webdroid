@@ -29,86 +29,86 @@ const FN = jit.FN;
 const FZ = jit.FZ;
 
 pub fn rwArm(w: u32) jit.RW {
-    var q = jit.ALL32;
-    q.fr = 0;
-    q.fw = 0;
+    var rw = jit.ALL32;
+    rw.fr = 0;
+    rw.fw = 0;
     const cc = w >> 28;
-    if (cc == 15) return q;
+    if (cc == 15) return rw;
     if (cc != 14) {
-        q.fr = jit.condReads(@intCast(cc));
-        q.cond = true;
+        rw.fr = jit.condReads(@intCast(cc));
+        rw.cond = true;
     }
     const top = bits(w, 25, 3);
     const S = w & (1 << 20) != 0;
     switch (top) {
         0, 1 => {
             if (top == 0 and ((w & 0x0fc000f0) == 0x00000090 or (w & 0x0f8000f0) == 0x00800090)) {
-                if (S) q.fw = FN | FZ;
-                return q;
+                if (S) rw.fw = FN | FZ;
+                return rw;
             }
-            if (top == 0 and (w & 0x0e000090) == 0x00000090) return q;
+            if (top == 0 and (w & 0x0e000090) == 0x00000090) return rw;
             if ((w & 0x0d900000) == 0x01000000) {
-                if ((w & 0x0fbf0fff) == 0x010f0000) q.fr = 15;
-                if ((w & 0x0db0f000) == 0x0120f000 and w & (1 << 19) != 0) q.fw = 15;
-                return q;
+                if ((w & 0x0fbf0fff) == 0x010f0000) rw.fr = 15;
+                if ((w & 0x0db0f000) == 0x0120f000 and w & (1 << 19) != 0) rw.fw = 15;
+                return rw;
             }
             const o = bits(w, 21, 4);
             const logical = o < 2 or o == 8 or o == 9 or o >= 12;
-            if (o >= 5 and o <= 7) q.fr |= FC;
+            if (o >= 5 and o <= 7) rw.fr |= FC;
             if (w & (1 << 25) == 0) {
                 const kind = bits(w, 5, 2);
                 const n = bits(w, 7, 5);
                 const regsh = w & 0x10 != 0;
-                if ((!regsh and kind == 3 and n == 0) or (S and logical and (regsh or (kind == 0 and n == 0)))) q.fr |= FC;
-            } else if (S and logical and bits(w, 8, 4) == 0) q.fr |= FC;
-            if (S) q.fw = if (logical) FN | FZ | FC else 15;
+                if ((!regsh and kind == 3 and n == 0) or (S and logical and (regsh or (kind == 0 and n == 0)))) rw.fr |= FC;
+            } else if (S and logical and bits(w, 8, 4) == 0) rw.fr |= FC;
+            if (S) rw.fw = if (logical) FN | FZ | FC else 15;
         },
         6, 7 => {
             if (top == 7 and w & (1 << 24) != 0) {
-                q.fr = 15;
-                q.fw = 15;
-            } else if ((w & 0x0fff0fff) == 0x0ef1fa10) q.fw = 15;
+                rw.fr = 15;
+                rw.fw = 15;
+            } else if ((w & 0x0fff0fff) == 0x0ef1fa10) rw.fw = 15;
         },
         else => {},
     }
-    return q;
+    return rw;
 }
 pub fn rwThumb(h: u32) jit.RW {
-    var q = jit.ALL32;
-    q.fr = 0;
-    q.fw = 0;
+    var rw = jit.ALL32;
+    rw.fr = 0;
+    rw.fw = 0;
     switch (h >> 12) {
         0, 1 => {
             const o = (h >> 11) & 3;
-            q.fw = if (o == 3) 15 else if (o == 0 and (h >> 6) & 31 == 0) FN | FZ else FN | FZ | FC;
+            rw.fw = if (o == 3) 15 else if (o == 0 and (h >> 6) & 31 == 0) FN | FZ else FN | FZ | FC;
         },
-        2, 3 => q.fw = if ((h >> 11) & 3 == 0) FN | FZ else 15,
+        2, 3 => rw.fw = if ((h >> 11) & 3 == 0) FN | FZ else 15,
         4 => if ((h & 0xfc00) == 0x4000) {
             switch ((h >> 6) & 15) {
-                0, 1, 8, 12, 13, 14, 15 => q.fw = FN | FZ,
+                0, 1, 8, 12, 13, 14, 15 => rw.fw = FN | FZ,
                 2, 3, 4, 7 => {
-                    q.fr = FC;
-                    q.fw = FN | FZ | FC;
+                    rw.fr = FC;
+                    rw.fw = FN | FZ | FC;
                 },
                 5, 6 => {
-                    q.fr = FC;
-                    q.fw = 15;
+                    rw.fr = FC;
+                    rw.fw = 15;
                 },
-                else => q.fw = 15,
+                else => rw.fw = 15,
             }
         } else if ((h & 0xff00) == 0x4500) {
-            q.fw = 15;
+            rw.fw = 15;
         },
         13 => {
             const cc = (h >> 8) & 15;
-            if (cc < 14) q.fr = jit.condReads(@intCast(cc)) else if (cc == 15) {
-                q.fr = 15;
-                q.fw = 15;
+            if (cc < 14) rw.fr = jit.condReads(@intCast(cc)) else if (cc == 15) {
+                rw.fr = 15;
+                rw.fw = 15;
             }
         },
         else => {},
     }
-    return q;
+    return rw;
 }
 
 pub fn scanArm(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {

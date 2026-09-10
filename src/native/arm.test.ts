@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { mem } from "./mem";
 import { Cpu, setA64 } from "./cpu";
+import { core } from "./core";
 import { pattern, sweep } from "./a64.testkit";
 import { mainThread } from "../jvm/natives/jlang";
 import { RET_SENTINEL } from "./abi";
@@ -209,5 +210,19 @@ describe("thumb decoder", () => {
     expect(c.w[6]).toBe(0x10c);
     expect(mem.ld32(state + 0x24)).toBe(0x10c);
     expect(mem.u8[buf + 0x10b]).toBe(mem.u8[buf + 0x106]);
+  });
+});
+
+describe("arm block coverage", () => {
+  // An interpreted block used to run past the end of its page, and cover() masks both ends to the
+  // page, so the range it was handed ran backwards and marked nothing -- not even the words on the
+  // page it started on. code_write only drops a page for a word that is marked.
+  test("a block that reaches the next page still marks the words it ran", () => {
+    const nop = 0xe1a00000, bxLr = 0xe12fff1e;
+    const at = mem.reserve(0x2000, 0x1000);
+    for (let i = 0; i < 4; i++) mem.u32[((at + 0xff0) >>> 2) + i] = nop;
+    mem.u32[(at + 0x1000) >>> 2] = bxLr;
+    execute(at + 0xff0, () => {});
+    expect(core.code_write(at + 0xff0)).toBe(1);
   });
 });

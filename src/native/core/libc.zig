@@ -1,5 +1,6 @@
 const std = @import("std");
 const abi = @import("abi.zig");
+const assert = std.debug.assert;
 const mem = @import("mem.zig");
 const cpu = @import("cpu.zig");
 const a64 = @import("a64.zig");
@@ -52,12 +53,20 @@ pub const Fn = enum(u8) {
 };
 pub const Result = enum(u32) { done, fault, host };
 export fn libc_call(cp: u32, id: u32) u32 {
+    abi.require(id != 0 and id < @typeInfo(Fn).@"enum".fields.len, "libc_call: unknown id");
     return @intFromEnum(call(@ptrFromInt(cp), @intCast(id)));
 }
 pub const TLS_KEYS = 256;
-pub const slot_fn: [*]u8 = @ptrFromInt(abi.KERN_BASE + 0xa0_0000);
+pub const slot_fn: [*]u8 = @ptrFromInt(abi.KERN_SLOT_FN);
+comptime {
+    assert(@sizeOf(@TypeOf(slot_fn[0])) * abi.TRAMP_SLOTS <= abi.KERN_DEAD - abi.KERN_SLOT_FN);
+    // An id is stored as one byte per slot, so the table has to stay addressable by that byte.
+    assert(@typeInfo(Fn).@"enum".fields.len <= 256);
+}
 pub var bypass: bool = false;
 export fn host_bind(slot: u32, id: u32) void {
+    abi.require(slot < abi.TRAMP_SLOTS, "host_bind: trampoline slot out of range");
+    abi.require(id < @typeInfo(Fn).@"enum".fields.len, "host_bind: unknown id");
     slot_fn[slot] = @intCast(id);
 }
 export fn host_bypass(on: u32) void {
@@ -77,7 +86,14 @@ inline fn va(p: u32) u64 {
     return mem.va(p);
 }
 fn wrote(d: u32, n: u32) void {
-    if (mem.page_flags[d >> abi.PAGE_SHIFT] | mem.page_flags[(d + n - 1) >> abi.PAGE_SHIFT] != 0) cpu.invalidate_range(d, n);
+    assert(n != 0);
+    assert(@as(u64, d) + n <= 0x1_0000_0000);
+    // Every page the write covers, not just its ends: a copy of three pages or more can land on
+    // executed code in the middle of its range and leave the ends untouched. One byte read per
+    // 4 KiB written is nothing against the copy itself.
+    const first = d >> abi.PAGE_SHIFT;
+    const last = (d + n - 1) >> abi.PAGE_SHIFT;
+    for (mem.page_flags[first .. last + 1]) |f| if (f != 0) return cpu.invalidate_range(d, n);
 }
 fn stp(c: *Cpu, a: u32, v: u64) bool {
     return if (c.a64 != 0) cpu.st(u64, c, a, v) else cpu.st(u32, c, a, @truncate(v));

@@ -1,5 +1,6 @@
 const std = @import("std");
 const abi = @import("abi.zig");
+const assert = std.debug.assert;
 
 const PAGE_SHIFT = abi.PAGE_SHIFT;
 const PAGE_SIZE = abi.PAGE_SIZE;
@@ -25,9 +26,14 @@ const FREE = 0;
 const RESERVED = 1;
 const USED = 2;
 const IMAGE = 3;
-const pages: [*]u8 = @ptrFromInt(abi.KERN_BASE);
-pub const page_flags: [*]u8 = @ptrFromInt(abi.KERN_BASE + 0x10_0000);
-const big_len: [*]u32 = @ptrFromInt(abi.KERN_BASE + 0x20_0000);
+const pages: [*]u8 = @ptrFromInt(abi.KERN_PAGES);
+pub const page_flags: [*]u8 = @ptrFromInt(abi.KERN_PAGE_FLAGS);
+const big_len: [*]u32 = @ptrFromInt(abi.KERN_BIG_LEN);
+comptime {
+    assert(@sizeOf(@TypeOf(pages[0])) * abi.PAGE_INDEX_MAX <= abi.KERN_PAGE_FLAGS - abi.KERN_PAGES);
+    assert(@sizeOf(@TypeOf(page_flags[0])) * abi.PAGE_INDEX_MAX <= abi.KERN_BIG_LEN - abi.KERN_PAGE_FLAGS);
+    assert(@sizeOf(@TypeOf(big_len[0])) * abi.PAGE_INDEX_MAX <= abi.KERN_DECODED - abi.KERN_BIG_LEN);
+}
 inline fn pageOf(a: u32) u32 {
     return a >> PAGE_SHIFT;
 }
@@ -38,6 +44,13 @@ const PAGE_MAX = 0x40000;
 const HDR = 16;
 var small_heads = [_]u32{0} ** (SMALL_MAX / CLASS_STEP + 1);
 var big_heads = [_]u32{0} ** 32;
+comptime {
+    // classSize rounds a small request up to a CLASS_STEP multiple and headFor divides by it, so
+    // the largest small class has to be the last slot rather than one past it.
+    assert(SMALL_MAX % CLASS_STEP == 0);
+    assert(SMALL_MAX / CLASS_STEP + 1 == small_heads.len);
+    assert(PAGE_MAX > SMALL_MAX);
+}
 var mem_size: u32 = abi.MEM_SIZE_A32;
 var heap_top: u32 = abi.ARENA_BASE;
 var heap_peak: u32 = 0;
@@ -54,13 +67,17 @@ fn classSize(n: u32) u32 {
     return ((n + q - 1) / q) * q;
 }
 fn bigIdx(cs: u32) usize {
+    assert(cs > SMALL_MAX);
+    assert(cs <= PAGE_MAX);
     const k: u5 = @intCast(31 - @clz(cs - 1));
-    return (@as(usize, k) - 10) * 4 + (cs >> (k - 2)) - 5;
+    const i = (@as(usize, k) - 10) * 4 + (cs >> (k - 2)) - 5;
+    assert(i < big_heads.len);
+    return i;
 }
 
 fn findRun(n: u32, allow: u8, alignment: u32, phantom_in: bool) u32 {
     const end = pageOf(if (pool_base != 0) pool_base else module_bot);
-    const top: u32 = 0x100000;
+    const top: u32 = abi.PAGE_INDEX_MAX;
     const phantom = phantom_in and pool_base == 0;
     var s = (pageOf(abi.ARENA_BASE) + alignment - 1) & ~(alignment - 1);
     while (s < end and s + n <= top) : (s = (s + alignment) & ~(alignment - 1)) {
@@ -422,6 +439,14 @@ export fn err() u32 {
     return last_err;
 }
 pub export fn reserve(size: u32, alignment: u32) u32 {
+    abi.require(alignment != 0 and alignment & (alignment - 1) == 0, "reserve: alignment is not a power of two");
+    // Running out of address space is a result the caller already reads through err(), not a
+    // programmer error; without the test the subtraction below wraps and hands back a base above
+    // module_bot, which then walks the page map backwards.
+    if (size == 0 or size > module_bot - abi.ARENA_BASE) {
+        last_err = 4;
+        return 0;
+    }
     const base = (module_bot - size) & ~(alignment - 1);
     if (pool_base != 0) {
         const keep = (base - pool_base) / UNIT;
