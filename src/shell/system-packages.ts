@@ -6,6 +6,8 @@ export const SYSTEM_PACKAGES = [
     indexSha256: "a25bdb8be43a5e78d659d0d78e82336862df733e59d16cf6f97b8dfd78ad152f",
     signatureMetadata: "fake-signature",
     grants: ["android.permission.FAKE_PACKAGE_SIGNATURE", "org.microg.gms.PROVISION"],
+    // Browser geolocation supplies the platform provider; radio scans are unavailable.
+    disabledComponents: ["org.microg.gms.location.network.NetworkLocationService"],
     provision: { component: "org.microg.gms.provision.ProvisionService", extras: { checkin_enabled: true, gcm_enabled: true } },
   },
   {
@@ -15,6 +17,7 @@ export const SYSTEM_PACKAGES = [
     indexSha256: "09e63f8651e840a8ef805803a7afa55bb4dcb7f042dcf37767245247964eb98a",
     signatureMetadata: "fake-signature",
     grants: ["android.permission.FAKE_PACKAGE_SIGNATURE"],
+    disabledComponents: [],
     provision: null,
   },
 ] as const;

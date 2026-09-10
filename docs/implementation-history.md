@@ -542,3 +542,32 @@ removes that task and returns to the SDK client. The ordinary AccountManager log
 also passes with no missing APIs or suspension diagnostics in all four reached processes.
 Evidence: /tmp/webdroid-activitytasks-browser.{json,log} and
 /tmp/webdroid-authenticator-{activity,task}-browser.{png,json,log}.
+
+## Platform-backed balanced location
+
+Pinned microG selects its built-in network service when that component is enabled;
+otherwise its LocationManager requests the Android network provider. Browser geolocation
+cannot supply the radio scans consumed by the built-in backend. The verified system-package
+profile now defaults that optional component to disabled using the ordinary component store.
+Provisioning checks the component exists and preserves explicit default/enabled/disabled
+settings. Fresh-browser fixtures verify all four initial states. No runtime package-name
+branch or microG bytecode replacement is involved.
+
+The genuine SDK/microG balanced request receives a synthetic browser fix with
+enableHighAccuracy=false, then releases the watch on removal. All three reached runtimes
+have empty missing-API and suspension diagnostics. The dedicated API 35 Android reference,
+using the same microG component configuration and SDK priority 102, receives the synthetic
+network-provider fix with its supplied 7 m accuracy. The temporary Android test provider
+and shell mock-location app-op were removed/reset afterward; the reference retains the
+matching microG configuration. Input accuracy is not a comparison of positioning quality.
+Evidence: /tmp/webdroid-balanced-location.{json,log},
+/tmp/webdroid-provision-settings.{json,log}, /tmp/webdroid-reference-balanced.{png,json}.
+The SDK fixture accepts a location_priority Intent extra; the default remains high accuracy.
+
+Two failed probes were fixture mistakes: missing background-location permission interrupted
+the SDK activity and correctly removed its listener, while updates inside microG's 10-second
+network interval were correctly filtered. Respecting both exposed the missing bearingTo
+method in real microG. Location now shares one cached WGS84 inverse calculation for distance,
+bearing and distanceBetween, matching Android's float results for six oracle cases including
+polar/dateline and antipodal coordinates. Four tests pass with 79 assertions; typecheck and
+updated SDK smoke compilation pass. Oracle: /tmp/webdroid-location-oracle/output.txt.

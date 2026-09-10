@@ -89,7 +89,7 @@ public class ClientActivity extends Activity {
         };
         status.setText("location: waiting");
         LocationServices.getFusedLocationProviderClient(this).requestLocationUpdates(
-                new LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000).build(), location, Looper.getMainLooper()).addOnFailureListener(this::failure);
+                new LocationRequest.Builder(getIntent().getIntExtra("location_priority", Priority.PRIORITY_HIGH_ACCURACY), 1000).build(), location, Looper.getMainLooper()).addOnFailureListener(this::failure);
     }
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(request, permissions, results);

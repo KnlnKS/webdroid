@@ -240,3 +240,21 @@ TEMP state and one canonical persistent owner. Processes and bytecode start on d
   client without missing APIs. Task membership survives recreation and root removal across
   processes. Task affinity/launch-mode policies, token-by-features selection and encrypted
   account sessions remain incomplete. The broader regression matrix is being refreshed.
+
+## Location and lifecycle verification
+
+- At 25e39a8, typecheck and 1,001 unit tests pass (47,201 assertions). Resy, microG
+  and SDK smoke compilation each report zero failures; framework checks remain 295/363
+  with executable probes passing, and text comparison passes 6/6. Serialized E2E renders
+  75/75 scored steps (37.36% overall content difference); goldens are unchanged. Corpus
+  renders 13/14 APKs. Existing FitNotes/Harmonic exceptions, six Flappy FPS failures and
+  Lichess's loading screen remain. The newly observed Reddit executor-bindService gap also
+  reproduces on b567197. Artifacts: /tmp/webdroid-auth-final-*.
+- Balanced location now uses microG's genuine platform-provider fallback through a bundled
+  component default that preserves explicit settings. Fresh browser and matching Android
+  reference tests receive callbacks; browser request removal releases its watch, with clean
+  diagnostics in all three reached processes. WGS84 distance/bearing calculations match six
+  Android float-result fixtures. These tests use synthetic inputs, not physical radio scans.
+- Interactive Google authentication, full map parity, task affinity/launch-mode policies
+  and broader crash-loop behavior remain open. Final profile regression/performance checks
+  are in progress.

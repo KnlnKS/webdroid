@@ -6,7 +6,7 @@ import { attr, attrStr, TV } from "../android/axml";
 import { resString } from "../android/res";
 import { vfs } from "../jvm/natives/jio";
 import { signaturePermissions } from "../android/packages";
-import { JIntent } from "../android/intent";
+import { JIntent, componentState, mkComponentName } from "../android/intent";
 import { packages } from "../android/packages";
 import { serviceTransport } from "../android/runningservices";
 import { box, JBool } from "../jvm/natives/jlang";
@@ -26,6 +26,11 @@ export function provisionPackages(): Promise<void> {
     if (archive.pkg !== spec.pkg) throw new Error(`System package identity mismatch: ${spec.file}`);
     const record = registerPackage(archive);
     record.system = true;
+    for (const name of spec.disabledComponents) {
+      if (!Object.values(record.components).some(components => components.has(name))) throw new Error("Provisioned component unavailable: " + name);
+      const component = mkComponentName(record.pkg, name);
+      if (globalThis.localStorage?.getItem(componentState.key(component)) === null) componentState.set(component, 2);
+    }
     for (const permission of spec.grants) { record.grants.add(permission); signaturePermissions.add(permission); }
     const metadata = record.application?.children.find((n) => n.name === "meta-data" && attrStr(n, "name") === spec.signatureMetadata);
     const value = metadata && attr(metadata, "value");

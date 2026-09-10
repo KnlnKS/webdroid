@@ -27,3 +27,9 @@ Bundled dependencies retain their upstream licenses in the APKs.
 Signature compatibility reads the APK's own `fake-signature` manifest metadata, only
 after verifying the entire pinned APK. Actual signer certificates remain authoritative
 for installation/update verification. Arbitrary installed APKs receive no such grant.
+
+The bundled profile disables microG's optional radio-based network location service
+when no explicit component setting exists. Genuine microG then requests Android's
+platform network provider, supplied by browser geolocation. Explicit component
+settings survive provisioning. Browsers expose no Wi-Fi/cell scans; this configuration
+does not manufacture radio observations or modify microG bytecode.
