@@ -174,7 +174,7 @@ rt.register({
   },
 });
 class JSocket extends JObj {
-  host = ""; port = 0; tls = false; relay: Relay | null = null; closed = 0;
+  host = ""; port = 0; tls = false; relay: Relay | null = null; closed = 0; soTimeout = 0;
   /** Opening is deferred so an SSLSocket wrapping a plain one can take the target over and
    *  connect with TLS instead -- which is exactly how OkHttp builds an HTTPS connection. */
   async open(): Promise<void> {
@@ -188,6 +188,16 @@ class JSocket extends JObj {
   }
 }
 class JSocketIn extends JObj { s!: JSocket; }
+/** A read under SO_TIMEOUT waits only that long, then throws and leaves the stream usable —
+ *  which is how a caller probes whether a pooled connection is still alive. */
+async function socketRead(s: JSocket, out: Uint8Array, off: number, len: number): Promise<number> {
+  const relay = s.relay;
+  if (!relay) return -1;
+  if (s.soTimeout && !await relay.waitReadable(s.soTimeout)) {
+    throw rt.mkThrowable("java/net/SocketTimeoutException", "Read timed out");
+  }
+  return relay.read(out, off, len);
+}
 class JSocketOut extends JObj { s!: JSocket; }
 
 async function socketConnect(this: JSocket, a: JInetSocketAddress) {
@@ -222,10 +232,11 @@ const socketMethods: NativeSpec["methods"] = {
   "getRemoteSocketAddress()Ljava/net/SocketAddress;": function (this: JSocket) {
     const a = new JInetSocketAddress(); a.host = this.host; a.port = this.port; return a;
   },
-  "setTcpNoDelay(Z)V": () => {}, "setSoTimeout(I)V": () => {}, "setKeepAlive(Z)V": () => {},
+  "setTcpNoDelay(Z)V": () => {}, "setKeepAlive(Z)V": () => {},
   "setReuseAddress(Z)V": () => {}, "setSoLinger(ZI)V": () => {},
   "setSendBufferSize(I)V": () => {}, "setReceiveBufferSize(I)V": () => {},
-  "getSoTimeout()I": () => 0,
+  "setSoTimeout(I)V": function (this: JSocket, ms: number) { this.soTimeout = ms; },
+  "getSoTimeout()I": function (this: JSocket) { return this.soTimeout; },
 };
 rt.register({ name: "java/net/Socket", ctor: JSocket, ifaces: ["java/io/Closeable"], methods: { ...socketMethods, "<init>(Ljava/net/SocketImpl;)V": function () {} } });
 
@@ -235,14 +246,14 @@ rt.register({
     "<init>()V": function () {},
     "read()I": async function (this: JSocketIn) {
       const b = new Uint8Array(1);
-      const n = await (this.s.relay?.read(b, 0, 1) ?? -1);
+      const n = await socketRead(this.s, b, 0, 1);
       return n < 0 ? -1 : b[0];
     },
     "read([B)I": maySuspend(function (this: JSocketIn, out: Int8Array) {
-      return this.s.relay?.read(new Uint8Array(out.buffer, out.byteOffset, out.length), 0, out.length) ?? -1;
+      return socketRead(this.s, new Uint8Array(out.buffer, out.byteOffset, out.length), 0, out.length);
     }),
     "read([BII)I": maySuspend(function (this: JSocketIn, out: Int8Array, off: number, len: number) {
-      return this.s.relay?.read(new Uint8Array(out.buffer, out.byteOffset, out.length), off, len) ?? -1;
+      return socketRead(this.s, new Uint8Array(out.buffer, out.byteOffset, out.length), off, len);
     }),
     "available()I": function (this: JSocketIn) { return this.s.relay?.available() ?? 0; },
     "close()V": function (this: JSocketIn) { this.s.relay?.close(); },

@@ -80,6 +80,18 @@ export class Relay {
     return new Promise<void>((resolve) => this.waiters.add(resolve));
   }
 
+  /** wait until a read can complete without blocking, or `ms` elapses — SO_TIMEOUT's contract,
+   *  which a caller probing an idle connection depends on to not wait forever */
+  async waitReadable(ms: number): Promise<boolean> {
+    if (this.qLen || this.eof) return true;
+    await new Promise<void>((resolve) => {
+      const fire = () => { clearTimeout(timer); resolve(); };
+      const timer = setTimeout(() => { this.waiters.delete(fire); resolve(); }, ms);
+      this.waiters.add(fire);
+    });
+    return this.qLen > 0 || this.eof;
+  }
+
   subscribe(waiter: () => void): () => void {
     this.waiters.add(waiter);
     return () => this.waiters.delete(waiter);
