@@ -2,7 +2,7 @@
 // dataSize/dataPosition agree with what an app measured on a device. What has no byte
 // form here — a Serializable, a binder — rides in a side table keyed by its position.
 import { JObj, rt, maySuspend } from "../jvm/runtime";
-import { dotName, slashName, jarray, mangleStaticField } from "../jvm/abi";
+import { dotName, slashName, jarray, mangleStaticField, utf8 } from "../jvm/abi";
 import { newObj, vcall, JInt, JLong, JFloat, JDouble, JBool, JByte, JShort, JChar, box, defineException } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, type JList } from "../jvm/natives/jutil";
 import { JBundle } from "./os";
@@ -69,6 +69,43 @@ function readString(p: JParcel): string | null {
   const at = advance(p, pad4((len + 1) * 2));
   let s = "";
   for (let i = 0; i < len; i++) s += String.fromCharCode(p.view.getUint16(at + i * 2, true));
+  return s;
+}
+function writeString8(p: JParcel, s: string | null) {
+  if (s === null) return writeInt(p, -1);
+  let bytes: Uint8Array;
+  if (!/[\0\ud800-\udfff]/.test(s)) bytes = utf8.enc.encode(s);
+  else {
+    // ART String8 uses modified NUL/surrogates but four bytes for paired supplementary characters.
+    const out: number[] = [];
+    for (const ch of s) {
+      const c = ch.codePointAt(0)!;
+      if (c > 0 && c < 0x80) out.push(c);
+      else if (c < 0x800) out.push(0xc0 | c >> 6, 0x80 | c & 63);
+      else if (c < 0x10000) out.push(0xe0 | c >> 12, 0x80 | c >> 6 & 63, 0x80 | c & 63);
+      else out.push(0xf0 | c >> 18, 0x80 | c >> 12 & 63, 0x80 | c >> 6 & 63, 0x80 | c & 63);
+    }
+    bytes = Uint8Array.from(out);
+  }
+  const n = pad4(bytes.length + 1);
+  writeInt(p, bytes.length); reserve(p, n);
+  const at = advance(p, n);
+  p.buf.set(bytes, at); p.buf.fill(0, at + bytes.length, at + n);
+}
+function readString8(p: JParcel): string | null {
+  const len = readInt(p);
+  if (len < 0) return null;
+  const at = advance(p, pad4(len + 1));
+  const bytes = p.buf.subarray(at, at + len);
+  if (!bytes.includes(0xc0) && !bytes.includes(0xed)) return utf8.dec.decode(bytes);
+  let s = "";
+  for (let i = 0; i < bytes.length;) {
+    const c = bytes[i++];
+    if (c < 0x80) s += String.fromCharCode(c);
+    else if (c < 0xe0) s += String.fromCharCode((c & 31) << 6 | bytes[i++] & 63);
+    else if (c < 0xf0) s += String.fromCharCode((c & 15) << 12 | (bytes[i++] & 63) << 6 | bytes[i++] & 63);
+    else s += String.fromCodePoint((c & 7) << 18 | (bytes[i++] & 63) << 12 | (bytes[i++] & 63) << 6 | bytes[i++] & 63);
+  }
   return s;
 }
 function writeBytes(p: JParcel, b: Int8Array | null) {
@@ -299,7 +336,7 @@ rt.register({
     "writeByte(B)V": function (this: JParcel, v: number) { writeInt(this, v); },
     "writeBoolean(Z)V": function (this: JParcel, v: number) { writeInt(this, v); },
     [`writeString(${S})V`]: function (this: JParcel, s: string | null) { writeString(this, s); },
-    [`writeString8(${S})V`]: function (this: JParcel, s: string | null) { writeString(this, s); },
+    [`writeString8(${S})V`]: function (this: JParcel, s: string | null) { writeString8(this, s); },
     [`writeString16(${S})V`]: function (this: JParcel, s: string | null) { writeString(this, s); },
     "writeCharSequence(Ljava/lang/CharSequence;)V": async function (this: JParcel, s: unknown) { writeString(this, s === null ? null : await csText(s)); },
     "writeByteArray([B)V": function (this: JParcel, b: Int8Array | null) { writeBytes(this, b); },
@@ -340,7 +377,7 @@ rt.register({
     "readByte()B": function (this: JParcel) { return readInt(this) << 24 >> 24; },
     "readBoolean()Z": function (this: JParcel) { return readInt(this) ? 1 : 0; },
     [`readString()${S}`]: function (this: JParcel) { return readString(this); },
-    [`readString8()${S}`]: function (this: JParcel) { return readString(this); },
+    [`readString8()${S}`]: function (this: JParcel) { return readString8(this); },
     [`readString16()${S}`]: function (this: JParcel) { return readString(this); },
     "readCharSequence()Ljava/lang/CharSequence;": function (this: JParcel) { return readString(this); },
     "createByteArray()[B": function (this: JParcel) { return readBytes(this); },
