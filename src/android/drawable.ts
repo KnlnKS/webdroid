@@ -180,7 +180,19 @@ function copyBounds(from: JDrawable, to: JDrawable) {
 }
 rt.register({ name: "android/graphics/drawable/Drawable", ctor: JDrawable, methods: drawableMethods });
 rt.register({ name: "android/graphics/drawable/Drawable$Callback", ctor: class extends JObj {} });
-rt.register({ name: "android/graphics/drawable/Drawable$ConstantState", ctor: class extends JObj {} });
+class JConstantState extends JObj {}
+class JDrawableState extends JConstantState {
+  create!: () => JDrawable;
+}
+rt.register({ name: "android/graphics/drawable/Drawable$ConstantState", ctor: JConstantState, methods: {
+  "newDrawable(Landroid/content/res/Resources;)Landroid/graphics/drawable/Drawable;": function () { return vcall(this, "newDrawable", "()Landroid/graphics/drawable/Drawable;"); },
+  "newDrawable(Landroid/content/res/Resources;Landroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;": function (res: unknown) { return vcall(this, "newDrawable", "(Landroid/content/res/Resources;)Landroid/graphics/drawable/Drawable;", res); },
+  "getChangingConfigurations()I": () => 0,
+  "canApplyTheme()Z": () => 0,
+} });
+rt.register({ name: "android/graphics/drawable/VectorDrawable$VectorDrawableState", ctor: JDrawableState, sup: "android/graphics/drawable/Drawable$ConstantState", methods: {
+  "newDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableState) { return this.create(); },
+} });
 // marker interface for self-driven drawables (AnimatedVectorDrawable, AnimationDrawable) — start()/
 // stop()/isRunning() so callers (e.g. material3's ripple host) can `instanceof` a drawable to see
 // whether it animates itself. None of our drawables self-animate yet, so nothing implements it —
@@ -1040,7 +1052,14 @@ rt.register({
     },
   },
 });
-rt.register({ name: "android/graphics/drawable/VectorDrawable", ctor: JVectorDrawable, sup: "android/graphics/drawable/Drawable" });
+rt.register({ name: "android/graphics/drawable/VectorDrawable", ctor: JVectorDrawable, sup: "android/graphics/drawable/Drawable", methods: {
+  "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;": function (this: JVectorDrawable) {
+    const { vw, vh, vpW, vpH, paths, vtint, tint, alpha, autoMirrored } = this;
+    const state = new (rt.link("android/graphics/drawable/VectorDrawable$VectorDrawableState").ctor)() as JDrawableState;
+    state.create = () => Object.assign(new JVectorDrawable(), { vw, vh, vpW, vpH, paths, vtint, tint, alpha, autoMirrored });
+    return state;
+  },
+} });
 
 export class JColorStateList extends JObj {
   items: { states: number[]; negStates: number[]; color: number }[] = [];
