@@ -459,7 +459,7 @@ const rafOpen = function (this: JRAF, p: string, mode: string) {
   this.write = mode.includes("w");
   const data = vfs.read(this.path);
   const source = data ? null : vfs.source(this.path);
-  if (!source && !this.write) throw rt.mkThrowable("java/io/FileNotFoundException", p);
+  if (!data && !source && !this.write) throw rt.mkThrowable("java/io/FileNotFoundException", p);
   if (source && this.write) throw rt.mkThrowable("java/io/IOException", "read-only file: " + p);
   this.source = this.write ? null : source;
   this.buf = data ?? new Uint8Array(0);
