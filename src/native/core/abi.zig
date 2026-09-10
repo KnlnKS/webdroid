@@ -42,6 +42,14 @@ pub const KERN_DEAD_END: u32 = KERN_DEAD + JIT_SLOTS * 1;
 /// The JIT's emit buffer, carved off the top of the kernel region; src/native/abi.ts spells it too.
 pub const JIT_BUF: u32 = KERN_END - 0x0010_0000;
 
+/// A check that survives ReleaseFast, which is the build that ships. `assert` is the right tool
+/// for an invariant the core owns -- it costs nothing here and the ReleaseSafe build the tests run
+/// still catches it -- but an argument arriving from the host is not ours to assume, and these
+/// entry points are called once per bind or per region install, never in a loop.
+pub inline fn require(ok: bool, comptime what: []const u8) void {
+    if (!ok) @panic(what);
+}
+
 comptime {
     assert(LOW % PAGE_SIZE == 0);
     assert(STACK_BASE >= LOW);

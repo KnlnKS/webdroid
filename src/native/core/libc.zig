@@ -53,6 +53,7 @@ pub const Fn = enum(u8) {
 };
 pub const Result = enum(u32) { done, fault, host };
 export fn libc_call(cp: u32, id: u32) u32 {
+    abi.require(id != 0 and id < @typeInfo(Fn).@"enum".fields.len, "libc_call: unknown id");
     return @intFromEnum(call(@ptrFromInt(cp), @intCast(id)));
 }
 pub const TLS_KEYS = 256;
@@ -64,6 +65,8 @@ comptime {
 }
 pub var bypass: bool = false;
 export fn host_bind(slot: u32, id: u32) void {
+    abi.require(slot < abi.TRAMP_SLOTS, "host_bind: trampoline slot out of range");
+    abi.require(id < @typeInfo(Fn).@"enum".fields.len, "host_bind: unknown id");
     slot_fn[slot] = @intCast(id);
 }
 export fn host_bypass(on: u32) void {

@@ -161,12 +161,17 @@ export fn jit_count() u32 {
     return nregions;
 }
 export fn jit_entry(i: u32) u32 {
+    abi.require(i < nregions, "jit_entry: region index out of range");
     return regions[i].entry;
 }
 export fn jit_stat() u32 {
     return regions_installed;
 }
 export fn jit_install(i: u32, slot: u32) void {
+    abi.require(i < nregions, "jit_install: region index out of range");
+    // The slot is packed above the block index here and read back as an index into cpu.zig's dead
+    // map, which is sized for the host's table.
+    abi.require(slot < abi.JIT_SLOTS, "jit_install: table slot out of range");
     const r = &regions[i];
     const page = cpu.decodedPage(r.page) orelse return;
     if (page.epoch != r.epoch) return;

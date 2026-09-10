@@ -158,6 +158,7 @@ comptime {
     assert(@sizeOf(@TypeOf(dead[0])) * abi.JIT_SLOTS <= abi.KERN_DEAD_END - abi.KERN_DEAD);
 }
 export fn jit_kill(slot: u32) void {
+    abi.require(slot < abi.JIT_SLOTS, "jit_kill: table slot out of range");
     dead[slot] = 1;
 }
 export fn jit_evict() void {
@@ -274,6 +275,8 @@ export fn cpu_stat(i: u32) u32 {
 }
 pub var max_block: u32 = 256;
 export fn set_max_block(n: u32) void {
+    // A block never leaves the page it started on, so a page of instructions is the whole range.
+    abi.require(n >= 1 and n <= OPS_PER_PAGE, "set_max_block: out of range");
     max_block = n;
 }
 

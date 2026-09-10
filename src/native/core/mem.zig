@@ -439,6 +439,14 @@ export fn err() u32 {
     return last_err;
 }
 pub export fn reserve(size: u32, alignment: u32) u32 {
+    abi.require(alignment != 0 and alignment & (alignment - 1) == 0, "reserve: alignment is not a power of two");
+    // Running out of address space is a result the caller already reads through err(), not a
+    // programmer error; without the test the subtraction below wraps and hands back a base above
+    // module_bot, which then walks the page map backwards.
+    if (size == 0 or size > module_bot - abi.ARENA_BASE) {
+        last_err = 4;
+        return 0;
+    }
     const base = (module_bot - size) & ~(alignment - 1);
     if (pool_base != 0) {
         const keep = (base - pool_base) / UNIT;
