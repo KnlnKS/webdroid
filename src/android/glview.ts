@@ -7,8 +7,8 @@ import { vcall, JThread, setCurThread, curThread } from "../jvm/natives/jlang";
 import { JView, JViewGroup, guardCall, initViewFromCtx, invalidate, uiState, requestLayout, specSize, defaultSize } from "./view";
 import { onMain } from "./mainloop";
 import { JCanvas, JBitmap } from "./graphics";
-import { setGL } from "./gl";
-import { reportUncaught } from "./os";
+import { setGL, gl, tables } from "./gl";
+import { reportUncaught, mainLooper, mainHandler } from "./os";
 import { perf } from "../perf";
 
 const M_onSurfaceCreated = mangleMethod("onSurfaceCreated", "(Ljavax/microedition/khronos/opengles/GL10;Ljavax/microedition/khronos/egl/EGLConfig;)V");
@@ -315,8 +315,27 @@ rt.register({ name: "android/view/SurfaceHolder$Callback", ctor: class extends J
 rt.register({ name: "android/view/SurfaceHolder$Callback2", ctor: class extends JObj {}, ifaces: ["android/view/SurfaceHolder$Callback"] });
 rt.register({ name: "android/view/TextureView$SurfaceTextureListener", ctor: class extends JObj {} });
 export class JSurfaceTexture extends JObj {
-  surface: GlSurface = { view: null, width: 1, height: 1, present: null, frames: 0 };
+  surface: GlSurface = { view: null, width: 1, height: 1, present: null, frames: 0, onFrame: () => this.frameAvailable() };
   released = false;
+  textureName = 0;
+  timestamp = 0n;
+  listener: unknown = null;
+  onUpdate: (() => void) | undefined;
+  looper = (curThread.looper as typeof mainLooper) ?? mainLooper;
+  frameAvailable(): void {
+    this.onUpdate?.();
+    const listener = this.listener;
+    if (listener) void this.looper.run(() => !this.released && this.listener === listener
+      ? vcall(listener, "onFrameAvailable", "(Landroid/graphics/SurfaceTexture;)V", this) : undefined).catch(reportUncaught);
+  }
+  update(): void {
+    if (this.released || !gl || !tables().textures[this.textureName]) throw rt.mkThrowable("java/lang/IllegalStateException", "SurfaceTexture has no current texture");
+    const frame = this.surface.present;
+    if (!frame) return;
+    gl.bindTexture(gl.TEXTURE_2D, tables().textures[this.textureName]);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
+    if (typeof VideoFrame !== "undefined" && frame instanceof VideoFrame) this.timestamp = BigInt(frame.timestamp) * 1000n;
+  }
   release(): void {
     if (this.released) return;
     this.released = true;
@@ -331,9 +350,13 @@ export class JSurfaceTexture extends JObj {
 rt.register({
   name: "android/graphics/SurfaceTexture", ctor: JSurfaceTexture,
   methods: {
-    "<init>(I)V": () => {},
-    "<init>(Z)V": () => {},
-    "<init>(IZ)V": () => {},
+    "<init>(I)V": function (this: JSurfaceTexture, texture: number) { this.textureName = texture; },
+    "<init>(Z)V": (single: number) => { if (single) rt.unimplemented("SurfaceTexture single-buffer mode"); },
+    "<init>(IZ)V": function (this: JSurfaceTexture, texture: number, single: number) { if (single) rt.unimplemented("SurfaceTexture single-buffer mode"); this.textureName = texture; },
+    "setOnFrameAvailableListener(Landroid/graphics/SurfaceTexture$OnFrameAvailableListener;)V": function (this: JSurfaceTexture, listener: unknown) { this.listener = listener; },
+    "setOnFrameAvailableListener(Landroid/graphics/SurfaceTexture$OnFrameAvailableListener;Landroid/os/Handler;)V": function (this: JSurfaceTexture, listener: unknown, handler: ReturnType<typeof mainHandler> | null) { this.listener = listener; if (handler) this.looper = handler.looper; },
+    "updateTexImage()V": function (this: JSurfaceTexture) { this.update(); },
+    "getTimestamp()J": function (this: JSurfaceTexture) { return this.timestamp; },
     "setDefaultBufferSize(II)V": function (this: JSurfaceTexture, w: number, h: number) {
       if (w <= 0 || h <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid buffer size");
       this.surface.width = w; this.surface.height = h;
@@ -342,6 +365,7 @@ rt.register({
     "release()V": function (this: JSurfaceTexture) { this.release(); },
   },
 });
+rt.register({ name: "android/graphics/SurfaceTexture$OnFrameAvailableListener", ctor: class extends JObj {} });
 class JTextureView extends JView {
   listener: unknown = null;
   texture: JSurfaceTexture | null = null;
@@ -353,7 +377,7 @@ class JTextureView extends JView {
     const texture = this.texture ??= new (rt.link("android/graphics/SurfaceTexture").ctor)() as JSurfaceTexture;
     if (!created && texture.surface.width === w && texture.surface.height === h) return;
     texture.surface.view = this;
-    texture.surface.onFrame = () => {
+    texture.onUpdate = () => {
       if (this.listener) void onMain(() => this.texture === texture && this.listener
         ? vcall(this.listener, "onSurfaceTextureUpdated", "(Landroid/graphics/SurfaceTexture;)V", texture) : undefined);
     };
@@ -368,7 +392,7 @@ class JTextureView extends JView {
     this.texture = null;
     this.surfaceLayer = null;
     texture.surface.view = null;
-    texture.surface.onFrame = undefined;
+    texture.onUpdate = undefined;
     void onMain(async () => {
       if (!listener || await vcall(listener, "onSurfaceTextureDestroyed", "(Landroid/graphics/SurfaceTexture;)Z", texture)) texture.release();
     });
@@ -530,3 +554,103 @@ rt.register({
     "eglGetCurrentContext()Ljavax/microedition/khronos/egl/EGLContext;": () => { const c = new JEGLContext(); c.egl = glSurfaces.current ?? new EglContext(); return c; },
   },
 });
+
+class JEGLHandle extends JObj { constructor(readonly handle = 0) { super(); } }
+class JEGL14Display extends JEGLHandle {}
+class JEGL14Config extends JEGLHandle {}
+class JEGL14Context extends JEGLHandle { egl: EglContext | null = null; }
+class JEGL14Surface extends JEGLHandle { surf: GlSurface | null = null; owned = false; }
+rt.register({ name: "android/opengl/EGLObjectHandle", ctor: JEGLHandle, methods: {
+  "getNativeHandle()J": function (this: JEGLHandle) { return BigInt(this.handle); },
+  "getHandle()I": function (this: JEGLHandle) { return this.handle; },
+  "hashCode()I": function (this: JEGLHandle) { return this.handle; },
+  "equals(Ljava/lang/Object;)Z": function (this: JEGLHandle, other: unknown) { return +(other instanceof JEGLHandle && other.constructor === this.constructor && other.handle === this.handle); },
+} });
+for (const [name, ctor] of [["EGLDisplay", JEGL14Display], ["EGLConfig", JEGL14Config], ["EGLContext", JEGL14Context], ["EGLSurface", JEGL14Surface]] as const) {
+  rt.register({ name: "android/opengl/" + name, ctor, sup: "android/opengl/EGLObjectHandle" });
+  rt.link("android/opengl/" + name);
+}
+const noDisplay = new JEGL14Display(), noContext = new JEGL14Context(), noSurface = new JEGL14Surface();
+const defaultDisplay = new JEGL14Display(1), defaultConfig = new JEGL14Config(1);
+let eglHandle = 2, eglError = 0x3000, currentContext = noContext;
+function eglOut(array: Int32Array | null, offset: number, value: number): void {
+  if (!array) return;
+  if (offset < 0 || offset >= array.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid EGL result offset");
+  array[offset] = value;
+}
+function eglFailure<T>(error: number, result: T): T { eglError = error; return result; }
+rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics: {
+  EGL_NO_DISPLAY: noDisplay, EGL_NO_CONTEXT: noContext, EGL_NO_SURFACE: noSurface, EGL_DEFAULT_DISPLAY: 0,
+  EGL_NONE: 0x3038, EGL_SUCCESS: 0x3000, EGL_WIDTH: 0x3057, EGL_HEIGHT: 0x3056, EGL_CONTEXT_CLIENT_VERSION: 0x3098,
+  EGL_RED_SIZE: 0x3024, EGL_GREEN_SIZE: 0x3023, EGL_BLUE_SIZE: 0x3022, EGL_ALPHA_SIZE: 0x3021,
+  EGL_DEPTH_SIZE: 0x3025, EGL_STENCIL_SIZE: 0x3026, EGL_RENDERABLE_TYPE: 0x3040, EGL_SURFACE_TYPE: 0x3033,
+  EGL_OPENGL_ES2_BIT: 4, EGL_PBUFFER_BIT: 1, EGL_WINDOW_BIT: 4,
+}, methods: {
+  "static eglGetDisplay(I)Landroid/opengl/EGLDisplay;": (display: number) => display === 0 ? defaultDisplay : eglFailure(0x3008, noDisplay),
+  "static eglInitialize(Landroid/opengl/EGLDisplay;[II[II)Z": (display: JEGL14Display, major: Int32Array | null, majorOffset: number, minor: Int32Array | null, minorOffset: number) => {
+    if (display !== defaultDisplay) return eglFailure(0x3008, 0);
+    eglOut(major, majorOffset, 1); eglOut(minor, minorOffset, 4); return 1;
+  },
+  "static eglQueryString(Landroid/opengl/EGLDisplay;I)Ljava/lang/String;": (display: JEGL14Display, name: number) => display !== defaultDisplay ? eglFailure(0x3008, null) : name === 0x3053 ? "webdroid" : name === 0x3054 ? "1.4" : name === 0x308d ? "OpenGL_ES" : "",
+  "static eglChooseConfig(Landroid/opengl/EGLDisplay;[II[Landroid/opengl/EGLConfig;II[II)Z": (display: JEGL14Display, attrs: Int32Array | null, offset: number, configs: JEGL14Config[] | null, configOffset: number, size: number, count: Int32Array | null, countOffset: number) => {
+    if (display !== defaultDisplay) return eglFailure(0x3008, 0);
+    let matches = true;
+    for (let i = offset; attrs && i + 1 < attrs.length && attrs[i] !== 0x3038; i += 2) {
+      const actual = eglConfigAttrib(attrs[i]), requested = attrs[i + 1];
+      if (requested !== -1 && (attrs[i] === 0x3033 || attrs[i] === 0x3040 ? (actual & requested) !== requested : actual < requested)) matches = false;
+    }
+    eglOut(count, countOffset, +matches);
+    if (matches && configs && size > 0) {
+      if (configOffset < 0 || configOffset >= configs.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid EGL config offset");
+      configs[configOffset] = defaultConfig;
+    }
+    return 1;
+  },
+  "static eglGetConfigAttrib(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;I[II)Z": (display: JEGL14Display, config: JEGL14Config, attr: number, out: Int32Array, offset: number) => {
+    if (display !== defaultDisplay || config !== defaultConfig) return eglFailure(0x3005, 0);
+    eglOut(out, offset, eglConfigAttrib(attr)); return 1;
+  },
+  "static eglCreateContext(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;Landroid/opengl/EGLContext;[II)Landroid/opengl/EGLContext;": (display: JEGL14Display, config: JEGL14Config, share: JEGL14Context, attrs: Int32Array | null, offset: number) => {
+    if (display !== defaultDisplay || config !== defaultConfig) return eglFailure(0x3005, noContext);
+    const version = attrVal(attrs?.subarray(offset) ?? null, 0x3098) || 1;
+    if (version < 1 || version > 3) return eglFailure(0x3004, noContext);
+    const context = new JEGL14Context(eglHandle++); context.egl = new EglContext(share?.egl ?? undefined); context.egl.major = version; return context;
+  },
+  "static eglCreatePbufferSurface(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;[II)Landroid/opengl/EGLSurface;": (display: JEGL14Display, config: JEGL14Config, attrs: Int32Array | null, offset: number) => {
+    if (display !== defaultDisplay || config !== defaultConfig) return eglFailure(0x3005, noSurface);
+    const a = attrs?.subarray(offset) ?? null, width = attrVal(a, 0x3057) || 1, height = attrVal(a, 0x3056) || 1;
+    if (width < 0 || height < 0) return eglFailure(0x3004, noSurface);
+    const surface = new JEGL14Surface(eglHandle++); surface.owned = true;
+    surface.surf = { view: null, width, height, present: null, frames: 0 }; return surface;
+  },
+  "static eglCreateWindowSurface(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;Ljava/lang/Object;[II)Landroid/opengl/EGLSurface;": (display: JEGL14Display, config: JEGL14Config, window: unknown) => {
+    if (display !== defaultDisplay || config !== defaultConfig) return eglFailure(0x3005, noSurface);
+    const target = surfaceOf(window); if (!target) return eglFailure(0x300b, noSurface);
+    const surface = new JEGL14Surface(eglHandle++); surface.surf = target; return surface;
+  },
+  "static eglMakeCurrent(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;Landroid/opengl/EGLSurface;Landroid/opengl/EGLContext;)Z": (display: JEGL14Display, draw: JEGL14Surface, _read: JEGL14Surface, context: JEGL14Context) => {
+    if (display !== defaultDisplay) return eglFailure(0x3008, 0);
+    if (context === noContext) { currentContext = noContext; glSurfaces.current = null; setGL(null); return 1; }
+    if (!context?.egl || !context.egl.makeCurrent(draw?.surf ?? null)) return eglFailure(0x3006, 0);
+    currentContext = context; return 1;
+  },
+  "static eglGetCurrentContext()Landroid/opengl/EGLContext;": () => currentContext,
+  "static eglSwapBuffers(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;)Z": async (_display: JEGL14Display, surface: JEGL14Surface) => {
+    const context = glSurfaces.current;
+    if (!surface?.surf || context?.target !== surface.surf) return eglFailure(0x300d, 0);
+    await context.swap(); return 1;
+  },
+  "static eglDestroySurface(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;)Z": (_display: JEGL14Display, surface: JEGL14Surface) => {
+    if (!surface?.surf) return eglFailure(0x300d, 0);
+    if (glSurfaces.current?.target === surface.surf) glSurfaces.current.target = null;
+    if (surface.owned) surface.surf.present?.close(); surface.surf = null; return 1;
+  },
+  "static eglDestroyContext(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLContext;)Z": (_display: JEGL14Display, context: JEGL14Context) => {
+    if (!context?.egl) return eglFailure(0x3006, 0);
+    if (currentContext === context) { currentContext = noContext; glSurfaces.current = null; setGL(null); }
+    context.egl = null; return 1;
+  },
+  "static eglReleaseThread()Z": () => { currentContext = noContext; glSurfaces.current = null; setGL(null); return 1; },
+  "static eglTerminate(Landroid/opengl/EGLDisplay;)Z": (display: JEGL14Display) => display === defaultDisplay ? 1 : eglFailure(0x3008, 0),
+  "static eglGetError()I": () => { const error = eglError; eglError = 0x3000; return error; },
+} });

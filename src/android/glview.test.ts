@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import "../natives";
 import { JObj, rt } from "../jvm/runtime";
+import { mangleMethod } from "../jvm/abi";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { JView } from "./view";
 import { JSurface, JSurfaceTexture } from "./glview";
@@ -45,4 +46,18 @@ test("TextureView supplies a sized surface and honors retained ownership on deta
   await vcall(view, "onDetachedFromWindow", "()V");
   await onMain(() => {});
   expect(second.released).toBe(true);
+});
+
+test("EGL14 exposes typed sentinel handles and honors result array offsets", async () => {
+  const call = (name: string, desc: string, ...args: unknown[]) => rt.link("android/opengl/EGL14").ctor[mangleMethod(name, desc)](...args);
+  const display = await call("eglGetDisplay", "(I)Landroid/opengl/EGLDisplay;", 0);
+  const none = await call("eglGetDisplay", "(I)Landroid/opengl/EGLDisplay;", 1);
+  expect(await vcall(display, "equals", "(Ljava/lang/Object;)Z", none)).toBe(0);
+  expect(await vcall(none, "getNativeHandle", "()J")).toBe(0n);
+  const major = new Int32Array(2), minor = new Int32Array(3), count = new Int32Array(2);
+  expect(await call("eglInitialize", "(Landroid/opengl/EGLDisplay;[II[II)Z", display, major, 1, minor, 2)).toBe(1);
+  expect([...major]).toEqual([0, 1]); expect([...minor]).toEqual([0, 0, 4]);
+  const configs = [null, null];
+  expect(await call("eglChooseConfig", "(Landroid/opengl/EGLDisplay;[II[Landroid/opengl/EGLConfig;II[II)Z", display, new Int32Array([0, 0x3040, 4, 0x3038]), 1, configs, 1, 1, count, 1)).toBe(1);
+  expect(configs[0]).toBeNull(); expect(configs[1]).not.toBeNull(); expect([...count]).toEqual([0, 1]);
 });
