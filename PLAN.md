@@ -1,7 +1,8 @@
 # microG integration
 
-Integration started from `82e1afb` on `codex/microg-integration`. At the user’s request,
-work is now folded into `main` alongside `6946f16` and continues in the main checkout.
+Integration started from `82e1afb` on `codex/microg-integration`. The merged integration is on `main` alongside `6946f16`.
+Completion now continues from `b567197` in `codex/microg-completion`, in the
+`../webdroid-microg-completion` worktree at the user’s request.
 Run genuine microG and client APK bytecode; add Android platform behavior, never
 app-specific substitutes. Keep comments and dependencies minimal.
 
@@ -109,3 +110,12 @@ TEMP state and one canonical persistent owner. Processes and bytecode start on d
 - Corpus: 12/13 APKs rendered a frame; TikTok remains unsuccessful. Logs and current
   E2E artifacts/counters are retained under `/tmp/webdroid-microg-main-*`. Cold/warm,
   IPC, memory, idle and controlled foreground CPU comparisons remain incomplete.
+
+## Completion worktree
+
+- Fresh SDK-client baseline on private port 41973 confirms availability 0 and the
+  missing NativeConnectivityListener.initialize JNI entry. No map renders yet.
+- Next: defining-loader ownership through System.loadLibrary, JNI_OnLoad, JNI class
+  lookup and native registration; exercise duplicate-loader fixtures and real maps.
+- Existing authorized test account supplied interactively. Firebase project reference
+  remains needed for live message delivery; credentials stay outside artifacts.
