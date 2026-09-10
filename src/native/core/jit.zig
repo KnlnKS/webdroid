@@ -877,7 +877,7 @@ pub fn Emit(comptime wide: bool) type {
                 .excl => {
                     const size: u2 = @intCast(o.a);
                     const o2 = o.b & 4 != 0;
-                    const L = o.b & 2 != 0;
+                    const load = o.b & 2 != 0;
                     const o1 = o.b & 1 != 0;
                     if (o1 and !o2) {
                         e.fallback(pc, k);
@@ -898,7 +898,7 @@ pub fn Emit(comptime wide: bool) type {
                         e.endif();
                         b.get(L_T0);
                         e.setX(o.rm);
-                    } else if (L) {
+                    } else if (load) {
                         if (!o2) b.emit(.{ get(L_CPU), c32(1), mo(O.i32_store, OFF_EXCL) });
                         b.emit(.{ get(L_A), mo(LD[size][0], 0) });
                         e.setX(o.rd);
