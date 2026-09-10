@@ -58,8 +58,8 @@ rt.register({
     "static myLooper()Landroid/os/Looper;": () => (curThread.looper as JLooper) ?? null,
     "static prepare()V": () => { if (!curThread.looper) curThread.looper = new JLooper(); },
     "static prepareMainLooper()V": () => {},
-    "loop()V": () => new Promise(() => {}), // parks the java thread; JS loop drives everything
-    "static loop()V": () => new Promise(() => {}),
+    "loop()V": maySuspend(() => new Promise(() => {})), // parks the java thread; JS loop drives everything
+    "static loop()V": maySuspend(() => new Promise(() => {})),
     "getThread()Ljava/lang/Thread;": function (this: JLooper) { return this.thread; },
     "isCurrentThread()Z": function (this: JLooper) { return curThread === this.thread ? 1 : 0; },
     "quit()V": () => {},
