@@ -2799,3 +2799,99 @@ the page as it does for A64 (before, only `cacheflush` did).
 reads bracketed every host body; both left the host-call path. The TS bodies of every
 core-served call went. The core is 7,677 lines of Zig against 7,252; the repository's
 TypeScript is 4,868 lines smaller.
+
+## Resy: the eleven platform truths between a splash screen and a restaurant list
+
+Resy booted to a blank screen. Nothing about it was Resy-specific: every fix below is a place
+where the platform answered with something no device answers with, and the app took the branch
+that answer implied.
+
+**A static field read is the class's first use.** `Field.getInt`/`getLong` read the constructor's
+property without initializing the class, so a constant read before `<clinit>` came back
+`undefined` and the caller took it for the field's zero. joda-time-android resolves all 500 of
+its timezone resources by reflecting `R$raw`, and got 0 for every one. The typed getters now
+share `get()`'s init, and a `Field` carries its declaration's own access flags, so `isSynthetic`
+and `transient` are the declaration's rather than a fixed `public`.
+
+**An empty provider list is not a device state.** `Security.getProviders()` returned nothing, and
+okhttp reads `getProviders()[0].getName()` unguarded — its `Platform` class failed to initialize
+and took every HTTP call with it. The list is the platform's now, in the platform's order.
+
+**A Reader has to read through the stream it was given.** `InputStreamReader` decoded the native
+`InputStream`'s byte buffer, which for an app's own stream — okio's, over a socket — is the empty
+one every subclass inherits. Every Retrofit response body read as `""`. A Reader now holds the
+stream and pulls a chunk at a time through its virtual `read`. `DataInputStream` had the same
+hole and closes it the same way.
+
+**`needsInput` is about the input.** okio's `InflaterSource` refills only when the inflater asks
+for input, and then requires `getRemaining()` to be 0; with the gzip trailer sitting unconsumed
+we asked anyway and the refill threw `IllegalStateException("?")` partway through every gzipped
+response.
+
+**A CharSequence is not a String.** `Arrays.toString`, `StringBuilder(CharSequence)`,
+`Pattern.matcher(CharSequence)` and `%s` went through JS string coercion, so a StringBuilder
+printed as `[object Object]`. libphonenumber builds its alpha character class out of
+`Arrays.toString(ALPHA_MAPPINGS.keySet().toArray())` — the pattern really did contain
+`objectObjectobjectObject…` — and then parsed into a StringBuilder that matched none of it.
+
+**`Matcher.matches()` anchors both ends.** It ran a sticky match and checked where the match
+landed, so an alternation settled for the branch that matched a prefix and never backtracked
+into the one that matched the whole input. libphonenumber's `VALID_PHONE_NUMBER` starts with
+`\p{Nd}{2}`, so every phone number "did not seem to be a phone number".
+
+**Object streams are a block-data protocol.** libphonenumber reads its metadata through an
+`ObjectInputStream`, which did not exist. Both object streams now speak the serialization
+stream's `TC_BLOCKDATA` layer — the whole protocol an `Externalizable` body uses. An object
+graph needs the class descriptors and back references and says so rather than inventing a value,
+which is what the Facebook SDK's event store gets and handles.
+
+**A pooled connection is probed with a one-millisecond read.** okhttp sets `SO_TIMEOUT` to 1 and
+reads; the read waited for bytes that were never coming and the call never left the client. A
+timed-out read throws `SocketTimeoutException` and leaves the stream where it was.
+
+**`draw(Canvas)` is the method widgets override.** The traversal went straight to
+`onDraw`/`dispatchDraw`, so `TextInputLayout`'s floating label and box stroke — painted in its
+`draw` override — never appeared, and every Material text field rendered as a bare EditText. The
+base body is registered as `View.draw` and the traversal calls it virtually, taking the direct
+path when nothing overrides it.
+
+**`setFactory` merges; `cloneInContext` clones.** `setFactory2` replaced the installed factory
+instead of merging with it, and `cloneInContext` handed back the context's own cached inflater.
+Between them a fragment's inflater lost appcompat's factory, so `<ImageView>` stayed an
+`ImageView` and never read `app:srcCompat`, a tint or a vector source.
+
+**A floating ViewTreeObserver merges into the window's on attach.** A listener registered before
+its view was attached stayed on the detached subtree's observer and the window's layout pass
+never fired it. Resy's onboarding starts its reveal from `onGlobalLayout` and sat on an
+invisible form.
+
+**A runtime permission is denied until the app asks.** `checkSelfPermission` answered GRANTED for
+everything, including dangerous permissions a fresh install has never been given. This is the one
+that hid the restaurant list: Resy's `UserLocationLiveData.onActive` reads the location permission
+and, when it is refused, falls back to a default position; seeing a grant it had never been given,
+it went to Play Services instead — which is genuinely absent — and no location ever arrived. Both
+`ResyListActivity.onResume` and `ResyLocationManager` branch on the same read. Dangerous
+permissions now start denied and the request grants them, with the pause/resume a modal system
+window leaves behind, so an activity that re-reads the permission in `onResume` sees the answer.
+
+Also generic and found on the way: `Class.getGenericInterfaces` answered with an empty array and
+every native class claimed not to be an interface, so gson resolved `List<Foo>` up to `Collection`
+and fell back to `Object` — handing back `LinkedTreeMap`s for every parameterized collection
+field in every app. A class's type variables and parameterized supertypes now come from its
+signature annotation, or from the variable names a native spec declares; a name that appears in
+some spec's `ifaces` is an interface, which is what `Class.isInterface` answers with.
+
+**Where it got to.** Onboarding, the sign-in sheet, the email/password screen, the location
+drawer, the nearby-restaurant list with live availability, and a venue page with its photo,
+description, slots and address all render off the live API. `/2/config`, `/3/location`,
+`/3/location/config` and `/4/find` are real 200s over verified TLS. The map area is the Google
+Maps placeholder and stays one: Play Services is absent, and the app says so itself. The phone
+sign-in posts `/3/auth/mobile` and shows whatever the API answers; a disposable test number was
+rejected by Resy with 400, which is the server's answer, not the emulator's. No reservation was
+booked and no account was created.
+
+The boot-only corpus rendered frames for 12 of 13 APKs; TikTok still fails on the same Keva and
+executor-queue gaps. Two full E2E runs of the starting commit put mihon-app at 57.19% and 56.18%
+and OVERALL at 37.13% and 36.98%; this revision scored 56.81% and 37.17% inside that spread, with
+fitnotes (40.89 → 40.90) and mihon-onboarding (17.56) unchanged, every flow's rendered-step count
+identical, and the same missing list and the same uncaught exceptions in both.
