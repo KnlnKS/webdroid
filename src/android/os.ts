@@ -9,7 +9,7 @@ import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject } from "../jvm/natives/jlang";
+import { vcall, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
 export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
@@ -386,6 +386,20 @@ class JBaseBundle extends JObj {
 export class JBundle extends JBaseBundle {
   constructor() { super(); rt.link("android/os/Bundle"); }
 }
+const bundleBoxes: Record<string, typeof JInt | typeof JLong | typeof JFloat | typeof JDouble | typeof JBool> = {
+  I: JInt, J: JLong, F: JFloat, D: JDouble, Z: JBool,
+};
+export function bundlePrimitive(value: unknown, descriptor: string, fallback: unknown): unknown {
+  if (typeof value === (descriptor === "J" ? "bigint" : "number")) return value;
+  return value instanceof bundleBoxes[descriptor] ? value.v : fallback;
+}
+export function bundleBox(value: unknown, descriptor: string): unknown {
+  if (typeof value !== "number") return value;
+  if (descriptor === "Z") return box(JBool, value);
+  if (descriptor === "F") return box(JFloat, value);
+  if (descriptor === "D") return box(JDouble, value);
+  return value;
+}
 const bundleMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "<init>(I)V": function () {},
@@ -428,15 +442,17 @@ for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "
   ["IntArray", "[I"], ["LongArray", "[J"], ["StringArray", "[Ljava/lang/String;"],
   ["IntegerArrayList", "Ljava/util/ArrayList;"], ["ParcelableArray", "[Landroid/os/Parcelable;"],
   ["SparseParcelableArray", "Landroid/util/SparseArray;"], ["Binder", "Landroid/os/IBinder;"]] as const) {
-  bundleMethods[`put${t}(Ljava/lang/String;${d})V`] = function (this: JBundle, k: string, v: unknown) { this.map.set(k, v); };
+  bundleMethods[`put${t}(Ljava/lang/String;${d})V`] = function (this: JBundle, k: string, v: unknown) { this.map.set(k, bundleBox(v, d)); };
   bundleMethods[`get${t}(Ljava/lang/String;)${d}`] = function (this: JBundle, k: string) {
     const v = this.map.get(k);
+    if (d.length === 1) return bundlePrimitive(v, d, d === "J" ? 0n : 0);
     if (v !== undefined) return v;
     return d === "I" || d === "Z" ? 0 : d === "J" ? 0n : d === "F" || d === "D" ? 0 : null;
   };
   if (d === "I" || d === "J" || d === "Z" || d === "F" || d === "D" || d === "Ljava/lang/String;") {
     bundleMethods[`get${t}(Ljava/lang/String;${d})${d}`] = function (this: JBundle, k: string, dflt: unknown) {
       const v = this.map.get(k);
+      if (d.length === 1) return bundlePrimitive(v, d, dflt);
       return v !== undefined ? v : dflt;
     };
   }

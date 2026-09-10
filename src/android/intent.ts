@@ -1,5 +1,5 @@
 import { JObj, type NativeSpec, rt, maySuspend } from "../jvm/runtime";
-import { JBundle, reportUncaught, PROCESS_NAME } from "./os";
+import { JBundle, bundlePrimitive, bundleBox, reportUncaught, PROCESS_NAME } from "./os";
 import { appHost, type AppHost } from "./apphost";
 import { mkUri } from "./net";
 import { newLinkedHashSet } from "../jvm/natives/jutil";
@@ -136,16 +136,17 @@ for (const [t, d, dflt] of [["String", "Ljava/lang/String;", null], ["Int", "I",
   ["Bundle", "Landroid/os/Bundle;", null], ["StringArrayList", "Ljava/util/ArrayList;", null],
   ["IntArray", "[I", null], ["ByteArray", "[B", null], ["StringArray", "[Ljava/lang/String;", null]] as const) {
   intentMethods[`putExtra(Ljava/lang/String;${d})Landroid/content/Intent;`] = function (this: JIntent, k: string, v: unknown) {
-    this.extras.map.set(k, v);
+    this.extras.map.set(k, bundleBox(v, d));
     return this;
   };
   intentMethods[`get${t}Extra(Ljava/lang/String;)${d}`] = function (this: JIntent, k: string) {
+    if (d.length === 1) return bundlePrimitive(this.extras.map.get(k), d, dflt);
     return this.extras.map.get(k) ?? dflt;
   };
   if (d === "I" || d === "J" || d === "Z" || d === "F" || d === "D") {
     intentMethods[`get${t}Extra(Ljava/lang/String;${d})${d}`] = function (this: JIntent, k: string, dv: unknown) {
       const v = this.extras.map.get(k);
-      return v === undefined ? dv : v;
+      return bundlePrimitive(v, d, dv);
     };
   }
   if (t === "Bundle") {
