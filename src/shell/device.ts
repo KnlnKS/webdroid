@@ -754,10 +754,10 @@ let touchTarget: "decor" | { overlay: number } | null = null;
 let downTime = 0;
 // input joins the main queue: keeps DOWN/UP ordered and serialized with layout,
 // Handler posts, and lifecycle — like Android's single main looper.
-export function dispatchPointer(action: number, x: number, y: number): Promise<void> {
+export function dispatchPointer(action: number, x: number, y: number, at = performance.now()): Promise<void> {
   // charged to perf.inputMs: the wall time a tap costs is otherwise in no counter at all.
   const t0 = performance.now();
-  return onMain(() => dispatchPointer0(action, x, y, t0)).finally(() => { perf.inputMs += performance.now() - t0; });
+  return onMain(() => dispatchPointer0(action, x, y, at)).finally(() => { perf.inputMs += performance.now() - t0; });
 }
 async function dispatchPointer0(action: number, x: number, y: number, t: number) {
   const act = booted?.stack[booted.stack.length - 1];
@@ -769,8 +769,10 @@ async function dispatchPointer0(action: number, x: number, y: number, t: number)
   ev.rawY = y;
   // The same clock SystemClock.uptimeMillis reports, because app code subtracts one from the
   // other: Compose's velocity tracker divides by this dt, and 0 - 0 is not a duration.
-  // t is when the event arrived, not when the queue got round to it: a gap between two events
-  // has to mean the finger paused, never that the app was busy.
+  // t is when the event was generated, not when the queue got round to it: a gap between two
+  // events has to mean the finger paused, never that the app was busy. A gesture stamps its
+  // events at the times it meant, as an input driver does, so a fling's velocity does not
+  // depend on how loaded the host is.
   ev.eventTime = t;
   if (action === 0) downTime = ev.eventTime;
   ev.downTime = downTime;

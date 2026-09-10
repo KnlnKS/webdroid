@@ -321,13 +321,14 @@ const wd = {
   },
   swipe: async (x1: number, y1: number, x2: number, y2: number, ms = 400) => {
     const steps = Math.max(2, Math.round(ms / 16));
-    await dispatchPointer(0, x1, y1);
+    const t0 = performance.now();
+    void dispatchPointer(0, x1, y1, t0);
     for (let i = 1; i <= steps; i++) {
-      const t = i / steps;
-      await dispatchPointer(2, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t);
-      await sleep(ms / steps);
+      const at = t0 + ms * i / steps, t = i / steps;
+      await sleep(Math.max(0, at - performance.now()));
+      void dispatchPointer(2, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, at);
     }
-    await dispatchPointer(1, x2, y2);
+    await dispatchPointer(1, x2, y2, t0 + ms);
     return `swiped ${x1},${y1} -> ${x2},${y2}`;
   },
   // Is the main-looper queue still draining? Every input, layout and frame goes through the one
