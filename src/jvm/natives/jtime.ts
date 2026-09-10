@@ -33,6 +33,28 @@ rt.register({
   },
 });
 
+// java.sql's three java.util.Date subclasses. Android ships them, and a library decides whether
+// to register its SQL adapters by looking one of them up.
+const pad = (n: number, w = 2) => String(n).padStart(w, "0");
+const SQL_TEXT: Record<string, (d: Date) => string> = {
+  Date: (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+  Time: (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`,
+  Timestamp: (d) => `${SQL_TEXT.Date(d)} ${SQL_TEXT.Time(d)}.${pad(d.getMilliseconds(), 3)}000000`,
+};
+for (const n of ["Date", "Time", "Timestamp"]) {
+  rt.register({
+    name: `java/sql/${n}`, ctor: class extends JDate {}, sup: "java/util/Date",
+    methods: {
+      "<init>(J)V": function (this: JDate, t: bigint) { this.t = Number(t); },
+      "toString()Ljava/lang/String;": function (this: JDate) { return SQL_TEXT[n](new Date(this.t)); },
+      ...(n === "Timestamp" ? {
+        "getNanos()I": function (this: JDate) { return (this.t % 1000) * 1e6; },
+        "setNanos(I)V": function (this: JDate, ns: number) { this.t = Math.trunc(this.t / 1000) * 1000 + ns / 1e6; },
+      } : {}),
+    },
+  });
+}
+
 // ── TimeZone (device local zone)
 class JTimeZone extends JObj { id = "GMT"; }
 export const localTz = new JTimeZone();

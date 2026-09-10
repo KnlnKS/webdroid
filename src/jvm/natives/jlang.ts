@@ -685,12 +685,14 @@ export function javaFormat(fmt: string, args: unknown[]): string {
       let v = args[idx];
       // BigInteger prints its whole signed magnitude; int/long print two's-complement at their width.
       const big = rt.iof(v, "java/math/BigInteger") ? (v as { v: bigint }).v : null;
+      // %x/%o print two's complement at the ARGUMENT's width, so a Byte -1 is "ff", not "ffffffff"
+      const mask = v instanceof JByte ? 0xff : v instanceof JShort ? 0xffff : -1;
       if (v !== null && typeof v === "object" && "v" in (v as object)) {
         const inner = (v as { v: unknown }).v;
         if (typeof inner === "number" || typeof inner === "bigint") v = inner; // unbox Integer/Long/Double…
       }
       const radix = (r: number) => big !== null ? (big < 0n ? "-" : "") + (big < 0n ? -big : big).toString(r)
-        : (typeof v === "bigint" ? BigInt.asUintN(64, v) : (Number(v) >>> 0)).toString(r);
+        : (typeof v === "bigint" ? BigInt.asUintN(64, v) : ((Number(v) & mask) >>> 0)).toString(r);
       let s: string;
       switch (conv) {
         case "d": s = String(v); if (flags.includes(",")) s = Number(v).toLocaleString("en-US"); break;

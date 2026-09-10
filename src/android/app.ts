@@ -705,6 +705,27 @@ for (const [name, methods, statics] of [
   rt.register({ name, ctor: class extends JObj {}, methods, statics });
 }
 rt.register({ name: "android/telephony/PhoneStateListener", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
+// libphonenumber's metadata is not on this device, so neither the watcher nor formatNumber
+// regroups anything: the digits a caller typed are the digits it reads back.
+rt.register({
+  name: "android/telephony/PhoneNumberFormattingTextWatcher", ctor: class extends JObj {},
+  ifaces: ["android/text/TextWatcher"],
+  methods: {
+    "<init>()V": function () {},
+    "<init>(Ljava/lang/String;)V": function () {},
+    "beforeTextChanged(Ljava/lang/CharSequence;III)V": () => {},
+    "onTextChanged(Ljava/lang/CharSequence;III)V": () => {},
+    "afterTextChanged(Landroid/text/Editable;)V": () => {},
+  },
+});
+rt.register({
+  name: "android/telephony/PhoneNumberUtils", ctor: class extends JObj {},
+  methods: {
+    "static formatNumber(Ljava/lang/String;)Ljava/lang/String;": (n: string | null) => n,
+    "static formatNumber(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (n: string | null) => n,
+    "static stripSeparators(Ljava/lang/String;)Ljava/lang/String;": (n: string | null) => n?.replace(/[^0-9+]/g, "") ?? null,
+  },
+});
 // apps `implements` this to track refresh-rate / display changes; it must link even though it never fires here
 rt.register({ name: "android/hardware/display/DisplayManager$DisplayListener", ctor: class extends JObj {} });
 rt.register({ name: "android/app/AppOpsManager$OnOpChangedListener", ctor: class extends JObj {} });
