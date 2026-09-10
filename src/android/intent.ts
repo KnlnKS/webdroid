@@ -61,10 +61,8 @@ const intentMethods: NativeSpec["methods"] = {
     this.component = cn?.cls ?? null; this.componentPkg = cn?.pkg ?? null;
     return this;
   },
-  "getComponent()Landroid/content/ComponentName;": async function (this: JIntent, pm: unknown) {
-    if (this.component) return mkComponentName(this.componentPkg ?? appHost?.pkg ?? "", this.component);
-    const resolved = await vcall(pm, "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", this, 0x10000);
-    return resolved?.activityInfo ? mkComponentName(resolved.activityInfo.packageName, resolved.activityInfo.name) : null;
+  "getComponent()Landroid/content/ComponentName;": function (this: JIntent) {
+    return this.component ? mkComponentName(this.componentPkg ?? appHost?.pkg ?? "", this.component) : null;
   },
   "setAction(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, a: string) { this.action = a; return this; },
   "setPackage(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, p: string) { this.pkg = p; return this; },
@@ -184,6 +182,7 @@ export const componentState = {
   set(c: JComponentName, st: number) { try { globalThis.localStorage?.setItem(this.key(c), String(st)); } catch { /* private mode */ } },
 };
 export function mkComponentName(pkg: string, cls: string): JComponentName {
+  rt.link("android/content/ComponentName");
   const c = new JComponentName();
   c.pkg = pkg; c.cls = cls;
   return c;
