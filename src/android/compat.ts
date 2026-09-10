@@ -155,6 +155,7 @@ rt.register({
     "getScaledOverscrollDistance()I": () => 0,
     "getScaledOverflingDistance()I": () => Math.round(device.dp(6)),
     "static getEdgeSlop()I": () => 12,
+    "static getGlobalActionKeyTimeout()J": () => 500n,
     "getScaledEdgeSlop()I": () => Math.round(device.dp(12)),
     "getScaledWindowTouchSlop()I": () => device.touchSlop * 2,
     "getScaledDoubleTapSlop()I": () => Math.round(device.dp(100)),
