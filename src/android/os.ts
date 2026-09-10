@@ -669,6 +669,16 @@ rt.register({
     "<init>(II)V": function (this: JKeyEvent, a: number, k: number) { this.action = a; this.keyCode = k; },
     "static getMaxKeyCode()I": () => 316,
     "static getModifierMetaStateMask()I": () => 0x770ff,
+    "static normalizeMetaState(I)I": (state: number) => {
+      if (state & 0xc0) state |= 1;
+      if (state & 0x30) state |= 2;
+      if (state & 0x6000) state |= 0x1000;
+      if (state & 0x60000) state |= 0x10000;
+      if (state & 0x100) state |= 0x100000;
+      if (state & 0x200) state |= 2;
+      if (state & 0x400) state |= 4;
+      return state & 0x7770ff;
+    },
     "getAction()I": function (this: JKeyEvent) { return this.action; },
     "getKeyCode()I": function (this: JKeyEvent) { return this.keyCode; },
     "getRepeatCount()I": () => 0,
