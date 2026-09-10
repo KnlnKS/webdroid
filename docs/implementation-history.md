@@ -2338,3 +2338,32 @@ a bitmap. Bitmap-backed context writes now invalidate that memo and advance the 
 used by shader caches; ordinary framebuffer contexts do not acquire this tracking wrapper.
 Constructor errors follow [AOSP BitmapShader](https://android.googlesource.com/platform/frameworks/base/+/master/graphics/java/android/graphics/BitmapShader.java)
 and [Bitmap.checkRecycled](https://android.googlesource.com/platform/frameworks/base/+/master/graphics/java/android/graphics/Bitmap.java).
+
+### Video decoding and frame scheduling
+
+MediaCodec now probes browser WebCodecs support and supplies bounded decoder queues,
+synchronous dequeue and Handler callbacks, actual decoded video frames and native-order PCM.
+Real encoder fixtures exercise VP8, H.264, VP9 and Opus through the Java-facing adapter. Reddit's
+AVC stream omits Android's key-frame flag, so the adapter reads the elementary stream's frame
+header instead of requiring that optional flag. CryptoInfo and LogSessionId retain their actual
+Java fields and identity. ByteBuffer.order links ByteOrder before exposing its values.
+
+A current public video (`1w7xji6`, a 68-second drawing demonstration) reached 720x1280 AVC
+frames and stereo 48-kHz AAC decoded to PCM. Its playback renderer then required
+Choreographer.postVsyncCallback. These callbacks now use the existing main-thread frame queue,
+with callback-scoped FrameData and one predicted browser presentation timeline. Recent rAF
+cadence rejects an isolated delayed frame; each emulator frame snapshots its prediction before
+awaiting callbacks. There is no fabricated set of Android compositor timelines.
+
+The fresh session advanced through 2,066 surface frames with a running 48-kHz Web Audio clock,
+but a screenshot was black: a cached RenderNode command held a VideoFrame after presentation
+had replaced and closed it. Recorded surface draws now read the live surface at replay time,
+just as nested RenderNodes read their current display lists. This avoids both retaining closed
+frames and copying decoded pixels. That counter evidence alone is not visual playback proof;
+a fresh capture is required after the replay fix.
+
+Saved navigation separately exposed Material's inherited View.EMPTY_STATE_SET and
+SELECTED_STATE_SET, followed by TypedArray.getFraction. The arrays come from platform state
+IDs; fraction decoding shares TypedValue's complex representation, including base versus parent
+base, missing-value defaults and invalid-type errors. TextUtils cursor offsets honor surrogate
+pairs and ReplacementSpan boundaries through Java CharSequence/Spanned methods.
