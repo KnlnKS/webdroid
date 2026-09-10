@@ -622,16 +622,23 @@ for (const [name, methods, statics] of [
   ["android/os/ext/SdkExtensions", {
     "static getExtensionVersion(I)I": () => 0,
   }],
-  // No app-ops daemon here, so no permission carries an op and every note is allowed: a caller
-  // that maps a permission to an op takes the same branch a device takes when the op is unset.
   ["android/app/AppOpsManager", {
     "static permissionToOp(Ljava/lang/String;)Ljava/lang/String;": () => null,
     "noteOp(Ljava/lang/String;ILjava/lang/String;)I": () => 0,
-    "noteOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": () => 0,
+    "noteOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": async function (this: JObj, op: string, uid: number, pkg: string) {
+      return vcall(this, "checkOpNoThrow", "(Ljava/lang/String;ILjava/lang/String;)I", op, uid, pkg);
+    },
+    "noteOpNoThrow(Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I": async function (this: JObj, op: string, uid: number, pkg: string) {
+      return vcall(this, "noteOpNoThrow", "(Ljava/lang/String;ILjava/lang/String;)I", op, uid, pkg);
+    },
     "noteProxyOp(Ljava/lang/String;Ljava/lang/String;)I": () => 0,
     "noteProxyOpNoThrow(Ljava/lang/String;Ljava/lang/String;)I": () => 0,
     "checkOp(Ljava/lang/String;ILjava/lang/String;)I": () => 0,
-    "checkOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": () => 0,
+    "checkOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": (_op: string, uid: number, pkg: string) => packages.get(pkg)?.uid === uid ? 0 : 2,
+    "startOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": async function (this: JObj, op: string, uid: number, pkg: string) {
+      return vcall(this, "checkOpNoThrow", "(Ljava/lang/String;ILjava/lang/String;)I", op, uid, pkg);
+    },
+    "finishOp(Ljava/lang/String;ILjava/lang/String;)V": () => {},
     "unsafeCheckOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": () => 0,
     "checkPackage(ILjava/lang/String;)V": () => {},
     "startWatchingMode(Ljava/lang/String;Ljava/lang/String;Landroid/app/AppOpsManager$OnOpChangedListener;)V": () => {},
