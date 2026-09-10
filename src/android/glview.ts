@@ -399,6 +399,11 @@ export class JSurface extends JObj {
   texture: JSurfaceTexture | null = null;
   released = false;
   get surf(): GlSurface | null { return this.released ? null : this.holder?.surface ?? (this.texture && !this.texture.released ? this.texture.surface : null); }
+  setFrameRate(rate: number, compatibility: number, strategy = 0): void {
+    if (this.released) throw rt.mkThrowable("java/lang/IllegalStateException", "Surface has been released");
+    if (!Number.isFinite(rate) || rate < 0 || (rate !== 0 && ((compatibility !== 0 && compatibility !== 1) || (strategy !== 0 && strategy !== 1)))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid frame rate preference");
+    // The browser controls display refresh; this preference does not throttle frame production.
+  }
 }
 rt.register({
   name: "android/view/Surface", ctor: JSurface,
@@ -408,6 +413,9 @@ rt.register({
       this.texture = texture;
     },
     "isValid()Z": function (this: JSurface) { return this.surf ? 1 : 0; },
+    "setFrameRate(FI)V": function (this: JSurface, rate: number, compatibility: number) { this.setFrameRate(rate, compatibility); },
+    "setFrameRate(FII)V": function (this: JSurface, rate: number, compatibility: number, strategy: number) { this.setFrameRate(rate, compatibility, strategy); },
+    "clearFrameRate()V": function (this: JSurface) { this.setFrameRate(0, 0); },
     "release()V": function (this: JSurface) { this.released = true; },
   },
 });
