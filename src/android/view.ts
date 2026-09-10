@@ -1457,6 +1457,7 @@ export async function dispatchAttached(v: JView) {
 async function attachTree(v: JView) {
   if (v.attached) return;
   v.attached = true;
+  mergeVTO(v);
   try { await guardMaybe(v, M_onAttached); } catch (e) { reportUncaught(e); }
   // a snapshot, as AOSP's copy-on-write list: a one-shot listener removing itself must not skip the next
   for (const l of [...v.attachLs]) {
@@ -1811,6 +1812,19 @@ class JVTO extends JObj {
   }
 }
 const vtoMap = new WeakMap<JView, JVTO>();
+const VTO_LISTS = ["globalLayoutLs", "preDrawLs", "drawLs", "scrollLs", "focusLs"] as const;
+/**
+ * AOSP's floating ViewTreeObserver: a listener registered before the view was attached goes on
+ * the detached subtree's own observer, and dispatchAttachedToWindow merges it into the window's.
+ * Without the merge the window never fires it — which is a fragment that stays mid-animation.
+ */
+function mergeVTO(v: JView): void {
+  const floating = vtoMap.get(v);
+  if (!floating || !v.parent) return;
+  vtoMap.delete(v);
+  const real = getVTO(v);
+  for (const k of VTO_LISTS) real[k].push(...floating[k]);
+}
 function getVTO(v: JView): JVTO {
   let root: JView = v;
   while (root.parent) root = root.parent;
