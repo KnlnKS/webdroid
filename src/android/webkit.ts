@@ -1,17 +1,15 @@
-// android.webkit. The canvas cannot rasterise a web page, so a WebView is an <iframe> the shell
-// parks in a DOM layer over the framebuffer: each draw pass stamps the views it painted and the
-// sweep afterwards shows exactly those, at the rect their view tree laid out. The dev server
-// fronts http(s) (same-origin, un-framed) and the apk's assets, which keeps every frame document
-// scriptable from here: JS bridge, evaluateJavascript and link interception all rely on it.
+// WebViews occupy DOM frames above the canvas. JavaScript interfaces use a separate renderer
+// so synchronous page calls can wait while the Java runtime continues executing.
 
 import { rt, JObj, type NativeSpec, type ClassInfo, maySuspend } from "../jvm/runtime";
 import { mangleMethod, parseMethodDesc } from "../jvm/abi";
-import { vcall, mkEnumSet, type JSimpleEnum } from "../jvm/natives/jlang";
+import { vcall, mkEnumSet, JThread, curThread, setCurThread, type JSimpleEnum } from "../jvm/natives/jlang";
 import { JViewGroup, initViewFromCtx, defaultSize, type JView } from "./view";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { type JContext } from "./context";
 import { mkUri } from "./net";
+import { WebBridge, type WebInterfaces } from "../shell/webbridge";
 import { WEB_INJECT } from "../shell/webinject";
 
 const inst = <T = JObj>(cls: string): T => new (rt.link(cls).ctor)();
@@ -137,21 +135,20 @@ const toJava = (d: string, x: unknown): unknown =>
   d === "J" ? BigInt(Math.trunc(Number(x)) || 0) : d === "Z" ? (x ? 1 : 0) : d === "F" || d === "D" ? Number(x)
   : d === "C" ? String(x).charCodeAt(0) | 0 : d.length === 1 ? Number(x) | 0 : x;
 const fromJava = (d: string, r: unknown): unknown => d === "J" ? Number(r) : d === "Z" ? !!r : d === "V" ? undefined : r;
-/**
- * The page-side face of a Java object: one function per @JavascriptInterface method (past API 17
- * AOSP exposes nothing else). Android's bridge blocks the page's JS thread until Java returns; a
- * compiled Java method here is async, so every call returns a Promise instead -- a deliberate
- * deviation a page has to await.
- */
-function bridge(o: JObj): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
+function bridge(o: JObj, thread: JThread): WebInterfaces[string] {
+  const out: WebInterfaces[string] = Object.create(null);
   for (let ci = (o.constructor as unknown as { $i?: ClassInfo }).$i ?? null; ci && ci.def && ci.dex; ci = ci.superInfo) {
     const dex = ci.dex, annos = dex.classAnnotations(ci.def).methods;
     for (const m of ci.def.virtualMethods) {
       const name = dex.method(m.methodIdx).name;
       if ((m.flags & 9) !== 1 || name in out || !annos.get(m.methodIdx)?.some((a) => a.type === "android/webkit/JavascriptInterface")) continue;
       const desc = dex.methodDesc(m.methodIdx), { params, ret } = parseMethodDesc(desc);
-      out[name] = async (...args: unknown[]) => fromJava(ret, await vcall(o, name, desc, ...params.map((d, i) => toJava(d, args[i]))));
+      out[name] = async (...args: unknown[]) => {
+        const previous = curThread;
+        setCurThread(thread);
+        try { return fromJava(ret, await vcall(o, name, desc, ...params.map((d, i) => toJava(d, args[i])))); }
+        finally { if (curThread === thread) setCurThread(previous); }
+      };
     }
   }
   return out;
@@ -179,7 +176,30 @@ class JWebView extends JViewGroup {
   loaded = false;
   hist: Entry[] = [];
   idx = -1;
-  ifaces: Record<string, unknown> = {};
+  ifaces: WebInterfaces = Object.create(null);
+  bridgeThread = Object.assign(new JThread(), { jname: "JavaBridge" });
+  private remote: WebBridge | null = null;
+  private remoteOrigin = "";
+  private remoteHeight = 0;
+  private nextEval = 0;
+  private evaluations = new Map<number, (value: string) => void>();
+  private message = (event: MessageEvent) => {
+    if (event.source !== this.el?.contentWindow || event.origin !== this.remoteOrigin || event.data?.bridge !== this.remote?.id) return;
+    const data = event.data;
+    if (data.kind === "ready") this.send({ kind: "load", src: this.hist[this.idx]?.src, doc: this.hist[this.idx]?.doc });
+    else if (data.kind === "loaded") {
+      this.remoteHeight = typeof data.height === "number" ? data.height : 0;
+      this.finishLoad(typeof data.url === "string" ? data.url : null, typeof data.title === "string" ? data.title : "", typeof data.error === "string" ? data.error : null);
+    } else if (data.kind === "navigate" && typeof data.url === "string") this.navigate(data.url);
+    else if (data.kind === "evaluated" && typeof data.seq === "number" && typeof data.value === "string") this.evaluations.get(data.seq)?.(data.value);
+  };
+  private send(data: object) { this.el?.contentWindow?.postMessage({ ...data, bridge: this.remote?.id }, this.remoteOrigin); }
+  private closeBridge() {
+    this.remote?.close(); this.remote = null; this.remoteOrigin = "";
+    window.removeEventListener("message", this.message);
+    for (const done of this.evaluations.values()) done("null");
+  }
+  destroy() { this.gen++; this.closeBridge(); this.hide(); this.el?.remove(); this.el = null; live.delete(this); }
   el: HTMLIFrameElement | null = null;
   drawnAt = 0;
   shown = false;
@@ -207,7 +227,16 @@ class JWebView extends JViewGroup {
         if (e.doc !== undefined) el.srcdoc = e.doc;
         else { el.removeAttribute("srcdoc"); el.src = e.src!; }
       };
-      if (e.src?.startsWith("/proxy?")) void webProxy().then(load).catch((error) => { console.error("[webview transport]", error); load(); });
+      this.closeBridge();
+      if (Object.keys(this.ifaces).length) {
+        const remote = this.remote = new WebBridge({ ...this.ifaces });
+        window.addEventListener("message", this.message);
+        void remote.ready.then((origin) => {
+          if (this.gen !== g) return;
+          this.remoteOrigin = origin;
+          el.removeAttribute("srcdoc"); el.src = origin + "/webview?bridge=" + remote.id;
+        }).catch(() => { if (this.gen === g) this.finishLoad(null, "", "WebView bridge unavailable"); });
+      } else if (e.src?.startsWith("/proxy?")) void webProxy().then(load).catch((error) => { console.error("[webview transport]", error); load(); });
       else load();
     }
     void onMain(() => this.gen === g && vcall(this.client, "onPageStarted", "(Landroid/webkit/WebView;Ljava/lang/String;Landroid/graphics/Bitmap;)V", this, e.url, null));
@@ -223,16 +252,20 @@ class JWebView extends JViewGroup {
     this.go(this.hist[i], false);
   }
   private onLoad() {
-    const g = this.gen, cur = this.hist[this.idx];
-    const doc = this.el!.contentDocument;
+    if (this.remote) return;
+    const cur = this.hist[this.idx], doc = this.el!.contentDocument;
     // the iframe's initial about:blank fires load too; it is nobody's navigation
     if (doc?.URL === "about:blank" && cur?.src !== "about:blank") return;
     const redirected = doc?.querySelector('meta[name="wd-proxy-url"]')?.getAttribute("content");
-    if (redirected) { this.url = redirected; if (cur) cur.url = redirected; }
-    const url = this.url ?? "";
     const err = doc?.querySelector('meta[name="wd-proxy-error"]')?.getAttribute("content");
     if (doc && !err) this.hookLinks(doc);
-    this.loaded = !err; this.progress = 100; this.title = doc?.title || url;
+    this.finishLoad(redirected ?? null, doc?.title ?? "", err ?? null);
+  }
+  private finishLoad(redirected: string | null, title: string, err: string | null) {
+    const g = this.gen, cur = this.hist[this.idx];
+    if (redirected) { this.url = redirected; if (cur) cur.url = redirected; }
+    const url = this.url ?? "";
+    this.loaded = !err; this.progress = 100; this.title = title || url;
     // Chromium's order; each step re-checks the generation because a callback commonly starts
     // the next load (an app's error page), which ends this one's sequence
     const steps: [unknown, string, string, ...unknown[]][] = err
@@ -250,14 +283,23 @@ class JWebView extends JViewGroup {
       const href = unmap(a.href, this);
       if (a.hash && href.split("#")[0] === (this.url ?? "").split("#")[0]) return; // same-document fragment: no navigation
       e.preventDefault();
-      void onMain(async () => {
-        if (await vcall(this.client, "shouldOverrideUrlLoading", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Z", this, mkRequest(href, true))) return;
-        this.loadUrl(href);
-      });
+      this.navigate(href);
     }, true);
   }
+  private navigate(href: string) {
+    void onMain(async () => {
+      if (await vcall(this.client, "shouldOverrideUrlLoading", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Z", this, mkRequest(href, true))) return;
+      this.loadUrl(href);
+    });
+  }
   /** Chromium JSON-encodes the completion value; undefined, functions and throws all read as null */
-  evalJs(js: string): string {
+  evalJs(js: string): string | Promise<string> {
+    if (this.remote) return new Promise<string>((resolve) => {
+      const seq = ++this.nextEval;
+      const done = (value: string) => { clearTimeout(timer); this.evaluations.delete(seq); resolve(value); };
+      const timer = setTimeout(() => done("null"), 30_000);
+      this.evaluations.set(seq, done); this.send({ kind: "eval", seq, script: js });
+    });
     const w = win(this);
     if (!w) return "null";
     try { return JSON.stringify((w as unknown as { eval(s: string): unknown }).eval(js)) ?? "null"; } catch { return "null"; }
@@ -285,6 +327,7 @@ class JWebView extends JViewGroup {
     }
     return true;
   }
+  contentHeight() { return this.remote ? this.remoteHeight : win(this)?.document.documentElement.scrollHeight ?? 0; }
   hide() { if (this.shown) { this.shown = false; this.el!.hidden = true; } }
 }
 /** srcdoc payload: the bridge bootstrap first (after a doctype, or the document goes quirks), then the base */
@@ -309,7 +352,7 @@ rt.register({
     },
     "onDraw(Landroid/graphics/Canvas;)V": function (this: JWebView) { this.drawnAt = frame; live.add(this); },
     "onDetachedFromWindow()V": function (this: JWebView) { this.hide(); },
-    "destroy()V": function (this: JWebView) { this.gen++; this.hide(); this.el?.remove(); this.el = null; live.delete(this); },
+    "destroy()V": function (this: JWebView) { this.destroy(); },
     "getSettings()Landroid/webkit/WebSettings;": function (this: JWebView) { return this.settings; },
     // AOSP substitutes its default client for null
     "setWebViewClient(Landroid/webkit/WebViewClient;)V": function (this: JWebView, c: JObj | null) { this.client = c ?? inst("android/webkit/WebViewClient"); },
@@ -342,13 +385,13 @@ rt.register({
     "goBackOrForward(I)V": function (this: JWebView, n: number) { this.step(n); },
     // Chromium prunes every entry but the current one
     "clearHistory()V": function (this: JWebView) { if (this.idx >= 0) { this.hist = [this.hist[this.idx]]; this.idx = 0; } },
-    "evaluateJavascript(Ljava/lang/String;Landroid/webkit/ValueCallback;)V": maySuspend(function (this: JWebView, js: string, cb: unknown) {
-      const r = this.evalJs(js);
+    "evaluateJavascript(Ljava/lang/String;Landroid/webkit/ValueCallback;)V": maySuspend(async function (this: JWebView, js: string, cb: unknown) {
+      const r = await this.evalJs(js);
       if (cb) void onMain(() => vcall(cb, "onReceiveValue", "(Ljava/lang/Object;)V", r));
     }),
-    "addJavascriptInterface(Ljava/lang/Object;Ljava/lang/String;)V": function (this: JWebView, o: JObj, name: string) { this.ifaces[name] = bridge(o); },
+    "addJavascriptInterface(Ljava/lang/Object;Ljava/lang/String;)V": function (this: JWebView, o: JObj, name: string) { this.ifaces[name] = bridge(o, this.bridgeThread); },
     "removeJavascriptInterface(Ljava/lang/String;)V": function (this: JWebView, name: string) { delete this.ifaces[name]; },
-    "getContentHeight()I": function (this: JWebView) { return win(this)?.document.documentElement.scrollHeight ?? 0; },
+    "getContentHeight()I": function (this: JWebView) { return this.contentHeight(); },
     "getScale()F": () => device.density,
     "setInitialScale(I)V": () => {},
     "pageUp(Z)Z": function (this: JWebView, top: number) { const w = win(this); if (!w) return 0; w.scrollBy(0, top ? -w.document.documentElement.scrollHeight : -w.innerHeight); return 1; },

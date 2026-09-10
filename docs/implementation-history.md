@@ -3002,3 +3002,37 @@ the actual declaring package and protection metadata; unknown names throw NameNo
 The next reopened browser kept the same FCM token, the unchanged SDK client counted one
 received message, and microG sent its acknowledgement. Evidence is in
 `/tmp/webdroid-gms-completion-receipt.{png,json}`. No token or credential belongs in reports.
+
+
+## WebView scripts and synchronous JavaScript interfaces
+
+Google's login page initially stayed hidden because `getUrl()` retained EmbeddedSetup after
+an HTTP redirect. Reporting the final document URL allows microG's `/identifier` visibility
+check to complete. Cookie removal now completes its asynchronous ValueCallback even with an
+empty jar. Cookie storage and authenticated WebView networking remain incomplete.
+
+Rewriting script `src` attributes to proxy URLs failed: Google's module loader examines the
+original URL and raised `Error: nb`. A service worker proxies script requests without changing
+DOM URLs. After scripts ran, microG's `getAndroidId()` and `getAccounts()` returned Promises
+instead of Android's synchronous results; Google raised `Error: int64`. The Android ID reads
+real provider state, so removing an async wrapper cannot resolve the actual suspension.
+
+A JavaScript-interface WebView now uses a separate renderer site. Synchronous HTTP calls relay
+opaque requests to the owning browser realm over a WebSocket; Java execution stays client-side
+on a private bridge thread. Ordinary WebViews keep the direct path. The relay owns no account
+or Java state and releases pending requests on disconnect, cancellation or timeout. Local
+servers use the localhost/127.0.0.1 pair; other deployments must route a separate site to the
+same server and configure WEBDROID_WEBVIEW_ORIGIN.
+
+The delayed-result browser fixture returned 42 synchronously after asynchronous work, retained
+original script and final document URLs, and completed evaluateJavascript and destruction.
+Real HTTP/WebSocket tests cover reply ownership, delayed results, duplicate connections and
+pending-call cleanup. Typecheck passed. The unchanged microG/Google page now executes both
+getAndroidId and getAccounts without the int64 error in headless and normal Chrome. Headless
+Playwright disables site isolation by default: the first synchronous bridge proof deadlocked
+until its launch restored site isolation. The shared test launcher now matches normal Chrome.
+
+Google subsequently rejected the normal-Chrome sign-in flow with HTTP 403 (`rrk=32`) before
+password entry. This does not establish user authentication. Navigation, cookie behavior and
+the upstream rejection still need investigation. Captures remain under
+/tmp/webdroid-gms-completion-signin-web and /tmp/webdroid-webview-bridge-check.

@@ -1,12 +1,15 @@
 import index from "./index.html";
 import processIndex from "./process.html";
-import { WEB_INJECT, WEB_PROXY_WORKER } from "./src/shell/webinject";
+import { WEB_INJECT, WEB_PROXY_WORKER, WEB_FRAME } from "./src/shell/webinject";
 import { openInstall } from "./src/shell/install";
 import { prepareSystemPackages } from "./scripts/system-packages";
 
-await prepareSystemPackages();
+import { WebRelay, type WebRelayData } from "./src/shell/webrelay";
 
-type TcpData = { host: string; port: number; tls: boolean; sock: import("bun").Socket | null; ready: boolean; pending: (Uint8Array | Buffer)[] };
+await prepareSystemPackages();
+const webRelay = new WebRelay();
+
+type TcpData = { kind: "tcp"; host: string; port: number; tls: boolean; sock: import("bun").Socket | null; ready: boolean; pending: (Uint8Array | Buffer)[] };
 
 // Hop-by-hop/encoding headers never survive the proxy; the framing/isolation set is dropped
 // only for `frame=1`, where the shell embeds the document in an iframe it must be able to script.
@@ -43,12 +46,21 @@ function apkAssets(apk: string): Promise<Record<string, Uint8Array>> {
   return pending;
 }
 
-const server: Bun.Server<TcpData> = Bun.serve({
+const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
   port: Number(process.env.PORT ?? 4080),
   development: { hmr: false },
   routes: {
     "/": index,
     "/process": processIndex,
+    "/webview": () => new Response(WEB_FRAME, { headers: { "content-type": "text/html", "cache-control": "no-store" } }),
+    "/webview-call": (req) => webRelay.call(req),
+    "/webview-origin": (req) => {
+      const url = new URL(req.url);
+      if (process.env.WEBDROID_WEBVIEW_ORIGIN) return Response.json(process.env.WEBDROID_WEBVIEW_ORIGIN);
+      if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") return new Response("Configure WEBDROID_WEBVIEW_ORIGIN on a separate site", { status: 503 });
+      url.hostname = url.hostname === "localhost" ? "127.0.0.1" : "localhost";
+      return Response.json(url.origin);
+    },
     "/webview-worker.js": () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } }),
     "/proxy": async (req) => {
       const q = new URL(req.url).searchParams;
@@ -151,18 +163,24 @@ const server: Bun.Server<TcpData> = Bun.serve({
   // meant to face a network.
   fetch(req, srv) {
     const u = new URL(req.url);
+    if (u.pathname === "/webview-socket") {
+      const id = u.searchParams.get("id") ?? "";
+      if (!/^[a-f0-9-]{36}$/.test(id) || req.headers.get("origin") !== u.origin) return new Response("bad bridge", { status: 403 });
+      return srv.upgrade(req, { data: { kind: "webview", id } }) ? undefined : new Response("expected websocket", { status: 400 });
+    }
     if (u.pathname !== "/tcp") return new Response("not found", { status: 404 });
     const host = u.searchParams.get("host") ?? "";
     const port = Number(u.searchParams.get("port"));
     if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
       return new Response("bad target", { status: 400 });
     }
-    const data: TcpData = { host, port, tls: u.searchParams.get("tls") === "1", sock: null, ready: false, pending: [] };
+    const data: TcpData = { kind: "tcp", host, port, tls: u.searchParams.get("tls") === "1", sock: null, ready: false, pending: [] };
     return srv.upgrade(req, { data }) ? undefined : new Response("expected websocket", { status: 400 });
   },
   websocket: {
     async open(ws) {
       const d = ws.data;
+      if (d.kind === "webview") { webRelay.open(d.id, ws); return; }
       // A TLS socket silently drops (returns 0 for) anything written before its handshake
       // completes, and connect() resolves on the TCP open, not the handshake. The ready control
       // frame goes out only once the socket can carry bytes, and anything that arrives before
@@ -191,10 +209,11 @@ const server: Bun.Server<TcpData> = Bun.serve({
       }
     },
     message(ws, msg) {
+      if (ws.data.kind === "webview") { if (typeof msg === "string") webRelay.reply(ws, msg); return; }
       if (typeof msg === "string") return;
       if (ws.data.ready) ws.data.sock?.write(msg); else ws.data.pending.push(msg);
     },
-    close(ws) { ws.data.sock?.end(); },
+    close(ws) { if (ws.data.kind === "webview") webRelay.close(ws.data.id, ws); else ws.data.sock?.end(); },
   },
 });
 

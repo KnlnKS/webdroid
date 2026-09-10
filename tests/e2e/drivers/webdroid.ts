@@ -25,6 +25,7 @@ function pageUrl(screen: Screen): string {
 }
 
 const LAUNCH_ARGS = [
+  "--site-per-process",
   "--use-gl=angle", "--use-angle=swiftshader",
   "--font-render-hinting=none", "--disable-lcd-text",
   "--force-device-scale-factor=1", "--hide-scrollbars",
@@ -39,7 +40,7 @@ export const CONTEXT_OPTS = {
   colorScheme: "light" as const,
   reducedMotion: "reduce" as const,
 };
-export const launchBrowser = () => chromium.launch({ headless: true, args: LAUNCH_ARGS });
+export const launchBrowser = () => chromium.launch({ headless: true, args: LAUNCH_ARGS, ignoreDefaultArgs: ["--disable-features=IsolateOrigins,site-per-process"] });
 
 export type LaunchOpts = {
   screen?: Screen;
