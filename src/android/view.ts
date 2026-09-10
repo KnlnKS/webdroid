@@ -213,6 +213,21 @@ async function guardApply(fn: JMethod, self: unknown, ...args: unknown[]): Promi
   return r instanceof Promise ? await r : r;
 }
 
+class JPointerIcon extends JObj { type = 0; }
+const pointerIcons = new Map<number, JPointerIcon>();
+rt.register({
+  name: "android/view/PointerIcon", ctor: JPointerIcon, ifaces: ["android/os/Parcelable"],
+  methods: {
+    "static getSystemIcon(Landroid/content/Context;I)Landroid/view/PointerIcon;": (context: unknown, type: number) => {
+      if (!context) throw rt.mkThrowable("java/lang/IllegalArgumentException", "context must not be null");
+      let icon = pointerIcons.get(type);
+      if (!icon) { icon = new JPointerIcon(); icon.type = type; pointerIcons.set(type, icon); }
+      return icon;
+    },
+    "getType()I": function (this: JPointerIcon) { return this.type; },
+  },
+});
+
 export class JView extends JObj {
   ctx: unknown = null;            // android Context
   jres: Resources | null = null;
@@ -234,6 +249,7 @@ export class JView extends JObj {
   stateListAnimator: unknown = null;
   keyboardCluster = false;
   touchBlocksFocus = false;
+  pointerIcon: JPointerIcon | null = null;
   left = 0; top = 0; right = 0; bottom = 0;
   static $nextDrawingId = 0;
   measuredW = 0; measuredH = 0;
@@ -890,7 +906,9 @@ const viewMethods: NativeSpec["methods"] = {
   "getOutlineProvider()Landroid/view/ViewOutlineProvider;": function (this: JView) { return this.outlineProvider ?? bgOutline; },
   "setClipToOutline(Z)V": () => {},
   "setTransitionName(Ljava/lang/String;)V": () => {},
-  "setPointerIcon(Landroid/view/PointerIcon;)V": () => {},
+  "setPointerIcon(Landroid/view/PointerIcon;)V": function (this: JView, icon: JPointerIcon | null) { this.pointerIcon = icon; },
+  "getPointerIcon()Landroid/view/PointerIcon;": function (this: JView) { return this.pointerIcon; },
+  "onResolvePointerIcon(Landroid/view/MotionEvent;I)Landroid/view/PointerIcon;": function (this: JView) { return this.pointerIcon; },
   "setForegroundGravity(I)V": () => {},
   "sendAccessibilityEvent(I)V": () => {},
   "announceForAccessibility(Ljava/lang/CharSequence;)V": () => {},
