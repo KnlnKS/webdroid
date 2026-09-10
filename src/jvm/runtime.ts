@@ -783,7 +783,8 @@ export class Runtime {
     if (d1 !== d2) return 0;
     const ea = a.slice(d1), eb = b.slice(d2);
     if (ea[0] === "L" && eb[0] === "L") {
-      const ei = this.classes.get(descToName(ea)) ?? null;
+      if (eb === "Ljava/lang/Object;") return 1;
+      const ei = this.link(descToName(ea));
       return ei?.types.has(descToName(eb)) ? 1 : 0;
     }
     return 0;

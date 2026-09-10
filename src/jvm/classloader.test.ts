@@ -201,3 +201,14 @@ test("array class descriptors do not eagerly stub optional component classes", a
   expect(rt.classes.has(name)).toBe(false);
   expect(rt.missing).toEqual(before);
 });
+
+
+test("array covariance resolves platform components through a package loader", () => {
+  const child = rt.fork();
+  rt.link("java/lang/Integer");
+  const values = Object.assign([], { $t: "Ljava/lang/Integer;" });
+  expect(child.iof(values, "[Ljava/lang/Object;")).toBe(1);
+  expect(child.iof(values, "[Ljava/lang/Number;")).toBe(1);
+  expect(child.iof(values, "[Ljava/lang/String;")).toBe(0);
+  expect(child.iof(new Int32Array(0), "[Ljava/lang/Object;")).toBe(0);
+});
