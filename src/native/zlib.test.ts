@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { deflateSync, gzipSync, zlibSync } from "fflate";
+import { deflateSync, gzipSync, zlibSync, inflateSync, gunzipSync, unzlibSync } from "fflate";
 import { mainThread } from "../jvm/natives/jlang";
 import { libcInit } from "./libc";
 import { Cpu, setA64 } from "./cpu";
@@ -163,4 +163,71 @@ test("crc32 returns an unsigned z_ulong on both ABIs", async () => {
   setA64(false);
   const cpu32 = new Cpu(mainThread, "zlib 32 test");
   expect((await cpu32.call(crc, [0, source, 9])) >>> 0).toBe(0xcbf43926);
+});
+
+for (const a64 of [false, true]) test(`deflate ${a64 ? "A64" : "ARM32"} preserves chunked streams, counters and reset`, async () => {
+  setA64(a64); libcInit();
+  const worker = new Cpu(mainThread, "deflate test"), wide = a64 ? 8 : 4;
+  const inputCount = a64 ? 8 : 4, outputPtr = a64 ? 24 : 12, outputCount = a64 ? 32 : 16;
+  const totalIn = a64 ? 16 : 8, totalOut = a64 ? 40 : 20;
+  const init = lookupHost("deflateInit2_", "libz.so")!, run = lookupHost("deflate", "libz.so")!;
+  const reset = lookupHost("deflateReset", "libz.so")!, close = lookupHost("deflateEnd", "libz.so")!;
+  const version = mem.hostStr("1.2.8"), payload = new TextEncoder().encode("chunked native compression ".repeat(45));
+  for (const bits of [-15, 15, 31]) {
+    const stream = mem.calloc(1, a64 ? 112 : 56), source = mem.malloc(payload.length), out = mem.malloc(7);
+    mem.u8.set(payload, source);
+    try {
+      expect(await worker.call(init, [stream, -1, 8, bits, 8, 0, version, a64 ? 112 : 56])).toBe(Z_OK);
+      for (let round = 0; round < 2; round++) {
+        const chunks: Uint8Array[] = [];
+        let status = Z_OK;
+        for (let offset = 0; offset < payload.length;) {
+          const size = Math.min(53, payload.length - offset);
+          stp(stream, source + offset); mem.st32(stream + inputCount, size); offset += size;
+          for (let guard = 0; guard < 1000; guard++) {
+            stp(stream + outputPtr, out); mem.st32(stream + outputCount, 7);
+            status = await worker.call(run, [stream, offset === payload.length ? 4 : 0]);
+            const produced = 7 - mem.ld32(stream + outputCount);
+            if (produced) chunks.push(mem.u8.slice(out, out + produced));
+            expect([Z_OK, Z_STREAM_END]).toContain(status);
+            if (status === Z_STREAM_END || offset < payload.length && !mem.ld32(stream + inputCount)) break;
+            if (guard === 999) throw new Error("deflate did not complete");
+          }
+        }
+        expect(status).toBe(Z_STREAM_END);
+        const encoded = bytes(chunks), decode = bits < 0 ? inflateSync : bits === 31 ? gunzipSync : unzlibSync;
+        expect(decode(encoded)).toEqual(payload);
+        expect(wide === 8 ? Number(mem.ld64(stream + totalIn)) : mem.ld32(stream + totalIn)).toBe(payload.length);
+        expect(wide === 8 ? Number(mem.ld64(stream + totalOut)) : mem.ld32(stream + totalOut)).toBe(encoded.length);
+        if (!round) expect(await worker.call(reset, [stream])).toBe(Z_OK);
+      }
+      expect(await worker.call(close, [stream])).toBe(Z_OK);
+      expect(await worker.call(run, [stream, 4])).toBe(-2);
+    } finally { mem.free(stream); mem.free(source); mem.free(out); }
+  }
+  setA64(true); libcInit();
+});
+
+test("deflate sync flush drains once and resumes the same stream", async () => {
+  setA64(true); libcInit();
+  const worker = new Cpu(mainThread, "deflate flush test"), strm = mem.calloc(1, STREAM_SIZE);
+  const run = lookupHost("deflate", "libz.so")!, source = mem.malloc(3), out = mem.malloc(5);
+  const chunks: Uint8Array[] = [];
+  try {
+    expect(await worker.call(lookupHost("deflateInit_", "libz.so")!, [strm, -1, mem.hostStr("1.2.8"), STREAM_SIZE])).toBe(Z_OK);
+    mem.u8.set([97, 98, 99], source);
+    stp(strm + IN, source); mem.st32(strm + AVAIL_IN, 3);
+    for (const flush of [2, 2, 4]) {
+      for (let guard = 0; guard < 50; guard++) {
+        stp(strm + OUT, out); mem.st32(strm + AVAIL_OUT, 5);
+        const status = await worker.call(run, [strm, flush]), n = 5 - mem.ld32(strm + AVAIL_OUT);
+        if (n) chunks.push(mem.u8.slice(out, out + n));
+        expect([Z_OK, Z_BUF_ERROR, Z_STREAM_END]).toContain(status);
+        if (flush === 4 ? status === Z_STREAM_END : n < 5) break;
+        if (guard === 49) throw new Error("sync flush did not drain");
+      }
+    }
+    expect(unzlibSync(bytes(chunks))).toEqual(Uint8Array.of(97, 98, 99));
+    expect(await worker.call(lookupHost("deflateEnd", "libz.so")!, [strm])).toBe(Z_OK);
+  } finally { mem.free(strm); mem.free(source); mem.free(out); worker.dispose(); }
 });

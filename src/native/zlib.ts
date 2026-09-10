@@ -1,7 +1,7 @@
 // libz streaming inflate API over fflate's raw DEFLATE decoder. Container headers and trailers
 // stay here so zlib, gzip, and auto-detect modes have zlib-compatible completion and checksums.
 
-import { Inflate } from "fflate";
+import { Inflate, Deflate, Zlib, Gzip } from "fflate";
 import { mem, AddrMap } from "./mem";
 import { hostLib, type HostFn, PTR, stp, ldp } from "./host";
 
@@ -201,7 +201,7 @@ function processPending(s: Stream): number {
   return Z_STREAM_END;
 }
 
-function drain(s: Stream, strm: number): number {
+function drain(s: { out: Uint8Array[] }, strm: number): number {
   let avail = mem.ld32(strm + Z.AVOUT) >>> 0, out = ldp(strm + Z.OUT), wrote = 0;
   while (avail && s.out.length) {
     const chunk = s.out[0], take = Math.min(avail, chunk.length);
@@ -266,10 +266,58 @@ function decodeZlib(data: Uint8Array): Uint8Array | null {
   return result;
 }
 
+type Encoder = { codec: Deflate | Zlib | Gzip; out: Uint8Array[]; bits: number; level: number; check: number; finished: boolean; started: boolean; flush: number };
+const encoders = new AddrMap<Encoder>();
+function openEncoder(strm: number, level: number, bits: number): number {
+  const compression = ([0, 1, 2, 3, 4, 5, 6, 7, 8, 9] as const)[level === -1 ? 6 : level];
+  if (!strm || compression === undefined || ![-15, 15, 31].includes(bits)) return Z_STREAM_ERROR;
+  const codec = bits < 0 ? new Deflate({ level: compression }) : bits === 31 ? new Gzip({ level: compression, mtime: 0 }) : new Zlib({ level: compression });
+  const s: Encoder = { codec, out: [], bits, level, check: bits === 31 ? 0 : 1, finished: false, started: false, flush: -1 };
+  codec.ondata = (chunk) => { if (chunk.length) s.out.push(chunk); };
+  encoders.set(strm, s);
+  stp(strm + Z.STATE, stateSeq++); stp(strm + Z.MSG, 0);
+  storeUlong(strm + Z.TIN, 0); storeUlong(strm + Z.TOUT, 0); storeUlong(strm + Z.ADLER, s.check);
+  return Z_OK;
+}
+function deflate(strm: number, flush: number): number {
+  const s = encoders.get(strm);
+  if (!s || ![0, 2, 4, 5].includes(flush)) return Z_STREAM_ERROR;
+  const count = mem.ld32(strm + Z.AVIN) >>> 0;
+  if (s.finished && (flush !== 4 || count)) return Z_STREAM_ERROR;
+  if (!ldp(strm + Z.OUT) || count && !ldp(strm + Z.IN)) return Z_STREAM_ERROR;
+  if (!mem.ld32(strm + Z.AVOUT)) return Z_BUF_ERROR;
+  let wrote = drain(s, strm);
+  if (s.out.length || !mem.ld32(strm + Z.AVOUT)) return Z_OK;
+  if (s.finished) return Z_STREAM_END;
+  if (!count && (flush === 0 || flush === s.flush)) return wrote ? Z_OK : Z_BUF_ERROR;
+  const source = ldp(strm + Z.IN), bytes = mem.u8.subarray(source, source + count);
+  s.check = s.bits === 31 ? crc32(s.check, bytes) : adler32(s.check, bytes);
+  s.codec.push(bytes, flush === 4);
+  if (flush === 2 || flush === 5) s.codec.flush(flush === 2);
+  s.started = true; s.finished = flush === 4; s.flush = flush;
+  stp(strm + Z.IN, source + count); mem.st32(strm + Z.AVIN, 0);
+  storeUlong(strm + Z.TIN, loadUlong(strm + Z.TIN) + count); storeUlong(strm + Z.ADLER, s.check);
+  wrote += drain(s, strm);
+  return s.finished && !s.out.length ? Z_STREAM_END : count || wrote ? Z_OK : Z_BUF_ERROR;
+}
+
 export function zlibInit(): void {
   if (PTR === 8) Z = { IN: 0, AVIN: 8, TIN: 16, OUT: 24, AVOUT: 32, TOUT: 40, MSG: 48, STATE: 56, ADLER: 96 };
   else Z = { IN: 0, AVIN: 4, TIN: 8, OUT: 12, AVOUT: 16, TOUT: 20, MSG: 24, STATE: 28, ADLER: 48 };
   const M: Record<string, HostFn> = {
+    deflateInit_: (_c, a) => { const strm = a.p(), level = a.i(); a.str(); a.i(); return openEncoder(strm, level, 15); },
+    deflateInit2_: (_c, a) => {
+      const strm = a.p(), level = a.i(), method = a.i(), bits = a.i(), memory = a.i(), strategy = a.i(); a.str(); a.i();
+      return method === 8 && memory >= 1 && memory <= 9 && strategy >= 0 && strategy <= 4 ? openEncoder(strm, level, bits) : Z_STREAM_ERROR;
+    },
+    deflate: (_c, a) => deflate(a.p(), a.i()),
+    deflateReset: (_c, a) => { const strm = a.p(), s = encoders.get(strm); return s ? openEncoder(strm, s.level, s.bits) : Z_STREAM_ERROR; },
+    deflateEnd: (_c, a) => {
+      const strm = a.p(), s = encoders.get(strm);
+      if (!s) return Z_STREAM_ERROR;
+      encoders.delete(strm); stp(strm + Z.STATE, 0);
+      return s.started && !s.finished ? Z_DATA_ERROR : Z_OK;
+    },
     inflateInit_: (_c, a) => { const strm = a.p(); a.str(); a.i(); return open(strm, 15); },
     inflateInit2_: (_c, a) => { const strm = a.p(), bits = a.i(); a.str(); a.i(); return open(strm, bits); },
     inflate: (_c, a) => inflate(a.p(), a.i()),
