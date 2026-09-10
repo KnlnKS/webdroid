@@ -3065,3 +3065,15 @@ completed request without requiring the view to be painted. Google now gets
 past its cookie check and performs account lookup, but its RPC returns an internal error.
 The same microG build on emulator-5580 reaches the password screen with the test account,
 so that remaining browser failure must not be classified as an upstream limitation.
+
+
+## WebView document URLs and account lookup
+
+A proxied document retained `/webview` as its browser pathname and the desktop navigator's
+user agent. Preserving the final upstream path/query and the configured Android user agent
+made Google's account lookup succeed; its RPC now uses `/v3/signin/identifier`. Bridge
+configuration uses reserved query keys. Cross-origin script navigation goes through the
+WebViewClient before loading the next proxied document, retaining the package cookie jar.
+The unchanged microG flow now reaches the Google password screen in webdroid, matching
+emulator-5580. This is not yet authenticated-account evidence. Typecheck and the browser
+cookie/bridge fixture pass; screenshot: /tmp/webdroid-gms-completion-signin-next.png.

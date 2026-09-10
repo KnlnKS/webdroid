@@ -236,6 +236,7 @@ class JWebView extends JViewGroup {
     this.url = e.url; this.loaded = false; this.progress = 10; this.title = "";
     const g = ++this.gen, el = this.frame();
     if (el) {
+      (el as unknown as { __wdUserAgent: unknown }).__wdUserAgent = this.settings.v.userAgentString;
       const load = () => {
         if (this.gen !== g) return;
         if (e.doc !== undefined) el.srcdoc = e.doc;
@@ -248,7 +249,7 @@ class JWebView extends JViewGroup {
         void remote.ready.then((origin) => {
           if (this.gen !== g) return;
           this.remoteOrigin = origin;
-          el.removeAttribute("srcdoc"); el.src = origin + "/webview?bridge=" + remote.id + "&url=" + encodeURIComponent(e.url) + "&ua=" + encodeURIComponent(String(this.settings.v.userAgentString));
+          el.removeAttribute("srcdoc"); el.src = origin + "/webview?__wd_bridge=" + remote.id + "&__wd_url=" + encodeURIComponent(e.url) + "&__wd_ua=" + encodeURIComponent(String(this.settings.v.userAgentString));
         }).catch(() => { if (this.gen === g) this.finishLoad(null, "", "WebView bridge unavailable"); });
       } else if (e.src?.startsWith("/proxy?")) void webProxy().then(load).catch((error) => { console.error("[webview transport]", error); load(); });
       else load();

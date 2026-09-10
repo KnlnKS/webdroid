@@ -1,6 +1,12 @@
 export const WEB_INJECT = `<script>(function(){
-const id = new URL(location.href).searchParams.get("bridge");
-if (!id) { const f = window.frameElement; if (f && f.__wdIfaces) Object.assign(window, f.__wdIfaces); return; }
+const config = new URL(location.href).searchParams, f = window.frameElement;
+const ua = config.get("__wd_ua") || f?.__wdUserAgent;
+if (ua) {
+  Object.defineProperty(navigator, "userAgent", {value: ua});
+  Object.defineProperty(navigator, "appVersion", {value: ua.startsWith("Mozilla/") ? ua.slice(8) : ua});
+}
+const id = config.get("__wd_bridge");
+if (!id) { if (f && f.__wdIfaces) Object.assign(window, f.__wdIfaces); return; }
 function call(body) {
   const xhr = new XMLHttpRequest();
   xhr.open("POST", location.origin + "/webview-call?id=" + encodeURIComponent(id), false);
@@ -19,6 +25,12 @@ for (const [name, methods] of Object.entries(interfaces)) {
   Object.defineProperty(window, name, {value: object, configurable: true});
 }
 const send = data => parent.postMessage({bridge: id, ...data}, "*");
+window.navigation?.addEventListener("navigate", event => {
+  if (!event.cancelable || event.destination.sameDocument || event.hashChange || event.formData || event.downloadRequest) return;
+  const url = new URL(event.destination.url);
+  if (url.origin === location.origin) return;
+  event.preventDefault(); send({kind: "navigate", url: url.href});
+});
 addEventListener("load", () => send({kind: "loaded", url: document.querySelector('meta[name="wd-proxy-url"]')?.content,
   error: document.querySelector('meta[name="wd-proxy-error"]')?.content, title: document.title, height: document.documentElement.scrollHeight}));
 document.addEventListener("click", event => {
@@ -38,7 +50,7 @@ addEventListener("message", event => {
 })()</script>`;
 
 export const WEB_FRAME = `<!doctype html><script>(function(){
-const id = new URL(location.href).searchParams.get("bridge");
+const id = new URL(location.href).searchParams.get("__wd_bridge");
 addEventListener("message", async event => {
   if (!event.isTrusted || event.source !== parent || event.data?.bridge !== id || event.data.kind !== "load" || !event.ports[0]) return;
   try {
@@ -52,7 +64,15 @@ addEventListener("message", async event => {
     await service.register("/webview-worker.js");
     await service.ready;
     if (!service.controller) await new Promise(resolve => service.addEventListener("controllerchange", resolve, {once: true}));
-    const html = event.data.doc ?? await (await fetch(event.data.src, {headers: {"x-wd-user-agent": event.data.userAgent}})).text();
+    const response = event.data.doc === undefined ? await fetch(event.data.src, {headers: {"x-wd-user-agent": event.data.userAgent}}) : null;
+    const final = response?.headers.get("x-wd-final-url");
+    if (final) {
+      const source = new URL(final), local = new URL(location.href);
+      local.pathname = source.pathname; local.search = source.search; local.hash = source.hash;
+      local.searchParams.set("__wd_bridge", id); local.searchParams.set("__wd_url", final); local.searchParams.set("__wd_ua", event.data.userAgent);
+      history.replaceState(null, "", local);
+    }
+    const html = event.data.doc ?? await response.text();
     document.open(); document.write(html); document.close();
   } catch { parent.postMessage({bridge: id, kind: "loaded", error: "WebView document transport failed"}, "*"); }
 }, {once: true});
@@ -76,11 +96,11 @@ self.addEventListener("fetch", event => {
   if (original.origin === self.location.origin && !localProxy) return;
   event.respondWith((async () => {
     const client = await self.clients.get(event.clientId), url = client && new URL(client.url);
-    if (!url || (url.pathname !== "/webview" && (url.pathname !== "/proxy" || url.searchParams.get("frame") !== "1"))) return fetch(request);
-    const isolated = url.pathname === "/webview";
+    if (!url || (!url.searchParams.has("__wd_bridge") && (url.pathname !== "/proxy" || url.searchParams.get("frame") !== "1"))) return fetch(request);
+    const isolated = url.searchParams.has("__wd_bridge");
     const headers = new Headers();
     request.headers.forEach((value, name) => headers.set(name.startsWith("x-wd-") ? name : "x-wd-" + name, value));
-    const page = url.searchParams.get("url"), agent = url.searchParams.get("ua");
+    const page = url.searchParams.get(isolated ? "__wd_url" : "url"), agent = url.searchParams.get("__wd_ua");
     if (agent) headers.set("x-wd-user-agent", agent);
     let target = localProxy ? original.searchParams.get("url") : request.url;
     if (page && /^https?:/.test(page)) {

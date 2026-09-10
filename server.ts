@@ -170,6 +170,7 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
   // meant to face a network.
   fetch(req, srv) {
     const u = new URL(req.url);
+    if (/^[a-f0-9-]{36}$/.test(u.searchParams.get("__wd_bridge") ?? "")) return new Response(WEB_FRAME, { headers: { "content-type": "text/html", "cache-control": "no-store" } });
     if (u.pathname === "/webview-socket") {
       const id = u.searchParams.get("id") ?? "";
       if (!/^[a-f0-9-]{36}$/.test(id) || req.headers.get("origin") !== u.origin) return new Response("bad bridge", { status: 403 });
