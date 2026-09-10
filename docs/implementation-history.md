@@ -3202,3 +3202,21 @@ interval-filter and removal fixture also passed. No live coordinates were retain
 Lichess's final serialized run at 22859aa remained responsive through all 15 steps, but
 captures still showed its loading screen; this is not gameplay parity. Existing missing
 PhantomReference and SidecarProvider remain in /tmp/webdroid-lichess-final-e2e.log.
+
+### Shared account state and visibility
+
+AccountManager now uses a lazy browser-owned account store instead of separate package
+localStorage arrays. Records carry authenticator ownership and explicit package visibility.
+Only the owner UID can read or modify passwords, user data and cached tokens; visibility
+exposes account identity without granting credential access. Authenticator discovery reads
+metadata and resources from the defining package, including direct XML string attributes.
+Password changes invalidate cached tokens. Feature queries no longer claim support for
+unchecked features, and notifyAccountAuthenticated requires an owned existing account.
+
+Typecheck and eight focused tests passed (55 assertions). A separate fresh browser fixture
+confirmed genuine microG authenticator metadata, account user-data changes across two SDK
+processes, and reload persistence. That fixture used a synthetic local account record, not
+a successful Google login (/tmp/webdroid-account-store-browser.log). The browser check also
+caught registration order: storage attaches before the foreground process exists, so its
+process-death cleanup hook is installed only after registration. Reattaching removes the
+previous account-update observer. Authenticator Binder request routing remains incomplete.

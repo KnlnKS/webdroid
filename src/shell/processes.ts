@@ -1,5 +1,7 @@
 import { PendingIntents, type PendingOperation } from "./pendingintents";
 import { Alarms } from "./alarms";
+import { AccountStore } from "./accounts";
+import { useAccountStore } from "../android/accounts";
 import { executePendingIntent, pendingTransport } from "../android/pendingintent";
 import { alarmTransport } from "../android/alarm";
 import { encodeIntent, decodeIntent, type IntentData } from "../android/intentipc";
@@ -51,6 +53,7 @@ type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HT
   watchers: Set<() => void>; pending: Set<(error: unknown) => void> };
 export class ProcessBroker {
   readonly files = new PrivateFiles();
+  readonly accounts = new AccountStore();
   readonly intents = new PendingIntents(async (operation, fill, alarmCount) => {
     if (packages.get(operation.pkg)?.uid !== operation.uid)
       throw rt.mkThrowable("android/app/PendingIntent$CanceledException", "Creator package is unavailable");
@@ -303,6 +306,8 @@ export function connectProcess(): ProcessEndpoint {
   broker.files.attach(PROCESS_PID, vfs);
   useSQLiteStore(broker.databases);
   usePreferenceStore(broker.preferences);
+  const stopAccounts = useAccountStore(broker.accounts);
+  if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopAccounts);
   usePermissionStore(broker.permissions);
   useWebCookies((pkg) => broker.cookies(pkg));
   locationTransport.available = () => broker.location.available;

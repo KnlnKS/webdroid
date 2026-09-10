@@ -2,10 +2,12 @@ import { JObj, rt, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { defineException, stringHash, vcall } from "../jvm/natives/jlang";
 import { appHost } from "./apphost";
-import { attr, parseAXML } from "./axml";
+import { attr, attrStr, parseAXML } from "./axml";
 import { onMain } from "./mainloop";
 import { servicesMatching } from "./pm";
-import type { JBundle } from "./os";
+import { PROCESS_UID, type JBundle } from "./os";
+import { packages } from "./packages";
+import { AccountStore, type StoredAccount } from "../shell/accounts";
 import { resString } from "./res";
 
 class JAccount extends JObj { name = ""; type = ""; }
@@ -32,28 +34,33 @@ for (const [name, sup] of [["android/accounts/AccountsException", "java/lang/Exc
 
 for (const i of ["android/accounts/AccountManagerFuture", "android/accounts/AccountManagerCallback", "android/accounts/OnAccountsUpdateListener"]) rt.register({ name: i, ctor: class extends JObj {} });
 
-// ── the account database: one per package, persisted like preferences so a login survives a reload
-type Stored = { name: string; type: string; password: string | null; data: Record<string, string>; tokens: Record<string, string> };
-let db: Stored[] | null = null;
-const key = () => "wd:accounts:" + (appHost?.pkg ?? "");
-function accounts(): Stored[] {
-  if (!db) {
-    try { db = JSON.parse(globalThis.localStorage?.getItem(key()) ?? "[]"); } catch { db = []; }
-  }
-  return db!;
+let accountStore = new AccountStore(), stopAccountUpdates = () => {};
+export function useAccountStore(store: AccountStore): () => void {
+  stopAccountUpdates(); accountStore = store;
+  return stopAccountUpdates = store.watch(() => {
+    for (const l of listeners) void onMain(() => vcall(l, "onAccountsUpdated", "([Landroid/accounts/Account;)V", allAccounts()));
+  });
 }
-function persist() {
-  try { globalThis.localStorage?.setItem(key(), JSON.stringify(db)); } catch { /* quota */ }
-  for (const l of listeners) void onMain(() => vcall(l, "onAccountsUpdated", "([Landroid/accounts/Account;)V", allAccounts()));
+useAccountStore(accountStore);
+const accounts = () => accountStore.records;
+const persist = () => accountStore.persist();
+const owns = (s: StoredAccount) => packages.get(s.owner)?.uid === PROCESS_UID;
+function visible(s: StoredAccount, pkg = appHost?.pkg ?? ""): boolean {
+  const owner = packages.get(s.owner), caller = packages.get(pkg);
+  return !!owner && !!caller && (owner.uid === caller.uid || s.visibility[pkg] === 1 || s.visibility[pkg] === 2);
 }
-const find = (a: JAccount | null) => accounts().find((s) => s.name === a?.name && s.type === a?.type);
-const toJ = (s: Stored) => { const a = new JAccount(); a.name = s.name; a.type = s.type; return a; };
-const accountArray = (list: Stored[]) => jarray(list.map(toJ), "Landroid/accounts/Account;");
-const allAccounts = () => accountArray(accounts());
-const byType = (type: string | null) => accountArray(accounts().filter((s) => type === null || s.type === type));
+function find(a: JAccount | null): StoredAccount | undefined {
+  const stored = accounts().find(s => s.name === a?.name && s.type === a?.type);
+  if (stored && !owns(stored)) throw rt.mkThrowable("java/lang/SecurityException", "Caller does not own this account type");
+  return stored;
+}
+const toJ = (s: StoredAccount) => { const a = new JAccount(); a.name = s.name; a.type = s.type; return a; };
+const accountArray = (list: StoredAccount[]) => { rt.link("android/accounts/Account"); return jarray(list.map(toJ), "Landroid/accounts/Account;"); };
+const allAccounts = () => accountArray(accounts().filter(s => visible(s)));
+const byType = (type: string | null, pkg = appHost?.pkg ?? "") => accountArray(accounts().filter(s => (type === null || s.type === type) && visible(s, pkg)));
 const listeners = new Set<unknown>();
 function remove(a: JAccount): number {
-  const i = accounts().findIndex((s) => s.name === a.name && s.type === a.type);
+  const stored = find(a), i = stored ? accounts().indexOf(stored) : -1;
   if (i < 0) return 0;
   accounts().splice(i, 1); persist();
   return 1;
@@ -107,15 +114,16 @@ rt.register({
 });
 /** the manifest's authenticator services, each described by its <account-authenticator> resource */
 function authenticators(): JAuthenticatorDescription[] {
-  const host = appHost!, out: JAuthenticatorDescription[] = [];
-  for (const { meta } of servicesMatching("android.accounts.AccountAuthenticator")) {
+  rt.link("android/accounts/AuthenticatorDescription");
+  const out: JAuthenticatorDescription[] = [];
+  for (const { meta, owner } of servicesMatching("android.accounts.AccountAuthenticator")) {
     const id = meta.map.get("android.accounts.AccountAuthenticator");
-    const bytes = typeof id === "number" ? host.res.fileOf(id)?.bytes : null;
+    const bytes = typeof id === "number" ? owner.res.fileOf(id)?.bytes : null;
     if (!bytes) continue;
     const n = parseAXML(bytes), d = new JAuthenticatorDescription();
     const ref = (name: string) => attr(n, name)?.data ?? 0;
-    d.type = resString(host.res, ref("accountType")) ?? "";
-    d.packageName = host.pkg;
+    d.type = attrStr(n, "accountType") ?? resString(owner.res, ref("accountType")) ?? "";
+    d.packageName = owner.pkg;
     d.labelId = ref("label"); d.iconId = ref("icon"); d.smallIconId = ref("smallIcon"); d.accountPreferencesId = ref("accountPreferences");
     d.customTokens = attr(n, "customTokens")?.data ? 1 : 0;
     out.push(d);
@@ -126,6 +134,7 @@ function authenticators(): JAuthenticatorDescription[] {
 class JAccountManager extends JObj {}
 let manager: JAccountManager | null = null;
 const statics: Record<string, unknown> = {
+  VISIBILITY_UNDEFINED: 0, VISIBILITY_VISIBLE: 1, VISIBILITY_USER_MANAGED_VISIBLE: 2, VISIBILITY_NOT_VISIBLE: 3, VISIBILITY_USER_MANAGED_NOT_VISIBLE: 4,
   ERROR_CODE_REMOTE_EXCEPTION: 1, ERROR_CODE_NETWORK_ERROR: 3, ERROR_CODE_CANCELED: 4, ERROR_CODE_INVALID_RESPONSE: 5, ERROR_CODE_UNSUPPORTED_OPERATION: 6,
   ERROR_CODE_BAD_ARGUMENTS: 7, ERROR_CODE_BAD_REQUEST: 8, ERROR_CODE_BAD_AUTHENTICATION: 9,
   KEY_ACCOUNT_NAME: "authAccount", KEY_ACCOUNT_TYPE: "accountType", KEY_AUTHTOKEN: "authtoken", KEY_INTENT: "intent", KEY_PASSWORD: "password", KEY_ACCOUNTS: "accounts",
@@ -139,13 +148,19 @@ const methods: NativeSpec["methods"] = {
   "static get(Landroid/content/Context;)Landroid/accounts/AccountManager;": () => manager ??= new JAccountManager(),
   [`getAccounts()[${ACC}`]: allAccounts,
   [`getAccountsByType(${S})[${ACC}`]: byType,
-  [`getAccountsByTypeForPackage(${S}${S})[${ACC}`]: byType,
-  [`getAccountsByTypeAndFeatures(${S}[${S}${CB}${H})${F}`]: (type: string, _f: unknown, cb: unknown) => future(byType(type), cb),
+  [`getAccountsByTypeForPackage(${S}${S})[${ACC}`]: (type: string, pkg: string) => {
+    if (pkg !== appHost?.pkg && !authenticators().some(d => d.type === type && packages.get(d.packageName)?.uid === PROCESS_UID))
+      throw rt.mkThrowable("java/lang/SecurityException", "Caller does not own this account type");
+    return byType(type, pkg);
+  },
+  [`getAccountsByTypeAndFeatures(${S}[${S}${CB}${H})${F}`]: (type: string, features: string[] | null, cb: unknown) => features?.length ? unsupported() : future(byType(type), cb),
   [`addAccountExplicitly(${ACC}${S}Landroid/os/Bundle;)Z`]: (a: JAccount, password: string | null, extras: JBundle | null) => {
+    const owner = authenticators().find(d => d.type === a.type)?.packageName;
+    if (!owner || packages.get(owner)?.uid !== PROCESS_UID) throw rt.mkThrowable("java/lang/SecurityException", "Caller does not own this account type");
     if (find(a)) return 0;
-    const data: Record<string, string> = {};
+    const data: Record<string, string> = Object.create(null);
     for (const [k, v] of extras?.map ?? []) if (v != null) data[k] = String(v);
-    accounts().push({ name: a.name, type: a.type, password, data, tokens: {} });
+    accounts().push({ name: a.name, type: a.type, owner, password, data, tokens: Object.create(null), visibility: Object.create(null) });
     persist();
     return 1;
   },
@@ -165,8 +180,8 @@ const methods: NativeSpec["methods"] = {
     persist();
   },
   [`getPassword(${ACC})${S}`]: (a: JAccount) => find(a)?.password ?? null,
-  [`setPassword(${ACC}${S})V`]: (a: JAccount, p: string | null) => { const s = find(a); if (s) { s.password = p; persist(); } },
-  [`clearPassword(${ACC})V`]: (a: JAccount) => { const s = find(a); if (s) { s.password = null; persist(); } },
+  [`setPassword(${ACC}${S})V`]: (a: JAccount, p: string | null) => { const s = find(a); if (s) { s.password = p; s.tokens = Object.create(null); persist(); } },
+  [`clearPassword(${ACC})V`]: (a: JAccount) => { const s = find(a); if (s) { s.password = null; s.tokens = Object.create(null); persist(); } },
   [`peekAuthToken(${ACC}${S})${S}`]: (a: JAccount, type: string) => find(a)?.tokens[type] ?? null,
   [`setAuthToken(${ACC}${S}${S})V`]: (a: JAccount, type: string, token: string | null) => {
     const s = find(a);
@@ -195,6 +210,17 @@ const methods: NativeSpec["methods"] = {
     if (now) void onMain(() => vcall(l, "onAccountsUpdated", "([Landroid/accounts/Account;)V", allAccounts()));
   }),
   "removeOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;)V": (l: unknown) => { listeners.delete(l); },
-  [`notifyAccountAuthenticated(${ACC})Z`]: () => 1,
+  [`setAccountVisibility(${ACC}${S}I)Z`]: (a: JAccount, pkg: string, visibility: number) => {
+    if (visibility < 0 || visibility > 4) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid account visibility");
+    const stored = find(a);
+    if (!stored || !packages.has(pkg)) return 0;
+    if (visibility) stored.visibility[pkg] = visibility; else delete stored.visibility[pkg];
+    persist(); return 1;
+  },
+  [`getAccountVisibility(${ACC}${S})I`]: (a: JAccount, pkg: string) => {
+    const stored = find(a);
+    return stored ? packages.get(stored.owner)?.uid === packages.get(pkg)?.uid ? 1 : stored.visibility[pkg] ?? 4 : 0;
+  },
+  [`notifyAccountAuthenticated(${ACC})Z`]: (a: JAccount) => +!!find(a),
 };
 rt.register({ name: "android/accounts/AccountManager", ctor: JAccountManager, statics, methods });

@@ -182,3 +182,8 @@ TEMP state and one canonical persistent owner. Processes and bytecode start on d
   checks. Permission changes are event-driven; idle permission observation does not retain
   a geolocation watch. Lichess's 15-step rerun is responsive, but its captures remain on a
   loading screen with existing missing PhantomReference/SidecarProvider.
+- Account records now share a lazy browser-owned store with authenticator ownership and
+  package visibility. Credential/user-data access requires the owner UID; exposed account
+  identity does not grant token access. Real-browser fixtures verify cross-process writes,
+  reload persistence and microG metadata ownership. This does not establish Google login;
+  interactive authentication and authenticator Binder request routing remain incomplete.
