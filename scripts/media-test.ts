@@ -16,13 +16,13 @@ try {
     const set = async (format: unknown, key: string, value: number) => wd.vcall(format, "setInteger", "(Ljava/lang/String;I)V", key, value);
     const chunks: EncodedVideoChunk[] = [];
     const encoder = new VideoEncoder({ output: chunk => chunks.push(chunk), error: error => { throw error; } });
-    const mime = videoCodec.startsWith("avc") ? "video/avc" : "video/x-vnd.on2.vp8";
+    const mime = videoCodec.startsWith("avc") ? "video/avc" : videoCodec.startsWith("vp09") ? "video/x-vnd.on2.vp9" : "video/x-vnd.on2.vp8";
     encoder.configure({ codec: videoCodec, width: 16, height: 16, bitrate: 100000, framerate: 30, latencyMode: "realtime", avc: videoCodec.startsWith("avc") ? { format: "annexb" } : undefined });
     const canvas = new OffscreenCanvas(16, 16), context = canvas.getContext("2d");
     if (!context) throw new Error("2D canvas unavailable");
     for (const [i, color] of ["red", "lime", "blue"].entries()) {
       context.fillStyle = color; context.fillRect(0, 0, 16, 16);
-      const frame = new VideoFrame(canvas, { timestamp: i * 33333 }); encoder.encode(frame, { keyFrame: true }); frame.close();
+      const frame = new VideoFrame(canvas, { timestamp: i * 33333 }); encoder.encode(frame, { keyFrame: i === 0 }); frame.close();
     }
     await encoder.flush(); encoder.close();
     const texture = await wd.newObj("android/graphics/SurfaceTexture", "(I)V", 0);
@@ -54,7 +54,7 @@ try {
         const input = await wd.vcall(decoder, "getInputBuffer", "(I)Ljava/nio/ByteBuffer;", index);
         const chunk = chunks[i];
         if (chunk) { const bytes = new Uint8Array(chunk.byteLength); chunk.copyTo(bytes); new Uint8Array(input.ab).set(bytes); }
-        await wd.vcall(decoder, "queueInputBuffer", "(IIIJI)V", index, 0, chunk?.byteLength ?? 0, BigInt(chunk?.timestamp ?? 100000), chunk ? 1 : 4);
+        await wd.vcall(decoder, "queueInputBuffer", "(IIIJI)V", index, 0, chunk?.byteLength ?? 0, BigInt(chunk?.timestamp ?? 100000), chunk ? 0 : 4);
       }
       const info = await wd.newObj("android/media/MediaCodec$BufferInfo");
       let ended = false, frames = 0;

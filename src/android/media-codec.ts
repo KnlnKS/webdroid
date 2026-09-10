@@ -27,6 +27,19 @@ function bufferBytes(buffer: JBuffer): Uint8Array { const view = buffer.dv; retu
 function codecData(format: JMediaFormat, key: string): Uint8Array | undefined {
   const value = format.values.get(key)?.value; return value instanceof JBuffer ? bufferBytes(value) : undefined;
 }
+function videoKeyFrame(mime: string, data: Uint8Array): boolean {
+  if (mime === "video/x-vnd.on2.vp8") return data.length > 0 && !(data[0] & 1);
+  if (mime === "video/x-vnd.on2.vp9") {
+    const header = data[0], shift = (header & 48) === 48 ? 1 : 0;
+    return data.length > 0 && header >>> 6 === 2 && !(header & (12 >>> shift));
+  }
+  if (mime === "video/avc") for (let i = 0; i + 3 < data.length; i++) {
+    if (data[i] || data[i + 1] || data[i + 2] !== 1) continue;
+    const type = data[i + 3] & 31;
+    if (type === 1 || type === 5) return type === 5;
+  }
+  return false;
+}
 function videoConfig(def: Definition, format: JMediaFormat): VideoDecoderConfig {
   let codec = def.codec;
   const data = codecData(format, "csd-0");
@@ -227,7 +240,7 @@ class JMediaCodec extends JObj {
           const a = codecData(this.format, "csd-0"), b = codecData(this.format, "csd-1");
           if (a) { const joined = new Uint8Array(a.length + (b?.length ?? 0) + data.length); joined.set(a); if (b) joined.set(b, a.length); joined.set(data, a.length + (b?.length ?? 0)); data = joined; }
         }
-        this.prepend = false; decoder.decode(new EncodedVideoChunk({ type: flags & 1 ? "key" : "delta", timestamp: Number(timestamp), data }));
+        this.prepend = false; decoder.decode(new EncodedVideoChunk({ type: flags & 1 || videoKeyFrame(this.info.definition.mime, data) ? "key" : "delta", timestamp: Number(timestamp), data }));
       } else decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: Number(timestamp), data }));
     }
     this.available.add(index);
