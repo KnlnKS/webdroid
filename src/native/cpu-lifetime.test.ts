@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { JThread } from "../jvm/natives/jlang";
 import { Cpu, bindCpu, cpuByTid, cpuFor, cpus, setA64 } from "./cpu";
-import { HOST_DATA_END, STACK_END } from "./abi";
+import { HOST_DATA_END, STACK_END, MEM_SIZE } from "./abi";
 import { ldp, PTR } from "./host";
 import { jniInit, javaVM } from "./jni";
 import { mem } from "./mem";
@@ -47,12 +47,17 @@ test("CPU disposal preserves a replacement thread binding and rejects active run
   next.dispose();
 });
 
-test("failed fixed-arena allocations do not consume the remaining address space", () => {
+test("failed allocations preserve space and overflow stacks are reused", () => {
   const top = mem.hostAlloc(0);
   expect(() => mem.hostAlloc(HOST_DATA_END)).toThrow("out of host data space");
   expect(mem.hostAlloc(0)).toBe(top);
-  expect(() => mem.allocStack(STACK_END)).toThrow("out of stack address space");
+  expect(() => mem.allocStack(MEM_SIZE)).toThrow("out of stack address space");
   const stack = mem.allocStack(0x100000);
   expect(stack.top).toBeLessThanOrEqual(STACK_END);
   mem.freeStack(stack.base, stack.top);
+  const overflow = mem.allocStack(STACK_END);
+  expect(overflow.top).toBeGreaterThan(STACK_END);
+  mem.freeStack(overflow.base, overflow.top);
+  expect(mem.allocStack(STACK_END)).toEqual(overflow);
+  mem.freeStack(overflow.base, overflow.top);
 });

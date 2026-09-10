@@ -426,7 +426,9 @@ export const mem = {
     return base;
   },
   allocStack(size: number): { base: number; top: number } {
-    let base = freeStacks.get(size)?.pop() ?? stackTop + STACK_GUARD;
+    const reused = freeStacks.get(size)?.pop();
+    if (reused !== undefined) return { base: reused, top: reused + size };
+    let base = stackTop + STACK_GUARD;
     if (base + size > STACK_END) {
       // the fixed span is full: a stack past it is page-mapped arena memory, so the thread count
       // is bounded by memory, as in a process (an app's dispatcher, http and image pools alone
