@@ -181,30 +181,39 @@ rt.register({
 });
 class JSocket extends JObj {
   host = ""; port = 0; tls = false; relay: Relay | null = null; closed = 0; soTimeout = 0;
+  private opening: Promise<void> | null = null;
   /** Opening is deferred so an SSLSocket wrapping a plain one can take the target over and
    *  connect with TLS instead -- which is exactly how OkHttp builds an HTTPS connection. */
-  async open(): Promise<void> {
-    if (this.relay || this.closed) return;
-    const r = new Relay(this.host, this.port, this.tls);
-    try { await r.ready; } catch {
+  open(): Promise<void> {
+    if (this.closed) throw rt.mkThrowable("java/net/SocketException", "Socket is closed");
+    if (this.opening) return this.opening;
+    if (this.relay) return Promise.resolve();
+    const r = this.relay = new Relay(this.host, this.port, this.tls);
+    return this.opening = r.ready.catch(() => {
       r.close();
+      if (this.relay === r) this.relay = null;
       throw rt.mkThrowable("java/net/ConnectException", `Failed to connect to ${this.host}:${this.port}`);
-    }
-    this.relay = r;
+    }).finally(() => { this.opening = null; });
   }
 }
 class JSocketIn extends JObj { s!: JSocket; }
 /** A read under SO_TIMEOUT waits only that long, then throws and leaves the stream usable —
  *  which is how a caller probes whether a pooled connection is still alive. */
 async function socketRead(s: JSocket, out: Uint8Array, off: number, len: number): Promise<number> {
+  if (!s.relay?.connected) await s.open();
   const relay = s.relay;
-  if (!relay) return -1;
+  if (!relay || s.closed) throw rt.mkThrowable("java/net/SocketException", "Socket is closed");
   if (s.soTimeout && !await relay.waitReadable(s.soTimeout)) {
     throw rt.mkThrowable("java/net/SocketTimeoutException", "Read timed out");
   }
   return relay.read(out, off, len);
 }
 class JSocketOut extends JObj { s!: JSocket; }
+function socketWrite(s: JSocket, bytes: Uint8Array): void | Promise<void> {
+  if (s.closed) throw rt.mkThrowable("java/net/SocketException", "Socket is closed");
+  if (!s.relay?.connected) return s.open().then(() => socketWrite(s, bytes));
+  if (!s.relay.write(bytes)) throw rt.mkThrowable("java/net/SocketException", "Socket write failed");
+}
 
 async function socketConnect(this: JSocket, a: JInetSocketAddress) {
   this.host = a?.host ?? ""; this.port = a?.port ?? 0;
@@ -225,7 +234,7 @@ const socketMethods: NativeSpec["methods"] = {
   },
   "close()V": function (this: JSocket) { this.closed = 1; this.relay?.close(); this.relay = null; },
   "isClosed()Z": function (this: JSocket) { return this.closed; },
-  "isConnected()Z": function (this: JSocket) { return this.relay ? 1 : 0; },
+  "isConnected()Z": function (this: JSocket) { return this.relay?.connected ? 1 : 0; },
   "isInputShutdown()Z": function (this: JSocket) { return this.relay ? 0 : 1; },
   "isOutputShutdown()Z": function (this: JSocket) { return this.relay ? 0 : 1; },
   "shutdownInput()V": () => {},
@@ -269,13 +278,13 @@ rt.register({
   name: "webdroid/SocketOutputStream", ctor: JSocketOut, sup: "java/io/OutputStream",
   methods: {
     "<init>()V": function () {},
-    "write(I)V": function (this: JSocketOut, b: number) { this.s.relay?.write(new Uint8Array([b & 0xff])); },
-    "write([B)V": function (this: JSocketOut, b: Int8Array) {
-      this.s.relay?.write(new Uint8Array(b.buffer, b.byteOffset, b.length));
-    },
-    "write([BII)V": function (this: JSocketOut, b: Int8Array, off: number, len: number) {
-      this.s.relay?.write(new Uint8Array(b.buffer, b.byteOffset + off, len));
-    },
+    "write(I)V": maySuspend(function (this: JSocketOut, b: number) { return socketWrite(this.s, new Uint8Array([b & 0xff])); }),
+    "write([B)V": maySuspend(function (this: JSocketOut, b: Int8Array) {
+      return socketWrite(this.s, new Uint8Array(b.buffer, b.byteOffset, b.length));
+    }),
+    "write([BII)V": maySuspend(function (this: JSocketOut, b: Int8Array, off: number, len: number) {
+      return socketWrite(this.s, new Uint8Array(b.buffer, b.byteOffset + off, len));
+    }),
     "flush()V": () => {},
     "close()V": function (this: JSocketOut) { this.s.relay?.close(); },
   },
