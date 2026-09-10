@@ -204,10 +204,10 @@ rt.register({
   },
 });
 
-// java.security.Security's provider list. This device installs none: the crypto surface here
-// is the platform's own (jcrypto), reached through Cipher.getInstance with no provider, which
-// is also what jcrypto's getProvider() already answers with null. A caller asking for a named
-// provider gets what a device without it gives — null — and takes its own fallback.
+// java.security.Security's provider list. The crypto surface is the platform's own (jcrypto),
+// reached through Cipher.getInstance with no provider, so a Provider here carries no service
+// of its own. The list is still the platform's, in the platform's order: an empty one is not a
+// state any device is in, and callers index it (`getProviders()[0].getName()`) unguarded.
 class JProvider extends JObj { pname = ""; }
 rt.register({
   name: "java/security/Provider", ctor: JProvider,
@@ -216,7 +216,8 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JProvider) { return this.pname; },
   },
 });
-const providers: JProvider[] = [];
+const providers: JProvider[] = ["AndroidNSSP", "AndroidOpenSSL", "CertPathProvider",
+  "AndroidKeyStoreBCWorkaround", "BC", "HarmonyJSSE", "AndroidKeyStore"].map((pname) => Object.assign(new JProvider(), { pname }));
 rt.register({
   name: "java/security/Security", ctor: class extends JObj {},
   methods: {

@@ -914,6 +914,13 @@ export function boxInt(v: number): JInt {
   if (v < -128 || v > 255) return box(JInt, v);
   return intCache[v + 128] ??= box(JInt, v);
 }
+/** A primitive read out of an Object-typed slot. A bare JS number has no toString()/hashCode()
+ *  for the caller, and the slot lost the declared width, so the value's own shape names it. */
+export function boxObject(v: unknown): unknown {
+  if (typeof v === "number") return Number.isInteger(v) ? boxInt(v) : box(JDouble, v);
+  if (typeof v === "bigint") return box(JLong, v);
+  return v;
+}
 /** compareTo for every box class: `v` holds the number/bigint */
 const cmpV = function (this: { v: number | bigint }, o: { v: number | bigint }) { return this.v < o.v ? -1 : this.v > o.v ? 1 : 0; };
 function nfe(s: unknown): never {
@@ -950,6 +957,9 @@ rt.register({
     "equals(Ljava/lang/Object;)Z": function (this: JInt, o: unknown) { return o instanceof JInt && o.v === this.v ? 1 : 0; },
     "compareTo(Ljava/lang/Integer;)I": cmpV,
     "compareTo(Ljava/lang/Object;)I": cmpV,
+    "static getInteger(Ljava/lang/String;)Ljava/lang/Integer;": (prop: string) => { const v = sysLong(prop); return v === null ? null : boxInt(Number(v)); },
+    "static getInteger(Ljava/lang/String;I)Ljava/lang/Integer;": (prop: string, def: number) => boxInt(Number(sysLong(prop) ?? BigInt(def))),
+    "static getInteger(Ljava/lang/String;Ljava/lang/Integer;)Ljava/lang/Integer;": (prop: string, def: JInt) => { const v = sysLong(prop); return v === null ? def : boxInt(Number(v)); },
     "static lowestOneBit(I)I": (v: number) => v & -v,
     "static valueOf(I)Ljava/lang/Integer;": boxInt,
     "static valueOf(Ljava/lang/String;)Ljava/lang/Integer;": (s: string) => boxInt(parseIntJ(s)),
@@ -1024,7 +1034,8 @@ rt.register({
 
     "static highestOneBit(J)J": (v: bigint) => { if (v === 0n) return 0n; let x = BigInt.asUintN(64, v); let r = 1n << 62n; while (!(x & (1n << 63n))) { x <<= 1n; r >>= 1n; } return BigInt.asIntN(64, r << 1n); },
     "static reverse(J)J": (v: bigint) => { let x = BigInt.asUintN(64, v), r = 0n; for (let i = 0n; i < 64n; i++) { r = (r << 1n) | (x & 1n); x >>= 1n; } return BigInt.asIntN(64, r); },
-    "static getLong(Ljava/lang/String;J)Ljava/lang/Long;": (_prop: string, def: bigint) => box(JLong, def), // system properties: none defined
+    "static getLong(Ljava/lang/String;)Ljava/lang/Long;": (prop: string) => { const v = sysLong(prop); return v === null ? null : box(JLong, v); },
+    "static getLong(Ljava/lang/String;J)Ljava/lang/Long;": (prop: string, def: bigint) => box(JLong, sysLong(prop) ?? def),
     "static toString(J)Ljava/lang/String;": (v: bigint) => String(v),
     "static toHexString(J)Ljava/lang/String;": (v: bigint) => BigInt.asUintN(64, v).toString(16),
     "static compare(JJ)I": (a: bigint, b: bigint) => (a < b ? -1 : a > b ? 1 : 0),
@@ -1297,6 +1308,13 @@ async function dlopen(lib: string, abi: () => string | null, bytes: (a: string) 
 }
 const loadLibrary = async (n: string) => dlopen(`lib${n}.so`, () => pickAbi((a) => !!rt.classpath[`lib/${a}/lib${n}.so`]),
   (a) => rt.classpath[`lib/${a}/lib${n}.so`] ?? null);
+/** Integer.getInteger/Long.getLong: a system property decoded the way Integer.decode does,
+ *  null when it is unset or not a number — the value a caller falls back from. */
+function sysLong(prop: string): bigint | null {
+  const raw = sysProps[prop];
+  if (raw === undefined) return null;
+  try { return BigInt(raw.trim()); } catch { return null; }
+}
 const sysProps: Record<string, string> = {
   "java.version": "0", "os.name": "Linux", "line.separator": "\n",
   "java.vm.name": "webdroid", "file.separator": "/", "path.separator": ":",
@@ -1495,6 +1513,7 @@ rt.register({
     "static sleep(J)V": maySuspend((ms: bigint) => park(curThread, () => () => {}, Number(ms))),
     "static yield()V": maySuspend(() => new Promise((r) => setTimeout(r, 0))),
     "static interrupted()Z": () => { const v = curThread.interrupted; curThread.interrupted = 0; return v; },
+    "static holdsLock(Ljava/lang/Object;)Z": (o: unknown) => rt.monitors.holds(o as object, curThread) ? 1 : 0,
   },
 });
 
