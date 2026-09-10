@@ -170,7 +170,7 @@ class JPType extends JObj {
   args: unknown[] = [];      // Type[]
   key = "";                  // canonical string for equals/hashCode
 }
-rt.register({ name: "java/lang/reflect/ParameterizedType", ctor: class extends JObj {} });
+rt.register({ name: "java/lang/reflect/ParameterizedType", ctor: class extends JObj {}, ifaces: ["java/lang/reflect/Type"] });
 rt.register({
   name: "webdroid/PType", ctor: JPType, ifaces: ["java/lang/reflect/ParameterizedType", "java/lang/reflect/Type"],
   methods: {
@@ -182,7 +182,7 @@ rt.register({
     "equals(Ljava/lang/Object;)Z": function (this: JPType, o: unknown) { return o instanceof JPType && o.key === this.key ? 1 : 0; },
   },
 });
-class JTypeVar extends JObj { name = ""; key = ""; }
+class JTypeVar extends JObj { name = ""; key = ""; decl: unknown = null; bounds: unknown[] = []; }
 class JWildcard extends JObj { upper: unknown[] = []; lower: unknown[] = []; key = ""; }
 class JGenericArray extends JObj { component: unknown = null; key = ""; }
 const typeKey = (a: any): string => a?.key ?? (a?.ci ? dotName(a.ci.name) : a?.primName ?? a?.arrDesc ?? "?");
@@ -197,8 +197,8 @@ rt.register({
   name: "webdroid/TypeVar", ctor: JTypeVar, ifaces: ["java/lang/reflect/TypeVariable", "java/lang/reflect/Type"],
   methods: {
     "getName()Ljava/lang/String;": function (this: JTypeVar) { return this.name; },
-    "getBounds()[Ljava/lang/reflect/Type;": () => types([rt.classFor("java/lang/Object")]),
-    "getGenericDeclaration()Ljava/lang/reflect/GenericDeclaration;": () => null,
+    "getBounds()[Ljava/lang/reflect/Type;": function (this: JTypeVar) { return types(this.bounds.length ? this.bounds : [rt.classFor("java/lang/Object")]); },
+    "getGenericDeclaration()Ljava/lang/reflect/GenericDeclaration;": function (this: JTypeVar) { return this.decl; },
     ...typeEquality(JTypeVar),
   },
 });
@@ -218,7 +218,7 @@ rt.register({
   },
 });
 /** parse one type signature at ref.pos: a JClass, or one of the generic Type objects above */
-function parseTypeSig(s: string, ref: { pos: number }): unknown {
+function parseTypeSig(s: string, ref: { pos: number }, decl: unknown = null): unknown {
   const c = s[ref.pos];
   if (c === "L") {
     let name = "";
@@ -227,7 +227,7 @@ function parseTypeSig(s: string, ref: { pos: number }): unknown {
     const args: unknown[] = [];
     if (s[ref.pos] === "<") {
       ref.pos++;
-      while (s[ref.pos] !== ">") args.push(parseTypeSig(s, ref));
+      while (s[ref.pos] !== ">") args.push(parseTypeSig(s, ref, decl));
       ref.pos++; // '>'
       // inner-class suffix ".Name" possible; skip to ';'
       while (ref.pos < s.length && s[ref.pos] !== ";") ref.pos++;
@@ -242,7 +242,7 @@ function parseTypeSig(s: string, ref: { pos: number }): unknown {
   }
   if (c === "[") {
     ref.pos++;
-    const el: any = parseTypeSig(s, ref);
+    const el: any = parseTypeSig(s, ref, decl);
     if (el?.ci || el?.primName || el?.arrDesc) return rt.classFor("[" + (el.ci ? "L" + el.ci.name + ";" : el.arrDesc ?? PRIM_DESC[el.primName]));
     const g = new JGenericArray(); g.component = el; g.key = typeKey(el) + "[]";
     return g;
@@ -253,12 +253,13 @@ function parseTypeSig(s: string, ref: { pos: number }): unknown {
     while (ref.pos < s.length && s[ref.pos] !== ";") v.name += s[ref.pos++];
     ref.pos++;
     v.key = v.name;
+    v.decl = decl;
     return v;
   }
   if (c === "+" || c === "-" || c === "*") {
     const w = new JWildcard();
     ref.pos++;
-    const bound = c === "*" ? null : parseTypeSig(s, ref);
+    const bound = c === "*" ? null : parseTypeSig(s, ref, decl);
     w.upper = [c === "+" ? bound : rt.classFor("java/lang/Object")];
     if (c === "-") w.lower = [bound];
     w.key = c === "*" ? "?" : (c === "+" ? "? extends " : "? super ") + typeKey(bound);
@@ -654,6 +655,60 @@ function classForDesc(desc: string, runtime: Runtime = rt): unknown {
 }
 function paramClasses(desc: string, elem: string, runtime: Runtime = rt) { return jarray(parseMethodDesc(desc).params.map((d) => classForDesc(d, runtime)), elem); }
 function noTypeVars() { return jarray([], "Ljava/lang/reflect/TypeVariable;"); }
+
+// ── a class's own generic model. A serializer resolving List<Foo> walks up to Collection<E> and
+// asks who declared E, so the type variables and the parameterized supertypes have to be real.
+const genericCache = new WeakMap<ClassInfo, { vars: JTypeVar[]; ifaces: unknown[]; sup: unknown }>();
+/** the class signature javac emits, from the dex annotation or the native spec's declaration */
+function typeVarsOf(info: ClassInfo): JTypeVar[] { return generics(info).vars; }
+function mkPType(raw: unknown, args: unknown[]): JPType {
+  const t = new JPType();
+  t.raw = raw; t.args = args;
+  t.key = typeKey(raw) + "<" + args.map(typeKey).join(", ") + ">";
+  return t;
+}
+function generics(info: ClassInfo): { vars: JTypeVar[]; ifaces: unknown[]; sup: unknown } {
+  let g = genericCache.get(info);
+  if (g) return g;
+  const cls = (info.owner ?? rt).classFor(info.name);
+  const vars: JTypeVar[] = [];
+  const ifaces: unknown[] = [];
+  let sup: unknown = null;
+  const sig = info.def ? signatureOf(classAnno(info).cls) : rt.natives.get(info.name)?.typeVars;
+  if (info.def) {
+    if (sig) {
+      const ref = { pos: 0 };
+      if (sig[0] === "<") {
+        ref.pos = 1;
+        while (ref.pos < sig.length && sig[ref.pos] !== ">") {
+          let name = "";
+          while (ref.pos < sig.length && sig[ref.pos] !== ":") name += sig[ref.pos++];
+          const bounds: unknown[] = [];
+          while (sig[ref.pos] === ":") {
+            ref.pos++;
+            if (sig[ref.pos] !== ":" && sig[ref.pos] !== ">") bounds.push(parseTypeSig(sig, ref, cls));
+          }
+          vars.push(Object.assign(new JTypeVar(), { name, key: name, decl: cls, bounds }));
+        }
+        ref.pos++;
+      }
+      sup = parseTypeSig(sig, ref, cls);
+      while (ref.pos < sig.length) ifaces.push(parseTypeSig(sig, ref, cls));
+    }
+  } else if (sig) {
+    for (const name of sig.split(",")) vars.push(Object.assign(new JTypeVar(), { name, key: name, decl: cls, bounds: [] }));
+  }
+  // A native class states its variables only; each supertype takes as many of them as it declares.
+  const apply = (i: ClassInfo) => {
+    const n = typeVarsOf(i).length;
+    const raw = (i.owner ?? rt).classFor(i.name);
+    return n && n <= vars.length ? mkPType(raw, vars.slice(0, n)) : raw;
+  };
+  if (!ifaces.length) for (const i of info.interfaces) ifaces.push(apply(i));
+  if (!sup) sup = info.superInfo ? apply(info.superInfo) : null;
+  genericCache.set(info, (g = { vars, ifaces, sup }));
+  return g;
+}
 export function unboxArg(v: unknown): unknown {
   // reflection passes boxed primitives; unwrap to raw for native/compiled calls
   if (v !== null && typeof v === "object" && "v" in (v as object)) return (v as { v: unknown }).v;
@@ -846,16 +901,10 @@ export function installClassReflection() {
     return jarray(this.ci ? classMethods(this.ci, false) : [], "Ljava/lang/reflect/Method;");
   };
   M["getGenericSuperclass()Ljava/lang/reflect/Type;"] = function (this: JClass) {
-    const ci = this.ci;
-    const sup = ci?.superInfo;
-    if (!sup) return null;
-    // dalvik.annotation.Signature carries the generic class signature
-    const s = ci!.def ? signatureOf(classAnno(ci!).cls) : null;
-    if (s) {
-      const t = parseTypeSig(s, { pos: skipTypeParams(s) });
-      if (t instanceof JPType) return t;
-    }
-    return (sup.owner ?? rt).classFor(sup.name);
+    return this.ci?.superInfo ? generics(this.ci).sup : null;
+  };
+  M["getGenericInterfaces()[Ljava/lang/reflect/Type;"] = function (this: JClass) {
+    return types(this.ci ? generics(this.ci).ifaces : []);
   };
   M["getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;"] = function (this: JClass, path: string) {
     // a relative name resolves against the class's own package
@@ -870,7 +919,9 @@ export function installClassReflection() {
     p.pname = n.includes("/") ? dotName(n.slice(0, n.lastIndexOf("/"))) : "";
     return p;
   };
-  M["getTypeParameters()[Ljava/lang/reflect/TypeVariable;"] = noTypeVars;
+  M["getTypeParameters()[Ljava/lang/reflect/TypeVariable;"] = function (this: JClass) {
+    return jarray(this.ci ? typeVarsOf(this.ci).slice() : [], "Ljava/lang/reflect/TypeVariable;");
+  };
   M["getEnumConstants()[Ljava/lang/Object;"] = async function (this: JClass) {
     const info = this.ci;
     if (!info) return null;

@@ -33,6 +33,11 @@ export interface NativeSpec {
   fields?: Record<string, string>;
   /** run once at init — for expensive static setup */
   clinit?: () => void | Promise<void>;
+  /** the class's own type-variable names ("E", "K,V"). A bytecode class carries these in its
+   *  signature annotation; a native one declares them here, and each interface it implements is
+   *  reported parameterized with as many of them as that interface declares — which is how a
+   *  serializer walking List<Foo> up to Collection<E> finds Foo. */
+  typeVars?: string;
 }
 
 export function callSelf(m: NativeSpec["methods"], sig: string, self: unknown, ...args: unknown[]): unknown {
@@ -178,10 +183,23 @@ export class Runtime {
     }
   }
 
+  private ifaceNames: Set<string> | null = null;
+  /** Which registered natives are interfaces: an `ifaces` entry names one by definition, and an
+   *  interface never declares a superclass. Class.isInterface is what a serializer walking a
+   *  generic supertype tests before it looks at the implemented interfaces at all. */
+  private nativeIfaces(): Set<string> {
+    if (this.ifaceNames) return this.ifaceNames;
+    const named = new Set<string>();
+    for (const spec of this.natives.values()) for (const i of spec.ifaces ?? []) named.add(i);
+    this.ifaceNames = new Set([...named].filter((n) => !this.natives.get(n)?.sup));
+    return this.ifaceNames;
+  }
+
   register(spec: NativeSpec) {
     if (isBytecode(spec.name)) return;   // provenance says AOSP's own bytecode answers for this
     if (this.classes.has(spec.name)) console.warn("[webdroid] native registered after link:", spec.name);
     this.natives.set(spec.name, spec);
+    this.ifaceNames = null;
   }
 
   dexLink(dex: DexFile): DexLink {
@@ -385,6 +403,7 @@ export class Runtime {
     const native = this.natives.get(name);
     if (native) {
       info.native = true;
+      if (this.nativeIfaces().has(name)) info.flags |= ACC.INTERFACE;
       info.ctor = native.ctor;
       if (name !== "java/lang/Object" && name !== "java/lang/String") {
         const supName = native.sup ?? "java/lang/Object";

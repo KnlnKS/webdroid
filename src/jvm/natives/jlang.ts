@@ -272,7 +272,6 @@ rt.register({
     "getTypeName()Ljava/lang/String;": function (this: JClass) {
       return dotName(this.ci?.name ?? this.primName ?? this.arrDesc ?? "?");
     },
-    "getGenericInterfaces()[Ljava/lang/reflect/Type;": () => jarray([], "Ljava/lang/reflect/Type;"),
     "getEnclosingClass()Ljava/lang/Class;": function (this: JClass) {
       const n = this.ci?.name ?? "";
       const i = n.lastIndexOf("$");
@@ -528,7 +527,7 @@ rt.mkThrowable = (cls: string, msg: string | null) => {
 // close-this-thing helper into one method that tests `instanceof AutoCloseable` first, so a
 // Closeable that is not one falls off the end of the chain into its throw.
 rt.register({
-  name: "java/lang/Iterable", ctor: class extends JObj {},
+  name: "java/lang/Iterable", ctor: class extends JObj {}, typeVars: "T",
   methods: {
     "forEach(Ljava/util/function/Consumer;)V": async function (this: JObj, c: unknown) {
       const it = await vcall(this, "iterator", "()Ljava/util/Iterator;");

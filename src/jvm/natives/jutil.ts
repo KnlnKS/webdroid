@@ -561,7 +561,7 @@ const listExtras: Record<string, (base: Methods) => Methods> = {
 for (const n of ["java/util/ArrayList", "java/util/LinkedList", "java/util/Vector", "java/util/Stack", "java/util/ArrayDeque"]) {
   const base = listMethods();
   rt.register({
-    name: n, ctor: class extends JList {},
+    name: n, ctor: class extends JList {}, typeVars: "E",
     ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/Queue", "java/util/Deque", "java/util/RandomAccess", "java/lang/Cloneable", "java/io/Serializable"],
     methods: { ...base, ...listExtras[n]?.(base) },
   });
@@ -843,7 +843,7 @@ for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/conc
   const methods = { ...mapMethods(), ...mapExtras[n] };
   if (n === "java/util/EnumMap") methods["put(Ljava/lang/Enum;Ljava/lang/Object;)Ljava/lang/Object;"] = methods["put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"];
   rt.register({
-    name: n, ctor: class extends JMap {},
+    name: n, ctor: class extends JMap {}, typeVars: "K,V",
     sup: n === "java/util/LinkedHashMap" ? "java/util/HashMap" : "java/lang/Object",
     ifaces: ["java/util/Map", "java/util/concurrent/ConcurrentMap", "java/util/SortedMap", "java/lang/Cloneable", "java/io/Serializable"],
     methods,
@@ -930,11 +930,11 @@ function addToSet(s: JSet, v: unknown): number | Promise<number> {
   }
   return slowFind(s.slow, v).then((i) => (i >= 0 ? 0 : (s.slow.push({ k: v, v }), 1)));
 }
-rt.register({ name: "webdroid/BaseSet", ctor: JSet, ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"], methods: setMethods() });
+rt.register({ name: "webdroid/BaseSet", ctor: JSet, typeVars: "E", ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"], methods: setMethods() });
 for (const n of ["java/util/HashSet", "java/util/LinkedHashSet",
   "java/util/concurrent/CopyOnWriteArraySet", "java/util/EnumSet", "java/util/concurrent/ConcurrentHashMap$KeySetView"]) {
   rt.register({
-    name: n, ctor: class extends JSet {},
+    name: n, ctor: class extends JSet {}, typeVars: "E",
     sup: n === "java/util/LinkedHashSet" ? "java/util/HashSet" : "java/lang/Object",
     ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/util/SortedSet", "java/io/Serializable"],
     methods: n === "java/util/EnumSet" ? { ...setMethods(), ...enumSetStatics() } : setMethods(),
@@ -1126,14 +1126,14 @@ function treeSetMethods(): NativeSpec["methods"] {
 }
 for (const n of ["java/util/TreeMap", "java/util/concurrent/ConcurrentSkipListMap"]) {
   rt.register({
-    name: n, ctor: class extends JTreeMap {},
+    name: n, ctor: class extends JTreeMap {}, typeVars: "K,V",
     ifaces: ["java/util/NavigableMap", "java/util/concurrent/ConcurrentMap", "java/lang/Cloneable", "java/io/Serializable"],
     methods: { ...mapMethods(), ...treeMapMethods() },
   });
 }
 for (const n of ["java/util/TreeSet", "java/util/concurrent/ConcurrentSkipListSet"]) {
   rt.register({
-    name: n, ctor: class extends JTreeSet {},
+    name: n, ctor: class extends JTreeSet {}, typeVars: "E",
     ifaces: ["java/util/NavigableSet", "java/lang/Cloneable", "java/io/Serializable"],
     methods: { ...setMethods(), ...treeSetMethods() },
   });
@@ -1691,18 +1691,18 @@ const absMap: Methods = {
   },
 };
 rt.register({
-  name: "java/util/AbstractCollection", ctor: JAbstractCollection,
+  name: "java/util/AbstractCollection", ctor: JAbstractCollection, typeVars: "E",
   ifaces: ["java/util/Collection", "java/lang/Iterable"], methods: absCollection,
 });
 rt.register({
-  name: "java/util/AbstractList", ctor: JAbstractList, sup: "java/util/AbstractCollection",
+  name: "java/util/AbstractList", ctor: JAbstractList, sup: "java/util/AbstractCollection", typeVars: "E",
   ifaces: ["java/util/List"], fields: { modCount: "modCount" }, methods: absList,
 });
 rt.register({
-  name: "java/util/AbstractSet", ctor: JAbstractSet, sup: "java/util/AbstractCollection",
+  name: "java/util/AbstractSet", ctor: JAbstractSet, sup: "java/util/AbstractCollection", typeVars: "E",
   ifaces: ["java/util/Set"], methods: absSet,
 });
-rt.register({ name: "java/util/AbstractMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"], methods: absMap });
+rt.register({ name: "java/util/AbstractMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"], typeVars: "K,V", methods: absMap });
 
 // collection interfaces as markers — with their real extends-hierarchy so
 // check-cast/instanceof through superinterfaces works (dex classes implementing
@@ -1775,17 +1775,17 @@ const listDefaults: Methods = {
     for (let i = 0; i < n; i++) await vcall(this, "set", `(I${O})${O}`, i, await vcall(fn, "apply", `(${O})${O}`, await vcall(this, "get", `(I)${O}`, i)));
   },
 };
-rt.register({ name: "java/util/Collection", ctor: class extends JObj {}, ifaces: ["java/lang/Iterable"], methods: collDefaults });
-rt.register({ name: "java/util/List", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], methods: listDefaults });
-rt.register({ name: "java/util/Set", ctor: class extends JObj {}, ifaces: ["java/util/Collection"] });
-rt.register({ name: "java/util/Queue", ctor: class extends JObj {}, ifaces: ["java/util/Collection"] });
-rt.register({ name: "java/util/Deque", ctor: class extends JObj {}, ifaces: ["java/util/Queue"] });
-rt.register({ name: "java/util/SortedSet", ctor: class extends JObj {}, ifaces: ["java/util/Set"] });
-rt.register({ name: "java/util/NavigableSet", ctor: class extends JObj {}, ifaces: ["java/util/SortedSet"] });
-rt.register({ name: "java/util/SortedMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"] });
-rt.register({ name: "java/util/NavigableMap", ctor: class extends JObj {}, ifaces: ["java/util/SortedMap"] });
-rt.register({ name: "java/util/concurrent/ConcurrentMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"] });
-rt.register({ name: "java/util/Map", ctor: class extends JObj {}, methods: mapDefaults });
+rt.register({ name: "java/util/Collection", ctor: class extends JObj {}, ifaces: ["java/lang/Iterable"], typeVars: "E", methods: collDefaults });
+rt.register({ name: "java/util/List", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], typeVars: "E", methods: listDefaults });
+rt.register({ name: "java/util/Set", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], typeVars: "E" });
+rt.register({ name: "java/util/Queue", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], typeVars: "E" });
+rt.register({ name: "java/util/Deque", ctor: class extends JObj {}, ifaces: ["java/util/Queue"], typeVars: "E" });
+rt.register({ name: "java/util/SortedSet", ctor: class extends JObj {}, ifaces: ["java/util/Set"], typeVars: "E" });
+rt.register({ name: "java/util/NavigableSet", ctor: class extends JObj {}, ifaces: ["java/util/SortedSet"], typeVars: "E" });
+rt.register({ name: "java/util/SortedMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"], typeVars: "K,V" });
+rt.register({ name: "java/util/NavigableMap", ctor: class extends JObj {}, ifaces: ["java/util/SortedMap"], typeVars: "K,V" });
+rt.register({ name: "java/util/concurrent/ConcurrentMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"], typeVars: "K,V" });
+rt.register({ name: "java/util/Map", ctor: class extends JObj {}, typeVars: "K,V", methods: mapDefaults });
 rt.register({
   name: "java/util/Iterator", ctor: class extends JObj {},
   methods: {
