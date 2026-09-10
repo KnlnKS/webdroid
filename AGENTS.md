@@ -65,8 +65,9 @@ An alternate `WEBDROID_SCREEN=1080x2424@480` runs as smoke when it differs from 
   live separately from the core view traversal.
 - SQLite uses sql.js and persists snapshots per database. Persist without closing/reopening
   the database: connection-local TEMP tables and triggers must survive.
-- ARM32 and A64 run in the wasm core (`src/native/core/*.zig`, built by `bun run build:core`
-  with Zig 0.16 and committed inlined as `core.wasm.ts`; tests run the ReleaseSafe build). The
+- ARM32 and A64 run in the wasm core (`src/native/core/*.zig`, built with Zig 0.16 into
+  `core.wasm.ts`, which is not committed: `bunfig.toml` preloads `scripts/build-core.ts`, so any
+  bun entry point rebuilds it when a Zig source is newer; tests run the ReleaseSafe build). The
   core owns the guest memory, so a guest address is a linear-memory offset; the register file
   is a struct in it (`cpu.ts` keeps the async driver). Blocks are interpreted from a per-page
   decode cache until hot, then a region compiles to a wasm function (`jit.zig`, `jit32.zig`)

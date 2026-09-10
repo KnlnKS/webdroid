@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun run server.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "bun scripts/build-core.ts && tsc --noEmit -p tsconfig.json",
     "test": "bun test src tests",
     "inspect": "bun scripts/inspect.ts",
     "smoke": "bun scripts/smoke.ts",
