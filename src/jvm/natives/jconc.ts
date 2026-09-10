@@ -315,7 +315,18 @@ const executorMethods: NativeSpec["methods"] = {
     function (this: JExecutor, r: unknown, d: bigint, u: JTimeUnit) {
       return submit(this, r, "run", "()V", Number(d) * u.ms);
     },
-  "scheduleAtFixedRate(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;":
+  "schedule(Ljava/util/concurrent/Callable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;":
+    maySuspend(function (this: JExecutor, c: unknown, d: bigint, u: JTimeUnit) {
+      return submit(this, c, "call", "()Ljava/lang/Object;", Number(d) * u.ms);
+    }),
+  ...repeating("scheduleAtFixedRate", true),
+  ...repeating("scheduleWithFixedDelay", false),
+};
+/** The two periodic schedules differ only in where the next run is measured from: a rate keeps
+ *  the period's grid, a delay starts counting when the previous run finished. */
+function repeating(name: string, fixedRate: boolean): NativeSpec["methods"] {
+  return {
+    [`${name}(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;`]:
     function (this: JExecutor, r: unknown, init: bigint, period: bigint, u: JTimeUnit) {
       if (period <= 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "nonpositive period");
       const f = newFuture();
@@ -326,7 +337,7 @@ const executorMethods: NativeSpec["methods"] = {
           task = submit(this, r, "run", "()V", next - performance.now());
           void task.promise!.then(() => {
             if (task.error) { f.error = task.error; f.done = 1; resolve(null); }
-            else { next += Number(period) * u.ms; tick(); }
+            else { next = (fixedRate ? next : performance.now()) + Number(period) * u.ms; tick(); }
           });
         };
         f.cancel = (interrupt) => {
@@ -341,7 +352,8 @@ const executorMethods: NativeSpec["methods"] = {
       });
       return f;
     },
-};
+  };
+}
 function initScheduled(this: JExecutor, core: number, factory: unknown = null) {
   if (core < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative pool size");
   this.limit = Math.max(1, core); this.factory = factory;
@@ -395,6 +407,13 @@ export function mkExecutor(count = 1, factory: unknown = null): JExecutor {
   const ex: JExecutor = new (rt.link("webdroid/Executor").ctor)();
   ex.limit = count; ex.factory = factory; return ex;
 }
+/** A scheduled pool takes the constructor's rule, not the fixed pool's: zero cores is legal
+ *  and still runs a due task. */
+function mkScheduled(count = 1, factory: unknown = null): JExecutor {
+  const ex: JExecutor = new (rt.link("webdroid/Executor").ctor)();
+  initScheduled.call(ex, count, factory);
+  return ex;
+}
 // Executors.defaultThreadFactory()/callable() must hand back REAL objects: callers wrap them and
 // invoke newThread()/call() themselves, so the auto-stubbed interfaces are not enough.
 class JRunnableCallable extends JObj { r: unknown = null; result: unknown = null; }
@@ -435,8 +454,8 @@ rt.register({
     "static newFixedThreadPool(ILjava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ExecutorService;": mkExecutor,
     "static newCachedThreadPool()Ljava/util/concurrent/ExecutorService;": () => mkExecutor(Infinity),
     "static newCachedThreadPool(Ljava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ExecutorService;": (factory: unknown) => mkExecutor(Infinity, factory),
-    "static newScheduledThreadPool(I)Ljava/util/concurrent/ScheduledExecutorService;": mkExecutor,
-    "static newScheduledThreadPool(ILjava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ScheduledExecutorService;": mkExecutor,
+    "static newScheduledThreadPool(I)Ljava/util/concurrent/ScheduledExecutorService;": mkScheduled,
+    "static newScheduledThreadPool(ILjava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ScheduledExecutorService;": mkScheduled,
     "static newSingleThreadScheduledExecutor()Ljava/util/concurrent/ScheduledExecutorService;": mkExecutor,
     "static newSingleThreadScheduledExecutor(Ljava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ScheduledExecutorService;": (factory: unknown) => mkExecutor(1, factory),
     "static unconfigurableExecutorService(Ljava/util/concurrent/ExecutorService;)Ljava/util/concurrent/ExecutorService;": (e: unknown) => e,
