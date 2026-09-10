@@ -211,3 +211,37 @@ test("client process death releases remote service bindings", async () => {
     expect(events).toEqual(["bind", "unbind"]); expect(broker.alive(38001)).toBe(true);
   } finally { for (const [i, pkg] of names.entries()) { broker.fail(38000 + i, "fixture complete"); packages.delete(pkg); } }
 });
+
+test("removing a task destroys members across processes and restores the external caller", async () => {
+  const broker = new ProcessBroker(), names = ["test.tasks.caller", "test.tasks.root", "test.tasks.child"], events: string[] = [];
+  const data = { bytes: new Uint8Array(), objects: [] }, intent = { action: "test", component: null, componentPkg: null, dataUri: null, typeStr: null, pkg: null, flags: 0, categories: [], extras: data,
+    identifier: null, sourceBounds: null, selector: null, clipData: null, contentUserHint: -2, originalIntent: null };
+  const identities = new Map<number, { id: number; task: number }>();
+  for (const [i, pkg] of names.entries()) {
+    packages.set(pkg, new PackageRecord({ name: "manifest", attrs: [{ name: "package", ns: "", resId: 0, type: TV.STRING, data: 0, str: pkg }], children: [] }, new Resources(null, {}), "/" + pkg, 29000 + i, async () => []));
+    const pid = 39000 + i; broker.connect(pkg, pkg, pid);
+    broker.ready(pid, {
+      service: async () => null, provider: async () => { throw new Error("Unused provider"); },
+      broadcast: async (_intent, _component, _ordered, result) => result, transact: async () => ({ handled: 0, data }),
+      activity: async request => {
+        if (request.kind === "launch") {
+          const identity = broker.tasks.attach(pid, request.taskId); identities.set(pid, identity); broker.activityTask(pid, request.id, identity.task);
+        } else if (request.kind === "finishTask") {
+          const identity = identities.get(pid)!; expect(identity.task).toBe(request.taskId); broker.tasks.detach(pid, identity.id); events.push(pid + ":destroy");
+        } else if (request.kind === "visibility") events.push(pid + ":" + request.phase);
+        else if (request.kind === "result") events.push(pid + ":result:" + request.code);
+      },
+    });
+  }
+  try {
+    broker.foreground(39000); broker.tasks.attach(39000);
+    await broker.launchActivity(39000, names[1], names[1], "Root", intent, 7);
+    const root = identities.get(39001)!;
+    await broker.launchActivity(39001, names[2], names[2], "Child", intent, 8, null, root.task);
+    const child = identities.get(39002)!;
+    expect(() => broker.removeTask(39002, child.id, 0, null)).toThrow(); events.length = 0;
+    await broker.removeTask(39001, root.id, -1, null);
+    expect(events).toEqual(["39002:destroy", "39001:destroy", "39000:resume", "39000:result:-1", "39001:result:0"]);
+    expect(broker.tasks.members(root.task)).toEqual([]); expect(broker.back(39000)).toBe(false);
+  } finally { for (const [i, pkg] of names.entries()) { broker.fail(39000 + i, "Fixture complete"); packages.delete(pkg); } }
+});

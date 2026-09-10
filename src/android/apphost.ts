@@ -3,7 +3,7 @@ import type { JApplication, JActivity } from "./app";
 import type { JResources } from "./resnative";
 import type { JIntent, ActivityResultTarget } from "./intent";
 
-export type ActivityLaunch = { caller: { pkg: string; cls: string } | null; result?: ActivityResultTarget; remoteId?: number };
+export type ActivityLaunch = { caller: { pkg: string; cls: string } | null; result?: ActivityResultTarget; remoteId?: number; activityId?: number; taskId?: number };
 
 /** Host bundle shared by all contexts of the app */
 export interface AppHost {

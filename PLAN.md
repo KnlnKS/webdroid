@@ -228,3 +228,15 @@ TEMP state and one canonical persistent owner. Processes and bytecode start on d
 - Google authentication remains unverified: the existing Chrome sign-in tab is back at the
   email step and awaits interactive completion. Authenticator request dispatch, broader activity
   recreation/crash-loop semantics, balanced-power location and full map parity remain open.
+
+## Authenticator dispatch checkpoint
+
+- AccountManager now binds the installed authenticator, invokes real Binder methods and
+  delivers asynchronous results on the selected Handler. Cancellation, timeouts, process death,
+  caller identity and nested login response Parcels are covered by focused tests. Genuine microG
+  feature filtering and login-Intent responses pass clean-browser checks using a synthetic local
+  account; this does not establish Google authentication.
+- Login activity handoff, Back cancellation and Cancel from a separate task now return to the
+  client without missing APIs. Task membership survives recreation and root removal across
+  processes. Task affinity/launch-mode policies, token-by-features selection and encrypted
+  account sessions remain incomplete. The broader regression matrix is being refreshed.

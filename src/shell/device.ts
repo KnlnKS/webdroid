@@ -325,6 +325,11 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
   act.callingActivity = options?.caller ? mkComponentName(options.caller.pkg, options.caller.cls) : null;
   act.resultTo = options?.result ?? null;
   act.remoteId = options?.remoteId ?? 0;
+  act.activityId = options?.activityId ?? 0; act.taskId = options?.taskId ?? 0;
+  if (!act.activityId) {
+    const previous = booted.stack.at(-1);
+    activityTransport.attach?.(act, options?.taskId ?? (intent && intent.flags & 0x10000000 ? 0 : previous?.taskId ?? 0));
+  }
   act.requestedOrientation = requestedOrientation;
   act.lastNonConfig = relaunch?.nonConfig ?? null;
   const saved = relaunch?.state ?? null;
@@ -443,7 +448,7 @@ export function recreateActivity(act: JActivity): void {
         await fireActivityLifecycle(act, "Destroyed");
       } catch (e) { reportUncaught(e); }
       booted.stack.splice(i, 1);
-      const options = { caller: act.callingActivity, result: act.resultTo ?? undefined, remoteId: act.remoteId };
+      const options = { caller: act.callingActivity, result: act.resultTo ?? undefined, remoteId: act.remoteId, activityId: act.activityId, taskId: act.taskId };
       act.remoteId = 0;
       await launchActivity0(cls, act.intent, { state, nonConfig, requestedOrientation: act.requestedOrientation }, options);
     } catch (e) { reportUncaught(e); }
@@ -481,7 +486,7 @@ async function windowFocus(act: JActivity, has: boolean) {
   } catch (e) { reportUncaught(e); }
 }
 
-async function finishActivity(act: JActivity) {
+async function finishActivity(act: JActivity, resume = true) {
   if (!booted) return;
   const i = booted.stack.indexOf(act);
   if (i < 0) return;
@@ -491,7 +496,7 @@ async function finishActivity(act: JActivity) {
   await windowFocus(act, false);
   const remote = activityTransport.finish?.(act) ?? false;
   const top = booted.stack[booted.stack.length - 1];
-  if (top && !remote) {
+  if (top && !top.finished && !remote && resume) {
     applyOrientationRequest(top.requestedOrientation);
     await resumeActivity(top);
     await windowFocus(top, true);
@@ -505,6 +510,18 @@ async function finishActivity(act: JActivity) {
   uiState.needsLayout = true;
   uiState.needsDraw = true;
   uiState.needsInsets = true; // the revealed activity's decor is the new dispatch target
+}
+
+export function finishTask(taskId: number, resume: boolean): Promise<void> {
+  return onMain(async () => {
+    const activities = booted?.stack.filter(a => a.taskId === taskId) ?? [];
+    for (const act of activities) { act.finished = true; act.remoteId = 0; }
+    for (const act of activities.reverse()) await finishActivity(act, false);
+    const top = booted?.stack.at(-1);
+    if (resume && top) {
+      applyOrientationRequest(top.requestedOrientation); await resumeActivity(top); await windowFocus(top, true); void buildOptionsMenu(top);
+    }
+  });
 }
 
 export function activityVisibility(phase: "pause" | "stop" | "resume"): Promise<void> {

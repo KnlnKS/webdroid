@@ -1,5 +1,6 @@
 import { PendingIntents, type PendingOperation } from "./pendingintents";
 import { Alarms } from "./alarms";
+import { ActivityTasks } from "./activitytasks";
 import { AccountStore } from "./accounts";
 import { useAccountStore } from "../android/accounts";
 import { authenticators, authenticatorMethods } from "../android/authenticator";
@@ -38,9 +39,9 @@ type ServiceRequest = { kind: "bind"; intent: IntentData; key: string } | { kind
   | { kind: "start"; intent: IntentData; foreground: boolean }
   | { kind: "pending"; operation: PendingOperation; fill: IntentData | null; alarmCount: number };
 type BroadcastData = { code: number; data: string | null; extras: ParcelData; aborted: boolean };
-type ActivityRequest = { kind: "launch"; id: number; component: string; intent: IntentData; caller: { pkg: string; cls: string } | null }
+type ActivityRequest = { kind: "launch"; id: number; taskId: number; component: string; intent: IntentData; caller: { pkg: string; cls: string } | null }
   | { kind: "visibility"; phase: "pause" | "stop" | "resume" }
-  | { kind: "result"; request: number; code: number; data: IntentData | null } | { kind: "back" };
+  | { kind: "result"; request: number; code: number; data: IntentData | null } | { kind: "back" } | { kind: "finishTask"; taskId: number; resume: boolean };
 export const processPresentation = { visible: true, changed: (_visible: boolean) => {} };
 export type PackageSnapshot = { pkg: string; source: Uint8Array | PackedArchive; uid: number; system: boolean; grants: string[]; signatures: Uint8Array[] | null };
 export type ProcessEndpoint = {
@@ -56,6 +57,7 @@ type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HT
   watchers: Set<() => void>; pending: Set<(error: unknown) => void> };
 export class ProcessBroker {
   readonly files = new PrivateFiles();
+  readonly tasks = new ActivityTasks();
   readonly accounts = new AccountStore();
   readonly intents = new PendingIntents(async (operation, fill, alarmCount) => {
     if (packages.get(operation.pkg)?.uid !== operation.uid)
@@ -88,7 +90,7 @@ export class ProcessBroker {
   private nextPid = 1001;
   private foregroundPid = 0;
   private nextActivity = 1;
-  private activities: { id: number; pid: number; caller: number; previous: number; request: number }[] = [];
+  private activities: { id: number; pid: number; taskId: number; caller: number; previous: number; request: number }[] = [];
   private activityQueue: Promise<void> = Promise.resolve();
   private booted = false;
 
@@ -100,15 +102,15 @@ export class ProcessBroker {
   }
 
   foreground(pid: number): void { this.foregroundPid = pid; }
-  launchActivity(caller: number, pkg: string, process: string, component: string, intent: IntentData, request: number, callingClass: string | null = null): Promise<void> {
+  launchActivity(caller: number, pkg: string, process: string, component: string, intent: IntentData, request: number, callingClass: string | null = null, taskId = 0): Promise<void> {
     const source = this.entry(caller);
-    const target = this.connect(pkg, process), activity = { id: this.nextActivity++, pid: target.pid, caller, previous: 0, request };
+    const target = this.connect(pkg, process), activity = { id: this.nextActivity++, pid: target.pid, taskId, caller, previous: 0, request };
     return this.queueActivity(async () => {
       const previous = this.entry(this.foregroundPid || caller); activity.previous = previous.pid;
       await this.request(previous, (endpoint) => endpoint.activity({ kind: "visibility", phase: "pause" }));
       this.activities.push(activity);
       try {
-        await this.request(target, (endpoint) => endpoint.activity({ kind: "launch", id: activity.id, component, intent, caller: callingClass ? { pkg: source.pkg, cls: callingClass } : null }));
+        await this.request(target, (endpoint) => endpoint.activity({ kind: "launch", id: activity.id, taskId, component, intent, caller: callingClass ? { pkg: source.pkg, cls: callingClass } : null }));
         await this.request(previous, (endpoint) => endpoint.activity({ kind: "visibility", phase: "stop" }));
         this.show(target.pid);
       } catch (error) {
@@ -125,6 +127,24 @@ export class ProcessBroker {
       const [activity] = this.activities.splice(index, 1);
       if (index === this.activities.length) await this.restore(activity, code, data);
       else if (this.alive(activity.caller)) await this.result(activity, code, data);
+    });
+  }
+  activityTask(pid: number, id: number, taskId: number): void {
+    const activity = this.activities.find(a => a.pid === pid && a.id === id);
+    if (activity) activity.taskId = taskId;
+  }
+  removeTask(pid: number, activityId: number, code: number, data: IntentData | null): Promise<void> {
+    if (!this.tasks.root(pid, activityId)) throw rt.mkThrowable("java/lang/SecurityException", "Activity is not the task root");
+    const taskId = this.tasks.task(pid, activityId);
+    return this.queueActivity(async () => {
+      const members = this.tasks.members(taskId), removed = this.activities.filter(a => a.taskId === taskId);
+      const restore = this.activities.at(-1)?.taskId === taskId;
+      this.activities = this.activities.filter(a => a.taskId !== taskId);
+      for (const member of members.reverse()) if (this.alive(member)) await this.request(this.entry(member), endpoint => endpoint.activity({ kind: "finishTask", taskId, resume: !removed.length && member === this.foregroundPid }));
+      const root = removed[0];
+      if (root && restore) await this.restore(root, code, data);
+      else if (root && this.alive(root.caller)) await this.result(root, code, data);
+      for (const activity of removed.slice(1)) if (this.alive(activity.caller)) await this.result(activity, 0, null);
     });
   }
   back(caller: number): boolean {
@@ -193,7 +213,7 @@ export class ProcessBroker {
     const entry = this.entries.get(pid);
     if (!entry || entry.dead) return;
     const error = rt.mkThrowable("android/os/DeadObjectException", message);
-    entry.dead = true; entry.reject(error);
+    entry.dead = true; entry.reject(error); this.tasks.died(pid);
     for (const reject of entry.pending) reject(error);
     entry.pending.clear();
     for (const [key, binding] of entry.bindings)
@@ -328,9 +348,19 @@ export function connectProcess(): ProcessEndpoint {
     const request = nextRequest++, data = await encodeIntent(intent);
     if (result && result.code >= 0) requests.set(request, result);
     const caller = result && result.code >= 0 ? await vcall(result.act, "getComponentName", "()Landroid/content/ComponentName;") : null;
-    void broker.launchActivity(PROCESS_PID, pkg, process, component, data, request, caller?.cls ?? null);
+    const taskId = intent.flags & 0x10000000 ? 0 : (result?.act ?? appHost?.currentActivity())?.taskId ?? 0;
+    void broker.launchActivity(PROCESS_PID, pkg, process, component, data, request, caller?.cls ?? null, taskId);
+  };
+  activityTransport.attach = (act, task) => {
+    const attached = broker.tasks.attach(PROCESS_PID, task); act.activityId = attached.id; act.taskId = attached.task;
+    if (act.remoteId) broker.activityTask(PROCESS_PID, act.remoteId, act.taskId);
+  };
+  activityTransport.isTaskRoot = act => broker.tasks.root(PROCESS_PID, act.activityId);
+  activityTransport.removeTask = act => {
+    void (act.resultData ? encodeIntent(act.resultData) : Promise.resolve(null)).then(data => broker.removeTask(PROCESS_PID, act.activityId, act.resultCode, data)).catch(reportUncaught);
   };
   activityTransport.finish = (act) => {
+    broker.tasks.detach(PROCESS_PID, act.activityId);
     const id = act.remoteId;
     if (!id) return false;
     act.remoteId = 0;
@@ -371,6 +401,7 @@ export function connectProcess(): ProcessEndpoint {
   serviceTransport.start = async (owner, process, intent, foreground) => { await remote(broker.service(PROCESS_PID, owner.pkg, process, { kind: "start", intent: await encodeIntent(intent), foreground })); };
   return {
     activity: async (request) => {
+      if (request.kind === "finishTask") return (await import("./device")).finishTask(request.taskId, request.resume);
       if (request.kind === "back") return (await import("./device")).pressBack();
       if (request.kind === "visibility") {
         await (await import("./device")).activityVisibility(request.phase);
@@ -382,7 +413,7 @@ export function connectProcess(): ProcessEndpoint {
         const intent = await decodeIntent(request.intent);
         await onMain(async () => {
           if (!appHost) throw new Error("Process has no application");
-          await appHost.launch(request.component, intent, { caller: request.caller, remoteId: request.id });
+          await appHost.launch(request.component, intent, { caller: request.caller, remoteId: request.id, taskId: request.taskId });
           if (!appHost.currentActivity()) throw new Error("Activity did not start: " + request.component);
         });
         processPresentation.visible = true; processPresentation.changed(true);

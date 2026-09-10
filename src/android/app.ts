@@ -1,7 +1,7 @@
 import { JContextWrapper, contextMethods, systemService, wrapperMethods, display, displayListeners, grantPermissions } from "./context";
 import { JWindow } from "./window";
 import {
-  JIntent, systemActivities, deliverActivityResult, RESULT_OK, RESULT_CANCELED, launchIntent, mkComponentName,
+  JIntent, activityTransport, systemActivities, deliverActivityResult, RESULT_OK, RESULT_CANCELED, launchIntent, mkComponentName,
   type JComponentName
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
@@ -87,6 +87,8 @@ export class JActivity extends JContextWrapper {
   resultTo: { act: JActivity; code: number } | null = null;
   callingActivity: JComponentName | null = null;
   remoteId = 0;
+  activityId = 0;
+  taskId = 0;
   lifecycleCbs: unknown[] | null = null;
   fragMgr: JFragmentManager | null = null;
   // set while a configuration-change relaunch is tearing this instance down, so androidx keeps
@@ -303,11 +305,16 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
       appHost?.finishActivity(this);
     }
   },
+  "finishAndRemoveTask()V": function (this: JActivity) {
+    if (this.finished) return;
+    if (activityTransport.isTaskRoot?.(this) && activityTransport.removeTask) { this.finished = true; activityTransport.removeTask(this); }
+    else callSelf(activityMethods, "finish()V", this);
+  },
   "finishAffinity()V": maySuspend(function (this: JActivity) { callSelf(activityMethods, "finish()V", this); }),
   "finishAfterTransition()V": maySuspend(function (this: JActivity) { callSelf(activityMethods, "finish()V", this); }),
   "isFinishing()Z": function (this: JActivity) { return this.finished ? 1 : 0; },
   "isDestroyed()Z": function (this: JActivity) { return this.finished ? 1 : 0; },
-  "isTaskRoot()Z": () => 1,
+  "isTaskRoot()Z": function (this: JActivity) { return +(activityTransport.isTaskRoot?.(this) ?? false); },
   // AOSP's startActivityForResult only *starts* something; the result arrives later through
   // onActivityResult. Awaiting a system activity here would hold the serialized main-looper
   // queue for as long as its (native, modal) UI is up, which reads as a wedge.
@@ -371,7 +378,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "onRetainCustomNonConfigurationInstance()Ljava/lang/Object;": () => null,
   "getLastNonConfigurationInstance()Ljava/lang/Object;": function (this: JActivity) { return this.lastNonConfig; },
   "getChangingConfigurations()I": () => 0,
-  "getTaskId()I": () => 1,
+  "getTaskId()I": function (this: JActivity) { return this.taskId || -1; },
   "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z": () => 0,
   // The system's dialog goes in front of the activity: it pauses, the answer is recorded, and
   // it resumes before the result is delivered. Nobody is here to tap, so asking is what grants

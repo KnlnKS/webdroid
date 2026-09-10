@@ -525,3 +525,20 @@ Activity.finishAndRemoveTask; task completion is the next platform gap. Evidence
 /tmp/webdroid-authenticator-activity-browser.{png,json,log}. Interactive Google authentication
 is still unverified. Token-by-features account selection, authenticator session encryption and
 notification-based consent remain outside this dispatch checkpoint.
+
+## Activity task completion
+
+Activity.finishAndRemoveTask now distinguishes task roots from nested activities instead of
+aliasing every call to finish. A broker-owned membership table gives local and remote activities
+stable task/instance IDs, promotes surviving roots, and retains identity through recreation.
+Task removal runs destruction in the owning processes and restores the outside caller. This
+models task membership and removal; affinity-based task reuse and launch-mode policies remain
+separate work.
+
+Eight focused tests and typecheck pass. The browser fixture creates a local task and child,
+recreates the child, removes the task through its root and verifies the original SDK activity
+resumes. A genuine microG LoginActivity launched as a new task exits through its Cancel button,
+removes that task and returns to the SDK client. The ordinary AccountManager login/Back path
+also passes with no missing APIs or suspension diagnostics in all four reached processes.
+Evidence: /tmp/webdroid-activitytasks-browser.{json,log} and
+/tmp/webdroid-authenticator-{activity,task}-browser.{png,json,log}.

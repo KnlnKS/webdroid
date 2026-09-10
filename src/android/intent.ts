@@ -308,6 +308,9 @@ export type ActivityResultTarget = { act: JActivity; code: number };
 export const activityTransport: {
   launch?: (pkg: string, process: string, component: string, intent: JIntent, result?: ActivityResultTarget) => Promise<void>;
   finish?: (act: JActivity) => boolean;
+  attach?: (act: JActivity, task: number) => void;
+  isTaskRoot?: (act: JActivity) => boolean;
+  removeTask?: (act: JActivity) => void;
 } = {};
 export async function launchIntent(host: AppHost, intent: JIntent, result?: ActivityResultTarget) {
   const { getPM } = await import("./pm");
