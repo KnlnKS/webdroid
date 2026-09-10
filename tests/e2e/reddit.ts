@@ -11,9 +11,15 @@ const secrets = [username, password];
 const redact = (text: string) => secrets.reduce((value, secret) => value.replaceAll(secret, "[redacted]"), text);
 const out = `${E2E_DIR}actual/reddit`;
 const timeoutMs = 120_000;
+const runTimeoutMs = Number(process.env.REDDIT_TIMEOUT_MS ?? 600_000);
+if (!Number.isFinite(runTimeoutMs) || runTimeoutMs <= 0) throw new Error("REDDIT_TIMEOUT_MS must be positive");
 await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
-const driver = await WebdroidDriver.launch();
+let driver: WebdroidDriver;
+let closing: Promise<void> | undefined;
+let timedOut = false;
+const close = () => driver ? closing ??= driver.close() : Promise.resolve();
+const pageErrors: string[] = [];
 const runs: unknown[] = [];
 let authenticated = false;
 let seenMissing = new Set<string>();
@@ -43,27 +49,34 @@ async function waitText(...labels: string[]): Promise<void> {
   });
 }
 
-async function capture(id: string, start: number, error?: string): Promise<void> {
+async function capture(id: string, start: number, error?: string, contentMs?: number): Promise<void> {
+  const captureStart = Date.now();
   const snapshot = await driver.snapshot();
   const missing = await driver.missing();
-  const errors = (await driver.logs()).filter((line) => line.startsWith("error:"));
+  const errors = [...(await driver.logs()).filter((line) => /^(error:|window\.error:|unhandledrejection:)/.test(line)), ...pageErrors];
   const texts = await drawn();
+  const perf = await driver.perf();
+  const nativeFault = await driver.page.evaluate(() => wd.native.lastFault.regs);
+  const newErrors = errors.filter((item) => !seenErrors.has(item)).map(redact);
+  const issues = [snapshot.wedged && "main loop wedged", newErrors.length && `${newErrors.length} errors`,
+    nativeFault && "native fault", perf.layoutErrors && `${perf.layoutErrors} layout errors`,
+    perf.drawErrors && `${perf.drawErrors} draw errors`, perf.glErrors && `${perf.glErrors} GL errors`].filter(Boolean);
   const record = {
-    id, ms: Date.now() - start, mainLoopWedged: snapshot.wedged,
-    texts: texts.map(redact), perf: await driver.perf(),
-    newMissing: missing.filter((item) => !seenMissing.has(item)),
-    newErrors: errors.filter((item) => !seenErrors.has(item)).map(redact),
-    nativeRequired: await driver.nativeRequired(), error,
+    id, ms: Date.now() - start, contentMs, captureMs: Date.now() - captureStart, mainLoopWedged: snapshot.wedged,
+    texts: texts.map(redact), perf, nativeFault,
+    newMissing: missing.filter((item) => !seenMissing.has(item)).map(redact), newErrors,
+    nativeRequired: await driver.nativeRequired(), error: error ?? (issues.length ? issues.join(", ") : undefined),
   };
   seenMissing = new Set(missing);
   seenErrors = new Set(errors);
   await Bun.write(`${out}/${id}.png`, snapshot.png);
   runs.push(record);
   console.log(`${id}: ${record.ms}ms${snapshot.wedged ? " MAIN LOOP WEDGED" : ""}${error ? ` ${error}` : ""}`);
-  if (snapshot.wedged) throw new Error(`${id}: main loop wedged`);
+  if (issues.length) throw new Error(`${id}: ${issues.join(", ")}`);
 }
 
-async function step(id: string, action: () => Promise<void>, labels: string[], absent: string[] = []): Promise<void> {
+const newProse = (texts: string[], before: Set<string>) => texts.filter(text => text.trim().length >= 24 && /[a-z]{3}/i.test(text) && !before.has(text));
+async function step(id: string, action: () => Promise<void>, labels: string[], absent: string[] = [], content = (_texts: string[]) => true): Promise<void> {
   stage = id;
   await driver.perfReset();
   const start = Date.now();
@@ -72,12 +85,16 @@ async function step(id: string, action: () => Promise<void>, labels: string[], a
   await waitFor(id, async () => {
     const next = await driver.page.evaluate(() => globalThis.__e2eDrawnText);
     return next.frame > frame && labels.every((label) => next.texts.some((text) => contains(text, label))) &&
-      absent.every((label) => !next.texts.some((text) => contains(text, label)));
+      absent.every((label) => !next.texts.some((text) => contains(text, label))) && content(next.texts);
   });
-  await capture(id, start);
+  await capture(id, start, undefined, Date.now() - start);
 }
 
-try {
+async function run(): Promise<void> {
+  driver = await WebdroidDriver.launch();
+  if (timedOut) { await close(); throw new Error("Browser launched after the run deadline"); }
+  driver.page.on("pageerror", error => pageErrors.push("pageerror: " + error.message));
+  driver.page.on("crash", () => pageErrors.push("pageerror: renderer crashed"));
   await driver.setClock(Date.now());
   await driver.reset({ width: 1080, height: 2424, densityDpi: 480 });
   await driver.page.evaluate(observeDrawnText);
@@ -111,25 +128,46 @@ try {
   if ((await drawn()).some((text) => text.includes("Join the conversation"))) {
     throw new Error("Post marker is already on the feed; cannot measure a detail transition");
   }
-  await step("post", () => driver.tapNorm(0.5, 0.2), ["Join the conversation"]);
-  for (let i = 0; i < 5 && !(await drawn()).some((text) => contains(text, "Reply")); i++) {
+  const feedTexts = new Set(await drawn());
+  await step("post", () => driver.tapNorm(0.5, 0.2), ["Join the conversation"], [],
+    texts => !texts.some(text => text.trim() === "Home") && newProse(texts, feedTexts).length >= 2);
+  const postTexts = new Set(await drawn());
+  const commentsReady = async () => {
+    const texts = await drawn();
+    return texts.some(text => contains(text, "Reply")) && newProse(texts, postTexts).length > 0;
+  };
+  for (let i = 0; i < 5 && !await commentsReady(); i++) {
     await step(`comments-scroll-${i + 1}`, () => driver.swipe([0.5, 0.8], [0.5, 0.3]), ["Join the conversation"]);
   }
-  await waitText("Reply");
+  await waitFor("comment text and Reply", commentsReady);
   await capture("comments", Date.now());
   await step("composer", () => driver.tapNorm(0.48, 0.93), ["Commenting on"]);
   await step("composer-back", () => driver.back(), ["Join the conversation", "Reply"], ["Commenting on"]);
   await driver.settle();
   await step("post-back", () => driver.back(), ["Home"], ["Join the conversation"]);
+}
+
+let timer: ReturnType<typeof setTimeout>;
+try {
+  await Promise.race([run(), new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      void close().catch(() => {});
+      reject(new Error(`Whole-run deadline exceeded (${runTimeoutMs}ms) at ${stage}`));
+    }, runTimeoutMs);
+  })]);
 } catch (error) {
   const message = redact(error instanceof Error ? error.message : String(error));
   failure = message;
-  if (authenticated) await capture(`${stage}-failed`, Date.now(), message).catch(() => {});
+  if (authenticated && !timedOut) await capture(`${stage}-failed`, Date.now(), message).catch(() => {});
   console.error(message);
   process.exitCode = 1;
 } finally {
-  await Bun.write(`${out}/run.json`, JSON.stringify({
-    url: BASE_URL, jsFlags: process.env.WEBDROID_JS_FLAGS ?? "", failedAt: failure ? stage : undefined, error: failure, runs,
-  }, null, 2));
-  await driver.close();
+  clearTimeout(timer!);
+  try {
+    await Bun.write(`${out}/run.json`, redact(JSON.stringify({
+      url: BASE_URL, jsFlags: process.env.WEBDROID_JS_FLAGS ?? "", timeoutMs: runTimeoutMs, timedOut,
+      failedAt: failure ? stage : undefined, error: failure, pageErrors: pageErrors.map(redact), runs,
+    }, null, 2)));
+  } finally { await close(); }
 }

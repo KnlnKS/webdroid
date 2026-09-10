@@ -48,10 +48,25 @@ sequentially with the main suite. Live feed content can move the post target or 
 image lightbox, so a timeout is a diagnostic failure to inspect, not proof of an emulator bug.
 
 Completion requires newly presented canvas text: post detail must draw "Join the
-conversation", scrolling must reach "Reply", and Back must remove the detail marker. A stable white pixel or
-an attached container cannot pass. The diagnostic hook observes synchronous canvas calls,
-including Compose replay; clipping and occlusion still require screenshot inspection.
-It neither votes nor submits comments.
+conversation" plus two new prose strings of at least 24 characters, scrolling must reach
+"Reply" and additional prose absent from the initial post frame, and Back must remove the
+detail marker. These are content checks, not semantic identification of individual comments;
+live posts without enough text may fail. The synchronous canvas observer includes Compose
+replay, but clipping and occlusion still require screenshot inspection.
+
+The run fails on new Java/page errors, native faults, layout/draw/GL errors or a wedged main
+loop. Missing API queries are recorded without automatically failing: optional platform
+queries can be legitimate. A host-side ten-minute deadline closes the browser even when a
+renderer evaluation is stuck; `REDDIT_TIMEOUT_MS` overrides it. Failure details and host page
+errors still reach `run.json` when page-side diagnostics cannot finish.
+
+This smoke does not establish video playback, image lightbox, search, subreddit, profile,
+settings, notifications, Create, deep-link or mutation coverage. It neither votes nor submits
+comments. Keep separate manual artifacts for those paths. Per-step `contentMs` measures the
+action and text polling, `captureMs` measures snapshot/telemetry work, and `ms` includes both;
+feed/comments captures have no action latency. The separately controlled stock-Chrome text
+post measurement was 3.70 s first content and 2.19–2.31 s warm, with screenshot completion
+measured separately; see the implementation history. This live smoke is not that benchmark.
 
 `WEBDROID_JS_FLAGS='--no-sparkplug --no-maglev'` opts either webdroid driver into a controlled
 V8-tier experiment. The Reddit run records the supplied flags. Leave it unset when measuring
