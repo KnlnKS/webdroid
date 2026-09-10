@@ -2,6 +2,7 @@
 // Strings are JS string primitives (String.prototype carries mangled Java methods).
 
 import { rt, JObj, maySuspend, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
+import { directionality } from "../bidi";
 import { mangleMethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8 } from "../abi";
 
 function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => unknown {
@@ -1152,6 +1153,8 @@ rt.register({
   statics: { MAX_VALUE: 0xffff, MIN_VALUE: 0, get TYPE() { return rt.classFor("char"); } },
   methods: {
     "static charCount(I)I": (cp: number) => (cp >= 0x10000 ? 2 : 1),
+    "static getDirectionality(C)B": directionality,
+    "static getDirectionality(I)B": directionality,
     "static toChars(I)[C": (cp: number) => { const str = String.fromCodePoint(cp); const a = new Uint16Array(str.length); for (let k = 0; k < str.length; k++) a[k] = str.charCodeAt(k); return a; },
     "static codePointAt(Ljava/lang/CharSequence;I)I": (cs: unknown, i2: number) => String(cs).codePointAt(i2) ?? 0,
     "static isSupplementaryCodePoint(I)Z": (cp: number) => (cp >= 0x10000 ? 1 : 0),
