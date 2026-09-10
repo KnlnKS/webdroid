@@ -571,6 +571,7 @@ for (const n of ["java/util/ArrayList", "java/util/LinkedList", "java/util/Vecto
 class JMap extends JObj {
   m = new Map<unknown, Ent>();       // fast keys
   slow: Ent[] = [];                  // custom-equals keys (linear; rare)
+  slowVersion = 0;
   access = false;                    // LinkedHashMap accessOrder
 }
 async function slowFind(list: Ent[], k: unknown): Promise<number> {
@@ -686,7 +687,7 @@ function mapMethods(): NativeSpec["methods"] {
           if (key !== SLOW) return this.m.get(key) === entry && this.m.delete(key) ? 1 : 0;
           const index = this.slow.indexOf(entry);
           if (index < 0) return 0;
-          this.slow.splice(index, 1); return 1;
+          this.slow.splice(index, 1); this.slowVersion++; return 1;
         };
         const equal = jeq(value, old);
         return equal instanceof Promise ? equal.then(finish) : finish(equal);
@@ -695,7 +696,7 @@ function mapMethods(): NativeSpec["methods"] {
       const entries = this.slow.slice();
       return slowFind(entries, k).then((index) => remove(entries[index]));
     }),
-    "clear()V": function (this: JMap) { this.m.clear(); this.slow.length = 0; },
+    "clear()V": function (this: JMap) { this.m.clear(); this.slow.length = 0; this.slowVersion++; },
     "putAll(Ljava/util/Map;)V": async function (this: JMap, src: unknown) { if (src) await copyMapInto(src, this); },
     "keySet()Ljava/util/Set;": function (this: JMap) { return new JSetView(this, "k"); },
     "values()Ljava/util/Collection;": function (this: JMap) { return new JSetView(this, "v"); },
@@ -751,7 +752,7 @@ rt.register({
           if (this.map.m.get(key) === entry) this.map.m.delete(key);
         } else {
           const index = this.map.slow.indexOf(entry);
-          if (index >= 0) this.map.slow.splice(index, 1);
+          if (index >= 0) { this.map.slow.splice(index, 1); this.map.slowVersion++; }
         }
         entries.splice(i, 1); values.splice(i, 1);
       } });
@@ -794,7 +795,7 @@ rt.register({
       for (const v of await toJsArray(c)) if ((await indexIn(snap, v)) < 0) return 0;
       return 1;
     },
-    "clear()V": function (this: JSetView) { this.map.m.clear(); this.map.slow.length = 0; },
+    "clear()V": function (this: JSetView) { this.map.m.clear(); this.map.slow.length = 0; this.map.slowVersion++; },
     "toString()Ljava/lang/String;": function (this: JSetView) { return "[" + this.snapshot().join(", ") + "]"; },
   },
 });
@@ -854,6 +855,7 @@ for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/conc
 class JSet extends JObj {
   m = new Map<unknown, Ent>();
   slow: Ent[] = [];
+  slowVersion = 0;
 }
 /** the members, fast bucket first then the custom-equals ones (both must be walked) */
 function setItems(s: JSet): unknown[] {
@@ -898,7 +900,7 @@ function setMethods(): NativeSpec["methods"] {
       if (mk !== SLOW) return this.m.has(mk) ? 1 : 0;
       return slowFind(this.slow, v).then((i) => (i >= 0 ? 1 : 0));
     }),
-    "clear()V": function (this: JSet) { this.m.clear(); this.slow.length = 0; },
+    "clear()V": function (this: JSet) { this.m.clear(); this.slow.length = 0; this.slowVersion++; },
     "iterator()Ljava/util/Iterator;": function (this: JSet) { return mkIter(setItems(this)); },
     "addAll(Ljava/util/Collection;)Z": async function (this: JSet, c: unknown) {
       let ch = 0;
@@ -968,32 +970,35 @@ class JTreeSet extends JSet { cmp: unknown = null; rev = false; }
 type Sorted = JTreeMap | JTreeSet;
 const UNB = Symbol("unbounded");
 
-/** index of k, else ~insertionPoint */
-function bsearch(t: Sorted, k: unknown, lo = 0, hi = t.slow.length): number | Promise<number> {
+// Commit before yielding again; suspended comparators can invalidate an insertion index.
+function bsearch<T>(t: Sorted, k: unknown, done: (index: number) => T, lo = 0, hi = t.slow.length): T | Promise<T> {
+  const version = t.slowVersion, thread = rt.th();
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
     const r = jcmp(t.cmp, t.slow[mid].k, k);
     if (r instanceof Promise) {
       return r.then((c) => {
+        rt.st(thread);
+        if (version !== t.slowVersion) return bsearch(t, k, done);
         if (t.rev) c = -c;
-        return c === 0 ? mid : c < 0 ? bsearch(t, k, mid + 1, hi) : bsearch(t, k, lo, mid);
+        return c === 0 ? done(mid) : c < 0 ? bsearch(t, k, done, mid + 1, hi) : bsearch(t, k, done, lo, mid);
       });
     }
     const c = t.rev ? -r : r;
-    if (c === 0) return mid;
+    if (c === 0) return done(mid);
     if (c < 0) lo = mid + 1; else hi = mid;
   }
-  return ~lo;
+  return done(~lo);
 }
 /** nearest index to k: mode -2 lower, -1 floor, 1 ceiling, 2 higher; -1 = none */
 async function near(t: Sorted, k: unknown, mode: number): Promise<number> {
-  const i = await bsearch(t, k);
+  const i = await bsearch(t, k, (i) => i);
   const j = i >= 0 ? i + (mode === 2 ? 1 : mode === -2 ? -1 : 0) : mode < 0 ? ~i - 1 : ~i;
   return j >= 0 && j < t.slow.length ? j : -1;
 }
 /** slice index for a range bound; `upper` = exclusive end of the range */
 async function bound(t: Sorted, k: unknown, inc: boolean, upper: boolean): Promise<number> {
-  const i = await bsearch(t, k);
+  const i = await bsearch(t, k, (i) => i);
   return i < 0 ? ~i : inc === upper ? i + 1 : i;
 }
 function sub<T extends Sorted>(t: T, ents: Ent[], rev = t.rev): T {
@@ -1013,9 +1018,9 @@ function keysOf(t: JTreeMap, ents: Ent[], rev: boolean): JTreeSet {
   return s;
 }
 function tadd(s: JTreeSet, v: unknown): number | Promise<number> {
-  return after(bsearch(s, v), (i) => {
+  return bsearch(s, v, (i) => {
     if (i >= 0) return 0;
-    s.slow.splice(~i, 0, { k: v, v });
+    s.slow.splice(~i, 0, { k: v, v }); s.slowVersion++;
     return 1;
   });
 }
@@ -1030,7 +1035,7 @@ function treeMapMethods(): NativeSpec["methods"] {
   };
   const end = (last: boolean, poll: boolean) => function (this: JTreeMap) {
     const e = endOf(this, last);
-    if (e && poll) this.slow.splice(last ? this.slow.length - 1 : 0, 1);
+    if (e && poll) { this.slow.splice(last ? this.slow.length - 1 : 0, 1); this.slowVersion++; }
     return e && new JMapEntry(e);
   };
   const endKey = (last: boolean) => function (this: JTreeMap) {
@@ -1044,20 +1049,20 @@ function treeMapMethods(): NativeSpec["methods"] {
     "<init>(Ljava/util/SortedMap;)V": async function (this: JTreeMap, m: unknown) { if (m) await copyMapInto(m, this); },
     "comparator()Ljava/util/Comparator;": function (this: JTreeMap) { return this.cmp; },
     "get(Ljava/lang/Object;)Ljava/lang/Object;": maySuspend(function (this: JTreeMap, k: unknown) {
-      return after(bsearch(this, k), (i) => (i < 0 ? null : this.slow[i].v));
+      return bsearch(this, k, (i) => (i < 0 ? null : this.slow[i].v));
     }),
     "containsKey(Ljava/lang/Object;)Z": maySuspend(function (this: JTreeMap, k: unknown) {
-      return after(bsearch(this, k), (i) => (i < 0 ? 0 : 1));
+      return bsearch(this, k, (i) => (i < 0 ? 0 : 1));
     }),
     "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": maySuspend(function (this: JTreeMap, k: unknown, v: unknown) {
-      return after(bsearch(this, k), (i) => {
+      return bsearch(this, k, (i) => {
         if (i >= 0) { const o = this.slow[i].v; this.slow[i].v = v; return o; }
-        this.slow.splice(~i, 0, { k, v });
+        this.slow.splice(~i, 0, { k, v }); this.slowVersion++;
         return null;
       });
     }),
     "remove(Ljava/lang/Object;)Ljava/lang/Object;": maySuspend(function (this: JTreeMap, k: unknown) {
-      return after(bsearch(this, k), (i) => (i < 0 ? null : this.slow.splice(i, 1)[0].v));
+      return bsearch(this, k, (i) => (i < 0 ? null : (this.slowVersion++, this.slow.splice(i, 1)[0].v)));
     }),
     "firstKey()Ljava/lang/Object;": endKey(false),
     "lastKey()Ljava/lang/Object;": endKey(true),
@@ -1089,7 +1094,7 @@ function treeSetMethods(): NativeSpec["methods"] {
     const i = await near(this, v, mode); return i < 0 ? null : this.slow[i].k;
   };
   const poll = (last: boolean) => function (this: JTreeSet) {
-    return this.slow.length ? this.slow.splice(last ? this.slow.length - 1 : 0, 1)[0].k : null;
+    return this.slow.length ? (this.slowVersion++, this.slow.splice(last ? this.slow.length - 1 : 0, 1)[0].k) : null;
   };
   return {
     "<init>(Ljava/util/Comparator;)V": function (this: JTreeSet, c: unknown) { this.cmp = c; },
@@ -1099,10 +1104,10 @@ function treeSetMethods(): NativeSpec["methods"] {
     "comparator()Ljava/util/Comparator;": function (this: JTreeSet) { return this.cmp; },
     "add(Ljava/lang/Object;)Z": maySuspend(function (this: JTreeSet, v: unknown) { return tadd(this, v); }),
     "remove(Ljava/lang/Object;)Z": maySuspend(function (this: JTreeSet, v: unknown) {
-      return after(bsearch(this, v), (i) => (i < 0 ? 0 : (this.slow.splice(i, 1), 1)));
+      return bsearch(this, v, (i) => (i < 0 ? 0 : (this.slowVersion++, this.slow.splice(i, 1), 1)));
     }),
     "contains(Ljava/lang/Object;)Z": maySuspend(function (this: JTreeSet, v: unknown) {
-      return after(bsearch(this, v), (i) => (i < 0 ? 0 : 1));
+      return bsearch(this, v, (i) => (i < 0 ? 0 : 1));
     }),
     "lower(Ljava/lang/Object;)Ljava/lang/Object;": nav(-2),
     "floor(Ljava/lang/Object;)Ljava/lang/Object;": nav(-1),

@@ -166,6 +166,13 @@ test("sorting preserves the initiating thread across comparator suspensions", as
     expect(values).toEqual([1, 2, 3, 4]);
     expect(callers.length).toBeGreaterThan(1);
     expect(callers.every((thread) => thread === owner)).toBe(true);
+    const tree = await newObj("java/util/TreeSet", "(Ljava/util/Comparator;)V", comparator);
+    for (const value of values) { setCurThread(owner); await vcall(tree, "add", "(Ljava/lang/Object;)Z", value); }
+    callers.length = 0;
+    setCurThread(owner);
+    await vcall(tree, "add", "(Ljava/lang/Object;)Z", 5);
+    expect(callers.length).toBeGreaterThan(1);
+    expect(callers.every((thread) => thread === owner)).toBe(true);
   } finally { setCurThread(previous); }
 });
 
@@ -210,4 +217,30 @@ test("CopyOnWriteArrayList dispatch snapshots survive listeners removing themsel
     await expect(vcall(cursor, name, desc, ...args)).rejects.toBeInstanceOf(rt.link("java/lang/UnsupportedOperationException").ctor);
   }
   await expect(vcall(list, "listIterator", "(I)Ljava/util/ListIterator;", 2)).rejects.toBeDefined();
+});
+
+test("sorted collections retry indices invalidated while a comparator suspends", async () => {
+  rt.register({ name: "webdroid/AsyncSortedComparator", ctor: class extends JObj {}, methods: {
+    "compare(Ljava/lang/Object;Ljava/lang/Object;)I": async (a: number, b: number) => a - b,
+  } });
+  const cmp = await newObj("webdroid/AsyncSortedComparator", null);
+  const set = await newObj("java/util/TreeSet", "(Ljava/util/Comparator;)V", cmp);
+  const add = (n: number) => vcall(set, "add", "(Ljava/lang/Object;)Z", n);
+  await add(10); await add(12);
+  expect(await Promise.all([add(19), add(16), add(19)])).toEqual([1, 1, 0]);
+  expect(await vcall(set, "toArray", "()[Ljava/lang/Object;")).toEqual([10, 12, 16, 19]);
+  expect(await Promise.all([vcall(set, "remove", "(Ljava/lang/Object;)Z", 12), add(11), add(13)])).toEqual([1, 1, 1]);
+  expect(await vcall(set, "toArray", "()[Ljava/lang/Object;")).toEqual([10, 11, 13, 16, 19]);
+  const pending = add(20);
+  await vcall(set, "clear", "()V");
+  expect(await pending).toBe(1);
+  expect(await vcall(set, "toArray", "()[Ljava/lang/Object;")).toEqual([20]);
+
+  const map = await newObj("java/util/TreeMap", "(Ljava/util/Comparator;)V", cmp);
+  const put = (n: number) => vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", n, String(n));
+  await put(10); await put(12);
+  expect(await Promise.all([put(19), put(16), put(19)])).toEqual([null, null, "19"]);
+  expect(await vcall(map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", 16)).toBe("16");
+  const keys = await vcall(map, "keySet", "()Ljava/util/Set;");
+  expect(await vcall(keys, "toArray", "()[Ljava/lang/Object;")).toEqual([10, 12, 19]);
 });

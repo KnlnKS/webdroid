@@ -2238,3 +2238,30 @@ scratch browser with Sparkplug disabled, before shared cold execution. It is a v
 transition, but is not a controlled speed comparison against the earlier 9.5-second measurement:
 network content, warmed classes, and browser flags differ. No reply or post was submitted during
 composer testing; a typed draft was discarded through the app's discard prompt.
+
+## Reddit: sorted-collection suspension and profile resume
+
+Returning from account settings through settings to the profile stalled before the next
+Inbox tap. Runtime sampling found `vmt.l` repeatedly processing the same first entry of a
+Compose `SortedSet`. Its backing array was `[19,16]` by node depth: removal of the first key
+returned false even though the identical object remained at index zero. Instrumenting native
+operations before navigation showed two overlapping adds with an asynchronous comparator.
+A depth-19 add started on `[16,16]` and finished on `[16,16,19,16]`; the key's depth had not
+changed. Both operations had computed an insertion index before another continuation mutated
+the array. The extra promise continuation between search and splice also permitted this race.
+
+Sorted searches now validate a structural revision after comparison and apply the result in
+that same continuation. Clear, poll and inherited map-view removals invalidate pending searches;
+callbacks retain their initiating Java thread. A regression with overlapping adds, duplicate
+keys, removal and clear fails against the starting implementation and passes for TreeSet and
+TreeMap after the fix. Natural-order primitive operations keep their synchronous path.
+
+The runaway layout also exposed a separate compiler problem: its loop limit was inside the
+DEX catch dispatch. A catch handler within its own try range caught the loop-limit error before
+it could execute its move-exception/goto cleanup, producing an infinite non-yielding error loop.
+The limit now escapes that method's catch dispatch in both execution tiers. This is a diagnostic
+escape, not the sorted-collection repair.
+
+With the collection fix, fresh stock Chrome 152 arm64 rendered profile, settings, account
+settings, both Back transitions and Inbox without errors. Specialized async source grew to
+28.29 MB, below the admission limit. The successful run used no runtime method probes.
