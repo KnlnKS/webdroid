@@ -1434,6 +1434,12 @@ export function detachView(parent: JViewGroup, child: JView) {
 }
 export async function dispatchAttached(v: JView) {
   if (v.attached) return;
+  await attachTree(v);
+  // Queued attachment can install content after a hosted view recorded its first empty frame.
+  invalidate(v);
+}
+async function attachTree(v: JView) {
+  if (v.attached) return;
   v.attached = true;
   try { await guardMaybe(v, M_onAttached); } catch (e) { reportUncaught(e); }
   // a snapshot, as AOSP's copy-on-write list: a one-shot listener removing itself must not skip the next
@@ -1442,7 +1448,7 @@ export async function dispatchAttached(v: JView) {
   }
   // one child's failure must not prevent its siblings from attaching (e.g. ViewPager populate)
   if (v instanceof JViewGroup) for (const c of [...v.children]) {
-    try { await dispatchAttached(c); } catch (e) { reportUncaught(e); }
+    try { await attachTree(c); } catch (e) { reportUncaught(e); }
   }
 }
 /**
