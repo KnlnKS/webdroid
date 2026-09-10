@@ -901,6 +901,7 @@ rt.register({ name: "android/app/Service", ctor: JService, sup: "android/content
   methods: {
     ...contextMethods,
     "<init>()V": function () {},
+    "getApplication()Landroid/app/Application;": function (this: JService) { return this.$host.application; },
     "onCreate()V": () => {},
     "onDestroy()V": () => {},
     "onUnbind(Landroid/content/Intent;)Z": () => 0,
