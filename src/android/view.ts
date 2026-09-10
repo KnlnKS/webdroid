@@ -1443,7 +1443,8 @@ export function detachView(parent: JViewGroup, child: JView) {
 export async function dispatchAttached(v: JView) {
   if (v.attached) return;
   await attachTree(v);
-  // Queued attachment can install content after a hosted view recorded its first empty frame.
+  // Queued attachment may follow an unattached measure and an empty hosted display list.
+  requestLayout(v);
   invalidate(v);
 }
 async function attachTree(v: JView) {
@@ -1458,6 +1459,7 @@ async function attachTree(v: JView) {
   if (v instanceof JViewGroup) for (const c of [...v.children]) {
     try { await attachTree(c); } catch (e) { reportUncaught(e); }
   }
+  v.layoutRequested = true;
 }
 /**
  * A Configuration change reaches a view hierarchy the way AOSP's ViewRootImpl delivers it —

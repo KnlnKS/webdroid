@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../natives";
 import { newObj, vcall } from "../jvm/natives/jlang";
-import { dispatchAttached, JView, JViewGroup, requestLayout, uiState } from "./view";
+import { dispatchAttached, JView, JViewGroup, layoutView, measureView, requestLayout, uiState } from "./view";
 import { mangleMethod, mangleStaticField } from "../jvm/abi";
 import { onMain } from "./mainloop";
 import { rt } from "../jvm/runtime";
@@ -62,4 +62,27 @@ test("queued subtree attachment invalidates its hosted drawing after callbacks c
   expect(uiState.needsDraw).toBe(true);
   await onMain(() => dispatchAttached(root));
   expect(events).toEqual(["attach", "content", "invalidate"]);
+});
+
+test("attachment remeasures descendants previously measured without a window token", async () => {
+  const root = new JViewGroup(), child = new JView();
+  root.children.push(child); child.parent = root;
+  const measurements: boolean[] = [];
+  Object.assign(root, {
+    [mangleMethod("onMeasure", "(II)V")]: async (w: number, h: number) => measureView(child, w, h),
+    [mangleMethod("onLayout", "(ZIIII)V")]: async () => layoutView(child, 0, 0, 100, 100),
+  });
+  Object.assign(child, {
+    [mangleMethod("onMeasure", "(II)V")]: () => { measurements.push(child.attached); },
+    [mangleMethod("onLayout", "(ZIIII)V")]: () => {},
+  });
+  await onMain(async () => {
+    await measureView(root, 100, 100);
+    await layoutView(root, 0, 0, 100, 100);
+    await dispatchAttached(root);
+    await measureView(root, 100, 100);
+    await layoutView(root, 0, 0, 100, 100);
+    await measureView(root, 100, 100);
+  });
+  expect(measurements).toEqual([false, true]);
 });
