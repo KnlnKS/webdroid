@@ -73,9 +73,39 @@ TEMP state and one canonical persistent owner. Processes and bytecode start on d
   recorded here. Successful checkin does not establish FCM receipt.
 - The standard SDK client reports availability success (0) in webdroid and the separate
   rooted Android reference using the same pinned microG APKs. Browser maps next require
-  ContentProviderClient. Android maps currently fail loading a Mapbox native library;
-  inspect the manual system installation before treating that as an upstream limitation.
+  native-library lookup and JNI ownership for code loaded through package class loaders.
+  Android now renders interactive maps after installing the unchanged extracted ARM64
+  libraries alongside the system APK; both loaded and camera-idle callbacks were observed.
 - Before the main merge: typecheck passed; 938 unit tests passed (46,126 assertions).
   Resy, microG and SDK-client smoke compilation each reported zero method failures.
   Authentication, real FCM receipt, location, interactive maps and the complete regression
   and performance matrix remain open. Existing reference AVDs and goldens are unchanged.
+
+- Main migration: merge `2a92ed9` preserved `6946f16`; typecheck and 946 tests passed.
+  The integration worktree was removed after moving ignored generated artifacts into
+  main. Subsequent provider, Parcel and reflection changes run from the main checkout.
+- ContentProviderClient now reaches the genuine Dynamite provider. Empty primitive Parcel
+  reads match AOSP without changing unhandled Binder results. Annotation identity and
+  one-argument Class.forName retain defining loaders; a duplicate-DEX fixture covers cold
+  and hot calls. The latest maps trace reaches Mapbox’s native connectivity initialization.
+  It still does not render a map in webdroid. Android maps do render and pan.
+- Resy, microG, Companion and the SDK client each smoke-compile with zero method failures
+  on merged main. A full unit run after the annotation fix passed 948 tests.
+
+## Main verification checkpoint
+
+- Typecheck passed. The full unit suite passed 948 tests and 46,357 assertions.
+- Framework checks completed: 295/363 declared native delegates (81%); all executable
+  framework probes passed. Text comparison: 6/6 paragraphs break identically.
+- Serialized E2E (`--jobs 1`) completed all eight flows. Scored rendering: FitNotes
+  39/39, Mihon app 17/17, Harmonic 14/14, Mihon onboarding 5/5. Content differences:
+  40.89%, 57.20%, 31.93%, 17.56%; overall 36.90%. Goldens are unchanged.
+- FitNotes still reported a fragment-destruction exception; Harmonic reported a layout
+  exception; Lichess reported missing PhantomReference and native surface diagnostics.
+  Compare individual errors with a controlled baseline before closing regression work.
+- DoodleJump’s missing Service.getApplication delegate was added after that run.
+  Typecheck, service tests and DoodleJump smoke compilation passed; its focused E2E rerun
+  rendered 6/6 steps with no missing APIs or errors and minimum measured 36 fps.
+- Corpus: 12/13 APKs rendered a frame; TikTok remains unsuccessful. Logs and current
+  E2E artifacts/counters are retained under `/tmp/webdroid-microg-main-*`. Cold/warm,
+  IPC, memory, idle and controlled foreground CPU comparisons remain incomplete.

@@ -2895,3 +2895,53 @@ executor-queue gaps. Two full E2E runs of the starting commit put mihon-app at 5
 and OVERALL at 37.13% and 36.98%; this revision scored 56.81% and 37.17% inside that spread, with
 fitnotes (40.89 → 40.90) and mihon-onboarding (17.56) unchanged, every flow's rendered-step count
 identical, and the same missing list and the same uncaught exceptions in both.
+
+
+## microG integration: source preparation, real checkin and maps bring-up
+
+The pinned system APKs are generated into ignored `vendor/microg/` by
+`scripts/system-packages.ts`. The prepared bundle preserves the original signing blocks,
+ZIP metadata and every ABI. Content-addressed entry streams load through browser gzip
+handling; exact APK reconstruction was checked against both pinned SHA-256 digests.
+A complete bundle starts without fetching or reprocessing its source APK. DEX and native
+entries remain deferred until their package loader needs them.
+
+Real microG checkin runs in a secondary process and persists registration across reloads.
+Its first failure was a missing Build radio field consumed by its protocol serializer.
+The next was explicit HTTP gzip encoding: the proxy decoded a response that microG then
+passed to its own gzip decoder. Preserving explicit response encodings fixed that mismatch.
+Registration identifiers and security tokens are deliberately absent from these records.
+Checkin success does not establish FCM delivery or authentication.
+
+The standard maps SDK client reaches microG’s Dynamite provider through ContentProviderClient.
+A misleading ClassNotFoundException during parent-loader probing was not the failure:
+CreatorImpl subsequently loaded. The actual failure was an unsupported Binder transaction
+returning an empty reply. AOSP Parcel’s primitive reads return zero without advancing when
+insufficient data remains; webdroid threw. Matching those reads preserves the unhandled
+transaction result and lets the SDK follow the same path as Android.
+
+The next failure, an annotation that could not cast to its identically named type, came from
+reflection caching annotation prototypes by name and resolving values through the foreground
+loader. Annotation prototypes now key on ClassInfo; runtime-visible annotations, nested values
+and enum defaults follow the defining loader. A later one-argument Class.forName lookup needed
+the calling runtime, which marked static native entries now receive in both cold and hot DEX
+execution. The maps trace has reached native connectivity initialization; native-library lookup
+and JNI class ownership remain work in progress.
+
+The separate rooted Android reference initially failed to find libmapbox-gl.so because the
+manual system-package installation had not extracted native libraries. Installing the pinned
+APK’s unchanged ARM64 libraries under `/system/priv-app/MicroG/lib/arm64`, with normal modes
+and restored SELinux contexts, fixed it. The SDK fixture rendered map tiles and reported loaded
+and camera-idle after a pan. This was an installation failure, not an upstream microG limitation.
+Existing reference AVDs and goldens were not changed.
+
+
+After merging with main’s Resy and Zig work, typecheck and 948 unit tests passed.
+Framework probes completed at 295/363 declared native delegates; all six text-layout
+paragraphs matched. Serialized E2E rendered every step in all eight flows, with 36.90%
+overall content difference against existing goldens. Corpus rendered 12/13 APKs, with
+TikTok unsuccessful. A DoodleJump service trace exposed Service.getApplication; adding
+the delegate removed that error in a focused 6/6-step rerun (minimum 36 fps).
+The FitNotes fragment exception, Harmonic layout exception and Lichess PhantomReference
+and surface diagnostics remain comparison points. These runs are functional evidence;
+controlled foreground CPU, memory, IPC and idle comparisons are not complete.
