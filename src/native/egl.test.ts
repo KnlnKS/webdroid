@@ -6,6 +6,16 @@ import { gles1Init } from "./gles1";
 import { gles3Init } from "./gles3";
 import { hostLib, lookupHost } from "./host";
 import { mem } from "./mem";
+import { resolveGlobalOrNull } from "./dl";
+
+test("ELF imports honor the declared GLES dependency when host symbols overlap", () => {
+  for (const name of ["glGenTextures", "glBindTexture", "glTexImage2D", "glGetString"]) {
+    const one = lookupHost(name, "libGLESv1_CM.so"), two = lookupHost(name, "libGLESv2.so");
+    expect(one).not.toBe(two);
+    expect(resolveGlobalOrNull(name, ["libc.so", "libGLESv2.so"])).toBe(two);
+    expect(resolveGlobalOrNull(name, ["libc.so", "libGLESv1_CM.so"])).toBe(one);
+  }
+});
 
 let cpu: Cpu;
 beforeAll(() => {
