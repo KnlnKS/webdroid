@@ -194,7 +194,8 @@ const FB_WORDS = 4096;
 var fb_words: [FB_WORDS]u32 = [_]u32{0} ** FB_WORDS;
 var fb_wcounts: [FB_WORDS]u32 = [_]u32{0} ** FB_WORDS;
 fn countWord(w: u32) void {
-    const key = (w & 0xffe0_fc00) | 1;
+    // rd and rn go; rm too, but only where bits 16-20 are a register (the three-register forms)
+    const key = (w & (if (w & 0x0020_0400 == 0x0020_0400) @as(u32, 0xffe0_fc00) else 0xffff_fc00)) | 1;
     var i = (key *% 0x9e37_79b9) >> 20;
     var probes: u32 = 0;
     while (probes < 8) : (probes += 1) {

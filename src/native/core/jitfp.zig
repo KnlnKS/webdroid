@@ -59,10 +59,14 @@ fn roundOp(dp: bool, mode: u32) u8 {
     };
 }
 
-/// a scalar FP word; anything else in the space falls back
+/// a SIMD&FP word: the scalar FP space, the vector forms emitVector knows, or a fallback
 pub fn emitSimd(e: *Emit, w: u32, pc: u32, k: u32) void {
+    if (!is(w, 0x5000_0000, 0x1000_0000)) {
+        if (!emitVector(e, w)) e.fallback(pc, k);
+        return;
+    }
     const ftype = bits(w, 22, 2);
-    if (!is(w, 0x5000_0000, 0x1000_0000) or w & 0x2000_0000 != 0 or ftype > 1) return e.fallback(pc, k);
+    if (w & 0x2000_0000 != 0 or ftype > 1) return e.fallback(pc, k);
     const b = e.b;
     const dp = ftype == 1;
     const rd: u8 = @intCast(w & 31);
@@ -255,6 +259,444 @@ fn fcmp(e: *Emit, rn: u8, rm: ?u8, dp: bool) void {
     b.set(jit.L_V);
 }
 
+// ── vectors, through simd128: a whole V register is loaded, the lanes operated on, and the
+// result stored whole (Q) or as its low half with the top cleared, as the architecture does
+const S = wasm.Simd;
+fn vop(e: *Emit, op: u8) void {
+    e.b.byte(S.prefix);
+    e.b.u(op);
+}
+/// a v128 memory op at the V register (align hint 0)
+fn vmem(e: *Emit, op: u8, off: u32) void {
+    vop(e, op);
+    e.b.u(0);
+    e.b.u(off);
+}
+fn vget(e: *Emit, n: u8) void {
+    e.b.get(L_CPU);
+    vmem(e, S.load, voff(n));
+}
+/// the stack holds [cpu, v128]: stores it as Vd
+fn vput(e: *Emit, d: u8, q: bool) void {
+    if (q) {
+        vmem(e, S.store, voff(d));
+        return;
+    }
+    vmem(e, 0x5b, voff(d)); // store64_lane
+    e.b.byte(0);
+    e.b.get(L_CPU);
+    e.b.i64c(0);
+    e.b.memop(O.i64_store, voff(d) + 8);
+}
+/// the register-form lane tables have no entry (0) for a width wasm lacks
+fn lane(tab: [4]u8, esz: u32) ?u8 {
+    return if (tab[esz] == 0) null else tab[esz];
+}
+/// the vector forms the emitter knows; false leaves the word to the interpreter, and nothing
+/// has been emitted by then
+fn emitVector(e: *Emit, w: u32) bool {
+    const b = e.b;
+    const rd: u8 = @intCast(w & 31);
+    const rn: u8 = @intCast(bits(w, 5, 5));
+    const rm: u8 = @intCast(bits(w, 16, 5));
+    const q = bits(w, 30, 1) != 0;
+    const U = bits(w, 29, 1) != 0;
+    const size = bits(w, 22, 2);
+    // the scalar forms zero above their element and keep to the interpreter
+    if (w & 0x1000_0000 != 0) return false;
+    // modified immediate: MOVI / MVNI / ORR / BIC / FMOV
+    if (is(w, 0x9ff8_0400, 0x0f00_0400)) {
+        const cmode = bits(w, 12, 4);
+        const ex = simd.expandImm(bits(w, 29, 1), cmode, bits(w, 11, 1), (bits(w, 16, 3) << 5) | bits(w, 5, 5)) orelse return false;
+        if (ex.kind == .fmov and U and !q) return false;
+        const v: i64 = @bitCast(ex.v);
+        for ([_]u32{ 0, 8 }) |off| {
+            b.get(L_CPU);
+            if (off == 8 and !q) {
+                b.i64c(0);
+            } else switch (ex.kind) {
+                .orr, .bic => {
+                    b.get(L_CPU);
+                    b.memop(O.i64_load, voff(rd) + off);
+                    b.i64c(if (ex.kind == .orr) v else ~v);
+                    b.op(if (ex.kind == .orr) O.i64_or else O.i64_and);
+                },
+                .mvni => b.i64c(~v),
+                else => b.i64c(v),
+            }
+            b.memop(O.i64_store, voff(rd) + off);
+        }
+        return true;
+    }
+    // copy: DUP / INS / SMOV / UMOV
+    if (is(w, 0x9fe0_8400, 0x0e00_0400)) {
+        const imm5 = bits(w, 16, 5);
+        const imm4 = bits(w, 11, 4);
+        if (imm5 & 15 == 0) return false;
+        const esz: u32 = @ctz(imm5);
+        const idx = imm5 >> @intCast(esz + 1);
+        if (U) {
+            b.get(L_CPU);
+            vget(e, rd);
+            vget(e, rn);
+            vop(e, S.extract_u[esz]);
+            b.byte(@intCast(imm4 >> @intCast(esz)));
+            vop(e, S.replace[esz]);
+            b.byte(@intCast(idx));
+            vmem(e, S.store, voff(rd));
+            return true;
+        }
+        switch (imm4) {
+            0 => {
+                b.get(L_CPU);
+                vget(e, rn);
+                vop(e, S.extract_u[esz]);
+                b.byte(@intCast(idx));
+                vop(e, S.splat[esz]);
+                vput(e, rd, q);
+            },
+            1 => {
+                b.get(L_CPU);
+                e.getX(rn);
+                if (esz < 3) b.op(O.i32_wrap_i64);
+                vop(e, S.splat[esz]);
+                vput(e, rd, q);
+            },
+            3 => {
+                b.get(L_CPU);
+                vget(e, rd);
+                e.getX(rn);
+                if (esz < 3) b.op(O.i32_wrap_i64);
+                vop(e, S.replace[esz]);
+                b.byte(@intCast(idx));
+                vmem(e, S.store, voff(rd));
+            },
+            5, 7 => {
+                if (esz == 3 and !q) return false;
+                vget(e, rn);
+                vop(e, if (imm4 == 5) S.extract_s[esz] else S.extract_u[esz]);
+                b.byte(@intCast(idx));
+                if (esz == 3) {
+                    e.setX(rd);
+                } else if (q) {
+                    b.op(if (imm4 == 5) O.i64_extend_i32_s else O.i64_extend_i32_u);
+                    e.setX(rd);
+                } else e.setW(rd);
+            },
+            else => return false,
+        }
+        return true;
+    }
+    // three-same, bitwise: AND / BIC / ORR / ORN, EOR / BSL / BIT / BIF
+    if (is(w, 0x9f20_fc00, 0x0e20_1c00)) {
+        b.get(L_CPU);
+        if (!U) {
+            vget(e, rn);
+            vget(e, rm);
+            switch (size) {
+                0 => vop(e, S.and_),
+                1 => vop(e, S.andnot),
+                2 => vop(e, S.or_),
+                else => {
+                    vop(e, S.not);
+                    vop(e, S.or_);
+                },
+            }
+        } else if (size == 0) {
+            vget(e, rn);
+            vget(e, rm);
+            vop(e, S.xor);
+        } else {
+            // bitselect(a, b, c) = (a & c) | (b & ~c)
+            const order: [3]u8 = switch (size) {
+                1 => .{ rn, rm, rd },
+                2 => .{ rn, rd, rm },
+                else => .{ rd, rn, rm },
+            };
+            for (order) |r| vget(e, r);
+            vop(e, S.bitselect);
+        }
+        vput(e, rd, q);
+        return true;
+    }
+    if (is(w, 0xbfff_fc00, 0x2e20_5800)) {
+        b.get(L_CPU);
+        vget(e, rn);
+        vop(e, S.not);
+        vput(e, rd, q);
+        return true;
+    }
+    // three-same
+    if (is(w, 0x9f20_0400, 0x0e20_0400)) {
+        const opcode = bits(w, 11, 5);
+        if (opcode >= 24) {
+            const dp = size & 1 != 0;
+            const fv = size & 2 != 0;
+            const f: u32 = @intFromBool(dp);
+            if (opcode == 27 and !U) {
+                fmulx(e, rn, rm, dp);
+                vput(e, rd, q);
+                return true;
+            }
+            const op: u8 = switch (opcode) {
+                26 => if (!U) (if (fv) S.fsub[f] else S.fadd[f]) else if (fv) S.fsub[f] else return false,
+                27 => S.fmul[f],
+                31 => if (U) S.fdiv[f] else return false,
+                28 => if (!U) S.feq[f] else if (fv) S.fgt[f] else S.fge[f],
+                30 => if (!U) (if (fv) S.fmin[f] else S.fmax[f]) else return false,
+                else => return false,
+            };
+            b.get(L_CPU);
+            vget(e, rn);
+            vget(e, rm);
+            vop(e, op);
+            if (opcode == 26 and U) vop(e, S.fabs[f]);
+            vput(e, rd, q);
+            return true;
+        }
+        const op: ?u8 = switch (opcode) {
+            16 => lane(if (U) S.sub else S.add, size),
+            17 => if (U) lane(S.eq, size) else lane(S.ne, size),
+            6 => lane(if (U) S.gt_u else S.gt_s, size),
+            7 => lane(if (U) S.ge_u else S.ge_s, size),
+            19 => if (U) null else lane(S.mul, size),
+            18 => lane(S.mul, size),
+            12 => lane(if (U) S.max_u else S.max_s, size),
+            13 => lane(if (U) S.min_u else S.min_s, size),
+            else => null,
+        };
+        const o = op orelse return false;
+        b.get(L_CPU);
+        if (opcode == 18) vget(e, rd);
+        vget(e, rn);
+        vget(e, rm);
+        if (opcode == 17 and !U) {
+            // CMTST: any bit in common
+            vop(e, S.and_);
+            vop(e, S.const_);
+            for (0..16) |_| b.byte(0);
+        }
+        vop(e, o);
+        if (opcode == 18) vop(e, lane(if (U) S.sub else S.add, size).?);
+        vput(e, rd, q);
+        return true;
+    }
+    // two-register misc
+    if (is(w, 0x9f3e_0c00, 0x0e20_0800)) {
+        const opcode = bits(w, 12, 5);
+        const fv = size & 2 != 0;
+        const dp = size & 1 != 0;
+        const f: u32 = @intFromBool(dp);
+        if (opcode >= 22 or (opcode >= 12 and opcode <= 15 and fv)) {
+            const op: u8 = switch (opcode) {
+                15 => if (fv) (if (U) S.fneg[f] else S.fabs[f]) else return false,
+                31 => if (U) S.fsqrt[f] else return false,
+                24 => if (U) return false else if (fv) S.fceil[f] else S.fnearest[f],
+                25 => if (U) return false else if (fv) S.ftrunc[f] else S.ffloor[f],
+                // the conversions: single lanes only, which wasm has
+                29 => if (fv or dp) return false else if (U) S.f32x4_convert_i32x4_u else S.f32x4_convert_i32x4_s,
+                27 => if (!fv or dp) return false else if (U) S.i32x4_trunc_sat_f32x4_u else S.i32x4_trunc_sat_f32x4_s,
+                else => return false,
+            };
+            b.get(L_CPU);
+            vget(e, rn);
+            vop(e, op);
+            vput(e, rd, q);
+            return true;
+        }
+        if (opcode == 11) {
+            const op: u8 = if (U) S.neg[size] else S.neg[size] - 1;
+            b.get(L_CPU);
+            vget(e, rn);
+            vop(e, op);
+            vput(e, rd, q);
+            return true;
+        }
+        return false;
+    }
+    // shift by immediate: SSHR / USHR, SHL, SSHLL / USHLL
+    if (is(w, 0x9f80_0400, 0x0f00_0400) and bits(w, 19, 4) != 0) {
+        const immh = bits(w, 19, 4);
+        const esz: u32 = if (immh & 8 != 0) 3 else if (immh & 4 != 0) 2 else if (immh & 2 != 0) 1 else 0;
+        const bitsT: u32 = @as(u32, 8) << @intCast(esz);
+        const opcode = bits(w, 11, 5);
+        const amount = (immh << 3) | bits(w, 16, 3);
+        const shr = 2 * bitsT - amount;
+        if (opcode == 20) {
+            // widen the low (or, Q, the high) half, then shift
+            if (esz == 3) return false;
+            b.get(L_CPU);
+            vget(e, rn);
+            vop(e, S.extend_low_s[esz] + @as(u8, if (q) 1 else 0) + @as(u8, if (U) 2 else 0));
+            if (amount != bitsT) {
+                b.i32c(@intCast(amount - bitsT));
+                vop(e, S.shl[esz + 1]);
+            }
+            vmem(e, S.store, voff(rd));
+            return true;
+        }
+        const op: u8 = switch (opcode) {
+            0 => if (U) (if (shr >= bitsT) return false else S.shr_u[esz]) else S.shr_s[esz],
+            10 => if (U) return false else S.shl[esz],
+            else => return false,
+        };
+        b.get(L_CPU);
+        vget(e, rn);
+        b.i32c(@intCast(if (opcode == 10) amount - bitsT else @min(shr, bitsT - 1)));
+        vop(e, op);
+        vput(e, rd, q);
+        return true;
+    }
+    // by element: FMUL, MUL
+    if (is(w, 0x9f00_0400, 0x0f00_0000)) {
+        const opcode = bits(w, 12, 4);
+        const Lb = bits(w, 21, 1);
+        const M = bits(w, 20, 1);
+        const H = bits(w, 11, 1);
+        const rmLow = bits(w, 16, 4);
+        if (opcode == 9 and !U) {
+            if (size & 2 == 0) return false;
+            const dp = size & 1 != 0;
+            if (dp and Lb != 0) return false;
+            const idx = if (dp) H else (H << 1) | Lb;
+            const f: u32 = @intFromBool(dp);
+            b.get(L_CPU);
+            vget(e, rn);
+            vget(e, @intCast((M << 4) | rmLow));
+            vop(e, S.fextract[f]);
+            b.byte(@intCast(idx));
+            vop(e, S.fsplat[f]);
+            vop(e, S.fmul[f]);
+            vput(e, rd, q);
+            return true;
+        }
+        if (opcode == 8 and !U and (size == 1 or size == 2)) {
+            const idx = if (size == 1) (H << 2) | (Lb << 1) | M else (H << 1) | Lb;
+            const m: u8 = @intCast(if (size == 1) rmLow else (M << 4) | rmLow);
+            b.get(L_CPU);
+            vget(e, rn);
+            vget(e, m);
+            vop(e, S.extract_u[size]);
+            b.byte(@intCast(idx));
+            vop(e, S.splat[size]);
+            vop(e, S.mul[size]);
+            vput(e, rd, q);
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+/// FMULX: the product, except that a zero times an infinity is ±2; leaves [cpu, v128]
+fn fmulx(e: *Emit, rn: u8, rm: u8, dp: bool) void {
+    const b = e.b;
+    const f: u32 = @intFromBool(dp);
+    const lanes: u32 = if (dp) 2 else 4;
+    const zero = [_]u8{0} ** 16;
+    var inf: [16]u8 = undefined;
+    var sign: [16]u8 = undefined;
+    var two: [16]u8 = undefined;
+    for (0..lanes) |i| {
+        if (dp) {
+            @as(*align(1) u64, @ptrCast(&inf[8 * i])).* = 0x7ff0_0000_0000_0000;
+            @as(*align(1) u64, @ptrCast(&sign[8 * i])).* = 0x8000_0000_0000_0000;
+            @as(*align(1) u64, @ptrCast(&two[8 * i])).* = 0x4000_0000_0000_0000;
+        } else {
+            @as(*align(1) u32, @ptrCast(&inf[4 * i])).* = 0x7f80_0000;
+            @as(*align(1) u32, @ptrCast(&sign[4 * i])).* = 0x8000_0000;
+            @as(*align(1) u32, @ptrCast(&two[4 * i])).* = 0x4000_0000;
+        }
+    }
+    b.get(L_CPU);
+    // ±2 with the product's sign
+    vget(e, rn);
+    vget(e, rm);
+    vop(e, S.xor);
+    vop(e, S.const_);
+    b.bytes(&sign);
+    vop(e, S.and_);
+    vop(e, S.const_);
+    b.bytes(&two);
+    vop(e, S.or_);
+    // the product
+    vget(e, rn);
+    vget(e, rm);
+    vop(e, S.fmul[f]);
+    // where one operand is zero and the other infinite
+    for ([_][2]*const [16]u8{ .{ &zero, &inf }, .{ &inf, &zero } }, 0..) |pair, i| {
+        vget(e, rn);
+        vop(e, S.fabs[f]);
+        vop(e, S.const_);
+        b.bytes(pair[0]);
+        vop(e, S.feq[f]);
+        vget(e, rm);
+        vop(e, S.fabs[f]);
+        vop(e, S.const_);
+        b.bytes(pair[1]);
+        vop(e, S.feq[f]);
+        vop(e, S.and_);
+        if (i == 1) vop(e, S.or_);
+    }
+    vop(e, S.bitselect);
+}
+/// LD1 / ST1 of one lane, and LD1R, of one register
+fn emitVlane(e: *Emit, w: u32) bool {
+    const b = e.b;
+    const rt: u8 = @intCast(w & 31);
+    const rn: u8 = @intCast(bits(w, 5, 5));
+    const rm: u8 = @intCast(bits(w, 16, 5));
+    const q = bits(w, 30, 1);
+    const Ld = bits(w, 22, 1) != 0;
+    const post = bits(w, 23, 1) != 0;
+    const opcode = bits(w, 13, 3);
+    const Sb = bits(w, 12, 1);
+    const size = bits(w, 10, 2);
+    if (bits(w, 21, 1) != 0 or opcode & 1 != 0) return false;
+    var esz: u32 = undefined;
+    var idx: u32 = 0;
+    if (opcode >= 6) {
+        if (!Ld or Sb != 0) return false;
+        esz = size;
+    } else {
+        const scale = opcode >> 1;
+        esz = if (scale == 0) 0 else if (scale == 1) 1 else if (size & 1 != 0) 3 else 2;
+        idx = switch (esz) {
+            0 => (q << 3) | (Sb << 2) | size,
+            1 => (q << 2) | (Sb << 1) | (size >> 1),
+            2 => (q << 1) | Sb,
+            else => q,
+        };
+    }
+    e.getSP(rn);
+    e.address();
+    if (opcode >= 6) {
+        b.get(L_CPU);
+        b.get(jit.L_A);
+        vmem(e, S.load8_splat + @as(u8, @intCast(esz)), 0);
+        vput(e, rt, q != 0);
+    } else if (Ld) {
+        b.get(L_CPU);
+        b.get(jit.L_A);
+        vget(e, rt);
+        vmem(e, S.load8_lane + @as(u8, @intCast(esz)), 0);
+        b.byte(@intCast(idx));
+        vmem(e, S.store, voff(rt));
+    } else {
+        e.storeCheck(0);
+        b.get(jit.L_A);
+        vget(e, rt);
+        vmem(e, S.store8_lane + @as(u8, @intCast(esz)), 0);
+        b.byte(@intCast(idx));
+    }
+    if (post) {
+        e.getSP(rn);
+        if (rm == 31) b.i64c(@as(i64, 1) << @intCast(esz)) else e.getX(rm);
+        b.op(O.i64_add);
+        e.setSP(rn);
+    }
+    return true;
+}
+
 /// Vt <- `width` bytes at L_A + off, the rest zeroed
 fn vload(e: *Emit, t: u8, off: u32, width: u32) void {
     const b = e.b;
@@ -315,7 +757,11 @@ pub fn emitVmem(e: *Emit, w: u32, pc: u32, k: u32) void {
     const rt: u8 = @intCast(w & 31);
     const rn: u8 = @intCast(bits(w, 5, 5));
     const rm: u8 = @intCast(bits(w, 16, 5));
-    if (is(w, 0xbfbf0000, 0x0c000000) or is(w, 0xbfa00000, 0x0c800000) or is(w, 0xbf9f0000, 0x0d000000) or is(w, 0xbf800000, 0x0d800000)) return e.fallback(pc, k);
+    if (is(w, 0xbfbf0000, 0x0c000000) or is(w, 0xbfa00000, 0x0c800000)) return e.fallback(pc, k);
+    if (is(w, 0xbf9f0000, 0x0d000000) or is(w, 0xbf800000, 0x0d800000)) {
+        if (!emitVlane(e, w)) e.fallback(pc, k);
+        return;
+    }
     if (is(w, 0x3a000000, 0x28000000)) {
         const opc = bits(w, 30, 2);
         if (opc == 3) return e.fallback(pc, k);

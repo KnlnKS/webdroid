@@ -257,7 +257,7 @@ inline fn a64Sx(v: u32, n: u5) i64 {
 
 // ── AdvSIMD modified immediate: the 64-bit pattern a cmode/op/imm8 triple expands to
 const ImmKind = enum { movi, mvni, orr, bic, fmov };
-fn expandImm(o: u32, cmode: u32, o2: u32, imm8: u32) ?struct { v: u64, kind: ImmKind } {
+pub fn expandImm(o: u32, cmode: u32, o2: u32, imm8: u32) ?struct { v: u64, kind: ImmKind } {
     const group = cmode >> 1;
     const logical: ImmKind = if (cmode & 1 != 0) (if (o != 0) .bic else .orr) else (if (o != 0) .mvni else .movi);
     if (group <= 3) {
