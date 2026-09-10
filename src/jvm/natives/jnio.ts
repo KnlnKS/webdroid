@@ -89,7 +89,7 @@ rt.register({
     "order(Ljava/nio/ByteOrder;)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, o: { little: boolean }) {
       this.little = !!o?.little; return this;
     },
-    "order()Ljava/nio/ByteOrder;": function (this: JByteBuffer) { return this.little ? byteOrderLE : byteOrderBE; },
+    "order()Ljava/nio/ByteOrder;": function (this: JByteBuffer) { rt.link("java/nio/ByteOrder"); return this.little ? byteOrderLE : byteOrderBE; },
     "put(B)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(1); this.dv.setInt8(this.pos++, v); return this; },
     "put(IB)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setInt8(i, v); return this; },
     "put([B)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, arr: Int8Array) {

@@ -110,6 +110,7 @@ try {
       const buffer = await wd.vcall(decoder, "getOutputBuffer", "(I)Ljava/nio/ByteBuffer;", index);
       if (buffer) {
         const order = await wd.vcall(buffer, "order", "()Ljava/nio/ByteOrder;");
+        check(await wd.vcall(order, "toString", "()Ljava/lang/String;") === "LITTLE_ENDIAN", "decoded PCM byte order must be linked");
         check(order === await wd.scall("java/nio/ByteOrder", "nativeOrder", "()Ljava/nio/ByteOrder;"), "decoded PCM must use native byte order");
       }
       if (buffer) for (let i = 0; i < info.size; i += 2) { const value = buffer.dv.getInt16(i, true) / 32768; energy += value * value; count++; }
