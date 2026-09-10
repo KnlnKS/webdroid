@@ -140,6 +140,26 @@ TEMP state and one canonical persistent owner. Processes and bytecode start on d
   deletion and temporary-cache behavior passed real-browser checks.
 - Latest affected smoke compilation: Resy, microG and SDK client each report zero method
   failures. Typecheck and targeted lifecycle/storage/Parcel/network/package tests pass.
-  The full unit checkpoint passed 963 tests and 46,926 assertions before the later
-  socket/private-file/permission fixes. Full regression captures, account authentication,
-  location and controlled performance comparisons remain open.
+  The pre-contract full unit checkpoint passed 977 tests and 47,058 assertions. Full
+  regression captures, account authentication and controlled performance comparisons remain open.
+
+- Google accepted the authorized test password and reached interactive two-step verification.
+  Account authentication remains pending. WebView cookies have a package-scoped persistent
+  owner; isolated rendering preserves synchronous Java interfaces and upstream document URLs.
+- Browser geolocation now feeds shared Android providers and genuine microG fused-location
+  bytecode. The unchanged SDK client received callbacks with 4 m accuracy in a deterministic
+  browser test and 40 m in normal Chrome without a coordinate override. The same pinned
+  microG build on Android received a callback with 5 m accuracy from the AVD test location.
+  These values describe separate inputs, not an accuracy comparison. No live coordinates
+  were recorded. Reference screenshot: `/tmp/webdroid-reference-location.png`.
+- The instrumented SDK location capture at `4b0a0c7` reports no missing APIs or undeclared
+  native suspension in all four processes. Background main queues were empty. Older captures
+  that queried an absent `__wdProcess` global did not establish child-process API coverage.
+- Location requests share one browser watch, filter interval/distance and release the watch
+  after the last active request. Android 13 Location, LocationRequest and WorkSource parcels
+  carry values across process boundaries. Browser providers do not establish physical GNSS
+  or Wi-Fi/cell provenance. Denial/regrant, process death and balanced-power coverage remain.
+- Runtime permission grants now share a package store across processes. A permission activity
+  launched by a background service restores the previously visible app and sends its result
+  to the caller. PendingIntent parcels retain Binder handles, but remote sending/cancellation
+  and process-independent operation ownership remain incomplete.

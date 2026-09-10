@@ -3096,3 +3096,36 @@ encoding: NUL uses C0 80, paired supplementary characters use four bytes, unpair
 use three. The regression fixture checks reference bytes, padding and the next integer.
 Reference probe source and output are under `/tmp/webdroid-location-oracle/`; wire fixtures
 are retained in `src/android/parcel.test.ts` and `src/android/location.test.ts`.
+
+
+## microG fused location through browser providers
+
+The SDK's high-accuracy request initially had no provider capable of serving it. microG's
+own network-location service can bypass Android's network provider; its DEX confirmed that
+selection. Hiding the service or substituting a client result would bypass genuine behavior.
+The platform now exposes browser-backed active and passive providers, aggregates high-accuracy
+requests into one Geolocation watch, and filters delivered fixes by interval and distance.
+There is no coordinate constant in runtime code. The browser cannot identify physical sensor
+provenance, so this does not establish satellite or Wi-Fi/cell emulation.
+
+The callback path exposed Android 13 LocationRequest and WorkSource parcel gaps, an unlinked
+shared Handler, ContentValues(int), AppOps attribution and suspension declarations. A separate
+foreground/caller distinction fixes permission UI launched from background service processes.
+Shared runtime grants and a common monotonic clock keep package processes consistent.
+PendingIntent now preserves its Binder handle when parceled; remote execution and durable
+operation ownership remain unimplemented and fail explicitly.
+
+The deterministic unchanged-SDK capture at 4b0a0c7 delivered a location callback with 4 m
+accuracy. Normal Chrome, without a coordinate override, delivered a callback reporting 40 m;
+no live coordinates were retained. The dedicated Android reference delivered the same SDK
+callback with 5 m accuracy after an AVD test fix. These independent inputs establish callback
+paths, not comparative sensor precision. Artifacts: /tmp/webdroid-gms-location-check.{png,json},
+/tmp/webdroid-reference-location.png. The single-watch browser fixture also verifies passive
+subscriptions, minimum interval and teardown after the final active request.
+
+Process frames now expose runtime diagnostics and inherit natcheck/bytecode/jit query options.
+Earlier collectors silently treated an absent child diagnostic global as empty telemetry.
+The new location capture checked all four actual runtimes: missing APIs and undeclared native
+suspension were empty, and background main queues had no pending work. The full unit run
+before the final suspension annotations passed 977 tests and 47,058 assertions; subsequent
+framework probes passed (295/363 declared delegates) and text comparison passed 6/6.
