@@ -18,7 +18,7 @@ import "../src/jvm/natives/jio";
 import { loadNativeLib, linkNativeLib } from "../src/native/loader";
 import { calledMissing, unresolved, hostTrace } from "../src/native/host";
 import { jniMissing, registered } from "../src/native/jni";
-import { blockStats, NativeFault } from "../src/native/cpu";
+import { codeStats, NativeFault } from "../src/native/cpu";
 import { perf } from "../src/perf";
 
 const args = process.argv.slice(2);
@@ -60,5 +60,5 @@ console.log("registered natives:", registered.map((r) => `${r.cls.split("/").pop
 console.log("unresolved imports:", [...unresolved].join(" "));
 console.log("calledMissing:", [...calledMissing].join(" "));
 console.log("jniMissing:", [...jniMissing].join(" "));
-console.log("blocks:", blockStats, "instr:", perf.nativeInstr, "ms:", perf.nativeMs.toFixed(1), "hostCalls:", perf.nativeHostCalls);
+console.log("decoded pages:", codeStats.pages, "invalidated:", codeStats.invalidated, "instr:", perf.nativeInstr, "ms:", perf.nativeMs.toFixed(1), "hostCalls:", perf.nativeHostCalls);
 process.exit(0);

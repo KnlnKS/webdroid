@@ -24,6 +24,7 @@ import { overlays } from "./android/popup";
 import { openDatabase } from "./android/sqlite";
 import { setWebLayer, webViewInfo } from "./android/webkit";
 import { native } from "./native/debug";
+import { jitStats } from "./native/core";
 import { allSurfaces, probeSurface } from "./android/glview";
 import { device, parseScreen, readStoredScreen, storeScreen, type Screen } from "./shell/config";
 import { openInstallRemote } from "./shell/install";
@@ -228,6 +229,7 @@ const tap = async (x: number, y: number) => {
 // declares about itself, so a native that returns a promise without being async has to be
 // findable rather than guessed at.
 rt.auditNatives = new URLSearchParams(location.search).get("natcheck") === "1";
+jitStats.on = new URLSearchParams(location.search).get("jit") !== "0"; // `?jit=0`: the interpreter alone, to tell the tiers apart
 
 const wd = {
   rt, uiState, overlays, perf, perfReset, mainDbg, yields: yieldStats, timedParks, suspends: suspendTrace, setGL, logs: logBuf, ticks: 0, native, vfs,

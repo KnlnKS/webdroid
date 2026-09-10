@@ -2,11 +2,22 @@
 // (bionic exports both). A float result leaves through retF/retD so it lands in v0 on AAPCS64.
 
 import { mem } from "./mem";
-import { hostLib, type HostFn, retF, retD, PTR, VRET, fbits, bitsf } from "./host";
+import { hostLib, type HostFn, retF, retD, PTR, VRET, SERVED, fbits, bitsf } from "./host";
 import type { Cpu } from "./cpu";
 
 /** a long result: 64-bit on LP64 */
 const retLong = (x: number) => (PTR === 8 ? BigInt(Math.trunc(x)) : Math.trunc(x) | 0);
+/** round to nearest, ties away from zero (C's round) */
+const rna = (x: number) => (x < 0 ? -Math.round(-x) : Math.round(x));
+/** round in FPCR's current mode: 0 nearest-even, 1 +inf, 2 -inf, 3 zero */
+function rint(c: Cpu, x: number): number {
+  switch ((c.fpcr >>> 22) & 3) {
+    case 1: return Math.ceil(x);
+    case 2: return Math.floor(x);
+    case 3: return Math.trunc(x);
+    default: { const r = Math.round(x); return r % 2 !== 0 && Math.abs(x - Math.trunc(x)) === 0.5 ? r - 1 : r; }
+  }
+}
 
 export function libmInit(): void {
   const d1 = (f: (x: number) => number): HostFn => (c, a) => retD(c, f(a.d()));
@@ -15,6 +26,7 @@ export function libmInit(): void {
   const f2 = (f: (x: number, y: number) => number): HostFn => (c, a) => retF(c, f(a.f(), a.f()));
   const both = (name: string, f1d: (x: number) => number, f1f = f1d): [string, HostFn][] => [[name, d1(f1d)], [name + "f", f1(f1f)]];
   const both2 = (name: string, f: (x: number, y: number) => number): [string, HostFn][] => [[name, d2(f)], [name + "f", f2(f)]];
+  const served = (...names: string[]): [string, HostFn][] => names.flatMap((n) => [[n, SERVED], [n + "f", SERVED]]);
   const logb = (x: number) => (x === 0 ? -Infinity : !isFinite(x) ? Infinity : Math.floor(Math.log2(Math.abs(x))));
   const frexp = (v: number, ep: number): number => {
     if (v === 0 || !isFinite(v)) { mem.st32(ep, 0); return v; }
@@ -23,14 +35,14 @@ export function libmInit(): void {
     return v / 2 ** e;
   };
   const M: Record<string, HostFn> = Object.fromEntries([
-    ...both("sin", Math.sin), ...both("cos", Math.cos), ...both("tan", Math.tan),
+    ...served("sin", "cos", "tan", "exp", "log", "sqrt", "pow", "atan2", "fmod", "sincos"),
     ...both("asin", Math.asin), ...both("acos", Math.acos), ...both("atan", Math.atan),
     ...both("sinh", Math.sinh), ...both("cosh", Math.cosh), ...both("tanh", Math.tanh),
     ...both("asinh", Math.asinh), ...both("acosh", Math.acosh), ...both("atanh", Math.atanh),
-    ...both("sqrt", Math.sqrt), ...both("cbrt", Math.cbrt), ...both("exp", Math.exp), ...both("exp2", (x) => 2 ** x), ...both("expm1", Math.expm1),
-    ...both("log", Math.log), ...both("log2", Math.log2), ...both("log10", Math.log10), ...both("log1p", Math.log1p), ...both("logb", logb),
+    ...both("cbrt", Math.cbrt), ...both("exp2", (x) => 2 ** x), ...both("expm1", Math.expm1),
+    ...both("log2", Math.log2), ...both("log10", Math.log10), ...both("log1p", Math.log1p), ...both("logb", logb),
     ...both("floor", Math.floor), ...both("ceil", Math.ceil), ...both("trunc", Math.trunc), ...both("fabs", Math.abs),
-    ...both2("atan2", Math.atan2), ...both2("pow", Math.pow), ...both2("fmod", (x, y) => x % y), ...both2("hypot", Math.hypot),
+    ...both2("hypot", Math.hypot),
     ...both2("fmax", Math.max), ...both2("fmin", Math.min), ...both2("fdim", (x, y) => (x > y ? x - y : 0)),
     ...both2("copysign", (x, y) => (y < 0 || (y === 0 && 1 / y < 0) ? -Math.abs(x) : Math.abs(x))),
     ...both2("remainder", (x, y) => x - y * Math.round(x / y)),
@@ -42,13 +54,13 @@ export function libmInit(): void {
       if (x === 0) return bitsf(y < 0 ? 0x80000001 : 1);
       return bitsf(fbits(x) + ((y > x) === (x > 0) ? 1 : -1));
     }),
-    round: (c, a) => retD(c, c.rna(a.d())), roundf: (c, a) => retF(c, c.rna(a.f())),
-    rint: (c, a) => retD(c, c.rint(a.d())), rintf: (c, a) => retF(c, c.rint(a.f())),
-    nearbyint: (c, a) => retD(c, c.rint(a.d())), nearbyintf: (c, a) => retF(c, c.rint(a.f())),
-    lround: (c, a) => retLong(c.rna(a.d())), lroundf: (c, a) => retLong(c.rna(a.f())),
-    llround: (c, a) => BigInt(Math.trunc(c.rna(a.d()))), llroundf: (c, a) => BigInt(Math.trunc(c.rna(a.f()))),
-    lrint: (c, a) => retLong(c.rint(a.d())), lrintf: (c, a) => retLong(c.rint(a.f())),
-    llrint: (c, a) => BigInt(Math.trunc(c.rint(a.d()))), llrintf: (c, a) => BigInt(Math.trunc(c.rint(a.f()))),
+    round: (c, a) => retD(c, rna(a.d())), roundf: (c, a) => retF(c, rna(a.f())),
+    rint: (c, a) => retD(c, rint(c, a.d())), rintf: (c, a) => retF(c, rint(c, a.f())),
+    nearbyint: (c, a) => retD(c, rint(c, a.d())), nearbyintf: (c, a) => retF(c, rint(c, a.f())),
+    lround: (c, a) => retLong(rna(a.d())), lroundf: (c, a) => retLong(rna(a.f())),
+    llround: (c, a) => BigInt(Math.trunc(rna(a.d()))), llroundf: (c, a) => BigInt(Math.trunc(rna(a.f()))),
+    lrint: (c, a) => retLong(rint(c, a.d())), lrintf: (c, a) => retLong(rint(c, a.f())),
+    llrint: (c, a) => BigInt(Math.trunc(rint(c, a.d()))), llrintf: (c, a) => BigInt(Math.trunc(rint(c, a.f()))),
     ldexp: (c, a) => retD(c, a.d() * 2 ** a.i()), ldexpf: (c, a) => retF(c, a.f() * 2 ** a.i()),
     scalbn: (c, a) => retD(c, a.d() * 2 ** a.i()), scalbnf: (c, a) => retF(c, a.f() * 2 ** a.i()),
     scalbln: (c, a) => retD(c, a.d() * 2 ** Number(PTR === 8 ? a.l() : a.i())),
@@ -58,8 +70,6 @@ export function libmInit(): void {
     frexpf: (c, a) => { const v = a.f(), ep = a.p(); return retF(c, frexp(v, ep)); },
     modf: (c, a) => { const v = a.d(), ip = a.p(); const i = Math.trunc(v); mem.stf64(ip, i); return retD(c, v - i); },
     modff: (c, a) => { const v = a.f(), ip = a.p(); const i = Math.trunc(v); mem.stf32(ip, i); return retF(c, v - i); },
-    sincos: (_c, a) => { const x = a.d(), s = a.p(), co = a.p(); mem.stf64(s, Math.sin(x)); mem.stf64(co, Math.cos(x)); },
-    sincosf: (_c, a) => { const x = a.f(), s = a.p(), co = a.p(); mem.stf32(s, Math.sin(x)); mem.stf32(co, Math.cos(x)); },
     fma: (c, a) => retD(c, a.d() * a.d() + a.d()), fmaf: (c, a) => retF(c, a.f() * a.f() + a.f()),
     nan: (c) => retD(c, NaN), nanf: (c) => retF(c, NaN),
     erf: (c, a) => retD(c, erf(a.d())), erff: (c, a) => retF(c, erf(a.f())),
@@ -87,8 +97,8 @@ function lldiv(cpu: Cpu, a: { l(): bigint; p(): number }): ReturnType<HostFn> {
   }
   const n = a.l(), d = a.l();
   const q = d === 0n ? 0n : n / d, r = n - q * d;
-  cpu.r[0] = Number(q & 0xffffffffn) | 0; cpu.h[0] = Number((q >> 32n) & 0xffffffffn) | 0;
-  cpu.r[1] = Number(r & 0xffffffffn) | 0; cpu.h[1] = Number((r >> 32n) & 0xffffffffn) | 0;
+  cpu.w[0] = Number(q & 0xffffffffn) | 0; cpu.w[1] = Number((q >> 32n) & 0xffffffffn) | 0;
+  cpu.w[2] = Number(r & 0xffffffffn) | 0; cpu.w[3] = Number((r >> 32n) & 0xffffffffn) | 0;
   return VRET;
 }
 

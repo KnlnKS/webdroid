@@ -706,7 +706,7 @@ export function gles3Init(): void {
   for (const [k, f] of Object.entries(G)) {
     if (k === "glGetError") continue;
     G[k] = (c, a) => {
-      const args = glProbe.on ? `(${c.r[0] >>> 0},${c.r[1] >>> 0},${c.r[2] >>> 0})` : "";   // read before f consumes them
+      const args = glProbe.on ? `(${c.w[0] >>> 0},${c.w[2] >>> 0},${c.w[4] >>> 0})` : "";   // read before f consumes them
       const r = f(c, a);
       if (glProbe.on && current) {
         glRing.push(k + args); if (glRing.length > 400) glRing.splice(0, 200);

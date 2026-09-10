@@ -2545,3 +2545,257 @@ so the probe pins `Date` itself. Frame rates measured beside six other browsers 
 measurements — flappybird fell from 51 to 17 fps under a seven-job run — so `minFps` gates apply
 only under `--jobs 1` and `run.json` records the jobs a run used. In-page perf counters from a
 parallel run carry the same caveat: compare costs with `--jobs 1`.
+## The wasm core
+
+The native tier's CPU and memory moved from TypeScript into a Zig core compiled to wasm32
+(`src/native/core/`). The measurements that decided the shape, and what did not work.
+
+**Why.** The JS tier's hot blocks were fast — `wd.native.bench()` quoted arm 4,196M and a64
+2,852M instr/s under bun, doodlejump sustained ~707M — but its cold A64 tier ran ~50M instr/s
+and was the whole of Lichess's 4 s native boot (200M instructions, 640k host calls), every
+64-bit op paid the split lo/hi register file, NEON was unrolled per lane in JS, and the block
+cache was bounded because `new Function` code exhausted V8's executable space. wasm has i64,
+f32, v128 and its own code space.
+
+**Shape.** The core imports the guest memory, so a guest address is a linear-memory offset and
+every `mem.u8`/`ld32`/`st32` in the host tier is unchanged; one memory starts at the 32-bit
+size and grows in place on the A64 switch, so nothing is copied at `mem.init`. The register
+file is an `extern struct` per thread in that memory (`layout()` exports the offsets; a test
+reads them) with x0..x30 as u64: the lo/hi split was a JS workaround, not something to carry.
+Interpretation is a per-page cache of decoded ops for A64 and direct decode for ARM32; the
+SIMD&FP space executes by lane through comptime element types. Hot libc (memcpy, memset,
+strlen, malloc and kin) is bound to its trampoline slot and served without leaving the core:
+Lichess's JNI_OnLoad went from 9,730 host calls to 446. A block entered 48 times becomes a
+region — the blocks reachable from it through direct branches inside the page — emitted as one
+wasm function with registers in locals and a br_table between blocks, so loops stay inside the
+function. What the emitter does not inline spills and calls the interpreter for that word, so
+semantics have one home. Batches compile synchronously where the engine allows (bun, so tests
+are deterministic) and in the background on Chrome's main thread, which refuses synchronous
+compiles past 4 KB. Region functions link into the core's imported table above its own
+entries; the page's slot map routes the dispatcher.
+
+**Measured (bun, byte-copy loop).** Interpreter: a64 208M instr/s, arm 290M. JIT: a64 3.8G,
+arm 3.8G, against the JS tier's 2.85G and 4.2G. The core is 160 KB stripped: the name section
+Zig emits by default was 1.1 MB of the 1.3 MB binary.
+
+**Parity as a test.** The test kits run every decoder program in the interpreter, then past
+the heat threshold, and demand the same register file; a program whose second interpreter run
+differs from its first (it reads the counter, or memory it rewrote) is exempt, and memory is
+put back so the test asserts on a fresh run. The sweep found the subtraction overflow flag
+using the addition formula and the reversed operands of `select` in register-specified shifts.
+
+**The first app run.** DoodleJump's loader thread trapped where the unit tests were green.
+Two causes were the core's own: decode blocks came from the guest arena, and the loader wrote
+through a pointer it had freed and kept, straight into a block (a use-after-free that a real
+libc survives); the blocks moved to the image region. The rest were ARM32 emitter bugs no
+test program had reached: Thumb MVN, an STM that wrote its base back before storing it
+(`push {sp, lr}`, which __aeabi_uldivmod's helper reads back), a register-specified shift whose
+amount landed in Rn's temporary (`orr r8, r2, r1, lsl r3` inside __divdi3), and a fallback
+that jumped and then spilled stale locals over the interpreter's result. None was found by
+reading: the tools that found them are worth more than the fixes. `?jit=0` separates the
+tiers; `__wdJit` installs only regions whose entry lies in given ranges, so a headless run
+bisects 1,000 regions to one in ten launches; `jit_fallback` hands a pc range inside that region
+to the interpreter, so a bun test over the library's own bytes bisects the region to one
+instruction in a few seconds; and a wasm trap reports the function and offset, which named
+`on_store` rather than the region. A hang in the middle of that bisection was the fallback
+path itself: the ARM interpreter reports a taken branch through pc alone, so the fallback
+had continued past it.
+
+**In the browser.** Chrome runs the same byte-copy regions at 1.25G instr/s where bun runs
+them at 3.9G (`wd.native.bench()` now reports the second pass, after the region compiled).
+Among Us reaches The Skeld with 98.5% of its instructions in regions and still runs ~120M
+instr/s: IL2CPP code is thousands of small functions, every call and return leaves a region
+through the dispatcher with a spill and a reload, and it makes 26k host calls a second on top.
+The next win there is region-to-region chaining, not coverage. Its 55,000 regions in two
+minutes also reached the table's end, where the first cut flushed everything; the table now
+evicts its oldest half of batches (a region still hot re-heats within 48 entries).
+
+**Negative results.** `@mulAdd` on wasm32 goes through compiler-rt's `fma` libcall and returned
+a NaN with payload 1 for finite operands in the hardware-oracle cases; the fused ops use the
+Dekker/TwoSum software form instead, which the oracle accepts. The decoded-op cache is not
+the win it looked: the direct-decoding ARM32 interpreter runs faster than the cached A64 one,
+so the cache exists for the JIT's region discovery more than for interpretation. Nothing else
+in the tree is worth wasm: graphics and text are Canvas2D-bound, SQLite and crypto are already
+native, DEX and resource parsing produce JS objects; the only right-shaped candidates (the
+synchronous digests, the box blur) have no measured cost.
+
+## The wasm core, second pass: where a transfer's cost really was
+
+Among Us at The Skeld went from ~120M to 540–560M guest instructions per second of core time
+(three 15 s samples: 542, 552, 553M), with 0.000% of instructions interpreted, on the commits
+from "fallback and host-call histograms" to "hot blocks the batch queue had no room for ask
+again". What each one was worth, and what the measurements overturned.
+
+**Measure first.** `wd.native.jit.fallbacks()` counts what regions hand to the interpreter by op
+kind and by the SIMD&FP word's top bits, `fallbackWords()` keeps the words themselves with the
+register fields masked, and `wd.native.hostCalls()` counts host calls by name. At the baseline
+gameplay window (18 s, 2.9G instructions) 1.05G words fell back — 578M of them scalar FP,
+then FP loads and stores, then the vector classes — and 35k host calls a second were led by
+`pthread_getspecific` (12k/s), mutex lock and unlock (7.5k/s each), `pthread_self` and `sincosf`.
+The bench gained a `blr`/`ret` loop so a transfer is one number: bun runs it at 780M instr/s;
+Chrome ran it at 90–120M.
+
+**Chaining alone bought little.** Regions hand off by `return_call_indirect` through the core's
+table (the engine is probed once; without tail calls the epilogue returns to the dispatcher as
+before). The call loop in Chrome moved from ~90M to ~100M instr/s: hand-built probes put a raw
+tail call at 1 ns and a cross-instance one at 5.5 ns, so the dispatcher round trip was never the
+cost. Memory traffic was: in Chrome each i64 load or store in a fresh function costs 0.4–0.7 ns
+against a ~2 ns floor per call, and a transfer did some 60 of them (every written register, the
+flags four times, `ic`, the budget).
+
+**Precise spills were the win.** Each op declares what it reads and writes; the prologue loads
+the region's read-or-written set, a transfer exit spills the may-written-before set of its block
+(a fixed point over the region's edges) plus the block's own writes, the status exit keeps the
+full spill, and a fallback spills what the interpreter reads or may write and reloads what it
+writes. `ic` and its limit live in locals and the flags load once. The call loop went to ~800M
+in Chrome once V8 tiered the regions up (in later sessions it stayed at Liftoff and ~115M;
+the engine decides that, not the emitter). The one bug this found: a fallback's write set that
+over-names a register — a conversion's V destination taken for a GPR — reloaded that register
+stale over a dirty local. A fallback now spills everything it will reload, so an over-named
+write is harmless, and the classifier names the SIMD&FP space's general registers exactly.
+Gameplay: 120M → 161M instr/s.
+
+**Then FP.** The scalar FP space is emitted over V registers that stay in the Cpu struct (no
+spill or reload around a fallback), with FMAX/FMIN and the NM forms calling fp.zig for their NaN
+rules and a double FMADD calling fp.fma; the V loads and stores translate like the integer ones.
+Gameplay: 161M → 419M. The tier-parity sweep had to learn that an engine may commute a multiply
+between tiers and that which NaN operand's payload survives is its choice, as the hardware
+oracle already allowed. Exclusives, CAS, acquire/release and `mrs tpidr_el0` inline; the vector
+forms the histogram named (moves, copies, bitwise, add/sub/mul/compare/min/max, float
+arithmetic and compares, FMULX, the single-lane conversions, the shifts with SSHLL/USHLL, FMUL and
+MUL by element, the lane loads and stores with LD1R) go through simd128: 467M → 550M. What
+still falls back at The Skeld — SCVTF and FCVTN on doubles, ZIP1, XTN, REV64, FMLA by element,
+EXT, the multi-register LD1 — is about 1% of core time and not worth more emitter.
+
+**The host side, measured.** `pthread_self`, `pthread_getspecific` and `pthread_setspecific` are
+served in the core from a per-thread key table in guest memory (73k → 38k host calls a second).
+`perf.nativeHostMs` then showed a host call's body costs ~0.7 µs, so the remaining 38k/s are
+~3% of wall time; the mutex fast path was not built. Of a 15 s gameplay window the core runs
+6.9 s, host-call bodies 0.2 s, region linking 6 ms and the JS frame loop 0.3 s: the rest is the
+guest's own waiting, and the frame rate (16–17 fps, from 14.5) no longer tracks core speed.
+
+**Two structural leaks.** A block that reached the heat threshold while the batch queue was full
+never asked again — its heat passed 48 once — and 1.4% of gameplay instructions ran in the
+interpreter; a refused request now retries at the block's next entry. And The Skeld runs 60k
+regions, past the 57k the 64K-entry table held, where eviction would have churned; the table has
+256K entries and batches take 64 regions.
+
+**Not done, and why.** Following `bl` into regions across pages (with `ret` matched against the
+region's return sites) was planned; with a transfer at ~2.5 ns and IL2CPP averaging perhaps 15
+instructions between transfers it is at most 6% of core time, and multi-page regions need
+their own invalidation. It waits for a measurement that names it. A hang was seen once during a
+boot on the precise-spill build (UnityMain in `pthread_cond_wait`, every worker parked) and did
+not reproduce in eight later boots; if it returns, `?jit=0` and `__wdJit` still bisect it.
+
+## The wasm core, janitor pass
+
+The core went from 8,992 to 7,270 lines with the same guest semantics: the parity kits, the
+540-instruction hardware oracle in both tiers, and the cache test pass unchanged, the scored
+e2e flows repeat their scores (fitnotes 40.88%, mihon-onboarding 17.56%, mihon-app 60.70%,
+harmonic 32.87%), doodlejump renders 6/6 at 42 fps minimum and lichess 15/15, with the same
+instruction counts as the previous rollup (10.94G and 200.7M). What changed and what it was
+worth.
+
+**Shape.** One `bits.zig` holds the field helpers five files each carried; `cpu.st`, `cpu.raise`
+and `cpu.setPc32` are the one page-checked store, fault and interworking write. The interpreters
+fold their u64/u32 twins into comptime-typed bodies (`a64.addsub`, `adc`, `ccmp`, `extr`,
+`one`, `two`), ARM32 shares one `logic` between A32 and Thumb and one `vreg` accessor for the
+VFP file, and the SIMD lane loops compute pairwise operands, absolute differences and rounded
+shifts only in the arms that read them, with the narrowing paths taking their variants at
+comptime so a 32-bit lane never widens to i128. The JIT emits through `Buf.emit`, a tuple of
+opcodes and operand structs, so an instruction's wasm reads as one line; `wasm.W` maps an i32
+opcode to its i64 twin by the table's fixed distances, and `Emit(comptime wide)` instantiates
+the emitter per width, which is what let `flags`, `flagsNZ`, the spills and the division
+sequence be written once. The FP thunks and their import names come from one comptime list.
+The three JIT files went from 3,814 to 2,521 lines, and with the buffer's byte writers kept
+out of line the stripped core is 240 KB against 326 KB before; the blobs are no longer
+committed but built on demand when a Zig source is newer.
+
+**Hot paths.** A block counts `ic` once at its end and no longer reloads its page per
+instruction (the loop already returns on a page crossing or a dropped page). Regions check the
+budget only on back edges: every cycle has one, a forward path is bounded by the region, so
+the worst overrun past `ic_limit` is one region (359 instructions) instead of one block. A
+store's page check computes its address once and a 16-byte store makes one check over both
+halves; `bpc` is written on the fault path rather than per block, so an engine trap inside a
+region now names the last interpreted block, with the wasm frame text still naming the
+function. Permutes (ZIP, UZP, TRN), EXT, REV16/32/64, XTN/XTN2 and FCVTN/FCVTN2 on doubles
+emit as `i8x16.shuffle` and `f32x4.demote_f64x2_zero`, the lane maps coming from the same
+`permuteIndex` the interpreter's `permute` uses.
+
+**Measured.** Among Us on The Skeld, a 27 s sample after the map loaded: 593M instr/s of core
+time (7.08G instructions in 11.9 s of core) at 16 fps, against 540–560M before; boot to the map
+raised no fault. The doodlejump and lichess flows ran in 28% and 21% less core time than the
+previous rollup (which predates the pthread keys served in the core, so the host-call fall of
+81–86% is mostly that commit). `wd.native.bench()` in Chrome is a wash, as the loops it times
+are transfer-bound: arm 5.2G, a64 5.0G, the call loop 0.95G on both builds.
+
+**Removed.** The fallback histograms and the interpreted-instruction counter cost work on
+every fallback and every interpreted instruction and were read only by `wd.native.jit`; they
+went with `abi_const` and the unused `jit_stat` arms. `?jit=0`, `__wdJit`, `jit_fallback`,
+`perf.nativeHostMs` and `wd.native.hostCalls()` remain. The host tests that only needed a Cpu
+to run TS (lifetime, mem, jni-fp, pthread, signal, libc, libm, fortify, stdio, epoll,
+environment, proc, host) went too; the kits, the oracle and the cache test are the core's
+proof. `wd.native.bench()` switches the process ABI and resets the image region, so it is not
+to be run while an app is live: doing so faulted the game's timer thread at pc 0 during this
+pass.
+
+**Reasons that used to be comments.** Fused FP uses the Dekker/TwoSum form because
+`@mulAdd` on wasm32 goes through compiler-rt and returned a NaN for finite operands. A
+fallback spills everything it reloads so an over-named write set cannot reload stale memory
+over a dirty local. The slice holds up to 256 instructions past its budget while the exclusive
+monitor is set so a CAS loop's block never straddles a slice. A refused batch request
+decrements heat so the block asks again at its next entry. A region installs only against the
+page epoch it was emitted for. Decode blocks come from the image region and are zeroed on
+reuse because the guest can write through a freed arena pointer and a resized memory hands the
+same addresses back. `emitVector` emits nothing before returning false. A V-file write below Q
+zeroes the top of the register.
+
+## The wasm core, third pass
+
+Among Us at The Skeld (Practice, idle at spawn, headless Chromium, two 20 s windows each)
+went from 455M to 550M guest instructions per second of core time, with 40% fewer host
+calls; the pre-pass core was measured in the same scene from a second worktree, because the
+593M/s of the second pass came from a different scene and browser. The game still swaps 31
+frames a second: a frame is ~12M guest instructions, so at 550M/s it misses the 16.7 ms
+vsync and `eglSwapBuffers` waits for the next one. What each item was worth, and what
+the measurements overturned.
+
+**Flags as pending operands.** A flag-setting instruction leaves its operands and result in
+six dedicated locals instead of computing N, Z, C and V; a condition on that pending
+compare is one wasm comparison (`cmp; b.lt` is `a < b signed`); the flags are materialized
+only where a block's successor reads them, by a backward liveness over the region's
+`taken`/`fall` edges with every exit reading everything, and a conditional branch settles
+each edge inside its own arm. Partial writers (A32 logic and shifts keep V, `mul` keeps C
+and V, Thumb `movs` keeps C) settle what they preserve before staging, which is where the
+first attempt miscomputed: staging the new operands clobbered the locals the old flags
+were still to be read from. Bun's optimizing tier already deletes dead flag work, so
+`wd.native.bench()` there was flat; Chromium's baseline tier is where the cost lived:
+thumb sum 6.7G → 14.3G, a32 sum 7.3G → 13.3G, a32 cmp 5.9G → 12.5G, a64 sum 4.0G → 5.7G,
+a64 cmp 5.0G → 7.1G instr/s (the bench gained these loops). Whole-flow doodlejump core
+time fell 5% only: its 10.9G instructions are the startup texture decode and its gameplay
+is GL-call bound. On IL2CPP code the gain was ~3.5%: most blocks end in `bl` or `ret`,
+where the flags are architecturally live and must be spilled anyway.
+
+**The plane path.** A counting wrapper on the `tx` import showed 670M plane translations in
+one session at The Skeld: the heap lives in planes, and each translation was a
+cross-instance call. The region now reads `mem.zig`'s `P`/`L`/`S` tables inline and only
+the plane path pays the null check: 470M → 550M instr/s, the largest single item.
+
+**Served in the core.** Uncontended `pthread_mutex_lock/unlock/trylock` use the guest word
+in bionic's layout (state, count, type, owner), with contention left to the host, which
+parks waiters and hands the word over; `sin/cos/tan/exp/log/sqrt/pow/atan2/fmod/sincos`
+and their float forms run through compiler-rt. Host calls: doodlejump 299k → 176k over its
+flow, lichess 83k → 14k, The Skeld 1.73M → 1.03M per 20 s. What remains at The Skeld is
+GL (`glBindBuffer` 130k per 20 s, `glVertexAttribPointer` 80k), then `clock_gettime`,
+`syscall`, `modff` and `ldexp` at 45–76k each.
+
+**Negative result.** Dropping the A64 decoded-op cache (decode directly, as ARM32 does)
+cost the interpreter 224M → 139M instr/s on the byte-copy loop, so the cache stays for
+A64; ARM32 pages, which never read it, take 12 KB blocks instead of 32 KB, and the ARM32
+interpreter and scanners now mark the words they execute so a store into ARM32 code drops
+the page as it does for A64 (before, only `cacheflush` did).
+
+**Host path.** `jit_pending` was polled after every synchronous host call and two clock
+reads bracketed every host body; both left the host-call path. The TS bodies of every
+core-served call went. The core is 7,677 lines of Zig against 7,252; the repository's
+TypeScript is 4,868 lines smaller.

@@ -28,9 +28,11 @@ WEBDROID_URL=http://localhost:4090 bun run corpus
 bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
 ```
 
-- Typecheck must pass with `noUnusedLocals`. Unit tests cover DEX/resources, ARM32/A64,
-  hardware-oracle SIMD, native host services, storage, and the E2E comparison machinery.
-  Use the test runner's count rather than maintaining a duplicate count here.
+- Typecheck must pass with `noUnusedLocals`; it builds the wasm core first, so Zig 0.16 is
+  required and the core's two blobs are built, never committed. Unit tests cover DEX/resources,
+  the ARM32/A64 tier-parity kits, the hardware-oracle SIMD fixture, decode-cache invalidation,
+  native host services, storage, and the E2E comparison machinery. Use the test runner's count
+  rather than maintaining a duplicate count here.
 - Smoke compilation must report zero method failures for each APK affected by a change.
 - `fwtest [prefix ...]` measures delegate coverage with real framework bytecode.
 - E2E's four scored flows are FitNotes, Mihon onboarding, Mihon app, and Harmonic.
@@ -69,9 +71,26 @@ An alternate `WEBDROID_SCREEN=1080x2424@480` runs as smoke when it differs from 
   live separately from the core view traversal.
 - SQLite uses sql.js and persists snapshots per database. Persist without closing/reopening
   the database: connection-local TEMP tables and triggers must survive.
-- ARM32 and A64 use the native tier. A64 registers are split low/high Int32 halves; preserve
-  zero-extension and signed/unsigned encoding rules. Cold handlers and a bounded hot-code
-  cache prevent executable-code GC pressure. One process uses one ABI.
+- ARM32 and A64 run in the wasm core (`src/native/core/*.zig`, built with Zig 0.16 into
+  `core.wasm.ts`, which is not committed: `bunfig.toml` preloads `scripts/build-core.ts`, so any
+  bun entry point rebuilds it when a Zig source is newer; tests run the ReleaseSafe build). The
+  core owns the guest memory, so a guest address is a linear-memory offset; the register file
+  is a struct in it (`cpu.ts` keeps the async driver). A64 blocks are interpreted from a
+  per-page decode cache (ARM32 decodes directly and its pages hold only the coverage, heat
+  and slot maps) until hot, then a region compiles to a wasm function (`jit.zig`, `jit32.zig`)
+  that the host links into the core's table. What the emitter does not inline calls the
+  interpreter for that word: semantics live once, in `a64.zig`/`simd.zig`/`arm.zig`. In a
+  region a flag-setting instruction leaves its operands pending; a condition on them is one
+  wasm comparison and the flags are materialized only where a successor block or an exit
+  reads them (a backward liveness over the region's edges). A plane address translates
+  inline from `mem.zig`'s tables. Hot libc, uncontended mutexes (the guest word, bionic's
+  layout) and the float transcendentals are served in the core (`libc.zig`, ids in
+  `CORE_LIBC`); a served name has no host body, and the tracer reaches the one body through
+  `libc_call`. One process uses one ABI. The test kits run every program in both tiers and
+  demand the same register file. A miscompile in an app is
+  bisected, not read: `?jit=0` runs the interpreter alone, `__wdJit` (ranges of entry pcs)
+  installs only some regions, `core.jit_fallback(lo, hi)` hands a pc range inside a region
+  to the interpreter, and a wasm trap names the function and offset that raised it.
 - APK/XAPK installation is shared by shell, server, and scripts. Asset packs can use range
   reads with bounded caching. Preserve split precedence and distinct DEX entries.
 - `src/natives.ts` is the central registration list. Import the owning module directly for
@@ -98,8 +117,10 @@ An alternate `WEBDROID_SCREEN=1080x2424@480` runs as smoke when it differs from 
 - Dispatch Back to the topmost window first. Keep dialogs bounded before adding title chrome.
 - Text measurements use the shared measurement/metric caches. Draw failures are reported and
   must not permanently stop the frame loop.
-- Preserve native cache invalidation and release incoming and outgoing hot links on eviction,
-  including when the caller is active. Keep signals, host callbacks, and guest frames ordered.
+- A store into an executed word drops the page's decoded ops and region slots (the ARM32
+  interpreter and scanners mark executed words too); a region is installed only against the
+  page epoch it was emitted for. Keep signals, host callbacks, and guest frames ordered. A host
+  call is always an exit from `run_slice`, never a call-out from a wasm frame.
 - Do not fabricate account, network, service, or API success. Unknown services return null;
   unsupported relocations fail explicitly. Device absence and successful emulation differ.
 - Read signatures, encodings, argument meanings, and return layouts from DEX/native evidence.

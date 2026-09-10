@@ -8,3 +8,6 @@ tests/e2e/report/
 vendor/aosp
 tests/e2e/perf-rollup.json
 scripts/simd-oracle/build/
+.zig-cache/
+src/native/core.wasm.ts
+src/native/core.safe.wasm.ts

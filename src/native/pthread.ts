@@ -2,15 +2,18 @@
 // Everything runs on one JS thread, so a "contended" lock means the acquirer parks until unlock.
 
 import { mem, AddrMap, NativeFault } from "./mem";
-import { hostLib, NORET, type HostFn, stp, stpVa } from "./host";
+import { hostLib, NORET, SERVED, type HostFn, stp, stpVa } from "./host";
 import { Cpu, bindCpu, cpuByTid, cpuOf, yieldToLoop } from "./cpu";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
+import { TLS_KEYS } from "./core";
 import { RET_SENTINEL, E } from "./abi";
 import { JThread, reportUncaught, threadExit } from "../jvm/natives/jlang";
 import { readTs, fail } from "./libc";
 
-interface Mutex { owner: number; count: number; waiters: (() => void)[] }
-const mutexes = new AddrMap<Mutex>();
+/** bionic's mutex word: bits 0-1 state (0 free, 1 held, 2 held with waiters), 2-13 recursion count, 14-15 type, 16-31 owner tid;
+ *  the core takes and releases it uncontended (libc.zig), the host parks and hands it over */
+const COUNT = 0x3ffc;
+const mutexWaiters = new AddrMap<(() => void)[]>();
 const conds = new AddrMap<((timedOut: boolean) => void)[]>();
 const sems = new AddrMap<{ count: number; waiters: (() => void)[] }>();
 /** readers share, one writer excludes; a blocked acquirer parks and every unlock wakes them all to retry */
@@ -30,15 +33,15 @@ function rwRelease(cpu: Cpu, l: RwLock): number {
 }
 const threads = new Map<number, { done: Promise<void>; retval: bigint; detached: boolean; joined: boolean; exited: boolean }>();
 let keySeq = 1, threadSeq = 0;
-const keyDtors = new Map<number, number>();
+const keyDtors = new Map<number, number>();                              // pthread key → destructor, run for the thread's non-null values at its exit
 /** key destructors, as many rounds as they keep setting values (Bionic stops at four) */
 async function runKeyDestructors(cpu: Cpu): Promise<void> {
   for (let round = 0, again = true; again && round < 4; round++) {
     again = false;
-    for (const [k, v] of cpu.tls) {
-      const d = keyDtors.get(k);
-      if (!v || !d) continue;
-      cpu.tls.set(k, 0n); again = true; cpu.finished = false;
+    for (const [k, d] of keyDtors) {
+      const v = mem.ld64(cpu.tlsTab + 8 * k);
+      if (!v) continue;
+      mem.st64(cpu.tlsTab + 8 * k, 0n); again = true; cpu.finished = false;
       await cpu.call(d, [v], "key destructor");
     }
   }
@@ -51,24 +54,24 @@ threadExit.hook = (t) => {
   if (!cpu || cpu.loops || cpu.depth) return;
   void runKeyDestructors(cpu).catch(reportUncaught).finally(() => { if (!cpu.loops) cpu.dispose(); });
 };
-const onceWaiters = new AddrMap<(() => void)[]>();                      // pthread key → destructor, run for the thread's non-null values at its exit
+const onceWaiters = new AddrMap<(() => void)[]>();
 const ETIMEDOUT = E.TIMEDOUT, EBUSY = E.BUSY;
 
-function mutexOf(a: number): Mutex {
-  let m = mutexes.get(a);
-  if (!m) mutexes.set(a, (m = { owner: 0, count: 0, waiters: [] }));
-  return m;
+function lock(cpu: Cpu, a: number): number | Promise<number> {
+  const w = mem.ld32(a);
+  if ((w & 3) === 0) { mem.st32(a, (w & 0xc000) | 1 | (cpu.tid << 16)); return 0; }
+  if ((w >>> 16) === cpu.tid) { if ((w & COUNT) === COUNT) return E.AGAIN; mem.st32(a, w + 4); return 0; }
+  mem.st32(a, w | 2);
+  let q = mutexWaiters.get(a);
+  if (!q) mutexWaiters.set(a, (q = []));
+  const Q = q;
+  return new Promise<number>((res) => Q.push(() => { mem.st32(a, (mem.ld32(a) & 0xc000) | (Q.length ? 2 : 1) | (cpu.tid << 16)); res(0); }));
 }
-function lock(cpu: Cpu, m: Mutex): number | Promise<number> {
-  if (m.owner === 0) { m.owner = cpu.tid; m.count = 1; return 0; }
-  if (m.owner === cpu.tid) { m.count++; return 0; }
-  return new Promise<number>((res) => m.waiters.push(() => { m.owner = cpu.tid; m.count = 1; res(0); }));
-}
-function unlock(m: Mutex): void {
-  if (m.count > 1) { m.count--; return; }
-  m.owner = 0; m.count = 0;
-  const w = m.waiters.shift();
-  if (w) w();
+function unlock(a: number): void {
+  const w = mem.ld32(a);
+  if (w & COUNT) { mem.st32(a, w - 4); return; }
+  const next = mutexWaiters.get(a)?.shift();
+  if (next) next(); else mem.st32(a, w & 0xc000);
 }
 /** setTimeout past 2^31-1 ms fires at once; a wait that long is untimed */
 const timed = (ms: number | null): number | null => (ms !== null && ms < 0x7fffffff ? ms : null);
@@ -106,11 +109,9 @@ export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: numbe
 }
 
 function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | null): Promise<number> {
-  const m = mutexOf(mutex);
-  const count = m.count;
-  m.owner = 0; m.count = 0;
-  const w = m.waiters.shift();
-  if (w) w();
+  const count = mem.ld32(mutex) & COUNT;
+  mem.st32(mutex, mem.ld32(mutex) & ~COUNT);
+  unlock(mutex);
   let list = conds.get(cond);
   if (!list) conds.set(cond, (list = []));
   const L = list;
@@ -120,9 +121,9 @@ function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | nul
     L.push(wake);
     if (timed(timeoutMs) !== null) timer = parkTimeout(() => { const i = L.indexOf(wake); if (i >= 0) L.splice(i, 1); res(true); }, Math.max(0, timeoutMs!));
   }).then(async (timedOut) => {
-    const r = lock(cpu, m);
+    const r = lock(cpu, mutex);
     if (r instanceof Promise) await r;
-    m.count = count || 1;
+    mem.st32(mutex, mem.ld32(mutex) | count);
     return timedOut ? ETIMEDOUT : 0;
   });
 }
@@ -135,8 +136,8 @@ function startThread(parent: Cpu, start: number, arg: bigint, detached: boolean)
   cpu.signalMask = parent.signalMask;
   bindCpu(jt, cpu);
   try { cpu.ensureStack(); } catch (e) { cpu.dispose(); throw e; }
-  cpu.r[0] = Number(arg & 0xffffffffn) | 0; cpu.h[0] = Number(arg >> 32n) | 0;
-  cpu.r[cpu.lrx] = RET_SENTINEL;
+  cpu.w[0] = Number(arg & 0xffffffffn) | 0; cpu.w[1] = Number(arg >> 32n) | 0;
+  cpu.w[2 * cpu.lrx] = RET_SENTINEL; cpu.w[2 * cpu.lrx + 1] = 0;
   cpu.setPc(start);
   const rec = { retval: 0n, done: Promise.resolve(), detached, joined: false, exited: false };
   rec.done = new Promise<void>((resolve) => {
@@ -145,7 +146,7 @@ function startThread(parent: Cpu, start: number, arg: bigint, detached: boolean)
       void (async () => {
         try {
           await cpu.run();
-          if (!cpu.finished) rec.retval = (cpu.a64 ? BigInt(cpu.h[0] >>> 0) << 32n : 0n) | BigInt(cpu.r[0] >>> 0);
+          if (!cpu.finished) rec.retval = (cpu.a64 ? BigInt(cpu.w[1] >>> 0) << 32n : 0n) | BigInt(cpu.w[0] >>> 0);
           await runKeyDestructors(cpu);
         } catch (e) { reportUncaught(e); }
         finally {
@@ -207,7 +208,7 @@ export function pthreadInit(): void {
       cpu.finished = true;
       return NORET;
     },
-    pthread_self: (cpu) => cpu.tid,
+    pthread_self: SERVED,
     pthread_equal: (_c, a) => (a.i() === a.i() ? 1 : 0),
     pthread_sigmask: (cpu, a) => cpu.sigmask(a.i(), a.p(), a.p(), cpu.a64 ? 8 : 4),
     pthread_sigmask64: (cpu, a) => cpu.sigmask(a.i(), a.p(), a.p(), 8),
@@ -227,13 +228,12 @@ export function pthreadInit(): void {
     pthread_attr_getstacksize: (_c, a) => { a.p(); stp(a.p(), 0x100000); return 0; },
     pthread_attr_getstack: (cpu, a) => { a.p(); const base = a.p(), sz = a.p(); stp(base, cpu.stackBase); stp(sz, cpu.stackTop - cpu.stackBase); return 0; },
     pthread_getattr_np: () => 0,
-    // mutex: state keyed by address, the guest word untouched
-    pthread_mutex_init: (_c, a) => { mutexes.set(a.p(), { owner: 0, count: 0, waiters: [] }); return 0; },
-    pthread_mutex_destroy: (_c, a) => { mutexes.delete(a.p()); return 0; },
-    pthread_mutex_lock: (cpu, a) => lock(cpu, mutexOf(a.p())),
-    pthread_mutex_trylock: (cpu, a) => { const m = mutexOf(a.p()); if (m.owner && m.owner !== cpu.tid) return EBUSY; return lock(cpu, m) as number; },
-    pthread_mutex_unlock: (_c, a) => { unlock(mutexOf(a.p())); return 0; },
-    pthread_mutex_timedlock: (cpu, a) => lock(cpu, mutexOf(a.p())),
+    pthread_mutex_init: (_c, a) => { mem.st32(a.p(), 0); return 0; },
+    pthread_mutex_destroy: (_c, a) => { mutexWaiters.delete(a.p()); return 0; },
+    pthread_mutex_lock: (cpu, a) => lock(cpu, a.p()),
+    pthread_mutex_trylock: (cpu, a) => { const m = a.p(), w = mem.ld32(m); return (w & 3) === 0 || (w >>> 16) === cpu.tid ? (lock(cpu, m) as number) : EBUSY; },
+    pthread_mutex_unlock: (_c, a) => { unlock(a.p()); return 0; },
+    pthread_mutex_timedlock: (cpu, a) => lock(cpu, a.p()),
     pthread_mutexattr_init: () => 0, pthread_mutexattr_destroy: () => 0, pthread_mutexattr_settype: () => 0, pthread_mutexattr_setpshared: () => 0,
     pthread_cond_init: (_c, a) => { conds.set(a.p(), []); return 0; },
     pthread_cond_destroy: (_c, a) => { conds.delete(a.p()); return 0; },
@@ -246,7 +246,7 @@ export function pthreadInit(): void {
     pthread_cond_signal: (_c, a) => { const l = conds.get(a.p()); const w = l?.shift(); if (w) w(false); return 0; },
     pthread_cond_broadcast: (_c, a) => { const l = conds.get(a.p()); if (l) for (const w of l.splice(0)) w(false); return 0; },
     pthread_condattr_init: () => 0, pthread_condattr_destroy: () => 0, pthread_condattr_setclock: () => 0, pthread_condattr_setpshared: () => 0,
-    pthread_key_create: (_c, a) => { const out = a.p(), dtor = a.p(); if (dtor) keyDtors.set(keySeq, dtor); mem.st32(out, keySeq++); return 0; },
+    pthread_key_create: (_c, a) => { const out = a.p(), dtor = a.p(); if (keySeq >= TLS_KEYS) return E.AGAIN; if (dtor) keyDtors.set(keySeq, dtor); mem.st32(out, keySeq++); return 0; },
     pthread_rwlock_init: (_c, a) => { rwlocks.set(a.p(), { readers: 0, writer: 0, waiters: [] }); return 0; },
     pthread_rwlock_destroy: (_c, a) => { rwlocks.delete(a.p()); return 0; },
     pthread_rwlock_rdlock: (cpu, a) => rwAcquire(cpu, rwOf(a.p()), false),
@@ -261,10 +261,9 @@ export function pthreadInit(): void {
     pthread_mutexattr_gettype: (_c, a) => { a.p(); mem.st32(a.p(), 0); return 0; },
     pthread_condattr_getclock: (_c, a) => { a.p(); mem.st32(a.p(), 0); return 0; },
     pthread_cond_clockwait: (cpu, a) => { const c = a.p(), m = a.p(), clk = a.i(), ts = a.p(); return condWait(cpu, c, m, absMs(ts) - (clk === 0 ? Date.now() : performance.now() + 1000)); },
-    pthread_mutex_clocklock: (cpu, a) => lock(cpu, mutexOf(a.p())),
+    pthread_mutex_clocklock: (cpu, a) => lock(cpu, a.p()),
     pthread_key_delete: (_c, a) => { keyDtors.delete(a.i()); return 0; },
-    pthread_getspecific: (cpu, a) => cpu.tls.get(a.i()) ?? 0n,
-    pthread_setspecific: (cpu, a) => { const k = a.i(), v = a.va(); cpu.tls.set(k, v); return 0; },
+    pthread_getspecific: SERVED, pthread_setspecific: SERVED,
     // the control word: 0 untouched, 1 running (callers wait), 2 done — no caller returns before the initializer has
     pthread_once: async (cpu, a) => {
       const once = a.p(), fn = a.p();

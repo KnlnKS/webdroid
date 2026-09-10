@@ -23,7 +23,7 @@ See “One build, or none” and “The delegates” in the implementation histo
 | Delegates | `src/android/delegates.ts` routes framework natives into the same graphics/resource/text implementations used by TS. `fwtest` reports current coverage and real-bytecode evidence. |
 | Regression evidence | A local `bun run e2e` writes current scores and rendered-step counts to `tests/e2e/report/report.json` and per-step diagnostics and costs to `tests/e2e/actual/`. The pre-cleanup run had known Mihon scheduler/Compose failures and variable live Harmonic content; compare against the starting commit before attributing a regression. |
 | Corpus | `bun run corpus` reports current breadth. Focused Among Us testing reaches Practice; a boot-only corpus pass does not establish gameplay. |
-| Native tier | ARM32 **and AArch64**. Among Us executes Unity/IL2CPP through a shared cold interpreter and bounded hot-block compiler. Practice on The Skeld renders and accepts joystick movement, with empty reached missing-API telemetry. Controlled gameplay remains roughly 4–9 fps; online play is unverified. See "Among Us: Practice and code-cache pressure" in the implementation history. |
+| Native tier | ARM32 **and AArch64**, in the wasm core: a Zig interpreter with a per-page decode cache and a JIT that compiles hot regions to wasm functions, which hand off to each other by tail call, keep flags as pending operands until a successor reads them, translate plane addresses inline, and inline scalar FP and the hot vector ops. Among Us executes Unity/IL2CPP through it at 540–550M instr/s of core time at The Skeld in headless Chromium (455M for the previous core in the same scene), swapping 31 frames a second at ~12M guest instructions per frame; online play is unverified. See "The wasm core, third pass" in the implementation history. |
 | Flutter | Lichess executes its ARM64 Flutter/Dart code, renders its UI, connects over verified native TLS, and accepts board and text input. A local game completed ten moves and ten replies from its bundled Fairy-Stockfish engine after allocator reuse fixes. See "Lichess: native heap reuse during computer games" in the implementation history; this does not establish every feature or account flow. |
 | Mihon | Keiyoushi repository and MangaDex installation persist. The visible catalog, search, saved library, chapter reader, page turns, and resume work. The user selected Downloads/untitled folder through Chrome's native picker, and Mihon's storage location reflects that selection; see the implementation history for reached APIs and native image-decoding evidence. |
 | Reddit | Stock Chrome arm64 runs shared cold DEX handlers with a 32 Mi-code-unit admission cap for specialized async methods; synchronous bodies/shared handlers remain outside that cap. Controlled text-post content appeared in 3.70 s first and 2.19–2.31 s warm, not a controlled comparison with the older 9.5 s result. Feed, drawer, post/comments, profile/settings, Inbox, Saved posts/comments and History have rendered. Create community selection and required-body validation were checked with a discarded draft. Fresh captures show changing 720×1280 AVC video from a 68 s post; Unmuted AAC 48 kHz stereo playback has nonzero scheduled PCM and an advancing AudioTrack/AudioContext clock; subjective headless audibility is not claimed. The startup Intent.getComponent exception is fixed. The authenticated smoke passes all 10 steps; final full E2E and a starting-commit comparison are complete, with existing FitNotes/Lichess failures retained. This is not all-feature coverage. See [the implementation history](docs/implementation-history.md#reddit-shared-cold-bytecode-execution). |
@@ -194,8 +194,9 @@ it has been tried three ways and measured.
 ## 5. Native tier — remaining work
 
 - A64 SIMD/FP, JNI, Bionic host services, EGL/GLES3, and NDK libraries are implemented far
-  enough for Among Us Practice on The Skeld. Cold instruction families share handlers; hot
-  blocks compile after the configured threshold and are bounded by the compiled-code cache.
+  enough for Among Us Practice on The Skeld. The core interprets A64 from a decode cache and
+  ARM32 directly; hot regions compile to wasm; when the table fills, the oldest batches are
+  evicted and a region still hot re-heats and comes back.
 - Practice renders and accepts movement, but gameplay is not yet smooth. Profile real play
   before changing CPU, graphics, or cache policy; preserve the hardware-oracle and cache tests.
 - Local UDP supports process-local sessions. External UDP has no relay. Native TLS uses a
@@ -206,8 +207,13 @@ it has been tried three ways and measured.
 - Thumb-2, symbol-version/ifunc support, and additional relocation formats are separate work;
   inspect actual library requirements before extending them. Unsupported relocations must
   continue to fail explicitly.
-- A different execution backend remains a measured architectural decision, not cleanup work.
-  Preserve split low/high registers, lazy compilation, shared cold handlers, and invalidation.
+- The execution backend is the wasm core: see "The wasm core", "The wasm core, second pass",
+  "The wasm core, janitor pass" and "The wasm core, third pass" in the implementation history
+  for what was measured. The Skeld is core-bound at ~12M guest instructions per frame: the
+  next win is per-instruction cost in regions (entry and exit spills, `countIc`, the store
+  check), or serving `clock_gettime`, `modff` and `ldexp`, the remaining non-GL host calls.
+  `?jit=0`, `__wdJit`, `jit_fallback`, `perf.nativeHostMs` and `wd.native.hostCalls()` are the
+  instruments left; inline or serve in the core only what a profile of real play names.
 
 ## 6. Corpus and coverage
 

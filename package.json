@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun run server.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "bun scripts/build-core.ts && tsc --noEmit -p tsconfig.json",
     "test": "bun test src tests",
     "inspect": "bun scripts/inspect.ts",
     "smoke": "bun scripts/smoke.ts",
@@ -27,7 +27,8 @@
     "e2e:record": "bun tests/e2e/capture-emulator.ts",
     "e2e:diff": "bun tests/e2e/score.ts",
     "e2e": "bun tests/e2e/run.ts",
-    "textcmp": "bun scripts/textcmp.ts"
+    "textcmp": "bun scripts/textcmp.ts",
+    "build:core": "bun scripts/build-core.ts"
   },
   "dependencies": {
     "fflate": "^0.8.2",

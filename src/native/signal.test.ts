@@ -1,6 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { JThread } from "../jvm/natives/jlang";
-import { Cpu, setA64, sigHandlers } from "./cpu";
+import { Cpu, setA64, sigHandlers, SliceExit } from "./cpu";
+import { RET_SENTINEL } from "./abi";
 import { defineHost, lookupHost } from "./host";
 import { libcInit, LAYOUT } from "./libc";
 import { mem } from "./mem";
@@ -95,19 +96,25 @@ test("pthread creation inherits the parent's signal mask", async () => {
   } finally { mem.free(p); }
 });
 
+// the syscall leaves the core as its own exit, so the instruction itself is what drives it
+const SVC = { true: 0xd4000001, false: 0xef000000 } as const;
 for (const a64 of [false, true]) test(`${a64 ? "svc" : "swi"} rt_sigprocmask uses kernel mask size and negative errors`, () => {
   setA64(a64);
   const cpu = new Cpu(new JThread(), "raw signal syscall"), p = mem.malloc(16);
+  const code = mem.reserve(0x1000, 0x1000);
+  mem.u32[code >>> 2] = SVC[`${a64}`];
+  mem.u32[(code >>> 2) + 1] = a64 ? 0xd65f03c0 : 0xe12fff1e;   // ret / bx lr
+  const syscall = () => { cpu.ensureStack(); cpu.w[2 * cpu.spx] = cpu.stackTop; cpu.w[2 * cpu.lrx] = RET_SENTINEL; cpu.setPc(code); while (cpu.runSlice(64) !== SliceExit.Exit) { /* spin */ } };
   try {
     mem.st64(p, 1n << 40n);
-    cpu.r[0] = 2; cpu.r[1] = p; cpu.r[2] = p + 8; cpu.r[3] = 8;
-    cpu.r[a64 ? 8 : 7] = a64 ? 135 : 175;
-    if (a64) cpu.svc(); else cpu.swi();
-    expect(cpu.r[0]).toBe(0);
+    cpu.w[0] = 2; cpu.w[2] = p; cpu.w[4] = p + 8; cpu.w[6] = 8;
+    cpu.w[2 * (a64 ? 8 : 7)] = a64 ? 135 : 175;
+    syscall();
+    expect(cpu.w[0]).toBe(0);
     expect(cpu.signalMask).toBe(1n << 40n);
     expect(mem.ld64(p + 8)).toBe(0n);
-    cpu.r[0] = 2; cpu.r[3] = 4;
-    if (a64) cpu.svc(); else cpu.swi();
-    expect(cpu.r[0]).toBe(-22);
+    cpu.w[0] = 2; cpu.w[6] = 4;
+    syscall();
+    expect(cpu.w[0]).toBe(-22);
   } finally { mem.free(p); }
 });
