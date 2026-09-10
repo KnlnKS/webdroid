@@ -17,12 +17,38 @@ export class JLocation extends JObj {
     this.extras = source.extras ? await newObj("android/os/Bundle", "(Landroid/os/Bundle;)V", source.extras) as JBundle : null;
   }
 }
-// AOSP iterates Vincenty on WGS84; haversine is within 0.5% and enough for an app's proximity checks.
-export function distanceM(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const r = Math.PI / 180, dLat = (lat2 - lat1) * r, dLon = (lon2 - lon1) * r;
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(dLon / 2) ** 2;
-  return 2 * 6371000 * Math.asin(Math.sqrt(Math.min(1, h)));
+const geodesicCache = { lat1: NaN, lon1: NaN, lat2: NaN, lon2: NaN, distance: 0, initial: 0, final: 0 };
+function geodesic(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const out = geodesicCache;
+  if (lat1 === out.lat1 && lon1 === out.lon1 && lat2 === out.lat2 && lon2 === out.lon2) return out;
+  const radians = Math.PI / 180, major = 6378137, minor = 6356752.3142, flattening = (major - minor) / major;
+  const reduced1 = Math.atan((1 - flattening) * Math.tan(lat1 * radians)), reduced2 = Math.atan((1 - flattening) * Math.tan(lat2 * radians));
+  const c1 = Math.cos(reduced1), c2 = Math.cos(reduced2), s1 = Math.sin(reduced1), s2 = Math.sin(reduced2);
+  const longitude = lon2 * radians - lon1 * radians;
+  let lambda = longitude, sinLambda = 0, cosLambda = 0, sigma = 0, correction = 0, scale = 0;
+  for (let iteration = 0; iteration < 20; iteration++) {
+    const previous = lambda;
+    sinLambda = Math.sin(lambda); cosLambda = Math.cos(lambda);
+    const x = c2 * sinLambda, y = c1 * s2 - s1 * c2 * cosLambda;
+    const sinSigma = Math.sqrt(x * x + y * y), cosSigma = s1 * s2 + c1 * c2 * cosLambda;
+    sigma = Math.atan2(sinSigma, cosSigma);
+    const sinAlpha = sinSigma === 0 ? 0 : c1 * c2 * sinLambda / sinSigma, cosAlpha2 = 1 - sinAlpha * sinAlpha;
+    const midpoint = cosAlpha2 === 0 ? 0 : cosSigma - 2 * s1 * s2 / cosAlpha2, midpoint2 = midpoint * midpoint;
+    const u = cosAlpha2 * ((major * major - minor * minor) / (minor * minor));
+    scale = 1 + u / 16384 * (4096 + u * (-768 + u * (320 - 175 * u)));
+    const b = u / 1024 * (256 + u * (-128 + u * (74 - 47 * u)));
+    const c = flattening / 16 * cosAlpha2 * (4 + flattening * (4 - 3 * cosAlpha2));
+    correction = b * sinSigma * (midpoint + b / 4 * (cosSigma * (-1 + 2 * midpoint2) - b / 6 * midpoint * (-3 + 4 * sinSigma * sinSigma) * (-3 + 4 * midpoint2)));
+    lambda = longitude + (1 - c) * flattening * sinAlpha * (sigma + c * sinSigma * (midpoint + c * cosSigma * (-1 + 2 * midpoint2)));
+    if (Math.abs((lambda - previous) / lambda) < 1e-12) break;
+  }
+  out.lat1 = lat1; out.lon1 = lon1; out.lat2 = lat2; out.lon2 = lon2;
+  out.distance = Math.fround(minor * scale * (sigma - correction));
+  out.initial = Math.fround(Math.fround(Math.atan2(c2 * sinLambda, c1 * s2 - s1 * c2 * cosLambda)) * (180 / Math.PI));
+  out.final = Math.fround(Math.fround(Math.atan2(c1 * sinLambda, -s1 * c2 + c1 * s2 * cosLambda)) * (180 / Math.PI));
+  return out;
 }
+export function distanceM(lat1: number, lon1: number, lat2: number, lon2: number): number { return geodesic(lat1, lon1, lat2, lon2).distance; }
 const optional = [
   ["ElapsedRealtimeUncertaintyNanos", "", "D", 256], ["Altitude", "", "D", 1],
   ["Speed", "", "F", 2], ["Bearing", "", "F", 4], ["Accuracy", "", "F", 8],
@@ -59,7 +85,13 @@ const locMethods: NonNullable<NativeSpec["methods"]> = {
   "setLongitude(D)V": function (this: JLocation, v: number) { this.lon = v; },
   "getTime()J": function (this: JLocation) { return this.time; },
   "setTime(J)V": function (this: JLocation, t: bigint) { this.time = t; },
-  "distanceTo(Landroid/location/Location;)F": function (this: JLocation, o: JLocation) { return Math.fround(distanceM(this.lat, this.lon, o.lat, o.lon)); },
+  "distanceTo(Landroid/location/Location;)F": function (this: JLocation, o: JLocation) { return distanceM(this.lat, this.lon, o.lat, o.lon); },
+  "bearingTo(Landroid/location/Location;)F": function (this: JLocation, o: JLocation) { return geodesic(this.lat, this.lon, o.lat, o.lon).initial; },
+  "static distanceBetween(DDDD[F)V": (lat1: number, lon1: number, lat2: number, lon2: number, results: Float32Array | null) => {
+    if (!results?.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "results must have length >= 1");
+    const value = geodesic(lat1, lon1, lat2, lon2); results[0] = value.distance;
+    if (results.length > 1) results[1] = value.initial; if (results.length > 2) results[2] = value.final;
+  },
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JLocation, p: JParcel) {
     await vcall(p, "writeString8", "(Ljava/lang/String;)V", this.provider);
