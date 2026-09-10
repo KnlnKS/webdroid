@@ -9,16 +9,27 @@ import { PROCESS_UID, type JBundle } from "./os";
 import { packages } from "./packages";
 import { AccountStore, type StoredAccount } from "../shell/accounts";
 import { resString } from "./res";
+import { JParcel, parcelCreator } from "./parcel";
 
-class JAccount extends JObj { name = ""; type = ""; }
+class JAccount extends JObj { name = ""; type = ""; accessId: string | null = null; }
+function initAccount(this: JAccount, name: string | null, type: string | null, accessId: string | null = null) {
+  if (!name || !type) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Account name and type must not be empty");
+  this.name = name; this.type = type; this.accessId = accessId;
+}
 
 rt.register({
   name: "android/accounts/Account", ctor: JAccount, ifaces: ["android/os/Parcelable"],
   fields: { name: "name", type: "type" },
+  statics: { get CREATOR() { return parcelCreator("android/accounts/Account", async p => {
+    const name = await vcall(p, "readString", "()Ljava/lang/String;"), type = await vcall(p, "readString", "()Ljava/lang/String;");
+    const account = new JAccount(); initAccount.call(account, name, type, await vcall(p, "readString", "()Ljava/lang/String;")); return account;
+  }); } },
   methods: {
-    "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JAccount, name: string | null, type: string | null) {
-      if (!name || !type) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Account name and type must not be empty");
-      this.name = name; this.type = type;
+    "<init>(Ljava/lang/String;Ljava/lang/String;)V": initAccount,
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": initAccount,
+    "getAccessId()Ljava/lang/String;": function (this: JAccount) { return this.accessId; },
+    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JAccount, p: JParcel) {
+      for (const value of [this.name, this.type, this.accessId]) await vcall(p, "writeString", "(Ljava/lang/String;)V", value);
     },
     "equals(Ljava/lang/Object;)Z": function (this: JAccount, other: unknown) {
       return other instanceof JAccount && this.name === other.name && this.type === other.type ? 1 : 0;

@@ -56,3 +56,13 @@ test("account ownership protects credentials while explicit visibility exposes o
     for (const pkg of names) packages.delete(pkg);
   }
 });
+
+test("Account Parcel carries Android 13 identity and access ID across the IPC wire", async () => {
+  const { exportParcel, importParcel } = await import("./binder");
+  const account = await newObj("android/accounts/Account", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", "fixture", "test.account", "fixture-access");
+  const parcel = await newObj("android/os/Parcel");
+  await vcall(parcel, "writeParcelable", "(Landroid/os/Parcelable;I)V", account, 0);
+  const copy = await vcall(importParcel(exportParcel(parcel)), "readParcelable", "(Ljava/lang/ClassLoader;)Landroid/os/Parcelable;", null);
+  expect(await vcall(copy, "equals", "(Ljava/lang/Object;)Z", account)).toBe(1);
+  expect(await vcall(copy, "getAccessId", "()Ljava/lang/String;")).toBe("fixture-access");
+});
