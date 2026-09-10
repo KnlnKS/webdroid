@@ -27,10 +27,10 @@ WEBDROID_URL=http://localhost:4090 bun run corpus
 bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
 ```
 
-- Typecheck must pass with `noUnusedLocals`. Unit tests cover DEX/resources, the ARM32/A64
-  tier-parity kits and hardware-oracle SIMD, decode-cache invalidation, JNI, networking,
-  storage, and the E2E comparison machinery. Use the test runner's count rather than
-  maintaining a duplicate count here.
+- Typecheck must pass with `noUnusedLocals`. The unit tests are the wasm core's proof and
+  nothing else: the ARM32/A64 tier-parity kits, the hardware-oracle SIMD fixture, and the
+  decode-cache invalidation test (`bun run test` is `bun test src/native`). Everything else
+  is proven by the e2e flows; do not add unit tests.
 - Smoke compilation must report zero method failures for each APK affected by a change.
 - `fwtest [prefix ...]` measures delegate coverage with real framework bytecode.
 - E2E's four scored flows are FitNotes, Mihon onboarding, Mihon app, and Harmonic.
@@ -69,11 +69,18 @@ An alternate `WEBDROID_SCREEN=1080x2424@480` runs as smoke when it differs from 
   `core.wasm.ts`, which is not committed: `bunfig.toml` preloads `scripts/build-core.ts`, so any
   bun entry point rebuilds it when a Zig source is newer; tests run the ReleaseSafe build). The
   core owns the guest memory, so a guest address is a linear-memory offset; the register file
-  is a struct in it (`cpu.ts` keeps the async driver). Blocks are interpreted from a per-page
-  decode cache until hot, then a region compiles to a wasm function (`jit.zig`, `jit32.zig`)
+  is a struct in it (`cpu.ts` keeps the async driver). A64 blocks are interpreted from a
+  per-page decode cache (ARM32 decodes directly and its pages hold only the coverage, heat
+  and slot maps) until hot, then a region compiles to a wasm function (`jit.zig`, `jit32.zig`)
   that the host links into the core's table. What the emitter does not inline calls the
-  interpreter for that word: semantics live once, in `a64.zig`/`simd.zig`/`arm.zig`. Hot libc
-  is served in the core (`libc.zig`). One process uses one ABI. The test kits run every
+  interpreter for that word: semantics live once, in `a64.zig`/`simd.zig`/`arm.zig`. In a
+  region a flag-setting instruction leaves its operands pending; a condition on them is one
+  wasm comparison and the flags are materialized only where a successor block or an exit
+  reads them (a backward liveness over the region's edges). A plane address translates
+  inline from `mem.zig`'s tables. Hot libc, uncontended mutexes (the guest word, bionic's
+  layout) and the float transcendentals are served in the core (`libc.zig`, ids in
+  `CORE_LIBC`); a served name has no host body, and the tracer reaches the one body through
+  `libc_call`. One process uses one ABI. The test kits run every
   program in both tiers and demand the same register file. A miscompile in an app is
   bisected, not read: `?jit=0` runs the interpreter alone, `__wdJit` (ranges of entry pcs)
   installs only some regions, `core.jit_fallback(lo, hi)` hands a pc range inside a region
@@ -104,8 +111,9 @@ An alternate `WEBDROID_SCREEN=1080x2424@480` runs as smoke when it differs from 
 - Dispatch Back to the topmost window first. Keep dialogs bounded before adding title chrome.
 - Text measurements use the shared measurement/metric caches. Draw failures are reported and
   must not permanently stop the frame loop.
-- A store into an executed word drops the page's decoded ops and region slots; a region is
-  installed only against the page epoch it was emitted for. Keep signals, host callbacks, and
+- A store into an executed word drops the page's decoded ops and region slots (the ARM32
+  interpreter and scanners mark executed words too); a region is installed only against the
+  page epoch it was emitted for. Keep signals, host callbacks, and
   guest frames ordered. A host call is always an exit from `run_slice`, never a call-out from
   a wasm frame.
 - Do not fabricate account, network, service, or API success. Unknown services return null;

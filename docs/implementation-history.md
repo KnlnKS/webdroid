@@ -2283,3 +2283,54 @@ page epoch it was emitted for. Decode blocks come from the image region and are 
 reuse because the guest can write through a freed arena pointer and a resized memory hands the
 same addresses back. `emitVector` emits nothing before returning false. A V-file write below Q
 zeroes the top of the register.
+
+## The wasm core, third pass
+
+Among Us at The Skeld (Practice, idle at spawn, headless Chromium, two 20 s windows each)
+went from 455M to 550M guest instructions per second of core time, with 40% fewer host
+calls; the pre-pass core was measured in the same scene from a second worktree, because the
+593M/s of the second pass came from a different scene and browser. The game still swaps 31
+frames a second: a frame is ~12M guest instructions, so at 550M/s it misses the 16.7 ms
+vsync and `eglSwapBuffers` waits for the next one. What each item was worth, and what
+the measurements overturned.
+
+**Flags as pending operands.** A flag-setting instruction leaves its operands and result in
+six dedicated locals instead of computing N, Z, C and V; a condition on that pending
+compare is one wasm comparison (`cmp; b.lt` is `a < b signed`); the flags are materialized
+only where a block's successor reads them, by a backward liveness over the region's
+`taken`/`fall` edges with every exit reading everything, and a conditional branch settles
+each edge inside its own arm. Partial writers (A32 logic and shifts keep V, `mul` keeps C
+and V, Thumb `movs` keeps C) settle what they preserve before staging, which is where the
+first attempt miscomputed: staging the new operands clobbered the locals the old flags
+were still to be read from. Bun's optimizing tier already deletes dead flag work, so
+`wd.native.bench()` there was flat; Chromium's baseline tier is where the cost lived:
+thumb sum 6.7G → 14.3G, a32 sum 7.3G → 13.3G, a32 cmp 5.9G → 12.5G, a64 sum 4.0G → 5.7G,
+a64 cmp 5.0G → 7.1G instr/s (the bench gained these loops). Whole-flow doodlejump core
+time fell 5% only: its 10.9G instructions are the startup texture decode and its gameplay
+is GL-call bound. On IL2CPP code the gain was ~3.5%: most blocks end in `bl` or `ret`,
+where the flags are architecturally live and must be spilled anyway.
+
+**The plane path.** A counting wrapper on the `tx` import showed 670M plane translations in
+one session at The Skeld: the heap lives in planes, and each translation was a
+cross-instance call. The region now reads `mem.zig`'s `P`/`L`/`S` tables inline and only
+the plane path pays the null check: 470M → 550M instr/s, the largest single item.
+
+**Served in the core.** Uncontended `pthread_mutex_lock/unlock/trylock` use the guest word
+in bionic's layout (state, count, type, owner), with contention left to the host, which
+parks waiters and hands the word over; `sin/cos/tan/exp/log/sqrt/pow/atan2/fmod/sincos`
+and their float forms run through compiler-rt. Host calls: doodlejump 299k → 176k over its
+flow, lichess 83k → 14k, The Skeld 1.73M → 1.03M per 20 s. What remains at The Skeld is
+GL (`glBindBuffer` 130k per 20 s, `glVertexAttribPointer` 80k), then `clock_gettime`,
+`syscall`, `modff` and `ldexp` at 45–76k each.
+
+**Negative result.** Dropping the A64 decoded-op cache (decode directly, as ARM32 does)
+cost the interpreter 224M → 139M instr/s on the byte-copy loop, so the cache stays for
+A64; ARM32 pages, which never read it, take 12 KB blocks instead of 32 KB, and the ARM32
+interpreter and scanners now mark the words they execute so a store into ARM32 code drops
+the page as it does for A64 (before, only `cacheflush` did).
+
+**Host path.** `jit_pending` was polled after every synchronous host call and two clock
+reads bracketed every host body; both left the host-call path. The TS bodies of every
+core-served call, and the unit tests that were not the core's proof (64 files, 4,900
+lines), went. The core is 7,677 lines of Zig against 7,252; the repository's TypeScript
+is 4,868 lines smaller.
