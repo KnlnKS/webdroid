@@ -31,6 +31,7 @@ import "./android/glview";
 import "./android/os";
 import "./android/util";
 import "./android/accounts";
+import "./android/authenticator";
 import "./android/parcel";
 import "./android/binder";
 import "./android/intentservice";
