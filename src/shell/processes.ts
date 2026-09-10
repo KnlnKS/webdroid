@@ -144,6 +144,10 @@ export class ProcessBroker {
       frame.hidden = true;
       frame.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:16px;z-index:1";
       frame.src = "/process?pid=" + entry.pid + `&screen=${device.width}x${device.height}@${device.densityDpi}`;
+      const params = new URLSearchParams(location.search);
+      for (const key of ["bytecode", "natcheck", "jit"]) {
+        const value = params.get(key); if (value !== null) frame.src += "&" + key + "=" + encodeURIComponent(value);
+      }
       frame.addEventListener("error", () => this.fail(entry.pid, "Process frame failed"));
       (document.getElementById("screen")?.parentElement ?? document.body).appendChild(frame);
     }
