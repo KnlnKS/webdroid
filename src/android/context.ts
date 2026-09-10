@@ -2,7 +2,7 @@ import { type JFile, vfs, mkFile } from "../jvm/natives/jio";
 import { JObj, rt, type NativeSpec, callSelf, maySuspend } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
 import { resString, themeOf, JTheme, rvColor, obtainStyled, type JAttrSet, JTypedArray } from "./res";
-import { newObj, javaFormat } from "../jvm/natives/jlang";
+import { newObj, javaFormat, vcall } from "../jvm/natives/jlang";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { getInflater } from "./inflate";
 import { getAppInfo, getPM } from "./pm";
@@ -16,12 +16,17 @@ import { type JIntent, launchIntent } from "./intent";
 import { svcStart, svcStop } from "./runningservices";
 import { TV } from "./axml";
 import { registerReceiver, unregisterReceiver, sendBroadcast } from "./broadcast";
+import { packages } from "./packages";
+import type { JClassLoader } from "../jvm/natives/jlang";
+import { mkJResources } from "./resnative";
 
 const privDir = (p: string): JFile => { vfs.mkdir(p); return mkFile(p); };
 
 export class JContext extends JObj {
   declare $host: AppHost;
+  packageLoader: JClassLoader | null = null;
 }
+const packageContexts = new Map<string, Promise<JContext>>();
 
 // system service singletons (created lazily per name)
 export const services = new Map<string, unknown>();
@@ -118,17 +123,29 @@ export const contextMethods: NativeSpec["methods"] = {
   "getPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
   "getAttributionTag()Ljava/lang/String;": () => null,
   "getAttributionSource()Landroid/content/AttributionSource;": maySuspend(function (this: JContext) { return attribution ??= newObj("android/content/AttributionSource", null); }),
-  // only this package is installed, so its own name is the one context that exists; AOSP
-  // throws NameNotFoundException for anything else (callers handle it — it is how they
-  // discover an optional dependency is absent)
-  // The framework package is loaded too, and one Resources answers for both, so a context on
-  // "android" is this one. Material asks for it to read the platform palette.
-  "createPackageContext(Ljava/lang/String;I)Landroid/content/Context;": function (this: JContext, pkg: string) {
-    if (pkg !== this.$host.pkg && pkg !== this.$host.res.tbl(0x01000000)?.pkgName) {
-      throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
+  "createPackageContext(Ljava/lang/String;I)Landroid/content/Context;": maySuspend(function (this: JContext, pkg: string, flags: number) {
+    if (pkg === this.$host.pkg || pkg === this.$host.res.tbl(0x01000000)?.pkgName) return this;
+    const record = packages.get(pkg);
+    if (!record) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
+    const key = pkg + ":" + (flags & 1);
+    let ready = packageContexts.get(key);
+    if (!ready) {
+      const caller = this.$host;
+      ready = (async () => {
+        const info = await vcall(getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 128);
+        const context = new JContext(), theme = new JTheme();
+        theme.res = record.res;
+        if (info.theme) await theme.apply(info.theme);
+        context.$host = { ...caller, pkg, res: record.res, zip: record.res.zip,
+          jresources: mkJResources(record.res, false), theme, themeResId: info.theme, iconRes: info.icon, splits: [] };
+        if (flags & 1) context.packageLoader = await newObj("webdroid/PackageClassLoader", "(Ljava/lang/String;)V", record.path);
+        return context;
+      })();
+      packageContexts.set(key, ready);
+      void ready.catch(() => packageContexts.delete(key));
     }
-    return this;
-  },
+    return ready;
+  }),
   "getOpPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
   "getApplicationContext()Landroid/content/Context;": function (this: JContext) { return this.$host.application; },
   // API 31. Everything here draws into the one window, but the application context is not a
@@ -138,7 +155,9 @@ export const contextMethods: NativeSpec["methods"] = {
     if (this === this.$host.application) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Context is not associated with a display");
     return display();
   },
-  "getApplicationInfo()Landroid/content/pm/ApplicationInfo;": function (this: JContext) { return getAppInfo(this.$host); },
+  "getApplicationInfo()Landroid/content/pm/ApplicationInfo;": maySuspend(function (this: JContext) {
+    return this.$host === appHost ? getAppInfo(this.$host) : vcall(getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", this.$host.pkg, 128);
+  }),
   "getPackageManager()Landroid/content/pm/PackageManager;": function () { return getPM(); },
   "getContentResolver()Landroid/content/ContentResolver;": function () { return contentResolver(); },
   "getMainLooper()Landroid/os/Looper;": () => mainLooper,
@@ -171,7 +190,7 @@ export const contextMethods: NativeSpec["methods"] = {
     a.host = this.$host.res;
     return a;
   },
-  "getClassLoader()Ljava/lang/ClassLoader;": bootLoader,
+  "getClassLoader()Ljava/lang/ClassLoader;": function (this: JContext) { return this.packageLoader ?? bootLoader(); },
   "getPackageResourcePath()Ljava/lang/String;": function (this: JContext) { return getAppInfo(this.$host).sourceDir; },
   "getPackageCodePath()Ljava/lang/String;": function (this: JContext) { return getAppInfo(this.$host).sourceDir; },
   // AOSP's ensurePrivateDirExists: the directory exists once asked for (native code stat()s it)

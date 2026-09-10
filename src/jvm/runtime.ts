@@ -151,6 +151,8 @@ export class Runtime {
 
   hotSourceBytes = 0;
   parent: Runtime | null = null;
+  platformClasses = new Set<string>();
+  platformParent = false;
   classLoader: unknown = null;
   // Share host services and thread hooks; loader definitions and compiled call sites stay private.
   fork(): Runtime {
@@ -169,12 +171,15 @@ export class Runtime {
     return child;
   }
 
-  loadDex(dex: DexFile) {
+  loadDex(dex: DexFile, platform = false) {
     this.refCache.clear();
     this.dexes.push(dex);
     for (let i = 0; i < dex.classDefCount; i++) {
       const name = descToName(dex.type(dex.classDef2Type(i)));
-      if (!this.dexIndex.has(name)) this.dexIndex.set(name, [dex, i]);
+      if (!this.dexIndex.has(name)) {
+        this.dexIndex.set(name, [dex, i]);
+        if (platform) this.platformClasses.add(name);
+      }
     }
   }
 
@@ -377,7 +382,7 @@ export class Runtime {
   link(name: string): ClassInfo {
     let info = this.classes.get(name);
     if (info) return info;
-    if (this.parent && (this.natives.has(name) || !this.dexIndex.has(name))) return this.parent.link(name);
+    if (this.parent && (this.natives.has(name) || !this.dexIndex.has(name) && (!this.platformParent || this.platformClasses.has(name)))) return this.parent.link(name);
     if (name[0] === "[") return this.linkArray(name);
     info = new ClassInfo(name, this);
     this.classes.set(name, info);
