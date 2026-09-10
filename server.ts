@@ -79,7 +79,7 @@ const server: Bun.Server<TcpData> = Bun.serve({
           // Served from our origin so the shell can script it; <base> keeps its subresources and
           // links resolving against the real one. text() re-encodes as UTF-8, so say so.
           h.set("content-type", "text/html; charset=utf-8");
-          return new Response(inHead(await upstream.text(), `<base href="${attr(upstream.url)}">` + WEB_INJECT), { status: upstream.status, headers: h });
+          return new Response(inHead(await upstream.text(), `<meta name="wd-proxy-url" content="${attr(upstream.url)}"><base href="${attr(upstream.url)}">` + WEB_INJECT), { status: upstream.status, headers: h });
         }
         return new Response(upstream.body, { status: upstream.status, headers: h });
       } catch (e) {

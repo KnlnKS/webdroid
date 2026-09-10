@@ -209,10 +209,13 @@ class JWebView extends JViewGroup {
     this.go(this.hist[i], false);
   }
   private onLoad() {
-    const g = this.gen, url = this.url ?? "", cur = this.hist[this.idx];
+    const g = this.gen, cur = this.hist[this.idx];
     const doc = this.el!.contentDocument;
     // the iframe's initial about:blank fires load too; it is nobody's navigation
     if (doc?.URL === "about:blank" && cur?.src !== "about:blank") return;
+    const redirected = doc?.querySelector('meta[name="wd-proxy-url"]')?.getAttribute("content");
+    if (redirected) { this.url = redirected; if (cur) cur.url = redirected; }
+    const url = this.url ?? "";
     const err = doc?.querySelector('meta[name="wd-proxy-error"]')?.getAttribute("content");
     if (doc && !err) this.hookLinks(doc);
     this.loaded = !err; this.progress = 100; this.title = doc?.title || url;
