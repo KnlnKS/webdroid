@@ -90,3 +90,30 @@ test("invalid JNI handles and hardware pixels fail without overwriting outputs",
   expect(await cpu.call(host("unlockPixels"), [env, ref])).toBe(-2);
   expect(mem.stats().used).toBe(allocated);
 });
+
+
+test("bitmap buffers share native pixel representation and advance typed slice positions", async () => {
+  const { b } = await createBitmap();
+  b.pixels().set([120, 60, 30, 128, 9, 8, 7, 255]);
+  const byteClass = rt.link("java/nio/ByteBuffer").ctor;
+  for (const direct of [false, true]) {
+    const buffer = await vcall(byteClass, direct ? "allocateDirect" : "allocate", "(I)Ljava/nio/ByteBuffer;", 20);
+    await vcall(buffer, "position", "(I)Ljava/nio/Buffer;", 4);
+    const slice = await vcall(buffer, "slice", "()Ljava/nio/ByteBuffer;");
+    await vcall(slice, "position", "(I)Ljava/nio/Buffer;", 2);
+    await vcall(b, "copyPixelsToBuffer", "(Ljava/nio/Buffer;)V", slice);
+    expect(slice.pos).toBe(10); expect(buffer.pos).toBe(4);
+    expect([...new Uint8Array(slice.dv.buffer, slice.dv.byteOffset + 2, 8)]).toEqual([60, 30, 15, 128, 9, 8, 7, 255]);
+    const typed = await vcall(buffer, "asIntBuffer", "()Ljava/nio/IntBuffer;");
+    await vcall(b, "copyPixelsToBuffer", "(Ljava/nio/Buffer;)V", typed);
+    expect(typed.pos).toBe(2);
+    typed.pos = 0;
+    const generation = b.genId;
+    await vcall(b, "copyPixelsFromBuffer", "(Ljava/nio/Buffer;)V", typed);
+    expect(typed.pos).toBe(2); expect(b.genId).toBe(generation + 1);
+    expect([...b.pixels()]).toEqual([120, 60, 30, 128, 9, 8, 7, 255]);
+    typed.pos = typed.lim;
+    await expect(vcall(b, "copyPixelsToBuffer", "(Ljava/nio/Buffer;)V", typed)).rejects.toMatchObject({ msg: "Buffer not large enough for pixels" });
+    expect(typed.pos).toBe(typed.lim);
+  }
+});

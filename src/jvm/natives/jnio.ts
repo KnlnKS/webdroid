@@ -134,12 +134,12 @@ rt.register({
     "getFloat(I)F": function (this: JByteBuffer, i: number) { return this.dv.getFloat32(i, this.little); },
     "putDouble(D)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(8); this.dv.setFloat64(this.pos, v, this.little); this.pos += 8; return this; },
     "getDouble()D": function (this: JByteBuffer) { this.clampGet(8); const v = this.dv.getFloat64(this.pos, this.little); this.pos += 8; return v; },
-    "asFloatBuffer()Ljava/nio/FloatBuffer;": function (this: JByteBuffer) { return viewBuffer(this, JFloatBuffer, 2); },
-    "asIntBuffer()Ljava/nio/IntBuffer;": function (this: JByteBuffer) { return viewBuffer(this, JIntBuffer, 2); },
-    "asShortBuffer()Ljava/nio/ShortBuffer;": function (this: JByteBuffer) { return viewBuffer(this, JShortBuffer, 1); },
-    "asCharBuffer()Ljava/nio/CharBuffer;": function (this: JByteBuffer) { return viewBuffer(this, JCharBuffer, 1); },
-    "asDoubleBuffer()Ljava/nio/DoubleBuffer;": function (this: JByteBuffer) { return viewBuffer(this, JDoubleBuffer, 3); },
-    "asLongBuffer()Ljava/nio/LongBuffer;": function (this: JByteBuffer) { return viewBuffer(this, JLongBuffer, 3); },
+    "asFloatBuffer()Ljava/nio/FloatBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/FloatBuffer").ctor, 2); },
+    "asIntBuffer()Ljava/nio/IntBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/IntBuffer").ctor, 2); },
+    "asShortBuffer()Ljava/nio/ShortBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/ShortBuffer").ctor, 1); },
+    "asCharBuffer()Ljava/nio/CharBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/CharBuffer").ctor, 1); },
+    "asDoubleBuffer()Ljava/nio/DoubleBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/DoubleBuffer").ctor, 3); },
+    "asLongBuffer()Ljava/nio/LongBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/LongBuffer").ctor, 3); },
     "slice()Ljava/nio/ByteBuffer;": function (this: JByteBuffer) {
       const b = new JByteBuffer();
       b.backing = this.backing; b.byteOffset = this.byteOffset + this.pos;

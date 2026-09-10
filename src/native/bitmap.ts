@@ -1,4 +1,4 @@
-import { JBitmap } from "../android/graphics";
+import { JBitmap, copyBitmapPixels } from "../android/graphics";
 import type { Cpu } from "./cpu";
 import { deref } from "./jni";
 import { hostLib, stp, type ArgReader } from "./host";
@@ -9,18 +9,6 @@ const alphaOf = (b: JBitmap) => !b.hasAlpha ? 1 : b.premultiplied ? 0 : 2;
 function bitmap(cpu: Cpu, a: ArgReader): JBitmap | null {
   const env = a.p(), b = deref(a.p(), cpu);
   return env && env === cpu.env && b instanceof JBitmap ? b : null;
-}
-
-// Canvas pixels are straight RGBA; the NDK exposes the bitmap's declared alpha representation.
-function copyPixels(src: ArrayLike<number>, dst: Uint8Array | Uint8ClampedArray, alpha: number, decode: boolean) {
-  if (alpha === 2) { dst.set(src); return; }
-  for (let i = 0; i < dst.length; i += 4) {
-    const a = alpha === 1 ? 255 : src[i + 3], scale = a === 0 ? 0 : decode ? 255 / a : a / 255;
-    dst[i] = Math.round(src[i] * scale);
-    dst[i + 1] = Math.round(src[i + 1] * scale);
-    dst[i + 2] = Math.round(src[i + 2] * scale);
-    dst[i + 3] = a;
-  }
 }
 
 export function bitmapInit(): void {
@@ -44,7 +32,7 @@ export function bitmapInit(): void {
         const pixels = b.pixels(), pointer = mem.malloc(pixels.length);
         if (!pointer) return -3;
         lock = { pointer, count: 0, alpha: alphaOf(b) };
-        copyPixels(pixels, mem.bytes(pointer, pixels.length), lock.alpha, false);
+        copyBitmapPixels(pixels, mem.bytes(pointer, pixels.length), lock.alpha, false);
         locks.set(b, lock);
       }
       lock.count++;
@@ -59,7 +47,7 @@ export function bitmapInit(): void {
       try {
         if (b.recycled) return -2;
         const pixels = b.pixels();
-        copyPixels(mem.bytes(lock.pointer, pixels.length), pixels, lock.alpha, true);
+        copyBitmapPixels(mem.bytes(lock.pointer, pixels.length), pixels, lock.alpha, true);
         b.commit(0, 0, b.w, b.h);
         return 0;
       } finally {

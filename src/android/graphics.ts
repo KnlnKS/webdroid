@@ -8,6 +8,7 @@ import { vcall, mkEnumSet, JSimpleEnum, linkInit, stringHash } from "../jvm/nati
 import { usLocale } from "../jvm/natives/jvalues";
 import { readStreamFully, vfs } from "../jvm/natives/jio";
 import { jclsNameOf } from "./apphost";
+import { JBuffer } from "../jvm/natives/jnio";
 import { JPath } from "./path";
 import { perf } from "../perf";
 import { type JRenderEffect } from "./rendereffect";
@@ -1038,6 +1039,18 @@ const putArgb = (d: RGBA, i: number, c: number) => {
   d[i] = (c >> 16) & 0xff; d[i + 1] = (c >> 8) & 0xff; d[i + 2] = c & 0xff; d[i + 3] = c >>> 24;
 };
 
+// Canvas pixels are straight RGBA; the NDK exposes the bitmap's declared alpha representation.
+export function copyBitmapPixels(src: ArrayLike<number>, dst: Uint8Array | Uint8ClampedArray, alpha: number, decode: boolean) {
+  if (alpha === 2) { dst.set(src); return; }
+  for (let i = 0; i < dst.length; i += 4) {
+    const a = alpha === 1 ? 255 : src[i + 3], scale = a === 0 ? 0 : decode ? 255 / a : a / 255;
+    dst[i] = Math.round(src[i] * scale);
+    dst[i + 1] = Math.round(src[i + 1] * scale);
+    dst[i + 2] = Math.round(src[i + 2] * scale);
+    dst[i + 3] = a;
+  }
+}
+
 export class JBitmap extends JObj {
   w = 0; h = 0;
   density = device.densityDpi;
@@ -1119,9 +1132,26 @@ export class JBitmap extends JObj {
     return b;
   }
 }
+function bitmapBuffer(bitmap: JBitmap, buffer: JBuffer, from: boolean): void {
+  if (bitmap.recycled || bitmap.config === 7) throw rt.mkThrowable("java/lang/IllegalStateException", "Bitmap pixels unavailable");
+  if (!buffer) rt.npe();
+  if (!["ByteBuffer", "ShortBuffer", "IntBuffer"].some((name) => rt.iof(buffer, "java/nio/" + name)))
+    throw rt.mkThrowable("java/lang/RuntimeException", "unsupported Buffer subclass");
+  const length = bitmap.w * bitmap.h * 4;
+  if ((buffer.lim - buffer.pos) * 2 ** buffer.elemShift < length)
+    throw rt.mkThrowable("java/lang/RuntimeException", "Buffer not large enough for pixels");
+  const view = buffer.dv, bytes = new Uint8Array(view.buffer, view.byteOffset + buffer.pos * 2 ** buffer.elemShift, length);
+  const pixels = bitmap.pixels(), alpha = !bitmap.hasAlpha ? 1 : bitmap.premultiplied ? 0 : 2;
+  if (from) { copyBitmapPixels(bytes, pixels, alpha, true); bitmap.commit(0, 0, bitmap.w, bitmap.h); }
+  else copyBitmapPixels(pixels, bytes, alpha, false);
+  buffer.pos += length >> buffer.elemShift;
+}
+
 /** Exported for the same reason canvasMethods is: AOSP's own Bitmap bytecode reaches these
  *  bodies through its native* delegates (src/android/delegates.ts), not a second copy. */
 export const bitmapMethods: NativeSpec["methods"] = {
+    "copyPixelsToBuffer(Ljava/nio/Buffer;)V": function (this: JBitmap, b: JBuffer) { bitmapBuffer(this, b, false); },
+    "copyPixelsFromBuffer(Ljava/nio/Buffer;)V": function (this: JBitmap, b: JBuffer) { bitmapBuffer(this, b, true); },
     "reconfigure(IILandroid/graphics/Bitmap$Config;)V": function (this: JBitmap, w: number, h: number) { this.reconfigure(w, h); },
     "static createBitmap(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;": JBitmap.create,
     "static createBitmap(Landroid/util/DisplayMetrics;IILandroid/graphics/Bitmap$Config;ZLandroid/graphics/ColorSpace;)Landroid/graphics/Bitmap;":
