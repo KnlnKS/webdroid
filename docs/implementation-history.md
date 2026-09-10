@@ -126,6 +126,14 @@ were restored to the completion capture after comparisons.
   reference; API 33 opaque/hierarchical part fixtures verify encoding and absolute paths.
   Uri Parcelable round-trip and invalid-type checks pass with typecheck. The oracle lives in
   /tmp/webdroid-intent-oracle; it needs app_process, since bare dalvikvm lacks Parcel JNI.
+- Intent/ComponentName Parcel support now preserves nested callback Binders, identifiers,
+  source bounds and selectors. Broker Intent payloads carry the same metadata without Java
+  objects; identifiers participate in PendingIntent/service filter identity. The device-backed
+  Intent fixture exposed Bundle length counting the magic word and an incorrect empty encoding:
+  Android 13 BaseBundle excludes magic from length and writes one zero word for an empty Bundle.
+  Those encodings are corrected. Twenty focused tests (148 assertions) and typecheck pass;
+  nonempty ClipData parcels remain explicitly unsupported. Authenticator dispatch still needs
+  implementation and live verification after these transport prerequisites.
 - The unchanged maps SDK renders real tiles/labels and reports loaded/camera-idle after panning
   (/tmp/webdroid-gms-completion-{trace,pan}.png). Full map parity remains open. On Android, missing
   libmapbox-gl.so was an installation error: unchanged ARM64 libraries needed extraction beneath

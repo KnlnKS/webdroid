@@ -12,7 +12,7 @@ export class PendingIntents {
   constructor(private dispatch: (operation: PendingOperation, fill: IntentData | null, alarmCount: number) => Promise<void>) {}
   create(operation: PendingOperation): number | null {
     const { pkg, uid, kind, code, intent } = operation, flags = operation.flags & ~0x38000000;
-    const key = JSON.stringify([pkg, uid, kind, code, flags, intent.action, intent.dataUri, intent.typeStr,
+    const key = JSON.stringify([pkg, uid, kind, code, flags, intent.action, intent.dataUri, intent.typeStr, intent.identifier,
       intent.pkg, intent.componentPkg, intent.component, [...intent.categories].sort()]);
     let id = this.keys.get(key);
     if (id !== undefined && operation.flags & 0x10000000) { this.cancel(id); id = undefined; }

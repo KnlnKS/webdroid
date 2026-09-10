@@ -46,15 +46,15 @@ function reserve(p: JParcel, n: number) {
 }
 const advance = (p: JParcel, n: number) => { const at = p.pos; p.pos += n; if (p.pos > p.size) p.size = p.pos; return at; };
 const pad4 = (n: number) => (n + 3) & ~3;
-function writeInt(p: JParcel, v: number) { reserve(p, 4); p.view.setInt32(advance(p, 4), v | 0, true); }
+export function writeInt(p: JParcel, v: number) { reserve(p, 4); p.view.setInt32(advance(p, 4), v | 0, true); }
 function writeLong(p: JParcel, v: bigint) { reserve(p, 8); p.view.setBigInt64(advance(p, 8), BigInt.asIntN(64, v), true); }
 function writeFloat(p: JParcel, v: number) { reserve(p, 4); p.view.setFloat32(advance(p, 4), v, true); }
 function writeDouble(p: JParcel, v: number) { reserve(p, 8); p.view.setFloat64(advance(p, 8), v, true); }
-function readInt(p: JParcel) { return p.pos + 4 <= p.size ? p.view.getInt32(advance(p, 4), true) : 0; }
+export function readInt(p: JParcel) { return p.pos + 4 <= p.size ? p.view.getInt32(advance(p, 4), true) : 0; }
 function readLong(p: JParcel) { return p.pos + 8 <= p.size ? p.view.getBigInt64(advance(p, 8), true) : 0n; }
 function readFloat(p: JParcel) { return p.pos + 4 <= p.size ? p.view.getFloat32(advance(p, 4), true) : 0; }
 function readDouble(p: JParcel) { return p.pos + 8 <= p.size ? p.view.getFloat64(advance(p, 8), true) : 0; }
-function writeString(p: JParcel, s: string | null) {
+export function writeString(p: JParcel, s: string | null) {
   if (s === null) return writeInt(p, -1);
   writeInt(p, s.length);
   const n = pad4((s.length + 1) * 2);
@@ -63,7 +63,7 @@ function writeString(p: JParcel, s: string | null) {
   for (let i = 0; i < s.length; i++) p.view.setUint16(at + i * 2, s.charCodeAt(i), true);
   p.buf.fill(0, at + s.length * 2, at + n);
 }
-function readString(p: JParcel): string | null {
+export function readString(p: JParcel): string | null {
   const len = readInt(p);
   if (len < 0) return null;
   const at = advance(p, pad4((len + 1) * 2));
@@ -71,7 +71,7 @@ function readString(p: JParcel): string | null {
   for (let i = 0; i < len; i++) s += String.fromCharCode(p.view.getUint16(at + i * 2, true));
   return s;
 }
-function writeString8(p: JParcel, s: string | null) {
+export function writeString8(p: JParcel, s: string | null) {
   if (s === null) return writeInt(p, -1);
   let bytes: Uint8Array;
   if (!/[\0\ud800-\udfff]/.test(s)) bytes = utf8.enc.encode(s);
@@ -92,7 +92,7 @@ function writeString8(p: JParcel, s: string | null) {
   const at = advance(p, n);
   p.buf.set(bytes, at); p.buf.fill(0, at + bytes.length, at + n);
 }
-function readString8(p: JParcel): string | null {
+export function readString8(p: JParcel): string | null {
   const len = readInt(p);
   if (len < 0) return null;
   const at = advance(p, pad4(len + 1));
@@ -158,17 +158,19 @@ async function readParcelable(p: JParcel, loader: unknown) {
 }
 async function writeBundle(p: JParcel, b: JBundle | null) {
   if (!b) return writeInt(p, -1);
+  if (!b.map.size) return writeInt(p, 0);
   const lenAt = p.pos;
   writeInt(p, 0); writeInt(p, BNDL); writeInt(p, b.map.size);
   for (const [k, v] of b.map) { writeString(p, k); await writeValue(p, v); }
-  p.view.setInt32(lenAt, p.pos - lenAt - 4, true);
+  p.view.setInt32(lenAt, p.pos - lenAt - 8, true);
 }
 async function readBundle(p: JParcel, loader: unknown) {
   const len = readInt(p);
   if (len < 0) return null;
-  if (readInt(p) !== BNDL) throw rt.mkThrowable("java/lang/IllegalStateException", "Bad magic number for Bundle");
   const b = new (rt.link("android/os/Bundle").ctor)() as JBundle;
   b.loader = loader;
+  if (len === 0) return b;
+  if (readInt(p) !== BNDL) throw rt.mkThrowable("java/lang/IllegalStateException", "Bad magic number for Bundle");
   for (let n = readInt(p); n > 0; n--) { const k = readString(p)!; b.map.set(k, await readValue(p, loader)); }
   return b;
 }

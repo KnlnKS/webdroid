@@ -1,7 +1,9 @@
 import { JObj, type NativeSpec, rt, maySuspend } from "../jvm/runtime";
 import { JBundle, bundlePrimitive, bundleBox, reportUncaught, PROCESS_NAME } from "./os";
 import { appHost, type AppHost } from "./apphost";
-import { mkUri } from "./net";
+import { mkUri, readUri, writeUri } from "./net";
+import { JRect } from "./graphics";
+import { type JParcel, parcelCreator, readInt, readString, readString8, writeInt, writeString, writeString8 } from "./parcel";
 import { newLinkedHashSet } from "../jvm/natives/jutil";
 import type { JContext } from "./context";
 import type { JActivity } from "./app";
@@ -18,17 +20,68 @@ export class JIntent extends JObj {
   extras = new JBundle();
   flags = 0;
   categories = new Set<string>();
+  identifier: string | null = null;
+  sourceBounds: JRect | null = null;
+  selector: JIntent | null = null;
+  clipData: JObj | null = null;
+  contentUserHint = -2;
+  originalIntent: JIntent | null = null;
   copyFrom(o: JIntent) {
     if (o) {
       this.action = o.action; this.component = o.component; this.componentPkg = o.componentPkg; this.dataUri = o.dataUri;
       this.extras = new JBundle();
       this.extras.map = new Map(o.extras.map);
       this.flags = o.flags; this.pkg = o.pkg; this.typeStr = o.typeStr; this.categories = new Set(o.categories);
+      this.identifier = o.identifier; this.sourceBounds = o.sourceBounds ? copyBounds(o.sourceBounds) : null;
+      this.selector = o.selector ? new JIntent() : null; this.selector?.copyFrom(o.selector!);
+      this.clipData = o.clipData; this.contentUserHint = o.contentUserHint;
+      this.originalIntent = o.originalIntent ? new JIntent() : null; this.originalIntent?.copyFrom(o.originalIntent!);
     }
   }
 }
+function copyBounds(rect: JRect): JRect {
+  rt.link("android/graphics/Rect");
+  return Object.assign(new JRect(), { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
+}
+async function readIntent(p: JParcel, intent = new JIntent()): Promise<JIntent> {
+  rt.link("android/content/Intent");
+  intent.action = readString8(p); intent.dataUri = (await readUri(p))?.uri ?? null;
+  intent.typeStr = readString8(p); intent.identifier = readString8(p); intent.flags = readInt(p); intent.pkg = readString8(p);
+  const component = readComponent(p); intent.component = component?.cls ?? null; intent.componentPkg = component?.pkg ?? null;
+  intent.sourceBounds = null;
+  if (readInt(p)) {
+    rt.link("android/graphics/Rect");
+    intent.sourceBounds = Object.assign(new JRect(), { left: readInt(p), top: readInt(p), right: readInt(p), bottom: readInt(p) });
+  }
+  intent.categories.clear();
+  const count = readInt(p);
+  if (count > (p.size - p.pos) / 4) throw rt.mkThrowable("android/os/BadParcelableException", "Invalid category count");
+  for (let i = 0; i < count; i++) { const category = readString8(p); if (category !== null) intent.categories.add(category); }
+  intent.selector = readInt(p) ? await readIntent(p) : null;
+  if (readInt(p)) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "ClipData parcel");
+  intent.clipData = null; intent.contentUserHint = readInt(p);
+  intent.extras = await vcall(p, "readBundle", "()Landroid/os/Bundle;") ?? new JBundle();
+  intent.originalIntent = readInt(p) ? await readIntent(p) : null;
+  return intent;
+}
+async function writeIntent(this: JIntent, p: JParcel, flags: number): Promise<void> {
+  writeString8(p, this.action); await writeUri(p, this.dataUri === null ? null : mkUri(this.dataUri));
+  writeString8(p, this.typeStr); writeString8(p, this.identifier); writeInt(p, this.flags); writeString8(p, this.pkg);
+  writeComponent(this.component === null ? null : mkComponentName(this.componentPkg ?? appHost?.pkg ?? "", this.component), p);
+  const bounds = this.sourceBounds; writeInt(p, +!!bounds);
+  if (bounds) for (const value of [bounds.left, bounds.top, bounds.right, bounds.bottom]) writeInt(p, value);
+  writeInt(p, this.categories.size); for (const category of this.categories) writeString8(p, category);
+  writeInt(p, +!!this.selector); if (this.selector) await vcall(this.selector, "writeToParcel", "(Landroid/os/Parcel;I)V", p, flags);
+  writeInt(p, +!!this.clipData); if (this.clipData) await vcall(this.clipData, "writeToParcel", "(Landroid/os/Parcel;I)V", p, flags);
+  writeInt(p, this.contentUserHint); await vcall(p, "writeBundle", "(Landroid/os/Bundle;)V", this.extras.map.size ? this.extras : null);
+  writeInt(p, +!!this.originalIntent); if (this.originalIntent) await vcall(this.originalIntent, "writeToParcel", "(Landroid/os/Parcel;I)V", p, flags);
+}
 const intentMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
+  "<init>(Landroid/os/Parcel;)V": async function (this: JIntent, p: JParcel) { await readIntent(p, this); },
+  "readFromParcel(Landroid/os/Parcel;)V": async function (this: JIntent, p: JParcel) { await readIntent(p, this); },
+  "writeToParcel(Landroid/os/Parcel;I)V": writeIntent,
+  "describeContents()I": () => 0,
   "<init>(Ljava/lang/String;)V": function (this: JIntent, a: string) { this.action = a; },
   "<init>(Ljava/lang/String;Landroid/net/Uri;)V": function (this: JIntent, a: string, u: any) {
     this.action = a;
@@ -68,7 +121,10 @@ const intentMethods: NativeSpec["methods"] = {
     return this.component ? mkComponentName(this.componentPkg ?? appHost?.pkg ?? "", this.component) : null;
   },
   "setAction(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, a: string) { this.action = a; return this; },
-  "setPackage(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, p: string) { this.pkg = p; return this; },
+  "setPackage(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, p: string | null) {
+    if (p !== null && this.selector) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Package and selector are mutually exclusive");
+    this.pkg = p; return this;
+  },
   "getPackage()Ljava/lang/String;": function (this: JIntent) { return this.pkg; },
   "getAction()Ljava/lang/String;": function (this: JIntent) { return this.action; },
   "setData(Landroid/net/Uri;)Landroid/content/Intent;": function (this: JIntent, u: any) { this.dataUri = u?.uri ?? null; return this; },
@@ -94,9 +150,14 @@ const intentMethods: NativeSpec["methods"] = {
     }
     if (other.categories.size && (!this.categories.size || flags & 4)) { this.categories = new Set(other.categories); changed |= 4; }
     if (other.component !== null && flags & 8) { this.component = other.component; this.componentPkg = other.componentPkg; changed |= 8; }
-    if (other.pkg !== null && (this.pkg === null || flags & 16)) { this.pkg = other.pkg; changed |= 16; }
+    if (other.pkg !== null && !this.selector && (this.pkg === null || flags & 16)) { this.pkg = other.pkg; changed |= 16; }
+    if (other.identifier !== null && (this.identifier === null || flags & 256)) { this.identifier = other.identifier; changed |= 256; }
+    if (other.sourceBounds && (!this.sourceBounds || flags & 32)) { this.sourceBounds = copyBounds(other.sourceBounds); changed |= 32; }
+    if (other.selector && !this.pkg && flags & 64) { this.selector = new JIntent(); this.selector.copyFrom(other.selector); changed |= 64; }
+    if (other.clipData && (!this.clipData || flags & 128)) { this.clipData = other.clipData; changed |= 128; }
     this.flags |= other.flags;
     if (other.extras.map.size) this.extras.map = new Map([...other.extras.map, ...this.extras.map]);
+    if ((changed & 130 || other.extras.map.size) && this.contentUserHint === -2) this.contentUserHint = other.contentUserHint;
     return changed;
   },
   "getExtras()Landroid/os/Bundle;": function (this: JIntent) { return this.extras.map.size ? this.extras : null; },
@@ -131,12 +192,17 @@ const intentMethods: NativeSpec["methods"] = {
     i.component = c?.cls ?? null; i.componentPkg = c?.pkg ?? null;
     return i;
   },
-  // Nothing here builds a ClipData or a launch rectangle, and AOSP answers null when it has none.
-  "getClipData()Landroid/content/ClipData;": () => null,
-  "setClipData(Landroid/content/ClipData;)V": () => {},
-  "getSourceBounds()Landroid/graphics/Rect;": () => null,
-  "getSelector()Landroid/content/Intent;": () => null,
-  "getIdentifier()Ljava/lang/String;": () => null,
+  "getClipData()Landroid/content/ClipData;": function (this: JIntent) { return this.clipData; },
+  "setClipData(Landroid/content/ClipData;)V": function (this: JIntent, clip: JObj | null) { this.clipData = clip; },
+  "getSourceBounds()Landroid/graphics/Rect;": function (this: JIntent) { return this.sourceBounds; },
+  "setSourceBounds(Landroid/graphics/Rect;)V": function (this: JIntent, bounds: JRect | null) { this.sourceBounds = bounds ? copyBounds(bounds) : null; },
+  "getSelector()Landroid/content/Intent;": function (this: JIntent) { return this.selector; },
+  "setSelector(Landroid/content/Intent;)V": function (this: JIntent, selector: JIntent | null) {
+    if (selector === this || selector && this.pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid selector");
+    this.selector = selector;
+  },
+  "getIdentifier()Ljava/lang/String;": function (this: JIntent) { return this.identifier; },
+  "setIdentifier(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, identifier: string | null) { this.identifier = identifier; return this; },
   "resolveActivity(Landroid/content/pm/PackageManager;)Landroid/content/ComponentName;": async function (this: JIntent, pm: unknown) {
     if (this.component) return mkComponentName(this.componentPkg ?? appHost?.pkg ?? "", this.component);
     const resolved = await vcall(pm, "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", this, 0x10000);
@@ -174,6 +240,7 @@ for (const [t, d, dflt] of [["String", "Ljava/lang/String;", null], ["Int", "I",
 rt.register({
   name: "android/content/Intent", ctor: JIntent, ifaces: ["android/os/Parcelable", "java/lang/Cloneable"],
   statics: {
+    get CREATOR() { return parcelCreator("android/content/Intent", readIntent); },
     ACTION_MAIN: "android.intent.action.MAIN", ACTION_VIEW: "android.intent.action.VIEW",
     ACTION_SEND: "android.intent.action.SEND", ACTION_EDIT: "android.intent.action.EDIT",
     ACTION_PICK: "android.intent.action.PICK", ACTION_GET_CONTENT: "android.intent.action.GET_CONTENT",
@@ -191,6 +258,14 @@ rt.register({
   methods: intentMethods,
 });
 export class JComponentName extends JObj { pkg = ""; cls = ""; }
+function writeComponent(component: JComponentName | null, p: JParcel): void {
+  writeString(p, component?.pkg ?? null); if (component) writeString(p, component.cls);
+}
+function readComponent(p: JParcel): JComponentName | null {
+  const pkg = readString(p); if (pkg === null) return null;
+  const cls = readString(p); if (cls === null) throw rt.mkThrowable("java/lang/NullPointerException", "class name");
+  return mkComponentName(pkg, cls);
+}
 /** PackageManager component enabled states an app set (DEFAULT until then); part of the
  *  install like firstInstallTime, so they survive a reboot and go with wd.reset */
 export const componentState = {
@@ -206,7 +281,12 @@ export function mkComponentName(pkg: string, cls: string): JComponentName {
 }
 rt.register({
   name: "android/content/ComponentName", ctor: JComponentName, ifaces: ["android/os/Parcelable"],
+  statics: { get CREATOR() { return parcelCreator("android/content/ComponentName", async p => readComponent(p)); } },
   methods: {
+    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JComponentName, p: JParcel) { writeComponent(this, p); },
+    "static writeToParcel(Landroid/content/ComponentName;Landroid/os/Parcel;)V": writeComponent,
+    "static readFromParcel(Landroid/os/Parcel;)Landroid/content/ComponentName;": readComponent,
+    "describeContents()I": () => 0,
     "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JComponentName, p: string, c: string) { this.pkg = p; this.cls = c; },
     "<init>(Landroid/content/Context;Ljava/lang/String;)V": function (this: JComponentName, ctx: JContext, cls: string) {
       this.pkg = ctx?.$host?.pkg ?? "";

@@ -47,7 +47,8 @@ test("remote activity lifecycle and Back return a serialized result to the calle
     packages.set(pkg, new PackageRecord(root, new Resources(null, {}), "/" + pkg, 21000 + i, async () => []));
     broker.connect(pkg, pkg, 31000 + i);
   }
-  const intent = { action: "test", component: null, componentPkg: null, dataUri: null, typeStr: null, pkg: null, flags: 0, categories: [], extras: { bytes: new Uint8Array(), objects: [] } };
+  const intent = { action: "test", component: null, componentPkg: null, dataUri: null, typeStr: null, pkg: null, flags: 0, categories: [], extras: { bytes: new Uint8Array(), objects: [] },
+    identifier: null, sourceBounds: null, selector: null, clipData: null, contentUserHint: -2, originalIntent: null };
   let finish!: () => void;
   const result = new Promise<void>((resolve) => { finish = resolve; });
   let id = 0;
@@ -128,7 +129,8 @@ test("an activity launched by a background service restores the previous foregro
   });
   try {
     broker.foreground(35000);
-    const intent = { action: "test", component: null, componentPkg: null, dataUri: null, typeStr: null, pkg: null, flags: 0, categories: [], extras: data };
+    const intent = { action: "test", component: null, componentPkg: null, dataUri: null, typeStr: null, pkg: null, flags: 0, categories: [], extras: data,
+      identifier: null, sourceBounds: null, selector: null, clipData: null, contentUserHint: -2, originalIntent: null };
     await broker.launchActivity(35001, names[2], names[2], "test.PermissionActivity", intent, 7);
     await broker.finishActivity(35002, activityId, -1, null);
     await finished.promise;
@@ -145,7 +147,8 @@ test("system PendingIntents and alarms survive creator death and retain creator 
     broker.connect(pkg, pkg, 36000 + i);
   }
   const data = { bytes: new Uint8Array(), objects: [] }, delivered = Promise.withResolvers<void>();
-  const intent = { action: "test.PENDING", component: null, componentPkg: null, dataUri: null, typeStr: null, pkg: null, flags: 0, categories: [], extras: data };
+  const intent = { action: "test.PENDING", component: null, componentPkg: null, dataUri: null, typeStr: null, pkg: null, flags: 0, categories: [], extras: data,
+      identifier: null, sourceBounds: null, selector: null, clipData: null, contentUserHint: -2, originalIntent: null };
   const endpoint: ProcessEndpoint = {
     activity: async () => {}, provider: async () => { throw new Error("unused"); },
     transact: async () => ({ handled: 0, data }), broadcast: async (_i, _c, _o, result) => result,
@@ -200,7 +203,8 @@ test("client process death releases remote service bindings", async () => {
     });
   }
   try {
-    const intent = { action: "test.BIND", component: null, componentPkg: null, dataUri: null, typeStr: null, pkg: null, flags: 0, categories: [], extras: data };
+    const intent = { action: "test.BIND", component: null, componentPkg: null, dataUri: null, typeStr: null, pkg: null, flags: 0, categories: [], extras: data,
+      identifier: null, sourceBounds: null, selector: null, clipData: null, contentUserHint: -2, originalIntent: null };
     await broker.service(38000, names[1], names[1], { kind: "bind", key: "38000:1", intent });
     broker.fail(38000, "client stopped");
     await released.promise;

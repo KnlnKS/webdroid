@@ -53,6 +53,17 @@ test("PendingIntent identity ignores extras and supports update, cancellation an
   await expect(vcall(once, "send", "()V")).rejects.toMatchObject({ msg: null });
 });
 
+test("PendingIntent filter identity distinguishes Intent identifiers", async () => {
+  const context = new JContext(), intent = new JIntent(); intent.action = "test.IDENTIFIER";
+  const get = () => vcall(rt.link("android/app/PendingIntent").ctor, "getBroadcast", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 24, intent, 0x4000000);
+  intent.identifier = "first"; const first = await get();
+  intent.identifier = "second"; const second = await get();
+  expect(await vcall(first, "equals", "(Ljava/lang/Object;)Z", second)).toBe(0);
+  intent.identifier = "first";
+  expect(await vcall(first, "equals", "(Ljava/lang/Object;)Z", await get())).toBe(1);
+  await vcall(first, "cancel", "()V"); await vcall(second, "cancel", "()V");
+});
+
 test("mutable PendingIntent fill preserves fixed fields and immutable operations reject fill", async () => {
   const context = new JContext(), intent = await newObj("android/content/Intent") as JIntent;
   intent.action = "test.FILL"; intent.extras.map.set("fixed", 7);
