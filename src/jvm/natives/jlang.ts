@@ -405,18 +405,21 @@ export async function stackTraceText(t: JThrowable): Promise<string> {
   }
   return out;
 }
+const throwableConstructors: NonNullable<NativeSpec["methods"]> = {
+  "<init>()V": function () {},
+  "<init>(Ljava/lang/String;)V": function (this: JThrowable, m: string) { this.msg = m; },
+  "<init>(Ljava/lang/String;Ljava/lang/Throwable;)V": function (this: JThrowable, m: string, c: JThrowable) { this.msg = m; this.cause = c; },
+  "<init>(Ljava/lang/Throwable;)V": function (this: JThrowable, c: JThrowable) {
+    this.cause = c; this.msg = c ? dotName(jclsName(c)) + ": " + c.msg : null;
+  },
+  "<init>(Ljava/lang/String;Ljava/lang/Throwable;ZZ)V": function (this: JThrowable, m: string, c: JThrowable) { this.msg = m; this.cause = c; },
+};
 rt.register({
   name: "java/lang/Throwable",
   ctor: JThrowable,
   ifaces: ["java/io/Serializable"],
   methods: {
-    "<init>()V": function () {},
-    "<init>(Ljava/lang/String;)V": function (this: JThrowable, m: string) { this.msg = m; },
-    "<init>(Ljava/lang/String;Ljava/lang/Throwable;)V": function (this: JThrowable, m: string, c: JThrowable) { this.msg = m; this.cause = c; },
-    "<init>(Ljava/lang/Throwable;)V": function (this: JThrowable, c: JThrowable) {
-      this.cause = c; this.msg = c ? dotName(jclsName(c)) + ": " + c.msg : null;
-    },
-    "<init>(Ljava/lang/String;Ljava/lang/Throwable;ZZ)V": function (this: JThrowable, m: string, c: JThrowable) { this.msg = m; this.cause = c; },
+    ...throwableConstructors,
     "getMessage()Ljava/lang/String;": function (this: JThrowable) { return this.msg; },
     "getLocalizedMessage()Ljava/lang/String;": function (this: JThrowable) { return this.msg; },
     "getCause()Ljava/lang/Throwable;": function (this: JThrowable) { return this.cause; },
@@ -459,11 +462,12 @@ export function reportUncaught(e: unknown) {
 
 const excCtors = new Map<string, new () => JThrowable>([["java/lang/Throwable", JThrowable]]);
 /** Register a throwable class under an already-registered parent (native here or elsewhere). */
-export function defineException(name: string, sup: string) {
+export function defineException(name: string, sup: string, constructors: string[] = []) {
   const parent = excCtors.get(sup) ?? (rt.link(sup).ctor as new () => JThrowable);
   const c = class extends parent {};
   excCtors.set(name, c);
-  rt.register({ name, sup, ctor: c });
+  const methods = Object.fromEntries(constructors.map((desc) => ["<init>" + desc, throwableConstructors["<init>" + desc]]));
+  rt.register({ name, sup, ctor: c, methods });
 }
 defineException("java/lang/Error", "java/lang/Throwable");
 defineException("java/lang/Exception", "java/lang/Throwable");
@@ -495,7 +499,7 @@ defineException("java/lang/UnsatisfiedLinkError", "java/lang/LinkageError");
 defineException("java/lang/AbstractMethodError", "java/lang/LinkageError");
 defineException("java/lang/InternalError", "java/lang/Error");
 defineException("java/lang/ExceptionInInitializerError", "java/lang/LinkageError");
-defineException("java/io/IOException", "java/lang/Exception");
+defineException("java/io/IOException", "java/lang/Exception", ["()V", "(Ljava/lang/String;)V", "(Ljava/lang/Throwable;)V", "(Ljava/lang/String;Ljava/lang/Throwable;)V"]);
 defineException("java/io/FileNotFoundException", "java/io/IOException");
 defineException("java/io/EOFException", "java/io/IOException");
 defineException("java/io/UnsupportedEncodingException", "java/io/IOException");
