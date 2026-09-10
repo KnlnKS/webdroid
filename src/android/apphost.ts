@@ -1,7 +1,9 @@
 import type { Resources, JTheme } from "./res";
 import type { JApplication, JActivity } from "./app";
 import type { JResources } from "./resnative";
-import type { JIntent } from "./intent";
+import type { JIntent, ActivityResultTarget } from "./intent";
+
+export type ActivityLaunch = { caller: { pkg: string; cls: string } | null; result?: ActivityResultTarget; remoteId?: number };
 
 /** Host bundle shared by all contexts of the app */
 export interface AppHost {
@@ -20,7 +22,7 @@ export interface AppHost {
   jresources: JResources;
   statusBarColor: number;
   navBarColor: number;
-  launch: (component: string, intent: JIntent | null) => Promise<void>;
+  launch: (component: string, intent: JIntent | null, options?: ActivityLaunch) => Promise<void>;
   /** the pause/resume a modal system window (the permission dialog) leaves behind */
   roundTrip: (activity: JActivity) => Promise<void>;
   finishActivity: (activity: JActivity) => void;

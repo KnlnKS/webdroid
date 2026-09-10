@@ -1,5 +1,5 @@
 import { JObj, type NativeSpec, rt, maySuspend } from "../jvm/runtime";
-import { JBundle, reportUncaught } from "./os";
+import { JBundle, reportUncaught, PROCESS_NAME } from "./os";
 import { appHost, type AppHost } from "./apphost";
 import { mkUri } from "./net";
 import { newLinkedHashSet } from "../jvm/natives/jutil";
@@ -207,11 +207,25 @@ rt.register({
 });
 
 defineException("android/content/ActivityNotFoundException", "java/lang/RuntimeException");
-export async function launchIntent(host: AppHost, intent: JIntent) {
+export type ActivityResultTarget = { act: JActivity; code: number };
+export const activityTransport: {
+  launch?: (pkg: string, process: string, component: string, intent: JIntent, result?: ActivityResultTarget) => Promise<void>;
+  finish?: (act: JActivity) => boolean;
+} = {};
+export async function launchIntent(host: AppHost, intent: JIntent, result?: ActivityResultTarget) {
   const { getPM } = await import("./pm");
   const resolved = await vcall(getPM(), "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", intent, 0x10000);
   if (!resolved?.activityInfo) throw rt.mkThrowable("android/content/ActivityNotFoundException", "No activity found for " + intent.action);
-  await host.launch(resolved.activityInfo.name.replace(/\./g, "/"), intent);
+  const info = resolved.activityInfo;
+  if (info.packageName !== host.pkg && (!info.exported || info.permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", info.permission, host.pkg) !== 0))
+    throw rt.mkThrowable("java/lang/SecurityException", "Activity permission denied: " + info.name);
+  const component = info.name.replace(/\./g, "/");
+  if (info.packageName !== host.pkg || info.processName !== (PROCESS_NAME || host.pkg)) {
+    if (!activityTransport.launch) throw rt.mkThrowable("android/content/ActivityNotFoundException", "Activity process unavailable: " + info.processName);
+    return activityTransport.launch(info.packageName, info.processName, component, intent, result);
+  }
+  const caller = result && result.code >= 0 ? await vcall(result.act, "getComponentName", "()Landroid/content/ComponentName;") as JComponentName : null;
+  await host.launch(component, intent, { caller, result });
 }
 
 export const RESULT_OK = -1, RESULT_CANCELED = 0;

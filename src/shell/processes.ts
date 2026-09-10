@@ -2,7 +2,8 @@ import { packages } from "../android/packages";
 import { appHost } from "../android/apphost";
 import { binderTransport, receiveTransaction, exportBinder, importBinder, exportParcel, importParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
 import { JParcel } from "../android/parcel";
-import { JIntent } from "../android/intent";
+import { JIntent, activityTransport, deliverActivityResult, type ActivityResultTarget } from "../android/intent";
+import { onMain } from "../android/mainloop";
 import { JBundle, PROCESS_PID } from "../android/os";
 import { bindLocalService, unbindLocalService, svcStart, serviceTransport } from "../android/runningservices";
 import { vcall } from "../jvm/natives/jlang";
@@ -22,8 +23,13 @@ type IntentData = { action: string | null; component: string | null; componentPk
 type ServiceRequest = { kind: "bind"; intent: IntentData; key: string } | { kind: "unbind"; key: string }
   | { kind: "start"; intent: IntentData; foreground: boolean };
 type BroadcastData = { code: number; data: string | null; extras: ParcelData; aborted: boolean };
+type ActivityRequest = { kind: "launch"; id: number; component: string; intent: IntentData; caller: { pkg: string; cls: string } | null }
+  | { kind: "visibility"; phase: "pause" | "stop" | "resume" }
+  | { kind: "result"; request: number; code: number; data: IntentData | null } | { kind: "back" };
+export const processPresentation = { visible: true, changed: (_visible: boolean) => {} };
 export type PackageSnapshot = { pkg: string; source: Uint8Array | PackedArchive; uid: number; system: boolean; grants: string[]; signatures: Uint8Array[] | null };
 export type ProcessEndpoint = {
+  activity: (request: ActivityRequest) => Promise<void>;
   transact: (request: Transaction, caller: Caller) => Promise<TransactionReply>;
   service: (request: ServiceRequest) => Promise<BinderHandle | null>;
   provider: (request: ProviderRequest, caller: Caller) => Promise<ProviderReply>;
@@ -37,6 +43,64 @@ export class ProcessBroker {
   private entries = new Map<number, Entry>();
   private byName = new Map<string, Entry>();
   private nextPid = 1001;
+  private foregroundPid = 0;
+  private nextActivity = 1;
+  private activities: { id: number; pid: number; caller: number; request: number }[] = [];
+  private activityQueue: Promise<void> = Promise.resolve();
+
+  foreground(pid: number): void { this.foregroundPid = pid; }
+  launchActivity(caller: number, pkg: string, process: string, component: string, intent: IntentData, request: number, callingClass: string | null = null): Promise<void> {
+    const source = this.entry(caller);
+    const target = this.connect(pkg, process), activity = { id: this.nextActivity++, pid: target.pid, caller, request };
+    return this.queueActivity(async () => {
+      const previous = this.entry(this.foregroundPid || caller);
+      await this.request(previous, (endpoint) => endpoint.activity({ kind: "visibility", phase: "pause" }));
+      this.activities.push(activity);
+      try {
+        await this.request(target, (endpoint) => endpoint.activity({ kind: "launch", id: activity.id, component, intent, caller: callingClass ? { pkg: source.pkg, cls: callingClass } : null }));
+        await this.request(previous, (endpoint) => endpoint.activity({ kind: "visibility", phase: "stop" }));
+        this.show(target.pid);
+      } catch (error) {
+        this.activities.splice(this.activities.indexOf(activity), 1);
+        await this.restore(activity, 0, null);
+        throw error;
+      }
+    });
+  }
+  finishActivity(pid: number, id: number, code: number, data: IntentData | null): void {
+    this.queueActivity(async () => {
+      const index = this.activities.findIndex((a) => a.pid === pid && a.id === id);
+      if (index < 0) return;
+      const [activity] = this.activities.splice(index, 1);
+      if (index === this.activities.length) await this.restore(activity, code, data);
+      else if (this.alive(activity.caller)) await this.result(activity, code, data);
+    });
+  }
+  back(caller: number): boolean {
+    if (!this.foregroundPid || this.foregroundPid === caller) return false;
+    this.queueActivity(() => this.request(this.entry(this.foregroundPid), (endpoint) => endpoint.activity({ kind: "back" })));
+    return true;
+  }
+  private queueActivity(run: () => Promise<void>): Promise<void> {
+    this.activityQueue = this.activityQueue.then(run).catch((error) => console.error("[activity process]", error));
+    return this.activityQueue;
+  }
+  private async restore(activity: { caller: number; request: number }, code: number, data: IntentData | null): Promise<void> {
+    if (!this.alive(activity.caller)) return;
+    await this.request(this.entry(activity.caller), (endpoint) => endpoint.activity({ kind: "visibility", phase: "resume" }));
+    this.show(activity.caller);
+    await this.result(activity, code, data);
+  }
+  private result(activity: { caller: number; request: number }, code: number, data: IntentData | null): Promise<void> {
+    return this.request(this.entry(activity.caller), (endpoint) => endpoint.activity({ kind: "result", request: activity.request, code, data }));
+  }
+  private show(pid: number): void {
+    this.foregroundPid = pid;
+    for (const entry of this.entries.values()) {
+      if (!entry.frame) continue;
+      entry.frame.hidden = entry.pid !== pid;
+    }
+  }
 
   connect(pkg: string, process: string, pid?: number): Entry {
     const key = pkg + "/" + process, previous = this.byName.get(key);
@@ -51,9 +115,10 @@ export class ProcessBroker {
     if (pid === undefined) {
       const frame = document.createElement("iframe"); entry.frame = frame;
       frame.hidden = true;
+      frame.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:16px;z-index:1";
       frame.src = "/process?pid=" + entry.pid + `&screen=${device.width}x${device.height}@${device.densityDpi}`;
       frame.addEventListener("error", () => this.fail(entry.pid, "Process frame failed"));
-      document.body.appendChild(frame);
+      (document.getElementById("screen")?.parentElement ?? document.body).appendChild(frame);
     }
     return entry;
   }
@@ -76,6 +141,7 @@ export class ProcessBroker {
     entry.pending.clear();
     for (const watcher of entry.watchers) { try { watcher(); } catch (error) { console.error("[process death]", error); } }
     entry.watchers.clear(); entry.frame?.remove();
+    for (const activity of this.activities.filter((a) => a.pid === pid)) this.finishActivity(pid, activity.id, 0, null);
   }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
   watch(pid: number, died: () => void): () => void {
@@ -167,6 +233,22 @@ async function remote<T>(pending: Promise<T>): Promise<T> {
 }
 export function connectProcess(): ProcessEndpoint {
   const broker = processBroker();
+  let nextRequest = 1;
+  const requests = new Map<number, ActivityResultTarget>();
+  activityTransport.launch = async (pkg, process, component, intent, result) => {
+    const request = nextRequest++, data = await encodeIntent(intent);
+    if (result && result.code >= 0) requests.set(request, result);
+    const caller = result && result.code >= 0 ? await vcall(result.act, "getComponentName", "()Landroid/content/ComponentName;") : null;
+    void broker.launchActivity(PROCESS_PID, pkg, process, component, data, request, caller?.cls ?? null);
+  };
+  activityTransport.finish = (act) => {
+    const id = act.remoteId;
+    if (!id) return false;
+    act.remoteId = 0;
+    processPresentation.visible = false; processPresentation.changed(false);
+    void (act.resultData ? encodeIntent(act.resultData) : Promise.resolve(null)).then((data) => broker.finishActivity(PROCESS_PID, id, act.resultCode, data));
+    return true;
+  };
   useSQLiteStore(broker.databases);
   connectProviders((pkg, process, request) => remote(broker.provider(PROCESS_PID, pkg, process, request)));
   broadcastTransport.send = async (intent, permission, ordered) => remote(broker.broadcast(PROCESS_PID, await encodeIntent(intent), permission, ordered));
@@ -177,6 +259,28 @@ export function connectProcess(): ProcessEndpoint {
   serviceTransport.unbind = async (owner, process, key) => { await remote(broker.service(owner.pkg, process, { kind: "unbind", key })); };
   serviceTransport.start = async (owner, process, intent, foreground) => { await remote(broker.service(owner.pkg, process, { kind: "start", intent: await encodeIntent(intent), foreground })); };
   return {
+    activity: async (request) => {
+      if (request.kind === "back") return (await import("./device")).pressBack();
+      if (request.kind === "visibility") {
+        await (await import("./device")).activityVisibility(request.phase);
+        if (request.phase !== "pause") {
+          processPresentation.visible = request.phase === "resume";
+          processPresentation.changed(processPresentation.visible);
+        }
+      } else if (request.kind === "launch") {
+        const intent = await decodeIntent(request.intent);
+        await onMain(async () => {
+          if (!appHost) throw new Error("Process has no application");
+          await appHost.launch(request.component, intent, { caller: request.caller, remoteId: request.id });
+          if (!appHost.currentActivity()) throw new Error("Activity did not start: " + request.component);
+        });
+        processPresentation.visible = true; processPresentation.changed(true);
+      } else {
+        const result = requests.get(request.request);
+        requests.delete(request.request);
+        if (result && !result.act.finished) deliverActivityResult(result.act, result.code, request.code, request.data ? await decodeIntent(request.data) : null);
+      }
+    },
     transact: receiveTransaction,
     provider: receiveProvider,
     broadcast: async (intent, component, ordered, data) => {
@@ -201,5 +305,6 @@ export function registerForegroundProcess(): void {
   if (!appHost) return;
   const broker = processBroker();
   broker.connect(appHost.pkg, appHost.pkg, PROCESS_PID);
+  broker.foreground(PROCESS_PID);
   broker.ready(PROCESS_PID, connectProcess());
 }

@@ -5,6 +5,19 @@
 // drags without a line of code that knows about either.
 import { device } from "./config";
 import { dispatchPointer } from "./device";
+import { setInputElement } from "../android/textview";
+import { imeInput, imeAction, imeActive, imeHasAction, imeSelection, imeFinishComposition } from "../android/ime";
+
+export function attachIme(canvas: HTMLCanvasElement, kbd: HTMLTextAreaElement): void {
+  setInputElement(kbd);
+  attachInput(canvas, () => { if (imeActive()) setTimeout(() => kbd.focus(), 0); });
+  kbd.addEventListener("input", (event) => void imeInput(kbd.value, kbd.selectionStart, kbd.selectionEnd, event instanceof InputEvent && event.isComposing));
+  kbd.addEventListener("select", () => void imeSelection(kbd.selectionStart, kbd.selectionEnd));
+  kbd.addEventListener("compositionend", () => void imeFinishComposition());
+  kbd.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.isComposing && imeHasAction()) { e.preventDefault(); void imeAction(); }
+  });
+}
 
 // getBoundingClientRect forces layout, so the rect a gesture maps through is read once when the
 // gesture starts, not per move.

@@ -11,9 +11,9 @@ import { loadFramework, loadFrameworkDex } from "../android/framework";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
 import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguration } from "../android/resnative";
-import { setAppHost, type AppHost } from "../android/apphost";
+import { setAppHost, type AppHost, type ActivityLaunch } from "../android/apphost";
 import { setManifest, manifestActivityTheme, manifestActivityOrientation, activityHandlesConfig, CONFIG_UI_MODE, getPM } from "../android/pm";
-import { JIntent, deliverActivityResult } from "../android/intent";
+import { JIntent, deliverActivityResult, activityTransport, mkComponentName } from "../android/intent";
 import { ensureDecor, startingWindow } from "../android/decor";
 import { getInflater } from "../android/inflate";
 import { JActivity, fireActivityLifecycle } from "../android/app";
@@ -214,7 +214,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     splits: install.splits.map((sp) => sp.name),
     application: null, jresources: jres,
     statusBarColor: -16777216, navBarColor: -16777216,
-    launch: async (component, intent) => { await launchActivity(component, intent); },
+    launch: async (component, intent, options) => { await launchActivity(component, intent, options); },
     // finish() only requests: AOSP delivers the pause/stop/destroy chain as later main-thread
     // messages, so it queues as a main job rather than running detached alongside the caller
     finishActivity: (a) => { void onMain(() => finishActivity(a)); },
@@ -282,16 +282,16 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   });
 }
 
-function launchActivity(cls: string, intent: JIntent | null): Promise<void> {
+function launchActivity(cls: string, intent: JIntent | null, options?: ActivityLaunch): Promise<void> {
   // Startup and Java callbacks already hold the main queue; queuing again would deadlock.
   const run = async () => {
     const prev = curThread;
     setCurThread(mainThread);
-    try { await launchActivity0(cls, intent); } finally { setCurThread(prev); }
+    try { await launchActivity0(cls, intent, undefined, options); } finally { setCurThread(prev); }
   };
   return inMainJob() ? run() : onMain(run);
 }
-async function launchActivity0(component: string, intent: JIntent | null, relaunch?: Relaunch) {
+async function launchActivity0(component: string, intent: JIntent | null, relaunch?: Relaunch, options?: ActivityLaunch) {
   if (!booted) return;
   const host = booted.host;
   const cls = aliasTargets.get(component) ?? component;
@@ -317,9 +317,13 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
     act = new info.ctor();
   } catch (e) {
     reportUncaught(e);
+    if (options?.remoteId) throw e;
     return;
   }
   act.$host = host;
+  act.callingActivity = options?.caller ? mkComponentName(options.caller.pkg, options.caller.cls) : null;
+  act.resultTo = options?.result ?? null;
+  act.remoteId = options?.remoteId ?? 0;
   act.requestedOrientation = requestedOrientation;
   act.lastNonConfig = relaunch?.nonConfig ?? null;
   const saved = relaunch?.state ?? null;
@@ -438,7 +442,9 @@ export function recreateActivity(act: JActivity): void {
         await fireActivityLifecycle(act, "Destroyed");
       } catch (e) { reportUncaught(e); }
       booted.stack.splice(i, 1);
-      await launchActivity0(cls, act.intent, { state, nonConfig, requestedOrientation: act.requestedOrientation });
+      const options = { caller: act.callingActivity, result: act.resultTo ?? undefined, remoteId: act.remoteId };
+      act.remoteId = 0;
+      await launchActivity0(cls, act.intent, { state, nonConfig, requestedOrientation: act.requestedOrientation }, options);
     } catch (e) { reportUncaught(e); }
     finally { setCurThread(prev); }
   }), 0);
@@ -482,8 +488,9 @@ async function finishActivity(act: JActivity) {
   act.finished = true;
   if (act.resumed) await pauseActivity(act);
   await windowFocus(act, false);
+  const remote = activityTransport.finish?.(act) ?? false;
   const top = booted.stack[booted.stack.length - 1];
-  if (top) {
+  if (top && !remote) {
     applyOrientationRequest(top.requestedOrientation);
     await resumeActivity(top);
     await windowFocus(top, true);
@@ -497,6 +504,23 @@ async function finishActivity(act: JActivity) {
   uiState.needsLayout = true;
   uiState.needsDraw = true;
   uiState.needsInsets = true; // the revealed activity's decor is the new dispatch target
+}
+
+export function activityVisibility(phase: "pause" | "stop" | "resume"): Promise<void> {
+  return onMain(async () => {
+    const act = booted?.host.currentActivity();
+    if (!act) return;
+    if (phase === "pause") {
+      if (act.resumed) await pauseActivity(act);
+      await windowFocus(act, false);
+    } else if (phase === "stop") {
+      if (act.started) await stopActivity(act);
+    } else {
+      await resumeActivity(act);
+      await windowFocus(act, true);
+      uiState.needsLayout = uiState.needsDraw = true;
+    }
+  });
 }
 
 async function buildOptionsMenu(act: JActivity) {

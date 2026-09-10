@@ -1,7 +1,9 @@
 import "./natives";
-import { processBroker, connectProcess } from "./shell/processes";
-import { bootApk } from "./shell/device";
-import { setProcessIdentity } from "./android/os";
+import { processBroker, connectProcess, processPresentation } from "./shell/processes";
+import { bootApk, setScreenCanvas, tick, SCREEN_W, SCREEN_H } from "./shell/device";
+import { setProcessIdentity, recordVsync } from "./android/os";
+import { attachIme, drainInput } from "./shell/input";
+import { setWebLayer } from "./android/webkit";
 import { parsePackageArchive, packageArchive } from "./android/packagearchive";
 import { PackedArchive, packedArchives } from "./shell/packedarchive";
 import { rt } from "./jvm/runtime";
@@ -11,6 +13,28 @@ import { vfs } from "./jvm/natives/jio";
 import { mountSystemCertificates } from "./shell/cacerts";
 
 const pid = Number(new URLSearchParams(location.search).get("pid")), broker = processBroker();
+const canvas = document.getElementById("screen") as HTMLCanvasElement;
+canvas.width = SCREEN_W; canvas.height = SCREEN_H;
+setScreenCanvas(canvas);
+setWebLayer(document.getElementById("weblayer")!);
+attachIme(canvas, document.getElementById("kbd") as HTMLTextAreaElement);
+processPresentation.visible = false;
+let frameId = 0, ticking = false;
+function frame(time: number): void {
+  frameId = 0;
+  if (!processPresentation.visible) return;
+  recordVsync(time); drainInput();
+  if (!ticking) {
+    ticking = true;
+    void tick().finally(() => { ticking = false; });
+  }
+  frameId = requestAnimationFrame(frame);
+}
+processPresentation.changed = (visible) => {
+  if (visible && !frameId) frameId = requestAnimationFrame(frame);
+  else if (!visible && frameId) { cancelAnimationFrame(frameId); frameId = 0; }
+};
+window.addEventListener("pagehide", () => broker.fail(pid, "Process frame unloaded"), { once: true });
 try {
   const data = await broker.bootstrap(pid);
   setProcessIdentity(pid, data.uid);

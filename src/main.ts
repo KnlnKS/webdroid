@@ -1,4 +1,4 @@
-import { recordVsync } from "./android/os";
+import { recordVsync, PROCESS_PID } from "./android/os";
 // webdroid shell: phone chrome, launcher, boot + input wiring.
 
 import "./natives";
@@ -13,13 +13,12 @@ import { mangleMethod } from "./jvm/abi";
 import { loadFramework } from "./android/framework";
 import { unreadAttrs } from "./android/res";
 import { bootApk, tick, dispatchPointer, pressBack, currentApp, contentTop, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas, frame, present } from "./shell/device";
-import { attachInput, drainInput } from "./shell/input";
+import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { perf, perfReset } from "./perf";
 import { uiState, measureView, makeSpec } from "./android/view";
 import { onMain, mainDbg } from "./android/mainloop";
-import { imeInput, imeAction, imeActive, imeHasAction, imeSelection, imeFinishComposition } from "./android/ime";
-import { setInputElement } from "./android/textview";
+import { imeInput, imeAction } from "./android/ime";
 import { overlays } from "./android/popup";
 import { openDatabase } from "./android/sqlite";
 import { setWebLayer, webViewInfo } from "./android/webkit";
@@ -87,7 +86,6 @@ const statusEl = document.getElementById("status")!;
 const missingEl = document.getElementById("missing")!;
 const launcherEl = document.getElementById("launcher")!;
 const kbd = document.getElementById("kbd") as HTMLTextAreaElement;
-setInputElement(kbd);
 // WebViews are <iframe>s over the canvas: the framework positions them, the shell owns the layer
 setWebLayer(document.getElementById("weblayer")!);
 
@@ -160,7 +158,8 @@ const nativeEl = document.getElementById("native")!;
 rt.onNativeRequired = (lib, abi) => { nativeEl.textContent = "native code required: " + lib + " (" + abi + ")"; };
 
 import { provisionPackages, provisionServices } from "./shell/provision";
-import { connectProcess, registerForegroundProcess } from "./shell/processes";
+import { connectProcess, registerForegroundProcess, processPresentation, processBroker } from "./shell/processes";
+const back = () => { if (!processBroker().back(PROCESS_PID)) return pressBack(); };
 
 // The android resource package is the same for every app: start it now so a boot never waits.
 void loadFramework();
@@ -251,7 +250,7 @@ const wd = {
     return (fn as (...a: unknown[]) => unknown)(...args);
   },
   nativeLiars: () => [...rt.nativeLiars].sort(),
-  boot, app: () => currentApp(), rnodes: () => JRenderNode.all, back: () => pressBack(),
+  boot, app: () => currentApp(), rnodes: () => JRenderNode.all, back,
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
   web: () => webViewInfo(),
   // framework attributes a layout used that nothing here reads: a look that is wrong with a
@@ -378,6 +377,7 @@ const wd = {
 // frame loop: rAF when visible, timer fallback when the tab is hidden/backgrounded
 let lastTick = 0, ticking = false;
 function doTick() {
+  if (!processPresentation.visible) return;
   drainInput(); // ahead of the frame, and ahead of the guard below: a slow frame must not starve input
   if (ticking) return; // the timer fallback must not count a frame that is still in flight
   ticking = true;
@@ -406,18 +406,9 @@ frame.font = `${device.dp(13)}px system-ui`;
 frame.fillText("pick an app on the right →", SCREEN_W / 2, SCREEN_H / 2 + device.dp(20));
 present();
 
-attachInput(canvas, () => {
-  if (imeActive()) setTimeout(() => kbd.focus(), 0);
-});
-document.getElementById("btn-back")!.addEventListener("click", () => void pressBack());
+attachIme(canvas, kbd);
+document.getElementById("btn-back")!.addEventListener("click", () => void back());
 document.getElementById("btn-home")!.addEventListener("click", () => location.reload());
-
-kbd.addEventListener("input", (event) => void imeInput(kbd.value, kbd.selectionStart, kbd.selectionEnd, event instanceof InputEvent && event.isComposing));
-kbd.addEventListener("select", () => void imeSelection(kbd.selectionStart, kbd.selectionEnd));
-kbd.addEventListener("compositionend", () => void imeFinishComposition());
-kbd.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.isComposing && imeHasAction()) { e.preventDefault(); void imeAction(); }
-});
 
 mountSystemCertificates();
 

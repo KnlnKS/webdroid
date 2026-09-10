@@ -85,6 +85,8 @@ export class JActivity extends JContextWrapper {
   resultData: JIntent | null = null;
   /** who asked for this activity's result, and under which request code */
   resultTo: { act: JActivity; code: number } | null = null;
+  callingActivity: JComponentName | null = null;
+  remoteId = 0;
   lifecycleCbs: unknown[] | null = null;
   fragMgr: JFragmentManager | null = null;
   // set while a configuration-change relaunch is tearing this instance down, so androidx keeps
@@ -318,9 +320,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
       );
       return;
     }
-    await launchIntent(this.$host, intent);
-    const started = this.$host.currentActivity();
-    if (started && started !== this) started.resultTo = { act: this, code };
+    await launchIntent(this.$host, intent, { act: this, code });
   },
   // ActivityCompat — and so every androidx ActivityResultRegistry launcher — calls the options
   // overload, which must funnel into the body above rather than carry a second copy of it.
@@ -342,8 +342,8 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     return mkComponentName(this.$host.pkg, jclsNameOf(this));
   },
   "getLocalClassName()Ljava/lang/String;": function (this: JActivity) { return jclsNameOf(this); },
-  "getCallingActivity()Landroid/content/ComponentName;": () => null,
-  "getCallingPackage()Ljava/lang/String;": () => null,
+  "getCallingActivity()Landroid/content/ComponentName;": function (this: JActivity) { return this.callingActivity; },
+  "getCallingPackage()Ljava/lang/String;": function (this: JActivity) { return this.callingActivity?.pkg ?? null; },
   "overridePendingTransition(II)V": () => {},
   "startPostponedEnterTransition()V": () => {},
   "getPreferences(I)Landroid/content/SharedPreferences;": function (this: JActivity) {
