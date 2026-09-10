@@ -108,3 +108,18 @@ test("remote Binder death recipients can be removed and are delivered once", asy
     await expect(vcall(binder, "linkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)V", recipient, 0)).rejects.toBeTruthy();
   } finally { Object.assign(binderTransport, saved); }
 });
+
+test("unhandled Binder calls leave an empty reply with Android primitive read defaults", async () => {
+  const binder = await newObj("android/os/Binder"), data = new JParcel(), reply = new JParcel();
+  expect(await vcall(binder, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1234, data, reply, 0)).toBe(0);
+  expect(reply.size).toBe(0);
+  await vcall(reply, "readException", "()V");
+  for (const [name, desc, value] of [["readInt", "()I", 0], ["readLong", "()J", 0n], ["readFloat", "()F", 0], ["readDouble", "()D", 0]] as const) {
+    expect(await vcall(reply, name, desc)).toBe(value);
+    expect(reply.pos).toBe(0); expect(reply.size).toBe(0);
+  }
+  await vcall(reply, "writeInt", "(I)V", 17); reply.pos = 0;
+  expect(await vcall(reply, "readLong", "()J")).toBe(0n);
+  expect(reply.pos).toBe(0);
+  expect(await vcall(reply, "readInt", "()I")).toBe(17);
+});

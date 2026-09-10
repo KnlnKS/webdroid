@@ -50,10 +50,10 @@ function writeInt(p: JParcel, v: number) { reserve(p, 4); p.view.setInt32(advanc
 function writeLong(p: JParcel, v: bigint) { reserve(p, 8); p.view.setBigInt64(advance(p, 8), BigInt.asIntN(64, v), true); }
 function writeFloat(p: JParcel, v: number) { reserve(p, 4); p.view.setFloat32(advance(p, 4), v, true); }
 function writeDouble(p: JParcel, v: number) { reserve(p, 8); p.view.setFloat64(advance(p, 8), v, true); }
-function readInt(p: JParcel) { if (p.pos + 4 > p.size) throw rt.mkThrowable("java/lang/RuntimeException", "Parcel: read past end"); return p.view.getInt32(advance(p, 4), true); }
-function readLong(p: JParcel) { return p.view.getBigInt64(advance(p, 8), true); }
-function readFloat(p: JParcel) { return p.view.getFloat32(advance(p, 4), true); }
-function readDouble(p: JParcel) { return p.view.getFloat64(advance(p, 8), true); }
+function readInt(p: JParcel) { return p.pos + 4 <= p.size ? p.view.getInt32(advance(p, 4), true) : 0; }
+function readLong(p: JParcel) { return p.pos + 8 <= p.size ? p.view.getBigInt64(advance(p, 8), true) : 0n; }
+function readFloat(p: JParcel) { return p.pos + 4 <= p.size ? p.view.getFloat32(advance(p, 4), true) : 0; }
+function readDouble(p: JParcel) { return p.pos + 8 <= p.size ? p.view.getFloat64(advance(p, 8), true) : 0; }
 function writeString(p: JParcel, s: string | null) {
   if (s === null) return writeInt(p, -1);
   writeInt(p, s.length);
