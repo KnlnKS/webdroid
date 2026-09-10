@@ -5,6 +5,20 @@ import { linkInit, newObj, vcall } from "./jlang";
 import "./jutil";
 import "./jreflect";
 
+test("deque remove consumes the FIFO head and throws when empty", async () => {
+  for (const name of ["java/util/ArrayDeque", "java/util/LinkedList", "java/util/concurrent/ConcurrentLinkedDeque"]) {
+    const queue = await newObj(name);
+    await vcall(queue, "offer", "(Ljava/lang/Object;)Z", "first");
+    await vcall(queue, "offer", "(Ljava/lang/Object;)Z", "second");
+    expect(await vcall(queue, "remove", "()Ljava/lang/Object;")).toBe("first");
+    expect(await vcall(queue, "removeFirst", "()Ljava/lang/Object;")).toBe("second");
+    expect(await vcall(queue, "poll", "()Ljava/lang/Object;")).toBeNull();
+    let error: unknown;
+    try { await vcall(queue, "remove", "()Ljava/lang/Object;"); } catch (e) { error = e; }
+    expect(rt.iof(error, "java/util/NoSuchElementException")).toBe(1);
+  }
+});
+
 test("Collections.sort dispatches to custom list storage and overrides", async () => {
   class SortList extends JObj { values: unknown[] = ["c", "a", "b"]; }
   rt.register({ name: "webdroid/SortList", ctor: SortList, ifaces: ["java/util/List"], methods: {

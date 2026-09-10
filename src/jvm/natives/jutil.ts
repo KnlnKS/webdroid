@@ -296,6 +296,10 @@ function subView(parent: unknown[], from: number, to: number): unknown[] {
   });
 }
 type Methods = NonNullable<NativeSpec["methods"]>;
+function removeHead(this: JList): unknown {
+  if (!this.a.length) throw rt.mkThrowable("java/util/NoSuchElementException", null);
+  return this.a.shift();
+}
 export function listMethods(): Methods {
   return {
     "<init>()V": function () {},
@@ -407,10 +411,8 @@ export function listMethods(): Methods {
     // Deque/Queue-ish extras (LinkedList/ArrayDeque share this)
     "addFirst(Ljava/lang/Object;)V": function (this: JList, v: unknown) { this.a.unshift(v); },
     "addLast(Ljava/lang/Object;)V": function (this: JList, v: unknown) { this.a.push(v); },
-    "removeFirst()Ljava/lang/Object;": function (this: JList) {
-      if (!this.a.length) throw rt.mkThrowable("java/util/NoSuchElementException", null);
-      return this.a.shift();
-    },
+    "remove()Ljava/lang/Object;": removeHead,
+    "removeFirst()Ljava/lang/Object;": removeHead,
     "removeLast()Ljava/lang/Object;": function (this: JList) {
       if (!this.a.length) throw rt.mkThrowable("java/util/NoSuchElementException", null);
       return this.a.pop();
@@ -428,10 +430,7 @@ export function listMethods(): Methods {
     "offerFirst(Ljava/lang/Object;)Z": function (this: JList, v: unknown) { this.a.unshift(v); return 1; },
     "offerLast(Ljava/lang/Object;)Z": function (this: JList, v: unknown) { this.a.push(v); return 1; },
     "push(Ljava/lang/Object;)V": function (this: JList, v: unknown) { this.a.unshift(v); },
-    "pop()Ljava/lang/Object;": function (this: JList) {
-      if (!this.a.length) throw rt.mkThrowable("java/util/NoSuchElementException", null);
-      return this.a.shift();
-    },
+    "pop()Ljava/lang/Object;": removeHead,
   };
 }
 function indexIn(arr: unknown[], v: unknown, from = 0): number | Promise<number> {
@@ -1169,7 +1168,7 @@ export const priorityQueueMethods = (): NonNullable<NativeSpec["methods"]> => ({
   "offer(Ljava/lang/Object;)Z": async function (this: JPriorityQueue, v: unknown) { await pqInsert(this, v); return 1; },
   "add(Ljava/lang/Object;)Z": async function (this: JPriorityQueue, v: unknown) { await pqInsert(this, v); return 1; },
   "poll()Ljava/lang/Object;": function (this: JPriorityQueue) { return this.a.length ? this.a.shift()! : null; },
-  "remove()Ljava/lang/Object;": function (this: JPriorityQueue) { if (!this.a.length) throw rt.mkThrowable("java/util/NoSuchElementException", null); return this.a.shift()!; },
+  "remove()Ljava/lang/Object;": removeHead,
   "peek()Ljava/lang/Object;": function (this: JPriorityQueue) { return this.a.length ? this.a[0] : null; },
   "element()Ljava/lang/Object;": function (this: JPriorityQueue) { if (!this.a.length) throw rt.mkThrowable("java/util/NoSuchElementException", null); return this.a[0]; },
   "comparator()Ljava/util/Comparator;": function (this: JPriorityQueue) { return this.cmp; },
