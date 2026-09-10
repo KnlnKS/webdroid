@@ -378,8 +378,9 @@ rt.register({
     },
   },
 });
+rt.register({ name: "java/util/regex/MatchResult", ctor: class extends JObj {} });
 rt.register({
-  name: "java/util/regex/Matcher", ctor: JMatcher,
+  name: "java/util/regex/Matcher", ctor: JMatcher, ifaces: ["java/util/regex/MatchResult"],
   methods: {
     "find()Z": function (this: JMatcher) {
       this.re.lastIndex = Math.max(this.lastEnd, this.regionS);

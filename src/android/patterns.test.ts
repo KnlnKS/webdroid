@@ -1,3 +1,4 @@
+import { rt } from "../jvm/runtime";
 import { expect, test } from "bun:test";
 import { mangleStaticField } from "../jvm/abi";
 import { linkInit, vcall } from "../jvm/natives/jlang";
@@ -50,4 +51,18 @@ test("Patterns exposes the framework email and IP expressions", async () => {
       expect(await vcall(matcher, "matches", "()Z")).toBe(expected);
     }
   }
+});
+
+test("Matcher and its snapshot implement MatchResult without sharing subsequent matches", async () => {
+  const cls = (await linkInit("java/util/regex/Pattern")).ctor;
+  await linkInit("java/util/regex/Matcher");
+  const pattern = await vcall(cls, "compile", "(Ljava/lang/String;)Ljava/util/regex/Pattern;", "[a-z]+");
+  const matcher = await vcall(pattern, "matcher", "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;", "first second");
+  expect(await vcall(matcher, "find", "()Z")).toBe(1);
+  const result = await vcall(matcher, "toMatchResult", "()Ljava/util/regex/MatchResult;");
+  expect(rt.iof(matcher, "java/util/regex/MatchResult")).toBe(1);
+  expect(rt.iof(result, "java/util/regex/MatchResult")).toBe(1);
+  expect(await vcall(matcher, "find", "()Z")).toBe(1);
+  expect(await vcall(result, "group", "()Ljava/lang/String;")).toBe("first");
+  expect(await vcall(matcher, "group", "()Ljava/lang/String;")).toBe("second");
 });
