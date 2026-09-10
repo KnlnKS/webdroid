@@ -3129,3 +3129,43 @@ The new location capture checked all four actual runtimes: missing APIs and unde
 suspension were empty, and background main queues had no pending work. The full unit run
 before the final suspension annotations passed 977 tests and 47,058 assertions; subsequent
 framework probes passed (295/363 declared delegates) and text comparison passed 6/6.
+
+
+## Completion regression capture and idle push
+
+At 4b0a0c7, the full unit suite passed 977 tests (47,058 assertions), framework probes
+passed at 295/363 declared delegates, and text comparison passed 6/6. Serialized E2E
+rendered every scored step: FitNotes 39/39, Mihon app 17/17, onboarding 5/5 and Harmonic
+14/14. Content differences were 40.89%, 56.39%, 17.56% and 34.31% (overall 37.29%).
+FitNotes retained its fragment-destruction exception; Harmonic retained a layout exception.
+DoodleJump rendered 6/6 at a minimum of 35 fps. Flappy Bird rendered 7/7 but failed six FPS
+gates, at roughly 22 fps in play; a controlled b567197 run using the same browser launcher
+also failed six gates at 21–22 fps. This comparison does not indicate a new Flappy regression.
+Full artifacts are archived under /tmp/webdroid-completion-e2e-4b0a0c7-{actual,report}.
+
+Lichess did regress: all 15 steps wedged. Capturing the original host exception identified
+glGetInternalformativ dereferencing null on its NUM_SAMPLE_COUNTS query. Correct GLES
+symbol ownership made this path reachable. WebGL accepts only SAMPLES and returns a typed
+array; GLES's count query must return that array's length. The delegate now translates
+that query, bounds writes by bufSize and leaves output unchanged on invalid requests.
+A real WebGL fixture verifies count, sample value, output bounds, zero/negative sizes and
+invalid targets (/tmp/webdroid-gl-query-check.log). The corrected launch is responsive and
+renders Flutter navigation; b567197 remains responsive but fails to create its Skia surface
+and draws a blank screen. Both still reach the existing missing PhantomReference. The full
+Lichess flow must be rerun. Captures: /tmp/webdroid-lichess-{baseline,query-fixed}.{png,json}.
+
+microG's DEX schedules its heartbeat with AlarmManager at elapsedRealtime plus 300 seconds.
+The prior AlarmManager delegates did nothing. PendingIntent now preserves filter identity,
+request code and creation flags, snapshots its base intent, shares cancellation, and supports
+NO_CREATE, CANCEL_CURRENT, UPDATE_CURRENT and ONE_SHOT. AlarmManager uses one timer per realm
+for its pending operations, handles wall/elapsed clocks, replacement and cancellation, and
+coalesces missed repeating occurrences. Seven focused tests passed (44 assertions), including
+real broadcast delivery; typecheck passed. Operations and alarms are still process-local.
+
+With ece2390, the reopened test state logged into MCS at 1.621 s, sent its real heartbeat at
+301.473 s and received HeartbeatAck at 301.534 s. No reconnect followed initial connection.
+All three reached processes had empty missing-API sets and empty main queues at 350 s.
+The audit also identified Looper.loop's undeclared suspension; the following commit marks
+both delegates without adding Promise wrappers. Only event labels/timings were retained in
+/tmp/webdroid-mcs-idle-check.{json,log}; no message bodies or credentials were recorded.
+This verifies one idle heartbeat interval, not process-death recovery or indefinite uptime.

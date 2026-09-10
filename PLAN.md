@@ -163,3 +163,13 @@ TEMP state and one canonical persistent owner. Processes and bytecode start on d
   launched by a background service restores the previously visible app and sends its result
   to the caller. PendingIntent parcels retain Binder handles, but remote sending/cancellation
   and process-independent operation ownership remain incomplete.
+
+- The completion E2E checkpoint rendered all scored steps (overall content difference 37.29%).
+  A newly reached GLES sample-count query wedged Lichess; 18fac17 fixes the query and restores
+  responsive launch with real Flutter navigation. The full flow still needs a rerun.
+  Flappy Bird's six FPS failures also occur on the controlled b567197 baseline.
+- AlarmManager now delivers scheduled operations and PendingIntent honors identity and
+  creation flags. An unaccelerated idle test at ece2390 sent microG's five-minute heartbeat
+  and received HeartbeatAck 61 ms later without a reconnect. Missing APIs and main queues
+  were empty across three processes; the reached Looper suspension annotation was corrected.
+  System ownership across process death and broader reconnection tests remain incomplete.
