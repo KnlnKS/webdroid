@@ -363,7 +363,7 @@ export async function classpathStream(path: string, runtime: Runtime = rt): Prom
   return bytes ? newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length)) : null;
 }
 
-class JThrowable extends JObj {
+export class JThrowable extends JObj {
   msg: string | null = null;
   cause: JThrowable | null = null;
   suppressed: JThrowable[] = [];
@@ -513,13 +513,10 @@ defineException("java/util/ConcurrentModificationException", "java/lang/RuntimeE
 
 rt.mkThrowable = (cls: string, msg: string | null) => {
   let ctor = excCtors.get(cls);
-  if (!ctor) {
-    // exception classes registered outside excCtors (framework natives)
-    try {
-      const info = rt.link(cls);
-      if (info.ctor && (info.ctor === JThrowable || info.ctor.prototype instanceof JThrowable)) ctor = info.ctor;
-    } catch { /* fall through */ }
-  }
+  try {
+    const info = rt.link(cls);
+    if (info.ctor && (info.ctor === JThrowable || info.ctor.prototype instanceof JThrowable)) ctor = info.ctor;
+  } catch { /* fall through */ }
   const e = new (ctor ?? excCtors.get("java/lang/RuntimeException")!)();
   e.msg = msg;
   return e;

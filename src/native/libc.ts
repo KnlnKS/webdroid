@@ -4,7 +4,7 @@
 
 import { mem, NativeFault } from "./mem";
 import { hostLib, hostData, NORET, ARG0, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, calledMissing } from "./host";
-import { E } from "./abi";
+import { E, ERRSTR } from "./abi";
 import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
 import { backtrace } from "./dl";
 import { format, scan } from "./printf";
@@ -607,10 +607,5 @@ function scanInto(s: string, f: string, a: { p(): number }): number {
     return 0;
   });
 }
-const ERRSTR: Record<number, string> = {
-  1: "Operation not permitted", 2: "No such file or directory", 4: "Interrupted system call", 5: "I/O error", 9: "Bad file descriptor",
-  11: "Try again", 12: "Out of memory", 13: "Permission denied", 16: "Device or resource busy", 17: "File exists", 20: "Not a directory",
-  21: "Is a directory", 22: "Invalid argument", 24: "Too many open files", 28: "No space left on device", 29: "Illegal seek", 34: "Numerical result out of range",
-  35: "Resource deadlock would occur", 38: "Function not implemented", 39: "Directory not empty", 101: "Network is unreachable", 110: "Connection timed out",
-};
+
 export { NativeFault };

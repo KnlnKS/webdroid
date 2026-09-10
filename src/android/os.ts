@@ -4,7 +4,8 @@ import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
-import { vcall, curThread, mainThread, JThread, setCurThread, reportUncaught, mkEnumSet, newObj, defineException } from "../jvm/natives/jlang";
+import { vcall, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException } from "../jvm/natives/jlang";
+import { E, ERRSTR } from "../native/abi";
 export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
 import { uiState } from "./view";
@@ -737,8 +738,30 @@ rt.register({
 });
 
 // android.system.Os: the libcore syscall surface over the same descriptor table native code uses
-defineException("android/system/ErrnoException", "java/lang/Exception");
-const errno = (fn: string, e: number) => { const x = rt.mkThrowable("android/system/ErrnoException", fn) as JObj & { errno: number }; x.errno = e; return x; };
+class JErrnoException extends JThrowable { errno = 0; functionName = ""; }
+function errnoMessage(this: JErrnoException): string {
+  const name = Object.entries(E).find(([, value]) => value === this.errno)?.[0];
+  return `${this.functionName} failed: ${name ? "E" + name : "errno " + this.errno} (${ERRSTR[this.errno] ?? "Unknown error " + this.errno})`;
+}
+function initErrno(this: JErrnoException, fn: string, value: number, cause: JThrowable | null = null) {
+  this.functionName = fn; this.errno = value; this.cause = cause;
+}
+rt.register({
+  name: "android/system/ErrnoException", ctor: JErrnoException, sup: "java/lang/Exception",
+  fields: { errno: "errno", functionName: "functionName" },
+  methods: {
+    "<init>(Ljava/lang/String;I)V": initErrno,
+    "<init>(Ljava/lang/String;ILjava/lang/Throwable;)V": initErrno,
+    "getMessage()Ljava/lang/String;": errnoMessage,
+    "rethrowAsIOException()Ljava/io/IOException;": function (this: JErrnoException) {
+      const error = rt.mkThrowable("java/io/IOException", errnoMessage.call(this)); error.cause = this; throw error;
+    },
+    "rethrowAsSocketException()Ljava/net/SocketException;": function (this: JErrnoException) {
+      const error = rt.mkThrowable("java/net/SocketException", errnoMessage.call(this)); error.cause = this; throw error;
+    },
+  },
+});
+const errno = (fn: string, e: number) => { const x = rt.mkThrowable("android/system/ErrnoException", fn) as JErrnoException; initErrno.call(x, fn, e); return x; };
 class JStructStat extends JObj { st_dev = 0n; st_ino = 0n; st_mode = 0; st_nlink = 1n; st_uid = 0; st_gid = 0; st_size = 0n; st_atime = 0n; st_mtime = 0n; st_ctime = 0n; st_blksize = 4096n; st_blocks = 0n; }
 rt.register({
   name: "android/system/StructStat", ctor: JStructStat,
@@ -781,6 +804,7 @@ rt.register({
 rt.register({
   name: "android/system/OsConstants", ctor: class extends JObj {},
   statics: {
+    ...Object.fromEntries(Object.entries(E).map(([name, value]) => ["E" + name, value])),
     PROT_READ: 0x1,
     MAP_PRIVATE: 0x02,
     SEEK_SET: 0, SEEK_CUR: 1, SEEK_END: 2,

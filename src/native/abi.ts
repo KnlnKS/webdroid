@@ -49,3 +49,10 @@ export const E = {
   NOTEMPTY: 39, NOTSOCK: 88, PROTONOSUPPORT: 93, SOCKTNOSUPPORT: 94, AFNOSUPPORT: 97, NETUNREACH: 101,
   ISCONN: 106, NOTCONN: 107, TIMEDOUT: 110, CONNREFUSED: 111, HOSTUNREACH: 113, ALREADY: 114, INPROGRESS: 115,
 } as const;
+
+export const ERRSTR: Record<number, string> = {
+  1: "Operation not permitted", 2: "No such file or directory", 4: "Interrupted system call", 5: "I/O error", 9: "Bad file descriptor",
+  11: "Try again", 12: "Out of memory", 13: "Permission denied", 16: "Device or resource busy", 17: "File exists", 20: "Not a directory",
+  21: "Is a directory", 22: "Invalid argument", 24: "Too many open files", 28: "No space left on device", 29: "Illegal seek", 34: "Numerical result out of range",
+  35: "Resource deadlock would occur", 38: "Function not implemented", 39: "Directory not empty", 101: "Network is unreachable", 110: "Connection timed out",
+};
