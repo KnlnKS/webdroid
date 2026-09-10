@@ -295,12 +295,13 @@ rt.register({
   statics: {
     MODEL: "webdroid", MANUFACTURER: "webdroid", BRAND: "google", DEVICE: "webdroid",
     PRODUCT: "webdroid", HARDWARE: "browser", FINGERPRINT: "google/webdroid/1.0", SOC_MANUFACTURER: "unknown", SOC_MODEL: "unknown", SKU: "unknown", ODM_SKU: "unknown",
-    SERIAL: "unknown", ID: "WD1A", DISPLAY: "webdroid 1.0", TAGS: "release-keys", TYPE: "user",
+    SERIAL: "unknown", RADIO: "unknown", ID: "WD1A", DISPLAY: "webdroid 1.0", TAGS: "release-keys", TYPE: "user",
     BOARD: "web", BOOTLOADER: "unknown", HOST: "localhost", USER: "web", TIME: 0n,
     SUPPORTED_ABIS: jarray(["arm64-v8a", "armeabi-v7a"], "Ljava/lang/String;"),
     SUPPORTED_32_BIT_ABIS: jarray(["armeabi-v7a"], "Ljava/lang/String;"),
     SUPPORTED_64_BIT_ABIS: jarray(["arm64-v8a"], "Ljava/lang/String;"),
   },
+  methods: { "static getRadioVersion()Ljava/lang/String;": () => null },
 });
 class JBuildVersion extends JObj {}
 rt.register({
