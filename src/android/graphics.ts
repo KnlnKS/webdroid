@@ -6,7 +6,7 @@ import { device } from "../shell/config";
 import { handle } from "./handles";
 import { vcall, mkEnumSet, JSimpleEnum, linkInit, stringHash } from "../jvm/natives/jlang";
 import { usLocale } from "../jvm/natives/jvalues";
-import { readStreamFully } from "../jvm/natives/jio";
+import { readStreamFully, vfs } from "../jvm/natives/jio";
 import { jclsNameOf } from "./apphost";
 import { JPath } from "./path";
 import { perf } from "../perf";
@@ -250,6 +250,14 @@ export function typefaceFor(fam: string | null, style = 0): JTypeface {
 }
 /** the medium face framework chrome uses (dialog buttons, picker values, the action bar title) */
 export const tfMedium = typefaceFor("sans-serif-medium");
+// fonts.ts owns font parsing and imports this module, so the loader arrives from there
+let loadTypeface: (bytes: Uint8Array | null) => Promise<JTypeface | null> = async () => null;
+export const setTypefaceLoader = (f: typeof loadTypeface) => { loadTypeface = f; };
+const assetFont = maySuspend((am: { host: { zip: Record<string, Uint8Array> } } | null, path: string) => {
+  const bytes = am?.host.zip["assets/" + path];
+  if (!bytes) throw rt.mkThrowable("java/lang/RuntimeException", "Font asset not found " + path);
+  return loadTypeface(bytes);
+});
 rt.register({
   name: "android/graphics/Typeface", ctor: JTypeface,
   statics: {
@@ -259,6 +267,9 @@ rt.register({
   },
   methods: {
     "static create(Ljava/lang/String;I)Landroid/graphics/Typeface;": typefaceFor,
+    "static createFromAsset(Landroid/content/res/AssetManager;Ljava/lang/String;)Landroid/graphics/Typeface;": assetFont,
+    "static createFromFile(Ljava/lang/String;)Landroid/graphics/Typeface;": maySuspend((p: string) => loadTypeface(vfs.read(p))),
+    "static createFromFile(Ljava/io/File;)Landroid/graphics/Typeface;": maySuspend((f: { path: string } | null) => loadTypeface(f ? vfs.read(f.path) : null)),
     "static create(Landroid/graphics/Typeface;IZ)Landroid/graphics/Typeface;": (base: JTypeface | null, weight: number, italic: number) => {
       const t = mkTypeface(base?.family ?? "Roboto, sans-serif", weight >= 600, !!italic);
       t.weight = weight;

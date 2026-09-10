@@ -9,7 +9,7 @@ import { vcall } from "../jvm/natives/jlang";
 import { parseAXML, attr } from "./axml";
 import { vfs, type JFile } from "../jvm/natives/jio";
 import { JBuffer, bufferView } from "../jvm/natives/jnio";
-import { JTypeface, mkTypeface, typefaceFor, setFamilyMetrics } from "./graphics";
+import { JTypeface, mkTypeface, typefaceFor, setFamilyMetrics, setTypefaceLoader } from "./graphics";
 import type { Resources } from "./res";
 import type { JResources, JAssetManager } from "./resnative";
 
@@ -345,20 +345,26 @@ const tfbMethods: NonNullable<NativeSpec["methods"]> = {
   "setFontVariationSettings([Landroid/graphics/fonts/FontVariationAxis;)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, a: JFontVariationAxis[] | null) { this.axes = a ? [...a] : null; return this; },
   "setFallback(Ljava/lang/String;)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, s: string | null) { this.fallback = s; return this; },
   // AOSP returns null when the font cannot be read (rather than throwing)
-  "build()Landroid/graphics/Typeface;": async function (this: JTypefaceBuilder) {
-    if (!this.bytes) return null;
-    const f = new JFont();
-    f.bytes = this.bytes; f.ttcIndex = this.ttcIndex; f.axes = this.axes;
-    const st = sfntStyle(this.bytes, this.ttcIndex);
-    if (!st) return null;
-    f.style = mkFontStyle(this.weight !== -1 ? this.weight : st.weight || 400, this.italic !== -1 ? this.italic : st.italic ? ITALIC : UPRIGHT);
-    const fam = new JFontFamily();
-    fam.fonts = [f];
-    fam.css = "wd-font-" + (++fontSeq);
-    await registerFace(f, fam.css);
-    return typefaceOver([fam], this.fallback, f.style);
+  "build()Landroid/graphics/Typeface;": function (this: JTypefaceBuilder) {
+    return buildTypeface(this.bytes, this);
   },
 };
+/** font bytes → a registered Typeface, null when they are not a font this can read */
+async function buildTypeface(bytes: Uint8Array | null, o: Partial<JTypefaceBuilder> = {}): Promise<JTypeface | null> {
+  if (!bytes) return null;
+  const { weight = -1, italic = -1, ttcIndex = 0, axes = null, fallback = null } = o;
+  const st = sfntStyle(bytes, ttcIndex);
+  if (!st) return null;
+  const f = new JFont();
+  f.bytes = bytes; f.ttcIndex = ttcIndex; f.axes = axes;
+  f.style = mkFontStyle(weight !== -1 ? weight : st.weight || 400, italic !== -1 ? italic : st.italic ? ITALIC : UPRIGHT);
+  const fam = new JFontFamily();
+  fam.fonts = [f];
+  fam.css = "wd-font-" + (++fontSeq);
+  await registerFace(f, fam.css);
+  return typefaceOver([fam], fallback, f.style);
+}
+setTypefaceLoader(buildTypeface);
 rt.register({ name: "android/graphics/Typeface$Builder", ctor: JTypefaceBuilder, methods: tfbMethods });
 
 const fontMemo = new WeakMap<Resources, Map<number, Promise<JTypeface | null>>>();
