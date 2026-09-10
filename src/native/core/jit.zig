@@ -778,13 +778,20 @@ pub fn Emit(comptime wide: bool) type {
                         e.setSP(o.rn);
                     }
                     const sz: u32 = if (opc == 2) 3 else 2;
+                    const load = o.a & 4 != 0;
+                    // A 64-bit pair writes exactly the two words storeCheck's paired form tests, so
+                    // both halves cost one page lookup and one branch instead of two. jitfp.vstore
+                    // already stores 16 bytes this way. The 32-bit pair is 4 bytes apart, which the
+                    // paired form does not describe, so it keeps a check per half.
+                    const paired = !load and sz == 3;
+                    if (paired) e.storeCheck(0, true);
                     for ([_]u8{ o.rd, o.rm }, 0..) |t, i| {
                         const off = (@as(u32, 1) << @intCast(sz)) * @as(u32, @intCast(i));
-                        if (o.a & 4 != 0) {
+                        if (load) {
                             b.emit(.{ get(L_A), mo(LD[sz][@intFromBool(opc == 1)], off) });
                             e.setX(t);
                         } else {
-                            e.storeCheck(off, false);
+                            if (!paired) e.storeCheck(off, false);
                             b.get(L_A);
                             e.getX(t);
                             b.memop(ST[sz], off);
