@@ -122,6 +122,7 @@ type IterOwner = { removeAt?(i: number): void | Promise<void>; readonly modCount
 class JIter extends JObj {
   i = 0;
   last = -1; // index next()/previous() returned, the target of set()/remove(); -1 once consumed
+  readOnly = false;
   expectedMod: number | null = null; // fail-fast snapshot, only set when owner exposes modCount
   constructor(public arr: unknown[], public owner: IterOwner | null = null) {
     super();
@@ -148,6 +149,7 @@ rt.register({
     "hasMoreElements()Z": iterHasNext,
     "nextElement()Ljava/lang/Object;": iterNext,
     "remove()V": async function (this: JIter) {
+      if (this.readOnly) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
       if (this.last < 0) throw rt.mkThrowable("java/lang/IllegalStateException", null);
       checkMod(this);
       if (this.owner?.removeAt) await this.owner.removeAt(this.last);
@@ -166,11 +168,13 @@ rt.register({
     "nextIndex()I": function (this: JIter) { return this.i; },
     "previousIndex()I": function (this: JIter) { return this.i - 1; },
     "set(Ljava/lang/Object;)V": function (this: JIter, v: unknown) {
+      if (this.readOnly) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
       if (this.last < 0) throw rt.mkThrowable("java/lang/IllegalStateException", null);
       checkMod(this);
       this.arr[this.last] = v;
     },
     "add(Ljava/lang/Object;)V": function (this: JIter, v: unknown) {
+      if (this.readOnly) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
       checkMod(this);
       this.arr.splice(this.i++, 0, v);
       this.last = -1;
@@ -1170,8 +1174,17 @@ rt.register({
   ifaces: ["java/util/Queue", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"],
   methods: priorityQueueMethods(),
 });
+function snapshotIterator(list: JList, at = 0): JIter {
+  if (at < 0 || at > list.a.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(at));
+  const it = mkIter(list.a.slice());
+  it.i = at; it.readOnly = true;
+  return it;
+}
 const concurrentListExtras: Record<string, Methods> = {
   "java/util/concurrent/CopyOnWriteArrayList": {
+    "iterator()Ljava/util/Iterator;": function (this: JList) { return snapshotIterator(this); },
+    "listIterator()Ljava/util/ListIterator;": function (this: JList) { return snapshotIterator(this); },
+    "listIterator(I)Ljava/util/ListIterator;": function (this: JList, at: number) { return snapshotIterator(this, at); },
     "addIfAbsent(Ljava/lang/Object;)Z": async function (this: JList, v: unknown) {
       if ((await indexIn(this.a, v)) >= 0) return 0;
       this.a.push(v);

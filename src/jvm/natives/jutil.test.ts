@@ -192,3 +192,22 @@ test("map computation preserves the caller for mapping and overridable writes", 
     expect(callers).toEqual([owner, owner, owner, owner]);
   } finally { setCurThread(previous); }
 });
+
+test("CopyOnWriteArrayList dispatch snapshots survive listeners removing themselves", async () => {
+  const list = await newObj("java/util/concurrent/CopyOnWriteArrayList");
+  for (const value of ["first", "second", "last"]) await vcall(list, "add", "(Ljava/lang/Object;)Z", value);
+  const it = await vcall(list, "iterator", "()Ljava/util/Iterator;"), delivered: unknown[] = [];
+  while (await vcall(it, "hasNext", "()Z")) {
+    const value = await vcall(it, "next", "()Ljava/lang/Object;"); delivered.push(value);
+    await vcall(list, "remove", "(Ljava/lang/Object;)Z", value);
+    if (value === "first") await vcall(list, "add", "(Ljava/lang/Object;)Z", "new");
+  }
+  expect(delivered).toEqual(["first", "second", "last"]); expect(list.a).toEqual(["new"]);
+  const cursor = await vcall(list, "listIterator", "(I)Ljava/util/ListIterator;", 1);
+  await vcall(list, "set", "(ILjava/lang/Object;)Ljava/lang/Object;", 0, "changed");
+  expect(await vcall(cursor, "previous", "()Ljava/lang/Object;")).toBe("new");
+  for (const [name, desc, args] of [["remove", "()V", []], ["set", "(Ljava/lang/Object;)V", ["x"]], ["add", "(Ljava/lang/Object;)V", ["x"]]] as const) {
+    await expect(vcall(cursor, name, desc, ...args)).rejects.toBeInstanceOf(rt.link("java/lang/UnsupportedOperationException").ctor);
+  }
+  await expect(vcall(list, "listIterator", "(I)Ljava/util/ListIterator;", 2)).rejects.toBeDefined();
+});
