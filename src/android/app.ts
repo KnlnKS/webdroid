@@ -49,6 +49,23 @@ rt.register({
     "getPrimaryColor()I": function (this: JTaskDescription) { return this.primaryColor; },
   },
 });
+class JActivityOptions extends JObj { animationType = -1; }
+rt.register({
+  name: "android/app/ActivityOptions", ctor: JActivityOptions,
+  methods: {
+    "static makeBasic()Landroid/app/ActivityOptions;": () => new JActivityOptions(),
+    "static makeSceneTransitionAnimation(Landroid/app/Activity;[Landroid/util/Pair;)Landroid/app/ActivityOptions;": (activity: JActivity) => {
+      if (!activity) return rt.npe();
+      if (activity.window.features.has(13)) throw rt.unimplemented("ActivityOptions shared element transitions");
+      const options = new JActivityOptions(); options.animationType = 6; return options;
+    },
+    "toBundle()Landroid/os/Bundle;": function (this: JActivityOptions) {
+      const bundle = new JBundle();
+      if (this.animationType !== -1) bundle.map.set("android:activity.animType", this.animationType);
+      return bundle;
+    },
+  },
+});
 export class JActivity extends JContextWrapper {
   window = new JWindow();
   intent: JIntent | null = null;
