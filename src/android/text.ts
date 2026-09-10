@@ -41,30 +41,44 @@ rt.register({
 
 // ── Spans (data-only carriers; TextView applies a small subset visually)
 interface SpanRec { span: unknown; start: number; end: number; flags: number; }
-export class JSpannable extends JObj {
+export class JSpanned extends JObj {
   text = "";
   spans: SpanRec[] = [];
   // JObj has no JS toString, so String(spanned) anywhere in the framework read "[object Object]"
   toString() { return this.text; }
 }
+export class JSpannable extends JSpanned {}
 export function spannedString(s: unknown): string {
   if (s === null || s === undefined) return "";
   if (typeof s === "string") return s;
-  if (s instanceof JSpannable) return s.text;
+  if (s instanceof JSpanned) return s.text;
   return String(s);
 }
 function sliceSpanned(cs: unknown, start: number, end: number): unknown {
-  if (!(cs instanceof JSpannable)) return spannedString(cs).slice(start, end);
+  if (!(cs instanceof JSpanned)) return spannedString(cs).slice(start, end);
   const out = new (cs.constructor as new () => JSpannable)(); out.text = cs.text.slice(start, end);
   for (const r of cs.spans) if (r.end > start && r.start < end) out.spans.push({ ...r, start: Math.max(0, r.start - start), end: Math.min(end, r.end) - start });
   return out;
 }
 const spanMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
-  "<init>(Ljava/lang/CharSequence;)V": function (this: JSpannable, cs: unknown) {
-    this.text = spannedString(cs);
-    if (cs instanceof JSpannable) this.spans = cs.spans.slice();
-  },
+  "<init>(Ljava/lang/CharSequence;)V": maySuspend(function (this: JSpanned, cs: unknown) {
+    if (cs == null) return rt.npe();
+    if (typeof cs === "string") { this.text = cs; return; }
+    if (cs instanceof JSpanned) {
+      this.text = cs.text; this.spans = cs.spans.map((span) => ({ ...span })); return;
+    }
+    return (async () => {
+      this.text = await csText(cs);
+      if (!rt.iof(cs, "android/text/Spanned")) return;
+      const spans = await vcall(cs, "getSpans", "(IILjava/lang/Class;)[Ljava/lang/Object;", 0, this.text.length, rt.classFor("java/lang/Object"));
+      for (const span of spans) this.spans.push({ span,
+        start: await vcall(cs, "getSpanStart", "(Ljava/lang/Object;)I", span),
+        end: await vcall(cs, "getSpanEnd", "(Ljava/lang/Object;)I", span),
+        flags: await vcall(cs, "getSpanFlags", "(Ljava/lang/Object;)I", span),
+      });
+    })();
+  }),
   "length()I": function (this: JSpannable) { return this.text.length; },
   "charAt(I)C": function (this: JSpannable, i: number) { return this.text.charCodeAt(i); },
   "toString()Ljava/lang/String;": function (this: JSpannable) { return this.text; },
@@ -103,12 +117,23 @@ rt.register({
   ifaces: ["java/lang/CharSequence", "android/text/Spannable", "android/text/Spanned"],
   methods: spanMethods,
 });
+class JSpannedString extends JSpanned {}
+const immutableSpanMethods = Object.fromEntries(Object.entries(spanMethods!).filter(([name]) => !name.startsWith("setSpan(") && !name.startsWith("removeSpan(") && name !== "<init>()V"));
+rt.register({
+  name: "android/text/SpannedString", ctor: JSpannedString,
+  ifaces: ["java/lang/CharSequence", "android/text/Spanned"],
+  methods: {
+    ...immutableSpanMethods,
+    "static valueOf(Ljava/lang/CharSequence;)Landroid/text/SpannedString;": (cs: unknown) =>
+      cs instanceof JSpannedString ? cs : newObj("android/text/SpannedString", "(Ljava/lang/CharSequence;)V", cs),
+  },
+});
 /** CharSequence → text. May be a JS string, a Spannable, or an app class (Compose
  *  AnnotatedString wrappers), so anything unrecognised answers through toString(). */
 export async function csText(cs: unknown): Promise<string> {
   if (cs === null || cs === undefined) return "";
   if (typeof cs === "string") return cs;
-  if (cs instanceof JSpannable) return cs.text;
+  if (cs instanceof JSpanned) return cs.text;
   return String(await vcall(cs, "toString", "()Ljava/lang/String;"));
 }
 const selectionStart = new JObj(), selectionEnd = new JObj();
@@ -557,13 +582,13 @@ rt.register({
 type SpanMetrics = { top: number; ascent: number; descent: number; bottom: number; leading: number };
 type Replacement = SpanRec & { width: number; metrics: SpanMetrics; paint: JTextPaint };
 function replacementSpans(cs: unknown): SpanRec[] {
-  return cs instanceof JSpannable ? cs.spans.filter((s) => s.end > s.start && rt.iof(s.span, "android/text/style/ReplacementSpan")).sort((a, b) => a.start - b.start) : [];
+  return cs instanceof JSpanned ? cs.spans.filter((s) => s.end > s.start && rt.iof(s.span, "android/text/style/ReplacementSpan")).sort((a, b) => a.start - b.start) : [];
 }
 async function measureReplacements(cs: unknown, paint: JTextPaint, spans = replacementSpans(cs)): Promise<Replacement[]> {
   const result: Replacement[] = [];
   for (const span of spans) {
     const p = new JTextPaint(); copyPaint(paint, p); p.density = paint.density;
-    if (cs instanceof JSpannable) for (const style of cs.spans) {
+    if (cs instanceof JSpanned) for (const style of cs.spans) {
       if (style.end <= span.start || style.start >= span.end || rt.iof(style.span, "android/text/style/ReplacementSpan")) continue;
       if (rt.iof(style.span, "android/text/style/MetricAffectingSpan")) await vcall(style.span, "updateMeasureState", "(Landroid/text/TextPaint;)V", p);
     }
@@ -671,7 +696,7 @@ class JLayout extends JObj {
   async applyLineHeightSpans() {
     this.tops = this.bases = null;
     const src = this.src;
-    if (!(src instanceof JSpannable)) return;
+    if (!(src instanceof JSpanned)) return;
     const spans = src.spans.filter((s) => rt.iof(s.span, "android/text/style/LineHeightSpan"));
     if (!spans.length && !this.replacements.length) return;
     const fm = new (rt.link("android/graphics/Paint$FontMetricsInt").ctor as new () => { top: number; ascent: number; descent: number; bottom: number; leading: number })();

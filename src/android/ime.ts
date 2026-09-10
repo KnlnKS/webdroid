@@ -13,7 +13,7 @@ import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { jarray } from "../jvm/abi";
-import { JEditable, JSpannable, csText, textSelection, setTextSelection } from "./text";
+import { JEditable, JSpannable, JSpanned, csText, textSelection, setTextSelection } from "./text";
 import { JView, invalidate } from "./view";
 import { JMatrix } from "./graphics";
 import { JTextView, JEditText, focusedEdit, focusEditText, inputEl, editInput, fireEditorAction } from "./textview";
@@ -375,7 +375,7 @@ rt.register({
     "newEditable(Ljava/lang/CharSequence;)Landroid/text/Editable;": async (cs: unknown) => {
       const o = new (rt.link("android/text/SpannableStringBuilder").ctor)() as JSpannable;
       o.text = await csText(cs);
-      if (cs instanceof JSpannable) o.spans = cs.spans.slice();
+      if (cs instanceof JSpanned) o.spans = cs.spans.slice();
       return o;
     },
   },

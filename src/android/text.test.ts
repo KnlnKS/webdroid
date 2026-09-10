@@ -4,6 +4,23 @@ import { newObj, vcall } from "../jvm/natives/jlang";
 import { rt } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 
+test("SpannedString snapshots spans without exposing mutable Spannable methods", async () => {
+  const source = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "caption");
+  const marker = await newObj("android/text/style/StyleSpan", "(I)V", 1);
+  await vcall(source, "setSpan", "(Ljava/lang/Object;III)V", marker, 1, 5, 33);
+  const copy = await newObj("android/text/SpannedString", "(Ljava/lang/CharSequence;)V", source);
+  await vcall(source, "setSpan", "(Ljava/lang/Object;III)V", marker, 0, 7, 17);
+  expect(await vcall(copy, "getSpanStart", "(Ljava/lang/Object;)I", marker)).toBe(1);
+  expect(await vcall(copy, "getSpanEnd", "(Ljava/lang/Object;)I", marker)).toBe(5);
+  expect(rt.iof(copy, "android/text/Spannable")).toBe(0);
+  expect(copy[mangleMethod("setSpan", "(Ljava/lang/Object;III)V")]).toBeUndefined();
+  const slice = await vcall(copy, "subSequence", "(II)Ljava/lang/CharSequence;", 2, 6);
+  expect(await vcall(slice, "toString", "()Ljava/lang/String;")).toBe("ptio");
+  expect(await vcall(slice, "getSpanStart", "(Ljava/lang/Object;)I", marker)).toBe(0);
+  const valueOf = rt.link("android/text/SpannedString").ctor[mangleMethod("valueOf", "(Ljava/lang/CharSequence;)Landroid/text/SpannedString;")];
+  expect(valueOf(copy)).toBe(copy);
+});
+
 test("capitalization distinguishes paragraphs, words, sentences and abbreviations", async () => {
   const caps = rt.link("android/text/TextUtils").ctor[mangleMethod("getCapsMode", "(Ljava/lang/CharSequence;II)I")];
   for (const [text, requested, expected] of [
