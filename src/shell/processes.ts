@@ -15,6 +15,7 @@ import { getPM, JResolveInfo } from "../android/pm";
 import { toJsArray } from "../jvm/natives/jutil";
 import { attrStr } from "../android/axml";
 import { sqliteStore, useSQLiteStore } from "../android/sqlite";
+import { preferenceStore, usePreferenceStore } from "../android/sharedprefs";
 import { rt } from "../jvm/runtime";
 import { packedArchives, type PackedArchive } from "./packedarchive";
 
@@ -40,6 +41,7 @@ type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HT
   watchers: Set<() => void>; pending: Set<(error: unknown) => void> };
 export class ProcessBroker {
   readonly databases = sqliteStore;
+  readonly preferences = preferenceStore;
   private entries = new Map<number, Entry>();
   private byName = new Map<string, Entry>();
   private nextPid = 1001;
@@ -250,6 +252,7 @@ export function connectProcess(): ProcessEndpoint {
     return true;
   };
   useSQLiteStore(broker.databases);
+  usePreferenceStore(broker.preferences);
   connectProviders((pkg, process, request) => remote(broker.provider(PROCESS_PID, pkg, process, request)));
   broadcastTransport.send = async (intent, permission, ordered) => remote(broker.broadcast(PROCESS_PID, await encodeIntent(intent), permission, ordered));
   binderTransport.transact = (request) => remote(broker.transact(PROCESS_PID, request));
