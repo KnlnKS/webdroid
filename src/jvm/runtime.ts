@@ -817,6 +817,18 @@ export class Runtime {
       case "([C)V": return charsToString(args[0] as Uint16Array, 0, (args[0] as Uint16Array).length);
       case "([CII)V": return charsToString(args[0] as Uint16Array, args[1] as number, args[2] as number);
       case "([B)V": return utf8.dec.decode(args[0] as Int8Array);
+      case "([BI)V": case "([BIII)V": {
+        const bytes = args[0] as Int8Array;
+        if (!bytes) throw this.mkThrowable("java/lang/NullPointerException", "ascii");
+        const high = (args[1] as number) << 8;
+        const off = desc === "([BI)V" ? 0 : args[2] as number;
+        const count = desc === "([BI)V" ? bytes.length : args[3] as number;
+        if (off < 0 || count < 0 || off > bytes.length - count)
+          throw this.mkThrowable("java/lang/StringIndexOutOfBoundsException", "offset/count");
+        const chars = new Uint16Array(count);
+        for (let i = 0; i < count; i++) chars[i] = high | (bytes[off + i] & 255);
+        return charsToString(chars, 0, count);
+      }
       case "([BII)V": {
         const b = args[0] as Int8Array;
         return utf8.dec.decode(b.subarray(args[1] as number, (args[1] as number) + (args[2] as number)));

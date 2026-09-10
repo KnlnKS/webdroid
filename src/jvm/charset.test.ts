@@ -4,6 +4,14 @@ import { rt } from "./runtime";
 import { encodeString, decodeString } from "./charset";
 import { vcall } from "./natives/jlang";
 
+test("legacy byte String constructors combine unsigned bytes with the high byte", () => {
+  const bytes = Int8Array.of(65, -128, -1);
+  expect(rt.newStr("([BI)V", [bytes, 0])).toBe("A\x80\xff");
+  expect(rt.newStr("([BIII)V", [bytes, 0x101, 1, 2])).toBe("\u0180\u01ff");
+  expect(() => rt.newStr("([BIII)V", [bytes, 0, 2, 2])).toThrow();
+  expect(() => rt.newStr("([BI)V", [null, 0])).toThrow();
+});
+
 test("Latin-1 preserves every byte through Java String charset overloads", async () => {
   const bytes = Int8Array.from({ length: 256 }, (_, i) => i);
   const charset = rt.link("java/nio/charset/StandardCharsets").ctor.s$ISO_8859_1;
