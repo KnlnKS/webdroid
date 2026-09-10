@@ -380,7 +380,14 @@ export function gles3Init(): void {
     glGetBooleanv: (_c, a) => { const n = a.i(); out(param(n), a.p(), st8, 1); },
     glGetIntegeri_v: (_c, a) => { const t = a.i(), i = a.i(); out(g().getIndexedParameter(t, i), a.p(), st32, 4); },
     glGetInteger64i_v: (_c, a) => { const t = a.i(), i = a.i(); out(g().getIndexedParameter(t, i), a.p(), st64, 8); },
-    glGetInternalformativ: (_c, a) => { const t = a.i(), f = a.i(), pn = a.i(); a.i(); const v = g().getInternalformatParameter(t, f, pn); out(pn === 0x9380 ? (v as Int32Array).length : v, a.p(), st32, 4); },
+    glGetInternalformativ: (_c, a) => {
+      const t = a.i(), f = a.i(), pn = a.i(), size = a.i(), p = a.p();
+      if (size < 0) { err ||= 0x501; return; }
+      const values: unknown = g().getInternalformatParameter(t, f, pn === 0x9380 ? 0x80a9 : pn);
+      if (!(values instanceof Int32Array) || !size) return;
+      if (pn === 0x9380) mem.st32(p, values.length);
+      else for (let i = 0; i < Math.min(size, values.length); i++) mem.st32(p + i * 4, values[i]);
+    },
     glGetShaderPrecisionFormat: (_c, a) => {
       const f = g().getShaderPrecisionFormat(a.i(), a.i()), range = a.p(), prec = a.p();
       if (f) { mem.st32(range, f.rangeMin); mem.st32(range + 4, f.rangeMax); mem.st32(prec, f.precision); }
