@@ -172,9 +172,10 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
       if (hostTrace.ring.length > hostTrace.max) hostTrace.ring.splice(0, hostTrace.ring.length - hostTrace.max);
     }
   }
-  const t0 = performance.now();
+  const timed = slowMs > 0 || hostTrace.on;
+  const t0 = timed ? performance.now() : 0;
   const ret = fn(cpu, a);
-  const dt = performance.now() - t0;
+  const dt = timed ? performance.now() - t0 : 0;
   perf.nativeHostMs += dt;
   if (slowMs && dt > slowMs) console.warn(`[slow-native] ${cpu.name}:${names[slot]}(${(cpu.w[0] >>> 0).toString(16)},${(cpu.w[2] >>> 0).toString(16)},${(cpu.w[4] >>> 0).toString(16)}) ${dt.toFixed(0)}ms`);
   if (ret instanceof Promise) { cpu.pending = ret; return; }

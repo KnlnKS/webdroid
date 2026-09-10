@@ -21,7 +21,7 @@ export const perf = {
   glFrames: 0, glFrameMs: 0, glSkipped: 0,
   // the native tier: guest instructions, wall time in the core, slices, host calls, time spent
   // running native code on the main thread, GLES draws and errors from native GL.
-  nativeInstr: 0, nativeMs: 0, nativeSlices: 0, nativeHostCalls: 0, nativeHostMs: 0, nativeMainMs: 0, glDraws: 0, glErrors: 0,
+  nativeInstr: 0, nativeMs: 0, nativeSlices: 0, nativeHostCalls: 0, nativeHostMs: 0, glDraws: 0, glErrors: 0,
   // the JIT: regions linked into the core, and the wall time spent emitting, compiling and linking them
   jitRegions: 0, jitMs: 0,
   bootMs: 0,

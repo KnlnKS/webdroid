@@ -87,7 +87,9 @@ export const table = new WebAssembly.Table({ initial: TABLE_SIZE, element: "anyf
 async function load(): Promise<WebAssembly.Module> {
   // the tests run the safety-checked build: undefined behaviour panics instead of miscomputing
   const b64 = typeof process !== "undefined" && process.env.NODE_ENV === "test" ? (await import("./core.safe.wasm")).default : (await import("./core.wasm")).default;
-  return WebAssembly.compile(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
+  const s = atob(b64), bytes = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+  return WebAssembly.compile(bytes);
 }
 const instance = await WebAssembly.instantiate(await load(), {
   env: {

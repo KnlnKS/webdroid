@@ -396,18 +396,17 @@ export class Cpu {
       try { ex = core.run_slice(this.base, Math.max(stepMode.on ? 1 : 0, limit - this.ic)); }
       catch (e) { throw this.trap(e); }
       if (stepMode.on) this.step();
-      jitDrain();
       switch (ex) {
         case CoreExit.Budget:
+          jitDrain();
           if (profile.on) profile.samples.set(this.pc, (profile.samples.get(this.pc) ?? 0) + 1);
           if (this.ic >= limit) return SliceExit.Budget;
           continue;
         case CoreExit.Host:
           hostDispatch(this, this.exit);
-          if (this.pending) return SliceExit.Suspend;
-          if (this.finished) return SliceExit.Exit;
+          if (this.pending || this.finished) { jitDrain(); return this.pending ? SliceExit.Suspend : SliceExit.Exit; }
           continue;
-        case CoreExit.Ret: return SliceExit.Exit;
+        case CoreExit.Ret: jitDrain(); return SliceExit.Exit;
         case CoreExit.Syscall: this.syscall(this.exit); continue;
         default: {
           const code = this.exit, word = this.u32[OFF_WORD >> 2] >>> 0;
