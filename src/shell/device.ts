@@ -21,8 +21,8 @@ import { JMenu, pushMenuToBar } from "../android/menu";
 import { JContext } from "../android/context";
 import { attachProvider } from "../android/contentresolver";
 import { APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
-import { reportUncaught, JBundle, dispatchVsync, PROCESS_PID, setProcessIdentity } from "../android/os";
-import { packageUid } from "../android/packages";
+import { reportUncaught, JBundle, dispatchVsync, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
+import { packageUid, packages } from "../android/packages";
 import { onMain, inMainJob, mainDbg } from "../android/mainloop";
 import { JView, JViewGroup, uiState, layoutPass, replayLayoutRequests, measureView, layoutView, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
@@ -104,7 +104,7 @@ export function contentTop(): number {
   return act && (act.window.flags & FLAG_FULLSCREEN) ? 0 : STATUS_H;
 }
 
-export async function bootApk(input: Uint8Array | Install, onStatus: (s: string) => void, apkFile = ""): Promise<BootedApp> {
+export async function bootApk(input: Uint8Array | Install, onStatus: (s: string) => void, apkFile = "", processName: string | null = null, prepared?: () => void): Promise<BootedApp> {
   // The android package registers android.R.* and fills the widgets' attr-id tables, so it has to
   // be here before anything links. main.ts starts the fetch alongside the apk's, so this waits on
   // nothing in the common case.
@@ -178,7 +178,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
       f.children.some((x) => x.name === "category" && attrStr(x, "name") === "android.intent.category.LAUNCHER"));
     if (hasLauncher && !mainActivity) mainActivity = n.replace(/\./g, "/");
   }
-  if (!mainActivity) throw new Error("no launcher activity found");
+  if (!mainActivity && !processName) throw new Error("no launcher activity found");
   // ActivityThread installs providers by descending initOrder, manifest order breaking ties
   const providers = new Map<string, XmlNode>();
   const providerNodes = (appNode?.children ?? []).filter((c) => c.name === "provider");
@@ -224,8 +224,10 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     invalidateOptionsMenu: (a) => { void buildOptionsMenu(a); },
   };
   setAppHost(host);
-  setProcessIdentity(PROCESS_PID, packageUid(pkg));
+  setProcessIdentity(PROCESS_PID, packages.get(pkg)?.uid ?? packageUid(pkg));
+  setProcessName(processName ?? pkg);
   setManifest(manifest, activities, providers);
+  prepared?.();
 
   return onMain(async () => {
     onStatus("starting app…");
@@ -248,6 +250,10 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
       // ContentProviders run before Application.onCreate (androidx-startup initializers
       // like WorkManager live here)
       for (const [pn, node] of providers) {
+        if (processName) {
+          const declared = attrStr(node, "process") ?? attrStr(appNode!, "process") ?? pkg;
+          if ((declared.startsWith(":") ? pkg + declared : declared) !== processName) continue;
+        }
         try {
           const cls = pn.replace(/\./g, "/");
           if (rt.link(cls).stub) continue;
@@ -262,9 +268,11 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
       reportUncaught(e);
     }
 
-    booted = { host, mainActivityCls: mainActivity, stack: [], label };
-    onStatus("launching " + mainActivity.split("/").pop());
-    await launchActivity(mainActivity, null);
+    booted = { host, mainActivityCls: mainActivity ?? "", stack: [], label };
+    if (!processName && mainActivity) {
+      onStatus("launching " + mainActivity.split("/").pop());
+      await launchActivity(mainActivity, null);
+    }
     return booted;
   });
 }

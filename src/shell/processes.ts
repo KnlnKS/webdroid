@@ -1,0 +1,205 @@
+import { packages } from "../android/packages";
+import { appHost } from "../android/apphost";
+import { binderTransport, receiveTransaction, exportBinder, importBinder, exportParcel, importParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
+import { JParcel } from "../android/parcel";
+import { JIntent } from "../android/intent";
+import { JBundle, PROCESS_PID } from "../android/os";
+import { bindLocalService, unbindLocalService, svcStart, serviceTransport } from "../android/runningservices";
+import { vcall } from "../jvm/natives/jlang";
+import { vfs } from "../jvm/natives/jio";
+import { device } from "./config";
+import { connectProviders, receiveProvider, type ProviderRequest, type ProviderReply } from "../android/provideripc";
+import { broadcastTransport, deliverBroadcast, hasBroadcastReceiver } from "../android/broadcast";
+import { getPM, JResolveInfo } from "../android/pm";
+import { toJsArray } from "../jvm/natives/jutil";
+import { attrStr } from "../android/axml";
+import { sqliteStore, useSQLiteStore } from "../android/sqlite";
+import { rt } from "../jvm/runtime";
+import { packedArchives, type PackedArchive } from "./packedarchive";
+
+type IntentData = { action: string | null; component: string | null; componentPkg: string | null; dataUri: string | null;
+  typeStr: string | null; pkg: string | null; flags: number; categories: string[]; extras: ParcelData };
+type ServiceRequest = { kind: "bind"; intent: IntentData; key: string } | { kind: "unbind"; key: string }
+  | { kind: "start"; intent: IntentData; foreground: boolean };
+type BroadcastData = { code: number; data: string | null; extras: ParcelData; aborted: boolean };
+export type PackageSnapshot = { pkg: string; source: Uint8Array | PackedArchive; uid: number; system: boolean; grants: string[]; signatures: Uint8Array[] | null };
+export type ProcessEndpoint = {
+  transact: (request: Transaction, caller: Caller) => Promise<TransactionReply>;
+  service: (request: ServiceRequest) => Promise<BinderHandle | null>;
+  provider: (request: ProviderRequest, caller: Caller) => Promise<ProviderReply>;
+  broadcast: (intent: IntentData, component: string | null, ordered: boolean, result: BroadcastData) => Promise<BroadcastData>;
+};
+type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
+  ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
+  watchers: Set<() => void>; pending: Set<(error: unknown) => void> };
+export class ProcessBroker {
+  readonly databases = sqliteStore;
+  private entries = new Map<number, Entry>();
+  private byName = new Map<string, Entry>();
+  private nextPid = 1001;
+
+  connect(pkg: string, process: string, pid?: number): Entry {
+    const key = pkg + "/" + process, previous = this.byName.get(key);
+    if (previous && !previous.dead) return previous;
+    const owner = packages.get(pkg);
+    if (!owner) throw new Error("Package not installed: " + pkg);
+    let resolve!: Entry["resolve"], reject!: Entry["reject"];
+    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? this.nextPid++, frame: null, dead: false, watchers: new Set(), pending: new Set(),
+      ready: new Promise((yes, no) => { resolve = yes; reject = no; }), resolve, reject };
+    void entry.ready.catch(() => {});
+    this.entries.set(entry.pid, entry); this.byName.set(key, entry);
+    if (pid === undefined) {
+      const frame = document.createElement("iframe"); entry.frame = frame;
+      frame.hidden = true;
+      frame.src = "/process?pid=" + entry.pid + `&screen=${device.width}x${device.height}@${device.densityDpi}`;
+      frame.addEventListener("error", () => this.fail(entry.pid, "Process frame failed"));
+      document.body.appendChild(frame);
+    }
+    return entry;
+  }
+  async bootstrap(pid: number): Promise<{ pkg: string; process: string; uid: number; registry: PackageSnapshot[] }> {
+    const entry = this.entry(pid), owner = packages.get(entry.pkg)!;
+    const registry = await Promise.all([...packages.values()].map(async (record) => {
+      const source = packedArchives.get(record.path) ?? await vfs.readFile(record.path);
+      if (!source) throw new Error("Package bytes unavailable: " + record.pkg);
+      return { pkg: record.pkg, source, uid: record.uid, system: record.system, grants: [...record.grants], signatures: record.compatibilityCertificates };
+    }));
+    return { pkg: owner.pkg, process: entry.process, uid: entry.uid, registry };
+  }
+  ready(pid: number, endpoint: ProcessEndpoint): void { this.entry(pid).resolve(endpoint); }
+  fail(pid: number, message: string): void {
+    const entry = this.entries.get(pid);
+    if (!entry || entry.dead) return;
+    const error = rt.mkThrowable("android/os/DeadObjectException", message);
+    entry.dead = true; entry.reject(error);
+    for (const reject of entry.pending) reject(error);
+    entry.pending.clear();
+    for (const watcher of entry.watchers) { try { watcher(); } catch (error) { console.error("[process death]", error); } }
+    entry.watchers.clear(); entry.frame?.remove();
+  }
+  alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
+  watch(pid: number, died: () => void): () => void {
+    const entry = this.entry(pid); entry.watchers.add(died); return () => { entry.watchers.delete(died); };
+  }
+  async transact(callerPid: number, request: Transaction): Promise<TransactionReply> {
+    const caller = this.entry(callerPid), target = this.entry(request.handle.pid);
+    return this.request(target, (endpoint) => endpoint.transact(request, { pid: caller.pid, uid: caller.uid }));
+  }
+  async service(pkg: string, process: string, request: ServiceRequest): Promise<BinderHandle | null> {
+    const entry = request.kind === "unbind" ? this.byName.get(pkg + "/" + process) : this.connect(pkg, process);
+    if (!entry || entry.dead) return null;
+    return this.request(entry, (endpoint) => endpoint.service(request));
+  }
+  async provider(pid: number, pkg: string, process: string, request: ProviderRequest): Promise<ProviderReply> {
+    const caller = this.entry(pid);
+    const owner = packages.get(pkg), node = [...owner?.components.provider.values() ?? []].find((n) => attrStr(n, "authorities")?.split(";").includes(request.authority));
+    if (!node) throw new Error("Provider not installed");
+    const permission = attrStr(node, request.name === "query" || request.name === "getType" ? "readPermission" : "writePermission") ?? attrStr(node, "permission");
+    if (caller.pkg !== pkg && permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", permission, caller.pkg) !== 0)
+      throw new Error("Provider permission denied: " + permission);
+    return this.request(this.connect(pkg, process), (endpoint) => endpoint.provider(request, { uid: caller.uid, pid }));
+  }
+  async broadcast(pid: number, data: IntentData, permission: string | null, ordered: boolean): Promise<void> {
+    const caller = this.entry(pid), intent = await decodeIntent(data, false);
+    const list = await vcall(getPM(), "queryBroadcastReceivers", "(Landroid/content/Intent;I)Ljava/util/List;", intent, 0);
+    const targets: { entry: Entry; component: string | null; priority: number }[] = [...this.entries.values()].filter((e) => !e.dead).map((entry) => ({ entry, component: null, priority: 0 }));
+    for (const resolved of await toJsArray(list)) {
+      if (!(resolved instanceof JResolveInfo)) continue;
+      const info = resolved.activityInfo;
+      if (!info || !info.exported && info.packageName !== caller.pkg) continue;
+      if (info.permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", info.permission, caller.pkg) !== 0) continue;
+      targets.push({ entry: this.connect(info.packageName, info.processName), component: info.name, priority: resolved.priority ?? 0 });
+    }
+    targets.sort((a, b) => b.priority - a.priority);
+    const bundle = new JParcel(); await vcall(bundle, "writeBundle", "(Landroid/os/Bundle;)V", null);
+    let result: BroadcastData = { code: 0, data: null, extras: exportParcel(bundle), aborted: false };
+    for (const target of targets) {
+      if (permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", permission, target.entry.pkg) !== 0) continue;
+      result = await this.request(target.entry, (endpoint) => endpoint.broadcast(data, target.component, ordered, result));
+      if (ordered && result.aborted) break;
+    }
+  }
+  private entry(pid: number): Entry {
+    const entry = this.entries.get(pid);
+    if (!entry || entry.dead) throw rt.mkThrowable("android/os/DeadObjectException", "Process is dead: " + pid);
+    return entry;
+  }
+  private request<T>(entry: Entry, call: (endpoint: ProcessEndpoint) => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      entry.pending.add(reject);
+      void entry.ready.then((endpoint) => {
+        if (entry.dead) throw rt.mkThrowable("android/os/DeadObjectException", "Process is dead: " + entry.pid);
+        return call(endpoint);
+      }).then(resolve, reject).finally(() => entry.pending.delete(reject));
+    });
+  }
+}
+
+declare global { interface Window { __wdProcesses?: ProcessBroker; } }
+export function processBroker(): ProcessBroker {
+  const root = window.parent;
+  return root.__wdProcesses ??= new ProcessBroker();
+}
+async function encodeIntent(intent: JIntent): Promise<IntentData> {
+  const parcel = new JParcel();
+  await vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", intent.extras);
+  return { action: intent.action, component: intent.component, componentPkg: intent.componentPkg, dataUri: intent.dataUri,
+    typeStr: intent.typeStr, pkg: intent.pkg, flags: intent.flags, categories: [...intent.categories], extras: exportParcel(parcel) };
+}
+async function decodeIntent(data: IntentData, extras = true): Promise<JIntent> {
+  const intent = new JIntent();
+  Object.assign(intent, data, { categories: new Set(data.categories), extras: new JBundle() });
+  if (extras) intent.extras = await vcall(importParcel(data.extras), "readBundle", "()Landroid/os/Bundle;");
+  return intent;
+}
+async function remote<T>(pending: Promise<T>): Promise<T> {
+  try { return await pending; }
+  catch (error) {
+    if (error && typeof error === "object") {
+      const ctor: unknown = Reflect.get(error, "constructor"), info: unknown = typeof ctor === "function" ? Reflect.get(ctor, "$i") : null;
+      if (info && typeof info === "object" && "name" in info && typeof info.name === "string") {
+        const message: unknown = Reflect.get(error, "msg");
+        throw rt.mkThrowable(info.name, typeof message === "string" ? message : null);
+      }
+    }
+    throw error;
+  }
+}
+export function connectProcess(): ProcessEndpoint {
+  const broker = processBroker();
+  useSQLiteStore(broker.databases);
+  connectProviders((pkg, process, request) => remote(broker.provider(PROCESS_PID, pkg, process, request)));
+  broadcastTransport.send = async (intent, permission, ordered) => remote(broker.broadcast(PROCESS_PID, await encodeIntent(intent), permission, ordered));
+  binderTransport.transact = (request) => remote(broker.transact(PROCESS_PID, request));
+  binderTransport.alive = (pid) => broker.alive(pid);
+  binderTransport.watch = (pid, died) => broker.watch(pid, died);
+  serviceTransport.bind = async (owner, process, intent, key) => importBinder(await remote(broker.service(owner.pkg, process, { kind: "bind", intent: await encodeIntent(intent), key })));
+  serviceTransport.unbind = async (owner, process, key) => { await remote(broker.service(owner.pkg, process, { kind: "unbind", key })); };
+  serviceTransport.start = async (owner, process, intent, foreground) => { await remote(broker.service(owner.pkg, process, { kind: "start", intent: await encodeIntent(intent), foreground })); };
+  return {
+    transact: receiveTransaction,
+    provider: receiveProvider,
+    broadcast: async (intent, component, ordered, data) => {
+      if (!appHost?.application) throw new Error("Process has no application");
+      if (!component && !hasBroadcastReceiver(await decodeIntent(intent, false))) return data;
+      const result = await deliverBroadcast(appHost.application, await decodeIntent(intent), component, ordered,
+        { ...data, extras: await vcall(importParcel(data.extras), "readBundle", "()Landroid/os/Bundle;") });
+      const extras = new JParcel(); await vcall(extras, "writeBundle", "(Landroid/os/Bundle;)V", result.extras);
+      return { ...result, extras: exportParcel(extras) };
+    },
+    service: async (request) => {
+      if (request.kind === "unbind") { await unbindLocalService(request.key); return null; }
+      const context = appHost?.application;
+      if (!context) throw new Error("Process has no application");
+      const intent = await decodeIntent(request.intent);
+      if (request.kind === "bind") return exportBinder(await bindLocalService(context, intent, request.key));
+      svcStart(context, intent, request.foreground); return null;
+    },
+  };
+}
+export function registerForegroundProcess(): void {
+  if (!appHost) return;
+  const broker = processBroker();
+  broker.connect(appHost.pkg, appHost.pkg, PROCESS_PID);
+  broker.ready(PROCESS_PID, connectProcess());
+}

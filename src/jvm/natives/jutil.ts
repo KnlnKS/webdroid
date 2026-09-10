@@ -567,7 +567,7 @@ for (const n of ["java/util/ArrayList", "java/util/LinkedList", "java/util/Vecto
   });
 }
 
-class JMap extends JObj {
+export class JMap extends JObj {
   m = new Map<unknown, Ent>();       // fast keys
   slow: Ent[] = [];                  // custom-equals keys (linear; rare)
   slowVersion = 0;

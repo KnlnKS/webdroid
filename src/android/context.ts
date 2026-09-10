@@ -13,7 +13,7 @@ import { loadColorStateList, loadDrawable } from "./drawable";
 import { JAssetManager, type JConfiguration, scopedResources } from "./resnative";
 import { dbPath } from "./sqlite";
 import { type JIntent, launchIntent } from "./intent";
-import { svcStart, svcStop } from "./runningservices";
+import { svcStart, svcStop, svcBind, svcUnbind } from "./runningservices";
 import { TV } from "./axml";
 import { registerReceiver, unregisterReceiver, sendBroadcast } from "./broadcast";
 import { packages } from "./packages";
@@ -248,6 +248,8 @@ export const contextMethods: NativeSpec["methods"] = {
   "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;Ljava/lang/String;Landroid/os/Handler;I)Landroid/content/Intent;": function (this: JContext, receiver: JObj | null, filter: { actions: string[] }, _permission: string, handler: unknown) { return registerReceiver(this, receiver, filter, handler); },
   "unregisterReceiver(Landroid/content/BroadcastReceiver;)V": unregisterReceiver,
   "sendBroadcast(Landroid/content/Intent;)V": function (this: JContext, intent: JIntent) { sendBroadcast(this, intent); },
+  "sendBroadcast(Landroid/content/Intent;Ljava/lang/String;)V": function (this: JContext, intent: JIntent, permission: string | null) { sendBroadcast(this, intent, permission); },
+  "sendOrderedBroadcast(Landroid/content/Intent;Ljava/lang/String;)V": function (this: JContext, intent: JIntent, permission: string | null) { sendBroadcast(this, intent, permission, true); },
   "startService(Landroid/content/Intent;)Landroid/content/ComponentName;": function (this: JContext, intent: JIntent) {
     return svcStart(this, intent, false);
   },
@@ -255,8 +257,8 @@ export const contextMethods: NativeSpec["methods"] = {
     return svcStart(this, intent, true);
   },
   "stopService(Landroid/content/Intent;)Z": (intent: JIntent) => svcStop(intent?.component),
-  "bindService(Landroid/content/Intent;Landroid/content/ServiceConnection;I)Z": () => 0,
-  "unbindService(Landroid/content/ServiceConnection;)V": () => {},
+  "bindService(Landroid/content/Intent;Landroid/content/ServiceConnection;I)Z": async function (this: JContext, intent: JIntent, connection: unknown, flags: number) { return svcBind(this, intent, connection, flags); },
+  "unbindService(Landroid/content/ServiceConnection;)V": svcUnbind,
   "startActivity(Landroid/content/Intent;)V": async function (this: JContext, intent: JIntent) {
     await launchIntent(this.$host, intent);
   },

@@ -258,7 +258,7 @@ rt.register({
     SUPPORTED_32_BIT_ABIS: jarray(["armeabi-v7a"], "Ljava/lang/String;"),
     SUPPORTED_64_BIT_ABIS: jarray(["arm64-v8a"], "Ljava/lang/String;"),
   },
-  methods: { "static getRadioVersion()Ljava/lang/String;": () => null },
+  methods: { "static getSerial()Ljava/lang/String;": () => "unknown", "static getRadioVersion()Ljava/lang/String;": () => null },
 });
 class JBuildVersion extends JObj {}
 rt.register({
@@ -273,12 +273,15 @@ rt.register({ name: "android/os/Build$VERSION_CODES", ctor: class extends JObj {
   ]),
 });
 export let PROCESS_PID = 1000, PROCESS_UID = 10001;
+export let PROCESS_NAME = "";
 export function setProcessIdentity(pid: number, uid: number): void { PROCESS_PID = pid; PROCESS_UID = uid; }
+export function setProcessName(name: string): void { PROCESS_NAME = name; }
 rt.register({
   name: "android/os/Process", ctor: class extends JObj {},
   statics: { THREAD_PRIORITY_BACKGROUND: 10, THREAD_PRIORITY_DEFAULT: 0, THREAD_PRIORITY_URGENT_DISPLAY: -8 },
   methods: {
     "static myPid()I": () => PROCESS_PID,
+    "static is64Bit()Z": () => rt.nativeAbis.find((abi) => Object.keys(rt.classpath).some((path) => path.startsWith("lib/" + abi + "/"))) !== "armeabi-v7a" ? 1 : 0,
     "static killProcess(I)V": (pid: number) => { console.warn("Process.killProcess", pid); markProcessExited(); },
     // androidx's startup tracing asks how long ago this process began; there is no earlier
     // moment here than the page's own timeOrigin

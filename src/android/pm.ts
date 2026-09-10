@@ -74,6 +74,10 @@ class JComponentInfo extends JPackageItemInfo {
   applicationInfo: JApplicationInfo | null = null;
   processName = ""; permission: string | null = null; enabled = 1; exported = 0; directBootAware = 0;
 }
+export class JConfigurationInfo extends JObj { reqTouchScreen = 0; reqKeyboardType = 0; reqNavigation = 0; reqInputFeatures = 0; reqGlEsVersion = 0; }
+rt.register({ name: "android/content/pm/ConfigurationInfo", ctor: JConfigurationInfo, fields: {
+  reqTouchScreen: "reqTouchScreen", reqKeyboardType: "reqKeyboardType", reqNavigation: "reqNavigation", reqInputFeatures: "reqInputFeatures", reqGlEsVersion: "reqGlEsVersion",
+}, methods: { "<init>()V": function () {}, "getGlEsVersion()Ljava/lang/String;": function (this: JConfigurationInfo) { return (this.reqGlEsVersion >>> 16) + "." + (this.reqGlEsVersion & 65535); } } });
 rt.register({ name: "android/content/pm/ComponentInfo", ctor: JComponentInfo, sup: "android/content/pm/PackageItemInfo",
   fields: { applicationInfo: "applicationInfo", processName: "processName", enabled: "enabled", exported: "exported", directBootAware: "directBootAware" },
   methods: {
@@ -102,11 +106,13 @@ rt.register({
     CONFIG_LAYOUT_DIRECTION: 0x2000, CONFIG_FONT_SCALE: 0x40000000 },
   methods: { "<init>()V": function () {} },
 });
+export class JResolveInfo extends JObj {
+  activityInfo: JActivityInfo | null = null; serviceInfo: JServiceInfo | null = null; providerInfo: JProviderInfo | null = null;
+  filter: unknown = null; priority = 0; preferredOrder = 0;
+  match = 0; specificIndex = -1; isDefault = 0; labelRes = 0; nonLocalizedLabel: string | null = null; icon = 0; resolvePackageName: string | null = null;
+}
 rt.register({
-  name: "android/content/pm/ResolveInfo", ctor: class extends JObj {
-    activityInfo = null; serviceInfo = null; providerInfo = null; filter = null; priority = 0; preferredOrder = 0;
-    match = 0; specificIndex = -1; isDefault = 0; labelRes = 0; nonLocalizedLabel = null; icon = 0; resolvePackageName = null;
-  },
+  name: "android/content/pm/ResolveInfo", ctor: JResolveInfo,
   fields: { activityInfo: "activityInfo", serviceInfo: "serviceInfo", providerInfo: "providerInfo", filter: "filter",
     priority: "priority", preferredOrder: "preferredOrder", match: "match", specificIndex: "specificIndex", isDefault: "isDefault",
     labelRes: "labelRes", nonLocalizedLabel: "nonLocalizedLabel", icon: "icon", resolvePackageName: "resolvePackageName" },
@@ -123,8 +129,9 @@ rt.register({
     },
   },
 });
+class JProviderInfo extends JComponentInfo { authority = ""; grantUriPermissions = 0; multiprocess = 0; }
 rt.register({
-  name: "android/content/pm/ProviderInfo", sup: "android/content/pm/ComponentInfo", ctor: class extends JComponentInfo { authority = ""; grantUriPermissions = 0; multiprocess = 0; },
+  name: "android/content/pm/ProviderInfo", sup: "android/content/pm/ComponentInfo", ctor: JProviderInfo,
   fields: { authority: "authority", grantUriPermissions: "grantUriPermissions", multiprocess: "multiprocess" },
   methods: { "<init>()V": function () {} },
 });
@@ -394,7 +401,7 @@ export const servicesMatching = (action: string) => [...packages.values()].flatM
   [...owner.components.service.values()].filter((n) => matchesAction(n, action)).map((node) => ({ node, meta: metaData(node, owner.res), owner })));
 
 function providerInfo(cls: string, pkg: string, authority: string, n: XmlNode | null, flags = 0, owner = packages.get(pkg)): unknown {
-  const pi = new (rt.link("android/content/pm/ProviderInfo").ctor)() as Record<string, unknown>;
+  const pi = new (rt.link("android/content/pm/ProviderInfo").ctor)() as JProviderInfo;
   pi.name = cls;
   pi.packageName = pkg;
   pi.authority = authority;
@@ -402,7 +409,7 @@ function providerInfo(cls: string, pkg: string, authority: string, n: XmlNode | 
   pi.metaData = flags & 128 ? metaData(n) : null;
   pi.exported = !n || attr(n, "exported")?.data ? 1 : 0;
   pi.grantUriPermissions = !n || attr(n, "grantUriPermissions")?.data ? 1 : 0;
-  if (n && owner) componentInfo(pi as unknown as JComponentInfo, cls, n, flags, owner);
+  if (n && owner) componentInfo(pi, cls, n, flags, owner);
   return pi;
 }
 const mkProviderInfo = (cls: string, n: XmlNode, flags = 0) =>
@@ -646,6 +653,7 @@ rt.register({
     "hasSystemFeature(Ljava/lang/String;I)Z": (name: string) => device.features.includes(name) ? 1 : 0,
     "getSystemAvailableFeatures()[Landroid/content/pm/FeatureInfo;": () =>
       jarray(device.features.map((name) => Object.assign(new JFeatureInfo(), { name })), "Landroid/content/pm/FeatureInfo;"),
+    "getSystemSharedLibraryNames()[Ljava/lang/String;": () => jarray([], "Ljava/lang/String;"),
     "checkPermission(Ljava/lang/String;Ljava/lang/String;)I": async (permission: string, pkg: string) => {
       const record = packages.get(pkg);
       if (record?.grants.has(permission)) return 0;
@@ -870,8 +878,8 @@ function archiveInfo(archive: PackageArchive, path: string, flags: number): JPac
   return info;
 }
 export const installedPath = (pkg: string) => `/data/app/${pkg}/base.apk`;
-export function registerPackage(archive: PackageArchive, path = installedPath(archive.pkg)): PackageRecord {
-  const record = new PackageRecord(archive.root, archive.res, path, packageUid(archive.pkg), () => Promise.resolve(archive.certificates));
+export function registerPackage(archive: PackageArchive, path = installedPath(archive.pkg), uid = packageUid(archive.pkg)): PackageRecord {
+  const record = new PackageRecord(archive.root, archive.res, path, uid, () => Promise.resolve(archive.certificates));
   packages.set(record.pkg, record);
   for (const node of archive.root.children) if (node.name === "permission" && ((attr(node, "protectionLevel")?.data ?? 0) & 3) >= 2) {
     const name = attrStr(node, "name");

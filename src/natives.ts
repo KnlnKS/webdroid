@@ -33,6 +33,7 @@ import "./android/util";
 import "./android/accounts";
 import "./android/parcel";
 import "./android/binder";
+import "./android/intentservice";
 import "./android/resultreceiver";
 import "./android/graphics";
 import "./android/rendereffect";
