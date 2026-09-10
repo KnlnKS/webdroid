@@ -1,8 +1,3 @@
-// Guest memory: the malloc arena, the page allocator behind mmap, the address planes a 64-bit
-// runtime reserves past the buffer, and the module/stack/host-data regions. Semantics are
-// mem.ts's of old, one for one; the page tables live at KERN_BASE so they exist before the
-// allocator that hands out everything else does.
-
 const std = @import("std");
 const abi = @import("abi.zig");
 
@@ -26,23 +21,17 @@ pub fn move(d: u32, s: u32, n: u32) void {
     if (d <= s) std.mem.copyForwards(u8, bytes(d)[0..n], bytes(s)[0..n]) else std.mem.copyBackwards(u8, bytes(d)[0..n], bytes(s)[0..n]);
 }
 
-// ── page tables
 const FREE = 0;
 const RESERVED = 1;
 const USED = 2;
 const IMAGE = 3;
 const pages: [*]u8 = @ptrFromInt(abi.KERN_BASE);
-/// bit 0: a page holding compiled code (a store into it invalidates); bit 1: never mapped
 pub const page_flags: [*]u8 = @ptrFromInt(abi.KERN_BASE + 0x10_0000);
-/// bytes of the page-run block starting at that page (0: none)
 const big_len: [*]u32 = @ptrFromInt(abi.KERN_BASE + 0x20_0000);
 inline fn pageOf(a: u32) u32 {
     return a >> PAGE_SHIFT;
 }
 
-// ── malloc arena: 16-byte size classes to 1 KiB, four classes per doubling to 256 KiB, whole
-// pages above that. The header is 16 bytes before the block: [p-8] = owning block for aligned
-// allocations or 0, [p-4] = class size. Page-run blocks carry no header; big_len knows them.
 const CLASS_STEP = 16;
 const SMALL_MAX = 1024;
 const PAGE_MAX = 0x40000;
@@ -69,9 +58,6 @@ fn bigIdx(cs: u32) usize {
     return (@as(usize, k) - 10) * 4 + (cs >> (k - 2)) - 5;
 }
 
-/// First run of n pages starting at a multiple of `alignment` pages whose every page is at most
-/// `allow`. A reservation (`phantom`) may run past the arena's end, over the images and beyond
-/// memory: those pages can never be committed, and a reserve-then-trim caller unmaps them at once.
 fn findRun(n: u32, allow: u8, alignment: u32, phantom_in: bool) u32 {
     const end = pageOf(if (pool_base != 0) pool_base else module_bot);
     const top: u32 = 0x100000;
@@ -85,7 +71,6 @@ fn findRun(n: u32, allow: u8, alignment: u32, phantom_in: bool) u32 {
     }
     return 0;
 }
-/// grow the heap by n bytes through free pages, stepping over a mapping in its way
 fn bump(n: u32) u32 {
     var p = heap_top;
     while (true) {
@@ -137,7 +122,6 @@ pub export fn malloc(n: u32) u32 {
     used += cs;
     return p;
 }
-/// 0 for a corrupt header
 pub export fn free(p_in: u32) u32 {
     if (p_in == 0) return 1;
     var p = p_in;
@@ -195,18 +179,10 @@ pub export fn memalign(alignment: u32, n: u32) u32 {
     return p;
 }
 
-// ── pages: FREE / RESERVED / USED. A reservation (an anonymous PROT_NONE mmap) holds address
-// space, not pages: reservations may overlap one another, as overcommit lets a process reserve
-// far more than it has, and a commit (mprotect to readable/writable) is what claims the pages.
-
-/// n bytes of pages: a hole, then fresh heap, and for a reservation the uncommitted part of
-/// other reservations. Pages of a mapping come zeroed; a reservation's are zeroed at commit.
 pub export fn map_pages(n_in: u32, rsv: u32, alignment: u32) u32 {
     const n = (n_in +% (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
     if (n == 0) return 0;
     const np = n >> PAGE_SHIFT;
-    // a reservation of 2A is the reserve-then-trim idiom for an A-aligned block: placing it on an
-    // A boundary packs the kept blocks back to back instead of leaving an A-sized hole between them
     var al = alignment / PAGE_SIZE;
     if (rsv != 0 and np >= 256) al = @max(al, @as(u32, 1) << @intCast(31 - @clz((np + 1) >> 1)));
     al = @max(al, 1);
@@ -218,7 +194,6 @@ pub export fn map_pages(n_in: u32, rsv: u32, alignment: u32) u32 {
     if (rsv == 0) fill(p, 0, n);
     return p;
 }
-/// return a page-aligned run (any sub-range of a mapping); 0 when misaligned
 pub export fn unmap_pages(addr: u32, n_in: u32) u32 {
     const n = (n_in +% (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
     if (addr & (PAGE_SIZE - 1) != 0 or n == 0 or addr < abi.ARENA_BASE) return 0;
@@ -227,8 +202,6 @@ pub export fn unmap_pages(addr: u32, n_in: u32) u32 {
     if (b > a) @memset(pages[a..b], FREE);
     return 1;
 }
-/// mprotect to accessible: a reserved page becomes a zeroed page of its own; 0 (ENOMEM) on an
-/// unmapped or phantom one. Pages below the arena are the images' and the loader's own.
 export fn commit_pages(addr: u32, n: u32) u32 {
     if (addr < abi.ARENA_BASE) return 0;
     const a = pageOf(addr);
@@ -241,7 +214,6 @@ export fn commit_pages(addr: u32, n: u32) u32 {
     };
     return 1;
 }
-/// mprotect to PROT_NONE: the pages go back to being address space
 export fn decommit_pages(addr: u32, n: u32) void {
     const a = @max(pageOf(addr), pageOf(abi.ARENA_BASE));
     const b = @min(pageOf(addr +% n +% (PAGE_SIZE - 1)), pageOf(module_bot));
@@ -251,21 +223,16 @@ export fn decommit_pages(addr: u32, n: u32) void {
     };
 }
 
-// ── address planes. A pointer whose high half is h ≠ 0 lives in plane h: one mapping per plane,
-// normally starting at PLANE_LO; large reservations span consecutive planes from offset zero.
-// A plane's committed prefix is one contiguous run of the pool at the top of the arena, so a
-// range in the plane is a range in the buffer for host and guest alike; a commit past the run
-// grows it in place or moves it (the guest keeps its addresses; the move copies what is committed).
 const UNIT: u32 = 1 << 25;
 const PLANES = 256;
 const PLANE_LO: u32 = 0x1000_0000;
 var pool_base: u32 = 0;
-var owner = [_]i16{-1} ** 64; // pool unit → plane, -1 free
+var owner = [_]i16{-1} ** 64;
 var owner_len: u32 = 0;
-var P = [_]u32{0} ** PLANES; // plane → buffer offset of its run
-var R = [_]u64{0} ** PLANES; // reservation (0: plane free)
-var S = [_]u32{0} ** PLANES; // committed prefix
-var L = [_]u32{PLANE_LO} ** PLANES; // low base
+var P = [_]u32{0} ** PLANES;
+var R = [_]u64{0} ** PLANES;
+var S = [_]u32{0} ** PLANES;
+var L = [_]u32{PLANE_LO} ** PLANES;
 var moves: u32 = 0;
 
 inline fn unitsOf(n: u64) u32 {
@@ -284,7 +251,6 @@ fn freeRun(units: u32, from: u32) i32 {
     }
     return -1;
 }
-/// the start of the largest free gap that holds `units`: room to grow in place behind a new run
 fn widestRun(units: u32) i32 {
     const top = poolUnits();
     var best: i32 = -1;
@@ -302,7 +268,6 @@ fn widestRun(units: u32) i32 {
     }
     return best;
 }
-/// the plane's run moves to the free run at `dst` (its `need` units), the guest none the wiser
 fn moveRun(h: usize, dst: u32, need: u32) void {
     const at = (P[h] - pool_base) / UNIT;
     const have = unitsOf(S[h]);
@@ -314,7 +279,6 @@ fn moveRun(h: usize, dst: u32, need: u32) void {
     @memset(owner[dst .. dst + need], @intCast(h));
     P[h] = pool_base + dst * UNIT;
 }
-/// commit the plane's prefix up to `n` bytes: extend the run in place, or move it to a free run
 fn grow(h: usize, n: u32) bool {
     const have = unitsOf(S[h]);
     const need = unitsOf(n);
@@ -327,7 +291,7 @@ fn grow(h: usize, n: u32) bool {
         }
         if (dst < 0) return false;
         if (at < 0) {
-            @memset(owner[@intCast(dst)..@as(usize, @intCast(dst)) + need], @intCast(h));
+            @memset(owner[@intCast(dst) .. @as(usize, @intCast(dst)) + need], @intCast(h));
             P[h] = pool_base + @as(u32, @intCast(dst)) * UNIT;
         } else moveRun(h, @intCast(dst), need);
     }
@@ -348,7 +312,6 @@ inline fn lo(v: u64) u32 {
     return @truncate(v);
 }
 
-/// plane h ≠ 0 address → buffer offset; 0 past the committed prefix, as the page would fault
 pub export fn tx(h: u32, l: u32) u32 {
     const off = l -% L[h & 255];
     if (h >= PLANES or off >= S[h]) return 0;
@@ -357,7 +320,6 @@ pub export fn tx(h: u32, l: u32) u32 {
 export fn plane_reserved(h: u32) u32 {
     return @intFromBool(R[h & 255] != 0);
 }
-/// buffer offset → the address the guest knows it by: itself in plane 0, else the plane's
 pub export fn va(phys: u32) u64 {
     if (pool_base == 0 or phys < pool_base) return phys;
     const u = (phys - pool_base) / UNIT;
@@ -365,8 +327,6 @@ pub export fn va(phys: u32) u64 {
     const h: u32 = @intCast(owner[u]);
     return (@as(u64, h) << 32) | (L[h] + (phys - P[h]));
 }
-/// mmap: plane 0 while it has room, else a plane of its own (a reservation commits nothing yet;
-/// a writable mapping is committed whole); 0 when neither has room
 export fn map_va(n: u64, rsv: u32) u64 {
     if (n == 0) return 0;
     if (n > @as(u64, 0x1_0000_0000) - PLANE_LO) {
@@ -392,7 +352,6 @@ export fn map_va(n: u64, rsv: u32) u64 {
     R[h] = n;
     return (@as(u64, h) << 32) | L[h];
 }
-/// unmapping the tail shortens the plane; the whole of it frees the plane; a hole is a decommit
 export fn unmap_va(va_in: u64, n_in: u64) u32 {
     if (va_in & (PAGE_SIZE - 1) != 0 or n_in == 0) return 0;
     var v = va_in;
@@ -405,7 +364,6 @@ export fn unmap_va(va_in: u64, n_in: u64) u32 {
             if (unmap_pages(l, @intCast(@min(size, 0xffff_ffff))) == 0) return 0;
         } else if (h < PLANES and R[h] != 0) {
             const off: i64 = @as(i64, l) - L[h];
-            // a range ending inside the plane but starting before it is a hole, not a tail
             if (off <= 0 and size >= R[h]) release(h) else if (off > 0 and off + @as(i64, @intCast(size)) >= @as(i64, @intCast(R[h]))) {
                 R[h] = @intCast(off);
                 decommit_va(v, size);
@@ -416,7 +374,6 @@ export fn unmap_va(va_in: u64, n_in: u64) u32 {
     }
     return 1;
 }
-/// may this range be re-reserved over (MAP_FIXED on top of a mapping)?
 export fn check_reserve(h: u32, l: u32, size: u32) u32 {
     if (h == 0) {
         if (l < abi.ARENA_BASE or @as(u64, l) + size > (if (pool_base != 0) pool_base else module_bot)) return 0;
@@ -433,8 +390,6 @@ export fn commit_va(v: u64, n: u64) u32 {
     const end: u64 = @as(u64, l - L[h & 255]) + n;
     return @intFromBool(h < PLANES and l >= L[h] and end <= R[h] and (end <= S[h] or grow(h, @intCast(end))));
 }
-/// MADV_DONTNEED on a private anonymous mapping: what is committed of it reads back as zero.
-/// 0 when the range is not the process's own to drop (the images, the loader's data).
 export fn drop_va(v: u64, n: u64) u32 {
     const h = hi(v);
     const l = lo(v);
@@ -462,16 +417,12 @@ export fn decommit_va(v: u64, n: u64) void {
     }
 }
 
-// ── regions: modules bump DOWN from the top of the shared arena, malloc bumps up from the bottom
 var last_err: u32 = 0;
 export fn err() u32 {
     return last_err;
 }
-/// address space for a module image: never freed. 0 with `err` set: 0x100|h (the pool holds
-/// plane h), 2 (the pool reaches the images), 3 (the heap does)
 pub export fn reserve(size: u32, alignment: u32) u32 {
     const base = (module_bot - size) & ~(alignment - 1);
-    // the pool's top units become the image's: a plane run up there moves down first
     if (pool_base != 0) {
         const keep = (base - pool_base) / UNIT;
         for (1..PLANES) |h| {
@@ -479,7 +430,7 @@ pub export fn reserve(size: u32, alignment: u32) u32 {
             const at = (P[h] - pool_base) / UNIT;
             const need = unitsOf(S[h]);
             if (at + need <= keep) continue;
-            @memset(owner[at .. at + need], -1); // its own units count as free for the search
+            @memset(owner[at .. at + need], -1);
             var dst: i32 = -1;
             var run: u32 = 0;
             for (0..keep) |i| {
@@ -505,15 +456,13 @@ pub export fn reserve(size: u32, alignment: u32) u32 {
         last_err = 3;
         return 0;
     }
-    // the image's pages stay the image's, whatever the memory is later sized to
     @memset(pages[pageOf(base)..pageOf(module_bot)], IMAGE);
     module_bot = base;
     return base;
 }
 
-var free_stacks: [64][2]u32 = undefined; // (base, size) of finished threads' stacks
+var free_stacks: [64][2]u32 = undefined;
 var free_stack_count: u32 = 0;
-/// a thread stack of `size` bytes; 0 when the stack region is exhausted
 export fn alloc_stack(size: u32) u32 {
     var i: u32 = 0;
     while (i < free_stack_count) : (i += 1) if (free_stacks[i][1] == size) {
@@ -534,7 +483,6 @@ export fn free_stack(base: u32, size: u32) void {
         free_stack_count += 1;
     }
 }
-/// host-owned guest data (FILE structs, JNI tables, static strings): bump only; 0 when full
 export fn host_alloc(n: u32, alignment: u32) u32 {
     const p = (host_top + alignment - 1) & ~(alignment - 1);
     if (@as(u64, p) + n > abi.HOST_DATA_END) return 0;
@@ -542,7 +490,6 @@ export fn host_alloc(n: u32, alignment: u32) u32 {
     return p;
 }
 
-/// size the process's memory: the image region is reset, the arena and its tables carry over
 export fn mem_init(size: u32) void {
     mem_size = size;
     module_bot = size;

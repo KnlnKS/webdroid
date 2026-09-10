@@ -1,19 +1,13 @@
-// IEEE pieces the architecture defines beyond what wasm's own operations give: ARM's rounding
-// modes, saturating conversions, the reciprocal estimates (a table function of the top fraction
-// bits, not 1/x), half precision, and the NaN rules of FMAXNM/FMINNM.
-
 const std = @import("std");
 
 pub inline fn isNan(x: anytype) bool {
     return x != x;
 }
-/// round to nearest, ties to even; keeps the sign of a zero, as FRINTN must
 pub fn rne(comptime F: type, x: F) F {
     const t = @trunc(x);
     if (@abs(x - t) == 0.5) return if (@mod(t, 2) == 0) t else t + (if (x < 0) @as(F, -1) else 1);
     return @round(x);
 }
-/// round in FPCR's mode: 0 nearest even, 1 +inf, 2 -inf, 3 zero
 pub fn rint(comptime F: type, fpcr: u32, x: F) F {
     return switch ((fpcr >> 22) & 3) {
         1 => @ceil(x),
@@ -22,7 +16,6 @@ pub fn rint(comptime F: type, fpcr: u32, x: F) F {
         else => rne(F, x),
     };
 }
-/// an integer-valued float to a saturating integer; NaN is 0
 pub fn toInt(comptime I: type, x: anytype) I {
     if (isNan(x)) return 0;
     const F = @TypeOf(x);
@@ -32,12 +25,9 @@ pub fn toInt(comptime I: type, x: anytype) I {
     if (x <= min) return std.math.minInt(I);
     return @intFromFloat(x);
 }
-/// fused a*b+c with one rounding, as the hardware does: a single precision one is exact in double
-/// arithmetic; a double one folds the product's error (Dekker) and the sum's (TwoSum) back in
 pub fn fma(comptime F: type, a: F, b: F, c: F) F {
     if (F == f32) return @floatCast(@as(f64, a) * @as(f64, b) + @as(f64, c));
     const p = a * b;
-    // Dekker's split needs |a|, |b| < 2^996 and a finite product; outside that the plain sum is all there is
     if (!std.math.isFinite(p) or !std.math.isFinite(c) or @abs(a) > 1e290 or @abs(b) > 1e290 or @abs(p) < 1e-290) return p + c;
     const ah = a * 134217729 - (a * 134217729 - a);
     const al = a - ah;
@@ -49,7 +39,6 @@ pub fn fma(comptime F: type, a: F, b: F, c: F) F {
     const se = (p - (s - bb)) + (c - bb);
     return s + (se + pe);
 }
-/// FMULX: a zero times an infinity is ±2, otherwise the product
 pub fn fmulx(comptime F: type, a: F, b: F) F {
     const za = a == 0;
     const zb = b == 0;
@@ -58,7 +47,6 @@ pub fn fmulx(comptime F: type, a: F, b: F) F {
     if ((za and ib) or (zb and ia)) return if (std.math.signbit(a) != std.math.signbit(b)) -2 else 2;
     return a * b;
 }
-/// FMAX/FMIN: a NaN wins, a signed zero orders below a positive one
 pub fn fmax(comptime F: type, a: F, b: F) F {
     if (isNan(a)) return a;
     if (isNan(b)) return b;
@@ -71,7 +59,6 @@ pub fn fmin(comptime F: type, a: F, b: F) F {
     if (a == b) return if (std.math.signbit(a) or std.math.signbit(b)) -@abs(a) else a;
     return if (a < b) a else b;
 }
-/// FMAXNM/FMINNM on bit patterns: a signaling NaN wins (quieted), a quiet NaN loses to a number
 pub fn fnm(comptime F: type, a: F, b: F, max: bool) F {
     const U = std.meta.Int(.unsigned, @bitSizeOf(F));
     const ab: U = @bitCast(a);
@@ -89,7 +76,6 @@ pub fn fnm(comptime F: type, a: F, b: F, max: bool) F {
     }
     return if (max) fmax(F, a, b) else fmin(F, a, b);
 }
-/// FRECPX: the exponent negated bitwise, the fraction zeroed
 pub fn recpx(comptime F: type, x: F) F {
     if (isNan(x)) return x;
     const U = std.meta.Int(.unsigned, @bitSizeOf(F));
@@ -114,7 +100,6 @@ fn parts(comptime F: type, x: F) Parts {
     const b: u32 = @bitCast(x);
     return .{ .neg = b >> 31 != 0, .exp = @intCast((b >> 23) & 0xff), .frac = @as(u64, b & 0x7f_ffff) << 29 };
 }
-/// FPRecipEstimate
 pub fn recpe(comptime F: type, x: F) F {
     if (isNan(x)) return x;
     const p = parts(F, x);
@@ -140,7 +125,6 @@ pub fn recpe(comptime F: type, x: F) F {
     }
     return pack(F, p.neg, rexp, rfrac);
 }
-/// FPRSqrtEstimate
 pub fn rsqrte(comptime F: type, x: F) F {
     if (isNan(x)) return x;
     const p = parts(F, x);
@@ -163,7 +147,6 @@ pub fn rsqrte(comptime F: type, x: F) F {
     const est: u64 = ((b + 1) >> 1) & 0xff;
     return pack(F, false, @divTrunc((if (F == f64) @as(i32, 3068) else 380) - exp, 2), est << 44);
 }
-/// IEEE half to a double
 pub fn h2f(h: u16) f64 {
     const s: f64 = if (h & 0x8000 != 0) -1 else 1;
     const e: i32 = (h >> 10) & 0x1f;
@@ -172,7 +155,6 @@ pub fn h2f(h: u16) f64 {
     if (e == 31) return if (m != 0) std.math.nan(f64) else s * std.math.inf(f64);
     return std.math.ldexp(s * (1 + m / 1024), e - 15);
 }
-/// a double to half: round to nearest even, denormals, NaN kept quiet
 pub fn f2h(x0: f64) u16 {
     if (isNan(x0)) return 0x7e00;
     const s: u16 = if (std.math.signbit(x0)) 0x8000 else 0;
@@ -198,14 +180,12 @@ pub fn f2hb(comptime F: type, b: std.meta.Int(.unsigned, @bitSizeOf(F))) u16 {
     const hi: u32 = @intCast(b >> (@bitSizeOf(F) - 32));
     return @intCast(((hi >> 16) & 0x8000) | 0x7e00 | ((hi >> (if (F == f32) 13 else 10)) & 0x1ff));
 }
-/// the flags FCMP leaves: less 1000, equal 0110, greater 0010, unordered 0011
 pub fn fcmp(a: anytype, b: @TypeOf(a)) u32 {
     if (isNan(a) or isNan(b)) return 0x3000_0000;
     if (a < b) return 0x8000_0000;
     if (a == b) return 0x6000_0000;
     return 0x2000_0000;
 }
-/// population count of a byte, and the carry-less product of two bytes (PMULL)
 pub fn pmul8(a: u8, b: u8) u16 {
     var r: u16 = 0;
     var i: u4 = 0;

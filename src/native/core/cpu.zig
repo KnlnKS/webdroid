@@ -1,8 +1,3 @@
-// The guest CPU: one state struct per thread in linear memory, the slice run loop, and the
-// per-page decode cache. A block is interpreted from a decoded-op cache until a control
-// transfer; the loop hands control back to the host for a trampoline pc, the return sentinel,
-// a fault, the budget, or a syscall the host owns.
-
 const abi = @import("abi.zig");
 const mem = @import("mem.zig");
 const a64 = @import("a64.zig");
@@ -11,31 +6,23 @@ const libc = @import("libc.zig");
 const jit = @import("jit.zig");
 
 pub const Cpu = extern struct {
-    // the architectural state Cpu.call saves and restores: everything up to `tls`
-    x: [32]u64, // x31 is sp
+    x: [32]u64,
     pc: u64,
     v: [32][16]u8 align(16),
-    /// CPSR layout: N Z C V at 31..28, Q at 27, GE at 19..16, T at 5 (ARM32); A64 keeps NZCV here too
     cpsr: u32,
     fpcr: u32,
     fpsr: u32,
-    /// exclusive monitor: set by a load-exclusive, consumed by the store
     excl: u32,
     tls: u64,
     ic: i64,
-    /// the block being executed, for fault attribution
     bpc: u32,
     tid: u32,
     a64: u32,
-    /// the trampoline slot (HOST), the fault code (FAULT) or the syscall number (SYSCALL) of the last exit
     exit: u32,
     fault_word: u32,
     fault_addr: u32,
-    /// the thread's errno, for calls served in the core
     errno_addr: u32,
-    /// the slice's instruction budget, for a region to leave at a block boundary
     ic_limit: i64,
-    /// the thread's pthread key values, TLS_KEYS of them (libc.zig serves the lookups)
     tls_tab: u32,
 
     pub inline fn n(c: *Cpu) u32 {
@@ -59,7 +46,6 @@ pub const Cpu = extern struct {
 };
 
 pub const Exit = enum(u32) { budget = 0, host = 1, ret = 2, fault = 3, syscall = 4 };
-/// what an instruction leaves the block loop with
 pub const Status = enum(u8) { next, jump, fault, syscall };
 
 pub const Fault = enum(u32) {
@@ -92,7 +78,7 @@ export fn layout(i: u32) u32 {
         13 => @offsetOf(Cpu, "exit"),
         14 => @offsetOf(Cpu, "fault_word"),
         15 => @offsetOf(Cpu, "fault_addr"),
-        16 => @offsetOf(Cpu, "tls"), // the end of the saved state
+        16 => @offsetOf(Cpu, "tls"),
         17 => @offsetOf(Cpu, "errno_addr"),
         18 => @offsetOf(Cpu, "tls_tab"),
         else => 0xffff_ffff,
@@ -111,22 +97,15 @@ export fn cpu_free(p: u32) void {
     _ = mem.free(p);
 }
 
-// ── the decode cache: one Op per instruction word of a page, decoded on first execution. The
-// coverage bits say which words were decoded, so a store into the page's data leaves the code
-// alone while a store into an executed word drops the page (self-modifying code, JIT stubs).
 pub const OPS_PER_PAGE = abi.PAGE_SIZE / 4;
 pub const Page = extern struct {
     cov: [OPS_PER_PAGE / 8]u8,
-    /// which allocation of this page's block: a region compiled against an older one is stale
     epoch: u32,
-    /// entries of this page executed, until the JIT takes the block (by halfword: Thumb blocks)
     heat: [2 * OPS_PER_PAGE]u16,
-    /// table slot << 8 | block index of the region holding the block starting here (0: none)
     slot: [2 * OPS_PER_PAGE]u32,
     ops: [OPS_PER_PAGE]a64.Op,
 };
 const PAGE_BLOCK = (@sizeOf(Page) + abi.PAGE_SIZE - 1) & ~@as(u32, abi.PAGE_SIZE - 1);
-/// page number → its decode block (0: none), sized for the largest memory
 pub const DECODED = abi.KERN_BASE + 0x60_0000;
 const decoded: [*]u32 = @ptrFromInt(DECODED);
 pub var stats = extern struct { pages: u32 = 0, invalidated: u32 = 0 }{};
@@ -136,8 +115,6 @@ pub fn decodedPage(pg: u32) ?*Page {
     const p = decoded[pg];
     return if (p == 0) null else @ptrFromInt(p);
 }
-// Decode blocks come from the image region, which the guest never owns: a block taken from
-// the arena could be written through a pointer the guest freed and kept.
 var free_blocks: [4096]u32 = undefined;
 var nfree: u32 = 0;
 fn allocBlock() u32 {
@@ -146,7 +123,6 @@ fn allocBlock() u32 {
         nfree -= 1;
         p = free_blocks[nfree];
     } else p = mem.reserve(PAGE_BLOCK, abi.PAGE_SIZE);
-    // a resized memory hands out the same addresses again: never trust a block to be clean
     if (p != 0) @memset(mem.bytes(p)[0..PAGE_BLOCK], 0);
     return p;
 }
@@ -164,12 +140,10 @@ pub fn pageFor(pc: u32) ?*Page {
     }
     return @ptrFromInt(p);
 }
-/// table slots whose regions the host dropped, until `jit_evict` takes their entries out
 const dead: [*]u8 = @ptrFromInt(abi.KERN_BASE + 0xa4_0000);
 export fn jit_kill(slot: u32) void {
     dead[slot] = 1;
 }
-/// every slot-map entry of a killed slot goes, and its block re-heats from zero
 export fn jit_evict() void {
     var pg: u32 = 0;
     while (pg < (abi.MEM_SIZE_A64 >> abi.PAGE_SHIFT)) : (pg += 1) if (decoded[pg] != 0) {
@@ -202,11 +176,9 @@ export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
         .syscall => return 3,
     }
 }
-/// the ARM32 interpreter runs one instruction for a region: the same statuses as exec_word
 export fn exec_word32(cp: u32, pc: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
     c.bpc = pc;
-    // the ARM interpreter reports a taken branch through pc alone
     const len: u32 = if (c.cpsr & (1 << 5) != 0 and (mem.ptr(u16, pc).* & 0xf800) != 0xf000) 2 else 4;
     return switch (arm.step(c, pc)) {
         .next => @intFromBool(@as(u32, @truncate(c.pc)) != pc +% len),
@@ -236,14 +208,12 @@ pub inline fn st(comptime T: type, c: *Cpu, a: u32, v: T) bool {
     mem.ptr(T, a).* = v;
     return true;
 }
-/// a plane address for a region: 0 when it does not translate (the fault is set)
 export fn tx_addr(cp: u32, va: u64) u32 {
     const c: *Cpu = @ptrFromInt(cp);
     if (a64.addr(c, va)) |a| return a;
     _ = raise(c, .bad_address, 0);
     return 0;
 }
-/// a store into a flagged page: code goes stale, the null page faults
 export fn on_store(cp: u32, a: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
     if (mem.page_flags[a >> abi.PAGE_SHIFT] & 2 != 0) {
@@ -265,7 +235,6 @@ fn dropPage(pg: u32) void {
     }
     stats.invalidated += 1;
 }
-/// a store into a page holding decoded code: the page is dropped if the word was decoded
 pub export fn code_write(addr: u32) u32 {
     const pg = addr >> abi.PAGE_SHIFT;
     const p = decoded[pg];
@@ -285,7 +254,6 @@ export fn invalidate_all() void {
     var pg: u32 = 0;
     while (pg < (abi.MEM_SIZE_A64 >> abi.PAGE_SHIFT)) : (pg += 1) dropPage(pg);
 }
-/// the memory was sized anew: every block address is stale
 pub fn reset() void {
     invalidate_all();
     nfree = 0;
@@ -293,7 +261,6 @@ pub fn reset() void {
 export fn cpu_stat(i: u32) u32 {
     return if (i == 0) stats.pages else stats.invalidated;
 }
-/// instructions per interpreted block; 1 makes every instruction a slice boundary (the step tracer)
 pub var max_block: u32 = 256;
 export fn set_max_block(n: u32) void {
     max_block = n;
@@ -303,8 +270,6 @@ pub inline fn isTramp(pc: u32) bool {
     return pc >= abi.TRAMP_BASE and pc < abi.TRAMP_END;
 }
 
-/// run until the frame returns, a host call, a fault, or the budget: the exit code, with the
-/// details in the struct
 export fn run_slice(cp: u32, budget: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
     const limit = c.ic + budget;
@@ -323,7 +288,6 @@ export fn run_slice(cp: u32, budget: u32) u32 {
                 _ = raise(c, .bad_address, 0);
                 return @intFromEnum(Exit.fault);
             }
-            // return as the host would: to lr, interworking on ARM32
             const lr: u32 = @truncate(c.x[if (c.a64 != 0) 30 else 14]);
             if (c.a64 != 0) c.pc = lr else setPc32(c, lr);
             continue;
@@ -339,7 +303,6 @@ export fn run_slice(cp: u32, budget: u32) u32 {
             const f: *const fn (u32, u32) callconv(.c) u32 = @ptrFromInt(s >> 8);
             const r = f(cp, s & 255);
             if (r >= jit.STATUS_MAX) {
-                // an ARM32 region leaves with an interworking target
                 if (c.a64 != 0) c.pc = r else setPc32(c, r);
             } else switch (r) {
                 2 => return @intFromEnum(Exit.fault),
@@ -349,7 +312,6 @@ export fn run_slice(cp: u32, budget: u32) u32 {
         } else {
             const h = page.heat[i] +% 1;
             page.heat[i] = h;
-            // a request the queue has no room for is asked again at the block's next entry
             if (h == jit.HEAT and !jit.request(pc, if (c.a64 != 0) .a64 else if (c.cpsr & (1 << 5) != 0) .thumb else .arm)) page.heat[i] = h - 1;
             status = if (c.a64 != 0) a64.block(c, pc, page) else arm.block(c, pc);
         }
@@ -358,9 +320,6 @@ export fn run_slice(cp: u32, budget: u32) u32 {
             .syscall => return @intFromEnum(Exit.syscall),
             else => {},
         }
-        // a CAS loop's block ends between its load- and store-exclusive: another thread running
-        // there would make the unconditional-success store write a stale value, so the monitor
-        // holds the slice
         if (c.ic >= limit and (c.excl == 0 or c.ic >= limit + 256)) return @intFromEnum(Exit.budget);
     }
 }

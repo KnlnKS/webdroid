@@ -1,8 +1,3 @@
-// ARM32: the A32 instruction set, Thumb-1 (T16, ARMv5T/v6) and the VFPv3 coprocessor, decoded
-// as they execute over the Cpu. Registers are the low words of `x`; flags are CPSR's; the VFP
-// file is `v` with Sn at byte 4n and Dn at byte 8n (d0-d15 aliasing s0-s31 as the hardware does);
-// FPSCR lives in `fpcr`. Every instruction leaves the next pc in c.pc.
-
 const std = @import("std");
 const abi = @import("abi.zig");
 const mem = @import("mem.zig");
@@ -22,7 +17,6 @@ inline fn r(c: *Cpu, n: u32) u32 {
 inline fn set(c: *Cpu, n: u32, v: u32) void {
     c.x[n] = v;
 }
-/// a register as an operand: r15 reads as the fetch address
 inline fn reg(c: *Cpu, n: u32, pc: u32) u32 {
     return if (n == 15) pc +% 8 else r(c, n);
 }
@@ -57,7 +51,6 @@ inline fn addr(c: *Cpu, a: u32) ?u32 {
     }
     return a;
 }
-/// interworking branch: the low bit selects the instruction set
 inline fn bx(c: *Cpu, target: u32) Status {
     cpu.setPc32(c, target);
     return .jump;
@@ -70,7 +63,6 @@ pub fn cond(c: *Cpu, cc: u32) bool {
     return a64.cond(c, @intCast(cc));
 }
 
-/// register-specified shift with carry-out
 const Shifted = struct { v: u32, carry: u32 };
 fn shiftReg(c: *Cpu, kind: u32, v: u32, n: u32) Shifted {
     if (n == 0) return .{ .v = v, .carry = cf(c) };
@@ -85,7 +77,6 @@ fn shiftReg(c: *Cpu, kind: u32, v: u32, n: u32) Shifted {
         },
     }
 }
-/// operand2 with its shifter carry (the carry in when the shift leaves it alone)
 fn op2(c: *Cpu, w: u32, pc: u32) Shifted {
     if (w & (1 << 25) != 0) {
         const rot = bits(w, 8, 4) * 2;
@@ -107,8 +98,6 @@ fn op2(c: *Cpu, w: u32, pc: u32) Shifted {
     }
 }
 
-// ── A32
-/// one instruction, for the JIT's fallback
 pub fn step(c: *Cpu, pc: u32) Status {
     return if (c.cpsr & (1 << 5) != 0) execThumb(c, pc) else execArm(c, pc);
 }
@@ -117,14 +106,14 @@ fn execArm(c: *Cpu, pc: u32) Status {
     const cc = w >> 28;
     c.pc = pc + 4;
     if (cc == 15) {
-        if ((w & 0x0e000000) == 0x0a000000) { // BLX (immediate): to Thumb
+        if ((w & 0x0e000000) == 0x0a000000) {
             const off: u32 = @bitCast((@as(i32, @bitCast(w << 8)) >> 6) | @as(i32, @intCast((w >> 23) & 2)));
             set(c, 14, pc + 4);
             return bx(c, ((pc +% 8 +% off) & ~@as(u32, 1)) | 1);
         }
-        if ((w & 0x0d70f000) == 0x0550f000) return .next; // PLD
-        if ((w & 0x0ff000f0) == 0x05700040 or (w & 0x0ff000f0) == 0x05700050 or (w & 0x0ff000f0) == 0x05700060) return .next; // barriers
-        if ((w & 0x0fff00ff) == 0x057ff01f) { // CLREX
+        if ((w & 0x0d70f000) == 0x0550f000) return .next;
+        if ((w & 0x0ff000f0) == 0x05700040 or (w & 0x0ff000f0) == 0x05700050 or (w & 0x0ff000f0) == 0x05700060) return .next;
+        if ((w & 0x0fff00ff) == 0x057ff01f) {
             c.excl = 0;
             return .next;
         }
@@ -137,7 +126,7 @@ fn execArm(c: *Cpu, pc: u32) Status {
     const rm = w & 15;
     const top = bits(w, 25, 3);
     switch (top) {
-        5 => { // B / BL
+        5 => {
             const off: u32 = @bitCast(@as(i32, @bitCast(w << 8)) >> 6);
             if (w & (1 << 24) != 0) set(c, 14, pc + 4);
             return jump(c, pc +% 8 +% off);
@@ -167,7 +156,7 @@ fn execArm(c: *Cpu, pc: u32) Status {
             }
             return .next;
         },
-        4 => { // LDM / STM
+        4 => {
             const P = w & (1 << 24) != 0;
             const U = w & (1 << 23) != 0;
             const W = w & (1 << 21) != 0;
@@ -206,7 +195,7 @@ fn execArm(c: *Cpu, pc: u32) Status {
         6 => return vfp(c, w, pc) orelse fault(c, .unimplemented, w, pc),
         7 => {
             if (w & (1 << 24) != 0) return swi(c, pc);
-            if ((w & 0x0ff00fff) == 0x0e1d0f70 and bits(w, 8, 4) == 15) { // mrc p15, 0, rd, c13, c0, 3
+            if ((w & 0x0ff00fff) == 0x0e1d0f70 and bits(w, 8, 4) == 15) {
                 set(c, rd, @truncate(c.tls));
                 return .next;
             }
@@ -218,28 +207,28 @@ fn execArm(c: *Cpu, pc: u32) Status {
 
 fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32, rm: u32) Status {
     if (top == 0) {
-        if ((w & 0x0ff000f0) == 0x01200010) return bx(c, reg(c, rm, pc)); // BX
-        if ((w & 0x0ff000f0) == 0x01200030) { // BLX (register)
+        if ((w & 0x0ff000f0) == 0x01200010) return bx(c, reg(c, rm, pc));
+        if ((w & 0x0ff000f0) == 0x01200030) {
             set(c, 14, pc + 4);
             return bx(c, reg(c, rm, pc));
         }
         if ((w & 0x0ff000f0) == 0x01200070) return fault(c, .brk, w, pc);
-        if ((w & 0x0fff0ff0) == 0x016f0f10) { // CLZ
+        if ((w & 0x0fff0ff0) == 0x016f0f10) {
             set(c, rd, @clz(reg(c, rm, pc)));
             return .next;
         }
-        if ((w & 0x0fbf0fff) == 0x010f0000) { // MRS
+        if ((w & 0x0fbf0fff) == 0x010f0000) {
             set(c, rd, c.cpsr | 0x10);
             return .next;
         }
-        if ((w & 0x0fc000f0) == 0x00000090) { // MUL / MLA
+        if ((w & 0x0fc000f0) == 0x00000090) {
             var v = reg(c, rm, pc) *% reg(c, rs, pc);
             if (w & (1 << 21) != 0) v +%= r(c, rd);
             set(c, rn, v);
             if (w & (1 << 20) != 0) setNZ(c, v);
             return .next;
         }
-        if ((w & 0x0f8000f0) == 0x00800090) { // UMULL / UMLAL / SMULL / SMLAL
+        if ((w & 0x0f8000f0) == 0x00800090) {
             const signed = w & (1 << 22) != 0;
             var p: u64 = if (signed) @bitCast(@as(i64, @as(i32, @bitCast(reg(c, rm, pc)))) *% @as(i64, @as(i32, @bitCast(reg(c, rs, pc))))) else @as(u64, reg(c, rm, pc)) *% @as(u64, reg(c, rs, pc));
             if (w & (1 << 21) != 0) p +%= (@as(u64, r(c, rn)) << 32) | r(c, rd);
@@ -248,7 +237,7 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
             if (w & (1 << 20) != 0) c.cpsr = (c.cpsr & 0x3fff_ffff) | (@as(u32, @intCast(p >> 63)) << 31) | (@as(u32, @intFromBool(p == 0)) << 30);
             return .next;
         }
-        if ((w & 0x0fb000f0) == 0x01000090) { // SWP / SWPB
+        if ((w & 0x0fb000f0) == 0x01000090) {
             const byte = w & (1 << 22) != 0;
             const a = addr(c, reg(c, rn, pc)) orelse return badAddr(c, w, pc);
             const t: u32 = if (byte) ld(u8, a) else ld(u32, a);
@@ -256,7 +245,7 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
             set(c, rd, t);
             return .next;
         }
-        if ((w & 0x0f9000f0) == 0x01800090) { // LDREX / STREX family (0 word, 1 dword, 2 byte, 3 half)
+        if ((w & 0x0f9000f0) == 0x01800090) {
             const Ld = w & (1 << 20) != 0;
             const sz = bits(w, 21, 2);
             const a = addr(c, reg(c, rn, pc)) orelse return badAddr(c, w, pc);
@@ -284,7 +273,7 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
             }
             return .next;
         }
-        if ((w & 0x0f900090) == 0x01000080) { // DSP: SMLAxy SMULxy SMLAWy SMULWy SMLALxy
+        if ((w & 0x0f900090) == 0x01000080) {
             const o = bits(w, 21, 2);
             const x = bits(w, 5, 1);
             const y = bits(w, 6, 1);
@@ -313,7 +302,7 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
             }
             return .next;
         }
-        if ((w & 0x0f9000f0) == 0x01000050) { // QADD / QSUB / QDADD / QDSUB
+        if ((w & 0x0f9000f0) == 0x01000050) {
             const o = bits(w, 21, 2);
             const n: i64 = @as(i32, @bitCast(reg(c, rn, pc)));
             const dbl: i64 = if (o & 2 != 0) sat32(c, n * 2) else n;
@@ -321,7 +310,7 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
             set(c, rd, @bitCast(@as(i32, @intCast(sat32(c, if (o & 1 != 0) m - dbl else m + dbl)))));
             return .next;
         }
-        if ((w & 0x0e000090) == 0x00000090) { // LDRH/STRH/LDRSB/LDRSH/LDRD/STRD
+        if ((w & 0x0e000090) == 0x00000090) {
             const P = w & (1 << 24) != 0;
             const U = w & (1 << 23) != 0;
             const I = w & (1 << 22) != 0;
@@ -342,7 +331,7 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
                 }
             } else switch (sh) {
                 1 => if (!st(u16, c, a, @truncate(r(c, rd)))) return badAddr(c, w, pc),
-                2 => { // LDRD
+                2 => {
                     set(c, rd, ld(u32, a));
                     set(c, rd + 1, ld(u32, a + 4));
                 },
@@ -354,12 +343,12 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
             return .next;
         }
     }
-    if ((w & 0x0db0f000) == 0x0120f000 and (top == 1 or (w & 0xf0) == 0)) { // MSR
+    if ((w & 0x0db0f000) == 0x0120f000 and (top == 1 or (w & 0xf0) == 0)) {
         const src = if (top == 1) op2(c, w, pc).v else reg(c, rm, pc);
         if (w & (1 << 19) != 0) c.cpsr = (c.cpsr & 0x07ff_ffff) | (src & 0xf800_0000);
         return .next;
     }
-    if (top == 1 and (w & 0x0fb00000) == 0x03000000) { // MOVW / MOVT
+    if (top == 1 and (w & 0x0fb00000) == 0x03000000) {
         const imm16 = ((w >> 4) & 0xf000) | (w & 0xfff);
         set(c, rd, if (w & (1 << 22) != 0) (r(c, rd) & 0xffff) | (imm16 << 16) else imm16);
         return .next;
@@ -415,13 +404,12 @@ fn sat32(c: *Cpu, v: i64) i64 {
     return v;
 }
 
-/// ARMv6 media instructions (top = 3, bit 4 set): extends, reverses, bitfields, saturates, pack
 fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
     const op1 = bits(w, 20, 5);
     const op2b = bits(w, 5, 3);
     const RM = reg(c, rm, pc);
     const RN = reg(c, rn, pc);
-    if ((w & 0x0fe00070) == 0x07c00010) { // BFI / BFC
+    if ((w & 0x0fe00070) == 0x07c00010) {
         const lsb = bits(w, 7, 5);
         const msb = bits(w, 16, 5);
         const width = msb -% lsb +% 1;
@@ -429,7 +417,7 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
         set(c, rd, if (rn == 15) r(c, rd) & ~mask else (r(c, rd) & ~mask) | ((RN << @intCast(lsb)) & mask));
         return .next;
     }
-    if ((w & 0x0fa00070) == 0x07a00050) { // SBFX / UBFX
+    if ((w & 0x0fa00070) == 0x07a00050) {
         const lsb = bits(w, 7, 5);
         const width = bits(w, 16, 5) + 1;
         if (w & (1 << 22) != 0) {
@@ -440,7 +428,7 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
         }
         return .next;
     }
-    if (op1 >= 8 and op1 <= 15 and (op2b & 3) == 3) { // SXTB16/SXTB/SXTH/UXTB16/UXTB/UXTH (+A)
+    if (op1 >= 8 and op1 <= 15 and (op2b & 3) == 3) {
         const rot = bits(w, 10, 2) * 8;
         const rotated = std.math.rotr(u32, RM, rot);
         const add: u32 = if (rn == 15) 0 else RN;
@@ -456,19 +444,19 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
         set(c, rd, v);
         return .next;
     }
-    if ((w & 0x0fff0ff0) == 0x06bf0f30) { // REV
+    if ((w & 0x0fff0ff0) == 0x06bf0f30) {
         set(c, rd, @byteSwap(RM));
         return .next;
     }
-    if ((w & 0x0fff0ff0) == 0x06bf0fb0) { // REV16
+    if ((w & 0x0fff0ff0) == 0x06bf0fb0) {
         set(c, rd, rev16(RM));
         return .next;
     }
-    if ((w & 0x0fff0ff0) == 0x06ff0fb0) { // REVSH
+    if ((w & 0x0fff0ff0) == 0x06ff0fb0) {
         set(c, rd, sxh(@byteSwap(@as(u16, @truncate(RM)))));
         return .next;
     }
-    if ((w & 0x0ff00ff0) == 0x06800fb0) { // SEL
+    if ((w & 0x0ff00ff0) == 0x06800fb0) {
         const ge = bits(c.cpsr, 16, 4);
         var v: u32 = 0;
         var i: u5 = 0;
@@ -479,7 +467,7 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
         set(c, rd, v);
         return .next;
     }
-    if ((w & 0x0fe00030) == 0x06a00010 or (w & 0x0fe00030) == 0x06e00010) { // SSAT / USAT
+    if ((w & 0x0fe00030) == 0x06a00010 or (w & 0x0fe00030) == 0x06e00010) {
         const sh = bits(w, 7, 5);
         const satb = bits(w, 16, 5);
         const shifted: i64 = if (w & (1 << 6) != 0) @as(i32, @bitCast(RN)) >> @intCast(if (sh == 0) 31 else sh) else @as(i64, @as(i32, @bitCast(RN))) << @intCast(sh);
@@ -493,12 +481,12 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
         }
         return .next;
     }
-    if ((w & 0x0ff00030) == 0x06800010) { // PKHBT / PKHTB
+    if ((w & 0x0ff00030) == 0x06800010) {
         const sh = bits(w, 7, 5);
         if (w & (1 << 6) != 0) set(c, rd, (RN & 0xffff0000) | (@as(u32, @bitCast(@as(i32, @bitCast(RM)) >> @intCast(if (sh == 0) 31 else sh))) & 0xffff)) else set(c, rd, (RN & 0xffff) | ((RM << @intCast(sh)) & 0xffff0000));
         return .next;
     }
-    if ((w & 0x0ff000f0) == 0x07800010) { // USAD8 / USADA8
+    if ((w & 0x0ff000f0) == 0x07800010) {
         const s = reg(c, rs, pc);
         var sum: u32 = if (rd == 15) 0 else r(c, rd);
         var i: u5 = 0;
@@ -506,11 +494,11 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
         set(c, rn, sum);
         return .next;
     }
-    if ((w & 0x0ff000f0) == 0x0700f010) { // SMUAD-shaped fallback: the low product
+    if ((w & 0x0ff000f0) == 0x0700f010) {
         set(c, rn, RM *% reg(c, rs, pc));
         return .next;
     }
-    if ((w & 0x0ff0f0f0) == 0x0750f010 or (w & 0x0ff000f0) == 0x07500010) { // SMMUL / SMMLA
+    if ((w & 0x0ff0f0f0) == 0x0750f010 or (w & 0x0ff000f0) == 0x07500010) {
         const p: i64 = @as(i64, @as(i32, @bitCast(RM))) * @as(i64, @as(i32, @bitCast(reg(c, rs, pc))));
         var v: u32 = @truncate(@as(u64, @bitCast(p)) >> 32);
         if ((w & 0x0ff0f0f0) != 0x0750f010) v +%= r(c, rd);
@@ -520,14 +508,13 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
     return fault(c, .unimplemented, w, pc);
 }
 
-/// EABI syscall (swi 0, number in r7): only what a userspace runtime issues directly
 fn swi(c: *Cpu, pc: u32) Status {
     switch (r(c, 7)) {
-        0xf0002 => { // __ARM_NR_cacheflush
+        0xf0002 => {
             cpu.invalidate_range(r(c, 0), r(c, 1) -% r(c, 0));
             set(c, 0, 0);
         },
-        0xf0005 => { // __ARM_NR_set_tls
+        0xf0005 => {
             c.tls = r(c, 0);
             set(c, 0, 0);
         },
@@ -547,12 +534,10 @@ fn swi(c: *Cpu, pc: u32) Status {
     return .jump;
 }
 
-// ── VFP
 inline fn vreg(comptime T: type, c: *Cpu, n: u32) *align(@sizeOf(T)) T {
     const per = 16 / @sizeOf(T);
     return @ptrCast(@alignCast(&c.v[n / per][(n % per) * @sizeOf(T)]));
 }
-/// one VFP instruction (ARM encoding, cond already handled); null when not VFP
 fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
     const cp = bits(w, 8, 4);
     if (cp != 10 and cp != 11) return null;
@@ -574,7 +559,7 @@ fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
         const Ld = bits(w, 20, 1) != 0;
         const rn = bits(w, 16, 4);
         const imm8 = w & 255;
-        if (top == 12 and !P and !W and bits(w, 21, 2) == 2) { // 64-bit transfers
+        if (top == 12 and !P and !W and bits(w, 21, 2) == 2) {
             const rt = bits(w, 12, 4);
             const rt2 = bits(w, 16, 4);
             const lo = if (dp) m * 2 else m;
@@ -587,7 +572,7 @@ fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
             }
             return .next;
         }
-        if (P and !W) { // VLDR / VSTR
+        if (P and !W) {
             const base = if (rn == 15) (pc +% 8) & ~@as(u32, 3) else r(c, rn);
             const a = addr(c, if (U) base +% imm8 * 4 else base -% imm8 * 4) orelse return badAddr(c, w, pc);
             if (Ld) {
@@ -599,7 +584,6 @@ fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
             }
             return .next;
         }
-        // VLDM / VSTM / VPUSH / VPOP
         const count = if (dp) imm8 >> 1 else imm8;
         const nbytes = imm8 * 4;
         var a = addr(c, if (U) r(c, rn) else r(c, rn) -% nbytes) orelse return badAddr(c, w, pc);
@@ -617,7 +601,7 @@ fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
         return .next;
     }
     if (top != 14) return null;
-    if (w & 0x10 != 0) { // register transfers
+    if (w & 0x10 != 0) {
         const rt = bits(w, 12, 4);
         const o = bits(w, 21, 3);
         const Ld = bits(w, 20, 1) != 0;
@@ -625,7 +609,7 @@ fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
             if (Ld) set(c, rt, vreg(u32, c, n).*) else vreg(u32, c, n).* = reg(c, rt, pc);
             return .next;
         }
-        if (o == 7 and !dp) { // VMRS / VMSR: FPSCR is register 1; FPSID/MVFR read as constants
+        if (o == 7 and !dp) {
             if (Ld) {
                 if (vn == 1) {
                     if (rt == 15) c.cpsr = (c.cpsr & 0x0fff_ffff) | (c.fpcr & 0xf000_0000) else set(c, rt, c.fpcr);
@@ -633,7 +617,7 @@ fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
             } else if (vn == 1) c.fpcr = r(c, rt);
             return .next;
         }
-        if (dp and (o == 0 or o == 1) and (w & 0x60) == 0) { // VMOV scalar ↔ core, the 32-bit lane form
+        if (dp and (o == 0 or o == 1) and (w & 0x60) == 0) {
             const lane = n * 2 + (o & 1);
             if (Ld) set(c, rt, vreg(u32, c, lane).*) else vreg(u32, c, lane).* = reg(c, rt, pc);
             return .next;
@@ -661,7 +645,7 @@ fn vfpArith(comptime F: type, c: *Cpu, w: u32, d: u32, n: u32, m: u32) ?Status {
         0x9 => vreg(F, c, d).* = if (o6) fp.fma(F, -vn, vm, -vd) else fp.fma(F, vn, vm, -vd),
         0xa => vreg(F, c, d).* = if (o6) fp.fma(F, -vn, vm, vd) else fp.fma(F, vn, vm, vd),
         0xb => {
-            if (!o6) { // VMOV (immediate)
+            if (!o6) {
                 const imm = @import("simd.zig").vfpImm(bits(w, 16, 4) << 4 | (w & 15), dp);
                 if (dp) vreg(u32, c, d * 2).* = @truncate(imm) else vreg(u32, c, d).* = @truncate(imm);
                 if (dp) vreg(u32, c, d * 2 + 1).* = @intCast(imm >> 32);
@@ -673,15 +657,15 @@ fn vfpArith(comptime F: type, c: *Cpu, w: u32, d: u32, n: u32, m: u32) ?Status {
                 0 => vreg(F, c, d).* = if (o7) @abs(vm) else vm,
                 1 => vreg(F, c, d).* = if (o7) @sqrt(vm) else -vm,
                 4, 5 => c.fpcr = (c.fpcr & 0x0fff_ffff) | fp.fcmp(vd, if (opc2 == 5) @as(F, 0) else vm),
-                7 => { // VCVT between single and double
+                7 => {
                     if (!o7) return null;
                     if (dp) vreg(f32, c, (bits(w, 12, 4) << 1) | bits(w, 22, 1)).* = @floatCast(vm) else vreg(f64, c, (bits(w, 22, 1) << 4) | bits(w, 12, 4)).* = vreg(f32, c, m).*;
                 },
-                8 => { // VCVT from int (o7: signed)
+                8 => {
                     const src = vreg(u32, c, (bits(w, 0, 4) << 1) | bits(w, 5, 1)).*;
                     vreg(F, c, d).* = if (o7) @floatFromInt(@as(i32, @bitCast(src))) else @floatFromInt(src);
                 },
-                12, 13 => { // VCVT to int (12 unsigned, 13 signed); o7: round toward zero
+                12, 13 => {
                     const t = if (o7) @trunc(vm) else fp.rne(F, vm);
                     const dst = vreg(u32, c, (bits(w, 12, 4) << 1) | bits(w, 22, 1));
                     dst.* = if (opc2 == 13) @bitCast(fp.toInt(i32, t)) else fp.toInt(u32, t);
@@ -694,7 +678,6 @@ fn vfpArith(comptime F: type, c: *Cpu, w: u32, d: u32, n: u32, m: u32) ?Status {
     return .next;
 }
 
-// ── Thumb-1
 fn execThumb(c: *Cpu, pc: u32) Status {
     const h: u32 = ld(u16, pc);
     c.pc = pc + 2;
@@ -869,7 +852,7 @@ fn thumbMisc(c: *Cpu, h: u32, pc: u32, rd: u32, rn: u32) Status {
         set(c, 13, if (h & 0x80 != 0) r(c, 13) -% imm else r(c, 13) +% imm);
         return .next;
     }
-    if ((h & 0xfe00) == 0xb400) { // PUSH
+    if ((h & 0xfe00) == 0xb400) {
         const list = (h & 255) | ((h & 0x100) << 6);
         const base = r(c, 13) -% @as(u32, @popCount(list)) * 4;
         var a = addr(c, base) orelse return badAddr(c, h, pc);
@@ -884,7 +867,7 @@ fn thumbMisc(c: *Cpu, h: u32, pc: u32, rd: u32, rn: u32) Status {
         }
         return .next;
     }
-    if ((h & 0xfe00) == 0xbc00) { // POP
+    if ((h & 0xfe00) == 0xbc00) {
         const list = (h & 255) | ((h & 0x100) << 7);
         var a = addr(c, r(c, 13)) orelse return badAddr(c, h, pc);
         set(c, 13, a +% @as(u32, @popCount(list)) * 4);
@@ -897,7 +880,7 @@ fn thumbMisc(c: *Cpu, h: u32, pc: u32, rd: u32, rn: u32) Status {
         return .next;
     }
     if ((h & 0xff00) == 0xbe00) return fault(c, .brk, h, pc);
-    if ((h & 0xff00) == 0xbf00 or (h & 0xffe8) == 0xb660) return .next; // hints, CPS
+    if ((h & 0xff00) == 0xbf00 or (h & 0xffe8) == 0xb660) return .next;
     const t = r(c, rn);
     switch (h & 0xffc0) {
         0xb200 => set(c, rd, sxh(t)),
@@ -908,7 +891,7 @@ fn thumbMisc(c: *Cpu, h: u32, pc: u32, rd: u32, rn: u32) Status {
         0xba40 => set(c, rd, rev16(t)),
         0xbac0 => set(c, rd, sxh(@byteSwap(@as(u16, @truncate(t))))),
         else => {
-            if ((h & 0xf500) == 0xb100) { // CBZ / CBNZ
+            if ((h & 0xf500) == 0xb100) {
                 const imm = ((h >> 3) & 31) * 2 + ((h & 0x200) >> 3);
                 const zero = r(c, rd) == 0;
                 if (zero != (h & 0x800 != 0)) return jump(c, pc +% 4 +% imm);
@@ -920,7 +903,6 @@ fn thumbMisc(c: *Cpu, h: u32, pc: u32, rd: u32, rn: u32) Status {
     return .next;
 }
 
-/// interpret from `start` to the first control transfer (or max_block instructions)
 pub fn block(c: *Cpu, start: u32) Status {
     const thumb = c.cpsr & (1 << 5) != 0;
     if (start & (if (thumb) @as(u32, 1) else 3) != 0) return fault(c, .misaligned_pc, start, start);

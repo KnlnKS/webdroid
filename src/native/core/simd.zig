@@ -1,8 +1,3 @@
-// The A64 SIMD&FP space, decoded as it executes: the V register file by lane, unrolled per lane
-// through a comptime element type. Moves, loads, stores, inserts and permutes copy bits so a
-// NaN keeps its payload; arithmetic goes through the float types. Every op builds its result in
-// a local and writes it last, so a destination that is also a source reads its old lanes.
-
 const std = @import("std");
 const abi = @import("abi.zig");
 const mem = @import("mem.zig");
@@ -22,7 +17,6 @@ inline fn L(comptime T: type, r: *align(16) V) *align(16) [16 / @sizeOf(T)]T {
 inline fn get(comptime T: type, c: *Cpu, n: u8, i: usize) T {
     return L(T, &c.v[n])[i];
 }
-/// the destination's old lanes to start from (an accumulate keeps what it does not write)
 inline fn old(c: *Cpu, d: u8) V {
     return c.v[d];
 }
@@ -30,7 +24,6 @@ inline fn write(c: *Cpu, d: u8, out: V, q: bool) void {
     c.v[d] = out;
     if (!q) @as(*align(8) u64, @ptrCast(&c.v[d][8])).* = 0;
 }
-/// a scalar result: everything above the element zeroed
 inline fn writeScalar(c: *Cpu, d: u8, comptime T: type, v: T) void {
     var out: V align(16) = @splat(0);
     L(T, &out)[0] = v;
@@ -51,7 +44,6 @@ fn Signed(comptime T: type) type {
 fn Wide(comptime T: type) type {
     return std.meta.Int(@typeInfo(T).int.signedness, @bitSizeOf(T) * 2);
 }
-/// saturate to T, raising QC
 fn sat(comptime T: type, c: *Cpu, v: anytype) T {
     if (v > std.math.maxInt(T)) {
         c.setQ();
@@ -67,7 +59,6 @@ inline fn cond(c: *Cpu, cc: u8) bool {
     return a64.cond(c, cc);
 }
 
-/// VFPExpandImm: the 8-bit modified immediate of FMOV as bits
 pub fn vfpImm(imm8: u32, dp: bool) u64 {
     const sign = imm8 >> 7;
     const b6 = (imm8 >> 6) & 1;
@@ -81,7 +72,6 @@ pub fn vfpImm(imm8: u32, dp: bool) u64 {
     return (sign << 31) | (exp << 23) | (frac << 19);
 }
 
-// ── memory
 pub inline fn vload(c: *Cpu, t: u8, a: u32, width: usize) void {
     var out: V align(16) = @splat(0);
     @memcpy(out[0..width], mem.bytes(a)[0..width]);
@@ -106,7 +96,6 @@ pub fn memop(c: *Cpu, w: u32) Status {
     const rt: u8 = @intCast(w & 31);
     const rn: u8 = @intCast(bits(w, 5, 5));
     const rm: u8 = @intCast(bits(w, 16, 5));
-    // multiple structures (LD1..LD4 / ST1..ST4), with or without post-index
     if (is(w, 0xbfbf0000, 0x0c000000) or is(w, 0xbfa00000, 0x0c800000)) {
         const q = bits(w, 30, 1) != 0;
         const Ld = bits(w, 22, 1) != 0;
@@ -147,7 +136,6 @@ pub fn memop(c: *Cpu, w: u32) Status {
         if (post) wb(c, rn, rm, regs * nbytes);
         return .next;
     }
-    // single structure, and the replicating loads
     if (is(w, 0xbf9f0000, 0x0d000000) or is(w, 0xbf800000, 0x0d800000)) {
         const q = bits(w, 30, 1);
         const Ld = bits(w, 22, 1) != 0;
@@ -186,7 +174,6 @@ pub fn memop(c: *Cpu, w: u32) Status {
         if (post) wb(c, rn, rm, regs * es);
         return .next;
     }
-    // LDP / STP: S, D, Q
     if (is(w, 0x3a000000, 0x28000000)) {
         const opc = bits(w, 30, 2);
         const Ld = bits(w, 22, 1) != 0;
@@ -205,7 +192,6 @@ pub fn memop(c: *Cpu, w: u32) Status {
         } else if (!vstore(c, rt, a, width) or !vstore(c, rt2, a + width, width)) return badAddr(c, w);
         return .next;
     }
-    // LDR / STR: unsigned offset, register offset, unscaled / pre / post index
     const size = bits(w, 30, 2);
     const opc = bits(w, 22, 2);
     const Ld = opc & 1 != 0;
@@ -236,7 +222,6 @@ pub fn memop(c: *Cpu, w: u32) Status {
     return .next;
 }
 
-// ── AdvSIMD modified immediate: the 64-bit pattern a cmode/op/imm8 triple expands to
 const ImmKind = enum { movi, mvni, orr, bic, fmov };
 pub fn expandImm(o: u32, cmode: u32, o2: u32, imm8: u32) ?struct { v: u64, kind: ImmKind } {
     const group = cmode >> 1;
@@ -285,7 +270,6 @@ pub fn exec(c: *Cpu, w: u32) Status {
     const rm: u8 = @intCast(bits(w, 16, 5));
     const q = bits(w, 30, 1) != 0;
 
-    // ── modified immediate: MOVI / MVNI / ORR / BIC / FMOV (vector immediate)
     if (is(w, 0x9ff80400, 0x0f000400)) {
         const o = bits(w, 29, 1);
         const cmode = bits(w, 12, 4);
@@ -302,7 +286,6 @@ pub fn exec(c: *Cpu, w: u32) Status {
         write(c, rd, out, q);
         return .next;
     }
-    // ── copy: DUP / INS / SMOV / UMOV, vector and scalar
     if (is(w, 0x9fe08400, 0x0e000400) or is(w, 0xdfe08400, 0x5e000400)) {
         const scalar = w & 0x10000000 != 0;
         const o = bits(w, 29, 1);
@@ -363,7 +346,6 @@ pub fn exec(c: *Cpu, w: u32) Status {
         }
         return .next;
     }
-    // ── EXT: bytes imm4.. of Vn:Vm
     if (is(w, 0xbfe08400, 0x2e000000)) {
         const imm = bits(w, 11, 4);
         if (!q and imm > 7) return fault(c, w);
@@ -376,7 +358,6 @@ pub fn exec(c: *Cpu, w: u32) Status {
         write(c, rd, out, q);
         return .next;
     }
-    // ── TBL / TBX: bytes of Vd picked out of 1-4 consecutive table registers by the indices in Vm
     if (is(w, 0xbfe08c00, 0x0e000000)) {
         const len = bits(w, 13, 2) + 1;
         const tbx = bits(w, 12, 1) != 0;
@@ -390,7 +371,6 @@ pub fn exec(c: *Cpu, w: u32) Status {
         write(c, rd, out, q);
         return .next;
     }
-    // ── permute: UZP1 / TRN1 / ZIP1 / UZP2 / TRN2 / ZIP2
     if (is(w, 0xbf208c00, 0x0e000800)) {
         const size = bits(w, 22, 2);
         const opcode = bits(w, 12, 3);
@@ -400,7 +380,6 @@ pub fn exec(c: *Cpu, w: u32) Status {
             else => unreachable,
         };
     }
-    // ── three-same, bitwise: AND/BIC/ORR/ORN, EOR/BSL/BIT/BIF
     if (is(w, 0x9f20fc00, 0x0e201c00)) {
         const U = bits(w, 29, 1) != 0;
         const size = bits(w, 22, 2);
@@ -425,7 +404,6 @@ pub fn exec(c: *Cpu, w: u32) Status {
         write(c, rd, out, q);
         return .next;
     }
-    // ── NOT
     if (is(w, 0xbffffc00, 0x2e205800)) {
         var out: V align(16) = undefined;
         for (0..2) |i| L(u64, &out)[i] = ~get(u64, c, rn, i);
@@ -459,8 +437,6 @@ fn permute(comptime T: type, c: *Cpu, rd: u8, rn: u8, rm: u8, q: bool, opcode: u
     write(c, rd, out, q);
     return .next;
 }
-
-// ── the vector and scalar-SIMD arithmetic families
 
 const Ctx = struct {
     c: *Cpu,
@@ -502,7 +478,6 @@ fn vector(c: *Cpu, w: u32) ?Status {
     return null;
 }
 
-/// dispatch on the element size to a comptime-typed body: body(T) where T is the lane type
 inline fn bySize(comptime f: anytype, x: Ctx, size: u32, signed: bool) Status {
     return switch (size) {
         0 => if (signed) f(i8, x) else f(u8, x),
@@ -582,7 +557,6 @@ fn threeSameI(comptime T: type, x: Ctx) Status {
     const c = x.c;
     const opcode = bits(x.w, 11, 5);
     const count = laneCount(x, T);
-    // wide enough for any sum, and signed so a difference of unsigned lanes is representable
     const W = std.meta.Int(.signed, if (@bitSizeOf(T) == 64) 128 else 64);
     const bitsT = @bitSizeOf(T);
     var out: V align(16) = old(c, x.rd);
@@ -676,7 +650,6 @@ fn twoMiscF(comptime F: type, x: Ctx) Status {
     switch (opcode) {
         22 => {
             if (x.U or x.fv) return fault(c, x.w);
-            // FCVTN(2): .2s from .2d, or .4h from .4s
             var narrow: [8]u8 align(8) = undefined;
             if (F == f64) {
                 for (0..2) |i| @as(*align(4) [2]f32, @ptrCast(&narrow))[i] = @floatCast(get(f64, c, x.rn, i));
@@ -686,7 +659,6 @@ fn twoMiscF(comptime F: type, x: Ctx) Status {
             return narrowed(x, narrow, if (F == f64) 4 else 2);
         },
         23 => {
-            // FCVTL: .4s from .4h, .2d from .2s (upper half when Q)
             const off: usize = if (x.q) (if (F == f64) 2 else 4) else 0;
             if (F == f64) {
                 for (0..2) |i| O[i] = get(f32, c, x.rn, off + i);
@@ -734,7 +706,6 @@ fn xtn(comptime Src: type, comptime N: type, x: Ctx, comptime saturate: bool) St
     }
     return narrowed(x, narrow, @sizeOf(N));
 }
-/// SHRN/RSHRN, SQSHRUN/SQRSHRUN, SQSHRN/UQSHRN, SQRSHRN/UQRSHRN: narrow from lanes twice as wide
 fn shrn(comptime N: type, x: Ctx, shr: u32, comptime round: bool, comptime plain: bool, comptime srcSigned: bool) Status {
     const WS = std.meta.Int(.signed, @bitSizeOf(N) * 2);
     const WU = std.meta.Int(.unsigned, @bitSizeOf(N) * 2);
@@ -748,7 +719,6 @@ fn shrn(comptime N: type, x: Ctx, shr: u32, comptime round: bool, comptime plain
     }
     return narrowed(x, narrow, @sizeOf(N));
 }
-/// a narrowing op writes the half of Vd the Q bit names (the other half keeps its lanes)
 fn narrowed(x: Ctx, narrow: [8]u8, es: usize) Status {
     const c = x.c;
     if (x.scalar) {
@@ -779,7 +749,6 @@ fn twoMiscI(comptime T: type, x: Ctx) Status {
     const OS = L(S, &out);
     switch (opcode) {
         0, 1 => {
-            // REV64 / REV32 (U) / REV16: bytes reversed within a group
             const group: usize = if (opcode == 1) 2 else if (x.U) 4 else 8;
             if (@sizeOf(T) >= group) return fault(c, x.w);
             const per = group / @sizeOf(T);
@@ -788,7 +757,6 @@ fn twoMiscI(comptime T: type, x: Ctx) Status {
             return .next;
         },
         2, 6 => {
-            // SADDLP / UADDLP, SADALP / UADALP
             if (bitsT == 64) return fault(c, x.w);
             const OW = L(W, &out);
             for (0..count / 2) |i| {
@@ -799,7 +767,6 @@ fn twoMiscI(comptime T: type, x: Ctx) Status {
             return .next;
         },
         18, 20 => {
-            // XTN(2) plain; SQXTUN(2) signed to unsigned; SQXTN(2) signed; UQXTN(2) unsigned
             if (bitsT == 64) return fault(c, x.w);
             if (opcode == 18 and !x.U) return xtn(Unsigned(W), Unsigned(T), x, false);
             if (opcode == 18) return xtn(Signed(W), Unsigned(T), x, true);
@@ -807,7 +774,6 @@ fn twoMiscI(comptime T: type, x: Ctx) Status {
             return xtn(Unsigned(W), Unsigned(T), x, true);
         },
         19 => {
-            // SHLL(2): widen and shift left by the element size
             if (!x.U or bitsT == 64) return fault(c, x.w);
             const half = 8 / @sizeOf(T);
             const off: usize = if (x.q) half else 0;
@@ -849,7 +815,6 @@ fn across(x: Ctx) Status {
     const c = x.c;
     const opcode = bits(x.w, 12, 5);
     if (x.scalar) {
-        // pairwise: two lanes of Vn into one scalar
         if (!x.U and opcode == 27) {
             writeScalar(c, x.rd, u64, get(u64, c, x.rn, 0) +% get(u64, c, x.rn, 1));
             return .next;
@@ -928,7 +893,6 @@ fn shiftImmT(comptime T: type, x: Ctx) Status {
             return if (x.U) shrn(Un, x, shr, round, false, false) else shrn(S, x, shr, round, false, true);
         },
         20 => {
-            // SSHLL / USHLL (SXTL / UXTL): widen from the low (or high, Q) half
             if (bitsT == 64) return fault(c, x.w);
             const half = 8 / @sizeOf(T);
             const off: usize = if (x.q) half else 0;
@@ -1046,7 +1010,6 @@ fn byElementI(comptime S: type, x: Ctx, m: u8, idx: usize) Status {
             x.finish(S, out);
         },
         10, 2, 6 => {
-            // SMULL/UMULL, SMLAL/UMLAL, SMLSL/UMLSL by element
             const wcount = 8 / @sizeOf(S);
             const off: usize = if (x.q) wcount else 0;
             if (x.U) {
@@ -1070,7 +1033,6 @@ fn byElementI(comptime S: type, x: Ctx, m: u8, idx: usize) Status {
     }
     return .next;
 }
-/// SDOT / UDOT, by vector (idx = the lane, or the matching 4 bytes when m is Vm)
 fn dot(x: Ctx, m: u8, idx: usize) Status {
     const c = x.c;
     if (x.size != 2) return fault(c, x.w);
@@ -1104,7 +1066,6 @@ fn threeDifferentT(comptime T: type, x: Ctx) Status {
     const off: usize = if (q) wcount else 0;
     var out: V align(16) = old(c, x.rd);
     if (opcode == 4 or opcode == 6) {
-        // ADDHN / RADDHN / SUBHN / RSUBHN: the high half of the wide op
         const WU = Unsigned(W);
         var narrow: [8]u8 align(8) = undefined;
         for (0..wcount) |i| {
@@ -1140,7 +1101,6 @@ fn threeDifferentT(comptime T: type, x: Ctx) Status {
     return .next;
 }
 
-// ── scalar floating point (bit 28 set): the data-processing groups and the conversions
 fn scalarFp(c: *Cpu, w: u32) Status {
     const ftype = bits(w, 22, 2);
     if (w & 0x20000000 != 0) return fault(c, w);
@@ -1148,11 +1108,9 @@ fn scalarFp(c: *Cpu, w: u32) Status {
         0 => fpT(f32, c, w),
         1 => fpT(f64, c, w),
         3 => fpHalf(c, w),
-        // ftype 2 exists only as FMOV of the top half of a D register
         else => if (is(w, 0x5f20fc00, 0x1e200000) and bits(w, 16, 3) >= 6) fpT(f64, c, w) else fault(c, w),
     };
 }
-/// the half-precision forms that exist: FCVT to and from a wider type
 fn fpHalf(c: *Cpu, w: u32) Status {
     const rd: u8 = @intCast(w & 31);
     const rn: u8 = @intCast(bits(w, 5, 5));
@@ -1180,7 +1138,6 @@ fn fpT(comptime F: type, c: *Cpu, w: u32) Status {
     const U = std.meta.Int(.unsigned, @bitSizeOf(F));
     const n = get(F, c, rn, 0);
     const m = get(F, c, rm, 0);
-    // FP <-> integer conversion, and the FMOV general forms
     if (is(w, 0x5f20fc00, 0x1e200000)) {
         const rmode = bits(w, 19, 2);
         const opcode = bits(w, 16, 3);
@@ -1207,7 +1164,6 @@ fn fpT(comptime F: type, c: *Cpu, w: u32) Status {
         }
         return fault(c, w);
     }
-    // FP <-> fixed point
     if (is(w, 0x5f200000, 0x1e000000)) {
         const rmode = bits(w, 19, 2);
         const opcode = bits(w, 16, 3);
@@ -1294,7 +1250,6 @@ fn fpT(comptime F: type, c: *Cpu, w: u32) Status {
         writeScalar(c, rd, U, if (cond(c, @intCast(bits(w, 12, 4)))) get(U, c, rn, 0) else get(U, c, rm, 0));
         return .next;
     }
-    // 3-source: FMADD / FMSUB / FNMADD / FNMSUB (one rounding, as the hardware fuses)
     if (is(w, 0x5f000000, 0x1f000000)) {
         const o1 = bits(w, 21, 1) != 0;
         const o0 = bits(w, 15, 1) != 0;

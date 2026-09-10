@@ -1,8 +1,3 @@
-// AArch64: the decoder into compact ops and their execution over the Cpu. x31 is SP or the zero
-// register depending on the instruction, which is why every operand goes through one of two
-// accessors rather than being spelled directly. The SIMD&FP space keeps its word and decodes
-// as it executes (simd.zig).
-
 const abi = @import("abi.zig");
 const mem = @import("mem.zig");
 const cpu = @import("cpu.zig");
@@ -12,38 +7,38 @@ const Status = cpu.Status;
 const Fault = cpu.Fault;
 
 pub const Kind = enum(u16) {
-    raw = 0, // not decoded yet
+    raw = 0,
     fault,
     nop,
     adr,
-    addsub, // a: sub | S<<1 | sf<<2 | ext<<3 (source is sp; dest is sp unless S)
-    logic, // a: opc | sf<<2 (dest is sp unless ANDS, for the immediate form: ext bit 3)
-    movw, // a: opc | sf<<2, b: shift, imm: imm16
-    bfm, // a: opc | sf<<2 | log2(esize)<<3, b: immr, ra: imms, rm: tmask ones, imm: wmask
-    extr, // a: sf, b: lsb
-    b, // a: link, imm: target
-    bcond, // a: cond, imm: target
-    cbz, // a: sf | nz<<1, imm: target
-    tbz, // a: nz, b: bit, imm: target
-    br, // a: 0 br, 1 blr, 2 ret
+    addsub,
+    logic,
+    movw,
+    bfm,
+    extr,
+    b,
+    bcond,
+    cbz,
+    tbz,
+    br,
     svc,
     clrex,
-    mrs, // imm: key
-    msr, // imm: key
-    ldrlit, // b: opc, imm: address
-    ldp, // a: kind | L<<2 | opc<<3, rm: rt2, imm: offset
-    excl, // a: size, b: o2<<2 | L<<1 | o1, rm: rs, ra: rt2
-    atomic, // a: size, b: op, rm: rs
-    ldst, // a: mode (0 offset, 1 post, 2 pre, 3 register), b: size<<2 | opc, ra: option<<1 | S, imm: offset
-    adc, // a: sub | S<<1 | sf<<2
-    ccmp, // a: sub | sf<<2 | imm<<3, b: cond, ra: nzcv, imm: imm5
-    csel, // a: opc | op2<<1 | sf<<2, b: cond
-    one, // a: opc | sf<<3
-    two, // a: opc | sf<<6
-    three, // a: op31 | o0<<3 | sf<<4
-    simd, // imm: the word
-    vldrlit, // b: opc, imm: address
-    vmem, // imm: the word
+    mrs,
+    msr,
+    ldrlit,
+    ldp,
+    excl,
+    atomic,
+    ldst,
+    adc,
+    ccmp,
+    csel,
+    one,
+    two,
+    three,
+    simd,
+    vldrlit,
+    vmem,
 };
 
 pub const Op = extern struct {
@@ -72,7 +67,6 @@ fn faultOp(code: Fault) Op {
     return .{ .kind = .fault, .rd = 0, .rn = 0, .rm = 0, .ra = 0, .a = @intCast(@intFromEnum(code)), .b = 0, .imm = 0 };
 }
 
-/// ARM's DecodeBitMasks; null for the encodings the architecture leaves undefined
 const Masks = struct { wmask: u64, tmask_ones: u8, esize_log: u8 };
 fn bitMasks(n: u32, imms: u32, immr: u32, sf: bool, immediate: bool) ?Masks {
     const width: u32 = if (sf) 64 else 32;
@@ -90,7 +84,6 @@ fn bitMasks(n: u32, imms: u32, immr: u32, sf: bool, immediate: bool) ?Masks {
     const rot = if (r == 0) welem else ((welem >> @intCast(r)) | (welem << @intCast(esize - r))) & ones(esize);
     return .{ .wmask = replicate(rot, esize, width), .tmask_ones = @intCast(d + 1), .esize_log = len };
 }
-/// a value of `esize` bits repeated across `width` bits
 pub inline fn replicate(v: u64, esize: u32, width: u32) u64 {
     const unit = if (esize >= 64) 1 else (~@as(u64, 0) / ones(esize));
     return (v *% unit) & ones(width);
@@ -98,7 +91,6 @@ pub inline fn replicate(v: u64, esize: u32, width: u32) u64 {
 
 pub fn decode(w: u32, pc: u32) Op {
     const sf = (w >> 31) & 1;
-    // ── data processing, immediate
     if (is(w, 0x1c000000, 0x10000000)) {
         const o = bits(w, 23, 3);
         switch (o) {
@@ -154,7 +146,6 @@ pub fn decode(w: u32, pc: u32) Op {
             },
         }
     }
-    // ── branches, exception generating, system
     if (is(w, 0x1c000000, 0x14000000)) {
         if (is(w, 0x7c000000, 0x14000000)) {
             var r = op(.b, w);
@@ -187,10 +178,10 @@ pub fn decode(w: u32, pc: u32) Op {
             return r;
         }
         if (is(w, 0xffe0001f, 0xd4000001)) return op(.svc, w);
-        if (is(w, 0xfffff01f, 0xd503201f)) return op(.nop, w); // HINT
-        if (is(w, 0xfffff01f, 0xd503301f)) return if (bits(w, 5, 3) == 2) op(.clrex, w) else op(.nop, w); // CLREX / DSB / DMB / ISB
-        if (is(w, 0xfff8f01f, 0xd500401f)) return op(.nop, w); // MSR (immediate)
-        if (is(w, 0xfff80000, 0xd5080000)) return if (bits(w, 5, 11) == 0x3a1) faultOp(.dc_zva) else op(.nop, w); // SYS
+        if (is(w, 0xfffff01f, 0xd503201f)) return op(.nop, w);
+        if (is(w, 0xfffff01f, 0xd503301f)) return if (bits(w, 5, 3) == 2) op(.clrex, w) else op(.nop, w);
+        if (is(w, 0xfff8f01f, 0xd500401f)) return op(.nop, w);
+        if (is(w, 0xfff80000, 0xd5080000)) return if (bits(w, 5, 11) == 0x3a1) faultOp(.dc_zva) else op(.nop, w);
         if (is(w, 0xfff00000, 0xd5300000)) {
             var r = op(.mrs, w);
             r.imm = bits(w, 5, 15);
@@ -204,7 +195,6 @@ pub fn decode(w: u32, pc: u32) Op {
         if (is(w, 0xffe0001f, 0xd4200000)) return faultOp(.brk);
         return faultOp(.unimplemented);
     }
-    // ── loads and stores
     if (is(w, 0x0a000000, 0x08000000)) {
         if (w & 0x04000000 != 0) {
             if (is(w, 0x3b000000, 0x18000000)) {
@@ -248,7 +238,7 @@ pub fn decode(w: u32, pc: u32) Op {
             r.b = @intCast(bits(w, 12, 4));
             return r;
         }
-        if (size == 3 and opc == 2) return op(.nop, w); // PRFM / PRFUM
+        if (size == 3 and opc == 2) return op(.nop, w);
         var r = op(.ldst, w);
         r.b = @intCast((size << 2) | opc);
         if (is(w, 0x3b000000, 0x39000000)) {
@@ -259,13 +249,12 @@ pub fn decode(w: u32, pc: u32) Op {
             r.ra = @intCast((bits(w, 13, 3) << 1) | bits(w, 12, 1));
         } else {
             const kind = bits(w, 10, 2);
-            if (kind == 2) return faultOp(.unimplemented); // unprivileged
+            if (kind == 2) return faultOp(.unimplemented);
             r.a = @as(u8, if (kind == 1) 1 else if (kind == 3) 2 else 0);
             r.imm = @bitCast(@as(i64, bt.sx(i32, bits(w, 12, 9), 9)));
         }
         return r;
     }
-    // ── data processing, register
     if (is(w, 0x0e000000, 0x0a000000)) {
         if (is(w, 0x1f000000, 0x0a000000)) {
             const amt = bits(w, 10, 6);
@@ -345,7 +334,6 @@ pub fn decode(w: u32, pc: u32) Op {
     return faultOp(if (w == 0) .undefined else .unimplemented);
 }
 
-// ── operands
 pub inline fn zr(c: *Cpu, n: u8) u64 {
     return if (n == 31) 0 else c.x[n];
 }
@@ -377,7 +365,6 @@ pub inline fn nz(comptime T: type, v: T) u32 {
     const bitsT = @typeInfo(T).int.bits;
     return (@as(u32, @intCast(v >> (bitsT - 1))) << 31) | (@as(u32, @intFromBool(v == 0)) << 30);
 }
-/// a + b + cin with the NZCV of the addition
 fn Flagged(comptime T: type) type {
     return struct { r: T, f: u32 };
 }
@@ -390,7 +377,6 @@ pub fn addc(comptime T: type, a: T, b: T, cin: u1) Flagged(T) {
     const vflag: u32 = @intCast(((a ^ res) & (b ^ res)) >> (bitsT - 1));
     return .{ .r = res, .f = nz(T, res) | (cflag << 29) | (vflag << 28) };
 }
-/// a - b - !cin (SUB when cin = 1)
 inline fn subc(comptime T: type, a: T, b: T, cin: u1) Flagged(T) {
     return addc(T, a, ~b, cin);
 }
@@ -405,7 +391,6 @@ inline fn shift(comptime T: type, v: T, kind: u8, amt: u32) T {
         else => if (k == 0) v else (v >> s) | (v << @intCast(bitsT - k)),
     };
 }
-/// the second operand of a register-form data-processing op, 64-bit wide
 fn operand2(c: *Cpu, o: *const Op) u64 {
     switch (o.b) {
         0 => return o.imm,
@@ -419,8 +404,6 @@ fn operand2(c: *Cpu, o: *const Op) u64 {
     }
 }
 
-// ── memory. Guest addresses are under 4 GiB by construction; a pointer whose high half is set
-// names an address plane (mem.zig) and translates on the way in.
 pub inline fn addr(c: *Cpu, va: u64) ?u32 {
     const lo: u32 = @truncate(va);
     const hi: u32 = @intCast(va >> 32);
@@ -442,8 +425,6 @@ inline fn badAddr(c: *Cpu, pc: u32) Status {
     return raise(c, .bad_address, ld(u32, pc));
 }
 
-// ── system registers, keyed on op0:op1:CRn:CRm:op2. The ID registers read as "no optional
-// features" so a runtime keeps to its generic paths; DCZID says DC ZVA is prohibited.
 fn sysRead(c: *Cpu, key: u64) ?u64 {
     return switch (key) {
         0x5a10 => c.cpsr & 0xf000_0000,
@@ -459,12 +440,10 @@ fn sysRead(c: *Cpu, key: u64) ?u64 {
     };
 }
 extern "env" fn now_ms() f64;
-/// the generic timer: CNTVCT_EL0 at CNTFRQ_EL0 = 19.2 MHz
 fn cnt() u64 {
     return @intFromFloat(now_ms() * 19200);
 }
 
-// ── execution
 pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
     switch (o.kind) {
         .raw => unreachable,
@@ -714,9 +693,6 @@ fn two(comptime T: type, c: *Cpu, o: *const Op) void {
     setX(c, o.rd, v);
 }
 
-/// load/store exclusive, ordered, and compare-and-swap. Threads are cooperative and a slice
-/// holds while the monitor is set (cpu.zig), so a store-exclusive succeeds iff a load-exclusive
-/// preceded it and the read-modify-write of CAS is direct.
 fn exclusive(c: *Cpu, o: *const Op, pc: u32) Status {
     const size = o.a;
     const o2 = o.b & 4 != 0;
@@ -793,7 +769,6 @@ inline fn stSized(c: *Cpu, a: u32, size: u8, v: u64) bool {
         else => st(u64, c, a, v),
     };
 }
-/// atomic memory operations (LSE): the read-modify-write is direct, threads being cooperative
 fn atomic(c: *Cpu, o: *const Op, pc: u32) Status {
     const size = o.a;
     const a = addr(c, c.x[o.rn]) orelse return badAddr(c, pc);
@@ -820,8 +795,6 @@ fn atomic(c: *Cpu, o: *const Op, pc: u32) Status {
     return .next;
 }
 
-/// A64 syscall (svc #0, number in x8): the same handful a userspace runtime issues directly;
-/// the ones the host owns leave the slice
 fn svc(c: *Cpu) Status {
     switch (@as(u32, @truncate(c.x[8]))) {
         172 => c.x[0] = 4242,
@@ -839,7 +812,6 @@ fn svc(c: *Cpu) Status {
     return .jump;
 }
 
-/// interpret from c.pc to the first control transfer (or 256 instructions); the pc is left in c.pc
 pub fn block(c: *Cpu, start: u32, page: *cpu.Page) Status {
     if (start & 3 != 0) return raise(c, .misaligned_pc, start);
     c.bpc = start;

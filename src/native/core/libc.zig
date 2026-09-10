@@ -1,7 +1,3 @@
-// The libc calls a guest makes most: served here when their trampoline slot is bound to one of
-// these, so memcpy and malloc never leave the core. Semantics are libc.ts's; the host keeps the
-// rest, and switching the tracer on routes every call back to it.
-
 const std = @import("std");
 const abi = @import("abi.zig");
 const mem = @import("mem.zig");
@@ -31,9 +27,7 @@ pub const Fn = enum(u8) {
     pthread_getspecific,
     pthread_setspecific,
 };
-/// pthread keys per thread: the table in Cpu.tls_tab (cpu.ts sizes it, pthread.ts caps the keys)
 pub const TLS_KEYS = 256;
-/// trampoline slot → Fn
 pub const slot_fn: [*]u8 = @ptrFromInt(abi.KERN_BASE + 0xa0_0000);
 pub var bypass: bool = false;
 export fn host_bind(slot: u32, id: u32) void {
@@ -52,7 +46,6 @@ inline fn ptr(c: *Cpu, i: u32) ?u32 {
 inline fn ret(c: *Cpu, v: u64) void {
     c.x[0] = v;
 }
-/// the guest's address for a buffer offset
 inline fn va(p: u32) u64 {
     return mem.va(p);
 }
@@ -69,7 +62,6 @@ inline fn size() u64 {
     return @as(u64, @wasmMemorySize(0)) * 65536;
 }
 
-/// run the bound call; false for a bad address (the fault is set), leaving x0 as the result
 pub fn call(c: *Cpu, id: u8) bool {
     switch (@as(Fn, @enumFromInt(id))) {
         .none => unreachable,
@@ -157,7 +149,6 @@ pub fn call(c: *Cpu, id: u8) bool {
         .memalign => {
             const al = arg(c, 0);
             const n = arg(c, 1);
-            // the nearest power of two at or above the request, as bionic rounds it
             const alignment: u64 = if (al <= 1) 1 else @as(u64, 1) << @intCast(64 - @clz(al - 1));
             const p = if (alignment < size() and n < size()) mem.memalign(@intCast(alignment), @intCast(@max(n, 1))) else 0;
             if (p == 0) setErrno(c, 12);

@@ -1,5 +1,3 @@
-// The guest address map, mirrored from abi.ts; `abi_const` lets a test prove the two agree.
-
 pub const PAGE_SHIFT = 12;
 pub const PAGE_SIZE: u32 = 1 << PAGE_SHIFT;
 pub const LOW: u32 = 0x1_0000;
@@ -10,7 +8,6 @@ pub const HOST_DATA_END: u32 = HOST_DATA + 0x0008_0000;
 pub const TRAMP_BASE: u32 = HOST_DATA_END;
 pub const TRAMP_END: u32 = TRAMP_BASE + 0x0007_0000;
 pub const RET_SENTINEL: u32 = TRAMP_END - 8;
-/// the core's page tables: page state, page flags, and the length of page-run blocks
 pub const KERN_BASE: u32 = TRAMP_END;
 pub const KERN_END: u32 = KERN_BASE + 0x00c0_0000;
 pub const ARENA_BASE: u32 = KERN_END;
