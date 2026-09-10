@@ -3,7 +3,7 @@ import "../natives";
 import { rt } from "../jvm/runtime";
 import { newObj, vcall, curThread } from "../jvm/natives/jlang";
 import { mangleMethod } from "../jvm/abi";
-import { exportBinder, importBinder, exportParcel, importParcel, receiveTransaction, callingIdentity } from "./binder";
+import { exportBinder, importBinder, exportParcel, importParcel, receiveTransaction, callingIdentity, binderTransport } from "./binder";
 import { PROCESS_PID, PROCESS_UID } from "./os";
 import { JParcel } from "./parcel";
 rt.link("android/os/Parcel");
@@ -64,4 +64,47 @@ test("one-way Binder work is ordered without blocking the sender", async () => {
   release();
   for (let i = 0; i < 20 && events.length !== 2; i++) await Promise.resolve();
   expect(events).toEqual([1, 2]);
+});
+
+test("nested Binder callbacks retain their scoped callers and restore cleared identities", async () => {
+  const outer = await newObj("android/os/Binder"), callback = await newObj("android/os/Binder");
+  const data = exportParcel(new JParcel()), original = curThread, caller = { pid: 21, uid: 10021 };
+  callback[mangleMethod("onTransact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z")] = async () => {
+    expect(callingIdentity()).toEqual({ pid: 22, uid: 10022 });
+    const cls = rt.link("android/os/Binder").ctor;
+    const token = await vcall(cls, "clearCallingIdentity", "()J");
+    expect(callingIdentity()).toEqual({ pid: PROCESS_PID, uid: PROCESS_UID });
+    await vcall(cls, "restoreCallingIdentity", "(J)V", token);
+    expect(callingIdentity()).toEqual({ pid: 22, uid: 10022 });
+    return 1;
+  };
+  outer[mangleMethod("onTransact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z")] = async () => {
+    expect(callingIdentity()).toEqual(caller);
+    const reply = await receiveTransaction({ handle: exportBinder(callback)!, code: 1, flags: 0, data }, { pid: 22, uid: 10022 });
+    expect(reply.handled).toBe(1); expect(callingIdentity()).toEqual(caller); return 1;
+  };
+  await receiveTransaction({ handle: exportBinder(outer)!, code: 1, flags: 0, data }, caller);
+  expect(curThread).toBe(original);
+});
+
+test("remote Binder death recipients can be removed and are delivered once", async () => {
+  const saved = { ...binderTransport }, watchers = new Set<() => void>();
+  let alive = true, deaths = 0;
+  binderTransport.alive = () => alive;
+  binderTransport.watch = (_pid, died) => { watchers.add(died); return () => { watchers.delete(died); }; };
+  try {
+    const binder = importBinder({ pid: 98765, id: 1 }), recipient = await newObj("java/lang/Object");
+    recipient[mangleMethod("binderDied", "()V")] = () => { deaths++; };
+    await vcall(binder, "linkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)V", recipient, 0);
+    expect(await vcall(binder, "unlinkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)Z", recipient, 0)).toBe(1);
+    expect(watchers.size).toBe(0);
+    await vcall(binder, "linkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)V", recipient, 0);
+    await vcall(binder, "linkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)V", recipient, 0);
+    expect(watchers.size).toBe(1);
+    alive = false; for (const died of watchers) died(); watchers.clear();
+    await Promise.resolve(); expect(deaths).toBe(1);
+    expect(await vcall(binder, "isBinderAlive", "()Z")).toBe(0);
+    expect(await vcall(binder, "unlinkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)Z", recipient, 0)).toBe(0);
+    await expect(vcall(binder, "linkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)V", recipient, 0)).rejects.toBeTruthy();
+  } finally { Object.assign(binderTransport, saved); }
 });

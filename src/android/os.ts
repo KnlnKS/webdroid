@@ -1,5 +1,7 @@
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
+import { JMessage, obtain } from "./messenger";
+import { parcelCreator, type JParcel } from "./parcel";
 import { keyCodes, deadChar } from "./keycodes";
 import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
@@ -82,57 +84,12 @@ rt.register({
 // name -- addIdleHandler dispatches dynamically -- which is exactly why it was missed.
 rt.register({ name: "android/os/MessageQueue$IdleHandler", ctor: class extends JObj {} });
 
-class JMessage extends JObj {
-  what = 0; arg1 = 0; arg2 = 0; obj: unknown = null;
-  callback: unknown = null; target: JHandler | null = null;
-  whenMs = 0;
-  timer: ReturnType<typeof setTimeout> | undefined;
-}
-function obtain(h: JHandler | null, what = 0, obj: unknown = null, arg1 = 0, arg2 = 0, callback: unknown = null): JMessage {
-  const m = new JMessage(); m.target = h; m.what = what; m.obj = obj; m.arg1 = arg1; m.arg2 = arg2; m.callback = callback; return m;
-}
-rt.register({
-  name: "android/os/Message", ctor: JMessage,
-  fields: { what: "what", arg1: "arg1", arg2: "arg2", obj: "obj" },
-  methods: {
-    "<init>()V": function () {},
-    "static obtain()Landroid/os/Message;": () => new JMessage(),
-    "static obtain(Landroid/os/Handler;)Landroid/os/Message;": (h: JHandler) => obtain(h),
-    "static obtain(Landroid/os/Handler;I)Landroid/os/Message;": (h: JHandler, w: number) => obtain(h, w),
-    "static obtain(Landroid/os/Handler;ILjava/lang/Object;)Landroid/os/Message;": (h: JHandler, w: number, o: unknown) => obtain(h, w, o),
-    "static obtain(Landroid/os/Handler;III)Landroid/os/Message;": (h: JHandler, w: number, a1: number, a2: number) => obtain(h, w, null, a1, a2),
-    "static obtain(Landroid/os/Handler;IIILjava/lang/Object;)Landroid/os/Message;": (h: JHandler, w: number, a1: number, a2: number, o: unknown) => obtain(h, w, o, a1, a2),
-    "static obtain(Landroid/os/Handler;Ljava/lang/Runnable;)Landroid/os/Message;": (h: JHandler, r: unknown) => obtain(h, 0, null, 0, 0, r),
-    "static obtain(Landroid/os/Message;)Landroid/os/Message;": (m: JMessage) => obtain(m.target, m.what, m.obj, m.arg1, m.arg2, m.callback),
-    "setTarget(Landroid/os/Handler;)V": function (this: JMessage, h: JHandler) { this.target = h; },
-    "sendToTarget()V": function (this: JMessage) { this.target?.send(this, 0); },
-    "recycle()V": () => {},
-    "getCallback()Ljava/lang/Runnable;": function (this: JMessage) { return this.callback; },
-  },
-});
-
 rt.register({ name: "android/os/Handler$Callback", ctor: class extends JObj {} });
-
 defineException("android/os/RemoteException", "java/lang/Exception");
 defineException("android/os/DeadObjectException", "android/os/RemoteException");
-// a Messenger over a Handler delivers in-process; one over a foreign binder has no process behind it
-class JMessenger extends JObj { handler: JHandler | null = null; }
-rt.register({
-  name: "android/os/Messenger", ctor: JMessenger, ifaces: ["android/os/Parcelable"],
-  methods: {
-    "<init>(Landroid/os/Handler;)V": function (this: JMessenger, h: JHandler) { this.handler = h; },
-    "<init>(Landroid/os/IBinder;)V": function () {},
-    "send(Landroid/os/Message;)V": function (this: JMessenger, m: JMessage) {
-      if (!this.handler) throw rt.mkThrowable("android/os/DeadObjectException", null);
-      this.handler.send(m, 0);
-    },
-    "getBinder()Landroid/os/IBinder;": maySuspend(() => newObj("android/os/Binder")),
-    "describeContents()I": () => 0,
-  },
-});
 
 let handlerSeq = 0;
-class JHandler extends JObj {
+export class JHandler extends JObj {
   looper: JLooper = mainLooper;
   cb: unknown = null; // Handler.Callback
   pending = new Map<unknown, Set<JMessage>>(); // keyed by `what`, or by the Runnable of a post
@@ -435,6 +392,8 @@ const bundleMethods: NativeSpec["methods"] = {
     copy.map = new Map(this.map); copy.loader = this.loader;
     return copy;
   },
+  "describeContents()I": () => 0,
+  "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JBundle, parcel: JParcel) { await vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", this); },
   "size()I": function (this: JBundle) { return this.map.size; },
   // A Bundle holds boxed values: `get` is the only reader that lost the declared width, and a
   // caller that reaches for Object then calls toString()/instanceof Number needs the box.
@@ -489,7 +448,7 @@ for (const [t, d] of [["Parcelable", "Ljava/lang/Object;"], ["Serializable", "Lj
 }
 rt.register({ name: "android/os/BaseBundle", ctor: JBaseBundle, methods: bundleMethods });
 rt.register({ name: "android/os/Bundle", ctor: JBundle, sup: "android/os/BaseBundle",
-  ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], statics: { get EMPTY() { return new JBundle(); } }, methods: bundleMethods });
+  ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], statics: { get EMPTY() { return new JBundle(); }, get CREATOR() { return parcelCreator("android/os/Bundle", (p) => vcall(p, "readBundle", "()Landroid/os/Bundle;")); } }, methods: bundleMethods });
 rt.register({ name: "android/os/PersistableBundle", ctor: class extends JBaseBundle {}, sup: "android/os/BaseBundle",
   ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], methods: bundleMethods });
 
@@ -1014,24 +973,5 @@ rt.register({
 });
 
 /** a Runnable over a JS closure, for framework code that must go through a Handler queue */
-class JFnRunnable extends JObj { fn: () => unknown = () => {}; }
+export class JFnRunnable extends JObj { fn: () => unknown = () => {}; }
 rt.register({ name: "webdroid/FnRunnable", ctor: JFnRunnable, ifaces: ["java/lang/Runnable"], methods: { "run()V": maySuspend(function (this: JFnRunnable) { return this.fn(); }) } });
-
-// ── ResultReceiver: a callback that crosses processes on Android; here the send() lands on the
-// creating Handler's looper (or inline when made without one), exactly as the in-process path does.
-class JResultReceiver extends JObj { handler: JHandler | null = null; }
-rt.register({
-  name: "android/os/ResultReceiver", ctor: JResultReceiver, ifaces: ["android/os/Parcelable"],
-  methods: {
-    "<init>(Landroid/os/Handler;)V": function (this: JResultReceiver, h: JHandler | null) { this.handler = h; },
-    "send(ILandroid/os/Bundle;)V": maySuspend(function (this: JResultReceiver, code: number, data: unknown) {
-      const deliver = () => vcall(this, "onReceiveResult", "(ILandroid/os/Bundle;)V", code, data);
-      if (!this.handler) return deliver();
-      const r = new JFnRunnable(); r.fn = deliver;
-      this.handler.post(r, 0);
-    }),
-    "onReceiveResult(ILandroid/os/Bundle;)V": () => {},
-    "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": () => {},
-  },
-});

@@ -3,16 +3,18 @@
 // form here — a Serializable, a binder — rides in a side table keyed by its position.
 import { JObj, rt, maySuspend } from "../jvm/runtime";
 import { dotName, slashName, jarray, mangleStaticField } from "../jvm/abi";
-import { newObj, vcall, JInt, JLong, JFloat, JDouble, JBool, JByte, JShort, JChar, box } from "../jvm/natives/jlang";
+import { newObj, vcall, JInt, JLong, JFloat, JDouble, JBool, JByte, JShort, JChar, box, defineException } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, type JList } from "../jvm/natives/jutil";
 import { JBundle } from "./os";
 import { csText } from "./text";
+import { deserialize, type Serialized } from "../jvm/serialization";
 
 const enum V { NULL = -1, STRING = 0, INTEGER = 1, MAP = 2, BUNDLE = 3, PARCELABLE = 4, SHORT = 5, LONG = 6, FLOAT = 7, DOUBLE = 8, BOOLEAN = 9,
   CHARSEQUENCE = 10, LIST = 11, BYTEARRAY = 13, STRINGARRAY = 14, IBINDER = 15, PARCELABLEARRAY = 16, OBJECTARRAY = 17, INTARRAY = 18, LONGARRAY = 19,
   BYTE = 20, SERIALIZABLE = 21, BOOLEANARRAY = 23, DOUBLEARRAY = 28, CHAR = 29, SHORTARRAY = 30, CHARARRAY = 31, FLOATARRAY = 32 }
 const BNDL = 0x4c444e42;
 const P = "Landroid/os/Parcel;";
+defineException("android/os/BadParcelableException", "java/lang/RuntimeException");
 const EXCEPTIONS = ["java/lang/SecurityException", "android/os/BadParcelableException", "java/lang/IllegalArgumentException",
   "java/lang/NullPointerException", "java/lang/IllegalStateException", "android/os/NetworkOnMainThreadException", "java/lang/UnsupportedOperationException"];
 
@@ -22,6 +24,19 @@ export class JParcel extends JObj {
   pos = 0;
   size = 0;
   objects = new Map<number, unknown>();
+}
+class JCreator extends JObj { type = ""; read!: (parcel: JParcel) => Promise<unknown>; }
+rt.register({ name: "webdroid/ParcelableCreator", ctor: JCreator, ifaces: ["android/os/Parcelable$Creator"], methods: {
+  "createFromParcel(Landroid/os/Parcel;)Ljava/lang/Object;": async function (this: JCreator, parcel: JParcel) { return this.read(parcel); },
+  "newArray(I)[Ljava/lang/Object;": function (this: JCreator, size: number) { return jarray(Array(size).fill(null), "L" + this.type + ";"); },
+} });
+const creators = new Map<string, JCreator>();
+export function parcelCreator(type: string, read: JCreator["read"]): JCreator {
+  let creator = creators.get(type);
+  if (!creator) {
+    rt.link("webdroid/ParcelableCreator"); creator = new JCreator(); creator.type = type; creator.read = read; creators.set(type, creator);
+  }
+  return creator;
 }
 function reserve(p: JParcel, n: number) {
   if (p.pos + n <= p.buf.length) return;
@@ -74,6 +89,11 @@ function readBytes(p: JParcel): Int8Array | null {
 /** an opaque object: its slot holds a tag, the side table holds the value */
 function writeObject(p: JParcel, o: unknown) { p.objects.set(p.pos, o); writeInt(p, 0); }
 function readObject(p: JParcel) { const at = p.pos; readInt(p); return p.objects.get(at) ?? null; }
+async function readSerializable(p: JParcel): Promise<unknown> {
+  if (readString(p) === null) return null;
+  const object = readObject(p);
+  return object && typeof object === "object" && "serialized" in object ? deserialize(object as Serialized) : object;
+}
 
 const className = (o: JObj) => dotName((o.constructor as { $i?: { name: string } }).$i?.name ?? "java/lang/Object");
 async function writeParcelable(p: JParcel, o: JObj | null, flags: number) {
@@ -85,7 +105,8 @@ async function writeParcelable(p: JParcel, o: JObj | null, flags: number) {
 async function creatorOf(name: string): Promise<unknown> {
   const info = rt.link(slashName(name));
   const pending = rt.initClass(info); if (pending) await pending;
-  const creator = (info.ctor as Record<string, unknown>)[mangleStaticField("CREATOR")];
+  let creator: unknown;
+  for (let owner: typeof info | null = info; owner && !creator; owner = owner.superInfo) creator = (owner.ctor as Record<string, unknown>)[mangleStaticField("CREATOR")];
   if (!creator) throw rt.mkThrowable("java/lang/RuntimeException", "Parcelable protocol requires a Parcelable.Creator object called CREATOR on class " + name);
   return creator;
 }
@@ -232,7 +253,7 @@ async function readValue(p: JParcel, loader: unknown): Promise<unknown> {
     case V.MAP: return readMap(p, loader);
     case V.LIST: return readList(p, loader);
     case V.IBINDER: return readObject(p);
-    case V.SERIALIZABLE: readString(p); return readObject(p);
+    case V.SERIALIZABLE: return readSerializable(p);
     default: throw rt.mkThrowable("java/lang/RuntimeException", "Parcel: unknown type code " + t);
   }
 }
@@ -302,6 +323,7 @@ rt.register({
     "writeTypedObject(Landroid/os/Parcelable;I)V": async function (this: JParcel, o: unknown, flags: number) { if (o === null) writeInt(this, 0); else { writeInt(this, 1); await vcall(o, "writeToParcel", `(${P}I)V`, this, flags); } },
     "writeSerializable(Ljava/io/Serializable;)V": function (this: JParcel, o: unknown) { if (o === null) return writeString(this, null); writeString(this, className(o as JObj)); writeObject(this, o); },
     "writeStrongBinder(Landroid/os/IBinder;)V": function (this: JParcel, b: unknown) { writeObject(this, b); },
+    "writeStrongInterface(Landroid/os/IInterface;)V": async function (this: JParcel, value: unknown) { writeObject(this, value ? await vcall(value, "asBinder", "()Landroid/os/IBinder;") : null); },
     [`writeInterfaceToken(${S})V`]: function (this: JParcel, s: string) { writeString(this, s); },
     "writeNoException()V": function (this: JParcel) { writeInt(this, 0); },
     "writeException(Ljava/lang/Exception;)V": async function (this: JParcel, error: unknown) {
@@ -351,8 +373,8 @@ rt.register({
     },
     [`readTypedObject(${CR})Ljava/lang/Object;`]: function (this: JParcel, c: unknown) { return readInt(this) ? createFrom(this, c, null) : null; },
     [`readTypedList(Ljava/util/List;${CR})V`]: async function (this: JParcel, out: unknown, c: unknown) { await vcall(out, "clear", "()V"); for (const v of (await readTyped(this, c)) ?? []) await vcall(out, "add", "(Ljava/lang/Object;)Z", v); },
-    "readSerializable()Ljava/io/Serializable;": function (this: JParcel) { return readString(this) === null ? null : readObject(this); },
-    [`readSerializable(${L}Ljava/lang/Class;)Ljava/io/Serializable;`]: function (this: JParcel) { return readString(this) === null ? null : readObject(this); },
+    "readSerializable()Ljava/io/Serializable;": async function (this: JParcel) { return readSerializable(this); },
+    [`readSerializable(${L}Ljava/lang/Class;)Ljava/io/Serializable;`]: async function (this: JParcel) { return readSerializable(this); },
     "readStrongBinder()Landroid/os/IBinder;": function (this: JParcel) { return readObject(this); },
     "readException()V": function (this: JParcel) {
       const code = readInt(this);

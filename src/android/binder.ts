@@ -2,9 +2,10 @@ import { JObj, rt } from "../jvm/runtime";
 import { curThread, JThread, setCurThread, vcall } from "../jvm/natives/jlang";
 import { PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { JParcel } from "./parcel";
+import { serialize, type Serialized } from "../jvm/serialization";
 
 export type BinderHandle = { pid: number; id: number };
-export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | null][] };
+export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | Serialized | null][] };
 export type Transaction = { handle: BinderHandle; code: number; flags: number; data: ParcelData };
 export type TransactionReply = { handled: number; data: ParcelData };
 export type Caller = { pid: number; uid: number };
@@ -18,7 +19,7 @@ export const binderTransport: {
   watch: () => () => {},
 };
 
-class JBinder extends JObj { owner: unknown = null; descriptor: string | null = null; }
+export class JBinder extends JObj { owner: unknown = null; descriptor: string | null = null; }
 class JBinderProxy extends JObj {
   handle: BinderHandle = { pid: 0, id: 0 };
   deaths = new Map<unknown, () => void>();
@@ -31,7 +32,7 @@ let nextId = 1;
 export function exportBinder(binder: unknown): BinderHandle | null {
   if (binder == null || binder === 0) return null;
   if (binder instanceof JBinderProxy) return binder.handle;
-  if (!(binder instanceof JObj) || !rt.iof(binder, "android/os/IBinder")) throw rt.mkThrowable("android/os/BadParcelableException", "Non-Binder object in IPC parcel");
+  if (!(binder instanceof JObj) || !rt.iof(binder, "android/os/IBinder")) throw rt.mkThrowable("android/os/BadParcelableException", "Non-Binder object in IPC parcel: " + (binder instanceof JObj ? (binder.constructor as { $i?: { name: string } }).$i?.name : typeof binder));
   let id = localIds.get(binder);
   if (!id) { id = nextId++; localIds.set(binder, id); local.set(id, binder); }
   return { pid: PROCESS_PID, id };
@@ -48,29 +49,33 @@ export function importBinder(handle: BinderHandle | null): JObj | null {
   return proxy;
 }
 export function exportParcel(parcel: JParcel): ParcelData {
-  return { bytes: parcel.buf.slice(0, parcel.size), objects: [...parcel.objects].map(([at, o]) => [at, exportBinder(o)]) };
+  return { bytes: parcel.buf.slice(0, parcel.size), objects: [...parcel.objects].map(([at, o]) => [at, rt.iof(o, "java/io/Serializable") ? serialize(o) : exportBinder(o)]) };
 }
 export function importParcel(data: ParcelData, parcel = new JParcel()): JParcel {
   parcel.buf = new Uint8Array(data.bytes); parcel.view = new DataView(parcel.buf.buffer);
   parcel.pos = 0; parcel.size = parcel.buf.length;
-  parcel.objects = new Map(data.objects.map(([at, handle]) => [at, importBinder(handle)]));
+  parcel.objects = new Map(data.objects.map(([at, handle]) => [at, handle && "serialized" in handle ? handle : importBinder(handle)]));
   return parcel;
 }
 
 const callers = new WeakMap<JThread, Caller>();
 const savedIdentities = new WeakMap<JThread, Map<bigint, Caller>>();
 let nextIdentity = 1n;
-export const callingIdentity = (): Caller => callers.get(curThread) ?? { pid: PROCESS_PID, uid: PROCESS_UID };
+export const transactionCaller = (): Caller | undefined => callers.get(curThread);
+export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCESS_PID, uid: PROCESS_UID };
 const oneWay = new Map<number, Promise<unknown>>();
+export async function withCallingIdentity<T>(caller: Caller, call: () => Promise<T>): Promise<T> {
+  const thread = new JThread(), previous = curThread;
+  thread.jname = "Binder:" + PROCESS_PID; callers.set(thread, caller); setCurThread(thread);
+  try { return await call(); }
+  finally { callers.delete(thread); if (curThread === thread) setCurThread(previous); }
+}
 export async function receiveTransaction(request: Transaction, caller: Caller): Promise<TransactionReply> {
   const binder = local.get(request.handle.id);
   if (!binder || request.handle.pid !== PROCESS_PID) throw rt.mkThrowable("android/os/DeadObjectException", "Binder is dead");
   const run = async (): Promise<TransactionReply> => {
-    const thread = new JThread(), previous = curThread;
-    thread.jname = "Binder:" + PROCESS_PID; callers.set(thread, caller);
     const data = importParcel(request.data), reply = new JParcel();
-    setCurThread(thread);
-    try {
+    return withCallingIdentity(caller, async () => {
       try {
         const handled = await vcall(binder, "onTransact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", request.code, data, reply, request.flags);
         return { handled, data: exportParcel(reply) };
@@ -80,10 +85,7 @@ export async function receiveTransaction(request: Transaction, caller: Caller): 
         await vcall(reply, "writeException", "(Ljava/lang/Exception;)V", error);
         return { handled: 1, data: exportParcel(reply) };
       }
-    } finally {
-      callers.delete(thread);
-      if (curThread === thread) setCurThread(previous);
-    }
+    });
   };
   if (!(request.flags & 1)) return run();
   const pending = (oneWay.get(request.handle.id) ?? Promise.resolve()).then(run).catch(reportUncaught);
