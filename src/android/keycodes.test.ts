@@ -15,3 +15,15 @@ test("KeyEvent parses platform names, optional prefixes and bounded numeric key 
   expect(normalize(0x100 | 0x200 | 0x400 | 0x800)).toBe(0x100006);
   expect(normalize(0x80000000)).toBe(0);
 });
+
+test("KeyEvent combines dead keys and retains Android stroke compositions", () => {
+  const dead = rt.link("android/view/KeyEvent").ctor[mangleMethod("getDeadChar", "(II)I")];
+  expect(dead(96, 101)).toBe(232);
+  expect(dead(94, 32)).toBe(94);
+  expect(dead(94, 94)).toBe(94);
+  expect(dead(39, 101)).toBe(233);
+  expect(dead(45, 79)).toBe(216);
+  expect(dead(45, 105)).toBe(0x268);
+  expect(dead(94, 49)).toBe(0);
+  expect(dead(0, 101)).toBe(0);
+});

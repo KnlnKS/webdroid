@@ -1,6 +1,6 @@
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
-import { keyCodes } from "./keycodes";
+import { keyCodes, deadChar } from "./keycodes";
 import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
@@ -668,6 +668,7 @@ rt.register({
   },
   methods: {
     "<init>(II)V": function (this: JKeyEvent, a: number, k: number) { this.action = a; this.keyCode = k; },
+    "static getDeadChar(II)I": deadChar,
     "static getMaxKeyCode()I": () => keyCodes.size - 1,
     "static keyCodeFromString(Ljava/lang/String;)I": (name: string) => {
       if (name == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
