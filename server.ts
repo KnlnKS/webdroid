@@ -58,11 +58,13 @@ const server: Bun.Server<TcpData> = Bun.serve({
         req.headers.forEach((v, k) => {
           if (k.startsWith("x-wd-")) headers.set(k.slice(5), v);
         });
+        const encoded = !frame && headers.has("accept-encoding");
         const upstream = await fetch(url, {
           method: req.method === "HEAD" ? "HEAD" : req.method,
           headers,
           body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
           redirect: "follow",
+          decompress: !encoded,
         });
         const h = new Headers();
         upstream.headers.forEach((v, k) => {
@@ -70,6 +72,7 @@ const server: Bun.Server<TcpData> = Bun.serve({
         });
         h.set("Access-Control-Allow-Origin", "*");
         h.set("x-wd-final-url", upstream.url);
+        if (encoded && upstream.headers.has("content-encoding")) h.set("x-wd-content-encoding", upstream.headers.get("content-encoding")!);
         if (frame && upstream.body && /^text\/html/i.test(upstream.headers.get("content-type") ?? "")) {
           // Served from our origin so the shell can script it; <base> keeps its subresources and
           // links resolving against the real one. text() re-encodes as UTF-8, so say so.
