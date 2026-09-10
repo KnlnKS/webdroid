@@ -159,6 +159,8 @@ rt.onUncaught = (e: any) => {
 const nativeEl = document.getElementById("native")!;
 rt.onNativeRequired = (lib, abi) => { nativeEl.textContent = "native code required: " + lib + " (" + abi + ")"; };
 
+import { provisionPackages } from "./shell/provision";
+
 // The android resource package is the same for every app: start it now so a boot never waits.
 void loadFramework();
 
@@ -196,7 +198,7 @@ window.addEventListener("unhandledrejection", (e) => logBuf.push("unhandledrejec
 async function boot(file: string) {
   try {
     statusEl.textContent = "downloading " + file + "…";
-    const [install] = await Promise.all([openInstallRemote("/apks/" + encodeURIComponent(file)), fontsReady]);
+    const [install] = await Promise.all([openInstallRemote("/apks/" + encodeURIComponent(file)), fontsReady, provisionPackages()]);
     const t0 = performance.now();
     await bootApk(install, (s) => { statusEl.textContent = s; }, file);
     perf.bootMs = performance.now() - t0;

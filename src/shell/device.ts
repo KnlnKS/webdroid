@@ -21,7 +21,8 @@ import { JMenu, pushMenuToBar } from "../android/menu";
 import { JContext } from "../android/context";
 import { attachProvider } from "../android/contentresolver";
 import { APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
-import { reportUncaught, JBundle, dispatchVsync } from "../android/os";
+import { reportUncaught, JBundle, dispatchVsync, PROCESS_PID, setProcessIdentity } from "../android/os";
+import { packageUid } from "../android/packages";
 import { onMain, inMainJob, mainDbg } from "../android/mainloop";
 import { JView, JViewGroup, uiState, layoutPass, replayLayoutRequests, measureView, layoutView, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
@@ -184,7 +185,6 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     const n = attrStr(c, "name") ?? "";
     providers.set(n.startsWith(".") ? pkg + n : n, c);
   }
-  setManifest(manifest, activities, providers); // PackageManager answers from the real manifest
 
   onStatus("resources…");
   const arsc = new Arsc(zip["resources.arsc"], (p) => zip[p] ?? null);
@@ -223,6 +223,8 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     invalidateOptionsMenu: (a) => { void buildOptionsMenu(a); },
   };
   setAppHost(host);
+  setProcessIdentity(PROCESS_PID, packageUid(pkg));
+  setManifest(manifest, activities, providers);
 
   return onMain(async () => {
     onStatus("starting app…");

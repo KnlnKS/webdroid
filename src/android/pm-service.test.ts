@@ -6,12 +6,46 @@ import { Arsc } from "./arsc";
 import { Resources, JTheme } from "./res";
 import { JResources } from "./resnative";
 import { type AppHost, appHost, setAppHost } from "./apphost";
-import { setManifest } from "./pm";
+import { setManifest, registerPackage } from "./pm";
+import { packages } from "./packages";
 import { parsePackageArchive } from "./packagearchive";
 import { mkComponentName, launchIntent } from "./intent";
 
 const previousHost = appHost;
 afterAll(() => setAppHost(previousHost));
+
+test("installed packages resolve components, resources and signing identities independently", async () => {
+  const first = host(); setAppHost(first);
+  setManifest(node("manifest", { package: first.pkg }, [node("application")]), new Map(), new Map());
+  const other = host(); other.pkg = "test.other";
+  const root = node("manifest", { package: other.pkg, versionCode: 42 }, [node("application", { label: "Other" }, [
+    node("service", { name: ".Shared", process: ":worker", exported: 1 }, [node("intent-filter", {}, [node("action", { name: "test.CROSS_PACKAGE" })]), node("meta-data", { name: "owner", value: "other" })]),
+    node("provider", { name: ".Data", authorities: "test.other.data", exported: 1 }),
+  ])]);
+  const cert = new Uint8Array([1, 2, 3]);
+  const record = registerPackage({ root, pkg: other.pkg, res: other.res, bytes: new Uint8Array(), certificates: [cert] });
+  try {
+    const pm = await newObj("android/content/pm/PackageManager"), intent = await newObj("android/content/Intent");
+    intent.action = "test.CROSS_PACKAGE"; intent.pkg = other.pkg;
+    const list = await vcall(pm, "queryIntentServices", "(Landroid/content/Intent;I)Ljava/util/List;", intent, 128);
+    expect(list.a).toHaveLength(1);
+    expect(list.a[0].serviceInfo.processName).toBe("test.other:worker");
+    expect(list.a[0].serviceInfo.metaData.map.get("owner")).toBe("other");
+    expect(list.a[0].serviceInfo.applicationInfo.uid).toBe(record.uid);
+    expect(list.a[0].serviceInfo.applicationInfo.uid).not.toBe(packages.get(first.pkg)?.uid);
+    const provider = await vcall(pm, "resolveContentProvider", "(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;", "test.other.data", 0);
+    expect(provider.applicationInfo.packageName).toBe(other.pkg);
+    const get = () => vcall(pm, "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", other.pkg, 64);
+    expect(new Uint8Array((await get()).signatures[0].bytes)).toEqual(cert);
+    record.compatibilityCertificates = [new Uint8Array([9])];
+    expect(new Uint8Array((await get()).signatures[0].bytes)).toEqual(new Uint8Array([9]));
+    expect(await record.certificates()).toEqual([cert]);
+    record.system = true;
+    expect((await vcall(pm, "queryIntentServices", "(Landroid/content/Intent;I)Ljava/util/List;", intent, 0x100000)).a).toHaveLength(1);
+    intent.pkg = first.pkg;
+    expect((await vcall(pm, "queryIntentServices", "(Landroid/content/Intent;I)Ljava/util/List;", intent, 0)).a).toHaveLength(0);
+  } finally { packages.delete(other.pkg); }
+});
 
 const node = (name: string, attrs: Record<string, string | number> = {}, children: XmlNode[] = []): XmlNode => ({ name, children,
   attrs: Object.entries(attrs).map(([name, value]) => ({ name, ns: "", resId: 0, type: typeof value === "string" ? TV.STRING : TV.INT_DEC, data: typeof value === "number" ? value : 0, str: typeof value === "string" ? value : null })) });

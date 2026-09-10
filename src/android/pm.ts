@@ -19,6 +19,7 @@ import { JIntent, type JComponentName, componentState, mkComponentName } from ".
 import { matchesIntentFilter } from "./intent-filter";
 import { csText } from "./text";
 import type { JActivity } from "./app";
+import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, type ComponentKind } from "./packages";
 
 class JFeatureInfo extends JObj {
   name: string | null = null;   // null on the glEsVersion entry, as AOSP leaves it
@@ -185,10 +186,7 @@ let manifestActivities = new Map<string, XmlNode>();
 let manifestProviders = new Map<string, XmlNode>();
 const manifestServices = new Map<string, XmlNode>();
 const manifestReceivers = new Map<string, XmlNode>();
-const qualifyComponent = (name: string, pkg: string) => {
-  name = name.replace(/\//g, ".");
-  return name.startsWith(".") ? pkg + name : name.includes(".") ? name : pkg + "." + name;
-};
+let currentPackage: PackageRecord | null = null;
 export function setManifest(root: XmlNode, activities: Map<string, XmlNode>, providers: Map<string, XmlNode>) {
   manifestRoot = root;
   manifestActivities = activities;
@@ -196,6 +194,18 @@ export function setManifest(root: XmlNode, activities: Map<string, XmlNode>, pro
   cachedAppInfo = null;
   manifestServices.clear(); manifestReceivers.clear();
   const pkg = attrStr(root, "package") ?? "";
+  if (currentPackage && packages.get(currentPackage.pkg) === currentPackage) packages.delete(currentPackage.pkg);
+  if (appHost) {
+    const host = appHost;
+    currentPackage = packages.get(pkg) ?? new PackageRecord(root, host.res, apkPath(), packageUid(pkg), async () => {
+      const bytes = await vfs.readFile(apkPath());
+      if (!bytes) return [];
+      let pending = certificateCache.get(bytes);
+      if (!pending) certificateCache.set(bytes, pending = apkCertificates(bytes, host.zip));
+      return pending;
+    });
+    packages.set(pkg, currentPackage);
+  }
   for (const service of appNode()?.children ?? []) {
     const name = attrStr(service, "name");
     if (name && (service.name === "service" || service.name === "receiver"))
@@ -262,6 +272,8 @@ export function getAppInfo(host: AppHost): JApplicationInfo {
   if (!cachedAppInfo) {
     cachedAppInfo = new JApplicationInfo();
     cachedAppInfo.packageName = host.pkg;
+    cachedAppInfo.uid = packageUid(host.pkg);
+    cachedAppInfo.flags = packages.get(host.pkg)?.system ? 1 : 0;
     cachedAppInfo.sourceDir = apkPath();
     cachedAppInfo.publicSourceDir = apkPath();
     // AOSP leaves these null for a base-only install, and library loaders null-check them
@@ -377,9 +389,10 @@ function matchesAction(n: XmlNode, action: string | null): boolean {
 }
 
 /** the manifest's services answering `action`, with their <meta-data> */
-export const servicesMatching = (action: string) => [...manifestServices.values()].filter((n) => matchesAction(n, action)).map((node) => ({ node, meta: metaData(node) }));
+export const servicesMatching = (action: string) => [...packages.values()].flatMap((owner) =>
+  [...owner.components.service.values()].filter((n) => matchesAction(n, action)).map((node) => ({ node, meta: metaData(node, owner.res), owner })));
 
-function providerInfo(cls: string, pkg: string, authority: string, n: XmlNode | null, flags = 0): unknown {
+function providerInfo(cls: string, pkg: string, authority: string, n: XmlNode | null, flags = 0, owner = packages.get(pkg)): unknown {
   const pi = new (rt.link("android/content/pm/ProviderInfo").ctor)() as Record<string, unknown>;
   pi.name = cls;
   pi.packageName = pkg;
@@ -388,6 +401,7 @@ function providerInfo(cls: string, pkg: string, authority: string, n: XmlNode | 
   pi.metaData = flags & 128 ? metaData(n) : null;
   pi.exported = !n || attr(n, "exported")?.data ? 1 : 0;
   pi.grantUriPermissions = !n || attr(n, "grantUriPermissions")?.data ? 1 : 0;
+  if (n && owner) componentInfo(pi as unknown as JComponentInfo, cls, n, flags, owner);
   return pi;
 }
 const mkProviderInfo = (cls: string, n: XmlNode, flags = 0) =>
@@ -410,7 +424,8 @@ function queryProviders(intent: { action?: string | null } | null, flags = 0): J
 function resolveProvider(authority: string, flags = 0): unknown {
   const sys = systemProviders.find(([a]) => a === authority);
   if (sys) return sysProviderInfo(sys);
-  for (const [c, n] of providerNodes()) if (authoritiesOf(n).includes(authority)) return mkProviderInfo(c, n, flags);
+  for (const owner of packages.values()) for (const [c, n] of owner.components.provider)
+    if (authoritiesOf(n).includes(authority) && visibleComponent(c, n, flags, owner)) return providerInfo(c, owner.pkg, authoritiesOf(n).join(";"), n, flags, owner);
   return null;
 }
 
@@ -430,52 +445,55 @@ function queryActivities(intent: JIntent | null, flags: number): JList {
   return queryComponents(intent, flags, "activity");
 }
 
-function componentEnabled(name: string, node: XmlNode): boolean {
-  const state = componentState.get(mkComponentName(appHost?.pkg ?? "", name));
+function componentEnabled(name: string, node: XmlNode, owner = currentPackage): boolean {
+  const state = componentState.get(mkComponentName(owner?.pkg ?? appHost?.pkg ?? "", name));
   return state === 1 || state === 0 && attr(node, "enabled")?.data !== 0;
 }
-function visibleComponent(name: string, node: XmlNode, flags: number): boolean {
-  if (flags & 0x100000) return false; // MATCH_SYSTEM_ONLY: the APK is a user-installed package.
-  if (!(flags & 0x200) && (attr(appNode()!, "enabled")?.data === 0 || !componentEnabled(name, node))) return false;
+function visibleComponent(name: string, node: XmlNode, flags: number, owner = currentPackage): boolean {
+  if (flags & 0x100000 && !owner?.system) return false;
+  if (!(flags & 0x200) && (owner?.enabled === false || !componentEnabled(name, node, owner))) return false;
   const directBoot = flags & 0xc0000;
   return !directBoot || !!(directBoot & (attr(node, "directBootAware")?.data ? 0x80000 : 0x40000));
 }
-function componentInfo(info: JServiceInfo | JActivityInfo, name: string, node: XmlNode, flags: number) {
-  const pkg = appHost?.pkg ?? "";
-  info.name = name; info.packageName = pkg; info.applicationInfo = appHost ? getAppInfo(appHost) : null;
-  info.enabled = componentEnabled(name, node) ? 1 : 0;
+function componentInfo(info: JComponentInfo, name: string, node: XmlNode, flags: number, owner = currentPackage) {
+  const pkg = owner?.pkg ?? appHost?.pkg ?? "";
+  info.name = name; info.packageName = pkg;
+  info.applicationInfo = owner && owner !== currentPackage ? recordAppInfo(owner) : appHost ? getAppInfo(appHost) : null;
+  info.archiveResources = owner?.res ?? null;
+  info.enabled = componentEnabled(name, node, owner) ? 1 : 0;
   info.exported = (attr(node, "exported")?.data ?? (node.children.some((f) => f.name === "intent-filter") ? 1 : 0)) ? 1 : 0;
-  info.permission = attrStr(node, "permission") ?? (appNode() ? attrStr(appNode()!, "permission") : null);
-  const process = attrStr(node, "process") ?? (appNode() ? attrStr(appNode()!, "process") : null) ?? pkg;
-  info.processName = process.startsWith(":") ? pkg + process : process;
+  info.permission = attrStr(node, "permission") ?? (owner?.application ? attrStr(owner.application, "permission") : null);
+  info.processName = owner?.process(node) ?? pkg;
   info.directBootAware = attr(node, "directBootAware")?.data ? 1 : 0;
-  info.metaData = flags & 0x80 ? metaData(node) : null;
+  info.metaData = flags & 0x80 ? metaData(node, owner?.res) : null;
 }
-function serviceInfo(name: string, node: XmlNode, flags: number): JServiceInfo {
+function serviceInfo(name: string, node: XmlNode, flags: number, owner = currentPackage): JServiceInfo {
   const info = new (rt.link("android/content/pm/ServiceInfo").ctor)() as JServiceInfo;
-  componentInfo(info, name, node, flags);
+  componentInfo(info, name, node, flags, owner);
   info.foregroundServiceType = attr(node, "foregroundServiceType")?.data ?? 0;
   info.flags = (attr(node, "stopWithTask")?.data ? 1 : 0) | (attr(node, "isolatedProcess")?.data ? 2 : 0);
   return info;
 }
-function receiverInfo(name: string, node: XmlNode, flags: number): JActivityInfo {
+function receiverInfo(name: string, node: XmlNode, flags: number, owner = currentPackage): JActivityInfo {
   const info = new (rt.link("android/content/pm/ActivityInfo").ctor)() as JActivityInfo;
-  componentInfo(info, name, node, flags);
+  componentInfo(info, name, node, flags, owner);
   return info;
 }
 
 function getServiceInfo(component: JComponentName, flags: number): JServiceInfo {
-  const pkg = appHost?.pkg ?? "", name = qualifyComponent(component.cls, component.pkg);
-  const node = manifestServices.get(name);
-  if (component.pkg !== pkg || !node || !visibleComponent(name, node, flags)) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", component.pkg + "/" + name);
-  return serviceInfo(name, node, flags);
+  const name = qualifyComponent(component.cls, component.pkg), owner = packages.get(component.pkg);
+  const node = owner?.components.service.get(name);
+  if (!owner || !node || !visibleComponent(name, node, flags, owner)) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", component.pkg + "/" + name);
+  return serviceInfo(name, node, flags, owner);
 }
-function queryComponents(intent: JIntent | null, flags: number, kind: "service" | "receiver" | "activity" = "service"): JList {
-  const result = newArrayList(), pkg = appHost?.pkg ?? "";
-  if (!intent || intent.pkg && intent.pkg !== pkg || intent.componentPkg && intent.componentPkg !== pkg) return result;
-  for (const [rawName, node] of kind === "activity" ? manifestActivities : kind === "receiver" ? manifestReceivers : manifestServices) {
-    const name = qualifyComponent(rawName, pkg);
-    if (!visibleComponent(name, node, flags)) continue;
+function queryComponents(intent: JIntent | null, flags: number, kind: Exclude<ComponentKind, "provider"> = "service"): JList {
+  const result = newArrayList();
+  if (!intent) return result;
+  for (const owner of packages.values()) {
+    const pkg = owner.pkg;
+    if (intent.pkg && intent.pkg !== pkg || intent.componentPkg && intent.componentPkg !== pkg) continue;
+    for (const [name, node] of owner.components[kind]) {
+    if (!visibleComponent(name, node, flags, owner)) continue;
     let priority = 0;
     if (intent.component) { if (qualifyComponent(intent.component, pkg) !== name) continue; }
     else {
@@ -485,12 +503,13 @@ function queryComponents(intent: JIntent | null, flags: number, kind: "service" 
     }
     const info = new (rt.link("android/content/pm/ResolveInfo").ctor)();
     if (kind === "activity") {
-      info.activityInfo = mkActivityInfo(name);
-      componentInfo(info.activityInfo, name, node, flags);
-    } else if (kind === "receiver") info.activityInfo = receiverInfo(name, node, flags);
-    else info.serviceInfo = serviceInfo(name, node, flags);
+      info.activityInfo = mkActivityInfo(name, owner);
+      componentInfo(info.activityInfo, name, node, flags, owner);
+    } else if (kind === "receiver") info.activityInfo = receiverInfo(name, node, flags, owner);
+    else info.serviceInfo = serviceInfo(name, node, flags, owner);
     info.priority = priority;
     result.a.push(info);
+    }
   }
   result.a.sort((a, b) => (b as { priority: number }).priority - (a as { priority: number }).priority);
   return result;
@@ -528,9 +547,9 @@ rt.register({
     FEATURE_VR_MODE: "android.software.vr.mode", FEATURE_TELEPHONY: "android.hardware.telephony", FEATURE_LEANBACK: "android.software.leanback" },
   methods: {
     "getProviderInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ProviderInfo;": (comp: JComponentName, flags: number) => {
-      const cls = qualifyComponent(comp.cls, comp.pkg), node = manifestProviders.get(cls);
-      if (comp.pkg !== appHost?.pkg || !node) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", comp.pkg + "/" + cls);
-      return mkProviderInfo(cls, node, flags);
+      const cls = qualifyComponent(comp.cls, comp.pkg), owner = packages.get(comp.pkg), node = owner?.components.provider.get(cls);
+      if (!owner || !node || !visibleComponent(cls, node, flags, owner)) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", comp.pkg + "/" + cls);
+      return providerInfo(cls, comp.pkg, authoritiesOf(node).join(";"), node, flags, owner);
     },
     "getResourcesForApplication(Ljava/lang/String;)Landroid/content/res/Resources;": async function (pkg: string) {
       const info = await vcall(this, "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 0);
@@ -548,10 +567,10 @@ rt.register({
       catch (error) { if (error instanceof rt.link("android/content/res/Resources$NotFoundException").ctor) return null; throw error; }
     },
     "getReceiverInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;": (component: JComponentName, flags: number) => {
-      const name = qualifyComponent(component.cls, component.pkg), node = manifestReceivers.get(name);
-      if (component.pkg !== appHost?.pkg || !node || !visibleComponent(name, node, flags))
+      const name = qualifyComponent(component.cls, component.pkg), owner = packages.get(component.pkg), node = owner?.components.receiver.get(name);
+      if (!owner || !node || !visibleComponent(name, node, flags, owner))
         throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", component.pkg + "/" + name);
-      return receiverInfo(name, node, flags);
+      return receiverInfo(name, node, flags, owner);
     },
     "getServiceInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ServiceInfo;": getServiceInfo,
     "getServiceInfo(Landroid/content/ComponentName;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Landroid/content/pm/ServiceInfo;": (c: JComponentName, f: JInfoFlags) => getServiceInfo(c, Number(f.value)),
@@ -560,6 +579,8 @@ rt.register({
       return vcall(this, "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", pkg, Number(f?.value ?? 0n));
     },
     "getPackageInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;": async function (pkg: string, flags: number) {
+      const record = packages.get(pkg);
+      if (record && (record !== currentPackage || record.system)) return recordInfo(record, flags);
       const installed = await installedPackage(pkg);
       if (installed) return archiveInfo(installed.archive, installed.path, flags);
       if (appHost && pkg !== appHost.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
@@ -594,6 +615,8 @@ rt.register({
       return vcall(this, "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, Number(f?.value ?? 0n));
     },
     "getApplicationInfo(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;": async function (pkg: string, flags: number) {
+      const record = packages.get(pkg);
+      if (record && (record !== currentPackage || record.system)) return recordAppInfo(record, flags);
       const installed = await installedPackage(pkg);
       if (installed) return archiveInfo(installed.archive, installed.path, flags).applicationInfo;
       if (appHost && pkg !== appHost.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
@@ -622,7 +645,19 @@ rt.register({
     "hasSystemFeature(Ljava/lang/String;I)Z": (name: string) => device.features.includes(name) ? 1 : 0,
     "getSystemAvailableFeatures()[Landroid/content/pm/FeatureInfo;": () =>
       jarray(device.features.map((name) => Object.assign(new JFeatureInfo(), { name })), "Landroid/content/pm/FeatureInfo;"),
-    "checkPermission(Ljava/lang/String;Ljava/lang/String;)I": () => 0,
+    "checkPermission(Ljava/lang/String;Ljava/lang/String;)I": async (permission: string, pkg: string) => {
+      const record = packages.get(pkg);
+      if (record?.grants.has(permission)) return 0;
+      if (!record?.permissions.has(permission)) return -1;
+      if (!signaturePermissions.has(permission)) return 0;
+      const certificates = await record.certificates();
+      for (const owner of packages.values()) {
+        if (!owner.root.children.some((n) => n.name === "permission" && attrStr(n, "name") === permission)) continue;
+        const signers = await owner.certificates();
+        if (certificates.length && certificates.length === signers.length && certificates.every((c, i) => c.length === signers[i].length && c.every((b, j) => b === signers[i][j]))) return 0;
+      }
+      return -1;
+    },
     "getInstallerPackageName(Ljava/lang/String;)Ljava/lang/String;": () => null,
     "getInstallSourceInfo(Ljava/lang/String;)Landroid/content/pm/InstallSourceInfo;": (pkg: string) => {
       if (!appHost || pkg !== appHost.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
@@ -632,9 +667,23 @@ rt.register({
     "canRequestPackageInstalls()Z": () => 1,
     "isInstantApp()Z": () => 0,
     "isInstantApp(Ljava/lang/String;)Z": () => 0,
-    // one package is installed and it owns every uid this process can ask about
-    "getNameForUid(I)Ljava/lang/String;": () => appHost?.pkg ?? null,
-    "getPackagesForUid(I)[Ljava/lang/String;": () => jarray([appHost?.pkg ?? ""], "Ljava/lang/String;"),
+    "getNameForUid(I)Ljava/lang/String;": (uid: number) => [...packages.values()].find((p) => p.uid === uid)?.pkg ?? null,
+    "getPackagesForUid(I)[Ljava/lang/String;": (uid: number) => {
+      const names = [...packages.values()].filter((p) => p.uid === uid).map((p) => p.pkg);
+      return names.length ? jarray(names, "Ljava/lang/String;") : null;
+    },
+    "getPackageUid(Ljava/lang/String;I)I": (pkg: string) => {
+      const record = packages.get(pkg);
+      if (!record) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
+      return record.uid;
+    },
+    "checkSignatures(Ljava/lang/String;Ljava/lang/String;)I": async (a: string, b: string) => {
+      const x = packages.get(a), y = packages.get(b);
+      if (!x || !y) return -4;
+      const left = await x.visibleCertificates(), right = await y.visibleCertificates();
+      if (!left.length || !right.length) return !left.length && !right.length ? 1 : !left.length ? -1 : -2;
+      return left.length === right.length && left.every((cert) => right.some((other) => cert.length === other.length && cert.every((v, i) => v === other[i]))) ? 0 : -3;
+    },
     "getInstalledPackages(I)Ljava/util/List;": installedPackages,
     "getInstalledPackages(Landroid/content/pm/PackageManager$PackageInfoFlags;)Ljava/util/List;": (flags: JInfoFlags) => installedPackages(Number(flags.value)),
     "getActivityInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;": (comp: any) =>
@@ -672,18 +721,18 @@ export function activityHandlesConfig(act: JActivity, bits: number): boolean {
 }
 
 /** ActivityInfo for a dotted class name, read off that activity's own manifest node. */
-function mkActivityInfo(cls: string): JActivityInfo {
-  const node = manifestActivities.get(cls.replace(/\./g, "/"));
+function mkActivityInfo(cls: string, owner = currentPackage): JActivityInfo {
+  const node = owner?.components.activity.get(cls.replace(/\//g, "."));
   const a = new JActivityInfo();
   a.name = cls;
-  a.packageName = appHost?.pkg ?? "";
+  a.packageName = owner?.pkg ?? appHost?.pkg ?? "";
   a.theme = (node && attr(node, "theme")?.data) ?? appHost?.themeResId ?? 0;
   a.configChanges = (node && attr(node, "configChanges")?.data) ?? 0;
   a.screenOrientation = (node && attr(node, "screenOrientation")?.data) ?? -1;
   a.exported = node && attr(node, "exported")?.data ? 1 : 0;
   a.permission = node ? attrStr(node, "permission") : null;
   a.parentActivityName = node ? attrStr(node, "parentActivityName") : null;
-  a.metaData = metaData(node);
+  a.metaData = metaData(node, owner?.res);
   return a;
 }
 
@@ -817,21 +866,69 @@ function archiveInfo(archive: PackageArchive, path: string, flags: number): JPac
   if (flags & 0x8000000) info.signingInfo = signingInfo(certificates);
   return info;
 }
-const installedPath = (pkg: string) => `/data/app/${pkg}/base.apk`;
+export const installedPath = (pkg: string) => `/data/app/${pkg}/base.apk`;
+export function registerPackage(archive: PackageArchive, path = installedPath(archive.pkg)): PackageRecord {
+  const record = new PackageRecord(archive.root, archive.res, path, packageUid(archive.pkg), () => Promise.resolve(archive.certificates));
+  packages.set(record.pkg, record);
+  for (const node of archive.root.children) if (node.name === "permission" && ((attr(node, "protectionLevel")?.data ?? 0) & 3) >= 2) {
+    const name = attrStr(node, "name");
+    if (name) signaturePermissions.add(name);
+  }
+  return record;
+}
+function recordAppInfo(record: PackageRecord, flags = 0): JApplicationInfo {
+  const root = record.root, app = record.application, res = record.res;
+  const ai = new JApplicationInfo();
+  ai.packageName = record.pkg; ai.uid = record.uid;
+  ai.sourceDir = ai.publicSourceDir = record.path; ai.dataDir = `/data/data/${record.pkg}`;
+  ai.archiveResources = res; ai.processName = app ? record.process(app) : record.pkg;
+  ai.enabled = record.enabled ? 1 : 0; ai.flags = record.system ? 1 : 0;
+  const label = app && attr(app, "label");
+  ai.labelRes = label?.type === TV.REFERENCE ? label.data : 0;
+  ai.nonLocalizedLabel = label?.str ?? null;
+  ai.icon = app && attr(app, "icon")?.data || 0;
+  ai.theme = app && attr(app, "theme")?.data || 0;
+  const cls = app && attrStr(app, "name");
+  ai.className = cls ? qualifyComponent(cls, record.pkg) : null;
+  const sdk = root.children.find((c) => c.name === "uses-sdk");
+  ai.minSdkVersion = sdk && attr(sdk, "minSdkVersion")?.data || 1;
+  ai.targetSdkVersion = sdk && attr(sdk, "targetSdkVersion")?.data || ai.minSdkVersion;
+  if (flags & 128) ai.metaData = metaData(app, res);
+  return ai;
+}
+async function recordInfo(record: PackageRecord, flags: number): Promise<JPackageInfo> {
+  const pi = new JPackageInfo(), root = record.root;
+  pi.packageName = record.pkg;
+  pi.versionCode = attr(root, "versionCode")?.data ?? 0;
+  pi.longVersionCode = BigInt(pi.versionCode >>> 0) | BigInt(attr(root, "versionCodeMajor")?.data ?? 0) << 32n;
+  const version = attr(root, "versionName");
+  pi.versionName = version?.type === TV.REFERENCE ? resString(record.res, version.data) : version?.str ?? "";
+  pi.applicationInfo = recordAppInfo(record, flags);
+  pi.firstInstallTime = pi.lastUpdateTime = installTime(record.pkg);
+  if (flags & 64) pi.signatures = signatures(await record.visibleCertificates());
+  if (flags & 0x8000000) pi.signingInfo = signingInfo(await record.visibleCertificates());
+  pi.reqFeatures = reqFeatures(root);
+  if (flags & 0x1000) pi.requestedPermissions = requestedPermissions(root);
+  if (flags & 1) pi.activities = jarray([...record.components.activity].filter(([n, node]) => visibleComponent(n, node, flags, record)).map(([n]) => mkActivityInfo(n, record)), "Landroid/content/pm/ActivityInfo;");
+  if (flags & 2) pi.receivers = jarray([...record.components.receiver].filter(([n, node]) => visibleComponent(n, node, flags, record)).map(([n, node]) => receiverInfo(n, node, flags, record)), "Landroid/content/pm/ActivityInfo;");
+  if (flags & 4) pi.services = jarray([...record.components.service].filter(([n, node]) => visibleComponent(n, node, flags, record)).map(([n, node]) => serviceInfo(n, node, flags, record)), "Landroid/content/pm/ServiceInfo;");
+  return pi;
+}
 async function installedPackage(pkg: string) {
   await restorePackages();
   const path = installedPath(pkg), archive = await readArchive(path);
+  if (archive && !packages.has(pkg)) registerPackage(archive, path);
   return archive ? { path, archive } : null;
 }
 async function installedPackages(flags: number): Promise<JList> {
   await restorePackages();
   const result = newArrayList();
-  if (appHost) result.a.push(await vcall(getPM(), "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", appHost.pkg, flags));
   for (const path of vfs.files.keys()) {
     if (!/^\/data\/app\/[^/]+\/base\.apk$/.test(path)) continue;
     const archive = await readArchive(path);
-    if (archive && archive.pkg !== appHost?.pkg) result.a.push(archiveInfo(archive, path, flags));
+    if (archive && !packages.has(archive.pkg)) registerPackage(archive, path);
   }
+  for (const record of packages.values()) result.a.push(await vcall(getPM(), "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", record.pkg, flags));
   return result;
 }
 export async function installPackageArchive(bytes: Uint8Array, expectedPackage: string | null = null): Promise<string> {
@@ -848,5 +945,6 @@ export async function installPackageArchive(bytes: Uint8Array, expectedPackage: 
   }))) throw new Error("APK signing certificate differs from installed package");
   await persistPackage(installedPath(archive.pkg), bytes);
   vfs.write(installedPath(archive.pkg), bytes);
+  registerPackage(archive);
   return archive.pkg;
 }

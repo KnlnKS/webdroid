@@ -1,6 +1,10 @@
 import index from "./index.html";
 import { WEB_INJECT } from "./src/shell/webinject";
 import { openInstall } from "./src/shell/install";
+import { prepareSystemPackages, systemPackageFile } from "./scripts/system-packages";
+import { SYSTEM_PACKAGES } from "./src/shell/system-packages";
+
+await prepareSystemPackages();
 
 type TcpData = { host: string; port: number; tls: boolean; sock: import("bun").Socket | null; ready: boolean; pending: (Uint8Array | Buffer)[] };
 
@@ -112,6 +116,10 @@ const server: Bun.Server<TcpData> = Bun.serve({
     // when the device profile does, so let the browser keep them across reloads.
     "/vendor/:file": (req) => serveVendor(req.params.file),
     "/vendor/aosp/:file": (req) => serveVendor(`aosp/${req.params.file}`),
+    "/system-packages/:file": (req) => {
+      if (!SYSTEM_PACKAGES.some((p) => p.file === req.params.file)) return new Response("not found", { status: 404 });
+      return new Response(Bun.file(systemPackageFile(req.params.file)), { headers: { "cache-control": "public, max-age=31536000, immutable" } });
+    },
     "/apks": async () => {
       const names: string[] = [];
       for await (const f of new Bun.Glob("*.{apk,xapk}").scan("apks")) names.push(f);

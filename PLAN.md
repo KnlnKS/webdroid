@@ -37,6 +37,12 @@ foreground CPU regressions. Each commit uses `area: sentence`.
   Capture/logs: `/tmp/webdroid-microg-baseline.{png,json}`.
 - Both pinned APKs downloaded to the external `Library/Caches/webdroid/microg` cache;
   SHA-256 matches GitHub release digests. No APK binary added to Git.
+- Baseline typecheck passed; 924 unit tests passed (46,035 assertions).
+- Package registry/provisioning: typecheck and 10 targeted tests pass. Resy no longer
+  displays the Play Services dialog; its own package/signature checks accept the
+  verified APKs and scoped compatibility signatures. Services are not yet running.
+  Capture `/tmp/webdroid-microg-packages.{png,json}` identifies package contexts,
+  service binding and `Executors.unconfigurableScheduledExecutorService` next.
 
 ## Remaining architecture
 

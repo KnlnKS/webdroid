@@ -314,7 +314,8 @@ rt.register({ name: "android/os/Build$VERSION_CODES", ctor: class extends JObj {
     ["S", 31], ["S_V2", 32], ["TIRAMISU", 33], ["UPSIDE_DOWN_CAKE", 34], ["VANILLA_ICE_CREAM", 35],
   ]),
 });
-export const PROCESS_PID = 1000, PROCESS_UID = 10001;
+export let PROCESS_PID = 1000, PROCESS_UID = 10001;
+export function setProcessIdentity(pid: number, uid: number): void { PROCESS_PID = pid; PROCESS_UID = uid; }
 rt.register({
   name: "android/os/Process", ctor: class extends JObj {},
   statics: { THREAD_PRIORITY_BACKGROUND: 10, THREAD_PRIORITY_DEFAULT: 0, THREAD_PRIORITY_URGENT_DISPLAY: -8 },
