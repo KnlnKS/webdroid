@@ -25,16 +25,22 @@ rt.register({ name: "android/media/RingtoneManager", ctor: class extends JObj {}
 
 rt.register({ name: "android/media/Image", ctor: class extends JObj {}, ifaces: ["java/lang/AutoCloseable"] });
 
-class JAudioAttributes extends JObj { usage = 0; contentType = 0; }
+class JAudioAttributes extends JObj { usage = 0; contentType = 0; flags = 0x800; }
 rt.register({
   name: "android/media/AudioAttributes", ctor: JAudioAttributes, ifaces: ["android/os/Parcelable"],
   methods: {
     "getUsage()I": function (this: JAudioAttributes) { return this.usage; },
     "getContentType()I": function (this: JAudioAttributes) { return this.contentType; },
+    "getFlags()I": function (this: JAudioAttributes) { return this.flags & 0x111; },
+    "getAllFlags()I": function (this: JAudioAttributes) { return this.flags & 0x1f7ff; },
+    "getAllowedCapturePolicy()I": function (this: JAudioAttributes) { return this.flags & 0x1000 ? 3 : this.flags & 0x400 ? 2 : 1; },
+    "areHapticChannelsMuted()Z": function (this: JAudioAttributes) { return this.flags & 0x800 ? 1 : 0; },
+    "isContentSpatialized()Z": function (this: JAudioAttributes) { return this.flags & 0x4000 ? 1 : 0; },
+    "getSpatializationBehavior()I": function (this: JAudioAttributes) { return this.flags & 0x8000 ? 1 : 0; },
     "equals(Ljava/lang/Object;)Z": function (this: JAudioAttributes, other: unknown) {
-      return other instanceof JAudioAttributes && this.usage === other.usage && this.contentType === other.contentType ? 1 : 0;
+      return other instanceof JAudioAttributes && this.usage === other.usage && this.contentType === other.contentType && this.flags === other.flags ? 1 : 0;
     },
-    "hashCode()I": function (this: JAudioAttributes) { return (this.contentType * 31 + this.usage) | 0; },
+    "hashCode()I": function (this: JAudioAttributes) { return ((this.contentType * 31 + this.usage) * 31 + this.flags) | 0; },
   },
 });
 class JAudioAttributesBuilder extends JObj { attrs = new JAudioAttributes(); }
@@ -42,6 +48,17 @@ rt.register({
   name: "android/media/AudioAttributes$Builder", ctor: JAudioAttributesBuilder,
   methods: {
     "<init>()V": function () {},
+    "setFlags(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, flags: number) { this.attrs.flags |= flags & 0x1d1; return this; },
+    "setAllowedCapturePolicy(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, policy: number) {
+      if (policy < 1 || policy > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid capture policy " + policy);
+      this.attrs.flags = (this.attrs.flags & ~0x1400) | (policy === 3 ? 0x1400 : policy === 2 ? 0x400 : 0); return this;
+    },
+    "setHapticChannelsMuted(Z)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, muted: number) { this.attrs.flags = (this.attrs.flags & ~0x800) | (muted ? 0x800 : 0); return this; },
+    "setIsContentSpatialized(Z)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, spatialized: number) { this.attrs.flags = (this.attrs.flags & ~0x4000) | (spatialized ? 0x4000 : 0); return this; },
+    "setSpatializationBehavior(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, behavior: number) {
+      if (behavior !== 0 && behavior !== 1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid spatialization behavior " + behavior);
+      this.attrs.flags = (this.attrs.flags & ~0x8000) | (behavior ? 0x8000 : 0); return this;
+    },
     "setUsage(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, usage: number) {
       if (usage < 0 || usage > 16) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid usage " + usage);
       this.attrs.usage = usage; return this;

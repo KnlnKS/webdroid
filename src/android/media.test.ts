@@ -38,3 +38,25 @@ test("audio attribute builds are independent values with normalized notification
   rt.link("android/media/SoundPool");
   await vcall(pool, "release", "()V");
 });
+
+test("audio attribute policies preserve flags and immutable build snapshots", async () => {
+  const builder = await newObj("android/media/AudioAttributes$Builder");
+  const build = () => vcall(builder, "build", "()Landroid/media/AudioAttributes;");
+  const original = await build();
+  expect(await vcall(original, "areHapticChannelsMuted", "()Z")).toBe(1);
+  for (const flags of [1, 0x10, 0x100, 0x4000]) await vcall(builder, "setFlags", "(I)Landroid/media/AudioAttributes$Builder;", flags);
+  await vcall(builder, "setAllowedCapturePolicy", "(I)Landroid/media/AudioAttributes$Builder;", 3);
+  await vcall(builder, "setHapticChannelsMuted", "(Z)Landroid/media/AudioAttributes$Builder;", 0);
+  await vcall(builder, "setIsContentSpatialized", "(Z)Landroid/media/AudioAttributes$Builder;", 1);
+  await vcall(builder, "setSpatializationBehavior", "(I)Landroid/media/AudioAttributes$Builder;", 1);
+  const changed = await build();
+  for (const [method, value] of [["getFlags", 0x111], ["getAllowedCapturePolicy", 3], ["getSpatializationBehavior", 1]] as const) {
+    expect(await vcall(changed, method, "()I")).toBe(value);
+  }
+  expect(await vcall(changed, "areHapticChannelsMuted", "()Z")).toBe(0);
+  expect(await vcall(changed, "isContentSpatialized", "()Z")).toBe(1);
+  expect(await vcall(original, "getAllowedCapturePolicy", "()I")).toBe(1);
+  expect(await vcall(changed, "equals", "(Ljava/lang/Object;)Z", original)).toBe(0);
+  await expect(vcall(builder, "setAllowedCapturePolicy", "(I)Landroid/media/AudioAttributes$Builder;", 0)).rejects.toMatchObject({ msg: "Invalid capture policy 0" });
+  await expect(vcall(builder, "setSpatializationBehavior", "(I)Landroid/media/AudioAttributes$Builder;", 2)).rejects.toMatchObject({ msg: "Invalid spatialization behavior 2" });
+});
