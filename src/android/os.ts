@@ -103,7 +103,9 @@ export class JHandler extends JObj {
     if (!set) this.pending.set(key, (set = new Set()));
     set.add(msg);
     // still pending until it runs, so a removeMessages/hasMessages in between sees it
-    const go = () => this.looper.run(() => { if (set.delete(msg)) return this.dispatch(msg); });
+    const go = () => this.looper.run(() => {
+      if (set.delete(msg)) return vcall(this, "dispatchMessage", "(Landroid/os/Message;)V", msg).catch(reportUncaught);
+    });
     if (delay > 0) msg.timer = setTimeout(() => void go(), delay); else void go();
     return 1;
   }
@@ -111,13 +113,6 @@ export class JHandler extends JObj {
   cancel(key: unknown): void {
     for (const m of this.pending.get(key) ?? []) clearTimeout(m.timer);
     this.pending.delete(key);
-  }
-  private async dispatch(msg: JMessage): Promise<void> {
-    try {
-      if (msg.callback) await vcall(msg.callback, "run", "()V");
-      else if (this.cb && (await vcall(this.cb, "handleMessage", "(Landroid/os/Message;)Z", msg))) { /* handled */ }
-      else await vcall(this, "handleMessage", "(Landroid/os/Message;)V", msg);
-    } catch (e) { reportUncaught(e); }
   }
 }
 /** The window's handler, which View.post/postDelayed/scheduleDrawable enqueue on. Lazy so it
@@ -156,6 +151,11 @@ rt.register({
       this.looper = (curThread.looper as JLooper) ?? mainLooper; this.cb = cb;
     },
     "handleMessage(Landroid/os/Message;)V": function () {},
+    "dispatchMessage(Landroid/os/Message;)V": async function (this: JHandler, msg: JMessage) {
+      if (msg.callback) await vcall(msg.callback, "run", "()V");
+      else if (!this.cb || !await vcall(this.cb, "handleMessage", "(Landroid/os/Message;)Z", msg))
+        await vcall(this, "handleMessage", "(Landroid/os/Message;)V", msg);
+    },
     "post(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.post(r, 0); },
     "postDelayed(Ljava/lang/Runnable;J)Z": function (this: JHandler, r: unknown, d: bigint) { return this.post(r, Number(d)); },
     "postAtTime(Ljava/lang/Runnable;J)Z": function (this: JHandler, r: unknown, at: bigint) {

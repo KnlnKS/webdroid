@@ -37,3 +37,16 @@ test("Messenger Binder delivery copies message data and authenticates the sender
   const bundle = await vcall(importParcel(exportParcel(bundleParcel)), "readBundle", "()Landroid/os/Bundle;");
   expect(bundle.map.get("value")).toBe("payload");
 });
+
+test("queued and direct Handler messages reach the overridable dispatch entry", async () => {
+  const received: number[] = [];
+  rt.register({ name: "test/DispatchHandler", ctor: class extends JHandler {}, sup: "android/os/Handler", methods: {
+    "dispatchMessage(Landroid/os/Message;)V": (message: JMessage) => { received.push(message.what); },
+  } });
+  const handler = await newObj("test/DispatchHandler"), direct = new JMessage(), queued = new JMessage();
+  direct.what = 17; queued.what = 29;
+  await vcall(handler, "dispatchMessage", "(Landroid/os/Message;)V", direct);
+  await vcall(handler, "sendMessage", "(Landroid/os/Message;)Z", queued);
+  await onMain(() => {});
+  expect(received).toEqual([17, 29]);
+});
