@@ -42,6 +42,7 @@ export const uiState = {
    *  hands the same value to every callback; Compose's BroadcastFrameClock fans one timestamp
    *  to all withFrameNanos awaiters, so animations desync if callbacks see different times. */
   frameTimeNanos: 0n,
+  frameIntervalNanos: 0n,
 };
 export function invalidate(v?: JView) {
   perf.invalidates++; uiState.needsDraw = true;

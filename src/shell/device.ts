@@ -1,7 +1,7 @@
 // Device shell: APK boot, activity stack, frame loop, touch routing.
 
 import { dexesIn } from "../jvm/dex";
-import { rt } from "../jvm/runtime";
+import { rt, type JObj } from "../jvm/runtime";
 import { analyseProgram } from "../jvm/analyse";
 import { vfs, apkPath } from "../jvm/natives/jio";
 import { openInstall, type Install } from "./install";
@@ -21,7 +21,7 @@ import { JMenu, pushMenuToBar } from "../android/menu";
 import { JContext } from "../android/context";
 import { attachProvider } from "../android/contentresolver";
 import { APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
-import { reportUncaught, JBundle } from "../android/os";
+import { reportUncaught, JBundle, dispatchVsync } from "../android/os";
 import { onMain, inMainJob, mainDbg } from "../android/mainloop";
 import { JView, JViewGroup, uiState, layoutPass, replayLayoutRequests, measureView, layoutView, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
@@ -590,10 +590,11 @@ async function tick0() {
     // callbacks in the SAME frame see times hundreds of ms apart during boot.
     uiState.frameTimeNanos = BigInt(Math.floor(performance.now() * 1e6));
     const cbs = uiState.frameCallbacks.length ? uiState.frameCallbacks.splice(0) : [];
-    for (const cb of cbs as { frame?: any; run?: any }[]) {
-      mainDbg.phase = "frame:" + ((cb.frame ?? cb.run)?.constructor?.$i?.name ?? "?");
+    for (const cb of cbs as { frame?: any; run?: any; vsync?: JObj }[]) {
+      mainDbg.phase = "frame:" + ((cb.frame ?? cb.run ?? cb.vsync)?.constructor?.$i?.name ?? "?");
       try {
         if (cb.frame) await guardCall(cb.frame, M_doFrame, uiState.frameTimeNanos);
+        else if (cb.vsync) await dispatchVsync(cb.vsync);
         else if (cb.run) await vcall(cb.run, "run", "()V");
       } catch (e) { reportUncaught(e); }
     }

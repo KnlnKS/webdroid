@@ -628,6 +628,46 @@ rt.register({
 });
 
 // ── Choreographer (frame callbacks; shell drains queue each rAF)
+class JFrameTimeline extends JObj {
+  active = false;
+  id = 0n;
+  presentation = 0n;
+  check() {
+    if (!this.active) throw rt.mkThrowable("java/lang/IllegalStateException", "Frame data is only valid during its vsync callback");
+  }
+}
+class JFrameData extends JFrameTimeline {
+  time = 0n;
+  timelines = jarray([new JFrameTimeline()], "Landroid/view/Choreographer$FrameTimeline;");
+}
+rt.register({
+  name: "android/view/Choreographer$FrameTimeline", ctor: JFrameTimeline,
+  methods: {
+    "getVsyncId()J": function (this: JFrameTimeline) { this.check(); return this.id; },
+    "getExpectedPresentationTimeNanos()J": function (this: JFrameTimeline) { this.check(); return this.presentation; },
+    "getDeadlineNanos()J": function (this: JFrameTimeline) { this.check(); return this.presentation; },
+  },
+});
+rt.register({
+  name: "android/view/Choreographer$FrameData", ctor: JFrameData,
+  methods: {
+    "getFrameTimeNanos()J": function (this: JFrameData) { this.check(); return this.time; },
+    "getFrameTimelines()[Landroid/view/Choreographer$FrameTimeline;": function (this: JFrameData) { this.check(); return this.timelines; },
+    "getPreferredFrameTimeline()Landroid/view/Choreographer$FrameTimeline;": function (this: JFrameData) { this.check(); return this.timelines[0]; },
+  },
+});
+rt.register({ name: "android/view/Choreographer$VsyncCallback", ctor: class extends JObj {} });
+export async function dispatchVsync(callback: JObj) {
+  rt.link("android/view/Choreographer$FrameData");
+  rt.link("android/view/Choreographer$FrameTimeline");
+  const data = new JFrameData(), timeline = data.timelines[0];
+  data.time = timeline.id = uiState.frameTimeNanos;
+  // The browser exposes one predicted presentation, not Android's alternate timelines.
+  timeline.presentation = data.time + uiState.frameIntervalNanos;
+  data.active = timeline.active = true;
+  try { await vcall(callback, "onVsync", "(Landroid/view/Choreographer$FrameData;)V", data); }
+  finally { data.active = timeline.active = false; }
+}
 class JChoreographer extends JObj {
   // AOSP's own field, read reflectively by anything measuring frame pacing (Sentry, Matrix,
   // Flutter's FPS probe). It is the same nanos getFrameTimeNanos() answers.
@@ -639,6 +679,14 @@ rt.register({
   fields: { mLastFrameTimeNanos: "mLastFrameTimeNanos" },
   methods: {
     "static getInstance()Landroid/view/Choreographer;": () => theChoreographer,
+    "postVsyncCallback(Landroid/view/Choreographer$VsyncCallback;)V": (cb: JObj) => {
+      if (cb == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "callback must not be null");
+      uiState.frameCallbacks.push({ vsync: cb });
+    },
+    "removeVsyncCallback(Landroid/view/Choreographer$VsyncCallback;)V": (cb: JObj) => {
+      if (cb == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "callback must not be null");
+      uiState.frameCallbacks = uiState.frameCallbacks.filter((c: any) => c.vsync !== cb);
+    },
     "postFrameCallback(Landroid/view/Choreographer$FrameCallback;)V": (cb: unknown) => {
       uiState.frameCallbacks.push({ frame: cb });
     },
