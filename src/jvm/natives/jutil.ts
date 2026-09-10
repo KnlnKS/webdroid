@@ -727,9 +727,9 @@ async function copyMapInto(src: unknown, dst: JMap) {
 /** live-ish view over a JMap for keySet/values/entrySet (iteration + size + contains + remove) */
 class JSetView extends JObj {
   constructor(public map: JMap, public kind: "k" | "v" | "e") { super(); }
-  snapshot(): unknown[] {
+  snapshot(entries: Iterable<Ent> = allEnts(this.map)): unknown[] {
     const out: unknown[] = [];
-    for (const e of allEnts(this.map)) out.push(this.kind === "k" ? e.k : this.kind === "v" ? e.v : new JMapEntry(e));
+    for (const e of entries) out.push(this.kind === "k" ? e.k : this.kind === "v" ? e.v : new JMapEntry(e));
     return out;
   }
 }
@@ -739,7 +739,19 @@ rt.register({
   methods: {
     "size()I": function (this: JSetView) { return this.map.m.size + this.map.slow.length; },
     "isEmpty()Z": function (this: JSetView) { return this.map.m.size + this.map.slow.length ? 0 : 1; },
-    "iterator()Ljava/util/Iterator;": function (this: JSetView) { return mkIter(this.snapshot()); },
+    "iterator()Ljava/util/Iterator;": function (this: JSetView) {
+      const entries = [...allEnts(this.map)], values = this.snapshot(entries);
+      return mkIter(values, { removeAt: (i) => {
+        const entry = entries[i], key = mapKey(entry.k);
+        if (key !== SLOW) {
+          if (this.map.m.get(key) === entry) this.map.m.delete(key);
+        } else {
+          const index = this.map.slow.indexOf(entry);
+          if (index >= 0) this.map.slow.splice(index, 1);
+        }
+        entries.splice(i, 1); values.splice(i, 1);
+      } });
+    },
     "contains(Ljava/lang/Object;)Z": maySuspend(function (this: JSetView, v: unknown) {
       if (this.kind === "k") return vcallMaybe(this.map, "containsKey", "(Ljava/lang/Object;)Z", v);
       return after(indexIn(this.snapshot(), v), (i) => (i >= 0 ? 1 : 0));

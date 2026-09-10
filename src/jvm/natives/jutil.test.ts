@@ -5,6 +5,51 @@ import { linkInit, newObj, vcall } from "./jlang";
 import "./jutil";
 import "./jreflect";
 
+test("map view iterator removal unlinks fast and custom-equality entries", async () => {
+  let comparisons = 0;
+  class ViewKey extends JObj {}
+  rt.register({ name: "webdroid/MapViewRemovalKey", ctor: ViewKey, methods: {
+    "equals(Ljava/lang/Object;)Z": function (this: ViewKey, other: unknown) { comparisons++; return this === other ? 1 : 0; },
+  } });
+  await linkInit("webdroid/MapEntry");
+  await linkInit("webdroid/SetView");
+  for (const view of ["keySet", "values", "entrySet"]) {
+    const map = await newObj("java/util/LinkedHashMap");
+    const key = await newObj("webdroid/MapViewRemovalKey", null);
+    await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "fast", "same");
+    await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, "same");
+    const collection = await vcall(map, view, view === "values" ? "()Ljava/util/Collection;" : "()Ljava/util/Set;");
+    const iterator = await vcall(collection, "iterator", "()Ljava/util/Iterator;");
+    for (const remaining of [1, 0]) {
+      await vcall(iterator, "next", "()Ljava/lang/Object;");
+      comparisons = 0;
+      await vcall(iterator, "remove", "()V");
+      expect(comparisons).toBe(0);
+      expect(await vcall(map, "size", "()I")).toBe(remaining);
+      expect(await vcall(collection, "size", "()I")).toBe(remaining);
+    }
+    expect(await vcall(iterator, "hasNext", "()Z")).toBe(0);
+    await expect(vcall(iterator, "remove", "()V")).rejects.toBeDefined();
+  }
+});
+
+test("successive cache evictions remove each resource only once", async () => {
+  await linkInit("webdroid/MapEntry");
+  await linkInit("webdroid/SetView");
+  const map = await newObj("java/util/LinkedHashMap");
+  for (const key of ["first", "second", "third"]) await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, key);
+  const removed = [];
+  for (let i = 0; i < 3; i++) {
+    const entries = await vcall(map, "entrySet", "()Ljava/util/Set;");
+    const iterator = await vcall(entries, "iterator", "()Ljava/util/Iterator;");
+    const entry = await vcall(iterator, "next", "()Ljava/lang/Object;");
+    removed.push(await vcall(entry, "getValue", "()Ljava/lang/Object;"));
+    await vcall(iterator, "remove", "()V");
+  }
+  expect(removed).toEqual(["first", "second", "third"]);
+  expect(await vcall(map, "size", "()I")).toBe(0);
+});
+
 test("Arrays.asList returns a linked Serializable list backed by its array", async () => {
   await linkInit("java/lang/Class");
   const arrays = (await linkInit("java/util/Arrays")).ctor;
