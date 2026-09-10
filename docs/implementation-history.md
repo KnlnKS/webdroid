@@ -2945,3 +2945,60 @@ the delegate removed that error in a focused 6/6-step rerun (minimum 36 fps).
 The FitNotes fragment exception, Harmonic layout exception and Lichess PhantomReference
 and surface diagnostics remain comparison points. These runs are functional evidence;
 controlled foreground CPU, memory, IPC and idle comparisons are not complete.
+
+
+## microG completion: maps, process activities and live messaging setup
+
+The SDK map client now renders real tiles and labels and returns loaded/camera-idle
+callbacks after panning. JNI lookup and registration must retain the defining loader
+through native calls, including JNI_OnLoad; sharing a registry between Runtime forks
+bound duplicate classes to the wrong native function. Duplicate-loader fixtures use
+different native return values to verify identity.
+
+Mapbox next exposed platform layout-parameter conversion, GL viewport dispatch, bitmap
+NIO transfers, MatchResult ancestry, zlib compression and VectorDrawable constant-state
+cloning. GLES symbol lookup must honor ELF DT_NEEDED host libraries: choosing a global
+GLES1 registration for a GLES2 consumer mixed texture and framebuffer handle namespaces.
+The final native fault reproduced with JIT disabled. HTTP Date parsing dereferenced
+`_ctype_` as a pointer, as declared by bionic; exporting the table itself made its first
+bytes become the guest address. Exporting a pointer slot to the table fixed both ABIs.
+
+The isolated LP64 MAP_FIXED reservation test also fails on the starting main checkout
+with an unmap overflow. The full unit suite passed before activity-routing changes.
+An isolated failure here is not evidence of a new microG regression; keep the baseline
+comparison when revisiting native-memory tests.
+
+The sign-in SDK requires an actual remote activity and its calling component before
+onCreate. Once those were supplied, microG reached AccountManager lookup and then its
+own LoginActivity. A returned status became `[object Object]` because typed Bundle and
+Intent getters leaked Parcel's boxed values; round-trip primitive tests cover the fix.
+No Google account authentication is claimed from merely displaying the login prompt.
+
+A dedicated no-billing Firebase project now supplies live SDK test configuration outside
+Git. Registration returned a real FCM token. The first reopened delivery attempt remained
+at zero: McsService reported no live connection. GcmPrefs.setEnabled returns immediately
+when already enabled, while startup previously omitted BOOT_COMPLETED. Eligible receiver
+routing now includes that OS event once per browser device session. Receipt, reconnect,
+account privacy/authenticator dispatch, location and full performance acceptance remain
+open. Diagnostic collectors must exclude upstream HTTP-form logs because those include
+installation authorization values even when the log line contains no word `token`.
+
+
+The live messaging connection required SSLContext.getDefault, SQLiteProgram's Closeable
+interface and Handler.dispatchMessage's actual override/callback semantics. Wrapped TLS
+sockets must open on first stream I/O: microG does not explicitly call startHandshake.
+Previously reads returned EOF and writes disappeared. Concurrent stream-open tests now
+verify one TLS connection and actual transferred bytes. MCS then logged in successfully.
+
+FCM registration changed across launches because Firebase Installations stores its identity
+in an app-private JSON file, while the VFS was memory-only. A broker-owned private-file
+store now shares binary values across realms and batches IndexedDB writes. Restore runs
+before package initialization. A real-browser check verified binary reload, empty directories,
+Java File.renameTo, deletion and non-persistent cache files across successive reloads.
+
+The next console test reached microG's delivery permission check and killed its MCS reader
+on missing PackageManager.getPermissionInfo. Manifest-derived PermissionInfo now exposes
+the actual declaring package and protection metadata; unknown names throw NameNotFoundException.
+The next reopened browser kept the same FCM token, the unchanged SDK client counted one
+received message, and microG sent its acknowledgement. Evidence is in
+`/tmp/webdroid-gms-completion-receipt.{png,json}`. No token or credential belongs in reports.

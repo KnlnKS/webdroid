@@ -113,12 +113,33 @@ TEMP state and one canonical persistent owner. Processes and bytecode start on d
 
 ## Completion worktree
 
-- Fresh SDK-client baseline on private port 41973 confirms availability 0 and the
-  missing NativeConnectivityListener.initialize JNI entry. No map renders yet.
-- Next: defining-loader ownership through System.loadLibrary, JNI_OnLoad, JNI class
-  lookup and native registration; exercise duplicate-loader fixtures and real maps.
-- Existing authorized test account supplied interactively. Firebase project reference
-  remains needed for live message delivery; credentials stay outside artifacts.
-- Defining-loader native loading and JNI lookup/registration now pass 19 targeted tests
-  and typecheck. The SDK map client passes native connectivity initialization and reaches
-  GL viewport setup and FrameLayout parameter conversion; maps are not yet rendered.
+- Work continues from `b567197` in `../webdroid-microg-completion`, branch
+  `codex/microg-completion`, private port 41973. Focused commits retain each platform fix.
+- Defining-loader JNI ownership, native dependencies, GL viewport routing, layout parameter
+  conversion, bitmap buffer copies, regex interfaces, streaming zlib, vector constant-state
+  cloning and bionic character-table indirection now let the unchanged SDK map client render
+  real tiles and labels. Loaded and camera-idle callbacks were observed after panning.
+  Captures: `/tmp/webdroid-gms-completion-trace.png` and
+  `/tmp/webdroid-gms-completion-pan.png`. Full map parity is not yet established.
+- Cross-process activities have foreground presentation, input, lifecycle transitions,
+  calling-activity metadata and serialized results. microG's genuine login prompt renders.
+  No account has yet authenticated in webdroid. Process death, nested/recreated activity
+  routing and service rebinding still need broader lifecycle verification.
+- Typed Bundle/Intent primitive reads now unbox Parcel values; Boolean/Float/Double writes
+  retain their wire types. AccountManager is available through Context service lookup.
+- Preferences use one persistent owner across process realms with data-only values.
+  Interleaved-write and reload tests pass. Boot completion is dispatched once to eligible
+  installed receivers, including non-exported receivers, to restore background services.
+- Dedicated Firebase project `webdroid-microg-test` and Android app `org.webdroid.gmsclient`
+  are registered on the free Spark plan, with optional Analytics and Gemini disabled.
+  Configuration and browser test state stay outside the repository. The SDK received a real
+  FCM registration token. A reopened browser retained that token, received a console test
+  notification in the unchanged SDK client and sent the upstream acknowledgement.
+  Capture: `/tmp/webdroid-gms-completion-receipt.{png,json}`. Private files now share one
+  owner and persist through IndexedDB before package startup; binary reload, rename,
+  deletion and temporary-cache behavior passed real-browser checks.
+- Latest affected smoke compilation: Resy, microG and SDK client each report zero method
+  failures. Typecheck and targeted lifecycle/storage/Parcel/network/package tests pass.
+  The full unit checkpoint passed 963 tests and 46,926 assertions before the later
+  socket/private-file/permission fixes. Full regression captures, account authentication,
+  location and controlled performance comparisons remain open.
