@@ -27,9 +27,10 @@ WEBDROID_URL=http://localhost:4090 bun run corpus
 bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
 ```
 
-- Typecheck must pass with `noUnusedLocals`. Unit tests cover DEX/resources, ARM32/A64,
-  hardware-oracle SIMD, native host services, storage, and the E2E comparison machinery.
-  Use the test runner's count rather than maintaining a duplicate count here.
+- Typecheck must pass with `noUnusedLocals`. Unit tests cover DEX/resources, the ARM32/A64
+  tier-parity kits and hardware-oracle SIMD, decode-cache invalidation, JNI, networking,
+  storage, and the E2E comparison machinery. Use the test runner's count rather than
+  maintaining a duplicate count here.
 - Smoke compilation must report zero method failures for each APK affected by a change.
 - `fwtest [prefix ...]` measures delegate coverage with real framework bytecode.
 - E2E's four scored flows are FitNotes, Mihon onboarding, Mihon app, and Harmonic.
