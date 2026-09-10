@@ -70,6 +70,19 @@ rt.register({
     "loadIcon(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;": function (this: JPackageItemInfo) { return this.archiveResources && this.icon ? loadDrawable(this.archiveResources, this.icon, null) : null; },
   },
 });
+class JPermissionInfo extends JPackageItemInfo {
+  group: string | null = null; protectionLevel = 0; flags = 0; descriptionRes = 0;
+}
+rt.register({
+  name: "android/content/pm/PermissionInfo", ctor: JPermissionInfo, sup: "android/content/pm/PackageItemInfo", ifaces: ["android/os/Parcelable"],
+  fields: { group: "group", protectionLevel: "protectionLevel", flags: "flags", descriptionRes: "descriptionRes" },
+  methods: {
+    "<init>()V": function () {},
+    "getProtection()I": function (this: JPermissionInfo) { return this.protectionLevel & 15; },
+    "getProtectionFlags()I": function (this: JPermissionInfo) { return this.protectionLevel & ~15; },
+    "describeContents()I": () => 0,
+  },
+});
 class JComponentInfo extends JPackageItemInfo {
   applicationInfo: JApplicationInfo | null = null;
   processName = ""; permission: string | null = null; enabled = 1; exported = 0; directBootAware = 0;
@@ -654,6 +667,25 @@ rt.register({
     "getSystemAvailableFeatures()[Landroid/content/pm/FeatureInfo;": () =>
       jarray(device.features.map((name) => Object.assign(new JFeatureInfo(), { name })), "Landroid/content/pm/FeatureInfo;"),
     "getSystemSharedLibraryNames()[Ljava/lang/String;": () => jarray([], "Ljava/lang/String;"),
+    "getPermissionInfo(Ljava/lang/String;I)Landroid/content/pm/PermissionInfo;": (name: string, flags: number) => {
+      for (const owner of packages.values()) {
+        const node = owner.root.children.find((n) => n.name === "permission" && attrStr(n, "name") === name);
+        if (!node) continue;
+        rt.link("android/content/pm/PermissionInfo");
+        const info = new JPermissionInfo(), label = attr(node, "label");
+        info.name = name; info.packageName = owner.pkg; info.archiveResources = owner.res;
+        info.group = attrStr(node, "permissionGroup");
+        info.protectionLevel = attr(node, "protectionLevel")?.data ?? 0;
+        info.flags = attr(node, "permissionFlags")?.data ?? 0;
+        info.descriptionRes = attr(node, "description")?.data ?? 0;
+        info.icon = attr(node, "icon")?.data ?? 0;
+        info.labelRes = label?.type === TV.REFERENCE ? label.data : 0;
+        info.nonLocalizedLabel = label?.str ?? null;
+        info.metaData = flags & 128 ? metaData(node, owner.res) : null;
+        return info;
+      }
+      throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", name);
+    },
     "checkPermission(Ljava/lang/String;Ljava/lang/String;)I": async (permission: string, pkg: string) => {
       const record = packages.get(pkg);
       if (record?.grants.has(permission)) return 0;

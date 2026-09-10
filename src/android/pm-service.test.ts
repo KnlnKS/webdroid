@@ -14,6 +14,27 @@ import { mkComponentName, launchIntent } from "./intent";
 const previousHost = appHost;
 afterAll(() => setAppHost(previousHost));
 
+test("permission metadata identifies its declaring package and rejects undeclared names", async () => {
+  const installed = host(); setAppHost(installed);
+  const record = registerPackage({ pkg: "test.permission.owner", res: installed.res, certificates: [],
+    root: node("manifest", { package: "test.permission.owner" }, [node("permission", {
+      name: "test.permission.PUSH", protectionLevel: 0x12, permissionGroup: "test.group", label: "Delivery", permissionFlags: 1,
+    }, [node("meta-data", { name: "version", value: 7 })])]) });
+  try {
+    const pm = await newObj("android/content/pm/PackageManager");
+    const get = (name: string, flags = 0) => vcall(pm, "getPermissionInfo", "(Ljava/lang/String;I)Landroid/content/pm/PermissionInfo;", name, flags);
+    const info = await get("test.permission.PUSH", 128);
+    expect(info.packageName).toBe(record.pkg); expect(info.name).toBe("test.permission.PUSH");
+    expect(info.group).toBe("test.group"); expect(info.nonLocalizedLabel).toBe("Delivery");
+    expect(info.metaData.map.get("version")).toBe(7); expect(info.flags).toBe(1);
+    expect(await vcall(info, "getProtection", "()I")).toBe(2);
+    expect(await vcall(info, "getProtectionFlags", "()I")).toBe(16);
+    expect((await get("test.permission.PUSH")).metaData).toBeNull();
+    info.packageName = "mutated"; expect((await get("test.permission.PUSH")).packageName).toBe(record.pkg);
+    await expect(get("test.permission.ABSENT")).rejects.toMatchObject({ msg: "test.permission.ABSENT" });
+  } finally { packages.delete(record.pkg); }
+});
+
 test("installed packages resolve components, resources and signing identities independently", async () => {
   const first = host(); setAppHost(first);
   setManifest(node("manifest", { package: first.pkg }, [node("application")]), new Map(), new Map());
