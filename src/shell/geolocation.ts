@@ -3,18 +3,21 @@ export type LocationFix = {
   altitudeAccuracy: number | null; speed: number | null; heading: number | null;
   timestamp: number; monotonic: number; highAccuracy: boolean;
 };
-export type LocationEvent = { kind: "fix"; fix: LocationFix } | { kind: "error"; code: number };
+export type LocationEvent = { kind: "fix"; fix: LocationFix } | { kind: "error"; code: number } | { kind: "enabled" };
 export class BrowserLocation {
   private subscriptions = new Map<string, { pid: number; highAccuracy: boolean; active: boolean; receive: (event: LocationEvent) => void }>();
   private watch: number | null = null;
   private highAccuracy = false;
   private generation = 0;
   private denied = false;
+  private observingPermission = false;
   last: LocationFix | null = null;
   get available() { return typeof navigator !== "undefined" && !!navigator.geolocation; }
   get enabled() { return this.available && !this.denied; }
   subscribe(pid: number, id: number, highAccuracy: boolean, active: boolean, receive: (event: LocationEvent) => void) {
-    this.subscriptions.set(pid + ":" + id, { pid, highAccuracy, active, receive }); this.update();
+    this.subscriptions.set(pid + ":" + id, { pid, highAccuracy, active, receive });
+    if (this.denied) receive({ kind: "error", code: 1 });
+    this.update();
   }
   remove(pid: number, id?: number) {
     if (id !== undefined) this.subscriptions.delete(pid + ":" + id);
@@ -23,8 +26,21 @@ export class BrowserLocation {
   }
   private update() {
     if (!this.available) return;
-    const active = [...this.subscriptions.values()].some(s => s.active);
-    const highAccuracy = [...this.subscriptions.values()].some(s => s.active && s.highAccuracy);
+    let active = false, highAccuracy = false;
+    for (const sub of this.subscriptions.values()) if (sub.active) { active = true; highAccuracy ||= sub.highAccuracy; }
+    if (active && !this.observingPermission && navigator.permissions) {
+      this.observingPermission = true;
+      void navigator.permissions.query({ name: "geolocation" }).then(status => {
+        const changed = () => {
+          if (status.state === "denied") this.deny();
+          else {
+            if (this.denied && status.state === "granted") { this.denied = false; this.emit({ kind: "enabled" }); }
+            this.update();
+          }
+        };
+        status.onchange = changed; changed();
+      }).catch(() => {});
+    }
     if (this.watch !== null && active && highAccuracy === this.highAccuracy) return;
     const generation = ++this.generation;
     if (this.watch !== null) { navigator.geolocation.clearWatch(this.watch); this.watch = null; }
@@ -40,14 +56,16 @@ export class BrowserLocation {
       this.emit({ kind: "fix", fix: this.last });
     }, error => {
       if (generation !== this.generation) return;
-      this.denied = error.code === 1;
-      if (this.denied) {
-        this.last = null;
-        if (this.watch !== null) navigator.geolocation.clearWatch(this.watch);
-        this.watch = null; this.generation++;
-      }
-      this.emit({ kind: "error", code: error.code });
+      if (error.code === 1) this.deny();
+      else this.emit({ kind: "error", code: error.code });
     }, { enableHighAccuracy: highAccuracy, maximumAge: 0 });
+  }
+  private deny() {
+    const changed = !this.denied;
+    this.denied = true; this.last = null;
+    if (this.watch !== null) navigator.geolocation.clearWatch(this.watch);
+    this.watch = null; this.generation++;
+    if (changed) this.emit({ kind: "error", code: 1 });
   }
   private emit(event: LocationEvent) { for (const sub of this.subscriptions.values()) sub.receive(event); }
 }

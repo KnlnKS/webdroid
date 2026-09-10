@@ -178,3 +178,7 @@ TEMP state and one canonical persistent owner. Processes and bytecode start on d
   and delivered exactly one broadcast. Creator-UID checks, cancellation, immutable fills
   and focused tests pass. Raw IIntentSender transactions beyond descriptor queries remain
   unsupported; actual MCS recovery after process death still needs verification.
+- Browser location denial, active/idle regrant and process-death cleanup now pass real-browser
+  checks. Permission changes are event-driven; idle permission observation does not retain
+  a geolocation watch. Lichess's 15-step rerun is responsive, but its captures remain on a
+  loading screen with existing missing PhantomReference/SidecarProvider.

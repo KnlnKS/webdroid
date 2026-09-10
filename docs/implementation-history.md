@@ -3185,3 +3185,20 @@ and observed a new process deliver exactly one broadcast with ALARM_COUNT=1. The
 reported no missing APIs. Evidence: /tmp/webdroid-system-intents-browser.{json,log}.
 System Binder descriptor queries work; unsupported raw IIntentSender transactions remain
 unhandled. This fixture establishes process restart and delivery, not MCS reconnection.
+
+### Location permission recovery
+
+A real-browser denial/regrant test reproduced an active request remaining stopped after
+permission was granted. BrowserLocation now observes permission changes without polling,
+clears its last fix on denial, and restarts active requests on regrant. Provider listeners
+receive disabled/enabled callbacks. The permission listener remains attached while idle
+so provider availability can recover without an app first requesting a disabled provider.
+The browser geolocation watch still stops when no active subscription remains.
+
+Typecheck passed. Real-browser checks passed initial denial, active regrant, revocation
+clearing the last fix, idle regrant without a watch, and process death removing its watch
+(/tmp/webdroid-location-regrant-fixed.log). The existing single-watch, passive-provider,
+interval-filter and removal fixture also passed. No live coordinates were retained.
+Lichess's final serialized run at 22859aa remained responsive through all 15 steps, but
+captures still showed its loading screen; this is not gameplay parity. Existing missing
+PhantomReference and SidecarProvider remain in /tmp/webdroid-lichess-final-e2e.log.

@@ -48,6 +48,10 @@ function subscribe(provider: string, request: JLocationRequest, listener: JObj, 
   if (request.duration < 0x7fffffffn) subscription.timer = setTimeout(() => remove(listener, provider), Number(request.duration));
   locationTransport.subscribe(subscription.id, provider === "gps" || request.quality === 100, provider !== "passive" && request.interval !== LOCATION_FOREVER, event => {
     if (!subscription.active) return;
+    if (event.kind === "enabled") {
+      dispatch(async () => { if (subscription.active) await vcall(listener, "onProviderEnabled", "(Ljava/lang/String;)V", provider); });
+      return;
+    }
     if (event.kind === "error") {
       if (event.code === 1) dispatch(async () => { if (subscription.active) await vcall(listener, "onProviderDisabled", "(Ljava/lang/String;)V", provider); });
       return;
