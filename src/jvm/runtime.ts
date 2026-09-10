@@ -6,6 +6,7 @@
 // present when virtual dispatch happens.
 
 import { yieldToLoop } from "./yield";
+import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle } from "./abi";
 import { compileClassSource, compileLazyMethod, methodKey, type CompiledCtor } from "./compiler";
@@ -821,10 +822,10 @@ export class Runtime {
         return utf8.dec.decode(b.subarray(args[1] as number, (args[1] as number) + (args[2] as number)));
       }
       case "([BLjava/lang/String;)V": case "([BLjava/nio/charset/Charset;)V":
-        return utf8.dec.decode(args[0] as Int8Array);
+        return decodeString(args[0] as Int8Array, args[1]);
       case "([BIILjava/lang/String;)V": case "([BIILjava/nio/charset/Charset;)V": {
         const b = args[0] as Int8Array;
-        return utf8.dec.decode(b.subarray(args[1] as number, (args[1] as number) + (args[2] as number)));
+        return decodeString(b.subarray(args[1] as number, (args[1] as number) + (args[2] as number)), args[3]);
       }
       // code points, not chars: each element is a whole Unicode scalar
       case "([III)V": {

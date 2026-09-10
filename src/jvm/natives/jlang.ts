@@ -3,6 +3,7 @@
 
 import { rt, JObj, maySuspend, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
 import { directionality } from "../bidi";
+import { encodeString } from "../charset";
 import { mangleMethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8 } from "../abi";
 
 function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => unknown {
@@ -626,8 +627,9 @@ sm("getChars(II[CI)V", function (srcBegin: number, srcEnd: number, dst: Uint16Ar
 });
 const utf8Bytes = function (this: string) { return new Int8Array(utf8.enc.encode(this).buffer); };
 sm("getBytes()[B", utf8Bytes);
-sm("getBytes(Ljava/lang/String;)[B", utf8Bytes);
-sm("getBytes(Ljava/nio/charset/Charset;)[B", utf8Bytes);
+const encodedBytes = function (this: string, charset: unknown) { return encodeString(this, charset); };
+sm("getBytes(Ljava/lang/String;)[B", encodedBytes);
+sm("getBytes(Ljava/nio/charset/Charset;)[B", encodedBytes);
 sm("replace(CC)Ljava/lang/String;", function (a: number, b: number) {
   return this.split(String.fromCharCode(a)).join(String.fromCharCode(b));
 });

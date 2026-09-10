@@ -3,6 +3,7 @@
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { defineException, vcall } from "./jlang";
 import { mem } from "../../native/mem";
+import { decodeString } from "../charset";
 
 type BufferStorage = { kind: "heap"; ab: ArrayBuffer } | { kind: "direct"; ab: ArrayBuffer } | { kind: "native"; address: number | bigint };
 const directBuffers = new FinalizationRegistry<number>((address) => mem.free(address));
@@ -379,7 +380,7 @@ rt.register({
     "newEncoder()Ljava/nio/charset/CharsetEncoder;": function (this: JCharset) { return mkCoder("CharsetEncoder", this); },
     "newDecoder()Ljava/nio/charset/CharsetDecoder;": function (this: JCharset) { return mkCoder("CharsetDecoder", this); },
     "decode(Ljava/nio/ByteBuffer;)Ljava/nio/CharBuffer;": function (this: JCharset, b: JBuffer) {
-      const text = new TextDecoder(this.cname).decode(new Uint8Array(b.ab, b.dv.byteOffset + b.pos, b.lim - b.pos));
+      const text = decodeString(new Uint8Array(b.ab, b.dv.byteOffset + b.pos, b.lim - b.pos), this);
       b.pos = b.lim;
       const out = viewBuffer(mkByteBuffer(text.length * 2), JCharBuffer, 1);
       for (let i = 0; i < text.length; i++) out.dv.setUint16(i << 1, text.charCodeAt(i), out.little);
@@ -426,7 +427,7 @@ rt.register({
     "decode(Ljava/nio/ByteBuffer;Ljava/nio/CharBuffer;Z)Ljava/nio/charset/CoderResult;":
       function (this: JCharsetCoder, src: JBuffer, dst: JBuffer) {
         const bytes = new Uint8Array(src.ab, src.dv.byteOffset + src.pos, src.lim - src.pos);
-        const text = new TextDecoder(this.cs.cname).decode(bytes);
+        const text = decodeString(bytes, this.cs);
         const n = Math.min(text.length, dst.lim - dst.pos);
         for (let i = 0; i < n; i++) dst.dv.setUint16((dst.pos + i) << 1, text.charCodeAt(i), dst.little);
         dst.pos += n;
@@ -451,5 +452,5 @@ rt.register({
 });
 rt.register({
   name: "java/nio/charset/StandardCharsets", ctor: class extends JObj {},
-  statics: { UTF_8: utf8, ISO_8859_1: charset("ISO-8859-1"), US_ASCII: charset("US-ASCII"), UTF_16: charset("UTF-16") },
+  statics: { UTF_8: utf8, ISO_8859_1: charset("ISO-8859-1"), US_ASCII: charset("US-ASCII"), UTF_16: charset("UTF-16"), UTF_16BE: charset("UTF-16BE"), UTF_16LE: charset("UTF-16LE") },
 });
