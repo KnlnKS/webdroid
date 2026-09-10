@@ -91,9 +91,15 @@ rt.register({
 rt.register({ name: "java/net/Authenticator$RequestorType", ctor: class extends JObj {} });
 
 class JSSLContext extends JObj {}
+let defaultSSLContext: JSSLContext | null = null;
 rt.register({
   name: "javax/net/ssl/SSLContext", ctor: JSSLContext,
   methods: {
+    "static getDefault()Ljavax/net/ssl/SSLContext;": () => defaultSSLContext ??= new JSSLContext(),
+    "static setDefault(Ljavax/net/ssl/SSLContext;)V": (context: JSSLContext | null) => {
+      if (!context) throw rt.mkThrowable("java/lang/NullPointerException", "context");
+      defaultSSLContext = context;
+    },
     "static getInstance(Ljava/lang/String;)Ljavax/net/ssl/SSLContext;": () => new JSSLContext(),
     "init([Ljavax/net/ssl/KeyManager;[Ljavax/net/ssl/TrustManager;Ljava/security/SecureRandom;)V": () => {},
     "getSocketFactory()Ljavax/net/ssl/SSLSocketFactory;": () => new (rt.link("javax/net/ssl/SSLSocketFactory").ctor)(),
