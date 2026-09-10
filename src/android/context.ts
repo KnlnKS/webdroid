@@ -55,12 +55,30 @@ const RUNTIME_PERMISSIONS = new Set(["READ_CALENDAR", "WRITE_CALENDAR", "READ_CA
   "READ_MEDIA_IMAGES", "READ_MEDIA_VIDEO", "READ_MEDIA_AUDIO", "POST_NOTIFICATIONS",
   "BLUETOOTH_SCAN", "BLUETOOTH_CONNECT", "BLUETOOTH_ADVERTISE", "NEARBY_WIFI_DEVICES"]
   .map((n) => "android.permission." + n));
-const grantedPermissions = new Set<string>();
+export class PermissionStore {
+  private packages = new Map<string, Set<string>>();
+  get(pkg: string): Set<string> {
+    let grants = this.packages.get(pkg);
+    if (!grants) {
+      grants = new Set(); this.packages.set(pkg, grants);
+      try {
+        const saved: unknown = JSON.parse(globalThis.localStorage?.getItem("wd:permissions:" + pkg) ?? "[]");
+        if (Array.isArray(saved)) for (const value of saved) if (typeof value === "string") grants.add(value);
+      } catch { /* corrupt permission state remains denied */ }
+    }
+    return grants;
+  }
+  grant(pkg: string, names: string[]) {
+    const grants = this.get(pkg); for (const name of names) grants.add(name);
+    globalThis.localStorage?.setItem("wd:permissions:" + pkg, JSON.stringify([...grants]));
+  }
+}
+export let permissionStore = new PermissionStore();
+export function usePermissionStore(store: PermissionStore) { permissionStore = store; }
 export const permissionState = (name: string) =>
-  RUNTIME_PERMISSIONS.has(name) && !grantedPermissions.has(name) ? -1 : 0;
-/** what a user tapping "Allow" leaves behind; the results a caller reads back */
+  RUNTIME_PERMISSIONS.has(name) && !permissionStore.get(appHost?.pkg ?? "").has(name) ? -1 : 0;
 export function grantPermissions(names: string[]): Int32Array {
-  for (const n of names) grantedPermissions.add(n);
+  permissionStore.grant(appHost?.pkg ?? "", names);
   return new Int32Array(names.length);
 }
 

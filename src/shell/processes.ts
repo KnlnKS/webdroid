@@ -1,3 +1,4 @@
+import { PermissionStore, usePermissionStore } from "../android/context";
 import { packages } from "../android/packages";
 import { appHost } from "../android/apphost";
 import { binderTransport, receiveTransaction, exportBinder, importBinder, exportParcel, importParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
@@ -44,6 +45,7 @@ type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HT
   watchers: Set<() => void>; pending: Set<(error: unknown) => void> };
 export class ProcessBroker {
   readonly files = new PrivateFiles();
+  readonly permissions = new PermissionStore();
   private cookieStores = new Map<string, Promise<WebCookies>>();
   cookies(pkg: string): Promise<WebCookies> {
     let store = this.cookieStores.get(pkg);
@@ -279,6 +281,7 @@ export function connectProcess(): ProcessEndpoint {
   broker.files.attach(PROCESS_PID, vfs);
   useSQLiteStore(broker.databases);
   usePreferenceStore(broker.preferences);
+  usePermissionStore(broker.permissions);
   useWebCookies((pkg) => broker.cookies(pkg));
   connectProviders((pkg, process, request) => remote(broker.provider(PROCESS_PID, pkg, process, request)));
   broadcastTransport.send = async (intent, permission, ordered) => remote(broker.broadcast(PROCESS_PID, await encodeIntent(intent), permission, ordered));
