@@ -1,5 +1,6 @@
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
+import { keyCodes } from "./keycodes";
 import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
@@ -662,12 +663,20 @@ class JKeyEvent extends JObj { action = 0; keyCode = 0; }
 rt.register({
   name: "android/view/KeyEvent", ctor: JKeyEvent, ifaces: ["android/os/Parcelable"],
   statics: {
-    ACTION_DOWN: 0, ACTION_UP: 1, KEYCODE_BACK: 4, KEYCODE_ENTER: 66, KEYCODE_DEL: 67, MAX_KEYCODE: 84,
-    KEYCODE_DPAD_UP: 19, KEYCODE_DPAD_DOWN: 20, KEYCODE_MENU: 82, KEYCODE_VOLUME_UP: 24, KEYCODE_VOLUME_DOWN: 25,
+    ACTION_DOWN: 0, ACTION_UP: 1, MAX_KEYCODE: 84,
+    ...Object.fromEntries([...keyCodes].map(([name, code]) => ["KEYCODE_" + name, code])),
   },
   methods: {
     "<init>(II)V": function (this: JKeyEvent, a: number, k: number) { this.action = a; this.keyCode = k; },
-    "static getMaxKeyCode()I": () => 316,
+    "static getMaxKeyCode()I": () => keyCodes.size - 1,
+    "static keyCodeFromString(Ljava/lang/String;)I": (name: string) => {
+      if (name == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      if (/^[+-]?\d+$/.test(name)) {
+        const code = Number(name);
+        if (code >= 0 && code < keyCodes.size) return code | 0;
+      }
+      return keyCodes.get(name.startsWith("KEYCODE_") ? name.slice(8) : name) ?? 0;
+    },
     "static getModifierMetaStateMask()I": () => 0x770ff,
     "static normalizeMetaState(I)I": (state: number) => {
       if (state & 0xc0) state |= 1;
