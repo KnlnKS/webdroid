@@ -121,7 +121,8 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   rt.classpath = zip;
   // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its
   // own .so with ZipFile(ApplicationInfo.sourceDir) has to find lib/, not a list of apks.
-  vfs.write(apkPath(), install.base);
+  if (install.base instanceof Uint8Array) vfs.write(apkPath(), install.base);
+  else vfs.mount(apkPath(), install.base);
   for (const sp of install.splits) {
     if (sp.bytes) vfs.write(apkPath(sp.name), sp.bytes);
     else vfs.mount(apkPath(sp.name), sp.source);

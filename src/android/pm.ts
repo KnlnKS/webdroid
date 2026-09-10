@@ -5,7 +5,8 @@ import type { JBundle } from "./os";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { type XmlNode, attrStr, attr, TV } from "./axml";
 import { normRV, resString, type Resources } from "./res";
-import { apkCertificates, parsePackageArchive, type PackageArchive } from "./packagearchive";
+import { apkCertificates, parsePackageArchive, packageArchive, type PackageArchive } from "./packagearchive";
+import { packedArchives } from "../shell/packedarchive";
 import { loadDrawable } from "./drawable";
 import { mkJResources, mkXmlParser } from "./resnative";
 import { getPackageInstaller } from "./packageinstaller";
@@ -833,6 +834,8 @@ function applicationLabel(info: JPackageItemInfo): string {
 const archiveCache = new WeakMap<Uint8Array, Promise<PackageArchive>>();
 const certificateCache = new WeakMap<Uint8Array, Promise<Uint8Array[]>>();
 async function readArchive(path: string): Promise<PackageArchive | null> {
+  const packed = packedArchives.get(path);
+  if (packed) return packageArchive(packed.zip, packed.index.certificates.map((c) => Uint8Array.from(c.match(/../g)!, (b) => parseInt(b, 16))));
   const bytes = await vfs.readFile(path);
   if (!bytes) return null;
   let archive = archiveCache.get(bytes);

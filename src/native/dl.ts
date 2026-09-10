@@ -24,8 +24,8 @@ const inflight = new Map<string, Promise<Module>>();
 function basename(p: string): string { return p.slice(p.lastIndexOf("/") + 1); }
 
 /** the bytes of lib<name>.so shipped in the booted apk, for any ABI the tier runs */
-function apkLibBytes(name: string): Uint8Array | null {
-  for (const a of rt.nativeAbis) { const b = rt.classpath[`lib/${a}/${name}`]; if (b) return b; }
+function apkLibPath(name: string): string | null {
+  for (const a of rt.nativeAbis) { const path = `lib/${a}/${name}`; if (rt.hasClasspath(path)) return path; }
   return null;
 }
 
@@ -38,7 +38,7 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false)
   const p = inflight.get(name);
   if (p) return p;
   const q = (async () => {
-    const b = bytes ?? apkLibBytes(name);
+    const path = apkLibPath(name), b = bytes ?? (path ? await rt.readClasspath(path) : null);
     if (!b) throw new Error(`dlopen failed: library "${name}" not found`);
     const mod = loadElf(name, b, resolveGlobal);
     // a process is one ABI: the first image decides which emitter its code compiles with
@@ -47,7 +47,7 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false)
     modules.push(mod);
     byName.set(name, mod);
     // dependencies that are real modules in the apk load (and initialise) first; host libs need nothing
-    for (const n of mod.needed) if (!hostLibNames().includes(n) && !byName.has(n) && apkLibBytes(n)) await loadModule(n, undefined, link);
+    for (const n of mod.needed) if (!hostLibNames().includes(n) && !byName.has(n) && apkLibPath(n)) await loadModule(n, undefined, link);
     if (!link) await runInit(mod);
     return mod;
   })();
@@ -110,7 +110,7 @@ export function dlInit(): void {
       if (hostLibNames().includes(name)) return handleOf({ lib: name });
       const have = byName.get(name);
       if (have) { have.refs++; return handleOf({ mod: have }); }
-      if (!apkLibBytes(name)) { setErr(`dlopen failed: library "${name}" not found`); return 0; }
+      if (!apkLibPath(name)) { setErr(`dlopen failed: library "${name}" not found`); return 0; }
       try { return handleOf({ mod: await loadModule(name) }); }
       catch (e) { setErr(String((e as Error).message ?? e)); return 0; }
     },

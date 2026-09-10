@@ -1,5 +1,6 @@
 import { SYSTEM_PACKAGES } from "./system-packages";
-import { parsePackageArchive } from "../android/packagearchive";
+import { packageArchive } from "../android/packagearchive";
+import { PackedArchive, packedArchives, sha256, type PackedArchiveIndex } from "./packedarchive";
 import { installedPath, registerPackage } from "../android/pm";
 import { attr, attrStr, TV } from "../android/axml";
 import { resString } from "../android/res";
@@ -9,12 +10,15 @@ import { signaturePermissions } from "../android/packages";
 let ready: Promise<void> | null = null;
 export function provisionPackages(): Promise<void> {
   return ready ??= Promise.all(SYSTEM_PACKAGES.map(async (spec) => {
-    const response = await fetch("/system-packages/" + spec.file);
+    const response = await fetch("/vendor/microg/" + spec.file.replace(/\.apk$/, ".json"));
     if (!response.ok) throw new Error(`System package unavailable: ${spec.file}: ${response.status}`);
     const bytes = new Uint8Array(await response.arrayBuffer());
-    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-    if (Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("") !== spec.sha256) throw new Error(`System package digest mismatch: ${spec.file}`);
-    const archive = await parsePackageArchive(bytes);
+    if (await sha256(bytes) !== spec.indexSha256) throw new Error(`System package index digest mismatch: ${spec.file}`);
+    const index: PackedArchiveIndex = JSON.parse(new TextDecoder().decode(bytes));
+    if (index.version !== 1 || index.sha256 !== spec.sha256) throw new Error(`System package source mismatch: ${spec.file}`);
+    const packed = new PackedArchive(index, "/vendor/microg/");
+    await packed.prepare();
+    const archive = packageArchive(packed.zip, index.certificates.map((c) => Uint8Array.from(c.match(/../g)!, (b) => parseInt(b, 16))));
     if (archive.pkg !== spec.pkg) throw new Error(`System package identity mismatch: ${spec.file}`);
     const record = registerPackage(archive);
     record.system = true;
@@ -24,6 +28,7 @@ export function provisionPackages(): Promise<void> {
     const signature = value?.type === TV.REFERENCE ? resString(record.res, value.data) : value?.str;
     if (!signature || !/^(?:[a-f\d]{2})+$/i.test(signature)) throw new Error(`Invalid compatibility signature: ${spec.file}`);
     record.compatibilityCertificates = [Uint8Array.from(signature.match(/../g)!, (byte) => parseInt(byte, 16))];
-    vfs.write(installedPath(record.pkg), bytes);
+    packedArchives.set(installedPath(record.pkg), packed);
+    vfs.mount(installedPath(record.pkg), packed);
   })).then(() => {});
 }

@@ -4,16 +4,21 @@ import { rt } from "../runtime";
 import { dexesIn } from "../dex";
 import { JClassLoader } from "./jlang";
 import { vfs } from "./jio";
+import { packedArchives } from "../../shell/packedarchive";
 
 async function init(this: JClassLoader, path: string, libraries: string | null, parent: JClassLoader | null) {
   this.parent = parent;
   this.runtime = (parent?.runtime ?? rt).fork();
   this.runtime.classLoader = this;
   for (const entry of path.split(":")) {
-    const bytes = await vfs.readFile(entry);
-    if (!bytes) continue;
-    const files: Record<string, Uint8Array> = bytes[0] === 0x64 && bytes[1] === 0x65 && bytes[2] === 0x78
-      ? { "classes.dex": bytes } : zipTree(bytes);
+    const packed = packedArchives.get(entry);
+    let files: Record<string, Uint8Array>;
+    if (packed) { await packed.prepare(true); files = packed.zip; this.runtime.classpathSource = packed; }
+    else {
+      const bytes = await vfs.readFile(entry);
+      if (!bytes) continue;
+      files = bytes[0] === 0x64 && bytes[1] === 0x65 && bytes[2] === 0x78 ? { "classes.dex": bytes } : zipTree(bytes);
+    }
     for (const name of Object.keys(files).filter((n) => /^classes(?:[2-9]|[1-9][0-9]+)?\.dex$/.test(n)).sort((a, b) => a.length - b.length || a.localeCompare(b)))
       for (const dex of dexesIn(files[name], entry + "!/" + name)) this.runtime.loadDex(dex);
     for (const name of Object.keys(files)) if (!Object.hasOwn(this.runtime.classpath, name)) {

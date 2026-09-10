@@ -1,8 +1,7 @@
 import index from "./index.html";
 import { WEB_INJECT } from "./src/shell/webinject";
 import { openInstall } from "./src/shell/install";
-import { prepareSystemPackages, systemPackageFile } from "./scripts/system-packages";
-import { SYSTEM_PACKAGES } from "./src/shell/system-packages";
+import { prepareSystemPackages } from "./scripts/system-packages";
 
 await prepareSystemPackages();
 
@@ -116,9 +115,12 @@ const server: Bun.Server<TcpData> = Bun.serve({
     // when the device profile does, so let the browser keep them across reloads.
     "/vendor/:file": (req) => serveVendor(req.params.file),
     "/vendor/aosp/:file": (req) => serveVendor(`aosp/${req.params.file}`),
-    "/system-packages/:file": (req) => {
-      if (!SYSTEM_PACKAGES.some((p) => p.file === req.params.file)) return new Response("not found", { status: 404 });
-      return new Response(Bun.file(systemPackageFile(req.params.file)), { headers: { "cache-control": "public, max-age=31536000, immutable" } });
+    "/vendor/microg/:file": (req) => {
+      const file = req.params.file;
+      if (!/^[\w.-]+$/.test(file)) return new Response("not found", { status: 404 });
+      const headers: Record<string, string> = { "cache-control": file.endsWith(".json") ? "no-cache" : "public, max-age=31536000, immutable" };
+      if (file.endsWith(".gz") && !new URL(req.url).searchParams.has("raw")) headers["content-encoding"] = "gzip";
+      return new Response(Bun.file("vendor/microg/" + file), { headers });
     },
     "/apks": async () => {
       const names: string[] = [];

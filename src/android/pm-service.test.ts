@@ -23,7 +23,7 @@ test("installed packages resolve components, resources and signing identities in
     node("provider", { name: ".Data", authorities: "test.other.data", exported: 1 }),
   ])]);
   const cert = new Uint8Array([1, 2, 3]);
-  const record = registerPackage({ root, pkg: other.pkg, res: other.res, bytes: new Uint8Array(), certificates: [cert] });
+  const record = registerPackage({ root, pkg: other.pkg, res: other.res, certificates: [cert] });
   try {
     const pm = await newObj("android/content/pm/PackageManager"), intent = await newObj("android/content/Intent");
     intent.action = "test.CROSS_PACKAGE"; intent.pkg = other.pkg;
