@@ -96,6 +96,11 @@ rt.register({
     "static setDefault(Ljava/util/Locale;)V": () => {},
     "getDisplayName()Ljava/lang/String;": function (this: JLocale) { return displayName.call(this, usLocale); },
     "getDisplayName(Ljava/util/Locale;)Ljava/lang/String;": displayName,
+    "getDisplayLanguage()Ljava/lang/String;": function (this: JLocale) { return displayPart(this.lang, "language", localeTag(usLocale)); },
+    "getDisplayLanguage(Ljava/util/Locale;)Ljava/lang/String;": function (this: JLocale, locale: JLocale) {
+      if (!locale) throw rt.mkThrowable("java/lang/NullPointerException", "displayLocale");
+      return displayPart(this.lang, "language", localeTag(locale));
+    },
     "getLanguage()Ljava/lang/String;": function (this: JLocale) { return this.lang; },
     "getISO3Language()Ljava/lang/String;": function (this: JLocale) { return ISO3[this.lang] ?? this.lang; },
     "static getISOLanguages()[Ljava/lang/String;": () => jarray(Object.keys(ISO3).sort(), "Ljava/lang/String;"),
