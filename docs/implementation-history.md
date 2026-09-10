@@ -2367,3 +2367,19 @@ SELECTED_STATE_SET, followed by TypedArray.getFraction. The arrays come from pla
 IDs; fraction decoding shares TypedValue's complex representation, including base versus parent
 base, missing-value defaults and invalid-type errors. TextUtils cursor offsets honor surrogate
 pairs and ReplacementSpan boundaries through Java CharSequence/Spanned methods.
+
+A subsequent fresh source-only session verified visible playback after that fix: two captures
+show the same video advancing from pink lines to the hand completing a pink-and-teal pattern.
+After using the app's Unmute and Replay controls, read-only CDP snapshots 2.003 seconds apart
+recorded 1,429→1,481 presented frames, AudioTrack head 922,171→1,014,139 at 48 kHz, a running
+AudioContext, gain 1 and queued PCM RMS 0.21435. This establishes changing video pixels and
+nonzero scheduled audio with an advancing playback clock, not subjective headless audibility.
+The temporary evidence is `/tmp/media-visual-a.png`, `/tmp/media-visual-b.png` and
+`/tmp/media-playback-proof.json`.
+
+Read-only navigation also reached History's explicit empty state, saved comments and a saved
+post after switching tabs, and the Custom Feed picker. Create loaded the account's actual
+communities; choosing a community with required body text kept Post disabled for a title alone
+and enabled it after entering body text. The draft was explicitly discarded. No vote, comment,
+post, subscription or account-setting change was submitted. Initial Saved population and a
+separate deep-link exception still required investigation at this point.
