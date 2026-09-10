@@ -78,6 +78,7 @@ import "./android/preference";
 import "./android/animator";
 import "./android/media";
 import "./android/media-format";
+import "./android/media-codec";
 import "./android/webkit";
 import "./android/hardware";
 import "./android/location";

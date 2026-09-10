@@ -184,7 +184,7 @@ export function mappedReadOnlyBuffer(data: Uint8Array): JBuffer {
   buffer.byteOffset = data.byteOffset; buffer.cap = buffer.lim = data.length; buffer.readOnly = true;
   return buffer;
 }
-function mkByteBuffer(cap: number, direct = false): JByteBuffer {
+export function mkByteBuffer(cap: number, direct = false): JByteBuffer {
   if (cap < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative buffer capacity");
   const b = new JByteBuffer();
   b.backing = { storage: { kind: direct ? "direct" : "heap", ab: new ArrayBuffer(cap) } };
