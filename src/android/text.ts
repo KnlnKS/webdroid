@@ -432,6 +432,14 @@ rt.register({
       const i = spannedString(s).slice(0, to).indexOf(String.fromCharCode(ch), from);
       return i;
     },
+    "static lastIndexOf(Ljava/lang/CharSequence;CI)I": async (s: unknown, ch: number, last: number) =>
+      last < 0 ? -1 : (await csText(s)).lastIndexOf(String.fromCharCode(ch), last),
+    "static indexOf(Ljava/lang/CharSequence;Ljava/lang/CharSequence;II)I": async (s: unknown, needle: unknown, start: number, end: number) => {
+      const text = await csText(s), part = await csText(needle);
+      if (!part.length) return start;
+      const found = text.indexOf(part, start);
+      return found > end - part.length ? -1 : found;
+    },
     "static equals(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Z": (a: unknown, b: unknown) =>
       (spannedString(a) === spannedString(b) && (a === null) === (b === null) ? 1 : 0),
     "static isDigitsOnly(Ljava/lang/CharSequence;)Z": (s: unknown) => (/^\d*$/.test(spannedString(s)) ? 1 : 0),
