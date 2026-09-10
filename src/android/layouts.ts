@@ -11,7 +11,7 @@ import { type JMotionEvent, trackVelocity, restVelocity, SCROLL_WEIGHT, FLING } 
 import { device } from "../shell/config";
 import { TV } from "./axml";
 import { inflateLayout } from "./inflate";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, vcallMaybe } from "../jvm/natives/jlang";
 
 /** ViewGroup.generateLayoutParams(LayoutParams): keep ours, else copy size (and margins) into a fresh one */
 function adoptLp<T extends JMarginLP>(Ctor: new () => T, lp: JLayoutParams | null): T {
@@ -24,7 +24,10 @@ function adoptLp<T extends JMarginLP>(Ctor: new () => T, lp: JLayoutParams | nul
 
 export class JFrameLayout extends JViewGroup {}
 const frameMethods: NativeSpec["methods"] = {
-  "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": function () {
+  "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": function (this: JFrameLayout) {
+    return vcallMaybe(this, "generateDefaultLayoutParams", "()Landroid/widget/FrameLayout$LayoutParams;");
+  },
+  "generateDefaultLayoutParams()Landroid/widget/FrameLayout$LayoutParams;": function () {
     const lp = new JFrameLP();
     lp.width = MATCH_PARENT; lp.height = MATCH_PARENT;
     return lp;
