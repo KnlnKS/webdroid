@@ -67,10 +67,35 @@ test("AudioTrack buffers before play, freezes the clock on pause, and discards f
   await vcall(track, "play", "()V");
   expect(starts[1][0]).toBe(1.02);
   expect(starts[1][1]).toBeCloseTo(0.05);
+  await vcall(track, "stop", "()V");
+  expect(await vcall(track, "getPlaybackHeadPosition", "()I")).toBe(0);
+  now = 1.03;
+  expect(await vcall(track, "getPlaybackHeadPosition", "()I")).toBe(0);
+  await vcall(track, "play", "()V");
+  expect(await vcall(track, "getPlaybackHeadPosition", "()I")).toBe(0);
+  now = 1.04;
+  expect(await vcall(track, "getPlaybackHeadPosition", "()I")).toBeGreaterThan(0);
   await vcall(track, "pause", "()V");
   await vcall(track, "flush", "()V");
   expect(await vcall(track, "getPlaybackHeadPosition", "()I")).toBe(0);
   await vcall(track, "play", "()V");
   expect(starts).toHaveLength(2);
   await vcall(track, "release", "()V");
+});
+
+test("blocking PCM buffer writes wait for capacity and retain the unconsumed position", async () => {
+  const track = await newObj("android/media/AudioTrack", "(IIIIII)V", 3, 8000, 12, 2, 4, 1) as { queuedSec(): number; push(samples: Int16Array, frames: number): void };
+  let full = false, calls = 0, finished = false;
+  track.queuedSec = () => full ? 1 : 0;
+  track.push = () => { full = true; calls++; };
+  const buffer = rt.link("java/nio/ByteBuffer").ctor[mangleMethod("wrap", "([B)Ljava/nio/ByteBuffer;")](new Int8Array(8)) as JBuffer;
+  const write = vcall(track, "write", "(Ljava/nio/ByteBuffer;II)I", buffer, 8, 0).then(n => { finished = true; return n; });
+  await Bun.sleep(15);
+  expect(buffer.pos).toBe(4);
+  expect(calls).toBe(1);
+  expect(finished).toBe(false);
+  full = false;
+  expect(await write).toBe(8);
+  expect(buffer.pos).toBe(8);
+  expect(calls).toBe(2);
 });
