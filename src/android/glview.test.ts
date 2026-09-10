@@ -3,7 +3,8 @@ import "../natives";
 import { JObj, rt } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { newObj, vcall } from "../jvm/natives/jlang";
-import { JView } from "./view";
+import { JCanvas } from "./graphics";
+import { JView, drawView } from "./view";
 import { JSurface, JSurfaceTexture } from "./glview";
 import { inMainJob, onMain } from "./mainloop";
 
@@ -60,4 +61,28 @@ test("EGL14 exposes typed sentinel handles and honors result array offsets", asy
   const configs = [null, null];
   expect(await call("eglChooseConfig", "(Landroid/opengl/EGLDisplay;[II[Landroid/opengl/EGLConfig;II[II)Z", display, new Int32Array([0, 0x3040, 4, 0x3038]), 1, configs, 1, 1, count, 1)).toBe(1);
   expect(configs[0]).toBeNull(); expect(configs[1]).not.toBeNull(); expect([...count]).toEqual([0, 1]);
+});
+
+
+test("recorded surface draws read the current frame without retaining closed frames", async () => {
+  const view = new JView();
+  view.right = 320; view.bottom = 180;
+  const oldFrame = {} as VideoFrame, nextFrame = {} as VideoFrame;
+  view.surfaceLayer = oldFrame;
+  const ops: ((target: CanvasRenderingContext2D) => void)[] = [];
+  const images: unknown[] = [];
+  const ctx = new Proxy({
+    __isRecorder: true,
+    __record: (op: (target: CanvasRenderingContext2D) => void) => ops.push(op),
+    drawImage: (image: unknown) => images.push(image),
+  }, { get: (object, key) => key in object ? object[key as keyof typeof object] : () => {} }) as unknown as CanvasRenderingContext2D;
+  await drawView(view, JCanvas.wrap(ctx, 320, 180));
+  expect(ops).toHaveLength(1);
+  expect(images).toHaveLength(0);
+  view.surfaceLayer = nextFrame;
+  ops[0](ctx);
+  expect(images).toEqual([nextFrame]);
+  view.surfaceLayer = null;
+  ops[0](ctx);
+  expect(images).toEqual([nextFrame]);
 });

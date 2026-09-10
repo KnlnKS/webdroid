@@ -559,7 +559,14 @@ async function drawLayered(v: JView, cv: JCanvas, w: number, h: number) {
 /** the view's own painting, in its own coordinate space: background, content, children, overlay */
 async function drawContent(v: JView, cv: JCanvas) {
   const ctx = cv.ctx;
-  if (v.surfaceLayer) ctx.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
+  if (v.surfaceLayer) {
+    const recorder = ctx as typeof ctx & { __isRecorder?: boolean; __record?: (draw: (target: typeof ctx) => void) => void };
+    // A surface's current frame can be replaced and closed before this display list replays.
+    if (recorder.__isRecorder) recorder.__record!((target) => {
+      if (v.surfaceLayer) target.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
+    });
+    else ctx.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
+  }
   else if (v.background) {
     // through setBounds, not the fields: AOSP's onBoundsChange is where wrapper/shape drawables
     // (and app subclasses) rebuild their geometry, and it only fires on a real change
