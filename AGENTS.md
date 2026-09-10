@@ -11,9 +11,10 @@ current status.
 
 ## Verify
 
-Use a private port: another checkout may already serve 4080. Never run two E2E captures
-concurrently; they share `tests/e2e/actual/` and `tests/e2e/report/`. Do not edit source
-while a capture is running. Follow the user's requested verification timing.
+Use a private port: another checkout may already serve 4080. Never run two E2E processes
+concurrently; they share `tests/e2e/actual/` and `tests/e2e/report/` (one run drives its
+flows in parallel by itself). Do not edit source while a capture is running. Follow the
+user's requested verification timing.
 
 ```bash
 bun run typecheck
@@ -33,7 +34,11 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
 - Smoke compilation must report zero method failures for each APK affected by a change.
 - `fwtest [prefix ...]` measures delegate coverage with real framework bytecode.
 - E2E's four scored flows are FitNotes, Mihon onboarding, Mihon app, and Harmonic.
-  Unscored game/calculator flows still report rendered steps, errors, missing APIs, and fps.
+  Unscored game/calculator flows still report rendered steps, errors, missing APIs, and fps;
+  the fps gates apply only under `--jobs 1`.
+- A step's `settleDelayMs` is a horizon for webdroid, not a sleep: the page-side probe ends a
+  step as soon as nothing scheduled inside it can change the screen. Read `settled`/`busy` in
+  `run.json` before lengthening a dwell.
 - Inspect `run.json` per-step `newMissing`, `newErrors`, `nativeRequired`, layout/draw errors,
   render completion, and perf. Empty reached telemetry does not imply full API coverage.
 - Compare ambiguous failures against the starting commit. Existing Mihon scheduler/Compose

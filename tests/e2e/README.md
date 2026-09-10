@@ -16,7 +16,10 @@ already be serving the default port. Run captures sequentially: they share outpu
 
 `bun run e2e` **never touches an emulator** and does not need the Android SDK installed —
 `adb` may be absent from `PATH` entirely. It reads `golden/`, drives webdroid over Playwright,
-and writes `actual/` + `report/index.html`.
+and writes `actual/` + `report/index.html`. Every flow runs in its own headless browser and
+`--jobs N` (default: half the cpus) bounds how many run at once; each flow is scored in a
+subprocess as soon as it has captured. The full suite takes about a minute on a 14-core
+machine, the four scored flows about half of that.
 
 Recording new goldens is a separate, manual step (below).
 
@@ -27,6 +30,7 @@ bun run e2e --test fitnotes           # just that flow
 bun run e2e --test mihon              # prefix match: both mihon flows
 bun run e2e --test fitnotes,mihon-app # comma-separated
 bun run e2e fitnotes                  # bare name works too
+bun run e2e --jobs 1                  # one browser at a time: the fps gates only apply here
 bun run e2e --list                    # what flows exist
 bun run e2e --shots                   # also save every distinct frame per step to webdroid-shots/
 ```
@@ -82,24 +86,57 @@ A flow with no `golden/<flow>/manifest.json` runs in **smoke mode**: every step 
 the console prints a smoke summary, and nothing is scored or written to the report. A step
 declared `animated: true` (a game loop never settles) is captured once after its
 `settleDelayMs` instead of waiting for stable frames; `tapAt` takes `repeat`/`everyMs` for a
-burst of taps as one step, and `Flow.minFps` flags an animated step as `SLOW`. A partial run replaces
-`report/index.html` with only the flows it ran, and says so.
+burst of taps as one step, and `Flow.minFps` flags an animated step as `SLOW` — only under
+`--jobs 1`, because a frame rate measured beside six other browsers measures the host.
+`run.json` records the `jobs` a run used. A partial run replaces `report/index.html` with only
+the flows it ran, and says so.
 
-`--shots [dir]` records every distinct webdroid frame *during* each step, not just the settled
-one that gets diffed — what you need when a step goes wrong (what was drawn on the way, and
-whether anything was drawn at all). The directory is wiped per run and gitignored. Only `e2e`
-honours it; the emulator recorder and `e2e:diff` have no frames to record.
+`--shots [dir]` records every distinct frame webdroid *presented* during each step, not just
+the settled one that gets diffed — what you need when a step goes wrong (what was drawn on
+the way, and whether anything was drawn at all). The directory is wiped per run and gitignored.
+Only `e2e` honours it; the emulator recorder and `e2e:diff` have no frames to record.
 
 ## How a step works
 
 A step is declared once, semantically, in `flows/`. Two drivers interpret it:
 
-| | emulator (`drivers/emulator.ts`) | webdroid (`drivers/webdroid.ts`) |
+| | emulator (`drivers/emulator.ts`) | webdroid (`drivers/webdroid.ts` + `lib/probe.ts`) |
 |---|---|---|
 | `tapText` | `uiautomator dump` → find node → `input tap` | `wd.locateText` → `wd.tap`; falls back to the recorded coordinate |
 | `tapAt` | `input tap` at normalized coords | `wd.tap` |
 | `typeInto` | tap, `input text`, close the IME | `wd.tap` then `wd.type` |
 | `swipe` / `back` | `input swipe` / `keyevent 4` | `wd.swipe` / `wd.back` |
+| settle | sleep `settleDelayMs`, then screenshots every 350 ms until 4 agree | see below |
+
+The webdroid side of a step is one `page.evaluate`: the probe `lib/probe.ts` installs into the
+page performs the action, waits for the app to settle, checks the main looper is alive, encodes
+the frame and returns it with the step's telemetry. Nothing polls the page from outside.
+
+### How webdroid settles
+
+The probe wraps `setTimeout`, `fetch`, `createImageBitmap`, `ImageDecoder`, `WebSocket` and the
+screen's `transferFromImageBitmap` before the page boots, and pins `Date` to the flow's clock
+(Playwright's own clock shim cannot be wrapped). With that and what `wd` exposes it knows when
+the app is idle, and a step ends on the first of:
+
+* **idle** — no main-looper job running or queued, no pending layout/draw/insets, no frame
+  callbacks or animators, no parked yields, nothing in flight over fetch/decode/the relay, no
+  timer due before `settleDelayMs` plus the stability window (timed parks are waits, not work,
+  and do not count), and nothing presented in the last 150 ms. This may end a step long before
+  its horizon: nothing is scheduled that could change the screen.
+* **pixels** — the recorder's own rule, on frames sampled every 250 ms *past* the horizon: four
+  consecutive identical samples, or a steady two-frame oscillation (a blinking caret) with the
+  more frequent frame chosen. `lib/settle.ts` is the one copy of that rule.
+* **timeout** — `settleDelayMs` + 20 s.
+
+`settleDelayMs` is therefore a **horizon**, not a sleep: how long the screen may legitimately
+keep changing after the action. The emulator recorder still sleeps it. `run.json` records per
+step which tier ended it (`settled`), how long it took (`settleMs`), and what kept the fast
+path waiting (`busy`, poll counts per reason) — the first thing to read when a step is slow.
+
+The captured frame is the one the pixel rule judged stable when that tier decided, and a fresh
+readback of the screen when the app was idle: reading the screen while SwiftShader is busy
+drawing costs seconds, and an idle compositor answers in milliseconds.
 
 The emulator pass also **records** the coordinate each `tapText` resolved to, into
 `golden/<flow>/manifest.json`. webdroid replays those coordinates whenever it cannot find the
@@ -186,7 +223,8 @@ webdroid runs every input, layout pass and frame through one serialized main-loo
 (`src/android/mainloop.ts`). If a job in that queue never settles, the app stops responding
 *and* stops repainting — which from the outside is indistinguishable from "the screen
 settled". `wd.alive()` enqueues a no-op behind whatever is in the queue and races it against a
-timeout, so a hung app is reported as hung instead of quietly scoring as stable.
+timeout, so a hung app is reported as hung instead of quietly scoring as stable. A wedged
+step settles through the pixel rule (its screen holds still) and is then flagged by that probe.
 
 The capture pass writes these flags to `actual/<flow>/run.json`, so a standalone
 `bun run e2e:diff` scores identically to a full `bun run e2e` instead of silently reporting a

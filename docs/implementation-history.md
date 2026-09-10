@@ -2491,3 +2491,57 @@ The baseline archive, corpus JSONs and command logs remain in `/tmp/webdroid-*`.
 delivery, every media variant, and submitted votes/posts/replies remain unverified; no external
 content or account-setting mutations were submitted. The reached Reddit handoff flows, stock
 Chrome code-pressure problem, valid post timing and real video/audio path are verified above.
+
+## The harness observes instead of sleeping
+
+`bun run e2e` took about 415 s for 111 steps on a 14-core M4 Pro while the apps themselves
+spent under 40 s in frames, layout, draw and compilation. The rest was the harness: fixed
+`settleDelayMs` sleeps (~232 s) declared so the pixel heuristic would not lock onto a splash, a
+250 ms PNG-hash poll needing four agreeing samples (a 1.3 s floor per step, ~145 s), one
+browser driving flows back to back, and fifteen Playwright round trips per step.
+
+A prototype ran an in-page idle detector beside the old settle and compared the two captures
+byte for byte on every step. FitNotes' idle steps ended in ~250 ms instead of ~1.6 s, Calculator
+M3's in 0.4–1.5 s instead of 1.4–6.4 s, both Mihon flows and Harmonic in roughly half the time,
+and every frame matched except the caret's phase and Harmonic's live content. That became the
+probe in `tests/e2e/lib/probe.ts`: it wraps timers, fetch, image decoding, the relay socket and
+the screen's `transferFromImageBitmap` before the page boots, reads the main queue, `uiState`,
+parked yields and timed parks off `wd`, and ends a step when nothing scheduled inside the step's
+horizon can change the screen. The recorder's pixel rule stays as the fallback, sampled only past
+the horizon, and is the one copy in `lib/settle.ts`. Flows run in parallel browsers and are
+scored in subprocesses as they finish. The full suite takes 60 s; the scored flows report the
+same content, strict and tolerant numbers as before to the digit for FitNotes and Mihon
+onboarding, within Harmonic's live spread, and better for Mihon app.
+
+What the measurements corrected along the way:
+
+- The contract was not "dwell, then stable": the old loop could not settle before the dwell plus
+  five samples, so a toast timing out or a snackbar dismissing 2 s after a tap was always waited
+  for. A fast path that ignored timers past the horizon captured FitNotes' "Training saved" bar
+  and moved four steps by 15 points. Timers due within the horizon plus that window now block
+  the fast path, and the scores returned to the digit.
+- Mihon's coroutine event loop re-arms 95 ms and 1000 ms `park` timeouts forever, and its launch
+  holds a 10 s executor task plus a 400 ms SQLite save debounce per statement. A timed park is a
+  thread waiting, not work, so every timed wait in the runtime registers in `timedParks` and the
+  probe ignores it; the executor task is scheduled work and is waited for within the horizon.
+- FitNotes redrew every frame on 14 of 39 steps because an off-screen ViewPager page's
+  indeterminate `ProgressBar` set `needsDraw` from `onDraw`. AOSP's `drawChild` quick-rejects a
+  child the clip excludes; `drawView` now does the same, which also stops drawing every
+  off-screen page each frame.
+- `wd.alive()` never cleared its 1.5 s timeout; once timers were observed, every following step
+  waited at the window's edge for the previous step's probe.
+- A swipe awaited each move's dispatch before sleeping, so a loaded host spread the same positions
+  over more time and every fling got slower with load. Events now carry the times the gesture
+  meant, as an input driver's do. Scroll steps still move a few points between an uncontended
+  and a seven-browser run; the fling itself is deterministic, the frames it lands on are not.
+- Reading the screen back with `toBlob` costs 6–30 ms when the app is idle and 1–7 s while it
+  draws continuously under SwiftShader (Harmonic): the readback queues behind the app's own GPU
+  work. The pixel tier therefore captures the frame it sampled, and only the idle tier reads the
+  screen.
+
+Negative results: Playwright's `page.clock` shim rewires `setTimeout` and throws
+(`Cannot access 'realTimeTimer' before initialization`) when another wrapper sits on top of it,
+so the probe pins `Date` itself. Frame rates measured beside six other browsers are host
+measurements — flappybird fell from 51 to 17 fps under a seven-job run — so `minFps` gates apply
+only under `--jobs 1` and `run.json` records the jobs a run used. In-page perf counters from a
+parallel run carry the same caveat: compare costs with `--jobs 1`.

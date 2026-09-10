@@ -33,7 +33,13 @@ export type Step = {
   action: Action;
   /** Regions excluded from the diff (normalized). Escape hatch for non-deterministic pixels. */
   maskRects?: Rect[];
-  /** Extra dwell after the action before settling, ms. For slow screens. */
+  /**
+   * The step's horizon, ms. The emulator recorder sleeps it before settling. webdroid does not
+   * sleep: it waits for work the app scheduled inside the horizon (plus the stability window)
+   * and refuses to trust pixel stability before it, so a splash that holds still for a second
+   * is not mistaken for the screen behind it. Set it to how long the screen may legitimately
+   * keep changing after the action.
+   */
   settleDelayMs?: number;
   /** The screen keeps changing by design (a game loop): capture once after the dwell instead
    *  of waiting for stability, which would never come. */
