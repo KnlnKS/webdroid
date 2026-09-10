@@ -2241,7 +2241,9 @@ opcodes and operand structs, so an instruction's wasm reads as one line; `wasm.W
 opcode to its i64 twin by the table's fixed distances, and `Emit(comptime wide)` instantiates
 the emitter per width, which is what let `flags`, `flagsNZ`, the spills and the division
 sequence be written once. The FP thunks and their import names come from one comptime list.
-The three JIT files went from 3,814 to 2,521 lines.
+The three JIT files went from 3,814 to 2,521 lines, and with the buffer's byte writers kept
+out of line the stripped core is 240 KB against 326 KB before; the blobs are no longer
+committed but built on demand when a Zig source is newer.
 
 **Hot paths.** A block counts `ic` once at its end and no longer reloads its page per
 instruction (the loop already returns on a page crossing or a dropped page). Regions check the

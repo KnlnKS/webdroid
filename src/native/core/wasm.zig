@@ -259,7 +259,7 @@ pub const Buf = struct {
     pub fn init(base: u32, cap: u32) Buf {
         return .{ .p = @ptrFromInt(base), .len = 0, .cap = cap };
     }
-    pub fn byte(b: *Buf, x: u8) void {
+    pub noinline fn byte(b: *Buf, x: u8) void {
         if (b.len >= b.cap) {
             b.overflow = true;
             return;
@@ -270,7 +270,7 @@ pub const Buf = struct {
     pub fn bytes(b: *Buf, str: []const u8) void {
         for (str) |x| b.byte(x);
     }
-    pub fn u(b: *Buf, v_in: u64) void {
+    pub noinline fn u(b: *Buf, v_in: u64) void {
         var x = v_in;
         while (true) {
             const seven: u8 = @truncate(x & 0x7f);
@@ -282,7 +282,7 @@ pub const Buf = struct {
             b.byte(seven | 0x80);
         }
     }
-    pub fn s(b: *Buf, v_in: i64) void {
+    pub noinline fn s(b: *Buf, v_in: i64) void {
         var x = v_in;
         while (true) {
             const seven: u8 = @truncate(@as(u64, @bitCast(x)) & 0x7f);
