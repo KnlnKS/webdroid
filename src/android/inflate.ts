@@ -10,9 +10,13 @@ import type { JContext } from "./context";
 
 class JLayoutInflater extends JObj {
   jctx: JContext | null = null;
-  factory2: unknown = null;
-  factory: unknown = null;
+  /** AOSP's FactoryMerger: setFactory keeps the one already installed and asks the new one
+   *  first, so a cloned inflater that a fragment manager adds its factory to still reaches
+   *  appcompat's — which is what turns <ImageView> into AppCompatImageView. Newest first. */
+  factory2: unknown[] = [];
+  factory: unknown[] = [];
   privateFactory: unknown = null;
+  factorySet = false;
 }
 
 // AOSP resolves an undotted tag against these package prefixes, in this order
@@ -36,10 +40,17 @@ async function createViewByName(name: string, jctx: unknown, set: JAttrSet): Pro
   return newObj(clsName, "(Landroid/content/Context;Landroid/util/AttributeSet;)V", jctx, set);
 }
 
+function setFactory(inflater: JLayoutInflater, f: unknown, chain: unknown[]): void {
+  if (f === null) throw rt.mkThrowable("java/lang/NullPointerException", "Given factory can not be null");
+  if (inflater.factorySet) throw rt.mkThrowable("java/lang/IllegalStateException", "A factory has already been set on this LayoutInflater");
+  inflater.factorySet = true;
+  chain.unshift(f);
+}
+
 async function createViewFromTag(
   inflater: JLayoutInflater, parent: JView | null, name: string, jctx: JContext, set: JAttrSet,
 ): Promise<JView> {
-  for (const factory of [inflater.factory2, inflater.privateFactory]) {
+  for (const factory of [...inflater.factory2, inflater.privateFactory]) {
     if (!factory) continue;
     const v = await vcall(factory, "onCreateView",
       "(Landroid/view/View;Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;",
@@ -47,8 +58,8 @@ async function createViewFromTag(
     if (v === parent || (v as JView)?.parent) { console.warn("[inflate] factory returned parent/attached view for", name, "— ignoring"); continue; }
     if (v) return v as JView;
   }
-  if (inflater.factory) {
-    const v = await vcall(inflater.factory, "onCreateView",
+  for (const factory of inflater.factory) {
+    const v = await vcall(factory, "onCreateView",
       "(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;", name, jctx, set);
     if (v) return v as JView;
   }
@@ -189,15 +200,19 @@ rt.register({
         if (!rootNode) return null;
         return inflateNode(this.jctx, rootNode, (root as JViewGroup) ?? null, !!attach, this);
       },
-    "setFactory2(Landroid/view/LayoutInflater$Factory2;)V": function (this: JLayoutInflater, f: unknown) { this.factory2 = f; },
-    "setFactory(Landroid/view/LayoutInflater$Factory;)V": function (this: JLayoutInflater, f: unknown) { this.factory = f; },
-    "getFactory()Landroid/view/LayoutInflater$Factory;": function (this: JLayoutInflater) { return this.factory ?? this.factory2; },
-    "getFactory2()Landroid/view/LayoutInflater$Factory2;": function (this: JLayoutInflater) { return this.factory2; },
+    "setFactory2(Landroid/view/LayoutInflater$Factory2;)V": function (this: JLayoutInflater, f: unknown) { setFactory(this, f, this.factory2); },
+    "setFactory(Landroid/view/LayoutInflater$Factory;)V": function (this: JLayoutInflater, f: unknown) { setFactory(this, f, this.factory); },
+    "getFactory()Landroid/view/LayoutInflater$Factory;": function (this: JLayoutInflater) { return this.factory[0] ?? this.factory2[0] ?? null; },
+    "getFactory2()Landroid/view/LayoutInflater$Factory2;": function (this: JLayoutInflater) { return this.factory2[0] ?? null; },
     "setPrivateFactory(Landroid/view/LayoutInflater$Factory2;)V": function (this: JLayoutInflater, f: unknown) { this.privateFactory = f; },
+    // A clone carries the factories but not the "already set" flag, so the next setFactory
+    // merges rather than throwing — the path every fragment's inflater takes.
     "cloneInContext(Landroid/content/Context;)Landroid/view/LayoutInflater;": function (this: JLayoutInflater, jctx: JContext) {
-      const inf = getInflater(jctx);
-      inf.factory2 = this.factory2;
-      inf.factory = this.factory;
+      const inf = new JLayoutInflater();
+      inf.jctx = jctx;
+      inf.factory2 = [...this.factory2];
+      inf.factory = [...this.factory];
+      inf.privateFactory = this.privateFactory;
       return inf;
     },
     "getContext()Landroid/content/Context;": function (this: JLayoutInflater) { return this.jctx; },
