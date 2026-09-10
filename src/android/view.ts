@@ -261,7 +261,7 @@ export class JView extends JObj {
   background: JDrawable | null = null;
   foreground: JDrawable | null = null;
   /** a SurfaceView's surface: composited behind the view's own drawing, like SurfaceFlinger does */
-  surfaceLayer: OffscreenCanvas | ImageBitmap | null = null;
+  surfaceLayer: OffscreenCanvas | ImageBitmap | VideoFrame | null = null;
   alphaV = 1;
   scrollX = 0; scrollY = 0;
   translationX = 0; translationY = 0; translationZ = 0;

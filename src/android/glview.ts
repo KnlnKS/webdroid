@@ -154,7 +154,14 @@ rt.register({ name: "android/opengl/GLSurfaceView$EGLWindowSurfaceFactory", ctor
 // (JView.surfaceLayer). SurfaceHolder callbacks fire on the main looper once the view has a size,
 // as SurfaceFlinger's surface creation does. The Java EGL10 and the native libEGL both bind to
 // these surfaces (glSurfaces), so there is exactly one drawing buffer per SurfaceView.
-export interface GlSurface { view: JView | null; width: number; height: number; present: ImageBitmap | null; frames: number }
+export interface GlSurface { view: JView | null; width: number; height: number; present: ImageBitmap | VideoFrame | null; frames: number; onFrame?: () => void }
+export function presentSurface(surface: GlSurface, frame: ImageBitmap | VideoFrame): void {
+  surface.present?.close();
+  surface.present = frame;
+  surface.frames++;
+  if (surface.view) { surface.view.surfaceLayer = frame; invalidate(surface.view); }
+  surface.onFrame?.();
+}
 /** An EGL context owns the WebGL2 context: WebGL binds one to a canvas for life, so making a
  *  surface current retargets the canvas to the surface's size, and a swap hands the finished frame
  *  to the surface as an ImageBitmap (what the compositor draws, what a probe samples). A shared
@@ -180,10 +187,8 @@ export class EglContext {
     const s = this.target;
     if (!s) return Promise.resolve();
     const bmp = this.canvas.transferToImageBitmap();
-    s.present?.close();
-    s.present = bmp; s.frames++;
+    presentSurface(s, bmp);
     perf.glFrames++;
-    if (s.view) { s.view.surfaceLayer = bmp; invalidate(); }
     return new Promise((r) => { if (typeof requestAnimationFrame === "function" && !document.hidden) requestAnimationFrame(() => r()); else setTimeout(r, 16); });
   }
 }
@@ -309,9 +314,66 @@ rt.register({
 rt.register({ name: "android/view/SurfaceHolder$Callback", ctor: class extends JObj {} });
 rt.register({ name: "android/view/SurfaceHolder$Callback2", ctor: class extends JObj {}, ifaces: ["android/view/SurfaceHolder$Callback"] });
 rt.register({ name: "android/view/TextureView$SurfaceTextureListener", ctor: class extends JObj {} });
-// no surface texture is ever produced here: the view reports itself unavailable, as one does
-// before its surface exists, and Compose only ever asks whether a child is one
-class JTextureView extends JView { listener: unknown = null; }
+export class JSurfaceTexture extends JObj {
+  surface: GlSurface = { view: null, width: 1, height: 1, present: null, frames: 0 };
+  released = false;
+  release(): void {
+    if (this.released) return;
+    this.released = true;
+    this.surface.present?.close();
+    this.surface.present = null;
+    if (this.surface.view) this.surface.view.surfaceLayer = null;
+    this.surface.view = null;
+    this.surface.onFrame = undefined;
+    if (glSurfaces.current?.target === this.surface) glSurfaces.current.target = null;
+  }
+}
+rt.register({
+  name: "android/graphics/SurfaceTexture", ctor: JSurfaceTexture,
+  methods: {
+    "<init>(I)V": () => {},
+    "<init>(Z)V": () => {},
+    "<init>(IZ)V": () => {},
+    "setDefaultBufferSize(II)V": function (this: JSurfaceTexture, w: number, h: number) {
+      if (w <= 0 || h <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid buffer size");
+      this.surface.width = w; this.surface.height = h;
+    },
+    "isReleased()Z": function (this: JSurfaceTexture) { return +this.released; },
+    "release()V": function (this: JSurfaceTexture) { this.release(); },
+  },
+});
+class JTextureView extends JView {
+  listener: unknown = null;
+  texture: JSurfaceTexture | null = null;
+  opaque = true;
+  ensureSurface(): void {
+    const w = this.width(), h = this.height();
+    if (!this.attached || w <= 0 || h <= 0) return;
+    const created = !this.texture;
+    const texture = this.texture ??= new (rt.link("android/graphics/SurfaceTexture").ctor)() as JSurfaceTexture;
+    if (!created && texture.surface.width === w && texture.surface.height === h) return;
+    texture.surface.view = this;
+    texture.surface.onFrame = () => {
+      if (this.listener) void onMain(() => this.texture === texture && this.listener
+        ? vcall(this.listener, "onSurfaceTextureUpdated", "(Landroid/graphics/SurfaceTexture;)V", texture) : undefined);
+    };
+    texture.surface.width = w; texture.surface.height = h;
+    if (created) allSurfaces.push(texture.surface);
+    const listener = this.listener;
+    if (listener) void onMain(() => vcall(listener, created ? "onSurfaceTextureAvailable" : "onSurfaceTextureSizeChanged", "(Landroid/graphics/SurfaceTexture;II)V", texture, w, h));
+  }
+  destroySurface(): void {
+    const texture = this.texture, listener = this.listener;
+    if (!texture) return;
+    this.texture = null;
+    this.surfaceLayer = null;
+    texture.surface.view = null;
+    texture.surface.onFrame = undefined;
+    void onMain(async () => {
+      if (!listener || await vcall(listener, "onSurfaceTextureDestroyed", "(Landroid/graphics/SurfaceTexture;)Z", texture)) texture.release();
+    });
+  }
+}
 rt.register({
   name: "android/view/TextureView", ctor: JTextureView, sup: "android/view/View",
   methods: {
@@ -320,25 +382,33 @@ rt.register({
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": async function (this: JTextureView, c: unknown, set: any) { await initViewFromCtx(this, c, set); },
     "setSurfaceTextureListener(Landroid/view/TextureView$SurfaceTextureListener;)V": function (this: JTextureView, l: unknown) { this.listener = l; },
     "getSurfaceTextureListener()Landroid/view/TextureView$SurfaceTextureListener;": function (this: JTextureView) { return this.listener; },
-    "getSurfaceTexture()Landroid/graphics/SurfaceTexture;": () => null,
-    "isAvailable()Z": () => 0,
-    "setOpaque(Z)V": () => {},
-    "isOpaque()Z": () => 1,
+    "getSurfaceTexture()Landroid/graphics/SurfaceTexture;": function (this: JTextureView) { return this.texture; },
+    "isAvailable()Z": function (this: JTextureView) { return +(this.texture !== null); },
+    "setOpaque(Z)V": function (this: JTextureView, opaque: number) { this.opaque = !!opaque; },
+    "isOpaque()Z": function (this: JTextureView) { return +this.opaque; },
+    "onLayout(ZIIII)V": function (this: JTextureView) { this.ensureSurface(); },
+    "onAttachedToWindow()V": function (this: JTextureView) { this.ensureSurface(); },
+    "onDetachedFromWindow()V": function (this: JTextureView) { this.destroySurface(); },
     "lockCanvas()Landroid/graphics/Canvas;": () => null,
     "getBitmap()Landroid/graphics/Bitmap;": () => null,
   },
 });
-/** the Java Surface: one stable handle onto its holder's live surface, which ANativeWindow_fromSurface derefs */
+/** A Surface handle can be released without releasing its producer's buffer queue. */
 export class JSurface extends JObj {
   holder: JSurfaceHolder | null = null;
-  get surf(): GlSurface | null { return this.holder?.surface ?? null; }
+  texture: JSurfaceTexture | null = null;
+  released = false;
+  get surf(): GlSurface | null { return this.released ? null : this.holder?.surface ?? (this.texture && !this.texture.released ? this.texture.surface : null); }
 }
 rt.register({
   name: "android/view/Surface", ctor: JSurface,
   methods: {
-    "<init>(Landroid/graphics/SurfaceTexture;)V": function () {},
+    "<init>(Landroid/graphics/SurfaceTexture;)V": function (this: JSurface, texture: JSurfaceTexture) {
+      if (!texture) throw rt.mkThrowable("java/lang/IllegalArgumentException", "surfaceTexture must not be null");
+      this.texture = texture;
+    },
     "isValid()Z": function (this: JSurface) { return this.surf ? 1 : 0; },
-    "release()V": () => {},
+    "release()V": function (this: JSurface) { this.released = true; },
   },
 });
 rt.register({
@@ -384,7 +454,7 @@ class JEGLSurface extends JObj { surf: GlSurface | null = null; }
 const attrVal = (a: Int32Array | null, k: number): number => { if (a) for (let i = 0; i + 1 < a.length && a[i] !== 0x3038; i += 2) if (a[i] === k) return a[i + 1]; return 0; };
 rt.register({ name: "javax/microedition/khronos/egl/EGLSurface", ctor: JEGLSurface });
 const surfaceOf = (win: unknown): GlSurface | null =>
-  win instanceof JSurfaceHolder ? win.surface : win instanceof JView ? getHolder(win).surface : null;
+  win instanceof JSurface ? win.surf : win instanceof JSurfaceTexture ? (win.released ? null : win.surface) : win instanceof JSurfaceHolder ? win.surface : win instanceof JView ? getHolder(win).surface : null;
 rt.register({
   name: "javax/microedition/khronos/egl/EGL10", ctor: class extends JObj {},
   statics: {
