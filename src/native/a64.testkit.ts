@@ -31,7 +31,17 @@ function place(words: number[]): number {
   for (let i = 0; i < words.length; i++) mem.u32[(at >>> 2) + i] = words[i];
   return at;
 }
-const state = (c: Cpu) => [Array.from(c.w), Array.from(c.si), c.cpsr];
+/** the V file with every arithmetic NaN canonical: which payload an operation leaves, and from
+ *  which operand, is the engine's business (it may commute a multiply) and differs between tiers */
+function vfile(c: Cpu): number[] {
+  const si = Array.from(c.si), f = new Float32Array(c.si.buffer, c.si.byteOffset, 128), d = new Float64Array(c.si.buffer, c.si.byteOffset, 64);
+  for (let i = 0; i < 64; i++) {
+    if (d[i] !== d[i]) { si[2 * i] = 0; si[2 * i + 1] = 0x7ff80000; continue; }
+    for (const h of [2 * i, 2 * i + 1]) if (f[h] !== f[h]) si[h] = 0x7fc00000;
+  }
+  return si;
+}
+const state = (c: Cpu) => [Array.from(c.w), vfile(c), c.cpsr];
 /** The program's first run, the one the test's expectations describe. A program whose second
  *  run reproduces the first (no time, no memory it rewrites) then runs to the JIT, which must
  *  agree; memory is put back so the test sees the first run's. */

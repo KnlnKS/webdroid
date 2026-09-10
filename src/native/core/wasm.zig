@@ -108,6 +108,10 @@ pub const Op = struct {
     pub const i64_rotr = 0x8a;
     pub const f32_abs = 0x8b;
     pub const f32_neg = 0x8c;
+    pub const f32_ceil = 0x8d;
+    pub const f32_floor = 0x8e;
+    pub const f32_trunc = 0x8f;
+    pub const f32_nearest = 0x90;
     pub const f32_sqrt = 0x91;
     pub const f32_add = 0x92;
     pub const f32_sub = 0x93;
@@ -115,6 +119,10 @@ pub const Op = struct {
     pub const f32_div = 0x95;
     pub const f64_abs = 0x99;
     pub const f64_neg = 0x9a;
+    pub const f64_ceil = 0x9b;
+    pub const f64_floor = 0x9c;
+    pub const f64_trunc = 0x9d;
+    pub const f64_nearest = 0x9e;
     pub const f64_sqrt = 0x9f;
     pub const f64_add = 0xa0;
     pub const f64_sub = 0xa1;
@@ -123,8 +131,13 @@ pub const Op = struct {
     pub const i32_wrap_i64 = 0xa7;
     pub const i64_extend_i32_s = 0xac;
     pub const i64_extend_i32_u = 0xad;
+    /// the four conversions from i32 s, i32 u, i64 s, i64 u follow in that order
+    pub const f32_convert_i32_s = 0xb2;
     pub const f32_demote_f64 = 0xb6;
+    pub const f64_convert_i32_s = 0xb7;
     pub const f64_promote_f32 = 0xbb;
+    /// the saturating truncations: i32 from f32 s/u, f64 s/u, then i64 likewise
+    pub const fc_prefix = 0xfc;
     pub const i32_extend8_s = 0xc0;
     pub const i32_extend16_s = 0xc1;
     pub const i64_extend8_s = 0xc2;
@@ -189,6 +202,11 @@ pub const Buf = struct {
     pub fn i64c(b: *Buf, v: i64) void {
         b.byte(Op.i64_const);
         b.s(v);
+    }
+    pub fn f64c(b: *Buf, v: f64) void {
+        b.byte(Op.f64_const);
+        const raw: [8]u8 = @bitCast(v);
+        b.bytes(&raw);
     }
     pub fn get(b: *Buf, l: u32) void {
         b.byte(Op.local_get);

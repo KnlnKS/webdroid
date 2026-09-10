@@ -11,6 +11,8 @@ const cpu = @import("cpu.zig");
 const a64 = @import("a64.zig");
 const wasm = @import("wasm.zig");
 const jit32 = @import("jit32.zig");
+const jitfp = @import("jitfp.zig");
+const fp = @import("fp.zig");
 const Cpu = cpu.Cpu;
 const Op = a64.Op;
 const Buf = wasm.Buf;
@@ -22,7 +24,7 @@ const MAX_INSTR = 320;
 const MAX_REGIONS = 24;
 
 // ── locals: the parameters, then a fixed layout every region shares
-const L_CPU = 0;
+pub const L_CPU = 0;
 const L_ENTRY = 1;
 pub const L_X = 2; // x0..x31 (x31 is sp)
 pub const L_N = 34;
@@ -41,12 +43,45 @@ pub const L_RET = 46;
 pub const L_SC = 47;
 pub const L_IC = 48;
 pub const L_LIMIT = 49;
+pub const L_F0 = 50;
+pub const L_F1 = 51;
 // imported functions
 const F_EXEC = 0; // exec_word(cpu, word, pc) -> status
 const F_TX = 1; // tx_addr(cpu, addr i64) -> i32 (0: fault)
 const F_STORE = 2; // on_store(cpu, addr) -> i32 (0 ok)
 const F_EXEC32 = 3; // exec_word32(cpu, pc) -> status
-const N_IMPORTS = 4;
+/// FMAX, FMIN, FMAXNM, FMINNM on singles then doubles, and the fused double multiply-add
+pub const F_FMAX32 = 4;
+pub const F_FMAX64 = 8;
+pub const F_FMA64 = 12;
+const N_IMPORTS = 13;
+export fn jit_fmax32(a: f32, b: f32) f32 {
+    return fp.fmax(f32, a, b);
+}
+export fn jit_fmin32(a: f32, b: f32) f32 {
+    return fp.fmin(f32, a, b);
+}
+export fn jit_fmaxnm32(a: f32, b: f32) f32 {
+    return fp.fnm(f32, a, b, true);
+}
+export fn jit_fminnm32(a: f32, b: f32) f32 {
+    return fp.fnm(f32, a, b, false);
+}
+export fn jit_fmax64(a: f64, b: f64) f64 {
+    return fp.fmax(f64, a, b);
+}
+export fn jit_fmin64(a: f64, b: f64) f64 {
+    return fp.fmin(f64, a, b);
+}
+export fn jit_fmaxnm64(a: f64, b: f64) f64 {
+    return fp.fnm(f64, a, b, true);
+}
+export fn jit_fminnm64(a: f64, b: f64) f64 {
+    return fp.fnm(f64, a, b, false);
+}
+export fn jit_fma64(a: f64, b: f64, c: f64) f64 {
+    return fp.fma(f64, a, b, c);
+}
 /// a region function's return: a status below this, else the next pc
 pub const STATUS_MAX = 16;
 
@@ -232,21 +267,21 @@ pub const Emit = struct {
         e.nest -= 1;
     }
 
-    fn getX(e: *Emit, n: u8) void {
+    pub fn getX(e: *Emit, n: u8) void {
         if (n == 31) e.b.i64c(0) else e.b.get(L_X + n);
     }
-    fn getSP(e: *Emit, n: u8) void {
+    pub fn getSP(e: *Emit, n: u8) void {
         e.b.get(L_X + n);
     }
     /// pops an i64 into Xn (a zero-register write is dropped)
-    fn setX(e: *Emit, n: u8) void {
+    pub fn setX(e: *Emit, n: u8) void {
         if (n == 31) e.b.op(O.drop) else e.b.set(L_X + n);
     }
-    fn setSP(e: *Emit, n: u8) void {
+    pub fn setSP(e: *Emit, n: u8) void {
         e.b.set(L_X + n);
     }
     /// pops an i32, zero-extends it into Xn
-    fn setW(e: *Emit, n: u8) void {
+    pub fn setW(e: *Emit, n: u8) void {
         e.b.op(O.i64_extend_i32_u);
         e.setX(n);
     }
@@ -390,7 +425,7 @@ pub const Emit = struct {
         e.endif();
     }
     /// pops an i64 address; leaves the translated i32 in L_A or exits with a fault
-    fn address(e: *Emit) void {
+    pub fn address(e: *Emit) void {
         const b = e.b;
         b.tee(L_T0);
         b.i64c(32);
@@ -1232,6 +1267,9 @@ pub const Emit = struct {
                     e.setX(o.rd);
                 } else e.fallback(pc, k);
             },
+            .simd => jitfp.emitSimd(e, @truncate(o.imm), pc, k),
+            .vmem => jitfp.emitVmem(e, @truncate(o.imm), pc, k),
+            .vldrlit => jitfp.emitVldrlit(e, o),
             else => e.fallback(pc, k),
         }
         return false;
@@ -1351,8 +1389,8 @@ fn emitRegion(b: *Buf, r: *Region, page: *cpu.Page) void {
         e.written = 0x7fff;
         @memset(wb[0..n], 0x7fff);
     }
-    // locals: 32 registers, 4 i32 flags, 4 i64 temps, 6 i32 temps, ic and its limit
-    b.u(5);
+    // locals: 32 registers, 4 i32 flags, 4 i64 temps, 6 i32 temps, ic and its limit, 2 f64 temps
+    b.u(6);
     b.u(32);
     b.byte(if (wide) wasm.I64 else wasm.I32);
     b.u(4);
@@ -1363,6 +1401,8 @@ fn emitRegion(b: *Buf, r: *Region, page: *cpu.Page) void {
     b.byte(wasm.I32);
     b.u(2);
     b.byte(wasm.I64);
+    b.u(2);
+    b.byte(wasm.F64);
     e.loadRegs(e.used);
     e.loadFlags();
     b.get(L_CPU);
@@ -1511,32 +1551,33 @@ export fn jit_emit(out: u32, cap: u32) u32 {
     nrequests = 0;
     if (nregions == 0) return 0;
     b.bytes(&[_]u8{ 0, 'a', 's', 'm', 1, 0, 0, 0 });
-    // type section: 0 (i32,i32)->i32 region, 1 (i32,i32,i32)->i32 exec, 2 (i32,i64)->i32 tx, 3 (i32,i32)->i32 store
+    // type section: 0 (i32,i32)->i32 region and store, 1 (i32,i32,i32)->i32 exec, 2 (i32,i64)->i32 tx,
+    // 3 (f32,f32)->f32, 4 (f64,f64)->f64, 5 (f64,f64,f64)->f64
     b.byte(1);
     const type_len = b.reserve();
     const type_start = b.len;
-    b.u(3);
+    b.u(6);
     b.bytes(&[_]u8{ 0x60, 2, wasm.I32, wasm.I32, 1, wasm.I32 });
     b.bytes(&[_]u8{ 0x60, 3, wasm.I32, wasm.I32, wasm.I32, 1, wasm.I32 });
     b.bytes(&[_]u8{ 0x60, 2, wasm.I32, wasm.I64, 1, wasm.I32 });
+    b.bytes(&[_]u8{ 0x60, 2, wasm.F32, wasm.F32, 1, wasm.F32 });
+    b.bytes(&[_]u8{ 0x60, 2, wasm.F64, wasm.F64, 1, wasm.F64 });
+    b.bytes(&[_]u8{ 0x60, 3, wasm.F64, wasm.F64, wasm.F64, 1, wasm.F64 });
     b.patch(type_len, b.len - type_start);
-    // import section: memory, the core's table (for the hand-off), exec, tx, store, exec32
+    // import section: memory, the core's table (for the hand-off), then the functions in F_ order
     b.byte(2);
     const imp_len = b.reserve();
     const imp_start = b.len;
-    b.u(6);
+    b.u(2 + N_IMPORTS);
     importName(&b, "memory");
     b.bytes(&[_]u8{ 0x02, 0x00, 1 });
     importName(&b, "__indirect_function_table");
     b.bytes(&[_]u8{ 0x01, 0x70, 0x00, 0 });
-    importName(&b, "exec");
-    b.bytes(&[_]u8{ 0x00, 1 });
-    importName(&b, "tx");
-    b.bytes(&[_]u8{ 0x00, 2 });
-    importName(&b, "store");
-    b.bytes(&[_]u8{ 0x00, 0 });
-    importName(&b, "exec32");
-    b.bytes(&[_]u8{ 0x00, 0 });
+    const fns = [_]struct { []const u8, u8 }{ .{ "exec", 1 }, .{ "tx", 2 }, .{ "store", 0 }, .{ "exec32", 0 }, .{ "fmax32", 3 }, .{ "fmin32", 3 }, .{ "fmaxnm32", 3 }, .{ "fminnm32", 3 }, .{ "fmax64", 4 }, .{ "fmin64", 4 }, .{ "fmaxnm64", 4 }, .{ "fminnm64", 4 }, .{ "fma64", 5 } };
+    for (fns) |f| {
+        importName(&b, f[0]);
+        b.bytes(&[_]u8{ 0x00, f[1] });
+    }
     b.patch(imp_len, b.len - imp_start);
     // function section
     b.byte(3);
