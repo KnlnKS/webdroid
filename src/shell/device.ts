@@ -153,6 +153,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   }
   const manifest = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(manifest, "package") ?? "app";
+  await vfs.prepare(pkg);
   const appNode = manifest.children.find((c) => c.name === "application");
   const appCls = (attrStr(appNode!, "name") ?? "android.app.Application").replace(/^\./, pkg + ".").replace(/\./g, "/");
   const themeAttr = appNode?.attrs.find((a) => a.name === "theme");

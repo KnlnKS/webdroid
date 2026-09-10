@@ -17,6 +17,7 @@ import { attrStr } from "../android/axml";
 import { sqliteStore, useSQLiteStore } from "../android/sqlite";
 import { preferenceStore, usePreferenceStore } from "../android/sharedprefs";
 import { rt } from "../jvm/runtime";
+import { PrivateFiles } from "./privatefiles";
 import { packedArchives, type PackedArchive } from "./packedarchive";
 
 type IntentData = { action: string | null; component: string | null; componentPkg: string | null; dataUri: string | null;
@@ -40,6 +41,7 @@ type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HT
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
   watchers: Set<() => void>; pending: Set<(error: unknown) => void> };
 export class ProcessBroker {
+  readonly files = new PrivateFiles();
   readonly databases = sqliteStore;
   readonly preferences = preferenceStore;
   private entries = new Map<number, Entry>();
@@ -150,7 +152,7 @@ export class ProcessBroker {
     for (const reject of entry.pending) reject(error);
     entry.pending.clear();
     for (const watcher of entry.watchers) { try { watcher(); } catch (error) { console.error("[process death]", error); } }
-    entry.watchers.clear(); entry.frame?.remove();
+    entry.watchers.clear(); entry.frame?.remove(); this.files.detach(pid);
     for (const activity of this.activities.filter((a) => a.pid === pid)) this.finishActivity(pid, activity.id, 0, null);
   }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
@@ -214,7 +216,11 @@ export class ProcessBroker {
 declare global { interface Window { __wdProcesses?: ProcessBroker; } }
 export function processBroker(): ProcessBroker {
   const root = window.parent;
-  return root.__wdProcesses ??= new ProcessBroker();
+  if (!root.__wdProcesses) {
+    const broker = root.__wdProcesses = new ProcessBroker();
+    root.addEventListener("pagehide", () => { void broker.files.flush().catch((error) => console.error("[private files]", error)); });
+  }
+  return root.__wdProcesses;
 }
 async function encodeIntent(intent: JIntent): Promise<IntentData> {
   rt.link("android/os/Parcel");
@@ -260,6 +266,7 @@ export function connectProcess(): ProcessEndpoint {
     void (act.resultData ? encodeIntent(act.resultData) : Promise.resolve(null)).then((data) => broker.finishActivity(PROCESS_PID, id, act.resultCode, data));
     return true;
   };
+  broker.files.attach(PROCESS_PID, vfs);
   useSQLiteStore(broker.databases);
   usePreferenceStore(broker.preferences);
   connectProviders((pkg, process, request) => remote(broker.provider(PROCESS_PID, pkg, process, request)));

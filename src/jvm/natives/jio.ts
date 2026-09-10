@@ -1,4 +1,4 @@
-// java.io.* natives + an in-memory VFS. Nothing persists it; vfs.onWrite is the hook for a host that wants to.
+// java.io.* natives and the VFS shared with native file descriptors.
 
 import { rt, JObj, maySuspend, type NativeSpec } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray, utf8 } from "../abi";
@@ -20,6 +20,9 @@ rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, iface
 export const vfs = {
   files: new Map<string, Uint8Array>(),
   lazyFiles: new Map<string, FileSource>(),
+  dirs: new Set<string>(["/data", "/sdcard"]),
+  prepare: (_pkg: string): Promise<void> => Promise.resolve(),
+  flush: (): Promise<void> => Promise.resolve(),
   onWrite: (path: string) => {},
   norm(p: string): string {
     const parts: string[] = [];
@@ -67,7 +70,7 @@ export const vfs = {
     const dir = p.endsWith("/") ? p : p + "/";
     for (const k of this.files.keys()) if (k.startsWith(dir)) return true;
     for (const k of this.lazyFiles.keys()) if (k.startsWith(dir)) return true;
-    return false;
+    return this.dirs.has(p);
   },
   isDir(p: string): boolean {
     p = this.norm(p);
@@ -75,7 +78,7 @@ export const vfs = {
     const dir = p.endsWith("/") ? p : p + "/";
     for (const k of this.files.keys()) if (k.startsWith(dir)) return true;
     for (const k of this.lazyFiles.keys()) if (k.startsWith(dir)) return true;
-    return dirs.has(p);
+    return this.dirs.has(p);
   },
   delete(p: string): boolean {
     const path = this.norm(p);
@@ -83,8 +86,8 @@ export const vfs = {
     if (removed) this.onWrite(path);
     return removed;
   },
-  mkdir(p: string) { dirs.add(this.norm(p)); },
-  rmdir(p: string): boolean { return dirs.delete(this.norm(p)); },
+  mkdir(p: string) { const path = this.norm(p); if (!this.dirs.has(path)) { this.dirs.add(path); this.onWrite(path); } },
+  rmdir(p: string): boolean { const path = this.norm(p), removed = this.dirs.delete(path); if (removed) this.onWrite(path); return removed; },
   list(p: string): string[] {
     p = this.norm(p);
     const dir = p === "/" ? "/" : p + "/";
@@ -95,12 +98,11 @@ export const vfs = {
     for (const k of this.lazyFiles.keys()) {
       if (k.startsWith(dir)) names.add(k.slice(dir.length).split("/")[0]);
     }
-    for (const d of dirs) if (d.startsWith(dir)) names.add(d.slice(dir.length).split("/")[0]);
+    for (const d of this.dirs) if (d.startsWith(dir)) names.add(d.slice(dir.length).split("/")[0]);
     names.delete("");
     return [...names];
   },
 };
-const dirs = new Set<string>(["/data", "/sdcard"]);
 
 export class JFile extends JObj { path = ""; }
 export function mkFile(path: string): JFile { const f = new JFile(); f.path = vfs.norm(path); return f; }
@@ -144,8 +146,8 @@ rt.register({
     "length()J": function (this: JFile) { return BigInt(vfs.stat(this.path)?.size ?? 0); },
     "lastModified()J": function () { return BigInt(Date.now()); },
     "setLastModified(J)Z": () => 1,
-    "mkdir()Z": function (this: JFile) { dirs.add(this.path); return 1; },
-    "mkdirs()Z": function (this: JFile) { dirs.add(this.path); return 1; },
+    "mkdir()Z": function (this: JFile) { vfs.mkdir(this.path); return 1; },
+    "mkdirs()Z": function (this: JFile) { vfs.mkdir(this.path); return 1; },
     "createNewFile()Z": function (this: JFile) {
       if (vfs.exists(this.path)) return 0;
       vfs.write(this.path, new Uint8Array(0));
@@ -1292,7 +1294,7 @@ rt.register({
     },
     "static delete(Ljava/nio/file/Path;)V": (p: JNioPath) => { vfs.delete(p.p); },
     "static deleteIfExists(Ljava/nio/file/Path;)Z": (p: JNioPath) => (vfs.delete(p.p) ? 1 : 0),
-    "static createDirectories(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;": (p: JNioPath) => { dirs.add(p.p); return p; },
+    "static createDirectories(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;": (p: JNioPath) => { vfs.mkdir(p.p); return p; },
     "static size(Ljava/nio/file/Path;)J": (p: JNioPath) => BigInt(vfs.stat(p.p)?.size ?? 0),
     "static readAttributes(Ljava/nio/file/Path;Ljava/lang/Class;[Ljava/nio/file/LinkOption;)Ljava/nio/file/attribute/BasicFileAttributes;": (p: JNioPath) => {
       const a = new JBasicAttrs();
