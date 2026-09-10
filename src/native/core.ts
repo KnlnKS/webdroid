@@ -49,7 +49,6 @@ export interface Core {
   host_bypass(on: number): void;
   libc_call(cpu: number, id: number): number;
   exec_word(cpu: number, word: number, pc: number): number;
-  tx_addr(cpu: number, addr: bigint): number;
   on_store(cpu: number, addr: number): number;
   jit_pending(): number;
   jit_emit(out: number, cap: number): number;
@@ -106,7 +105,7 @@ if (core.__heap_base.value > STACK_BASE) throw new Error("[native] the core's da
 // ── the JIT: the core emits a module per batch of hot regions; each region function is linked
 // into the table and the core's slot maps route the dispatcher to it
 const JIT_CAP = 1 << 20; // the last MiB of the KERN region (abi.ts)
-const jitImports = { env: { memory, __indirect_function_table: table, exec: core.exec_word, exec32: core.exec_word32, tx: core.tx_addr, store: core.on_store, fmax32: core.jit_fmax32, fmin32: core.jit_fmin32, fmaxnm32: core.jit_fmaxnm32, fminnm32: core.jit_fminnm32, fmax64: core.jit_fmax64, fmin64: core.jit_fmin64, fmaxnm64: core.jit_fmaxnm64, fminnm64: core.jit_fminnm64, fma64: core.jit_fma64 } };
+const jitImports = { env: { memory, __indirect_function_table: table, exec: core.exec_word, exec32: core.exec_word32, store: core.on_store, fmax32: core.jit_fmax32, fmin32: core.jit_fmin32, fmaxnm32: core.jit_fmaxnm32, fminnm32: core.jit_fminnm32, fmax64: core.jit_fmax64, fmin64: core.jit_fmin64, fmaxnm64: core.jit_fmaxnm64, fminnm64: core.jit_fminnm64, fma64: core.jit_fma64 } };
 /** whether the engine has wasm tail calls: a region then hands off to the next region without returning to the dispatcher */
 const TAIL = WebAssembly.validate(new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 1, 5, 1, 0x60, 0, 1, 0x7f, 3, 2, 1, 0, 10, 6, 1, 4, 0, 0x12, 0, 0x0b]));
 core.jit_config(TAIL ? 1 : 0);

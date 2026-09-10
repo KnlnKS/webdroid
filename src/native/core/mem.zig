@@ -229,10 +229,10 @@ const PLANE_LO: u32 = 0x1000_0000;
 var pool_base: u32 = 0;
 var owner = [_]i16{-1} ** 64;
 var owner_len: u32 = 0;
-var P = [_]u32{0} ** PLANES;
+pub var P = [_]u32{0} ** PLANES;
 var R = [_]u64{0} ** PLANES;
-var S = [_]u32{0} ** PLANES;
-var L = [_]u32{PLANE_LO} ** PLANES;
+pub var S = [_]u32{0} ** PLANES;
+pub var L = [_]u32{PLANE_LO} ** PLANES;
 var moves: u32 = 0;
 
 inline fn unitsOf(n: u64) u32 {

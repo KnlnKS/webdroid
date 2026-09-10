@@ -73,13 +73,12 @@ pub fn condReads(cc: u8) u4 {
     };
 }
 const F_EXEC = 0;
-const F_TX = 1;
-const F_STORE = 2;
-const F_EXEC32 = 3;
-pub const F_FMAX32 = 4;
-pub const F_FMAX64 = 8;
-pub const F_FMA64 = 12;
-const N_IMPORTS = 13;
+const F_STORE = 1;
+const F_EXEC32 = 2;
+pub const F_FMAX32 = 3;
+pub const F_FMAX64 = 7;
+pub const F_FMA64 = 11;
+const N_IMPORTS = 12;
 const FP_NAMES = [_][]const u8{ "fmax", "fmin", "fmaxnm", "fminnm" };
 fn fpThunk(comptime F: type, comptime k: u2) *const fn (F, F) callconv(.c) F {
     return &struct {
@@ -107,6 +106,9 @@ const OFF_CPSR = @offsetOf(Cpu, "cpsr");
 const OFF_IC = @offsetOf(Cpu, "ic");
 const OFF_LIMIT = @offsetOf(Cpu, "ic_limit");
 const OFF_BPC = @offsetOf(Cpu, "bpc");
+const OFF_EXIT = @offsetOf(Cpu, "exit");
+const OFF_FAULT_WORD = @offsetOf(Cpu, "fault_word");
+const OFF_FAULT_ADDR = @offsetOf(Cpu, "fault_addr");
 const OFF_EXCL = @offsetOf(Cpu, "excl");
 const OFF_TLS = @offsetOf(Cpu, "tls");
 const OFF_SLOT = @offsetOf(cpu.Page, "slot");
@@ -491,10 +493,17 @@ pub fn Emit(comptime wide: bool) type {
             e.exitStatus(2);
         }
         pub fn address(e: *Self) void {
-            e.b.emit(.{ tee(L_T0), c64(32), O.i64_shr_u, O.i64_eqz, O.if_, wasm.I32, get(L_T0), O.i32_wrap_i64, O.else_, get(L_CPU), get(L_T0), call(F_TX), O.end, tee(L_A), O.i32_eqz });
+            const b = e.b;
+            b.emit(.{ tee(L_T0), c64(32), O.i64_shr_u, O.i32_wrap_i64, tee(L_B), O.i32_eqz, O.if_, wasm.I32, get(L_T0), O.i32_wrap_i64, O.else_ });
+            e.nest += 1;
+            b.emit(.{ get(L_B), c32(255), O.i32_and, c32(2), O.i32_shl, set(L_NEXT), get(L_T0), O.i32_wrap_i64, get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.L)), O.i32_sub, tee(L_R), get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.S)), O.i32_lt_u, get(L_B), c32(256), O.i32_lt_u, O.i32_and, O.if_, wasm.I32, get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.P)), get(L_R), O.i32_add, O.else_, c32(0), O.end, tee(L_A), O.i32_eqz });
             e.ifv();
+            b.emit(.{ get(L_CPU), c32(@intFromEnum(cpu.Fault.bad_address)), mo(O.i32_store, OFF_EXIT), get(L_CPU), c32(0), mo(O.i32_store, OFF_FAULT_WORD), get(L_CPU), get(L_T0), O.i32_wrap_i64, mo(O.i32_store, OFF_FAULT_ADDR) });
             e.faultExit();
             e.endif();
+            b.emit(.{ get(L_A), O.end });
+            e.nest -= 1;
+            b.set(L_A);
         }
         pub fn storeCheck(e: *Self, off: u32, two: bool) void {
             const b = e.b;
@@ -1167,7 +1176,7 @@ export fn jit_emit(out: u32, cap: u32) u32 {
     b.bytes(&[_]u8{ 0, 'a', 's', 'm', 1, 0, 0, 0, 1 });
     const type_len = b.reserve();
     const type_start = b.len;
-    b.bytes(&[_]u8{ 6, 0x60, 2, wasm.I32, wasm.I32, 1, wasm.I32, 0x60, 3, wasm.I32, wasm.I32, wasm.I32, 1, wasm.I32, 0x60, 2, wasm.I32, wasm.I64, 1, wasm.I32, 0x60, 2, wasm.F32, wasm.F32, 1, wasm.F32, 0x60, 2, wasm.F64, wasm.F64, 1, wasm.F64, 0x60, 3, wasm.F64, wasm.F64, wasm.F64, 1, wasm.F64 });
+    b.bytes(&[_]u8{ 5, 0x60, 2, wasm.I32, wasm.I32, 1, wasm.I32, 0x60, 3, wasm.I32, wasm.I32, wasm.I32, 1, wasm.I32, 0x60, 2, wasm.F32, wasm.F32, 1, wasm.F32, 0x60, 2, wasm.F64, wasm.F64, 1, wasm.F64, 0x60, 3, wasm.F64, wasm.F64, wasm.F64, 1, wasm.F64 });
     b.patch(type_len, b.len - type_start);
     b.byte(2);
     const imp_len = b.reserve();
@@ -1183,11 +1192,10 @@ export fn jit_emit(out: u32, cap: u32) u32 {
     b.bytes("__indirect_function_table");
     b.bytes(&[_]u8{ 0x01, 0x70, 0x00, 0 });
     importFn(&b, "exec", 1);
-    importFn(&b, "tx", 2);
     importFn(&b, "store", 0);
     importFn(&b, "exec32", 0);
-    inline for ([_][]const u8{ "32", "64" }, 3..) |sfx, ty| inline for (FP_NAMES) |nm| importFn(&b, nm ++ sfx, ty);
-    importFn(&b, "fma64", 5);
+    inline for ([_][]const u8{ "32", "64" }, 2..) |sfx, ty| inline for (FP_NAMES) |nm| importFn(&b, nm ++ sfx, ty);
+    importFn(&b, "fma64", 4);
     b.patch(imp_len, b.len - imp_start);
     b.byte(3);
     b.u(1 + nregions);

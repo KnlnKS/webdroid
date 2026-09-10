@@ -201,12 +201,6 @@ pub inline fn st(comptime T: type, c: *Cpu, a: u32, v: T) bool {
     mem.ptr(T, a).* = v;
     return true;
 }
-export fn tx_addr(cp: u32, va: u64) u32 {
-    const c: *Cpu = @ptrFromInt(cp);
-    if (a64.addr(c, va)) |a| return a;
-    _ = raise(c, .bad_address, 0);
-    return 0;
-}
 export fn on_store(cp: u32, a: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
     if (mem.page_flags[a >> abi.PAGE_SHIFT] & 2 != 0) {
