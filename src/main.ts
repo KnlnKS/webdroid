@@ -1,3 +1,4 @@
+import { recordVsync } from "./android/os";
 // webdroid shell: phone chrome, launcher, boot + input wiring.
 
 import "./natives";
@@ -373,10 +374,8 @@ function doTick() {
   perf.frames++;
   void tick().then(() => { perf.frameMs += performance.now() - lastTick; }).finally(() => { ticking = false; });
 }
-let lastRaf = 0;
 function loop(time: number) {
-  if (lastRaf) uiState.frameIntervalNanos = BigInt(Math.round((time - lastRaf) * 1e6));
-  lastRaf = time;
+  recordVsync(time);
   doTick();
   requestAnimationFrame(loop);
 }

@@ -589,12 +589,13 @@ async function tick0() {
     // doFrame does: every callback here awaits, so recomputing it per callback let two
     // callbacks in the SAME frame see times hundreds of ms apart during boot.
     uiState.frameTimeNanos = BigInt(Math.floor(performance.now() * 1e6));
+    const presentation = uiState.frameTimeNanos + uiState.frameIntervalNanos;
     const cbs = uiState.frameCallbacks.length ? uiState.frameCallbacks.splice(0) : [];
     for (const cb of cbs as { frame?: any; run?: any; vsync?: JObj }[]) {
       mainDbg.phase = "frame:" + ((cb.frame ?? cb.run ?? cb.vsync)?.constructor?.$i?.name ?? "?");
       try {
         if (cb.frame) await guardCall(cb.frame, M_doFrame, uiState.frameTimeNanos);
-        else if (cb.vsync) await dispatchVsync(cb.vsync);
+        else if (cb.vsync) await dispatchVsync(cb.vsync, presentation);
         else if (cb.run) await vcall(cb.run, "run", "()V");
       } catch (e) { reportUncaught(e); }
     }

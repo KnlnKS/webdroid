@@ -3,7 +3,7 @@ import "../natives";
 import { rt, JObj } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
-import { dispatchVsync } from "./os";
+import { dispatchVsync, recordVsync } from "./os";
 import { uiState } from "./view";
 
 test("vsync callbacks share the frame clock and expire their timeline after returning", async () => {
@@ -22,7 +22,7 @@ test("vsync callbacks share the frame clock and expire their timeline after retu
       expect(await vcall(timeline, "getDeadlineNanos", "()J")).toBe(1016666667n);
     },
   });
-  await dispatchVsync(cb);
+  await dispatchVsync(cb, 1016666667n);
   await expect(vcall(captured!, "getFrameTimeNanos", "()J")).rejects.toThrow();
   await expect(vcall(timeline!, "getVsyncId", "()J")).rejects.toThrow();
 });
@@ -38,4 +38,18 @@ test("removing a vsync callback preserves other queued frame work", async () => 
     expect(uiState.frameCallbacks).toEqual([{ frame: cb }, { vsync: other }]);
     await expect(vcall(choreographer, "postVsyncCallback", "(Landroid/view/Choreographer$VsyncCallback;)V", null)).rejects.toThrow();
   } finally { uiState.frameCallbacks = old; }
+});
+
+
+test("vsync cadence ignores an isolated delayed animation frame", () => {
+  recordVsync(100);
+  recordVsync(116);
+  recordVsync(132);
+  expect(uiState.frameIntervalNanos).toBe(16000000n);
+  recordVsync(1132);
+  expect(uiState.frameIntervalNanos).toBe(16000000n);
+  recordVsync(1148);
+  expect(uiState.frameIntervalNanos).toBe(16000000n);
+  for (let i = 1; i <= 32; i++) recordVsync(1148 + i * 20);
+  expect(uiState.frameIntervalNanos).toBe(20000000n);
 });

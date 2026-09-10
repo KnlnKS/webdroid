@@ -657,13 +657,24 @@ rt.register({
   },
 });
 rt.register({ name: "android/view/Choreographer$VsyncCallback", ctor: class extends JObj {} });
-export async function dispatchVsync(callback: JObj) {
+const rafIntervals = new Float64Array(32);
+let lastRaf = 0, rafSample = 0;
+export function recordVsync(time: number) {
+  if (lastRaf && time > lastRaf) {
+    rafIntervals[rafSample++ % rafIntervals.length] = time - lastRaf;
+    let interval = Infinity;
+    for (let i = 0; i < Math.min(rafSample, rafIntervals.length); i++) interval = Math.min(interval, rafIntervals[i]);
+    uiState.frameIntervalNanos = BigInt(Math.round(interval * 1e6));
+  }
+  lastRaf = time;
+}
+export async function dispatchVsync(callback: JObj, presentation: bigint) {
   rt.link("android/view/Choreographer$FrameData");
   rt.link("android/view/Choreographer$FrameTimeline");
   const data = new JFrameData(), timeline = data.timelines[0];
   data.time = timeline.id = uiState.frameTimeNanos;
   // The browser exposes one predicted presentation, not Android's alternate timelines.
-  timeline.presentation = data.time + uiState.frameIntervalNanos;
+  timeline.presentation = presentation;
   data.active = timeline.active = true;
   try { await vcall(callback, "onVsync", "(Landroid/view/Choreographer$FrameData;)V", data); }
   finally { data.active = timeline.active = false; }
