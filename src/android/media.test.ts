@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import "../natives";
 import { rt } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
-import { mangleMethod } from "../jvm/abi";
+import { mangleMethod, mangleStaticField } from "../jvm/abi";
 
 test("default ringtone URIs identify settings with Android type-mask precedence", async () => {
   const manager = rt.link("android/media/RingtoneManager").ctor;
@@ -74,4 +74,15 @@ test("audio formats retain independent encoding and channel layout snapshots", a
   expect(await vcall(stereo, "getSampleRate", "()I")).toBe(48000);
   expect(await vcall(stereo, "getChannelCount", "()I")).toBe(2);
   expect(await vcall(mono, "getChannelCount", "()I")).toBe(1);
+});
+
+test("absent media metrics retain a comparable empty session ID", async () => {
+  const cls = "android/media/metrics/LogSessionId";
+  const none = rt.link(cls).ctor[mangleStaticField("LOG_SESSION_ID_NONE")];
+  expect(await vcall(none, "getStringId", "()Ljava/lang/String;")).toBe("");
+  const empty = await newObj(cls, "(Ljava/lang/String;)V", "");
+  const session = await newObj(cls, "(Ljava/lang/String;)V", "session");
+  expect(await vcall(none, "equals", "(Ljava/lang/Object;)Z", empty)).toBe(1);
+  expect(await vcall(none, "equals", "(Ljava/lang/Object;)Z", session)).toBe(0);
+  expect(await vcall(none, "equals", "(Ljava/lang/Object;)Z", null)).toBe(0);
 });

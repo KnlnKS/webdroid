@@ -1,7 +1,7 @@
 // android.media: MediaPlayer over HTMLAudioElement, SoundPool over Web Audio.
 
 import { rt, JObj, maySuspend } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { stringHash, vcall } from "../jvm/natives/jlang";
 import { vfs } from "../jvm/natives/jio";
 import type { JBuffer } from "../jvm/natives/jnio";
 rt.register({ name: "android/media/AudioManager$OnAudioFocusChangeListener", ctor: class extends JObj {} });
@@ -570,7 +570,13 @@ rt.register({
 });
 
 rt.register({ name: "android/media/MediaCodec$Callback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
-rt.register({ name: "android/media/metrics/LogSessionId", ctor: class extends JObj {}, methods: { "getStringId()Ljava/lang/String;": () => "" } });
+class JLogSessionId extends JObj { id = ""; }
+rt.register({ name: "android/media/metrics/LogSessionId", ctor: JLogSessionId, statics: { LOG_SESSION_ID_NONE: new JLogSessionId() }, methods: {
+  "<init>(Ljava/lang/String;)V": function (this: JLogSessionId, id: string) { if (id == null) throw rt.mkThrowable("java/lang/NullPointerException", "id"); this.id = id; },
+  "getStringId()Ljava/lang/String;": function (this: JLogSessionId) { return this.id; },
+  "equals(Ljava/lang/Object;)Z": function (this: JLogSessionId, other: unknown) { return +(other instanceof JLogSessionId && other.id === this.id); },
+  "hashCode()I": function (this: JLogSessionId) { return stringHash(this.id); },
+} });
 export class JBufferInfo extends JObj { offset = 0; size = 0; presentationTimeUs = 0n; flags = 0; }
 rt.register({
   name: "android/media/MediaCodec$BufferInfo", ctor: JBufferInfo,
