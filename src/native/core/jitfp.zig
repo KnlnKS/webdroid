@@ -178,6 +178,7 @@ pub fn emitSimd(e: *Emit, w: u32, pc: u32, k: u32) void {
 }
 fn fcmp(e: *Emit, rn: u8, rm: ?u8, f: u1) void {
     const b = e.b;
+    e.eager(15);
     getF(e, rn, f);
     if (f == 0) b.byte(O.f64_promote_f32);
     b.set(jit.L_F0);

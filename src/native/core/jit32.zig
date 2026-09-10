@@ -19,8 +19,97 @@ const L_B = jit.L_B;
 const L_R = jit.L_R;
 const L_C = jit.L_C;
 const L_SC = jit.L_SC;
+const FA = jit.L_FA32;
+const FB = jit.L_FB32;
+const FR = jit.L_FR32;
+const FC = jit.FC;
 
 pub const Scan = struct { len: u32, ends: bool };
+const FN = jit.FN;
+const FZ = jit.FZ;
+
+pub fn rwArm(w: u32) jit.RW {
+    var q = jit.ALL32;
+    q.fr = 0;
+    q.fw = 0;
+    const cc = w >> 28;
+    if (cc == 15) return q;
+    if (cc != 14) {
+        q.fr = jit.condReads(@intCast(cc));
+        q.cond = true;
+    }
+    const top = bits(w, 25, 3);
+    const S = w & (1 << 20) != 0;
+    switch (top) {
+        0, 1 => {
+            if (top == 0 and ((w & 0x0fc000f0) == 0x00000090 or (w & 0x0f8000f0) == 0x00800090)) {
+                if (S) q.fw = FN | FZ;
+                return q;
+            }
+            if (top == 0 and (w & 0x0e000090) == 0x00000090) return q;
+            if ((w & 0x0d900000) == 0x01000000) {
+                if ((w & 0x0fbf0fff) == 0x010f0000) q.fr = 15;
+                if ((w & 0x0db0f000) == 0x0120f000 and w & (1 << 19) != 0) q.fw = 15;
+                return q;
+            }
+            const o = bits(w, 21, 4);
+            const logical = o < 2 or o == 8 or o == 9 or o >= 12;
+            if (o >= 5 and o <= 7) q.fr |= FC;
+            if (w & (1 << 25) == 0) {
+                const kind = bits(w, 5, 2);
+                const n = bits(w, 7, 5);
+                const regsh = w & 0x10 != 0;
+                if ((!regsh and kind == 3 and n == 0) or (S and logical and (regsh or (kind == 0 and n == 0)))) q.fr |= FC;
+            } else if (S and logical and bits(w, 8, 4) == 0) q.fr |= FC;
+            if (S) q.fw = if (logical) FN | FZ | FC else 15;
+        },
+        6, 7 => {
+            if (top == 7 and w & (1 << 24) != 0) {
+                q.fr = 15;
+                q.fw = 15;
+            } else if ((w & 0x0fff0fff) == 0x0ef1fa10) q.fw = 15;
+        },
+        else => {},
+    }
+    return q;
+}
+pub fn rwThumb(h: u32) jit.RW {
+    var q = jit.ALL32;
+    q.fr = 0;
+    q.fw = 0;
+    switch (h >> 12) {
+        0, 1 => {
+            const o = (h >> 11) & 3;
+            q.fw = if (o == 3) 15 else if (o == 0 and (h >> 6) & 31 == 0) FN | FZ else FN | FZ | FC;
+        },
+        2, 3 => q.fw = if ((h >> 11) & 3 == 0) FN | FZ else 15,
+        4 => if ((h & 0xfc00) == 0x4000) {
+            switch ((h >> 6) & 15) {
+                0, 1, 8, 12, 13, 14, 15 => q.fw = FN | FZ,
+                2, 3, 4, 7 => {
+                    q.fr = FC;
+                    q.fw = FN | FZ | FC;
+                },
+                5, 6 => {
+                    q.fr = FC;
+                    q.fw = 15;
+                },
+                else => q.fw = 15,
+            }
+        } else if ((h & 0xff00) == 0x4500) {
+            q.fw = 15;
+        },
+        13 => {
+            const cc = (h >> 8) & 15;
+            if (cc < 14) q.fr = jit.condReads(@intCast(cc)) else if (cc == 15) {
+                q.fr = 15;
+                q.fw = 15;
+            }
+        },
+        else => {},
+    }
+    return q;
+}
 
 pub fn scanArm(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
     cpu.cover(page, pc, pc);
@@ -107,13 +196,10 @@ fn bxExit(e: *Emit, k: u32) void {
     e.countIc(k);
     e.exitRet();
 }
-fn setNZC(e: *Emit) void {
-    e.flagsNZ(false);
-    e.b.emit(.{ get(L_SC), set(L_C) });
-}
 fn shiftByReg(e: *Emit, kind: u32, carry: bool) void {
     const b = e.b;
     if (carry) {
+        e.settle(FC);
         b.emit(.{ get(L_A), O.i32_eqz, O.if_, wasm.I32, get(L_C), O.else_, get(L_B) });
         switch (kind) {
             0 => b.emit(.{ c32(32), get(L_A), O.i32_sub, O.i32_shr_u, c32(1), O.i32_and, c32(0), get(L_A), c32(32), O.i32_le_u, O.select }),
@@ -136,6 +222,7 @@ fn op2(e: *Emit, w: u32, pc: u32, carry: bool) void {
         const imm8 = w & 255;
         const v = if (rot == 0) imm8 else (imm8 >> @intCast(rot)) | (imm8 << @intCast(32 - rot));
         if (carry) {
+            if (rot == 0) e.settle(FC);
             if (rot == 0) b.get(L_C) else b.i32c(@intCast(v >> 31));
             b.set(L_SC);
         }
@@ -151,6 +238,7 @@ fn op2(e: *Emit, w: u32, pc: u32, carry: bool) void {
         return;
     }
     const n = bits(w, 7, 5);
+    if (carry or (kind == 3 and n == 0)) e.settle(FC);
     if (carry) {
         b.set(L_B);
         if (n == 0 and kind == 0) b.get(L_C) else b.emit(.{ get(L_B), c32(@intCast(switch (kind) {
@@ -191,9 +279,16 @@ pub fn emitArm(e: *Emit, pc: u32, k: u32) bool {
         e.fallback(pc, k);
         return false;
     }
+    const top = bits(w, 25, 3);
     if (cc != 14) {
         e.cond(@intCast(cc));
-        e.ifv();
+        if (top == 5 and w & (1 << 24) == 0) {
+            e.branch(pc +% 8 +% @as(u32, @bitCast(@as(i32, @bitCast(w << 8)) >> 6)), pc + 4, k);
+            return true;
+        }
+        const q = rwArm(w);
+        const inl = top == 4 or top == 2 or (top == 3 and w & 0x10 == 0) or (top < 2 and (w & 0x0d900000) != 0x01000000 and !(top == 0 and (w & 0x0e000090) == 0x00000090));
+        e.ifc(if (!inl or q.fw != 0) 15 else q.fr & ~jit.condReads(@intCast(cc)));
     }
     const ends = armBody(e, w, pc, k);
     if (cc != 14) {
@@ -305,8 +400,10 @@ fn dataProcessing(e: *Emit, w: u32, pc: u32, k: u32, top: u32, rn: u32, rd: u32,
             getR(e, rs, pc, false);
             b.byte(O.i32_mul);
             if (w & (1 << 21) != 0) b.emit(.{ get(L_X + rd), O.i32_add });
-            b.emit(.{ tee(L_R), set(L_X + rn) });
-            if (w & (1 << 20) != 0) e.flagsNZ(false);
+            const S = w & (1 << 20) != 0;
+            if (S) e.pre(.nz);
+            b.emit(.{ tee(if (S) FR else L_R), set(L_X + rn) });
+            if (S) e.pend(false, .nz);
             return false;
         }
         if ((w & 0x0f8000f0) == 0x00800090) {
@@ -317,7 +414,10 @@ fn dataProcessing(e: *Emit, w: u32, pc: u32, k: u32, top: u32, rn: u32, rd: u32,
             b.emit(.{ ext, O.i64_mul });
             if (w & (1 << 21) != 0) b.emit(.{ get(L_X + rn), O.i64_extend_i32_u, wasm.c64(32), O.i64_shl, get(L_X + rd), O.i64_extend_i32_u, O.i64_or, O.i64_add });
             b.emit(.{ tee(jit.L_T0), O.i32_wrap_i64, set(L_X + rd), get(jit.L_T0), wasm.c64(32), O.i64_shr_u, O.i32_wrap_i64, set(L_X + rn) });
-            if (w & (1 << 20) != 0) b.emit(.{ get(L_X + rn), c32(31), O.i32_shr_u, set(jit.L_N), get(jit.L_T0), O.i64_eqz, set(jit.L_Z) });
+            if (w & (1 << 20) != 0) {
+                e.eager(jit.FN | jit.FZ);
+                b.emit(.{ get(L_X + rn), c32(31), O.i32_shr_u, set(jit.L_N), get(jit.L_T0), O.i64_eqz, set(jit.L_Z) });
+            }
             return false;
         }
         if ((w & 0x0e000090) == 0x00000090) {
@@ -394,34 +494,38 @@ fn dataProcessing(e: *Emit, w: u32, pc: u32, k: u32, top: u32, rn: u32, rd: u32,
     const o = bits(w, 21, 4);
     const S = w & (1 << 20) != 0;
     const logical = o < 2 or o == 8 or o == 9 or o >= 12;
+    const A: u32 = if (S) FA else L_A;
+    const B: u32 = if (S) FB else L_B;
+    const R: u32 = if (S) FR else L_R;
+    const kind: jit.Pend = if (logical) .logic else switch (o) {
+        2, 10, 3 => .sub,
+        4, 11 => .add,
+        else => .adc,
+    };
+    if (S) e.pre(kind);
+    if (o >= 5 and o <= 7) e.settle(FC);
     op2(e, w, pc, S and logical);
-    b.set(L_B);
+    b.set(B);
     getR(e, rn, pc, false);
-    b.set(L_A);
+    b.set(A);
     switch (o) {
-        0, 8 => b.emit(.{ get(L_A), get(L_B), O.i32_and }),
-        1, 9 => b.emit(.{ get(L_A), get(L_B), O.i32_xor }),
-        12 => b.emit(.{ get(L_A), get(L_B), O.i32_or }),
-        14 => b.emit(.{ get(L_A), get(L_B), c32(-1), O.i32_xor, O.i32_and }),
-        13 => b.get(L_B),
-        15 => b.emit(.{ get(L_B), c32(-1), O.i32_xor }),
-        2, 10 => b.emit(.{ get(L_A), get(L_B), O.i32_sub }),
-        3 => b.emit(.{ get(L_B), get(L_A), O.i32_sub, get(L_A), get(L_B), set(L_A), set(L_B) }),
-        4, 11 => b.emit(.{ get(L_A), get(L_B), O.i32_add }),
-        5 => b.emit(.{ get(L_A), get(L_B), O.i32_add, get(L_C), O.i32_add }),
-        6 => b.emit(.{ get(L_B), c32(-1), O.i32_xor, set(L_B), get(L_A), get(L_B), O.i32_add, get(L_C), O.i32_add }),
-        else => b.emit(.{ get(L_A), c32(-1), O.i32_xor, get(L_B), set(L_A), set(L_B), get(L_A), get(L_B), O.i32_add, get(L_C), O.i32_add }),
+        0, 8 => b.emit(.{ get(A), get(B), O.i32_and }),
+        1, 9 => b.emit(.{ get(A), get(B), O.i32_xor }),
+        12 => b.emit(.{ get(A), get(B), O.i32_or }),
+        14 => b.emit(.{ get(A), get(B), c32(-1), O.i32_xor, O.i32_and }),
+        13 => b.get(B),
+        15 => b.emit(.{ get(B), c32(-1), O.i32_xor }),
+        2, 10 => b.emit(.{ get(A), get(B), O.i32_sub }),
+        3 => b.emit(.{ get(B), get(A), O.i32_sub, get(A), get(B), set(A), set(B) }),
+        4, 11 => b.emit(.{ get(A), get(B), O.i32_add }),
+        5 => b.emit(.{ get(A), get(B), O.i32_add, get(L_C), O.i32_add }),
+        6 => b.emit(.{ get(B), c32(-1), O.i32_xor, set(B), get(A), get(B), O.i32_add, get(L_C), O.i32_add }),
+        else => b.emit(.{ get(A), c32(-1), O.i32_xor, get(B), set(A), set(B), get(A), get(B), O.i32_add, get(L_C), O.i32_add }),
     }
-    b.set(L_R);
-    if (S) {
-        if (logical) setNZC(e) else switch (o) {
-            2, 10, 3 => e.flags(false, false, true),
-            4, 11 => e.flags(false, false, false),
-            else => e.flags(false, true, false),
-        }
-    }
+    b.set(R);
+    if (S) e.pend(false, kind);
     if (o < 8 or o > 11) {
-        b.get(L_R);
+        b.get(R);
         if (rd == 15) {
             bxExit(e, k);
             return true;
@@ -489,23 +593,24 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
         0, 1 => {
             const o = (h >> 11) & 3;
             if (o == 3) {
-                b.emit(.{ get(L_X + rn), set(L_A) });
+                b.emit(.{ get(L_X + rn), set(FA) });
                 if (h & (1 << 10) != 0) b.i32c(@intCast(rm)) else b.get(L_X + rm);
-                b.set(L_B);
+                b.set(FB);
                 const sub = h & (1 << 9) != 0;
-                b.emit(.{ get(L_A), get(L_B), if (sub) O.i32_sub else O.i32_add, tee(L_R), set(L_X + rd) });
-                e.flags(false, false, sub);
+                b.emit(.{ get(FA), get(FB), if (sub) O.i32_sub else O.i32_add, tee(FR), set(L_X + rd) });
+                e.pend(false, if (sub) .sub else .add);
             } else {
                 const n = (h >> 6) & 31;
+                e.pre(if (o == 0 and n == 0) .nz else .logic);
                 b.emit(.{ get(L_X + rn), set(L_B) });
                 if (o == 0 and n == 0) {
-                    b.emit(.{ get(L_B), tee(L_R), set(L_X + rd) });
-                    e.flagsNZ(false);
+                    b.emit(.{ get(L_B), tee(FR), set(L_X + rd) });
+                    e.pend(false, .nz);
                 } else {
                     b.emit(.{ c32(@intCast(if (n == 0) 32 else n)), set(L_A) });
                     shiftByReg(e, o, true);
-                    b.emit(.{ tee(L_R), set(L_X + rd) });
-                    setNZC(e);
+                    b.emit(.{ tee(FR), set(L_X + rd) });
+                    e.pend(false, .logic);
                 }
             }
         },
@@ -514,54 +619,61 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
             const r8 = (h >> 8) & 7;
             const imm: i32 = @intCast(h & 255);
             if (o == 0) {
-                b.emit(.{ c32(imm), tee(L_R), set(L_X + r8) });
-                e.flagsNZ(false);
+                e.pre(.nz);
+                b.emit(.{ c32(imm), tee(FR), set(L_X + r8) });
+                e.pend(false, .nz);
             } else {
-                b.emit(.{ get(L_X + r8), set(L_A), c32(imm), set(L_B), get(L_A), get(L_B), if (o == 2) O.i32_add else O.i32_sub, set(L_R) });
-                e.flags(false, false, o != 2);
-                if (o != 1) b.emit(.{ get(L_R), set(L_X + r8) });
+                b.emit(.{ get(L_X + r8), set(FA), c32(imm), set(FB), get(FA), get(FB), if (o == 2) O.i32_add else O.i32_sub, set(FR) });
+                if (o != 1) b.emit(.{ get(FR), set(L_X + r8) });
+                e.pend(false, if (o == 2) .add else .sub);
             }
         },
         4 => {
             if ((h & 0xfc00) == 0x4000) {
                 const o = (h >> 6) & 15;
-                b.emit(.{ get(L_X + rd), set(L_A), get(L_X + rn), set(L_B) });
+                e.pre(switch (o) {
+                    0, 1, 8, 12, 13, 14, 15 => .nz,
+                    2, 3, 4, 7 => .logic,
+                    else => .add,
+                });
+                if (o >= 2 and o <= 7) e.settle(FC);
+                b.emit(.{ get(L_X + rd), set(FA), get(L_X + rn), set(FB) });
                 switch (o) {
                     0, 1, 8, 12, 14, 15 => {
-                        if (o != 15) b.get(L_A);
-                        b.get(L_B);
+                        if (o != 15) b.get(FA);
+                        b.get(FB);
                         if (o == 14 or o == 15) b.emit(.{ c32(-1), O.i32_xor });
                         if (o != 15) b.byte(switch (o) {
                             0, 8, 14 => O.i32_and,
                             1 => O.i32_xor,
                             else => O.i32_or,
                         });
-                        b.tee(L_R);
+                        b.tee(FR);
                         if (o == 8) b.byte(O.drop) else setR(e, rd);
-                        e.flagsNZ(false);
+                        e.pend(false, .nz);
                     },
                     2, 3, 4, 7 => {
-                        b.emit(.{ get(L_A), get(L_B), c32(255), O.i32_and, set(L_A), set(L_B) });
+                        b.emit(.{ get(FA), get(FB), c32(255), O.i32_and, set(L_A), set(L_B) });
                         shiftByReg(e, if (o == 7) 3 else o - 2, true);
-                        b.emit(.{ tee(L_R), set(L_X + rd) });
-                        setNZC(e);
+                        b.emit(.{ tee(FR), set(L_X + rd) });
+                        e.pend(false, .logic);
                     },
                     5, 6 => {
-                        if (o == 6) b.emit(.{ get(L_B), c32(-1), O.i32_xor, set(L_B) });
-                        b.emit(.{ get(L_A), get(L_B), O.i32_add, get(L_C), O.i32_add, tee(L_R), set(L_X + rd) });
-                        e.flags(false, true, false);
+                        if (o == 6) b.emit(.{ get(FB), c32(-1), O.i32_xor, set(FB) });
+                        b.emit(.{ get(FA), get(FB), O.i32_add, get(L_C), O.i32_add, tee(FR), set(L_X + rd) });
+                        e.pend(false, .adc);
                     },
                     9 => {
-                        b.emit(.{ c32(0), set(L_A), c32(0), get(L_B), O.i32_sub, tee(L_R), set(L_X + rd) });
-                        e.flags(false, false, true);
+                        b.emit(.{ c32(0), set(FA), c32(0), get(FB), O.i32_sub, tee(FR), set(L_X + rd) });
+                        e.pend(false, .sub);
                     },
                     10, 11 => {
-                        b.emit(.{ get(L_A), get(L_B), if (o == 10) O.i32_sub else O.i32_add, set(L_R) });
-                        e.flags(false, false, o == 10);
+                        b.emit(.{ get(FA), get(FB), if (o == 10) O.i32_sub else O.i32_add, set(FR) });
+                        e.pend(false, if (o == 10) .sub else .add);
                     },
                     else => {
-                        b.emit(.{ get(L_A), get(L_B), O.i32_mul, tee(L_R), set(L_X + rd) });
-                        e.flagsNZ(false);
+                        b.emit(.{ get(FA), get(FB), O.i32_mul, tee(FR), set(L_X + rd) });
+                        e.pend(false, .nz);
                     },
                 }
                 return false;
@@ -590,10 +702,10 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                     },
                     1 => {
                         getR(e, d, pc, true);
-                        b.set(L_A);
+                        b.set(FA);
                         getR(e, m, pc, true);
-                        b.emit(.{ set(L_B), get(L_A), get(L_B), O.i32_sub, set(L_R) });
-                        e.flags(false, false, true);
+                        b.emit(.{ set(FB), get(FA), get(FB), O.i32_sub, set(FR) });
+                        e.pend(false, .sub);
                     },
                     else => {
                         getR(e, m, pc, true);
@@ -677,10 +789,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
             }
             const target = pc +% 4 +% @as(u32, @bitCast(bt.sx(i32, h & 255, 8) * 2));
             e.cond(@intCast(cc));
-            e.ifv();
-            e.transfer(e.r.blocks[e.blk].taken, target | 1, k);
-            e.endif();
-            e.transfer(e.r.blocks[e.blk].fall, (pc + 2) | 1, k);
+            e.branch(target | 1, (pc + 2) | 1, k);
             return true;
         },
         14 => {
@@ -761,10 +870,7 @@ fn thumbMisc(e: *Emit, h: u32, pc: u32, k: u32, rd: u32, rn: u32) bool {
         const target = pc + 4 + ((h >> 3) & 31) * 2 + ((h & 0x200) >> 3);
         b.emit(.{ get(L_X + rd), O.i32_eqz });
         if (h & 0x800 != 0) b.byte(O.i32_eqz);
-        e.ifv();
-        e.transfer(e.r.blocks[e.blk].taken, target | 1, k);
-        e.endif();
-        e.transfer(e.r.blocks[e.blk].fall, (pc + 2) | 1, k);
+        e.branch(target | 1, (pc + 2) | 1, k);
         return true;
     }
     e.fallback(pc, k);

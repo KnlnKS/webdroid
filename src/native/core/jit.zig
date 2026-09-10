@@ -21,6 +21,7 @@ const c64 = wasm.c64;
 const mo = wasm.mo;
 const call = wasm.call;
 const bit = bt.bit;
+const bits = bt.bits;
 
 pub const HEAT = 48;
 const MAX_BLOCKS = 40;
@@ -48,6 +49,29 @@ pub const L_IC = 48;
 pub const L_LIMIT = 49;
 pub const L_F0 = 50;
 pub const L_F1 = 51;
+pub const L_FA64 = 52;
+pub const L_FB64 = 53;
+pub const L_FR64 = 54;
+pub const L_FA32 = 55;
+pub const L_FB32 = 56;
+pub const L_FR32 = 57;
+pub const FN: u4 = 8;
+pub const FZ: u4 = 4;
+pub const FC: u4 = 2;
+pub const FV: u4 = 1;
+pub const Pend = enum(u8) { none, add, sub, adc, logic, nz };
+pub fn condReads(cc: u8) u4 {
+    return switch (cc >> 1) {
+        0 => FZ,
+        1 => FC,
+        2 => FN,
+        3 => FV,
+        4 => FC | FZ,
+        5 => FN | FV,
+        6 => FZ | FN | FV,
+        else => 0,
+    };
+}
 const F_EXEC = 0;
 const F_TX = 1;
 const F_STORE = 2;
@@ -93,7 +117,7 @@ export fn jit_config(c: u32) void {
 }
 
 pub const Isa = enum(u8) { a64 = 0, arm = 1, thumb = 2 };
-pub const Block = struct { pc: u32, n: u32, taken: i32, fall: i32 };
+pub const Block = struct { pc: u32, n: u32, taken: i32, fall: i32, exits: bool };
 pub const Region = struct {
     entry: u32,
     page: u32,
@@ -151,7 +175,7 @@ export fn jit_done() void {
 pub fn blockFor(r: *Region, pc: u32) i32 {
     for (r.blocks[0..r.nblocks], 0..) |b, i| if (b.pc == pc) return @intCast(i);
     if (r.nblocks >= MAX_BLOCKS or (pc >> abi.PAGE_SHIFT) != r.page) return -1;
-    r.blocks[r.nblocks] = .{ .pc = pc, .n = 0, .taken = -1, .fall = -1 };
+    r.blocks[r.nblocks] = .{ .pc = pc, .n = 0, .taken = -2, .fall = -2, .exits = false };
     r.nblocks += 1;
     return @intCast(r.nblocks - 1);
 }
@@ -199,6 +223,7 @@ fn discover(r: *Region, page: *cpu.Page) bool {
             pc += s.len;
             if (s.ends or n >= MAX_INSTR or total >= MAX_INSTR or (pc & (abi.PAGE_SIZE - 1)) == 0) {
                 if (!s.ends) r.blocks[i].fall = if ((pc & (abi.PAGE_SIZE - 1)) != 0 and total < MAX_INSTR) blockFor(r, pc) else -1;
+                r.blocks[i].exits = s.ends and r.blocks[i].taken == -2;
                 break;
             }
         }
@@ -207,9 +232,9 @@ fn discover(r: *Region, page: *cpu.Page) bool {
     return r.nblocks > 0;
 }
 
-pub const RW = struct { r: u32, w: u32, fr: bool = false, fw: bool = false };
-const ALL = RW{ .r = 0xffff_ffff, .w = 0xffff_ffff, .fr = true, .fw = true };
-const ALL32 = RW{ .r = 0x7fff, .w = 0x7fff, .fr = true, .fw = true };
+pub const RW = struct { r: u32, w: u32, fr: u4 = 0, fw: u4 = 0, cond: bool = false };
+const ALL = RW{ .r = 0xffff_ffff, .w = 0xffff_ffff, .fr = 15, .fw = 15 };
+pub const ALL32 = RW{ .r = 0x7fff, .w = 0x7fff, .fr = 15, .fw = 15 };
 pub const LD = [4][2]u8{
     .{ O.i64_load8_u, O.i64_load8_s },
     .{ O.i64_load16_u, O.i64_load16_s },
@@ -220,6 +245,12 @@ pub const ST = [4]u8{ O.i64_store8, O.i64_store16, O.i64_store32, O.i64_store };
 const Regs = struct { a: u32, b: u32, r: u32, t: u32 };
 inline fn regs(comptime wide: bool) Regs {
     return if (wide) .{ .a = L_T0, .b = L_T1, .r = L_T2, .t = L_T3 } else .{ .a = L_A, .b = L_B, .r = L_R, .t = L_NEXT };
+}
+pub inline fn fregs(comptime wide: bool) Regs {
+    return if (wide) .{ .a = L_FA64, .b = L_FB64, .r = L_FR64, .t = L_T3 } else .{ .a = L_FA32, .b = L_FB32, .r = L_FR32, .t = L_NEXT };
+}
+inline fn cmpOp(comptime wide: bool, op32: u8) u8 {
+    return if (wide) op32 + 0x0b else op32;
 }
 fn topBit(b: *Buf, comptime wide: bool) void {
     if (wide) b.emit(.{ c64(63), O.i64_shr_u, O.i32_wrap_i64 }) else b.emit(.{ c32(31), O.i32_shr_u });
@@ -242,10 +273,124 @@ pub fn Emit(comptime wide: bool) type {
         chain_depth: u32,
         top_depth: u32,
         nest: u32,
+        pk: Pend = .none,
+        term: bool = false,
+        lin: [MAX_BLOCKS]u4 = undefined,
+        pw: bool = false,
+        pdirty: u4 = 0,
 
         pub fn ifv(e: *Self) void {
             e.b.blockStart(O.if_, wasm.VOID);
             e.nest += 1;
+        }
+        pub fn ifc(e: *Self, mask: u4) void {
+            e.settle(mask);
+            e.ifv();
+        }
+        pub fn branch(e: *Self, tpc: u32, fpc: u32, k: u32) void {
+            const blk = e.r.blocks[e.blk];
+            const pk = e.pk;
+            const pw = e.pw;
+            const pdirty = e.pdirty;
+            e.ifv();
+            e.term = true;
+            e.transfer(blk.taken, tpc, k);
+            e.b.byte(O.else_);
+            e.pk = pk;
+            e.pw = pw;
+            e.pdirty = pdirty;
+            e.transfer(blk.fall, fpc, k);
+            e.term = false;
+            e.endif();
+            e.pk = .none;
+            e.pdirty = 0;
+        }
+        fn kindMask(kind: Pend) u4 {
+            return switch (kind) {
+                .logic => if (wide) 15 else 14,
+                .nz => 12,
+                else => 15,
+            };
+        }
+        fn flagsOf(e: *Self, comptime w: bool, kind: Pend, mask: u4) void {
+            const R = fregs(w);
+            const b = e.b;
+            if (mask & FN != 0) {
+                b.get(R.r);
+                topBit(b, w);
+                b.set(L_N);
+            }
+            if (mask & FZ != 0) b.emit(.{ get(R.r), W(w, O.i32_eqz), set(L_Z) });
+            if (mask & FC != 0) switch (kind) {
+                .add => b.emit(.{ get(R.r), get(R.a), W(w, O.i32_lt_u), set(L_C) }),
+                .sub => b.emit(.{ get(R.a), get(R.b), W(w, O.i32_ge_u), set(L_C) }),
+                .adc => b.emit(.{ get(R.a), get(R.b), W(w, O.i32_add), tee(R.t), get(R.a), W(w, O.i32_lt_u), get(R.r), get(R.t), W(w, O.i32_lt_u), O.i32_or, set(L_C) }),
+                .logic => if (wide) b.emit(.{ c32(0), set(L_C) }) else b.emit(.{ get(L_SC), set(L_C) }),
+                .nz, .none => {},
+            };
+            if (mask & FV != 0) switch (kind) {
+                .add, .adc, .sub => {
+                    b.emit(.{ get(R.a), get(if (kind == .sub) R.b else R.r), W(w, O.i32_xor), get(if (kind == .sub) R.a else R.b), get(R.r), W(w, O.i32_xor), W(w, O.i32_and) });
+                    topBit(b, w);
+                    b.set(L_V);
+                },
+                .logic => if (wide) b.emit(.{ c32(0), set(L_V) }),
+                .nz, .none => {},
+            };
+        }
+        pub fn pre(e: *Self, kind: Pend) void {
+            e.settle(~kindMask(kind));
+        }
+        pub fn pend(e: *Self, comptime w: bool, kind: Pend) void {
+            e.pk = kind;
+            e.pw = w;
+            e.pdirty = kindMask(kind);
+            if (e.nest != 0) e.emitPending(e.pdirty);
+        }
+        fn emitPending(e: *Self, m: u4) void {
+            if (wide and e.pw) e.flagsOf(true, e.pk, m) else e.flagsOf(false, e.pk, m);
+            e.drop(m);
+        }
+        pub fn settle(e: *Self, mask: u4) void {
+            const m = mask & e.pdirty;
+            if (m == 0) return;
+            std.debug.assert(e.nest == 0 or e.term);
+            e.emitPending(m);
+        }
+        fn drop(e: *Self, mask: u4) void {
+            e.pdirty &= ~mask;
+            if (e.pdirty == 0) e.pk = .none;
+        }
+        pub fn eager(e: *Self, mask: u4) void {
+            e.settle(~mask);
+            e.drop(mask);
+        }
+        fn fuse(e: *Self, comptime w: bool, cc: u8) bool {
+            const R = fregs(w);
+            const b = e.b;
+            switch (cc >> 1) {
+                0 => b.emit(.{ get(R.r), W(w, O.i32_eqz) }),
+                2 => {
+                    b.get(R.r);
+                    topBit(b, w);
+                },
+                1 => switch (e.pk) {
+                    .sub => b.emit(.{ get(R.a), get(R.b), cmpOp(w, O.i32_ge_u) }),
+                    .add => b.emit(.{ get(R.r), get(R.a), cmpOp(w, O.i32_lt_u) }),
+                    else => return false,
+                },
+                4, 5, 6 => {
+                    if (e.pk != .sub) return false;
+                    b.emit(.{ get(R.a), get(R.b), cmpOp(w, switch (cc >> 1) {
+                        4 => O.i32_gt_u,
+                        5 => O.i32_ge_s,
+                        else => O.i32_gt_s,
+                    }) });
+                },
+                else => return false,
+            }
+            if (cc & 1 != 0) b.byte(O.i32_eqz);
+            return true;
         }
         pub fn endif(e: *Self) void {
             e.b.byte(O.end);
@@ -284,14 +429,20 @@ pub fn Emit(comptime wide: bool) type {
         fn spillFlags(e: *Self) void {
             e.b.emit(.{ get(L_CPU), get(L_CPU), mo(O.i32_load, OFF_CPSR), c32(0x0fff_ffff), O.i32_and, get(L_N), c32(31), O.i32_shl, O.i32_or, get(L_Z), c32(30), O.i32_shl, O.i32_or, get(L_C), c32(29), O.i32_shl, O.i32_or, get(L_V), c32(28), O.i32_shl, O.i32_or, mo(O.i32_store, OFF_CPSR) });
         }
-        fn loadFlags(e: *Self) void {
-            e.b.emit(.{ get(L_CPU), mo(O.i32_load, OFF_CPSR), set(L_A), get(L_A), c32(31), O.i32_shr_u, set(L_N) });
-            for ([_]u8{ 30, 29, 28 }, L_Z..L_V + 1) |s, l| e.b.emit(.{ get(L_A), c32(s), O.i32_shr_u, c32(1), O.i32_and, set(@intCast(l)) });
+        fn loadFlags(e: *Self, mask: u4) void {
+            if (mask == 0) return;
+            e.b.emit(.{ get(L_CPU), mo(O.i32_load, OFF_CPSR), set(L_A) });
+            if (mask & FN != 0) e.b.emit(.{ get(L_A), c32(31), O.i32_shr_u, set(L_N) });
+            for ([_]u8{ 30, 29, 28 }, [_]u4{ FZ, FC, FV }, L_Z..L_V + 1) |s, f, l| if (mask & f != 0) e.b.emit(.{ get(L_A), c32(s), O.i32_shr_u, c32(1), O.i32_and, set(@intCast(l)) });
+        }
+        fn edge(e: *Self, t: i32) u4 {
+            return if (t >= 0) e.lin[@intCast(t)] else 15;
         }
         pub fn exit(e: *Self) void {
             e.b.br(e.exit_depth + e.nest);
         }
         pub fn exitRet(e: *Self) void {
+            e.settle(15);
             e.spillRegs(e.wcur);
             e.spillFlags();
             e.b.br(e.chain_depth + e.nest);
@@ -305,6 +456,7 @@ pub fn Emit(comptime wide: bool) type {
             e.exit();
         }
         pub fn transfer(e: *Self, target: i32, pc: u32, k: u32) void {
+            e.settle(e.edge(target));
             e.countIc(k);
             if (target < 0) return e.exitTo(pc);
             if (target <= @as(i32, @intCast(e.blk))) {
@@ -318,11 +470,15 @@ pub fn Emit(comptime wide: bool) type {
         }
         pub fn fallback(e: *Self, pc: u32, k: u32) void {
             const b = e.b;
+            if (e.rw.fr | e.rw.fw != 0) e.settle(15);
             e.spillRegs(e.rw.r | e.rw.w);
-            if (e.rw.fr or e.rw.fw) e.spillFlags();
+            if (e.rw.fr | e.rw.fw != 0) e.spillFlags();
             if (wide) b.emit(.{ get(L_CPU), c32(@bitCast(mem.ld(u32, pc))), c32(@bitCast(pc)), call(F_EXEC), set(L_R) }) else b.emit(.{ get(L_CPU), c32(@bitCast(pc)), call(F_EXEC32), set(L_R) });
             e.loadRegs(e.rw.w);
-            if (e.rw.fw) e.loadFlags();
+            if (e.rw.fw != 0) {
+                e.loadFlags(15);
+                e.eager(15);
+            }
             b.get(L_R);
             e.ifv();
             e.countIc(k);
@@ -359,6 +515,8 @@ pub fn Emit(comptime wide: bool) type {
         }
         pub fn cond(e: *Self, cc: u8) void {
             const b = e.b;
+            if (e.pk != .none and cc < 14 and (if (wide and e.pw) e.fuse(true, cc) else e.fuse(false, cc))) return;
+            e.settle(condReads(cc));
             switch (cc >> 1) {
                 0 => b.get(L_Z),
                 1 => b.get(L_C),
@@ -370,27 +528,6 @@ pub fn Emit(comptime wide: bool) type {
                 else => return b.i32c(1),
             }
             if (cc & 1 != 0) b.byte(O.i32_eqz);
-        }
-        pub fn flagsNZ(e: *Self, comptime w: bool) void {
-            const R = regs(w);
-            e.b.get(R.r);
-            topBit(e.b, w);
-            e.b.emit(.{ set(L_N), get(R.r), W(w, O.i32_eqz), set(L_Z) });
-        }
-        pub fn flagsLogic(e: *Self, comptime w: bool) void {
-            e.flagsNZ(w);
-            e.b.emit(.{ c32(0), set(L_C), c32(0), set(L_V) });
-        }
-        pub fn flags(e: *Self, comptime w: bool, carry_in: bool, sub: bool) void {
-            const R = regs(w);
-            const b = e.b;
-            e.flagsNZ(w);
-            if (!carry_in) {
-                if (sub) b.emit(.{ get(R.a), get(R.b), W(w, O.i32_ge_u) }) else b.emit(.{ get(R.r), get(R.a), W(w, O.i32_lt_u) });
-            } else b.emit(.{ get(R.a), get(R.b), W(w, O.i32_add), tee(R.t), get(R.a), W(w, O.i32_lt_u), get(R.r), get(R.t), W(w, O.i32_lt_u), O.i32_or });
-            b.emit(.{ set(L_C), get(R.a), get(if (sub) R.b else R.r), W(w, O.i32_xor), get(if (sub) R.a else R.b), get(R.r), W(w, O.i32_xor), W(w, O.i32_and) });
-            topBit(b, w);
-            b.set(L_V);
         }
         fn shiftOp(comptime w: bool, kind: u8) u8 {
             return switch (kind & 3) {
@@ -434,8 +571,11 @@ pub fn Emit(comptime wide: bool) type {
         }
         fn arith(e: *Self, comptime w: bool, o: *const Op, sub: bool, carry: bool, flag: bool) void {
             const b = e.b;
-            const R = regs(w);
+            const R = if (flag) fregs(w) else regs(w);
+            const kind: Pend = if (carry) .adc else if (sub) .sub else .add;
+            if (flag) e.pre(kind);
             if (carry) {
+                e.settle(FC);
                 e.getX(o.rn);
                 if (!w) b.byte(O.i32_wrap_i64);
                 b.set(R.a);
@@ -445,7 +585,6 @@ pub fn Emit(comptime wide: bool) type {
                 b.emit(.{ set(R.b), get(R.a), get(R.b), W(w, O.i32_add), get(L_C) });
                 if (w) b.byte(O.i64_extend_i32_u);
                 b.emit(.{ W(w, O.i32_add), tee(R.r) });
-                if (flag) e.flags(w, true, false);
             } else {
                 if (o.b == 1) e.getX(o.rn) else e.getSP(o.rn);
                 if (!w) b.byte(O.i32_wrap_i64);
@@ -453,7 +592,6 @@ pub fn Emit(comptime wide: bool) type {
                 e.operand2(o);
                 if (!w) b.byte(O.i32_wrap_i64);
                 b.emit(.{ set(R.b), get(R.a), get(R.b), if (sub) W(w, O.i32_sub) else W(w, O.i32_add), tee(R.r) });
-                if (flag) e.flags(w, false, sub);
             }
             if (flag or carry) {
                 if (w) e.setX(o.rd) else e.setW(o.rd);
@@ -461,6 +599,7 @@ pub fn Emit(comptime wide: bool) type {
                 if (!w) b.byte(O.i64_extend_i32_u);
                 e.setSP(o.rd);
             }
+            if (flag) e.pend(w, kind);
         }
         fn divide(e: *Self, comptime w: bool, signed: bool) void {
             const b = e.b;
@@ -485,6 +624,7 @@ pub fn Emit(comptime wide: bool) type {
                 .logic => {
                     const opc = o.a & 3;
                     const sf = o.a & 4 != 0;
+                    if (opc == 3) e.pre(.logic);
                     e.getX(o.rn);
                     e.operand2(o);
                     b.byte(switch (opc) {
@@ -492,10 +632,10 @@ pub fn Emit(comptime wide: bool) type {
                         1 => O.i64_or,
                         else => O.i64_xor,
                     });
-                    if (!sf) b.emit(.{ O.i32_wrap_i64, tee(L_R), O.i64_extend_i32_u }) else b.tee(L_T2);
+                    if (!sf) b.emit(.{ O.i32_wrap_i64, tee(if (opc == 3) L_FR32 else L_R), O.i64_extend_i32_u }) else if (opc == 3) b.tee(L_FR64);
                     if (opc == 3) {
-                        if (sf) e.flagsLogic(true) else e.flagsLogic(false);
                         e.setX(o.rd);
+                        if (sf) e.pend(true, .logic) else e.pend(false, .logic);
                     } else if (o.a & 8 != 0) e.setX(o.rd) else e.setSP(o.rd);
                 },
                 .movw => {
@@ -582,10 +722,7 @@ pub fn Emit(comptime wide: bool) type {
                             if (o.a == 0) b.byte(O.i32_eqz);
                         },
                     }
-                    e.ifv();
-                    e.transfer(e.r.blocks[e.blk].taken, @truncate(o.imm), k);
-                    e.endif();
-                    e.transfer(e.r.blocks[e.blk].fall, pc + 4, k);
+                    e.branch(@truncate(o.imm), pc + 4, k);
                     return true;
                 },
                 .br => {
@@ -669,23 +806,25 @@ pub fn Emit(comptime wide: bool) type {
                     }
                 },
                 .ccmp => {
+                    const kind: Pend = if (o.a & 1 != 0) .sub else .add;
                     e.cond(o.b);
+                    e.eager(15);
                     b.blockStart(O.if_, wasm.VOID);
                     if (o.a & 4 != 0) {
                         e.getX(o.rn);
-                        b.set(L_T0);
+                        b.set(L_FA64);
                         if (o.a & 8 != 0) b.i64c(@bitCast(o.imm)) else e.getX(o.rm);
-                        b.emit(.{ set(L_T1), get(L_T0), get(L_T1), if (o.a & 1 != 0) O.i64_sub else O.i64_add, set(L_T2) });
-                        e.flags(true, false, o.a & 1 != 0);
+                        b.emit(.{ set(L_FB64), get(L_FA64), get(L_FB64), if (o.a & 1 != 0) O.i64_sub else O.i64_add, set(L_FR64) });
+                        e.flagsOf(true, kind, 15);
                     } else {
                         e.getX(o.rn);
-                        b.emit(.{ O.i32_wrap_i64, set(L_A) });
+                        b.emit(.{ O.i32_wrap_i64, set(L_FA32) });
                         if (o.a & 8 != 0) b.i32c(@intCast(o.imm)) else {
                             e.getX(o.rm);
                             b.byte(O.i32_wrap_i64);
                         }
-                        b.emit(.{ set(L_B), get(L_A), get(L_B), if (o.a & 1 != 0) O.i32_sub else O.i32_add, set(L_R) });
-                        e.flags(false, false, o.a & 1 != 0);
+                        b.emit(.{ set(L_FB32), get(L_FA32), get(L_FB32), if (o.a & 1 != 0) O.i32_sub else O.i32_add, set(L_FR32) });
+                        e.flagsOf(false, kind, 15);
                     }
                     b.byte(O.else_);
                     for ([_]u32{ L_N, L_Z, L_C, L_V }, 0..) |l, i| b.emit(.{ c32((o.ra >> @intCast(3 - i)) & 1), set(l) });
@@ -806,7 +945,7 @@ pub fn Emit(comptime wide: bool) type {
 fn rwOf(o: *const Op) RW {
     return switch (o.kind) {
         .nop, .clrex, .fault, .vldrlit => .{ .r = 0, .w = 0 },
-        .bcond => .{ .r = 0, .w = 0, .fr = true },
+        .bcond => .{ .r = 0, .w = 0, .fr = condReads(o.a) },
         .adr, .ldrlit => .{ .r = 0, .w = bit(o.rd) },
         .movw => .{ .r = if (o.a & 3 == 3) bit(o.rd) else 0, .w = bit(o.rd) },
         .cbz, .tbz => .{ .r = bit(o.rd), .w = 0 },
@@ -823,22 +962,22 @@ fn rwOf(o: *const Op) RW {
             const base = bit(o.rn) | (if (o.a == 3) bit(o.rm) else 0);
             break :blk if (load) .{ .r = base, .w = bit(o.rd) | wb } else .{ .r = base | bit(o.rd), .w = wb };
         },
-        .addsub => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd), .fw = o.a & 2 != 0 },
-        .logic => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd), .fw = o.a & 3 == 3 },
+        .addsub => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd), .fw = if (o.a & 2 != 0) 15 else 0 },
+        .logic => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd), .fw = if (o.a & 3 == 3) 15 else 0 },
         .bfm => .{ .r = bit(o.rn) | (if (o.a & 3 == 1) bit(o.rd) else 0), .w = bit(o.rd) },
         .extr, .two => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd) },
         .one => .{ .r = bit(o.rn), .w = bit(o.rd) },
         .three => .{ .r = bit(o.rn) | bit(o.rm) | bit(o.ra), .w = bit(o.rd) },
-        .adc => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd), .fr = true, .fw = o.a & 2 != 0 },
-        .ccmp => .{ .r = bit(o.rn) | bit(o.rm), .w = 0, .fr = true, .fw = true },
-        .csel => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd), .fr = true },
+        .adc => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd), .fr = FC, .fw = if (o.a & 2 != 0) 15 else 0 },
+        .ccmp => .{ .r = bit(o.rn) | bit(o.rm), .w = 0, .fr = condReads(o.b), .fw = 15 },
+        .csel => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd), .fr = condReads(o.b) },
         .excl => blk: {
             const m = bit(o.rd) | bit(o.rd + 1) | bit(o.rn) | bit(o.rm) | bit(o.rm + 1) | bit(o.ra);
             break :blk .{ .r = m, .w = m };
         },
         .atomic => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rd) },
-        .mrs => .{ .r = 0, .w = bit(o.rd), .fr = o.imm == 0x5a10 },
-        .msr => .{ .r = bit(o.rd), .w = 0, .fw = o.imm == 0x5a10 },
+        .mrs => .{ .r = 0, .w = bit(o.rd), .fr = if (o.imm == 0x5a10) 15 else 0 },
+        .msr => .{ .r = bit(o.rd), .w = 0, .fw = if (o.imm == 0x5a10) 15 else 0 },
         .vmem => .{ .r = bit(o.rn) | bit(o.rm), .w = bit(o.rn) },
         .simd => simdRw(@truncate(o.imm)),
         .svc, .raw => ALL,
@@ -852,15 +991,18 @@ fn simdRw(w: u32) RW {
             const opcode = (w >> 16) & 7;
             return if (opcode == 2 or opcode == 3 or opcode == 7) .{ .r = bit(rn), .w = 0 } else .{ .r = 0, .w = bit(rd) };
         }
-        if (w & 0x5f20_3c00 == 0x1e20_2000) return .{ .r = 0, .w = 0, .fw = true };
-        if (w & 0x5f20_0c00 == 0x1e20_0400) return .{ .r = 0, .w = 0, .fr = true, .fw = true };
-        if (w & 0x5f20_0c00 == 0x1e20_0c00) return .{ .r = 0, .w = 0, .fr = true };
+        if (w & 0x5f20_3c00 == 0x1e20_2000) return .{ .r = 0, .w = 0, .fw = 15 };
+        if (w & 0x5f20_0c00 == 0x1e20_0400) return .{ .r = 0, .w = 0, .fr = condReads(@intCast(bits(w, 12, 4))), .fw = 15 };
+        if (w & 0x5f20_0c00 == 0x1e20_0c00) return .{ .r = 0, .w = 0, .fr = condReads(@intCast(bits(w, 12, 4))) };
         return .{ .r = 0, .w = 0 };
     }
     if (w & 0x9fe0_8400 == 0x0e00_0400 and w & 0x800 != 0) return if (w & 0x2000 != 0) .{ .r = 0, .w = bit(rd) } else .{ .r = bit(rn), .w = 0 };
     return .{ .r = 0, .w = 0 };
 }
 
+inline fn ilen(comptime isa: Isa, pc: u32) u32 {
+    return if (isa == .thumb and (mem.ld(u16, pc) & 0xf800) != 0xf000) 2 else 4;
+}
 fn emitRegion(b: *Buf, r: *Region, page: *cpu.Page) void {
     switch (r.isa) {
         inline else => |isa| emitRegionAs(isa, b, r, page),
@@ -872,27 +1014,64 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
     const n = r.nblocks;
     var writes: [MAX_BLOCKS]u32 = undefined;
     var wb: [MAX_BLOCKS]u32 = undefined;
-    if (wide) {
-        for (r.blocks[0..n], 0..) |blk, i| {
-            writes[i] = 0;
-            wb[i] = 0;
-            var pc = blk.pc;
-            var j: u32 = 0;
-            while (j < blk.n) : (j += 1) {
-                const rw = rwOf(&page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2]);
-                writes[i] |= rw.w;
-                e.used |= rw.r | rw.w;
-                pc += 4;
-            }
-            e.written |= writes[i];
+    var base: [MAX_BLOCKS]u32 = undefined;
+    var fr: [MAX_INSTR]u4 = undefined;
+    var fk: [MAX_INSTR]u4 = undefined;
+    var t: u32 = 0;
+    for (r.blocks[0..n], 0..) |blk, i| {
+        writes[i] = 0;
+        wb[i] = 0;
+        base[i] = t;
+        var pc = blk.pc;
+        var j: u32 = 0;
+        while (j < blk.n) : (j += 1) {
+            var rw = switch (isa) {
+                .a64 => rwOf(&page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2]),
+                .arm => jit32.rwArm(mem.ld(u32, pc)),
+                .thumb => jit32.rwThumb(mem.ld(u16, pc)),
+            };
+            if (pc -% fb_lo < fb_hi -% fb_lo) rw = if (wide) ALL else ALL32;
+            writes[i] |= rw.w;
+            e.used |= rw.r | rw.w;
+            fr[t] = rw.fr;
+            fk[t] = if (rw.cond) 0 else rw.fw;
+            t += 1;
+            pc += ilen(isa, pc);
         }
-        var changed = true;
+        e.written |= writes[i];
+    }
+    var lin: [MAX_BLOCKS]u4 = [_]u4{0} ** MAX_BLOCKS;
+    var changed = true;
+    while (changed) {
+        changed = false;
+        var i: u32 = n;
+        while (i > 0) {
+            i -= 1;
+            const blk = r.blocks[i];
+            var l: u4 = if (blk.exits) 15 else 0;
+            for ([_]i32{ blk.taken, blk.fall }) |x| l |= if (x >= 0) lin[@intCast(x)] else if (x == -1) 15 else 0;
+            var j = blk.n;
+            while (j > 0) {
+                j -= 1;
+                l = (l & ~fk[base[i] + j]) | fr[base[i] + j];
+            }
+            if (l != lin[i]) {
+                lin[i] = l;
+                changed = true;
+            }
+        }
+    }
+    e.lin = lin;
+    var live: u4 = 0;
+    for (lin[0..n]) |l| live |= l;
+    if (wide) {
+        changed = true;
         while (changed) {
             changed = false;
             for (r.blocks[0..n], 0..) |blk, i| {
                 const out = wb[i] | writes[i];
-                for ([_]i32{ blk.taken, blk.fall }) |t| if (t >= 0) {
-                    const j: usize = @intCast(t);
+                for ([_]i32{ blk.taken, blk.fall }) |x| if (x >= 0) {
+                    const j: usize = @intCast(x);
                     if (wb[j] | out != wb[j]) {
                         wb[j] |= out;
                         changed = true;
@@ -905,9 +1084,9 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
         e.written = 0x7fff;
         @memset(wb[0..n], 0x7fff);
     }
-    b.emit(.{ 6, 32, if (wide) wasm.I64 else wasm.I32, 4, wasm.I32, 4, wasm.I64, 6, wasm.I32, 2, wasm.I64, 2, wasm.F64 });
+    b.emit(.{ 8, 32, if (wide) wasm.I64 else wasm.I32, 4, wasm.I32, 4, wasm.I64, 6, wasm.I32, 2, wasm.I64, 2, wasm.F64, 3, wasm.I64, 3, wasm.I32 });
     e.loadRegs(e.used);
-    e.loadFlags();
+    e.loadFlags(live);
     b.emit(.{ get(L_CPU), mo(O.i64_load, OFF_IC), set(L_IC), get(L_CPU), mo(O.i64_load, OFF_LIMIT), set(L_LIMIT), get(L_ENTRY), set(L_NEXT), O.block, wasm.VOID, O.block, wasm.VOID, O.loop, wasm.VOID });
     for (0..n) |_| b.blockStart(O.block, wasm.VOID);
     b.emit(.{ get(L_NEXT), O.br_table });
@@ -921,17 +1100,20 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
         e.chain_depth = n - @as(u32, @intCast(i));
         e.exit_depth = e.chain_depth + 1;
         e.wcur = wb[i];
+        e.pk = .none;
+        e.pdirty = 0;
         var pc = blk.pc;
         var j: u32 = 0;
         var ended = false;
         while (j < blk.n) : (j += 1) {
-            const len: u32 = if (isa == .thumb and (mem.ld(u16, pc) & 0xf800) != 0xf000) 2 else 4;
+            const len = ilen(isa, pc);
             const o = &page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2];
             if (wide) {
                 e.rw = rwOf(o);
                 e.wcur |= e.rw.w;
             }
             if (pc -% fb_lo < fb_hi -% fb_lo) {
+                if (wide) e.rw = ALL;
                 e.fallback(pc, j + 1);
                 ended = false;
             } else ended = switch (isa) {
