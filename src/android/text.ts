@@ -423,6 +423,14 @@ async function adjacentTextOffset(cs: unknown, offset: number, after: boolean): 
   return offset;
 }
 
+async function textIndexOf(cs: unknown, needle: unknown, start = 0, end?: number): Promise<number> {
+  const thread = rt.th(), text = await csText(cs); rt.st(thread);
+  const part = await csText(needle); rt.st(thread);
+  if (!part.length) return start;
+  const found = text.indexOf(part, start);
+  return found > (end ?? text.length) - part.length ? -1 : found;
+}
+
 class JTextUtils extends JObj {}
 rt.register({
   name: "android/text/TextUtils", ctor: JTextUtils,
@@ -483,12 +491,9 @@ rt.register({
     },
     "static lastIndexOf(Ljava/lang/CharSequence;CI)I": async (s: unknown, ch: number, last: number) =>
       last < 0 ? -1 : (await csText(s)).lastIndexOf(String.fromCharCode(ch), last),
-    "static indexOf(Ljava/lang/CharSequence;Ljava/lang/CharSequence;II)I": async (s: unknown, needle: unknown, start: number, end: number) => {
-      const text = await csText(s), part = await csText(needle);
-      if (!part.length) return start;
-      const found = text.indexOf(part, start);
-      return found > end - part.length ? -1 : found;
-    },
+    "static indexOf(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)I": textIndexOf,
+    "static indexOf(Ljava/lang/CharSequence;Ljava/lang/CharSequence;I)I": textIndexOf,
+    "static indexOf(Ljava/lang/CharSequence;Ljava/lang/CharSequence;II)I": textIndexOf,
     "static equals(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Z": (a: unknown, b: unknown) =>
       (spannedString(a) === spannedString(b) && (a === null) === (b === null) ? 1 : 0),
     "static isDigitsOnly(Ljava/lang/CharSequence;)Z": (s: unknown) => (/^\d*$/.test(spannedString(s)) ? 1 : 0),

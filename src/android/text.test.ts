@@ -83,3 +83,12 @@ test("text offsets use Java CharSequence and custom Spanned boundaries", async (
   expect(await cls[mangleMethod("getOffsetBefore", "(Ljava/lang/CharSequence;I)I")](cs, 5)).toBe(1);
   expect(await cls[mangleMethod("getOffsetAfter", "(Ljava/lang/CharSequence;I)I")](cs, 1)).toBe(5);
 });
+
+test("CharSequence search overloads preserve start and end boundaries", async () => {
+  const cls = rt.link("android/text/TextUtils").ctor;
+  const text = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "abc abc");
+  const needle = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "abc");
+  expect(await cls[mangleMethod("indexOf", "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)I")](text, needle)).toBe(0);
+  expect(await cls[mangleMethod("indexOf", "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;I)I")](text, needle, 1)).toBe(4);
+  expect(await cls[mangleMethod("indexOf", "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;II)I")](text, needle, 1, 6)).toBe(-1);
+});
