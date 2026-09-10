@@ -2152,3 +2152,71 @@ so the cache exists for the JIT's region discovery more than for interpretation.
 in the tree is worth wasm: graphics and text are Canvas2D-bound, SQLite and crypto are already
 native, DEX and resource parsing produce JS objects; the only right-shaped candidates (the
 synchronous digests, the box blur) have no measured cost.
+
+## The wasm core, second pass: where a transfer's cost really was
+
+Among Us at The Skeld went from ~120M to 540–560M guest instructions per second of core time
+(three 15 s samples: 542, 552, 553M), with 0.000% of instructions interpreted, on the commits
+from "fallback and host-call histograms" to "hot blocks the batch queue had no room for ask
+again". What each one was worth, and what the measurements overturned.
+
+**Measure first.** `wd.native.jit.fallbacks()` counts what regions hand to the interpreter by op
+kind and by the SIMD&FP word's top bits, `fallbackWords()` keeps the words themselves with the
+register fields masked, and `wd.native.hostCalls()` counts host calls by name. At the baseline
+gameplay window (18 s, 2.9G instructions) 1.05G words fell back — 578M of them scalar FP,
+then FP loads and stores, then the vector classes — and 35k host calls a second were led by
+`pthread_getspecific` (12k/s), mutex lock and unlock (7.5k/s each), `pthread_self` and `sincosf`.
+The bench gained a `blr`/`ret` loop so a transfer is one number: bun runs it at 780M instr/s;
+Chrome ran it at 90–120M.
+
+**Chaining alone bought little.** Regions hand off by `return_call_indirect` through the core's
+table (the engine is probed once; without tail calls the epilogue returns to the dispatcher as
+before). The call loop in Chrome moved from ~90M to ~100M instr/s: hand-built probes put a raw
+tail call at 1 ns and a cross-instance one at 5.5 ns, so the dispatcher round trip was never the
+cost. Memory traffic was: in Chrome each i64 load or store in a fresh function costs 0.4–0.7 ns
+against a ~2 ns floor per call, and a transfer did some 60 of them (every written register, the
+flags four times, `ic`, the budget).
+
+**Precise spills were the win.** Each op declares what it reads and writes; the prologue loads
+the region's read-or-written set, a transfer exit spills the may-written-before set of its block
+(a fixed point over the region's edges) plus the block's own writes, the status exit keeps the
+full spill, and a fallback spills what the interpreter reads or may write and reloads what it
+writes. `ic` and its limit live in locals and the flags load once. The call loop went to ~800M
+in Chrome once V8 tiered the regions up (in later sessions it stayed at Liftoff and ~115M;
+the engine decides that, not the emitter). The one bug this found: a fallback's write set that
+over-names a register — a conversion's V destination taken for a GPR — reloaded that register
+stale over a dirty local. A fallback now spills everything it will reload, so an over-named
+write is harmless, and the classifier names the SIMD&FP space's general registers exactly.
+Gameplay: 120M → 161M instr/s.
+
+**Then FP.** The scalar FP space is emitted over V registers that stay in the Cpu struct (no
+spill or reload around a fallback), with FMAX/FMIN and the NM forms calling fp.zig for their NaN
+rules and a double FMADD calling fp.fma; the V loads and stores translate like the integer ones.
+Gameplay: 161M → 419M. The tier-parity sweep had to learn that an engine may commute a multiply
+between tiers and that which NaN operand's payload survives is its choice, as the hardware
+oracle already allowed. Exclusives, CAS, acquire/release and `mrs tpidr_el0` inline; the vector
+forms the histogram named (moves, copies, bitwise, add/sub/mul/compare/min/max, float
+arithmetic and compares, FMULX, the single-lane conversions, the shifts with SSHLL/USHLL, FMUL and
+MUL by element, the lane loads and stores with LD1R) go through simd128: 467M → 550M. What
+still falls back at The Skeld — SCVTF and FCVTN on doubles, ZIP1, XTN, REV64, FMLA by element,
+EXT, the multi-register LD1 — is about 1% of core time and not worth more emitter.
+
+**The host side, measured.** `pthread_self`, `pthread_getspecific` and `pthread_setspecific` are
+served in the core from a per-thread key table in guest memory (73k → 38k host calls a second).
+`perf.nativeHostMs` then showed a host call's body costs ~0.7 µs, so the remaining 38k/s are
+~3% of wall time; the mutex fast path was not built. Of a 15 s gameplay window the core runs
+6.9 s, host-call bodies 0.2 s, region linking 6 ms and the JS frame loop 0.3 s: the rest is the
+guest's own waiting, and the frame rate (16–17 fps, from 14.5) no longer tracks core speed.
+
+**Two structural leaks.** A block that reached the heat threshold while the batch queue was full
+never asked again — its heat passed 48 once — and 1.4% of gameplay instructions ran in the
+interpreter; a refused request now retries at the block's next entry. And The Skeld runs 60k
+regions, past the 57k the 64K-entry table held, where eviction would have churned; the table has
+256K entries and batches take 64 regions.
+
+**Not done, and why.** Following `bl` into regions across pages (with `ret` matched against the
+region's return sites) was planned; with a transfer at ~2.5 ns and IL2CPP averaging perhaps 15
+instructions between transfers it is at most 6% of core time, and multi-page regions need
+their own invalidation. It waits for a measurement that names it. A hang was seen once during a
+boot on the precise-spill build (UnityMain in `pthread_cond_wait`, every worker parked) and did
+not reproduce in eight later boots; if it returns, `?jit=0` and `__wdJit` still bisect it.
