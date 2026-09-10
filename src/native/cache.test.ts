@@ -62,3 +62,22 @@ describe("the decode cache", () => {
     expect(codeStats.invalidated).toBe(before + 2);
   });
 });
+
+describe("region discovery", () => {
+  // Scanning a block registers its successors, so a region's block count grows while it is being
+  // scanned. Block 0 here stops one instruction short of the budget and forks, and each block
+  // reached after that would once have scanned an instruction of its own, past the end of the
+  // emitter's per-instruction arrays.
+  test("blocks discovered past the instruction budget emit nothing", () => {
+    const nop = 0xd503201f, cbzX0 = 0xb4000040; // cbz x0, #+8
+    const words: number[] = Array(318).fill(nop);
+    words.push(cbzX0); // 318: taken -> 320, fall -> 319
+    words.push(RET); //   319
+    words.push(cbzX0); // 320: taken -> 322, fall -> 321
+    words.push(RET); //   321
+    words.push(RET); //   322
+    const before = jitStats.regions;
+    expect(run(words, (c) => { c.w[0] = 0; }).w[0]).toBe(0);
+    expect(jitStats.regions).toBeGreaterThan(before);
+  });
+});

@@ -175,7 +175,11 @@ export fn jit_install(i: u32, slot: u32) void {
     const r = &regions[i];
     const page = cpu.decodedPage(r.page) orelse return;
     if (page.epoch != r.epoch) return;
-    for (r.blocks[0..r.nblocks], 0..) |b, k| page.slot[(b.pc & (abi.PAGE_SIZE - 1)) >> 1] = (slot << 8) | @as(u32, @intCast(k));
+    // An empty block only exits to its own pc, so installing one would hand that pc straight back
+    // to a region that cannot advance it.
+    for (r.blocks[0..r.nblocks], 0..) |b, k| if (b.n != 0) {
+        page.slot[(b.pc & (abi.PAGE_SIZE - 1)) >> 1] = (slot << 8) | @as(u32, @intCast(k));
+    };
     regions_installed += 1;
 }
 export fn jit_done() void {
@@ -220,7 +224,11 @@ fn scanA64(r: *Region, i: u32, page: *cpu.Page, pc: u32) jit32.Scan {
 fn discover(r: *Region, page: *cpu.Page) bool {
     var total: u32 = 0;
     var i: u32 = 0;
-    while (i < r.nblocks) : (i += 1) {
+    // Scanning a block registers its successors, so r.nblocks grows underneath this loop. Stopping
+    // on the budget here and not only inside the inner loop is what keeps the instructions across
+    // every block down to MAX_INSTR: a block reached after it is exhausted keeps blockFor's n = 0
+    // and emits nothing, and jit_install leaves its pc to the interpreter.
+    while (i < r.nblocks and total < MAX_INSTR) : (i += 1) {
         var pc = r.blocks[i].pc;
         var n: u32 = 0;
         while (true) {
@@ -1051,6 +1059,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
             if (pc -% fb_lo < fb_hi -% fb_lo) rw = if (wide) ALL else ALL32;
             writes[i] |= rw.w;
             e.used |= rw.r | rw.w;
+            assert(t < fr.len);
             fr[t] = rw.fr;
             fk[t] = if (rw.cond) 0 else rw.fw;
             t += 1;
