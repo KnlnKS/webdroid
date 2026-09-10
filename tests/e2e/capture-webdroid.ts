@@ -17,6 +17,8 @@ export type StepRun = {
   /** which tier of the settle contract ended the step, and how long it took */
   settled: Settled["how"];
   settleMs: number;
+  /** what kept the fast path waiting, as poll counts per reason */
+  busy?: Record<string, number>;
   settleTimedOut: boolean;
   /** webdroid's main-looper queue stopped draining — the app is hung, not merely idle. */
   mainLoopWedged: boolean;
@@ -136,6 +138,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, { jobs = 1, s
     }
     const frames = r.frames.length || undefined;
     runs.push({ id: step.id, index: i, file, semanticHit: r.semanticHit, settled: r.settled.how, settleMs: Math.round(r.settled.ms),
+                busy: Object.keys(r.settled.busy).length ? r.settled.busy : undefined,
                 settleTimedOut: r.settled.how === "timeout", mainLoopWedged: r.wedged, frames,
                 ms: stepMs, perf: r.perf, fps: step.animated ? Math.round(fps) : undefined, slow: slow || undefined,
                 newMissing: r.newMissing.length ? r.newMissing : undefined,
@@ -145,7 +148,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, { jobs = 1, s
     const p = r.perf;
     const flags = [
       r.semanticHit === false ? "coord-fallback" : "",
-      r.settled.how === "timeout" ? `settle timeout (${r.settled.busy.join(" ")})` : r.settled.how === "pixels" ? "pixels" : "",
+      r.settled.how === "timeout" ? `settle timeout (${Object.keys(r.settled.busy).join(" ")})` : r.settled.how === "pixels" ? "pixels" : "",
       r.wedged ? "MAIN LOOP WEDGED" : "",
       frames ? `${frames} frame${frames === 1 ? "" : "s"}` : "",
       `${stepMs}ms`,

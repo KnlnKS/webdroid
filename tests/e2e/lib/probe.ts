@@ -36,7 +36,8 @@ export type SettleOpts = {
 
 export type StepSpec = { act: Act; screen: Screen; settle: SettleOpts; aliveMs: number };
 
-export type Settled = { how: "idle" | "pixels" | "timeout" | "snapshot"; ms: number; busy: string[] };
+/** how the wait ended, how long it took, and how many polls each reason kept it waiting */
+export type Settled = { how: "idle" | "pixels" | "timeout" | "snapshot"; ms: number; busy: Record<string, number> };
 
 export type StepResult = {
   png: string;
@@ -64,6 +65,8 @@ declare global {
     settle(opts: SettleOpts): Promise<Settled>;
     capture(): Promise<string>;
     act(a: Act, screen: Screen, deadlineMs: number): Promise<boolean | undefined>;
+    /** pending timers as ms until due, parks marked negative: what "timers" in a busy record means */
+    timers(): number[];
   };
 }
 
@@ -179,7 +182,7 @@ function installProbe(cfg: ProbeConfig): void {
     r.readAsDataURL(b!);
   }, "image/png"));
 
-  const busy = (horizonAt: number, stableMs: number): string[] => {
+  const busy = (dueBefore: number, stableMs: number): string[] => {
     const now = performance.now();
     const wd = g.wd, u = wd.uiState, d = wd.mainDbg;
     const r: string[] = [];
@@ -196,7 +199,7 @@ function installProbe(cfg: ProbeConfig): void {
     if (wd.yields.pending()) r.push("yields");
     if (inflight) r.push("inflight");
     if (awaitingSockets()) r.push("sockets");
-    const due = Math.max(horizonAt, now + stableMs);
+    const due = Math.max(dueBefore, now + stableMs);
     for (const [id, at] of timers) if (at <= due && !wd.timedParks.has(id)) { r.push("timers"); break; }
     if (now - lastPresent < stableMs) r.push("presented");
     return r;
@@ -211,27 +214,33 @@ function installProbe(cfg: ProbeConfig): void {
       wantSample = true;
       if (await nextPresent(500)) captured = sampled.get(lastHash) ?? null;
       wantSample = false;
-      return { how: "snapshot", ms: performance.now() - t0, busy: [] };
+      return { how: "snapshot", ms: performance.now() - t0, busy: {} };
     }
     const horizonAt = t0 + o.horizonMs;
+    // the pixel rule needs stableFrames + 1 samples past the horizon before it can settle, so
+    // anything scheduled inside that window was always waited for: a toast timing out, a
+    // snackbar dismissing. The fast path keeps that contract.
+    const dueBefore = horizonAt + (o.stableFrames + 1) * o.intervalMs;
+    // the pixel rule samples only past the horizon, as the recorder does past its dwell
     const hashes: number[] = [];
-    let lastSample = t0;
-    wantSample = true; lastHash = -1;
+    const seen: Record<string, number> = {};
+    let lastSample = horizonAt - o.intervalMs;
+    lastHash = -1;
+    const done = (how: Settled["how"]): Settled => { wantSample = false; return { how, ms: performance.now() - t0, busy: seen }; };
     for (;;) {
       const now = performance.now();
       if (now - lastSample >= o.intervalMs) {
         lastSample = now;
-        hashes.push(lastHash);
+        if (now > horizonAt) hashes.push(lastHash);
         if (hashes.length > o.stableFrames * 2) hashes.shift();
         wantSample = true;
       }
-      const b = busy(horizonAt, o.stableMs);
-      if (!b.length) { wantSample = false; return { how: "idle", ms: now - t0, busy: b }; }
-      if (now >= horizonAt - o.stableMs) {
-        const h = stableFrame(hashes, o.stableFrames);
-        if (h !== undefined) { wantSample = false; captured = sampled.get(h) ?? null; return { how: "pixels", ms: now - t0, busy: b }; }
-      }
-      if (now - t0 >= o.timeoutMs + o.horizonMs) { wantSample = false; return { how: "timeout", ms: now - t0, busy: b }; }
+      const b = busy(dueBefore, o.stableMs);
+      if (!b.length) return done("idle");
+      for (const k of b) seen[k] = (seen[k] ?? 0) + 1;
+      const h = stableFrame(hashes, o.stableFrames);
+      if (h !== undefined) { captured = sampled.get(h) ?? null; return done("pixels"); }
+      if (now - t0 >= o.timeoutMs + o.horizonMs) return done("timeout");
       await sleep(25);
     }
   };
@@ -302,7 +311,11 @@ function installProbe(cfg: ProbeConfig): void {
       frames,
     };
   };
-  g.__wd = { step, settle, capture, act };
+  const pendingTimers = () => {
+    const now = performance.now(), wd = g.wd;
+    return [...timers].map(([id, at]) => (wd.timedParks.has(id) ? -1 : 1) * Math.round(at - now)).sort((a, b) => a - b);
+  };
+  g.__wd = { step, settle, capture, act, timers: pendingTimers };
 }
 
 /** The init script: the stability rule and the probe, installed with the flow's configuration. */

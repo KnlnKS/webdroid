@@ -335,10 +335,13 @@ const wd = {
   // serialized queue in android/mainloop.ts; if a job in it never settles, the app stops
   // responding AND stops repainting — which is indistinguishable from "the screen settled"
   // unless you probe the queue directly.
-  alive: (ms = 1500) => Promise.race([
-    onMain(() => true),
-    new Promise((r) => setTimeout(() => r(false), ms)),
-  ]),
+  alive: (ms = 1500) => {
+    let id: ReturnType<typeof setTimeout>;
+    return Promise.race([
+      onMain(() => true).finally(() => clearTimeout(id)),
+      new Promise((r) => { id = setTimeout(() => r(false), ms); }),
+    ]);
+  },
   // wipe persisted app state (sqlite + prefs + the picked directories) so a run starts fresh
   reset: () => {
     void clearRoots();
