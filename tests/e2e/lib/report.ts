@@ -42,8 +42,8 @@ export type FlowReport = {
 const pct = (n: number) => n.toFixed(2).padStart(6) + "%";
 
 /** A flow with no goldens: what ran, what hung, what was missing — nothing about pixels. */
-export function printSmoke(app: string, runs: StepRun[]): void {
-  console.log(`\n--- ${app} (smoke, not scored) ---`);
+export function printSmoke(app: string, runs: StepRun[], log = console.log): void {
+  log(`\n--- ${app} (smoke, not scored) ---`);
   let wedgedAt: number | undefined;
   const missing = new Set<string>(), native = new Set<string>();
   for (const s of runs) {
@@ -59,10 +59,10 @@ export function printSmoke(app: string, runs: StepRun[]): void {
       s.newMissing?.length ? `${s.newMissing.length} missing` : "",
       s.newErrors?.length ? `${s.newErrors.length} errors` : "",
     ].filter(Boolean).join(" ");
-    console.log(`  ${String(s.index).padStart(2, "0")} ${s.id}${flags ? "  [" + flags + "]" : ""}`);
+    log(`  ${String(s.index).padStart(2, "0")} ${s.id}${flags ? "  [" + flags + "]" : ""}`);
   }
   const fps = runs.map((s) => s.fps).filter((f): f is number => f !== undefined);
-  console.log(`  rendered ${runs.filter((s) => !s.mainLoopWedged).length}/${runs.length}` +
+  log(`  rendered ${runs.filter((s) => !s.mainLoopWedged).length}/${runs.length}` +
     (wedgedAt !== undefined ? ` · wedged at ${String(wedgedAt).padStart(2, "0")}` : "") +
     (fps.length ? ` · min fps ${Math.min(...fps)}` : "") +
     (missing.size ? ` · missing: ${[...missing].join(", ")}` : " · nothing missing") +

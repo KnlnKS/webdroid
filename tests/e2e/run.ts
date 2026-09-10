@@ -1,50 +1,70 @@
 // `bun run e2e` — capture webdroid, diff against the committed goldens, report.
-// Never starts, queries, or requires an Android emulator.
-import { ENV_SCREEN, WebdroidDriver } from "./drivers/webdroid";
+// Never starts, queries, or requires an Android emulator. Every flow runs in its own browser;
+// `--jobs` bounds how many at once, and each is scored as soon as it has captured.
+import { cpus } from "node:os";
+import { ENV_SCREEN } from "./drivers/webdroid";
 import { sameScreen, screenOf, screenParam } from "./types";
 import { parseScreen } from "../../src/shell/config";
-import { captureFlow, loadManifest, prepareShots, type StepRun } from "./capture-webdroid";
-import { diffFlow, writeReport } from "./score";
-import { printFlow, printSmoke, type FlowReport } from "./lib/report";
+import { captureFlow, launchFor, loadManifest, prepareShots } from "./capture-webdroid";
+import { assembleReport, scoreFlow } from "./score";
+import { printSmoke } from "./lib/report";
 import { parseArgs } from "./lib/args";
 import { FLOWS } from "./flows";
 
-const { flows, shots } = parseArgs(process.argv.slice(2), "bun run e2e");
-if (flows.length) console.log(`flows: ${flows.map((f) => f.app).join(", ")}`);
+const { flows, shots, jobs } = parseArgs(process.argv.slice(2), "bun run e2e");
+const pinned = parseScreen(ENV_SCREEN);
+console.log(`flows: ${flows.map((f) => f.app).join(", ")}  (${jobs} at a time)`);
+if (shots) await prepareShots(shots);
 
-const drv = await WebdroidDriver.launch();
-if (shots) { await prepareShots(shots); drv.enableShots(shots); }
-const runs = new Map<string, StepRun[]>();
-try {
-  for (const f of flows) runs.set(f.app, await captureFlow(f, drv));
-} finally {
-  await drv.close();
-}
+type Outcome = { app: string; scored: boolean; lines: string[]; ms: number };
 
-const reports: FlowReport[] = [];
-for (const f of flows) {
-  // A flow without goldens is a smoke target: rendered/wedged/missing/fps, no pixel score.
-  const manifest = await loadManifest(f.app);
-  if (!manifest) { printSmoke(f.app, runs.get(f.app) ?? []); continue; }
-  // So is a flow the run pinned to some other geometry. The goldens are pixels at one size, so
-  // a run at any other size measures cost, never fidelity — and saying so here means the gate
-  // cannot be passed at the wrong size by accident.
-  const pinned = parseScreen(ENV_SCREEN);
-  if (pinned && !sameScreen(pinned, screenOf(manifest))) {
-    console.log(`\n--- ${f.app} (smoke: ran at ${screenParam(pinned)}, goldens are ${screenParam(screenOf(manifest))}) ---`);
-    printSmoke(f.app, runs.get(f.app) ?? []);
-    continue;
+async function runFlow(app: string): Promise<Outcome> {
+  const flow = flows.find((f) => f.app === app)!;
+  const manifest = await loadManifest(app);
+  const lines: string[] = [];
+  const log = (s: string) => lines.push(s);
+  const t0 = Date.now();
+  const drv = await launchFor(flow, manifest, !!shots);
+  let scored = false;
+  try {
+    const runs = await captureFlow(flow, drv, { jobs, shots, log });
+    // A flow without goldens is a smoke target: rendered/wedged/missing/fps, no pixel score. So
+    // is a flow the run pinned to some other geometry: the goldens are pixels at one size, so a
+    // run at any other size measures cost, never fidelity — and saying so here means the gate
+    // cannot be passed at the wrong size by accident.
+    if (!manifest) printSmoke(app, runs, log);
+    else if (pinned && !sameScreen(pinned, screenOf(manifest))) {
+      log(`\n--- ${app} (smoke: ran at ${screenParam(pinned)}, goldens are ${screenParam(screenOf(manifest))}) ---`);
+      printSmoke(app, runs, log);
+    } else {
+      lines.push(await scoreFlow(app));
+      scored = true;
+    }
+  } finally {
+    await drv.close();
   }
-  const r = await diffFlow(f, runs.get(f.app));
-  printFlow(r);
-  reports.push(r);
+  return { app, scored, lines, ms: Date.now() - t0 };
 }
-if (!reports.length) {
-  console.log("\nno scored flows; see tests/e2e/actual/<flow>/run.json");
+
+// longest flows first, so the tail of the run is not one slow flow starting last
+const weight = (app: string) => FLOWS.find((f) => f.app === app)!.steps.reduce((a, s) => a + (s.settleDelayMs ?? 0) + 1000, 0);
+const queue = flows.map((f) => f.app).sort((a, b) => weight(b) - weight(a));
+const outcomes: Outcome[] = [];
+const t0 = Date.now();
+await Promise.all(Array.from({ length: Math.min(jobs, queue.length) }, async () => {
+  for (let app = queue.shift(); app; app = queue.shift()) {
+    const o = await runFlow(app);
+    outcomes.push(o);
+    console.log(`\n${o.lines.join("\n")}\n  (${(o.ms / 1000).toFixed(1)}s)`);
+  }
+}));
+
+const scoredApps = outcomes.filter((o) => o.scored).map((o) => o.app);
+if (!scoredApps.length) {
+  console.log(`\nno scored flows; see tests/e2e/actual/<flow>/run.json  (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
   process.exit(0);
 }
-
-const out = await writeReport(reports, screenParam(drv.screen));
+const { out, reports } = await assembleReport(scoredApps, screenParam(pinned ?? screenOf(await loadManifest(scoredApps[0]))));
 // smoke flows (no goldens) never appear in the report, so compare against the scorable set
 let scorable = 0;
 for (const f of FLOWS) if (await loadManifest(f.app)) scorable++;
@@ -61,5 +81,5 @@ for (const r of reports) {
     (r.wedgedAtStep !== undefined ? `   WEDGED at step ${String(r.wedgedAtStep).padStart(2, "0")}` : ""));
 }
 console.log(`  ${"OVERALL".padEnd(18)} content ${overall.toFixed(2)}%   (the target metric)`);
-console.log(`${"=".repeat(60)}\nreport: ${out}`);
+console.log(`${"=".repeat(60)}\nreport: ${out}   (${((Date.now() - t0) / 1000).toFixed(1)}s, ${jobs} jobs, ${cpus().length} cpus)`);
 if (shots) console.log(`frames: ${shots}/`);

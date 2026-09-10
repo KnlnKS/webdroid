@@ -26,7 +26,6 @@ let seenMissing = new Set<string>();
 let seenErrors = new Set<string>();
 let stage = "login";
 let failure: string | undefined;
-declare global { var __redditGesture: { done: boolean; error?: string }; }
 
 async function waitFor(label: string, ready: () => Promise<boolean>): Promise<void> {
   const start = Date.now();
@@ -71,19 +70,7 @@ async function loginFailure(error: string): Promise<void> {
     missing: missing.map(redact), perf });
 }
 
-async function scrollComments(): Promise<void> {
-  await driver.page.evaluate(({ width, height }) => {
-    const state: { done: boolean; error?: string } = { done: false };
-    globalThis.__redditGesture = state;
-    void wd.swipe(width * 0.5, height * 0.8, width * 0.5, height * 0.3).then(
-      () => { state.done = true; },
-      (error: unknown) => { state.error = String(error); state.done = true; });
-  }, driver.screen);
-  await waitFor("comment swipe completion", () => driver.page.evaluate(() => {
-    if (globalThis.__redditGesture.error) throw new Error(globalThis.__redditGesture.error);
-    return globalThis.__redditGesture.done;
-  }));
-}
+const scrollComments = () => driver.swipe([0.5, 0.8], [0.5, 0.3]);
 
 async function capture(id: string, start: number, error?: string, contentMs?: number): Promise<void> {
   const captureStart = Date.now();
@@ -114,7 +101,7 @@ async function capture(id: string, start: number, error?: string, contentMs?: nu
 }
 
 const newProse = (texts: string[], before: Set<string>) => texts.filter(text => text.trim().length >= 24 && /[a-z]{3}/i.test(text) && !before.has(text));
-async function step(id: string, action: () => Promise<void>, labels: string[], absent: string[] = [], content = (_texts: string[]) => true): Promise<void> {
+async function step(id: string, action: () => Promise<unknown>, labels: string[], absent: string[] = [], content = (_texts: string[]) => true): Promise<void> {
   stage = id;
   await driver.perfReset();
   const start = Date.now();
@@ -129,13 +116,11 @@ async function step(id: string, action: () => Promise<void>, labels: string[], a
 }
 
 async function run(): Promise<void> {
-  driver = await WebdroidDriver.launch();
+  driver = await WebdroidDriver.launch({ screen: { width: 1080, height: 2424, densityDpi: 480 }, fixedMs: null });
   if (timedOut) { await close(); throw new Error("Browser launched after the run deadline"); }
   driver.page.removeAllListeners("pageerror");
   driver.page.on("pageerror", error => pageErrors.push("pageerror: " + error.message));
   driver.page.on("crash", () => pageErrors.push("pageerror: renderer crashed"));
-  await driver.page.clock.setSystemTime(Date.now());
-  await driver.reset({ width: 1080, height: 2424, densityDpi: 480 });
   await driver.page.evaluate(observeDrawnText);
   await driver.boot("Reddit.xapk");
   await waitText("The most real");

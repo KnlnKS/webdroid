@@ -8,7 +8,7 @@ import { html, printFlow, type FlowReport, type StepReport } from "./lib/report"
 import { parseArgs } from "./lib/args";
 import { screenOf, screenParam, uiFileFor, type Flow, type Manifest, type RecordedStep, type Step, type UiNode } from "./types";
 import { diffTrees } from "./lib/tree";
-import type { StepRun } from "./capture-webdroid";
+import type { FlowRun, StepRun } from "./capture-webdroid";
 import { E2E_DIR, sha1 } from "./lib/util";
 
 /**
@@ -45,7 +45,7 @@ export async function diffFlow(flow: Flow, runs?: StepRun[]): Promise<FlowReport
   // Fall back to the flags the capture pass left on disk, so `e2e:diff` scores identically.
   let runInfo = runs;
   if (!runInfo) {
-    if (existsSync(`${actualDir}/run.json`)) runInfo = await Bun.file(`${actualDir}/run.json`).json();
+    if (existsSync(`${actualDir}/run.json`)) runInfo = ((await Bun.file(`${actualDir}/run.json`).json()) as FlowRun).steps;
     else console.warn(`  ${flow.app}: actual/ has no run.json — scoring pixels only, wedge flags unknown; rerun \`bun run e2e --test ${flow.app}\``);
   }
   const runById = new Map((runInfo ?? []).map((r) => [r.id, r]));
@@ -112,25 +112,46 @@ export async function diffFlow(flow: Flow, runs?: StepRun[]): Promise<FlowReport
   };
 }
 
-export async function writeReport(reports: FlowReport[], geometry: string): Promise<string> {
+const flowJson = (app: string) => `${E2E_DIR}report/${app}.json`;
+
+/** Score one flow in a subprocess — the pixel work is CPU-bound and must not stall the event
+ *  loop the other flows' browsers are driven from — and return its printed summary. */
+export async function scoreFlow(app: string): Promise<string> {
+  const p = Bun.spawn(["bun", `${E2E_DIR}score.ts`, "--json", app], { stdout: "pipe", stderr: "pipe" });
+  const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+  if (await p.exited) throw new Error(`scoring ${app} failed: ${err || out}`);
+  return out.trimEnd();
+}
+
+/** index.html + report.json from the per-flow JSON files the scoring passes wrote. */
+export async function assembleReport(apps: string[], geometry: string): Promise<{ out: string; reports: FlowReport[] }> {
   const dir = `${E2E_DIR}report`;
-  await mkdir(dir, { recursive: true });
+  const reports: FlowReport[] = [];
+  for (const app of apps) reports.push(await Bun.file(flowJson(app)).json());
   const generatedAt = new Date().toISOString();
   await Bun.write(`${dir}/index.html`, html(reports, generatedAt, geometry));
   await Bun.write(`${dir}/report.json`, JSON.stringify({ generatedAt, reports }, null, 2));
-  return `${dir}/index.html`;
+  return { out: `${dir}/index.html`, reports };
 }
 
 if (import.meta.main) {
-  const { flows } = parseArgs(process.argv.slice(2), "bun run e2e:diff");
-  const reports: FlowReport[] = [];
-  for (const f of flows) {
-    const r = await diffFlow(f);
+  const json = process.argv[2] === "--json";
+  const { flows, jobs } = parseArgs(process.argv.slice(json ? 3 : 2), "bun run e2e:diff");
+  await mkdir(`${E2E_DIR}report`, { recursive: true });
+  if (json) {
+    const r = await diffFlow(flows[0]);
+    await Bun.write(flowJson(flows[0].app), JSON.stringify(r));
     printFlow(r);
-    reports.push(r);
+  } else {
+    const queue = flows.map((f) => f.app);
+    const summaries = new Map<string, string>();
+    await Promise.all(Array.from({ length: Math.min(jobs, queue.length) }, async () => {
+      for (let app = queue.shift(); app; app = queue.shift()) summaries.set(app, await scoreFlow(app));
+    }));
+    for (const f of flows) console.log(summaries.get(f.app));
+    // scored flows all share the goldens' geometry — diffImages would have thrown otherwise
+    const first: Manifest = await Bun.file(`${E2E_DIR}golden/${flows[0].app}/manifest.json`).json();
+    const { out } = await assembleReport(flows.map((f) => f.app), screenParam(screenOf(first)));
+    console.log(`\nreport: ${out}`);
   }
-  // scored flows all share the goldens' geometry — diffImages would have thrown otherwise
-  const first: Manifest = await Bun.file(`${E2E_DIR}golden/${flows[0].app}/manifest.json`).json();
-  const out = await writeReport(reports, screenParam(screenOf(first)));
-  console.log(`\nreport: ${out}`);
 }

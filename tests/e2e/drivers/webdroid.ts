@@ -1,10 +1,10 @@
-// webdroid driver — Playwright over the dev server, using the in-page `wd` helpers.
+// webdroid driver — Playwright over the dev server. Every action, settle and capture happens in
+// one page.evaluate against the probe in lib/probe.ts; nothing here polls the page.
 // Deliberately free of any Android/adb dependency: `bun run e2e` must run with no SDK present.
-import { mkdir } from "node:fs/promises";
 import { chromium, type Browser, type Page } from "playwright";
 import { PINNED_CLOCK_MS, deviceScreen, screenParam, type Screen, type UiNode } from "../types";
-import { sleep, sha1, BASE_URL, settleOn } from "../lib/util";
-
+import { BASE_URL } from "../lib/util";
+import { DEFAULT_SETTLE, probeScript, type Act, type SettleOpts, type StepResult, type StepSpec } from "../lib/probe";
 
 // WEBDROID_BYTECODE=android/graphics/,android/content/res/ scores a provenance cut: the same
 // bundle, with those prefixes served by AOSP's own bytecode instead of our native specs. That
@@ -17,19 +17,12 @@ export const ENV_SCREEN = process.env.WEBDROID_SCREEN;
 
 /** Compose the query rather than concatenating it: `?bytecode=x` + `?screen=y` silently drops
  *  the second parameter, and the run then measures the wrong geometry against the right pixels. */
-function pageUrl(screen?: Screen): string {
+function pageUrl(screen: Screen): string {
   const u = new URL(BASE_URL);
   if (CUT) u.searchParams.set("bytecode", CUT);
-  if (screen) u.searchParams.set("screen", screenParam(screen));
+  u.searchParams.set("screen", screenParam(screen));
   return u.href;
 }
-
-declare global {
-  var wd: any;
-}
-
-/** Hard stop so a step that repaints forever cannot fill the disk. */
-const MAX_FRAMES_PER_STEP = 240;
 
 const LAUNCH_ARGS = [
   "--use-gl=angle", "--use-angle=swiftshader",
@@ -48,186 +41,81 @@ export const CONTEXT_OPTS = {
 };
 export const launchBrowser = () => chromium.launch({ headless: true, args: LAUNCH_ARGS });
 
+export type LaunchOpts = {
+  screen?: Screen;
+  /** Date is pinned here (default PINNED_CLOCK_MS); null keeps the wall clock. Timers, rAF and
+   *  performance.now keep running either way. */
+  fixedMs?: number | null;
+  /** localStorage seeded before the page boots: a flow's shared_prefs, already in wd's format */
+  storage?: [string, string][];
+  shots?: boolean;
+};
+
+const SETTLE_DEFAULTS: SettleOpts = { ...DEFAULT_SETTLE, horizonMs: 0, animated: false };
+
 export class WebdroidDriver {
-  constructor(private browser: Browser, public page: Page) {}
+  constructor(private browser: Browser, public page: Page, public screen: Screen) {}
 
-  /** what the page is currently rendering at — the space every denormalized tap is expressed in */
-  screen: Screen = deviceScreen();
-
-  // Optional frame recorder (--shots). The diffed capture is one settled frame per step. This records every DISTINCT frame while
-  // the step runs, which is what you actually need to see when a step goes wrong: what was
-  // drawn on the way, and whether anything was drawn at all.
-  private shotsRoot?: string;
-  private stepDir?: string;
-  private shotSeq = 0;
-  private shotLastHash = "";
-  private shotRunning = false;
-  private shotLoop?: Promise<void>;
-
-  enableShots(dir: string): void { this.shotsRoot = dir; }
-
-  private async snapFrame(): Promise<void> {
-    if (!this.stepDir || this.shotSeq >= MAX_FRAMES_PER_STEP) return;
-    const png = await this.capture();
-    const h = sha1(png);
-    if (h === this.shotLastHash) return;
-    this.shotLastHash = h;
-    await Bun.write(`${this.stepDir}/f${String(this.shotSeq++).padStart(3, "0")}.png`, png);
-  }
-
-  async beginStep(flow: string, index: number, id: string, intervalMs = 150): Promise<void> {
-    if (!this.shotsRoot) return;
-    this.stepDir = `${this.shotsRoot}/${flow}/${String(index).padStart(2, "0")}-${id}`;
-    await mkdir(this.stepDir, { recursive: true });
-    this.shotSeq = 0;
-    this.shotLastHash = "";
-    this.shotRunning = true;
-    this.shotLoop = (async () => {
-      while (this.shotRunning) {
-        // The page is busy with the step's own evaluate calls; a dropped sample is fine.
-        await this.snapFrame().catch(() => {});
-        await sleep(intervalMs);
-      }
-      await this.snapFrame().catch(() => {});
-    })();
-  }
-
-  async endStep(): Promise<number> {
-    if (!this.shotLoop) return 0;
-    this.shotRunning = false;
-    await this.shotLoop;
-    this.shotLoop = undefined;
-    const n = this.shotSeq;
-    this.stepDir = undefined;
-    return n;
-  }
-
-  static async launch(): Promise<WebdroidDriver> {
+  static async launch(opts: LaunchOpts = {}): Promise<WebdroidDriver> {
+    const screen = opts.screen ?? deviceScreen();
     const browser = await launchBrowser();
     const ctx = await browser.newContext(CONTEXT_OPTS);
+    await ctx.addInitScript({ content: probeScript({ fixedMs: opts.fixedMs === undefined ? PINNED_CLOCK_MS : opts.fixedMs, storage: opts.storage ?? [], shots: !!opts.shots }) });
     const page = await ctx.newPage();
-    // Pin Date without freezing timers — rAF and the 33ms setInterval fallback keep running.
-    await page.clock.setFixedTime(new Date(PINNED_CLOCK_MS));
-
     page.on("pageerror", (e) => console.error("  [page error]", String(e).slice(0, 200)));
-
-    const resp = await page.goto(pageUrl(), { waitUntil: "domcontentloaded", timeout: 30_000 });
-    if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE_URL} — run \`bun run dev\``);
-    await page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
-    await page.evaluate(() => (document as any).fonts.ready);
-    return new WebdroidDriver(browser, page);
+    const drv = new WebdroidDriver(browser, page, screen);
+    await drv.open(screen);
+    return drv;
   }
 
-  /** Pin Date to `ms` without freezing timers. Per flow: see Flow.liveClock. */
-  setClock(ms: number): Promise<void> {
-    return this.page.clock.setFixedTime(new Date(ms));
-  }
-
-  /** A fresh install — wd.reset() is the one definition of what that wipes. Navigates rather
-   *  than reloads, so each flow gets the geometry its own goldens were recorded at. */
-  async reset(screen: Screen = deviceScreen()): Promise<void> {
-    await this.page.evaluate(() => (globalThis as any).wd.reset());
+  private async open(screen: Screen): Promise<void> {
     this.screen = screen;
-    await this.page.goto(pageUrl(screen), { waitUntil: "domcontentloaded" });
+    const resp = await this.page.goto(pageUrl(screen), { waitUntil: "domcontentloaded", timeout: 30_000 });
+    if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE_URL} — run \`bun run dev\``);
     await this.page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
-    await this.page.evaluate(() => (document as any).fonts.ready);
+    await this.page.evaluate(() => document.fonts.ready);
   }
 
-  /**
-   * Write a flow's seed prefs into webdroid's own store, so the two passes start on the same
-   * screen. The flow carries the Android shared_prefs XML the emulator writes as a file;
-   * webdroid keeps prefs as JSON under `wd:prefs:<pkg>:<name>` (see JSharedPrefs.persist),
-   * so parse rather than duplicate the data in a second format.
-   */
-  async seedPrefs(pkg: string, xml: string): Promise<void> {
-    const map: Record<string, unknown> = {};
-    for (const m of xml.matchAll(/<(string|boolean|int|long|float)\s+name="([^"]+)"(?:\s+value="([^"]*)")?\s*(?:\/>|>([\s\S]*?)<\/\1>)/g)) {
-      const [, kind, name, attr, text] = m;
-      map[name] = kind === "string" ? (text ?? "")
-        : kind === "boolean" ? attr === "true"
-        : kind === "long" ? { $l: attr }
-        : Number(attr);
-    }
-    await this.page.evaluate(
-      ([key, value]) => localStorage.setItem(key as string, JSON.stringify(value)),
-      [`wd:prefs:${pkg}:${pkg}_preferences`, map] as const,
-    );
-    await this.page.reload({ waitUntil: "domcontentloaded" });
-    await this.page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
+  /** A fresh install — wd.reset() is the one definition of what that wipes — at `screen`. */
+  async reset(screen: Screen = this.screen): Promise<void> {
+    await this.page.evaluate(() => (globalThis as any).wd.reset());
+    await this.open(screen);
   }
 
-  /**
-   * Every wd.* driving helper is fired WITHOUT awaiting its in-page promise. Those promises
-   * resolve through webdroid's serialized main-looper queue, which can stall arbitrarily long
-   * (or forever, when a step wedges the app); awaiting them from Playwright surfaces as
-   * "Resulting promise was garbage collected" and aborts the run. Progress is observed through
-   * settle() instead, which is what we actually care about.
-   */
-  private fire(fn: string, ...args: unknown[]): Promise<void> {
-    return this.page.evaluate(
-      ([f, a]) => { void (globalThis as any).wd[f as string](...(a as unknown[])); },
-      [fn, args] as const,
-    );
+  /** One flow step, start to finish, in the page: action, settle, liveness, capture, telemetry. */
+  step(act: Act, settle: Partial<SettleOpts> = {}): Promise<StepResult> {
+    const spec: StepSpec = { act, screen: this.screen, settle: { ...SETTLE_DEFAULTS, ...settle }, aliveMs: 1500 };
+    return this.page.evaluate((s) => globalThis.__wd.step(s), spec);
   }
 
-  async boot(apk: string): Promise<void> {
-    await this.fire("boot", apk);
+  /** An action on its own, awaited to completion under the settle timeout. */
+  act(act: Act): Promise<boolean | undefined> {
+    return this.page.evaluate(([a, s, ms]) => globalThis.__wd.act(a, s, ms), [act, this.screen, DEFAULT_SETTLE.timeoutMs] as const);
   }
 
-  /** Try the semantic path first; report whether it hit so the report can flag fallbacks. */
-  async tapText(text: string): Promise<boolean> {
-    const hit = await this.page.evaluate(
-      (t) => (globalThis as any).wd.locateText(t) as { x: number; y: number } | null, text);
-    if (!hit) return false;
-    await this.fire("tap", hit.x, hit.y);
-    return true;
-  }
+  boot(apk: string): Promise<unknown> { return this.act({ type: "boot", apk }); }
+  /** Try the semantic path; report whether it hit so the report can flag fallbacks. */
+  tapText(text: string): Promise<boolean> { return this.act({ type: "tapText", text }) as Promise<boolean>; }
+  tapNorm(x: number, y: number): Promise<unknown> { return this.act({ type: "tap", x, y }); }
+  type(text: string): Promise<unknown> { return this.act({ type: "type", text }); }
+  back(): Promise<unknown> { return this.act({ type: "back" }); }
+  swipe(from: [number, number], to: [number, number], ms = 400): Promise<unknown> { return this.act({ type: "swipe", from, to, ms }); }
 
-  async tapNorm(x: number, y: number): Promise<void> {
-    await this.fire("tap", x * this.screen.width, y * this.screen.height);
-  }
-
-  async type(text: string): Promise<void> {
-    await this.fire("type", text);
-  }
-
-  async back(): Promise<void> {
-    await this.fire("back");
-  }
-
-  async swipe(from: [number, number], to: [number, number], ms = 400): Promise<void> {
-    await this.fire("swipe", from[0] * this.screen.width, from[1] * this.screen.height,
-                    to[0] * this.screen.width, to[1] * this.screen.height, ms);
-  }
-
-  /** Exact framebuffer pixels — sidesteps the CSS-scaling trap the implementation history's "Harness notes" warns about.
-   *  toBlob, not toDataURL: the screen holds a transferred bitmap, which toDataURL reads back in
-   *  hundreds of milliseconds under SwiftShader while toBlob takes single digits. */
+  /** Exact framebuffer pixels, base64 PNG decoded. */
   async capture(): Promise<Buffer> {
-    const dataUrl = await this.page.evaluate(() => new Promise<string>((resolve) => {
-      const c = document.getElementById("screen") as HTMLCanvasElement;
-      c.toBlob((b) => { const r = new FileReader(); r.onload = () => resolve(r.result as string); r.readAsDataURL(b!); }, "image/png");
-    }));
-    return Buffer.from(dataUrl.split(",")[1], "base64");
+    return Buffer.from(await this.page.evaluate(() => globalThis.__wd.capture()), "base64");
   }
 
-  /**
-   * Settle on the same contract as the emulator driver: frame hash stable for N samples.
-   * Stable pixels alone prove nothing, so every exit also asks alive() whether the main-looper
-   * queue still drains; a hung app is reported as wedged, not as settled.
-   */
-  async settle({ stableFrames = 4, intervalMs = 250, timeoutMs = 20_000 } = {}):
-      Promise<{ png: Buffer; timedOut: boolean; wedged: boolean }> {
-    const r = await settleOn(() => this.capture(), { stableFrames, intervalMs, timeoutMs });
-    // Stable pixels alone prove nothing: confirm the main queue is still draining, so a hung
-    // app is reported as hung instead of silently passing as "settled".
-    return { ...r, wedged: !(await this.alive(1500)) };
+  /** Settle on the probe's contract, then confirm the main-looper queue still drains. */
+  async settle(opts: Partial<SettleOpts> = {}): Promise<{ png: Buffer; timedOut: boolean; wedged: boolean }> {
+    const settled = await this.page.evaluate((o) => globalThis.__wd.settle(o), { ...SETTLE_DEFAULTS, ...opts });
+    const wedged = !(await this.alive(1500));
+    return { png: await this.capture(), timedOut: settled.how === "timeout", wedged };
   }
 
   /** One frame now, plus the liveness check settle() does. For screens that never settle. */
-  async snapshot(): Promise<{ png: Buffer; timedOut: boolean; wedged: boolean }> {
-    const png = await this.capture();
-    return { png, timedOut: false, wedged: !(await this.alive(1500)) };
+  snapshot(): Promise<{ png: Buffer; timedOut: boolean; wedged: boolean }> {
+    return this.settle({ animated: true });
   }
 
   /** The page's captured console ring (wd.logs): "error: …" lines are uncaught Java throwables. */
@@ -238,7 +126,6 @@ export class WebdroidDriver {
   /**
    * Is webdroid's serialized main-looper queue still draining? A wedged queue stops input,
    * layout AND repaint, so a frozen screen looks exactly like a settled one from the outside.
-   * This is the only way to tell the two apart.
    */
   alive(timeoutMs = 2000): Promise<boolean> {
     return this.page.evaluate((ms) => (globalThis as any).wd.alive(ms), timeoutMs);
@@ -246,7 +133,7 @@ export class WebdroidDriver {
 
   /** Zero the in-page perf counters (bootMs is kept — it is a whole-run number). */
   perfReset(): Promise<void> {
-    return this.page.evaluate(() => (globalThis as any).wd.perfReset?.());
+    return this.page.evaluate(() => (globalThis as any).wd.perfReset());
   }
 
   perf(): Promise<Record<string, number>> {
@@ -266,11 +153,6 @@ export class WebdroidDriver {
   /** The view hierarchy in the shape `uiautomator dump` reports, for the structural diff. */
   uiTree(): Promise<UiNode[]> {
     return this.page.evaluate(() => (globalThis as any).wd.uiTree?.() ?? []);
-  }
-
-  /** Framework attributes a layout carried that nothing in the framework reads. */
-  unreadAttrs(): Promise<string[]> {
-    return this.page.evaluate(() => (globalThis as any).wd.unreadAttrs?.() ?? []);
   }
 
   /** Native libraries the app tried to load that only exist as machine code: "libx.so (abi)". */

@@ -5,9 +5,8 @@
 import { mkdir } from "node:fs/promises";
 import { PNG } from "pngjs";
 import { WebdroidDriver } from "../tests/e2e/drivers/webdroid";
-import { applyStep, loadManifest, settleStep } from "../tests/e2e/capture-webdroid";
+import { launchFor, loadManifest, runStep } from "../tests/e2e/capture-webdroid";
 import { FLOWS } from "../tests/e2e/flows";
-import { PINNED_CLOCK_MS } from "../tests/e2e/types";
 import { device } from "../src/shell/config";
 import { sleep } from "../tests/e2e/lib/util";
 
@@ -83,13 +82,10 @@ async function trackpad(drv: WebdroidDriver, nx: number, ny: number, dx: number,
 await mkdir(outDir, { recursive: true });
 const manifest = await loadManifest(app);
 const byId = new Map((manifest?.steps ?? []).map((s) => [s.id, s]));
-const drv = await WebdroidDriver.launch();
-await drv.setClock(flow.liveClock ? Date.now() : PINNED_CLOCK_MS);
-await drv.reset();
+const drv = await launchFor(flow, manifest);
 for (const [i, step] of flow.steps.entries()) {
   if (i > stopAt) break;
-  await applyStep(drv, flow, step, byId.get(step.id));
-  await settleStep(drv, step);
+  await runStep(drv, flow, step, byId.get(step.id));
   console.log(`${String(i).padStart(2, "0")} ${step.label}`);
 }
 

@@ -2,10 +2,8 @@
 //   bun scripts/dbg.ts [flow] [stopAtStep] [outDir]     env: TREE=1 LOGS=1 NOMISS=1
 // Frames land in <outDir>/NN.png (default webdroid-shots/dbg, gitignored).
 import { mkdir } from "node:fs/promises";
-import { WebdroidDriver } from "../tests/e2e/drivers/webdroid";
-import { applyStep, loadManifest, settleStep } from "../tests/e2e/capture-webdroid";
+import { launchFor, loadManifest, runStep } from "../tests/e2e/capture-webdroid";
 import { FLOWS } from "../tests/e2e/flows";
-import { PINNED_CLOCK_MS } from "../tests/e2e/types";
 
 const app = process.argv[2] ?? "fitnotes";
 const stopAt = Number(process.argv[3] ?? 99);
@@ -16,21 +14,15 @@ const manifest = await loadManifest(app);
 const byId = new Map((manifest?.steps ?? []).map((s) => [s.id, s]));
 await mkdir(outDir, { recursive: true });
 
-const drv = await WebdroidDriver.launch();
-// the same clock the flow's capture uses: a device held in the past renders an app's error state
-await drv.setClock(flow.liveClock ? Date.now() : PINNED_CLOCK_MS);
-await drv.reset();
+const drv = await launchFor(flow, manifest);
 await drv.page.evaluate(() => { (globalThis as any).wd.mainDbg.trace = true; });
 for (const [i, step] of flow.steps.entries()) {
   if (i > stopAt) break;
-  const rec = byId.get(step.id);
-  let hit: boolean | undefined;
-  try { hit = await applyStep(drv, flow, step, rec); } catch (e) { console.log("  ERR", e); }
-  const t0 = Date.now();
-  const st = await settleStep(drv, step);
-  const alive = !st.wedged;
-  console.log(`${String(i).padStart(2, "0")} ${step.label}${hit === false ? " [coord-fallback]" : ""} settle=${Date.now() - t0}ms${st.timedOut ? " TIMEOUT" : ""}${alive ? "" : "  *** WEDGED ***"}`);
-  await Bun.write(`${outDir}/${String(i).padStart(2, "0")}.png`, st.png);
+  const r = await runStep(drv, flow, step, byId.get(step.id));
+  if (r.error) console.log("  ERR", r.error);
+  const alive = !r.wedged;
+  console.log(`${String(i).padStart(2, "0")} ${step.label}${r.semanticHit === false ? " [coord-fallback]" : ""} settle=${Math.round(r.settled.ms)}ms ${r.settled.how}${alive ? "" : "  *** WEDGED ***"}`);
+  await Bun.write(`${outDir}/${String(i).padStart(2, "0")}.png`, Buffer.from(r.png, "base64"));
   if (!alive) {
     const a0 = Date.now();
     const ok2 = await drv.alive(30000);

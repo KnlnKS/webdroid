@@ -1,4 +1,5 @@
 // Flow selection shared by every entry point, so `--test` means the same thing everywhere.
+import { cpus } from "node:os";
 import { FLOWS } from "../flows";
 import type { Flow } from "../types";
 
@@ -24,13 +25,17 @@ function resolve(name: string): Flow[] {
 }
 
 const DEFAULT_SHOTS_DIR = "webdroid-shots";
+/** Half the machine: a flow's renderer, its SwiftShader process and Bun's own work each want a core. */
+const DEFAULT_JOBS = Math.max(1, Math.floor(cpus().length / 2));
 
 function printHelp(cmd: string, extra = ""): void {
-  console.log(`usage: ${cmd} [--test <flow>]... [--shots [dir]]
+  console.log(`usage: ${cmd} [--test <flow>]... [--jobs N] [--shots [dir]]
 
   --test, -t <flow>   run only this flow. Repeatable, accepts a comma-separated list, and
                       matches on prefix (--test mihon selects both mihon flows).
                       Bare names work too: ${cmd} fitnotes
+  --jobs, -j N        flows driven at once, each in its own browser (default ${DEFAULT_JOBS} here:
+                      half the cpus). 1 reproduces an uncontended run for fps measurements.
   --shots [dir]       save every distinct webdroid frame during each step to
                       ./${DEFAULT_SHOTS_DIR} (or [dir]). Wiped at the start of every run,
                       and gitignored.
@@ -46,10 +51,11 @@ known flows: ${KNOWN().join(", ")}`);
  * each step, not just the settled one that gets diffed). Any flag this parser doesn't know
  * is an error rather than a silently ignored typo.
  */
-export function parseArgs(argv: string[], cmd: string): { flows: Flow[]; shots?: string } {
+export function parseArgs(argv: string[], cmd: string): { flows: Flow[]; shots?: string; jobs: number } {
   const picked: Flow[] = [];
   const unknownFlags: string[] = [];
   let shots: string | undefined;
+  let jobs = DEFAULT_JOBS;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -60,6 +66,12 @@ export function parseArgs(argv: string[], cmd: string): { flows: Flow[]; shots?:
       continue;
     }
     if (a.startsWith("--shots=")) { shots = a.slice("--shots=".length) || DEFAULT_SHOTS_DIR; continue; }
+    if (a === "--jobs" || a === "-j" || a.startsWith("--jobs=")) {
+      const v = a.includes("=") ? a.slice(a.indexOf("=") + 1) : argv[++i];
+      jobs = Math.floor(Number(v));
+      if (!(jobs >= 1)) fail(`${a} needs a positive number`);
+      continue;
+    }
     if (a === "--help" || a === "-h") { printHelp(cmd); process.exit(0); }
     if (a === "--list") { console.log(KNOWN().join("\n")); process.exit(0); }
     if (a === "--test" || a === "-t") {
@@ -83,5 +95,5 @@ export function parseArgs(argv: string[], cmd: string): { flows: Flow[]; shots?:
 
   // De-dupe so `--test mihon --test mihon-app` doesn't run mihon-app twice.
   const seen = new Set<string>();
-  return { flows: (picked.length ? picked : FLOWS).filter((f) => !seen.has(f.app) && seen.add(f.app)), shots };
+  return { flows: (picked.length ? picked : FLOWS).filter((f) => !seen.has(f.app) && seen.add(f.app)), shots, jobs };
 }
