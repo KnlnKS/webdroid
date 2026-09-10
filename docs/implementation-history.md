@@ -2300,3 +2300,23 @@ Process.getGidForName uses a generated Android 15 identity table and bionic's nu
 multi-user group conventions. Unknown names return -1; there is no app-specific name rule.
 The full unit suite passed after the surface, identity and collection changes; final regression
 captures remain pending until the media integration is complete.
+
+### Stock first-post content timing and hot-source plateau
+
+A later stock Chrome 152 arm64 run, with the other diagnostic browsers closed and runtime
+tracing disabled, opened a fresh session's first long text post in **3.70 s**. Two reopens of
+the same post reached content in **2.31 s** and **2.19 s**. The detector required a new rendered
+frame containing the post title, composer and at least four long body lines absent from the
+feed, with the Home label gone. It did not use a white pixel or input-dispatch completion.
+Full-page screenshots confirmed the body but finished at 10.04, 9.20 and 8.28 s respectively;
+that separate capture/paint delay remains. Layout and draw errors were zero. These are current
+measurements of one live post, not a controlled comparison with the handoff's older 9.5 s post.
+
+Broader navigation reached 23.5k classes and the admission ceiling: specialized async source
+stopped at 33,554,357 code units with 10,261 promotions. Text post, search and community-header
+navigation continued with additional methods cold. The community feed itself remained empty
+in that run, so this is not full community-content verification. A settled Inbox profile before
+the ceiling was 2.6% GC, with 155 MiB executable allocation and 185 MiB committed. At the ceiling,
+a profile was dominated by `transferToImageBitmap` (84.5%), with GC below 0.1%; a detailed memory
+dump timed out, so there is no final executable-allocation measurement at the ceiling. The
+source limit constrains admission, not V8's exact allocation or reclamation policy.
