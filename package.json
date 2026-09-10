@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "bun run server.ts",
     "typecheck": "bun scripts/build-core.ts && tsc --noEmit -p tsconfig.json",
-    "test": "bun test src tests",
+    "test": "bun test src/native",
     "inspect": "bun scripts/inspect.ts",
     "smoke": "bun scripts/smoke.ts",
     "audit": "bun scripts/audit.ts",
