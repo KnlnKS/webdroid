@@ -502,3 +502,26 @@ a successful Google login (/tmp/webdroid-account-store-browser.log). The browser
 caught registration order: storage attaches before the foreground process exists, so its
 process-death cleanup hook is installed only after registration. Reattaching removes the
 previous account-update observer. Authenticator Binder request routing remains incomplete.
+
+## Authenticator requests and futures
+
+AccountManager now discovers authenticator services from manifest metadata and dispatches
+Android 13 IAccountAuthenticator transactions through a system-owned service binding. The
+response Binder enforces the authenticator UID. Caller options replace supplied package/UID/PID
+values, and token replies must match the requested account. Futures post to the requested
+Handler, reject pending main-thread waits, and release bindings on completion, cancellation,
+timeout or service death. Account and Intent replies retain nested callback Binder handles.
+
+The focused suite passes 19 tests and 98 assertions; typecheck passes. In a clean browser,
+genuine microG bytecode answered positive/negative feature requests for a synthetic local
+account, filtered the visible account list, and returned LoginActivity with its response.
+No Google account or token was fabricated. Pending updateCredentials requests canceled cleanly;
+process death returned AuthenticatorException, and early cancellation left no binding behind.
+Evidence: /tmp/webdroid-authenticator-{browser,lifecycle-browser}.{json,log}.
+
+An Activity-bearing addAccount request rendered microG's login prompt, remained pending, and
+Back canceled the future and released its binding. That newly reached path reported missing
+Activity.finishAndRemoveTask; task completion is the next platform gap. Evidence:
+/tmp/webdroid-authenticator-activity-browser.{png,json,log}. Interactive Google authentication
+is still unverified. Token-by-features account selection, authenticator session encryption and
+notification-based consent remain outside this dispatch checkpoint.

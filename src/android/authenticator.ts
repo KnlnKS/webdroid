@@ -4,7 +4,10 @@ import { mangleStaticField } from "../jvm/abi";
 import { JBinder, callingIdentity, withCallingIdentity } from "./binder";
 import { JParcel, parcelCreator, readInt, readString, writeInt, writeString } from "./parcel";
 import { JBundle, bundleBox } from "./os";
-import { packages } from "./packages";
+import { packages, qualifyComponent } from "./packages";
+import { attr, attrStr, parseAXML } from "./axml";
+import { servicesMatching } from "./pm";
+import { resString } from "./res";
 
 export const AUTHENTICATOR = "android.accounts.IAccountAuthenticator", AUTH_RESPONSE = "android.accounts.IAccountAuthenticatorResponse";
 const S = "Ljava/lang/String;", A = "Landroid/accounts/Account;", B = "Landroid/os/Bundle;";
@@ -92,3 +95,32 @@ rt.register({ name: "android/accounts/AbstractAccountAuthenticator", ctor: JAuth
   ...Object.fromEntries(authenticatorMethods.slice(8).map(([name, args]) => [name + "(Landroid/accounts/AccountAuthenticatorResponse;" + args.join("") + ")" + B,
     () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Authenticator session operation"); }])),
 } });
+
+class JAuthenticatorDescription extends JObj {
+  type = ""; packageName = ""; component = ""; process = ""; labelId = 0; iconId = 0; smallIconId = 0; accountPreferencesId = 0; customTokens = 0;
+}
+rt.register({
+  name: "android/accounts/AuthenticatorDescription", ctor: JAuthenticatorDescription, ifaces: ["android/os/Parcelable"],
+  fields: { type: "type", packageName: "packageName", labelId: "labelId", iconId: "iconId", smallIconId: "smallIconId", accountPreferencesId: "accountPreferencesId", customTokens: "customTokens" },
+  methods: { "describeContents()I": () => 0 },
+});
+/** the manifest's authenticator services, each described by its <account-authenticator> resource */
+export function authenticators(): JAuthenticatorDescription[] {
+  rt.link("android/accounts/AuthenticatorDescription");
+  const out: JAuthenticatorDescription[] = [];
+  for (const { node, meta, owner } of servicesMatching("android.accounts.AccountAuthenticator")) {
+    if (!owner.enabled || attr(node, "enabled")?.data === 0) continue;
+    const id = meta.map.get("android.accounts.AccountAuthenticator");
+    const bytes = typeof id === "number" ? owner.res.fileOf(id)?.bytes : null;
+    if (!bytes) continue;
+    const n = parseAXML(bytes), d = new JAuthenticatorDescription();
+    const ref = (name: string) => attr(n, name)?.data ?? 0;
+    d.type = attrStr(n, "accountType") ?? resString(owner.res, ref("accountType")) ?? "";
+    d.packageName = owner.pkg; d.process = owner.process(node);
+    d.component = qualifyComponent(attrStr(node, "name") ?? "", owner.pkg);
+    d.labelId = ref("label"); d.iconId = ref("icon"); d.smallIconId = ref("smallIcon"); d.accountPreferencesId = ref("accountPreferences");
+    d.customTokens = attr(n, "customTokens")?.data ? 1 : 0;
+    out.push(d);
+  }
+  return out;
+}

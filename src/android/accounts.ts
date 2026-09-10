@@ -1,15 +1,15 @@
 import { JObj, rt, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { defineException, stringHash, vcall } from "../jvm/natives/jlang";
+import { defineException, stringHash, vcall, curThread, mainThread } from "../jvm/natives/jlang";
 import { appHost } from "./apphost";
-import { attr, attrStr, parseAXML } from "./axml";
 import { onMain } from "./mainloop";
-import { servicesMatching } from "./pm";
-import { PROCESS_UID, type JBundle } from "./os";
+import { PROCESS_UID, bundleBox, bundlePrimitive, type JHandler, type JBundle } from "./os";
 import { packages } from "./packages";
 import { AccountStore, type StoredAccount } from "../shell/accounts";
-import { resString } from "./res";
 import { JParcel, parcelCreator } from "./parcel";
+import { authenticators } from "./authenticator";
+import { accountFuture, type JAccountFuture } from "./accountfuture";
+import { accountOptions, requestAccount } from "./accountrequest";
 
 class JAccount extends JObj { name = ""; type = ""; accessId: string | null = null; }
 function initAccount(this: JAccount, name: string | null, type: string | null, accessId: string | null = null) {
@@ -77,57 +77,52 @@ function remove(a: JAccount): number {
   return 1;
 }
 
-/** an operation's outcome, delivered to the callback on the main looper as AccountManager does */
-class JAccountFuture extends JObj { value: unknown = null; }
-function future(value: unknown, cb: unknown): JAccountFuture {
-  const f = new JAccountFuture();
-  f.value = value;
-  if (cb) void onMain(() => vcall(cb, "run", "(Landroid/accounts/AccountManagerFuture;)V", f));
-  return f;
-}
-rt.register({
-  name: "webdroid/AccountFuture", ctor: JAccountFuture, ifaces: ["android/accounts/AccountManagerFuture"],
-  methods: {
-    "getResult()Ljava/lang/Object;": function (this: JAccountFuture) { return this.value; },
-    "getResult(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JAccountFuture) { return this.value; },
-    "isDone()Z": () => 1,
-    "isCancelled()Z": () => 0,
-    "cancel(Z)Z": () => 0,
-  },
-});
-const bundle = (entries: Record<string, unknown>) => {
-  const b = new (rt.link("android/os/Bundle").ctor)() as JBundle;
-  for (const [k, v] of Object.entries(entries)) b.map.set(k, v);
-  return b;
+const unsupported = () => { throw rt.mkThrowable("android/accounts/AuthenticatorException", "Account operation is unavailable"); };
+const boolResult = (b: JBundle) => {
+  if (!b.map.has("booleanResult")) throw rt.mkThrowable("android/accounts/AuthenticatorException", "Missing boolean result");
+  return bundleBox(bundlePrimitive(b.map.get("booleanResult"), "Z", 0), "Z");
 };
-/** an operation that needs an authenticator UI or the network: nothing here answers it */
-const unsupported = () => { throw rt.mkThrowable("android/accounts/AuthenticatorException", "no authenticator"); };
-
-class JAuthenticatorDescription extends JObj {
-  type = ""; packageName = ""; labelId = 0; iconId = 0; smallIconId = 0; accountPreferencesId = 0; customTokens = 0;
+function features(a: JAccount, values: string[], cb: unknown, handler: JHandler | null): JAccountFuture {
+  if (!a || !values) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Account and features are required");
+  return requestAccount({ type: a.type, method: "hasFeatures", args: [a, values], callback: cb, handler, convert: boolResult });
 }
-rt.register({
-  name: "android/accounts/AuthenticatorDescription", ctor: JAuthenticatorDescription, ifaces: ["android/os/Parcelable"],
-  fields: { type: "type", packageName: "packageName", labelId: "labelId", iconId: "iconId", smallIconId: "smallIconId", accountPreferencesId: "accountPreferencesId", customTokens: "customTokens" },
-  methods: { "describeContents()I": () => 0 },
-});
-/** the manifest's authenticator services, each described by its <account-authenticator> resource */
-function authenticators(): JAuthenticatorDescription[] {
-  rt.link("android/accounts/AuthenticatorDescription");
-  const out: JAuthenticatorDescription[] = [];
-  for (const { meta, owner } of servicesMatching("android.accounts.AccountAuthenticator")) {
-    const id = meta.map.get("android.accounts.AccountAuthenticator");
-    const bytes = typeof id === "number" ? owner.res.fileOf(id)?.bytes : null;
-    if (!bytes) continue;
-    const n = parseAXML(bytes), d = new JAuthenticatorDescription();
-    const ref = (name: string) => attr(n, name)?.data ?? 0;
-    d.type = attrStr(n, "accountType") ?? resString(owner.res, ref("accountType")) ?? "";
-    d.packageName = owner.pkg;
-    d.labelId = ref("label"); d.iconId = ref("icon"); d.smallIconId = ref("smallIcon"); d.accountPreferencesId = ref("accountPreferences");
-    d.customTokens = attr(n, "customTokens")?.data ? 1 : 0;
-    out.push(d);
-  }
-  return out;
+function accountsWithFeatures(type: string, values: string[] | null, cb: unknown, handler: JHandler | null): JAccountFuture {
+  if (!type) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Account type is required");
+  const list = byType(type);
+  if (!values?.length) return accountFuture(cb, handler, list);
+  const future = accountFuture(cb, handler), matches: JAccount[] = [];
+  let active: JAccountFuture | null = null;
+  future.cleanup = () => { active?.finish({ kind: "canceled" }); };
+  void (async () => {
+    try {
+      for (const account of list) {
+        if (!future.pending) return;
+        active = features(account, values, null, null); await active.done();
+        if (bundlePrimitive(await active.result(), "Z", 0)) matches.push(account);
+      }
+      future.finish({ kind: "result", value: jarray(matches, "Landroid/accounts/Account;") });
+    } catch (error) { future.finish({ kind: "error", error }); }
+  })();
+  return future;
+}
+function authToken(a: JAccount, type: string, options: JBundle | null, activity: unknown, cb: unknown, handler: JHandler | null): JAccountFuture {
+  if (!a || !type) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Account and token type are required");
+  return requestAccount({ type: a.type, method: "getAuthToken", args: [a, type, accountOptions(options)], activity, callback: cb, handler,
+    convert: result => {
+      if (result.map.has("authtoken") && (result.map.get("authAccount") !== a.name || result.map.get("accountType") !== a.type))
+        throw rt.mkThrowable("android/accounts/AuthenticatorException", "Token account does not match request");
+      return result;
+    } });
+}
+function removeAccount(a: JAccount, activity: unknown, cb: unknown, handler: JHandler | null, boolean: boolean): JAccountFuture {
+  const stored = find(a);
+  return requestAccount({ type: a.type, method: "getAccountRemovalAllowed", args: [a], activity, callback: cb, handler, convert: result => {
+    if (!result.map.has("intent") && bundlePrimitive(boolResult(result), "Z", 0)) {
+      const index = stored ? accounts().indexOf(stored) : -1;
+      if (index >= 0) { accounts().splice(index, 1); persist(); }
+    }
+    return boolean ? boolResult(result) : result;
+  } });
 }
 
 class JAccountManager extends JObj {}
@@ -152,7 +147,8 @@ const methods: NativeSpec["methods"] = {
       throw rt.mkThrowable("java/lang/SecurityException", "Caller does not own this account type");
     return byType(type, pkg);
   },
-  [`getAccountsByTypeAndFeatures(${S}[${S}${CB}${H})${F}`]: (type: string, features: string[] | null, cb: unknown) => features?.length ? unsupported() : future(byType(type), cb),
+  [`getAccountsByTypeAndFeatures(${S}[${S}${CB}${H})${F}`]: maySuspend(accountsWithFeatures),
+  [`hasFeatures(${ACC}[${S}${CB}${H})${F}`]: maySuspend(features),
   [`addAccountExplicitly(${ACC}${S}Landroid/os/Bundle;)Z`]: (a: JAccount, password: string | null, extras: JBundle | null) => {
     const owner = authenticators().find(d => d.type === a.type)?.packageName;
     if (!owner || packages.get(owner)?.uid !== PROCESS_UID) throw rt.mkThrowable("java/lang/SecurityException", "Caller does not own this account type");
@@ -164,13 +160,13 @@ const methods: NativeSpec["methods"] = {
     return 1;
   },
   [`removeAccountExplicitly(${ACC})Z`]: remove,
-  [`removeAccount(${ACC}${CB}${H})${F}`]: (a: JAccount, cb: unknown) => future(bundle({ booleanResult: remove(a) }), cb),
-  [`removeAccount(${ACC}Landroid/app/Activity;${CB}${H})${F}`]: (a: JAccount, _act: unknown, cb: unknown) => future(bundle({ booleanResult: remove(a) }), cb),
-  [`renameAccount(${ACC}${S}${CB}${H})${F}`]: (a: JAccount, name: string, cb: unknown) => {
+  [`removeAccount(${ACC}${CB}${H})${F}`]: maySuspend((a: JAccount, cb: unknown, h: JHandler | null) => removeAccount(a, null, cb, h, true)),
+  [`removeAccount(${ACC}Landroid/app/Activity;${CB}${H})${F}`]: maySuspend((a: JAccount, act: unknown, cb: unknown, h: JHandler | null) => removeAccount(a, act, cb, h, false)),
+  [`renameAccount(${ACC}${S}${CB}${H})${F}`]: maySuspend((a: JAccount, name: string, cb: unknown, h: JHandler | null) => {
     const s = find(a);
     if (s) { s.name = name; persist(); }
-    return future(s ? toJ(s) : null, cb);
-  },
+    return accountFuture(cb, h, s ? toJ(s) : null);
+  }),
   [`getUserData(${ACC}${S})${S}`]: (a: JAccount, k: string) => find(a)?.data[k] ?? null,
   [`setUserData(${ACC}${S}${S})V`]: (a: JAccount, k: string, v: string | null) => {
     const s = find(a);
@@ -192,13 +188,25 @@ const methods: NativeSpec["methods"] = {
     for (const s of accounts()) for (const k of Object.keys(s.tokens)) if (s.type === type && s.tokens[k] === token) delete s.tokens[k];
     persist();
   },
-  [`blockingGetAuthToken(${ACC}${S}Z)${S}`]: (a: JAccount, type: string) => find(a)?.tokens[type] ?? unsupported(),
-  [`getAuthToken(${ACC}${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: (a: JAccount, type: string, _o: unknown, _act: unknown, cb: unknown) =>
-    future(bundle({ authAccount: a.name, accountType: a.type, authtoken: find(a)?.tokens[type] ?? unsupported() }), cb),
-  [`getAuthToken(${ACC}${S}Landroid/os/Bundle;Z${CB}${H})${F}`]: (a: JAccount, type: string, _o: unknown, _n: number, cb: unknown) =>
-    future(bundle({ authAccount: a.name, accountType: a.type, authtoken: find(a)?.tokens[type] ?? unsupported() }), cb),
+  [`blockingGetAuthToken(${ACC}${S}Z)${S}`]: async (a: JAccount, type: string) => {
+    if (curThread === mainThread) throw rt.mkThrowable("java/lang/IllegalStateException", "AccountManager cannot block the main thread");
+    const thread = curThread, result = await authToken(a, type, null, null, null, null).result(undefined, thread);
+    return (await vcall(result, "getString", "(Ljava/lang/String;)Ljava/lang/String;", "authtoken")) ?? null;
+  },
+  [`getAuthToken(${ACC}${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: maySuspend(authToken),
+  [`getAuthToken(${ACC}${S}Landroid/os/Bundle;Z${CB}${H})${F}`]: maySuspend((a: JAccount, type: string, o: JBundle | null, _notify: number, cb: unknown, h: JHandler | null) => authToken(a, type, o, null, cb, h)),
+  [`getAuthToken(${ACC}${S}Z${CB}${H})${F}`]: maySuspend((a: JAccount, type: string, _notify: number, cb: unknown, h: JHandler | null) => authToken(a, type, null, null, cb, h)),
   [`getAuthTokenByFeatures(${S}${S}[${S}Landroid/app/Activity;Landroid/os/Bundle;Landroid/os/Bundle;${CB}${H})${F}`]: unsupported,
-  [`addAccount(${S}${S}[${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: unsupported,
+  [`addAccount(${S}${S}[${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: maySuspend((type: string, token: string | null, features: string[] | null, options: JBundle | null, activity: unknown, callback: unknown, handler: JHandler | null) => {
+    if (!type) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Account type is required");
+    return requestAccount({ type, method: "addAccount", args: [type, token, features, accountOptions(options)], activity, callback, handler });
+  }),
+  [`confirmCredentials(${ACC}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: maySuspend((a: JAccount, options: JBundle | null, activity: unknown, callback: unknown, handler: JHandler | null) =>
+    requestAccount({ type: a.type, method: "confirmCredentials", args: [a, accountOptions(options)], activity, callback, handler })),
+  [`updateCredentials(${ACC}${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: maySuspend((a: JAccount, token: string, options: JBundle | null, activity: unknown, callback: unknown, handler: JHandler | null) =>
+    requestAccount({ type: a.type, method: "updateCredentials", args: [a, token, accountOptions(options)], activity, callback, handler })),
+  [`editProperties(${S}Landroid/app/Activity;${CB}${H})${F}`]: maySuspend((type: string, activity: unknown, callback: unknown, handler: JHandler | null) =>
+    requestAccount({ type, method: "editProperties", args: [type], activity, callback, handler })),
   "getAuthenticatorTypes()[Landroid/accounts/AuthenticatorDescription;": () => jarray(authenticators(), "Landroid/accounts/AuthenticatorDescription;"),
   [`addOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;${H}Z)V`]: maySuspend((l: unknown, _h: unknown, now: number) => {
     listeners.add(l);
