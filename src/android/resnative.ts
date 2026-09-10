@@ -5,7 +5,7 @@ import { device } from "../shell/config";
 import { newXmlPullParser } from "./xmlpull";
 import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
-import { JTypedValue } from "./util";
+import { JTypedValue, complexToFraction } from "./util";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 import { javaFormat, defineException, vcall } from "../jvm/natives/jlang";
 import { type JLocale, localeTag, localeDirection, usLocale } from "../jvm/natives/jvalues";
@@ -293,7 +293,11 @@ const resMethods: NativeSpec["methods"] = {
   "getDimensionPixelOffset(I)I": function (this: JResources, id: number) { return Math.trunc(rvDimen(this.host, this.host.ref(id), 0)); },
   "getBoolean(I)Z": function (this: JResources, id: number) { return rvInt(this.host, this.host.ref(id), 0) ? 1 : 0; },
   "getInteger(I)I": function (this: JResources, id: number) { return rvInt(this.host, this.host.ref(id), 0); },
-  "getFraction(III)F": function (this: JResources, id: number) { return rvFloat(this.host, this.host.ref(id), 0); },
+  "getFraction(III)F": function (this: JResources, id: number, base: number, pbase: number) {
+    const value = this.host.ref(id);
+    if (value?.t !== TV.FRACTION) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", `Resource ${id} is not a fraction`);
+    return complexToFraction(value.d, base, pbase);
+  },
   "getDrawable(I)Landroid/graphics/drawable/Drawable;": function (this: JResources, id: number) {
     return loadDrawable(this.host, id, null);
   },
@@ -481,6 +485,12 @@ rt.register({
     },
     "getInt(II)I": function (this: JTypedArray, i: number, d: number) { return this.vals[i] ? rvInt(this.res, this.vals[i], d) : d; },
     "getInteger(II)I": function (this: JTypedArray, i: number, d: number) { return this.vals[i] ? rvInt(this.res, this.vals[i], d) : d; },
+    "getFraction(IIIF)F": function (this: JTypedArray, i: number, base: number, pbase: number, d: number) {
+      const value = this.vals[i];
+      if (!value || value.t === TV.NULL) return d;
+      if (value.t !== TV.FRACTION) throw rt.mkThrowable("java/lang/UnsupportedOperationException", `Cannot convert value at ${i} to fraction`);
+      return complexToFraction(value.d, base, pbase);
+    },
     "getFloat(IF)F": function (this: JTypedArray, i: number, d: number) { return this.vals[i] ? rvFloat(this.res, this.vals[i], d) : d; },
     "getColor(II)I": function (this: JTypedArray, i: number, d: number) { return this.vals[i] ? rvColor(this.res, this.vals[i], d) : d; },
     "getColorStateList(I)Landroid/content/res/ColorStateList;": function (this: JTypedArray, i: number) {

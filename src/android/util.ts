@@ -247,13 +247,17 @@ rt.register({
     "getFloat()F": function (this: JTypedValue) { return intBitsToFloat(this.data); },
     // COMPLEX_UNIT_FRACTION scales the base, FRACTION_PARENT the parent's base
     "getFraction(FF)F": function (this: JTypedValue, base: number, pbase: number) {
-      return ((this.data & 0xf) === 0 ? base : pbase) * complexToPx(this.data & ~0xf, NO_DM);
+      return complexToFraction(this.data, base, pbase);
     },
     "static complexToFraction(IFF)F": (data: number, base: number, pbase: number) =>
-      ((data & 0xf) === 0 ? base : pbase) * complexToPx(data & ~0xf, NO_DM),
+      complexToFraction(data, base, pbase),
     "static complexToFloat(I)F": (data: number) => complexToPx(data & ~0xf, NO_DM),
   },
 });
+export function complexToFraction(data: number, base: number, pbase: number): number {
+  const unit = data & 0xf;
+  return unit > 1 ? 0 : complexToPx(data & ~0xf, NO_DM) * (unit === 0 ? base : pbase);
+}
 const NO_DM = { density: 1, scaledDensity: 1 };
 const RADIX_MULT = [2 ** -8, 2 ** -15, 2 ** -23, 2 ** -31];
 export function complexToPx(data: number, dm: { density: number; scaledDensity: number }): number {

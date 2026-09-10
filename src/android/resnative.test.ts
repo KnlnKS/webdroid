@@ -200,3 +200,15 @@ test("TextUtils and Configuration share locale direction including explicit scri
   const invalid = Object.assign(new JLocale(), { lang: "not a language" });
   expect(await vcall(text, "getLayoutDirectionFromLocale", "(Ljava/util/Locale;)I", invalid)).toBe(0);
 });
+
+
+test("TypedArray fractions use their base and reject non-fraction values", async () => {
+  const array = new (rt.link("android/content/res/TypedArray").ctor)();
+  array.vals = [{ t: 6, d: 0x40000030 }, { t: 6, d: 0xc0000031 }, null, { t: 16, d: 5 }, { t: 6, d: 0x40000032 }];
+  const fraction = (i: number) => vcall(array, "getFraction", "(IIIF)F", i, 80, 120, 7);
+  expect(await fraction(0)).toBe(40);
+  expect(await fraction(1)).toBe(-60);
+  expect(await fraction(2)).toBe(7);
+  await expect(fraction(3)).rejects.toThrow();
+  expect(await fraction(4)).toBe(0);
+});
