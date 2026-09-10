@@ -2415,3 +2415,11 @@ submitted access units before any decoded output may require admission based on 
 decodeQueueSize rather than output callbacks, and midstream decoded format changes do not yet
 produce revised output-format notifications. Neither occurred in the verified clip; no
 speculative queue rewrite was included before final verification.
+
+The apparent deep-link exception actually came from the first boot, before login. A debugger
+breakpoint retained across reload captured `l0t` invoking Intent.getComponent. That zero-argument
+getter had accidentally acquired resolveActivity's implementation and tried to call an undefined
+PackageManager. Restoring the synchronous explicit-component-or-null getter fixes the source
+error; the regression also checks setPackage alone, explicit class, cleared component and linked
+ComponentName metadata. The later direct package-manager query was valid, so neither DEX
+register handling nor package resolution needed a workaround.
