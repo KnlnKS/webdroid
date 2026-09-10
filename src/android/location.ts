@@ -1,5 +1,5 @@
 import { rt, JObj, type NativeSpec } from "../jvm/runtime";
-import { JBundle } from "./os";
+import { JBundle, uptimeMillis } from "./os";
 import { parcelCreator, type JParcel } from "./parcel";
 import { newObj, vcall } from "../jvm/natives/jlang";
 
@@ -39,7 +39,7 @@ const locMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "getElapsedRealtimeNanos()J": function (this: JLocation) { return this.elapsed; },
   "getElapsedRealtimeMillis()J": function (this: JLocation) { return this.elapsed / 1000000n; },
-  "getElapsedRealtimeAgeMillis()J": function (this: JLocation) { return BigInt(Math.floor(performance.now())) - this.elapsed / 1000000n; },
+  "getElapsedRealtimeAgeMillis()J": function (this: JLocation) { return BigInt(Math.floor(uptimeMillis())) - this.elapsed / 1000000n; },
   "getElapsedRealtimeAgeMillis(J)J": function (this: JLocation, now: bigint) { return now - this.elapsed / 1000000n; },
   "setElapsedRealtimeNanos(J)V": function (this: JLocation, value: bigint) { this.elapsed = value; },
   "isMock()Z": function (this: JLocation) { return +this.mock; },

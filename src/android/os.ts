@@ -89,6 +89,8 @@ rt.register({ name: "android/os/Handler$Callback", ctor: class extends JObj {} }
 defineException("android/os/RemoteException", "java/lang/Exception");
 defineException("android/os/DeadObjectException", "android/os/RemoteException");
 
+export const bootTime = typeof window === "undefined" ? performance.timeOrigin : window.parent.performance.timeOrigin;
+export const uptimeMillis = () => performance.timeOrigin - bootTime + performance.now();
 let handlerSeq = 0;
 export class JHandler extends JObj {
   looper: JLooper = mainLooper;
@@ -160,7 +162,7 @@ rt.register({
     "post(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.post(r, 0); },
     "postDelayed(Ljava/lang/Runnable;J)Z": function (this: JHandler, r: unknown, d: bigint) { return this.post(r, Number(d)); },
     "postAtTime(Ljava/lang/Runnable;J)Z": function (this: JHandler, r: unknown, at: bigint) {
-      return this.post(r, Math.max(0, Number(at) - performance.now()));
+      return this.post(r, Math.max(0, Number(at) - uptimeMillis()));
     },
     "postAtFrontOfQueue(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.post(r, 0); },
     "removeCallbacks(Ljava/lang/Runnable;)V": function (this: JHandler, r: unknown) { this.cancel(r); },
@@ -169,7 +171,7 @@ rt.register({
     "sendMessageDelayed(Landroid/os/Message;J)Z": function (this: JHandler, m: JMessage, d: bigint) { return this.send(m, Number(d)); },
     "sendEmptyMessage(I)Z": function (this: JHandler, w: number) { const m = new JMessage(); m.what = w; return this.send(m, 0); },
     "sendEmptyMessageAtTime(IJ)Z": function (this: JHandler, w: number, at: bigint) {
-      const m = new JMessage(); m.what = w; return this.send(m, Math.max(0, Number(at) - performance.now()));
+      const m = new JMessage(); m.what = w; return this.send(m, Math.max(0, Number(at) - uptimeMillis()));
     },
     "sendEmptyMessageDelayed(IJ)Z": function (this: JHandler, w: number, d: bigint) {
       const m = new JMessage(); m.what = w; return this.send(m, Number(d));
@@ -217,9 +219,9 @@ class JSystemClock extends JObj {}
 rt.register({
   name: "android/os/SystemClock", ctor: JSystemClock,
   methods: {
-    "static uptimeMillis()J": () => BigInt(Math.floor(performance.now())),
-    "static elapsedRealtime()J": () => BigInt(Math.floor(performance.now())),
-    "static elapsedRealtimeNanos()J": () => BigInt(Math.floor(performance.now() * 1e6)),
+    "static uptimeMillis()J": () => BigInt(Math.floor(uptimeMillis())),
+    "static elapsedRealtime()J": () => BigInt(Math.floor(uptimeMillis())),
+    "static elapsedRealtimeNanos()J": () => BigInt(Math.floor(uptimeMillis() * 1e6)),
     "static currentThreadTimeMillis()J": () => BigInt(Math.floor(performance.now())),
     "static sleep(J)V": (ms: bigint) => new Promise((r) => setTimeout(r, Number(ms))),
   },
