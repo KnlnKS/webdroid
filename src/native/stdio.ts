@@ -1,7 +1,7 @@
 // stdio + the fd table over the JVM vfs: FILE structs live in guest memory (bionic __sFILE layout)
 // so the getc/putc macros and __srget refills work; /proc/cpuinfo and /proc/meminfo are synthesized.
 
-import { mem } from "./mem";
+import { mem, guestAt } from "./mem";
 import { hostLib, hostData, vaList, type HostFn, PTR, stp, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
@@ -158,8 +158,6 @@ function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   f.dirty = true;
   return n;
 }
-const guestAt = (base: number | bigint, offset = 0): number =>
-  typeof base === "bigint" ? mem.txVa(base + BigInt(offset)) : base + offset;
 function fdReadAt(cpu: Cpu, f: Fd, p: number, n: number, off: number): number | Promise<number> {
   if (!n) return 0;
   if (f.random) {

@@ -2,7 +2,7 @@
 // honestly. Struct layouts live in LAYOUT, chosen by the process ABI. stdio is in stdio.ts,
 // printf/scanf in printf.ts.
 
-import { mem, NativeFault } from "./mem";
+import { mem, NativeFault, guestAt } from "./mem";
 import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, calledMissing } from "./host";
 import { E, ERRSTR } from "./abi";
 import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
@@ -286,7 +286,7 @@ export function libcInit(): void {
       const p = flags & 0x10 ? hint : mem.mapVa(n, reserve);
       if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return failed(E.NOMEM);
       if (flags & 0x10 && !reserve) { invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
-      if (fd !== -1 && !(flags & 0x20)) { const r = readInto(cpu, fd, off, typeof p === "bigint" ? mem.txVa(p) : p, n); return r instanceof Promise ? r.then(() => p) : p; }
+      if (fd !== -1 && !(flags & 0x20)) { const r = readInto(cpu, fd, off, guestAt(p), n); return r instanceof Promise ? r.then(() => p) : p; }
       return p;
     },
     mmap64: (cpu, a) => M.mmap(cpu, a),

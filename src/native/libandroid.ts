@@ -3,7 +3,7 @@
 // libmediandk (nothing). A name they lack is NULL from dlsym, as on a device without it — which
 // is how libunity picks its frame pacing when AChoreographer_* is absent.
 
-import { mem } from "./mem";
+import { mem, guestAt } from "./mem";
 import { hostLib, hostData, cstr, stp, retF, type HostFn, type ArgReader } from "./host";
 import { deref } from "./jni";
 import { JSurface, type GlSurface } from "../android/glview";
@@ -160,7 +160,7 @@ export function ndkInit(): void {
       if (!n) return 0;
       const dst = mem.va(buf);
       const value = s.data ? s.data.subarray(s.pos, s.pos + n) : s.source.read(s.pos, n);
-      const done = (bytes: Uint8Array) => { mem.write(typeof dst === "bigint" ? mem.txVa(dst) : dst, bytes); s.pos += bytes.length; return bytes.length; };
+      const done = (bytes: Uint8Array) => { mem.write(guestAt(dst), bytes); s.pos += bytes.length; return bytes.length; };
       return value instanceof Promise ? value.then(done) : done(value);
     },
     AAsset_seek: (_c, a) => { const s = A(a); return s ? seek(s, a.i(), a.i()) : -1; },

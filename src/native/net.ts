@@ -4,7 +4,8 @@ import { Relay } from "../shell/relay";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { hostLib, PTR, stp, type HostFn, type HostRet, ptr } from "./host";
-import { mem } from "./mem";
+import { mem, guestAt } from "./mem";
+import { fail } from "./libc";
 import { allocateFd, releaseFd, reserveFd } from "./fd";
 const enc = new TextEncoder();
 
@@ -74,7 +75,6 @@ export function setNativePollProvider(provider: NativePollProvider): () => void 
   return () => { localPollProvider = previous; };
 }
 
-const fail = (cpu: Cpu, errno: number): number => { mem.st32(cpu.errnoAddr, errno); return -1; };
 const wake = (socket: NativeSocket): void => {
   const waiters = [...socket.waiters];
   socket.waiters.clear();
@@ -335,15 +335,14 @@ function nativeSendTo(cpu: Cpu, fd: number, source: number, length: number, dest
   return length;
 }
 
-function writeDatagramAddress(endpoint: Ipv4Endpoint, address: number, length: number): void {
-  const capacity = mem.ld32(length);
+function putSockaddr(endpoint: Ipv4Endpoint, address: number, length: number, capacity: number): void {
   const sockaddr = new Uint8Array(16);
   sockaddr[0] = AF_INET;
   sockaddr[2] = endpoint.port >>> 8;
   sockaddr[3] = endpoint.port & 255;
   sockaddr.set(endpoint.address, 4);
-  if (capacity > 0) mem.u8.set(sockaddr.subarray(0, Math.min(capacity, sockaddr.length)), address);
-  mem.st32(length, sockaddr.length);
+  if (capacity > 0) mem.u8.set(sockaddr.subarray(0, Math.min(capacity, 16)), address);
+  mem.st32(length, 16);
 }
 
 function nativeReceiveFrom(cpu: Cpu, fd: number, destination: number, length: number, flags: number, source: number, sourceLength: number): number | Promise<number> {
@@ -367,13 +366,13 @@ function nativeReceiveFrom(cpu: Cpu, fd: number, destination: number, length: nu
       socket.queue.shift();
       socket.queuedBytes -= datagram.bytes.length;
     }
-    const currentDestination = typeof destinationVa === "bigint" ? mem.txVa(destinationVa) : destinationVa;
+    const currentDestination = guestAt(destinationVa);
     const copied = Math.min(length, datagram.bytes.length);
     if (copied) mem.write(currentDestination, datagram.bytes.subarray(0, copied));
     if (sourceVa && sourceLengthVa) {
-      const currentSource = typeof sourceVa === "bigint" ? mem.txVa(sourceVa) : sourceVa;
-      const currentLength = typeof sourceLengthVa === "bigint" ? mem.txVa(sourceLengthVa) : sourceLengthVa;
-      writeDatagramAddress(datagram.source, currentSource, currentLength);
+      const currentSource = guestAt(sourceVa);
+      const currentLength = guestAt(sourceLengthVa);
+      putSockaddr(datagram.source, currentSource, currentLength, mem.ld32(currentLength));
     }
     return flags & MSG_TRUNC ? datagram.bytes.length : copied;
   };
@@ -450,7 +449,7 @@ export function nativeSocketRead(cpu: Cpu, fd: number, destination: number, leng
   const bytes = new Uint8Array(length);
   return socket.relay.read(bytes, 0, length).then((read) => {
     if (read < 0) return 0;
-    mem.write(typeof target === "bigint" ? mem.txVa(target) : target, bytes.subarray(0, read));
+    mem.write(guestAt(target), bytes.subarray(0, read));
     return read;
   });
 }
@@ -510,7 +509,7 @@ export function nativePoll(_cpu: Cpu, pollfds: number, count: number, timeout: n
       finished = true;
       for (const cleanup of cleanups) cleanup();
       if (timer !== undefined) clearTimeout(timer);
-      const current = typeof target === "bigint" ? mem.txVa(target) : target;
+      const current = guestAt(target);
       resolve(scanPoll(current, count));
     };
     for (let i = 0; i < count; i++) cleanups.push(watchNativeFd(mem.ld32(pollfds + i * 8), finish));
@@ -554,8 +553,8 @@ function nativeSelect(cpu: Cpu, count: number, readSet: number, writeSet: number
   const setVas = [readSet, writeSet, exceptSet].map((set) => set ? mem.va(set) : 0);
 
   const finish = (): number => {
-    const currentPoll = typeof pollVa === "bigint" ? mem.txVa(pollVa) : pollVa;
-    const sets = setVas.map((set) => typeof set === "bigint" ? mem.txVa(set) : set);
+    const currentPoll = guestAt(pollVa);
+    const sets = setVas.map((set) => guestAt(set));
     if (requested.some((_request, i) => mem.ld16u(currentPoll + i * 8 + 6) & POLLNVAL)) {
       mem.free(currentPoll);
       return fail(cpu, E.BADF);
@@ -605,14 +604,7 @@ function nativeSocketName(cpu: Cpu, fd: number, address: number, length: number,
   const capacity = mem.ld32(length);
   if (capacity < 0) return fail(cpu, E.INVAL);
   if (capacity && !address) return fail(cpu, E.FAULT);
-
-  const sockaddr = new Uint8Array(16);
-  sockaddr[0] = AF_INET;
-  sockaddr[2] = endpoint.port >>> 8;
-  sockaddr[3] = endpoint.port & 255;
-  sockaddr.set(endpoint.address, 4);
-  mem.u8.set(sockaddr.subarray(0, Math.min(capacity, sockaddr.length)), address);
-  mem.st32(length, sockaddr.length);
+  putSockaddr(endpoint, address, length, capacity);
   return 0;
 }
 
@@ -683,9 +675,7 @@ export function netInit(): void {
     },
     recv: (cpu, args) => {
       const fd = args.i(), destination = args.p(), length = args.u(), flags = args.i();
-      return isNativeSocket(fd)
-        ? nativeReceiveFrom(cpu, fd, destination, length, flags, 0, 0)
-        : localPollProvider?.read(cpu, fd, destination, length) ?? fail(cpu, E.BADF);
+      return isNativeSocket(fd) ? nativeReceiveFrom(cpu, fd, destination, length, flags, 0, 0) : nativeReceive(cpu, fd, destination, length);
     },
     recvfrom: (cpu, args) => {
       const fd = args.i(), destination = args.p(), length = args.u(), flags = args.i();

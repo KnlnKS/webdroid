@@ -122,7 +122,6 @@ export let PTR = 4;
 export function setPtrWidth(n: number): void { PTR = n; }
 /** store a guest pointer; the high half of an LP64 slot is always zero in this address space */
 export function stp(a: number, v: number): void { const g = mem.va(v); if (typeof g === "bigint") { mem.st64(a, g); return; } mem.st32(a, v); if (PTR === 8) mem.st32(a + 4, 0); }
-/** load a guest pointer */
 /** a pointer read from guest memory, translated; a pointer stored is written as the guest knows it */
 export function ldp(a: number): number { const lo = mem.ld32(a), hi = PTR === 8 ? mem.ld32(a + 4) : 0; return hi ? mem.tx(hi, lo) : lo >>> 0; }
 export function stpVa(a: number, v: number | bigint): void { if (typeof v === "bigint") mem.st64(a, v); else stp(a, v); }
@@ -245,9 +244,9 @@ const addrs = new Map<string, number>();  // "lib!sym" → address
 const closedLibs = new Set<string>();
 /** names an image asked a closed library for and did not get ("lib!sym") */
 export const probed = new Set<string>();
+function libOf(lib: string): Map<string, HostFn | number> { let m = libs.get(lib); if (!m) libs.set(lib, (m = new Map())); return m; }
 export function hostLib(lib: string, fnsIn: Record<string, HostFn>, opts?: { closed?: boolean }): void {
-  let m = libs.get(lib);
-  if (!m) libs.set(lib, (m = new Map()));
+  const m = libOf(lib);
   for (const [k, v] of Object.entries(fnsIn)) m.set(k, v);
   if (opts?.closed) closedLibs.add(lib);
 }
@@ -259,11 +258,7 @@ export function probeHost(sym: string, lib: string): number {
   if (closedLibs.has(lib)) { probed.add(lib + "!" + sym); return 0; }
   return missingStub(lib + "!" + sym);
 }
-export function hostData(lib: string, sym: string, addr: number): void {
-  let m = libs.get(lib);
-  if (!m) libs.set(lib, (m = new Map()));
-  m.set(sym, addr);
-}
+export function hostData(lib: string, sym: string, addr: number): void { libOf(lib).set(sym, addr); }
 export function hostLibNames(): string[] { return [...libs.keys()]; }
 export function lookupHost(sym: string, lib?: string): number | undefined {
   for (const [ln, m] of libs) {

@@ -195,6 +195,7 @@ export const mem = {
     return { used: core.stat(0), blocks: core.stat(1), peak: core.stat(2), size: core.stat(3), free: core.stat(4), planes: core.stat(5), chunks: core.stat(6), moves: core.stat(7) };
   },
 };
+export const guestAt = (base: number | bigint, offset = 0): number => (typeof base === "bigint" ? mem.txVa(base + BigInt(offset)) : base + offset);
 views();
 core.mem_init(MEM_SIZE_A32);
 SPAN = MEM_SIZE_A32 - LOW;
