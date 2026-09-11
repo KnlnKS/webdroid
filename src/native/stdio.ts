@@ -269,7 +269,7 @@ function fdSeek(cpu: Cpu | null, fd: number, off: number, whence: number): numbe
   f.pos = np;
   return np;
 }
-/** an inode per path: a runtime's own share table (Mono's sharing violations) keys on st_dev/st_ino */
+/** an inode per path: a runtime's own share table keys on st_dev/st_ino */
 function inoOf(path: string): number { let h = 0x811c9dc5; for (let i = 0; i < path.length; i++) h = Math.imul(h ^ path.charCodeAt(i), 0x01000193); return (h >>> 0) || 1; }
 function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number, path: string): void {
   mem.memset(buf, 0, LAYOUT.STAT_SIZE);

@@ -1,7 +1,6 @@
 // The NDK's closed host libraries: libandroid (windows over the shell's surfaces, per-thread
 // loopers, sensors, assets), libOpenSLES (no engine, so audio takes the AudioTrack path) and
-// libmediandk (nothing). A name they lack is NULL from dlsym, as on a device without it — which
-// is how libunity picks its frame pacing when AChoreographer_* is absent.
+// libmediandk (nothing). A name they lack is NULL from dlsym, as on a device without it.
 
 import { mem, guestAt } from "./mem";
 import { hostLib, hostData, cstr, stp, retF, type HostFn, type ArgReader } from "./host";

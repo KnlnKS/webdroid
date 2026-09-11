@@ -47,8 +47,7 @@ async function runKeyDestructors(cpu: Cpu): Promise<void> {
   }
 }
 // A Java thread that ends has no native frame left. Its thread-locals get their destructors,
-// as a pthread exit gives them, and the stack goes back to the pool: OkHttp runs one thread
-// per call, and each call that crossed JNI otherwise kept a stack for good.
+// as a pthread exit gives them, and the stack goes back to the pool.
 threadExit.hook = (t) => {
   const cpu = cpuOf(t);
   if (!cpu || cpu.loops || cpu.depth) return;
