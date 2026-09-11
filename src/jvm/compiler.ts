@@ -26,8 +26,12 @@ interface Ins {
 const NO_REGS: number[] = [];
 const ENDS_RE = /^(goto|return|throw)/;
 const NO_WRITE_RE = /^(if|goto|return|throw|nop|monitor|aput|iput|sput|invoke|packed|sparse|fill-array|check-cast)/;
-const FLOAT_OP_RE = /^(add|sub|mul|div|rem)-float/;
-const DOUBLE_OP_RE = /^(add|sub|mul|div|rem)-double/;
+const OPERAND_KIND_RE = /^(?:(?:add|sub|mul|div|rem|neg|cmpl|cmpg)-(float|double)|(float|double)-to-)/;
+const REL: Record<string, string> = { lt: "<", ge: ">=", gt: ">", le: "<=" };
+const holder = (isStatic: boolean) => (isStatic ? "C" : "C.prototype");
+const paramList = (desc: string) => parseMethodDesc(desc).params.map((_, j) => "p" + j).join(",");
+const isRef = (desc: string) => desc[0] === "L" || desc[0] === "[";
+const ref = (r: string) => `(${r}===0?null:${r})`;
 function nibbleRegs(r: number, u: number, n: number): number[] {
   const out = new Array<number>(n);
   for (let i = 0; i < n; i++) out[i] = i === 4 ? (u >> 8) & 0xf : (r >> (i * 4)) & 0xf;
@@ -137,8 +141,8 @@ function emitLazy(dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   const i = info.lazy!.length;
   info.lazy!.push({ m, mangled, isStatic, name, desc });
-  const ps = parseMethodDesc(desc).params.map((_, j) => "p" + j).join(",");
-  return `let $z${i};${isStatic ? "C" : "C.prototype"}.${mangled}=function(${ps}){` +
+  const ps = paramList(desc);
+  return `let $z${i};${holder(isStatic)}.${mangled}=function(${ps}){` +
     `return ($z${i}||($z${i}=R.lz(C,${i}))).call(this${ps ? "," + ps : ""})};`;
 }
 
@@ -186,9 +190,9 @@ export function methodKey(dex: DexFile, methodIdx: number): { name: string; desc
  *  register the native. The cell mirrors emitLazy's so a captured thunk stays one call away. */
 function emitNativeStub(dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
-  const target = (m.flags & ACC.STATIC) !== 0 ? "C" : "C.prototype";
+  const target = holder((m.flags & ACC.STATIC) !== 0);
   const cls = JSON.stringify(info.name), v = `$n${m.methodIdx}`;
-  const ps = parseMethodDesc(desc).params.map((_, j) => "p" + j).join(",");
+  const ps = paramList(desc);
   return `let ${v};${target}.${mangled}=function(${ps}){` +
     `if(!${v}&&!(${v}=${target}.${mangled}=R.jniFn(${cls},${JSON.stringify(name + desc)})))` +
     `throw R.ulink(${cls},${JSON.stringify(name)},${JSON.stringify(desc)});` +
@@ -201,11 +205,11 @@ function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod,
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   try {
     const body = new MethodCompiler(R, dex, info, code, isStatic, desc, name).compile(count);
-    return `${isStatic ? "C" : "C.prototype"}.${mangled} = ${body};`;
+    return `${holder(isStatic)}.${mangled} = ${body};`;
   } catch (e) {
     const msg = `compile error ${info.name}.${name}${desc}: ${e}`;
     console.warn(msg);
-    return `${isStatic ? "C" : "C.prototype"}.${mangled} = function(){ throw R.unimplemented(${JSON.stringify(msg)}); };`;
+    return `${holder(isStatic)}.${mangled} = function(){ throw R.unimplemented(${JSON.stringify(msg)}); };`;
   }
 }
 
@@ -237,7 +241,6 @@ class MethodCompiler {
       const u = insns[pc];
       if ((u & 0xff) === 0 && (u >> 8) !== 0) { pc += insnLen(insns, pc); continue; } // payload
       const ins = decode(insns, pc);
-      ins.len = insnLen(insns, pc);
       this.ins.set(pc, ins);
       this.order.push(pc);
       pc += ins.len;
@@ -411,16 +414,12 @@ ${catchBody}
       for (const pc of body.get(lead)!) {
         const i = this.ins.get(pc)!;
         const n = i.name;
-        if (FLOAT_OP_RE.test(n) || n === "neg-float" || n.startsWith("cmpl-float") || n.startsWith("cmpg-float") ||
-            n === "float-to-int" || n === "float-to-long" || n === "float-to-double") {
-          if (n.endsWith("/2addr")) { mark(i.a, "F"); mark(i.b, "F"); }
-          else if (n.startsWith("neg") || n.startsWith("float-to")) mark(i.b, "F");
-          else { mark(i.b, "F"); mark(i.c, "F"); }
-        } else if (DOUBLE_OP_RE.test(n) || n === "neg-double" || n.startsWith("cmpl-double") || n.startsWith("cmpg-double") ||
-            n === "double-to-int" || n === "double-to-long" || n === "double-to-float") {
-          if (n.endsWith("/2addr")) { mark(i.a, "D"); mark(i.b, "D"); }
-          else if (n.startsWith("neg") || n.startsWith("double-to")) mark(i.b, "D");
-          else { mark(i.b, "D"); mark(i.c, "D"); }
+        const operand = OPERAND_KIND_RE.exec(n);
+        if (operand) {
+          const k = (operand[1] ?? operand[2]) === "float" ? "F" : "D";
+          if (n.endsWith("/2addr")) { mark(i.a, k); mark(i.b, k); }
+          else if (n.startsWith("neg") || operand[2]) mark(i.b, k);
+          else { mark(i.b, k); mark(i.c, k); }
         } else if (n === "aput" || n === "aput-wide") {
           const k = arr.get(i.b);
           if (k) mark(i.a, k);
@@ -548,28 +547,20 @@ ${catchBody}
   private branchTargets(i: Ins): number[] {
     switch (i.name) {
       case "goto": case "goto/16": case "goto/32": return [i.pc + i.a];
-      case "packed-switch": case "sparse-switch": {
-        const targets = [];
-        const payload = i.pc + i.b;
-        const insns = this.code.insns;
-        if (i.name === "packed-switch") {
-          const size = insns[payload + 1];
-          for (let j = 0; j < size; j++) {
-            targets.push(i.pc + (insns[payload + 4 + j * 2] | (insns[payload + 5 + j * 2] << 16)));
-          }
-        } else {
-          const size = insns[payload + 1];
-          for (let j = 0; j < size; j++) {
-            const off = payload + 2 + size * 2 + j * 2;
-            targets.push(i.pc + (insns[off] | (insns[off + 1] << 16)));
-          }
-        }
-        return targets;
-      }
-      default:
-        if (i.name.startsWith("if-")) return [i.pc + (i.fmt === "22t" ? i.c : i.b)];
-        return [];
+      case "packed-switch": case "sparse-switch": return this.switchCases(i).map(([, t]) => t);
+      default: return i.name.startsWith("if-") ? [this.ifTarget(i)] : [];
     }
+  }
+  private ifTarget(i: Ins): number { return i.pc + (i.fmt === "22t" ? i.c : i.b); }
+  /** a switch's [key, target] pairs out of its packed or sparse payload */
+  private switchCases(i: Ins): [number, number][] {
+    const insns = this.code.insns, payload = i.pc + i.b, size = insns[payload + 1], out: [number, number][] = [];
+    const word = (at: number) => insns[at] | (insns[at + 1] << 16);
+    for (let j = 0; j < size; j++) {
+      if (i.name === "packed-switch") out.push([word(payload + 2) + j, i.pc + word(payload + 4 + j * 2)]);
+      else out.push([word(payload + 2 + j * 2), i.pc + word(payload + 2 + size * 2 + j * 2)]);
+    }
+    return out;
   }
 
   // inside <clinit>: pass own type idx so the runtime can detect clinit cycles
@@ -616,7 +607,7 @@ ${catchBody}
       case "move-exception": out.push(`${A}=$ex;`); break;
       case "return-void": out.push(this.leave() + "return;"); break;
       case "return": case "return-wide": out.push(`${this.leave()}return ${A};`); break;
-      case "return-object": out.push(`${this.leave()}return ${A}===0?null:${A};`); break;
+      case "return-object": out.push(`${this.leave()}return ${ref(A)};`); break;
       case "const/4": case "const/16": case "const":
         out.push(`${A}=${i.constKind === "F" ? f32bits(i.b) : i.b};`);
         break;
@@ -659,8 +650,8 @@ ${catchBody}
       case "filled-new-array": case "filled-new-array/range": {
         const elem = dex.type(i.b).slice(1);
         const vals = i.regs.map((r) => `v${r}`).join(",");
-        if (elem[0] === "L" || elem[0] === "[") {
-          out.push(`$t=R.oa(${i.regs.length},${JSON.stringify(elem)});${i.regs.map((r, j) => `$t[${j}]=v${r}===0?null:v${r};`).join("")}`);
+        if (isRef(elem)) {
+          out.push(`$t=R.oa(${i.regs.length},${JSON.stringify(elem)});${i.regs.map((r, j) => `$t[${j}]=${ref("v" + r)};`).join("")}`);
         } else {
           out.push(`$t=${typedArrayCtor(elem)}.of(${vals});`);
         }
@@ -687,29 +678,9 @@ ${catchBody}
       }
       case "throw": out.push(`throw ${A};`); break;
       case "goto": case "goto/16": case "goto/32": out.push(this.jumpStr(i.pc + i.a, i.pc)); break;
-      case "packed-switch": case "sparse-switch": {
-        const insns = this.code.insns;
-        const payload = i.pc + i.b;
-        const cases: string[] = [];
-        if (i.name === "packed-switch") {
-          const size = insns[payload + 1];
-          const first = (insns[payload + 2] | (insns[payload + 3] << 16));
-          for (let j = 0; j < size; j++) {
-            const t = i.pc + (insns[payload + 4 + j * 2] | (insns[payload + 5 + j * 2] << 16));
-            cases.push(`case ${first + j}:${this.jumpStr(t, i.pc)}`);
-          }
-        } else {
-          const size = insns[payload + 1];
-          for (let j = 0; j < size; j++) {
-            const k = insns[payload + 2 + j * 2] | (insns[payload + 3 + j * 2] << 16);
-            const off = payload + 2 + size * 2 + j * 2;
-            const t = i.pc + (insns[off] | (insns[off + 1] << 16));
-            cases.push(`case ${k}:${this.jumpStr(t, i.pc)}`);
-          }
-        }
-        out.push(`switch(${A}){${cases.join("")}}`);
+      case "packed-switch": case "sparse-switch":
+        out.push(`switch(${A}){${this.switchCases(i).map(([k, t]) => `case ${k}:${this.jumpStr(t, i.pc)}`).join("")}}`);
         break;
-      }
       case "cmpl-float": case "cmpl-double":
         out.push(`${A}=${B}<${C}?-1:${B}>${C}?1:${B}===${C}?0:-1;`); break;
       case "cmpg-float": case "cmpg-double":
@@ -718,16 +689,10 @@ ${catchBody}
         out.push(`${A}=${B}<${C}?-1:${B}>${C}?1:0;`); break;
       case "if-eq": this.emitIf(`(${A}===${B}||(${nz(A)}&&${nz(B)}))`, i, out); break;
       case "if-ne": this.emitIf(`!(${A}===${B}||(${nz(A)}&&${nz(B)}))`, i, out); break;
-      case "if-lt": this.emitIf(`${A}<${B}`, i, out); break;
-      case "if-ge": this.emitIf(`${A}>=${B}`, i, out); break;
-      case "if-gt": this.emitIf(`${A}>${B}`, i, out); break;
-      case "if-le": this.emitIf(`${A}<=${B}`, i, out); break;
-      case "if-eqz": this.emitIfz(nz(A), i, out); break;
-      case "if-nez": this.emitIfz(`!${nz(A)}`, i, out); break;
-      case "if-ltz": this.emitIfz(`${A}<0`, i, out); break;
-      case "if-gez": this.emitIfz(`${A}>=0`, i, out); break;
-      case "if-gtz": this.emitIfz(`${A}>0`, i, out); break;
-      case "if-lez": this.emitIfz(`${A}<=0`, i, out); break;
+      case "if-eqz": this.emitIf(nz(A), i, out); break;
+      case "if-nez": this.emitIf(`!${nz(A)}`, i, out); break;
+      case "if-lt": case "if-ge": case "if-gt": case "if-le": this.emitIf(`${A}${REL[i.name.slice(3)]}${B}`, i, out); break;
+      case "if-ltz": case "if-gez": case "if-gtz": case "if-lez": this.emitIf(`${A}${REL[i.name.slice(3, 5)]}0`, i, out); break;
       case "const-method-handle": case "const-method-type":
         out.push(this.unsupported(`${i.name} #${i.b}`));
         break;
@@ -737,14 +702,12 @@ ${catchBody}
         if (i.name.startsWith("aget")) {
           out.push(`if((${C}>>>0)>=${B}.length)R.aio(${C},${B}.length);${A}=${B}[${C}];`);
         } else if (i.name.startsWith("aput")) {
-          const val = i.name === "aput-object" ? `(${A}===0?null:${A})` : A;
+          const val = i.name === "aput-object" ? ref(A) : A;
           out.push(`if((${C}>>>0)>=${B}.length)R.aio(${C},${B}.length);${B}[${C}]=${val};`);
         } else if (i.name.startsWith("iget")) {
           out.push(`${A}=${B}.${this.fieldProp(i.c)};`);
         } else if (i.name.startsWith("iput")) {
-          const ft = this.dex.type(this.dex.field(i.c).type);
-          const val = (ft[0] === "L" || ft[0] === "[") ? `(${A}===0?null:${A})` : A;
-          out.push(`${B}.${this.fieldProp(i.c)}=${val};`);
+          out.push(`${B}.${this.fieldProp(i.c)}=${isRef(this.dex.type(this.dex.field(i.c).type)) ? ref(A) : A};`);
         } else if (i.name.startsWith("sget")) {
           this.emitStaticField(i, out, true);
         } else if (i.name.startsWith("sput")) {
@@ -765,10 +728,7 @@ ${catchBody}
   }
 
   private emitIf(cond: string, i: Ins, out: string[]) {
-    out.push(`if(${cond}){${this.jumpStr(i.pc + i.c, i.pc)}}`);
-  }
-  private emitIfz(cond: string, i: Ins, out: string[]) {
-    out.push(`if(${cond}){${this.jumpStr(i.pc + i.b, i.pc)}}`);
+    out.push(`if(${cond}){${this.jumpStr(this.ifTarget(i), i.pc)}}`);
   }
 
   private emitStaticField(i: Ins, out: string[], isGet: boolean) {
@@ -781,10 +741,8 @@ ${catchBody}
     } else {
       this.guard(`D.fs[${i.b}]??D.rsf(${i.b}${this.fromArg})`, out, "$u");
     }
-    const ft = this.dex.type(this.dex.field(i.b).type);
-    const isRef = ft[0] === "L" || ft[0] === "[";
     const A = `v${i.a}`;
-    out.push(isGet ? `${A}=$u.${prop};` : `$u.${prop}=${isRef ? `(${A}===0?null:${A})` : A};`);
+    out.push(isGet ? `${A}=$u.${prop};` : `$u.${prop}=${isRef(this.dex.type(this.dex.field(i.b).type)) ? ref(A) : A};`);
   }
 
   /** an instruction we cannot compile: throw here, so the rest of the method still runs */
@@ -812,7 +770,7 @@ ${catchBody}
     let ri = isInstance ? 1 : 0;
     for (const p of dex.protoParamTypes(mref.proto)) {
       const r = `v${i.regs[ri]}`;
-      args.push(p[0] === "L" || p[0] === "[" ? `(${r}===0?null:${r})` : r);
+      args.push(isRef(p) ? ref(r) : r);
       ri += isWide(p) ? 2 : 1;
     }
     const recv = isInstance ? `v${i.regs[0]}` : "";
@@ -947,6 +905,6 @@ function typedArrayCtor(elem: string): string {
 }
 
 function newArrayExpr(elem: string, lenExpr: string): string {
-  if (elem[0] === "L" || elem[0] === "[") return `R.oa(${lenExpr},${JSON.stringify(elem)})`;
+  if (isRef(elem)) return `R.oa(${lenExpr},${JSON.stringify(elem)})`;
   return `new ${typedArrayCtor(elem)}(${lenExpr})`;
 }
