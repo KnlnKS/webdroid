@@ -1,14 +1,12 @@
-import { recordVsync, PROCESS_PID } from "./android/os";
 // webdroid shell: phone chrome, launcher, boot + input wiring.
-
 import "./natives";
+import { recordVsync, PROCESS_PID } from "./android/os";
 import { RangeFile } from "./shell/lazyfile";
 import { mountSystemCertificates } from "./shell/cacerts";
 
 import { SYSTEM_FONT } from "./android/graphics";
-import { setGL } from "./android/gl";
 import { rt } from "./jvm/runtime";
-import { newObj, vcall, linkInit, suspendTrace } from "./jvm/natives/jlang";
+import { newObj, vcall, linkInit } from "./jvm/natives/jlang";
 import { mangleMethod } from "./jvm/abi";
 import { loadFramework } from "./android/framework";
 import { unreadAttrs } from "./android/res";
@@ -16,11 +14,10 @@ import { bootApk, tick, dispatchPointer, pressBack, currentApp, contentTop, SCRE
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { perf, perfReset } from "./perf";
-import { uiState, measureView, makeSpec } from "./android/view";
+import { uiState } from "./android/view";
 import { onMain, mainDbg } from "./android/mainloop";
-import { imeInput, imeAction } from "./android/ime";
+import { imeInput } from "./android/ime";
 import { overlays } from "./android/popup";
-import { openDatabase } from "./android/sqlite";
 import { setWebLayer, webViewInfo } from "./android/webkit";
 import { native } from "./native/debug";
 import { jitStats } from "./native/core";
@@ -28,6 +25,10 @@ import { device, parseScreen, readStoredScreen, storeScreen, type Screen } from 
 import { openInstallRemote } from "./shell/install";
 import { vfs } from "./jvm/natives/jio";
 import { yieldStats, timedParks } from "./jvm/yield";
+import { provisionPackages, provisionServices } from "./shell/provision";
+import { connectProcess, registerForegroundProcess, processPresentation, processBroker } from "./shell/processes";
+
+const params = new URLSearchParams(location.search);
 
 const root = document.getElementById("root")!;
 
@@ -88,14 +89,8 @@ const kbd = document.getElementById("kbd") as HTMLTextAreaElement;
 // WebViews are <iframe>s over the canvas: the framework positions them, the shell owns the layer
 setWebLayer(document.getElementById("weblayer")!);
 
-/**
- * Fit the framebuffer into whatever the viewport has left, at any aspect ratio or density.
- * The bezel padding and the nav row are the stylesheet's, so measure the difference between
- * the phone and the canvas rather than restating it as a magic constant — the old formula's
- * `SCREEN_H / 2 * 1.2` was a 768 that only meant anything at 1280 tall and density 2, and it
- * bounded no width at all, so a wide framebuffer pushed the sidebar off screen.
- * Never scaled past 1 CSS px per device px: the canvas is the framebuffer, not a poster.
- */
+/** Fit the framebuffer into what the viewport has left, measuring the bezel from the stylesheet,
+ *  and never past 1 CSS px per device px. */
 const phoneEl = document.getElementById("phone")!;
 function fit() {
   const chromeW = phoneEl.offsetWidth - canvas.offsetWidth;
@@ -156,8 +151,6 @@ rt.onUncaught = (e: any) => {
 const nativeEl = document.getElementById("native")!;
 rt.onNativeRequired = (lib, abi) => { nativeEl.textContent = "native code required: " + lib + " (" + abi + ")"; };
 
-import { provisionPackages, provisionServices } from "./shell/provision";
-import { connectProcess, registerForegroundProcess, processPresentation, processBroker } from "./shell/processes";
 const back = () => { if (!processBroker().back(PROCESS_PID)) return pressBack(); };
 
 // The android resource package is the same for every app: start it now so a boot never waits.
@@ -175,7 +168,7 @@ void fetch("/apks").then((r) => r.json() as Promise<string[]>).catch(() => [] as
     el.onclick = () => void boot(file);
     launcherEl.appendChild(el);
   }
-  const auto = new URLSearchParams(location.search).get("apk");
+  const auto = params.get("apk");
   if (auto && files.includes(auto)) void boot(auto);
 });
 
@@ -212,7 +205,7 @@ async function boot(file: string) {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const topDecor = (): any => { const app = currentApp(); return app?.stack[app.stack.length - 1]?.window.decor ?? null; };
+const topDecor = (): any => currentApp()?.stack.at(-1)?.window.decor ?? null;
 const clsName = (v: any): string => v.constructor?.$i?.name ?? v.constructor.name;
 /** depth-first over a view tree, with each view's absolute position (parents' scroll removed) */
 function* walkTree(v: any, depth = 0, ox = 0, oy = 0, skipGone = false): Generator<{ v: any; depth: number; x: number; y: number }> {
@@ -227,20 +220,16 @@ const tap = async (x: number, y: number) => {
   await dispatchPointer(1, x, y);
 };
 
-/** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. */
-// `?natcheck=1` before anything links: the suspension analysis believes what a native
-// declares about itself, so a native that returns a promise without being async has to be
-// findable rather than guessed at.
-rt.auditNatives = new URLSearchParams(location.search).get("natcheck") === "1";
-jitStats.on = new URLSearchParams(location.search).get("jit") !== "0"; // `?jit=0`: the interpreter alone, to tell the tiers apart
+// `?natcheck=1` audits natives that return a promise without declaring suspension; `?jit=0`
+// runs the interpreter alone, to tell the tiers apart
+rt.auditNatives = params.get("natcheck") === "1";
+jitStats.on = params.get("jit") !== "0";
 
+/** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. */
 const wd = {
-  rt, uiState, overlays, perf, perfReset, mainDbg, yields: yieldStats, timedParks, suspends: suspendTrace, setGL, logs: logBuf, ticks: 0, native, vfs,
-  // The JVM's own entry points, so a script can drive real bytecode from the page the way
-  // scripts/fwtest.ts drives it headless. That is the only way to exercise anything needing
-  // Canvas2D — text metrics, a bitmap raster, an image decode — since bun has no canvas.
-  newObj, vcall, linkInit,
-  jni: (cls: string, sig: string) => rt.jniFn(cls, sig),
+  rt, uiState, perf, perfReset, mainDbg, yields: yieldStats, timedParks, logs: logBuf, ticks: 0, native,
+  // the JVM's entry points, so a page script can drive real bytecode where Canvas2D is needed
+  newObj, vcall,
   /** a static on a bytecode class: statics live on the constructor, mangled the same way */
   scall: async (cls: string, name: string, desc: string, ...args: unknown[]) => {
     const fn = ((await linkInit(cls)).ctor as Record<string, unknown>)[mangleMethod(name, desc)];
@@ -290,11 +279,6 @@ const wd = {
     for (const o of overlays) emit(o.view, 0, 0);
     return out;
   },
-  find: (idOrCls: number | string): any[] => {
-    const decor = topDecor();
-    if (!decor) return [];
-    return [...walkTree(decor)].map((n) => n.v).filter((v) => v.idNum === idOrCls || (typeof idOrCls === "string" && clsName(v).includes(idOrCls)));
-  },
   // Center of the first visible view whose text matches, in SCREEN coords (status bar included,
   // the space wd.tap takes). Overlays first, topmost first. Synchronous on purpose: the e2e
   // harness needs a value it can await from outside the page without holding an in-page promise.
@@ -335,10 +319,8 @@ const wd = {
     await dispatchPointer(1, x2, y2, t0 + ms);
     return `swiped ${x1},${y1} -> ${x2},${y2}`;
   },
-  // Is the main-looper queue still draining? Every input, layout and frame goes through the one
-  // serialized queue in android/mainloop.ts; if a job in it never settles, the app stops
-  // responding AND stops repainting — which is indistinguishable from "the screen settled"
-  // unless you probe the queue directly.
+  // Is the main-looper queue still draining? A wedged job stops input and repaint alike, which
+  // looks exactly like a settled screen from outside.
   alive: (ms = 1500) => {
     let id: ReturnType<typeof setTimeout>;
     return Promise.race([
@@ -359,15 +341,6 @@ const wd = {
     kbd.value = s;
     await imeInput(s);
     return "typed " + s;
-  },
-  /** the IME action key — what a search field is waiting for after wd.type */
-  enter: () => imeAction(),
-  measure: (v: any, w: number, wm: number, h: number, hm: number) =>
-    measureView(v, makeSpec(w, wm), makeSpec(h, hm)).then(() => [v.measuredW, v.measuredH]),
-  querydb: async (sql: string) => {
-    const app = currentApp();
-    const jdb = await openDatabase(`/data/data/${app?.host.pkg}/databases/database.db`);
-    return jdb.db!.exec(sql).map((r) => ({ cols: r.columns, rows: r.values.slice(0, 5) }));
   },
 };
 (globalThis as any).wd = wd;
