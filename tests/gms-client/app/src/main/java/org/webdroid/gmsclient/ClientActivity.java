@@ -45,6 +45,7 @@ public class ClientActivity extends Activity {
         button("Map", this::map);
         button("Map probe", () -> startActivity(new Intent(this, MapProbeActivity.class)));
         button("Bitmap probe", () -> BitmapProbe.run(getResources()));
+        button("Window probe", () -> startActivity(new Intent(this, WindowProbeActivity.class)));
         setContentView(layout);
         status.setText("GMS client ready");
         if (getIntent().getBooleanExtra("bitmap_probe", false)) BitmapProbe.run(getResources());

@@ -39,3 +39,15 @@ adb logcat -s GmsClientBitmap:I '*:S'
 
 These are bounded integration probes, not complete Maps or BitmapFactory parity.
 Keep authentication, Firebase configuration and token material outside the repository.
+
+**Window probe** isolates the geometry used by Maps and other embedded views. Run
+Fullscreen, Edge, Normal, Hide, Legacy, Normal, Popup, then Dialog, dismissing overlays
+with Back. `GmsClientWindow` logs screen/window origins, view/root sizes and root bar
+insets. Dialog logs its initial content size and then a fixed 640x360 bottom window.
+Detached views should return zero coordinates and no root insets; popup content starts
+at its own window origin. Android can launch it directly:
+
+```sh
+adb shell am start -n org.webdroid.gmsclient/.WindowProbeActivity
+adb logcat -s GmsClientWindow:I '*:S'
+```
