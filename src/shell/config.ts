@@ -69,8 +69,7 @@ export const device = {
   get density(): number { return this.densityDpi / DENSITY_DEFAULT; },
   /** AOSP status_bar_height */
   statusBarDp: 24,
-  /** the gesture/navigation bar: not painted (the activity spans the whole framebuffer), but it
-   *  is what the device reports as the bottom window inset, so an edge-to-edge app pads for it */
+  /** the gesture/navigation bar inset */
   navBarDp: 24,
   /** AOSP ViewConfiguration.TOUCH_SLOP: dp of travel before a press counts as a drag */
   touchSlopDp: 8,

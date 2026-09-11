@@ -17,6 +17,8 @@ interface Overlay {
   view: JView;
   x: number; y: number;
   dismissOnOutside: boolean;
+  dim?: () => number;
+  modal?: boolean;
   /** the window's own back handling (a Dialog cancels itself); absent means dismiss iff dismissOnOutside */
   onBack?: () => unknown;
   /** how the shell dismisses this window (outside touch / back): a PopupWindow must run its own
@@ -25,8 +27,10 @@ interface Overlay {
 }
 export const overlays: Overlay[] = [];
 export function addOverlay(v: JView, x = 0, y = 0, dismissOnOutside = false, onBack?: () => unknown, onDismiss?: () => unknown) {
-  overlays.push({ view: v, x, y, dismissOnOutside, onBack, onDismiss });
+  const overlay: Overlay = { view: v, x, y, dismissOnOutside, onBack, onDismiss };
+  overlays.push(overlay);
   requestLayout(v);
+  return overlay;
 }
 export function dismissOverlay(o: Overlay) { return o.onDismiss ? o.onDismiss() : removeOverlay(o.view); }
 /** the windows under it keep their layout; the screen only has to be drawn without it */

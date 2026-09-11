@@ -2,7 +2,7 @@ import { AID } from "./res";
 import type { AppHost } from "./apphost";
 import { JTheme, rvInt, themeOf, themeByName, rvDimen, rvColor } from "./res";
 import { type JDrawable, loadDrawableRV, JColorDrawable } from "./drawable";
-import { JView, attachView } from "./view";
+import { JView, JMarginLP, attachView, requestLayout } from "./view";
 import { manifestActivityTheme } from "./pm";
 import { device } from "../shell/config";
 import type { JActivity } from "./app";
@@ -11,6 +11,27 @@ import { rt } from "../jvm/runtime";
 import { JActionBarView } from "./menu";
 import { TV } from "./axml";
 import { darken } from "./window";
+import { sysIns, type JWindowInsets } from "./windowinsets";
+import { vcall } from "../jvm/natives/jlang";
+
+class JDecorView extends JFrameLayout {}
+rt.register({
+  name: "webdroid/DecorView", ctor: JDecorView, sup: "android/widget/FrameLayout",
+  methods: {
+    "onApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": function (this: JDecorView, ins: JWindowInsets) {
+      const root = this.children[0], lp = root?.lp;
+      if (!(lp instanceof JMarginLP)) return ins;
+      const bars = sysIns(ins), fits = this.windowOwner?.decorFitsSystemWindows;
+      const top = fits && !(this.systemUiVisibility & 0x400) ? bars.top : 0;
+      const bottom = fits && !(this.systemUiVisibility & 0x200) ? bars.bottom : 0;
+      if (lp.marginT !== top || lp.marginB !== bottom) {
+        lp.marginT = top; lp.marginB = bottom;
+        requestLayout(root);
+      }
+      return vcall(ins, "inset", "(IIII)Landroid/view/WindowInsets;", 0, top, 0, bottom);
+    },
+  },
+});
 
 /** what a window paints behind its content, from its own theme */
 async function windowBackground(host: AppHost, theme: JTheme): Promise<JDrawable> {
@@ -46,7 +67,7 @@ export async function ensureDecor(act: JActivity) {
   if (act.window.decor) return;
   const host = act.$host;
   const theme: JTheme = themeOf(act) ?? host.theme;
-  const decor = new JFrameLayout();
+  const decor = new JDecorView();
   decor.ctx = act;
   decor.jres = host.res;
   decor.theme = theme;

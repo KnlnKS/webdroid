@@ -25,7 +25,7 @@ import { packageUid, packages } from "../android/packages";
 import { onMain, inMainJob, mainDbg } from "../android/mainloop";
 import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setMeasureTargetSdk, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
-import { dispatchWindowInsets } from "../android/windowinsets";
+import { dispatchWindowInsets, rootWindowInsets } from "../android/windowinsets";
 import { JCanvas, cssColor, tfMedium } from "../android/graphics";
 import { overlays, drawToasts, dismissOverlay } from "../android/popup";
 import { webLayerSweep } from "../android/webkit";
@@ -91,12 +91,6 @@ export function currentApp(): BootedApp | null { return booted; }
 /** <activity-alias> component name → the Activity class that actually runs */
 const aliasTargets = new Map<string, string>();
 
-const FLAG_FULLSCREEN = 1024;
-/** Where the top activity's window starts: FLAG_FULLSCREEN takes the status bar's rows too. */
-export function contentTop(): number {
-  const act = booted?.stack.at(-1);
-  return act && (act.window.flags & FLAG_FULLSCREEN) ? 0 : STATUS_H;
-}
 const invalidateWindow = () => { uiState.needsLayout = uiState.needsDraw = uiState.needsInsets = true; };
 
 export async function bootApk(input: Uint8Array | Install, onStatus: (s: string) => void, apkFile = "", processName: string | null = null, prepared?: () => void): Promise<BootedApp> {
@@ -592,12 +586,9 @@ async function tick0() {
       return;
     }
     startWin = null;
-    const contentY = contentTop(), contentH = SCREEN_H - contentY;
-    // AOSP's performTraversals dispatches insets before measure, so padding a fitsSystemWindows
-    // consumer sets is visible to the same pass. Waiting for one completed layout keeps a
-    // listener that reads getHeight() from seeing zeros; clearing the flag BEFORE dispatching
-    // means a listener's own requestApplyInsets() re-arms the next frame instead of recursing.
-    if (uiState.needsInsets && decor.right > 0) {
+    // Dispatch before measure so decor margins and descendant inset padding affect this pass.
+    // Clear first: a listener's requestApplyInsets() belongs to the next traversal.
+    if (uiState.needsInsets) {
       uiState.needsInsets = false;
       perf.insetsPasses++;
       mainDbg.phase = "insets";
@@ -618,18 +609,25 @@ async function tick0() {
           for (const o of overlays) forceLayoutFlags(o.view);
         }
         mainDbg.phase = "measure";
-        await measureView(decor, makeSpec(SCREEN_W, MS_EXACTLY), makeSpec(contentH, MS_EXACTLY));
+        await measureView(decor, makeSpec(SCREEN_W, MS_EXACTLY), makeSpec(SCREEN_H, MS_EXACTLY));
         mainDbg.phase = "layout";
-        await layoutRoot(decor, 0, 0, SCREEN_W, contentH);
+        await layoutRoot(decor, 0, 0, SCREEN_W, SCREEN_H);
         mainDbg.phase = "overlays";
         for (const o of overlays) {
-          await measureView(o.view, makeSpec(SCREEN_W, 0x80000000 | 0), makeSpec(contentH, 0x80000000 | 0));
+          const win = o.view.windowOwner, floating = !!win?.dialog;
+          const top = floating ? STATUS_H : 0, bottom = floating ? device.navBar : 0;
+          await measureView(o.view, makeSpec(SCREEN_W, 0x80000000 | 0), makeSpec(SCREEN_H - top - bottom, 0x80000000 | 0));
+          if (floating) {
+            const gravity = win!.gravity;
+            o.x = (gravity & 7) === 3 ? 0 : (gravity & 7) === 5 ? SCREEN_W - o.view.measuredW : (SCREEN_W - o.view.measuredW) >> 1;
+            o.y = (gravity & 0x70) === 0x30 ? top : (gravity & 0x70) === 0x50 ? SCREEN_H - bottom - o.view.measuredH : top + ((SCREEN_H - top - bottom - o.view.measuredH) >> 1);
+          }
           // AOSP lays a window out inside the screen: a dropdown anchored near the right edge
           // shifts left instead of hanging off it. The popup's own placement pass runs before
           // its content has a measured width, so this is the pass that has the real numbers —
           // and the position is written back, since hit-testing reads it too.
           o.x = Math.max(0, Math.min(o.x, SCREEN_W - o.view.measuredW));
-          o.y = Math.max(0, Math.min(o.y, contentH - o.view.measuredH));
+          o.y = Math.max(0, Math.min(o.y, SCREEN_H - o.view.measuredH));
           await layoutRoot(o.view, o.x, o.y, o.x + o.view.measuredW, o.y + o.view.measuredH);
         }
         mainDbg.phase = "globalLayout";
@@ -655,9 +653,7 @@ async function tick0() {
       try {
         ctx.fillStyle = "#000";
         ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-        if (contentY) drawStatusBar(ctx, act!.window.appearance, act!.window.appearanceMask);
-        ctx.translate(0, contentY);
-        const cv = JCanvas.wrap(ctx, SCREEN_W, contentH);
+        const cv = JCanvas.wrap(ctx, SCREEN_W, SCREEN_H);
         // AOSP's performDraw() dispatches OnPreDrawListener/OnDrawListener right before the
         // tree draw, on every draw pass -- not only ones that also ran a layout.
         try {
@@ -665,9 +661,19 @@ async function tick0() {
           await fireDrawPass(decor);
           mainDbg.phase = "draw";
           await drawView(decor, cv);
+          const bars = rootWindowInsets(decor);
+          if (bars.vis & 1) drawStatusBar(ctx, act!.window.appearance, act!.window.appearanceMask);
+          if (bars.vis & 2) {
+            ctx.fillStyle = cssColor(booted!.host.navBarColor);
+            ctx.fillRect(0, SCREEN_H - device.navBar, SCREEN_W, device.navBar);
+          }
           mainDbg.phase = "drawOverlays";
-          for (const o of overlays) await drawView(o.view, cv);
-          drawToasts(ctx, SCREEN_W, contentH);
+          for (const o of overlays) {
+            const dim = o.dim?.() ?? 0;
+            if (dim > 0) { ctx.fillStyle = `rgba(0,0,0,${dim})`; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H); }
+            await drawView(o.view, cv);
+          }
+          drawToasts(ctx, SCREEN_W, SCREEN_H);
         } catch (e) {
           perf.drawErrors++;
           console.error("[draw]", e);
@@ -679,7 +685,7 @@ async function tick0() {
       present();
       perf.drawMs += performance.now() - t0;
       // WebView frames are DOM over the canvas: show the ones this pass drew, hide the rest
-      webLayerSweep(contentY, overlays.length > 0);
+      webLayerSweep(0, overlays.length > 0);
     }
   } catch (e) {
     console.error("[tick]", e);
@@ -741,7 +747,7 @@ async function dispatchPointer0(action: number, x: number, y: number, t: number)
   ev.eventTime = t;
   if (action === 0) downTime = ev.eventTime;
   ev.downTime = downTime;
-  const ly = y - contentTop();
+  const ly = y;
   try {
     if (action === 0) {
       for (let i = overlays.length - 1; i >= 0; i--) {
@@ -756,6 +762,7 @@ async function dispatchPointer0(action: number, x: number, y: number, t: number)
           touchTarget = null;
           return;
         }
+        if (o.modal) { touchTarget = { overlay: i }; break; }
       }
       if (touchTarget === null) touchTarget = "decor";
     } else if (touchTarget === null) {

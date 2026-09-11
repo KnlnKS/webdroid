@@ -42,26 +42,30 @@ const insShrink = (s: Ins | null, l: number, t: number, r: number, b: number): I
 /** the bars as one rect, the shape the deprecated system-window API and fitSystemWindows use */
 export const sysIns = (w: JWindowInsets) => insUnion(w, TYPE_BARS, false);
 
-let rootIns: JWindowInsets | null = null;
-/**
- * The window's insets. The shell lays the decor out at `contentTop()` — BELOW the status bar —
- * so the bar never overlaps the app and `statusBars()` is genuinely zero; the window's bottom
- * edge is the physical bottom, so the gesture bar is the one inset an app has to pad for.
- * Cached: it only changes when the device profile does.
- */
-export function rootWindowInsets(): JWindowInsets {
-  if (rootIns) return rootIns;
+const rootInsets = new WeakMap<JView, { top: number; bottom: number; vis: number; value: JWindowInsets }>();
+export function rootWindowInsets(view?: JView): JWindowInsets {
+  let root = view;
+  while (root?.parent) root = root.parent;
+  const flags = root?.windowOwner?.flags ?? 0, sysUi = root?.systemUiVisibility ?? 0;
+  const hidden = (root?.windowOwner?.hiddenInsets ?? 0) | (flags & 1024 || sysUi & 4 ? 1 : 0) | (sysUi & 2 ? 2 : 0);
+  const top = Math.max(0, device.statusBar - (root?.top ?? 0));
+  const bottom = Math.max(0, (root?.bottom || device.height) - (device.height - device.navBar));
+  const vis = ~((1 << IT_IME) | (1 << IT_CUTOUT) | (1 << IT_CAPTION) | hidden);
+  const cached = root && rootInsets.get(root);
+  if (cached && cached.top === top && cached.bottom === bottom && cached.vis === vis) return cached.value;
   const w = new JWindowInsets();
-  const bar = { left: 0, top: 0, right: 0, bottom: device.navBar };
+  w.ins[IT_STATUS] = { left: 0, top, right: 0, bottom: 0 };
+  const bar = { left: 0, top: 0, right: 0, bottom };
   w.ins[IT_NAV] = w.ins[IT_GESTURES] = w.ins[IT_MANDATORY] = bar;
   // no soft keyboard, no cutout, no freeform caption: those types exist but are never shown
-  w.vis = ~((1 << IT_IME) | (1 << IT_CUTOUT) | (1 << IT_CAPTION));
-  return (rootIns = w);
+  w.vis = vis;
+  if (root) rootInsets.set(root, { top, bottom, vis, value: w });
+  return w;
 }
 /** AOSP's ViewRootImpl traversal: hand the window's insets to the decor, which walks them down */
 export async function dispatchWindowInsets(root: JView) {
   await vcall(root, "dispatchApplyWindowInsets",
-    "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", rootWindowInsets());
+    "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", rootWindowInsets(root));
 }
 
 const wiMethods: NativeSpec["methods"] = {

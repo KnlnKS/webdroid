@@ -21,6 +21,7 @@ import { device } from "../shell/config";
 import { inflateLayout, getInflater } from "./inflate";
 import { csText } from "./text";
 import type { JWindow } from "./window";
+import { complexToFraction } from "./util";
 
 const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
 const M_onCreate = mangleMethod("onCreate", "(Landroid/os/Bundle;)V");
@@ -63,10 +64,10 @@ async function loadCardBg(root: DialogRoot): Promise<void> {
   root.themeDim = dimOn ? rvFloat(root.jres, root.theme.lookup(AID("backgroundDimAmount")), 0.6) : 0;
 }
 
-/** the dialog window: scrim, then the window frame sized/placed by the window's layout params */
+/** The dialog's decor; the shell owns its placement and dimming behind the window. */
 class DialogRoot extends JFrameLayout {
   /**
-   * Padding of an app-supplied window background, left/top/right/bottom. Material's alert
+   * Padding of the window background, left/top/right/bottom. Material's alert
    * dialog hands the window an InsetDrawable — the card it paints is inset from the window —
    * so the content has to sit inside that inset or it spills outside the card. AOSP takes a
    * decor's padding from its background for exactly this reason.
@@ -74,7 +75,7 @@ class DialogRoot extends JFrameLayout {
   bgPad: [number, number, number, number] = [0, 0, 0, 0];
   async readBgPadding() {
     const win = this.dialog?.win;
-    const bg = win?.bgSet ? win.bg : null;
+    const bg = win?.bgSet ? win.bg : this.cardBg;
     if (!bg) { this.bgPad = [0, 0, 0, 0]; return; }
     const r = new JRect();
     await guardCall(bg, M_getPadding, r);
@@ -88,56 +89,47 @@ class DialogRoot extends JFrameLayout {
     this.content.children.length = 0;
     if (v) attachView(this.content, v);
   }
-  cardTop = 0; cardLeft = 0; cardW = 0; cardH = 0;
   /** the dialog window's own background, from its theme — not a hardcoded white card */
   cardBg: JDrawable | null = null;
   themeDim = 0.6;
   /** the theme's dialogCornerRadius: the frame's shape, and so the shadow's */
   cardRadius = 0;
 }
-const GRAV_TOP = 0x30, GRAV_BOTTOM = 0x50, GRAV_VMASK = 0x70;
 rt.register({
   name: "webdroid/DialogRoot", ctor: DialogRoot, sup: "android/widget/FrameLayout",
   methods: {
     "onMeasure(II)V": async function (this: DialogRoot, wSpec: number, hSpec: number) {
-      this.measuredW = specSize(wSpec);
-      this.measuredH = specSize(hSpec);
       await this.readBgPadding();
+      const maxW = specSize(wSpec), maxH = specSize(hSpec);
+      this.measuredW = this.measuredH = 0;
       const c = this.children[0];
       if (c && c.visibility !== 8) {
-        // WindowManager.LayoutParams: MATCH_PARENT fills the window, WRAP_CONTENT sizes to the content
-        // within the platform dialog's margins and minimum width, a pixel size is exact.
         const win = this.dialog?.win;
         const lw = win?.layoutW ?? -2, lh = win?.layoutH ?? -2;
-        const maxW = lw === -1 ? this.measuredW : Math.min(this.measuredW - device.dp(48), device.dp(320));
-        const availH = lh === -1 ? this.measuredH : this.measuredH - device.dp(100);
-        const wantW = lw === -1 || c.lp?.width === -1;
-        await measureView(c, makeSpec(lw > 0 ? lw : maxW, wantW || lw > 0 ? MS_EXACTLY : (MS_AT_MOST | 0)),
-          makeSpec(lh > 0 ? lh : availH, lh > 0 ? MS_EXACTLY : (MS_AT_MOST | 0)));
-        this.cardW = lw === -1 || lw > 0 || wantW ? c.measuredW : Math.max(device.dp(280), c.measuredW);
-        if (this.cardW !== c.measuredW) await measureView(c, makeSpec(this.cardW, MS_EXACTLY), makeSpec(availH, MS_AT_MOST | 0));
-        this.cardH = c.measuredH + this.bgPad[1] + this.bgPad[3];
-        this.cardW += this.bgPad[0] + this.bgPad[2];
-        this.cardLeft = (this.measuredW - this.cardW) >> 1;
-        const vg = (win?.gravity ?? 0) & GRAV_VMASK;
-        this.cardTop = vg === GRAV_TOP ? 0 : vg === GRAV_BOTTOM ? this.measuredH - this.cardH : (this.measuredH - this.cardH) >> 1;
+        const padW = this.bgPad[0] + this.bgPad[2], padH = this.bgPad[1] + this.bgPad[3];
+        const hSpec = makeSpec(Math.max(0, (lh >= 0 ? lh : maxH) - padH), lh === -2 ? MS_AT_MOST : MS_EXACTLY);
+        await measureView(c, makeSpec(Math.max(0, (lw >= 0 ? lw : maxW) - padW), lw === -2 ? MS_AT_MOST : MS_EXACTLY), hSpec);
+        let width = c.measuredW + padW;
+        if (lw === -2 && this.theme && this.jres) {
+          const min = this.theme.lookup(AID(device.orientation === 1 ? "windowMinWidthMinor" : "windowMinWidthMajor"));
+          const minW = min?.t === TV.FRACTION ? complexToFraction(min.d, maxW, maxW) : rvDimen(this.jres, min, 0);
+          width = Math.min(maxW, Math.max(width, Math.round(minW)));
+          if (width !== c.measuredW + padW) await measureView(c, makeSpec(Math.max(0, width - padW), MS_EXACTLY), hSpec);
+        }
+        this.measuredW = width;
+        this.measuredH = c.measuredH + padH;
       }
     },
     "onLayout(ZIIII)V": async function (this: DialogRoot) {
       const c = this.children[0];
       if (c && c.visibility !== 8) {
         const [l, t, r, b] = this.bgPad;
-        await layoutView(c, this.cardLeft + l, this.cardTop + t, this.cardLeft + this.cardW - r, this.cardTop + this.cardH - b);
+        await layoutView(c, l, t, this.width() - r, this.height() - b);
       }
     },
     "onDraw(Landroid/graphics/Canvas;)V": async function (this: DialogRoot, cv: JCanvas) {
       const ctx = cv.ctx;
       const win = this.dialog?.win;
-      const dim = win && !Number.isNaN(win.dimAmount) ? win.dimAmount : this.themeDim;
-      if (dim > 0) {
-        ctx.fillStyle = `rgba(0,0,0,${dim})`;
-        ctx.fillRect(0, 0, this.width(), this.height());
-      }
       // An explicit Window.setBackgroundDrawable replaces the theme's frame (Compose sets it
       // transparent and draws its own surface); only the platform frame casts a shadow.
       const bg = win?.bgSet ? win.bg : this.cardBg;
@@ -152,25 +144,25 @@ rt.register({
         ctx.globalAlpha = 0.01;
         ctx.fillStyle = "#000";
         ctx.beginPath();
-        ctx.roundRect(this.cardLeft, this.cardTop, this.cardW, this.cardH, r);
+        ctx.roundRect(0, 0, this.width(), this.height(), r);
         ctx.fill();
         ctx.restore();
       }
       if (bg) {
         ctx.save();
         ctx.beginPath();
-        ctx.roundRect(this.cardLeft, this.cardTop, this.cardW, this.cardH, r);
+        ctx.roundRect(0, 0, this.width(), this.height(), r);
         ctx.clip();
         const b = bg.bounds;
-        b.left = this.cardLeft; b.top = this.cardTop;
-        b.right = this.cardLeft + this.cardW; b.bottom = this.cardTop + this.cardH;
+        b.left = b.top = 0;
+        b.right = this.width(); b.bottom = this.height();
         await guardCall(bg, M_drawableDraw, cv);
         ctx.restore();
       }
     },
     "onTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: DialogRoot, ev: any) {
       if ((ev.action & 0xff) === 1 &&
-        (ev.x < this.cardLeft || ev.x > this.cardLeft + this.cardW || ev.y < this.cardTop || ev.y > this.cardTop + this.cardH)) {
+        (ev.x < 0 || ev.x >= this.width() || ev.y < 0 || ev.y >= this.height())) {
         if (this.dialog?.cancelable) await this.dialog?.cancel();
       }
       return 1;
@@ -262,7 +254,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     const root = this.ensureRoot();
     if (!v.lp) {
       const lp = new JFrameLP();
-      lp.width = -2; lp.height = -2;
+      lp.width = -1; lp.height = -1;
       v.lp = lp;
     }
     root.setContent(v);
@@ -281,7 +273,10 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     this.showing = true;
     const root = this.ensureRoot();
     await loadCardBg(root);
-    addOverlay(root, 0, 0, false, () => vcall(this, "onBackPressed", "()V"));
+    await vcall(this, "getWindow", "()Landroid/view/Window;");
+    const overlay = addOverlay(root, 0, 0, false, () => vcall(this, "onBackPressed", "()V"), () => this.cancel());
+    overlay.dim = () => this.win && !Number.isNaN(this.win.dimAmount) ? this.win.dimAmount : root.themeDim;
+    overlay.modal = true;
     const f = jmethod(this, M_onCreate);
     if (f && !(this as any).$created) {
       (this as any).$created = true;

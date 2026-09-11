@@ -10,7 +10,7 @@ import { newObj, vcall, linkInit } from "./jvm/natives/jlang";
 import { mangleMethod } from "./jvm/abi";
 import { loadFramework } from "./android/framework";
 import { unreadAttrs } from "./android/res";
-import { bootApk, tick, dispatchPointer, pressBack, currentApp, contentTop, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas, frame, present } from "./shell/device";
+import { bootApk, tick, dispatchPointer, pressBack, currentApp, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas, frame, present } from "./shell/device";
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { perf, perfReset } from "./perf";
@@ -258,7 +258,7 @@ const wd = {
     const app = currentApp();
     const decor = topDecor();
     if (!app || !decor) return [];
-    const res = app.host.res, top = contentTop();
+    const res = app.host.res;
     const out: unknown[] = [];
     const emit = (root: any, ox: number, oy: number) => {
       for (const { v, x, y } of walkTree(root, 0, ox, oy, true)) {
@@ -268,7 +268,7 @@ const wd = {
           desc: String(v.contentDesc ?? ""),
           cls: clsName(v).replace(/\//g, "."),
           resId: id && !id.startsWith("0x") ? `${v.idNum >>> 24 === 1 ? "android" : app.host.pkg}:id/${id}` : "",
-          bounds: [x, y + top, x + (v.right - v.left), y + top + (v.bottom - v.top)],
+          bounds: [x, y, x + (v.right - v.left), y + (v.bottom - v.top)],
           clickable: !!v.clickable,
         });
       }
@@ -293,7 +293,7 @@ const wd = {
         // the emulator driver resolves a tapText against text OR content-desc, so an icon-only
         // control (an overflow button, a nav arrow) has to be findable here the same way
         const cd = String(v.contentDesc ?? "").toLowerCase();
-        if ((txt === want || raw === want || cd === want) && v.right > v.left) return { x: x + (v.right - v.left) / 2, y: y + (v.bottom - v.top) / 2 + contentTop() };
+        if ((txt === want || raw === want || cd === want) && v.right > v.left) return { x: x + (v.right - v.left) / 2, y: y + (v.bottom - v.top) / 2 };
       }
     }
     return null;

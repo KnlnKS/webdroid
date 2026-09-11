@@ -987,3 +987,119 @@ Evidence: `/tmp/webdroid-map-coordinates-{browser,android-run}.log`,
 The browser captures all three reached runtimes before boot, including NativeMapView's;
 all missing sets and error lists are empty. Login `/diag` still shows the SDK client,
 zero accounts and no bridge calls; user sign-in remains pending.
+
+
+### 2026-09-11 — Window geometry and decor inset ownership
+
+The standalone SDK WindowProbeActivity (`05141f6`) compares actual Android API results
+for detached, normal, fullscreen, edge-to-edge, hidden-bar, legacy-layout, popup and
+dialog windows. The old implementation returned content-relative activity coordinates,
+ignored edge-to-edge requests, gave detached views root insets and included popup screen
+position in window-relative coordinates. DialogRoot represented a full-screen dim layer
+rather than the dialog's real window. Its width cap/minimum were hardcoded and its
+single-view setContentView defaulted to wrap instead of filling a resized window.
+
+The working correction puts activity decor in display coordinates, lets decor consume
+bar insets into content margins, and removes the independent shell translation from
+rendering/input/diagnostic trees. Root insets are cached by root geometry and visibility.
+A popup's window coordinates exclude its root's screen position. Dialog measurement uses
+window parameters, theme padding and minimum-width resources, while the shell positions
+and dims behind the actual window. Modal outside touches still reach the dialog's own
+cancellation handler. This follows the responsibilities visible in
+[AOSP View](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-13.0.0_r12/core/java/android/view/View.java)
+and [DecorView](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-13.0.0_r12/core/java/com/android/internal/policy/DecorView.java),
+without changing client or library bytecode.
+
+At 1080x2424@480, normal/fullscreen/edge/hidden/legacy activity and popup probe values
+match Android, including root sizes/insets and both coordinate spaces. Detached root
+insets are null. A wrapped dialog reports content origin 48,48 and width 332 in both;
+its native text is 55 pixels tall versus Android's 57, giving root heights 151 versus
+153 and a one-pixel center difference. After setLayout(640,360) and bottom gravity, both
+report root 220,1992,640,360 and content 544x264 at screen 268,2040/window 48,48.
+The Android immersive-mode education prompt was acknowledged before the successful
+repeat; it blocked the first expanded probe, not the app's window operation.
+
+The genuine map now reports and draws origin 0,320 with size 1080x2032, versus Android's
+0,322 and 1080x2030. The remaining difference is the preceding text row's height. Camera
+cancellation, pan, fixed-camera marker replacement/click and activity reopen complete
+without exceptions or missing APIs in all three observed runtimes. Evidence:
+`/tmp/webdroid-window-{before,final}.log`, `...-android-expanded.log`, adjacent JSON/PNG
+captures, and `/tmp/webdroid-map-window-current.{log,json}`. Typecheck, 611 units, zero
+method failures for Resy/microG/rebuilt SDK, executable framework probes and textcmp pass;
+logs use `/tmp/webdroid-window-*`. Broader verification is recorded below.
+The probe does not establish transformed-view coordinates, all inset/flag combinations,
+all dialog themes or complete window-manager parity.
+
+
+The first full E2E window run captured all 111 steps, but Flappy Bird stopped producing
+GL frames after an unexpected `ACTION_VIEW` launch. Its game surface now ends above the
+navigation bar (2088 instead of 2160 pixels). The old normalized flap point maps to
+camera y≈273, inside the title's Rate button (y=270..318), versus y=264 previously.
+Bytecode and the APK's atlas establish these bounds. Both old and new Play coordinates
+remain inside the Play button, so the initial missed-button hypothesis was rejected.
+A trace records Play accepted at 151 ms and Rate pressed at 1077 ms while the title's
+fade still runs; transition completion around 1151 ms can race the release. The flow's
+800 ms horizon was too short. It now waits 1500 ms before gameplay and after restart;
+production input and game bytecode are unchanged by this test adjustment.
+
+The original flow failed in one of three current runs versus zero of three baseline
+runs. A surface-relative Play-only experiment completed six runs, but changed no hit
+region and therefore did not prove a coordinate fix; that experiment was discarded.
+With the corrected horizon (`6fc0163`), all three alternating full-flow pairs complete
+both games with no new exceptions or missing APIs. Current gameplay steps produce
+64–106 GL frames and show actual gameplay; Play captures show Get Ready. Baseline
+produces 57–100 gameplay frames. These diagnostic runs are not CPU benchmarks.
+The available dedicated API 35 and isolated API 26 references only support arm64 and
+cannot install this APK's native ABI unchanged. The temporary API 26 emulator was stopped
+and its owned AVD files removed; no APK was modified or physical device used. Evidence:
+`/tmp/webdroid-window-flappy-*`, including button/engine/camera disassembly, transition
+trace, alternating runs and screenshots. The final serialized E2E run completes all 111 steps in 246.4 seconds with no added
+missing/error/native-required diagnostics versus `28b9246`, no layout/draw errors and
+no wedged main loops. Flappy gameplay produces 66–113 GL frames. Content-difference
+scores are Mihon 57.67%, FitNotes 41.54%, Harmonic 29.35%, onboarding 17.56% and overall
+36.53%; goldens remain unchanged. These scores are not claims of visual parity.
+Doodle minimum FPS is 37 versus baseline 39, and Flappy retains its old 27 FPS limit;
+controlled native timing follows. Lichess still shows its prior responsive loading
+state and takes 84.4 seconds versus 78.3 previously; live-network wall time is not a
+CPU comparison. Evidence: `/tmp/webdroid-window-final-{e2e,comparison}.log`.
+
+The final corpus JSON reports 13/14 APKs rendering and the same 24 distinct gaps as
+`28b9246`. Every APK has no additional normalized missing APIs or errors; TikTok retains
+its baseline failure. The earlier console-only run observed 23 gaps, so it was not used
+to assert a capability improvement. Files: `/tmp/webdroid-window-final-corpus.{log,json}`
+and `...-corpus-comparison.json`. Performance uses three alternating pairs against
+`05141f6` on port 41982, with no other test/build/capture work running concurrently.
+
+FitNotes startup comparison (eight steps, median of three pairs): foreground CPU is
+1174.03 → 1174.35 ms cold (+0.03%) and 1153.40 → 1138.47 ms after reset (−1.29%).
+Retained JS heap is 136.857 → 136.885 MB cold (+0.021%) and 137.010 → 137.016 MB reset
+(+0.004%). The transient pre-GC cold heap is +3.40%, not retained growth. First ten-second
+idle CPU changes −4.51% cold / +5.33% reset, while the later settled ten-second window
+changes −0.22% / −0.87%; these do not establish a sustained idle regression. Both sides
+compile 600 classes and issue 42 broker calls carrying 100 bytes; root Wasm memory is
+256 MiB. Every phase is visible, advances 3600–3605 idle ticks, and has no layout/draw
+errors or added missing APIs. The old FitNotes FragmentManager exception remains on
+both sides. IPC timings include awaited service work and are not isolated transport
+latency. JS/CDP and root Wasm figures do not measure total browser/process memory.
+Evidence: `/tmp/webdroid-window-perf-{baseline,current}-{1,2,3}.json` and
+`/tmp/webdroid-window-perf-summary.jsonl`.
+
+The native Doodle Jump comparison gives median CPU 11691.36 → 11651.12 ms (−0.34%),
+retained JS heap 150.773 → 150.760 MB (−0.008%), and native execution 9343.50 →
+9388.50 ms (+0.48%). Median GL frames rise 748 → 773 (+3.34%); aggregate frame work
+rises 469.40 → 493.20 ms (+5.07%) and draw work 454.20 → 476.60 ms (+4.93%). This is
+more frame work alongside more rendered frames, without a foreground CPU regression;
+it is not a universal speedup. Both sides compile 68 classes, have 256 MiB root Wasm,
+remain visible, advance 1750–1793 ticks and report no layout/draw/GL errors, missing
+APIs or native-required gaps. Screenshots show the same animated tutorial scene, with
+the intended navigation-bar geometry difference. This does not measure the full game,
+all native apps or every child process's memory. Evidence:
+`/tmp/webdroid-window-native-perf-{baseline,current}-{1,2,3}.json`, adjacent PNGs and
+`/tmp/webdroid-window-native-perf-summary.jsonl`.
+
+Remaining window reference coverage includes transformed view coordinates, inset/flag
+combinations and notifications, overlay inset dispatch, non-floating dialog themes,
+and explicit dialog dimensions smaller than background padding. In particular, review
+DialogRoot's exact-size result and child layout for that last boundary before claiming
+arbitrary-size parity. The map's animation-interruption idle ordering and earlier
+variable-camera marker miss also remain open; Google consent still awaits the user.

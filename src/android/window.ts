@@ -3,7 +3,7 @@ import { mangleMethod } from "../jvm/abi";
 import type { JFrameLayout } from "./layouts";
 import type { JActionBarView } from "./menu";
 import { type JDrawable, loadDrawable } from "./drawable";
-import { requestLayout, findById, invalidate, dispatchAttached, dispatchDetached, JLayoutParams, type JView } from "./view";
+import { requestLayout, findById, invalidate, dispatchAttached, dispatchDetached, uiState, JLayoutParams, type JView } from "./view";
 import { JActivity, activityMethods } from "./app";
 import { ensureDecor } from "./decor";
 import { newObj, vcall } from "../jvm/natives/jlang";
@@ -32,6 +32,8 @@ export class JWindow extends JObj {
   backDispatcher(): JObj { return this.backD ??= rt.make("android/window/OnBackInvokedDispatcher"); }
   /** WindowManager.LayoutParams flags; the shell reads FLAG_FULLSCREEN off the top activity. */
   flags = 0;
+  decorFitsSystemWindows = true;
+  hiddenInsets = 0;
   screenBrightness = -1;
   /** WindowManager.LayoutParams width/height/gravity/dimAmount, which size and place a dialog
    *  window; `bg` is an explicit setBackgroundDrawable (a dialog window draws it as its frame). */
@@ -50,6 +52,7 @@ class JInsetsController extends JObj { w: JWindow = null!; }
 /** A change to how a window is sized or placed relays out its tree: an activity's decor or a
  *  dialog's frame. A window not built yet lays out fresh when it is. */
 function relayoutWindow(w: JWindow) {
+  uiState.needsInsets = true;
   const root = w.decor ?? (w.dialog as { root?: JView | null } | null)?.root;
   if (root) requestLayout(root);
 }
@@ -99,6 +102,11 @@ rt.register({
     "setFlags(II)V": function (this: JWindow, flags: number, mask: number) { setWindowFlags(this, (this.flags & ~mask) | (flags & mask)); },
     "addFlags(I)V": function (this: JWindow, f: number) { setWindowFlags(this, this.flags | f); },
     "clearFlags(I)V": function (this: JWindow, f: number) { setWindowFlags(this, this.flags & ~f); },
+    "setDecorFitsSystemWindows(Z)V": function (this: JWindow, fits: number) {
+      if (this.decorFitsSystemWindows === !!fits) return;
+      this.decorFitsSystemWindows = !!fits;
+      relayoutWindow(this);
+    },
     "requestFeature(I)Z": function (this: JWindow, f: number) { this.features.add(f); return 1; },
     "setStatusBarColor(I)V": function (this: JWindow, c: number) {
       if (appHost) appHost.statusBarColor = c;
@@ -147,14 +155,12 @@ rt.register({
     ...noops("setStatusBarContrastEnforced(Z)V", "setNavigationBarContrastEnforced(Z)V",
       "addOnFrameMetricsAvailableListener(Landroid/view/Window$OnFrameMetricsAvailableListener;Landroid/os/Handler;)V",
       "removeOnFrameMetricsAvailableListener(Landroid/view/Window$OnFrameMetricsAvailableListener;)V",
-      "setSharedElementsUseOverlay(Z)V", "setSoftInputMode(I)V", "setWindowAnimations(I)V", "setFeatureInt(II)V",
-      "setDecorFitsSystemWindows(Z)V"),
+      "setSharedElementsUseOverlay(Z)V", "setSoftInputMode(I)V", "setWindowAnimations(I)V", "setFeatureInt(II)V"),
     ...stubs(0, "isStatusBarContrastEnforced()Z", "isNavigationBarContrastEnforced()Z"),
     ...stubs(null, "getSharedElementEnterTransition()Landroid/transition/Transition;"),
   },
 });
-// The API-30 controller: appearance/behavior are window state (the shell reads the
-// light-status-bars bit); show/hide are no-ops until the shell has movable system bars.
+// API-30 window state, shared by decor's inset consumption and the shell's bar rendering.
 rt.register({
   name: "android/view/WindowInsetsController", ctor: class extends JObj {},
   statics: { APPEARANCE_LOW_PROFILE_BARS: 4, APPEARANCE_LIGHT_STATUS_BARS, APPEARANCE_LIGHT_NAVIGATION_BARS: 16,
@@ -176,7 +182,9 @@ rt.register({
     "addOnControllableInsetsChangedListener(Landroid/view/WindowInsetsController$OnControllableInsetsChangedListener;)V": function (this: JInsetsController, listener: unknown) {
       return vcall(listener, "onControllableInsetsChanged", "(Landroid/view/WindowInsetsController;I)V", this, 0);
     },
-    ...noops("show(I)V", "hide(I)V",
+    "show(I)V": function (this: JInsetsController, mask: number) { this.w.hiddenInsets &= ~mask; relayoutWindow(this.w); },
+    "hide(I)V": function (this: JInsetsController, mask: number) { this.w.hiddenInsets |= mask; relayoutWindow(this.w); },
+    ...noops(
       "removeOnControllableInsetsChangedListener(Landroid/view/WindowInsetsController$OnControllableInsetsChangedListener;)V",
       "controlWindowInsetsAnimation(IJLandroid/view/animation/Interpolator;Landroid/os/CancellationSignal;Landroid/view/WindowInsetsAnimationControlListener;)V"),
   },
@@ -208,8 +216,8 @@ class JWindowMetrics extends JObj {}
 rt.register({
   name: "android/view/WindowMetrics", ctor: JWindowMetrics,
   methods: {
-    "getBounds()Landroid/graphics/Rect;": async () => newObj("android/graphics/Rect", "(IIII)V", 0, 0, device.width, device.height - device.statusBar),
-    "getDensity()F": () => 2,
+    "getBounds()Landroid/graphics/Rect;": async () => newObj("android/graphics/Rect", "(IIII)V", 0, 0, device.width, device.height),
+    "getDensity()F": () => device.density,
     "getWindowInsets()Landroid/view/WindowInsets;": () => rootWindowInsets(),
   },
 });

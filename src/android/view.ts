@@ -253,6 +253,15 @@ export function locationOnScreen(v: JView): [number, number] {
   }
   return [x, y];
 }
+function viewLocation(v: JView, out: Int32Array | null, screen: boolean) {
+  if (!out || out.length < 2) throw rt.mkThrowable("java/lang/IllegalArgumentException", "outLocation must be an array of two integers");
+  if (!v.attached) { out[0] = out[1] = 0; return; }
+  let root = v;
+  while (root.parent) root = root.parent;
+  const [x, y] = locationOnScreen(v);
+  out[0] = Math.round(x - (screen ? 0 : root.left));
+  out[1] = Math.round(y - (screen ? 0 : root.top));
+}
 /** AOSP: fills baseState's trailing zeros IN PLACE — callers ignore the return value */
 function mergeStates(base: Int32Array, extra: Int32Array | null): Int32Array {
   if (!extra) return base;
@@ -301,6 +310,7 @@ export class JView extends JObj {
   parent: JView | null = null;
   attached = false;
   windowOwner: JWindow | null = null;
+  systemUiVisibility = 0;
 
   idNum = -1;
   /** android:contentDescription — the label an icon-only control answers to */
@@ -988,8 +998,8 @@ const viewMethods: NativeSpec["methods"] = {
     while (v.parent) v = v.parent;
     return v;
   },
-  "getLocationOnScreen([I)V": function (this: JView, out: Int32Array) { [out[0], out[1]] = locationOnScreen(this); },
-  "getLocationInWindow([I)V": function (this: JView, out: Int32Array) { [out[0], out[1]] = locationOnScreen(this); },
+  "getLocationOnScreen([I)V": function (this: JView, out: Int32Array) { viewLocation(this, out, true); },
+  "getLocationInWindow([I)V": function (this: JView, out: Int32Array) { viewLocation(this, out, false); },
   "getHitRect(Landroid/graphics/Rect;)V": function (this: JView, r: JRect) {
     r.left = this.left; r.top = this.top; r.right = this.right; r.bottom = this.bottom;
   },
@@ -1042,8 +1052,14 @@ const viewMethods: NativeSpec["methods"] = {
     }
     return 0;
   },
-  // the system UI never changes underneath the app here, so the listener has nothing to hear
   "setOnSystemUiVisibilityChangeListener(Landroid/view/View$OnSystemUiVisibilityChangeListener;)V": () => {},
+  "setSystemUiVisibility(I)V": function (this: JView, flags: number) {
+    if (this.systemUiVisibility === flags) return;
+    this.systemUiVisibility = flags;
+    uiState.needsInsets = true;
+    requestLayout(this);
+  },
+  "getSystemUiVisibility()I": function (this: JView) { return this.systemUiVisibility; },
   "setFitsSystemWindows(Z)V": function (this: JView, on: number) { this.fitsSys = !!on; },
   "requestApplyInsets()V": () => { uiState.needsInsets = true; },
   // registering a listener is the moment an app declares interest, and it usually happens after
@@ -1247,7 +1263,7 @@ const viewMethods: NativeSpec["methods"] = {
   "getOverlay()Landroid/view/ViewOverlay;": overlayOf,
   "getOverlay()Landroid/view/ViewGroupOverlay;": overlayOf,
   "getWindowId()Landroid/view/WindowId;": function (this: JView) { return this.attached ? WINDOW_ID : null; },
-  "getRootWindowInsets()Landroid/view/WindowInsets;": () => rootWindowInsets(),
+  "getRootWindowInsets()Landroid/view/WindowInsets;": function (this: JView) { return this.attached ? rootWindowInsets(this) : null; },
   "getWindowInsetsController()Landroid/view/WindowInsetsController;": function (this: JView) {
     if (!this.attached) return null;
     let root: JView = this;
@@ -1314,9 +1330,9 @@ const viewMethods: NativeSpec["methods"] = {
     return 1;
   },
   "getWindowVisibleDisplayFrame(Landroid/graphics/Rect;)V": function (this: JView, r: JRect) {
-    let root: JView = this;
-    while (root.parent) root = root.parent;
-    r.left = 0; r.top = device.statusBar; r.right = root.width() || device.width; r.bottom = device.statusBar + (root.height() || device.height - device.statusBar);
+    const vis = rootWindowInsets(this).vis;
+    r.left = 0; r.top = vis & 1 ? device.statusBar : 0;
+    r.right = device.width; r.bottom = device.height - (vis & 2 ? device.navBar : 0);
   },
   "bringToFront()V": function (this: JView) {
     const p = this.parent as JViewGroup | null;
@@ -1357,7 +1373,7 @@ const viewMethods: NativeSpec["methods"] = {
     "onInitializeAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V", "setLabelFor(I)V",
     "destroyDrawingCache()V", "buildDrawingCache()V", "setClipToOutline(Z)V", "setTransitionName(Ljava/lang/String;)V",
     "setForegroundGravity(I)V", "sendAccessibilityEvent(I)V", "announceForAccessibility(Ljava/lang/CharSequence;)V",
-    "setSystemUiVisibility(I)V", "setVerticalScrollBarEnabled(Z)V", "setHorizontalScrollBarEnabled(Z)V",
+    "setVerticalScrollBarEnabled(Z)V", "setHorizontalScrollBarEnabled(Z)V",
     "setScrollBarStyle(I)V", "setScrollContainer(Z)V", "setImportantForAutofill(I)V",
     "setDefaultFocusHighlightEnabled(Z)V", "setForceDarkAllowed(Z)V",
     "setWindowInsetsAnimationCallback(Landroid/view/WindowInsetsAnimation$Callback;)V",
@@ -1378,7 +1394,7 @@ const viewMethods: NativeSpec["methods"] = {
     "onVisibilityChanged(Landroid/view/View;I)V", "onVisibilityAggregated(Z)V", "onWindowVisibilityChanged(I)V",
     "onWindowSystemUiVisibilityChanged(I)V", "onAnimationStart()V", "onAnimationEnd()V", "onRtlPropertiesChanged(I)V",
     "drawableHotspotChanged(FF)V", "setLayoutDirection(I)V", "setTextDirection(I)V"),
-  ...stubs(0, "getWindowVisibility()I", "getImportantForAccessibility()I", "getSystemUiVisibility()I",
+  ...stubs(0, "getWindowVisibility()I", "getImportantForAccessibility()I",
     "onInterceptTouchEvent(Landroid/view/MotionEvent;)Z", "willNotDraw()Z", "canScrollVertically(I)Z",
     "canScrollHorizontally(I)Z", "isShowingLayoutBounds()Z", "getImportantForAutofill()I", "getKeepScreenOn()Z",
     "onKeyDown(ILandroid/view/KeyEvent;)Z", "onKeyUp(ILandroid/view/KeyEvent;)Z",

@@ -52,6 +52,26 @@ Android 2030 at 1080x2424@480. Both platforms report equal screen/window origins
 screen-only offset is insufficient. Correct the owning window geometry, including
 system bars and overlays, before changing shared coordinate helpers.
 
+Verified window geometry checkpoint (probe commit `05141f6`):
+activity decor now occupies the display and consumes bar insets according to fullscreen,
+edge-to-edge and legacy layout requests. Drawing, input and API coordinates share that
+space. Dialogs use their actual window bounds, theme padding/minimum width and layout
+parameters; the shell handles positioning and dimming. Android/browser probes match
+normal/fullscreen/edge/hidden/legacy/popup coordinates and fixed dialog geometry. Wrapped
+dialog height retains a two-pixel text difference. Map reports/draws top 320 with height
+2032, versus Android 322/2030; the previous 72-pixel discrepancy is gone. Matched gestures,
+marker click and reopen pass with all three runtimes observed and no added diagnostics.
+Typecheck, 611 units, affected APK compilation, framework probes and textcmp pass.
+The first full E2E pass exposed a Flappy Bird flow race: its first flap could press Rate
+during the title fade. Commit `6fc0163` waits for the observed transition; three alternating
+pairs complete both games without exceptions. Final E2E completes all 111 steps with no additional diagnostics or layout/draw errors;
+corpus renders 13/14 with the same 24 gaps. Three alternating pairs against `05141f6`
+give median CPU +0.03% cold, −1.29% after reset and −0.34% in the native Doodle tutorial
+benchmark; retained JS heap changes at most +0.021%. Detailed frames/idle/memory limits
+are in the history. Goldens are unchanged. This is not full window parity: pending
+reference coverage includes transformed coordinates, inset/flag notifications, overlay
+inset dispatch, broader dialog themes and sizes smaller than background padding.
+
 A fresh test tab is open in Chrome at `http://localhost:41979/?apk=GmsClient.apk`.
 The user has been asked to complete the authorized Google sign-in directly in that
 tab; no credentials or challenge responses have been supplied in this run. The
@@ -61,7 +81,8 @@ bridge method names and reached process diagnostics without account names/tokens
 Do not initiate another login attempt while this one awaits the user.
 
 Servers: current checkout 41977, original baseline 41978, instrumented login 41979,
-runner baseline `4acef6d` on 41981 (`/tmp/webdroid-map-thread-baseline`).
+runner baseline `4acef6d` on 41981 (`/tmp/webdroid-map-thread-baseline`),
+window baseline `05141f6` on 41982 (`/tmp/webdroid-window-baseline`).
 The baseline worktree is `/tmp/webdroid-microg-resume-baseline`. Temporary diagnostic
 entry points are `/tmp/webdroid-microg-resume-debug-server.ts` and
 `/tmp/webdroid-microg-resume-diagnostics.ts`; safe process state is `/diag` on 41979.
