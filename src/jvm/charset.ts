@@ -1,7 +1,7 @@
 import { utf8, charsToString } from "./abi";
 import { rt } from "./runtime";
 
-export function charsetName(value: unknown): string {
+function charsetName(value: unknown): string {
   const name = typeof value === "string" ? value : value && typeof value === "object" && "cname" in value ? value.cname : null;
   if (typeof name !== "string") throw rt.mkThrowable("java/lang/NullPointerException", "charset");
   switch (name.replace(/[-_]/g, "").toUpperCase()) {

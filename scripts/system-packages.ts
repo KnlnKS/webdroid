@@ -14,7 +14,7 @@ async function writeFile(path: string, data: Uint8Array | string): Promise<void>
   await Bun.write(temporary, data);
   await rename(temporary, path);
 }
-export async function packArchive(bytes: Uint8Array, directory: string): Promise<PackedArchiveIndex> {
+async function packArchive(bytes: Uint8Array, directory: string): Promise<PackedArchiveIndex> {
   await verifyApkSignature(bytes);
   const archive = await parsePackageArchive(bytes), entries = centralDir(bytes);
   await mkdir(directory, { recursive: true });

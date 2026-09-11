@@ -5,7 +5,7 @@ import { removeFrom } from "./view";
 import { onMain } from "./mainloop";
 
 type PreferenceValue = string | number | bigint | boolean | null | readonly string[];
-export class PreferenceStore {
+class PreferenceStore {
   private files = new Map<string, Map<string, PreferenceValue>>();
   open(name: string): Map<string, PreferenceValue> {
     let values = this.files.get(name);
@@ -42,7 +42,7 @@ export function usePreferenceStore(store: PreferenceStore): void {
   preferenceStore = store;
   for (const prefs of prefsCache.values()) prefs.load();
 }
-export class JSharedPrefs extends JObj {
+class JSharedPrefs extends JObj {
   name = "";
   map = new Map<string, PreferenceValue>();
   listeners: unknown[] = [];

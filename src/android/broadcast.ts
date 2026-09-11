@@ -8,7 +8,7 @@ import { reportUncaught } from "./os";
 import { JBundle } from "./os";
 
 interface Filter { actions: string[]; schemes?: string[]; priority?: number; }
-export type BroadcastResult = { code: number; data: string | null; extras: JBundle | null; aborted: boolean };
+type BroadcastResult = { code: number; data: string | null; extras: JBundle | null; aborted: boolean };
 export const broadcastTransport: { send: ((intent: JIntent, permission: string | null, ordered: boolean) => Promise<void>) | null } = { send: null };
 const receivers = new Map<JObj, { context: JContext; filter: Filter; handler: unknown }>();
 export function registerReceiver(context: JContext, receiver: JObj | null, filter: Filter, handler: unknown = null): null {

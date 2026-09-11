@@ -31,7 +31,7 @@ const SUSPENDS = "\0suspends";   // the node every unresolvable target reports t
  * @param methods  the bodies to consider — the reachable set, not the whole apk
  * @param subtypes declared type -> concrete types a site on it may dispatch to
  */
-export interface Suspension {
+interface Suspension {
   /** the method keys that can suspend */
   suspends: Set<string>;
   /** call sites as the compiler names them ("@owner.sig" virtual, "owner.sig" exact) whose every target cannot suspend */

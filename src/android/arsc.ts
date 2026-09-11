@@ -42,7 +42,7 @@ const localePart = (a: number, b: number, base: number) => !a ? "" : a & 0x80
 /** a split table's string index → its slot in the base pool */
 type Remap = ((i: number) => number) | null;
 /** the archive an Arsc was parsed from: a res/… path to its bytes, or null */
-export type Files = (path: string) => Uint8Array | null;
+type Files = (path: string) => Uint8Array | null;
 
 /** AOSP's screen size class for a smallest-width in dp */
 const sizeClass = (swdp: number): number => swdp >= 720 ? 4 : swdp >= 480 ? 3 : swdp >= 320 ? 2 : 1;

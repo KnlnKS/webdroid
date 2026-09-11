@@ -12,7 +12,7 @@ import { appHost } from "./apphost";
 type Value = { kind: "uri"; value: string } | { kind: "values" | "value"; data: ParcelData };
 export type ProviderRequest = { authority: string; name: string; desc: string; args: Value[] };
 export type ProviderReply = { kind: "cursor"; columns: string[]; rows: Value[][] } | { kind: "value"; value: Value };
-export type ProviderCall = (pkg: string, process: string, request: ProviderRequest) => Promise<ProviderReply>;
+type ProviderCall = (pkg: string, process: string, request: ProviderRequest) => Promise<ProviderReply>;
 async function encode(value: unknown): Promise<Value> {
   if (value instanceof JUri) return { kind: "uri", value: value.uri };
   const p = new JParcel(), values = value instanceof JContentValues;

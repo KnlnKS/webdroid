@@ -4,7 +4,7 @@ import { JBinder } from "./binder";
 import { JParcel, parcelCreator } from "./parcel";
 import { JFnRunnable, type JHandler, type JBundle } from "./os";
 
-export class JResultReceiver extends JObj { handler: JHandler | null = null; binder: JObj | null = null; remote = false; }
+class JResultReceiver extends JObj { handler: JHandler | null = null; binder: JObj | null = null; remote = false; }
 class JResultBinder extends JBinder { receiver!: JResultReceiver; }
 rt.register({ name: "webdroid/ResultReceiverBinder", ctor: JResultBinder, sup: "android/os/Binder", methods: {
   "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": async function (this: JResultBinder, code: number, data: JParcel, reply: JParcel | null) {

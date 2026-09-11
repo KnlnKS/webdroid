@@ -15,11 +15,11 @@ const src = `${dir}/core`;
 const OUT = [["ReleaseFast", "core.wasm"], ["ReleaseSafe", "core.safe.wasm"]] as const;
 const mtime = (p: string) => { try { return statSync(p).mtimeMs; } catch { return -1; } };
 
-export function stale(): boolean {
+function stale(): boolean {
   const newest = Math.max(mtime("scripts/build-core.ts"), ...readdirSync(src).map((f) => mtime(`${src}/${f}`)));
   return OUT.some(([, name]) => mtime(`${dir}/${name}.ts`) < newest);
 }
-export async function build(): Promise<void> {
+async function build(): Promise<void> {
   for (const [mode, name] of OUT) {
     const bin = `${dir}/${name}`;
     await $`zig build-exe ${src}/core.zig -target wasm32-freestanding -O ${mode} -mcpu=${FEATURES} -fno-entry -rdynamic --import-memory --import-table --global-base=65536 --stack 262144 --export=__heap_base -fstrip -femit-bin=${bin}`;

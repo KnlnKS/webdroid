@@ -892,7 +892,7 @@ function installForName(classCtor: unknown) {
 }
 
 // wire Class.getMethods / getDeclaredMethods to real Method objects
-export function installClassReflection() {
+function installClassReflection() {
   const info = rt.link("java/lang/Class");
   const proto = info.ctor.prototype as Record<string, unknown>;
   installForName(info.ctor);

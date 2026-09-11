@@ -66,7 +66,7 @@ export function normRV(v: RV): RV {
 }
 
 /** an app XML colour literal (#rgb … #aarrggbb) — the one raw string form still parsed */
-export function parseColor(raw: string): number {
+function parseColor(raw: string): number {
   let h = raw.slice(1);
   if (h.length === 3 || h.length === 4) h = h.split("").map((c) => c + c).join("");
   if (h.length === 6) h = "ff" + h;

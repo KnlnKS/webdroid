@@ -57,7 +57,7 @@ function dnString(rdn: Node, f: Awaited<ReturnType<typeof forge>>): string {
   return attrs.map((a) => `${a.shortName ?? a.type}=${a.value.replace(/([,+"\\<>;])/g, "\\$1")}`).reverse().join(",");
 }
 /** parse one DER certificate */
-export async function parseX509(input: Uint8Array): Promise<JX509> {
+async function parseX509(input: Uint8Array): Promise<JX509> {
   const f = await forge();
   const root = (f.asn1 as any).fromDer(binary(input), { strict: false, decodeBitStrings: false }) as Node;
   const c = new (rt.link("java/security/cert/X509Certificate").ctor)() as JX509;
@@ -119,7 +119,7 @@ function systemAnchors(): Promise<Map<string, JX509[]>> {
   });
 }
 /** alias → certificate, the way the AndroidCAStore KeyStore names them */
-export async function systemCaEntries(): Promise<Map<string, JX509>> {
+async function systemCaEntries(): Promise<Map<string, JX509>> {
   const m = new Map<string, JX509>();
   for (const certs of (await systemAnchors()).values()) for (const c of certs) m.set("system:" + stringHash(c.subjectDer).toString(16), c);
   return m;
@@ -130,7 +130,7 @@ function checkValidity(c: JX509, at = Date.now()) {
   if (at > c.notAfter) throw rt.mkThrowable("java/security/cert/CertificateExpiredException", "certificate expired: " + c.subject);
 }
 /** the trusted path leaf → root, or a CertificateException naming what broke */
-export async function verifyChain(chain: JX509[]): Promise<JX509[]> {
+async function verifyChain(chain: JX509[]): Promise<JX509[]> {
   if (!chain.length || chain.some((c) => !c.der.length)) throw certErr("empty or unparsed certificate chain");
   const store = await systemAnchors();
   const path: JX509[] = [];

@@ -314,7 +314,7 @@ rt.register({
 rt.register({ name: "android/view/SurfaceHolder$Callback", ctor: class extends JObj {} });
 rt.register({ name: "android/view/SurfaceHolder$Callback2", ctor: class extends JObj {}, ifaces: ["android/view/SurfaceHolder$Callback"] });
 rt.register({ name: "android/view/TextureView$SurfaceTextureListener", ctor: class extends JObj {} });
-export class JSurfaceTexture extends JObj {
+class JSurfaceTexture extends JObj {
   surface: GlSurface = { view: null, width: 1, height: 1, present: null, frames: 0, onFrame: () => this.frameAvailable() };
   released = false;
   textureName = 0;

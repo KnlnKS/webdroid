@@ -816,7 +816,7 @@ export function fmtDouble(v: number): string {
   return (m.includes(".") ? m : m + ".0") + "E" + (e[0] === "+" ? e.slice(1) : e);
 }
 // Float.toString: the shortest digits that round-trip through a 32-bit float, not the double's.
-export function fmtFloat(v: number): string {
+function fmtFloat(v: number): string {
   if (v !== v || v === 0 || !Number.isFinite(v)) return fmtDouble(v);
   for (let p = 1; p < 9; p++) {
     const d = Number(v.toPrecision(p));

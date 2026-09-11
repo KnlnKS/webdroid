@@ -11,7 +11,7 @@ import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MEM_SIZE_A32, MEM_SIZE
 import { perf } from "../perf";
 export { NativeFault };
 
-export const enum SliceExit { Budget = 0, Suspend = 1, Exit = 2 }
+const enum SliceExit { Budget = 0, Suspend = 1, Exit = 2 }
 const enum CoreExit { Budget = 0, Host = 1, Ret = 2, Fault = 3, Syscall = 4 }
 // ~5 ms of guest time per slice: coarse enough that the macrotask hop per slice is noise, fine
 // enough that a 60 Hz frame loop on the JS thread keeps its cadence

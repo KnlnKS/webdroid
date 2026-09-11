@@ -15,7 +15,7 @@ rt.register({
   },
 });
 
-export class JUUID extends JObj { hi = 0n; lo = 0n; }
+class JUUID extends JObj { hi = 0n; lo = 0n; }
 export function uuidFromString(s: string): JUUID {
   const parts = s.split("-");
   if (parts.length !== 5) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid UUID string: " + s);

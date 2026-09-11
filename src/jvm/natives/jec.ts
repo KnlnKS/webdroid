@@ -52,7 +52,7 @@ function add(c: Curve, P: Pt, Q: Pt): Pt {
   const x3 = mod(l * l - x1 - x2, c.p);
   return [x3, mod(l * (x1 - x3) - y1, c.p)];
 }
-export function mul(c: Curve, k: bigint, P: Pt): Pt {
+function mul(c: Curve, k: bigint, P: Pt): Pt {
   let R: Pt = null;
   for (let Q = P; k > 0n; k >>= 1n, Q = add(c, Q, Q)) if (k & 1n) R = add(c, R, Q);
   return R;
@@ -100,14 +100,14 @@ function pointOf(c: Curve, raw: Uint8Array): JEcPublicKey {
 }
 
 // ── keys
-export class JEcPublicKey extends JObj { c!: Curve; x = 0n; y = 0n; }
-export class JEcPrivateKey extends JObj { c!: Curve; s = 0n; pub!: JEcPublicKey; }
-export function ecPublic(c: Curve, x: bigint, y: bigint): JEcPublicKey {
+class JEcPublicKey extends JObj { c!: Curve; x = 0n; y = 0n; }
+class JEcPrivateKey extends JObj { c!: Curve; s = 0n; pub!: JEcPublicKey; }
+function ecPublic(c: Curve, x: bigint, y: bigint): JEcPublicKey {
   if (!onCurve(c, x, y)) throw badSpec("point is not on the curve");
   const k = new (rt.link("webdroid/EcPublicKey").ctor)() as JEcPublicKey;
   k.c = c; k.x = x; k.y = y; return k;
 }
-export function ecPrivate(c: Curve, s: bigint): JEcPrivateKey {
+function ecPrivate(c: Curve, s: bigint): JEcPrivateKey {
   if (s <= 0n || s >= c.n) throw badSpec("scalar out of range");
   const k = new (rt.link("webdroid/EcPrivateKey").ctor)() as JEcPrivateKey;
   const [x, y] = mul(c, s, [c.gx, c.gy])!;

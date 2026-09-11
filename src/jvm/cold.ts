@@ -9,7 +9,7 @@ interface Frame {
 }
 type Handler = { kind: "sync"; run: (frame: Frame, constants: unknown[]) => void } |
   { kind: "suspend"; run: (frame: Frame, constants: unknown[]) => Generator<Promise<unknown>, void, unknown> };
-export type ColdOp = Handler & { constants: unknown[]; next: number; method?: number };
+type ColdOp = Handler & { constants: unknown[]; next: number; method?: number };
 export interface ColdMethod {
   R: Runtime; D: ReturnType<Runtime["dexLink"]>; S: unknown;
   regs: number; first: number; instance: boolean; widths: number[];

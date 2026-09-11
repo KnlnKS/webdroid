@@ -9,7 +9,7 @@ export class NativeFault extends Error {
   pc = 0;
 }
 
-export interface Core {
+interface Core {
   __heap_base: WebAssembly.Global;
   mem_init(size: number): void;
   flags_ptr(): number;
@@ -82,7 +82,7 @@ export const TLS_KEYS = 256;
 export const memory = new WebAssembly.Memory({ initial: MEM_SIZE_A32 / 65536, maximum: MEM_SIZE_A64 / 65536 });
 /** the core's function table, which JIT regions are linked into above the core's own entries */
 const TABLE_SIZE = 1 << 18, JIT_SLOT0 = 8192; // cpu.zig's dead map is sized to match
-export const table = new WebAssembly.Table({ initial: TABLE_SIZE, element: "anyfunc" });
+const table = new WebAssembly.Table({ initial: TABLE_SIZE, element: "anyfunc" });
 
 async function load(): Promise<WebAssembly.Module> {
   // the tests run the safety-checked build: undefined behaviour panics instead of miscomputing

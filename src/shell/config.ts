@@ -31,7 +31,7 @@ export function orientationForRequest(request: number): DeviceOrientation | null
 }
 
 /** Rotate a configured framebuffer while preserving its exact two dimensions and density. */
-export function orientScreen(screen: Screen, orientation: DeviceOrientation): Screen {
+function orientScreen(screen: Screen, orientation: DeviceOrientation): Screen {
   const landscape = screen.width > screen.height;
   if ((orientation === 2) === landscape || screen.width === screen.height) return screen;
   return { width: screen.height, height: screen.width, densityDpi: screen.densityDpi };

@@ -6,19 +6,6 @@ const relayUrl = (host: string, port: number, tls: boolean) => {
     `/tcp?host=${encodeURIComponent(host)}&port=${port}${tls ? "&tls=1" : ""}`;
 };
 
-export interface RelayTransport {
-  binaryType: BinaryType;
-  readonly readyState: number;
-  onmessage: ((event: MessageEvent) => void) | null;
-  onclose: ((event: CloseEvent) => void) | null;
-  onerror: ((event: Event) => void) | null;
-  send(data: Uint8Array): void;
-  close(): void;
-}
-
-export type RelayTransportFactory = (url: string) => RelayTransport;
-const openWebSocket: RelayTransportFactory = (url) => new WebSocket(url);
-
 interface RelayEndpoint {
   family: "IPv4" | "IPv6";
   address: string;
@@ -27,7 +14,7 @@ interface RelayEndpoint {
 
 /** One WebSocket carries one TCP byte stream through server.ts's /tcp relay. */
 export class Relay {
-  private readonly transport: RelayTransport;
+  private readonly transport: WebSocket;
   private q: Uint8Array[] = [];
   private qHead = 0;
   private qLen = 0;
@@ -37,8 +24,8 @@ export class Relay {
   localEndpoint: RelayEndpoint | null = null;
   readonly ready: Promise<void>;
 
-  constructor(host: string, port: number, tls: boolean, open: RelayTransportFactory = openWebSocket) {
-    const transport = (this.transport = open(relayUrl(host, port, tls)));
+  constructor(host: string, port: number, tls: boolean) {
+    const transport = (this.transport = new WebSocket(relayUrl(host, port, tls)));
     transport.binaryType = "arraybuffer";
     let settled = false;
     const wake = () => { for (const waiter of this.waiters) waiter(); this.waiters.clear(); };

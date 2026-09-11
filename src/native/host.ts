@@ -84,7 +84,7 @@ class VaList implements ArgReader {
  *  argument comes from the register save area at gr_top + gr_offs while gr_offs is negative, then
  *  from 8-byte stack slots; an FP one likewise from 16-byte slots at vr_top + vr_offs. The offsets
  *  are kept here, not written back: no caller reuses the list after a v*printf or Call*MethodV. */
-export class VaList64 implements ArgReader {
+class VaList64 implements ArgReader {
   private stack: number; private grTop: number; private vrTop: number; private grOffs: number; private vrOffs: number;
   constructor(a: number) { this.stack = ldp(a); this.grTop = ldp(a + 8); this.vrTop = ldp(a + 16); this.grOffs = mem.ld32(a + 24); this.vrOffs = mem.ld32(a + 28); }
   private slot(): number { const p = (this.stack + 7) & ~7; this.stack = p + 8; return p; }

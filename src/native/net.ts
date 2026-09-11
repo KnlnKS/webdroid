@@ -1,6 +1,6 @@
 // Bionic IPv4 sockets: TCP over the browser WebSocket relay, plus process-local UDP.
 
-import { Relay, type RelayTransportFactory } from "../shell/relay";
+import { Relay } from "../shell/relay";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { hostLib, PTR, stp, type HostFn, type HostRet, ptr } from "./host";
@@ -56,13 +56,12 @@ const syntheticHosts = new Map<number, string>();
 const syntheticAddresses = new Map<string, [number, number, number, number]>();
 let nextSynthetic = 1;
 let nextDatagramPort = 49_152;
-let transportFactory: RelayTransportFactory | undefined;
 export const netDebug = { events: [] as string[] };
 function record(event: string): void {
   netDebug.events.push(event);
   if (netDebug.events.length > 100) netDebug.events.shift();
 }
-export interface NativePollProvider {
+interface NativePollProvider {
   query(fd: number, events: number): number | null;
   subscribe(fd: number, wake: () => void): () => void;
   read(cpu: Cpu, fd: number, destination: number, length: number): number | Promise<number> | null;
@@ -122,7 +121,7 @@ const addrinfoLayout = () => PTR === 8
   ? { size: 48, canon: 24, addr: 32, next: 40 }
   : { size: 32, canon: 20, addr: 24, next: 28 };
 
-export function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints: number, result: number): number {
+function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints: number, result: number): number {
   if (!result) { fail(cpu, E.FAULT); return EAI_SYSTEM; }
   const flags = hints ? mem.ld32(hints) : 0;
   const family = hints ? mem.ld32(hints + 4) : AF_UNSPEC;
@@ -173,9 +172,9 @@ export function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number,
   return 0;
 }
 
-export function nativeFreeaddrinfo(address: number): void { if (address) mem.free(address); }
+function nativeFreeaddrinfo(address: number): void { if (address) mem.free(address); }
 
-export function nativeSocket(cpu: Cpu, domain: number, type: number, protocol: number): number {
+function nativeSocket(cpu: Cpu, domain: number, type: number, protocol: number): number {
   const baseType = type & 0xf;
   if (domain !== AF_INET) return fail(cpu, E.AFNOSUPPORT);
   if (baseType !== SOCK_STREAM && baseType !== SOCK_DGRAM) return fail(cpu, E.SOCKTNOSUPPORT);
@@ -197,7 +196,7 @@ export function nativeSocket(cpu: Cpu, domain: number, type: number, protocol: n
   return fd;
 }
 
-export function nativeConnect(cpu: Cpu, fd: number, sockaddr: number, length: number): HostRet | Promise<HostRet> {
+function nativeConnect(cpu: Cpu, fd: number, sockaddr: number, length: number): HostRet | Promise<HostRet> {
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
   const socket = descriptor.socket;
@@ -223,7 +222,7 @@ export function nativeConnect(cpu: Cpu, fd: number, sockaddr: number, length: nu
   const { address: bytes, port } = endpoint;
   const host = syntheticHosts.get(ipv4Key(bytes)) ?? ipv4Text(bytes);
   record(`connect fd=${fd} ${host}:${port} nonblock=${socket.nonblock}`);
-  const relay = new Relay(host, port, false, transportFactory);
+  const relay = new Relay(host, port, false);
   socket.relay = relay;
   socket.connecting = true;
   socket.peer = { address: bytes, port };
@@ -275,7 +274,7 @@ function bindDatagram(cpu: Cpu, socket: NativeDatagramSocket, requested: Ipv4End
   return true;
 }
 
-export function nativeBind(cpu: Cpu, fd: number, sockaddr: number, length: number): number {
+function nativeBind(cpu: Cpu, fd: number, sockaddr: number, length: number): number {
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
   const socket = descriptor.socket;
@@ -305,7 +304,7 @@ function datagramSource(local: Ipv4Endpoint): Ipv4Endpoint {
     : local;
 }
 
-export function nativeSendTo(cpu: Cpu, fd: number, source: number, length: number, destination: number, destinationLength: number): number {
+function nativeSendTo(cpu: Cpu, fd: number, source: number, length: number, destination: number, destinationLength: number): number {
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
   const socket = descriptor.socket;
@@ -347,7 +346,7 @@ function writeDatagramAddress(endpoint: Ipv4Endpoint, address: number, length: n
   mem.st32(length, sockaddr.length);
 }
 
-export function nativeReceiveFrom(cpu: Cpu, fd: number, destination: number, length: number, flags: number, source: number, sourceLength: number): number | Promise<number> {
+function nativeReceiveFrom(cpu: Cpu, fd: number, destination: number, length: number, flags: number, source: number, sourceLength: number): number | Promise<number> {
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
   const socket = descriptor.socket;
@@ -525,7 +524,7 @@ const fdIsSet = (set: number, fd: number): boolean => !!set && !!(mem.u8[set + (
 const setFd = (set: number, fd: number): void => { mem.u8[set + (fd >>> 3)] |= 1 << (fd & 7); };
 
 /** Bionic select(2), sharing readiness and wakeups with poll(2). */
-export function nativeSelect(cpu: Cpu, count: number, readSet: number, writeSet: number, exceptSet: number, timeout: number): number | Promise<number> {
+function nativeSelect(cpu: Cpu, count: number, readSet: number, writeSet: number, exceptSet: number, timeout: number): number | Promise<number> {
   if (count < 0 || count > FD_SETSIZE) return fail(cpu, E.INVAL);
   const setBytes = Math.ceil(count / (PTR * 8)) * PTR;
   const requested: { fd: number; events: number }[] = [];
@@ -578,7 +577,7 @@ export function nativeSelect(cpu: Cpu, count: number, readSet: number, writeSet:
   return result instanceof Promise ? result.then(finish) : finish();
 }
 
-export function nativeGetsockopt(cpu: Cpu, fd: number, level: number, option: number, value: number, length: number): number {
+function nativeGetsockopt(cpu: Cpu, fd: number, level: number, option: number, value: number, length: number): number {
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
   const socket = descriptor.socket;
@@ -617,11 +616,11 @@ function nativeSocketName(cpu: Cpu, fd: number, address: number, length: number,
   return 0;
 }
 
-export function nativeGetsockname(cpu: Cpu, fd: number, address: number, length: number): number {
+function nativeGetsockname(cpu: Cpu, fd: number, address: number, length: number): number {
   return nativeSocketName(cpu, fd, address, length, false);
 }
 
-export function nativeGetpeername(cpu: Cpu, fd: number, address: number, length: number): number {
+function nativeGetpeername(cpu: Cpu, fd: number, address: number, length: number): number {
   return nativeSocketName(cpu, fd, address, length, true);
 }
 
@@ -634,7 +633,7 @@ function copyText(text: string, destination: number, capacity: number): boolean 
   return true;
 }
 
-export function nativeGetnameinfo(sockaddr: number, length: number, host: number, hostLength: number, service: number, serviceLength: number, flags = 0): number {
+function nativeGetnameinfo(sockaddr: number, length: number, host: number, hostLength: number, service: number, serviceLength: number, flags = 0): number {
   if (!sockaddr || length < 8 || mem.ld16u(sockaddr) !== AF_INET) return EAI_ADDRFAMILY;
   const bytes = mem.u8.subarray(sockaddr + 4, sockaddr + 8);
   const numeric = ipv4Text(bytes), resolved = syntheticHosts.get(ipv4Key(bytes));
@@ -644,7 +643,7 @@ export function nativeGetnameinfo(sockaddr: number, length: number, host: number
   return copyText(name, host, hostLength) && copyText(String(port), service, serviceLength) ? 0 : EAI_OVERFLOW;
 }
 
-export function nativeSend(cpu: Cpu, fd: number, source: number, length: number): number {
+function nativeSend(cpu: Cpu, fd: number, source: number, length: number): number {
   if (isNativeSocket(fd)) return nativeSocketWrite(cpu, fd, source, length);
   return localPollProvider?.write(cpu, fd, source, length) ?? fail(cpu, E.BADF);
 }
@@ -716,19 +715,4 @@ export function netInit(): void {
     select: (cpu, args) => nativeSelect(cpu, args.i(), args.p(), args.p(), args.p(), args.p()),
   };
   hostLib("libc.so", functions);
-}
-
-export function setNativeRelayTransportFactoryForTest(factory: RelayTransportFactory | undefined): void { transportFactory = factory; }
-export function resetNativeNetworkForTest(): void {
-  const states = new Set<NativeSocket>();
-  for (const [fd, descriptor] of sockets) { states.add(descriptor.socket); releaseFd(fd); }
-  for (const socket of states) if (socket.kind === "stream") socket.relay?.close();
-  sockets.clear();
-  datagramBindings.clear();
-  syntheticHosts.clear();
-  syntheticAddresses.clear();
-  nextSynthetic = 1;
-  nextDatagramPort = 49_152;
-  transportFactory = undefined;
-  netDebug.events.length = 0;
 }

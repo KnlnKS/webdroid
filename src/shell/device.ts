@@ -420,7 +420,7 @@ interface Relaunch { state: JBundle | null; nonConfig: unknown; requestedOrienta
  * fresh one with both. That relaunch IS how such an app sees a new Configuration at all — it is
  * the whole of AppCompat's day/night switch — so recreate() has to do it for real.
  */
-export function recreateActivity(act: JActivity): void {
+function recreateActivity(act: JActivity): void {
   const cls = (act.constructor as any)?.$i?.name as string | undefined;
   if (!cls || !booted || booted.stack.indexOf(act) < 0) return;
   // AOSP's recreate() only schedules the relaunch; running it nested inside the caller's own

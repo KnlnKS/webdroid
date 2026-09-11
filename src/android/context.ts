@@ -73,9 +73,9 @@ export class PermissionStore {
     globalThis.localStorage?.setItem("wd:permissions:" + pkg, JSON.stringify([...grants]));
   }
 }
-export let permissionStore = new PermissionStore();
+let permissionStore = new PermissionStore();
 export function usePermissionStore(store: PermissionStore) { permissionStore = store; }
-export const permissionState = (name: string) =>
+const permissionState = (name: string) =>
   RUNTIME_PERMISSIONS.has(name) && !permissionStore.get(appHost?.pkg ?? "").has(name) ? -1 : 0;
 export function grantPermissions(names: string[]): Int32Array {
   permissionStore.grant(appHost?.pkg ?? "", names);

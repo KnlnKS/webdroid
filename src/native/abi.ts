@@ -19,18 +19,16 @@ const TRAMP_SPAN = 0x0007_0000;                // host-call trampolines, 8 bytes
 const KERN_SPAN = 0x00c0_0000;                 // the core's page tables and JIT buffer (mem.zig, cpu.zig, jit.zig)
 
 export const STACK_BASE = 0x0010_0000;
-export const STACK_END = STACK_BASE + STACK_SPAN;
-export const HOST_DATA = STACK_END;
-export const HOST_DATA_END = HOST_DATA + HOST_SPAN;
+const STACK_END = STACK_BASE + STACK_SPAN;
+const HOST_DATA = STACK_END;
+const HOST_DATA_END = HOST_DATA + HOST_SPAN;
 export const TRAMP_BASE = HOST_DATA_END;
 export const TRAMP_END = TRAMP_BASE + TRAMP_SPAN;
 /** lr planted by Cpu.call; reaching it as pc ends the call. The last trampoline slot, never defined. */
 export const RET_SENTINEL = TRAMP_END - 8;
-export const KERN_BASE = TRAMP_END;
-export const KERN_END = KERN_BASE + KERN_SPAN;
+const KERN_BASE = TRAMP_END;
+const KERN_END = KERN_BASE + KERN_SPAN;
 export const JIT_BUF = KERN_END - 0x0010_0000;
-/** the shared region: malloc bumps up from ARENA_BASE, ELF images bump down from the end of memory */
-export const ARENA_BASE = KERN_END;
 export const MEM_SIZE_A32 = 0x1000_0000;
 export const MEM_SIZE_A64 = 0xffff_0000; // 4 GiB less a page: the whole 32-bit space a WebAssembly memory can back
 /** above this the buffer backs the address planes' chunks rather than plane 0 itself (mem.ts) */
@@ -39,7 +37,6 @@ export const POOL_BASE = 0xa000_0000;
 export let MEM_SIZE = MEM_SIZE_A32;
 export function setMemSize(n: number): void { MEM_SIZE = n; }
 export const STACK_SIZE = 0x10_0000;
-export const STACK_GUARD = 0x1_0000;
 
 export const trampAddr = (slot: number) => TRAMP_BASE + slot * 8;
 export const trampSlot = (pc: number) => (pc - TRAMP_BASE) >> 3;

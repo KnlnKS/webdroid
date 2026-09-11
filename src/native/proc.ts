@@ -17,7 +17,7 @@ const CAP_VERSION_1 = 0x19980330, CAP_VERSION_2 = 0x20071026, CAP_VERSION_3 = 0x
 const capWords = (version: number) => version === CAP_VERSION_1 ? 1 : version === CAP_VERSION_2 || version === CAP_VERSION_3 ? 2 : 0;
 
 /** Linux capget for the one unprivileged Android app process represented by this runtime. */
-export function capget(cpu: Cpu, header: number, data: number): number {
+function capget(cpu: Cpu, header: number, data: number): number {
   if (!header) return fail(cpu, 14);                                               // EFAULT
   const words = capWords(mem.ld32(header));
   if (!words) {

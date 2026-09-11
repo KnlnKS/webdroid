@@ -1,7 +1,7 @@
 import { zipTree } from "../jvm/natives/jzip";
 import type { FileSource } from "./lazyfile";
 
-export type PackedFile = { file: string; size: number; sha256: string };
+type PackedFile = { file: string; size: number; sha256: string };
 export type PackedArchiveIndex = {
   version: 1;
   pkg: string;

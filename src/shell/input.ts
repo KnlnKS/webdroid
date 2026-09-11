@@ -48,7 +48,7 @@ function cancelWheel() {
 }
 
 /** `onDown` runs after a press is dispatched: the shell refocuses its hidden IME input there. */
-export function attachInput(canvas: HTMLCanvasElement, onDown: () => void) {
+function attachInput(canvas: HTMLCanvasElement, onDown: () => void) {
   canvas.addEventListener("pointerdown", (e) => {
     if (live) cancelWheel();
     down = true;

@@ -596,7 +596,7 @@ export function measureText(p: JPaint, s: string): number {
  * on the wrong size. main.ts applies these as ascent/descent-override on the loaded faces.
  */
 export const SYSTEM_FONT = { ascent: 1900 / 2048, descent: 500 / 2048, top: 2146 / 2048, bottom: 555 / 2048 };
-export type FontMetrics = typeof SYSTEM_FONT;
+type FontMetrics = typeof SYSTEM_FONT;
 /** Per CSS family, the metrics AOSP would report for it; anything unregistered is the device
  *  font's. fonts.ts fills this in as it registers a face out of an app's own resources. */
 const familyMetrics = new Map<string, FontMetrics>();

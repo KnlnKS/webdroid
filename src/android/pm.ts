@@ -42,7 +42,7 @@ rt.register({
     },
   },
 });
-export const signatures = (certificates: Uint8Array[] = []) => {
+const signatures = (certificates: Uint8Array[] = []) => {
   rt.link("android/content/pm/Signature");
   return jarray(certificates.map((bytes) => Object.assign(new JSignature(), { bytes: new Int8Array(bytes) })), "Landroid/content/pm/Signature;");
 };

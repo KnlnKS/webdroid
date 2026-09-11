@@ -43,8 +43,8 @@ type ActivityRequest = { kind: "launch"; id: number; taskId: number; component: 
   | { kind: "visibility"; phase: "pause" | "stop" | "resume" }
   | { kind: "result"; request: number; code: number; data: IntentData | null } | { kind: "back" } | { kind: "finishTask"; taskId: number; resume: boolean };
 export const processPresentation = { visible: true, changed: (_visible: boolean) => {} };
-export type PackageSnapshot = { pkg: string; source: Uint8Array | PackedArchive; uid: number; system: boolean; grants: string[]; signatures: Uint8Array[] | null };
-export type ProcessEndpoint = {
+type PackageSnapshot = { pkg: string; source: Uint8Array | PackedArchive; uid: number; system: boolean; grants: string[]; signatures: Uint8Array[] | null };
+type ProcessEndpoint = {
   activity: (request: ActivityRequest) => Promise<void>;
   transact: (request: Transaction, caller: Caller) => Promise<TransactionReply>;
   service: (request: ServiceRequest) => Promise<BinderHandle | null>;
@@ -55,7 +55,7 @@ type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HT
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
   bindings: Map<string, { pkg: string; process: string }>;
   watchers: Set<() => void>; pending: Set<(error: unknown) => void> };
-export class ProcessBroker {
+class ProcessBroker {
   readonly files = new PrivateFiles();
   readonly tasks = new ActivityTasks();
   readonly accounts = new AccountStore();
