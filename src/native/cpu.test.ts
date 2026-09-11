@@ -1,0 +1,82 @@
+import { describe, expect, test } from "bun:test";
+import { curThread, JThread, mainThread, setCurThread } from "../jvm/natives/jlang";
+import { Cpu, setA64, sigHandlers, slice } from "./cpu";
+import { defineHost } from "./host";
+import { mem } from "./mem";
+
+for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 thread identity", () => {
+  test("a parked guest releases its Java thread on host completion and rejection", async () => {
+    setA64(a64);
+    for (const reject of [false, true]) {
+      const worker = new JThread(), cpu = new Cpu(worker, "identity");
+      const deferred = Promise.withResolvers<number>();
+      const entered: JThread[] = [];
+      const address = defineHost("test.thread.park." + reject, () => { entered.push(curThread); return deferred.promise; });
+      const failure = new Error("host rejected");
+      setCurThread(mainThread);
+      try {
+        const result = cpu.call(address).catch(error => error);
+        const parked = curThread;
+        if (reject) deferred.reject(failure); else deferred.resolve(17);
+        const value = await result;
+        expect(entered).toEqual([worker]);
+        expect(parked).toBe(mainThread);
+        expect(curThread).toBe(mainThread);
+        expect(value).toBe(reject ? failure : 17);
+        expect(cpu.depth).toBe(0);
+      } finally { cpu.dispose(); setCurThread(mainThread); }
+    }
+  });
+
+  test("a budget yield releases Java identity and the next host call resumes its guest thread", async () => {
+    setA64(a64);
+    const worker = new JThread(), cpu = new Cpu(worker, "identity");
+    const entered: JThread[] = [];
+    const host = defineHost("test.thread.yield", (_cpu, args) => { entered.push(curThread); return args.i() + 1; });
+    const address = mem.reserve(4096, 4096);
+    mem.u32.set(a64 ? [0x528000e0, 0x58000070, 0xd61f0200, 0xd503201f, host, 0] : [0xe3a00007, 0xe51ff004, host], address >>> 2);
+    const budget = slice.instr;
+    slice.instr = 1;
+    setCurThread(mainThread);
+    try {
+      const result = cpu.call(address);
+      const yielded = curThread;
+      expect(await result).toBe(8);
+      expect(yielded).toBe(mainThread);
+      expect(entered).toEqual([worker]);
+      expect(curThread).toBe(mainThread);
+    } finally { slice.instr = budget; cpu.dispose(); setCurThread(mainThread); }
+  });
+
+  test("a synchronous guest return releases Java identity before its caller resumes", async () => {
+    setA64(a64);
+    const worker = new JThread(), cpu = new Cpu(worker, "identity");
+    const address = defineHost("test.thread.return", () => 9);
+    setCurThread(mainThread);
+    try {
+      const result = cpu.call(address);
+      const returned = curThread;
+      expect(await result).toBe(9);
+      expect(returned).toBe(mainThread);
+    } finally { cpu.dispose(); setCurThread(mainThread); }
+  });
+
+  test("a signal handler restores the interrupted guest's Java identity", async () => {
+    setA64(a64);
+    const worker = new JThread(), cpu = new Cpu(worker, "identity"), entered: JThread[] = [];
+    const handler = defineHost("test.thread.signal", () => { entered.push(curThread); return 0; });
+    const address = defineHost("test.thread.interrupted", () => { entered.push(curThread); return 23; });
+    const previous = sigHandlers.get(12);
+    sigHandlers.set(12, { fn: handler, mask: 0n, flags: 0 });
+    cpu.signals.push(12);
+    setCurThread(mainThread);
+    try {
+      expect(await cpu.call(address)).toBe(23);
+      expect(entered).toEqual([worker, worker]);
+      expect(curThread).toBe(mainThread);
+    } finally {
+      if (previous) sigHandlers.set(12, previous); else sigHandlers.delete(12);
+      cpu.dispose(); setCurThread(mainThread);
+    }
+  });
+});

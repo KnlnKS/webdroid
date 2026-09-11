@@ -3,7 +3,7 @@
 // signals and yields between slices. The core executes; this decides what happens at its exits.
 
 import type { Runtime } from "../jvm/runtime";
-import { JThread, setCurThread } from "../jvm/natives/jlang";
+import { JThread, mainThread, setCurThread } from "../jvm/natives/jlang";
 import { NativeFault, mem } from "./mem";
 import { core, jitDrain, TLS_KEYS } from "./core";
 import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs } from "./host";
@@ -349,41 +349,54 @@ export class Cpu {
   }
   private async loop(): Promise<void> {
     const myDepth = this.depth;
-    for (;;) {
-      setCurThread(this.jthread);
-      if (processExited) await new Promise<never>(() => {});
-      for (let sig; (sig = this.takeSignal());) { this.state = "deliver"; await this.deliver(sig); }
-      const t0 = performance.now(), ic0 = this.ic;
-      let ex: SliceExit;
-      this.state = "slice";
-      try { ex = this.runSlice(slice.instr); }
-      finally {
-        const dt = performance.now() - t0;
-        perf.nativeMs += dt; perf.nativeSlices++; perf.nativeInstr += this.ic - ic0;
-        if (slowMs && dt > slowMs) console.warn(`[slow-native] ${this.name} slice ${dt.toFixed(0)}ms ${this.ic - ic0} instr from ${symbolizeHook(this.bpc)}`);
-      }
-      if (ex === SliceExit.Exit) return;
-      if (ex === SliceExit.Suspend) {
-        const p = this.pending!;
-        this.pending = null;
-        const outerParked = this.parkedAt;                                        // a frame below may be parked in its own host call
-        this.parkedAt = myDepth;
-        this.pump();
-        this.state = "park";
-        const v = await p;
-        // a handler delivered while we were parked may still be running on top of this frame,
-        // parked in its own host call (sigsuspend): the flag is its until it finishes
-        this.state = "idle";
-        while (this.depth > myDepth) await new Promise<void>((r) => this.idle.push(r));
-        this.parkedAt = outerParked;
+    try {
+      for (;;) {
         setCurThread(this.jthread);
-        if (this.finished) return;
-        hostReturn(this, v as HostRet);
-        continue;
+        if (processExited) { setCurThread(mainThread); await new Promise<never>(() => {}); }
+        for (let sig; (sig = this.takeSignal());) {
+          this.state = "deliver";
+          const delivery = this.deliver(sig);
+          setCurThread(mainThread);
+          await delivery;
+          setCurThread(this.jthread);
+        }
+        const t0 = performance.now(), ic0 = this.ic;
+        let ex: SliceExit;
+        this.state = "slice";
+        try { ex = this.runSlice(slice.instr); }
+        finally {
+          const dt = performance.now() - t0;
+          perf.nativeMs += dt; perf.nativeSlices++; perf.nativeInstr += this.ic - ic0;
+          if (slowMs && dt > slowMs) console.warn(`[slow-native] ${this.name} slice ${dt.toFixed(0)}ms ${this.ic - ic0} instr from ${symbolizeHook(this.bpc)}`);
+        }
+        if (ex === SliceExit.Exit) return;
+        if (ex === SliceExit.Suspend) {
+          const p = this.pending!;
+          this.pending = null;
+          const outerParked = this.parkedAt;                                        // a frame below may be parked in its own host call
+          this.parkedAt = myDepth;
+          this.pump();
+          this.state = "park";
+          setCurThread(mainThread);
+          const v = await p;
+          // a handler delivered while we were parked may still be running on top of this frame,
+          // parked in its own host call (sigsuspend): the flag is its until it finishes
+          this.state = "idle";
+          while (this.depth > myDepth) {
+            setCurThread(mainThread);
+            await new Promise<void>((r) => this.idle.push(r));
+          }
+          this.parkedAt = outerParked;
+          setCurThread(this.jthread);
+          if (this.finished) return;
+          hostReturn(this, v as HostRet);
+          continue;
+        }
+        this.state = "yield";
+        setCurThread(mainThread);
+        await yieldToLoop();
       }
-      this.state = "yield";
-      await yieldToLoop();
-    }
+    } finally { setCurThread(mainThread); }
   }
 
   /** run the core until the frame returns, a host call parks the thread, or the budget is spent */

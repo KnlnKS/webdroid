@@ -34,6 +34,15 @@ JS heap is effectively unchanged. These measure eight FitNotes steps with render
 advancing ticks, not all APKs or total browser/process memory. This is bounded map
 progress, not full interaction parity.
 
+The extended map flow reproduced a native thread-identity leak: `ResourceLoaderTh`
+remained current across CPU waits/yields and reached UI gesture bytecode. The runner
+now releases identity while suspended and restores its guest before execution resumes,
+including signal delivery. Eight ARM32/A64 tests fail on `4acef6d` and pass with this
+change. A matched fixed-camera flow completes cancellation, pan, marker replacement,
+click and activity reopen without exceptions; the old build throws during gesture
+dispatch. Full regression/performance verification is pending. An earlier click miss
+at a variable camera position and screen-coordinate differences remain to investigate.
+
 A fresh test tab is open in Chrome at `http://localhost:41979/?apk=GmsClient.apk`.
 The user has been asked to complete the authorized Google sign-in directly in that
 tab; no credentials or challenge responses have been supplied in this run. The

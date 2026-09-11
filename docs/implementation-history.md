@@ -870,3 +870,57 @@ The Google-login test tab remains at the SDK client with zero accounts and no re
 bridge calls; it still awaits the user's credentials/challenge. No further login
 attempt was started. Broader map gestures/cancellation/lifecycle and the previously
 listed account/service/task breadth remain open; the integration goal is not complete.
+
+### 2026-09-11 — Native suspension leaked guest Java thread identity
+
+The extended Maps SDK probe interrupts an animation, pans with a marker present,
+replaces/clicks the marker, then destroys and reopens its activity. Android completes
+this sequence. Webdroid's map also moved, but annotation feature queries and sometimes
+camera movement threw MapLibre CalledFromWorkerThreadException. Empty missing-API sets
+alone did not expose the failure. The exception originated in touch dispatch through
+AnnotationManager/MoveGestureDetector, not the delayed single-tap timer.
+
+A temporary currentThread/setCurThread trace identified `ResourceLoaderTh` inside a
+main-queue input job. The last identity setters came from Cpu.loop's native resource
+worker. Bytecode releases identity when it suspends, but the native runner left its
+worker current while awaiting host promises or yielding its budget. Native view
+continuations could then call Java with that worker's identity.
+
+Cpu.loop now releases to the runtime's default main identity before suspension and
+on exit/rejection, and restores its guest after a signal handler or host wait. Guest
+frame/signal ordering and wake timing are unchanged. Eight real ARM32/A64 runner tests
+cover parked host completion/rejection, budget yield followed by a host call, synchronous
+return, and a signal handler followed by the interrupted guest. All eight fail against
+`4acef6d` and pass with the change; the incomplete first attempt also exposed why signal
+resumption and synchronous exit needed explicit coverage.
+
+The first fixed extended run removed the exceptions but produced a map click instead
+of the expected marker click at the SDK-reported position. Animation interruption had
+left different intermediate zooms between runs. A controlled follow-up resets the
+camera before marker insertion: both `4acef6d` and current deliver the marker click,
+while only the baseline throws the worker-thread exception during panning. This does
+not explain away the earlier miss or establish complete coordinate/hit-test parity.
+At 1080x2424@480 the browser also reports a different initial minimum zoom/projected
+marker Y than Android; window/navigation geometry and screen-coordinate reporting
+remain open. No app-specific callback suppression or marker substitution was added.
+
+Instrumentation now installs before SDK boot, records every reached fork, and confirms
+that the runtime owning NativeMapView was captured (three reached runtimes, all missing
+sets empty). Earlier successful simple-marker observations retain their narrower scope.
+Android's second animation gets one onCancel and one onFinish, as documented by the
+[SDK callback contract](https://developers.google.com/android/reference/com/google/android/gms/maps/GoogleMap.CancelableCallback).
+Current repeats reach loaded after activity teardown/reopen with fresh callback counts.
+
+Evidence: `/tmp/webdroid-map-advanced-{browser,android}.log`,
+`/tmp/webdroid-map-thread-{all,pins}-browser.{log,json}`,
+`/tmp/webdroid-map-matched-{baseline,current}.{log,json}`,
+`/tmp/webdroid-map-thread-test-{baseline,both}.log`. The source-matched baseline server
+is 41981, worktree `/tmp/webdroid-map-thread-baseline` at `4acef6d`; its only extra source
+is the copied new runner test. Production/current remains 41977. Login server 41979
+and the pending user interaction are preserved. Broad regression/performance checks
+for this runner change are pending.
+
+Before the runner commit: typecheck, 611 tests / 20,439 assertions, executable framework
+probes and 6/6 text comparisons pass. Resy, pinned microG and the rebuilt SDK client
+compile with zero method failures. Logs: `/tmp/webdroid-map-thread-{typecheck-final,
+unit-final,fwtest,textcmp,resy-smoke,gms-smoke,client-smoke}.log`.
