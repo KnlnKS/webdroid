@@ -22,21 +22,21 @@ function jeq(a: unknown, b: unknown): number | Promise<number> {
   if (a === b) return 1;
   if (a === null || b === null || a === undefined || b === undefined) return 0;
   if (typeof a === "string") return 0; // string equals only identical strings
-  return vcall(a, "equals", "(Ljava/lang/Object;)Z", b);
+  return vcallMaybe(a, "equals", "(Ljava/lang/Object;)Z", b);
 }
 function jhash(o: unknown): number | Promise<number> {
   if (o === null || o === undefined) return 0;
   if (typeof o === "string") return stringHash(o);
-  return vcall(o, "hashCode", "()I");
+  return vcallMaybe(o, "hashCode", "()I");
 }
 function jcmp(cmp: unknown, a: unknown, b: unknown): number | Promise<number> {
-  if (cmp) return vcall(cmp, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", a, b);
+  if (cmp) return vcallMaybe(cmp, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", a, b);
   const t = typeof a;
   if (typeof b === t && (t === "string" || t === "number" || t === "bigint")) {
     const x = a as number, y = b as number;
     return x < y ? -1 : x > y ? 1 : 0;
   }
-  return vcall(a, "compareTo", "(Ljava/lang/Object;)I", b);
+  return vcallMaybe(a, "compareTo", "(Ljava/lang/Object;)I", b);
 }
 
 /** Fast map key for values with value/identity semantics, or SLOW sentinel. */
@@ -593,27 +593,6 @@ function mapMethods(): NativeSpec["methods"] {
     },
     "size()I": function (this: JMap) { return this.m.size + this.slow.length; },
     "isEmpty()Z": function (this: JMap) { return this.m.size + this.slow.length === 0 ? 1 : 0; },
-    "compute(Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;": async function (this: JMap, k: unknown, fn: unknown) {
-      if (fn === null) rt.npe();
-      const thread = rt.th();
-      const old = await vcall(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
-      rt.st(thread);
-      const value = await vcall(fn, "apply", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, old);
-      rt.st(thread);
-      if (value == null) await vcall(this, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
-      else await vcall(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, value);
-      return value ?? null;
-    },
-    "computeIfAbsent(Ljava/lang/Object;Ljava/util/function/Function;)Ljava/lang/Object;": async function (this: JMap, k: unknown, fn: unknown) {
-      const thread = rt.th();
-      const cur = await vcall(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
-      if (cur !== null && cur !== undefined) return cur;
-      rt.st(thread);
-      const v = await vcall(fn, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
-      rt.st(thread);
-      if (v !== null && v !== undefined) await vcall(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, v);
-      return v ?? null;
-    },
     "get(Ljava/lang/Object;)Ljava/lang/Object;": maySuspend(function (this: JMap, k: unknown) {
       const mk = mapKey(k);
       if (mk !== SLOW) {
@@ -659,12 +638,6 @@ function mapMethods(): NativeSpec["methods"] {
         return null;
       });
     }),
-    "putIfAbsent(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JMap, k: unknown, v: unknown) {
-      const cur = await vcall(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
-      if (cur !== null) return cur;
-      await vcall(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, v);
-      return null;
-    },
     "remove(Ljava/lang/Object;)Ljava/lang/Object;": maySuspend(function (this: JMap, k: unknown) {
       const mk = mapKey(k);
       if (mk !== SLOW) {
@@ -1590,11 +1563,7 @@ const absList: Methods = {
     for (let i = 0; i < a.length; i++) if (!(await aeq(a[i], b[i]))) return 0;
     return 1;
   },
-  "hashCode()I": async function (this: JAbstractList) {
-    let h = 1;
-    for (const x of await toJsArray(this)) { const r = jhash(x); h = (31 * h + (r instanceof Promise ? await r : r)) | 0; }
-    return h;
-  },
+  "hashCode()I": async function (this: JAbstractList) { return hashSeq(await toJsArray(this)); },
 };
 const absSet: Methods = {
   "equals(Ljava/lang/Object;)Z": async function (this: JObj, o: unknown) {
@@ -1722,9 +1691,12 @@ const mapDefaults: Methods = {
     return null;
   },
   "computeIfAbsent(Ljava/lang/Object;Ljava/util/function/Function;)Ljava/lang/Object;": async function (this: JObj, k: unknown, fn: unknown) {
+    const thread = rt.th();
     const cur = await vcall(this, "get", GET, k);
     if (cur !== null && cur !== undefined) return cur;
+    rt.st(thread);
     const v = await vcall(fn, "apply", `(${O})${O}`, k);
+    rt.st(thread);
     if (v !== null && v !== undefined) await vcall(this, "put", PUT, k, v);
     return v ?? null;
   },
@@ -1736,8 +1708,12 @@ const mapDefaults: Methods = {
     return v ?? null;
   },
   "compute(Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;": async function (this: JObj, k: unknown, fn: unknown) {
+    if (fn === null) rt.npe();
+    const thread = rt.th();
     const cur = await vcall(this, "get", GET, k);
+    rt.st(thread);
     const v = await vcall(fn, "apply", `(${O}${O})${O}`, k, cur ?? null);
+    rt.st(thread);
     if (v === null || v === undefined) { if (cur !== null && cur !== undefined) await vcall(this, "remove", `(${O})${O}`, k); }
     else await vcall(this, "put", PUT, k, v);
     return v ?? null;
@@ -1839,6 +1815,9 @@ for (const f of ["Supplier", "Function", "BiFunction", "Consumer", "BiConsumer",
   rt.register({ name: "java/util/function/" + f, ctor: class extends JObj {} });
 }
 
+type Fillable = { fill(v: unknown, s?: number, e?: number): unknown };
+const fill = (a: Fillable, v: unknown) => a.fill(v);
+const fillRange = (a: Fillable, f: number, t: number, v: unknown) => a.fill(v, f, t);
 class JArrays extends JObj {}
 class JArraysList extends JList {}
 rt.register({
@@ -1853,54 +1832,23 @@ rt.register({
       rt.link("webdroid/ArraysList");
       const l = new JArraysList(); l.a = arr; return l;
     },
-    "static sort([I)V": taSort,
-    "static sort([J)V": taSort,
-    "static sort([F)V": taSort,
-    "static sort([D)V": taSort,
-    "static sort([III)V": taSort,
-    "static sort([JII)V": taSort,
-    "static sort([FII)V": taSort,
+    ...Object.fromEntries([..."BCSIJFD"].flatMap((t) => [[`static sort([${t})V`, taSort], [`static sort([${t}II)V`, taSort]])),
     "static sort([Ljava/lang/Object;)V": maySuspend((a: unknown[]) => sortInPlace(a, null)),
     "static sort([Ljava/lang/Object;Ljava/util/Comparator;)V": maySuspend((a: unknown[], cmp: unknown) => sortInPlace(a, cmp)),
     "static sort([Ljava/lang/Object;IILjava/util/Comparator;)V": maySuspend((a: unknown[], from: number, to: number, cmp: unknown) => sortInPlace(a, cmp, from, to)),
-    "static fill([II)V": (a: Int32Array, v: number) => a.fill(v),
-    "static fill([BB)V": (a: Int8Array, v: number) => a.fill(v),
-    "static fill([ZZ)V": (a: Uint8Array, v: number) => a.fill(v),
-    "static fill([CC)V": (a: Uint16Array, v: number) => a.fill(v),
-    "static fill([FF)V": (a: Float32Array, v: number) => a.fill(v),
-    "static fill([DD)V": (a: Float64Array, v: number) => a.fill(v),
-    "static fill([JJ)V": (a: BigInt64Array, v: bigint) => a.fill(v),
-    "static fill([Ljava/lang/Object;Ljava/lang/Object;)V": (a: unknown[], v: unknown) => a.fill(v),
-    "static fill([IIII)V": (a: Int32Array, f: number, t: number, v: number) => a.fill(v, f, t),
-    "static fill([BIIB)V": (a: Int8Array, f: number, t: number, v: number) => a.fill(v, f, t),
-    "static fill([JIIJ)V": (a: BigInt64Array, f: number, t: number, v: bigint) => a.fill(v, f, t),
-    "static fill([FIIF)V": (a: Float32Array, f: number, t: number, v: number) => a.fill(v, f, t),
-    "static fill([DIID)V": (a: Float64Array, f: number, t: number, v: number) => a.fill(v, f, t),
-    "static fill([CIIC)V": (a: Uint16Array, f: number, t: number, v: number) => a.fill(v, f, t),
-    "static fill([ZIIZ)V": (a: Uint8Array, f: number, t: number, v: number) => a.fill(v, f, t),
-    "static fill([SIIS)V": (a: Int16Array, f: number, t: number, v: number) => a.fill(v, f, t),
-    "static fill([SS)V": (a: Int16Array, v: number) => a.fill(v),
-    "static fill([Ljava/lang/Object;IILjava/lang/Object;)V": (a: unknown[], f: number, t: number, v: unknown) => a.fill(v, f, t),
-    "static copyOf([II)[I": taCopyOf,
-    "static copyOf([BI)[B": taCopyOf,
-    "static copyOf([CI)[C": taCopyOf,
-    "static copyOf([JI)[J": taCopyOf,
-    "static copyOf([FI)[F": taCopyOf,
-    "static copyOf([DI)[D": taCopyOf,
+    ...Object.fromEntries([..."ZBCSIJFD"].flatMap((t) => [[`static fill([${t}${t})V`, fill], [`static fill([${t}II${t})V`, fillRange],
+      [`static copyOf([${t}I)[${t}`, taCopyOf]])),
+    "static fill([Ljava/lang/Object;Ljava/lang/Object;)V": fill,
+    "static fill([Ljava/lang/Object;IILjava/lang/Object;)V": fillRange,
     "static copyOf([Ljava/lang/Object;I)[Ljava/lang/Object;": (a: unknown[], n: number) => objCopyOf(a, n, elemOf(a)),
     "static copyOf([Ljava/lang/Object;ILjava/lang/Class;)[Ljava/lang/Object;": (a: unknown[], n: number, cls: { arrDesc?: string }) =>
       objCopyOf(a, n, cls?.arrDesc?.slice(1) ?? elemOf(a)),
-    "static copyOf([ZI)[Z": taCopyOf,
-    "static copyOf([SI)[S": taCopyOf,
     ...Object.fromEntries(["B", "I", "C", "J", "F", "D", "S", "Z"].map((t) => [`static copyOfRange([${t}II)[${t}`, taCopyOfRange])),
     "static copyOfRange([Ljava/lang/Object;II)[Ljava/lang/Object;": (a: unknown[], s: number, e: number) => objCopyOfRange(a, s, e, elemOf(a)),
     "static copyOfRange([Ljava/lang/Object;IILjava/lang/Class;)[Ljava/lang/Object;": (a: unknown[], s: number, e: number, cls: { arrDesc?: string }) =>
       objCopyOfRange(a, s, e, cls?.arrDesc?.slice(1) ?? elemOf(a)),
     ...Object.fromEntries(["B", "I", "C", "J", "F", "D", "S", "Z"].map((t) => [`static equals([${t}[${t})Z`, taEq])),
-    "static hashCode([B)I": taHash,
-    "static hashCode([C)I": taHash,
-    "static hashCode([S)I": taHash,
-    "static hashCode([Z)I": taHash,
+    ...Object.fromEntries([..."BCSZI"].map((t) => [`static hashCode([${t})I`, taHash])),
     "static hashCode([F)I": (a: Float32Array | null) => {
       if (!a) return 0;
       const f = new Float32Array(1), i = new Int32Array(f.buffer);
@@ -1911,8 +1859,6 @@ rt.register({
     "static toString([F)Ljava/lang/String;": (a: Float32Array) => (a ? "[" + Array.from(a, fmtDouble).join(", ") + "]" : "null"),
     "static toString([J)Ljava/lang/String;": (a: BigInt64Array) => (a ? "[" + Array.from(a).join(", ") + "]" : "null"),
     "static toString([Z)Ljava/lang/String;": (a: Uint8Array) => (a ? "[" + Array.from(a, (v) => (v ? "true" : "false")).join(", ") + "]" : "null"),
-    "static sort([C)V": taSort,
-    "static sort([S)V": taSort,
     "static deepHashCode([Ljava/lang/Object;)I": maySuspend((a: unknown[] | null) => (a ? hashSeq(a) : 0)),
     "static equals([Ljava/lang/Object;[Ljava/lang/Object;)Z": async (a: unknown[], b: unknown[]) => {
       if (a === b) return 1;
@@ -1924,12 +1870,6 @@ rt.register({
       return 1;
     },
     "static hashCode([Ljava/lang/Object;)I": maySuspend((a: unknown[] | null) => (a ? hashSeq(a) : 0)),
-    "static hashCode([I)I": (a: Int32Array) => {
-      if (!a) return 0;
-      let h = 1;
-      for (const e of a) h = (Math.imul(h, 31) + e) | 0;
-      return h;
-    },
     "static toString([I)Ljava/lang/String;": (a: Int32Array) => (a ? "[" + a.join(", ") + "]" : "null"),
     // each element through ITS OWN toString: a boxed Character prints its character, and a
     // library that builds a character class out of a key set depends on it
@@ -2001,6 +1941,13 @@ function objCopyOf(a: unknown[], n: number, elem?: string): unknown[] {
 }
 
 class JCollections extends JObj {}
+const extreme = (sign: number) => async (c: unknown, cmp: unknown = null) => {
+  const a = await toJsArray(c);
+  let best = a[0];
+  for (let i = 1; i < a.length; i++) if ((await jcmp(cmp, a[i], best)) * sign > 0) best = a[i];
+  return best;
+};
+const collMax = extreme(1), collMin = extreme(-1);
 const emptyList = new JList();
 rt.register({
   name: "java/util/Collections", ctor: JCollections,
@@ -2053,30 +2000,10 @@ rt.register({
     "static nCopies(ILjava/lang/Object;)Ljava/util/List;": (n: number, v: unknown) => {
       const l = new JList(); l.a = new Array(n).fill(v); return l;
     },
-    "static max(Ljava/util/Collection;)Ljava/lang/Object;": async (c: unknown) => {
-      const a = await toJsArray(c);
-      let best = a[0];
-      for (let i = 1; i < a.length; i++) if ((await jcmp(null, a[i], best)) > 0) best = a[i];
-      return best;
-    },
-    "static min(Ljava/util/Collection;)Ljava/lang/Object;": async (c: unknown) => {
-      const a = await toJsArray(c);
-      let best = a[0];
-      for (let i = 1; i < a.length; i++) if ((await jcmp(null, a[i], best)) < 0) best = a[i];
-      return best;
-    },
-    "static max(Ljava/util/Collection;Ljava/util/Comparator;)Ljava/lang/Object;": async (c: unknown, cmp: unknown) => {
-      const a = await toJsArray(c);
-      let best = a[0];
-      for (let i = 1; i < a.length; i++) if ((await jcmp(cmp, a[i], best)) > 0) best = a[i];
-      return best;
-    },
-    "static min(Ljava/util/Collection;Ljava/util/Comparator;)Ljava/lang/Object;": async (c: unknown, cmp: unknown) => {
-      const a = await toJsArray(c);
-      let best = a[0];
-      for (let i = 1; i < a.length; i++) if ((await jcmp(cmp, a[i], best)) < 0) best = a[i];
-      return best;
-    },
+    "static max(Ljava/util/Collection;)Ljava/lang/Object;": collMax,
+    "static min(Ljava/util/Collection;)Ljava/lang/Object;": collMin,
+    "static max(Ljava/util/Collection;Ljava/util/Comparator;)Ljava/lang/Object;": collMax,
+    "static min(Ljava/util/Collection;Ljava/util/Comparator;)Ljava/lang/Object;": collMin,
   },
 });
 
