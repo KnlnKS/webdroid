@@ -717,10 +717,17 @@ after terms. Protected response capture recovered `egQ4Re` HTTP 200 with `[[null
 and `ihzRS` HTTP 200 with a null payload and error field `[13]`. The cached public script
 names the latter `/CredentialDataService.GetCredential`. The genuine bridge reached
 notifyOnTermsOfServiceAccepted but not addAccount, and no page exceptions were observed.
-The error code does not identify why Google rejected credential retrieval. A retry
-with corrected ports is awaiting phone verification; sanitized request host/path and
-Origin/Referer origins are captured to test the transport hypothesis. No Google-specific
-production transformation or fabricated credential was added.
+The error code does not identify why Google rejected credential retrieval. The retry
+with corrected ports passed another user-approved phone challenge and failed identically.
+Sanitized request capture shows hostname `127.0.0.1`, path
+`/v3/signin/speedbump/embeddedsigninconsent`, and correct Origin/Referer origins
+`https://accounts.google.com`. In the cached public script, navigation Ul() reads
+window.location.href; Kzb() serializes the parsed hostname/path into eL()'s credential
+request. The renderer hostname therefore still enters the payload even though the
+worker sends correct headers. This is a proven location-semantics gap, not yet proof
+that changing it resolves error 13. Further MFA needs a general location solution and
+a controlled comparison; a Google-specific request rewrite would hide the platform
+bug. No production payload transformation or fabricated credential was added.
 
 Evidence: `/tmp/webdroid-webhistory-{tests,port-before,typecheck,units}.log` and the
 protected test-config `resume-network/` response captures. Credentials and raw request

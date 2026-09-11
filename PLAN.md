@@ -140,11 +140,16 @@ user's phone verification. Consent again failed: `egQ4Re` returned `[[null,true]
 then `ihzRS` returned a null result with error field `[13]`. No account was added.
 These bodies were captured before navigation under protected `resume-network/` storage;
 there were no page errors. This does not establish the cause of Google's rejection.
-A controlled retry with the port correction is now awaiting fresh phone verification
-in Chrome at `http://localhost:41979/?apk=GmsClient.apk`. The instrumented server also
-records sanitized credential-request hostname/path and Origin/Referer origin fields;
-it does not record request credentials. Do not start another attempt while this one
-awaits the user. Encoding processes remain active under a replacement parent; inspect
+The port-corrected retry also passed password/phone verification and failed with the
+same credential error. Its sanitized request shows hostname `127.0.0.1` and path
+`/v3/signin/speedbump/embeddedsigninconsent`, while Origin and Referer origin correctly
+equal `https://accounts.google.com`. Cached public code reads window.location.href
+through its navigation service and serializes the hostname into GetCredential. This
+proves another renderer-origin leak; its causal role in Google's error still needs a
+controlled comparison. Do not rewrite this Google-specific payload or fabricate a
+credential. Investigate general upstream location semantics before another MFA attempt.
+The Chrome tab remains open at `http://localhost:41979/?apk=GmsClient.apk`.
+Encoding processes remain active under a replacement parent; inspect
 current process state rather than relying on the earlier PID for quiet measurements.
 
 Servers: current checkout 41977, original baseline 41978, instrumented login 41979,
