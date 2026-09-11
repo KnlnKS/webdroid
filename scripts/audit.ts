@@ -2,16 +2,9 @@
 //
 //   bun run audit <apk> [--framework] [--all] [--limit N] [--json out.json]
 //
-// The old audit walked method_ids — every framework method the constant pool mentions,
-// reachable or not, with no answer at all for interface dispatch. This walks the program:
-// manifest components and services files are the roots, rapid type analysis resolves the
-// virtual and interface sites against the types some reachable new-instance creates, and
-// what comes out is the work queue, ranked, with fields included.
-//
-// With --framework the real AOSP dex joins the program, and the question changes from
-// "which android.* method have we not written" to "which native method would we have to
-// implement if this class ran as AOSP's own bytecode" — a set the platform build fixes,
-// not one the next apk grows.
+// Manifest components and services files are the roots; rapid type analysis resolves virtual
+// and interface sites. With --framework the AOSP dex joins the program and the report becomes
+// the native methods this apk would need if those classes ran as AOSP bytecode.
 import { openApk, openDexes, dexesOf } from "./lib";
 import { argv } from "./args";
 import { Program, reach } from "../src/jvm/reach";

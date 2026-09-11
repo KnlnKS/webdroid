@@ -2,14 +2,8 @@
 //
 //   bun run fwtest [prefix ...]      # default: the graphics and resource cuts
 //
-// The point is that a delegate is written because a real framework method asked for it, not
-// because a list said so. Provenance withholds our native spec for the named prefixes, the
-// real classes load from vendor/aosp/framework.jar, and whatever they reach that we do not
-// answer for comes back as a ranked list.
-//
-// It reports two numbers per class: how many of the natives the dex declares we implement,
-// and how many of those the exercise below actually reached. The first is coverage, the
-// second is evidence.
+// Provenance withholds our native spec for the named prefixes, the real classes load from
+// vendor/aosp/framework.jar, and what they reach that we do not answer for is reported.
 import { existsSync } from "node:fs";
 import { BYTECODE } from "../src/jvm/provenance";
 

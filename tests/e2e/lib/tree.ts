@@ -1,7 +1,4 @@
 // Structural diff of two view hierarchies: what the device laid out against what webdroid did.
-//
-// A pixel percentage says a screen is wrong. This says which view is wrong and by how many px,
-// which is the difference between "harmonic's settings are off" and "every row sits 14px high".
 
 import type { UiNode } from "../types";
 

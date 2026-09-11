@@ -1,12 +1,6 @@
-// Does AOSP's own StaticLayout break lines where ours does? Two loads of the SAME bundle, one with android/text/{Layout,StaticLayout} and
-// android/graphics/text/ served by vendor/aosp/framework.jar and one without, over the same
-// paragraphs through the same StaticLayout.Builder call. They should agree on the greedy
-// strategy, because both break through text.ts's greedyBreaks — AOSP's Layout and StaticLayout
-// declare zero natives, so what the cut swaps is thousands of lines of real line-breaking Java
-// sitting on the MeasuredText/LineBreaker delegates.
-//
-// Text measurement needs a Canvas2D context, so this cannot be `bun run fwtest`: it has to be
-// a page. The page must be a REAL one — the MCP browser is throttled (see AGENTS.md).
+// Does AOSP's own StaticLayout break lines where ours does? The same bundle loads twice, once
+// with android/text/{Layout,StaticLayout} and android/graphics/text/ served by AOSP bytecode,
+// and both break the same paragraphs. Text measurement needs Canvas2D, so this runs in a page.
 import { BASE_URL } from "../tests/e2e/lib/util";
 import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
 import { need } from "./args";

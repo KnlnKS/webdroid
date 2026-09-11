@@ -1,25 +1,10 @@
-// Boot every apk in the tree and rank what stopped it.
-//
-//   bun run dev            # required
-//   bun run corpus [apk ...] [--json out.json] [--wait ms]
-//
-// The scored flows say how close a handful of apps look to a real device. They cannot say
-// anything about an apk nobody has written a flow for, which is most of them. This boots each
-// one headlessly, records what it asked for and did not get, and ranks the gaps by how many
-// apks they block — so the queue is ordered by expected value across the corpus rather than
-// by whichever app was opened last.
-//
-// Breadth gated on depth: a gap here is a candidate, not a task. It earns work when it also
-// shows up in a scored flow.
+// Boot every apk in the tree headlessly and rank the gaps by how many apks they block.
+//   bun run corpus [apk ...] [--json out.json] [--wait ms]      (needs `bun run dev`)
 import { type Page } from "playwright";
 import { readdirSync } from "node:fs";
 import { argv } from "./args";
 import { BASE_URL } from "../tests/e2e/lib/util";
 import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
-
-// the e2e driver's convention: a server left running in another worktree answers on 4080 and a
-// run then measures code you did not write (see "Harness notes" in the implementation history)
-
 
 const args = process.argv.slice(2);
 const { opt, positional } = argv(args, ["--json", "--wait"]);

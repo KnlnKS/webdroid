@@ -31,13 +31,8 @@ type DiffResult = {
   strictPct: number;
   /** pixelmatch with threshold 0.1 — forgives antialiasing and sub-1% colour drift, 0..100. */
   tolerantPct: number;
-  /**
-   * Tolerant mismatch measured over the union of the two images' CONTENT pixels (anything
-   * differing from that image's own background). Whole-frame percentages flatter a renderer
-   * that draws nothing: a blank canvas scores ~3% against Mihon's mostly-white Library. This
-   * one scores it ~100%, because every content pixel the golden has is missing. Use it as the
-   * target metric; the other two are diagnostics.
-   */
+  /** Tolerant mismatch over the union of both images' content (non-background) pixels: the
+   *  target metric, since whole-frame percentages flatter a renderer that draws nothing. */
   contentDiffPct: number;
   /** Content pixels in the golden, and in the actual — a blank render shows up as ~0 here. */
   goldenInk: number;
