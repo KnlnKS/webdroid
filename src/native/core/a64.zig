@@ -640,9 +640,6 @@ pub fn exec(c: *Cpu, o: *const Op, pc: u32) Status {
     return .next;
 }
 
-fn Signed(comptime T: type) type {
-    return std.meta.Int(.signed, @bitSizeOf(T));
-}
 fn addsub(comptime T: type, c: *Cpu, o: *const Op) void {
     const base: T = @truncate(if (o.b == 1) zr(c, o.rn) else c.x[o.rn]);
     const t: T = @truncate(operand2(c, o));
@@ -676,15 +673,15 @@ fn one(comptime T: type, c: *Cpu, o: *const Op) void {
         2 => if (T == u64) @bitCast(@byteSwap(@as(@Vector(2, u32), @bitCast(x)))) else @byteSwap(x),
         3 => @byteSwap(x),
         4 => @clz(x),
-        else => @clz(x ^ @as(T, @bitCast(@as(Signed(T), @bitCast(x)) >> (@bitSizeOf(T) - 1)))) - 1,
+        else => @clz(x ^ @as(T, @bitCast(@as(bt.Signed(T), @bitCast(x)) >> (@bitSizeOf(T) - 1)))) - 1,
     };
     setX(c, o.rd, v);
 }
 fn two(comptime T: type, c: *Cpu, o: *const Op) void {
     const a: T = @truncate(zr(c, o.rn));
     const m: T = @truncate(zr(c, o.rm));
-    const as: Signed(T) = @bitCast(a);
-    const ms: Signed(T) = @bitCast(m);
+    const as: bt.Signed(T) = @bitCast(a);
+    const ms: bt.Signed(T) = @bitCast(m);
     const v: T = switch (o.a & 63) {
         2 => if (m == 0) 0 else a / m,
         3 => if (m == 0) 0 else if (ms == -1) 0 -% a else @bitCast(@divTrunc(as, ms)),

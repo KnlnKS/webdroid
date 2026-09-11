@@ -1,3 +1,4 @@
+const std = @import("std");
 pub inline fn is(w: u32, mask: u32, val: u32) bool {
     return (w & mask) == val;
 }
@@ -27,4 +28,13 @@ pub inline fn extend(m: u64, option: u32) u64 {
         6 => sxw(m),
         else => m,
     };
+}
+pub fn Unsigned(comptime T: type) type {
+    return std.meta.Int(.unsigned, @bitSizeOf(T));
+}
+pub fn Signed(comptime T: type) type {
+    return std.meta.Int(.signed, @bitSizeOf(T));
+}
+pub fn Wide(comptime T: type) type {
+    return std.meta.Int(@typeInfo(T).int.signedness, @bitSizeOf(T) * 2);
 }

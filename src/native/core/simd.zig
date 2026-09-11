@@ -35,15 +35,9 @@ inline fn fault(c: *Cpu, w: u32) Status {
 inline fn badAddr(c: *Cpu, w: u32) Status {
     return cpu.raise(c, .bad_address, w);
 }
-fn Unsigned(comptime T: type) type {
-    return std.meta.Int(.unsigned, @bitSizeOf(T));
-}
-fn Signed(comptime T: type) type {
-    return std.meta.Int(.signed, @bitSizeOf(T));
-}
-fn Wide(comptime T: type) type {
-    return std.meta.Int(@typeInfo(T).int.signedness, @bitSizeOf(T) * 2);
-}
+const Unsigned = bt.Unsigned;
+const Signed = bt.Signed;
+const Wide = bt.Wide;
 fn sat(comptime T: type, c: *Cpu, v: anytype) T {
     if (v > std.math.maxInt(T)) {
         c.setQ();
@@ -55,9 +49,7 @@ fn sat(comptime T: type, c: *Cpu, v: anytype) T {
     }
     return @intCast(v);
 }
-inline fn cond(c: *Cpu, cc: u8) bool {
-    return a64.cond(c, cc);
-}
+const cond = a64.cond;
 
 pub fn vfpImm(imm8: u32, dp: bool) u64 {
     const sign = imm8 >> 7;
@@ -514,7 +506,7 @@ fn threeSameF(comptime F: type, x: Ctx) Status {
     const count = laneCount(x, F);
     var out: V align(16) = old(c, x.rd);
     const O = L(F, &out);
-    const U = std.meta.Int(.unsigned, @bitSizeOf(F));
+    const U = Unsigned(F);
     const OU = L(U, &out);
     for (0..count) |i| {
         const n = get(F, c, x.rn, i);
@@ -640,8 +632,8 @@ fn twoMiscF(comptime F: type, x: Ctx) Status {
     const c = x.c;
     const opcode = bits(x.w, 12, 5);
     const count = laneCount(x, F);
-    const U = std.meta.Int(.unsigned, @bitSizeOf(F));
-    const I = std.meta.Int(.signed, @bitSizeOf(F));
+    const U = Unsigned(F);
+    const I = Signed(F);
     var out: V align(16) = old(c, x.rd);
     const O = L(F, &out);
     const OU = L(U, &out);
@@ -1135,7 +1127,7 @@ fn fpT(comptime F: type, c: *Cpu, w: u32) Status {
     const rm: u8 = @intCast(bits(w, 16, 5));
     const sf = w >> 31 != 0;
     const dp = F == f64;
-    const U = std.meta.Int(.unsigned, @bitSizeOf(F));
+    const U = Unsigned(F);
     const n = get(F, c, rn, 0);
     const m = get(F, c, rm, 0);
     if (is(w, 0x5f20fc00, 0x1e200000)) {
