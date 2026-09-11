@@ -603,18 +603,10 @@ rt.register({
     "setLayerInset(IIIII)V": function (this: JLayerDrawable, i: number, l: number, t: number, r: number, b: number) {
       if (this.layers[i]) this.layers[i].insets = [l, t, r, b];
     },
-    "setLayerInsetLeft(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[0] = v; },
-    "setLayerInsetTop(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[1] = v; },
-    "setLayerInsetRight(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[2] = v; },
-    "setLayerInsetBottom(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[3] = v; },
-    "setLayerInsetStart(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[0] = v; },
-    "setLayerInsetEnd(II)V": function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[2] = v; },
-    "getLayerInsetLeft(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[0] ?? 0; },
-    "getLayerInsetTop(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[1] ?? 0; },
-    "getLayerInsetRight(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[2] ?? 0; },
-    "getLayerInsetBottom(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[3] ?? 0; },
-    "getLayerInsetStart(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[0] ?? 0; },
-    "getLayerInsetEnd(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[2] ?? 0; },
+    ...Object.fromEntries(([["Left", 0], ["Top", 1], ["Right", 2], ["Bottom", 3], ["Start", 0], ["End", 2]] as const).flatMap(([n, k]) => [
+      [`setLayerInset${n}(II)V`, function (this: JLayerDrawable, i: number, v: number) { if (this.layers[i]) this.layers[i].insets[k] = v; }],
+      [`getLayerInset${n}(I)I`, function (this: JLayerDrawable, i: number) { return this.layers[i]?.insets[k] ?? 0; }],
+    ])),
     "setLayerSize(III)V": function (this: JLayerDrawable, i: number, w: number, h: number) { if (this.layers[i]) { this.layers[i].w = w; this.layers[i].h = h; } },
     "setLayerWidth(II)V": function (this: JLayerDrawable, i: number, w: number) { if (this.layers[i]) this.layers[i].w = w; },
     "setLayerHeight(II)V": function (this: JLayerDrawable, i: number, h: number) { if (this.layers[i]) this.layers[i].h = h; },

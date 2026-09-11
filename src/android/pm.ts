@@ -487,10 +487,14 @@ function receiverInfo(name: string, node: XmlNode, flags: number, owner = curren
   return info;
 }
 
+const nameNotFound = (what: string): unknown => rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", what);
+function lookupComponent(c: JComponentName, kind: ComponentKind, flags: number): [string, XmlNode, PackageRecord] {
+  const name = qualifyComponent(c.cls, c.pkg), owner = packages.get(c.pkg), node = owner?.components[kind].get(name);
+  if (!owner || !node || !visibleComponent(name, node, flags, owner)) throw nameNotFound(c.pkg + "/" + name);
+  return [name, node, owner];
+}
 function getServiceInfo(component: JComponentName, flags: number): JServiceInfo {
-  const name = qualifyComponent(component.cls, component.pkg), owner = packages.get(component.pkg);
-  const node = owner?.components.service.get(name);
-  if (!owner || !node || !visibleComponent(name, node, flags, owner)) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", component.pkg + "/" + name);
+  const [name, node, owner] = lookupComponent(component, "service", flags);
   return serviceInfo(name, node, flags, owner);
 }
 function queryComponents(intent: JIntent | null, flags: number, kind: Exclude<ComponentKind, "provider"> = "service"): JList {
@@ -552,8 +556,7 @@ rt.register({
     FEATURE_VR_MODE: "android.software.vr.mode", FEATURE_TELEPHONY: "android.hardware.telephony", FEATURE_LEANBACK: "android.software.leanback" },
   methods: {
     "getProviderInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ProviderInfo;": (comp: JComponentName, flags: number) => {
-      const cls = qualifyComponent(comp.cls, comp.pkg), owner = packages.get(comp.pkg), node = owner?.components.provider.get(cls);
-      if (!owner || !node || !visibleComponent(cls, node, flags, owner)) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", comp.pkg + "/" + cls);
+      const [cls, node, owner] = lookupComponent(comp, "provider", flags);
       return providerInfo(cls, comp.pkg, authoritiesOf(node).join(";"), node, flags, owner);
     },
     "getResourcesForApplication(Ljava/lang/String;)Landroid/content/res/Resources;": async function (pkg: string) {
@@ -562,7 +565,7 @@ rt.register({
     },
     "getResourcesForApplication(Landroid/content/pm/ApplicationInfo;)Landroid/content/res/Resources;": async (info: JApplicationInfo) => {
       const res = info.archiveResources ?? (info.packageName === appHost?.pkg ? appHost.res : (await installedPackage(info.packageName))?.archive.res);
-      if (!res) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", info.packageName);
+      if (!res) throw nameNotFound(info.packageName);
       return res.jobj ?? mkJResources(res, false);
     },
     "getXml(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/content/res/XmlResourceParser;": async (pkg: string, id: number, info: JApplicationInfo | null) => {
@@ -572,9 +575,7 @@ rt.register({
       catch (error) { if (error instanceof rt.link("android/content/res/Resources$NotFoundException").ctor) return null; throw error; }
     },
     "getReceiverInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;": (component: JComponentName, flags: number) => {
-      const name = qualifyComponent(component.cls, component.pkg), owner = packages.get(component.pkg), node = owner?.components.receiver.get(name);
-      if (!owner || !node || !visibleComponent(name, node, flags, owner))
-        throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", component.pkg + "/" + name);
+      const [name, node, owner] = lookupComponent(component, "receiver", flags);
       return receiverInfo(name, node, flags, owner);
     },
     "getServiceInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ServiceInfo;": getServiceInfo,
@@ -588,7 +589,7 @@ rt.register({
       if (record && (record !== currentPackage || record.system)) return recordInfo(record, flags);
       const installed = await installedPackage(pkg);
       if (installed) return archiveInfo(installed.archive, installed.path, flags);
-      if (appHost && pkg !== appHost.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
+      if (appHost && pkg !== appHost.pkg) throw nameNotFound(pkg);
       const pi = new JPackageInfo();
       pi.packageName = pkg;
       // the manifest's own version, not an invented one
@@ -624,7 +625,7 @@ rt.register({
       if (record && (record !== currentPackage || record.system)) return recordAppInfo(record, flags);
       const installed = await installedPackage(pkg);
       if (installed) return archiveInfo(installed.archive, installed.path, flags).applicationInfo;
-      if (appHost && pkg !== appHost.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
+      if (appHost && pkg !== appHost.pkg) throw nameNotFound(pkg);
       return appHost ? getAppInfo(appHost) : new JApplicationInfo();
     },
     "getApplicationLabel(Landroid/content/pm/ApplicationInfo;)Ljava/lang/CharSequence;": applicationLabel,
@@ -668,7 +669,7 @@ rt.register({
         info.metaData = flags & 128 ? metaData(node, owner.res) : null;
         return info;
       }
-      throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", name);
+      throw nameNotFound(name);
     },
     "checkPermission(Ljava/lang/String;Ljava/lang/String;)I": async (permission: string, pkg: string) => {
       const record = packages.get(pkg);
@@ -684,7 +685,7 @@ rt.register({
       return -1;
     },
     "getInstallSourceInfo(Ljava/lang/String;)Landroid/content/pm/InstallSourceInfo;": (pkg: string) => {
-      if (!appHost || pkg !== appHost.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
+      if (!appHost || pkg !== appHost.pkg) throw nameNotFound(pkg);
       return new JInstallSourceInfo();
     },
     "getPackageInstaller()Landroid/content/pm/PackageInstaller;": getPackageInstaller,
@@ -698,7 +699,7 @@ rt.register({
     },
     "getPackageUid(Ljava/lang/String;I)I": (pkg: string) => {
       const record = packages.get(pkg);
-      if (!record) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
+      if (!record) throw nameNotFound(pkg);
       return record.uid;
     },
     "checkSignatures(Ljava/lang/String;Ljava/lang/String;)I": async (a: string, b: string) => {
@@ -864,23 +865,11 @@ function archiveInfo(archive: PackageArchive, path: string, flags: number): JPac
   const { root, pkg, res, certificates } = archive;
   const app = root.children.find((c) => c.name === "application");
   rt.link("android/content/pm/PackageInfo"); rt.link("android/content/pm/ApplicationInfo");
-  const info = new JPackageInfo(), ai = new JApplicationInfo();
-  info.packageName = ai.packageName = pkg;
-  info.versionCode = attr(root, "versionCode")?.data ?? 0;
-  info.longVersionCode = BigInt(info.versionCode >>> 0) | BigInt(attr(root, "versionCodeMajor")?.data ?? 0) << 32n;
-  const version = attr(root, "versionName");
-  info.versionName = version?.type === TV.REFERENCE ? resString(res, version.data) : version?.str ?? "";
-  ai.sourceDir = ai.publicSourceDir = path; ai.dataDir = `/data/data/${pkg}`;
-  ai.archiveResources = res; ai.processName = pkg;
-  const label = app && attr(app, "label");
-  ai.labelRes = label?.type === TV.REFERENCE ? label.data : 0;
-  ai.nonLocalizedLabel = label?.str ?? null;
-  ai.icon = app && attr(app, "icon")?.data || 0;
+  const info = new JPackageInfo(), ai = appInfoFrom(new JApplicationInfo(), pkg, path, res, root, app, flags);
+  info.packageName = pkg;
+  setVersion(info, root, res);
+  ai.processName = pkg;
   ai.className = app && attrStr(app, "name") || null;
-  const sdk = root.children.find((c) => c.name === "uses-sdk");
-  ai.minSdkVersion = sdk && attr(sdk, "minSdkVersion")?.data || 1;
-  ai.targetSdkVersion = sdk && attr(sdk, "targetSdkVersion")?.data || ai.minSdkVersion;
-  if (flags & 128) ai.metaData = metaData(app, res);
   info.applicationInfo = ai; info.reqFeatures = reqFeatures(root);
   if (flags & 0x1000) info.requestedPermissions = requestedPermissions(root);
   if (flags & 64) info.signatures = signatures(certificates);
@@ -897,33 +886,38 @@ export function registerPackage(archive: PackageArchive, path = installedPath(ar
   }
   return record;
 }
-function recordAppInfo(record: PackageRecord, flags = 0): JApplicationInfo {
-  const root = record.root, app = record.application, res = record.res;
-  const ai = new JApplicationInfo();
-  ai.packageName = record.pkg; ai.uid = record.uid;
-  ai.sourceDir = ai.publicSourceDir = record.path; ai.dataDir = `/data/data/${record.pkg}`;
-  ai.archiveResources = res; ai.processName = app ? record.process(app) : record.pkg;
-  ai.enabled = record.enabled ? 1 : 0; ai.flags = record.system ? 1 : 0;
+function appInfoFrom(ai: JApplicationInfo, pkg: string, path: string, res: Resources, root: XmlNode, app: XmlNode | null | undefined, flags: number) {
+  ai.packageName = pkg; ai.sourceDir = ai.publicSourceDir = path; ai.dataDir = `/data/data/${pkg}`; ai.archiveResources = res;
   const label = app && attr(app, "label");
   ai.labelRes = label?.type === TV.REFERENCE ? label.data : 0;
   ai.nonLocalizedLabel = label?.str ?? null;
   ai.icon = app && attr(app, "icon")?.data || 0;
-  ai.theme = app && attr(app, "theme")?.data || 0;
-  const cls = app && attrStr(app, "name");
-  ai.className = cls ? qualifyComponent(cls, record.pkg) : null;
   const sdk = root.children.find((c) => c.name === "uses-sdk");
   ai.minSdkVersion = sdk && attr(sdk, "minSdkVersion")?.data || 1;
   ai.targetSdkVersion = sdk && attr(sdk, "targetSdkVersion")?.data || ai.minSdkVersion;
   if (flags & 128) ai.metaData = metaData(app, res);
   return ai;
 }
+function setVersion(info: JPackageInfo, root: XmlNode, res: Resources) {
+  info.versionCode = attr(root, "versionCode")?.data ?? 0;
+  info.longVersionCode = BigInt(info.versionCode >>> 0) | BigInt(attr(root, "versionCodeMajor")?.data ?? 0) << 32n;
+  const version = attr(root, "versionName");
+  info.versionName = version?.type === TV.REFERENCE ? resString(res, version.data) : version?.str ?? "";
+}
+function recordAppInfo(record: PackageRecord, flags = 0): JApplicationInfo {
+  const app = record.application;
+  const ai = appInfoFrom(new JApplicationInfo(), record.pkg, record.path, record.res, record.root, app, flags);
+  ai.uid = record.uid; ai.processName = app ? record.process(app) : record.pkg;
+  ai.enabled = record.enabled ? 1 : 0; ai.flags = record.system ? 1 : 0;
+  ai.theme = app && attr(app, "theme")?.data || 0;
+  const cls = app && attrStr(app, "name");
+  ai.className = cls ? qualifyComponent(cls, record.pkg) : null;
+  return ai;
+}
 async function recordInfo(record: PackageRecord, flags: number): Promise<JPackageInfo> {
   const pi = new JPackageInfo(), root = record.root;
   pi.packageName = record.pkg;
-  pi.versionCode = attr(root, "versionCode")?.data ?? 0;
-  pi.longVersionCode = BigInt(pi.versionCode >>> 0) | BigInt(attr(root, "versionCodeMajor")?.data ?? 0) << 32n;
-  const version = attr(root, "versionName");
-  pi.versionName = version?.type === TV.REFERENCE ? resString(record.res, version.data) : version?.str ?? "";
+  setVersion(pi, root, record.res);
   pi.applicationInfo = recordAppInfo(record, flags);
   pi.firstInstallTime = pi.lastUpdateTime = installTime(record.pkg);
   if (flags & 64) pi.signatures = signatures(await record.visibleCertificates());
