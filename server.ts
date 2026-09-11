@@ -126,7 +126,7 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
       if (ext === "html") return new Response(inHead(new TextDecoder().decode(bytes), WEB_INJECT), { headers: { "content-type": type } });
       return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { "content-type": type } });
     },
-    "/sqljs/:file": (req) => serveFile("node_modules/sql.js/dist", req.params.file),
+    "/sqljs/:file": (req) => serveFile("vendor/sql.js/dist", req.params.file),
     // the android: resource package (bun run gen-framework-res) and, under vendor/aosp, the
     // device's own framework.jar + framework-res.apk (bun run gen-framework). Both only change
     // when the device profile does, so let the browser keep them across reloads.

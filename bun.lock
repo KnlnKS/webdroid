@@ -6,7 +6,7 @@
       "dependencies": {
         "fflate": "^0.8.2",
         "node-forge": "^1.4.0",
-        "sql.js": "file:vendor/sql.js",
+        "sql.js": "workspace:*",
         "tough-cookie": "^6.0.2",
       },
       "devDependencies": {
@@ -19,6 +19,10 @@
         "pngjs": "^7.0.0",
         "typescript": "^5.9.2",
       },
+    },
+    "vendor/sql.js": {
+      "name": "sql.js",
+      "version": "1.14.2-webdroid.1",
     },
   },
   "packages": {
@@ -50,7 +54,7 @@
 
     "pngjs": ["pngjs@7.0.0", "", {}, "sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow=="],
 
-    "sql.js": ["sql.js@file:vendor/sql.js", {}],
+    "sql.js": ["sql.js@workspace:vendor/sql.js"],
 
     "tldts": ["tldts@7.4.12", "", { "dependencies": { "tldts-core": "^7.4.12" }, "bin": { "tldts": "bin/cli.js" } }, "sha512-WylhSDKVeYnWXL3a+vKTaOxjnOeEGw938hImY8zoRWJjRRK/Jp1K+IihBzIONpUmW4e3WmXT6q5FW6vlESVZCA=="],
 

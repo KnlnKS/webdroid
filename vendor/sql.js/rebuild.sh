@@ -1,9 +1,21 @@
 #!/bin/sh
+# Build dist/ from the pinned sources. Bun's preload runs this when dist/ is missing, so progress
+# goes to stderr, never into an entry point's stdout.
 set -eu
-emcc --version | head -1 | grep -q '4.0.9' || { echo 'Activate Emscripten 4.0.9 first' >&2; exit 1; }
+exec >&2
+version=4.0.9
+if ! emcc --version 2>/dev/null | head -1 | grep -q "$version"; then
+  # emsdk tags match the Emscripten release they install
+  emsdk=${WEBDROID_EMSDK:-${XDG_CACHE_HOME:-$HOME/.cache}/webdroid/emsdk-$version}
+  [ -x "$emsdk/emsdk" ] || git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$version" https://github.com/emscripten-core/emsdk.git "$emsdk"
+  "$emsdk/emsdk" install "$version"
+  "$emsdk/emsdk" activate "$version" >/dev/null
+  eval "$("$emsdk/emsdk" construct_env 2>/dev/null)"
+fi
 output=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+partial="$output/dist.$$"
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+trap 'rm -rf "$work" "$partial"' EXIT
 git clone --quiet --depth 1 --branch v1.14.2 https://github.com/sql-js/sql.js.git "$work/sql.js"
 cd "$work/sql.js"
 git checkout --quiet 9c4e167ec37129192d166ab9223faa9a4bd07c58
@@ -23,5 +35,9 @@ pathlib.Path('sqlite-src/sqlite-amalgamation-3490100/extension-functions.c').wri
 PY
 mkdir -p dist
 make -o sqlite-src/sqlite-amalgamation-3490100 EMFLAGS_OPTIMIZED='-Oz -flto' dist/sql-wasm.js dist/sql-wasm-browser.js
-cp dist/sql-wasm.js dist/sql-wasm.wasm dist/sql-wasm-browser.js dist/sql-wasm-browser.wasm "$output/dist/"
-chmod 644 "$output"/dist/*.wasm
+# swapped in whole, so the preload only has to recognise a missing dist/
+mkdir "$partial"
+cp dist/sql-wasm.js dist/sql-wasm.wasm dist/sql-wasm-browser.js dist/sql-wasm-browser.wasm "$partial/"
+chmod 644 "$partial"/*.wasm
+rm -rf "$output/dist"
+mv "$partial" "$output/dist"

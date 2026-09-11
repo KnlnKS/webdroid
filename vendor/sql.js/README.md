@@ -11,15 +11,12 @@ Toolchain: Emscripten 4.0.9 (native WebAssembly BigInt), `-Oz -flto`.
 Closure is omitted so rebuilding does not require Java. Both WASM files are
 identical; their names match the upstream entry points.
 
-To rebuild, activate Emscripten 4.0.9 through emsdk, then run:
-
-```sh
-vendor/sql.js/rebuild.sh
-bun install
-bun test src/android/sqlite.test.ts
-```
+The build output in `dist/` is not committed. Bun's preload (`scripts/preload.ts`)
+runs `rebuild.sh` whenever `dist/` is missing, before any entry point imports sql.js.
+The script uses an active Emscripten 4.0.9, or installs that release through emsdk
+pinned to the same tag under `~/.cache/webdroid/` (override with `WEBDROID_EMSDK`).
+To rebuild by hand, run `vendor/sql.js/rebuild.sh`.
 
 The script verifies upstream source checksums and applies `int64.patch`.
-Python 3, Git, Make, and network access are required only for rebuilding.
-Normal development uses the committed artifacts. The package file dependency
-makes Bun imports and the server's `/sqljs/` route use the same build.
+Python 3, Git, Make, and network access are required to build. The workspace
+link makes Bun imports and the server's `/sqljs/` route use the same build.

@@ -2,6 +2,7 @@
   "name": "webdroid",
   "private": true,
   "type": "module",
+  "workspaces": ["vendor/sql.js"],
   "scripts": {
     "dev": "bun run server.ts",
     "typecheck": "bun scripts/build-core.ts && tsc --noEmit -p tsconfig.json",
@@ -33,7 +34,7 @@
   "dependencies": {
     "fflate": "^0.8.2",
     "node-forge": "^1.4.0",
-    "sql.js": "file:vendor/sql.js",
+    "sql.js": "workspace:*",
     "tough-cookie": "^6.0.2"
   },
   "devDependencies": {
