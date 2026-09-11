@@ -1,11 +1,12 @@
 export const WEB_INJECT = `<script>(function(){
-const config = new URL(location.href).searchParams, f = window.frameElement;
-const ua = config.get("__wd_ua") || f?.__wdUserAgent;
+const config = window.__wdWebView, f = window.frameElement;
+delete window.__wdWebView;
+const ua = config?.agent || f?.__wdUserAgent;
 if (ua) {
   Object.defineProperty(navigator, "userAgent", {value: ua});
   Object.defineProperty(navigator, "appVersion", {value: ua.startsWith("Mozilla/") ? ua.slice(8) : ua});
 }
-const id = config.get("__wd_bridge");
+const id = config?.id;
 if (!id) { if (f && f.__wdIfaces) Object.assign(window, f.__wdIfaces); return; }
 function call(body) {
   const xhr = new XMLHttpRequest();
@@ -55,11 +56,14 @@ addEventListener("message", async event => {
   if (!event.isTrusted || event.source !== parent || event.data?.bridge !== id || event.data.kind !== "load" || !event.ports[0]) return;
   try {
     const port = event.ports[0], send = port.postMessage.bind(port), service = navigator.serviceWorker;
+    const context = {id, page: new URL(location.href).searchParams.get("__wd_url"), agent: event.data.userAgent};
     const stop = Event.prototype.stopImmediatePropagation;
     const controller = Object.getOwnPropertyDescriptor(ServiceWorkerContainer.prototype, "controller").get.bind(service);
     service.addEventListener("message", event => {
-      if (!event.isTrusted || event.source !== controller() || event.data?.kind !== "webcookies" || !event.ports[0]) return;
-      stop.call(event); send(event.data, [event.ports[0]]);
+      if (!event.isTrusted || event.source !== controller() || !event.ports[0]) return;
+      if (event.data?.kind === "webcontext") {
+        stop.call(event); event.ports[0].postMessage(context); event.ports[0].close();
+      } else if (event.data?.kind === "webcookies") { stop.call(event); send(event.data, [event.ports[0]]); }
     }, {capture: true});
     await service.register("/webview-worker.js");
     await service.ready;
@@ -69,10 +73,11 @@ addEventListener("message", async event => {
     if (final) {
       const source = new URL(final), local = new URL(location.href);
       local.pathname = source.pathname; local.search = source.search; local.hash = source.hash;
-      local.searchParams.set("__wd_bridge", id); local.searchParams.set("__wd_url", final); local.searchParams.set("__wd_ua", event.data.userAgent);
+      context.page = final;
       history.replaceState(null, "", local);
     }
     const html = event.data.doc ?? await response.text();
+    window.__wdWebView = context;
     document.open(); document.write(html); document.close();
   } catch { parent.postMessage({bridge: id, kind: "loaded", error: "WebView document transport failed"}, "*"); }
 }, {once: true});
@@ -82,25 +87,38 @@ parent.postMessage({bridge: id, kind: "ready"}, "*");
 export const WEB_PROXY_WORKER = `
 self.addEventListener("install", event => event.waitUntil(self.skipWaiting()));
 self.addEventListener("activate", event => event.waitUntil(self.clients.claim()));
-function cookies(client, url, values) {
+const contexts = new Map();
+function message(client, data) {
   return new Promise((resolve, reject) => {
     const channel = new MessageChannel();
     const timer = setTimeout(() => { channel.port1.close(); reject(Error("WebView cookie owner unavailable")); }, 10000);
     channel.port1.onmessage = event => { clearTimeout(timer); channel.port1.close(); resolve(event.data); };
-    client.postMessage({kind: "webcookies", url, values}, [channel.port2]);
+    client.postMessage(data, [channel.port2]);
   });
+}
+async function context(client) {
+  const url = new URL(client.url), config = url.searchParams;
+  if (config.has("__wd_bridge")) return {id: config.get("__wd_bridge"), page: config.get("__wd_url"), agent: config.get("__wd_ua")};
+  if (url.pathname === "/proxy" && config.get("frame") === "1") return {page: config.get("url")};
+  const key = client.id + client.url;
+  let value = contexts.get(key);
+  if (!value) {
+    value = message(client, {kind: "webcontext"}); contexts.set(key, value);
+    if (contexts.size > 64) contexts.delete(contexts.keys().next().value);
+    value.catch(() => contexts.delete(key));
+  }
+  return value;
 }
 self.addEventListener("fetch", event => {
   const request = event.request, original = new URL(request.url);
   const localProxy = original.origin === self.location.origin && original.pathname === "/proxy";
   if (original.origin === self.location.origin && !localProxy) return;
   event.respondWith((async () => {
-    const client = await self.clients.get(event.clientId), url = client && new URL(client.url);
-    if (!url || (!url.searchParams.has("__wd_bridge") && (url.pathname !== "/proxy" || url.searchParams.get("frame") !== "1"))) return fetch(request);
-    const isolated = url.searchParams.has("__wd_bridge");
+    const client = await self.clients.get(event.clientId);
+    if (!client) return fetch(request);
+    const {page, agent, id} = await context(client), isolated = !!id;
     const headers = new Headers();
     request.headers.forEach((value, name) => headers.set(name.startsWith("x-wd-") ? name : "x-wd-" + name, value));
-    const page = url.searchParams.get(isolated ? "__wd_url" : "url"), agent = url.searchParams.get("__wd_ua");
     if (agent) headers.set("x-wd-user-agent", agent);
     let target = localProxy ? original.searchParams.get("url") : request.url;
     if (page && /^https?:/.test(page)) {
@@ -113,13 +131,13 @@ self.addEventListener("fetch", event => {
       const include = isolated && (localProxy || request.credentials === "include" || request.credentials === "same-origin" && page && new URL(page).origin === new URL(target).origin);
       headers.delete("x-wd-cookie");
       if (include) {
-        const value = await cookies(client, target);
+        const value = await message(client, {kind: "webcookies", url: target});
         if (value) headers.set("x-wd-cookie", value); else headers.delete("x-wd-cookie");
       }
       const frame = localProxy && original.searchParams.get("frame") === "1";
       const response = await fetch("/proxy?manual=1&url=" + encodeURIComponent(target) + (frame ? "&frame=1" : ""), { method, headers, body, credentials: "omit" });
       const values = response.headers.get("x-wd-set-cookie");
-      if (include && values) await cookies(client, target, JSON.parse(values));
+      if (include && values) await message(client, {kind: "webcookies", url: target, values: JSON.parse(values)});
       const status = Number(response.headers.get("x-wd-status") || response.status), location = response.headers.get("location");
       if (![301,302,303,307,308].includes(status) || !location) {
         const clean = new Headers(response.headers);
