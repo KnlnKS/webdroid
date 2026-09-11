@@ -24,7 +24,7 @@ import { APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
 import { reportUncaught, JBundle, dispatchVsync, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
 import { packageUid, packages } from "../android/packages";
 import { onMain, inMainJob, mainDbg } from "../android/mainloop";
-import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
+import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
 import { dispatchWindowInsets } from "../android/windowinsets";
 import { JCanvas, cssColor, tfMedium } from "../android/graphics";
@@ -710,6 +710,7 @@ function forceLayoutFlags(v: JView) {
   v.layoutRequested = true;
   v.layoutRequired = true;
   v.oldWSpec = -1;
+  clearMeasureCache(v);
   if (v instanceof JViewGroup) for (const c of v.children) forceLayoutFlags(c);
 }
 function drawStatusIcons(ctx: OffscreenCanvasRenderingContext2D, bg: number, appearance: number, appearanceMask: number) {

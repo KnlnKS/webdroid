@@ -115,6 +115,7 @@ export function requestLayout(v: JView) {
   for (let p: JView | null = v; p; p = p.parent) {
     p.layoutRequested = true;
     p.oldWSpec = -1;
+    clearMeasureCache(p);
     // AOSP calls the parent's requestLayout() virtually: an override (Compose's AndroidViewHolder
     // asks its layout node to remeasure, DrawerLayout declines mid-layout) resumes the walk itself
     const par = p.parent;
@@ -316,6 +317,14 @@ export class JView extends JObj {
   static $nextDrawingId = 0;
   measuredW = 0; measuredH = 0;
   oldWSpec = -1; oldHSpec = -1;
+  /** AOSP mMeasureCache: up to three spec pairs and the sizes they produced, [w, h, mw, mh] each,
+   *  so a parent measuring a child under alternating specs does not re-run its onMeasure.
+   *  Emptied wherever the old specs are reset, as AOSP's requestLayout/forceLayout clear it. */
+  mc: Float64Array | null = null;
+  mcLen = 0; mcNext = 0;
+  /** AOSP PFLAG3_MEASURE_NEEDED_BEFORE_LAYOUT: the cache answered the last measure, so this
+   *  view's children may hold another spec's sizes; layout re-runs onMeasure first */
+  measureBeforeLayout = false;
   padL = 0; padT = 0; padR = 0; padB = 0;
   minW = 0; minH = 0;
   lp: JLayoutParams | null = null;
@@ -499,17 +508,49 @@ export function resolveSizeAndState(size: number, spec: number): number {
   return size;
 }
 
+export function clearMeasureCache(v: JView) { v.mcLen = v.mcNext = 0; }
+function measureCacheFind(v: JView, wSpec: number, hSpec: number): number {
+  const c = v.mc!;
+  for (let i = 0; i < v.mcLen * 4; i += 4) if (c[i] === wSpec && c[i + 1] === hSpec) return i;
+  return -1;
+}
+function measureCachePut(v: JView, wSpec: number, hSpec: number) {
+  const c = v.mc ??= new Float64Array(12);
+  let i = measureCacheFind(v, wSpec, hSpec);
+  if (i < 0) {
+    i = v.mcNext * 4;
+    v.mcNext = (v.mcNext + 1) % 3;
+    if (v.mcLen < 3) v.mcLen++;
+  }
+  c[i] = wSpec; c[i + 1] = hSpec; c[i + 2] = v.measuredW; c[i + 3] = v.measuredH;
+}
 export async function measureView(v: JView, wSpec: number, hSpec: number) {
   // AOSP View.measure: with no forced layout and identical specs the previous measurement
   // still holds. Without this every pass re-measured the whole tree from the root.
-  if (!v.layoutRequested && wSpec === v.oldWSpec && hSpec === v.oldHSpec) return;
+  if (!v.layoutRequested) {
+    if (wSpec === v.oldWSpec && hSpec === v.oldHSpec) return;
+    // a spec pair this view already measured under since its last request: the size it produced
+    const i = v.mcLen ? measureCacheFind(v, wSpec, hSpec) : -1;
+    if (i >= 0) {
+      const c = v.mc!;
+      v.oldWSpec = wSpec; v.oldHSpec = hSpec;
+      v.measuredW = c[i + 2]; v.measuredH = c[i + 3];
+      v.measureBeforeLayout = true;
+      v.layoutRequired = true;
+      perf.measureCacheHits++;
+      return;
+    }
+  }
   v.oldWSpec = wSpec; v.oldHSpec = hSpec;
   perf.onMeasures++;
   try {
     await guardCall(v, M_onMeasure, wSpec, hSpec);
     v.layoutRequired = true;   // AOSP sets PFLAG_LAYOUT_REQUIRED whenever onMeasure runs
+    v.measureBeforeLayout = false;
+    measureCachePut(v, wSpec, hSpec);
   } catch (e) {
     v.oldWSpec = -1;
+    clearMeasureCache(v);
     throw e;
   }
 }
@@ -529,6 +570,12 @@ function setBound(v: JView, l: number, t: number, r: number, b: number) {
 }
 
 export async function layoutView(v: JView, l: number, t: number, r: number, b: number) {
+  // AOSP View.layout: a measure the cache answered left the children as the last onMeasure did
+  if (v.measureBeforeLayout) {
+    v.measureBeforeLayout = false;
+    perf.onMeasures++;
+    await guardCall(v, M_onMeasure, v.oldWSpec, v.oldHSpec);
+  }
   const oldL = v.left, oldT = v.top, oldR = v.right, oldB = v.bottom;
   const changed = oldL !== l || oldT !== t || oldR !== r || oldB !== b;
   const ow = v.width(), oh = v.height();
@@ -898,7 +945,7 @@ const viewMethods: NativeSpec["methods"] = {
   // which is the one path that reaches here. Do NOT pre-set layoutRequested: the helper's
   // walk breaks at the first marked node, so marking `this` first would skip the ancestors.
   "requestLayout()V": nativeRequestLayout,
-  "forceLayout()V": function (this: JView) { this.layoutRequested = true; },
+  "forceLayout()V": function (this: JView) { this.layoutRequested = true; clearMeasureCache(this); },
   "isLayoutRequested()Z": function (this: JView) { return this.layoutRequested ? 1 : 0; },
   "post(Ljava/lang/Runnable;)Z": function (r: unknown) { return mainHandler().post(r, 0); },
   "postDelayed(Ljava/lang/Runnable;J)Z": function (r: unknown, d: bigint) { return mainHandler().post(r, Number(d)); },
@@ -1482,6 +1529,7 @@ async function attachTree(v: JView) {
     try { await attachTree(c); } catch (e) { reportUncaught(e); }
   }
   v.layoutRequested = true;
+  clearMeasureCache(v);
 }
 /**
  * A Configuration change reaches a view hierarchy the way AOSP's ViewRootImpl delivers it —
