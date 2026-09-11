@@ -221,7 +221,7 @@ function bytes(b: JByteBuffer): Int8Array {
 // Java's wrap shares the array: writes through either side show on the other. A typed array is
 // laid out in native order, so a wrapped typed buffer reads little-endian (Java's order() for it
 // too); ByteBuffer.wrap keeps Java's big-endian default.
-function wrapArray<T extends JBuffer>(Ctor: new () => T, arr: { buffer: ArrayBufferLike; byteOffset: number; length: number }, shift: number, off = 0, len = arr.length): T {
+function wrapArray<T extends JBuffer>(Ctor: new () => T, arr: Int8Array | Int16Array | Int32Array | Float32Array, shift: number, off = 0, len = arr.length): T {
   const b = new Ctor();
   b.backing = { storage: { kind: "heap", ab: arr.buffer as ArrayBuffer } };
   b.byteOffset = arr.byteOffset;
@@ -250,52 +250,108 @@ function viewBuffer<T extends JBuffer>(src: JByteBuffer, Ctor: new () => T, shif
   return b;
 }
 
-type Elems = { buffer: ArrayBufferLike; byteOffset: number; length: number; [i: number]: number | bigint; subarray(s: number, e: number): Elems; set(a: any, off?: number): void };
-type ElemArray = { new (...a: any[]): Elems; BYTES_PER_ELEMENT: number };
-// GL batches refill nativeOrder() buffers every frame: copy through a typed-array view when aligned;
-// the per-element DataView path remains for big-endian or unaligned views.
-function typedBuffer(name: string, d: string, Ctor: new () => JBuffer, Arr: ElemArray, get: (dv: DataView, o: number, le: boolean) => number | bigint,
-  set: (dv: DataView, o: number, v: any, le: boolean) => void, ifaces?: string[]) {
-  const size = Arr.BYTES_PER_ELEMENT, shift = Math.log2(size), T = `Ljava/nio/${name};`;
-  const fast = (b: JBuffer) => b.little && !(b.dv.byteOffset & (size - 1));
-  const put = (b: JBuffer, arr: Elems, off: number, len: number) => {
-    b.clampPut(len);
-    if (fast(b)) new Arr(b.ab, b.dv.byteOffset, b.cap).set(arr.subarray(off, off + len), b.pos);
-    else for (let i = 0, dv = b.dv; i < len; i++) set(dv, (b.pos + i) << shift, arr[off + i], b.little);
-    b.pos += len; return b;
-  };
-  const take = (b: JBuffer, arr: Elems, off: number, len: number) => {
-    b.clampGet(len);
-    if (fast(b)) arr.set(new Arr(b.ab, b.dv.byteOffset + (b.pos << shift), len), off);
-    else for (let i = 0, dv = b.dv; i < len; i++) arr[off + i] = get(dv, (b.pos + i) << shift, b.little);
-    b.pos += len; return b;
-  };
-  rt.register({
-    name: `java/nio/${name}`, ctor: Ctor, sup: "java/nio/Buffer", ifaces,
-    methods: {
-      ...bufferBaseMethods(),
-      ...chaining(T),
-      [`static allocate(I)${T}`]: (cap: number) => viewBuffer(mkByteBuffer(cap << shift), Ctor, shift),
-      [`static wrap([${d})${T}`]: (arr: Elems) => wrapArray(Ctor, arr, shift),
-      [`static wrap([${d}II)${T}`]: (arr: Elems, off: number, len: number) => wrapArray(Ctor, arr, shift, off, len),
-      [`put(${d})${T}`]: function (this: JBuffer, v: unknown) { this.clampPut(1); set(this.dv, this.pos++ << shift, v, this.little); return this; },
-      [`put(I${d})${T}`]: function (this: JBuffer, i: number, v: unknown) { this.clampPut(0); set(this.dv, i << shift, v, this.little); return this; },
-      [`put([${d})${T}`]: function (this: JBuffer, arr: Elems) { return put(this, arr, 0, arr.length); },
-      [`put([${d}II)${T}`]: function (this: JBuffer, arr: Elems, off: number, len: number) { return put(this, arr, off, len); },
-      [`get()${d}`]: function (this: JBuffer) { this.clampGet(1); return get(this.dv, this.pos++ << shift, this.little); },
-      [`get(I)${d}`]: function (this: JBuffer, i: number) { return get(this.dv, i << shift, this.little); },
-      [`get([${d})${T}`]: function (this: JBuffer, arr: Elems) { return take(this, arr, 0, arr.length); },
-      [`get([${d}II)${T}`]: function (this: JBuffer, arr: Elems, off: number, len: number) { return take(this, arr, off, len); },
+// FloatBuffer (typical GL usage)
+rt.register({
+  name: "java/nio/FloatBuffer", ctor: JFloatBuffer, sup: "java/nio/Buffer",
+  methods: {
+    ...bufferBaseMethods(),
+    ...chaining("Ljava/nio/FloatBuffer;"),
+    "static allocate(I)Ljava/nio/FloatBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 4), JFloatBuffer, 2),
+    "static wrap([F)Ljava/nio/FloatBuffer;": (arr: Float32Array) => wrapArray(JFloatBuffer, arr, 2),
+    "put(F)Ljava/nio/FloatBuffer;": function (this: JFloatBuffer, v: number) { this.clampPut(1); this.dv.setFloat32(this.pos++ << 2, v, this.little); return this; },
+    "put(IF)Ljava/nio/FloatBuffer;": function (this: JFloatBuffer, i: number, v: number) { this.clampPut(0); this.dv.setFloat32(i << 2, v, this.little); return this; },
+    "put([F)Ljava/nio/FloatBuffer;": function (this: JFloatBuffer, arr: Float32Array) { return putFloats(this, arr, 0, arr.length); },
+    "put([FII)Ljava/nio/FloatBuffer;": function (this: JFloatBuffer, arr: Float32Array, off: number, len: number) { return putFloats(this, arr, off, len); },
+    "get()F": function (this: JFloatBuffer) { this.clampGet(1); return this.dv.getFloat32(this.pos++ << 2, this.little); },
+    "get(I)F": function (this: JFloatBuffer, i: number) { return this.dv.getFloat32(i << 2, this.little); },
+    "get([F)Ljava/nio/FloatBuffer;": function (this: JFloatBuffer, arr: Float32Array) {
+      this.clampGet(arr.length);
+      for (let i = 0; i < arr.length; i++) arr[i] = this.dv.getFloat32((this.pos + i) << 2, this.little);
+      this.pos += arr.length; return this;
     },
-  });
+  },
+});
+// GL sprite batches refill a nativeOrder() FloatBuffer every frame: copy through a Float32Array
+// view when aligned; the per-element DataView path remains for big-endian or unaligned views.
+function putFloats(b: JFloatBuffer, arr: Float32Array, off: number, len: number): JFloatBuffer {
+  b.clampPut(len);
+  const byteOff = b.dv.byteOffset;
+  if (b.little && !(byteOff & 3)) new Float32Array(b.ab, byteOff, b.cap).set(len === arr.length ? arr : arr.subarray(off, off + len), b.pos);
+  else for (let i = 0; i < len; i++) b.dv.setFloat32((b.pos + i) << 2, arr[off + i], b.little);
+  b.pos += len; return b;
 }
-typedBuffer("FloatBuffer", "F", JFloatBuffer, Float32Array, (dv, o, le) => dv.getFloat32(o, le), (dv, o, v, le) => dv.setFloat32(o, v, le));
-typedBuffer("IntBuffer", "I", JIntBuffer, Int32Array, (dv, o, le) => dv.getInt32(o, le), (dv, o, v, le) => dv.setInt32(o, v, le));
-typedBuffer("ShortBuffer", "S", JShortBuffer, Int16Array, (dv, o, le) => dv.getInt16(o, le), (dv, o, v, le) => dv.setInt16(o, v, le));
-typedBuffer("CharBuffer", "C", JCharBuffer, Uint16Array, (dv, o, le) => dv.getUint16(o, le), (dv, o, v, le) => dv.setUint16(o, v, le),
-  ["java/lang/CharSequence", "java/lang/Comparable", "java/lang/Appendable"]);
-typedBuffer("LongBuffer", "J", JLongBuffer, BigInt64Array, (dv, o, le) => dv.getBigInt64(o, le), (dv, o, v, le) => dv.setBigInt64(o, v, le));
-typedBuffer("DoubleBuffer", "D", JDoubleBuffer, Float64Array, (dv, o, le) => dv.getFloat64(o, le), (dv, o, v, le) => dv.setFloat64(o, v, le));
+function intBufferMethods(): NativeSpec["methods"] {
+  return {
+    ...bufferBaseMethods(),
+    ...chaining("Ljava/nio/IntBuffer;"),
+    "static allocate(I)Ljava/nio/IntBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 4), JIntBuffer, 2),
+    "static wrap([I)Ljava/nio/IntBuffer;": (arr: Int32Array) => wrapArray(JIntBuffer, arr, 2),
+    "put(I)Ljava/nio/IntBuffer;": function (this: JIntBuffer, v: number) { this.clampPut(1); this.dv.setInt32(this.pos++ << 2, v, this.little); return this; },
+    "put(II)Ljava/nio/IntBuffer;": function (this: JIntBuffer, i: number, v: number) { this.clampPut(0); this.dv.setInt32(i << 2, v, this.little); return this; },
+    "put([I)Ljava/nio/IntBuffer;": function (this: JIntBuffer, arr: Int32Array) {
+      this.clampPut(arr.length);
+      for (let i = 0; i < arr.length; i++) this.dv.setInt32((this.pos + i) << 2, arr[i], this.little);
+      this.pos += arr.length; return this;
+    },
+    "get()I": function (this: JIntBuffer) { this.clampGet(1); return this.dv.getInt32(this.pos++ << 2, this.little); },
+    "get(I)I": function (this: JIntBuffer, i: number) { return this.dv.getInt32(i << 2, this.little); },
+    "get([I)Ljava/nio/IntBuffer;": function (this: JIntBuffer, arr: Int32Array) {
+      this.clampGet(arr.length);
+      for (let i = 0; i < arr.length; i++) arr[i] = this.dv.getInt32((this.pos + i) << 2, this.little);
+      this.pos += arr.length; return this;
+    },
+  };
+}
+rt.register({ name: "java/nio/IntBuffer", ctor: JIntBuffer, sup: "java/nio/Buffer", methods: intBufferMethods() });
+rt.register({
+  name: "java/nio/ShortBuffer", ctor: JShortBuffer, sup: "java/nio/Buffer",
+  methods: {
+    ...bufferBaseMethods(),
+    ...chaining("Ljava/nio/ShortBuffer;"),
+    "static allocate(I)Ljava/nio/ShortBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 2), JShortBuffer, 1),
+    "static wrap([S)Ljava/nio/ShortBuffer;": (arr: Int16Array) => wrapArray(JShortBuffer, arr, 1),
+    "static wrap([SII)Ljava/nio/ShortBuffer;": (arr: Int16Array, off: number, len: number) => wrapArray(JShortBuffer, arr, 1, off, len),
+    "put(S)Ljava/nio/ShortBuffer;": function (this: JShortBuffer, v: number) { this.clampPut(1); this.dv.setInt16(this.pos++ << 1, v, this.little); return this; },
+    "get()S": function (this: JShortBuffer) { this.clampGet(1); return this.dv.getInt16(this.pos++ << 1, this.little); },
+    "get(I)S": function (this: JShortBuffer, i: number) { return this.dv.getInt16(i << 1, this.little); },
+    "put([S)Ljava/nio/ShortBuffer;": function (this: JShortBuffer, arr: Int16Array) {
+      this.clampPut(arr.length);
+      for (let i = 0; i < arr.length; i++) this.dv.setInt16((this.pos + i) << 1, arr[i], this.little);
+      this.pos += arr.length; return this;
+    },
+  },
+});
+rt.register({
+  name: "java/nio/CharBuffer", ctor: JCharBuffer, sup: "java/nio/Buffer",
+  ifaces: ["java/lang/CharSequence", "java/lang/Comparable", "java/lang/Appendable"],
+  methods: {
+    ...bufferBaseMethods(),
+    ...chaining("Ljava/nio/CharBuffer;"),
+    "static allocate(I)Ljava/nio/CharBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 2), JCharBuffer, 1),
+    "get()C": function (this: JCharBuffer) { this.clampGet(1); return this.dv.getUint16(this.pos++ << 1, this.little); },
+    "put(C)Ljava/nio/CharBuffer;": function (this: JCharBuffer, v: number) { this.clampPut(1); this.dv.setUint16(this.pos++ << 1, v, this.little); return this; },
+  },
+});
+rt.register({
+  name: "java/nio/LongBuffer", ctor: JLongBuffer, sup: "java/nio/Buffer",
+  methods: {
+    ...bufferBaseMethods(),
+    ...chaining("Ljava/nio/LongBuffer;"),
+    "static allocate(I)Ljava/nio/LongBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 8), JLongBuffer, 3),
+    "get()J": function (this: JLongBuffer) { this.clampGet(1); return this.dv.getBigInt64(this.pos++ << 3, this.little); },
+    "put(J)Ljava/nio/LongBuffer;": function (this: JLongBuffer, v: bigint) { this.clampPut(1); this.dv.setBigInt64(this.pos++ << 3, v, this.little); return this; },
+  },
+});
+rt.register({
+  name: "java/nio/DoubleBuffer", ctor: JDoubleBuffer, sup: "java/nio/Buffer",
+  methods: {
+    ...bufferBaseMethods(),
+    ...chaining("Ljava/nio/DoubleBuffer;"),
+    "static allocate(I)Ljava/nio/DoubleBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 8), JDoubleBuffer, 3),
+    "get()D": function (this: JDoubleBuffer) { this.clampGet(1); return this.dv.getFloat64(this.pos++ << 3, this.little); },
+    "put(D)Ljava/nio/DoubleBuffer;": function (this: JDoubleBuffer, v: number) { this.clampPut(1); this.dv.setFloat64(this.pos++ << 3, v, this.little); return this; },
+  },
+});
 
 class JByteOrder extends JObj { little = false; name = "BIG_ENDIAN"; }
 const byteOrderBE = new JByteOrder();
@@ -316,7 +372,8 @@ export function bufferView(b: JBuffer): { ab: ArrayBuffer; byteOffset: number; b
   return { ab: b.ab, byteOffset: b.dv.byteOffset, byteFromPos: b.dv.byteOffset + (b.pos << b.elemShift) };
 }
 
-// ── charset coding-error policy: our encode/decode always replaces
+// ── charset coding-error policy (Mihon/OkHttp touch these; behavior is moot —
+// our encode/decode always replaces)
 class JCodingErrorAction extends JObj {}
 rt.register({
   name: "java/nio/charset/CodingErrorAction", ctor: JCodingErrorAction,
