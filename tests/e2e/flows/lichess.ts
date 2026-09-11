@@ -1,31 +1,38 @@
-// Flutter's native framebuffer has no host view text anchors.
-import type { Flow } from "../types";
-import { device } from "../../../src/shell/config";
+// Flutter's native framebuffer has no host view text anchors, so every tap is positional and the
+// flow pins the screen they were measured at.
+import type { Flow, Screen } from "../types";
 
-const boardY = (ranks: number) => 0.5 + ranks * device.width / (8 * device.height);
+const SCREEN: Screen = { width: 1080, height: 2424, densityDpi: 480 };
+const at = (x: number, y: number): [number, number] => [x / SCREEN.width, y / SCREEN.height];
+const tap = (x: number, y: number) => { const [nx, ny] = at(x, y); return { type: "tapAt" as const, x: nx, y: ny }; };
+const swipe = (from: [number, number], to: [number, number]) => ({ type: "swipe" as const, from: at(...from), to: at(...to), ms: 300 });
+const dp = (n: number) => n * SCREEN.densityDpi / 160;
+const navY = SCREEN.height - dp(64);
+const boardY = (ranks: number) => 0.5 + ranks * SCREEN.width / (8 * SCREEN.height);
 
 export const lichess: Flow = {
   app: "lichess",
   pkg: "org.lichess.mobileV2",
   activity: "org.lichess.mobileV2.MainActivity",
   apk: "lichess.apk",
+  screen: SCREEN,
   crop: { top: 0, bottom: 48, left: 0, right: 0 },
   liveClock: true,
   steps: [
     { id: "launch", label: "Launch — Flutter home", action: { type: "launch" }, settleDelayMs: 40000 },
-    { id: "tools", label: "More — tools", action: { type: "tapAt", x: 0.9, y: 1 - device.dp(64) / device.height }, settleDelayMs: 2000 },
-    { id: "editor", label: "Board editor", action: { type: "tapAt", x: 0.5, y: device.dp(324) / device.height }, settleDelayMs: 2000 },
+    { id: "tools", label: "More — tools", action: tap(972, navY), settleDelayMs: 2000 },
+    { id: "editor", label: "Board editor", action: tap(540, dp(324)), settleDelayMs: 2000 },
     { id: "pawn", label: "Drag e2 pawn to e4", action: { type: "swipe", from: [0.5625, boardY(2.5)], to: [0.5625, boardY(0.5)], ms: 300 }, settleDelayMs: 2000 },
     { id: "back", label: "Back to tools", action: { type: "back" }, settleDelayMs: 2000 },
-    { id: "home", label: "Home", action: { type: "tapAt", x: 0.1, y: 1 - device.dp(64) / device.height }, settleDelayMs: 2000 },
-    { id: "play", label: "Play options", action: { type: "tapAt", x: 900 / 1080, y: 1980 / 2424 }, settleDelayMs: 2000 },
-    { id: "computer", label: "Computer game setup", action: { type: "tapAt", x: 0.5, y: 2000 / 2424 }, settleDelayMs: 2000 },
-    { id: "level", label: "Stockfish level 1", action: { type: "tapAt", x: 195 / 1080, y: 1245 / 2424 }, settleDelayMs: 2000 },
-    { id: "side", label: "Choose side", action: { type: "tapAt", x: 750 / 1080, y: 1595 / 2424 }, settleDelayMs: 2000 },
-    { id: "white", label: "Play as White", action: { type: "tapAt", x: 400 / 1080, y: 925 / 2424 }, settleDelayMs: 2000 },
-    { id: "game", label: "Start native Stockfish game", action: { type: "tapAt", x: 0.5, y: 2230 / 2424 }, settleDelayMs: 5000 },
-    { id: "e4", label: "e4 and engine reply", action: { type: "swipe", from: [608 / 1080, 1615 / 2424], to: [608 / 1080, 1345 / 2424], ms: 300 }, settleDelayMs: 4000 },
-    { id: "nf3", label: "Nf3 and engine reply", action: { type: "swipe", from: [878 / 1080, 1750 / 2424], to: [742 / 1080, 1480 / 2424], ms: 300 }, settleDelayMs: 4000 },
-    { id: "ne5", label: "Ne5 and engine reply", action: { type: "swipe", from: [742 / 1080, 1480 / 2424], to: [608 / 1080, 1210 / 2424], ms: 300 }, settleDelayMs: 4000 },
+    { id: "home", label: "Home", action: tap(108, navY), settleDelayMs: 2000 },
+    { id: "play", label: "Play options", action: tap(900, 1980), settleDelayMs: 2000 },
+    { id: "computer", label: "Computer game setup", action: tap(540, 2000), settleDelayMs: 2000 },
+    { id: "level", label: "Stockfish level 1", action: tap(195, 1245), settleDelayMs: 2000 },
+    { id: "side", label: "Choose side", action: tap(750, 1595), settleDelayMs: 2000 },
+    { id: "white", label: "Play as White", action: tap(400, 925), settleDelayMs: 2000 },
+    { id: "game", label: "Start native Stockfish game", action: tap(540, 2230), settleDelayMs: 5000 },
+    { id: "e4", label: "e4 and engine reply", action: swipe([608, 1615], [608, 1345]), settleDelayMs: 4000 },
+    { id: "nf3", label: "Nf3 and engine reply", action: swipe([878, 1750], [742, 1480]), settleDelayMs: 4000 },
+    { id: "ne5", label: "Ne5 and engine reply", action: swipe([742, 1480], [608, 1210]), settleDelayMs: 4000 },
   ],
 };

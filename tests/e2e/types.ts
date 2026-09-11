@@ -69,6 +69,9 @@ export type Flow = {
    * disagree about what "now" is. Anything the flow renders from the clock must be masked.
    */
   liveClock?: boolean;
+  /** The geometry positional taps were measured at. A flow with no goldens runs at it, since a
+   *  normalized coordinate only lands on the same view at the same size. */
+  screen?: Screen;
   steps: Step[];
 };
 
@@ -120,13 +123,13 @@ export type Manifest = {
  * The geometry a comparison happens at. It is NOT the device profile: the goldens are pixels
  * captured at one size, lib/diff.ts refuses any other, and the normalized taps a flow carries
  * denormalize into that same space. So the manifest a run is scored against is what says how
- * big the screen is, and `screenOf` reads it from there. The profile only answers for a flow
- * with no goldens, and for the recorder — which is *defining* the geometry, not matching one.
+ * big the screen is, and `screenOf` reads it from there. Without goldens a flow's own `screen`
+ * answers, then the profile — as it does for the recorder, which is *defining* the geometry.
  */
 export type Screen = { width: number; height: number; densityDpi: number };
 
-export const screenOf = (m: Manifest | undefined): Screen =>
-  m ? { width: m.device.width, height: m.device.height, densityDpi: m.device.densityDpi } : deviceScreen();
+export const screenOf = (m: Manifest | undefined, fallback?: Screen): Screen =>
+  m ? { width: m.device.width, height: m.device.height, densityDpi: m.device.densityDpi } : fallback ?? deviceScreen();
 
 export const deviceScreen = (): Screen =>
   ({ width: device.width, height: device.height, densityDpi: device.densityDpi });

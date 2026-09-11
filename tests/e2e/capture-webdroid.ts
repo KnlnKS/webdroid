@@ -81,7 +81,7 @@ function prefsStorage(pkg: string, xml: string): [string, string] {
  *  to measure cost), the flow's clock, and its seed prefs already in storage. */
 export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = false): Promise<WebdroidDriver> {
   return WebdroidDriver.launch({
-    screen: parseScreen(ENV_SCREEN) ?? screenOf(manifest),
+    screen: parseScreen(ENV_SCREEN) ?? screenOf(manifest, flow.screen),
     fixedMs: flow.liveClock ? null : PINNED_CLOCK_MS,
     storage: flow.seedPrefs ? [prefsStorage(flow.pkg, flow.seedPrefs)] : [],
     shots,
