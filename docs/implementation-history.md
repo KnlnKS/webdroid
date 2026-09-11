@@ -9,6 +9,15 @@ Temporary /tmp evidence may expire. Committed regression fixtures are the durabl
 
 ## microG completion and open acceptance
 
+The 2026-09-10 handoff at the top of PLAN.md supersedes the historical status below.
+Android passed interactive Google consent and stored the test account, then the SDK
+returned status 8. Webdroid still fails after consent. Moving renderer metadata out of
+the visible query fixes a verified request-contamination bug but does not resolve login.
+Google's observed null `.replace` exception points to its single-BASE requirement and
+the proxy's unconditional BASE injection; that next investigation remains unimplemented.
+The final WebView change passes typecheck, browser transport/restart checks and all
+1,002 unit tests. Full Android parity is not established.
+
 Genuine microG v0.3.16.252432 and Companion run as installed system packages with scoped
 compatibility signatures. Resy's own availability checks accept them and its Play Services
 dialog disappears. Availability is not authentication or full API support. Baseline: 82e1afb;

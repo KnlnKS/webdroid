@@ -1,15 +1,160 @@
 # microG integration
 
 Integration started from `82e1afb` on `codex/microg-integration`. The merged integration is on `main` alongside `6946f16`.
-Completion now continues from `b567197` in `codex/microg-completion`, in the
-`../webdroid-microg-completion` worktree at the user’s request.
+Completion continued from `b567197` on `codex/microg-completion`; the handoff below
+records its merge into `main` and the remaining work.
 Run genuine microG and client APK bytecode; add Android platform behavior, never
 app-specific substitutes. Keep comments and dependencies minimal.
-The evidence below is chronological; the final checkpoint records current verification.
+The handoff is current; the remaining evidence is chronological.
 
 Generated microG bundles belong in ignored `vendor/microg/`. Commit the preparation
 script and pinned metadata only. Generate missing files during setup/server startup;
 reuse complete bundles without downloading or reprocessing the source APKs.
+
+## Handoff — 2026-09-10
+
+This section supersedes the older chronological status below. Implementation is paused
+at the user's request; the completion worktree is merged into `main`. Resume in
+`/Users/kunalan/Projects/webdroid`. Branch `codex/microg-completion` started at `b567197`;
+its focused commits retain the implementation history.
+
+### Current implementation
+
+Genuine microG v0.3.16.252432 and Companion run as installed system packages. Resy's
+Play Services availability dialog is resolved. This is a working integration checkpoint,
+not full Android parity. Google authentication in webdroid remains unsuccessful.
+
+- Package preparation, signature grants, metadata and lazy DEX/native loading work.
+  Per-process JVM realms communicate through real Binder/Parcel routing. Services,
+  providers, broadcasts and cross-process activities execute genuine APK bytecode.
+- Preferences, private files and account records have shared broker ownership.
+  Bound-service death notifies clients and reconnects auto-create bindings. PendingIntent
+  and alarm ownership survives creator death. Activity task membership/root removal work.
+- AccountManager binds installed authenticators, routes asynchronous futures and login
+  activities, checks caller identity/account visibility and handles replies/cancellation.
+  Platform fixtures pass; they do not establish a real Google account in the browser.
+- Real checkin, FCM registration, retained token after reopen, one received test push and
+  its upstream acknowledgement were observed. An unaccelerated five-minute MCS alarm
+  restarted the killed process and reconnected at 306.815 seconds. This establishes
+  delayed recovery, not immediate sticky-service restart or another receipt after death.
+- Browser geolocation reaches genuine microG fused-location bytecode. High/balanced
+  priorities, denial/regrant, removal and process cleanup were tested. The pinned package
+  profile disables microG's optional internal radio provider by default so its own
+  fallback uses the browser-backed platform provider; explicit settings win. WGS84
+  distance/bearing results match six Android float fixtures.
+- Native/JNI and graphics fixes allow real map tiles/labels, loaded/camera-idle callbacks
+  and panning. Complete map interaction parity remains open.
+
+### Google sign-in: exact stopping point
+
+Password and phone verification succeed in webdroid. Choosing the device user and
+accepting the already-authorized Google terms leads to "Something went wrong".
+Fresh retries reproduced this; it is not established to be merely an expired tab.
+
+The same account and pinned microG build on the dedicated Android reference passed
+consent, stored one real `com.google` account and reached microG's account chooser.
+Selecting it returned SDK authentication status 8, a separate unresolved downstream
+error. Do not import Android tokens to substitute for successful browser authentication.
+
+The latest browser trace reached the genuine `notifyOnTermsOfServiceAccepted` bridge.
+Consent RPC `egQ4Re` returned HTTP 200 and `[[null,true]]`; the next RPC `ihzRS` also
+returned HTTP 200, then navigated to `/v3/signin/unknownerror`. Its response body was
+not recovered through CDP after navigation. Five reached runtime diagnostic sets were
+empty. No `oauth_token` or newly authenticated Google account was observed in webdroid.
+
+A verified URL bug was corrected in `src/shell/webinject.ts`: internal `__wd_bridge`,
+`__wd_url` and `__wd_ua` parameters were visible to the page and copied into Google's
+final RPC. Bootstrap context now lives outside the visible URL; the worker obtains it
+through messaging and a bounded cache, including after restart. The corrected attempt
+sent a clean query but still failed. Retain this for URL correctness, not as a login fix.
+
+**Next concrete investigation:** `server.ts` unconditionally injects a `<base>` element,
+even when the upstream document supplies one. Google's loaded script reported
+`Cannot read properties of null (reading 'replace')`. Reading that actual script found
+`_.pab` returns a base path only when `getElementsByTagName("BASE").length == 1`;
+its caller immediately invokes `.replace`. Confirm the affected document's elements,
+then preserve upstream base semantics with a general HTML transformation. Test relative
+URLs and documents with/without an existing base. No fix was implemented, and causality
+for the final authentication rejection remains unproven.
+
+Another unresolved observation: `/_/bscframe` returned HTTP 200 followed by Chromium
+`ERR_BLOCKED_BY_RESPONSE`, with SAMEORIGIN/same-site restrictions. The isolated renderer
+origin differs from Google's. Do not indiscriminately remove security headers. Both
+platforms logged microG's genuine local-DroidGuard fallback; no result was fabricated.
+
+Relevant owners: `src/android/webkit.ts`, `src/shell/webinject.ts`, `webbridge.ts`,
+`webcookies.ts`, `server.ts`, and the Android modules `authenticator.ts`,
+`accountrequest.ts`, `accountfuture.ts`, `accounts.ts`. Pinned upstream
+[LoginActivity.java](https://github.com/microg/GmsCore/blob/v0.3.16.252432/play-services-core/src/main/java/org/microg/gms/auth/login/LoginActivity.java)
+and [DroidGuardHandler.kt](https://github.com/microg/GmsCore/blob/v0.3.16.252432/play-services-core/src/main/kotlin/org/microg/gms/auth/login/DroidGuardHandler.kt)
+are also cached under `/tmp/webdroid-microg-*`. LoginActivity reads `oauth_token` at
+its genuine close/programmatic-auth URL, exchanges it and saves the account. Terms
+acceptance alone does none of these steps.
+
+### Verification and remaining challenges
+
+At `a780ce4` (documented by `3eadfac`): typecheck, 1,002 units / 47,229 assertions,
+zero smoke failures for Resy/microG/SDK, executable framework probes and 6/6 text
+comparisons pass. Serialized E2E reached all 75 scored steps with unchanged goldens;
+corpus rendered 13/14 APKs. Existing FitNotes/Harmonic exceptions, Flappy FPS failures,
+Lichess's responsive loading screen and TikTok failure remain. See the final checkpoint
+below for scores and controlled baseline comparisons.
+
+CPU medians versus `b567197`: cold +3.59%, reset +5.56%; delayed microG provider/class
+startup adds work. Settled nine-step CPU median +0.22%; live JS heap 129.0 → 137.6 MB,
+excluding Wasm/external memory. These are bounded measurements, not a speedup claim.
+
+The final URL correction passed typecheck, 3 focused cookie/relay tests (25 assertions)
+and a real isolated-browser fixture covering redirects, synchronous Java results,
+HttpOnly boundaries, POST body/cookies, Android user-agent, clean visible query, worker
+restart and persistent-only cookies after reopen. Evidence:
+`/tmp/webdroid-webview-context-{check,typecheck,unit}.log`; fixture:
+`/tmp/webdroid-webview-context-check.ts`. The full earlier E2E/performance matrix was
+not repeated for this WebView correction. The closing full unit run passed 1,002 tests
+with zero failures and 47,229 assertions in 76.10 seconds; output is retained at
+`/tmp/webdroid-webview-handoff-unit.log`.
+
+Resy's remaining notification-configuration dialog is its Firebase HTTP 400 invalid
+configuration, reproduced with the same APK on Android. Evidence:
+`/tmp/webdroid-resy-final-{android,browser}.{png,json}`. The dedicated SDK's successful
+push receipt does not repair that APK's configuration.
+
+Other open breadth: task affinity/launch modes, sticky-service crash policy/crash loops,
+token-by-features account selection, encrypted account sessions/notification consent,
+full map parity and broader lifecycle coverage. Legacy per-package account storage has
+no production migration to the new shared account store.
+
+### Resume references and cleanup
+
+- Dev servers on 41863 and 41973–41976 are stopped for handoff. Start a private port
+  from main. The prior auth URL was `http://localhost:41973/?apk=GmsClient.apk`; it
+  ended on Google's error screen, not a live challenge or successful browser session.
+- Dedicated reference: `emulator-5580`, Android 15/API 35, same pinned microG. It now
+  contains the authorized test Google account. Webdroid advertises API 33; compare
+  compatible wire contracts. The optional radio provider remains disabled to match
+  the browser profile. ADB: `/Users/kunalan/Library/Android/sdk/platform-tools/adb`.
+  Inspect narrowly; do not dump account databases or raw authentication logs.
+- Firebase project `webdroid-microg-test`, Android package `org.webdroid.gmsclient`,
+  Spark/free plan, no billing, Analytics/Gemini off. Private configuration directory:
+  `/Users/kunalan/Library/Application Support/webdroid/test-config/`, containing
+  `google-services.json` and protected `browser-state.json`. Never print, commit or
+  overwrite credentials, cookies, checkin IDs or tokens. Account authorization remains
+  in conversation history; passwords deliberately are not recorded here.
+- APKs, generated microG/AOSP packages and dependencies already belong to main and
+  were symlinked into the worktree. Do not overwrite `apks/GmsClient.apk`. Preserve the
+  rebuilt client separately at `tests/gms-client/app/build/outputs/apk/debug/`.
+  Generated Wasm blobs are never committed. Temporary `/tmp` evidence may expire.
+- Earlier evidence: `/tmp/webdroid-gms-completion-receipt.{png,json,log}`,
+  `/tmp/webdroid-mcs-death-check.{ts,json,log}`, `/tmp/webdroid-profile-final-*`,
+  `/tmp/webdroid-profile-perf-{baseline,final}-{1,2,3}.json` and
+  `/tmp/webdroid-profile-steady-{baseline,final}{,-2,-3}.json`. The old receipt script
+  can overwrite protected state and tests a total rather than a fresh count delta;
+  do not rerun it unchanged. Keep trace secrets outside reports.
+- For live login, discover the current Chrome iframe debugger target; old session IDs
+  become stale. Enable Network before the action in the current turn and capture bodies
+  before navigation drops them. Existing terms acceptance is authorized; actual phone
+  challenges still require the user. Further MFA attempts need a concrete hypothesis
+  and sufficient tracing. No additional sign-in work was started during final cleanup.
 
 ## Milestones
 
