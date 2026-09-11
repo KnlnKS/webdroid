@@ -1155,3 +1155,91 @@ Build and smoke pass (6678 classes, zero method failures). Evidence:
 `/tmp/webdroid-map-twice-{android,browser}.log`, browser JSON, stage screenshots and
 `...-{build,smoke}.log`. Production remains at `6f47f86`; investigate event dispatch and
 main-queue ordering next, without replacing or fabricating SDK callbacks.
+
+
+### 2026-09-11 — Handler cancellation after enqueueing
+
+The pinned MapLibre 10.2.0 CameraChangeDispatcher suppresses an interrupted animation's
+intermediate idle/cancel sequence by checking and removing queued messages before the
+next move-start event. The exact APK bytecode matches the published source's
+`CameraChangeHandler.scheduleMessage`. Webdroid's `JHandler.cancel` deleted the lookup
+entry but left its Set populated. Already-enqueued jobs retain that Set and therefore
+still dispatched supposedly removed messages. The stale idle set the dispatcher's
+idle flag before the replacement animation finished, suppressing the final idle event.
+
+The correction clears the pending Set before dropping its lookup entry.
+It preserves replacement messages and other keys and does not modify map callbacks or
+APK/library bytecode. Four tests exercise actual Handler APIs on the main queue:
+immediate removal/replacement, timer expiration behind a busy looper, runnable
+removal/reposting, and removeCallbacksAndMessages(null). All four fail on `5d7875e`
+and pass with the fix (9 assertions). Full units pass 615 tests / 20,448 assertions;
+typecheck, framework probes and affected APK smoke compilation also pass.
+
+The genuine controlled map flow now gives cancellation, completion, then idle, matching
+Android. Both variable-camera and reset-camera marker clicks work, pan works, and a fresh
+activity reaches loaded after reopen. All three reached runtimes, including NativeMapView's,
+have empty missing sets and error lists. Broader checks are recorded below.
+Evidence: `/tmp/webdroid-map-handler-test-{before,after}.log`,
+`/tmp/webdroid-map-handler-after.{log,json}`, stage PNGs, and
+`...-{unit,typecheck,fwtest,gms-smoke,resy-smoke}.log`.
+
+Sources: [MapLibre 10.2.0 source archive](https://repo.maven.apache.org/maven2/org/maplibre/gl/android-sdk/10.2.0/android-sdk-10.2.0-sources.jar),
+[pinned microG map adapter](https://github.com/microg/GmsCore/blob/v0.3.16.252432/play-services-maps/core/mapbox/src/main/kotlin/org/microg/gms/maps/mapbox/GoogleMap.kt),
+and [AOSP MessageQueue removal](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-13.0.0_r12/core/java/android/os/MessageQueue.java).
+The local source/disassembly files use `/tmp/webdroid-map-twice-*` and
+`/tmp/webdroid-map-handler-MessageQueue.java`. The matched baseline worktree is
+`/tmp/webdroid-map-handler-baseline` at `5d7875e`, served on 41983.
+
+The serialized Handler E2E run completes all 111 steps in 257.0 seconds with no added
+normalized missing/error/native-required diagnostics, layout/draw failures or wedges.
+FitNotes' prior FragmentManager-destroyed exception disappears while its visual score
+is unchanged. Content scores are Mihon 57.20%, FitNotes 41.54%, Harmonic 29.76%, onboarding
+17.56%, overall 36.52%; goldens remain unchanged. Corpus renders 13/14 with the same 24
+gaps and no added per-APK errors; TikTok still fails. Evidence:
+`/tmp/webdroid-map-handler-{e2e,comparison}.log`, `...-window-comparison.json`,
+`...-corpus.{log,json}` and `...-corpus-comparison.json`.
+
+Mihon's back-out step waits 3038 ms (pixel settling) versus 666 ms (idle) in the preceding
+window capture, but its PNG is byte-identical. Lichess retains its known
+responsive loading state; Flappy retains the 27 FPS limit, and Doodle minimum FPS is 38.
+
+A fresh matched Mihon pair against `5d7875e` does not reproduce the long settle: back-out
+is idle after 670 ms baseline / 700 ms fixed, with 34 draws on both. Whole-flow foreground
+CPU is 9123.75 → 8933.13 ms (−2.09%) and elapsed capture time 25.19 → 24.82 seconds.
+The single back-out step's CPU rises 359.29 → 400.46 ms, so this pair is not proof of
+identical per-step cost or an explanation of every transient wait. It rules out a
+persistent three-second wait in this matched run; repeated standard startup/native
+comparisons follow. Files: `/tmp/webdroid-map-handler-mihon-{baseline,current}.json`,
+adjacent logs and `...-mihon-pair.log`.
+
+Three alternating FitNotes pairs against `5d7875e` give median foreground CPU
+1301.95 → 1249.25 ms cold (−4.05%) and 1165.86 → 1231.10 ms after reset (+5.60%).
+The latter crosses the investigation threshold; a fresh series records per-step CPU.
+Retained heap falls 0.017% / 0.020%; 600 classes, 42 broker calls/100 bytes and 256 MiB
+root Wasm memory are unchanged. Every run renders visibly with advancing ticks and no
+added diagnostics; only the baseline has the FragmentManager-destroyed error.
+First/steady idle CPU changes are −6.84%/+3.18% cold and −3.19%/+8.08% after reset.
+Files: `/tmp/webdroid-map-handler-perf-{baseline,current}-{1,2,3}.json` and
+`...-perf-summary.jsonl`.
+
+Three alternating Doodle pairs give median CPU 12229.44 → 11857.62 ms (−3.04%),
+retained heap 150707128 → 150764372 bytes (+0.038%) and native time −3.41%.
+GL frames fall 686 → 664 (−3.21%); this does not isolate a throughput improvement.
+All six runs render the animated tutorial visibly, advance 1573–1765 ticks and have
+no missing/error/native-required or layout/draw/GL diagnostics. Classes remain 68 and
+root Wasm memory 256 MiB. Evidence: `/tmp/webdroid-map-handler-native-perf-*`, summary
+JSONL and captured PNGs. This measures the tutorial flow, not full gameplay.
+
+A fresh three-pair FitNotes series adds CDP CPU measurements around each step on both
+builds. Median CPU is 1326.50 → 1285.92 ms cold (−3.06%) and 1240.31 → 1238.63 ms after
+reset (−0.14%); the earlier reset increase does not repeat. Per-step costs vary with
+execution timing: one reset pair has launch −258 ms and the next step +272 ms, while
+the whole flow changes +19 ms. This is not an isolated causal profile of that shift.
+Retained heap changes −0.016%/+0.038%; pre-GC heap rises about 3.8% in both phases.
+First-idle CPU rises 12.23%/14.26%, while later steady-idle falls 1.79%/5.72%; no
+uniform idle reduction is established. Classes, broker counts/bytes and root Wasm size
+are unchanged. All runs render visibly, advance 3601–3614 ticks and retain the same
+diagnostic difference. Per-step instrumentation affects timing, so retain the two
+series separately. Files: `/tmp/webdroid-map-handler-repeat-perf-{baseline,current}-{1,2,3}.json`
+and `/tmp/webdroid-map-handler-repeat-summary.jsonl`. No repeatable >5% foreground CPU
+increase was found in these bounded checks; they do not cover every APK or process.

@@ -112,7 +112,10 @@ export class JHandler extends JObj {
   }
   post(r: unknown, delay: number): number { return this.send(obtain(this, 0, null, 0, 0, r), delay); }
   cancel(key: unknown): void {
-    for (const m of this.pending.get(key) ?? []) clearTimeout(m.timer);
+    const messages = this.pending.get(key);
+    if (!messages) return;
+    for (const m of messages) clearTimeout(m.timer);
+    messages.clear();
     this.pending.delete(key);
   }
 }

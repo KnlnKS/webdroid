@@ -80,7 +80,21 @@ and browser deliver one cancellation and one completion; both accept marker clic
 the resulting camera position. Android emits idle after completion. Webdroid instead
 emits idle before cancellation and none after completion, with all three reached
 runtime diagnostic sets empty. This is a reproduced platform divergence, not an upstream
-waiver. Trace camera-event/Handler ordering before changing callbacks or timings.
+waiver. The bundled dispatcher removes pending idle/cancel messages, but Handler.cancel
+left the captured message set populated after deleting its map entry. The fix
+clears that set so queued jobs cannot dispatch removed messages. Four public-API tests
+fail before and pass after; the genuine map now matches Android cancellation/completion/
+idle ordering and still passes marker/pan/reopen checks with all three runtimes observed.
+Typecheck, 615 units, affected smoke compilation, framework probes and textcmp pass.
+All 111 E2E steps complete without added diagnostics; corpus retains 13/14 rendered
+and the same 24 gaps. FitNotes' prior FragmentManager-destroyed error disappears.
+Three pairs show cold CPU −4.05% and reset CPU +5.60%. A fresh three-pair comparison
+with per-step CPU measurements gives −3.06% / −0.14%; the reset increase does not
+repeat. Retained heap changes at most 0.039%. Native tutorial CPU is −3.04%, with
+3.21% fewer GL frames; this does not establish a throughput improvement. Both series,
+idle/frame measurements and their limits are retained in the history.
+The source-matched pre-fix baseline is `5d7875e` on 41983 in
+`/tmp/webdroid-map-handler-baseline`.
 
 A fresh test tab is open in Chrome at `http://localhost:41979/?apk=GmsClient.apk`.
 The user has been asked to complete the authorized Google sign-in directly in that
