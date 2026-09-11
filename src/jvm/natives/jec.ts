@@ -3,7 +3,8 @@
 // arithmetic is BigInt, which is what lets a key built from a spec (no WebCrypto import of a
 // bare scalar) still agree on a secret, and lets a point be checked before it is trusted.
 import { rt, JObj } from "../runtime";
-import { JBigInteger, mkBI } from "./jmath";
+import { JBigInteger, mkBI, modInverse } from "./jmath";
+import { valueClass } from "./jsec";
 import { JRsaPublicKey, JRsaPrivateKey } from "./jrsa";
 
 type Curve = { names: string[]; web: string; oid: number[]; bytes: number; p: bigint; a: bigint; b: bigint; gx: bigint; gy: bigint; n: bigint };
@@ -34,11 +35,6 @@ const badSpec = (msg: string) => rt.mkThrowable("java/security/spec/InvalidKeySp
 
 // ── affine arithmetic
 const mod = (x: bigint, p: bigint) => ((x % p) + p) % p;
-function inv(x: bigint, p: bigint): bigint {
-  let [a, b, u, v] = [mod(x, p), p, 1n, 0n];
-  while (a !== 0n) { const q = b / a; [a, b] = [b - q * a, a]; [u, v] = [v - q * u, u]; }
-  return mod(v, p);
-}
 type Pt = [bigint, bigint] | null;
 function add(c: Curve, P: Pt, Q: Pt): Pt {
   if (!P) return Q;
@@ -47,8 +43,8 @@ function add(c: Curve, P: Pt, Q: Pt): Pt {
   let l: bigint;
   if (x1 === x2) {
     if (mod(y1 + y2, c.p) === 0n) return null;
-    l = mod((3n * x1 * x1 + c.a) * inv(2n * y1, c.p), c.p);
-  } else l = mod((y2 - y1) * inv(x2 - x1, c.p), c.p);
+    l = mod((3n * x1 * x1 + c.a) * modInverse(2n * y1, c.p), c.p);
+  } else l = mod((y2 - y1) * modInverse(x2 - x1, c.p), c.p);
   const x3 = mod(l * l - x1 - x2, c.p);
   return [x3, mod(l * (x1 - x3) - y1, c.p)];
 }
@@ -132,7 +128,7 @@ function curveOfSpec(params: any): Curve {
   return c;
 }
 
-for (const name of ["java/security/interfaces/ECKey", "java/security/interfaces/ECPublicKey", "java/security/interfaces/ECPrivateKey"]) rt.register({ name, ctor: class extends JObj {} });
+rt.markers("java/security/interfaces/ECKey", "java/security/interfaces/ECPublicKey", "java/security/interfaces/ECPrivateKey");
 rt.register({
   name: "webdroid/EcPublicKey", ctor: JEcPublicKey, ifaces: ["java/security/interfaces/ECPublicKey", "java/security/interfaces/ECKey", "java/security/PublicKey", "java/security/Key"],
   methods: {
@@ -190,35 +186,11 @@ const rsaAlg = tlv(0x30, [...tlv(6, oidBytes(ID_RSA)), 5, 0]);
 const rsaSpki = (n: bigint, e: bigint) => Uint8Array.from(tlv(0x30, [...rsaAlg, ...tlv(3, [0, ...tlv(0x30, [...big(n), ...big(e)])])]));
 const rsaPkcs8 = (parts: bigint[]) => Uint8Array.from(tlv(0x30, [...tlv(2, [0]), ...rsaAlg, ...tlv(4, tlv(0x30, parts.flatMap(big)))]));
 const RSA_CRT = ["n", "e", "d", "p", "q", "dp", "dq", "qinv"];
-rt.register({
-  name: "java/security/spec/RSAPublicKeySpec", ctor: class extends JObj {}, ifaces: ["java/security/spec/KeySpec"],
-  methods: {
-    "<init>(Ljava/math/BigInteger;Ljava/math/BigInteger;)V": function (this: Record<string, unknown>, n: unknown, e: unknown) { this.n = n; this.e = e; },
-    "getModulus()Ljava/math/BigInteger;": function (this: Record<string, unknown>) { return this.n; },
-    "getPublicExponent()Ljava/math/BigInteger;": function (this: Record<string, unknown>) { return this.e; },
-  },
-});
-rt.register({
-  name: "java/security/spec/RSAPrivateKeySpec", ctor: class extends JObj {}, ifaces: ["java/security/spec/KeySpec"],
-  methods: {
-    "<init>(Ljava/math/BigInteger;Ljava/math/BigInteger;)V": function (this: Record<string, unknown>, n: unknown, d: unknown) { this.n = n; this.d = d; },
-    "getModulus()Ljava/math/BigInteger;": function (this: Record<string, unknown>) { return this.n; },
-    "getPrivateExponent()Ljava/math/BigInteger;": function (this: Record<string, unknown>) { return this.d; },
-  },
-});
-rt.register({
-  name: "java/security/spec/RSAPrivateCrtKeySpec", ctor: class extends JObj {}, sup: "java/security/spec/RSAPrivateKeySpec",
-  methods: {
-    "<init>(Ljava/math/BigInteger;Ljava/math/BigInteger;Ljava/math/BigInteger;Ljava/math/BigInteger;Ljava/math/BigInteger;Ljava/math/BigInteger;Ljava/math/BigInteger;Ljava/math/BigInteger;)V":
-      function (this: Record<string, unknown>, ...a: unknown[]) { RSA_CRT.forEach((k, i) => { this[k] = a[i]; }); },
-    "getPublicExponent()Ljava/math/BigInteger;": function (this: Record<string, unknown>) { return this.e; },
-    "getPrimeP()Ljava/math/BigInteger;": function (this: Record<string, unknown>) { return this.p; },
-    "getPrimeQ()Ljava/math/BigInteger;": function (this: Record<string, unknown>) { return this.q; },
-    "getPrimeExponentP()Ljava/math/BigInteger;": function (this: Record<string, unknown>) { return this.dp; },
-    "getPrimeExponentQ()Ljava/math/BigInteger;": function (this: Record<string, unknown>) { return this.dq; },
-    "getCrtCoefficient()Ljava/math/BigInteger;": function (this: Record<string, unknown>) { return this.qinv; },
-  },
-});
+const BI = "Ljava/math/BigInteger;", KEY_SPEC = ["java/security/spec/KeySpec"];
+valueClass("java/security/spec/RSAPublicKeySpec", ["n", "e"], `(${BI}${BI})V`, [[`getModulus()${BI}`, "n"], [`getPublicExponent()${BI}`, "e"]], KEY_SPEC);
+valueClass("java/security/spec/RSAPrivateKeySpec", ["n", "d"], `(${BI}${BI})V`, [[`getModulus()${BI}`, "n"], [`getPrivateExponent()${BI}`, "d"]], KEY_SPEC);
+valueClass("java/security/spec/RSAPrivateCrtKeySpec", RSA_CRT, `(${BI.repeat(8)})V`, [[`getPublicExponent()${BI}`, "e"], [`getPrimeP()${BI}`, "p"],
+  [`getPrimeQ()${BI}`, "q"], [`getPrimeExponentP()${BI}`, "dp"], [`getPrimeExponentQ()${BI}`, "dq"], [`getCrtCoefficient()${BI}`, "qinv"]], [], "java/security/spec/RSAPrivateKeySpec");
 
 class JKeyFactory extends JObj { algo = "EC"; }
 const keyFactory = (algo: string) => {
@@ -270,14 +242,15 @@ const keyAgreement = (algo: string) => {
   return new JKeyAgreement();
 };
 const invalidKey = (msg: string) => rt.mkThrowable("java/security/InvalidKeyException", msg);
+function agreementInit(this: JKeyAgreement, k: unknown) { if (!(k instanceof JEcPrivateKey)) throw invalidKey("EC private key required"); this.priv = k; this.peer = null; }
 rt.register({
   name: "javax/crypto/KeyAgreement", ctor: JKeyAgreement,
   methods: {
     "static getInstance(Ljava/lang/String;)Ljavax/crypto/KeyAgreement;": keyAgreement,
     "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/KeyAgreement;": keyAgreement,
     "getAlgorithm()Ljava/lang/String;": () => "ECDH",
-    "init(Ljava/security/Key;)V": function (this: JKeyAgreement, k: unknown) { if (!(k instanceof JEcPrivateKey)) throw invalidKey("EC private key required"); this.priv = k; this.peer = null; },
-    "init(Ljava/security/Key;Ljava/security/SecureRandom;)V": function (this: JKeyAgreement, k: unknown) { if (!(k instanceof JEcPrivateKey)) throw invalidKey("EC private key required"); this.priv = k; this.peer = null; },
+    "init(Ljava/security/Key;)V": agreementInit,
+    "init(Ljava/security/Key;Ljava/security/SecureRandom;)V": agreementInit,
     "doPhase(Ljava/security/Key;Z)Ljava/security/Key;": function (this: JKeyAgreement, k: unknown, last: number) {
       if (!this.priv) throw rt.mkThrowable("java/lang/IllegalStateException", "not initialized");
       if (!(k instanceof JEcPublicKey) || k.c !== this.priv.c) throw invalidKey("EC public key on the same curve required");

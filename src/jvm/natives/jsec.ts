@@ -13,19 +13,22 @@ const SHA256_K = new Uint32Array([0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5
     0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2]);
 const SHA256_H0 = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]);
-function sha256(data: Uint8Array): Uint8Array {
-  const H = new Uint32Array(SHA256_H0);
-  const len = data.length;
-  const padded = new Uint8Array(((len + 8) >> 6 << 6) + 64);
+/** the message padded to whole 64-byte blocks, its bit length in the last eight bytes */
+function mdPad(data: Uint8Array, le: boolean): DataView {
+  const len = data.length, padded = new Uint8Array(((len + 8) >> 6 << 6) + 64);
   padded.set(data);
   padded[len] = 0x80;
-  const bitLen = len * 8;
   const dv = new DataView(padded.buffer);
-  dv.setUint32(padded.length - 4, bitLen >>> 0, false);
-  dv.setUint32(padded.length - 8, Math.floor(bitLen / 0x100000000), false);
+  dv.setUint32(padded.length - (le ? 8 : 4), (len * 8) >>> 0, le);
+  dv.setUint32(padded.length - (le ? 4 : 8), Math.floor(len / 0x20000000), le);
+  return dv;
+}
+function sha256(data: Uint8Array): Uint8Array {
+  const H = new Uint32Array(SHA256_H0);
+  const dv = mdPad(data, false);
   const w = new Uint32Array(64);
   const rot = (x: number, n: number) => (x >>> n) | (x << (32 - n));
-  for (let off = 0; off < padded.length; off += 64) {
+  for (let off = 0; off < dv.byteLength; off += 64) {
     for (let i = 0; i < 16; i++) w[i] = dv.getUint32(off + i * 4, false);
     for (let i = 16; i < 64; i++) {
       const s0 = rot(w[i - 15], 7) ^ rot(w[i - 15], 18) ^ (w[i - 15] >>> 3);
@@ -53,16 +56,10 @@ function sha256(data: Uint8Array): Uint8Array {
 
 function sha1(data: Uint8Array): Uint8Array {
   const H = new Uint32Array([0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0]);
-  const len = data.length;
-  const padded = new Uint8Array(((len + 8) >> 6 << 6) + 64);
-  padded.set(data);
-  padded[len] = 0x80;
-  new DataView(padded.buffer).setUint32(padded.length - 4, (len * 8) >>> 0, false);
-  new DataView(padded.buffer).setUint32(padded.length - 8, Math.floor(len / 0x20000000), false);
+  const dv = mdPad(data, false);
   const w = new Uint32Array(80);
-  const dv = new DataView(padded.buffer);
   const rot = (x: number, n: number) => (x << n) | (x >>> (32 - n));
-  for (let off = 0; off < padded.length; off += 64) {
+  for (let off = 0; off < dv.byteLength; off += 64) {
     for (let i = 0; i < 16; i++) w[i] = dv.getUint32(off + i * 4, false);
     for (let i = 16; i < 80; i++) w[i] = rot(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
     let [a, b, c, d, e] = H;
@@ -93,16 +90,10 @@ const MD5_S = [7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9,
 // RFC 1321; little-endian words, unlike the SHAs above.
 function md5(data: Uint8Array): Uint8Array {
   const H = new Uint32Array([0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476]);
-  const len = data.length;
-  const padded = new Uint8Array(((len + 8) >> 6 << 6) + 64);
-  padded.set(data);
-  padded[len] = 0x80;
-  const dv = new DataView(padded.buffer);
-  dv.setUint32(padded.length - 8, (len * 8) >>> 0, true);
-  dv.setUint32(padded.length - 4, Math.floor(len / 0x20000000), true);
+  const dv = mdPad(data, true);
   const w = new Uint32Array(16);
   const rot = (x: number, n: number) => (x << n) | (x >>> (32 - n));
-  for (let off = 0; off < padded.length; off += 64) {
+  for (let off = 0; off < dv.byteLength; off += 64) {
     for (let i = 0; i < 16; i++) w[i] = dv.getUint32(off + i * 4, true);
     let [a, b, c, d] = H;
     for (let i = 0; i < 64; i++) {
@@ -160,7 +151,7 @@ class JMessageDigest extends JObj {
   parts: Uint8Array[] = [];
 }
 function mdUpdate(md: JMessageDigest, b: Int8Array, off = 0, len = b.length) {
-  md.parts.push(new Uint8Array(b.buffer.slice(b.byteOffset + off, b.byteOffset + off + len)));
+  md.parts.push(u8(b, off, len).slice());
 }
 function mdDigest(md: JMessageDigest): Int8Array {
   const all = concat(md.parts);
@@ -240,21 +231,22 @@ for (const n of ["java/security/spec/ECParameterSpec", "java/security/spec/ECGen
   rt.register({ name: n, ctor: class extends JObj {}, methods: { "<init>(Ljava/lang/String;)V": () => {}, "<init>()V": () => {} } });
 }
 
-// java.security.spec's EC value classes: plain data an app's own curve math hands around
-const ecData = (name: string, fields: string[], ctorDesc: string, getters: [string, string][]) => rt.register({
-  name, ctor: class extends JObj {}, ifaces: name.endsWith("ECFieldFp") ? ["java/security/spec/ECField"] : name.endsWith("Spec") ? ["java/security/spec/AlgorithmParameterSpec", "java/security/spec/KeySpec"] : [],
+// java.security.spec's value classes: plain data an app's own key math hands around
+export const valueClass = (name: string, fields: string[], ctorDesc: string, getters: [string, string][], ifaces: string[] = [], sup?: string) => rt.register({
+  name, ctor: class extends JObj {}, ifaces, sup,
   methods: {
     [`<init>${ctorDesc}`]: function (this: Record<string, unknown>, ...a: unknown[]) { fields.forEach((f, i) => { this[f] = a[i]; }); },
     ...Object.fromEntries(getters.map(([m, f]) => [m, function (this: Record<string, unknown>) { return this[f] ?? null; }])),
   },
 });
 rt.markers("java/security/spec/ECField");
-ecData("java/security/spec/ECFieldFp", ["p"], "(Ljava/math/BigInteger;)V", [["getP()Ljava/math/BigInteger;", "p"], ["getFieldSize()I", "size"]]);
-ecData("java/security/spec/ECPoint", ["x", "y"], "(Ljava/math/BigInteger;Ljava/math/BigInteger;)V", [["getAffineX()Ljava/math/BigInteger;", "x"], ["getAffineY()Ljava/math/BigInteger;", "y"]]);
-ecData("java/security/spec/EllipticCurve", ["field", "a", "b"], "(Ljava/security/spec/ECField;Ljava/math/BigInteger;Ljava/math/BigInteger;)V",
+const SPEC = ["java/security/spec/AlgorithmParameterSpec", "java/security/spec/KeySpec"];
+valueClass("java/security/spec/ECFieldFp", ["p"], "(Ljava/math/BigInteger;)V", [["getP()Ljava/math/BigInteger;", "p"], ["getFieldSize()I", "size"]], ["java/security/spec/ECField"]);
+valueClass("java/security/spec/ECPoint", ["x", "y"], "(Ljava/math/BigInteger;Ljava/math/BigInteger;)V", [["getAffineX()Ljava/math/BigInteger;", "x"], ["getAffineY()Ljava/math/BigInteger;", "y"]]);
+valueClass("java/security/spec/EllipticCurve", ["field", "a", "b"], "(Ljava/security/spec/ECField;Ljava/math/BigInteger;Ljava/math/BigInteger;)V",
   [["getField()Ljava/security/spec/ECField;", "field"], ["getA()Ljava/math/BigInteger;", "a"], ["getB()Ljava/math/BigInteger;", "b"]]);
-ecData("java/security/spec/ECParameterSpec", ["curve", "g", "n", "h"], "(Ljava/security/spec/EllipticCurve;Ljava/security/spec/ECPoint;Ljava/math/BigInteger;I)V",
-  [["getCurve()Ljava/security/spec/EllipticCurve;", "curve"], ["getGenerator()Ljava/security/spec/ECPoint;", "g"], ["getOrder()Ljava/math/BigInteger;", "n"], ["getCofactor()I", "h"]]);
-ecData("java/security/spec/ECPublicKeySpec", ["w", "params"], "(Ljava/security/spec/ECPoint;Ljava/security/spec/ECParameterSpec;)V", [["getW()Ljava/security/spec/ECPoint;", "w"], ["getParams()Ljava/security/spec/ECParameterSpec;", "params"]]);
-ecData("java/security/spec/ECPrivateKeySpec", ["s", "params"], "(Ljava/math/BigInteger;Ljava/security/spec/ECParameterSpec;)V", [["getS()Ljava/math/BigInteger;", "s"], ["getParams()Ljava/security/spec/ECParameterSpec;", "params"]]);
-ecData("java/security/spec/ECGenParameterSpec", ["name"], "(Ljava/lang/String;)V", [["getName()Ljava/lang/String;", "name"]]);
+valueClass("java/security/spec/ECParameterSpec", ["curve", "g", "n", "h"], "(Ljava/security/spec/EllipticCurve;Ljava/security/spec/ECPoint;Ljava/math/BigInteger;I)V",
+  [["getCurve()Ljava/security/spec/EllipticCurve;", "curve"], ["getGenerator()Ljava/security/spec/ECPoint;", "g"], ["getOrder()Ljava/math/BigInteger;", "n"], ["getCofactor()I", "h"]], SPEC);
+valueClass("java/security/spec/ECPublicKeySpec", ["w", "params"], "(Ljava/security/spec/ECPoint;Ljava/security/spec/ECParameterSpec;)V", [["getW()Ljava/security/spec/ECPoint;", "w"], ["getParams()Ljava/security/spec/ECParameterSpec;", "params"]], SPEC);
+valueClass("java/security/spec/ECPrivateKeySpec", ["s", "params"], "(Ljava/math/BigInteger;Ljava/security/spec/ECParameterSpec;)V", [["getS()Ljava/math/BigInteger;", "s"], ["getParams()Ljava/security/spec/ECParameterSpec;", "params"]], SPEC);
+valueClass("java/security/spec/ECGenParameterSpec", ["name"], "(Ljava/lang/String;)V", [["getName()Ljava/lang/String;", "name"]], SPEC);

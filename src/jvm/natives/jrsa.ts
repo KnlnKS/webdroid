@@ -5,9 +5,9 @@ import { vcall } from "./jlang";
 import { mkBI } from "./jmath";
 import { JKeyGenSpec } from "../../android/security";
 
-const forge = () => import("node-forge").then((m) => m.default);
-const binary = (bytes: Uint8Array) => String.fromCharCode(...bytes);
-const array = (s: string) => Uint8Array.from(s, (c) => c.charCodeAt(0));
+export const forge = () => import("node-forge").then((m) => m.default);
+export const binary = (b: Uint8Array) => { let s = ""; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return s; };
+export const array = (s: string) => Uint8Array.from(s, (c) => c.charCodeAt(0));
 
 export class JRsaPublicKey extends JObj {
   encoded = new Uint8Array(0);
@@ -39,7 +39,7 @@ class JRsaKeyPair extends JObj {
 for (const name of ["java/security/PublicKey", "java/security/PrivateKey"]) {
   rt.register({ name, ctor: class extends JObj {}, ifaces: ["java/security/Key"] });
 }
-for (const name of ["java/security/interfaces/RSAKey", "java/security/interfaces/RSAPublicKey", "java/security/interfaces/RSAPrivateKey"]) rt.register({ name, ctor: class extends JObj {} });
+rt.markers("java/security/interfaces/RSAKey", "java/security/interfaces/RSAPublicKey", "java/security/interfaces/RSAPrivateKey");
 const bigInt = (v: { toString(radix: number): string }) => mkBI(BigInt("0x" + v.toString(16)));
 rt.register({
   name: "webdroid/RsaPublicKey", ctor: JRsaPublicKey, ifaces: ["java/security/interfaces/RSAPublicKey", "java/security/interfaces/RSAKey", "java/security/PublicKey", "java/security/Key"],

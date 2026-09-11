@@ -6,14 +6,11 @@ import { JObj, rt, maySuspend } from "../runtime";
 import { jarray, i8 } from "../abi";
 import { boxInt, defineException, newObj, stringHash, vcall } from "./jlang";
 import { newArrayList, mkIter } from "./jutil";
-import { JRsaPublicKey } from "./jrsa";
+import { JRsaPublicKey, forge, binary, array as bytes } from "./jrsa";
 import { JDate } from "./jtime";
 import { readStreamFully } from "./jio";
 
-const forge = () => import("node-forge").then((m) => m.default);
 type Node = asn1.Asn1;
-const binary = (b: Uint8Array) => { let s = ""; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return s; };
-const bytes = (s: string) => Uint8Array.from(s, (c) => c.charCodeAt(0));
 
 const SIG: Record<string, { name: "RSASSA-PKCS1-v1_5" | "ECDSA"; hash: string }> = {
   "1.2.840.113549.1.1.5": { name: "RSASSA-PKCS1-v1_5", hash: "SHA-1" }, "1.2.840.113549.1.1.11": { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
