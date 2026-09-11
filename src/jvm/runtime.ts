@@ -180,20 +180,10 @@ export class Runtime {
   classLoader: unknown = null;
   // Share host services and thread hooks; loader definitions and compiled call sites stay private.
   fork(): Runtime {
-    const child: Runtime = Object.create(this);
-    child.parent = this;
-    child.classes = new Map();
-    child.dexes = [];
-    child.dexIndex = new Map();
-    child.links = new Map();
-    child.refCache = new Map();
-    child.jni = new Map();
-    child.classpath = {};
-    child.classpathLocations = new Map();
-    child.syncMethods = null;
-    child.syncSites = null;
-    child.syncInits = null;
-    return child;
+    return Object.assign(Object.create(this) as Runtime, {
+      parent: this, classes: new Map(), dexes: [], dexIndex: new Map(), links: new Map(), refCache: new Map(), jni: new Map(),
+      classpath: {}, classpathLocations: new Map(), syncMethods: null, syncSites: null, syncInits: null,
+    });
   }
 
   loadDex(dex: DexFile, platform = false) {
@@ -432,17 +422,7 @@ export class Runtime {
       info.native = true;
       if (this.nativeIfaces().has(name)) info.flags |= ACC.INTERFACE;
       info.ctor = native.ctor;
-      if (name !== "java/lang/Object" && name !== "java/lang/String") {
-        const supName = native.sup ?? "java/lang/Object";
-        info.superInfo = this.link(supName);
-      }
-      info.types.add(name);
-      if (info.superInfo) for (const t of info.superInfo.types) info.types.add(t);
-      for (const i of native.ifaces ?? []) {
-        const ii = this.link(i);
-        info.interfaces.push(ii);
-        for (const t of ii.types) info.types.add(t);
-      }
+      this.adopt(info, name !== "java/lang/Object" && name !== "java/lang/String" ? native.sup ?? "java/lang/Object" : null, native.ifaces ?? []);
       this.setupNativeMembers(info, native);
       return info;
     }
@@ -470,15 +450,7 @@ export class Runtime {
     info.dex = dex;
     info.def = def;
     info.flags = def.flags;
-    const superName = def.superIdx === NO_INDEX ? null : descToName(dex.type(def.superIdx));
-    info.superInfo = superName ? this.link(superName) : null;
-    info.types.add(name);
-    if (info.superInfo) for (const t of info.superInfo.types) info.types.add(t);
-    for (const ifIdx of def.interfaces) {
-      const ii = this.link(descToName(dex.type(ifIdx)));
-      info.interfaces.push(ii);
-      for (const t of ii.types) info.types.add(t);
-    }
+    this.adopt(info, def.superIdx === NO_INDEX ? null : descToName(dex.type(def.superIdx)), def.interfaces.map((i) => descToName(dex.type(i))));
     // instance field table + ctor shell with field defaults
     let fieldsInit = "";
     for (const f of def.instanceFields) {
@@ -503,6 +475,18 @@ export class Runtime {
       info.ctor[prop] = defaultValue(desc);
     }
     return info;
+  }
+
+  /** link the supertypes and take on every name the class is assignable to */
+  private adopt(info: ClassInfo, sup: string | null, ifaces: string[]) {
+    info.superInfo = sup ? this.link(sup) : null;
+    info.types.add(info.name);
+    if (info.superInfo) for (const t of info.superInfo.types) info.types.add(t);
+    for (const i of ifaces) {
+      const ii = this.link(i);
+      info.interfaces.push(ii);
+      for (const t of ii.types) info.types.add(t);
+    }
   }
 
   private setupNativeMembers(info: ClassInfo, spec: NativeSpec) {

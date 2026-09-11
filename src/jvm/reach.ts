@@ -145,10 +145,21 @@ export class Program {
 
 const bump = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) ?? 0) + 1);
 
-const INVOKE: Record<number, 0 | 1> = {   // 1 = virtual/interface (dispatched), 0 = exact
+export const INVOKE: Record<number, 0 | 1> = {   // 1 = virtual/interface (dispatched), 0 = exact
   0x6e: 1, 0x6f: 0, 0x70: 0, 0x71: 0, 0x72: 1,
   0x74: 1, 0x75: 0, 0x76: 0, 0x77: 0, 0x78: 1,
 };
+export const splitKey = (k: MemberKey): [string, string] => { const i = k.indexOf("."); return [k.slice(0, i), k.slice(i + 1)]; };
+/** every instruction's opcode and pc; one unwalkable instruction must not cost us the rest of the program */
+export function walkInsns(insns: Uint16Array, visit: (op: number, pc: number) => void) {
+  for (let pc = 0; pc < insns.length;) {
+    visit(insns[pc] & 0xff, pc);
+    let len: number;
+    try { len = insnLen(insns, pc); } catch { return; }
+    if (len <= 0) return;
+    pc += len;
+  }
+}
 
 export function reach(p: Program, roots: MemberKey[], rootClasses: string[] = []): ReachResult {
   const r: ReachResult = {
@@ -222,18 +233,15 @@ export function reach(p: Program, roots: MemberKey[], rootClasses: string[] = []
   }
 
   for (const c of rootClasses) instantiate(c);
-  for (const k of roots) { const i = k.indexOf("."); addMethod(k.slice(0, i), k.slice(i + 1)); }
+  for (const k of roots) addMethod(...splitKey(k));
 
   while (work.length) {
-    const k = work.pop()!;
-    const i = k.indexOf(".");
-    const hit = p.resolve(k.slice(0, i), k.slice(i + 1));
+    const hit = p.resolve(...splitKey(work.pop()!));
     if (!hit?.m.codeOff) continue;
     const dex = p.dexOf(hit.cls)!;
     const code = dex.code(hit.m.codeOff);
     const insns = code.insns;
-    for (let pc = 0; pc < insns.length; ) {
-      const op = insns[pc] & 0xff;
+    walkInsns(insns, (op, pc) => {
       const kind = INVOKE[op];
       if (kind !== undefined) {
         const mIdx = insns[pc + 1];
@@ -251,12 +259,7 @@ export function reach(p: Program, roots: MemberKey[], rootClasses: string[] = []
         touchClass(owner);
         if (owner && (!p.has(owner) || !p.hasField(owner, f.name))) bump(r.unresolvedFields, owner + "." + f.name);
       }
-      let len: number;
-      // one unwalkable instruction must not cost us the rest of the program
-      try { len = insnLen(insns, pc); } catch { break; }
-      if (len <= 0) break;
-      pc += len;
-    }
+    });
     for (const t of code.tries) for (const [typeIdx] of t.handlers) touchClass(typeName(dex.type(typeIdx)));
   }
 

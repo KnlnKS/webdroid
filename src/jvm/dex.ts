@@ -268,14 +268,11 @@ export class DexFile {
     if (classDataOff) {
       const r = new Reader(this.bytes, classDataOff);
       const ns = r.uleb(), ni = r.uleb(), nd = r.uleb(), nv = r.uleb();
-      let idx = 0;
-      for (let j = 0; j < ns; j++) { idx += r.uleb(); def.staticFields.push({ fieldIdx: idx, flags: r.uleb() }); }
-      idx = 0;
-      for (let j = 0; j < ni; j++) { idx += r.uleb(); def.instanceFields.push({ fieldIdx: idx, flags: r.uleb() }); }
-      idx = 0;
-      for (let j = 0; j < nd; j++) { idx += r.uleb(); def.directMethods.push({ methodIdx: idx, flags: r.uleb(), codeOff: r.uleb() }); }
-      idx = 0;
-      for (let j = 0; j < nv; j++) { idx += r.uleb(); def.virtualMethods.push({ methodIdx: idx, flags: r.uleb(), codeOff: r.uleb() }); }
+      const list = <T>(n: number, out: T[], mk: (idx: number) => T) => { for (let j = 0, idx = 0; j < n; j++) out.push(mk(idx += r.uleb())); };
+      list(ns, def.staticFields, (fieldIdx) => ({ fieldIdx, flags: r.uleb() }));
+      list(ni, def.instanceFields, (fieldIdx) => ({ fieldIdx, flags: r.uleb() }));
+      list(nd, def.directMethods, (methodIdx) => ({ methodIdx, flags: r.uleb(), codeOff: r.uleb() }));
+      list(nv, def.virtualMethods, (methodIdx) => ({ methodIdx, flags: r.uleb(), codeOff: r.uleb() }));
     }
     return def;
   }
@@ -291,17 +288,8 @@ export class DexFile {
     const methodsSize = v.getUint32(dir + 8, true);
     if (classAnnoOff) out.cls = this.annotationSet(classAnnoOff);
     let p = dir + 16;
-    for (let i = 0; i < fieldsSize; i++) {
-      const fieldIdx = v.getUint32(p, true);
-      const setOff = v.getUint32(p + 4, true);
-      out.fields.set(fieldIdx, this.annotationSet(setOff));
-      p += 8;
-    }
-    for (let i = 0; i < methodsSize; i++) {
-      const methodIdx = v.getUint32(p, true);
-      const setOff = v.getUint32(p + 4, true);
-      out.methods.set(methodIdx, this.annotationSet(setOff));
-      p += 8;
+    for (const [n, into] of [[fieldsSize, out.fields], [methodsSize, out.methods]] as const) {
+      for (let i = 0; i < n; i++, p += 8) into.set(v.getUint32(p, true), this.annotationSet(v.getUint32(p + 4, true)));
     }
     // annotated_parameters: one annotation_set_ref_list per method, one set per parameter.
     // Retrofit, Dagger and Jackson read nothing else — @Query, @Named, @JsonProperty are all here.
@@ -435,15 +423,11 @@ export class DexFile {
       case 0x03: return this.readZExt(r, size);              // char
       case 0x04: return this.readSExt(r, size);              // int
       case 0x06: return this.readSExt64(r, size);            // long
-      case 0x10: { // float: size bytes, right-zero-extended to 4
-        const buf = new Uint8Array(4);
-        for (let i = 0; i < size; i++) buf[4 - size + i] = r.u8();
-        return new DataView(buf.buffer).getFloat32(0, true);
-      }
-      case 0x11: { // double: right-zero-extended to 8
-        const buf = new Uint8Array(8);
-        for (let i = 0; i < size; i++) buf[8 - size + i] = r.u8();
-        return new DataView(buf.buffer).getFloat64(0, true);
+      case 0x10: case 0x11: { // float/double: size bytes, right-zero-extended to 4/8
+        const n = type === 0x10 ? 4 : 8, buf = new Uint8Array(n);
+        for (let i = 0; i < size; i++) buf[n - size + i] = r.u8();
+        const dv = new DataView(buf.buffer);
+        return n === 4 ? dv.getFloat32(0, true) : dv.getFloat64(0, true);
       }
       case 0x17: return this.string(this.readZExt(r, size)); // string
       case 0x18: return { kind: "type", idx: this.readZExt(r, size) };

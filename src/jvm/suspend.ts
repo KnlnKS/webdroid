@@ -3,7 +3,7 @@
 // Every compiled method is an async function today because any call might return a promise.
 // In the shape the compiler emits that costs ~24x over the same body called synchronously —
 // 490M calls/s against 20M — and widening the syntactic rule buys nothing: 12.4% of
-// harmonic's bodies are sync today and only 13.4% contain no invoke at all. So the answer
+// sampled bodies are sync today and only 13.4% contain no invoke at all. So the answer
 // has to come from the call graph.
 //
 // It is a backward closure over that graph. A method suspends if it can reach one that does.
@@ -12,18 +12,15 @@
 // <clinit>, which is a method in the graph like any other. Anything unresolvable is assumed
 // to suspend, so being wrong makes a method slow, never wrong.
 //
-// A virtual call site is one node, not one node per possible receiver. Fanning out per site
-// made mihon 12.5M edges and 37s.
+// A virtual call site is one node, not one node per possible receiver: fanning out per site
+// costs millions of edges on a large app.
 
-import { type Program, sigOf } from "./reach";
-import { insnLen } from "./opcodes";
+import { type Program, sigOf, INVOKE, splitKey, walkInsns } from "./reach";
 import { descToName } from "./abi";
 
 /** answers for a method no dex defines: true suspends, false does not, null unknown */
 type NativeOracle = (cls: string, sig: string) => boolean | null;
 
-const INVOKE_VIRTUAL: Record<number, 1> = { 0x6e: 1, 0x72: 1, 0x74: 1, 0x78: 1 };
-const INVOKE_EXACT: Record<number, 1> = { 0x6f: 1, 0x70: 1, 0x71: 1, 0x75: 1, 0x76: 1, 0x77: 1 };
 const CLINIT = "<clinit>()V";
 const SUSPENDS = "\0suspends";   // the node every unresolvable target reports to
 
@@ -60,8 +57,8 @@ export function analyseSuspend(
   // suspends, as far as any site that reaches it after all is concerned.
   const scanned = new Set<string>();
   for (const key of methods) {
-    const dot = key.indexOf("."), hit = p.resolve(key.slice(0, dot), key.slice(dot + 1));
-    if (hit?.m.codeOff) scanned.add(hit.cls + key.slice(dot));
+    const [cls, sig] = splitKey(key), hit = p.resolve(cls, sig);
+    if (hit?.m.codeOff) scanned.add(hit.cls + "." + sig);
   }
   const resolved = new Map<string, string>();
   function definitionOf(cls: string, sig: string): string {
@@ -98,24 +95,22 @@ export function analyseSuspend(
   }
 
   for (const key of methods) {
-    const dot = key.indexOf(".");
-    const sig = key.slice(dot + 1);
-    const hit = p.resolve(key.slice(0, dot), sig);
+    const [cls, sig] = splitKey(key);
+    const hit = p.resolve(cls, sig);
     if (!hit?.m.codeOff) continue;
     const self = hit.cls + "." + sig;
     const dex = p.dexOf(hit.cls)!;
     const insns = dex.code(hit.m.codeOff).insns;
-    for (let pc = 0; pc < insns.length; ) {
-      const op = insns[pc] & 0xff;
+    walkInsns(insns, (op, pc) => {
       if (op === 0x1d) mark(self); // monitor-enter can contend across cooperative threads
-      if (INVOKE_EXACT[op]) {
+      if (INVOKE[op] === 0) {
         const mIdx = insns[pc + 1];
         const owner = descToName(dex.type(dex.method(mIdx).cls));
         if (owner[0] !== "[") {
           if (op === 0x71 || op === 0x77) initOf(owner, self);   // invoke-static inits
           exact(owner, sigOf(dex, mIdx), self);
         }
-      } else if (INVOKE_VIRTUAL[op]) {
+      } else if (INVOKE[op] === 1) {
         const mIdx = insns[pc + 1];
         const owner = descToName(dex.type(dex.method(mIdx).cls));
         if (owner[0] !== "[") {
@@ -128,18 +123,12 @@ export function analyseSuspend(
       } else if (op >= 0x60 && op <= 0x6d) {                     // sget/sput
         initOf(descToName(dex.type(dex.field(insns[pc + 1]).cls)), self);
       }
-      let len: number;
-      try { len = insnLen(insns, pc); } catch { break; }
-      if (len <= 0) break;
-      pc += len;
-    }
+    });
   }
 
   // one fan-out per distinct site, after the scan, so a hot signature costs once
   for (const site of virtualSites) {
-    const dot = site.indexOf(".");
-    const owner = site.slice(0, dot), sig = site.slice(dot + 1);
-    const node = "@" + site;
+    const [owner, sig] = splitKey(site), node = "@" + site;
     exact(owner, sig, node);
     for (const t of subtypes.get(owner) ?? []) exact(t, sig, node);
   }
