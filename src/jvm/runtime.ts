@@ -166,12 +166,6 @@ export class Runtime {
   su: (t: unknown) => void = () => {};
   onUncaught: ((e: unknown) => void) | null = null;
   fuel = 4096;
-  /** methods the suspension analysis proved cannot suspend, so they compile without `async`.
-   *  Null until it has run; a method it never saw falls back to the compiler's syntactic rule. */
-  syncMethods: Set<string> | null = null;
-  /** call sites and class initializations the analysis proved cannot suspend: their guards need no await */
-  syncSites: Set<string> | null = null;
-  syncInits: Set<string> | null = null;
 
   hotSourceBytes = 0;
   parent: Runtime | null = null;
@@ -182,7 +176,7 @@ export class Runtime {
   fork(): Runtime {
     return Object.assign(Object.create(this) as Runtime, {
       parent: this, classes: new Map(), dexes: [], dexIndex: new Map(), links: new Map(), refCache: new Map(), jni: new Map(),
-      classpath: {}, classpathLocations: new Map(), syncMethods: null, syncSites: null, syncInits: null,
+      classpath: {}, classpathLocations: new Map(),
     });
   }
 
@@ -337,46 +331,6 @@ export class Runtime {
     return () => { throw this.unimplemented(what); };
   }
 
-  /** Whether a call that leaves the dex can suspend. Our own natives are the leaves of the
-   *  suspension analysis: async functions and explicitly marked conditional callbacks suspend.
-   *
-   *  Dispatch is on the runtime receiver, not the declared type, so the answer has to cover
-   *  every registered class assignable to it — an interface registered as an empty marker
-   *  (android/content/SharedPreferences) carries no method at all, and the body that runs
-   *  lives on webdroid/SharedPrefs. A call that resolves to nothing throws, which is not a
-   *  suspension; only a class we cannot see into at all is unknown. */
-  nativeOracle(): (cls: string, sig: string) => boolean | null {
-    // registered class name → every registered class assignable to it, itself included
-    const subs = new Map<string, ClassInfo[]>();
-    for (const name of this.natives.keys()) {
-      const info = this.classes.get(name);
-      if (!info?.ctor || info.stub) continue;
-      for (const t of info.types) {
-        let l = subs.get(t);
-        if (!l) subs.set(t, (l = []));
-        l.push(info);
-      }
-    }
-    return (cls, sig) => {
-      // a native's static initializer is the spec's `clinit` hook, not a prototype method,
-      // and it belongs to that exact class rather than to anything assignable to it
-      if (sig === "<clinit>()V") {
-        const c = this.natives.get(cls)?.clinit;
-        return c ? canSuspend(c) : this.natives.has(cls) ? false : null;
-      }
-      const l = subs.get(cls);
-      const paren = sig.indexOf("(");
-      if (!l || paren < 0) return null;          // nothing registered under this name
-      const mangled = mangleMethod(sig.slice(0, paren), sig.slice(paren));
-      for (const info of l) {
-        const fn = info.ctor.prototype[mangled] ?? info.ctor[mangled];
-        if (typeof fn === "function" && canSuspend(fn)) return true;
-      }
-      // either every implementation is sync, or there is none and the call throws
-      return false;
-    };
-  }
-
   /** `?natcheck=1`: report promises from natives lacking an async or maySuspend declaration.
    *  Off by default — it costs a call frame per native. */
   auditNatives = false;
@@ -389,13 +343,6 @@ export class Runtime {
       if (r instanceof Promise) rt.nativeLiars.add(cls + " " + key);
       return r;
     };
-  }
-
-  /** a frame compiled sync got a promise anyway: the analysis was wrong about something it
-   *  could reach. It cannot await, and handing the promise on as a value would be silent. */
-  nosusp(what: string, site = ""): Error {
-    this.noteMissing(`${what} suspended in a sync frame at ${site}`);
-    return this.mkThrowable("java/lang/IllegalStateException", `webdroid: ${what} suspended in a frame compiled sync at ${site}`);
   }
 
   unimplemented(what: string): Error {

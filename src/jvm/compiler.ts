@@ -259,18 +259,14 @@ class MethodCompiler {
     }
 
     this.typeConsts();
-    // Sync eligibility. The whole-program answer (src/jvm/suspend.ts) is authoritative where
-    // it has one; a method it never saw — reflection, a class loaded later — falls back to
-    // the syntactic rule, which is sound because none of those instructions can suspend.
-    if (this.R.syncMethods?.has(this.info.name + "." + this.mname + this.desc)) this.sync = true;
-    else {
-      for (const pc2 of this.order) {
-        const i = this.ins.get(pc2)!;
-        if (i.name.startsWith("invoke") || i.name.startsWith("sget") || i.name.startsWith("sput") ||
-            i.name === "monitor-enter" || i.name === "new-instance" || i.name === "filled-new-array" || i.name === "filled-new-array/range") {
-          this.sync = false;
-          break;
-        }
+    // A body with no call, static access, monitor or allocation cannot suspend, so it compiles
+    // without `async`.
+    for (const pc2 of this.order) {
+      const i = this.ins.get(pc2)!;
+      if (i.name.startsWith("invoke") || i.name.startsWith("sget") || i.name.startsWith("sput") ||
+          i.name === "monitor-enter" || i.name === "new-instance" || i.name === "filled-new-array" || i.name === "filled-new-array/range") {
+        this.sync = false;
+        break;
       }
     }
   }
@@ -566,14 +562,9 @@ ${catchBody}
     return this.mname === "<clinit>" && this.info.def ? `,${this.info.def.typeIdx}` : "";
   }
 
-  /** A site the whole-program analysis proved cannot suspend gets the same loud check a sync
-   *  frame does instead of an await: the check is a fraction of the bytecode, and it is the
-   *  await machinery, not the call, that sets the size of a body. */
-  private guard(expr: string, out: string[], assignTo = "$t", siteSync = false, site = "") {
-    // A sync frame cannot await. If the analysis was wrong the value arrives as a promise,
-    // and saying so is the only honest thing left — proceeding would hand a promise on as
-    // if it were the result. Naming the site is what makes the wrong answer findable.
-    if (this.sync || siteSync) { out.push(`${assignTo}=${expr};if(${assignTo} instanceof Promise)throw R.nosusp(${JSON.stringify(this.info.name + "." + this.mname + this.desc)},${JSON.stringify(site)});`); return; }
+  /** A call or class initialization: its value, awaited when it is a promise. Only async bodies
+   *  reach here: a body holding any of these instructions never compiles sync. */
+  private guard(expr: string, out: string[], assignTo = "$t") {
     out.push(`${assignTo}=${expr};${this.suspend(assignTo)}`);
   }
 
@@ -584,8 +575,6 @@ ${catchBody}
     return `if(${value} instanceof Promise){$p=${value};$resume=${resume};break $dispatch;}case -${resume}:if($resume){${value}=$p;$resume=0;}`;
   }
 
-  private siteSync(key: string): boolean { return this.R.syncSites?.has(key) ?? false; }
-  private initSync(cls: string): boolean { return this.R.syncInits?.has(cls) ?? false; }
 
   private fieldProp(fieldIdx: number): string {
     return this.R.resolveInstanceField(this.dex, fieldIdx);
@@ -636,7 +625,7 @@ ${catchBody}
         const tname = descToName(dex.type(i.b));
         if (tname === "java/lang/String") { out.push(`${A}="";`); break; }
         if (tname === this.info.name) out.push(`$u=D.cl[${i.b}]??D.link(${i.b});`);
-        else this.guard(`D.ic[${i.b}]??D.init(${i.b}${this.fromArg})`, out, "$u", this.initSync(tname), "init " + tname);
+        else this.guard(`D.ic[${i.b}]??D.init(${i.b}${this.fromArg})`, out, "$u");
         out.push(`${A}=new $u();`);
         break;
       }
@@ -734,8 +723,7 @@ ${catchBody}
     if (typeIdx >= 0 && descToName(this.dex.type(typeIdx)) === this.info.name) {
       out.push(`$u=D.cl[${typeIdx}]??D.link(${typeIdx});`);
     } else if (typeIdx >= 0) {
-      const owner = descToName(this.dex.type(typeIdx));
-      this.guard(`D.ic[${typeIdx}]??D.init(${typeIdx}${this.fromArg})`, out, "$u", this.initSync(owner), "init " + owner);
+      this.guard(`D.ic[${typeIdx}]??D.init(${typeIdx}${this.fromArg})`, out, "$u");
     } else {
       this.guard(`D.fs[${i.b}]??D.rsf(${i.b}${this.fromArg})`, out, "$u");
     }
@@ -781,14 +769,13 @@ ${catchBody}
     }
     switch (kind) {
       case "invoke-virtual": case "invoke-interface":
-        this.guard(`${recv}.${mangled}(${argStr})`, out, "$t", this.siteSync("@" + clsName + "." + mref.name + desc), clsName + "." + mref.name + desc);
+        this.guard(`${recv}.${mangled}(${argStr})`, out);
         break;
       case "invoke-super": {
         // resolve against the superclass prototype; an interface-default super call
         // (Iface.super.m()) instead resolves on the declared interface's prototype
         out.push(`$t=(S.prototype.${mangled}??(D.cl[${mref.cls}]??D.link(${mref.cls})).prototype.${mangled}??R.nsm(${JSON.stringify(clsName + "." + mref.name + desc + " (super)")})).call(${recv}${argStr ? "," + argStr : ""});`);
-        if (!this.sync) out.push(this.siteSync(clsName + "." + mref.name + desc) ? `if($t instanceof Promise)throw R.nosusp(${JSON.stringify(this.info.name + "." + this.mname + this.desc)},${JSON.stringify(clsName + "." + mref.name + desc)});`
-          : this.suspend("$t"));
+        out.push(this.suspend("$t"));
         break;
       }
       case "invoke-direct": {
@@ -799,15 +786,15 @@ ${catchBody}
         // same-class: entry into this class's code implies inited (or initing in
         // this chain — JVM reentrancy); skip init to avoid clinit self-deadlock
         if (clsName === this.info.name) out.push(`$u=D.dp[${i.b}]??D.rdp0(${i.b});`);
-        else this.guard(`D.dp[${i.b}]??D.rdp(${i.b}${this.fromArg})`, out, "$u", this.initSync(clsName), "init " + clsName);
-        this.guard(`$u.call(${recv}${argStr ? "," + argStr : ""})`, out, "$t", this.siteSync(clsName + "." + mref.name + desc), clsName + "." + mref.name + desc);
+        else this.guard(`D.dp[${i.b}]??D.rdp(${i.b}${this.fromArg})`, out, "$u");
+        this.guard(`$u.call(${recv}${argStr ? "," + argStr : ""})`, out);
         break;
       }
       case "invoke-static": {
         if (clsName === this.info.name) out.push(`$u=D.cl[${mref.cls}]??D.link(${mref.cls});`);
-        else this.guard(`D.ic[${mref.cls}]??D.init(${mref.cls}${this.fromArg})`, out, "$u", this.initSync(clsName), "init " + clsName);
+        else this.guard(`D.ic[${mref.cls}]??D.init(${mref.cls}${this.fromArg})`, out, "$u");
         const args = this.R.natives.get(clsName)?.callerSensitive?.includes(mref.name + desc) ? argStr + (argStr ? ",R" : "R") : argStr;
-        this.guard(`$u.${mangled}(${args})`, out, "$t", this.siteSync(clsName + "." + mref.name + desc), clsName + "." + mref.name + desc);
+        this.guard(`$u.${mangled}(${args})`, out);
         break;
       }
       // invoke-polymorphic (MethodHandle.invoke/invokeExact) lands here

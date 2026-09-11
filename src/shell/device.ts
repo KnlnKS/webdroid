@@ -2,7 +2,6 @@
 
 import { dexesIn } from "../jvm/dex";
 import { rt, type JObj } from "../jvm/runtime";
-import { analyseProgram } from "../jvm/analyse";
 import { vfs, apkPath } from "../jvm/natives/jio";
 import { openInstall, type Install } from "./install";
 import { vcall, curThread, mainThread, setCurThread } from "../jvm/natives/jlang";
@@ -81,9 +80,6 @@ function launcherOrientation(root: XmlNode): number {
   return (targetNode && attr(targetNode, "screenOrientation")?.data) ?? -1;
 }
 
-/** `?sync=1` opts into the sync tier: the analysis is sound, our natives are not yet. */
-const SYNC_TIER = typeof location !== "undefined" && new URLSearchParams(location.search).get("sync") === "1";
-
 interface BootedApp {
   host: AppHost;
   mainActivityCls: string;
@@ -134,17 +130,6 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   // interface is a class provenance withheld would otherwise link it, find no dex yet, and
   // auto-stub it into the class cache for the rest of the run.
   rt.linkNatives((name, e) => console.warn("[link native]", name, e));
-  // Every dex is loaded and every native has a prototype, so the call graph is complete and
-  // nothing has been compiled yet: the only moment the suspension analysis can run.
-  if (SYNC_TIER) {
-    onStatus("analysing…");
-    const services: Record<string, string> = {};
-    for (const n of Object.keys(zip)) {
-      if (n.startsWith("META-INF/services/")) services[n] = new TextDecoder().decode(zip[n]);
-    }
-    const a = analyseProgram(zip["AndroidManifest.xml"], services);
-    console.log(`[webdroid] ${a.reachable} reachable methods, ${a.sync} cannot suspend, in ${a.ms.toFixed(0)}ms`);
-  }
   const pkg = attrStr(manifest, "package") ?? "app";
   await vfs.prepare(pkg);
   const appNode = manifest.children.find((c) => c.name === "application");

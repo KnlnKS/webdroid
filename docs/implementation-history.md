@@ -258,9 +258,9 @@ submitted. Perfsum does not parse this standalone schema: its zero Reddit row is
   accessors without reading them.
 - Native re-entry can suspend while common paths stay synchronous. maySuspend records this
   without Promise wrappers. Reached natcheck success cannot validate the whole sync tier.
-  The experimental call-graph tier stays opt-in: generated lists miss unreached overloads,
-  source scans miss helpers, and assuming all natives suspend erased nearly all advantage
-  (historically 13.7% sync versus ~40% under unsafe assumptions).
+  The experimental call-graph sync tier was removed. Sound, it needed every native to declare
+  its re-entry, and running the analysis at boot cost up to 1.4 s of first draw; deferring it
+  behind a proof cache worked but carried more machinery than its measured gain justified.
 - Dalvik constant typing requires CFG reaching definitions through merges and exception edges,
   not PC order. R8 arms reuse registers; moves propagate wide/float definitions. JS bitwise
   results are signed int32; Java float-to-int conversion saturates where specified. Constructor

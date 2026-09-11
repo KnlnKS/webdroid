@@ -797,8 +797,7 @@ delegate("android/os/SystemProperties", {
 // ── android.graphics.Bitmap ────────────────────────────────────────────────────────────
 // The handle is a JBitmap. Several of these build the Java object rather than returning a
 // handle, so they construct AOSP's own Bitmap through its (nativePtr, w, h, density, mutable,
-// ninePatchChunk, insets) constructor — which makes them async, and an async delegate on a cut
-// class is safe because the suspension analysis has no spec to consult and assumes suspension.
+// ninePatchChunk, insets) constructor — which makes them async.
 //
 // Everything here is ARGB_8888: that is what a Canvas2D raster is, and reporting anything else
 // would have callers allocate for a depth we do not have. AOSP's NATIVE config numbering is

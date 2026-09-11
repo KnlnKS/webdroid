@@ -36,7 +36,7 @@ interface ClassRec {
 
 /** name+desc of a method ref, memoised per dex: the walk asks for these once per call site */
 const sigCaches = new WeakMap<DexFile, (string | undefined)[]>();
-export function sigOf(dex: DexFile, mIdx: number): string {
+function sigOf(dex: DexFile, mIdx: number): string {
   let c = sigCaches.get(dex);
   if (!c) sigCaches.set(dex, (c = []));
   return (c[mIdx] ??= dex.method(mIdx).name + dex.methodDesc(mIdx));
@@ -145,13 +145,13 @@ export class Program {
 
 const bump = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) ?? 0) + 1);
 
-export const INVOKE: Record<number, 0 | 1> = {   // 1 = virtual/interface (dispatched), 0 = exact
+const INVOKE: Record<number, 0 | 1> = {   // 1 = virtual/interface (dispatched), 0 = exact
   0x6e: 1, 0x6f: 0, 0x70: 0, 0x71: 0, 0x72: 1,
   0x74: 1, 0x75: 0, 0x76: 0, 0x77: 0, 0x78: 1,
 };
 export const splitKey = (k: MemberKey): [string, string] => { const i = k.indexOf("."); return [k.slice(0, i), k.slice(i + 1)]; };
 /** every instruction's opcode and pc; one unwalkable instruction must not cost us the rest of the program */
-export function walkInsns(insns: Uint16Array, visit: (op: number, pc: number) => void) {
+function walkInsns(insns: Uint16Array, visit: (op: number, pc: number) => void) {
   for (let pc = 0; pc < insns.length;) {
     visit(insns[pc] & 0xff, pc);
     let len: number;
