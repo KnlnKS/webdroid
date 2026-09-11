@@ -5,7 +5,7 @@ import { mem } from "./mem";
 import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet, hostTrace } from "./host";
 import { Cpu, cpuFor, type CallArg } from "./cpu";
 import { rt, JObj, type ClassInfo, type Runtime } from "../jvm/runtime";
-import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, splitSig, u8 } from "../jvm/abi";
+import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, splitSig, u8, primElem } from "../jvm/abi";
 import { curThread, JClass, stackTraceText } from "../jvm/natives/jlang";
 import { JCtor, JMethod, classCtors, mkMethod } from "../jvm/natives/jreflect";
 import { JBuffer, directBufferAddress, nativeByteBuffer } from "../jvm/natives/jnio";
@@ -86,15 +86,15 @@ function fieldId(info: ClassInfo, prop: string, type: string, isStatic: boolean)
   return id;
 }
 
-interface Registered { info: ClassInfo; cls: string; name: string; sig: string; fn: number; isStatic: boolean }
+interface Registered { info: ClassInfo; cls: string; name: string; sig: string; fn: number; isStatic: boolean; params: string[]; ret: string; label: string }
 export const registered: Registered[] = [];
 
 const clsName = (o: unknown): string => {
   if (typeof o === "string") return "java/lang/String";
   if (o instanceof JClass) return "java/lang/Class";
   if (Array.isArray(o)) return "[" + ((o as any).$t ?? "Ljava/lang/Object;");
-  if (o instanceof Int8Array) return "[B"; if (o instanceof Uint8Array) return "[Z"; if (o instanceof Uint16Array) return "[C"; if (o instanceof Int16Array) return "[S";
-  if (o instanceof Int32Array) return "[I"; if (o instanceof BigInt64Array) return "[J"; if (o instanceof Float32Array) return "[F"; if (o instanceof Float64Array) return "[D";
+  const e = primElem(o);
+  if (e) return "[" + e;
   return ((o as any)?.constructor?.$i as ClassInfo | undefined)?.name ?? "java/lang/Object";
 };
 function infoOf(clsRef: number): ClassInfo | null {
@@ -180,7 +180,7 @@ async function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], no
 
 /** a Java native method whose body is guest code: marshal, run on the caller's Cpu, convert the result */
 async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unknown[]): Promise<unknown> {
-  const { params, ret } = parseMethodDesc(r.sig);
+  const { params, ret } = r;
   await cpu.awaitIdleBase();
   const prevCur = cur, previousRuntime = cpu.nativeRuntime;
   cpu.nativeRuntime = r.info.owner ?? rt;
@@ -203,7 +203,7 @@ async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unk
     const jt = cpu.jthread;
     jt.inNative++;
     try {
-      r0 = await cpu.call(r.fn, list, r.cls.split("/").pop() + "." + r.name);
+      r0 = await cpu.call(r.fn, list, r.label);
       r1 = cpu.ret1;
     } finally { cur = cpu; if (--jt.inNative === 0) for (const w of jt.nativeIdle.splice(0)) w(); }
     let out: unknown;
@@ -246,6 +246,13 @@ function copyOut(type: string, arr: any, p: number, start: number, len: number):
 function copyIn(type: string, arr: any, p: number, start: number, len: number): void {
   const dst = u8(arr, start * elemSize[type], len * elemSize[type]);
   dst.set(mem.u8.subarray(p, p + len * elemSize[type]));
+}
+function pin(arr: any, type: string, isCopy: number): number {
+  const p = mem.malloc(Math.max(1, arr.length * elemSize[type]));
+  copyOut(type, arr, p, 0, arr.length);
+  pinned.set(p, { arr, type });
+  if (isCopy) mem.st8(isCopy, 1);
+  return p;
 }
 
 export function jniInit(): void {
@@ -403,15 +410,7 @@ export function jniInit(): void {
   for (let k = 1; k <= 8; k++) {
     const P = PRIM[k], D = PRIM_DESC[k];
     def(174 + k, `New${P}Array`, (_c, a) => { a.p(); return toRef(new PRIM_ARRAYS[D as PrimElem](a.i())); });
-    def(182 + k, `Get${P}ArrayElements`, (_c, a) => {
-      a.p(); const arr = deref(a.p()) as any; const isCopy = a.p();
-      if (!arr) return 0;
-      const p = mem.malloc(Math.max(1, arr.length * elemSize[D]));
-      copyOut(D, arr, p, 0, arr.length);
-      pinned.set(p, { arr, type: D });
-      if (isCopy) mem.st8(isCopy, 1);
-      return p;
-    });
+    def(182 + k, `Get${P}ArrayElements`, (_c, a) => { a.p(); const arr = deref(a.p()) as any; const isCopy = a.p(); return arr ? pin(arr, D, isCopy) : 0; });
     def(190 + k, `Release${P}ArrayElements`, (_c, a) => {
       a.p(); a.p(); const p = a.p(), mode = a.i();
       const pin = pinned.get(p);
@@ -430,16 +429,7 @@ export function jniInit(): void {
       copyIn(D, arr, buf, st, n);
     });
   }
-  def(222, "GetPrimitiveArrayCritical", (_c, a) => {
-    a.p(); const arr = deref(a.p()) as any; const isCopy = a.p();
-    if (!arr) return 0;
-    const D = clsName(arr)[1];
-    const p = mem.malloc(Math.max(1, arr.length * elemSize[D]));
-    copyOut(D, arr, p, 0, arr.length);
-    pinned.set(p, { arr, type: D });
-    if (isCopy) mem.st8(isCopy, 1);
-    return p;
-  });
+  def(222, "GetPrimitiveArrayCritical", (_c, a) => { a.p(); const arr = deref(a.p()) as any; const isCopy = a.p(); return arr ? pin(arr, clsName(arr)[1], isCopy) : 0; });
   def(223, "ReleasePrimitiveArrayCritical", T[191]!);
   def(215, "RegisterNatives", (cpu, a) => {
     a.p(); const i = infoOf(a.p()); const tab = a.p(), n = a.i();
@@ -511,7 +501,8 @@ function registerNative(info: ClassInfo, name: string, sig: string, fn: number):
   if (def && dex) {
     for (const m of def.directMethods) { const mr = dex.method(m.methodIdx); if (mr.name === name && dex.methodDesc(m.methodIdx) === sig) { isStatic = (m.flags & 0x8) !== 0; break; } }
   }
-  const rec: Registered = { info, cls: info.name, name, sig, fn, isStatic };
+  const { params, ret } = parseMethodDesc(sig);
+  const rec: Registered = { info, cls: info.name, name, sig, fn, isStatic, params, ret, label: info.name.split("/").pop() + "." + name };
   registered.push(rec);
   (info.owner ?? rt).registerJni(info.name, name + sig, function (this: unknown, ...args: unknown[]) {
     return callGuestNative(cpuFor(curThread), rec, this, args);
