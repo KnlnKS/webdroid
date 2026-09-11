@@ -4,7 +4,7 @@
 
 import { mem } from "./mem";
 import { hostLib, type HostFn, retF, retD, PTR, stp, ldp, ARG0, ptr, vaList } from "./host";
-import { utf8, wlen, wstr } from "./libc";
+import { utf8, wlen, wstr, mbLen, WCTEST } from "./libc";
 import { format } from "./printf";
 
 const wput = (p: number, s: string): number => { let i = 0; for (const ch of s) mem.st32(p + 4 * i++, ch.codePointAt(0)!); mem.st32(p + 4 * i, 0); return i; };
@@ -72,21 +72,18 @@ export function localeInit(): void {
       const pwc = a.p(), s = a.p(), n = a.u();
       if (!s) return 0;
       const b0 = mem.u8[s];
-      const len = b0 < 0x80 ? 1 : b0 >= 0xf0 ? 4 : b0 >= 0xe0 ? 3 : b0 >= 0xc0 ? 2 : 1;
+      const len = mbLen(b0);
       if (n < len) return -1;
       if (pwc) mem.st32(pwc, dec.decode(mem.u8.subarray(s, s + len)).codePointAt(0) ?? 0);
       return b0 === 0 ? 0 : len;
     },
-    mbrlen: (_c, a) => { const s = a.p(), n = a.u(); if (!s) return 0; const b0 = mem.u8[s]; if (b0 === 0) return 0; const len = b0 < 0x80 ? 1 : b0 >= 0xf0 ? 4 : b0 >= 0xe0 ? 3 : b0 >= 0xc0 ? 2 : 1; return n < len ? -2 : len; },
+    mbrlen: (_c, a) => { const s = a.p(), n = a.u(); if (!s) return 0; const b0 = mem.u8[s]; if (b0 === 0) return 0; const len = mbLen(b0); return n < len ? -2 : len; },
     mbsrtowcs: (_c, a) => mbsToWcs(a.p(), a.p(), 0x7fffffff, a.u()),
     mbsnrtowcs: (_c, a) => mbsToWcs(a.p(), a.p(), a.u(), a.u()),
     wcsrtombs: (_c, a) => wcsToMbs(a.p(), a.p(), 0x7fffffff, a.u()),
     wcsnrtombs: (_c, a) => wcsToMbs(a.p(), a.p(), a.u(), a.u()),
-    iswalnum: (_c, a) => wtest(a.i(), /[\p{L}\p{N}]/u), iswxdigit: (_c, a) => wtest(a.i(), /[0-9a-fA-F]/),
-    iswprint: (_c, a) => wtest(a.i(), /[^\p{Cc}]/u), iswblank: (_c, a) => wtest(a.i(), /[ \t]/),
-    iswcntrl: (_c, a) => wtest(a.i(), /\p{Cc}/u), iswpunct: (_c, a) => wtest(a.i(), /\p{P}/u), iswgraph: (_c, a) => wtest(a.i(), /[^\s\p{Cc}]/u),
   };
-  for (const n of ["iswalnum", "iswxdigit", "iswprint", "iswblank", "iswcntrl", "iswpunct", "iswgraph"]) M[n + "_l"] = M[n];
+  for (const k of ["alnum", "xdigit", "print", "blank", "cntrl", "punct", "graph"]) M["isw" + k] = M["isw" + k + "_l"] = (_c, a) => wtest(a.i(), WCTEST[k]);
   hostLib("libc.so", M);
 }
 function wtest(c: number, re: RegExp): number { return c >= 0 && c <= 0x10ffff && re.test(String.fromCodePoint(c)) ? 1 : 0; }

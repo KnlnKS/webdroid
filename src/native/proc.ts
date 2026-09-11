@@ -7,7 +7,8 @@ import { mem } from "./mem";
 import { hostLib, hostData, type HostFn, PTR, stp, ldp, vaList, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import { type Cpu, cpuByTid, sigHandlers } from "./cpu";
-import { fail, utf8, logLine, LAYOUT } from "./libc";
+import { fail, logLine, LAYOUT, strncpy, snprintfInto, readTm } from "./libc";
+import { MONTHS, DAYS } from "../jvm/natives/jtime";
 import { format } from "./printf";
 import { device } from "../shell/config";
 /** wd.native.killLog: the last pthread_kill calls, who signalled whom and what the target was doing */
@@ -69,9 +70,6 @@ export function procInit(): void {
     getpwuid_r: (_c, a) => { a.i(); const out = a.p(); a.p(); a.p(); const res = a.p(); mem.memmove(out, pw, 8 * PTR); stp(res, out); return 0; },
     getpwnam: () => pw,
     setuid: () => 0, setgid: () => 0, seteuid: () => 0, setegid: () => 0, setgroups: () => 0, initgroups: () => 0, setsid: () => 4242,
-    fork: (cpu) => fail(cpu, E.NOSYS), vfork: (cpu) => fail(cpu, E.NOSYS),
-    execl: (cpu) => fail(cpu, E.NOSYS), execlp: (cpu) => fail(cpu, E.NOSYS), execv: (cpu) => fail(cpu, E.NOSYS), execve: (cpu) => fail(cpu, E.NOSYS), execvp: (cpu) => fail(cpu, E.NOSYS),
-    waitpid: (cpu) => fail(cpu, E.NOSYS), wait: (cpu) => fail(cpu, E.NOSYS),
     ptrace: (cpu) => fail(cpu, E.PERM),
     // signals: a handler runs on the target thread, at once when it is parked in a host call
     // (as a kernel interrupts a syscall) and at its next slice boundary when it is running
@@ -111,7 +109,6 @@ export function procInit(): void {
     __cxa_thread_atexit_impl: () => 0,
     __gnu_strerror_r: (_c, a) => { const e = a.i(), b = a.p(), n = a.u(); mem.putCstr(b, `error ${e}`, n); return ptr(b); },
     __cmsg_nxthdr: () => 0,
-    getnameinfo: () => -4,   // EAI_FAIL
     recvmsg: (cpu) => fail(cpu, E.NETUNREACH), sendmsg: (cpu) => fail(cpu, E.NETUNREACH),
     if_nametoindex: () => 0, if_indextoname: () => 0,
     // sorting and searching call back into the guest for every comparison
@@ -171,8 +168,6 @@ export function procInit(): void {
     __strcat_chk: (cpu, a) => { const d = a.p(), s = a.p(); const dl = mem.strlen(d), n = mem.strlen(s) + 1; chk(dl + n, a.u(), cpu); mem.memmove(d + dl, s, n); return ARG0; },
     __strncat_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); const dl = mem.strlen(d); let i = 0; for (; i < n && u8[s + i]; i++) u8[d + dl + i] = u8[s + i]; u8[d + dl + i] = 0; chk(dl + i + 1, a.u(), cpu); return ARG0; },
     __strlen_chk: (cpu, a) => { const s = a.p(); const n = mem.strlen(s); chk(n + 1, a.u(), cpu); return n; },
-    __strchr_chk: (_c, a) => { const p = a.p(), c = a.i() & 255; for (let i = p; ; i++) { if (u8[i] === c) return ptr(i); if (!u8[i]) return 0; } },
-    __strrchr_chk: (_c, a) => { const p = a.p(), c = a.i() & 255; let r = 0; for (let i = p; ; i++) { if (u8[i] === c) r = i; if (!u8[i]) return ptr(r); } },
     __vsnprintf_chk: (cpu, a) => { const d = a.p(), n = a.u(); a.i(); chk(n, a.u(), cpu); const f = a.str(); return snprintfInto(d, n, format(f, vaList(a.p()))); },
     __snprintf_chk: (cpu, a) => { const d = a.p(), n = a.u(); a.i(); chk(n, a.u(), cpu); const f = a.str(); return snprintfInto(d, n, format(f, a)); },
     __vsprintf_chk: (_c, a) => { const d = a.p(); a.i(); a.u(); const f = a.str(); return mem.putCstr(d, format(f, vaList(a.p()))); },
@@ -182,6 +177,7 @@ export function procInit(): void {
     __FD_CLR_chk: (_c, a) => { const fd = a.i(), set = a.p(); u8[set + (fd >> 3)] &= ~(1 << (fd & 7)); },
     __FD_ISSET_chk: (_c, a) => { const fd = a.i(), set = a.p(); return (u8[set + (fd >> 3)] >> (fd & 7)) & 1; },
   };
+  for (const n of ["fork", "vfork", "execl", "execlp", "execv", "execve", "execvp", "waitpid", "wait"]) M[n] = (cpu) => fail(cpu, E.NOSYS);
   for (const suffix of ["", "64"]) {
     M["sigemptyset" + suffix] = (_c, a) => { mem.memset(a.p(), 0, suffix ? 8 : PTR); return 0; };
     M["sigfillset" + suffix] = (_c, a) => { mem.memset(a.p(), 255, suffix ? 8 : PTR); return 0; };
@@ -196,20 +192,8 @@ export function procInit(): void {
   }
   hostLib("libc.so", M);
 }
-function strncpy(d: number, s: number, n: number): void {
-  let i = 0;
-  for (; i < n && mem.u8[s + i]; i++) mem.u8[d + i] = mem.u8[s + i];
-  for (; i < n; i++) mem.u8[d + i] = 0;
-}
-function snprintfInto(d: number, n: number, s: string): number {
-  const b = utf8(s);
-  if (n > 0) { const k = Math.min(b.length, n - 1); mem.u8.set(b.subarray(0, k), d); mem.u8[d + k] = 0; }
-  return b.length;
-}
-const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function asctime(tm: number): string {
-  const f: number[] = []; for (let i = 0; i < 9; i++) f.push(mem.ld32(tm + i * 4));
-  const [sec, min, hour, mday, mon, year, wday] = f;
+  const [sec, min, hour, mday, mon, year, wday] = readTm(tm);
   const p2 = (n: number) => String(n).padStart(2, "0");
-  return `${DAYS[wday] ?? "???"} ${MONTHS[mon] ?? "???"} ${String(mday).padStart(2, " ")} ${p2(hour)}:${p2(min)}:${p2(sec)} ${year + 1900}\n`;
+  return `${DAYS[wday]?.slice(0, 3) ?? "???"} ${MONTHS[mon]?.slice(0, 3) ?? "???"} ${String(mday).padStart(2, " ")} ${p2(hour)}:${p2(min)}:${p2(sec)} ${year + 1900}\n`;
 }

@@ -5,7 +5,7 @@ import { mem } from "./mem";
 import { hostLib, hostData, vaList, type HostFn, PTR, stp, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
-import { LAYOUT, fail, utf8, logLine, offArg, readTs, writeTs, clockTime } from "./libc";
+import { LAYOUT, fail, utf8, logLine, offArg, readTs, writeTs, clockTime, scanSink } from "./libc";
 import { format, scan } from "./printf";
 import { vfs } from "../jvm/natives/jio";
 import { device } from "../shell/config";
@@ -751,15 +751,8 @@ export function stdioInit(): void {
       }
       const text = dec.decode(data);
       let consumed = 0;
-      const r = scan(text, f + "%n", (kind, v) => {
-        if (kind === "n") { consumed = v as number; return 0; }
-        const dst = a.p();
-        if (!dst) return 0;
-        if (kind === "i") mem.st32(dst, v as number); else if (kind === "h") mem.st16(dst, v as number); else if (kind === "b") mem.st8(dst, v as number);
-        else if (kind === "l") mem.st64(dst, v as bigint); else if (kind === "f") mem.stf32(dst, v as number); else if (kind === "d") mem.stf64(dst, v as number);
-        else if (kind === "s") mem.putCstr(dst, v as string);
-        return 0;
-      });
+      const sink = scanSink(a);
+      const r = scan(text, f + "%n", (kind, v) => (kind === "n" ? ((consumed = v as number), 0) : sink(kind, v)));
       const bytes = utf8(text.slice(0, consumed)).length, used = Math.min(bytes, pending?.length ?? 0);
       if (pending) { pending.length -= used; if (!pending.length) pushback.delete(fp); }
       fo.pos += bytes - used;

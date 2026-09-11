@@ -51,6 +51,7 @@ export function fail(cpu: Cpu | null, e: number): number { if (cpu) setErrno(cpu
 
 const enc = new TextEncoder(), dec = new TextDecoder();
 export const utf8 = (s: string) => enc.encode(s);
+export const mbLen = (b0: number) => b0 < 0x80 ? 1 : b0 >= 0xf0 ? 4 : b0 >= 0xe0 ? 3 : b0 >= 0xc0 ? 2 : 1;
 
 // ── ctype: BSD _ctype_ table (index c+1), the bit values bionic's <ctype.h> macros test
 const _U = 0x01, _L = 0x02, _N = 0x04, _S = 0x08, _P = 0x10, _C = 0x20, _X = 0x40, _B = 0x80;
@@ -112,7 +113,7 @@ function fillTm(tm: number, d: Date, utc: boolean): void {
   stp(tm + LAYOUT.TM_GMTOFF, utc ? 0 : tzOffsetMin() * 60);
   stp(tm + LAYOUT.TM_ZONE, tznames[utc ? 0 : 1]);
 }
-function readTm(tm: number): number[] { const f: number[] = []; for (let i = 0; i < 9; i++) f.push(mem.ld32(tm + i * 4)); return f; }
+export function readTm(tm: number): number[] { const f: number[] = []; for (let i = 0; i < 9; i++) f.push(mem.ld32(tm + i * 4)); return f; }
 function strftime(fmt: string, tm: number): string {
   const [sec, min, hour, mday, mon, year, wday, yday] = readTm(tm);
   const p2 = (n: number) => String(n).padStart(2, "0");
@@ -236,7 +237,6 @@ export function libcInit(): void {
     getppid: () => 1,
     bsd_signal: () => 0,
     nice: () => 0, setpriority: () => 0, getpriority: () => 0,
-    sched_yield: () => 0,
     // Bionic's numbering: _SC_PAGESIZE/_SC_PAGE_SIZE 0x27/0x28, _SC_NPROCESSORS_CONF/ONLN 0x60/0x61, _SC_PHYS_PAGES 0x62
     sysconf: (_c, a) => { const n = a.i(); return n === 0x27 || n === 0x28 ? 4096 : n === 0x60 || n === 0x61 ? device.cpu.cores : n === 0x62 ? 65536 : -1; },
     getpagesize: () => 4096,
@@ -321,13 +321,7 @@ export function libcInit(): void {
 
     strlen: SERVED, strnlen: SERVED,
     strcpy: (_c, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s); mem.memmove(d, s, n + 1); return ARG0; },
-    strncpy: (_c, a) => {
-      const d = a.p(), s = a.p(), n = a.u();
-      let i = 0;
-      for (; i < n && mem.u8[s + i]; i++) mem.u8[d + i] = mem.u8[s + i];
-      for (; i < n; i++) mem.u8[d + i] = 0;
-      return ARG0;
-    },
+    strncpy: (_c, a) => { strncpy(a.p(), a.p(), a.u()); return ARG0; },
     stpcpy: (_c, a) => { const d = a.p(), s = a.p(); const n = mem.strlen(s); mem.memmove(d, s, n + 1); return ptr(d + n); },
     strcat: (_c, a) => { const d = a.p(), s = a.p(); const dl = mem.strlen(d), n = mem.strlen(s); mem.memmove(d + dl, s, n + 1); return ARG0; },
     strncat: (_c, a) => {
@@ -345,19 +339,14 @@ export function libcInit(): void {
     strxfrm: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const l = mem.strlen(s); if (n) { const k = Math.min(l, n - 1); mem.memmove(d, s, k); mem.u8[d + k] = 0; } return l; },
     strchr: (_c, a) => { const p = a.p(), c = a.i() & 255; for (let i = p; ; i++) { if (mem.u8[i] === c) return ptr(i); if (!mem.u8[i]) return 0; } },
     strrchr: (_c, a) => { const p = a.p(), c = a.i() & 255; let r = 0; for (let i = p; ; i++) { if (mem.u8[i] === c) r = i; if (!mem.u8[i]) return ptr(r); } },
-    strstr: (_c, a) => {
-      const h = a.p(), n = a.p();
-      const hs = mem.cstr(h), ns = mem.cstr(n);
-      const i = hs.indexOf(ns);
-      return i < 0 ? 0 : ptr(h + utf8(hs.slice(0, i)).length);
-    },
-    strcasestr: (_c, a) => { const h = a.p(), n = a.p(); const hs = mem.cstr(h).toLowerCase(), ns = mem.cstr(n).toLowerCase(); const i = hs.indexOf(ns); return i < 0 ? 0 : ptr(h + utf8(hs.slice(0, i)).length); },
-    strpbrk: (_c, a) => { const p = a.p(), set = mem.cstr(a.p()); for (let i = p; mem.u8[i]; i++) if (set.includes(String.fromCharCode(mem.u8[i]))) return ptr(i); return 0; },
-    strspn: (_c, a) => { const p = a.p(), set = mem.cstr(a.p()); let i = 0; while (mem.u8[p + i] && set.includes(String.fromCharCode(mem.u8[p + i]))) i++; return i; },
-    strcspn: (_c, a) => { const p = a.p(), set = mem.cstr(a.p()); let i = 0; while (mem.u8[p + i] && !set.includes(String.fromCharCode(mem.u8[p + i]))) i++; return i; },
+    strstr: (_c, a) => { const i = strstrAt(a.p(), a.p(), false); return i ? ptr(i) : 0; },
+    strcasestr: (_c, a) => { const i = strstrAt(a.p(), a.p(), true); return i ? ptr(i) : 0; },
+    strpbrk: (_c, a) => { const p = a.p(), set = byteSet(a.p()); for (let i = p; mem.u8[i]; i++) if (set[mem.u8[i]]) return ptr(i); return 0; },
+    strspn: (_c, a) => { const p = a.p(), set = byteSet(a.p()); let i = 0; while (set[mem.u8[p + i]]) i++; return i; },
+    strcspn: (_c, a) => { const p = a.p(), set = byteSet(a.p()); let i = 0; while (mem.u8[p + i] && !set[mem.u8[p + i]]) i++; return i; },
     strdup: (_c, a) => { const s = a.p(); const n = mem.strlen(s); const d = mem.malloc(n + 1); mem.memmove(d, s, n + 1); return d; },
     strndup: (_c, a) => { const s = a.p(), n = a.u(); let l = 0; while (l < n && mem.u8[s + l]) l++; const d = mem.malloc(l + 1); mem.memmove(d, s, l); mem.u8[d + l] = 0; return d; },
-    strtok: (cpu, a) => ptr(strtok(cpu, a.p(), a.p(), 0)),
+    strtok: (cpu, a) => ptr(strtok(cpu, a.p(), a.p())),
     strtok_r: (_c, a) => { const s = a.p(), d = a.p(), save = a.p(); return ptr(strtokR(s, d, save)); },
     strerror: (_c, a) => { mem.putCstr(strerrorBuf, ERRSTR[a.i()] ?? `Unknown error ${a.i()}`, 64); return strerrorBuf; },
     strerror_r: (_c, a) => { const e = a.i(), b = a.p(), n = a.u(); mem.putCstr(b, ERRSTR[e] ?? `Unknown error ${e}`, n); return 0; },
@@ -411,7 +400,7 @@ export function libcInit(): void {
       if (!s) return 0;
       if (n === 0) return -2;
       const b0 = mem.u8[s];
-      const len = b0 < 0x80 ? 1 : b0 >= 0xf0 ? 4 : b0 >= 0xe0 ? 3 : b0 >= 0xc0 ? 2 : 1;
+      const len = mbLen(b0);
       if (n < len) return -2;
       const cp = dec.decode(mem.u8.subarray(s, s + len)).codePointAt(0) ?? 0;
       if (pwc) mem.st32(pwc, cp);
@@ -425,13 +414,13 @@ export function libcInit(): void {
 
     // ── formatting (printf family that lands in memory; the FILE ones live in stdio.ts)
     sprintf: (_c, a) => { const d = a.p(), f = a.str(); return mem.putCstr(d, format(f, a)); },
-    snprintf: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(); const s = format(f, a); const b = utf8(s); if (n > 0) { const k = Math.min(b.length, n - 1); mem.u8.set(b.subarray(0, k), d); mem.u8[d + k] = 0; } return b.length; },
+    snprintf: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(); return snprintfInto(d, n, format(f, a)); },
     vsprintf: (_c, a) => { const d = a.p(), f = a.str(); return mem.putCstr(d, format(f, vaList(a.p()))); },
-    vsnprintf: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(); const s = format(f, vaList(a.p())); const b = utf8(s); if (n > 0) { const k = Math.min(b.length, n - 1); mem.u8.set(b.subarray(0, k), d); mem.u8[d + k] = 0; } return b.length; },
+    vsnprintf: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(); return snprintfInto(d, n, format(f, vaList(a.p()))); },
     vasprintf: (_c, a) => { const out = a.p(), f = a.str(); const s = format(f, vaList(a.p())); stp(out, mem.strdup(s)); return utf8(s).length; },
     asprintf: (_c, a) => { const out = a.p(), f = a.str(); const s = format(f, a); stp(out, mem.strdup(s)); return utf8(s).length; },
-    sscanf: (_c, a) => { const s = a.str(), f = a.str(); return scanInto(s, f, a); },
-    vsscanf: (_c, a) => { const s = a.str(), f = a.str(); return scanInto(s, f, vaList(a.p())); },
+    sscanf: (_c, a) => { const s = a.str(), f = a.str(); return scan(s, f, scanSink(a)); },
+    vsscanf: (_c, a) => { const s = a.str(), f = a.str(); return scan(s, f, scanSink(vaList(a.p()))); },
 
     time: (_c, a) => { const p = a.p(); const t = Math.floor(Date.now() / 1000); if (p) stp(p, t); return t; },
     gettimeofday: (_c, a) => { const tv = a.p(); if (tv) writeTs(tv, Date.now(), 1e3); return 0; },
@@ -474,7 +463,6 @@ export function libcInit(): void {
 
     // Native TCP and resolver functions are registered by netInit below. These unsupported
     // server-side operations stay explicit rather than pretending that a listener exists.
-    bind: (cpu) => fail(cpu, E.ACCES),
     listen: (cpu) => fail(cpu, E.NETUNREACH),
     accept: (cpu) => fail(cpu, E.NETUNREACH),
     gethostbyname: () => 0,
@@ -496,7 +484,7 @@ export function libcInit(): void {
     "isalpha", "isdigit", "isxdigit", "isspace", "isupper", "islower", "isalnum", "ispunct", "isprint", "iscntrl", "tolower", "toupper",
     "iswspace", "iswdigit", "iswalpha", "iswupper", "iswlower", "towlower", "towupper", "mbrtowc", "wcrtomb", "localeconv", "strerror",
     "sprintf", "snprintf", "vsprintf", "vsnprintf", "asprintf", "vasprintf", "sscanf", "vsscanf", "btowc", "wctob", "wctype", "iswctype"]) if (M[n]) M[n + "_l"] = M[n];
-  M.strtold = M.strtod; M.strtold_l = M.strtod;
+  M.strtold = M.strtod; M.strtold_l = M.strtod; M.__strchr_chk = M.strchr; M.__strrchr_chk = M.strrchr;
   hostLib("libc.so", M);
   hostLib("liblog.so", { __android_log_write: M.__android_log_write, __android_log_print: M.__android_log_print, __android_log_vprint: M.__android_log_vprint, __android_log_assert: M.__android_log_assert });
   const tmBuf = mem.hostAlloc(LAYOUT.TM_SIZE);
@@ -519,6 +507,32 @@ export function logLine(prio: number, tag: string, msg: string): void {
   if (prio >= 6) console.error("[logcat]", line); else if (prio === 5) console.warn("[logcat]", line); else console.log("[logcat]", line);
 }
 
+export function strncpy(d: number, s: number, n: number): void {
+  let i = 0;
+  for (; i < n && mem.u8[s + i]; i++) mem.u8[d + i] = mem.u8[s + i];
+  for (; i < n; i++) mem.u8[d + i] = 0;
+}
+export function snprintfInto(d: number, n: number, s: string): number {
+  const b = utf8(s);
+  if (n > 0) { const k = Math.min(b.length, n - 1); mem.u8.set(b.subarray(0, k), d); mem.u8[d + k] = 0; }
+  return b.length;
+}
+function strstrAt(h: number, n: number, ci: boolean): number {
+  const u8 = mem.u8, nl = mem.strlen(n), low = (c: number) => (ci && c >= 65 && c <= 90 ? c + 32 : c);
+  if (!nl) return h;
+  for (let i = h; u8[i]; i++) {
+    let k = 0;
+    while (k < nl && low(u8[i + k]) === low(u8[n + k])) k++;
+    if (k === nl) return i;
+  }
+  return 0;
+}
+const accept = new Uint8Array(256);
+function byteSet(p: number): Uint8Array {
+  accept.fill(0);
+  for (let i = p; mem.u8[i]; i++) accept[mem.u8[i]] = 1;
+  return accept;
+}
 function strcmpAt(x: number, y: number, n: number, ci: boolean): number {
   for (let i = 0; i < n; i++) {
     let a = mem.u8[x + i], b = mem.u8[y + i];
@@ -535,36 +549,37 @@ export function wstr(p: number, max = 0x7fffffff): string {
   return s;
 }
 const WCTYPES = ["alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space", "upper", "xdigit"];
-const WCTEST: Record<string, RegExp> = {
+export const WCTEST: Record<string, RegExp> = {
   alnum: /[\p{L}\p{N}]/u, alpha: /\p{L}/u, blank: /[ \t]/, cntrl: /\p{Cc}/u, digit: /\d/, graph: /[^\s\p{Cc}]/u, lower: /\p{Ll}/u,
   print: /[^\p{Cc}]/u, punct: /\p{P}/u, space: /\s/, upper: /\p{Lu}/u, xdigit: /[0-9a-fA-F]/,
 };
 const tokSave = new Map<number, number>();
-function strtok(cpu: Cpu, s: number, delim: number, _z: number): number {
+function strtok(cpu: Cpu, s: number, delim: number): number {
   const save = tokSave.get(cpu.tid) ?? 0;
   if (!s) s = save;
-  const r = strtokAt(s, mem.cstr(delim));
+  const r = strtokAt(s, delim);
   tokSave.set(cpu.tid, r.next);
   return r.tok;
 }
 function strtokR(s: number, delim: number, save: number): number {
   if (!s) s = ldp(save);
-  const r = strtokAt(s, mem.cstr(delim));
+  const r = strtokAt(s, delim);
   stp(save, r.next);
   return r.tok;
 }
-function strtokAt(s: number, delim: string): { tok: number; next: number } {
+function strtokAt(s: number, delim: number): { tok: number; next: number } {
   if (!s) return { tok: 0, next: 0 };
+  const set = byteSet(delim), u8 = mem.u8;
   let p = s;
-  while (mem.u8[p] && delim.includes(String.fromCharCode(mem.u8[p]))) p++;
-  if (!mem.u8[p]) return { tok: 0, next: p };
+  while (set[u8[p]]) p++;
+  if (!u8[p]) return { tok: 0, next: p };
   const tok = p;
-  while (mem.u8[p] && !delim.includes(String.fromCharCode(mem.u8[p]))) p++;
-  if (mem.u8[p]) { mem.u8[p] = 0; p++; }
+  while (u8[p] && !set[u8[p]]) p++;
+  if (u8[p]) { u8[p] = 0; p++; }
   return { tok, next: p };
 }
-function scanInto(s: string, f: string, a: { p(): number }): number {
-  return scan(s, f, (kind, v) => {
+export function scanSink(a: { p(): number }) {
+  return (kind: string, v: unknown): number => {
     const dst = a.p();
     if (!dst) return 0;
     if (kind === "i" || kind === "n") mem.st32(dst, v as number);
@@ -575,6 +590,6 @@ function scanInto(s: string, f: string, a: { p(): number }): number {
     else if (kind === "d") mem.stf64(dst, v as number);
     else if (kind === "s") mem.putCstr(dst, v as string);
     return 0;
-  });
+  };
 }
 export { NativeFault };
