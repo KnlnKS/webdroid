@@ -771,3 +771,53 @@ and any phone challenge. The isolated diagnostic server captures only `egQ4Re` a
 reports contain bridge method names, API gaps and account counts rather than secrets.
 The existing protected browser state was neither imported nor overwritten. No new
 Google account or successful final consent has been observed in this run.
+
+### 2026-09-11 — SDK map markers and bitmap resource density
+
+The final WebView resource-order E2E rerun completed all 111 steps (75 scored), with
+no additional missing/error/native-required diagnostics against `28b9246`. Scores:
+FitNotes 40.89%, Mihon onboarding 17.56%, Mihon app 57.16%, Harmonic 32.67%.
+Goldens stayed unchanged. Evidence: `/tmp/webdroid-microg-resume-e2e-final.log`,
+`/tmp/webdroid-microg-resume-comparison-final.log` and
+`/tmp/webdroid-microg-resume-perfsum-final.log`.
+
+A dedicated Maps SDK activity now exercises camera movement, animation completion,
+default markers and marker clicks against genuine microG. The initial browser run
+matched Android's target/zoom and callbacks, but default-marker construction reached
+missing `BitmapFactory.decodeResource(Resources,int)` in microG's
+`BitmapDescriptorFactoryImpl.defaultMarker`. No application bytecode was substituted.
+
+The resource decoder uses the existing stream/bitmap decoder and the selected ARSC
+configuration's density; file-name heuristics would fail for obfuscated resource paths.
+`openRawResource` now supplies TypedValue metadata, follows resource aliases and throws
+Resources.NotFoundException for missing files. Resource decoding closes its stream and
+follows Android's exception-to-null contract. Density defaults, explicit density,
+`nodpi`, `inScaled`, `inScreenDensity` and bitmap density follow
+[AOSP BitmapFactory](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-13.0.0_r1/graphics/java/android/graphics/BitmapFactory.java).
+The shared decoder also reports sampled output dimensions and requested mutability.
+
+The retained `BitmapProbe` exercises four tiny 8x6 PNG resources (mdpi, nodpi,
+unqualified and alias), seven option combinations and a missing ID. All 33 log results
+match the dedicated API 35 Android reference at 480 dpi. In particular sampled decode
+reports 4x3 bounds before density scaling, while bounds-only decode reports 8x6.
+This does not establish arbitrary codec sampling, nine-patch decoding, inBitmap reuse,
+hardware/color-space validation or complete BitmapFactory parity; those pre-existing
+decoder limits remain outside the observed marker path.
+
+The fixed browser map visibly renders the marker, delivers its click callback and
+opens the SDK title bubble. Camera target 51.5074,-0.1278, zoom 10 then 11, one animation
+completion and one marker click match Android. Initial minimum zoom and projection
+pixels differ with the two screen geometries; these are smoke observations, not a
+pixel-parity claim. Three recorded browser runtimes have empty missing sets and no
+captured errors. The rebuilt SDK APK remains under its ignored Gradle build directory;
+`apks/GmsClient.apk` and the protected login state are unchanged.
+
+Typecheck, 603 tests / 20,401 assertions, zero method failures for Resy/microG/rebuilt
+SDK, executable framework probes and 6/6 text comparisons pass. Full E2E/corpus and
+isolated CPU/memory verification of this bitmap change are pending.
+Evidence: `/tmp/webdroid-map-probe-browser-fixed.log`, map screenshots and JSON beside
+it, `/tmp/webdroid-map-probe-android.log`, `/tmp/webdroid-bitmap-probe-{android,browser-final,
+typecheck,unit,fwtest,smoke,resy-smoke,gms-smoke,textcmp}.log` and
+`/tmp/webdroid-bitmap-probe-browser.json`. Browser scripts are under the matching
+`/tmp/webdroid-{map,bitmap}-probe-browser.ts` paths. Android probes use the same rebuilt
+APK installed with `adb install -r`, preserving the dedicated test account.

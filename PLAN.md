@@ -16,9 +16,18 @@ Current checks: typecheck; 603 tests / 20,401 assertions; zero method failures f
 Resy, microG and GmsClient; executable framework probes; 6/6 text comparisons.
 The serialized E2E run at `0ff3003` reached all 75 scored and 36 smoke steps, with no
 new diagnostics versus `28b9246`. The subsequent resource-order refinement passed
-12 Chromium tests and repeated isolated WebView/real-microG page checks; corpus at
-`349c4e0` rendered 13/14 APKs (TikTok failed). Goldens are unchanged. Detailed fresh
-CPU/memory comparisons and a full E2E rerun after the refinement remain pending.
+12 Chromium tests and repeated isolated WebView/real-microG page checks. Its final
+serialized E2E rerun also completed all 111 steps without additional diagnostics;
+corpus rendered 13/14 APKs (TikTok failed). Goldens are unchanged. Detailed fresh
+CPU/memory comparisons remain pending.
+
+The genuine SDK map probe exposed missing `BitmapFactory.decodeResource`. The current
+change decodes through the existing bitmap path using the selected compiled resource's
+density, including aliases. Camera movement, animation completion, a default marker,
+marker click and title bubble now work. A 33-result bitmap probe matches the dedicated
+Android reference for density, sampling, bounds and mutability. Typecheck, 603 units,
+affected APK compilation, framework probes and textcmp pass; full E2E/corpus verification
+for this change is underway. This is bounded map progress, not full interaction parity.
 
 A fresh test tab is open in Chrome at `http://localhost:41979/?apk=GmsClient.apk`.
 The user has been asked to complete the authorized Google sign-in directly in that

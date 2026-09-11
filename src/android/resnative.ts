@@ -18,6 +18,13 @@ export class JResources extends JObj {
   host!: Resources;
   config: JConfiguration | null = null;
 }
+function openRawResource(this: JResources, id: number, value = new JTypedValue()) {
+  const file = this.host.pathOf(id, 0, value);
+  const bytes = file?.arsc.files(file.path);
+  if (!file || !bytes) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Resource 0x" + id.toString(16));
+  fillTypedValue(this.host, { t: TV.REFERENCE, d: file.id }, value);
+  return streamOf(bytes);
+}
 /** the app's Resources double as the system ones: framework attrs resolve through the same table */
 let systemRes: JResources | null = null;
 export function mkJResources(host: Resources, system = true): JResources {
@@ -350,11 +357,8 @@ const resMethods: NativeSpec["methods"] = {
     a.host = this.host;
     return a;
   },
-  "openRawResource(I)Ljava/io/InputStream;": function (this: JResources, id: number) {
-    const f = this.host.fileOf(id);
-    if (!f) throw rt.mkThrowable("java/io/FileNotFoundException", "raw 0x" + id.toString(16));
-    return streamOf(f.bytes);
-  },
+  "openRawResource(I)Ljava/io/InputStream;": openRawResource,
+  "openRawResource(ILandroid/util/TypedValue;)Ljava/io/InputStream;": openRawResource,
   "obtainAttributes(Landroid/util/AttributeSet;[I)Landroid/content/res/TypedArray;": function (this: JResources, set: JAttrSet | null, attrs: Int32Array) {
     return obtainStyled(this.host, null, set, attrs, 0, 0);
   },

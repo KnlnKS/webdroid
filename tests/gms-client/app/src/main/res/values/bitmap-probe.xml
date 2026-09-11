@@ -1,0 +1,3 @@
+<resources>
+    <item name="probe_alias" type="drawable">@drawable/probe_mdpi</item>
+</resources>

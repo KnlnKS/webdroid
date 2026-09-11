@@ -43,8 +43,11 @@ public class ClientActivity extends Activity {
         button("Received messages", () -> status.setText("messages: " + getSharedPreferences("messaging", 0).getInt("received", 0)));
         button("Location", this::location);
         button("Map", this::map);
+        button("Map probe", () -> startActivity(new Intent(this, MapProbeActivity.class)));
+        button("Bitmap probe", () -> BitmapProbe.run(getResources()));
         setContentView(layout);
         status.setText("GMS client ready");
+        if (getIntent().getBooleanExtra("bitmap_probe", false)) BitmapProbe.run(getResources());
     }
     private void button(String label, Runnable action) {
         Button button = new Button(this);

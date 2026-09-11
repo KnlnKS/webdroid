@@ -12,6 +12,7 @@ import { JBuffer } from "../jvm/natives/jnio";
 import { JPath } from "./path";
 import { perf } from "../perf";
 import { type JRenderEffect } from "./rendereffect";
+import { JTypedValue, type JDisplayMetrics } from "./util";
 
 const cssCache = new Map<number, string>();
 export function cssColor(argb: number): string {
@@ -1855,17 +1856,52 @@ export async function decodeBytes(bytes: Uint8Array, opts: JBFOptions | null,
     }
     let w = img.width, h = img.height;
     if (opts && opts.inSampleSize > 1) { w = Math.max(1, w / opts.inSampleSize | 0); h = Math.max(1, h / opts.inSampleSize | 0); }
-    if (opts && opts.inDensity && opts.inTargetDensity && opts.inScaled && opts.inDensity !== opts.inTargetDensity) {
+    if (opts) { opts.outWidth = w; opts.outHeight = h; }
+    const scaled = opts && opts.inDensity && opts.inTargetDensity && opts.inScaled
+      && opts.inDensity !== opts.inTargetDensity && opts.inDensity !== opts.inScreenDensity;
+    if (scaled) {
       w = Math.round(w * opts.inTargetDensity / opts.inDensity);
       h = Math.round(h * opts.inTargetDensity / opts.inDensity);
     }
     if (onHeader) [w, h] = await onHeader(w, h);
-    return JBitmap.fromImage(img, w, h);
+    const bitmap = JBitmap.fromImage(img, w, h);
+    if (opts?.inDensity) bitmap.density = scaled ? opts.inTargetDensity : opts.inDensity;
+    bitmap.immutable = !opts?.inMutable;
+    return bitmap;
   } catch (e) {
     if (onHeader) throw e;
     console.warn("[decode]", e);
     return null;
   } finally { img?.close(); }
+}
+async function decodeStream(stream: unknown, pad: JRect | null = null, opts: JBFOptions | null = null) {
+  const bitmap = stream ? await decodeBytes(await streamBytes(stream), opts) : null;
+  if (bitmap && pad) pad.left = pad.top = pad.right = pad.bottom = -1;
+  return bitmap;
+}
+async function decodeResourceStream(res: unknown, value: JTypedValue | null, stream: unknown, pad: JRect | null, opts: JBFOptions | null) {
+  opts ??= new JBFOptions();
+  if (!opts.inDensity && value && value.density !== 0xffff) opts.inDensity = value.density || 160;
+  if (!opts.inTargetDensity && res) {
+    const metrics: JDisplayMetrics = await vcall(res, "getDisplayMetrics", "()Landroid/util/DisplayMetrics;");
+    opts.inTargetDensity = metrics.densityDpi;
+  }
+  return decodeStream(stream, pad, opts);
+}
+async function decodeResource(res: unknown, id: number, opts: JBFOptions | null = null) {
+  let bitmap: JBitmap | null = null, stream: unknown = null;
+  try {
+    const value = new JTypedValue();
+    stream = await vcall(res, "openRawResource", "(ILandroid/util/TypedValue;)Ljava/io/InputStream;", id, value);
+    bitmap = await decodeResourceStream(res, value, stream, null, opts);
+  } catch (error) {
+    if (!(error instanceof rt.link("java/lang/Exception").ctor)) throw error;
+  } finally {
+    if (stream) try { await vcall(stream, "close", "()V"); }
+    catch (error) { if (!(error instanceof rt.link("java/io/IOException").ctor)) throw error; }
+  }
+  if (!bitmap && opts?.inBitmap) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Problem decoding into existing bitmap");
+  return bitmap;
 }
 rt.register({
   name: "android/graphics/BitmapFactory", ctor: class extends JObj {},
@@ -1875,10 +1911,11 @@ rt.register({
     "static decodeByteArray([BIILandroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;":
       (b: Int8Array, off: number, len: number, o: JBFOptions) =>
         decodeBytes(u8(b, off, len), o),
-    "static decodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;": async (s: unknown) => decodeBytes(await streamBytes(s), null),
-    "static decodeStream(Ljava/io/InputStream;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;":
-      async (s: unknown, r: unknown, o: JBFOptions) => decodeBytes(await streamBytes(s), o),
-    // decodeResource/decodeFile wired by res.ts / vfs
+    "static decodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;": decodeStream,
+    "static decodeStream(Ljava/io/InputStream;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;": decodeStream,
+    "static decodeResource(Landroid/content/res/Resources;I)Landroid/graphics/Bitmap;": decodeResource,
+    "static decodeResource(Landroid/content/res/Resources;ILandroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;": decodeResource,
+    "static decodeResourceStream(Landroid/content/res/Resources;Landroid/util/TypedValue;Ljava/io/InputStream;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;": decodeResourceStream,
   },
 });
 

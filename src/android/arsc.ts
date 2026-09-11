@@ -240,7 +240,7 @@ export class Arsc {
   }
 
   /** best-config entry for resId, or null */
-  entry(resId: number): ResEntry | null {
+  entry(resId: number, selected?: { density: number }): ResEntry | null {
     if ((resId >>> 24) !== this.pkgId) return null;
     const typeId = (resId >> 16) & 0xff;
     const entryIdx = resId & 0xffff;
@@ -251,7 +251,7 @@ export class Arsc {
       const e = ch.entries.get(entryIdx);
       if (!e) continue;
       const s = this.configScore(ch.config);
-      if (s > bestScore) { bestScore = s; best = e; }
+      if (s > bestScore) { bestScore = s; best = e; if (selected) selected.density = ch.config.density; }
     }
     return best;
   }
