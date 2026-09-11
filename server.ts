@@ -1,6 +1,7 @@
 import index from "./index.html";
 import processIndex from "./process.html";
-import { WEB_INJECT, WEB_PROXY_WORKER, WEB_FRAME } from "./src/shell/webinject";
+import { WEB_PROXY_WORKER, WEB_FRAME } from "./src/shell/webinject";
+import { htmlAttribute, webDocument } from "./src/shell/webhtml";
 import { openInstall } from "./src/shell/install";
 import { prepareSystemPackages } from "./scripts/system-packages";
 import { ensureFrameworkRes } from "./scripts/gen-framework-res";
@@ -16,13 +17,6 @@ type TcpData = { kind: "tcp"; host: string; port: number; tls: boolean; sock: im
 // only for `frame=1`, where the shell embeds the document in an iframe it must be able to script.
 const DROP = /^(content-encoding|content-length|transfer-encoding|set-cookie)$/i;
 const DROP_FRAME = /^(x-frame-options|content-security-policy(-report-only)?|cross-origin-(opener|embedder)-policy)$/i;
-const attr = (s: string) => s.replace(/[&"<]/g, (c) => c === "&" ? "&amp;" : c === '"' ? "&quot;" : "&lt;");
-/** html with `s` inserted at the top of <head>, before any of the page's own scripts */
-function inHead(html: string, s: string): string {
-  const m = /<head[^>]*>/i.exec(html);
-  const at = m ? m.index + m[0].length : 0;
-  return html.slice(0, at) + s + html.slice(at);
-}
 
 const ASSET_TYPE: Record<string, string> = {
   html: "text/html", js: "text/javascript", css: "text/css", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
@@ -101,12 +95,12 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
           // Served from our origin so the shell can script it; <base> keeps its subresources and
           // links resolving against the real one. text() re-encodes as UTF-8, so say so.
           h.set("content-type", "text/html; charset=utf-8");
-          return new Response(inHead(await upstream.text(), `<meta name="wd-proxy-url" content="${attr(upstream.url)}"><base href="${attr(upstream.url)}">` + WEB_INJECT), { status: upstream.status, headers: h });
+          return new Response(webDocument(await upstream.text(), upstream.url), { status: upstream.status, headers: h });
         }
         return new Response(upstream.body, { status: upstream.status, headers: h });
       } catch (e) {
         // a WebView reads the meta to report onReceivedError — a contract, not text sniffing
-        if (frame) return new Response(`<!doctype html><meta name="wd-proxy-error" content="${attr(String(e))}">`,
+        if (frame) return new Response(`<!doctype html><meta name="wd-proxy-error" content="${htmlAttribute(String(e))}">`,
           { status: 502, headers: { "content-type": "text/html; charset=utf-8" } });
         return new Response(`proxy error: ${e}`, { status: 502 });
       }
@@ -124,7 +118,7 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
       if (!bytes) return new Response("not found", { status: 404 });
       const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
       const type = ASSET_TYPE[ext] ?? "application/octet-stream";
-      if (ext === "html") return new Response(inHead(new TextDecoder().decode(bytes), WEB_INJECT), { headers: { "content-type": type } });
+      if (ext === "html") return new Response(webDocument(new TextDecoder().decode(bytes)), { headers: { "content-type": type } });
       return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { "content-type": type } });
     },
     "/sqljs/:file": (req) => serveFile("vendor/sql.js/dist", req.params.file),
