@@ -5,7 +5,7 @@ import "./natives";
 import { RangeFile } from "./shell/lazyfile";
 import { mountSystemCertificates } from "./shell/cacerts";
 
-import { JRenderNode, SYSTEM_FONT } from "./android/graphics";
+import { SYSTEM_FONT } from "./android/graphics";
 import { setGL } from "./android/gl";
 import { rt } from "./jvm/runtime";
 import { newObj, vcall, linkInit, suspendTrace } from "./jvm/natives/jlang";
@@ -24,7 +24,6 @@ import { openDatabase } from "./android/sqlite";
 import { setWebLayer, webViewInfo } from "./android/webkit";
 import { native } from "./native/debug";
 import { jitStats } from "./native/core";
-import { allSurfaces, probeSurface } from "./android/glview";
 import { device, parseScreen, readStoredScreen, storeScreen, type Screen } from "./shell/config";
 import { openInstallRemote } from "./shell/install";
 import { vfs } from "./jvm/natives/jio";
@@ -237,7 +236,6 @@ jitStats.on = new URLSearchParams(location.search).get("jit") !== "0"; // `?jit=
 
 const wd = {
   rt, uiState, overlays, perf, perfReset, mainDbg, yields: yieldStats, timedParks, suspends: suspendTrace, setGL, logs: logBuf, ticks: 0, native, vfs,
-  surfaces: () => allSurfaces.map((s) => ({ view: s.view?.constructor.name, width: s.width, height: s.height, frames: s.frames, present: !!s.present })), probeSurface,
   // The JVM's own entry points, so a script can drive real bytecode from the page the way
   // scripts/fwtest.ts drives it headless. That is the only way to exercise anything needing
   // Canvas2D — text metrics, a bitmap raster, an image decode — since bun has no canvas.
@@ -250,7 +248,7 @@ const wd = {
     return (fn as (...a: unknown[]) => unknown)(...args);
   },
   nativeLiars: () => [...rt.nativeLiars].sort(),
-  boot, app: () => currentApp(), rnodes: () => JRenderNode.all, back,
+  boot, app: () => currentApp(), back,
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
   web: () => webViewInfo(),
   // framework attributes a layout used that nothing here reads: a look that is wrong with a

@@ -140,7 +140,7 @@ await exercise("Bitmap.createBitmap + pixels", async () => {
 if (existsSync("vendor/aosp/framework-res.apk")) {
   const { Arsc } = await import("../src/android/arsc");
   const { Resources, setFramework } = await import("../src/android/res");
-  const { handle } = await import("../src/android/delegates");
+  const { handle } = await import("../src/android/handles");
   const { centralDir, entryBytes } = await import("../src/jvm/natives/jzip");
   // read the package lazily, as framework.ts does: the arsc up front, every other entry on
   // demand — the layout exercise below needs res/ to be reachable, not just the table

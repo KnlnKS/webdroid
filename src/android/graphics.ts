@@ -301,7 +301,6 @@ export class JPaint extends JObj {
   tf: JTypeface = tfDefault;
   antiAlias = true;
   textAlignN = 0; // 0 left, 1 center, 2 right
-  alphaMul = 1;   // via setAlpha on top of color? android: setAlpha replaces color alpha
   shader: CanvasGradient | CanvasPattern | null = null;
   shaderObj: JShader | null = null;
   maskFilter: JBlurMaskFilter | null = null;
@@ -1593,8 +1592,6 @@ export class JRenderNode extends JObj {
   hasDL = false;
   effect: JRenderEffect | null = null;
   effectInput: OffscreenCanvas | null = null;
-  static all: JRenderNode[] = [];   // debug registry (capped)
-  constructor() { super(); if (JRenderNode.all.length < 400) JRenderNode.all.push(this); }
 }
 type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 /** recording proxy: applies ops immediately to the mirror octx (so reads like

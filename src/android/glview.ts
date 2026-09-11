@@ -206,19 +206,6 @@ rt.register({
       (s: JSurface, bmp: JBitmap, l: unknown) => { void pixelCopy(s.surf, bmp, l); },
   },
 });
-/** every window surface ever created (wd.surfaces), and a coarse look at what one last presented */
-export const allSurfaces: GlSurface[] = [];
-export function probeSurface(i: number, grid = 32): { nonBlack: number; mean: number[]; corners: number[][] } | null {
-  const s = allSurfaces[i];
-  if (!s?.present) return null;
-  const c = new OffscreenCanvas(grid, grid), ctx = c.getContext("2d")!;
-  ctx.drawImage(s.present, 0, 0, grid, grid);
-  const d = ctx.getImageData(0, 0, grid, grid).data;
-  let lit = 0; const mean = [0, 0, 0];
-  for (let p = 0; p < d.length; p += 4) { if (Math.max(d[p], d[p + 1], d[p + 2]) > 16) lit++; mean[0] += d[p]; mean[1] += d[p + 1]; mean[2] += d[p + 2]; }
-  const px = (x: number, y: number) => [...d.subarray((y * grid + x) * 4, (y * grid + x) * 4 + 3)];
-  return { nonBlack: lit / (grid * grid), mean: mean.map((m) => Math.round(m / (grid * grid))), corners: [px(0, 0), px(grid - 1, 0), px(grid >> 1, grid >> 1), px(0, grid - 1), px(grid - 1, grid - 1)] };
-}
 class JEGLContext extends JObj { egl!: EglContext; }
 /** the one EGL config: RGBA8, depth 24, stencil 8, no multisampling, ES1/2/3, window + pbuffer */
 export function eglConfigAttrib(attr: number): number {
@@ -264,7 +251,7 @@ class JSurfaceView extends JViewGroup {
     const holder = getHolder(this);
     if (holder.surface && this.surfW === w && this.surfH === h) return;
     const created = !holder.surface;
-    if (created) allSurfaces.push(holder.surface = { view: this, width: w, height: h, present: null, frames: 0 });
+    if (created) holder.surface = { view: this, width: w, height: h, present: null, frames: 0 };
     else { holder.surface!.width = w; holder.surface!.height = h; }
     this.surfW = w; this.surfH = h;
     void onMain(async () => {
@@ -372,7 +359,6 @@ class JTextureView extends JView {
         ? vcall(this.listener, "onSurfaceTextureUpdated", "(Landroid/graphics/SurfaceTexture;)V", texture) : undefined);
     };
     texture.surface.width = w; texture.surface.height = h;
-    if (created) allSurfaces.push(texture.surface);
     const listener = this.listener;
     if (listener) void onMain(() => vcall(listener, created ? "onSurfaceTextureAvailable" : "onSurfaceTextureSizeChanged", "(Landroid/graphics/SurfaceTexture;II)V", texture, w, h));
   }

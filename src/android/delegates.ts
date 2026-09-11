@@ -33,11 +33,6 @@ import { jarray } from "../jvm/abi";
 import { device } from "../shell/config";
 import { BytesFile, type FileSource } from "../shell/lazyfile";
 
-// ── handles ────────────────────────────────────────────────────────────────────────────
-// The table itself is src/android/handles.ts: AOSP bytecode asks our own objects for their
-// native pointer too, and graphics.ts cannot import this file.
-export { handle, deref } from "./handles";
-
 type Fn = (...a: never[]) => unknown;
 /** register the native halves of one class, by their exact AOSP descriptors */
 function delegate(cls: string, table: Record<string, unknown>) {

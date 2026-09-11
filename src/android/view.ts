@@ -1351,7 +1351,7 @@ export function attachView(parent: JViewGroup, child: JView, index = -1) {
   // integrity: never create a cycle (child already an ancestor of parent)
   for (let a: JView | null = parent; a; a = a.parent) {
     if (a === child) {
-      console.error("[webdroid] refused cyclic addView:", (child.constructor as any)?.$i?.name, "into", (parent.constructor as any)?.$i?.name, new Error().stack?.split("\n").slice(1, 6).join(" | "));
+      console.error("[webdroid] refused cyclic addView:", (child.constructor as any)?.$i?.name, "into", (parent.constructor as any)?.$i?.name);
       return;
     }
   }
@@ -1534,7 +1534,6 @@ const vgMethods: NativeSpec["methods"] = {
   },
   "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": function () {
     const lp = new JLayoutParams();
-    lp.width = WRAP_CONTENT; lp.height = WRAP_CONTENT;
     return lp;
   },
   "generateLayoutParams(Landroid/util/AttributeSet;)Landroid/view/ViewGroup$LayoutParams;": function (this: JViewGroup, set: JAttrSet) {
@@ -1713,30 +1712,16 @@ class JVTO extends JObj {
   scrollLs: unknown[] = [];
   focusLs: unknown[] = [];
   focused: JView | null = null;
-  async dispatchFocusChanged(old: JView | null, now: JView | null) {
-    for (const l of [...this.focusLs]) {
-      try { await vcall(l, "onGlobalFocusChanged", "(Landroid/view/View;Landroid/view/View;)V", old, now); } catch (e) { console.error("[vto]", e); }
-    }
-  }
-  async dispatchGlobalLayout() {
-    for (const l of [...this.globalLayoutLs]) {
-      try { await vcall(l, "onGlobalLayout", "()V"); } catch (e) { console.error("[vto]", e); }
-    }
-  }
-  async dispatchPreDraw() {
-    for (const l of [...this.preDrawLs]) {
-      try { await vcall(l, "onPreDraw", "()Z"); } catch (e) { console.error("[vto]", e); }
-    }
-  }
-  async dispatchOnDraw() {
-    for (const l of [...this.drawLs]) {
-      try { await vcall(l, "onDraw", "()V"); } catch (e) { console.error("[vto]", e); }
-    }
-  }
-  async dispatchScrollChanged() {
-    for (const l of [...this.scrollLs]) {
-      try { await vcall(l, "onScrollChanged", "()V"); } catch (e) { console.error("[vto]", e); }
-    }
+  dispatchFocusChanged(old: JView | null, now: JView | null) { return fanOut(this.focusLs, "onGlobalFocusChanged", "(Landroid/view/View;Landroid/view/View;)V", old, now); }
+  dispatchGlobalLayout() { return fanOut(this.globalLayoutLs, "onGlobalLayout", "()V"); }
+  dispatchPreDraw() { return fanOut(this.preDrawLs, "onPreDraw", "()Z"); }
+  dispatchOnDraw() { return fanOut(this.drawLs, "onDraw", "()V"); }
+  dispatchScrollChanged() { return fanOut(this.scrollLs, "onScrollChanged", "()V"); }
+}
+async function fanOut(ls: unknown[], name: string, desc: string, ...args: unknown[]): Promise<void> {
+  if (!ls.length) return;
+  for (const l of [...ls]) {
+    try { await vcall(l, name, desc, ...args); } catch (e) { console.error("[vto]", e); }
   }
 }
 const vtoMap = new WeakMap<JView, JVTO>();
@@ -1799,17 +1784,12 @@ rt.register({
     "removeOnWindowFocusChangeListener(Landroid/view/ViewTreeObserver$OnWindowFocusChangeListener;)V": () => {},
     "addOnTouchModeChangeListener(Landroid/view/ViewTreeObserver$OnTouchModeChangeListener;)V": () => {},
     "removeOnTouchModeChangeListener(Landroid/view/ViewTreeObserver$OnTouchModeChangeListener;)V": () => {},
-    "addOnGlobalFocusChangeListener(Landroid/view/ViewTreeObserver$OnGlobalFocusChangeListener;)V": function (this: JVTO, l: unknown) { this.focusLs.push(l); },
-    "removeOnGlobalFocusChangeListener(Landroid/view/ViewTreeObserver$OnGlobalFocusChangeListener;)V": function (this: JVTO, l: unknown) { removeFrom(this.focusLs, l); },
-    "addOnScrollChangedListener(Landroid/view/ViewTreeObserver$OnScrollChangedListener;)V": function (this: JVTO, l: unknown) { this.scrollLs.push(l); },
-    "removeOnScrollChangedListener(Landroid/view/ViewTreeObserver$OnScrollChangedListener;)V": function (this: JVTO, l: unknown) { removeFrom(this.scrollLs, l); },
-    "addOnGlobalLayoutListener(Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;)V": function (this: JVTO, l: unknown) { this.globalLayoutLs.push(l); },
-    "removeOnGlobalLayoutListener(Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;)V": function (this: JVTO, l: unknown) { removeFrom(this.globalLayoutLs, l); },
+    ...Object.fromEntries(([["focusLs", "GlobalFocusChange"], ["scrollLs", "ScrollChanged"], ["globalLayoutLs", "GlobalLayout"],
+      ["preDrawLs", "PreDraw"], ["drawLs", "Draw"]] as const).flatMap(([k, n]) => {
+      const t = `On${n}Listener(Landroid/view/ViewTreeObserver$On${n}Listener;)V`;
+      return [[`add${t}`, function (this: JVTO, l: unknown) { this[k].push(l); }], [`remove${t}`, function (this: JVTO, l: unknown) { removeFrom(this[k], l); }]];
+    })),
     "removeGlobalOnLayoutListener(Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;)V": function (this: JVTO, l: unknown) { removeFrom(this.globalLayoutLs, l); },
-    "addOnPreDrawListener(Landroid/view/ViewTreeObserver$OnPreDrawListener;)V": function (this: JVTO, l: unknown) { this.preDrawLs.push(l); },
-    "removeOnPreDrawListener(Landroid/view/ViewTreeObserver$OnPreDrawListener;)V": function (this: JVTO, l: unknown) { removeFrom(this.preDrawLs, l); },
-    "addOnDrawListener(Landroid/view/ViewTreeObserver$OnDrawListener;)V": function (this: JVTO, l: unknown) { this.drawLs.push(l); },
-    "removeOnDrawListener(Landroid/view/ViewTreeObserver$OnDrawListener;)V": function (this: JVTO, l: unknown) { removeFrom(this.drawLs, l); },
     "isAlive()Z": () => 1,
     "dispatchOnGlobalLayout()V": maySuspend(function (this: JVTO) { return this.dispatchGlobalLayout(); }),
   },
