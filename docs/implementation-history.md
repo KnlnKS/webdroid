@@ -814,10 +814,59 @@ captured errors. The rebuilt SDK APK remains under its ignored Gradle build dire
 
 Typecheck, 603 tests / 20,401 assertions, zero method failures for Resy/microG/rebuilt
 SDK, executable framework probes and 6/6 text comparisons pass. Full E2E/corpus and
-isolated CPU/memory verification of this bitmap change are pending.
+isolated CPU/memory verification of this bitmap change were pending at `c376306`.
 Evidence: `/tmp/webdroid-map-probe-browser-fixed.log`, map screenshots and JSON beside
 it, `/tmp/webdroid-map-probe-android.log`, `/tmp/webdroid-bitmap-probe-{android,browser-final,
 typecheck,unit,fwtest,smoke,resy-smoke,gms-smoke,textcmp}.log` and
 `/tmp/webdroid-bitmap-probe-browser.json`. Browser scripts are under the matching
 `/tmp/webdroid-{map,bitmap}-probe-browser.ts` paths. Android probes use the same rebuilt
 APK installed with `adb install -r`, preserving the dedicated test account.
+
+The subsequent full serialized E2E run completed all 111 steps, with no added
+missing/error/native-required entries, no layout/draw errors and no wedges against
+`28b9246`. Scores: FitNotes 40.89%, Mihon onboarding 17.56%, Mihon app 57.40%,
+Harmonic 33.07%. DoodleJump minimum FPS is 39 on both revisions; Flappy is 27 → 26
+and retains its known FPS failures. A corpus process briefly overlapped the tail of
+FitNotes/start of Harmonic before being stopped, so those timing intervals are not
+isolated performance evidence. The complete corpus rerun after E2E renders 13/14 APKs
+and reports the same 24 distinct gaps as the baseline; TikTok still fails with 12 gaps.
+This corpus run retained its summary, not per-APK error JSON. Evidence:
+`/tmp/webdroid-bitmap-probe-{e2e,comparison,corpus-final}.log`.
+
+Three alternating baseline/current performance pairs compare `28b9246` with `c376306`,
+using headless Chromium, the same eight FitNotes steps and golden geometry, with no
+competing capture/build workload. The middle pair reverses order. "Cold" uses a fresh
+browser context; "warm" resets the app in that browser, not an Android warm activity
+resume. CDP thread-tick TaskDuration covers the measured renderer, not total system CPU.
+
+Median baseline → current:
+
+| Measurement | Cold | Reset |
+| --- | --- | --- |
+| Foreground CPU | 1203.52 → 1201.21 ms (−0.19%) | 1171.13 → 1173.16 ms (+0.17%) |
+| Boot counter | 141.1 → 140.2 ms | 156.3 → 155.5 ms |
+| Lazy compile time | 99.5 → 98.3 ms | 112.7 → 108.8 ms |
+| Retained JS heap after GC | 136.858 → 136.859 MB | 137.002 → 136.974 MB |
+| Steady idle CPU over 10 seconds | 356.36 → 369.42 ms (+3.66%) | 377.72 → 368.99 ms (−2.31%) |
+
+All runs compile 600 classes and perform 20 cold / 24 reset draws. Frame counters vary
+with scheduling (medians 168 → 171 cold, 195 → 202 reset); no layout/draw errors occur.
+Every run stays visible, renders all measured steps, advances 3599–3604 ticks across
+30 seconds of idle observation and ends with an empty main queue. Each reproduces the
+same destroyed-FragmentManager exception and no missing APIs, so this is an observed
+flow comparison, not a claim that the app completes every intended transaction.
+
+The broker wrappers observe 42 calls and 100 binary payload bytes in every run.
+Aggregate awaited call time is 2342.3 → 2325.8 ms cold and 991.6 → 982.9 ms reset;
+these overlapping asynchronous durations are neither CPU time nor serialized wire size.
+Root Wasm linear memory stays at 256 MiB; this is addressable memory, not resident RAM,
+and JS heap excludes Wasm/external memory. Natural pre-GC heap medians also stay close
+(+0.17% cold, +0.01% reset). No repeatable >5% foreground CPU regression was observed.
+Evidence: `/tmp/webdroid-bitmap-perf-{baseline,current}-{1,2,3}.{json,log}` and
+`/tmp/webdroid-bitmap-perf-summary.jsonl`; driver and series scripts are
+`/tmp/webdroid-microg-resume-perf.ts` and `...-perf-series.ts`.
+
+The Google-login test tab remains at the SDK client with zero accounts and no recorded
+bridge calls; it still awaits the user's credentials/challenge. No further login
+attempt was started. Broader map gestures/cancellation/lifecycle and the previously
+listed account/service/task breadth remain open; the integration goal is not complete.

@@ -19,15 +19,20 @@ new diagnostics versus `28b9246`. The subsequent resource-order refinement passe
 12 Chromium tests and repeated isolated WebView/real-microG page checks. Its final
 serialized E2E rerun also completed all 111 steps without additional diagnostics;
 corpus rendered 13/14 APKs (TikTok failed). Goldens are unchanged. Detailed fresh
-CPU/memory comparisons remain pending.
+CPU/memory comparisons are recorded below.
 
-The genuine SDK map probe exposed missing `BitmapFactory.decodeResource`. The current
-change decodes through the existing bitmap path using the selected compiled resource's
+The genuine SDK map probe exposed missing `BitmapFactory.decodeResource`. Commit
+`c376306` decodes through the existing bitmap path using the selected compiled resource's
 density, including aliases. Camera movement, animation completion, a default marker,
 marker click and title bubble now work. A 33-result bitmap probe matches the dedicated
 Android reference for density, sampling, bounds and mutability. Typecheck, 603 units,
-affected APK compilation, framework probes and textcmp pass; full E2E/corpus verification
-for this change is underway. This is bounded map progress, not full interaction parity.
+affected APK compilation, framework probes and textcmp pass. Its full E2E run completes
+111 steps with no additional diagnostics, layout/draw errors or wedges; corpus renders
+13/14 with the same 24 distinct gaps as the baseline. Three alternating baseline/current
+pairs give median foreground CPU changes of −0.19% cold and +0.17% after reset; retained
+JS heap is effectively unchanged. These measure eight FitNotes steps with rendering and
+advancing ticks, not all APKs or total browser/process memory. This is bounded map
+progress, not full interaction parity.
 
 A fresh test tab is open in Chrome at `http://localhost:41979/?apk=GmsClient.apk`.
 The user has been asked to complete the authorized Google sign-in directly in that
