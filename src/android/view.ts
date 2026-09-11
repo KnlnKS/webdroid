@@ -111,7 +111,7 @@ export function requestLayout(v: JView) {
   uiState.needsLayout = true; uiState.needsDraw = true;
   if (uiState.layoutTrace) traceLayoutRequest(uiState.layoutTrace, v);
   perf.layoutRequests++;
-  if (layoutPass.active && v.attached && !layoutPass.requesters.includes(v)) layoutPass.requesters.push(v);
+  if (layoutPass.active && v.attached && !v.inRequesters) { v.inRequesters = true; layoutPass.requesters.push(v); }
   for (let p: JView | null = v; p; p = p.parent) {
     p.layoutRequested = true;
     p.oldWSpec = -1;
@@ -157,7 +157,10 @@ function shownPath(v: JView): boolean {
 export function replayLayoutRequests() {
   const rs = layoutPass.requesters;
   if (!rs.length) return;
-  for (const r of rs) if (r.layoutRequested && r.attached && shownPath(r)) validRequesters.push(r);
+  for (const r of rs) {
+    r.inRequesters = false;
+    if (r.layoutRequested && r.attached && shownPath(r)) validRequesters.push(r);
+  }
   for (const r of rs) for (let p: JView | null = r; p && p.layoutRequested; p = p.parent) p.layoutRequested = false;
   rs.length = 0;
   for (const r of validRequesters) requestLayoutVirtual(r);
@@ -350,6 +353,8 @@ export class JView extends JObj {
   layoutChangeLs: unknown[] = [];
   attachLs: unknown[] = [];
   layoutRequested = true;
+  /** already in layoutPass.requesters this pass: AOSP's mLayoutRequesters holds a view once */
+  inRequesters = false;
   /** AOSP PFLAG_LAYOUT_REQUIRED: set when onMeasure ran, cleared when onLayout consumed it */
   layoutRequired = true;
   overScrollMode = 0;
@@ -525,9 +530,14 @@ function measureCachePut(v: JView, wSpec: number, hSpec: number) {
   c[i] = wSpec; c[i + 1] = hSpec; c[i + 2] = v.measuredW; c[i + 3] = v.measuredH;
 }
 /** AOSP View.sAlwaysRemeasureExactly: an app targeting M (23) or lower re-measures under a changed
- *  EXACTLY spec even at the size it already has; its LinearLayout weights relied on that pass */
-let alwaysRemeasureExactly = false;
-export function setAlwaysRemeasureExactly(on: boolean) { alwaysRemeasureExactly = on; }
+ *  EXACTLY spec even at the size it already has; its LinearLayout weights relied on that pass.
+ *  View.sIgnoreMeasureCache: one targeting below KitKat (19) never has onMeasure answered by
+ *  the measure cache. */
+let alwaysRemeasureExactly = false, ignoreMeasureCache = false;
+export function setMeasureTargetSdk(target: number) {
+  alwaysRemeasureExactly = target <= 23;
+  ignoreMeasureCache = target < 19;
+}
 export async function measureView(v: JView, wSpec: number, hSpec: number) {
   // AOSP View.measure: with no forced layout and identical specs the previous measurement
   // still holds. Without this every pass re-measured the whole tree from the root.
@@ -542,7 +552,7 @@ export async function measureView(v: JView, wSpec: number, hSpec: number) {
       return;
     }
     // a spec pair this view already measured under since its last request: the size it produced
-    const i = v.mcLen ? measureCacheFind(v, wSpec, hSpec) : -1;
+    const i = v.mcLen && !ignoreMeasureCache ? measureCacheFind(v, wSpec, hSpec) : -1;
     if (i >= 0) {
       const c = v.mc!;
       v.oldWSpec = wSpec; v.oldHSpec = hSpec;
