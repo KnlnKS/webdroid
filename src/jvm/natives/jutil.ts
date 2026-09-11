@@ -2,7 +2,7 @@ import { readStreamFully } from "./jio";
 import { jarray, mangleMethod, charsToString } from "../abi";
 import {
   vcall, vcallMaybe, after, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, idHash, defineException,
-  mkCmp, fmtDouble
+  mkCmp, fmtDouble, bitCount32
 } from "./jlang";
 import { JObj, rt, maySuspend, type NativeSpec, type ClassInfo } from "../runtime";
 
@@ -1258,12 +1258,7 @@ rt.register({
     "isEmpty()Z": function (this: JBitSet) { return bsLength(this) === 0 ? 1 : 0; },
     "cardinality()I": function (this: JBitSet) {
       let n = 0;
-      for (let i = 0; i < this.w.length; i++) {
-        let v = this.w[i];
-        v -= (v >>> 1) & 0x55555555;
-        v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
-        n += Math.imul((v + (v >>> 4)) & 0x0f0f0f0f, 0x01010101) >>> 24;
-      }
+      for (let i = 0; i < this.w.length; i++) n += bitCount32(this.w[i]);
       return n;
     },
     "nextSetBit(I)I": function (this: JBitSet, from: number) {

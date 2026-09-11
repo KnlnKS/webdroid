@@ -135,8 +135,7 @@ rt.register({
     },
     "getClass()Ljava/lang/Class;": function () { const info: ClassInfo | undefined = (this.constructor as typeof JObj).$i; return (info?.owner ?? rt).classFor(jclsName(this)); },
     "clone()Ljava/lang/Object;": function (this: any) {
-      if (Array.isArray(this)) { const c: unknown[] = (this as unknown[]).slice(); (c as any).$t = (this as any).$t; return c; }
-      if (ArrayBuffer.isView(this)) return (this as any).slice();
+      if (Array.isArray(this) || ArrayBuffer.isView(this)) return rt.arrCall(this, "clone");
       const c = Object.create(Object.getPrototypeOf(this));
       Object.assign(c, this);
       return c;
@@ -470,47 +469,24 @@ export function defineException(name: string, sup: string, constructors: string[
   const methods = Object.fromEntries(constructors.map((desc) => ["<init>" + desc, throwableConstructors["<init>" + desc]]));
   rt.register({ name, sup, ctor: c, methods });
 }
-defineException("java/lang/Error", "java/lang/Throwable");
-defineException("java/lang/Exception", "java/lang/Throwable");
-defineException("java/lang/RuntimeException", "java/lang/Exception");
-for (const n of ["NullPointerException", "ClassCastException", "ArithmeticException", "ArrayIndexOutOfBoundsException",
-  "StringIndexOutOfBoundsException", "IndexOutOfBoundsException", "IllegalArgumentException", "IllegalStateException",
-  "UnsupportedOperationException", "NumberFormatException", "NegativeArraySizeException", "ArrayStoreException",
-  "SecurityException"]) {
-  defineException("java/lang/" + n, "java/lang/RuntimeException");
+const lang = (n: string) => (n.includes("/") ? n : "java/lang/" + n);
+for (const [sup, names] of [
+  ["Throwable", "Error Exception"],
+  ["Exception", "RuntimeException InterruptedException CloneNotSupportedException ReflectiveOperationException org/xmlpull/v1/XmlPullParserException"],
+  ["RuntimeException", "NullPointerException ClassCastException ArithmeticException ArrayIndexOutOfBoundsException StringIndexOutOfBoundsException " +
+    "IndexOutOfBoundsException IllegalArgumentException IllegalStateException UnsupportedOperationException NumberFormatException " +
+    "NegativeArraySizeException ArrayStoreException SecurityException IllegalMonitorStateException java/util/NoSuchElementException " +
+    "java/util/ConcurrentModificationException"],
+  ["ReflectiveOperationException", "ClassNotFoundException NoSuchMethodException NoSuchFieldException InstantiationException IllegalAccessException"],
+  ["Error", "StackOverflowError OutOfMemoryError AssertionError LinkageError InternalError"],
+  ["LinkageError", "NoClassDefFoundError NoSuchMethodError NoSuchFieldError UnsatisfiedLinkError AbstractMethodError ExceptionInInitializerError"],
+  ["java/io/IOException", "java/io/FileNotFoundException java/io/EOFException java/io/UnsupportedEncodingException java/net/SocketException " +
+    "java/net/SocketTimeoutException java/net/UnknownHostException java/io/InterruptedIOException"],
+  ["java/net/SocketException", "java/net/ConnectException"],
+]) {
+  if (sup === "java/io/IOException") defineException(sup, "java/lang/Exception", ["()V", "(Ljava/lang/String;)V", "(Ljava/lang/Throwable;)V", "(Ljava/lang/String;Ljava/lang/Throwable;)V"]);
+  for (const n of names.split(" ")) defineException(lang(n), lang(sup));
 }
-defineException("java/lang/IllegalMonitorStateException", "java/lang/RuntimeException");
-defineException("java/lang/InterruptedException", "java/lang/Exception");
-defineException("java/lang/CloneNotSupportedException", "java/lang/Exception");
-defineException("java/lang/ReflectiveOperationException", "java/lang/Exception");
-defineException("java/lang/ClassNotFoundException", "java/lang/ReflectiveOperationException");
-defineException("java/lang/NoSuchMethodException", "java/lang/ReflectiveOperationException");
-defineException("java/lang/NoSuchFieldException", "java/lang/ReflectiveOperationException");
-defineException("java/lang/InstantiationException", "java/lang/ReflectiveOperationException");
-defineException("java/lang/IllegalAccessException", "java/lang/ReflectiveOperationException");
-defineException("java/lang/StackOverflowError", "java/lang/Error");
-defineException("java/lang/OutOfMemoryError", "java/lang/Error");
-defineException("java/lang/AssertionError", "java/lang/Error");
-defineException("java/lang/LinkageError", "java/lang/Error");
-defineException("java/lang/NoClassDefFoundError", "java/lang/LinkageError");
-defineException("org/xmlpull/v1/XmlPullParserException", "java/lang/Exception");
-defineException("java/lang/NoSuchMethodError", "java/lang/LinkageError");
-defineException("java/lang/NoSuchFieldError", "java/lang/LinkageError");
-defineException("java/lang/UnsatisfiedLinkError", "java/lang/LinkageError");
-defineException("java/lang/AbstractMethodError", "java/lang/LinkageError");
-defineException("java/lang/InternalError", "java/lang/Error");
-defineException("java/lang/ExceptionInInitializerError", "java/lang/LinkageError");
-defineException("java/io/IOException", "java/lang/Exception", ["()V", "(Ljava/lang/String;)V", "(Ljava/lang/Throwable;)V", "(Ljava/lang/String;Ljava/lang/Throwable;)V"]);
-defineException("java/io/FileNotFoundException", "java/io/IOException");
-defineException("java/io/EOFException", "java/io/IOException");
-defineException("java/io/UnsupportedEncodingException", "java/io/IOException");
-defineException("java/net/SocketException", "java/io/IOException");
-defineException("java/net/ConnectException", "java/net/SocketException");
-defineException("java/net/SocketTimeoutException", "java/io/IOException");
-defineException("java/net/UnknownHostException", "java/io/IOException");
-defineException("java/io/InterruptedIOException", "java/io/IOException");
-defineException("java/util/NoSuchElementException", "java/lang/RuntimeException");
-defineException("java/util/ConcurrentModificationException", "java/lang/RuntimeException");
 
 rt.mkThrowable = (cls: string, msg: string | null) => {
   let ctor = excCtors.get(cls);
@@ -930,6 +906,21 @@ export function boxObject(v: unknown): unknown {
   if (typeof v === "bigint") return box(JLong, v);
   return v;
 }
+const PRIM_BOX = { I: "java/lang/Integer", J: "java/lang/Long", F: "java/lang/Float", D: "java/lang/Double", B: "java/lang/Byte", S: "java/lang/Short" };
+export const bitCount32 = (v: number) => {
+  v -= (v >>> 1) & 0x55555555;
+  v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+  return Math.imul((v + (v >>> 4)) & 0x0f0f0f0f, 0x01010101) >>> 24;
+};
+const rev32 = (v: number) => {
+  v = ((v & 0x55555555) << 1) | ((v >>> 1) & 0x55555555);
+  v = ((v & 0x33333333) << 2) | ((v >>> 2) & 0x33333333);
+  v = ((v & 0x0f0f0f0f) << 4) | ((v >>> 4) & 0x0f0f0f0f);
+  return ((v << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | (v >>> 24)) | 0;
+};
+const ctz32 = (v: number) => (v === 0 ? 32 : 31 - Math.clz32(v & -v));
+const lo32 = (v: bigint) => Number(BigInt.asUintN(32, v)), hi32 = (v: bigint) => Number(BigInt.asUintN(32, v >> 32n));
+const nlz64 = (v: bigint) => { const hi = hi32(v); return hi ? Math.clz32(hi) : 32 + Math.clz32(lo32(v)); };
 /** compareTo for every box class: `v` holds the number/bigint */
 const cmpV = function (this: { v: number | bigint }, o: { v: number | bigint }) { return this.v < o.v ? -1 : this.v > o.v ? 1 : 0; };
 function nfe(s: unknown): never {
@@ -941,7 +932,13 @@ function parseIntJ(s: string, radix = 10): number {
   if (Number.isNaN(v) || v > 2147483647 || v < -2147483648) nfe(s);
   return v | 0;
 }
-const numCommon = (kind: "I" | "J" | "F" | "D" | "B" | "S") => ({
+const numCommon = (kind: "I" | "J" | "F" | "D" | "B" | "S", Ctor: new () => { v: number | bigint }) => ({
+  [`<init>(${kind})V`]: function (this: { v: number | bigint }, v: number | bigint) { this.v = v; },
+  "equals(Ljava/lang/Object;)Z": function (this: { v: number | bigint }, o: unknown) {
+    return o instanceof Ctor && (kind === "F" || kind === "D" ? Object.is(o.v, this.v) : o.v === this.v) ? 1 : 0;
+  },
+  [`compareTo(L${PRIM_BOX[kind]};)I`]: cmpV,
+  "compareTo(Ljava/lang/Object;)I": cmpV,
   "intValue()I": function (this: { v: number | bigint }) { return typeof this.v === "bigint" ? Number(BigInt.asIntN(32, this.v)) : this.v | 0; },
   "longValue()J": function (this: { v: number | bigint }) { return typeof this.v === "bigint" ? this.v : BigInt(Math.trunc(this.v)); },
   "floatValue()F": function (this: { v: number | bigint }) { return Math.fround(Number(this.v)); },
@@ -961,11 +958,7 @@ rt.register({
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   statics: { MAX_VALUE: 2147483647, MIN_VALUE: -2147483648, SIZE: 32, BYTES: 4, get TYPE() { return rt.classFor("int"); } },
   methods: {
-    ...numCommon("I"),
-    "<init>(I)V": function (this: JInt, v: number) { this.v = v; },
-    "equals(Ljava/lang/Object;)Z": function (this: JInt, o: unknown) { return o instanceof JInt && o.v === this.v ? 1 : 0; },
-    "compareTo(Ljava/lang/Integer;)I": cmpV,
-    "compareTo(Ljava/lang/Object;)I": cmpV,
+    ...numCommon("I", JInt),
     "static getInteger(Ljava/lang/String;)Ljava/lang/Integer;": (prop: string) => { const v = sysLong(prop); return v === null ? null : boxInt(Number(v)); },
     "static getInteger(Ljava/lang/String;I)Ljava/lang/Integer;": (prop: string, def: number) => boxInt(Number(sysLong(prop) ?? BigInt(def))),
     "static getInteger(Ljava/lang/String;Ljava/lang/Integer;)Ljava/lang/Integer;": (prop: string, def: JInt) => { const v = sysLong(prop); return v === null ? def : boxInt(Number(v)); },
@@ -984,20 +977,11 @@ rt.register({
     "static min(II)I": (a: number, b: number) => Math.min(a, b),
     "static max(II)I": (a: number, b: number) => Math.max(a, b),
     "static sum(II)I": (a: number, b: number) => (a + b) | 0,
-    "static bitCount(I)I": (v: number) => {
-      v = v - ((v >> 1) & 0x55555555);
-      v = (v & 0x33333333) + ((v >> 2) & 0x33333333);
-      return (Math.imul((v + (v >> 4)) & 0x0f0f0f0f, 0x01010101)) >> 24;
-    },
+    "static bitCount(I)I": bitCount32,
     "static numberOfLeadingZeros(I)I": (v: number) => Math.clz32(v),
-    "static numberOfTrailingZeros(I)I": (v: number) => (v === 0 ? 32 : 31 - Math.clz32(v & -v)),
+    "static numberOfTrailingZeros(I)I": ctz32,
     "static highestOneBit(I)I": (v: number) => (v === 0 ? 0 : 1 << (31 - Math.clz32(v))),
-    "static reverse(I)I": (v: number) => {
-      v = ((v & 0x55555555) << 1) | ((v >>> 1) & 0x55555555);
-      v = ((v & 0x33333333) << 2) | ((v >>> 2) & 0x33333333);
-      v = ((v & 0x0f0f0f0f) << 4) | ((v >>> 4) & 0x0f0f0f0f);
-      return ((v << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | (v >>> 24)) | 0;
-    },
+    "static reverse(I)I": rev32,
     "static rotateLeft(II)I": (v: number, n: number) => ((v << n) | (v >>> (32 - n))) | 0,
     "static hashCode(I)I": (v: number) => v,
     "static signum(I)I": (v: number) => Math.sign(v),
@@ -1024,25 +1008,20 @@ rt.register({
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   statics: { MAX_VALUE: 9223372036854775807n, MIN_VALUE: -9223372036854775808n, SIZE: 64, BYTES: 8, get TYPE() { return rt.classFor("long"); } },
   methods: {
-    ...numCommon("J"),
-    "<init>(J)V": function (this: JLong, v: bigint) { this.v = v; },
-    "equals(Ljava/lang/Object;)Z": function (this: JLong, o: unknown) { return o instanceof JLong && o.v === this.v ? 1 : 0; },
-    "compareTo(Ljava/lang/Long;)I": cmpV,
-    "compareTo(Ljava/lang/Object;)I": cmpV,
+    ...numCommon("J", JLong),
     "static valueOf(J)Ljava/lang/Long;": (v: bigint) => box(JLong, v),
     "static valueOf(Ljava/lang/String;)Ljava/lang/Long;": (s: string) => box(JLong, parseLongJ(s)),
     "static parseLong(Ljava/lang/String;)J": parseLongJ,
     "static parseLong(Ljava/lang/String;I)J": parseLongJ,
     "static lowestOneBit(J)J": (v: bigint) => v & -v,
-    "static numberOfLeadingZeros(J)I": (v: bigint) => { const x = BigInt.asUintN(64, v); const hi = Number(x >> 32n); return hi ? Math.clz32(hi) : 32 + Math.clz32(Number(x & 0xffffffffn)); },
+    "static numberOfLeadingZeros(J)I": nlz64,
     "static toString(JI)Ljava/lang/String;": (v: bigint, radix: number) => v.toString(radix),
     "static compareUnsigned(JJ)I": (a: bigint, b: bigint) => { const x = BigInt.asUintN(64, a), y = BigInt.asUintN(64, b); return x < y ? -1 : x > y ? 1 : 0; },
     "static divideUnsigned(JJ)J": (a: bigint, b: bigint) => BigInt.asIntN(64, BigInt.asUintN(64, a) / BigInt.asUintN(64, b)),
     "static remainderUnsigned(JJ)J": (a: bigint, b: bigint) => BigInt.asIntN(64, BigInt.asUintN(64, a) % BigInt.asUintN(64, b)),
     "static rotateRight(JI)J": (v: bigint, d: number) => { const n = BigInt(d & 63); const x = BigInt.asUintN(64, v); return BigInt.asIntN(64, (x >> n) | (x << (64n - n))); },
-
-    "static highestOneBit(J)J": (v: bigint) => { if (v === 0n) return 0n; let x = BigInt.asUintN(64, v); let r = 1n << 62n; while (!(x & (1n << 63n))) { x <<= 1n; r >>= 1n; } return BigInt.asIntN(64, r << 1n); },
-    "static reverse(J)J": (v: bigint) => { let x = BigInt.asUintN(64, v), r = 0n; for (let i = 0n; i < 64n; i++) { r = (r << 1n) | (x & 1n); x >>= 1n; } return BigInt.asIntN(64, r); },
+    "static highestOneBit(J)J": (v: bigint) => (v === 0n ? 0n : BigInt.asIntN(64, 1n << BigInt(63 - nlz64(v)))),
+    "static reverse(J)J": (v: bigint) => BigInt.asIntN(64, (BigInt(rev32(lo32(v)) >>> 0) << 32n) | BigInt(rev32(hi32(v)) >>> 0)),
     "static getLong(Ljava/lang/String;)Ljava/lang/Long;": (prop: string) => { const v = sysLong(prop); return v === null ? null : box(JLong, v); },
     "static getLong(Ljava/lang/String;J)Ljava/lang/Long;": (prop: string, def: bigint) => box(JLong, sysLong(prop) ?? def),
     "static toString(J)Ljava/lang/String;": (v: bigint) => String(v),
@@ -1052,16 +1031,8 @@ rt.register({
     "static max(JJ)J": (a: bigint, b: bigint) => (a > b ? a : b),
     "static signum(J)I": (v: bigint) => (v < 0n ? -1 : v > 0n ? 1 : 0),
     "static hashCode(J)I": (v: bigint) => Number(BigInt.asIntN(32, v ^ (v >> 32n))),
-    "static numberOfTrailingZeros(J)I": (v: bigint) => {
-      if (v === 0n) return 64;
-      let n = 0; while ((v & 1n) === 0n) { v >>= 1n; n++; }
-      return n;
-    },
-    "static bitCount(J)I": (v: bigint) => {
-      let n = 0; v = BigInt.asUintN(64, v);
-      while (v) { n += Number(v & 1n); v >>= 1n; }
-      return n;
-    },
+    "static numberOfTrailingZeros(J)I": (v: bigint) => (lo32(v) ? ctz32(lo32(v)) : 32 + ctz32(hi32(v))),
+    "static bitCount(J)I": (v: bigint) => bitCount32(lo32(v)) + bitCount32(hi32(v)),
     "static rotateLeft(JI)J": (v: bigint, n: number) =>
       BigInt.asIntN(64, (v << BigInt(n & 63)) | (BigInt.asUintN(64, v) >> BigInt(64 - (n & 63)))),
     "static reverseBytes(J)J": (v: bigint) => {
@@ -1087,11 +1058,7 @@ rt.register({
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   statics: { MAX_VALUE: 3.4028234663852886e38, MIN_VALUE: 1.401298464324817e-45, POSITIVE_INFINITY: Infinity, NEGATIVE_INFINITY: -Infinity, NaN: NaN, get TYPE() { return rt.classFor("float"); } },
   methods: {
-    ...numCommon("F"),
-    "<init>(F)V": function (this: JFloat, v: number) { this.v = v; },
-    "equals(Ljava/lang/Object;)Z": function (this: JFloat, o: unknown) { return o instanceof JFloat && Object.is(o.v, this.v) ? 1 : 0; },
-    "compareTo(Ljava/lang/Float;)I": cmpV,
-    "compareTo(Ljava/lang/Object;)I": cmpV,
+    ...numCommon("F", JFloat),
     "static valueOf(F)Ljava/lang/Float;": (v: number) => box(JFloat, v),
     "static parseFloat(Ljava/lang/String;)F": (s: string) => Math.fround(parseFloatJ(s)),
     "static hashCode(F)I": floatToIntBits,
@@ -1110,11 +1077,7 @@ rt.register({
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   statics: { MAX_VALUE: 1.7976931348623157e308, MIN_VALUE: 4.9e-324, POSITIVE_INFINITY: Infinity, NEGATIVE_INFINITY: -Infinity, NaN: NaN, get TYPE() { return rt.classFor("double"); } },
   methods: {
-    ...numCommon("D"),
-    "<init>(D)V": function (this: JDouble, v: number) { this.v = v; },
-    "equals(Ljava/lang/Object;)Z": function (this: JDouble, o: unknown) { return o instanceof JDouble && Object.is(o.v, this.v) ? 1 : 0; },
-    "compareTo(Ljava/lang/Double;)I": cmpV,
-    "compareTo(Ljava/lang/Object;)I": cmpV,
+    ...numCommon("D", JDouble),
     "static valueOf(D)Ljava/lang/Double;": (v: number) => box(JDouble, v),
     "static parseDouble(Ljava/lang/String;)D": parseFloatJ,
     "static doubleToLongBits(D)J": doubleToLongBits,
@@ -1133,20 +1096,18 @@ rt.register({
   name: "java/lang/Byte", ctor: JByte, sup: "java/lang/Number",
   statics: { MAX_VALUE: 127, MIN_VALUE: -128, get TYPE() { return rt.classFor("byte"); } },
   methods: {
-    ...numCommon("B"),
+    ...numCommon("B", JByte),
     "static valueOf(B)Ljava/lang/Byte;": (v: number) => box(JByte, v),
     "static parseByte(Ljava/lang/String;)B": (s: string) => parseIntJ(s) << 24 >> 24,
     "static parseByte(Ljava/lang/String;I)B": (s: string, r: number) => parseIntJ(s, r) << 24 >> 24,
-    "equals(Ljava/lang/Object;)Z": function (this: JByte, o: unknown) { return o instanceof JByte && o.v === this.v ? 1 : 0; },
   },
 });
 rt.register({
   name: "java/lang/Short", ctor: JShort, sup: "java/lang/Number",
   statics: { MAX_VALUE: 32767, MIN_VALUE: -32768, get TYPE() { return rt.classFor("short"); } },
   methods: {
-    ...numCommon("S"),
+    ...numCommon("S", JShort),
     "static valueOf(S)Ljava/lang/Short;": (v: number) => box(JShort, v),
-    "equals(Ljava/lang/Object;)Z": function (this: JShort, o: unknown) { return o instanceof JShort && o.v === this.v ? 1 : 0; },
   },
 });
 export const TRUE = new JBool(); TRUE.v = 1;
@@ -1202,13 +1163,10 @@ rt.register({
     "static toString(C)Ljava/lang/String;": (v: number) => String.fromCharCode(v),
     "static isDigit(C)Z": (c: number) => (c >= 48 && c <= 57 ? 1 : 0),
     "static isDigit(I)Z": (c: number) => (/\p{Nd}/u.test(String.fromCodePoint(c)) ? 1 : 0),
-    "static isLetter(C)Z": (c: number) => (/\p{L}/u.test(String.fromCharCode(c)) ? 1 : 0),
-    "static isLetter(I)Z": (c: number) => (/\p{L}/u.test(String.fromCodePoint(c)) ? 1 : 0),
-    "static isLetterOrDigit(C)Z": (c: number) => (/[\p{L}\p{Nd}]/u.test(String.fromCharCode(c)) ? 1 : 0),
-    "static isLetterOrDigit(I)Z": (c: number) => (/[\p{L}\p{Nd}]/u.test(String.fromCodePoint(c)) ? 1 : 0),
-    "static isWhitespace(C)Z": (c: number) => (/\s/.test(String.fromCharCode(c)) ? 1 : 0),
-    "static isWhitespace(I)Z": (c: number) => (/\s/.test(String.fromCodePoint(c)) ? 1 : 0),
-    "static isSpaceChar(C)Z": (c: number) => (/\s/.test(String.fromCharCode(c)) ? 1 : 0),
+    ...Object.fromEntries(([["isLetter", /\p{L}/u], ["isLetterOrDigit", /[\p{L}\p{Nd}]/u], ["isWhitespace", /\s/], ["isSpaceChar", /\s/]] as const).flatMap(([n, re]) => {
+      const test = (c: number) => (re.test(String.fromCodePoint(c)) ? 1 : 0);
+      return [[`static ${n}(C)Z`, test], [`static ${n}(I)Z`, test]];
+    })),
     "static isUpperCase(C)Z": (c: number) => { const s = String.fromCharCode(c); return s !== s.toLowerCase() && s === s.toUpperCase() ? 1 : 0; },
     "static isLowerCase(C)Z": (c: number) => { const s = String.fromCharCode(c); return s !== s.toUpperCase() && s === s.toLowerCase() ? 1 : 0; },
     "static toUpperCase(C)C": (c: number) => String.fromCharCode(c).toUpperCase().charCodeAt(0),
