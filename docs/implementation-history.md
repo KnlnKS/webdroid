@@ -947,3 +947,43 @@ microG costs. No repeatable >5% foreground CPU regression is observed. Evidence:
 `/tmp/webdroid-map-thread-perf-{baseline,current}-{1,2,3}.json`, adjacent `.json.png`
 captures, and `/tmp/webdroid-map-thread-perf-summary.jsonl`; driver/series/summary scripts
 use the same `/tmp/webdroid-map-thread-perf` prefix.
+
+
+### 2026-09-11 — Map window-coordinate measurements
+
+The SDK marker trace now also reports `getLocationOnScreen`, `getLocationInWindow`
+and MapView width/height. The rebuilt APK compiles with zero method failures and runs
+on both the dedicated Android reference and browser, without changing production code.
+At 1080x2424@480:
+
+| Measurement | Android | Webdroid |
+| --- | --- | --- |
+| Reported screen origin | 0,322 | 0,248 |
+| Reported window origin | 0,322 | 0,248 |
+| Drawn map top | 322 | 320 |
+| Map size | 1080x2030 | 1080x2104 |
+| Projected center marker | 540,1336 | 540,1298 |
+
+Webdroid's view hierarchy omits the shell's 72-pixel status-bar translation, and its
+map extends to the display bottom rather than Android's bottom system-bar boundary.
+The 2-pixel control-height difference is separate. The SDK still delivers the bounded
+marker click in both runs, so a successful click alone does not validate coordinates.
+The Android run here completes only one animation, with no cancellation; separate
+ADB taps did not reproduce the earlier interruption timing. Earlier cancellation
+observations retain their own evidence, not this repeat.
+
+[AOSP View](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-13.0.0_r12/core/java/android/view/View.java)
+transforms into window space, then adds the attached window's screen position for
+screen coordinates. The Android activity's window already includes system bars, so
+its two origins are equal. Webdroid currently computes both from its content-relative
+tree, while `device.ts` independently translates rendering and input. The exported
+`locationOnScreen` helper also serves popup placement and relative rectangles; simply
+adding the status-bar offset to it would mix coordinate systems. A correction needs
+explicit ownership of window geometry and checks for fullscreen, overlays and detached
+views. No coordinate patch or map-specific offset was added in this checkpoint.
+
+Evidence: `/tmp/webdroid-map-coordinates-{browser,android-run}.log`,
+`/tmp/webdroid-map-coordinates-browser.json`, build/smoke logs with the same prefix.
+The browser captures all three reached runtimes before boot, including NativeMapView's;
+all missing sets and error lists are empty. Login `/diag` still shows the SDK client,
+zero accounts and no bridge calls; user sign-in remains pending.

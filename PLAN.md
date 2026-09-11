@@ -46,6 +46,11 @@ baseline; corpus retains TikTok's failure (13/14 rendered). Three alternating na
 benchmark pairs versus `4acef6d` give median foreground CPU +0.15%, retained JS heap
 −0.001% and native execution time +0.59%, with working visible rendering in every run. An earlier click miss at a variable camera position, screen-coordinate
 differences and camera-idle callback ordering during interruption remain to investigate.
+The expanded SDK trace confirms a 72-pixel mismatch between browser-reported and drawn
+map origin (248 versus 320); Android reports/draws 322. Browser map height is 2104 versus
+Android 2030 at 1080x2424@480. Both platforms report equal screen/window origins, so a
+screen-only offset is insufficient. Correct the owning window geometry, including
+system bars and overlays, before changing shared coordinate helpers.
 
 A fresh test tab is open in Chrome at `http://localhost:41979/?apk=GmsClient.apk`.
 The user has been asked to complete the authorized Google sign-in directly in that

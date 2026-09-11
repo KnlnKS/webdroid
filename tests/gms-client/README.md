@@ -7,7 +7,7 @@ with `adb install -r` to retain test state, or load the rebuilt APK into webdroi
 
 **Map probe** opens a lifecycle-managed Maps SDK view. Wait for `loaded`, press
 Move, Animate, then Marker; tap the marker. `GmsClientMap` logs the SDK's actual
-camera state, callbacks and projected marker position. The reference path reaches
+camera state, callbacks, projected marker position, screen/window origins and map size. The reference path reaches
 zoom 10, then 11, one animation completion and one marker click; clicking opens the
 "SDK marker" title. Initial minimum zoom and projection coordinates depend on screen
 geometry. Android can launch it directly:

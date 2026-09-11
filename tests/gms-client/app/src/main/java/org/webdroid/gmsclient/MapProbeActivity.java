@@ -72,6 +72,9 @@ public class MapProbeActivity extends Activity {
             int[] origin = new int[2];
             view.getLocationOnScreen(origin);
             line += " marker=" + (origin[0] + point.x) + "," + (origin[1] + point.y);
+            line += " screen=" + origin[0] + "," + origin[1];
+            view.getLocationInWindow(origin);
+            line += " window=" + origin[0] + "," + origin[1] + " size=" + view.getWidth() + "," + view.getHeight();
         }
         status.setText("map: " + event + "; zoom=" + camera.zoom);
         Log.i("GmsClientMap", line);
