@@ -215,6 +215,12 @@ function readPrimArray<T>(p: JParcel, make: (n: number) => T, one: () => number 
   for (let i = 0; i < n; i++) out[i] = one();
   return out as unknown as T;
 }
+const PRIM_PARCEL: [new (n: number) => ArrayLike<number | bigint>, V, (p: JParcel, v: never) => void, (p: JParcel) => number | bigint, string, string][] = [
+  [Int32Array, V.INTARRAY, writeInt, readInt, "Int", "I"], [BigInt64Array, V.LONGARRAY, writeLong, readLong, "Long", "J"],
+  [Float32Array, V.FLOATARRAY, writeFloat, readFloat, "Float", "F"], [Float64Array, V.DOUBLEARRAY, writeDouble, readDouble, "Double", "D"],
+  [Uint8Array, V.BOOLEANARRAY, writeInt, readInt, "Boolean", "Z"], [Uint16Array, V.CHARARRAY, writeInt, readInt, "Char", "C"],
+  [Int16Array, V.SHORTARRAY, writeInt, readInt, "", "S"],
+];
 const readStrings = (p: JParcel) => readPrimArray(p, (n) => jarray(new Array<string | null>(n).fill(null), "Ljava/lang/String;"), () => readString(p) as never);
 const writeStrings = (p: JParcel, a: (string | null)[] | null) => { if (!a) return writeInt(p, -1); writeInt(p, a.length); for (const s of a) writeString(p, s); };
 function readStringList(p: JParcel) { const a = readStrings(p); return a ? newArrayList(a) : null; }
@@ -234,13 +240,7 @@ async function writeValue(p: JParcel, v: unknown) {
   if (v instanceof JShort) { tag(V.SHORT); return writeInt(p, v.v); }
   if (v instanceof JChar) { tag(V.CHAR); return writeInt(p, v.v); }
   if (v instanceof Int8Array) { tag(V.BYTEARRAY); return writeBytes(p, v); }
-  if (v instanceof Int32Array) { tag(V.INTARRAY); return writePrimArray(p, v, (x: number) => writeInt(p, x)); }
-  if (v instanceof BigInt64Array) { tag(V.LONGARRAY); return writePrimArray(p, v, (x: bigint) => writeLong(p, x)); }
-  if (v instanceof Float32Array) { tag(V.FLOATARRAY); return writePrimArray(p, v, (x: number) => writeFloat(p, x)); }
-  if (v instanceof Float64Array) { tag(V.DOUBLEARRAY); return writePrimArray(p, v, (x: number) => writeDouble(p, x)); }
-  if (v instanceof Uint8Array) { tag(V.BOOLEANARRAY); return writePrimArray(p, v, (x: number) => writeInt(p, x)); }
-  if (v instanceof Uint16Array) { tag(V.CHARARRAY); return writePrimArray(p, v, (x: number) => writeInt(p, x)); }
-  if (v instanceof Int16Array) { tag(V.SHORTARRAY); return writePrimArray(p, v, (x: number) => writeInt(p, x)); }
+  for (const [C, code, w] of PRIM_PARCEL) if (v instanceof C) { tag(code); return writePrimArray(p, v as ArrayLike<number>, (x: never) => w(p, x)); }
   if (Array.isArray(v)) {
     const t = (v as { $t?: string }).$t;
     if (t === "Ljava/lang/String;") { tag(V.STRINGARRAY); return writeStrings(p, v); }
@@ -272,13 +272,6 @@ async function readValue(p: JParcel, loader: unknown): Promise<unknown> {
     case V.SHORT: return box(JShort, readInt(p));
     case V.CHAR: return box(JChar, readInt(p));
     case V.BYTEARRAY: return readBytes(p);
-    case V.INTARRAY: return readPrimArray(p, (n) => new Int32Array(n), () => readInt(p));
-    case V.LONGARRAY: return readPrimArray(p, (n) => new BigInt64Array(n), () => readLong(p));
-    case V.FLOATARRAY: return readPrimArray(p, (n) => new Float32Array(n), () => readFloat(p));
-    case V.DOUBLEARRAY: return readPrimArray(p, (n) => new Float64Array(n), () => readDouble(p));
-    case V.BOOLEANARRAY: return readPrimArray(p, (n) => new Uint8Array(n), () => readInt(p));
-    case V.CHARARRAY: return readPrimArray(p, (n) => new Uint16Array(n), () => readInt(p));
-    case V.SHORTARRAY: return readPrimArray(p, (n) => new Int16Array(n), () => readInt(p));
     case V.STRINGARRAY: return readStrings(p);
     case V.PARCELABLEARRAY: case V.OBJECTARRAY: {
       const n = readInt(p);
@@ -293,7 +286,11 @@ async function readValue(p: JParcel, loader: unknown): Promise<unknown> {
     case V.LIST: return readList(p, loader);
     case V.IBINDER: return readObject(p);
     case V.SERIALIZABLE: return readSerializable(p);
-    default: throw rt.mkThrowable("java/lang/RuntimeException", "Parcel: unknown type code " + t);
+    default: {
+      const prim = PRIM_PARCEL.find((e) => e[1] === t);
+      if (prim) return readPrimArray(p, (n) => new prim[0](n), () => prim[3](p));
+      throw rt.mkThrowable("java/lang/RuntimeException", "Parcel: unknown type code " + t);
+    }
   }
 }
 async function writeTyped(p: JParcel, items: unknown[] | null, flags: number) {
@@ -343,12 +340,10 @@ rt.register({
     "writeCharSequence(Ljava/lang/CharSequence;)V": async function (this: JParcel, s: unknown) { writeString(this, s === null ? null : await csText(s)); },
     "writeByteArray([B)V": function (this: JParcel, b: Int8Array | null) { writeBytes(this, b); },
     "writeByteArray([BII)V": function (this: JParcel, b: Int8Array | null, off: number, len: number) { writeBytes(this, b && b.subarray(off, off + len)); },
-    "writeIntArray([I)V": function (this: JParcel, a: Int32Array | null) { writePrimArray(this, a, (x: number) => writeInt(this, x)); },
-    "writeLongArray([J)V": function (this: JParcel, a: BigInt64Array | null) { writePrimArray(this, a, (x: bigint) => writeLong(this, x)); },
-    "writeFloatArray([F)V": function (this: JParcel, a: Float32Array | null) { writePrimArray(this, a, (x: number) => writeFloat(this, x)); },
-    "writeDoubleArray([D)V": function (this: JParcel, a: Float64Array | null) { writePrimArray(this, a, (x: number) => writeDouble(this, x)); },
-    "writeBooleanArray([Z)V": function (this: JParcel, a: Uint8Array | null) { writePrimArray(this, a, (x: number) => writeInt(this, x)); },
-    "writeCharArray([C)V": function (this: JParcel, a: Uint16Array | null) { writePrimArray(this, a, (x: number) => writeInt(this, x)); },
+    ...Object.fromEntries(PRIM_PARCEL.filter((e) => e[4]).flatMap(([C, , w, r, name, d]) => [
+      [`write${name}Array([${d})V`, function (this: JParcel, a: ArrayLike<number> | null) { writePrimArray(this, a, (x: never) => w(this, x)); }],
+      [`create${name}Array()[${d}`, function (this: JParcel) { return readPrimArray(this, (n) => new C(n), () => r(this)); }],
+    ])),
     [`writeStringArray([${S})V`]: function (this: JParcel, a: string[] | null) { writeStrings(this, a); },
     "writeStringList(Ljava/util/List;)V": async function (this: JParcel, l: unknown) { writeStrings(this, l === null ? null : await toJsArray(l) as string[]); },
     "writeValue(Ljava/lang/Object;)V": maySuspend(function (this: JParcel, v: unknown) { return writeValue(this, v); }),
@@ -383,12 +378,6 @@ rt.register({
     [`readString16()${S}`]: function (this: JParcel) { return readString(this); },
     "readCharSequence()Ljava/lang/CharSequence;": function (this: JParcel) { return readString(this); },
     "createByteArray()[B": function (this: JParcel) { return readBytes(this); },
-    "createIntArray()[I": function (this: JParcel) { return readPrimArray(this, (n) => new Int32Array(n), () => readInt(this)); },
-    "createLongArray()[J": function (this: JParcel) { return readPrimArray(this, (n) => new BigInt64Array(n), () => readLong(this)); },
-    "createFloatArray()[F": function (this: JParcel) { return readPrimArray(this, (n) => new Float32Array(n), () => readFloat(this)); },
-    "createDoubleArray()[D": function (this: JParcel) { return readPrimArray(this, (n) => new Float64Array(n), () => readDouble(this)); },
-    "createBooleanArray()[Z": function (this: JParcel) { return readPrimArray(this, (n) => new Uint8Array(n), () => readInt(this)); },
-    "createCharArray()[C": function (this: JParcel) { return readPrimArray(this, (n) => new Uint16Array(n), () => readInt(this)); },
     [`createStringArray()[${S}`]: function (this: JParcel) { return readStrings(this); },
     "createStringArrayList()Ljava/util/ArrayList;": function (this: JParcel) { return readStringList(this); },
     "readIntArray([I)V": function (this: JParcel, out: Int32Array) { const n = readInt(this); for (let i = 0; i < n; i++) out[i] = readInt(this); },

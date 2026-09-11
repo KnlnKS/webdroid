@@ -810,57 +810,23 @@ function gradientStops(g: CanvasGradient, colors: ArrayLike<number>, stops: Arra
   for (let i = 0; i < colors.length; i++) g.addColorStop(stops ? stops[i] : i / (colors.length - 1), cssColor(colors[i]));
   return g;
 }
-rt.register({
-  name: "android/graphics/SweepGradient", ctor: class extends JShader {}, sup: "android/graphics/Shader",
-  methods: {
-    "<init>(FFII)V": function (this: JShader, x: number, y: number, a: number, b: number) {
-      this.grad = gradientStops(measureCtx().createConicGradient(0, x, y), [a, b], null);
+function gradientSpec(name: string, geom: string, tile: string, make: (a: number[]) => CanvasGradient): NativeSpec {
+  const n = geom.length, sig = (c: string) => `<init>(${geom}${c}${tile})V`;
+  const init = (colors: (a: any[]) => ArrayLike<number>, stops: (a: any[]) => ArrayLike<number> | null) =>
+    function (this: JShader, ...a: any[]) { this.grad = gradientStops(make(a), colors(a), stops(a)); };
+  return {
+    name: "android/graphics/" + name, ctor: class extends JShader {}, sup: "android/graphics/Shader",
+    methods: {
+      [sig("II")]: init((a) => [a[n], a[n + 1]], () => null),
+      [sig("[I[F")]: init((a) => a[n], (a) => a[n + 1]),
+      [sig("JJ")]: init((a) => [argbOfColorLong(a[n]), argbOfColorLong(a[n + 1])], () => null),
+      [sig("[J[F")]: init((a) => Array.from(a[n] as BigInt64Array, argbOfColorLong), (a) => a[n + 1]),
     },
-    "<init>(FF[I[F)V": function (this: JShader, x: number, y: number, colors: Int32Array, stops: Float32Array | null) {
-      this.grad = gradientStops(measureCtx().createConicGradient(0, x, y), colors, stops);
-    },
-    "<init>(FFJJ)V": function (this: JShader, x: number, y: number, a: bigint, b: bigint) {
-      this.grad = gradientStops(measureCtx().createConicGradient(0, x, y), [argbOfColorLong(a), argbOfColorLong(b)], null);
-    },
-    "<init>(FF[J[F)V": function (this: JShader, x: number, y: number, colors: BigInt64Array, stops: Float32Array | null) {
-      this.grad = gradientStops(measureCtx().createConicGradient(0, x, y), Array.from(colors, argbOfColorLong), stops);
-    },
-  },
-});
-rt.register({
-  name: "android/graphics/LinearGradient", ctor: class extends JShader {}, sup: "android/graphics/Shader",
-  methods: {
-    "<init>(FFFFIILandroid/graphics/Shader$TileMode;)V": function (this: JShader, x0: number, y0: number, x1: number, y1: number, c0: number, c1: number) {
-      this.grad = gradientStops(measureCtx().createLinearGradient(x0, y0, x1, y1), [c0, c1], null);
-    },
-    "<init>(FFFF[I[FLandroid/graphics/Shader$TileMode;)V": function (this: JShader, x0: number, y0: number, x1: number, y1: number, colors: Int32Array, stops: Float32Array | null) {
-      this.grad = gradientStops(measureCtx().createLinearGradient(x0, y0, x1, y1), colors, stops);
-    },
-    "<init>(FFFF[J[FLandroid/graphics/Shader$TileMode;)V": function (this: JShader, x0: number, y0: number, x1: number, y1: number, colors: BigInt64Array, stops: Float32Array | null) {
-      this.grad = gradientStops(measureCtx().createLinearGradient(x0, y0, x1, y1), Array.from(colors, argbOfColorLong), stops);
-    },
-    "<init>(FFFFJJLandroid/graphics/Shader$TileMode;)V": function (this: JShader, x0: number, y0: number, x1: number, y1: number, c0: bigint, c1: bigint) {
-      this.grad = gradientStops(measureCtx().createLinearGradient(x0, y0, x1, y1), [argbOfColorLong(c0), argbOfColorLong(c1)], null);
-    },
-  },
-});
-rt.register({
-  name: "android/graphics/RadialGradient", ctor: class extends JShader {}, sup: "android/graphics/Shader",
-  methods: {
-    "<init>(FFFIILandroid/graphics/Shader$TileMode;)V": function (this: JShader, x: number, y: number, r: number, c0: number, c1: number) {
-      this.grad = gradientStops(measureCtx().createRadialGradient(x, y, 0, x, y, r), [c0, c1], null);
-    },
-    "<init>(FFF[I[FLandroid/graphics/Shader$TileMode;)V": function (this: JShader, x: number, y: number, r: number, colors: Int32Array, stops: Float32Array | null) {
-      this.grad = gradientStops(measureCtx().createRadialGradient(x, y, 0, x, y, r), colors, stops);
-    },
-    "<init>(FFF[J[FLandroid/graphics/Shader$TileMode;)V": function (this: JShader, x: number, y: number, r: number, colors: BigInt64Array, stops: Float32Array | null) {
-      this.grad = gradientStops(measureCtx().createRadialGradient(x, y, 0, x, y, r), Array.from(colors, argbOfColorLong), stops);
-    },
-    "<init>(FFFJJLandroid/graphics/Shader$TileMode;)V": function (this: JShader, x: number, y: number, r: number, c0: bigint, c1: bigint) {
-      this.grad = gradientStops(measureCtx().createRadialGradient(x, y, 0, x, y, r), [argbOfColorLong(c0), argbOfColorLong(c1)], null);
-    },
-  },
-});
+  };
+}
+rt.register(gradientSpec("SweepGradient", "FF", "", (a) => measureCtx().createConicGradient(0, a[0], a[1])));
+rt.register(gradientSpec("LinearGradient", "FFFF", "Landroid/graphics/Shader$TileMode;", (a) => measureCtx().createLinearGradient(a[0], a[1], a[2], a[3])));
+rt.register(gradientSpec("RadialGradient", "FFF", "Landroid/graphics/Shader$TileMode;", (a) => measureCtx().createRadialGradient(a[0], a[1], 0, a[0], a[1], a[2])));
 
 // ── Matrix (affine 2x3: [a, b, c, d, tx, ty] as in canvas transform(a,b,c,d,e,f))
 export class JMatrix extends JObj {

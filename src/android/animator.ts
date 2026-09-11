@@ -159,6 +159,11 @@ async function applyAnimProp(target: unknown, prop: string, v: number) {
   }
 }
 /** one value = animate from the property's current value to it (AOSP: from is read at start) */
+function objAnim(target: unknown, fields: Partial<JValueAnimator>, vals?: ArrayLike<number>, isInt = false): JValueAnimator {
+  const a: JValueAnimator = Object.assign(rt.make("android/animation/ObjectAnimator"), { target }, fields);
+  if (vals) setNumKeys(a, vals, isInt);
+  return a;
+}
 function setNumKeys(a: { keys: number[] | null; from: number; to: number; isInt: boolean; objKeys: unknown[] | null }, v: ArrayLike<number>, isInt: boolean) {
   a.isInt = isInt; a.objKeys = null;
   if (v.length === 1) { a.keys = null; a.from = NaN; a.to = v[0]; return; }
@@ -386,63 +391,23 @@ rt.register({
     // R8/javac narrow the return type at ObjectAnimator call sites, so the mangled name
     // differs from the ValueAnimator/Animator overloads above and needs its own entry.
     "setDuration(J)Landroid/animation/ObjectAnimator;": setDur,
-    "static ofFloat(Ljava/lang/Object;Ljava/lang/String;[F)Landroid/animation/ObjectAnimator;":
-      (target: unknown, prop: string, vals: Float32Array) => {
-        const a = rt.make("android/animation/ObjectAnimator");
-        a.target = target;
-        a.propName = prop;
-        setNumKeys(a, vals, false);
-        return a;
-      },
-    "static ofInt(Ljava/lang/Object;Ljava/lang/String;[I)Landroid/animation/ObjectAnimator;":
-      (target: unknown, prop: string, vals: Int32Array) => {
-        const a = rt.make("android/animation/ObjectAnimator");
-        a.target = target;
-        a.propName = prop;
-        setNumKeys(a, vals, true);
-        return a;
-      },
-    "static ofFloat(Ljava/lang/Object;Landroid/util/Property;[F)Landroid/animation/ObjectAnimator;":
-      (target: unknown, prop: unknown, vals: Float32Array) => {
-        const a = rt.make("android/animation/ObjectAnimator");
-        a.target = target;
-        a.prop = prop;
-        setNumKeys(a, vals, false);
-        return a;
-      },
-    "static ofInt(Ljava/lang/Object;Landroid/util/Property;[I)Landroid/animation/ObjectAnimator;":
-      (target: unknown, prop: unknown, vals: Int32Array) => {
-        const a = rt.make("android/animation/ObjectAnimator");
-        a.target = target;
-        a.prop = prop;
-        setNumKeys(a, vals, true);
-        return a;
-      },
+    "static ofFloat(Ljava/lang/Object;Ljava/lang/String;[F)Landroid/animation/ObjectAnimator;": (t: unknown, p: string, v: Float32Array) => objAnim(t, { propName: p }, v, false),
+    "static ofInt(Ljava/lang/Object;Ljava/lang/String;[I)Landroid/animation/ObjectAnimator;": (t: unknown, p: string, v: Int32Array) => objAnim(t, { propName: p }, v, true),
+    "static ofFloat(Ljava/lang/Object;Landroid/util/Property;[F)Landroid/animation/ObjectAnimator;": (t: unknown, p: unknown, v: Float32Array) => objAnim(t, { prop: p }, v, false),
+    "static ofInt(Ljava/lang/Object;Landroid/util/Property;[I)Landroid/animation/ObjectAnimator;": (t: unknown, p: unknown, v: Int32Array) => objAnim(t, { prop: p }, v, true),
     "setPropertyName(Ljava/lang/String;)V": function (this: any, p: string) { this.propName = p; },
     "getPropertyName()Ljava/lang/String;": function (this: JValueAnimator) { return this.propName || (this.prop as { name?: string })?.name || (this.holders[0]?.name ?? null); },
     "setProperty(Landroid/util/Property;)V": function (this: any, p: unknown) { this.prop = p; },
     "setAutoCancel(Z)V": () => {},
     "getTarget()Ljava/lang/Object;": function (this: JValueAnimator) { return this.target; },
-    "static ofArgb(Ljava/lang/Object;Ljava/lang/String;[I)Landroid/animation/ObjectAnimator;": (target: unknown, prop: string, vals: Int32Array) => {
-      const a = rt.make("android/animation/ObjectAnimator") as JValueAnimator;
-      a.target = target; a.propName = prop; a.evaluator = argbEvaluator; a.objKeys = Array.from(vals, boxInt);
-      return a;
-    },
-    "static ofObject(Ljava/lang/Object;Ljava/lang/String;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/ObjectAnimator;": (target: unknown, prop: string, ev: unknown, vals: unknown[]) => {
-      const a = rt.make("android/animation/ObjectAnimator") as JValueAnimator;
-      a.target = target; a.propName = prop; a.evaluator = ev; a.objKeys = [...(vals ?? [])];
-      return a;
-    },
-    "static ofObject(Ljava/lang/Object;Landroid/util/Property;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/ObjectAnimator;": (target: unknown, prop: unknown, ev: unknown, vals: unknown[]) => {
-      const a = rt.make("android/animation/ObjectAnimator") as JValueAnimator;
-      a.target = target; a.prop = prop; a.evaluator = ev; a.objKeys = [...(vals ?? [])];
-      return a;
-    },
-    "static ofPropertyValuesHolder(Ljava/lang/Object;[Landroid/animation/PropertyValuesHolder;)Landroid/animation/ObjectAnimator;": (target: unknown, hs: JPVH[]) => {
-      const a = rt.make("android/animation/ObjectAnimator") as JValueAnimator;
-      a.target = target; a.holders = [...(hs ?? [])];
-      return a;
-    },
+    "static ofArgb(Ljava/lang/Object;Ljava/lang/String;[I)Landroid/animation/ObjectAnimator;": (t: unknown, p: string, v: Int32Array) =>
+      objAnim(t, { propName: p, evaluator: argbEvaluator, objKeys: Array.from(v, boxInt) }),
+    "static ofObject(Ljava/lang/Object;Ljava/lang/String;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/ObjectAnimator;": (t: unknown, p: string, ev: unknown, v: unknown[]) =>
+      objAnim(t, { propName: p, evaluator: ev, objKeys: [...(v ?? [])] }),
+    "static ofObject(Ljava/lang/Object;Landroid/util/Property;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/ObjectAnimator;": (t: unknown, p: unknown, ev: unknown, v: unknown[]) =>
+      objAnim(t, { prop: p, evaluator: ev, objKeys: [...(v ?? [])] }),
+    "static ofPropertyValuesHolder(Ljava/lang/Object;[Landroid/animation/PropertyValuesHolder;)Landroid/animation/ObjectAnimator;": (t: unknown, hs: JPVH[]) =>
+      objAnim(t, { holders: [...(hs ?? [])] }),
     "setFloatValues([F)V": function (this: JValueAnimator, v: Float32Array) { setNumKeys(this, v, false); },
     "setIntValues([I)V": function (this: JValueAnimator, v: Int32Array) { setNumKeys(this, v, true); },
   },
