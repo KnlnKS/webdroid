@@ -125,13 +125,27 @@ The user has been asked whether to wait for encoding or pause it for up to 15 mi
 no permission to pause that other project's work has been received. No processes have
 been paused. The encoder parent PID 39311 remains live as of the latest continuation.
 
-A fresh test tab is open in Chrome at `http://localhost:41979/?apk=GmsClient.apk`.
-The user has been asked to complete the authorized Google sign-in directly in that
-tab; no credentials or challenge responses have been supplied in this run. The
-instrumented server captures only consent RPC responses `egQ4Re` and `ihzRS` before
-navigation, under the protected test-config `resume-network/` directory. It records
-bridge method names and reached process diagnostics without account names/tokens.
-Do not initiate another login attempt while this one awaits the user.
+The resumed login exposed native History rejecting upstream same-origin URLs on the
+isolated renderer. A general history wrapper now translates those URLs, updates the
+worker's upstream context and follows generated document bases while preserving explicit
+bases. Native state cloning and history traversal remain browser-owned. Differing-port
+tests also caught the renderer port surviving URL.host assignment; protocol, hostname
+and port are now assigned explicitly. Typecheck and 23 focused Chromium tests pass.
+The full suite passed 628 tests / 20,462 assertions before the final port refinement;
+the affected Chromium tests were rerun afterward. Broader transport/E2E verification
+of this history change remains pending.
+
+With the first history wrapper, Google accepted the supplied test credentials and the
+user's phone verification. Consent again failed: `egQ4Re` returned `[[null,true]]`,
+then `ihzRS` returned a null result with error field `[13]`. No account was added.
+These bodies were captured before navigation under protected `resume-network/` storage;
+there were no page errors. This does not establish the cause of Google's rejection.
+A controlled retry with the port correction is now awaiting fresh phone verification
+in Chrome at `http://localhost:41979/?apk=GmsClient.apk`. The instrumented server also
+records sanitized credential-request hostname/path and Origin/Referer origin fields;
+it does not record request credentials. Do not start another attempt while this one
+awaits the user. Encoding processes remain active under a replacement parent; inspect
+current process state rather than relying on the earlier PID for quiet measurements.
 
 Servers: current checkout 41977, original baseline 41978, instrumented login 41979,
 runner baseline `4acef6d` on 41981 (`/tmp/webdroid-map-thread-baseline`),

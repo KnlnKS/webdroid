@@ -1,3 +1,5 @@
+import { installWebHistory } from "./webhistory";
+
 export const WEB_INJECT = `<script>(function(){
 const config = window.__wdWebView, f = window.frameElement;
 delete window.__wdWebView;
@@ -8,6 +10,7 @@ if (ua) {
 }
 const id = config?.id;
 if (!id) { if (f && f.__wdIfaces) Object.assign(window, f.__wdIfaces); return; }
+(${installWebHistory.toString()})(config);
 function call(body) {
   const xhr = new XMLHttpRequest();
   xhr.open("POST", location.origin + "/webview-call?id=" + encodeURIComponent(id), false);

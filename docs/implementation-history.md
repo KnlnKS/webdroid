@@ -690,6 +690,42 @@ mirrors and host-side WebView and audio. It worked, but was not adopted. Its cos
 - **Harness:** the harness had to capture inside the worker, and same-package multi-process
   SQLite became last-writer-wins.
 
+## WebView same-document history and resumed consent — 2026-09-11
+
+The resumed Google identifier step called History.pushState with an upstream URL and
+threw SecurityError because the document runs on the isolated renderer origin. The
+new history wrapper resolves URLs against the document base and translates only the
+upstream origin to the renderer. Browser history owns entry creation, state cloning,
+replacement and back/forward; the wrapper updates the worker context and generated
+document base after successful changes. Explicit upstream bases remain unchanged.
+Empty/null/omitted URLs retain the current document URL, following the
+[shared History steps](https://html.spec.whatwg.org/multipage/nav-history-apis.html#shared-history-push/replace-state-steps).
+
+The initial implementation assigned URL.host after changing the protocol. Assigning
+a host without a port leaves an existing non-default port intact, contaminating the
+upstream context with the renderer port. Six Chromium cases fail when the fixture
+uses a non-default renderer port. Explicit protocol/hostname/port assignment fixes
+them, including HTTPS upstream to HTTP renderer translation. The final 23 HTML/history
+cases pass with 34 assertions. Typecheck passes; the full suite passed 628 tests and
+20,462 assertions before the final port refinement, followed by the focused rerun.
+Full transport/E2E verification of this change is still pending. Android WebView's
+own history list, visited-history callbacks and document-cookie path synchronization
+remain outside this bounded wrapper; do not infer complete History/WebView parity.
+
+The first live run passed password and user-approved phone verification, then failed
+after terms. Protected response capture recovered `egQ4Re` HTTP 200 with `[[null,true]]`
+and `ihzRS` HTTP 200 with a null payload and error field `[13]`. The cached public script
+names the latter `/CredentialDataService.GetCredential`. The genuine bridge reached
+notifyOnTermsOfServiceAccepted but not addAccount, and no page exceptions were observed.
+The error code does not identify why Google rejected credential retrieval. A retry
+with corrected ports is awaiting phone verification; sanitized request host/path and
+Origin/Referer origins are captured to test the transport hypothesis. No Google-specific
+production transformation or fabricated credential was added.
+
+Evidence: `/tmp/webdroid-webhistory-{tests,port-before,typecheck,units}.log` and the
+protected test-config `resume-network/` response captures. Credentials and raw request
+payloads are excluded from reports and source control.
+
 ## WebView upstream bases — 2026-09-11
 
 Resumed microG from `28b9246` on `codex/microg-webview-base`. The current public

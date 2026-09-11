@@ -20,7 +20,7 @@ export function webDocument(html: string, url?: string): string {
   }).transform(html);
 
   const injection = (url === undefined ? "" : `<meta name="wd-proxy-url" content="${htmlAttribute(url)}">`
-    + `<base${hasBase ? " data-wd-fallback" : ""} href="${htmlAttribute(url)}">`) + WEB_INJECT;
+    + `<base data-wd-document-base${hasBase ? " data-wd-fallback" : ""} href="${htmlAttribute(url)}">`) + WEB_INJECT;
   let inserted = false;
   const rewriter = new HTMLRewriter().on("*", { element(element) {
     if (inserted || element.tagName === "html") return;
@@ -48,6 +48,7 @@ export function webDocument(html: string, url?: string): string {
       element.setAttribute("href", resolved && !["data:", "javascript:"].includes(resolved.protocol) ? resolved.href : url);
     } else if (!hasHref) {
       element.setAttribute("href", url);
+      element.setAttribute("data-wd-document-base", "");
       hasHref = true;
     }
   });
