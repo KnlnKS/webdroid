@@ -50,7 +50,18 @@ public class WindowProbeActivity extends Activity {
                 trace("dialog", text);
                 dialog.getWindow().setLayout(640, 360);
                 dialog.getWindow().setGravity(android.view.Gravity.BOTTOM);
-                text.postDelayed(() -> trace("dialog sized", text), 250);
+                text.postDelayed(() -> {
+                    trace("dialog sized", text);
+                    dialog.getWindow().setLayout(48, 24);
+                    text.postDelayed(() -> {
+                        trace("dialog tiny", text);
+                        dialog.getWindow().setLayout(0, 0);
+                        text.postDelayed(() -> {
+                            trace("dialog zero", text);
+                            dialog.getWindow().setLayout(640, 360);
+                        }, 250);
+                    }, 250);
+                }, 250);
             }, 250);
         });
         target = label("window target");

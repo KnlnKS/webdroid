@@ -1103,3 +1103,31 @@ and explicit dialog dimensions smaller than background padding. In particular, r
 DialogRoot's exact-size result and child layout for that last boundary before claiming
 arbitrary-size parity. The map's animation-interruption idle ordering and earlier
 variable-camera marker miss also remain open; Google consent still awaits the user.
+
+
+### 2026-09-11 — Dialog dimensions below background padding
+
+The boundary flagged at the window checkpoint reproduces on `613a2c2`: requesting
+48x24 or 0x0 leaves a 96x96 dialog root, because the empty measured content is added
+back to the background padding. Android preserves the explicit dimensions. The root
+now uses the exact requested size (or the available match-parent size); wrap-content
+still derives from content plus padding. Child layout uses its measured width/height,
+so an undersized root does not create negative child bounds.
+
+At 1080x2424@480, Android and corrected browser both report the 48x24 bottom dialog
+at root 516,2328 with content origin screen 564,2376/window 48,48 and zero content
+size. The 0x0 root is 540,2352, with content at screen 588,2400/window 48,48, also zero
+size. The probe restores 640x360 after these checks. All preceding geometry results
+are unchanged, including the known two-pixel wrapped text-height difference. Browser
+errors/missing APIs are empty in the reached runtime. The rebuilt SDK compiles 6677
+classes with zero method failures; typecheck passes. Evidence:
+`/tmp/webdroid-window-small-{android,before,after}.log`, adjacent browser JSON and
+`...-{build,smoke,typecheck}.log`. This targeted correction follows the full matrix and
+performance checks at `613a2c2`; it does not rerun every earlier benchmark.
+
+The follow-up FitNotes run completes all 39 steps with byte-identical PNGs to the
+`613a2c2` capture, no layout/draw failures and no additional normalized diagnostics.
+Only the existing exception's bundle hash changes. Evidence:
+`/tmp/webdroid-window-small-fitnotes.log` and
+`/tmp/webdroid-window-small-fitnotes-before/`. Goldens remain unchanged; the generated
+report currently shows only this selected flow, while other full-run captures remain.

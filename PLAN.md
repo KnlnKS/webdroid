@@ -70,7 +70,10 @@ give median CPU +0.03% cold, −1.29% after reset and −0.34% in the native Doo
 benchmark; retained JS heap changes at most +0.021%. Detailed frames/idle/memory limits
 are in the history. Goldens are unchanged. This is not full window parity: pending
 reference coverage includes transformed coordinates, inset/flag notifications, overlay
-inset dispatch, broader dialog themes and sizes smaller than background padding.
+inset dispatch and broader dialog themes. A follow-up Android probe covers 48x24 and
+0x0 dialogs: exact window dimensions now survive background padding, and the child
+uses its measured size. Typecheck and the complete geometry probe pass; all 39 FitNotes
+PNGs are byte-identical to the window checkpoint, with no additional diagnostics.
 
 A fresh test tab is open in Chrome at `http://localhost:41979/?apk=GmsClient.apk`.
 The user has been asked to complete the authorized Google sign-in directly in that

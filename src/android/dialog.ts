@@ -107,8 +107,9 @@ rt.register({
         const win = this.dialog?.win;
         const lw = win?.layoutW ?? -2, lh = win?.layoutH ?? -2;
         const padW = this.bgPad[0] + this.bgPad[2], padH = this.bgPad[1] + this.bgPad[3];
-        const hSpec = makeSpec(Math.max(0, (lh >= 0 ? lh : maxH) - padH), lh === -2 ? MS_AT_MOST : MS_EXACTLY);
-        await measureView(c, makeSpec(Math.max(0, (lw >= 0 ? lw : maxW) - padW), lw === -2 ? MS_AT_MOST : MS_EXACTLY), hSpec);
+        const widthLimit = lw >= 0 ? lw : maxW, heightLimit = lh >= 0 ? lh : maxH;
+        const hSpec = makeSpec(Math.max(0, heightLimit - padH), lh === -2 ? MS_AT_MOST : MS_EXACTLY);
+        await measureView(c, makeSpec(Math.max(0, widthLimit - padW), lw === -2 ? MS_AT_MOST : MS_EXACTLY), hSpec);
         let width = c.measuredW + padW;
         if (lw === -2 && this.theme && this.jres) {
           const min = this.theme.lookup(AID(device.orientation === 1 ? "windowMinWidthMinor" : "windowMinWidthMajor"));
@@ -116,15 +117,15 @@ rt.register({
           width = Math.min(maxW, Math.max(width, Math.round(minW)));
           if (width !== c.measuredW + padW) await measureView(c, makeSpec(Math.max(0, width - padW), MS_EXACTLY), hSpec);
         }
-        this.measuredW = width;
-        this.measuredH = c.measuredH + padH;
+        this.measuredW = lw === -2 ? width : widthLimit;
+        this.measuredH = lh === -2 ? c.measuredH + padH : heightLimit;
       }
     },
     "onLayout(ZIIII)V": async function (this: DialogRoot) {
       const c = this.children[0];
       if (c && c.visibility !== 8) {
-        const [l, t, r, b] = this.bgPad;
-        await layoutView(c, l, t, this.width() - r, this.height() - b);
+        const [l, t] = this.bgPad;
+        await layoutView(c, l, t, l + c.measuredW, t + c.measuredH);
       }
     },
     "onDraw(Landroid/graphics/Canvas;)V": async function (this: DialogRoot, cv: JCanvas) {

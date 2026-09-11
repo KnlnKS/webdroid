@@ -43,7 +43,8 @@ Keep authentication, Firebase configuration and token material outside the repos
 **Window probe** isolates the geometry used by Maps and other embedded views. Run
 Fullscreen, Edge, Normal, Hide, Legacy, Normal, Popup, then Dialog, dismissing overlays
 with Back. `GmsClientWindow` logs screen/window origins, view/root sizes and root bar
-insets. Dialog logs its initial content size and then a fixed 640x360 bottom window.
+insets. Dialog logs its initial content size, then 640x360, 48x24 and 0x0 bottom windows,
+before restoring 640x360.
 Detached views should return zero coordinates and no root insets; popup content starts
 at its own window origin. Android can launch it directly:
 
