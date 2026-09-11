@@ -35,7 +35,6 @@ export const uiState = {
   needsDraw: true,
   /** the next pass must re-measure everything: a caller dirtied something it could not name */
   forceAll: true,
-  settle: 2,
   frameCallbacks: [] as unknown[],
   animHooks: new Set<() => boolean>(), // ts-side animators; return false to remove
   /** the current frame's timestamp. AOSP's Choreographer computes this ONCE in doFrame and
@@ -110,7 +109,7 @@ function focusMoved(v: JView, now: JView | null) {
  * a view fall back to re-measuring everything.
  */
 export function requestLayout(v?: JView | null) {
-  uiState.needsLayout = true; uiState.needsDraw = true; uiState.settle = 3;
+  uiState.needsLayout = true; uiState.needsDraw = true;
   if (uiState.layoutTrace) traceLayoutRequest(uiState.layoutTrace, v);
   if (!v) { perf.layoutRequestsAll++; uiState.forceAll = true; return; }
   perf.layoutRequests++;

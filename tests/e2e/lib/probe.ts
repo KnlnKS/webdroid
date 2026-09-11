@@ -188,7 +188,6 @@ function installProbe(cfg: ProbeConfig): void {
       if (u.needsDraw) r.push("draw");
       if (u.needsLayout) r.push("layout");
       if (u.needsInsets) r.push("insets");
-      if (u.settle > 0) r.push("settle");
     }
     if (u.frameCallbacks.length) r.push("frameCallbacks");
     if (u.animHooks.size) r.push("animators");

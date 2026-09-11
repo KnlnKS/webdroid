@@ -353,12 +353,6 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
     if (prev?.started) await stopActivity(prev);
     void buildOptionsMenu(act);
     invalidateWindow();
-    // Fragment pages (ViewPager/FragmentPagerAdapter) instantiate asynchronously, after this
-    // frame's layout. Schedule extra re-layouts so they get measured/laid out once present.
-    uiState.settle = Math.max(uiState.settle, 6);
-    for (const delay of [80, 200, 450]) {
-      setTimeout(() => { uiState.needsLayout = true; uiState.needsDraw = true; }, delay);
-    }
   } catch (e) {
     reportUncaught(e);
   }
@@ -574,31 +568,6 @@ async function drawStartWin(w: { view: JView; fullscreen: boolean }) {
   present();
 }
 let clockMinute = -1, clockText = "";
-// Views committed outside a layout pass (androidx addViewInLayout, async fragment
-// commits) can leave measured != laid-out sizes with no pass scheduled. Detect and
-// schedule one more full pass; fingerprint prevents re-trigger loops on legit mismatches.
-let lastSettleFp = 0;
-function settleWatch(root: any): void {
-  let fp = 0, n = 0;
-  const stack = [root];
-  while (stack.length) {
-    const v = stack.pop();
-    if (!v || v.visibility === 8) continue;
-    const w = v.right - v.left, h = v.bottom - v.top;
-    if ((v.measuredW !== w || v.measuredH !== h) && v.measuredW > 0 && v.measuredH > 0) {
-      n++;
-      fp = (Math.imul(fp, 33) ^ (v.idNum ?? 0)) >>> 0;
-      fp = (Math.imul(fp, 33) ^ (w * 31 + h)) >>> 0;
-      fp = (Math.imul(fp, 33) ^ (v.measuredW * 31 + v.measuredH)) >>> 0;
-    }
-    for (const c of v.children ?? []) stack.push(c);
-  }
-  // A mismatch means someone committed a view outside a layout pass; the cached specs are
-  // no longer trustworthy anywhere, so ask for a full re-measure rather than a cached one.
-  if (n && fp !== lastSettleFp) { uiState.needsLayout = true; uiState.needsDraw = true; uiState.forceAll = true; }
-  lastSettleFp = n ? fp : 0;
-}
-
 
 export async function tick() {
   if (drawing) return;
@@ -639,7 +608,6 @@ async function tick0() {
       return;
     }
     startWin = null;
-    let didLayout = false;
     const contentY = contentTop(), contentH = SCREEN_H - contentY;
     // AOSP's performTraversals dispatches insets before measure, so padding a fitsSystemWindows
     // consumer sets is visible to the same pass. Waiting for one completed layout keeps a
@@ -654,7 +622,6 @@ async function tick0() {
     }
     if (uiState.needsLayout) {
       uiState.needsLayout = false;
-      didLayout = true;
       const t0 = performance.now();
       perf.layoutPasses++;
       decor.layoutRequested = true;
@@ -692,11 +659,6 @@ async function tick0() {
       replayLayoutRequests();
       perf.layoutMs += performance.now() - t0;
       uiState.needsDraw = true;
-      // stateful app views (ViewPager etc.) may cache specs mid-build: settle with extra passes
-      if (uiState.settle > 0) {
-        uiState.settle--;
-        uiState.needsLayout = true;
-      }
     }
     if (uiState.needsDraw) {
       uiState.needsDraw = false;
@@ -704,7 +666,6 @@ async function tick0() {
       perf.draws++;
       perf.fullDraws++;
       perf.dirtyPx += SCREEN_W * SCREEN_H;
-      const laidOut = didLayout;
       ctx.save();
       rt.yieldGap = 50;
       try {
@@ -735,9 +696,6 @@ async function tick0() {
       perf.drawMs += performance.now() - t0;
       // WebView frames are DOM over the canvas: show the ones this pass drew, hide the rest
       webLayerSweep(contentY, overlays.length > 0);
-      // Only meaningful right after a layout pass: without one, measured-vs-laid-out sizes
-      // cannot have changed, so the walk is pure cost.
-      if (laidOut) settleWatch(decor);
     }
   } catch (e) {
     console.error("[tick]", e);
