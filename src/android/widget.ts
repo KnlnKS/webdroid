@@ -1,7 +1,7 @@
 import { AID } from "./res";
 import { JView, initViewFromCtx, invalidate, resolveSizeAndState, uiState, JViewGroup, defaultSize } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawChild } from "./drawable";
-import { rt, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
+import { rt, type NativeSpec, maySuspend, stubs, noops, fieldGetters, flagGetters, fieldSetters, flagSetters } from "../jvm/runtime";
 import { type JAttrSet, rvColor, obtainStyled, rvInt } from "./res";
 import { TV } from "./axml";
 import { type JCanvas, cssColor } from "./graphics";
@@ -36,23 +36,21 @@ rt.register({
       }
       if (this.horizontal) this.indeterminate = false;
     },
-    "setIndeterminate(Z)V": function (this: JProgressBar, v: number) { this.indeterminate = !!v; },
-    "isIndeterminate()Z": function (this: JProgressBar) { return this.indeterminate ? 1 : 0; },
     "setProgress(I)V": function (this: JProgressBar, p: number) { this.progress = p; invalidate(); },
-    "getProgress()I": function (this: JProgressBar) { return this.progress; },
     "setMax(I)V": function (this: JProgressBar, m: number) { this.max = Math.max(1, m); },
-    "getMax()I": function (this: JProgressBar) { return this.max; },
     "setProgressDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JProgressBar, d: JDrawable | null) { this.progressD = d; invalidate(); },
-    "getProgressDrawable()Landroid/graphics/drawable/Drawable;": function (this: JProgressBar) { return this.progressD; },
     "setIndeterminateDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JProgressBar, d: JDrawable | null) { this.indetD = d; invalidate(); },
-    "getIndeterminateDrawable()Landroid/graphics/drawable/Drawable;": function (this: JProgressBar) { return this.indetD; },
     "setProgressTintList(Landroid/content/res/ColorStateList;)V": function (this: JProgressBar, c: JColorStateList | null) { this.tintCsl = c; invalidate(); },
-    "getProgressTintList()Landroid/content/res/ColorStateList;": function (this: JProgressBar) { return this.tintCsl; },
     "setIndeterminateTintList(Landroid/content/res/ColorStateList;)V": function (this: JProgressBar, c: JColorStateList | null) { this.tintCsl = c; invalidate(); },
-    "getIndeterminateTintList()Landroid/content/res/ColorStateList;": function (this: JProgressBar) { return this.tintCsl; },
     "setProgress(IZ)V": function (this: JProgressBar, p: number) { this.progress = p; invalidate(); },
-    "setMin(I)V": function (this: JProgressBar, m: number) { this.min = m; },
-    "getMin()I": function (this: JProgressBar) { return this.min; },
+    ...flagSetters({ "setIndeterminate(Z)V": "indeterminate" }),
+    ...flagGetters({ "isIndeterminate()Z": "indeterminate" }),
+    ...fieldGetters({ "getProgress()I": "progress", "getMax()I": "max",
+      "getProgressDrawable()Landroid/graphics/drawable/Drawable;": "progressD",
+      "getIndeterminateDrawable()Landroid/graphics/drawable/Drawable;": "indetD",
+      "getProgressTintList()Landroid/content/res/ColorStateList;": "tintCsl",
+      "getIndeterminateTintList()Landroid/content/res/ColorStateList;": "tintCsl", "getMin()I": "min" }),
+    ...fieldSetters({ "setMin(I)V": "min" }),
     ...noops("setSecondaryProgress(I)V", "setInterpolator(Landroid/view/animation/Interpolator;)V",
       "setInterpolator(Landroid/content/Context;I)V"),
     ...stubs(0, "getSecondaryProgress()I"),
@@ -115,15 +113,14 @@ rt.register({
   methods: {
     ...seekBarMethods,
     "setNumStars(I)V": function (this: JRatingBar, n: number) { this.stars = n; this.max = Math.round(n / this.step); },
-    "getNumStars()I": function (this: JRatingBar) { return this.stars; },
     "setStepSize(F)V": function (this: JRatingBar, s: number) { this.step = s || 1; this.max = Math.round(this.stars / this.step); },
-    "getStepSize()F": function (this: JRatingBar) { return this.step; },
     "setRating(F)V": function (this: JRatingBar, r: number) { this.progress = Math.round(r / this.step); invalidate(); },
     "getRating()F": function (this: JRatingBar) { return Math.fround(this.progress * this.step); },
     "setIsIndicator(Z)V": () => {},
     "isIndicator()Z": () => 1,
-    "setOnRatingBarChangeListener(Landroid/widget/RatingBar$OnRatingBarChangeListener;)V": function (this: JRatingBar, l: unknown) { this.ratingL = l; },
-    "getOnRatingBarChangeListener()Landroid/widget/RatingBar$OnRatingBarChangeListener;": function (this: JRatingBar) { return this.ratingL; },
+    ...fieldGetters({ "getNumStars()I": "stars", "getStepSize()F": "step",
+      "getOnRatingBarChangeListener()Landroid/widget/RatingBar$OnRatingBarChangeListener;": "ratingL" }),
+    ...fieldSetters({ "setOnRatingBarChangeListener(Landroid/widget/RatingBar$OnRatingBarChangeListener;)V": "ratingL" }),
   },
 });
 
@@ -200,10 +197,7 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": init,
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": maySuspend(init),
   "setChecked(Z)V": function (this: JCompoundButton, c: number) { return this.setCheckedInternal(!!c); },
-  "isChecked()Z": function (this: JCompoundButton) { return this.checked ? 1 : 0; },
   "toggle()V": function (this: JCompoundButton) { return this.setCheckedInternal(!this.checked); },
-  "setOnCheckedChangeListener(Landroid/widget/CompoundButton$OnCheckedChangeListener;)V":
-    function (this: JCompoundButton, l: unknown) { this.checkL = l; },
   "performClick()Z": async function (this: JCompoundButton) {
     // inside a RadioGroup: single-select semantics
     let g: JView | null = this.parent;
@@ -216,7 +210,9 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
     if (this.clickL) await vcall(this.clickL, "onClick", "(Landroid/view/View;)V", this);
     return 1;
   },
-  "getButtonDrawable()Landroid/graphics/drawable/Drawable;": function (this: JCompoundButton) { return this.buttonD; },
+  ...flagGetters({ "isChecked()Z": "checked" }),
+  ...fieldSetters({ "setOnCheckedChangeListener(Landroid/widget/CompoundButton$OnCheckedChangeListener;)V": "checkL" }),
+  ...fieldGetters({ "getButtonDrawable()Landroid/graphics/drawable/Drawable;": "buttonD" }),
   "setButtonDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JCompoundButton, d: JDrawable | null) {
     this.buttonD = d;
     this.buttonW = d ? (kind === "switch" ? device.dp(52) : device.dp(32)) : 0;

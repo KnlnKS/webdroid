@@ -1,6 +1,6 @@
 // android.media: MediaPlayer over HTMLAudioElement, SoundPool over Web Audio.
 
-import { rt, JObj, maySuspend, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, maySuspend, stubs, noops, fieldGetters } from "../jvm/runtime";
 import { stringHash, vcall } from "../jvm/natives/jlang";
 import { vfs } from "../jvm/natives/jio";
 import type { JBuffer } from "../jvm/natives/jnio";
@@ -381,10 +381,6 @@ rt.register({
     },
     "static getNativeOutputSampleRate(I)I": () => outputSampleRate(),
     "static getMaxVolume()F": () => 1, "static getMinVolume()F": () => 0,
-    "getState()I": function (this: JAudioTrack) { return this.state; },
-    "getPlayState()I": function (this: JAudioTrack) { return this.playState; },
-    "getSampleRate()I": function (this: JAudioTrack) { return this.rate; },
-    "getChannelCount()I": function (this: JAudioTrack) { return this.channels; },
     "getPlaybackHeadPosition()I": function (this: JAudioTrack) { return this.playState === 1 ? 0 : Math.floor(this.head() - this.headOrigin) | 0; },
     "setStereoVolume(FF)I": function (this: JAudioTrack, l: number, r: number) { this.vol = (l + r) / 2; if (this.gain) this.gain.gain.value = this.vol; return 0; },
     "setVolume(F)I": function (this: JAudioTrack, v: number) { this.vol = v; if (this.gain) this.gain.gain.value = v; return 0; },
@@ -413,11 +409,11 @@ rt.register({
       else this.push(data.subarray(off, off + n), Math.floor(n / this.channels));
       return this.wrote(n);
     }),
-    "getAudioSessionId()I": function (this: JAudioTrack) { return this.sessionId; },
     "getBufferSizeInFrames()I": function (this: JAudioTrack) { return Math.floor(this.bufBytes / this.frameBytes()); },
     "getBufferCapacityInFrames()I": function (this: JAudioTrack) { return Math.floor(this.bufBytes / this.frameBytes()); },
-    "getAudioAttributes()Landroid/media/AudioAttributes;": function (this: JAudioTrack) { return this.attributes; },
-    "getUnderrunCount()I": function (this: JAudioTrack) { return this.underruns; },
+    ...fieldGetters({ "getState()I": "state", "getPlayState()I": "playState", "getSampleRate()I": "rate",
+      "getChannelCount()I": "channels", "getAudioSessionId()I": "sessionId",
+      "getAudioAttributes()Landroid/media/AudioAttributes;": "attributes", "getUnderrunCount()I": "underruns" }),
     ...stubs(0, "static isDirectPlaybackSupported(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)Z",
       "setPlaybackRate(I)I", "setNotificationMarkerPosition(I)I", "isOffloadedPlayback()Z",
       "getTimestamp(Landroid/media/AudioTimestamp;)Z", "setPreferredDevice(Landroid/media/AudioDeviceInfo;)Z"),
@@ -489,10 +485,8 @@ rt.register({
   statics: { CHANNEL_CONFIGURATION_MONO: 2, CHANNEL_CONFIGURATION_STEREO: 3, CHANNEL_OUT_MONO: 4, CHANNEL_OUT_STEREO: 12, CHANNEL_IN_MONO: 16, CHANNEL_IN_STEREO: 12,
     ENCODING_PCM_16BIT: 2, ENCODING_PCM_8BIT: 3, ENCODING_PCM_FLOAT: 4, ENCODING_DEFAULT: 1, ENCODING_INVALID: 0 },
   methods: {
-    "getEncoding()I": function (this: JAudioFormat) { return this.encoding; },
-    "getSampleRate()I": function (this: JAudioFormat) { return this.sampleRate; },
-    "getChannelMask()I": function (this: JAudioFormat) { return this.channelMask; },
-    "getChannelIndexMask()I": function (this: JAudioFormat) { return this.channelIndexMask; },
+    ...fieldGetters({ "getEncoding()I": "encoding", "getSampleRate()I": "sampleRate",
+      "getChannelMask()I": "channelMask", "getChannelIndexMask()I": "channelIndexMask" }),
     "getChannelCount()I": function (this: JAudioFormat) {
       let mask = this.channelMask || this.channelIndexMask, n = 0;
       for (; mask; mask &= mask - 1) n++;

@@ -1,7 +1,7 @@
 // WebViews occupy DOM frames above the canvas. JavaScript interfaces use a separate renderer
 // so synchronous page calls can wait while the Java runtime continues executing.
 
-import { rt, JObj, type NativeSpec, type ClassInfo, maySuspend, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, type ClassInfo, maySuspend, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { mangleMethod, parseMethodDesc } from "../jvm/abi";
 import { vcall, mkEnumSet, JThread, curThread, setCurThread, type JSimpleEnum } from "../jvm/natives/jlang";
 import { JViewGroup, initViewFromCtx, defaultSize, type JView } from "./view";
@@ -368,13 +368,9 @@ rt.register({
     "onDraw(Landroid/graphics/Canvas;)V": function (this: JWebView) { this.drawnAt = frame; live.add(this); },
     "onDetachedFromWindow()V": function (this: JWebView) { this.hide(); },
     "destroy()V": function (this: JWebView) { this.destroy(); },
-    "getSettings()Landroid/webkit/WebSettings;": function (this: JWebView) { return this.settings; },
     // AOSP substitutes its default client for null
     "setWebViewClient(Landroid/webkit/WebViewClient;)V": function (this: JWebView, c: JObj | null) { this.client = c ?? inst("android/webkit/WebViewClient"); },
-    "getWebViewClient()Landroid/webkit/WebViewClient;": function (this: JWebView) { return this.client; },
     "setWebChromeClient(Landroid/webkit/WebChromeClient;)V": function (this: JWebView, c: JObj | null) { this.chrome = c ?? inst("android/webkit/WebChromeClient"); },
-    "getWebChromeClient()Landroid/webkit/WebChromeClient;": function (this: JWebView) { return this.chrome; },
-    "setDownloadListener(Landroid/webkit/DownloadListener;)V": function (this: JWebView, l: unknown) { this.dl = l; },
     "loadUrl(Ljava/lang/String;)V": function (this: JWebView, u: string) { this.loadUrl(u); },
     "loadUrl(Ljava/lang/String;Ljava/util/Map;)V": function (this: JWebView, u: string) { this.loadUrl(u); },
     // AOSP: loadData navigates to the data: URL itself; loadDataWithBaseURL's entry is historyUrl (about:blank when absent)
@@ -387,10 +383,12 @@ rt.register({
       },
     "reload()V": function (this: JWebView) { if (this.idx >= 0) this.go(this.hist[this.idx], false); },
     "stopLoading()V": function (this: JWebView) { this.gen++; win(this)?.stop(); },
-    "getUrl()Ljava/lang/String;": function (this: JWebView) { return this.url; },
-    "getOriginalUrl()Ljava/lang/String;": function (this: JWebView) { return this.url; },
-    "getTitle()Ljava/lang/String;": function (this: JWebView) { return this.title; },
-    "getProgress()I": function (this: JWebView) { return this.progress; },
+    ...fieldGetters({ "getSettings()Landroid/webkit/WebSettings;": "settings",
+      "getWebViewClient()Landroid/webkit/WebViewClient;": "client",
+      "getWebChromeClient()Landroid/webkit/WebChromeClient;": "chrome", "getUrl()Ljava/lang/String;": "url",
+      "getOriginalUrl()Ljava/lang/String;": "url", "getTitle()Ljava/lang/String;": "title",
+      "getProgress()I": "progress" }),
+    ...fieldSetters({ "setDownloadListener(Landroid/webkit/DownloadListener;)V": "dl" }),
     "canGoBack()Z": function (this: JWebView) { return this.idx > 0 ? 1 : 0; },
     "canGoForward()Z": function (this: JWebView) { return this.idx < this.hist.length - 1 ? 1 : 0; },
     "canGoBackOrForward(I)Z": function (this: JWebView, n: number) { const i = this.idx + n; return i >= 0 && i < this.hist.length ? 1 : 0; },
@@ -539,17 +537,12 @@ rt.register({
       function (this: JWebResourceResponse, m: string, e: string, st: number, rs: string, h: unknown, d: unknown) {
         this.mime = m; this.enc = e; this.status = st; this.reason = rs; this.headers = h; this.data = d;
       },
-    "getMimeType()Ljava/lang/String;": function (this: JWebResourceResponse) { return this.mime; },
-    "getEncoding()Ljava/lang/String;": function (this: JWebResourceResponse) { return this.enc; },
-    "getData()Ljava/io/InputStream;": function (this: JWebResourceResponse) { return this.data; },
-    "getStatusCode()I": function (this: JWebResourceResponse) { return this.status; },
-    "getReasonPhrase()Ljava/lang/String;": function (this: JWebResourceResponse) { return this.reason; },
-    "getResponseHeaders()Ljava/util/Map;": function (this: JWebResourceResponse) { return this.headers; },
-    "setMimeType(Ljava/lang/String;)V": function (this: JWebResourceResponse, m: string) { this.mime = m; },
-    "setEncoding(Ljava/lang/String;)V": function (this: JWebResourceResponse, e: string) { this.enc = e; },
-    "setData(Ljava/io/InputStream;)V": function (this: JWebResourceResponse, d: unknown) { this.data = d; },
     "setStatusCodeAndReasonPhrase(ILjava/lang/String;)V": function (this: JWebResourceResponse, st: number, rs: string) { this.status = st; this.reason = rs; },
-    "setResponseHeaders(Ljava/util/Map;)V": function (this: JWebResourceResponse, h: unknown) { this.headers = h; },
+    ...fieldGetters({ "getMimeType()Ljava/lang/String;": "mime", "getEncoding()Ljava/lang/String;": "enc",
+      "getData()Ljava/io/InputStream;": "data", "getStatusCode()I": "status",
+      "getReasonPhrase()Ljava/lang/String;": "reason", "getResponseHeaders()Ljava/util/Map;": "headers" }),
+    ...fieldSetters({ "setMimeType(Ljava/lang/String;)V": "mime", "setEncoding(Ljava/lang/String;)V": "enc",
+      "setData(Ljava/io/InputStream;)V": "data", "setResponseHeaders(Ljava/util/Map;)V": "headers" }),
   },
 });
 rt.register({ name: "android/webkit/SslErrorHandler", ctor: class extends JObj {}, methods: { "cancel()V": () => {}, "proceed()V": () => {} } });
@@ -616,10 +609,8 @@ rt.register({
   methods: {
     "<init>(Ljava/lang/String;Ljava/lang/String;ILandroid/webkit/ConsoleMessage$MessageLevel;)V":
       function (this: JConsoleMessage, m: string, s: string, l: number, lv: JSimpleEnum) { this.msg = m; this.src = s; this.line = l; this.level = lv; },
-    "message()Ljava/lang/String;": function (this: JConsoleMessage) { return this.msg; },
-    "sourceId()Ljava/lang/String;": function (this: JConsoleMessage) { return this.src; },
-    "lineNumber()I": function (this: JConsoleMessage) { return this.line; },
-    "messageLevel()Landroid/webkit/ConsoleMessage$MessageLevel;": function (this: JConsoleMessage) { return this.level; },
+    ...fieldGetters({ "message()Ljava/lang/String;": "msg", "sourceId()Ljava/lang/String;": "src",
+      "lineNumber()I": "line", "messageLevel()Landroid/webkit/ConsoleMessage$MessageLevel;": "level" }),
   },
 });
 class JJsResult extends JObj {}

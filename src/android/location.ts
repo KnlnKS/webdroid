@@ -1,4 +1,4 @@
-import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, fieldGetters, fieldSetters, flagSetters } from "../jvm/runtime";
 import { JBundle, uptimeMillis } from "./os";
 import { parcelCreator, type JParcel } from "./parcel";
 import { newObj, vcall } from "../jvm/natives/jlang";
@@ -56,35 +56,28 @@ const optional = [
   ["BearingAccuracy", "Degrees", "F", 128],
 ] as const;
 const locMethods: NonNullable<NativeSpec["methods"]> = {
-  "<init>(Ljava/lang/String;)V": function (this: JLocation, p: string) { this.provider = p; },
   "<init>(Landroid/location/Location;)V": maySuspend(function (this: JLocation, source: JLocation) { return this.set(source); }),
   "set(Landroid/location/Location;)V": maySuspend(function (this: JLocation, source: JLocation) { return this.set(source); }),
   "reset()V": function (this: JLocation) {
     this.provider = null; this.lat = this.lon = 0; this.time = this.elapsed = 0n;
     this.mock = false; this.opt = {}; this.extras = null;
   },
-  "getElapsedRealtimeNanos()J": function (this: JLocation) { return this.elapsed; },
   "getElapsedRealtimeMillis()J": function (this: JLocation) { return this.elapsed / 1000000n; },
   "getElapsedRealtimeAgeMillis()J": function (this: JLocation) { return BigInt(Math.floor(uptimeMillis())) - this.elapsed / 1000000n; },
   "getElapsedRealtimeAgeMillis(J)J": function (this: JLocation, now: bigint) { return now - this.elapsed / 1000000n; },
-  "setElapsedRealtimeNanos(J)V": function (this: JLocation, value: bigint) { this.elapsed = value; },
   "isMock()Z": function (this: JLocation) { return +this.mock; },
   "isFromMockProvider()Z": function (this: JLocation) { return +this.mock; },
-  "setMock(Z)V": function (this: JLocation, value: number) { this.mock = !!value; },
-  "setIsFromMockProvider(Z)V": function (this: JLocation, value: number) { this.mock = !!value; },
-  "getExtras()Landroid/os/Bundle;": function (this: JLocation) { return this.extras; },
   "setExtras(Landroid/os/Bundle;)V": async function (this: JLocation, value: JBundle | null) {
     this.extras = value ? await newObj("android/os/Bundle", "(Landroid/os/Bundle;)V", value) as JBundle : null;
   },
   "isComplete()Z": function (this: JLocation) { return +(this.provider !== null && "Accuracy" in this.opt && this.time !== 0n && this.elapsed !== 0n); },
-  "getProvider()Ljava/lang/String;": function (this: JLocation) { return this.provider; },
-  "setProvider(Ljava/lang/String;)V": function (this: JLocation, p: string) { this.provider = p; },
-  "getLatitude()D": function (this: JLocation) { return this.lat; },
-  "setLatitude(D)V": function (this: JLocation, v: number) { this.lat = v; },
-  "getLongitude()D": function (this: JLocation) { return this.lon; },
-  "setLongitude(D)V": function (this: JLocation, v: number) { this.lon = v; },
-  "getTime()J": function (this: JLocation) { return this.time; },
-  "setTime(J)V": function (this: JLocation, t: bigint) { this.time = t; },
+  ...fieldSetters({ "<init>(Ljava/lang/String;)V": "provider", "setElapsedRealtimeNanos(J)V": "elapsed",
+    "setProvider(Ljava/lang/String;)V": "provider", "setLatitude(D)V": "lat", "setLongitude(D)V": "lon",
+    "setTime(J)V": "time" }),
+  ...fieldGetters({ "getElapsedRealtimeNanos()J": "elapsed", "getExtras()Landroid/os/Bundle;": "extras",
+    "getProvider()Ljava/lang/String;": "provider", "getLatitude()D": "lat", "getLongitude()D": "lon",
+    "getTime()J": "time" }),
+  ...flagSetters({ "setMock(Z)V": "mock", "setIsFromMockProvider(Z)V": "mock" }),
   "distanceTo(Landroid/location/Location;)F": function (this: JLocation, o: JLocation) { return distanceM(this.lat, this.lon, o.lat, o.lon); },
   "bearingTo(Landroid/location/Location;)F": function (this: JLocation, o: JLocation) { return geodesic(this.lat, this.lon, o.lat, o.lon).initial; },
   "static distanceBetween(DDDD[F)V": (lat1: number, lon1: number, lat2: number, lon2: number, results: Float32Array | null) => {

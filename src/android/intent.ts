@@ -1,4 +1,4 @@
-import { JObj, type NativeSpec, rt, maySuspend } from "../jvm/runtime";
+import { JObj, type NativeSpec, rt, maySuspend, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { JBundle, bundlePrimitive, bundleBox, reportUncaught, PROCESS_NAME } from "./os";
 import { appHost, type AppHost } from "./apphost";
 import { mkUri, readUri, writeUri } from "./net";
@@ -82,7 +82,6 @@ const intentMethods: NativeSpec["methods"] = {
   "readFromParcel(Landroid/os/Parcel;)V": async function (this: JIntent, p: JParcel) { await readIntent(p, this); },
   "writeToParcel(Landroid/os/Parcel;I)V": writeIntent,
   "describeContents()I": () => 0,
-  "<init>(Ljava/lang/String;)V": function (this: JIntent, a: string) { this.action = a; },
   "<init>(Ljava/lang/String;Landroid/net/Uri;)V": function (this: JIntent, a: string, u: any) {
     this.action = a;
     this.dataUri = u?.uri ?? null;
@@ -125,21 +124,16 @@ const intentMethods: NativeSpec["methods"] = {
     if (p !== null && this.selector) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Package and selector are mutually exclusive");
     this.pkg = p; return this;
   },
-  "getPackage()Ljava/lang/String;": function (this: JIntent) { return this.pkg; },
-  "getAction()Ljava/lang/String;": function (this: JIntent) { return this.action; },
   "setData(Landroid/net/Uri;)Landroid/content/Intent;": function (this: JIntent, u: any) { this.dataUri = u?.uri ?? null; return this; },
   "getData()Landroid/net/Uri;": function (this: JIntent) { return this.dataUri ? mkUri(this.dataUri) : null; },
-  "getDataString()Ljava/lang/String;": function (this: JIntent) { return this.dataUri; },
   "setType(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, t: string) { this.typeStr = t; return this; },
   "setDataAndType(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, u: any, t: string) {
     this.dataUri = u?.uri ?? null;
     this.typeStr = t;
     return this;
   },
-  "getType()Ljava/lang/String;": function (this: JIntent) { return this.typeStr; },
   "addFlags(I)Landroid/content/Intent;": function (this: JIntent, f: number) { this.flags |= f; return this; },
   "setFlags(I)Landroid/content/Intent;": function (this: JIntent, f: number) { this.flags = f; return this; },
-  "getFlags()I": function (this: JIntent) { return this.flags; },
   "addCategory(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, c: string) { this.categories.add(c); return this; },
   "hasCategory(Ljava/lang/String;)Z": function (this: JIntent, c: string) { return this.categories.has(c) ? 1 : 0; },
   "fillIn(Landroid/content/Intent;I)I": function (this: JIntent, other: JIntent, flags: number) {
@@ -179,8 +173,6 @@ const intentMethods: NativeSpec["methods"] = {
     const i = this.dataUri?.indexOf(":") ?? -1;
     return i > 0 ? this.dataUri!.slice(0, i) : null;
   },
-  "resolveType(Landroid/content/ContentResolver;)Ljava/lang/String;": function (this: JIntent) { return this.typeStr; },
-  "resolveTypeIfNeeded(Landroid/content/ContentResolver;)Ljava/lang/String;": function (this: JIntent) { return this.typeStr; },
   // A chooser needs a chooser activity; with none installed the target intent is what launches,
   // which is what AOSP falls back to when nothing can handle ACTION_CHOOSER.
   "static createChooser(Landroid/content/Intent;Ljava/lang/CharSequence;)Landroid/content/Intent;": (t: JIntent) => t,
@@ -192,16 +184,18 @@ const intentMethods: NativeSpec["methods"] = {
     i.component = c?.cls ?? null; i.componentPkg = c?.pkg ?? null;
     return i;
   },
-  "getClipData()Landroid/content/ClipData;": function (this: JIntent) { return this.clipData; },
-  "setClipData(Landroid/content/ClipData;)V": function (this: JIntent, clip: JObj | null) { this.clipData = clip; },
-  "getSourceBounds()Landroid/graphics/Rect;": function (this: JIntent) { return this.sourceBounds; },
   "setSourceBounds(Landroid/graphics/Rect;)V": function (this: JIntent, bounds: JRect | null) { this.sourceBounds = bounds ? copyBounds(bounds) : null; },
-  "getSelector()Landroid/content/Intent;": function (this: JIntent) { return this.selector; },
   "setSelector(Landroid/content/Intent;)V": function (this: JIntent, selector: JIntent | null) {
     if (selector === this || selector && this.pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid selector");
     this.selector = selector;
   },
-  "getIdentifier()Ljava/lang/String;": function (this: JIntent) { return this.identifier; },
+  ...fieldSetters({ "<init>(Ljava/lang/String;)V": "action", "setClipData(Landroid/content/ClipData;)V": "clipData" }),
+  ...fieldGetters({ "getPackage()Ljava/lang/String;": "pkg", "getAction()Ljava/lang/String;": "action",
+    "getDataString()Ljava/lang/String;": "dataUri", "getType()Ljava/lang/String;": "typeStr", "getFlags()I": "flags",
+    "resolveType(Landroid/content/ContentResolver;)Ljava/lang/String;": "typeStr",
+    "resolveTypeIfNeeded(Landroid/content/ContentResolver;)Ljava/lang/String;": "typeStr",
+    "getClipData()Landroid/content/ClipData;": "clipData", "getSourceBounds()Landroid/graphics/Rect;": "sourceBounds",
+    "getSelector()Landroid/content/Intent;": "selector", "getIdentifier()Ljava/lang/String;": "identifier" }),
   "setIdentifier(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, identifier: string | null) { this.identifier = identifier; return this; },
   "resolveActivity(Landroid/content/pm/PackageManager;)Landroid/content/ComponentName;": async function (this: JIntent, pm: unknown) {
     if (this.component) return mkComponentName(this.componentPkg ?? appHost?.pkg ?? "", this.component);

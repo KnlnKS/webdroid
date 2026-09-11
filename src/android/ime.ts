@@ -9,7 +9,7 @@
 // declares `implements InputConnection`, and an unregistered interface makes Runtime.link
 // auto-stub it — which poisons every class that names it.
 
-import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { jarray, splitSig } from "../jvm/abi";
@@ -331,10 +331,8 @@ rt.register({
     "<init>(JILjava/lang/CharSequence;Ljava/lang/CharSequence;)V": function (this: JCompletionInfo, id: bigint, pos: number, t: unknown, l: unknown) {
       this.id = id; this.position = pos; this.text = t; this.label = l;
     },
-    "getId()J": function (this: JCompletionInfo) { return this.id; },
-    "getPosition()I": function (this: JCompletionInfo) { return this.position; },
-    "getText()Ljava/lang/CharSequence;": function (this: JCompletionInfo) { return this.text; },
-    "getLabel()Ljava/lang/CharSequence;": function (this: JCompletionInfo) { return this.label; },
+    ...fieldGetters({ "getId()J": "id", "getPosition()I": "position", "getText()Ljava/lang/CharSequence;": "text",
+      "getLabel()Ljava/lang/CharSequence;": "label" }),
     "describeContents()I": () => 0,
   },
 });
@@ -374,11 +372,9 @@ class JCursorAnchorInfo extends JObj {
 rt.register({
   name: "android/view/inputmethod/CursorAnchorInfo", ctor: JCursorAnchorInfo, ifaces: ["android/os/Parcelable"],
   methods: {
-    "getSelectionStart()I": function (this: JCursorAnchorInfo) { return this.selStart; },
-    "getSelectionEnd()I": function (this: JCursorAnchorInfo) { return this.selEnd; },
-    "getComposingTextStart()I": function (this: JCursorAnchorInfo) { return this.compStart; },
-    "getComposingText()Ljava/lang/CharSequence;": function (this: JCursorAnchorInfo) { return this.compText; },
-    "getInsertionMarkerFlags()I": function (this: JCursorAnchorInfo) { return this.markerFlags; },
+    ...fieldGetters({ "getSelectionStart()I": "selStart", "getSelectionEnd()I": "selEnd",
+      "getComposingTextStart()I": "compStart", "getComposingText()Ljava/lang/CharSequence;": "compText",
+      "getInsertionMarkerFlags()I": "markerFlags" }),
     "getInsertionMarkerHorizontal()F": function (this: JCursorAnchorInfo) { return this.marker ? this.marker[0] : NaN; },
     "getInsertionMarkerTop()F": function (this: JCursorAnchorInfo) { return this.marker ? this.marker[1] : NaN; },
     "getInsertionMarkerBaseline()F": function (this: JCursorAnchorInfo) { return this.marker ? this.marker[2] : NaN; },
@@ -564,18 +560,17 @@ rt.register({
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": async function (this: JAutoComplete, c: unknown, set: unknown) {
       await vcall(this, "<init>", "(Landroid/content/Context;Landroid/util/AttributeSet;)V", c, set);
     },
-    "setAdapter(Landroid/widget/ListAdapter;)V": function (this: JAutoComplete, a: unknown) { this.adapter = a; },
-    "getAdapter()Landroid/widget/ListAdapter;": function (this: JAutoComplete) { return this.adapter; },
     "setThreshold(I)V": function (this: JAutoComplete, t: number) { this.threshold = t <= 0 ? 1 : t; },
-    "getThreshold()I": function (this: JAutoComplete) { return this.threshold; },
     "enoughToFilter()Z": function (this: JAutoComplete) { return this.text.length >= this.threshold ? 1 : 0; },
-    "setOnItemClickListener(Landroid/widget/AdapterView$OnItemClickListener;)V": function (this: JAutoComplete, l: unknown) { this.itemClickL = l; },
-    "getOnItemClickListener()Landroid/widget/AdapterView$OnItemClickListener;": function (this: JAutoComplete) { return this.itemClickL; },
-    "setOnItemSelectedListener(Landroid/widget/AdapterView$OnItemSelectedListener;)V": function (this: JAutoComplete, l: unknown) { this.itemSelectedL = l; },
-    "getOnItemSelectedListener()Landroid/widget/AdapterView$OnItemSelectedListener;": function (this: JAutoComplete) { return this.itemSelectedL; },
     "showDropDown()V": function (this: JAutoComplete) { this.popupShowing = 1; },
     "dismissDropDown()V": function (this: JAutoComplete) { this.popupShowing = 0; },
-    "isPopupShowing()Z": function (this: JAutoComplete) { return this.popupShowing; },
+    ...fieldSetters({ "setAdapter(Landroid/widget/ListAdapter;)V": "adapter",
+      "setOnItemClickListener(Landroid/widget/AdapterView$OnItemClickListener;)V": "itemClickL",
+      "setOnItemSelectedListener(Landroid/widget/AdapterView$OnItemSelectedListener;)V": "itemSelectedL" }),
+    ...fieldGetters({ "getAdapter()Landroid/widget/ListAdapter;": "adapter", "getThreshold()I": "threshold",
+      "getOnItemClickListener()Landroid/widget/AdapterView$OnItemClickListener;": "itemClickL",
+      "getOnItemSelectedListener()Landroid/widget/AdapterView$OnItemSelectedListener;": "itemSelectedL",
+      "isPopupShowing()Z": "popupShowing" }),
     "setDropDownWidth(I)V": () => {}, "setDropDownHeight(I)V": () => {},
     "setDropDownVerticalOffset(I)V": () => {}, "setDropDownHorizontalOffset(I)V": () => {},
     "setText(Ljava/lang/CharSequence;Z)V": async function (this: JAutoComplete, cs: unknown) {

@@ -2,7 +2,7 @@ import { AID } from "./res";
 import { JViewGroup, specSize, JView, invalidate, requestLayout } from "./view";
 import { type JDrawable, loadDrawable, loadDrawableRV } from "./drawable";
 import { type JCanvas, tfMedium } from "./graphics";
-import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, stubs, noops, fieldGetters, flagGetters } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { showPopupMenu } from "./popup";
 import { appHost, type AppHost } from "./apphost";
@@ -244,8 +244,6 @@ function mkMenuItem(id: number, title: string): JMenuItem {
   return m;
 }
 const menuItemMethods: NativeSpec["methods"] = {
-  "getItemId()I": function (this: JMenuItem) { return this.id; },
-  "getTitle()Ljava/lang/CharSequence;": function (this: JMenuItem) { return this.title; },
   "setTitle(Ljava/lang/CharSequence;)Landroid/view/MenuItem;": function (this: JMenuItem, t: unknown) {
     this.title = spannedString(t);
     return this;
@@ -262,21 +260,19 @@ const menuItemMethods: NativeSpec["methods"] = {
     this.icon = d;
     return this;
   },
-  "getIcon()Landroid/graphics/drawable/Drawable;": function (this: JMenuItem) { return this.icon; },
   "setVisible(Z)Landroid/view/MenuItem;": function (this: JMenuItem, v: number) { this.visible = !!v; invalidate(); return this; },
-  "isVisible()Z": function (this: JMenuItem) { return this.visible ? 1 : 0; },
   "setEnabled(Z)Landroid/view/MenuItem;": function (this: JMenuItem, v: number) { this.enabled = !!v; return this; },
-  "isEnabled()Z": function (this: JMenuItem) { return this.enabled ? 1 : 0; },
   "setChecked(Z)Landroid/view/MenuItem;": function (this: JMenuItem, v: number) { this.checked = !!v; return this; },
-  "isChecked()Z": function (this: JMenuItem) { return this.checked ? 1 : 0; },
   "setCheckable(Z)Landroid/view/MenuItem;": function (this: JMenuItem, v: number) { this.checkable = !!v; return this; },
   "setShowAsAction(I)V": function (this: JMenuItem, v: number) { this.showAsAction = v; invalidate(); },
   "setOnActionExpandListener(Landroid/view/MenuItem$OnActionExpandListener;)Landroid/view/MenuItem;":
     function (this: JMenuItem) { return this; },
   "setOnMenuItemClickListener(Landroid/view/MenuItem$OnMenuItemClickListener;)Landroid/view/MenuItem;":
     function (this: JMenuItem, l: unknown) { this.clickL = l; return this; },
-  "getSubMenu()Landroid/view/SubMenu;": function (this: JMenuItem) { return this.sub; },
-  "hasSubMenu()Z": function (this: JMenuItem) { return this.sub ? 1 : 0; },
+  ...fieldGetters({ "getItemId()I": "id", "getTitle()Ljava/lang/CharSequence;": "title",
+    "getIcon()Landroid/graphics/drawable/Drawable;": "icon", "getSubMenu()Landroid/view/SubMenu;": "sub" }),
+  ...flagGetters({ "isVisible()Z": "visible", "isEnabled()Z": "enabled", "isChecked()Z": "checked",
+    "hasSubMenu()Z": "sub" }),
   "setTitleCondensed(Ljava/lang/CharSequence;)Landroid/view/MenuItem;": function (this: JMenuItem) { return this; },
   "setAlphabeticShortcut(C)Landroid/view/MenuItem;": function (this: JMenuItem) { return this; },
   "setActionView(Landroid/view/View;)Landroid/view/MenuItem;": function (this: JMenuItem) { return this; },
@@ -443,7 +439,6 @@ rt.register({
       this.navMode = m;
       this.bar((b) => { b.navMode = m; });
     },
-    "getNavigationMode()I": function (this: JActionBar) { return this.navMode; },
     "setListNavigationCallbacks(Landroid/widget/SpinnerAdapter;Landroid/app/ActionBar$OnNavigationListener;)V":
       async function (this: JActionBar, adapter: unknown, listener: unknown) {
         this.navAdapter = adapter;
@@ -462,12 +457,12 @@ rt.register({
       if (this.act?.window.actionBarView) this.act.window.actionBarView.navSelected = i;
       return this.fireNav(i);
     },
-    "getSelectedNavigationIndex()I": function (this: JActionBar) { return this.navSelected; },
     "getNavigationItemCount()I": async function (this: JActionBar) {
       return this.navAdapter ? await vcall(this.navAdapter, "getCount", "()I") : 0;
     },
     "getHeight()I": () => 112,
-    "getThemedContext()Landroid/content/Context;": function (this: JActionBar) { return this.act; },
+    ...fieldGetters({ "getNavigationMode()I": "navMode", "getSelectedNavigationIndex()I": "navSelected",
+      "getThemedContext()Landroid/content/Context;": "act" }),
     // No action view expands on our bar yet; onBackPressed asks first, as AOSP does.
     "collapseActionView()Z": () => 0,
     "getDisplayOptions()I": function (this: JActionBar) { return this.act?.window.actionBarView?.showUp ? 4 : 0; },

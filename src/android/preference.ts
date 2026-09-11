@@ -4,7 +4,7 @@
 // existing SharedPreferences/PreferenceManager plumbing in app.ts. No per-app special-casing:
 // any app's res/xml/*.xml preference screen renders through this same path.
 
-import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { attr, TV, parseAXML, type XmlNode } from "./axml";
@@ -127,28 +127,24 @@ const preferenceMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JPreference, c: unknown, set: JAttrSet | null) {
     initPrefCommon(this, c, set);
   },
-  "getKey()Ljava/lang/String;": function (this: JPreference) { return this.keyStr; },
-  "setKey(Ljava/lang/String;)V": function (this: JPreference, k: string) { this.keyStr = k; },
-  "getTitle()Ljava/lang/CharSequence;": function (this: JPreference) { return this.titleStr; },
   "setTitle(Ljava/lang/CharSequence;)V": function (this: JPreference, t: unknown) { this.titleStr = spannedString(t); notifyChanged(this); },
   "setTitle(I)V": function (this: JPreference, id: number) { this.titleStr = ctxString(this.jctx, id); notifyChanged(this); },
-  "getSummary()Ljava/lang/CharSequence;": function (this: JPreference) { return this.summaryStr; },
   "setSummary(Ljava/lang/CharSequence;)V": function (this: JPreference, t: unknown) { this.summaryStr = spannedString(t); notifyChanged(this); },
   "setSummary(I)V": function (this: JPreference, id: number) { this.summaryStr = ctxString(this.jctx, id); notifyChanged(this); },
-  "isEnabled()Z": function (this: JPreference) { return this.enabled ? 1 : 0; },
   "setEnabled(Z)V": function (this: JPreference, e: number) { this.enabled = !!e; notifyChanged(this); },
-  "getContext()Landroid/content/Context;": function (this: JPreference) { return this.jctx; },
   "getPreferenceManager()Landroid/preference/PreferenceManager;": function (this: JPreference) {
     return this.owner ? ensurePM(this.owner) : null;
   },
   "getSharedPreferences()Landroid/content/SharedPreferences;": function (this: JPreference) { return prefsOf(this.jctx); },
-  "setOnPreferenceClickListener(Landroid/preference/Preference$OnPreferenceClickListener;)V":
-    function (this: JPreference, l: unknown) { this.clickL = l; },
-  "getOnPreferenceClickListener()Landroid/preference/Preference$OnPreferenceClickListener;": function (this: JPreference) { return this.clickL; },
-  "setOnPreferenceChangeListener(Landroid/preference/Preference$OnPreferenceChangeListener;)V":
-    function (this: JPreference, l: unknown) { this.changeL = l; },
-  "getOnPreferenceChangeListener()Landroid/preference/Preference$OnPreferenceChangeListener;": function (this: JPreference) { return this.changeL; },
-  "toString()Ljava/lang/String;": function (this: JPreference) { return this.titleStr; },
+  ...fieldGetters({ "getKey()Ljava/lang/String;": "keyStr", "getTitle()Ljava/lang/CharSequence;": "titleStr",
+    "getSummary()Ljava/lang/CharSequence;": "summaryStr", "getContext()Landroid/content/Context;": "jctx",
+    "getOnPreferenceClickListener()Landroid/preference/Preference$OnPreferenceClickListener;": "clickL",
+    "getOnPreferenceChangeListener()Landroid/preference/Preference$OnPreferenceChangeListener;": "changeL",
+    "toString()Ljava/lang/String;": "titleStr" }),
+  ...fieldSetters({ "setKey(Ljava/lang/String;)V": "keyStr",
+    "setOnPreferenceClickListener(Landroid/preference/Preference$OnPreferenceClickListener;)V": "clickL",
+    "setOnPreferenceChangeListener(Landroid/preference/Preference$OnPreferenceChangeListener;)V": "changeL" }),
+  ...flagGetters({ "isEnabled()Z": "enabled" }),
   ...stubs(1, "isSelectable()Z", "isPersistent()Z"),
   ...noops("setSelectable(Z)V", "setPersistent(Z)V", "setOrder(I)V", "onClick()V"),
   ...stubs(0, "getOrder()I"),

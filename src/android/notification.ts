@@ -6,7 +6,7 @@
 // `n.extras` and friends directly rather than through getters.
 
 import { newArrayList } from "../jvm/natives/jutil";
-import { rt, JObj, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { mkUri } from "./net";
 import { PARCELABLE } from "./os";
@@ -47,11 +47,9 @@ const iconMethods: Record<string, Impl> = {
     (u: string) => mkIcon(TYPE_URI_ADAPTIVE, (i) => { i.uri = mkUri(u); }),
   "static createWithData([BII)Landroid/graphics/drawable/Icon;":
     (b: Int8Array, off: number, len: number) => mkIcon(TYPE_DATA, (i) => { i.data = b?.slice(off, off + len) ?? null; }),
-  "getType()I": function (this: JIcon) { return this.type; },
-  "getResId()I": function (this: JIcon) { return this.resId; },
-  "getResPackage()Ljava/lang/String;": function (this: JIcon) { return this.resPkg; },
   "getUri()Landroid/net/Uri;": function (this: JIcon) { return this.uri ?? null; },
-  "getBitmap()Landroid/graphics/Bitmap;": function (this: JIcon) { return this.bmp; },
+  ...fieldGetters({ "getType()I": "type", "getResId()I": "resId", "getResPackage()Ljava/lang/String;": "resPkg",
+    "getBitmap()Landroid/graphics/Bitmap;": "bmp" }),
   ...PARCELABLE,
   "loadDrawable(Landroid/content/Context;)Landroid/graphics/drawable/Drawable;":
     async function (this: JIcon, ctx: unknown) {
@@ -173,9 +171,8 @@ rt.register({
       this.icon = i; this.tickerText = t; this.when = w;
     },
     "clone()Landroid/app/Notification;": function (this: JNotification) { return Object.assign(new JNotification(), this); },
-    "getChannelId()Ljava/lang/String;": function (this: JNotification) { return this.channelId; },
-    "getGroup()Ljava/lang/String;": function (this: JNotification) { return this.group; },
-    "getSortKey()Ljava/lang/String;": function (this: JNotification) { return this.sortKey; },
+    ...fieldGetters({ "getChannelId()Ljava/lang/String;": "channelId", "getGroup()Ljava/lang/String;": "group",
+      "getSortKey()Ljava/lang/String;": "sortKey" }),
     ...PARCELABLE,
   },
 });
@@ -347,14 +344,12 @@ rt.register({
     "getIcon()Landroid/graphics/drawable/Icon;": function (this: JNAction) {
       return this.ico ??= this.icon ? mkIcon(TYPE_RESOURCE, (x) => { x.resId = this.icon; }) : null;
     },
-    "getTitle()Ljava/lang/CharSequence;": function (this: JNAction) { return this.title; },
-    "getActionIntent()Landroid/app/PendingIntent;": function (this: JNAction) { return this.actionIntent; },
-    "getExtras()Landroid/os/Bundle;": function (this: JNAction) { return this.extras; },
     "getRemoteInputs()[Landroid/app/RemoteInput;": () => null,
     "getDataOnlyRemoteInputs()[Landroid/app/RemoteInput;": () => null,
     "getAllowGeneratedReplies()Z": () => 1,
-    "getSemanticAction()I": function (this: JNAction) { return this.semantic; },
-    "isContextual()Z": function (this: JNAction) { return this.contextual; },
+    ...fieldGetters({ "getTitle()Ljava/lang/CharSequence;": "title",
+      "getActionIntent()Landroid/app/PendingIntent;": "actionIntent", "getExtras()Landroid/os/Bundle;": "extras",
+      "getSemanticAction()I": "semantic", "isContextual()Z": "contextual" }),
     "isAuthenticationRequired()Z": () => 0,
     "clone()Landroid/app/Notification$Action;": function (this: JNAction) { return Object.assign(new JNAction(), this); },
     ...PARCELABLE,
@@ -392,10 +387,8 @@ class JPerson extends JObj {
 rt.register({
   name: "android/app/Person", ctor: JPerson, ifaces: ["android/os/Parcelable"],
   methods: {
-    "getName()Ljava/lang/CharSequence;": function (this: JPerson) { return this.name; },
-    "getKey()Ljava/lang/String;": function (this: JPerson) { return this.key; },
-    "getUri()Ljava/lang/String;": function (this: JPerson) { return this.uri; },
-    "getIcon()Landroid/graphics/drawable/Icon;": function (this: JPerson) { return this.ico; },
+    ...fieldGetters({ "getName()Ljava/lang/CharSequence;": "name", "getKey()Ljava/lang/String;": "key",
+      "getUri()Ljava/lang/String;": "uri", "getIcon()Landroid/graphics/drawable/Icon;": "ico" }),
     "isBot()Z": () => 0, "isImportant()Z": () => 0,
     ...PARCELABLE,
   },
@@ -424,10 +417,9 @@ rt.register({
     "<init>(Ljava/lang/String;Ljava/lang/CharSequence;I)V": function (this: JNotificationChannel, id: string, nm: unknown, imp: number) {
       this.id = id; this.nm = nm; this.imp = imp;
     },
-    "getId()Ljava/lang/String;": function (this: JNotificationChannel) { return this.id; },
-    "getName()Ljava/lang/CharSequence;": function (this: JNotificationChannel) { return this.nm; },
-    "setName(Ljava/lang/CharSequence;)V": function (this: JNotificationChannel, v: unknown) { this.nm = v; },
-    "getImportance()I": function (this: JNotificationChannel) { return this.imp; },
+    ...fieldGetters({ "getId()Ljava/lang/String;": "id", "getName()Ljava/lang/CharSequence;": "nm",
+      "getImportance()I": "imp" }),
+    ...fieldSetters({ "setName(Ljava/lang/CharSequence;)V": "nm" }),
     ...stubs(null, "getGroup()Ljava/lang/String;", "getSound()Landroid/net/Uri;"),
     ...stubs(0, "shouldVibrate()Z"),
     ...stubs(1, "canShowBadge()Z"),

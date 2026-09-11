@@ -3,7 +3,7 @@
 // listeners, duration — and beginDelayedTransition lets the next layout land while still
 // telling listeners the transition started and ended, on the main queue.
 
-import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { onMain } from "./mainloop";
@@ -55,20 +55,18 @@ const transitionMethods: NonNullable<NativeSpec["methods"]> = {
   [`excludeTarget(Ljava/lang/Class;Z)${T}`]: function (this: JTransition) { return this; },
   [`excludeChildren(Landroid/view/View;Z)${T}`]: function (this: JTransition) { return this; },
   [`excludeChildren(IZ)${T}`]: function (this: JTransition) { return this; },
-  "getTargets()Ljava/util/List;": function (this: JTransition) { return this.targets; },
-  "getTargetIds()Ljava/util/List;": function (this: JTransition) { return this.targetIds; },
-  "getTargetNames()Ljava/util/List;": function (this: JTransition) { return this.targetNames; },
-  "getTargetTypes()Ljava/util/List;": function (this: JTransition) { return this.targetTypes; },
   "getName()Ljava/lang/String;": maySuspend(function (this: JTransition) { return this.name || (this.constructor as any).$i?.name?.replace(/\//g, ".") || "android.transition.Transition"; }),
-  "setEpicenterCallback(Landroid/transition/Transition$EpicenterCallback;)V": function (this: JTransition, c: unknown) { this.epicenterCb = c; },
-  "getEpicenterCallback()Landroid/transition/Transition$EpicenterCallback;": function (this: JTransition) { return this.epicenterCb; },
   "getEpicenter()Landroid/graphics/Rect;": maySuspend(function (this: JTransition) {
     return this.epicenterCb ? vcall(this.epicenterCb, "onGetEpicenter", "(Landroid/transition/Transition;)Landroid/graphics/Rect;", this) : null;
   }),
-  "setPathMotion(Landroid/transition/PathMotion;)V": function (this: JTransition, p: unknown) { this.pathMotion = p; },
-  "getPathMotion()Landroid/transition/PathMotion;": function (this: JTransition) { return this.pathMotion; },
-  "setPropagation(Landroid/transition/TransitionPropagation;)V": function (this: JTransition, p: unknown) { this.propagation = p; },
-  "getPropagation()Landroid/transition/TransitionPropagation;": function (this: JTransition) { return this.propagation; },
+  ...fieldGetters({ "getTargets()Ljava/util/List;": "targets", "getTargetIds()Ljava/util/List;": "targetIds",
+    "getTargetNames()Ljava/util/List;": "targetNames", "getTargetTypes()Ljava/util/List;": "targetTypes",
+    "getEpicenterCallback()Landroid/transition/Transition$EpicenterCallback;": "epicenterCb",
+    "getPathMotion()Landroid/transition/PathMotion;": "pathMotion",
+    "getPropagation()Landroid/transition/TransitionPropagation;": "propagation" }),
+  ...fieldSetters({ "setEpicenterCallback(Landroid/transition/Transition$EpicenterCallback;)V": "epicenterCb",
+    "setPathMotion(Landroid/transition/PathMotion;)V": "pathMotion",
+    "setPropagation(Landroid/transition/TransitionPropagation;)V": "propagation" }),
   ...noops("setMatchOrder([I)V", "captureStartValues(Landroid/transition/TransitionValues;)V",
     "captureEndValues(Landroid/transition/TransitionValues;)V"),
   ...stubs(null, "getTransitionProperties()[Ljava/lang/String;",

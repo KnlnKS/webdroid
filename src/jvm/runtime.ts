@@ -47,6 +47,12 @@ export function stubs(value: unknown, ...sigs: string[]): Record<string, () => u
   return Object.fromEntries(sigs.map((s) => [s, fn]));
 }
 export const noops = (...sigs: string[]) => stubs(undefined, ...sigs);
+type Accessor = (this: any, v?: unknown) => unknown;
+const accessors = (t: Record<string, string>, make: (f: string) => Accessor) => Object.fromEntries(Object.entries(t).map(([s, f]) => [s, make(f)]));
+export const fieldGetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any) { return this[f]; });
+export const flagGetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any) { return this[f] ? 1 : 0; });
+export const fieldSetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any, v?: unknown) { this[f] = v; });
+export const flagSetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any, v?: unknown) { this[f] = !!v; });
 
 export function callSelf(m: NativeSpec["methods"], sig: string, self: unknown, ...args: unknown[]): unknown {
   return (m![sig] as (this: unknown, ...a: unknown[]) => unknown).call(self, ...args);

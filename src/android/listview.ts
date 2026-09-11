@@ -2,7 +2,7 @@ import { AID, bagStrings } from "./res";
 // AdapterView/ListView/GridView + framework adapters (BaseAdapter/ArrayAdapter).
 // Non-recycling: materializes all item views (fine at app scale), scrolls internally.
 
-import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSizeAndState, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom } from "./view";
@@ -171,7 +171,6 @@ function amString(m: JActionMode, id: number): string {
 rt.register({
   name: "android/view/ActionMode", ctor: JActionMode,
   methods: {
-    "getMenu()Landroid/view/Menu;": function (this: JActionMode) { return this.menu; },
     "getMenuInflater()Landroid/view/MenuInflater;": function (this: JActionMode) {
       const inf = rt.make("android/view/MenuInflater");
       inf.jctx = this.jctx;
@@ -181,12 +180,12 @@ rt.register({
       this.title = spannedString(t);
     },
     "setTitle(I)V": function (this: JActionMode, id: number) { jmethod(this, M_amSetTitle)!.call(this, amString(this, id)); },
-    "getTitle()Ljava/lang/CharSequence;": function (this: JActionMode) { return this.title; },
     "setSubtitle(Ljava/lang/CharSequence;)V": function (this: JActionMode, t: unknown) {
       this.subtitle = spannedString(t);
     },
     "setSubtitle(I)V": function (this: JActionMode, id: number) { jmethod(this, M_amSetSubtitle)!.call(this, amString(this, id)); },
-    "getSubtitle()Ljava/lang/CharSequence;": function (this: JActionMode) { return this.subtitle; },
+    ...fieldGetters({ "getMenu()Landroid/view/Menu;": "menu", "getTitle()Ljava/lang/CharSequence;": "title",
+      "getSubtitle()Ljava/lang/CharSequence;": "subtitle" }),
     "invalidate()V": async function (this: JActionMode) {
       if (this.cb) {
         await vcall(this.cb, "onPrepareActionMode", "(Landroid/view/ActionMode;Landroid/view/Menu;)Z", this, this.menu);
@@ -430,20 +429,9 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     }
     await this.rebuild();
   },
-  "getAdapter()Landroid/widget/ListAdapter;": function (this: JListView) { return this.adapter; },
-  "getAdapter()Landroid/widget/Adapter;": function (this: JListView) { return this.adapter; },
-  "setOnItemClickListener(Landroid/widget/AdapterView$OnItemClickListener;)V": function (this: JListView, l: unknown) {
-    this.itemClickL = l;
-  },
   // appcompat's dropdown list reads both back: without them a Spinner popup dies on open, and
   // picking a row throws instead of selecting it
   "getOnItemClickListener()Landroid/widget/AdapterView$OnItemClickListener;": function (this: JListView) { return this.itemClickL; },
-  "setOnItemLongClickListener(Landroid/widget/AdapterView$OnItemLongClickListener;)V": function (this: JListView, l: unknown) {
-    this.itemLongClickL = l;
-  },
-  "setOnItemSelectedListener(Landroid/widget/AdapterView$OnItemSelectedListener;)V": function (this: JListView, l: unknown) {
-    this.itemSelectedL = l;
-  },
   "addHeaderView(Landroid/view/View;)V": addHeader,
   "addHeaderView(Landroid/view/View;Ljava/lang/Object;Z)V": addHeader,
   "addFooterView(Landroid/view/View;)V": addFooter,
@@ -466,8 +454,6 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     requestLayout(this);
   },
   "setDividerHeight(I)V": function (this: JListView, h: number) { this.divH = h; requestLayout(this); },
-  "getDividerHeight()I": function (this: JListView) { return this.divH; },
-  "getChoiceMode()I": function (this: JListView) { return this.choiceMode; },
   "setChoiceMode(I)V": async function (this: JListView, m: number) {
     this.choiceMode = m;
     if (m !== CHOICE_MODE_MULTIPLE_MODAL && this.actionMode) await vcall(this.actionMode, "finish", "()V");
@@ -535,14 +521,11 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     return 0;
   },
   "setEmptyView(Landroid/view/View;)V": function (this: JListView, v: JView) { this.emptyView = v; this.updateEmptyStatus(); },
-  "getEmptyView()Landroid/view/View;": function (this: JListView) { return this.emptyView; },
   "smoothScrollBy(II)V": function (this: JListView, dy: number) { this.scrollRows(dy); },
   "setOnScrollListener(Landroid/widget/AbsListView$OnScrollListener;)V": function (this: JListView, l: unknown) {
     this.scrollL = l;
     this.notifyScroll();
   },
-  "setMultiChoiceModeListener(Landroid/widget/AbsListView$MultiChoiceModeListener;)V":
-    function (this: JListView, l: unknown) { this.multiChoiceL = l; },
   "clearChoices()V": function (this: JListView) { this.checked.clear(); invalidate(); },
   "getCheckedItemCount()I": function (this: JListView) { return this.checked.size; },
   "getCheckedItemIds()[J": function (this: JListView) { return BigInt64Array.from([...this.checked].map((c) => BigInt(c))); },
@@ -552,12 +535,16 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     for (const c of this.checked) sa.m.set(c, 1);
     return sa;
   },
-  "getListPaddingLeft()I": function (this: JListView) { return this.padL; },
-  "getListPaddingRight()I": function (this: JListView) { return this.padR; },
-  "getListPaddingTop()I": function (this: JListView) { return this.padT; },
-  "getListPaddingBottom()I": function (this: JListView) { return this.padB; },
   "pointToPosition(II)I": function (this: JListView, x: number, y: number) { return this.itemIndexAt(y + this.scrollY); },
-  "getDivider()Landroid/graphics/drawable/Drawable;": function (this: JListView) { return this.divDraw; },
+  ...fieldGetters({ "getAdapter()Landroid/widget/ListAdapter;": "adapter",
+    "getAdapter()Landroid/widget/Adapter;": "adapter", "getDividerHeight()I": "divH", "getChoiceMode()I": "choiceMode",
+    "getEmptyView()Landroid/view/View;": "emptyView", "getListPaddingLeft()I": "padL",
+    "getListPaddingRight()I": "padR", "getListPaddingTop()I": "padT", "getListPaddingBottom()I": "padB",
+    "getDivider()Landroid/graphics/drawable/Drawable;": "divDraw" }),
+  ...fieldSetters({ "setOnItemClickListener(Landroid/widget/AdapterView$OnItemClickListener;)V": "itemClickL",
+    "setOnItemLongClickListener(Landroid/widget/AdapterView$OnItemLongClickListener;)V": "itemLongClickL",
+    "setOnItemSelectedListener(Landroid/widget/AdapterView$OnItemSelectedListener;)V": "itemSelectedL",
+    "setMultiChoiceModeListener(Landroid/widget/AbsListView$MultiChoiceModeListener;)V": "multiChoiceL" }),
   "layoutChildren()V": function (this: JListView) { requestLayout(this); },
   ...noops("setSelector(Landroid/graphics/drawable/Drawable;)V", "setSelector(I)V", "setDrawSelectorOnTop(Z)V",
     "setFastScrollEnabled(Z)V", "setHeaderDividersEnabled(Z)V", "setFooterDividersEnabled(Z)V",

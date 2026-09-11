@@ -1,6 +1,6 @@
 // android.animation: ValueAnimator/ObjectAnimator/AnimatorSet, driven from the frame loop via uiState.animHooks.
 
-import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { vcall, vcallMaybe, boxInt, box, JFloat } from "../jvm/natives/jlang";
 import { toJsArray, newArrayList } from "../jvm/natives/jutil";
@@ -266,16 +266,10 @@ const vaMethods: NativeSpec["methods"] = {
   "setDuration(J)Landroid/animation/ValueAnimator;": setDur,
   "setDuration(J)Landroid/animation/Animator;": setDur,
   "getDuration()J": function (this: JValueAnimator) { return BigInt(this.durationMs); },
-  "setInterpolator(Landroid/animation/TimeInterpolator;)V": function (this: JValueAnimator, i: unknown) { this.interp = i; },
-  "setInterpolator(Landroid/view/animation/Interpolator;)V": function (this: JValueAnimator, i: unknown) { this.interp = i; },
-  "getInterpolator()Landroid/animation/TimeInterpolator;": function (this: JValueAnimator) { return this.interp; },
-  "getRepeatCount()I": function (this: JValueAnimator) { return this.repeat; },
-  "getRepeatMode()I": function (this: JValueAnimator) { return this.repeatMode; },
   "getTotalDuration()J": function (this: JValueAnimator) { return this.repeat < 0 ? -1n : BigInt(this.delayMs + this.durationMs * (this.repeat + 1)); },
   "setFloatValues([F)V": function (this: JValueAnimator, v: Float32Array) { setNumKeys(this, v, false); },
   "setIntValues([I)V": function (this: JValueAnimator, v: Int32Array) { setNumKeys(this, v, true); },
   "setObjectValues([Ljava/lang/Object;)V": function (this: JValueAnimator, v: unknown[]) { this.objKeys = [...v]; },
-  "setEvaluator(Landroid/animation/TypeEvaluator;)V": function (this: JValueAnimator, e: unknown) { this.evaluator = e; },
   "removeListener(Landroid/animation/Animator$AnimatorListener;)V": function (this: JValueAnimator, l: unknown) {
     const i = this.animLs.indexOf(l); if (i >= 0) this.animLs.splice(i, 1);
   },
@@ -285,7 +279,12 @@ const vaMethods: NativeSpec["methods"] = {
   "getListeners()Ljava/util/ArrayList;": function (this: JValueAnimator) { return this.animLs.length ? newArrayList([...this.animLs]) : null; },
   "pause()V": function (this: JValueAnimator) { if (this.running && !this.paused) { this.paused = true; this.pausedAt = performance.now(); } },
   "resume()V": function (this: JValueAnimator) { if (this.paused) { this.paused = false; this.startT += performance.now() - this.pausedAt; } },
-  "isPaused()Z": function (this: JValueAnimator) { return this.paused ? 1 : 0; },
+  ...fieldSetters({ "setInterpolator(Landroid/animation/TimeInterpolator;)V": "interp",
+    "setInterpolator(Landroid/view/animation/Interpolator;)V": "interp",
+    "setEvaluator(Landroid/animation/TypeEvaluator;)V": "evaluator" }),
+  ...fieldGetters({ "getInterpolator()Landroid/animation/TimeInterpolator;": "interp", "getRepeatCount()I": "repeat",
+    "getRepeatMode()I": "repeatMode" }),
+  ...flagGetters({ "isPaused()Z": "paused" }),
   "reverse()V": async function (this: JValueAnimator) {
     if (this.running) { this.reversed = !this.reversed; this.startT = performance.now() - (this.durationMs - (performance.now() - this.startT)); return; }
     this.startReversed = true;
@@ -326,8 +325,6 @@ const vaMethods: NativeSpec["methods"] = {
   "setStartDelay(J)V": function (this: JValueAnimator, d: bigint) { this.delayMs = Number(d); },
   "getStartDelay()J": function (this: JValueAnimator) { return BigInt(this.delayMs); },
   "setTarget(Ljava/lang/Object;)V": function (this: JValueAnimator, t: unknown) { setTargetDeep(this, t); },
-  "setRepeatCount(I)V": function (this: JValueAnimator, n: number) { this.repeat = n; },
-  "setRepeatMode(I)V": function (this: JValueAnimator, m: number) { this.repeatMode = m; },
   "addUpdateListener(Landroid/animation/ValueAnimator$AnimatorUpdateListener;)V": function (this: JValueAnimator, l: unknown) {
     this.updateLs.push(l);
   },
@@ -368,10 +365,10 @@ const vaMethods: NativeSpec["methods"] = {
     }
   },
   "end()V": function (this: JValueAnimator) { this.running = false; },
-  "isRunning()Z": function (this: JValueAnimator) { return this.running ? 1 : 0; },
-  "isStarted()Z": function (this: JValueAnimator) { return this.running ? 1 : 0; },
   "getAnimatedValue()Ljava/lang/Object;": function (this: JValueAnimator) { return boxedCur(this); },
-  "getAnimatedFraction()F": function (this: JValueAnimator) { return this.frac; },
+  ...fieldSetters({ "setRepeatCount(I)V": "repeat", "setRepeatMode(I)V": "repeatMode" }),
+  ...flagGetters({ "isRunning()Z": "running", "isStarted()Z": "running" }),
+  ...fieldGetters({ "getAnimatedFraction()F": "frac" }),
   "static ofFloat([F)Landroid/animation/ValueAnimator;": (vals: Float32Array) => { const a = new JValueAnimator(); setNumKeys(a, vals, false); return a; },
   "static ofInt([I)Landroid/animation/ValueAnimator;": (vals: Int32Array) => { const a = new JValueAnimator(); setNumKeys(a, vals, true); return a; },
   "static ofArgb([I)Landroid/animation/ValueAnimator;": (vals: Int32Array) => {

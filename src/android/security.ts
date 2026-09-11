@@ -1,7 +1,7 @@
 // android.security.keystore: KeyGenParameterSpec (+Builder) and KeyProperties — the description
 // of a key the AndroidKeyStore KeyGenerator (jcrypto) generates under an alias.
 
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, fieldGetters, flagGetters } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 
 const strs = (a: string[]) => jarray(a.slice(), "Ljava/lang/String;");
@@ -16,24 +16,20 @@ export class JKeyGenSpec extends JObj {
   certificateNotBefore: unknown = null; certificateNotAfter: unknown = null;
 }
 const specGetters = {
-  "getKeystoreAlias()Ljava/lang/String;": function (this: JKeyGenSpec) { return this.alias; },
-  "getPurposes()I": function (this: JKeyGenSpec) { return this.purposes; },
-  "getKeySize()I": function (this: JKeyGenSpec) { return this.keySize; },
   "getBlockModes()[Ljava/lang/String;": function (this: JKeyGenSpec) { return strs(this.blockModes); },
   "getEncryptionPaddings()[Ljava/lang/String;": function (this: JKeyGenSpec) { return strs(this.paddings); },
   "getSignaturePaddings()[Ljava/lang/String;": function (this: JKeyGenSpec) { return strs(this.sigPaddings); },
   "getDigests()[Ljava/lang/String;": function (this: JKeyGenSpec) { return strs(this.digests); },
-  "isUserAuthenticationRequired()Z": function (this: JKeyGenSpec) { return this.userAuth ? 1 : 0; },
-  "getUserAuthenticationValidityDurationSeconds()I": function (this: JKeyGenSpec) { return this.authSeconds; },
-  "isRandomizedEncryptionRequired()Z": function (this: JKeyGenSpec) { return this.randomizedEncryption ? 1 : 0; },
-  "isStrongBoxBacked()Z": function (this: JKeyGenSpec) { return this.strongBox ? 1 : 0; },
-  "isUnlockedDeviceRequired()Z": function (this: JKeyGenSpec) { return this.unlockedDeviceRequired ? 1 : 0; },
-  "isInvalidatedByBiometricEnrollment()Z": function (this: JKeyGenSpec) { return this.invalidatedByEnrollment ? 1 : 0; },
-  "getKeyValidityStart()Ljava/util/Date;": function (this: JKeyGenSpec) { return this.keyValidityStart; },
-  "getKeyValidityForOriginationEnd()Ljava/util/Date;": function (this: JKeyGenSpec) { return this.keyValidityEnd; },
-  "getKeyValidityForConsumptionEnd()Ljava/util/Date;": function (this: JKeyGenSpec) { return this.keyValidityConsumptionEnd; },
-  "getAttestationChallenge()[B": function (this: JKeyGenSpec) { return this.attestation; },
-  "getUid()I": function (this: JKeyGenSpec) { return this.uid; },
+  ...fieldGetters({ "getKeystoreAlias()Ljava/lang/String;": "alias", "getPurposes()I": "purposes",
+    "getKeySize()I": "keySize", "getUserAuthenticationValidityDurationSeconds()I": "authSeconds",
+    "getKeyValidityStart()Ljava/util/Date;": "keyValidityStart",
+    "getKeyValidityForOriginationEnd()Ljava/util/Date;": "keyValidityEnd",
+    "getKeyValidityForConsumptionEnd()Ljava/util/Date;": "keyValidityConsumptionEnd",
+    "getAttestationChallenge()[B": "attestation", "getUid()I": "uid" }),
+  ...flagGetters({ "isUserAuthenticationRequired()Z": "userAuth",
+    "isRandomizedEncryptionRequired()Z": "randomizedEncryption", "isStrongBoxBacked()Z": "strongBox",
+    "isUnlockedDeviceRequired()Z": "unlockedDeviceRequired",
+    "isInvalidatedByBiometricEnrollment()Z": "invalidatedByEnrollment" }),
 };
 rt.register({ name: "android/security/keystore/KeyGenParameterSpec", ctor: JKeyGenSpec, ifaces: ["java/security/spec/AlgorithmParameterSpec"], methods: specGetters });
 

@@ -1,7 +1,7 @@
 // android.hardware: Sensor value classes and the listener interface apps implement.
 // SensorManager itself is a Context system service and lives with the others in app.ts.
 
-import { rt, JObj, stubs } from "../jvm/runtime";
+import { rt, JObj, stubs, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newArrayList } from "../jvm/natives/jutil";
 
@@ -16,12 +16,9 @@ rt.register({
     TYPE_PRESSURE: 6, TYPE_PROXIMITY: 8, TYPE_GRAVITY: 9, TYPE_LINEAR_ACCELERATION: 10, TYPE_ROTATION_VECTOR: 11, TYPE_ALL: -1,
   },
   methods: {
-    "getType()I": function (this: JSensor) { return this.type; },
-    "getName()Ljava/lang/String;": function (this: JSensor) { return this.sname; },
-    "getVendor()Ljava/lang/String;": function (this: JSensor) { return this.vendor; },
-    "getMaximumRange()F": function (this: JSensor) { return this.maxRange; },
-    "getResolution()F": function (this: JSensor) { return this.resolution; },
-    "getMinDelay()I": function (this: JSensor) { return this.minDelay; },
+    ...fieldGetters({ "getType()I": "type", "getName()Ljava/lang/String;": "sname",
+      "getVendor()Ljava/lang/String;": "vendor", "getMaximumRange()F": "maxRange", "getResolution()F": "resolution",
+      "getMinDelay()I": "minDelay" }),
   },
 });
 
@@ -45,9 +42,8 @@ rt.register({
   name: "android/view/InputEvent", ctor: JInputEvent, ifaces: ["android/os/Parcelable"],
   methods: {
     "getDevice()Landroid/view/InputDevice;": function (this: JInputEvent) { return inputDevice(this.deviceId); },
-    "getDeviceId()I": function (this: JInputEvent) { return this.deviceId; },
-    "getSource()I": function (this: JInputEvent) { return this.source; },
-    "setSource(I)V": function (this: JInputEvent, source: number) { this.source = source; },
+    ...fieldGetters({ "getDeviceId()I": "deviceId", "getSource()I": "source" }),
+    ...fieldSetters({ "setSource(I)V": "source" }),
     "isFromSource(I)Z": function (this: JInputEvent, source: number) { return (this.source & source) === source ? 1 : 0; },
   },
 });

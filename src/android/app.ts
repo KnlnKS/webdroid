@@ -7,7 +7,7 @@ import {
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "./os";
-import { type NativeSpec, rt, callSelf, JObj, maySuspend, stubs, noops } from "../jvm/runtime";
+import { type NativeSpec, rt, callSelf, JObj, maySuspend, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, attachView, findById, dispatchConfigurationChanged, invalidate } from "./view";
@@ -47,10 +47,8 @@ rt.register({
   methods: {
     "<init>(Ljava/lang/String;II)V": function (this: JTaskDescription, label: string | null, icon: number, color: number) { this.init(label, icon, color); },
     "<init>(Ljava/lang/String;Landroid/graphics/Bitmap;I)V": function (this: JTaskDescription, label: string | null, icon: JBitmap | null, color: number) { this.init(label, icon, color); },
-    "getLabel()Ljava/lang/String;": function (this: JTaskDescription) { return this.label; },
-    "getIcon()Landroid/graphics/Bitmap;": function (this: JTaskDescription) { return this.icon; },
-    "getIconResource()I": function (this: JTaskDescription) { return this.iconResource; },
-    "getPrimaryColor()I": function (this: JTaskDescription) { return this.primaryColor; },
+    ...fieldGetters({ "getLabel()Ljava/lang/String;": "label", "getIcon()Landroid/graphics/Bitmap;": "icon",
+      "getIconResource()I": "iconResource", "getPrimaryColor()I": "primaryColor" }),
   },
 });
 class JActivityOptions extends JObj { animationType = -1; }
@@ -144,7 +142,6 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   ...lifecycleCbMethods,
   "getWindowManager()Landroid/view/WindowManager;": function (this: JActivity) { return systemService(this, "window"); },
   "getIntent()Landroid/content/Intent;": function (this: JActivity) { return this.intent ?? (this.intent = new JIntent()); },
-  "setIntent(Landroid/content/Intent;)V": function (this: JActivity, i: JIntent) { this.intent = i; },
   "getLayoutInflater()Landroid/view/LayoutInflater;": function (this: JActivity) { return getInflater(this); },
   "getMenuInflater()Landroid/view/MenuInflater;": function (this: JActivity) {
     const m = new JMenuInflater();
@@ -250,7 +247,6 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "setTitle(I)V": maySuspend(function (this: JActivity, id: number) {
     callSelf(activityMethods, "setTitle(Ljava/lang/CharSequence;)V", this, resString(this.$host.res, id));
   }),
-  "getTitle()Ljava/lang/CharSequence;": function (this: JActivity) { return this.titleStr; },
   "getActionBar()Landroid/app/ActionBar;": async function (this: JActivity) {
     await ensureDecor(this);
     if (!this.actionBarObj) {
@@ -276,8 +272,6 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "finishAffinity()V": maySuspend(function (this: JActivity) { callSelf(activityMethods, "finish()V", this); }),
   "finishAfterTransition()V": maySuspend(function (this: JActivity) { callSelf(activityMethods, "finish()V", this); }),
-  "isFinishing()Z": function (this: JActivity) { return this.finished ? 1 : 0; },
-  "isDestroyed()Z": function (this: JActivity) { return this.finished ? 1 : 0; },
   "isTaskRoot()Z": function (this: JActivity) { return +(activityTransport.isTaskRoot?.(this) ?? false); },
   // AOSP's startActivityForResult only *starts* something; the result arrives later through
   // onActivityResult. Awaiting a system activity here would hold the serialized main-looper
@@ -298,7 +292,6 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "startActivityForResult(Landroid/content/Intent;ILandroid/os/Bundle;)V": maySuspend(function (this: JActivity, intent: JIntent, code: number) {
     return callSelf(activityMethods, "startActivityForResult(Landroid/content/Intent;I)V", this, intent, code);
   }),
-  "setResult(I)V": function (this: JActivity, c: number) { this.resultCode = c; },
   "setResult(ILandroid/content/Intent;)V": function (this: JActivity, c: number, d: JIntent) {
     this.resultCode = c;
     this.resultData = d;
@@ -308,12 +301,10 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     this.requestedOrientation = orientation;
     this.$host.setRequestedOrientation(this, orientation);
   },
-  "getRequestedOrientation()I": function (this: JActivity) { return this.requestedOrientation; },
   "getComponentName()Landroid/content/ComponentName;": function (this: JActivity) {
     return mkComponentName(this.$host.pkg, jclsNameOf(this));
   },
   "getLocalClassName()Ljava/lang/String;": function (this: JActivity) { return jclsNameOf(this); },
-  "getCallingActivity()Landroid/content/ComponentName;": function (this: JActivity) { return this.callingActivity; },
   "getCallingPackage()Ljava/lang/String;": function (this: JActivity) { return this.callingActivity?.pkg ?? null; },
   "getPreferences(I)Landroid/content/SharedPreferences;": function (this: JActivity) {
     return getPrefs(this.$host.pkg, jclsNameOf(this));
@@ -328,13 +319,17 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     }
     return this.fragMgr;
   },
-  "hasWindowFocus()Z": function (this: JActivity) { return this.hasWindowFocus ? 1 : 0; },
-  "isChangingConfigurations()Z": function (this: JActivity) { return this.changingConfigurations ? 1 : 0; },
   // Activity.isChild is only true for the long-dead ActivityGroup embedding; AppCompat asks it
   // before relaunching for a night-mode change.
   "isChild()Z": () => 0,
   "recreate()V": function (this: JActivity) { appHost?.recreateActivity(this); },
-  "getLastNonConfigurationInstance()Ljava/lang/Object;": function (this: JActivity) { return this.lastNonConfig; },
+  ...fieldSetters({ "setIntent(Landroid/content/Intent;)V": "intent", "setResult(I)V": "resultCode" }),
+  ...fieldGetters({ "getTitle()Ljava/lang/CharSequence;": "titleStr",
+    "getRequestedOrientation()I": "requestedOrientation",
+    "getCallingActivity()Landroid/content/ComponentName;": "callingActivity",
+    "getLastNonConfigurationInstance()Ljava/lang/Object;": "lastNonConfig" }),
+  ...flagGetters({ "isFinishing()Z": "finished", "isDestroyed()Z": "finished", "hasWindowFocus()Z": "hasWindowFocus",
+    "isChangingConfigurations()Z": "changingConfigurations" }),
   "getTaskId()I": function (this: JActivity) { return this.taskId || -1; },
   // The system's dialog goes in front of the activity: it pauses, the answer is recorded, and
   // it resumes before the result is delivered. Nobody is here to tap, so asking is what grants

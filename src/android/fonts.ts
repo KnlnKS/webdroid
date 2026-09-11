@@ -3,7 +3,7 @@
 // (each member a FontFace with its own weight/style, which is exactly how CSS selects within a
 // family); a Typeface names that family (plus fallbacks) with a weight and slant.
 
-import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, fieldGetters } from "../jvm/runtime";
 import { jarray, i8 } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { parseAXML, attr } from "./axml";
@@ -241,11 +241,9 @@ rt.register({
 rt.register({
   name: "android/graphics/fonts/Font", ctor: JFont,
   methods: {
-    "getStyle()Landroid/graphics/fonts/FontStyle;": function (this: JFont) { return this.style; },
-    "getTtcIndex()I": function (this: JFont) { return this.ttcIndex; },
     "getAxes()[Landroid/graphics/fonts/FontVariationAxis;": function (this: JFont) { return axisArray(this.axes); },
-    "getFile()Ljava/io/File;": function (this: JFont) { return this.file; },
-    "getSourceIdentifier()I": function (this: JFont) { return this.srcId; },
+    ...fieldGetters({ "getStyle()Landroid/graphics/fonts/FontStyle;": "style", "getTtcIndex()I": "ttcIndex",
+      "getFile()Ljava/io/File;": "file", "getSourceIdentifier()I": "srcId" }),
     "getBuffer()Ljava/nio/ByteBuffer;": maySuspend(function (this: JFont) {
       const b = this.bytes ?? new Uint8Array(0);
       return vcall(rt.link("java/nio/ByteBuffer").ctor, "wrap", "([B)Ljava/nio/ByteBuffer;", i8(b));

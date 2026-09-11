@@ -1,4 +1,4 @@
-import { JObj, rt, maySuspend, stubs } from "../jvm/runtime";
+import { JObj, rt, maySuspend, stubs, fieldGetters, flagGetters } from "../jvm/runtime";
 import { jarray, hexBytes } from "../jvm/abi";
 import { device } from "../shell/config";
 import type { JBundle } from "./os";
@@ -778,17 +778,13 @@ rt.register({
   name: "android/content/pm/ShortcutInfo", ctor: JShortcutInfo, ifaces: ["android/os/Parcelable"],
   statics: { SURFACE_LAUNCHER: 1 },
   methods: {
-    "getId()Ljava/lang/String;": function (this: JShortcutInfo) { return this.id; },
-    "getPackage()Ljava/lang/String;": function (this: JShortcutInfo) { return this.pkg; },
-    "getShortLabel()Ljava/lang/CharSequence;": function (this: JShortcutInfo) { return this.shortLabel; },
-    "getLongLabel()Ljava/lang/CharSequence;": function (this: JShortcutInfo) { return this.longLabel; },
-    "getDisabledMessage()Ljava/lang/CharSequence;": function (this: JShortcutInfo) { return this.disabledMessage; },
-    "getRank()I": function (this: JShortcutInfo) { return this.rank; },
     "getExtras()Landroid/os/PersistableBundle;": async function (this: JShortcutInfo) { return (await copyShortcut(this)).extras; },
     "getIntent()Landroid/content/Intent;": async function (this: JShortcutInfo) { return (await copyShortcut(this)).intents.at(-1) ?? null; },
     "getIntents()[Landroid/content/Intent;": async function (this: JShortcutInfo) { return jarray((await copyShortcut(this)).intents, "Landroid/content/Intent;"); },
-    "isDynamic()Z": function (this: JShortcutInfo) { return this.dynamic ? 1 : 0; },
-    "isLongLived()Z": function (this: JShortcutInfo) { return this.longLived ? 1 : 0; },
+    ...fieldGetters({ "getId()Ljava/lang/String;": "id", "getPackage()Ljava/lang/String;": "pkg",
+      "getShortLabel()Ljava/lang/CharSequence;": "shortLabel", "getLongLabel()Ljava/lang/CharSequence;": "longLabel",
+      "getDisabledMessage()Ljava/lang/CharSequence;": "disabledMessage", "getRank()I": "rank" }),
+    ...flagGetters({ "isDynamic()Z": "dynamic", "isLongLived()Z": "longLived" }),
     "isExcludedFromSurfaces(I)Z": function (this: JShortcutInfo, surfaces: number) { return this.excluded & surfaces ? 1 : 0; },
     ...stubs(0, "isPinned()Z", "isDeclaredInManifest()Z"),
     ...stubs(1, "isEnabled()Z"),
