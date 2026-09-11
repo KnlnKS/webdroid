@@ -1573,17 +1573,18 @@ function mkRecorder(node: JRenderNode): Ctx2D {
     __isRecorder: true,
     __record(fn: (c: Ctx2D) => void) { node.ops.push(fn); },
   };
+  const fns = new Map<PropertyKey, (...args: unknown[]) => unknown>();
   return new Proxy(base, {
     get(t, p) {
       if (p in t) return (t as Record<PropertyKey, unknown>)[p];
       const v = (octx as unknown as Record<PropertyKey, unknown>)[p];
-      if (typeof v === "function") {
-        return (...args: unknown[]) => {
-          node.ops.push((c) => { ((c as unknown as Record<PropertyKey, (...a: unknown[]) => unknown>)[p])(...args); });
-          return (v as (...a: unknown[]) => unknown).apply(octx, args);
-        };
-      }
-      return v;
+      if (typeof v !== "function") return v;
+      let w = fns.get(p);
+      if (!w) fns.set(p, w = (...args: unknown[]) => {
+        node.ops.push((c) => { ((c as unknown as Record<PropertyKey, (...a: unknown[]) => unknown>)[p])(...args); });
+        return (v as (...a: unknown[]) => unknown).apply(octx, args);
+      });
+      return w;
     },
     set(t, p, val) {
       node.ops.push((c) => { (c as unknown as Record<PropertyKey, unknown>)[p] = val; });

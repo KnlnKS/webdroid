@@ -554,7 +554,7 @@ const on = (desc: string) => {
 /** the trailing paint handle every nDraw* carries has to become the paint itself */
 const withPaint = (desc: string, arity: number) => {
   const fn = cm(desc);
-  return (h: bigint, ...a: unknown[]) => (fn as (...x: unknown[]) => unknown).apply(canvas(h), [...a.slice(0, arity), paint(a[arity] as bigint)]);
+  return (h: bigint, ...a: unknown[]) => { a[arity] = paint(a[arity] as bigint); return (fn as (...x: unknown[]) => unknown).apply(canvas(h), a); };
 };
 
 delegate("android/graphics/Canvas", {
@@ -603,6 +603,8 @@ delegate("android/graphics/Canvas", {
   ...noops("nSetCompatibilityVersion(I)V", "nSetDrawFilter(JJ)V", "nClipShader(JJI)V"),
 });
 
+const drawText = (h: bigint, s: string, x: number, y: number, pt: bigint) =>
+  cm("drawText(Ljava/lang/String;FFLandroid/graphics/Paint;)V").call(canvas(h), s as never, x as never, y as never, paint(pt) as never);
 delegate("android/graphics/BaseCanvas", {
   "nDrawColor(JII)V": (h: bigint, c: number) => on("drawColor(I)V")(h, c),
   "nDrawColor(JJJI)V": (h: bigint, _cs: bigint, c: bigint) => on("drawColor(I)V")(h, argbOfColorLong(c)),
@@ -618,17 +620,15 @@ delegate("android/graphics/BaseCanvas", {
   "nDrawLines(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, count: number, pt: bigint) =>
     cm("drawLines([FLandroid/graphics/Paint;)V").call(canvas(h), pts.subarray(off, off + count) as never, paint(pt) as never),
   "nDrawPoints(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, count: number, pt: bigint) => {
-    const c = canvas(h), p = paint(pt);
-    for (let i = 0; i + 1 < count; i += 2) cm("drawPoint(FFLandroid/graphics/Paint;)V").call(c, pts[off + i] as never, pts[off + i + 1] as never, p as never);
+    const c = canvas(h), p = paint(pt), draw = cm("drawPoint(FFLandroid/graphics/Paint;)V");
+    for (let i = 0; i + 1 < count; i += 2) draw.call(c, pts[off + i] as never, pts[off + i + 1] as never, p as never);
   },
-  "nDrawText(JLjava/lang/String;IIFFIJ)V": (h: bigint, s: string, start: number, end: number, x: number, y: number, _flags: number, pt: bigint) =>
-    cm("drawText(Ljava/lang/String;FFLandroid/graphics/Paint;)V").call(canvas(h), s.slice(start, end) as never, x as never, y as never, paint(pt) as never),
-  "nDrawText(J[CIIFFIJ)V": (h: bigint, c: Uint16Array, i: number, n: number, x: number, y: number, _flags: number, pt: bigint) =>
-    cm("drawText(Ljava/lang/String;FFLandroid/graphics/Paint;)V").call(canvas(h), charsToString(c, i, n) as never, x as never, y as never, paint(pt) as never),
+  "nDrawText(JLjava/lang/String;IIFFIJ)V": (h: bigint, s: string, start: number, end: number, x: number, y: number, _f: number, pt: bigint) => drawText(h, s.slice(start, end), x, y, pt),
+  "nDrawText(J[CIIFFIJ)V": (h: bigint, c: Uint16Array, i: number, n: number, x: number, y: number, _f: number, pt: bigint) => drawText(h, charsToString(c, i, n), x, y, pt),
   "nDrawTextRun(JLjava/lang/String;IIIIFFZJ)V": (h: bigint, s: string, start: number, end: number, _cs: number, _ce: number, x: number, y: number, _rtl: number, pt: bigint) =>
-    cm("drawText(Ljava/lang/String;FFLandroid/graphics/Paint;)V").call(canvas(h), s.slice(start, end) as never, x as never, y as never, paint(pt) as never),
+    drawText(h, s.slice(start, end), x, y, pt),
   "nDrawTextRun(J[CIIIIFFZJJ)V": (h: bigint, c: Uint16Array, i: number, n: number, _cs: number, _cc: number, x: number, y: number, _rtl: number, pt: bigint) =>
-    cm("drawText(Ljava/lang/String;FFLandroid/graphics/Paint;)V").call(canvas(h), charsToString(c, i, n) as never, x as never, y as never, paint(pt) as never),
+    drawText(h, charsToString(c, i, n), x, y, pt),
   "nDrawBitmap(JJFFJIII)V": (h: bigint, b: bigint, x: number, y: number, pt: bigint) =>
     cm("drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V").call(canvas(h), deref<JBitmap>(b) as never, x as never, y as never, (pt ? paint(pt) : null) as never),
   "nDrawBitmap(JJFFFFFFFFJII)V": (h: bigint, b: bigint, sl: number, st: number, sr: number, sb: number, dl: number, dt: number, dr: number, db: number, pt: bigint) =>
