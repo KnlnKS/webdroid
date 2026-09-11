@@ -6,17 +6,16 @@
 
 import { mem } from "./mem";
 import { hostLib, cstr, PTR, ldp, stp, calledMissing, type HostFn, type ArgReader } from "./host";
-import { gl as current, tables, put } from "../android/gl";
+import { gl as current, tables as T, put } from "../android/gl";
 import { yieldToLoop } from "./cpu";
 import { perf } from "../perf";
-import { glProbe } from "./gles1";
 import { rewriteTextureSwizzles, visibleUniforms, type SwizzleRewrite, type VisibleUniforms } from "./swizzle";
 const dec = new TextDecoder();
 export let gles3Procs: Record<string, HostFn> = {};
+export const glProbe = !!(globalThis as { __wdGlProbe?: boolean }).__wdGlProbe;
 
 type GL = WebGL2RenderingContext;
 const g = (): GL => { if (!current) throw new Error("GL call without a current context"); return current as GL; };
-const T = tables;
 let err = 0;                                  // an error we raised ourselves; glGetError reports it before WebGL's
 let unpackPbo = false, packPbo = false;
 const mapped = new WeakMap<object, { ptr: number; off: number; len: number; access: number }>();   // a mapping belongs to the buffer, not the target

@@ -8,7 +8,7 @@
 import { mem } from "./mem";
 import { hostLib, calledMissing, cstr, type HostFn, type HostRet, type ArgReader, bitsf } from "./host";
 import type { Cpu } from "./cpu";
-import { glCommon } from "./gles3";
+import { glCommon, glProbe } from "./gles3";
 import { gl } from "../android/gl";
 import { perf } from "../perf";
 
@@ -24,7 +24,6 @@ export function gles1String(context: GL, name: number): string | null {
 }
 
 /** getError probe after every GL entry point (perf.glErrors counts) */
-export const glProbe = !!(globalThis as { __wdGlProbe?: boolean }).__wdGlProbe;
 
 type M4 = Float32Array;
 const ident = (): M4 => { const m = new Float32Array(16); m[0] = m[5] = m[10] = m[15] = 1; return m; };
