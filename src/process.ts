@@ -13,6 +13,7 @@ import type { Install } from "./shell/install";
 import { installedPath, registerPackage } from "./android/pm";
 import { vfs } from "./jvm/natives/jio";
 import { mountSystemCertificates } from "./shell/cacerts";
+import { hexBytes, u8 } from "./jvm/abi";
 
 const params = new URLSearchParams(location.search), pid = Number(params.get("pid")), broker = processBroker();
 rt.auditNatives = params.get("natcheck") === "1";
@@ -51,21 +52,21 @@ try {
     if ("index" in source) {
       const packed = new PackedArchive(source.index, source.base, source);
       await packed.prepare(snapshot.pkg === data.pkg);
-      archive = packageArchive(packed.zip, source.index.certificates.map((c) => Uint8Array.from(c.match(/../g)!, (b) => parseInt(b, 16))));
+      archive = packageArchive(packed.zip, source.index.certificates.map(hexBytes));
       packedArchives.set(path, packed); vfs.mount(path, packed);
       if (snapshot.pkg === data.pkg) {
         boot = { zip: packed.zip, base: packed, lazyEntries: new Map(), splits: [] };
         rt.classpathSource = packed;
       }
     } else {
-      const bytes = new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+      const bytes = u8(source);
       archive = await parsePackageArchive(bytes); vfs.write(path, bytes);
       if (snapshot.pkg === data.pkg) boot = bytes;
     }
     const record = registerPackage(archive, path, snapshot.uid);
     record.system = snapshot.system;
     for (const grant of snapshot.grants) record.grants.add(grant);
-    record.compatibilityCertificates = snapshot.signatures?.map((s) => new Uint8Array(s.buffer, s.byteOffset, s.byteLength)) ?? null;
+    record.compatibilityCertificates = snapshot.signatures?.map((s) => u8(s)) ?? null;
   }
   const endpoint = connectProcess();
   if (!boot) throw new Error("Process package unavailable");

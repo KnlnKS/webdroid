@@ -92,7 +92,7 @@ async function vpaEnd(this: JVPA, cancelled: boolean) {
 }
 function vpaAnim(a: JVPA): unknown {
   if (!a.anim) {
-    const o = new (rt.link("android/animation/ValueAnimator").ctor)();
+    const o = rt.make("android/animation/ValueAnimator");
     o.durationMs = a.durationMs; o.delayMs = a.delayMs;
     a.anim = o;
   }

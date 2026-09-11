@@ -11,7 +11,7 @@ import { rt, JObj, maySuspend, type NativeSpec } from "../runtime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
 import { stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
-import { jarray, strArray, dotName, utf8 } from "../abi";
+import { jarray, strArray, dotName, utf8, i8, u8 } from "../abi";
 import { vfs, type JInputStream, type JOutputStream } from "./jio";
 import { Relay } from "../../shell/relay";
 
@@ -27,7 +27,7 @@ class JSocketFactory extends JObj {}
 const socketFactory = new JSocketFactory();
 /** a connected socket of the given class (SSLSocket's own <init> turns tls on) */
 async function dial(cls: string, host: string, port: number): Promise<JSocket> {
-  const s = new (rt.link(cls).ctor)() as JSocket;
+  const s = rt.make(cls) as JSocket;
   s.host = host ?? ""; s.port = port;
   if (cls !== "java/net/Socket") s.tls = true;
   await s.open();
@@ -52,7 +52,7 @@ rt.register({
     // the plain connection is dropped, which is invisible because nothing has been written yet.
     "createSocket(Ljava/net/Socket;Ljava/lang/String;IZ)Ljava/net/Socket;":
       function (plain: JSocket, host: string, port: number, autoClose: number) {
-        const s = new (rt.link("javax/net/ssl/SSLSocket").ctor)() as JSocket;
+        const s = rt.make("javax/net/ssl/SSLSocket") as JSocket;
         s.host = host ?? plain?.host ?? ""; s.port = port || plain?.port || 443; s.tls = true;
         if (autoClose && plain) { plain.relay?.close(); plain.relay = null; plain.closed = 1; }
         return s;
@@ -88,7 +88,7 @@ rt.register({
   name: "java/net/Authenticator", ctor: class extends JObj {},
   methods: { "<init>()V": function () {} },
 });
-rt.register({ name: "java/net/Authenticator$RequestorType", ctor: class extends JObj {} });
+rt.markers("java/net/Authenticator$RequestorType");
 
 class JSSLContext extends JObj {}
 let defaultSSLContext: JSSLContext | null = null;
@@ -102,7 +102,7 @@ rt.register({
     },
     "static getInstance(Ljava/lang/String;)Ljavax/net/ssl/SSLContext;": () => new JSSLContext(),
     "init([Ljavax/net/ssl/KeyManager;[Ljavax/net/ssl/TrustManager;Ljava/security/SecureRandom;)V": () => {},
-    "getSocketFactory()Ljavax/net/ssl/SSLSocketFactory;": () => new (rt.link("javax/net/ssl/SSLSocketFactory").ctor)(),
+    "getSocketFactory()Ljavax/net/ssl/SSLSocketFactory;": () => rt.make("javax/net/ssl/SSLSocketFactory"),
   },
 });
 
@@ -159,7 +159,7 @@ rt.register({
     "static getNetworkInterfaces()Ljava/util/Enumeration;": () => mkIter([new JNetworkInterface()]),
   },
 });
-rt.register({ name: "java/net/SocketAddress", ctor: class extends JObj {} });
+rt.markers("java/net/SocketAddress");
 class JInetSocketAddress extends JObj { host = ""; port = 0; addr: JInetAddress | null = null; }
 rt.register({
   name: "java/net/InetSocketAddress", ctor: JInetSocketAddress, sup: "java/net/SocketAddress",
@@ -227,10 +227,10 @@ const socketMethods: NativeSpec["methods"] = {
   "connect(Ljava/net/SocketAddress;)V": socketConnect,
   "connect(Ljava/net/SocketAddress;I)V": socketConnect,
   "getInputStream()Ljava/io/InputStream;": maySuspend(function (this: JSocket) {
-    const o = new (rt.link("webdroid/SocketInputStream").ctor)() as JSocketIn; o.s = this; return o;
+    const o = rt.make("webdroid/SocketInputStream") as JSocketIn; o.s = this; return o;
   }),
   "getOutputStream()Ljava/io/OutputStream;": function (this: JSocket) {
-    const o = new (rt.link("webdroid/SocketOutputStream").ctor)() as JSocketOut; o.s = this; return o;
+    const o = rt.make("webdroid/SocketOutputStream") as JSocketOut; o.s = this; return o;
   },
   "close()V": function (this: JSocket) { this.closed = 1; this.relay?.close(); this.relay = null; },
   "isClosed()Z": function (this: JSocket) { return this.closed; },
@@ -265,10 +265,10 @@ rt.register({
       return n < 0 ? -1 : b[0];
     },
     "read([B)I": maySuspend(function (this: JSocketIn, out: Int8Array) {
-      return socketRead(this.s, new Uint8Array(out.buffer, out.byteOffset, out.length), 0, out.length);
+      return socketRead(this.s, u8(out), 0, out.length);
     }),
     "read([BII)I": maySuspend(function (this: JSocketIn, out: Int8Array, off: number, len: number) {
-      return socketRead(this.s, new Uint8Array(out.buffer, out.byteOffset, out.length), off, len);
+      return socketRead(this.s, u8(out), off, len);
     }),
     "available()I": function (this: JSocketIn) { return this.s.relay?.available() ?? 0; },
     "close()V": function (this: JSocketIn) { this.s.relay?.close(); },
@@ -280,10 +280,10 @@ rt.register({
     "<init>()V": function () {},
     "write(I)V": maySuspend(function (this: JSocketOut, b: number) { return socketWrite(this.s, new Uint8Array([b & 0xff])); }),
     "write([B)V": maySuspend(function (this: JSocketOut, b: Int8Array) {
-      return socketWrite(this.s, new Uint8Array(b.buffer, b.byteOffset, b.length));
+      return socketWrite(this.s, u8(b));
     }),
     "write([BII)V": maySuspend(function (this: JSocketOut, b: Int8Array, off: number, len: number) {
-      return socketWrite(this.s, new Uint8Array(b.buffer, b.byteOffset + off, len));
+      return socketWrite(this.s, u8(b, off, len));
     }),
     "flush()V": () => {},
     "close()V": function (this: JSocketOut) { this.s.relay?.close(); },
@@ -304,7 +304,7 @@ rt.register({
     "<init>()V": function (this: JSSLSocket) { this.tls = true; },
     "startHandshake()V": async function (this: JSSLSocket) { await this.open(); },
     "getSession()Ljavax/net/ssl/SSLSession;": function (this: JSSLSocket) {
-      const s = new (rt.link("webdroid/SSLSessionImpl").ctor)() as JSSLSession;
+      const s = rt.make("webdroid/SSLSessionImpl") as JSSLSession;
       s.host = this.host; s.port = this.port;
       return s;
     },
@@ -317,7 +317,7 @@ rt.register({
     "getSupportedCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
     "setHandshakeTimeout(I)V": () => {},
     "addHandshakeCompletedListener(Ljavax/net/ssl/HandshakeCompletedListener;)V": () => {},
-    "getSSLParameters()Ljavax/net/ssl/SSLParameters;": () => new (rt.link("javax/net/ssl/SSLParameters").ctor)(),
+    "getSSLParameters()Ljavax/net/ssl/SSLParameters;": () => rt.make("javax/net/ssl/SSLParameters"),
     "setSSLParameters(Ljavax/net/ssl/SSLParameters;)V": () => {},
     // The relay opens TLS without ALPN, so the server answers as HTTP/1.1. Saying so is
     // load-bearing: a client told "h2" would send an HTTP/2 preface down an HTTP/1.1 connection.
@@ -360,7 +360,7 @@ rt.register({
     "getPeerHost()Ljava/lang/String;": function (this: JSSLSession) { return this.host; },
     "getPeerPort()I": function (this: JSSLSession) { return this.port; },
     "getPeerCertificates()[Ljava/security/cert/Certificate;": function (this: JSSLSession) {
-      const c = new (rt.link("java/security/cert/X509Certificate").ctor)() as JX509;
+      const c = rt.make("java/security/cert/X509Certificate") as JX509;
       c.host = this.host;
       return jarray([c], "Ljava/security/cert/Certificate;");
     },
@@ -458,9 +458,9 @@ class JURL extends JObj {
   spec = ""; u!: URL;
   open(): JURLConnection {
     const https = this.u.protocol === "https:";
-    if (this.u.protocol === "jar:") { const c = new (rt.link("java/net/JarURLConnection").ctor)() as JURLConnection; c.url = this; return c; }
+    if (this.u.protocol === "jar:") { const c = rt.make("java/net/JarURLConnection") as JURLConnection; c.url = this; return c; }
     if (!https && this.u.protocol !== "http:") throw rt.unimplemented("URL.openConnection " + this.u.protocol);
-    const c = new (rt.link(https ? "javax/net/ssl/HttpsURLConnection" : "java/net/HttpURLConnection").ctor)() as JURLConnection;
+    const c = rt.make(https ? "javax/net/ssl/HttpsURLConnection" : "java/net/HttpURLConnection") as JURLConnection;
     c.url = this;
     return c;
   }
@@ -521,7 +521,7 @@ rt.register({
       if (this.u.protocol === "file:") {
         const bytes = await vfs.readFile(decodeURIComponent(this.u.pathname));
         if (!bytes) throw rt.mkThrowable("java/io/FileNotFoundException", this.spec);
-        return newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length));
+        return newObj("java/io/ByteArrayInputStream", "([B)V", i8(bytes));
       }
       return vcall(this.open(), "getInputStream", "()Ljava/io/InputStream;");
     },
@@ -549,7 +549,7 @@ const statusLine = (r: HttpRes) => "HTTP/1.1 " + r.status + (r.msg ? " " + r.msg
 const PUT = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 /** Map<String, List<String>> as URLConnection and CookieHandler hand headers out (a null key is legal: the status line) */
 async function headerMap(groups: Iterable<[string | null, string[]]>) {
-  const m = new (rt.link("java/util/HashMap").ctor)();
+  const m = rt.make("java/util/HashMap");
   for (const [k, v] of groups) await vcall(m, "put", PUT, k, newArrayList(v));
   return m;
 }
@@ -616,7 +616,7 @@ class JURLConnection extends JObj {
   }
   stream(): JInputStream {
     if (!this.inStream) {
-      this.inStream = new (rt.link("java/io/ByteArrayInputStream").ctor)() as JInputStream;
+      this.inStream = rt.make("java/io/ByteArrayInputStream") as JInputStream;
       this.inStream.buf = this.res!.body;
     }
     return this.inStream;
@@ -655,7 +655,7 @@ rt.register({
     "getOutputStream()Ljava/io/OutputStream;": function (this: JURLConnection) {
       if (!this.doOut) throw rt.mkThrowable("java/net/ProtocolException", "cannot write to a URLConnection if doOutput=false - call setDoOutput(true)");
       if (this.method === "GET") this.method = "POST";   // a GET that writes a body becomes a POST (OpenJDK and AOSP alike)
-      return this.out ??= new (rt.link("java/io/OutputStream").ctor)() as JOutputStream;
+      return this.out ??= rt.make("java/io/OutputStream") as JOutputStream;
     },
     "setRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JURLConnection, k: string | null, v: string) {
       if (k === null) throw rt.mkThrowable("java/lang/NullPointerException", "key is null");
@@ -780,7 +780,7 @@ rt.register({
   statics: { ACCEPT_ALL: acceptAll, ACCEPT_NONE: acceptNone, ACCEPT_ORIGINAL_SERVER: acceptOriginal },
   methods: { "shouldAccept(Ljava/net/URI;Ljava/net/HttpCookie;)Z": function (this: JCookiePolicy) { return this.accept; } },
 });
-rt.register({ name: "java/net/CookieStore", ctor: class extends JObj {} });
+rt.markers("java/net/CookieStore");
 class JCookieStore extends JObj { jar = new Map<string, Map<string, string>>(); }
 rt.register({
   name: "webdroid/CookieStore", ctor: JCookieStore, ifaces: ["java/net/CookieStore"],

@@ -122,9 +122,8 @@ for (const name of ["android/widget/MultiAutoCompleteTextView",
     },
   });
 }
-rt.register({ name: "android/widget/SearchView$OnQueryTextListener", ctor: class extends JObj {} });
-rt.register({ name: "android/widget/FilterQueryProvider", ctor: class extends JObj {} });
-rt.register({ name: "android/widget/Filterable", ctor: class extends JObj {} });
+rt.markers("android/widget/SearchView$OnQueryTextListener", "android/widget/FilterQueryProvider",
+  "android/widget/Filterable");
 rt.register({ name: "android/widget/Filter", ctor: class extends JObj {},
   methods: { "<init>()V": function () {}, "filter(Ljava/lang/CharSequence;)V": () => {},
     "filter(Ljava/lang/CharSequence;Landroid/widget/Filter$FilterListener;)V": () => {} } });

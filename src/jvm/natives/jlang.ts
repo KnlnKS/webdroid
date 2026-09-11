@@ -6,7 +6,7 @@ import { parkTimeout, unparkTimeout } from "../yield";
 import { directionality } from "../bidi";
 import { encodeString } from "../charset";
 import { javaClassSets } from "../regex-sets";
-import { mangleMethod, jmethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8 } from "../abi";
+import { mangleMethod, jmethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 
 function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => unknown {
   const fn = obj[mangleMethod(name, desc)] ?? rt.proxyMethod?.(obj, name, desc);
@@ -361,7 +361,7 @@ const bootLoader = new JClassLoader();
 /** a classpath entry as an InputStream, or null when the apk has no such file */
 export async function classpathStream(path: string, runtime: Runtime = rt): Promise<unknown> {
   const bytes = await runtime.readClasspath(path);
-  return bytes ? newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length)) : null;
+  return bytes ? newObj("java/io/ByteArrayInputStream", "([B)V", i8(bytes)) : null;
 }
 
 export class JThrowable extends JObj {
@@ -546,14 +546,11 @@ for (const [i, ext] of [["java/lang/Runnable"], ["java/lang/Comparable"], ["java
 
 // ── arrays: Object-typed call sites (Kotlin generics) dispatch mangled Object
 // methods directly on JS arrays — give every array prototype the basics
-for (const proto of [Array.prototype, Int8Array.prototype, Uint8Array.prototype, Int16Array.prototype,
-  Uint16Array.prototype, Int32Array.prototype, Float32Array.prototype, Float64Array.prototype,
-  BigInt64Array.prototype] as object[]) {
+for (const proto of [Array.prototype, ...Object.values(PRIM_ARRAYS).map((c) => c.prototype)] as object[]) {
   for (const [sig, name] of [["getClass()Ljava/lang/Class;", "getClass"], ["hashCode()I", "hashCode"],
     ["toString()Ljava/lang/String;", "toString"], ["equals(Ljava/lang/Object;)Z", "equals"],
     ["clone()Ljava/lang/Object;", "clone"]] as [string, string][]) {
-    const paren = sig.indexOf("(");
-    Object.defineProperty(proto, mangleMethod(sig.slice(0, paren), sig.slice(paren)), {
+    Object.defineProperty(proto, mangleMethod(...splitSig(sig)), {
       value: function (this: unknown, other?: unknown) { return name === "equals" ? (this === other ? 1 : 0) : rt.arrCall(this, name); },
       writable: true, configurable: true, enumerable: false,
     });
@@ -562,8 +559,7 @@ for (const proto of [Array.prototype, Int8Array.prototype, Uint8Array.prototype,
 
 // ── String (patch JS String.prototype with mangled methods)
 function sm(sig: string, fn: (this: string, ...a: any[]) => unknown) {
-  const paren = sig.indexOf("(");
-  Object.defineProperty(String.prototype, mangleMethod(sig.slice(0, paren), sig.slice(paren)), {
+  Object.defineProperty(String.prototype, mangleMethod(...splitSig(sig)), {
     value: fn, writable: true, configurable: true, enumerable: false,
   });
 }
@@ -1575,7 +1571,7 @@ rt.register({
     "initialValue()Ljava/lang/Object;": function () { return null; },
     "static withInitial(Ljava/util/function/Supplier;)Ljava/lang/ThreadLocal;": (sup: unknown) => {
       if (sup == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      const t = new (rt.link("webdroid/SuppliedThreadLocal").ctor)();
+      const t = rt.make("webdroid/SuppliedThreadLocal");
       t.supplier = sup;
       return t;
     },
@@ -1638,7 +1634,7 @@ export function mkEnumSet(cls: string, names: string[], extra: NativeSpec["metho
   return vals;
 }
 
-rt.register({ name: "java/lang/Thread$UncaughtExceptionHandler", ctor: class extends JObj {} });
+rt.markers("java/lang/Thread$UncaughtExceptionHandler");
 mkEnumSet("java/lang/Thread$State", ["NEW", "RUNNABLE", "BLOCKED", "WAITING", "TIMED_WAITING", "TERMINATED"]);
 
 // java.lang.Character.UnicodeScript. Java's constant names ARE Unicode's script names, and the

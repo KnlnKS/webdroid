@@ -490,11 +490,11 @@ rt.register({
   methods: {
     "static loadAnimation(Landroid/content/Context;I)Landroid/view/animation/Animation;": () => new JAnimation(),
     "static loadInterpolator(Landroid/content/Context;I)Landroid/view/animation/Interpolator;": () =>
-      new (rt.link("android/view/animation/LinearInterpolator").ctor)(),
+      rt.make("android/view/animation/LinearInterpolator"),
     "static currentAnimationTimeMillis()J": () => BigInt(Math.floor(performance.now())),
   },
 });
-rt.register({ name: "android/view/animation/Animation$AnimationListener", ctor: class extends JObj {} });
+rt.markers("android/view/animation/Animation$AnimationListener");
 
 const DOUBLE_TAP_TIMEOUT = 300, DOUBLE_TAP_MIN_TIME = 40, LONG_PRESS_TIMEOUT = 450;
 type PendingTap = { down: JMotionEvent; up: JMotionEvent | null; deferred: boolean; cancelled: boolean; timer: ReturnType<typeof setTimeout> };
@@ -615,8 +615,7 @@ rt.register({
     "onDoubleTapEvent(Landroid/view/MotionEvent;)Z": () => 0,
   },
 });
-rt.register({ name: "android/view/GestureDetector$OnGestureListener", ctor: class extends JObj {} });
-rt.register({ name: "android/view/GestureDetector$OnDoubleTapListener", ctor: class extends JObj {} });
+rt.markers("android/view/GestureDetector$OnGestureListener", "android/view/GestureDetector$OnDoubleTapListener");
 
 // ── GestureStore/GestureLibrary — stubbed (legacy, sometimes touched by old ad SDKs)
 rt.register({

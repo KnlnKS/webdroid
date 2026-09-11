@@ -1106,7 +1106,7 @@ const viewMethods: NativeSpec["methods"] = {
   }),
   "setFocusedByDefault(Z)V": () => {},
   "getImportantForAutofill()I": () => 0,
-  "getAutofillId()Landroid/view/autofill/AutofillId;": () => new (rt.link("android/view/autofill/AutofillId").ctor)(),
+  "getAutofillId()Landroid/view/autofill/AutofillId;": () => rt.make("android/view/autofill/AutofillId"),
   "getBaseline()I": () => -1,
   "hasOnClickListeners()Z": function (this: JView) { return this.clickL ? 1 : 0; },
   "setKeepScreenOn(Z)V": () => {},
@@ -1858,7 +1858,7 @@ function getVTO(v: JView): JVTO {
 function fireScrollChanged(v: JView) { void getVTO(v).dispatchScrollChanged(); }
 class JA11yAction extends JObj { actionId = 0; label: string | null = null; }
 rt.register({ name: "android/view/accessibility/AccessibilityNodeInfo", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable"] });
-rt.register({ name: "android/view/accessibility/AccessibilityRecord", ctor: class extends JObj {} });
+rt.markers("android/view/accessibility/AccessibilityRecord");
 rt.register({
   name: "android/view/accessibility/AccessibilityNodeInfo$AccessibilityAction", ctor: JA11yAction,
   methods: {
@@ -1870,7 +1870,7 @@ rt.register({
     "getLabel()Ljava/lang/CharSequence;": function (this: JA11yAction) { return this.label; },
   },
 });
-rt.register({ name: "android/view/autofill/AutofillId", ctor: class extends JObj {} });
+rt.markers("android/view/autofill/AutofillId");
 rt.register({
   name: "android/view/TouchDelegate", ctor: class extends JObj {},
   methods: {
@@ -2080,10 +2080,9 @@ rt.register({
     "cleanupLayoutState(Landroid/view/View;)V": (c: JView) => { c.layoutRequested = false; },
     ...viewMethods, ...vgMethods },
 });
-rt.register({ name: "android/view/ViewParent", ctor: class extends JObj {} });
-rt.register({ name: "android/view/ViewManager", ctor: class extends JObj {} });
+rt.markers("android/view/ViewParent", "android/view/ViewManager");
 // apps `implements` this to watch a ViewGroup's addView/removeView traffic
-rt.register({ name: "android/view/ViewGroup$OnHierarchyChangeListener", ctor: class extends JObj {} });
+rt.markers("android/view/ViewGroup$OnHierarchyChangeListener");
 // ViewOutlineProvider: abstract outline strategy (View.setOutlineProvider). Nothing in the
 // draw pipeline consumes an Outline's shape yet (no clip/shadow rendering exists), so this
 // only has to link and answer getOutline() correctly in isolation — same bar as Outline

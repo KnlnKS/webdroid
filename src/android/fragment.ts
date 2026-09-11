@@ -30,7 +30,7 @@ async function runFragmentAdd(fm: JFragmentManager, frag: JFragment, containerId
   frag.attachedView = view;
   if (view && container) {
     if (!view.lp) {
-      const lp = new (rt.link("android/widget/FrameLayout$LayoutParams").ctor)();
+      const lp = rt.make("android/widget/FrameLayout$LayoutParams");
       lp.width = -1; lp.height = -1;
       view.lp = lp;
     }
@@ -92,7 +92,7 @@ rt.register({
   name: "android/app/FragmentManager", ctor: JFragmentManager,
   methods: {
     "beginTransaction()Landroid/app/FragmentTransaction;": function (this: JFragmentManager) {
-      const tx = new (rt.link("android/app/FragmentTransaction").ctor)() as JFragmentTransaction;
+      const tx = rt.make("android/app/FragmentTransaction") as JFragmentTransaction;
       tx.fm = this;
       return tx;
     },

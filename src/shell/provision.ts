@@ -10,6 +10,7 @@ import { JIntent, componentState, mkComponentName } from "../android/intent";
 import { packages } from "../android/packages";
 import { serviceTransport } from "../android/runningservices";
 import { box, JBool } from "../jvm/natives/jlang";
+import { hexBytes } from "../jvm/abi";
 
 let ready: Promise<void> | null = null;
 export function provisionPackages(): Promise<void> {
@@ -22,7 +23,7 @@ export function provisionPackages(): Promise<void> {
     if (index.version !== 1 || index.sha256 !== spec.sha256) throw new Error(`System package source mismatch: ${spec.file}`);
     const packed = new PackedArchive(index, "/vendor/microg/");
     await packed.prepare();
-    const archive = packageArchive(packed.zip, index.certificates.map((c) => Uint8Array.from(c.match(/../g)!, (b) => parseInt(b, 16))));
+    const archive = packageArchive(packed.zip, index.certificates.map(hexBytes));
     if (archive.pkg !== spec.pkg) throw new Error(`System package identity mismatch: ${spec.file}`);
     const record = registerPackage(archive);
     record.system = true;
@@ -36,7 +37,7 @@ export function provisionPackages(): Promise<void> {
     const value = metadata && attr(metadata, "value");
     const signature = value?.type === TV.REFERENCE ? resString(record.res, value.data) : value?.str;
     if (!signature || !/^(?:[a-f\d]{2})+$/i.test(signature)) throw new Error(`Invalid compatibility signature: ${spec.file}`);
-    record.compatibilityCertificates = [Uint8Array.from(signature.match(/../g)!, (byte) => parseInt(byte, 16))];
+    record.compatibilityCertificates = [hexBytes(signature)];
     packedArchives.set(installedPath(record.pkg), packed);
     vfs.mount(installedPath(record.pkg), packed);
   })).then(() => {});

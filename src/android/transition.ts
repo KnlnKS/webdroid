@@ -144,7 +144,7 @@ rt.register({
     // AOSP: sequential Fade(OUT) → ChangeBounds → Fade(IN)
     "<init>()V": function (this: JTransitionSet) {
       this.ordering = 1;
-      for (const n of ["Fade", "ChangeBounds", "Fade"]) this.kids.push(new (rt.link("android/transition/" + n).ctor)() as JTransition);
+      for (const n of ["Fade", "ChangeBounds", "Fade"]) this.kids.push(rt.make("android/transition/" + n) as JTransition);
     },
   },
 });

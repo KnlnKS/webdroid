@@ -3,12 +3,13 @@ import { newObj, vcall } from "../jvm/natives/jlang";
 import { type JFile, readStreamFully } from "../jvm/natives/jio";
 import type { JBuffer } from "../jvm/natives/jnio";
 import { decodeBytes } from "./graphics";
+import { u8 } from "../jvm/abi";
 
 class JImageSource extends JObj { read!: () => Promise<Uint8Array>; }
 class JImageInfo extends JObj { size: unknown = null; }
 class JImageDecoder extends JObj { width = 0; height = 0; unpremultiplied = false; }
 function streamSource(open: () => Promise<unknown>): JImageSource {
-  const source = new (rt.link("android/graphics/ImageDecoder$Source").ctor)() as JImageSource;
+  const source = rt.make("android/graphics/ImageDecoder$Source") as JImageSource;
   source.read = async () => {
     const stream = await open();
     try { return await readStreamFully(stream); }
@@ -17,11 +18,11 @@ function streamSource(open: () => Promise<unknown>): JImageSource {
   return source;
 }
 async function decode(source: JImageSource, listener: unknown) {
-  const decoder = new (rt.link("android/graphics/ImageDecoder").ctor)() as JImageDecoder;
+  const decoder = rt.make("android/graphics/ImageDecoder") as JImageDecoder;
   try {
     const bitmap = await decodeBytes(await source.read(), null, async (width, height) => {
       decoder.width = width; decoder.height = height;
-      const info = new (rt.link("android/graphics/ImageDecoder$ImageInfo").ctor)() as JImageInfo;
+      const info = rt.make("android/graphics/ImageDecoder$ImageInfo") as JImageInfo;
       info.size = await newObj("android/util/Size", "(II)V", width, height);
       if (listener) await vcall(listener, "onHeaderDecoded",
         "(Landroid/graphics/ImageDecoder;Landroid/graphics/ImageDecoder$ImageInfo;Landroid/graphics/ImageDecoder$Source;)V", decoder, info, source);
@@ -53,8 +54,8 @@ rt.register({ name: "android/graphics/ImageDecoder", ctor: JImageDecoder, method
   "static createSource(Ljava/util/concurrent/Callable;)Landroid/graphics/ImageDecoder$Source;": maySuspend((callable: unknown) =>
     streamSource(async () => vcall(await vcall(callable, "call", "()Ljava/lang/Object;"), "createInputStream", "()Ljava/io/FileInputStream;"))),
   "static createSource(Ljava/nio/ByteBuffer;)Landroid/graphics/ImageDecoder$Source;": (buffer: JBuffer) => {
-    const view = buffer.dv, bytes = new Uint8Array(view.buffer, view.byteOffset + buffer.pos, buffer.lim - buffer.pos);
-    const source = new (rt.link("android/graphics/ImageDecoder$Source").ctor)() as JImageSource;
+    const view = buffer.dv, bytes = u8(view, buffer.pos, buffer.lim - buffer.pos);
+    const source = rt.make("android/graphics/ImageDecoder$Source") as JImageSource;
     source.read = async () => bytes;
     return source;
   },

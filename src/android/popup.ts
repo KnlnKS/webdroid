@@ -77,7 +77,7 @@ class PopupMenuView extends JView {
 // android.widget.PopupMenu.OnMenuItemClickListener — pure interface. PopupMenu below already
 // vcalls onMenuItemClick(MenuItem)Z from the pick handler; this only lets app classes declare
 // `implements` on it.
-rt.register({ name: "android/widget/PopupMenu$OnMenuItemClickListener", ctor: class extends JObj {} });
+rt.markers("android/widget/PopupMenu$OnMenuItemClickListener");
 
 rt.register({
   name: "webdroid/PopupMenuView", ctor: PopupMenuView, sup: "android/view/View",
@@ -177,7 +177,7 @@ rt.register({
 // ── android.widget.PopupWindow: content wrapped in a decor FrameLayout (AOSP's PopupDecorView +
 // PopupBackgroundView collapsed into one) that carries the popup background and turns the
 // window's mWidth/mHeight into the content's measure specs.
-rt.register({ name: "android/widget/PopupWindow$OnDismissListener", ctor: class extends JObj {} });
+rt.markers("android/widget/PopupWindow$OnDismissListener");
 
 const M_dispatchTouch = mangleMethod("dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z");
 const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");

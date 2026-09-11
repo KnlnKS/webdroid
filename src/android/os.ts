@@ -83,9 +83,9 @@ rt.register({
 // A callback interface an app implements has to be registered or its class cannot link, and
 // Runtime.link auto-stubs it and poisons everything downstream. Nothing calls it through this
 // name -- addIdleHandler dispatches dynamically -- which is exactly why it was missed.
-rt.register({ name: "android/os/MessageQueue$IdleHandler", ctor: class extends JObj {} });
+rt.markers("android/os/MessageQueue$IdleHandler");
 
-rt.register({ name: "android/os/Handler$Callback", ctor: class extends JObj {} });
+rt.markers("android/os/Handler$Callback");
 defineException("android/os/RemoteException", "java/lang/Exception");
 defineException("android/os/DeadObjectException", "android/os/RemoteException");
 
@@ -367,14 +367,14 @@ rt.register({
       ["permitNonSdkApiUsage()", "permitUnsafeIntentLaunch()", "penaltyDeath()", "penaltyDeathOnCleartextNetwork()", "penaltyDeathOnFileUriExposure()", "penaltyDropBox()", "penaltyLog()",
         "penaltyListener(Ljava/util/concurrent/Executor;Landroid/os/StrictMode$OnVmViolationListener;)", "setClassInstanceLimit(Ljava/lang/Class;I)"]),
     "android/os/StrictMode$VmPolicy");
-  const threadPolicy = () => new (rt.link("android/os/StrictMode$ThreadPolicy").ctor)();
+  const threadPolicy = () => rt.make("android/os/StrictMode$ThreadPolicy");
   rt.register({
     name: "android/os/StrictMode", ctor: class extends JObj {},
     methods: {
       "static setThreadPolicy(Landroid/os/StrictMode$ThreadPolicy;)V": () => {},
       "static noteSlowCall(Ljava/lang/String;)V": () => {},
       "static setVmPolicy(Landroid/os/StrictMode$VmPolicy;)V": () => {},
-      "static getVmPolicy()Landroid/os/StrictMode$VmPolicy;": () => new (rt.link("android/os/StrictMode$VmPolicy").ctor)(),
+      "static getVmPolicy()Landroid/os/StrictMode$VmPolicy;": () => rt.make("android/os/StrictMode$VmPolicy"),
       "static getThreadPolicy()Landroid/os/StrictMode$ThreadPolicy;": threadPolicy,
       "static allowThreadDiskReads()Landroid/os/StrictMode$ThreadPolicy;": threadPolicy,
       "static allowThreadDiskWrites()Landroid/os/StrictMode$ThreadPolicy;": threadPolicy,
@@ -499,8 +499,7 @@ rt.register({
     "hashCode()I": maySuspend(function (this: JParcelUuid) { return vcall(this.uuid, "hashCode", "()I"); }),
   },
 });
-rt.register({ name: "android/os/Parcelable", ctor: class extends JObj {} });
-rt.register({ name: "android/os/Parcelable$Creator", ctor: class extends JObj {} });
+rt.markers("android/os/Parcelable", "android/os/Parcelable$Creator");
 rt.register({
   name: "android/os/CancellationSignal", ctor: class extends JObj { cancelled = 0; },
   methods: {
@@ -559,7 +558,7 @@ rt.register({
       (m?.includes("w") ? 0x28000000 : 0x10000000) | (m?.includes("t") || m === "w" ? 0x04000000 : 0)
       | (m?.includes("a") ? 0x02000000 : 0),
     "getFileDescriptor()Ljava/io/FileDescriptor;": function (this: JParcelFileDescriptor) {
-      const d = new (rt.link("java/io/FileDescriptor").ctor)() as JFileDescriptor;
+      const d = rt.make("java/io/FileDescriptor") as JFileDescriptor;
       d.fd = pfdFd(this);
       return d;
     },
@@ -595,7 +594,7 @@ for (const n of ["android/util/CloseGuard", "dalvik/system/CloseGuard"]) {
   rt.register({
     name: n, ctor: class extends JObj {},
     methods: {
-      [`static get()L${n};`]: () => new (rt.link(n).ctor)(),
+      [`static get()L${n};`]: () => rt.make(n),
       "open(Ljava/lang/String;)V": () => {},
       "close()V": () => {},
       "warnIfOpen()V": () => {},
@@ -662,7 +661,7 @@ rt.register({
     "getPreferredFrameTimeline()Landroid/view/Choreographer$FrameTimeline;": function (this: JFrameData) { this.check(); return this.timelines[0]; },
   },
 });
-rt.register({ name: "android/view/Choreographer$VsyncCallback", ctor: class extends JObj {} });
+rt.markers("android/view/Choreographer$VsyncCallback");
 const rafIntervals = new Float64Array(32);
 let lastRaf = 0, rafSample = 0;
 export function recordVsync(time: number) {
@@ -722,7 +721,7 @@ rt.register({
     "getFrameTimeNanos()J": () => uiState.frameTimeNanos,
   },
 });
-rt.register({ name: "android/view/Choreographer$FrameCallback", ctor: class extends JObj {} });
+rt.markers("android/view/Choreographer$FrameCallback");
 
 class JKeyEvent extends JObj { action = 0; keyCode = 0; }
 rt.register({
@@ -765,7 +764,7 @@ rt.register({
     "isCanceled()Z": () => 0,
   },
 });
-rt.register({ name: "android/view/KeyEvent$Callback", ctor: class extends JObj {} });
+rt.markers("android/view/KeyEvent$Callback");
 
 // Observable / DataSetObservable. `mObservers` is the protected ArrayList subclasses walk
 // directly (RecyclerView's AdapterDataObservable does), so it is a real java.util.ArrayList.
@@ -868,7 +867,7 @@ rt.register({
     },
     [`static close(${FD})V`]: (d: JFileDescriptor) => { javaCloseFd(d.fd); d.fd = -1; },
     [`static dup(${FD})${FD}`]: (d: JFileDescriptor) => {
-      const n = new (rt.link("java/io/FileDescriptor").ctor)() as JFileDescriptor;
+      const n = rt.make("java/io/FileDescriptor") as JFileDescriptor;
       n.fd = javaDupFd(d.fd);
       if (n.fd < 0) throw errno("dup", 9);
       return n;

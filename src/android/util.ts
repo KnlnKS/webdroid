@@ -294,7 +294,7 @@ for (const [n, num] of [["Size", (v: number) => v | 0], ["SizeF", (v: number) =>
       [`static parse${n}(Ljava/lang/String;)Landroid/util/${n};`]: (s: string) => {
         const m = /^(-?[\d.]+)\s*[*x]\s*(-?[\d.]+)$/.exec(s ?? "");
         if (!m) throw rt.mkThrowable("java/lang/NumberFormatException", "Invalid " + n + ": " + s);
-        const o = new (rt.link("android/util/" + n).ctor)() as JSize;
+        const o = rt.make("android/util/" + n) as JSize;
         o.w = num(parseFloat(m[1])); o.h = num(parseFloat(m[2]));
         return o;
       },

@@ -98,12 +98,12 @@ export function descToName(desc: string): string {
 export const PRIM_NAME: Record<string, string> = { I: "int", J: "long", F: "float", D: "double", Z: "boolean", B: "byte", C: "char", S: "short", V: "void" };
 export const PRIM_DESC: Record<string, string> = Object.fromEntries(Object.entries(PRIM_NAME).map(([d, n]) => [n, d]));
 
-/** a primitive array of `n` elements, by type descriptor — the one mapping of Java's element
- *  types onto TypedArrays (byte=Int8, boolean=Uint8, char=Uint16, long=BigInt64). */
-export const newPrimArray: Record<string, (n: number) => unknown> = {
-  Z: (n) => new Uint8Array(n), B: (n) => new Int8Array(n), C: (n) => new Uint16Array(n), S: (n) => new Int16Array(n),
-  I: (n) => new Int32Array(n), J: (n) => new BigInt64Array(n), F: (n) => new Float32Array(n), D: (n) => new Float64Array(n),
-};
+/** the one mapping of Java's element types onto TypedArrays (byte=Int8, boolean=Uint8, char=Uint16, long=BigInt64) */
+export const PRIM_ARRAYS = { Z: Uint8Array, B: Int8Array, C: Uint16Array, S: Int16Array, I: Int32Array, J: BigInt64Array, F: Float32Array, D: Float64Array };
+export type PrimElem = keyof typeof PRIM_ARRAYS;
+export function primElem(v: unknown): PrimElem | undefined {
+  for (const d in PRIM_ARRAYS) if (v instanceof PRIM_ARRAYS[d as PrimElem]) return d as PrimElem;
+}
 
 /** tag a JS array as a Java `elem[]` for compiled code (in place, returns the same array) */
 export function jarray<T>(items: T[], elem = "Ljava/lang/Object;"): T[] {
@@ -119,6 +119,22 @@ export function charsToString(chars: Uint16Array | Uint8Array, off: number, len:
     s += String.fromCharCode(...chars.subarray(off + i, off + Math.min(len, i + 1024)));
   }
   return s;
+}
+
+export const i8 = <B extends ArrayBufferLike>(b: ArrayBufferView<B>, off = 0, len = b.byteLength - off) => new Int8Array(b.buffer, b.byteOffset + off, len);
+export const u8 = <B extends ArrayBufferLike>(b: ArrayBufferView<B>, off = 0, len = b.byteLength - off) => new Uint8Array(b.buffer, b.byteOffset + off, len);
+export function concat(parts: readonly Uint8Array[]): Uint8Array<ArrayBuffer> {
+  let n = 0;
+  for (const p of parts) n += p.length;
+  const out = new Uint8Array(n);
+  n = 0;
+  for (const p of parts) { out.set(p, n); n += p.length; }
+  return out;
+}
+export const hexBytes = (h: string) => Uint8Array.from(h.match(/../g) ?? [], (b) => parseInt(b, 16));
+export function splitSig(sig: string): [string, string] {
+  const p = sig.indexOf("(");
+  return [sig.slice(0, p), sig.slice(p)];
 }
 
 export type JMethod = (this: unknown, ...a: unknown[]) => unknown;

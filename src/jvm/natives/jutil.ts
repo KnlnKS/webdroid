@@ -209,7 +209,7 @@ export function newArrayList(items: unknown[] = []): JList {
   return l;
 }
 export function newStringSet(items: Iterable<string>): JSet {
-  const set: JSet = new (rt.link("java/util/HashSet").ctor)();
+  const set: JSet = rt.make("java/util/HashSet");
   for (const key of items) set.m.set(key, { k: key, v: key });
   return set;
 }
@@ -833,8 +833,8 @@ const mapExtras: Record<string, NativeSpec["methods"]> = {
   "java/util/EnumMap": { "<init>(Ljava/lang/Class;)V": function () {} },
   "android/util/ArrayMap": arrayMapMethods,
   "java/util/concurrent/ConcurrentHashMap": {
-    "static newKeySet()Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": () => new (rt.link("java/util/concurrent/ConcurrentHashMap$KeySetView").ctor)(),
-    "static newKeySet(I)Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": () => new (rt.link("java/util/concurrent/ConcurrentHashMap$KeySetView").ctor)(),
+    "static newKeySet()Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": () => rt.make("java/util/concurrent/ConcurrentHashMap$KeySetView"),
+    "static newKeySet(I)Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": () => rt.make("java/util/concurrent/ConcurrentHashMap$KeySetView"),
   },
 };
 for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/concurrent/ConcurrentHashMap",
@@ -2007,8 +2007,8 @@ rt.register({
   clinit: () => {
     const c = rt.link("java/util/Collections").ctor as any;
     c.s$EMPTY_LIST = emptyList;
-    c.s$EMPTY_MAP = new (rt.link("java/util/HashMap").ctor)();
-    c.s$EMPTY_SET = new (rt.link("java/util/HashSet").ctor)();
+    c.s$EMPTY_MAP = rt.make("java/util/HashMap");
+    c.s$EMPTY_SET = rt.make("java/util/HashSet");
   },
   methods: {
     "static emptyList()Ljava/util/List;": () => newArrayList(),
@@ -2028,7 +2028,7 @@ rt.register({
       return newArrayList(out);
     },
     "static enumeration(Ljava/util/Collection;)Ljava/util/Enumeration;": async (c: unknown) => mkIter(await toJsArray(c)),
-    "static newSetFromMap(Ljava/util/Map;)Ljava/util/Set;": () => new (rt.link("java/util/HashSet").ctor)(),
+    "static newSetFromMap(Ljava/util/Map;)Ljava/util/Set;": () => rt.make("java/util/HashSet"),
     "static unmodifiableMap(Ljava/util/Map;)Ljava/util/Map;": (m: unknown) => m,
     "static unmodifiableSet(Ljava/util/Set;)Ljava/util/Set;": (s: unknown) => s,
     "static unmodifiableCollection(Ljava/util/Collection;)Ljava/util/Collection;": (c: unknown) => c,
@@ -2206,7 +2206,7 @@ for (const [key, fn] of [
 
 // java.util.Observable: the legacy observer pair, still constructed by analytics SDKs
 class JObservable extends JObj { observers: unknown[] = []; changed = 0; }
-rt.register({ name: "java/util/Observer", ctor: class extends JObj {} });
+rt.markers("java/util/Observer");
 rt.register({
   name: "java/util/Observable", ctor: JObservable,
   methods: {

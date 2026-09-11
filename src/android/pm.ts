@@ -1,5 +1,5 @@
 import { JObj, rt, maySuspend } from "../jvm/runtime";
-import { jarray } from "../jvm/abi";
+import { jarray, hexBytes } from "../jvm/abi";
 import { device } from "../shell/config";
 import type { JBundle } from "./os";
 import { vcall, newObj } from "../jvm/natives/jlang";
@@ -191,7 +191,7 @@ for (const n of ["ApplicationInfoFlags", "ComponentInfoFlags", "PackageInfoFlags
     name, ctor: class extends JInfoFlags {},
     methods: {
       [`static of(J)L${name};`]: (v: bigint) => {
-        const f = new (rt.link(name).ctor)() as JInfoFlags;
+        const f = rt.make(name) as JInfoFlags;
         f.value = v;
         return f;
       },
@@ -236,7 +236,7 @@ export function setManifest(root: XmlNode, activities: Map<string, XmlNode>, pro
 const appNode = () => manifestRoot?.children.find((c) => c.name === "application") ?? null;
 /** <meta-data> children → Bundle, typed the way aapt encoded them (string / boolean / int). */
 function metaData(node: XmlNode | null | undefined, res = appHost?.res): JBundle {
-  const b = new (rt.link("android/os/Bundle").ctor)() as JBundle;
+  const b = rt.make("android/os/Bundle") as JBundle;
   for (const md of node?.children ?? []) {
     if (md.name !== "meta-data") continue;
     const k = attrStr(md, "name");
@@ -414,7 +414,7 @@ export const servicesMatching = (action: string) => [...packages.values()].flatM
   [...owner.components.service.values()].filter((n) => matchesAction(n, action)).map((node) => ({ node, meta: metaData(node, owner.res), owner })));
 
 function providerInfo(cls: string, pkg: string, authority: string, n: XmlNode | null, flags = 0, owner = packages.get(pkg)): unknown {
-  const pi = new (rt.link("android/content/pm/ProviderInfo").ctor)() as JProviderInfo;
+  const pi = rt.make("android/content/pm/ProviderInfo") as JProviderInfo;
   pi.name = cls;
   pi.packageName = pkg;
   pi.authority = authority;
@@ -436,7 +436,7 @@ function queryProviders(intent: { action?: string | null } | null, flags = 0): J
     ...systemProviders.filter(([, , act]) => !action || act === action).map(sysProviderInfo),
     ...providerNodes().filter(([, n]) => matchesAction(n, action)).map(([c, n]) => mkProviderInfo(c, n, flags)),
   ].map((pi) => {
-    const ri = new (rt.link("android/content/pm/ResolveInfo").ctor)() as Record<string, unknown>;
+    const ri = rt.make("android/content/pm/ResolveInfo") as Record<string, unknown>;
     ri.providerInfo = pi;
     return ri;
   }));
@@ -489,14 +489,14 @@ function componentInfo(info: JComponentInfo, name: string, node: XmlNode, flags:
   info.metaData = flags & 0x80 ? metaData(node, owner?.res) : null;
 }
 function serviceInfo(name: string, node: XmlNode, flags: number, owner = currentPackage): JServiceInfo {
-  const info = new (rt.link("android/content/pm/ServiceInfo").ctor)() as JServiceInfo;
+  const info = rt.make("android/content/pm/ServiceInfo") as JServiceInfo;
   componentInfo(info, name, node, flags, owner);
   info.foregroundServiceType = attr(node, "foregroundServiceType")?.data ?? 0;
   info.flags = (attr(node, "stopWithTask")?.data ? 1 : 0) | (attr(node, "isolatedProcess")?.data ? 2 : 0);
   return info;
 }
 function receiverInfo(name: string, node: XmlNode, flags: number, owner = currentPackage): JActivityInfo {
-  const info = new (rt.link("android/content/pm/ActivityInfo").ctor)() as JActivityInfo;
+  const info = rt.make("android/content/pm/ActivityInfo") as JActivityInfo;
   componentInfo(info, name, node, flags, owner);
   return info;
 }
@@ -522,7 +522,7 @@ function queryComponents(intent: JIntent | null, flags: number, kind: Exclude<Co
       if (!filters.length) continue;
       priority = Math.max(...filters.map((filter) => attr(filter, "priority")?.data ?? 0));
     }
-    const info = new (rt.link("android/content/pm/ResolveInfo").ctor)();
+    const info = rt.make("android/content/pm/ResolveInfo");
     if (kind === "activity") {
       info.activityInfo = mkActivityInfo(name, owner);
       componentInfo(info.activityInfo, name, node, flags, owner);
@@ -783,10 +783,10 @@ class JShortcutInfo extends JObj {
   rank = 0; excluded = 0; longLived = false; dynamic = false;
 }
 async function copyShortcut(info: JShortcutInfo): Promise<JShortcutInfo> {
-  const copy = Object.assign(new (rt.link("android/content/pm/ShortcutInfo").ctor)(), info);
+  const copy = Object.assign(rt.make("android/content/pm/ShortcutInfo"), info);
   copy.intents = await Promise.all(info.intents.map((intent) => newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent)));
   if (info.extras) {
-    copy.extras = Object.assign(new (rt.link("android/os/PersistableBundle").ctor)(), info.extras);
+    copy.extras = Object.assign(rt.make("android/os/PersistableBundle"), info.extras);
     copy.extras.map = new Map(info.extras.map);
   }
   return copy;
@@ -875,7 +875,7 @@ const archiveCache = new WeakMap<Uint8Array, Promise<PackageArchive>>();
 const certificateCache = new WeakMap<Uint8Array, Promise<Uint8Array[]>>();
 async function readArchive(path: string): Promise<PackageArchive | null> {
   const packed = packedArchives.get(path);
-  if (packed) return packageArchive(packed.zip, packed.index.certificates.map((c) => Uint8Array.from(c.match(/../g)!, (b) => parseInt(b, 16))));
+  if (packed) return packageArchive(packed.zip, packed.index.certificates.map(hexBytes));
   const bytes = await vfs.readFile(path);
   if (!bytes) return null;
   let archive = archiveCache.get(bytes);

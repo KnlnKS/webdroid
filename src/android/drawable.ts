@@ -179,7 +179,7 @@ function copyBounds(from: JDrawable, to: JDrawable) {
   onBoundsChangeAll(to);
 }
 rt.register({ name: "android/graphics/drawable/Drawable", ctor: JDrawable, methods: drawableMethods });
-rt.register({ name: "android/graphics/drawable/Drawable$Callback", ctor: class extends JObj {} });
+rt.markers("android/graphics/drawable/Drawable$Callback");
 class JConstantState extends JObj {}
 class JDrawableState extends JConstantState {
   create!: () => JDrawable;
@@ -197,7 +197,7 @@ rt.register({ name: "android/graphics/drawable/VectorDrawable$VectorDrawableStat
 // stop()/isRunning() so callers (e.g. material3's ripple host) can `instanceof` a drawable to see
 // whether it animates itself. None of our drawables self-animate yet, so nothing implements it —
 // registering it is enough for the instanceof check to resolve instead of throwing on a missing class.
-rt.register({ name: "android/graphics/drawable/Animatable", ctor: class extends JObj {} });
+rt.markers("android/graphics/drawable/Animatable");
 
 export class JColorDrawable extends JDrawable {
   color = 0;
@@ -1055,7 +1055,7 @@ rt.register({
 rt.register({ name: "android/graphics/drawable/VectorDrawable", ctor: JVectorDrawable, sup: "android/graphics/drawable/Drawable", methods: {
   "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;": function (this: JVectorDrawable) {
     const { vw, vh, vpW, vpH, paths, vtint, tint, alpha, autoMirrored } = this;
-    const state = new (rt.link("android/graphics/drawable/VectorDrawable$VectorDrawableState").ctor)() as JDrawableState;
+    const state = rt.make("android/graphics/drawable/VectorDrawable$VectorDrawableState") as JDrawableState;
     state.create = () => Object.assign(new JVectorDrawable(), { vw, vh, vpW, vpH, paths, vtint, tint, alpha, autoMirrored });
     return state;
   },

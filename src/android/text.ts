@@ -263,7 +263,7 @@ rt.register({
   },
 });
 // Pure marker interface: "recreate the TextPaint, don't just measure."
-rt.register({ name: "android/text/style/UpdateAppearance", ctor: class extends JObj {} });
+rt.markers("android/text/style/UpdateAppearance");
 class JMetricAffectingSpan extends JCharacterStyle {}
 rt.register({
   name: "android/text/style/MetricAffectingSpan", ctor: JMetricAffectingSpan,
@@ -272,7 +272,7 @@ rt.register({
 });
 // Interface only (no ParagraphStyle registered yet to extend): the type real span classes
 // implement for the chooseHeight line-height adjustment applyLineHeightSpans applies.
-rt.register({ name: "android/text/style/LineHeightSpan", ctor: class extends JObj {} });
+rt.markers("android/text/style/LineHeightSpan");
 class JReplacementSpan extends JMetricAffectingSpan {}
 rt.register({
   name: "android/text/style/ReplacementSpan", ctor: JReplacementSpan,
@@ -356,7 +356,7 @@ rt.register({ name: "android/text/style/AbsoluteSizeSpan", ctor: JAbsoluteSizeSp
 
 // Paragraph-level spans: interfaces the layout would consult per paragraph (nothing in JLayout
 // walks them yet), plus the concrete Standard leading-margin span Compose uses for textIndent.
-rt.register({ name: "android/text/style/ParagraphStyle", ctor: class extends JObj {} });
+rt.markers("android/text/style/ParagraphStyle");
 rt.register({ name: "android/text/style/LeadingMarginSpan", ctor: class extends JObj {}, ifaces: ["android/text/style/ParagraphStyle"] });
 rt.register({ name: "android/text/style/LeadingMarginSpan$LeadingMarginSpan2", ctor: class extends JObj {}, ifaces: ["android/text/style/LeadingMarginSpan", "android/text/style/WrapTogetherSpan"] });
 rt.register({ name: "android/text/style/WrapTogetherSpan", ctor: class extends JObj {}, ifaces: ["android/text/style/ParagraphStyle"] });
@@ -372,7 +372,7 @@ rt.register({
     "drawLeadingMargin(Landroid/graphics/Canvas;Landroid/graphics/Paint;IIIIIILjava/lang/CharSequence;IIZLandroid/text/Layout;)V": () => {},
   },
 });
-rt.register({ name: "android/text/style/LineBackgroundSpan", ctor: class extends JObj {} });
+rt.markers("android/text/style/LineBackgroundSpan");
 class JQuoteSpan extends JObj { color = 0xff0000ff | 0; stripe = 2; gap = 2; }
 rt.register({
   name: "android/text/style/QuoteSpan", ctor: JQuoteSpan,
@@ -1032,14 +1032,14 @@ rt.register({
     ANYRTL_LTR: new JTDH(), LOCALE: new JTDH(),
   },
 });
-rt.register({ name: "android/graphics/text/LineBreakConfig", ctor: class extends JObj {} });
+rt.markers("android/graphics/text/LineBreakConfig");
 rt.register({
   name: "android/graphics/text/LineBreakConfig$Builder", ctor: class extends JObj {},
   methods: {
     "<init>()V": function () {},
     "setLineBreakStyle(I)Landroid/graphics/text/LineBreakConfig$Builder;": function (this: JObj) { return this; },
     "setLineBreakWordStyle(I)Landroid/graphics/text/LineBreakConfig$Builder;": function (this: JObj) { return this; },
-    "build()Landroid/graphics/text/LineBreakConfig;": () => new (rt.link("android/graphics/text/LineBreakConfig").ctor)(),
+    "build()Landroid/graphics/text/LineBreakConfig;": () => rt.make("android/graphics/text/LineBreakConfig"),
   },
 });
 
@@ -1134,8 +1134,7 @@ rt.register({
 // custom movement methods) and the framework movement singletons. Our TextView lays text out
 // itself and does not yet map a touch to a character offset, so the link-following part of
 // LinkMovementMethod.onTouchEvent honestly reports "not handled".
-rt.register({ name: "android/text/method/TransformationMethod", ctor: class extends JObj {} });
-rt.register({ name: "android/text/method/MovementMethod", ctor: class extends JObj {} });
+rt.markers("android/text/method/TransformationMethod", "android/text/method/MovementMethod");
 class JBaseMovementMethod extends JObj {}
 const movementMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>()V": function () {},

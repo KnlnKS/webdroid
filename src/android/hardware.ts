@@ -5,7 +5,7 @@ import { rt, JObj } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newArrayList } from "../jvm/natives/jutil";
 
-rt.register({ name: "android/hardware/SensorEventListener", ctor: class extends JObj {} });
+rt.markers("android/hardware/SensorEventListener");
 rt.register({ name: "android/hardware/HardwareBuffer", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable", "java/lang/AutoCloseable"] });
 
 class JSensor extends JObj { type = 0; sname = ""; vendor = ""; maxRange = 0; resolution = 0; minDelay = 0; }
@@ -95,7 +95,7 @@ rt.register({
     "getSource()I": () => 0x1002,
   },
 });
-rt.register({ name: "android/hardware/input/InputManager$InputDeviceListener", ctor: class extends JObj {} });
+rt.markers("android/hardware/input/InputManager$InputDeviceListener");
 rt.register({
   name: "android/hardware/input/InputManager", ctor: class extends JObj {},
   methods: {

@@ -95,7 +95,7 @@ export async function receiveTransaction(request: Transaction, caller: Caller): 
 }
 
 rt.register({ name: "android/os/IBinder", ctor: class extends JObj {}, statics: { FIRST_CALL_TRANSACTION: 1, FLAG_ONEWAY: 1, INTERFACE_TRANSACTION: 0x5f4e5446 } });
-rt.register({ name: "android/os/IBinder$DeathRecipient", ctor: class extends JObj {} });
+rt.markers("android/os/IBinder$DeathRecipient");
 rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBinder"], methods: {
   "<init>()V": function () {},
   "static flushPendingCommands()V": () => {},

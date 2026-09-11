@@ -1,7 +1,7 @@
 // java.security — MessageDigest (sync MD5/SHA-1/SHA-256: fingerprint checks at boot, cache keys), SecureRandom, AccessController.
 import { rt, JObj } from "../runtime";
 import { vcall, defineException } from "./jlang";
-import { jarray } from "../abi";
+import { jarray, concat, u8 } from "../abi";
 import { JRandom, randomSeed } from "./jrandom";
 
 const SHA256_K = new Uint32Array([0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -135,12 +135,12 @@ defineException("java/security/cert/CertificateNotYetValidException", "java/secu
 defineException("java/security/cert/CRLException", "java/security/GeneralSecurityException");
 defineException("java/security/cert/CertPathValidatorException", "java/security/GeneralSecurityException");
 defineException("java/security/cert/CertPathBuilderException", "java/security/GeneralSecurityException");
-rt.register({ name: "java/security/cert/CertPath", ctor: class extends JObj {} });
+rt.markers("java/security/cert/CertPath");
 rt.register({
   name: "java/security/cert/CertPathValidator", ctor: class extends JObj {},
   methods: {
     "static getInstance(Ljava/lang/String;)Ljava/security/cert/CertPathValidator;": () =>
-      new (rt.link("java/security/cert/CertPathValidator").ctor)(),
+      rt.make("java/security/cert/CertPathValidator"),
     "validate(Ljava/security/cert/CertPath;Ljava/security/cert/CertPathParameters;)Ljava/security/cert/CertPathValidatorResult;": () => {
       throw rt.mkThrowable("java/security/cert/CertPathValidatorException", "no trust anchors");
     },
@@ -163,11 +163,7 @@ function mdUpdate(md: JMessageDigest, b: Int8Array, off = 0, len = b.length) {
   md.parts.push(new Uint8Array(b.buffer.slice(b.byteOffset + off, b.byteOffset + off + len)));
 }
 function mdDigest(md: JMessageDigest): Int8Array {
-  let total = 0;
-  for (const p of md.parts) total += p.length;
-  const all = new Uint8Array(total);
-  let o = 0;
-  for (const p of md.parts) { all.set(p, o); o += p.length; }
+  const all = concat(md.parts);
   md.parts = [];
   const a = md.fn(all);
   return new Int8Array(a.buffer, 0, a.length);
@@ -194,8 +190,7 @@ rt.register({
 });
 
 const doPrivileged = async (a: unknown) => vcall(a, "run", "()Ljava/lang/Object;");
-rt.register({ name: "java/security/PrivilegedAction", ctor: class extends JObj {} });
-rt.register({ name: "java/security/PrivilegedExceptionAction", ctor: class extends JObj {} });
+rt.markers("java/security/PrivilegedAction", "java/security/PrivilegedExceptionAction");
 rt.register({
   name: "java/security/AccessController", ctor: class extends JObj {},
   methods: {
@@ -236,7 +231,7 @@ rt.register({
   name: "java/security/SecureRandom", ctor: JSecureRandom, sup: "java/util/Random",
   methods: {
     "<init>()V": function (this: JSecureRandom) { this.setSeed(randomSeed()); },
-    "nextBytes([B)V": (b: Int8Array) => crypto.getRandomValues(new Uint8Array(b.buffer, b.byteOffset, b.length)),
+    "nextBytes([B)V": (b: Int8Array) => crypto.getRandomValues(u8(b)),
   },
 });
 
@@ -253,7 +248,7 @@ const ecData = (name: string, fields: string[], ctorDesc: string, getters: [stri
     ...Object.fromEntries(getters.map(([m, f]) => [m, function (this: Record<string, unknown>) { return this[f] ?? null; }])),
   },
 });
-rt.register({ name: "java/security/spec/ECField", ctor: class extends JObj {} });
+rt.markers("java/security/spec/ECField");
 ecData("java/security/spec/ECFieldFp", ["p"], "(Ljava/math/BigInteger;)V", [["getP()Ljava/math/BigInteger;", "p"], ["getFieldSize()I", "size"]]);
 ecData("java/security/spec/ECPoint", ["x", "y"], "(Ljava/math/BigInteger;Ljava/math/BigInteger;)V", [["getAffineX()Ljava/math/BigInteger;", "x"], ["getAffineY()Ljava/math/BigInteger;", "y"]]);
 ecData("java/security/spec/EllipticCurve", ["field", "a", "b"], "(Ljava/security/spec/ECField;Ljava/math/BigInteger;Ljava/math/BigInteger;)V",

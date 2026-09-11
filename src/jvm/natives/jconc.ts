@@ -5,6 +5,7 @@ import { parkTimeout, unparkTimeout } from "../yield";
 import { vcall, newObj, JThread, JEnum, setCurThread, curThread, park, defineException } from "./jlang";
 import { JList, newArrayList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods } from "./jutil";
 import { JRandom, randomSeed } from "./jrandom";
+import { splitSig } from "../abi";
 
 // ── atomics (single-threaded: trivial)
 class JAtomicInt extends JObj { v = 0; }
@@ -206,7 +207,7 @@ async function runTask(ex: JExecutor, worker: JExecutor["workers"][number], entr
   try {
     if (f.cancelled) return;
     if (!worker.thread) {
-      worker.thread = ex.factory ? await vcall(ex.factory, "newThread", "(Ljava/lang/Runnable;)Ljava/lang/Thread;", task) : new (rt.link("java/lang/Thread").ctor)();
+      worker.thread = ex.factory ? await vcall(ex.factory, "newThread", "(Ljava/lang/Runnable;)Ljava/lang/Thread;", task) : rt.make("java/lang/Thread");
       if (!worker.thread) throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "ThreadFactory returned null");
     }
     if (f.cancelled) return;
@@ -392,7 +393,7 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       "allowCoreThreadTimeOut(Z)V": function () {},
       "setKeepAliveTime(JLjava/util/concurrent/TimeUnit;)V": function () {},
       "getQueue()Ljava/util/concurrent/BlockingQueue;": function (this: JExecutor) {
-        if (!this.queue) { this.queue = new (rt.link("java/util/concurrent/LinkedBlockingQueue").ctor)() as JList; this.queue.a = this.tasks.map((t) => t.task); }
+        if (!this.queue) { this.queue = rt.make("java/util/concurrent/LinkedBlockingQueue") as JList; this.queue.a = this.tasks.map((t) => t.task); }
         return this.queue;
       },
       "purge()V": function () {},
@@ -413,7 +414,7 @@ class JExecutors extends JObj {}
 class JDelegatedExecutor extends JObj { delegate: unknown = null; }
 const delegated: NativeSpec["methods"] = {};
 for (const signature of Object.keys(executorMethods)) {
-  const at = signature.indexOf("("), name = signature.slice(0, at), desc = signature.slice(at);
+  const [name, desc] = splitSig(signature);
   if (name === "<init>") continue;
   delegated[signature] = async function (this: JDelegatedExecutor, ...args: unknown[]) { return vcall(this.delegate, name, desc, ...args); };
 }
@@ -421,13 +422,13 @@ rt.register({ name: "webdroid/DelegatedScheduledExecutor", ctor: JDelegatedExecu
   ifaces: ["java/util/concurrent/ScheduledExecutorService", "java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"], methods: delegated });
 export function mkExecutor(count = 1, factory: unknown = null): JExecutor {
   if (count <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "nonpositive pool size");
-  const ex: JExecutor = new (rt.link("webdroid/Executor").ctor)();
+  const ex: JExecutor = rt.make("webdroid/Executor");
   ex.limit = count; ex.factory = factory; return ex;
 }
 /** A scheduled pool takes the constructor's rule, not the fixed pool's: zero cores is legal
  *  and still runs a due task. */
 function mkScheduled(count = 1, factory: unknown = null): JExecutor {
-  const ex: JExecutor = new (rt.link("webdroid/Executor").ctor)();
+  const ex: JExecutor = rt.make("webdroid/Executor");
   initScheduled.call(ex, count, factory);
   return ex;
 }
@@ -458,7 +459,7 @@ rt.register({
   name: "java/util/concurrent/Executors", ctor: JExecutors,
   methods: {
     "static defaultThreadFactory()Ljava/util/concurrent/ThreadFactory;":
-      () => new (rt.link("webdroid/DefaultThreadFactory").ctor)(),
+      () => rt.make("webdroid/DefaultThreadFactory"),
     "static callable(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Callable;":
       (r: unknown, result: unknown) => {
         const c = new (rt.link("webdroid/RunnableCallable").ctor as typeof JRunnableCallable)();
@@ -743,7 +744,7 @@ function fieldProp(cls: { ci?: ClassInfo | null } | null, name: string): string 
 }
 class JFieldUpdater extends JObj { prop = ""; }
 function mkUpdater(cls: string, target: { ci?: ClassInfo | null } | null, field: string): JFieldUpdater {
-  const u = new (rt.link(cls).ctor)() as JFieldUpdater;
+  const u = rt.make(cls) as JFieldUpdater;
   u.prop = fieldProp(target, field);
   return u;
 }
@@ -894,7 +895,7 @@ const rwMethods: NativeSpec["methods"] = {
 function rwHandle(lock: JRWLock, write: boolean): JRWInner {
   const existing = write ? lock.write : lock.read;
   if (existing) return existing;
-  const inner: JRWInner = new (rt.link("java/util/concurrent/locks/ReentrantReadWriteLock$" + (write ? "WriteLock" : "ReadLock")).ctor)();
+  const inner: JRWInner = rt.make("java/util/concurrent/locks/ReentrantReadWriteLock$" + (write ? "WriteLock" : "ReadLock"));
   inner.owner = lock;
   if (write) lock.write = inner; else lock.read = inner;
   return inner;
@@ -966,7 +967,7 @@ rt.register({
     "cancel(Z)Z": function (this: JCompletable) { if (this.done) return 0; this.cancelled = this.done = 1; this.settle(); return 1; },
   },
 });
-rt.register({ name: "java/util/concurrent/CompletionStage", ctor: class extends JObj {} });
+rt.markers("java/util/concurrent/CompletionStage");
 
 class JFutureTask extends JFuture {
   callable: unknown = null;
@@ -1001,7 +1002,7 @@ rt.register({
     "cancel(Z)Z": () => 0,
   },
 });
-rt.register({ name: "java/util/concurrent/RunnableFuture", ctor: class extends JObj {} });
+rt.markers("java/util/concurrent/RunnableFuture");
 
 // ── AbstractQueuedSynchronizer: the state word, its CAS, and FIFO waiting in exclusive and shared
 // modes; a subclass supplies tryAcquire/tryRelease (and the shared pair) as the JDK's does

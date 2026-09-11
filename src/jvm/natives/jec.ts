@@ -104,16 +104,16 @@ class JEcPublicKey extends JObj { c!: Curve; x = 0n; y = 0n; }
 class JEcPrivateKey extends JObj { c!: Curve; s = 0n; pub!: JEcPublicKey; }
 function ecPublic(c: Curve, x: bigint, y: bigint): JEcPublicKey {
   if (!onCurve(c, x, y)) throw badSpec("point is not on the curve");
-  const k = new (rt.link("webdroid/EcPublicKey").ctor)() as JEcPublicKey;
+  const k = rt.make("webdroid/EcPublicKey") as JEcPublicKey;
   k.c = c; k.x = x; k.y = y; return k;
 }
 function ecPrivate(c: Curve, s: bigint): JEcPrivateKey {
   if (s <= 0n || s >= c.n) throw badSpec("scalar out of range");
-  const k = new (rt.link("webdroid/EcPrivateKey").ctor)() as JEcPrivateKey;
+  const k = rt.make("webdroid/EcPrivateKey") as JEcPrivateKey;
   const [x, y] = mul(c, s, [c.gx, c.gy])!;
   k.c = c; k.s = s; k.pub = ecPublic(c, x, y); return k;
 }
-const inst = <T extends JObj>(cls: string, fields: Record<string, unknown>): T => Object.assign(new (rt.link(cls).ctor)(), fields) as T;
+const inst = <T extends JObj>(cls: string, fields: Record<string, unknown>): T => Object.assign(rt.make(cls), fields) as T;
 const specs = new Map<Curve, JObj>();
 function paramSpec(c: Curve): JObj {
   let s = specs.get(c);
@@ -226,7 +226,7 @@ const keyFactory = (algo: string) => {
   if (a !== "EC" && a !== "RSA") throw rt.mkThrowable("java/security/NoSuchAlgorithmException", algo + " KeyFactory not available");
   const f = new JKeyFactory(); f.algo = a; return f;
 };
-const rsaKey = <T extends JRsaPublicKey | JRsaPrivateKey>(cls: string, encoded: Uint8Array<ArrayBuffer>): T => { const k = new (rt.link(cls).ctor)() as T; k.encoded = encoded; return k; };
+const rsaKey = <T extends JRsaPublicKey | JRsaPrivateKey>(cls: string, encoded: Uint8Array<ArrayBuffer>): T => { const k = rt.make(cls) as T; k.encoded = encoded; return k; };
 rt.register({
   name: "java/security/KeyFactory", ctor: JKeyFactory,
   methods: {

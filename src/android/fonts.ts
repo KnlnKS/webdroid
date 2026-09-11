@@ -4,7 +4,7 @@
 // family); a Typeface names that family (plus fallbacks) with a weight and slant.
 
 import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
-import { jarray } from "../jvm/abi";
+import { jarray, i8 } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { parseAXML, attr } from "./axml";
 import { vfs, type JFile } from "../jvm/natives/jio";
@@ -248,7 +248,7 @@ rt.register({
     "getSourceIdentifier()I": function (this: JFont) { return this.srcId; },
     "getBuffer()Ljava/nio/ByteBuffer;": maySuspend(function (this: JFont) {
       const b = this.bytes ?? new Uint8Array(0);
-      return vcall(rt.link("java/nio/ByteBuffer").ctor, "wrap", "([B)Ljava/nio/ByteBuffer;", new Int8Array(b.buffer, b.byteOffset, b.byteLength));
+      return vcall(rt.link("java/nio/ByteBuffer").ctor, "wrap", "([B)Ljava/nio/ByteBuffer;", i8(b));
     }),
     "getLocaleList()Landroid/os/LocaleList;": maySuspend(() => vcall(rt.link("android/os/LocaleList").ctor, "getDefault", "()Landroid/os/LocaleList;")),
     "equals(Ljava/lang/Object;)Z": function (this: JFont, o: unknown) {

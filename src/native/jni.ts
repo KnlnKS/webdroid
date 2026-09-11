@@ -5,7 +5,7 @@ import { mem } from "./mem";
 import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet, hostTrace } from "./host";
 import { Cpu, cpuFor, type CallArg } from "./cpu";
 import { rt, JObj, type ClassInfo, type Runtime } from "../jvm/runtime";
-import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, newPrimArray } from "../jvm/abi";
+import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, splitSig, u8 } from "../jvm/abi";
 import { curThread, JClass, stackTraceText } from "../jvm/natives/jlang";
 import { JCtor, JMethod, classCtors, mkMethod } from "../jvm/natives/jreflect";
 import { JBuffer, directBufferAddress, nativeByteBuffer } from "../jvm/natives/jnio";
@@ -246,11 +246,11 @@ const PRIM_DESC = ["L", "Z", "B", "C", "S", "I", "J", "F", "D", "V"];
 const elemSize: Record<string, number> = { Z: 1, B: 1, C: 2, S: 2, I: 4, J: 8, F: 4, D: 8 };
 const pinned = new Map<number, { arr: any; type: string }>();
 function copyOut(type: string, arr: any, p: number, start: number, len: number): void {
-  const bytes = new Uint8Array(arr.buffer, arr.byteOffset + start * elemSize[type], len * elemSize[type]);
+  const bytes = u8(arr, start * elemSize[type], len * elemSize[type]);
   mem.u8.set(bytes, p);
 }
 function copyIn(type: string, arr: any, p: number, start: number, len: number): void {
-  const dst = new Uint8Array(arr.buffer, arr.byteOffset + start * elemSize[type], len * elemSize[type]);
+  const dst = u8(arr, start * elemSize[type], len * elemSize[type]);
   dst.set(mem.u8.subarray(p, p + len * elemSize[type]));
 }
 
@@ -408,7 +408,7 @@ export function jniInit(): void {
   def(174, "SetObjectArrayElement", (cpu, a) => { a.p(); const arr = deref(a.p()) as unknown[]; const i = a.i(); const v = deref(a.p()); if (!arr || i < 0 || i >= arr.length) { pend(cpu, throwable("java/lang/ArrayIndexOutOfBoundsException", String(i))); return; } arr[i] = v; });
   for (let k = 1; k <= 8; k++) {
     const P = PRIM[k], D = PRIM_DESC[k];
-    def(174 + k, `New${P}Array`, (_c, a) => { a.p(); return toRef(newPrimArray[D](a.i())); });
+    def(174 + k, `New${P}Array`, (_c, a) => { a.p(); return toRef(new PRIM_ARRAYS[D as PrimElem](a.i())); });
     def(182 + k, `Get${P}ArrayElements`, (_c, a) => {
       a.p(); const arr = deref(a.p()) as any; const isCopy = a.p();
       if (!arr) return 0;
@@ -533,7 +533,7 @@ function registerNative(info: ClassInfo, name: string, sig: string, fn: number):
 /** natives with no RegisterNatives entry resolve by the JNI short-name export `Java_pkg_Cls_method` */
 export function resolveByExport(lookup: (sym: string) => number | undefined): void {
   rt.jniResolver = function (this: Runtime, cls: string, sig: string) {
-    const name = sig.slice(0, sig.indexOf("(")), desc = sig.slice(sig.indexOf("("));
+    const [name, desc] = splitSig(sig);
     const mangle = (s: string) => s.replace(/_/g, "_1").replace(/;/g, "_2").replace(/\[/g, "_3").replace(/\//g, "_").replace(/[^A-Za-z0-9_]/g, (c) => "_0" + c.charCodeAt(0).toString(16).padStart(4, "0"));
     const short = "Java_" + mangle(cls) + "_" + mangle(name);
     const fn = lookup(short) ?? lookup(short + "__" + mangle(desc.slice(1, desc.indexOf(")"))));

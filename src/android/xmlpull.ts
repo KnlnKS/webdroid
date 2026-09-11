@@ -124,7 +124,7 @@ rt.register({
     [`getInputEncoding()${S}`]: () => "UTF-8",
   },
 });
-const newParser = () => new (rt.link("webdroid/XmlPullParser").ctor)() as JXmlPull;
+const newParser = () => rt.make("webdroid/XmlPullParser") as JXmlPull;
 class JXmlPullFactory extends JObj { nsAware = false; }
 rt.register({
   name: "org/xmlpull/v1/XmlPullParserFactory", ctor: JXmlPullFactory,

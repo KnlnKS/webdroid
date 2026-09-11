@@ -3,7 +3,7 @@ import { JBundle, uptimeMillis } from "./os";
 import { parcelCreator, type JParcel } from "./parcel";
 import { newObj, vcall } from "../jvm/natives/jlang";
 
-rt.register({ name: "android/location/LocationListener", ctor: class extends JObj {} });
+rt.markers("android/location/LocationListener");
 
 export class JLocation extends JObj {
   provider: string | null = null;

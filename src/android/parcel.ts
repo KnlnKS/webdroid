@@ -2,7 +2,7 @@
 // dataSize/dataPosition agree with what an app measured on a device. What has no byte
 // form here — a Serializable, a binder — rides in a side table keyed by its position.
 import { JObj, rt, maySuspend } from "../jvm/runtime";
-import { dotName, slashName, jarray, mangleStaticField, utf8 } from "../jvm/abi";
+import { dotName, slashName, jarray, mangleStaticField, utf8, u8 } from "../jvm/abi";
 import { newObj, vcall, JInt, JLong, JFloat, JDouble, JBool, JByte, JShort, JChar, box, defineException } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, type JList } from "../jvm/natives/jutil";
 import { JBundle } from "./os";
@@ -114,7 +114,7 @@ function writeBytes(p: JParcel, b: Int8Array | null) {
   const n = pad4(b.length);
   reserve(p, n);
   const at = advance(p, n);
-  p.buf.set(new Uint8Array(b.buffer, b.byteOffset, b.length), at);
+  p.buf.set(u8(b), at);
   p.buf.fill(0, at + b.length, at + n);
 }
 function readBytes(p: JParcel): Int8Array | null {
@@ -167,7 +167,7 @@ async function writeBundle(p: JParcel, b: JBundle | null) {
 async function readBundle(p: JParcel, loader: unknown) {
   const len = readInt(p);
   if (len < 0) return null;
-  const b = new (rt.link("android/os/Bundle").ctor)() as JBundle;
+  const b = rt.make("android/os/Bundle") as JBundle;
   b.loader = loader;
   if (len === 0) return b;
   if (readInt(p) !== BNDL) throw rt.mkThrowable("java/lang/IllegalStateException", "Bad magic number for Bundle");
@@ -325,7 +325,7 @@ rt.register({
     "setDataCapacity(I)V": function (this: JParcel, n: number) { reserve(this, n - this.pos); },
     "marshall()[B": function (this: JParcel) { return new Int8Array(this.buf.slice(0, this.size).buffer); },
     "unmarshall([BII)V": function (this: JParcel, b: Int8Array, off: number, len: number) {
-      this.buf = new Uint8Array(len); this.buf.set(new Uint8Array(b.buffer, b.byteOffset + off, len));
+      this.buf = new Uint8Array(len); this.buf.set(u8(b, off, len));
       this.view = new DataView(this.buf.buffer); this.size = len; this.pos = 0; this.objects.clear();
     },
     [`appendFrom(${P}II)V`]: function (this: JParcel, o: JParcel, off: number, len: number) {

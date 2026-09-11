@@ -304,13 +304,13 @@ rt.register({
 /** the transport the one modelled network runs on: ConnectivityManager.TYPE_WIFI */
 const NET_TYPE = 1;
 const netUp = async (): Promise<number> =>
-  (await vcall(new (rt.link("android/net/NetworkInfo").ctor)(), "isConnected", "()Z")) ? 1 : 0;
+  (await vcall(rt.make("android/net/NetworkInfo"), "isConnected", "()Z")) ? 1 : 0;
 class JNetwork extends JObj { id = 1; }
 let theNetwork: JNetwork | null = null;
 let boundNetwork: JNetwork | null = null;
-const network = (): JNetwork => (theNetwork ??= new (rt.link("android/net/Network").ctor)() as JNetwork);
+const network = (): JNetwork => (theNetwork ??= rt.make("android/net/Network") as JNetwork);
 const knownNetwork = (n: unknown): n is JNetwork => n instanceof JNetwork && n.id === network().id;
-const netCaps = () => new (rt.link("android/net/NetworkCapabilities").ctor)();
+const netCaps = () => rt.make("android/net/NetworkCapabilities");
 const netCallbacks = new Set<unknown>();
 async function fireNetAvailable(cb: unknown) {
   if (!netCallbacks.has(cb) || !(await netUp())) return;
@@ -383,7 +383,7 @@ rt.register({
   },
 });
 
-rt.register({ name: "android/net/ConnectivityManager$OnNetworkActiveListener", ctor: class extends JObj {} });
+rt.markers("android/net/ConnectivityManager$OnNetworkActiveListener");
 const activeListeners = new Set<unknown>();
 const registerCallback = (cb: unknown) => {
   if (!cb) return;
@@ -393,7 +393,7 @@ const registerCallback = (cb: unknown) => {
 const registerOnHandler = async (cb: unknown, handler: unknown) => {
   if (!cb || !handler) throw rt.mkThrowable("java/lang/NullPointerException", "callback and handler are required");
   netCallbacks.add(cb);
-  const task = new (rt.link("webdroid/FnRunnable").ctor)();
+  const task = rt.make("webdroid/FnRunnable");
   task.fn = () => fireNetAvailable(cb);
   await vcall(handler, "post", "(Ljava/lang/Runnable;)Z", task);
 };
@@ -401,16 +401,16 @@ rt.register({
   name: "android/net/ConnectivityManager", ctor: class extends JObj {},
   statics: { TYPE_MOBILE: 0, TYPE_WIFI: 1, TYPE_ETHERNET: 9, TYPE_VPN: 17, RESTRICT_BACKGROUND_STATUS_DISABLED: 1 },
   methods: {
-    "getActiveNetworkInfo()Landroid/net/NetworkInfo;": () => new (rt.link("android/net/NetworkInfo").ctor)(),
+    "getActiveNetworkInfo()Landroid/net/NetworkInfo;": () => rt.make("android/net/NetworkInfo"),
     // the one Network, present exactly when NetworkInfo says connected (a null here with a
     // connected NetworkInfo reads as "no internet" to every modern connectivity check)
     "getActiveNetwork()Landroid/net/Network;": async () => (await netUp()) ? network() : null,
     "getAllNetworks()[Landroid/net/Network;": async () => jarray((await netUp()) ? [network()] : [], "Landroid/net/Network;"),
-    "getNetworkInfo(Landroid/net/Network;)Landroid/net/NetworkInfo;": (n: unknown) => knownNetwork(n) ? new (rt.link("android/net/NetworkInfo").ctor)() : null,
+    "getNetworkInfo(Landroid/net/Network;)Landroid/net/NetworkInfo;": (n: unknown) => knownNetwork(n) ? rt.make("android/net/NetworkInfo") : null,
     // by network type (TYPE_WIFI/TYPE_MOBILE...): the one network we model is the active one,
     // so its own type answers and every other type has no info, as on a device without it
     "getNetworkInfo(I)Landroid/net/NetworkInfo;": async (t: number) =>
-      (await netUp()) && t === NET_TYPE ? new (rt.link("android/net/NetworkInfo").ctor)() : null,
+      (await netUp()) && t === NET_TYPE ? rt.make("android/net/NetworkInfo") : null,
     "getLinkProperties(Landroid/net/Network;)Landroid/net/LinkProperties;": () => null,
     "bindProcessToNetwork(Landroid/net/Network;)Z": (n: unknown) => {
       if (n != null && !knownNetwork(n)) return 0;

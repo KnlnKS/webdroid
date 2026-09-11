@@ -161,7 +161,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     await ensureDecor(this);
     this.window.contentParent!.children.length = 0;
     if (!v.lp) {
-      const lp = new (rt.link("android/widget/FrameLayout$LayoutParams").ctor)();
+      const lp = rt.make("android/widget/FrameLayout$LayoutParams");
       lp.width = -1; lp.height = -1;
       v.lp = lp;
     }
@@ -360,7 +360,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   // onBackPressed asks it whether the press was consumed.
   "getFragmentManager()Landroid/app/FragmentManager;": function (this: JActivity) {
     if (!this.fragMgr) {
-      const manager: JFragmentManager = new (rt.link("android/app/FragmentManager").ctor)();
+      const manager: JFragmentManager = rt.make("android/app/FragmentManager");
       manager.act = this;
       this.fragMgr = manager;
     }
@@ -422,10 +422,10 @@ rt.register({
     "getListView()Landroid/widget/ListView;": function (this: JActivity) { return this.window.decor ? findById(this.window.decor, 0x102000a) : null; },
   },
 });
-rt.register({ name: "android/view/Window$Callback", ctor: class extends JObj {} });
+rt.markers("android/view/Window$Callback");
 // Frame metrics are reported per frame that was actually measured; a listener registered on a
 // window that never janks is one a device never calls either.
-rt.register({ name: "android/view/Window$OnFrameMetricsAvailableListener", ctor: class extends JObj {} });
+rt.markers("android/view/Window$OnFrameMetricsAvailableListener");
 
 export class JApplication extends JContextWrapper {
   lifecycleCbs: unknown[] | null = null;
@@ -477,8 +477,7 @@ rt.register({
   },
 });
 
-rt.register({ name: "android/content/ComponentCallbacks", ctor: class extends JObj {} });
-rt.register({ name: "android/content/ComponentCallbacks2", ctor: class extends JObj {} });
+rt.markers("android/content/ComponentCallbacks", "android/content/ComponentCallbacks2");
 
 class JToast extends JObj { text = ""; }
 rt.register({
@@ -510,7 +509,7 @@ for (const [name, methods, statics] of [
     "getLargeMemoryClass()I": () => 512,
     "isLowRamDevice()Z": () => 0,
     "getRunningAppProcesses()Ljava/util/List;": () => newArrayList([myProcess()]),
-    "getProcessMemoryInfo([I)[Landroid/os/Debug$MemoryInfo;": (pids: Int32Array) => jarray(Array.from(pids, () => new (rt.link("android/os/Debug$MemoryInfo").ctor)()), "Landroid/os/Debug$MemoryInfo;"),
+    "getProcessMemoryInfo([I)[Landroid/os/Debug$MemoryInfo;": (pids: Int32Array) => jarray(Array.from(pids, () => rt.make("android/os/Debug$MemoryInfo")), "Landroid/os/Debug$MemoryInfo;"),
     "getHistoricalProcessExitReasons(Ljava/lang/String;II)Ljava/util/List;": () => newArrayList(),
     "getRunningServices(I)Ljava/util/List;": (max: number) => {
       const all = [...runningServices.values()];
@@ -720,8 +719,7 @@ rt.register({
   },
 });
 // apps `implements` this to track refresh-rate / display changes; it must link even though it never fires here
-rt.register({ name: "android/hardware/display/DisplayManager$DisplayListener", ctor: class extends JObj {} });
-rt.register({ name: "android/app/AppOpsManager$OnOpChangedListener", ctor: class extends JObj {} });
+rt.markers("android/hardware/display/DisplayManager$DisplayListener", "android/app/AppOpsManager$OnOpChangedListener");
 // AccessibilityManager callback interfaces — apps `implements` these to watch for a
 // screen reader turning on; must link even though it never fires here (see above).
 for (const n of ["AccessibilityStateChangeListener", "TouchExplorationStateChangeListener"]) {
@@ -796,7 +794,7 @@ rt.register({
     "unregisterOnBackInvokedCallback(Landroid/window/OnBackInvokedCallback;)V": function (this: JBackDispatcher, cb: unknown) { this.cbs = this.cbs.filter((e) => e.cb !== cb); },
   },
 });
-rt.register({ name: "android/window/OnBackInvokedCallback", ctor: class extends JObj {} });
+rt.markers("android/window/OnBackInvokedCallback");
 rt.register({
   name: "android/content/ContentProvider", ctor: class extends JObj { $ctx: unknown = null; },
   methods: {
@@ -897,7 +895,7 @@ rt.register({ name: "android/app/Service", ctor: JService, sup: "android/content
 
 // API-30 WindowInsetsAnimation: the APK ships desugar stubs whose <clinit> throws
 // NoClassDefFoundError; real framework classes shadow them on-device, so must ours.
-rt.register({ name: "android/view/WindowInsetsAnimation", ctor: class extends JObj {} });
+rt.markers("android/view/WindowInsetsAnimation");
 rt.register({
   name: "android/view/WindowInsetsAnimation$Callback", ctor: class extends JObj {},
   methods: { "<init>(I)V": () => {} },

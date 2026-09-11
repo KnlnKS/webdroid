@@ -1,7 +1,7 @@
 // java.io.* natives and the VFS shared with native file descriptors.
 
 import { rt, JObj, maySuspend, type NativeSpec } from "../runtime";
-import { mangleStaticField, mangleMethod, charsToString, jarray, utf8 } from "../abi";
+import { mangleStaticField, mangleMethod, charsToString, jarray, utf8, concat, i8, u8 } from "../abi";
 import { vcall, vcallMaybe, after, stringHash, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
 import { mappedReadOnlyBuffer } from "./jnio";
@@ -108,8 +108,7 @@ export class JFile extends JObj { path = ""; }
 export function mkFile(path: string): JFile { const f = new JFile(); f.path = vfs.norm(path); return f; }
 const listFiles = (d: JFile) => jarray(vfs.list(d.path).map((n) => mkFile(d.path + "/" + n)), "Ljava/io/File;");
 // apps implement these to pick over a directory listing (File.listFiles(filter))
-rt.register({ name: "java/io/FilenameFilter", ctor: class extends JObj {} });
-rt.register({ name: "java/io/FileFilter", ctor: class extends JObj {} });
+rt.markers("java/io/FilenameFilter", "java/io/FileFilter");
 // Default dir matches System.getProperty("java.io.tmpdir"). Creation cannot fail in the in-memory vfs.
 function createTempFile(prefix: string, suffix: string | null, dir: JFile | null): JFile {
   if (prefix.length < 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Prefix string too short");
@@ -238,14 +237,14 @@ const inputStreamMethods: NativeSpec["methods"] = {
     if (this.source) {
       return after(this.source.read(this.pos, len), (bytes) => {
         if (!bytes.length) return -1;
-        out.set(new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length), off);
+        out.set(i8(bytes), off);
         this.pos += bytes.length;
         return bytes.length;
       });
     }
     if (this.pos >= this.buf.length) return -1;
     const n = Math.min(len, this.buf.length - this.pos);
-    out.set(new Int8Array(this.buf.buffer, this.buf.byteOffset + this.pos, n), off);
+    out.set(i8(this.buf, this.pos, n), off);
     this.pos += n;
     return n;
   }),
@@ -274,26 +273,21 @@ export async function readStreamFully(s: unknown): Promise<Uint8Array> {
     return out;
   }
   const chunks: Uint8Array[] = [];
-  let total = 0;
   const tmp = new Int8Array(1 << 16);
   for (;;) {
     const n = await vcall(s, "read", "([BII)I", tmp, 0, tmp.length) as number;
     if (n <= 0) break;
     chunks.push(new Uint8Array(tmp.buffer.slice(0, n)));
-    total += n;
   }
-  const out = new Uint8Array(total);
-  let at = 0;
-  for (const c of chunks) { out.set(c, at); at += c.length; }
-  return out;
+  return concat(chunks);
 }
 rt.register({ name: "java/io/InputStream", ctor: JInputStream, ifaces: ["java/io/Closeable"], methods: inputStreamMethods });
 rt.register({
   name: "java/io/ByteArrayInputStream", ctor: class extends JInputStream {}, sup: "java/io/InputStream",
   methods: {
-    "<init>([B)V": function (this: JInputStream, b: Int8Array) { this.buf = new Uint8Array(b.buffer, b.byteOffset, b.length); },
+    "<init>([B)V": function (this: JInputStream, b: Int8Array) { this.buf = u8(b); },
     "<init>([BII)V": function (this: JInputStream, b: Int8Array, off: number, len: number) {
-      this.buf = new Uint8Array(b.buffer, b.byteOffset + off, len);
+      this.buf = u8(b, off, len);
     },
   },
 });
@@ -342,7 +336,7 @@ rt.register({
     "readLong()J": dataRead(8, (b) => new DataView(b.buffer, b.byteOffset, 8).getBigInt64(0)),
     "readBoolean()Z": dataRead(1, (b) => (b[0] ? 1 : 0)),
     "readFully([B)V": maySuspend(function (this: JInputStream, out: Int8Array) {
-      return after(dataBytes(this, out.length), (bytes) => { out.set(new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length)); });
+      return after(dataBytes(this, out.length), (bytes) => { out.set(i8(bytes)); });
     }),
     "readUTF()Ljava/lang/String;": async function (this: JInputStream) {
       const head = await dataBytes(this, 2);
@@ -468,7 +462,7 @@ rt.register({
     }),
     "readFully([B)V": maySuspend(async function (this: JObjectIn, out: Int8Array) {
       const b = await blockBytes(this, out.length);
-      out.set(new Int8Array(b.buffer, b.byteOffset, b.length));
+      out.set(i8(b));
     }),
     "readObject()Ljava/lang/Object;": noGraph,
     "defaultReadObject()V": noGraph,
@@ -533,7 +527,7 @@ class JBAOS extends JOutputStream {
     nb.set(this.buf.subarray(0, this.count));
     this.buf = nb;
   }
-  bytes(): Uint8Array { return new Uint8Array(this.buf.buffer, this.buf.byteOffset, this.count); }
+  bytes(): Uint8Array { return u8(this.buf, 0, this.count); }
 }
 function baosString(this: JBAOS) { return utf8.dec.decode(this.bytes()); }
 rt.register({
@@ -694,7 +688,7 @@ function rafRead(f: JRAF, b: Int8Array, off: number, len: number): number | Prom
     const value = f.source.read(f.pos, len);
     const done = (bytes: Uint8Array) => {
       if (!bytes.length) return -1;
-      b.set(new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length), off);
+      b.set(i8(bytes), off);
       f.pos += bytes.length;
       return bytes.length;
     };
@@ -717,7 +711,7 @@ async function rafReadFully(f: JRAF, b: Int8Array, off: number, len: number): Pr
 function rafWrite(f: JRAF, b: Int8Array, off: number, len: number) {
   checkFileOpen(f);
   rafGrow(f, f.pos + len);
-  f.buf.set(new Uint8Array(b.buffer, b.byteOffset + off, len), f.pos);
+  f.buf.set(u8(b, off, len), f.pos);
   f.pos += len;
   vfs.write(f.path, f.buf);
 }
@@ -900,7 +894,7 @@ rt.register({
   sysInfo.ctor[mangleStaticField("err")] = err;
 }
 
-rt.register({ name: "java/lang/Readable", ctor: class extends JObj {} });
+rt.markers("java/lang/Readable");
 class JReader extends JObj {
   s = ""; pos = 0;
   /** the stream or reader still to be decoded into `s`; null once the text is complete */
@@ -1082,7 +1076,7 @@ const pw = async (p: JPrintWriter, s: string, ln: boolean) => {
   if (ln && p.auto) await vcall(p, "flush", "()V");
 };
 const mkOSW = async (o: unknown) => {
-  const w = new (rt.link("java/io/OutputStreamWriter").ctor)();
+  const w = rt.make("java/io/OutputStreamWriter");
   await vcall(w, "<init>", "(Ljava/io/OutputStream;)V", o);
   return w;
 };
@@ -1174,7 +1168,7 @@ rt.register({
 });
 
 // File locks remain advisory; byte mappings retain the opened stream's storage.
-const fileLock = () => new (rt.link("java/nio/channels/FileLock").ctor)();
+const fileLock = () => rt.make("java/nio/channels/FileLock");
 class JFileChannel extends JObj {
   file!: JInputStream | JRAF | JFOS;
   open = true;
@@ -1263,7 +1257,7 @@ rt.register({
     "getFileName()Ljava/nio/file/Path;": function (this: JNioPath) { return mkPath(this.p.split("/").pop() ?? ""); },
   },
 });
-rt.register({ name: "java/nio/file/CopyOption", ctor: class extends JObj {} });
+rt.markers("java/nio/file/CopyOption");
 rt.register({
   name: "java/nio/file/Paths", ctor: class extends JObj {},
   methods: {
@@ -1319,7 +1313,7 @@ rt.register({
     "static fromMillis(J)Ljava/nio/file/attribute/FileTime;": (ms: bigint) => { const t = new JFileTime(); t.ms = ms; return t; },
   },
 });
-rt.register({ name: "java/nio/file/attribute/BasicFileAttributes", ctor: class extends JObj {} });
+rt.markers("java/nio/file/attribute/BasicFileAttributes");
 class JBasicAttrs extends JObj { sz = 0; dir = false; }
 rt.register({
   name: "webdroid/BasicAttrs", ctor: JBasicAttrs, ifaces: ["java/nio/file/attribute/BasicFileAttributes"],
@@ -1355,10 +1349,7 @@ async function slurp(src: unknown): Promise<Uint8Array> {
     if (n <= 0) break;
     parts.push(new Uint8Array(chunk.buffer, 0, n).slice());
   }
-  const out = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
-  let o = 0;
-  for (const p of parts) { out.set(p, o); o += p.length; }
-  return out;
+  return concat(parts);
 }
 class JScanner extends JObj { text = ""; pos = 0; delim = /\s+/y; }
 function skipDelim(s: JScanner): void { s.delim.lastIndex = s.pos; const m = s.delim.exec(s.text); if (m && m.index === s.pos) s.pos += m[0].length; }

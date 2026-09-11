@@ -143,7 +143,7 @@ rt.register({
   name: "android/app/job/JobServiceEngine", ctor: JJobServiceEngine,
   methods: {
     "<init>(Landroid/app/Service;)V": function (this: JJobServiceEngine, s: unknown) { this.svc = s; },
-    "getBinder()Landroid/os/IBinder;": () => new (rt.link("android/os/Binder").ctor)(),
+    "getBinder()Landroid/os/IBinder;": () => rt.make("android/os/Binder"),
     "onStartJob(Landroid/app/job/JobParameters;)Z": () => 0,
     "onStopJob(Landroid/app/job/JobParameters;)Z": () => 0,
     "jobFinished(Landroid/app/job/JobParameters;Z)V": () => {},

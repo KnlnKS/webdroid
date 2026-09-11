@@ -1,5 +1,5 @@
 import { JObj, rt, maySuspend } from "../jvm/runtime";
-import { jarray } from "../jvm/abi";
+import { jarray, u8 } from "../jvm/abi";
 import { JThrowable, vcall } from "../jvm/natives/jlang";
 import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
 import { JMediaFormat } from "./media-format";
@@ -23,7 +23,7 @@ const numberValue = (format: JMediaFormat, key: string, fallback: number): numbe
 const stringValue = (format: JMediaFormat, key: string): string => {
   const value = format.values.get(key)?.value; return typeof value === "string" ? value : "";
 };
-function bufferBytes(buffer: JBuffer): Uint8Array { const view = buffer.dv; return new Uint8Array(view.buffer, view.byteOffset + buffer.pos, buffer.lim - buffer.pos); }
+function bufferBytes(buffer: JBuffer): Uint8Array { const view = buffer.dv; return u8(view, buffer.pos, buffer.lim - buffer.pos); }
 function codecData(format: JMediaFormat, key: string): Uint8Array | undefined {
   const value = format.values.get(key)?.value; return value instanceof JBuffer ? bufferBytes(value) : undefined;
 }

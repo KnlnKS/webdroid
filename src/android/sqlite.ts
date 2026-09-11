@@ -2,7 +2,7 @@ import { JMap } from "../jvm/natives/jutil";
 // android.database.* over sql.js (in-memory, persisted to localStorage per db).
 
 import initSqlJs, { type Database, type Statement } from "sql.js";
-import { charsToString } from "../jvm/abi";
+import { charsToString, i8, u8 } from "../jvm/abi";
 import { rt, JObj, type NativeSpec, callSelf, maySuspend } from "../jvm/runtime";
 import { vcall, boxInt, box, JLong, JBool } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
@@ -194,7 +194,7 @@ function bindArgs(args: unknown[] | null): (string | number | bigint | Uint8Arra
     if (a === null || a === undefined) return null;
     if (typeof a === "bigint") return a;
     if (typeof a === "number" || typeof a === "string") return a;
-    if (a instanceof Int8Array) return new Uint8Array(a.buffer, a.byteOffset, a.length);
+    if (a instanceof Int8Array) return u8(a);
     if (typeof a === "object" && "v" in (a as object)) {
       const v = (a as { v: unknown }).v;
       return v as number | bigint;
@@ -293,7 +293,7 @@ const cursorMethods: NativeSpec["methods"] = {
   "getShort(I)S": function (this: JCursor, i: number) { return (Number(this.val(i) ?? 0) << 16) >> 16; },
   "getBlob(I)[B": function (this: JCursor, i: number) {
     const v = this.val(i);
-    if (v instanceof Uint8Array) return new Int8Array(v.buffer, v.byteOffset, v.length);
+    if (v instanceof Uint8Array) return i8(v);
     return v === null ? null : new Int8Array(0);
   },
   "isNull(I)Z": function (this: JCursor, i: number) { return this.val(i) === null ? 1 : 0; },
@@ -319,7 +319,7 @@ const cursorMethods: NativeSpec["methods"] = {
   "getExtras()Landroid/os/Bundle;": () => new JBundle(),
   "respond(Landroid/os/Bundle;)Landroid/os/Bundle;": () => new JBundle(),
 };
-rt.register({ name: "android/database/Cursor", ctor: class extends JObj {} });
+rt.markers("android/database/Cursor");
 rt.register({ name: "webdroid/Cursor", ctor: JCursor, ifaces: ["android/database/Cursor", "java/io/Closeable"], methods: cursorMethods });
 class JRowBuilder extends JObj { cursor!: JCursor; row!: unknown[]; index = 0; }
 rt.register({ name: "android/database/MatrixCursor$RowBuilder", ctor: JRowBuilder, methods: {
@@ -508,7 +508,7 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "getPath()Ljava/lang/String;": function (this: JSQLiteDatabase) { return this.path; },
   "getAttachedDbs()Ljava/util/List;": function (this: JSQLiteDatabase) {
-    const p = new (rt.link("android/util/Pair").ctor)();
+    const p = rt.make("android/util/Pair");
     p.first = "main"; p.second = this.path;
     return newArrayList([p]);
   },
@@ -576,7 +576,7 @@ rt.register({
 class JSQLiteQuery extends JSQLiteProgram {}
 class JSQLiteCursorDriver extends JObj { query: JSQLiteQuery | null = null; }
 rt.register({ name: "android/database/sqlite/SQLiteQuery", ctor: JSQLiteQuery, sup: "android/database/sqlite/SQLiteProgram" });
-rt.register({ name: "android/database/sqlite/SQLiteCursorDriver", ctor: class extends JObj {} });
+rt.markers("android/database/sqlite/SQLiteCursorDriver");
 rt.register({ name: "android/database/sqlite/SQLiteDirectCursorDriver", ctor: JSQLiteCursorDriver, ifaces: ["android/database/sqlite/SQLiteCursorDriver"], methods: {
   "setBindArguments([Ljava/lang/String;)V": function (this: JSQLiteCursorDriver, args: string[]) { if (this.query) this.query.binds = args.slice(); },
 } });
@@ -633,7 +633,7 @@ rt.register({ name: "android/database/sqlite/SQLiteDatabase", ctor: JSQLiteDatab
     rt.register({ name: "android/database/sqlite/" + n, ctor: class extends p {}, sup: "android/database/sqlite/SQLiteException" });
   }
 }
-rt.register({ name: "android/database/sqlite/SQLiteDatabase$CursorFactory", ctor: class extends JObj {} });
+rt.markers("android/database/sqlite/SQLiteDatabase$CursorFactory");
 rt.register({ name: "android/database/ContentObserver", ctor: class extends JObj {},
   methods: { "<init>(Landroid/os/Handler;)V": function () {} } });
 rt.register({ name: "android/database/DataSetObserver", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
@@ -723,7 +723,7 @@ async function openHelperDb(h: JSQLiteOpenHelper): Promise<JSQLiteDatabase> {
   await vcall(h, "onOpen", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);
   return jdb;
 }
-rt.register({ name: "android/database/DatabaseErrorHandler", ctor: class extends JObj {} });
+rt.markers("android/database/DatabaseErrorHandler");
 
 // ── androidx.sqlite bundled driver (libsqliteJni) over sql.js. Mihon's SQLDelight/Room
 // stack drives the DB through these statics; handles are opaque bigints.

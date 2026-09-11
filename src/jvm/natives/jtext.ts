@@ -194,14 +194,14 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "<init>(Ljava/util/Locale;)V": function () {},
-    "static getInstance()Ljava/text/DecimalFormatSymbols;": () => new (rt.link("java/text/DecimalFormatSymbols").ctor)(),
-    "static getInstance(Ljava/util/Locale;)Ljava/text/DecimalFormatSymbols;": () => new (rt.link("java/text/DecimalFormatSymbols").ctor)(),
+    "static getInstance()Ljava/text/DecimalFormatSymbols;": () => rt.make("java/text/DecimalFormatSymbols"),
+    "static getInstance(Ljava/util/Locale;)Ljava/text/DecimalFormatSymbols;": () => rt.make("java/text/DecimalFormatSymbols"),
     "setDecimalSeparator(C)V": () => {},
     "getDecimalSeparator()C": () => 46,
     "getGroupingSeparator()C": () => 44,
   },
 });
-const collator = () => new (rt.link("java/text/Collator").ctor)();
+const collator = () => rt.make("java/text/Collator");
 rt.register({
   name: "java/text/Collator", ctor: class extends JObj {}, ifaces: ["java/util/Comparator"],
   methods: {

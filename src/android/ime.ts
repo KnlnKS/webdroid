@@ -12,7 +12,7 @@
 import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
-import { jarray } from "../jvm/abi";
+import { jarray, splitSig } from "../jvm/abi";
 import { JEditable, JSpannable, JSpanned, csText, textSelection, setTextSelection } from "./text";
 import { JView, invalidate } from "./view";
 import { JMatrix } from "./graphics";
@@ -20,7 +20,7 @@ import { JTextView, JEditText, focusedEdit, focusEditText, inputEl, editInput, f
 import { inMainJob, onMain } from "./mainloop";
 import { PARCELABLE } from "./os";
 
-rt.register({ name: "android/view/textservice/SpellCheckerSession$SpellCheckerSessionListener", ctor: class extends JObj {} });
+rt.markers("android/view/textservice/SpellCheckerSession$SpellCheckerSessionListener");
 rt.register({
   name: "android/view/textservice/TextServicesManager", ctor: class extends JObj {},
   methods: {
@@ -167,10 +167,6 @@ const IC_SIGS = [
   "setComposingText(Ljava/lang/CharSequence;ILandroid/view/inputmethod/TextAttribute;)Z",
   "setSelection(II)Z", "setImeConsumesInput(Z)Z", "takeSnapshot()Landroid/view/inputmethod/TextSnapshot;",
 ];
-const splitSig = (sig: string) => {
-  const i = sig.indexOf("(");
-  return { name: sig.slice(0, i), desc: sig.slice(i) };
-};
 rt.register({
   name: "android/view/inputmethod/InputConnection", ctor: class extends JObj {},
   statics: {
@@ -187,7 +183,7 @@ class JBaseInputConnection extends JObj {
   view: JView | null = null; full = 0; own: JEditable | null = null; batch = 0;
   editable(): JEditable {
     if (this.full && this.view instanceof JTextView) return this.view.getEditable();
-    return this.own ??= new (rt.link("webdroid/Editable").ctor)() as JEditable;
+    return this.own ??= rt.make("webdroid/Editable") as JEditable;
   }
   async content() {
     const editable = await vcall(this, "getEditable", "()Landroid/text/Editable;");
@@ -236,7 +232,7 @@ rt.register({
       return start === end ? null : text.slice(Math.min(start, end), Math.max(start, end));
     },
     "getExtractedText(Landroid/view/inputmethod/ExtractedTextRequest;I)Landroid/view/inputmethod/ExtractedText;": async function (this: JBaseInputConnection) {
-      const { text, start, end } = await this.content(), extracted = new (rt.link("android/view/inputmethod/ExtractedText").ctor)() as JExtractedText;
+      const { text, start, end } = await this.content(), extracted = rt.make("android/view/inputmethod/ExtractedText") as JExtractedText;
       extracted.text = text; extracted.selectionStart = start; extracted.selectionEnd = end; return extracted;
     },
     "getCursorCapsMode(I)I": () => 0,
@@ -326,7 +322,7 @@ const wrapMethods: Record<string, unknown> = {
   "getTarget()Landroid/view/inputmethod/InputConnection;": function (this: JICWrapper) { return this.targetIc; },
 };
 for (const sig of IC_SIGS) {
-  const { name, desc } = splitSig(sig);
+  const [name, desc] = splitSig(sig);
   const ret = desc.slice(desc.indexOf(")") + 1);
   const miss = ret === "V" ? undefined : ret === "Z" || ret === "I" ? 0 : null;
   wrapMethods[sig] = maySuspend(function (this: JICWrapper, ...a: unknown[]) {
@@ -373,7 +369,7 @@ rt.register({
     "<init>()V": function () {},
     "static getInstance()Landroid/text/Editable$Factory;": () => editableFactory ?? (editableFactory = new JEditableFactory()),
     "newEditable(Ljava/lang/CharSequence;)Landroid/text/Editable;": async (cs: unknown) => {
-      const o = new (rt.link("android/text/SpannableStringBuilder").ctor)() as JSpannable;
+      const o = rt.make("android/text/SpannableStringBuilder") as JSpannable;
       o.text = await csText(cs);
       if (cs instanceof JSpanned) o.spans = cs.spans.slice();
       return o;
@@ -478,12 +474,12 @@ async function connectInput(view: JView) {
   }
   if (view instanceof JEditText) { focusEditText(view); return true; }
   focusEditText(null);
-  const info = new (rt.link("android/view/inputmethod/EditorInfo").ctor)() as JEditorInfo;
+  const info = rt.make("android/view/inputmethod/EditorInfo") as JEditorInfo;
   const connection = await vcall(view, "onCreateInputConnection", "(Landroid/view/inputmethod/EditorInfo;)Landroid/view/inputmethod/InputConnection;", info);
   if (!connection) return false;
   const session = { view, connection, info, text: info.surrounding, offset: info.surroundingStart, start: Math.max(0, info.initialSelStart), end: Math.max(0, info.initialSelEnd), compStart: -1, compEnd: -1 };
   served = session;
-  const request = new (rt.link("android/view/inputmethod/ExtractedTextRequest").ctor)();
+  const request = rt.make("android/view/inputmethod/ExtractedTextRequest");
   const extracted = await vcall(connection, "getExtractedText", "(Landroid/view/inputmethod/ExtractedTextRequest;I)Landroid/view/inputmethod/ExtractedText;", request, 1);
   if (extracted) await extractedInput(session, extracted);
   mirrorInput(); return true;
@@ -620,4 +616,4 @@ rt.register({
     "performCompletion()V": function () {},
   },
 });
-rt.register({ name: "android/widget/Filter$FilterListener", ctor: class extends JObj {} });
+rt.markers("android/widget/Filter$FilterListener");

@@ -151,6 +151,5 @@ rt.register({
     return m;
   })(),
 });
-rt.register({ name: "android/content/SharedPreferences", ctor: class extends JObj {} });
-rt.register({ name: "android/content/SharedPreferences$Editor", ctor: class extends JObj {} });
-rt.register({ name: "android/content/SharedPreferences$OnSharedPreferenceChangeListener", ctor: class extends JObj {} });
+rt.markers("android/content/SharedPreferences", "android/content/SharedPreferences$Editor",
+  "android/content/SharedPreferences$OnSharedPreferenceChangeListener");

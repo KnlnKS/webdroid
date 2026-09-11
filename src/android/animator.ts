@@ -201,7 +201,7 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JPVH) { return this.name + ": " + (this.keys ?? this.objKeys ?? [this.from, this.to]).join(", "); },
   },
 });
-rt.register({ name: "android/animation/TypeEvaluator", ctor: class extends JObj {} });
+rt.markers("android/animation/TypeEvaluator");
 class JRectEvaluator extends JObj { rect: JRect | null = null; }
 function evaluateRect(this: JRectEvaluator, f: number, a: JRect, b: JRect): JRect {
   const edge = (x: number, y: number) => (x + rt.f2i(Math.fround(Math.fround((y - x) | 0) * f))) | 0;
@@ -394,7 +394,7 @@ rt.register({
     "setDuration(J)Landroid/animation/ObjectAnimator;": setDur,
     "static ofFloat(Ljava/lang/Object;Ljava/lang/String;[F)Landroid/animation/ObjectAnimator;":
       (target: unknown, prop: string, vals: Float32Array) => {
-        const a = new (rt.link("android/animation/ObjectAnimator").ctor)();
+        const a = rt.make("android/animation/ObjectAnimator");
         a.target = target;
         a.propName = prop;
         setNumKeys(a, vals, false);
@@ -402,7 +402,7 @@ rt.register({
       },
     "static ofInt(Ljava/lang/Object;Ljava/lang/String;[I)Landroid/animation/ObjectAnimator;":
       (target: unknown, prop: string, vals: Int32Array) => {
-        const a = new (rt.link("android/animation/ObjectAnimator").ctor)();
+        const a = rt.make("android/animation/ObjectAnimator");
         a.target = target;
         a.propName = prop;
         setNumKeys(a, vals, true);
@@ -410,7 +410,7 @@ rt.register({
       },
     "static ofFloat(Ljava/lang/Object;Landroid/util/Property;[F)Landroid/animation/ObjectAnimator;":
       (target: unknown, prop: unknown, vals: Float32Array) => {
-        const a = new (rt.link("android/animation/ObjectAnimator").ctor)();
+        const a = rt.make("android/animation/ObjectAnimator");
         a.target = target;
         a.prop = prop;
         setNumKeys(a, vals, false);
@@ -418,7 +418,7 @@ rt.register({
       },
     "static ofInt(Ljava/lang/Object;Landroid/util/Property;[I)Landroid/animation/ObjectAnimator;":
       (target: unknown, prop: unknown, vals: Int32Array) => {
-        const a = new (rt.link("android/animation/ObjectAnimator").ctor)();
+        const a = rt.make("android/animation/ObjectAnimator");
         a.target = target;
         a.prop = prop;
         setNumKeys(a, vals, true);
@@ -430,22 +430,22 @@ rt.register({
     "setAutoCancel(Z)V": () => {},
     "getTarget()Ljava/lang/Object;": function (this: JValueAnimator) { return this.target; },
     "static ofArgb(Ljava/lang/Object;Ljava/lang/String;[I)Landroid/animation/ObjectAnimator;": (target: unknown, prop: string, vals: Int32Array) => {
-      const a = new (rt.link("android/animation/ObjectAnimator").ctor)() as JValueAnimator;
+      const a = rt.make("android/animation/ObjectAnimator") as JValueAnimator;
       a.target = target; a.propName = prop; a.evaluator = argbEvaluator; a.objKeys = Array.from(vals, boxInt);
       return a;
     },
     "static ofObject(Ljava/lang/Object;Ljava/lang/String;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/ObjectAnimator;": (target: unknown, prop: string, ev: unknown, vals: unknown[]) => {
-      const a = new (rt.link("android/animation/ObjectAnimator").ctor)() as JValueAnimator;
+      const a = rt.make("android/animation/ObjectAnimator") as JValueAnimator;
       a.target = target; a.propName = prop; a.evaluator = ev; a.objKeys = [...(vals ?? [])];
       return a;
     },
     "static ofObject(Ljava/lang/Object;Landroid/util/Property;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/ObjectAnimator;": (target: unknown, prop: unknown, ev: unknown, vals: unknown[]) => {
-      const a = new (rt.link("android/animation/ObjectAnimator").ctor)() as JValueAnimator;
+      const a = rt.make("android/animation/ObjectAnimator") as JValueAnimator;
       a.target = target; a.prop = prop; a.evaluator = ev; a.objKeys = [...(vals ?? [])];
       return a;
     },
     "static ofPropertyValuesHolder(Ljava/lang/Object;[Landroid/animation/PropertyValuesHolder;)Landroid/animation/ObjectAnimator;": (target: unknown, hs: JPVH[]) => {
-      const a = new (rt.link("android/animation/ObjectAnimator").ctor)() as JValueAnimator;
+      const a = rt.make("android/animation/ObjectAnimator") as JValueAnimator;
       a.target = target; a.holders = [...(hs ?? [])];
       return a;
     },
@@ -549,9 +549,8 @@ rt.register({
     "isChangingLayout()Z": () => 0,
   },
 });
-rt.register({ name: "android/animation/LayoutTransition$TransitionListener", ctor: class extends JObj {} });
-rt.register({ name: "android/animation/Animator$AnimatorPauseListener", ctor: class extends JObj {} });
-rt.register({ name: "android/animation/ValueAnimator$DurationScaleChangeListener", ctor: class extends JObj {} });
+rt.markers("android/animation/LayoutTransition$TransitionListener", "android/animation/Animator$AnimatorPauseListener",
+  "android/animation/ValueAnimator$DurationScaleChangeListener");
 const M_start = mangleMethod("start", "()V");
 const M_cancel = mangleMethod("cancel", "()V");
 
@@ -567,12 +566,12 @@ function xmlAttr(res: Resources, node: XmlNode, id: number): RV | null {
 }
 function inflateAnimator(res: Resources, node: XmlNode): JValueAnimator {
   if (node.name === "set") {
-    const set = new (rt.link("android/animation/AnimatorSet").ctor)() as JAnimatorSet;
+    const set = rt.make("android/animation/AnimatorSet") as JAnimatorSet;
     set.anims = node.children.map((c) => inflateAnimator(res, c));
     set.sequential = rvInt(res, xmlAttr(res, node, A.ordering)) === 1;
     return set;
   }
-  const a = new (rt.link("android/animation/ObjectAnimator").ctor)() as JValueAnimator;
+  const a = rt.make("android/animation/ObjectAnimator") as JValueAnimator;
   a.propName = xmlAttr(res, node, A.propertyName)?.s ?? "";
   a.durationMs = rvInt(res, xmlAttr(res, node, A.duration), 300);
   a.delayMs = rvInt(res, xmlAttr(res, node, A.startOffset));
@@ -643,8 +642,7 @@ rt.register({
     },
   },
 });
-rt.register({ name: "android/animation/Animator$AnimatorListener", ctor: class extends JObj {} });
-rt.register({ name: "android/animation/ValueAnimator$AnimatorUpdateListener", ctor: class extends JObj {} });
+rt.markers("android/animation/Animator$AnimatorListener", "android/animation/ValueAnimator$AnimatorUpdateListener");
 rt.register({
   name: "android/animation/AnimatorListenerAdapter", ctor: class extends JObj {},
   ifaces: ["android/animation/Animator$AnimatorListener"],

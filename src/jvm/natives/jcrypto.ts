@@ -3,7 +3,7 @@
 import { rt, JObj, maySuspend } from "../runtime";
 import { defineException } from "./jlang";
 import { mkIter } from "./jutil";
-import { mangleMethod } from "../abi";
+import { mangleMethod, concat, i8 } from "../abi";
 import { JKeyGenSpec } from "../../android/security";
 import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain, rsaCrypt } from "./jrsa";
 import { generateEc, isEcCurve, curveOfParams } from "./jec";
@@ -24,13 +24,6 @@ function bytes(b: Int8Array, off = 0, len = b.length - off): Uint8Array<ArrayBuf
   u.set(b.subarray(off, off + len));
   return u;
 }
-function join(parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
-  const all = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let o = 0;
-  for (const p of parts) { all.set(p, o); o += p.length; }
-  return all;
-}
-const toJava = (u: Uint8Array) => new Int8Array(u.buffer, u.byteOffset, u.length);
 
 class JSecretKeySpec extends JObj {
   key = new Uint8Array(0);
@@ -165,7 +158,7 @@ async function cbcRaw(key: CryptoKey, iv: Uint8Array<ArrayBuffer>, data: Uint8Ar
   const p = { name: "AES-CBC", iv };
   if (enc) return new Uint8Array(await crypto.subtle.encrypt(p, key, data), 0, data.length);
   const last = data.length ? data.subarray(data.length - 16) : iv;
-  const ct = join([data, await cbcRaw(key, ZERO_IV, last.map((b) => b ^ 0x10), true)]);
+  const ct = concat([data, await cbcRaw(key, ZERO_IV, last.map((b) => b ^ 0x10), true)]);
   return new Uint8Array(await crypto.subtle.decrypt(p, key, ct));
 }
 async function ecb(key: CryptoKey, data: Uint8Array<ArrayBuffer>, enc: boolean): Promise<Uint8Array<ArrayBuffer>> {
@@ -175,7 +168,7 @@ async function ecb(key: CryptoKey, data: Uint8Array<ArrayBuffer>, enc: boolean):
 }
 function pad(d: Uint8Array): Uint8Array<ArrayBuffer> {
   const n = 16 - d.length % 16;
-  return join([d, new Uint8Array(n).fill(n)]);
+  return concat([d, new Uint8Array(n).fill(n)]);
 }
 function unpad(d: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
   const n = d[d.length - 1];
@@ -187,7 +180,7 @@ function unpad(d: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
 async function doFinal(c: JCipher, b?: Int8Array, off = 0, len = b?.length): Promise<Int8Array> {
   if (!c.key && !c.rsa) throw rt.mkThrowable("java/lang/IllegalStateException", "Cipher not initialized");
   if (b) c.parts.push(bytes(b, off, len));
-  let data = join(c.parts);
+  let data = concat(c.parts);
   c.parts = [];
   if (c.rsa) return rsaCrypt(c.rsa, data, c.oaep);
   if (!c.key) throw rt.mkThrowable("java/lang/IllegalStateException", "Cipher not initialized");
@@ -196,14 +189,14 @@ async function doFinal(c: JCipher, b?: Int8Array, off = 0, len = b?.length): Pro
   if (c.alg === "AES-CTR") return new Int8Array(await crypto.subtle[op]({ name: c.alg, counter: c.iv!, length: 128 }, c.key, data));
   if (c.alg === "AES-GCM") {
     const p: AesGcmParams = { name: c.alg, iv: c.iv!, tagLength: c.tagLength };
-    if (c.aad.length) { p.additionalData = join(c.aad); c.aad = []; }
+    if (c.aad.length) { p.additionalData = concat(c.aad); c.aad = []; }
     try { return new Int8Array(await crypto.subtle[op](p, c.key, data)); }
     catch { throw rt.mkThrowable("javax/crypto/AEADBadTagException", "Tag mismatch"); }
   }
   if (c.padded && enc) data = pad(data);
   if (data.length % 16) throw rt.mkThrowable("javax/crypto/IllegalBlockSizeException", "Input length not multiple of 16 bytes");
   const out = c.alg === "AES-ECB" ? await ecb(c.key, data, enc) : await cbcRaw(c.key, c.iv!, data, enc);
-  return toJava(c.padded && !enc ? unpad(out) : out);
+  return i8(c.padded && !enc ? unpad(out) : out);
 }
 rt.register({
   name: "javax/crypto/Cipher", ctor: JCipher,
@@ -285,7 +278,7 @@ class JMac extends JObj {
 async function macFinal(m: JMac, b?: Int8Array): Promise<Int8Array> {
   if (!m.key) throw rt.mkThrowable("java/lang/IllegalStateException", "MAC not initialized");
   if (b) m.parts.push(bytes(b));
-  const data = join(m.parts);
+  const data = concat(m.parts);
   m.parts = [];
   return new Int8Array(await crypto.subtle.sign("HMAC", m.key, data));
 }
@@ -362,9 +355,8 @@ function storeFor(type: string): JKeyStore {
 }
 rt.register({ name: "webdroid/CAStore", ctor: class extends JKeyStore {}, sup: "java/security/KeyStore", methods: caStoreMethods });
 class JSecretKeyEntry extends JObj { key: JSecretKeySpec | null = null; }
-rt.register({ name: "java/security/KeyStore$Entry", ctor: class extends JObj {} });
-rt.register({ name: "java/security/KeyStore$LoadStoreParameter", ctor: class extends JObj {} });
-rt.register({ name: "java/security/KeyStore$ProtectionParameter", ctor: class extends JObj {} });
+rt.markers("java/security/KeyStore$Entry", "java/security/KeyStore$LoadStoreParameter",
+  "java/security/KeyStore$ProtectionParameter");
 rt.register({
   name: "java/security/KeyStore$SecretKeyEntry", ctor: JSecretKeyEntry, ifaces: ["java/security/KeyStore$Entry"],
   methods: {

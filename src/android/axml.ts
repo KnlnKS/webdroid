@@ -1,3 +1,4 @@
+import { u8 } from "../jvm/abi";
 // Android binary XML (AXML) + shared string-pool / Res_value bits (also used by arsc.ts)
 
 export const TV = { // typed value dataType
@@ -34,7 +35,7 @@ export class StringPool {
         if (u16len & 0x80) u16len = ((u16len & 0x7f) << 8) | view.getUint8(p++);
         let bytelen = view.getUint8(p++);
         if (bytelen & 0x80) bytelen = ((bytelen & 0x7f) << 8) | view.getUint8(p++);
-        const bytes = new Uint8Array(view.buffer, view.byteOffset + p, bytelen);
+        const bytes = u8(view, p, bytelen);
         this.strings.push(utf8Dec.decode(bytes));
       } else {
         let len = view.getUint16(p, true); p += 2;

@@ -29,7 +29,7 @@ export class JWindow extends JObj {
   features = new Set<number>();
   /** the window's OnBackInvokedDispatcher (AOSP: one per ViewRootImpl) */
   backD: JObj | null = null;
-  backDispatcher(): JObj { return this.backD ??= new (rt.link("android/window/OnBackInvokedDispatcher").ctor)(); }
+  backDispatcher(): JObj { return this.backD ??= rt.make("android/window/OnBackInvokedDispatcher"); }
   /** WindowManager.LayoutParams flags; the shell reads FLAG_FULLSCREEN off the top activity. */
   flags = 0;
   screenBrightness = -1;
@@ -122,7 +122,7 @@ rt.register({
       invalidate();
     },
     "getAttributes()Landroid/view/WindowManager$LayoutParams;": function (this: JWindow) {
-      const lp = new (rt.link("android/view/WindowManager$LayoutParams").ctor)();
+      const lp = rt.make("android/view/WindowManager$LayoutParams");
       lp.flags = this.flags;
       lp.screenBrightness = this.screenBrightness;
       return lp;
@@ -159,7 +159,7 @@ rt.register({
   statics: { APPEARANCE_LOW_PROFILE_BARS: 4, APPEARANCE_LIGHT_STATUS_BARS, APPEARANCE_LIGHT_NAVIGATION_BARS: 16,
     BEHAVIOR_DEFAULT: 1, BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE: 2 },
 });
-rt.register({ name: "android/view/WindowInsetsController$OnControllableInsetsChangedListener", ctor: class extends JObj {} });
+rt.markers("android/view/WindowInsetsController$OnControllableInsetsChangedListener");
 rt.register({
   name: "webdroid/InsetsController", ctor: JInsetsController, ifaces: ["android/view/WindowInsetsController"],
   methods: {
@@ -205,7 +205,7 @@ rt.register({
     "getTitle()Ljava/lang/CharSequence;": function (this: { title: unknown }) { return this.title; },
   },
 });
-rt.register({ name: "android/view/WindowManager", ctor: class extends JObj {} });
+rt.markers("android/view/WindowManager");
 class JWindowMetrics extends JObj {}
 rt.register({
   name: "android/view/WindowMetrics", ctor: JWindowMetrics,
@@ -223,7 +223,7 @@ rt.register({
     "getMaximumWindowMetrics()Landroid/view/WindowMetrics;": () => new JWindowMetrics(),
     "addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": async (v: JView, lp: JLayoutParams & { x?: number; y?: number }) => {
       v.lp = lp;
-      v.windowOwner ??= new (rt.link("android/view/Window").ctor)();
+      v.windowOwner ??= rt.make("android/view/Window");
       addOverlay(v, lp.x ?? 0, lp.y ?? 0);
       await dispatchAttached(v);
     },

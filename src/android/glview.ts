@@ -58,8 +58,8 @@ class JGLSurfaceView extends JViewGroup {
         if (!this.eglConfig) {
           this.eglConfig = this.configChooser
             ? (await vcall(this.configChooser, "chooseConfig", D_chooseConfig,
-                new (rt.link("javax/microedition/khronos/egl/EGL10").ctor)(),
-                new (rt.link("javax/microedition/khronos/egl/EGLDisplay").ctor)())) ?? theConfig
+                rt.make("javax/microedition/khronos/egl/EGL10"),
+                rt.make("javax/microedition/khronos/egl/EGLDisplay"))) ?? theConfig
             : theConfig;
         }
         await guardCall(this.renderer, M_onSurfaceCreated, this.fakeGL10, this.eglConfig);
@@ -145,10 +145,8 @@ rt.register({
     },
   },
 });
-rt.register({ name: "android/opengl/GLSurfaceView$Renderer", ctor: class extends JObj {} });
-rt.register({ name: "android/opengl/GLSurfaceView$EGLConfigChooser", ctor: class extends JObj {} });
-rt.register({ name: "android/opengl/GLSurfaceView$EGLContextFactory", ctor: class extends JObj {} });
-rt.register({ name: "android/opengl/GLSurfaceView$EGLWindowSurfaceFactory", ctor: class extends JObj {} });
+rt.markers("android/opengl/GLSurfaceView$Renderer", "android/opengl/GLSurfaceView$EGLConfigChooser",
+  "android/opengl/GLSurfaceView$EGLContextFactory", "android/opengl/GLSurfaceView$EGLWindowSurfaceFactory");
 
 // ── SurfaceView: a real surface (an OffscreenCanvas + WebGL context) composited behind the view
 // (JView.surfaceLayer). SurfaceHolder callbacks fire on the main looper once the view has a size,
@@ -195,7 +193,7 @@ export class EglContext {
 export const glSurfaces = { current: null as EglContext | null };
 
 // PixelCopy: the surface's last presented frame into a Bitmap, the listener told on its handler's looper
-rt.register({ name: "android/view/PixelCopy$OnPixelCopyFinishedListener", ctor: class extends JObj {} });
+rt.markers("android/view/PixelCopy$OnPixelCopyFinishedListener");
 const pixelCopy = async (s: GlSurface | null, bmp: JBitmap, listener: unknown): Promise<void> => {
   let result = 1;                                                              // ERROR_UNKNOWN
   if (s?.present) { bmp.ctx.drawImage(s.present, 0, 0, bmp.w, bmp.h); result = 0; }
@@ -311,9 +309,9 @@ rt.register({
     "unlockCanvasAndPost(Landroid/graphics/Canvas;)V": () => {},
   },
 });
-rt.register({ name: "android/view/SurfaceHolder$Callback", ctor: class extends JObj {} });
+rt.markers("android/view/SurfaceHolder$Callback");
 rt.register({ name: "android/view/SurfaceHolder$Callback2", ctor: class extends JObj {}, ifaces: ["android/view/SurfaceHolder$Callback"] });
-rt.register({ name: "android/view/TextureView$SurfaceTextureListener", ctor: class extends JObj {} });
+rt.markers("android/view/TextureView$SurfaceTextureListener");
 class JSurfaceTexture extends JObj {
   surface: GlSurface = { view: null, width: 1, height: 1, present: null, frames: 0, onFrame: () => this.frameAvailable() };
   released = false;
@@ -365,7 +363,7 @@ rt.register({
     "release()V": function (this: JSurfaceTexture) { this.release(); },
   },
 });
-rt.register({ name: "android/graphics/SurfaceTexture$OnFrameAvailableListener", ctor: class extends JObj {} });
+rt.markers("android/graphics/SurfaceTexture$OnFrameAvailableListener");
 class JTextureView extends JView {
   listener: unknown = null;
   texture: JSurfaceTexture | null = null;
@@ -374,7 +372,7 @@ class JTextureView extends JView {
     const w = this.width(), h = this.height();
     if (!this.attached || w <= 0 || h <= 0) return;
     const created = !this.texture;
-    const texture = this.texture ??= new (rt.link("android/graphics/SurfaceTexture").ctor)() as JSurfaceTexture;
+    const texture = this.texture ??= rt.make("android/graphics/SurfaceTexture") as JSurfaceTexture;
     if (!created && texture.surface.width === w && texture.surface.height === h) return;
     texture.surface.view = this;
     texture.onUpdate = () => {
@@ -475,8 +473,8 @@ for (const i of ["javax/microedition/khronos/opengles/GL", "javax/microedition/k
 rt.register({
   name: "javax/microedition/khronos/egl/EGLContext", ctor: JEGLContext,
   methods: {
-    "static getEGL()Ljavax/microedition/khronos/egl/EGL;": () => new (rt.link("javax/microedition/khronos/egl/EGL10").ctor)(),
-    "getGL()Ljavax/microedition/khronos/opengles/GL;": () => new (rt.link("webdroid/GL10").ctor)(),
+    "static getEGL()Ljavax/microedition/khronos/egl/EGL;": () => rt.make("javax/microedition/khronos/egl/EGL10"),
+    "getGL()Ljavax/microedition/khronos/opengles/GL;": () => rt.make("webdroid/GL10"),
   },
 });
 
@@ -519,7 +517,7 @@ rt.register({
         return 1;
       },
     "eglGetDisplay(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;": () =>
-      new (rt.link("javax/microedition/khronos/egl/EGLDisplay").ctor)(),
+      rt.make("javax/microedition/khronos/egl/EGLDisplay"),
     "eglInitialize(Ljavax/microedition/khronos/egl/EGLDisplay;[I)Z": (_d: unknown, v: Int32Array | null) => {
       if (v) { v[0] = 1; v[1] = 4; }
       return 1;

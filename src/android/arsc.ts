@@ -3,6 +3,7 @@
 
 import { StringPool } from "./axml";
 import { device as dev } from "../shell/config";
+import { u8 } from "../jvm/abi";
 
 interface ResEntry {
   key: string;                     // entry name
@@ -134,8 +135,8 @@ export class Arsc {
       cfg.hdp = view.getUint16(c + 34, true);
     }
     if (cfg.lang) {
-      const script = cfgSize >= 48 ? String.fromCharCode(...new Uint8Array(view.buffer, view.byteOffset + c + 36, 4)).replace(/\0.*$/, "") : "";
-      const variant = cfgSize >= 48 ? String.fromCharCode(...new Uint8Array(view.buffer, view.byteOffset + c + 40, 8)).replace(/\0.*$/, "") : "";
+      const script = cfgSize >= 48 ? String.fromCharCode(...u8(view, c + 36, 4)).replace(/\0.*$/, "") : "";
+      const variant = cfgSize >= 48 ? String.fromCharCode(...u8(view, c + 40, 8)).replace(/\0.*$/, "") : "";
       this.locales.add([cfg.lang, script, cfg.region, variant].filter(Boolean).join("-"));
     }
     // Keep other locales as encoded chunks until a scoped resource lookup selects them.

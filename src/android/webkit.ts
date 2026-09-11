@@ -14,7 +14,7 @@ import { webCookies, thirdPartyCookies } from "./cookies";
 import { WebBridge, type WebInterfaces } from "../shell/webbridge";
 import { WEB_INJECT } from "../shell/webinject";
 
-const inst = <T = JObj>(cls: string): T => new (rt.link(cls).ctor)();
+const inst = <T = JObj>(cls: string): T => rt.make(cls);
 
 const EXT_MIME: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",

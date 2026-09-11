@@ -8,7 +8,7 @@
 import { yieldToLoop } from "./yield";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
-import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle } from "./abi";
+import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle, primElem, splitSig } from "./abi";
 import { compileClassSource, compileLazyMethod, methodKey, type CompiledCtor } from "./compiler";
 import { isBytecode } from "./provenance";
 import { perf } from "../perf";
@@ -214,6 +214,8 @@ export class Runtime {
     this.natives.set(spec.name, spec);
     this.ifaceNames = null;
   }
+  markers(...names: string[]) { for (const name of names) this.register({ name, ctor: class extends JObj {} }); }
+  make(cls: string): any { return new (this.link(cls).ctor)(); }
 
   dexLink(dex: DexFile): DexLink {
     let d = this.links.get(dex);
@@ -507,8 +509,7 @@ export class Runtime {
     for (const [key, impl] of Object.entries(methods)) {
       let k = key, isStatic = false;
       if (k.startsWith("static ")) { isStatic = true; k = k.slice(7); }
-      const paren = k.indexOf("(");
-      const mname = k.slice(0, paren), desc = k.slice(paren);
+      const [mname, desc] = splitSig(k);
       const mangled = mangleMethod(mname, desc);
       const target: Record<string, unknown> = isStatic ? ctorAny : proto;
       const fn = typeof impl === "string" ? proto[impl] : impl;
@@ -926,15 +927,8 @@ function findStaticOwner(start: ClassInfo, name: string, desc: string): { info: 
 type ArrLike = unknown[] | { length: number };
 function arrayDesc(v: unknown): string {
   if (Array.isArray(v)) return (v as any).$t ? "[" + (v as any).$t : "[Ljava/lang/Object;";
-  if (v instanceof Int8Array) return "[B";
-  if (v instanceof Uint8Array) return "[Z";
-  if (v instanceof Uint16Array) return "[C";
-  if (v instanceof Int16Array) return "[S";
-  if (v instanceof Int32Array) return "[I";
-  if (v instanceof BigInt64Array) return "[J";
-  if (v instanceof Float32Array) return "[F";
-  if (v instanceof Float64Array) return "[D";
-  return "[Ljava/lang/Object;";
+  const e = primElem(v);
+  return e ? "[" + e : "[Ljava/lang/Object;";
 }
 function describeVal(v: unknown): string {
   if (typeof v === "string") return "java.lang.String";

@@ -4,7 +4,7 @@ import {
   resolveSizeAndState, makeSpec, MS_EXACTLY, childMeasureSpec, measureView, layoutView, initViewFromCtx,
   requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState
 } from "./view";
-import { type NativeSpec, rt, callSelf, JObj } from "../jvm/runtime";
+import { type NativeSpec, rt, callSelf } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvFloat, onFramework } from "./res";
 import { gravityH, gravityV, G } from "./gravity";
 import { type JMotionEvent, trackVelocity, restVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
@@ -694,4 +694,4 @@ const viewStubMethods: NativeSpec["methods"] = {
   },
 };
 rt.register({ name: "android/view/ViewStub", ctor: JViewStub, sup: "android/view/View", methods: viewStubMethods });
-rt.register({ name: "android/view/ViewStub$OnInflateListener", ctor: class extends JObj {} });
+rt.markers("android/view/ViewStub$OnInflateListener");

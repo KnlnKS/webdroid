@@ -133,7 +133,7 @@ rt.register({
   ctor: class extends (rt.link("android/app/Service").ctor as new () => JObj) {},
   methods: { "<init>()V": function () {} },
 });
-rt.register({ name: "android/widget/RemoteViewsService$RemoteViewsFactory", ctor: class extends JObj {} });
+rt.markers("android/widget/RemoteViewsService$RemoteViewsFactory");
 
 // ── android.app.Notification. Every one of these is a PUBLIC field in AOSP.
 const NFIELDS: Record<string, unknown> = {

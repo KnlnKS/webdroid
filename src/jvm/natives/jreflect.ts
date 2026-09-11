@@ -1,7 +1,7 @@
 // java.lang.reflect.Method + annotation instances backed by DEX annotation parsing.
 
 import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
-import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, newPrimArray, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat } from "../abi";
+import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat, splitSig } from "../abi";
 import { vcall, boxInt, box, boxObject, stringHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 
@@ -302,7 +302,7 @@ function genericMethodTypes(owner: ClassInfo, name: string, desc: string): { par
 function newArrayOf(cls: JClass | null, len: number): unknown {
   if (len < 0) throw rt.mkThrowable("java/lang/NegativeArraySizeException", String(len));
   const prim = cls?.primName;
-  if (prim && PRIM_DESC[prim]) return newPrimArray[PRIM_DESC[prim]](len);
+  if (prim && PRIM_DESC[prim]) return new PRIM_ARRAYS[PRIM_DESC[prim] as PrimElem](len);
   const elem = cls?.arrDesc ? "[" + cls.arrDesc : cls?.ci ? "L" + cls.ci.name + ";" : "Ljava/lang/Object;";
   return rt.oa(len, elem);
 }
@@ -487,12 +487,7 @@ function uPutLong(o: any, off: bigint, value: bigint): void {
   else { const f = unsafeFields[Number(off) / 8]; o[f.prop] = f.desc === "D" ? longBitsToDouble(value) : value; }
 }
 function arrayIndexScale(cls: JClass): number {
-  switch (cls.arrDesc?.[1]) {
-    case "C": case "S": return 2;
-    case "F": case "I": return 4;
-    case "D": case "J": return 8;
-    default: return 1;
-  }
+  return PRIM_ARRAYS[cls.arrDesc?.[1] as PrimElem]?.BYTES_PER_ELEMENT ?? 1;
 }
 
 const methodsCache = new WeakMap<ClassInfo, [JMethod[] | undefined, JMethod[] | undefined]>();
@@ -511,8 +506,7 @@ function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
     for (const key of Object.keys(spec?.methods ?? {})) {
       let k = key, isStatic = false;
       if (k.startsWith("static ")) { isStatic = true; k = k.slice(7); }
-      const paren = k.indexOf("(");
-      const name = k.slice(0, paren), desc = k.slice(paren);
+      const [name, desc] = splitSig(k);
       if (name === "<init>" || seen.has(name + desc)) continue;
       seen.add(name + desc);
       const mangled = mangleMethod(name, desc);
@@ -1011,8 +1005,7 @@ function installClassReflection() {
   };
   // attach with proper mangled keys onto the live prototype
   for (const [sig, fn] of Object.entries(M)) {
-    const paren = sig.indexOf("(");
-    proto[mangleMethod(sig.slice(0, paren), sig.slice(paren))] = fn;
+    proto[mangleMethod(...splitSig(sig))] = fn;
   }
 }
 function classDesc(c: JClass): string {
@@ -1033,7 +1026,7 @@ rt.register({
 // ── java.lang.reflect.Proxy: one synthetic class per interface set. Every interface method, and
 // Object's equals/hashCode/toString which Java routes the same way, boxes its arguments into the
 // InvocationHandler and unboxes what comes back.
-rt.register({ name: "java/lang/reflect/InvocationHandler", ctor: class extends JObj {} });
+rt.markers("java/lang/reflect/InvocationHandler");
 class JProxy extends JObj { h: unknown = null; }
 const proxyClasses = new Map<string, ClassInfo>();
 const D_INVOKE = "(Ljava/lang/Object;Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object;";
@@ -1055,7 +1048,7 @@ function interfaceMethods(ci: ClassInfo, out: Map<string, Decl>): void {
     for (const i of ci.interfaces) interfaceMethods(i, out);
     return;
   }
-  for (const k of Object.keys(rt.natives.get(ci.name)?.methods ?? {})) if (!k.startsWith("static ")) { const p = k.indexOf("("); out.set(k, [ci, k.slice(0, p), k.slice(p), 0x401]); }
+  for (const k of Object.keys(rt.natives.get(ci.name)?.methods ?? {})) if (!k.startsWith("static ")) out.set(k, [ci, ...splitSig(k), 0x401]);
   for (const [k, d] of rt.methodRefs(ci.name)) out.set(k, [ci, k.slice(0, k.length - d.length), d, 0x401]);
   const loc = declIndex?.get(ci.name);
   if (loc) {

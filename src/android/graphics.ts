@@ -1,7 +1,7 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
 import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
-import { mangleMethod, charsToString, intBitsToFloat } from "../jvm/abi";
+import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle } from "./handles";
 import { vcall, mkEnumSet, JSimpleEnum, linkInit, stringHash } from "../jvm/natives/jlang";
@@ -660,7 +660,7 @@ const COMPOSITE: Record<string, GlobalCompositeOperation> = {
 mkEnumSet("android/graphics/PorterDuff$Mode",
   ["CLEAR", "SRC", "DST", "SRC_OVER", "DST_OVER", "SRC_IN", "DST_IN", "SRC_OUT", "DST_OUT",
     "SRC_ATOP", "DST_ATOP", "XOR", "DARKEN", "LIGHTEN", "MULTIPLY", "SCREEN", "ADD", "OVERLAY"]);
-rt.register({ name: "android/graphics/PorterDuff", ctor: class extends JObj {} });
+rt.markers("android/graphics/PorterDuff");
 rt.register({
   name: "android/graphics/PorterDuffColorFilter", ctor: class extends JObj { tint = 0; },
   sup: "android/graphics/ColorFilter",
@@ -668,7 +668,7 @@ rt.register({
     "<init>(ILandroid/graphics/PorterDuff$Mode;)V": function (this: any, c: number) { this.tint = c; },
   },
 });
-rt.register({ name: "android/graphics/ColorFilter", ctor: class extends JObj {} });
+rt.markers("android/graphics/ColorFilter");
 class JColorSpace extends JObj { cname = "sRGB"; }
 const srgbSpace = new JColorSpace();
 mkEnumSet("android/graphics/ColorSpace$Named",
@@ -719,12 +719,12 @@ rt.register({
     "<init>([FF)V": function (this: any, iv: Float32Array) { this.intervals = [...iv]; },
   },
 });
-rt.register({ name: "android/graphics/PathEffect", ctor: class extends JObj {} });
+rt.markers("android/graphics/PathEffect");
 rt.register({ name: "android/graphics/CornerPathEffect", ctor: class extends JObj {}, sup: "android/graphics/PathEffect",
   methods: { "<init>(F)V": function () {} } });
 mkEnumSet("android/graphics/BlurMaskFilter$Blur", ["NORMAL", "SOLID", "OUTER", "INNER"]);
 class JBlurMaskFilter extends JObj { sigma = 0; }
-rt.register({ name: "android/graphics/MaskFilter", ctor: class extends JObj {} });
+rt.markers("android/graphics/MaskFilter");
 rt.register({
   name: "android/graphics/BlurMaskFilter", ctor: JBlurMaskFilter, sup: "android/graphics/MaskFilter",
   methods: {
@@ -1140,7 +1140,7 @@ function bitmapBuffer(bitmap: JBitmap, buffer: JBuffer, from: boolean): void {
   const length = bitmap.w * bitmap.h * 4;
   if ((buffer.lim - buffer.pos) * 2 ** buffer.elemShift < length)
     throw rt.mkThrowable("java/lang/RuntimeException", "Buffer not large enough for pixels");
-  const view = buffer.dv, bytes = new Uint8Array(view.buffer, view.byteOffset + buffer.pos * 2 ** buffer.elemShift, length);
+  const view = buffer.dv, bytes = u8(view, buffer.pos * 2 ** buffer.elemShift, length);
   const pixels = bitmap.pixels(), alpha = !bitmap.hasAlpha ? 1 : bitmap.premultiplied ? 0 : 2;
   if (from) { copyBitmapPixels(bytes, pixels, alpha, true); bitmap.commit(0, 0, bitmap.w, bitmap.h); }
   else copyBitmapPixels(pixels, bytes, alpha, false);
@@ -1398,7 +1398,7 @@ export const canvasMethods: NativeSpec["methods"] = {
   },
   "getMatrix()Landroid/graphics/Matrix;": function (this: JCanvas) {
     const t = this.ctx.getTransform();
-    const m = new (rt.link("android/graphics/Matrix").ctor)() as JMatrix;
+    const m = rt.make("android/graphics/Matrix") as JMatrix;
     m.m = [t.a, t.b, t.c, t.d, t.e, t.f];
     return m;
   },
@@ -1875,7 +1875,7 @@ rt.register({
     "isRect()Z": () => 1,
     "isComplex()Z": () => 0,
     "getBounds()Landroid/graphics/Rect;": function (this: JRegion) {
-      const r = new (rt.link("android/graphics/Rect").ctor)() as JRect;
+      const r = rt.make("android/graphics/Rect") as JRect;
       r.left = this.left; r.top = this.top; r.right = this.right; r.bottom = this.bottom;
       return r;
     },
@@ -1960,10 +1960,10 @@ rt.register({
   name: "android/graphics/BitmapFactory", ctor: class extends JObj {},
   methods: {
     "static decodeByteArray([BII)Landroid/graphics/Bitmap;": (b: Int8Array, off: number, len: number) =>
-      decodeBytes(new Uint8Array(b.buffer, b.byteOffset + off, len), null),
+      decodeBytes(u8(b, off, len), null),
     "static decodeByteArray([BIILandroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;":
       (b: Int8Array, off: number, len: number, o: JBFOptions) =>
-        decodeBytes(new Uint8Array(b.buffer, b.byteOffset + off, len), o),
+        decodeBytes(u8(b, off, len), o),
     "static decodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;": async (s: unknown) => decodeBytes(await streamBytes(s), null),
     "static decodeStream(Ljava/io/InputStream;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;":
       async (s: unknown, r: unknown, o: JBFOptions) => decodeBytes(await streamBytes(s), o),

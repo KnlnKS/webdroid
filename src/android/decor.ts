@@ -61,7 +61,7 @@ export async function ensureDecor(act: JActivity) {
   root.jres = host.res;
   root.theme = theme;
   {
-    const lp = new (rt.link("android/widget/LinearLayout$LayoutParams").ctor)();
+    const lp = rt.make("android/widget/LinearLayout$LayoutParams");
     lp.width = -1; lp.height = -1;
     root.lp = lp;
   }
@@ -97,7 +97,7 @@ export async function ensureDecor(act: JActivity) {
     if (bgD instanceof JColorDrawable) host.statusBarColor = darken(bgD.color);
     const sbc = theme.lookup(AID("statusBarColor"));
     if (sbc) host.statusBarColor = rvColor(host.res, sbc, host.statusBarColor);
-    const lp = new (rt.link("android/widget/LinearLayout$LayoutParams").ctor)();
+    const lp = rt.make("android/widget/LinearLayout$LayoutParams");
     lp.width = -1; lp.height = -2;
     bar.lp = lp;
     attachView(root, bar);
@@ -112,14 +112,14 @@ export async function ensureDecor(act: JActivity) {
   content.theme = theme;
   content.idNum = 0x01020002; // android.R.id.content
   {
-    const lp = new (rt.link("android/widget/LinearLayout$LayoutParams").ctor)();
+    const lp = rt.make("android/widget/LinearLayout$LayoutParams");
     lp.width = -1; lp.height = 0;
     (lp as any).weight = 1;
     content.lp = lp;
   }
   attachView(root, content);
   {
-    const lp2 = new (rt.link("android/widget/FrameLayout$LayoutParams").ctor)();
+    const lp2 = rt.make("android/widget/FrameLayout$LayoutParams");
     lp2.width = -1; lp2.height = -1;
     root.lp = lp2;
   }

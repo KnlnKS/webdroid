@@ -4,6 +4,7 @@
 import { Inflate, Deflate, Zlib, Gzip } from "fflate";
 import { mem, AddrMap } from "./mem";
 import { hostLib, type HostFn, PTR, stp, ldp } from "./host";
+import { concat } from "../jvm/abi";
 
 // z_stream fields used here. Pointer and ulong fields follow the process pointer width.
 let Z = { IN: 0, AVIN: 4, TIN: 8, OUT: 12, AVOUT: 16, TOUT: 20, MSG: 24, STATE: 28, ADLER: 48 };
@@ -258,12 +259,7 @@ function decodeZlib(data: Uint8Array): Uint8Array | null {
   const s = makeStream(15)!;
   s.pending = data;
   if (processPending(s) !== Z_STREAM_END) return null;
-  let size = 0;
-  for (const chunk of s.out) size += chunk.length;
-  const result = new Uint8Array(size);
-  let at = 0;
-  for (const chunk of s.out) { result.set(chunk, at); at += chunk.length; }
-  return result;
+  return concat(s.out);
 }
 
 type Encoder = { codec: Deflate | Zlib | Gzip; out: Uint8Array[]; bits: number; level: number; check: number; finished: boolean; started: boolean; flush: number };

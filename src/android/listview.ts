@@ -150,7 +150,7 @@ rt.register({
 // ── ActionMode + the modal multi-select callbacks
 // AbsListView.MultiChoiceModeListener extends ActionMode.Callback; apps implement it and we
 // drive it from setItemChecked. No action bar UI: the mode owns a Menu the app can fill.
-rt.register({ name: "android/view/ActionMode$Callback", ctor: class extends JObj {} });
+rt.markers("android/view/ActionMode$Callback");
 rt.register({
   name: "android/widget/AbsListView$MultiChoiceModeListener", ctor: class extends JObj {},
   ifaces: ["android/view/ActionMode$Callback"],
@@ -179,7 +179,7 @@ rt.register({
   methods: {
     "getMenu()Landroid/view/Menu;": function (this: JActionMode) { return this.menu; },
     "getMenuInflater()Landroid/view/MenuInflater;": function (this: JActionMode) {
-      const inf = new (rt.link("android/view/MenuInflater").ctor)();
+      const inf = rt.make("android/view/MenuInflater");
       inf.jctx = this.jctx;
       return inf;
     },
@@ -356,7 +356,7 @@ async function notifyChoiceMode(list: JListView, pos: number, checked: boolean) 
     const mode = new JActionMode();
     mode.jctx = list.ctx;
     mode.cb = cb;
-    mode.menu = new (rt.link("webdroid/Menu").ctor)();
+    mode.menu = rt.make("webdroid/Menu");
     mode.onFinish = async () => {
       list.actionMode = null;
       for (const p of [...list.checked]) await guardCall(list, M_setItemChecked, p, 0);

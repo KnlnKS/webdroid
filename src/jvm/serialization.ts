@@ -1,5 +1,5 @@
 import { rt, JObj, type ClassInfo } from "./runtime";
-import { jarray } from "./abi";
+import { jarray, PRIM_ARRAYS, primElem, type PrimElem } from "./abi";
 import { defineException } from "./natives/jlang";
 defineException("java/io/ObjectStreamException", "java/io/IOException");
 defineException("java/io/NotSerializableException", "java/io/ObjectStreamException");
@@ -33,8 +33,7 @@ export function serialize(value: unknown): Serialized {
     const ref = nodes.length; seen.set(v, ref);
     if (Array.isArray(v) || ArrayBuffer.isView(v)) {
       const type = Array.isArray(v) ? ("$t" in v && typeof v.$t === "string" ? v.$t : "Ljava/lang/Object;")
-        : v instanceof Uint8Array ? "Z" : v instanceof Int8Array ? "B" : v instanceof Int16Array ? "S" : v instanceof Uint16Array ? "C" : v instanceof Int32Array ? "I"
-          : v instanceof BigInt64Array ? "J" : v instanceof Float32Array ? "F" : v instanceof Float64Array ? "D" : "";
+        : primElem(v) ?? "";
       if (!type || v instanceof DataView) throw rt.mkThrowable("java/io/NotSerializableException", "Unsupported array");
       const node: Node = { kind: "array", type, values: [] }; nodes.push(node);
       node.values = Array.from(v as ArrayLike<unknown>, encode); return { ref };
@@ -53,9 +52,7 @@ export async function deserialize(data: Serialized): Promise<unknown> {
   for (const node of data.serialized) {
     if (node.kind === "array") {
       const n = node.values.length;
-      values.push(node.type === "Z" ? new Uint8Array(n) : node.type === "B" ? new Int8Array(n) : node.type === "S" ? new Int16Array(n) : node.type === "C" ? new Uint16Array(n)
-        : node.type === "I" ? new Int32Array(n) : node.type === "J" ? new BigInt64Array(n) : node.type === "F" ? new Float32Array(n)
-          : node.type === "D" ? new Float64Array(n) : jarray(Array(n).fill(null), node.type));
+      values.push(node.type.length === 1 ? new PRIM_ARRAYS[node.type as PrimElem](n) : jarray(Array(n).fill(null), node.type));
     } else {
       const info = rt.link(node.type); await rt.initClass(info); fields(info); infos.set(node.type, info); values.push(new info.ctor());
     }

@@ -3,7 +3,7 @@
 // built against the system CA store the shell mounts. Cronet asks Java for exactly this.
 import type { asn1 } from "node-forge";
 import { JObj, rt, maySuspend } from "../runtime";
-import { jarray } from "../abi";
+import { jarray, concat, i8, u8 } from "../abi";
 import { boxInt, defineException, newObj, stringHash, vcall } from "./jlang";
 import { newArrayList, mkIter } from "./jutil";
 import { JRsaPublicKey } from "./jrsa";
@@ -13,8 +13,6 @@ const forge = () => import("node-forge").then((m) => m.default);
 type Node = asn1.Asn1;
 const binary = (b: Uint8Array) => { let s = ""; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return s; };
 const bytes = (s: string) => Uint8Array.from(s, (c) => c.charCodeAt(0));
-const i8 = (b: Uint8Array) => new Int8Array(b.buffer, b.byteOffset, b.length);
-const u8 = (b: Int8Array) => new Uint8Array(b.buffer, b.byteOffset, b.length);
 
 const SIG: Record<string, { name: "RSASSA-PKCS1-v1_5" | "ECDSA"; hash: string }> = {
   "1.2.840.113549.1.1.5": { name: "RSASSA-PKCS1-v1_5", hash: "SHA-1" }, "1.2.840.113549.1.1.11": { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
@@ -60,7 +58,7 @@ function dnString(rdn: Node, f: Awaited<ReturnType<typeof forge>>): string {
 async function parseX509(input: Uint8Array): Promise<JX509> {
   const f = await forge();
   const root = (f.asn1 as any).fromDer(binary(input), { strict: false, decodeBitStrings: false }) as Node;
-  const c = new (rt.link("java/security/cert/X509Certificate").ctor)() as JX509;
+  const c = rt.make("java/security/cert/X509Certificate") as JX509;
   const [tbs, sigAlg, sigBits] = root.value as Node[];
   c.der = new Uint8Array(input);
   c.tbs = der(tbs, f);
@@ -153,8 +151,8 @@ async function verifyChain(chain: JX509[]): Promise<JX509[]> {
 const chainOf = (arr: unknown[] | null) => (arr ?? []).filter((c): c is JX509 => c instanceof JX509);
 
 class JPrincipal extends JObj { name = ""; der = ""; }
-export function mkPrincipal(name: string, der = ""): JPrincipal { const p = new (rt.link("javax/security/auth/x500/X500Principal").ctor)() as JPrincipal; p.name = name; p.der = der; return p; }
-rt.register({ name: "java/security/Principal", ctor: class extends JObj {} });
+export function mkPrincipal(name: string, der = ""): JPrincipal { const p = rt.make("javax/security/auth/x500/X500Principal") as JPrincipal; p.name = name; p.der = der; return p; }
+rt.markers("java/security/Principal");
 rt.register({
   name: "javax/security/auth/x500/X500Principal", ctor: JPrincipal, ifaces: ["java/security/Principal"],
   methods: {
@@ -172,7 +170,7 @@ rt.register({
   name: "java/security/cert/Certificate", ctor: class extends JObj {},
   methods: { "getType()Ljava/lang/String;": () => "X.509" },
 });
-const date = (ms: number) => { const d = new (rt.link("java/util/Date").ctor)() as JDate; d.t = ms; return d; };
+const date = (ms: number) => { const d = rt.make("java/util/Date") as JDate; d.t = ms; return d; };
 rt.register({
   name: "java/security/cert/X509Certificate", ctor: JX509, sup: "java/security/cert/Certificate",
   methods: {
@@ -237,10 +235,7 @@ async function drain(stream: unknown): Promise<Uint8Array> {
     if (n <= 0) break;
     chunks.push(u8(buf.subarray(0, n)).slice());
   }
-  const out = new Uint8Array(chunks.reduce((s, c) => s + c.length, 0));
-  let o = 0;
-  for (const c of chunks) { out.set(c, o); o += c.length; }
-  return out;
+  return concat(chunks);
 }
 const isPem = (b: Uint8Array) => b[0] === 0x2d;
 async function certsFrom(stream: unknown): Promise<JX509[]> {
@@ -251,9 +246,9 @@ async function certsFrom(stream: unknown): Promise<JX509[]> {
 defineException("java/security/SignatureException", "java/security/GeneralSecurityException");
 function certFactory(type: string) {
   if (type?.toUpperCase() !== "X.509") throw certErr(type + " not available");
-  return new (rt.link("java/security/cert/CertificateFactory").ctor)();
+  return rt.make("java/security/cert/CertificateFactory");
 }
-rt.register({ name: "java/security/cert/CertificateFactorySpi", ctor: class extends JObj {} });
+rt.markers("java/security/cert/CertificateFactorySpi");
 rt.register({
   name: "java/security/cert/CertificateFactory", ctor: class extends JObj {},
   methods: {
@@ -274,7 +269,7 @@ rt.register({
     "static getDefaultAlgorithm()Ljava/lang/String;": () => "PKIX",
     "static getInstance(Ljava/lang/String;)Ljavax/net/ssl/TrustManagerFactory;": () => new JTMF(),
     "init(Ljava/security/KeyStore;)V": () => {},
-    "getTrustManagers()[Ljavax/net/ssl/TrustManager;": () => jarray([new (rt.link("webdroid/X509TM").ctor)()], "Ljavax/net/ssl/TrustManager;"),
+    "getTrustManagers()[Ljavax/net/ssl/TrustManager;": () => jarray([rt.make("webdroid/X509TM")], "Ljavax/net/ssl/TrustManager;"),
   },
 });
 rt.register({

@@ -18,4 +18,4 @@ rt.register({
 });
 rt.register({ name: "java/util/logging/Level", ctor: class extends JObj {},
   clinit: () => { const c = rt.link("java/util/logging/Level").ctor as any; for (const n of ["OFF","SEVERE","WARNING","INFO","CONFIG","FINE","FINER","FINEST","ALL"]) c["s$"+n] = new c(); } });
-rt.register({ name: "java/util/logging/Handler", ctor: class extends JObj {} });
+rt.markers("java/util/logging/Handler");

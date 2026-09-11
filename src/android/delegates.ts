@@ -21,7 +21,7 @@ import {
   JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, colorLongOfArgb, affineFromPoints, CAPS, JOINS,
 } from "./graphics";
 import { newObj } from "../jvm/natives/jlang";
-import { charsToString, floatToIntBits } from "../jvm/abi";
+import { charsToString, floatToIntBits, i8, u8 } from "../jvm/abi";
 import { JPath, pathBounds, pathOffset, pathTransform } from "./path";
 import { greedyBreaks, type JTextPaint, type TLine } from "./text";
 import {
@@ -69,7 +69,7 @@ rt.register({
     "static reportUnconditionalChange(J)V": () => {},
   },
 });
-rt.register({ name: "android/compat/Compatibility$BehaviorChangeDelegate", ctor: class extends JObj {} });
+rt.markers("android/compat/Compatibility$BehaviorChangeDelegate");
 
 class JNativeAllocationRegistry extends JObj {}
 const mkRegistry = () => new JNativeAllocationRegistry();
@@ -80,7 +80,7 @@ rt.register({
     "static createMalloced(Ljava/lang/ClassLoader;J)Llibcore/util/NativeAllocationRegistry;": mkRegistry,
     "static createMalloced(Ljava/lang/ClassLoader;JJ)Llibcore/util/NativeAllocationRegistry;": mkRegistry,
     "static createNonmalloced(Ljava/lang/ClassLoader;JJ)Llibcore/util/NativeAllocationRegistry;": mkRegistry,
-    "registerNativeAllocation(Ljava/lang/Object;J)Ljava/lang/Runnable;": () => new (rt.link("webdroid/FreeRunnable").ctor)(),
+    "registerNativeAllocation(Ljava/lang/Object;J)Ljava/lang/Runnable;": () => rt.make("webdroid/FreeRunnable"),
     // the one case that is not bookkeeping: an explicit free has to reach the delegate
     "static applyFreeFunction(JJ)V": (fn: bigint, ptr: bigint) => { deref<(p: bigint) => void>(fn)?.(ptr); },
   },
@@ -963,7 +963,7 @@ delegate("android/content/res/StringBlock", {
 
 delegate("android/content/res/XmlBlock", {
   "nativeCreate([BII)J": (b: Int8Array, off: number, len: number) =>
-    handle(mkBlock(new Uint8Array(b.buffer, b.byteOffset + off, len), currentResources())),
+    handle(mkBlock(u8(b, off, len), currentResources())),
   "nativeDestroy(J)V": release,
   "nativeGetStringBlock(J)J": (h: bigint) => {
     const b = block(h);
@@ -1171,7 +1171,7 @@ delegate("android/content/res/AssetManager", {
     if (!len) return 0;
     const bytes = await c.source.read(c.pos, len);
     if (!bytes.length) return -1;
-    out.set(new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length), off);
+    out.set(i8(bytes), off);
     c.pos += bytes.length;
     return bytes.length;
   },

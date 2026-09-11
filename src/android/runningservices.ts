@@ -45,7 +45,7 @@ function serviceRecord(ctx: JContext, cls: string): JRunningServiceInfo {
   let si = runningServices.get(cls);
   if (!si) {
     const pkg = ctx.$host?.pkg ?? appHost?.pkg ?? "";
-    si = new (rt.link("android/app/ActivityManager$RunningServiceInfo").ctor)() as JRunningServiceInfo;
+    si = rt.make("android/app/ActivityManager$RunningServiceInfo") as JRunningServiceInfo;
     si.service = mkComponentName(pkg, cls); si.process = PROCESS_NAME || pkg;
     si.activeSince = BigInt(Date.now()); runningServices.set(cls, si);
   }

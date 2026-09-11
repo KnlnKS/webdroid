@@ -4,7 +4,7 @@
 // JAlertDialog in dialog.ts, whose show()/buildAlertContent flow this dialog inherits by
 // extending JAlertDialog directly, exactly as AOSP's own TimePickerDialog does.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, type NativeSpec } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, boxInt } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
@@ -210,7 +210,7 @@ const timePickerMethods: NativeSpec["methods"] = {
   "setOnTimeChangedListener(Landroid/widget/TimePicker$OnTimeChangedListener;)V": function (this: JTimePicker, l: unknown) { this.changeL = l; },
 };
 rt.register({ name: "android/widget/TimePicker", ctor: JTimePicker, sup: "android/widget/LinearLayout", methods: timePickerMethods });
-rt.register({ name: "android/widget/TimePicker$OnTimeChangedListener", ctor: class extends JObj {} });
+rt.markers("android/widget/TimePicker$OnTimeChangedListener");
 
 // ── TimePickerDialog: AlertDialog with a TimePicker as its customView + OK/Cancel buttons.
 // AOSP's own TimePickerDialog extends AlertDialog too, so this mirrors the real hierarchy —
@@ -260,4 +260,4 @@ const timePickerDialogMethods: NativeSpec["methods"] = {
   },
 };
 rt.register({ name: "android/app/TimePickerDialog", ctor: JTimePickerDialog, sup: "android/app/AlertDialog", methods: timePickerDialogMethods });
-rt.register({ name: "android/app/TimePickerDialog$OnTimeSetListener", ctor: class extends JObj {} });
+rt.markers("android/app/TimePickerDialog$OnTimeSetListener");

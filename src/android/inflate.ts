@@ -226,6 +226,5 @@ rt.register({
       },
   },
 });
-rt.register({ name: "android/view/LayoutInflater$Factory", ctor: class extends JObj {} });
-rt.register({ name: "android/view/LayoutInflater$Factory2", ctor: class extends JObj {} });
+rt.markers("android/view/LayoutInflater$Factory", "android/view/LayoutInflater$Factory2");
 

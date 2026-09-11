@@ -378,7 +378,7 @@ rt.register({
     },
   },
 });
-rt.register({ name: "java/util/regex/MatchResult", ctor: class extends JObj {} });
+rt.markers("java/util/regex/MatchResult");
 rt.register({
   name: "java/util/regex/Matcher", ctor: JMatcher, ifaces: ["java/util/regex/MatchResult"],
   methods: {
@@ -659,7 +659,7 @@ rt.register({
     "static systemDefault()Ljava/time/ZoneId;": () => { const z = new JZoneId(); z.id = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC"; return z; },
     "static of(Ljava/lang/String;)Ljava/time/ZoneId;": (id: string) => { const z = new JZoneId(); z.id = id; return z; },
     "getId()Ljava/lang/String;": function (this: JZoneId) { return this.id; },
-    "getRules()Ljava/time/zone/ZoneRules;": () => new (rt.link("java/time/zone/ZoneRules").ctor)(),
+    "getRules()Ljava/time/zone/ZoneRules;": () => rt.make("java/time/zone/ZoneRules"),
     "toString()Ljava/lang/String;": function (this: JZoneId) { return this.id; },
   },
 });

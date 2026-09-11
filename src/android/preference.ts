@@ -109,7 +109,7 @@ function notifyChanged(pref: JPreference) {
 }
 function ensurePM(frag: JPreferenceFragment): JPreferenceManager {
   if (!frag.pm) {
-    const pm = new (rt.link("android/preference/PreferenceManager").ctor)() as JPreferenceManager;
+    const pm = rt.make("android/preference/PreferenceManager") as JPreferenceManager;
     pm.jctx = frag.act;
     frag.pm = pm;
   }
@@ -392,7 +392,7 @@ async function buildRowView(row: Row, jctx: any): Promise<JView> {
   attachView(rowL, col);
 
   if (pref instanceof JCheckBoxPreference) {
-    const cb: any = new (rt.link("android/widget/CheckBox").ctor)();
+    const cb: any = rt.make("android/widget/CheckBox");
     cb.ctx = jctx; cb.jres = jres; cb.theme = theme;
     cb.checked = pref.checked;
     cb.enabled = pref.enabled;

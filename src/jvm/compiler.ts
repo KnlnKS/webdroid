@@ -6,7 +6,7 @@
 
 import type { DexFile, CodeItem, EncodedMethod } from "./dex";
 import { OPS, FMT_LEN, insnLen, type Fmt } from "./opcodes";
-import { mangleMethod, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble } from "./abi";
+import { mangleMethod, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble, PRIM_ARRAYS, type PrimElem } from "./abi";
 import { ACC, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
 import { coldOp, runCold, type ColdMethod } from "./cold";
@@ -941,17 +941,9 @@ const f32bits = (bits: number) => litOf(intBitsToFloat(bits));
 const f64bits = (bits: bigint) => litOf(longBitsToDouble(BigInt.asIntN(64, bits)));
 
 function typedArrayCtor(elem: string): string {
-  switch (elem) {
-    case "B": return "Int8Array";
-    case "Z": return "Uint8Array";
-    case "C": return "Uint16Array";
-    case "S": return "Int16Array";
-    case "I": return "Int32Array";
-    case "J": return "BigInt64Array";
-    case "F": return "Float32Array";
-    case "D": return "Float64Array";
-    default: throw new Error("elem " + elem);
-  }
+  const c = PRIM_ARRAYS[elem as PrimElem];
+  if (!c) throw new Error("elem " + elem);
+  return c.name;
 }
 
 function newArrayExpr(elem: string, lenExpr: string): string {

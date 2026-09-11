@@ -2,7 +2,7 @@
 // central-directory index, GZIPInputStream over a drained source.
 import { Inflate, Unzlib, Deflate, Zlib, Gzip, inflateSync, gunzipSync } from "fflate";
 import { rt, JObj, maySuspend } from "../runtime";
-import { mangleMethod, utf8 } from "../abi";
+import { mangleMethod, utf8, i8, u8 } from "../abi";
 import { vcall, vcallMaybe, newObj, defineException } from "./jlang";
 import { vfs, JFile, JInputStream, JOutputStream } from "./jio";
 import { mkIter } from "./jutil";
@@ -59,7 +59,7 @@ function drain(z: JInflater, b: Int8Array, off: number, len: number): number {
   while (n < len && z.out.length) {
     const c = z.out[0];
     const take = Math.min(len - n, c.length);
-    new Uint8Array(b.buffer, b.byteOffset + off + n, take).set(c.subarray(0, take));
+    u8(b, off + n, take).set(c.subarray(0, take));
     n += take;
     if (take === c.length) z.out.shift(); else z.out[0] = c.subarray(take);
   }
@@ -142,7 +142,7 @@ rt.register({
 // stream; close() finishes the deflate stream first (the zlib trailer), as the JDK does.
 class JDeflaterOut extends JOutputStream { out: unknown = null; def = new JDeflater(); closed = false; }
 async function pump(s: JDeflaterOut) {
-  for (const c of s.def.out) await vcall(s.out, "write", "([BII)V", new Int8Array(c.buffer, c.byteOffset, c.length), 0, c.length);
+  for (const c of s.def.out) await vcall(s.out, "write", "([BII)V", i8(c), 0, c.length);
   s.def.out = [];
 }
 function dosInit(this: JDeflaterOut, o: unknown, def?: JDeflater | null) { this.out = o; if (def) this.def = def; }
@@ -323,7 +323,7 @@ export function zipTree(z: Uint8Array, into: Record<string, Uint8Array> = {}, re
 
 class JZipEntry extends JObj { e: ZEntry = UNKNOWN; }
 function mkZipEntry(e: ZEntry): JZipEntry {
-  const z = new (rt.link("java/util/zip/ZipEntry").ctor)() as JZipEntry;
+  const z = rt.make("java/util/zip/ZipEntry") as JZipEntry;
   z.e = e;
   return z;
 }
@@ -372,7 +372,7 @@ rt.register({
       const e = this.entries.get(ze.e.name);
       if (!e) return null;
       const b = await this.data(e);
-      return newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array(b.buffer, b.byteOffset, b.length));
+      return newObj("java/io/ByteArrayInputStream", "([B)V", i8(b));
     },
     "close()V": function () {},
   },

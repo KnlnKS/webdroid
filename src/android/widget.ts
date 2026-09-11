@@ -1,7 +1,7 @@
 import { AID } from "./res";
 import { JView, initViewFromCtx, invalidate, resolveSizeAndState, uiState, JViewGroup, defaultSize } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawChild } from "./drawable";
-import { rt, type NativeSpec, JObj, maySuspend } from "../jvm/runtime";
+import { rt, type NativeSpec, maySuspend } from "../jvm/runtime";
 import { type JAttrSet, rvColor, obtainStyled, rvInt } from "./res";
 import { TV } from "./axml";
 import { type JCanvas, cssColor } from "./graphics";
@@ -110,8 +110,7 @@ for (const [name, sup] of [["android/widget/AbsSeekBar", "android/widget/Progres
   ["android/widget/SeekBar", "android/widget/AbsSeekBar"]] as const) {
   rt.register({ name, ctor: class extends JRatingBar {}, sup, methods: seekBarMethods });
 }
-rt.register({ name: "android/widget/SeekBar$OnSeekBarChangeListener", ctor: class extends JObj {} });
-rt.register({ name: "android/widget/RatingBar$OnRatingBarChangeListener", ctor: class extends JObj {} });
+rt.markers("android/widget/SeekBar$OnSeekBarChangeListener", "android/widget/RatingBar$OnRatingBarChangeListener");
 rt.register({
   name: "android/widget/RatingBar", ctor: JRatingBar, sup: "android/widget/AbsSeekBar",
   methods: {
@@ -302,7 +301,7 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
   };
 };
 rt.register({ name: "android/widget/CompoundButton", ctor: JCompoundButton, sup: "android/widget/Button", methods: compoundMethods("check") });
-rt.register({ name: "android/widget/CompoundButton$OnCheckedChangeListener", ctor: class extends JObj {} });
+rt.markers("android/widget/CompoundButton$OnCheckedChangeListener");
 rt.register({ name: "android/widget/CheckBox", ctor: class extends JCompoundButton {}, sup: "android/widget/CompoundButton", methods: compoundMethods("check") });
 rt.register({ name: "android/widget/RadioButton", ctor: class extends JCompoundButton {}, sup: "android/widget/CompoundButton", methods: compoundMethods("radio") });
 rt.register({ name: "android/widget/Switch", ctor: class extends JCompoundButton {}, sup: "android/widget/CompoundButton", methods: compoundMethods("switch") });

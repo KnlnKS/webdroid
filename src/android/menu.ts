@@ -287,14 +287,11 @@ const menuItemMethods: NativeSpec["methods"] = {
   "collapseActionView()Z": () => 0,
 };
 rt.register({ name: "webdroid/MenuItem", ctor: JMenuItem, ifaces: ["android/view/MenuItem"], methods: menuItemMethods });
-rt.register({ name: "android/view/MenuItem", ctor: class extends JObj {} });
-rt.register({ name: "android/view/SubMenu", ctor: class extends JObj {} });
+rt.markers("android/view/MenuItem", "android/view/SubMenu");
 // Callback interfaces a menu's owner implements. An unregistered one auto-stubs and poisons
 // the app class declaring it, which takes the whole menu down with it.
-rt.register({ name: "android/view/MenuItem$OnMenuItemClickListener", ctor: class extends JObj {} });
-rt.register({ name: "android/view/MenuItem$OnActionExpandListener", ctor: class extends JObj {} });
-rt.register({ name: "android/view/CollapsibleActionView", ctor: class extends JObj {} });
-rt.register({ name: "android/view/ActionProvider$VisibilityListener", ctor: class extends JObj {} });
+rt.markers("android/view/MenuItem$OnMenuItemClickListener", "android/view/MenuItem$OnActionExpandListener",
+  "android/view/CollapsibleActionView", "android/view/ActionProvider$VisibilityListener");
 // ActionProvider is an abstract class an app subclasses; the base keeps the visibility
 // listener and answers the queries AOSP's default implementation does.
 class JActionProvider extends JObj { visL: unknown = null; }
@@ -498,5 +495,4 @@ rt.register({
     "newTab()Landroid/app/ActionBar$Tab;": () => null,
   },
 });
-rt.register({ name: "android/app/ActionBar", ctor: class extends JObj {} });
-rt.register({ name: "android/app/ActionBar$OnNavigationListener", ctor: class extends JObj {} });
+rt.markers("android/app/ActionBar", "android/app/ActionBar$OnNavigationListener");

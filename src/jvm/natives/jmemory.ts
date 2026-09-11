@@ -1,5 +1,6 @@
 import { mem } from "../../native/mem";
 import { rt, JObj, type NativeSpec } from "../runtime";
+import { u8 } from "../abi";
 
 function physical(address: number | bigint): number {
   const va = typeof address === "bigint" ? BigInt.asUintN(64, address) : BigInt(address >>> 0);
@@ -61,7 +62,7 @@ function peekByteArray(address: number | bigint, output: Int8Array | null, offse
 
 function pokeByteArray(address: number | bigint, input: Int8Array | null, offset: number, length: number): void {
   const bytes = checkArray(input, offset, length);
-  if (length) mem.write(physical(address), new Uint8Array(bytes.buffer, bytes.byteOffset + offset, length));
+  if (length) mem.write(physical(address), u8(bytes, offset, length));
 }
 
 const methods: NonNullable<NativeSpec["methods"]> = {};

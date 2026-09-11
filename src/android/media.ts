@@ -4,7 +4,7 @@ import { rt, JObj, maySuspend } from "../jvm/runtime";
 import { stringHash, vcall } from "../jvm/natives/jlang";
 import { vfs } from "../jvm/natives/jio";
 import type { JBuffer } from "../jvm/natives/jnio";
-rt.register({ name: "android/media/AudioManager$OnAudioFocusChangeListener", ctor: class extends JObj {} });
+rt.markers("android/media/AudioManager$OnAudioFocusChangeListener");
 /** the rate the Web Audio output actually runs at */
 export const outputSampleRate = (): number => actx?.sampleRate ?? 44100;
 import { onMain } from "./mainloop";
@@ -470,7 +470,7 @@ rt.register({
       if (this.offload || this.mode !== 1) rt.unimplemented("AudioTrack non-streaming output");
       const format = this.format, encoding = format?.encoding || 2;
       if (encoding !== 2 && encoding !== 3 && encoding !== 4) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Unsupported PCM encoding");
-      const track = new (rt.link("android/media/AudioTrack").ctor)() as JAudioTrack;
+      const track = rt.make("android/media/AudioTrack") as JAudioTrack;
       track.rate = format?.sampleRate || outputSampleRate();
       if (track.rate < 3000 || track.rate > 384000) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid sample rate");
       let mask = format?.channelIndexMask || format?.channelMask || 12, channels = 0;
@@ -485,10 +485,10 @@ rt.register({
     },
   },
 });
-rt.register({ name: "android/media/AudioRouting$OnRoutingChangedListener", ctor: class extends JObj {} });
+rt.markers("android/media/AudioRouting$OnRoutingChangedListener");
 rt.register({ name: "android/media/AudioTimestamp", ctor: class extends JObj { framePosition = 0n; nanoTime = 0n; }, fields: { framePosition: "framePosition", nanoTime: "nanoTime" }, methods: { "<init>()V": () => {} } });
-rt.register({ name: "android/media/AudioTrack$OnPlaybackPositionUpdateListener", ctor: class extends JObj {} });
-rt.register({ name: "android/media/AudioRecord$OnRecordPositionUpdateListener", ctor: class extends JObj {} });
+rt.markers("android/media/AudioTrack$OnPlaybackPositionUpdateListener",
+  "android/media/AudioRecord$OnRecordPositionUpdateListener");
 class JAudioFormat extends JObj { encoding = 0; sampleRate = 0; channelMask = 0; channelIndexMask = 0; }
 rt.register({
   name: "android/media/AudioFormat", ctor: JAudioFormat,
@@ -538,8 +538,8 @@ rt.register({
       }),
   },
 });
-rt.register({ name: "android/media/MediaScannerConnection$OnScanCompletedListener", ctor: class extends JObj {} });
-rt.register({ name: "android/media/MediaScannerConnection$MediaScannerConnectionClient", ctor: class extends JObj {} });
+rt.markers("android/media/MediaScannerConnection$OnScanCompletedListener",
+  "android/media/MediaScannerConnection$MediaScannerConnectionClient");
 
 // ── MediaRouter: one route, the device's own display, with no presentation display behind it
 class JRouteInfo extends JObj {}
@@ -557,7 +557,7 @@ rt.register({
     "removeCallback(Landroid/media/MediaRouter$Callback;)V": () => {},
   },
 });
-rt.register({ name: "android/media/MediaRouter$Callback", ctor: class extends JObj {} });
+rt.markers("android/media/MediaRouter$Callback");
 rt.register({
   name: "android/media/MediaRouter$RouteInfo", ctor: JRouteInfo,
   methods: {
@@ -625,7 +625,7 @@ rt.register({
     "removeOnSpatializerStateChangedListener(Landroid/media/Spatializer$OnSpatializerStateChangedListener;)V": () => {},
   },
 });
-rt.register({ name: "android/media/Spatializer$OnSpatializerStateChangedListener", ctor: class extends JObj {} });
+rt.markers("android/media/Spatializer$OnSpatializerStateChangedListener");
 
 rt.register({
   name: "android/media/AudioDeviceCallback", ctor: class extends JObj {},

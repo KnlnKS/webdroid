@@ -47,7 +47,7 @@ rt.register({
 
 // getSystemService("permission_controller"). Nothing calls through it; the class only has
 // to exist so the lookup doesn't fall through to a Binder stub.
-rt.register({ name: "android/permission/PermissionControllerManager", ctor: class extends JObj {} });
+rt.markers("android/permission/PermissionControllerManager");
 
 // ── FileObserver: real shape, no eventing (there is no filesystem to watch here).
 class JFileObserver extends JObj { paths: unknown = null; mask = 0xfff; }
@@ -81,5 +81,5 @@ rt.register({ name: "android/content/ServiceConnection", ctor: class extends JOb
   "onNullBinding(Landroid/content/ComponentName;)V": () => {},
   "onBindingDied(Landroid/content/ComponentName;)V": () => {},
 } });
-rt.register({ name: "android/os/IInterface", ctor: class extends JObj {} });
+rt.markers("android/os/IInterface");
 rt.register({ name: "android/os/Parcelable$ClassLoaderCreator", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable$Creator"] });

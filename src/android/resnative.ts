@@ -224,7 +224,7 @@ rt.register({
     "getDeclaredLength()J": function (this: JAssetFd) { return BigInt(this.bytes.length); },
     "getStartOffset()J": () => 0n,
     "getParcelFileDescriptor()Landroid/os/ParcelFileDescriptor;": function (this: JAssetFd) { return this.pfd; },
-    "getFileDescriptor()Ljava/io/FileDescriptor;": () => new (rt.link("java/io/FileDescriptor").ctor)(),
+    "getFileDescriptor()Ljava/io/FileDescriptor;": () => rt.make("java/io/FileDescriptor"),
     "close()V": () => {},
   },
 });
@@ -674,4 +674,4 @@ rt.register({
 
 // Implemented by app/library code, never handed out by us — it only has to exist so a
 // class declaring `implements NamespaceContext` links instead of being auto-stubbed.
-rt.register({ name: "javax/xml/namespace/NamespaceContext", ctor: class extends JObj {} });
+rt.markers("javax/xml/namespace/NamespaceContext");

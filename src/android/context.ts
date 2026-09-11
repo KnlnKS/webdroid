@@ -124,7 +124,7 @@ export function systemService(jctx: JContext, name: string): unknown {
   // A service we do not model is one this device does not have: AOSP returns null, and callers
   // handle that. Handing back a stand-in object instead only moved the failure to their cast.
   if (!cls) { rt.noteMissing("systemService " + name); return null; }
-  s = new (rt.link(cls).ctor)();
+  s = rt.make(cls);
   services.set(name, s);
   return s;
 }

@@ -149,7 +149,7 @@ export class JTextView extends JView {
     }
   }
   getEditable(): JEditable {
-    if (!this.editObj) this.editObj = new (rt.link("webdroid/Editable").ctor)() as JEditable;
+    if (!this.editObj) this.editObj = rt.make("webdroid/Editable") as JEditable;
     this.editObj.text = this.text;
     return this.editObj;
   }
@@ -625,7 +625,7 @@ rt.register({
   name: "android/widget/TextView", ctor: JTextView, sup: "android/view/View",
   methods: textViewMethods,
 });
-rt.register({ name: "android/widget/TextView$OnEditorActionListener", ctor: class extends JObj {} });
+rt.markers("android/widget/TextView$OnEditorActionListener");
 const bufferTypes = mkEnumSet("android/widget/TextView$BufferType", ["NORMAL", "SPANNABLE", "EDITABLE"]);
 
 export class JButton extends JTextView {
@@ -742,4 +742,4 @@ rt.register({
   },
 });
 
-rt.register({ name: "android/widget/Checkable", ctor: class extends JObj {} });
+rt.markers("android/widget/Checkable");

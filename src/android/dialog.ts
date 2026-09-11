@@ -365,7 +365,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "dispatchPopulateAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)Z": () => 0,
   "onKeyDown(ILandroid/view/KeyEvent;)Z": () => 0,
   "onKeyUp(ILandroid/view/KeyEvent;)Z": () => 0,
-  "onSaveInstanceState()Landroid/os/Bundle;": () => new (rt.link("android/os/Bundle").ctor)(),
+  "onSaveInstanceState()Landroid/os/Bundle;": () => rt.make("android/os/Bundle"),
   "onRestoreInstanceState(Landroid/os/Bundle;)V": function () {},
 };
 rt.register({
@@ -578,7 +578,7 @@ rt.register({ name: "android/app/ProgressDialog", ctor: class extends JAlertDial
     "setProgressStyle(I)V": () => {},
     "static show(Landroid/content/Context;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/app/ProgressDialog;":
       async (c: any, t: unknown, m: unknown) => {
-        const d = new (rt.link("android/app/ProgressDialog").ctor)();
+        const d = rt.make("android/app/ProgressDialog");
         d.jctx = c;
         d.titleStr = await str(c?.$host, t);
         d.message = await str(c?.$host, m);
