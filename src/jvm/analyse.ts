@@ -2,7 +2,7 @@
 // is compiled". It answers two questions off the same call graph: what the apk can reach,
 // and which of those methods can suspend.
 //
-// It is not free — harmonic pays ~130ms of a 700ms boot — so it earns its place only if the
+// It is not free — it costs about a fifth of a boot — so it earns its place only if the
 // sync tier it enables is worth more. That is a measurement, not an assumption: `?sync=0`
 // turns it off and the e2e perf columns say which way it went.
 

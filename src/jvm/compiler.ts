@@ -99,7 +99,7 @@ function decode(insns: Uint16Array, pc: number): Ins {
 }
 
 /** Generating a method's JS source costs ~4x what handing it to `new Function` does, and on
- *  mihon's boot only 31% of the methods of the classes we load are ever called. So a body is
+ *  a large app's boot only 31% of the methods of the classes we load are ever called. So a body is
  *  emitted as a thunk that compiles itself on first call. Set false to compile everything up
  *  front (scripts/smoke.ts, which exists to surface compile failures). */
 let lazyMethods = true;
