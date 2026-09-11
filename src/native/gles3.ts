@@ -239,42 +239,45 @@ const shadowed = (t: number): BufRec | null => { if (t !== COPY_READ && t !== CO
 /** run an operation on a data target: a copy target stands in for the buffer's own kind, binding restored */
 function withTarget<R>(t: number, fn: (tt: number) => R): R {
   if (t !== COPY_READ && t !== COPY_WRITE) return fn(t);
+  const gl = g();
   const r = recAt(t), tt = r?.elem ? ELEM : ARRAY;
-  const prev = g().getParameter(tt === ELEM ? 0x8895 : 0x8894) as WebGLBuffer | null;
-  g().bindBuffer(tt, r?.gl ?? null);
-  try { return fn(tt); } finally { g().bindBuffer(tt, prev); }
+  const prev = gl.getParameter(tt === ELEM ? 0x8895 : 0x8894) as WebGLBuffer | null;
+  gl.bindBuffer(tt, r?.gl ?? null);
+  try { return fn(tt); } finally { gl.bindBuffer(tt, prev); }
 }
 function writeBuffers(t: number, fn: (target: number) => void): void {
   withTarget(t, fn);
   const r = recAt(t);
   if (!r?.other) return;
+  const gl = g();
   const elem = t === COPY_READ || t === COPY_WRITE ? r.elem : t === ELEM;
   const target = elem ? ARRAY : ELEM, buffer = elem === r.elem ? r.other : r.gl;
-  const prev = g().getParameter(target === ELEM ? 0x8895 : 0x8894);
-  g().bindBuffer(target, buffer);
-  try { fn(target); } finally { g().bindBuffer(target, prev); }
+  const prev = gl.getParameter(target === ELEM ? 0x8895 : 0x8894);
+  gl.bindBuffer(target, buffer);
+  try { fn(target); } finally { gl.bindBuffer(target, prev); }
 }
 const writeBack = (t: number, off: number, data: Uint8Array): void => { const r = shadowed(t); if (r) r.shadow!.set(data, off); else writeBuffers(t, (tt) => g().bufferSubData(tt, off, data)); };
 function realize(t: number, h: number): WebGLBuffer | null {
   const r = rec(h);
   if (!r) return null;
+  const gl = g();
   if (r.elem === null) {
-    r.elem = t === ELEM; r.gl = g().createBuffer();
+    r.elem = t === ELEM; r.gl = gl.createBuffer();
     if (r.gl) { recOf.set(r.gl, r); T().ids.set(r.gl, h); }
-    g().bindBuffer(t, r.gl);
-    if (r.shadow) { g().bufferData(t, r.shadow, r.usage); r.shadow = null; }
+    gl.bindBuffer(t, r.gl);
+    if (r.shadow) { gl.bufferData(t, r.shadow, r.usage); r.shadow = null; }
   }
   if (r.elem === (t === ELEM)) return r.gl;
   if (!r.other) {
     // WebGL forbids sharing index and vertex storage, so copy only on the first mixed bind.
-    const target = r.elem ? ELEM : ARRAY, prev = g().getParameter(r.elem ? 0x8895 : 0x8894);
-    g().bindBuffer(target, r.gl);
-    const data = new Uint8Array(g().getBufferParameter(target, 0x8764));
-    g().getBufferSubData(target, 0, data);
-    g().bindBuffer(target, prev);
-    r.other = g().createBuffer();
+    const target = r.elem ? ELEM : ARRAY, prev = gl.getParameter(r.elem ? 0x8895 : 0x8894);
+    gl.bindBuffer(target, r.gl);
+    const data = new Uint8Array(gl.getBufferParameter(target, 0x8764));
+    gl.getBufferSubData(target, 0, data);
+    gl.bindBuffer(target, prev);
+    r.other = gl.createBuffer();
     if (r.other) { recOf.set(r.other, r); T().ids.set(r.other, h); }
-    g().bindBuffer(t, r.other); g().bufferData(t, data, r.usage);
+    gl.bindBuffer(t, r.other); gl.bufferData(t, data, r.usage);
   }
   return r.other;
 }
@@ -282,13 +285,14 @@ function realize(t: number, h: number): WebGLBuffer | null {
 function syncVertexBuffer(buffer: WebGLBuffer | null): void {
   const r = buffer && recOf.get(buffer);
   if (!r?.other) return;
-  const vertex = g().getParameter(0x8894), element = g().getParameter(0x8895);
-  g().bindBuffer(ARRAY, buffer);
-  const data = new Uint8Array(g().getBufferParameter(ARRAY, 0x8764));
-  g().getBufferSubData(ARRAY, 0, data);
-  g().bindBuffer(ELEM, r.elem ? r.gl : r.other);
-  g().bufferSubData(ELEM, 0, data);
-  g().bindBuffer(ARRAY, vertex); g().bindBuffer(ELEM, element);
+  const gl = g();
+  const vertex = gl.getParameter(0x8894), element = gl.getParameter(0x8895);
+  gl.bindBuffer(ARRAY, buffer);
+  const data = new Uint8Array(gl.getBufferParameter(ARRAY, 0x8764));
+  gl.getBufferSubData(ARRAY, 0, data);
+  gl.bindBuffer(ELEM, r.elem ? r.gl : r.other);
+  gl.bufferSubData(ELEM, 0, data);
+  gl.bindBuffer(ARRAY, vertex); gl.bindBuffer(ELEM, element);
 }
 
 function syncFeedback(): void {
@@ -369,15 +373,34 @@ const active = (q: (p: WebGLProgram, i: number) => WebGLActiveInfo | null): Host
 };
 const names = (pp: number, n: number): string[] => { const r: string[] = []; for (let i = 0; i < n; i++) r.push(mem.cstr(ldp(pp + i * PTR))); return r; };
 
+/** the state entry points ES 1.1 and ES 3.0 share */
+export const glCommon: Record<string, HostFn> = {
+  glViewport: (_c, a) => g().viewport(a.i(), a.i(), a.i(), a.i()), glScissor: (_c, a) => g().scissor(a.i(), a.i(), a.i(), a.i()),
+  glClear: (_c, a) => g().clear(a.i()), glClearColor: (_c, a) => g().clearColor(a.f(), a.f(), a.f(), a.f()),
+  glClearDepthf: (_c, a) => g().clearDepth(a.f()), glClearStencil: (_c, a) => g().clearStencil(a.i()),
+  glFlush: () => g().flush(), glFinish: () => g().finish(),
+  glBlendFunc: (_c, a) => g().blendFunc(a.i(), a.i()), glBlendFuncSeparate: (_c, a) => g().blendFuncSeparate(a.i(), a.i(), a.i(), a.i()),
+  glBlendEquation: (_c, a) => g().blendEquation(a.i()), glBlendEquationSeparate: (_c, a) => g().blendEquationSeparate(a.i(), a.i()),
+  glBlendColor: (_c, a) => g().blendColor(a.f(), a.f(), a.f(), a.f()),
+  glColorMask: (_c, a) => g().colorMask(!!(a.i() & 255), !!(a.i() & 255), !!(a.i() & 255), !!(a.i() & 255)),
+  glDepthFunc: (_c, a) => g().depthFunc(a.i()), glDepthMask: (_c, a) => g().depthMask(!!(a.i() & 255)), glDepthRangef: (_c, a) => g().depthRange(a.f(), a.f()),
+  glStencilFunc: (_c, a) => g().stencilFunc(a.i(), a.i(), a.i()), glStencilOp: (_c, a) => g().stencilOp(a.i(), a.i(), a.i()), glStencilMask: (_c, a) => g().stencilMask(a.i()),
+  glCullFace: (_c, a) => g().cullFace(a.i()), glFrontFace: (_c, a) => g().frontFace(a.i()),
+  glPolygonOffset: (_c, a) => g().polygonOffset(a.f(), a.f()), glLineWidth: (_c, a) => g().lineWidth(a.f()),
+  glSampleCoverage: (_c, a) => g().sampleCoverage(a.f(), !!(a.i() & 255)),
+  glCopyTexImage2D: (_c, a) => g().copyTexImage2D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i()),
+  glCopyTexSubImage2D: (_c, a) => g().copyTexSubImage2D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i()),
+};
+const draw = (): GL => { perf.glDraws++; prepareDraw(); return g(); };
+type Setter = (this: GL, ...v: unknown[]) => void;
+const method = (name: string): (() => Setter) => { let m: Setter | undefined; return () => (m ??= (g() as unknown as Record<string, Setter>)[name]); };
+
 export function gles3Init(): void {
   const G: Record<string, HostFn> = {
+    ...glCommon,
     // ── strings, state queries, errors
     glGetString: (_c, a) => cstr(str(a.i())),
     glGetStringi: (_c, a) => { const n = a.i(), i = a.i(); return cstr(n === 0x1f03 ? exts()[i] ?? "" : ""); },
-    glGetIntegerv: (_c, a) => { const n = a.i(); out(param(n), a.p(), st32, 4); },
-    glGetInteger64v: (_c, a) => { const n = a.i(); out(param(n), a.p(), st64, 8); },
-    glGetFloatv: (_c, a) => { const n = a.i(); out(param(n), a.p(), stf, 4); },
-    glGetBooleanv: (_c, a) => { const n = a.i(); out(param(n), a.p(), st8, 1); },
     glGetIntegeri_v: (_c, a) => { const t = a.i(), i = a.i(); out(g().getIndexedParameter(t, i), a.p(), st32, 4); },
     glGetInteger64i_v: (_c, a) => { const t = a.i(), i = a.i(); out(g().getIndexedParameter(t, i), a.p(), st64, 8); },
     glGetInternalformativ: (_c, a) => {
@@ -396,25 +419,12 @@ export function gles3Init(): void {
     glIsEnabled: (_c, a) => (g().isEnabled(a.i()) ? 1 : 0),
     glEnable: (_c, a) => g().enable(a.i()), glDisable: (_c, a) => g().disable(a.i()),
     glHint: (_c, a) => g().hint(a.i(), a.i()),
-    glViewport: (_c, a) => g().viewport(a.i(), a.i(), a.i(), a.i()), glScissor: (_c, a) => g().scissor(a.i(), a.i(), a.i(), a.i()),
-    glClear: (_c, a) => g().clear(a.i()), glClearColor: (_c, a) => g().clearColor(a.f(), a.f(), a.f(), a.f()),
-    glClearDepthf: (_c, a) => g().clearDepth(a.f()), glClearStencil: (_c, a) => g().clearStencil(a.i()),
     glClearBufferfv: (_c, a) => { const b = a.i(), d = a.i(); g().clearBufferfv(b, d, f32(a.p(), b === 0x1800 ? 4 : 1)); },
     glClearBufferiv: (_c, a) => { const b = a.i(), d = a.i(); g().clearBufferiv(b, d, i32(a.p(), b === 0x1800 ? 4 : 1)); },
     glClearBufferuiv: (_c, a) => { const b = a.i(), d = a.i(); g().clearBufferuiv(b, d, u32(a.p(), 4)); },
     glClearBufferfi: (_c, a) => g().clearBufferfi(a.i(), a.i(), a.f(), a.i()),
-    glFlush: () => g().flush(), glFinish: () => g().finish(),
-    glBlendFunc: (_c, a) => g().blendFunc(a.i(), a.i()), glBlendFuncSeparate: (_c, a) => g().blendFuncSeparate(a.i(), a.i(), a.i(), a.i()),
-    glBlendEquation: (_c, a) => g().blendEquation(a.i()), glBlendEquationSeparate: (_c, a) => g().blendEquationSeparate(a.i(), a.i()),
-    glBlendColor: (_c, a) => g().blendColor(a.f(), a.f(), a.f(), a.f()),
-    glColorMask: (_c, a) => g().colorMask(!!(a.i() & 255), !!(a.i() & 255), !!(a.i() & 255), !!(a.i() & 255)),
-    glDepthFunc: (_c, a) => g().depthFunc(a.i()), glDepthMask: (_c, a) => g().depthMask(!!(a.i() & 255)), glDepthRangef: (_c, a) => g().depthRange(a.f(), a.f()),
-    glStencilFunc: (_c, a) => g().stencilFunc(a.i(), a.i(), a.i()), glStencilFuncSeparate: (_c, a) => g().stencilFuncSeparate(a.i(), a.i(), a.i(), a.i()),
-    glStencilOp: (_c, a) => g().stencilOp(a.i(), a.i(), a.i()), glStencilOpSeparate: (_c, a) => g().stencilOpSeparate(a.i(), a.i(), a.i(), a.i()),
-    glStencilMask: (_c, a) => g().stencilMask(a.i()), glStencilMaskSeparate: (_c, a) => g().stencilMaskSeparate(a.i(), a.i()),
-    glCullFace: (_c, a) => g().cullFace(a.i()), glFrontFace: (_c, a) => g().frontFace(a.i()),
-    glPolygonOffset: (_c, a) => g().polygonOffset(a.f(), a.f()), glLineWidth: (_c, a) => g().lineWidth(a.f()),
-    glSampleCoverage: (_c, a) => g().sampleCoverage(a.f(), !!(a.i() & 255)),
+    glStencilFuncSeparate: (_c, a) => g().stencilFuncSeparate(a.i(), a.i(), a.i(), a.i()), glStencilOpSeparate: (_c, a) => g().stencilOpSeparate(a.i(), a.i(), a.i(), a.i()),
+    glStencilMaskSeparate: (_c, a) => g().stencilMaskSeparate(a.i(), a.i()),
     glPixelStorei: (_c, a) => g().pixelStorei(a.i(), a.i()),
 
     // ── shaders and programs
@@ -495,9 +505,6 @@ export function gles3Init(): void {
       out(p && g().getActiveUniforms(p, indices, pn), a.p(), st32, 4);
     },
     glTransformFeedbackVaryings: (_c, a) => { const p = H(T().programs, a.i()); const n = a.i(), pp = a.p(), mode = a.i(); if (p) g().transformFeedbackVaryings(p, names(pp, n), mode); },
-    glGetUniformfv: (_c, a) => { const p = H(T().programs, a.i()), u = U(a.i()); out(p && u && g().getUniform(p, u), a.p(), stf, 4); },
-    glGetUniformiv: (_c, a) => { const p = H(T().programs, a.i()), u = U(a.i()); out(p && u && g().getUniform(p, u), a.p(), st32, 4); },
-    glGetUniformuiv: (_c, a) => { const p = H(T().programs, a.i()), u = U(a.i()); out(p && u && g().getUniform(p, u), a.p(), st32, 4); },
 
     // ── buffers
     glGenBuffers: (_c, a) => { const n = a.i(); gen(T().buffers, n, a.p(), () => { const o = {} as WebGLBuffer; recOf.set(o, { gl: null, other: null, elem: null, shadow: null, usage: 0x88e4 }); return o; }); },
@@ -523,8 +530,6 @@ export function gles3Init(): void {
       const src = rs ? rs.shadow!.subarray(roff, roff + n) : withTarget(rt, (tt) => { const d = new Uint8Array(n); g().getBufferSubData(tt, roff, d); return d; });
       writeBack(wt, woff, src);
     },
-    glGetBufferParameteriv: (_c, a) => { const t = a.i(), pn = a.i(), r = shadowed(t); out(r ? (pn === 0x8765 ? r.usage : r.shadow!.length) : withTarget(t, (tt) => g().getBufferParameter(tt, pn)), a.p(), st32, 4); },
-    glGetBufferParameteri64v: (_c, a) => { const t = a.i(), pn = a.i(), r = shadowed(t); out(r ? (pn === 0x8765 ? r.usage : r.shadow!.length) : withTarget(t, (tt) => g().getBufferParameter(tt, pn)), a.p(), st64, 8); },
     // a mapping is a guest copy of the range: read in on map, written back on unmap or flush
     glMapBufferRange: (_c, a) => {
       const t = a.i(), off = a.i(), len = a.i(), access = a.i(), b = recAt(t);
@@ -546,10 +551,7 @@ export function gles3Init(): void {
     glGetBufferPointerv: (_c, a) => { const t = a.i(); a.i(); const b = recAt(t); stp(a.p(), (b && mapped.get(b)?.ptr) || 0); },
 
     // ── vertex arrays and attributes
-    glGenVertexArrays: (_c, a) => { const n = a.i(); gen(T().vaos, n, a.p(), () => g().createVertexArray()); },
-    glDeleteVertexArrays: (_c, a) => { const n = a.i(); del(T().vaos, n, a.p(), (o) => g().deleteVertexArray(o)); },
     glBindVertexArray: (_c, a) => g().bindVertexArray(H(T().vaos, a.i())),
-    glIsVertexArray: (_c, a) => (H(T().vaos, a.i()) ? 1 : 0),
     glEnableVertexAttribArray: (_c, a) => g().enableVertexAttribArray(a.i()), glDisableVertexAttribArray: (_c, a) => g().disableVertexAttribArray(a.i()),
     glVertexAttribPointer: (_c, a) => g().vertexAttribPointer(a.i(), a.i(), a.i(), !!(a.i() & 255), a.i(), a.p()),
     glVertexAttribIPointer: (_c, a) => g().vertexAttribIPointer(a.i(), a.i(), a.i(), a.i(), a.p()),
@@ -560,18 +562,14 @@ export function gles3Init(): void {
     glVertexAttrib3fv: (_c, a) => g().vertexAttrib3fv(a.i(), f32(a.p(), 3)), glVertexAttrib4fv: (_c, a) => g().vertexAttrib4fv(a.i(), f32(a.p(), 4)),
     glVertexAttribI4i: (_c, a) => g().vertexAttribI4i(a.i(), a.i(), a.i(), a.i(), a.i()), glVertexAttribI4ui: (_c, a) => g().vertexAttribI4ui(a.i(), a.u(), a.u(), a.u(), a.u()),
     glVertexAttribI4iv: (_c, a) => g().vertexAttribI4iv(a.i(), i32(a.p(), 4)), glVertexAttribI4uiv: (_c, a) => g().vertexAttribI4uiv(a.i(), u32(a.p(), 4)),
-    glGetVertexAttribfv: (_c, a) => { const i = a.i(), pn = a.i(); out(g().getVertexAttrib(i, pn), a.p(), stf, 4); },
-    glGetVertexAttribiv: (_c, a) => { const i = a.i(), pn = a.i(); out(g().getVertexAttrib(i, pn), a.p(), st32, 4); },
-    glGetVertexAttribIiv: (_c, a) => { const i = a.i(), pn = a.i(); out(g().getVertexAttrib(i, pn), a.p(), st32, 4); },
-    glGetVertexAttribIuiv: (_c, a) => { const i = a.i(), pn = a.i(); out(g().getVertexAttrib(i, pn), a.p(), st32, 4); },
     glGetVertexAttribPointerv: (_c, a) => { const i = a.i(), pn = a.i(); stp(a.p(), g().getVertexAttribOffset(i, pn)); },
 
     // ── draws
-    glDrawArrays: (_c, a) => { perf.glDraws++; prepareDraw(); g().drawArrays(a.i(), a.i(), a.i()); },
-    glDrawElements: (_c, a) => { perf.glDraws++; prepareDraw(); g().drawElements(a.i(), a.i(), a.i(), a.p()); },
-    glDrawArraysInstanced: (_c, a) => { perf.glDraws++; prepareDraw(); g().drawArraysInstanced(a.i(), a.i(), a.i(), a.i()); },
-    glDrawElementsInstanced: (_c, a) => { perf.glDraws++; prepareDraw(); g().drawElementsInstanced(a.i(), a.i(), a.i(), a.p(), a.i()); },
-    glDrawRangeElements: (_c, a) => { perf.glDraws++; prepareDraw(); g().drawRangeElements(a.i(), a.i(), a.i(), a.i(), a.i(), a.p()); },
+    glDrawArrays: (_c, a) => draw().drawArrays(a.i(), a.i(), a.i()),
+    glDrawElements: (_c, a) => draw().drawElements(a.i(), a.i(), a.i(), a.p()),
+    glDrawArraysInstanced: (_c, a) => draw().drawArraysInstanced(a.i(), a.i(), a.i(), a.i()),
+    glDrawElementsInstanced: (_c, a) => draw().drawElementsInstanced(a.i(), a.i(), a.i(), a.p(), a.i()),
+    glDrawRangeElements: (_c, a) => draw().drawRangeElements(a.i(), a.i(), a.i(), a.i(), a.i(), a.p()),
 
     // ── textures and samplers
     glActiveTexture: (_c, a) => { const texture = a.i(); g().activeTexture(texture); if (texture >= TEXTURE0) contextState().activeUnit = texture - TEXTURE0; },
@@ -615,31 +613,11 @@ export function gles3Init(): void {
     },
     glTexStorage2D: (_c, a) => g().texStorage2D(a.i(), a.i(), a.i(), a.i(), a.i()),
     glTexStorage3D: (_c, a) => g().texStorage3D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i()),
-    glCopyTexImage2D: (_c, a) => g().copyTexImage2D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i()),
-    glCopyTexSubImage2D: (_c, a) => g().copyTexSubImage2D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i()),
     glCopyTexSubImage3D: (_c, a) => g().copyTexSubImage3D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i()),
     glGenerateMipmap: (_c, a) => g().generateMipmap(a.i()),
-    glTexParameteri: (_c, a) => texParam(a.i(), a.i(), a.i()),
-    glTexParameterf: (_c, a) => texParamf(a.i(), a.i(), a.f()),
-    glTexParameteriv: (_c, a) => { const t = a.i(), pn = a.i(); texParam(t, pn, mem.ld32(a.p())); },
-    glTexParameterfv: (_c, a) => { const t = a.i(), pn = a.i(); texParamf(t, pn, mem.ldf32(a.p())); },
-    glGetTexParameteriv: (_c, a) => { const t = a.i(), pn = a.i(); out(texParameter(t, pn), a.p(), st32, 4); },
-    glGetTexParameterfv: (_c, a) => { const t = a.i(), pn = a.i(); out(texParameter(t, pn), a.p(), stf, 4); },
-    glGenSamplers: (_c, a) => { const n = a.i(); gen(T().samplers, n, a.p(), () => g().createSampler()); },
-    glDeleteSamplers: (_c, a) => { const n = a.i(); del(T().samplers, n, a.p(), (o) => g().deleteSampler(o)); },
-    glIsSampler: (_c, a) => (H(T().samplers, a.i()) ? 1 : 0),
     glBindSampler: (_c, a) => g().bindSampler(a.i(), H(T().samplers, a.i())),
-    glSamplerParameteri: (_c, a) => { const s = H(T().samplers, a.i()); const pn = a.i(), v = a.i(); if (s) g().samplerParameteri(s, pn, v); },
-    glSamplerParameterf: (_c, a) => { const s = H(T().samplers, a.i()); const pn = a.i(), v = a.f(); if (s) g().samplerParameterf(s, pn, v); },
-    glSamplerParameteriv: (_c, a) => { const s = H(T().samplers, a.i()); const pn = a.i(), v = mem.ld32(a.p()); if (s) g().samplerParameteri(s, pn, v); },
-    glSamplerParameterfv: (_c, a) => { const s = H(T().samplers, a.i()); const pn = a.i(), v = mem.ldf32(a.p()); if (s) g().samplerParameterf(s, pn, v); },
-    glGetSamplerParameteriv: (_c, a) => { const s = H(T().samplers, a.i()); const pn = a.i(); out(s && g().getSamplerParameter(s, pn), a.p(), st32, 4); },
-    glGetSamplerParameterfv: (_c, a) => { const s = H(T().samplers, a.i()); const pn = a.i(); out(s && g().getSamplerParameter(s, pn), a.p(), stf, 4); },
 
     // ── framebuffers and renderbuffers
-    glGenFramebuffers: (_c, a) => { const n = a.i(); gen(T().fbos, n, a.p(), () => g().createFramebuffer()); },
-    glDeleteFramebuffers: (_c, a) => { const n = a.i(); del(T().fbos, n, a.p(), (o) => g().deleteFramebuffer(o)); },
-    glIsFramebuffer: (_c, a) => (H(T().fbos, a.i()) ? 1 : 0),
     glBindFramebuffer: (_c, a) => g().bindFramebuffer(a.i(), H(T().fbos, a.i())),
     glFramebufferTexture2D: (_c, a) => g().framebufferTexture2D(a.i(), a.i(), a.i(), H(T().textures, a.i()), a.i()),
     glFramebufferTextureLayer: (_c, a) => g().framebufferTextureLayer(a.i(), a.i(), H(T().textures, a.i()), a.i(), a.i()),
@@ -655,18 +633,12 @@ export function gles3Init(): void {
       const x = a.i(), y = a.i(), w = a.i(), h = a.i(), f = a.i(), ty = a.i(), p = a.p();
       if (packPbo) { g().readPixels(x, y, w, h, f, ty, p); syncVertexBuffer(g().getParameter(0x88ed)); } else g().readPixels(x, y, w, h, f, ty, pixels(ty, p));
     },
-    glGenRenderbuffers: (_c, a) => { const n = a.i(); gen(T().rbos, n, a.p(), () => g().createRenderbuffer()); },
-    glDeleteRenderbuffers: (_c, a) => { const n = a.i(); del(T().rbos, n, a.p(), (o) => g().deleteRenderbuffer(o)); },
-    glIsRenderbuffer: (_c, a) => (H(T().rbos, a.i()) ? 1 : 0),
     glBindRenderbuffer: (_c, a) => g().bindRenderbuffer(a.i(), H(T().rbos, a.i())),
     glRenderbufferStorage: (_c, a) => g().renderbufferStorage(a.i(), a.i(), a.i(), a.i()),
     glRenderbufferStorageMultisample: (_c, a) => g().renderbufferStorageMultisample(a.i(), a.i(), a.i(), a.i(), a.i()),
     glGetRenderbufferParameteriv: (_c, a) => { const t = a.i(), pn = a.i(); out(g().getRenderbufferParameter(t, pn), a.p(), st32, 4); },
 
     // ── queries, sync, transform feedback
-    glGenQueries: (_c, a) => { const n = a.i(); gen(T().queries, n, a.p(), () => g().createQuery()); },
-    glDeleteQueries: (_c, a) => { const n = a.i(); del(T().queries, n, a.p(), (o) => g().deleteQuery(o)); },
-    glIsQuery: (_c, a) => (H(T().queries, a.i()) ? 1 : 0),
     glBeginQuery: (_c, a) => { const t = a.i(), q = H(T().queries, a.i()); if (q) g().beginQuery(t, q); },
     glEndQuery: (_c, a) => g().endQuery(a.i()),
     glGetQueryiv: (_c, a) => { const t = a.i(), pn = a.i(); out(g().getQuery(t, pn), a.p(), st32, 4); },
@@ -684,30 +656,53 @@ export function gles3Init(): void {
       return r;
     },
     glGetSynciv: (_c, a) => { const s = H(T().syncs, a.i()); const pn = a.i(); a.i(); const lenp = a.p(); if (lenp) mem.st32(lenp, 1); out(s && g().getSyncParameter(s, pn), a.p(), st32, 4); },
-    glGenTransformFeedbacks: (_c, a) => { const n = a.i(); gen(T().tfs, n, a.p(), () => g().createTransformFeedback()); },
-    glDeleteTransformFeedbacks: (_c, a) => { const n = a.i(); del(T().tfs, n, a.p(), (o) => g().deleteTransformFeedback(o)); },
-    glIsTransformFeedback: (_c, a) => (H(T().tfs, a.i()) ? 1 : 0),
     glBindTransformFeedback: (_c, a) => g().bindTransformFeedback(a.i(), H(T().tfs, a.i())),
     glBeginTransformFeedback: (_c, a) => g().beginTransformFeedback(a.i()), glEndTransformFeedback: () => { g().endTransformFeedback(); syncFeedback(); },
     glPauseTransformFeedback: () => { g().pauseTransformFeedback(); syncFeedback(); }, glResumeTransformFeedback: () => g().resumeTransformFeedback(),
   };
+  const objects = [["VertexArray", "VertexArrays", "vaos", "createVertexArray", "deleteVertexArray"], ["Sampler", "Samplers", "samplers", "createSampler", "deleteSampler"],
+    ["Framebuffer", "Framebuffers", "fbos", "createFramebuffer", "deleteFramebuffer"], ["Renderbuffer", "Renderbuffers", "rbos", "createRenderbuffer", "deleteRenderbuffer"],
+    ["Query", "Queries", "queries", "createQuery", "deleteQuery"], ["TransformFeedback", "TransformFeedbacks", "tfs", "createTransformFeedback", "deleteTransformFeedback"]] as const;
+  for (const [one, many, key, create, remove] of objects) {
+    G[`glGen${many}`] = (_c, a) => { const n = a.i(); gen(T()[key], n, a.p(), () => g()[create]()); };
+    G[`glDelete${many}`] = (_c, a) => { const n = a.i(); del(T()[key], n, a.p(), (o) => g()[remove](o)); };
+    G[`glIs${one}`] = (_c, a) => (H(T()[key], a.i()) ? 1 : 0);
+  }
+  for (const [s, st, bpe] of [["Integer", st32, 4], ["Integer64", st64, 8], ["Float", stf, 4], ["Boolean", st8, 1]] as const) G[`glGet${s}v`] = (_c, a) => { const n = a.i(); out(param(n), a.p(), st, bpe); };
+  for (const [s, st, bpe] of [["iv", st32, 4], ["i64v", st64, 8]] as const) {
+    G[`glGetBufferParameter${s}`] = (_c, a) => { const t = a.i(), pn = a.i(), r = shadowed(t); out(r ? (pn === 0x8765 ? r.usage : r.shadow!.length) : withTarget(t, (tt) => g().getBufferParameter(tt, pn)), a.p(), st, bpe); };
+  }
+  for (const [s, st] of [["iv", st32], ["fv", stf]] as const) {
+    G[`glGetTexParameter${s}`] = (_c, a) => { const t = a.i(), pn = a.i(); out(texParameter(t, pn), a.p(), st, 4); };
+    G[`glGetSamplerParameter${s}`] = (_c, a) => { const smp = H(T().samplers, a.i()); const pn = a.i(); out(smp && g().getSamplerParameter(smp, pn), a.p(), st, 4); };
+  }
+  for (const [s, st] of [["f", stf], ["i", st32], ["ui", st32]] as const) G[`glGetUniform${s}v`] = (_c, a) => { const p = H(T().programs, a.i()), u = U(a.i()); out(p && u && g().getUniform(p, u), a.p(), st, 4); };
+  for (const [s, st] of [["fv", stf], ["iv", st32], ["Iiv", st32], ["Iuiv", st32]] as const) G[`glGetVertexAttrib${s}`] = (_c, a) => { const i = a.i(), pn = a.i(); out(g().getVertexAttrib(i, pn), a.p(), st, 4); };
+  const I = (a: ArgReader) => a.i(), LD = (a: ArgReader) => mem.ld32(a.p()), F = (a: ArgReader) => a.f(), LDF = (a: ArgReader) => mem.ldf32(a.p());
+  for (const [s, read, int] of [["i", I, true], ["f", F, false], ["iv", LD, true], ["fv", LDF, false]] as const) {
+    G[`glTexParameter${s}`] = (_c, a) => { const t = a.i(), pn = a.i(); (int ? texParam : texParamf)(t, pn, read(a)); };
+    G[`glSamplerParameter${s}`] = (_c, a) => { const smp = H(T().samplers, a.i()); const pn = a.i(), v = read(a); if (smp) { if (int) g().samplerParameteri(smp, pn, v); else g().samplerParameterf(smp, pn, v); } };
+  }
   // ── uniforms: glUniform{1..4}{f,i,ui}[v] and the nine matrix shapes
   const kinds = [["f", (a: ArgReader) => a.f(), f32], ["i", (a: ArgReader) => a.i(), i32], ["ui", (a: ArgReader) => a.u(), u32]] as const;
   for (let n = 1; n <= 4; n++) for (const [k, rd, vw] of kinds) {
-    const fn = `uniform${n}${k}`, fnv = fn + "v";
+    const set = method(`uniform${n}${k}`), setv = method(`uniform${n}${k}v`), sampler = n === 1 && k === "i";
     G[`glUniform${n}${k}`] = (_c, a) => {
       const u = U(a.i()), x = rd(a), y = n > 1 ? rd(a) : 0, z = n > 2 ? rd(a) : 0, w = n > 3 ? rd(a) : 0;
-      if (u) (g() as unknown as Record<string, (...v: unknown[]) => void>)[fn](u, x, y, z, w);
-      if (u && n === 1 && k === "i") markSamplerUnitsDirty();
+      if (!u) return;
+      set().call(g(), u, x, y, z, w);
+      if (sampler) markSamplerUnitsDirty();
     };
     G[`glUniform${n}${k}v`] = (_c, a) => {
-      const u = U(a.i()), cnt = a.i(), p = a.p(); if (u) (g() as unknown as Record<string, (...v: unknown[]) => void>)[fnv](u, vw(p, cnt * n));
-      if (u && n === 1 && k === "i") markSamplerUnitsDirty();
+      const u = U(a.i()), cnt = a.i(), p = a.p();
+      if (!u) return;
+      setv().call(g(), u, vw(p, cnt * n));
+      if (sampler) markSamplerUnitsDirty();
     };
   }
   for (const [m, e] of [["2", 4], ["3", 9], ["4", 16], ["2x3", 6], ["3x2", 6], ["2x4", 8], ["4x2", 8], ["3x4", 12], ["4x3", 12]] as const) {
-    const fn = `uniformMatrix${m}fv`;
-    G[`glUniformMatrix${m}fv`] = (_c, a) => { const u = U(a.i()), cnt = a.i(), t = !!(a.i() & 255), p = a.p(); if (u) (g() as unknown as Record<string, (...v: unknown[]) => void>)[fn](u, t, f32(p, cnt * e)); };
+    const set = method(`uniformMatrix${m}fv`);
+    G[`glUniformMatrix${m}fv`] = (_c, a) => { const u = U(a.i()), cnt = a.i(), t = !!(a.i() & 255), p = a.p(); if (u) set().call(g(), u, t, f32(p, cnt * e)); };
   }
   // the probe: after each entry point, count and name a GL error (wd.native.glProbe)
   for (const [k, f] of Object.entries(G)) {

@@ -6,7 +6,9 @@
 // column-major Float32Array(16) stacks; the shader takes the MVP product and the texture matrix.
 
 import { mem } from "./mem";
-import { hostLib, calledMissing, type HostFn, bitsf } from "./host";
+import { hostLib, calledMissing, cstr, type HostFn, type HostRet, type ArgReader, bitsf } from "./host";
+import type { Cpu } from "./cpu";
+import { glCommon } from "./gles3";
 import { gl } from "../android/gl";
 import { perf } from "../perf";
 
@@ -261,14 +263,12 @@ const EXTENSIONS = "GL_OES_blend_subtract GL_OES_blend_func_separate GL_OES_blen
 export let gles1Procs: Record<string, HostFn> = {};
 
 export function gles1Init(): void {
-  const strs = new Map<string, number>();
-  const cstr = (s: string) => { let p = strs.get(s); if (!p) strs.set(s, (p = mem.hostStr(s))); return p; };
   const noCtx = () => { calledMissing.add("gles1:call without a current context"); };
   /** wrap: current-context guard + optional getError probe */
-  const W = (name: string, fn: (c: Ctx, a: Parameters<HostFn>[1]) => number | void | bigint): HostFn => (_cpu, a) => {
+  const W = (name: string, fn: (c: Ctx, a: ArgReader, cpu: Cpu) => HostRet): HostFn => (cpu, a) => {
     const c = cur();
     if (!c) { noCtx(); return 0; }
-    const r = fn(c, a);
+    const r = fn(c, a, cpu);
     if (glProbe.on) { const e = c.gl.getError(); if (e) { perf.glErrors++; console.warn("[gles1] error", e.toString(16), "after", name); } }
     return r === undefined ? 0 : r;
   };
@@ -303,7 +303,8 @@ export function gles1Init(): void {
       default: if (on) c.caps.add(cap); else c.caps.delete(cap);
     }
   };
-  const isOn = (c: Ctx, cap: number): number => cap === 0x0de1 ? +c.texOn[c.unit] : cap === 0x0bc0 ? +c.alphaTest : [0x0be2, 0x0b71, 0x0b44, 0x0c11, 0x0b90, 0x0bd0, 0x8037].includes(cap) ? +c.gl.isEnabled(cap) : cap === 0x8074 ? +c.vert.on : cap === 0x8076 ? +c.col.on : cap === 0x8078 ? +c.tex[c.clientUnit].on : cap === 0x8075 ? +c.norm.on : +c.caps.has(cap);
+  const clientArray = (c: Ctx, cap: number): ArrayState | null => cap === 0x8074 ? c.vert : cap === 0x8076 ? c.col : cap === 0x8078 ? c.tex[c.clientUnit] : cap === 0x8075 ? c.norm : null;
+  const isOn = (c: Ctx, cap: number): number => cap === 0x0de1 ? +c.texOn[c.unit] : cap === 0x0bc0 ? +c.alphaTest : [0x0be2, 0x0b71, 0x0b44, 0x0c11, 0x0b90, 0x0bd0, 0x8037].includes(cap) ? +c.gl.isEnabled(cap) : +(clientArray(c, cap)?.on ?? c.caps.has(cap));
   const getv = (c: Ctx, pname: number): number[] | null => {
     const g = c.gl;
     switch (pname) {
@@ -360,21 +361,15 @@ export function gles1Init(): void {
     else { g.texImage2D(target, level, ifmt, w, h, 0, fmt, type, data); if (level === 0) rec.hasAlpha = texFormat(fmt).hasAlpha; }
     if (rec.genMip && level === 0) g.generateMipmap(g.TEXTURE_2D);
   };
-  const texParam = W("glTexParameter", (c, a) => {
-    const target = a.i(), pname = a.i(), v = a.i();
+  const texParam = (name: string, read: (a: ArgReader) => number) => W(name, (c, a) => {
+    const target = a.i(), pname = a.i(), v = read(a);
     const rec = c.textures[c.bound[c.unit]];
     if (pname === 0x8191) { if (rec) rec.genMip = v !== 0; return; }   // GL_GENERATE_MIPMAP
     if (rec) c.gl.bindTexture(target, rec.tex);
     c.gl.texParameteri(target, pname, v);
   });
-  const texParamF = W("glTexParameterf", (c, a) => {
-    const target = a.i(), pname = a.i(), v = bitsf(a.i()) | 0;
-    const rec = c.textures[c.bound[c.unit]];
-    if (pname === 0x8191) { if (rec) rec.genMip = v !== 0; return; }
-    if (rec) c.gl.bindTexture(target, rec.tex);
-    c.gl.texParameteri(target, pname, v);
-  });
-  const texParamV = W("glTexParameterv", (c, a) => { const target = a.i(), pname = a.i(), p = a.p(); const v = pname === 0x8191 ? mem.ld32(p) : mem.ld32(p); const rec = c.textures[c.bound[c.unit]]; if (pname === 0x8191) { if (rec) rec.genMip = v !== 0; return; } if (rec) c.gl.bindTexture(target, rec.tex); c.gl.texParameteri(target, pname, v); });
+  const texEnv = (name: string, read: (a: ArgReader) => number) => W(name, (c, a) => { a.i(); if (a.i() === 0x2200) c.texEnv[c.unit] = read(a); });
+  const clientState = (name: string, on: boolean) => W(name, (c, a) => { const s = clientArray(c, a.i()); if (s) s.on = on; });
   const draw = (c: Ctx, mode: number, count: number, indices: { type: number; ptr: number } | null, first: number) => {
     const g = c.gl;
     if (count <= 0) return;
@@ -408,35 +403,19 @@ export function gles1Init(): void {
     glMultMatrixx: W("glMultMatrixx", (c, a) => { mulRight(top(c), m4(a, true)); }),
     glPushMatrix: W("glPushMatrix", (c) => { const s = stack(c); const lim = c.mode === 0x1700 ? 32 : 2; if (s.length >= lim) { c.err = 0x503; return; } s.push(new Float32Array(s[s.length - 1])); }),
     glPopMatrix: W("glPopMatrix", (c) => { const s = stack(c); if (s.length <= 1) { c.err = 0x504; return; } s.pop(); }),
-    glOrthof: W("glOrthof", (c, a) => ortho(c, F(a), F(a), F(a), F(a), F(a), F(a))),
-    glOrthox: W("glOrthox", (c, a) => ortho(c, Xa(a), Xa(a), Xa(a), Xa(a), Xa(a), Xa(a))),
-    glFrustumf: W("glFrustumf", (c, a) => frustum(c, F(a), F(a), F(a), F(a), F(a), F(a))),
-    glFrustumx: W("glFrustumx", (c, a) => frustum(c, Xa(a), Xa(a), Xa(a), Xa(a), Xa(a), Xa(a))),
-    glTranslatef: W("glTranslatef", (c, a) => translate(c, F(a), F(a), F(a))),
-    glTranslatex: W("glTranslatex", (c, a) => translate(c, Xa(a), Xa(a), Xa(a))),
-    glScalef: W("glScalef", (c, a) => scale(c, F(a), F(a), F(a))),
-    glScalex: W("glScalex", (c, a) => scale(c, Xa(a), Xa(a), Xa(a))),
-    glRotatef: W("glRotatef", (c, a) => rotate(c, F(a), F(a), F(a), F(a))),
-    glRotatex: W("glRotatex", (c, a) => rotate(c, Xa(a), Xa(a), Xa(a), Xa(a))),
     glVertexPointer: setArr((c) => c.vert),
     glColorPointer: setArr((c) => c.col),
     glTexCoordPointer: setArr((c) => c.tex[c.clientUnit]),
     glNormalPointer: W("glNormalPointer", (c, a) => { const s = c.norm; s.type = a.i(); s.stride = a.i(); s.ptr = a.i() >>> 0; s.vbo = c.arrayBuf; }),
-    glPointSizePointerOES: W("glPointSizePointerOES", (c) => once(c, "glPointSizePointerOES")),
-    glEnableClientState: W("glEnableClientState", (c, a) => { const s = a.i(); if (s === 0x8074) c.vert.on = true; else if (s === 0x8076) c.col.on = true; else if (s === 0x8078) c.tex[c.clientUnit].on = true; else if (s === 0x8075) c.norm.on = true; }),
-    glDisableClientState: W("glDisableClientState", (c, a) => { const s = a.i(); if (s === 0x8074) c.vert.on = false; else if (s === 0x8076) c.col.on = false; else if (s === 0x8078) c.tex[c.clientUnit].on = false; else if (s === 0x8075) c.norm.on = false; }),
+    glEnableClientState: clientState("glEnableClientState", true), glDisableClientState: clientState("glDisableClientState", false),
     glClientActiveTexture: W("glClientActiveTexture", (c, a) => { c.clientUnit = (a.i() - 0x84c0) & 1; }),
     glActiveTexture: W("glActiveTexture", (c, a) => { c.unit = (a.i() - 0x84c0) & 1; }),
     glDrawArrays: W("glDrawArrays", (c, a) => { const mode = a.i(), first = a.i(), count = a.i(); draw(c, mode, count, null, first); }),
     glDrawElements: W("glDrawElements", (c, a) => { const mode = a.i(), count = a.i(), type = a.i(), ptr = a.p(); draw(c, mode, count, { type, ptr }, 0); }),
-    glColor4f: W("glColor4f", (c, a) => { c.color[0] = F(a); c.color[1] = F(a); c.color[2] = F(a); c.color[3] = F(a); }),
-    glColor4x: W("glColor4x", (c, a) => { c.color[0] = Xa(a); c.color[1] = Xa(a); c.color[2] = Xa(a); c.color[3] = Xa(a); }),
     glColor4ub: W("glColor4ub", (c, a) => { c.color[0] = (a.i() & 255) / 255; c.color[1] = (a.i() & 255) / 255; c.color[2] = (a.i() & 255) / 255; c.color[3] = (a.i() & 255) / 255; }),
-    glNormal3f: W("glNormal3f", () => {}), glNormal3x: W("glNormal3x", () => {}),
-    glMultiTexCoord4f: W("glMultiTexCoord4f", (c) => once(c, "glMultiTexCoord4f")), glMultiTexCoord4x: W("glMultiTexCoord4x", (c) => once(c, "glMultiTexCoord4x")),
     glPointSize: W("glPointSize", (c, a) => { c.gl.useProgram(c.prog); c.gl.uniform1f(c.u.uPointSize, F(a)); }),
     glPointSizex: W("glPointSizex", (c, a) => { c.gl.useProgram(c.prog); c.gl.uniform1f(c.u.uPointSize, Xa(a)); }),
-    glLineWidth: W("glLineWidth", (c, a) => c.gl.lineWidth(F(a))), glLineWidthx: W("glLineWidthx", (c, a) => c.gl.lineWidth(Xa(a))),
+    glLineWidthx: W("glLineWidthx", (c, a) => c.gl.lineWidth(Xa(a))),
     glGenTextures: W("glGenTextures", (c, a) => { const n = a.i(), out = a.p(); for (let i = 0; i < n; i++) { c.textures.push({ tex: c.gl.createTexture(), hasAlpha: true, genMip: false }); mem.st32(out + i * 4, c.textures.length - 1); } }),
     glDeleteTextures: W("glDeleteTextures", (c, a) => { const n = a.i(), p = a.p(); for (let i = 0; i < n; i++) { const id = mem.ld32(p + i * 4); const r = c.textures[id]; if (r) { c.gl.deleteTexture(r.tex); c.textures[id] = null; } for (let u = 0; u < 2; u++) if (c.bound[u] === id) c.bound[u] = 0; } }),
     glBindTexture: W("glBindTexture", (c, a) => { a.i(); const id = a.i(); c.bound[c.unit] = id; if (id && !c.textures[id]) { while (c.textures.length <= id) c.textures.push(null); c.textures[id] = { tex: c.gl.createTexture(), hasAlpha: true, genMip: false }; } c.gl.activeTexture(c.gl.TEXTURE0 + c.unit); c.gl.bindTexture(c.gl.TEXTURE_2D, id ? c.textures[id]!.tex : null); }),
@@ -454,17 +433,6 @@ export function gles1Init(): void {
       g.texImage2D(target, level, g.RGBA, w, h, 0, g.RGBA, g.UNSIGNED_BYTE, decodeEtc1(mem.u8.subarray(p, p + size), w, h));
       rec.hasAlpha = false;
     }),
-    glCompressedTexSubImage2D: W("glCompressedTexSubImage2D", (c) => once(c, "glCompressedTexSubImage2D")),
-    glCopyTexImage2D: W("glCopyTexImage2D", (c, a) => { const t = a.i(), l = a.i(), f = a.i(), x = a.i(), y = a.i(), w = a.i(), h = a.i(); c.gl.copyTexImage2D(t, l, f, x, y, w, h, 0); }),
-    glCopyTexSubImage2D: W("glCopyTexSubImage2D", (c, a) => { c.gl.copyTexSubImage2D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i()); }),
-    glTexParameteri: texParam, glTexParameterx: texParam, glTexParameterf: texParamF,
-    glTexParameteriv: texParamV, glTexParameterxv: texParamV, glTexParameterfv: W("glTexParameterfv", (c, a) => { const target = a.i(), pname = a.i(), v = mem.ldf32(a.p()) | 0; const rec = c.textures[c.bound[c.unit]]; if (pname === 0x8191) { if (rec) rec.genMip = v !== 0; return; } if (rec) c.gl.bindTexture(target, rec.tex); c.gl.texParameteri(target, pname, v); }),
-    glTexEnvi: W("glTexEnvi", (c, a) => { a.i(); const pn = a.i(), v = a.i(); if (pn === 0x2200) c.texEnv[c.unit] = v; }),
-    glTexEnvx: W("glTexEnvx", (c, a) => { a.i(); const pn = a.i(), v = a.i(); if (pn === 0x2200) c.texEnv[c.unit] = v; }),
-    glTexEnvf: W("glTexEnvf", (c, a) => { a.i(); const pn = a.i(), v = F(a); if (pn === 0x2200) c.texEnv[c.unit] = v | 0; }),
-    glTexEnviv: W("glTexEnviv", (c, a) => { a.i(); const pn = a.i(), p = a.p(); if (pn === 0x2200) c.texEnv[c.unit] = mem.ld32(p); }),
-    glTexEnvxv: W("glTexEnvxv", (c, a) => { a.i(); const pn = a.i(), p = a.p(); if (pn === 0x2200) c.texEnv[c.unit] = mem.ld32(p); }),
-    glTexEnvfv: W("glTexEnvfv", (c, a) => { a.i(); const pn = a.i(), p = a.p(); if (pn === 0x2200) c.texEnv[c.unit] = mem.ldf32(p) | 0; }),
     glPixelStorei: W("glPixelStorei", (c, a) => { const pn = a.i(), v = a.i(); if (pn === 0x0cf5) c.unpackAlign = v; else c.gl.pixelStorei(pn, v); }),
     glGenerateMipmapOES: W("glGenerateMipmapOES", (c, a) => c.gl.generateMipmap(a.i())),
     glGenBuffers: W("glGenBuffers", (c, a) => { const n = a.i(), out = a.p(); for (let i = 0; i < n; i++) { c.buffers.push(c.gl.createBuffer()); mem.st32(out + i * 4, c.buffers.length - 1); } }),
@@ -476,47 +444,11 @@ export function gles1Init(): void {
     glEnable: W("glEnable", (c, a) => capSet(c, a.i(), true)),
     glDisable: W("glDisable", (c, a) => capSet(c, a.i(), false)),
     glIsEnabled: W("glIsEnabled", (c, a) => isOn(c, a.i())),
-    glBlendFunc: W("glBlendFunc", (c, a) => c.gl.blendFunc(a.i(), a.i())),
-    glBlendFuncSeparate: W("glBlendFuncSeparate", (c, a) => c.gl.blendFuncSeparate(a.i(), a.i(), a.i(), a.i())),
-    glBlendFuncSeparateOES: W("glBlendFuncSeparateOES", (c, a) => c.gl.blendFuncSeparate(a.i(), a.i(), a.i(), a.i())),
-    glBlendEquation: W("glBlendEquation", (c, a) => c.gl.blendEquation(a.i())),
-    glBlendEquationOES: W("glBlendEquationOES", (c, a) => c.gl.blendEquation(a.i())),
-    glBlendEquationSeparate: W("glBlendEquationSeparate", (c, a) => c.gl.blendEquationSeparate(a.i(), a.i())),
-    glBlendEquationSeparateOES: W("glBlendEquationSeparateOES", (c, a) => c.gl.blendEquationSeparate(a.i(), a.i())),
-    glBlendColor: W("glBlendColor", (c, a) => c.gl.blendColor(F(a), F(a), F(a), F(a))),
-    glAlphaFunc: W("glAlphaFunc", (c, a) => { c.alphaFunc = a.i(); c.alphaRef = F(a); }),
-    glAlphaFuncx: W("glAlphaFuncx", (c, a) => { c.alphaFunc = a.i(); c.alphaRef = Xa(a); }),
-    glDepthFunc: W("glDepthFunc", (c, a) => c.gl.depthFunc(a.i())),
-    glDepthMask: W("glDepthMask", (c, a) => c.gl.depthMask(!!(a.i() & 255))),
-    glDepthRangef: W("glDepthRangef", (c, a) => c.gl.depthRange(F(a), F(a))),
     glDepthRangex: W("glDepthRangex", (c, a) => c.gl.depthRange(Xa(a), Xa(a))),
-    glClearColor: W("glClearColor", (c, a) => c.gl.clearColor(F(a), F(a), F(a), F(a))),
     glClearColorx: W("glClearColorx", (c, a) => c.gl.clearColor(Xa(a), Xa(a), Xa(a), Xa(a))),
-    glClearDepthf: W("glClearDepthf", (c, a) => c.gl.clearDepth(F(a))),
     glClearDepthx: W("glClearDepthx", (c, a) => c.gl.clearDepth(Xa(a))),
-    glClearStencil: W("glClearStencil", (c, a) => c.gl.clearStencil(a.i())),
-    glClear: W("glClear", (c, a) => c.gl.clear(a.i())),
-    glColorMask: W("glColorMask", (c, a) => c.gl.colorMask(!!(a.i() & 255), !!(a.i() & 255), !!(a.i() & 255), !!(a.i() & 255))),
-    glCullFace: W("glCullFace", (c, a) => c.gl.cullFace(a.i())),
-    glFrontFace: W("glFrontFace", (c, a) => c.gl.frontFace(a.i())),
-    glScissor: W("glScissor", (c, a) => c.gl.scissor(a.i(), a.i(), a.i(), a.i())),
-    glViewport: W("glViewport", (c, a) => c.gl.viewport(a.i(), a.i(), a.i(), a.i())),
-    glPolygonOffset: W("glPolygonOffset", (c, a) => c.gl.polygonOffset(F(a), F(a))),
     glPolygonOffsetx: W("glPolygonOffsetx", (c, a) => c.gl.polygonOffset(Xa(a), Xa(a))),
-    glStencilFunc: W("glStencilFunc", (c, a) => c.gl.stencilFunc(a.i(), a.i(), a.i())),
-    glStencilMask: W("glStencilMask", (c, a) => c.gl.stencilMask(a.i())),
-    glStencilOp: W("glStencilOp", (c, a) => c.gl.stencilOp(a.i(), a.i(), a.i())),
-    glSampleCoverage: W("glSampleCoverage", (c, a) => c.gl.sampleCoverage(F(a), !!(a.i() & 255))),
     glSampleCoveragex: W("glSampleCoveragex", (c, a) => c.gl.sampleCoverage(Xa(a), !!(a.i() & 255))),
-    glHint: W("glHint", () => {}), glShadeModel: W("glShadeModel", () => {}),
-    glFinish: W("glFinish", (c) => c.gl.finish()), glFlush: W("glFlush", (c) => c.gl.flush()),
-    // lighting / fog / clip planes: recorded, reported once if a draw depends on them
-    glLightf: W("glLightf", () => {}), glLightx: W("glLightx", () => {}), glLightfv: W("glLightfv", () => {}), glLightxv: W("glLightxv", () => {}),
-    glLightModelf: W("glLightModelf", () => {}), glLightModelx: W("glLightModelx", () => {}), glLightModelfv: W("glLightModelfv", () => {}), glLightModelxv: W("glLightModelxv", () => {}),
-    glMaterialf: W("glMaterialf", () => {}), glMaterialx: W("glMaterialx", () => {}), glMaterialfv: W("glMaterialfv", () => {}), glMaterialxv: W("glMaterialxv", () => {}),
-    glFogf: W("glFogf", () => {}), glFogx: W("glFogx", () => {}), glFogfv: W("glFogfv", () => {}), glFogxv: W("glFogxv", () => {}),
-    glClipPlanef: W("glClipPlanef", (c) => once(c, "glClipPlanef")), glClipPlanex: W("glClipPlanex", (c) => once(c, "glClipPlanex")),
-    glPointParameterf: W("glPointParameterf", () => {}), glPointParameterx: W("glPointParameterx", () => {}), glPointParameterfv: W("glPointParameterfv", () => {}), glPointParameterxv: W("glPointParameterxv", () => {}),
     glGetError: W("glGetError", (c) => { const e = c.err || c.gl.getError(); c.err = 0; return e; }),
     glGetString: W("glGetString", (c, a) => {
       const value = gles1String(c.gl, a.i());
@@ -536,6 +468,26 @@ export function gles1Init(): void {
       c.gl.readPixels(x, y, w, h, fmt, type, view);
     }),
   };
+  const I = (a: ArgReader) => a.i(), LD = (a: ArgReader) => mem.ld32(a.p());
+  for (const [s, read] of [["i", I], ["x", I], ["f", (a: ArgReader) => F(a) | 0], ["iv", LD], ["xv", LD], ["fv", (a: ArgReader) => mem.ldf32(a.p()) | 0]] as const) {
+    G["glTexParameter" + s] = texParam("glTexParameter" + s, read);
+    G["glTexEnv" + s] = texEnv("glTexEnv" + s, read);
+  }
+  const FX: [string, (c: Ctx, a: ArgReader, r: (a: ArgReader) => number) => void][] = [
+    ["glOrthof", (c, a, r) => ortho(c, r(a), r(a), r(a), r(a), r(a), r(a))],
+    ["glFrustumf", (c, a, r) => frustum(c, r(a), r(a), r(a), r(a), r(a), r(a))],
+    ["glTranslatef", (c, a, r) => translate(c, r(a), r(a), r(a))],
+    ["glScalef", (c, a, r) => scale(c, r(a), r(a), r(a))],
+    ["glRotatef", (c, a, r) => rotate(c, r(a), r(a), r(a), r(a))],
+    ["glColor4f", (c, a, r) => { for (let i = 0; i < 4; i++) c.color[i] = r(a); }],
+    ["glAlphaFunc", (c, a, r) => { c.alphaFunc = a.i(); c.alphaRef = r(a); }],
+  ];
+  for (const [n, fn] of FX) { const x = n.replace(/f?$/, "x"); G[n] = W(n, (c, a) => fn(c, a, F)); G[x] = W(x, (c, a) => fn(c, a, Xa)); }
+  for (const [n, f] of Object.entries(glCommon)) G[n] = W(n, (_c, a, cpu) => f(cpu, a) as HostRet);
+  for (const n of ["glBlendFuncSeparate", "glBlendEquation", "glBlendEquationSeparate"]) G[n + "OES"] = G[n];
+  // lighting / fog / clip planes: recorded, reported once if a draw depends on them
+  for (const n of ["glNormal3f", "glNormal3x", "glHint", "glShadeModel", ...["glLight", "glLightModel", "glMaterial", "glFog", "glPointParameter"].flatMap((p) => [p + "f", p + "x", p + "fv", p + "xv"])]) G[n] = W(n, () => {});
+  for (const n of ["glPointSizePointerOES", "glMultiTexCoord4f", "glMultiTexCoord4x", "glCompressedTexSubImage2D", "glClipPlanef", "glClipPlanex"]) G[n] = W(n, (c) => once(c, n));
   gles1Procs = G;
   hostLib("libGLESv1_CM.so", G, { closed: true });
 }
