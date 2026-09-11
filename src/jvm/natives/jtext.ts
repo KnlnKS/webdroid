@@ -5,7 +5,7 @@ import { rt, JObj, type NativeSpec } from "../runtime";
 import { vcall, vcallMaybe, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble } from "./jlang";
 import { strArray, jarray, utf8, slashName, dotName } from "../abi";
 import { mkIter } from "./jutil";
-import { JDate, JCalendar, localTz, MONTHS, DAYS, pad2 } from "./jtime";
+import { JDate, JCalendar, localTz, MONTHS, DAYS, pad } from "./jtime";
 
 export function formatDate(pattern: string, t: number): string {
   const d = new Date(t);
@@ -13,20 +13,20 @@ export function formatDate(pattern: string, t: number): string {
     if (quoted !== undefined) return quoted || "'";
     const c = m[0], n = m.length;
     switch (c) {
-      case "y": case "Y": return n === 2 ? pad2(d.getFullYear() % 100) : String(d.getFullYear());
+      case "y": case "Y": return n === 2 ? pad(d.getFullYear() % 100) : String(d.getFullYear());
       case "M": case "L":
         if (n >= 4) return MONTHS[d.getMonth()];
         if (n === 3) return MONTHS[d.getMonth()].slice(0, 3);
-        return n === 2 ? pad2(d.getMonth() + 1) : String(d.getMonth() + 1);
-      case "d": return n === 2 ? pad2(d.getDate()) : String(d.getDate());
+        return n === 2 ? pad(d.getMonth() + 1) : String(d.getMonth() + 1);
+      case "d": return n === 2 ? pad(d.getDate()) : String(d.getDate());
       case "E": return n >= 4 ? DAYS[d.getDay()] : DAYS[d.getDay()].slice(0, 3);
       case "a": return d.getHours() < 12 ? "AM" : "PM";
-      case "H": return n === 2 ? pad2(d.getHours()) : String(d.getHours());
-      case "h": { const h = d.getHours() % 12 || 12; return n === 2 ? pad2(h) : String(h); }
+      case "H": return n === 2 ? pad(d.getHours()) : String(d.getHours());
+      case "h": { const h = d.getHours() % 12 || 12; return n === 2 ? pad(h) : String(h); }
       case "K": return String(d.getHours() % 12);
       case "k": return String(d.getHours() || 24);
-      case "m": return n === 2 ? pad2(d.getMinutes()) : String(d.getMinutes());
-      case "s": return n === 2 ? pad2(d.getSeconds()) : String(d.getSeconds());
+      case "m": return n === 2 ? pad(d.getMinutes()) : String(d.getMinutes());
+      case "s": return n === 2 ? pad(d.getSeconds()) : String(d.getSeconds());
       case "S": return String(d.getMilliseconds()).padStart(3, "0").slice(0, n);
       case "z": case "Z": case "X": return "";
       case "G": return "AD";
@@ -88,12 +88,8 @@ rt.register({
     "static getDateInstance()Ljava/text/DateFormat;": () => withPattern("MMM d, yyyy"),
     "static getDateInstance(I)Ljava/text/DateFormat;": dateInstance,
     "static getDateInstance(ILjava/util/Locale;)Ljava/text/DateFormat;": dateInstance,
-    "static getTimeInstance()Ljava/text/DateFormat;": () => withPattern("h:mm a"),
-    "static getTimeInstance(I)Ljava/text/DateFormat;": () => withPattern("h:mm a"),
-    "static getTimeInstance(ILjava/util/Locale;)Ljava/text/DateFormat;": () => withPattern("h:mm a"),
-    "static getDateTimeInstance()Ljava/text/DateFormat;": () => withPattern("MMM d, yyyy h:mm a"),
-    "static getDateTimeInstance(II)Ljava/text/DateFormat;": () => withPattern("MMM d, yyyy h:mm a"),
-    "static getDateTimeInstance(IILjava/util/Locale;)Ljava/text/DateFormat;": () => withPattern("MMM d, yyyy h:mm a"),
+    ...Object.fromEntries((["", "I", "ILjava/util/Locale;"]).flatMap((a) => [[`static getTimeInstance(${a})Ljava/text/DateFormat;`, () => withPattern("h:mm a")],
+      [`static getDateTimeInstance(${a.replace("I", "II")})Ljava/text/DateFormat;`, () => withPattern("MMM d, yyyy h:mm a")]])),
   },
 });
 rt.register({
@@ -306,14 +302,8 @@ rt.register({
   name: "java/text/BreakIterator", ctor: JBreakIter,
   statics: { DONE: -1 },
   methods: {
-    "static getLineInstance()Ljava/text/BreakIterator;": biFactory("line"),
-    "static getLineInstance(Ljava/util/Locale;)Ljava/text/BreakIterator;": biFactory("line"),
-    "static getWordInstance()Ljava/text/BreakIterator;": biFactory("word"),
-    "static getWordInstance(Ljava/util/Locale;)Ljava/text/BreakIterator;": biFactory("word"),
-    "static getCharacterInstance()Ljava/text/BreakIterator;": biFactory("char"),
-    "static getCharacterInstance(Ljava/util/Locale;)Ljava/text/BreakIterator;": biFactory("char"),
-    "static getSentenceInstance()Ljava/text/BreakIterator;": biFactory("sentence"),
-    "static getSentenceInstance(Ljava/util/Locale;)Ljava/text/BreakIterator;": biFactory("sentence"),
+    ...Object.fromEntries(([["Line", "line"], ["Word", "word"], ["Character", "char"], ["Sentence", "sentence"]] as const).flatMap(([n, kind]) =>
+      ["", "Ljava/util/Locale;"].map((a) => [`static get${n}Instance(${a})Ljava/text/BreakIterator;`, biFactory(kind)]))),
     "setText(Ljava/lang/String;)V": function (this: JBreakIter, t: string) { this.text = t ?? ""; this.pos = 0; },
     "setText(Ljava/text/CharacterIterator;)V": async function (this: JBreakIter, ci: JObj) {
       let s = "";

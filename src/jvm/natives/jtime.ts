@@ -22,20 +22,16 @@ rt.register({
     "compareTo(Ljava/util/Date;)I": dateCmp,
     "compareTo(Ljava/lang/Object;)I": dateCmp,
     "toString()Ljava/lang/String;": function (this: JDate) { return new Date(this.t).toString(); },
-    "getYear()I": function (this: JDate) { return new Date(this.t).getFullYear() - 1900; },
-    "getMonth()I": function (this: JDate) { return new Date(this.t).getMonth(); },
-    "getDate()I": function (this: JDate) { return new Date(this.t).getDate(); },
-    "getDay()I": function (this: JDate) { return new Date(this.t).getDay(); },
-    "getHours()I": function (this: JDate) { return new Date(this.t).getHours(); },
-    "getMinutes()I": function (this: JDate) { return new Date(this.t).getMinutes(); },
-    "getSeconds()I": function (this: JDate) { return new Date(this.t).getSeconds(); },
+    ...Object.fromEntries(([["getYear", (d: Date) => d.getFullYear() - 1900], ["getMonth", (d: Date) => d.getMonth()], ["getDate", (d: Date) => d.getDate()],
+      ["getDay", (d: Date) => d.getDay()], ["getHours", (d: Date) => d.getHours()], ["getMinutes", (d: Date) => d.getMinutes()], ["getSeconds", (d: Date) => d.getSeconds()]] as const)
+      .map(([n, get]) => [`${n}()I`, function (this: JDate) { return get(new Date(this.t)); }])),
     "clone()Ljava/lang/Object;": function (this: JDate) { const d = new JDate(); d.t = this.t; return d; },
   },
 });
 
 // java.sql's three java.util.Date subclasses. Android ships them, and a library decides whether
 // to register its SQL adapters by looking one of them up.
-const pad = (n: number, w = 2) => String(n).padStart(w, "0");
+export const pad = (n: number, w = 2) => String(n).padStart(w, "0");
 const SQL_TEXT: Record<string, (d: Date) => string> = {
   Date: (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
   Time: (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`,
@@ -346,26 +342,20 @@ function toJsRegex(p: string, flags: number, global: boolean): RegExp {
   try { return javaRegex(p, f); }
   catch { return javaRegex(p.replace(/\(\?</g, "(?:<"), f.replace("u", "")); }
 }
+const compile = (p: string, flags = 0) => { const pt = new JPattern(); pt.src = p; pt.flags = flags; return pt; };
+const quoteRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const patternRe = (p: JPattern) => toJsRegex(p.flags & 16 ? quoteRe(p.src) : p.src, p.flags, true);
 rt.register({
   name: "java/util/regex/Pattern", ctor: JPattern, ifaces: ["java/io/Serializable"],
   statics: { CASE_INSENSITIVE: 2, MULTILINE: 8, DOTALL: 32, LITERAL: 16, UNICODE_CASE: 64 },
   methods: {
-    "static compile(Ljava/lang/String;)Ljava/util/regex/Pattern;": (p: string) => {
-      const pt = new JPattern();
-      pt.src = p;
-      return pt;
-    },
-    "static compile(Ljava/lang/String;I)Ljava/util/regex/Pattern;": (p: string, f: number) => {
-      const pt = new JPattern();
-      pt.src = p;
-      pt.flags = f;
-      return pt;
-    },
-    "static quote(Ljava/lang/String;)Ljava/lang/String;": (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    "static compile(Ljava/lang/String;)Ljava/util/regex/Pattern;": compile,
+    "static compile(Ljava/lang/String;I)Ljava/util/regex/Pattern;": compile,
+    "static quote(Ljava/lang/String;)Ljava/lang/String;": quoteRe,
     "static matches(Ljava/lang/String;Ljava/lang/CharSequence;)Z": (p: string, s: unknown) => javaMatches(p, jToString(s)),
     "matcher(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;": function (this: JPattern, s: unknown) {
       const m = new JMatcher();
-      m.re = toJsRegex(this.flags & 16 ? this.src.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : this.src, this.flags, true);
+      m.re = patternRe(this);
       m.input = s == null ? "" : jToString(s);
       return m;
     },
@@ -433,7 +423,7 @@ rt.register({
     "appendTail(Ljava/lang/StringBuilder;)Ljava/lang/StringBuilder;": function (this: JMatcher, sb: JSB) { sb.s += this.input.slice(this.appendPos); return sb; },
     "static quoteReplacement(Ljava/lang/String;)Ljava/lang/String;": (s: string) => s.replace(/[\\$]/g, "\\$&"),
     "usePattern(Ljava/util/regex/Pattern;)Ljava/util/regex/Matcher;": function (this: JMatcher, p: JPattern) {
-      this.re = toJsRegex(p.flags & 16 ? p.src.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : p.src, p.flags, true);
+      this.re = patternRe(p);
       this.m = null;
       return this;
     },
@@ -490,6 +480,8 @@ function zdt(ms: number, zone: JZoneId | null = null): JZonedDateTime {
   const z = new JZonedDateTime(); z.ms = ms; if (zone) z.zone = zone; return z;
 }
 const odt = (ms: number, zone: JZoneId | null = null) => Object.assign(new (rt.link("java/time/OffsetDateTime").ctor as typeof JZonedDateTime)(), zdt(ms, zone));
+const ldtOf = (date: JLocalDate, time = new JLocalTime()) => { const l = new JLocalDateTime(); l.date = date; l.time = time; return l; };
+const sysZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
 const localMs = (l: JLocalDateTime) => new Date(l.date.y, l.date.mo - 1, l.date.d, l.time.h, l.time.mi, l.time.s).getTime();
 
 const mkInstant = (ms: number) => { const i = new JInstant(); i.ms = ms; return i; };
@@ -531,7 +523,7 @@ rt.register({
   name: "java/time/Clock", ctor: JClock,
   methods: {
     "static systemUTC()Ljava/time/Clock;": () => clockIn(zoneOf("UTC")),
-    "static systemDefaultZone()Ljava/time/Clock;": () => clockIn(zoneOf(Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC")),
+    "static systemDefaultZone()Ljava/time/Clock;": () => clockIn(zoneOf(sysZone())),
     "static system(Ljava/time/ZoneId;)Ljava/time/Clock;": (z: JZoneId) => clockIn(z),
     "static fixed(Ljava/time/Instant;Ljava/time/ZoneId;)Ljava/time/Clock;": (i: JInstant, z: JZoneId) => clockIn(z, i.ms),
     "static offset(Ljava/time/Clock;Ljava/time/Duration;)Ljava/time/Clock;": (c: JClock, d: { ms: number }) => clockIn(c.zone!, c.fixed === null ? null : c.fixed + d.ms),
@@ -548,7 +540,6 @@ function parseIso(s: string): number {
   if (Number.isNaN(ms)) throw rt.mkThrowable("java/time/format/DateTimeParseException", `Text '${text}' could not be parsed`);
   return ms;
 }
-/** the epoch millis of any temporal here */
 /** compareTo plus the isAfter/isBefore/isEqual trio every java.time temporal derives from it */
 const ordering = (desc: string, cmp: (a: any, b: any) => number): NativeSpec["methods"] => ({
   "compareTo(Ljava/lang/Object;)I": cmp,
@@ -591,13 +582,7 @@ function dateUntil(start: JLocalDate, end: JLocalDate, unit: JSimpleEnum): bigin
   }
 }
 const ldFromDate = (dt: Date) => ldOf(dt.getFullYear(), dt.getMonth() + 1, dt.getDate());
-const ldtFromDate = (dt: Date) => {
-  const l = new JLocalDateTime();
-  l.date = ldFromDate(dt);
-  l.time.h = dt.getHours(); l.time.mi = dt.getMinutes(); l.time.s = dt.getSeconds(); l.time.ns = dt.getMilliseconds() * 1e6;
-  return l;
-};
-export const pad2 = (n: number) => String(n).padStart(2, "0");
+const ldtFromDate = (dt: Date) => ldtOf(ldFromDate(dt), ltOf(dt.getHours(), dt.getMinutes(), dt.getSeconds(), dt.getMilliseconds() * 1e6));
 
 rt.register({
   name: "java/time/Instant", ctor: JInstant, ifaces: ["java/lang/Comparable"],
@@ -620,9 +605,7 @@ rt.register({
     "plusMillis(J)Ljava/time/Instant;": function (this: JInstant, d: bigint) { return mkInstant(this.ms + Number(d)); },
     "plusSeconds(J)Ljava/time/Instant;": function (this: JInstant, d: bigint) { return mkInstant(this.ms + Number(d) * 1000); },
     "minusMillis(J)Ljava/time/Instant;": function (this: JInstant, d: bigint) { return mkInstant(this.ms - Number(d)); },
-    "isBefore(Ljava/time/Instant;)Z": function (this: JInstant, o: JInstant) { return this.ms < o.ms ? 1 : 0; },
-    "isAfter(Ljava/time/Instant;)Z": function (this: JInstant, o: JInstant) { return this.ms > o.ms ? 1 : 0; },
-    "compareTo(Ljava/lang/Object;)I": function (this: JInstant, o: JInstant) { return this.ms < o.ms ? -1 : this.ms > o.ms ? 1 : 0; },
+    ...ordering("Ljava/time/Instant;", (x: JInstant, o: JInstant) => (x.ms < o.ms ? -1 : x.ms > o.ms ? 1 : 0)),
     "equals(Ljava/lang/Object;)Z": function (this: JInstant, o: unknown) { return o instanceof JInstant && o.ms === this.ms ? 1 : 0; },
     "hashCode()I": function (this: JInstant) { return this.ms | 0; },
     "atOffset(Ljava/time/ZoneOffset;)Ljava/time/OffsetDateTime;": function (this: JInstant, z: JZoneId) { return odt(this.ms, z); },
@@ -656,8 +639,8 @@ rt.register({
 rt.register({
   name: "java/time/ZoneId", ctor: JZoneId,
   methods: {
-    "static systemDefault()Ljava/time/ZoneId;": () => { const z = new JZoneId(); z.id = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC"; return z; },
-    "static of(Ljava/lang/String;)Ljava/time/ZoneId;": (id: string) => { const z = new JZoneId(); z.id = id; return z; },
+    "static systemDefault()Ljava/time/ZoneId;": () => zoneOf(sysZone()),
+    "static of(Ljava/lang/String;)Ljava/time/ZoneId;": zoneOf,
     "getId()Ljava/lang/String;": function (this: JZoneId) { return this.id; },
     "getRules()Ljava/time/zone/ZoneRules;": () => rt.make("java/time/zone/ZoneRules"),
     "toString()Ljava/lang/String;": function (this: JZoneId) { return this.id; },
@@ -715,9 +698,7 @@ rt.register({
     "atStartOfDay(Ljava/time/ZoneId;)Ljava/time/ZonedDateTime;": function (this: JLocalDate, z: JZoneId) {
       return zdt(new Date(this.y, this.mo - 1, this.d).getTime(), z);
     },
-    "atStartOfDay()Ljava/time/LocalDateTime;": function (this: JLocalDate) {
-      const l = new JLocalDateTime(); l.date = ldOf(this.y, this.mo, this.d); return l;
-    },
+    "atStartOfDay()Ljava/time/LocalDateTime;": function (this: JLocalDate) { return ldtOf(ldOf(this.y, this.mo, this.d)); },
     ...ordering("Ljava/time/chrono/ChronoLocalDate;", (x: JLocalDate, o: JLocalDate) => {
       const a = x.y * 10000 + x.mo * 100 + x.d, b = o.y * 10000 + o.mo * 100 + o.d;
       return a < b ? -1 : a > b ? 1 : 0;
@@ -726,33 +707,24 @@ rt.register({
       return o instanceof JLocalDate && o.y === this.y && o.mo === this.mo && o.d === this.d ? 1 : 0;
     },
     "hashCode()I": function (this: JLocalDate) { return this.y * 10000 + this.mo * 100 + this.d; },
-    "toString()Ljava/lang/String;": function (this: JLocalDate) { return `${this.y}-${pad2(this.mo)}-${pad2(this.d)}`; },
+    "toString()Ljava/lang/String;": function (this: JLocalDate) { return `${this.y}-${pad(this.mo)}-${pad(this.d)}`; },
   },
 });
 rt.register({
   name: "java/time/LocalDateTime", ctor: JLocalDateTime, ifaces: ["java/lang/Comparable"],
   clinit: () => {
     const c = rt.link("java/time/LocalDateTime").ctor as any;
-    const mk = (y: number, mo: number, d: number, h: number, mi: number, sec: number) => {
-      const l = new JLocalDateTime(); l.date = ldOf(y, mo, d); l.time.h = h; l.time.mi = mi; l.time.s = sec; return l;
-    };
-    c.s$MIN = mk(-271821, 4, 20, 0, 0, 0);
-    c.s$MAX = mk(275760, 9, 12, 23, 59, 59);
+    c.s$MIN = ldtOf(ldOf(-271821, 4, 20));
+    c.s$MAX = ldtOf(ldOf(275760, 9, 12), ltOf(23, 59, 59));
   },
   methods: {
     "static now()Ljava/time/LocalDateTime;": () => ldtFromDate(new Date()),
     "static parse(Ljava/lang/CharSequence;)Ljava/time/LocalDateTime;": (s: string) => ldtFromDate(new Date(parseIso(s))),
     "static parse(Ljava/lang/CharSequence;Ljava/time/format/DateTimeFormatter;)Ljava/time/LocalDateTime;": (s: string) => ldtFromDate(new Date(parseIso(s))),
     "static from(Ljava/time/temporal/TemporalAccessor;)Ljava/time/LocalDateTime;": (t: unknown) => ldtFromDate(new Date(temporalMs(t))),
-    "static of(Ljava/time/LocalDate;Ljava/time/LocalTime;)Ljava/time/LocalDateTime;": (d: JLocalDate, t: JLocalTime) => {
-      const l = new JLocalDateTime(); l.date = d ?? new JLocalDate(); l.time = t ?? new JLocalTime(); return l;
-    },
-    "static of(IIIII)Ljava/time/LocalDateTime;": (y: number, mo: number, d: number, h: number, mi: number) => {
-      const l = new JLocalDateTime(); l.date = ldOf(y, mo, d); l.time.h = h; l.time.mi = mi; return l;
-    },
-    "static of(IIIIII)Ljava/time/LocalDateTime;": (y: number, mo: number, d: number, h: number, mi: number, sec: number) => {
-      const l = new JLocalDateTime(); l.date = ldOf(y, mo, d); l.time.h = h; l.time.mi = mi; l.time.s = sec; return l;
-    },
+    "static of(Ljava/time/LocalDate;Ljava/time/LocalTime;)Ljava/time/LocalDateTime;": (d: JLocalDate, t: JLocalTime) => ldtOf(d ?? new JLocalDate(), t ?? new JLocalTime()),
+    "static of(IIIII)Ljava/time/LocalDateTime;": (y: number, mo: number, d: number, h: number, mi: number) => ldtOf(ldOf(y, mo, d), ltOf(h, mi)),
+    "static of(IIIIII)Ljava/time/LocalDateTime;": (y: number, mo: number, d: number, h: number, mi: number, sec: number) => ldtOf(ldOf(y, mo, d), ltOf(h, mi, sec)),
     "static ofInstant(Ljava/time/Instant;Ljava/time/ZoneId;)Ljava/time/LocalDateTime;": (i: any) => ldtFromDate(new Date(i?.ms ?? Date.now())),
     "atZone(Ljava/time/ZoneId;)Ljava/time/ZonedDateTime;": function (this: JLocalDateTime, z: JZoneId) { return zdt(localMs(this), z); },
     "toLocalDate()Ljava/time/LocalDate;": function (this: JLocalDateTime) { return this.date; },
@@ -761,16 +733,13 @@ rt.register({
     "getNano()I": function (this: JLocalDateTime) { return this.time.ns; },
     "getDayOfWeek()Ljava/time/DayOfWeek;": function (this: JLocalDateTime) { return dowOf(new Date(this.date.y, this.date.mo - 1, this.date.d).getDay()); },
     "format(Ljava/time/format/DateTimeFormatter;)Ljava/lang/String;": formatWith,
-    "toEpochSecond(Ljava/time/ZoneOffset;)J": function (this: JLocalDateTime) {
-      return BigInt(Math.floor(new Date(this.date.y, this.date.mo - 1, this.date.d, this.time.h, this.time.mi, this.time.s).getTime() / 1000));
-    },
+    "toEpochSecond(Ljava/time/ZoneOffset;)J": function (this: JLocalDateTime) { return BigInt(Math.floor(localMs(this) / 1000)); },
     "getYear()I": function (this: JLocalDateTime) { return this.date.y; },
     "getMonthValue()I": function (this: JLocalDateTime) { return this.date.mo; },
     "getDayOfMonth()I": function (this: JLocalDateTime) { return this.date.d; },
     "getHour()I": function (this: JLocalDateTime) { return this.time.h; },
     ...ordering("Ljava/time/chrono/ChronoLocalDateTime;", (x: JLocalDateTime, o: JLocalDateTime) => {
-      const k = (t: JLocalDateTime) => new Date(t.date.y, t.date.mo - 1, t.date.d, t.time.h, t.time.mi, t.time.s).getTime();
-      const a = k(x), b = k(o);
+      const a = localMs(x), b = localMs(o);
       return a < b ? -1 : a > b ? 1 : 0;
     }),
     "getMinute()I": function (this: JLocalDateTime) { return this.time.mi; },
@@ -810,10 +779,8 @@ rt.register({
     ...ordering("Ljava/time/chrono/ChronoZonedDateTime;", (x: JZonedDateTime, o: JZonedDateTime) => (x.ms < o.ms ? -1 : x.ms > o.ms ? 1 : 0)),
   },
 });
-for (const marker of ["java/time/temporal/Temporal", "java/time/temporal/TemporalAccessor",
-  "java/time/temporal/TemporalAmount", "java/time/temporal/TemporalUnit", "java/time/format/FormatStyle"]) {
-  rt.register({ name: marker, ctor: class extends JObj {} });
-}
+rt.markers("java/time/temporal/Temporal", "java/time/temporal/TemporalAccessor", "java/time/temporal/TemporalAmount",
+  "java/time/temporal/TemporalUnit", "java/time/format/FormatStyle");
 defineException("java/time/DateTimeException", "java/lang/RuntimeException");
 defineException("java/time/format/DateTimeParseException", "java/time/DateTimeException");
 defineException("java/time/temporal/UnsupportedTemporalTypeException", "java/time/DateTimeException");
@@ -837,12 +804,12 @@ rt.register({
     "parse(Ljava/lang/CharSequence;)Ljava/time/temporal/TemporalAccessor;": function (this: JDateTimeFormatter, s: string) { return zdt(parseIso(s), this.zone as JZoneId | null); },
     // Locale-aware overload: the pattern still drives the output, and MONTHS below is en-only,
     // so the locale changes nothing here — but omitting the overload throws on the caller.
-    "static ofPattern(Ljava/lang/String;Ljava/util/Locale;)Ljava/time/format/DateTimeFormatter;": (p: string) => { const f = new JDateTimeFormatter(); f.pattern = p; return f; },
+    "static ofPattern(Ljava/lang/String;Ljava/util/Locale;)Ljava/time/format/DateTimeFormatter;": fmtOf,
     "static ofLocalizedDate(Ljava/time/format/FormatStyle;)Ljava/time/format/DateTimeFormatter;": () => new JDateTimeFormatter(),
     "format(Ljava/time/temporal/TemporalAccessor;)Ljava/lang/String;": function (this: JDateTimeFormatter, t: any) {
       const dt: Date = t instanceof JLocalDate ? new Date(t.y, t.mo - 1, t.d)
         : t instanceof JZonedDateTime || t instanceof JInstant ? new Date(t.ms)
-        : t instanceof JLocalDateTime ? new Date(t.date.y, t.date.mo - 1, t.date.d, t.time.h, t.time.mi, t.time.s)
+        : t instanceof JLocalDateTime ? new Date(localMs(t))
         : new Date();
       if (this.pattern === "ISO_INSTANT") return dt.toISOString().replace(/\.000Z$/, "Z");
       return this.pattern
@@ -850,11 +817,11 @@ rt.register({
         .replace(/yyyy/g, String(dt.getFullYear()))
         .replace(/MMMM/g, MONTHS[dt.getMonth()])
         .replace(/MMM/g, MONTHS[dt.getMonth()].slice(0, 3))
-        .replace(/MM/g, pad2(dt.getMonth() + 1))
-        .replace(/dd/g, pad2(dt.getDate()))
-        .replace(/HH/g, pad2(dt.getHours()))
-        .replace(/mm/g, pad2(dt.getMinutes()))
-        .replace(/ss/g, pad2(dt.getSeconds()));
+        .replace(/MM/g, pad(dt.getMonth() + 1))
+        .replace(/dd/g, pad(dt.getDate()))
+        .replace(/HH/g, pad(dt.getHours()))
+        .replace(/mm/g, pad(dt.getMinutes()))
+        .replace(/ss/g, pad(dt.getSeconds()));
     },
   },
 });
@@ -899,6 +866,6 @@ rt.register({
       const a = x.h * 3600 + x.mi * 60 + x.s, b = o.h * 3600 + o.mi * 60 + o.s;
       return a < b ? -1 : a > b ? 1 : 0;
     }),
-    "toString()Ljava/lang/String;": function (this: JLocalTime) { return `${pad2(this.h)}:${pad2(this.mi)}:${pad2(this.s)}`; },
+    "toString()Ljava/lang/String;": function (this: JLocalTime) { return `${pad(this.h)}:${pad(this.mi)}:${pad(this.s)}`; },
   },
 });
