@@ -168,6 +168,10 @@ export class JClass extends JObj {
   componentOwner: Runtime | null = null;
   jname: string | null = null;
 }
+export function enclosingClass(this: JClass): JClass | null {
+  const n = this.ci?.name ?? "", i = n.lastIndexOf("$");
+  return i > 0 ? rt.classFor(n.slice(0, i)) : null;
+}
 const arrayClasses = new WeakMap<Runtime, Map<string, JClass>>();
 const classCache = new Map<string, JClass>();
 function arrayOwner(runtime: Runtime, desc: string): Runtime {
@@ -272,11 +276,7 @@ rt.register({
     "getTypeName()Ljava/lang/String;": function (this: JClass) {
       return dotName(this.ci?.name ?? this.primName ?? this.arrDesc ?? "?");
     },
-    "getEnclosingClass()Ljava/lang/Class;": function (this: JClass) {
-      const n = this.ci?.name ?? "";
-      const i = n.lastIndexOf("$");
-      return i > 0 ? rt.classFor(n.slice(0, i)) : null;
-    },
+    "getEnclosingClass()Ljava/lang/Class;": enclosingClass,
     "cast(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JClass, o: unknown) {
       return (this.ci?.owner ?? rt).cc(o, this.ci?.name ?? this.arrDesc ?? "java/lang/Object");
     },

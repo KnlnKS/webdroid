@@ -2,7 +2,7 @@
 
 import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
 import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat, splitSig } from "../abi";
-import { vcall, boxInt, box, boxObject, stringHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit } from "./jlang";
+import { vcall, boxInt, box, boxObject, stringHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit, enclosingClass } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 
 // ── annotation cache per class: methodIdx (within its dex) → EncAnnotation[]
@@ -400,24 +400,15 @@ rt.register({
     "putInt(Ljava/lang/Object;JI)V": uPutInt,
     "getLong(Ljava/lang/Object;J)J": uGetLong,
     "putLong(Ljava/lang/Object;JJ)V": uPutLong,
-    "getBoolean(Ljava/lang/Object;J)Z": (o: any, off: bigint) => {
-      const view = uView(o); return view ? (view.getUint8(Number(off)) ? 1 : 0) : (o[uKey(o, off)] ? 1 : 0);
-    },
-    "putBoolean(Ljava/lang/Object;JZ)V": (o: any, off: bigint, v: number) => {
-      const view = uView(o); if (view) view.setUint8(Number(off), v ? 1 : 0); else o[uKey(o, off)] = v;
-    },
-    "getByte(Ljava/lang/Object;J)B": (o: any, off: bigint) => uView(o)?.getInt8(Number(off)) ?? o[uKey(o, off)] ?? 0,
-    "putByte(Ljava/lang/Object;JB)V": (o: any, off: bigint, v: number) => {
-      const view = uView(o); if (view) view.setInt8(Number(off), v); else o[uKey(o, off)] = v;
-    },
-    "getFloat(Ljava/lang/Object;J)F": (o: any, off: bigint) => uView(o)?.getFloat32(Number(off), true) ?? o[uKey(o, off)] ?? 0,
-    "putFloat(Ljava/lang/Object;JF)V": (o: any, off: bigint, v: number) => {
-      const view = uView(o); if (view) view.setFloat32(Number(off), v, true); else o[uKey(o, off)] = v;
-    },
-    "getDouble(Ljava/lang/Object;J)D": (o: any, off: bigint) => uView(o)?.getFloat64(Number(off), true) ?? o[uKey(o, off)] ?? 0,
-    "putDouble(Ljava/lang/Object;JD)V": (o: any, off: bigint, v: number) => {
-      const view = uView(o); if (view) view.setFloat64(Number(off), v, true); else o[uKey(o, off)] = v;
-    },
+    ...Object.fromEntries(([
+      ["Boolean", "Z", (v: DataView, at: number) => (v.getUint8(at) ? 1 : 0), (v: DataView, at: number, x: number) => v.setUint8(at, x ? 1 : 0)],
+      ["Byte", "B", (v: DataView, at: number) => v.getInt8(at), (v: DataView, at: number, x: number) => v.setInt8(at, x)],
+      ["Float", "F", (v: DataView, at: number) => v.getFloat32(at, true), (v: DataView, at: number, x: number) => v.setFloat32(at, x, true)],
+      ["Double", "D", (v: DataView, at: number) => v.getFloat64(at, true), (v: DataView, at: number, x: number) => v.setFloat64(at, x, true)],
+    ] as const).flatMap(([n, d, get, put]) => [
+      [`get${n}(Ljava/lang/Object;J)${d}`, (o: any, off: bigint) => { const view = uView(o); return view ? get(view, Number(off)) : (d === "Z" ? (o[uKey(o, off)] ? 1 : 0) : o[uKey(o, off)] ?? 0); }],
+      [`put${n}(Ljava/lang/Object;J${d})V`, (o: any, off: bigint, v: number) => { const view = uView(o); if (view) put(view, Number(off), v); else o[uKey(o, off)] = v; }],
+    ])),
     "staticFieldOffset(Ljava/lang/reflect/Field;)J": fieldOffset,
     "staticFieldBase(Ljava/lang/reflect/Field;)Ljava/lang/Object;": (f: JField) => f.owner.ctor,
     "getLongVolatile(Ljava/lang/Object;J)J": uGetLong,
@@ -461,8 +452,7 @@ function uGetInt(o: any, off: bigint): number {
   const view = uView(o);
   if (!view) { const f = unsafeFields[Number(off) / 8], v = o[f.prop] ?? 0; return f.desc === "F" ? floatToIntBits(v) : v; }
   const offset = Number(off);
-  if (offset + 4 <= view.byteLength) return view.getInt32(offset, true);
-  if (offset < 0 || offset >= view.byteLength) return view.getInt32(offset, true);
+  if (offset + 4 <= view.byteLength || offset < 0 || offset >= view.byteLength) return view.getInt32(offset, true);
   let value = 0;
   for (let i = 0; offset + i < view.byteLength; i++) value |= view.getUint8(offset + i) << (i * 8);
   return value | 0;
@@ -471,8 +461,7 @@ function uPutInt(o: any, off: bigint, value: number): void {
   const view = uView(o);
   if (!view) { const f = unsafeFields[Number(off) / 8]; o[f.prop] = f.desc === "F" ? intBitsToFloat(value) : value; return; }
   const offset = Number(off);
-  if (offset + 4 <= view.byteLength) { view.setInt32(offset, value, true); return; }
-  if (offset < 0 || offset >= view.byteLength) { view.setInt32(offset, value, true); return; }
+  if (offset + 4 <= view.byteLength || offset < 0 || offset >= view.byteLength) { view.setInt32(offset, value, true); return; }
   for (let i = 0; offset + i < view.byteLength; i++) view.setUint8(offset + i, value >>> (i * 8));
 }
 function uGetLong(o: any, off: bigint): bigint {
@@ -870,7 +859,6 @@ function installForName(classCtor: unknown) {
     }
     const name = slashName(jn);
     if (!loadable(name)) {
-      console.debug("[webdroid] Class.forName: no such class", jn);
       // link it first: an unlinked exception class has no own ClassInfo, so it inherits
       // its superclass's $i and `catch (ClassNotFoundException)` in compiled code — which
       // matches on ClassInfo.types — would not match the throwable we are about to make.
@@ -922,10 +910,7 @@ function installClassReflection() {
     const p = rt.initClass(info); if (p) await p;
     try { return await vcall(info.ctor, "values", `()[L${info.name};`); } catch { return null; }
   };
-  M["getDeclaringClass()Ljava/lang/Class;"] = function (this: JClass) {
-    const i = this.ci?.name?.lastIndexOf("$") ?? -1;
-    return i > 0 ? rt.classFor(this.ci!.name.slice(0, i)) : null;
-  };
+  M["getDeclaringClass()Ljava/lang/Class;"] = enclosingClass;
   M["getEnclosingConstructor()Ljava/lang/reflect/Constructor;"] = () => null;
   M["getDeclaredField(Ljava/lang/String;)Ljava/lang/reflect/Field;"] = function (this: JClass, name: string) {
     const f = this.ci ? classFields(this.ci, name) : [];
