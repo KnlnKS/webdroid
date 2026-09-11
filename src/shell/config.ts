@@ -28,9 +28,9 @@ function orientScreen(screen: Screen, orientation: DeviceOrientation): Screen {
 }
 
 /** A current phone: 480dpi divides both sides exactly and keeps the 360dp width bucket. */
-const DEFAULT: Screen = { width: 1080, height: 2424, densityDpi: 480 };
+const DEFAULT: Screen = { width: 1080, height: 2160, densityDpi: 480 };
 
-/** `1080x2424@480` — the dpi is optional and falls back to the built-in profile's. */
+/** `1080x2160@480` — the dpi is optional and falls back to the built-in profile's. */
 export function parseScreen(s: string | null | undefined): Screen | null {
   const m = /^\s*(\d+)\s*x\s*(\d+)\s*(?:@\s*(\d+))?\s*$/i.exec(s ?? "");
   if (!m) return null;
