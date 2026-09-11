@@ -879,6 +879,17 @@ export function matMul(a: number[], b: number[]): [number, number, number, numbe
     a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5],
   ];
 }
+const translateA = (x: number, y: number): JMatrix["m"] => [1, 0, 0, 1, x, y];
+const scaleA = (sx: number, sy: number, px = 0, py = 0): JMatrix["m"] => [sx, 0, 0, sy, px - sx * px, py - sy * py];
+function affineOps(name: string, make: (a: number, b: number, c?: number, d?: number) => JMatrix["m"], sigs: string[]) {
+  const ops: NativeSpec["methods"] = {};
+  for (const s of sigs) {
+    ops[`set${name}(${s})V`] = function (this: JMatrix, a: number, b?: number, c?: number, d?: number) { this.m = make(a, b as number, c, d); };
+    ops[`pre${name}(${s})Z`] = function (this: JMatrix, a: number, b?: number, c?: number, d?: number) { this.m = matMul(this.m, make(a, b as number, c, d)); return 1; };
+    ops[`post${name}(${s})Z`] = function (this: JMatrix, a: number, b?: number, c?: number, d?: number) { this.m = matMul(make(a, b as number, c, d), this.m); return 1; };
+  }
+  return ops;
+}
 export function affineFromPoints(src: Float32Array, si: number, dst: Float32Array, di: number, count: number): JMatrix["m"] | null {
   if (!count) return [1, 0, 0, 1, 0, 0];
   const x = src[si], y = src[si + 1], u = dst[di], v = dst[di + 1];
@@ -916,10 +927,7 @@ rt.register({
     "<init>(Landroid/graphics/Matrix;)V": function (this: JMatrix, o: JMatrix) { if (o) this.m = [...o.m]; },
     "reset()V": function (this: JMatrix) { this.m = [1, 0, 0, 1, 0, 0]; },
     "set(Landroid/graphics/Matrix;)V": function (this: JMatrix, o: JMatrix) { this.m = [...o.m]; },
-    "isIdentity()Z": function (this: JMatrix) {
-      const m = this.m;
-      return m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0 ? 1 : 0;
-    },
+    "isIdentity()Z": function (this: JMatrix) { return isIdentityM(this.m) ? 1 : 0; },
     "setPolyToPoly([FI[FII)Z": function (this: JMatrix, src: Float32Array, si: number, dst: Float32Array, di: number, count: number) {
       if (count > 4) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
       if (count < 0 || si < 0 || di < 0 || si + count * 2 > src.length || di + count * 2 > dst.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
@@ -927,47 +935,15 @@ rt.register({
       if (!matrix) return 0;
       this.m = matrix; return 1;
     },
-    "setTranslate(FF)V": function (this: JMatrix, x: number, y: number) { this.m = [1, 0, 0, 1, x, y]; },
-    "setScale(FF)V": function (this: JMatrix, sx: number, sy: number) { this.m = [sx, 0, 0, sy, 0, 0]; },
-    "setScale(FFFF)V": function (this: JMatrix, sx: number, sy: number, px: number, py: number) {
-      this.m = [sx, 0, 0, sy, px - sx * px, py - sy * py];
-    },
-    "setRotate(F)V": function (this: JMatrix, deg: number) { this.m = rotM(deg); },
-    "setRotate(FFF)V": function (this: JMatrix, deg: number, px: number, py: number) { this.m = rotM(deg, px, py); },
-    "postTranslate(FF)Z": function (this: JMatrix, x: number, y: number) {
-      this.m = matMul([1, 0, 0, 1, x, y], this.m);
-      return 1;
-    },
-    "postScale(FF)Z": function (this: JMatrix, sx: number, sy: number) {
-      this.m = matMul([sx, 0, 0, sy, 0, 0], this.m);
-      return 1;
-    },
-    "postScale(FFFF)Z": function (this: JMatrix, sx: number, sy: number, px: number, py: number) {
-      this.m = matMul([sx, 0, 0, sy, px - sx * px, py - sy * py], this.m);
-      return 1;
-    },
-    "postRotate(F)Z": function (this: JMatrix, deg: number) { this.m = matMul(rotM(deg), this.m); return 1; },
-    "postRotate(FFF)Z": function (this: JMatrix, deg: number, px: number, py: number) { this.m = matMul(rotM(deg, px, py), this.m); return 1; },
-    "preTranslate(FF)Z": function (this: JMatrix, x: number, y: number) {
-      this.m = matMul(this.m, [1, 0, 0, 1, x, y]);
-      return 1;
-    },
-    "preScale(FF)Z": function (this: JMatrix, sx: number, sy: number) {
-      this.m = matMul(this.m, [sx, 0, 0, sy, 0, 0]);
-      return 1;
-    },
-    "preRotate(F)Z": function (this: JMatrix, deg: number) { this.m = matMul(this.m, rotM(deg)); return 1; },
+    ...affineOps("Translate", translateA, ["FF"]),
+    ...affineOps("Scale", scaleA, ["FF", "FFFF"]),
+    ...affineOps("Rotate", rotM, ["F", "FFF"]),
     "postConcat(Landroid/graphics/Matrix;)Z": function (this: JMatrix, o: JMatrix) {
       this.m = matMul(o.m, this.m);
       return 1;
     },
     "preConcat(Landroid/graphics/Matrix;)Z": function (this: JMatrix, o: JMatrix) {
       this.m = matMul(this.m, o.m);
-      return 1;
-    },
-    "preRotate(FFF)Z": function (this: JMatrix, deg: number, px: number, py: number) { this.m = matMul(this.m, rotM(deg, px, py)); return 1; },
-    "preScale(FFFF)Z": function (this: JMatrix, sx: number, sy: number, px: number, py: number) {
-      this.m = matMul(this.m, [sx, 0, 0, sy, px - sx * px, py - sy * py]);
       return 1;
     },
     "setConcat(Landroid/graphics/Matrix;Landroid/graphics/Matrix;)Z": function (this: JMatrix, a: JMatrix, b: JMatrix) {

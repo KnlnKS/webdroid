@@ -4,7 +4,7 @@ import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runt
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook, copyEvent } from "./view";
 import { restVelocity, type JMotionEvent } from "./motionevent";
-import { JMatrix } from "./graphics";
+import { JMatrix, rotM } from "./graphics";
 import { mangleMethod } from "../jvm/abi";
 import { onMain, inMainJob } from "./mainloop";
 import { newArrayList } from "../jvm/natives/jutil";
@@ -430,8 +430,7 @@ const SUBCLASS: Record<string, {
     },
     apply: (a, t, out) => {
       const deg = a.p[0] + (a.p[1] - a.p[0]) * t, px = a.p[2], py = a.p[3];
-      const r = deg * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
-      out.matrix.m = [c, sn, -sn, c, px - c * px + sn * py, py - sn * px - c * py];
+      out.matrix.m = rotM(deg, px, py);
     },
     init: (a, w, h, pw, ph) => { a.p[2] = resolveDim(a.pt[2], a.p[2], w, pw); a.p[3] = resolveDim(a.pt[3], a.p[3], h, ph); },
   },
