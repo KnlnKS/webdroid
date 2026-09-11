@@ -886,15 +886,21 @@ export function registerPackage(archive: PackageArchive, path = installedPath(ar
   }
   return record;
 }
+/** <uses-sdk>: targetSdkVersion defaults to minSdkVersion, which defaults to 1 */
+export function usesSdk(root: XmlNode): { min: number; target: number } {
+  const sdk = root.children.find((c) => c.name === "uses-sdk");
+  const min = sdk && attr(sdk, "minSdkVersion")?.data || 1;
+  return { min, target: sdk && attr(sdk, "targetSdkVersion")?.data || min };
+}
 function appInfoFrom(ai: JApplicationInfo, pkg: string, path: string, res: Resources, root: XmlNode, app: XmlNode | null | undefined, flags: number) {
   ai.packageName = pkg; ai.sourceDir = ai.publicSourceDir = path; ai.dataDir = `/data/data/${pkg}`; ai.archiveResources = res;
   const label = app && attr(app, "label");
   ai.labelRes = label?.type === TV.REFERENCE ? label.data : 0;
   ai.nonLocalizedLabel = label?.str ?? null;
   ai.icon = app && attr(app, "icon")?.data || 0;
-  const sdk = root.children.find((c) => c.name === "uses-sdk");
-  ai.minSdkVersion = sdk && attr(sdk, "minSdkVersion")?.data || 1;
-  ai.targetSdkVersion = sdk && attr(sdk, "targetSdkVersion")?.data || ai.minSdkVersion;
+  const sdk = usesSdk(root);
+  ai.minSdkVersion = sdk.min;
+  ai.targetSdkVersion = sdk.target;
   if (flags & 128) ai.metaData = metaData(app, res);
   return ai;
 }

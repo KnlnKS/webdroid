@@ -524,11 +524,23 @@ function measureCachePut(v: JView, wSpec: number, hSpec: number) {
   }
   c[i] = wSpec; c[i + 1] = hSpec; c[i + 2] = v.measuredW; c[i + 3] = v.measuredH;
 }
+/** AOSP View.sAlwaysRemeasureExactly: an app targeting M (23) or lower re-measures under a changed
+ *  EXACTLY spec even at the size it already has; its LinearLayout weights relied on that pass */
+let alwaysRemeasureExactly = false;
+export function setAlwaysRemeasureExactly(on: boolean) { alwaysRemeasureExactly = on; }
 export async function measureView(v: JView, wSpec: number, hSpec: number) {
   // AOSP View.measure: with no forced layout and identical specs the previous measurement
   // still holds. Without this every pass re-measured the whole tree from the root.
   if (!v.layoutRequested) {
     if (wSpec === v.oldWSpec && hSpec === v.oldHSpec) return;
+    // AOSP: a changed spec that is EXACTLY the size the view already measures needs no measure
+    if (!alwaysRemeasureExactly && specMode(wSpec) === MS_EXACTLY && specMode(hSpec) === MS_EXACTLY &&
+        v.measuredW === specSize(wSpec) && v.measuredH === specSize(hSpec)) {
+      v.oldWSpec = wSpec; v.oldHSpec = hSpec;
+      measureCachePut(v, wSpec, hSpec);
+      perf.exactSkips++;
+      return;
+    }
     // a spec pair this view already measured under since its last request: the size it produced
     const i = v.mcLen ? measureCacheFind(v, wSpec, hSpec) : -1;
     if (i >= 0) {

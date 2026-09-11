@@ -12,7 +12,7 @@ import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
 import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguration } from "../android/resnative";
 import { setAppHost, type AppHost, type ActivityLaunch } from "../android/apphost";
-import { setManifest, manifestActivityTheme, manifestActivityOrientation, activityHandlesConfig, CONFIG_UI_MODE, getPM } from "../android/pm";
+import { setManifest, manifestActivityTheme, manifestActivityOrientation, activityHandlesConfig, CONFIG_UI_MODE, getPM, usesSdk } from "../android/pm";
 import { JIntent, deliverActivityResult, activityTransport, mkComponentName } from "../android/intent";
 import { ensureDecor, startingWindow } from "../android/decor";
 import { getInflater } from "../android/inflate";
@@ -24,7 +24,7 @@ import { APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
 import { reportUncaught, JBundle, dispatchVsync, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
 import { packageUid, packages } from "../android/packages";
 import { onMain, inMainJob, mainDbg } from "../android/mainloop";
-import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
+import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setAlwaysRemeasureExactly, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
 import { dispatchWindowInsets } from "../android/windowinsets";
 import { JCanvas, cssColor, tfMedium } from "../android/graphics";
@@ -219,6 +219,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   setProcessIdentity(PROCESS_PID, packages.get(pkg)?.uid ?? packageUid(pkg));
   setProcessName(processName ?? pkg);
   setManifest(manifest, activities, providers);
+  setAlwaysRemeasureExactly(usesSdk(manifest).target <= 23);
   prepared?.();
 
   return onMain(async () => {

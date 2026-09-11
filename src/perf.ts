@@ -13,8 +13,9 @@ export const perf = {
   // onMeasure bodies that actually ran, views laid out at a size other than their measurement,
   // and window-inset dispatches (each one forces a layout pass).
   layoutRequests: 0, layoutRequestsAll: 0, onMeasures: 0, layoutMismatch: 0, insetsPasses: 0,
-  // TextView line breaking computed against served from a memo, and measures a cache answered
-  wraps: 0, wrapHits: 0, measureCacheHits: 0,
+  // TextView line breaking computed against served from a memo, measures a cache answered, and
+  // measures skipped because an EXACTLY spec matched the size the view already had
+  wraps: 0, wrapHits: 0, measureCacheHits: 0, exactSkips: 0,
   // draw work: views painted against views their parent's clip rejected
   viewsDrawn: 0, viewsRejected: 0,
   // a frame phase that threw. Must stay 0 on a healthy app; non-zero names a real gap.

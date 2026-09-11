@@ -2,7 +2,7 @@
 // on cost as well as on pixels.  bun scripts/perfsum.ts [dir=tests/e2e/actual] [baseline.json]
 import { readdirSync, existsSync } from "node:fs";
 
-const LAYOUT_KEYS = ["invalidates", "layoutRequests", "layoutRequestsAll", "onMeasures", "layoutMismatch", "insetsPasses", "wraps", "wrapHits", "measureCacheHits", "viewsDrawn", "viewsRejected"] as const;
+const LAYOUT_KEYS = ["invalidates", "layoutRequests", "layoutRequestsAll", "onMeasures", "layoutMismatch", "insetsPasses", "wraps", "wrapHits", "measureCacheHits", "exactSkips", "viewsDrawn", "viewsRejected"] as const;
 const KEYS = ["bootMs", "compileMs", "classesCompiled", "layoutMs", "layoutPasses", "drawMs", "draws", "frameMs", "frames", "inputMs", "measureText", "nativeInstr", "nativeMs", "nativeHostCalls", "jitRegions", "jitMs", ...LAYOUT_KEYS] as const;
 
 async function rollup(dir: string) {
