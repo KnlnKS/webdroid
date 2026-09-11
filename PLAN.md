@@ -99,7 +99,7 @@ The cancellation fix is committed as `3c98726`; its matched baseline was `5d7875
 
 A post-GC map reopen probe finds that completed runnable keys accumulate in a
 long-lived Handler (7 after the first close, then 11/15/19/23 after successive opens).
-The pending queues are empty. The working follow-up removes a key when its last
+The pending queues are empty. Commit `e3c651f` removes a key when its last
 message leaves the queue, before dispatch so callbacks can repost safely. Two new tests
 fail on `3c98726` and pass after. The repeated map flow now has no completed callback
 keys, and Handler instances return to 5 after each close instead of growing to 21.
@@ -114,6 +114,16 @@ The same loaded-machine Harmonic comparison takes 59.9 seconds on `3c98726` and
 slowdown before the fix but does not replace quiet verification. Performance is pending.
 The matched baseline is now
 `3c98726` on 41983 in `/tmp/webdroid-map-handler-baseline`.
+
+Quiet verification is prepared with three source states: pre-cancellation `5d7875e`
+on 41984 (`/tmp/webdroid-handler-cancel-baseline`), cancellation-only `3c98726` on
+41983, and current `e3c651f` on 41977. `/tmp/webdroid-handler-quiet-startup.ts` runs
+three rotated-order cold/reset pairs across these states using the existing startup
+driver; it refuses to begin a run while image encoders are active. Inspect machine
+load before accepting timings. Native and affected E2E timing reruns remain necessary.
+The user has been asked whether to wait for encoding or pause it for up to 15 minutes;
+no permission to pause that other project's work has been received. No processes have
+been paused. The encoder parent PID 39311 remains live as of the latest continuation.
 
 A fresh test tab is open in Chrome at `http://localhost:41979/?apk=GmsClient.apk`.
 The user has been asked to complete the authorized Google sign-in directly in that
