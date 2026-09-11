@@ -35,6 +35,10 @@ import { locationTransport } from "../android/locationmanager";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives, type PackedArchive } from "./packedarchive";
 
+const permissionDenied = async (permission: string, pkg: string) =>
+  await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", permission, pkg) !== 0;
+const resultIntent = (data: JIntent | null) => data ? encodeIntent(data) : Promise.resolve(null);
+function setVisible(visible: boolean): void { processPresentation.visible = visible; processPresentation.changed(visible); }
 type ServiceRequest = { kind: "bind"; intent: IntentData; key: string } | { kind: "unbind"; key: string }
   | { kind: "start"; intent: IntentData; foreground: boolean }
   | { kind: "pending"; operation: PendingOperation; fill: IntentData | null; alarmCount: number };
@@ -278,7 +282,7 @@ class ProcessBroker {
     const owner = packages.get(pkg), node = [...owner?.components.provider.values() ?? []].find((n) => attrStr(n, "authorities")?.split(";").includes(request.authority));
     if (!node) throw new Error("Provider not installed");
     const permission = attrStr(node, request.name === "query" || request.name === "getType" ? "readPermission" : "writePermission") ?? attrStr(node, "permission");
-    if (caller.pkg !== pkg && permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", permission, caller.pkg) !== 0)
+    if (caller.pkg !== pkg && permission && await permissionDenied(permission, caller.pkg))
       throw new Error("Provider permission denied: " + permission);
     return this.request(this.connect(pkg, process), (endpoint) => endpoint.provider(request, { uid: caller.uid, pid }));
   }
@@ -290,14 +294,14 @@ class ProcessBroker {
       if (!(resolved instanceof JResolveInfo)) continue;
       const info = resolved.activityInfo;
       if (!info || caller && !info.exported && info.packageName !== caller.pkg) continue;
-      if (caller && info.permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", info.permission, caller.pkg) !== 0) continue;
+      if (caller && info.permission && await permissionDenied(info.permission, caller.pkg)) continue;
       targets.push({ entry: this.connect(info.packageName, info.processName), component: info.name, priority: resolved.priority ?? 0 });
     }
     targets.sort((a, b) => b.priority - a.priority);
     const bundle = new JParcel(); await vcall(bundle, "writeBundle", "(Landroid/os/Bundle;)V", null);
     let result: BroadcastData = { code: 0, data: null, extras: exportParcel(bundle), aborted: false };
     for (const target of targets) {
-      if (permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", permission, target.entry.pkg) !== 0) continue;
+      if (permission && await permissionDenied(permission, target.entry.pkg)) continue;
       result = await this.request(target.entry, (endpoint) => endpoint.broadcast(data, target.component, ordered, result));
       if (ordered && result.aborted) break;
     }
@@ -357,15 +361,15 @@ export function connectProcess(): ProcessEndpoint {
   };
   activityTransport.isTaskRoot = act => broker.tasks.root(PROCESS_PID, act.activityId);
   activityTransport.removeTask = act => {
-    void (act.resultData ? encodeIntent(act.resultData) : Promise.resolve(null)).then(data => broker.removeTask(PROCESS_PID, act.activityId, act.resultCode, data)).catch(reportUncaught);
+    void resultIntent(act.resultData).then(data => broker.removeTask(PROCESS_PID, act.activityId, act.resultCode, data)).catch(reportUncaught);
   };
   activityTransport.finish = (act) => {
     broker.tasks.detach(PROCESS_PID, act.activityId);
     const id = act.remoteId;
     if (!id) return false;
     act.remoteId = 0;
-    processPresentation.visible = false; processPresentation.changed(false);
-    void (act.resultData ? encodeIntent(act.resultData) : Promise.resolve(null)).then((data) => broker.finishActivity(PROCESS_PID, id, act.resultCode, data));
+    setVisible(false);
+    void resultIntent(act.resultData).then((data) => broker.finishActivity(PROCESS_PID, id, act.resultCode, data));
     return true;
   };
   broker.files.attach(PROCESS_PID, vfs);
@@ -401,14 +405,12 @@ export function connectProcess(): ProcessEndpoint {
   serviceTransport.start = async (owner, process, intent, foreground) => { await remote(broker.service(PROCESS_PID, owner.pkg, process, { kind: "start", intent: await encodeIntent(intent), foreground })); };
   return {
     activity: async (request) => {
-      if (request.kind === "finishTask") return (await import("./device")).finishTask(request.taskId, request.resume);
-      if (request.kind === "back") return (await import("./device")).pressBack();
+      const shell = await import("./device");
+      if (request.kind === "finishTask") return shell.finishTask(request.taskId, request.resume);
+      if (request.kind === "back") return shell.pressBack();
       if (request.kind === "visibility") {
-        await (await import("./device")).activityVisibility(request.phase);
-        if (request.phase !== "pause") {
-          processPresentation.visible = request.phase === "resume";
-          processPresentation.changed(processPresentation.visible);
-        }
+        await shell.activityVisibility(request.phase);
+        if (request.phase !== "pause") setVisible(request.phase === "resume");
       } else if (request.kind === "launch") {
         const intent = await decodeIntent(request.intent);
         await onMain(async () => {
@@ -416,7 +418,7 @@ export function connectProcess(): ProcessEndpoint {
           await appHost.launch(request.component, intent, { caller: request.caller, remoteId: request.id, taskId: request.taskId });
           if (!appHost.currentActivity()) throw new Error("Activity did not start: " + request.component);
         });
-        processPresentation.visible = true; processPresentation.changed(true);
+        setVisible(true);
       } else {
         const result = requests.get(request.request);
         requests.delete(request.request);

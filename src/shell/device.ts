@@ -62,28 +62,26 @@ function applyOrientationRequest(request: number): boolean {
   return true;
 }
 
+const qualify = (pkg: string, name: string) => name.startsWith(".") ? pkg + name : name;
+const isLauncher = (node: XmlNode) => node.children.some((filter) =>
+  filter.name === "intent-filter" && filter.children.some((x) => x.name === "category" && attrStr(x, "name") === "android.intent.category.LAUNCHER"));
+
 /** The launch component's declaration, resolving an alias to its target Activity when needed. */
 function launcherOrientation(root: XmlNode): number {
   const pkg = attrStr(root, "package") ?? "";
   const app = root.children.find((c) => c.name === "application");
-  const nameOf = (node: XmlNode) => {
-    const name = attrStr(node, "name") ?? "";
-    return name.startsWith(".") ? pkg + name : name;
-  };
-  const launcher = app?.children.find((node) => (node.name === "activity" || node.name === "activity-alias") && node.children.some((filter) =>
-    filter.name === "intent-filter" && filter.children.some((x) => x.name === "category" && attrStr(x, "name") === "android.intent.category.LAUNCHER")));
+  const launcher = app?.children.find((node) => (node.name === "activity" || node.name === "activity-alias") && isLauncher(node));
   if (!launcher) return -1;
   const own = attr(launcher, "screenOrientation");
   if (own) return own.data;
   const target = attrStr(launcher, "targetActivity");
   if (!target) return -1;
-  const full = target.startsWith(".") ? pkg + target : target;
-  const targetNode = app?.children.find((node) => node.name === "activity" && nameOf(node) === full);
+  const full = qualify(pkg, target);
+  const targetNode = app?.children.find((node) => node.name === "activity" && qualify(pkg, attrStr(node, "name") ?? "") === full);
   return (targetNode && attr(targetNode, "screenOrientation")?.data) ?? -1;
 }
 
-/** `?sync=1` opts into the sync tier. Off by default: see "The sync tier is worth 24x and we
- *  cannot have it yet" in the implementation history — the analysis is sound, our natives are not. */
+/** `?sync=1` opts into the sync tier: the analysis is sound, our natives are not yet. */
 const SYNC_TIER = typeof location !== "undefined" && new URLSearchParams(location.search).get("sync") === "1";
 
 interface BootedApp {
@@ -100,9 +98,10 @@ const aliasTargets = new Map<string, string>();
 const FLAG_FULLSCREEN = 1024;
 /** Where the top activity's window starts: FLAG_FULLSCREEN takes the status bar's rows too. */
 export function contentTop(): number {
-  const act = booted?.stack[booted.stack.length - 1];
+  const act = booted?.stack.at(-1);
   return act && (act.window.flags & FLAG_FULLSCREEN) ? 0 : STATUS_H;
 }
+const invalidateWindow = () => { uiState.needsLayout = uiState.needsDraw = uiState.needsInsets = true; };
 
 export async function bootApk(input: Uint8Array | Install, onStatus: (s: string) => void, apkFile = "", processName: string | null = null, prepared?: () => void): Promise<BootedApp> {
   // The android package registers android.R.* and fills the widgets' attr-id tables, so it has to
@@ -114,9 +113,10 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   onStatus("unpacking apk…");
   const install = input instanceof Uint8Array ? openInstall(input) : input;
   const zip = install.zip;
+  const manifest = parseAXML(zip["AndroidManifest.xml"]);
   // Orientation precedes resource construction: both app and framework tables must select the
   // same -land/-port entries the Activity will see through Configuration.
-  applyOrientationRequest(launcherOrientation(parseAXML(zip["AndroidManifest.xml"])));
+  applyOrientationRequest(launcherOrientation(manifest));
   const [fwPkg] = await Promise.all([loadFramework(), restoreRoots()]);
   rt.classpath = zip;
   // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its
@@ -151,7 +151,6 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     const a = analyseProgram(zip["AndroidManifest.xml"], services);
     console.log(`[webdroid] ${a.reachable} reachable methods, ${a.sync} cannot suspend, in ${a.ms.toFixed(0)}ms`);
   }
-  const manifest = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(manifest, "package") ?? "app";
   await vfs.prepare(pkg);
   const appNode = manifest.children.find((c) => c.name === "application");
@@ -164,28 +163,22 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   const activities = new Map<string, XmlNode>();
   for (const c of appNode?.children ?? []) {
     if (c.name !== "activity" && c.name !== "activity-alias") continue;
-    let n = attrStr(c, "name") ?? "";
-    if (n.startsWith(".")) n = pkg + n;
-    activities.set(n.replace(/\./g, "/"), c);
+    const n = qualify(pkg, attrStr(c, "name") ?? "").replace(/\./g, "/");
+    activities.set(n, c);
     // An <activity-alias> names a component, not a class: the class that runs is its
     // targetActivity. The alias keeps its own name everywhere a component is named (that is
     // what an intent resolves to and what PackageManager answers for) and only the launch
-    // resolves through. Play-store icon swaps and renamed entry points are aliases, so an
-    // apk whose LAUNCHER is one used to link the alias name and auto-stub it.
+    // resolves through.
     const target = attrStr(c, "targetActivity");
-    if (target) aliasTargets.set(n.replace(/\./g, "/"), (target.startsWith(".") ? pkg + target : target).replace(/\./g, "/"));
-    const hasLauncher = c.children.some((f) =>
-      f.name === "intent-filter" &&
-      f.children.some((x) => x.name === "category" && attrStr(x, "name") === "android.intent.category.LAUNCHER"));
-    if (hasLauncher && !mainActivity) mainActivity = n.replace(/\./g, "/");
+    if (target) aliasTargets.set(n, qualify(pkg, target).replace(/\./g, "/"));
+    if (!mainActivity && isLauncher(c)) mainActivity = n;
   }
   if (!mainActivity && !processName) throw new Error("no launcher activity found");
   // ActivityThread installs providers by descending initOrder, manifest order breaking ties
   const providers = new Map<string, XmlNode>();
   const providerNodes = (appNode?.children ?? []).filter((c) => c.name === "provider");
   for (const c of providerNodes.sort((a, b) => (attr(b, "initOrder")?.data ?? 0) - (attr(a, "initOrder")?.data ?? 0))) {
-    const n = attrStr(c, "name") ?? "";
-    providers.set(n.startsWith(".") ? pkg + n : n, c);
+    providers.set(qualify(pkg, attrStr(c, "name") ?? ""), c);
   }
 
   onStatus("resources…");
@@ -226,7 +219,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     },
     recreateActivity: (a) => { recreateActivity(a); },
     setRequestedOrientation: (a, orientation) => { changeActivityOrientation(a, orientation); },
-    currentActivity: () => booted?.stack[booted.stack.length - 1] ?? null,
+    currentActivity: () => booted?.stack.at(-1) ?? null,
     invalidateOptionsMenu: (a) => { void buildOptionsMenu(a); },
   };
   setAppHost(host);
@@ -345,30 +338,25 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
     act.window.activity = act;
     getInflater(act).privateFactory = act;
     act.intent = intent;
-    const prev = booted.stack[booted.stack.length - 1];
+    const prev = booted.stack.at(-1);
     if (prev?.resumed) { await pauseActivity(prev); await windowFocus(prev, false); }
     booted.stack.push(act);
-    try { await vcall(act, "onCreate", "(Landroid/os/Bundle;)V", saved); }
-    catch (e) { reportUncaught(e); }
+    await safeCall(act, "onCreate", "(Landroid/os/Bundle;)V", saved);
     // onCreate may set the window theme before its first getDecorView/setContentView.
     await ensureDecor(act);
     await fireActivityLifecycle(act, "Created", saved);
-    // Android dispatches onAttachedToWindow after onCreate, before onStart — and it must
-    // happen even if a later lifecycle callback throws (androidx ViewPager.populate needs it).
+    // Android dispatches onAttachedToWindow after onCreate, before onStart, even if a later
+    // lifecycle callback throws.
     if (act.window.decor) await dispatchAttached(act.window.decor);
-    try { await vcall(act, "onStart", "()V"); } catch (e) { reportUncaught(e); }
-    await fireActivityLifecycle(act, "Started");
-    try { await vcall(act, "onPostCreate", "(Landroid/os/Bundle;)V", saved); } catch (e) { reportUncaught(e); }
-    try { await vcall(act, "onResume", "()V"); } catch (e) { reportUncaught(e); }
-    await fireActivityLifecycle(act, "Resumed");
-    try { await vcall(act, "onPostResume", "()V"); } catch (e) { reportUncaught(e); }
+    await lifecycleStep(act, "onStart", "Started");
+    await safeCall(act, "onPostCreate", "(Landroid/os/Bundle;)V", saved);
+    await lifecycleStep(act, "onResume", "Resumed");
+    await safeCall(act, "onPostResume");
     await windowFocus(act, true);
     // AOSP stops the covered activity only once the new one is up
     if (prev?.started) await stopActivity(prev);
     void buildOptionsMenu(act);
-    uiState.needsLayout = true;
-    uiState.needsDraw = true;
-    uiState.needsInsets = true; // a new window: its decor has never been handed the insets
+    invalidateWindow();
     // Fragment pages (ViewPager/FragmentPagerAdapter) instantiate asynchronously, after this
     // frame's layout. Schedule extra re-layouts so they get measured/laid out once present.
     uiState.settle = Math.max(uiState.settle, 6);
@@ -383,9 +371,7 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
 const CONFIG_ORIENTATION_SIZE = 0x0080 | 0x0400;
 function changeActivityOrientation(act: JActivity, request: number): void {
   if (!applyOrientationRequest(request)) return;
-  uiState.needsLayout = true;
-  uiState.needsDraw = true;
-  uiState.needsInsets = true;
+  invalidateWindow();
   if (activityHandlesConfig(act, CONFIG_ORIENTATION_SIZE)) {
     void onMain(() => vcall(act, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", deviceConfiguration())).catch(reportUncaught);
   } else recreateActivity(act);
@@ -399,9 +385,8 @@ function changeActivityOrientation(act: JActivity, request: number): void {
  */
 function deviceNightChanged(night: boolean): void {
   if (!setDeviceNight(night) || !booted) return;
-  uiState.needsLayout = true;
-  uiState.needsDraw = true;
-  const act = booted.stack[booted.stack.length - 1];
+  uiState.needsLayout = uiState.needsDraw = true;
+  const act = booted.stack.at(-1);
   if (!act) return;
   if (activityHandlesConfig(act, CONFIG_UI_MODE)) {
     void onMain(async () => {
@@ -456,8 +441,11 @@ function recreateActivity(act: JActivity): void {
   }), 0);
 }
 
+async function safeCall(act: JActivity, method: string, desc = "()V", ...args: unknown[]) {
+  try { await vcall(act, method, desc, ...args); } catch (e) { reportUncaught(e); }
+}
 async function lifecycleStep(act: JActivity, method: string, phase: Parameters<typeof fireActivityLifecycle>[1]) {
-  try { await vcall(act, method, "()V"); } catch (e) { reportUncaught(e); }
+  await safeCall(act, method);
   await fireActivityLifecycle(act, phase);
 }
 const pauseActivity = (act: JActivity) => lifecycleStep(act, "onPause", "Paused");
@@ -467,11 +455,17 @@ const stopActivity = (act: JActivity) => lifecycleStep(act, "onStop", "Stopped")
  *  onPostResume, so pages created after a round-trip were stuck STARTED without it. */
 async function resumeActivity(act: JActivity) {
   if (!act.started) {
-    try { await vcall(act, "onRestart", "()V"); } catch (e) { reportUncaught(e); }
+    await safeCall(act, "onRestart");
     await lifecycleStep(act, "onStart", "Started");
   }
   if (!act.resumed) await lifecycleStep(act, "onResume", "Resumed");
-  try { await vcall(act, "onPostResume", "()V"); } catch (e) { reportUncaught(e); }
+  await safeCall(act, "onPostResume");
+}
+async function resumeTop(top: JActivity) {
+  applyOrientationRequest(top.requestedOrientation);
+  await resumeActivity(top);
+  await windowFocus(top, true);
+  void buildOptionsMenu(top);
 }
 /** ViewRootImpl reports window focus once the resumed activity's window is up and takes it
  *  away when another window covers it. Only a change is delivered, as the window manager does;
@@ -495,21 +489,14 @@ async function finishActivity(act: JActivity, resume = true) {
   if (act.resumed) await pauseActivity(act);
   await windowFocus(act, false);
   const remote = activityTransport.finish?.(act) ?? false;
-  const top = booted.stack[booted.stack.length - 1];
-  if (top && !top.finished && !remote && resume) {
-    applyOrientationRequest(top.requestedOrientation);
-    await resumeActivity(top);
-    await windowFocus(top, true);
-    void buildOptionsMenu(top);
-  }
+  const top = booted.stack.at(-1);
+  if (top && !top.finished && !remote && resume) await resumeTop(top);
   // AOSP hands the result to the launcher once it is back up, before the finished instance dies.
   if (act.resultTo) deliverActivityResult(act.resultTo.act, act.resultTo.code, act.resultCode, act.resultData);
   if (act.window.decor) await dispatchDetached(act.window.decor);
   if (act.started) await stopActivity(act);
   await lifecycleStep(act, "onDestroy", "Destroyed");
-  uiState.needsLayout = true;
-  uiState.needsDraw = true;
-  uiState.needsInsets = true; // the revealed activity's decor is the new dispatch target
+  invalidateWindow();
 }
 
 export function finishTask(taskId: number, resume: boolean): Promise<void> {
@@ -518,9 +505,7 @@ export function finishTask(taskId: number, resume: boolean): Promise<void> {
     for (const act of activities) { act.finished = true; act.remoteId = 0; }
     for (const act of activities.reverse()) await finishActivity(act, false);
     const top = booted?.stack.at(-1);
-    if (resume && top) {
-      applyOrientationRequest(top.requestedOrientation); await resumeActivity(top); await windowFocus(top, true); void buildOptionsMenu(top);
-    }
+    if (resume && top) await resumeTop(top);
   });
 }
 
@@ -561,8 +546,8 @@ export function pressBack(): Promise<void> {
 }
 async function pressBack0() {
   // the topmost window takes the key: a dialog or popup before the activity under it
-  const top = overlays[overlays.length - 1];
-  const act = booted?.stack[booted.stack.length - 1];
+  const top = overlays.at(-1);
+  const act = booted?.stack.at(-1);
   try {
     if (top?.onBack) await top.onBack();
     else if (top?.dismissOnOutside) await dismissOverlay(top);
@@ -662,7 +647,7 @@ async function tick0() {
     if (uiState.animHooks.size) {
       for (const hook of [...uiState.animHooks]) if (!hook()) uiState.animHooks.delete(hook);
     }
-    const act = booted?.stack[booted.stack.length - 1];
+    const act = booted?.stack.at(-1);
     const decor = act?.window.decor;
     if (!decor) {
       if (startWin && uiState.needsDraw) {
@@ -818,8 +803,7 @@ export function dispatchPointer(action: number, x: number, y: number, at = perfo
   return onMain(() => dispatchPointer0(action, x, y, at)).finally(() => { perf.inputMs += performance.now() - t0; });
 }
 async function dispatchPointer0(action: number, x: number, y: number, t: number) {
-  const act = booted?.stack[booted.stack.length - 1];
-  const decor = act?.window.decor;
+  const decor = booted?.stack.at(-1)?.window.decor;
   if (!decor) return;
   const ev = new JMotionEvent();
   ev.action = action;
