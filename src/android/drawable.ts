@@ -530,6 +530,9 @@ rt.register({
 class JLayerDrawable extends JDrawable {
   layers: { d: JDrawable; insets: [number, number, number, number]; w?: number; h?: number; gravity?: number }[] = [];
   ids: (number | null)[] = [];
+  /** AOSP LayerDrawable.addLayer: a layer's invalidations and scheduling reach this drawable,
+   *  and through its own callback the view it is drawn into */
+  pushLayer(layer: JLayerDrawable["layers"][number]) { layer.d.callback = this; this.layers.push(layer); }
   /** AOSP updateLayerBounds: insets, then an explicit layer size placed by its gravity */
   layout() {
     for (const l of this.layers) {
@@ -584,7 +587,7 @@ rt.register({
       return r.left || r.top || r.right || r.bottom ? 1 : 0;
     },
     "<init>([Landroid/graphics/drawable/Drawable;)V": function (this: JLayerDrawable, ds: JDrawable[]) {
-      for (const d of ds ?? []) this.layers.push({ d, insets: [0, 0, 0, 0] });
+      for (const d of ds ?? []) this.pushLayer({ d, insets: [0, 0, 0, 0] });
     },
     // AOSP hands the state to every layer: a Material button's fill is a MaterialShapeDrawable
     // inside an InsetDrawable inside the ripple, and it is the one that reads state_checked
@@ -617,8 +620,7 @@ rt.register({
     "setId(II)V": function (this: JLayerDrawable, i: number, id: number) { this.ids[i] = id; },
     "getId(I)I": function (this: JLayerDrawable, i: number) { return this.ids[i] ?? -1; },
     "addLayer(Landroid/graphics/drawable/Drawable;)I": function (this: JLayerDrawable, d: JDrawable) {
-      d.callback = this;
-      this.layers.push({ d, insets: [0, 0, 0, 0] });
+      this.pushLayer({ d, insets: [0, 0, 0, 0] });
       return this.layers.length - 1;
     },
     "setDrawableByLayerId(ILandroid/graphics/drawable/Drawable;)Z": function (this: JLayerDrawable, id: number, d: JDrawable) {
@@ -670,7 +672,7 @@ rt.register({
   methods: {
     "<init>(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V":
       function (this: JAdaptiveIconDrawable, bg: JDrawable | null, fg: JDrawable | null) {
-        for (const d of [bg, fg]) if (d) this.layers.push({ d, insets: [0, 0, 0, 0] });
+        for (const d of [bg, fg]) if (d) this.pushLayer({ d, insets: [0, 0, 0, 0] });
       },
     "getBackground()Landroid/graphics/drawable/Drawable;": function (this: JAdaptiveIconDrawable) { return this.layers[0]?.d ?? null; },
     "getForeground()Landroid/graphics/drawable/Drawable;": function (this: JAdaptiveIconDrawable) { return this.layers[1]?.d ?? null; },
@@ -772,7 +774,7 @@ rt.register({
     },
     "<init>(Landroid/content/res/ColorStateList;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V":
       function (this: JRippleDrawable, csl: JColorStateList | null, content: JDrawable | null) {
-        if (content) this.layers.push({ d: content, insets: [0, 0, 0, 0] });
+        if (content) this.pushLayer({ d: content, insets: [0, 0, 0, 0] });
         this.setColor(csl);
       },
     "setColor(Landroid/content/res/ColorStateList;)V": function (this: JRippleDrawable, csl: JColorStateList) {
@@ -791,10 +793,10 @@ rt.register({
   name: "android/graphics/drawable/InsetDrawable", ctor: class extends JLayerDrawable {}, sup: "android/graphics/drawable/LayerDrawable",
   methods: {
     "<init>(Landroid/graphics/drawable/Drawable;I)V": function (this: JLayerDrawable, d: JDrawable, i: number) {
-      this.layers.push({ d, insets: [i, i, i, i] });
+      this.pushLayer({ d, insets: [i, i, i, i] });
     },
     "<init>(Landroid/graphics/drawable/Drawable;IIII)V": function (this: JLayerDrawable, d: JDrawable, l: number, t: number, r: number, b: number) {
-      this.layers.push({ d, insets: [l, t, r, b] });
+      this.pushLayer({ d, insets: [l, t, r, b] });
     },
     "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JLayerDrawable) { return this.layers[0]?.d ?? null; },
   },
@@ -1186,7 +1188,7 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
           // AOSP LayerDrawable: an item may carry its own size and a gravity to place it by,
           // and layout() already implements that. Without them a 24dp arrow inflated into a
           // spinner's background is stretched across the whole widget.
-          d.layers.push({
+          d.pushLayer({
             d: child,
             insets: [
               rvDimen(res, nodeAttr(res, c, AT.left), 0),
@@ -1209,7 +1211,7 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
       for (const n of ["background", "foreground"]) {
         const c = node.children.find((k) => k.name === n);
         const child = c ? await itemDrawable(res, c, theme) : null;
-        if (child) d.layers.push({ d: child, insets: [0, 0, 0, 0] });
+        if (child) d.pushLayer({ d: child, insets: [0, 0, 0, 0] });
       }
       return d;
     }
@@ -1226,7 +1228,7 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
         // invisible on a light theme and the entire surface on a dark one.
         if (idv && idv.d === maskId(res)) { d.mask = await itemDrawable(res, c, theme); continue; }
         const child = await itemDrawable(res, c, theme);
-        if (child) { d.layers.push({ d: child, insets: [0, 0, 0, 0] }); d.ids.push(idv ? idv.d : null); }
+        if (child) { d.pushLayer({ d: child, insets: [0, 0, 0, 0] }); d.ids.push(idv ? idv.d : null); }
       }
       return d;
     }
@@ -1235,7 +1237,7 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
       const child = await itemDrawable(res, node, theme);
       const all = rvDimen(res, get(AT.inset), 0);
       if (child) {
-        d.layers.push({
+        d.pushLayer({
           d: child,
           insets: [
             rvDimen(res, get(AT.insetLeft), all), rvDimen(res, get(AT.insetTop), all),
