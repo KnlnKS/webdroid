@@ -21,6 +21,7 @@ import { fontResource } from "./fonts";
 import { type NativeSpec, callSelf, rt, JObj, maySuspend, stubs, noops } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { usLocale } from "../jvm/natives/jvalues";
+import { perf } from "../perf";
 
 export class JTextView extends JView {
   /** kept for the app to read back; text is drawn untransformed */
@@ -89,6 +90,7 @@ export class JTextView extends JView {
   textHeight(lines: number): number { return lines * this.lineHeight() + this.topPad() + this.bottomPad(); }
   ascent(): number { return Math.round(-fontAscent(this.paintT)) + this.topPad(); }
   wrap(avail: number): string[] {
+    perf.wraps++;
     const text = this.displayText();
     if (avail <= 0) return text ? [text] : [];
     // measureText memoises on (font, string) and applies letter spacing; ctx.measureText did

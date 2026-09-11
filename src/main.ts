@@ -228,6 +228,7 @@ jitStats.on = params.get("jit") !== "0";
 /** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. */
 const wd = {
   rt, uiState, perf, perfReset, mainDbg, yields: yieldStats, timedParks, logs: logBuf, ticks: 0, native,
+  layoutTrace: (on?: boolean) => { if (on !== undefined) uiState.layoutTrace = on ? { cls: {}, site: {} } : null; return uiState.layoutTrace; },
   // the JVM's entry points, so a page script can drive real bytecode where Canvas2D is needed
   newObj, vcall,
   /** a static on a bytecode class: statics live on the constructor, mangled the same way */

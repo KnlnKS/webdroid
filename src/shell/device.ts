@@ -47,7 +47,11 @@ let fb = new OffscreenCanvas(SCREEN_W, SCREEN_H);
 export let frame = fb.getContext("2d")!;
 let screen: ImageBitmapRenderingContext | null = null;
 export function setScreenCanvas(c: HTMLCanvasElement): void { screen = c.getContext("bitmaprenderer"); }
-export function present(): void { screen?.transferFromImageBitmap(fb.transferToImageBitmap()); }
+export function present(): void {
+  if (!screen) return;
+  perf.transfers++;
+  screen.transferFromImageBitmap(fb.transferToImageBitmap());
+}
 
 /** Apply one of ActivityInfo's fixed orientations; all other requests retain the current axes. */
 function applyOrientationRequest(request: number): boolean {
@@ -643,6 +647,7 @@ async function tick0() {
     // means a listener's own requestApplyInsets() re-arms the next frame instead of recursing.
     if (uiState.needsInsets && decor.right > 0) {
       uiState.needsInsets = false;
+      perf.insetsPasses++;
       mainDbg.phase = "insets";
       try { await dispatchWindowInsets(decor); } catch (e) { console.error("[insets]", e); }
       uiState.needsLayout = true;
@@ -698,6 +703,8 @@ async function tick0() {
       uiState.needsDraw = false;
       const t0 = performance.now();
       perf.draws++;
+      perf.fullDraws++;
+      perf.dirtyPx += SCREEN_W * SCREEN_H;
       const laidOut = didLayout;
       ctx.save();
       rt.yieldGap = 50;

@@ -13,7 +13,7 @@ import { device } from "../shell/config";
 import { rootWindowInsets, type JWindowInsets, sysIns } from "./windowinsets";
 import { mkVPA } from "./viewanimator";
 import type { JContext } from "./context";
-import { onMain } from "./mainloop";
+import { onMain, mainDbg } from "./mainloop";
 import type { JWindow } from "./window";
 
 // MeasureSpec
@@ -43,7 +43,18 @@ export const uiState = {
    *  to all withFrameNanos awaiters, so animations desync if callbacks see different times. */
   frameTimeNanos: 0n,
   frameIntervalNanos: 0n,
+  /** debug only (wd.layoutTrace): requestLayout counts by requesting class, and by frame phase
+   *  plus the two native frames that asked. Null costs one test per request. */
+  layoutTrace: null as { cls: Record<string, number>; site: Record<string, number> } | null,
 };
+function traceLayoutRequest(t: NonNullable<typeof uiState.layoutTrace>, v: JView | null | undefined) {
+  const cls = v ? ((v.constructor as { $i?: { name: string } }).$i?.name ?? v.constructor.name) : "(all)";
+  t.cls[cls] = (t.cls[cls] ?? 0) + 1;
+  // stack[0] is the message, [1] this function, [2] requestLayout; the callers follow
+  const callers = (new Error().stack ?? "").split("\n").slice(3, 5).map((l) => /at (?:async )?([^\s(]+)/.exec(l)?.[1] ?? "?");
+  const site = `${mainDbg.phase || "-"} ${callers.join("<")}`;
+  t.site[site] = (t.site[site] ?? 0) + 1;
+}
 export function invalidate(v?: JView) {
   perf.invalidates++; uiState.needsDraw = true;
   if (v) descendantInvalidated(v, v);
@@ -93,7 +104,9 @@ function focusMoved(v: JView, now: JView | null) {
  */
 export function requestLayout(v?: JView | null) {
   uiState.needsLayout = true; uiState.needsDraw = true; uiState.settle = 3;
-  if (!v) { uiState.forceAll = true; return; }
+  if (uiState.layoutTrace) traceLayoutRequest(uiState.layoutTrace, v);
+  if (!v) { perf.layoutRequestsAll++; uiState.forceAll = true; return; }
+  perf.layoutRequests++;
   if (layoutPass.active) layoutPass.requesters.push(v);
   for (let p: JView | null = v; p; p = p.parent) {
     p.layoutRequested = true;
@@ -445,6 +458,7 @@ export async function measureView(v: JView, wSpec: number, hSpec: number) {
   // still holds. Without this every pass re-measured the whole tree from the root.
   if (!v.layoutRequested && wSpec === v.oldWSpec && hSpec === v.oldHSpec) return;
   v.oldWSpec = wSpec; v.oldHSpec = hSpec;
+  perf.onMeasures++;
   try {
     await guardCall(v, M_onMeasure, wSpec, hSpec);
     v.layoutRequired = true;   // AOSP sets PFLAG_LAYOUT_REQUIRED whenever onMeasure runs
@@ -473,6 +487,7 @@ export async function layoutView(v: JView, l: number, t: number, r: number, b: n
   const changed = oldL !== l || oldT !== t || oldR !== r || oldB !== b;
   const ow = v.width(), oh = v.height();
   v.left = l; v.top = t; v.right = r; v.bottom = b;
+  if ((r - l !== v.measuredW || b - t !== v.measuredH) && v.measuredW > 0 && v.measuredH > 0) perf.layoutMismatch++;
   if (changed) {
     await guardMaybe(v, M_onSizeChanged, r - l, b - t, ow, oh);
   }
@@ -508,7 +523,8 @@ export async function drawView(v: JView, cv: JCanvas, parent?: JViewGroup) {
   // animations (ViewPager page snaps, OverScroller flings)
   const cs = jmethod(v, M_computeScroll);
   if (cs && cs !== noopComputeScroll) await guardApply(cs, v);
-  if (parent && clipRejects(parent, v)) return;
+  if (parent && clipRejects(parent, v)) { perf.viewsRejected++; return; }
+  perf.viewsDrawn++;
   const ctx = cv.ctx;
   // AOSP View.draw() brackets the whole thing with getSaveCount()/restoreToCount(): a view
   // that throws between save() and restore() must not leave its clip on the shared context,
