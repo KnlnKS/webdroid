@@ -3,8 +3,7 @@
 // everywhere or nowhere.
 
 import { parseAXML, attrStr } from "../android/axml";
-import { inflateSync } from "fflate";
-import { centralDirFromTail, centralDirInfoFromTail, centralDirRecords, zipTree, type ZEntry } from "../jvm/natives/jzip";
+import { centralDirOfSource, inflateEntry, localDataOffset, zipTree, type ZEntry } from "../jvm/natives/jzip";
 import { BytesFile, RangeFile, SliceFile, readFully, type FileSource } from "./lazyfile";
 
 /** A split install (.xapk, .apks, an App Bundle's output) is a zip of apks rather than an
@@ -63,26 +62,10 @@ export function openInstall(bytes: Uint8Array): Install {
   return mergeInstall(opened);
 }
 
-const TAIL = 22 + 0xffff;
-async function zipEntries(source: FileSource): Promise<Map<string, ZEntry>> {
-  const tailSize = Math.min(TAIL, source.size);
-  const tail = await readFully(source, source.size - tailSize, tailSize);
-  const info = centralDirInfoFromTail(tail, source.size);
-  if (info.offset >= source.size - tail.length) return centralDirFromTail(tail, source.size);
-  return centralDirRecords(await readFully(source, info.offset, info.size), info.entries);
-}
-async function entryDataOffset(source: FileSource, entry: ZEntry): Promise<number> {
-  const header = await readFully(source, entry.off, 30);
-  const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
-  if (header.length !== 30 || view.getUint32(0, true) !== 0x04034b50) throw new Error(`invalid local header for ${entry.name}`);
-  return entry.off + 30 + view.getUint16(26, true) + view.getUint16(28, true);
-}
 async function entrySource(source: FileSource, entry: ZEntry): Promise<FileSource> {
-  const offset = await entryDataOffset(source, entry);
+  const offset = await localDataOffset(source, entry);
   if (entry.method === 0) return new SliceFile(source, offset, entry.size);
-  const compressed = await readFully(source, offset, entry.csize);
-  if (entry.method === 8) return new BytesFile(inflateSync(compressed));
-  throw new Error(`invalid compression method ${entry.method}: ${entry.name}`);
+  return new BytesFile(inflateEntry(await readFully(source, offset, entry.csize), entry));
 }
 class ZipEntryFile implements FileSource {
   readonly size: number;
@@ -98,7 +81,7 @@ class ZipEntryFile implements FileSource {
   }
 }
 async function openedApk(source: FileSource): Promise<OpenedApk> {
-  const entries = await zipEntries(source);
+  const entries = await centralDirOfSource(source);
   const manifestEntry = entries.get("AndroidManifest.xml");
   const manifestSource = manifestEntry ? await entrySource(source, manifestEntry) : null;
   const manifest = manifestSource ? await readFully(manifestSource) : null;
@@ -114,7 +97,7 @@ async function openedApk(source: FileSource): Promise<OpenedApk> {
 
 export async function openInstallRemote(url: string): Promise<Install> {
   const source = await RangeFile.open(url);
-  const entries = await zipEntries(source);
+  const entries = await centralDirOfSource(source);
   if (entries.has("AndroidManifest.xml")) return openInstall(await readFully(source));
   const apks = [...entries.values()].filter((entry) => entry.name.endsWith(".apk"));
   if (!apks.length) throw new Error("no AndroidManifest.xml and no apks inside: not an apk or a split install");

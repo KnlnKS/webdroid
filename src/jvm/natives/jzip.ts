@@ -9,6 +9,7 @@ import { mkIter } from "./jutil";
 import { readFully, type FileSource } from "../../shell/lazyfile";
 
 type Codec = Inflate | Unzlib | Deflate | Zlib | Gzip;
+const collect = (z: { out: Uint8Array[]; done: boolean }) => (d: Uint8Array, final: boolean) => { if (d.length) z.out.push(d); if (final) z.done = true; };
 class JInflater extends JObj {
   raw = false;
   st: Codec | null = null;
@@ -21,7 +22,7 @@ class JInflater extends JObj {
   ensure() {
     if (!this.st) {
       this.st = this.raw ? new Inflate() : new Unzlib();
-      this.st.ondata = (d, final) => { if (d.length) this.out.push(d); if (final) this.done = true; };
+      this.st.ondata = collect(this);
     }
     return this.st;
   }
@@ -54,7 +55,7 @@ class JInflater extends JObj {
     return n;
   }
 }
-function drain(z: JInflater, b: Int8Array, off: number, len: number): number {
+function drain(z: { out: Uint8Array[] }, b: Int8Array, off: number, len: number): number {
   let n = 0;
   while (n < len && z.out.length) {
     const c = z.out[0];
@@ -71,10 +72,10 @@ rt.register({
     "<init>()V": function (this: JInflater) { this.raw = false; },
     "<init>(Z)V": function (this: JInflater, nowrap: number) { this.raw = !!nowrap; },
     "setInput([BII)V": function (this: JInflater, b: Int8Array, off: number, len: number) {
-      this.feed(new Uint8Array(b.buffer.slice(b.byteOffset + off, b.byteOffset + off + len)));
+      this.feed(u8(b, off, len).slice());
     },
     "setInput([B)V": function (this: JInflater, b: Int8Array) {
-      this.feed(new Uint8Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.length)));
+      this.feed(u8(b).slice());
     },
     "inflate([BII)I": function (this: JInflater, b: Int8Array, off: number, len: number) { return this.inflate(b, off, len); },
     "inflate([B)I": function (this: JInflater, b: Int8Array) { return this.inflate(b, 0, b.length); },
@@ -107,7 +108,7 @@ class JDeflater extends JObj {
   ensure() {
     if (!this.st) {
       this.st = this.raw ? new Deflate() : new Zlib();
-      this.st.ondata = (d, final) => { if (d.length) this.out.push(d); if (final) this.done = true; };
+      this.st.ondata = collect(this);
     }
     return this.st;
   }
@@ -120,7 +121,7 @@ rt.register({
     "<init>(I)V": function () {},
     "<init>(IZ)V": function (this: JDeflater, _level: number, nowrap: number) { this.raw = !!nowrap; },
     "setInput([BII)V": function (this: JDeflater, b: Int8Array, off: number, len: number) {
-      this.pending = new Uint8Array(b.buffer.slice(b.byteOffset + off, b.byteOffset + off + len));
+      this.pending = u8(b, off, len).slice();
     },
     "finish()V": function (this: JDeflater) {
       this.ensure().push(this.pending ?? new Uint8Array(0), true);
@@ -128,8 +129,7 @@ rt.register({
     },
     "deflate([BII)I": function (this: JDeflater, b: Int8Array, off: number, len: number) {
       if (this.pending) { this.ensure().push(this.pending); this.pending = null; }
-      const z = this as unknown as JInflater;
-      return drain(z, b, off, len);
+      return drain(this, b, off, len);
     },
     "finished()Z": function (this: JDeflater) { return this.done && !this.out.length ? 1 : 0; },
     "needsInput()Z": function (this: JDeflater) { return this.pending ? 0 : 1; },
@@ -159,7 +159,7 @@ rt.register({
     "write(I)V": maySuspend(function (this: JDeflaterOut, b: number) { return vcallMaybe(this, "write", "([BII)V", Int8Array.of(b), 0, 1); }),
     "write([BII)V": async function (this: JDeflaterOut, b: Int8Array, off: number, len: number) {
       if (this.def.done) throw rt.mkThrowable("java/io/IOException", "write beyond end of stream");
-      if (len > 0) { this.def.ensure().push(new Uint8Array(b.buffer.slice(b.byteOffset + off, b.byteOffset + off + len))); await pump(this); }
+      if (len > 0) { this.def.ensure().push(u8(b, off, len).slice()); await pump(this); }
     },
     "finish()V": async function (this: JDeflaterOut) {
       if (!this.def.done) { this.def.ensure().push(new Uint8Array(0), true); await pump(this); }
@@ -173,7 +173,7 @@ rt.register({
     },
   },
 });
-class JGzipDeflater extends JDeflater { ensure() { return this.st ??= Object.assign(new Gzip(), { ondata: (d: Uint8Array, f: boolean) => { if (d.length) this.out.push(d); if (f) this.done = true; } }); } }
+class JGzipDeflater extends JDeflater { ensure() { return this.st ??= Object.assign(new Gzip(), { ondata: collect(this) }); } }
 rt.register({
   name: "java/util/zip/GZIPOutputStream", ctor: class extends JDeflaterOut { def = new JGzipDeflater(); }, sup: "java/util/zip/DeflaterOutputStream",
   methods: {
@@ -240,7 +240,7 @@ function directoryFromTail(z: Uint8Array, fileSize: number): ZipDirectory {
   if (offset + size > fileSize) throw rt.mkThrowable("java/util/zip/ZipException", "Central Directory is outside the archive");
   return { offset, size, entries };
 }
-export function centralDirRecords(z: Uint8Array, entries: number): Map<string, ZEntry> {
+function centralDirRecords(z: Uint8Array, entries: number): Map<string, ZEntry> {
   const v = new DataView(z.buffer, z.byteOffset, z.byteLength);
   const out = new Map<string, ZEntry>();
   let p = 0;
@@ -258,16 +258,13 @@ export function centralDirRecords(z: Uint8Array, entries: number): Map<string, Z
   }
   return out;
 }
-export function centralDirFromTail(z: Uint8Array, fileSize: number): Map<string, ZEntry> {
+function centralDirFromTail(z: Uint8Array, fileSize: number): Map<string, ZEntry> {
   const d = directoryFromTail(z, fileSize);
   const start = d.offset - (fileSize - z.length);
   if (start < 0 || start + d.size > z.length) {
     throw rt.mkThrowable("java/util/zip/ZipException", `Central Directory needs range ${d.offset}-${d.offset + d.size - 1}`);
   }
   return centralDirRecords(z.subarray(start, start + d.size), d.entries);
-}
-export function centralDirInfoFromTail(z: Uint8Array, fileSize: number): ZipDirectory {
-  return directoryFromTail(z, fileSize);
 }
 export function centralDir(z: Uint8Array): Map<string, ZEntry> {
   const d = directoryFromTail(z, z.length);
@@ -277,29 +274,30 @@ export function entryBytes(z: Uint8Array, e: ZEntry): Uint8Array {
   const v = new DataView(z.buffer, z.byteOffset, z.byteLength);
   // the local header carries its own name/extra lengths, which may differ from the central ones
   const start = e.off + 30 + v.getUint16(e.off + 26, true) + v.getUint16(e.off + 28, true);
-  const raw = z.subarray(start, start + e.csize);
+  return inflateEntry(z.subarray(start, start + e.csize), e);
+}
+export function inflateEntry(raw: Uint8Array, e: ZEntry): Uint8Array {
   if (e.method === 0) return raw;
   if (e.method === 8) return inflateSync(raw);
   throw rt.mkThrowable("java/util/zip/ZipException", "Invalid compression method " + e.method + ": " + e.name);
 }
-async function centralDirOfSource(source: FileSource): Promise<Map<string, ZEntry>> {
+export async function centralDirOfSource(source: FileSource): Promise<Map<string, ZEntry>> {
   const tailSize = Math.min(22 + 0xffff, source.size);
   const tail = await readFully(source, source.size - tailSize, tailSize);
-  const info = centralDirInfoFromTail(tail, source.size);
+  const info = directoryFromTail(tail, source.size);
   if (info.offset >= source.size - tail.length) return centralDirFromTail(tail, source.size);
   return centralDirRecords(await readFully(source, info.offset, info.size), info.entries);
 }
-async function entryBytesOfSource(source: FileSource, e: ZEntry): Promise<Uint8Array> {
+export async function localDataOffset(source: FileSource, e: ZEntry): Promise<number> {
   const header = await readFully(source, e.off, 30);
   const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
   if (header.length !== 30 || view.getUint32(0, true) !== 0x04034b50) {
     throw rt.mkThrowable("java/util/zip/ZipException", "Invalid local header: " + e.name);
   }
-  const start = e.off + 30 + view.getUint16(26, true) + view.getUint16(28, true);
-  const raw = await readFully(source, start, e.csize);
-  if (e.method === 0) return raw;
-  if (e.method === 8) return inflateSync(raw);
-  throw rt.mkThrowable("java/util/zip/ZipException", "Invalid compression method " + e.method + ": " + e.name);
+  return e.off + 30 + view.getUint16(26, true) + view.getUint16(28, true);
+}
+async function entryBytesOfSource(source: FileSource, e: ZEntry): Promise<Uint8Array> {
+  return inflateEntry(await readFully(source, await localDataOffset(source, e), e.csize), e);
 }
 /** A zip as the file tree the rest of the boot reads, materialised one entry at a time: a
  *  stored entry is a view into bytes we already hold and costs nothing, a deflated one is
