@@ -23,6 +23,38 @@ import { jarray, mangleMethod } from "../jvm/abi";
 import { usLocale } from "../jvm/natives/jvalues";
 import { perf } from "../perf";
 
+/** one wrap result: the lines, each line's width, and the widest */
+export type Wrapped = { lines: string[]; widths: number[]; maxW: number };
+const NO_LINES: Wrapped = { lines: [], widths: [], maxW: 0 };
+/**
+ * Line breaking memo. Every input the breaker reads is part of the key, so any change that alters
+ * the lines misses and nothing has to invalidate it; letter spacing is keyed on its own because
+ * font() leaves it out. Two widths are kept because onMeasure wraps at the space it is offered
+ * and then at the width it settles on.
+ */
+class WrapMemo {
+  text = ""; font = ""; ls = NaN; max = NaN; single = false; ell = false;
+  a0 = NaN; w0 = NO_LINES; a1 = NaN; w1 = NO_LINES;
+  get(tv: JTextView, text: string, avail: number): Wrapped {
+    const p = tv.paintT, font = p.font();
+    if (text === this.text && font === this.font && p.letterSpacingEm === this.ls && tv.maxLinesV === this.max &&
+        tv.singleLine === this.single && tv.ellipsizeEnd === this.ell) {
+      if (avail === this.a0) { perf.wrapHits++; return this.w0; }
+      if (avail === this.a1) { perf.wrapHits++; return this.w1; }
+    } else {
+      this.text = text; this.font = font; this.ls = p.letterSpacingEm; this.max = tv.maxLinesV;
+      this.single = tv.singleLine; this.ell = tv.ellipsizeEnd;
+      this.a0 = this.a1 = NaN;
+    }
+    const lines = tv.breakLines(text, avail), widths = new Array<number>(lines.length);
+    let maxW = 0;
+    for (let i = 0; i < lines.length; i++) { const w = measureText(p, lines[i]); widths[i] = w; if (w > maxW) maxW = w; }
+    this.a1 = this.a0; this.w1 = this.w0;
+    this.a0 = avail;
+    return (this.w0 = { lines, widths, maxW });
+  }
+}
+
 export class JTextView extends JView {
   /** kept for the app to read back; text is drawn untransformed */
   transformation: unknown = null;
@@ -32,7 +64,9 @@ export class JTextView extends JView {
   imeOptions = 0; breakStrategy = 0; hyphenation = 0; autoSizeType = 0;
   linksClickable = true; fontVariation: string | null = null;
   maxW = Infinity;
-  layoutObj: unknown = null; layoutKey = "";
+  /** getLayout's StaticLayout and the inputs it was built from */
+  layoutObj: unknown = null;
+  layoutText = ""; layoutW = NaN; layoutFont = ""; layoutMax = NaN; layoutLS = NaN; layoutMult = NaN; layoutExtra = NaN;
   text = "";
   rawText: unknown = "";       // original CharSequence (may be Spannable)
   hint = "";
@@ -63,7 +97,10 @@ export class JTextView extends JView {
   cursorVisible = true;
   /** when the caret last restarted its blink: focus and every edit, as AOSP's Editor.Blink does */
   blinkStart = 0;
+  /** the lines this view laid out and draws, with each line's width */
   lines: string[] = [];
+  lineWidths: number[] = [];
+  wrapMemo: WrapMemo | null = null; hintMemo: WrapMemo | null = null;
   layoutWidthFor = -1;
   inputTypeV = 1;
   styleBits = 0;
@@ -89,9 +126,10 @@ export class JTextView extends JView {
   bottomPad(): number { return this.includePad ? Math.round(fontBottom(this.paintT) - fontDescent(this.paintT)) : 0; }
   textHeight(lines: number): number { return lines * this.lineHeight() + this.topPad() + this.bottomPad(); }
   ascent(): number { return Math.round(-fontAscent(this.paintT)) + this.topPad(); }
-  wrap(avail: number): string[] {
+  /** line breaking of `text` at `avail`: a pure function of its arguments, the paint and the
+   *  flags WrapMemo keys on. Callers go through linesFor/hintFor. */
+  breakLines(text: string, avail: number): string[] {
     perf.wraps++;
-    const text = this.displayText();
     if (avail <= 0) return text ? [text] : [];
     // measureText memoises on (font, string) and applies letter spacing; ctx.measureText did
     // neither, so every probe of the break search went to the browser and no line accounted for
@@ -155,13 +193,19 @@ export class JTextView extends JView {
     this.editObj.text = this.text;
     return this.editObj;
   }
-  wrapHint(avail: number): string[] {
-    const saveText = this.text;
-    this.text = this.hint;
-    const lines = this.wrap(avail);
-    this.text = saveText;
-    return lines;
+  /** the text's lines at `avail` */
+  linesFor(avail: number): Wrapped { return (this.wrapMemo ??= new WrapMemo()).get(this, this.displayText(), avail); }
+  /** an empty field draws its hint every frame, so the hint keeps a memo of its own */
+  private hintUpperOf = ""; private hintUpper = "";
+  hintFor(avail: number): Wrapped {
+    let hint = this.hint;
+    if (this.allCaps) {
+      if (this.hintUpperOf !== hint) { this.hintUpperOf = hint; this.hintUpper = hint.toUpperCase(); }
+      hint = this.hintUpper;
+    }
+    return (this.hintMemo ??= new WrapMemo()).get(this, hint, avail);
   }
+  useLines(w: Wrapped) { this.lines = w.lines; this.lineWidths = w.widths; }
 }
 const tvAttr = attrTable(
   "text", "textSize", "textColor", "textStyle", "textAppearance", "hint", "gravity", "maxLines",
@@ -484,10 +528,12 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const dlW = this.drawableL ? Math.max(0, this.drawableL.intrinsicW()) + this.drawablePad : 0;
     const drW = this.drawableR ? Math.max(0, this.drawableR.intrinsicW()) + this.drawablePad : 0;
     const w = this.layoutWidthFor - this.padL - this.padR - dlW - drW;
-    const key = this.displayText() + "\u0000" + w + "\u0000" + this.paintT.font() + "\u0000" + this.maxLinesV;
-    if (this.layoutKey !== key) {
-      this.layoutKey = key;
-      this.layoutObj = mkStaticLayout(this.displayText(), this.paintT, w, this.lineSpacingMult, this.lineSpacingExtra, Number.isFinite(this.maxLinesV) ? this.maxLinesV : undefined);
+    const p = this.paintT, text = this.displayText(), font = p.font();
+    if (text !== this.layoutText || w !== this.layoutW || font !== this.layoutFont || this.maxLinesV !== this.layoutMax ||
+        p.letterSpacingEm !== this.layoutLS || this.lineSpacingMult !== this.layoutMult || this.lineSpacingExtra !== this.layoutExtra) {
+      this.layoutText = text; this.layoutW = w; this.layoutFont = font; this.layoutMax = this.maxLinesV;
+      this.layoutLS = p.letterSpacingEm; this.layoutMult = this.lineSpacingMult; this.layoutExtra = this.lineSpacingExtra;
+      this.layoutObj = mkStaticLayout(text, p, w, this.lineSpacingMult, this.lineSpacingExtra, Number.isFinite(this.maxLinesV) ? this.maxLinesV : undefined);
     }
     return this.layoutObj;
   },
@@ -531,11 +577,10 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const display = this.displayText() || "";
     if (wMode === MS_EXACTLY) {
       w = wSize;
-      this.lines = this.wrap(w - this.padL - this.padR - dlW);
+      this.useLines(this.linesFor(w - this.padL - this.padR - dlW));
     } else {
-      this.lines = this.wrap(availText);
-      let tw = 0;
-      for (const l of this.lines) tw = Math.max(tw, measureText(this.paintT, l));
+      let lay = this.linesFor(availText);
+      let tw = lay.maxW;
       if (!display && this.hint) tw = Math.max(tw, measureText(this.paintT, this.hint));
       w = Math.ceil(tw) + this.padL + this.padR + dlW;
       w = Math.min(Math.max(w, this.minW), this.maxW);
@@ -544,7 +589,8 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       // stay wrapped for the desired width, so a clamp leaves both the height (too few lines)
       // and the draw (a line wider than the view, silently clipped) wrong.
       const finalAvail = w - this.padL - this.padR - dlW;
-      if (finalAvail < availText) this.lines = this.wrap(finalAvail);
+      if (finalAvail < availText) lay = this.linesFor(finalAvail);
+      this.useLines(lay);
     }
     const lineCount = Math.max(this.lines.length, display || this.hint ? 1 : 0, this.minLinesV);
     const vPad = this.padT + this.padB;
@@ -580,10 +626,11 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     }
     const avail = contentR - contentL;
     if (this.layoutWidthFor !== this.width()) {
-      this.lines = this.wrap(avail);
+      this.useLines(this.linesFor(avail));
       this.layoutWidthFor = this.width();
     }
-    const lines = showHint ? this.wrapHint(avail) : this.lines;
+    const hintLay = showHint ? this.hintFor(avail) : null;
+    const lines = hintLay ? hintLay.lines : this.lines, widths = hintLay ? hintLay.widths : this.lineWidths;
     if (!lines.length && !this.editable) return;
     const lh = this.lineHeight();
     const totalH = this.textHeight(Math.max(1, lines.length));
@@ -596,18 +643,18 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const hg = gravityH(this.gravityT);
     ctx.textAlign = hg === 1 ? "center" : hg === 5 ? "right" : "left";
     const x = hg === 1 ? (contentL + contentR) / 2 : hg === 5 ? contentR : contentL;
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       ctx.fillText(line, x, y);
       if (this.paintT.strikeThru && line) {
-        const w = measureText(this.paintT, line);
+        const w = widths[i];
         const sx = hg === 1 ? x - w / 2 : hg === 5 ? x - w : x;
         ctx.fillRect(sx, y - this.paintT.textSize * 0.3, w, Math.max(1, this.paintT.textSize / 14));
       }
       y += lh;
     }
     if (this.editable && this.focused && this.cursorVisible && Math.floor((performance.now() - this.blinkStart) / 500) % 2 === 0) {
-      const lastLine = lines[lines.length - 1] ?? "";
-      const cw = measureText(this.paintT, lastLine);
+      const cw = widths[lines.length - 1] ?? 0;
       const cx = (hg === 1 ? x + cw / 2 : hg === 5 ? x : x + cw) + 1;
       const cy = y - lh;
       ctx.fillStyle = cssColor(cslColor(this.colors, []));
