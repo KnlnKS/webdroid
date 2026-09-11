@@ -75,6 +75,13 @@ inset dispatch and broader dialog themes. A follow-up Android probe covers 48x24
 uses its measured size. Typecheck and the complete geometry probe pass; all 39 FitNotes
 PNGs are byte-identical to the window checkpoint, with no additional diagnostics.
 
+The SDK now has a controlled Twice action (second animation after 50 ms). Both Android
+and browser deliver one cancellation and one completion; both accept marker clicks at
+the resulting camera position. Android emits idle after completion. Webdroid instead
+emits idle before cancellation and none after completion, with all three reached
+runtime diagnostic sets empty. This is a reproduced platform divergence, not an upstream
+waiver. Trace camera-event/Handler ordering before changing callbacks or timings.
+
 A fresh test tab is open in Chrome at `http://localhost:41979/?apk=GmsClient.apk`.
 The user has been asked to complete the authorized Google sign-in directly in that
 tab; no credentials or challenge responses have been supplied in this run. The

@@ -17,9 +17,9 @@ adb shell am start -n org.webdroid.gmsclient/.MapProbeActivity
 adb logcat -s GmsClientMap:I '*:S'
 ```
 
-For interruption/lifecycle coverage, press Animate twice within its 500 ms duration:
-expect one cancellation and one completion. The intermediate/final zoom depends on
-when the second action arrives. Press Move again to establish a fixed camera before
+For interruption/lifecycle coverage, Twice schedules another 500 ms animation after
+50 ms: expect one cancellation and one completion. This avoids ADB command latency.
+The intermediate/final zoom depends on when the second action arrives. Press Move again to establish a fixed camera before
 adding a marker. Drag the map, reset with Move, replace the marker and click it, then
 go Back and reopen the probe; the new activity should load with fresh callback counts.
 Check exceptions as well as callbacks: a partially handled gesture can still move the

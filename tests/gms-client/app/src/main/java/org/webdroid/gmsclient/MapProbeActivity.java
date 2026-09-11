@@ -33,10 +33,11 @@ public class MapProbeActivity extends Activity {
         LinearLayout controls = new LinearLayout(this);
         layout.addView(controls);
         button(controls, "Move", () -> map.moveCamera(CameraUpdateFactory.newLatLngZoom(new LatLng(51.5074, -0.1278), 10)));
-        button(controls, "Animate", () -> map.animateCamera(CameraUpdateFactory.zoomBy(1), 500, new GoogleMap.CancelableCallback() {
-            @Override public void onFinish() { finished++; trace("finished"); }
-            @Override public void onCancel() { canceled++; trace("canceled"); }
-        }));
+        button(controls, "Animate", this::animate);
+        button(controls, "Twice", () -> {
+            animate();
+            view.postDelayed(this::animate, 50);
+        });
         button(controls, "Marker", () -> {
             if (marker != null) marker.remove();
             marker = map.addMarker(new MarkerOptions().position(map.getCameraPosition().target).title("SDK marker"));
@@ -53,6 +54,13 @@ public class MapProbeActivity extends Activity {
             map.setOnMarkerClickListener(clicked -> { clicks++; trace("marker clicked"); return false; });
             map.setOnMapClickListener(point -> trace("map clicked"));
             trace("ready");
+        });
+    }
+
+    private void animate() {
+        map.animateCamera(CameraUpdateFactory.zoomBy(1), 500, new GoogleMap.CancelableCallback() {
+            @Override public void onFinish() { finished++; trace("finished"); }
+            @Override public void onCancel() { canceled++; trace("canceled"); }
         });
     }
 

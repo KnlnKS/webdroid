@@ -1131,3 +1131,27 @@ Only the existing exception's bundle hash changes. Evidence:
 `/tmp/webdroid-window-small-fitnotes.log` and
 `/tmp/webdroid-window-small-fitnotes-before/`. Goldens remain unchanged; the generated
 report currently shows only this selected flow, while other full-run captures remain.
+
+
+### 2026-09-11 — Controlled map animation interruption
+
+A new SDK Twice control starts a 500 ms animation and posts another after 50 ms on
+its view's main queue. Separate ADB taps previously missed the interruption window.
+This fixture changes only the test APK; genuine Maps/microG/Mapbox bytecode is untouched.
+Both platforms now deliver one cancellation and one completion. Android emits camera
+idle after completion (idle count 2 at cancel/finish, then 3). Webdroid emits idle before
+cancellation (count 3 already at cancel) and emits none after completion. The callback
+ordering difference therefore reproduces against the same pinned microG build on the
+dedicated Android reference and must not be dismissed as an upstream limitation.
+
+Both platforms deliver a marker click at the resulting, unreset camera position, then
+pan, reset the camera, replace the marker and click again. Browser teardown/reopen also
+reaches loaded. Its three reached runtimes include NativeMapView's and have empty missing
+sets and error lists. This narrows the earlier variable-camera miss after the coordinate
+fix; it is not exhaustive hit-test parity. Android's intermediate/final zoom differs
+because real execution timing differs; it is not a fixed-camera pixel comparison.
+
+Build and smoke pass (6678 classes, zero method failures). Evidence:
+`/tmp/webdroid-map-twice-{android,browser}.log`, browser JSON, stage screenshots and
+`...-{build,smoke}.log`. Production remains at `6f47f86`; investigate event dispatch and
+main-queue ordering next, without replacing or fabricating SDK callbacks.
