@@ -561,44 +561,61 @@ const relativeMethods: NativeSpec["methods"] = {
     pos.clear();
     const byId = new Map<number, JView>();
     for (const c of kids) if (c.idNum > 0) byId.set(c.idNum, c);
-    const anchorPos = (v: JView) => pos.get(v) ?? { l: v.left, t: v.top };
+    // a rule naming a later sibling reads where that sibling sat last pass until this pass places it
+    let forward = false;
+    const anchorPos = (v: JView) => {
+      const p = pos.get(v);
+      if (p) return p;
+      forward = true;
+      return { l: v.left, t: v.top };
+    };
     let maxR = 0, maxB = 0;
-    for (const c of kids) {
-      const lp = c.lp instanceof JRelativeLP ? c.lp : null;
-      const m = c.lp instanceof JMarginLP ? c.lp : NO_MARGIN;
-      let l = this.padL + m.marginL;
-      let t = this.padT + m.marginT;
-      if (lp) {
-        const anchor = (verb: number): JView | null => {
-          const id = lp.rules.get(verb);
-          return id && id > 0 ? byId.get(id) ?? null : null;
-        };
-        if (lp.rules.get(RL.ALIGN_PARENT_RIGHT)) l = availW - this.padR - c.measuredW - m.marginR;
-        if (lp.rules.get(RL.CENTER_HORIZONTAL) || lp.rules.get(RL.CENTER_IN_PARENT)) l = (availW - c.measuredW) >> 1;
-        if (lp.rules.get(RL.ALIGN_PARENT_BOTTOM)) t = availH - this.padB - c.measuredH - m.marginB;
-        if (lp.rules.get(RL.CENTER_VERTICAL) || lp.rules.get(RL.CENTER_IN_PARENT)) t = (availH - c.measuredH) >> 1;
-        const rOf = anchor(RL.RIGHT_OF);
-        if (rOf) l = anchorPos(rOf).l + rOf.measuredW + m.marginL;
-        const lOf = anchor(RL.LEFT_OF);
-        if (lOf) l = anchorPos(lOf).l - c.measuredW - m.marginR;
-        const below = anchor(RL.BELOW);
-        if (below) t = anchorPos(below).t + below.measuredH + m.marginT;
-        const above = anchor(RL.ABOVE);
-        if (above) t = anchorPos(above).t - c.measuredH - m.marginB;
-        const aL = anchor(RL.ALIGN_LEFT);
-        if (aL) l = anchorPos(aL).l;
-        const aT = anchor(RL.ALIGN_TOP);
-        if (aT) t = anchorPos(aT).t;
-        const aR = anchor(RL.ALIGN_RIGHT);
-        if (aR) l = anchorPos(aR).l + aR.measuredW - c.measuredW;
-        const aB = anchor(RL.ALIGN_BOTTOM);
-        if (aB) t = anchorPos(aB).t + aB.measuredH - c.measuredH;
-        const aBase = anchor(RL.ALIGN_BASELINE);
-        if (aBase) t = anchorPos(aBase).t;
+    // AOSP sorts the children by their anchor graph. Walking them in order instead, a forward
+    // reference resolves on a later walk: repeat until nothing moves, which a chain of n
+    // children needs at most n times.
+    for (let walk = 0, moved = true; moved && walk <= kids.length; walk++) {
+      moved = false; maxR = 0; maxB = 0;
+      for (const c of kids) {
+        const lp = c.lp instanceof JRelativeLP ? c.lp : null;
+        const m = c.lp instanceof JMarginLP ? c.lp : NO_MARGIN;
+        let l = this.padL + m.marginL;
+        let t = this.padT + m.marginT;
+        if (lp) {
+          const anchor = (verb: number): JView | null => {
+            const id = lp.rules.get(verb);
+            return id && id > 0 ? byId.get(id) ?? null : null;
+          };
+          if (lp.rules.get(RL.ALIGN_PARENT_RIGHT)) l = availW - this.padR - c.measuredW - m.marginR;
+          if (lp.rules.get(RL.CENTER_HORIZONTAL) || lp.rules.get(RL.CENTER_IN_PARENT)) l = (availW - c.measuredW) >> 1;
+          if (lp.rules.get(RL.ALIGN_PARENT_BOTTOM)) t = availH - this.padB - c.measuredH - m.marginB;
+          if (lp.rules.get(RL.CENTER_VERTICAL) || lp.rules.get(RL.CENTER_IN_PARENT)) t = (availH - c.measuredH) >> 1;
+          const rOf = anchor(RL.RIGHT_OF);
+          if (rOf) l = anchorPos(rOf).l + rOf.measuredW + m.marginL;
+          const lOf = anchor(RL.LEFT_OF);
+          if (lOf) l = anchorPos(lOf).l - c.measuredW - m.marginR;
+          const below = anchor(RL.BELOW);
+          if (below) t = anchorPos(below).t + below.measuredH + m.marginT;
+          const above = anchor(RL.ABOVE);
+          if (above) t = anchorPos(above).t - c.measuredH - m.marginB;
+          const aL = anchor(RL.ALIGN_LEFT);
+          if (aL) l = anchorPos(aL).l;
+          const aT = anchor(RL.ALIGN_TOP);
+          if (aT) t = anchorPos(aT).t;
+          const aR = anchor(RL.ALIGN_RIGHT);
+          if (aR) l = anchorPos(aR).l + aR.measuredW - c.measuredW;
+          const aB = anchor(RL.ALIGN_BOTTOM);
+          if (aB) t = anchorPos(aB).t + aB.measuredH - c.measuredH;
+          const aBase = anchor(RL.ALIGN_BASELINE);
+          if (aBase) t = anchorPos(aBase).t;
+        }
+        const p = pos.get(c);
+        if (!p) pos.set(c, { l, t });
+        else if (p.l !== l || p.t !== t) { p.l = l; p.t = t; moved = true; }
+        maxR = Math.max(maxR, l + c.measuredW + m.marginR);
+        maxB = Math.max(maxB, t + c.measuredH + m.marginB);
       }
-      pos.set(c, { l, t });
-      maxR = Math.max(maxR, l + c.measuredW + m.marginR);
-      maxB = Math.max(maxB, t + c.measuredH + m.marginB);
+      // the first walk places everything; only a forward reference makes a second one worth it
+      if (walk === 0) moved = forward;
     }
     this.measuredW = resolveSizeAndState(maxR + this.padR, wSpec);
     this.measuredH = resolveSizeAndState(maxB + this.padB, hSpec);
