@@ -37,49 +37,8 @@ bun run e2e --shots                   # also save every distinct frame per step 
 
 `--test` works the same way on `e2e:record` and `e2e:diff`.
 
-### Authenticated Reddit diagnostic
-
-With `REDDIT_USERNAME` and `REDDIT_PASSWORD` supplied in the environment, run:
-
-```bash
-WEBDROID_URL=http://localhost:4090 bun tests/e2e/reddit.ts
-```
-
-This separate, opt-in smoke run signs in and exercises the feed, navigation drawer, Back,
-and a post with comments and an empty composer at 1080×2424 @480dpi. It saves only post-login screenshots and
-redacted text/telemetry to `actual/reddit/`; it never records credential screens. Run it
-sequentially with the main suite. Live feed content can move the post target or select an
-image lightbox, so a timeout is a diagnostic failure to inspect, not proof of an emulator bug.
-`REDDIT_OUT_DIR` selects a separate diagnostic directory. Login uses a running wall clock and
-waits for the IME input connection before typing; pre-login failures record redacted drawn text,
-logs, missing APIs and performance data without screenshots.
-
-Completion requires newly presented canvas text: post detail must draw "Join the
-conversation" plus two new prose strings of at least 24 characters, scrolling must reach
-"Reply" and additional prose absent from the initial post frame, and Back must remove the
-detail marker. These are content checks, not semantic identification of individual comments;
-live posts without enough text may fail. The synchronous canvas observer includes Compose
-replay, but clipping and occlusion still require screenshot inspection.
-
-The run fails on new Java/page errors, native faults, layout/draw/GL errors or a wedged main
-loop. Missing API queries are recorded without automatically failing: optional platform
-queries can be legitimate. Explicit Chromium-style WARNING/INFO/DEBUG messages sent to stderr
-remain in the warning and raw-log records. Comment swipes complete before subsequent gestures,
-and the view settles before opening the composer. A host-side ten-minute deadline closes the browser even when a
-renderer evaluation is stuck; `REDDIT_TIMEOUT_MS` overrides it. Failure details and host page
-errors still reach `run.json` when page-side diagnostics cannot finish.
-
-This smoke does not establish video playback, image lightbox, search, subreddit, profile,
-settings, notifications, Create, deep-link or mutation coverage. It neither votes nor submits
-comments. Keep separate manual artifacts for those paths. Per-step `contentMs` measures the
-action and text polling, `captureMs` measures snapshot/telemetry work, and `ms` includes both;
-feed/comments captures have no action latency. The separately controlled stock-Chrome text
-post measurement was 3.70 s first content and 2.19–2.31 s warm, with screenshot completion
-measured separately; see the implementation history. This live smoke is not that benchmark.
-
 `WEBDROID_JS_FLAGS='--no-sparkplug --no-maglev'` opts either webdroid driver into a controlled
-V8-tier experiment. The Reddit run records the supplied flags. Leave it unset when measuring
-stock-browser behavior.
+V8-tier experiment. Leave it unset when measuring stock-browser behavior.
 
 A flow with no `golden/<flow>/manifest.json` runs in **smoke mode**: every step still executes,
 `actual/<flow>/run.json` records rendered/wedged/`newMissing`/`newErrors`/perf/fps per step,

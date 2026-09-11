@@ -31,7 +31,7 @@ async function treeDiffFor(goldenDir: string, actualDir: string, rec: RecordedSt
   return diffTrees(golden, await Bun.file(actualFile).json());
 }
 
-export async function diffFlow(flow: Flow, runs?: StepRun[]): Promise<FlowReport> {
+async function diffFlow(flow: Flow, runs?: StepRun[]): Promise<FlowReport> {
   const goldenDir = `${E2E_DIR}golden/${flow.app}`;
   const actualDir = `${E2E_DIR}actual/${flow.app}`;
   const sxsDir = `${E2E_DIR}report/${flow.app}-sxs`;

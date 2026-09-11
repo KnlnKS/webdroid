@@ -4,7 +4,7 @@
 import { stableFrame } from "./settle";
 import type { Screen, UiNode } from "../types";
 
-export type ProbeConfig = {
+type ProbeConfig = {
   /** the instant Date is pinned to; null runs on the wall clock */
   fixedMs: number | null;
   /** localStorage entries written before the page boots, when absent */
@@ -62,11 +62,7 @@ declare global {
   var wd: any;
   var __wd: {
     step(spec: StepSpec): Promise<StepResult>;
-    settle(opts: SettleOpts): Promise<Settled>;
-    capture(): Promise<string>;
     act(a: Act, screen: Screen, deadlineMs: number): Promise<boolean | undefined>;
-    /** pending timers as ms until due, parks marked negative: what "timers" in a busy record means */
-    timers(): number[];
   };
 }
 
@@ -311,11 +307,7 @@ function installProbe(cfg: ProbeConfig): void {
       frames,
     };
   };
-  const pendingTimers = () => {
-    const now = performance.now(), wd = g.wd;
-    return [...timers].map(([id, at]) => (wd.timedParks.has(id) ? -1 : 1) * Math.round(at - now)).sort((a, b) => a - b);
-  };
-  g.__wd = { step, settle, capture, act, timers: pendingTimers };
+  g.__wd = { step, act };
 }
 
 /** The init script: the stability rule and the probe, installed with the flow's configuration. */

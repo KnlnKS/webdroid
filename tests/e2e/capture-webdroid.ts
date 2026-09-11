@@ -65,7 +65,7 @@ export async function loadManifest(app: string): Promise<Manifest | undefined> {
  * as JSON under `wd:prefs:<pkg>:<name>` (see JSharedPrefs.persist), so parse rather than
  * duplicate the data in a second format.
  */
-export function prefsStorage(pkg: string, xml: string): [string, string] {
+function prefsStorage(pkg: string, xml: string): [string, string] {
   const map: Record<string, unknown> = {};
   for (const m of xml.matchAll(/<(string|boolean|int|long|float)\s+name="([^"]+)"(?:\s+value="([^"]*)")?\s*(?:\/>|>([\s\S]*?)<\/\1>)/g)) {
     const [, kind, name, attr, text] = m;
@@ -89,7 +89,7 @@ export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = fa
 }
 
 /** The probe action for a step, with the recorded coordinate as the tapText fallback. */
-export function actOf(flow: Flow, step: Step, rec?: RecordedStep): Act {
+function actOf(flow: Flow, step: Step, rec?: RecordedStep): Act {
   const a = step.action;
   switch (a.type) {
     case "launch": return { type: "boot", apk: flow.apk };
