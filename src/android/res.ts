@@ -369,6 +369,10 @@ export function resolveStyleValue(res: Resources, theme: JTheme | null | undefin
 
 /** the string resource `id` names, "" when it is not one */
 export const resString = (res: Resources, id: number): string => rvString(res, res.ref(id)) ?? "";
+export function bagStrings(res: Resources, id: number): string[] {
+  const bag = res.bag(id);
+  return bag ? [...bag.map.values()].map((v) => rvString(res, res.resolveRefs(v)) ?? "") : [];
+}
 export function rvString(res: Resources, v: RV | null): string | null {
   if (!v || v.t === TV.NULL) return null;
   if (v.s !== undefined && (v.t === T_STR || v.t === TV.STRING)) return v.s;

@@ -1,4 +1,4 @@
-import { AID } from "./res";
+import { AID, resString } from "./res";
 import { JView, requestLayout, initViewFromCtx, guardCall, invalidate, specMode, specSize, MS_UNSPEC, MS_EXACTLY, MS_AT_MOST, resolveSizeAndState, setFocusHook, removeFrom } from "./view";
 import {
   type JColorStateList, mkCsl, type JDrawable, loadColorStateList, loadDrawableRV, cslColor, loadDrawable,
@@ -295,7 +295,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     return vcall(this, "setText", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", cs, bufferTypes[0]);
   }),
   "setText(I)V": async function (this: JTextView, id: number) {
-    const s = this.jres ? rvString(this.jres, this.jres.resolveRefs({ t: TV.REFERENCE, d: id })) ?? "" : "";
+    const s = this.jres ? resString(this.jres, id) : "";
     await guardCall(this, mangleMethod("setText", "(Ljava/lang/CharSequence;)V"), s);
   },
   "setText(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V": async function (this: JTextView, cs: unknown) {
@@ -315,7 +315,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "length()I": function (this: JTextView) { return this.text.length; },
   "setHint(Ljava/lang/CharSequence;)V": function (this: JTextView, cs: unknown) { this.hint = spannedString(cs); invalidate(); },
   "setHint(I)V": function (this: JTextView, id: number) {
-    this.hint = this.jres ? rvString(this.jres, this.jres.resolveRefs({ t: TV.REFERENCE, d: id })) ?? "" : "";
+    this.hint = this.jres ? resString(this.jres, id) : "";
   },
   "getHint()Ljava/lang/CharSequence;": function (this: JTextView) { return this.hint; },
   "setTextSize(F)V": function (this: JTextView, sp: number) {

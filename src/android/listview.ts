@@ -1,4 +1,4 @@
-import { AID } from "./res";
+import { AID, bagStrings } from "./res";
 // AdapterView/ListView/GridView + framework adapters (BaseAdapter/ArrayAdapter).
 // Non-recycling: materializes all item views (fine at app scale), scrolls internally.
 
@@ -135,10 +135,7 @@ rt.register({
         a.jctx = c;
         a.layoutRes = layout;
         const res: Resources = c.$host.res;
-        const bag = res.bag(arrRes);
-        if (bag) {
-          a.items = [...bag.map.values()].map((v) => rvString(res, res.resolveRefs(v)) ?? "");
-        }
+        a.items = bagStrings(res, arrRes);
         return a;
       },
   },

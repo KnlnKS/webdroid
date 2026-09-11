@@ -8,7 +8,7 @@ import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runt
 import { mangleMethod } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { attr, TV, parseAXML, type XmlNode } from "./axml";
-import { JAttrSet, normRV, resString, rvString, type Resources, type RV, JTheme } from "./res";
+import { JAttrSet, normRV, resString, rvString, type Resources, type RV, JTheme, bagStrings } from "./res";
 import { JView, JLinearLP, attachView } from "./view";
 import { tfMedium } from "./graphics";
 import { JLinearLayout } from "./layouts";
@@ -40,10 +40,6 @@ function attrBool(res: Resources, node: XmlNode, name: string, dflt: boolean): b
   if (v.t === TV.BOOLEAN) return !!v.d;
   const s = rvString(res, res.resolveRefs(v));
   return s ? s === "true" : dflt;
-}
-function bagStrings(res: Resources, id: number): string[] {
-  const bag = res.bag(id);
-  return bag ? [...bag.map.values()].map((v) => rvString(res, res.resolveRefs(v)) ?? "") : [];
 }
 function attrStringArray(res: Resources, node: XmlNode, name: string): string[] {
   const a = attr(node, name);

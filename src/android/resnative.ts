@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newXmlPullParser } from "./xmlpull";
-import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV } from "./res";
+import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
 import { JTypedValue, complexToFraction } from "./util";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
@@ -301,8 +301,8 @@ const resMethods: NativeSpec["methods"] = {
     function (this: JResources, id: number, t: JTheme | null) {
       return loadDrawable(this.host, id, t);
     }),
-  "getStringArray(I)[Ljava/lang/String;": function (this: JResources, id: number) { return jarray(stringArray(this.host, id), "Ljava/lang/String;"); },
-  "getTextArray(I)[Ljava/lang/CharSequence;": function (this: JResources, id: number) { return jarray(stringArray(this.host, id), "Ljava/lang/CharSequence;"); },
+  "getStringArray(I)[Ljava/lang/String;": function (this: JResources, id: number) { return jarray(bagStrings(this.host, id), "Ljava/lang/String;"); },
+  "getTextArray(I)[Ljava/lang/CharSequence;": function (this: JResources, id: number) { return jarray(bagStrings(this.host, id), "Ljava/lang/CharSequence;"); },
   "getIntArray(I)[I": function (this: JResources, id: number) {
     return Int32Array.from(arrayValues(this.host, id).map((v) => rvInt(this.host, this.host.resolveRefs(v), 0)));
   },
@@ -384,10 +384,6 @@ function xmlParser(this: JResources, id: number) { return mkXmlParser(this.host,
 function arrayValues(res: Resources, id: number): RV[] {
   const bag = res.bag(id);
   return bag ? [...bag.map.values()] : [];
-}
-/** a string-array/plurals-like bag as strings, references followed */
-function stringArray(res: Resources, id: number): string[] {
-  return arrayValues(res, id).map((v) => rvString(res, res.resolveRefs(v)) ?? "");
 }
 function pluralString(res: Resources, id: number, n: number): string | null {
   const bag = res.bag(id);
@@ -472,7 +468,7 @@ rt.register({
     "getText(I)Ljava/lang/CharSequence;": function (this: JTypedArray, i: number) { return rvString(this.res, this.vals[i]); },
     "getTextArray(I)[Ljava/lang/CharSequence;": function (this: JTypedArray, i: number) {
       const v = this.vals[i];
-      return v && v.t === TV.REFERENCE && v.d ? jarray(stringArray(this.res, v.d), "Ljava/lang/CharSequence;") : null;
+      return v && v.t === TV.REFERENCE && v.d ? jarray(bagStrings(this.res, v.d), "Ljava/lang/CharSequence;") : null;
     },
     "getNonResourceString(I)Ljava/lang/String;": function (this: JTypedArray, i: number) { return rvString(this.res, this.vals[i]); },
     "getBoolean(IZ)Z": function (this: JTypedArray, i: number, d: number) {

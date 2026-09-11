@@ -1,4 +1,4 @@
-import { AID } from "./res";
+import { AID, resString } from "./res";
 // android.app.Dialog / AlertDialog rendered as overlays (scrim + centered card).
 
 import { rt, JObj, type NativeSpec, callSelf, maySuspend, stubs, noops } from "../jvm/runtime";
@@ -15,7 +15,7 @@ import { JCanvas, tfMedium , JRect } from "./graphics";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
 import { reportUncaught } from "./os";
-import { rvString, rvInt, rvFloat, rvDimen, themeOf, JTheme } from "./res";
+import { rvInt, rvFloat, rvDimen, themeOf, JTheme } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
 import { inflateLayout, getInflater } from "./inflate";
@@ -227,7 +227,7 @@ class JDialog extends JObj {
 /** A title/message/button text arrives as a resource id or any CharSequence (a Spanned from
  *  Html.fromHtml, an app class); everything resolves to one string here. */
 async function str(host: any, v: unknown): Promise<string> {
-  if (typeof v === "number") return host ? rvString(host.res, host.res.resolveRefs({ t: TV.REFERENCE, d: v })) ?? "" : "";
+  if (typeof v === "number") return host ? resString(host.res, v) : "";
   return csText(v);
 }
 async function setDialogTitle(this: JDialog, t: unknown) { this.titleStr = await str(this.jctx?.$host, t); }
