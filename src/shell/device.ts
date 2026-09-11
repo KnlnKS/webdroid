@@ -104,12 +104,8 @@ export function contentTop(): number {
 const invalidateWindow = () => { uiState.needsLayout = uiState.needsDraw = uiState.needsInsets = true; };
 
 export async function bootApk(input: Uint8Array | Install, onStatus: (s: string) => void, apkFile = "", processName: string | null = null, prepared?: () => void): Promise<BootedApp> {
-  // The android package registers android.R.* and fills the widgets' attr-id tables, so it has to
-  // be here before anything links. main.ts starts the fetch alongside the apk's, so this waits on
-  // nothing in the common case.
-  // The directories a previous session picked, awaited: an app reads its persisted storage URI
-  // while it is starting, and a tree that does not resolve *yet* is one that does not exist as
-  // far as it is concerned — for the whole session, since it caches the answer.
+  // The framework package must be in place before anything links, and restored storage roots
+  // must resolve before the app reads a persisted tree URI: it caches the answer for the session.
   onStatus("unpacking apk…");
   const install = input instanceof Uint8Array ? openInstall(input) : input;
   const zip = install.zip;
@@ -189,7 +185,6 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   const themeResId = themeAttr?.data ?? 0;
   const theme = new JTheme();
   theme.res = res;
-  // sensible base: Material Light, then app theme on top
   const fwMaterial = fwPkg.findId("style", "Theme.Material.Light.DarkActionBar");
   if (fwMaterial) theme.apply(fwMaterial);
   if (themeResId) theme.apply(themeResId);
@@ -246,8 +241,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     try {
       await vcall(application, "<init>", "()V");
       await vcall(application, "attachBaseContext", "(Landroid/content/Context;)V", baseCtx);
-      // ContentProviders run before Application.onCreate (androidx-startup initializers
-      // like WorkManager live here)
+      // ContentProviders install before Application.onCreate
       for (const [pn, node] of providers) {
         if (processName) {
           const declared = attrStr(node, "process") ?? attrStr(appNode!, "process") ?? pkg;
@@ -377,12 +371,8 @@ function changeActivityOrientation(act: JActivity, request: number): void {
   } else recreateActivity(act);
 }
 
-/**
- * The device's own light/dark setting changed under a running app. AOSP delivers that the way it
- * delivers any configuration change: the top activity is told if it declared uiMode in its
- * manifest, and relaunched if it did not. An app following the system reaches its new colours
- * through one of those two doors and no other.
- */
+/** A night-mode change reaches the top activity as any configuration change does: through
+ *  onConfigurationChanged if it declared uiMode, through a relaunch otherwise. */
 function deviceNightChanged(night: boolean): void {
   if (!setDeviceNight(night) || !booted) return;
   uiState.needsLayout = uiState.needsDraw = true;
@@ -399,12 +389,8 @@ globalThis.matchMedia?.("(prefers-color-scheme: dark)")
 
 interface Relaunch { state: JBundle | null; nonConfig: unknown; requestedOrientation: number }
 
-/**
- * A configuration change an activity did not declare in its manifest relaunches it: AOSP saves
- * the instance state and the non-configuration instance, tears the instance down, then starts a
- * fresh one with both. That relaunch IS how such an app sees a new Configuration at all — it is
- * the whole of AppCompat's day/night switch — so recreate() has to do it for real.
- */
+/** An undeclared configuration change relaunches the activity: AOSP saves the instance state and
+ *  the non-configuration instance, tears it down, then starts a fresh one with both. */
 function recreateActivity(act: JActivity): void {
   const cls = (act.constructor as any)?.$i?.name as string | undefined;
   if (!cls || !booted || booted.stack.indexOf(act) < 0) return;
@@ -451,8 +437,7 @@ async function lifecycleStep(act: JActivity, method: string, phase: Parameters<t
 const pauseActivity = (act: JActivity) => lifecycleStep(act, "onPause", "Paused");
 const stopActivity = (act: JActivity) => lifecycleStep(act, "onStop", "Stopped");
 /** Returning to a covered activity: onRestart → onStart → onResume → onPostResume, with the
- *  ActivityLifecycleCallbacks a fresh launch fires. androidx moves its fragments to RESUMED in
- *  onPostResume, so pages created after a round-trip were stuck STARTED without it. */
+ *  ActivityLifecycleCallbacks a fresh launch fires. */
 async function resumeActivity(act: JActivity) {
   if (!act.started) {
     await safeCall(act, "onRestart");
@@ -468,8 +453,7 @@ async function resumeTop(top: JActivity) {
   void buildOptionsMenu(top);
 }
 /** ViewRootImpl reports window focus once the resumed activity's window is up and takes it
- *  away when another window covers it. Only a change is delivered, as the window manager does;
- *  game loops start and stop on this callback, so a silent default left them never started. */
+ *  away when another window covers it; only a change is delivered. */
 async function windowFocus(act: JActivity, has: boolean) {
   if (act.hasWindowFocus === has) return;
   act.hasWindowFocus = has;
@@ -559,8 +543,6 @@ const M_doFrame = mangleMethod("doFrame", "(J)V");
 const M_dispatch = mangleMethod("dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z");
 let drawing = false;
 let sbColor = NaN, sbCss = "";
-/** The status band and its icons: one copy, so the starting window paints the same band the
- *  activity's own frame does. */
 function drawStatusBar(ctx: OffscreenCanvasRenderingContext2D, appearance: number, appearanceMask: number) {
   const sb = booted!.host.statusBarColor;
   if (sb !== sbColor) { sbColor = sb; sbCss = cssColor(sb); }
@@ -595,8 +577,6 @@ let clockMinute = -1, clockText = "";
 // schedule one more full pass; fingerprint prevents re-trigger loops on legit mismatches.
 let lastSettleFp = 0;
 function settleWatch(root: any): void {
-  // Hash rather than concatenate: this walks the whole tree, and building a string per
-  // mismatch made every drawn frame allocate proportionally to the tree.
   let fp = 0, n = 0;
   const stack = [root];
   while (stack.length) {
@@ -809,12 +789,8 @@ async function dispatchPointer0(action: number, x: number, y: number, t: number)
   ev.action = action;
   ev.rawX = x;
   ev.rawY = y;
-  // The same clock SystemClock.uptimeMillis reports, because app code subtracts one from the
-  // other: Compose's velocity tracker divides by this dt, and 0 - 0 is not a duration.
-  // t is when the event was generated, not when the queue got round to it: a gap between two
-  // events has to mean the finger paused, never that the app was busy. A gesture stamps its
-  // events at the times it meant, as an input driver does, so a fling's velocity does not
-  // depend on how loaded the host is.
+  // SystemClock.uptimeMillis's clock, stamped when the event was generated rather than when the
+  // queue reached it, so a fling's velocity does not depend on how loaded the host is.
   ev.eventTime = t;
   if (action === 0) downTime = ev.eventTime;
   ev.downTime = downTime;

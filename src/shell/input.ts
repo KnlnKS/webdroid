@@ -1,8 +1,5 @@
-// Host input: the browser's pointer and wheel streams become Android MotionEvents. The shell
-// owns the mapping from the canvas's CSS box to framebuffer px; the framework only ever sees a
-// MotionEvent and never learns what kind of device produced it, which is the whole point — a
-// trackpad's two-finger swipe is a phone's one-finger drag, so every app scrolls, pages and
-// drags without a line of code that knows about either.
+// Host input: the browser's pointer and wheel streams become Android MotionEvents, so a
+// trackpad's two-finger swipe reaches every app as a phone's one-finger drag.
 import { device } from "./config";
 import { dispatchPointer } from "./device";
 import { setInputElement } from "../android/textview";
