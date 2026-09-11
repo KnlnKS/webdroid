@@ -753,7 +753,7 @@ export function stdioInit(): void {
       }
       const text = dec.decode(data);
       let consumed = 0;
-      const r = scan(text + "", f + "%n", (kind, v) => {
+      const r = scan(text, f + "%n", (kind, v) => {
         if (kind === "n") { consumed = v as number; return 0; }
         const dst = a.p();
         if (!dst) return 0;

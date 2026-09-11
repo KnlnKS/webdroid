@@ -7,7 +7,8 @@ import { hostLib, type HostFn, PTR, stp, ldp } from "./host";
 import { concat } from "../jvm/abi";
 
 // z_stream fields used here. Pointer and ulong fields follow the process pointer width.
-let Z = { IN: 0, AVIN: 4, TIN: 8, OUT: 12, AVOUT: 16, TOUT: 20, MSG: 24, STATE: 28, ADLER: 48 };
+const Z32 = { IN: 0, AVIN: 4, TIN: 8, OUT: 12, AVOUT: 16, TOUT: 20, MSG: 24, STATE: 28, ADLER: 48 };
+let Z = Z32;
 const Z_OK = 0, Z_STREAM_END = 1, Z_NEED_DICT = 2, Z_STREAM_ERROR = -2, Z_DATA_ERROR = -3, Z_BUF_ERROR = -5;
 
 type Wrapper = "raw" | "zlib" | "gzip";
@@ -298,8 +299,7 @@ function deflate(strm: number, flush: number): number {
 }
 
 export function zlibInit(): void {
-  if (PTR === 8) Z = { IN: 0, AVIN: 8, TIN: 16, OUT: 24, AVOUT: 32, TOUT: 40, MSG: 48, STATE: 56, ADLER: 96 };
-  else Z = { IN: 0, AVIN: 4, TIN: 8, OUT: 12, AVOUT: 16, TOUT: 20, MSG: 24, STATE: 28, ADLER: 48 };
+  Z = PTR === 8 ? { IN: 0, AVIN: 8, TIN: 16, OUT: 24, AVOUT: 32, TOUT: 40, MSG: 48, STATE: 56, ADLER: 96 } : Z32;
   const M: Record<string, HostFn> = {
     deflateInit_: (_c, a) => { const strm = a.p(), level = a.i(); a.str(); a.i(); return openEncoder(strm, level, 15); },
     deflateInit2_: (_c, a) => {

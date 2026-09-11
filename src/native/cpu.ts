@@ -9,7 +9,8 @@ import { core, jitDrain, TLS_KEYS } from "./core";
 import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs } from "./host";
 import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
-export { NativeFault };
+import { yieldToLoop, yieldStats } from "../jvm/yield";
+export { NativeFault, yieldToLoop, yieldStats };
 
 const enum SliceExit { Budget = 0, Suspend = 1, Exit = 2 }
 const enum CoreExit { Budget = 0, Host = 1, Ret = 2, Fault = 3, Syscall = 4 }
@@ -32,7 +33,7 @@ const FAULTS = ["unimplemented", "undefined", "bad address", "misaligned pc", "d
 
 export const codeStats = { get pages(): number { return core.cpu_stat(0); }, get invalidated(): number { return core.cpu_stat(1); } };
 /** single-step register trace: every instruction logs pc + the registers it changed (slow; debugging only) */
-export const stepMode = { on: false, ring: [] as string[], max: 40000, watch: 0, hits: [] as string[] };
+export const stepMode = { on: false, ring: [] as string[], max: 40000, hits: [] as string[] };
 export function setStepMode(on: boolean): void {
   stepMode.on = on;
   core.set_max_block(on ? 1 : 256);
@@ -72,8 +73,6 @@ export function isA64(): boolean { return A64; }
 export const lastFault: { regs: { cpu: string; r: number[]; h: number[]; bt: string[]; frames: string[] } | null } = { regs: null };
 let backtraceHook: (cpu: Cpu) => string[] = () => [];
 export function setBacktraceHook(f: (cpu: Cpu) => string[]): void { backtraceHook = f; }
-/** log every call() frame on the named thread (debug: set __wdCallLog to the thread name before load) */
-const callLog = (globalThis as { __wdCallLog?: string }).__wdCallLog ?? "";
 export const watchPcs = new Set<number>(((globalThis as { __wdWatch?: number[] }).__wdWatch ?? []).map((p) => p >>> 0));
 
 export class Cpu {
@@ -220,7 +219,6 @@ export class Cpu {
   }
   async deliver(sig: number): Promise<void> {
     const h = sigHandlers.get(sig);
-    if (callLog && this.name === callLog) console.log(`[call-native] ${this.name} deliver ${sig} depth=${this.depth} loops=${this.loops} parked=${this.parked} state=${this.state}`);
     this.sigLog.push(`${sig}@${this.ic}${this.parked ? "p" : ""}/${this.loops}`);
     const mask = this.signalMask, handling = this.handling.has(sig);
     this.signalMask = (mask | (h?.mask ?? 0n) | (h && h.flags & 0x40000000 ? 0n : 1n << BigInt(sig - 1))) & 0xfffffffffffbfeffn;
@@ -278,7 +276,6 @@ export class Cpu {
     // thread; a handler's own delivery never waits
     if (!label.startsWith("signal ")) while (this.frames.length && this.frames[this.frames.length - 1].startsWith("signal ")) await new Promise<void>((r) => this.idle.push(r));
     this.frames.push(label);
-    if (callLog && this.name === callLog) console.log(`[call-native] ${this.name} enter ${label} depth=${this.depth} loops=${this.loops} parked=${this.parked} pending=${!!this.pending} fn=${symbolizeHook(fn >>> 0)} lr=${symbolizeHook(this.lr >>> 0)} pc=${symbolizeHook(this.pc)}`);
     this.ensureStack();
     const w = this.w;
     const saved = this.savePool.pop() ?? new Uint8Array(ARCH_SIZE);
@@ -331,7 +328,6 @@ export class Cpu {
       this.retFp1 = this.a64 ? this.si[1] : w[2];
       return w[0];
     } finally {
-      if (callLog && this.name === callLog) console.log(`[call-native] ${this.name} leave ${label} depth=${this.depth} loops=${this.loops} pc=${symbolizeHook(this.pc)} r0=${(w[0] >>> 0).toString(16)}`);
       this.depth--;
       this.frames.pop();
       for (const w2 of this.idle.splice(0)) w2();
@@ -362,13 +358,13 @@ export class Cpu {
       this.state = "slice";
       try { ex = this.runSlice(slice.instr); }
       finally {
-        perf.nativeMs += performance.now() - t0; perf.nativeSlices++; perf.nativeInstr += this.ic - ic0;
-        if (slowMs && performance.now() - t0 > slowMs) console.warn(`[slow-native] ${this.name} slice ${(performance.now() - t0).toFixed(0)}ms ${this.ic - ic0} instr from ${symbolizeHook(this.bpc)}`);
+        const dt = performance.now() - t0;
+        perf.nativeMs += dt; perf.nativeSlices++; perf.nativeInstr += this.ic - ic0;
+        if (slowMs && dt > slowMs) console.warn(`[slow-native] ${this.name} slice ${dt.toFixed(0)}ms ${this.ic - ic0} instr from ${symbolizeHook(this.bpc)}`);
       }
-      if (ex === SliceExit.Exit) { if (callLog && this.name === callLog) console.log(`[call-native] ${this.name} loop exit depth=${this.depth} myDepth=${myDepth} loops=${this.loops}`); return; }
+      if (ex === SliceExit.Exit) return;
       if (ex === SliceExit.Suspend) {
         const p = this.pending!;
-        if (callLog && this.name === callLog) console.log(`[call-native] ${this.name} loop park depth=${this.depth} myDepth=${myDepth} at ${symbolizeHook(this.pc)}`);
         this.pending = null;
         const outerParked = this.parkedAt;                                        // a frame below may be parked in its own host call
         this.parkedAt = myDepth;
@@ -379,7 +375,6 @@ export class Cpu {
         // parked in its own host call (sigsuspend): the flag is its until it finishes
         this.state = "idle";
         while (this.depth > myDepth) await new Promise<void>((r) => this.idle.push(r));
-        if (callLog && this.name === callLog) console.log(`[call-native] ${this.name} loop resume depth=${this.depth} myDepth=${myDepth} loops=${this.loops} pc=${symbolizeHook(this.pc)} lr=${symbolizeHook(this.lr >>> 0)}`);
         this.parkedAt = outerParked;
         setCurThread(this.jthread);
         if (this.finished) return;
@@ -493,7 +488,3 @@ export const sigHandlers = new Map<number, { fn: number; flags: number; mask?: b
 
 let symbolizeHook: (pc: number) => string = (pc) => "0x" + pc.toString(16);
 export function setSymbolizeHook(f: (pc: number) => string): void { symbolizeHook = f; }
-
-
-import { yieldToLoop, yieldStats } from "../jvm/yield";
-export { yieldToLoop, yieldStats };

@@ -12,11 +12,7 @@ import { perf } from "../perf";
 import { glProbe } from "./gles1";
 import { rewriteTextureSwizzles, visibleUniforms, type SwizzleRewrite, type VisibleUniforms } from "./swizzle";
 const dec = new TextDecoder();
-/** the last GL entry points, while the probe is on (wd.native.glRing) */
-export const glRing: string[] = [];
 export let gles3Procs: Record<string, HostFn> = {};
-/** wd.native.gl3: the live context and the objects behind guest handles (debug) */
-export const glDebug = { gl: () => current, buf: (h: number) => rec(h), tex: (h: number) => T().textures[h], prog: (h: number) => T().programs[h] };
 
 type GL = WebGL2RenderingContext;
 const g = (): GL => { if (!current) throw new Error("GL call without a current context"); return current as GL; };
@@ -202,31 +198,6 @@ function del(tbl: (object | null)[], n: number, p: number, kill: (o: never) => v
   for (let i = 0; i < n; i++) { const h = mem.ld32(p + 4 * i), o = tbl[h]; if (o) { kill(o as never); tbl[h] = null; } }
 }
 
-/** what a draw just did: the framebuffer's lit pixels on a grid, and the state the draw ran with (wd.native.glProbe.capture = n) */
-function captureDraw(): unknown {
-  const gl = g(), vp = gl.getParameter(gl.VIEWPORT) as Int32Array, px = new Uint8Array(4);
-  let lit = 0; const grid = 12;
-  const read = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING), draw = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING);
-  gl.bindFramebuffer(gl.READ_FRAMEBUFFER, draw);
-  try {
-    for (let y = 0; y < grid; y++) for (let x = 0; x < grid; x++) {
-      gl.readPixels(vp[0] + Math.floor((x + 0.5) * vp[2] / grid), vp[1] + Math.floor((y + 0.5) * vp[3] / grid), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
-      if (Math.max(px[0], px[1], px[2]) > 16) lit++;
-    }
-  } finally {
-    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, read);
-  }
-  const prog = gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null;
-  const attribs = prog ? Array.from({ length: gl.getProgramParameter(prog, gl.ACTIVE_ATTRIBUTES) as number }, (_, i) => gl.getActiveAttrib(prog, i)?.name) : [];
-  const uniforms = prog ? Array.from({ length: gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS) as number }, (_, i) => { const u = gl.getActiveUniform(prog, i); return u ? `${u.name}:${u.type.toString(16)}` : null; }) : [];
-  const va = [0, 1, 2, 3].map((i) => ({ on: gl.getVertexAttrib(i, gl.VERTEX_ATTRIB_ARRAY_ENABLED), size: gl.getVertexAttrib(i, gl.VERTEX_ATTRIB_ARRAY_SIZE), type: (gl.getVertexAttrib(i, gl.VERTEX_ATTRIB_ARRAY_TYPE) as number).toString(16), stride: gl.getVertexAttrib(i, gl.VERTEX_ATTRIB_ARRAY_STRIDE), buf: !!gl.getVertexAttrib(i, gl.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING) }));
-  const fb = gl.getParameter(gl.FRAMEBUFFER_BINDING);
-  const vals = prog ? uniforms.map((u) => { const name = (u ?? "").split(":")[0]; const isArr = name.endsWith("[0]"); const base = isArr ? name.slice(0, -3) : name; const r: number[] = []; for (let i = 0; i < (isArr ? 4 : 1); i++) { const loc = gl.getUniformLocation(prog, isArr ? `${base}[${i}]` : base); const v = loc ? gl.getUniform(prog, loc) : null; r.push(...(typeof v === "number" ? [v] : v ? Array.from(v as ArrayLike<number>) : [NaN])); } return `${base}=${r.map((x) => +x.toFixed(3)).join(",")}`; }) : [];
-  const vbuf = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING) as WebGLBuffer | null;
-  let vdata: number[] = [];
-  if (vbuf) { const prev = gl.getParameter(gl.ARRAY_BUFFER_BINDING); gl.bindBuffer(gl.ARRAY_BUFFER, vbuf); const f = new Float32Array(12); gl.getBufferSubData(gl.ARRAY_BUFFER, 0, f); vdata = Array.from(f).map((x) => +x.toFixed(3)); gl.bindBuffer(gl.ARRAY_BUFFER, prev); }
-  return { lit: `${lit}/${grid * grid}`, vp: [...vp], fbo: !!fb, link: prog ? gl.getProgramParameter(prog, gl.LINK_STATUS) : null, attribs, uniforms, vals, vdata, va, depth: gl.isEnabled(gl.DEPTH_TEST), stencil: gl.isEnabled(gl.STENCIL_TEST), blend: gl.isEnabled(gl.BLEND), scissor: gl.isEnabled(gl.SCISSOR_TEST), cull: gl.isEnabled(gl.CULL_FACE), mask: gl.getParameter(gl.COLOR_WRITEMASK), tex: !!gl.getParameter(gl.TEXTURE_BINDING_2D), err: gl.getError() };
-}
 // ── buffer records: kind (element or not) decided at the first typed bind, data shadowed until then
 interface BufRec { gl: WebGLBuffer | null; other: WebGLBuffer | null; elem: boolean | null; shadow: Uint8Array | null; usage: number }
 const COPY_READ = 0x8f36, COPY_WRITE = 0x8f37, ELEM = 0x8893, ARRAY = 0x8892;
@@ -704,17 +675,13 @@ export function gles3Init(): void {
     const set = method(`uniformMatrix${m}fv`);
     G[`glUniformMatrix${m}fv`] = (_c, a) => { const u = U(a.i()), cnt = a.i(), t = !!(a.i() & 255), p = a.p(); if (u) set().call(g(), u, t, f32(p, cnt * e)); };
   }
-  // the probe: after each entry point, count and name a GL error (wd.native.glProbe)
-  for (const [k, f] of Object.entries(G)) {
+  // the probe: after each entry point, count and name a GL error
+  if (glProbe) for (const [k, f] of Object.entries(G)) {
     if (k === "glGetError") continue;
     G[k] = (c, a) => {
-      const args = glProbe.on ? `(${c.w[0] >>> 0},${c.w[2] >>> 0},${c.w[4] >>> 0})` : "";   // read before f consumes them
-      const r = f(c, a);
-      if (glProbe.on && current) {
-        glRing.push(k + args); if (glRing.length > 400) glRing.splice(0, 200);
-        if (glProbe.capture > 0 && k.startsWith("glDraw") && k !== "glDrawBuffers") { glProbe.capture--; console.log("[gl-capture] " + k + args + " " + JSON.stringify(captureDraw())); }
-        const e = current.getError(); if (e) { perf.glErrors++; console.warn("[gl] 0x" + e.toString(16), "after", k + args); }
-      }
+      const args = `(${c.w[0] >>> 0},${c.w[2] >>> 0},${c.w[4] >>> 0})`;   // read before f consumes them
+      const r = f(c, a), e = current?.getError();
+      if (e) { perf.glErrors++; console.warn("[gl] 0x" + e.toString(16), "after", k + args); }
       return r;
     };
   }

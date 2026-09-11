@@ -144,7 +144,6 @@ export function defineHost(name: string, fn: HostFn): number {
 export function slotName(slot: number): string { return names[slot] ?? `slot${slot}`; }
 /** calls per trampoline slot (wd.native.hostCalls) */
 export const hostCounts = new Uint32Array((TRAMP_END - TRAMP_BASE) >>> 3);
-const STR0 = new Set(["fopen", "open", "access", "stat", "lstat", "mkdir", "opendir", "getenv", "unlink", "rename", "remove", "rmdir", "dlopen", "strlen", "strcmp", "strncmp", "strcpy", "strncpy", "strstr", "strchr", "atoi", "strtol", "strdup", "sprintf", "snprintf", "puts", "printf"]);
 export const hostTrace = { on: false, ring: [] as string[], max: 256, filter: null as RegExp | null };
 
 /** dispatch a host call at trampoline `slot`; a returned promise parks the Cpu (see Cpu.runSlice) */
@@ -161,14 +160,12 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
     if (!hostTrace.filter || hostTrace.filter.test(nm)) {
       traced = true;
       const w = cpu.w;
-      let s0 = "";
-      if (STR0.has(nm) && w[0]) { try { s0 = ` "${mem.cstr(w[0] >>> 0, 120)}"`; } catch { s0 = " <bad ptr>"; } }
       // a reservation's caller is two frames up (the mmap wrapper keeps its lr at sp+0x10)
       const args = Array.from({ length: cpu.a64 ? 8 : 4 }, (_, i) => {
         const lo = (w[2 * i] >>> 0).toString(16);
         return cpu.a64 && w[2 * i + 1] ? (w[2 * i + 1] >>> 0).toString(16) + "_" + lo.padStart(8, "0") : lo;
       }).join(",");
-      const entry = `${cpu.name}:${nm}(${args})${s0} lr=${(cpu.lr >>> 0).toString(16)}`;
+      const entry = `${cpu.name}:${nm}(${args}) lr=${(cpu.lr >>> 0).toString(16)}`;
       // a spin loop's repeats add nothing: keep the first pass through a short cycle
       if (hostTrace.ring.slice(-4).some((e) => e.startsWith(entry))) traced = false;
       else hostTrace.ring.push(entry);

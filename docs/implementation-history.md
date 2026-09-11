@@ -395,7 +395,6 @@ The Zig wasm core supersedes historical JS ARM/A64 emitters and the split hi/lo 
 Keep semantics in the interpreters and reuse them in JIT fallbacks. Tier-parity kits, the SIMD
 hardware oracle and code-write invalidation tests establish correctness. Bisect app failures
 with ?jit=0, __wdJit ranges and jit_fallback; inspect wasm function/offset and original host error.
-wd.native.bench() changes ABI and resets image memory: never run it in a live app process.
 
 - Fallbacks spill everything they reload; overestimated writes once overwrote dirty locals with
   stale memory. Preserve branch/PC/interworking. Partial flag writers settle preserved flags

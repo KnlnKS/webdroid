@@ -4,12 +4,9 @@ import { hostTrace, calledMissing, unresolved, probed, hostCounts, slotName } fr
 import { killLog } from "./proc";
 import { futexStats } from "./pthread";
 import { jniMissing, jniTrace, registered } from "./jni";
-import { Cpu, cpus, codeStats, stepMode, setStepMode, profile, slice, isA64, setA64, hasProcessExited, yieldStats, sigHandlers, watchPcs, lastFault, invalidations } from "./cpu";
-import { mainThread } from "../jvm/natives/jlang";
+import { cpus, codeStats, stepMode, setStepMode, profile, slice, hasProcessExited, yieldStats, sigHandlers, watchPcs, lastFault, invalidations } from "./cpu";
 import { mem } from "./mem";
 import { core, jitStats } from "./core";
-import { glProbe } from "./gles1";
-import { glRing, glDebug } from "./gles3";
 import { netDebug } from "./net";
 
 export const native = {
@@ -51,51 +48,9 @@ export const native = {
   backtrace: (name: string) => { const c = [...cpus].find((c) => c.name === name); return c ? backtrace(c) : []; }, watchPcs, lastFault, invalidations,
   peek: (a: number, n = 16) => Array.from(mem.bytes(a, n)).map((b) => b.toString(16).padStart(2, "0")).join(" "),
   cstr: mem.cstr,
-  glProbe, glRing, gl3: glDebug, net: netDebug,
+  net: netDebug,
 };
 // a harness can arm the trace before boot: page.addInitScript(() => { globalThis.__wdNativeTrace = "regex" })
 const pre = (globalThis as { __wdNativeTrace?: string }).__wdNativeTrace;
 if (pre) { hostTrace.on = true; hostTrace.filter = pre === "." ? null : new RegExp(pre); hostTrace.max = 2000; }
-if ((globalThis as { __wdNativeStep?: boolean }).__wdNativeStep) { setStepMode(true); stepMode.watch = (globalThis as { __wdNativeWatch?: number }).__wdNativeWatch ?? 0; }
-/** microbenchmark: 20M-iteration loops on a scratch Cpu, quoted as guest instructions per second.
- *  Encodings from clang; it runs on the slice loop, as guest code does. */
-let benchBufs: { src: number; dst: number; code: number[] } | null = null;
-async function bench(): Promise<string> {
-  const N = 20_000_000;
-  // reserved once: the arena bump-allocates and never frees, so a second call must not take
-  // another 40 MiB out of it. The code pages come from the arena, which survives the ABI
-  // switch (the image region does not), so a second call runs the regions the first compiled
-  // (the engine's tiered-up code, on Chrome) rather than compiling afresh
-  benchBufs ??= { src: mem.reserve(N + 0x1000, 0x1000), dst: mem.reserve(N + 0x1000, 0x1000), code: [] };
-  const { src, dst } = benchBufs;
-  const copy = [dst, src, N, 0], sum = [src, N, 0];
-  // the transfer cost: `mov x4, x30; loop: blr x3; subs x2, x2, #1; b.ne loop; ret x4` calling `f: add x0, x0, #1; ret`
-  // the flag cost: byte sums with cmp+conditional add (A32) and cmp+csel (A64), and a Thumb sum whose every op sets flags
-  const programs: [string, boolean, number[], number[] | ((code: number) => number[]), boolean?][] = [
-    ["arm copy", false, [0xe7d1c003, 0xe2422001, 0xe7c0c003, 0xe2833001, 0xe3520000, 0x1afffffa, 0xe12fff1e], copy],
-    ["a64 copy", true, [0x3863682c, 0xd1000442, 0x3823680c, 0x91000463, 0xb5ffff82, 0xd65f03c0], copy],
-    ["a64 call", true, [0xaa1e03e4, 0xd63f0060, 0xf1000442, 0x54ffffc1, 0xd65f0080, 0x91000400, 0xd65f03c0], (code) => [0, 0, N, code + 20]],
-    ["thumb sum", false, [0x7803, 0x1c40, 0x18d2, 0x3901, 0xd1fa, 0x4770], sum, true],
-    ["a32 sum", false, [0xe4d03001, 0xe0822003, 0xe2511001, 0x1afffffb, 0xe12fff1e], sum],
-    ["a32 cmp", false, [0xe4d03001, 0xe3530040, 0x30822003, 0xe2511001, 0x1afffffa, 0xe12fff1e], sum],
-    ["a64 sum", true, [0x38401403, 0x0b030042, 0x71000421, 0x54ffffa1, 0xd65f03c0], sum],
-    ["a64 cmp", true, [0x38401403, 0x7101007f, 0x1a831042, 0x71000421, 0x54ffff81, 0xd65f03c0], sum],
-  ];
-  const was = isA64();
-  const out: string[] = [];
-  for (const [name, a64, words, args, thumb] of programs) {
-    setA64(a64);
-    const code = (benchBufs!.code[out.length] ??= mem.memalign(0x1000, 0x1000));
-    if (thumb) for (let i = 0; i < words.length; i++) mem.u16[(code >>> 1) + i] = words[i];
-    else for (let i = 0; i < words.length; i++) mem.u32[(code >>> 2) + i] = words[i];
-    const c = new Cpu(mainThread, "bench"), a = typeof args === "function" ? args(code) : args, at = thumb ? code | 1 : code;
-    // twice: the first pass compiles the region, the second is the steady state
-    await c.call(at, a);
-    const t0 = performance.now(), ic0 = c.ic;
-    await c.call(at, a);
-    out.push(`${name} ${((c.ic - ic0) / (performance.now() - t0) / 1000).toFixed(0)}M`);
-  }
-  setA64(was);
-  return out.join(" · ");
-}
-(native as unknown as { bench: () => Promise<string> }).bench = bench;
+if ((globalThis as { __wdNativeStep?: boolean }).__wdNativeStep) setStepMode(true);

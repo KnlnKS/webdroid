@@ -24,7 +24,7 @@ export function gles1String(context: GL, name: number): string | null {
 }
 
 /** getError probe after every GL entry point (perf.glErrors counts) */
-export const glProbe = { on: false, capture: 0 };
+export const glProbe = !!(globalThis as { __wdGlProbe?: boolean }).__wdGlProbe;
 
 type M4 = Float32Array;
 const ident = (): M4 => { const m = new Float32Array(16); m[0] = m[5] = m[10] = m[15] = 1; return m; };
@@ -269,7 +269,7 @@ export function gles1Init(): void {
     const c = cur();
     if (!c) { noCtx(); return 0; }
     const r = fn(c, a, cpu);
-    if (glProbe.on) { const e = c.gl.getError(); if (e) { perf.glErrors++; console.warn("[gles1] error", e.toString(16), "after", name); } }
+    if (glProbe) { const e = c.gl.getError(); if (e) { perf.glErrors++; console.warn("[gles1] error", e.toString(16), "after", name); } }
     return r === undefined ? 0 : r;
   };
   const m4Scratch = new Float32Array(16);
