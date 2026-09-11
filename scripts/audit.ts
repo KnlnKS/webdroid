@@ -65,7 +65,7 @@ console.log(`${apk}: ${appClasses} app classes${fwDexes.length ? ` + ${p.size - 
 console.log(`reachable: ${r.methods.size} method bodies, ${r.instantiated.size} instantiated types, ${r.classes.size} classes touched ` +
   `(load ${(t1 - t0).toFixed(0)}ms, closure ${(t2 - t1).toFixed(0)}ms)`);
 
-for (const n of [...rt.natives.keys()]) { try { rt.link(n); } catch { /* */ } }
+rt.linkNatives();
 const split = (key: string) => { const i = key.indexOf("."); return [key.slice(0, i), key.slice(i + 1)] as const; };
 const ctorOf = (cls: string) => (rt.natives.has(cls) ? rt.classes.get(cls)?.ctor : null) ?? null;
 

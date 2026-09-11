@@ -218,6 +218,9 @@ export class Runtime {
   }
   markers(...names: string[]) { for (const name of names) this.register({ name, ctor: class extends JObj {} }); }
   make(cls: string): any { return new (this.link(cls).ctor)(); }
+  linkNatives(onError?: (name: string, e: unknown) => void) {
+    for (const name of [...this.natives.keys()]) { try { this.link(name); } catch (e) { onError?.(name, e); } }
+  }
 
   dexLink(dex: DexFile): DexLink {
     let d = this.links.get(dex);

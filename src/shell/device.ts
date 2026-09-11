@@ -133,9 +133,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   // Natives materialize AFTER every dex is indexed, never before: a native whose super or
   // interface is a class provenance withheld would otherwise link it, find no dex yet, and
   // auto-stub it into the class cache for the rest of the run.
-  for (const name of [...rt.natives.keys()]) {
-    try { rt.link(name); } catch (e) { console.warn("[link native]", name, e); }
-  }
+  rt.linkNatives((name, e) => console.warn("[link native]", name, e));
   // Every dex is loaded and every native has a prototype, so the call graph is complete and
   // nothing has been compiled yet: the only moment the suspension analysis can run.
   if (SYNC_TIER) {

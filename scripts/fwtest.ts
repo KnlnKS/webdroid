@@ -21,7 +21,7 @@ await import("../src/natives");
 
 const JAR = "vendor/aosp/framework.jar";
 await loadJarDexes(JAR);
-for (const n of [...rt.natives.keys()]) { try { rt.link(n); } catch { /* */ } }
+rt.linkNatives();
 
 console.log(`withheld ${BYTECODE.length} prefixes; ${rt.dexIndex.size} framework classes\n`);
 

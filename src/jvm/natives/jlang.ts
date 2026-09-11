@@ -1376,13 +1376,8 @@ mainThread.jname = "main";
 mainThread.alive = 1;
 export let curThread = mainThread;
 rt.th = () => curThread;
-/** wd.suspends.on records, per thread, the JS stack at its latest suspension: the answer to "what is this thread waiting in" */
-export const suspendTrace = { on: false, last: new Map<JThread, string>(), count: new Map<JThread, number>() };
-rt.st = (t) => { curThread = t as JThread; if (suspendTrace.on) suspendTrace.last.delete(t as JThread); };
-rt.su = (t) => {
-  if (suspendTrace.on) { suspendTrace.last.set(t as JThread, new Error().stack ?? ""); suspendTrace.count.set(t as JThread, (suspendTrace.count.get(t as JThread) ?? 0) + 1); }
-  curThread = mainThread;
-};
+rt.st = (t) => { curThread = t as JThread; };
+rt.su = () => { curThread = mainThread; };
 class JDefaultUEH extends JObj {}
 rt.register({
   name: "webdroid/DefaultUEH", ctor: JDefaultUEH, ifaces: ["java/lang/Thread$UncaughtExceptionHandler"],

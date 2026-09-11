@@ -1549,7 +1549,7 @@ rt.register({ name: "android/graphics/RecordingCanvas", ctor: JRecordingCanvas, 
 // with an OffscreenCanvas; drawRenderNode composites it with the node's transform props.
 let invalidateHook: (() => void) | null = null;
 export function setInvalidateHook(f: () => void) { invalidateHook = f; }
-export class JRenderNode extends JObj {
+class JRenderNode extends JObj {
   w = 0; h = 0; left = 0; top = 0;
   alpha = 1; tx = 0; ty = 0; sx = 1; sy = 1; rot = 0;
   px = Number.NaN; py = Number.NaN;   // pivot (NaN = center)

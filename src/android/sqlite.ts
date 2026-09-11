@@ -148,7 +148,7 @@ export function dbPath(pkg: string, name: string): string {
   if (name.includes("/")) throw rt.mkThrowable("java/lang/IllegalArgumentException", `File ${name} contains a path separator`);
   return `/data/data/${pkg}/databases/${name}`;
 }
-export async function openDatabase(path: string, flags = 0x10000000): Promise<JSQLiteDatabase> {
+async function openDatabase(path: string, flags = 0x10000000): Promise<JSQLiteDatabase> {
   if (!path) throw rt.mkThrowable("java/lang/IllegalArgumentException", "path must not be empty");
   const readOnly = (flags & 1) !== 0;
   const sql = await ensureSql();
