@@ -387,7 +387,7 @@ const fontsReady = Promise.all([Promise.all([
   ["Roboto", "Roboto-Regular.ttf", "400", "normal"], ["Roboto Medium", "Roboto-Medium.ttf", "500", "normal"],
   ["Roboto", "Roboto-Bold.ttf", "700", "normal"], ["Roboto", "Roboto-Italic.ttf", "400", "italic"],
 ].map(async ([name, file, weight, style]) => {
-  const response = await fetch(`/Roboto/${file}`);
+  const response = await fetch(`/vendor/fonts/${file}`);
   if (!response.ok) throw new Error(`font ${file}: ${response.status}`);
   const bytes = await response.arrayBuffer();
   vfs.write(`/system/fonts/${file}`, new Uint8Array(bytes));
@@ -397,7 +397,7 @@ const fontsReady = Promise.all([Promise.all([
   });
   document.fonts.add(await f.load());
   return `<font weight="${weight}" style="${style}">${file}</font>`;
-})), RangeFile.open("/vendor/Noto-COLRv1.ttf").then(font => vfs.mount("/system/fonts/Noto-COLRv1.ttf", font))]).then(([fonts]) => {
+})), RangeFile.open("/vendor/fonts/Noto-COLRv1.ttf").then(font => vfs.mount("/system/fonts/Noto-COLRv1.ttf", font))]).then(([fonts]) => {
   // Native Skia reads the same faces through Android's system font configuration.
   vfs.write("/system/etc/fonts.xml", new TextEncoder().encode(
     `<?xml version="1.0"?><familyset version="23"><family name="sans-serif">${fonts.join("")}</family>` +
