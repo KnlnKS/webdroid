@@ -618,3 +618,74 @@ Artifacts: /tmp/webdroid-profile-final-{unit,fwtest,textcmp,resy-smoke,microg-sm
 /tmp/webdroid-profile-final-perfsum.log. The corpus log reports launch/gap coverage; the previous
 checkpoint retains detailed per-APK error JSON. The preserved Google sign-in tab is still at
 the email step; no authenticated account result has been observed.
+
+## Layout passes, text wrapping and the measure cache
+
+The frame loop laid out and redrew every frame even when nothing changed. Harmonic's idle front
+page ran one layout pass and one draw per frame, with about 268 invalidates each. Three mechanisms
+fed the loop:
+- Every attach, including `addViewInLayout`, `attachViewToParent` and `detachViewFromParent`,
+  requested layout on the parent. RecyclerView re-attaches its rows inside its own `onLayout`, so
+  each pass asked for the next.
+- `replayLayoutRequests` replayed requests made during measure. AOSP collects requesters only
+  while `isInLayout()` and keeps those whose force-layout flag survived the pass.
+- `settle = 3`, the activity-start timers and `settleWatch` added up to six extra passes per
+  request.
+
+Now:
+- Hierarchy mutations request through the parent's virtual `requestLayout()`; the in-layout
+  variants request nothing.
+- Replay keeps only surviving, attached, shown requesters, and the settle machinery is gone.
+- `requestLayout` always names a view. `requestLayoutAll` is reserved for boot and configuration
+  changes.
+- Overlay and decor roots are no longer force-measured each pass.
+- AOSP's measure cache (skipped below targetSdk 19) and the EXACTLY-spec skip (targetSdk above 23)
+  are in.
+- TextView memoises line wrapping and per-line widths. Setters that change wrapping request
+  layout, and size and typeface only on change.
+- RelativeLayout resolves forward anchors within one pass.
+- Layer, Ripple and Inset drawables set their children's callbacks. The old per-frame loop had
+  hidden that; without it a MaterialButton morph froze.
+
+Dirty-region drawing was measured out: once idle draws stopped, a draw cost 1.4–2.7 ms against a
+~10 ms full blit on SwiftShader, so `present()` stays a zero-copy transfer.
+
+Benchmarked base `91ea9b1` against `847d5d6` on an idle machine:
+- two alternating `--jobs 1` E2E runs per build on SwiftShader
+- real-GPU first draw in Chrome 152 (headless, ANGLE Metal), 3 runs
+- idle renderer CPU (CDP `TaskDuration` over 10 s after a 12 s settle), 3 runs
+
+| Harmonic | Base | Final |
+|---|---|---|
+| Idle renderer CPU | 506 ms/s | 17 ms/s |
+| Idle layout passes / draws per 10 s | 600 / 600 | 0 / 0 |
+| E2E wall time | 43.4 s | 24.7 s |
+| Layout time | 17.3 s | 2.4 s |
+| Frame time | 26.2 s | 6.1 s |
+| `measureText` calls | 12.5 M | 92 k |
+
+- **FitNotes:** wall time −13%, layout passes −69%, `measureText` −97%.
+- **Other flows:** wall time within ±2%, with 65–75% fewer layout passes.
+- **Unchanged:** goldens, fps and diagnostics.
+- **Real-GPU first draw:** moves within run spread (FitNotes −1%, Harmonic 0%, Resy +4%).
+- **calculatorm:** its median draw time looked 59% higher. The whole difference is a one-time
+  launch draw that is bimodal on base too (52 against 450 ms across its two runs); its tap steps
+  are equal.
+
+Limits:
+- Settles now usually end on "idle", so a missing invalidation would surface as a golden flake.
+- `getLayout()` and TextView wrapping still use different line breakers.
+
+## Rejected: a Web Worker per process
+
+Process realms were moved from iframes into module workers, with a message-only broker, storage
+mirrors and host-side WebView and audio. It worked, but was not adopted. Its costs:
+- **Memory:** about 15% more JS heap (+36 MB for Resy with microG), because each worker holds
+  its own copy of the dex it runs. Sharing it would need SharedArrayBuffer, which the WebView
+  proxy's framing rules out.
+- **First draw:** each worker pays a one-time first decoded-image draw of about 200 ms on
+  SwiftShader, on the thread that boots the app. Warming it up could not overlap the install's
+  range reads, which need the same thread.
+- **Compiled code:** Chrome reused none of it across module workers, even at a stable script URL.
+- **Harness:** the harness had to capture inside the worker, and same-package multi-process
+  SQLite became last-writer-wins.
