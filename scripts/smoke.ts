@@ -5,12 +5,12 @@ import { perf } from "../src/perf";
 import { setLazyMethods } from "../src/jvm/compiler";
 import "../src/jvm/natives/jlang";
 import { descToName } from "../src/jvm/abi";
+import { need } from "./args";
 
-// this script exists to surface compile failures, so every body must actually be generated
+const [path] = need("bun run smoke <apk> [--cold]");
 const cold = process.argv.includes("--cold");
 setLazyMethods(cold);
 
-const path = process.argv[2] ?? "apks/FitNotes.apk";
 await loadDexes(path);
 
 let ok = 0, fail = 0;

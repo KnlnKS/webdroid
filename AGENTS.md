@@ -36,7 +36,7 @@ bun run test
 bun run smoke apks/FitNotes.apk
 bun run fwtest
 PORT=4090 bun run server.ts
-WEBDROID_URL=http://localhost:4090 bun run textcmp
+WEBDROID_URL=http://localhost:4090 bun run textcmp FitNotes.apk
 WEBDROID_URL=http://localhost:4090 bun run e2e --jobs 1
 WEBDROID_URL=http://localhost:4090 bun run corpus
 bun scripts/perfsum.ts tests/e2e/actual <baseline.json>

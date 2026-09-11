@@ -1,8 +1,4 @@
-// Does AOSP's own StaticLayout break lines where ours does?
-//
-//   bun scripts/textcmp.ts            # needs `bun run dev` (WEBDROID_URL picks the server)
-//
-// Two loads of the SAME bundle, one with android/text/{Layout,StaticLayout} and
+// Does AOSP's own StaticLayout break lines where ours does? Two loads of the SAME bundle, one with android/text/{Layout,StaticLayout} and
 // android/graphics/text/ served by vendor/aosp/framework.jar and one without, over the same
 // paragraphs through the same StaticLayout.Builder call. They should agree on the greedy
 // strategy, because both break through text.ts's greedyBreaks — AOSP's Layout and StaticLayout
@@ -13,8 +9,9 @@
 // a page. The page must be a REAL one — the MCP browser is throttled (see AGENTS.md).
 import { BASE_URL } from "../tests/e2e/lib/util";
 import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
+import { need } from "./args";
 
-
+const [apk] = need("bun run textcmp <apk>");
 const CUT = "android/text/Layout,android/text/StaticLayout,android/graphics/text/";
 
 const PARAGRAPHS: [string, number, number][] = [        // text, width px, text size px
@@ -33,11 +30,9 @@ async function layouts(cut: boolean) {
   if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE_URL} — run \`bun run dev\``);
   await page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
   await page.evaluate(() => document.fonts.ready);
-  // BOTH sides boot. Native specs get their mangled methods at rt.link, which boot is what
-  // runs (see "Native classes need rt.link() before direct TS instantiation" in the implementation
-  // history), and
-  // the framework dex a cut resolves against is fetched by the same boot.
-  await page.evaluate(() => void (globalThis as any).wd.boot("FitNotes.apk"));
+  // both sides boot: native specs get their mangled methods at rt.link, and the framework dex a
+  // cut resolves against is fetched by the same boot
+  await page.evaluate((a) => void (globalThis as any).wd.boot(a), apk);
   await page.waitForFunction(() => (globalThis as any).wd.perf.bootMs > 0, null, { timeout: 120_000 });
   const out = await page.evaluate(async (paras) => {
     const wd = (globalThis as any).wd;

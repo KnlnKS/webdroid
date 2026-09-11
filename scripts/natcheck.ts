@@ -2,12 +2,11 @@
 //
 // The suspension analysis recognizes async functions and maySuspend declarations. An unmarked
 // native that returns a promise makes its callers compile sync and then hands them a promise.
-//
-//   bun scripts/natcheck.ts [apk ...]          # needs `bun run dev` on :4080
 import { BASE_URL } from "../tests/e2e/lib/util";
 import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
+import { need } from "./args";
 
-const apks = process.argv.slice(2).length ? process.argv.slice(2) : ["harmonic.apk", "FitNotes.apk", "mihon-v0.20.4.apk"];
+const apks = need("bun run natcheck <apk...>");
 const browser = await launchBrowser();
 const liars = new Set<string>();
 for (const apk of apks) {

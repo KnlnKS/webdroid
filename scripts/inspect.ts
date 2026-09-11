@@ -1,8 +1,8 @@
-// bun scripts/inspect.ts <apk> — sanity-check parsers, dump manifest + dex stats
 import { openApk, dexesOf, dumpXml } from "./lib";
 import { parseAXML } from "../src/android/axml";
+import { need } from "./args";
 
-const path = process.argv[2] ?? "apks/FitNotes.apk";
+const [path] = need("bun run inspect <apk>");
 const zip = await openApk(path);
 
 console.log(dumpXml(parseAXML(zip["AndroidManifest.xml"]), 0, [], 3).join("\n"));

@@ -2,7 +2,8 @@
 // Logs every entry/exit of the matching methods on the matching classes during boot.
 import { WebdroidDriver } from "../tests/e2e/drivers/webdroid";
 import { sleep } from "../tests/e2e/lib/util";
-const apk = process.argv[2] ?? "mihon-v0.20.4.apk";
+import { need } from "./args";
+const [apk] = need("TRACE=<class-regex> bun run trace <apk>");
 const drv = await WebdroidDriver.launch();
 await drv.reset();
 await drv.page.evaluate(([clsRe, methRe]) => {
