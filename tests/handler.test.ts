@@ -11,6 +11,7 @@ class RecordingHandler extends JHandler {
 }
 class RecordingRunnable extends JObj {
   runs = 0;
+  onRun: (() => void) | null = null;
 }
 rt.register({
   name: "test/RecordingHandler", ctor: RecordingHandler, sup: "android/os/Handler",
@@ -22,7 +23,7 @@ rt.register({
 });
 rt.register({
   name: "test/RecordingRunnable", ctor: RecordingRunnable, ifaces: ["java/lang/Runnable"],
-  methods: { "run()V": function (this: RecordingRunnable) { this.runs++; } },
+  methods: { "run()V": function (this: RecordingRunnable) { this.runs++; this.onRun?.(); } },
 });
 rt.linkNatives();
 
@@ -84,4 +85,23 @@ test("removeCallbacksAndMessages cancels queued messages and runnables", async (
   await onMain(() => {});
   expect(handler.delivered).toEqual([]);
   expect(runnable.runs).toBe(1);
+});
+
+test("a long-lived Handler releases completed callback keys", async () => {
+  const handler = new RecordingHandler();
+  await onMain(() => {
+    for (let i = 0; i < 1000; i++) handler.post(new RecordingRunnable(), 0);
+  });
+  await onMain(() => {});
+  expect(handler.pending.size).toBe(0);
+});
+
+test("a callback can repost itself while being dispatched", async () => {
+  const handler = new RecordingHandler(), runnable = new RecordingRunnable();
+  runnable.onRun = () => { if (runnable.runs === 1) handler.post(runnable, 0); };
+  await onMain(() => handler.post(runnable, 0));
+  await onMain(() => {});
+  await onMain(() => {});
+  expect(runnable.runs).toBe(2);
+  expect(handler.pending.size).toBe(0);
 });

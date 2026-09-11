@@ -1241,5 +1241,59 @@ uniform idle reduction is established. Classes, broker counts/bytes and root Was
 are unchanged. All runs render visibly, advance 3601–3614 ticks and retain the same
 diagnostic difference. Per-step instrumentation affects timing, so retain the two
 series separately. Files: `/tmp/webdroid-map-handler-repeat-perf-{baseline,current}-{1,2,3}.json`
-and `/tmp/webdroid-map-handler-repeat-summary.jsonl`. No repeatable >5% foreground CPU
-increase was found in these bounded checks; they do not cover every APK or process.
+and `/tmp/webdroid-map-handler-repeat-summary.jsonl`. These initially did not reproduce
+the >5% foreground CPU increase. Later inspection found competing encoding work,
+started at 15:24:25, overlapping the repeat and native comparison. These series cannot
+clear the original increase; quiet matched measurements remain necessary.
+
+### 2026-09-11 — Completed Handler callback retention
+
+After the cancellation fix, a post-GC browser probe finds empty pending-map entries
+holding completed Runnable keys. In the SDK map flow, a long-lived Handler grows from
+7 such keys after the first close to 11/15/19/23 after successive opens. Across all
+queried Handler instances, completed callback keys reach 32 and retained instances
+grow 5 → 9 → 13 → 17 → 21, although every pending queue is empty. CDP object groups
+are released after each count; the probe retains only numeric summaries.
+
+The follow-up deletes a key when its final message leaves the queue, before dispatch
+so reentrant callbacks can repost. Two tests fail on `3c98726` and pass after: a batch
+of 1000 completed callbacks leaves no keys, and a callback safely reposts itself.
+The same real map flow now retains zero completed callback keys; Handler instances
+return to 5 after each close and 9 after reopen. Cancellation/completion/idle ordering,
+both marker clicks, pan and five map loads succeed. All three reached runtime missing
+sets and error lists remain empty. These counts establish removal of this retention
+path, not absence of all map/native memory leaks.
+
+Typecheck, 617 units / 20,451 assertions, framework probes, zero-method-failure smoke
+compilation of microG/Resy/SDK and 6/6 text comparisons pass. E2E/corpus/performance
+verification is in progress. Evidence: `/tmp/webdroid-map-handler-retention.{log,json}`,
+`/tmp/webdroid-handler-retention-after.{log,json}`, `...-test-{before,after}.log` and
+`...-{typecheck,unit,fwtest,smoke,textcmp}.log`. The baseline worktree on 41983 is now
+`3c98726`; current 41977 includes the follow-up.
+
+E2E completes 111 steps in 331.9 seconds with no added normalized missing/error/native
+diagnostics, layout/draw errors or wedges. Scores are Mihon 57.44%, FitNotes 41.44%,
+Harmonic 27.12%, onboarding 17.56%, overall 35.89%; goldens are unchanged. Harmonic's
+step time grows 24.5 → 62.6 seconds, largely in draw time; minimum Doodle FPS falls
+38 → 22 and Flappy 27 → 12. A concurrent encoding job in another project runs many
+avifenc processes, observed collectively using several CPU cores. This is a concrete
+confounder, not a proven explanation or a regression waiver. Repeat the affected flows
+and performance under quiet matched conditions. Evidence:
+`/tmp/webdroid-handler-retention-{e2e,comparison}.log`, `...-comparison.json` and
+`...-competing-load.txt`. The encoding parent started at 15:24:25 on 2026-09-11,
+overlapping the preceding cancellation repeat/native measurements too.
+
+Corpus retains 13/14 rendered and 24 gaps, with two additional captured error messages.
+Fresh matched ChatGPT/Reddit runs have identical normalized diagnostics; ChatGPT's
+InheritableThreadLocal failure appears on both. Extending Reddit observation by 15
+seconds reproduces its Uri-JsonAdapter StartupException on `3c98726`, establishing
+that the short corpus window can miss it. Evidence: `...-corpus.{log,json}`,
+`...-corpus-comparison.json`, `...-corpus-recheck-{baseline,current}.{log,json}` and
+`...-reddit-{baseline,current}.{log,json}` under `/tmp/webdroid-handler-retention-`.
+
+A fresh Harmonic pair under the same competing load takes 59.93 seconds on `3c98726`
+and 51.73 seconds fixed; CPU is 7038.91 → 7105.91 ms (+0.95%), draw time 32.38 → 24.40
+seconds. Both have the same WindowExtensionsProvider gap and no errors. The large
+wall-time slowdown therefore also occurs without the retention fix. This is a
+diagnostic comparison under load, not an isolated performance result. Files:
+`/tmp/webdroid-handler-retention-harmonic-{baseline,current}.{json,log}`.

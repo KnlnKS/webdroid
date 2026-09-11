@@ -105,7 +105,9 @@ export class JHandler extends JObj {
     set.add(msg);
     // still pending until it runs, so a removeMessages/hasMessages in between sees it
     const go = () => this.looper.run(() => {
-      if (set.delete(msg)) return vcall(this, "dispatchMessage", "(Landroid/os/Message;)V", msg).catch(reportUncaught);
+      if (!set.delete(msg)) return;
+      if (!set.size) this.pending.delete(key);
+      return vcall(this, "dispatchMessage", "(Landroid/os/Message;)V", msg).catch(reportUncaught);
     });
     if (delay > 0) msg.timer = setTimeout(() => void go(), delay); else void go();
     return 1;

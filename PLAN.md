@@ -89,12 +89,31 @@ Typecheck, 615 units, affected smoke compilation, framework probes and textcmp p
 All 111 E2E steps complete without added diagnostics; corpus retains 13/14 rendered
 and the same 24 gaps. FitNotes' prior FragmentManager-destroyed error disappears.
 Three pairs show cold CPU −4.05% and reset CPU +5.60%. A fresh three-pair comparison
-with per-step CPU measurements gives −3.06% / −0.14%; the reset increase does not
-repeat. Retained heap changes at most 0.039%. Native tutorial CPU is −3.04%, with
+with per-step CPU measurements gives −3.06% / −0.14%. Subsequent inspection found
+concurrent image encoders overlapping that repeat and the native comparison, so quiet
+verification of the original reset increase remains open. Retained heap changes at most
+0.039%. Native tutorial CPU is −3.04%, with
 3.21% fewer GL frames; this does not establish a throughput improvement. Both series,
 idle/frame measurements and their limits are retained in the history.
-The source-matched pre-fix baseline is `5d7875e` on 41983 in
-`/tmp/webdroid-map-handler-baseline`.
+The cancellation fix is committed as `3c98726`; its matched baseline was `5d7875e`.
+
+A post-GC map reopen probe finds that completed runnable keys accumulate in a
+long-lived Handler (7 after the first close, then 11/15/19/23 after successive opens).
+The pending queues are empty. The working follow-up removes a key when its last
+message leaves the queue, before dispatch so callbacks can repost safely. Two new tests
+fail on `3c98726` and pass after. The repeated map flow now has no completed callback
+keys, and Handler instances return to 5 after each close instead of growing to 21.
+All three reached runtime diagnostics remain empty. Typecheck, 617 units, framework
+probes, affected smoke compilation and textcmp pass; E2E completes 111 steps without
+added diagnostics or wedges. Harmonic draw times and native FPS worsen during the
+competing encoding load; those comparisons require matched quiet reruns. Corpus
+retains 13/14 rendered and 24 gaps. Two newly captured messages reproduce on the
+committed baseline (the Reddit startup error needs a longer observation window).
+The same loaded-machine Harmonic comparison takes 59.9 seconds on `3c98726` and
+51.7 seconds after the retention fix, with no new diagnostics; this reproduces the
+slowdown before the fix but does not replace quiet verification. Performance is pending.
+The matched baseline is now
+`3c98726` on 41983 in `/tmp/webdroid-map-handler-baseline`.
 
 A fresh test tab is open in Chrome at `http://localhost:41979/?apk=GmsClient.apk`.
 The user has been asked to complete the authorized Google sign-in directly in that
