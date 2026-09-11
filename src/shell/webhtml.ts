@@ -20,7 +20,7 @@ export function webDocument(html: string, url?: string): string {
   }).transform(html);
 
   const injection = (url === undefined ? "" : `<meta name="wd-proxy-url" content="${htmlAttribute(url)}">`
-    + (hasBase ? "" : `<base href="${htmlAttribute(url)}">`)) + WEB_INJECT;
+    + `<base${hasBase ? " data-wd-fallback" : ""} href="${htmlAttribute(url)}">`) + WEB_INJECT;
   let inserted = false;
   const rewriter = new HTMLRewriter().on("*", { element(element) {
     if (inserted || element.tagName === "html") return;
@@ -38,6 +38,11 @@ export function webDocument(html: string, url?: string): string {
   });
   if (url !== undefined) bases(rewriter, element => {
     const href = element.getAttribute("href");
+    // Keep pre-base resources on the upstream origin, then remove the fallback before page scripts see both bases.
+    if (hasBase && (href !== null || !hasHref)) {
+      element.before('<script>document.querySelector("base[data-wd-fallback]")?.remove()</script>', { html: true });
+      hasBase = false;
+    }
     if (href !== null) {
       const resolved = URL.parse(href, url);
       element.setAttribute("href", resolved && !["data:", "javascript:"].includes(resolved.protocol) ? resolved.href : url);

@@ -57,3 +57,22 @@ test("WebView injects before scripts with an omitted head and preserves asset UR
       document.getElementsByTagName("base").length])).toEqual(["true", "CSS1Compat", "https://renderer.example/asset/next", 0]);
   } finally { await page.close(); }
 });
+
+test("WebView resolves resources before and after an upstream base", async () => {
+  const page = await browser.newPage();
+  const scripts: string[] = [];
+  page.on("console", message => scripts.push(message.text()));
+  await page.route("**/*", route => {
+    const url = route.request().url();
+    if (url.endsWith(".js")) {
+      return route.fulfill({ contentType: "text/javascript", body: "console.log(document.currentScript.src)" });
+    }
+    return route.fulfill({ contentType: "text/html", body: webDocument(
+      '<!doctype html><head><script src="before.js"></script><base target="_blank"><base href="/assets/"><script src="after.js"></script></head>', source) });
+  });
+  try {
+    await page.goto("https://renderer.example/dir/page");
+    expect(scripts).toEqual(["https://upstream.example/dir/before.js", "https://upstream.example/assets/after.js"]);
+    expect(await page.evaluate(() => document.getElementsByTagName("base").length)).toBe(2);
+  } finally { await page.close(); }
+});
