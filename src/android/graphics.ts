@@ -13,9 +13,14 @@ import { JPath } from "./path";
 import { perf } from "../perf";
 import { type JRenderEffect } from "./rendereffect";
 
+const cssCache = new Map<number, string>();
 export function cssColor(argb: number): string {
-  const a = (argb >>> 24) / 255;
-  return `rgba(${(argb >> 16) & 0xff},${(argb >> 8) & 0xff},${argb & 0xff},${a.toFixed(3)})`;
+  let s = cssCache.get(argb);
+  if (s === undefined) {
+    if (cssCache.size >= 4096) cssCache.clear();
+    cssCache.set(argb, s = `rgba(${(argb >> 16) & 0xff},${(argb >> 8) & 0xff},${argb & 0xff},${((argb >>> 24) / 255).toFixed(3)})`);
+  }
+  return s;
 }
 
 export class JRect extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
@@ -529,21 +534,21 @@ export function measureCtx(font?: string): CanvasRenderingContext2D | OffscreenC
 // cleared wholesale rather than evicted per entry — line breaking probes many short-lived
 // prefixes, so LRU bookkeeping would cost more than the refill.
 const WIDTH_CACHE_MAX = 20000;
-let widthCache = new Map<string, number>();
+let widthCache = new Map<string, Map<string, number>>(), widthCount = 0;
 const vmetCache = new Map<string, { a: number; d: number }>();
 let lastFont = "";
 function setFont(ctx: { font: string }, f: string): void {
   if (f !== lastFont) { ctx.font = f; lastFont = f; }
 }
 function rawWidth(f: string, s: string): number {
-  const k = f + "\u0000" + s;
-  const hit = widthCache.get(k);
+  let byFont = widthCache.get(f);
+  if (byFont === undefined) widthCache.set(f, byFont = new Map());
+  const hit = byFont.get(s);
   if (hit !== undefined) return hit;
   perf.measureTextMiss++;
-  const ctx = measureCtx(f);
-  const w = ctx.measureText(s).width;
-  if (widthCache.size >= WIDTH_CACHE_MAX) widthCache = new Map();
-  widthCache.set(k, w);
+  const w = measureCtx(f).measureText(s).width;
+  if (++widthCount > WIDTH_CACHE_MAX) { widthCache = new Map([[f, byFont = new Map()]]); widthCount = 1; }
+  byFont.set(s, w);
   return w;
 }
 /** the advance up to `offset` within [start,end), and per-character advances when asked for.
