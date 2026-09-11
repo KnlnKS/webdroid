@@ -47,11 +47,17 @@ export class JWindow extends JObj {
 }
 export const APPEARANCE_LIGHT_STATUS_BARS = 8;
 class JInsetsController extends JObj { w: JWindow = null!; }
+/** A change to how a window is sized or placed relays out its tree: an activity's decor or a
+ *  dialog's frame. A window not built yet lays out fresh when it is. */
+function relayoutWindow(w: JWindow) {
+  const root = w.decor ?? (w.dialog as { root?: JView | null } | null)?.root;
+  if (root) requestLayout(root);
+}
 /** FLAG_FULLSCREEN moves the window's top edge, so a flag change is a relayout of the decor. */
 function setWindowFlags(w: JWindow, flags: number) {
   if (w.flags === flags) return;
   w.flags = flags;
-  requestLayout(w.decor);
+  relayoutWindow(w);
 }
 
 export function darken(c: number): number {
@@ -129,8 +135,8 @@ rt.register({
       if (this.activity) callSelf(activityMethods, "setTitle(Ljava/lang/CharSequence;)V", this.activity, t);
     }),
     "getContext()Landroid/content/Context;": function (this: JWindow) { return this.activity ?? (this.dialog as { jctx?: unknown } | null)?.jctx ?? null; },
-    "setLayout(II)V": function (this: JWindow, w: number, h: number) { this.layoutW = w; this.layoutH = h; requestLayout(this.decor); },
-    "setGravity(I)V": function (this: JWindow, g: number) { this.gravity = g; requestLayout(this.decor); },
+    "setLayout(II)V": function (this: JWindow, w: number, h: number) { this.layoutW = w; this.layoutH = h; relayoutWindow(this); },
+    "setGravity(I)V": function (this: JWindow, g: number) { this.gravity = g; relayoutWindow(this); },
     "setDimAmount(F)V": function (this: JWindow, a: number) { this.dimAmount = a; invalidate(); },
     "getWindowManager()Landroid/view/WindowManager;": function (this: JWindow) { return systemService(this.activity, "window"); },
     "hasFeature(I)Z": function (this: JWindow, f: number) { return this.features.has(f) ? 1 : 0; },

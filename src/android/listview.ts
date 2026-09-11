@@ -287,9 +287,10 @@ export class JListView extends JViewGroup {
   updateEmptyStatus() {
     if (!this.emptyView) return;
     const empty = !this.adapter || !this.itemViews.length;
-    this.emptyView.visibility = empty ? 0 : 8;
-    this.visibility = empty ? 8 : 0;
-    requestLayout();
+    // AOSP flips both through setVisibility, which asks for layout only on a change
+    const ev = empty ? 0 : 8, lv = empty ? 8 : 0;
+    if (this.emptyView.visibility !== ev) { this.emptyView.visibility = ev; requestLayout(this.emptyView); }
+    if (this.visibility !== lv) { this.visibility = lv; requestLayout(this); }
   }
   /** the tail AOSP layoutChildren shares with GridView: land the deferred selection, clamp, report */
   finishLayout() {
@@ -318,7 +319,7 @@ export class JListView extends JViewGroup {
       for (const v of this.allViews()) attachView(this, v);
       this.updateEmptyStatus();
       this.dirty = false;
-      requestLayout();
+      requestLayout(this);
     } catch (e) {
       reportUncaught(e);
       this.dirty = false;
@@ -688,7 +689,7 @@ rt.register({
   name: "android/widget/GridView", ctor: class extends JListView { cols = 2; }, sup: "android/widget/AbsListView",
   methods: {
     ...listViewMethods,
-    "setNumColumns(I)V": function (this: any, n: number) { this.cols = Math.max(1, n); requestLayout(); },
+    "setNumColumns(I)V": function (this: any, n: number) { this.cols = Math.max(1, n); requestLayout(this); },
     ...noops("setColumnWidth(I)V", "setStretchMode(I)V", "setHorizontalSpacing(I)V", "setVerticalSpacing(I)V"),
     "onMeasure(II)V": async function (this: any, wSpec: number, hSpec: number) {
       const w = defaultSize(specSize(wSpec), wSpec);
@@ -740,7 +741,7 @@ class JSpinner extends JListView {
       if (this.selView) attachView(this, this.selView);
     }
     this.dirty = false;
-    requestLayout();
+    requestLayout(this);
   }
 }
 /** the dropdown list: as wide as its anchor, as tall as the free space beside it */

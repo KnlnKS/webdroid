@@ -21,6 +21,39 @@ import { fontResource } from "./fonts";
 import { type NativeSpec, callSelf, rt, JObj, maySuspend, stubs, noops } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { usLocale } from "../jvm/natives/jvalues";
+import { perf } from "../perf";
+
+/** one wrap result: the lines, each line's width, and the widest */
+export type Wrapped = { lines: string[]; widths: number[]; maxW: number };
+const NO_LINES: Wrapped = { lines: [], widths: [], maxW: 0 };
+/**
+ * Line breaking memo. Every input the breaker reads is part of the key, so any change that alters
+ * the lines misses and nothing has to invalidate it; letter spacing is keyed on its own because
+ * font() leaves it out. Two widths are kept because onMeasure wraps at the space it is offered
+ * and then at the width it settles on.
+ */
+class WrapMemo {
+  text = ""; font = ""; ls = NaN; max = NaN; single = false; ell = false;
+  a0 = NaN; w0 = NO_LINES; a1 = NaN; w1 = NO_LINES;
+  get(tv: JTextView, text: string, avail: number): Wrapped {
+    const p = tv.paintT, font = p.font();
+    if (text === this.text && font === this.font && p.letterSpacingEm === this.ls && tv.maxLinesV === this.max &&
+        tv.singleLine === this.single && tv.ellipsizeEnd === this.ell) {
+      if (avail === this.a0) { perf.wrapHits++; return this.w0; }
+      if (avail === this.a1) { perf.wrapHits++; return this.w1; }
+    } else {
+      this.text = text; this.font = font; this.ls = p.letterSpacingEm; this.max = tv.maxLinesV;
+      this.single = tv.singleLine; this.ell = tv.ellipsizeEnd;
+      this.a0 = this.a1 = NaN;
+    }
+    const lines = tv.breakLines(text, avail), widths = new Array<number>(lines.length);
+    let maxW = 0;
+    for (let i = 0; i < lines.length; i++) { const w = measureText(p, lines[i]); widths[i] = w; if (w > maxW) maxW = w; }
+    this.a1 = this.a0; this.w1 = this.w0;
+    this.a0 = avail;
+    return (this.w0 = { lines, widths, maxW });
+  }
+}
 
 export class JTextView extends JView {
   /** kept for the app to read back; text is drawn untransformed */
@@ -31,7 +64,9 @@ export class JTextView extends JView {
   imeOptions = 0; breakStrategy = 0; hyphenation = 0; autoSizeType = 0;
   linksClickable = true; fontVariation: string | null = null;
   maxW = Infinity;
-  layoutObj: unknown = null; layoutKey = "";
+  /** getLayout's StaticLayout and the inputs it was built from */
+  layoutObj: unknown = null;
+  layoutText = ""; layoutW = NaN; layoutFont = ""; layoutMax = NaN; layoutLS = NaN; layoutMult = NaN; layoutExtra = NaN;
   text = "";
   rawText: unknown = "";       // original CharSequence (may be Spannable)
   hint = "";
@@ -62,7 +97,10 @@ export class JTextView extends JView {
   cursorVisible = true;
   /** when the caret last restarted its blink: focus and every edit, as AOSP's Editor.Blink does */
   blinkStart = 0;
+  /** the lines this view laid out and draws, with each line's width */
   lines: string[] = [];
+  lineWidths: number[] = [];
+  wrapMemo: WrapMemo | null = null; hintMemo: WrapMemo | null = null;
   layoutWidthFor = -1;
   inputTypeV = 1;
   styleBits = 0;
@@ -88,8 +126,10 @@ export class JTextView extends JView {
   bottomPad(): number { return this.includePad ? Math.round(fontBottom(this.paintT) - fontDescent(this.paintT)) : 0; }
   textHeight(lines: number): number { return lines * this.lineHeight() + this.topPad() + this.bottomPad(); }
   ascent(): number { return Math.round(-fontAscent(this.paintT)) + this.topPad(); }
-  wrap(avail: number): string[] {
-    const text = this.displayText();
+  /** line breaking of `text` at `avail`: a pure function of its arguments, the paint and the
+   *  flags WrapMemo keys on. Callers go through linesFor/hintFor. */
+  breakLines(text: string, avail: number): string[] {
+    perf.wraps++;
     if (avail <= 0) return text ? [text] : [];
     // measureText memoises on (font, string) and applies letter spacing; ctx.measureText did
     // neither, so every probe of the break search went to the browser and no line accounted for
@@ -153,13 +193,19 @@ export class JTextView extends JView {
     this.editObj.text = this.text;
     return this.editObj;
   }
-  wrapHint(avail: number): string[] {
-    const saveText = this.text;
-    this.text = this.hint;
-    const lines = this.wrap(avail);
-    this.text = saveText;
-    return lines;
+  /** the text's lines at `avail` */
+  linesFor(avail: number): Wrapped { return (this.wrapMemo ??= new WrapMemo()).get(this, this.displayText(), avail); }
+  /** an empty field draws its hint every frame, so the hint keeps a memo of its own */
+  private hintUpperOf = ""; private hintUpper = "";
+  hintFor(avail: number): Wrapped {
+    let hint = this.hint;
+    if (this.allCaps) {
+      if (this.hintUpperOf !== hint) { this.hintUpperOf = hint; this.hintUpper = hint.toUpperCase(); }
+      hint = this.hintUpper;
+    }
+    return (this.hintMemo ??= new WrapMemo()).get(this, hint, avail);
   }
+  useLines(w: Wrapped) { this.lines = w.lines; this.lineWidths = w.widths; }
 }
 const tvAttr = attrTable(
   "text", "textSize", "textColor", "textStyle", "textAppearance", "hint", "gravity", "maxLines",
@@ -279,6 +325,19 @@ export function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v:
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": maySuspend(function (this: T, c: unknown, set: JAttrSet | null, dsa: number) { return init(this, c, set, dsa); }),
   };
 }
+/** AOSP setRawTextSize: only a size that differs asks for layout */
+function setRawTextSize(tv: JTextView, px: number) {
+  if (tv.paintT.textSize === px) return;
+  tv.paintT.textSize = px;
+  requestLayout(tv);
+}
+/** AOSP setTypeface: the typeface already in use asks for nothing. Fake bold counts as a change
+ *  here because it changes the measured width. */
+function applyTypeface(tv: JTextView, tf: JTypeface, fakeBold: boolean) {
+  if (tv.paintT.tf === tf && tv.paintT.fakeBold === fakeBold) return;
+  tv.paintT.tf = tf; tv.paintT.fakeBold = fakeBold;
+  requestLayout(tv);
+}
 function compoundDrawables(this: JTextView) {
   return jarray([this.drawableL, this.drawableT, this.drawableR, this.drawableB], "Landroid/graphics/drawable/Drawable;");
 }
@@ -312,18 +371,16 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     return this.editable ? this.getEditable() : (this.rawText ?? this.text);
   },
   "length()I": function (this: JTextView) { return this.text.length; },
-  "setHint(Ljava/lang/CharSequence;)V": function (this: JTextView, cs: unknown) { this.hint = spannedString(cs); invalidate(); },
+  // AOSP's checkForRelayout: an empty view measures its hint, so a new one can change the size
+  "setHint(Ljava/lang/CharSequence;)V": function (this: JTextView, cs: unknown) { this.hint = spannedString(cs); requestLayout(this); },
   "setHint(I)V": function (this: JTextView, id: number) {
     this.hint = this.jres ? resString(this.jres, id) : "";
+    requestLayout(this);
   },
   "getHint()Ljava/lang/CharSequence;": function (this: JTextView) { return this.hint; },
-  "setTextSize(F)V": function (this: JTextView, sp: number) {
-    this.paintT.textSize = sp * device.density;
-    requestLayout(this);
-  },
+  "setTextSize(F)V": function (this: JTextView, sp: number) { setRawTextSize(this, sp * device.density); },
   "setTextSize(IF)V": function (this: JTextView, unit: number, v: number) {
-    this.paintT.textSize = unit === 1 || unit === 2 ? v * device.density : v; // COMPLEX_UNIT_DIP / SP
-    requestLayout(this);
+    setRawTextSize(this, unit === 1 || unit === 2 ? v * device.density : v); // COMPLEX_UNIT_DIP / SP
   },
   "getTextSize()F": function (this: JTextView) { return this.paintT.textSize; },
   "setTextColor(I)V": function (this: JTextView, c: number) { this.colors = mkCsl(c); invalidate(); },
@@ -333,17 +390,14 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "getTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.colors; },
   "getCurrentTextColor()I": function (this: JTextView) { return cslColor(this.colors, this.drawableState()); },
-  "setHintTextColor(I)V": function (this: JTextView, c: number) { this.hintColors = mkCsl(c); },
+  "setHintTextColor(I)V": function (this: JTextView, c: number) { this.hintColors = mkCsl(c); invalidate(this); },
   "setGravity(I)V": function (this: JTextView, g: number) { this.gravityT = g; invalidate(); },
   "getGravity()I": function (this: JTextView) { return this.gravityT; },
   "setTypeface(Landroid/graphics/Typeface;)V": function (this: JTextView, t: JTypeface | null) {
-    this.paintT.tf = t ?? tfDefault;
-    requestLayout(this);
+    applyTypeface(this, t ?? tfDefault, this.paintT.fakeBold);
   },
   "setTypeface(Landroid/graphics/Typeface;I)V": function (this: JTextView, t: JTypeface | null, style: number) {
-    this.paintT.tf = t ?? tfDefault;
-    this.paintT.fakeBold = (style & 1) !== 0;
-    requestLayout(this);
+    applyTypeface(this, t ?? tfDefault, (style & 1) !== 0);
   },
   "getTypeface()Landroid/graphics/Typeface;": function (this: JTextView) { return this.paintT.tf; },
   "getPaint()Landroid/text/TextPaint;": function (this: JTextView) { return this.paintT; },
@@ -354,14 +408,17 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setMinLines(I)V": function (this: JTextView, n: number) { this.minLinesV = n; requestLayout(this); },
   "setLines(I)V": function (this: JTextView, n: number) { this.maxLinesV = n; this.minLinesV = n; requestLayout(this); },
   "setEllipsize(Landroid/text/TextUtils$TruncateAt;)V": function (this: JTextView, e: { ord: number } | null) {
-    this.ellipsizeEnd = e?.ord === 2;
+    const end = e?.ord === 2;
+    if (this.ellipsizeEnd !== end) { this.ellipsizeEnd = end; requestLayout(this); }
   },
   "setAllCaps(Z)V": function (this: JTextView, v: number) { this.allCaps = !!v; this.capsSet = true; requestLayout(this); },
   "setLineSpacing(FF)V": function (this: JTextView, extra: number, mult: number) {
     this.lineSpacingExtra = extra; this.lineSpacingMult = mult;
     requestLayout(this);
   },
-  "setLetterSpacing(F)V": function (this: JTextView, v: number) { this.paintT.letterSpacingEm = v; },
+  "setLetterSpacing(F)V": function (this: JTextView, v: number) {
+    if (this.paintT.letterSpacingEm !== v) { this.paintT.letterSpacingEm = v; requestLayout(this); }
+  },
   "setIncludeFontPadding(Z)V": function (this: JTextView, on: number) { this.includePad = !!on; requestLayout(this); },
   "setTextAppearance(Landroid/content/Context;I)V": function (this: JTextView, c: unknown, id: number) { return setTextAppearance.call(this, id); },
   "setTextAppearance(I)V": setTextAppearance,
@@ -423,7 +480,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getTotalPaddingTop()I": compoundPadT,
   "getTotalPaddingBottom()I": compoundPadB,
   "setWidth(I)V": function (this: JTextView, w: number) { this.minW = w; this.maxW = w; requestLayout(this); },
-  "setMinEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.paintT.textSize); },
+  "setMinEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.paintT.textSize); requestLayout(this); },
   "setRawInputType(I)V": function (this: JTextView, t: number) { this.inputTypeV = t; },
   "setLinksClickable(Z)V": function (this: JTextView, v: number) { this.linksClickable = !!v; },
   "getLinksClickable()Z": function (this: JTextView) { return this.linksClickable ? 1 : 0; },
@@ -471,10 +528,12 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const dlW = this.drawableL ? Math.max(0, this.drawableL.intrinsicW()) + this.drawablePad : 0;
     const drW = this.drawableR ? Math.max(0, this.drawableR.intrinsicW()) + this.drawablePad : 0;
     const w = this.layoutWidthFor - this.padL - this.padR - dlW - drW;
-    const key = this.displayText() + "\u0000" + w + "\u0000" + this.paintT.font() + "\u0000" + this.maxLinesV;
-    if (this.layoutKey !== key) {
-      this.layoutKey = key;
-      this.layoutObj = mkStaticLayout(this.displayText(), this.paintT, w, this.lineSpacingMult, this.lineSpacingExtra, Number.isFinite(this.maxLinesV) ? this.maxLinesV : undefined);
+    const p = this.paintT, text = this.displayText(), font = p.font();
+    if (text !== this.layoutText || w !== this.layoutW || font !== this.layoutFont || this.maxLinesV !== this.layoutMax ||
+        p.letterSpacingEm !== this.layoutLS || this.lineSpacingMult !== this.layoutMult || this.lineSpacingExtra !== this.layoutExtra) {
+      this.layoutText = text; this.layoutW = w; this.layoutFont = font; this.layoutMax = this.maxLinesV;
+      this.layoutLS = p.letterSpacingEm; this.layoutMult = this.lineSpacingMult; this.layoutExtra = this.lineSpacingExtra;
+      this.layoutObj = mkStaticLayout(text, p, w, this.lineSpacingMult, this.lineSpacingExtra, Number.isFinite(this.maxLinesV) ? this.maxLinesV : undefined);
     }
     return this.layoutObj;
   },
@@ -483,7 +542,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     r.left = this.padL; r.right = Math.max(this.padL, w - this.padR); r.top = this.padT + i * lh; r.bottom = r.top + lh;
     return r.top + this.ascent();
   },
-  "setMinWidth(I)V": function (this: JTextView, w: number) { this.minW = w; },
+  "setMinWidth(I)V": function (this: JTextView, w: number) { this.minW = w; requestLayout(this); },
   ...noops("setCompoundDrawableTintMode(Landroid/graphics/PorterDuff$Mode;)V",
     "setTextLocales(Landroid/os/LocaleList;)V", "setImeHintLocales(Landroid/os/LocaleList;)V", "beginBatchEdit()V",
     "endBatchEdit()V", "setHighlightColor(I)V", "setHorizontallyScrolling(Z)V", "setMarqueeRepeatLimit(I)V",
@@ -492,8 +551,8 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   ...stubs(1, "getIncludeFontPadding()Z"),
   ...stubs(0, "isHorizontallyScrollable()Z"),
   ...stubs(-1, "getAutoSizeMinTextSize()I", "getAutoSizeMaxTextSize()I", "getAutoSizeStepGranularity()I"),
-  "setMinHeight(I)V": function (this: JTextView, h: number) { this.minH = h; },
-  "setEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.paintT.textSize); },
+  "setMinHeight(I)V": function (this: JTextView, h: number) { this.minH = h; requestLayout(this); },
+  "setEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.paintT.textSize); requestLayout(this); },
   "setPaintFlags(I)V": function (this: JTextView, f: number) {
     this.paintT.strikeThru = (f & 16) !== 0;
     this.paintT.underline = (f & 8) !== 0;
@@ -518,11 +577,10 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const display = this.displayText() || "";
     if (wMode === MS_EXACTLY) {
       w = wSize;
-      this.lines = this.wrap(w - this.padL - this.padR - dlW);
+      this.useLines(this.linesFor(w - this.padL - this.padR - dlW));
     } else {
-      this.lines = this.wrap(availText);
-      let tw = 0;
-      for (const l of this.lines) tw = Math.max(tw, measureText(this.paintT, l));
+      let lay = this.linesFor(availText);
+      let tw = lay.maxW;
       if (!display && this.hint) tw = Math.max(tw, measureText(this.paintT, this.hint));
       w = Math.ceil(tw) + this.padL + this.padR + dlW;
       w = Math.min(Math.max(w, this.minW), this.maxW);
@@ -531,7 +589,8 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       // stay wrapped for the desired width, so a clamp leaves both the height (too few lines)
       // and the draw (a line wider than the view, silently clipped) wrong.
       const finalAvail = w - this.padL - this.padR - dlW;
-      if (finalAvail < availText) this.lines = this.wrap(finalAvail);
+      if (finalAvail < availText) lay = this.linesFor(finalAvail);
+      this.useLines(lay);
     }
     const lineCount = Math.max(this.lines.length, display || this.hint ? 1 : 0, this.minLinesV);
     const vPad = this.padT + this.padB;
@@ -567,10 +626,11 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     }
     const avail = contentR - contentL;
     if (this.layoutWidthFor !== this.width()) {
-      this.lines = this.wrap(avail);
+      this.useLines(this.linesFor(avail));
       this.layoutWidthFor = this.width();
     }
-    const lines = showHint ? this.wrapHint(avail) : this.lines;
+    const hintLay = showHint ? this.hintFor(avail) : null;
+    const lines = hintLay ? hintLay.lines : this.lines, widths = hintLay ? hintLay.widths : this.lineWidths;
     if (!lines.length && !this.editable) return;
     const lh = this.lineHeight();
     const totalH = this.textHeight(Math.max(1, lines.length));
@@ -583,18 +643,18 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const hg = gravityH(this.gravityT);
     ctx.textAlign = hg === 1 ? "center" : hg === 5 ? "right" : "left";
     const x = hg === 1 ? (contentL + contentR) / 2 : hg === 5 ? contentR : contentL;
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       ctx.fillText(line, x, y);
       if (this.paintT.strikeThru && line) {
-        const w = measureText(this.paintT, line);
+        const w = widths[i];
         const sx = hg === 1 ? x - w / 2 : hg === 5 ? x - w : x;
         ctx.fillRect(sx, y - this.paintT.textSize * 0.3, w, Math.max(1, this.paintT.textSize / 14));
       }
       y += lh;
     }
     if (this.editable && this.focused && this.cursorVisible && Math.floor((performance.now() - this.blinkStart) / 500) % 2 === 0) {
-      const lastLine = lines[lines.length - 1] ?? "";
-      const cw = measureText(this.paintT, lastLine);
+      const cw = widths[lines.length - 1] ?? 0;
       const cx = (hg === 1 ? x + cw / 2 : hg === 5 ? x : x + cw) + 1;
       const cy = y - lh;
       ctx.fillStyle = cssColor(cslColor(this.colors, []));

@@ -26,13 +26,14 @@ interface Overlay {
 export const overlays: Overlay[] = [];
 export function addOverlay(v: JView, x = 0, y = 0, dismissOnOutside = false, onBack?: () => unknown, onDismiss?: () => unknown) {
   overlays.push({ view: v, x, y, dismissOnOutside, onBack, onDismiss });
-  requestLayout();
+  requestLayout(v);
 }
 export function dismissOverlay(o: Overlay) { return o.onDismiss ? o.onDismiss() : removeOverlay(o.view); }
+/** the windows under it keep their layout; the screen only has to be drawn without it */
 export function removeOverlay(v: JView) {
   const i = overlays.findIndex((o) => o.view === v);
   if (i >= 0) overlays.splice(i, 1);
-  requestLayout();
+  invalidate();
 }
 
 // toast: plain shell-drawn banner (not a View)
@@ -319,7 +320,7 @@ async function pwPlace(this: JPopupWindow) {
   }
   const o = overlays.find((o) => o.view === d);
   if (o) { o.x = x; o.y = y; }
-  requestLayout();
+  requestLayout(d);
 }
 async function pwShowDropDown(this: JPopupWindow, anchor: JView, xoff = 0, yoff = 0, gravity = 0) {
   if (this.showing || !this.content) return;
@@ -339,7 +340,7 @@ async function pwShowAt(this: JPopupWindow, parent: JView, gravity: number, x: n
   const py = vg === 16 ? ((sh - d.measuredH) >> 1) + y : vg === 80 ? sh - d.measuredH - y : y;
   const o = overlays.find((o) => o.view === d);
   if (o) { o.x = px; o.y = py; }
-  requestLayout();
+  requestLayout(d);
 }
 async function pwDismiss(this: JPopupWindow) {
   if (!this.showing) return;
@@ -357,9 +358,8 @@ async function pwDismiss(this: JPopupWindow) {
 }
 function pwUpdate(this: JPopupWindow) {
   if (!this.showing || !this.decor) return;
-  this.decor.layoutRequested = true;
+  requestLayout(this.decor);
   if (this.anchor) return pwPlace.call(this);
-  requestLayout();
 }
 /** update(anchor, xoff, yoff, width, height): -1 leaves a dimension alone */
 function pwUpdateAnchor(this: JPopupWindow, anchor: JView, xoff: number, yoff: number, width: number, height: number) {

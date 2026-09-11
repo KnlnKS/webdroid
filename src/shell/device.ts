@@ -12,7 +12,7 @@ import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
 import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguration } from "../android/resnative";
 import { setAppHost, type AppHost, type ActivityLaunch } from "../android/apphost";
-import { setManifest, manifestActivityTheme, manifestActivityOrientation, activityHandlesConfig, CONFIG_UI_MODE, getPM } from "../android/pm";
+import { setManifest, manifestActivityTheme, manifestActivityOrientation, activityHandlesConfig, CONFIG_UI_MODE, getPM, usesSdk } from "../android/pm";
 import { JIntent, deliverActivityResult, activityTransport, mkComponentName } from "../android/intent";
 import { ensureDecor, startingWindow } from "../android/decor";
 import { getInflater } from "../android/inflate";
@@ -24,7 +24,7 @@ import { APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
 import { reportUncaught, JBundle, dispatchVsync, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
 import { packageUid, packages } from "../android/packages";
 import { onMain, inMainJob, mainDbg } from "../android/mainloop";
-import { JView, JViewGroup, uiState, layoutPass, replayLayoutRequests, measureView, layoutView, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
+import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setMeasureTargetSdk, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
 import { dispatchWindowInsets } from "../android/windowinsets";
 import { JCanvas, cssColor, tfMedium } from "../android/graphics";
@@ -219,6 +219,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   setProcessIdentity(PROCESS_PID, packages.get(pkg)?.uid ?? packageUid(pkg));
   setProcessName(processName ?? pkg);
   setManifest(manifest, activities, providers);
+  setMeasureTargetSdk(usesSdk(manifest).target);
   prepared?.();
 
   return onMain(async () => {
@@ -349,12 +350,6 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
     if (prev?.started) await stopActivity(prev);
     void buildOptionsMenu(act);
     invalidateWindow();
-    // Fragment pages (ViewPager/FragmentPagerAdapter) instantiate asynchronously, after this
-    // frame's layout. Schedule extra re-layouts so they get measured/laid out once present.
-    uiState.settle = Math.max(uiState.settle, 6);
-    for (const delay of [80, 200, 450]) {
-      setTimeout(() => { uiState.needsLayout = true; uiState.needsDraw = true; }, delay);
-    }
   } catch (e) {
     reportUncaught(e);
   }
@@ -364,6 +359,7 @@ const CONFIG_ORIENTATION_SIZE = 0x0080 | 0x0400;
 function changeActivityOrientation(act: JActivity, request: number): void {
   if (!applyOrientationRequest(request)) return;
   invalidateWindow();
+  requestLayoutAll();
   if (activityHandlesConfig(act, CONFIG_ORIENTATION_SIZE)) {
     void onMain(() => vcall(act, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", deviceConfiguration())).catch(reportUncaught);
   } else recreateActivity(act);
@@ -373,7 +369,7 @@ function changeActivityOrientation(act: JActivity, request: number): void {
  *  onConfigurationChanged if it declared uiMode, through a relaunch otherwise. */
 function deviceNightChanged(night: boolean): void {
   if (!setDeviceNight(night) || !booted) return;
-  uiState.needsLayout = uiState.needsDraw = true;
+  requestLayoutAll();
   const act = booted.stack.at(-1);
   if (!act) return;
   if (activityHandlesConfig(act, CONFIG_UI_MODE)) {
@@ -420,6 +416,7 @@ function recreateActivity(act: JActivity): void {
       const options = { caller: act.callingActivity, result: act.resultTo ?? undefined, remoteId: act.remoteId, activityId: act.activityId, taskId: act.taskId };
       act.remoteId = 0;
       await launchActivity0(cls, act.intent, { state, nonConfig, requestedOrientation: act.requestedOrientation }, options);
+      requestLayoutAll();
     } catch (e) { reportUncaught(e); }
     finally { setCurThread(prev); }
   }), 0);
@@ -570,31 +567,6 @@ async function drawStartWin(w: { view: JView; fullscreen: boolean }) {
   present();
 }
 let clockMinute = -1, clockText = "";
-// Views committed outside a layout pass (androidx addViewInLayout, async fragment
-// commits) can leave measured != laid-out sizes with no pass scheduled. Detect and
-// schedule one more full pass; fingerprint prevents re-trigger loops on legit mismatches.
-let lastSettleFp = 0;
-function settleWatch(root: any): void {
-  let fp = 0, n = 0;
-  const stack = [root];
-  while (stack.length) {
-    const v = stack.pop();
-    if (!v || v.visibility === 8) continue;
-    const w = v.right - v.left, h = v.bottom - v.top;
-    if ((v.measuredW !== w || v.measuredH !== h) && v.measuredW > 0 && v.measuredH > 0) {
-      n++;
-      fp = (Math.imul(fp, 33) ^ (v.idNum ?? 0)) >>> 0;
-      fp = (Math.imul(fp, 33) ^ (w * 31 + h)) >>> 0;
-      fp = (Math.imul(fp, 33) ^ (v.measuredW * 31 + v.measuredH)) >>> 0;
-    }
-    for (const c of v.children ?? []) stack.push(c);
-  }
-  // A mismatch means someone committed a view outside a layout pass; the cached specs are
-  // no longer trustworthy anywhere, so ask for a full re-measure rather than a cached one.
-  if (n && fp !== lastSettleFp) { uiState.needsLayout = true; uiState.needsDraw = true; uiState.forceAll = true; }
-  lastSettleFp = n ? fp : 0;
-}
-
 
 export async function tick() {
   if (drawing) return;
@@ -635,7 +607,6 @@ async function tick0() {
       return;
     }
     startWin = null;
-    let didLayout = false;
     const contentY = contentTop(), contentH = SCREEN_H - contentY;
     // AOSP's performTraversals dispatches insets before measure, so padding a fitsSystemWindows
     // consumer sets is visible to the same pass. Waiting for one completed layout keeps a
@@ -643,29 +614,30 @@ async function tick0() {
     // means a listener's own requestApplyInsets() re-arms the next frame instead of recursing.
     if (uiState.needsInsets && decor.right > 0) {
       uiState.needsInsets = false;
+      perf.insetsPasses++;
       mainDbg.phase = "insets";
       try { await dispatchWindowInsets(decor); } catch (e) { console.error("[insets]", e); }
       uiState.needsLayout = true;
     }
     if (uiState.needsLayout) {
       uiState.needsLayout = false;
-      didLayout = true;
       const t0 = performance.now();
       perf.layoutPasses++;
-      decor.layoutRequested = true;
-      layoutPass.active = true;
       try {
-        // Only blow the whole tree's cached measurements away when a caller dirtied something
-        // it could not name; otherwise requestLayout(view) has already marked the path to the
-        // root and measureView reuses everything else.
-        if (uiState.forceAll) { uiState.forceAll = false; forceLayoutFlags(decor); }
+        // Boot or a configuration change: every window's cached measurements are stale.
+        // Otherwise requestLayout(view) has marked the path to its root and measureView reuses
+        // everything else; a window nothing asked for is not re-measured at all.
+        if (uiState.forceAll) {
+          uiState.forceAll = false;
+          forceLayoutFlags(decor);
+          for (const o of overlays) forceLayoutFlags(o.view);
+        }
         mainDbg.phase = "measure";
         await measureView(decor, makeSpec(SCREEN_W, MS_EXACTLY), makeSpec(contentH, MS_EXACTLY));
         mainDbg.phase = "layout";
-        await layoutView(decor, 0, 0, SCREEN_W, contentH);
+        await layoutRoot(decor, 0, 0, SCREEN_W, contentH);
         mainDbg.phase = "overlays";
         for (const o of overlays) {
-          o.view.layoutRequested = true;
           await measureView(o.view, makeSpec(SCREEN_W, 0x80000000 | 0), makeSpec(contentH, 0x80000000 | 0));
           // AOSP lays a window out inside the screen: a dropdown anchored near the right edge
           // shifts left instead of hanging off it. The popup's own placement pass runs before
@@ -673,7 +645,7 @@ async function tick0() {
           // and the position is written back, since hit-testing reads it too.
           o.x = Math.max(0, Math.min(o.x, SCREEN_W - o.view.measuredW));
           o.y = Math.max(0, Math.min(o.y, contentH - o.view.measuredH));
-          await layoutView(o.view, o.x, o.y, o.x + o.view.measuredW, o.y + o.view.measuredH);
+          await layoutRoot(o.view, o.x, o.y, o.x + o.view.measuredW, o.y + o.view.measuredH);
         }
         mainDbg.phase = "globalLayout";
         await fireGlobalLayout(decor);
@@ -684,21 +656,15 @@ async function tick0() {
         perf.layoutErrors++;
         console.error("[layout]", e);
       }
-      layoutPass.active = false;
+      mainDbg.phase = "replay";
       replayLayoutRequests();
       perf.layoutMs += performance.now() - t0;
       uiState.needsDraw = true;
-      // stateful app views (ViewPager etc.) may cache specs mid-build: settle with extra passes
-      if (uiState.settle > 0) {
-        uiState.settle--;
-        uiState.needsLayout = true;
-      }
     }
     if (uiState.needsDraw) {
       uiState.needsDraw = false;
       const t0 = performance.now();
       perf.draws++;
-      const laidOut = didLayout;
       ctx.save();
       rt.yieldGap = 50;
       try {
@@ -729,9 +695,6 @@ async function tick0() {
       perf.drawMs += performance.now() - t0;
       // WebView frames are DOM over the canvas: show the ones this pass drew, hide the rest
       webLayerSweep(contentY, overlays.length > 0);
-      // Only meaningful right after a layout pass: without one, measured-vs-laid-out sizes
-      // cannot have changed, so the walk is pure cost.
-      if (laidOut) settleWatch(decor);
     }
   } catch (e) {
     console.error("[tick]", e);
@@ -742,6 +705,7 @@ function forceLayoutFlags(v: JView) {
   v.layoutRequested = true;
   v.layoutRequired = true;
   v.oldWSpec = -1;
+  clearMeasureCache(v);
   if (v instanceof JViewGroup) for (const c of v.children) forceLayoutFlags(c);
 }
 function drawStatusIcons(ctx: OffscreenCanvasRenderingContext2D, bg: number, appearance: number, appearanceMask: number) {

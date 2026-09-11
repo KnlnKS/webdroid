@@ -1,6 +1,6 @@
 import { JObj, rt, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
-import { findById, type JViewGroup, type JView, attachView, detachView, requestLayout, removeFrom } from "./view";
+import { findById, type JViewGroup, type JView, attachView, detachView, removeFrom } from "./view";
 import { getInflater } from "./inflate";
 import type { JActivity } from "./app";
 import { reportUncaught } from "./os";
@@ -68,8 +68,8 @@ async function runFragmentTransaction(tx: JFragmentTransaction): Promise<number>
       await runFragmentRemove(fm, op.frag);
     }
   }
+  // the views added and removed above asked for layout themselves, as AOSP's do
   tx.ops.length = 0;
-  requestLayout();
   return 0;
 }
 rt.register({

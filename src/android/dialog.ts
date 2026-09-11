@@ -256,7 +256,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     const root = this.ensureRoot();
     root.setContent(null);
     await inflateLayout(this.jctx, layoutId, root.content, true);
-    requestLayout();
+    requestLayout(root.content);
   },
   "setContentView(Landroid/view/View;)V": function (this: JDialog, v: JView) {
     const root = this.ensureRoot();
@@ -266,7 +266,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
       v.lp = lp;
     }
     root.setContent(v);
-    requestLayout();
+    requestLayout(root.content);
   },
   "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": maySuspend(function (this: JDialog, v: JView, lp: any) {
     v.lp = lp;
@@ -275,7 +275,6 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
     v.lp = lp;
     attachView(this.ensureRoot().content, v);
-    requestLayout();
   },
   "show()V": async function (this: JDialog) {
     if (this.showing) return;
@@ -298,7 +297,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     if (this.showL) {
       try { await vcall(this.showL, "onShow", "(Landroid/content/DialogInterface;)V", this); } catch (e) { reportUncaught(e); }
     }
-    requestLayout();
+    requestLayout(root);
   },
   "hide()V": function (this: JDialog) { if (this.root) this.root.visibility = 4; },
   "dismiss()V": function (this: JDialog) { return this.dismissImpl(); },

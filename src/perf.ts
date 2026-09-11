@@ -9,6 +9,15 @@ export const perf = {
   // how many repaints were asked for vs how many frames actually drew: tells "slow frame"
   // apart from "we are drawing frames nobody asked for".
   invalidates: 0,
+  // layout work: requests that name a view against those that re-measure the whole tree,
+  // onMeasure bodies that actually ran, views laid out at a size other than their measurement,
+  // and window-inset dispatches (each one forces a layout pass).
+  layoutRequests: 0, layoutRequestsAll: 0, onMeasures: 0, layoutMismatch: 0, insetsPasses: 0,
+  // TextView line breaking computed against served from a memo, measures a cache answered, and
+  // measures skipped because an EXACTLY spec matched the size the view already had
+  wraps: 0, wrapHits: 0, measureCacheHits: 0, exactSkips: 0,
+  // draw work: views painted against views their parent's clip rejected
+  viewsDrawn: 0, viewsRejected: 0,
   // a frame phase that threw. Must stay 0 on a healthy app; non-zero names a real gap.
   layoutErrors: 0, drawErrors: 0,
   // wall time inside input dispatch, and lazy class compilation — both land ON the tap.

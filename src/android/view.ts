@@ -13,7 +13,7 @@ import { device } from "../shell/config";
 import { rootWindowInsets, type JWindowInsets, sysIns } from "./windowinsets";
 import { mkVPA } from "./viewanimator";
 import type { JContext } from "./context";
-import { onMain } from "./mainloop";
+import { onMain, mainDbg } from "./mainloop";
 import type { JWindow } from "./window";
 
 // MeasureSpec
@@ -35,7 +35,6 @@ export const uiState = {
   needsDraw: true,
   /** the next pass must re-measure everything: a caller dirtied something it could not name */
   forceAll: true,
-  settle: 2,
   frameCallbacks: [] as unknown[],
   animHooks: new Set<() => boolean>(), // ts-side animators; return false to remove
   /** the current frame's timestamp. AOSP's Choreographer computes this ONCE in doFrame and
@@ -43,7 +42,18 @@ export const uiState = {
    *  to all withFrameNanos awaiters, so animations desync if callbacks see different times. */
   frameTimeNanos: 0n,
   frameIntervalNanos: 0n,
+  /** debug only (wd.layoutTrace): requestLayout counts by requesting class, and by frame phase
+   *  plus the two native frames that asked. Null costs one test per request. */
+  layoutTrace: null as { cls: Record<string, number>; site: Record<string, number> } | null,
 };
+function traceLayoutRequest(t: NonNullable<typeof uiState.layoutTrace>, v: JView | null | undefined) {
+  const cls = v ? ((v.constructor as { $i?: { name: string } }).$i?.name ?? v.constructor.name) : "(all)";
+  t.cls[cls] = (t.cls[cls] ?? 0) + 1;
+  // stack[0] is the message, [1] this function, [2] requestLayout; the callers follow
+  const callers = (new Error().stack ?? "").split("\n").slice(3, 5).map((l) => /at (?:async )?([^\s(]+)/.exec(l)?.[1] ?? "?");
+  const site = `${mainDbg.phase || "-"} ${callers.join("<")}`;
+  t.site[site] = (t.site[site] ?? 0) + 1;
+}
 export function invalidate(v?: JView) {
   perf.invalidates++; uiState.needsDraw = true;
   if (v) descendantInvalidated(v, v);
@@ -63,6 +73,13 @@ function descendantInvalidated(child: JView, target: JView) {
 }
 function nativeOnDescInv(this: JViewGroup, _child: JView, target: JView) { invalidate(); descendantInvalidated(this, target); }
 function nativeRequestLayout(this: JView) { requestLayout(this); }
+/** AOSP's addView and removeView call the parent's requestLayout() virtually: an override
+ *  (RecyclerView defers while it binds or lays out) decides first */
+export function requestLayoutVirtual(v: JView) {
+  const f = jmethod(v, M_requestLayout);
+  if (f && f !== nativeRequestLayout) void guardApply(f as JMethod, v);
+  else requestLayout(v);
+}
 setInvalidateHook(invalidate);
 let focusHook: (v: JView, on: boolean) => void = () => {};
 export const setFocusHook = (h: typeof focusHook) => { focusHook = h; };
@@ -88,16 +105,17 @@ function focusMoved(v: JView, now: JView | null) {
 /**
  * Schedule a layout pass. Pass the view whose measurement went stale so the pass can skip
  * the clean parts of the tree (AOSP marks the view and walks UP to the root; children are
- * re-measured only when their parent hands them different specs). Callers that cannot name
- * a view fall back to re-measuring everything.
+ * re-measured only when their parent hands them different specs).
  */
-export function requestLayout(v?: JView | null) {
-  uiState.needsLayout = true; uiState.needsDraw = true; uiState.settle = 3;
-  if (!v) { uiState.forceAll = true; return; }
-  if (layoutPass.active) layoutPass.requesters.push(v);
+export function requestLayout(v: JView) {
+  uiState.needsLayout = true; uiState.needsDraw = true;
+  if (uiState.layoutTrace) traceLayoutRequest(uiState.layoutTrace, v);
+  perf.layoutRequests++;
+  if (layoutPass.active && v.attached && !v.inRequesters) { v.inRequesters = true; layoutPass.requesters.push(v); }
   for (let p: JView | null = v; p; p = p.parent) {
     p.layoutRequested = true;
     p.oldWSpec = -1;
+    clearMeasureCache(p);
     // AOSP calls the parent's requestLayout() virtually: an override (Compose's AndroidViewHolder
     // asks its layout node to remeasure, DrawerLayout declines mid-layout) resumes the walk itself
     const par = p.parent;
@@ -106,18 +124,47 @@ export function requestLayout(v?: JView | null) {
     if (f && f !== nativeRequestLayout) { void guardApply(f as JMethod, par); break; }
   }
 }
+/** A configuration change (orientation, night mode, a relaunch), like boot, leaves every cached
+ *  measurement stale, and no single view names that: the next pass re-measures every window. */
+export function requestLayoutAll() {
+  uiState.needsLayout = true; uiState.needsDraw = true; uiState.forceAll = true;
+  perf.layoutRequestsAll++;
+  if (uiState.layoutTrace) traceLayoutRequest(uiState.layoutTrace, null);
+}
 /**
- * AOSP ViewRootImpl.mLayoutRequesters: a requestLayout() made during a pass stops at an ancestor
- * the pass has already flagged and then cleared, and the pass clears the requester's own flag on
- * its way down, so the request would vanish. After the pass the flags on each requester's path are
- * cleared and the request is made again, which marks the path to the root for the next pass.
+ * AOSP ViewRootImpl.mLayoutRequesters. A requestLayout() made while the tree lays out stops at an
+ * ancestor the pass has flagged, and that ancestor's layout then clears the flag, so the request
+ * could vanish. Requests are collected only during layout (isInLayout): one made during measure
+ * is served by the same pass's layout, which clears the requester's flag.
  */
 export const layoutPass = { active: false, requesters: [] as JView[] };
+/** ViewRootImpl.performLayout: a window root's layout, with in-layout requests collected */
+export async function layoutRoot(v: JView, l: number, t: number, r: number, b: number) {
+  layoutPass.active = true;
+  try { await layoutView(v, l, t, r, b); } finally { layoutPass.active = false; }
+}
+const validRequesters: JView[] = [];
+function shownPath(v: JView): boolean {
+  for (let p: JView | null = v; p; p = p.parent) if (p.visibility === 8) return false;
+  return true;
+}
+/**
+ * AOSP getValidLayoutRequesters: only a requester whose flag survived the pass lost its request,
+ * and only one still attached and not under a GONE ancestor asks again. Every requester's flagged
+ * path is cleared first, so the new request marks it to the root. The repeat runs in the next
+ * frame's pass rather than as a second pass in this one.
+ */
 export function replayLayoutRequests() {
   const rs = layoutPass.requesters;
   if (!rs.length) return;
-  for (const r of rs) for (let p: JView | null = r; p; p = p.parent) p.layoutRequested = false;
-  for (const r of rs.splice(0)) requestLayout(r);
+  for (const r of rs) {
+    r.inRequesters = false;
+    if (r.layoutRequested && r.attached && shownPath(r)) validRequesters.push(r);
+  }
+  for (const r of rs) for (let p: JView | null = r; p && p.layoutRequested; p = p.parent) p.layoutRequested = false;
+  rs.length = 0;
+  for (const r of validRequesters) requestLayoutVirtual(r);
+  validRequesters.length = 0;
 }
 
 const M_onMeasure = mangleMethod("onMeasure", "(II)V");
@@ -148,11 +195,27 @@ function windowOffset(view: JView): [number, number] {
   return [tx, ty];
 }
 function removeChild(this: JViewGroup, c: JView) { detachView(this, c); }
-function removeAllChildren(this: JViewGroup) { for (const c of [...this.children]) detachView(this, c); }
-async function attachInLayout(this: JViewGroup, c: JView, i: number, lp: JLayoutParams) {
+function removeChildInLayout(this: JViewGroup, c: JView) { detachView(this, c, false); }
+/** AOSP removeViews/removeAllViews: the children leave without requests and the parent asks
+ *  once; the *InLayout forms do not ask at all */
+function removeRange(vg: JViewGroup, start: number, n: number, request: boolean) {
+  const gone = vg.children.slice(start, start + n);
+  for (const c of gone) detachView(vg, c, false);
+  if (request && gone.length) { requestLayoutVirtual(vg); invalidate(vg); }
+}
+/** AOSP addViewInLayout: addViewInner without the parent's request. Unless the caller prevents
+ *  it, the child's own setLayoutParams asks, before the child has a parent to pass it to. */
+async function addInLayout(this: JViewGroup, c: JView, i: number, lp: JLayoutParams, preventRequestLayout?: number) {
   c.lp = lp ? await convertLp(this, lp) : c.lp;
-  attachView(this, c, i);
+  if (!preventRequestLayout) requestLayoutVirtual(c);
+  attachView(this, c, i, false);
   return 1;
+}
+/** AOSP attachViewToParent: re-links a child detachViewFromParent took out. It never left the
+ *  window, so there is no attach dispatch, no hierarchy callback and no request. */
+async function attachToParent(this: JViewGroup, c: JView, i: number, lp: JLayoutParams) {
+  c.lp = lp ? await convertLp(this, lp) : c.lp;
+  linkChild(this, c, i);
 }
 export function obtainEvent(dt: bigint, et: bigint, action: number, x: number, y: number, metaState = 0) {
   const e = new JMotionEvent();
@@ -257,6 +320,14 @@ export class JView extends JObj {
   static $nextDrawingId = 0;
   measuredW = 0; measuredH = 0;
   oldWSpec = -1; oldHSpec = -1;
+  /** AOSP mMeasureCache: up to three spec pairs and the sizes they produced, [w, h, mw, mh] each,
+   *  so a parent measuring a child under alternating specs does not re-run its onMeasure.
+   *  Emptied wherever the old specs are reset, as AOSP's requestLayout/forceLayout clear it. */
+  mc: Float64Array | null = null;
+  mcLen = 0; mcNext = 0;
+  /** AOSP PFLAG3_MEASURE_NEEDED_BEFORE_LAYOUT: the cache answered the last measure, so this
+   *  view's children may hold another spec's sizes; layout re-runs onMeasure first */
+  measureBeforeLayout = false;
   padL = 0; padT = 0; padR = 0; padB = 0;
   minW = 0; minH = 0;
   lp: JLayoutParams | null = null;
@@ -282,6 +353,8 @@ export class JView extends JObj {
   layoutChangeLs: unknown[] = [];
   attachLs: unknown[] = [];
   layoutRequested = true;
+  /** already in layoutPass.requesters this pass: AOSP's mLayoutRequesters holds a view once */
+  inRequesters = false;
   /** AOSP PFLAG_LAYOUT_REQUIRED: set when onMeasure ran, cleared when onLayout consumed it */
   layoutRequired = true;
   overScrollMode = 0;
@@ -440,16 +513,66 @@ export function resolveSizeAndState(size: number, spec: number): number {
   return size;
 }
 
+export function clearMeasureCache(v: JView) { v.mcLen = v.mcNext = 0; }
+function measureCacheFind(v: JView, wSpec: number, hSpec: number): number {
+  const c = v.mc!;
+  for (let i = 0; i < v.mcLen * 4; i += 4) if (c[i] === wSpec && c[i + 1] === hSpec) return i;
+  return -1;
+}
+function measureCachePut(v: JView, wSpec: number, hSpec: number) {
+  const c = v.mc ??= new Float64Array(12);
+  let i = measureCacheFind(v, wSpec, hSpec);
+  if (i < 0) {
+    i = v.mcNext * 4;
+    v.mcNext = (v.mcNext + 1) % 3;
+    if (v.mcLen < 3) v.mcLen++;
+  }
+  c[i] = wSpec; c[i + 1] = hSpec; c[i + 2] = v.measuredW; c[i + 3] = v.measuredH;
+}
+/** AOSP View.sAlwaysRemeasureExactly: an app targeting M (23) or lower re-measures under a changed
+ *  EXACTLY spec even at the size it already has; its LinearLayout weights relied on that pass.
+ *  View.sIgnoreMeasureCache: one targeting below KitKat (19) never has onMeasure answered by
+ *  the measure cache. */
+let alwaysRemeasureExactly = false, ignoreMeasureCache = false;
+export function setMeasureTargetSdk(target: number) {
+  alwaysRemeasureExactly = target <= 23;
+  ignoreMeasureCache = target < 19;
+}
 export async function measureView(v: JView, wSpec: number, hSpec: number) {
   // AOSP View.measure: with no forced layout and identical specs the previous measurement
   // still holds. Without this every pass re-measured the whole tree from the root.
-  if (!v.layoutRequested && wSpec === v.oldWSpec && hSpec === v.oldHSpec) return;
+  if (!v.layoutRequested) {
+    if (wSpec === v.oldWSpec && hSpec === v.oldHSpec) return;
+    // AOSP: a changed spec that is EXACTLY the size the view already measures needs no measure
+    if (!alwaysRemeasureExactly && specMode(wSpec) === MS_EXACTLY && specMode(hSpec) === MS_EXACTLY &&
+        v.measuredW === specSize(wSpec) && v.measuredH === specSize(hSpec)) {
+      v.oldWSpec = wSpec; v.oldHSpec = hSpec;
+      measureCachePut(v, wSpec, hSpec);
+      perf.exactSkips++;
+      return;
+    }
+    // a spec pair this view already measured under since its last request: the size it produced
+    const i = v.mcLen && !ignoreMeasureCache ? measureCacheFind(v, wSpec, hSpec) : -1;
+    if (i >= 0) {
+      const c = v.mc!;
+      v.oldWSpec = wSpec; v.oldHSpec = hSpec;
+      v.measuredW = c[i + 2]; v.measuredH = c[i + 3];
+      v.measureBeforeLayout = true;
+      v.layoutRequired = true;
+      perf.measureCacheHits++;
+      return;
+    }
+  }
   v.oldWSpec = wSpec; v.oldHSpec = hSpec;
+  perf.onMeasures++;
   try {
     await guardCall(v, M_onMeasure, wSpec, hSpec);
     v.layoutRequired = true;   // AOSP sets PFLAG_LAYOUT_REQUIRED whenever onMeasure runs
+    v.measureBeforeLayout = false;
+    measureCachePut(v, wSpec, hSpec);
   } catch (e) {
     v.oldWSpec = -1;
+    clearMeasureCache(v);
     throw e;
   }
 }
@@ -469,10 +592,17 @@ function setBound(v: JView, l: number, t: number, r: number, b: number) {
 }
 
 export async function layoutView(v: JView, l: number, t: number, r: number, b: number) {
+  // AOSP View.layout: a measure the cache answered left the children as the last onMeasure did
+  if (v.measureBeforeLayout) {
+    v.measureBeforeLayout = false;
+    perf.onMeasures++;
+    await guardCall(v, M_onMeasure, v.oldWSpec, v.oldHSpec);
+  }
   const oldL = v.left, oldT = v.top, oldR = v.right, oldB = v.bottom;
   const changed = oldL !== l || oldT !== t || oldR !== r || oldB !== b;
   const ow = v.width(), oh = v.height();
   v.left = l; v.top = t; v.right = r; v.bottom = b;
+  if ((r - l !== v.measuredW || b - t !== v.measuredH) && v.measuredW > 0 && v.measuredH > 0) perf.layoutMismatch++;
   if (changed) {
     await guardMaybe(v, M_onSizeChanged, r - l, b - t, ow, oh);
   }
@@ -508,7 +638,8 @@ export async function drawView(v: JView, cv: JCanvas, parent?: JViewGroup) {
   // animations (ViewPager page snaps, OverScroller flings)
   const cs = jmethod(v, M_computeScroll);
   if (cs && cs !== noopComputeScroll) await guardApply(cs, v);
-  if (parent && clipRejects(parent, v)) return;
+  if (parent && clipRejects(parent, v)) { perf.viewsRejected++; return; }
+  perf.viewsDrawn++;
   const ctx = cv.ctx;
   // AOSP View.draw() brackets the whole thing with getSaveCount()/restoreToCount(): a view
   // that throws between save() and restore() must not leave its clip on the shared context,
@@ -836,7 +967,7 @@ const viewMethods: NativeSpec["methods"] = {
   // which is the one path that reaches here. Do NOT pre-set layoutRequested: the helper's
   // walk breaks at the first marked node, so marking `this` first would skip the ancestors.
   "requestLayout()V": nativeRequestLayout,
-  "forceLayout()V": function (this: JView) { this.layoutRequested = true; },
+  "forceLayout()V": function (this: JView) { this.layoutRequested = true; clearMeasureCache(this); },
   "isLayoutRequested()Z": function (this: JView) { return this.layoutRequested ? 1 : 0; },
   "post(Ljava/lang/Runnable;)Z": function (r: unknown) { return mainHandler().post(r, 0); },
   "postDelayed(Ljava/lang/Runnable;J)Z": function (r: unknown, d: bigint) { return mainHandler().post(r, Number(d)); },
@@ -1345,21 +1476,45 @@ async function convertLp(vg: JViewGroup, lp: JLayoutParams | null): Promise<JLay
   return lp;
 }
 
-export function attachView(parent: JViewGroup, child: JView, index = -1) {
+/** The array and parent link alone, which is all AOSP's attachViewToParent does. False when the
+ *  link would make a cycle. */
+function linkChild(parent: JViewGroup, child: JView, index: number): boolean {
   // integrity: never create a cycle (child already an ancestor of parent)
   for (let a: JView | null = parent; a; a = a.parent) {
     if (a === child) {
       console.error("[webdroid] refused cyclic addView:", (child.constructor as any)?.$i?.name, "into", (parent.constructor as any)?.$i?.name);
-      return;
+      return false;
     }
   }
   if (child.parent) detachView(child.parent as JViewGroup, child);
   if (index < 0 || index > parent.children.length) parent.children.push(child);
   else parent.children.splice(index, 0, child);
   child.parent = parent;
-  // every addView overload funnels here (see addViewFunnel/addView3 below), and
-  // addViewInLayout/attachViewToParent call this directly too -- so this is the one
-  // place that sees every child ever added, regardless of call path.
+  return true;
+}
+/** AOSP detachViewFromParent: the child leaves the array but stays attached to the window */
+function unlinkChild(parent: JViewGroup, child: JView): boolean {
+  const i = parent.children.indexOf(child);
+  if (i < 0) return false;
+  parent.children.splice(i, 1);
+  child.parent = null;
+  return true;
+}
+/** AOSP removeViewInternal and removeDetachedView: the hierarchy listener hears of it and the
+ *  child leaves the window */
+function childRemoved(parent: JViewGroup, child: JView) {
+  if (parent.hierarchyChangeL) {
+    void vcall(parent.hierarchyChangeL, "onChildViewRemoved", "(Landroid/view/View;Landroid/view/View;)V", parent, child);
+  }
+  if (child.attached) void onMain(() => dispatchDetached(child));
+}
+/**
+ * AOSP addViewInner: every addView overload funnels here (see addViewFunnel/addView3 below), as
+ * does addViewInLayout, which passes request=false. addView asks the parent for layout through
+ * its virtual requestLayout(); the in-layout form leaves that to the pass already running.
+ */
+export function attachView(parent: JViewGroup, child: JView, index = -1, request = true) {
+  if (!linkChild(parent, child, index)) return;
   if (parent.hierarchyChangeL) {
     void vcall(parent.hierarchyChangeL, "onChildViewAdded", "(Landroid/view/View;Landroid/view/View;)V", parent, child);
   }
@@ -1367,20 +1522,13 @@ export function attachView(parent: JViewGroup, child: JView, index = -1) {
   // than starting a chain that interleaves with the caller at its first await (Compose's
   // composition installs a snapshot read observer that must not see foreign reads).
   if (parent.attached) void onMain(() => dispatchAttached(child));
-  requestLayout(parent);
-  invalidate(parent);
+  if (request) { requestLayoutVirtual(parent); invalidate(parent); }
 }
-export function detachView(parent: JViewGroup, child: JView) {
-  const i = parent.children.indexOf(child);
-  if (i < 0) return;
-  parent.children.splice(i, 1);
-  child.parent = null;
-  if (parent.hierarchyChangeL) {
-    void vcall(parent.hierarchyChangeL, "onChildViewRemoved", "(Landroid/view/View;Landroid/view/View;)V", parent, child);
-  }
-  if (child.attached) void onMain(() => dispatchDetached(child));
-  requestLayout(parent);
-  invalidate(parent);
+/** AOSP removeView (request) and removeViewInLayout (no request) */
+export function detachView(parent: JViewGroup, child: JView, request = true) {
+  if (!unlinkChild(parent, child)) return;
+  childRemoved(parent, child);
+  if (request) { requestLayoutVirtual(parent); invalidate(parent); }
 }
 export async function dispatchAttached(v: JView) {
   if (v.attached) return;
@@ -1403,6 +1551,7 @@ async function attachTree(v: JView) {
     try { await attachTree(c); } catch (e) { reportUncaught(e); }
   }
   v.layoutRequested = true;
+  clearMeasureCache(v);
 }
 /**
  * A Configuration change reaches a view hierarchy the way AOSP's ViewRootImpl delivers it —
@@ -1499,25 +1648,21 @@ const vgMethods: NativeSpec["methods"] = {
     return addViewFunnel(this, c, -1, lp);
   }),
   "removeView(Landroid/view/View;)V": removeChild,
-  "removeViewInLayout(Landroid/view/View;)V": removeChild,
+  "removeViewInLayout(Landroid/view/View;)V": removeChildInLayout,
   "removeViewAt(I)V": function (this: JViewGroup, i: number) {
     const c = this.children[i];
     if (c) detachView(this, c);
   },
-  "removeAllViews()V": removeAllChildren,
-  "removeAllViewsInLayout()V": removeAllChildren,
+  "removeAllViews()V": function (this: JViewGroup) { removeRange(this, 0, this.children.length, true); },
+  "removeAllViewsInLayout()V": function (this: JViewGroup) { removeRange(this, 0, this.children.length, false); },
   "getChildCount()I": function (this: JViewGroup) { return this.children.length; },
   "getChildAt(I)Landroid/view/View;": function (this: JViewGroup, i: number) { return this.children[i] ?? null; },
   "indexOfChild(Landroid/view/View;)I": function (this: JViewGroup, c: JView) { return this.children.indexOf(c); },
-  "removeViews(II)V": function (this: JViewGroup, start: number, n: number) {
-    for (const c of this.children.slice(start, start + n)) detachView(this, c);
-  },
-  "removeViewsInLayout(II)V": function (this: JViewGroup, start: number, n: number) {
-    for (const c of this.children.slice(start, start + n)) detachView(this, c);
-  },
+  "removeViews(II)V": function (this: JViewGroup, start: number, n: number) { removeRange(this, start, n, true); },
+  "removeViewsInLayout(II)V": function (this: JViewGroup, start: number, n: number) { removeRange(this, start, n, false); },
   "detachViewFromParent(I)V": function (this: JViewGroup, i: number) {
     const c = this.children[i];
-    if (c) { this.children.splice(i, 1); c.parent = null; }
+    if (c) unlinkChild(this, c);
   },
   "getFocusedChild()Landroid/view/View;": function (this: JViewGroup) {
     return this.children.find((c) => c.focused || (c instanceof JViewGroup && findByPred(c, (v) => v.focused))) ?? null;
@@ -1592,11 +1737,15 @@ const vgMethods: NativeSpec["methods"] = {
   "setClipToPadding(Z)V": function (this: JViewGroup, v: number) { this.clipToPadding = !!v; },
   "getClipToPadding()Z": function (this: JViewGroup) { return this.clipToPadding ? 1 : 0; },
   "getDescendantFocusability()I": () => 0x20000,
-  "addViewInLayout(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)Z": attachInLayout,
-  "addViewInLayout(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;Z)Z": attachInLayout,
-  "attachViewToParent(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V": attachInLayout,
-  "removeDetachedView(Landroid/view/View;Z)V": removeChild,
-  "detachViewFromParent(Landroid/view/View;)V": removeChild,
+  "addViewInLayout(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)Z": addInLayout,
+  "addViewInLayout(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;Z)Z": addInLayout,
+  "attachViewToParent(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V": attachToParent,
+  // the child was already unlinked by detachViewFromParent; this is the rest of its removal
+  "removeDetachedView(Landroid/view/View;Z)V": function (this: JViewGroup, c: JView) {
+    unlinkChild(this, c);
+    childRemoved(this, c);
+  },
+  "detachViewFromParent(Landroid/view/View;)V": function (this: JViewGroup, c: JView) { unlinkChild(this, c); },
   "drawChild(Landroid/graphics/Canvas;Landroid/view/View;J)Z": async function (this: JViewGroup, cv: JCanvas, c: JView) {
     await drawView(c, cv, this);
     return 0;
@@ -1834,9 +1983,9 @@ rt.register({
     "<init>(Landroid/view/ViewGroup$LayoutParams;)V": marginCopy,
     "<init>(Landroid/view/ViewGroup$MarginLayoutParams;)V": marginCopy,
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": lpAttrs,
+    // AOSP changes the params alone: the view asks for layout when they are applied to it
     "setMargins(IIII)V": function (this: JMarginLP, l: number, t: number, r: number, b: number) {
       this.marginL = l; this.marginT = t; this.marginR = r; this.marginB = b;
-      requestLayout();
     },
     "setMarginStart(I)V": function (this: JMarginLP, v: number) { this.marginL = v; },
     "setMarginEnd(I)V": function (this: JMarginLP, v: number) { this.marginR = v; },
