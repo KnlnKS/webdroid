@@ -38,7 +38,7 @@ export function webDocument(html: string, url?: string): string {
   });
   if (url !== undefined) bases(rewriter, element => {
     const href = element.getAttribute("href");
-    // Keep pre-base resources on the upstream origin, then remove the fallback before page scripts see both bases.
+    // Pre-base resources need the upstream fallback; replace it when the document supplies its own href.
     if (hasBase && (href !== null || !hasHref)) {
       element.before('<script>document.querySelector("base[data-wd-fallback]")?.remove()</script>', { html: true });
       hasBase = false;

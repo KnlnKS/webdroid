@@ -689,3 +689,85 @@ mirrors and host-side WebView and audio. It worked, but was not adopted. Its cos
 - **Compiled code:** Chrome reused none of it across module workers, even at a stable script URL.
 - **Harness:** the harness had to capture inside the worker, and same-package multi-process
   SQLite became last-writer-wins.
+
+## WebView upstream bases — 2026-09-11
+
+Resumed microG from `28b9246` on `codex/microg-webview-base`. The current public
+Google identifier document has one `<base href="https://accounts.google.com/v3/signin/">`.
+The proxy prepended another using the final document URL. The cached Google script's
+`_.pab` returns null unless there is exactly one BASE element, and its caller uses
+`.replace` on that result. This confirms the duplicate-base mechanism; it does not
+establish the cause of Google's later consent rejection.
+
+`0ff3003` replaces the head regex with Bun's existing HTMLRewriter. The transformer
+resolves base hrefs against the final upstream URL, preserves separate href/target
+selection and multiple original bases, ignores inert template contents and tag-like
+text, and injects the bridge before page scripts without moving the doctype. Invalid
+or disallowed base URLs use the upstream fallback, following the
+[HTML base rules](https://html.spec.whatwg.org/multipage/semantics.html#the-base-element).
+Asset documents use the same insertion path without an upstream base.
+
+A follow-up Chromium test exposed a resource-order regression: an external script
+before the document's base loaded from the renderer origin. `349c4e0` keeps an upstream
+fallback until the real href is parsed, then removes it through a synchronous script.
+Scripts before and after that point execute from the correct document/assets paths.
+Chromium may speculatively request an additional relative resource under the temporary
+fallback before parsing the removal script; the test observed `/dir/after.js` as well
+as `/assets/after.js`, but executed only the latter. This is a remaining transport
+cost, not evidence that every dynamic document/base operation matches native WebView.
+No host-specific page transformation or security-header relaxation was added.
+
+Verification:
+
+- Final typecheck and 603 units / 20,401 assertions pass, including 12 real Chromium
+  HTML cases. Resy, pinned microG and GmsClient compile with zero method failures.
+- Framework executable probes pass; the browser-only Paint metric probe is skipped
+  by that CLI. Text comparison passes 6/6 paragraphs.
+- The isolated WebView fixture passes delayed synchronous bridge returns, relative
+  scripts, redirect cookies, HttpOnly boundaries, POST cookies/body, Android user-agent,
+  clean visible URL, worker restart, destruction and persistent-only cookies on reopen.
+- Genuine microG reaches Google's identifier page with exactly one original base and
+  no page exceptions. Diagnostic instrumentation reached all three child JVM realms;
+  their missing sets were empty. The old `__wdProcess` helper was absent in this checkout,
+  so the fixture explicitly injected it into the process bundle. Empty values from a
+  missing helper were not treated as diagnostic coverage.
+- Serialized E2E at `0ff3003` and starting revision `28b9246` completes all 111 steps
+  (75 scored). No missing/error/native-required entries are added. Content scores,
+  baseline → current: FitNotes 40.89 → 40.89%, Mihon onboarding 17.56 → 17.56%,
+  Mihon app 56.94 → 57.07%, Harmonic 32.22 → 32.25%. Visual goldens are unchanged.
+  FitNotes' destroyed FragmentManager, Harmonic's extension-provider gap, Lichess's
+  PhantomReference/sidecar gaps and DNS warning, and Flappy's DexClassLoader gap and six
+  FPS failures reproduce in the baseline. Lichess remains on its loading screen.
+- Per-flow elapsed changes are between −1.12% and +1.34%. Flappy minimum FPS is 27 in
+  both; DoodleJump is 39 → 38. One focused Chromium test overlapped the baseline run,
+  so these are regression observations, not an isolated CPU benchmark. The previous
+  full matrix precedes the resource-order refinement; its final verification consists
+  of focused Chromium/transport/login checks and corpus. Fresh isolated CPU/memory
+  comparison and a full E2E rerun remain pending.
+- Both full corpus runs render 13/14 APKs; TikTok fails in each. Initial gap counts are
+  24 baseline / 26 current, differing only in two nativeStoreString entries on TikTok's
+  failing startup path. A matched TikTok repeat produces the same 12 gaps and undefined
+  queue `push` failures on both revisions, without those two entries. Neither repeated
+  run requests a proxied HTML document or HTML asset, so the changed transformer is not
+  reached. The initial difference is retained as an observation, not attributed to a
+  proven network cause.
+
+The initial transformer processed a cached 1.48 MB Google document in a 0.62 ms median
+across 50 warmed iterations (p95 0.83 ms). This measures server-side transformation at
+`0ff3003`, not login latency. The root executable browser bundles match after removing
+Bun's path/source-map comments; the server transformer is outside the emulator bundle.
+
+Artifacts: `/tmp/webdroid-microg-resume-{unit-final,typecheck-final,webhtml-final,fwtest,
+textcmp,resy-smoke,gms-smoke,client-smoke,e2e,baseline-e2e,corpus,baseline-corpus}.log`,
+`/tmp/webdroid-microg-resume-comparison.json`, corpus JSON files beside their logs,
+`/tmp/webdroid-microg-resume-{baseline,current}-tiktok-path.json`,
+`/tmp/webdroid-microg-resume-{baseline-,}perfsum.log`,
+`/tmp/webdroid-webview-relative-context-final.log`, and
+`/tmp/webdroid-microg-resume-login-page-final.log`.
+
+A fresh Chrome test tab at localhost:41979 is awaiting user-entered Google credentials
+and any phone challenge. The isolated diagnostic server captures only `egQ4Re` and
+`ihzRS` response bodies before navigation into a protected test-config subdirectory;
+reports contain bridge method names, API gaps and account counts rather than secrets.
+The existing protected browser state was neither imported nor overwritten. No new
+Google account or successful final consent has been observed in this run.

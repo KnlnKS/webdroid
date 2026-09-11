@@ -1,11 +1,47 @@
 # microG integration
 
+## Resume — 2026-09-11
+
+Work resumed from `28b9246` on `codex/microg-webview-base`. Commits `0ff3003` and
+`349c4e0` fix the duplicate-base investigation below. Google's current identifier
+document supplies one base pointing to `/v3/signin/`; the old proxy added a second.
+The server now parses HTML, resolves upstream base hrefs and preserves first-href/
+first-target selection, inert templates and standards mode. A temporary fallback
+resolves resources before the upstream base is parsed and is removed before later
+page scripts run. Genuine microG reaches Google's identifier page with one correct
+base, no page exceptions and no missing APIs in the three reached child JVM realms.
+This does not establish that the final consent rejection is fixed.
+
+Current checks: typecheck; 603 tests / 20,401 assertions; zero method failures for
+Resy, microG and GmsClient; executable framework probes; 6/6 text comparisons.
+The serialized E2E run at `0ff3003` reached all 75 scored and 36 smoke steps, with no
+new diagnostics versus `28b9246`. The subsequent resource-order refinement passed
+12 Chromium tests and repeated isolated WebView/real-microG page checks; corpus at
+`349c4e0` rendered 13/14 APKs (TikTok failed). Goldens are unchanged. Detailed fresh
+CPU/memory comparisons and a full E2E rerun after the refinement remain pending.
+
+A fresh test tab is open in Chrome at `http://localhost:41979/?apk=GmsClient.apk`.
+The user has been asked to complete the authorized Google sign-in directly in that
+tab; no credentials or challenge responses have been supplied in this run. The
+instrumented server captures only consent RPC responses `egQ4Re` and `ihzRS` before
+navigation, under the protected test-config `resume-network/` directory. It records
+bridge method names and reached process diagnostics without account names/tokens.
+Do not initiate another login attempt while this one awaits the user.
+
+Servers: current checkout 41977, matching baseline 41978, instrumented login 41979.
+The baseline worktree is `/tmp/webdroid-microg-resume-baseline`. Temporary diagnostic
+entry points are `/tmp/webdroid-microg-resume-debug-server.ts` and
+`/tmp/webdroid-microg-resume-diagnostics.ts`; safe process state is `/diag` on 41979.
+Evidence uses `/tmp/webdroid-microg-resume-*` and
+`/tmp/webdroid-webview-{relative,resume}-context*`. See implementation history for
+the transient fallback's speculative-loading limit and exact verification scope.
+
 Integration started from `82e1afb` on `codex/microg-integration`. The merged integration is on `main` alongside `6946f16`.
 Completion continued from `b567197` on `codex/microg-completion`; the handoff below
 records its merge into `main` and the remaining work.
 Run genuine microG and client APK bytecode; add Android platform behavior, never
 app-specific substitutes. Keep comments and dependencies minimal.
-The handoff is current; the remaining evidence is chronological.
+The resume section is current; the handoff below retains the preceding checkpoint.
 
 Generated microG bundles belong in ignored `vendor/microg/`. Commit the preparation
 script and pinned metadata only. Generate missing files during setup/server startup;
@@ -68,14 +104,13 @@ final RPC. Bootstrap context now lives outside the visible URL; the worker obtai
 through messaging and a bounded cache, including after restart. The corrected attempt
 sent a clean query but still failed. Retain this for URL correctness, not as a login fix.
 
-**Next concrete investigation:** `server.ts` unconditionally injects a `<base>` element,
+**Investigation resolved in the resume above:** `server.ts` unconditionally injected a `<base>` element,
 even when the upstream document supplies one. Google's loaded script reported
 `Cannot read properties of null (reading 'replace')`. Reading that actual script found
 `_.pab` returns a base path only when `getElementsByTagName("BASE").length == 1`;
-its caller immediately invokes `.replace`. Confirm the affected document's elements,
-then preserve upstream base semantics with a general HTML transformation. Test relative
-URLs and documents with/without an existing base. No fix was implemented, and causality
-for the final authentication rejection remains unproven.
+its caller immediately invokes `.replace`. The resume fixes this using a general HTML
+transformation and Chromium tests. Causality for the final authentication rejection
+remains unproven.
 
 Another unresolved observation: `/_/bscframe` returned HTTP 200 followed by Chromium
 `ERR_BLOCKED_BY_RESPONSE`, with SAMEORIGIN/same-site restrictions. The isolated renderer
