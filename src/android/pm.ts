@@ -321,8 +321,6 @@ class JPackageInfo extends JObj {
  * When this package was installed, epoch ms. An app's data directory IS its installation
  * here, so the first boot that has no persisted state is the install, and the timestamp is
  * kept with that state (wd.reset wipes it along with the rest of the "install").
- * Reporting 0 said "installed at the epoch", which is how mihon's donation campaign — gated
- * on `now >= firstInstallTime + 30 days` — greeted every fresh boot with a modal sheet.
  */
 function installTime(pkg: string): bigint {
   const key = "wd:install:" + pkg;

@@ -47,7 +47,6 @@ let rootIns: JWindowInsets | null = null;
  * The window's insets. The shell lays the decor out at `contentTop()` — BELOW the status bar —
  * so the bar never overlaps the app and `statusBars()` is genuinely zero; the window's bottom
  * edge is the physical bottom, so the gesture bar is the one inset an app has to pad for.
- * (The mihon golden is the proof: its bottom nav sits 48px higher than ours drew it.)
  * Cached: it only changes when the device profile does.
  */
 export function rootWindowInsets(): JWindowInsets {

@@ -185,10 +185,7 @@ rt.register({ name: "android/graphics/drawable/Drawable$ConstantState", ctor: JC
 rt.register({ name: "android/graphics/drawable/VectorDrawable$VectorDrawableState", ctor: JDrawableState, sup: "android/graphics/drawable/Drawable$ConstantState", methods: {
   "newDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableState) { return this.create(); },
 } });
-// marker interface for self-driven drawables (AnimatedVectorDrawable, AnimationDrawable) — start()/
-// stop()/isRunning() so callers (e.g. material3's ripple host) can `instanceof` a drawable to see
-// whether it animates itself. None of our drawables self-animate yet, so nothing implements it —
-// registering it is enough for the instanceof check to resolve instead of throwing on a missing class.
+// callers `instanceof` a drawable against Animatable to see whether it animates itself
 rt.markers("android/graphics/drawable/Animatable");
 
 export class JColorDrawable extends JDrawable {

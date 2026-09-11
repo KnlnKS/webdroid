@@ -717,8 +717,7 @@ async function openHelperDb(h: JSQLiteOpenHelper): Promise<JSQLiteDatabase> {
 }
 rt.markers("android/database/DatabaseErrorHandler");
 
-// ── androidx.sqlite bundled driver (libsqliteJni) over sql.js. Mihon's SQLDelight/Room
-// stack drives the DB through these statics; handles are opaque bigints.
+// ── androidx.sqlite bundled driver (libsqliteJni) over sql.js; handles are opaque bigints.
 interface BStmt {
   st: import("sql.js").Statement;
   sql: string;

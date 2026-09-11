@@ -1966,10 +1966,6 @@ rt.register({
 rt.markers("android/view/ViewParent", "android/view/ViewManager");
 // apps `implements` this to watch a ViewGroup's addView/removeView traffic
 rt.markers("android/view/ViewGroup$OnHierarchyChangeListener");
-// ViewOutlineProvider: abstract outline strategy (View.setOutlineProvider). Nothing in the
-// draw pipeline consumes an Outline's shape yet (no clip/shadow rendering exists), so this
-// only has to link and answer getOutline() correctly in isolation — same bar as Outline
-// itself (android/graphics/Outline), which already exists.
 const GET_OUTLINE_DESC = "(Landroid/view/View;Landroid/graphics/Outline;)V";
 class JViewOutlineProvider extends JObj {}
 function mkOutlineProvider(fill: (view: JView, outline: unknown) => unknown): JViewOutlineProvider {
