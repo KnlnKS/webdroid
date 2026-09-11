@@ -281,6 +281,19 @@ export function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v:
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": maySuspend(function (this: T, c: unknown, set: JAttrSet | null, dsa: number) { return init(this, c, set, dsa); }),
   };
 }
+/** AOSP setRawTextSize: only a size that differs asks for layout */
+function setRawTextSize(tv: JTextView, px: number) {
+  if (tv.paintT.textSize === px) return;
+  tv.paintT.textSize = px;
+  requestLayout(tv);
+}
+/** AOSP setTypeface: the typeface already in use asks for nothing. Fake bold counts as a change
+ *  here because it changes the measured width. */
+function applyTypeface(tv: JTextView, tf: JTypeface, fakeBold: boolean) {
+  if (tv.paintT.tf === tf && tv.paintT.fakeBold === fakeBold) return;
+  tv.paintT.tf = tf; tv.paintT.fakeBold = fakeBold;
+  requestLayout(tv);
+}
 function compoundDrawables(this: JTextView) {
   return jarray([this.drawableL, this.drawableT, this.drawableR, this.drawableB], "Landroid/graphics/drawable/Drawable;");
 }
@@ -314,18 +327,16 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     return this.editable ? this.getEditable() : (this.rawText ?? this.text);
   },
   "length()I": function (this: JTextView) { return this.text.length; },
-  "setHint(Ljava/lang/CharSequence;)V": function (this: JTextView, cs: unknown) { this.hint = spannedString(cs); invalidate(); },
+  // AOSP's checkForRelayout: an empty view measures its hint, so a new one can change the size
+  "setHint(Ljava/lang/CharSequence;)V": function (this: JTextView, cs: unknown) { this.hint = spannedString(cs); requestLayout(this); },
   "setHint(I)V": function (this: JTextView, id: number) {
     this.hint = this.jres ? resString(this.jres, id) : "";
+    requestLayout(this);
   },
   "getHint()Ljava/lang/CharSequence;": function (this: JTextView) { return this.hint; },
-  "setTextSize(F)V": function (this: JTextView, sp: number) {
-    this.paintT.textSize = sp * device.density;
-    requestLayout(this);
-  },
+  "setTextSize(F)V": function (this: JTextView, sp: number) { setRawTextSize(this, sp * device.density); },
   "setTextSize(IF)V": function (this: JTextView, unit: number, v: number) {
-    this.paintT.textSize = unit === 1 || unit === 2 ? v * device.density : v; // COMPLEX_UNIT_DIP / SP
-    requestLayout(this);
+    setRawTextSize(this, unit === 1 || unit === 2 ? v * device.density : v); // COMPLEX_UNIT_DIP / SP
   },
   "getTextSize()F": function (this: JTextView) { return this.paintT.textSize; },
   "setTextColor(I)V": function (this: JTextView, c: number) { this.colors = mkCsl(c); invalidate(); },
@@ -335,17 +346,14 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "getTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.colors; },
   "getCurrentTextColor()I": function (this: JTextView) { return cslColor(this.colors, this.drawableState()); },
-  "setHintTextColor(I)V": function (this: JTextView, c: number) { this.hintColors = mkCsl(c); },
+  "setHintTextColor(I)V": function (this: JTextView, c: number) { this.hintColors = mkCsl(c); invalidate(this); },
   "setGravity(I)V": function (this: JTextView, g: number) { this.gravityT = g; invalidate(); },
   "getGravity()I": function (this: JTextView) { return this.gravityT; },
   "setTypeface(Landroid/graphics/Typeface;)V": function (this: JTextView, t: JTypeface | null) {
-    this.paintT.tf = t ?? tfDefault;
-    requestLayout(this);
+    applyTypeface(this, t ?? tfDefault, this.paintT.fakeBold);
   },
   "setTypeface(Landroid/graphics/Typeface;I)V": function (this: JTextView, t: JTypeface | null, style: number) {
-    this.paintT.tf = t ?? tfDefault;
-    this.paintT.fakeBold = (style & 1) !== 0;
-    requestLayout(this);
+    applyTypeface(this, t ?? tfDefault, (style & 1) !== 0);
   },
   "getTypeface()Landroid/graphics/Typeface;": function (this: JTextView) { return this.paintT.tf; },
   "getPaint()Landroid/text/TextPaint;": function (this: JTextView) { return this.paintT; },
@@ -356,14 +364,17 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setMinLines(I)V": function (this: JTextView, n: number) { this.minLinesV = n; requestLayout(this); },
   "setLines(I)V": function (this: JTextView, n: number) { this.maxLinesV = n; this.minLinesV = n; requestLayout(this); },
   "setEllipsize(Landroid/text/TextUtils$TruncateAt;)V": function (this: JTextView, e: { ord: number } | null) {
-    this.ellipsizeEnd = e?.ord === 2;
+    const end = e?.ord === 2;
+    if (this.ellipsizeEnd !== end) { this.ellipsizeEnd = end; requestLayout(this); }
   },
   "setAllCaps(Z)V": function (this: JTextView, v: number) { this.allCaps = !!v; this.capsSet = true; requestLayout(this); },
   "setLineSpacing(FF)V": function (this: JTextView, extra: number, mult: number) {
     this.lineSpacingExtra = extra; this.lineSpacingMult = mult;
     requestLayout(this);
   },
-  "setLetterSpacing(F)V": function (this: JTextView, v: number) { this.paintT.letterSpacingEm = v; },
+  "setLetterSpacing(F)V": function (this: JTextView, v: number) {
+    if (this.paintT.letterSpacingEm !== v) { this.paintT.letterSpacingEm = v; requestLayout(this); }
+  },
   "setIncludeFontPadding(Z)V": function (this: JTextView, on: number) { this.includePad = !!on; requestLayout(this); },
   "setTextAppearance(Landroid/content/Context;I)V": function (this: JTextView, c: unknown, id: number) { return setTextAppearance.call(this, id); },
   "setTextAppearance(I)V": setTextAppearance,
@@ -425,7 +436,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getTotalPaddingTop()I": compoundPadT,
   "getTotalPaddingBottom()I": compoundPadB,
   "setWidth(I)V": function (this: JTextView, w: number) { this.minW = w; this.maxW = w; requestLayout(this); },
-  "setMinEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.paintT.textSize); },
+  "setMinEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.paintT.textSize); requestLayout(this); },
   "setRawInputType(I)V": function (this: JTextView, t: number) { this.inputTypeV = t; },
   "setLinksClickable(Z)V": function (this: JTextView, v: number) { this.linksClickable = !!v; },
   "getLinksClickable()Z": function (this: JTextView) { return this.linksClickable ? 1 : 0; },
@@ -485,7 +496,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     r.left = this.padL; r.right = Math.max(this.padL, w - this.padR); r.top = this.padT + i * lh; r.bottom = r.top + lh;
     return r.top + this.ascent();
   },
-  "setMinWidth(I)V": function (this: JTextView, w: number) { this.minW = w; },
+  "setMinWidth(I)V": function (this: JTextView, w: number) { this.minW = w; requestLayout(this); },
   ...noops("setCompoundDrawableTintMode(Landroid/graphics/PorterDuff$Mode;)V",
     "setTextLocales(Landroid/os/LocaleList;)V", "setImeHintLocales(Landroid/os/LocaleList;)V", "beginBatchEdit()V",
     "endBatchEdit()V", "setHighlightColor(I)V", "setHorizontallyScrolling(Z)V", "setMarqueeRepeatLimit(I)V",
@@ -494,8 +505,8 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   ...stubs(1, "getIncludeFontPadding()Z"),
   ...stubs(0, "isHorizontallyScrollable()Z"),
   ...stubs(-1, "getAutoSizeMinTextSize()I", "getAutoSizeMaxTextSize()I", "getAutoSizeStepGranularity()I"),
-  "setMinHeight(I)V": function (this: JTextView, h: number) { this.minH = h; },
-  "setEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.paintT.textSize); },
+  "setMinHeight(I)V": function (this: JTextView, h: number) { this.minH = h; requestLayout(this); },
+  "setEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.paintT.textSize); requestLayout(this); },
   "setPaintFlags(I)V": function (this: JTextView, f: number) {
     this.paintT.strikeThru = (f & 16) !== 0;
     this.paintT.underline = (f & 8) !== 0;
