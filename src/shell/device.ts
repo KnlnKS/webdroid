@@ -24,7 +24,7 @@ import { APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
 import { reportUncaught, JBundle, dispatchVsync, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
 import { packageUid, packages } from "../android/packages";
 import { onMain, inMainJob, mainDbg } from "../android/mainloop";
-import { JView, JViewGroup, uiState, layoutPass, replayLayoutRequests, measureView, layoutView, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
+import { JView, JViewGroup, uiState, replayLayoutRequests, measureView, layoutRoot, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
 import { dispatchWindowInsets } from "../android/windowinsets";
 import { JCanvas, cssColor, tfMedium } from "../android/graphics";
@@ -658,7 +658,6 @@ async function tick0() {
       const t0 = performance.now();
       perf.layoutPasses++;
       decor.layoutRequested = true;
-      layoutPass.active = true;
       try {
         // Only blow the whole tree's cached measurements away when a caller dirtied something
         // it could not name; otherwise requestLayout(view) has already marked the path to the
@@ -667,7 +666,7 @@ async function tick0() {
         mainDbg.phase = "measure";
         await measureView(decor, makeSpec(SCREEN_W, MS_EXACTLY), makeSpec(contentH, MS_EXACTLY));
         mainDbg.phase = "layout";
-        await layoutView(decor, 0, 0, SCREEN_W, contentH);
+        await layoutRoot(decor, 0, 0, SCREEN_W, contentH);
         mainDbg.phase = "overlays";
         for (const o of overlays) {
           o.view.layoutRequested = true;
@@ -678,7 +677,7 @@ async function tick0() {
           // and the position is written back, since hit-testing reads it too.
           o.x = Math.max(0, Math.min(o.x, SCREEN_W - o.view.measuredW));
           o.y = Math.max(0, Math.min(o.y, contentH - o.view.measuredH));
-          await layoutView(o.view, o.x, o.y, o.x + o.view.measuredW, o.y + o.view.measuredH);
+          await layoutRoot(o.view, o.x, o.y, o.x + o.view.measuredW, o.y + o.view.measuredH);
         }
         mainDbg.phase = "globalLayout";
         await fireGlobalLayout(decor);
@@ -689,7 +688,7 @@ async function tick0() {
         perf.layoutErrors++;
         console.error("[layout]", e);
       }
-      layoutPass.active = false;
+      mainDbg.phase = "replay";
       replayLayoutRequests();
       perf.layoutMs += performance.now() - t0;
       uiState.needsDraw = true;

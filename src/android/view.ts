@@ -114,7 +114,7 @@ export function requestLayout(v?: JView | null) {
   if (uiState.layoutTrace) traceLayoutRequest(uiState.layoutTrace, v);
   if (!v) { perf.layoutRequestsAll++; uiState.forceAll = true; return; }
   perf.layoutRequests++;
-  if (layoutPass.active) layoutPass.requesters.push(v);
+  if (layoutPass.active && v.attached && !layoutPass.requesters.includes(v)) layoutPass.requesters.push(v);
   for (let p: JView | null = v; p; p = p.parent) {
     p.layoutRequested = true;
     p.oldWSpec = -1;
@@ -127,17 +127,36 @@ export function requestLayout(v?: JView | null) {
   }
 }
 /**
- * AOSP ViewRootImpl.mLayoutRequesters: a requestLayout() made during a pass stops at an ancestor
- * the pass has already flagged and then cleared, and the pass clears the requester's own flag on
- * its way down, so the request would vanish. After the pass the flags on each requester's path are
- * cleared and the request is made again, which marks the path to the root for the next pass.
+ * AOSP ViewRootImpl.mLayoutRequesters. A requestLayout() made while the tree lays out stops at an
+ * ancestor the pass has flagged, and that ancestor's layout then clears the flag, so the request
+ * could vanish. Requests are collected only during layout (isInLayout): one made during measure
+ * is served by the same pass's layout, which clears the requester's flag.
  */
 export const layoutPass = { active: false, requesters: [] as JView[] };
+/** ViewRootImpl.performLayout: a window root's layout, with in-layout requests collected */
+export async function layoutRoot(v: JView, l: number, t: number, r: number, b: number) {
+  layoutPass.active = true;
+  try { await layoutView(v, l, t, r, b); } finally { layoutPass.active = false; }
+}
+const validRequesters: JView[] = [];
+function shownPath(v: JView): boolean {
+  for (let p: JView | null = v; p; p = p.parent) if (p.visibility === 8) return false;
+  return true;
+}
+/**
+ * AOSP getValidLayoutRequesters: only a requester whose flag survived the pass lost its request,
+ * and only one still attached and not under a GONE ancestor asks again. Every requester's flagged
+ * path is cleared first, so the new request marks it to the root. The repeat runs in the next
+ * frame's pass rather than as a second pass in this one.
+ */
 export function replayLayoutRequests() {
   const rs = layoutPass.requesters;
   if (!rs.length) return;
-  for (const r of rs) for (let p: JView | null = r; p; p = p.parent) p.layoutRequested = false;
-  for (const r of rs.splice(0)) requestLayout(r);
+  for (const r of rs) if (r.layoutRequested && r.attached && shownPath(r)) validRequesters.push(r);
+  for (const r of rs) for (let p: JView | null = r; p && p.layoutRequested; p = p.parent) p.layoutRequested = false;
+  rs.length = 0;
+  for (const r of validRequesters) requestLayoutVirtual(r);
+  validRequesters.length = 0;
 }
 
 const M_onMeasure = mangleMethod("onMeasure", "(II)V");
