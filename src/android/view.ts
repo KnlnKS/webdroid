@@ -105,13 +105,11 @@ function focusMoved(v: JView, now: JView | null) {
 /**
  * Schedule a layout pass. Pass the view whose measurement went stale so the pass can skip
  * the clean parts of the tree (AOSP marks the view and walks UP to the root; children are
- * re-measured only when their parent hands them different specs). Callers that cannot name
- * a view fall back to re-measuring everything.
+ * re-measured only when their parent hands them different specs).
  */
-export function requestLayout(v?: JView | null) {
+export function requestLayout(v: JView) {
   uiState.needsLayout = true; uiState.needsDraw = true;
   if (uiState.layoutTrace) traceLayoutRequest(uiState.layoutTrace, v);
-  if (!v) { perf.layoutRequestsAll++; uiState.forceAll = true; return; }
   perf.layoutRequests++;
   if (layoutPass.active && v.attached && !layoutPass.requesters.includes(v)) layoutPass.requesters.push(v);
   for (let p: JView | null = v; p; p = p.parent) {
@@ -124,6 +122,13 @@ export function requestLayout(v?: JView | null) {
     const f = jmethod(par, M_requestLayout);
     if (f && f !== nativeRequestLayout) { void guardApply(f as JMethod, par); break; }
   }
+}
+/** A configuration change (orientation, night mode, a relaunch), like boot, leaves every cached
+ *  measurement stale, and no single view names that: the next pass re-measures every window. */
+export function requestLayoutAll() {
+  uiState.needsLayout = true; uiState.needsDraw = true; uiState.forceAll = true;
+  perf.layoutRequestsAll++;
+  if (uiState.layoutTrace) traceLayoutRequest(uiState.layoutTrace, null);
 }
 /**
  * AOSP ViewRootImpl.mLayoutRequesters. A requestLayout() made while the tree lays out stops at an
@@ -1908,9 +1913,9 @@ rt.register({
     "<init>(Landroid/view/ViewGroup$LayoutParams;)V": marginCopy,
     "<init>(Landroid/view/ViewGroup$MarginLayoutParams;)V": marginCopy,
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": lpAttrs,
+    // AOSP changes the params alone: the view asks for layout when they are applied to it
     "setMargins(IIII)V": function (this: JMarginLP, l: number, t: number, r: number, b: number) {
       this.marginL = l; this.marginT = t; this.marginR = r; this.marginB = b;
-      requestLayout();
     },
     "setMarginStart(I)V": function (this: JMarginLP, v: number) { this.marginL = v; },
     "setMarginEnd(I)V": function (this: JMarginLP, v: number) { this.marginR = v; },

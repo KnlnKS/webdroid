@@ -8,7 +8,6 @@ import { vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { onMain } from "./mainloop";
 import { reportUncaught } from "./os";
-import { requestLayout } from "./view";
 
 class JTransition extends JObj {
   durationMs = -1n; delayMs = -1n;
@@ -146,9 +145,9 @@ rt.register({
   },
 });
 
-/** the scene change is whatever the caller does next; the listeners hear start/end once it lands */
+/** the scene change is whatever the caller does next, and it asks for its own layout, as in AOSP;
+ *  the listeners hear start/end once it lands */
 function beginDelayed(t: JTransition | null) {
-  requestLayout();
   if (!t) return;
   void onMain(async () => { await fire(t, "onTransitionStart"); await fire(t, "onTransitionEnd"); });
 }

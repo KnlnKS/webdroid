@@ -391,9 +391,9 @@ rt.register({
 class JActionBar extends JObj {
   act: JActivity | null = null;
   /** apply `f` to the activity's bar view, if it has one, then repaint (or relayout) */
-  bar(f: (b: JActionBarView) => void, then: () => void = invalidate) {
+  bar(f: (b: JActionBarView) => void, then: (b: JActionBarView) => void = invalidate) {
     const b = this.act?.window.actionBarView;
-    if (b) { f(b); then(); }
+    if (b) { f(b); then(b); }
   }
   navMode = 0; // 0 standard, 1 list, 2 tabs
   navAdapter: unknown = null;

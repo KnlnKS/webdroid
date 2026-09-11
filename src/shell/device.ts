@@ -24,7 +24,7 @@ import { APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
 import { reportUncaught, JBundle, dispatchVsync, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
 import { packageUid, packages } from "../android/packages";
 import { onMain, inMainJob, mainDbg } from "../android/mainloop";
-import { JView, JViewGroup, uiState, replayLayoutRequests, measureView, layoutRoot, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
+import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
 import { dispatchWindowInsets } from "../android/windowinsets";
 import { JCanvas, cssColor, tfMedium } from "../android/graphics";
@@ -362,6 +362,7 @@ const CONFIG_ORIENTATION_SIZE = 0x0080 | 0x0400;
 function changeActivityOrientation(act: JActivity, request: number): void {
   if (!applyOrientationRequest(request)) return;
   invalidateWindow();
+  requestLayoutAll();
   if (activityHandlesConfig(act, CONFIG_ORIENTATION_SIZE)) {
     void onMain(() => vcall(act, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", deviceConfiguration())).catch(reportUncaught);
   } else recreateActivity(act);
@@ -371,7 +372,7 @@ function changeActivityOrientation(act: JActivity, request: number): void {
  *  onConfigurationChanged if it declared uiMode, through a relaunch otherwise. */
 function deviceNightChanged(night: boolean): void {
   if (!setDeviceNight(night) || !booted) return;
-  uiState.needsLayout = uiState.needsDraw = true;
+  requestLayoutAll();
   const act = booted.stack.at(-1);
   if (!act) return;
   if (activityHandlesConfig(act, CONFIG_UI_MODE)) {
@@ -418,6 +419,7 @@ function recreateActivity(act: JActivity): void {
       const options = { caller: act.callingActivity, result: act.resultTo ?? undefined, remoteId: act.remoteId, activityId: act.activityId, taskId: act.taskId };
       act.remoteId = 0;
       await launchActivity0(cls, act.intent, { state, nonConfig, requestedOrientation: act.requestedOrientation }, options);
+      requestLayoutAll();
     } catch (e) { reportUncaught(e); }
     finally { setCurThread(prev); }
   }), 0);
@@ -624,19 +626,21 @@ async function tick0() {
       uiState.needsLayout = false;
       const t0 = performance.now();
       perf.layoutPasses++;
-      decor.layoutRequested = true;
       try {
-        // Only blow the whole tree's cached measurements away when a caller dirtied something
-        // it could not name; otherwise requestLayout(view) has already marked the path to the
-        // root and measureView reuses everything else.
-        if (uiState.forceAll) { uiState.forceAll = false; forceLayoutFlags(decor); }
+        // Boot or a configuration change: every window's cached measurements are stale.
+        // Otherwise requestLayout(view) has marked the path to its root and measureView reuses
+        // everything else; a window nothing asked for is not re-measured at all.
+        if (uiState.forceAll) {
+          uiState.forceAll = false;
+          forceLayoutFlags(decor);
+          for (const o of overlays) forceLayoutFlags(o.view);
+        }
         mainDbg.phase = "measure";
         await measureView(decor, makeSpec(SCREEN_W, MS_EXACTLY), makeSpec(contentH, MS_EXACTLY));
         mainDbg.phase = "layout";
         await layoutRoot(decor, 0, 0, SCREEN_W, contentH);
         mainDbg.phase = "overlays";
         for (const o of overlays) {
-          o.view.layoutRequested = true;
           await measureView(o.view, makeSpec(SCREEN_W, 0x80000000 | 0), makeSpec(contentH, 0x80000000 | 0));
           // AOSP lays a window out inside the screen: a dropdown anchored near the right edge
           // shifts left instead of hanging off it. The popup's own placement pass runs before
