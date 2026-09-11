@@ -15,13 +15,9 @@ import { jarray, strArray, dotName, utf8, i8, u8 } from "../abi";
 import { vfs, type JInputStream, type JOutputStream } from "./jio";
 import { Relay } from "../../shell/relay";
 
-for (const marker of [
-  "javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager",
-  "javax/net/ssl/KeyManager", "javax/net/ssl/SSLSession",
-  "java/nio/channels/ReadableByteChannel", "java/nio/channels/WritableByteChannel", "java/nio/channels/ByteChannel",
-  "java/nio/channels/Channel",
-  "java/net/ResponseCache",
-]) rt.register({ name: marker, ctor: class extends JObj {} });
+rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager", "javax/net/ssl/KeyManager",
+  "javax/net/ssl/SSLSession", "java/nio/channels/ReadableByteChannel", "java/nio/channels/WritableByteChannel",
+  "java/nio/channels/ByteChannel", "java/nio/channels/Channel", "java/net/ResponseCache");
 
 class JSocketFactory extends JObj {}
 const socketFactory = new JSocketFactory();
@@ -122,14 +118,12 @@ rt.register({
 
 // java.net addresses, and Socket over the relay above
 class JInetAddress extends JObj { host = ""; }
+const inetAddr = (host: string | null) => Object.assign(new JInetAddress(), { host: host ?? "" });
 rt.register({
   name: "java/net/InetAddress", ctor: JInetAddress,
   methods: {
-    "static getByName(Ljava/lang/String;)Ljava/net/InetAddress;": (h: string) => { const a = new JInetAddress(); a.host = h ?? ""; return a; },
-    "static getAllByName(Ljava/lang/String;)[Ljava/net/InetAddress;": (h: string) => {
-      const a = new JInetAddress(); a.host = h ?? "";
-      return jarray([a], "Ljava/net/InetAddress;");
-    },
+    "static getByName(Ljava/lang/String;)Ljava/net/InetAddress;": inetAddr,
+    "static getAllByName(Ljava/lang/String;)[Ljava/net/InetAddress;": (h: string) => jarray([inetAddr(h)], "Ljava/net/InetAddress;"),
     "getHostName()Ljava/lang/String;": function (this: JInetAddress) { return this.host; },
     "getHostAddress()Ljava/lang/String;": function (this: JInetAddress) { return "0.0.0.0"; },
     "getAddress()[B": () => new Int8Array(4),
@@ -142,7 +136,7 @@ rt.register({
 // not ours. One loopback interface is what a device with no permission to enumerate sees, and
 // it keeps the callers that walk them (device-id fallbacks, MAC lookups) on their empty path.
 class JNetworkInterface extends JObj { iname = "lo"; }
-const loopback = () => { const a = new JInetAddress(); a.host = "localhost"; return a; };
+const loopback = () => inetAddr("localhost");
 rt.register({
   name: "java/net/NetworkInterface", ctor: JNetworkInterface,
   methods: {
@@ -161,19 +155,17 @@ rt.register({
 });
 rt.markers("java/net/SocketAddress");
 class JInetSocketAddress extends JObj { host = ""; port = 0; addr: JInetAddress | null = null; }
+const inetSock = (host: string | null, port: number) => Object.assign(new JInetSocketAddress(), { host: host ?? "", port });
 rt.register({
   name: "java/net/InetSocketAddress", ctor: JInetSocketAddress, sup: "java/net/SocketAddress",
   methods: {
     "<init>(Ljava/lang/String;I)V": function (this: JInetSocketAddress, h: string, p2: number) { this.host = h ?? ""; this.port = p2; },
     "<init>(Ljava/net/InetAddress;I)V": function (this: JInetSocketAddress, a: JInetAddress, p2: number) { this.addr = a; this.host = a?.host ?? ""; this.port = p2; },
-    "static createUnresolved(Ljava/lang/String;I)Ljava/net/InetSocketAddress;": (h: string, p2: number) => {
-      const x = new JInetSocketAddress(); x.host = h ?? ""; x.port = p2; return x;
-    },
+    "static createUnresolved(Ljava/lang/String;I)Ljava/net/InetSocketAddress;": inetSock,
     "getHostName()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host; },
     "getPort()I": function (this: JInetSocketAddress) { return this.port; },
     "getAddress()Ljava/net/InetAddress;": function (this: JInetSocketAddress) {
-      if (!this.addr) { this.addr = new JInetAddress(); this.addr.host = this.host; }
-      return this.addr;
+      return this.addr ??= inetAddr(this.host);
     },
     "isUnresolved()Z": () => 0,
     "toString()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host + ":" + this.port; },
@@ -241,12 +233,8 @@ const socketMethods: NativeSpec["methods"] = {
   "shutdownOutput()V": () => {},
   "getPort()I": function (this: JSocket) { return this.port; },
   "getLocalPort()I": () => 0,
-  "getInetAddress()Ljava/net/InetAddress;": function (this: JSocket) {
-    const a = new JInetAddress(); a.host = this.host; return a;
-  },
-  "getRemoteSocketAddress()Ljava/net/SocketAddress;": function (this: JSocket) {
-    const a = new JInetSocketAddress(); a.host = this.host; a.port = this.port; return a;
-  },
+  "getInetAddress()Ljava/net/InetAddress;": function (this: JSocket) { return inetAddr(this.host); },
+  "getRemoteSocketAddress()Ljava/net/SocketAddress;": function (this: JSocket) { return inetSock(this.host, this.port); },
   "setTcpNoDelay(Z)V": () => {}, "setKeepAlive(Z)V": () => {},
   "setReuseAddress(Z)V": () => {}, "setSoLinger(ZI)V": () => {},
   "setSendBufferSize(I)V": () => {}, "setReceiveBufferSize(I)V": () => {},
@@ -378,23 +366,32 @@ rt.register({
   },
 });
 
-class JURI extends JObj { u = ""; }
+class JURI extends JObj {
+  u = "";
+  private parsed?: URL | null;
+  url(): URL | null {
+    if (this.parsed === undefined) { try { this.parsed = new URL(this.u); } catch { this.parsed = null; } }
+    return this.parsed;
+  }
+}
+const mkURI = (u: string | null) => Object.assign(new JURI(), { u: u ?? "" });
 // URLEncoder/URLDecoder: application/x-www-form-urlencoded, which is encodeURIComponent plus
 // "+" for a space and the extra unreserved set Java leaves alone.
 const formEncode = (s: string) =>
   encodeURIComponent(s ?? "").replace(/[!'()~*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase()).replace(/%20/g, "+");
+const formDecode = (s: string) => decodeURIComponent((s ?? "").replace(/\+/g, " "));
 rt.register({
   name: "java/net/URLEncoder", ctor: class extends JObj {},
   methods: {
-    "static encode(Ljava/lang/String;)Ljava/lang/String;": (s: string) => formEncode(s),
-    "static encode(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (s: string) => formEncode(s),
+    "static encode(Ljava/lang/String;)Ljava/lang/String;": formEncode,
+    "static encode(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": formEncode,
   },
 });
 rt.register({
   name: "java/net/URLDecoder", ctor: class extends JObj {},
   methods: {
-    "static decode(Ljava/lang/String;)Ljava/lang/String;": (s: string) => decodeURIComponent((s ?? "").replace(/\+/g, " ")),
-    "static decode(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (s: string) => decodeURIComponent((s ?? "").replace(/\+/g, " ")),
+    "static decode(Ljava/lang/String;)Ljava/lang/String;": formDecode,
+    "static decode(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": formDecode,
   },
 });
 rt.register({
@@ -407,7 +404,7 @@ rt.register({
         this.u = (sch ? sch + ":" : "") + (host ? "//" + (ui ? ui + "@" : "") + host + (port === -1 ? "" : ":" + port) : "") +
           (path ?? "") + (q ? "?" + q : "") + (f ? "#" + f : "");
       },
-    "static create(Ljava/lang/String;)Ljava/net/URI;": (s: string) => { const r = new JURI(); r.u = s ?? ""; return r; },
+    "static create(Ljava/lang/String;)Ljava/net/URI;": mkURI,
     "toString()Ljava/lang/String;": function (this: JURI) { return this.u; },
     // RFC 2396 path normalisation: "." and ".." segments resolved, the rest of the URI untouched
     "normalize()Ljava/net/URI;": function (this: JURI) {
@@ -418,20 +415,20 @@ rt.register({
         if (seg === ".." && out.length > 1) { out.pop(); continue; }
         out.push(seg);
       }
-      const r = new JURI(); r.u = (m[1] ?? "") + (m[2] ?? "") + out.join("/") + m[4]; return r;
+      return mkURI((m[1] ?? "") + (m[2] ?? "") + out.join("/") + m[4]);
     },
     "toASCIIString()Ljava/lang/String;": function (this: JURI) { return this.u; },
     "getScheme()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf(":"); return i > 0 ? this.u.slice(0, i) : null; },
-    "getHost()Ljava/lang/String;": function (this: JURI) { try { return new URL(this.u).hostname; } catch { return null; } },
-    "getPath()Ljava/lang/String;": function (this: JURI) { try { return new URL(this.u).pathname; } catch { return this.u.replace(/^[a-z]+:/i, ""); } },
+    "getHost()Ljava/lang/String;": function (this: JURI) { return this.url()?.hostname ?? null; },
+    "getPath()Ljava/lang/String;": function (this: JURI) { return this.url()?.pathname ?? this.u.replace(/^[a-z]+:/i, ""); },
     "toURL()Ljava/net/URL;": function (this: JURI) { const u = new JURL(); urlInit(u, this.u); return u; },
     "getUserInfo()Ljava/lang/String;": function (this: JURI) { const m = /^[^:/?#]+:\/\/([^@/?#]*)@/.exec(this.u); return m ? decodeURIComponent(m[1]) : null; },
-    "getPort()I": function (this: JURI) { try { return Number(new URL(this.u).port) || -1; } catch { return -1; } },
-    "getQuery()Ljava/lang/String;": function (this: JURI) { try { const q = new URL(this.u).search; return q ? q.slice(1) : null; } catch { return null; } },
+    "getPort()I": function (this: JURI) { return Number(this.url()?.port) || -1; },
+    "getQuery()Ljava/lang/String;": function (this: JURI) { const q = this.url()?.search; return q ? q.slice(1) : null; },
     "getFragment()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf("#"); return i < 0 ? null : this.u.slice(i + 1); },
-    "getRawPath()Ljava/lang/String;": function (this: JURI) { try { return new URL(this.u).pathname; } catch { return null; } },
+    "getRawPath()Ljava/lang/String;": function (this: JURI) { return this.url()?.pathname ?? null; },
     "getSchemeSpecificPart()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf(":"); return i < 0 ? this.u : this.u.slice(i + 1); },
-    "resolve(Ljava/lang/String;)Ljava/net/URI;": function (this: JURI, o: string) { const r = new JURI(); try { r.u = new URL(o, this.u).href; } catch { r.u = o; } return r; },
+    "resolve(Ljava/lang/String;)Ljava/net/URI;": function (this: JURI, o: string) { try { return mkURI(new URL(o, this.u).href); } catch { return mkURI(o); } },
     "equals(Ljava/lang/Object;)Z": function (this: JURI, o: unknown) { return o instanceof JURI && o.u === this.u ? 1 : 0; },
     "hashCode()I": function (this: JURI) { return stringHash(this.u); },
   },
