@@ -304,7 +304,6 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (t !== this.text) {
       this.text = t;
       this.layoutWidthFor = -1;
-      this.layoutRequested = true;
       requestLayout(this);
       await this.notifyWatchers();
     }
@@ -320,12 +319,10 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getHint()Ljava/lang/CharSequence;": function (this: JTextView) { return this.hint; },
   "setTextSize(F)V": function (this: JTextView, sp: number) {
     this.paintT.textSize = sp * device.density;
-    this.layoutRequested = true;
     requestLayout(this);
   },
   "setTextSize(IF)V": function (this: JTextView, unit: number, v: number) {
     this.paintT.textSize = unit === 1 || unit === 2 ? v * device.density : v; // COMPLEX_UNIT_DIP / SP
-    this.layoutRequested = true;
     requestLayout(this);
   },
   "getTextSize()F": function (this: JTextView) { return this.paintT.textSize; },
@@ -341,13 +338,11 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getGravity()I": function (this: JTextView) { return this.gravityT; },
   "setTypeface(Landroid/graphics/Typeface;)V": function (this: JTextView, t: JTypeface | null) {
     this.paintT.tf = t ?? tfDefault;
-    this.layoutRequested = true;
     requestLayout(this);
   },
   "setTypeface(Landroid/graphics/Typeface;I)V": function (this: JTextView, t: JTypeface | null, style: number) {
     this.paintT.tf = t ?? tfDefault;
     this.paintT.fakeBold = (style & 1) !== 0;
-    this.layoutRequested = true;
     requestLayout(this);
   },
   "getTypeface()Landroid/graphics/Typeface;": function (this: JTextView) { return this.paintT.tf; },

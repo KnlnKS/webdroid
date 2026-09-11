@@ -660,14 +660,8 @@ const viewMethods: NativeSpec["methods"] = {
   "getPaddingBottom()I": function (this: JView) { return this.padB; },
   "getPaddingStart()I": function (this: JView) { return this.padL; },
   "getPaddingEnd()I": function (this: JView) { return this.padR; },
-  "setPadding(IIII)V": function (this: JView, l: number, t: number, r: number, b: number) {
-    this.padL = l; this.padT = t; this.padR = r; this.padB = b;
-    requestLayout(this);
-  },
-  "setPaddingRelative(IIII)V": function (this: JView, l: number, t: number, r: number, b: number) {
-    this.padL = l; this.padT = t; this.padR = r; this.padB = b;
-    requestLayout(this);
-  },
+  "setPadding(IIII)V": setPadding,
+  "setPaddingRelative(IIII)V": setPadding,
   "setMinimumWidth(I)V": function (this: JView, v: number) { this.minW = v; },
   "setMinimumHeight(I)V": function (this: JView, v: number) { this.minH = v; },
   "getMinimumWidth()I": function (this: JView) { return this.minW; },
@@ -1285,6 +1279,10 @@ const viewMethods: NativeSpec["methods"] = {
   },
 };
 
+function setPadding(this: JView, l: number, t: number, r: number, b: number) {
+  this.padL = l; this.padT = t; this.padR = r; this.padB = b;
+  requestLayout(this);
+}
 export function findById(v: JView, id: number): JView | null {
   if (v.idNum === id) return v;
   if (v instanceof JViewGroup) {
@@ -1809,7 +1807,12 @@ export async function fireDrawPass(root: JView) {
   await o.dispatchOnDraw();
 }
 
-// layout params natives
+export const lpAttrs = function (this: JLayoutParams, _c: unknown, set: JAttrSet) { lpFromAttrs(this, set.res, set); };
+const marginCopy = function (this: JMarginLP, o: JLayoutParams | null) {
+  if (!o) return;
+  this.width = o.width; this.height = o.height;
+  if (o instanceof JMarginLP) { this.marginL = o.marginL; this.marginT = o.marginT; this.marginR = o.marginR; this.marginB = o.marginB; }
+};
 rt.register({
   name: "android/view/ViewGroup$LayoutParams", ctor: JLayoutParams,
   statics: { MATCH_PARENT: -1, FILL_PARENT: -1, WRAP_CONTENT: -2 },
@@ -1819,9 +1822,7 @@ rt.register({
     "<init>(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JLayoutParams, o: JLayoutParams) {
       if (o) { this.width = o.width; this.height = o.height; }
     },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JLayoutParams, c: unknown, set: JAttrSet) {
-      lpFromAttrs(this, set.res, set);
-    },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": lpAttrs,
     "resolveLayoutDirection(I)V": () => {},
   },
 });
@@ -1830,23 +1831,9 @@ rt.register({
   fields: { leftMargin: "marginL", topMargin: "marginT", rightMargin: "marginR", bottomMargin: "marginB" },
   methods: {
     "<init>(II)V": function (this: JMarginLP, w: number, h: number) { this.width = w; this.height = h; },
-    "<init>(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JMarginLP, o: JLayoutParams) {
-      if (o) {
-        this.width = o.width; this.height = o.height;
-        if (o instanceof JMarginLP) {
-          this.marginL = o.marginL; this.marginT = o.marginT; this.marginR = o.marginR; this.marginB = o.marginB;
-        }
-      }
-    },
-    "<init>(Landroid/view/ViewGroup$MarginLayoutParams;)V": function (this: JMarginLP, o: JMarginLP) {
-      if (o) {
-        this.width = o.width; this.height = o.height;
-        this.marginL = o.marginL; this.marginT = o.marginT; this.marginR = o.marginR; this.marginB = o.marginB;
-      }
-    },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JMarginLP, c: unknown, set: JAttrSet) {
-      lpFromAttrs(this, set.res, set);
-    },
+    "<init>(Landroid/view/ViewGroup$LayoutParams;)V": marginCopy,
+    "<init>(Landroid/view/ViewGroup$MarginLayoutParams;)V": marginCopy,
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": lpAttrs,
     "setMargins(IIII)V": function (this: JMarginLP, l: number, t: number, r: number, b: number) {
       this.marginL = l; this.marginT = t; this.marginR = r; this.marginB = b;
       requestLayout();

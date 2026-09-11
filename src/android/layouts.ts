@@ -1,6 +1,6 @@
 import { AID } from "./res";
 import {
-  JMarginLP, type JLayoutParams, JViewGroup, JFrameLP, MATCH_PARENT, lpFromAttrs, measureChildWithMargins,
+  JMarginLP, type JLayoutParams, JViewGroup, JFrameLP, MATCH_PARENT, lpFromAttrs, lpAttrs, measureChildWithMargins,
   resolveSizeAndState, makeSpec, MS_EXACTLY, childMeasureSpec, measureView, layoutView, initViewFromCtx,
   requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState
 } from "./view";
@@ -101,9 +101,7 @@ rt.register({
       if (o instanceof JMarginLP) { this.marginL = o.marginL; this.marginT = o.marginT; this.marginR = o.marginR; this.marginB = o.marginB; }
       if (o instanceof JFrameLP) this.gravity = o.gravity;
     },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JFrameLP, c: unknown, set: JAttrSet) {
-      lpFromAttrs(this, set.res, set);
-    },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": lpAttrs,
   },
 });
 
@@ -256,9 +254,7 @@ rt.register({
       if (o instanceof JMarginLP) { this.marginL = o.marginL; this.marginT = o.marginT; this.marginR = o.marginR; this.marginB = o.marginB; }
       if (o instanceof JLinearLP) { this.weight = o.weight; this.gravity = o.gravity; }
     },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JLinearLP, c: unknown, set: JAttrSet) {
-      lpFromAttrs(this, set.res, set);
-    },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": lpAttrs,
   },
 });
 
@@ -341,9 +337,7 @@ for (const owner of ["TableRow", "TableLayout"]) rt.register({
   methods: {
     "<init>()V": function (this: JLinearLP) { this.width = MATCH_PARENT; this.height = WRAP_CONTENT; },
     "<init>(II)V": function (this: JLinearLP, w: number, h: number) { this.width = w; this.height = h; },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JLinearLP, c: unknown, set: JAttrSet) {
-      lpFromAttrs(this, set.res, set);
-    },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": lpAttrs,
   },
 });
 
