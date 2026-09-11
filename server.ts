@@ -27,9 +27,10 @@ const ASSET_TYPE: Record<string, string> = {
   html: "text/html", js: "text/javascript", css: "text/css", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
   svg: "image/svg+xml", json: "application/json", txt: "text/plain", woff2: "font/woff2", pdf: "application/pdf",
 };
-function serveVendor(path: string): Response {
-  if (!/^(aosp\/)?[\w.-]+$/.test(path)) return new Response("nope", { status: 400 });
-  return new Response(Bun.file(`vendor/${path}`), { headers: { "cache-control": "max-age=31536000, immutable" } });
+const IMMUTABLE = "public, max-age=31536000, immutable";
+function serveFile(dir: string, name: string, headers?: Record<string, string>): Response {
+  if (!name || /[/\\]|\.\./.test(name)) return new Response("nope", { status: 400 });
+  return new Response(Bun.file(`${dir}/${name}`), { headers });
 }
 
 const assetCache = new Map<string, Promise<Record<string, Uint8Array>>>();
@@ -112,8 +113,8 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
     // an apk's assets/ entry — what file:///android_asset/ resolves to inside a WebView. Path-shaped
     // so a page's relative subresources resolve to siblings, as they do under android_asset.
     "/asset/:apk/*": async (req) => {
-      // the apk segment is measured in the raw pathname, so a name that had to be escaped
-      // ("Among%20Us.xapk") must not be counted at its decoded length
+      // the apk segment is measured in the raw pathname, so an escaped name is not counted at
+      // its decoded length
       const [, rawApk, rawPath] = /^\/asset\/([^/]+)\/(.*)$/.exec(new URL(req.url).pathname) ?? [];
       const apk = decodeURIComponent(rawApk ?? "");
       const path = decodeURIComponent(rawPath ?? "");
@@ -125,38 +126,25 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
       if (ext === "html") return new Response(inHead(new TextDecoder().decode(bytes), WEB_INJECT), { headers: { "content-type": type } });
       return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { "content-type": type } });
     },
-    "/Roboto/:file": (req) => {
-      const f = req.params.file;
-      if (!/^[\w.-]+$/.test(f)) return new Response("nope", { status: 400 });
-      return new Response(Bun.file(`public/${f}`));
-    },
-    "/sqljs/:file": (req) => {
-      const f = req.params.file;
-      if (!/^[\w.-]+$/.test(f)) return new Response("nope", { status: 400 });
-      return new Response(Bun.file(`node_modules/sql.js/dist/${f}`));
-    },
+    "/Roboto/:file": (req) => serveFile("public", req.params.file),
+    "/sqljs/:file": (req) => serveFile("node_modules/sql.js/dist", req.params.file),
     // the android: resource package (bun run gen-framework-res) and, under vendor/aosp, the
     // device's own framework.jar + framework-res.apk (bun run gen-framework). Both only change
     // when the device profile does, so let the browser keep them across reloads.
-    "/vendor/:file": (req) => serveVendor(req.params.file),
-    "/vendor/aosp/:file": (req) => serveVendor(`aosp/${req.params.file}`),
+    "/vendor/:file": (req) => serveFile("vendor", req.params.file, { "cache-control": IMMUTABLE }),
+    "/vendor/aosp/:file": (req) => serveFile("vendor/aosp", req.params.file, { "cache-control": IMMUTABLE }),
     "/vendor/microg/:file": (req) => {
       const file = req.params.file;
-      if (!/^[\w.-]+$/.test(file)) return new Response("not found", { status: 404 });
-      const headers: Record<string, string> = { "cache-control": file.endsWith(".json") ? "no-cache" : "public, max-age=31536000, immutable" };
+      const headers: Record<string, string> = { "cache-control": file.endsWith(".json") ? "no-cache" : IMMUTABLE };
       if (file.endsWith(".gz") && !new URL(req.url).searchParams.has("raw")) headers["content-encoding"] = "gzip";
-      return new Response(Bun.file("vendor/microg/" + file), { headers });
+      return serveFile("vendor/microg", file, headers);
     },
     "/apks": async () => {
       const names: string[] = [];
       for await (const f of new Bun.Glob("*.{apk,xapk}").scan("apks")) names.push(f);
       return Response.json(names.sort());
     },
-    "/apks/:name": (req) => {
-      const name = decodeURIComponent(req.params.name);
-      if (name.includes("/") || name.includes("..")) return new Response("nope", { status: 400 });
-      return new Response(Bun.file(`apks/${name}`));
-    },
+    "/apks/:name": (req) => serveFile("apks", decodeURIComponent(req.params.name)),
   },
   // Raw TCP over a WebSocket. A page cannot open a socket, but every Java networking stack
   // ultimately wants one, so the dev server lends it ours: one WS carries one TCP connection.

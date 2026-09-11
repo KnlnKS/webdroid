@@ -1,4 +1,5 @@
 import type { vfs } from "../jvm/natives/jio";
+import { openDb, txDone } from "./idb";
 
 type FileValue = { kind: "file"; bytes: Uint8Array } | { kind: "directory" };
 const privatePath = /^\/data\/(?:data|user\/0|user_de\/0)\/[^/]+(?:\/|$)/;
@@ -39,17 +40,12 @@ export class PrivateFiles {
     for (const view of this.views.values()) this.install(view, path, value);
   }
   private db(): Promise<IDBDatabase> {
-    return this.database ??= new Promise((resolve, reject) => {
-      const request = indexedDB.open("webdroid-private-files", 1);
-      request.onupgradeneeded = () => request.result.createObjectStore("files");
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    return this.database ??= openDb("webdroid-private-files", "files");
   }
   prepare(pkg: string): Promise<void> {
     let loaded = this.loaded.get(pkg);
     if (!loaded) {
-      loaded = this.db().then((db) => new Promise<void>((resolve, reject) => {
+      loaded = this.db().then((db) => {
         const transaction = db.transaction("files"), store = transaction.objectStore("files");
         for (const root of ["/data/data/", "/data/user/0/", "/data/user_de/0/"]) {
           const prefix = root + pkg + "/", request = store.openCursor(IDBKeyRange.bound(prefix, prefix + "\uffff"));
@@ -64,9 +60,8 @@ export class PrivateFiles {
             cursor.continue();
           };
         }
-        transaction.oncomplete = () => resolve();
-        transaction.onabort = () => reject(transaction.error);
-      }));
+        return txDone(transaction);
+      });
       this.loaded.set(pkg, loaded);
     }
     return loaded;
@@ -76,13 +71,9 @@ export class PrivateFiles {
     if (!this.pending.size) return this.writes;
     const pending = this.pending; this.pending = new Map();
     const write = this.writes.then(async () => {
-      const db = await this.db();
-      await new Promise<void>((resolve, reject) => {
-        const transaction = db.transaction("files", "readwrite"), store = transaction.objectStore("files");
-        for (const [path, value] of pending) { if (value) store.put(value, path); else store.delete(path); }
-        transaction.oncomplete = () => resolve();
-        transaction.onabort = () => reject(transaction.error);
-      });
+      const transaction = (await this.db()).transaction("files", "readwrite"), store = transaction.objectStore("files");
+      for (const [path, value] of pending) { if (value) store.put(value, path); else store.delete(path); }
+      await txDone(transaction);
     });
     this.writes = write.catch(() => {
       for (const path of pending.keys()) if (!this.pending.has(path)) this.pending.set(path, this.values.get(path) ?? null);

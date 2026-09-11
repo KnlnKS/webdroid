@@ -8,6 +8,8 @@
  * above has one path rather than two. A user who *cancels* the real picker still gets null.
  */
 
+import { openDb } from "./idb";
+
 // lib.dom types the handles but not the picker, the async iteration or the permission calls.
 declare global {
   interface Window {
@@ -22,20 +24,11 @@ declare global {
   interface FileSystemDirectoryHandle { entries(): AsyncIterableIterator<[string, FileSystemHandle]> }
 }
 
-const DB = "webdroid", STORE = "roots";
 const roots = new Map<string, FileSystemDirectoryHandle>();
 
-function idb(): Promise<IDBDatabase> {
-  return new Promise((res, rej) => {
-    const r = indexedDB.open(DB, 1);
-    r.onupgradeneeded = () => r.result.createObjectStore(STORE);
-    r.onsuccess = () => res(r.result);
-    r.onerror = () => rej(r.error);
-  });
-}
 function tx<T>(mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
-  return idb().then((db) => new Promise<T>((res, rej) => {
-    const r = run(db.transaction(STORE, mode).objectStore(STORE));
+  return openDb("webdroid", "roots").then((db) => new Promise<T>((res, rej) => {
+    const r = run(db.transaction("roots", mode).objectStore("roots"));
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
   }));
