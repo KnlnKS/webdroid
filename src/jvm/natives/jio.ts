@@ -10,10 +10,6 @@ import { mappedReadOnlyBuffer } from "./jnio";
  *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
 export const apkPath = (split?: string) => split ? `/data/app/split_${split}.apk` : "/data/app/base.apk";
 
-// marker interface — apps implement this to opt into custom serialization; writeExternal/
-// readExternal dispatch isn't needed by anything exercised so far, so this just stops the
-// interface from auto-stubbing when an app class implements it directly (see "VM and
-// framework lessons" in the implementation history).
 rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
 
 // ── VFS: path → bytes. Directories implicit.
@@ -64,21 +60,18 @@ export const vfs = {
   lazy() {
     return [...this.lazyFiles].map(([path, source]) => ({ path, size: source.size, ...source.stats?.() }));
   },
+  under(p: string): boolean {
+    const dir = p.endsWith("/") ? p : p + "/";
+    for (const m of [this.files, this.lazyFiles]) for (const k of m.keys()) if (k.startsWith(dir)) return true;
+    return this.dirs.has(p);
+  },
   exists(p: string): boolean {
     p = this.norm(p);
-    if (this.files.has(p) || this.lazyFiles.has(p)) return true;
-    const dir = p.endsWith("/") ? p : p + "/";
-    for (const k of this.files.keys()) if (k.startsWith(dir)) return true;
-    for (const k of this.lazyFiles.keys()) if (k.startsWith(dir)) return true;
-    return this.dirs.has(p);
+    return this.files.has(p) || this.lazyFiles.has(p) || this.under(p);
   },
   isDir(p: string): boolean {
     p = this.norm(p);
-    if (this.files.has(p) || this.lazyFiles.has(p)) return false;
-    const dir = p.endsWith("/") ? p : p + "/";
-    for (const k of this.files.keys()) if (k.startsWith(dir)) return true;
-    for (const k of this.lazyFiles.keys()) if (k.startsWith(dir)) return true;
-    return this.dirs.has(p);
+    return !this.files.has(p) && !this.lazyFiles.has(p) && this.under(p);
   },
   delete(p: string): boolean {
     const path = this.norm(p);
@@ -92,12 +85,7 @@ export const vfs = {
     p = this.norm(p);
     const dir = p === "/" ? "/" : p + "/";
     const names = new Set<string>();
-    for (const k of this.files.keys()) {
-      if (k.startsWith(dir)) names.add(k.slice(dir.length).split("/")[0]);
-    }
-    for (const k of this.lazyFiles.keys()) {
-      if (k.startsWith(dir)) names.add(k.slice(dir.length).split("/")[0]);
-    }
+    for (const m of [this.files, this.lazyFiles]) for (const k of m.keys()) if (k.startsWith(dir)) names.add(k.slice(dir.length).split("/")[0]);
     for (const d of this.dirs) if (d.startsWith(dir)) names.add(d.slice(dir.length).split("/")[0]);
     names.delete("");
     return [...names];
@@ -164,7 +152,7 @@ rt.register({
       return 1;
     },
     "list()[Ljava/lang/String;": function (this: JFile) {
-      const a = vfs.list(this.path); (a as any).$t = "Ljava/lang/String;"; return a;
+      return jarray(vfs.list(this.path), "Ljava/lang/String;");
     },
     "listFiles()[Ljava/io/File;": function (this: JFile) { return listFiles(this); },
     "listFiles(Ljava/io/FilenameFilter;)[Ljava/io/File;": async function (this: JFile, f: unknown) {
@@ -181,7 +169,7 @@ rt.register({
     "list(Ljava/io/FilenameFilter;)[Ljava/lang/String;": async function (this: JFile, f: unknown) {
       const out: string[] = [];
       for (const n of vfs.list(this.path)) if (!f || await vcall(f, "accept", "(Ljava/io/File;Ljava/lang/String;)Z", this, n)) out.push(n);
-      (out as any).$t = "Ljava/lang/String;"; return out;
+      return jarray(out, "Ljava/lang/String;");
     },
     "canRead()Z": () => 1, "canWrite()Z": () => 1, "canExecute()Z": () => 1,
     "setReadable(Z)Z": () => 1, "setWritable(Z)Z": () => 1, "setExecutable(Z)Z": () => 1,
@@ -261,6 +249,24 @@ const inputStreamMethods: NativeSpec["methods"] = {
 };
 const readI = mangleMethod("read", "()I"), readBII = mangleMethod("read", "([BII)I");
 const writeBII = mangleMethod("write", "([BII)V");
+// the DataInput/DataOutput primitives, big-endian as the JDK reads and writes them
+type Get = (v: DataView) => unknown;
+type Put = (v: DataView, x: never) => void;
+const PRIMS: [string, string, number, Get, Put][] = [
+  ["Int", "I", 4, (v) => v.getInt32(0), (v, x: number) => v.setInt32(0, x)],
+  ["Short", "S", 2, (v) => v.getInt16(0), (v, x: number) => v.setInt16(0, x)],
+  ["Char", "C", 2, (v) => v.getUint16(0), (v, x: number) => v.setUint16(0, x)],
+  ["Byte", "B", 1, (v) => v.getInt8(0), (v, x: number) => v.setInt8(0, x)],
+  ["Boolean", "Z", 1, (v) => (v.getUint8(0) ? 1 : 0), (v, x: number) => v.setUint8(0, x ? 1 : 0)],
+  ["Long", "J", 8, (v) => v.getBigInt64(0), (v, x: bigint) => v.setBigInt64(0, x)],
+  ["Float", "F", 4, (v) => v.getFloat32(0), (v, x: number) => v.setFloat32(0, x)],
+  ["Double", "D", 8, (v) => v.getFloat64(0), (v, x: number) => v.setFloat64(0, x)],
+];
+const READS: [string, string, number, Get, Put?][] = [...PRIMS, ["UnsignedShort", "I", 2, (v) => v.getUint16(0)], ["UnsignedByte", "I", 1, (v) => v.getUint8(0)]];
+const readers = (read: (n: number, get: Get) => unknown) =>
+  Object.fromEntries(READS.map(([name, d, n, get]) => [`read${name}()${d}`, read(n, get)])) as NonNullable<NativeSpec["methods"]>;
+const writers = (write: (n: number, put: Put) => unknown) =>
+  Object.fromEntries(PRIMS.map(([name, d, n, , put]) => [`write${name}(${"SBC".includes(d) ? "I" : d})V`, write(n, put)])) as NonNullable<NativeSpec["methods"]>;
 /** every byte an InputStream has left: in place when its reads are ours, else through its virtual read */
 export async function readStreamFully(s: unknown): Promise<Uint8Array> {
   const base = JInputStream.prototype as any;
@@ -326,13 +332,7 @@ rt.register({
   ifaces: ["java/io/DataInput"],
   methods: {
     "<init>(Ljava/io/InputStream;)V": adoptStream,
-    "readInt()I": dataRead(4, (b) => (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]),
-    "readByte()B": dataRead(1, (b) => b[0] << 24 >> 24),
-    "readUnsignedByte()I": dataRead(1, (b) => b[0]),
-    "readShort()S": dataRead(2, (b) => ((b[0] << 8) | b[1]) << 16 >> 16),
-    "readUnsignedShort()I": dataRead(2, (b) => (b[0] << 8) | b[1]),
-    "readLong()J": dataRead(8, (b) => new DataView(b.buffer, b.byteOffset, 8).getBigInt64(0)),
-    "readBoolean()Z": dataRead(1, (b) => (b[0] ? 1 : 0)),
+    ...readers((n, get) => dataRead(n, (b) => get(new DataView(b.buffer, b.byteOffset, n)))),
     "readFully([B)V": maySuspend(function (this: JInputStream, out: Int8Array) {
       return after(dataBytes(this, out.length), (bytes) => { out.set(i8(bytes)); });
     }),
@@ -391,7 +391,7 @@ rt.register({
 });
 // ── java.io.Object{Input,Output}Stream, over the serialization stream's BLOCK-DATA layer only.
 // A primitive written outside writeObject travels in TC_BLOCKDATA records, which is the whole
-// protocol Externalizable bodies (libphonenumber's metadata, for one) use. An object graph needs
+// protocol Externalizable bodies use. An object graph needs
 // the class-descriptor and back-reference machinery, which is not modelled: readObject says so.
 const STREAM_MAGIC = 0xaced, STREAM_VERSION = 5, TC_BLOCKDATA = 0x77, TC_BLOCKDATALONG = 0x7a;
 class JObjectIn extends JInputStream { blockEnd = 0; }
@@ -444,16 +444,7 @@ rt.register({
         throw rt.mkThrowable("java/io/StreamCorruptedException", "invalid stream header");
       }
     }),
-    "readInt()I": blockRead(4, (v) => v.getInt32(0)),
-    "readShort()S": blockRead(2, (v) => v.getInt16(0)),
-    "readUnsignedShort()I": blockRead(2, (v) => v.getUint16(0)),
-    "readByte()B": blockRead(1, (v) => v.getInt8(0)),
-    "readUnsignedByte()I": blockRead(1, (v) => v.getUint8(0)),
-    "readBoolean()Z": blockRead(1, (v) => (v.getUint8(0) ? 1 : 0)),
-    "readChar()C": blockRead(2, (v) => v.getUint16(0)),
-    "readLong()J": blockRead(8, (v) => v.getBigInt64(0)),
-    "readFloat()F": blockRead(4, (v) => v.getFloat32(0)),
-    "readDouble()D": blockRead(8, (v) => v.getFloat64(0)),
+    ...readers(blockRead),
     "readUTF()Ljava/lang/String;": maySuspend(async function (this: JObjectIn) {
       const head = await blockBytes(this, 2);
       return modifiedUtf8(await blockBytes(this, (head[0] << 8) | head[1]));
@@ -467,7 +458,7 @@ rt.register({
     "close()V": function () {},
   },
 });
-class JObjectOut extends JOutputStream {}
+class JObjectOut extends JOutputStream { target: unknown = null; }
 /** every primitive write is its own TC_BLOCKDATA record, which reads back identically */
 function blockWrite(o: JObjectOut, bytes: Uint8Array): void {
   o.chunks.push(TC_BLOCKDATA, bytes.length);
@@ -484,17 +475,10 @@ rt.register({
   ifaces: ["java/io/ObjectOutput", "java/io/DataOutput"],
   methods: {
     "<init>(Ljava/io/OutputStream;)V": function (this: JObjectOut, out: JOutputStream) {
-      (this as unknown as { target: unknown }).target = out;
+      this.target = out;
       this.chunks.push(STREAM_MAGIC >> 8, STREAM_MAGIC & 0xff, 0, STREAM_VERSION);
     },
-    "writeInt(I)V": blockPut(4, (v, x: number) => v.setInt32(0, x)),
-    "writeShort(I)V": blockPut(2, (v, x: number) => v.setInt16(0, x)),
-    "writeByte(I)V": blockPut(1, (v, x: number) => v.setInt8(0, x)),
-    "writeBoolean(Z)V": blockPut(1, (v, x: number) => v.setUint8(0, x ? 1 : 0)),
-    "writeChar(I)V": blockPut(2, (v, x: number) => v.setUint16(0, x)),
-    "writeLong(J)V": blockPut(8, (v, x: bigint) => v.setBigInt64(0, x)),
-    "writeFloat(F)V": blockPut(4, (v, x: number) => v.setFloat32(0, x)),
-    "writeDouble(D)V": blockPut(8, (v, x: number) => v.setFloat64(0, x)),
+    ...writers(blockPut),
     "writeUTF(Ljava/lang/String;)V": function (this: JObjectOut, str: string) {
       const body = utf8.enc.encode(str);
       const b = new Uint8Array(body.length + 2);
@@ -504,7 +488,7 @@ rt.register({
     },
     "writeObject(Ljava/lang/Object;)V": noGraph,
     "flush()V": maySuspend(function (this: JObjectOut) {
-      const target = (this as unknown as { target: unknown }).target;
+      const target = this.target;
       const bytes = Int8Array.from(this.chunks);
       this.chunks = [];
       return target ? vcall(target, "write", "([BII)V", bytes, 0, bytes.length) : undefined;
@@ -648,10 +632,7 @@ rt.register({
     "read([BII)I": async function (this: JRAF, b: Int8Array, off: number, len: number) { return await rafRead(this, b, off, len); },
     "readFully([B)V": maySuspend(function (this: JRAF, b: Int8Array) { return rafReadFully(this, b, 0, b.length); }),
     "readFully([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { return rafReadFully(this, b, off, len); },
-    ...Object.fromEntries(([["readInt()I", 4, (v: DataView) => v.getInt32(0)], ["readLong()J", 8, (v: DataView) => v.getBigInt64(0)], ["readShort()S", 2, (v: DataView) => v.getInt16(0)],
-      ["readUnsignedShort()I", 2, (v: DataView) => v.getUint16(0)], ["readByte()B", 1, (v: DataView) => v.getInt8(0)], ["readUnsignedByte()I", 1, (v: DataView) => v.getUint8(0)],
-      ["readBoolean()Z", 1, (v: DataView) => v.getUint8(0) ? 1 : 0], ["readDouble()D", 8, (v: DataView) => v.getFloat64(0)], ["readFloat()F", 4, (v: DataView) => v.getFloat32(0)]] as const)
-      .map(([key, n, get]) => [key, async function (this: JRAF) { const b = new Int8Array(n); await rafReadFully(this, b, 0, n); return get(new DataView(b.buffer)); }])),
+    ...readers((n, get) => async function (this: JRAF) { const b = new Int8Array(n); await rafReadFully(this, b, 0, n); return get(new DataView(b.buffer)); }),
     "write(I)V": function (this: JRAF, v: number) {
       checkFileOpen(this);
       rafGrow(this, this.pos + 1);
@@ -660,14 +641,7 @@ rt.register({
     },
     "write([B)V": function (this: JRAF, b: Int8Array) { rafWrite(this, b, 0, b.length); },
     "write([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { rafWrite(this, b, off, len); },
-    // DataOutput: big-endian, as the JDK writes
-    "writeInt(I)V": function (this: JRAF, v: number) { rafWrite(this, new Int8Array(Int32Array.of(v).buffer).reverse(), 0, 4); },
-    "writeShort(I)V": function (this: JRAF, v: number) { rafWrite(this, Int8Array.of(v >> 8, v), 0, 2); },
-    "writeByte(I)V": function (this: JRAF, v: number) { rafWrite(this, Int8Array.of(v), 0, 1); },
-    "writeBoolean(Z)V": function (this: JRAF, v: number) { rafWrite(this, Int8Array.of(v ? 1 : 0), 0, 1); },
-    "writeLong(J)V": function (this: JRAF, v: bigint) { rafWrite(this, new Int8Array(BigInt64Array.of(v).buffer).reverse(), 0, 8); },
-    "writeDouble(D)V": function (this: JRAF, v: number) { rafWrite(this, new Int8Array(Float64Array.of(v).buffer).reverse(), 0, 8); },
-    "writeFloat(F)V": function (this: JRAF, v: number) { rafWrite(this, new Int8Array(Float32Array.of(v).buffer).reverse(), 0, 4); },
+    ...writers((n, put) => function (this: JRAF, x: never) { const b = new Int8Array(n); put(new DataView(b.buffer), x); rafWrite(this, b, 0, n); }),
     "setLength(J)V": function (this: JRAF, n: bigint) {
       checkFileOpen(this);
       const len = Number(n);
@@ -1143,15 +1117,7 @@ rt.register({
     "write([BII)V": function (this: JDataOut, b: Int8Array, off: number, len: number) {
       for (let i = 0; i < len; i++) this.sink?.chunks.push(b[off + i] & 0xff);
     },
-    "writeInt(I)V": function (this: JDataOut, v: number) {
-      this.sink?.chunks.push((v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff);
-    },
-    "writeLong(J)V": function (this: JDataOut, v: bigint) {
-      for (let i = 7n; i >= 0n; i--) this.sink?.chunks.push(Number((v >> (i * 8n)) & 0xffn));
-    },
-    "writeByte(I)V": function (this: JDataOut, v: number) { this.sink?.chunks.push(v & 0xff); },
-    "writeShort(I)V": function (this: JDataOut, v: number) { this.sink?.chunks.push((v >>> 8) & 0xff, v & 0xff); },
-    "writeBoolean(Z)V": function (this: JDataOut, v: number) { this.sink?.chunks.push(v ? 1 : 0); },
+    ...writers((n, put) => function (this: JDataOut, x: never) { const b = new Uint8Array(n); put(new DataView(b.buffer), x); this.sink?.chunks.push(...b); }),
     "writeUTF(Ljava/lang/String;)V": function (this: JDataOut, s: string) {
       const b = utf8.enc.encode(s);
       const sink = this.sink;
