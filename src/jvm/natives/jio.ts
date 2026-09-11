@@ -259,17 +259,15 @@ const inputStreamMethods: NativeSpec["methods"] = {
   "reset()V": function (this: JInputStream) { this.pos = (this as any).markPos ?? 0; },
   "markSupported()Z": () => 1,
 };
-const readBII = mangleMethod("read", "([BII)I");
+const readI = mangleMethod("read", "()I"), readBII = mangleMethod("read", "([BII)I");
 const writeBII = mangleMethod("write", "([BII)V");
-/**
- * Every byte an InputStream has left, through its virtual read() — the only way that works for
- * a stream that is not one of ours (okhttp hands out its own, and its bytes are on a socket,
- * not in JInputStream.buf).
- */
+/** every byte an InputStream has left: in place when its reads are ours, else through its virtual read */
 export async function readStreamFully(s: unknown): Promise<Uint8Array> {
-  if (s instanceof JInputStream && s.constructor === JInputStream && !s.source) {
-    const out = s.buf.subarray(s.pos);
-    s.pos = s.buf.length;
+  const base = JInputStream.prototype as any;
+  if (s instanceof JInputStream && !s.wrapped && (s as any)[readI] === base[readI] && (s as any)[readBII] === base[readBII]) {
+    checkFileOpen(s);
+    const out = s.source ? await readFully(s.source, s.pos) : s.buf.subarray(s.pos);
+    s.pos += out.length;
     return out;
   }
   const chunks: Uint8Array[] = [];
@@ -1333,24 +1331,6 @@ rt.register({ name: "java/nio/file/LinkOption", ctor: class extends JObj {}, sup
   statics: { NOFOLLOW_LINKS: new JObj() } });
 
 // ── java.util.Scanner: tokens and lines over a source read whole up front (a stream, a string, a file)
-async function slurp(src: unknown): Promise<Uint8Array> {
-  if (src instanceof JInputStream) {
-    if (src.source) {
-      const bytes = await readFully(src.source, src.pos);
-      src.pos += bytes.length;
-      return bytes;
-    }
-    return src.buf.subarray(src.pos);
-  }
-  const parts: Uint8Array[] = [];
-  for (;;) {
-    const chunk = new Int8Array(8192);
-    const n = (await vcall(src, "read", "([BII)I", chunk, 0, chunk.length)) as number;
-    if (n <= 0) break;
-    parts.push(new Uint8Array(chunk.buffer, 0, n).slice());
-  }
-  return concat(parts);
-}
 class JScanner extends JObj { text = ""; pos = 0; delim = /\s+/y; }
 function skipDelim(s: JScanner): void { s.delim.lastIndex = s.pos; const m = s.delim.exec(s.text); if (m && m.index === s.pos) s.pos += m[0].length; }
 function peekToken(s: JScanner): string | null {
@@ -1367,7 +1347,7 @@ function nextToken(s: JScanner): string {
   s.pos += t.length;
   return t;
 }
-const scanStream = async function (this: JScanner, s: unknown) { this.text = utf8.dec.decode(await slurp(s)); };
+const scanStream = async function (this: JScanner, s: unknown) { this.text = utf8.dec.decode(await readStreamFully(s)); };
 rt.register({
   name: "java/util/Scanner", ctor: JScanner, ifaces: ["java/util/Iterator", "java/io/Closeable"],
   methods: {

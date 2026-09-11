@@ -2,9 +2,9 @@
 // central-directory index, GZIPInputStream over a drained source.
 import { Inflate, Unzlib, Deflate, Zlib, Gzip, inflateSync, gunzipSync } from "fflate";
 import { rt, JObj, maySuspend } from "../runtime";
-import { mangleMethod, utf8, i8, u8 } from "../abi";
+import { utf8, i8, u8 } from "../abi";
 import { vcall, vcallMaybe, newObj, defineException } from "./jlang";
-import { vfs, JFile, JInputStream, JOutputStream } from "./jio";
+import { vfs, JFile, JInputStream, JOutputStream, readStreamFully } from "./jio";
 import { mkIter } from "./jutil";
 import { readFully, type FileSource } from "../../shell/lazyfile";
 
@@ -379,31 +379,8 @@ rt.register({
 });
 
 // ── GZIPInputStream: the whole source is gunzipped up front and served like any buffer-backed stream
-const readI = mangleMethod("read", "()I"), readBII = mangleMethod("read", "([BII)I");
-/** everything the source still holds — in place for a native buffer stream, else through its own read([BII) */
-async function drainStream(src: JInputStream): Promise<Uint8Array> {
-  const base = JInputStream.prototype as any;
-  if (src instanceof JInputStream && (src as any)[readI] === base[readI] && (src as any)[readBII] === base[readBII]) {
-    if (src.source) {
-      const b = await readFully(src.source, src.pos);
-      src.pos += b.length;
-      return b;
-    }
-    const b = src.buf.subarray(src.pos);
-    src.pos = src.buf.length;
-    return b;
-  }
-  const chunks: Uint8Array[] = [];
-  const buf = new Int8Array(65536);
-  let n = 0, total = 0;
-  while ((n = await vcall(src, "read", "([BII)I", buf, 0, buf.length)) > 0) { chunks.push(new Uint8Array(buf.buffer.slice(0, n))); total += n; }
-  const out = new Uint8Array(total);
-  let p = 0;
-  for (const c of chunks) { out.set(c, p); p += c.length; }
-  return out;
-}
 async function gunzip(this: JInputStream, src: JInputStream) {
-  const z = await drainStream(src);
+  const z = await readStreamFully(src);
   try { this.buf = gunzipSync(z); }
   catch (e) { throw rt.mkThrowable("java/util/zip/ZipException", (e as Error).message); }
 }

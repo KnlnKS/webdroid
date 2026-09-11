@@ -3,11 +3,12 @@
 // built against the system CA store the shell mounts. Cronet asks Java for exactly this.
 import type { asn1 } from "node-forge";
 import { JObj, rt, maySuspend } from "../runtime";
-import { jarray, concat, i8, u8 } from "../abi";
+import { jarray, i8 } from "../abi";
 import { boxInt, defineException, newObj, stringHash, vcall } from "./jlang";
 import { newArrayList, mkIter } from "./jutil";
 import { JRsaPublicKey } from "./jrsa";
 import { JDate } from "./jtime";
+import { readStreamFully } from "./jio";
 
 const forge = () => import("node-forge").then((m) => m.default);
 type Node = asn1.Asn1;
@@ -226,20 +227,9 @@ rt.register({
   },
 });
 
-/** everything an InputStream has, through its virtual read */
-async function drain(stream: unknown): Promise<Uint8Array> {
-  const chunks: Uint8Array[] = [];
-  const buf = new Int8Array(8192);
-  for (;;) {
-    const n = (await vcall(stream, "read", "([BII)I", buf, 0, buf.length)) as number;
-    if (n <= 0) break;
-    chunks.push(u8(buf.subarray(0, n)).slice());
-  }
-  return concat(chunks);
-}
 const isPem = (b: Uint8Array) => b[0] === 0x2d;
 async function certsFrom(stream: unknown): Promise<JX509[]> {
-  const b = await drain(stream);
+  const b = await readStreamFully(stream);
   if (!b.length) throw certErr("empty input");
   return isPem(b) ? fromPem(new TextDecoder().decode(b)) : [await parseX509(b)];
 }
