@@ -8,7 +8,7 @@ import { parkTimeout, unparkTimeout } from "../jvm/yield";
 import { TLS_KEYS } from "./core";
 import { RET_SENTINEL, E } from "./abi";
 import { JThread, reportUncaught, threadExit } from "../jvm/natives/jlang";
-import { readTs, fail } from "./libc";
+import { readTs, fail, clockTime } from "./libc";
 
 /** bionic's mutex word: bits 0-1 state (0 free, 1 held, 2 held with waiters), 2-13 recursion count, 14-15 type, 16-31 owner tid;
  *  the core takes and releases it uncontended (libc.zig), the host parks and hands it over */
@@ -86,12 +86,10 @@ export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: numbe
   const cmd = op & 0x7f;
   if (cmd === 0 || cmd === 9) {                                                 // FUTEX_WAIT (relative timeout) / FUTEX_WAIT_BITSET (absolute)
     if (mem.ld32(addr) !== val) { fstat(cpu, "eagain"); return fail(cpu, E.AGAIN); }
-    // a delay past 2^31-1 ms overflows setTimeout and fires at once: that long is untimed
-    const raw = !ts ? null : cmd === 0 ? readTs(ts) : readTs(ts) - (op & 256 ? Date.now() : performance.now() + 1000);
-    const ms = raw !== null && raw < 0x7fffffff ? raw : null;
+    const ms = timed(!ts ? null : cmd === 0 ? readTs(ts) : readTs(ts) - clockTime(op & 256 ? 0 : 1));
     let q = futexes.get(addr);
     if (!q) futexes.set(addr, (q = []));
-    fstat(cpu, ms === null ? "wait" : "timedwait:" + Math.round(ms));
+    fstat(cpu, ms === null ? "wait" : "timedwait");
     return new Promise<number>((r) => {
       const w = (woken: boolean) => { unparkTimeout(id); fstat(cpu, woken ? "woken" : "timeout"); r(woken ? 0 : fail(cpu, E.TIMEDOUT)); };
       q.push(w);
@@ -125,6 +123,17 @@ function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | nul
     if (r instanceof Promise) await r;
     mem.st32(mutex, mem.ld32(mutex) | count);
     return timedOut ? ETIMEDOUT : 0;
+  });
+}
+
+const condUntil = (clk: number): HostFn => (cpu, a) => { const c = a.p(), m = a.p(), ts = a.p(); return condWait(cpu, c, m, absMs(ts) - clockTime(clk)); };
+function semWait(cpu: Cpu, s: { count: number; waiters: (() => void)[] }, ts: number, clk: number): number | Promise<number> {
+  if (s.count > 0) { s.count--; return 0; }
+  const ms = timed(absMs(ts) - clockTime(clk));
+  return new Promise<number>((r) => {
+    const w = () => { unparkTimeout(t); r(0); };
+    const t = ms === null ? undefined : parkTimeout(() => { const i = s.waiters.indexOf(w); if (i >= 0) { s.waiters.splice(i, 1); r(fail(cpu, ETIMEDOUT)); } }, Math.max(0, ms));
+    s.waiters.push(w);
   });
 }
 
@@ -238,9 +247,7 @@ export function pthreadInit(): void {
     pthread_cond_init: (_c, a) => { conds.set(a.p(), []); return 0; },
     pthread_cond_destroy: (_c, a) => { conds.delete(a.p()); return 0; },
     pthread_cond_wait: (cpu, a) => condWait(cpu, a.p(), a.p(), null),
-    pthread_cond_timedwait: (cpu, a) => { const c = a.p(), m = a.p(), ts = a.p(); return condWait(cpu, c, m, absMs(ts) - Date.now()); },
-    pthread_cond_timedwait_monotonic_np: (cpu, a) => { const c = a.p(), m = a.p(), ts = a.p(); return condWait(cpu, c, m, absMs(ts) - (performance.now() + 1000)); },
-    pthread_cond_timedwait_monotonic: (cpu, a) => { const c = a.p(), m = a.p(), ts = a.p(); return condWait(cpu, c, m, absMs(ts) - (performance.now() + 1000)); },
+    pthread_cond_timedwait: condUntil(0), pthread_cond_timedwait_monotonic_np: condUntil(1), pthread_cond_timedwait_monotonic: condUntil(1),
     pthread_cond_timedwait_relative_np: (cpu, a) => { const c = a.p(), m = a.p(), ts = a.p(); return condWait(cpu, c, m, absMs(ts)); },
     pthread_cond_timeout_np: (cpu, a) => { const c = a.p(), m = a.p(), ms = a.u(); return condWait(cpu, c, m, ms); },
     pthread_cond_signal: (_c, a) => { const l = conds.get(a.p()); const w = l?.shift(); if (w) w(false); return 0; },
@@ -260,7 +267,7 @@ export function pthreadInit(): void {
     pthread_atfork: () => 0,
     pthread_mutexattr_gettype: (_c, a) => { a.p(); mem.st32(a.p(), 0); return 0; },
     pthread_condattr_getclock: (_c, a) => { a.p(); mem.st32(a.p(), 0); return 0; },
-    pthread_cond_clockwait: (cpu, a) => { const c = a.p(), m = a.p(), clk = a.i(), ts = a.p(); return condWait(cpu, c, m, absMs(ts) - (clk === 0 ? Date.now() : performance.now() + 1000)); },
+    pthread_cond_clockwait: (cpu, a) => { const c = a.p(), m = a.p(), clk = a.i(), ts = a.p(); return condWait(cpu, c, m, absMs(ts) - clockTime(clk)); },
     pthread_mutex_clocklock: (cpu, a) => lock(cpu, a.p()),
     pthread_key_delete: (_c, a) => { keyDtors.delete(a.i()); return 0; },
     pthread_getspecific: SERVED, pthread_setspecific: SERVED,
@@ -277,21 +284,12 @@ export function pthreadInit(): void {
     sem_init: (_c, a) => { const s = a.p(); a.i(); const v = a.u(); sems.set(s, { count: v, waiters: [] }); return 0; },
     sem_destroy: (_c, a) => { sems.delete(a.p()); return 0; },
     sem_wait: (_c, a) => { const s = semOf(a.p()); if (s.count > 0) { s.count--; return 0; } return new Promise<number>((r) => s.waiters.push(() => r(0))); },
-    sem_trywait: (cpu, a) => { const s = semOf(a.p()); if (s.count > 0) { s.count--; return 0; } mem.st32(cpu.errnoAddr, E.AGAIN); return -1; },
+    sem_trywait: (cpu, a) => { const s = semOf(a.p()); if (s.count > 0) { s.count--; return 0; } return fail(cpu, E.AGAIN); },
     sem_post: (_c, a) => { const s = semOf(a.p()); const w = s.waiters.shift(); if (w) w(); else s.count++; return 0; },
     sem_getvalue: (_c, a) => { const s = semOf(a.p()); mem.st32(a.p(), s.count); return 0; },
-    sem_timedwait: (cpu, a) => {
-      const s = semOf(a.p()), ts = a.p();
-      if (s.count > 0) { s.count--; return 0; }
-      const ms = timed(absMs(ts) - Date.now());
-      return new Promise<number>((r) => {
-        const w = () => { unparkTimeout(t); r(0); };
-        const t = ms === null ? undefined : parkTimeout(() => { const i = s.waiters.indexOf(w); if (i >= 0) { s.waiters.splice(i, 1); mem.st32(cpu.errnoAddr, ETIMEDOUT); r(-1); } }, Math.max(0, ms));
-        s.waiters.push(w);
-      });
-    },
-    sem_clockwait: (cpu, a) => { const s = semOf(a.p()); a.i(); const ts = a.p(); if (s.count > 0) { s.count--; return 0; } void cpu; const ms = timed(absMs(ts) - Date.now()); return new Promise<number>((r) => { if (ms !== null) parkTimeout(() => r(-1), Math.max(0, ms)); s.waiters.push(() => r(0)); }); },
-    clock_nanosleep: (_c, a) => { const clk = a.i(), flags = a.i(), req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, 16); const ms = readTs(req); return sleepMs(flags & 1 ? ms - (clk === 0 ? Date.now() : performance.now() + 1000) : ms); },
+    sem_timedwait: (cpu, a) => { const s = semOf(a.p()); return semWait(cpu, s, a.p(), 0); },
+    sem_clockwait: (cpu, a) => { const s = semOf(a.p()), clk = a.i(); return semWait(cpu, s, a.p(), clk); },
+    clock_nanosleep: (_c, a) => { const clk = a.i(), flags = a.i(), req = a.p(), rem = a.p(); if (rem) mem.memset(rem, 0, 16); const ms = readTs(req); return sleepMs(flags & 1 ? ms - clockTime(clk) : ms); },
     // sleeping
     usleep: (_c, a) => sleepMs(a.u() / 1000),
     sleep: (_c, a) => sleepMs(a.u() * 1000),
