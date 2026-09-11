@@ -74,6 +74,13 @@ function descendantInvalidated(child: JView, target: JView) {
 }
 function nativeOnDescInv(this: JViewGroup, _child: JView, target: JView) { invalidate(); descendantInvalidated(this, target); }
 function nativeRequestLayout(this: JView) { requestLayout(this); }
+/** AOSP's addView and removeView call the parent's requestLayout() virtually: an override
+ *  (RecyclerView defers while it binds or lays out) decides first */
+export function requestLayoutVirtual(v: JView) {
+  const f = jmethod(v, M_requestLayout);
+  if (f && f !== nativeRequestLayout) void guardApply(f as JMethod, v);
+  else requestLayout(v);
+}
 setInvalidateHook(invalidate);
 let focusHook: (v: JView, on: boolean) => void = () => {};
 export const setFocusHook = (h: typeof focusHook) => { focusHook = h; };
@@ -161,11 +168,27 @@ function windowOffset(view: JView): [number, number] {
   return [tx, ty];
 }
 function removeChild(this: JViewGroup, c: JView) { detachView(this, c); }
-function removeAllChildren(this: JViewGroup) { for (const c of [...this.children]) detachView(this, c); }
-async function attachInLayout(this: JViewGroup, c: JView, i: number, lp: JLayoutParams) {
+function removeChildInLayout(this: JViewGroup, c: JView) { detachView(this, c, false); }
+/** AOSP removeViews/removeAllViews: the children leave without requests and the parent asks
+ *  once; the *InLayout forms do not ask at all */
+function removeRange(vg: JViewGroup, start: number, n: number, request: boolean) {
+  const gone = vg.children.slice(start, start + n);
+  for (const c of gone) detachView(vg, c, false);
+  if (request && gone.length) { requestLayoutVirtual(vg); invalidate(vg); }
+}
+/** AOSP addViewInLayout: addViewInner without the parent's request. Unless the caller prevents
+ *  it, the child's own setLayoutParams asks, before the child has a parent to pass it to. */
+async function addInLayout(this: JViewGroup, c: JView, i: number, lp: JLayoutParams, preventRequestLayout?: number) {
   c.lp = lp ? await convertLp(this, lp) : c.lp;
-  attachView(this, c, i);
+  if (!preventRequestLayout) requestLayoutVirtual(c);
+  attachView(this, c, i, false);
   return 1;
+}
+/** AOSP attachViewToParent: re-links a child detachViewFromParent took out. It never left the
+ *  window, so there is no attach dispatch, no hierarchy callback and no request. */
+async function attachToParent(this: JViewGroup, c: JView, i: number, lp: JLayoutParams) {
+  c.lp = lp ? await convertLp(this, lp) : c.lp;
+  linkChild(this, c, i);
 }
 export function obtainEvent(dt: bigint, et: bigint, action: number, x: number, y: number, metaState = 0) {
   const e = new JMotionEvent();
@@ -1361,21 +1384,45 @@ async function convertLp(vg: JViewGroup, lp: JLayoutParams | null): Promise<JLay
   return lp;
 }
 
-export function attachView(parent: JViewGroup, child: JView, index = -1) {
+/** The array and parent link alone, which is all AOSP's attachViewToParent does. False when the
+ *  link would make a cycle. */
+function linkChild(parent: JViewGroup, child: JView, index: number): boolean {
   // integrity: never create a cycle (child already an ancestor of parent)
   for (let a: JView | null = parent; a; a = a.parent) {
     if (a === child) {
       console.error("[webdroid] refused cyclic addView:", (child.constructor as any)?.$i?.name, "into", (parent.constructor as any)?.$i?.name);
-      return;
+      return false;
     }
   }
   if (child.parent) detachView(child.parent as JViewGroup, child);
   if (index < 0 || index > parent.children.length) parent.children.push(child);
   else parent.children.splice(index, 0, child);
   child.parent = parent;
-  // every addView overload funnels here (see addViewFunnel/addView3 below), and
-  // addViewInLayout/attachViewToParent call this directly too -- so this is the one
-  // place that sees every child ever added, regardless of call path.
+  return true;
+}
+/** AOSP detachViewFromParent: the child leaves the array but stays attached to the window */
+function unlinkChild(parent: JViewGroup, child: JView): boolean {
+  const i = parent.children.indexOf(child);
+  if (i < 0) return false;
+  parent.children.splice(i, 1);
+  child.parent = null;
+  return true;
+}
+/** AOSP removeViewInternal and removeDetachedView: the hierarchy listener hears of it and the
+ *  child leaves the window */
+function childRemoved(parent: JViewGroup, child: JView) {
+  if (parent.hierarchyChangeL) {
+    void vcall(parent.hierarchyChangeL, "onChildViewRemoved", "(Landroid/view/View;Landroid/view/View;)V", parent, child);
+  }
+  if (child.attached) void onMain(() => dispatchDetached(child));
+}
+/**
+ * AOSP addViewInner: every addView overload funnels here (see addViewFunnel/addView3 below), as
+ * does addViewInLayout, which passes request=false. addView asks the parent for layout through
+ * its virtual requestLayout(); the in-layout form leaves that to the pass already running.
+ */
+export function attachView(parent: JViewGroup, child: JView, index = -1, request = true) {
+  if (!linkChild(parent, child, index)) return;
   if (parent.hierarchyChangeL) {
     void vcall(parent.hierarchyChangeL, "onChildViewAdded", "(Landroid/view/View;Landroid/view/View;)V", parent, child);
   }
@@ -1383,20 +1430,13 @@ export function attachView(parent: JViewGroup, child: JView, index = -1) {
   // than starting a chain that interleaves with the caller at its first await (Compose's
   // composition installs a snapshot read observer that must not see foreign reads).
   if (parent.attached) void onMain(() => dispatchAttached(child));
-  requestLayout(parent);
-  invalidate(parent);
+  if (request) { requestLayoutVirtual(parent); invalidate(parent); }
 }
-export function detachView(parent: JViewGroup, child: JView) {
-  const i = parent.children.indexOf(child);
-  if (i < 0) return;
-  parent.children.splice(i, 1);
-  child.parent = null;
-  if (parent.hierarchyChangeL) {
-    void vcall(parent.hierarchyChangeL, "onChildViewRemoved", "(Landroid/view/View;Landroid/view/View;)V", parent, child);
-  }
-  if (child.attached) void onMain(() => dispatchDetached(child));
-  requestLayout(parent);
-  invalidate(parent);
+/** AOSP removeView (request) and removeViewInLayout (no request) */
+export function detachView(parent: JViewGroup, child: JView, request = true) {
+  if (!unlinkChild(parent, child)) return;
+  childRemoved(parent, child);
+  if (request) { requestLayoutVirtual(parent); invalidate(parent); }
 }
 export async function dispatchAttached(v: JView) {
   if (v.attached) return;
@@ -1515,25 +1555,21 @@ const vgMethods: NativeSpec["methods"] = {
     return addViewFunnel(this, c, -1, lp);
   }),
   "removeView(Landroid/view/View;)V": removeChild,
-  "removeViewInLayout(Landroid/view/View;)V": removeChild,
+  "removeViewInLayout(Landroid/view/View;)V": removeChildInLayout,
   "removeViewAt(I)V": function (this: JViewGroup, i: number) {
     const c = this.children[i];
     if (c) detachView(this, c);
   },
-  "removeAllViews()V": removeAllChildren,
-  "removeAllViewsInLayout()V": removeAllChildren,
+  "removeAllViews()V": function (this: JViewGroup) { removeRange(this, 0, this.children.length, true); },
+  "removeAllViewsInLayout()V": function (this: JViewGroup) { removeRange(this, 0, this.children.length, false); },
   "getChildCount()I": function (this: JViewGroup) { return this.children.length; },
   "getChildAt(I)Landroid/view/View;": function (this: JViewGroup, i: number) { return this.children[i] ?? null; },
   "indexOfChild(Landroid/view/View;)I": function (this: JViewGroup, c: JView) { return this.children.indexOf(c); },
-  "removeViews(II)V": function (this: JViewGroup, start: number, n: number) {
-    for (const c of this.children.slice(start, start + n)) detachView(this, c);
-  },
-  "removeViewsInLayout(II)V": function (this: JViewGroup, start: number, n: number) {
-    for (const c of this.children.slice(start, start + n)) detachView(this, c);
-  },
+  "removeViews(II)V": function (this: JViewGroup, start: number, n: number) { removeRange(this, start, n, true); },
+  "removeViewsInLayout(II)V": function (this: JViewGroup, start: number, n: number) { removeRange(this, start, n, false); },
   "detachViewFromParent(I)V": function (this: JViewGroup, i: number) {
     const c = this.children[i];
-    if (c) { this.children.splice(i, 1); c.parent = null; }
+    if (c) unlinkChild(this, c);
   },
   "getFocusedChild()Landroid/view/View;": function (this: JViewGroup) {
     return this.children.find((c) => c.focused || (c instanceof JViewGroup && findByPred(c, (v) => v.focused))) ?? null;
@@ -1608,11 +1644,15 @@ const vgMethods: NativeSpec["methods"] = {
   "setClipToPadding(Z)V": function (this: JViewGroup, v: number) { this.clipToPadding = !!v; },
   "getClipToPadding()Z": function (this: JViewGroup) { return this.clipToPadding ? 1 : 0; },
   "getDescendantFocusability()I": () => 0x20000,
-  "addViewInLayout(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)Z": attachInLayout,
-  "addViewInLayout(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;Z)Z": attachInLayout,
-  "attachViewToParent(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V": attachInLayout,
-  "removeDetachedView(Landroid/view/View;Z)V": removeChild,
-  "detachViewFromParent(Landroid/view/View;)V": removeChild,
+  "addViewInLayout(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)Z": addInLayout,
+  "addViewInLayout(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;Z)Z": addInLayout,
+  "attachViewToParent(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V": attachToParent,
+  // the child was already unlinked by detachViewFromParent; this is the rest of its removal
+  "removeDetachedView(Landroid/view/View;Z)V": function (this: JViewGroup, c: JView) {
+    unlinkChild(this, c);
+    childRemoved(this, c);
+  },
+  "detachViewFromParent(Landroid/view/View;)V": function (this: JViewGroup, c: JView) { unlinkChild(this, c); },
   "drawChild(Landroid/graphics/Canvas;Landroid/view/View;J)Z": async function (this: JViewGroup, cv: JCanvas, c: JView) {
     await drawView(c, cv, this);
     return 0;
