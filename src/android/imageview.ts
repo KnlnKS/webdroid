@@ -4,7 +4,7 @@ import {
   type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, cslColor, drawChild
 } from "./drawable";
 import { mkEnumSet } from "../jvm/natives/jlang";
-import { type NativeSpec, rt } from "../jvm/runtime";
+import { type NativeSpec, rt, stubs, noops } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvColor } from "./res";
 import type { JBitmap, JCanvas } from "./graphics";
 
@@ -61,7 +61,6 @@ const imageViewMethods: NativeSpec["methods"] = {
     this.scaleType = st?.ord ?? 3;
     invalidate();
   },
-  "getScaleType()Landroid/widget/ImageView$ScaleType;": function () { return null; },
   "setAdjustViewBounds(Z)V": function (this: JImageView, v: number) { this.adjustBounds = !!v; },
   "setMaxWidth(I)V": function (this: JImageView, v: number) { this.maxW = v; requestLayout(this); },
   "setMaxHeight(I)V": function (this: JImageView, v: number) { this.maxH = v; requestLayout(this); },
@@ -82,9 +81,9 @@ const imageViewMethods: NativeSpec["methods"] = {
     if (this.drawable && csl) this.drawable.tint = cslColor(csl, this.drawableState());
     invalidate();
   },
-  "setImageMatrix(Landroid/graphics/Matrix;)V": () => {},
   "setImageLevel(I)V": function (this: JImageView, l: number) { if (this.drawable) this.drawable.level = l; },
-  "setImageURI(Landroid/net/Uri;)V": () => {},
+  ...stubs(null, "getScaleType()Landroid/widget/ImageView$ScaleType;"),
+  ...noops("setImageMatrix(Landroid/graphics/Matrix;)V", "setImageURI(Landroid/net/Uri;)V"),
   "onMeasure(II)V": function (this: JImageView, wSpec: number, hSpec: number) {
     const dw = Math.max(0, this.drawable?.intrinsicW() ?? 0);
     const dh = Math.max(0, this.drawable?.intrinsicH() ?? 0);

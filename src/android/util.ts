@@ -1,7 +1,7 @@
 // android.util.* natives: Log, the sparse arrays, StateSet, Property, DisplayMetrics, LruCache,
 // TypedValue, Size, FloatMath and JsonReader.
 
-import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
 import { intBitsToFloat, mangleStaticField } from "../jvm/abi";
 import { device } from "../shell/config";
 import { vcall, JEnum, linkInit } from "../jvm/natives/jlang";
@@ -123,7 +123,7 @@ rt.register({
 class JPair extends JObj { first: unknown = null; second: unknown = null; }
 rt.register({
   name: "android/util/Pair", ctor: JPair,
-  fields: { first: "first", second: "second" },
+  fields: ["first", "second"],
   methods: {
     "<init>(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JPair, a: unknown, b: unknown) { this.first = a; this.second = b; },
     "static create(Ljava/lang/Object;Ljava/lang/Object;)Landroid/util/Pair;": (a: unknown, b: unknown) => {
@@ -168,10 +168,7 @@ export class JDisplayMetrics extends JObj {
 rt.register({
   name: "android/util/DisplayMetrics", ctor: JDisplayMetrics,
   statics: { DENSITY_DEFAULT: 160 },
-  fields: {
-    density: "density", densityDpi: "densityDpi", scaledDensity: "scaledDensity",
-    widthPixels: "widthPixels", heightPixels: "heightPixels", xdpi: "xdpi", ydpi: "ydpi",
-  },
+  fields: ["density", "densityDpi", "scaledDensity", "widthPixels", "heightPixels", "xdpi", "ydpi"],
   methods: { "<init>()V": function () {}, "setTo(Landroid/util/DisplayMetrics;)V": function (this: JDisplayMetrics, o: JDisplayMetrics) { Object.assign(this, o); } },
 });
 
@@ -226,8 +223,7 @@ rt.register({
     COMPLEX_UNIT_PX: 0, COMPLEX_UNIT_DIP: 1, COMPLEX_UNIT_SP: 2, COMPLEX_UNIT_PT: 3,
     COMPLEX_UNIT_IN: 4, COMPLEX_UNIT_MM: 5,
   },
-  fields: { type: "type", data: "data", resourceId: "resourceId", string: "string", density: "density",
-            assetCookie: "assetCookie", changingConfigurations: "changingConfigurations" },
+  fields: ["type", "data", "resourceId", "string", "density", "assetCookie", "changingConfigurations"],
   methods: {
     "<init>()V": function () {},
     "static complexToDimensionPixelSize(ILandroid/util/DisplayMetrics;)I": (data: number, dm: JDisplayMetrics) => {
@@ -438,9 +434,8 @@ rt.register({
   name: "android/util/JsonWriter", ctor: JJsonWriter, ifaces: ["java/io/Closeable", "java/io/Flushable"],
   methods: {
     "<init>(Ljava/io/Writer;)V": function (this: JJsonWriter, out: unknown) { this.out = out; },
-    "setIndent(Ljava/lang/String;)V": () => {},
-    "setLenient(Z)V": () => {},
-    "isLenient()Z": () => 0,
+    ...noops("setIndent(Ljava/lang/String;)V", "setLenient(Z)V"),
+    ...stubs(0, "isLenient()Z"),
     [`beginArray()${JW}`]: jsonOpen(true),
     [`endArray()${JW}`]: jsonClose("]"),
     [`beginObject()${JW}`]: jsonOpen(false),

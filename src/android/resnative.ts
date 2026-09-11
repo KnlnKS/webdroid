@@ -1,6 +1,6 @@
 // Java-facing android.content.res.* on top of res.ts + drawable.ts
 
-import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newXmlPullParser } from "./xmlpull";
 import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV } from "./res";
@@ -71,22 +71,16 @@ function configEquals(a: JConfiguration, b: JConfiguration): boolean {
 }
 rt.register({
   name: "android/content/res/Configuration", ctor: JConfiguration,
-  fields: {
-    orientation: "orientation", screenWidthDp: "screenWidthDp", screenHeightDp: "screenHeightDp",
-    smallestScreenWidthDp: "smallestScreenWidthDp", densityDpi: "densityDpi", fontScale: "fontScale",
-    uiMode: "uiMode", locale: "locale", mcc: "mcc", mnc: "mnc", touchscreen: "touchscreen",
-    keyboard: "keyboard", keyboardHidden: "keyboardHidden", navigation: "navigation",
-    navigationHidden: "navigationHidden", hardKeyboardHidden: "hardKeyboardHidden", screenLayout: "screenLayout",
-    fontWeightAdjustment: "fontWeightAdjustment", colorMode: "colorMode",
-  },
+  fields: ["orientation", "screenWidthDp", "screenHeightDp", "smallestScreenWidthDp", "densityDpi", "fontScale",
+    "uiMode", "locale", "mcc", "mnc", "touchscreen", "keyboard", "keyboardHidden", "navigation", "navigationHidden",
+    "hardKeyboardHidden", "screenLayout", "fontWeightAdjustment", "colorMode"],
   methods: {
-    "<init>()V": function () {},
     "<init>(Landroid/content/res/Configuration;)V": function (this: JConfiguration, o: JConfiguration) {
       if (o) Object.assign(this, o);
     },
     "setTo(Landroid/content/res/Configuration;)V": function (this: JConfiguration, o: JConfiguration) { Object.assign(this, o); },
-    "diff(Landroid/content/res/Configuration;)I": () => 0,
-    "updateFrom(Landroid/content/res/Configuration;)I": () => 0,
+    ...noops("<init>()V"),
+    ...stubs(0, "diff(Landroid/content/res/Configuration;)I", "updateFrom(Landroid/content/res/Configuration;)I"),
     "equals(Ljava/lang/Object;)Z": function (this: JConfiguration, o: unknown) { return o instanceof JConfiguration && configEquals(this, o) ? 1 : 0; },
     "equals(Landroid/content/res/Configuration;)Z": function (this: JConfiguration, o: JConfiguration | null) { return o && configEquals(this, o) ? 1 : 0; },
     "hashCode()I": function (this: JConfiguration) {

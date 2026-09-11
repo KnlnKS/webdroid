@@ -1,7 +1,7 @@
 import { AID } from "./res";
 // android.app.Dialog / AlertDialog rendered as overlays (scrim + centered card).
 
-import { rt, JObj, type NativeSpec, callSelf, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf, maySuspend, stubs, noops } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import {
@@ -300,9 +300,6 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     }
     requestLayout();
   },
-  "onCreate(Landroid/os/Bundle;)V": function () {},
-  "onStart()V": function () {},
-  "onStop()V": function () {},
   "hide()V": function (this: JDialog) { if (this.root) this.root.visibility = 4; },
   "dismiss()V": function (this: JDialog) { return this.dismissImpl(); },
   "cancel()V": function (this: JDialog) { return this.cancel(); },
@@ -314,7 +311,6 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "setOnCancelListener(Landroid/content/DialogInterface$OnCancelListener;)V": function (this: JDialog, l: unknown) { this.cancelL = l; },
   "setOnDismissListener(Landroid/content/DialogInterface$OnDismissListener;)V": function (this: JDialog, l: unknown) { this.dismissL = l; },
   "setOnShowListener(Landroid/content/DialogInterface$OnShowListener;)V": function (this: JDialog, l: unknown) { this.showL = l; },
-  "setOnKeyListener(Landroid/content/DialogInterface$OnKeyListener;)V": () => {},
   "findViewById(I)Landroid/view/View;": async function (this: JDialog, id: number) {
     return this.root ? findById(this.root, id) : null;
   },
@@ -330,43 +326,32 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     this.win.decor.windowOwner = this.win;
     return this.win;
   },
-  "requestWindowFeature(I)Z": () => 1,
   "getLayoutInflater()Landroid/view/LayoutInflater;": async function (this: JDialog) {
     return getInflater(this.jctx);
   },
   "getOwnerActivity()Landroid/app/Activity;": function (this: JDialog) { return this.jctx; },
-  "setOwnerActivity(Landroid/app/Activity;)V": () => {},
-  "getCurrentFocus()Landroid/view/View;": () => null,
-  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": () => 0,
   "onBackPressed()V": function (this: JDialog) { if (this.cancelable) return this.cancel(); },
-  "create()V": function () {},
   // Window.Callback, as Dialog's defaults
   "onContentChanged()V": function () {},
-  "onAttachedToWindow()V": function () {},
-  "onDetachedFromWindow()V": function () {},
-  "onWindowAttributesChanged(Landroid/view/WindowManager$LayoutParams;)V": function () {},
-  "onWindowFocusChanged(Z)V": function () {},
-  "onPanelClosed(ILandroid/view/Menu;)V": function () {},
-  "onSearchRequested()Z": () => 0,
-  "onSearchRequested(Landroid/view/SearchEvent;)Z": () => 0,
-  "onCreatePanelView(I)Landroid/view/View;": () => null,
-  "onCreatePanelMenu(ILandroid/view/Menu;)Z": () => 0,
-  "onPreparePanel(ILandroid/view/View;Landroid/view/Menu;)Z": () => 1,
-  "onMenuOpened(ILandroid/view/Menu;)Z": () => 1,
-  "onMenuItemSelected(ILandroid/view/MenuItem;)Z": () => 0,
-  "onActionModeStarted(Landroid/view/ActionMode;)V": function () {},
-  "onActionModeFinished(Landroid/view/ActionMode;)V": function () {},
-  "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;": () => null,
-  "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;": () => null,
-  "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": () => 0,
-  "dispatchKeyShortcutEvent(Landroid/view/KeyEvent;)Z": () => 0,
-  "dispatchTrackballEvent(Landroid/view/MotionEvent;)Z": () => 0,
-  "dispatchGenericMotionEvent(Landroid/view/MotionEvent;)Z": () => 0,
-  "dispatchPopulateAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)Z": () => 0,
-  "onKeyDown(ILandroid/view/KeyEvent;)Z": () => 0,
-  "onKeyUp(ILandroid/view/KeyEvent;)Z": () => 0,
   "onSaveInstanceState()Landroid/os/Bundle;": () => rt.make("android/os/Bundle"),
-  "onRestoreInstanceState(Landroid/os/Bundle;)V": function () {},
+  ...noops("onCreate(Landroid/os/Bundle;)V", "onStart()V", "onStop()V",
+    "setOnKeyListener(Landroid/content/DialogInterface$OnKeyListener;)V", "setOwnerActivity(Landroid/app/Activity;)V",
+    "create()V", "onAttachedToWindow()V", "onDetachedFromWindow()V",
+    "onWindowAttributesChanged(Landroid/view/WindowManager$LayoutParams;)V", "onWindowFocusChanged(Z)V",
+    "onPanelClosed(ILandroid/view/Menu;)V", "onActionModeStarted(Landroid/view/ActionMode;)V",
+    "onActionModeFinished(Landroid/view/ActionMode;)V", "onRestoreInstanceState(Landroid/os/Bundle;)V"),
+  ...stubs(1, "requestWindowFeature(I)Z", "onPreparePanel(ILandroid/view/View;Landroid/view/Menu;)Z",
+    "onMenuOpened(ILandroid/view/Menu;)Z"),
+  ...stubs(null, "getCurrentFocus()Landroid/view/View;", "onCreatePanelView(I)Landroid/view/View;",
+    "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;",
+    "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;"),
+  ...stubs(0, "dispatchTouchEvent(Landroid/view/MotionEvent;)Z", "onSearchRequested()Z",
+    "onSearchRequested(Landroid/view/SearchEvent;)Z", "onCreatePanelMenu(ILandroid/view/Menu;)Z",
+    "onMenuItemSelected(ILandroid/view/MenuItem;)Z", "dispatchKeyEvent(Landroid/view/KeyEvent;)Z",
+    "dispatchKeyShortcutEvent(Landroid/view/KeyEvent;)Z", "dispatchTrackballEvent(Landroid/view/MotionEvent;)Z",
+    "dispatchGenericMotionEvent(Landroid/view/MotionEvent;)Z",
+    "dispatchPopulateAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)Z",
+    "onKeyDown(ILandroid/view/KeyEvent;)Z", "onKeyUp(ILandroid/view/KeyEvent;)Z"),
 };
 rt.register({
   name: "android/app/Dialog", ctor: JDialog,

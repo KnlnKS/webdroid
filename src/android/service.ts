@@ -2,7 +2,7 @@
 // and the callback/marker interfaces apps implement (ServiceConnection, IInterface,
 // Parcelable$ClassLoaderCreator).
 
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, stubs, noops } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jutil";
 import { PARCELABLE } from "./os";
 
@@ -27,20 +27,13 @@ rt.register({
 rt.register({
   name: "android/os/UserManager", ctor: class extends JObj {},
   methods: {
-    "isUserUnlocked()Z": () => 1,
-    "isUserUnlocked(Landroid/os/UserHandle;)Z": () => 1,
-    "isUserRunning(Landroid/os/UserHandle;)Z": () => 1,
-    "isUserAGoat()Z": () => 0,
-    "isSystemUser()Z": () => 1,
-    "isDemoUser()Z": () => 0,
-    "isManagedProfile()Z": () => 0,
-    "isProfile()Z": () => 0,
-    "isQuietModeEnabled(Landroid/os/UserHandle;)Z": () => 0,
-    "hasUserRestriction(Ljava/lang/String;)Z": () => 0,
-    "getUserCount()I": () => 1,
     "getUserName()Ljava/lang/String;": () => "Owner",
     "getUserProfiles()Ljava/util/List;": async () => newArrayList([theUser]),
-    "getSerialNumberForUser(Landroid/os/UserHandle;)J": () => 0n,
+    ...stubs(1, "isUserUnlocked()Z", "isUserUnlocked(Landroid/os/UserHandle;)Z",
+      "isUserRunning(Landroid/os/UserHandle;)Z", "isSystemUser()Z", "getUserCount()I"),
+    ...stubs(0, "isUserAGoat()Z", "isDemoUser()Z", "isManagedProfile()Z", "isProfile()Z",
+      "isQuietModeEnabled(Landroid/os/UserHandle;)Z", "hasUserRestriction(Ljava/lang/String;)Z"),
+    ...stubs(0n, "getSerialNumberForUser(Landroid/os/UserHandle;)J"),
     "getUserForSerialNumber(J)Landroid/os/UserHandle;": () => theUser,
   },
 });
@@ -69,9 +62,7 @@ rt.register({
     "<init>(Ljava/io/File;I)V": fileObserverInit,
     "<init>(Ljava/util/List;)V": fileObserverInit,
     "<init>(Ljava/util/List;I)V": fileObserverInit,
-    "startWatching()V": () => {},
-    "stopWatching()V": () => {},
-    "onEvent(ILjava/lang/String;)V": () => {},
+    ...noops("startWatching()V", "stopWatching()V", "onEvent(ILjava/lang/String;)V"),
   },
 });
 

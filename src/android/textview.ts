@@ -18,7 +18,7 @@ import {
 } from "./res";
 import { TV } from "./axml";
 import { fontResource } from "./fonts";
-import { type NativeSpec, callSelf, rt, JObj, maySuspend } from "../jvm/runtime";
+import { type NativeSpec, callSelf, rt, JObj, maySuspend, stubs, noops } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { usLocale } from "../jvm/natives/jvalues";
 
@@ -412,7 +412,6 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     invalidate();
   },
   "getCompoundDrawableTintList()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.drawableTint; },
-  "setCompoundDrawableTintMode(Landroid/graphics/PorterDuff$Mode;)V": () => {},
   "getHintTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.hintColors; },
   "getLineSpacingExtra()F": function (this: JTextView) { return this.lineSpacingExtra; },
   "getLineSpacingMultiplier()F": function (this: JTextView) { return this.lineSpacingMult; },
@@ -420,7 +419,6 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getMinWidth()I": function (this: JTextView) { return this.minW; },
   "getMinHeight()I": function (this: JTextView) { return this.minH; },
   "getLetterSpacing()F": function (this: JTextView) { return this.paintT.letterSpacingEm; },
-  "getIncludeFontPadding()Z": () => 1,
   "setBreakStrategy(I)V": function (this: JTextView, b: number) { this.breakStrategy = b; },
   "getBreakStrategy()I": function (this: JTextView) { return this.breakStrategy; },
   "setHyphenationFrequency(I)V": function (this: JTextView, h: number) { this.hyphenation = h; },
@@ -429,21 +427,16 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getTotalPaddingRight()I": compoundPadR,
   "getTotalPaddingTop()I": compoundPadT,
   "getTotalPaddingBottom()I": compoundPadB,
-  "isHorizontallyScrollable()Z": () => 0,
   "setWidth(I)V": function (this: JTextView, w: number) { this.minW = w; this.maxW = w; requestLayout(this); },
   "setMinEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.paintT.textSize); },
   "setRawInputType(I)V": function (this: JTextView, t: number) { this.inputTypeV = t; },
   "setLinksClickable(Z)V": function (this: JTextView, v: number) { this.linksClickable = !!v; },
   "getLinksClickable()Z": function (this: JTextView) { return this.linksClickable ? 1 : 0; },
-  "setTextLocales(Landroid/os/LocaleList;)V": () => {},
-  "setImeHintLocales(Landroid/os/LocaleList;)V": () => {},
   "getTextLocale()Ljava/util/Locale;": () => usLocale,
   "setFontVariationSettings(Ljava/lang/String;)Z": function (this: JTextView, s: string | null) { this.fontVariation = s; return 1; },
   "getFontVariationSettings()Ljava/lang/String;": function (this: JTextView) { return this.fontVariation; },
   "setCustomSelectionActionModeCallback(Landroid/view/ActionMode$Callback;)V": function (this: JTextView, cb: unknown) { this.selActionMode = cb; },
   "getCustomSelectionActionModeCallback()Landroid/view/ActionMode$Callback;": function (this: JTextView) { return this.selActionMode; },
-  "beginBatchEdit()V": () => {},
-  "endBatchEdit()V": () => {},
   "onCheckIsTextEditor()Z": function (this: JTextView) { return this.editable ? 1 : 0; },
   // AOSP: an explicit line height is applied as extra spacing over the font's own line height
   "setLineHeight(I)V": function (this: JTextView, h: number) { this.lineSpacingMult = 1; this.lineSpacingExtra = h - this.lineHeight() + this.lineSpacingExtra; requestLayout(this); },
@@ -462,24 +455,11 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setAutoSizeTextTypeUniformWithConfiguration(IIII)V": function (this: JTextView) { this.autoSizeType = 1; },
   "setAutoSizeTextTypeUniformWithPresetSizes([II)V": function (this: JTextView) { this.autoSizeType = 1; },
   "getAutoSizeTextType()I": function (this: JTextView) { return this.autoSizeType; },
-  "getAutoSizeMinTextSize()I": () => -1,
-  "getAutoSizeMaxTextSize()I": () => -1,
-  "getAutoSizeStepGranularity()I": () => -1,
   "getAutoSizeTextAvailableSizes()[I": () => new Int32Array(0),
   "setTransformationMethod(Landroid/text/method/TransformationMethod;)V": function (this: JTextView, m: unknown) { this.transformation = m; },
   "getTransformationMethod()Landroid/text/method/TransformationMethod;": function (this: JTextView) { return this.transformation; },
-  "setHighlightColor(I)V": () => {},
-  "setHorizontallyScrolling(Z)V": () => {},
-  "setMarqueeRepeatLimit(I)V": () => {},
-  "setSelectAllOnFocus(Z)V": () => {},
-  "setTextIsSelectable(Z)V": () => {},
   "setCursorVisible(Z)V": function (this: JTextView, v: number) { this.cursorVisible = !!v; },
-  "setError(Ljava/lang/CharSequence;)V": () => {},
-  "setAutoLinkMask(I)V": () => {},
-  "setLinkTextColor(I)V": () => {},
-  "setMaxEms(I)V": () => {},
   "setOnEditorActionListener(Landroid/widget/TextView$OnEditorActionListener;)V": function (this: JTextView, l: unknown) { this.editorActionL = l; },
-  "setShadowLayer(FFFI)V": () => {},
   "setFilters([Landroid/text/InputFilter;)V": function (this: JTextView, arr: unknown[]) {
     this.filters = arr ?? [];
     for (const f of this.filters ?? []) {
@@ -509,7 +489,14 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     return r.top + this.ascent();
   },
   "setMinWidth(I)V": function (this: JTextView, w: number) { this.minW = w; },
-  "setMaxHeight(I)V": () => {},
+  ...noops("setCompoundDrawableTintMode(Landroid/graphics/PorterDuff$Mode;)V",
+    "setTextLocales(Landroid/os/LocaleList;)V", "setImeHintLocales(Landroid/os/LocaleList;)V", "beginBatchEdit()V",
+    "endBatchEdit()V", "setHighlightColor(I)V", "setHorizontallyScrolling(Z)V", "setMarqueeRepeatLimit(I)V",
+    "setSelectAllOnFocus(Z)V", "setTextIsSelectable(Z)V", "setError(Ljava/lang/CharSequence;)V", "setAutoLinkMask(I)V",
+    "setLinkTextColor(I)V", "setMaxEms(I)V", "setShadowLayer(FFFI)V", "setMaxHeight(I)V"),
+  ...stubs(1, "getIncludeFontPadding()Z"),
+  ...stubs(0, "isHorizontallyScrollable()Z"),
+  ...stubs(-1, "getAutoSizeMinTextSize()I", "getAutoSizeMaxTextSize()I", "getAutoSizeStepGranularity()I"),
   "setMinHeight(I)V": function (this: JTextView, h: number) { this.minH = h; },
   "setEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.paintT.textSize); },
   "setPaintFlags(I)V": function (this: JTextView, f: number) {
@@ -666,11 +653,9 @@ rt.register({
     ...textViewMethods,
     ...textViewCtors<JEditText>("editTextStyle"),
     "getText()Landroid/text/Editable;": function (this: JEditText) { return this.getEditable(); },
-    "setSelection(I)V": () => {},
-    "setSelection(II)V": () => {},
     "getSelectionStart()I": function (this: JEditText) { return this.text.length; },
     "getSelectionEnd()I": function (this: JEditText) { return this.text.length; },
-    "selectAll()V": () => {},
+    ...noops("setSelection(I)V", "setSelection(II)V", "selectAll()V"),
     "performClick()Z": async function (this: JEditText) {
       focusEditText(this);
       if (this.clickL) await vcall(this.clickL, "onClick", "(Landroid/view/View;)V", this);

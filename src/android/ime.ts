@@ -9,7 +9,7 @@
 // declares `implements InputConnection`, and an unregistered interface makes Runtime.link
 // auto-stub it — which poisons every class that names it.
 
-import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { jarray, splitSig } from "../jvm/abi";
@@ -74,13 +74,9 @@ rt.register({
     IME_FLAG_NO_EXTRACT_UI: 0x10000000, IME_FLAG_NO_ACCESSORY_ACTION: 0x20000000,
     IME_FLAG_NO_ENTER_ACTION: 0x40000000, IME_FLAG_FORCE_ASCII: -0x80000000,
   },
-  fields: {
-    inputType: "inputType", imeOptions: "imeOptions", privateImeOptions: "privateImeOptions",
-    actionLabel: "actionLabel", actionId: "actionId", initialSelStart: "initialSelStart",
-    initialSelEnd: "initialSelEnd", initialCapsMode: "initialCapsMode", hintText: "hintText",
-    label: "label", packageName: "packageName", fieldId: "fieldId", fieldName: "fieldName",
-    extras: "extras", hintLocales: "hintLocales", contentMimeTypes: "contentMimeTypes",
-  },
+  fields: ["inputType", "imeOptions", "privateImeOptions", "actionLabel", "actionId", "initialSelStart",
+    "initialSelEnd", "initialCapsMode", "hintText", "label", "packageName", "fieldId", "fieldName", "extras",
+    "hintLocales", "contentMimeTypes"],
   methods: {
     "<init>()V": function () {},
     // AOSP drops flags/action bits the target SDK cannot express. We report the newest
@@ -128,17 +124,13 @@ class JExtractedText extends JObj {
 rt.register({
   name: "android/view/inputmethod/ExtractedText", ctor: JExtractedText, ifaces: ["android/os/Parcelable"],
   statics: { FLAG_SINGLE_LINE: 1, FLAG_SELECTING: 2 },
-  fields: {
-    text: "text", startOffset: "startOffset", partialStartOffset: "partialStartOffset",
-    partialEndOffset: "partialEndOffset", selectionStart: "selectionStart",
-    selectionEnd: "selectionEnd", flags: "flags",
-  },
+  fields: ["text", "startOffset", "partialStartOffset", "partialEndOffset", "selectionStart", "selectionEnd", "flags"],
   methods: { "<init>()V": function () {}, "describeContents()I": () => 0, "writeToParcel(Landroid/os/Parcel;I)V": () => {} },
 });
 class JExtractedTextRequest extends JObj { token = 0; flags = 0; hintMaxLines = 0; hintMaxChars = 0; }
 rt.register({
   name: "android/view/inputmethod/ExtractedTextRequest", ctor: JExtractedTextRequest, ifaces: ["android/os/Parcelable"],
-  fields: { token: "token", flags: "flags", hintMaxLines: "hintMaxLines", hintMaxChars: "hintMaxChars" },
+  fields: ["token", "flags", "hintMaxLines", "hintMaxChars"],
   methods: { "<init>()V": function () {}, "describeContents()I": () => 0, "writeToParcel(Landroid/os/Parcel;I)V": () => {} },
 });
 
@@ -235,7 +227,6 @@ rt.register({
       const { text, start, end } = await this.content(), extracted = rt.make("android/view/inputmethod/ExtractedText") as JExtractedText;
       extracted.text = text; extracted.selectionStart = start; extracted.selectionEnd = end; return extracted;
     },
-    "getCursorCapsMode(I)I": () => 0,
     "commitText(Ljava/lang/CharSequence;I)Z": async function (this: JBaseInputConnection, cs: unknown, pos: number) {
       return replaceAt(this, await csText(cs), pos, false);
     },
@@ -278,23 +269,18 @@ rt.register({
       if (this.view) await vcall(this.view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", ev);
       return 1;
     },
-    "performEditorAction(I)Z": () => 1,
-    "performContextMenuAction(I)Z": () => 1,
-    "performPrivateCommand(Ljava/lang/String;Landroid/os/Bundle;)Z": () => 1,
-    "performSpellCheck()Z": () => 1,
-    "clearMetaKeyStates(I)Z": () => 1,
-    "commitCompletion(Landroid/view/inputmethod/CompletionInfo;)Z": () => 0,
-    "commitCorrection(Landroid/view/inputmethod/CorrectionInfo;)Z": () => 0,
-    "commitContent(Landroid/view/inputmethod/InputContentInfo;ILandroid/os/Bundle;)Z": () => 0,
-    "reportFullscreenMode(Z)Z": () => 0,
-    "requestCursorUpdates(I)Z": () => 0,
-    "requestCursorUpdates(II)Z": () => 0,
-    "setImeConsumesInput(Z)Z": () => 1,
-    "getHandler()Landroid/os/Handler;": () => null,
-    "getSurroundingText(III)Landroid/view/inputmethod/SurroundingText;": () => null,
-    "takeSnapshot()Landroid/view/inputmethod/TextSnapshot;": () => null,
-    "performHandwritingGesture(Landroid/view/inputmethod/HandwritingGesture;Ljava/util/concurrent/Executor;Ljava/util/function/IntConsumer;)V": () => {},
-    "previewHandwritingGesture(Landroid/view/inputmethod/PreviewableHandwritingGesture;Landroid/os/CancellationSignal;)Z": () => 0,
+    ...stubs(0, "getCursorCapsMode(I)I", "commitCompletion(Landroid/view/inputmethod/CompletionInfo;)Z",
+      "commitCorrection(Landroid/view/inputmethod/CorrectionInfo;)Z",
+      "commitContent(Landroid/view/inputmethod/InputContentInfo;ILandroid/os/Bundle;)Z", "reportFullscreenMode(Z)Z",
+      "requestCursorUpdates(I)Z", "requestCursorUpdates(II)Z",
+      "previewHandwritingGesture(Landroid/view/inputmethod/PreviewableHandwritingGesture;Landroid/os/CancellationSignal;)Z"),
+    ...stubs(1, "performEditorAction(I)Z", "performContextMenuAction(I)Z",
+      "performPrivateCommand(Ljava/lang/String;Landroid/os/Bundle;)Z", "performSpellCheck()Z",
+      "clearMetaKeyStates(I)Z", "setImeConsumesInput(Z)Z"),
+    ...stubs(null, "getHandler()Landroid/os/Handler;",
+      "getSurroundingText(III)Landroid/view/inputmethod/SurroundingText;",
+      "takeSnapshot()Landroid/view/inputmethod/TextSnapshot;"),
+    ...noops("performHandwritingGesture(Landroid/view/inputmethod/HandwritingGesture;Ljava/util/concurrent/Executor;Ljava/util/function/IntConsumer;)V"),
     // TextAttribute only carries IME styling hints; the text edit is identical.
     "commitText(Ljava/lang/CharSequence;ILandroid/view/inputmethod/TextAttribute;)Z": async function (this: JBaseInputConnection, cs: unknown, p: number) {
       return vcall(this, "commitText", "(Ljava/lang/CharSequence;I)Z", cs, p);
@@ -590,14 +576,8 @@ rt.register({
     "showDropDown()V": function (this: JAutoComplete) { this.popupShowing = 1; },
     "dismissDropDown()V": function (this: JAutoComplete) { this.popupShowing = 0; },
     "isPopupShowing()Z": function (this: JAutoComplete) { return this.popupShowing; },
-    "setDropDownBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": () => {},
-    "setDropDownBackgroundResource(I)V": () => {},
     "setDropDownWidth(I)V": () => {}, "setDropDownHeight(I)V": () => {},
     "setDropDownVerticalOffset(I)V": () => {}, "setDropDownHorizontalOffset(I)V": () => {},
-    "setDropDownAnchor(I)V": () => {},
-    "setCompletionHint(Ljava/lang/CharSequence;)V": () => {},
-    "clearListSelection()V": () => {},
-    "getListSelection()I": () => -1,
     "setText(Ljava/lang/CharSequence;Z)V": async function (this: JAutoComplete, cs: unknown) {
       await vcall(this, "setText", "(Ljava/lang/CharSequence;)V", cs);
     },
@@ -613,7 +593,10 @@ rt.register({
     "replaceText(Ljava/lang/CharSequence;)V": async function (this: JAutoComplete, cs: unknown) {
       await vcall(this, "setText", "(Ljava/lang/CharSequence;)V", cs);
     },
-    "performCompletion()V": function () {},
+    ...noops("setDropDownBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V",
+      "setDropDownBackgroundResource(I)V", "setDropDownAnchor(I)V", "setCompletionHint(Ljava/lang/CharSequence;)V",
+      "clearListSelection()V", "performCompletion()V"),
+    ...stubs(-1, "getListSelection()I"),
   },
 });
 rt.markers("android/widget/Filter$FilterListener");

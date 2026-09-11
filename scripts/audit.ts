@@ -85,8 +85,7 @@ const registeredField = (key: string) => {
   const ctor = ctorOf(cls);
   if (!ctor) return false;
   const info = rt.classes.get(cls)!;
-  return mangleStaticField(name) in ctor || info.fieldTable.has(name) ||
-    (rt.natives.get(cls)?.fields?.[name] !== undefined);
+  return mangleStaticField(name) in ctor || info.fieldTable.has(name);
 };
 
 const isFramework = (k: string) => FRAMEWORK_RE.test(k);

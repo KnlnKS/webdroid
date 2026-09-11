@@ -2,7 +2,7 @@ import { AID } from "./res";
 // AdapterView/ListView/GridView + framework adapters (BaseAdapter/ArrayAdapter).
 // Non-recycling: materializes all item views (fine at app scale), scrolls internally.
 
-import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSizeAndState, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom } from "./view";
@@ -31,7 +31,6 @@ export class JBaseAdapter extends JObj {
   observers: unknown[] = [];
 }
 export const baseAdapterMethods: NonNullable<NativeSpec["methods"]> = {
-  "<init>()V": function () {},
   "registerDataSetObserver(Landroid/database/DataSetObserver;)V": function (this: JBaseAdapter, o: unknown) {
     this.observers.push(o);
   },
@@ -49,11 +48,9 @@ export const baseAdapterMethods: NonNullable<NativeSpec["methods"]> = {
       try { await vcall(o, "onInvalidated", "()V"); } catch (e) { reportUncaught(e); }
     }
   },
-  "hasStableIds()Z": () => 0,
-  "areAllItemsEnabled()Z": () => 1,
-  "isEnabled(I)Z": () => 1,
-  "getItemViewType(I)I": () => 0,
-  "getViewTypeCount()I": () => 1,
+  ...noops("<init>()V"),
+  ...stubs(0, "hasStableIds()Z", "getItemViewType(I)I"),
+  ...stubs(1, "areAllItemsEnabled()Z", "isEnabled(I)Z", "getViewTypeCount()I"),
   "isEmpty()Z": async function (this: JBaseAdapter) {
     return (await vcall(this, "getCount", "()I")) === 0 ? 1 : 0;
   },
@@ -473,9 +470,6 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setDividerHeight(I)V": function (this: JListView, h: number) { this.divH = h; requestLayout(this); },
   "getDividerHeight()I": function (this: JListView) { return this.divH; },
-  "setSelector(Landroid/graphics/drawable/Drawable;)V": () => {},
-  "setSelector(I)V": () => {},
-  "setDrawSelectorOnTop(Z)V": () => {},
   "getChoiceMode()I": function (this: JListView) { return this.choiceMode; },
   "setChoiceMode(I)V": async function (this: JListView, m: number) {
     this.choiceMode = m;
@@ -545,21 +539,11 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setEmptyView(Landroid/view/View;)V": function (this: JListView, v: JView) { this.emptyView = v; this.updateEmptyStatus(); },
   "getEmptyView()Landroid/view/View;": function (this: JListView) { return this.emptyView; },
-  "setFastScrollEnabled(Z)V": () => {},
-  "setHeaderDividersEnabled(Z)V": () => {},
-  "setFooterDividersEnabled(Z)V": () => {},
-  "setOverscrollHeader(Landroid/graphics/drawable/Drawable;)V": () => {},
-  "setOverscrollFooter(Landroid/graphics/drawable/Drawable;)V": () => {},
   "smoothScrollBy(II)V": function (this: JListView, dy: number) { this.scrollRows(dy); },
-  "setVerticalFadingEdgeEnabled(Z)V": () => {},
-  "setFadingEdgeLength(I)V": () => {},
   "setOnScrollListener(Landroid/widget/AbsListView$OnScrollListener;)V": function (this: JListView, l: unknown) {
     this.scrollL = l;
     this.notifyScroll();
   },
-  "setRecyclerListener(Landroid/widget/AbsListView$RecyclerListener;)V": () => {},
-  "setTextFilterEnabled(Z)V": () => {},
-  "setSmoothScrollbarEnabled(Z)V": () => {},
   "setMultiChoiceModeListener(Landroid/widget/AbsListView$MultiChoiceModeListener;)V":
     function (this: JListView, l: unknown) { this.multiChoiceL = l; },
   "clearChoices()V": function (this: JListView) { this.checked.clear(); invalidate(); },
@@ -578,13 +562,15 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "pointToPosition(II)I": function (this: JListView, x: number, y: number) { return this.itemIndexAt(y + this.scrollY); },
   "getDivider()Landroid/graphics/drawable/Drawable;": function (this: JListView) { return this.divDraw; },
   "layoutChildren()V": function (this: JListView) { requestLayout(this); },
-  "setItemsCanFocus(Z)V": () => {},
-  "getSelectedItem()Ljava/lang/Object;": () => null,
-  "getSelectedItemPosition()I": () => -1,
-  "setScrollingCacheEnabled(Z)V": () => {},
-  "setCacheColorHint(I)V": () => {},
-  "setTranscriptMode(I)V": () => {},
-  "setStackFromBottom(Z)V": () => {},
+  ...noops("setSelector(Landroid/graphics/drawable/Drawable;)V", "setSelector(I)V", "setDrawSelectorOnTop(Z)V",
+    "setFastScrollEnabled(Z)V", "setHeaderDividersEnabled(Z)V", "setFooterDividersEnabled(Z)V",
+    "setOverscrollHeader(Landroid/graphics/drawable/Drawable;)V",
+    "setOverscrollFooter(Landroid/graphics/drawable/Drawable;)V", "setVerticalFadingEdgeEnabled(Z)V",
+    "setFadingEdgeLength(I)V", "setRecyclerListener(Landroid/widget/AbsListView$RecyclerListener;)V",
+    "setTextFilterEnabled(Z)V", "setSmoothScrollbarEnabled(Z)V", "setItemsCanFocus(Z)V",
+    "setScrollingCacheEnabled(Z)V", "setCacheColorHint(I)V", "setTranscriptMode(I)V", "setStackFromBottom(Z)V"),
+  ...stubs(null, "getSelectedItem()Ljava/lang/Object;"),
+  ...stubs(-1, "getSelectedItemPosition()I"),
   "invalidateViews()V": function (this: JListView) { this.dirty = true; void this.rebuild(); },
   "onMeasure(II)V": measureListView,
   "onLayout(ZIIII)V": async function (this: JListView) {
@@ -719,10 +705,7 @@ rt.register({
   methods: {
     ...listViewMethods,
     "setNumColumns(I)V": function (this: any, n: number) { this.cols = Math.max(1, n); requestLayout(); },
-    "setColumnWidth(I)V": () => {},
-    "setStretchMode(I)V": () => {},
-    "setHorizontalSpacing(I)V": () => {},
-    "setVerticalSpacing(I)V": () => {},
+    ...noops("setColumnWidth(I)V", "setStretchMode(I)V", "setHorizontalSpacing(I)V", "setVerticalSpacing(I)V"),
     "onMeasure(II)V": async function (this: any, wSpec: number, hSpec: number) {
       const w = defaultSize(specSize(wSpec), wSpec);
       const availW = Math.max(0, w - this.padL - this.padR);

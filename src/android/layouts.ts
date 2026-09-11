@@ -4,7 +4,7 @@ import {
   resolveSizeAndState, makeSpec, MS_EXACTLY, childMeasureSpec, measureView, layoutView, initViewFromCtx,
   requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState
 } from "./view";
-import { type NativeSpec, rt, callSelf } from "../jvm/runtime";
+import { type NativeSpec, rt, callSelf, noops } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvFloat, onFramework } from "./res";
 import { gravityH, gravityV, G } from "./gravity";
 import { type JMotionEvent, trackVelocity, restVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
@@ -92,7 +92,7 @@ rt.register({
 });
 rt.register({
   name: "android/widget/FrameLayout$LayoutParams", ctor: JFrameLP, sup: "android/view/ViewGroup$MarginLayoutParams",
-  fields: { gravity: "gravity" },
+  fields: ["gravity"],
   methods: {
     "<init>(II)V": function (this: JFrameLP, w: number, h: number) { this.width = w; this.height = h; },
     "<init>(III)V": function (this: JFrameLP, w: number, h: number, g: number) { this.width = w; this.height = h; this.gravity = g; },
@@ -134,9 +134,8 @@ export const linearMethods: NativeSpec["methods"] = {
   "getOrientation()I": function (this: JLinearLayout) { return this.orientation; },
   "setGravity(I)V": function (this: JLinearLayout, g: number) { this.gravity = g; requestLayout(this); },
   "setWeightSum(F)V": function (this: JLinearLayout, w: number) { this.weightSum = w; },
-  "setShowDividers(I)V": () => {},
-  "setDividerDrawable(Landroid/graphics/drawable/Drawable;)V": () => {},
-  "setBaselineAligned(Z)V": () => {},
+  ...noops("setShowDividers(I)V", "setDividerDrawable(Landroid/graphics/drawable/Drawable;)V",
+    "setBaselineAligned(Z)V"),
   "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": function (this: JLinearLayout) {
     const lp = new JLinearLP();
     if (this.orientation === 1) { lp.width = MATCH_PARENT; lp.height = WRAP_CONTENT; }
@@ -248,7 +247,7 @@ rt.register({
 });
 rt.register({
   name: "android/widget/LinearLayout$LayoutParams", ctor: JLinearLP, sup: "android/view/ViewGroup$MarginLayoutParams",
-  fields: { gravity: "gravity", weight: "weight" },
+  fields: ["gravity", "weight"],
   methods: {
     "<init>(II)V": function (this: JLinearLP, w: number, h: number) { this.width = w; this.height = h; },
     "<init>(IIF)V": function (this: JLinearLP, w: number, h: number, wt: number) { this.width = w; this.height = h; this.weight = wt; },

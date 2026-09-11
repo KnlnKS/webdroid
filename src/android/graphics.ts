@@ -1,6 +1,6 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
-import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle } from "./handles";
@@ -106,19 +106,19 @@ const rectMethods = (F: boolean): NativeSpec["methods"] => ({
 });
 rt.register({
   name: "android/graphics/Rect", ctor: JRect, ifaces: ["android/os/Parcelable"],
-  fields: { left: "left", top: "top", right: "right", bottom: "bottom" },
+  fields: ["left", "top", "right", "bottom"],
   methods: rectMethods(false),
 });
 export class JRectF extends JRect {}
 rt.register({
   name: "android/graphics/RectF", ctor: JRectF, ifaces: ["android/os/Parcelable"],
-  fields: { left: "left", top: "top", right: "right", bottom: "bottom" },
+  fields: ["left", "top", "right", "bottom"],
   methods: rectMethods(true),
 });
 export class JPoint extends JObj { x = 0; y = 0; }
 rt.register({
   name: "android/graphics/Point", ctor: JPoint,
-  fields: { x: "x", y: "y" },
+  fields: ["x", "y"],
   methods: {
     "offset(II)V": function (this: JPoint, dx: number, dy: number) { this.x += dx; this.y += dy; },
     "negate()V": function (this: JPoint) { this.x = -this.x; this.y = -this.y; },
@@ -130,7 +130,7 @@ rt.register({
 });
 rt.register({
   name: "android/graphics/PointF", ctor: class extends JPoint {},
-  fields: { x: "x", y: "y" },
+  fields: ["x", "y"],
   methods: {
     "<init>()V": function () {},
     "<init>(FF)V": function (this: JPoint, x: number, y: number) { this.x = x; this.y = y; },
@@ -158,7 +158,7 @@ export function insetsOf(l: number, t: number, r: number, b: number): JInsets {
 }
 rt.register({
   name: "android/graphics/Insets", ctor: JInsets,
-  fields: { left: "left", top: "top", right: "right", bottom: "bottom" },
+  fields: ["left", "top", "right", "bottom"],
   statics: { NONE: INSETS_NONE },
   methods: {
     "static of(IIII)Landroid/graphics/Insets;": (l: number, t: number, r: number, b: number) => insetsOf(l, t, r, b),
@@ -358,39 +358,15 @@ const paintMethods: NativeSpec["methods"] = {
     function (this: JPaint, chars: Uint16Array, start: number, end: number, _cs: number, _ce: number, _rtl: number, offset: number, advances: Float32Array | null, advIdx: number) {
       return runAdvances(this, charsToString(chars, 0, chars.length), start, end, offset, advances, advIdx);
     },
-  "<init>()V": function () {},
-  "<init>(I)V": function () {},
   "<init>(Landroid/graphics/Paint;)V": function (this: JPaint, o: JPaint) { if (o) copyPaint(o, this); },
   "set(Landroid/graphics/Paint;)V": function (this: JPaint, o: JPaint) { copyPaint(o, this); },
   "setColor(I)V": function (this: JPaint, c: number) { this.color = c; },
   "setColor(J)V": function (this: JPaint, c: bigint) { this.color = Number(BigInt.asIntN(32, c >> 32n)); },
   "getColorLong()J": function (this: JPaint) { return BigInt(this.color >>> 0) << 32n; },
-  "isFilterBitmap()Z": () => 1,
-  "setHinting(I)V": () => {},
-  "getHinting()I": () => 1,
-  "setSubpixelText(Z)V": () => {},
-  "setLinearText(Z)V": () => {},
-  "setElegantTextHeight(Z)V": () => {},
-  "setFontFeatureSettings(Ljava/lang/String;)V": () => {},
-  "setFontVariationSettings(Ljava/lang/String;)Z": () => 1,
-  "setTextLocale(Ljava/util/Locale;)V": () => {},
   "getTextLocale()Ljava/util/Locale;": () => usLocale,
   "getTextLocales()Landroid/os/LocaleList;": async () => vcall((await linkInit("android/os/LocaleList")).ctor, "getDefault", "()Landroid/os/LocaleList;"),
-  "setTextLocales(Landroid/os/LocaleList;)V": () => {},
-  "setTextScaleX(F)V": () => {},
-  "getTextScaleX()F": () => 1,
-  "setTextSkewX(F)V": () => {},
-  "setStartHyphenEdit(I)V": () => {},
-  "setEndHyphenEdit(I)V": () => {},
-  "setWordSpacing(F)V": () => {},
-  "getWordSpacing()F": () => 0,
-  "getLetterSpacing()F": () => 0,
-  "isDither()Z": () => 0,
   "getShader()Landroid/graphics/Shader;": function (this: JPaint) { return this.shaderObj; },
-  "getStrokeCap()Landroid/graphics/Paint$Cap;": function (this: JPaint) { return null; },
-  "getStrokeJoin()Landroid/graphics/Paint$Join;": function (this: JPaint) { return null; },
   "getStrokeMiter()F": () => 4,
-  "getPathEffect()Landroid/graphics/PathEffect;": () => null,
   "getXfermode()Landroid/graphics/Xfermode;": function (this: JPaint) { return this.xfermode; },
   "setBlendMode(Landroid/graphics/BlendMode;)V": function (this: JPaint, m: JSimpleEnum | null) {
     this.blendMode = m;
@@ -410,8 +386,6 @@ const paintMethods: NativeSpec["methods"] = {
   "getTextSize()F": function (this: JPaint) { return this.textSize; },
   "setAntiAlias(Z)V": function (this: JPaint, v: number) { this.antiAlias = !!v; },
   "isAntiAlias()Z": function (this: JPaint) { return this.antiAlias ? 1 : 0; },
-  "setDither(Z)V": function () {},
-  "setFilterBitmap(Z)V": function () {},
   "setTypeface(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;": function (this: JPaint, t: JTypeface | null) {
     const o = this.tf;
     this.tf = t ?? tfDefault;
@@ -422,7 +396,6 @@ const paintMethods: NativeSpec["methods"] = {
   "getTextAlign()Landroid/graphics/Paint$Align;": function (this: JPaint) { return paintAlignEnum[this.textAlignN]; },
   "setStrokeCap(Landroid/graphics/Paint$Cap;)V": function (this: JPaint, c: { ord: number }) { this.strokeCapN = CAPS[c?.ord ?? 0]; },
   "setStrokeJoin(Landroid/graphics/Paint$Join;)V": function (this: JPaint, j: { ord: number }) { this.strokeJoinN = JOINS[j?.ord ?? 0]; },
-  "setStrokeMiter(F)V": function () {},
   "setShader(Landroid/graphics/Shader;)Landroid/graphics/Shader;": function (this: JPaint, s: JShader | null) {
     this.shader = s?.grad ?? null;
     this.shaderObj = s ?? null;
@@ -443,14 +416,20 @@ const paintMethods: NativeSpec["methods"] = {
     this.blend = x ? COMPOSITE[x.ename] ?? null : null;
     return x;
   },
-  "setFlags(I)V": function () {},
-  "getFlags()I": function () { return 1; },
   "setUnderlineText(Z)V": function (this: JPaint, v: number) { this.underline = !!v; },
   "setStrikeThruText(Z)V": function (this: JPaint, v: number) { this.strikeThru = !!v; },
   "setFakeBoldText(Z)V": function (this: JPaint, v: number) { this.fakeBold = !!v; },
   "setLetterSpacing(F)V": function (this: JPaint, v: number) { this.letterSpacingEm = v; },
-  "setShadowLayer(FFFI)V": function () {},
-  "clearShadowLayer()V": function () {},
+  ...noops("<init>()V", "<init>(I)V", "setHinting(I)V", "setSubpixelText(Z)V", "setLinearText(Z)V",
+    "setElegantTextHeight(Z)V", "setFontFeatureSettings(Ljava/lang/String;)V", "setTextLocale(Ljava/util/Locale;)V",
+    "setTextLocales(Landroid/os/LocaleList;)V", "setTextScaleX(F)V", "setTextSkewX(F)V", "setStartHyphenEdit(I)V",
+    "setEndHyphenEdit(I)V", "setWordSpacing(F)V", "setDither(Z)V", "setFilterBitmap(Z)V", "setStrokeMiter(F)V",
+    "setFlags(I)V", "setShadowLayer(FFFI)V", "clearShadowLayer()V"),
+  ...stubs(1, "isFilterBitmap()Z", "getHinting()I", "setFontVariationSettings(Ljava/lang/String;)Z",
+    "getTextScaleX()F", "getFlags()I"),
+  ...stubs(0, "getWordSpacing()F", "getLetterSpacing()F", "isDither()Z"),
+  ...stubs(null, "getStrokeCap()Landroid/graphics/Paint$Cap;", "getStrokeJoin()Landroid/graphics/Paint$Join;",
+    "getPathEffect()Landroid/graphics/PathEffect;"),
   "measureText(Ljava/lang/String;)F": function (this: JPaint, s: string) { return measureText(this, s ?? ""); },
   "measureText(Ljava/lang/CharSequence;II)F": function (this: JPaint, s: unknown, a: number, b: number) {
     return measureText(this, String(s).slice(a, b));
@@ -522,12 +501,12 @@ class JFontMetrics extends JObj { top = 0; ascent = 0; descent = 0; bottom = 0; 
 class JFontMetricsInt extends JObj { top = 0; ascent = 0; descent = 0; bottom = 0; leading = 0; }
 rt.register({
   name: "android/graphics/Paint$FontMetrics", ctor: JFontMetrics,
-  fields: { top: "top", ascent: "ascent", descent: "descent", bottom: "bottom", leading: "leading" },
+  fields: ["top", "ascent", "descent", "bottom", "leading"],
   methods: { "<init>()V": function () {} },
 });
 rt.register({
   name: "android/graphics/Paint$FontMetricsInt", ctor: JFontMetricsInt,
-  fields: { top: "top", ascent: "ascent", descent: "descent", bottom: "bottom", leading: "leading" },
+  fields: ["top", "ascent", "descent", "bottom", "leading"],
   methods: { "<init>()V": function () {} },
 });
 let _measureCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
@@ -679,10 +658,9 @@ rt.register({
   methods: {
     "static get(Landroid/graphics/ColorSpace$Named;)Landroid/graphics/ColorSpace;": () => srgbSpace,
     "getName()Ljava/lang/String;": function (this: JColorSpace) { return this.cname; },
-    "isSrgb()Z": () => 1,
-    "isWideGamut()Z": () => 0,
-    "getId()I": () => 0,
-    "getModel()Landroid/graphics/ColorSpace$Model;": () => null,
+    ...stubs(1, "isSrgb()Z"),
+    ...stubs(0, "isWideGamut()Z", "getId()I"),
+    ...stubs(null, "getModel()Landroid/graphics/ColorSpace$Model;"),
     // AOSP's Bitmap passes this pointer to nativeCreate/nativeErase. There is no native colour
     // space behind a 2D context, and 0 is the null handle — which those delegates ignore.
     "getNativeInstance()J": () => 0n,
@@ -1351,7 +1329,6 @@ function cropBitmap(src: JBitmap, x: number, y: number, w: number, h: number, m:
 /** Exported so AOSP's own Canvas bytecode reaches the same bodies through its nDraw*
  *  delegates (src/android/delegates.ts) rather than a second copy of each. */
 export const canvasMethods: NativeSpec["methods"] = {
-  "<init>()V": function () {},
   "<init>(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
   "getWidth()I": function (this: JCanvas) { return this.w; },
   "getHeight()I": function (this: JCanvas) { return this.h; },
@@ -1362,8 +1339,6 @@ export const canvasMethods: NativeSpec["methods"] = {
     const t = this.ctx.getTransform();
     m.m = [t.a, t.b, t.c, t.d, t.e, t.f];
   },
-  "enableZ()V": () => {},
-  "disableZ()V": () => {},
   "save()I": canvasSave,
   // layers are drawn straight through: a saveLayer is just a save
   "saveLayer(Landroid/graphics/RectF;Landroid/graphics/Paint;)I": canvasSave,
@@ -1411,10 +1386,6 @@ export const canvasMethods: NativeSpec["methods"] = {
   },
   "clipRect(Landroid/graphics/Rect;)Z": function (this: JCanvas, r: JRect) { return clipRect.call(this, r.left, r.top, r.right, r.bottom); },
   "clipRect(Landroid/graphics/RectF;)Z": function (this: JCanvas, r: JRectF) { return clipRect.call(this, r.left, r.top, r.right, r.bottom); },
-  "clipOutRect(FFFF)Z": () => 1,
-  "clipOutRect(IIII)Z": () => 1,
-  "clipOutRect(Landroid/graphics/Rect;)Z": () => 1,
-  "clipOutPath(Landroid/graphics/Path;)Z": () => 1,
   "clipPath(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z": function (this: JCanvas, path: JPath, op: { ename?: string } | null) {
     if (op && op.ename && op.ename !== "INTERSECT") return 1;
     this.ctx.clip(path.path(), path.fillRule);
@@ -1433,7 +1404,6 @@ export const canvasMethods: NativeSpec["methods"] = {
     r.right = this.w; r.bottom = this.h;
     return r;
   },
-  "quickReject(FFFFLandroid/graphics/Canvas$EdgeType;)Z": () => 0,
   "drawColor(I)V": function (this: JCanvas, c: number) {
     this.ctx.save();
     this.ctx.fillStyle = cssColor(c);
@@ -1532,9 +1502,11 @@ export const canvasMethods: NativeSpec["methods"] = {
       this.ctx.drawImage(tintedBmp(b, p?.filterColor ?? null), 0, 0);
       this.ctx.restore();
     },
-  "drawPicture(Landroid/graphics/Picture;)V": () => {},
-  "isHardwareAccelerated()Z": () => 1,
-  "setDrawFilter(Landroid/graphics/DrawFilter;)V": () => {},
+  ...noops("<init>()V", "enableZ()V", "disableZ()V", "drawPicture(Landroid/graphics/Picture;)V",
+    "setDrawFilter(Landroid/graphics/DrawFilter;)V"),
+  ...stubs(1, "clipOutRect(FFFF)Z", "clipOutRect(IIII)Z", "clipOutRect(Landroid/graphics/Rect;)Z",
+    "clipOutPath(Landroid/graphics/Path;)Z", "isHardwareAccelerated()Z"),
+  ...stubs(0, "quickReject(FFFFLandroid/graphics/Canvas$EdgeType;)Z"),
   "setBitmap(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
 };
 /** AOSP: a canvas without a bitmap accepts and discards draws; one detached 1x1 surface takes them */
@@ -1912,16 +1884,10 @@ class JBFOptions extends JObj {
 }
 rt.register({
   name: "android/graphics/BitmapFactory$Options", ctor: JBFOptions,
-  fields: {
-    inJustDecodeBounds: "inJustDecodeBounds", inSampleSize: "inSampleSize",
-    outWidth: "outWidth", outHeight: "outHeight", inDensity: "inDensity",
-    inTargetDensity: "inTargetDensity", inScaled: "inScaled", inPreferredConfig: "inPreferredConfig",
-    inBitmap: "inBitmap", inMutable: "inMutable", outMimeType: "outMimeType",
-    inPreferredColorSpace: "inPreferredColorSpace", inPremultiplied: "inPremultiplied",
-    outConfig: "outConfig", inTempStorage: "inTempStorage", inDither: "inDither", outColorSpace: "outColorSpace",
-    inPreferQualityOverSpeed: "inPreferQualityOverSpeed", inInputShareable: "inInputShareable", inPurgeable: "inPurgeable",
-    inScreenDensity: "inScreenDensity", mCancel: "mCancel",
-  },
+  fields: ["inJustDecodeBounds", "inSampleSize", "outWidth", "outHeight", "inDensity", "inTargetDensity", "inScaled",
+    "inPreferredConfig", "inBitmap", "inMutable", "outMimeType", "inPreferredColorSpace", "inPremultiplied",
+    "outConfig", "inTempStorage", "inDither", "outColorSpace", "inPreferQualityOverSpeed", "inInputShareable",
+    "inPurgeable", "inScreenDensity", "mCancel"],
   methods: { "<init>()V": function () {} },
 });
 /** an empty stream is a loader bug upstream of the decoder, so name the stream class rather than the decode failure */

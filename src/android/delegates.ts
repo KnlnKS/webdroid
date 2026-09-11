@@ -13,7 +13,7 @@
 // our specs withheld and reports what it reached and could not find; every delegate below is
 // there because that said so.
 
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, stubs, noops } from "../jvm/runtime";
 import { handle, deref, replace, release } from "./handles";
 import {
   JPaint, JTypeface, tfDefault, mkTypeface, measureText,
@@ -233,7 +233,6 @@ delegate("android/graphics/Typeface", {
   "nativeGetStyle(J)I": (h: bigint) => (deref<JTypeface>(h) ?? tfDefault).style(),
   "nativeGetWeight(J)I": (h: bigint) => (deref<JTypeface>(h) ?? tfDefault).weight,
   "nativeGetReleaseFunc()J": () => FINALIZER,
-  "nativeGetFamilySize(J)I": () => 1,
   "nativeCreateFromTypefaceWithExactStyle(JIZ)J": (h: bigint, weight: number, italic: number) => {
     const src = deref<JTypeface>(h) ?? tfDefault;
     return handle(mkTypeface(src.family, weight >= 600, !!italic, weight));
@@ -241,15 +240,14 @@ delegate("android/graphics/Typeface", {
   // a family built from font handles: we have the browser's faces, not font files, so the
   // family it resolves to is whatever the first face named
   "nativeCreateFromArray([JJII)J": (_fonts: BigInt64Array, fallback: bigint) => handle(deref<JTypeface>(fallback) ?? tfDefault),
-  "nativeGetSupportedAxes(J)[I": () => null,
-  "nativeSetDefault(J)V": () => {},
-  "nativeRegisterGenericFamily(Ljava/lang/String;J)V": () => {},
-  "nativeRegisterLocaleList(Ljava/lang/String;)V": () => {},
-  "nativeAddFontCollections(J)V": () => {},
-  "nativeWarmUpCache(Ljava/lang/String;)V": () => {},
   // the serialised typeface cache a process shares with the system; there is no other process
   "nativeReadTypefaces(Ljava/nio/ByteBuffer;I)[J": () => null,
-  "nativeWriteTypefaces(Ljava/nio/ByteBuffer;I[J)I": () => 0,
+  ...stubs(1, "nativeGetFamilySize(J)I"),
+  ...stubs(null, "nativeGetSupportedAxes(J)[I"),
+  ...noops("nativeSetDefault(J)V", "nativeRegisterGenericFamily(Ljava/lang/String;J)V",
+    "nativeRegisterLocaleList(Ljava/lang/String;)V", "nativeAddFontCollections(J)V",
+    "nativeWarmUpCache(Ljava/lang/String;)V"),
+  ...stubs(0, "nativeWriteTypefaces(Ljava/nio/ByteBuffer;I[J)I"),
   // Typeface.DEFAULT and friends are set through this from the static initialiser
   "nativeForceSetStaticFinalField(Ljava/lang/String;Landroid/graphics/Typeface;)V": () => {},
 });
@@ -312,9 +310,6 @@ delegate("android/graphics/Paint", {
   "nSetColorFilter(JJ)J": (h: bigint, f: bigint) => f,
   "nSetMaskFilter(JJ)J": (_h: bigint, f: bigint) => f,
   "nSetPathEffect(JJ)J": (_h: bigint, f: bigint) => f,
-  "nSetXfermode(JI)V": () => {},
-  "nSetShadowLayer(JFFFJJ)V": () => {},
-  "nHasShadowLayer(J)Z": () => 0,
 
   "nSetTypeface(JJ)V": (h: bigint, t: bigint) => { paint(h).tf = deref<JTypeface>(t) ?? tfDefault; },
   "nSetTextSize(JF)V": (h: bigint, v: number) => { paint(h).textSize = v; },
@@ -379,10 +374,8 @@ delegate("android/graphics/Paint", {
     const x = paint(a), y = paint(b);
     return x.textSize === y.textSize && x.tf === y.tf && x.letterSpacingEm === y.letterSpacingEm ? 1 : 0;
   },
-  "nHasGlyph(JILjava/lang/String;)Z": () => 1,
   // an outline the Canvas2D backend cannot produce: leave the path empty rather than wrong
   "nGetTextPath(JI[CIIFFJ)V": () => {},
-  "nGetTextPath(JILjava/lang/String;IIFFJ)V": () => {},
   "nGetFillPath(JJJ)Z": (_h: bigint, src: bigint, dst: bigint) => {
     const d = deref<JPath>(dst);
     d.ops = deref<JPath>(src).ops.slice();
@@ -397,9 +390,10 @@ delegate("android/graphics/Paint", {
   "nSetWordSpacing(JF)V": () => {}, "nGetWordSpacing(J)F": () => 0,
   "nSetTextScaleX(JF)V": () => {}, "nGetTextScaleX(J)F": () => 1,
   "nSetTextSkewX(JF)V": () => {}, "nGetTextSkewX(J)F": () => 0,
-  "nSetTextLocales(JLjava/lang/String;)I": () => 0,
-  "nSetTextLocalesByMinikinLocaleListId(JI)V": () => {},
-  "nSetFontFeatureSettings(JLjava/lang/String;)V": () => {},
+  ...noops("nSetXfermode(JI)V", "nSetShadowLayer(JFFFJJ)V", "nGetTextPath(JILjava/lang/String;IIFFJ)V",
+    "nSetTextLocalesByMinikinLocaleListId(JI)V", "nSetFontFeatureSettings(JLjava/lang/String;)V"),
+  ...stubs(0, "nHasShadowLayer(J)Z", "nSetTextLocales(JLjava/lang/String;)I"),
+  ...stubs(1, "nHasGlyph(JILjava/lang/String;)Z"),
 });
 
 interface Metrics { top: number; ascent: number; descent: number; bottom: number; leading: number }
@@ -461,7 +455,6 @@ delegate("android/graphics/Path", {
   "nRewind(J)V": (h: bigint) => { const p = path(h); p.ops = []; p.dirty = true; },
   "nSet(JJ)V": (h: bigint, s: bigint) => { const p = path(h); p.ops = path(s).ops.slice(); p.dirty = true; },
   "nIsEmpty(J)Z": (h: bigint) => (path(h).ops.length ? 0 : 1),
-  "nIncReserve(JI)V": () => {},
   "nGetGenerationID(J)I": (h: bigint) => path(h).ops.length,
 
   "nMoveTo(JFF)V": (h: bigint, x: number, y: number) => { const p = path(h); p.add(["m", x, y]); p.curX = x; p.curY = y; },
@@ -539,10 +532,9 @@ delegate("android/graphics/Path", {
     pathBounds(p, r);
     return 1;
   },
-  "nIsConvex(J)Z": () => 1,
-  "nIsInterpolatable(JJ)Z": () => 0,
-  "nInterpolate(JJFJ)Z": () => 0,
-  "nOp(JJIJ)Z": () => 0,
+  ...noops("nIncReserve(JI)V"),
+  ...stubs(1, "nIsConvex(J)Z"),
+  ...stubs(0, "nIsInterpolatable(JJ)Z", "nInterpolate(JJFJ)Z", "nOp(JJIJ)Z"),
   "nApproximate(JF)[F": () => new Float32Array(0),
 });
 
@@ -577,11 +569,7 @@ delegate("android/graphics/Canvas", {
   "nSetBitmap(JJ)V": (h: bigint, b: bigint) => { replace(h, bitmapCanvas(deref<JBitmap>(b))); },
   "nGetWidth(J)I": (h: bigint) => canvas(h).w,
   "nGetHeight(J)I": (h: bigint) => canvas(h).h,
-  "nIsOpaque(J)Z": () => 0,
-  "nIsHighContrastText(J)Z": () => 0,
-  "nSetCompatibilityVersion(I)V": () => {},
   "nFreeCaches()V": () => {}, "nFreeTextLayoutCaches()V": () => {},
-  "nSetDrawFilter(JJ)V": () => {},
 
   "nSave(JI)I": on("save()I"),
   "nRestore(J)Z": (h: bigint) => { const c = canvas(h); if (c.saveCount <= 1) return 0; on("restore()V")(h); return 1; },
@@ -611,14 +599,13 @@ delegate("android/graphics/Canvas", {
     c.ctx.clip(pp.path(), pp.fillRule);
     return 1;
   },
-  "nClipShader(JJI)V": () => {},
   "nGetClipBounds(JLandroid/graphics/Rect;)Z": (h: bigint, r: Rect) => {
     const c = canvas(h);
     r.left = 0; r.top = 0; r.right = c.w; r.bottom = c.h;
     return 1;
   },
-  "nQuickReject(JFFFF)Z": () => 0,
-  "nQuickReject(JJ)Z": () => 0,
+  ...stubs(0, "nIsOpaque(J)Z", "nIsHighContrastText(J)Z", "nQuickReject(JFFFF)Z", "nQuickReject(JJ)Z"),
+  ...noops("nSetCompatibilityVersion(I)V", "nSetDrawFilter(JJ)V", "nClipShader(JJI)V"),
 });
 
 delegate("android/graphics/BaseCanvas", {
@@ -868,7 +855,6 @@ delegate("android/graphics/Bitmap", {
 
   "nativeRecycle(J)V": (h: bigint) => { bmp(h).recycled = true; },
   "nativeGetNativeFinalizer()J": () => FINALIZER,
-  "nativePrepareToDraw(J)V": () => {},
   "nativeGenerationId(J)I": (h: bigint) => bmp(h).genId,
   "nativeConfig(J)I": (h: bigint) => bmp(h).config,
   "nativeRowBytes(J)I": (h: bigint) => bmp(h).w * 4,
@@ -906,18 +892,14 @@ delegate("android/graphics/Bitmap", {
 
   // one colour space, and it is sRGB: there is no colour management behind a 2D context
   "nativeIsSRGB(J)Z": () => 1,
-  "nativeIsSRGBLinear(J)Z": () => 0,
-  "nativeSetColorSpace(JJ)V": () => {},
-  "nativeComputeColorSpace(J)Landroid/graphics/ColorSpace;": () => null,
   // a device's shared-memory and HDR allocators, and the gainmap that rides on one: absent
   // here, and a caller discovers that the way it would on a device without them
   "nativeGetAshmemFD(J)I": () => -1,
-  "nativeIsBackedByAshmem(J)Z": () => 0,
-  "nativeHasGainmap(J)Z": () => 0,
-  "nativeExtractGainmap(J)Landroid/graphics/Gainmap;": () => null,
-  "nativeSetGainmap(JJ)V": () => {},
-  "nativeGetHardwareBuffer(J)Landroid/hardware/HardwareBuffer;": () => null,
-  "nativeWrapHardwareBufferBitmap(Landroid/hardware/HardwareBuffer;J)Landroid/graphics/Bitmap;": () => null,
+  ...noops("nativePrepareToDraw(J)V", "nativeSetColorSpace(JJ)V", "nativeSetGainmap(JJ)V"),
+  ...stubs(0, "nativeIsSRGBLinear(J)Z", "nativeIsBackedByAshmem(J)Z", "nativeHasGainmap(J)Z"),
+  ...stubs(null, "nativeComputeColorSpace(J)Landroid/graphics/ColorSpace;",
+    "nativeExtractGainmap(J)Landroid/graphics/Gainmap;", "nativeGetHardwareBuffer(J)Landroid/hardware/HardwareBuffer;",
+    "nativeWrapHardwareBufferBitmap(Landroid/hardware/HardwareBuffer;J)Landroid/graphics/Bitmap;"),
 });
 
 // ── android.content.res.StringBlock / XmlBlock ─────────────────────────────────────────
@@ -1034,15 +1016,6 @@ function writeSlot(out: Int32Array, i: number, v: RV | null, srcId: number) {
 
 delegate("android/content/res/AssetManager", {
   "nativeCreate()J": () => handle(currentResources() ?? new Resources(null, {})),
-  "nativeDestroy(J)V": () => {},
-  "nativeSetApkAssets(J[Landroid/content/res/ApkAssets;ZZ)V": () => {},
-  "nativeSetConfiguration(JIILjava/lang/String;[Ljava/lang/String;IIIIIIIIIIIIIIIIZ)V": () => {},
-  "nativeSetResourceResolutionLoggingEnabled(JZ)V": () => {},
-  "nativeGetLastResourceResolution(J)Ljava/lang/String;": () => "",
-  "nativeContainsAllocatedTable(J)Z": () => 0,
-  "getGlobalAssetCount()I": () => 0,
-  "getGlobalAssetManagerCount()I": () => 1,
-  "getAssetAllocations()Ljava/lang/String;": () => "",
 
   // resource reads: every one of these is a lookup arsc.ts already answers
   "nativeGetResourceValue(JISLandroid/util/TypedValue;Z)I": (h: bigint, id: number, _dens: number, tv: TypedValueLike, resolve: number) => {
@@ -1117,8 +1090,6 @@ delegate("android/content/res/AssetManager", {
     const v = t.lookup(attrId);
     return fillTypedValue(res, tv, resolve ? resolveStyleValue(res, t, v) : v, attrId);
   },
-  "nativeThemeGetChangingConfigurations(J)I": () => 0,
-  "nativeThemeDump(JJILjava/lang/String;Ljava/lang/String;)V": () => {},
   "nativeGetParentThemeIdentifier(JI)I": (h: bigint, id: number) => assets(h).bag(id)?.parent ?? 0,
 
   // obtainStyledAttributes, which is what every widget constructor is really doing
@@ -1195,16 +1166,22 @@ delegate("android/content/res/AssetManager", {
   // a file descriptor is a host concept there is nothing behind here; callers fall back to
   // the stream forms above when these return null
   "nativeOpenAssetFd(JLjava/lang/String;[J)Landroid/os/ParcelFileDescriptor;": () => null,
-  "nativeOpenNonAssetFd(JILjava/lang/String;[J)Landroid/os/ParcelFileDescriptor;": () => null,
 
   // the overlay/locale queries: no apk here is an overlay, and one device profile means one
   // locale and one configuration
   "nativeGetLocales(JZ)[Ljava/lang/String;": () => jarray([device.lang], "Ljava/lang/String;"),
-  "nativeGetSizeConfigurations(J)[Landroid/content/res/Configuration;": () => null,
-  "nativeGetSizeAndUiModeConfigurations(J)[Landroid/content/res/Configuration;": () => null,
-  "nativeGetOverlayableMap(JLjava/lang/String;)Ljava/util/Map;": () => null,
-  "nativeGetOverlayablesToString(JLjava/lang/String;)Ljava/lang/String;": () => null,
-  "nativeGetAssignedPackageIdentifiers(JZZ)Landroid/util/SparseArray;": () => null,
+  ...noops("nativeDestroy(J)V", "nativeSetApkAssets(J[Landroid/content/res/ApkAssets;ZZ)V",
+    "nativeSetConfiguration(JIILjava/lang/String;[Ljava/lang/String;IIIIIIIIIIIIIIIIZ)V",
+    "nativeSetResourceResolutionLoggingEnabled(JZ)V", "nativeThemeDump(JJILjava/lang/String;Ljava/lang/String;)V"),
+  ...stubs("", "nativeGetLastResourceResolution(J)Ljava/lang/String;", "getAssetAllocations()Ljava/lang/String;"),
+  ...stubs(0, "nativeContainsAllocatedTable(J)Z", "getGlobalAssetCount()I", "nativeThemeGetChangingConfigurations(J)I"),
+  ...stubs(1, "getGlobalAssetManagerCount()I"),
+  ...stubs(null, "nativeOpenNonAssetFd(JILjava/lang/String;[J)Landroid/os/ParcelFileDescriptor;",
+    "nativeGetSizeConfigurations(J)[Landroid/content/res/Configuration;",
+    "nativeGetSizeAndUiModeConfigurations(J)[Landroid/content/res/Configuration;",
+    "nativeGetOverlayableMap(JLjava/lang/String;)Ljava/util/Map;",
+    "nativeGetOverlayablesToString(JLjava/lang/String;)Ljava/lang/String;",
+    "nativeGetAssignedPackageIdentifiers(JZZ)Landroid/util/SparseArray;"),
 });
 
 interface Cursor { source: FileSource; pos: number }

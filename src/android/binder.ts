@@ -1,4 +1,4 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, stubs, noops } from "../jvm/runtime";
 import { curThread, JThread, setCurThread, vcall } from "../jvm/natives/jlang";
 import { PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { JParcel } from "./parcel";
@@ -97,8 +97,6 @@ export async function receiveTransaction(request: Transaction, caller: Caller): 
 rt.register({ name: "android/os/IBinder", ctor: class extends JObj {}, statics: { FIRST_CALL_TRANSACTION: 1, FLAG_ONEWAY: 1, INTERFACE_TRANSACTION: 0x5f4e5446 } });
 rt.markers("android/os/IBinder$DeathRecipient");
 rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBinder"], methods: {
-  "<init>()V": function () {},
-  "static flushPendingCommands()V": () => {},
   "static getCallingUid()I": () => callingIdentity().uid,
   "static getCallingPid()I": () => callingIdentity().pid,
   "static clearCallingIdentity()J": () => {
@@ -114,10 +112,8 @@ rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBi
   "attachInterface(Landroid/os/IInterface;Ljava/lang/String;)V": function (this: JBinder, owner: unknown, descriptor: string) { this.owner = owner; this.descriptor = descriptor; },
   "queryLocalInterface(Ljava/lang/String;)Landroid/os/IInterface;": function (this: JBinder, descriptor: string) { return this.descriptor === descriptor ? this.owner : null; },
   "getInterfaceDescriptor()Ljava/lang/String;": function (this: JBinder) { return this.descriptor; },
-  "pingBinder()Z": () => 1,
-  "isBinderAlive()Z": () => 1,
-  "linkToDeath(Landroid/os/IBinder$DeathRecipient;I)V": () => {},
-  "unlinkToDeath(Landroid/os/IBinder$DeathRecipient;I)Z": () => 1,
+  ...noops("<init>()V", "static flushPendingCommands()V", "linkToDeath(Landroid/os/IBinder$DeathRecipient;I)V"),
+  ...stubs(1, "pingBinder()Z", "isBinderAlive()Z", "unlinkToDeath(Landroid/os/IBinder$DeathRecipient;I)Z"),
   "transact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": async function (this: JBinder, code: number, data: JParcel, reply: JParcel | null, flags: number) {
     const pos = data.pos; data.pos = 0;
     try { return await vcall(this, "onTransact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", code, data, reply, flags); }

@@ -4,7 +4,7 @@
 // existing SharedPreferences/PreferenceManager plumbing in app.ts. No per-app special-casing:
 // any app's res/xml/*.xml preference screen renders through this same path.
 
-import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { attr, TV, parseAXML, type XmlNode } from "./axml";
@@ -141,12 +141,6 @@ const preferenceMethods: NonNullable<NativeSpec["methods"]> = {
   "setSummary(I)V": function (this: JPreference, id: number) { this.summaryStr = ctxString(this.jctx, id); notifyChanged(this); },
   "isEnabled()Z": function (this: JPreference) { return this.enabled ? 1 : 0; },
   "setEnabled(Z)V": function (this: JPreference, e: number) { this.enabled = !!e; notifyChanged(this); },
-  "isSelectable()Z": () => 1,
-  "setSelectable(Z)V": () => {},
-  "isPersistent()Z": () => 1,
-  "setPersistent(Z)V": () => {},
-  "getOrder()I": () => 0,
-  "setOrder(I)V": () => {},
   "getContext()Landroid/content/Context;": function (this: JPreference) { return this.jctx; },
   "getPreferenceManager()Landroid/preference/PreferenceManager;": function (this: JPreference) {
     return this.owner ? ensurePM(this.owner) : null;
@@ -159,7 +153,9 @@ const preferenceMethods: NonNullable<NativeSpec["methods"]> = {
     function (this: JPreference, l: unknown) { this.changeL = l; },
   "getOnPreferenceChangeListener()Landroid/preference/Preference$OnPreferenceChangeListener;": function (this: JPreference) { return this.changeL; },
   "toString()Ljava/lang/String;": function (this: JPreference) { return this.titleStr; },
-  "onClick()V": () => {},
+  ...stubs(1, "isSelectable()Z", "isPersistent()Z"),
+  ...noops("setSelectable(Z)V", "setPersistent(Z)V", "setOrder(I)V", "onClick()V"),
+  ...stubs(0, "getOrder()I"),
   "callChangeListener(Ljava/lang/Object;)Z": async function (this: JPreference, v: unknown) {
     if (!this.changeL) return 1;
     return (await vcall(this.changeL, "onPreferenceChange", "(Landroid/preference/Preference;Ljava/lang/Object;)Z", this, v)) ? 1 : 0;

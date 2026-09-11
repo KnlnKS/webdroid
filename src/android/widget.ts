@@ -1,7 +1,7 @@
 import { AID } from "./res";
 import { JView, initViewFromCtx, invalidate, resolveSizeAndState, uiState, JViewGroup, defaultSize } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawChild } from "./drawable";
-import { rt, type NativeSpec, maySuspend } from "../jvm/runtime";
+import { rt, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
 import { type JAttrSet, rvColor, obtainStyled, rvInt } from "./res";
 import { TV } from "./axml";
 import { type JCanvas, cssColor } from "./graphics";
@@ -42,7 +42,6 @@ rt.register({
     "getProgress()I": function (this: JProgressBar) { return this.progress; },
     "setMax(I)V": function (this: JProgressBar, m: number) { this.max = Math.max(1, m); },
     "getMax()I": function (this: JProgressBar) { return this.max; },
-    "setSecondaryProgress(I)V": () => {},
     "setProgressDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JProgressBar, d: JDrawable | null) { this.progressD = d; invalidate(); },
     "getProgressDrawable()Landroid/graphics/drawable/Drawable;": function (this: JProgressBar) { return this.progressD; },
     "setIndeterminateDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JProgressBar, d: JDrawable | null) { this.indetD = d; invalidate(); },
@@ -54,10 +53,10 @@ rt.register({
     "setProgress(IZ)V": function (this: JProgressBar, p: number) { this.progress = p; invalidate(); },
     "setMin(I)V": function (this: JProgressBar, m: number) { this.min = m; },
     "getMin()I": function (this: JProgressBar) { return this.min; },
-    "getSecondaryProgress()I": () => 0,
-    "getInterpolator()Landroid/view/animation/Interpolator;": () => null,
-    "setInterpolator(Landroid/view/animation/Interpolator;)V": () => {},
-    "setInterpolator(Landroid/content/Context;I)V": () => {},
+    ...noops("setSecondaryProgress(I)V", "setInterpolator(Landroid/view/animation/Interpolator;)V",
+      "setInterpolator(Landroid/content/Context;I)V"),
+    ...stubs(0, "getSecondaryProgress()I"),
+    ...stubs(null, "getInterpolator()Landroid/view/animation/Interpolator;"),
     "onMeasure(II)V": function (this: JProgressBar, wSpec: number, hSpec: number) {
       const dw = this.horizontal ? 48 : 96, dh = this.horizontal ? 16 : 96;
       this.measuredW = resolveSizeAndState(Math.max(dw + this.padL + this.padR, this.minW), wSpec);

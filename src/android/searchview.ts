@@ -6,7 +6,7 @@ import { type JAttrSet, obtainStyled, rvInt, rvString } from "./res";
 import { inflateLayout } from "./inflate";
 import { JImageView } from "./imageview";
 import { loadDrawableRV } from "./drawable";
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, noops } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 
 // ── SearchView. AOSP inflates layout/search_view.xml and toggles the parts of it that a
@@ -98,13 +98,9 @@ rt.register({
       }
     },
     "getQuery()Ljava/lang/CharSequence;": function (this: JSearchView) { return this.queryText; },
-    "setMaxWidth(I)V": () => {},
-    "setSubmitButtonEnabled(Z)V": () => {},
-    "clearFocus()V": () => {},
-    "onActionViewExpanded()V": () => {},
-    "onActionViewCollapsed()V": () => {},
-    "setOnCloseListener(Landroid/widget/SearchView$OnCloseListener;)V": () => {},
-    "setSearchableInfo(Landroid/app/SearchableInfo;)V": () => {},
+    ...noops("setMaxWidth(I)V", "setSubmitButtonEnabled(Z)V", "clearFocus()V", "onActionViewExpanded()V",
+      "onActionViewCollapsed()V", "setOnCloseListener(Landroid/widget/SearchView$OnCloseListener;)V",
+      "setSearchableInfo(Landroid/app/SearchableInfo;)V"),
   },
 });
 for (const name of ["android/widget/MultiAutoCompleteTextView",
@@ -114,11 +110,8 @@ for (const name of ["android/widget/MultiAutoCompleteTextView",
     methods: {
       ...textViewMethods,
       ...textViewCtors<JEditText>("autoCompleteTextViewStyle"),
-      "setThreshold(I)V": () => {},
-      "setAdapter(Landroid/widget/ListAdapter;)V": () => {},
-      "dismissDropDown()V": () => {},
-      "setDropDownAnchor(I)V": () => {},
-      "setImeVisibility(Z)V": () => {},
+      ...noops("setThreshold(I)V", "setAdapter(Landroid/widget/ListAdapter;)V", "dismissDropDown()V",
+        "setDropDownAnchor(I)V", "setImeVisibility(Z)V"),
     },
   });
 }

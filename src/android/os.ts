@@ -3,7 +3,7 @@
 import { JMessage, obtain } from "./messenger";
 import { parcelCreator, type JParcel } from "./parcel";
 import { keyCodes, deadChar } from "./keycodes";
-import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
@@ -57,13 +57,11 @@ rt.register({
     "static getMainLooper()Landroid/os/Looper;": () => mainLooper,
     "static myLooper()Landroid/os/Looper;": () => (curThread.looper as JLooper) ?? null,
     "static prepare()V": () => { if (!curThread.looper) curThread.looper = new JLooper(); },
-    "static prepareMainLooper()V": () => {},
     "loop()V": maySuspend(() => new Promise(() => {})), // parks the java thread; JS loop drives everything
     "static loop()V": maySuspend(() => new Promise(() => {})),
     "getThread()Ljava/lang/Thread;": function (this: JLooper) { return this.thread; },
     "isCurrentThread()Z": function (this: JLooper) { return curThread === this.thread ? 1 : 0; },
-    "quit()V": () => {},
-    "quitSafely()V": () => {},
+    ...noops("static prepareMainLooper()V", "quit()V", "quitSafely()V"),
     "getQueue()Landroid/os/MessageQueue;": () => mainQueue,
   },
 });
@@ -290,53 +288,45 @@ rt.register({
     // androidx's startup tracing asks how long ago this process began; there is no earlier
     // moment here than the page's own timeOrigin
     "static getStartUptimeMillis()J": () => 0n,
-    "static getStartElapsedRealtime()J": () => 0n,
     "static getElapsedCpuTime()J": () => BigInt(Math.round(performance.now())),
-    "static isIsolated()Z": () => 0,
-    "static isSdkSandbox()Z": () => 0,
     "static myTid()I": () => 1000,
     "static myUid()I": () => PROCESS_UID,
     "static getGidForName(Ljava/lang/String;)I": (name: string | null) => {
       if (name === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
       return androidGroupId(name);
     },
-    "static getThreadPriority(I)I": () => 0,
-    "static setThreadPriority(I)V": () => {},
-    "static setThreadPriority(II)V": () => {},
+    ...stubs(0n, "static getStartElapsedRealtime()J"),
+    ...stubs(0, "static isIsolated()Z", "static isSdkSandbox()Z", "static getThreadPriority(I)I"),
+    ...noops("static setThreadPriority(I)V", "static setThreadPriority(II)V"),
   },
 });
 rt.register({
   name: "android/os/Trace", ctor: class extends JObj {},
   methods: {
-    "static setCounter(Ljava/lang/String;J)V": () => {},
-    "static isTagEnabled(J)Z": () => 0,
-    "static beginSection(Ljava/lang/String;)V": () => {},
-    "static endSection()V": () => {},
-    "static beginAsyncSection(Ljava/lang/String;I)V": () => {},
-    "static endAsyncSection(Ljava/lang/String;I)V": () => {},
-    "static isEnabled()Z": () => 0,
+    ...noops("static setCounter(Ljava/lang/String;J)V", "static beginSection(Ljava/lang/String;)V",
+      "static endSection()V", "static beginAsyncSection(Ljava/lang/String;I)V",
+      "static endAsyncSection(Ljava/lang/String;I)V"),
+    ...stubs(0, "static isTagEnabled(J)Z", "static isEnabled()Z"),
   },
 });
 // the process's memory as the one heap the page has: no separate native, dalvik or graphics accounting
 rt.register({
   name: "android/os/Debug$MemoryInfo", ctor: class extends JObj { dalvikPss = 0; nativePss = 0; otherPss = 0; },
-  fields: { dalvikPss: "dalvikPss", nativePss: "nativePss", otherPss: "otherPss" },
+  fields: ["dalvikPss", "nativePss", "otherPss"],
   methods: {
-    "<init>()V": function () {},
     "getTotalPss()I": () => ((performance as any).memory?.usedJSHeapSize ?? 0) / 1024 | 0,
-    "getTotalPrivateDirty()I": () => 0,
-    "getTotalSharedDirty()I": () => 0,
+    ...noops("<init>()V"),
+    ...stubs(0, "getTotalPrivateDirty()I", "getTotalSharedDirty()I"),
     "getMemoryStat(Ljava/lang/String;)Ljava/lang/String;": () => "0",
   },
 });
 rt.register({
   name: "android/os/Debug", ctor: class extends JObj {},
   methods: {
-    "static isDebuggerConnected()Z": () => 0,
     "static getNativeHeapAllocatedSize()J": () => BigInt(((performance as any).memory?.usedJSHeapSize ?? 0) | 0),
     "static getNativeHeapSize()J": () => BigInt(((performance as any).memory?.totalJSHeapSize ?? 0) | 0),
-    "static getNativeHeapFreeSize()J": () => 0n,
-    "static waitingForDebugger()Z": () => 0,
+    ...stubs(0, "static isDebuggerConnected()Z", "static waitingForDebugger()Z"),
+    ...stubs(0n, "static getNativeHeapFreeSize()J"),
   },
 });
 {
@@ -371,9 +361,8 @@ rt.register({
   rt.register({
     name: "android/os/StrictMode", ctor: class extends JObj {},
     methods: {
-      "static setThreadPolicy(Landroid/os/StrictMode$ThreadPolicy;)V": () => {},
-      "static noteSlowCall(Ljava/lang/String;)V": () => {},
-      "static setVmPolicy(Landroid/os/StrictMode$VmPolicy;)V": () => {},
+      ...noops("static setThreadPolicy(Landroid/os/StrictMode$ThreadPolicy;)V",
+        "static noteSlowCall(Ljava/lang/String;)V", "static setVmPolicy(Landroid/os/StrictMode$VmPolicy;)V"),
       "static getVmPolicy()Landroid/os/StrictMode$VmPolicy;": () => rt.make("android/os/StrictMode$VmPolicy"),
       "static getThreadPolicy()Landroid/os/StrictMode$ThreadPolicy;": threadPolicy,
       "static allowThreadDiskReads()Landroid/os/StrictMode$ThreadPolicy;": threadPolicy,
@@ -404,8 +393,6 @@ export function bundleBox(value: unknown, descriptor: string): unknown {
   return value;
 }
 const bundleMethods: NativeSpec["methods"] = {
-  "<init>()V": function () {},
-  "<init>(I)V": function () {},
   "<init>(Landroid/os/Bundle;)V": function (this: JBundle, b: JBundle) { if (b) { this.map = new Map(b.map); this.loader = b.loader; } },
   "<init>(Ljava/lang/ClassLoader;)V": function (this: JBundle, cl: unknown) { this.loader = cl; },
   "clone()Ljava/lang/Object;": function (this: JBundle) {
@@ -413,7 +400,8 @@ const bundleMethods: NativeSpec["methods"] = {
     copy.map = new Map(this.map); copy.loader = this.loader;
     return copy;
   },
-  "describeContents()I": () => 0,
+  ...noops("<init>()V", "<init>(I)V"),
+  ...stubs(0, "describeContents()I"),
   "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JBundle, parcel: JParcel) { await vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", this); },
   "size()I": function (this: JBundle) { return this.map.size; },
   // A Bundle holds boxed values: `get` is the only reader that lost the declared width, and a
@@ -595,9 +583,7 @@ for (const n of ["android/util/CloseGuard", "dalvik/system/CloseGuard"]) {
     name: n, ctor: class extends JObj {},
     methods: {
       [`static get()L${n};`]: () => rt.make(n),
-      "open(Ljava/lang/String;)V": () => {},
-      "close()V": () => {},
-      "warnIfOpen()V": () => {},
+      ...noops("open(Ljava/lang/String;)V", "close()V", "warnIfOpen()V"),
     },
   });
 }
@@ -692,7 +678,7 @@ class JChoreographer extends JObj {
 const theChoreographer = new JChoreographer();
 rt.register({
   name: "android/view/Choreographer", ctor: JChoreographer,
-  fields: { mLastFrameTimeNanos: "mLastFrameTimeNanos" },
+  fields: ["mLastFrameTimeNanos"],
   methods: {
     "static getInstance()Landroid/view/Choreographer;": () => theChoreographer,
     "postVsyncCallback(Landroid/view/Choreographer$VsyncCallback;)V": (cb: JObj) => {
@@ -755,13 +741,9 @@ rt.register({
     },
     "getAction()I": function (this: JKeyEvent) { return this.action; },
     "getKeyCode()I": function (this: JKeyEvent) { return this.keyCode; },
-    "getRepeatCount()I": () => 0,
-    "getUnicodeChar()I": () => 0,
-    "hasModifiers(I)Z": () => 0,
-    "hasNoModifiers()Z": () => 1,
-    "startTracking()V": () => {},
-    "isTracking()Z": () => 0,
-    "isCanceled()Z": () => 0,
+    ...stubs(0, "getRepeatCount()I", "getUnicodeChar()I", "hasModifiers(I)Z", "isTracking()Z", "isCanceled()Z"),
+    ...stubs(1, "hasNoModifiers()Z"),
+    ...noops("startTracking()V"),
   },
 });
 rt.markers("android/view/KeyEvent$Callback");
@@ -837,7 +819,7 @@ function initErrno(this: JErrnoException, fn: string, value: number, cause: JThr
 }
 rt.register({
   name: "android/system/ErrnoException", ctor: JErrnoException, sup: "java/lang/Exception",
-  fields: { errno: "errno", functionName: "functionName" },
+  fields: ["errno", "functionName"],
   methods: {
     "<init>(Ljava/lang/String;I)V": initErrno,
     "<init>(Ljava/lang/String;ILjava/lang/Throwable;)V": initErrno,
@@ -854,7 +836,8 @@ const errno = (fn: string, e: number) => { const x = rt.mkThrowable("android/sys
 class JStructStat extends JObj { st_dev = 0n; st_ino = 0n; st_mode = 0; st_nlink = 1n; st_uid = 0; st_gid = 0; st_size = 0n; st_atime = 0n; st_mtime = 0n; st_ctime = 0n; st_blksize = 4096n; st_blocks = 0n; }
 rt.register({
   name: "android/system/StructStat", ctor: JStructStat,
-  fields: { st_dev: "st_dev", st_ino: "st_ino", st_mode: "st_mode", st_nlink: "st_nlink", st_uid: "st_uid", st_gid: "st_gid", st_size: "st_size", st_atime: "st_atime", st_mtime: "st_mtime", st_ctime: "st_ctime", st_blksize: "st_blksize", st_blocks: "st_blocks" },
+  fields: ["st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid", "st_size", "st_atime", "st_mtime",
+    "st_ctime", "st_blksize", "st_blocks"],
 });
 const FD = "Ljava/io/FileDescriptor;";
 rt.register({
@@ -923,7 +906,6 @@ rt.register({
     c.s$SERIAL_EXECUTOR = mkExecutor(1);
   },
   methods: {
-    "<init>()V": function () {},
     "execute([Ljava/lang/Object;)Landroid/os/AsyncTask;": function (this: JAsyncTask, params: unknown[]) {
       return runAsyncTask.call(this, serialTaskExecutor(), params);
     },
@@ -936,11 +918,9 @@ rt.register({
     },
     "isCancelled()Z": function (this: JAsyncTask) { return this.cancelled; },
     "getStatus()Landroid/os/AsyncTask$Status;": function (this: JAsyncTask) { return taskStatuses[this.status]; },
-    "doInBackground([Ljava/lang/Object;)Ljava/lang/Object;": () => null,
-    "onPreExecute()V": () => {},
-    "onPostExecute(Ljava/lang/Object;)V": () => {},
-    "onProgressUpdate([Ljava/lang/Object;)V": () => {},
-    "onCancelled()V": () => {},
+    ...noops("<init>()V", "onPreExecute()V", "onPostExecute(Ljava/lang/Object;)V",
+      "onProgressUpdate([Ljava/lang/Object;)V", "onCancelled()V"),
+    ...stubs(null, "doInBackground([Ljava/lang/Object;)Ljava/lang/Object;"),
     "onCancelled(Ljava/lang/Object;)V": maySuspend(function (this: JAsyncTask) { return vcall(this, "onCancelled", "()V"); }),
     "publishProgress([Ljava/lang/Object;)V": maySuspend(function (this: JAsyncTask, values: unknown[]) {
       if (!this.cancelled) void onMain(() => this.cancelled ? undefined : vcall(this, "onProgressUpdate", "([Ljava/lang/Object;)V", values)).catch(reportUncaught);

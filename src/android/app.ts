@@ -7,7 +7,7 @@ import {
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "./os";
-import { type NativeSpec, rt, callSelf, JObj, maySuspend } from "../jvm/runtime";
+import { type NativeSpec, rt, callSelf, JObj, maySuspend, stubs, noops } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, attachView, findById, dispatchConfigurationChanged, invalidate } from "./view";
@@ -180,12 +180,8 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "findViewById(I)Landroid/view/View;": function (this: JActivity, id: number) {
     return this.window.decor ? findById(this.window.decor, id) : null;
   },
-  "onCreate(Landroid/os/Bundle;)V": function () {},
-  "onPostCreate(Landroid/os/Bundle;)V": function () {},
   "onStart()V": async function (this: JActivity) { this.started = true; return dispatchFragLifecycle(this, "onStart"); },
-  "onRestart()V": function () {},
   "onResume()V": async function (this: JActivity) { this.resumed = true; return dispatchFragLifecycle(this, "onResume"); },
-  "onPostResume()V": function () {},
   "onPause()V": maySuspend(function (this: JActivity) { this.resumed = false; return dispatchFragLifecycle(this, "onPause"); }),
   "onStop()V": maySuspend(function (this: JActivity) { this.started = false; return dispatchFragLifecycle(this, "onStop"); }),
   "onDestroy()V": maySuspend(function (this: JActivity) { return dispatchFragLifecycle(this, "onDestroy"); }),
@@ -201,11 +197,6 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     if (fm && !(await vcall(fm, "isStateSaved", "()Z")) && (await vcall(fm, "popBackStackImmediate", "()Z"))) return;
     await vcall(this, "finish", "()V");
   },
-  "onNewIntent(Landroid/content/Intent;)V": function () {},
-  "onSaveInstanceState(Landroid/os/Bundle;)V": function () {},
-  "onRestoreInstanceState(Landroid/os/Bundle;)V": function () {},
-  "onCreateOptionsMenu(Landroid/view/Menu;)Z": () => 1,
-  "onPrepareOptionsMenu(Landroid/view/Menu;)Z": () => 1,
   // Android routes the options panel through onCreatePanelMenu/onPreparePanel/onMenuItemSelected;
   // apps (and androidx) override those, so the panel entry points must exist and delegate.
   "onCreatePanelMenu(ILandroid/view/Menu;)Z": maySuspend(function (this: JActivity, f: number, menu: JMenu) {
@@ -226,7 +217,6 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     }
     return 0;
   },
-  "onOptionsItemSelected(Landroid/view/MenuItem;)Z": () => 0,
   /**
    * AOSP walks getParentActivityIntent() and either recreates the task or navigateUpTo()s.
    * We have one task and no affinities, so the parent is simply whatever sits below us on
@@ -239,37 +229,12 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "onNavigateUpFromChild(Landroid/app/Activity;)Z": maySuspend(function (this: JActivity) {
     return vcall(this, "onNavigateUp", "()Z");
   }),
-  "onActivityResult(IILandroid/content/Intent;)V": function () {},
-  "onRequestPermissionsResult(I[Ljava/lang/String;[I)V": function () {},
   /** AOSP forwards the new Configuration into the window's view hierarchy. */
   "onConfigurationChanged(Landroid/content/res/Configuration;)V": function (this: JActivity, cfg: unknown) {
     return this.window.decor ? dispatchConfigurationChanged(this.window.decor, cfg) : undefined;
   },
-  "onWindowFocusChanged(Z)V": function () {},
-  "onAttachedToWindow()V": function () {},
   // the rest of Window.Callback, as Activity's no-op defaults
   "onContentChanged()V": function () {},
-  "onDetachedFromWindow()V": function () {},
-  "onWindowAttributesChanged(Landroid/view/WindowManager$LayoutParams;)V": function () {},
-  "onPanelClosed(ILandroid/view/Menu;)V": function () {},
-  "onSearchRequested()Z": () => 0,
-  "onSearchRequested(Landroid/view/SearchEvent;)Z": () => 0,
-  "onActionModeStarted(Landroid/view/ActionMode;)V": function () {},
-  "onActionModeFinished(Landroid/view/ActionMode;)V": function () {},
-  "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;": () => null,
-  "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;": () => null,
-  "onPointerCaptureChanged(Z)V": function () {},
-  "onProvideKeyboardShortcuts(Ljava/util/List;Landroid/view/Menu;I)V": function () {},
-  "onLowMemory()V": function () {},
-  "onTrimMemory(I)V": function () {},
-  "onUserInteraction()V": function () {},
-  "onTitleChanged(Ljava/lang/CharSequence;I)V": function () {},
-  "onChildTitleChanged(Landroid/app/Activity;Ljava/lang/CharSequence;)V": function () {},
-  "onCreateView(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;": () => null,
-  "onCreateView(Landroid/view/View;Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;": () => null,
-  "onKeyDown(ILandroid/view/KeyEvent;)Z": () => 0,
-  "onKeyUp(ILandroid/view/KeyEvent;)Z": () => 0,
-  "onTouchEvent(Landroid/view/MotionEvent;)Z": () => 0,
   "invalidateOptionsMenu()V": function (this: JActivity) { appHost?.invalidateOptionsMenu(this); },
   "supportInvalidateOptionsMenu()V": function (this: JActivity) { appHost?.invalidateOptionsMenu(this); },
   "openOptionsMenu()V": function (this: JActivity) {
@@ -278,7 +243,6 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     const { overflow } = bar.layoutMenu();
     void showMenuPopup(barAnchor(bar), overflow.length ? overflow : bar.menuItems);
   },
-  "closeOptionsMenu()V": function () {},
   "setTitle(Ljava/lang/CharSequence;)V": function (this: JActivity, t: unknown) {
     this.titleStr = spannedString(t);
     if (this.window.actionBarView) { this.window.actionBarView.titleStr = this.titleStr; invalidate(); }
@@ -351,8 +315,6 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "getLocalClassName()Ljava/lang/String;": function (this: JActivity) { return jclsNameOf(this); },
   "getCallingActivity()Landroid/content/ComponentName;": function (this: JActivity) { return this.callingActivity; },
   "getCallingPackage()Ljava/lang/String;": function (this: JActivity) { return this.callingActivity?.pkg ?? null; },
-  "overridePendingTransition(II)V": () => {},
-  "startPostponedEnterTransition()V": () => {},
   "getPreferences(I)Landroid/content/SharedPreferences;": function (this: JActivity) {
     return getPrefs(this.$host.pkg, jclsNameOf(this));
   },
@@ -366,20 +328,14 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     }
     return this.fragMgr;
   },
-  "getCurrentFocus()Landroid/view/View;": () => null,
   "hasWindowFocus()Z": function (this: JActivity) { return this.hasWindowFocus ? 1 : 0; },
   "isChangingConfigurations()Z": function (this: JActivity) { return this.changingConfigurations ? 1 : 0; },
   // Activity.isChild is only true for the long-dead ActivityGroup embedding; AppCompat asks it
   // before relaunching for a night-mode change.
   "isChild()Z": () => 0,
   "recreate()V": function (this: JActivity) { appHost?.recreateActivity(this); },
-  "reportFullyDrawn()V": () => {},
-  "onRetainNonConfigurationInstance()Ljava/lang/Object;": () => null,
-  "onRetainCustomNonConfigurationInstance()Ljava/lang/Object;": () => null,
   "getLastNonConfigurationInstance()Ljava/lang/Object;": function (this: JActivity) { return this.lastNonConfig; },
-  "getChangingConfigurations()I": () => 0,
   "getTaskId()I": function (this: JActivity) { return this.taskId || -1; },
-  "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z": () => 0,
   // The system's dialog goes in front of the activity: it pauses, the answer is recorded, and
   // it resumes before the result is delivered. Nobody is here to tap, so asking is what grants
   // — but an app that re-reads the permission in onResume must see the grant by then.
@@ -392,15 +348,32 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
       }).catch(reportUncaught);
     }, 0);
   }),
-  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": () => 0,
-  "setVolumeControlStream(I)V": () => {},
   "getVolumeControlStream()I": () => 3,
-  "setDefaultKeyMode(I)V": () => {},
-  "showDialog(I)V": () => {},
-  "dismissDialog(I)V": () => {},
-  "setFinishOnTouchOutside(Z)V": () => {},
-  "isInMultiWindowMode()Z": () => 0,
-  "getReferrer()Landroid/net/Uri;": () => null,
+  ...noops("onCreate(Landroid/os/Bundle;)V", "onPostCreate(Landroid/os/Bundle;)V", "onRestart()V", "onPostResume()V",
+    "onNewIntent(Landroid/content/Intent;)V", "onSaveInstanceState(Landroid/os/Bundle;)V",
+    "onRestoreInstanceState(Landroid/os/Bundle;)V", "onActivityResult(IILandroid/content/Intent;)V",
+    "onRequestPermissionsResult(I[Ljava/lang/String;[I)V", "onWindowFocusChanged(Z)V", "onAttachedToWindow()V",
+    "onDetachedFromWindow()V", "onWindowAttributesChanged(Landroid/view/WindowManager$LayoutParams;)V",
+    "onPanelClosed(ILandroid/view/Menu;)V", "onActionModeStarted(Landroid/view/ActionMode;)V",
+    "onActionModeFinished(Landroid/view/ActionMode;)V", "onPointerCaptureChanged(Z)V",
+    "onProvideKeyboardShortcuts(Ljava/util/List;Landroid/view/Menu;I)V", "onLowMemory()V", "onTrimMemory(I)V",
+    "onUserInteraction()V", "onTitleChanged(Ljava/lang/CharSequence;I)V",
+    "onChildTitleChanged(Landroid/app/Activity;Ljava/lang/CharSequence;)V", "closeOptionsMenu()V",
+    "overridePendingTransition(II)V", "startPostponedEnterTransition()V", "reportFullyDrawn()V",
+    "setVolumeControlStream(I)V", "setDefaultKeyMode(I)V", "showDialog(I)V", "dismissDialog(I)V",
+    "setFinishOnTouchOutside(Z)V"),
+  ...stubs(1, "onCreateOptionsMenu(Landroid/view/Menu;)Z", "onPrepareOptionsMenu(Landroid/view/Menu;)Z"),
+  ...stubs(0, "onOptionsItemSelected(Landroid/view/MenuItem;)Z", "onSearchRequested()Z",
+    "onSearchRequested(Landroid/view/SearchEvent;)Z", "onKeyDown(ILandroid/view/KeyEvent;)Z",
+    "onKeyUp(ILandroid/view/KeyEvent;)Z", "onTouchEvent(Landroid/view/MotionEvent;)Z", "getChangingConfigurations()I",
+    "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z", "dispatchTouchEvent(Landroid/view/MotionEvent;)Z",
+    "isInMultiWindowMode()Z"),
+  ...stubs(null, "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;",
+    "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;",
+    "onCreateView(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;",
+    "onCreateView(Landroid/view/View;Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;",
+    "getCurrentFocus()Landroid/view/View;", "onRetainNonConfigurationInstance()Ljava/lang/Object;",
+    "onRetainCustomNonConfigurationInstance()Ljava/lang/Object;", "getReferrer()Landroid/net/Uri;"),
 };
 rt.register({
   name: "android/app/Activity", ctor: JActivity, sup: "android/view/ContextThemeWrapper",
@@ -435,13 +408,9 @@ rt.register({
   ifaces: ["android/content/ComponentCallbacks2", "android/content/ComponentCallbacks"],
   methods: {
     ...wrapperMethods,
-    "<init>()V": function () {},
     "static getProcessName()Ljava/lang/String;": () => PROCESS_NAME || appHost?.pkg || "app",
-    "onCreate()V": function () {},
-    "onTerminate()V": function () {},
-    "onLowMemory()V": function () {},
-    "onTrimMemory(I)V": function () {},
-    "onConfigurationChanged(Landroid/content/res/Configuration;)V": function () {},
+    ...noops("<init>()V", "onCreate()V", "onTerminate()V", "onLowMemory()V", "onTrimMemory(I)V",
+      "onConfigurationChanged(Landroid/content/res/Configuration;)V"),
     ...lifecycleCbMethods,
     "registerComponentCallbacks(Landroid/content/ComponentCallbacks;)V": () => {},
   },
@@ -496,9 +465,7 @@ rt.register({
     },
     "show()V": function (this: JToast) { showToast(this.text); },
     "setText(Ljava/lang/CharSequence;)V": async function (this: JToast, t: unknown) { this.text = await csText(t); },
-    "setGravity(III)V": () => {},
-    "setDuration(I)V": () => {},
-    "cancel()V": () => {},
+    ...noops("setGravity(III)V", "setDuration(I)V", "cancel()V"),
   },
 });
 
@@ -533,15 +500,12 @@ for (const [name, methods, statics] of [
       const info = rt.link("android/os/PowerManager$WakeLock");
       return new info.ctor();
     },
-    "isInteractive()Z": () => 1,
-    "isPowerSaveMode()Z": () => 0,
-    "isSustainedPerformanceModeSupported()Z": () => 0,
     // the screen is on and this app was never exempted from doze, which is the state an app
     // offering a "disable battery optimisation" prompt is asking about
     "isDeviceIdleMode()Z": () => 0,
-    "isDeviceLightIdleMode()Z": () => 0,
-    "isLowPowerStandbyEnabled()Z": () => 0,
-    "isIgnoringBatteryOptimizations(Ljava/lang/String;)Z": () => 0,
+    ...stubs(1, "isInteractive()Z"),
+    ...stubs(0, "isPowerSaveMode()Z", "isSustainedPerformanceModeSupported()Z", "isDeviceLightIdleMode()Z",
+      "isLowPowerStandbyEnabled()Z", "isIgnoringBatteryOptimizations(Ljava/lang/String;)Z"),
   }],
   ["android/os/PowerManager$WakeLock", {
     "acquire()V": () => {}, "acquire(J)V": () => {}, "release()V": () => {},
@@ -568,26 +532,23 @@ for (const [name, methods, statics] of [
     "getSpatializer()Landroid/media/Spatializer;": () => { rt.link("android/media/Spatializer"); return new JSpatializer(); },
     "getStreamVolume(I)I": () => 5,
     "getStreamMaxVolume(I)I": () => 10,
-    "setStreamVolume(III)V": () => {},
-    "requestAudioFocus(Landroid/media/AudioManager$OnAudioFocusChangeListener;II)I": () => 1,
     "generateAudioSessionId()I": () => ++audioSession,
-    "abandonAudioFocus(Landroid/media/AudioManager$OnAudioFocusChangeListener;)I": () => 1,
     "getRingerMode()I": () => 2,
-    "getMode()I": () => 0,
-    "isSpeakerphoneOn()Z": () => 0,
     "isMusicActive()Z": isMusicActive,
-    "isBluetoothA2dpOn()Z": () => 0,
-    "isWiredHeadsetOn()Z": () => 0,
     // the output path is the Web Audio context: its rate is real, its buffer size is not a fixed number of frames
     "getProperty(Ljava/lang/String;)Ljava/lang/String;": (k: string) => (k === "android.media.property.OUTPUT_SAMPLE_RATE" ? String(outputSampleRate()) : null),
-    "registerAudioDeviceCallback(Landroid/media/AudioDeviceCallback;Landroid/os/Handler;)V": () => {},
-    "unregisterAudioDeviceCallback(Landroid/media/AudioDeviceCallback;)V": () => {},
     "getDevices(I)[Landroid/media/AudioDeviceInfo;": () => jarray([], "Landroid/media/AudioDeviceInfo;"),
     "getAudioDevicesForAttributes(Landroid/media/AudioAttributes;)Ljava/util/List;": () => newArrayList(),
-    "getParameters(Ljava/lang/String;)Ljava/lang/String;": () => "",
     "getDirectProfilesForAttributes(Landroid/media/AudioAttributes;)Ljava/util/List;": () => newArrayList(),
-    "static getPlaybackOffloadSupport(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)I": () => 0,
-    "static isOffloadedPlaybackSupported(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)Z": () => 0,
+    ...noops("setStreamVolume(III)V",
+      "registerAudioDeviceCallback(Landroid/media/AudioDeviceCallback;Landroid/os/Handler;)V",
+      "unregisterAudioDeviceCallback(Landroid/media/AudioDeviceCallback;)V"),
+    ...stubs(1, "requestAudioFocus(Landroid/media/AudioManager$OnAudioFocusChangeListener;II)I",
+      "abandonAudioFocus(Landroid/media/AudioManager$OnAudioFocusChangeListener;)I"),
+    ...stubs(0, "getMode()I", "isSpeakerphoneOn()Z", "isBluetoothA2dpOn()Z", "isWiredHeadsetOn()Z",
+      "static getPlaybackOffloadSupport(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)I",
+      "static isOffloadedPlaybackSupported(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)Z"),
+    ...stubs("", "getParameters(Ljava/lang/String;)Ljava/lang/String;"),
   }, {
     MODE_NORMAL: 0, MODE_RINGTONE: 1, MODE_IN_CALL: 2, MODE_IN_COMMUNICATION: 3,
     RINGER_MODE_SILENT: 0, RINGER_MODE_VIBRATE: 1, RINGER_MODE_NORMAL: 2,
@@ -599,25 +560,15 @@ for (const [name, methods, statics] of [
   // A Wi-Fi-only device with no SIM: no operator, no radio, and the identifiers API 29+
   // withholds from ordinary apps are null.
   ["android/telephony/TelephonyManager", {
-    "getNetworkOperator()Ljava/lang/String;": () => "",
-    "getNetworkOperatorName()Ljava/lang/String;": () => "",
-    "getSimOperator()Ljava/lang/String;": () => "",
-    "getSimOperatorName()Ljava/lang/String;": () => "",
-    "getSimCountryIso()Ljava/lang/String;": () => "",
-    "getNetworkCountryIso()Ljava/lang/String;": () => "",
-    "getPhoneType()I": () => 0,
-    "getNetworkType()I": () => 0,
-    "getDataNetworkType()I": () => 0,
-    "getSimState()I": () => 1,
-    "getCallState()I": () => 0,
-    "getDataState()I": () => 0,
-    "isNetworkRoaming()Z": () => 0,
-    "hasIccCard()Z": () => 0,
-    "getDeviceId()Ljava/lang/String;": () => null,
-    "getLine1Number()Ljava/lang/String;": () => null,
-    "getSubscriberId()Ljava/lang/String;": () => null,
-    "getSimSerialNumber()Ljava/lang/String;": () => null,
-    "listen(Landroid/telephony/PhoneStateListener;I)V": () => {},
+    ...stubs("", "getNetworkOperator()Ljava/lang/String;", "getNetworkOperatorName()Ljava/lang/String;",
+      "getSimOperator()Ljava/lang/String;", "getSimOperatorName()Ljava/lang/String;",
+      "getSimCountryIso()Ljava/lang/String;", "getNetworkCountryIso()Ljava/lang/String;"),
+    ...stubs(0, "getPhoneType()I", "getNetworkType()I", "getDataNetworkType()I", "getCallState()I", "getDataState()I",
+      "isNetworkRoaming()Z", "hasIccCard()Z"),
+    ...stubs(1, "getSimState()I"),
+    ...stubs(null, "getDeviceId()Ljava/lang/String;", "getLine1Number()Ljava/lang/String;",
+      "getSubscriberId()Ljava/lang/String;", "getSimSerialNumber()Ljava/lang/String;"),
+    ...noops("listen(Landroid/telephony/PhoneStateListener;I)V"),
   }, {
     PHONE_TYPE_NONE: 0, PHONE_TYPE_GSM: 1, PHONE_TYPE_CDMA: 2, PHONE_TYPE_SIP: 3,
     NETWORK_TYPE_UNKNOWN: 0,
@@ -629,26 +580,23 @@ for (const [name, methods, statics] of [
     "static getExtensionVersion(I)I": () => 0,
   }],
   ["android/app/AppOpsManager", {
-    "static permissionToOp(Ljava/lang/String;)Ljava/lang/String;": () => null,
-    "noteOp(Ljava/lang/String;ILjava/lang/String;)I": () => 0,
     "noteOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": maySuspend(function (this: JObj, op: string, uid: number, pkg: string) {
       return vcall(this, "checkOpNoThrow", "(Ljava/lang/String;ILjava/lang/String;)I", op, uid, pkg);
     }),
     "noteOpNoThrow(Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I": maySuspend(function (this: JObj, op: string, uid: number, pkg: string) {
       return vcall(this, "noteOpNoThrow", "(Ljava/lang/String;ILjava/lang/String;)I", op, uid, pkg);
     }),
-    "noteProxyOp(Ljava/lang/String;Ljava/lang/String;)I": () => 0,
-    "noteProxyOpNoThrow(Ljava/lang/String;Ljava/lang/String;)I": () => 0,
-    "checkOp(Ljava/lang/String;ILjava/lang/String;)I": () => 0,
     "checkOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": (_op: string, uid: number, pkg: string) => packages.get(pkg)?.uid === uid ? 0 : 2,
     "startOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": maySuspend(function (this: JObj, op: string, uid: number, pkg: string) {
       return vcall(this, "checkOpNoThrow", "(Ljava/lang/String;ILjava/lang/String;)I", op, uid, pkg);
     }),
-    "finishOp(Ljava/lang/String;ILjava/lang/String;)V": () => {},
-    "unsafeCheckOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": () => 0,
-    "checkPackage(ILjava/lang/String;)V": () => {},
-    "startWatchingMode(Ljava/lang/String;Ljava/lang/String;Landroid/app/AppOpsManager$OnOpChangedListener;)V": () => {},
-    "stopWatchingMode(Landroid/app/AppOpsManager$OnOpChangedListener;)V": () => {},
+    ...stubs(null, "static permissionToOp(Ljava/lang/String;)Ljava/lang/String;"),
+    ...stubs(0, "noteOp(Ljava/lang/String;ILjava/lang/String;)I", "noteProxyOp(Ljava/lang/String;Ljava/lang/String;)I",
+      "noteProxyOpNoThrow(Ljava/lang/String;Ljava/lang/String;)I", "checkOp(Ljava/lang/String;ILjava/lang/String;)I",
+      "unsafeCheckOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I"),
+    ...noops("finishOp(Ljava/lang/String;ILjava/lang/String;)V", "checkPackage(ILjava/lang/String;)V",
+      "startWatchingMode(Ljava/lang/String;Ljava/lang/String;Landroid/app/AppOpsManager$OnOpChangedListener;)V",
+      "stopWatchingMode(Landroid/app/AppOpsManager$OnOpChangedListener;)V"),
   }, { MODE_ALLOWED: 0, MODE_IGNORED: 1, MODE_ERRORED: 2, MODE_DEFAULT: 3 }],
   ["android/view/accessibility/AccessibilityManager", {
     // No real accessibility service runs here — a device with accessibility off reports
@@ -703,11 +651,8 @@ rt.register({
   name: "android/telephony/PhoneNumberFormattingTextWatcher", ctor: class extends JObj {},
   ifaces: ["android/text/TextWatcher"],
   methods: {
-    "<init>()V": function () {},
-    "<init>(Ljava/lang/String;)V": function () {},
-    "beforeTextChanged(Ljava/lang/CharSequence;III)V": () => {},
-    "onTextChanged(Ljava/lang/CharSequence;III)V": () => {},
-    "afterTextChanged(Landroid/text/Editable;)V": () => {},
+    ...noops("<init>()V", "<init>(Ljava/lang/String;)V", "beforeTextChanged(Ljava/lang/CharSequence;III)V",
+      "onTextChanged(Ljava/lang/CharSequence;III)V", "afterTextChanged(Landroid/text/Editable;)V"),
   },
 });
 rt.register({
@@ -728,7 +673,7 @@ for (const n of ["AccessibilityStateChangeListener", "TouchExplorationStateChang
 rt.register({
   name: "android/app/ActivityManager$MemoryInfo",
   ctor: class extends JObj { totalMem = 4n * 1024n ** 3n; availMem = 2n * 1024n ** 3n; lowMemory = 0; threshold = 128n * 1024n * 1024n; },
-  fields: { totalMem: "totalMem", availMem: "availMem", lowMemory: "lowMemory", threshold: "threshold" },
+  fields: ["totalMem", "availMem", "lowMemory", "threshold"],
   methods: { "<init>()V": function () {} },
 });
 class JRunningAppProcessInfo extends JObj {
@@ -748,11 +693,8 @@ class JRecentTaskInfo extends JObj {
 }
 rt.register({
   name: "android/app/ActivityManager$RecentTaskInfo", ctor: JRecentTaskInfo, ifaces: ["android/os/Parcelable"],
-  fields: {
-    id: "id", persistentId: "persistentId", taskId: "taskId", numActivities: "numActivities",
-    isRunning: "isRunning", baseIntent: "baseIntent", baseActivity: "baseActivity",
-    topActivity: "topActivity", origActivity: "origActivity", description: "description",
-  },
+  fields: ["id", "persistentId", "taskId", "numActivities", "isRunning", "baseIntent", "baseActivity", "topActivity",
+    "origActivity", "description"],
   methods: { "<init>()V": function () {} },
 });
 rt.register({
@@ -764,11 +706,8 @@ rt.register({
     IMPORTANCE_EMPTY: 500, IMPORTANCE_GONE: 1000,
     REASON_UNKNOWN: 0, REASON_PROVIDER_IN_USE: 1, REASON_SERVICE_IN_USE: 2,
   },
-  fields: {
-    processName: "processName", pid: "pid", uid: "uid", pkgList: "pkgList", importance: "importance",
-    lru: "lru", lastTrimLevel: "lastTrimLevel", importanceReasonCode: "importanceReasonCode",
-    importanceReasonPid: "importanceReasonPid", importanceReasonComponent: "importanceReasonComponent",
-  },
+  fields: ["processName", "pid", "uid", "pkgList", "importance", "lru", "lastTrimLevel", "importanceReasonCode",
+    "importanceReasonPid", "importanceReasonComponent"],
   methods: { "<init>()V": function () {} },
 });
 let procInfo: JRunningAppProcessInfo | null = null;
@@ -875,13 +814,10 @@ rt.register({ name: "android/app/Service", ctor: JService, sup: "android/content
   ifaces: ["android/content/ComponentCallbacks2", "android/content/ComponentCallbacks"],
   methods: {
     ...contextMethods,
-    "<init>()V": function () {},
     "getApplication()Landroid/app/Application;": function (this: JService) { return this.$host.application; },
-    "onCreate()V": () => {},
-    "onDestroy()V": () => {},
-    "onUnbind(Landroid/content/Intent;)Z": () => 0,
-    "onRebind(Landroid/content/Intent;)V": () => {},
-    "onStart(Landroid/content/Intent;I)V": () => {},
+    ...noops("<init>()V", "onCreate()V", "onDestroy()V", "onRebind(Landroid/content/Intent;)V",
+      "onStart(Landroid/content/Intent;I)V"),
+    ...stubs(0, "onUnbind(Landroid/content/Intent;)Z"),
     "onStartCommand(Landroid/content/Intent;II)I": async function (this: JObj, intent: JIntent, _flags: number, startId: number) {
       await vcall(this, "onStart", "(Landroid/content/Intent;I)V", intent, startId); return 1;
     },
@@ -910,10 +846,9 @@ rt.register({
     "getAppWidgetIds(Landroid/content/ComponentName;)[I": () => new Int32Array(0),
     "getInstalledProviders()Ljava/util/List;": () => newArrayList(),
     "getInstalledProvidersForPackage(Ljava/lang/String;Landroid/os/UserHandle;)Ljava/util/List;": () => newArrayList(),
-    "updateAppWidget([ILandroid/widget/RemoteViews;)V": () => {},
-    "updateAppWidget(Landroid/content/ComponentName;Landroid/widget/RemoteViews;)V": () => {},
-    "updateAppWidget(ILandroid/widget/RemoteViews;)V": () => {},
-    "notifyAppWidgetViewDataChanged([II)V": () => {},
+    ...noops("updateAppWidget([ILandroid/widget/RemoteViews;)V",
+      "updateAppWidget(Landroid/content/ComponentName;Landroid/widget/RemoteViews;)V",
+      "updateAppWidget(ILandroid/widget/RemoteViews;)V", "notifyAppWidgetViewDataChanged([II)V"),
     // No widget is placed on a home screen here, so no id names one and its options are empty.
     "getAppWidgetInfo(I)Landroid/appwidget/AppWidgetProviderInfo;": () => null,
     "getAppWidgetOptions(I)Landroid/os/Bundle;": () => new JBundle(),
@@ -924,13 +859,10 @@ rt.register({
 rt.register({
   name: "android/appwidget/AppWidgetProvider", ctor: class extends JObj {}, sup: "android/content/BroadcastReceiver",
   methods: {
-    "<init>()V": function () {},
-    "onUpdate(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;[I)V": () => {},
-    "onDeleted(Landroid/content/Context;[I)V": () => {},
-    "onEnabled(Landroid/content/Context;)V": () => {},
-    "onDisabled(Landroid/content/Context;)V": () => {},
-    "onRestored(Landroid/content/Context;[I[I)V": () => {},
-    "onAppWidgetOptionsChanged(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;ILandroid/os/Bundle;)V": () => {},
+    ...noops("<init>()V", "onUpdate(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;[I)V",
+      "onDeleted(Landroid/content/Context;[I)V", "onEnabled(Landroid/content/Context;)V",
+      "onDisabled(Landroid/content/Context;)V", "onRestored(Landroid/content/Context;[I[I)V",
+      "onAppWidgetOptionsChanged(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;ILandroid/os/Bundle;)V"),
   },
 });
 class JAppWidgetProviderInfo extends JObj {
@@ -944,12 +876,8 @@ rt.register({
     RESIZE_NONE: 0, RESIZE_HORIZONTAL: 1, RESIZE_VERTICAL: 2, RESIZE_BOTH: 3,
     WIDGET_CATEGORY_HOME_SCREEN: 1, WIDGET_CATEGORY_KEYGUARD: 2, WIDGET_CATEGORY_SEARCHBOX: 4,
   },
-  fields: {
-    provider: "provider", minWidth: "minWidth", minHeight: "minHeight",
-    minResizeWidth: "minResizeWidth", minResizeHeight: "minResizeHeight",
-    resizeMode: "resizeMode", updatePeriodMillis: "updatePeriodMillis",
-    initialLayout: "initialLayout", icon: "icon", label: "label",
-  },
+  fields: ["provider", "minWidth", "minHeight", "minResizeWidth", "minResizeHeight", "resizeMode",
+    "updatePeriodMillis", "initialLayout", "icon", "label"],
   methods: {
     "<init>()V": function () {},
     "loadLabel(Landroid/content/pm/PackageManager;)Ljava/lang/String;": function (this: JAppWidgetProviderInfo) { return this.label; },
@@ -960,24 +888,16 @@ rt.register({
 rt.register({
   name: "android/view/autofill/AutofillManager", ctor: class extends JObj {},
   methods: {
-    "isEnabled()Z": () => 0,
-    "isAutofillSupported()Z": () => 0,
-    "notifyValueChanged(Landroid/view/View;)V": () => {},
-    "notifyValueChanged(Landroid/view/View;ILandroid/view/autofill/AutofillValue;)V": () => {},
-    "notifyViewEntered(Landroid/view/View;)V": () => {},
-    "notifyViewExited(Landroid/view/View;)V": () => {},
-    "notifyViewVisibilityChanged(Landroid/view/View;Z)V": () => {},
-    "notifyViewVisibilityChanged(Landroid/view/View;IZ)V": () => {},
-    "notifyViewEntered(Landroid/view/View;ILandroid/graphics/Rect;)V": () => {},
-    "notifyViewExited(Landroid/view/View;I)V": () => {},
-    "requestAutofill(Landroid/view/View;)V": () => {},
-    "commit()V": () => {},
-    "cancel()V": () => {},
-    "registerCallback(Landroid/view/autofill/AutofillManager$AutofillCallback;)V": () => {},
-    "unregisterCallback(Landroid/view/autofill/AutofillManager$AutofillCallback;)V": () => {},
-    "hasEnabledAutofillServices()Z": () => 0,
-    "getAutofillServiceComponentName()Landroid/content/ComponentName;": () => null,
-    "disableAutofillServices()V": () => {},
+    ...stubs(0, "isEnabled()Z", "isAutofillSupported()Z", "hasEnabledAutofillServices()Z"),
+    ...noops("notifyValueChanged(Landroid/view/View;)V",
+      "notifyValueChanged(Landroid/view/View;ILandroid/view/autofill/AutofillValue;)V",
+      "notifyViewEntered(Landroid/view/View;)V", "notifyViewExited(Landroid/view/View;)V",
+      "notifyViewVisibilityChanged(Landroid/view/View;Z)V", "notifyViewVisibilityChanged(Landroid/view/View;IZ)V",
+      "notifyViewEntered(Landroid/view/View;ILandroid/graphics/Rect;)V", "notifyViewExited(Landroid/view/View;I)V",
+      "requestAutofill(Landroid/view/View;)V", "commit()V", "cancel()V",
+      "registerCallback(Landroid/view/autofill/AutofillManager$AutofillCallback;)V",
+      "unregisterCallback(Landroid/view/autofill/AutofillManager$AutofillCallback;)V", "disableAutofillServices()V"),
+    ...stubs(null, "getAutofillServiceComponentName()Landroid/content/ComponentName;"),
   },
 });
 // no autofill service exists, so a registered callback never hears an event

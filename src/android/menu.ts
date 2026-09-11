@@ -2,7 +2,7 @@ import { AID } from "./res";
 import { JViewGroup, specSize, JView, invalidate, requestLayout } from "./view";
 import { type JDrawable, loadDrawable, loadDrawableRV } from "./drawable";
 import { type JCanvas, tfMedium } from "./graphics";
-import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { showPopupMenu } from "./popup";
 import { appHost, type AppHost } from "./apphost";
@@ -279,12 +279,9 @@ const menuItemMethods: NativeSpec["methods"] = {
   "hasSubMenu()Z": function (this: JMenuItem) { return this.sub ? 1 : 0; },
   "setTitleCondensed(Ljava/lang/CharSequence;)Landroid/view/MenuItem;": function (this: JMenuItem) { return this; },
   "setAlphabeticShortcut(C)Landroid/view/MenuItem;": function (this: JMenuItem) { return this; },
-  "getOrder()I": () => 0,
-  "getGroupId()I": () => 0,
   "setActionView(Landroid/view/View;)Landroid/view/MenuItem;": function (this: JMenuItem) { return this; },
-  "getActionView()Landroid/view/View;": () => null,
-  "expandActionView()Z": () => 0,
-  "collapseActionView()Z": () => 0,
+  ...stubs(0, "getOrder()I", "getGroupId()I", "expandActionView()Z", "collapseActionView()Z"),
+  ...stubs(null, "getActionView()Landroid/view/View;"),
 };
 rt.register({ name: "webdroid/MenuItem", ctor: JMenuItem, ifaces: ["android/view/MenuItem"], methods: menuItemMethods });
 rt.markers("android/view/MenuItem", "android/view/SubMenu");
@@ -298,16 +295,13 @@ class JActionProvider extends JObj { visL: unknown = null; }
 rt.register({
   name: "android/view/ActionProvider", ctor: JActionProvider,
   methods: {
-    "<init>(Landroid/content/Context;)V": function () {},
-    "onCreateActionView()Landroid/view/View;": () => null,
     "onCreateActionView(Landroid/view/MenuItem;)Landroid/view/View;": maySuspend(function (this: JActionProvider) {
       return vcall(this, "onCreateActionView", "()Landroid/view/View;");
     }),
-    "onPerformDefaultAction()Z": () => 0,
-    "hasSubMenu()Z": () => 0,
-    "onPrepareSubMenu(Landroid/view/SubMenu;)V": () => {},
-    "overridesItemVisibility()Z": () => 0,
-    "isVisible()Z": () => 1,
+    ...noops("<init>(Landroid/content/Context;)V", "onPrepareSubMenu(Landroid/view/SubMenu;)V"),
+    ...stubs(null, "onCreateActionView()Landroid/view/View;"),
+    ...stubs(0, "onPerformDefaultAction()Z", "hasSubMenu()Z", "overridesItemVisibility()Z"),
+    ...stubs(1, "isVisible()Z"),
     "refreshVisibility(Z)V": maySuspend(function (this: JActionProvider, v: number) {
       if (this.visL) void vcall(this.visL, "onActionProviderVisibilityChanged", "(Z)V", v);
     }),
@@ -438,17 +432,7 @@ rt.register({
     "setTitle(I)V": function (this: JActionBar, id: number) { this.bar((b) => { b.titleStr = appString(id); }); },
     "setSubtitle(Ljava/lang/CharSequence;)V": function (this: JActionBar, t: unknown) { this.bar((b) => { b.subtitleStr = t ? spannedString(t) : null; }); },
     "getTitle()Ljava/lang/CharSequence;": function (this: JActionBar) { return this.act?.window.actionBarView?.titleStr ?? ""; },
-    "setHomeAsUpIndicator(Landroid/graphics/drawable/Drawable;)V": () => {},
-    "setHomeAsUpIndicator(I)V": () => {},
-    "setHomeActionContentDescription(I)V": () => {},
-    "setHomeActionContentDescription(Ljava/lang/CharSequence;)V": () => {},
     "setDisplayHomeAsUpEnabled(Z)V": function (this: JActionBar, v: number) { this.bar((b) => { b.showUp = !!v; }); },
-    "setHomeButtonEnabled(Z)V": () => {},
-    "setDisplayShowHomeEnabled(Z)V": () => {},
-    "setDisplayShowTitleEnabled(Z)V": () => {},
-    "setDisplayShowCustomEnabled(Z)V": () => {},
-    "setDisplayUseLogoEnabled(Z)V": () => {},
-    "setElevation(F)V": () => {},
     "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JActionBar, d: JDrawable | null) {
       this.bar((b) => { b.background = d; });
     },
@@ -482,17 +466,17 @@ rt.register({
     "getNavigationItemCount()I": async function (this: JActionBar) {
       return this.navAdapter ? await vcall(this.navAdapter, "getCount", "()I") : 0;
     },
-    "setCustomView(Landroid/view/View;)V": () => {},
-    "setIcon(I)V": () => {},
-    "setLogo(I)V": () => {},
     "getHeight()I": () => 112,
     "getThemedContext()Landroid/content/Context;": function (this: JActionBar) { return this.act; },
-    "getCustomView()Landroid/view/View;": () => null,
     // No action view expands on our bar yet; onBackPressed asks first, as AOSP does.
     "collapseActionView()Z": () => 0,
     "getDisplayOptions()I": function (this: JActionBar) { return this.act?.window.actionBarView?.showUp ? 4 : 0; },
-    "addTab(Landroid/app/ActionBar$Tab;)V": () => {},
-    "newTab()Landroid/app/ActionBar$Tab;": () => null,
+    ...noops("setHomeAsUpIndicator(Landroid/graphics/drawable/Drawable;)V", "setHomeAsUpIndicator(I)V",
+      "setHomeActionContentDescription(I)V", "setHomeActionContentDescription(Ljava/lang/CharSequence;)V",
+      "setHomeButtonEnabled(Z)V", "setDisplayShowHomeEnabled(Z)V", "setDisplayShowTitleEnabled(Z)V",
+      "setDisplayShowCustomEnabled(Z)V", "setDisplayUseLogoEnabled(Z)V", "setElevation(F)V",
+      "setCustomView(Landroid/view/View;)V", "setIcon(I)V", "setLogo(I)V", "addTab(Landroid/app/ActionBar$Tab;)V"),
+    ...stubs(null, "getCustomView()Landroid/view/View;", "newTab()Landroid/app/ActionBar$Tab;"),
   },
 });
 rt.markers("android/app/ActionBar", "android/app/ActionBar$OnNavigationListener");

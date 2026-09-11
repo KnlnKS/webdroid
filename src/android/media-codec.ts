@@ -1,4 +1,4 @@
-import { JObj, rt, maySuspend } from "../jvm/runtime";
+import { JObj, rt, maySuspend, noops } from "../jvm/runtime";
 import { jarray, u8 } from "../jvm/abi";
 import { JThrowable, vcall } from "../jvm/natives/jlang";
 import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
@@ -322,8 +322,6 @@ rt.register({ name: "android/media/MediaCodec", ctor: JMediaCodec, methods: {
   "releaseOutputBuffer(IJ)V": maySuspend(function (this: JMediaCodec, index: number, time: bigint) { this.releaseOutput(index, true, time); }),
   "setOutputSurface(Landroid/view/Surface;)V": function (this: JMediaCodec, surface: JSurface) { this.surface = surface; },
   "detachOutputSurface()V": function (this: JMediaCodec) { this.surface = null; },
-  "setVideoScalingMode(I)V": () => {},
-  "setParameters(Landroid/os/Bundle;)V": () => {},
-  "subscribeToVendorParameters(Ljava/util/List;)V": () => {},
-  "unsubscribeFromVendorParameters(Ljava/util/List;)V": () => {},
+  ...noops("setVideoScalingMode(I)V", "setParameters(Landroid/os/Bundle;)V",
+    "subscribeToVendorParameters(Ljava/util/List;)V", "unsubscribeFromVendorParameters(Ljava/util/List;)V"),
 } });

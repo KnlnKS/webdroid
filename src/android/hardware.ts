@@ -1,7 +1,7 @@
 // android.hardware: Sensor value classes and the listener interface apps implement.
 // SensorManager itself is a Context system service and lives with the others in app.ts.
 
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, stubs } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newArrayList } from "../jvm/natives/jutil";
 
@@ -28,7 +28,7 @@ rt.register({
 class JSensorEvent extends JObj { values = new Float32Array(3); accuracy = 0; timestamp = 0n; sensor: JSensor | null = null; }
 rt.register({
   name: "android/hardware/SensorEvent", ctor: JSensorEvent,
-  fields: { values: "values", accuracy: "accuracy", timestamp: "timestamp", sensor: "sensor" },
+  fields: ["values", "accuracy", "timestamp", "sensor"],
 });
 
 // ── android.hardware.input: the one input device is the touchscreen (id 1, SOURCE_TOUCHSCREEN)
@@ -68,17 +68,13 @@ rt.register({
   methods: {
     "static getDeviceIds()[I": () => Int32Array.of(1),
     "static getDevice(I)Landroid/view/InputDevice;": inputDevice,
-    "getId()I": () => 1,
     "getName()Ljava/lang/String;": () => "touchscreen",
     "getDescriptor()Ljava/lang/String;": () => "touchscreen",
     "getSources()I": () => 0x1002,
     "supportsSource(I)Z": (s: number) => ((s & 0x1002) === s ? 1 : 0),
-    "getKeyboardType()I": () => 0,
-    "isVirtual()Z": () => 0,
-    "isExternal()Z": () => 0,
-    "getVendorId()I": () => 0,
-    "getProductId()I": () => 0,
-    "getControllerNumber()I": () => 0,
+    ...stubs(1, "getId()I"),
+    ...stubs(0, "getKeyboardType()I", "isVirtual()Z", "isExternal()Z", "getVendorId()I", "getProductId()I",
+      "getControllerNumber()I"),
     "getMotionRange(I)Landroid/view/InputDevice$MotionRange;": motionRange,
     "getMotionRange(II)Landroid/view/InputDevice$MotionRange;": motionRange,
     "getMotionRanges()Ljava/util/List;": () => newArrayList(ranges.map(r => motionRange(r.axis))),

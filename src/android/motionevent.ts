@@ -1,4 +1,4 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, stubs, noops } from "../jvm/runtime";
 import { JInputEvent } from "./hardware";
 import { obtainEvent, copyEvent } from "./view";
 
@@ -67,21 +67,16 @@ rt.register({
     "getAxisValue(I)F": axisValue,
     "getAxisValue(II)F": axisValue,
     "getFlags()I": function (this: JMotionEvent) { return this.flags; },
-    "getClassification()I": () => 0,
     "getPressure(I)F": function (this: JMotionEvent) { return this.pressure; },
     "getEventTimeNanos()J": function (this: JMotionEvent) { return BigInt(Math.floor(Number(this.eventTime) * 1e6)); },
     "getAction()I": function (this: JMotionEvent) { return this.action; },
     "getActionMasked()I": function (this: JMotionEvent) { return this.action & 0xff; },
-    "getActionIndex()I": () => 0,
     "getX()F": function (this: JMotionEvent) { return this.x; },
     "getY()F": function (this: JMotionEvent) { return this.y; },
     "getX(I)F": function (this: JMotionEvent) { return this.x; },
     "getY(I)F": function (this: JMotionEvent) { return this.y; },
     "getRawX()F": function (this: JMotionEvent) { return this.rawX; },
     "getRawY()F": function (this: JMotionEvent) { return this.rawY; },
-    "getPointerCount()I": () => 1,
-    "getPointerId(I)I": () => 0,
-    "findPointerIndex(I)I": () => 0,
     // Single-pointer model (matches getX(I)/getY(I) above): every index reuses this event's
     // one tracked position, so PointerCoords is filled from the same backing fields.
     "getPointerCoords(ILandroid/view/MotionEvent$PointerCoords;)V": function (this: JMotionEvent, idx: number, out: JPointerCoords) {
@@ -98,9 +93,6 @@ rt.register({
     "offsetLocation(FF)V": function (this: JMotionEvent, dx: number, dy: number) { this.x += dx; this.y += dy; },
     "setLocation(FF)V": function (this: JMotionEvent, x: number, y: number) { this.x = x; this.y = y; },
     "getEdgeFlags()I": function (this: JMotionEvent) { return this.edgeFlags; },
-    "transform(Landroid/graphics/Matrix;)V": () => {},
-    "recycle()V": () => {},
-    "getHistorySize()I": () => 0,
     "getHistoricalX(I)F": function (this: JMotionEvent) { return this.x; },
     "getHistoricalY(I)F": function (this: JMotionEvent) { return this.y; },
     "getHistoricalEventTime(I)J": function (this: JMotionEvent) { return BigInt(Math.round(this.eventTime)); },
@@ -110,7 +102,10 @@ rt.register({
     "getToolMajor(I)F": function (this: JMotionEvent) { return this.toolMajor; },
     "getToolMinor(I)F": function (this: JMotionEvent) { return this.toolMinor; },
     "getToolType(I)I": function (this: JMotionEvent) { return this.toolType; },
-    "getButtonState()I": () => 0,
+    ...stubs(0, "getClassification()I", "getActionIndex()I", "getPointerId(I)I", "findPointerIndex(I)I",
+      "getHistorySize()I", "getButtonState()I"),
+    ...stubs(1, "getPointerCount()I"),
+    ...noops("transform(Landroid/graphics/Matrix;)V", "recycle()V"),
     "getMetaState()I": function (this: JMotionEvent) { return this.metaState; },
     "static obtain(JJIFFI)Landroid/view/MotionEvent;": obtainEvent,
     "static obtain(JJIFFFFIFFII)Landroid/view/MotionEvent;": obtainFullEvent,
@@ -128,10 +123,7 @@ class JPointerCoords extends JObj {
 }
 rt.register({
   name: "android/view/MotionEvent$PointerCoords", ctor: JPointerCoords,
-  fields: {
-    x: "x", y: "y", pressure: "pressure", size: "size", orientation: "orientation",
-    toolMajor: "toolMajor", toolMinor: "toolMinor", touchMajor: "touchMajor", touchMinor: "touchMinor",
-  },
+  fields: ["x", "y", "pressure", "size", "orientation", "toolMajor", "toolMinor", "touchMajor", "touchMinor"],
   methods: {
     "<init>()V": () => {},
     "<init>(Landroid/view/MotionEvent$PointerCoords;)V": function (this: JPointerCoords, o: JPointerCoords | null) {

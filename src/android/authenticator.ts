@@ -101,7 +101,7 @@ class JAuthenticatorDescription extends JObj {
 }
 rt.register({
   name: "android/accounts/AuthenticatorDescription", ctor: JAuthenticatorDescription, ifaces: ["android/os/Parcelable"],
-  fields: { type: "type", packageName: "packageName", labelId: "labelId", iconId: "iconId", smallIconId: "smallIconId", accountPreferencesId: "accountPreferencesId", customTokens: "customTokens" },
+  fields: ["type", "packageName", "labelId", "iconId", "smallIconId", "accountPreferencesId", "customTokens"],
   methods: { "describeContents()I": () => 0 },
 });
 /** the manifest's authenticator services, each described by its <account-authenticator> resource */

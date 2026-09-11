@@ -2,7 +2,7 @@
 // read back out of ConnectivityManager's own NetworkInfo so the two cannot disagree; nothing here
 // simulates the network going away.
 
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, stubs, noops } from "../jvm/runtime";
 import { vcall, curThread, stringHash, mkEnumSet } from "../jvm/natives/jlang";
 import { newArrayList, newLinkedHashSet } from "../jvm/natives/jutil";
 import { jarray } from "../jvm/abi";
@@ -373,13 +373,11 @@ rt.register({
   name: "android/net/ConnectivityManager$NetworkCallback", ctor: class extends JObj {},
   methods: {
     "<init>()V": function () {}, "<init>(I)V": function () {},
-    "onAvailable(Landroid/net/Network;)V": () => {},
-    "onLosing(Landroid/net/Network;I)V": () => {},
-    "onLost(Landroid/net/Network;)V": () => {},
-    "onUnavailable()V": () => {},
-    "onCapabilitiesChanged(Landroid/net/Network;Landroid/net/NetworkCapabilities;)V": () => {},
-    "onLinkPropertiesChanged(Landroid/net/Network;Landroid/net/LinkProperties;)V": () => {},
-    "onBlockedStatusChanged(Landroid/net/Network;Z)V": () => {},
+    ...noops("onAvailable(Landroid/net/Network;)V", "onLosing(Landroid/net/Network;I)V",
+      "onLost(Landroid/net/Network;)V", "onUnavailable()V",
+      "onCapabilitiesChanged(Landroid/net/Network;Landroid/net/NetworkCapabilities;)V",
+      "onLinkPropertiesChanged(Landroid/net/Network;Landroid/net/LinkProperties;)V",
+      "onBlockedStatusChanged(Landroid/net/Network;Z)V"),
   },
 });
 
@@ -439,18 +437,14 @@ const detailedStates = mkEnumSet("android/net/NetworkInfo$DetailedState", ["IDLE
 rt.register({
   name: "android/net/NetworkInfo", ctor: class extends JObj {},
   methods: {
-    "isConnected()Z": () => 1,
-    "isConnectedOrConnecting()Z": () => 1,
     "getType()I": () => NET_TYPE,
-    "getSubtype()I": () => 0,
     "getTypeName()Ljava/lang/String;": () => "WIFI",
-    "getSubtypeName()Ljava/lang/String;": () => "",
-    "getExtraInfo()Ljava/lang/String;": () => null,
-    "getReason()Ljava/lang/String;": () => null,
     "getState()Landroid/net/NetworkInfo$State;": () => { rt.link("android/net/NetworkInfo$State"); return states[1]; },
     "getDetailedState()Landroid/net/NetworkInfo$DetailedState;": () => { rt.link("android/net/NetworkInfo$DetailedState"); return detailedStates[5]; },
-    "isAvailable()Z": () => 1,
-    "isRoaming()Z": () => 0,
+    ...stubs(1, "isConnected()Z", "isConnectedOrConnecting()Z", "isAvailable()Z"),
+    ...stubs(0, "getSubtype()I", "isRoaming()Z"),
+    ...stubs("", "getSubtypeName()Ljava/lang/String;"),
+    ...stubs(null, "getExtraInfo()Ljava/lang/String;", "getReason()Ljava/lang/String;"),
   },
 });
 
@@ -465,12 +459,9 @@ rt.register({
     "static getThreadStatsTag()I": () => threadTags.get(curThread) ?? -1,
     "static clearThreadStatsTag()V": () => { threadTags.set(curThread, -1); },
     "static getAndSetThreadStatsTag(I)I": (tag: number) => { const t = curThread; const old = threadTags.get(t) ?? -1; threadTags.set(t, tag); return old; },
-    "static tagSocket(Ljava/net/Socket;)V": () => {},
-    "static untagSocket(Ljava/net/Socket;)V": () => {},
-    "static tagDatagramSocket(Ljava/net/DatagramSocket;)V": () => {},
-    "static untagDatagramSocket(Ljava/net/DatagramSocket;)V": () => {},
-    "static incrementOperationCount(I)V": () => {},
-    "static incrementOperationCount(II)V": () => {},
+    ...noops("static tagSocket(Ljava/net/Socket;)V", "static untagSocket(Ljava/net/Socket;)V",
+      "static tagDatagramSocket(Ljava/net/DatagramSocket;)V", "static untagDatagramSocket(Ljava/net/DatagramSocket;)V",
+      "static incrementOperationCount(I)V", "static incrementOperationCount(II)V"),
     "static getTotalRxBytes()J": () => -1n,
     "static getTotalTxBytes()J": () => -1n,
     "static getMobileRxBytes()J": () => -1n,

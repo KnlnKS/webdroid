@@ -1,6 +1,6 @@
 // android.graphics.drawable.* — Drawable hierarchy, XML inflation, 9-patch, vectors.
 
-import { rt, JObj, type NativeSpec, callSelf, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf, maySuspend, stubs, noops } from "../jvm/runtime";
 import { vcall, mkEnumSet } from "../jvm/natives/jlang";
 import { mangleMethod, jmethod, intBitsToFloat } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, insetsOf } from "./graphics";
@@ -69,7 +69,6 @@ function invalidateSelf(this: JDrawable) {
   if (this.callback) void vcall(this.callback, "invalidateDrawable", "(Landroid/graphics/drawable/Drawable;)V", this);
 }
 const drawableMethods: NativeSpec["methods"] = {
-  "<init>()V": function () {},
   "draw(Landroid/graphics/Canvas;)V": function (this: JDrawable, cv: JCanvas) { this.paint(cv); },
   "setBounds(IIII)V": setBounds,
   "setBounds(Landroid/graphics/Rect;)V": function (this: JDrawable, r: JRect) { setBounds.call(this, r.left, r.top, r.right, r.bottom); },
@@ -123,7 +122,6 @@ const drawableMethods: NativeSpec["methods"] = {
   "unscheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;)V": function (this: JDrawable, _d: unknown, r: unknown) { unscheduleSelf.call(this, r); },
   "invalidateDrawable(Landroid/graphics/drawable/Drawable;)V": invalidateSelf,
   "mutate()Landroid/graphics/drawable/Drawable;": maySuspend(function (this: JDrawable) { return this; }),
-  "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;": function () { return null; },
   "isStateful()Z": maySuspend(function (this: JDrawable) { return this instanceof JStateListDrawable ? 1 : 0; }),
   "getPadding(Landroid/graphics/Rect;)Z": maySuspend(function (this: JDrawable, r: JRect) {
     const p = (this as any).padding as JRect | undefined;
@@ -135,21 +133,11 @@ const drawableMethods: NativeSpec["methods"] = {
   "static resolveOpacity(II)I": (a: number, b: number) => a === b ? a : a === 0 || b === 0 ? 0 : a === -3 || b === -3 ? -3 : a === -2 || b === -2 ? -2 : -1,
   "setVisible(ZZ)Z": maySuspend(function (this: JDrawable, v: number) { const changed = this.visible !== !!v; this.visible = !!v; return changed ? 1 : 0; }),
   "isVisible()Z": function (this: JDrawable) { return this.visible ? 1 : 0; },
-  "getColorFilter()Landroid/graphics/ColorFilter;": () => null,
-  "setTintBlendMode(Landroid/graphics/BlendMode;)V": () => {},
-  "getChangingConfigurations()I": () => 0,
   "getOutline(Landroid/graphics/Outline;)V": maySuspend(function (this: JDrawable, o: unknown) {
     const b = this.bounds;
     return vcall(o, "setRect", "(IIII)V", b.left, b.top, b.right, b.bottom);
   }),
   "getOpticalInsets()Landroid/graphics/Insets;": () => insetsOf(0, 0, 0, 0),
-  "getTransparentRegion()Landroid/graphics/Region;": () => null,
-  "isProjected()Z": () => 0,
-  "canApplyTheme()Z": () => 0,
-  "applyTheme(Landroid/content/res/Resources$Theme;)V": () => {},
-  "onLayoutDirectionChanged(I)Z": () => 0,
-  "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;)V": () => {},
-  "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V": () => {},
   "setAutoMirrored(Z)V": function (this: JDrawable, m: number) { this.autoMirrored = !!m; },
   "isAutoMirrored()Z": function (this: JDrawable) { return this.autoMirrored ? 1 : 0; },
   "setLayoutDirection(I)Z": function (this: JDrawable, d: number) {
@@ -163,11 +151,15 @@ const drawableMethods: NativeSpec["methods"] = {
     return this instanceof JStateListDrawable ? this.current() : this;
   },
   "getDirtyBounds()Landroid/graphics/Rect;": function (this: JDrawable) { return this.bounds; },
-  "setChangingConfigurations(I)V": () => {},
-  "setDither(Z)V": () => {},
-  "setFilterBitmap(Z)V": () => {},
-  "setHotspot(FF)V": () => {},
-  "setHotspotBounds(IIII)V": () => {},
+  ...noops("<init>()V", "setTintBlendMode(Landroid/graphics/BlendMode;)V",
+    "applyTheme(Landroid/content/res/Resources$Theme;)V",
+    "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;)V",
+    "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V",
+    "setChangingConfigurations(I)V", "setDither(Z)V", "setFilterBitmap(Z)V", "setHotspot(FF)V",
+    "setHotspotBounds(IIII)V"),
+  ...stubs(null, "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;",
+    "getColorFilter()Landroid/graphics/ColorFilter;", "getTransparentRegion()Landroid/graphics/Region;"),
+  ...stubs(0, "getChangingConfigurations()I", "isProjected()Z", "canApplyTheme()Z", "onLayoutDirectionChanged(I)Z"),
 };
 function onBoundsChangeAll(d: JDrawable) {
   if (d instanceof JLayerDrawable) d.layout();
@@ -239,13 +231,11 @@ export class JBitmapDrawable extends JDrawable {
 rt.register({
   name: "android/graphics/drawable/BitmapDrawable", ctor: JBitmapDrawable, sup: "android/graphics/drawable/Drawable",
   methods: {
-    "<init>()V": function () {},
     "<init>(Landroid/content/res/Resources;Landroid/graphics/Bitmap;)V": function (this: JBitmapDrawable, r: unknown, b: JBitmap) { this.bmp = b; },
     "<init>(Landroid/graphics/Bitmap;)V": function (this: JBitmapDrawable, b: JBitmap) { this.bmp = b; },
     "getBitmap()Landroid/graphics/Bitmap;": function (this: JBitmapDrawable) { return this.bmp; },
-    "setAntiAlias(Z)V": () => {},
-    "setTileModeXY(Landroid/graphics/Shader$TileMode;Landroid/graphics/Shader$TileMode;)V": () => {},
-    "setGravity(I)V": () => {},
+    ...noops("<init>()V", "setAntiAlias(Z)V",
+      "setTileModeXY(Landroid/graphics/Shader$TileMode;Landroid/graphics/Shader$TileMode;)V", "setGravity(I)V"),
   },
 });
 
@@ -898,12 +888,11 @@ rt.register({
     "setVisible(ZZ)Z": function (this: JDrawableWrapper, v: number, r: number) { return this.dr ? vcall(this.dr, "setVisible", "(ZZ)Z", v, r) : 0; },
     "jumpToCurrentState()V": function (this: JDrawableWrapper) { if (this.dr) return vcall(this.dr, "jumpToCurrentState", "()V"); },
     "mutate()Landroid/graphics/drawable/Drawable;": function (this: JDrawableWrapper) { if (this.dr) void vcall(this.dr, "mutate", "()Landroid/graphics/drawable/Drawable;"); return this; },
-    "applyTheme(Landroid/content/res/Resources$Theme;)V": () => {},
-    "canApplyTheme()Z": () => 0,
-    "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V": () => {},
     "getOutline(Landroid/graphics/Outline;)V": function (this: JDrawableWrapper, o: unknown) { if (this.dr) return vcall(this.dr, "getOutline", "(Landroid/graphics/Outline;)V", o); },
-    "getChangingConfigurations()I": () => 0,
-    "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;": () => null,
+    ...noops("applyTheme(Landroid/content/res/Resources$Theme;)V",
+      "inflate(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V"),
+    ...stubs(0, "canApplyTheme()Z", "getChangingConfigurations()I"),
+    ...stubs(null, "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;"),
   },
 });
 // ── android.graphics.drawable.shapes + ShapeDrawable: a Shape is resized to the drawable's
@@ -940,7 +929,6 @@ class JRoundRectShape extends JShape {
 const M_shapeDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V");
 const M_onResize = mangleMethod("onResize", "(FF)V");
 const shapeMethods: NonNullable<NativeSpec["methods"]> = {
-  "<init>()V": function () {},
   "getWidth()F": function (this: JShape) { return this.w; },
   "getHeight()F": function (this: JShape) { return this.h; },
   "resize(FF)V": function (this: JShape, w: number, h: number) {
@@ -949,9 +937,8 @@ const shapeMethods: NonNullable<NativeSpec["methods"]> = {
     this.w = w; this.h = h;
     return jmethod(this, M_onResize)!.call(this, w, h);
   },
-  "onResize(FF)V": () => {},
-  "hasAlpha()Z": () => 1,
-  "getOutline(Landroid/graphics/Outline;)V": () => {},
+  ...noops("<init>()V", "onResize(FF)V", "getOutline(Landroid/graphics/Outline;)V"),
+  ...stubs(1, "hasAlpha()Z"),
   "draw(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShape, cv: JCanvas, p: JPaint) {
     const path = this.path();
     const evenOdd = this instanceof JRoundRectShape && !!this.inset;

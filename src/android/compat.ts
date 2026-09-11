@@ -1,6 +1,6 @@
 // Scrolling physics, view configuration, legacy animation classes, misc widgets' helpers.
 
-import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook, copyEvent } from "./view";
 import { restVelocity, type JMotionEvent } from "./motionevent";
@@ -29,9 +29,6 @@ class JScroller extends JObj {
   }
 }
 const scrollerMethods: NativeSpec["methods"] = {
-  "<init>(Landroid/content/Context;)V": function () {},
-  "<init>(Landroid/content/Context;Landroid/view/animation/Interpolator;)V": function () {},
-  "<init>(Landroid/content/Context;Landroid/view/animation/Interpolator;Z)V": function () {},
   "startScroll(IIII)V": function (this: JScroller, sx: number, sy: number, dx: number, dy: number) {
     this.startX = sx; this.startY = sy; this.finalX = sx + dx; this.finalY = sy + dy;
     this.startT = performance.now(); this.duration = 250;
@@ -69,7 +66,6 @@ const scrollerMethods: NativeSpec["methods"] = {
   },
   "forceFinished(Z)V": function (this: JScroller, f: number) { this.finished = !!f; },
   "getCurrVelocity()F": function (this: JScroller) { return this.finished ? 0 : 800; },
-  "setFriction(F)V": () => {},
   "getDuration()I": function (this: JScroller) { return this.duration; },
   "springBack(IIIIII)Z": function (this: JScroller, sx: number, sy: number, minX: number, maxX: number, minY: number, maxY: number) {
     const fx = Math.max(minX, Math.min(maxX, sx));
@@ -79,13 +75,14 @@ const scrollerMethods: NativeSpec["methods"] = {
     this.startT = performance.now(); this.duration = 200; this.finished = false;
     return 1;
   },
-  "isOverScrolled()Z": () => 0,
   "setFinalX(I)V": function (this: JScroller, x: number) { this.finalX = x; },
   "setFinalY(I)V": function (this: JScroller, y: number) { this.finalY = y; },
-  "extendDuration(I)V": () => {},
   "timePassed()I": function (this: JScroller) { return Math.round(performance.now() - this.startT); },
-  "notifyHorizontalEdgeReached(III)V": () => {},
-  "notifyVerticalEdgeReached(III)V": () => {},
+  ...noops("<init>(Landroid/content/Context;)V",
+    "<init>(Landroid/content/Context;Landroid/view/animation/Interpolator;)V",
+    "<init>(Landroid/content/Context;Landroid/view/animation/Interpolator;Z)V", "setFriction(F)V",
+    "extendDuration(I)V", "notifyHorizontalEdgeReached(III)V", "notifyVerticalEdgeReached(III)V"),
+  ...stubs(0, "isOverScrolled()Z"),
 };
 rt.register({ name: "android/widget/Scroller", ctor: JScroller, methods: scrollerMethods });
 rt.register({ name: "android/widget/OverScroller", ctor: class extends JScroller {}, methods: scrollerMethods });
@@ -148,11 +145,9 @@ rt.register({
     "getScaledHoverSlop()I": () => Math.round(device.dp(4)),
     "getScaledFadingEdgeLength()I": () => Math.round(device.dp(12)),
     "getScaledMinScalingSpan()I": () => Math.round(device.dp(27)),
-    "shouldShowMenuShortcutsWhenKeyboardPresent()Z": () => 0,
     "static getAmbiguousGestureMultiplier()F": () => 2,
     "static getMinimumFlingVelocity()I": () => 50,
     "static getMaximumFlingVelocity()I": () => 8000,
-    "getScaledOverscrollDistance()I": () => 0,
     "getScaledOverflingDistance()I": () => Math.round(device.dp(6)),
     "static getEdgeSlop()I": () => 12,
     "static getGlobalActionKeyTimeout()J": () => 500n,
@@ -160,7 +155,8 @@ rt.register({
     "getScaledWindowTouchSlop()I": () => device.touchSlop * 2,
     "getScaledDoubleTapSlop()I": () => Math.round(device.dp(100)),
     "getScaledScrollBarSize()I": () => Math.round(device.dp(4)),
-    "hasPermanentMenuKey()Z": () => 0,
+    ...stubs(0, "shouldShowMenuShortcutsWhenKeyboardPresent()Z", "getScaledOverscrollDistance()I",
+      "hasPermanentMenuKey()Z"),
     "static getScrollBarSize()I": () => 8,
     "static getDoubleTapTimeout()I": () => DOUBLE_TAP_TIMEOUT,
     "static getTapTimeout()I": () => 100,
@@ -180,24 +176,18 @@ rt.register({
   name: "android/widget/EdgeEffect", ctor: class extends JObj { color = 0x666666; dist = 0; },
   statics: { DEFAULT_BLEND_MODE: null },
   methods: {
-    "<init>(Landroid/content/Context;)V": function () {},
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function () {},
-    "setSize(II)V": () => {},
-    "isFinished()Z": () => 1,
-    "onPull(F)V": () => {},
-    "onPull(FF)V": () => {},
     // stretch overscroll (API 31): the pulled distance is what the caller reads back
     "onPullDistance(FF)F": function (this: any, d: number) { const before = this.dist; this.dist = Math.max(0, Math.min(1, this.dist + d)); return this.dist - before; },
     "getDistance()F": function (this: any) { return this.dist; },
     "onRelease()V": function (this: any) { this.dist = 0; },
-    "onAbsorb(I)V": () => {},
-    "draw(Landroid/graphics/Canvas;)Z": () => 0,
     "finish()V": function (this: any) { this.dist = 0; },
     "setColor(I)V": function (this: any, c: number) { this.color = c; },
     "getColor()I": function (this: any) { return this.color; },
-    "setBlendMode(Landroid/graphics/BlendMode;)V": () => {},
-    "getBlendMode()Landroid/graphics/BlendMode;": () => null,
-    "getMaxHeight()I": () => 0,
+    ...noops("<init>(Landroid/content/Context;)V", "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V",
+      "setSize(II)V", "onPull(F)V", "onPull(FF)V", "onAbsorb(I)V", "setBlendMode(Landroid/graphics/BlendMode;)V"),
+    ...stubs(1, "isFinished()Z"),
+    ...stubs(0, "draw(Landroid/graphics/Canvas;)Z", "getMaxHeight()I"),
+    ...stubs(null, "getBlendMode()Landroid/graphics/BlendMode;"),
   },
 });
 
@@ -355,8 +345,6 @@ setViewAnimHook((v, anim) => {
 });
 
 const animMethods: NativeSpec["methods"] = {
-  "<init>()V": function () {},
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function () {},
   "setDuration(J)V": function (this: JAnimation, d: bigint) { this.duration = Number(d); },
   "getDuration()J": function (this: JAnimation) { return BigInt(this.duration); },
   "setStartOffset(J)V": function (this: JAnimation, d: bigint) { this.startOffset = Number(d); },
@@ -372,11 +360,6 @@ const animMethods: NativeSpec["methods"] = {
   "setRepeatCount(I)V": function (this: JAnimation, n: number) { this.repeatCount = n; },
   "getRepeatCount()I": function (this: JAnimation) { return this.repeatCount; },
   "setRepeatMode(I)V": function (this: JAnimation, m: number) { this.repeatMode = m; },
-  "setZAdjustment(I)V": () => {},
-  "setDetachWallpaper(Z)V": () => {},
-  "setBackgroundColor(I)V": () => {},
-  "willChangeBounds()Z": () => 1,
-  "willChangeTransformationMatrix()Z": () => 1,
   "setAnimationListener(Landroid/view/animation/Animation$AnimationListener;)V": function (this: JAnimation, l: unknown) { this.listener = l; },
   "start()V": function (this: JAnimation) { this.startTime = -1; },
   "startNow()V": function (this: JAnimation) { this.startTime = performance.now(); },
@@ -389,7 +372,10 @@ const animMethods: NativeSpec["methods"] = {
   "hasStarted()Z": function (this: JAnimation) { return this.started ? 1 : 0; },
   "initialize(IIII)V": function (this: JAnimation) { this.initialized = true; },
   "isInitialized()Z": function (this: JAnimation) { return this.initialized ? 1 : 0; },
-  "applyTransformation(FLandroid/view/animation/Transformation;)V": () => {},
+  ...noops("<init>()V", "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", "setZAdjustment(I)V",
+    "setDetachWallpaper(Z)V", "setBackgroundColor(I)V",
+    "applyTransformation(FLandroid/view/animation/Transformation;)V"),
+  ...stubs(1, "willChangeBounds()Z", "willChangeTransformationMatrix()Z"),
   "getTransformation(JLandroid/view/animation/Transformation;)Z": async function (this: JAnimation, now: bigint, t: JTransformation) {
     return await getTransformation(this, Number(now), t, null) ? 1 : 0;
   },
@@ -603,16 +589,12 @@ rt.register({
   name: "android/view/GestureDetector$SimpleOnGestureListener", ctor: class extends JObj {},
   ifaces: ["android/view/GestureDetector$OnGestureListener", "android/view/GestureDetector$OnDoubleTapListener"],
   methods: {
-    "<init>()V": function () {},
-    "onDown(Landroid/view/MotionEvent;)Z": () => 0,
-    "onSingleTapUp(Landroid/view/MotionEvent;)Z": () => 0,
-    "onScroll(Landroid/view/MotionEvent;Landroid/view/MotionEvent;FF)Z": () => 0,
-    "onFling(Landroid/view/MotionEvent;Landroid/view/MotionEvent;FF)Z": () => 0,
-    "onLongPress(Landroid/view/MotionEvent;)V": () => {},
-    "onShowPress(Landroid/view/MotionEvent;)V": () => {},
-    "onSingleTapConfirmed(Landroid/view/MotionEvent;)Z": () => 0,
-    "onDoubleTap(Landroid/view/MotionEvent;)Z": () => 0,
-    "onDoubleTapEvent(Landroid/view/MotionEvent;)Z": () => 0,
+    ...noops("<init>()V", "onLongPress(Landroid/view/MotionEvent;)V", "onShowPress(Landroid/view/MotionEvent;)V"),
+    ...stubs(0, "onDown(Landroid/view/MotionEvent;)Z", "onSingleTapUp(Landroid/view/MotionEvent;)Z",
+      "onScroll(Landroid/view/MotionEvent;Landroid/view/MotionEvent;FF)Z",
+      "onFling(Landroid/view/MotionEvent;Landroid/view/MotionEvent;FF)Z",
+      "onSingleTapConfirmed(Landroid/view/MotionEvent;)Z", "onDoubleTap(Landroid/view/MotionEvent;)Z",
+      "onDoubleTapEvent(Landroid/view/MotionEvent;)Z"),
   },
 });
 rt.markers("android/view/GestureDetector$OnGestureListener", "android/view/GestureDetector$OnDoubleTapListener");
@@ -621,13 +603,10 @@ rt.markers("android/view/GestureDetector$OnGestureListener", "android/view/Gestu
 rt.register({
   name: "android/gesture/GestureStore", ctor: class extends JObj {},
   methods: {
-    "<init>()V": function () {},
-    "load(Ljava/io/InputStream;)V": () => {},
-    "load(Ljava/io/InputStream;Z)V": () => {},
-    "save(Ljava/io/OutputStream;)V": () => {},
     "getGestureEntries()Ljava/util/Set;": maySuspend(() => newObj("java/util/HashSet", null)),
     "recognize(Landroid/gesture/Gesture;)Ljava/util/ArrayList;": () => newArrayList(),
-    "addGesture(Ljava/lang/String;Landroid/gesture/Gesture;)V": () => {},
+    ...noops("<init>()V", "load(Ljava/io/InputStream;)V", "load(Ljava/io/InputStream;Z)V",
+      "save(Ljava/io/OutputStream;)V", "addGesture(Ljava/lang/String;Landroid/gesture/Gesture;)V"),
   },
 });
 for (const n of ["android/gesture/Gesture", "android/gesture/GestureLibrary", "android/gesture/Prediction",
@@ -640,14 +619,10 @@ rt.register({
   methods: {
     "<init>(Landroid/content/Context;)V": async function (this: any, c: unknown) { await initViewFromCtx(this, c, null); },
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: any, c: unknown, set: any) { await initViewFromCtx(this, c, set); },
-    "addOnGesturePerformedListener(Landroid/gesture/GestureOverlayView$OnGesturePerformedListener;)V": () => {},
-    "addOnGestureListener(Landroid/gesture/GestureOverlayView$OnGestureListener;)V": () => {},
-    "setGestureVisible(Z)V": () => {},
-    "setGestureStrokeType(I)V": () => {},
-    "setGestureColor(I)V": () => {},
-    "setGestureStrokeWidth(F)V": () => {},
-    "setEventsInterceptionEnabled(Z)V": () => {},
-    "setFadeOffset(J)V": () => {},
+    ...noops("addOnGesturePerformedListener(Landroid/gesture/GestureOverlayView$OnGesturePerformedListener;)V",
+      "addOnGestureListener(Landroid/gesture/GestureOverlayView$OnGestureListener;)V", "setGestureVisible(Z)V",
+      "setGestureStrokeType(I)V", "setGestureColor(I)V", "setGestureStrokeWidth(F)V",
+      "setEventsInterceptionEnabled(Z)V", "setFadeOffset(J)V"),
     "cancelGesture()V": () => {}, "clear(Z)V": () => {},
   },
 });

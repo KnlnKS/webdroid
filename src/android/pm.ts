@@ -1,4 +1,4 @@
-import { JObj, rt, maySuspend } from "../jvm/runtime";
+import { JObj, rt, maySuspend, stubs } from "../jvm/runtime";
 import { jarray, hexBytes } from "../jvm/abi";
 import { device } from "../shell/config";
 import type { JBundle } from "./os";
@@ -31,7 +31,7 @@ class JFeatureInfo extends JObj {
 rt.register({
   name: "android/content/pm/FeatureInfo", ctor: JFeatureInfo, ifaces: ["android/os/Parcelable"],
   statics: { FLAG_REQUIRED: 1, GL_ES_VERSION_UNDEFINED: 0 },
-  fields: { name: "name", version: "version", reqGlEsVersion: "reqGlEsVersion", flags: "flags" },
+  fields: ["name", "version", "reqGlEsVersion", "flags"],
   methods: {
     "<init>()V": function () {},
     "getGlEsVersion()Ljava/lang/String;": function (this: JFeatureInfo) {
@@ -57,7 +57,7 @@ class JPackageItemInfo extends JObj {
 }
 rt.register({
   name: "android/content/pm/PackageItemInfo", ctor: JPackageItemInfo,
-  fields: { name: "name", packageName: "packageName", labelRes: "labelRes", nonLocalizedLabel: "nonLocalizedLabel", icon: "icon", metaData: "metaData" },
+  fields: ["name", "packageName", "labelRes", "nonLocalizedLabel", "icon", "metaData"],
   methods: {
     "<init>()V": function () {},
     "loadXmlMetaData(Landroid/content/pm/PackageManager;Ljava/lang/String;)Landroid/content/res/XmlResourceParser;": maySuspend(function (this: JPackageItemInfo, pm: JPackageManager, name: string) {
@@ -75,7 +75,7 @@ class JPermissionInfo extends JPackageItemInfo {
 }
 rt.register({
   name: "android/content/pm/PermissionInfo", ctor: JPermissionInfo, sup: "android/content/pm/PackageItemInfo", ifaces: ["android/os/Parcelable"],
-  fields: { group: "group", protectionLevel: "protectionLevel", flags: "flags", descriptionRes: "descriptionRes" },
+  fields: ["group", "protectionLevel", "flags", "descriptionRes"],
   methods: {
     "<init>()V": function () {},
     "getProtection()I": function (this: JPermissionInfo) { return this.protectionLevel & 15; },
@@ -92,7 +92,7 @@ rt.register({ name: "android/content/pm/ConfigurationInfo", ctor: JConfiguration
   reqTouchScreen: "reqTouchScreen", reqKeyboardType: "reqKeyboardType", reqNavigation: "reqNavigation", reqInputFeatures: "reqInputFeatures", reqGlEsVersion: "reqGlEsVersion",
 }, methods: { "<init>()V": function () {}, "getGlEsVersion()Ljava/lang/String;": function (this: JConfigurationInfo) { return (this.reqGlEsVersion >>> 16) + "." + (this.reqGlEsVersion & 65535); } } });
 rt.register({ name: "android/content/pm/ComponentInfo", ctor: JComponentInfo, sup: "android/content/pm/PackageItemInfo",
-  fields: { applicationInfo: "applicationInfo", processName: "processName", enabled: "enabled", exported: "exported", directBootAware: "directBootAware" },
+  fields: ["applicationInfo", "processName", "enabled", "exported", "directBootAware"],
   methods: {
     "<init>()V": function () {},
     "isEnabled()Z": function (this: JComponentInfo) { return this.enabled && (this.applicationInfo?.enabled ?? 1) ? 1 : 0; },
@@ -104,10 +104,7 @@ class JActivityInfo extends JComponentInfo {
 }
 rt.register({
   name: "android/content/pm/ActivityInfo", ctor: JActivityInfo, sup: "android/content/pm/ComponentInfo", ifaces: ["android/os/Parcelable"],
-  fields: {
-    theme: "theme", configChanges: "configChanges", screenOrientation: "screenOrientation",
-    permission: "permission", parentActivityName: "parentActivityName",
-  },
+  fields: ["theme", "configChanges", "screenOrientation", "permission", "parentActivityName"],
   statics: { SCREEN_ORIENTATION_PORTRAIT: 1, SCREEN_ORIENTATION_UNSPECIFIED: -1, SCREEN_ORIENTATION_LANDSCAPE: 0, SCREEN_ORIENTATION_USER: 2, SCREEN_ORIENTATION_BEHIND: 3,
     SCREEN_ORIENTATION_SENSOR: 4, SCREEN_ORIENTATION_NOSENSOR: 5, SCREEN_ORIENTATION_SENSOR_LANDSCAPE: 6, SCREEN_ORIENTATION_SENSOR_PORTRAIT: 7,
     SCREEN_ORIENTATION_REVERSE_LANDSCAPE: 8, SCREEN_ORIENTATION_REVERSE_PORTRAIT: 9, SCREEN_ORIENTATION_FULL_SENSOR: 10, SCREEN_ORIENTATION_USER_LANDSCAPE: 11,
@@ -126,9 +123,8 @@ export class JResolveInfo extends JObj {
 }
 rt.register({
   name: "android/content/pm/ResolveInfo", ctor: JResolveInfo,
-  fields: { activityInfo: "activityInfo", serviceInfo: "serviceInfo", providerInfo: "providerInfo", filter: "filter",
-    priority: "priority", preferredOrder: "preferredOrder", match: "match", specificIndex: "specificIndex", isDefault: "isDefault",
-    labelRes: "labelRes", nonLocalizedLabel: "nonLocalizedLabel", icon: "icon", resolvePackageName: "resolvePackageName" },
+  fields: ["activityInfo", "serviceInfo", "providerInfo", "filter", "priority", "preferredOrder", "match",
+    "specificIndex", "isDefault", "labelRes", "nonLocalizedLabel", "icon", "resolvePackageName"],
   methods: {
     "<init>()V": function () {},
     "loadLabel(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;": async function (this: any, pm: unknown) {
@@ -145,7 +141,7 @@ rt.register({
 class JProviderInfo extends JComponentInfo { authority = ""; grantUriPermissions = 0; multiprocess = 0; }
 rt.register({
   name: "android/content/pm/ProviderInfo", sup: "android/content/pm/ComponentInfo", ctor: JProviderInfo,
-  fields: { authority: "authority", grantUriPermissions: "grantUriPermissions", multiprocess: "multiprocess" },
+  fields: ["authority", "grantUriPermissions", "multiprocess"],
   methods: { "<init>()V": function () {} },
 });
 class JServiceInfo extends JComponentInfo {
@@ -153,7 +149,7 @@ class JServiceInfo extends JComponentInfo {
 }
 rt.register({
   name: "android/content/pm/ServiceInfo", ctor: JServiceInfo, sup: "android/content/pm/ComponentInfo",
-  fields: { permission: "permission", flags: "flags", foregroundServiceType: "foregroundServiceType" },
+  fields: ["permission", "flags", "foregroundServiceType"],
   methods: { "<init>()V": function () {} },
 });
 class JSignature extends JObj { bytes = new Int8Array(0); }
@@ -278,14 +274,9 @@ class JApplicationInfo extends JPackageItemInfo {
 }
 rt.register({
   name: "android/content/pm/ApplicationInfo", ctor: JApplicationInfo, sup: "android/content/pm/PackageItemInfo", ifaces: ["android/os/Parcelable"],
-  fields: {
-    packageName: "packageName", sourceDir: "sourceDir", dataDir: "dataDir", nativeLibraryDir: "nativeLibraryDir",
-    flags: "flags", targetSdkVersion: "targetSdkVersion", minSdkVersion: "minSdkVersion", theme: "theme",
-    labelRes: "labelRes", nonLocalizedLabel: "nonLocalizedLabel", icon: "icon", className: "className", publicSourceDir: "publicSourceDir",
-    uid: "uid", processName: "processName", enabled: "enabled", metaData: "metaData",
-    splitNames: "splitNames", splitSourceDirs: "splitSourceDirs", splitPublicSourceDirs: "splitPublicSourceDirs",
-    sharedLibraryFiles: "sharedLibraryFiles",
-  },
+  fields: ["packageName", "sourceDir", "dataDir", "nativeLibraryDir", "flags", "targetSdkVersion", "minSdkVersion",
+    "theme", "labelRes", "nonLocalizedLabel", "icon", "className", "publicSourceDir", "uid", "processName", "enabled",
+    "metaData", "splitNames", "splitSourceDirs", "splitPublicSourceDirs", "sharedLibraryFiles"],
   methods: { "<init>()V": function () {} },
 });
 let cachedAppInfo: JApplicationInfo | null = null;
@@ -372,12 +363,9 @@ function requestedPermissions(root = manifestRoot): string[] | null {
 }
 rt.register({
   name: "android/content/pm/PackageInfo", ctor: JPackageInfo, ifaces: ["android/os/Parcelable"],
-  fields: {
-    packageName: "packageName", versionName: "versionName", versionCode: "versionCode", splitNames: "splitNames",
-    applicationInfo: "applicationInfo", firstInstallTime: "firstInstallTime", lastUpdateTime: "lastUpdateTime",
-    signatures: "signatures", signingInfo: "signingInfo", reqFeatures: "reqFeatures", requestedPermissions: "requestedPermissions",
-    activities: "activities", receivers: "receivers", services: "services", providers: "providers",
-  },
+  fields: ["packageName", "versionName", "versionCode", "splitNames", "applicationInfo", "firstInstallTime",
+    "lastUpdateTime", "signatures", "signingInfo", "reqFeatures", "requestedPermissions", "activities", "receivers",
+    "services", "providers"],
   methods: {
     "<init>()V": function () {},
     "getLongVersionCode()J": function (this: JPackageInfo) { return this.longVersionCode; },
@@ -541,13 +529,11 @@ rt.register({
   name: "android/content/pm/InstallSourceInfo", ctor: JInstallSourceInfo, ifaces: ["android/os/Parcelable"],
   // APK loading has no Android installer of record or installer-supplied source metadata.
   methods: {
-    "getInitiatingPackageName()Ljava/lang/String;": () => null,
-    "getInitiatingPackageSigningInfo()Landroid/content/pm/SigningInfo;": () => null,
-    "getOriginatingPackageName()Ljava/lang/String;": () => null,
-    "getInstallingPackageName()Ljava/lang/String;": () => null,
-    "getUpdateOwnerPackageName()Ljava/lang/String;": () => null,
-    "getPackageSource()I": () => 0,
-    "describeContents()I": () => 0,
+    ...stubs(null, "getInitiatingPackageName()Ljava/lang/String;",
+      "getInitiatingPackageSigningInfo()Landroid/content/pm/SigningInfo;",
+      "getOriginatingPackageName()Ljava/lang/String;", "getInstallingPackageName()Ljava/lang/String;",
+      "getUpdateOwnerPackageName()Ljava/lang/String;"),
+    ...stubs(0, "getPackageSource()I", "describeContents()I"),
   },
 });
 class JPackageManager extends JObj {}
@@ -699,15 +685,14 @@ rt.register({
       }
       return -1;
     },
-    "getInstallerPackageName(Ljava/lang/String;)Ljava/lang/String;": () => null,
     "getInstallSourceInfo(Ljava/lang/String;)Landroid/content/pm/InstallSourceInfo;": (pkg: string) => {
       if (!appHost || pkg !== appHost.pkg) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
       return new JInstallSourceInfo();
     },
     "getPackageInstaller()Landroid/content/pm/PackageInstaller;": getPackageInstaller,
-    "canRequestPackageInstalls()Z": () => 1,
-    "isInstantApp()Z": () => 0,
-    "isInstantApp(Ljava/lang/String;)Z": () => 0,
+    ...stubs(null, "getInstallerPackageName(Ljava/lang/String;)Ljava/lang/String;"),
+    ...stubs(1, "canRequestPackageInstalls()Z"),
+    ...stubs(0, "isInstantApp()Z", "isInstantApp(Ljava/lang/String;)Z"),
     "getNameForUid(I)Ljava/lang/String;": (uid: number) => [...packages.values()].find((p) => p.uid === uid)?.pkg ?? null,
     "getPackagesForUid(I)[Ljava/lang/String;": (uid: number) => {
       const names = [...packages.values()].filter((p) => p.uid === uid).map((p) => p.pkg);
@@ -807,9 +792,8 @@ rt.register({
     "isDynamic()Z": function (this: JShortcutInfo) { return this.dynamic ? 1 : 0; },
     "isLongLived()Z": function (this: JShortcutInfo) { return this.longLived ? 1 : 0; },
     "isExcludedFromSurfaces(I)Z": function (this: JShortcutInfo, surfaces: number) { return this.excluded & surfaces ? 1 : 0; },
-    "isPinned()Z": () => 0,
-    "isDeclaredInManifest()Z": () => 0,
-    "isEnabled()Z": () => 1,
+    ...stubs(0, "isPinned()Z", "isDeclaredInManifest()Z"),
+    ...stubs(1, "isEnabled()Z"),
   },
 });
 class JShortcutBuilder extends JObj { info = new JShortcutInfo(); }

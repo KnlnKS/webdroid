@@ -1,6 +1,6 @@
 // android.app.job: JobScheduler surface. Jobs are remembered so schedule/cancel/query stay consistent; nothing here ever runs one.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { JList } from "../jvm/natives/jutil";
 import { JContextWrapper } from "./context";
 
@@ -106,12 +106,10 @@ rt.register({
   methods: {
     "getJobId()I": function (this: JJobParameters) { return this.id; },
     "getExtras()Landroid/os/PersistableBundle;": function (this: JJobParameters) { return this.extras; },
-    "getNetwork()Landroid/net/Network;": () => null,
-    "getTriggeredContentAuthorities()[Ljava/lang/String;": () => null,
-    "getTriggeredContentUris()[Landroid/net/Uri;": () => null,
-    "isOverrideDeadlineExpired()Z": () => 0,
-    "dequeueWork()Landroid/app/job/JobWorkItem;": () => null,
-    "completeWork(Landroid/app/job/JobWorkItem;)V": () => {},
+    ...stubs(null, "getNetwork()Landroid/net/Network;", "getTriggeredContentAuthorities()[Ljava/lang/String;",
+      "getTriggeredContentUris()[Landroid/net/Uri;", "dequeueWork()Landroid/app/job/JobWorkItem;"),
+    ...stubs(0, "isOverrideDeadlineExpired()Z"),
+    ...noops("completeWork(Landroid/app/job/JobWorkItem;)V"),
   },
 });
 class JJobWorkItem extends JObj { intent: unknown = null; }
@@ -126,16 +124,12 @@ rt.register({
 rt.register({
   name: "android/app/job/JobService", ctor: class extends JContextWrapper {}, sup: "android/app/Service",
   methods: {
-    "<init>()V": function () {},
     "onCreate()V": () => {}, "onDestroy()V": () => {},
-    "onStartCommand(Landroid/content/Intent;II)I": () => 1,
-    "stopSelf()V": () => {},
-    "startForeground(ILandroid/app/Notification;)V": () => {},
-    "stopForeground(Z)V": () => {},
-    "onBind(Landroid/content/Intent;)Landroid/os/IBinder;": () => null,
-    "onStartJob(Landroid/app/job/JobParameters;)Z": () => 0,
-    "onStopJob(Landroid/app/job/JobParameters;)Z": () => 0,
-    "jobFinished(Landroid/app/job/JobParameters;Z)V": () => {},
+    ...noops("<init>()V", "stopSelf()V", "startForeground(ILandroid/app/Notification;)V", "stopForeground(Z)V",
+      "jobFinished(Landroid/app/job/JobParameters;Z)V"),
+    ...stubs(1, "onStartCommand(Landroid/content/Intent;II)I"),
+    ...stubs(null, "onBind(Landroid/content/Intent;)Landroid/os/IBinder;"),
+    ...stubs(0, "onStartJob(Landroid/app/job/JobParameters;)Z", "onStopJob(Landroid/app/job/JobParameters;)Z"),
   },
 });
 class JJobServiceEngine extends JObj { svc: unknown = null; }
@@ -144,8 +138,7 @@ rt.register({
   methods: {
     "<init>(Landroid/app/Service;)V": function (this: JJobServiceEngine, s: unknown) { this.svc = s; },
     "getBinder()Landroid/os/IBinder;": () => rt.make("android/os/Binder"),
-    "onStartJob(Landroid/app/job/JobParameters;)Z": () => 0,
-    "onStopJob(Landroid/app/job/JobParameters;)Z": () => 0,
-    "jobFinished(Landroid/app/job/JobParameters;Z)V": () => {},
+    ...stubs(0, "onStartJob(Landroid/app/job/JobParameters;)Z", "onStopJob(Landroid/app/job/JobParameters;)Z"),
+    ...noops("jobFinished(Landroid/app/job/JobParameters;Z)V"),
   },
 });

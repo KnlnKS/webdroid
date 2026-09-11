@@ -1,6 +1,6 @@
 // android.text.* — TextPaint, TextUtils, Spannable/Editable (spans stored, minimally styled).
 
-import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
 import { vcall, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import { type JDate } from "../jvm/natives/jtime";
 import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances } from "./graphics";
@@ -47,7 +47,7 @@ export class JTextPaint extends JPaint {
 }
 rt.register({
   name: "android/text/TextPaint", ctor: JTextPaint, sup: "android/graphics/Paint",
-  fields: { linkColor: "linkColor", bgColor: "bgColor", baselineShift: "baselineShift", drawableState: "drawableState", density: "density" },
+  fields: ["linkColor", "bgColor", "baselineShift", "drawableState", "density"],
   methods: {
     "<init>()V": function () {},
     "<init>(I)V": function () {},
@@ -321,16 +321,14 @@ for (const [name] of [
     name, ctor: c,
     ...spanHierarchy[name],
     methods: {
-      "<init>()V": function () {},
       "<init>(I)V": function (this: any, v: number) { this.color = v; this.style = v; this.size = v; },
       "<init>(F)V": function (this: any, v: number) { this.size = v; },
       "<init>(Ljava/lang/String;)V": function (this: any, v: string) { this.url = v; },
       // ImageSpan's drawable forms: nothing here draws a replacement image, but the span still
       // has to construct or the text it decorates never gets built
       "<init>(Landroid/content/Context;II)V": function () {},
-      "<init>(Landroid/content/Context;I)V": function () {},
-      "<init>(Landroid/graphics/drawable/Drawable;)V": function () {},
-      "<init>(Landroid/graphics/drawable/Drawable;I)V": function () {},
+      ...noops("<init>()V", "<init>(Landroid/content/Context;I)V", "<init>(Landroid/graphics/drawable/Drawable;)V",
+        "<init>(Landroid/graphics/drawable/Drawable;I)V"),
       "getURL()Ljava/lang/String;": function (this: any) { return this.url; },
       "getForegroundColor()I": function (this: any) { return this.color; },
       "getStyle()I": function (this: any) { return this.style; },
@@ -830,11 +828,8 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "static getDesiredWidth(Ljava/lang/CharSequence;Landroid/text/TextPaint;)F": maySuspend((cs: unknown, p: JTextPaint) => desiredWidth(cs, p)),
   "static getDesiredWidth(Ljava/lang/CharSequence;IILandroid/text/TextPaint;)F": maySuspend((cs: unknown, s: number, e: number, p: JTextPaint) => desiredWidth(sliceSpanned(cs, s, e), p)),
   "getLineCount()I": function (this: JLayout) { return this.lines.length; },
-  "isFallbackLineSpacingEnabled()Z": () => 0,
   "getSpacingMultiplier()F": function (this: JLayout) { return this.spacingMult; },
   "getSpacingAdd()F": function (this: JLayout) { return this.spacingAdd; },
-  "getAlignment()Landroid/text/Layout$Alignment;": () => null,
-  "getUseFallbackLineSpacing()Z": () => 0,
   "getLineTop(I)I": function (this: JLayout, i: number) { return this.lineTop(Math.min(i, this.lines.length)); },
   "getLineBottom(I)I": function (this: JLayout, i: number) { return this.lineTop(Math.min(i, this.lines.length - 1) + 1); },
   "getLineBottom(IZ)I": function (this: JLayout, i: number) { return this.lineTop(Math.min(i, this.lines.length - 1) + 1); },
@@ -848,7 +843,6 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
     const l = this.lines[Math.min(i, this.lines.length - 1)];
     return l ? l.start + l.text.length : 0;
   },
-  "getLineLeft(I)F": function () { return 0; },
   "getLineRight(I)F": function (this: JLayout, i: number) { return this.lines[i]?.width ?? 0; },
   "getLineWidth(I)F": function (this: JLayout, i: number) { return this.lines[i]?.width ?? 0; },
   "getLineMax(I)F": function (this: JLayout, i: number) { return this.lines[i]?.width ?? 0; },
@@ -856,13 +850,13 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "getWidth()I": function (this: JLayout) { return this.width; },
   "getText()Ljava/lang/CharSequence;": function (this: JLayout) { return this.src ?? this.text; },
   "getPaint()Landroid/text/TextPaint;": function (this: JLayout) { return this.paint; },
-  "getEllipsisStart(I)I": () => 0,
-  "getEllipsisCount(I)I": () => 0,
   "getEllipsizedWidth()I": function (this: JLayout) { return this.width; },
   "getTopPadding()I": function (this: JLayout) { return -this.padTop; },
   "getBottomPadding()I": function (this: JLayout) { return this.padBottom; },
-  "getParagraphDirection(I)I": () => 1,
-  "isRtlCharAt(I)Z": () => 0,
+  ...stubs(0, "isFallbackLineSpacingEnabled()Z", "getUseFallbackLineSpacing()Z", "getLineLeft(I)F",
+    "getEllipsisStart(I)I", "getEllipsisCount(I)I", "isRtlCharAt(I)Z"),
+  ...stubs(null, "getAlignment()Landroid/text/Layout$Alignment;"),
+  ...stubs(1, "getParagraphDirection(I)I"),
   "getLineForVertical(I)I": function (this: JLayout, y: number) {
     if (this.tops) { let i = 0; while (i + 1 < this.lines.length && this.tops[i + 1] <= y) i++; return i; }
     return Math.max(0, Math.min(this.lines.length - 1, Math.floor((y - this.padTop) / this.lineHeight())));
@@ -926,7 +920,7 @@ class JBoringMetrics extends JObj {
 }
 rt.register({
   name: "android/text/BoringLayout$Metrics", ctor: JBoringMetrics, sup: "android/graphics/Paint$FontMetricsInt",
-  fields: { top: "top", ascent: "ascent", descent: "descent", bottom: "bottom", leading: "leading", width: "width" },
+  fields: ["top", "ascent", "descent", "bottom", "leading", "width"],
   methods: { "<init>()V": function () {} },
 });
 function boringMetrics(text: string, paint: JTextPaint): JBoringMetrics | null {
@@ -1088,8 +1082,8 @@ class JTime extends JObj {
 const p2 = (n: number) => String(n).padStart(2, "0");
 rt.register({
   name: "android/text/format/Time", ctor: JTime,
-  fields: { year: "year", month: "month", monthDay: "monthDay", hour: "hour", minute: "minute", second: "second",
-    weekDay: "weekDay", yearDay: "yearDay", isDst: "isDst", gmtoff: "gmtoff", timezone: "timezone", allDay: "allDay" },
+  fields: ["year", "month", "monthDay", "hour", "minute", "second", "weekDay", "yearDay", "isDst", "gmtoff",
+    "timezone", "allDay"],
   statics: { TIMEZONE_UTC: "UTC", EPOCH_JULIAN_DAY: 2440588, MONDAY_BEFORE_JULIAN_EPOCH: 2440585 },
   methods: {
     "<init>()V": function () {},
@@ -1137,16 +1131,15 @@ rt.register({
 rt.markers("android/text/method/TransformationMethod", "android/text/method/MovementMethod");
 class JBaseMovementMethod extends JObj {}
 const movementMethods: NonNullable<NativeSpec["methods"]> = {
-  "<init>()V": function () {},
-  "initialize(Landroid/widget/TextView;Landroid/text/Spannable;)V": () => {},
-  "onTakeFocus(Landroid/widget/TextView;Landroid/text/Spannable;I)V": () => {},
-  "onKeyDown(Landroid/widget/TextView;Landroid/text/Spannable;ILandroid/view/KeyEvent;)Z": () => 0,
-  "onKeyUp(Landroid/widget/TextView;Landroid/text/Spannable;ILandroid/view/KeyEvent;)Z": () => 0,
-  "onKeyOther(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/KeyEvent;)Z": () => 0,
-  "onTrackballEvent(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/MotionEvent;)Z": () => 0,
-  "onTouchEvent(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/MotionEvent;)Z": () => 0,
-  "onGenericMotionEvent(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/MotionEvent;)Z": () => 0,
-  "canSelectArbitrarily()Z": () => 0,
+  ...noops("<init>()V", "initialize(Landroid/widget/TextView;Landroid/text/Spannable;)V",
+    "onTakeFocus(Landroid/widget/TextView;Landroid/text/Spannable;I)V"),
+  ...stubs(0, "onKeyDown(Landroid/widget/TextView;Landroid/text/Spannable;ILandroid/view/KeyEvent;)Z",
+    "onKeyUp(Landroid/widget/TextView;Landroid/text/Spannable;ILandroid/view/KeyEvent;)Z",
+    "onKeyOther(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/KeyEvent;)Z",
+    "onTrackballEvent(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/MotionEvent;)Z",
+    "onTouchEvent(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/MotionEvent;)Z",
+    "onGenericMotionEvent(Landroid/widget/TextView;Landroid/text/Spannable;Landroid/view/MotionEvent;)Z",
+    "canSelectArbitrarily()Z"),
 };
 rt.register({ name: "android/text/method/BaseMovementMethod", ctor: JBaseMovementMethod, ifaces: ["android/text/method/MovementMethod"], methods: movementMethods });
 class JScrollingMovementMethod extends JBaseMovementMethod {}

@@ -1,5 +1,5 @@
 import { services, type JContext } from "./context";
-import { rt, type NativeSpec, JObj, maySuspend } from "../jvm/runtime";
+import { rt, type NativeSpec, JObj, maySuspend, stubs, noops } from "../jvm/runtime";
 import { appHost, type AppHost } from "./apphost";
 import { type JUri, mkUri } from "./net";
 import {
@@ -185,11 +185,10 @@ class JUriPermission extends JObj { uriStr = ""; }
 rt.register({
   name: "android/content/UriPermission", ctor: JUriPermission,
   methods: {
-    "<init>()V": function () {},
     "getUri()Landroid/net/Uri;": function (this: JUriPermission) { return mkUri(this.uriStr); },
-    "isReadPermission()Z": () => 1,
-    "isWritePermission()Z": () => 1,
-    "getPersistedTime()J": () => 0n,
+    ...noops("<init>()V"),
+    ...stubs(1, "isReadPermission()Z", "isWritePermission()Z"),
+    ...stubs(0n, "getPersistedTime()J"),
   },
 });
 

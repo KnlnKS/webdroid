@@ -1,6 +1,6 @@
 // Overlay layer: toasts, popup menus, dialogs-lite. Drawn above the decor by the shell.
 
-import { rt, JObj, type NativeSpec, callSelf, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf, maySuspend, stubs, noops } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
@@ -370,7 +370,6 @@ function pwUpdateAnchor(this: JPopupWindow, anchor: JView, xoff: number, yoff: n
   return pwUpdate.call(this);
 }
 const pwMethods: NonNullable<NativeSpec["methods"]> = {
-  "<init>()V": function () {},
   "<init>(II)V": function (this: JPopupWindow, w: number, h: number) { this.w = w; this.h = h; },
   "<init>(Landroid/view/View;)V": pwSetContent,
   "<init>(Landroid/view/View;II)V": function (this: JPopupWindow, v: JView, w: number, h: number) { pwSetContent.call(this, v); this.w = w; this.h = h; },
@@ -398,16 +397,6 @@ const pwMethods: NonNullable<NativeSpec["methods"]> = {
   "isClippingEnabled()Z": function (this: JPopupWindow) { return this.clipping ? 1 : 0; },
   "setIsClippedToScreen(Z)V": function (this: JPopupWindow, f: number) { this.clipping = !!f; },
   "isClippedToScreen()Z": function (this: JPopupWindow) { return this.clipping ? 1 : 0; },
-  "setIsLaidOutInScreen(Z)V": () => {},
-  "setAttachedInDecor(Z)V": () => {},
-  "isAttachedInDecor()Z": () => 1,
-  "setSplitTouchEnabled(Z)V": () => {},
-  "isSplitTouchEnabled()Z": () => 1,
-  "setTouchModal(Z)V": () => {},
-  "setIgnoreCheekPress()V": () => {},
-  "setLayoutInScreenEnabled(Z)V": () => {},
-  "setAllowScrollingAnchorParent(Z)V": () => {},
-  "setWindowLayoutMode(II)V": () => {},
   "setOverlapAnchor(Z)V": function (this: JPopupWindow, f: number) { this.overlapAnchor = !!f; },
   "getOverlapAnchor()Z": function (this: JPopupWindow) { return this.overlapAnchor ? 1 : 0; },
   "isAboveAnchor()Z": function (this: JPopupWindow) { return this.aboveAnchor ? 1 : 0; },
@@ -423,10 +412,13 @@ const pwMethods: NonNullable<NativeSpec["methods"]> = {
   "getElevation()F": function (this: JPopupWindow) { return this.elevation; },
   "setEpicenterBounds(Landroid/graphics/Rect;)V": function (this: JPopupWindow, r: JRect | null) { this.epicenter = r; },
   "getEpicenterBounds()Landroid/graphics/Rect;": function (this: JPopupWindow) { return this.epicenter; },
-  "setEnterTransition(Landroid/transition/Transition;)V": () => {},
-  "setExitTransition(Landroid/transition/Transition;)V": () => {},
-  "getEnterTransition()Landroid/transition/Transition;": () => null,
-  "getExitTransition()Landroid/transition/Transition;": () => null,
+  ...noops("<init>()V", "setIsLaidOutInScreen(Z)V", "setAttachedInDecor(Z)V", "setSplitTouchEnabled(Z)V",
+    "setTouchModal(Z)V", "setIgnoreCheekPress()V", "setLayoutInScreenEnabled(Z)V", "setAllowScrollingAnchorParent(Z)V",
+    "setWindowLayoutMode(II)V", "setEnterTransition(Landroid/transition/Transition;)V",
+    "setExitTransition(Landroid/transition/Transition;)V"),
+  ...stubs(1, "isAttachedInDecor()Z", "isSplitTouchEnabled()Z"),
+  ...stubs(null, "getEnterTransition()Landroid/transition/Transition;",
+    "getExitTransition()Landroid/transition/Transition;"),
   "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JPopupWindow, d: JDrawable | null) {
     this.bg = d;
     if (this.decor) { this.decor.background = d; [this.decor.padL, this.decor.padT, this.decor.padR, this.decor.padB] = this.bgPad(); requestLayout(this.decor); }

@@ -3,7 +3,7 @@
 // listeners, duration — and beginDelayedTransition lets the next layout land while still
 // telling listeners the transition started and ended, on the main queue.
 
-import { rt, JObj, type NativeSpec, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { onMain } from "./mainloop";
@@ -69,12 +69,11 @@ const transitionMethods: NonNullable<NativeSpec["methods"]> = {
   "getPathMotion()Landroid/transition/PathMotion;": function (this: JTransition) { return this.pathMotion; },
   "setPropagation(Landroid/transition/TransitionPropagation;)V": function (this: JTransition, p: unknown) { this.propagation = p; },
   "getPropagation()Landroid/transition/TransitionPropagation;": function (this: JTransition) { return this.propagation; },
-  "setMatchOrder([I)V": () => {},
-  "getTransitionProperties()[Ljava/lang/String;": () => null,
-  "captureStartValues(Landroid/transition/TransitionValues;)V": () => {},
-  "captureEndValues(Landroid/transition/TransitionValues;)V": () => {},
-  "createAnimator(Landroid/view/ViewGroup;Landroid/transition/TransitionValues;Landroid/transition/TransitionValues;)Landroid/animation/Animator;": () => null,
-  "canRemoveViews()Z": () => 0,
+  ...noops("setMatchOrder([I)V", "captureStartValues(Landroid/transition/TransitionValues;)V",
+    "captureEndValues(Landroid/transition/TransitionValues;)V"),
+  ...stubs(null, "getTransitionProperties()[Ljava/lang/String;",
+    "createAnimator(Landroid/view/ViewGroup;Landroid/transition/TransitionValues;Landroid/transition/TransitionValues;)Landroid/animation/Animator;"),
+  ...stubs(0, "canRemoveViews()Z"),
   "clone()Landroid/transition/Transition;": maySuspend(function (this: JTransition) {
     const c = new (this.constructor as any)() as JTransition;
     Object.assign(c, this, { listeners: [], targets: newArrayList([...this.targets.a]), targetIds: newArrayList([...this.targetIds.a]) });
@@ -158,13 +157,12 @@ function beginDelayed(t: JTransition | null) {
 rt.register({
   name: "android/transition/TransitionManager", ctor: class extends JObj {},
   methods: {
-    "<init>()V": function () {},
     "static beginDelayedTransition(Landroid/view/ViewGroup;)V": () => beginDelayed(null),
     "static beginDelayedTransition(Landroid/view/ViewGroup;Landroid/transition/Transition;)V": (_root: unknown, t: JTransition | null) => beginDelayed(t),
-    "static endTransitions(Landroid/view/ViewGroup;)V": () => {},
     "static go(Landroid/transition/Scene;)V": maySuspend((s: unknown) => vcall(s, "enter", "()V")),
     "static go(Landroid/transition/Scene;Landroid/transition/Transition;)V": maySuspend((s: unknown, t: JTransition | null) => { beginDelayed(t); return vcall(s, "enter", "()V"); }),
-    "setTransition(Landroid/transition/Scene;Landroid/transition/Transition;)V": () => {},
+    ...noops("<init>()V", "static endTransitions(Landroid/view/ViewGroup;)V",
+      "setTransition(Landroid/transition/Scene;Landroid/transition/Transition;)V"),
     "transitionTo(Landroid/transition/Scene;)V": maySuspend((s: unknown) => vcall(s, "enter", "()V")),
   },
 });

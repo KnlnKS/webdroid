@@ -1,6 +1,6 @@
 // GLSurfaceView: owns a WebGL canvas, drives the Renderer, blits into the 2D framebuffer.
 
-import { rt, JObj, maySuspend } from "../jvm/runtime";
+import { rt, JObj, maySuspend, stubs, noops } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, JThread, setCurThread, curThread } from "../jvm/natives/jlang";
@@ -82,11 +82,6 @@ rt.register({
     "<init>(Landroid/content/Context;)V": async function (this: JGLSurfaceView, c: unknown) { await initViewFromCtx(this, c, null); },
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JGLSurfaceView, c: unknown, set: any) { await initViewFromCtx(this, c, set); },
     "setEGLConfigChooser(Landroid/opengl/GLSurfaceView$EGLConfigChooser;)V": function (this: JGLSurfaceView, c: unknown) { this.configChooser = c; },
-    "setEGLConfigChooser(ZZ)V": () => {},
-    "setEGLConfigChooser(IIIIII)V": () => {},
-    "setEGLContextClientVersion(I)V": () => {},
-    "setEGLContextFactory(Landroid/opengl/GLSurfaceView$EGLContextFactory;)V": () => {},
-    "setEGLWindowSurfaceFactory(Landroid/opengl/GLSurfaceView$EGLWindowSurfaceFactory;)V": () => {},
     "setRenderer(Landroid/opengl/GLSurfaceView$Renderer;)V": function (this: JGLSurfaceView, r: unknown) {
       this.renderer = r;
       if (this.hook) uiState.animHooks.delete(this.hook);
@@ -124,10 +119,11 @@ rt.register({
     // setPreserveEGLContextOnPause(true) behaviour and the only one we can offer.
     "onResume()V": function (this: JGLSurfaceView) { this.paused = false; invalidate(); },
     "onPause()V": function (this: JGLSurfaceView) { this.paused = true; },
-    "setPreserveEGLContextOnPause(Z)V": () => {},
     "getHolder()Landroid/view/SurfaceHolder;": function (this: JGLSurfaceView) { return getHolder(this); },
-    "setZOrderOnTop(Z)V": () => {},
-    "setDebugFlags(I)V": () => {},
+    ...noops("setEGLConfigChooser(ZZ)V", "setEGLConfigChooser(IIIIII)V", "setEGLContextClientVersion(I)V",
+      "setEGLContextFactory(Landroid/opengl/GLSurfaceView$EGLContextFactory;)V",
+      "setEGLWindowSurfaceFactory(Landroid/opengl/GLSurfaceView$EGLWindowSurfaceFactory;)V",
+      "setPreserveEGLContextOnPause(Z)V", "setZOrderOnTop(Z)V", "setDebugFlags(I)V"),
     "onMeasure(II)V": function (this: JGLSurfaceView, w: number, h: number) {
       this.measuredW = defaultSize(specSize(w), w);
       this.measuredH = defaultSize(specSize(h), h);
@@ -298,15 +294,11 @@ rt.register({
     "removeCallback(Landroid/view/SurfaceHolder$Callback;)V": function (this: JSurfaceHolder, cb: unknown) { const i = this.callbacks.indexOf(cb); if (i >= 0) this.callbacks.splice(i, 1); },
     "getSurface()Landroid/view/Surface;": function (this: JSurfaceHolder) { return this.jsurface ??= Object.assign(new JSurface(), { holder: this }); },
     "setFormat(I)V": function (this: JSurfaceHolder, f: number) { this.format = f; },
-    "setType(I)V": () => {},
-    "setKeepScreenOn(Z)V": () => {},
-    "setFixedSize(II)V": () => {},
-    "setSizeFromLayout()V": () => {},
-    "isCreating()Z": () => 0,
-    "getSurfaceFrame()Landroid/graphics/Rect;": function (this: JSurfaceHolder) { return null; },
-    "lockCanvas()Landroid/graphics/Canvas;": () => null,
-    "lockCanvas(Landroid/graphics/Rect;)Landroid/graphics/Canvas;": () => null,
-    "unlockCanvasAndPost(Landroid/graphics/Canvas;)V": () => {},
+    ...noops("setType(I)V", "setKeepScreenOn(Z)V", "setFixedSize(II)V", "setSizeFromLayout()V",
+      "unlockCanvasAndPost(Landroid/graphics/Canvas;)V"),
+    ...stubs(0, "isCreating()Z"),
+    ...stubs(null, "getSurfaceFrame()Landroid/graphics/Rect;", "lockCanvas()Landroid/graphics/Canvas;",
+      "lockCanvas(Landroid/graphics/Rect;)Landroid/graphics/Canvas;"),
   },
 });
 rt.markers("android/view/SurfaceHolder$Callback");
@@ -448,9 +440,7 @@ rt.register({
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JSurfaceView, c: unknown, set: any) { await initViewFromCtx(this, c, set); },
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": async function (this: JSurfaceView, c: unknown, set: any) { await initViewFromCtx(this, c, set); },
     "getHolder()Landroid/view/SurfaceHolder;": function (this: JSurfaceView) { return getHolder(this); },
-    "setZOrderOnTop(Z)V": () => {},
-    "setZOrderMediaOverlay(Z)V": () => {},
-    "setSecure(Z)V": () => {},
+    ...noops("setZOrderOnTop(Z)V", "setZOrderMediaOverlay(Z)V", "setSecure(Z)V"),
     "onMeasure(II)V": function (this: JSurfaceView, w: number, h: number) {
       this.measuredW = defaultSize(specSize(w), w);
       this.measuredH = defaultSize(specSize(h), h);
@@ -545,11 +535,10 @@ rt.register({
       async (_d: unknown, s: JEGLSurface | null) => { const c = glSurfaces.current; if (!s?.surf || c?.target !== s.surf) return 0; await c.swap(); return 1; },
     "eglQuerySurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;I[I)Z":
       (_d: unknown, s: JEGLSurface | null, attr: number, out: Int32Array) => { out[0] = attr === 0x3057 ? s?.surf?.width ?? 0 : attr === 0x3056 ? s?.surf?.height ?? 0 : 0; return 1; },
-    "eglDestroySurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;)Z": () => 1,
-    "eglDestroyContext(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLContext;)Z": () => 1,
-    "eglTerminate(Ljavax/microedition/khronos/egl/EGLDisplay;)Z": () => 1,
-    "eglWaitGL()Z": () => 1,
-    "eglWaitNative(ILjava/lang/Object;)Z": () => 1,
+    ...stubs(1, "eglDestroySurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;)Z",
+      "eglDestroyContext(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLContext;)Z",
+      "eglTerminate(Ljavax/microedition/khronos/egl/EGLDisplay;)Z", "eglWaitGL()Z",
+      "eglWaitNative(ILjava/lang/Object;)Z"),
     "eglGetCurrentContext()Ljavax/microedition/khronos/egl/EGLContext;": () => { const c = new JEGLContext(); c.egl = glSurfaces.current ?? new EglContext(); return c; },
   },
 });

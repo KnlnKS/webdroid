@@ -1,6 +1,6 @@
 // org.xmlpull.v1 over text XML: the browser parses, and the parser replays the tree as the pull
 // events the API defines. The binary-resource parser in resnative.ts is a separate object.
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, stubs } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
 
@@ -117,9 +117,8 @@ rt.register({
       const a = this.cur.attrs.find((x) => (this.nsAware ? x.localName : x.name) === name && (ns === null || ns === "" || x.namespaceURI === ns));
       return a ? a.value : null;
     },
-    "getNamespaceCount(I)I": () => 0,
-    "getLineNumber()I": () => -1,
-    "getColumnNumber()I": () => -1,
+    ...stubs(0, "getNamespaceCount(I)I"),
+    ...stubs(-1, "getLineNumber()I", "getColumnNumber()I"),
     [`getPositionDescription()${S}`]: function (this: JXmlPull) { return `event ${this.i}`; },
     [`getInputEncoding()${S}`]: () => "UTF-8",
   },

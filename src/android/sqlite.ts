@@ -3,7 +3,7 @@ import { JMap } from "../jvm/natives/jutil";
 
 import initSqlJs, { type Database, type Statement } from "sql.js";
 import { charsToString, i8, u8 } from "../jvm/abi";
-import { rt, JObj, type NativeSpec, callSelf, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf, maySuspend, stubs, noops } from "../jvm/runtime";
 import { vcall, boxInt, box, JLong, JBool } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { JBundle } from "./os";
@@ -307,15 +307,14 @@ const cursorMethods: NativeSpec["methods"] = {
   },
   "close()V": function (this: JCursor) { this.closed = true; },
   "isClosed()Z": function (this: JCursor) { return this.closed ? 1 : 0; },
-  "registerContentObserver(Landroid/database/ContentObserver;)V": () => {},
-  "unregisterContentObserver(Landroid/database/ContentObserver;)V": () => {},
-  "registerDataSetObserver(Landroid/database/DataSetObserver;)V": () => {},
-  "unregisterDataSetObserver(Landroid/database/DataSetObserver;)V": () => {},
-  "setNotificationUri(Landroid/content/ContentResolver;Landroid/net/Uri;)V": () => {},
-  "getNotificationUri()Landroid/net/Uri;": () => null,
-  "getWantsAllOnMoveCalls()Z": () => 0,
-  "deactivate()V": () => {},
-  "requery()Z": () => 1,
+  ...noops("registerContentObserver(Landroid/database/ContentObserver;)V",
+    "unregisterContentObserver(Landroid/database/ContentObserver;)V",
+    "registerDataSetObserver(Landroid/database/DataSetObserver;)V",
+    "unregisterDataSetObserver(Landroid/database/DataSetObserver;)V",
+    "setNotificationUri(Landroid/content/ContentResolver;Landroid/net/Uri;)V", "deactivate()V"),
+  ...stubs(null, "getNotificationUri()Landroid/net/Uri;"),
+  ...stubs(0, "getWantsAllOnMoveCalls()Z"),
+  ...stubs(1, "requery()Z"),
   "getExtras()Landroid/os/Bundle;": () => new JBundle(),
   "respond(Landroid/os/Bundle;)Landroid/os/Bundle;": () => new JBundle(),
 };
@@ -421,8 +420,6 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
       query.jdb = this; query.sql = sql; query.binds = args?.slice() ?? []; driver.query = query;
       return vcall(factory, "newCursor", "(Landroid/database/sqlite/SQLiteDatabase;Landroid/database/sqlite/SQLiteCursorDriver;Ljava/lang/String;Landroid/database/sqlite/SQLiteQuery;)Landroid/database/Cursor;", this, driver, editTable, query);
     },
-  "setMaxSqlCacheSize(I)V": () => {},
-  "isWriteAheadLoggingEnabled()Z": () => 0,
   "rawQuery(Ljava/lang/String;[Ljava/lang/String;)Landroid/database/Cursor;": function (this: JSQLiteDatabase, sql: string, args: unknown[] | null) {
     return runQuery(this, sql, args);
   },
@@ -513,13 +510,9 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
     return newArrayList([p]);
   },
   "isReadOnly()Z": function (this: JSQLiteDatabase) { return this.readOnly ? 1 : 0; },
-  "isDbLockedByCurrentThread()Z": () => 0,
   "setForeignKeyConstraintsEnabled(Z)V": function (this: JSQLiteDatabase, on: number) {
     this.db!.exec("PRAGMA foreign_keys = " + (on ? "ON" : "OFF"));
   },
-  "enableWriteAheadLogging()Z": () => 0,
-  "disableWriteAheadLogging()V": () => {},
-  "setLocale(Ljava/util/Locale;)V": () => {},
   "setMaximumSize(J)J": (v: bigint) => v,
   "compileStatement(Ljava/lang/String;)Landroid/database/sqlite/SQLiteStatement;": function (this: JSQLiteDatabase, sql: string) {
     rt.link("android/database/sqlite/SQLiteStatement");
@@ -528,8 +521,9 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
     st.sql = sql;
     return st;
   },
-  "yieldIfContendedSafely()Z": () => 0,
-  "static releaseMemory()I": () => 0,
+  ...noops("setMaxSqlCacheSize(I)V", "disableWriteAheadLogging()V", "setLocale(Ljava/util/Locale;)V"),
+  ...stubs(0, "isWriteAheadLoggingEnabled()Z", "isDbLockedByCurrentThread()Z", "enableWriteAheadLogging()Z",
+    "yieldIfContendedSafely()Z", "static releaseMemory()I"),
 };
 function buildQuery(table: string, cols: string[] | null, sel: string | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null): string {
   const c = cols?.length ? cols.join(",") : "*";
@@ -691,13 +685,11 @@ rt.register({
       return openHelperDb(this);
     },
     "getDatabaseName()Ljava/lang/String;": function (this: JSQLiteOpenHelper) { return this.name; },
-    "onCreate(Landroid/database/sqlite/SQLiteDatabase;)V": function () {},
-    "onUpgrade(Landroid/database/sqlite/SQLiteDatabase;II)V": function () {},
-    "onDowngrade(Landroid/database/sqlite/SQLiteDatabase;II)V": function () {},
-    "onOpen(Landroid/database/sqlite/SQLiteDatabase;)V": function () {},
-    "onConfigure(Landroid/database/sqlite/SQLiteDatabase;)V": function () {},
     "close()V": function (this: JSQLiteOpenHelper) { this.jdb?.scheduleSave(); },
-    "setWriteAheadLoggingEnabled(Z)V": () => {},
+    ...noops("onCreate(Landroid/database/sqlite/SQLiteDatabase;)V",
+      "onUpgrade(Landroid/database/sqlite/SQLiteDatabase;II)V",
+      "onDowngrade(Landroid/database/sqlite/SQLiteDatabase;II)V", "onOpen(Landroid/database/sqlite/SQLiteDatabase;)V",
+      "onConfigure(Landroid/database/sqlite/SQLiteDatabase;)V", "setWriteAheadLoggingEnabled(Z)V"),
   },
 });
 async function openHelperDb(h: JSQLiteOpenHelper): Promise<JSQLiteDatabase> {

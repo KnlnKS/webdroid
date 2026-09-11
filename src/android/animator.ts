@@ -1,6 +1,6 @@
 // android.animation: ValueAnimator/ObjectAnimator/AnimatorSet, driven from the frame loop via uiState.animHooks.
 
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { vcall, vcallMaybe, boxInt, box, JFloat } from "../jvm/natives/jlang";
 import { toJsArray, newArrayList } from "../jvm/natives/jutil";
@@ -263,7 +263,6 @@ function setDur(this: JValueAnimator, d: bigint) {
   return this;
 }
 const vaMethods: NativeSpec["methods"] = {
-  "<init>()V": function () {},
   "setDuration(J)Landroid/animation/ValueAnimator;": setDur,
   "setDuration(J)Landroid/animation/Animator;": setDur,
   "getDuration()J": function (this: JValueAnimator) { return BigInt(this.durationMs); },
@@ -284,7 +283,6 @@ const vaMethods: NativeSpec["methods"] = {
     const i = this.updateLs.indexOf(l); if (i >= 0) this.updateLs.splice(i, 1);
   },
   "getListeners()Ljava/util/ArrayList;": function (this: JValueAnimator) { return this.animLs.length ? newArrayList([...this.animLs]) : null; },
-  "addPauseListener(Landroid/animation/Animator$AnimatorPauseListener;)V": () => {},
   "pause()V": function (this: JValueAnimator) { if (this.running && !this.paused) { this.paused = true; this.pausedAt = performance.now(); } },
   "resume()V": function (this: JValueAnimator) { if (this.paused) { this.paused = false; this.startT += performance.now() - this.pausedAt; } },
   "isPaused()Z": function (this: JValueAnimator) { return this.paused ? 1 : 0; },
@@ -304,13 +302,12 @@ const vaMethods: NativeSpec["methods"] = {
     const h = this.holders.find((h) => h.name === name);
     return h ? boxedCur(h) : boxedCur(this);
   },
-  "static areAnimatorsEnabled()Z": () => 1,
-  "static getDurationScale()F": () => 1,
-  "static setDurationScale(F)V": () => {},
   "static getFrameDelay()J": () => 10n,
-  "static setFrameDelay(J)V": () => {},
-  "static registerDurationScaleChangeListener(Landroid/animation/ValueAnimator$DurationScaleChangeListener;)Z": () => 1,
-  "static unregisterDurationScaleChangeListener(Landroid/animation/ValueAnimator$DurationScaleChangeListener;)Z": () => 1,
+  ...noops("<init>()V", "addPauseListener(Landroid/animation/Animator$AnimatorPauseListener;)V",
+    "static setDurationScale(F)V", "static setFrameDelay(J)V"),
+  ...stubs(1, "static areAnimatorsEnabled()Z", "static getDurationScale()F",
+    "static registerDurationScaleChangeListener(Landroid/animation/ValueAnimator$DurationScaleChangeListener;)Z",
+    "static unregisterDurationScaleChangeListener(Landroid/animation/ValueAnimator$DurationScaleChangeListener;)Z"),
   "static ofObject(Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/ValueAnimator;": (ev: unknown, vals: unknown[]) => {
     const a = new JValueAnimator();
     a.evaluator = ev; a.objKeys = [...(vals ?? [])];
@@ -530,23 +527,19 @@ rt.register({
   name: "android/animation/LayoutTransition", ctor: JLayoutTransition,
   statics: { CHANGE_APPEARING: 0, CHANGE_DISAPPEARING: 1, APPEARING: 2, DISAPPEARING: 3, CHANGING: 4 },
   methods: {
-    "<init>()V": function () {},
     "enableTransitionType(I)V": function (this: JLayoutTransition, t: number) { this.enabled.add(t); },
     "disableTransitionType(I)V": function (this: JLayoutTransition, t: number) { this.enabled.delete(t); },
     "isTransitionTypeEnabled(I)Z": function (this: JLayoutTransition, t: number) { return this.enabled.has(t) ? 1 : 0; },
     "setDuration(J)V": function (this: JLayoutTransition, d: bigint) { for (let t = 0; t < 5; t++) this.durations.set(t, Number(d)); },
     "setDuration(IJ)V": function (this: JLayoutTransition, t: number, d: bigint) { this.durations.set(t, Number(d)); },
     "getDuration(I)J": function (this: JLayoutTransition, t: number) { return BigInt(this.durations.get(t) ?? 300); },
-    "setStartDelay(IJ)V": () => {},
-    "setStagger(IJ)V": () => {},
-    "setInterpolator(ILandroid/animation/TimeInterpolator;)V": () => {},
-    "setAnimator(ILandroid/animation/Animator;)V": () => {},
-    "getAnimator(I)Landroid/animation/Animator;": () => null,
-    "setAnimateParentHierarchy(Z)V": () => {},
     "addTransitionListener(Landroid/animation/LayoutTransition$TransitionListener;)V": function (this: JLayoutTransition, l: unknown) { this.listeners.push(l); },
     "removeTransitionListener(Landroid/animation/LayoutTransition$TransitionListener;)V": function (this: JLayoutTransition, l: unknown) { const i = this.listeners.indexOf(l); if (i >= 0) this.listeners.splice(i, 1); },
-    "isRunning()Z": () => 0,
-    "isChangingLayout()Z": () => 0,
+    ...noops("<init>()V", "setStartDelay(IJ)V", "setStagger(IJ)V",
+      "setInterpolator(ILandroid/animation/TimeInterpolator;)V", "setAnimator(ILandroid/animation/Animator;)V",
+      "setAnimateParentHierarchy(Z)V"),
+    ...stubs(null, "getAnimator(I)Landroid/animation/Animator;"),
+    ...stubs(0, "isRunning()Z", "isChangingLayout()Z"),
   },
 });
 rt.markers("android/animation/LayoutTransition$TransitionListener", "android/animation/Animator$AnimatorPauseListener",
@@ -647,10 +640,8 @@ rt.register({
   name: "android/animation/AnimatorListenerAdapter", ctor: class extends JObj {},
   ifaces: ["android/animation/Animator$AnimatorListener"],
   methods: {
-    "<init>()V": function () {},
-    "onAnimationStart(Landroid/animation/Animator;)V": () => {},
-    "onAnimationEnd(Landroid/animation/Animator;)V": () => {},
-    "onAnimationCancel(Landroid/animation/Animator;)V": () => {},
-    "onAnimationRepeat(Landroid/animation/Animator;)V": () => {},
+    ...noops("<init>()V", "onAnimationStart(Landroid/animation/Animator;)V",
+      "onAnimationEnd(Landroid/animation/Animator;)V", "onAnimationCancel(Landroid/animation/Animator;)V",
+      "onAnimationRepeat(Landroid/animation/Animator;)V"),
   },
 });

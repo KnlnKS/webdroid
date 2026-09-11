@@ -1,4 +1,4 @@
-import { rt, JObj, callSelf, maySuspend } from "../jvm/runtime";
+import { rt, JObj, callSelf, maySuspend, stubs, noops } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import type { JFrameLayout } from "./layouts";
 import type { JActionBarView } from "./menu";
@@ -64,12 +64,6 @@ export function darken(c: number): number {
 rt.register({
   name: "android/view/Window", ctor: JWindow,
   methods: {
-    "setStatusBarContrastEnforced(Z)V": () => {},
-    "setNavigationBarContrastEnforced(Z)V": () => {},
-    "addOnFrameMetricsAvailableListener(Landroid/view/Window$OnFrameMetricsAvailableListener;Landroid/os/Handler;)V": () => {},
-    "removeOnFrameMetricsAvailableListener(Landroid/view/Window$OnFrameMetricsAvailableListener;)V": () => {},
-    "isStatusBarContrastEnforced()Z": () => 0,
-    "isNavigationBarContrastEnforced()Z": () => 0,
     "getDecorView()Landroid/view/View;": async function (this: JWindow) {
       // AOSP installs the real decor on first access (appcompat asks for it before
       // setContentView); dialog windows materialize a bare one so insets helpers can operate
@@ -106,10 +100,8 @@ rt.register({
     },
     "getStatusBarColor()I": () => appHost?.statusBarColor ?? -16777216,
     "setNavigationBarColor(I)V": function (this: JWindow, c: number) { if (appHost) appHost.navBarColor = c; },
-    "setSharedElementsUseOverlay(Z)V": () => {},
     "setNavigationBarDividerColor(I)V": function (this: JWindow, c: number) { this.navBarDividerColor = c; invalidate(); },
     "getNavigationBarDividerColor()I": function (this: JWindow) { return this.navBarDividerColor; },
-    "setSoftInputMode(I)V": () => {},
     "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JWindow, d: JDrawable | null) {
       this.bg = d; this.bgSet = true;
       if (this.activity && this.decor) this.decor.background = d;
@@ -137,19 +129,22 @@ rt.register({
       if (this.activity) callSelf(activityMethods, "setTitle(Ljava/lang/CharSequence;)V", this.activity, t);
     }),
     "getContext()Landroid/content/Context;": function (this: JWindow) { return this.activity ?? (this.dialog as { jctx?: unknown } | null)?.jctx ?? null; },
-    "setWindowAnimations(I)V": () => {},
     "setLayout(II)V": function (this: JWindow, w: number, h: number) { this.layoutW = w; this.layoutH = h; requestLayout(this.decor); },
     "setGravity(I)V": function (this: JWindow, g: number) { this.gravity = g; requestLayout(this.decor); },
     "setDimAmount(F)V": function (this: JWindow, a: number) { this.dimAmount = a; invalidate(); },
     "getWindowManager()Landroid/view/WindowManager;": function (this: JWindow) { return systemService(this.activity, "window"); },
-    "setFeatureInt(II)V": () => {},
     "hasFeature(I)Z": function (this: JWindow, f: number) { return this.features.has(f) ? 1 : 0; },
     "getInsetsController()Landroid/view/WindowInsetsController;": function (this: JWindow) {
       if (!this.insetsController) { rt.link("webdroid/InsetsController"); this.insetsController = new JInsetsController(); this.insetsController.w = this; }
       return this.insetsController;
     },
-    "setDecorFitsSystemWindows(Z)V": () => {},
-    "getSharedElementEnterTransition()Landroid/transition/Transition;": () => null,
+    ...noops("setStatusBarContrastEnforced(Z)V", "setNavigationBarContrastEnforced(Z)V",
+      "addOnFrameMetricsAvailableListener(Landroid/view/Window$OnFrameMetricsAvailableListener;Landroid/os/Handler;)V",
+      "removeOnFrameMetricsAvailableListener(Landroid/view/Window$OnFrameMetricsAvailableListener;)V",
+      "setSharedElementsUseOverlay(Z)V", "setSoftInputMode(I)V", "setWindowAnimations(I)V", "setFeatureInt(II)V",
+      "setDecorFitsSystemWindows(Z)V"),
+    ...stubs(0, "isStatusBarContrastEnforced()Z", "isNavigationBarContrastEnforced()Z"),
+    ...stubs(null, "getSharedElementEnterTransition()Landroid/transition/Transition;"),
   },
 });
 // The API-30 controller: appearance/behavior are window state (the shell reads the
@@ -172,13 +167,12 @@ rt.register({
     "getSystemBarsAppearance()I": function (this: JInsetsController) { return this.w.appearance; },
     "setSystemBarsBehavior(I)V": function (this: JInsetsController, b: number) { this.w.barsBehavior = b; },
     "getSystemBarsBehavior()I": function (this: JInsetsController) { return this.w.barsBehavior; },
-    "show(I)V": () => {},
-    "hide(I)V": () => {},
     "addOnControllableInsetsChangedListener(Landroid/view/WindowInsetsController$OnControllableInsetsChangedListener;)V": maySuspend(function (this: JInsetsController, listener: unknown) {
       return vcall(listener, "onControllableInsetsChanged", "(Landroid/view/WindowInsetsController;I)V", this, 0);
     }),
-    "removeOnControllableInsetsChangedListener(Landroid/view/WindowInsetsController$OnControllableInsetsChangedListener;)V": () => {},
-    "controlWindowInsetsAnimation(IJLandroid/view/animation/Interpolator;Landroid/os/CancellationSignal;Landroid/view/WindowInsetsAnimationControlListener;)V": () => {},
+    ...noops("show(I)V", "hide(I)V",
+      "removeOnControllableInsetsChangedListener(Landroid/view/WindowInsetsController$OnControllableInsetsChangedListener;)V",
+      "controlWindowInsetsAnimation(IJLandroid/view/animation/Interpolator;Landroid/os/CancellationSignal;Landroid/view/WindowInsetsAnimationControlListener;)V"),
   },
 });
 rt.register({
@@ -190,17 +184,15 @@ rt.register({
     preferredDisplayModeId = 0;
     screenBrightness = -1;
   },
-  fields: { width: "width", height: "height", gravity: "gravity", flags: "flags", x: "x", y: "y",
-    softInputMode: "softInputMode", windowAnimations: "windowAnimations", dimAmount: "dimAmount", alpha: "alpha", format: "format", type: "type",
-    layoutInDisplayCutoutMode: "layoutInDisplayCutoutMode", token: "token", preferredDisplayModeId: "preferredDisplayModeId", screenBrightness: "screenBrightness" },
+  fields: ["width", "height", "gravity", "flags", "x", "y", "softInputMode", "windowAnimations", "dimAmount", "alpha",
+    "format", "type", "layoutInDisplayCutoutMode", "token", "preferredDisplayModeId", "screenBrightness"],
   statics: { MATCH_PARENT: -1, WRAP_CONTENT: -2, FLAG_FULLSCREEN: 1024, FLAG_KEEP_SCREEN_ON: 128, TYPE_APPLICATION: 2, SOFT_INPUT_ADJUST_RESIZE: 16, SOFT_INPUT_STATE_HIDDEN: 3,
     // no real display cutout in a fixed-viewport screen — the field just stores/reports whatever the app sets.
     LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT: 0, LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES: 1,
     LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER: 2, LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS: 3, LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS_ALLOWED: 4 },
   methods: {
-    "<init>()V": function () {},
-    "<init>(IIIII)V": function () {},
-    "copyFrom(Landroid/view/WindowManager$LayoutParams;)I": () => 0,
+    ...noops("<init>()V", "<init>(IIIII)V"),
+    ...stubs(0, "copyFrom(Landroid/view/WindowManager$LayoutParams;)I"),
     "setTitle(Ljava/lang/CharSequence;)V": function (this: { title: unknown }, title: unknown) { this.title = title ?? ""; },
     "getTitle()Ljava/lang/CharSequence;": function (this: { title: unknown }) { return this.title; },
   },

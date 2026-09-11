@@ -19,7 +19,7 @@ function initAccount(this: JAccount, name: string | null, type: string | null, a
 
 rt.register({
   name: "android/accounts/Account", ctor: JAccount, ifaces: ["android/os/Parcelable"],
-  fields: { name: "name", type: "type" },
+  fields: ["name", "type"],
   statics: { get CREATOR() { return parcelCreator("android/accounts/Account", async p => {
     const name = await vcall(p, "readString", "()Ljava/lang/String;"), type = await vcall(p, "readString", "()Ljava/lang/String;");
     const account = new JAccount(); initAccount.call(account, name, type, await vcall(p, "readString", "()Ljava/lang/String;")); return account;

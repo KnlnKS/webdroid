@@ -1,5 +1,5 @@
 import { type JFile, vfs, mkFile } from "../jvm/natives/jio";
-import { JObj, rt, type NativeSpec, callSelf, maySuspend } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec, callSelf, maySuspend, stubs, noops } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
 import { resString, themeOf, JTheme, rvColor, obtainStyled, type JAttrSet, JTypedArray } from "./res";
 import { newObj, javaFormat, vcall } from "../jvm/natives/jlang";
@@ -137,18 +137,14 @@ rt.register({
     "getUid()I": () => PROCESS_UID,
     "getPid()I": () => PROCESS_PID,
     "getPackageName()Ljava/lang/String;": () => appHost!.pkg,
-    "getAttributionTag()Ljava/lang/String;": () => null,
-    "getNext()Landroid/content/AttributionSource;": () => null,
-    "isTrusted(Landroid/content/Context;)Z": () => 1,
-    "describeContents()I": () => 0,
+    ...stubs(null, "getAttributionTag()Ljava/lang/String;", "getNext()Landroid/content/AttributionSource;"),
+    ...stubs(1, "isTrusted(Landroid/content/Context;)Z"),
+    ...stubs(0, "describeContents()I"),
   },
 });
 
 // ── Context methods (shared by Context/ContextWrapper/Activity/Application)
 export const contextMethods: NativeSpec["methods"] = {
-  "registerComponentCallbacks(Landroid/content/ComponentCallbacks;)V": () => {},
-  "unregisterComponentCallbacks(Landroid/content/ComponentCallbacks;)V": () => {},
-  "<init>()V": function () {},
   "getResources()Landroid/content/res/Resources;": function (this: JContext) { return this.$host.jresources; },
   "getTheme()Landroid/content/res/Resources$Theme;": function (this: JContext) {
     return themeOf(this) ?? this.$host.theme;
@@ -164,7 +160,6 @@ export const contextMethods: NativeSpec["methods"] = {
     return applied;
   }),
   "getPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
-  "getAttributionTag()Ljava/lang/String;": () => null,
   "getAttributionSource()Landroid/content/AttributionSource;": maySuspend(function (this: JContext) { return attribution ??= newObj("android/content/AttributionSource", null); }),
   "createPackageContext(Ljava/lang/String;I)Landroid/content/Context;": maySuspend(function (this: JContext, pkg: string, flags: number) {
     if (pkg === this.$host.pkg || pkg === this.$host.res.tbl(0x01000000)?.pkgName) return this;
@@ -284,7 +279,6 @@ export const contextMethods: NativeSpec["methods"] = {
   "checkPermission(Ljava/lang/String;II)I": (p: string) => permissionState(p),
   "checkCallingPermission(Ljava/lang/String;)I": (p: string) => permissionState(p),
   "checkCallingOrSelfPermission(Ljava/lang/String;)I": (p: string) => permissionState(p),
-  "enforceCallingOrSelfPermission(Ljava/lang/String;Ljava/lang/String;)V": () => {},
   "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;)Landroid/content/Intent;": function (this: JContext, receiver: JObj | null, filter: { actions: string[] }) { return registerReceiver(this, receiver, filter); },
   "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;I)Landroid/content/Intent;": function (this: JContext, receiver: JObj | null, filter: { actions: string[] }) { return registerReceiver(this, receiver, filter); },
   "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;Ljava/lang/String;Landroid/os/Handler;)Landroid/content/Intent;": function (this: JContext, receiver: JObj | null, filter: { actions: string[] }, _permission: string, handler: unknown) { return registerReceiver(this, receiver, filter, handler); },
@@ -344,8 +338,11 @@ export const contextMethods: NativeSpec["methods"] = {
     return context;
   },
   "createDeviceProtectedStorageContext()Landroid/content/Context;": function (this: JContext) { return this; },
-  "isDeviceProtectedStorage()Z": () => 0,
-  "isRestricted()Z": () => 0,
+  ...noops("registerComponentCallbacks(Landroid/content/ComponentCallbacks;)V",
+    "unregisterComponentCallbacks(Landroid/content/ComponentCallbacks;)V", "<init>()V",
+    "enforceCallingOrSelfPermission(Ljava/lang/String;Ljava/lang/String;)V"),
+  ...stubs(null, "getAttributionTag()Ljava/lang/String;"),
+  ...stubs(0, "isDeviceProtectedStorage()Z", "isRestricted()Z"),
 };
 
 rt.register({ name: "android/content/Context", ctor: JContext, methods: contextMethods,

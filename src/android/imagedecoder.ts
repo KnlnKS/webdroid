@@ -1,4 +1,4 @@
-import { JObj, rt, maySuspend } from "../jvm/runtime";
+import { JObj, rt, maySuspend, noops } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { type JFile, readStreamFully } from "../jvm/natives/jio";
 import type { JBuffer } from "../jvm/natives/jnio";
@@ -65,8 +65,6 @@ rt.register({ name: "android/graphics/ImageDecoder", ctor: JImageDecoder, method
     this.width = width; this.height = height;
   },
   "setUnpremultipliedRequired(Z)V": function (this: JImageDecoder, required: number) { this.unpremultiplied = !!required; },
-  "setAllocator(I)V": () => {},
-  "setMemorySizePolicy(I)V": () => {},
-  "setTargetColorSpace(Landroid/graphics/ColorSpace;)V": () => {},
-  "setOnPartialImageListener(Landroid/graphics/ImageDecoder$OnPartialImageListener;)V": () => {},
+  ...noops("setAllocator(I)V", "setMemorySizePolicy(I)V", "setTargetColorSpace(Landroid/graphics/ColorSpace;)V",
+    "setOnPartialImageListener(Landroid/graphics/ImageDecoder$OnPartialImageListener;)V"),
 } });

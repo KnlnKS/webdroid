@@ -31,11 +31,8 @@ export const serviceTransport: {
 rt.register({
   name: "android/app/ActivityManager$RunningServiceInfo", ctor: JRunningServiceInfo, ifaces: ["android/os/Parcelable"],
   statics: { FLAG_STARTED: 1, FLAG_FOREGROUND: 2, FLAG_SYSTEM_PROCESS: 4, FLAG_PERSISTENT_PROCESS: 8 },
-  fields: {
-    service: "service", pid: "pid", uid: "uid", process: "process", foreground: "foreground",
-    started: "started", flags: "flags", activeSince: "activeSince", lastActivityTime: "lastActivityTime",
-    restarting: "restarting", activeCount: "activeCount", clientCount: "clientCount", crashCount: "crashCount",
-  },
+  fields: ["service", "pid", "uid", "process", "foreground", "started", "flags", "activeSince", "lastActivityTime",
+    "restarting", "activeCount", "clientCount", "crashCount"],
   methods: { "<init>()V": function () {} },
 });
 

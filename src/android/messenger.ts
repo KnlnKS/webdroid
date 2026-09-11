@@ -1,4 +1,4 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, stubs, noops } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { JHandler, JBundle } from "./os";
 import { JBinder, callingIdentity } from "./binder";
@@ -25,9 +25,8 @@ async function readMessage(p: JParcel): Promise<JMessage> {
   return m;
 }
 rt.register({ name: "android/os/Message", ctor: JMessage, ifaces: ["android/os/Parcelable"],
-  fields: { what: "what", arg1: "arg1", arg2: "arg2", obj: "obj", replyTo: "replyTo", sendingUid: "sendingUid", workSourceUid: "workSourceUid" },
+  fields: ["what", "arg1", "arg2", "obj", "replyTo", "sendingUid", "workSourceUid"],
   statics: { get CREATOR() { return parcelCreator("android/os/Message", readMessage); } }, methods: {
-    "<init>()V": function () {},
     "static obtain()Landroid/os/Message;": () => new JMessage(),
     "static obtain(Landroid/os/Handler;)Landroid/os/Message;": (h: JHandler) => obtain(h),
     "static obtain(Landroid/os/Handler;I)Landroid/os/Message;": (h: JHandler, w: number) => obtain(h, w),
@@ -43,12 +42,12 @@ rt.register({ name: "android/os/Message", ctor: JMessage, ifaces: ["android/os/P
     },
     "setTarget(Landroid/os/Handler;)V": function (this: JMessage, h: JHandler) { this.target = h; },
     "sendToTarget()V": function (this: JMessage) { this.target?.send(this, 0); },
-    "recycle()V": () => {},
     "getCallback()Ljava/lang/Runnable;": function (this: JMessage) { return this.callback; },
     "getData()Landroid/os/Bundle;": function (this: JMessage) { return this.data ??= new JBundle(); },
     "peekData()Landroid/os/Bundle;": function (this: JMessage) { return this.data; },
     "setData(Landroid/os/Bundle;)V": function (this: JMessage, data: JBundle | null) { this.data = data; },
-    "describeContents()I": () => 0,
+    ...noops("<init>()V", "recycle()V"),
+    ...stubs(0, "describeContents()I"),
     "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JMessage, p: JParcel, flags: number) {
       if (this.callback) throw rt.mkThrowable("java/lang/RuntimeException", "Cannot marshal callbacks");
       for (const value of [this.what, this.arg1, this.arg2, this.obj ? 1 : 0]) await vcall(p, "writeInt", "(I)V", value);

@@ -30,7 +30,7 @@ export interface NativeSpec {
   methods?: Record<string, ((...a: never[]) => unknown) | string>;
   statics?: Record<string, unknown>;
   /** java-visible public instance fields: java name → JS property name on the TS class */
-  fields?: Record<string, string>;
+  fields?: Record<string, string> | string[];
   /** run once at init — for expensive static setup */
   clinit?: () => void | Promise<void>;
   /** the class's own type-variable names ("E", "K,V"). A bytecode class carries these in its
@@ -41,6 +41,12 @@ export interface NativeSpec {
   /** Static native entries receiving the calling runtime as a final host-only argument. */
   callerSensitive?: string[];
 }
+
+export function stubs(value: unknown, ...sigs: string[]): Record<string, () => unknown> {
+  const fn = () => value;
+  return Object.fromEntries(sigs.map((s) => [s, fn]));
+}
+export const noops = (...sigs: string[]) => stubs(undefined, ...sigs);
 
 export function callSelf(m: NativeSpec["methods"], sig: string, self: unknown, ...args: unknown[]): unknown {
   return (m![sig] as (this: unknown, ...a: unknown[]) => unknown).call(self, ...args);
@@ -532,7 +538,9 @@ export class Runtime {
         set: pin,
       });
     }
-    for (const [jname, prop] of Object.entries(spec.fields ?? {})) info.fieldTable.set(jname, prop);
+    const fl = spec.fields ?? [];
+    if (Array.isArray(fl)) for (const n of fl) info.fieldTable.set(n, n);
+    else for (const [jname, prop] of Object.entries(fl)) info.fieldTable.set(jname, prop);
     ctorAny.$i = info;
     info.state = spec.clinit ? 0 : 2;
     info.compiled = true;

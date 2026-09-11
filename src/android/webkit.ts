@@ -1,7 +1,7 @@
 // WebViews occupy DOM frames above the canvas. JavaScript interfaces use a separate renderer
 // so synchronous page calls can wait while the Java runtime continues executing.
 
-import { rt, JObj, type NativeSpec, type ClassInfo, maySuspend } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, type ClassInfo, maySuspend, stubs, noops } from "../jvm/runtime";
 import { mangleMethod, parseMethodDesc } from "../jvm/abi";
 import { vcall, mkEnumSet, JThread, curThread, setCurThread, type JSimpleEnum } from "../jvm/natives/jlang";
 import { JViewGroup, initViewFromCtx, defaultSize, type JView } from "./view";
@@ -391,7 +391,6 @@ rt.register({
     "getOriginalUrl()Ljava/lang/String;": function (this: JWebView) { return this.url; },
     "getTitle()Ljava/lang/String;": function (this: JWebView) { return this.title; },
     "getProgress()I": function (this: JWebView) { return this.progress; },
-    "getFavicon()Landroid/graphics/Bitmap;": () => null,
     "canGoBack()Z": function (this: JWebView) { return this.idx > 0 ? 1 : 0; },
     "canGoForward()Z": function (this: JWebView) { return this.idx < this.hist.length - 1 ? 1 : 0; },
     "canGoBackOrForward(I)Z": function (this: JWebView, n: number) { const i = this.idx + n; return i >= 0 && i < this.hist.length ? 1 : 0; },
@@ -407,7 +406,6 @@ rt.register({
     "removeJavascriptInterface(Ljava/lang/String;)V": function (this: JWebView, name: string) { delete this.ifaces[name]; },
     "getContentHeight()I": function (this: JWebView) { return this.contentHeight(); },
     "getScale()F": () => device.density,
-    "setInitialScale(I)V": () => {},
     "pageUp(Z)Z": function (this: JWebView, top: number) { const w = win(this); if (!w) return 0; w.scrollBy(0, top ? -w.document.documentElement.scrollHeight : -w.innerHeight); return 1; },
     "pageDown(Z)Z": function (this: JWebView, bottom: number) { const w = win(this); if (!w) return 0; w.scrollBy(0, bottom ? w.document.documentElement.scrollHeight : w.innerHeight); return 1; },
     "scrollTo(II)V": () => {}, "flingScroll(II)V": () => {},
@@ -415,15 +413,15 @@ rt.register({
     "onPause()V": () => {}, "onResume()V": () => {}, "pauseTimers()V": () => {}, "resumeTimers()V": () => {},
     "clearCache(Z)V": () => {}, "clearFormData()V": () => {}, "clearSslPreferences()V": () => {}, "clearMatches()V": () => {},
     "setNetworkAvailable(Z)V": () => {}, "setRendererPriorityPolicy(IZ)V": () => {}, "setFindListener(Landroid/webkit/WebView$FindListener;)V": () => {},
-    "saveState(Landroid/os/Bundle;)Landroid/webkit/WebBackForwardList;": () => null,
-    "restoreState(Landroid/os/Bundle;)Landroid/webkit/WebBackForwardList;": () => null,
-    "getCertificate()Landroid/net/http/SslCertificate;": () => null,
-    "isPrivateBrowsingEnabled()Z": () => 0,
-    "requestFocusFromTouch()Z": () => 1,
-    "static setWebContentsDebuggingEnabled(Z)V": () => {},
-    "static enableSlowWholeDocumentDraw()V": () => {},
-    "static setDataDirectorySuffix(Ljava/lang/String;)V": () => {},
-    "static disableWebView()V": () => {},
+    ...stubs(null, "getFavicon()Landroid/graphics/Bitmap;",
+      "saveState(Landroid/os/Bundle;)Landroid/webkit/WebBackForwardList;",
+      "restoreState(Landroid/os/Bundle;)Landroid/webkit/WebBackForwardList;",
+      "getCertificate()Landroid/net/http/SslCertificate;"),
+    ...noops("setInitialScale(I)V", "static setWebContentsDebuggingEnabled(Z)V",
+      "static enableSlowWholeDocumentDraw()V", "static setDataDirectorySuffix(Ljava/lang/String;)V",
+      "static disableWebView()V"),
+    ...stubs(0, "isPrivateBrowsingEnabled()Z"),
+    ...stubs(1, "requestFocusFromTouch()Z"),
     // no WebView apk is installed here; androidx.webkit reads null as "framework features only"
     // the provider is this frame layer, at the version the user agent already claims
     "static getCurrentWebViewPackage()Landroid/content/pm/PackageInfo;": () => {
@@ -445,70 +443,65 @@ rt.register({
     ERROR_BAD_URL: -12, ERROR_FILE: -13, ERROR_FILE_NOT_FOUND: -14, ERROR_TOO_MANY_REQUESTS: -15, ERROR_UNSAFE_RESOURCE: -16,
   },
   methods: {
-    "<init>()V": function () {},
-    "shouldOverrideUrlLoading(Landroid/webkit/WebView;Ljava/lang/String;)Z": () => 0,
     // AOSP forwards the request overload to the String one, so a subclass overriding either sees the click
     "shouldOverrideUrlLoading(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Z": maySuspend(function (this: JObj, v: JWebView, r: JReq) {
       return vcall(this, "shouldOverrideUrlLoading", "(Landroid/webkit/WebView;Ljava/lang/String;)Z", v, r.url);
     }),
-    "onPageStarted(Landroid/webkit/WebView;Ljava/lang/String;Landroid/graphics/Bitmap;)V": () => {},
-    "onPageFinished(Landroid/webkit/WebView;Ljava/lang/String;)V": () => {},
-    "onPageCommitVisible(Landroid/webkit/WebView;Ljava/lang/String;)V": () => {},
-    "onLoadResource(Landroid/webkit/WebView;Ljava/lang/String;)V": () => {},
-    "onReceivedError(Landroid/webkit/WebView;ILjava/lang/String;Ljava/lang/String;)V": () => {},
     // AOSP forwards a main-frame error to the legacy overload
     "onReceivedError(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;Landroid/webkit/WebResourceError;)V": maySuspend(function (this: JObj, v: JWebView, r: JReq, e: JWebErr) {
       if (r.main) return vcall(this, "onReceivedError", "(Landroid/webkit/WebView;ILjava/lang/String;Ljava/lang/String;)V", v, e.code, e.desc, r.url);
     }),
-    "onReceivedHttpError(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;Landroid/webkit/WebResourceResponse;)V": () => {},
     "onReceivedSslError(Landroid/webkit/WebView;Landroid/webkit/SslErrorHandler;Landroid/net/http/SslError;)V": maySuspend((_v: unknown, h: unknown) => vcall(h, "cancel", "()V")),
     "onReceivedHttpAuthRequest(Landroid/webkit/WebView;Landroid/webkit/HttpAuthHandler;Ljava/lang/String;Ljava/lang/String;)V": maySuspend((_v: unknown, h: unknown) => vcall(h, "cancel", "()V")),
     "onFormResubmission(Landroid/webkit/WebView;Landroid/os/Message;Landroid/os/Message;)V": maySuspend((_v: unknown, dontResend: unknown) => vcall(dontResend, "sendToTarget", "()V")),
-    "shouldInterceptRequest(Landroid/webkit/WebView;Ljava/lang/String;)Landroid/webkit/WebResourceResponse;": () => null,
     "shouldInterceptRequest(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Landroid/webkit/WebResourceResponse;": maySuspend(function (this: JObj, v: JWebView, r: JReq) {
       return vcall(this, "shouldInterceptRequest", "(Landroid/webkit/WebView;Ljava/lang/String;)Landroid/webkit/WebResourceResponse;", v, r.url);
     }),
-    "onRenderProcessGone(Landroid/webkit/WebView;Landroid/webkit/RenderProcessGoneDetail;)Z": () => 0,
-    "doUpdateVisitedHistory(Landroid/webkit/WebView;Ljava/lang/String;Z)V": () => {},
-    "onScaleChanged(Landroid/webkit/WebView;FF)V": () => {},
-    "onUnhandledKeyEvent(Landroid/webkit/WebView;Landroid/view/KeyEvent;)V": () => {},
-    "shouldOverrideKeyEvent(Landroid/webkit/WebView;Landroid/view/KeyEvent;)Z": () => 0,
-    "onReceivedLoginRequest(Landroid/webkit/WebView;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": () => {},
+    ...noops("<init>()V", "onPageStarted(Landroid/webkit/WebView;Ljava/lang/String;Landroid/graphics/Bitmap;)V",
+      "onPageFinished(Landroid/webkit/WebView;Ljava/lang/String;)V",
+      "onPageCommitVisible(Landroid/webkit/WebView;Ljava/lang/String;)V",
+      "onLoadResource(Landroid/webkit/WebView;Ljava/lang/String;)V",
+      "onReceivedError(Landroid/webkit/WebView;ILjava/lang/String;Ljava/lang/String;)V",
+      "onReceivedHttpError(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;Landroid/webkit/WebResourceResponse;)V",
+      "doUpdateVisitedHistory(Landroid/webkit/WebView;Ljava/lang/String;Z)V",
+      "onScaleChanged(Landroid/webkit/WebView;FF)V",
+      "onUnhandledKeyEvent(Landroid/webkit/WebView;Landroid/view/KeyEvent;)V",
+      "onReceivedLoginRequest(Landroid/webkit/WebView;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
+    ...stubs(0, "shouldOverrideUrlLoading(Landroid/webkit/WebView;Ljava/lang/String;)Z",
+      "onRenderProcessGone(Landroid/webkit/WebView;Landroid/webkit/RenderProcessGoneDetail;)Z",
+      "shouldOverrideKeyEvent(Landroid/webkit/WebView;Landroid/view/KeyEvent;)Z"),
+    ...stubs(null, "shouldInterceptRequest(Landroid/webkit/WebView;Ljava/lang/String;)Landroid/webkit/WebResourceResponse;"),
   },
 });
 rt.register({
   name: "android/webkit/WebChromeClient", ctor: class extends JObj {},
   methods: {
-    "<init>()V": function () {},
-    "onProgressChanged(Landroid/webkit/WebView;I)V": () => {},
-    "onReceivedTitle(Landroid/webkit/WebView;Ljava/lang/String;)V": () => {},
-    "onReceivedIcon(Landroid/webkit/WebView;Landroid/graphics/Bitmap;)V": () => {},
-    "onReceivedTouchIconUrl(Landroid/webkit/WebView;Ljava/lang/String;Z)V": () => {},
-    "onShowCustomView(Landroid/view/View;Landroid/webkit/WebChromeClient$CustomViewCallback;)V": () => {},
-    "onShowCustomView(Landroid/view/View;ILandroid/webkit/WebChromeClient$CustomViewCallback;)V": () => {},
-    "onHideCustomView()V": () => {},
     // AOSP calls the deprecated overload for compatibility, then reports "not handled"
     "onConsoleMessage(Landroid/webkit/ConsoleMessage;)Z": async function (this: JObj, m: JConsoleMessage) {
       await vcall(this, "onConsoleMessage", "(Ljava/lang/String;ILjava/lang/String;)V", m.msg, m.line, m.src);
       return 0;
     },
-    "onConsoleMessage(Ljava/lang/String;ILjava/lang/String;)V": () => {},
-    "onJsAlert(Landroid/webkit/WebView;Ljava/lang/String;Ljava/lang/String;Landroid/webkit/JsResult;)Z": () => 0,
-    "onJsConfirm(Landroid/webkit/WebView;Ljava/lang/String;Ljava/lang/String;Landroid/webkit/JsResult;)Z": () => 0,
-    "onJsPrompt(Landroid/webkit/WebView;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/webkit/JsPromptResult;)Z": () => 0,
-    "onJsBeforeUnload(Landroid/webkit/WebView;Ljava/lang/String;Ljava/lang/String;Landroid/webkit/JsResult;)Z": () => 0,
-    "onJsTimeout()Z": () => 1,
-    "onPermissionRequest(Landroid/webkit/PermissionRequest;)V": () => {},
-    "onPermissionRequestCanceled(Landroid/webkit/PermissionRequest;)V": () => {},
-    "onGeolocationPermissionsShowPrompt(Ljava/lang/String;Landroid/webkit/GeolocationPermissions$Callback;)V": () => {},
-    "onGeolocationPermissionsHidePrompt()V": () => {},
-    "getDefaultVideoPoster()Landroid/graphics/Bitmap;": () => null,
-    "getVideoLoadingProgressView()Landroid/view/View;": () => null,
-    "getVisitedHistory(Landroid/webkit/ValueCallback;)V": () => {},
-    "onCreateWindow(Landroid/webkit/WebView;ZZLandroid/os/Message;)Z": () => 0,
-    "onCloseWindow(Landroid/webkit/WebView;)V": () => {},
-    "onRequestFocus(Landroid/webkit/WebView;)V": () => {},
-    "onShowFileChooser(Landroid/webkit/WebView;Landroid/webkit/ValueCallback;Landroid/webkit/WebChromeClient$FileChooserParams;)Z": () => 0,
+    ...noops("<init>()V", "onProgressChanged(Landroid/webkit/WebView;I)V",
+      "onReceivedTitle(Landroid/webkit/WebView;Ljava/lang/String;)V",
+      "onReceivedIcon(Landroid/webkit/WebView;Landroid/graphics/Bitmap;)V",
+      "onReceivedTouchIconUrl(Landroid/webkit/WebView;Ljava/lang/String;Z)V",
+      "onShowCustomView(Landroid/view/View;Landroid/webkit/WebChromeClient$CustomViewCallback;)V",
+      "onShowCustomView(Landroid/view/View;ILandroid/webkit/WebChromeClient$CustomViewCallback;)V",
+      "onHideCustomView()V", "onConsoleMessage(Ljava/lang/String;ILjava/lang/String;)V",
+      "onPermissionRequest(Landroid/webkit/PermissionRequest;)V",
+      "onPermissionRequestCanceled(Landroid/webkit/PermissionRequest;)V",
+      "onGeolocationPermissionsShowPrompt(Ljava/lang/String;Landroid/webkit/GeolocationPermissions$Callback;)V",
+      "onGeolocationPermissionsHidePrompt()V", "getVisitedHistory(Landroid/webkit/ValueCallback;)V",
+      "onCloseWindow(Landroid/webkit/WebView;)V", "onRequestFocus(Landroid/webkit/WebView;)V"),
+    ...stubs(0, "onJsAlert(Landroid/webkit/WebView;Ljava/lang/String;Ljava/lang/String;Landroid/webkit/JsResult;)Z",
+      "onJsConfirm(Landroid/webkit/WebView;Ljava/lang/String;Ljava/lang/String;Landroid/webkit/JsResult;)Z",
+      "onJsPrompt(Landroid/webkit/WebView;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/webkit/JsPromptResult;)Z",
+      "onJsBeforeUnload(Landroid/webkit/WebView;Ljava/lang/String;Ljava/lang/String;Landroid/webkit/JsResult;)Z",
+      "onCreateWindow(Landroid/webkit/WebView;ZZLandroid/os/Message;)Z",
+      "onShowFileChooser(Landroid/webkit/WebView;Landroid/webkit/ValueCallback;Landroid/webkit/WebChromeClient$FileChooserParams;)Z"),
+    ...stubs(1, "onJsTimeout()Z"),
+    ...stubs(null, "getDefaultVideoPoster()Landroid/graphics/Bitmap;",
+      "getVideoLoadingProgressView()Landroid/view/View;"),
   },
 });
 for (const n of ["android/webkit/WebChromeClient$CustomViewCallback", "android/webkit/WebResourceRequest", "android/webkit/ValueCallback", "android/webkit/DownloadListener"]) {

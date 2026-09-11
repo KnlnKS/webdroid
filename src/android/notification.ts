@@ -6,7 +6,7 @@
 // `n.extras` and friends directly rather than through getters.
 
 import { newArrayList } from "../jvm/natives/jutil";
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, stubs, noops } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { mkUri } from "./net";
 import { PARCELABLE } from "./os";
@@ -339,7 +339,7 @@ class JNAction extends JObj {
 const mkActionArray = () => Object.assign([] as unknown[], { $t: "Landroid/app/Notification$Action;" });
 rt.register({
   name: "android/app/Notification$Action", ctor: JNAction, ifaces: ["android/os/Parcelable"],
-  fields: { icon: "icon", title: "title", actionIntent: "actionIntent" },
+  fields: ["icon", "title", "actionIntent"],
   methods: {
     "<init>(ILjava/lang/CharSequence;Landroid/app/PendingIntent;)V": function (this: JNAction, i: number, t: unknown, pi: unknown) {
       this.icon = i; this.title = t; this.actionIntent = pi;
@@ -428,19 +428,12 @@ rt.register({
     "getName()Ljava/lang/CharSequence;": function (this: JNotificationChannel) { return this.nm; },
     "setName(Ljava/lang/CharSequence;)V": function (this: JNotificationChannel, v: unknown) { this.nm = v; },
     "getImportance()I": function (this: JNotificationChannel) { return this.imp; },
-    "getGroup()Ljava/lang/String;": () => null,
-    "getSound()Landroid/net/Uri;": () => null,
-    "shouldVibrate()Z": () => 0,
-    "canShowBadge()Z": () => 1,
-    "setDescription(Ljava/lang/String;)V": () => {},
-    "setGroup(Ljava/lang/String;)V": () => {},
-    "setShowBadge(Z)V": () => {},
-    "setSound(Landroid/net/Uri;Landroid/media/AudioAttributes;)V": () => {},
-    "enableLights(Z)V": () => {},
-    "enableVibration(Z)V": () => {},
-    "setLockscreenVisibility(I)V": () => {},
-    "setLightColor(I)V": () => {},
-    "setVibrationPattern([J)V": () => {},
+    ...stubs(null, "getGroup()Ljava/lang/String;", "getSound()Landroid/net/Uri;"),
+    ...stubs(0, "shouldVibrate()Z"),
+    ...stubs(1, "canShowBadge()Z"),
+    ...noops("setDescription(Ljava/lang/String;)V", "setGroup(Ljava/lang/String;)V", "setShowBadge(Z)V",
+      "setSound(Landroid/net/Uri;Landroid/media/AudioAttributes;)V", "enableLights(Z)V", "enableVibration(Z)V",
+      "setLockscreenVisibility(I)V", "setLightColor(I)V", "setVibrationPattern([J)V"),
   },
 });
 rt.register({
@@ -453,23 +446,17 @@ rt.register({
 rt.register({
   name: "android/app/NotificationManager", ctor: class extends JObj {},
   methods: {
-    "notify(ILandroid/app/Notification;)V": () => {},
-    "notify(Ljava/lang/String;ILandroid/app/Notification;)V": () => {},
-    "cancel(I)V": () => {},
-    "cancel(Ljava/lang/String;I)V": () => {},
-    "cancelAll()V": () => {},
-    "setNotificationDelegate(Ljava/lang/String;)V": () => {},
-    "getNotificationDelegate()Ljava/lang/String;": () => null,
-    "createNotificationChannel(Landroid/app/NotificationChannel;)V": () => {},
-    "createNotificationChannels(Ljava/util/List;)V": () => {},
-    "createNotificationChannelGroup(Landroid/app/NotificationChannelGroup;)V": () => {},
-    "createNotificationChannelGroups(Ljava/util/List;)V": () => {},
-    "deleteNotificationChannel(Ljava/lang/String;)V": () => {},
-    "deleteNotificationChannelGroup(Ljava/lang/String;)V": () => {},
     "getNotificationChannels()Ljava/util/List;": () => newArrayList(),
-    "getNotificationChannel(Ljava/lang/String;)Landroid/app/NotificationChannel;": () => null,
     "getActiveNotifications()[Landroid/service/notification/StatusBarNotification;":
       () => Object.assign([] as unknown[], { $t: "Landroid/service/notification/StatusBarNotification;" }),
-    "areNotificationsEnabled()Z": () => 1,
+    ...noops("notify(ILandroid/app/Notification;)V", "notify(Ljava/lang/String;ILandroid/app/Notification;)V",
+      "cancel(I)V", "cancel(Ljava/lang/String;I)V", "cancelAll()V", "setNotificationDelegate(Ljava/lang/String;)V",
+      "createNotificationChannel(Landroid/app/NotificationChannel;)V", "createNotificationChannels(Ljava/util/List;)V",
+      "createNotificationChannelGroup(Landroid/app/NotificationChannelGroup;)V",
+      "createNotificationChannelGroups(Ljava/util/List;)V", "deleteNotificationChannel(Ljava/lang/String;)V",
+      "deleteNotificationChannelGroup(Ljava/lang/String;)V"),
+    ...stubs(null, "getNotificationDelegate()Ljava/lang/String;",
+      "getNotificationChannel(Ljava/lang/String;)Landroid/app/NotificationChannel;"),
+    ...stubs(1, "areNotificationsEnabled()Z"),
   },
 });

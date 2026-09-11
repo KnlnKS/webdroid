@@ -1,4 +1,4 @@
-import { JObj, rt, type NativeSpec, maySuspend } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { findById, type JViewGroup, type JView, attachView, detachView, requestLayout, removeFrom } from "./view";
 import { getInflater } from "./inflate";
@@ -126,7 +126,6 @@ export class JFragment extends JObj {
   tag: string | null = null;
 }
 export const fragMethods: NonNullable<NativeSpec["methods"]> = {
-  "<init>()V": function () {},
   "onAttach(Landroid/app/Activity;)V": function (this: JFragment, a: unknown) { this.act = a; },
   "onAttach(Landroid/content/Context;)V": function (this: JFragment, a: unknown) { this.act = a; },
   "getActivity()Landroid/app/Activity;": function (this: JFragment) { return this.act; },
@@ -145,12 +144,12 @@ export const fragMethods: NonNullable<NativeSpec["methods"]> = {
   }),
   "getArguments()Landroid/os/Bundle;": function (this: JFragment) { return this.args; },
   "setArguments(Landroid/os/Bundle;)V": function (this: JFragment, b: unknown) { this.args = b; },
-  "onCreateView(Landroid/view/LayoutInflater;Landroid/view/ViewGroup;Landroid/os/Bundle;)Landroid/view/View;": () => null,
   "getView()Landroid/view/View;": function (this: JFragment) { return this.attachedView; },
   "getTag()Ljava/lang/String;": function (this: JFragment) { return this.tag; },
   "getId()I": function (this: JFragment) { return this.containerId; },
-  "onActivityResult(IILandroid/content/Intent;)V": () => {},
-  "dump(Ljava/lang/String;Ljava/io/FileDescriptor;Ljava/io/PrintWriter;[Ljava/lang/String;)V": () => {},
+  ...noops("<init>()V", "onActivityResult(IILandroid/content/Intent;)V",
+    "dump(Ljava/lang/String;Ljava/io/FileDescriptor;Ljava/io/PrintWriter;[Ljava/lang/String;)V"),
+  ...stubs(null, "onCreateView(Landroid/view/LayoutInflater;Landroid/view/ViewGroup;Landroid/os/Bundle;)Landroid/view/View;"),
   "setHasOptionsMenu(Z)V": () => {}, "setRetainInstance(Z)V": () => {},
 };
 for (const k of ["isAdded()Z", "isRemoving()Z", "isDetached()Z", "isHidden()Z", "isVisible()Z", "isResumed()Z"]) {

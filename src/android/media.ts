@@ -1,6 +1,6 @@
 // android.media: MediaPlayer over HTMLAudioElement, SoundPool over Web Audio.
 
-import { rt, JObj, maySuspend } from "../jvm/runtime";
+import { rt, JObj, maySuspend, stubs, noops } from "../jvm/runtime";
 import { stringHash, vcall } from "../jvm/natives/jlang";
 import { vfs } from "../jvm/natives/jio";
 import type { JBuffer } from "../jvm/natives/jnio";
@@ -101,7 +101,6 @@ function mpLoad(mp: JMediaPlayer, bytes: Uint8Array) {
 rt.register({
   name: "android/media/MediaPlayer", ctor: JMediaPlayer,
   methods: {
-    "<init>()V": function () {},
     "static create(Landroid/content/Context;I)Landroid/media/MediaPlayer;": (c: any, resId: number) => {
       const mp = new JMediaPlayer();
       const host = c?.$host;
@@ -111,7 +110,6 @@ rt.register({
       }
       return mp;
     },
-    "setDataSource(Landroid/content/Context;Landroid/net/Uri;)V": () => {},
     "prepare()V": function (this: JMediaPlayer) { this.prepared = true; },
     "prepareAsync()V": function (this: JMediaPlayer) { this.prepared = true; },
     "start()V": function (this: JMediaPlayer) { players.add(this); void this.audio?.play().catch(() => { /* */ }); },
@@ -123,22 +121,21 @@ rt.register({
       }
     },
     "release()V": function (this: JMediaPlayer) { players.delete(this); this.audio = null; },
-    "reset()V": function () {},
     "isPlaying()Z": function (this: JMediaPlayer) { return this.audio && !this.audio.paused ? 1 : 0; },
     "setLooping(Z)V": function (this: JMediaPlayer, l: number) {
       this.looping = !!l;
       if (this.audio) this.audio.loop = !!l;
     },
     "setVolume(FF)V": function (this: JMediaPlayer, v: number) { if (this.audio) this.audio.volume = Math.min(1, v); },
-    "setAudioStreamType(I)V": () => {},
     "setOnCompletionListener(Landroid/media/MediaPlayer$OnCompletionListener;)V": function (this: JMediaPlayer, l: unknown) {
       this.completionL = l;
     },
     "setOnPreparedListener(Landroid/media/MediaPlayer$OnPreparedListener;)V": maySuspend(function (this: JMediaPlayer, l: unknown) {
       setTimeout(() => void vcall(l, "onPrepared", "(Landroid/media/MediaPlayer;)V", this).catch(reportUncaught), 10);
     }),
-    "setOnErrorListener(Landroid/media/MediaPlayer$OnErrorListener;)V": () => {},
-    "setWakeMode(Landroid/content/Context;I)V": () => {},
+    ...noops("<init>()V", "setDataSource(Landroid/content/Context;Landroid/net/Uri;)V", "reset()V",
+      "setAudioStreamType(I)V", "setOnErrorListener(Landroid/media/MediaPlayer$OnErrorListener;)V",
+      "setWakeMode(Landroid/content/Context;I)V"),
     "getDuration()I": function (this: JMediaPlayer) { return Math.round((this.audio?.duration ?? 0) * 1000); },
     "getCurrentPosition()I": function (this: JMediaPlayer) { return Math.round((this.audio?.currentTime ?? 0) * 1000); },
     "seekTo(I)V": function (this: JMediaPlayer, ms: number) { if (this.audio) this.audio.currentTime = ms / 1000; },
@@ -383,7 +380,6 @@ rt.register({
       return frames * (chanCfg === 12 || chanCfg === 3 ? 2 : 1) * (fmt === 3 ? 1 : 2);
     },
     "static getNativeOutputSampleRate(I)I": () => outputSampleRate(),
-    "static isDirectPlaybackSupported(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)Z": () => 0,
     "static getMaxVolume()F": () => 1, "static getMinVolume()F": () => 0,
     "getState()I": function (this: JAudioTrack) { return this.state; },
     "getPlayState()I": function (this: JAudioTrack) { return this.playState; },
@@ -392,11 +388,9 @@ rt.register({
     "getPlaybackHeadPosition()I": function (this: JAudioTrack) { return this.playState === 1 ? 0 : Math.floor(this.head() - this.headOrigin) | 0; },
     "setStereoVolume(FF)I": function (this: JAudioTrack, l: number, r: number) { this.vol = (l + r) / 2; if (this.gain) this.gain.gain.value = this.vol; return 0; },
     "setVolume(F)I": function (this: JAudioTrack, v: number) { this.vol = v; if (this.gain) this.gain.gain.value = v; return 0; },
-    "setPlaybackRate(I)I": () => 0,
     "setPlaybackPositionUpdateListener(Landroid/media/AudioTrack$OnPlaybackPositionUpdateListener;)V": function (this: JAudioTrack, l: unknown) { this.listener = l; if (!l) this.stopTimer(); else if (this.playState === 3) this.startTimer(); },
     "setPlaybackPositionUpdateListener(Landroid/media/AudioTrack$OnPlaybackPositionUpdateListener;Landroid/os/Handler;)V": function (this: JAudioTrack, l: unknown) { this.listener = l; if (!l) this.stopTimer(); else if (this.playState === 3) this.startTimer(); },
     "setPositionNotificationPeriod(I)I": function (this: JAudioTrack, p: number) { this.period = p; return 0; },
-    "setNotificationMarkerPosition(I)I": () => 0,
     "play()V": function (this: JAudioTrack) { if (this.resetHead) { this.headOrigin = this.head(); this.resetHead = false; } this.playState = 3; void this.ctx().resume(); this.schedule(); this.startTimer(); },
     "pause()V": function (this: JAudioTrack) { this.playState = 2; this.pauseQueue(); this.stopTimer(); },
     "stop()V": function (this: JAudioTrack) { if (this.playState !== 3 || !this.queue.length) this.clearQueue(); this.playState = 1; this.resetHead = true; this.stopTimer(); },
@@ -423,13 +417,13 @@ rt.register({
     "getBufferSizeInFrames()I": function (this: JAudioTrack) { return Math.floor(this.bufBytes / this.frameBytes()); },
     "getBufferCapacityInFrames()I": function (this: JAudioTrack) { return Math.floor(this.bufBytes / this.frameBytes()); },
     "getAudioAttributes()Landroid/media/AudioAttributes;": function (this: JAudioTrack) { return this.attributes; },
-    "isOffloadedPlayback()Z": () => 0,
-    "getTimestamp(Landroid/media/AudioTimestamp;)Z": () => 0,
     "getUnderrunCount()I": function (this: JAudioTrack) { return this.underruns; },
-    "setPreferredDevice(Landroid/media/AudioDeviceInfo;)Z": (_device: unknown) => 0,
-    "getRoutedDevice()Landroid/media/AudioDeviceInfo;": () => null,
-    "addOnRoutingChangedListener(Landroid/media/AudioRouting$OnRoutingChangedListener;Landroid/os/Handler;)V": () => {},
-    "removeOnRoutingChangedListener(Landroid/media/AudioRouting$OnRoutingChangedListener;)V": () => {},
+    ...stubs(0, "static isDirectPlaybackSupported(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)Z",
+      "setPlaybackRate(I)I", "setNotificationMarkerPosition(I)I", "isOffloadedPlayback()Z",
+      "getTimestamp(Landroid/media/AudioTimestamp;)Z", "setPreferredDevice(Landroid/media/AudioDeviceInfo;)Z"),
+    ...stubs(null, "getRoutedDevice()Landroid/media/AudioDeviceInfo;"),
+    ...noops("addOnRoutingChangedListener(Landroid/media/AudioRouting$OnRoutingChangedListener;Landroid/os/Handler;)V",
+      "removeOnRoutingChangedListener(Landroid/media/AudioRouting$OnRoutingChangedListener;)V"),
     "write(Ljava/nio/ByteBuffer;II)I": maySuspend(function (this: JAudioTrack, buffer: JBuffer, n: number, mode: number) { return this.writeBuffer(buffer, n, mode); }),
     "write(Ljava/nio/ByteBuffer;IIJ)I": maySuspend(function (this: JAudioTrack, buffer: JBuffer, n: number, mode: number) { return this.writeBuffer(buffer, n, mode); }),
   },
@@ -550,11 +544,10 @@ rt.register({
   methods: {
     "getSelectedRoute(I)Landroid/media/MediaRouter$RouteInfo;": () => theRoute,
     "getDefaultRoute()Landroid/media/MediaRouter$RouteInfo;": () => theRoute,
-    "getRouteCount()I": () => 1,
     "getRouteAt(I)Landroid/media/MediaRouter$RouteInfo;": (i: number) => (i === 0 ? theRoute : null),
-    "addCallback(ILandroid/media/MediaRouter$Callback;)V": () => {},
-    "addCallback(ILandroid/media/MediaRouter$Callback;I)V": () => {},
-    "removeCallback(Landroid/media/MediaRouter$Callback;)V": () => {},
+    ...stubs(1, "getRouteCount()I"),
+    ...noops("addCallback(ILandroid/media/MediaRouter$Callback;)V",
+      "addCallback(ILandroid/media/MediaRouter$Callback;I)V", "removeCallback(Landroid/media/MediaRouter$Callback;)V"),
   },
 });
 rt.markers("android/media/MediaRouter$Callback");
@@ -581,7 +574,7 @@ rt.register({ name: "android/media/metrics/LogSessionId", ctor: JLogSessionId, s
 export class JBufferInfo extends JObj { offset = 0; size = 0; presentationTimeUs = 0n; flags = 0; }
 rt.register({
   name: "android/media/MediaCodec$BufferInfo", ctor: JBufferInfo,
-  fields: { offset: "offset", size: "size", presentationTimeUs: "presentationTimeUs", flags: "flags" },
+  fields: ["offset", "size", "presentationTimeUs", "flags"],
   methods: {
     "<init>()V": function () {},
     "set(IIJI)V": function (this: JBufferInfo, o: number, s: number, t: bigint, f: number) { this.offset = o; this.size = s; this.presentationTimeUs = t; this.flags = f; },
@@ -593,7 +586,7 @@ class JCryptoInfo extends JObj {
 }
 rt.register({
   name: "android/media/MediaCodec$CryptoInfo", ctor: JCryptoInfo,
-  fields: { numSubSamples: "numSubSamples", numBytesOfClearData: "numBytesOfClearData", numBytesOfEncryptedData: "numBytesOfEncryptedData", key: "key", iv: "iv", mode: "mode" },
+  fields: ["numSubSamples", "numBytesOfClearData", "numBytesOfEncryptedData", "key", "iv", "mode"],
   methods: {
     "<init>()V": function () {},
     "set(I[I[I[B[BI)V": function (this: JCryptoInfo, count: number, clear: Int32Array | null, encrypted: Int32Array | null, key: Int8Array | null, iv: Int8Array | null, mode: number) {
@@ -617,12 +610,10 @@ rt.register({
   name: "android/media/Spatializer", ctor: JSpatializer,
   statics: { SPATIALIZER_IMMERSIVE_LEVEL_NONE: 0 },
   methods: {
-    "getImmersiveAudioLevel()I": () => 0,
-    "isAvailable()Z": () => 0,
-    "isEnabled()Z": () => 0,
-    "canBeSpatialized(Landroid/media/AudioAttributes;Landroid/media/AudioFormat;)Z": () => 0,
-    "addOnSpatializerStateChangedListener(Ljava/util/concurrent/Executor;Landroid/media/Spatializer$OnSpatializerStateChangedListener;)V": () => {},
-    "removeOnSpatializerStateChangedListener(Landroid/media/Spatializer$OnSpatializerStateChangedListener;)V": () => {},
+    ...stubs(0, "getImmersiveAudioLevel()I", "isAvailable()Z", "isEnabled()Z",
+      "canBeSpatialized(Landroid/media/AudioAttributes;Landroid/media/AudioFormat;)Z"),
+    ...noops("addOnSpatializerStateChangedListener(Ljava/util/concurrent/Executor;Landroid/media/Spatializer$OnSpatializerStateChangedListener;)V",
+      "removeOnSpatializerStateChangedListener(Landroid/media/Spatializer$OnSpatializerStateChangedListener;)V"),
   },
 });
 rt.markers("android/media/Spatializer$OnSpatializerStateChangedListener");
@@ -630,8 +621,7 @@ rt.markers("android/media/Spatializer$OnSpatializerStateChangedListener");
 rt.register({
   name: "android/media/AudioDeviceCallback", ctor: class extends JObj {},
   methods: {
-    "<init>()V": function () {},
-    "onAudioDevicesAdded([Landroid/media/AudioDeviceInfo;)V": () => {},
-    "onAudioDevicesRemoved([Landroid/media/AudioDeviceInfo;)V": () => {},
+    ...noops("<init>()V", "onAudioDevicesAdded([Landroid/media/AudioDeviceInfo;)V",
+      "onAudioDevicesRemoved([Landroid/media/AudioDeviceInfo;)V"),
   },
 });

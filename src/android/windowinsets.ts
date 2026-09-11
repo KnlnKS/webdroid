@@ -1,4 +1,4 @@
-import { JObj, type NativeSpec, rt } from "../jvm/runtime";
+import { JObj, type NativeSpec, rt, stubs } from "../jvm/runtime";
 import { insetsOf } from "./graphics";
 import { device } from "../shell/config";
 import type { JView } from "./view";
@@ -89,10 +89,9 @@ const wiMethods: NativeSpec["methods"] = {
   "hasStableInsets()Z": function (this: JWindowInsets) { const s = sysIns(this); return s.left || s.top || s.right || s.bottom ? 1 : 0; },
   "hasInsets()Z": function (this: JWindowInsets) { return this.ins.some((i) => i) ? 1 : 0; },
   "isConsumed()Z": function (this: JWindowInsets) { return this.consumedV ? 1 : 0; },
-  "isRound()Z": () => 0,
-  "getDisplayCutout()Landroid/view/DisplayCutout;": () => null,
-  "getRoundedCorner(I)Landroid/view/RoundedCorner;": () => null,
-  "getPrivacyIndicatorBounds()Landroid/graphics/Rect;": () => null,
+  ...stubs(0, "isRound()Z"),
+  ...stubs(null, "getDisplayCutout()Landroid/view/DisplayCutout;", "getRoundedCorner(I)Landroid/view/RoundedCorner;",
+    "getPrivacyIndicatorBounds()Landroid/graphics/Rect;"),
   "consumeDisplayCutout()Landroid/view/WindowInsets;": function (this: JWindowInsets) { return this; },
   "consumeStableInsets()Landroid/view/WindowInsets;": function (this: JWindowInsets) { return this; },
   // Consuming the bars is how a parent tells the rest of the tree "I have handled these": AOSP's
