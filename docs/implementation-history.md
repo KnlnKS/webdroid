@@ -917,10 +917,33 @@ Evidence: `/tmp/webdroid-map-advanced-{browser,android}.log`,
 `/tmp/webdroid-map-thread-test-{baseline,both}.log`. The source-matched baseline server
 is 41981, worktree `/tmp/webdroid-map-thread-baseline` at `4acef6d`; its only extra source
 is the copied new runner test. Production/current remains 41977. Login server 41979
-and the pending user interaction are preserved. Broad regression/performance checks
-for this runner change are pending.
+and the pending user interaction are preserved. Broad checks are recorded below.
 
 Before the runner commit: typecheck, 611 tests / 20,439 assertions, executable framework
 probes and 6/6 text comparisons pass. Resy, pinned microG and the rebuilt SDK client
 compile with zero method failures. Logs: `/tmp/webdroid-map-thread-{typecheck-final,
 unit-final,fwtest,textcmp,resy-smoke,gms-smoke,client-smoke}.log`.
+
+After `f459bcb`, the serialized E2E run completes all 111 steps with no added missing,
+error or native-required diagnostics versus `28b9246`, no layout/draw failures and no
+wedged rendering. Existing Doodle/Flappy FPS failures remain (Doodle minimum 39 → 38,
+Flappy 27 in both runs); this timing does not establish a regression. Corpus renders
+13/14 APKs with the same 24 distinct missing APIs, no added normalized error entries
+and the existing TikTok failure. Visual goldens are unchanged. Evidence:
+`/tmp/webdroid-map-thread-{e2e,comparison,corpus,corpus-comparison}.log`.
+
+Three alternating native performance pairs compare `4acef6d` with `f459bcb`, with the
+middle pair reversed and no competing capture/build work. Each fresh headless browser
+runs the first five standard Doodle Jump steps (through gameplay) at golden geometry.
+Median renderer foreground CPU is 11488.10 → 11505.70 ms (+0.15%); retained JS heap after
+GC is 150.782 → 150.780 MB (−0.001%). Native instruction count is 10.914 → 10.911 billion,
+native execution time 9182.20 → 9236.80 ms (+0.59%), host calls 148302 → 148677, and
+compiled classes 68 in every run. Draw time is 445.60 → 437.60 ms and GL frames 788 → 795.
+Every run stays visible, advances 1790–1817 ticks, renders the gameplay scene and has
+no missing/native-required/error diagnostics or layout/draw/GL failures. Wasm addressable
+memory remains 256 MiB. CPU is CDP thread-tick TaskDuration, heap excludes external/Wasm
+memory, and this bounded flow does not establish every APK's performance or cold/warm
+microG costs. No repeatable >5% foreground CPU regression is observed. Evidence:
+`/tmp/webdroid-map-thread-perf-{baseline,current}-{1,2,3}.json`, adjacent `.json.png`
+captures, and `/tmp/webdroid-map-thread-perf-summary.jsonl`; driver/series/summary scripts
+use the same `/tmp/webdroid-map-thread-perf` prefix.

@@ -37,11 +37,15 @@ progress, not full interaction parity.
 The extended map flow reproduced a native thread-identity leak: `ResourceLoaderTh`
 remained current across CPU waits/yields and reached UI gesture bytecode. The runner
 now releases identity while suspended and restores its guest before execution resumes,
-including signal delivery. Eight ARM32/A64 tests fail on `4acef6d` and pass with this
-change. A matched fixed-camera flow completes cancellation, pan, marker replacement,
+including signal delivery (`f459bcb`). Eight ARM32/A64 tests fail on `4acef6d` and pass
+with this change. A matched fixed-camera flow completes cancellation, pan, marker replacement,
 click and activity reopen without exceptions; the old build throws during gesture
-dispatch. Full regression/performance verification is pending. An earlier click miss
-at a variable camera position and screen-coordinate differences remain to investigate.
+dispatch. Typecheck, 611 units, APK compilation, framework probes, textcmp, all 111 E2E
+steps and corpus are verified with no additional diagnostics versus the starting
+baseline; corpus retains TikTok's failure (13/14 rendered). Three alternating native
+benchmark pairs versus `4acef6d` give median foreground CPU +0.15%, retained JS heap
+−0.001% and native execution time +0.59%, with working visible rendering in every run. An earlier click miss at a variable camera position, screen-coordinate
+differences and camera-idle callback ordering during interruption remain to investigate.
 
 A fresh test tab is open in Chrome at `http://localhost:41979/?apk=GmsClient.apk`.
 The user has been asked to complete the authorized Google sign-in directly in that
@@ -51,7 +55,8 @@ navigation, under the protected test-config `resume-network/` directory. It reco
 bridge method names and reached process diagnostics without account names/tokens.
 Do not initiate another login attempt while this one awaits the user.
 
-Servers: current checkout 41977, matching baseline 41978, instrumented login 41979.
+Servers: current checkout 41977, original baseline 41978, instrumented login 41979,
+runner baseline `4acef6d` on 41981 (`/tmp/webdroid-map-thread-baseline`).
 The baseline worktree is `/tmp/webdroid-microg-resume-baseline`. Temporary diagnostic
 entry points are `/tmp/webdroid-microg-resume-debug-server.ts` and
 `/tmp/webdroid-microg-resume-diagnostics.ts`; safe process state is `/diag` on 41979.
