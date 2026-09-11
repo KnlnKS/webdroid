@@ -329,12 +329,10 @@ class MethodCompiler {
     const declStr = decls.length ? `let ${decls.join(",")};` : "";
 
     const catchBody = this.hasTries ? this.emitCatch() : this.leave() + "throw $e;";
-    const nameLit = JSON.stringify(this.info.name + "." + this.mname);
-    const bounded = !this.hasBackEdge && !this.hasTries;
     return `${this.sync ? "function" : "async function"}(${jsParams.join(",")}){
-${paramInit.join("")}${declStr}let $t,$u,$ex,$fu,pc=0${bounded ? "" : ",$lc=0"};${this.sync ? "" : "const $th=R.th();let $s=0,$resume=0,$p;"}
+${paramInit.join("")}${declStr}let $t,$u,$ex,$fu,pc=0;${this.sync ? "" : "const $th=R.th();let $s=0,$resume=0,$p;"}
 for(;;){
-${bounded ? "" : `if(++$lc>5000000){${this.leave()}throw new Error("loopbomb "+${nameLit}+" pc="+pc);}\n`}try{${this.sync ? "switch(pc)" : "$dispatch:switch($resume>0?-$resume:pc)"}{
+try{${this.sync ? "switch(pc)" : "$dispatch:switch($resume>0?-$resume:pc)"}{
 ${blocks.join("\n")}
 default: throw new Error("bad pc "+pc);
 }

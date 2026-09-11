@@ -47,10 +47,8 @@ export async function runCold(method: ColdMethod, receiver: unknown, args: unkno
   let reg = method.first;
   if (method.instance) f.v[reg++] = receiver;
   for (let i = 0; i < args.length; i++) { f.v[reg] = args[i]; reg += method.widths[i]; }
-  let loops = 0;
   try {
     while (!f.done) {
-      if (loops > 5000000) throw new Error("loopbomb pc=" + f.next);
       const pc = f.next, op = method.ops.get(pc);
       if (!op) throw new Error("bad pc " + pc);
       f.next = op.next;
@@ -67,7 +65,6 @@ export async function runCold(method: ColdMethod, receiver: unknown, args: unkno
             R.st(f.$th); step = iterator.next(value);
           }
         }
-        if (f.next <= pc) loops++;
       } catch (error) {
         R.st(f.$th);
         if (error instanceof TypeError) {
