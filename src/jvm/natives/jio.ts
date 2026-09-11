@@ -1107,27 +1107,26 @@ rt.register({
   },
 });
 
-class JDataOut extends JOutputStream { sink: JOutputStream | null = null; }
+class JDataOut extends JOutputStream { sink: unknown = null; written = 0; }
+function emit(s: JDataOut, b: Int8Array, off: number, len: number): unknown {
+  return after(vcallMaybe(s.sink, "write", "([BII)V", b, off, len), () => { s.written += len; });
+}
 rt.register({
   name: "java/io/DataOutputStream", ctor: JDataOut, sup: "java/io/OutputStream",
   ifaces: ["java/io/DataOutput"],
   methods: {
-    "<init>(Ljava/io/OutputStream;)V": function (this: JDataOut, s: JOutputStream) { this.sink = s; },
-    "write(I)V": function (this: JDataOut, b: number) { this.sink?.chunks.push(b & 0xff); },
-    "write([BII)V": function (this: JDataOut, b: Int8Array, off: number, len: number) {
-      for (let i = 0; i < len; i++) this.sink?.chunks.push(b[off + i] & 0xff);
-    },
-    ...writers((n, put) => function (this: JDataOut, x: never) { const b = new Uint8Array(n); put(new DataView(b.buffer), x); this.sink?.chunks.push(...b); }),
-    "writeUTF(Ljava/lang/String;)V": function (this: JDataOut, s: string) {
-      const b = utf8.enc.encode(s);
-      const sink = this.sink;
-      if (!sink) return;
-      sink.chunks.push((b.length >>> 8) & 0xff, b.length & 0xff);
-      for (const x of b) sink.chunks.push(x); // not a spread: a long string would blow the argument limit
-    },
-    "flush()V": function () {},
-    "close()V": function () {},
-    "size()I": function (this: JDataOut) { return this.sink?.chunks.length ?? 0; },
+    "<init>(Ljava/io/OutputStream;)V": function (this: JDataOut, s: unknown) { this.sink = s; },
+    "write(I)V": maySuspend(function (this: JDataOut, b: number) { return after(vcallMaybe(this.sink, "write", "(I)V", b), () => { this.written++; }); }),
+    "write([BII)V": maySuspend(function (this: JDataOut, b: Int8Array, off: number, len: number) { return emit(this, b, off, len); }),
+    ...writers((n, put) => maySuspend(function (this: JDataOut, x: never) { const b = new Int8Array(n); put(new DataView(b.buffer), x); return emit(this, b, 0, n); })),
+    "writeUTF(Ljava/lang/String;)V": maySuspend(function (this: JDataOut, s: string) {
+      const b = utf8.enc.encode(s), out = new Int8Array(b.length + 2);
+      out[0] = b.length >>> 8; out[1] = b.length; out.set(b, 2);
+      return emit(this, out, 0, out.length);
+    }),
+    "flush()V": maySuspend(function (this: JDataOut) { return vcallMaybe(this.sink, "flush", "()V"); }),
+    "close()V": maySuspend(function (this: JDataOut) { return after(vcallMaybe(this.sink, "flush", "()V"), () => vcallMaybe(this.sink, "close", "()V")); }),
+    "size()I": function (this: JDataOut) { return this.written; },
   },
 });
 
