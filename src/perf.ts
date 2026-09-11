@@ -15,9 +15,8 @@ export const perf = {
   layoutRequests: 0, layoutRequestsAll: 0, onMeasures: 0, layoutMismatch: 0, insetsPasses: 0,
   // TextView line breaking computed against served from a memo, and measures a cache answered
   wraps: 0, wrapHits: 0, measureCacheHits: 0,
-  // draw work: views painted against views their parent's clip rejected, draws that repainted
-  // the whole screen, the pixel area repainted, and presents by blit or by bitmap transfer
-  viewsDrawn: 0, viewsRejected: 0, fullDraws: 0, dirtyPx: 0, blits: 0, transfers: 0,
+  // draw work: views painted against views their parent's clip rejected
+  viewsDrawn: 0, viewsRejected: 0,
   // a frame phase that threw. Must stay 0 on a healthy app; non-zero names a real gap.
   layoutErrors: 0, drawErrors: 0,
   // wall time inside input dispatch, and lazy class compilation — both land ON the tap.
