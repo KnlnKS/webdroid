@@ -3,10 +3,11 @@ import processIndex from "./process.html";
 import { WEB_INJECT, WEB_PROXY_WORKER, WEB_FRAME } from "./src/shell/webinject";
 import { openInstall } from "./src/shell/install";
 import { prepareSystemPackages } from "./scripts/system-packages";
+import { ensureFrameworkRes } from "./scripts/gen-framework-res";
 
 import { WebRelay, type WebRelayData } from "./src/shell/webrelay";
 
-await prepareSystemPackages();
+await Promise.all([prepareSystemPackages(), ensureFrameworkRes()]);
 const webRelay = new WebRelay();
 
 type TcpData = { kind: "tcp"; host: string; port: number; tls: boolean; sock: import("bun").Socket | null; ready: boolean; pending: (Uint8Array | Buffer)[] };
