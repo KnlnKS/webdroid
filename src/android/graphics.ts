@@ -231,8 +231,9 @@ rt.register({
   },
 });
 
+const ROBOTO = "Roboto, sans-serif";
 export class JTypeface extends JObj {
-  family = "Roboto, sans-serif";
+  family = ROBOTO;
   bold = false; italic = false;
   weight = 400;
   style(): number { return (this.bold ? 1 : 0) | (this.italic ? 2 : 0); }
@@ -242,13 +243,13 @@ export function mkTypeface(family: string, bold: boolean, italic: boolean, weigh
   t.family = family; t.bold = bold; t.italic = italic; t.weight = weight;
   return t;
 }
-export const tfDefault = mkTypeface("Roboto, sans-serif", false, false);
-const tfBold = mkTypeface("Roboto, sans-serif", true, false);
+export const tfDefault = mkTypeface(ROBOTO, false, false);
+const tfBold = mkTypeface(ROBOTO, true, false);
 /** Typeface.create(family, style): the framework family names land on the faces we ship (Roboto,
  *  Roboto Medium, and the browser's serif/monospace); light/thin/condensed fall back to Roboto */
 export function typefaceFor(fam: string | null, style = 0): JTypeface {
-  const family = fam === "sans-serif-medium" ? "Roboto Medium, Roboto, sans-serif"
-    : fam === "monospace" || fam === "serif" ? fam : "Roboto, sans-serif";
+  const family = fam === "sans-serif-medium" ? "Roboto Medium, " + ROBOTO
+    : fam === "monospace" || fam === "serif" ? fam : ROBOTO;
   const t = mkTypeface(family, (style & 1) !== 0, (style & 2) !== 0);
   if (fam === "sans-serif-medium") t.weight = 500;
   else if (fam === "sans-serif-light") t.weight = 300;
@@ -277,14 +278,14 @@ rt.register({
     "static createFromFile(Ljava/lang/String;)Landroid/graphics/Typeface;": maySuspend((p: string) => loadTypeface(vfs.read(p))),
     "static createFromFile(Ljava/io/File;)Landroid/graphics/Typeface;": maySuspend((f: { path: string } | null) => loadTypeface(f ? vfs.read(f.path) : null)),
     "static create(Landroid/graphics/Typeface;IZ)Landroid/graphics/Typeface;": (base: JTypeface | null, weight: number, italic: number) => {
-      const t = mkTypeface(base?.family ?? "Roboto, sans-serif", weight >= 600, !!italic);
+      const t = mkTypeface(base?.family ?? ROBOTO, weight >= 600, !!italic);
       t.weight = weight;
       return t;
     },
     "static create(Landroid/graphics/Typeface;I)Landroid/graphics/Typeface;": (base: JTypeface | null, style: number) =>
-      mkTypeface(base?.family ?? "Roboto, sans-serif", (style & 1) !== 0, (style & 2) !== 0),
+      mkTypeface(base?.family ?? ROBOTO, (style & 1) !== 0, (style & 2) !== 0),
     "static defaultFromStyle(I)Landroid/graphics/Typeface;": (style: number) =>
-      mkTypeface("Roboto, sans-serif", (style & 1) !== 0, (style & 2) !== 0),
+      mkTypeface(ROBOTO, (style & 1) !== 0, (style & 2) !== 0),
     "getStyle()I": function (this: JTypeface) { return this.style(); },
     "getWeight()I": function (this: JTypeface) { return this.weight; },
     "isBold()Z": function (this: JTypeface) { return this.bold ? 1 : 0; },
@@ -1259,6 +1260,11 @@ function drawArc(this: JCanvas, l: number, t: number, r: number, b: number, star
   if (useCenter) path.closePath();
   this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
 }
+function drawRoundRect(this: JCanvas, l: number, t: number, r: number, b: number, rx: number, _ry: number, p: JPaint) {
+  const path = new Path2D();
+  path.roundRect(l, t, r - l, b - t, Math.min(rx, (r - l) / 2, (b - t) / 2));
+  this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
+}
 function drawBitmapRect(this: JCanvas, b: JBitmap, src: JRect | null, dst: JRect | JRectF, p: JPaint | null) {
   const s = src ?? { left: 0, top: 0, right: b.w, bottom: b.h };
   this.ctx.drawImage(tintedBmp(b, p?.filterColor ?? null), s.left, s.top, s.right - s.left, s.bottom - s.top,
@@ -1376,15 +1382,9 @@ export const canvasMethods: NativeSpec["methods"] = {
   "drawRect(FFFFLandroid/graphics/Paint;)V": drawRect,
   "drawRect(Landroid/graphics/Rect;Landroid/graphics/Paint;)V": function (this: JCanvas, r: JRect, p: JPaint) { drawRect.call(this, r.left, r.top, r.right, r.bottom, p); },
   "drawRect(Landroid/graphics/RectF;Landroid/graphics/Paint;)V": function (this: JCanvas, r: JRectF, p: JPaint) { drawRect.call(this, r.left, r.top, r.right, r.bottom, p); },
-  "drawRoundRect(FFFFFFLandroid/graphics/Paint;)V": function (this: JCanvas, l: number, t: number, r: number, b: number, rx: number, ry: number, p: JPaint) {
-    const path = new Path2D();
-    path.roundRect(l, t, r - l, b - t, Math.min(rx, (r - l) / 2, (b - t) / 2));
-    this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
-  },
+  "drawRoundRect(FFFFFFLandroid/graphics/Paint;)V": drawRoundRect,
   "drawRoundRect(Landroid/graphics/RectF;FFLandroid/graphics/Paint;)V": function (this: JCanvas, r: JRectF, rx: number, ry: number, p: JPaint) {
-    const path = new Path2D();
-    path.roundRect(r.left, r.top, r.right - r.left, r.bottom - r.top, Math.min(rx, (r.right - r.left) / 2, (r.bottom - r.top) / 2));
-    this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
+    drawRoundRect.call(this, r.left, r.top, r.right, r.bottom, rx, ry, p);
   },
   "drawCircle(FFFLandroid/graphics/Paint;)V": function (this: JCanvas, x: number, y: number, r: number, p: JPaint) {
     const path = new Path2D();

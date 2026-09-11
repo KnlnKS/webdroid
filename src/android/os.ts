@@ -90,6 +90,7 @@ defineException("android/os/DeadObjectException", "android/os/RemoteException");
 export const bootTime = typeof window === "undefined" ? performance.timeOrigin : window.parent.performance.timeOrigin;
 export const uptimeMillis = () => performance.timeOrigin - bootTime + performance.now();
 let handlerSeq = 0;
+function emptyMessage(w: number): JMessage { const m = new JMessage(); m.what = w; return m; }
 export class JHandler extends JObj {
   looper: JLooper = mainLooper;
   cb: unknown = null; // Handler.Callback
@@ -167,13 +168,9 @@ rt.register({
     "sendMessage(Landroid/os/Message;)Z": function (this: JHandler, m: JMessage) { return this.send(m, 0); },
     "sendMessageAtFrontOfQueue(Landroid/os/Message;)Z": function (this: JHandler, m: JMessage) { return this.send(m, 0); },
     "sendMessageDelayed(Landroid/os/Message;J)Z": function (this: JHandler, m: JMessage, d: bigint) { return this.send(m, Number(d)); },
-    "sendEmptyMessage(I)Z": function (this: JHandler, w: number) { const m = new JMessage(); m.what = w; return this.send(m, 0); },
-    "sendEmptyMessageAtTime(IJ)Z": function (this: JHandler, w: number, at: bigint) {
-      const m = new JMessage(); m.what = w; return this.send(m, Math.max(0, Number(at) - uptimeMillis()));
-    },
-    "sendEmptyMessageDelayed(IJ)Z": function (this: JHandler, w: number, d: bigint) {
-      const m = new JMessage(); m.what = w; return this.send(m, Number(d));
-    },
+    "sendEmptyMessage(I)Z": function (this: JHandler, w: number) { return this.send(emptyMessage(w), 0); },
+    "sendEmptyMessageAtTime(IJ)Z": function (this: JHandler, w: number, at: bigint) { return this.send(emptyMessage(w), Math.max(0, Number(at) - uptimeMillis())); },
+    "sendEmptyMessageDelayed(IJ)Z": function (this: JHandler, w: number, d: bigint) { return this.send(emptyMessage(w), Number(d)); },
     "removeCallbacks(Ljava/lang/Runnable;Ljava/lang/Object;)V": function (this: JHandler, r: unknown) { this.cancel(r); },
     "removeMessages(I)V": function (this: JHandler, w: number) { this.cancel(w); },
     "removeMessages(ILjava/lang/Object;)V": function (this: JHandler, w: number) { this.cancel(w); },
@@ -183,12 +180,8 @@ rt.register({
     "hasMessages(ILjava/lang/Object;)Z": function (this: JHandler, w: number) { return this.pending.get(w)?.size ? 1 : 0; },
     "getLooper()Landroid/os/Looper;": function (this: JHandler) { return this.looper; },
     "obtainMessage()Landroid/os/Message;": function (this: JHandler) { const m = new JMessage(); m.target = this; return m; },
-    "obtainMessage(I)Landroid/os/Message;": function (this: JHandler, w: number) {
-      const m = new JMessage(); m.target = this; m.what = w; return m;
-    },
-    "obtainMessage(ILjava/lang/Object;)Landroid/os/Message;": function (this: JHandler, w: number, o: unknown) {
-      const m = new JMessage(); m.target = this; m.what = w; m.obj = o; return m;
-    },
+    "obtainMessage(I)Landroid/os/Message;": function (this: JHandler, w: number) { const m = emptyMessage(w); m.target = this; return m; },
+    "obtainMessage(ILjava/lang/Object;)Landroid/os/Message;": function (this: JHandler, w: number, o: unknown) { const m = emptyMessage(w); m.target = this; m.obj = o; return m; },
     "obtainMessage(III)Landroid/os/Message;": function (this: JHandler, w: number, a1: number, a2: number) {
       return obtain(this, w, null, a1, a2);
     },
@@ -606,12 +599,9 @@ rt.register({
     "restat(Ljava/lang/String;)V": statFs,
     "getBlockSizeLong()J": () => BLK,
     "getBlockSize()I": () => Number(BLK),
-    "getBlockCountLong()J": function (this: JStatFs) { return BigInt(Math.floor(this.total / 4096)); },
-    "getBlockCount()I": function (this: JStatFs) { return Math.floor(this.total / 4096) | 0; },
-    "getAvailableBlocksLong()J": function (this: JStatFs) { return BigInt(Math.floor(this.free / 4096)); },
-    "getAvailableBlocks()I": function (this: JStatFs) { return Math.floor(this.free / 4096) | 0; },
-    "getFreeBlocksLong()J": function (this: JStatFs) { return BigInt(Math.floor(this.free / 4096)); },
-    "getFreeBlocks()I": function (this: JStatFs) { return Math.floor(this.free / 4096) | 0; },
+    ...Object.fromEntries(([["BlockCount", "total"], ["AvailableBlocks", "free"], ["FreeBlocks", "free"]] as const).flatMap(([n, f]) => [
+      [`get${n}Long()J`, function (this: JStatFs) { return BigInt(Math.floor(this[f] / 4096)); }],
+      [`get${n}()I`, function (this: JStatFs) { return Math.floor(this[f] / 4096) | 0; }]])),
     "getAvailableBytes()J": function (this: JStatFs) { return BigInt(Math.floor(this.free)); },
     "getFreeBytes()J": function (this: JStatFs) { return BigInt(Math.floor(this.free)); },
     "getTotalBytes()J": function (this: JStatFs) { return BigInt(Math.floor(this.total)); },
