@@ -1,7 +1,7 @@
 import { AID } from "./res";
 import { JView, initViewFromCtx, invalidate, resolveSizeAndState, uiState, JViewGroup, defaultSize } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawChild } from "./drawable";
-import { rt, type NativeSpec, maySuspend, stubs, noops, fieldGetters, flagGetters, fieldSetters, flagSetters } from "../jvm/runtime";
+import { rt, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters, flagSetters } from "../jvm/runtime";
 import { type JAttrSet, rvColor, obtainStyled, rvInt } from "./res";
 import { TV } from "./axml";
 import { type JCanvas, cssColor } from "./graphics";
@@ -195,7 +195,7 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
   ...textViewMethods,
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": init,
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": init,
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": maySuspend(init),
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": init,
   "setChecked(Z)V": function (this: JCompoundButton, c: number) { return this.setCheckedInternal(!!c); },
   "toggle()V": function (this: JCompoundButton) { return this.setCheckedInternal(!this.checked); },
   "performClick()Z": async function (this: JCompoundButton) {

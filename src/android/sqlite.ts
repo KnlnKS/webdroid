@@ -3,7 +3,7 @@ import { JMap } from "../jvm/natives/jutil";
 
 import initSqlJs, { type Database, type Statement } from "sql.js";
 import { charsToString, i8, u8 } from "../jvm/abi";
-import { rt, JObj, type NativeSpec, callSelf, maySuspend, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
 import { vcall, boxInt, box, JLong, JBool } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { JBundle } from "./os";
@@ -477,9 +477,9 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
     this.txDepth++;
     this.txOk = false;
   },
-  "beginTransactionNonExclusive()V": maySuspend(function (this: JSQLiteDatabase) {
+  "beginTransactionNonExclusive()V": function (this: JSQLiteDatabase) {
     callSelf(dbMethods, "beginTransaction()V", this);
-  }),
+  },
   "setTransactionSuccessful()V": function (this: JSQLiteDatabase) { this.txOk = true; },
   "endTransaction()V": function (this: JSQLiteDatabase) {
     this.txDepth--;

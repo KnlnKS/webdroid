@@ -1,6 +1,6 @@
 // Scrolling physics, view configuration, legacy animation classes, misc widgets' helpers.
 
-import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook, copyEvent } from "./view";
 import { restVelocity, type JMotionEvent } from "./motionevent";
@@ -602,7 +602,7 @@ rt.markers("android/view/GestureDetector$OnGestureListener", "android/view/Gestu
 rt.register({
   name: "android/gesture/GestureStore", ctor: class extends JObj {},
   methods: {
-    "getGestureEntries()Ljava/util/Set;": maySuspend(() => newObj("java/util/HashSet", null)),
+    "getGestureEntries()Ljava/util/Set;": () => newObj("java/util/HashSet", null),
     "recognize(Landroid/gesture/Gesture;)Ljava/util/ArrayList;": () => newArrayList(),
     ...noops("<init>()V", "load(Ljava/io/InputStream;)V", "load(Ljava/io/InputStream;Z)V",
       "save(Ljava/io/OutputStream;)V", "addGesture(Ljava/lang/String;Landroid/gesture/Gesture;)V"),

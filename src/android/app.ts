@@ -7,7 +7,7 @@ import {
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "./os";
-import { type NativeSpec, rt, callSelf, JObj, maySuspend, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
+import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, attachView, findById, dispatchConfigurationChanged, invalidate } from "./view";
@@ -134,7 +134,7 @@ const lifecycleCbMethods: NativeSpec["methods"] = {
 };
 export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   ...contextMethods,
-  "<init>()V": maySuspend(function (this: JActivity) { this.window.activity = this; }),
+  "<init>()V": function (this: JActivity) { this.window.activity = this; },
   "getWindow()Landroid/view/Window;": function (this: JActivity) { return this.window; },
   "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JActivity) { return this.window.backDispatcher(); },
   "getApplication()Landroid/app/Application;": function (this: JActivity) { return this.$host.application; },
@@ -179,9 +179,9 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "onStart()V": async function (this: JActivity) { this.started = true; return dispatchFragLifecycle(this, "onStart"); },
   "onResume()V": async function (this: JActivity) { this.resumed = true; return dispatchFragLifecycle(this, "onResume"); },
-  "onPause()V": maySuspend(function (this: JActivity) { this.resumed = false; return dispatchFragLifecycle(this, "onPause"); }),
-  "onStop()V": maySuspend(function (this: JActivity) { this.started = false; return dispatchFragLifecycle(this, "onStop"); }),
-  "onDestroy()V": maySuspend(function (this: JActivity) { return dispatchFragLifecycle(this, "onDestroy"); }),
+  "onPause()V": function (this: JActivity) { this.resumed = false; return dispatchFragLifecycle(this, "onPause"); },
+  "onStop()V": function (this: JActivity) { this.started = false; return dispatchFragLifecycle(this, "onStop"); },
+  "onDestroy()V": function (this: JActivity) { return dispatchFragLifecycle(this, "onDestroy"); },
   /**
    * AOSP Activity.onBackPressed: collapse an expanded action view, then pop the fragment
    * back stack, and only if neither consumed the press, finish. androidx apps land here as
@@ -196,12 +196,12 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   // Android routes the options panel through onCreatePanelMenu/onPreparePanel/onMenuItemSelected;
   // apps (and androidx) override those, so the panel entry points must exist and delegate.
-  "onCreatePanelMenu(ILandroid/view/Menu;)Z": maySuspend(function (this: JActivity, f: number, menu: JMenu) {
+  "onCreatePanelMenu(ILandroid/view/Menu;)Z": function (this: JActivity, f: number, menu: JMenu) {
     return f === 0 ? vcall(this, "onCreateOptionsMenu", "(Landroid/view/Menu;)Z", menu) : 1;
-  }),
-  "onPreparePanel(ILandroid/view/View;Landroid/view/Menu;)Z": maySuspend(function (this: JActivity, f: number, _v: unknown, menu: JMenu) {
+  },
+  "onPreparePanel(ILandroid/view/View;Landroid/view/Menu;)Z": function (this: JActivity, f: number, _v: unknown, menu: JMenu) {
     return f === 0 ? vcall(this, "onPrepareOptionsMenu", "(Landroid/view/Menu;)Z", menu) : 1;
-  }),
+  },
   "onMenuItemSelected(ILandroid/view/MenuItem;)Z": async function (this: JActivity, f: number, item: JMenuItem) {
     if (f !== 0) return 0;
     if (await vcall(this, "onOptionsItemSelected", "(Landroid/view/MenuItem;)Z", item)) return 1;
@@ -223,9 +223,9 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     await vcall(this, "finish", "()V");
     return 1;
   },
-  "onNavigateUpFromChild(Landroid/app/Activity;)Z": maySuspend(function (this: JActivity) {
+  "onNavigateUpFromChild(Landroid/app/Activity;)Z": function (this: JActivity) {
     return vcall(this, "onNavigateUp", "()Z");
-  }),
+  },
   /** AOSP forwards the new Configuration into the window's view hierarchy. */
   "onConfigurationChanged(Landroid/content/res/Configuration;)V": function (this: JActivity, cfg: unknown) {
     return this.window.decor ? dispatchConfigurationChanged(this.window.decor, cfg) : undefined;
@@ -244,9 +244,9 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     this.titleStr = spannedString(t);
     if (this.window.actionBarView) { this.window.actionBarView.titleStr = this.titleStr; invalidate(); }
   },
-  "setTitle(I)V": maySuspend(function (this: JActivity, id: number) {
+  "setTitle(I)V": function (this: JActivity, id: number) {
     callSelf(activityMethods, "setTitle(Ljava/lang/CharSequence;)V", this, resString(this.$host.res, id));
-  }),
+  },
   "getActionBar()Landroid/app/ActionBar;": async function (this: JActivity) {
     await ensureDecor(this);
     if (!this.actionBarObj) {
@@ -256,9 +256,9 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     }
     return this.actionBarObj;
   },
-  "runOnUiThread(Ljava/lang/Runnable;)V": maySuspend(function (this: JActivity, r: unknown) {
+  "runOnUiThread(Ljava/lang/Runnable;)V": function (this: JActivity, r: unknown) {
     void onMain(() => vcall(r, "run", "()V").catch(reportUncaught));
-  }),
+  },
   "finish()V": function (this: JActivity) {
     if (!this.finished) {
       this.finished = true;
@@ -270,8 +270,8 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     if (activityTransport.isTaskRoot?.(this) && activityTransport.removeTask) { this.finished = true; activityTransport.removeTask(this); }
     else callSelf(activityMethods, "finish()V", this);
   },
-  "finishAffinity()V": maySuspend(function (this: JActivity) { callSelf(activityMethods, "finish()V", this); }),
-  "finishAfterTransition()V": maySuspend(function (this: JActivity) { callSelf(activityMethods, "finish()V", this); }),
+  "finishAffinity()V": function (this: JActivity) { callSelf(activityMethods, "finish()V", this); },
+  "finishAfterTransition()V": function (this: JActivity) { callSelf(activityMethods, "finish()V", this); },
   "isTaskRoot()Z": function (this: JActivity) { return +(activityTransport.isTaskRoot?.(this) ?? false); },
   // AOSP's startActivityForResult only *starts* something; the result arrives later through
   // onActivityResult. Awaiting a system activity here would hold the serialized main-looper
@@ -289,9 +289,9 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   // ActivityCompat — and so every androidx ActivityResultRegistry launcher — calls the options
   // overload, which must funnel into the body above rather than carry a second copy of it.
-  "startActivityForResult(Landroid/content/Intent;ILandroid/os/Bundle;)V": maySuspend(function (this: JActivity, intent: JIntent, code: number) {
+  "startActivityForResult(Landroid/content/Intent;ILandroid/os/Bundle;)V": function (this: JActivity, intent: JIntent, code: number) {
     return callSelf(activityMethods, "startActivityForResult(Landroid/content/Intent;I)V", this, intent, code);
-  }),
+  },
   "setResult(ILandroid/content/Intent;)V": function (this: JActivity, c: number, d: JIntent) {
     this.resultCode = c;
     this.resultData = d;
@@ -334,7 +334,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   // The system's dialog goes in front of the activity: it pauses, the answer is recorded, and
   // it resumes before the result is delivered. Nobody is here to tap, so asking is what grants
   // — but an app that re-reads the permission in onResume must see the grant by then.
-  "requestPermissions([Ljava/lang/String;I)V": maySuspend(function (this: JActivity, perms: string[], code: number) {
+  "requestPermissions([Ljava/lang/String;I)V": function (this: JActivity, perms: string[], code: number) {
     setTimeout(() => {
       void onMain(async () => {
         const granted = grantPermissions(perms);
@@ -342,7 +342,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
         await vcall(this, "onRequestPermissionsResult", "(I[Ljava/lang/String;[I)V", code, perms, granted);
       }).catch(reportUncaught);
     }, 0);
-  }),
+  },
   "getVolumeControlStream()I": () => 3,
   ...noops("onCreate(Landroid/os/Bundle;)V", "onPostCreate(Landroid/os/Bundle;)V", "onRestart()V", "onPostResume()V",
     "onNewIntent(Landroid/content/Intent;)V", "onSaveInstanceState(Landroid/os/Bundle;)V",
@@ -575,16 +575,16 @@ for (const [name, methods, statics] of [
     "static getExtensionVersion(I)I": () => 0,
   }],
   ["android/app/AppOpsManager", {
-    "noteOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": maySuspend(function (this: JObj, op: string, uid: number, pkg: string) {
+    "noteOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": function (this: JObj, op: string, uid: number, pkg: string) {
       return vcall(this, "checkOpNoThrow", "(Ljava/lang/String;ILjava/lang/String;)I", op, uid, pkg);
-    }),
-    "noteOpNoThrow(Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I": maySuspend(function (this: JObj, op: string, uid: number, pkg: string) {
+    },
+    "noteOpNoThrow(Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I": function (this: JObj, op: string, uid: number, pkg: string) {
       return vcall(this, "noteOpNoThrow", "(Ljava/lang/String;ILjava/lang/String;)I", op, uid, pkg);
-    }),
+    },
     "checkOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": (_op: string, uid: number, pkg: string) => packages.get(pkg)?.uid === uid ? 0 : 2,
-    "startOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": maySuspend(function (this: JObj, op: string, uid: number, pkg: string) {
+    "startOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": function (this: JObj, op: string, uid: number, pkg: string) {
       return vcall(this, "checkOpNoThrow", "(Ljava/lang/String;ILjava/lang/String;)I", op, uid, pkg);
-    }),
+    },
     ...stubs(null, "static permissionToOp(Ljava/lang/String;)Ljava/lang/String;"),
     ...stubs(0, "noteOp(Ljava/lang/String;ILjava/lang/String;)I", "noteProxyOp(Ljava/lang/String;Ljava/lang/String;)I",
       "noteProxyOpNoThrow(Ljava/lang/String;Ljava/lang/String;)I", "checkOp(Ljava/lang/String;ILjava/lang/String;)I",
@@ -627,7 +627,7 @@ for (const [name, methods, statics] of [
   ["android/hardware/display/DisplayManager", {
     // one fixed built-in display: unknown ids are null as in AOSP, and registered listeners
     // never fire because no display is ever added, removed or reconfigured here
-    "getDisplay(I)Landroid/view/Display;": maySuspend((id: number) => (id === 0 ? display() : null)),
+    "getDisplay(I)Landroid/view/Display;": (id: number) => (id === 0 ? display() : null),
     "getDisplays()[Landroid/view/Display;": () => jarray([display()], "Landroid/view/Display;"),
     "getDisplays(Ljava/lang/String;)[Landroid/view/Display;": (cat: string | null) => jarray(cat === null ? [display()] : [], "Landroid/view/Display;"),
     "registerDisplayListener(Landroid/hardware/display/DisplayManager$DisplayListener;Landroid/os/Handler;)V": (l: unknown) => {

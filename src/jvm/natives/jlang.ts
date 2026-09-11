@@ -1,7 +1,7 @@
 // java.lang.* natives. Convention: Java booleans are 0/1 numbers, longs are BigInt,
 // Strings are JS string primitives (String.prototype carries mangled Java methods).
 
-import { rt, JObj, maySuspend, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
+import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
 import { parkTimeout, unparkTimeout } from "../yield";
 import { directionality } from "../bidi";
 import { encodeString } from "../charset";
@@ -325,11 +325,11 @@ rt.register({
     },
     "resolveClass(Ljava/lang/Class;)V": () => {},
     "findClass(Ljava/lang/String;)Ljava/lang/Class;": (n: string) => { throw rt.mkThrowable("java/lang/ClassNotFoundException", n); },
-    "findResource(Ljava/lang/String;)Ljava/net/URL;": maySuspend(function (this: JClassLoader, path: string) {
+    "findResource(Ljava/lang/String;)Ljava/net/URL;": function (this: JClassLoader, path: string) {
       if (!this.runtime.hasClasspath(path)) return null;
       const archive = this.runtime.classpathLocations.get(path) ?? "/data/app/base.apk";
       return newObj("java/net/URL", "(Ljava/lang/String;)V", "jar:file://" + archive + "!/" + path);
-    }),
+    },
     "getResource(Ljava/lang/String;)Ljava/net/URL;": async function (this: JClassLoader, path: string) {
       const inherited = this.parent && await vcall(this.parent, "getResource", "(Ljava/lang/String;)Ljava/net/URL;", path);
       return inherited || vcall(this, "findResource", "(Ljava/lang/String;)Ljava/net/URL;", path);
@@ -712,9 +712,9 @@ rt.register({
       if (this.out) await vcall(this.out, "append", "(Ljava/lang/CharSequence;)Ljava/lang/Appendable;", s); else this.s += s;
       return this;
     },
-    "format(Ljava/util/Locale;Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/Formatter;": maySuspend(function (this: JFormatter, _l: unknown, fmt: string, args: unknown[]) {
+    "format(Ljava/util/Locale;Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/Formatter;": function (this: JFormatter, _l: unknown, fmt: string, args: unknown[]) {
       return vcall(this, "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/Formatter;", fmt, args);
-    }),
+    },
     "out()Ljava/lang/Appendable;": function (this: JFormatter) { return this.out; },
     "toString()Ljava/lang/String;": function (this: JFormatter) { return this.out ? vcall(this.out, "toString", "()Ljava/lang/String;") : this.s; },
     "flush()V": () => {},
@@ -732,8 +732,8 @@ rt.register({
     "static valueOf(D)Ljava/lang/String;": (v: number) => fmtDouble(v),
     "static valueOf(Z)Ljava/lang/String;": (v: number) => (v ? "true" : "false"),
     "static valueOf(C)Ljava/lang/String;": (v: number) => String.fromCharCode(v),
-    "static valueOf(Ljava/lang/Object;)Ljava/lang/String;": maySuspend((v: unknown) =>
-      v === null ? "null" : vcall(v, "toString", "()Ljava/lang/String;")),
+    "static valueOf(Ljava/lang/Object;)Ljava/lang/String;": (v: unknown) =>
+      v === null ? "null" : vcall(v, "toString", "()Ljava/lang/String;"),
     "static valueOf([C)Ljava/lang/String;": (v: Uint16Array) => charsToString(v, 0, v.length),
     "static valueOf([CII)Ljava/lang/String;": (v: Uint16Array, o: number, n: number) => charsToString(v, o, n),
     "static format(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;": (f: string, a: unknown[]) => javaFormat(f, a),
@@ -1475,8 +1475,8 @@ rt.register({
     "getUncaughtExceptionHandler()Ljava/lang/Thread$UncaughtExceptionHandler;": () => defaultUEH,
     "setUncaughtExceptionHandler(Ljava/lang/Thread$UncaughtExceptionHandler;)V": () => {},
     "static setDefaultUncaughtExceptionHandler(Ljava/lang/Thread$UncaughtExceptionHandler;)V": (h: unknown) => { defaultUEH = h; },
-    "static sleep(J)V": maySuspend((ms: bigint) => park(curThread, () => () => {}, Number(ms))),
-    "static yield()V": maySuspend(() => new Promise((r) => setTimeout(r, 0))),
+    "static sleep(J)V": (ms: bigint) => park(curThread, () => () => {}, Number(ms)),
+    "static yield()V": () => new Promise((r) => setTimeout(r, 0)),
     "static interrupted()Z": () => { const v = curThread.interrupted; curThread.interrupted = 0; return v; },
     "static holdsLock(Ljava/lang/Object;)Z": (o: unknown) => rt.monitors.holds(o as object, curThread) ? 1 : 0,
   },
@@ -1503,7 +1503,7 @@ rt.register({
 class JThreadLocal extends JObj {}
 rt.register({
   name: "webdroid/SuppliedThreadLocal", ctor: class extends JThreadLocal { supplier: unknown = null; }, sup: "java/lang/ThreadLocal",
-  methods: { "initialValue()Ljava/lang/Object;": maySuspend(function (this: { supplier: unknown }) { return vcallMaybe(this.supplier, "get", "()Ljava/lang/Object;"); }) },
+  methods: { "initialValue()Ljava/lang/Object;": function (this: { supplier: unknown }) { return vcallMaybe(this.supplier, "get", "()Ljava/lang/Object;"); } },
 });
 rt.register({
   name: "java/lang/ThreadLocal", ctor: JThreadLocal,
@@ -1649,7 +1649,7 @@ rt.register({
 rt.register({ name: "java/lang/ref/ReferenceQueue", ctor: class extends JObj {}, methods: {
   "<init>()V": function () {},
   "poll()Ljava/lang/ref/Reference;": () => null,
-  "remove()Ljava/lang/ref/Reference;": maySuspend(() => park(curThread, () => () => {}).then(() => null)),
+  "remove()Ljava/lang/ref/Reference;": () => park(curThread, () => () => {}).then(() => null),
   "remove(J)Ljava/lang/ref/Reference;": (ms: bigint) => park(curThread, () => () => {}, Number(ms)).then(() => null),
 } });
 

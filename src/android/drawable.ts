@@ -1,6 +1,6 @@
 // android.graphics.drawable.* — Drawable hierarchy, XML inflation, 9-patch, vectors.
 
-import { rt, JObj, type NativeSpec, callSelf, maySuspend, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
 import { vcall, mkEnumSet } from "../jvm/natives/jlang";
 import { mangleMethod, jmethod, intBitsToFloat } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, insetsOf } from "./graphics";
@@ -80,16 +80,16 @@ const drawableMethods: NativeSpec["methods"] = {
   "getIntrinsicHeight()I": function (this: JDrawable) { return this.intrinsicH(); },
   "getMinimumWidth()I": function (this: JDrawable) { return Math.max(0, this.intrinsicW()); },
   "getMinimumHeight()I": function (this: JDrawable) { return Math.max(0, this.intrinsicH()); },
-  "setAlpha(I)V": maySuspend(function (this: JDrawable, a: number) { this.alpha = a; }),
-  "getAlpha()I": maySuspend(function (this: JDrawable) { return this.alpha; }),
-  "setColorFilter(Landroid/graphics/ColorFilter;)V": maySuspend(function (this: JDrawable, f: any) { this.tint = f?.tint ?? null; }),
+  "setAlpha(I)V": function (this: JDrawable, a: number) { this.alpha = a; },
+  "getAlpha()I": function (this: JDrawable) { return this.alpha; },
+  "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JDrawable, f: any) { this.tint = f?.tint ?? null; },
   "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": function (this: JDrawable, c: number) { this.tint = c; },
   "clearColorFilter()V": function (this: JDrawable) { this.tint = null; },
   "setTint(I)V": function (this: JDrawable, c: number) { this.tint = c; },
-  "setTintList(Landroid/content/res/ColorStateList;)V": maySuspend(function (this: JDrawable, csl: JColorStateList | null) {
+  "setTintList(Landroid/content/res/ColorStateList;)V": function (this: JDrawable, csl: JColorStateList | null) {
     this.tint = csl ? cslColor(csl, this.stateSet) : null;
-  }),
-  "setTintMode(Landroid/graphics/PorterDuff$Mode;)V": maySuspend(function () {}),
+  },
+  "setTintMode(Landroid/graphics/PorterDuff$Mode;)V": function () {},
   "setState([I)Z": async function (this: JDrawable, st: Int32Array) {
     const cur = this.stateSet;
     if (cur.length === st.length && cur.every((v, i) => v === st[i])) return 0;
@@ -101,9 +101,9 @@ const drawableMethods: NativeSpec["methods"] = {
     invalidateSelf.call(this);
     return 1;
   },
-  "onStateChange([I)Z": maySuspend(function (this: JDrawable) { return this.onStateChange() ? 1 : 0; }),
+  "onStateChange([I)Z": function (this: JDrawable) { return this.onStateChange() ? 1 : 0; },
   "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JDrawable) { onBoundsChangeAll(this); },
-  "onLevelChange(I)Z": maySuspend(() => 0),
+  "onLevelChange(I)Z": () => 0,
   "getState()[I": function (this: JDrawable) { return Int32Array.from(this.stateSet); },
   "setLevel(I)Z": function (this: JDrawable, l: number) {
     if (this.level === l) return 0;
@@ -121,22 +121,22 @@ const drawableMethods: NativeSpec["methods"] = {
   "scheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;J)V": function (this: JDrawable, _d: unknown, r: unknown, when: bigint) { scheduleSelf.call(this, r, when); },
   "unscheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;)V": function (this: JDrawable, _d: unknown, r: unknown) { unscheduleSelf.call(this, r); },
   "invalidateDrawable(Landroid/graphics/drawable/Drawable;)V": invalidateSelf,
-  "mutate()Landroid/graphics/drawable/Drawable;": maySuspend(function (this: JDrawable) { return this; }),
-  "isStateful()Z": maySuspend(function (this: JDrawable) { return this instanceof JStateListDrawable ? 1 : 0; }),
-  "getPadding(Landroid/graphics/Rect;)Z": maySuspend(function (this: JDrawable, r: JRect) {
+  "mutate()Landroid/graphics/drawable/Drawable;": function (this: JDrawable) { return this; },
+  "isStateful()Z": function (this: JDrawable) { return this instanceof JStateListDrawable ? 1 : 0; },
+  "getPadding(Landroid/graphics/Rect;)Z": function (this: JDrawable, r: JRect) {
     const p = (this as any).padding as JRect | undefined;
     if (p) { r.left = p.left; r.top = p.top; r.right = p.right; r.bottom = p.bottom; return 1; }
     r.left = r.top = r.right = r.bottom = 0;
     return 0;
-  }),
-  "getOpacity()I": maySuspend(() => -3),
+  },
+  "getOpacity()I": () => -3,
   "static resolveOpacity(II)I": (a: number, b: number) => a === b ? a : a === 0 || b === 0 ? 0 : a === -3 || b === -3 ? -3 : a === -2 || b === -2 ? -2 : -1,
-  "setVisible(ZZ)Z": maySuspend(function (this: JDrawable, v: number) { const changed = this.visible !== !!v; this.visible = !!v; return changed ? 1 : 0; }),
+  "setVisible(ZZ)Z": function (this: JDrawable, v: number) { const changed = this.visible !== !!v; this.visible = !!v; return changed ? 1 : 0; },
   "isVisible()Z": function (this: JDrawable) { return this.visible ? 1 : 0; },
-  "getOutline(Landroid/graphics/Outline;)V": maySuspend(function (this: JDrawable, o: unknown) {
+  "getOutline(Landroid/graphics/Outline;)V": function (this: JDrawable, o: unknown) {
     const b = this.bounds;
     return vcall(o, "setRect", "(IIII)V", b.left, b.top, b.right, b.bottom);
-  }),
+  },
   "getOpticalInsets()Landroid/graphics/Insets;": () => insetsOf(0, 0, 0, 0),
   "setAutoMirrored(Z)V": function (this: JDrawable, m: number) { this.autoMirrored = !!m; },
   "isAutoMirrored()Z": function (this: JDrawable) { return this.autoMirrored ? 1 : 0; },
@@ -146,7 +146,7 @@ const drawableMethods: NativeSpec["methods"] = {
     return 1;
   },
   "getLayoutDirection()I": function (this: JDrawable) { return this.layoutDir; },
-  "jumpToCurrentState()V": maySuspend(() => {}),
+  "jumpToCurrentState()V": () => {},
   "getCurrent()Landroid/graphics/drawable/Drawable;": function (this: JDrawable) {
     return this instanceof JStateListDrawable ? this.current() : this;
   },
@@ -784,7 +784,7 @@ rt.register({
     "setHotspot(FF)V": function (this: JRippleDrawable, x: number, y: number) { this.hx = x; this.hy = y; },
     "isProjected()Z": () => 0,
     "isStateful()Z": () => 1,
-    "hasFocusStateSpecified()Z": maySuspend(() => 1),
+    "hasFocusStateSpecified()Z": () => 1,
     "setRadius(I)V": function (this: JRippleDrawable, r: number) { this.explicitRadius = r; },
     "getRadius()I": function (this: JRippleDrawable) { return this.explicitRadius; },
   },
@@ -979,15 +979,15 @@ rt.register({
     "<init>(Landroid/graphics/Picture;)V": function (this: JPictureDrawable, p: unknown) { this.picture = p; },
     "setPicture(Landroid/graphics/Picture;)V": function (this: JPictureDrawable, p: unknown) { this.picture = p; invalidateSelf.call(this); },
     "getPicture()Landroid/graphics/Picture;": function (this: JPictureDrawable) { return this.picture; },
-    "draw(Landroid/graphics/Canvas;)V": maySuspend(function (this: JPictureDrawable, cv: unknown) {
+    "draw(Landroid/graphics/Canvas;)V": function (this: JPictureDrawable, cv: unknown) {
       return this.picture ? vcall(this.picture, "draw", "(Landroid/graphics/Canvas;)V", cv) : undefined;
-    }),
-    "getIntrinsicWidth()I": maySuspend(function (this: JPictureDrawable) {
+    },
+    "getIntrinsicWidth()I": function (this: JPictureDrawable) {
       return this.picture ? vcall(this.picture, "getWidth", "()I") : -1;
-    }),
-    "getIntrinsicHeight()I": maySuspend(function (this: JPictureDrawable) {
+    },
+    "getIntrinsicHeight()I": function (this: JPictureDrawable) {
       return this.picture ? vcall(this.picture, "getHeight", "()I") : -1;
-    }),
+    },
   },
 });
 rt.register({

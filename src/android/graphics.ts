@@ -1,6 +1,6 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
-import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle } from "./handles";
@@ -260,11 +260,11 @@ export const tfMedium = typefaceFor("sans-serif-medium");
 // fonts.ts owns font parsing and imports this module, so the loader arrives from there
 let loadTypeface: (bytes: Uint8Array | null) => Promise<JTypeface | null> = async () => null;
 export const setTypefaceLoader = (f: typeof loadTypeface) => { loadTypeface = f; };
-const assetFont = maySuspend((am: { host: { zip: Record<string, Uint8Array> } } | null, path: string) => {
+const assetFont = (am: { host: { zip: Record<string, Uint8Array> } } | null, path: string) => {
   const bytes = am?.host.zip["assets/" + path];
   if (!bytes) throw rt.mkThrowable("java/lang/RuntimeException", "Font asset not found " + path);
   return loadTypeface(bytes);
-});
+};
 rt.register({
   name: "android/graphics/Typeface", ctor: JTypeface,
   statics: {
@@ -275,8 +275,8 @@ rt.register({
   methods: {
     "static create(Ljava/lang/String;I)Landroid/graphics/Typeface;": typefaceFor,
     "static createFromAsset(Landroid/content/res/AssetManager;Ljava/lang/String;)Landroid/graphics/Typeface;": assetFont,
-    "static createFromFile(Ljava/lang/String;)Landroid/graphics/Typeface;": maySuspend((p: string) => loadTypeface(vfs.read(p))),
-    "static createFromFile(Ljava/io/File;)Landroid/graphics/Typeface;": maySuspend((f: { path: string } | null) => loadTypeface(f ? vfs.read(f.path) : null)),
+    "static createFromFile(Ljava/lang/String;)Landroid/graphics/Typeface;": (p: string) => loadTypeface(vfs.read(p)),
+    "static createFromFile(Ljava/io/File;)Landroid/graphics/Typeface;": (f: { path: string } | null) => loadTypeface(f ? vfs.read(f.path) : null),
     "static create(Landroid/graphics/Typeface;IZ)Landroid/graphics/Typeface;": (base: JTypeface | null, weight: number, italic: number) => {
       const t = mkTypeface(base?.family ?? ROBOTO, weight >= 600, !!italic);
       t.weight = weight;
@@ -445,10 +445,10 @@ const paintMethods: NativeSpec["methods"] = {
   "measureText([CII)F": function (this: JPaint, c: Uint16Array, off: number, n: number) {
     return measureText(this, charsToString(c, off, n));
   },
-  "getTextBounds(Ljava/lang/CharSequence;IILandroid/graphics/Rect;)V": maySuspend(function (this: JPaint, cs: unknown, a: number, b: number, r: JRect) {
+  "getTextBounds(Ljava/lang/CharSequence;IILandroid/graphics/Rect;)V": function (this: JPaint, cs: unknown, a: number, b: number, r: JRect) {
     const str = typeof cs === "string" ? cs : ((cs as { text?: string })?.text ?? String(cs ?? ""));
     return vcall(this, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", str, a, b, r);
-  }),
+  },
   "getTextBounds(Ljava/lang/String;IILandroid/graphics/Rect;)V": function (this: JPaint, s: string, a: number, b: number, r: JRect) {
     const ctx = measureCtx(this.font());
     const m = ctx.measureText(s.slice(a, b));
@@ -1601,10 +1601,10 @@ rt.register({
   name: "android/graphics/Picture", ctor: JPicture,
   methods: {
     "<init>()V": function () {},
-    "beginRecording(II)Landroid/graphics/Canvas;": maySuspend(function (this: JPicture, w: number, h: number) {
+    "beginRecording(II)Landroid/graphics/Canvas;": function (this: JPicture, w: number, h: number) {
       return vcall(this.node, "beginRecording", "(II)Landroid/graphics/RecordingCanvas;", w, h);
-    }),
-    "endRecording()V": maySuspend(function (this: JPicture) { return vcall(this.node, "endRecording", "()V"); }),
+    },
+    "endRecording()V": function (this: JPicture) { return vcall(this.node, "endRecording", "()V"); },
     "getWidth()I": function (this: JPicture) { return this.node.w; },
     "getHeight()I": function (this: JPicture) { return this.node.h; },
     "draw(Landroid/graphics/Canvas;)V": function (this: JPicture, cv: JCanvas) {

@@ -4,7 +4,7 @@ import { mangleMethod, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, vcallMaybe, after, idHash } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor } from "./drawable";
 import { JMotionEvent } from "./motionevent";
-import { JObj, rt, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme } from "./res";
 import { mainHandler, reportUncaught } from "./os";
 import type { JDisplayMetrics } from "./util";
@@ -700,7 +700,7 @@ async function drawLayered(v: JView, cv: JCanvas, w: number, h: number) {
  * label and box there and calls super — so the traversal goes through the override when there
  * is one, and straight to the base body when there is not.
  */
-const baseDraw = maySuspend(function (this: JView, cv: JCanvas) { return drawContent(this, cv); });
+const baseDraw = function (this: JView, cv: JCanvas) { return drawContent(this, cv); };
 function drawSelf(v: JView, cv: JCanvas): Promise<void> {
   const fn = jmethod(v, M_draw);
   return fn && fn !== baseDraw ? guardApply(fn, v, cv) : drawContent(v, cv);
@@ -798,11 +798,11 @@ const viewMethods: NativeSpec["methods"] = {
   "getMinimumWidth()I": function (this: JView) { return this.minW; },
   "getMinimumHeight()I": function (this: JView) { return this.minH; },
   "getLayoutParams()Landroid/view/ViewGroup$LayoutParams;": function (this: JView) { return this.lp; },
-  "setLayoutParams(Landroid/view/ViewGroup$LayoutParams;)V": maySuspend(function (this: JView, lp: JLayoutParams) {
+  "setLayoutParams(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JView, lp: JLayoutParams) {
     this.lp = lp;
     requestLayout(this);
     return resolveLp(lp);
-  }),
+  },
   "getVisibility()I": function (this: JView) { return this.visibility; },
   "setVisibility(I)V": function (this: JView, v: number) {
     if (this.visibility !== v) { this.visibility = v; requestLayout(this); invalidate(this); }
@@ -916,7 +916,7 @@ const viewMethods: NativeSpec["methods"] = {
     if (this.longClickL) return await vcall(this.longClickL, "onLongClick", "(Landroid/view/View;)Z", this);
     return 0;
   },
-  "measure(II)V": maySuspend(function (this: JView, w: number, h: number) { return measureView(this, w, h); }),
+  "measure(II)V": function (this: JView, w: number, h: number) { return measureView(this, w, h); },
   "onMeasure(II)V": function (this: JView, wSpec: number, hSpec: number) {
     const bw = Math.max(this.minW, this.background?.intrinsicW() ?? 0);
     const bh = Math.max(this.minH, this.background?.intrinsicH() ?? 0);
@@ -933,9 +933,9 @@ const viewMethods: NativeSpec["methods"] = {
   "setMeasuredDimension(II)V": function (this: JView, w: number, h: number) {
     this.measuredW = w & 0xffffff; this.measuredH = h & 0xffffff;
   },
-  "layout(IIII)V": maySuspend(function (this: JView, l: number, t: number, r: number, b: number) {
+  "layout(IIII)V": function (this: JView, l: number, t: number, r: number, b: number) {
     return layoutView(this, l, t, r, b);
-  }),
+  },
   // AOSP's own body: background, content, children, foreground — at the canvas origin, with
   // the transform and clip left to whoever is drawing this view.
   "draw(Landroid/graphics/Canvas;)V": baseDraw,
@@ -1029,7 +1029,7 @@ const viewMethods: NativeSpec["methods"] = {
   // AOSP asks the delegate first, then performs the standard actions itself. The two
   // accessibility-focus actions belong to a running accessibility service; there is none here,
   // so they report the same false a device with the screen reader off reports.
-  "performAccessibilityAction(ILandroid/os/Bundle;)Z": maySuspend(function (this: JView, action: number, args: unknown) {
+  "performAccessibilityAction(ILandroid/os/Bundle;)Z": function (this: JView, action: number, args: unknown) {
     if (this.a11yDelegate) {
       return vcall(this.a11yDelegate, "performAccessibilityAction", "(Landroid/view/View;ILandroid/os/Bundle;)Z", this, action, args);
     }
@@ -1041,7 +1041,7 @@ const viewMethods: NativeSpec["methods"] = {
       case 0x20: return this.longClickable ? vcall(this, "performLongClick", "()Z") : 0;
     }
     return 0;
-  }),
+  },
   // the system UI never changes underneath the app here, so the listener has nothing to hear
   "setOnSystemUiVisibilityChangeListener(Landroid/view/View$OnSystemUiVisibilityChangeListener;)V": () => {},
   "setFitsSystemWindows(Z)V": function (this: JView, on: number) { this.fitsSys = !!on; },
@@ -1168,19 +1168,19 @@ const viewMethods: NativeSpec["methods"] = {
   // something actually destroys a view hierarchy.
   "clearViewTranslationCallback()V": () => {},
   "getUniqueDrawingId()J": function (this: JView) { return BigInt((this as unknown as { $udid?: number }).$udid ??= ++JView.$nextDrawingId); },
-  "transformMatrixToGlobal(Landroid/graphics/Matrix;)V": maySuspend(function (this: JView, m: unknown) {
+  "transformMatrixToGlobal(Landroid/graphics/Matrix;)V": function (this: JView, m: unknown) {
     const [tx, ty] = windowOffset(this);
     void vcall(m, "postTranslate", "(FF)Z", tx, ty);
-  }),
-  "transformMatrixToLocal(Landroid/graphics/Matrix;)V": maySuspend(function (this: JView, m: unknown) {
+  },
+  "transformMatrixToLocal(Landroid/graphics/Matrix;)V": function (this: JView, m: unknown) {
     const [tx, ty] = windowOffset(this);
     void vcall(m, "postTranslate", "(FF)Z", -tx, -ty);
-  }),
+  },
   "getAutofillId()Landroid/view/autofill/AutofillId;": () => rt.make("android/view/autofill/AutofillId"),
   "hasOnClickListeners()Z": function (this: JView) { return this.clickL ? 1 : 0; },
-  "requestRectangleOnScreen(Landroid/graphics/Rect;)Z": maySuspend(function (this: JView, rect: JRect) {
+  "requestRectangleOnScreen(Landroid/graphics/Rect;)Z": function (this: JView, rect: JRect) {
     return vcall(this, "requestRectangleOnScreen", "(Landroid/graphics/Rect;Z)Z", rect, 0);
-  }),
+  },
   "requestRectangleOnScreen(Landroid/graphics/Rect;Z)Z": async function (this: JView, rect: JRect, immediate: number) {
     let scrolled = 0;
     for (let child: JView = this, parent = child.parent; parent; child = parent, parent = parent.parent) {
@@ -1248,12 +1248,12 @@ const viewMethods: NativeSpec["methods"] = {
   "getOverlay()Landroid/view/ViewGroupOverlay;": overlayOf,
   "getWindowId()Landroid/view/WindowId;": function (this: JView) { return this.attached ? WINDOW_ID : null; },
   "getRootWindowInsets()Landroid/view/WindowInsets;": () => rootWindowInsets(),
-  "getWindowInsetsController()Landroid/view/WindowInsetsController;": maySuspend(function (this: JView) {
+  "getWindowInsetsController()Landroid/view/WindowInsetsController;": function (this: JView) {
     if (!this.attached) return null;
     let root: JView = this;
     while (root.parent) root = root.parent;
     return root.windowOwner ? vcall(root.windowOwner, "getInsetsController", "()Landroid/view/WindowInsetsController;") : null;
-  }),
+  },
   // AOSP: a view that fits system windows turns the bars into padding and consumes them; one
   // that does not still offers them to the deprecated fitSystemWindows(Rect) an app may override.
   "onApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": async function (this: JView, ins: JWindowInsets) {
@@ -1635,18 +1635,18 @@ const vgMethods: NativeSpec["methods"] = {
   "addView(Landroid/view/View;)V": async function (this: JViewGroup, c: JView) {
     return addViewFunnel(this, c, -1, null);
   },
-  "addView(Landroid/view/View;I)V": maySuspend(function (this: JViewGroup, c: JView, i: number) {
+  "addView(Landroid/view/View;I)V": function (this: JViewGroup, c: JView, i: number) {
     return addViewFunnel(this, c, i, null);
-  }),
-  "addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": maySuspend(function (this: JViewGroup, c: JView, lp: JLayoutParams) {
+  },
+  "addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JViewGroup, c: JView, lp: JLayoutParams) {
     return addViewFunnel(this, c, -1, lp);
-  }),
+  },
   "addView(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V": addView3,
-  "addView(Landroid/view/View;II)V": maySuspend(function (this: JViewGroup, c: JView, w: number, h: number) {
+  "addView(Landroid/view/View;II)V": function (this: JViewGroup, c: JView, w: number, h: number) {
     const lp = new JLayoutParams();
     lp.width = w; lp.height = h;
     return addViewFunnel(this, c, -1, lp);
-  }),
+  },
   "removeView(Landroid/view/View;)V": removeChild,
   "removeViewInLayout(Landroid/view/View;)V": removeChildInLayout,
   "removeViewAt(I)V": function (this: JViewGroup, i: number) {
@@ -1697,7 +1697,7 @@ const vgMethods: NativeSpec["methods"] = {
   "setChildrenDrawingOrderEnabled(Z)V": function (this: JViewGroup, e: number) { this.drawingOrderEnabled = !!e; },
   "isChildrenDrawingOrderEnabled()Z": function (this: JViewGroup) { return this.drawingOrderEnabled ? 1 : 0; },
   "getChildDrawingOrder(II)I": (_n: number, i: number) => i,
-  "getChildDrawingOrder(I)I": maySuspend(function (this: JViewGroup, i: number) { return vcall(this, "getChildDrawingOrder", "(II)I", this.children.length, i); }),
+  "getChildDrawingOrder(I)I": function (this: JViewGroup, i: number) { return vcall(this, "getChildDrawingOrder", "(II)I", this.children.length, i); },
   "onMeasure(II)V": async function (this: JViewGroup, w: number, h: number) {
     // default: act like FrameLayout-lite
     let mw = 0, mh = 0;
@@ -1716,9 +1716,9 @@ const vgMethods: NativeSpec["methods"] = {
       await layoutView(c, this.padL, this.padT, this.padL + c.measuredW, this.padT + c.measuredH);
     }
   },
-  "measureChildWithMargins(Landroid/view/View;IIII)V": maySuspend(function (this: JViewGroup, c: JView, ws: number, wu: number, hs: number, hu: number) {
+  "measureChildWithMargins(Landroid/view/View;IIII)V": function (this: JViewGroup, c: JView, ws: number, wu: number, hs: number, hu: number) {
     return measureChildWithMargins(this, c, ws, wu, hs, hu);
-  }),
+  },
   "measureChild(Landroid/view/View;II)V": async function (this: JViewGroup, c: JView, ws: number, hs: number) {
     await measureView(c,
       childMeasureSpec(ws, this.padL + this.padR, c.lp?.width ?? WRAP_CONTENT),
@@ -1938,7 +1938,7 @@ rt.register({
     })),
     "removeGlobalOnLayoutListener(Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;)V": function (this: JVTO, l: unknown) { removeFrom(this.globalLayoutLs, l); },
     "isAlive()Z": () => 1,
-    "dispatchOnGlobalLayout()V": maySuspend(function (this: JVTO) { return this.dispatchGlobalLayout(); }),
+    "dispatchOnGlobalLayout()V": function (this: JVTO) { return this.dispatchGlobalLayout(); },
   },
 });
 /** layout pass: OnGlobalLayoutListener fires when the tree's layout actually ran */
@@ -2042,15 +2042,15 @@ rt.register({
   name: "android/view/View$AccessibilityDelegate", ctor: class extends JObj {},
   methods: {
     "<init>()V": () => {},
-    "sendAccessibilityEvent(Landroid/view/View;I)V": maySuspend((h: unknown, t: number) => vcall(h, "sendAccessibilityEvent", "(I)V", t)),
+    "sendAccessibilityEvent(Landroid/view/View;I)V": (h: unknown, t: number) => vcall(h, "sendAccessibilityEvent", "(I)V", t),
     "sendAccessibilityEventUnchecked(Landroid/view/View;Landroid/view/accessibility/AccessibilityEvent;)V": () => {},
     "onPopulateAccessibilityEvent(Landroid/view/View;Landroid/view/accessibility/AccessibilityEvent;)V": () => {},
-    "onInitializeAccessibilityEvent(Landroid/view/View;Landroid/view/accessibility/AccessibilityEvent;)V": maySuspend((h: unknown, e: unknown) =>
-      vcall(h, "onInitializeAccessibilityEvent", "(Landroid/view/accessibility/AccessibilityEvent;)V", e)),
-    "onInitializeAccessibilityNodeInfo(Landroid/view/View;Landroid/view/accessibility/AccessibilityNodeInfo;)V": maySuspend((h: unknown, i: unknown) =>
-      vcall(h, "onInitializeAccessibilityNodeInfo", "(Landroid/view/accessibility/AccessibilityNodeInfo;)V", i)),
-    "dispatchPopulateAccessibilityEvent(Landroid/view/View;Landroid/view/accessibility/AccessibilityEvent;)Z": maySuspend((h: unknown, e: unknown) =>
-      vcall(h, "dispatchPopulateAccessibilityEvent", "(Landroid/view/accessibility/AccessibilityEvent;)Z", e)),
+    "onInitializeAccessibilityEvent(Landroid/view/View;Landroid/view/accessibility/AccessibilityEvent;)V": (h: unknown, e: unknown) =>
+      vcall(h, "onInitializeAccessibilityEvent", "(Landroid/view/accessibility/AccessibilityEvent;)V", e),
+    "onInitializeAccessibilityNodeInfo(Landroid/view/View;Landroid/view/accessibility/AccessibilityNodeInfo;)V": (h: unknown, i: unknown) =>
+      vcall(h, "onInitializeAccessibilityNodeInfo", "(Landroid/view/accessibility/AccessibilityNodeInfo;)V", i),
+    "dispatchPopulateAccessibilityEvent(Landroid/view/View;Landroid/view/accessibility/AccessibilityEvent;)Z": (h: unknown, e: unknown) =>
+      vcall(h, "dispatchPopulateAccessibilityEvent", "(Landroid/view/accessibility/AccessibilityEvent;)Z", e),
     "onRequestSendAccessibilityEvent(Landroid/view/ViewGroup;Landroid/view/View;Landroid/view/accessibility/AccessibilityEvent;)Z": () => 1,
     "getAccessibilityNodeProvider(Landroid/view/View;)Landroid/view/accessibility/AccessibilityNodeProvider;": () => null,
     "performAccessibilityAction(Landroid/view/View;ILandroid/os/Bundle;)Z": () => 0,

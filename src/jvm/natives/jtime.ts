@@ -1,6 +1,6 @@
 // java.util.Calendar/Date/TimeZone + java.text formatters + java.util.regex.
 
-import { rt, JObj, maySuspend, type NativeSpec } from "../runtime";
+import { rt, JObj, type NativeSpec } from "../runtime";
 import { javaMatches, javaRegex, jToString, mkEnumSet, defineException, vcall, type JSimpleEnum, type JSB } from "./jlang";
 import { jarray } from "../abi";
 
@@ -547,7 +547,7 @@ const ordering = (desc: string, cmp: (a: any, b: any) => number): NativeSpec["me
   [`isBefore(${desc})Z`]: function (this: JObj, o: unknown) { return cmp(this, o) < 0 ? 1 : 0; },
   [`isEqual(${desc})Z`]: function (this: JObj, o: unknown) { return cmp(this, o) === 0 ? 1 : 0; },
 });
-const formatWith = maySuspend(function (this: JObj, f: unknown) { return vcall(f, "format", "(Ljava/time/temporal/TemporalAccessor;)Ljava/lang/String;", this); });
+const formatWith = function (this: JObj, f: unknown) { return vcall(f, "format", "(Ljava/time/temporal/TemporalAccessor;)Ljava/lang/String;", this); };
 const temporalMs = (t: any): number => t instanceof JInstant || t instanceof JZonedDateTime ? t.ms
   : t instanceof JLocalDateTime ? localMs(t) : t instanceof JLocalDate ? new Date(t.y, t.mo - 1, t.d).getTime()
   : t instanceof JDate ? t.t : Date.now();
@@ -671,14 +671,14 @@ rt.register({
     "getMonthValue()I": function (this: JLocalDate) { return this.mo; },
     "getDayOfMonth()I": function (this: JLocalDate) { return this.d; },
     "toEpochDay()J": function (this: JLocalDate) { return BigInt(epochDay(this)); },
-    "until(Ljava/time/temporal/Temporal;Ljava/time/temporal/TemporalUnit;)J": maySuspend(function (this: JLocalDate, end: JObj, unit: JSimpleEnum) {
+    "until(Ljava/time/temporal/Temporal;Ljava/time/temporal/TemporalUnit;)J": function (this: JLocalDate, end: JObj, unit: JSimpleEnum) {
       if (!end || !unit) throw rt.mkThrowable("java/lang/NullPointerException", "end date and unit required");
       if (!chronoUnits.includes(unit)) return vcall(unit, "between", "(Ljava/time/temporal/Temporal;Ljava/time/temporal/Temporal;)J", this, end);
       if (end instanceof JLocalDate) return dateUntil(this, end, unit);
       if (end instanceof JLocalDateTime) return dateUntil(this, end.date, unit);
       return vcall(end, "getLong", "(Ljava/time/temporal/TemporalField;)J", chronoFields.find(f => f.ename === "EPOCH_DAY"))
         .then(day => dateUntil(this, dateFromEpochDay(Number(day)), unit));
-    }),
+    },
     "plusDays(J)Ljava/time/LocalDate;": function (this: JLocalDate, n: bigint) { return ldFromDate(new Date(this.y, this.mo - 1, this.d + Number(n))); },
     "minusDays(J)Ljava/time/LocalDate;": function (this: JLocalDate, n: bigint) { return ldFromDate(new Date(this.y, this.mo - 1, this.d - Number(n))); },
     "plusMonths(J)Ljava/time/LocalDate;": function (this: JLocalDate, n: bigint) {
@@ -786,9 +786,9 @@ defineException("java/time/format/DateTimeParseException", "java/time/DateTimeEx
 defineException("java/time/temporal/UnsupportedTemporalTypeException", "java/time/DateTimeException");
 const chronoUnits = mkEnumSet("java/time/temporal/ChronoUnit", ["NANOS", "MICROS", "MILLIS", "SECONDS", "MINUTES", "HOURS",
   "HALF_DAYS", "DAYS", "WEEKS", "MONTHS", "YEARS", "DECADES", "CENTURIES", "MILLENNIA", "ERAS", "FOREVER"], {
-  "between(Ljava/time/temporal/Temporal;Ljava/time/temporal/Temporal;)J": maySuspend(function (this: JSimpleEnum, start: JObj, end: JObj) {
+  "between(Ljava/time/temporal/Temporal;Ljava/time/temporal/Temporal;)J": function (this: JSimpleEnum, start: JObj, end: JObj) {
     return vcall(start, "until", "(Ljava/time/temporal/Temporal;Ljava/time/temporal/TemporalUnit;)J", end, this);
-  }),
+  },
 }, ["java/time/temporal/TemporalUnit"]);
 class JDateTimeFormatter extends JObj { pattern = "yyyy-MM-dd"; zone: unknown = null; }
 const fmtOf = (pattern: string) => { const f = new JDateTimeFormatter(); f.pattern = pattern; return f; };

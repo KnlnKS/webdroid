@@ -1,6 +1,6 @@
 // android.text.* — TextPaint, TextUtils, Spannable/Editable (spans stored, minimally styled).
 
-import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { vcall, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import { type JDate } from "../jvm/natives/jtime";
 import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances } from "./graphics";
@@ -87,7 +87,7 @@ function sliceSpanned(cs: unknown, start: number, end: number): unknown {
 }
 const spanMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
-  "<init>(Ljava/lang/CharSequence;)V": maySuspend(function (this: JSpanned, cs: unknown) {
+  "<init>(Ljava/lang/CharSequence;)V": function (this: JSpanned, cs: unknown) {
     if (cs == null) return rt.npe();
     if (typeof cs === "string") { this.text = cs; return; }
     if (cs instanceof JSpanned) {
@@ -103,7 +103,7 @@ const spanMethods: NativeSpec["methods"] = {
         flags: await vcall(cs, "getSpanFlags", "(Ljava/lang/Object;)I", span),
       });
     })();
-  }),
+  },
   "length()I": function (this: JSpannable) { return this.text.length; },
   "charAt(I)C": function (this: JSpannable, i: number) { return this.text.charCodeAt(i); },
   "toString()Ljava/lang/String;": function (this: JSpannable) { return this.text; },
@@ -825,8 +825,8 @@ async function drawLayout(this: JLayout, c: JCanvas) {
     }
 }
 const layoutMethods: NonNullable<NativeSpec["methods"]> = {
-  "static getDesiredWidth(Ljava/lang/CharSequence;Landroid/text/TextPaint;)F": maySuspend((cs: unknown, p: JTextPaint) => desiredWidth(cs, p)),
-  "static getDesiredWidth(Ljava/lang/CharSequence;IILandroid/text/TextPaint;)F": maySuspend((cs: unknown, s: number, e: number, p: JTextPaint) => desiredWidth(sliceSpanned(cs, s, e), p)),
+  "static getDesiredWidth(Ljava/lang/CharSequence;Landroid/text/TextPaint;)F": (cs: unknown, p: JTextPaint) => desiredWidth(cs, p),
+  "static getDesiredWidth(Ljava/lang/CharSequence;IILandroid/text/TextPaint;)F": (cs: unknown, s: number, e: number, p: JTextPaint) => desiredWidth(sliceSpanned(cs, s, e), p),
   "getLineCount()I": function (this: JLayout) { return this.lines.length; },
   "getSpacingMultiplier()F": function (this: JLayout) { return this.spacingMult; },
   "getSpacingAdd()F": function (this: JLayout) { return this.spacingAdd; },
@@ -906,10 +906,10 @@ const dynamicMethods: NonNullable<NativeSpec["methods"]> = {
 };
 for (const [signature, method] of Object.entries(layoutMethods)) {
   if (signature.startsWith("static ") || typeof method !== "function") continue;
-  dynamicMethods[signature] = maySuspend(function (this: JDynamicLayout, ...args: never[]) {
+  dynamicMethods[signature] = function (this: JDynamicLayout, ...args: never[]) {
     const pending = this.refresh();
     return pending ? pending.then(() => method.apply(this, args)) : method.apply(this, args);
-  });
+  };
 }
 dynamicMethods["getText()Ljava/lang/CharSequence;"] = function (this: JDynamicLayout) { return this.src; };
 rt.register({ name: "android/text/DynamicLayout", ctor: JDynamicLayout, sup: "android/text/Layout", methods: dynamicMethods });
@@ -942,11 +942,11 @@ class JBoringLayout extends JLayout {
     return this;
   }
 }
-const boringInit = maySuspend(function (this: JBoringLayout, cs: unknown, p: JTextPaint, w: number, _al: unknown, smult: number, sadd: number) {
+const boringInit = function (this: JBoringLayout, cs: unknown, p: JTextPaint, w: number, _al: unknown, smult: number, sadd: number) {
   return this.setup(cs, p, w, smult, sadd);
-});
-const boringMake = maySuspend((cs: unknown, p: JTextPaint, w: number, _al: unknown, smult: number, sadd: number, _m: unknown, incl: number) =>
-  new JBoringLayout().setup(cs, p, w, smult, sadd, !!incl));
+};
+const boringMake = (cs: unknown, p: JTextPaint, w: number, _al: unknown, smult: number, sadd: number, _m: unknown, incl: number) =>
+  new JBoringLayout().setup(cs, p, w, smult, sadd, !!incl);
 const isBoring = (cs: unknown, p: JTextPaint) => replacementSpans(cs).length ? null : boringMetrics(spannedString(cs), p);
 rt.register({
   name: "android/text/BoringLayout", ctor: JBoringLayout, sup: "android/text/Layout",
@@ -1041,8 +1041,8 @@ rt.register({
   name: "android/text/format/DateFormat", ctor: class extends JObj {},
   methods: {
     "static is24HourFormat(Landroid/content/Context;)Z": () => 0,
-    "static getDateFormat(Landroid/content/Context;)Ljava/text/DateFormat;": maySuspend(() => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "M/d/yy")),
-    "static getTimeFormat(Landroid/content/Context;)Ljava/text/DateFormat;": maySuspend(() => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "h:mm a")),
+    "static getDateFormat(Landroid/content/Context;)Ljava/text/DateFormat;": () => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "M/d/yy"),
+    "static getTimeFormat(Landroid/content/Context;)Ljava/text/DateFormat;": () => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "h:mm a"),
     "static format(Ljava/lang/CharSequence;J)Ljava/lang/CharSequence;": (fmt: unknown, t: bigint) => formatDate(spannedString(fmt), Number(t)),
     "static format(Ljava/lang/CharSequence;Ljava/util/Date;)Ljava/lang/CharSequence;": (fmt: unknown, d: JDate | null) => formatDate(spannedString(fmt), d?.t ?? Date.now()),
   },

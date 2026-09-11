@@ -1,5 +1,5 @@
 import { type JFile, vfs, mkFile } from "../jvm/natives/jio";
-import { JObj, rt, type NativeSpec, callSelf, maySuspend, stubs, noops } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
 import { resString, themeOf, JTheme, rvColor, obtainStyled, type JAttrSet, JTypedArray } from "./res";
 import { newObj, javaFormat, vcall } from "../jvm/natives/jlang";
@@ -151,17 +151,17 @@ export const contextMethods: NativeSpec["methods"] = {
   },
   // AOSP layers the style over whatever theme this context already resolves to, so a
   // ThemeOverlay on an already-themed context keeps everything underneath it
-  "setTheme(I)V": maySuspend(function (this: JContext, id: number) {
+  "setTheme(I)V": function (this: JContext, id: number) {
     const t = new JTheme();
     t.res = this.$host.res;
     t.styles = (themeOf(this) ?? this.$host.theme).styles.slice();
     const applied = t.apply(id);
     (this as any).ownTheme = t;
     return applied;
-  }),
+  },
   "getPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
-  "getAttributionSource()Landroid/content/AttributionSource;": maySuspend(function (this: JContext) { return attribution ??= newObj("android/content/AttributionSource", null); }),
-  "createPackageContext(Ljava/lang/String;I)Landroid/content/Context;": maySuspend(function (this: JContext, pkg: string, flags: number) {
+  "getAttributionSource()Landroid/content/AttributionSource;": function (this: JContext) { return attribution ??= newObj("android/content/AttributionSource", null); },
+  "createPackageContext(Ljava/lang/String;I)Landroid/content/Context;": function (this: JContext, pkg: string, flags: number) {
     if (pkg === this.$host.pkg || pkg === this.$host.res.tbl(0x01000000)?.pkgName) return this;
     const record = packages.get(pkg);
     if (!record) throw rt.mkThrowable("android/content/pm/PackageManager$NameNotFoundException", pkg);
@@ -183,7 +183,7 @@ export const contextMethods: NativeSpec["methods"] = {
       void ready.catch(() => packageContexts.delete(key));
     }
     return ready;
-  }),
+  },
   "getOpPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
   "getApplicationContext()Landroid/content/Context;": function (this: JContext) { return this.$host.application; },
   // API 31. Everything here draws into the one window, but the application context is not a
@@ -193,9 +193,9 @@ export const contextMethods: NativeSpec["methods"] = {
     if (this === this.$host.application) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Context is not associated with a display");
     return display();
   },
-  "getApplicationInfo()Landroid/content/pm/ApplicationInfo;": maySuspend(function (this: JContext) {
+  "getApplicationInfo()Landroid/content/pm/ApplicationInfo;": function (this: JContext) {
     return this.$host === appHost ? getAppInfo(this.$host) : vcall(getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", this.$host.pkg, 128);
-  }),
+  },
   "getPackageManager()Landroid/content/pm/PackageManager;": function () { return getPM(); },
   "getContentResolver()Landroid/content/ContentResolver;": function () { return contentResolver(); },
   "getMainLooper()Landroid/os/Looper;": () => mainLooper,
@@ -220,9 +220,9 @@ export const contextMethods: NativeSpec["methods"] = {
   "getColorStateList(I)Landroid/content/res/ColorStateList;": async function (this: JContext, id: number) {
     return loadColorStateList(this.$host.res, id, themeOf(this));
   },
-  "getDrawable(I)Landroid/graphics/drawable/Drawable;": maySuspend(function (this: JContext, id: number) {
+  "getDrawable(I)Landroid/graphics/drawable/Drawable;": function (this: JContext, id: number) {
     return loadDrawable(this.$host.res, id, themeOf(this));
-  }),
+  },
   "getAssets()Landroid/content/res/AssetManager;": function (this: JContext) {
     const a = new JAssetManager();
     a.host = this.$host.res;
@@ -262,12 +262,12 @@ export const contextMethods: NativeSpec["methods"] = {
     privDir(`/data/data/${this.$host.pkg}/files`);
     return mkFile(`/data/data/${this.$host.pkg}/files/${name}`);
   },
-  "openFileInput(Ljava/lang/String;)Ljava/io/FileInputStream;": maySuspend(function (this: JContext, name: string) {
+  "openFileInput(Ljava/lang/String;)Ljava/io/FileInputStream;": function (this: JContext, name: string) {
     return newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", `/data/data/${this.$host.pkg}/files/${name}`);
-  }),
-  "openFileOutput(Ljava/lang/String;I)Ljava/io/FileOutputStream;": maySuspend(function (this: JContext, name: string) {
+  },
+  "openFileOutput(Ljava/lang/String;I)Ljava/io/FileOutputStream;": function (this: JContext, name: string) {
     return newObj("java/io/FileOutputStream", "(Ljava/lang/String;)V", `/data/data/${this.$host.pkg}/files/${name}`);
-  }),
+  },
   "deleteFile(Ljava/lang/String;)Z": function (this: JContext, name: string) {
     return vfs.delete(`/data/data/${this.$host.pkg}/files/${name}`) ? 1 : 0;
   },
@@ -368,9 +368,9 @@ rt.register({
   methods: {
     ...wrapperMethods,
     "<init>(Landroid/content/Context;)V": attachBase,
-    "<init>(Landroid/content/Context;I)V": maySuspend(function (this: JContextWrapper, base: JContext, themeId: number) {
+    "<init>(Landroid/content/Context;I)V": function (this: JContextWrapper, base: JContext, themeId: number) {
       attachBase.call(this, base);
       if (themeId) callSelf(contextMethods, "setTheme(I)V", this, themeId);
-    }),
+    },
   },
 });

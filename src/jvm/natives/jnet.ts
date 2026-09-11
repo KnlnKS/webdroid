@@ -7,7 +7,7 @@
 // peer's. It carries the requested host as its only SAN, which is exactly what a hostname
 // verifier needs and nothing more, so an app that PINS a certificate will correctly fail rather
 // than be told a comforting lie.
-import { rt, JObj, maySuspend, type NativeSpec } from "../runtime";
+import { rt, JObj, type NativeSpec } from "../runtime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
 import { stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
@@ -218,9 +218,9 @@ const socketMethods: NativeSpec["methods"] = {
   },
   "connect(Ljava/net/SocketAddress;)V": socketConnect,
   "connect(Ljava/net/SocketAddress;I)V": socketConnect,
-  "getInputStream()Ljava/io/InputStream;": maySuspend(function (this: JSocket) {
+  "getInputStream()Ljava/io/InputStream;": function (this: JSocket) {
     const o = rt.make("webdroid/SocketInputStream") as JSocketIn; o.s = this; return o;
-  }),
+  },
   "getOutputStream()Ljava/io/OutputStream;": function (this: JSocket) {
     const o = rt.make("webdroid/SocketOutputStream") as JSocketOut; o.s = this; return o;
   },
@@ -252,12 +252,12 @@ rt.register({
       const n = await socketRead(this.s, b, 0, 1);
       return n < 0 ? -1 : b[0];
     },
-    "read([B)I": maySuspend(function (this: JSocketIn, out: Int8Array) {
+    "read([B)I": function (this: JSocketIn, out: Int8Array) {
       return socketRead(this.s, u8(out), 0, out.length);
-    }),
-    "read([BII)I": maySuspend(function (this: JSocketIn, out: Int8Array, off: number, len: number) {
+    },
+    "read([BII)I": function (this: JSocketIn, out: Int8Array, off: number, len: number) {
       return socketRead(this.s, u8(out), off, len);
-    }),
+    },
     "available()I": function (this: JSocketIn) { return this.s.relay?.available() ?? 0; },
     "close()V": function (this: JSocketIn) { this.s.relay?.close(); },
   },
@@ -266,13 +266,13 @@ rt.register({
   name: "webdroid/SocketOutputStream", ctor: JSocketOut, sup: "java/io/OutputStream",
   methods: {
     "<init>()V": function () {},
-    "write(I)V": maySuspend(function (this: JSocketOut, b: number) { return socketWrite(this.s, new Uint8Array([b & 0xff])); }),
-    "write([B)V": maySuspend(function (this: JSocketOut, b: Int8Array) {
+    "write(I)V": function (this: JSocketOut, b: number) { return socketWrite(this.s, new Uint8Array([b & 0xff])); },
+    "write([B)V": function (this: JSocketOut, b: Int8Array) {
       return socketWrite(this.s, u8(b));
-    }),
-    "write([BII)V": maySuspend(function (this: JSocketOut, b: Int8Array, off: number, len: number) {
+    },
+    "write([BII)V": function (this: JSocketOut, b: Int8Array, off: number, len: number) {
       return socketWrite(this.s, u8(b, off, len));
-    }),
+    },
     "flush()V": () => {},
     "close()V": function (this: JSocketOut) { this.s.relay?.close(); },
   },
@@ -497,7 +497,7 @@ rt.register({
     "getAuthority()Ljava/lang/String;": function (this: JURL) { const ui = userInfo(this.u); return (ui ? ui + "@" : "") + this.u.host; },
     "toExternalForm()Ljava/lang/String;": function (this: JURL) { return this.spec; },
     "toString()Ljava/lang/String;": function (this: JURL) { return this.spec; },
-    "toURI()Ljava/net/URI;": maySuspend(function (this: JURL) { return newObj("java/net/URI", "(Ljava/lang/String;)V", this.spec); }),
+    "toURI()Ljava/net/URI;": function (this: JURL) { return newObj("java/net/URI", "(Ljava/lang/String;)V", this.spec); },
     "equals(Ljava/lang/Object;)Z": function (this: JURL, o: unknown) { return o instanceof JURL && o.u.href === this.u.href ? 1 : 0; },
     "sameFile(Ljava/net/URL;)Z": function (this: JURL, o: JURL | null) { return o && noRef(o.u) === noRef(this.u) ? 1 : 0; },
     // over the normalised form, not the spec, so equal URLs hash alike as Object requires

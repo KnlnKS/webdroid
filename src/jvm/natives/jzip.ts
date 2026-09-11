@@ -1,7 +1,7 @@
 // java.util.zip on fflate: streaming codecs (Inflater/Deflater raw+zlib, CRC32), ZipFile over a
 // central-directory index, GZIPInputStream over a drained source.
 import { Inflate, Unzlib, Deflate, Zlib, Gzip, inflateSync, gunzipSync } from "fflate";
-import { rt, JObj, maySuspend } from "../runtime";
+import { rt, JObj } from "../runtime";
 import { utf8, i8, u8 } from "../abi";
 import { vcall, vcallMaybe, newObj, defineException } from "./jlang";
 import { vfs, JFile, JInputStream, JOutputStream, readStreamFully } from "./jio";
@@ -156,7 +156,7 @@ rt.register({
     "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;I)V": dosInit,
     "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;Z)V": dosInit,
     "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;IZ)V": dosInit,
-    "write(I)V": maySuspend(function (this: JDeflaterOut, b: number) { return vcallMaybe(this, "write", "([BII)V", Int8Array.of(b), 0, 1); }),
+    "write(I)V": function (this: JDeflaterOut, b: number) { return vcallMaybe(this, "write", "([BII)V", Int8Array.of(b), 0, 1); },
     "write([BII)V": async function (this: JDeflaterOut, b: Int8Array, off: number, len: number) {
       if (this.def.done) throw rt.mkThrowable("java/io/IOException", "write beyond end of stream");
       if (len > 0) { this.def.ensure().push(u8(b, off, len).slice()); await pump(this); }
@@ -164,7 +164,7 @@ rt.register({
     "finish()V": async function (this: JDeflaterOut) {
       if (!this.def.done) { this.def.ensure().push(new Uint8Array(0), true); await pump(this); }
     },
-    "flush()V": maySuspend(function (this: JDeflaterOut) { return vcallMaybe(this.out, "flush", "()V"); }),
+    "flush()V": function (this: JDeflaterOut) { return vcallMaybe(this.out, "flush", "()V"); },
     "close()V": async function (this: JDeflaterOut) {
       if (this.closed) return;
       this.closed = true;
@@ -210,7 +210,7 @@ rt.register({
       for (let i = 0; i < len; i++) { a = (a + (buf[off + i] & 0xff)) % 65521; b = (b + a) % 65521; }
       this.a = a; this.b = b;
     },
-    "update([B)V": maySuspend(function (this: JAdler32, buf: Int8Array) { return vcall(this, "update", "([BII)V", buf, 0, buf.length); }),
+    "update([B)V": function (this: JAdler32, buf: Int8Array) { return vcall(this, "update", "([BII)V", buf, 0, buf.length); },
     "update(I)V": function (this: JAdler32, v: number) { this.a = (this.a + (v & 0xff)) % 65521; this.b = (this.b + this.a) % 65521; },
     "getValue()J": function (this: JAdler32) { return BigInt(((this.b << 16) | this.a) >>> 0); },
     "reset()V": function (this: JAdler32) { this.a = 1; this.b = 0; },

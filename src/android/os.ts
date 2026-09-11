@@ -3,7 +3,7 @@
 import { JMessage, obtain } from "./messenger";
 import { parcelCreator, type JParcel } from "./parcel";
 import { keyCodes, deadChar } from "./keycodes";
-import { rt, JObj, type NativeSpec, maySuspend, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
@@ -57,8 +57,8 @@ rt.register({
     "static getMainLooper()Landroid/os/Looper;": () => mainLooper,
     "static myLooper()Landroid/os/Looper;": () => (curThread.looper as JLooper) ?? null,
     "static prepare()V": () => { if (!curThread.looper) curThread.looper = new JLooper(); },
-    "loop()V": maySuspend(() => new Promise(() => {})), // parks the java thread; JS loop drives everything
-    "static loop()V": maySuspend(() => new Promise(() => {})),
+    "loop()V": () => new Promise(() => {}), // parks the java thread; JS loop drives everything
+    "static loop()V": () => new Promise(() => {}),
     "getThread()Ljava/lang/Thread;": function (this: JLooper) { return this.thread; },
     "isCurrentThread()Z": function (this: JLooper) { return curThread === this.thread ? 1 : 0; },
     ...noops("static prepareMainLooper()V", "quit()V", "quitSafely()V"),
@@ -70,11 +70,11 @@ const mainQueue = new JMessageQueue();
 rt.register({
   name: "android/os/MessageQueue", ctor: JMessageQueue,
   methods: {
-    "addIdleHandler(Landroid/os/MessageQueue$IdleHandler;)V": maySuspend((h: unknown) => {
+    "addIdleHandler(Landroid/os/MessageQueue$IdleHandler;)V": (h: unknown) => {
       setTimeout(() => void onMain(async () => {
         try { await vcall(h, "queueIdle", "()Z"); } catch (e) { console.error("[idle]", e); }
       }), 50);
-    }),
+    },
     "removeIdleHandler(Landroid/os/MessageQueue$IdleHandler;)V": () => {},
   },
 });
@@ -237,8 +237,8 @@ rt.register({
     "<init>(Z)V": function (this: JConditionVariable, state: number) { this.opened = !!state; },
     "open()V": function (this: JConditionVariable) { this.opened = true; for (const wake of this.waiters) wake(); },
     "close()V": function (this: JConditionVariable) { this.opened = false; },
-    "block()V": maySuspend(function (this: JConditionVariable) { return this.block(); }),
-    "block(J)Z": maySuspend(function (this: JConditionVariable, ms: bigint) { return this.block(Number(ms)); }),
+    "block()V": function (this: JConditionVariable) { return this.block(); },
+    "block(J)Z": function (this: JConditionVariable, ms: bigint) { return this.block(Number(ms)); },
   },
 });
 class JBuild extends JObj {}
@@ -473,11 +473,11 @@ rt.register({
       return Object.assign(new JParcelUuid(), { uuid: uuidFromString(s) });
     },
     "getUuid()Ljava/util/UUID;": function (this: JParcelUuid) { return this.uuid; },
-    "toString()Ljava/lang/String;": maySuspend(function (this: JParcelUuid) { return vcall(this.uuid, "toString", "()Ljava/lang/String;"); }),
-    "equals(Ljava/lang/Object;)Z": maySuspend(function (this: JParcelUuid, o: unknown) {
+    "toString()Ljava/lang/String;": function (this: JParcelUuid) { return vcall(this.uuid, "toString", "()Ljava/lang/String;"); },
+    "equals(Ljava/lang/Object;)Z": function (this: JParcelUuid, o: unknown) {
       return o instanceof JParcelUuid ? vcall(this.uuid, "equals", "(Ljava/lang/Object;)Z", o.uuid) : 0;
-    }),
-    "hashCode()I": maySuspend(function (this: JParcelUuid) { return vcall(this.uuid, "hashCode", "()I"); }),
+    },
+    "hashCode()I": function (this: JParcelUuid) { return vcall(this.uuid, "hashCode", "()I"); },
   },
 });
 rt.markers("android/os/Parcelable", "android/os/Parcelable$Creator");
@@ -911,17 +911,17 @@ rt.register({
     ...noops("<init>()V", "onPreExecute()V", "onPostExecute(Ljava/lang/Object;)V",
       "onProgressUpdate([Ljava/lang/Object;)V", "onCancelled()V"),
     ...stubs(null, "doInBackground([Ljava/lang/Object;)Ljava/lang/Object;"),
-    "onCancelled(Ljava/lang/Object;)V": maySuspend(function (this: JAsyncTask) { return vcall(this, "onCancelled", "()V"); }),
-    "publishProgress([Ljava/lang/Object;)V": maySuspend(function (this: JAsyncTask, values: unknown[]) {
+    "onCancelled(Ljava/lang/Object;)V": function (this: JAsyncTask) { return vcall(this, "onCancelled", "()V"); },
+    "publishProgress([Ljava/lang/Object;)V": function (this: JAsyncTask, values: unknown[]) {
       if (!this.cancelled) void onMain(() => this.cancelled ? undefined : vcall(this, "onProgressUpdate", "([Ljava/lang/Object;)V", values)).catch(reportUncaught);
-    }),
+    },
     "get()Ljava/lang/Object;": async function (this: JAsyncTask) {
       if (!this.cancelled && this.done) await this.done;
       if (this.cancelled) throw rt.mkThrowable("java/util/concurrent/CancellationException", null);
       if (this.error) throw await newObj("java/util/concurrent/ExecutionException", "(Ljava/lang/Throwable;)V", this.error);
       return this.result;
     },
-    "static execute(Ljava/lang/Runnable;)V": maySuspend((r: unknown) => vcall(serialTaskExecutor(), "execute", "(Ljava/lang/Runnable;)V", r)),
+    "static execute(Ljava/lang/Runnable;)V": (r: unknown) => vcall(serialTaskExecutor(), "execute", "(Ljava/lang/Runnable;)V", r),
   },
 });
 async function runAsyncTask(this: JAsyncTask, executor: unknown, params: unknown[]): Promise<JAsyncTask> {
@@ -961,7 +961,7 @@ rt.register({
       this.totalMs = total;
       this.intervalMs = interval;
     },
-    "start()Landroid/os/CountDownTimer;": maySuspend(function (this: JCountDownTimer) {
+    "start()Landroid/os/CountDownTimer;": function (this: JCountDownTimer) {
       this.endAt = performance.now() + Number(this.totalMs);
       if (this.timer) clearInterval(this.timer);
       this.timer = setInterval(() => {
@@ -975,7 +975,7 @@ rt.register({
         }
       }, Math.max(50, Number(this.intervalMs)));
       return this;
-    }),
+    },
     "cancel()V": function (this: JCountDownTimer) {
       if (this.timer) { clearInterval(this.timer); this.timer = null; }
     },
@@ -986,4 +986,4 @@ rt.register({
 
 /** a Runnable over a JS closure, for framework code that must go through a Handler queue */
 export class JFnRunnable extends JObj { fn: () => unknown = () => {}; }
-rt.register({ name: "webdroid/FnRunnable", ctor: JFnRunnable, ifaces: ["java/lang/Runnable"], methods: { "run()V": maySuspend(function (this: JFnRunnable) { return this.fn(); }) } });
+rt.register({ name: "webdroid/FnRunnable", ctor: JFnRunnable, ifaces: ["java/lang/Runnable"], methods: { "run()V": function (this: JFnRunnable) { return this.fn(); } } });

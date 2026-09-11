@@ -1,4 +1,4 @@
-import { JObj, rt, maySuspend } from "../jvm/runtime";
+import { JObj, rt } from "../jvm/runtime";
 import { curThread, mainThread, park, vcall, type JThread } from "../jvm/natives/jlang";
 import { JFnRunnable, mainHandler, type JHandler } from "./os";
 
@@ -54,5 +54,5 @@ rt.register({ name: "webdroid/AccountFuture", ctor: JAccountFuture, ifaces: ["an
   },
   "isDone()Z": function (this: JAccountFuture) { return +!this.pending; },
   "isCancelled()Z": function (this: JAccountFuture) { return +(this.outcome.kind === "canceled"); },
-  "cancel(Z)Z": maySuspend(function (this: JAccountFuture) { return this.finish({ kind: "canceled" }); }),
+  "cancel(Z)Z": function (this: JAccountFuture) { return this.finish({ kind: "canceled" }); },
 } });

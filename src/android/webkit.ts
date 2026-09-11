@@ -1,7 +1,7 @@
 // WebViews occupy DOM frames above the canvas. JavaScript interfaces use a separate renderer
 // so synchronous page calls can wait while the Java runtime continues executing.
 
-import { rt, JObj, type NativeSpec, type ClassInfo, maySuspend, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, type ClassInfo, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { mangleMethod, parseMethodDesc } from "../jvm/abi";
 import { vcall, mkEnumSet, JThread, curThread, setCurThread, type JSimpleEnum } from "../jvm/natives/jlang";
 import { JViewGroup, initViewFromCtx, defaultSize, type JView } from "./view";
@@ -397,9 +397,9 @@ rt.register({
     "goBackOrForward(I)V": function (this: JWebView, n: number) { this.step(n); },
     // Chromium prunes every entry but the current one
     "clearHistory()V": function (this: JWebView) { if (this.idx >= 0) { this.hist = [this.hist[this.idx]]; this.idx = 0; } },
-    "evaluateJavascript(Ljava/lang/String;Landroid/webkit/ValueCallback;)V": maySuspend(function (this: JWebView, js: string, cb: unknown) {
+    "evaluateJavascript(Ljava/lang/String;Landroid/webkit/ValueCallback;)V": function (this: JWebView, js: string, cb: unknown) {
       void Promise.resolve(this.evalJs(js)).then((r) => cb && onMain(() => vcall(cb, "onReceiveValue", "(Ljava/lang/Object;)V", r)));
-    }),
+    },
     "addJavascriptInterface(Ljava/lang/Object;Ljava/lang/String;)V": function (this: JWebView, o: JObj, name: string) { this.ifaces[name] = bridge(o, this.bridgeThread); },
     "removeJavascriptInterface(Ljava/lang/String;)V": function (this: JWebView, name: string) { delete this.ifaces[name]; },
     "getContentHeight()I": function (this: JWebView) { return this.contentHeight(); },
@@ -442,19 +442,19 @@ rt.register({
   },
   methods: {
     // AOSP forwards the request overload to the String one, so a subclass overriding either sees the click
-    "shouldOverrideUrlLoading(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Z": maySuspend(function (this: JObj, v: JWebView, r: JReq) {
+    "shouldOverrideUrlLoading(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Z": function (this: JObj, v: JWebView, r: JReq) {
       return vcall(this, "shouldOverrideUrlLoading", "(Landroid/webkit/WebView;Ljava/lang/String;)Z", v, r.url);
-    }),
+    },
     // AOSP forwards a main-frame error to the legacy overload
-    "onReceivedError(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;Landroid/webkit/WebResourceError;)V": maySuspend(function (this: JObj, v: JWebView, r: JReq, e: JWebErr) {
+    "onReceivedError(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;Landroid/webkit/WebResourceError;)V": function (this: JObj, v: JWebView, r: JReq, e: JWebErr) {
       if (r.main) return vcall(this, "onReceivedError", "(Landroid/webkit/WebView;ILjava/lang/String;Ljava/lang/String;)V", v, e.code, e.desc, r.url);
-    }),
-    "onReceivedSslError(Landroid/webkit/WebView;Landroid/webkit/SslErrorHandler;Landroid/net/http/SslError;)V": maySuspend((_v: unknown, h: unknown) => vcall(h, "cancel", "()V")),
-    "onReceivedHttpAuthRequest(Landroid/webkit/WebView;Landroid/webkit/HttpAuthHandler;Ljava/lang/String;Ljava/lang/String;)V": maySuspend((_v: unknown, h: unknown) => vcall(h, "cancel", "()V")),
-    "onFormResubmission(Landroid/webkit/WebView;Landroid/os/Message;Landroid/os/Message;)V": maySuspend((_v: unknown, dontResend: unknown) => vcall(dontResend, "sendToTarget", "()V")),
-    "shouldInterceptRequest(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Landroid/webkit/WebResourceResponse;": maySuspend(function (this: JObj, v: JWebView, r: JReq) {
+    },
+    "onReceivedSslError(Landroid/webkit/WebView;Landroid/webkit/SslErrorHandler;Landroid/net/http/SslError;)V": (_v: unknown, h: unknown) => vcall(h, "cancel", "()V"),
+    "onReceivedHttpAuthRequest(Landroid/webkit/WebView;Landroid/webkit/HttpAuthHandler;Ljava/lang/String;Ljava/lang/String;)V": (_v: unknown, h: unknown) => vcall(h, "cancel", "()V"),
+    "onFormResubmission(Landroid/webkit/WebView;Landroid/os/Message;Landroid/os/Message;)V": (_v: unknown, dontResend: unknown) => vcall(dontResend, "sendToTarget", "()V"),
+    "shouldInterceptRequest(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Landroid/webkit/WebResourceResponse;": function (this: JObj, v: JWebView, r: JReq) {
       return vcall(this, "shouldInterceptRequest", "(Landroid/webkit/WebView;Ljava/lang/String;)Landroid/webkit/WebResourceResponse;", v, r.url);
-    }),
+    },
     ...noops("<init>()V", "onPageStarted(Landroid/webkit/WebView;Ljava/lang/String;Landroid/graphics/Bitmap;)V",
       "onPageFinished(Landroid/webkit/WebView;Ljava/lang/String;)V",
       "onPageCommitVisible(Landroid/webkit/WebView;Ljava/lang/String;)V",

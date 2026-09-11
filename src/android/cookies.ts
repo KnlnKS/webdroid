@@ -1,4 +1,4 @@
-import { JObj, maySuspend, rt } from "../jvm/runtime";
+import { JObj, rt } from "../jvm/runtime";
 import { box, JBool, vcall } from "../jvm/natives/jlang";
 import type { WebCookies } from "../shell/webcookies";
 import { appHost } from "./apphost";
@@ -23,16 +23,16 @@ rt.register({
   name: "android/webkit/CookieManager", ctor: JCookieManager,
   methods: {
     "static getInstance()Landroid/webkit/CookieManager;": () => instance ??= new JCookieManager(),
-    "getCookie(Ljava/lang/String;)Ljava/lang/String;": maySuspend(async (url: string) => (await store()).get(url) || null),
-    "setCookie(Ljava/lang/String;Ljava/lang/String;)V": maySuspend(async (url: string, value: string) => { (await store()).set(url, value); }),
-    "setCookie(Ljava/lang/String;Ljava/lang/String;Landroid/webkit/ValueCallback;)V": maySuspend(async (url: string, value: string, callback: unknown) => { complete(callback, (await store()).set(url, value)); }),
-    "setAcceptCookie(Z)V": maySuspend(async (accept: number) => { (await store()).accept = !!accept; }),
-    "acceptCookie()Z": maySuspend(async () => (await store()).accept ? 1 : 0),
+    "getCookie(Ljava/lang/String;)Ljava/lang/String;": async (url: string) => (await store()).get(url) || null,
+    "setCookie(Ljava/lang/String;Ljava/lang/String;)V": async (url: string, value: string) => { (await store()).set(url, value); },
+    "setCookie(Ljava/lang/String;Ljava/lang/String;Landroid/webkit/ValueCallback;)V": async (url: string, value: string, callback: unknown) => { complete(callback, (await store()).set(url, value)); },
+    "setAcceptCookie(Z)V": async (accept: number) => { (await store()).accept = !!accept; },
+    "acceptCookie()Z": async () => (await store()).accept ? 1 : 0,
     "setAcceptThirdPartyCookies(Landroid/webkit/WebView;Z)V": (view: JObj, accept: number) => { if (accept) thirdPartyCookies.add(view); else thirdPartyCookies.delete(view); },
     "acceptThirdPartyCookies(Landroid/webkit/WebView;)Z": (view: JObj) => thirdPartyCookies.has(view) ? 1 : 0,
-    "hasCookies()Z": maySuspend(async () => (await store()).has() ? 1 : 0),
-    "removeAllCookies(Landroid/webkit/ValueCallback;)V": maySuspend(async (callback: unknown) => complete(callback, (await store()).remove())),
-    "removeSessionCookies(Landroid/webkit/ValueCallback;)V": maySuspend(async (callback: unknown) => complete(callback, (await store()).remove(true))),
-    "flush()V": maySuspend(async () => { (await store()).flush(); }),
+    "hasCookies()Z": async () => (await store()).has() ? 1 : 0,
+    "removeAllCookies(Landroid/webkit/ValueCallback;)V": async (callback: unknown) => complete(callback, (await store()).remove()),
+    "removeSessionCookies(Landroid/webkit/ValueCallback;)V": async (callback: unknown) => complete(callback, (await store()).remove(true)),
+    "flush()V": async () => { (await store()).flush(); },
   },
 });

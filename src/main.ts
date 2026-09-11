@@ -220,9 +220,7 @@ const tap = async (x: number, y: number) => {
   await dispatchPointer(1, x, y);
 };
 
-// `?natcheck=1` audits natives that return a promise without declaring suspension; `?jit=0`
-// runs the interpreter alone, to tell the tiers apart
-rt.auditNatives = params.get("natcheck") === "1";
+// `?jit=0` runs the interpreter alone, to tell the tiers apart
 jitStats.on = params.get("jit") !== "0";
 
 /** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. */
@@ -237,7 +235,6 @@ const wd = {
     if (typeof fn !== "function") throw new Error(`no static ${cls}.${name}${desc}`);
     return (fn as (...a: unknown[]) => unknown)(...args);
   },
-  nativeLiars: () => [...rt.nativeLiars].sort(),
   boot, app: () => currentApp(), back,
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
   web: () => webViewInfo(),

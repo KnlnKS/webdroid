@@ -3,7 +3,7 @@
 // listeners, duration — and beginDelayedTransition lets the next layout land while still
 // telling listeners the transition started and ended, on the main queue.
 
-import { rt, JObj, type NativeSpec, maySuspend, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { onMain } from "./mainloop";
@@ -54,10 +54,10 @@ const transitionMethods: NonNullable<NativeSpec["methods"]> = {
   [`excludeTarget(Ljava/lang/Class;Z)${T}`]: function (this: JTransition) { return this; },
   [`excludeChildren(Landroid/view/View;Z)${T}`]: function (this: JTransition) { return this; },
   [`excludeChildren(IZ)${T}`]: function (this: JTransition) { return this; },
-  "getName()Ljava/lang/String;": maySuspend(function (this: JTransition) { return this.name || (this.constructor as any).$i?.name?.replace(/\//g, ".") || "android.transition.Transition"; }),
-  "getEpicenter()Landroid/graphics/Rect;": maySuspend(function (this: JTransition) {
+  "getName()Ljava/lang/String;": function (this: JTransition) { return this.name || (this.constructor as any).$i?.name?.replace(/\//g, ".") || "android.transition.Transition"; },
+  "getEpicenter()Landroid/graphics/Rect;": function (this: JTransition) {
     return this.epicenterCb ? vcall(this.epicenterCb, "onGetEpicenter", "(Landroid/transition/Transition;)Landroid/graphics/Rect;", this) : null;
-  }),
+  },
   ...fieldGetters({ "getTargets()Ljava/util/List;": "targets", "getTargetIds()Ljava/util/List;": "targetIds",
     "getTargetNames()Ljava/util/List;": "targetNames", "getTargetTypes()Ljava/util/List;": "targetTypes",
     "getEpicenterCallback()Landroid/transition/Transition$EpicenterCallback;": "epicenterCb",
@@ -71,11 +71,11 @@ const transitionMethods: NonNullable<NativeSpec["methods"]> = {
   ...stubs(null, "getTransitionProperties()[Ljava/lang/String;",
     "createAnimator(Landroid/view/ViewGroup;Landroid/transition/TransitionValues;Landroid/transition/TransitionValues;)Landroid/animation/Animator;"),
   ...stubs(0, "canRemoveViews()Z"),
-  "clone()Landroid/transition/Transition;": maySuspend(function (this: JTransition) {
+  "clone()Landroid/transition/Transition;": function (this: JTransition) {
     const c = new (this.constructor as any)() as JTransition;
     Object.assign(c, this, { listeners: [], targets: newArrayList([...this.targets.a]), targetIds: newArrayList([...this.targetIds.a]) });
     return c;
-  }),
+  },
   "toString()Ljava/lang/String;": function (this: JTransition) { return "Transition@" + this.durationMs; },
 };
 rt.register({ name: "android/transition/Transition", ctor: JTransition, ifaces: ["java/lang/Cloneable"], methods: transitionMethods });
@@ -156,10 +156,10 @@ rt.register({
   methods: {
     "static beginDelayedTransition(Landroid/view/ViewGroup;)V": () => beginDelayed(null),
     "static beginDelayedTransition(Landroid/view/ViewGroup;Landroid/transition/Transition;)V": (_root: unknown, t: JTransition | null) => beginDelayed(t),
-    "static go(Landroid/transition/Scene;)V": maySuspend((s: unknown) => vcall(s, "enter", "()V")),
-    "static go(Landroid/transition/Scene;Landroid/transition/Transition;)V": maySuspend((s: unknown, t: JTransition | null) => { beginDelayed(t); return vcall(s, "enter", "()V"); }),
+    "static go(Landroid/transition/Scene;)V": (s: unknown) => vcall(s, "enter", "()V"),
+    "static go(Landroid/transition/Scene;Landroid/transition/Transition;)V": (s: unknown, t: JTransition | null) => { beginDelayed(t); return vcall(s, "enter", "()V"); },
     ...noops("<init>()V", "static endTransitions(Landroid/view/ViewGroup;)V",
       "setTransition(Landroid/transition/Scene;Landroid/transition/Transition;)V"),
-    "transitionTo(Landroid/transition/Scene;)V": maySuspend((s: unknown) => vcall(s, "enter", "()V")),
+    "transitionTo(Landroid/transition/Scene;)V": (s: unknown) => vcall(s, "enter", "()V"),
   },
 });

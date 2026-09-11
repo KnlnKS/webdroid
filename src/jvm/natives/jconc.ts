@@ -1,6 +1,6 @@
 // java.util.concurrent.* — cooperative single-JS-thread implementations.
 
-import { rt, JObj, maySuspend, type NativeSpec, type ClassInfo } from "../runtime";
+import { rt, JObj, type NativeSpec, type ClassInfo } from "../runtime";
 import { parkTimeout, unparkTimeout } from "../yield";
 import { vcall, newObj, JThread, JEnum, setCurThread, curThread, park, defineException } from "./jlang";
 import { JList, newArrayList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods } from "./jutil";
@@ -247,7 +247,7 @@ rt.register({
   ifaces: ["java/util/concurrent/Future", "java/util/concurrent/ScheduledFuture"],
   methods: {
     "get()Ljava/lang/Object;": async function (this: JFuture) { return futureGet(this); },
-    "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": maySuspend(function (this: JFuture, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); }),
+    "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JFuture, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); },
     "isDone()Z": function (this: JFuture) { return this.done; },
     "isCancelled()Z": function (this: JFuture) { return this.cancelled; },
     "cancel(Z)Z": function (this: JFuture, interrupt: number) {
@@ -293,9 +293,9 @@ const executorMethods: NativeSpec["methods"] = {
   "submit(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown) {
     return submit(this, r, "run", "()V");
   },
-  "submit(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;": maySuspend(function (this: JExecutor, c: unknown) {
+  "submit(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;": function (this: JExecutor, c: unknown) {
     return submit(this, c, "call", "()Ljava/lang/Object;");
-  }),
+  },
   "shutdown()V": function (this: JExecutor) { this.shut = true; },
   "shutdownNow()Ljava/util/List;": function (this: JExecutor) {
     this.shut = true;
@@ -314,9 +314,9 @@ const executorMethods: NativeSpec["methods"] = {
       return submit(this, r, "run", "()V", Number(d) * u.ms);
     },
   "schedule(Ljava/util/concurrent/Callable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;":
-    maySuspend(function (this: JExecutor, c: unknown, d: bigint, u: JTimeUnit) {
+    function (this: JExecutor, c: unknown, d: bigint, u: JTimeUnit) {
       return submit(this, c, "call", "()Ljava/lang/Object;", Number(d) * u.ms);
-    }),
+    },
   ...repeating("scheduleAtFixedRate", true),
   ...repeating("scheduleWithFixedDelay", false),
 };
@@ -498,7 +498,7 @@ function condPark(c: JCondition, ms?: number) {
 rt.register({
   name: "webdroid/Condition", ctor: JCondition, ifaces: ["java/util/concurrent/locks/Condition"],
   methods: {
-    "await()V": maySuspend(function (this: JCondition) { return condPark(this); }),
+    "await()V": function (this: JCondition) { return condPark(this); },
     "awaitUninterruptibly()V": function (this: JCondition) { return new Promise<void>((r) => this.q.push(r)); },
     "await(JLjava/util/concurrent/TimeUnit;)Z": async function (this: JCondition, d: bigint, u: JTimeUnit) {
       return (await condPark(this, Number(d) * u.ms)) ? 1 : 0;
@@ -525,11 +525,11 @@ rt.register({
       if (this.n > 0 && --this.n === 0) for (const w of this.waiters.splice(0)) queueMicrotask(w);
     },
     "getCount()J": function (this: JCountDownLatch) { return BigInt(this.n); },
-    "await()V": maySuspend(function (this: JCountDownLatch) {
+    "await()V": function (this: JCountDownLatch) {
       if (this.n === 0) return;
       return new Promise<void>((r) => this.waiters.push(r));
-    }),
-    "await(JLjava/util/concurrent/TimeUnit;)Z": maySuspend(function (this: JCountDownLatch, d: bigint, u: JTimeUnit) {
+    },
+    "await(JLjava/util/concurrent/TimeUnit;)Z": function (this: JCountDownLatch, d: bigint, u: JTimeUnit) {
       if (this.n === 0) return 1;
       return new Promise<number>((resolve) => {
         const done = () => resolve(1);
@@ -539,17 +539,17 @@ rt.register({
           if (i >= 0) { this.waiters.splice(i, 1); resolve(0); }
         }, Number(d) * u.ms);
       });
-    }),
+    },
   },
 });
 
 type WaitingQueue = { a: unknown[]; takers: ((value: unknown) => void)[] };
 
-const takeFirst = maySuspend(function (this: WaitingQueue): unknown {
+const takeFirst = function (this: WaitingQueue): unknown {
   return this.a.length ? this.a.shift() : new Promise((resolve) => this.takers.push(resolve));
-});
+};
 
-const timedPoll = maySuspend(function (this: WaitingQueue, d: bigint, u: JTimeUnit): unknown {
+const timedPoll = function (this: WaitingQueue, d: bigint, u: JTimeUnit): unknown {
   if (this.a.length) return this.a.shift();
   return new Promise((resolve) => {
     const taker = (v: unknown) => resolve(v);
@@ -559,7 +559,7 @@ const timedPoll = maySuspend(function (this: WaitingQueue, d: bigint, u: JTimeUn
       if (i >= 0) { this.takers.splice(i, 1); resolve(null); }
     }, Number(d) * u.ms);
   });
-});
+};
 
 class JBlockingQueue extends JList {
   takers: ((v: unknown) => void)[] = [];
@@ -687,10 +687,10 @@ for (const [n, run] of [["AbortPolicy", 0], ["CallerRunsPolicy", 1], ["DiscardPo
     ifaces: ["java/util/concurrent/RejectedExecutionHandler"],
     methods: {
       "<init>()V": function () {},
-      "rejectedExecution(Ljava/lang/Runnable;Ljava/util/concurrent/ThreadPoolExecutor;)V": maySuspend((r: unknown) => {
+      "rejectedExecution(Ljava/lang/Runnable;Ljava/util/concurrent/ThreadPoolExecutor;)V": (r: unknown) => {
         if (run) return vcall(r, "run", "()V");
         if (n === "AbortPolicy") throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "rejected");
-      }),
+      },
     },
   });
 }
@@ -927,10 +927,10 @@ function parkThread(t: JThread, timeoutMs = 1000): void | Promise<void> {
 rt.register({
   name: "java/util/concurrent/locks/LockSupport", ctor: class extends JObj {},
   methods: {
-    "static park()V": maySuspend(() => parkThread(curThread)),
-    "static park(Ljava/lang/Object;)V": maySuspend(() => parkThread(curThread)),
-    "static parkNanos(J)V": maySuspend((n: bigint) => parkThread(curThread, Number(n) / 1e6)),
-    "static parkNanos(Ljava/lang/Object;J)V": maySuspend((_b: unknown, n: bigint) => parkThread(curThread, Number(n) / 1e6)),
+    "static park()V": () => parkThread(curThread),
+    "static park(Ljava/lang/Object;)V": () => parkThread(curThread),
+    "static parkNanos(J)V": (n: bigint) => parkThread(curThread, Number(n) / 1e6),
+    "static parkNanos(Ljava/lang/Object;J)V": (_b: unknown, n: bigint) => parkThread(curThread, Number(n) / 1e6),
     "static unpark(Ljava/lang/Thread;)V": (t: JThread | null) => { if (!t) return; if (t.unpark) { t.unpark(); t.unpark = null; } else t.permit = true; },
   },
 });
@@ -981,7 +981,7 @@ rt.register({
       this.wake(null);
     },
     "get()Ljava/lang/Object;": function (this: JFutureTask) { return futureGet(this); },
-    "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": maySuspend(function (this: JFutureTask, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); }),
+    "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JFutureTask, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); },
     "isDone()Z": function (this: JFutureTask) { return this.done; },
     "isCancelled()Z": () => 0,
     "cancel(Z)Z": () => 0,

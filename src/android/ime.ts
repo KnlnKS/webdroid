@@ -9,7 +9,7 @@
 // declares `implements InputConnection`, and an unregistered interface makes Runtime.link
 // auto-stub it — which poisons every class that names it.
 
-import { rt, JObj, type NativeSpec, maySuspend, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { jarray, splitSig } from "../jvm/abi";
@@ -311,9 +311,9 @@ for (const sig of IC_SIGS) {
   const [name, desc] = splitSig(sig);
   const ret = desc.slice(desc.indexOf(")") + 1);
   const miss = ret === "V" ? undefined : ret === "Z" || ret === "I" ? 0 : null;
-  wrapMethods[sig] = maySuspend(function (this: JICWrapper, ...a: unknown[]) {
+  wrapMethods[sig] = function (this: JICWrapper, ...a: unknown[]) {
     return this.targetIc === null ? miss : vcall(this.targetIc, name, desc, ...a);
-  });
+  };
 }
 rt.register({
   name: "android/view/inputmethod/InputConnectionWrapper", ctor: JICWrapper,

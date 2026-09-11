@@ -109,11 +109,6 @@ interface DexLink {
 
 /** how long a cross-chain clinit wait runs before it is presumed a same-chain cycle */
 const CLINIT_WAIT_MS = 60;
-type NativeFn = (...a: never[]) => unknown;
-const suspendingNatives = new WeakSet<NativeFn>();
-/** Declare conditional suspension without changing a native's synchronous fast path. */
-export function maySuspend<F extends NativeFn>(fn: F): F { suspendingNatives.add(fn); return fn; }
-const canSuspend = (fn: NativeFn) => fn.constructor.name === "AsyncFunction" || suspendingNatives.has(fn);
 
 export class Runtime {
   classes = new Map<string, ClassInfo>();
@@ -331,20 +326,6 @@ export class Runtime {
     return () => { throw this.unimplemented(what); };
   }
 
-  /** `?natcheck=1`: report promises from natives lacking an async or maySuspend declaration.
-   *  Off by default — it costs a call frame per native. */
-  auditNatives = false;
-  nativeLiars = new Set<string>();
-  private auditWrap(cls: string, key: string, fn: NativeFn): NativeFn {
-    if (canSuspend(fn)) return fn;
-    const rt = this;
-    return function (this: unknown, ...a: unknown[]) {
-      const r = (fn as (...x: unknown[]) => unknown).apply(this, a);
-      if (r instanceof Promise) rt.nativeLiars.add(cls + " " + key);
-      return r;
-    };
-  }
-
   unimplemented(what: string): Error {
     this.noteMissing(what);
     return this.mkThrowable("java/lang/UnsupportedOperationException", "webdroid missing: " + what);
@@ -460,7 +441,7 @@ export class Runtime {
       const target: Record<string, unknown> = isStatic ? ctorAny : proto;
       const fn = typeof impl === "string" ? proto[impl] : impl;
       if (typeof fn !== "function") throw new Error(`bad native impl ${spec.name}.${key}`);
-      target[mangled] = this.auditNatives ? this.auditWrap(spec.name, key, fn as NativeFn) : fn;
+      target[mangled] = fn;
       if (!isStatic) info.ownMethods.push(mangled);
     }
     // A static written as a getter is resolved on first READ, not here: link order is

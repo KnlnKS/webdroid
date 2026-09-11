@@ -15,7 +15,6 @@ import { mountSystemCertificates } from "./shell/cacerts";
 import { hexBytes, u8 } from "./jvm/abi";
 
 const params = new URLSearchParams(location.search), pid = Number(params.get("pid")), broker = processBroker();
-rt.auditNatives = params.get("natcheck") === "1";
 jitStats.on = params.get("jit") !== "0";
 const canvas = document.getElementById("screen") as HTMLCanvasElement;
 canvas.width = SCREEN_W; canvas.height = SCREEN_H;

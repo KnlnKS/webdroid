@@ -96,8 +96,8 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
 ## Diagnosis
 
 `package.json` is the command index. Start with `inspect`/`dis`/`jsrc` for bytecode,
-`audit` for reachable missing APIs, `fwscan`/`fwtest` for framework evidence and `natcheck`
-for suspension contracts. Native tools are `scripts/nrun.ts` and `scripts/ndbg.ts`.
+`audit` for reachable missing APIs and `fwscan`/`fwtest` for framework evidence. Native tools are
+`scripts/nrun.ts` and `scripts/ndbg.ts`.
 
 The browser exposes `wd` from `src/main.ts`; missing APIs are `wd.rt.missing`.
 For suspected JIT faults, compare `?jit=0`, then narrow with `__wdJit` ranges or

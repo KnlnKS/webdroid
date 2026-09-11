@@ -1,7 +1,7 @@
 // android.os.Parcel: AOSP's wire layout (4-byte cells, UTF-16 strings, BNDL bundles) so
 // dataSize/dataPosition agree with what an app measured on a device. What has no byte
 // form here — a Serializable, a binder — rides in a side table keyed by its position.
-import { JObj, rt, maySuspend } from "../jvm/runtime";
+import { JObj, rt } from "../jvm/runtime";
 import { dotName, slashName, jarray, mangleStaticField, utf8, u8 } from "../jvm/abi";
 import { newObj, vcall, JInt, JLong, JFloat, JDouble, JBool, JByte, JShort, JChar, box, defineException } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, type JList } from "../jvm/natives/jutil";
@@ -346,14 +346,14 @@ rt.register({
     ])),
     [`writeStringArray([${S})V`]: function (this: JParcel, a: string[] | null) { writeStrings(this, a); },
     "writeStringList(Ljava/util/List;)V": async function (this: JParcel, l: unknown) { writeStrings(this, l === null ? null : await toJsArray(l) as string[]); },
-    "writeValue(Ljava/lang/Object;)V": maySuspend(function (this: JParcel, v: unknown) { return writeValue(this, v); }),
-    "writeList(Ljava/util/List;)V": maySuspend(function (this: JParcel, l: unknown) { return writeList(this, l); }),
-    "writeMap(Ljava/util/Map;)V": maySuspend(function (this: JParcel, m: unknown) { return writeMap(this, m); }),
-    "writeBundle(Landroid/os/Bundle;)V": maySuspend(function (this: JParcel, b: JBundle | null) { return writeBundle(this, b); }),
-    "writeParcelable(Landroid/os/Parcelable;I)V": maySuspend(function (this: JParcel, o: JObj | null, flags: number) { return writeParcelable(this, o, flags); }),
+    "writeValue(Ljava/lang/Object;)V": function (this: JParcel, v: unknown) { return writeValue(this, v); },
+    "writeList(Ljava/util/List;)V": function (this: JParcel, l: unknown) { return writeList(this, l); },
+    "writeMap(Ljava/util/Map;)V": function (this: JParcel, m: unknown) { return writeMap(this, m); },
+    "writeBundle(Landroid/os/Bundle;)V": function (this: JParcel, b: JBundle | null) { return writeBundle(this, b); },
+    "writeParcelable(Landroid/os/Parcelable;I)V": function (this: JParcel, o: JObj | null, flags: number) { return writeParcelable(this, o, flags); },
     "writeTypedList(Ljava/util/List;)V": async function (this: JParcel, l: unknown) { return writeTyped(this, l === null ? null : await toJsArray(l), 0); },
     "writeTypedList(Ljava/util/List;I)V": async function (this: JParcel, l: unknown, flags: number) { return writeTyped(this, l === null ? null : await toJsArray(l), flags); },
-    "writeTypedArray([Landroid/os/Parcelable;I)V": maySuspend(function (this: JParcel, a: unknown[] | null, flags: number) { return writeTyped(this, a, flags); }),
+    "writeTypedArray([Landroid/os/Parcelable;I)V": function (this: JParcel, a: unknown[] | null, flags: number) { return writeTyped(this, a, flags); },
     "writeTypedObject(Landroid/os/Parcelable;I)V": async function (this: JParcel, o: unknown, flags: number) { if (o === null) writeInt(this, 0); else { writeInt(this, 1); await vcall(o, "writeToParcel", `(${P}I)V`, this, flags); } },
     "writeSerializable(Ljava/io/Serializable;)V": function (this: JParcel, o: unknown) { if (o === null) return writeString(this, null); writeString(this, className(o as JObj)); writeObject(this, o); },
     "writeStrongBinder(Landroid/os/IBinder;)V": function (this: JParcel, b: unknown) { writeObject(this, b); },
@@ -382,15 +382,15 @@ rt.register({
     "createStringArrayList()Ljava/util/ArrayList;": function (this: JParcel) { return readStringList(this); },
     "readIntArray([I)V": function (this: JParcel, out: Int32Array) { const n = readInt(this); for (let i = 0; i < n; i++) out[i] = readInt(this); },
     "readStringList(Ljava/util/List;)V": async function (this: JParcel, out: unknown) { await vcall(out, "clear", "()V"); for (const s of readStrings(this) ?? []) await vcall(out, "add", "(Ljava/lang/Object;)Z", s); },
-    [`readValue(${L})Ljava/lang/Object;`]: maySuspend(function (this: JParcel, loader: unknown) { return readValue(this, loader); }),
-    [`readArrayList(${L})Ljava/util/ArrayList;`]: maySuspend(function (this: JParcel, loader: unknown) { return readList(this, loader); }),
+    [`readValue(${L})Ljava/lang/Object;`]: function (this: JParcel, loader: unknown) { return readValue(this, loader); },
+    [`readArrayList(${L})Ljava/util/ArrayList;`]: function (this: JParcel, loader: unknown) { return readList(this, loader); },
     [`readList(Ljava/util/List;${L})V`]: async function (this: JParcel, out: unknown, loader: unknown) { for (const v of (await readList(this, loader))?.a ?? []) await vcall(out, "add", "(Ljava/lang/Object;)Z", v); },
-    [`readHashMap(${L})Ljava/util/HashMap;`]: maySuspend(function (this: JParcel, loader: unknown) { return readMap(this, loader); }),
+    [`readHashMap(${L})Ljava/util/HashMap;`]: function (this: JParcel, loader: unknown) { return readMap(this, loader); },
     [`readMap(Ljava/util/Map;${L})V`]: async function (this: JParcel, out: unknown, loader: unknown) { const m = await readMap(this, loader); if (m) await vcall(out, "putAll", "(Ljava/util/Map;)V", m); },
-    "readBundle()Landroid/os/Bundle;": maySuspend(function (this: JParcel) { return readBundle(this, null); }),
-    [`readBundle(${L})Landroid/os/Bundle;`]: maySuspend(function (this: JParcel, loader: unknown) { return readBundle(this, loader); }),
-    [`readParcelable(${L})Landroid/os/Parcelable;`]: maySuspend(function (this: JParcel, loader: unknown) { return readParcelable(this, loader); }),
-    [`readParcelable(${L}Ljava/lang/Class;)Ljava/lang/Object;`]: maySuspend(function (this: JParcel, loader: unknown) { return readParcelable(this, loader); }),
+    "readBundle()Landroid/os/Bundle;": function (this: JParcel) { return readBundle(this, null); },
+    [`readBundle(${L})Landroid/os/Bundle;`]: function (this: JParcel, loader: unknown) { return readBundle(this, loader); },
+    [`readParcelable(${L})Landroid/os/Parcelable;`]: function (this: JParcel, loader: unknown) { return readParcelable(this, loader); },
+    [`readParcelable(${L}Ljava/lang/Class;)Ljava/lang/Object;`]: function (this: JParcel, loader: unknown) { return readParcelable(this, loader); },
     [`createTypedArrayList(${CR})Ljava/util/ArrayList;`]: async function (this: JParcel, c: unknown) { const a = await readTyped(this, c); return a && newArrayList(a); },
     [`createTypedArray(${CR})[Ljava/lang/Object;`]: async function (this: JParcel, c: unknown) {
       const a = await readTyped(this, c);
@@ -399,7 +399,7 @@ rt.register({
       for (let i = 0; i < a.length; i++) out[i] = a[i];
       return out;
     },
-    [`readTypedObject(${CR})Ljava/lang/Object;`]: maySuspend(function (this: JParcel, c: unknown) { return readInt(this) ? createFrom(this, c, null) : null; }),
+    [`readTypedObject(${CR})Ljava/lang/Object;`]: function (this: JParcel, c: unknown) { return readInt(this) ? createFrom(this, c, null) : null; },
     [`readTypedList(Ljava/util/List;${CR})V`]: async function (this: JParcel, out: unknown, c: unknown) { await vcall(out, "clear", "()V"); for (const v of (await readTyped(this, c)) ?? []) await vcall(out, "add", "(Ljava/lang/Object;)Z", v); },
     "readSerializable()Ljava/io/Serializable;": async function (this: JParcel) { return readSerializable(this); },
     [`readSerializable(${L}Ljava/lang/Class;)Ljava/io/Serializable;`]: async function (this: JParcel) { return readSerializable(this); },

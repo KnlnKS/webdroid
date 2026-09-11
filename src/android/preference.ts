@@ -4,7 +4,7 @@
 // existing SharedPreferences/PreferenceManager plumbing in app.ts. No per-app special-casing:
 // any app's res/xml/*.xml preference screen renders through this same path.
 
-import { rt, JObj, type NativeSpec, maySuspend, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { attr, TV, parseAXML, type XmlNode } from "./axml";
@@ -446,11 +446,11 @@ const preferenceFragmentMethods: NonNullable<NativeSpec["methods"]> = {
   ...fragMethods,
   "getPreferenceManager()Landroid/preference/PreferenceManager;": function (this: JPreferenceFragment) { return ensurePM(this); },
   "getPreferenceScreen()Landroid/preference/PreferenceScreen;": function (this: JPreferenceFragment) { return this.root; },
-  "setPreferenceScreen(Landroid/preference/PreferenceScreen;)V": maySuspend(function (this: JPreferenceFragment, s: JPreferenceScreen | null) {
+  "setPreferenceScreen(Landroid/preference/PreferenceScreen;)V": function (this: JPreferenceFragment, s: JPreferenceScreen | null) {
     this.root = s;
     if (s) bindTree(s, this);
     if (this.adapter) void vcall(this.adapter, "notifyDataSetChanged", "()V").catch(reportUncaught);
-  }),
+  },
   "addPreferencesFromResource(I)V": async function (this: JPreferenceFragment, resId: number) {
     const jctx: any = this.act;
     const host = jctx?.$host;

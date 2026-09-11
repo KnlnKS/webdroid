@@ -1,4 +1,4 @@
-import { JObj, rt, type NativeSpec, maySuspend } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { defineException, stringHash, vcall, curThread, mainThread } from "../jvm/natives/jlang";
 import { appHost } from "./apphost";
@@ -147,8 +147,8 @@ const methods: NativeSpec["methods"] = {
       throw rt.mkThrowable("java/lang/SecurityException", "Caller does not own this account type");
     return byType(type, pkg);
   },
-  [`getAccountsByTypeAndFeatures(${S}[${S}${CB}${H})${F}`]: maySuspend(accountsWithFeatures),
-  [`hasFeatures(${ACC}[${S}${CB}${H})${F}`]: maySuspend(features),
+  [`getAccountsByTypeAndFeatures(${S}[${S}${CB}${H})${F}`]: accountsWithFeatures,
+  [`hasFeatures(${ACC}[${S}${CB}${H})${F}`]: features,
   [`addAccountExplicitly(${ACC}${S}Landroid/os/Bundle;)Z`]: (a: JAccount, password: string | null, extras: JBundle | null) => {
     const owner = authenticators().find(d => d.type === a.type)?.packageName;
     if (!owner || packages.get(owner)?.uid !== PROCESS_UID) throw rt.mkThrowable("java/lang/SecurityException", "Caller does not own this account type");
@@ -160,13 +160,13 @@ const methods: NativeSpec["methods"] = {
     return 1;
   },
   [`removeAccountExplicitly(${ACC})Z`]: remove,
-  [`removeAccount(${ACC}${CB}${H})${F}`]: maySuspend((a: JAccount, cb: unknown, h: JHandler | null) => removeAccount(a, null, cb, h, true)),
-  [`removeAccount(${ACC}Landroid/app/Activity;${CB}${H})${F}`]: maySuspend((a: JAccount, act: unknown, cb: unknown, h: JHandler | null) => removeAccount(a, act, cb, h, false)),
-  [`renameAccount(${ACC}${S}${CB}${H})${F}`]: maySuspend((a: JAccount, name: string, cb: unknown, h: JHandler | null) => {
+  [`removeAccount(${ACC}${CB}${H})${F}`]: (a: JAccount, cb: unknown, h: JHandler | null) => removeAccount(a, null, cb, h, true),
+  [`removeAccount(${ACC}Landroid/app/Activity;${CB}${H})${F}`]: (a: JAccount, act: unknown, cb: unknown, h: JHandler | null) => removeAccount(a, act, cb, h, false),
+  [`renameAccount(${ACC}${S}${CB}${H})${F}`]: (a: JAccount, name: string, cb: unknown, h: JHandler | null) => {
     const s = find(a);
     if (s) { s.name = name; persist(); }
     return accountFuture(cb, h, s ? toJ(s) : null);
-  }),
+  },
   [`getUserData(${ACC}${S})${S}`]: (a: JAccount, k: string) => find(a)?.data[k] ?? null,
   [`setUserData(${ACC}${S}${S})V`]: (a: JAccount, k: string, v: string | null) => {
     const s = find(a);
@@ -193,29 +193,29 @@ const methods: NativeSpec["methods"] = {
     const thread = curThread, result = await authToken(a, type, null, null, null, null).result(undefined, thread);
     return (await vcall(result, "getString", "(Ljava/lang/String;)Ljava/lang/String;", "authtoken")) ?? null;
   },
-  [`getAuthToken(${ACC}${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: maySuspend(authToken),
-  [`getAuthToken(${ACC}${S}Landroid/os/Bundle;Z${CB}${H})${F}`]: maySuspend((a: JAccount, type: string, o: JBundle | null, _notify: number, cb: unknown, h: JHandler | null) => authToken(a, type, o, null, cb, h)),
-  [`getAuthToken(${ACC}${S}Z${CB}${H})${F}`]: maySuspend((a: JAccount, type: string, _notify: number, cb: unknown, h: JHandler | null) => authToken(a, type, null, null, cb, h)),
+  [`getAuthToken(${ACC}${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: authToken,
+  [`getAuthToken(${ACC}${S}Landroid/os/Bundle;Z${CB}${H})${F}`]: (a: JAccount, type: string, o: JBundle | null, _notify: number, cb: unknown, h: JHandler | null) => authToken(a, type, o, null, cb, h),
+  [`getAuthToken(${ACC}${S}Z${CB}${H})${F}`]: (a: JAccount, type: string, _notify: number, cb: unknown, h: JHandler | null) => authToken(a, type, null, null, cb, h),
   [`getAuthTokenByFeatures(${S}${S}[${S}Landroid/app/Activity;Landroid/os/Bundle;Landroid/os/Bundle;${CB}${H})${F}`]: unsupported,
-  [`addAccount(${S}${S}[${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: maySuspend((type: string, token: string | null, features: string[] | null, options: JBundle | null, activity: unknown, callback: unknown, handler: JHandler | null) => {
+  [`addAccount(${S}${S}[${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: (type: string, token: string | null, features: string[] | null, options: JBundle | null, activity: unknown, callback: unknown, handler: JHandler | null) => {
     if (!type) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Account type is required");
     return requestAccount({ type, method: "addAccount", args: [type, token, features, accountOptions(options)], activity, callback, handler });
-  }),
-  [`confirmCredentials(${ACC}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: maySuspend((a: JAccount, options: JBundle | null, activity: unknown, callback: unknown, handler: JHandler | null) =>
-    requestAccount({ type: a.type, method: "confirmCredentials", args: [a, accountOptions(options)], activity, callback, handler })),
-  [`updateCredentials(${ACC}${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: maySuspend((a: JAccount, token: string, options: JBundle | null, activity: unknown, callback: unknown, handler: JHandler | null) =>
-    requestAccount({ type: a.type, method: "updateCredentials", args: [a, token, accountOptions(options)], activity, callback, handler })),
-  [`editProperties(${S}Landroid/app/Activity;${CB}${H})${F}`]: maySuspend((type: string, activity: unknown, callback: unknown, handler: JHandler | null) =>
-    requestAccount({ type, method: "editProperties", args: [type], activity, callback, handler })),
+  },
+  [`confirmCredentials(${ACC}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: (a: JAccount, options: JBundle | null, activity: unknown, callback: unknown, handler: JHandler | null) =>
+    requestAccount({ type: a.type, method: "confirmCredentials", args: [a, accountOptions(options)], activity, callback, handler }),
+  [`updateCredentials(${ACC}${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: (a: JAccount, token: string, options: JBundle | null, activity: unknown, callback: unknown, handler: JHandler | null) =>
+    requestAccount({ type: a.type, method: "updateCredentials", args: [a, token, accountOptions(options)], activity, callback, handler }),
+  [`editProperties(${S}Landroid/app/Activity;${CB}${H})${F}`]: (type: string, activity: unknown, callback: unknown, handler: JHandler | null) =>
+    requestAccount({ type, method: "editProperties", args: [type], activity, callback, handler }),
   "getAuthenticatorTypes()[Landroid/accounts/AuthenticatorDescription;": () => jarray(authenticators(), "Landroid/accounts/AuthenticatorDescription;"),
-  [`addOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;${H}Z)V`]: maySuspend((l: unknown, _h: unknown, now: number) => {
+  [`addOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;${H}Z)V`]: (l: unknown, _h: unknown, now: number) => {
     listeners.add(l);
     if (now) void onMain(() => vcall(l, "onAccountsUpdated", "([Landroid/accounts/Account;)V", allAccounts()));
-  }),
-  [`addOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;${H}Z[${S})V`]: maySuspend((l: unknown, _h: unknown, now: number) => {
+  },
+  [`addOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;${H}Z[${S})V`]: (l: unknown, _h: unknown, now: number) => {
     listeners.add(l);
     if (now) void onMain(() => vcall(l, "onAccountsUpdated", "([Landroid/accounts/Account;)V", allAccounts()));
-  }),
+  },
   "removeOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;)V": (l: unknown) => { listeners.delete(l); },
   [`setAccountVisibility(${ACC}${S}I)Z`]: (a: JAccount, pkg: string, visibility: number) => {
     if (visibility < 0 || visibility > 4) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid account visibility");

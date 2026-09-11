@@ -1,4 +1,4 @@
-import { JObj, rt, maySuspend } from "../jvm/runtime";
+import { JObj, rt } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { jarray, u8 } from "../jvm/abi";
 import { installPackageArchive } from "./pm";
@@ -44,7 +44,7 @@ rt.register({ name: "android/content/pm/PackageInstaller$Session", ctor: JSessio
     },
     "close()V": () => {},
     "abandon()V": function (this: JSession) { sessions.delete(this.id); this.sealed = true; this.entries.clear(); },
-    "commit(Landroid/content/IntentSender;)V": maySuspend(function (this: JSession, sender: Parameters<typeof sendIntent>[0]) {
+    "commit(Landroid/content/IntentSender;)V": function (this: JSession, sender: Parameters<typeof sendIntent>[0]) {
       if (this.sealed) throw rt.mkThrowable("java/lang/SecurityException", "Session is sealed");
       this.sealed = true;
       const finish = async () => {
@@ -66,7 +66,7 @@ rt.register({ name: "android/content/pm/PackageInstaller$Session", ctor: JSessio
         await sendIntent(sender, result);
       };
       void finish().catch(reportUncaught);
-    }),
+    },
   },
 });
 class JPackageInstaller extends JObj {}

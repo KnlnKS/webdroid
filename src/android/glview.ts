@@ -1,6 +1,6 @@
 // GLSurfaceView: owns a WebGL canvas, drives the Renderer, blits into the 2D framebuffer.
 
-import { rt, JObj, maySuspend, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, stubs, noops } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, JThread, setCurThread, curThread } from "../jvm/natives/jlang";
@@ -109,12 +109,12 @@ rt.register({
     "setRenderMode(I)V": function (this: JGLSurfaceView, m: number) { this.renderMode = m; },
     "getRenderMode()I": function (this: JGLSurfaceView) { return this.renderMode; },
     "requestRender()V": function (this: JGLSurfaceView) { this.dirty = true; invalidate(); },
-    "queueEvent(Ljava/lang/Runnable;)V": maySuspend(function (this: JGLSurfaceView, r: unknown) {
+    "queueEvent(Ljava/lang/Runnable;)V": function (this: JGLSurfaceView, r: unknown) {
       setTimeout(() => {
         const prev = curThread; setCurThread(this.glThread);
         void Promise.resolve(vcall(r, "run", "()V")).catch(reportUncaught).finally(() => setCurThread(prev));
       }, 0);
-    }),
+    },
     // GLThread stops rendering while paused; the WebGL context is kept across it, which is the
     // setPreserveEGLContextOnPause(true) behaviour and the only one we can offer.
     "onResume()V": function (this: JGLSurfaceView) { this.paused = false; invalidate(); },

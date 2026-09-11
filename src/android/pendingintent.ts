@@ -1,4 +1,4 @@
-import { JObj, rt, maySuspend } from "../jvm/runtime";
+import { JObj, rt } from "../jvm/runtime";
 import { defineException, idHash, newObj, vcall } from "../jvm/natives/jlang";
 import type { JContext } from "./context";
 import { appHost } from "./apphost";
@@ -57,7 +57,7 @@ rt.register({ name: "android/content/IntentSender", ctor: JIntentSender, ifaces:
     const sender = new JIntentSender(); sender.target = target; return sender;
   }); } }, methods: {
     "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": maySuspend(function (this: JIntentSender, p: JParcel) { return vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.target); }),
+    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JIntentSender, p: JParcel) { return vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.target); },
   },
 });
 rt.register({ name: "android/app/PendingIntent", ctor: JPendingIntent, ifaces: ["android/os/Parcelable"],
@@ -66,15 +66,15 @@ rt.register({ name: "android/app/PendingIntent", ctor: JPendingIntent, ifaces: [
     if (!target) return null;
     const result = new JPendingIntent(); result.sender.target = target; return result;
   }); } }, methods: {
-    "static getActivity(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": maySuspend((context: JContext, code: number, intent: JIntent, flags: number) => pending("activity", context, code, intent, flags)),
-    "static getBroadcast(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": maySuspend((context: JContext, code: number, intent: JIntent, flags: number) => pending("broadcast", context, code, intent, flags)),
-    "static getService(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": maySuspend((context: JContext, code: number, intent: JIntent, flags: number) => pending("service", context, code, intent, flags)),
+    "static getActivity(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, code: number, intent: JIntent, flags: number) => pending("activity", context, code, intent, flags),
+    "static getBroadcast(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, code: number, intent: JIntent, flags: number) => pending("broadcast", context, code, intent, flags),
+    "static getService(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, code: number, intent: JIntent, flags: number) => pending("service", context, code, intent, flags),
     "getIntentSender()Landroid/content/IntentSender;": function (this: JPendingIntent) { return this.sender; },
     "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": maySuspend(function (this: JPendingIntent, p: JParcel) { return vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.sender.target); }),
+    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JPendingIntent, p: JParcel) { return vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.sender.target); },
     "equals(Ljava/lang/Object;)Z": function (this: JPendingIntent, other: unknown) { return +(other instanceof JPendingIntent && this.sender.target === other.sender.target); },
     "hashCode()I": function (this: JPendingIntent) { return idHash(this.sender.target); },
     "cancel()V": function (this: JPendingIntent) { pendingTransport.cancel(pendingId(this)); },
-    "send()V": maySuspend(function (this: JPendingIntent) { return sendIntent(this.sender); }),
+    "send()V": function (this: JPendingIntent) { return sendIntent(this.sender); },
   },
 });

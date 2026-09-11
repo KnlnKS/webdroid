@@ -18,7 +18,7 @@ import {
 } from "./res";
 import { TV } from "./axml";
 import { fontResource } from "./fonts";
-import { type NativeSpec, callSelf, rt, JObj, maySuspend, stubs, noops } from "../jvm/runtime";
+import { type NativeSpec, callSelf, rt, JObj, stubs, noops } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { usLocale } from "../jvm/natives/jvalues";
 import { perf } from "../perf";
@@ -320,9 +320,9 @@ export function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v:
     await then?.(v);
   };
   return {
-    "<init>(Landroid/content/Context;)V": maySuspend(function (this: T, c: unknown) { return init(this, c, null); }),
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": maySuspend(function (this: T, c: unknown, set: JAttrSet | null) { return init(this, c, set); }),
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": maySuspend(function (this: T, c: unknown, set: JAttrSet | null, dsa: number) { return init(this, c, set, dsa); }),
+    "<init>(Landroid/content/Context;)V": function (this: T, c: unknown) { return init(this, c, null); },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: T, c: unknown, set: JAttrSet | null) { return init(this, c, set); },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": function (this: T, c: unknown, set: JAttrSet | null, dsa: number) { return init(this, c, set, dsa); },
   };
 }
 /** AOSP setRawTextSize: only a size that differs asks for layout */
@@ -350,9 +350,9 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   // AOSP routes every setText through the two-arg form, and that is the one apps override:
   // Material's Chip hands the text to its ChipDrawable there and nowhere else, and without it
   // the drawable measures itself with no text at all.
-  "setText(Ljava/lang/CharSequence;)V": maySuspend(function (this: JTextView, cs: unknown) {
+  "setText(Ljava/lang/CharSequence;)V": function (this: JTextView, cs: unknown) {
     return vcall(this, "setText", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", cs, bufferTypes[0]);
-  }),
+  },
   "setText(I)V": async function (this: JTextView, id: number) {
     const s = this.jres ? resString(this.jres, id) : "";
     await guardCall(this, mangleMethod("setText", "(Ljava/lang/CharSequence;)V"), s);
@@ -455,9 +455,9 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getCompoundDrawablesRelative()[Landroid/graphics/drawable/Drawable;": compoundDrawables,
   "setCompoundDrawablesRelative(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
   "setCompoundDrawablesRelativeWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
-  "setCompoundDrawablesRelativeWithIntrinsicBounds(IIII)V": maySuspend(function (this: JTextView, l: number, t: number, r: number, b: number) {
+  "setCompoundDrawablesRelativeWithIntrinsicBounds(IIII)V": function (this: JTextView, l: number, t: number, r: number, b: number) {
     return callSelf(textViewMethods, "setCompoundDrawablesWithIntrinsicBounds(IIII)V", this, l, t, r, b);
-  }),
+  },
   "setCompoundDrawableTintList(Landroid/content/res/ColorStateList;)V": function (this: JTextView, csl: JColorStateList | null) {
     this.drawableTint = csl;
     for (const d of [this.drawableL, this.drawableT, this.drawableR, this.drawableB]) if (d) d.tint = csl ? cslColor(csl, d.stateSet) : null;

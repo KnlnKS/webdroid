@@ -1,6 +1,6 @@
 // javax.crypto — SecretKeySpec, IvParameterSpec, Cipher (AES) and Mac (HMAC) over WebCrypto, which is
 // one-shot and async: update() buffers, doFinal() awaits the whole operation.
-import { rt, JObj, maySuspend } from "../runtime";
+import { rt, JObj } from "../runtime";
 import { defineException } from "./jlang";
 import { mkIter } from "./jutil";
 import { concat, i8, u8 } from "../abi";
@@ -239,10 +239,10 @@ rt.register({
     },
     "getParameters()Ljava/security/AlgorithmParameters;": () => null,
     "getBlockSize()I": function (this: JCipher) { return this.alg === "RSA-OAEP" ? 0 : 16; },
-    "getOutputSize(I)I": maySuspend(function (this: JCipher, n: number) {
+    "getOutputSize(I)I": function (this: JCipher, n: number) {
       if (this.rsa) return this.rsa.key().then((key) => Math.ceil(key.n.bitLength() / 8));
       return this.parts.reduce((s, p) => s + p.length, n) + 16;
-    }),
+    },
     "getIV()[B": function (this: JCipher) { return this.iv && new Int8Array(this.iv); },
     "getAlgorithm()Ljava/lang/String;": function (this: JCipher) { return this.transformation; },
   },
@@ -281,7 +281,7 @@ rt.register({
       [m.hash, m.len] = h;
       return m;
     },
-    "init(Ljava/security/Key;)V": maySuspend(function (this: JMac, k: unknown) { return initMac(this, k); }),
+    "init(Ljava/security/Key;)V": function (this: JMac, k: unknown) { return initMac(this, k); },
     "init(Ljava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JMac, k: unknown) { return initMac(this, k); },
     "update(B)V": function (this: JMac, b: number) { this.parts.push(new Uint8Array([b & 0xff])); },
     "update([B)V": function (this: JMac, b: Int8Array) { this.parts.push(bytes(b)); },

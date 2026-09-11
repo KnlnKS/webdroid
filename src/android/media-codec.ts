@@ -1,4 +1,4 @@
-import { JObj, rt, maySuspend, noops } from "../jvm/runtime";
+import { JObj, rt, noops } from "../jvm/runtime";
 import { jarray, u8 } from "../jvm/abi";
 import { JThrowable, vcall } from "../jvm/natives/jlang";
 import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
@@ -296,16 +296,16 @@ rt.register({ name: "android/media/MediaCodec", ctor: JMediaCodec, methods: {
     this.check(); if (crypto || flags) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "encoding and protected media are unavailable");
     this.format = new JMediaFormat(); this.format.values = new Map(format.values); this.surface = surface;
   },
-  "start()V": maySuspend(function (this: JMediaCodec) { this.start(); }),
+  "start()V": function (this: JMediaCodec) { this.start(); },
   "stop()V": function (this: JMediaCodec) { this.reset(); },
-  "flush()V": maySuspend(function (this: JMediaCodec) { const restart = this.started && !this.callback; this.reset(); if (restart) this.start(); }),
+  "flush()V": function (this: JMediaCodec) { const restart = this.started && !this.callback; this.reset(); if (restart) this.start(); },
   "release()V": function (this: JMediaCodec) { this.reset(); this.inputs = []; this.released = true; },
   "getInputBuffer(I)Ljava/nio/ByteBuffer;": function (this: JMediaCodec, index: number) { const b = this.inputs[index]; if (!b) return null; b.pos = 0; b.lim = b.cap; return b; },
   "getOutputBuffer(I)Ljava/nio/ByteBuffer;": function (this: JMediaCodec, index: number) { const o = this.outputs.get(index); return o?.kind === "audio" ? o.buffer : null; },
   "getInputBuffers()[Ljava/nio/ByteBuffer;": function (this: JMediaCodec) { return jarray(this.inputs.slice(), "Ljava/nio/ByteBuffer;"); },
   "getOutputFormat()Landroid/media/MediaFormat;": function (this: JMediaCodec) { return this.outputFormat; },
   "getOutputFormat(I)Landroid/media/MediaFormat;": function (this: JMediaCodec) { return this.outputFormat; },
-  "queueInputBuffer(IIIJI)V": maySuspend(function (this: JMediaCodec, index: number, offset: number, size: number, timestamp: bigint, flags: number) { this.queue(index, offset, size, timestamp, flags); }),
+  "queueInputBuffer(IIIJI)V": function (this: JMediaCodec, index: number, offset: number, size: number, timestamp: bigint, flags: number) { this.queue(index, offset, size, timestamp, flags); },
   "dequeueInputBuffer(J)I": async function (this: JMediaCodec, timeout: bigint) {
     this.check(); if (!this.ending && (!this.available.size || this.inFlight + this.outputs.size + this.scheduled.size >= 8)) await this.wait(timeout);
     if (this.ending || !this.available.size || this.inFlight + this.outputs.size + this.scheduled.size >= 8) return -1;
@@ -318,8 +318,8 @@ rt.register({ name: "android/media/MediaCodec", ctor: JMediaCodec, methods: {
     const index = this.outputQueue.shift(); if (index === undefined) return -1;
     Object.assign(info, this.outputs.get(index)?.info); return index;
   },
-  "releaseOutputBuffer(IZ)V": maySuspend(function (this: JMediaCodec, index: number, render: number) { this.releaseOutput(index, !!render); }),
-  "releaseOutputBuffer(IJ)V": maySuspend(function (this: JMediaCodec, index: number, time: bigint) { this.releaseOutput(index, true, time); }),
+  "releaseOutputBuffer(IZ)V": function (this: JMediaCodec, index: number, render: number) { this.releaseOutput(index, !!render); },
+  "releaseOutputBuffer(IJ)V": function (this: JMediaCodec, index: number, time: bigint) { this.releaseOutput(index, true, time); },
   "setOutputSurface(Landroid/view/Surface;)V": function (this: JMediaCodec, surface: JSurface) { this.surface = surface; },
   "detachOutputSurface()V": function (this: JMediaCodec) { this.surface = null; },
   ...noops("setVideoScalingMode(I)V", "setParameters(Landroid/os/Bundle;)V",

@@ -174,7 +174,7 @@ were restored to the completion capture after comparisons.
   an unhandled Binder transaction into success. Typed Bundle/Intent getters unbox Parcel values.
   Annotation prototypes key on ClassInfo, not names; annotation values, Class.forName, enum
   defaults and array Class identities follow defining loaders.
-- Child realms expose actual diagnostics and inherit natcheck/bytecode/jit options. Old collectors
+- Child realms expose actual diagnostics and inherit bytecode/jit options. Old collectors
   treated absent child globals as empty telemetry. The 4b0a0c7 location capture checked four actual
   runtimes with no missing APIs/undeclared suspension and empty background queues: reached-path
   coverage only.
@@ -256,11 +256,12 @@ submitted. Perfsum does not parse this standalone schema: its zero Reddit row is
   an own clinit, not an inherited JS static: rerunning it changed coroutine sentinel identity.
   Static getters and reflective field reads initialize the declaring class lazily. Copy JS
   accessors without reading them.
-- Native re-entry can suspend while common paths stay synchronous. maySuspend records this
-  without Promise wrappers. Reached natcheck success cannot validate the whole sync tier.
-  The experimental call-graph sync tier was removed. Sound, it needed every native to declare
-  its re-entry, and running the analysis at boot cost up to 1.4 s of first draw; deferring it
-  behind a proof cache worked but carried more machinery than its measured gain justified.
+- Native re-entry can suspend while common paths stay synchronous: a native returns a value or a
+  promise, and an async caller awaits only a promise. The experimental call-graph sync tier was
+  removed with the maySuspend declarations and the natcheck audit it relied on. Sound, it needed
+  every native to declare its re-entry, and running the analysis at boot cost up to 1.4 s of
+  first draw; deferring it behind a proof cache worked but carried more machinery than its
+  measured gain justified.
 - Dalvik constant typing requires CFG reaching definitions through merges and exception edges,
   not PC order. R8 arms reuse registers; moves propagate wide/float definitions. JS bitwise
   results are signed int32; Java float-to-int conversion saturates where specified. Constructor
