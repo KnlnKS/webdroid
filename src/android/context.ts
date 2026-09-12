@@ -131,14 +131,15 @@ export function systemService(jctx: JContext, name: string): unknown {
   return s;
 }
 
-// API 31: one process, one caller, so one AttributionSource describes every context
+// API 31: a context's own AttributionSource is this process; a provider's caller may be another
 let attribution: unknown;
+export class JAttributionSource extends JObj { uid = PROCESS_UID; pid = PROCESS_PID; pkg: string | null = null; }
 rt.register({
-  name: "android/content/AttributionSource", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable"],
+  name: "android/content/AttributionSource", ctor: JAttributionSource, ifaces: ["android/os/Parcelable"],
   methods: {
-    "getUid()I": () => PROCESS_UID,
-    "getPid()I": () => PROCESS_PID,
-    "getPackageName()Ljava/lang/String;": () => appHost!.pkg,
+    "getUid()I": function (this: JAttributionSource) { return this.uid; },
+    "getPid()I": function (this: JAttributionSource) { return this.pid; },
+    "getPackageName()Ljava/lang/String;": function (this: JAttributionSource) { return this.pkg ?? appHost!.pkg; },
     ...stubs(null, "getAttributionTag()Ljava/lang/String;", "getNext()Landroid/content/AttributionSource;"),
     ...stubs(1, "isTrusted(Landroid/content/Context;)Z"),
     ...stubs(0, "describeContents()I"),
@@ -364,6 +365,10 @@ export const wrapperMethods: NativeSpec["methods"] = {
 rt.register({
   name: "android/content/ContextWrapper", ctor: JContextWrapper, sup: "android/content/Context",
   methods: { ...wrapperMethods, "<init>(Landroid/content/Context;)V": attachBase },
+});
+rt.register({
+  name: "android/content/MutableContextWrapper", ctor: class extends JContextWrapper {}, sup: "android/content/ContextWrapper",
+  methods: { ...wrapperMethods, "<init>(Landroid/content/Context;)V": attachBase, "setBaseContext(Landroid/content/Context;)V": attachBase },
 });
 rt.register({
   name: "android/view/ContextThemeWrapper", ctor: class extends JContextWrapper {}, sup: "android/content/ContextWrapper",

@@ -1,4 +1,4 @@
-import { JContextWrapper, contextMethods, systemService, wrapperMethods, display, displayListeners, grantPermissions } from "./context";
+import { JContextWrapper, JAttributionSource, contextMethods, systemService, wrapperMethods, display, displayListeners, grantPermissions } from "./context";
 import { JWindow } from "./window";
 import {
   JIntent, activityTransport, systemActivities, deliverActivityResult, RESULT_OK, RESULT_CANCELED, launchIntent, mkComponentName,
@@ -564,7 +564,23 @@ for (const [name, methods, statics] of [
     ...stubs(1, "getSimState()I"),
     ...stubs(null, "getDeviceId()Ljava/lang/String;", "getLine1Number()Ljava/lang/String;",
       "getSubscriberId()Ljava/lang/String;", "getSimSerialNumber()Ljava/lang/String;"),
-    ...noops("listen(Landroid/telephony/PhoneStateListener;I)V"),
+    ...noops("listen(Landroid/telephony/PhoneStateListener;I)V", "unregisterTelephonyCallback(Landroid/telephony/TelephonyCallback;)V"),
+    // no radio: the one thing a registration ever hears is the initial "disconnected"/"idle"
+    // state, delivered on the caller's executor as the platform does
+    "registerTelephonyCallback(Ljava/util/concurrent/Executor;Landroid/telephony/TelephonyCallback;)V": (executor: unknown, cb: unknown) => {
+      if (executor === null || cb === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "executor and callback must not be null");
+      const initial: [string, string, string, unknown[]][] = [
+        ["android/telephony/TelephonyCallback$DataConnectionStateListener", "onDataConnectionStateChanged", "(II)V", [0, 0]],
+        ["android/telephony/TelephonyCallback$CallStateListener", "onCallStateChanged", "(I)V", [0]],
+      ];
+      for (const [iface, name, desc, args] of initial) {
+        if (!rt.iof(cb, iface)) continue;
+        const task = rt.make("webdroid/TelephonyDelivery") as JObj & { run: () => Promise<void> };
+        task.run = () => vcall(cb, name, desc, ...args);
+        void vcall(executor, "execute", "(Ljava/lang/Runnable;)V", task).catch(reportUncaught);
+      }
+    },
+    "getActiveModemCount()I": () => 0,
   }, {
     PHONE_TYPE_NONE: 0, PHONE_TYPE_GSM: 1, PHONE_TYPE_CDMA: 2, PHONE_TYPE_SIP: 3,
     NETWORK_TYPE_UNKNOWN: 0,
@@ -642,6 +658,8 @@ for (const [name, methods, statics] of [
 }
 rt.register({ name: "android/telephony/PhoneStateListener", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 rt.register({ name: "android/telephony/TelephonyCallback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
+rt.register({ name: "webdroid/TelephonyDelivery", ctor: class extends JObj { run: () => Promise<void> = async () => {}; }, ifaces: ["java/lang/Runnable"],
+  methods: { "run()V": function (this: { run: () => Promise<void> }) { return this.run(); } } });
 rt.markers("android/telephony/TelephonyCallback$DataConnectionStateListener", "android/telephony/TelephonyCallback$CallStateListener",
   "android/telephony/TelephonyCallback$ServiceStateListener", "android/telephony/TelephonyCallback$SignalStrengthsListener",
   "android/telephony/TelephonyCallback$DisplayInfoListener");
@@ -761,13 +779,20 @@ rt.register({
   },
 });
 rt.markers("android/window/OnBackInvokedCallback");
+function callingPackage(): string | null {
+  const caller = transactionCaller();
+  if (caller) for (const record of packages.values()) if (record.uid === caller.uid) return record.pkg;
+  return null;
+}
 rt.register({
   name: "android/content/ContentProvider", ctor: class extends JObj { $ctx: unknown = null; },
   methods: {
-    "getCallingPackage()Ljava/lang/String;": () => {
+    "getCallingPackage()Ljava/lang/String;": () => callingPackage(),
+    "getCallingAttributionSource()Landroid/content/AttributionSource;": () => {
       const caller = transactionCaller();
-      if (caller) for (const record of packages.values()) if (record.uid === caller.uid) return record.pkg;
-      return null;
+      if (!caller) return null;
+      rt.link("android/content/AttributionSource");
+      return Object.assign(new JAttributionSource(), { uid: caller.uid, pid: caller.pid, pkg: callingPackage() });
     },
     "<init>()V": function () {},
     "onCreate()Z": () => 1,

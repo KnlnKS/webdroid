@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
-import { rt } from "../src/jvm/runtime";
+import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall } from "../src/jvm/natives/jlang";
 import { mangleMethod } from "../src/jvm/abi";
 import { Resources } from "../src/android/res";
@@ -9,6 +9,7 @@ import { PROCESS_PID } from "../src/android/os";
 
 const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => (rt.link(cls).ctor as any)[mangleMethod(name, desc)](...args);
 
+rt.register({ name: "test/NoopRunnable", ctor: class extends JObj {}, ifaces: ["java/lang/Runnable"], methods: { "run()V": function () {} } });
 rt.linkNatives();
 
 test("ByteBuffer absolute long and double accessors leave the position alone", async () => {
@@ -116,4 +117,55 @@ test("DateUtils formats elapsed time and knows today", async () => {
   expect(await scall("android/text/format/DateUtils", "formatElapsedTime", "(J)Ljava/lang/String;", 3725n)).toBe("1:02:05");
   expect(await scall("android/text/format/DateUtils", "isToday", "(J)Z", BigInt(Date.now()))).toBe(1);
   expect(await scall("android/text/format/DateUtils", "isToday", "(J)Z", BigInt(Date.now() - 2 * 86400000))).toBe(0);
+});
+
+test("ColorMatrix saturation, scale and concat feed a ColorMatrixColorFilter", async () => {
+  const m = await newObj("android/graphics/ColorMatrix");
+  await vcall(m, "setSaturation", "(F)V", 0);
+  const a: Float32Array = await vcall(m, "getArray", "()[F");
+  expect(a[0]).toBeCloseTo(0.213); expect(a[1]).toBeCloseTo(0.715); expect(a[2]).toBeCloseTo(0.072); expect(a[18]).toBe(1);
+  const scale = await newObj("android/graphics/ColorMatrix");
+  await vcall(scale, "setScale", "(FFFF)V", 2, 1, 1, 1);
+  await vcall(m, "postConcat", "(Landroid/graphics/ColorMatrix;)V", scale);
+  expect((await vcall(m, "getArray", "()[F"))[0]).toBeCloseTo(0.426);
+  const filter = await newObj("android/graphics/ColorMatrixColorFilter", "(Landroid/graphics/ColorMatrix;)V", m);
+  const copy = await newObj("android/graphics/ColorMatrix");
+  await vcall(filter, "getColorMatrix", "(Landroid/graphics/ColorMatrix;)V", copy);
+  expect(await vcall(copy, "equals", "(Ljava/lang/Object;)Z", m)).toBe(1);
+  const { matrixColor } = await import("../src/android/graphics");
+  const grey = new Float32Array(20); grey.set([0.213, 0.715, 0.072, 0, 0, 0.213, 0.715, 0.072, 0, 0, 0.213, 0.715, 0.072, 0, 0, 0, 0, 0, 1, 0]);
+  expect(matrixColor(grey, 0xffff0000 | 0) >>> 0).toBe(0xff363636);
+  await expect(newObj("android/graphics/ColorMatrix", "([F)V", new Float32Array(3))).rejects.toMatchObject({ constructor: rt.link("java/lang/ArrayIndexOutOfBoundsException").ctor });
+});
+
+test("UrlQuerySanitizer drops unregistered parameters unless allowed and sanitizes values", async () => {
+  const strict = await newObj("android/net/UrlQuerySanitizer", "(Ljava/lang/String;)V", "http://x/?a=1&b=2");
+  expect(await vcall(strict, "hasParameter", "(Ljava/lang/String;)Z", "a")).toBe(0);
+  const open = await newObj("android/net/UrlQuerySanitizer");
+  await vcall(open, "setAllowUnregisteredParamaters", "(Z)V", 1);
+  await vcall(open, "setUnregisteredParameterValueSanitizer", "(Landroid/net/UrlQuerySanitizer$ValueSanitizer;)V",
+    await scall("android/net/UrlQuerySanitizer", "getUrlAndSpaceLegal", "()Landroid/net/UrlQuerySanitizer$ValueSanitizer;"));
+  await vcall(open, "parseUrl", "(Ljava/lang/String;)V", "http://x/p?q=hello+w%21rld&z=<b>&q=second");
+  expect(await vcall(open, "getValue", "(Ljava/lang/String;)Ljava/lang/String;", "q")).toBe("second");
+  expect(await vcall(open, "getValue", "(Ljava/lang/String;)Ljava/lang/String;", "z")).toBe("b");
+  const list = await vcall(open, "getParameterList", "()Ljava/util/List;");
+  expect(await vcall(list, "size", "()I")).toBe(3);
+  const first = await vcall(list, "get", "(I)Ljava/lang/Object;", 0);
+  expect(first.mParameter).toBe("q"); expect(first.mValue).toBe("hello w!rld");
+});
+
+test("a Looper Printer sees the dispatch lines around a handled message", async () => {
+  const lines: string[] = [];
+  rt.register({ name: "test/LinePrinter", ctor: class extends JObj {}, ifaces: ["android/util/Printer"],
+    methods: { "println(Ljava/lang/String;)V": (s: string) => { lines.push(s); } } });
+  const looper = await scall("android/os/Looper", "getMainLooper", "()Landroid/os/Looper;");
+  await vcall(looper, "setMessageLogging", "(Landroid/util/Printer;)V", rt.make("test/LinePrinter"));
+  const handler = await newObj("android/os/Handler", "(Landroid/os/Looper;)V", looper);
+  const task = rt.make("test/NoopRunnable");
+  await vcall(handler, "post", "(Ljava/lang/Runnable;)Z", task);
+  await new Promise((r) => setTimeout(r, 20));
+  await vcall(looper, "setMessageLogging", "(Landroid/util/Printer;)V", null);
+  expect(lines.length).toBe(2);
+  expect(lines[0].startsWith(">>>>> Dispatching to ")).toBe(true);
+  expect(lines[1].startsWith("<<<<< Finished to ")).toBe(true);
 });

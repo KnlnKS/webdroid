@@ -147,10 +147,10 @@ rt.register({
     },
   },
 });
-class JProviderInfo extends JComponentInfo { authority = ""; grantUriPermissions = 0; multiprocess = 0; }
+class JProviderInfo extends JComponentInfo { authority = ""; grantUriPermissions = 0; multiprocess = 0; readPermission: string | null = null; writePermission: string | null = null; }
 rt.register({
   name: "android/content/pm/ProviderInfo", sup: "android/content/pm/ComponentInfo", ctor: JProviderInfo,
-  fields: ["authority", "grantUriPermissions", "multiprocess"],
+  fields: ["authority", "grantUriPermissions", "multiprocess", "readPermission", "writePermission"],
   methods: { "<init>()V": function () {} },
 });
 class JServiceInfo extends JComponentInfo {
@@ -418,6 +418,8 @@ function providerInfo(cls: string, pkg: string, authority: string, n: XmlNode | 
   pi.exported = !n || attr(n, "exported")?.data ? 1 : 0;
   pi.grantUriPermissions = !n || attr(n, "grantUriPermissions")?.data ? 1 : 0;
   if (n && owner) componentInfo(pi, cls, n, flags, owner);
+  // PackageParser: an unset read/write permission falls back to the provider's own
+  if (n) { pi.readPermission = attrStr(n, "readPermission") ?? pi.permission; pi.writePermission = attrStr(n, "writePermission") ?? pi.permission; }
   return pi;
 }
 const mkProviderInfo = (cls: string, n: XmlNode, flags = 0) =>

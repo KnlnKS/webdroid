@@ -712,10 +712,10 @@ rt.register({
   },
 });
 const HTTP_METHODS = new Set(["GET", "POST", "HEAD", "OPTIONS", "PUT", "DELETE", "TRACE", "PATCH"]);
-class JHttpURLConnection extends JURLConnection {}
+class JHttpURLConnection extends JURLConnection { chunkLength = -1; fixedContentLength = -1; fixedContentLengthLong = -1n; }
 rt.register({
   name: "java/net/HttpURLConnection", ctor: JHttpURLConnection, sup: "java/net/URLConnection",
-  fields: { method: "method", instanceFollowRedirects: "follow" },
+  fields: { method: "method", instanceFollowRedirects: "follow", chunkLength: "chunkLength", fixedContentLength: "fixedContentLength", fixedContentLengthLong: "fixedContentLengthLong" },
   statics: {
     HTTP_OK: 200, HTTP_CREATED: 201, HTTP_ACCEPTED: 202, HTTP_NOT_AUTHORITATIVE: 203, HTTP_NO_CONTENT: 204, HTTP_RESET: 205,
     HTTP_PARTIAL: 206, HTTP_MULT_CHOICE: 300, HTTP_MOVED_PERM: 301, HTTP_MOVED_TEMP: 302, HTTP_SEE_OTHER: 303,
@@ -737,9 +737,10 @@ rt.register({
     "getInstanceFollowRedirects()Z": function (this: JHttpURLConnection) { return this.follow; },
     "static setFollowRedirects(Z)V": (b: number) => { followRedirects = b; },
     "static getFollowRedirects()Z": () => followRedirects,
-    "setChunkedStreamingMode(I)V": () => {},
-    "setFixedLengthStreamingMode(I)V": () => {},
-    "setFixedLengthStreamingMode(J)V": () => {},
+    // the body is buffered whole either way; the fields record the mode for a subclass's transport
+    "setChunkedStreamingMode(I)V": function (this: JHttpURLConnection, n: number) { this.chunkLength = n <= 0 ? 4096 : n; },
+    "setFixedLengthStreamingMode(I)V": function (this: JHttpURLConnection, n: number) { this.fixedContentLength = n; this.fixedContentLengthLong = BigInt(n); },
+    "setFixedLengthStreamingMode(J)V": function (this: JHttpURLConnection, n: bigint) { this.fixedContentLengthLong = n; this.fixedContentLength = Number(BigInt.asIntN(32, n)); },
     "getResponseCode()I": withRes((r) => r.status),
     "getResponseMessage()Ljava/lang/String;": withRes((r) => r.msg || null),
     "getErrorStream()Ljava/io/InputStream;": async function (this: JHttpURLConnection) {

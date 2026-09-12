@@ -32,6 +32,7 @@ rt.register({
 class JLooper extends JObj {
   thread: JThread;
   q: Promise<unknown> = Promise.resolve();
+  printer: unknown = null;   // Looper.setMessageLogging
   constructor(thread?: JThread) { super(); this.thread = thread ?? curThread; }
   /** Messages run serialized on the looper's thread. The main looper is the shell's queue; any
    *  other is its own chain with a macrotask hop between messages, so the shell, rAF and the
@@ -49,6 +50,16 @@ class JLooper extends JObj {
     return p;
   }
 }
+/** Looper.loop with a Printer installed: the two lines around each dispatch that block-detectors time */
+async function dispatchLogged(handler: JHandler, msg: JMessage, printer: unknown): Promise<void> {
+  const str = async (o: unknown) => o === null ? "null" : String(await vcall(o, "toString", "()Ljava/lang/String;"));
+  try {
+    await vcall(printer, "println", "(Ljava/lang/String;)V", `>>>>> Dispatching to ${await str(handler)} ${await str(msg.callback)}: ${msg.what}`);
+    await vcall(handler, "dispatchMessage", "(Landroid/os/Message;)V", msg);
+    await vcall(printer, "println", "(Ljava/lang/String;)V", `<<<<< Finished to ${await str(handler)} ${await str(msg.callback)}`);
+  } catch (e) { reportUncaught(e); }
+}
+rt.markers("android/util/Printer");
 export const mainLooper = new JLooper(mainThread);
 mainThread.looper = mainLooper;
 rt.register({
@@ -63,6 +74,7 @@ rt.register({
     "isCurrentThread()Z": function (this: JLooper) { return curThread === this.thread ? 1 : 0; },
     ...noops("static prepareMainLooper()V", "quit()V", "quitSafely()V"),
     "getQueue()Landroid/os/MessageQueue;": () => mainQueue,
+    "setMessageLogging(Landroid/util/Printer;)V": function (this: JLooper, printer: unknown) { this.printer = printer; },
     "static myQueue()Landroid/os/MessageQueue;": () => {
       if (!curThread.looper) throw rt.mkThrowable("java/lang/IllegalStateException", "No Looper; Looper.prepare() wasn't called on this thread.");
       return mainQueue;
@@ -111,6 +123,8 @@ export class JHandler extends JObj {
     const go = () => this.looper.run(() => {
       if (!set.delete(msg)) return;
       if (!set.size) this.pending.delete(key);
+      const printer = this.looper.printer;
+      if (printer) return dispatchLogged(this, msg, printer);
       return vcall(this, "dispatchMessage", "(Landroid/os/Message;)V", msg).catch(reportUncaught);
     });
     if (delay > 0) msg.timer = setTimeout(() => void go(), delay); else void go();

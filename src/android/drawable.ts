@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
 import { vcall, mkEnumSet } from "../jvm/natives/jlang";
 import { mangleMethod, jmethod, intBitsToFloat } from "../jvm/abi";
-import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, insetsOf } from "./graphics";
+import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf } from "./graphics";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, normRV } from "./res";
@@ -23,6 +23,7 @@ export class JDrawable extends JObj {
   stateSet: number[] = [];
   callback: unknown = null; // Drawable.Callback (usually a View)
   tint: number | null = null;
+  tintMatrix: Float32Array | null = null;
   autoMirrored = false;
   layoutDir = 0;
   visible = true;
@@ -82,9 +83,9 @@ const drawableMethods: NativeSpec["methods"] = {
   "getMinimumHeight()I": function (this: JDrawable) { return Math.max(0, this.intrinsicH()); },
   "setAlpha(I)V": function (this: JDrawable, a: number) { this.alpha = a; },
   "getAlpha()I": function (this: JDrawable) { return this.alpha; },
-  "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JDrawable, f: any) { this.tint = f?.tint ?? null; },
-  "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": function (this: JDrawable, c: number) { this.tint = c; },
-  "clearColorFilter()V": function (this: JDrawable) { this.tint = null; },
+  "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JDrawable, f: any) { this.tint = f?.tint ?? null; this.tintMatrix = f?.matrix ?? null; },
+  "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": function (this: JDrawable, c: number) { this.tint = c; this.tintMatrix = null; },
+  "clearColorFilter()V": function (this: JDrawable) { this.tint = null; this.tintMatrix = null; },
   "setTint(I)V": function (this: JDrawable, c: number) { this.tint = c; },
   "setTintList(Landroid/content/res/ColorStateList;)V": function (this: JDrawable, csl: JColorStateList | null) {
     this.tint = csl ? cslColor(csl, this.stateSet) : null;
@@ -195,7 +196,7 @@ export class JColorDrawable extends JDrawable {
     const ctx = cv.ctx;
     ctx.save();
     ctx.globalAlpha *= this.alpha / 255;
-    ctx.fillStyle = cssColor(this.tint ?? this.color);
+    ctx.fillStyle = cssColor(this.tintMatrix ? matrixColor(this.tintMatrix, this.color) : this.tint ?? this.color);
     ctx.fillRect(this.bounds.left, this.bounds.top, this.bounds.right - this.bounds.left, this.bounds.bottom - this.bounds.top);
     ctx.restore();
   }
@@ -217,7 +218,7 @@ export class JBitmapDrawable extends JDrawable {
     const ctx = cv.ctx;
     ctx.save();
     ctx.globalAlpha *= this.alpha / 255;
-    const src = tintedBmp(this.bmp, this.tint);
+    const src = tintedBmp(this.bmp, this.tint, this.tintMatrix);
     ctx.drawImage(src, this.bounds.left, this.bounds.top,
       Math.max(1, this.bounds.right - this.bounds.left), Math.max(1, this.bounds.bottom - this.bounds.top));
     ctx.restore();
@@ -248,7 +249,7 @@ class JNinePatchDrawable extends JDrawable {
     const ctx = cv.ctx;
     ctx.save();
     ctx.globalAlpha *= this.alpha / 255;
-    drawNinePatch(ctx, tintedBmp(this.bmp, this.tint), this.bmp.w, this.bmp.h, this.xDivs, this.yDivs, left, top, dw, dh);
+    drawNinePatch(ctx, tintedBmp(this.bmp, this.tint, this.tintMatrix), this.bmp.w, this.bmp.h, this.xDivs, this.yDivs, left, top, dw, dh);
     ctx.restore();
   }
   intrinsicW(): number { return this.bmp ? Math.round(this.bmp.w * this.srcDensityScale) : -1; }
