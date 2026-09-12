@@ -83,6 +83,34 @@ function atPath(cpu: Cpu, dirfd: number, path: string): string | number {
   if (!dir) return fail(cpu, E.BADF);
   return dir.dir ? dir.path + "/" + path : fail(cpu, E.NOTDIR);
 }
+/** rename(2) over the vfs: a file keeps its lazy source, a directory carries its entries along */
+export function renamePath(cpu: Cpu | null, fromPath: string, toPath: string): number {
+  const from = vfs.norm(fromPath), to = vfs.norm(toPath);
+  if (from === to) return vfs.exists(from) ? 0 : fail(cpu, E.NOENT);
+  if (vfs.isDir(from)) {
+    if (to === from || to.startsWith(from + "/")) return fail(cpu, E.INVAL);
+    if (vfs.exists(to)) {
+      if (!vfs.isDir(to)) return fail(cpu, E.NOTDIR);
+      if (vfs.list(to).length) return fail(cpu, E.NOTEMPTY);
+      vfs.rmdir(to);
+    }
+    const prefix = from + "/";
+    for (const m of [vfs.files, vfs.lazyFiles]) {
+      for (const k of [...m.keys()]) if (k.startsWith(prefix)) { const v = m.get(k)!; m.delete(k); m.set(to + k.slice(from.length), v as never); }
+    }
+    for (const d of [...vfs.dirs]) if (d === from || d.startsWith(prefix)) { vfs.dirs.delete(d); vfs.dirs.add(to + d.slice(from.length)); }
+    vfs.dirs.add(to);
+    vfs.onWrite(from); vfs.onWrite(to);
+    return 0;
+  }
+  const source = vfs.source(from);
+  if (!source) return fail(cpu, E.NOENT);
+  if (vfs.isDir(to)) return fail(cpu, E.ISDIR);
+  const bytes = vfs.read(from);
+  if (bytes) vfs.write(to, bytes); else vfs.mount(to, source);
+  vfs.delete(from);
+  return 0;
+}
 function accessPath(cpu: Cpu, path: string, mode: number): number {
   if (mode & ~7) return fail(cpu, E.INVAL);
   const p = vfs.norm(path);
@@ -537,7 +565,13 @@ export function stdioInit(): void {
     chmod: () => 0, fchmod: () => 0, chown: () => 0, fchown: () => 0, umask: () => 0o22,
     unlink: (cpu, a) => (vfs.delete(a.str()) ? 0 : fail(cpu, E.NOENT)),
     remove: (cpu, a) => { const p = vfs.norm(a.str()); if (vfs.isDir(p)) return vfs.list(p).length ? fail(cpu, E.NOTEMPTY) : 0; return vfs.delete(p) ? 0 : fail(cpu, E.NOENT); },
-    rename: (cpu, a) => { const from = vfs.norm(a.str()), to = vfs.norm(a.str()); const d = vfs.read(from); if (!d) return fail(cpu, E.NOENT); vfs.write(to, d); vfs.delete(from); return 0; },
+    rename: (cpu, a) => renamePath(cpu, a.str(), a.str()),
+    renameat: (cpu, a) => {
+      const from = atPath(cpu, a.i(), a.str());
+      if (typeof from !== "string") return from;
+      const to = atPath(cpu, a.i(), a.str());
+      return typeof to !== "string" ? to : renamePath(cpu, from, to);
+    },
     mkdir: (cpu, a) => mkdirPath(cpu, a.str()),
     mkdirat: (cpu, a) => { const path = atPath(cpu, a.i(), a.str()); return typeof path === "string" ? mkdirPath(cpu, path) : path; },
     rmdir: (cpu, a) => { const p = vfs.norm(a.str()); if (!vfs.isDir(p)) return fail(cpu, E.NOTDIR); if (vfs.list(p).length) return fail(cpu, E.NOTEMPTY); vfs.rmdir(p); return 0; },
