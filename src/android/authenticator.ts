@@ -115,7 +115,8 @@ export function authenticators(): JAuthenticatorDescription[] {
     if (!bytes) continue;
     const n = parseAXML(bytes), d = new JAuthenticatorDescription();
     const ref = (name: string) => attr(n, name)?.data ?? 0;
-    d.type = attrStr(n, "accountType") ?? resString(owner.res, ref("accountType")) ?? "";
+    // accountType is a literal or a @string reference; a reference has no string of its own
+    d.type = attr(n, "accountType")?.str ?? resString(owner.res, ref("accountType")) ?? "";
     d.packageName = owner.pkg; d.process = owner.process(node);
     d.component = qualifyComponent(attrStr(node, "name") ?? "", owner.pkg);
     d.labelId = ref("label"); d.iconId = ref("icon"); d.smallIconId = ref("smallIcon"); d.accountPreferencesId = ref("accountPreferences");

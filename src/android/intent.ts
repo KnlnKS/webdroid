@@ -306,12 +306,13 @@ export const activityTransport: {
   isTaskRoot?: (act: JActivity) => boolean;
   removeTask?: (act: JActivity) => void;
 } = {};
-export async function launchIntent(host: AppHost, intent: JIntent, result?: ActivityResultTarget) {
+/** `sender` is the package whose identity the start carries (a PendingIntent's creator) */
+export async function launchIntent(host: AppHost, intent: JIntent, result?: ActivityResultTarget, sender = host.pkg) {
   const { getPM } = await import("./pm");
   const resolved = await vcall(getPM(), "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", intent, 0x10000);
   if (!resolved?.activityInfo) throw rt.mkThrowable("android/content/ActivityNotFoundException", "No activity found for " + intent.action);
   const info = resolved.activityInfo;
-  if (info.packageName !== host.pkg && (!info.exported || info.permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", info.permission, host.pkg) !== 0))
+  if (info.packageName !== sender && (!info.exported || info.permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", info.permission, sender) !== 0))
     throw rt.mkThrowable("java/lang/SecurityException", "Activity permission denied: " + info.name);
   const component = info.name.replace(/\./g, "/");
   if (info.packageName !== host.pkg || info.processName !== (PROCESS_NAME || host.pkg)) {

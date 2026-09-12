@@ -7,5 +7,6 @@ import { calculatorm } from "./calculatorm";
 import { lichess } from "./lichess";
 import { doodlejump } from "./doodlejump";
 import { resy } from "./resy";
+import { reddit } from "./reddit";
 
-export const FLOWS: Flow[] = [fitnotes, mihonOnboarding, mihonApp, flappybird, harmonic, calculatorm, lichess, doodlejump, resy];
+export const FLOWS: Flow[] = [fitnotes, mihonOnboarding, mihonApp, flappybird, harmonic, calculatorm, lichess, doodlejump, resy, reddit];

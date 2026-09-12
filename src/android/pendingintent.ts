@@ -1,6 +1,7 @@
 import { JObj, rt } from "../jvm/runtime";
 import { defineException, idHash, newObj, vcall } from "../jvm/natives/jlang";
 import type { JContext } from "./context";
+import type { ActivityResultTarget } from "./intent";
 import { appHost } from "./apphost";
 import { JIntent, launchIntent } from "./intent";
 import { sendBroadcast } from "./broadcast";
@@ -28,8 +29,9 @@ export const pendingTransport = {
     localPendingIntents.create({ pkg, kind, code, flags, intent, uid: PROCESS_UID, process: PROCESS_NAME || pkg }),
   cancel: (id: number) => localPendingIntents.cancel(id),
   send: (id: number, fill: IntentData | null) => localPendingIntents.send(id, fill),
+  operation: (id: number): PendingOperation | null => localPendingIntents.take(id),
 };
-class JIntentSender extends JObj { target: JObj | null = null; }
+export class JIntentSender extends JObj { target: JObj | null = null; }
 export class JPendingIntent extends JObj { sender = new JIntentSender(); }
 function senderId(sender: JIntentSender): number {
   const handle = exportBinder(sender.target);
@@ -39,9 +41,21 @@ function senderId(sender: JIntentSender): number {
 export const pendingId = (intent: JPendingIntent) => senderId(intent.sender);
 defineException("android/util/AndroidException", "java/lang/Exception");
 defineException("android/app/PendingIntent$CanceledException", "android/util/AndroidException");
+defineException("android/content/IntentSender$SendIntentException", "android/util/AndroidException");
 export async function sendIntent(sender: JIntentSender, fill?: JIntent): Promise<void> {
   if (!await pendingTransport.send(senderId(sender), fill ? await encodeIntent(fill) : null))
     throw rt.mkThrowable("android/app/PendingIntent$CanceledException", null);
+}
+/** Context.startIntentSender: an activity sender starts with the creator's identity so the
+ *  result can come back to the caller; any other kind is an ordinary send. */
+export async function startIntentSender(context: JContext, sender: JIntentSender, fill: JIntent | null, result?: ActivityResultTarget): Promise<void> {
+  if (!sender) throw rt.mkThrowable("java/lang/NullPointerException", "intent");
+  const id = senderId(sender), operation = pendingTransport.operation(id);
+  if (!operation) throw rt.mkThrowable("android/content/IntentSender$SendIntentException", null);
+  if (operation.kind !== "activity") return sendIntent(sender, fill ?? undefined);
+  const intent = await decodeIntent(operation.intent);
+  if (fill && !(operation.flags & 0x4000000)) await vcall(intent, "fillIn", "(Landroid/content/Intent;I)I", fill, operation.flags);
+  await launchIntent(context.$host, intent, result, operation.pkg);
 }
 async function pending(kind: PendingOperation["kind"], context: JContext, code: number, intent: JIntent, flags: number): Promise<JPendingIntent | null> {
   if (!intent) throw rt.mkThrowable("java/lang/NullPointerException", "intent");

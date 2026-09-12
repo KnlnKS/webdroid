@@ -164,7 +164,7 @@ rt.register({
     "onTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: DialogRoot, ev: any) {
       if ((ev.action & 0xff) === 1 &&
         (ev.x < 0 || ev.x >= this.width() || ev.y < 0 || ev.y >= this.height())) {
-        if (this.dialog?.cancelable) await this.dialog?.cancel();
+        if (this.dialog?.cancelable && this.dialog.canceledOnTouchOutside) await this.dialog.cancel();
       }
       return 1;
     },
@@ -180,6 +180,7 @@ class JDialog extends JObj {
   themeId = 0;
   showing = false;
   cancelable = true;
+  canceledOnTouchOutside = true;
   cancelL: unknown = null;
   dismissL: unknown = null;
   showL: unknown = null;
@@ -303,7 +304,8 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "setTitle(Ljava/lang/CharSequence;)V": setDialogTitle,
   "setTitle(I)V": setDialogTitle,
   "setCancelable(Z)V": function (this: JDialog, c: number) { this.cancelable = !!c; },
-  "setCanceledOnTouchOutside(Z)V": function (this: JDialog, c: number) { this.cancelable = !!c; },
+  // AOSP: an outside-touch cancel implies a cancelable dialog, but withdrawing it leaves Back alone
+  "setCanceledOnTouchOutside(Z)V": function (this: JDialog, c: number) { if (c) this.cancelable = true; this.canceledOnTouchOutside = !!c; },
   "setOnCancelListener(Landroid/content/DialogInterface$OnCancelListener;)V": function (this: JDialog, l: unknown) { this.cancelL = l; },
   "setOnDismissListener(Landroid/content/DialogInterface$OnDismissListener;)V": function (this: JDialog, l: unknown) { this.dismissL = l; },
   "setOnShowListener(Landroid/content/DialogInterface$OnShowListener;)V": function (this: JDialog, l: unknown) { this.showL = l; },

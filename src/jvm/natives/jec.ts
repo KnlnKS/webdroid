@@ -7,7 +7,7 @@ import { JBigInteger, mkBI, modInverse } from "./jmath";
 import { valueClass } from "./jsec";
 import { JRsaPublicKey, JRsaPrivateKey } from "./jrsa";
 
-type Curve = { names: string[]; web: string; oid: number[]; bytes: number; p: bigint; a: bigint; b: bigint; gx: bigint; gy: bigint; n: bigint };
+export type Curve = { names: string[]; web: string; oid: number[]; bytes: number; p: bigint; a: bigint; b: bigint; gx: bigint; gy: bigint; n: bigint };
 const h = (s: string) => BigInt("0x" + s);
 const CURVES: Curve[] = [
   { names: ["secp256r1", "prime256v1", "P-256", "NIST P-256", "256"], web: "P-256", oid: [1, 2, 840, 10045, 3, 1, 7], bytes: 32,
@@ -96,8 +96,8 @@ function pointOf(c: Curve, raw: Uint8Array): JEcPublicKey {
 }
 
 // ── keys
-class JEcPublicKey extends JObj { c!: Curve; x = 0n; y = 0n; }
-class JEcPrivateKey extends JObj { c!: Curve; s = 0n; pub!: JEcPublicKey; }
+export class JEcPublicKey extends JObj { c!: Curve; x = 0n; y = 0n; }
+export class JEcPrivateKey extends JObj { c!: Curve; s = 0n; pub!: JEcPublicKey; }
 function ecPublic(c: Curve, x: bigint, y: bigint): JEcPublicKey {
   if (!onCurve(c, x, y)) throw badSpec("point is not on the curve");
   const k = rt.make("webdroid/EcPublicKey") as JEcPublicKey;
@@ -204,6 +204,10 @@ rt.register({
   methods: {
     "static getInstance(Ljava/lang/String;)Ljava/security/KeyFactory;": keyFactory,
     "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/KeyFactory;": keyFactory,
+    "static getInstance(Ljava/lang/String;Ljava/security/Provider;)Ljava/security/KeyFactory;": (algo: string, provider: unknown) => {
+      if (!provider) throw rt.mkThrowable("java/lang/IllegalArgumentException", "missing provider");
+      return keyFactory(algo);
+    },
     "getAlgorithm()Ljava/lang/String;": function (this: JKeyFactory) { return this.algo; },
     "generatePublic(Ljava/security/spec/KeySpec;)Ljava/security/PublicKey;": function (this: JKeyFactory, spec: any) {
       if (rt.iof(spec, "java/security/spec/ECPublicKeySpec")) return ecPublic(curveOfSpec(spec.params), spec.w.x.v, spec.w.y.v);

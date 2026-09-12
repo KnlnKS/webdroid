@@ -118,7 +118,7 @@ export function restoreRsa(priv: string, pub: string, cert: string): JRsaPrivate
 }
 export const rsaChain = (key: JRsaPrivateKey) => key.certificate && jarray([key.certificate], "Ljava/security/cert/Certificate;");
 
-class JMGFSpec extends JObj { digest = "SHA-1"; }
+export class JMGFSpec extends JObj { digest = "SHA-1"; }
 class JPSource extends JObj { value = new Uint8Array(0); }
 class JPSpecified extends JPSource {}
 export class JOAEP extends JObj { digest = "SHA-1"; mgf = new JMGFSpec(); source = new JPSpecified(); }
@@ -171,3 +171,26 @@ export async function rsaCrypt(key: JRsaPublicKey | JRsaPrivateKey, input: Uint8
     throw rt.mkThrowable(key instanceof JRsaPublicKey ? "javax/crypto/IllegalBlockSizeException" : "javax/crypto/BadPaddingException", "RSA OAEP operation failed");
   }
 }
+
+export class JPSSSpec extends JObj { digest = "SHA-1"; mgf = "MGF1"; mgfSpec: JMGFSpec | null = null; salt = 20; trailer = 1; }
+rt.register({
+  name: "java/security/spec/PSSParameterSpec", ctor: JPSSSpec, ifaces: ["java/security/spec/AlgorithmParameterSpec"],
+  statics: { DEFAULT: new JPSSSpec(), TRAILER_FIELD_BC: 1 },
+  methods: {
+    "<init>(I)V": function (this: JPSSSpec, salt: number) {
+      if (salt < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative saltLen value");
+      this.salt = salt;
+    },
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/security/spec/AlgorithmParameterSpec;II)V": function (this: JPSSSpec, digest: string, mgf: string, spec: JMGFSpec | null, salt: number, trailer: number) {
+      if (digest == null || mgf == null) throw rt.mkThrowable("java/lang/NullPointerException", "digest algorithm and mask generation function cannot be null");
+      if (salt < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative saltLen value");
+      if (trailer < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative trailerField");
+      this.digest = digest; this.mgf = mgf; this.mgfSpec = spec; this.salt = salt; this.trailer = trailer;
+    },
+    "getDigestAlgorithm()Ljava/lang/String;": function (this: JPSSSpec) { return this.digest; },
+    "getMGFAlgorithm()Ljava/lang/String;": function (this: JPSSSpec) { return this.mgf; },
+    "getMGFParameters()Ljava/security/spec/AlgorithmParameterSpec;": function (this: JPSSSpec) { return this.mgfSpec; },
+    "getSaltLength()I": function (this: JPSSSpec) { return this.salt; },
+    "getTrailerField()I": function (this: JPSSSpec) { return this.trailer; },
+  },
+});

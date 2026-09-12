@@ -39,10 +39,15 @@ export class PendingIntents {
     if (!record) return null;
     record.cancellations.add(canceled); return () => { record.cancellations.delete(canceled); };
   }
-  async send(id: number, fill: IntentData | null = null, alarmCount = 0): Promise<boolean> {
+  /** the operation a send runs; a one-shot sender is consumed by being taken */
+  take(id: number): PendingOperation | null {
     const operation = this.get(id);
+    if (operation && operation.flags & 0x40000000) this.cancel(id);
+    return operation;
+  }
+  async send(id: number, fill: IntentData | null = null, alarmCount = 0): Promise<boolean> {
+    const operation = this.take(id);
     if (!operation) return false;
-    if (operation.flags & 0x40000000) this.cancel(id);
     await this.dispatch({ ...operation, intent: structuredClone(operation.intent) }, fill, alarmCount); return true;
   }
 }
