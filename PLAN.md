@@ -171,9 +171,14 @@ browser probes pass without missing APIs. CircleImageView next calls `Matrix.set
 the delegate now implements Android's identity reset, with a failing-before regression.
 The complete account picker works and selecting the saved account returns SDK status 8.
 microG logs the upstream cause: `UNREGISTERED_ON_API_CONSOLE`, specifically requiring
-the client's package name and SHA-1 certificate registration. Verify the exact Android
-reference error and configure the authorized test project before retesting. Typecheck
-and 647 tests / 20,595 assertions pass; broader final regression checks remain pending.
+the client's package name and SHA-1 certificate registration. Android reproduces that
+exact error. Registering the actual shared signing fingerprint and enabling Google
+sign-in in the existing free Firebase project creates the missing OAuth clients;
+Android then returns `authentication: true`. Webdroid passes the upstream request but
+the SDK completion path needs `Semaphore.drainPermits`. Its delegate and two regression
+tests now pass, including negative counts and pending acquisitions. A subsequent reload
+exposes an array-to-String cast failure under investigation. Typecheck and 649 tests /
+20,614 assertions pass; broader final regression checks remain pending.
 
 The location implementation rewrites static Location references in isolated HTTP(S)
 scripts using the existing TypeScript parser on the server. Ordinary objects and local

@@ -859,6 +859,28 @@ UNREGISTERED_ON_API_CONSOLE, asking for matching package/SHA-1 OAuth registratio
 No missing APIs appear in the four current process diagnostics. Android previously
 returned status 8, but its exact warning still needs a fresh matched comparison.
 
+The fresh Android warning matches UNREGISTERED_ON_API_CONSOLE and the package/SHA-1
+explanation. Both original browser APK and expanded Android fixture are signed with
+SHA-1 9b898f830346ab06c8ff35882c6d9233104327ff. The test Firebase app had no fingerprints
+or OAuth clients. Adding that fingerprint alone still returns status 8. Enabling Google
+sign-in in the existing Spark project creates OAuth clients, after which Android shows
+`authentication: true`. No APK or runtime workaround is used for registration.
+[Firebase's setup requirements](https://firebase.google.com/docs/auth/android/google-signin)
+explain the fingerprint and provider configuration. The private google-services.json
+predates this registration; it was not overwritten or committed.
+
+Webdroid then reaches the SDK's missing Semaphore.drainPermits completion call. The
+delegate returns the previous count and sets it to zero synchronously, including negative
+counts, preserving waiting acquisitions. Two tests fail before and pass after (19 assertions);
+typecheck and 649 tests / 20,614 assertions pass. Java's
+[drainPermits contract](https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/util/concurrent/Semaphore.html#drainPermits())
+supports these semantics. Evidence: `/tmp/webdroid-semaphore-{before,after,units,typecheck}.log`.
+On reload, the next live attempt fails an Object[]-to-String cast in the account process;
+that remains to diagnose. The earlier broad E2E run was explicitly stopped before this
+production edit, so its partial captures do not establish final acceptance. Smoke
+compilation of all three affected APKs, framework probes and 6/6 text comparisons passed
+at the preceding Matrix checkpoint.
+
 ## WebView upstream bases — 2026-09-11
 
 Resumed microG from `28b9246` on `codex/microg-webview-base`. The current public

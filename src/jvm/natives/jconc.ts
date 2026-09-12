@@ -670,6 +670,7 @@ rt.register({
     [`tryAcquire(J${TU})Z`]: function (this: JSemaphore, t: bigint, u: JTimeUnit) { return this.acquire(1, Number(t) * u.ms); },
     [`tryAcquire(IJ${TU})Z`]: function (this: JSemaphore, n: number, t: bigint, u: JTimeUnit) { return this.acquire(n, Number(t) * u.ms); },
     "availablePermits()I": function (this: JSemaphore) { return this.permits; },
+    "drainPermits()I": function (this: JSemaphore) { const permits = this.permits; this.permits = 0; return permits; },
   },
 });
 
