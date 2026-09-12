@@ -13,6 +13,7 @@ import { loadColorStateList, loadDrawable } from "./drawable";
 import { JAssetManager, type JConfiguration, scopedResources } from "./resnative";
 import { dbPath } from "./sqlite";
 import { type JIntent, launchIntent } from "./intent";
+import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { svcStart, svcStop, svcBind, svcUnbind } from "./runningservices";
 import { TV } from "./axml";
 import { registerReceiver, unregisterReceiver, sendBroadcast } from "./broadcast";
@@ -301,6 +302,8 @@ export const contextMethods: NativeSpec["methods"] = {
     return svcBind(this, intent, connection, flags, executor);
   },
   "unbindService(Landroid/content/ServiceConnection;)V": svcUnbind,
+  "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;III)V": function (this: JContext, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); },
+  "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;IIILandroid/os/Bundle;)V": function (this: JContext, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); },
   "startActivity(Landroid/content/Intent;)V": async function (this: JContext, intent: JIntent) {
     await launchIntent(this.$host, intent);
   },

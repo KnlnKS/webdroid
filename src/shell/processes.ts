@@ -74,6 +74,11 @@ class ProcessBroker {
     if (!owner || owner.uid !== caller.uid) throw rt.mkThrowable("java/lang/SecurityException", "PendingIntent creator does not match caller");
     return this.intents.create({ pkg, kind, code, flags, intent, uid: caller.uid, process: caller.process });
   }
+  /** the operation behind a sender handle a process holds, taken for a start on the creator's behalf */
+  takePending(pid: number, id: number): PendingOperation | null {
+    this.entry(pid);
+    return this.intents.take(id);
+  }
   cancelPending(pid: number, id: number): void {
     const operation = this.intents.get(id);
     if (operation && operation.uid !== this.entry(pid).uid) throw rt.mkThrowable("java/lang/SecurityException", "Only the creator may cancel a PendingIntent");
@@ -398,6 +403,9 @@ export function connectProcess(): ProcessEndpoint {
     try { broker.cancelPending(PROCESS_PID, id); } catch (error) { remoteError(error); }
   };
   pendingTransport.send = (id, fill) => remote(broker.intents.send(id, fill));
+  pendingTransport.operation = id => {
+    try { return broker.takePending(PROCESS_PID, id); } catch (error) { return remoteError(error); }
+  };
   alarmTransport.schedule = (id, type, at, interval) => broker.alarms.schedule(id, type, at, interval);
   alarmTransport.cancel = id => broker.alarms.cancel(id);
   serviceTransport.bind = async (owner, process, intent, key) => importBinder(await remote(broker.service(PROCESS_PID, owner.pkg, process, { kind: "bind", intent: await encodeIntent(intent), key })));

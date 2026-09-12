@@ -21,6 +21,7 @@ import { csText, spannedString } from "./text";
 import { showToast } from "./popup";
 import { newArrayList, mkIter, toJsArray } from "../jvm/natives/jutil";
 import type { JUri } from "./net";
+import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { JService, runningServices, svcStop, svcFg } from "./runningservices";
 import { isMusicActive, outputSampleRate, JSpatializer } from "./media";
 import { device } from "../shell/config";
@@ -292,6 +293,14 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "startActivityForResult(Landroid/content/Intent;ILandroid/os/Bundle;)V": function (this: JActivity, intent: JIntent, code: number) {
     return callSelf(activityMethods, "startActivityForResult(Landroid/content/Intent;I)V", this, intent, code);
   },
+  "startIntentSenderForResult(Landroid/content/IntentSender;ILandroid/content/Intent;III)V": function (this: JActivity, sender: JIntentSender, code: number, fill: JIntent | null) {
+    return startIntentSender(this, sender, fill, code >= 0 ? { act: this, code } : undefined);
+  },
+  "startIntentSenderForResult(Landroid/content/IntentSender;ILandroid/content/Intent;IIILandroid/os/Bundle;)V": function (this: JActivity, sender: JIntentSender, code: number, fill: JIntent | null) {
+    return startIntentSender(this, sender, fill, code >= 0 ? { act: this, code } : undefined);
+  },
+  "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;III)V": function (this: JActivity, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); },
+  "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;IIILandroid/os/Bundle;)V": function (this: JActivity, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); },
   "setResult(ILandroid/content/Intent;)V": function (this: JActivity, c: number, d: JIntent) {
     this.resultCode = c;
     this.resultData = d;
