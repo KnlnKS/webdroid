@@ -1,5 +1,5 @@
 import { readStreamFully } from "./jio";
-import { jarray, mangleMethod, charsToString } from "../abi";
+import { jarray, mangleMethod, charsToString, dotName } from "../abi";
 import {
   vcall, vcallMaybe, after, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, idHash, defineException,
   mkCmp, fmtDouble, bitCount32
@@ -345,6 +345,10 @@ export function listMethods(): Methods {
     },
     "contains(Ljava/lang/Object;)Z": function (this: JList, v: unknown) {
       return after(indexIn(this.a, v), (i) => (i >= 0 ? 1 : 0));
+    },
+    "containsAll(Ljava/util/Collection;)Z": async function (this: JList, c: unknown) {
+      for (const v of await toJsArray(c)) if ((await indexIn(this.a, v)) < 0) return 0;
+      return 1;
     },
     // Collection default methods. They are declared on the interface, so nothing in an app
     // ever names the implementing class and a static scan cannot see them go missing.
@@ -809,9 +813,12 @@ const mapExtras: Record<string, NativeSpec["methods"]> = {
     "static newKeySet()Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": () => rt.make("java/util/concurrent/ConcurrentHashMap$KeySetView"),
     "static newKeySet(I)Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": () => rt.make("java/util/concurrent/ConcurrentHashMap$KeySetView"),
     "contains(Ljava/lang/Object;)Z": hashtableContains,
+    "keys()Ljava/util/Enumeration;": hashtableKeys, "elements()Ljava/util/Enumeration;": hashtableElements,
   },
-  "java/util/Hashtable": { "contains(Ljava/lang/Object;)Z": hashtableContains },
+  "java/util/Hashtable": { "contains(Ljava/lang/Object;)Z": hashtableContains, "keys()Ljava/util/Enumeration;": hashtableKeys, "elements()Ljava/util/Enumeration;": hashtableElements },
 };
+function hashtableKeys(this: JMap) { return mkIter([...allEnts(this)].map((e) => e.k)); }
+function hashtableElements(this: JMap) { return mkIter([...allEnts(this)].map((e) => e.v)); }
 /** the legacy Hashtable-era alias of containsValue, which rejects null */
 function hashtableContains(this: JMap, v: unknown) {
   if (v === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
@@ -848,6 +855,7 @@ function setMethods(): NativeSpec["methods"] {
     "<init>()V": function () {},
     "<init>(Ljava/util/Comparator;)V": function () {},
     "<init>(I)V": function () {},
+    "<init>(IF)V": function () {},
     "<init>(Ljava/util/Collection;)V": async function (this: JSet, c: unknown) {
       for (const v of await toJsArray(c)) await addToSet(this, v);
     },
@@ -1166,6 +1174,7 @@ function snapshotIterator(list: JList, at = 0): JIter {
 }
 const concurrentListExtras: Record<string, Methods> = {
   "java/util/concurrent/CopyOnWriteArrayList": {
+    "<init>([Ljava/lang/Object;)V": function (this: JList, items: unknown[]) { this.a = items.slice(); },
     "iterator()Ljava/util/Iterator;": function (this: JList) { return snapshotIterator(this); },
     "listIterator()Ljava/util/ListIterator;": function (this: JList) { return snapshotIterator(this); },
     "listIterator(I)Ljava/util/ListIterator;": function (this: JList, at: number) { return snapshotIterator(this, at); },
@@ -1775,6 +1784,20 @@ rt.register({
   },
 });
 for (const i of ["java/util/RandomAccess", "java/util/Enumeration"]) rt.register({ name: i, ctor: class extends JObj {} });
+class JEventObject extends JObj { source: unknown = null; }
+rt.register({
+  name: "java/util/EventObject", ctor: JEventObject, ifaces: ["java/io/Serializable"], fields: ["source"],
+  methods: {
+    "<init>(Ljava/lang/Object;)V": function (this: JEventObject, source: unknown) {
+      if (source === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "null source");
+      this.source = source;
+    },
+    "getSource()Ljava/lang/Object;": function (this: JEventObject) { return this.source; },
+    "toString()Ljava/lang/String;": async function (this: JEventObject) {
+      return dotName((this.constructor as typeof JObj).$i.name) + "[source=" + (await vcall(this.source, "toString", "()Ljava/lang/String;")) + "]";
+    },
+  },
+});
 // Comparator is an interface whose STATICS and defaults apps really do call.
 const keyed = (fn: unknown, sel: string, desc: string) =>
   mkCmp(async (a, b) => {

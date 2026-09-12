@@ -342,8 +342,12 @@ rt.register({
   },
   methods: { "hasCapability(I)Z": async (c: number) => networkCapabilities.has(c) ? netUp() : 0, "hasTransport(I)Z": (t: number) => (t === NET_TYPE ? 1 : 0),
     // no bandwidth estimate: the platform's "unspecified"
-    "getLinkDownstreamBandwidthKbps()I": () => 0, "getLinkUpstreamBandwidthKbps()I": () => 0, "getSignalStrength()I": () => -2147483648 },
+    "getLinkDownstreamBandwidthKbps()I": () => 0, "getLinkUpstreamBandwidthKbps()I": () => 0, "getSignalStrength()I": () => -2147483648,
+    // the relay's network carries no transport-specific info (no WifiInfo for it to be)
+    "getTransportInfo()Landroid/net/TransportInfo;": () => null },
 });
+rt.markers("android/net/TransportInfo");
+rt.register({ name: "android/net/wifi/WifiInfo", ctor: class extends JObj {}, ifaces: ["android/net/TransportInfo", "android/os/Parcelable"] });
 class JNetworkRequest extends JObj { caps: number[] = []; transports: number[] = []; }
 class JNetworkRequestBuilder extends JObj { r = new JNetworkRequest(); }
 rt.register({
@@ -416,6 +420,7 @@ rt.register({
     },
     "getBoundNetworkForProcess()Landroid/net/Network;": () => boundNetwork,
     "getRestrictBackgroundStatus()I": () => 1,
+    "getDefaultProxy()Landroid/net/ProxyInfo;": () => null,
     "registerNetworkCallback(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;)V": (_r: unknown, cb: unknown) => registerCallback(cb),
     "registerNetworkCallback(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;Landroid/os/Handler;)V": async (_r: unknown, cb: unknown, handler: unknown) => registerOnHandler(cb, handler),
     "registerDefaultNetworkCallback(Landroid/net/ConnectivityManager$NetworkCallback;)V": registerCallback,

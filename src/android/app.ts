@@ -362,7 +362,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     "onSearchRequested(Landroid/view/SearchEvent;)Z", "onKeyDown(ILandroid/view/KeyEvent;)Z",
     "onKeyUp(ILandroid/view/KeyEvent;)Z", "onTouchEvent(Landroid/view/MotionEvent;)Z", "getChangingConfigurations()I",
     "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z", "dispatchTouchEvent(Landroid/view/MotionEvent;)Z",
-    "isInMultiWindowMode()Z"),
+    "isInMultiWindowMode()Z", "isInPictureInPictureMode()Z"),
   ...stubs(null, "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;",
     "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;",
     "onCreateView(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;",
@@ -473,6 +473,7 @@ for (const [name, methods, statics] of [
     "getRunningAppProcesses()Ljava/util/List;": () => newArrayList([myProcess()]),
     "getProcessMemoryInfo([I)[Landroid/os/Debug$MemoryInfo;": (pids: Int32Array) => jarray(Array.from(pids, () => rt.make("android/os/Debug$MemoryInfo")), "Landroid/os/Debug$MemoryInfo;"),
     "getHistoricalProcessExitReasons(Ljava/lang/String;II)Ljava/util/List;": () => newArrayList(),
+    "getAppTasks()Ljava/util/List;": () => newArrayList(appTasks()),
     "getRunningServices(I)Ljava/util/List;": (max: number) => {
       const all = [...runningServices.values()];
       return newArrayList(max < all.length ? all.slice(0, max) : all);
@@ -640,6 +641,10 @@ for (const [name, methods, statics] of [
   rt.register({ name, ctor: class extends JObj {}, methods, statics });
 }
 rt.register({ name: "android/telephony/PhoneStateListener", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
+rt.register({ name: "android/telephony/TelephonyCallback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
+rt.markers("android/telephony/TelephonyCallback$DataConnectionStateListener", "android/telephony/TelephonyCallback$CallStateListener",
+  "android/telephony/TelephonyCallback$ServiceStateListener", "android/telephony/TelephonyCallback$SignalStrengthsListener",
+  "android/telephony/TelephonyCallback$DisplayInfoListener");
 // libphonenumber's metadata is not on this device, so neither the watcher nor formatNumber
 // regroups anything: the digits a caller typed are the digits it reads back.
 rt.register({
@@ -691,6 +696,33 @@ rt.register({
   fields: ["id", "persistentId", "taskId", "numActivities", "isRunning", "baseIntent", "baseActivity", "topActivity",
     "origActivity", "description"],
   methods: { "<init>()V": function () {} },
+});
+/** one of the caller's tasks: the activities that share a task id, as the shell stacks them */
+class JAppTask extends JObj { taskId = 0; }
+function taskInfo(taskId: number): JRecentTaskInfo {
+  const activities = (appHost?.activities() ?? []).filter((a) => a.taskId === taskId);
+  const info = new JRecentTaskInfo(), component = (a: JActivity | undefined) => a ? mkComponentName(appHost?.pkg ?? "", jclsNameOf(a)) : null;
+  info.id = info.persistentId = info.taskId = taskId;
+  info.numActivities = activities.length;
+  info.isRunning = activities.length ? 1 : 0;
+  info.baseIntent = activities[0]?.intent ?? null;
+  info.baseActivity = component(activities[0]);
+  info.topActivity = component(activities.at(-1));
+  return info;
+}
+function appTasks(): JAppTask[] {
+  rt.link("android/app/ActivityManager$AppTask");
+  const ids = [...new Set((appHost?.activities() ?? []).map((a) => a.taskId))];
+  return ids.map((taskId) => Object.assign(new JAppTask(), { taskId }));
+}
+rt.register({
+  name: "android/app/ActivityManager$AppTask", ctor: JAppTask,
+  methods: {
+    "getTaskInfo()Landroid/app/ActivityManager$RecentTaskInfo;": function (this: JAppTask) { return taskInfo(this.taskId); },
+    "finishAndRemoveTask()V": function (this: JAppTask) { appHost?.finishTask(this.taskId); },
+    "moveToFront()V": function () {},
+    "setExcludeFromRecents(Z)V": function () {},
+  },
 });
 rt.register({
   name: "android/app/ActivityManager$RunningAppProcessInfo", ctor: JRunningAppProcessInfo, ifaces: ["android/os/Parcelable"],

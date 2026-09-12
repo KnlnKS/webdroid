@@ -114,6 +114,7 @@ const SERVICE_CLASS: Record<string, string> = {
   permission_controller: "android/permission/PermissionControllerManager",
   locale: "android/app/LocaleManager",
   dropbox: "android/os/DropBoxManager",
+  storage: "android/os/storage/StorageManager",
 };
 const SERVICE_NAME = new Map(Object.entries(SERVICE_CLASS).map(([n, c]) => [c, n]));
 SERVICE_NAME.set("android/view/WindowManager", "window");

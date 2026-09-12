@@ -192,6 +192,8 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     recreateActivity: (a) => { recreateActivity(a); },
     setRequestedOrientation: (a, orientation) => { changeActivityOrientation(a, orientation); },
     currentActivity: () => booted?.stack.at(-1) ?? null,
+    activities: () => booted?.stack.slice() ?? [],
+    finishTask: (taskId) => { void finishTask(taskId, true); },
     invalidateOptionsMenu: (a) => { void buildOptionsMenu(a); },
   };
   setAppHost(host);

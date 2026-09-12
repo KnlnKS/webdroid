@@ -681,4 +681,4 @@ rt.register({
 
 // Implemented by app/library code, never handed out by us — it only has to exist so a
 // class declaring `implements NamespaceContext` links instead of being auto-stubbed.
-rt.markers("javax/xml/namespace/NamespaceContext");
+rt.markers("javax/xml/namespace/NamespaceContext", "org/xmlpull/v1/XmlSerializer");

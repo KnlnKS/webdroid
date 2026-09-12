@@ -63,6 +63,10 @@ rt.register({
     "isCurrentThread()Z": function (this: JLooper) { return curThread === this.thread ? 1 : 0; },
     ...noops("static prepareMainLooper()V", "quit()V", "quitSafely()V"),
     "getQueue()Landroid/os/MessageQueue;": () => mainQueue,
+    "static myQueue()Landroid/os/MessageQueue;": () => {
+      if (!curThread.looper) throw rt.mkThrowable("java/lang/IllegalStateException", "No Looper; Looper.prepare() wasn't called on this thread.");
+      return mainQueue;
+    },
   },
 });
 class JMessageQueue extends JObj {}
@@ -334,6 +338,7 @@ rt.register({
     "static getNativeHeapAllocatedSize()J": () => BigInt(((performance as any).memory?.usedJSHeapSize ?? 0) | 0),
     "static getNativeHeapSize()J": () => BigInt(((performance as any).memory?.totalJSHeapSize ?? 0) | 0),
     ...stubs(0, "static isDebuggerConnected()Z", "static waitingForDebugger()Z"),
+    "static threadCpuTimeNanos()J": () => BigInt(Math.round(performance.now() * 1e6)),
     ...stubs(0n, "static getNativeHeapFreeSize()J"),
   },
 });
@@ -607,6 +612,29 @@ async function statFs(this: JStatFs, p: string) {
   } catch { /* no estimate available: report an empty filesystem */ }
 }
 const BLK = 4096n;
+// ── android.os.storage.StorageManager: the one volume, identified by the platform's default UUID
+let storageUuid: ReturnType<typeof uuidFromString> | null = null;
+const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
+async function storageEstimate(): Promise<{ total: number; free: number }> {
+  const s = new JStatFs();
+  await statFs.call(s, "/data");
+  return s;
+}
+rt.register({
+  name: "android/os/storage/StorageManager", ctor: class extends JObj {},
+  statics: { get UUID_DEFAULT() { return uuidDefault(); } },
+  methods: {
+    "getUuidForPath(Ljava/io/File;)Ljava/util/UUID;": () => uuidDefault(),
+    "getAllocatableBytes(Ljava/util/UUID;)J": async () => BigInt(Math.floor((await storageEstimate()).free)),
+    "getCacheQuotaBytes(Ljava/util/UUID;)J": async () => BigInt(Math.floor((await storageEstimate()).total / 20)),
+    "getCacheSizeBytes(Ljava/util/UUID;)J": () => 0n,
+    "isAllocationSupported(Ljava/io/FileDescriptor;)Z": () => 0,
+    "isEncrypted(Ljava/io/File;)Z": () => 0,
+    "getStorageVolumes()Ljava/util/List;": () => newArrayList(),
+    "getPrimaryStorageVolume()Landroid/os/storage/StorageVolume;": () => null,
+    "getStorageVolume(Ljava/io/File;)Landroid/os/storage/StorageVolume;": () => null,
+  },
+});
 rt.register({
   name: "android/os/StatFs", ctor: JStatFs,
   methods: {
@@ -809,6 +837,10 @@ rt.register({
     "static getExternalStorageState(Ljava/io/File;)Ljava/lang/String;": () => "mounted",
     "static getStorageState(Ljava/io/File;)Ljava/lang/String;": () => "mounted",
     "static isExternalStorageManager()Z": () => 1,
+    "static isExternalStorageEmulated()Z": () => 1,
+    "static isExternalStorageEmulated(Ljava/io/File;)Z": () => 1,
+    "static isExternalStorageRemovable()Z": () => 0,
+    "static isExternalStorageRemovable(Ljava/io/File;)Z": () => 0,
     "static isExternalStorageLegacy()Z": () => 0,
   },
 });

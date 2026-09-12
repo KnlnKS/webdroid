@@ -225,7 +225,7 @@ function bytes(b: JByteBuffer): Int8Array {
 // Java's wrap shares the array: writes through either side show on the other. A typed array is
 // laid out in native order, so a wrapped typed buffer reads little-endian (Java's order() for it
 // too); ByteBuffer.wrap keeps Java's big-endian default.
-function wrapArray<T extends JBuffer>(Ctor: new () => T, arr: Int8Array | Int16Array | Int32Array | Float32Array, shift: number, off = 0, len = arr.length): T {
+function wrapArray<T extends JBuffer>(Ctor: new () => T, arr: Int8Array | Int16Array | Uint16Array | Int32Array | Float32Array, shift: number, off = 0, len = arr.length): T {
   const b = new Ctor();
   b.backing = { storage: { kind: "heap", ab: arr.buffer as ArrayBuffer } };
   b.byteOffset = arr.byteOffset;
@@ -336,6 +336,8 @@ rt.register({
     ...bufferBaseMethods(),
     ...chaining("Ljava/nio/CharBuffer;"),
     "static allocate(I)Ljava/nio/CharBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 2), JCharBuffer, 1),
+    "static wrap([C)Ljava/nio/CharBuffer;": (arr: Uint16Array) => wrapArray(JCharBuffer, arr, 1),
+    "static wrap([CII)Ljava/nio/CharBuffer;": (arr: Uint16Array, off: number, len: number) => wrapArray(JCharBuffer, arr, 1, off, len),
     "get()C": function (this: JCharBuffer) { this.clampGet(1); return this.dv.getUint16(this.pos++ << 1, this.little); },
     "put(C)Ljava/nio/CharBuffer;": function (this: JCharBuffer, v: number) { this.clampPut(1); this.dv.setUint16(this.pos++ << 1, v, this.little); return this; },
   },

@@ -29,6 +29,9 @@ export interface AppHost {
   recreateActivity: (activity: JActivity) => void;
   setRequestedOrientation: (activity: JActivity, orientation: number) => void;
   currentActivity: () => JActivity | null;
+  /** every live activity, bottom of the stack first */
+  activities: () => JActivity[];
+  finishTask: (taskId: number) => void;
   invalidateOptionsMenu: (activity: JActivity) => void;
 }
 export let appHost: AppHost | null = null;

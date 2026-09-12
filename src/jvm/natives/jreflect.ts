@@ -555,6 +555,13 @@ rt.register({
     "getTypeParameters()[Ljava/lang/reflect/TypeVariable;": noTypeVars,
     "getModifiers()I": function (this: JMethod) { return this.mods || (this.isStatic ? 0x8 : 0) | 0x1; },
     "isDefault()Z": function (this: JMethod) { return this.owner.isInterface && this.mods && !(this.mods & 0x400) ? 1 : 0; },
+    "getDefaultValue()Ljava/lang/Object;": function (this: JMethod) {
+      if (!this.owner.isInterface) return null;
+      const d = classAnno(this.owner).cls.find((a) => a.type === "dalvik/annotation/AnnotationDefault")?.elements.value;
+      if (!d || typeof d !== "object" || Array.isArray(d) || d.kind !== "annotation") return null;
+      const val = d.anno.elements[this.name];
+      return val === undefined ? null : boxReturn(this.desc.slice(this.desc.indexOf(")") + 1), resolveEncVal(val, d.anno.dex, this.owner.owner ?? rt));
+    },
     "getReturnType()Ljava/lang/Class;": function (this: JMethod) {
       return classForDesc(parseMethodDesc(this.desc).ret, this.owner.owner);
     },

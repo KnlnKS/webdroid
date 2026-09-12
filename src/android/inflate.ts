@@ -187,6 +187,13 @@ rt.register({
   name: "android/view/LayoutInflater", ctor: JLayoutInflater,
   methods: {
     "static from(Landroid/content/Context;)Landroid/view/LayoutInflater;": (jctx: unknown) => getInflater(jctx),
+    "<init>(Landroid/content/Context;)V": function (this: JLayoutInflater, jctx: JContext) { this.jctx = jctx; },
+    "<init>(Landroid/view/LayoutInflater;Landroid/content/Context;)V": function (this: JLayoutInflater, original: JLayoutInflater, jctx: JContext) {
+      this.jctx = jctx;
+      this.factory2 = [...original.factory2];
+      this.factory = [...original.factory];
+      this.privateFactory = original.privateFactory;
+    },
     "inflate(ILandroid/view/ViewGroup;)Landroid/view/View;": function (this: JLayoutInflater, id: number, root: unknown) {
       return inflateLayout(this.jctx, id, root, !!root);
     },

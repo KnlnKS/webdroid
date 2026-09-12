@@ -559,6 +559,8 @@ let followRedirects = 1, defaultUseCaches = 1;
 class JURLConnection extends JObj {
   url!: JURL;
   method = "GET"; follow = followRedirects; doOut = 0; doIn = 1; useCaches = defaultUseCaches;
+  /** the protected field a subclass implementing its own transport maintains; ours reads res */
+  connected = 0;
   cto = 0; rto = 0; ifMod = 0n;
   req: [string, string][] = [];
   out: JOutputStream | null = null;
@@ -638,6 +640,7 @@ rt.register({
 });
 rt.register({
   name: "java/net/URLConnection", ctor: JURLConnection,
+  fields: { connected: "connected", url: "url", doInput: "doIn", doOutput: "doOut", useCaches: "useCaches" },
   methods: {
     "<init>(Ljava/net/URL;)V": function (this: JURLConnection, u: JURL) { this.url = u; },
     "connect()V": async function (this: JURLConnection) { await this.connect(); },
@@ -712,6 +715,7 @@ const HTTP_METHODS = new Set(["GET", "POST", "HEAD", "OPTIONS", "PUT", "DELETE",
 class JHttpURLConnection extends JURLConnection {}
 rt.register({
   name: "java/net/HttpURLConnection", ctor: JHttpURLConnection, sup: "java/net/URLConnection",
+  fields: { method: "method", instanceFollowRedirects: "follow" },
   statics: {
     HTTP_OK: 200, HTTP_CREATED: 201, HTTP_ACCEPTED: 202, HTTP_NOT_AUTHORITATIVE: 203, HTTP_NO_CONTENT: 204, HTTP_RESET: 205,
     HTTP_PARTIAL: 206, HTTP_MULT_CHOICE: 300, HTTP_MOVED_PERM: 301, HTTP_MOVED_TEMP: 302, HTTP_SEE_OTHER: 303,

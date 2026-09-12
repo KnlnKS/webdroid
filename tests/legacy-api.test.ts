@@ -72,3 +72,48 @@ test("Resources(AssetManager, DisplayMetrics, Configuration) scopes its own conf
   await expect(newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V", null, null, null))
     .rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
 });
+
+test("ZipInputStream walks entries in local order and serves each entry's bytes", async () => {
+  const { zipSync } = await import("fflate");
+  const zip = zipSync({ "a.txt": new TextEncoder().encode("alpha"), "dir/": new Uint8Array(0), "dir/b.bin": new Uint8Array([1, 2, 3, 4]) }, { level: 6 });
+  const input = await newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array(zip.buffer, zip.byteOffset, zip.length));
+  const stream = await newObj("java/util/zip/ZipInputStream", "(Ljava/io/InputStream;)V", input);
+  const names: string[] = [], sizes: number[] = [];
+  for (let entry = await vcall(stream, "getNextEntry", "()Ljava/util/zip/ZipEntry;"); entry; entry = await vcall(stream, "getNextEntry", "()Ljava/util/zip/ZipEntry;")) {
+    names.push(await vcall(entry, "getName", "()Ljava/lang/String;"));
+    const out = new Int8Array(16);
+    let n = 0;
+    for (let r = await vcall(stream, "read", "([BII)I", out, n, 16 - n); r > 0; r = await vcall(stream, "read", "([BII)I", out, n, 16 - n)) n += r;
+    sizes.push(n);
+    if (names.at(-1) === "a.txt") expect(new TextDecoder().decode(new Uint8Array(out.buffer, 0, n))).toBe("alpha");
+    await vcall(stream, "closeEntry", "()V");
+  }
+  expect(names).toEqual(["a.txt", "dir/", "dir/b.bin"]);
+  expect(sizes).toEqual([5, 0, 4]);
+});
+
+test("List.containsAll, CharBuffer.wrap and EventObject", async () => {
+  const list = await newObj("java/util/ArrayList");
+  for (const v of ["x", "y"]) await vcall(list, "add", "(Ljava/lang/Object;)Z", v);
+  const other = await newObj("java/util/ArrayList");
+  await vcall(other, "add", "(Ljava/lang/Object;)Z", "y");
+  expect(await vcall(list, "containsAll", "(Ljava/util/Collection;)Z", other)).toBe(1);
+  await vcall(other, "add", "(Ljava/lang/Object;)Z", "z");
+  expect(await vcall(list, "containsAll", "(Ljava/util/Collection;)Z", other)).toBe(0);
+
+  const chars = Uint16Array.from("hello", (c) => c.charCodeAt(0));
+  const buffer = await scall("java/nio/CharBuffer", "wrap", "([CII)Ljava/nio/CharBuffer;", chars, 1, 3);
+  expect(await vcall(buffer, "get", "()C")).toBe("e".charCodeAt(0));
+  expect(await vcall(buffer, "remaining", "()I")).toBe(2);
+
+  const event = await newObj("java/util/EventObject", "(Ljava/lang/Object;)V", "src");
+  expect(await vcall(event, "getSource", "()Ljava/lang/Object;")).toBe("src");
+  await expect(newObj("java/util/EventObject", "(Ljava/lang/Object;)V", null)).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
+});
+
+test("DateUtils formats elapsed time and knows today", async () => {
+  expect(await scall("android/text/format/DateUtils", "formatElapsedTime", "(J)Ljava/lang/String;", 65n)).toBe("1:05");
+  expect(await scall("android/text/format/DateUtils", "formatElapsedTime", "(J)Ljava/lang/String;", 3725n)).toBe("1:02:05");
+  expect(await scall("android/text/format/DateUtils", "isToday", "(J)Z", BigInt(Date.now()))).toBe(1);
+  expect(await scall("android/text/format/DateUtils", "isToday", "(J)Z", BigInt(Date.now() - 2 * 86400000))).toBe(0);
+});

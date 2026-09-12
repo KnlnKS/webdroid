@@ -486,6 +486,7 @@ rt.register({
     "tryLock()Z": function (this: JLock) { this.held++; return 1; },
     "lockInterruptibly()V": function (this: JLock) { this.held++; },
     "isHeldByCurrentThread()Z": function (this: JLock) { return this.held > 0 ? 1 : 0; },
+    "isLocked()Z": function (this: JLock) { return this.held > 0 ? 1 : 0; },
     "newCondition()Ljava/util/concurrent/locks/Condition;": function () { return new JCondition(); },
   },
 });
@@ -609,7 +610,7 @@ const mkBlockingQueue = (name: string, deque = false) => rt.register({
     "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": timedPoll,
   },
 });
-for (const qn of ["java/util/concurrent/LinkedBlockingQueue", "java/util/concurrent/SynchronousQueue", "java/util/concurrent/ArrayBlockingQueue"]) mkBlockingQueue(qn);
+for (const qn of ["java/util/concurrent/LinkedBlockingQueue", "java/util/concurrent/SynchronousQueue", "java/util/concurrent/ArrayBlockingQueue", "java/util/concurrent/LinkedTransferQueue"]) mkBlockingQueue(qn);
 mkBlockingQueue("java/util/concurrent/LinkedBlockingDeque", true);
 // PriorityBlockingQueue: the sorted queue with a parking take(); a parked taker receives the
 // element that would have become the head
