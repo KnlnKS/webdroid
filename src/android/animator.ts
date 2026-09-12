@@ -349,6 +349,10 @@ const vaMethods: NativeSpec["methods"] = {
     this.startReversed = false;
     this.startT = performance.now();
     this.running = true;
+    // AOSP's start() animates fraction 0 at once, so getAnimatedValue() read from a start
+    // listener or before the first frame is the first key, not whatever was there before.
+    if (this.objKeys) this.cur = await objAt(this, 0);
+    else { const v = this.keys ? this.keys[0] : this.from; this.cur = this.isInt ? Math.round(v) : v; }
     for (const l of [...this.animLs]) {
       try { await vcall(l, "onAnimationStart", "(Landroid/animation/Animator;)V", this); } catch (e) { reportUncaught(e); }
     }
