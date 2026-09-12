@@ -475,3 +475,5 @@ rt.register({
   },
 });
 rt.markers("android/app/ActionBar", "android/app/ActionBar$OnNavigationListener");
+
+rt.markers("android/view/ContextMenu", "android/view/ContextMenu$ContextMenuInfo");

@@ -81,7 +81,7 @@ export function procInit(): void {
       return 0;
     },
     sched_getaffinity: (_c, a) => { a.i(); const n = a.u(), set = a.p(); mem.memset(set, 0, n); mem.st32(set, cpuMask); return 0; },
-    sched_setaffinity: () => 0,
+    sched_setaffinity: () => 0, sched_getcpu: () => 0,
     __sched_cpucount: (_c, a) => { const n = a.u(), set = a.p(); let k = 0; for (let i = 0; i < n; i++) { let b = u8[set + i]; while (b) { k += b & 1; b >>= 1; } } return k; },
     sched_get_priority_max: () => 99, sched_get_priority_min: () => 1,
     sched_getscheduler: () => 0, sched_setscheduler: () => 0, sched_getparam: (_c, a) => { a.i(); mem.st32(a.p(), 0); return 0; },

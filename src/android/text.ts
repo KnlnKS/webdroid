@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { vcall, mkEnumSet, newObj } from "../jvm/natives/jlang";
-import { type JDate } from "../jvm/natives/jtime";
+import { type JDate, type JCalendar } from "../jvm/natives/jtime";
 import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances } from "./graphics";
 import { device } from "../shell/config";
 import { formatDate } from "../jvm/natives/jtext";
@@ -272,7 +272,7 @@ rt.register({
 });
 // Interface only (no ParagraphStyle registered yet to extend): the type real span classes
 // implement for the chooseHeight line-height adjustment applyLineHeightSpans applies.
-rt.markers("android/text/style/LineHeightSpan");
+rt.markers("android/text/style/LineHeightSpan", "android/text/style/LineHeightSpan$WithDensity");
 class JReplacementSpan extends JMetricAffectingSpan {}
 rt.register({
   name: "android/text/style/ReplacementSpan", ctor: JReplacementSpan,
@@ -1045,6 +1045,7 @@ rt.register({
     "static getTimeFormat(Landroid/content/Context;)Ljava/text/DateFormat;": () => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "h:mm a"),
     "static format(Ljava/lang/CharSequence;J)Ljava/lang/CharSequence;": (fmt: unknown, t: bigint) => formatDate(spannedString(fmt), Number(t)),
     "static format(Ljava/lang/CharSequence;Ljava/util/Date;)Ljava/lang/CharSequence;": (fmt: unknown, d: JDate | null) => formatDate(spannedString(fmt), d?.t ?? Date.now()),
+    "static format(Ljava/lang/CharSequence;Ljava/util/Calendar;)Ljava/lang/CharSequence;": (fmt: unknown, c: JCalendar) => formatDate(spannedString(fmt), c.d.getTime()),
   },
 });
 

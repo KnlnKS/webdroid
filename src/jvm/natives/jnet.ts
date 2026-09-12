@@ -404,6 +404,9 @@ rt.register({
         this.u = (sch ? sch + ":" : "") + (host ? "//" + (ui ? ui + "@" : "") + host + (port === -1 ? "" : ":" + port) : "") +
           (path ?? "") + (q ? "?" + q : "") + (f ? "#" + f : "");
       },
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JURI, sch: string | null, host: string | null, path: string | null, f: string | null) {
+      this.u = (sch ? sch + ":" : "") + (host ? "//" + host : "") + (path ?? "") + (f ? "#" + f : "");
+    },
     "static create(Ljava/lang/String;)Ljava/net/URI;": mkURI,
     "toString()Ljava/lang/String;": function (this: JURI) { return this.u; },
     // RFC 2396 path normalisation: "." and ".." segments resolved, the rest of the URI untouched

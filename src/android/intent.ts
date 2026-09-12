@@ -231,6 +231,23 @@ for (const [t, d, dflt] of [["String", "Ljava/lang/String;", null], ["Int", "I",
     };
   }
 }
+class JShortcutIconResource extends JObj { packageName = ""; resourceName = ""; }
+rt.register({
+  name: "android/content/Intent$ShortcutIconResource", ctor: JShortcutIconResource, ifaces: ["android/os/Parcelable"],
+  fields: ["packageName", "resourceName"],
+  methods: {
+    "<init>()V": function () {},
+    "static fromContext(Landroid/content/Context;I)Landroid/content/Intent$ShortcutIconResource;": async (ctx: unknown, id: number) => {
+      const r = new JShortcutIconResource();
+      r.packageName = await vcall(ctx, "getPackageName", "()Ljava/lang/String;");
+      const res = await vcall(ctx, "getResources", "()Landroid/content/res/Resources;");
+      r.resourceName = await vcall(res, "getResourceName", "(I)Ljava/lang/String;", id);
+      return r;
+    },
+    "toString()Ljava/lang/String;": function (this: JShortcutIconResource) { return this.resourceName; },
+    "describeContents()I": () => 0,
+  },
+});
 rt.register({
   name: "android/content/Intent", ctor: JIntent, ifaces: ["android/os/Parcelable", "java/lang/Cloneable"],
   statics: {

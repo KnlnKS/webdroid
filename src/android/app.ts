@@ -644,7 +644,14 @@ for (const [name, methods, statics] of [
   }],
   ["android/app/KeyguardManager", { "isKeyguardLocked()Z": () => 0, "inKeyguardRestrictedInputMode()Z": () => 0, "isDeviceSecure()Z": () => 0 }],
   ["android/hardware/SensorManager", { "getDefaultSensor(I)Landroid/hardware/Sensor;": () => null, "getSensorList(I)Ljava/util/List;": () => newArrayList(), "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z": () => 0, "unregisterListener(Landroid/hardware/SensorEventListener;)V": () => {} }],
-  ["android/os/BatteryManager", { "getIntProperty(I)I": () => 80, "isCharging()Z": () => 1 }],
+  // a charging battery at 80%; counters the platform cannot read answer Integer/Long.MIN_VALUE
+  // as BatteryManager does for an unsupported property
+  ["android/os/BatteryManager", {
+    "getIntProperty(I)I": (id: number) => id === 4 ? 80 : id === 6 ? 2 : -2147483648,
+    "getLongProperty(I)J": (id: number) => id === 4 ? 80n : id === 6 ? 2n : -9223372036854775808n,
+    "isCharging()Z": () => 1,
+    "computeChargeTimeRemaining()J": () => -1n,
+  }],
   ["android/hardware/display/DisplayManager", {
     // one fixed built-in display: unknown ids are null as in AOSP, and registered listeners
     // never fire because no display is ever added, removed or reconfigured here

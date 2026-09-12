@@ -569,6 +569,7 @@ for (const n of ["java/util/ArrayList", "java/util/LinkedList", "java/util/Vecto
   const base = listMethods();
   rt.register({
     name: n, ctor: class extends JList {}, typeVars: "E",
+    sup: n === "java/util/Stack" ? "java/util/Vector" : n === "java/util/ArrayDeque" ? "java/util/AbstractCollection" : "java/util/AbstractList",
     ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/Queue", "java/util/Deque", "java/util/RandomAccess", "java/lang/Cloneable", "java/io/Serializable"],
     methods: { ...base, ...listExtras[n]?.(base) },
   });
@@ -834,7 +835,7 @@ for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/conc
   if (n === "java/util/EnumMap") methods["put(Ljava/lang/Enum;Ljava/lang/Object;)Ljava/lang/Object;"] = methods["put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"];
   rt.register({
     name: n, ctor: class extends JMap {}, typeVars: "K,V",
-    sup: n === "java/util/LinkedHashMap" ? "java/util/HashMap" : "java/lang/Object",
+    sup: n === "java/util/LinkedHashMap" ? "java/util/HashMap" : n === "android/util/ArrayMap" ? "java/lang/Object" : "java/util/AbstractMap",
     ifaces: ["java/util/Map", "java/util/concurrent/ConcurrentMap", "java/util/SortedMap", "java/lang/Cloneable", "java/io/Serializable"],
     methods,
   });
@@ -926,7 +927,7 @@ for (const n of ["java/util/HashSet", "java/util/LinkedHashSet",
   "java/util/concurrent/CopyOnWriteArraySet", "java/util/EnumSet", "java/util/concurrent/ConcurrentHashMap$KeySetView"]) {
   rt.register({
     name: n, ctor: class extends JSet {}, typeVars: "E",
-    sup: n === "java/util/LinkedHashSet" ? "java/util/HashSet" : "java/lang/Object",
+    sup: n === "java/util/LinkedHashSet" ? "java/util/HashSet" : "java/util/AbstractSet",
     ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/util/SortedSet", "java/io/Serializable"],
     methods: n === "java/util/EnumSet" ? { ...setMethods(), ...enumSetStatics() } : setMethods(),
   });
