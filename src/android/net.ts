@@ -470,3 +470,33 @@ rt.register({
     "static getUidTxBytes(I)J": () => -1n,
   },
 });
+
+// The one network is Wi-Fi (NetworkInfo says so), so the Wi-Fi radio is on and associated.
+// What a browser cannot see is what AOSP hides from an app without location access anyway:
+// the SSID/BSSID placeholders, no RSSI, no scan results.
+rt.register({
+  name: "android/net/wifi/WifiInfo", ctor: class extends JObj {},
+  methods: {
+    "getSSID()Ljava/lang/String;": () => "<unknown ssid>",
+    "getBSSID()Ljava/lang/String;": () => "02:00:00:00:00:00",
+    "getMacAddress()Ljava/lang/String;": () => "02:00:00:00:00:00",
+    "getRssi()I": () => -127,
+    "getNetworkId()I": () => -1,
+    "getLinkSpeed()I": () => -1,
+    "getFrequency()I": () => -1,
+    "getIpAddress()I": () => 0,
+    "toString()Ljava/lang/String;": () => "SSID: <unknown ssid>, BSSID: 02:00:00:00:00:00, MAC: 02:00:00:00:00:00, RSSI: -127, Link speed: -1Mbps, Net ID: -1",
+  },
+});
+rt.register({
+  name: "android/net/wifi/WifiManager", ctor: class extends JObj {},
+  statics: { WIFI_STATE_DISABLED: 1, WIFI_STATE_ENABLED: 3 },
+  methods: {
+    "isWifiEnabled()Z": () => 1,
+    "getWifiState()I": () => 3,
+    "getConnectionInfo()Landroid/net/wifi/WifiInfo;": () => rt.make("android/net/wifi/WifiInfo"),
+    "getScanResults()Ljava/util/List;": () => newArrayList(),
+    "getConfiguredNetworks()Ljava/util/List;": () => newArrayList(),
+    ...stubs(0, "startScan()Z", "is5GHzBandSupported()Z", "isScanAlwaysAvailable()Z", "setWifiEnabled(Z)Z"),
+  },
+});
