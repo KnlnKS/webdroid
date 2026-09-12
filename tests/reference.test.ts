@@ -14,3 +14,13 @@ test("PhantomReference never yields its referent and enqueues nothing", async ()
   expect(await vcall(queue, "poll", "()Ljava/lang/ref/Reference;")).toBeNull();
   expect(await vcall(queue, "remove", "(J)Ljava/lang/ref/Reference;", 5n)).toBeNull();
 });
+
+test("InheritableThreadLocal values reach threads created afterwards", async () => {
+  const local = await newObj("java/lang/InheritableThreadLocal");
+  await vcall(local, "set", "(Ljava/lang/Object;)V", "inherited");
+  const thread = await newObj("java/lang/Thread");
+  expect(thread.locals.get(local)).toBe("inherited");
+  expect(await vcall(local, "get", "()Ljava/lang/Object;")).toBe("inherited");
+  await vcall(await newObj("java/lang/Object"), "hashCode", "()I");
+  expect(rt.iof(local, "java/lang/ThreadLocal")).toBe(1);
+});

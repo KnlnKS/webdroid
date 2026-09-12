@@ -1360,7 +1360,7 @@ export class JThread extends JObj {
   alive = 0;
   prio = 5;
   target: unknown = null;   // Runnable
-  locals = new Map<object, unknown>();
+  locals = inheritedLocals();
   interrupted = 0;
   wake: (() => void) | null = null;
   /** LockSupport: a permit delivered while not parked, or the wake of a park in progress */
@@ -1374,10 +1374,10 @@ export class JThread extends JObj {
   /** resolves once the thread is back from native code (at once when it is not in any) */
   untilIdle(): Promise<void> { return this.inNative ? new Promise((r) => this.nativeIdle.push(r)) : Promise.resolve(); }
 }
-export const mainThread = new JThread();
+export let curThread: JThread = null as never;
+export const mainThread = curThread = new JThread();
 mainThread.jname = "main";
 mainThread.alive = 1;
-export let curThread = mainThread;
 rt.th = () => curThread;
 rt.st = (t) => { curThread = t as JThread; };
 rt.su = () => { curThread = mainThread; };
@@ -1504,6 +1504,17 @@ rt.register({
 });
 
 class JThreadLocal extends JObj {}
+class JInheritableThreadLocal extends JThreadLocal {}
+/** a new Thread starts with its creator's inheritable values (the default childValue) */
+function inheritedLocals(): Map<object, unknown> {
+  const m = new Map<object, unknown>();
+  if (curThread) for (const [k, v] of curThread.locals) if (k instanceof JInheritableThreadLocal) m.set(k, v);
+  return m;
+}
+rt.register({
+  name: "java/lang/InheritableThreadLocal", ctor: JInheritableThreadLocal, sup: "java/lang/ThreadLocal",
+  methods: { "<init>()V": function () {}, "childValue(Ljava/lang/Object;)Ljava/lang/Object;": (v: unknown) => v },
+});
 rt.register({
   name: "webdroid/SuppliedThreadLocal", ctor: class extends JThreadLocal { supplier: unknown = null; }, sup: "java/lang/ThreadLocal",
   methods: { "initialValue()Ljava/lang/Object;": function (this: { supplier: unknown }) { return vcallMaybe(this.supplier, "get", "()Ljava/lang/Object;"); } },
@@ -1630,6 +1641,7 @@ rt.register({
   methods: {
     "get()Ljava/lang/Object;": function (this: JRef) { return this.referent; },
     "clear()V": function (this: JRef) { this.referent = null; },
+    "static reachabilityFence(Ljava/lang/Object;)V": () => {},
   },
 });
 class JWeakRef extends JRef { wr: WeakRef<object> | null = null; }
