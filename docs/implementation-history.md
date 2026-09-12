@@ -815,6 +815,27 @@ HttpOnly token-cookie presence establish upstream progress, not a stored account
 successful SDK result. Image encoders were no longer present during the final check;
 the earlier quiet-performance backlog is still unverified.
 
+Phone verification subsequently completed. With `91d9ff7`, the actual fragment callback
+lets microG exchange the Google token and persist one account with a nonempty refresh
+credential. The next AuthResponse parse throws NoSuchMethodError for Field.setLong in
+Thread-4; the account survives in `wd:accounts`, but LoginActivity remains finalizing.
+DEX inspection identifies AuthResponse.parse and HttpFormClient.parseResponse as
+callers. AuthResponse uses typed setters for expiry, booleans and integers. Its source:
+[pinned AuthResponse](https://github.com/microg/GmsCore/blob/v0.3.16.252432/play-services-base/core/src/main/java/org/microg/gms/auth/AuthResponse.java).
+
+The reflection fix adds the primitive setter family to its owning registration and
+reuses the existing write path, including initialization. Tests cover the complete
+primitive widening matrix, long precision, invalid receivers, reference-field rejection,
+static receivers and suspended initialization. Long-to-float keeps discarded bits sticky
+before JS number conversion to avoid double rounding at halfway boundaries. A Java 17
+oracle agrees on all conversion pairs and the three boundary float bit patterns.
+The genuine unchanged AuthResponse parser now parses expiry 9007199254740993, integer
+37 and boolean values with no missing APIs; the baseline throws missing setLong.
+This does not expand reflection's pre-existing access-control implementation.
+Evidence: `/tmp/webdroid-authresponse-{parse.dis,probe.log,baseline-probe.log}`,
+`/tmp/webdroid-field-callers.log`, `/tmp/webdroid-reflection-field-{tests,typecheck,oracle}.log`.
+The live saved account still needs a reload with this fix and SDK verification.
+
 ## WebView upstream bases — 2026-09-11
 
 Resumed microG from `28b9246` on `codex/microg-webview-base`. The current public

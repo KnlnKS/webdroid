@@ -84,7 +84,7 @@ function annotatedElement<T extends { owner: ClassInfo }>(annosOf: (this: T) => 
   };
 }
 
-class JField extends JObj {
+export class JField extends JObj {
   accessible = 0;
   owner!: ClassInfo;
   fname = "";
@@ -98,6 +98,19 @@ class JField extends JObj {
 async function readField(this: JField, o: unknown): Promise<unknown> {
   const p = rt.initClass(this.owner); if (p) await p;
   return this.isStatic ? this.owner.ctor[this.prop] : (o as Record<string, unknown>)[this.prop];
+}
+async function writeField(this: JField, o: unknown, value: unknown, boxed = false): Promise<void> {
+  const p = rt.initClass(this.owner); if (p) await p;
+  if (boxed && "IJFDZBCS".includes(this.desc[0])) value = unboxArg(value);
+  if (this.isStatic) this.owner.ctor[this.prop] = value;
+  else (o as Record<string, unknown>)[this.prop] = value;
+}
+function fieldFloat(value: number | bigint): number {
+  if (typeof value === "number") return Math.fround(value);
+  const magnitude = value < 0n ? -value : value;
+  // Keep a sticky low bit before conversion to double so long-to-float cannot double-round.
+  const rounded = magnitude > 0x1fffffffffffffn ? ((magnitude >> 12n) | BigInt((magnitude & 0xfffn) !== 0n)) << 12n : magnitude;
+  return Math.fround(Number(value < 0n ? -rounded : rounded));
 }
 function classFields(info: ClassInfo, name?: string): JField[] {
   const out: JField[] = [];
@@ -152,14 +165,22 @@ rt.register({
     "get(Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JField, o: unknown) {
       return boxReturn(this.desc, await readField.call(this, o));
     },
-    "set(Ljava/lang/Object;Ljava/lang/Object;)V": async function (this: JField, o: unknown, v: unknown) {
-      const p = rt.initClass(this.owner); if (p) await p;
-      const raw = "IJFDZBCS".includes(this.desc[0]) ? unboxArg(v) : v;
-      if (this.isStatic) this.owner.ctor[this.prop] = raw;
-      else (o as Record<string, unknown>)[this.prop] = raw;
+    "set(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JField, o: unknown, v: unknown) {
+      return writeField.call(this, o, v, true);
     },
     ...Object.fromEntries((["Int I", "Long J", "Boolean Z", "Float F", "Double D", "Byte B", "Short S", "Char C"])
       .map((t) => [`get${t.slice(0, -2)}(Ljava/lang/Object;)${t.slice(-1)}`, readField])),
+    ...Object.fromEntries(["Boolean Z", "Byte BSIJFD", "Char CIJFD", "Short SIJFD", "Int IJFD", "Long JFD", "Float FD", "Double D"].map((spec) => {
+      const [name, targets] = spec.split(" ");
+      return [`set${name}(Ljava/lang/Object;${targets[0]})V`, function (this: JField, o: unknown, value: number | bigint) {
+        if (!this.isStatic) {
+          if (o == null) rt.npe();
+          if (!(this.owner.owner ?? rt).iof(o, this.owner.name)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Wrong field receiver");
+        }
+        if (this.desc.length !== 1 || !targets.includes(this.desc)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid primitive field conversion");
+        return writeField.call(this, o, this.desc === "J" ? BigInt(value) : this.desc === "F" ? fieldFloat(value) : this.desc === "D" ? Number(value) : value);
+      }];
+    })),
     "toString()Ljava/lang/String;": function (this: JField) { return this.owner.name + "." + this.fname; },
     ...annotatedElement(function (this: JField) { return classAnno(this.owner).fieldsByName.get(this.fname) ?? []; }),
   },

@@ -156,9 +156,16 @@ WebView client's `onPageFinished`. Chromium explicitly delivers that callback wi
 `onPageStarted` or `onPageCommitVisible` for fragment navigation. The new general
 fragment notification (`91d9ff7`) now passes ordinary and isolated WebView transport
 tests, including upstream URL mapping and callback ordering. The old isolated
-transport times out waiting for that notification. A fresh login with this fix is
-waiting for the user's phone verification in the preserved Chrome tab. No account
-has been stored yet; do not report completed SDK authentication.
+transport times out waiting for that notification. The fresh login passed phone
+verification and stored a genuine account plus its refresh credential in the broker's
+persistent account store. Finalization then stopped in `AuthResponse.parse` because
+`Field.setLong` was missing. Typed primitive field setters now use the shared writer,
+preserve long values, widen valid conversions and reject invalid conversions/receivers.
+The unchanged microG parser accepts long expiry, boolean and integer fixture values
+without missing APIs; the baseline throws the same missing setLong error as the live
+run. Java's primitive conversion matrix and long-to-float boundary results agree.
+Reload the saved account with this fix and verify the SDK result; do not repeat MFA
+or claim complete authentication before that result is observed.
 
 The location implementation rewrites static Location references in isolated HTTP(S)
 scripts using the existing TypeScript parser on the server. Ordinary objects and local
