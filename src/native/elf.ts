@@ -197,18 +197,25 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
       // them into one. RELA also carries the addend the linker left implicit in REL's slot.
       const type = f.rela ? info : info & 0xff;
       const sym = f.rela ? mem.u32[(p + f.ptr + 4) >>> 2] : info >>> 8;
-      const addend = f.rela ? mem.i32[(p + f.ptr * 2) >>> 2] : 0;
+      // an LP64 addend is 64-bit; the sum is kept as a double (exact below 2^53) so a slot can
+      // hold what the linker meant even when that is outside the 4 GiB of address space here
+      const addend = !f.rela ? 0 : f.ptr === 8 ? mem.i32[(p + f.ptr * 2 + 4) >>> 2] * 4294967296 + mem.u32[(p + f.ptr * 2) >>> 2] : mem.i32[(p + f.ptr * 2) >>> 2];
       const at = (base + off) >>> 2;
+      let value: number;
       switch (type) {
-        case f.RELATIVE: mem.u32[at] = (f.rela ? 0 : mem.u32[at]) + base + addend; break;
-        case f.ABS: mem.u32[at] = (f.rela ? 0 : mem.u32[at]) + symValue(sym) + addend; break;
-        case f.GLOB_DAT: case f.JUMP_SLOT: mem.u32[at] = symValue(sym) + addend; break;
-        case f.REL32: mem.u32[at] = mem.u32[at] + symValue(sym) - (base + off); break;
+        case f.RELATIVE: value = (f.rela ? 0 : mem.u32[at]) + base + addend; break;
+        case f.ABS: value = (f.rela ? 0 : mem.u32[at]) + symValue(sym) + addend; break;
+        case f.GLOB_DAT: case f.JUMP_SLOT: value = symValue(sym) + addend; break;
+        case f.REL32: value = mem.u32[at] + symValue(sym) - (base + off); break;
         case 0: continue;
         default: throw new Error(`${name}: unsupported relocation type ${type} at 0x${off.toString(16)}`);
       }
-      // the high half of a 64-bit slot: our address space is under 4 GiB, so it is always zero
-      if (f.ptr === 8) mem.u32[at + 1] = 0;
+      mem.u32[at] = value >>> 0;
+      // The high half of a 64-bit slot carries the sum's overflow rather than a flat zero: an
+      // image that stores base + A with A past its own end, and comes back inside by adding a
+      // negative 64-bit offset in a register, relies on that carry (libmetasec's pointer
+      // obfuscation). Nothing dereferences the intermediate, so no plane is ever named by it.
+      if (f.ptr === 8) mem.u32[at + 1] = Math.floor(value / 4294967296) | 0;
     }
   };
   if (rel) apply(rel, relsz);
