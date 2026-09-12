@@ -85,19 +85,25 @@ class VaList implements ArgReader {
  *  from 8-byte stack slots; an FP one likewise from 16-byte slots at vr_top + vr_offs. The offsets
  *  are kept here, not written back: no caller reuses the list after a v*printf or Call*MethodV. */
 class VaList64 implements ArgReader {
-  private stack = 0; private grTop = 0; private vrTop = 0; private grOffs = 0; private vrOffs = 0;
+  private stack = -1; private grTop = -1; private vrTop = -1; private grOffs = 0; private vrOffs = 0;
   private loaded = false;
   constructor(private readonly at: number) {}
-  // libc reads the list only when a conversion needs an argument: a caller with none may pass junk
+  // libc reads the list only when a conversion needs an argument: a caller with none may pass
+  // junk, and one whose arguments all sit in one area leaves the other area's top pointer
+  // uninitialized (clang builds the struct from whatever the slots held) — the guest never
+  // dereferences it, so each pointer is translated only once an argument comes from its area
   private load(): void {
-    const a = this.at;
-    this.stack = ldp(a); this.grTop = ldp(a + 8); this.vrTop = ldp(a + 16); this.grOffs = mem.ld32(a + 24); this.vrOffs = mem.ld32(a + 28);
+    this.grOffs = mem.ld32(this.at + 24); this.vrOffs = mem.ld32(this.at + 28);
     this.loaded = true;
   }
-  private slot(): number { const p = (this.stack + 7) & ~7; this.stack = p + 8; return p; }
+  private slot(): number {
+    if (this.stack < 0) this.stack = ldp(this.at);
+    const p = ((this.stack + 7) & ~7) >>> 0; this.stack = p + 8; return p;
+  }
   private gp(): number {
     if (!this.loaded) this.load();
     if (this.grOffs >= 0) return this.slot();
+    if (this.grTop < 0) this.grTop = ldp(this.at + 8);
     const p = this.grTop + this.grOffs;
     this.grOffs += 8;
     return this.grOffs > 0 ? this.slot() : p;
@@ -105,6 +111,7 @@ class VaList64 implements ArgReader {
   private fp(): number {
     if (!this.loaded) this.load();
     if (this.vrOffs >= 0) return this.slot();
+    if (this.vrTop < 0) this.vrTop = ldp(this.at + 16);
     const p = this.vrTop + this.vrOffs;
     this.vrOffs += 16;
     return this.vrOffs > 0 ? this.slot() : p;
