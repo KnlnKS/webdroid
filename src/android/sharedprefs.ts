@@ -141,8 +141,12 @@ rt.register({
     for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "J"], ["Float", "F"], ["Boolean", "Z"], ["StringSet", "Ljava/util/Set;"]] as const) {
       m[`get${t}(Ljava/lang/String;${d})${d}`] = function (this: JSharedPrefs, k: string, dv: unknown) {
         const v = this.map.get(k);
-        if (v === undefined) return dv;
-        if (t === "StringSet") return Array.isArray(v) ? newStringSet(v) : dv;
+        if (v == null) return dv;
+        if (t === "StringSet") {
+          if (!Array.isArray(v)) throw rt.mkThrowable("java/lang/ClassCastException", "Preference is not a string set");
+          return newStringSet(v);
+        }
+        if (t === "String" && typeof v !== "string") throw rt.mkThrowable("java/lang/ClassCastException", "Preference is not a string");
         if (t === "Boolean") return v ? 1 : 0;
         if (t === "Long" && typeof v !== "bigint") return BigInt(Math.trunc(v as number));
         return v;

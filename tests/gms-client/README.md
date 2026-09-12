@@ -5,6 +5,14 @@ directory). Keep the APK under `app/build/outputs/apk/debug/`; the shared
 `apks/GmsClient.apk` is a separate fixture. Install on a dedicated Android reference
 with `adb install -r` to retain test state, or load the rebuilt APK into webdroid.
 
+**Sign in** uses `GoogleSignInOptions.DEFAULT_SIGN_IN` and reports whether the SDK
+returns an account. Register the APK's actual package name and SHA-1 signing fingerprint
+in the test Firebase project, then enable Google as an authentication provider. Adding
+the fingerprint alone does not create the required OAuth setup. If the SDK returns
+status 8, inspect the underlying microG warning; `UNREGISTERED_ON_API_CONSOLE` identifies
+a registration problem. Verify account selection again after reload to cover persisted
+sign-in preferences. Keep credentials and downloaded project configuration private.
+
 **Map probe** opens a lifecycle-managed Maps SDK view. Wait for `loaded`, press
 Move, Animate, then Marker; tap the marker. `GmsClientMap` logs the SDK's actual
 camera state, callbacks, projected marker position, screen/window origins and map size. The reference path reaches

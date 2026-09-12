@@ -881,6 +881,21 @@ production edit, so its partial captures do not establish final acceptance. Smok
 compilation of all three affected APKs, framework probes and 6/6 text comparisons passed
 at the preceding Matrix checkpoint.
 
+A conditional debugger breakpoint identifies the cast at pc 114 in
+SignInConfigurationService.setAuthInfo. Its getString call reads the string set saved
+by the previous attempt. microG wraps that getter in runCatching to support old string
+and new string-set formats, but our getter returns the array; Kotlin's later String
+cast falls outside the intended handler. getString and getStringSet now throw on a
+stored value of the wrong type, following the
+[Android contract](https://developer.android.com/reference/android/content/SharedPreferences).
+A public-API regression covers both wrong-type directions, successful values and absent
+defaults (6 assertions). Numeric preference representation remains unchanged.
+After reload, the actual SDK client shows `authentication: true`. All four reached
+processes have empty missing sets; the observed flow has no console errors or auth
+warnings. The debugger breakpoint was removed and the debugger disabled before this run.
+No auth callbacks, account data or tokens were injected. Evidence:
+`/tmp/webdroid-preferences-{before,after,typecheck,units}.log`.
+
 ## WebView upstream bases — 2026-09-11
 
 Resumed microG from `28b9246` on `codex/microg-webview-base`. The current public

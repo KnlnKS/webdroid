@@ -177,8 +177,12 @@ sign-in in the existing free Firebase project creates the missing OAuth clients;
 Android then returns `authentication: true`. Webdroid passes the upstream request but
 the SDK completion path needs `Semaphore.drainPermits`. Its delegate and two regression
 tests now pass, including negative counts and pending acquisitions. A subsequent reload
-exposes an array-to-String cast failure under investigation. Typecheck and 649 tests /
-20,614 assertions pass; broader final regression checks remain pending.
+exposes SharedPreferences.getString returning a stored string set. microG intentionally
+catches ClassCastException inside runCatching for format migration; returning the wrong
+value delays the cast until outside that catch. String/string-set getters now enforce
+their types. Webdroid returns `authentication: true`, with no current process missing APIs,
+uncaught errors or authentication warnings. Repeat-after-reload and final broader checks
+are in progress; this verifies DEFAULT_SIGN_IN, not every OAuth scope or token mode.
 
 The location implementation rewrites static Location references in isolated HTTP(S)
 scripts using the existing TypeScript parser on the server. Ordinary objects and local
