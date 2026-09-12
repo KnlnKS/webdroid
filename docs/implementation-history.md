@@ -769,6 +769,22 @@ isolated benchmark. TypeScript stays server-side. Broader transport/E2E and perf
 acceptance remain pending. Evidence: `/tmp/webdroid-weblocation-{typecheck,units,tests,
 public-syntax,preflight}.log`; protected consent captures stay outside the repository.
 
+The fragment follow-up reports trusted renderer hash changes through the existing
+bridge and handles same-origin frame events locally. The owner updates its current
+URL before scheduling visited-history and page-finished callbacks on the main queue;
+generation checks suppress completion if a preceding callback navigates or destroys
+the view. It does not emit full-document start/commit callbacks. Ordinary proxy-frame
+hashes are mapped onto the upstream URL. The account exchange needs a fresh run.
+
+Twelve focused tests / 18 assertions and typecheck pass before the final ordinary
+proxy URL refinement. Real transport fixtures then pass for ordinary and isolated
+WebViews with exactly `visited,finished`, correct URL, unchanged loaded state and no
+runtime/page diagnostics. The original isolated transport times out. The first fixture
+incorrectly used `loaded` to wait for callback completion; it now waits for the observed
+initial page-finished callback before starting its fragment action. Native WebView
+back-stack integration with renderer same-document entries remains incomplete.
+Evidence: `/tmp/webdroid-webfragment-{tests,typecheck,transport,baseline}.log`.
+
 ## WebView upstream bases — 2026-09-11
 
 Resumed microG from `28b9246` on `codex/microg-webview-base`. The current public

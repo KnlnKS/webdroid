@@ -124,7 +124,12 @@ function srcFor(url: string, v: JWebView): string {
 /** a frame-side absolute URL back to the Android-visible one the app knows */
 function unmap(href: string, v: JWebView): string {
   const o = location.origin;
-  if (href.startsWith(o + "/proxy?")) return new URL(href).searchParams.get("url") ?? href;
+  if (href.startsWith(o + "/proxy?")) {
+    const local = new URL(href), source = local.searchParams.get("url");
+    if (!source) return href;
+    const url = new URL(source); if (local.hash) url.hash = local.hash;
+    return url.href;
+  }
   const a = o + "/asset/" + encodeURIComponent(apkOf(v)) + "/assets/";
   return href.startsWith(a) ? "file:///android_asset/" + href.slice(a.length) : href;
 }
@@ -167,7 +172,7 @@ function mkRequest(url: string, gesture = false): JReq {
 class JWebErr extends JObj { code = -1; desc = ""; }
 
 interface Entry { url: string; src?: string; doc?: string }
-class JWebView extends JViewGroup {
+export class JWebView extends JViewGroup {
   settings = inst<JWebSettings>("android/webkit/WebSettings");
   client = inst("android/webkit/WebViewClient");
   chrome = inst("android/webkit/WebChromeClient");
@@ -203,7 +208,8 @@ class JWebView extends JViewGroup {
     else if (data.kind === "loaded") {
       this.remoteHeight = typeof data.height === "number" ? data.height : 0;
       this.finishLoad(typeof data.url === "string" ? data.url : null, typeof data.title === "string" ? data.title : "", typeof data.error === "string" ? data.error : null);
-    } else if (data.kind === "navigate" && typeof data.url === "string") this.navigate(data.url, data.replace === true);
+    } else if (data.kind === "fragment" && typeof data.url === "string") this.fragmentNavigated(data.url);
+    else if (data.kind === "navigate" && typeof data.url === "string") this.navigate(data.url, data.replace === true);
     else if (data.kind === "evaluated" && typeof data.seq === "number" && typeof data.value === "string") this.evaluations.get(data.seq)?.(data.value);
   };
   private send(data: object, transfer: Transferable[] = []) { this.el?.contentWindow?.postMessage({ ...data, bridge: this.remote?.id }, this.remoteOrigin, transfer); }
@@ -290,8 +296,22 @@ class JWebView extends JViewGroup {
          [this.client, "onPageCommitVisible", WV_S, this, url], [this.client, "onPageFinished", WV_S, this, url]];
     void onMain(async () => { for (const [o, n, d, ...a] of steps) { if (this.gen !== g) return; await vcall(o, n, d, ...a); } });
   }
+  fragmentNavigated(url: string) {
+    const g = this.gen, cur = this.hist[this.idx];
+    this.url = url;
+    if (cur) { cur.url = url; if (cur.src) cur.src = srcFor(url, this); }
+    void onMain(async () => {
+      if (this.gen !== g) return;
+      await vcall(this.client, "doUpdateVisitedHistory", "(Landroid/webkit/WebView;Ljava/lang/String;Z)V", this, url, 0);
+      if (this.gen === g) await vcall(this.client, "onPageFinished", WV_S, this, url);
+    });
+  }
   /** a link click in the frame is the app's to override, as Chromium asks before navigating */
   private hookLinks(doc: Document) {
+    const g = this.gen;
+    doc.defaultView?.addEventListener("hashchange", event => {
+      if (event.isTrusted && this.gen === g) this.fragmentNavigated(unmap(event.newURL, this));
+    });
     doc.addEventListener("click", (e) => {
       const a = (e.target as Element).closest?.("a[href]") as HTMLAnchorElement | null;
       if (!a || /^javascript:/i.test(a.href)) return;

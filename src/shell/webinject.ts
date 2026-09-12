@@ -31,6 +31,7 @@ for (const [name, methods] of Object.entries(interfaces)) {
 }
 const send = data => parent.postMessage({bridge: id, ...data}, "*");
 (${installWebLocation.toString()})(config, (url, replace) => send({kind: "navigate", url, replace}));
+addEventListener("hashchange", event => { if (event.isTrusted) send({kind: "fragment", url: config.page}); });
 window.navigation?.addEventListener("navigate", event => {
   if (!event.cancelable || event.destination.sameDocument || event.hashChange || event.formData || event.downloadRequest) return;
   const url = new URL(event.destination.url);

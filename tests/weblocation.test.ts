@@ -123,6 +123,19 @@ test("location keeps illegal-receiver and missing-argument errors", async () => 
   } finally { await page.close(); }
 });
 
+test("fragment navigation reports the upstream URL after native history commits", async () => {
+  const page = await fixture();
+  try {
+    expect(await evaluate(page, `(async () => {
+      const reported = new Promise(resolve => addEventListener("message", event => {
+        if (event.data?.kind === "fragment") resolve(event.data.url);
+      }));
+      location.hash = "section";
+      return await reported;
+    })()`)).toBe("https://upstream.example:9443/dir/page?q=1#section");
+  } finally { await page.close(); }
+});
+
 test("location rewriting preserves constructors, destructuring and dynamic scopes", async () => {
   const page = await fixture();
   try {

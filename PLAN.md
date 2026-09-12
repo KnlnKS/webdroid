@@ -153,8 +153,10 @@ GetCredential. The same consent flow returns a payload without error 13, and the
 microG-owned cookie jar contains Google's real HttpOnly `oauth_token`. The page reaches
 `#close`, but no account is stored yet: fragment navigation does not reach the Java
 WebView client's `onPageFinished`. Chromium explicitly delivers that callback without
-`onPageStarted` or `onPageCommitVisible` for fragment navigation. Implement and verify
-that platform behavior before repeating sign-in. Preserve the live authenticated page.
+`onPageStarted` or `onPageCommitVisible` for fragment navigation. The new general
+fragment notification now passes ordinary and isolated WebView transport tests,
+including upstream URL mapping and callback ordering. The old isolated transport
+times out waiting for that notification. A fresh genuine account exchange is next.
 
 The location implementation rewrites static Location references in isolated HTTP(S)
 scripts using the existing TypeScript parser on the server. Ordinary objects and local
