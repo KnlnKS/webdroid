@@ -27,6 +27,21 @@ export function syntheticAddress(host: string): Ipv4 {
   return bytes;
 }
 export const syntheticHost = (bytes: ArrayLike<number>): string | null => hostBySynthetic.get(ipv4Key(bytes)) ?? null;
+/** Whether `host` exists in DNS, asked of the dev server once per name: true, false for NXDOMAIN, or
+ *  null when nothing could be asked (no server, a transport error), which callers treat as unknown
+ *  rather than absent. A numeric literal exists. */
+const knownNames = new Map<string, Promise<boolean | null>>();
+export function nameExists(host: string): Promise<boolean | null> | boolean {
+  if (parseIpv4(host) || host === "localhost") return true;
+  let pending = knownNames.get(host);
+  if (!pending) {
+    const page = typeof location === "undefined" ? null : location;
+    pending = page ? fetch(`${page.protocol}//${page.host}/dns?host=${encodeURIComponent(host)}`).then(
+      (r) => r.status === 200 ? true : r.status === 404 ? false : null, () => null) : Promise.resolve(null);
+    knownNames.set(host, pending);
+  }
+  return pending;
+}
 /** the name to dial for `host`: a synthetic literal stands for the name it was allotted to */
 export function dialName(host: string): string {
   const numeric = parseIpv4(host);

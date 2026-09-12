@@ -8,6 +8,7 @@ import { prepareSystemPackages } from "./scripts/system-packages";
 import { ensureFrameworkRes } from "./scripts/gen-framework-res";
 
 import { WebRelay, type WebRelayData } from "./src/shell/webrelay";
+import dns from "node:dns/promises";
 
 await Promise.all([prepareSystemPackages(), ensureFrameworkRes()]);
 const webRelay = new WebRelay();
@@ -165,6 +166,16 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
       const id = u.searchParams.get("id") ?? "";
       if (!/^[a-f0-9-]{36}$/.test(id) || req.headers.get("origin") !== u.origin) return new Response("bad bridge", { status: 403 });
       return srv.upgrade(req, { data: { kind: "webview", id } }) ? undefined : new Response("expected websocket", { status: 400 });
+    }
+    // Whether a name resolves: the guest's resolvers answer a synthetic address for every name
+    // (the relay dials by name), so this is how a name that does not exist fails as it would on a
+    // device, instead of every connection to it being refused.
+    if (u.pathname === "/dns") {
+      const name = u.searchParams.get("host") ?? "";
+      if (!/^[A-Za-z0-9.-]{1,253}$/.test(name)) return new Response("bad name", { status: 400 });
+      return dns.lookup(name, { all: true }).then(
+        (addresses) => Response.json({ addresses: addresses.map((a) => a.address) }),
+        (e: { code?: string }) => new Response(String(e.code ?? e), { status: e.code === "ENOTFOUND" || e.code === "ENODATA" ? 404 : 502 }));
     }
     if (u.pathname !== "/tcp") return new Response("not found", { status: 404 });
     const host = u.searchParams.get("host") ?? "";

@@ -13,7 +13,7 @@ import { stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
 import { jarray, strArray, dotName, utf8, i8, u8 } from "../abi";
 import { vfs, type JInputStream, type JOutputStream } from "./jio";
-import { Relay, syntheticAddress, syntheticHost, ipv4Text, type Ipv4 } from "../../shell/relay";
+import { Relay, syntheticAddress, syntheticHost, nameExists, ipv4Text, type Ipv4 } from "../../shell/relay";
 
 rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager", "javax/net/ssl/KeyManager",
   "javax/net/ssl/SSLSession", "java/nio/channels/ReadableByteChannel", "java/nio/channels/WritableByteChannel",
@@ -123,7 +123,10 @@ class JInetAddress extends JObj { host = ""; bytes: Ipv4 = [0, 0, 0, 0]; }
 class JInet4Address extends JInetAddress {}
 const inetAddr = (host: string | null) => {
   const name = host === null || host === "" ? "localhost" : host;
-  return Object.assign(new JInet4Address(), { host: name, bytes: name === "localhost" ? [127, 0, 0, 1] as Ipv4 : syntheticAddress(name) });
+  const address = () => Object.assign(new JInet4Address(), { host: name, bytes: name === "localhost" ? [127, 0, 0, 1] as Ipv4 : syntheticAddress(name) });
+  const exists = nameExists(name);
+  if (!(exists instanceof Promise)) return address();
+  return exists.then((known) => { if (known === false) throw rt.mkThrowable("java/net/UnknownHostException", "Unable to resolve host \"" + name + "\": No address associated with hostname"); return address(); });
 };
 const inetBytes = (bytes: Int8Array, host: string | null) => {
   if (bytes?.length !== 4) throw rt.mkThrowable("java/net/UnknownHostException", "addr is of illegal length");
@@ -136,7 +139,7 @@ rt.register({
   name: "java/net/InetAddress", ctor: JInetAddress,
   methods: {
     "static getByName(Ljava/lang/String;)Ljava/net/InetAddress;": inetAddr,
-    "static getAllByName(Ljava/lang/String;)[Ljava/net/InetAddress;": (h: string) => jarray([inetAddr(h)], "Ljava/net/InetAddress;"),
+    "static getAllByName(Ljava/lang/String;)[Ljava/net/InetAddress;": async (h: string) => jarray([await inetAddr(h)], "Ljava/net/InetAddress;"),
     "static getByAddress([B)Ljava/net/InetAddress;": (b: Int8Array) => inetBytes(b, null),
     "static getByAddress(Ljava/lang/String;[B)Ljava/net/InetAddress;": (h: string | null, b: Int8Array) => inetBytes(b, h),
     "static getLoopbackAddress()Ljava/net/InetAddress;": () => inetAddr("localhost"),
@@ -159,7 +162,7 @@ rt.register({
 // not ours. One loopback interface is what a device with no permission to enumerate sees, and
 // it keeps the callers that walk them (device-id fallbacks, MAC lookups) on their empty path.
 class JNetworkInterface extends JObj { iname = "lo"; }
-const loopback = () => inetAddr("localhost");
+const loopback = () => inetAddr("localhost") as JInetAddress;   // a literal name resolves synchronously
 rt.register({
   name: "java/net/NetworkInterface", ctor: JNetworkInterface,
   methods: {
@@ -187,8 +190,8 @@ rt.register({
     "static createUnresolved(Ljava/lang/String;I)Ljava/net/InetSocketAddress;": inetSock,
     "getHostName()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host; },
     "getPort()I": function (this: JInetSocketAddress) { return this.port; },
-    "getAddress()Ljava/net/InetAddress;": function (this: JInetSocketAddress) {
-      return this.addr ??= inetAddr(this.host);
+    "getAddress()Ljava/net/InetAddress;": async function (this: JInetSocketAddress) {
+      return this.addr ??= await inetAddr(this.host);
     },
     "isUnresolved()Z": () => 0,
     "toString()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host + ":" + this.port; },

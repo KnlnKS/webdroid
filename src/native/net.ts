@@ -1,6 +1,6 @@
 // Bionic IPv4 sockets: TCP over the browser WebSocket relay, plus process-local UDP.
 
-import { Relay, syntheticAddress, syntheticHost } from "../shell/relay";
+import { Relay, syntheticAddress, syntheticHost, nameExists } from "../shell/relay";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { hostLib, PTR, stp, type HostFn, type HostRet, ptr } from "./host";
@@ -108,7 +108,7 @@ const addrinfoLayout = () => PTR === 8
   ? { size: 48, canon: 24, addr: 32, next: 40 }
   : { size: 32, canon: 20, addr: 24, next: 28 };
 
-function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints: number, result: number): number {
+function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints: number, result: number): number | Promise<number> {
   if (!result) { fail(cpu, E.FAULT); return EAI_SYSTEM; }
   const flags = hints ? mem.ld32(hints) : 0;
   const family = hints ? mem.ld32(hints + 4) : AF_UNSPEC;
@@ -131,6 +131,11 @@ function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints:
 
   const resultType = socktype || (protocol === IPPROTO_UDP ? SOCK_DGRAM : SOCK_STREAM);
   const resultProtocol = protocol || (resultType === SOCK_DGRAM ? IPPROTO_UDP : IPPROTO_TCP);
+  // a name that does not exist is EAI_NONAME, as on a device; the answer for one that does is synthetic
+  const exists = numeric ? true : nameExists(node);
+  if (exists instanceof Promise) return exists.then((known) => known === false ? EAI_NONAME : answer());
+  return answer();
+  function answer(): number {
   const bytes = numeric ?? addressFor(node);
   const layout = addrinfoLayout();
   const sockaddr = layout.size;
@@ -157,6 +162,7 @@ function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints:
   stp(result, allocation);
   record(`resolved ${node} -> ${ipv4Text(bytes)} result=${mem.va(allocation).toString()}`);
   return 0;
+  }
 }
 
 function nativeFreeaddrinfo(address: number): void { if (address) mem.free(address); }

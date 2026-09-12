@@ -153,6 +153,7 @@ rt.register({
     "static getGlobalActionKeyTimeout()J": () => 500n,
     "getScaledEdgeSlop()I": () => Math.round(device.dp(12)),
     "getScaledWindowTouchSlop()I": () => device.touchSlop * 2,
+    "static getWindowTouchSlop()I": () => 16,
     "getScaledDoubleTapSlop()I": () => Math.round(device.dp(100)),
     "getScaledScrollBarSize()I": () => Math.round(device.dp(4)),
     ...stubs(0, "shouldShowMenuShortcutsWhenKeyboardPresent()Z", "getScaledOverscrollDistance()I",

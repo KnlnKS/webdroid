@@ -513,6 +513,12 @@ rt.register({
     // how AOSP's own StaticLayout finds paragraph boundaries, and how app code scans a Spanned
     // without flattening it
     "static indexOf(Ljava/lang/CharSequence;C)I": (s: unknown, ch: number) => spannedString(s).indexOf(String.fromCharCode(ch)),
+    "static lastIndexOf(Ljava/lang/CharSequence;C)I": (s: unknown, ch: number) => spannedString(s).lastIndexOf(String.fromCharCode(ch)),
+    // AOSP: the last occurrence at or after `start` and at or before `last`
+    "static lastIndexOf(Ljava/lang/CharSequence;CII)I": (s: unknown, ch: number, start: number, last: number) => {
+      const i = spannedString(s).lastIndexOf(String.fromCharCode(ch), last);
+      return i >= start ? i : -1;
+    },
     "static indexOf(Ljava/lang/CharSequence;CI)I": (s: unknown, ch: number, from: number) => spannedString(s).indexOf(String.fromCharCode(ch), from),
     "static indexOf(Ljava/lang/CharSequence;CII)I": (s: unknown, ch: number, from: number, to: number) => {
       const i = spannedString(s).slice(0, to).indexOf(String.fromCharCode(ch), from);
