@@ -31,7 +31,7 @@ function apkLibPath(name: string, owner: Runtime = rt): string | null {
 
 /** `link` loads and relocates without executing anything — no init array, no JNI_OnLoad. It is
  *  what an image whose machine code the tier cannot run yet can still be proved to do. */
-export async function loadModule(name: string, bytes?: Uint8Array, link = false, owner: Runtime = rt): Promise<Module> {
+export async function loadModule(name: string, bytes?: Uint8Array, link = false, owner: Runtime = rt, cpu: Cpu = cpuFor(curThread)): Promise<Module> {
   name = basename(name);
   const have = byName.get(name);
   if (have) { have.refs++; return have; }
@@ -47,19 +47,18 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false,
     modules.push(mod);
     byName.set(name, mod);
     // dependencies that are real modules in the apk load (and initialise) first; host libs need nothing
-    for (const n of mod.needed) if (!hostLibNames().includes(n) && !byName.has(n) && apkLibPath(n, owner)) await loadModule(n, undefined, link, owner);
+    for (const n of mod.needed) if (!hostLibNames().includes(n) && !byName.has(n) && apkLibPath(n, owner)) await loadModule(n, undefined, link, owner, cpu);
     relocate(resolveGlobal);
-    if (!link) await runInit(mod);
+    if (!link) await runInit(mod, cpu);
     return mod;
   })();
   inflight.set(name, q);
   try { return await q; } finally { inflight.delete(name); }
 }
 
-async function runInit(mod: Module): Promise<void> {
+async function runInit(mod: Module, cpu: Cpu): Promise<void> {
   if (mod.inited) return;
   mod.inited = true;
-  const cpu = cpuFor(curThread);
   if (mod.init) await cpu.call(mod.init);
   for (const f of mod.initArray) if (f && f !== 0xffffffff && f !== RET_SENTINEL) await cpu.call(f);
 }
@@ -112,7 +111,7 @@ export function dlInit(): void {
       const have = byName.get(name);
       if (have) { have.refs++; return handleOf({ mod: have }); }
       if (!apkLibPath(name, cpu.nativeRuntime ?? rt)) { setErr(`dlopen failed: library "${name}" not found`); return 0; }
-      try { return handleOf({ mod: await loadModule(name, undefined, false, cpu.nativeRuntime ?? rt) }); }
+      try { return handleOf({ mod: await loadModule(name, undefined, false, cpu.nativeRuntime ?? rt, cpu) }); }
       catch (e) { setErr(String((e as Error).message ?? e)); return 0; }
     },
     dlsym: (_cpu, a) => {

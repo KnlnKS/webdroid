@@ -1267,7 +1267,7 @@ async function dlopen(owner: Runtime, lib: string, abi: () => string | null, byt
   const pending = (async () => {
     const a = abi(), b = a && owner.loadNativeLib ? await bytes(a) : null;
     if (a && b && owner.loadNativeLib) {
-      try { return await owner.loadNativeLib(lib, b, a, owner); }
+      try { return await owner.loadNativeLib(lib, b, a, owner, thread); }
       catch (e) { needsNative(lib, a); throw e; }
     }
     if (a) needsNative(lib, a);
