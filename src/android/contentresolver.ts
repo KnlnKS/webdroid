@@ -13,6 +13,7 @@ import { newObj, defineException, vcall } from "../jvm/natives/jlang";
 import { mkCursor } from "./sqlite";
 import { newArrayList } from "../jvm/natives/jutil";
 import { getPM } from "./pm";
+import { locationTransport } from "./locationmanager";
 import { inMainJob, onMain } from "./mainloop";
 import { PROCESS_NAME } from "./os";
 
@@ -207,6 +208,19 @@ function androidId(): string {
   }
   return id;
 }
+// Secure.LOCATION_MODE and LOCATION_PROVIDERS_ALLOWED are the device's location switch: an app
+// that reads them before asking for fixes (ResyLocationManager.isLocationEnabled) sees the same
+// answer the LocationManager gives.
+function intSetting(table: string, name: string): number | null {
+  if (table === "secure" && name === "location_mode") return locationTransport.enabled() ? 3 : 0;
+  return null;
+}
+function stringSetting(table: string, name: string): string | null {
+  if (name === "android_id") return androidId();
+  if (name === "device_name") return "webdroid";
+  if (table === "secure" && name === "location_providers_allowed") return locationTransport.enabled() ? "gps,network" : "";
+  return null;
+}
 for (const [cls, table] of [["Global", "global"], ["Secure", "secure"], ["System", "system"]] as const) {
   rt.register({
     name: `android/provider/Settings$${cls}`, ctor: class extends JObj {},
@@ -220,16 +234,20 @@ for (const [cls, table] of [["Global", "global"], ["Secure", "secure"], ["System
       TEXT_SHOW_PASSWORD: "show_password",
       FONT_SCALE: "font_scale",
       ANDROID_ID: "android_id", DEVICE_NAME: "device_name",
+      LOCATION_MODE: "location_mode", LOCATION_PROVIDERS_ALLOWED: "location_providers_allowed",
+      LOCATION_MODE_OFF: 0, LOCATION_MODE_SENSORS_ONLY: 1, LOCATION_MODE_BATTERY_SAVING: 2, LOCATION_MODE_HIGH_ACCURACY: 3,
       CONTENT_URI: mkUri(`content://settings/${table}`),
     },
     methods: {
       "static getFloat(Landroid/content/ContentResolver;Ljava/lang/String;F)F": (_r: unknown, _n: string, d: number) => d,
-      "static getInt(Landroid/content/ContentResolver;Ljava/lang/String;I)I": (_r: unknown, _n: string, d: number) => d,
+      "static getInt(Landroid/content/ContentResolver;Ljava/lang/String;I)I": (_r: unknown, n: string, d: number) => intSetting(table, n) ?? d,
       "static getInt(Landroid/content/ContentResolver;Ljava/lang/String;)I": (_r: unknown, n: string) => {
-        throw rt.mkThrowable("android/provider/Settings$SettingNotFoundException", n);
+        const value = intSetting(table, n);
+        if (value === null) throw rt.mkThrowable("android/provider/Settings$SettingNotFoundException", n);
+        return value;
       },
       "static getLong(Landroid/content/ContentResolver;Ljava/lang/String;J)J": (_r: unknown, _n: string, d: bigint) => d,
-      "static getString(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;": (_r: unknown, n: string) => (n === "android_id" ? androidId() : n === "device_name" ? "webdroid" : null),
+      "static getString(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;": (_r: unknown, n: string) => stringSetting(table, n),
       "static getUriFor(Ljava/lang/String;)Landroid/net/Uri;": (n: string) => settingsUri(table, n),
       "static putFloat(Landroid/content/ContentResolver;Ljava/lang/String;F)Z": () => 0,
       "static putInt(Landroid/content/ContentResolver;Ljava/lang/String;I)Z": () => 0,
