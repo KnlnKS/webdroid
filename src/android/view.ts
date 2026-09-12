@@ -1,4 +1,5 @@
 import { perf } from "../perf";
+import { TV } from "./axml";
 import { setInvalidateHook, JRect, JCanvas, JMatrix, matMul, rotM, type JPoint } from "./graphics";
 import { mangleMethod, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, vcallMaybe, after, idHash } from "../jvm/natives/jlang";
@@ -488,7 +489,10 @@ async function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0) 
     AT.paddingStart, AT.paddingEnd, AT.tag, AT.contentDescription, AT.autoHandwritingEnabled,
   ], defStyleAttr, 0);
   const g = (i: number) => ta.vals[i];
-  if (g(0)) v.idNum = g(0)!.d;
+  // the id the reference names (getResourceId's answer): resolving @id/x lands on the entry's own
+  // false-boolean value, and an obfuscated type-name pool keeps resolveRefs from stopping short
+  const idv = g(0);
+  if (idv) v.idNum = idv.t === TV.REFERENCE || idv.t === TV.ATTRIBUTE ? idv.d : idv.r ?? idv.d;
   const bgv = g(1);
   if (bgv) {
     v.background = await loadDrawableRV(res, bgv, v.theme);
