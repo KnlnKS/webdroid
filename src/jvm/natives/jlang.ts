@@ -456,7 +456,8 @@ export function reportUncaught(e: unknown) {
   for (let c = je?.cause, depth = 0; c && depth < 8; c = c.cause, depth++) {
     causes += `\n  caused by ${(c.constructor as any)?.$i?.name ?? "?"}: ${c.msg ?? ""}`;
   }
-  console.error("[uncaught]", (je?.constructor as any)?.$i?.name ?? "?", (je?.msg ?? "") + causes, (je as any)?.jsStack ?? (e as any)?.stack ?? "");
+  const jframes = (je as { jframes?: string[] } | null)?.jframes;
+  console.error("[uncaught]", (je?.constructor as any)?.$i?.name ?? "?", (je?.msg ?? "") + causes + (jframes ? "\n  at " + jframes.join("\n  at ") : ""), (je as any)?.jsStack ?? (e as any)?.stack ?? "");
   rt.onUncaught?.(je);
 }
 

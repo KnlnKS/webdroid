@@ -72,10 +72,11 @@ const imageViewMethods: NativeSpec["methods"] = {
     invalidate();
   },
   "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JImageView, f: any) {
-    if (this.drawable) this.drawable.tint = f?.tint ?? null;
+    if (this.drawable) { this.drawable.tint = f?.tint ?? null; this.drawable.tintMatrix = f?.matrix ?? null; }
     invalidate();
   },
-  "clearColorFilter()V": function (this: JImageView) { if (this.drawable) this.drawable.tint = null; },
+  "clearColorFilter()V": function (this: JImageView) { if (this.drawable) { this.drawable.tint = null; this.drawable.tintMatrix = null; } },
+  "getImageTintList()Landroid/content/res/ColorStateList;": function (this: JImageView) { return this.tintCsl; },
   "setImageTintList(Landroid/content/res/ColorStateList;)V": function (this: JImageView, csl: JColorStateList | null) {
     this.tintCsl = csl;
     if (this.drawable && csl) this.drawable.tint = cslColor(csl, this.drawableState());

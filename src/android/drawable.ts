@@ -213,6 +213,8 @@ rt.register({
 
 export class JBitmapDrawable extends JDrawable {
   bmp: JBitmap | null = null;
+  /** the Paint getPaint() hands out: flags an app sets on it (filter, dither) have no effect on the 2D path */
+  bpaint: JPaint | null = null;
   paint(cv: JCanvas) {
     if (!this.bmp) return;
     const ctx = cv.ctx;
@@ -232,6 +234,7 @@ rt.register({
     "<init>(Landroid/content/res/Resources;Landroid/graphics/Bitmap;)V": function (this: JBitmapDrawable, r: unknown, b: JBitmap) { this.bmp = b; },
     "<init>(Landroid/graphics/Bitmap;)V": function (this: JBitmapDrawable, b: JBitmap) { this.bmp = b; },
     "getBitmap()Landroid/graphics/Bitmap;": function (this: JBitmapDrawable) { return this.bmp; },
+    "getPaint()Landroid/graphics/Paint;": function (this: JBitmapDrawable) { return this.bpaint ??= new JPaint(); },
     ...noops("<init>()V", "setAntiAlias(Z)V",
       "setTileModeXY(Landroid/graphics/Shader$TileMode;Landroid/graphics/Shader$TileMode;)V", "setGravity(I)V"),
   },

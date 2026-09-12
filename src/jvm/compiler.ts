@@ -286,7 +286,7 @@ class MethodCompiler {
       if (ins.name.startsWith("invoke") && !ins.name.startsWith("invoke-custom")) op.method = ins.b;
       ops.set(pc, op);
     }
-    return { R: this.R, D: this.R.dexLink(this.dex), S: this.info.superInfo?.ctor,
+    return { name: `${this.info.name}.${this.mname}${this.desc}`, R: this.R, D: this.R.dexLink(this.dex), S: this.info.superInfo?.ctor,
       regs: this.code.regs, first: this.code.regs - this.code.ins, instance: !this.isStatic,
       widths: parseMethodDesc(this.desc).params.map((p) => isWide(p) ? 2 : 1), ops,
       catches: this.code.tries.map((t) => ({ start: t.start, end: t.end, all: t.catchAllAddr,
