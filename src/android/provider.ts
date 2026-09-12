@@ -115,7 +115,7 @@ for (const [cls, path, extra] of [
 // ── MediaStore: the volume-scoped content URIs. content://media/<volume>/<table>
 const mediaUri = (vol: string, table: string) => mkUri(`content://media/${vol}/${table}`);
 for (const [cls, table] of [["Images$Media", "images/media"], ["Video$Media", "video/media"],
-  ["Audio$Media", "audio/media"], ["Files", "file"]] as const) {
+  ["Audio$Media", "audio/media"], ["Files", "file"], ["Downloads", "downloads"]] as const) {
   rt.register({
     name: "android/provider/MediaStore$" + cls, ctor: class extends JObj {},
     statics: {

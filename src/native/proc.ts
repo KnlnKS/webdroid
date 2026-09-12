@@ -56,6 +56,22 @@ function sigaction(a: ArgReader, wide: boolean): number {
   }
   return 0;
 }
+/** the raw rt_sigaction syscall: struct sigaction as the kernel lays it out (handler, flags, restorer,
+ *  mask), which is not bionic's, and a mask the size the caller states */
+function rtSigaction(a: ArgReader): number {
+  const sig = a.i(), act = a.p(), old = a.p(), prev = sigHandlers.get(sig);
+  const flagsAt = PTR, maskAt = 3 * PTR, size = maskAt + 8;
+  if (old) {
+    mem.memset(old, 0, size);
+    if (prev) { stp(old, prev.fn); mem.st32(old + flagsAt, prev.flags); mem.st64(old + maskAt, prev.mask ?? 0n); }
+  }
+  if (act) {
+    const fn = ldp(act);
+    if (fn > 1) sigHandlers.set(sig, { fn, flags: mem.ld32(act + flagsAt), mask: mem.ld64(act + maskAt) });
+    else sigHandlers.delete(sig);
+  }
+  return 0;
+}
 export function procInit(): void {
   const guard = mem.hostAlloc(8);
   mem.st32(guard, (Math.random() * 0x7fffffff) | 0x100); mem.st32(guard + 4, (Math.random() * 0x7fffffff) | 0);
@@ -96,6 +112,7 @@ export function procInit(): void {
     // bionic reserves the first two realtime signals for itself: SIGRTMIN is 34, SIGRTMAX 64
     __libc_current_sigrtmin: () => 34, __libc_current_sigrtmax: () => 64,
     sigaction: (_c, a) => sigaction(a, false),
+    rt_sigaction: (_c, a) => rtSigaction(a),
     // bionic's 64-bit-mask variant: the same record on LP64; on ILP32 the mask widens to 8
     // bytes at +4 and pushes sa_flags to +12
     sigaction64: (_c, a) => sigaction(a, true),

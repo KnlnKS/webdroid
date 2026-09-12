@@ -127,13 +127,16 @@ function jsonWrap(v: unknown): unknown {
 }
 const isObj = (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v);
 /** the typed get/opt family both containers answer, keyed by name on an object and by index on an array */
+/** the text a string getter answers for a stored value: Java's toString for an object (a nested
+ *  JSONObject/JSONArray prints its JSON), the literal for a primitive */
+const jsonText = (v: unknown): string | Promise<string> => typeof v === "object" && v !== null ? vcall(jsonWrap(v), "toString", "()Ljava/lang/String;") as string | Promise<string> : String(v);
 function accessors<S>(K: string, read: (self: S, k: never) => unknown): NonNullable<NativeSpec["methods"]> {
   const num = (self: S, k: never) => Number(read(self, k));
   const O = "Lorg/json/JSONObject;", A = "Lorg/json/JSONArray;";
   return {
     [`opt(${K})Ljava/lang/Object;`]: function (this: S, k: never) { return jsonWrap(read(this, k) ?? null); },
-    [`optString(${K})Ljava/lang/String;`]: function (this: S, k: never) { const v = read(this, k); return v === undefined ? "" : String(v); },
-    [`optString(${K}Ljava/lang/String;)Ljava/lang/String;`]: function (this: S, k: never, d: string) { const v = read(this, k); return v === undefined ? d : String(v); },
+    [`optString(${K})Ljava/lang/String;`]: function (this: S, k: never) { const v = read(this, k); return v === undefined ? "" : jsonText(v); },
+    [`optString(${K}Ljava/lang/String;)Ljava/lang/String;`]: function (this: S, k: never, d: string) { const v = read(this, k); return v === undefined ? d : jsonText(v); },
     [`getInt(${K})I`]: function (this: S, k: never) { return Math.trunc(num(this, k)) | 0; },
     [`optInt(${K})I`]: function (this: S, k: never) { return Math.trunc(Number(read(this, k) ?? 0)) | 0; },
     [`optInt(${K}I)I`]: function (this: S, k: never, d: number) { const v = num(this, k); return Number.isFinite(v) ? Math.trunc(v) | 0 : d; },
@@ -204,7 +207,7 @@ rt.register({
     ...accessors("Ljava/lang/String;", (self: JJSONObject, k: string) => self.o[k]),
     "getString(Ljava/lang/String;)Ljava/lang/String;": function (this: JJSONObject, k: string) {
       if (!(k in this.o)) throw rt.mkThrowable("org/json/JSONException", "No value for " + k);
-      return String(this.o[k]);
+      return jsonText(this.o[k]);
     },
     "getJSONObject(Ljava/lang/String;)Lorg/json/JSONObject;": function (this: JJSONObject, k: string) {
       if (!isObj(this.o[k])) throw rt.mkThrowable("org/json/JSONException", k + " is not an object");

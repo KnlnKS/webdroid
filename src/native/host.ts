@@ -85,16 +85,25 @@ class VaList implements ArgReader {
  *  from 8-byte stack slots; an FP one likewise from 16-byte slots at vr_top + vr_offs. The offsets
  *  are kept here, not written back: no caller reuses the list after a v*printf or Call*MethodV. */
 class VaList64 implements ArgReader {
-  private stack: number; private grTop: number; private vrTop: number; private grOffs: number; private vrOffs: number;
-  constructor(a: number) { this.stack = ldp(a); this.grTop = ldp(a + 8); this.vrTop = ldp(a + 16); this.grOffs = mem.ld32(a + 24); this.vrOffs = mem.ld32(a + 28); }
+  private stack = 0; private grTop = 0; private vrTop = 0; private grOffs = 0; private vrOffs = 0;
+  private loaded = false;
+  constructor(private readonly at: number) {}
+  // libc reads the list only when a conversion needs an argument: a caller with none may pass junk
+  private load(): void {
+    const a = this.at;
+    this.stack = ldp(a); this.grTop = ldp(a + 8); this.vrTop = ldp(a + 16); this.grOffs = mem.ld32(a + 24); this.vrOffs = mem.ld32(a + 28);
+    this.loaded = true;
+  }
   private slot(): number { const p = (this.stack + 7) & ~7; this.stack = p + 8; return p; }
   private gp(): number {
+    if (!this.loaded) this.load();
     if (this.grOffs >= 0) return this.slot();
     const p = this.grTop + this.grOffs;
     this.grOffs += 8;
     return this.grOffs > 0 ? this.slot() : p;
   }
   private fp(): number {
+    if (!this.loaded) this.load();
     if (this.vrOffs >= 0) return this.slot();
     const p = this.vrTop + this.vrOffs;
     this.vrOffs += 16;

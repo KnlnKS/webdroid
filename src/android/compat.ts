@@ -159,6 +159,7 @@ rt.register({
       "hasPermanentMenuKey()Z"),
     "static getScrollBarSize()I": () => 8,
     "static getDoubleTapTimeout()I": () => DOUBLE_TAP_TIMEOUT,
+    "static getJumpTapTimeout()I": () => 500,
     "static getTapTimeout()I": () => 100,
     "static getLongPressTimeout()I": () => LONG_PRESS_TIMEOUT,
     "static getPressedStateDuration()I": () => 64,

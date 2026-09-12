@@ -670,6 +670,7 @@ export function stdioInit(): void {
     chdir: () => 0,
     realpath: (_c, a) => { const p = vfs.norm(a.str()); let out = a.p(); if (!out) out = mem.malloc(4096); mem.putCstr(out, p, 4096); return ptr(out); },
     readlink: (cpu) => fail(cpu, E.INVAL),
+    readlinkat: (cpu) => fail(cpu, E.INVAL),
     symlink: (cpu) => fail(cpu, E.PERM), link: (cpu) => fail(cpu, E.PERM),
     utimes: () => 0, utime: () => 0,
 

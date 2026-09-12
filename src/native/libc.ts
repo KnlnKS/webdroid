@@ -192,11 +192,13 @@ const SYSCALL_NR64: Record<number, string> = {
   85: "timerfd_create", 86: "timerfd_settime", 87: "timerfd_gettime",
   25: "fcntl", 56: "openat", 57: "close", 62: "lseek", 63: "read", 64: "write", 80: "fstat", 101: "nanosleep", 113: "clock_gettime",
   129: "kill", 131: "tgkill", 169: "gettimeofday", 215: "munmap", 222: "mmap", 226: "mprotect",
+  43: "statfs", 48: "faccessat", 59: "pipe2", 78: "readlinkat", 79: "fstatat", 134: "rt_sigaction",
 };
 const SYSCALL_NR32: Record<number, string> = {
   350: "timerfd_create", 353: "timerfd_settime", 354: "timerfd_gettime",
   221: "fcntl", 322: "openat", 6: "close", 3: "read", 4: "write", 162: "nanosleep", 263: "clock_gettime", 37: "kill", 268: "tgkill",
   78: "gettimeofday", 91: "munmap", 125: "mprotect",
+  174: "rt_sigaction", 332: "readlinkat", 359: "pipe2",
 };
 /** the device's RAM as sysinfo and ActivityManager.getMemoryInfo both report it */
 const TOTAL_RAM = 4 * 2 ** 30, FREE_RAM = 2 * 2 ** 30;
