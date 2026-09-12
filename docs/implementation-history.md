@@ -1553,3 +1553,96 @@ seconds. Both have the same WindowExtensionsProvider gap and no errors. The larg
 wall-time slowdown therefore also occurs without the retention fix. This is a
 diagnostic comparison under load, not an isolated performance result. Files:
 `/tmp/webdroid-handler-retention-harmonic-{baseline,current}.{json,log}`.
+
+## Resy guest browsing at 8835eb4 — 2026-09-12
+
+Resy 1.18.0-687 now browses as a guest end to end: the nearby list with live slots and the
+MapLibre map (microG's maps module in the app process, markers and the user's location),
+keyword search from the action-bar pill through the keyboard's Search key, a venue page
+(photo, rating, description, need-to-know), back, and the location search. Every fix is a
+platform answer no device gives; none is Resy-specific.
+
+**A missing `Double.valueOf(String)` and a Bitmap that could not be parcelled.** `MarkerModel`
+parses coordinates through `Double.valueOf(String)`, which threw inside a LiveData observer.
+`BitmapDescriptorFactory.fromBitmap` writes the marker icon into a binder transaction and
+Bitmap claimed Parcelable without `writeToParcel` or a `CREATOR`; the wire form is Bitmap's
+own (flags, geometry, RGBA bytes), as on AOSP where only `CREATOR` reads it. `parcelCreator`
+moved to its own module so a Parcelable's owner can import it without a module cycle.
+
+**An activity launch waited forever on a pause that could not happen.** microG asked the user
+for its own location permission from `AskPermissionActivity` while Resy's main thread sat in
+a synchronous fused-location binder call; the broker waited for Resy to pause before showing
+the new activity, Resy could not pause until the binder call returned, and the call returned
+only after the permission was granted. AOSP bounds the previous activity's pause at
+PAUSE_TIMEOUT (500 ms) and its stop at STOP_TIMEOUT (11 s); the broker now does the same. The
+permission prompt itself then went away for the right reason: AOSP's
+DefaultPermissionGrantPolicy gives the privileged location provider its location permissions
+at boot, so provisioned system packages carry `defaultGrants` and `checkSelfPermission` honours
+install-time grants.
+
+**Dialogs, touches and layout.** `Dialog.show()` on a showing dialog only re-shows the decor
+(a DialogFragment hides in onStop and shows in onStart; the announcement sheet went INVISIBLE
+around the permission activity). A ViewGroup's OnTouchListener runs only after its children,
+as View.dispatchTouchEvent does when no child took the event — BottomSheetDialog's sheet
+installs one that swallows everything and ate its own close button. A RelativeLayout child
+whose rules fix both edges measures EXACTLY to the span between them, whatever its
+`layout_width`; the search pill measured to nothing.
+
+**Collections and animators.** `Object.clone` copied the JS object, so a cloned ArrayList
+shared its backing array; androidx.transition iterates a clone while listeners remove
+themselves, and the shared copy shrank under the loop (`Index: 14, Size: 14` at the end of
+every transition). Lists, maps and sets now clone with their own store. A ValueAnimator
+animates fraction zero when started (AOSP's start() does), and a one-value ObjectAnimator on
+a Property reads its start from `Property.get` rather than a named getter with an empty name
+— Fade's transition alpha animator threw inside start() from a pre-draw listener, so the
+search screen never signalled its animation complete.
+
+**The location chain.** Resy reads `Settings.Secure.LOCATION_MODE` before asking for fixes and
+treated the missing setting as location off; the setting now answers from the LocationManager's
+state, with `LOCATION_PROVIDERS_ALLOWED`. microG's location settings check derives gps/network
+presence from `PackageManager.hasSystemFeature`; the device declares `android.hardware.location`
+with its gps and network features (browser geolocation stands behind both providers), and the
+check answers SUCCESS instead of SETTINGS_CHANGE_UNAVAILABLE. With that, Resy's own
+`FusedLocationProviderClient.requestLocationUpdates` registers with microG and
+`ResyLocationManager$1.onLocationResult` receives fixes. The maps module's my-location marker
+then reached `Matrix.setRectToRect`/`ScaleToFit`, `Paint.setARGB`,
+`RelativeLayout.LayoutParams.alignWithParent`, `ActivityInfo.flags` and `BaseColumns`; the
+ScaleToFit resolution failure had aborted a RecyclerView layout mid-pass, after which it refused
+adapter updates ("Cannot call this method while RecyclerView is computing a layout").
+
+**The keyboard's Search key.** Resy's search field listens with an OnKeyListener for ENTER,
+not an editor-action listener. `TextView.onEditorAction` consults the listener, moves focus for
+NEXT/PREVIOUS, closes the keyboard for DONE and otherwise sends an ENTER key down/up to the
+view; the served InputConnection's `performEditorAction` was a stub. The e2e harness gained an
+`enter` action (imeAction on webdroid, `input keyevent 66` on the emulator) and
+`tests/e2e/flows/resy.ts`, a smoke flow (live content, no goldens) that renders 12/12 steps
+with nothing missing.
+
+**Also declared:** the Wi-Fi system service (the device's one network is Wi-Fi; the Places
+client caches a WifiManager), `Float.valueOf(String)`, SensorManager's per-sensor unregister
+and Handler overloads (a device without sensors answers them as the existing entries do).
+
+**What is upstream, with evidence.** The "Unable to configure device for notifications"
+alert and the Firebase installations 400s reproduce on a device (above). The Facebook
+`GraphResponse` 400 (`App button auto detection is disabled`) is Facebook's answer. The two
+`[W/ResyActivity] Error parsing JSON` lines are Branch's session callback: with no deep link,
+the referring params carry none of `action_text`/`content`/`heading`/`$canonical_url` that
+`lambda$onStart$4` reads with `getString`, and each miss is logged — a device without a
+referring link logs the same. The announcement bottom sheet ("Not a Gold Card Member?") is
+served by `/2/announcements` and requested again after every venue reload (`updateVenues` →
+`loadAnnouncements`); the API returned it repeatedly within a minute for the same uuid, so
+the flow closes it twice. The initial list queries `/4/find` at the saved city's default
+coordinates (40.764034, −73.9774937 for "ny") rather than the fused fix; Resy uses the fix for
+the map marker and `saveLocationLatLng`, and "Near Me" opens the location search rather than
+re-querying — both reproduce with the same code path on any device.
+
+**Observed, not changed.** microG's maps module loads into the app process with a
+PathClassLoader whose parent is microG's `FilteredClassLoader` over the app's loader, and its
+`GoogleApi`/`GoogleApiManager` calls resolve to Resy's bundled play-services copies exactly as
+that filter intends; the app-side traces here tag classes by dex to tell the copies apart.
+
+Gates at 8835eb4: typecheck; 670 tests / 20,693 assertions; Resy smoke-compiles 30,589
+classes with 0 method failures; `e2e --test resy` renders 12/12 with nothing missing; fitnotes
+41.54% content / 17.47% strict and mihon-onboarding 17.56% / 11.10%, identical to the
+starting commit run side by side on the same machine (a first run beside the unit and smoke
+gates spread to 41.93/17.56 and 17.56/13.46, which a second run did not reproduce).
