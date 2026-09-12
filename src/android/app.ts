@@ -585,6 +585,9 @@ for (const [name, methods, statics] of [
       }
     },
     "getActiveModemCount()I": () => 0,
+    // one radio-less manager answers for every subscription id
+    "createForSubscriptionId(I)Landroid/telephony/TelephonyManager;": function (this: JObj) { return this; },
+    "createForPhoneAccountHandle(Landroid/telecom/PhoneAccountHandle;)Landroid/telephony/TelephonyManager;": function (this: JObj) { return this; },
   }, {
     PHONE_TYPE_NONE: 0, PHONE_TYPE_GSM: 1, PHONE_TYPE_CDMA: 2, PHONE_TYPE_SIP: 3,
     NETWORK_TYPE_UNKNOWN: 0,

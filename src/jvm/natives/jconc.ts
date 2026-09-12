@@ -291,7 +291,11 @@ const executorMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "execute(Ljava/lang/Runnable;)V": function (this: JExecutor, r: unknown) {
     const f = submit(this, r, "run", "()V");
-    void f.promise!.then(() => { if (f.error) console.error("[executor]", (f.error as any).msg ?? f.error, (f.error as any).jsStack ?? ""); });
+    void f.promise!.then(() => {
+      if (!f.error) return;
+      const e = f.error as { msg?: string; jsStack?: string; jframes?: string[] };
+      console.error("[executor]", (e.msg ?? f.error) + (e.jframes ? "\n  at " + e.jframes.join("\n  at ") : ""), e.jsStack ?? "");
+    });
   },
   "submit(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown) {
     return submit(this, r, "run", "()V");
