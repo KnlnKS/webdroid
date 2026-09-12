@@ -101,10 +101,10 @@ export function setWebLayer(el: HTMLElement) { layer = el; }
 let frame = 1;
 const live = new Set<JWebView>();
 /** after each canvas draw pass: show the WebViews that pass painted, at their on-screen rect */
-export function webLayerSweep(top: number, covered: boolean): void {
+export function webLayerSweep(covered: boolean): void {
   for (const v of live) {
     if (!v.el) continue;
-    const show = v.drawnAt === frame && !covered && v.place(top);
+    const show = v.drawnAt === frame && !covered && v.place();
     if (show !== v.shown) { v.shown = show; v.el.hidden = !show; }
   }
   frame++;
@@ -344,7 +344,7 @@ export class JWebView extends JViewGroup {
     try { return JSON.stringify((w as unknown as { eval(s: string): unknown }).eval(js)) ?? "null"; } catch { return "null"; }
   }
   /** screen rect of the view: up the tree, clipped by each ancestor the way its dispatchDraw clips */
-  place(top: number): boolean {
+  place(): boolean {
     let l = 0, t = 0, r = this.width(), b = this.height(), v: JView = this;
     for (;;) {
       const p = v.parent;
@@ -354,7 +354,6 @@ export class JWebView extends JViewGroup {
       if (l < 0) l = 0; if (t < 0) t = 0; if (r > p.width()) r = p.width(); if (b > p.height()) b = p.height();
       v = p;
     }
-    t += top; b += top;
     if (l < 0) l = 0; if (t < 0) t = 0; if (r > device.width) r = device.width; if (b > device.height) b = device.height;
     if (r <= l || b <= t) return false;
     if (l !== this.x0 || t !== this.y0 || r !== this.x1 || b !== this.y1) {

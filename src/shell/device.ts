@@ -685,7 +685,7 @@ async function tick0() {
       present();
       perf.drawMs += performance.now() - t0;
       // WebView frames are DOM over the canvas: show the ones this pass drew, hide the rest
-      webLayerSweep(0, overlays.length > 0);
+      webLayerSweep(overlays.length > 0);
     }
   } catch (e) {
     console.error("[tick]", e);
@@ -747,13 +747,12 @@ async function dispatchPointer0(action: number, x: number, y: number, t: number)
   ev.eventTime = t;
   if (action === 0) downTime = ev.eventTime;
   ev.downTime = downTime;
-  const ly = y;
   try {
     if (action === 0) {
       for (let i = overlays.length - 1; i >= 0; i--) {
         const o = overlays[i];
         const v = o.view;
-        if (x >= v.left && x < v.right && ly >= v.top && ly < v.bottom) {
+        if (x >= v.left && x < v.right && y >= v.top && y < v.bottom) {
           touchTarget = { overlay: i };
           break;
         }
@@ -776,12 +775,12 @@ async function dispatchPointer0(action: number, x: number, y: number, t: number)
       const o = overlays[touchTarget.overlay];
       if (o) {
         ev.x = x - o.view.left;
-        ev.y = ly - o.view.top;
+        ev.y = y - o.view.top;
         await guardCall(o.view, M_dispatch, ev);
       }
     } else {
       ev.x = x;
-      ev.y = ly;
+      ev.y = y;
       await guardCall(decor, M_dispatch, ev);
     }
     if (action === 1 || action === 3) touchTarget = null;
