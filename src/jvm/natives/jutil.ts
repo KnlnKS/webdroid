@@ -808,8 +808,15 @@ const mapExtras: Record<string, NativeSpec["methods"]> = {
   "java/util/concurrent/ConcurrentHashMap": {
     "static newKeySet()Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": () => rt.make("java/util/concurrent/ConcurrentHashMap$KeySetView"),
     "static newKeySet(I)Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": () => rt.make("java/util/concurrent/ConcurrentHashMap$KeySetView"),
+    "contains(Ljava/lang/Object;)Z": hashtableContains,
   },
+  "java/util/Hashtable": { "contains(Ljava/lang/Object;)Z": hashtableContains },
 };
+/** the legacy Hashtable-era alias of containsValue, which rejects null */
+function hashtableContains(this: JMap, v: unknown) {
+  if (v === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  return vcall(this, "containsValue", "(Ljava/lang/Object;)Z", v);
+}
 for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/concurrent/ConcurrentHashMap",
   "java/util/WeakHashMap", "java/util/IdentityHashMap", "java/util/Hashtable", "java/util/EnumMap",
   "android/util/ArrayMap"]) {

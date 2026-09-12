@@ -5,7 +5,7 @@ import { device } from "../shell/config";
 import { newXmlPullParser } from "./xmlpull";
 import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
-import { JTypedValue, complexToFraction } from "./util";
+import { JTypedValue, complexToFraction, type JDisplayMetrics } from "./util";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 import { javaFormat, defineException, vcall } from "../jvm/natives/jlang";
 import { type JLocale, localeTag, localeDirection, usLocale } from "../jvm/natives/jvalues";
@@ -183,14 +183,19 @@ function configurationMetrics(resources: JResources): void {
   resources.host.dm.density = config.densityDpi / 160;
   resources.host.dm.scaledDensity = resources.host.dm.density * config.fontScale;
 }
-export function scopedResources(source: Resources, config: JConfiguration): JResources {
-  if (!config) throw rt.mkThrowable("java/lang/IllegalArgumentException", "overrideConfiguration must not be null");
-  const r = new JResources();
+/** give `r` its own configuration and selection scope over `source`'s tables, `config` applied
+ *  as a delta the way Configuration.updateFrom does */
+function scopeResources(r: JResources, source: Resources, config: JConfiguration): void {
   r.config = Object.assign(new JConfiguration(), source.jobj instanceof JResources ? source.jobj.config ?? theConfig : theConfig);
   mergeConfiguration(r.config, config);
   r.host = source.scoped(configurationQualifiers(r.config));
   r.host.jobj = r;
   configurationMetrics(r);
+}
+export function scopedResources(source: Resources, config: JConfiguration): JResources {
+  if (!config) throw rt.mkThrowable("java/lang/IllegalArgumentException", "overrideConfiguration must not be null");
+  const r = new JResources();
+  scopeResources(r, source, config);
   return r;
 }
 export const deviceConfiguration = (): JConfiguration => theConfig;
@@ -265,6 +270,13 @@ rt.register({
   },
 });
 
+/** Resources(AssetManager, DisplayMetrics, Configuration): a ResourcesImpl of its own over the
+ *  asset tables, which is what an app's Resources subclass wraps around the package's */
+function initResources(this: JResources, assets: JAssetManager | null, metrics: JDisplayMetrics | null, config: JConfiguration | null): void {
+  if (!assets) throw rt.mkThrowable("java/lang/NullPointerException", "assets");
+  scopeResources(this, assets.host, config ?? new JConfiguration());
+  if (metrics) { Object.assign(this.host.dm, metrics); configurationMetrics(this); }
+}
 const getString = function (this: JResources, id: number) { return resString(this.host, id); };
 const getColor = function (this: JResources, id: number) { return rvColor(this.host, this.host.ref(id), 0); };
 const resMethods: NativeSpec["methods"] = {
@@ -380,6 +392,7 @@ const resMethods: NativeSpec["methods"] = {
     return t;
   },
   "static getSystem()Landroid/content/res/Resources;": () => systemRes,
+  "<init>(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V": initResources,
 };
 rt.register({ name: "android/content/res/Resources", ctor: JResources, methods: resMethods });
 

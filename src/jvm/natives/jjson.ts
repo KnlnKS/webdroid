@@ -176,6 +176,9 @@ rt.register({
       if (!isObj(value)) throw rt.mkThrowable("org/json/JSONException", "Value is not an object");
       this.o = value as Record<string, unknown>;
     },
+    "<init>(Lorg/json/JSONObject;[Ljava/lang/String;)V": function (this: JJSONObject, src: JJSONObject, names: string[]) {
+      for (const k of names) if (k in src.o) this.o[k] = src.o[k];
+    },
     "<init>(Ljava/util/Map;)V": async function (this: JJSONObject, m: unknown) {
       for (const e of await toJsArray(await vcall(m, "entrySet", "()Ljava/util/Set;"))) {
         this.o[String(await vcall(e, "getKey", "()Ljava/lang/Object;"))] = jsonUnwrap(await vcall(e, "getValue", "()Ljava/lang/Object;"));

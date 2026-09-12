@@ -205,6 +205,7 @@ rt.register({ name: "android/os/HandlerThread", ctor: class extends JThread { jl
     "<init>(Ljava/lang/String;I)V": function (this: any, n: string) { this.jname = n; this.jlooper.thread = this; this.looper = this.jlooper; },
     "start()V": function (this: any) { this.alive = 1; },
     "getLooper()Landroid/os/Looper;": function (this: any) { return this.jlooper; },
+    "getThreadId()I": function (this: JThread) { return this.alive ? threadTid(this) : -1; },
     "quit()Z": () => 1, "quitSafely()Z": () => 1,
     "run()V": function () {},
   },
@@ -275,6 +276,15 @@ rt.register({ name: "android/os/Build$VERSION_CODES", ctor: class extends JObj {
 export let PROCESS_PID = 1000, PROCESS_UID = 10001;
 export let PROCESS_NAME = "";
 export function setProcessIdentity(pid: number, uid: number): void { PROCESS_PID = pid; PROCESS_UID = uid; }
+const threadTids = new WeakMap<JThread, number>();
+let tidSeq = 0;
+/** the kernel thread id of a Java thread: the main thread's is the pid, as on a device */
+export function threadTid(t: JThread): number {
+  if (t === mainThread) return PROCESS_PID;
+  let tid = threadTids.get(t);
+  if (tid === undefined) threadTids.set(t, (tid = PROCESS_PID + ++tidSeq));
+  return tid;
+}
 export function setProcessName(name: string): void { PROCESS_NAME = name; }
 rt.register({
   name: "android/os/Process", ctor: class extends JObj {},
@@ -287,7 +297,7 @@ rt.register({
     // moment here than the page's own timeOrigin
     "static getStartUptimeMillis()J": () => 0n,
     "static getElapsedCpuTime()J": () => BigInt(Math.round(performance.now())),
-    "static myTid()I": () => 1000,
+    "static myTid()I": () => threadTid(curThread),
     "static myUid()I": () => PROCESS_UID,
     "static getGidForName(Ljava/lang/String;)I": (name: string | null) => {
       if (name === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
@@ -850,7 +860,7 @@ rt.register({
       if (n.fd < 0) throw errno("dup", 9);
       return n;
     },
-    "static gettid()I": () => PROCESS_PID,
+    "static gettid()I": () => threadTid(curThread),
     "static getpid()I": () => PROCESS_PID,
     "static stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {
       const st = vfs.stat(path);
