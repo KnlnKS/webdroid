@@ -1553,6 +1553,8 @@ export function detachView(parent: JViewGroup, child: JView, request = true) {
 export async function dispatchAttached(v: JView) {
   if (v.attached) return;
   await attachTree(v);
+  // a root is a window's view: ViewRootImpl reports the window attached once its tree is
+  if (!v.parent) await vtoMap.get(v)?.dispatchWindowAttached(true);
   // Queued attachment may follow an unattached measure and an empty hosted display list.
   requestLayout(v);
   invalidate(v);
@@ -1589,6 +1591,7 @@ export async function dispatchDetached(v: JView) {
   if (v instanceof JViewGroup) for (const c of [...v.children]) await dispatchDetached(c);
   await guardMaybe(v, M_onDetached);
   for (const l of [...v.attachLs]) await vcall(l, "onViewDetachedFromWindow", "(Landroid/view/View;)V", v);
+  if (!v.parent) await vtoMap.get(v)?.dispatchWindowAttached(false);
 }
 
 /** AOSP getChildMeasureSpec */
@@ -1878,7 +1881,9 @@ class JVTO extends JObj {
   drawLs: unknown[] = [];
   scrollLs: unknown[] = [];
   focusLs: unknown[] = [];
+  windowAttachLs: unknown[] = [];
   focused: JView | null = null;
+  dispatchWindowAttached(attached: boolean) { return fanOut(this.windowAttachLs, attached ? "onWindowAttached" : "onWindowDetached", "()V"); }
   dispatchFocusChanged(old: JView | null, now: JView | null) { return fanOut(this.focusLs, "onGlobalFocusChanged", "(Landroid/view/View;Landroid/view/View;)V", old, now); }
   dispatchGlobalLayout() { return fanOut(this.globalLayoutLs, "onGlobalLayout", "()V"); }
   dispatchPreDraw() { return fanOut(this.preDrawLs, "onPreDraw", "()Z"); }
@@ -1892,7 +1897,7 @@ async function fanOut(ls: unknown[], name: string, desc: string, ...args: unknow
   }
 }
 const vtoMap = new WeakMap<JView, JVTO>();
-const VTO_LISTS = ["globalLayoutLs", "preDrawLs", "drawLs", "scrollLs", "focusLs"] as const;
+const VTO_LISTS = ["globalLayoutLs", "preDrawLs", "drawLs", "scrollLs", "focusLs", "windowAttachLs"] as const;
 /**
  * AOSP's floating ViewTreeObserver: a listener registered before the view was attached goes on
  * the detached subtree's own observer, and dispatchAttachedToWindow merges it into the window's.
@@ -1940,7 +1945,7 @@ rt.register({
 // AndroidComposeView registers OnPreDrawListener/OnScrollChangedListener itself, for one).
 for (const n of [
   "OnGlobalLayoutListener", "OnScrollChangedListener", "OnTouchModeChangeListener",
-  "OnPreDrawListener", "OnWindowFocusChangeListener", "OnDrawListener", "OnGlobalFocusChangeListener",
+  "OnPreDrawListener", "OnWindowFocusChangeListener", "OnDrawListener", "OnGlobalFocusChangeListener", "OnWindowAttachListener",
 ]) rt.register({ name: "android/view/ViewTreeObserver$" + n, ctor: class extends JObj {} });
 rt.register({
   name: "android/view/ViewTreeObserver", ctor: JVTO,
@@ -1952,7 +1957,7 @@ rt.register({
     "addOnTouchModeChangeListener(Landroid/view/ViewTreeObserver$OnTouchModeChangeListener;)V": () => {},
     "removeOnTouchModeChangeListener(Landroid/view/ViewTreeObserver$OnTouchModeChangeListener;)V": () => {},
     ...Object.fromEntries(([["focusLs", "GlobalFocusChange"], ["scrollLs", "ScrollChanged"], ["globalLayoutLs", "GlobalLayout"],
-      ["preDrawLs", "PreDraw"], ["drawLs", "Draw"]] as const).flatMap(([k, n]) => {
+      ["preDrawLs", "PreDraw"], ["drawLs", "Draw"], ["windowAttachLs", "WindowAttach"]] as const).flatMap(([k, n]) => {
       const t = `On${n}Listener(Landroid/view/ViewTreeObserver$On${n}Listener;)V`;
       return [[`add${t}`, function (this: JVTO, l: unknown) { this[k].push(l); }], [`remove${t}`, function (this: JVTO, l: unknown) { removeFrom(this[k], l); }]];
     })),

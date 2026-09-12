@@ -383,6 +383,10 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       "<init>(ILjava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, core: number) { initScheduled.call(this, core); },
       "<init>(ILjava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": initScheduled,
       "allowCoreThreadTimeOut(Z)V": function () {},
+      "getPoolSize()I": function (this: JExecutor) { return this.workers.length; },
+      "getActiveCount()I": function (this: JExecutor) { return this.workers.filter((w) => w.busy).length; },
+      "getCorePoolSize()I": function (this: JExecutor) { return this.limit; },
+      "getMaximumPoolSize()I": function (this: JExecutor) { return this.limit; },
       "setKeepAliveTime(JLjava/util/concurrent/TimeUnit;)V": function () {},
       "getQueue()Ljava/util/concurrent/BlockingQueue;": function (this: JExecutor) {
         if (!this.queue) { const queue = rt.make("java/util/concurrent/LinkedBlockingQueue") as JList; queue.a = this.tasks.map((t) => t.task); this.queue = queue; }

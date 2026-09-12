@@ -96,6 +96,22 @@ rt.register({
   },
 });
 
+// ── ContactsContract: the contract's URIs, which image loaders and pickers build requests from
+// before ever querying (the provider itself is absent: a query answers no rows)
+const contactsUri = (path: string) => mkUri(`content://com.android.contacts/${path}`);
+rt.register({
+  name: "android/provider/ContactsContract", ctor: class extends JObj {},
+  statics: { AUTHORITY: "com.android.contacts", AUTHORITY_URI: mkUri("content://com.android.contacts") },
+});
+for (const [cls, path, extra] of [
+  ["Contacts", "contacts", { CONTENT_LOOKUP_URI: contactsUri("contacts/lookup"), CONTENT_TYPE: "vnd.android.cursor.dir/contact", CONTENT_ITEM_TYPE: "vnd.android.cursor.item/contact" }],
+  ["RawContacts", "raw_contacts", {}], ["Data", "data", {}], ["Groups", "groups", {}],
+  ["CommonDataKinds$Phone", "data/phones", { CONTENT_TYPE: "vnd.android.cursor.dir/phone_v2", CONTENT_ITEM_TYPE: "vnd.android.cursor.item/phone_v2" }],
+  ["CommonDataKinds$Email", "data/emails", { CONTENT_TYPE: "vnd.android.cursor.dir/email_v2", CONTENT_ITEM_TYPE: "vnd.android.cursor.item/email_v2" }],
+] as const) {
+  rt.register({ name: "android/provider/ContactsContract$" + cls, ctor: class extends JObj {}, statics: { CONTENT_URI: contactsUri(path), ...extra } });
+}
+
 // ── MediaStore: the volume-scoped content URIs. content://media/<volume>/<table>
 const mediaUri = (vol: string, table: string) => mkUri(`content://media/${vol}/${table}`);
 for (const [cls, table] of [["Images$Media", "images/media"], ["Video$Media", "video/media"],

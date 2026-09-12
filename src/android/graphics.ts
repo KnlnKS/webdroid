@@ -74,6 +74,14 @@ const rectMethods = (F: boolean): NativeSpec["methods"] => ({
     if (l < r && t < b) { this.left = l; this.top = t; this.right = r; this.bottom = b; return 1; }
     return 0;
   },
+  [`setIntersect(${F ? "Landroid/graphics/RectF;Landroid/graphics/RectF;" : "Landroid/graphics/Rect;Landroid/graphics/Rect;"})Z`]: function (this: JRect, a: JRect, b: JRect) {
+    if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) {
+      this.left = Math.max(a.left, b.left); this.top = Math.max(a.top, b.top);
+      this.right = Math.min(a.right, b.right); this.bottom = Math.min(a.bottom, b.bottom);
+      return 1;
+    }
+    return 0;
+  },
   [`union(${F ? "Landroid/graphics/RectF;" : "Landroid/graphics/Rect;"})V`]: function (this: JRect, o: JRect) {
     this.left = Math.min(this.left, o.left); this.top = Math.min(this.top, o.top);
     this.right = Math.max(this.right, o.right); this.bottom = Math.max(this.bottom, o.bottom);
