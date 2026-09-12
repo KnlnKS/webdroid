@@ -251,11 +251,23 @@ liveness). Forcing the interpreter over that one block makes the handshake succe
 reproduced in an isolated tier-parity harness: BoringSSL's `bn_mul_mont` extracted verbatim and run
 with a Montgomery oracle agrees between interpreter and JIT both when the region is entered at the
 function start and when a snapshot is used to enter a region at the outer-loop head, across 24
-random P-384-sized moduli. The browser's failing region therefore has a different shape (entry pc,
-included block set, or MAX_BLOCKS truncation) than any reconstructed offline. The fix is a
-core/jit.zig change in the A64 deferred-flag liveness across a back-edge; it is left unmade pending
-a reproduction, since a core edit without tier-parity proof would risk every app. Estimated size
-once reproduced: a few lines in the flag `lin`/`settle` path plus the parity fixture.
+random P-384-sized moduli, because the browser's region has a shape no in-body entry produces.
+Replaying `discover` over the real page (region formation is a pure function of the page bytes and
+the entry pc) showed it: the hot entry is bn_mul_mont's entry 0x4c8140, the `bl` target, whose
+dispatcher `b.eq`s into bn_mul4x_mont (0x4c8380) and bn_sqr8x_mont (0x4c8d60) on the same page.
+Those blocks spend the 320-instruction region budget, so the generic body's 0x4c8268 and 0x4c82b0
+were registered as successors of the block 0x4c81f0–0x4c8264 (which runs straight through the
+`cmp x6,#1` to `cbz x21`) but never scanned: `n = 0`, no successors, `exits` false. The flag
+liveness gave such a block `lin = 0`, so the branch settled nothing into it, yet entering it
+leaves the region — the exit spilled the carry of the earlier `adcs x13,x13,x7` and the
+interpreter's `adc x13,x13,xzr` consumed it. A fallback range covering the `cmp` executes it in
+the interpreter and reloads the flag locals eagerly, which is why the bisection "fixed" it. Not a
+back-edge problem: any flag-setting branch into a budget-starved block, on either ISA. Fix:
+`discover` marks the unscanned blocks as region exits, so the dataflow settles every flag on the
+edges into them. `a64carry.test.ts` reproduces the shape with an in-page sibling block that spends
+the budget (clang encodings) and disagreed between tiers before the fix (JIT x3=5, cpsr=0 against
+the interpreter's 6 and Z|C); afterwards the Lichess socket connects once and stays up under the
+JIT with idle guest execution at the interpreter's level (65 K instr/s over 30 s, no reconnects).
 - The main corpus rendered 12/13 APKs; TikTok failed with Keva/executor-queue gaps. Boot frames
   are not successful app flows. An isolated LP64 MAP_FIXED reservation test also failed on
   starting main with an unmap overflow; compare before assigning it to microG.
