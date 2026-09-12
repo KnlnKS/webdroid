@@ -592,6 +592,23 @@ for (const [name, methods, statics] of [
     CALL_STATE_IDLE: 0, CALL_STATE_RINGING: 1, CALL_STATE_OFFHOOK: 2,
     DATA_DISCONNECTED: 0,
   }],
+  // no SIM: no active subscriptions, and every default id is INVALID_SUBSCRIPTION_ID
+  ["android/telephony/SubscriptionManager", {
+    "static from(Landroid/content/Context;)Landroid/telephony/SubscriptionManager;": (ctx: unknown) => systemService(ctx as Parameters<typeof systemService>[0], "telephony_subscription_service"),
+    "getActiveSubscriptionInfoList()Ljava/util/List;": () => null,
+    "getActiveSubscriptionInfoCount()I": () => 0,
+    "getActiveSubscriptionInfoCountMax()I": () => 1,
+    "getActiveSubscriptionInfo(I)Landroid/telephony/SubscriptionInfo;": () => null,
+    "getActiveSubscriptionInfoForSimSlotIndex(I)Landroid/telephony/SubscriptionInfo;": () => null,
+    "static getDefaultSubscriptionId()I": () => -1,
+    "static getDefaultDataSubscriptionId()I": () => -1,
+    "static getDefaultVoiceSubscriptionId()I": () => -1,
+    "static getDefaultSmsSubscriptionId()I": () => -1,
+    "static isValidSubscriptionId(I)Z": (id: number) => id >= 0 ? 1 : 0,
+    ...noops("addOnSubscriptionsChangedListener(Landroid/telephony/SubscriptionManager$OnSubscriptionsChangedListener;)V",
+      "addOnSubscriptionsChangedListener(Ljava/util/concurrent/Executor;Landroid/telephony/SubscriptionManager$OnSubscriptionsChangedListener;)V",
+      "removeOnSubscriptionsChangedListener(Landroid/telephony/SubscriptionManager$OnSubscriptionsChangedListener;)V"),
+  }, { INVALID_SUBSCRIPTION_ID: -1, DEFAULT_SUBSCRIPTION_ID: 2147483647, INVALID_SIM_SLOT_INDEX: -1 }],
   ["android/os/ext/SdkExtensions", {
     "static getExtensionVersion(I)I": () => 0,
   }],

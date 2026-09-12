@@ -246,7 +246,11 @@ rt.register({
     },
     "toString()Ljava/lang/String;": function (this: JShortcutIconResource) { return this.resourceName; },
     "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JShortcutIconResource, p: JParcel) { writeString(p, this.packageName); writeString(p, this.resourceName); },
   },
+  statics: { get CREATOR() { return parcelCreator("android/content/Intent$ShortcutIconResource", async (p) => {
+    const r = new JShortcutIconResource(); r.packageName = readString(p) ?? ""; r.resourceName = readString(p) ?? ""; return r;
+  }); } },
 });
 rt.register({
   name: "android/content/Intent", ctor: JIntent, ifaces: ["android/os/Parcelable", "java/lang/Cloneable"],

@@ -1959,6 +1959,12 @@ rt.register({
     "removeGlobalOnLayoutListener(Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;)V": function (this: JVTO, l: unknown) { removeFrom(this.globalLayoutLs, l); },
     "isAlive()Z": () => 1,
     "dispatchOnGlobalLayout()V": function (this: JVTO) { return this.dispatchGlobalLayout(); },
+    // true when any listener asked for the draw to be cancelled, as ViewTreeObserver reports it
+    "dispatchOnPreDraw()Z": async function (this: JVTO) {
+      let cancelled = 0;
+      for (const l of [...this.preDrawLs]) if (!(await vcall(l, "onPreDraw", "()Z"))) cancelled = 1;
+      return cancelled;
+    },
   },
 });
 /** layout pass: OnGlobalLayoutListener fires when the tree's layout actually ran */

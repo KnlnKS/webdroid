@@ -2182,3 +2182,24 @@ rt.register({
     },
   },
 });
+
+// java.lang.ProcessBuilder: there is no shell to fork, so start() fails the way Runtime.exec does
+class JProcessBuilder extends JObj { cmd: string[] = []; dir: unknown = null; redirect = false; }
+rt.register({
+  name: "java/lang/ProcessBuilder", ctor: JProcessBuilder,
+  methods: {
+    "<init>([Ljava/lang/String;)V": function (this: JProcessBuilder, cmd: string[]) { this.cmd = [...cmd]; },
+    "<init>(Ljava/util/List;)V": async function (this: JProcessBuilder, cmd: unknown) { this.cmd = (await toJsArray(cmd)) as string[]; },
+    "command([Ljava/lang/String;)Ljava/lang/ProcessBuilder;": function (this: JProcessBuilder, cmd: string[]) { this.cmd = [...cmd]; return this; },
+    "command(Ljava/util/List;)Ljava/lang/ProcessBuilder;": async function (this: JProcessBuilder, cmd: unknown) { this.cmd = (await toJsArray(cmd)) as string[]; return this; },
+    "command()Ljava/util/List;": function (this: JProcessBuilder) { return newArrayList(this.cmd.slice()); },
+    "redirectErrorStream(Z)Ljava/lang/ProcessBuilder;": function (this: JProcessBuilder, on: number) { this.redirect = !!on; return this; },
+    "redirectErrorStream()Z": function (this: JProcessBuilder) { return this.redirect ? 1 : 0; },
+    "directory(Ljava/io/File;)Ljava/lang/ProcessBuilder;": function (this: JProcessBuilder, d: unknown) { this.dir = d; return this; },
+    "environment()Ljava/util/Map;": () => rt.make("java/util/HashMap"),
+    "start()Ljava/lang/Process;": function (this: JProcessBuilder) {
+      throw rt.mkThrowable("java/io/IOException", `Cannot run program "${this.cmd[0] ?? ""}": error=2, No such file or directory`);
+    },
+  },
+});
+

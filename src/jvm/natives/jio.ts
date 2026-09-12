@@ -1033,6 +1033,7 @@ rt.register({
   name: "java/io/BufferedWriter", ctor: class extends JWriter { target: JWriter | null = null; }, sup: "java/io/Writer",
   methods: {
     "<init>(Ljava/io/Writer;)V": function (this: any, w: JWriter) { this.target = w; },
+    "<init>(Ljava/io/Writer;I)V": function (this: any, w: JWriter) { this.target = w; },
     "write(Ljava/lang/String;)V": function (this: any, str: string) { return wr(this.target, str); },
     "newLine()V": function (this: any) { return wr(this.target, "\n"); },
     "flush()V": function (this: any) { return vcallMaybe(this.target, "flush", "()V"); },

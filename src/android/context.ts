@@ -116,6 +116,7 @@ const SERVICE_CLASS: Record<string, string> = {
   dropbox: "android/os/DropBoxManager",
   storage: "android/os/storage/StorageManager",
   wifi: "android/net/wifi/WifiManager",
+  telephony_subscription_service: "android/telephony/SubscriptionManager",
 };
 const SERVICE_NAME = new Map(Object.entries(SERVICE_CLASS).map(([n, c]) => [c, n]));
 SERVICE_NAME.set("android/view/WindowManager", "window");

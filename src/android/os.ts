@@ -232,6 +232,7 @@ rt.register({ name: "android/os/HandlerThread", ctor: class extends JThread { jl
   },
 });
 
+const RUNTIME_STATS = ["art.gc.gc-count", "art.gc.gc-time", "art.gc.bytes-allocated", "art.gc.bytes-freed", "art.gc.blocking-gc-count", "art.gc.blocking-gc-time", "art.gc.gc-count-rate-histogram", "art.gc.blocking-gc-count-rate-histogram"];
 // ── SystemClock / Build / Process / Trace / Debug / StrictMode
 class JSystemClock extends JObj {}
 rt.register({
@@ -359,6 +360,13 @@ rt.register({
     "static getNativeHeapSize()J": () => BigInt(((performance as any).memory?.totalJSHeapSize ?? 0) | 0),
     ...stubs(0, "static isDebuggerConnected()Z", "static waitingForDebugger()Z"),
     "static threadCpuTimeNanos()J": () => BigInt(Math.round(performance.now() * 1e6)),
+    // ART's runtime counters: nothing here collects, blocks or compacts, so every stat is zero
+    "static getRuntimeStat(Ljava/lang/String;)Ljava/lang/String;": (name: string) => RUNTIME_STATS.includes(name) ? "0" : null,
+    "static getRuntimeStats()Ljava/util/Map;": async () => {
+      const m = await newObj("java/util/HashMap");
+      for (const k of RUNTIME_STATS) await vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, "0");
+      return m;
+    },
     // the JS heap is the nearest thing to this process's dalvik footprint; nothing here is shared
     "static getMemoryInfo(Landroid/os/Debug$MemoryInfo;)V": (info: { dalvikPss: number; dalvikPrivateDirty: number } | null) => {
       if (!info) throw rt.mkThrowable("java/lang/NullPointerException", "memoryInfo");

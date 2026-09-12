@@ -113,6 +113,7 @@ rt.register({
       invalidate();
     },
     "getStatusBarColor()I": () => appHost?.statusBarColor ?? -16777216,
+    "getNavigationBarColor()I": () => appHost?.navBarColor ?? -16777216,
     "setNavigationBarColor(I)V": function (this: JWindow, c: number) { if (appHost) appHost.navBarColor = c; },
     "setNavigationBarDividerColor(I)V": function (this: JWindow, c: number) { this.navBarDividerColor = c; invalidate(); },
     "getNavigationBarDividerColor()I": function (this: JWindow) { return this.navBarDividerColor; },
