@@ -1599,3 +1599,47 @@ seconds. Both have the same WindowExtensionsProvider gap and no errors. The larg
 wall-time slowdown therefore also occurs without the retention fix. This is a
 diagnostic comparison under load, not an isolated performance result. Files:
 `/tmp/webdroid-handler-retention-harmonic-{baseline,current}.{json,log}`.
+
+### 2026-09-12 — Reddit logged-out launch
+
+Reddit (2026.36.0, `Reddit.xapk`) threw a `bindService(Intent, int, Executor,
+ServiceConnection)` NoSuchMethodError and a Moshi StartupException ("Platform class
+android.net.Uri requires explicit JsonAdapter") at boot, then stayed white. Mechanisms, each
+verified by re-booting and observing for at least 45 s:
+
+- `bindService` lacked the API 29 Executor overload (`f8eaaf5`); callbacks now go through
+  the given Executor instead of the main queue.
+- `HashSet` had no `equals`/`hashCode`, so `Collections.emptySet()` never equalled Kotlin's
+  `EmptySet` and Moshi's adapter-method matcher rejected every registered `@ToJson` adapter
+  whose qualifier set was empty (`0c643e1`).
+- `KeyFactory.getInstance(String, Provider)` and the whole `java.security.Signature` class
+  were missing (`239d202`, `6ed8c23`). Tink's `RsaSsaPkcs1VerifyJce` inside reCAPTCHA's
+  coroutine hit the NoClassDefFoundError, which `runCatching` swallowed, so no error surfaced.
+- The white screen was Reddit's keep-on-screen splash predicate never clearing: the launch
+  delegate's lifecycle callback was never registered because `e()` threw before it —
+  `addAccountExplicitly` for the guest account refused with SecurityException, because the
+  authenticator's `accountType` resolved to a resource id string. A first-parent bisection
+  (export of each commit into the scratchpad, 40 s observation for the intro text) found
+  `e3c4ded` first bad; the fix takes the literal only when the attribute is a string
+  (`cabddab`).
+- The API 16 `startIntentSenderForResult` overload was missing (`98c1df6`). Credential
+  Manager's HiddenActivity starts microG's One Tap PendingIntent with it; the start now takes
+  the operation from the store that owns the sender (consuming a one-shot there), fills in
+  the intent and launches an activity sender as its creator with a result target.
+- `setCanceledOnTouchOutside(false)` made dialogs uncancelable, so Back could not dismiss
+  microG's bottom sheet (`8b4c6a3`). Process realms now expose a `wd` handle (`2c1b8e3`).
+
+Result: the welcome screen ("The most real place on the internet", Get Started, I already
+have an account) renders after Back dismisses microG's "Add Google account" sheet; the
+sign-up and login sheets open and close. Guest content is unreachable by app design: the
+launch delegate shows the intro whenever the session is logged out (`f()` reads only
+`Session.isLoggedOut` and the `android_launch_session_snapshot_ks` kill switch), the
+welcome screen never references the `Skip` string (`action_skip` is used only by
+notification re-enablement), a second launch repeats the intro, and a
+`RedditDeepLinkActivity` VIEW intent for `/r/pics/` also lands on the intro plus the
+credential sheet. Feed, post, comments, search and media were therefore not exercised
+without an account; `tests/e2e/flows/reddit.ts` covers the reachable logged-out screens.
+Remaining optional gaps: `media_metrics`, MIUI referrer, AppSet and AppsFlyer LVL/OAID
+classes, and Cronet's DnsConfig warning. microG keeps two activities resumed in its realm
+(`IdentityCredentialChooserActivity` under `AssistedSignInActivity`), unverified against
+Android.
