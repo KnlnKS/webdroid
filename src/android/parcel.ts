@@ -25,19 +25,7 @@ export class JParcel extends JObj {
   size = 0;
   objects = new Map<number, unknown>();
 }
-class JCreator extends JObj { type = ""; read!: (parcel: JParcel) => Promise<unknown>; }
-rt.register({ name: "webdroid/ParcelableCreator", ctor: JCreator, ifaces: ["android/os/Parcelable$Creator"], methods: {
-  "createFromParcel(Landroid/os/Parcel;)Ljava/lang/Object;": async function (this: JCreator, parcel: JParcel) { return this.read(parcel); },
-  "newArray(I)[Ljava/lang/Object;": function (this: JCreator, size: number) { return jarray(Array(size).fill(null), "L" + this.type + ";"); },
-} });
-const creators = new Map<string, JCreator>();
-export function parcelCreator(type: string, read: JCreator["read"]): JCreator {
-  let creator = creators.get(type);
-  if (!creator) {
-    rt.link("webdroid/ParcelableCreator"); creator = new JCreator(); creator.type = type; creator.read = read; creators.set(type, creator);
-  }
-  return creator;
-}
+export { parcelCreator } from "./parcelable";
 function reserve(p: JParcel, n: number) {
   if (p.pos + n <= p.buf.length) return;
   const b = new Uint8Array(Math.max(p.buf.length * 2, p.pos + n));

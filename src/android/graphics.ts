@@ -13,6 +13,8 @@ import { JPath } from "./path";
 import { perf } from "../perf";
 import { type JRenderEffect } from "./rendereffect";
 import { JTypedValue, type JDisplayMetrics } from "./util";
+import { parcelCreator } from "./parcelable";
+import type { JParcel } from "./parcel";
 
 const cssCache = new Map<number, string>();
 export function cssColor(argb: number): string {
@@ -1146,8 +1148,26 @@ export const bitmapMethods: NativeSpec["methods"] = {
       return 1;
     },
     "prepareToDraw()V": () => {},
+    "describeContents()I": () => 0,
+    // The wire format is Bitmap's own (AOSP writes it natively and only CREATOR reads it), so
+    // it carries what the raster needs to come back whole: the flags, geometry and RGBA bytes.
+    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JBitmap, p: JParcel) {
+      if (this.recycled) throw rt.mkThrowable("java/lang/IllegalStateException", "Can't parcel a recycled bitmap");
+      for (const v of [this.immutable ? 0 : 1, this.config, this.hasAlpha ? 1 : 0, this.premultiplied ? 1 : 0, this.w, this.h, this.density])
+        await vcall(p, "writeInt", "(I)V", v);
+      await vcall(p, "writeByteArray", "([B)V", new Int8Array(this.pixels().buffer, this.pixels().byteOffset, this.w * this.h * 4));
+    },
 };
-rt.register({ name: "android/graphics/Bitmap", ctor: JBitmap, ifaces: ["android/os/Parcelable"], methods: bitmapMethods });
+rt.register({ name: "android/graphics/Bitmap", ctor: JBitmap, ifaces: ["android/os/Parcelable"], methods: bitmapMethods,
+  statics: { get CREATOR() { return parcelCreator("android/graphics/Bitmap", async (p) => {
+    const f: number[] = [];
+    for (let i = 0; i < 7; i++) f.push(await vcall(p, "readInt", "()I"));
+    const b = JBitmap.create(f[4], f[5]);
+    b.immutable = !f[0]; b.config = f[1]; b.hasAlpha = !!f[2]; b.premultiplied = !!f[3]; b.density = f[6];
+    const bytes: Int8Array | null = await vcall(p, "createByteArray", "()[B");
+    if (bytes) b.pixels().set(u8(bytes));
+    return b;
+  }); } } });
 const bitmapConfigs = mkEnumSet("android/graphics/Bitmap$Config", ["ALPHA_8", "RGB_565", "ARGB_4444", "ARGB_8888", "RGBA_F16", "HARDWARE", "RGBA_1010102"]);
 mkEnumSet("android/graphics/Bitmap$CompressFormat", ["JPEG", "PNG", "WEBP"]);
 
