@@ -194,7 +194,7 @@ fn execArm(c: *Cpu, pc: u32) Status {
         },
         6 => return vfp(c, w, pc) orelse fault(c, .unimplemented, w, pc),
         7 => {
-            if (w & (1 << 24) != 0) return swi(c, pc);
+            if (w & (1 << 24) != 0) return swi(c);
             if ((w & 0x0ff00fff) == 0x0e1d0f70 and bits(w, 8, 4) == 15) {
                 set(c, rd, @truncate(c.tls));
                 return .next;
@@ -508,7 +508,7 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
     return fault(c, .unimplemented, w, pc);
 }
 
-fn swi(c: *Cpu, pc: u32) Status {
+fn swi(c: *Cpu) Status {
     switch (r(c, 7)) {
         0xf0002 => {
             cpu.invalidate_range(r(c, 0), r(c, 1) -% r(c, 0));
@@ -524,11 +524,10 @@ fn swi(c: *Cpu, pc: u32) Status {
         },
         20 => set(c, 0, 4242),
         224 => set(c, 0, 4242 + c.tid),
+        // every other number is the host's: it serves the same table as libc's syscall(2)
         else => {
-            c.exit = @intFromEnum(Fault.unsupported_syscall);
-            c.fault_word = r(c, 7);
-            c.pc = pc;
-            return .fault;
+            c.exit = r(c, 7);
+            return .syscall;
         },
     }
     return .jump;
@@ -816,7 +815,7 @@ fn execThumb(c: *Cpu, pc: u32) Status {
         },
         13 => {
             const cc = (h >> 8) & 15;
-            if (cc == 15) return swi(c, pc);
+            if (cc == 15) return swi(c);
             if (cc == 14) return fault(c, .undefined, h, pc);
             const off: u32 = @bitCast(@as(i32, @bitCast(h << 24)) >> 23);
             if (cond(c, cc)) return jump(c, pc +% 4 +% off);

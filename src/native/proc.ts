@@ -4,7 +4,7 @@
 // would on a device.
 
 import { mem } from "./mem";
-import { hostLib, hostData, type HostFn, PTR, stp, ldp, vaList, ARG0, ptr } from "./host";
+import { hostLib, hostData, type HostFn, type ArgReader, PTR, stp, ldp, vaList, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import { type Cpu, cpuByTid, sigHandlers } from "./cpu";
 import { fail, logLine, LAYOUT, strncpy, snprintfInto, readTm } from "./libc";
@@ -36,6 +36,25 @@ function capget(cpu: Cpu, header: number, data: number): number {
 let abortMessage = "";
 export function abortMessageOr(what: string): string { return abortMessage ? `${what}: ${abortMessage}` : what; }
 
+function sigaction(a: ArgReader, wide: boolean): number {
+  const sig = a.i(), act = a.p(), old = a.p(), prev = sigHandlers.get(sig);
+  const ilp32wide = wide && PTR !== 8;
+  const size = ilp32wide ? 20 : LAYOUT.SIGACTION_SIZE, flagsAt = ilp32wide ? 12 : LAYOUT.SA_FLAGS, maskAt = PTR === 8 ? 16 : 4;
+  const wideMask = wide || PTR === 8;
+  if (old) {
+    mem.memset(old, 0, size);
+    if (prev) {
+      stp(old + LAYOUT.SA_HANDLER, prev.fn); mem.st32(old + flagsAt, prev.flags);
+      if (wideMask) mem.st64(old + maskAt, prev.mask ?? 0n); else mem.st32(old + maskAt, Number((prev.mask ?? 0n) & 0xffffffffn));
+    }
+  }
+  if (act) {
+    const fn = ldp(act + LAYOUT.SA_HANDLER);
+    if (fn > 1) sigHandlers.set(sig, { fn, flags: mem.ld32(act + flagsAt), mask: wideMask ? mem.ld64(act + maskAt) : BigInt(mem.ld32(act + maskAt) >>> 0) });
+    else sigHandlers.delete(sig);
+  }
+  return 0;
+}
 export function procInit(): void {
   const guard = mem.hostAlloc(8);
   mem.st32(guard, (Math.random() * 0x7fffffff) | 0x100); mem.st32(guard + 4, (Math.random() * 0x7fffffff) | 0);
@@ -73,12 +92,10 @@ export function procInit(): void {
     ptrace: (cpu) => fail(cpu, E.PERM),
     // signals: a handler runs on the target thread, at once when it is parked in a host call
     // (as a kernel interrupts a syscall) and at its next slice boundary when it is running
-    sigaction: (_c, a) => {
-      const sig = a.i(), act = a.p(), old = a.p(), prev = sigHandlers.get(sig);
-      if (old) { mem.memset(old, 0, LAYOUT.SIGACTION_SIZE); if (prev) { stp(old + LAYOUT.SA_HANDLER, prev.fn); mem.st32(old + LAYOUT.SA_FLAGS, prev.flags); if (PTR === 8) mem.st64(old + 16, prev.mask ?? 0n); else mem.st32(old + 4, Number((prev.mask ?? 0n) & 0xffffffffn)); } }
-      if (act) { const fn = ldp(act + LAYOUT.SA_HANDLER); if (fn > 1) sigHandlers.set(sig, { fn, flags: mem.ld32(act + LAYOUT.SA_FLAGS), mask: PTR === 8 ? mem.ld64(act + 16) : BigInt(mem.ld32(act + 4) >>> 0) }); else sigHandlers.delete(sig); }
-      return 0;
-    },
+    sigaction: (_c, a) => sigaction(a, false),
+    // bionic's 64-bit-mask variant: the same record on LP64; on ILP32 the mask widens to 8
+    // bytes at +4 and pushes sa_flags to +12
+    sigaction64: (_c, a) => sigaction(a, true),
     signal: (_c, a) => { const sig = a.i(), fn = a.p(), prev = sigHandlers.get(sig)?.fn ?? 0; if (fn > 1) sigHandlers.set(sig, { fn, flags: 0 }); else sigHandlers.delete(sig); return prev; },
     // a thread that has run to its end is gone: ESRCH, which a stop-the-world collector discounts
     pthread_kill: (c, a) => {
