@@ -170,13 +170,16 @@ class JExecutor extends JObj {
   shut = false;
   pending = 0;
   removeOnCancel = 0;
-  queue: JList | null = null;
+  queue: JList | JObj | null = null;
   limit = 1;
   factory: unknown = null;
   workers: { thread: JThread | null; busy: boolean }[] = [];
   jobs = new Map<JFuture, unknown>();
   tasks: { task: unknown; f: JFuture; method: string; desc: string; finish: () => void }[] = [];
 }
+// a queue implemented in bytecode is only handed back by getQueue(); the executor's own task
+// list stays the source of truth and native queues mirror it for size()/isEmpty()
+const mirror = (ex: JExecutor) => (ex.queue instanceof JList ? ex.queue.a : null);
 function drainExecutor(ex: JExecutor) {
   while (ex.tasks.length) {
     let worker = ex.workers.find((w) => !w.busy);
@@ -185,7 +188,7 @@ function drainExecutor(ex: JExecutor) {
       worker = { thread: null, busy: false }; ex.workers.push(worker);
     }
     const task = ex.tasks.shift()!;
-    ex.queue?.a.shift();
+    mirror(ex)?.shift();
     worker.busy = true;
     void runTask(ex, worker, task);
   }
@@ -271,13 +274,13 @@ function submit(ex: JExecutor, task: unknown, method: string, desc: string, dela
     const entry = { task, f, method, desc, finish: () => resolve(null) };
     let timer: ReturnType<typeof setTimeout> | undefined;
     const enqueue = () => {
-      timer = undefined; ex.tasks.push(entry); ex.queue?.a.push(task);
+      timer = undefined; ex.tasks.push(entry); mirror(ex)?.push(task);
       setTimeout(() => drainExecutor(ex), 0);
     };
     if (delay > 0) timer = setTimeout(enqueue, delay); else enqueue();
     f.cancel = () => {
       const index = ex.tasks.indexOf(entry);
-      if (index >= 0) { ex.tasks.splice(index, 1); ex.queue?.a.splice(index, 1); ex.pending--; ex.jobs.delete(f); }
+      if (index >= 0) { ex.tasks.splice(index, 1); mirror(ex)?.splice(index, 1); ex.pending--; ex.jobs.delete(f); }
       else if (timer !== undefined) { clearTimeout(timer); timer = undefined; ex.pending--; ex.jobs.delete(f); }
       resolve(null);
     };
@@ -378,7 +381,7 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       "allowCoreThreadTimeOut(Z)V": function () {},
       "setKeepAliveTime(JLjava/util/concurrent/TimeUnit;)V": function () {},
       "getQueue()Ljava/util/concurrent/BlockingQueue;": function (this: JExecutor) {
-        if (!this.queue) { this.queue = rt.make("java/util/concurrent/LinkedBlockingQueue") as JList; this.queue.a = this.tasks.map((t) => t.task); }
+        if (!this.queue) { const queue = rt.make("java/util/concurrent/LinkedBlockingQueue") as JList; queue.a = this.tasks.map((t) => t.task); this.queue = queue; }
         return this.queue;
       },
       "purge()V": function () {},
