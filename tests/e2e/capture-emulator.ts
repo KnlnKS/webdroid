@@ -112,6 +112,9 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
       case "back":
         await emu.back();
         break;
+      case "enter":
+        await emu.shell("input keyevent 66");
+        break;
       case "swipe":
         await emu.swipe(a.from[0] * profile.width, a.from[1] * profile.height,
                         a.to[0] * profile.width, a.to[1] * profile.height, a.ms ?? 400);
