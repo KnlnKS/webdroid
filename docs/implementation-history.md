@@ -222,6 +222,40 @@ Archive: /tmp/webdroid-completion-e2e-4b0a0c7-{actual,report}.
   loading, with missing PhantomReference and optional SidecarProvider
   (/tmp/webdroid-lichess-final-e2e.log). Earlier playable Stockfish captures are historical
   evidence, not current gameplay verification.
+
+### 2026-09-11 — Lichess guest browsing, offline play, and a Dart-TLS JIT miscompile
+
+With PhantomReference fixed on main the guest app is fully usable offline and for online browsing:
+Home loads live content (Good evening, welcome card, Play), Puzzles loads the Puzzle of the day and
+Storm/Streak/Themes, Watch loads Broadcasts and Lichess TV top games, Learn opens Coordinate
+training, and the 15-step flow renders distinct frames end to end including the board-editor e2–e4
+drag and a level-1 computer game whose native Stockfish replies (`1. e4 b6 2. Nf3 h5 3. Ne5 a5`)
+appear in the move list. All that HTTP content arrives through Cronet, whose BoringSSL verifies the
+Let's Encrypt ECDSA (P-384) chain fine. `renameat`/`renameat2` (bionic uses them for
+atomic replace; Dart/sqflite journalling) were missing native symbols — added to stdio with a
+`renamePath` helper that also carries directory renames and lazy sources, with a unit test.
+
+Remaining limit: the app's realtime WebSocket to `socket.lichess.org` is opened by Dart's own
+`dart:io` SecureSocket, which uses libflutter's statically-linked BoringSSL, and its ECDSA P-384
+chain verification fails **only under the JIT** — the connection is torn down and retried in a
+tight loop (~13 reconnects/30 s; ~2.4 M guest instr/s while a browsing screen sits idle). Under
+`?jit=0` the same handshake succeeds and the socket stays up (1 connect/30 s), so this is a
+JIT-vs-interpreter disagreement with the interpreter correct, not a TLS/relay or cert-store gap
+(the pinned AOSP store resolves the by-dir hashes `1a416bbd/8ed85ee6/0b9bc432` and openssl verifies
+the served chain against it). Runtime JIT bisection (`wd.native.core.jit_fallback(lo,hi)` +
+`invalidate_range`, now exposed on `wd.native.core`) localized the miscompile to libflutter's
+generic `bn_mul_mont` (the P-384 modular multiply), file offset 0x4c8238–0x4c825c inside the outer
+Montgomery loop head at 0x4c821c — an `adds/adc/mul/umulh` limb chain feeding a `cmp x6,#1` whose
+carry a later block's `adc x13,x13,xzr` consumes across the loop back-edge (deferred-flag
+liveness). Forcing the interpreter over that one block makes the handshake succeed. It could NOT be
+reproduced in an isolated tier-parity harness: BoringSSL's `bn_mul_mont` extracted verbatim and run
+with a Montgomery oracle agrees between interpreter and JIT both when the region is entered at the
+function start and when a snapshot is used to enter a region at the outer-loop head, across 24
+random P-384-sized moduli. The browser's failing region therefore has a different shape (entry pc,
+included block set, or MAX_BLOCKS truncation) than any reconstructed offline. The fix is a
+core/jit.zig change in the A64 deferred-flag liveness across a back-edge; it is left unmade pending
+a reproduction, since a core edit without tier-parity proof would risk every app. Estimated size
+once reproduced: a few lines in the flag `lin`/`settle` path plus the parity fixture.
 - The main corpus rendered 12/13 APKs; TikTok failed with Keva/executor-queue gaps. Boot frames
   are not successful app flows. An isolated LP64 MAP_FIXED reservation test also failed on
   starting main with an unmap overflow; compare before assigning it to microG.
