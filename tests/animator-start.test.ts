@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
-import { rt } from "../src/jvm/runtime";
+import { rt, JObj } from "../src/jvm/runtime";
 import { mangleMethod, jarray } from "../src/jvm/abi";
 import { newObj, vcall, JFloat, box } from "../src/jvm/natives/jlang";
 
@@ -22,6 +22,21 @@ test("a started object animator reports its first key before the first frame", a
 test("a started float animator reports its start value before the first frame", async () => {
   const anim = scall("android/animation/ValueAnimator", "ofFloat", "([F)Landroid/animation/ValueAnimator;", new Float32Array([0.25, 1]));
   await vcall(anim, "start", "()V");
+  expect(await vcall(await vcall(anim, "getAnimatedValue", "()Ljava/lang/Object;"), "floatValue", "()F")).toBe(0.25);
+  await vcall(anim, "cancel", "()V");
+});
+
+class Alpha extends JObj {
+  value = 0.25;
+  [mangleMethod("get", "(Ljava/lang/Object;)Ljava/lang/Object;")]() { return box(JFloat, this.value); }
+  [mangleMethod("set", "(Ljava/lang/Object;Ljava/lang/Object;)V")](_t: unknown, v: JFloat) { this.value = v.v as number; }
+}
+
+test("a one-value ObjectAnimator on a Property starts from the Property's current value", async () => {
+  const prop = new Alpha(), target = new JObj();
+  const anim = scall("android/animation/ObjectAnimator", "ofFloat", "(Ljava/lang/Object;Landroid/util/Property;[F)Landroid/animation/ObjectAnimator;", target, prop, new Float32Array([1]));
+  await vcall(anim, "start", "()V");
+  expect(anim.from).toBe(0.25);
   expect(await vcall(await vcall(anim, "getAnimatedValue", "()Ljava/lang/Object;"), "floatValue", "()F")).toBe(0.25);
   await vcall(anim, "cancel", "()V");
 });
