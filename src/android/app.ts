@@ -559,6 +559,18 @@ for (const [name, methods, statics] of [
   }],
   // A Wi-Fi-only device with no SIM: no operator, no radio, and the identifiers API 29+
   // withholds from ordinary apps are null.
+  // the CellLocation family an app type-checks a (null) cell against; a device with no radio reports none
+  ["android/telephony/CellLocation", {
+    "static getEmpty()Landroid/telephony/CellLocation;": () => null,
+    "static requestLocationUpdate()V": () => {},
+  }],
+  ["android/telephony/gsm/GsmCellLocation", { ...stubs(-1, "getLac()I", "getCid()I", "getPsc()I"), ...noops("<init>()V", "setLacAndCid(II)V") }],
+  ["android/telephony/cdma/CdmaCellLocation", {
+    ...stubs(-1, "getBaseStationId()I", "getSystemId()I", "getNetworkId()I"),
+    ...stubs(0x7fffffff, "getBaseStationLatitude()I", "getBaseStationLongitude()I"),
+    "static convertQuartSecToDecDegrees(I)D": (quartSec: number) => quartSec / 14400,   // AOSP: quarter-seconds of arc to degrees
+    ...noops("<init>()V"),
+  }],
   ["android/telephony/TelephonyManager", {
     ...stubs("", "getNetworkOperator()Ljava/lang/String;", "getNetworkOperatorName()Ljava/lang/String;",
       "getSimOperator()Ljava/lang/String;", "getSimOperatorName()Ljava/lang/String;",
@@ -587,6 +599,7 @@ for (const [name, methods, statics] of [
     "getActiveModemCount()I": () => 0,
     // one radio-less manager answers for every subscription id
     "createForSubscriptionId(I)Landroid/telephony/TelephonyManager;": function (this: JObj) { return this; },
+    "getCellLocation()Landroid/telephony/CellLocation;": () => null,                  // no radio: no cell
     "createForPhoneAccountHandle(Landroid/telecom/PhoneAccountHandle;)Landroid/telephony/TelephonyManager;": function (this: JObj) { return this; },
   }, {
     PHONE_TYPE_NONE: 0, PHONE_TYPE_GSM: 1, PHONE_TYPE_CDMA: 2, PHONE_TYPE_SIP: 3,

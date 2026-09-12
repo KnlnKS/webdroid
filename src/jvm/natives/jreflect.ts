@@ -564,6 +564,16 @@ function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
       const fn = isStatic ? ci.ctor[mangled] : ci.ctor.prototype[mangled];
       if (typeof fn === "function") out.push(mkMethod(ci, name, desc, isStatic, fn));
     }
+    // methods installed outside the spec (Class's own reflection natives, generated members) are
+    // known by the descriptors bytecode references them with
+    for (const [k, desc] of rt.methodRefs(ci.name)) {
+      const name = k.slice(0, k.length - desc.length);
+      if (name === "<init>" || name === "<clinit>" || seen.has(k)) continue;
+      const mangled = mangleMethod(name, desc);
+      const fn = ci.ctor.prototype[mangled], sfn = ci.ctor[mangled];
+      if (typeof fn === "function") { seen.add(k); out.push(mkMethod(ci, name, desc, false, fn)); }
+      else if (typeof sfn === "function") { seen.add(k); out.push(mkMethod(ci, name, desc, true, sfn)); }
+    }
   };
   const collect = (ci: ClassInfo) => {
     if (!ci.def || !ci.dex) { if (ci.native) collectNative(ci); return; }

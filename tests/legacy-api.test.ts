@@ -181,3 +181,13 @@ test("Resources string getters throw NotFoundException for ids the table lacks",
   await expect(vcall(res, "getStringArray", "(I)[Ljava/lang/String;", 0x7f030001)).rejects.toMatchObject(notFound);
   expect(await vcall(res, "getText", "(ILjava/lang/CharSequence;)Ljava/lang/CharSequence;", 0x7f11240f, "fallback")).toBe("fallback");
 });
+
+test("Locale constants carry their language and country, and JSON text prints a stored long's digits", async () => {
+  const japan = (rt.link("java/util/Locale").ctor as any).s$JAPAN;
+  expect(await vcall(japan, "getLanguage", "()Ljava/lang/String;")).toBe("ja");
+  expect(await vcall(japan, "getCountry", "()Ljava/lang/String;")).toBe("JP");
+  const map = await newObj("java/util/HashMap");
+  await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "big", await newObj("java/lang/Long", "(J)V", 9007199254740993n));
+  const json = await newObj("org/json/JSONObject", "(Ljava/util/Map;)V", map);
+  expect(await vcall(json, "toString", "()Ljava/lang/String;")).toBe('{"big":9007199254740993}');
+});

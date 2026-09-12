@@ -88,7 +88,13 @@ function displayName(this: JLocale, displayLocale: JLocale): string {
 }
 rt.register({
   name: "java/util/Locale", ctor: JLocale,
-  statics: { US: usLocale, ENGLISH: Object.assign(new JLocale(), { lang: "en" }), ROOT: new JLocale() },
+  statics: {
+    US: usLocale, ENGLISH: Object.assign(new JLocale(), { lang: "en" }), ROOT: new JLocale(),
+    ...Object.fromEntries(([["UK", "en", "GB"], ["CANADA", "en", "CA"], ["CANADA_FRENCH", "fr", "CA"], ["FRANCE", "fr", "FR"], ["GERMANY", "de", "DE"], ["ITALY", "it", "IT"],
+      ["JAPAN", "ja", "JP"], ["KOREA", "ko", "KR"], ["CHINA", "zh", "CN"], ["PRC", "zh", "CN"], ["SIMPLIFIED_CHINESE", "zh", "CN"], ["TAIWAN", "zh", "TW"], ["TRADITIONAL_CHINESE", "zh", "TW"],
+      ["FRENCH", "fr", ""], ["GERMAN", "de", ""], ["ITALIAN", "it", ""], ["JAPANESE", "ja", ""], ["KOREAN", "ko", ""], ["CHINESE", "zh", ""]] as const)
+      .map(([name, lang, country]) => [name, Object.assign(new JLocale(), { lang, country })])),
+  },
   methods: {
     "<init>(Ljava/lang/String;)V": function (this: JLocale, l: string) { this.lang = l.toLowerCase(); },
     "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JLocale, l: string, c: string) { this.lang = l.toLowerCase(); this.country = c.toUpperCase(); },

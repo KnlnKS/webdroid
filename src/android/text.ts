@@ -461,6 +461,25 @@ async function textIndexOf(cs: unknown, needle: unknown, start = 0, end?: number
 }
 
 class JTextUtils extends JObj {}
+// AndroidCharacter: the bidi mirror pairs of the characters apps ask about (Unicode BidiMirroring's
+// paired brackets and quotes); everything else mirrors to itself
+const MIRROR = new Map<number, number>();
+for (const [a, b] of ["()", "[]", "{}", "<>", "«»", "‹›", "⁅⁆", "⁽⁾", "₍₎", "〈〉", "《》", "「」", "『』", "【】", "〔〕", "〖〗", "〘〙", "〚〛", "（）", "［］", "｛｝", "｟｠", "｢｣", "≤≥", "∈∋", "∼∽"]) { MIRROR.set(a.charCodeAt(0), b.charCodeAt(0)); MIRROR.set(b.charCodeAt(0), a.charCodeAt(0)); }
+rt.register({
+  name: "android/text/AndroidCharacter", ctor: class extends JObj {},
+  statics: { EAST_ASIAN_WIDTH_NEUTRAL: 0, EAST_ASIAN_WIDTH_AMBIGUOUS: 1, EAST_ASIAN_WIDTH_HALF_WIDTH: 2, EAST_ASIAN_WIDTH_FULL_WIDTH: 3, EAST_ASIAN_WIDTH_NARROW: 4, EAST_ASIAN_WIDTH_WIDE: 5 },
+  methods: {
+    "static getMirror(C)C": (c: number) => MIRROR.get(c) ?? c,
+    "static mirror([CII)Z": (chars: Uint16Array, start: number, count: number) => {
+      let changed = 0;
+      for (let i = start; i < start + count; i++) { const m = MIRROR.get(chars[i]); if (m !== undefined) { chars[i] = m; changed = 1; } }
+      return changed;
+    },
+    "static getDirectionality(C)B": (c: number) => (c >= 0x590 && c <= 0x8ff) || (c >= 0xfb1d && c <= 0xfdff) || (c >= 0xfe70 && c <= 0xfeff) ? 1 : c < 0x20 || (c >= 0x2000 && c <= 0x200f) ? 12 : 0,
+    "static getDirectionalities([C[BI)V": (chars: Uint16Array, out: Int8Array, count: number) => { for (let i = 0; i < count; i++) out[i] = chars[i] >= 0x590 && chars[i] <= 0x8ff ? 1 : 0; },
+    "static getEastAsianWidth(CZ)I": (c: number) => (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xff00 && c <= 0xff60) ? 5 : (c >= 0xff61 && c <= 0xffdc) ? 2 : (c >= 0xffe0 && c <= 0xffe6) ? 3 : 0,
+  },
+});
 rt.register({
   name: "android/text/TextUtils", ctor: JTextUtils,
   methods: {

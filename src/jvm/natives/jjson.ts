@@ -140,9 +140,9 @@ function accessors<S>(K: string, read: (self: S, k: never) => unknown): NonNulla
     [`getInt(${K})I`]: function (this: S, k: never) { return Math.trunc(num(this, k)) | 0; },
     [`optInt(${K})I`]: function (this: S, k: never) { return Math.trunc(Number(read(this, k) ?? 0)) | 0; },
     [`optInt(${K}I)I`]: function (this: S, k: never, d: number) { const v = num(this, k); return Number.isFinite(v) ? Math.trunc(v) | 0 : d; },
-    [`getLong(${K})J`]: function (this: S, k: never) { return BigInt(Math.trunc(Number(read(this, k) ?? 0))); },
-    [`optLong(${K})J`]: function (this: S, k: never) { return BigInt(Math.trunc(Number(read(this, k) ?? 0))); },
-    [`optLong(${K}J)J`]: function (this: S, k: never, d: bigint) { const v = num(this, k); return Number.isFinite(v) ? BigInt(Math.trunc(v)) : d; },
+    [`getLong(${K})J`]: function (this: S, k: never) { const v = read(this, k); return typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v ?? 0))); },
+    [`optLong(${K})J`]: function (this: S, k: never) { const v = read(this, k); return typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v ?? 0))); },
+    [`optLong(${K}J)J`]: function (this: S, k: never, d: bigint) { const v = read(this, k); if (typeof v === "bigint") return v; const n = Number(v); return Number.isFinite(n) ? BigInt(Math.trunc(n)) : d; },
     [`getDouble(${K})D`]: function (this: S, k: never) { return Number(read(this, k) ?? 0); },
     [`optDouble(${K})D`]: function (this: S, k: never) { const v = num(this, k); return Number.isFinite(v) ? v : Number.NaN; },
     [`optDouble(${K}D)D`]: function (this: S, k: never, d: number) { const v = num(this, k); return Number.isFinite(v) ? v : d; },
@@ -164,11 +164,14 @@ function jsonUnwrap(v: unknown): unknown {
   if (v instanceof JJSONArray) return v.a;
   if (v instanceof JBool) return !!v.v;
   if (typeof v === "object" && v !== null && "v" in v) return jsonUnwrap((v as { v: unknown }).v);
-  // a boxed Long arrives as a bigint, which JSON.stringify refuses; org.json stores the value,
-  // and every read path (getLong/optLong) boxes it back
-  if (typeof v === "bigint") return Number(v);
+  // a boxed Long arrives as a bigint: one a double can hold is stored as a number, a wider one
+  // (a 19-digit id) stays exact and prints its digits
+  if (typeof v === "bigint") return Number.isSafeInteger(Number(v)) ? Number(v) : v;
   return v;
 }
+/** the JSON text of a stored tree; a long that reached storage unboxed (a Map's boxed values) prints its digits */
+const jsonText64 = (v: unknown, indent?: number): string =>
+  JSON.stringify(v, (_k, x) => typeof x === "bigint" ? `\u0000${x}\u0000` : x, indent).replace(/"\\u0000(-?\d+)\\u0000"/g, "$1");
 rt.register({
   name: "org/json/JSONObject", ctor: JJSONObject,
   statics: { NULL: null },
@@ -197,7 +200,7 @@ rt.register({
       return this;
     },
     "put(Ljava/lang/String;I)Lorg/json/JSONObject;": function (this: JJSONObject, k: string, v: number) { this.o[k] = v; return this; },
-    "put(Ljava/lang/String;J)Lorg/json/JSONObject;": function (this: JJSONObject, k: string, v: bigint) { this.o[k] = Number(v); return this; },
+    "put(Ljava/lang/String;J)Lorg/json/JSONObject;": function (this: JJSONObject, k: string, v: bigint) { this.o[k] = jsonUnwrap(v); return this; },
     "put(Ljava/lang/String;D)Lorg/json/JSONObject;": function (this: JJSONObject, k: string, v: number) { this.o[k] = v; return this; },
     "put(Ljava/lang/String;Z)Lorg/json/JSONObject;": function (this: JJSONObject, k: string, v: number) { this.o[k] = !!v; return this; },
     "get(Ljava/lang/String;)Ljava/lang/Object;": function (this: JJSONObject, k: string) {
@@ -226,8 +229,8 @@ rt.register({
       const ks = Object.keys(this.o);
       return ks.length ? jsonWrap(ks) : null;
     },
-    "toString()Ljava/lang/String;": function (this: JJSONObject) { return JSON.stringify(this.o); },
-    "toString(I)Ljava/lang/String;": function (this: JJSONObject, indent: number) { return JSON.stringify(this.o, null, indent); },
+    "toString()Ljava/lang/String;": function (this: JJSONObject) { return jsonText64(this.o); },
+    "toString(I)Ljava/lang/String;": function (this: JJSONObject, indent: number) { return jsonText64(this.o, indent); },
   },
 });
 rt.register({
@@ -255,8 +258,8 @@ rt.register({
       this.a[i] = jsonUnwrap(v);
       return this;
     },
-    "put(J)Lorg/json/JSONArray;": function (this: JJSONArray, v: bigint) { this.a.push(Number(v)); return this; },
-    "toString()Ljava/lang/String;": function (this: JJSONArray) { return JSON.stringify(this.a); },
+    "put(J)Lorg/json/JSONArray;": function (this: JJSONArray, v: bigint) { this.a.push(jsonUnwrap(v)); return this; },
+    "toString()Ljava/lang/String;": function (this: JJSONArray) { return jsonText64(this.a); },
     "toString(I)Ljava/lang/String;": function (this: JJSONArray, indent: number) { return JSON.stringify(this.a, null, indent); },
   },
 });
