@@ -31,6 +31,8 @@ export const native = {
   })),
   calledMissing, unresolved, probed, jniMissing, registered, exited: hasProcessExited, sigHandlers: () => [...sigHandlers].map(([s, h]) => [s, symbolizePc(h.fn)]), yieldStats, killLog, futexStats: () => Object.fromEntries(futexStats),
   blocks: codeStats, jit: jitStats,
+  /** the wasm core itself: jit_fallback(lo, hi) + invalidate_range(addr, size) bisect a miscompile without a reload */
+  core,
   /** the host calls made, most often first */
   hostCalls: (n = 20) => [...hostCounts].map((k, i) => [k, i]).filter(([k]) => k).sort((a, b) => b[0] - a[0]).slice(0, n).map(([k, i]) => `${k} ${slotName(i)}`),
   /** profileReset(n) also sets the slice budget: a smaller one samples the hot pcs more finely */
