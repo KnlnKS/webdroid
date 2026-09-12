@@ -38,6 +38,16 @@ rt.register({
   },
 });
 
+// DropBox: there is no system log sink here, so every tag is disabled and entries are dropped.
+rt.register({
+  name: "android/os/DropBoxManager", ctor: class extends JObj {},
+  methods: {
+    ...noops("addText(Ljava/lang/String;Ljava/lang/String;)V", "addData(Ljava/lang/String;[BI)V", "addFile(Ljava/lang/String;Ljava/io/File;I)V"),
+    ...stubs(0, "isTagEnabled(Ljava/lang/String;)Z"),
+    "getNextEntry(Ljava/lang/String;J)Landroid/os/DropBoxManager$Entry;": () => null,
+  },
+});
+
 // getSystemService("permission_controller"). Nothing calls through it; the class only has
 // to exist so the lookup doesn't fall through to a Binder stub.
 rt.markers("android/permission/PermissionControllerManager");
