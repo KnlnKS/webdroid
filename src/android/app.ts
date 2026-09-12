@@ -1,4 +1,4 @@
-import { JContextWrapper, contextMethods, systemService, wrapperMethods, display, displayListeners, grantPermissions } from "./context";
+import { JContextWrapper, JAttributionSource, contextMethods, systemService, wrapperMethods, display, displayListeners, grantPermissions } from "./context";
 import { JWindow } from "./window";
 import {
   JIntent, activityTransport, systemActivities, deliverActivityResult, RESULT_OK, RESULT_CANCELED, launchIntent, mkComponentName,
@@ -371,7 +371,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     "onSearchRequested(Landroid/view/SearchEvent;)Z", "onKeyDown(ILandroid/view/KeyEvent;)Z",
     "onKeyUp(ILandroid/view/KeyEvent;)Z", "onTouchEvent(Landroid/view/MotionEvent;)Z", "getChangingConfigurations()I",
     "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z", "dispatchTouchEvent(Landroid/view/MotionEvent;)Z",
-    "isInMultiWindowMode()Z"),
+    "isInMultiWindowMode()Z", "isInPictureInPictureMode()Z"),
   ...stubs(null, "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;",
     "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;",
     "onCreateView(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;",
@@ -482,6 +482,7 @@ for (const [name, methods, statics] of [
     "getRunningAppProcesses()Ljava/util/List;": () => newArrayList([myProcess()]),
     "getProcessMemoryInfo([I)[Landroid/os/Debug$MemoryInfo;": (pids: Int32Array) => jarray(Array.from(pids, () => rt.make("android/os/Debug$MemoryInfo")), "Landroid/os/Debug$MemoryInfo;"),
     "getHistoricalProcessExitReasons(Ljava/lang/String;II)Ljava/util/List;": () => newArrayList(),
+    "getAppTasks()Ljava/util/List;": () => newArrayList(appTasks()),
     "getRunningServices(I)Ljava/util/List;": (max: number) => {
       const all = [...runningServices.values()];
       return newArrayList(max < all.length ? all.slice(0, max) : all);
@@ -507,6 +508,10 @@ for (const [name, methods, statics] of [
     // the screen is on and this app was never exempted from doze, which is the state an app
     // offering a "disable battery optimisation" prompt is asking about
     "isDeviceIdleMode()Z": () => 0,
+    "getCurrentThermalStatus()I": () => 0,                                       // THERMAL_STATUS_NONE
+    ...noops("addThermalStatusListener(Landroid/os/PowerManager$OnThermalStatusChangedListener;)V",
+      "addThermalStatusListener(Ljava/util/concurrent/Executor;Landroid/os/PowerManager$OnThermalStatusChangedListener;)V",
+      "removeThermalStatusListener(Landroid/os/PowerManager$OnThermalStatusChangedListener;)V"),
     ...stubs(1, "isInteractive()Z"),
     ...stubs(0, "isPowerSaveMode()Z", "isSustainedPerformanceModeSupported()Z", "isDeviceLightIdleMode()Z",
       "isLowPowerStandbyEnabled()Z", "isIgnoringBatteryOptimizations(Ljava/lang/String;)Z"),
@@ -563,6 +568,18 @@ for (const [name, methods, statics] of [
   }],
   // A Wi-Fi-only device with no SIM: no operator, no radio, and the identifiers API 29+
   // withholds from ordinary apps are null.
+  // the CellLocation family an app type-checks a (null) cell against; a device with no radio reports none
+  ["android/telephony/CellLocation", {
+    "static getEmpty()Landroid/telephony/CellLocation;": () => null,
+    "static requestLocationUpdate()V": () => {},
+  }],
+  ["android/telephony/gsm/GsmCellLocation", { ...stubs(-1, "getLac()I", "getCid()I", "getPsc()I"), ...noops("<init>()V", "setLacAndCid(II)V") }],
+  ["android/telephony/cdma/CdmaCellLocation", {
+    ...stubs(-1, "getBaseStationId()I", "getSystemId()I", "getNetworkId()I"),
+    ...stubs(0x7fffffff, "getBaseStationLatitude()I", "getBaseStationLongitude()I"),
+    "static convertQuartSecToDecDegrees(I)D": (quartSec: number) => quartSec / 14400,   // AOSP: quarter-seconds of arc to degrees
+    ...noops("<init>()V"),
+  }],
   ["android/telephony/TelephonyManager", {
     ...stubs("", "getNetworkOperator()Ljava/lang/String;", "getNetworkOperatorName()Ljava/lang/String;",
       "getSimOperator()Ljava/lang/String;", "getSimOperatorName()Ljava/lang/String;",
@@ -572,7 +589,27 @@ for (const [name, methods, statics] of [
     ...stubs(1, "getSimState()I"),
     ...stubs(null, "getDeviceId()Ljava/lang/String;", "getLine1Number()Ljava/lang/String;",
       "getSubscriberId()Ljava/lang/String;", "getSimSerialNumber()Ljava/lang/String;"),
-    ...noops("listen(Landroid/telephony/PhoneStateListener;I)V"),
+    ...noops("listen(Landroid/telephony/PhoneStateListener;I)V", "unregisterTelephonyCallback(Landroid/telephony/TelephonyCallback;)V"),
+    // no radio: the one thing a registration ever hears is the initial "disconnected"/"idle"
+    // state, delivered on the caller's executor as the platform does
+    "registerTelephonyCallback(Ljava/util/concurrent/Executor;Landroid/telephony/TelephonyCallback;)V": (executor: unknown, cb: unknown) => {
+      if (executor === null || cb === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "executor and callback must not be null");
+      const initial: [string, string, string, unknown[]][] = [
+        ["android/telephony/TelephonyCallback$DataConnectionStateListener", "onDataConnectionStateChanged", "(II)V", [0, 0]],
+        ["android/telephony/TelephonyCallback$CallStateListener", "onCallStateChanged", "(I)V", [0]],
+      ];
+      for (const [iface, name, desc, args] of initial) {
+        if (!rt.iof(cb, iface)) continue;
+        const task = rt.make("webdroid/TelephonyDelivery") as JObj & { run: () => Promise<void> };
+        task.run = () => vcall(cb, name, desc, ...args);
+        void vcall(executor, "execute", "(Ljava/lang/Runnable;)V", task).catch(reportUncaught);
+      }
+    },
+    "getActiveModemCount()I": () => 0,
+    // one radio-less manager answers for every subscription id
+    "createForSubscriptionId(I)Landroid/telephony/TelephonyManager;": function (this: JObj) { return this; },
+    "getCellLocation()Landroid/telephony/CellLocation;": () => null,                  // no radio: no cell
+    "createForPhoneAccountHandle(Landroid/telecom/PhoneAccountHandle;)Landroid/telephony/TelephonyManager;": function (this: JObj) { return this; },
   }, {
     PHONE_TYPE_NONE: 0, PHONE_TYPE_GSM: 1, PHONE_TYPE_CDMA: 2, PHONE_TYPE_SIP: 3,
     NETWORK_TYPE_UNKNOWN: 0,
@@ -580,6 +617,23 @@ for (const [name, methods, statics] of [
     CALL_STATE_IDLE: 0, CALL_STATE_RINGING: 1, CALL_STATE_OFFHOOK: 2,
     DATA_DISCONNECTED: 0,
   }],
+  // no SIM: no active subscriptions, and every default id is INVALID_SUBSCRIPTION_ID
+  ["android/telephony/SubscriptionManager", {
+    "static from(Landroid/content/Context;)Landroid/telephony/SubscriptionManager;": (ctx: unknown) => systemService(ctx as Parameters<typeof systemService>[0], "telephony_subscription_service"),
+    "getActiveSubscriptionInfoList()Ljava/util/List;": () => null,
+    "getActiveSubscriptionInfoCount()I": () => 0,
+    "getActiveSubscriptionInfoCountMax()I": () => 1,
+    "getActiveSubscriptionInfo(I)Landroid/telephony/SubscriptionInfo;": () => null,
+    "getActiveSubscriptionInfoForSimSlotIndex(I)Landroid/telephony/SubscriptionInfo;": () => null,
+    "static getDefaultSubscriptionId()I": () => -1,
+    "static getDefaultDataSubscriptionId()I": () => -1,
+    "static getDefaultVoiceSubscriptionId()I": () => -1,
+    "static getDefaultSmsSubscriptionId()I": () => -1,
+    "static isValidSubscriptionId(I)Z": (id: number) => id >= 0 ? 1 : 0,
+    ...noops("addOnSubscriptionsChangedListener(Landroid/telephony/SubscriptionManager$OnSubscriptionsChangedListener;)V",
+      "addOnSubscriptionsChangedListener(Ljava/util/concurrent/Executor;Landroid/telephony/SubscriptionManager$OnSubscriptionsChangedListener;)V",
+      "removeOnSubscriptionsChangedListener(Landroid/telephony/SubscriptionManager$OnSubscriptionsChangedListener;)V"),
+  }, { INVALID_SUBSCRIPTION_ID: -1, DEFAULT_SUBSCRIPTION_ID: 2147483647, INVALID_SIM_SLOT_INDEX: -1 }],
   ["android/os/ext/SdkExtensions", {
     "static getExtensionVersion(I)I": () => 0,
   }],
@@ -636,7 +690,14 @@ for (const [name, methods, statics] of [
     "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;ILandroid/os/Handler;)Z": () => 0,
     "unregisterListener(Landroid/hardware/SensorEventListener;)V": () => {},
     "unregisterListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;)V": () => {} }],
-  ["android/os/BatteryManager", { "getIntProperty(I)I": () => 80, "isCharging()Z": () => 1 }],
+  // a charging battery at 80%; counters the platform cannot read answer Integer/Long.MIN_VALUE
+  // as BatteryManager does for an unsupported property
+  ["android/os/BatteryManager", {
+    "getIntProperty(I)I": (id: number) => id === 4 ? 80 : id === 6 ? 2 : -2147483648,
+    "getLongProperty(I)J": (id: number) => id === 4 ? 80n : id === 6 ? 2n : -9223372036854775808n,
+    "isCharging()Z": () => 1,
+    "computeChargeTimeRemaining()J": () => -1n,
+  }],
   ["android/hardware/display/DisplayManager", {
     // one fixed built-in display: unknown ids are null as in AOSP, and registered listeners
     // never fire because no display is ever added, removed or reconfigured here
@@ -653,6 +714,12 @@ for (const [name, methods, statics] of [
   rt.register({ name, ctor: class extends JObj {}, methods, statics });
 }
 rt.register({ name: "android/telephony/PhoneStateListener", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
+rt.register({ name: "android/telephony/TelephonyCallback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
+rt.register({ name: "webdroid/TelephonyDelivery", ctor: class extends JObj { run: () => Promise<void> = async () => {}; }, ifaces: ["java/lang/Runnable"],
+  methods: { "run()V": function (this: { run: () => Promise<void> }) { return this.run(); } } });
+rt.markers("android/telephony/TelephonyCallback$DataConnectionStateListener", "android/telephony/TelephonyCallback$CallStateListener",
+  "android/telephony/TelephonyCallback$ServiceStateListener", "android/telephony/TelephonyCallback$SignalStrengthsListener",
+  "android/telephony/TelephonyCallback$DisplayInfoListener");
 // libphonenumber's metadata is not on this device, so neither the watcher nor formatNumber
 // regroups anything: the digits a caller typed are the digits it reads back.
 rt.register({
@@ -705,6 +772,33 @@ rt.register({
     "origActivity", "description"],
   methods: { "<init>()V": function () {} },
 });
+/** one of the caller's tasks: the activities that share a task id, as the shell stacks them */
+class JAppTask extends JObj { taskId = 0; }
+function taskInfo(taskId: number): JRecentTaskInfo {
+  const activities = (appHost?.activities() ?? []).filter((a) => a.taskId === taskId);
+  const info = new JRecentTaskInfo(), component = (a: JActivity | undefined) => a ? mkComponentName(appHost?.pkg ?? "", jclsNameOf(a)) : null;
+  info.id = info.persistentId = info.taskId = taskId;
+  info.numActivities = activities.length;
+  info.isRunning = activities.length ? 1 : 0;
+  info.baseIntent = activities[0]?.intent ?? null;
+  info.baseActivity = component(activities[0]);
+  info.topActivity = component(activities.at(-1));
+  return info;
+}
+function appTasks(): JAppTask[] {
+  rt.link("android/app/ActivityManager$AppTask");
+  const ids = [...new Set((appHost?.activities() ?? []).map((a) => a.taskId))];
+  return ids.map((taskId) => Object.assign(new JAppTask(), { taskId }));
+}
+rt.register({
+  name: "android/app/ActivityManager$AppTask", ctor: JAppTask,
+  methods: {
+    "getTaskInfo()Landroid/app/ActivityManager$RecentTaskInfo;": function (this: JAppTask) { return taskInfo(this.taskId); },
+    "finishAndRemoveTask()V": function (this: JAppTask) { appHost?.finishTask(this.taskId); },
+    "moveToFront()V": function () {},
+    "setExcludeFromRecents(Z)V": function () {},
+  },
+});
 rt.register({
   name: "android/app/ActivityManager$RunningAppProcessInfo", ctor: JRunningAppProcessInfo, ifaces: ["android/os/Parcelable"],
   statics: {
@@ -742,13 +836,20 @@ rt.register({
   },
 });
 rt.markers("android/window/OnBackInvokedCallback");
+function callingPackage(): string | null {
+  const caller = transactionCaller();
+  if (caller) for (const record of packages.values()) if (record.uid === caller.uid) return record.pkg;
+  return null;
+}
 rt.register({
   name: "android/content/ContentProvider", ctor: class extends JObj { $ctx: unknown = null; },
   methods: {
-    "getCallingPackage()Ljava/lang/String;": () => {
+    "getCallingPackage()Ljava/lang/String;": () => callingPackage(),
+    "getCallingAttributionSource()Landroid/content/AttributionSource;": () => {
       const caller = transactionCaller();
-      if (caller) for (const record of packages.values()) if (record.uid === caller.uid) return record.pkg;
-      return null;
+      if (!caller) return null;
+      rt.link("android/content/AttributionSource");
+      return Object.assign(new JAttributionSource(), { uid: caller.uid, pid: caller.pid, pkg: callingPackage() });
     },
     "<init>()V": function () {},
     "onCreate()Z": () => 1,

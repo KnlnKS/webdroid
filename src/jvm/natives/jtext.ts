@@ -80,8 +80,11 @@ const dateFormatMethods: NativeSpec["methods"] = {
   "toPattern()Ljava/lang/String;": function (this: JDateFormat) { return this.pattern; },
   "applyPattern(Ljava/lang/String;)V": function (this: JDateFormat, p: string) { this.pattern = p; },
 };
+// the abstract base DateFormat and NumberFormat share, so a cast through Format holds; each
+// concrete formatter carries its own format(Object)
+rt.register({ name: "java/text/Format", ctor: class extends JObj {}, ifaces: ["java/io/Serializable", "java/lang/Cloneable"], methods: { "<init>()V": function () {} } });
 rt.register({
-  name: "java/text/DateFormat", ctor: JDateFormat, ifaces: ["java/lang/Cloneable"],
+  name: "java/text/DateFormat", ctor: JDateFormat, sup: "java/text/Format", ifaces: ["java/lang/Cloneable"],
   statics: { FULL: 0, LONG: 1, MEDIUM: 2, SHORT: 3 },
   methods: {
     ...dateFormatMethods,
@@ -152,7 +155,7 @@ const nfMethods: NativeSpec["methods"] = {
 };
 const nfInstance = () => new JNumberFormat();
 rt.register({
-  name: "java/text/NumberFormat", ctor: JNumberFormat, ifaces: ["java/lang/Cloneable"],
+  name: "java/text/NumberFormat", ctor: JNumberFormat, sup: "java/text/Format", ifaces: ["java/lang/Cloneable"],
   methods: {
     ...nfMethods,
     "static getInstance()Ljava/text/NumberFormat;": nfInstance,

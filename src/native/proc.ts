@@ -4,9 +4,10 @@
 // would on a device.
 
 import { mem } from "./mem";
-import { hostLib, hostData, type HostFn, PTR, stp, ldp, vaList, ARG0, ptr } from "./host";
+import { hostLib, hostData, type HostFn, type ArgReader, PTR, stp, ldp, vaList, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import { type Cpu, cpuByTid, sigHandlers } from "./cpu";
+import { tidOf } from "./pthread";
 import { fail, logLine, LAYOUT, strncpy, snprintfInto, readTm } from "./libc";
 import { MONTHS, DAYS } from "../jvm/natives/jtime";
 import { format } from "./printf";
@@ -36,6 +37,41 @@ function capget(cpu: Cpu, header: number, data: number): number {
 let abortMessage = "";
 export function abortMessageOr(what: string): string { return abortMessage ? `${what}: ${abortMessage}` : what; }
 
+function sigaction(a: ArgReader, wide: boolean): number {
+  const sig = a.i(), act = a.p(), old = a.p(), prev = sigHandlers.get(sig);
+  const ilp32wide = wide && PTR !== 8;
+  const size = ilp32wide ? 20 : LAYOUT.SIGACTION_SIZE, flagsAt = ilp32wide ? 12 : LAYOUT.SA_FLAGS, maskAt = PTR === 8 ? 16 : 4;
+  const wideMask = wide || PTR === 8;
+  if (old) {
+    mem.memset(old, 0, size);
+    if (prev) {
+      stp(old + LAYOUT.SA_HANDLER, prev.fn); mem.st32(old + flagsAt, prev.flags);
+      if (wideMask) mem.st64(old + maskAt, prev.mask ?? 0n); else mem.st32(old + maskAt, Number((prev.mask ?? 0n) & 0xffffffffn));
+    }
+  }
+  if (act) {
+    const fn = ldp(act + LAYOUT.SA_HANDLER);
+    if (fn > 1) sigHandlers.set(sig, { fn, flags: mem.ld32(act + flagsAt), mask: wideMask ? mem.ld64(act + maskAt) : BigInt(mem.ld32(act + maskAt) >>> 0) });
+    else sigHandlers.delete(sig);
+  }
+  return 0;
+}
+/** the raw rt_sigaction syscall: struct sigaction as the kernel lays it out (handler, flags, restorer,
+ *  mask), which is not bionic's, and a mask the size the caller states */
+function rtSigaction(a: ArgReader): number {
+  const sig = a.i(), act = a.p(), old = a.p(), prev = sigHandlers.get(sig);
+  const flagsAt = PTR, maskAt = 3 * PTR, size = maskAt + 8;
+  if (old) {
+    mem.memset(old, 0, size);
+    if (prev) { stp(old, prev.fn); mem.st32(old + flagsAt, prev.flags); mem.st64(old + maskAt, prev.mask ?? 0n); }
+  }
+  if (act) {
+    const fn = ldp(act);
+    if (fn > 1) sigHandlers.set(sig, { fn, flags: mem.ld32(act + flagsAt), mask: mem.ld64(act + maskAt) });
+    else sigHandlers.delete(sig);
+  }
+  return 0;
+}
 export function procInit(): void {
   const guard = mem.hostAlloc(8);
   mem.st32(guard, (Math.random() * 0x7fffffff) | 0x100); mem.st32(guard + 4, (Math.random() * 0x7fffffff) | 0);
@@ -61,7 +97,7 @@ export function procInit(): void {
       return 0;
     },
     sched_getaffinity: (_c, a) => { a.i(); const n = a.u(), set = a.p(); mem.memset(set, 0, n); mem.st32(set, cpuMask); return 0; },
-    sched_setaffinity: () => 0,
+    sched_setaffinity: () => 0, sched_getcpu: () => 0,
     __sched_cpucount: (_c, a) => { const n = a.u(), set = a.p(); let k = 0; for (let i = 0; i < n; i++) { let b = u8[set + i]; while (b) { k += b & 1; b >>= 1; } } return k; },
     sched_get_priority_max: () => 99, sched_get_priority_min: () => 1,
     sched_getscheduler: () => 0, sched_setscheduler: () => 0, sched_getparam: (_c, a) => { a.i(); mem.st32(a.p(), 0); return 0; },
@@ -73,16 +109,17 @@ export function procInit(): void {
     ptrace: (cpu) => fail(cpu, E.PERM),
     // signals: a handler runs on the target thread, at once when it is parked in a host call
     // (as a kernel interrupts a syscall) and at its next slice boundary when it is running
-    sigaction: (_c, a) => {
-      const sig = a.i(), act = a.p(), old = a.p(), prev = sigHandlers.get(sig);
-      if (old) { mem.memset(old, 0, LAYOUT.SIGACTION_SIZE); if (prev) { stp(old + LAYOUT.SA_HANDLER, prev.fn); mem.st32(old + LAYOUT.SA_FLAGS, prev.flags); if (PTR === 8) mem.st64(old + 16, prev.mask ?? 0n); else mem.st32(old + 4, Number((prev.mask ?? 0n) & 0xffffffffn)); } }
-      if (act) { const fn = ldp(act + LAYOUT.SA_HANDLER); if (fn > 1) sigHandlers.set(sig, { fn, flags: mem.ld32(act + LAYOUT.SA_FLAGS), mask: PTR === 8 ? mem.ld64(act + 16) : BigInt(mem.ld32(act + 4) >>> 0) }); else sigHandlers.delete(sig); }
-      return 0;
-    },
+    // bionic reserves the first two realtime signals for itself: SIGRTMIN is 34, SIGRTMAX 64
+    __libc_current_sigrtmin: () => 34, __libc_current_sigrtmax: () => 64,
+    sigaction: (_c, a) => sigaction(a, false),
+    rt_sigaction: (_c, a) => rtSigaction(a),
+    // bionic's 64-bit-mask variant: the same record on LP64; on ILP32 the mask widens to 8
+    // bytes at +4 and pushes sa_flags to +12
+    sigaction64: (_c, a) => sigaction(a, true),
     signal: (_c, a) => { const sig = a.i(), fn = a.p(), prev = sigHandlers.get(sig)?.fn ?? 0; if (fn > 1) sigHandlers.set(sig, { fn, flags: 0 }); else sigHandlers.delete(sig); return prev; },
     // a thread that has run to its end is gone: ESRCH, which a stop-the-world collector discounts
     pthread_kill: (c, a) => {
-      const tid = a.i(), t = cpuByTid(tid), sig = a.i(), r = !t || t.finished ? E.SRCH : 0;
+      const tid = tidOf(a.p()), t = cpuByTid(tid), sig = a.i(), r = !t || t.finished ? E.SRCH : 0;
       killLog.push(`${c.name}->${t?.name ?? "tid" + tid}:${sig}=${r}${t ? `/${t.state},${t.loops},${t.parked ? "p" : ""}` : ""}`);
       if (killLog.length > 300) killLog.splice(0, 100);
       if (r === 0) t!.kill(sig);

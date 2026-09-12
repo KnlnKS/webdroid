@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
 import { JField } from "../src/jvm/natives/jreflect";
-import { vcall } from "../src/jvm/natives/jlang";
+import { vcall, newObj } from "../src/jvm/natives/jlang";
+import { mangleMethod } from "../src/jvm/abi";
 
 class Fields extends JObj { value: number | bigint = 0; static value: number | bigint = 0; }
 rt.register({ name: "test/PrimitiveFields", ctor: Fields });
@@ -57,4 +58,20 @@ test("a static primitive write waits for its declaring class to initialize", asy
   const f = Object.assign(new JField(), { owner: rt.link("test/DelayedFields"), prop: "value", desc: "J", isStatic: true });
   await vcall(f, "setLong", "(Ljava/lang/Object;J)V", null, 9n);
   expect(DelayedFields.value).toBe(9n);
+});
+
+test("type variables are equal only within one generic declaration", async () => {
+  const forName = (n: string) => (rt.link("java/lang/Class").ctor as any)[mangleMethod("forName", "(Ljava/lang/String;)Ljava/lang/Class;")](n);
+  const arrayList = await forName("java.util.ArrayList"), list = await forName("java.util.List");
+  const listOfE = (await vcall(arrayList, "getGenericInterfaces", "()[Ljava/lang/reflect/Type;"))[0];
+  const eOfArrayList = (await vcall(listOfE, "getActualTypeArguments", "()[Ljava/lang/reflect/Type;"))[0];
+  const eOfList = (await vcall(list, "getTypeParameters", "()[Ljava/lang/reflect/TypeVariable;"))[0];
+  expect(await vcall(eOfArrayList, "equals", "(Ljava/lang/Object;)Z", (await vcall(arrayList, "getTypeParameters", "()[Ljava/lang/reflect/TypeVariable;"))[0])).toBe(1);
+  expect(await vcall(eOfArrayList, "equals", "(Ljava/lang/Object;)Z", eOfList)).toBe(0);
+  expect(await vcall(eOfArrayList, "hashCode", "()I")).not.toBe(await vcall(eOfList, "hashCode", "()I"));
+  expect(await vcall(eOfArrayList, "toString", "()Ljava/lang/String;")).toBe("E");
+  const map = await newObj("java/util/HashMap");
+  await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", eOfList, "list");
+  expect(await vcall(map, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", eOfArrayList)).toBe(null);
+  expect(await vcall(map, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", eOfList)).toBe("list");
 });

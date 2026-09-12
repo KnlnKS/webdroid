@@ -384,3 +384,22 @@ describe("a64 decoder: hints, atomics, the REV family and system registers", () 
     expect(c.w[4]).toBe(0);
   });
 });
+
+describe("raw syscalls", () => {
+  test("an svc the core does not inline reaches libc's syscall table, and an unknown number answers -ENOSYS", async () => {
+    const { libcInit } = await import("./libc");
+    libcInit();
+    const buf = mem.reserve(0x1000, 0x1000);
+    const c = run([
+      0xd2801668,   // mov x8, #179 (sysinfo)
+      0xd4000001,   // svc #0
+      0xaa0003e1,   // mov x1, x0
+      0xd2807fe8,   // mov x8, #1023
+      0xd4000001,   // svc #0
+      RET], (c) => { c.w[0] = buf; c.w[1] = 0; });
+    expect([c.w[2], c.w[3]]).toEqual([0, 0]);          // sysinfo succeeded
+    expect([c.w[0], c.w[1]]).toEqual([-38, -1]);       // -ENOSYS, sign-extended to x0
+    expect(mem.ld32(buf + 104)).toBe(1);               // mem_unit
+    expect(Number(mem.ld64(buf + 32))).toBe(4 * 2 ** 30);
+  });
+});

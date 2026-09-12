@@ -154,6 +154,21 @@ const resolverMethods: NativeSpec["methods"] = {
         return cols.map((c) => cells[DOC_COLUMNS.indexOf(c)] ?? null);
       }));
     },
+  "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
+    function (this: JObj, u: JUri, proj: string[] | null, selection: string | null, args: string[] | null, sort: string | null) {
+      return vcall(this, "query", providerOperations.query, u, proj, selection, args, sort);
+    },
+  "call(Landroid/net/Uri;Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;": async (u: JUri, method: string, arg: string | null, extras: unknown) => {
+    if (u === null) throw rt.mkThrowable("java/lang/NullPointerException", "uri");
+    if (method === null) throw rt.mkThrowable("java/lang/NullPointerException", "method");
+    const provider = await contentProvider(u);
+    if (!provider) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown authority " + u.uri);
+    return vcall(provider, "call", providerOperations.call, method, arg, extras);
+  },
+  "call(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;": function (this: JObj, authority: string, method: string, arg: string | null, extras: unknown) {
+    if (authority === null) throw rt.mkThrowable("java/lang/NullPointerException", "authority");
+    return vcall(this, "call", "(Landroid/net/Uri;Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;", mkUri("content://" + authority), method, arg, extras);
+  },
   "openFileDescriptor(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;": openPfd,
   "openFileDescriptor(Landroid/net/Uri;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/os/ParcelFileDescriptor;": openPfd,
   "openAssetFileDescriptor(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;": openAfd,
@@ -240,6 +255,12 @@ for (const [cls, table] of [["Global", "global"], ["Secure", "secure"], ["System
     },
     methods: {
       "static getFloat(Landroid/content/ContentResolver;Ljava/lang/String;F)F": (_r: unknown, _n: string, d: number) => d,
+      "static getFloat(Landroid/content/ContentResolver;Ljava/lang/String;)F": (_r: unknown, n: string) => {
+        throw rt.mkThrowable("android/provider/Settings$SettingNotFoundException", n);
+      },
+      "static getLong(Landroid/content/ContentResolver;Ljava/lang/String;)J": (_r: unknown, n: string) => {
+        throw rt.mkThrowable("android/provider/Settings$SettingNotFoundException", n);
+      },
       "static getInt(Landroid/content/ContentResolver;Ljava/lang/String;I)I": (_r: unknown, n: string, d: number) => intSetting(table, n) ?? d,
       "static getInt(Landroid/content/ContentResolver;Ljava/lang/String;)I": (_r: unknown, n: string) => {
         const value = intSetting(table, n);

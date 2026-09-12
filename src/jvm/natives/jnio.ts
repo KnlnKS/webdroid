@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { defineException, vcall } from "./jlang";
 import { mem } from "../../native/mem";
-import { decodeString } from "../charset";
+import { decodeString, encodeString } from "../charset";
 
 type BufferStorage = { kind: "heap"; ab: ArrayBuffer } | { kind: "direct"; ab: ArrayBuffer } | { kind: "native"; address: number | bigint };
 const directBuffers = new FinalizationRegistry<number>((address) => mem.free(address));
@@ -128,12 +128,16 @@ rt.register({
     "getInt(I)I": function (this: JByteBuffer, i: number) { return this.dv.getInt32(i, this.little); },
     "putLong(J)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: bigint) { this.clampPut(8); this.dv.setBigInt64(this.pos, v, this.little); this.pos += 8; return this; },
     "getLong()J": function (this: JByteBuffer) { this.clampGet(8); const v = this.dv.getBigInt64(this.pos, this.little); this.pos += 8; return v; },
+    "getLong(I)J": function (this: JByteBuffer, i: number) { return this.dv.getBigInt64(i, this.little); },
+    "putLong(IJ)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: bigint) { this.clampPut(0); this.dv.setBigInt64(i, v, this.little); return this; },
     "putFloat(F)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(4); this.dv.setFloat32(this.pos, v, this.little); this.pos += 4; return this; },
     "putFloat(IF)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setFloat32(i, v, this.little); return this; },
     "getFloat()F": function (this: JByteBuffer) { this.clampGet(4); const v = this.dv.getFloat32(this.pos, this.little); this.pos += 4; return v; },
     "getFloat(I)F": function (this: JByteBuffer, i: number) { return this.dv.getFloat32(i, this.little); },
     "putDouble(D)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, v: number) { this.clampPut(8); this.dv.setFloat64(this.pos, v, this.little); this.pos += 8; return this; },
     "getDouble()D": function (this: JByteBuffer) { this.clampGet(8); const v = this.dv.getFloat64(this.pos, this.little); this.pos += 8; return v; },
+    "getDouble(I)D": function (this: JByteBuffer, i: number) { return this.dv.getFloat64(i, this.little); },
+    "putDouble(ID)Ljava/nio/ByteBuffer;": function (this: JByteBuffer, i: number, v: number) { this.clampPut(0); this.dv.setFloat64(i, v, this.little); return this; },
     "asFloatBuffer()Ljava/nio/FloatBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/FloatBuffer").ctor, 2); },
     "asIntBuffer()Ljava/nio/IntBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/IntBuffer").ctor, 2); },
     "asShortBuffer()Ljava/nio/ShortBuffer;": function (this: JByteBuffer) { return viewBuffer(this, rt.link("java/nio/ShortBuffer").ctor, 1); },
@@ -167,23 +171,27 @@ function duplicateBuffer(source: JByteBuffer): JByteBuffer {
   return b;
 }
 defineException("java/nio/ReadOnlyBufferException", "java/lang/UnsupportedOperationException");
-class JMappedByteBuffer extends JByteBuffer {}
+class JMappedByteBuffer extends JByteBuffer { flush: (() => void) | null = null; }
 rt.register({
   name: "java/nio/MappedByteBuffer", ctor: JMappedByteBuffer, sup: "java/nio/ByteBuffer",
   methods: {
     ...chaining("Ljava/nio/MappedByteBuffer;"),
     "isLoaded()Z": () => 1,
     "load()Ljava/nio/MappedByteBuffer;": function (this: JMappedByteBuffer) { return this; },
-    "force()Ljava/nio/MappedByteBuffer;": function (this: JMappedByteBuffer) { return this; },
+    "force()Ljava/nio/MappedByteBuffer;": function (this: JMappedByteBuffer) { this.flush?.(); return this; },
   },
 });
-export function mappedReadOnlyBuffer(data: Uint8Array): JBuffer {
+/** A buffer over `data` itself; `flush` (force) persists the file a READ_WRITE mapping shares its bytes with, and a read-only
+ *  mapping has none. The bytes are the mapping, so a writer's stores are in the file's storage before any force. */
+export function mappedBuffer(data: Uint8Array, flush: (() => void) | null): JBuffer {
   rt.link("java/nio/MappedByteBuffer");
   const buffer = new JMappedByteBuffer();
   buffer.backing = { storage: { kind: "direct", ab: data.buffer as ArrayBuffer } };
-  buffer.byteOffset = data.byteOffset; buffer.cap = buffer.lim = data.length; buffer.readOnly = true;
+  buffer.byteOffset = data.byteOffset; buffer.cap = buffer.lim = data.length; buffer.readOnly = flush === null;
+  buffer.flush = flush;
   return buffer;
 }
+export const mappedReadOnlyBuffer = (data: Uint8Array): JBuffer => mappedBuffer(data, null);
 export function mkByteBuffer(cap: number, direct = false): JByteBuffer {
   if (cap < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative buffer capacity");
   const b = new JByteBuffer();
@@ -221,7 +229,7 @@ function bytes(b: JByteBuffer): Int8Array {
 // Java's wrap shares the array: writes through either side show on the other. A typed array is
 // laid out in native order, so a wrapped typed buffer reads little-endian (Java's order() for it
 // too); ByteBuffer.wrap keeps Java's big-endian default.
-function wrapArray<T extends JBuffer>(Ctor: new () => T, arr: Int8Array | Int16Array | Int32Array | Float32Array, shift: number, off = 0, len = arr.length): T {
+function wrapArray<T extends JBuffer>(Ctor: new () => T, arr: Int8Array | Int16Array | Uint16Array | Int32Array | Float32Array, shift: number, off = 0, len = arr.length): T {
   const b = new Ctor();
   b.backing = { storage: { kind: "heap", ab: arr.buffer as ArrayBuffer } };
   b.byteOffset = arr.byteOffset;
@@ -332,6 +340,8 @@ rt.register({
     ...bufferBaseMethods(),
     ...chaining("Ljava/nio/CharBuffer;"),
     "static allocate(I)Ljava/nio/CharBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 2), JCharBuffer, 1),
+    "static wrap([C)Ljava/nio/CharBuffer;": (arr: Uint16Array) => wrapArray(JCharBuffer, arr, 1),
+    "static wrap([CII)Ljava/nio/CharBuffer;": (arr: Uint16Array, off: number, len: number) => wrapArray(JCharBuffer, arr, 1, off, len),
     "get()C": function (this: JCharBuffer) { this.clampGet(1); return this.dv.getUint16(this.pos++ << 1, this.little); },
     "put(C)Ljava/nio/CharBuffer;": function (this: JCharBuffer, v: number) { this.clampPut(1); this.dv.setUint16(this.pos++ << 1, v, this.little); return this; },
   },
@@ -443,6 +453,16 @@ rt.register({
   methods: {
     ...coderChain("Ljava/nio/charset/CharsetEncoder;"),
     "canEncode(C)Z": function (this: JCharsetCoder, c: number) { return encodable(this.cs, c) ? 1 : 0; },
+    "encode(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;Z)Ljava/nio/charset/CoderResult;":
+      function (this: JCharsetCoder, src: JBuffer, dst: JBuffer) {
+        let text = "";
+        for (let i = src.pos; i < src.lim; i++) text += String.fromCharCode(src.dv.getUint16(i << 1, src.little));
+        const bytes = encodeString(text, this.cs), n = Math.min(bytes.length, dst.lim - dst.pos);
+        for (let i = 0; i < n; i++) dst.dv.setInt8(dst.pos + i, bytes[i]);
+        dst.pos += n;
+        src.pos = src.lim;
+        return n < bytes.length ? CODER_OVERFLOW : CODER_UNDERFLOW;
+      },
     "canEncode(Ljava/lang/CharSequence;)Z": async function (this: JCharsetCoder, cs: unknown) {
       const s = typeof cs === "string" ? cs : String(await vcall(cs, "toString", "()Ljava/lang/String;"));
       for (let i = 0; i < s.length; i++) if (!encodable(this.cs, s.charCodeAt(i))) return 0;

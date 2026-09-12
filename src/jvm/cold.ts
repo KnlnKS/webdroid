@@ -11,6 +11,8 @@ type Handler = { kind: "sync"; run: (frame: Frame, constants: unknown[]) => void
   { kind: "suspend"; run: (frame: Frame, constants: unknown[]) => Generator<Promise<unknown>, void, unknown> };
 type ColdOp = Handler & { constants: unknown[]; next: number; method?: number };
 export interface ColdMethod {
+  /** "pkg/Class.method(desc)": the frame an exception unwinding through here is noted under */
+  name: string;
   R: Runtime; D: ReturnType<Runtime["dexLink"]>; S: unknown;
   regs: number; first: number; instance: boolean; widths: number[];
   ops: Map<number, ColdOp>;
@@ -39,6 +41,14 @@ export function coldOp(source: string, next: number): ColdOp {
   return { ...handler, constants, next };
 }
 
+/** Cold bodies share one runner, so the JS stack names none of them: the throwable itself
+ *  collects the Java frames it unwinds through (bounded), for [uncaught] reports. */
+function noteFrame(e: unknown, name: string): void {
+  if (typeof e !== "object" || e === null) return;
+  const t = e as { jframes?: string[] };
+  const frames = t.jframes ??= [];
+  if (frames.length < 48) frames.push(name);
+}
 export async function runCold(method: ColdMethod, receiver: unknown, args: unknown[]): Promise<unknown> {
   perf.coldCalls++;
   const { R, D, S } = method;
@@ -82,7 +92,7 @@ export async function runCold(method: ColdMethod, receiver: unknown, args: unkno
           handler = t.handlers.find(([name]) => name === "java/lang/Throwable" || R.iof(e, name))?.[1] ?? t.all;
           if (handler >= 0) break;
         }
-        if (handler < 0) throw e;
+        if (handler < 0) { noteFrame(e, method.name); throw e; }
         f.$ex = e; f.next = handler;
       }
     }

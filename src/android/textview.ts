@@ -56,6 +56,8 @@ class WrapMemo {
 }
 
 export class JTextView extends JView {
+  fallbackLineSpacing = true;
+  lineBreakStyle = 0; lineBreakWordStyle = 0;
   /** kept for the app to read back; text is drawn untransformed */
   transformation: unknown = null;
   editableFactory: unknown = null; spannableFactory: unknown = null;
@@ -420,6 +422,14 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (this.paintT.letterSpacingEm !== v) { this.paintT.letterSpacingEm = v; requestLayout(this); }
   },
   "setIncludeFontPadding(Z)V": function (this: JTextView, on: number) { this.includePad = !!on; requestLayout(this); },
+  // fallback-font line spacing only changes metrics where a glyph comes from a fallback font, which one system font never does here
+  "setFallbackLineSpacing(Z)V": function (this: JTextView, on: number) { this.fallbackLineSpacing = !!on; },
+  // API 33 line-break tuning: the ICU break iterator here has one style, so the values are only kept
+  "setLineBreakStyle(I)V": function (this: JTextView, v: number) { this.lineBreakStyle = v; },
+  "getLineBreakStyle()I": function (this: JTextView) { return this.lineBreakStyle; },
+  "setLineBreakWordStyle(I)V": function (this: JTextView, v: number) { this.lineBreakWordStyle = v; },
+  "getLineBreakWordStyle()I": function (this: JTextView) { return this.lineBreakWordStyle; },
+  "isFallbackLineSpacing()Z": function (this: JTextView) { return this.fallbackLineSpacing ? 1 : 0; },
   "setTextAppearance(Landroid/content/Context;I)V": function (this: JTextView, c: unknown, id: number) { return setTextAppearance.call(this, id); },
   "setTextAppearance(I)V": setTextAppearance,
   "setCompoundDrawablesWithIntrinsicBounds(IIII)V": async function (this: JTextView, l: number, t: number, r: number, b: number) {

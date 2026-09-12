@@ -2,7 +2,7 @@
 // writers, virtual host libraries, and the logging stubs unresolved imports bind to.
 
 import type { Cpu } from "./cpu";
-import { mem } from "./mem";
+import { mem, NativeFault } from "./mem";
 import { trampAddr, TRAMP_BASE, TRAMP_END, RET_SENTINEL } from "./abi";
 import { perf } from "../perf";
 import { core, CORE_LIBC } from "./core";
@@ -85,16 +85,25 @@ class VaList implements ArgReader {
  *  from 8-byte stack slots; an FP one likewise from 16-byte slots at vr_top + vr_offs. The offsets
  *  are kept here, not written back: no caller reuses the list after a v*printf or Call*MethodV. */
 class VaList64 implements ArgReader {
-  private stack: number; private grTop: number; private vrTop: number; private grOffs: number; private vrOffs: number;
-  constructor(a: number) { this.stack = ldp(a); this.grTop = ldp(a + 8); this.vrTop = ldp(a + 16); this.grOffs = mem.ld32(a + 24); this.vrOffs = mem.ld32(a + 28); }
+  private stack = 0; private grTop = 0; private vrTop = 0; private grOffs = 0; private vrOffs = 0;
+  private loaded = false;
+  constructor(private readonly at: number) {}
+  // libc reads the list only when a conversion needs an argument: a caller with none may pass junk
+  private load(): void {
+    const a = this.at;
+    this.stack = ldp(a); this.grTop = ldp(a + 8); this.vrTop = ldp(a + 16); this.grOffs = mem.ld32(a + 24); this.vrOffs = mem.ld32(a + 28);
+    this.loaded = true;
+  }
   private slot(): number { const p = (this.stack + 7) & ~7; this.stack = p + 8; return p; }
   private gp(): number {
+    if (!this.loaded) this.load();
     if (this.grOffs >= 0) return this.slot();
     const p = this.grTop + this.grOffs;
     this.grOffs += 8;
     return this.grOffs > 0 ? this.slot() : p;
   }
   private fp(): number {
+    if (!this.loaded) this.load();
     if (this.vrOffs >= 0) return this.slot();
     const p = this.vrTop + this.vrOffs;
     this.vrOffs += 16;
@@ -175,7 +184,14 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
   const t0 = timed ? performance.now() : 0;
   const served = hostTrace.on && bound[slot] ? core.libc_call(cpu.base, bound[slot]) : 2;
   if (served === 1) cpu.fault("bad address in a core-served call");
-  const ret = served === 0 ? ARG0 : fn(cpu, a);
+  let ret: HostRet | Promise<HostRet>;
+  try { ret = served === 0 ? ARG0 : fn(cpu, a); }
+  catch (e) {
+    // a host body tripping over a bad guest pointer (a JS Error, not a Java throwable or a fault
+    // already placed) is a fault of the guest call: name the block and caller as one
+    if (e instanceof Error && !("msg" in e) && !(e instanceof NativeFault && e.pc)) cpu.fault(`${e.message.replace(/^\[native\] /, "")} in ${names[slot]}`);
+    throw e;
+  }
   const dt = timed ? performance.now() - t0 : 0;
   perf.nativeHostMs += dt;
   if (slowMs && dt > slowMs) console.warn(`[slow-native] ${cpu.name}:${names[slot]}(${(cpu.w[0] >>> 0).toString(16)},${(cpu.w[2] >>> 0).toString(16)},${(cpu.w[4] >>> 0).toString(16)}) ${dt.toFixed(0)}ms`);
@@ -259,6 +275,7 @@ export function probeHost(sym: string, lib: string): number {
   return missingStub(lib + "!" + sym);
 }
 export function hostData(lib: string, sym: string, addr: number): void { libOf(lib).set(sym, addr); }
+export function hostFn(lib: string, sym: string): HostFn | undefined { const v = libs.get(lib)?.get(sym); return typeof v === "function" ? v : undefined; }
 export function hostLibNames(): string[] { return [...libs.keys()]; }
 export function lookupHost(sym: string, lib?: string): number | undefined {
   for (const [ln, m] of libs) {

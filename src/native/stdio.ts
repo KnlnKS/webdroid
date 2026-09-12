@@ -2,7 +2,7 @@
 // so the getc/putc macros and __srget refills work; /proc/cpuinfo and /proc/meminfo are synthesized.
 
 import { mem, guestAt } from "./mem";
-import { hostLib, hostData, vaList, type HostFn, PTR, stp, ARG0, ptr } from "./host";
+import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { LAYOUT, fail, utf8, logLine, offArg, readTs, writeTs, clockTime, scanSink } from "./libc";
@@ -261,6 +261,26 @@ export function readInto(cpu: Cpu, fd: number, off: number, dst: number, n: numb
 }
 function flushFd(f: Fd): void {
   if (f.dirty && !f.synthetic) { vfs.write(f.path, f.data.slice(0, f.len)); f.dirty = false; }
+}
+/** A MAP_SHARED file mapping's write-back: bytes land in the open description while it lasts (and reach
+ *  the file at once, as page-cache stores would) and in the file itself once the descriptor is closed,
+ *  since the mapping outlives it. Null for descriptors that are not plain files. */
+export function fdWriteBack(fd: number): ((off: number, bytes: Uint8Array) => void) | null {
+  const f = fds.get(fd);
+  if (!f || f.synthetic || f.random || f.dir || f.rpipe || f.wpipe || f.event || f.timer || f.epoll) return null;
+  return (off, bytes) => {
+    if (f.references > 0) {
+      grow(f, off + bytes.length);
+      if (off > f.len) f.data.fill(0, f.len, off);
+      f.data.set(bytes, off); f.len = Math.max(f.len, off + bytes.length); f.dirty = true; flushFd(f);
+      return;
+    }
+    const current = vfs.read(f.path) ?? new Uint8Array(0), end = off + bytes.length;
+    const data = current.length >= end ? current : new Uint8Array(end);
+    if (data !== current) data.set(current);
+    data.set(bytes, off);
+    vfs.write(f.path, data);
+  };
 }
 function fdClose(cpu: Cpu | null, fd: number): number {
   if (isNativeSocket(fd)) return cpu ? nativeSocketClose(cpu, fd) : fail(cpu, E.BADF);
@@ -684,6 +704,7 @@ export function stdioInit(): void {
     chdir: () => 0,
     realpath: (_c, a) => { const p = vfs.norm(a.str()); let out = a.p(); if (!out) out = mem.malloc(4096); mem.putCstr(out, p, 4096); return ptr(out); },
     readlink: (cpu) => fail(cpu, E.INVAL),
+    readlinkat: (cpu) => fail(cpu, E.INVAL),
     symlink: (cpu) => fail(cpu, E.PERM), link: (cpu) => fail(cpu, E.PERM),
     utimes: () => 0, utime: () => 0,
 
@@ -698,6 +719,36 @@ export function stdioInit(): void {
     rewinddir: (_c, a) => { const d = dirs.get(a.p()); if (d) d.i = 0; },
     closedir: (_c, a) => { const h = a.p(); const d = dirs.get(h); if (d) { mem.free(d.dirent); mem.free(h); dirs.delete(h); return 0; } return -1; },
     dirfd: () => -1,
+    // scandir(path, &namelist, filter, compar): every entry the filter keeps, each its own
+    // malloc'd dirent, sorted by the guest's comparator (over dirent**) into a malloc'd array
+    scandir: async (cpu, a) => {
+      const path = vfs.norm(a.str()), out = a.p(), filter = a.p(), compar = a.p();
+      if (!vfs.isDir(path)) return fail(cpu, vfs.exists(path) ? E.NOTDIR : E.NOENT);
+      const kept: number[] = [];
+      for (const name of [".", "..", ...vfs.list(path)]) {
+        const de = mem.malloc(LAYOUT.DIRENT_SIZE);
+        nextDirent({ entries: [name], i: 0 }, de);
+        if (filter && !(await cpu.call(filter, [de]))) { mem.free(de); continue; }
+        kept.push(de);
+      }
+      if (compar && kept.length > 1) {
+        const cell = mem.malloc(2 * PTR), cmp = async (x: number, y: number) => { stp(cell, x); stp(cell + PTR, y); return (await cpu.call(compar, [cell, cell + PTR])) | 0; };
+        try {
+          // insertion sort: stable, and each comparison is a guest call
+          for (let i = 1; i < kept.length; i++) {
+            const v = kept[i];
+            let j = i;
+            while (j > 0 && (await cmp(kept[j - 1], v)) > 0) { kept[j] = kept[j - 1]; j--; }
+            kept[j] = v;
+          }
+        } finally { mem.free(cell); }
+      }
+      const list = mem.malloc(Math.max(1, kept.length) * PTR);
+      for (let i = 0; i < kept.length; i++) stp(list + i * PTR, kept[i]);
+      stp(out, list);
+      return kept.length;
+    },
+    alphasort: (_c, a) => { const x = mem.cstr(ldp(a.p()) + LAYOUT.D_NAME), y = mem.cstr(ldp(a.p()) + LAYOUT.D_NAME); return x < y ? -1 : x > y ? 1 : 0; },
 
     fopen: (cpu, a) => {
       const path = a.str(), mode = a.str();

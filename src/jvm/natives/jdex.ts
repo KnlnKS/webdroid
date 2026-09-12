@@ -1,4 +1,6 @@
-import { slashName } from "../abi";
+import { slashName, dotName } from "../abi";
+import { mkIter } from "./jutil";
+import { JObj, type Runtime } from "../runtime";
 import { zipTree } from "./jzip";
 import { rt } from "../runtime";
 import { dexesIn } from "../dex";
@@ -27,6 +29,37 @@ async function init(this: JClassLoader, path: string, libraries: string | null, 
     }
   }
 }
+// the legacy dex handle: it names an archive on the classpath and lists the classes loaded from it
+class JDexFile extends JObj { path = ""; runtime: Runtime | null = null; }
+const dexRuntimeFor = (path: string): Runtime | null => {
+  for (let r: Runtime | null = (rt.classLoader as JClassLoader | null)?.runtime ?? rt; r; r = r.parent) if ([...r.classpathLocations.values()].includes(path)) return r;
+  return null;
+};
+const openDexFile = function (this: JDexFile, p: string) {
+  this.path = vfs.norm(p);
+  if (!vfs.exists(this.path) && !packedArchives.has(this.path)) throw rt.mkThrowable("java/io/IOException", "unable to open DEX file " + p);
+  this.runtime = dexRuntimeFor(this.path);
+};
+rt.register({
+  name: "dalvik/system/DexFile", ctor: JDexFile,
+  methods: {
+    "<init>(Ljava/lang/String;)V": openDexFile,
+    "<init>(Ljava/io/File;)V": function (this: JDexFile, f: { path: string }) { openDexFile.call(this, f.path); },
+    "static loadDex(Ljava/lang/String;Ljava/lang/String;I)Ldalvik/system/DexFile;": (source: string) => { const d = new JDexFile(); openDexFile.call(d, source); return d; },
+    "getName()Ljava/lang/String;": function (this: JDexFile) { return this.path; },
+    "toString()Ljava/lang/String;": function (this: JDexFile) { return this.path; },
+    "entries()Ljava/util/Enumeration;": function (this: JDexFile) {
+      const names: string[] = [];
+      if (this.runtime) for (const [name, [dex]] of this.runtime.dexIndex) if (dex.name.startsWith(this.path + "!")) names.push(dotName(name));
+      return mkIter(names);
+    },
+    "loadClass(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/Class;": function (this: JDexFile, name: string) {
+      const cls = slashName(name);
+      return this.runtime?.dexIndex.has(cls) ? this.runtime.classFor(cls) : null;
+    },
+    "close()V": function () {},
+  },
+});
 rt.register({
   name: "dalvik/system/PathClassLoader", ctor: class extends JClassLoader {}, sup: "java/lang/ClassLoader",
   methods: {

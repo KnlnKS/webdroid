@@ -1,4 +1,5 @@
 import { perf } from "../perf";
+import { TV } from "./axml";
 import { setInvalidateHook, JRect, JCanvas, JMatrix, matMul, rotM, type JPoint } from "./graphics";
 import { mangleMethod, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, vcallMaybe, after, idHash } from "../jvm/natives/jlang";
@@ -488,7 +489,10 @@ async function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0) 
     AT.paddingStart, AT.paddingEnd, AT.tag, AT.contentDescription, AT.autoHandwritingEnabled,
   ], defStyleAttr, 0);
   const g = (i: number) => ta.vals[i];
-  if (g(0)) v.idNum = g(0)!.d;
+  // the id the reference names (getResourceId's answer): resolving @id/x lands on the entry's own
+  // false-boolean value, and an obfuscated type-name pool keeps resolveRefs from stopping short
+  const idv = g(0);
+  if (idv) v.idNum = idv.t === TV.REFERENCE || idv.t === TV.ATTRIBUTE ? idv.d : idv.r ?? idv.d;
   const bgv = g(1);
   if (bgv) {
     v.background = await loadDrawableRV(res, bgv, v.theme);
@@ -1549,6 +1553,8 @@ export function detachView(parent: JViewGroup, child: JView, request = true) {
 export async function dispatchAttached(v: JView) {
   if (v.attached) return;
   await attachTree(v);
+  // a root is a window's view: ViewRootImpl reports the window attached once its tree is
+  if (!v.parent) await vtoMap.get(v)?.dispatchWindowAttached(true);
   // Queued attachment may follow an unattached measure and an empty hosted display list.
   requestLayout(v);
   invalidate(v);
@@ -1585,6 +1591,7 @@ export async function dispatchDetached(v: JView) {
   if (v instanceof JViewGroup) for (const c of [...v.children]) await dispatchDetached(c);
   await guardMaybe(v, M_onDetached);
   for (const l of [...v.attachLs]) await vcall(l, "onViewDetachedFromWindow", "(Landroid/view/View;)V", v);
+  if (!v.parent) await vtoMap.get(v)?.dispatchWindowAttached(false);
 }
 
 /** AOSP getChildMeasureSpec */
@@ -1874,7 +1881,9 @@ class JVTO extends JObj {
   drawLs: unknown[] = [];
   scrollLs: unknown[] = [];
   focusLs: unknown[] = [];
+  windowAttachLs: unknown[] = [];
   focused: JView | null = null;
+  dispatchWindowAttached(attached: boolean) { return fanOut(this.windowAttachLs, attached ? "onWindowAttached" : "onWindowDetached", "()V"); }
   dispatchFocusChanged(old: JView | null, now: JView | null) { return fanOut(this.focusLs, "onGlobalFocusChanged", "(Landroid/view/View;Landroid/view/View;)V", old, now); }
   dispatchGlobalLayout() { return fanOut(this.globalLayoutLs, "onGlobalLayout", "()V"); }
   dispatchPreDraw() { return fanOut(this.preDrawLs, "onPreDraw", "()Z"); }
@@ -1888,7 +1897,7 @@ async function fanOut(ls: unknown[], name: string, desc: string, ...args: unknow
   }
 }
 const vtoMap = new WeakMap<JView, JVTO>();
-const VTO_LISTS = ["globalLayoutLs", "preDrawLs", "drawLs", "scrollLs", "focusLs"] as const;
+const VTO_LISTS = ["globalLayoutLs", "preDrawLs", "drawLs", "scrollLs", "focusLs", "windowAttachLs"] as const;
 /**
  * AOSP's floating ViewTreeObserver: a listener registered before the view was attached goes on
  * the detached subtree's own observer, and dispatchAttachedToWindow merges it into the window's.
@@ -1936,7 +1945,7 @@ rt.register({
 // AndroidComposeView registers OnPreDrawListener/OnScrollChangedListener itself, for one).
 for (const n of [
   "OnGlobalLayoutListener", "OnScrollChangedListener", "OnTouchModeChangeListener",
-  "OnPreDrawListener", "OnWindowFocusChangeListener", "OnDrawListener", "OnGlobalFocusChangeListener",
+  "OnPreDrawListener", "OnWindowFocusChangeListener", "OnDrawListener", "OnGlobalFocusChangeListener", "OnWindowAttachListener",
 ]) rt.register({ name: "android/view/ViewTreeObserver$" + n, ctor: class extends JObj {} });
 rt.register({
   name: "android/view/ViewTreeObserver", ctor: JVTO,
@@ -1948,13 +1957,19 @@ rt.register({
     "addOnTouchModeChangeListener(Landroid/view/ViewTreeObserver$OnTouchModeChangeListener;)V": () => {},
     "removeOnTouchModeChangeListener(Landroid/view/ViewTreeObserver$OnTouchModeChangeListener;)V": () => {},
     ...Object.fromEntries(([["focusLs", "GlobalFocusChange"], ["scrollLs", "ScrollChanged"], ["globalLayoutLs", "GlobalLayout"],
-      ["preDrawLs", "PreDraw"], ["drawLs", "Draw"]] as const).flatMap(([k, n]) => {
+      ["preDrawLs", "PreDraw"], ["drawLs", "Draw"], ["windowAttachLs", "WindowAttach"]] as const).flatMap(([k, n]) => {
       const t = `On${n}Listener(Landroid/view/ViewTreeObserver$On${n}Listener;)V`;
       return [[`add${t}`, function (this: JVTO, l: unknown) { this[k].push(l); }], [`remove${t}`, function (this: JVTO, l: unknown) { removeFrom(this[k], l); }]];
     })),
     "removeGlobalOnLayoutListener(Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;)V": function (this: JVTO, l: unknown) { removeFrom(this.globalLayoutLs, l); },
     "isAlive()Z": () => 1,
     "dispatchOnGlobalLayout()V": function (this: JVTO) { return this.dispatchGlobalLayout(); },
+    // true when any listener asked for the draw to be cancelled, as ViewTreeObserver reports it
+    "dispatchOnPreDraw()Z": async function (this: JVTO) {
+      let cancelled = 0;
+      for (const l of [...this.preDrawLs]) if (!(await vcall(l, "onPreDraw", "()Z"))) cancelled = 1;
+      return cancelled;
+    },
   },
 });
 /** layout pass: OnGlobalLayoutListener fires when the tree's layout actually ran */

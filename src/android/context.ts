@@ -1,15 +1,14 @@
 import { type JFile, vfs, mkFile } from "../jvm/natives/jio";
 import { JObj, rt, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
-import { resString, themeOf, JTheme, rvColor, obtainStyled, type JAttrSet, JTypedArray } from "./res";
-import { newObj, javaFormat, vcall } from "../jvm/natives/jlang";
+import { resString, themeOf, JTheme, obtainStyled, type JAttrSet, JTypedArray } from "./res";
+import { newObj, vcall } from "../jvm/natives/jlang";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { getInflater } from "./inflate";
 import { getAppInfo, getPM } from "./pm";
 import { contentResolver } from "./contentresolver";
 import { mainLooper, mainExecutor, PROCESS_PID, PROCESS_UID } from "./os";
 import { getPrefs } from "./sharedprefs";
-import { loadColorStateList, loadDrawable } from "./drawable";
 import { JAssetManager, type JConfiguration, scopedResources } from "./resnative";
 import { dbPath } from "./sqlite";
 import { type JIntent, launchIntent } from "./intent";
@@ -33,7 +32,12 @@ const packageContexts = new Map<string, Promise<JContext>>();
 export const services = new Map<string, unknown>();
 /** a string resource of the running app ("" before boot) */
 export const appString = (id: number) => (appHost ? resString(appHost.res, id) : "");
-function ctxString(this: JContext, id: number) { return resString(this.$host.res, id); }
+/** a Context getter that is getResources().name(args[, getTheme()]) through the virtual entries */
+const viaResources = (name: string, desc: string, themed = false) => async function (this: JContext, ...args: unknown[]) {
+  const resources = await vcall(this, "getResources", "()Landroid/content/res/Resources;");
+  if (themed) args.push(await vcall(this, "getTheme", "()Landroid/content/res/Resources$Theme;"));
+  return vcall(resources, name, desc, ...args);
+};
 // the one logical display (Display.DEFAULT_DISPLAY = 0); AOSP hands out one Display per id
 let defaultDisplay: unknown;
 export const display = () => defaultDisplay ??= newObj("android/view/Display", null);
@@ -118,7 +122,9 @@ const SERVICE_CLASS: Record<string, string> = {
   permission_controller: "android/permission/PermissionControllerManager",
   locale: "android/app/LocaleManager",
   dropbox: "android/os/DropBoxManager",
+  storage: "android/os/storage/StorageManager",
   wifi: "android/net/wifi/WifiManager",
+  telephony_subscription_service: "android/telephony/SubscriptionManager",
 };
 const SERVICE_NAME = new Map(Object.entries(SERVICE_CLASS).map(([n, c]) => [c, n]));
 SERVICE_NAME.set("android/view/WindowManager", "window");
@@ -135,14 +141,15 @@ export function systemService(jctx: JContext, name: string): unknown {
   return s;
 }
 
-// API 31: one process, one caller, so one AttributionSource describes every context
+// API 31: a context's own AttributionSource is this process; a provider's caller may be another
 let attribution: unknown;
+export class JAttributionSource extends JObj { uid = PROCESS_UID; pid = PROCESS_PID; pkg: string | null = null; }
 rt.register({
-  name: "android/content/AttributionSource", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable"],
+  name: "android/content/AttributionSource", ctor: JAttributionSource, ifaces: ["android/os/Parcelable"],
   methods: {
-    "getUid()I": () => PROCESS_UID,
-    "getPid()I": () => PROCESS_PID,
-    "getPackageName()Ljava/lang/String;": () => appHost!.pkg,
+    "getUid()I": function (this: JAttributionSource) { return this.uid; },
+    "getPid()I": function (this: JAttributionSource) { return this.pid; },
+    "getPackageName()Ljava/lang/String;": function (this: JAttributionSource) { return this.pkg ?? appHost!.pkg; },
     ...stubs(null, "getAttributionTag()Ljava/lang/String;", "getNext()Landroid/content/AttributionSource;"),
     ...stubs(1, "isTrusted(Landroid/content/Context;)Z"),
     ...stubs(0, "describeContents()I"),
@@ -217,18 +224,14 @@ export const contextMethods: NativeSpec["methods"] = {
   "getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;": function (this: JContext, name: string) {
     return getPrefs(this.$host.pkg, name);
   },
-  "getString(I)Ljava/lang/String;": ctxString,
-  "getString(I[Ljava/lang/Object;)Ljava/lang/String;": function (this: JContext, id: number, args: unknown[]) {
-    return javaFormat(resString(this.$host.res, id), args);
-  },
-  "getText(I)Ljava/lang/CharSequence;": ctxString,
-  "getColor(I)I": function (this: JContext, id: number) { return rvColor(this.$host.res, this.$host.res.ref(id), 0); },
-  "getColorStateList(I)Landroid/content/res/ColorStateList;": async function (this: JContext, id: number) {
-    return loadColorStateList(this.$host.res, id, themeOf(this));
-  },
-  "getDrawable(I)Landroid/graphics/drawable/Drawable;": function (this: JContext, id: number) {
-    return loadDrawable(this.$host.res, id, themeOf(this));
-  },
+  // Context's resource getters are getResources().getX(id[, getTheme()]) in AOSP: both calls are
+  // virtual, so an app's Resources or ContextWrapper subclass (a string store, a skin engine) answers them.
+  "getString(I)Ljava/lang/String;": viaResources("getString", "(I)Ljava/lang/String;"),
+  "getString(I[Ljava/lang/Object;)Ljava/lang/String;": viaResources("getString", "(I[Ljava/lang/Object;)Ljava/lang/String;"),
+  "getText(I)Ljava/lang/CharSequence;": viaResources("getText", "(I)Ljava/lang/CharSequence;"),
+  "getColor(I)I": viaResources("getColor", "(ILandroid/content/res/Resources$Theme;)I", true),
+  "getColorStateList(I)Landroid/content/res/ColorStateList;": viaResources("getColorStateList", "(ILandroid/content/res/Resources$Theme;)Landroid/content/res/ColorStateList;", true),
+  "getDrawable(I)Landroid/graphics/drawable/Drawable;": viaResources("getDrawable", "(ILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;", true),
   "getAssets()Landroid/content/res/AssetManager;": function (this: JContext) {
     const a = new JAssetManager();
     a.host = this.$host.res;
@@ -376,6 +379,10 @@ rt.register({
   methods: { ...wrapperMethods, "<init>(Landroid/content/Context;)V": attachBase },
 });
 rt.register({
+  name: "android/content/MutableContextWrapper", ctor: class extends JContextWrapper {}, sup: "android/content/ContextWrapper",
+  methods: { ...wrapperMethods, "<init>(Landroid/content/Context;)V": attachBase, "setBaseContext(Landroid/content/Context;)V": attachBase },
+});
+rt.register({
   name: "android/view/ContextThemeWrapper", ctor: class extends JContextWrapper {}, sup: "android/content/ContextWrapper",
   methods: {
     ...wrapperMethods,
@@ -383,6 +390,10 @@ rt.register({
     "<init>(Landroid/content/Context;I)V": function (this: JContextWrapper, base: JContext, themeId: number) {
       attachBase.call(this, base);
       if (themeId) callSelf(contextMethods, "setTheme(I)V", this, themeId);
+    },
+    "<init>(Landroid/content/Context;Landroid/content/res/Resources$Theme;)V": function (this: JContextWrapper, base: JContext, theme: unknown) {
+      attachBase.call(this, base);
+      if (theme) (this as { ownTheme?: unknown }).ownTheme = theme;
     },
   },
 });

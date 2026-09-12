@@ -1,5 +1,5 @@
 import { readStreamFully } from "./jio";
-import { jarray, mangleMethod, charsToString } from "../abi";
+import { jarray, mangleMethod, charsToString, dotName } from "../abi";
 import {
   vcall, vcallMaybe, after, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, idHash, defineException,
   mkCmp, fmtDouble, bitCount32
@@ -92,6 +92,9 @@ rt.register({
   name: "java/util/AbstractMap$SimpleImmutableEntry", ctor: JSimpleImmutableEntry, ifaces: ["java/util/Map$Entry"],
   methods: {
     "<init>(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JSimpleImmutableEntry, k: unknown, v: unknown) { this.e = { k, v }; },
+    "<init>(Ljava/util/Map$Entry;)V": async function (this: JSimpleImmutableEntry, entry: unknown) {
+      this.e = { k: await vcall(entry, "getKey", "()Ljava/lang/Object;"), v: await vcall(entry, "getValue", "()Ljava/lang/Object;") };
+    },
     "getKey()Ljava/lang/Object;": function (this: JSimpleImmutableEntry) { return this.e.k; },
     "getValue()Ljava/lang/Object;": function (this: JSimpleImmutableEntry) { return this.e.v; },
     "setValue(Ljava/lang/Object;)Ljava/lang/Object;": function (): never {
@@ -349,6 +352,10 @@ export function listMethods(): Methods {
     "contains(Ljava/lang/Object;)Z": function (this: JList, v: unknown) {
       return after(indexIn(this.a, v), (i) => (i >= 0 ? 1 : 0));
     },
+    "containsAll(Ljava/util/Collection;)Z": async function (this: JList, c: unknown) {
+      for (const v of await toJsArray(c)) if ((await indexIn(this.a, v)) < 0) return 0;
+      return 1;
+    },
     // Collection default methods. They are declared on the interface, so nothing in an app
     // ever names the implementing class and a static scan cannot see them go missing.
     "removeIf(Ljava/util/function/Predicate;)Z": async function (this: JList, p: unknown) {
@@ -565,6 +572,7 @@ for (const n of ["java/util/ArrayList", "java/util/LinkedList", "java/util/Vecto
   const base = listMethods();
   rt.register({
     name: n, ctor: class extends JList {}, typeVars: "E",
+    sup: n === "java/util/Stack" ? "java/util/Vector" : n === "java/util/ArrayDeque" ? "java/util/AbstractCollection" : "java/util/AbstractList",
     ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/Queue", "java/util/Deque", "java/util/RandomAccess", "java/lang/Cloneable", "java/io/Serializable"],
     methods: { ...base, ...listExtras[n]?.(base) },
   });
@@ -818,8 +826,18 @@ const mapExtras: Record<string, NativeSpec["methods"]> = {
   "java/util/concurrent/ConcurrentHashMap": {
     "static newKeySet()Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": () => rt.make("java/util/concurrent/ConcurrentHashMap$KeySetView"),
     "static newKeySet(I)Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": () => rt.make("java/util/concurrent/ConcurrentHashMap$KeySetView"),
+    "contains(Ljava/lang/Object;)Z": hashtableContains,
+    "keys()Ljava/util/Enumeration;": hashtableKeys, "elements()Ljava/util/Enumeration;": hashtableElements,
   },
+  "java/util/Hashtable": { "contains(Ljava/lang/Object;)Z": hashtableContains, "keys()Ljava/util/Enumeration;": hashtableKeys, "elements()Ljava/util/Enumeration;": hashtableElements },
 };
+function hashtableKeys(this: JMap) { return mkIter([...allEnts(this)].map((e) => e.k)); }
+function hashtableElements(this: JMap) { return mkIter([...allEnts(this)].map((e) => e.v)); }
+/** the legacy Hashtable-era alias of containsValue, which rejects null */
+function hashtableContains(this: JMap, v: unknown) {
+  if (v === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  return vcall(this, "containsValue", "(Ljava/lang/Object;)Z", v);
+}
 for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/concurrent/ConcurrentHashMap",
   "java/util/WeakHashMap", "java/util/IdentityHashMap", "java/util/Hashtable", "java/util/EnumMap",
   "android/util/ArrayMap"]) {
@@ -827,7 +845,7 @@ for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/conc
   if (n === "java/util/EnumMap") methods["put(Ljava/lang/Enum;Ljava/lang/Object;)Ljava/lang/Object;"] = methods["put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"];
   rt.register({
     name: n, ctor: class extends JMap {}, typeVars: "K,V",
-    sup: n === "java/util/LinkedHashMap" ? "java/util/HashMap" : "java/lang/Object",
+    sup: n === "java/util/LinkedHashMap" ? "java/util/HashMap" : n === "android/util/ArrayMap" ? "java/lang/Object" : "java/util/AbstractMap",
     ifaces: ["java/util/Map", "java/util/concurrent/ConcurrentMap", "java/util/SortedMap", "java/lang/Cloneable", "java/io/Serializable"],
     methods,
   });
@@ -857,6 +875,7 @@ function setMethods(): NativeSpec["methods"] {
       c.slow = this.slow.map((e) => ({ k: e.k, v: e.v }));
       return c;
     },
+    "<init>(IF)V": function () {},
     "<init>(Ljava/util/Collection;)V": async function (this: JSet, c: unknown) {
       for (const v of await toJsArray(c)) await addToSet(this, v);
     },
@@ -941,7 +960,7 @@ for (const n of ["java/util/HashSet", "java/util/LinkedHashSet",
   "java/util/concurrent/CopyOnWriteArraySet", "java/util/EnumSet", "java/util/concurrent/ConcurrentHashMap$KeySetView"]) {
   rt.register({
     name: n, ctor: class extends JSet {}, typeVars: "E",
-    sup: n === "java/util/LinkedHashSet" ? "java/util/HashSet" : "java/lang/Object",
+    sup: n === "java/util/LinkedHashSet" ? "java/util/HashSet" : "java/util/AbstractSet",
     ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/util/SortedSet", "java/io/Serializable"],
     methods: n === "java/util/EnumSet" ? { ...setMethods(), ...enumSetStatics() } : setMethods(),
   });
@@ -1192,6 +1211,7 @@ function snapshotIterator(list: JList, at = 0): JIter {
 }
 const concurrentListExtras: Record<string, Methods> = {
   "java/util/concurrent/CopyOnWriteArrayList": {
+    "<init>([Ljava/lang/Object;)V": function (this: JList, items: unknown[]) { this.a = items.slice(); },
     "iterator()Ljava/util/Iterator;": function (this: JList) { return snapshotIterator(this); },
     "listIterator()Ljava/util/ListIterator;": function (this: JList) { return snapshotIterator(this); },
     "listIterator(I)Ljava/util/ListIterator;": function (this: JList, at: number) { return snapshotIterator(this, at); },
@@ -1801,6 +1821,20 @@ rt.register({
   },
 });
 for (const i of ["java/util/RandomAccess", "java/util/Enumeration"]) rt.register({ name: i, ctor: class extends JObj {} });
+class JEventObject extends JObj { source: unknown = null; }
+rt.register({
+  name: "java/util/EventObject", ctor: JEventObject, ifaces: ["java/io/Serializable"], fields: ["source"],
+  methods: {
+    "<init>(Ljava/lang/Object;)V": function (this: JEventObject, source: unknown) {
+      if (source === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "null source");
+      this.source = source;
+    },
+    "getSource()Ljava/lang/Object;": function (this: JEventObject) { return this.source; },
+    "toString()Ljava/lang/String;": async function (this: JEventObject) {
+      return dotName((this.constructor as typeof JObj).$i.name) + "[source=" + (await vcall(this.source, "toString", "()Ljava/lang/String;")) + "]";
+    },
+  },
+});
 // Comparator is an interface whose STATICS and defaults apps really do call.
 const keyed = (fn: unknown, sel: string, desc: string) =>
   mkCmp(async (a, b) => {
@@ -2181,3 +2215,24 @@ rt.register({
     },
   },
 });
+
+// java.lang.ProcessBuilder: there is no shell to fork, so start() fails the way Runtime.exec does
+class JProcessBuilder extends JObj { cmd: string[] = []; dir: unknown = null; redirect = false; }
+rt.register({
+  name: "java/lang/ProcessBuilder", ctor: JProcessBuilder,
+  methods: {
+    "<init>([Ljava/lang/String;)V": function (this: JProcessBuilder, cmd: string[]) { this.cmd = [...cmd]; },
+    "<init>(Ljava/util/List;)V": async function (this: JProcessBuilder, cmd: unknown) { this.cmd = (await toJsArray(cmd)) as string[]; },
+    "command([Ljava/lang/String;)Ljava/lang/ProcessBuilder;": function (this: JProcessBuilder, cmd: string[]) { this.cmd = [...cmd]; return this; },
+    "command(Ljava/util/List;)Ljava/lang/ProcessBuilder;": async function (this: JProcessBuilder, cmd: unknown) { this.cmd = (await toJsArray(cmd)) as string[]; return this; },
+    "command()Ljava/util/List;": function (this: JProcessBuilder) { return newArrayList(this.cmd.slice()); },
+    "redirectErrorStream(Z)Ljava/lang/ProcessBuilder;": function (this: JProcessBuilder, on: number) { this.redirect = !!on; return this; },
+    "redirectErrorStream()Z": function (this: JProcessBuilder) { return this.redirect ? 1 : 0; },
+    "directory(Ljava/io/File;)Ljava/lang/ProcessBuilder;": function (this: JProcessBuilder, d: unknown) { this.dir = d; return this; },
+    "environment()Ljava/util/Map;": () => rt.make("java/util/HashMap"),
+    "start()Ljava/lang/Process;": function (this: JProcessBuilder) {
+      throw rt.mkThrowable("java/io/IOException", `Cannot run program "${this.cmd[0] ?? ""}": error=2, No such file or directory`);
+    },
+  },
+});
+

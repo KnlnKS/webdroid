@@ -46,3 +46,26 @@ test("the dropbox service exists and has every tag disabled", async () => {
   expect(await vcall(dropbox, "isTagEnabled", "(Ljava/lang/String;)Z", "crash")).toBe(0);
   await vcall(dropbox, "addText", "(Ljava/lang/String;Ljava/lang/String;)V", "crash", "x");
 });
+
+test("FileChannel READ_WRITE mappings share the file's bytes and force persists them", async () => {
+  vfs.write("/tmp/nio-map.bin", new Uint8Array([1, 2, 3, 4]));
+  const raf = await newObj("java/io/RandomAccessFile", "(Ljava/lang/String;Ljava/lang/String;)V", "/tmp/nio-map.bin", "rw");
+  const channel = await vcall(raf, "getChannel", "()Ljava/nio/channels/FileChannel;");
+  const mode = (rt.link("java/nio/channels/FileChannel$MapMode").ctor as any).s$READ_WRITE;
+  const map = await vcall(channel, "map", "(Ljava/nio/channels/FileChannel$MapMode;JJ)Ljava/nio/MappedByteBuffer;", mode, 2n, 6n);
+  expect(await vcall(map, "capacity", "()I")).toBe(6);
+  expect(vfs.read("/tmp/nio-map.bin")!.length).toBe(8);           // the mapping extended the file
+  expect(await vcall(map, "get", "(I)B", 0)).toBe(3);
+  await vcall(map, "put", "(IB)Ljava/nio/ByteBuffer;", 1, 9);
+  expect(vfs.read("/tmp/nio-map.bin")![3]).toBe(9);               // the store is in the file's storage at once
+  await vcall(raf, "seek", "(J)V", 8n);
+  await vcall(raf, "write", "(I)V", 7);                            // the file grows past the mapping; the mapping follows the storage
+  await vcall(map, "put", "(IB)Ljava/nio/ByteBuffer;", 5, 5);
+  await vcall(map, "force", "()Ljava/nio/MappedByteBuffer;");
+  expect([...vfs.read("/tmp/nio-map.bin")!]).toEqual([1, 2, 3, 9, 0, 0, 0, 5, 7]);
+  await vcall(raf, "close", "()V");
+  expect([...vfs.read("/tmp/nio-map.bin")!]).toEqual([1, 2, 3, 9, 0, 0, 0, 5, 7]);
+  const reader = await newObj("java/io/RandomAccessFile", "(Ljava/lang/String;Ljava/lang/String;)V", "/tmp/nio-map.bin", "r");
+  const ro = await vcall(reader, "getChannel", "()Ljava/nio/channels/FileChannel;");
+  await expect(vcall(ro, "map", "(Ljava/nio/channels/FileChannel$MapMode;JJ)Ljava/nio/MappedByteBuffer;", mode, 0n, 4n)).rejects.toThrow();
+});

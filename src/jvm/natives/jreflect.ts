@@ -2,7 +2,7 @@
 
 import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
 import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat, splitSig } from "../abi";
-import { vcall, boxInt, box, boxObject, stringHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit, enclosingClass } from "./jlang";
+import { vcall, boxInt, box, boxObject, stringHash, idHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit, enclosingClass } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 
 // ── annotation cache per class: methodIdx (within its dex) → EncAnnotation[]
@@ -154,7 +154,7 @@ rt.register({
     "getType()Ljava/lang/Class;": function (this: JField) { return classForDesc(this.desc, this.owner.owner); },
     "getGenericType()Ljava/lang/reflect/Type;": function (this: JField) {
       const s = signatureOf(classAnno(this.owner).fieldsByName.get(this.fname));
-      return s ? parseTypeSig(s, { pos: 0 }) : classForDesc(this.desc, this.owner.owner);
+      return s ? parseTypeSig(s, { pos: 0 }, classScope(this.owner)) : classForDesc(this.desc, this.owner.owner);
     },
     "getModifiers()I": function (this: JField) { return this.flags; },
     "isSynthetic()Z": function (this: JField) { return (this.flags >> 12) & 1; },
@@ -201,7 +201,7 @@ rt.register({
     "getActualTypeArguments()[Ljava/lang/reflect/Type;": function (this: JPType) { return jarray(this.args.slice(), "Ljava/lang/reflect/Type;"); },
     "toString()Ljava/lang/String;": function (this: JPType) { return this.key; },
     "hashCode()I": function (this: JPType) { return stringHash(this.key); },
-    "equals(Ljava/lang/Object;)Z": function (this: JPType, o: unknown) { return o instanceof JPType && o.key === this.key ? 1 : 0; },
+    "equals(Ljava/lang/Object;)Z": function (this: JPType, o: unknown) { return typeEquals(this, o) ? 1 : 0; },
   },
 });
 class JTypeVar extends JObj { name = ""; key = ""; decl: unknown = null; bounds: unknown[] = []; }
@@ -209,10 +209,22 @@ class JWildcard extends JObj { upper: unknown[] = []; lower: unknown[] = []; key
 class JGenericArray extends JObj { component: unknown = null; key = ""; }
 const typeKey = (a: any): string => a?.key ?? (a?.ci ? dotName(a.ci.name) : a?.primName ?? a?.arrDesc ?? "?");
 const types = (a: unknown[]) => jarray(a.slice(), "Ljava/lang/reflect/Type;");
-const typeEquality = <T extends { key: string }>(C: new () => T) => ({
+/** Type equality as java.lang.reflect defines it: a type variable is its name AND its generic declaration
+ *  (List's E is not ArrayList's E — Gson's resolve keys a visited map by TypeVariable and would otherwise
+ *  answer the second one unresolved), a parameterized type its raw type and arguments; `key` is the display text */
+function typeEquals(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a instanceof JTypeVar) return b instanceof JTypeVar && a.name === b.name && a.decl === b.decl;
+  if (a instanceof JPType) return b instanceof JPType && a.raw === b.raw && a.args.length === b.args.length && a.args.every((x, i) => typeEquals(x, b.args[i]));
+  if (a instanceof JGenericArray) return b instanceof JGenericArray && typeEquals(a.component, b.component);
+  if (a instanceof JWildcard) return b instanceof JWildcard && a.upper.length === b.upper.length && a.lower.length === b.lower.length
+    && a.upper.every((x, i) => typeEquals(x, b.upper[i])) && a.lower.every((x, i) => typeEquals(x, b.lower[i]));
+  return false;
+}
+const typeEquality = <T extends { key: string }>() => ({
   "toString()Ljava/lang/String;": function (this: T) { return this.key; },
-  "hashCode()I": function (this: T) { return stringHash(this.key); },
-  "equals(Ljava/lang/Object;)Z": function (this: T, o: unknown) { return o instanceof C && o.key === this.key ? 1 : 0; },
+  "hashCode()I": function (this: T) { return stringHash(this.key) ^ (this instanceof JTypeVar && this.decl ? idHash(this.decl) : 0); },
+  "equals(Ljava/lang/Object;)Z": function (this: T, o: unknown) { return typeEquals(this, o) ? 1 : 0; },
 });
 for (const n of ["java/lang/reflect/TypeVariable", "java/lang/reflect/WildcardType", "java/lang/reflect/GenericArrayType"]) rt.register({ name: n, ctor: class extends JObj {}, ifaces: ["java/lang/reflect/Type"] });
 rt.register({
@@ -221,7 +233,7 @@ rt.register({
     "getName()Ljava/lang/String;": function (this: JTypeVar) { return this.name; },
     "getBounds()[Ljava/lang/reflect/Type;": function (this: JTypeVar) { return types(this.bounds.length ? this.bounds : [rt.classFor("java/lang/Object")]); },
     "getGenericDeclaration()Ljava/lang/reflect/GenericDeclaration;": function (this: JTypeVar) { return this.decl; },
-    ...typeEquality(JTypeVar),
+    ...typeEquality<JTypeVar>(),
   },
 });
 rt.register({
@@ -229,18 +241,22 @@ rt.register({
   methods: {
     "getUpperBounds()[Ljava/lang/reflect/Type;": function (this: JWildcard) { return types(this.upper); },
     "getLowerBounds()[Ljava/lang/reflect/Type;": function (this: JWildcard) { return types(this.lower); },
-    ...typeEquality(JWildcard),
+    ...typeEquality<JWildcard>(),
   },
 });
 rt.register({
   name: "webdroid/GenericArray", ctor: JGenericArray, ifaces: ["java/lang/reflect/GenericArrayType", "java/lang/reflect/Type"],
   methods: {
     "getGenericComponentType()Ljava/lang/reflect/Type;": function (this: JGenericArray) { return this.component; },
-    ...typeEquality(JGenericArray),
+    ...typeEquality<JGenericArray>(),
   },
 });
+/** The type variables a signature may name: those already declared (a class's, a method's own), so a
+ *  reference resolves to the declared object — equality is name and declaration — and an undeclared
+ *  name becomes a variable of `decl`, remembered for the next reference. */
+interface TypeScope { decl: unknown; vars: JTypeVar[] }
 /** parse one type signature at ref.pos: a JClass, or one of the generic Type objects above */
-function parseTypeSig(s: string, ref: { pos: number }, decl: unknown = null): unknown {
+function parseTypeSig(s: string, ref: { pos: number }, scope: TypeScope = { decl: null, vars: [] }): unknown {
   const c = s[ref.pos];
   if (c === "L") {
     let name = "";
@@ -249,7 +265,7 @@ function parseTypeSig(s: string, ref: { pos: number }, decl: unknown = null): un
     const args: unknown[] = [];
     if (s[ref.pos] === "<") {
       ref.pos++;
-      while (s[ref.pos] !== ">") args.push(parseTypeSig(s, ref, decl));
+      while (s[ref.pos] !== ">") args.push(parseTypeSig(s, ref, scope));
       ref.pos++; // '>'
       // inner-class suffix ".Name" possible; skip to ';'
       while (ref.pos < s.length && s[ref.pos] !== ";") ref.pos++;
@@ -264,24 +280,26 @@ function parseTypeSig(s: string, ref: { pos: number }, decl: unknown = null): un
   }
   if (c === "[") {
     ref.pos++;
-    const el: any = parseTypeSig(s, ref, decl);
+    const el: any = parseTypeSig(s, ref, scope);
     if (el?.ci || el?.primName || el?.arrDesc) return rt.classFor("[" + (el.ci ? "L" + el.ci.name + ";" : el.arrDesc ?? PRIM_DESC[el.primName]));
     const g = new JGenericArray(); g.component = el; g.key = typeKey(el) + "[]";
     return g;
   }
   if (c === "T") {
-    const v = new JTypeVar();
+    let name = "";
     ref.pos++;
-    while (ref.pos < s.length && s[ref.pos] !== ";") v.name += s[ref.pos++];
+    while (ref.pos < s.length && s[ref.pos] !== ";") name += s[ref.pos++];
     ref.pos++;
-    v.key = v.name;
-    v.decl = decl;
+    const known = scope.vars.find((v) => v.name === name);
+    if (known) return known;
+    const v = Object.assign(new JTypeVar(), { name, key: name, decl: scope.decl });
+    scope.vars.push(v);
     return v;
   }
   if (c === "+" || c === "-" || c === "*") {
     const w = new JWildcard();
     ref.pos++;
-    const bound = c === "*" ? null : parseTypeSig(s, ref, decl);
+    const bound = c === "*" ? null : parseTypeSig(s, ref, scope);
     w.upper = [c === "+" ? bound : rt.classFor("java/lang/Object")];
     if (c === "-") w.lower = [bound];
     w.key = c === "*" ? "?" : (c === "+" ? "? extends " : "? super ") + typeKey(bound);
@@ -310,12 +328,35 @@ function genericMethodTypes(owner: ClassInfo, name: string, desc: string): { par
   const erased = () => ({ params: parseMethodDesc(desc).params.map((d) => classForDesc(d, owner.owner)), ret: classForDesc(parseMethodDesc(desc).ret, owner.owner) });
   const s = signatureOf(classAnno(owner).methodsByRef.get(name + desc));
   if (!s) return erased();
+  // the method's own type parameters come first, then the class's
+  const scope = classScope(owner);
+  scope.vars.unshift(...declaredTypeVars(s, { pos: 0 }, { decl: null, vars: [] }));
   const ref = { pos: skipTypeParams(s) + 1 }; // past '('
   const params: unknown[] = [];
-  while (ref.pos < s.length && s[ref.pos] !== ")") params.push(parseTypeSig(s, ref));
+  while (ref.pos < s.length && s[ref.pos] !== ")") params.push(parseTypeSig(s, ref, scope));
   ref.pos++;
   if (params.length !== parseMethodDesc(desc).params.length) return erased();
-  return { params, ret: parseTypeSig(s, ref) };
+  return { params, ret: parseTypeSig(s, ref, scope) };
+}
+/** a scope naming the class's own type variables (a copy: references must not grow the class's list) */
+const classScope = (info: ClassInfo): TypeScope => ({ decl: (info.owner ?? rt).classFor(info.name), vars: [...typeVarsOf(info)] });
+/** the `<A:bound;B::iface;>` prefix of a signature at ref.pos, as declared variables of scope.decl */
+function declaredTypeVars(sig: string, ref: { pos: number }, scope: TypeScope): JTypeVar[] {
+  const vars: JTypeVar[] = [];
+  if (sig[ref.pos] !== "<") return vars;
+  ref.pos++;
+  while (ref.pos < sig.length && sig[ref.pos] !== ">") {
+    let name = "";
+    while (ref.pos < sig.length && sig[ref.pos] !== ":") name += sig[ref.pos++];
+    const v = scope.vars.find((x) => x.name === name) ?? (() => { const n = Object.assign(new JTypeVar(), { name, key: name, decl: scope.decl }); scope.vars.push(n); return n; })();
+    vars.push(v);
+    while (sig[ref.pos] === ":") {
+      ref.pos++;
+      if (sig[ref.pos] !== ":" && sig[ref.pos] !== ">") v.bounds.push(parseTypeSig(sig, ref, scope));
+    }
+  }
+  ref.pos++;
+  return vars;
 }
 
 /** an array of `len` elements whose component type is `cls` — what both
@@ -523,6 +564,16 @@ function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
       const fn = isStatic ? ci.ctor[mangled] : ci.ctor.prototype[mangled];
       if (typeof fn === "function") out.push(mkMethod(ci, name, desc, isStatic, fn));
     }
+    // methods installed outside the spec (Class's own reflection natives, generated members) are
+    // known by the descriptors bytecode references them with
+    for (const [k, desc] of rt.methodRefs(ci.name)) {
+      const name = k.slice(0, k.length - desc.length);
+      if (name === "<init>" || name === "<clinit>" || seen.has(k)) continue;
+      const mangled = mangleMethod(name, desc);
+      const fn = ci.ctor.prototype[mangled], sfn = ci.ctor[mangled];
+      if (typeof fn === "function") { seen.add(k); out.push(mkMethod(ci, name, desc, false, fn)); }
+      else if (typeof sfn === "function") { seen.add(k); out.push(mkMethod(ci, name, desc, true, sfn)); }
+    }
   };
   const collect = (ci: ClassInfo) => {
     if (!ci.def || !ci.dex) { if (ci.native) collectNative(ci); return; }
@@ -555,6 +606,13 @@ rt.register({
     "getTypeParameters()[Ljava/lang/reflect/TypeVariable;": noTypeVars,
     "getModifiers()I": function (this: JMethod) { return this.mods || (this.isStatic ? 0x8 : 0) | 0x1; },
     "isDefault()Z": function (this: JMethod) { return this.owner.isInterface && this.mods && !(this.mods & 0x400) ? 1 : 0; },
+    "getDefaultValue()Ljava/lang/Object;": function (this: JMethod) {
+      if (!this.owner.isInterface) return null;
+      const d = classAnno(this.owner).cls.find((a) => a.type === "dalvik/annotation/AnnotationDefault")?.elements.value;
+      if (!d || typeof d !== "object" || Array.isArray(d) || d.kind !== "annotation") return null;
+      const val = d.anno.elements[this.name];
+      return val === undefined ? null : boxReturn(this.desc.slice(this.desc.indexOf(")") + 1), resolveEncVal(val, d.anno.dex, this.owner.owner ?? rt));
+    },
     "getReturnType()Ljava/lang/Class;": function (this: JMethod) {
       return classForDesc(parseMethodDesc(this.desc).ret, this.owner.owner);
     },
@@ -682,23 +740,10 @@ function generics(info: ClassInfo): { vars: JTypeVar[]; ifaces: unknown[]; sup: 
   const sig = info.def ? signatureOf(classAnno(info).cls) : rt.natives.get(info.name)?.typeVars;
   if (info.def) {
     if (sig) {
-      const ref = { pos: 0 };
-      if (sig[0] === "<") {
-        ref.pos = 1;
-        while (ref.pos < sig.length && sig[ref.pos] !== ">") {
-          let name = "";
-          while (ref.pos < sig.length && sig[ref.pos] !== ":") name += sig[ref.pos++];
-          const bounds: unknown[] = [];
-          while (sig[ref.pos] === ":") {
-            ref.pos++;
-            if (sig[ref.pos] !== ":" && sig[ref.pos] !== ">") bounds.push(parseTypeSig(sig, ref, cls));
-          }
-          vars.push(Object.assign(new JTypeVar(), { name, key: name, decl: cls, bounds }));
-        }
-        ref.pos++;
-      }
-      sup = parseTypeSig(sig, ref, cls);
-      while (ref.pos < sig.length) ifaces.push(parseTypeSig(sig, ref, cls));
+      const ref = { pos: 0 }, scope: TypeScope = { decl: cls, vars };
+      declaredTypeVars(sig, ref, scope);
+      sup = parseTypeSig(sig, ref, scope);
+      while (ref.pos < sig.length) ifaces.push(parseTypeSig(sig, ref, scope));
     }
   } else if (sig) {
     for (const name of sig.split(",")) vars.push(Object.assign(new JTypeVar(), { name, key: name, decl: cls, bounds: [] }));

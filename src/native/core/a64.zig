@@ -800,10 +800,10 @@ fn svc(c: *Cpu) Status {
             c.exit = 135;
             return .syscall;
         },
+        // every other number is the host's: it serves the same table as libc's syscall(2)
         else => {
-            c.exit = @intFromEnum(Fault.unsupported_syscall);
-            c.fault_word = @truncate(c.x[8]);
-            return .fault;
+            c.exit = @truncate(c.x[8]);
+            return .syscall;
         },
     }
     return .jump;

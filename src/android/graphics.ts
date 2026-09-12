@@ -76,6 +76,14 @@ const rectMethods = (F: boolean): NativeSpec["methods"] => ({
     if (l < r && t < b) { this.left = l; this.top = t; this.right = r; this.bottom = b; return 1; }
     return 0;
   },
+  [`setIntersect(${F ? "Landroid/graphics/RectF;Landroid/graphics/RectF;" : "Landroid/graphics/Rect;Landroid/graphics/Rect;"})Z`]: function (this: JRect, a: JRect, b: JRect) {
+    if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) {
+      this.left = Math.max(a.left, b.left); this.top = Math.max(a.top, b.top);
+      this.right = Math.min(a.right, b.right); this.bottom = Math.min(a.bottom, b.bottom);
+      return 1;
+    }
+    return 0;
+  },
   [`union(${F ? "Landroid/graphics/RectF;" : "Landroid/graphics/Rect;"})V`]: function (this: JRect, o: JRect) {
     this.left = Math.min(this.left, o.left); this.top = Math.min(this.top, o.top);
     this.right = Math.max(this.right, o.right); this.bottom = Math.max(this.bottom, o.bottom);
@@ -317,6 +325,7 @@ export class JPaint extends JObj {
   strokeJoinN: CanvasLineJoin = "miter";
   dash: number[] | null = null;
   filterColor: number | null = null; // PorterDuff SRC_IN tint
+  filterMatrix: Float32Array | null = null; // ColorMatrixColorFilter
   filterObj: JObj | null = null;     // kept only so getColorFilter() round-trips
   /** Canvas2D form of the paint's Xfermode/BlendMode; null = plain source-over. */
   blend: GlobalCompositeOperation | null = null;
@@ -343,6 +352,7 @@ export class JPaint extends JObj {
     if (this.shaderObj instanceof JBitmapShader && ctx) return this.shaderObj.pattern(ctx);
     if (this.shader) return this.shader;
     const f = this.filterColor;
+    if (this.filterMatrix) return cssColor(matrixColor(this.filterMatrix, this.color));
     // PorterDuff/BlendMode SRC_IN — how Material tints every shape it draws: the filter's
     // colour replaces the paint's, keeping the alpha the two agree on
     if (f === null) return cssColor(this.color);
@@ -416,6 +426,7 @@ const paintMethods: NativeSpec["methods"] = {
   },
   "setColorFilter(Landroid/graphics/ColorFilter;)Landroid/graphics/ColorFilter;": function (this: JPaint, f: any) {
     this.filterColor = f?.tint ?? null;
+    this.filterMatrix = f?.matrix ?? null;
     this.filterObj = f ?? null;
     return f;
   },
@@ -502,7 +513,7 @@ export function copyPaint(src: JPaint, dst: JPaint) {
   dst.textSize = src.textSize; dst.tf = src.tf; dst.antiAlias = src.antiAlias;
   dst.textAlignN = src.textAlignN; dst.shader = src.shader; dst.shaderObj = src.shaderObj; dst.dash = src.dash;
   dst.maskFilter = src.maskFilter;
-  dst.filterColor = src.filterColor; dst.filterObj = src.filterObj; dst.underline = src.underline; dst.fakeBold = src.fakeBold;
+  dst.filterColor = src.filterColor; dst.filterMatrix = src.filterMatrix; dst.filterObj = src.filterObj; dst.underline = src.underline; dst.fakeBold = src.fakeBold;
   dst.letterSpacingEm = src.letterSpacingEm;
   dst.blend = src.blend; dst.xfermode = src.xfermode; dst.blendMode = src.blendMode;
 }
@@ -657,6 +668,57 @@ rt.register({
   },
 });
 rt.markers("android/graphics/ColorFilter");
+// ── ColorMatrix: AOSP's row-major 4x5, and the filter that carries a copy of one
+class JColorMatrix extends JObj { a = identityMatrix(); }
+function identityMatrix(): Float32Array { const m = new Float32Array(20); m[0] = m[6] = m[12] = m[18] = 1; return m; }
+function setMatrix(dst: Float32Array, src: Float32Array): void {
+  if (src.length < 20) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(src.length));
+  dst.set(src.subarray(0, 20));
+}
+function concat(a: Float32Array, b: Float32Array): Float32Array {
+  const out = new Float32Array(20);
+  for (let j = 0; j < 20; j += 5) {
+    for (let i = 0; i < 4; i++) out[j + i] = a[j] * b[i] + a[j + 1] * b[5 + i] + a[j + 2] * b[10 + i] + a[j + 3] * b[15 + i];
+    out[j + 4] = a[j] * b[4] + a[j + 1] * b[9] + a[j + 2] * b[14] + a[j + 3] * b[19] + a[j + 4];
+  }
+  return out;
+}
+rt.register({
+  name: "android/graphics/ColorMatrix", ctor: JColorMatrix,
+  methods: {
+    "<init>()V": function () {},
+    "<init>([F)V": function (this: JColorMatrix, src: Float32Array) { setMatrix(this.a, src); },
+    "<init>(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrix, src: JColorMatrix) { this.a.set(src.a); },
+    "getArray()[F": function (this: JColorMatrix) { return this.a; },
+    "reset()V": function (this: JColorMatrix) { this.a.fill(0); this.a[0] = this.a[6] = this.a[12] = this.a[18] = 1; },
+    "set(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrix, src: JColorMatrix) { this.a.set(src.a); },
+    "set([F)V": function (this: JColorMatrix, src: Float32Array) { setMatrix(this.a, src); },
+    "setScale(FFFF)V": function (this: JColorMatrix, r: number, g: number, b: number, a: number) {
+      this.a.fill(0); this.a[0] = r; this.a[6] = g; this.a[12] = b; this.a[18] = a;
+    },
+    "setSaturation(F)V": function (this: JColorMatrix, sat: number) {
+      const m = this.a, inv = 1 - sat, R = 0.213 * inv, G = 0.715 * inv, B = 0.072 * inv;
+      m.fill(0);
+      m[0] = R + sat; m[1] = G; m[2] = B;
+      m[5] = R; m[6] = G + sat; m[7] = B;
+      m[10] = R; m[11] = G; m[12] = B + sat;
+      m[18] = 1;
+    },
+    "setConcat(Landroid/graphics/ColorMatrix;Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrix, a: JColorMatrix, b: JColorMatrix) { this.a.set(concat(a.a, b.a)); },
+    "preConcat(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrix, pre: JColorMatrix) { this.a.set(concat(this.a, pre.a)); },
+    "postConcat(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrix, post: JColorMatrix) { this.a.set(concat(post.a, this.a)); },
+    "equals(Ljava/lang/Object;)Z": function (this: JColorMatrix, o: unknown) { return o instanceof JColorMatrix && o.a.every((v, i) => v === this.a[i]) ? 1 : 0; },
+  },
+});
+class JColorMatrixColorFilter extends JObj { matrix = identityMatrix(); }
+rt.register({
+  name: "android/graphics/ColorMatrixColorFilter", ctor: JColorMatrixColorFilter, sup: "android/graphics/ColorFilter",
+  methods: {
+    "<init>(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrixColorFilter, m: JColorMatrix) { this.matrix.set(m.a); },
+    "<init>([F)V": function (this: JColorMatrixColorFilter, src: Float32Array) { setMatrix(this.matrix, src); },
+    "getColorMatrix(Landroid/graphics/ColorMatrix;)V": function (this: JColorMatrixColorFilter, out: JColorMatrix) { out.a.set(this.matrix); },
+  },
+});
 class JColorSpace extends JObj { cname = "sRGB"; }
 const srgbSpace = new JColorSpace();
 mkEnumSet("android/graphics/ColorSpace$Named",
@@ -1306,7 +1368,7 @@ function drawRoundRect(this: JCanvas, l: number, t: number, r: number, b: number
 }
 function drawBitmapRect(this: JCanvas, b: JBitmap, src: JRect | null, dst: JRect | JRectF, p: JPaint | null) {
   const s = src ?? { left: 0, top: 0, right: b.w, bottom: b.h };
-  this.ctx.drawImage(tintedBmp(b, p?.filterColor ?? null), s.left, s.top, s.right - s.left, s.bottom - s.top,
+  this.ctx.drawImage(tintedBmp(b, p?.filterColor ?? null, p?.filterMatrix ?? null), s.left, s.top, s.right - s.left, s.bottom - s.top,
     dst.left, dst.top, dst.right - dst.left, dst.bottom - dst.top);
 }
 /** the (x, y, w, h) region of `src` as a new bitmap, through `m` when given */
@@ -1476,7 +1538,7 @@ export const canvasMethods: NativeSpec["methods"] = {
     drawTextImpl(this, charsToString(c, off, n), x, y, p);
   },
   "drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V": function (this: JCanvas, b: JBitmap, x: number, y: number, p: JPaint | null) {
-    this.ctx.drawImage(tintedBmp(b, p?.filterColor ?? null), x, y);
+    this.ctx.drawImage(tintedBmp(b, p?.filterColor ?? null, p?.filterMatrix ?? null), x, y);
   },
   "drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/Rect;Landroid/graphics/Paint;)V": drawBitmapRect,
   "drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/RectF;Landroid/graphics/Paint;)V": drawBitmapRect,
@@ -1484,7 +1546,7 @@ export const canvasMethods: NativeSpec["methods"] = {
     function (this: JCanvas, b: JBitmap, m: JMatrix, p: JPaint | null) {
       this.ctx.save();
       if (m) this.ctx.transform(...m.m);
-      this.ctx.drawImage(tintedBmp(b, p?.filterColor ?? null), 0, 0);
+      this.ctx.drawImage(tintedBmp(b, p?.filterColor ?? null, p?.filterMatrix ?? null), 0, 0);
       this.ctx.restore();
     },
   ...noops("<init>()V", "enableZ()V", "disableZ()V", "drawPicture(Landroid/graphics/Picture;)V",
@@ -1519,23 +1581,44 @@ function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
     ctx.fillRect(sx, y + p.textSize * 0.08, w, Math.max(1, p.textSize / 16));
   }
 }
-const tintCache = new WeakMap<JBitmap, Map<number, OffscreenCanvas>>();
-/** `b` recoloured SRC_IN with `tint`, cached per (bitmap, colour); the bitmap itself when tint is null */
-export function tintedBmp(b: JBitmap, tint: number | null): OffscreenCanvas {
-  if (tint === null) return b.canvas;
+const tintCache = new WeakMap<JBitmap, Map<number | string, OffscreenCanvas>>();
+/** `b` through a paint's colour filter — recoloured SRC_IN with `tint`, or every pixel through a
+ *  4x5 colour `matrix` — cached per (bitmap, filter); the bitmap itself when there is none */
+export function tintedBmp(b: JBitmap, tint: number | null, matrix: Float32Array | null = null): OffscreenCanvas {
+  if (tint === null && matrix === null) return b.canvas;
   let m = tintCache.get(b);
   if (!m) tintCache.set(b, (m = new Map()));
-  let t = m.get(tint);
+  const key = matrix ? matrix.join(",") : tint!;
+  let t = m.get(key);
   if (!t) {
     t = new OffscreenCanvas(b.w, b.h);
     const c = t.getContext("2d")!;
     c.drawImage(b.canvas, 0, 0);
-    c.globalCompositeOperation = "source-in";
-    c.fillStyle = cssColor(tint);
-    c.fillRect(0, 0, b.w, b.h);
-    m.set(tint, t);
+    if (matrix) {
+      const img = c.getImageData(0, 0, b.w, b.h), d = img.data, k = matrix;
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i + 1], bl = d[i + 2], a = d[i + 3];
+        d[i] = k[0] * r + k[1] * g + k[2] * bl + k[3] * a + k[4];
+        d[i + 1] = k[5] * r + k[6] * g + k[7] * bl + k[8] * a + k[9];
+        d[i + 2] = k[10] * r + k[11] * g + k[12] * bl + k[13] * a + k[14];
+        d[i + 3] = k[15] * r + k[16] * g + k[17] * bl + k[18] * a + k[19];
+      }
+      c.putImageData(img, 0, 0);
+    } else {
+      c.globalCompositeOperation = "source-in";
+      c.fillStyle = cssColor(tint!);
+      c.fillRect(0, 0, b.w, b.h);
+    }
+    m.set(key, t);
   }
   return t;
+}
+/** an ARGB colour through a 4x5 colour matrix (channels 0..255, offsets as stored) */
+export function matrixColor(k: Float32Array, color: number): number {
+  const a = color >>> 24, r = (color >>> 16) & 255, g = (color >>> 8) & 255, b = color & 255;
+  const clamp = (v: number) => v < 0 ? 0 : v > 255 ? 255 : Math.round(v);
+  return ((clamp(k[15] * r + k[16] * g + k[17] * b + k[18] * a + k[19]) << 24) | (clamp(k[0] * r + k[1] * g + k[2] * b + k[3] * a + k[4]) << 16)
+    | (clamp(k[5] * r + k[6] * g + k[7] * b + k[8] * a + k[9]) << 8) | clamp(k[10] * r + k[11] * g + k[12] * b + k[13] * a + k[14])) | 0;
 }
 rt.register({ name: "android/graphics/Canvas", ctor: JCanvas, methods: canvasMethods });
 // android.graphics.Outline: the shape a RenderNode clips to (clipToOutline) — Compose's

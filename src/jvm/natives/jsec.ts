@@ -217,12 +217,23 @@ rt.register({
 });
 
 // java.util.Random's generator seeded from the CSPRNG; nextBytes itself stays crypto-backed.
-class JSecureRandom extends JRandom {}
+class JSecureRandom extends JRandom { algo = "SHA1PRNG"; }
+const secureRandom = (algo: string) => { rt.link("java/security/SecureRandom"); const r = new JSecureRandom(); r.algo = algo; r.setSeed(randomSeed()); return r; };
 rt.register({
   name: "java/security/SecureRandom", ctor: JSecureRandom, sup: "java/util/Random",
   methods: {
     "<init>()V": function (this: JSecureRandom) { this.setSeed(randomSeed()); },
+    "<init>([B)V": function (this: JSecureRandom) { this.setSeed(randomSeed()); },
+    // every algorithm name draws from the same CSPRNG; the name is kept for getAlgorithm
+    "static getInstance(Ljava/lang/String;)Ljava/security/SecureRandom;": (algo: string) => {
+      if (algo === null) throw rt.mkThrowable("java/lang/NullPointerException", "algorithm == null");
+      return secureRandom(algo);
+    },
+    "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/SecureRandom;": (algo: string) => secureRandom(algo),
+    "static getInstanceStrong()Ljava/security/SecureRandom;": () => secureRandom("SHA1PRNG"),
+    "getAlgorithm()Ljava/lang/String;": function (this: JSecureRandom) { return this.algo; },
     "nextBytes([B)V": (b: Int8Array) => crypto.getRandomValues(u8(b)),
+    "generateSeed(I)[B": (n: number) => { const b = new Int8Array(n); crypto.getRandomValues(u8(b)); return b; },
   },
 });
 

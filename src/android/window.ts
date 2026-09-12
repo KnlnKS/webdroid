@@ -113,6 +113,7 @@ rt.register({
       invalidate();
     },
     "getStatusBarColor()I": () => appHost?.statusBarColor ?? -16777216,
+    "getNavigationBarColor()I": () => appHost?.navBarColor ?? -16777216,
     "setNavigationBarColor(I)V": function (this: JWindow, c: number) { if (appHost) appHost.navBarColor = c; },
     "setNavigationBarDividerColor(I)V": function (this: JWindow, c: number) { this.navBarDividerColor = c; invalidate(); },
     "getNavigationBarDividerColor()I": function (this: JWindow) { return this.navBarDividerColor; },
@@ -227,6 +228,7 @@ rt.register({
     "getDefaultDisplay()Landroid/view/Display;": display,
     "getCurrentWindowMetrics()Landroid/view/WindowMetrics;": () => new JWindowMetrics(),
     "getMaximumWindowMetrics()Landroid/view/WindowMetrics;": () => new JWindowMetrics(),
+    "isCrossWindowBlurEnabled()Z": () => 0,
     "addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": async (v: JView, lp: JLayoutParams & { x?: number; y?: number }) => {
       v.lp = lp;
       v.windowOwner ??= rt.make("android/view/Window");

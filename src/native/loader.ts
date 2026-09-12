@@ -1,5 +1,5 @@
 import { rt, type Runtime } from "../jvm/runtime";
-import { curThread } from "../jvm/natives/jlang";
+import { curThread, type JThread } from "../jvm/natives/jlang";
 import { libcInit } from "./libc";
 import { dlInit, loadModule, resolveGlobalOrNull } from "./dl";
 import type { Module } from "./elf";
@@ -40,7 +40,7 @@ export async function linkNativeLib(name: string, bytes: Uint8Array, abi = ""): 
   return loadModule(name, bytes, true);
 }
 
-export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string, owner: Runtime = rt): Promise<void> {
+export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string, owner: Runtime = rt, thread: JThread = curThread): Promise<void> {
   if (!(NATIVE_ABIS as readonly string[]).includes(abi)) {
     throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${name}" is ${abi} machine code`);
   }
@@ -48,10 +48,13 @@ export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string
   // before nativeInit builds them
   setA64(abi === "arm64-v8a");
   nativeInit();
-  const mod = await loadModule(name, bytes, false, owner);
+  // the caller's Cpu, chosen before anything awaits: init arrays and JNI_OnLoad run on the thread
+  // that called dlopen. Picking it afterwards once ran an executor's JNI_OnLoad on the main Cpu,
+  // parked mid-static-initialiser, and libc++'s guard reported a recursive initialisation.
+  const cpu = cpuFor(thread);
+  const mod = await loadModule(name, bytes, false, owner, cpu);
   const onload = mod.exports.get("JNI_OnLoad");
   if (onload) {
-    const cpu = cpuFor(curThread);
     const previous = cpu.nativeRuntime;
     cpu.nativeRuntime = owner;
     pushFrame(cpu);
@@ -60,4 +63,4 @@ export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string
   }
 }
 
-rt.loadNativeLib = loadNativeLib;
+rt.loadNativeLib = (name, bytes, abi, owner, thread) => loadNativeLib(name, bytes, abi, owner, thread as JThread | undefined);

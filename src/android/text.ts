@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { vcall, mkEnumSet, newObj } from "../jvm/natives/jlang";
-import { type JDate } from "../jvm/natives/jtime";
+import { type JDate, type JCalendar } from "../jvm/natives/jtime";
 import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances } from "./graphics";
 import { device } from "../shell/config";
 import { formatDate } from "../jvm/natives/jtext";
@@ -272,7 +272,7 @@ rt.register({
 });
 // Interface only (no ParagraphStyle registered yet to extend): the type real span classes
 // implement for the chooseHeight line-height adjustment applyLineHeightSpans applies.
-rt.markers("android/text/style/LineHeightSpan");
+rt.markers("android/text/style/LineHeightSpan", "android/text/style/LineHeightSpan$WithDensity");
 class JReplacementSpan extends JMetricAffectingSpan {}
 rt.register({
   name: "android/text/style/ReplacementSpan", ctor: JReplacementSpan,
@@ -461,6 +461,25 @@ async function textIndexOf(cs: unknown, needle: unknown, start = 0, end?: number
 }
 
 class JTextUtils extends JObj {}
+// AndroidCharacter: the bidi mirror pairs of the characters apps ask about (Unicode BidiMirroring's
+// paired brackets and quotes); everything else mirrors to itself
+const MIRROR = new Map<number, number>();
+for (const [a, b] of ["()", "[]", "{}", "<>", "«»", "‹›", "⁅⁆", "⁽⁾", "₍₎", "〈〉", "《》", "「」", "『』", "【】", "〔〕", "〖〗", "〘〙", "〚〛", "（）", "［］", "｛｝", "｟｠", "｢｣", "≤≥", "∈∋", "∼∽"]) { MIRROR.set(a.charCodeAt(0), b.charCodeAt(0)); MIRROR.set(b.charCodeAt(0), a.charCodeAt(0)); }
+rt.register({
+  name: "android/text/AndroidCharacter", ctor: class extends JObj {},
+  statics: { EAST_ASIAN_WIDTH_NEUTRAL: 0, EAST_ASIAN_WIDTH_AMBIGUOUS: 1, EAST_ASIAN_WIDTH_HALF_WIDTH: 2, EAST_ASIAN_WIDTH_FULL_WIDTH: 3, EAST_ASIAN_WIDTH_NARROW: 4, EAST_ASIAN_WIDTH_WIDE: 5 },
+  methods: {
+    "static getMirror(C)C": (c: number) => MIRROR.get(c) ?? c,
+    "static mirror([CII)Z": (chars: Uint16Array, start: number, count: number) => {
+      let changed = 0;
+      for (let i = start; i < start + count; i++) { const m = MIRROR.get(chars[i]); if (m !== undefined) { chars[i] = m; changed = 1; } }
+      return changed;
+    },
+    "static getDirectionality(C)B": (c: number) => (c >= 0x590 && c <= 0x8ff) || (c >= 0xfb1d && c <= 0xfdff) || (c >= 0xfe70 && c <= 0xfeff) ? 1 : c < 0x20 || (c >= 0x2000 && c <= 0x200f) ? 12 : 0,
+    "static getDirectionalities([C[BI)V": (chars: Uint16Array, out: Int8Array, count: number) => { for (let i = 0; i < count; i++) out[i] = chars[i] >= 0x590 && chars[i] <= 0x8ff ? 1 : 0; },
+    "static getEastAsianWidth(CZ)I": (c: number) => (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xff00 && c <= 0xff60) ? 5 : (c >= 0xff61 && c <= 0xffdc) ? 2 : (c >= 0xffe0 && c <= 0xffe6) ? 3 : 0,
+  },
+});
 rt.register({
   name: "android/text/TextUtils", ctor: JTextUtils,
   methods: {
@@ -513,6 +532,12 @@ rt.register({
     // how AOSP's own StaticLayout finds paragraph boundaries, and how app code scans a Spanned
     // without flattening it
     "static indexOf(Ljava/lang/CharSequence;C)I": (s: unknown, ch: number) => spannedString(s).indexOf(String.fromCharCode(ch)),
+    "static lastIndexOf(Ljava/lang/CharSequence;C)I": (s: unknown, ch: number) => spannedString(s).lastIndexOf(String.fromCharCode(ch)),
+    // AOSP: the last occurrence at or after `start` and at or before `last`
+    "static lastIndexOf(Ljava/lang/CharSequence;CII)I": (s: unknown, ch: number, start: number, last: number) => {
+      const i = spannedString(s).lastIndexOf(String.fromCharCode(ch), last);
+      return i >= start ? i : -1;
+    },
     "static indexOf(Ljava/lang/CharSequence;CI)I": (s: unknown, ch: number, from: number) => spannedString(s).indexOf(String.fromCharCode(ch), from),
     "static indexOf(Ljava/lang/CharSequence;CII)I": (s: unknown, ch: number, from: number, to: number) => {
       const i = spannedString(s).slice(0, to).indexOf(String.fromCharCode(ch), from);
@@ -1045,8 +1070,26 @@ rt.register({
     "static getTimeFormat(Landroid/content/Context;)Ljava/text/DateFormat;": () => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "h:mm a"),
     "static format(Ljava/lang/CharSequence;J)Ljava/lang/CharSequence;": (fmt: unknown, t: bigint) => formatDate(spannedString(fmt), Number(t)),
     "static format(Ljava/lang/CharSequence;Ljava/util/Date;)Ljava/lang/CharSequence;": (fmt: unknown, d: JDate | null) => formatDate(spannedString(fmt), d?.t ?? Date.now()),
+    "static format(Ljava/lang/CharSequence;Ljava/util/Calendar;)Ljava/lang/CharSequence;": (fmt: unknown, c: JCalendar) => formatDate(spannedString(fmt), c.d.getTime()),
   },
 });
+
+const sameLocalDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+rt.register({
+  name: "android/text/format/DateUtils", ctor: class extends JObj {},
+  statics: { SECOND_IN_MILLIS: 1000n, MINUTE_IN_MILLIS: 60000n, HOUR_IN_MILLIS: 3600000n, DAY_IN_MILLIS: 86400000n, WEEK_IN_MILLIS: 604800000n, YEAR_IN_MILLIS: 31449600000n },
+  methods: {
+    "static isToday(J)Z": (t: bigint) => sameLocalDay(new Date(Number(t)), new Date()) ? 1 : 0,
+    "static formatElapsedTime(J)Ljava/lang/String;": (s: bigint) => formatElapsed(Number(s)),
+    "static formatElapsedTime(Ljava/lang/StringBuilder;J)Ljava/lang/String;": (_sb: unknown, s: bigint) => formatElapsed(Number(s)),
+  },
+});
+/** h:mm:ss above an hour, m:ss below, as DateUtils.formatElapsedTime */
+function formatElapsed(seconds: number): string {
+  const h = Math.floor(seconds / 3600), m = Math.floor(seconds % 3600 / 60), s = seconds % 60;
+  const two = (n: number) => String(n).padStart(2, "0");
+  return h ? `${h}:${two(m)}:${two(s)}` : `${m}:${two(s)}`;
+}
 
 // ── android.text.format.Formatter: SI units and the 900 roll-over, as API 26+ formats them
 const BYTE_UNITS = ["B", "kB", "MB", "GB", "TB", "PB"];

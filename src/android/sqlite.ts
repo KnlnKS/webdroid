@@ -319,6 +319,22 @@ const cursorMethods: NativeSpec["methods"] = {
   "respond(Landroid/os/Bundle;)Landroid/os/Bundle;": () => new JBundle(),
 };
 rt.markers("android/database/Cursor");
+// CharArrayBuffer: the caller's reusable char[] a text column is copied into, grown when it is short
+class JCharArrayBuffer extends JObj { data: Uint16Array = new Uint16Array(0); sizeCopied = 0; }
+rt.register({
+  name: "android/database/CharArrayBuffer", ctor: JCharArrayBuffer, fields: ["data", "sizeCopied"],
+  methods: {
+    "<init>(I)V": function (this: JCharArrayBuffer, n: number) { this.data = new Uint16Array(n); },
+    "<init>([C)V": function (this: JCharArrayBuffer, chars: Uint16Array) { this.data = chars; },
+  },
+});
+cursorMethods["copyStringToBuffer(ILandroid/database/CharArrayBuffer;)V"] = async function (this: JCursor, i: number, buffer: JCharArrayBuffer) {
+  const text = await callSelf(cursorMethods, "getString(I)Ljava/lang/String;", this, i) as string | null;
+  if (text === null) { buffer.sizeCopied = 0; return; }
+  if (buffer.data.length < text.length) buffer.data = new Uint16Array(text.length);
+  for (let k = 0; k < text.length; k++) buffer.data[k] = text.charCodeAt(k);
+  buffer.sizeCopied = text.length;
+};
 rt.register({ name: "webdroid/Cursor", ctor: JCursor, ifaces: ["android/database/Cursor", "java/io/Closeable"], methods: cursorMethods });
 class JRowBuilder extends JObj { cursor!: JCursor; row!: unknown[]; index = 0; }
 rt.register({ name: "android/database/MatrixCursor$RowBuilder", ctor: JRowBuilder, methods: {

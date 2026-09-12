@@ -3,6 +3,7 @@
 import { JMessage, obtain } from "./messenger";
 import { parcelCreator, type JParcel } from "./parcel";
 import { keyCodes, deadChar } from "./keycodes";
+import { mem } from "../native/mem";
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
@@ -32,6 +33,7 @@ rt.register({
 class JLooper extends JObj {
   thread: JThread;
   q: Promise<unknown> = Promise.resolve();
+  printer: unknown = null;   // Looper.setMessageLogging
   constructor(thread?: JThread) { super(); this.thread = thread ?? curThread; }
   /** Messages run serialized on the looper's thread. The main looper is the shell's queue; any
    *  other is its own chain with a macrotask hop between messages, so the shell, rAF and the
@@ -49,6 +51,16 @@ class JLooper extends JObj {
     return p;
   }
 }
+/** Looper.loop with a Printer installed: the two lines around each dispatch that block-detectors time */
+async function dispatchLogged(handler: JHandler, msg: JMessage, printer: unknown): Promise<void> {
+  const str = async (o: unknown) => o === null ? "null" : String(await vcall(o, "toString", "()Ljava/lang/String;"));
+  try {
+    await vcall(printer, "println", "(Ljava/lang/String;)V", `>>>>> Dispatching to ${await str(handler)} ${await str(msg.callback)}: ${msg.what}`);
+    await vcall(handler, "dispatchMessage", "(Landroid/os/Message;)V", msg);
+    await vcall(printer, "println", "(Ljava/lang/String;)V", `<<<<< Finished to ${await str(handler)} ${await str(msg.callback)}`);
+  } catch (e) { reportUncaught(e); }
+}
+rt.markers("android/util/Printer");
 export const mainLooper = new JLooper(mainThread);
 mainThread.looper = mainLooper;
 rt.register({
@@ -63,6 +75,11 @@ rt.register({
     "isCurrentThread()Z": function (this: JLooper) { return curThread === this.thread ? 1 : 0; },
     ...noops("static prepareMainLooper()V", "quit()V", "quitSafely()V"),
     "getQueue()Landroid/os/MessageQueue;": () => mainQueue,
+    "setMessageLogging(Landroid/util/Printer;)V": function (this: JLooper, printer: unknown) { this.printer = printer; },
+    "static myQueue()Landroid/os/MessageQueue;": () => {
+      if (!curThread.looper) throw rt.mkThrowable("java/lang/IllegalStateException", "No Looper; Looper.prepare() wasn't called on this thread.");
+      return mainQueue;
+    },
   },
 });
 class JMessageQueue extends JObj {}
@@ -107,6 +124,8 @@ export class JHandler extends JObj {
     const go = () => this.looper.run(() => {
       if (!set.delete(msg)) return;
       if (!set.size) this.pending.delete(key);
+      const printer = this.looper.printer;
+      if (printer) return dispatchLogged(this, msg, printer);
       return vcall(this, "dispatchMessage", "(Landroid/os/Message;)V", msg).catch(reportUncaught);
     });
     if (delay > 0) msg.timer = setTimeout(() => void go(), delay); else void go();
@@ -165,6 +184,9 @@ rt.register({
     },
     "post(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.post(r, 0); },
     "postDelayed(Ljava/lang/Runnable;J)Z": function (this: JHandler, r: unknown, d: bigint) { return this.post(r, Number(d)); },
+    "postDelayed(Ljava/lang/Runnable;Ljava/lang/Object;J)Z": function (this: JHandler, r: unknown, token: unknown, d: bigint) {
+      return this.send(obtain(this, 0, token, 0, 0, r), Number(d));
+    },
     "postAtTime(Ljava/lang/Runnable;J)Z": function (this: JHandler, r: unknown, at: bigint) {
       return this.post(r, Math.max(0, Number(at) - uptimeMillis()));
     },
@@ -205,11 +227,13 @@ rt.register({ name: "android/os/HandlerThread", ctor: class extends JThread { jl
     "<init>(Ljava/lang/String;I)V": function (this: any, n: string) { this.jname = n; this.jlooper.thread = this; this.looper = this.jlooper; },
     "start()V": function (this: any) { this.alive = 1; },
     "getLooper()Landroid/os/Looper;": function (this: any) { return this.jlooper; },
+    "getThreadId()I": function (this: JThread) { return this.alive ? threadTid(this) : -1; },
     "quit()Z": () => 1, "quitSafely()Z": () => 1,
     "run()V": function () {},
   },
 });
 
+const RUNTIME_STATS = ["art.gc.gc-count", "art.gc.gc-time", "art.gc.bytes-allocated", "art.gc.bytes-freed", "art.gc.blocking-gc-count", "art.gc.blocking-gc-time", "art.gc.gc-count-rate-histogram", "art.gc.blocking-gc-count-rate-histogram"];
 // ── SystemClock / Build / Process / Trace / Debug / StrictMode
 class JSystemClock extends JObj {}
 rt.register({
@@ -275,6 +299,15 @@ rt.register({ name: "android/os/Build$VERSION_CODES", ctor: class extends JObj {
 export let PROCESS_PID = 1000, PROCESS_UID = 10001;
 export let PROCESS_NAME = "";
 export function setProcessIdentity(pid: number, uid: number): void { PROCESS_PID = pid; PROCESS_UID = uid; }
+const threadTids = new WeakMap<JThread, number>();
+let tidSeq = 0;
+/** the kernel thread id of a Java thread: the main thread's is the pid, as on a device */
+export function threadTid(t: JThread): number {
+  if (t === mainThread) return PROCESS_PID;
+  let tid = threadTids.get(t);
+  if (tid === undefined) threadTids.set(t, (tid = PROCESS_PID + ++tidSeq));
+  return tid;
+}
 export function setProcessName(name: string): void { PROCESS_NAME = name; }
 rt.register({
   name: "android/os/Process", ctor: class extends JObj {},
@@ -287,7 +320,7 @@ rt.register({
     // moment here than the page's own timeOrigin
     "static getStartUptimeMillis()J": () => 0n,
     "static getElapsedCpuTime()J": () => BigInt(Math.round(performance.now())),
-    "static myTid()I": () => 1000,
+    "static myTid()I": () => threadTid(curThread),
     "static myUid()I": () => PROCESS_UID,
     "static getGidForName(Ljava/lang/String;)I": (name: string | null) => {
       if (name === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
@@ -309,10 +342,13 @@ rt.register({
 });
 // the process's memory as the one heap the page has: no separate native, dalvik or graphics accounting
 rt.register({
-  name: "android/os/Debug$MemoryInfo", ctor: class extends JObj { dalvikPss = 0; nativePss = 0; otherPss = 0; },
+  name: "android/os/Debug$MemoryInfo", ctor: class extends JObj {
+    dalvikPss = 0; nativePss = 0; otherPss = 0;
+    dalvikSharedDirty = 0; dalvikPrivateDirty = 0; nativeSharedDirty = 0; nativePrivateDirty = 0; otherSharedDirty = 0; otherPrivateDirty = 0;
+  },
   fields: ["dalvikPss", "nativePss", "otherPss"],
   methods: {
-    "getTotalPss()I": () => ((performance as any).memory?.usedJSHeapSize ?? 0) / 1024 | 0,
+    "getTotalPss()I": function (this: { dalvikPss: number; nativePss: number; otherPss: number }) { return this.dalvikPss + this.nativePss + this.otherPss; },
     ...noops("<init>()V"),
     ...stubs(0, "getTotalPrivateDirty()I", "getTotalSharedDirty()I"),
     "getMemoryStat(Ljava/lang/String;)Ljava/lang/String;": () => "0",
@@ -321,10 +357,28 @@ rt.register({
 rt.register({
   name: "android/os/Debug", ctor: class extends JObj {},
   methods: {
-    "static getNativeHeapAllocatedSize()J": () => BigInt(((performance as any).memory?.usedJSHeapSize ?? 0) | 0),
-    "static getNativeHeapSize()J": () => BigInt(((performance as any).memory?.totalJSHeapSize ?? 0) | 0),
+    // the native heap is the guest allocator's: bytes in use, the extent it has reached, and the gap
+    "static getNativeHeapAllocatedSize()J": () => BigInt(Math.round(mem.stats().used)),
+    "static getNativeHeapSize()J": () => BigInt(Math.round(mem.stats().peak)),
+    "static getNativeHeapFreeSize()J": () => BigInt(Math.max(0, Math.round(mem.stats().peak - mem.stats().used))),
     ...stubs(0, "static isDebuggerConnected()Z", "static waitingForDebugger()Z"),
-    ...stubs(0n, "static getNativeHeapFreeSize()J"),
+    "static threadCpuTimeNanos()J": () => BigInt(Math.round(performance.now() * 1e6)),
+    "static getPss()J": () => BigInt((((performance as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1024) | 0),
+    // ART's runtime counters: nothing here collects, blocks or compacts, so every stat is zero
+    "static getRuntimeStat(Ljava/lang/String;)Ljava/lang/String;": (name: string) => RUNTIME_STATS.includes(name) ? "0" : null,
+    "static getRuntimeStats()Ljava/util/Map;": async () => {
+      const m = await newObj("java/util/HashMap");
+      for (const k of RUNTIME_STATS) await vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, "0");
+      return m;
+    },
+    // the JS heap is the nearest thing to this process's dalvik footprint; nothing here is shared
+    "static getMemoryInfo(Landroid/os/Debug$MemoryInfo;)V": (info: { dalvikPss: number; dalvikPrivateDirty: number; nativePss: number; nativePrivateDirty: number } | null) => {
+      if (!info) throw rt.mkThrowable("java/lang/NullPointerException", "memoryInfo");
+      const kb = (((performance as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1024) | 0;
+      info.dalvikPss = kb; info.dalvikPrivateDirty = kb;
+      const native = Math.round(mem.stats().used / 1024);
+      info.nativePss = native; info.nativePrivateDirty = native;
+    },
   },
 });
 {
@@ -597,6 +651,29 @@ async function statFs(this: JStatFs, p: string) {
   } catch { /* no estimate available: report an empty filesystem */ }
 }
 const BLK = 4096n;
+// ── android.os.storage.StorageManager: the one volume, identified by the platform's default UUID
+let storageUuid: ReturnType<typeof uuidFromString> | null = null;
+const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
+async function storageEstimate(): Promise<{ total: number; free: number }> {
+  const s = new JStatFs();
+  await statFs.call(s, "/data");
+  return s;
+}
+rt.register({
+  name: "android/os/storage/StorageManager", ctor: class extends JObj {},
+  statics: { get UUID_DEFAULT() { return uuidDefault(); } },
+  methods: {
+    "getUuidForPath(Ljava/io/File;)Ljava/util/UUID;": () => uuidDefault(),
+    "getAllocatableBytes(Ljava/util/UUID;)J": async () => BigInt(Math.floor((await storageEstimate()).free)),
+    "getCacheQuotaBytes(Ljava/util/UUID;)J": async () => BigInt(Math.floor((await storageEstimate()).total / 20)),
+    "getCacheSizeBytes(Ljava/util/UUID;)J": () => 0n,
+    "isAllocationSupported(Ljava/io/FileDescriptor;)Z": () => 0,
+    "isEncrypted(Ljava/io/File;)Z": () => 0,
+    "getStorageVolumes()Ljava/util/List;": () => newArrayList(),
+    "getPrimaryStorageVolume()Landroid/os/storage/StorageVolume;": () => null,
+    "getStorageVolume(Ljava/io/File;)Landroid/os/storage/StorageVolume;": () => null,
+  },
+});
 rt.register({
   name: "android/os/StatFs", ctor: JStatFs,
   methods: {
@@ -799,6 +876,10 @@ rt.register({
     "static getExternalStorageState(Ljava/io/File;)Ljava/lang/String;": () => "mounted",
     "static getStorageState(Ljava/io/File;)Ljava/lang/String;": () => "mounted",
     "static isExternalStorageManager()Z": () => 1,
+    "static isExternalStorageEmulated()Z": () => 1,
+    "static isExternalStorageEmulated(Ljava/io/File;)Z": () => 1,
+    "static isExternalStorageRemovable()Z": () => 0,
+    "static isExternalStorageRemovable(Ljava/io/File;)Z": () => 0,
     "static isExternalStorageLegacy()Z": () => 0,
   },
 });
@@ -850,7 +931,7 @@ rt.register({
       if (n.fd < 0) throw errno("dup", 9);
       return n;
     },
-    "static gettid()I": () => PROCESS_PID,
+    "static gettid()I": () => threadTid(curThread),
     "static getpid()I": () => PROCESS_PID,
     "static stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {
       const st = vfs.stat(path);

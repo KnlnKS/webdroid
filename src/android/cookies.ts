@@ -1,4 +1,4 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, noops } from "../jvm/runtime";
 import { box, JBool, vcall } from "../jvm/natives/jlang";
 import type { WebCookies } from "../shell/webcookies";
 import { appHost } from "./apphost";
@@ -19,6 +19,19 @@ const complete = (callback: unknown, value: boolean) => {
 export const thirdPartyCookies = new WeakSet<JObj>();
 class JCookieManager extends JObj {}
 let instance: JCookieManager | null = null;
+// the deprecated syncer: cookies are written through as they are set, so every sync is a no-op
+let syncManager: JObj | null = null;
+rt.register({
+  name: "android/webkit/CookieSyncManager", ctor: class extends JObj {},
+  methods: {
+    "static createInstance(Landroid/content/Context;)Landroid/webkit/CookieSyncManager;": () => syncManager ??= rt.make("android/webkit/CookieSyncManager") as JObj,
+    "static getInstance()Landroid/webkit/CookieSyncManager;": () => {
+      if (!syncManager) throw rt.mkThrowable("java/lang/IllegalStateException", "CookieSyncManager::createInstance() needs to be called before CookieSyncManager::getInstance()");
+      return syncManager;
+    },
+    ...noops("sync()V", "startSync()V", "stopSync()V", "resetSync()V"),
+  },
+});
 rt.register({
   name: "android/webkit/CookieManager", ctor: JCookieManager,
   methods: {

@@ -6,7 +6,7 @@ import type { Runtime } from "../jvm/runtime";
 import { JThread, mainThread, setCurThread } from "../jvm/natives/jlang";
 import { NativeFault, mem } from "./mem";
 import { core, jitDrain, TLS_KEYS } from "./core";
-import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs } from "./host";
+import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs, NORET } from "./host";
 import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
 import { yieldToLoop, yieldStats } from "../jvm/yield";
@@ -70,7 +70,7 @@ export function setA64(on: boolean): void {
 export function isA64(): boolean { return A64; }
 
 /** the register file at the first native fault, as the faulting block found it (debug) */
-export const lastFault: { regs: { cpu: string; r: number[]; h: number[]; bt: string[]; frames: string[] } | null } = { regs: null };
+export const lastFault: { regs: { cpu: string; r: number[]; h: number[]; bt: string[]; frames: string[] } | null; msg: string } = { regs: null, msg: "" };
 let backtraceHook: (cpu: Cpu) => string[] = () => [];
 export function setBacktraceHook(f: (cpu: Cpu) => string[]): void { backtraceHook = f; }
 export const watchPcs = new Set<number>(((globalThis as { __wdWatch?: number[] }).__wdWatch ?? []).map((p) => p >>> 0));
@@ -90,6 +90,8 @@ export class Cpu {
   a64 = false;
   pcx = 15; lrx = 14; spx = 13;
   private threadData = 0;
+  /** the pthread_internal_t this thread is known by: pthread_self(), the handle pthread_create hands out */
+  pthreadSelf = 0;
   jthread: JThread;
   tid: number;
   stackBase = 0; stackTop = 0;
@@ -112,14 +114,19 @@ export class Cpu {
     mem.initHooks.push(() => this.views());
     this.args = A64 ? new Args64(this) : new Args(this);
     this.setAbi(A64);
-    // the TLS block, errno, then the pthread key table the core serves lookups from
-    this.threadData = mem.calloc(1, 264 + 8 * TLS_KEYS);
+    // the TLS block, errno, the pthread key table the core serves lookups from, then the
+    // pthread_internal_t pthread_self() names (bionic's layout: tid at +0x10, the stack in
+    // attr at +0x20/+0x28), which TLS slot 1 points at as on a device
+    this.threadData = mem.calloc(1, 264 + 8 * TLS_KEYS + PTHREAD_SIZE);
     if (!this.threadData) throw new NativeFault("[native] out of memory for thread data");
     this.tlsBase = this.threadData;
     this.errnoAddr = this.threadData + 256;
     this.u32[OFF_ERRNO >> 2] = this.errnoAddr;
     this.tlsTab = this.threadData + 264;
     this.u32[OFF_TLSTAB >> 2] = this.tlsTab;
+    this.pthreadSelf = this.tlsTab + 8 * TLS_KEYS;
+    mem.st32(this.pthreadSelf + 0x10, 4242 + this.tid);
+    mem.st32(this.tlsBase + (A64 ? 8 : 4), this.pthreadSelf);
     cpus.add(this);
   }
   private views(): void {
@@ -264,6 +271,7 @@ export class Cpu {
       const s = mem.allocStack(STACK_SIZE);
       this.stackBase = s.base; this.stackTop = s.top;
       this.w[2 * this.spx] = s.top; this.w[2 * this.spx + 1] = 0;
+      if (this.a64) { mem.st64(this.pthreadSelf + 0x20, BigInt(s.base)); mem.st64(this.pthreadSelf + 0x28, BigInt(s.top - s.base)); }
     }
   }
 
@@ -419,7 +427,10 @@ export class Cpu {
           if (this.pending || this.finished) { jitDrain(); return this.pending ? SliceExit.Suspend : SliceExit.Exit; }
           continue;
         case CoreExit.Ret: jitDrain(); return SliceExit.Exit;
-        case CoreExit.Syscall: this.syscall(this.exit); continue;
+        case CoreExit.Syscall:
+          this.syscall(this.exit);
+          if (this.pending) { jitDrain(); return SliceExit.Suspend; }
+          continue;
         default: {
           const code = this.exit, word = this.u32[OFF_WORD >> 2] >>> 0;
           const what = code === 2 ? `bad address 0x${(this.u32[OFF_ADDR >> 2] >>> 0).toString(16)}` : code === 6 ? `${FAULTS[code]} ${word}` : `${FAULTS[code] ?? "fault " + code} 0x${word.toString(16).padStart(8, "0")}`;
@@ -428,7 +439,8 @@ export class Cpu {
       }
     }
   }
-  /** the syscalls the host owns, left by the core with their number */
+  /** the syscalls the host owns, left by the core with their number: the signal mask here, the
+   *  rest through libc's syscall(2) table (a raw svc and the wrapper reach the same bodies) */
   private syscall(nr: number): void {
     const w = this.w;
     if (nr === 135) {                                                                    // rt_sigprocmask
@@ -436,10 +448,30 @@ export class Cpu {
       w[0] = -result; w[1] = result ? -1 : 0;
     } else if (nr === 175) {
       w[0] = -(w[6] === 8 ? this.sigmask(w[0], w[2] >>> 0, w[4] >>> 0, 8) : 22);
-    } else this.fault(`syscall ${nr}`);
+    } else {
+      if (!rawSyscall) this.fault(`syscall ${nr}`);
+      const a = this.args;
+      a.reset(this);
+      const ret = rawSyscall(this, nr, a);
+      // the core has already stepped past the svc: a parked syscall resumes by writing x0 alone
+      if (ret instanceof Promise) { this.pending = ret.then((r) => { this.syscallReturn(r); return NORET; }); return; }
+      this.syscallReturn(ret);
+    }
+  }
+  /** the kernel's convention: the result in x0/r0, a failure as -errno (the wrapper bodies
+   *  answer -1 with errno set, which is turned back into what the kernel would have said) */
+  private syscallReturn(ret: HostRet): void {
+    let v: number | bigint = typeof ret === "number" || typeof ret === "bigint" ? ret : 0;
+    if (v === -1 || v === -1n) { const e = mem.ld32(this.errnoAddr); if (e) v = -e; }
+    if (typeof v === "bigint") { this.w[0] = Number(v & 0xffffffffn) | 0; this.w[1] = Number((v >> 32n) & 0xffffffffn) | 0; }
+    else { this.w[0] = v | 0; this.w[1] = v < 0 ? -1 : 0; }
   }
   private trap(e: unknown): NativeFault {
-    if (e instanceof NativeFault) return e;
+    if (e instanceof NativeFault) {
+      // a fault a host function raised (mem.tx on a bad pointer argument) names no guest site: add the block it was called from
+      if (!e.pc) { e.message += ` @ ${symbolizeHook(this.bpc)} (block 0x${this.bpc.toString(16)}, ${this.name})`; e.pc = this.bpc; }
+      return e;
+    }
     this.snapshot();
     // the wasm frame (region function and byte offset) says which emitted code trapped
     const frame = e instanceof Error ? /wasm-function\[\d+\]:0x[0-9a-f]+/.exec(e.stack ?? "") : null;
@@ -477,13 +509,21 @@ export class Cpu {
     if (!lastFault.regs) lastFault.regs = { cpu: this.name, r: [...Array(32)].map((_, i) => this.w[2 * i]), h: [...Array(32)].map((_, i) => this.w[2 * i + 1]), bt: backtraceHook(this), frames: [...this.frames] };
   }
   fault(msg: string): never {
+    const first = !lastFault.regs;
     this.snapshot();
     const e = new NativeFault(`[native] ${msg} @ ${symbolizeHook(this.pc)} (block 0x${this.bpc.toString(16)}, ${this.name}, lr=${symbolizeHook(this.lr >>> 0)})`);
+    // the first fault is the one worth knowing about even when Java catches it: keep its text
+    if (first) { lastFault.msg = e.message; console.warn("[native fault]", e.message); }
     e.pc = this.pc;
     throw e;
   }
 }
 
+/** libc's syscall(2) dispatcher, installed at init: raw svc/swi numbers the core leaves to the host */
+let rawSyscall: ((cpu: Cpu, nr: number, a: ArgReader) => HostRet | Promise<HostRet>) | null = null;
+export function setRawSyscall(fn: (cpu: Cpu, nr: number, a: ArgReader) => HostRet | Promise<HostRet>): void { rawSyscall = fn; }
+/** bionic's pthread_internal_t is under 0x200 bytes; a crash reporter scans it up to a page */
+const PTHREAD_SIZE = 0x200;
 let tidSeq = 0;
 export const cpus = new Set<Cpu>();
 const byThread = new WeakMap<JThread, Cpu>();

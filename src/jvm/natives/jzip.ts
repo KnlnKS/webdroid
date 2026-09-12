@@ -376,6 +376,39 @@ rt.register({
   },
 });
 
+// ── ZipInputStream: the source is drained and indexed by its central directory, which is what
+// makes an entry with a data descriptor (sizes only after the data) readable without decoding
+// ahead; entries are then served in local-header order, one buffer-backed entry at a time.
+class JZipInputStream extends JInputStream { zip: Uint8Array | null = null; entries: ZEntry[] = []; next = 0; }
+async function openZipStream(this: JZipInputStream, src: JInputStream) {
+  if (src === null) throw rt.mkThrowable("java/lang/NullPointerException", "in == null");
+  this.zip = await readStreamFully(src);
+}
+rt.register({
+  name: "java/util/zip/ZipInputStream", ctor: JZipInputStream, sup: "java/util/zip/InflaterInputStream",
+  methods: {
+    "<init>(Ljava/io/InputStream;)V": openZipStream,
+    "<init>(Ljava/io/InputStream;Ljava/nio/charset/Charset;)V": openZipStream,
+    "getNextEntry()Ljava/util/zip/ZipEntry;": function (this: JZipInputStream) {
+      if (!this.zip) throw rt.mkThrowable("java/io/IOException", "Stream closed");
+      if (!this.next && !this.entries.length) {
+        try { this.entries = [...centralDir(this.zip).values()].sort((a, b) => a.off - b.off); }
+        catch (e) { throw rt.mkThrowable("java/util/zip/ZipException", (e as Error).message); }
+      }
+      const e = this.entries[this.next];
+      if (!e) { this.buf = new Uint8Array(0); this.pos = 0; return null; }
+      this.next++;
+      this.buf = e.name.endsWith("/") ? new Uint8Array(0) : entryBytes(this.zip, e);
+      this.pos = 0;
+      return mkZipEntry(e);
+    },
+    "closeEntry()V": function (this: JZipInputStream) { this.buf = new Uint8Array(0); this.pos = 0; },
+    "available()I": function (this: JZipInputStream) { return this.pos < this.buf.length ? 1 : 0; },
+    "close()V": function (this: JZipInputStream) { this.zip = null; this.buf = new Uint8Array(0); this.pos = 0; },
+  },
+});
+rt.register({ name: "java/util/zip/InflaterInputStream", ctor: class extends JInputStream {}, sup: "java/io/FilterInputStream" });
+
 // ── GZIPInputStream: the whole source is gunzipped up front and served like any buffer-backed stream
 async function gunzip(this: JInputStream, src: JInputStream) {
   const z = await readStreamFully(src);

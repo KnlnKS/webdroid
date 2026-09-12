@@ -291,7 +291,11 @@ const executorMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "execute(Ljava/lang/Runnable;)V": function (this: JExecutor, r: unknown) {
     const f = submit(this, r, "run", "()V");
-    void f.promise!.then(() => { if (f.error) console.error("[executor]", (f.error as any).msg ?? f.error, (f.error as any).jsStack ?? ""); });
+    void f.promise!.then(() => {
+      if (!f.error) return;
+      const e = f.error as { msg?: string; jsStack?: string; jframes?: string[] };
+      console.error("[executor]", (e.msg ?? f.error) + (e.jframes ? "\n  at " + e.jframes.join("\n  at ") : ""), e.jsStack ?? "");
+    });
   },
   "submit(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown) {
     return submit(this, r, "run", "()V");
@@ -379,6 +383,10 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       "<init>(ILjava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, core: number) { initScheduled.call(this, core); },
       "<init>(ILjava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": initScheduled,
       "allowCoreThreadTimeOut(Z)V": function () {},
+      "getPoolSize()I": function (this: JExecutor) { return this.workers.length; },
+      "getActiveCount()I": function (this: JExecutor) { return this.workers.filter((w) => w.busy).length; },
+      "getCorePoolSize()I": function (this: JExecutor) { return this.limit; },
+      "getMaximumPoolSize()I": function (this: JExecutor) { return this.limit; },
       "setKeepAliveTime(JLjava/util/concurrent/TimeUnit;)V": function () {},
       "getQueue()Ljava/util/concurrent/BlockingQueue;": function (this: JExecutor) {
         if (!this.queue) { const queue = rt.make("java/util/concurrent/LinkedBlockingQueue") as JList; queue.a = this.tasks.map((t) => t.task); this.queue = queue; }
@@ -486,6 +494,7 @@ rt.register({
     "tryLock()Z": function (this: JLock) { this.held++; return 1; },
     "lockInterruptibly()V": function (this: JLock) { this.held++; },
     "isHeldByCurrentThread()Z": function (this: JLock) { return this.held > 0 ? 1 : 0; },
+    "isLocked()Z": function (this: JLock) { return this.held > 0 ? 1 : 0; },
     "newCondition()Ljava/util/concurrent/locks/Condition;": function () { return new JCondition(); },
   },
 });
@@ -609,7 +618,7 @@ const mkBlockingQueue = (name: string, deque = false) => rt.register({
     "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": timedPoll,
   },
 });
-for (const qn of ["java/util/concurrent/LinkedBlockingQueue", "java/util/concurrent/SynchronousQueue", "java/util/concurrent/ArrayBlockingQueue"]) mkBlockingQueue(qn);
+for (const qn of ["java/util/concurrent/LinkedBlockingQueue", "java/util/concurrent/SynchronousQueue", "java/util/concurrent/ArrayBlockingQueue", "java/util/concurrent/LinkedTransferQueue"]) mkBlockingQueue(qn);
 mkBlockingQueue("java/util/concurrent/LinkedBlockingDeque", true);
 // PriorityBlockingQueue: the sorted queue with a parking take(); a parked taker receives the
 // element that would have become the head

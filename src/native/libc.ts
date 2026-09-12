@@ -3,11 +3,11 @@
 // printf/scanf in printf.ts.
 
 import { mem, NativeFault, guestAt } from "./mem";
-import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, calledMissing } from "./host";
+import { hostLib, hostData, hostFn, NORET, ARG0, SERVED, ptr, vaList, type HostFn, type HostRet, type ArgReader, retF, retD, PTR, stp, ldp, calledMissing } from "./host";
 import { E, ERRSTR } from "./abi";
-import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
+import { invalidateRange, markProcessExited, setRawSyscall, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
-import { stdioInit, readInto } from "./stdio";
+import { stdioInit, readInto, fdWriteBack } from "./stdio";
 import { pthreadInit, futex } from "./pthread";
 import { zlibInit } from "./zlib";
 import { libmInit } from "./libm";
@@ -44,6 +44,20 @@ export function writeTs(p: number, ms: number, unit = 1e6): void {
 }
 /** an off_t argument: 64-bit on LP64, 32-bit on ILP32 */
 export const offArg = (a: { i(): number; l(): bigint }) => (PTR === 8 ? Number(a.l()) : a.i());
+/** MAP_SHARED writable file mappings awaiting write-back; `va` is the mapping's start, `off` its file offset */
+const sharedMaps: { va: bigint; n: number; off: number; writeBack: (off: number, bytes: Uint8Array) => void }[] = [];
+/** Write the part of every shared mapping inside [va, va+n) back to its file; `drop` forgets the mappings touched (munmap, MAP_FIXED). */
+function syncShared(va: bigint, n: number, drop: boolean): void {
+  if (!sharedMaps.length) return;
+  const end = va + BigInt(n);
+  for (let i = sharedMaps.length - 1; i >= 0; i--) {
+    const m = sharedMaps[i], lo = m.va > va ? m.va : va, hi = m.va + BigInt(m.n) < end ? m.va + BigInt(m.n) : end;
+    if (lo >= hi) continue;
+    const start = guestAt(lo);
+    m.writeBack(m.off + Number(lo - m.va), mem.u8.slice(start, start + Number(hi - lo)));
+    if (drop) sharedMaps.splice(i, 1);
+  }
+}
 
 function setErrno(cpu: Cpu, e: number): void { mem.st32(cpu.errnoAddr, e); }
 /** the common "-1 and errno" return */
@@ -172,7 +186,53 @@ let r48 = 0x1234abcd330en;
 const A48 = 0x5deece66dn, C48 = 0xbn, M48 = (1n << 48n) - 1n;
 const next48 = () => { r48 = (A48 * r48 + C48) & M48; return Number(r48 >> 17n); };
 
+/** raw syscall numbers served by the libc function of the same shape (an offset in a register on
+ *  LP64 makes mmap direct; ILP32's mmap2 counts pages and _llseek splits the offset, so neither is here) */
+const SYSCALL_NR64: Record<number, string> = {
+  85: "timerfd_create", 86: "timerfd_settime", 87: "timerfd_gettime",
+  25: "fcntl", 56: "openat", 57: "close", 62: "lseek", 63: "read", 64: "write", 80: "fstat", 101: "nanosleep", 113: "clock_gettime",
+  129: "kill", 131: "tgkill", 169: "gettimeofday", 215: "munmap", 222: "mmap", 226: "mprotect",
+  43: "statfs", 48: "faccessat", 59: "pipe2", 78: "readlinkat", 79: "fstatat", 134: "rt_sigaction",
+};
+const SYSCALL_NR32: Record<number, string> = {
+  350: "timerfd_create", 353: "timerfd_settime", 354: "timerfd_gettime",
+  221: "fcntl", 322: "openat", 6: "close", 3: "read", 4: "write", 162: "nanosleep", 263: "clock_gettime", 37: "kill", 268: "tgkill",
+  78: "gettimeofday", 91: "munmap", 125: "mprotect",
+  174: "rt_sigaction", 332: "readlinkat", 359: "pipe2",
+};
+/** the device's RAM as sysinfo and ActivityManager.getMemoryInfo both report it */
+const TOTAL_RAM = 4 * 2 ** 30, FREE_RAM = 2 * 2 ** 30;
+/** struct sysinfo: uptime, loads[3], totalram, freeram, sharedram, bufferram, totalswap, freeswap
+ *  at the long stride, then procs (u16), totalhigh, freehigh, mem_unit (u32); a 32-bit build
+ *  scales by mem_unit where the byte counts would not fit */
+function fillSysinfo(p: number): void {
+  const L = PTR, unit = L === 8 ? 1 : 4096;
+  mem.memset(p, 0, L === 8 ? 112 : 64);
+  const put = (off: number, v: number) => { if (L === 8) mem.st64(p + off, BigInt(v)); else mem.st32(p + off, v); };
+  put(0, Math.floor(performance.now() / 1000));
+  put(L * 4, TOTAL_RAM / unit); put(L * 5, FREE_RAM / unit);
+  mem.st16(p + L * 10, 1);
+  mem.st32(p + (L === 8 ? 104 : 52), unit);
+}
+/** syscall(2): what a raw svc/swi and libc's wrapper both reach. Bodies answer the wrapper's
+ *  way (-1 with errno set); Cpu.syscallReturn turns that into the kernel's -errno for a raw one. */
+function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promise<HostRet> {
+  if (nr === (PTR === 8 ? 98 : 240)) { const addr = a.p(), op = a.i(), val = a.i(), ts = a.p(); a.p(); return futex(cpu, addr, op, val, ts, a.i()); }
+  if (nr === (PTR === 8 ? 135 : 175)) { const how = a.i(), set = a.p(), old = a.p(), size = a.u(); const e = size === 8 ? cpu.sigmask(how, set, old, 8) : E.INVAL; return e ? fail(cpu, e) : 0; }
+  if (nr === (PTR === 8 ? 178 : 224)) return 4242 + cpu.tid;              // gettid
+  if (nr === (PTR === 8 ? 172 : 20)) return 4242;                          // getpid
+  if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); crypto.getRandomValues(mem.bytes(buf, n)); return n; } // getrandom
+  if (nr === (PTR === 8 ? 122 : 241)) return 0;                             // sched_setaffinity: one core, nothing to pin
+  if (nr === (PTR === 8 ? 179 : 116)) { fillSysinfo(a.p()); return 0; }    // sysinfo
+  // the numbers whose wrapper takes the syscall's own arguments: the argument cursor sits
+  // past nr, where those start
+  const name = (PTR === 8 ? SYSCALL_NR64 : SYSCALL_NR32)[nr];
+  if (name) return hostFn("libc.so", name)!(cpu, a);
+  calledMissing.add("syscall " + nr);
+  return fail(cpu, E.NOSYS);
+}
 export function libcInit(): void {
+  setRawSyscall(rawSyscall);
   LAYOUT = PTR === 8 ? LAYOUT64 : LAYOUT32;
   // _ctype_ (257 bytes, index c+1), tzname
   const ct = mem.hostAlloc(384);
@@ -276,8 +336,9 @@ export function libcInit(): void {
       mem.decommitVa(va, n);
       return 0;
     },
-    // File mappings are private copies, shared ones included: one process sees its own stores
-    // through the mapping, and nothing persists them to the file.
+    // File mappings are copies of the file's bytes: a private one keeps its stores to itself, and a
+    // MAP_SHARED writable one writes its bytes back to the file on msync and munmap (Linux would
+    // share the page cache continuously; a reader of the file between two syncs sees the older bytes).
     mmap: (cpu, a) => {
       const hint = a.va(), n = Number(a.va()), prot = a.i(), flags = a.i(), fd = a.i(), off = offArg(a);
       const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
@@ -285,28 +346,23 @@ export function libcInit(): void {
       const reserve = (flags & 0x20) !== 0 && prot === 0;
       const p = flags & 0x10 ? hint : mem.mapVa(n, reserve);
       if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return failed(E.NOMEM);
-      if (flags & 0x10 && !reserve) { invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
-      if (fd !== -1 && !(flags & 0x20)) { const r = readInto(cpu, fd, off, guestAt(p), n); return r instanceof Promise ? r.then(() => p) : p; }
+      if (flags & 0x10 && !reserve) { invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); syncShared(hint, n, true); }
+      if (fd !== -1 && !(flags & 0x20)) {
+        if (flags & 1 && prot & 2) { const writeBack = fdWriteBack(fd); if (writeBack) sharedMaps.push({ va: BigInt(p), n, off, writeBack }); }
+        const r = readInto(cpu, fd, off, guestAt(p), n); return r instanceof Promise ? r.then(() => p) : p;
+      }
       return p;
     },
     mmap64: (cpu, a) => M.mmap(cpu, a),
-    munmap: (cpu, a) => (mem.unmapVa(a.va(), Number(a.va())) ? 0 : fail(cpu, E.INVAL)),
+    munmap: (cpu, a) => { const va = a.va(), n = Number(a.va()); syncShared(va, n, true); return mem.unmapVa(va, n) ? 0 : fail(cpu, E.INVAL); },
     mremap: (cpu) => { fail(cpu, E.NOSYS); return PTR === 8 ? -1n : -1; },
     madvise: (_c, a) => { const va = a.va(), n = Number(a.va()); if (a.i() === 4) mem.dropVa(va, n); return 0; },   // MADV_DONTNEED
-    msync: () => 0, mlock: () => 0, munlock: () => 0,
+    msync: (cpu, a) => { const va = a.va(), n = Number(a.va()); if (va & 4095n) return fail(cpu, E.INVAL); syncShared(va, n, false); return 0; },
+    mlock: () => 0, munlock: () => 0,
     getrlimit: (_c, a) => { a.i(); const r = a.p(); stp(r, 0x100000); stp(r + PTR, 0x100000); return 0; },
     setrlimit: () => 0,
     // the raw syscalls a runtime issues past libc: futex is the one that must block
-    syscall: (cpu, a) => {
-      const nr = a.i();
-      if (nr === (PTR === 8 ? 98 : 240)) { const addr = a.p(), op = a.i(), val = a.i(), ts = a.p(); a.p(); return futex(cpu, addr, op, val, ts, a.i()); }
-      if (nr === (PTR === 8 ? 135 : 175)) { const how = a.i(), set = a.p(), old = a.p(), size = a.u(); const e = size === 8 ? cpu.sigmask(how, set, old, 8) : E.INVAL; return e ? fail(cpu, e) : 0; }
-      if (nr === (PTR === 8 ? 178 : 224)) return 4242 + cpu.tid;              // gettid
-      if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); crypto.getRandomValues(mem.bytes(buf, n)); return n; } // getrandom
-      if (nr === (PTR === 8 ? 122 : 241)) return 0;                             // sched_setaffinity: one core, nothing to pin
-      calledMissing.add("syscall " + nr);
-      return fail(cpu, E.NOSYS);
-    },
+    syscall: (cpu, a) => rawSyscall(cpu, a.i(), a),
     // PR_SET_NAME names the calling thread: what wd.native.regs shows and what a trace prefixes
     prctl: (cpu, a) => { const op = a.i(); if (op === 15) { const s = mem.cstr(a.p(), 16); if (s) { cpu.name = s; cpu.jthread.jname = s; } } return 0; },
     cacheflush: (_c, a) => { const s = a.p(), e = a.p(); invalidateRange(s, e - s, "cacheflush"); return 0; },
