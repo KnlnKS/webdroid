@@ -154,9 +154,11 @@ microG-owned cookie jar contains Google's real HttpOnly `oauth_token`. The page 
 `#close`, but no account is stored yet: fragment navigation does not reach the Java
 WebView client's `onPageFinished`. Chromium explicitly delivers that callback without
 `onPageStarted` or `onPageCommitVisible` for fragment navigation. The new general
-fragment notification now passes ordinary and isolated WebView transport tests,
-including upstream URL mapping and callback ordering. The old isolated transport
-times out waiting for that notification. A fresh genuine account exchange is next.
+fragment notification (`91d9ff7`) now passes ordinary and isolated WebView transport
+tests, including upstream URL mapping and callback ordering. The old isolated
+transport times out waiting for that notification. A fresh login with this fix is
+waiting for the user's phone verification in the preserved Chrome tab. No account
+has been stored yet; do not report completed SDK authentication.
 
 The location implementation rewrites static Location references in isolated HTTP(S)
 scripts using the existing TypeScript parser on the server. Ordinary objects and local
@@ -165,7 +167,18 @@ protected scripts are unchanged. Typecheck and all 637 tests / 20,476 assertions
 including 32 Chromium cases; genuine identifier/password/verification/consent execute
 without page exceptions. This is a bounded implementation: dynamic property names,
 generated code, native evaluateJavascript, some destructuring and reflective access
-are not virtualized. Broader APK/transport/E2E and quiet performance checks remain open.
+are not virtualized. The callback follow-up captures page-start URLs before queueing
+and reports the current upstream URL when parsing changes history before load.
+Both cases fail before and pass after. Final checks: typecheck, 642 tests / 20,482
+assertions, including 37 focused tests, and both WebView transport paths. The preceding
+checkpoint passes zero-failure microG/GmsClient/Resy compilation, framework probes,
+6/6 text comparisons and all 111 E2E steps without added diagnostics or rendering
+failures versus `28b9246`. Corpus reruns render 13/14 APKs with the same 24 gaps.
+An initial headless browser closure during Reddit is not reproduced; two SSL messages
+also do not recur in the paired Reddit rerun. Their cause is unresolved. TikTok's
+variable Keva gap reproduces on the baseline. Goldens are unchanged. Quiet CPU/memory
+acceptance remains open. Image encoders were absent at the latest check; earlier
+encoder PIDs are historical, not a current blocker.
 The Chrome tab remains open at `http://localhost:41979/?apk=GmsClient.apk`.
 Encoding processes remain active under a replacement parent; inspect
 current process state rather than relying on the earlier PID for quiet measurements.

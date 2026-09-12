@@ -38,7 +38,7 @@ window.navigation?.addEventListener("navigate", event => {
   if (url.origin === location.origin) return;
   event.preventDefault(); send({kind: "navigate", url: url.href});
 });
-addEventListener("load", () => send({kind: "loaded", url: document.querySelector('meta[name="wd-proxy-url"]')?.content,
+addEventListener("load", () => send({kind: "loaded", url: config.page ?? document.querySelector('meta[name="wd-proxy-url"]')?.content,
   error: document.querySelector('meta[name="wd-proxy-error"]')?.content, title: document.title, height: document.documentElement.scrollHeight}));
 document.addEventListener("click", event => {
   const a = event.target.closest?.("a[href]");

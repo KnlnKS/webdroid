@@ -785,6 +785,36 @@ initial page-finished callback before starting its fragment action. Native WebVi
 back-stack integration with renderer same-document entries remains incomplete.
 Evidence: `/tmp/webdroid-webfragment-{tests,typecheck,transport,baseline}.log`.
 
+Two callback URL races are covered by a follow-up: mutating the current history entry
+must not change an already queued page-start URL, and document completion must report
+the current upstream URL if parsing changed history. Both regression tests fail before
+the fix. The follow-up passes typecheck, all 642 tests / 20,482 assertions, 37 focused
+tests and actual ordinary/isolated WebView transport. Evidence:
+`/tmp/webdroid-webfragment-{queued,completion}-before.log` and
+`/tmp/webdroid-auth-callback-{tests,typecheck,units,transport}.log`.
+
+At `91d9ff7`, microG/GmsClient/Resy compile with zero method failures; executable
+framework probes and all six text comparisons pass. Serialized E2E completes 111
+steps without new missing APIs, native requirements, normalized errors, layout/draw
+errors or wedges versus `28b9246`. Flappy Bird's minimum 27 FPS and Doodle's 39 FPS
+also occur in the stored baseline run; this does not replace quiet CPU/memory checks.
+Goldens are unchanged. The initial corpus browser closes during Reddit startup with
+no new crash report; a complete current rerun and the baseline both render 13/14 APKs.
+Current retains 24 distinct gaps. Targeted paired Reddit/TikTok reruns have identical
+normalized diagnostics, including TikTok's variable Keva fetchBoolean gap. Two Reddit
+SSL messages seen only in the full current run and the first browser closure remain
+unexplained and were not reproduced by the pair. Evidence:
+`/tmp/webdroid-auth-location-{e2e-comparison,corpus-comparison}.json`,
+`...-corpus{,-rerun}.log`, `...-corpus-recheck-{baseline,current}.json`,
+`...-perfsum.log` and `/tmp/webdroid-auth-final-e2e.log`.
+
+The fresh real sign-in with fragment completion is waiting for phone verification;
+the Chrome tab is preserved on port 41979. No live callback or token was fabricated
+or transplanted into that session. The previous successful credential response and
+HttpOnly token-cookie presence establish upstream progress, not a stored account or
+successful SDK result. Image encoders were no longer present during the final check;
+the earlier quiet-performance backlog is still unverified.
+
 ## WebView upstream bases — 2026-09-11
 
 Resumed microG from `28b9246` on `codex/microg-webview-base`. The current public

@@ -240,7 +240,7 @@ export class JWebView extends JViewGroup {
   go(e: Entry, push = true) {
     if (push) { this.hist.length = ++this.idx; this.hist.push(e); }
     this.url = e.url; this.loaded = false; this.progress = 10; this.title = "";
-    const g = ++this.gen, el = this.frame();
+    const g = ++this.gen, el = this.frame(), url = e.url;
     if (el) {
       (el as unknown as { __wdUserAgent: unknown }).__wdUserAgent = this.settings.v.userAgentString;
       const load = () => {
@@ -260,7 +260,7 @@ export class JWebView extends JViewGroup {
       } else if (e.src?.startsWith("/proxy?")) void webProxy().then(load).catch((error) => { console.error("[webview transport]", error); load(); });
       else load();
     }
-    void onMain(() => this.gen === g && vcall(this.client, "onPageStarted", "(Landroid/webkit/WebView;Ljava/lang/String;Landroid/graphics/Bitmap;)V", this, e.url, null));
+    void onMain(() => this.gen === g && vcall(this.client, "onPageStarted", "(Landroid/webkit/WebView;Ljava/lang/String;Landroid/graphics/Bitmap;)V", this, url, null));
   }
   loadUrl(url: string) {
     if (/^javascript:/i.test(url)) { this.evalJs(url.slice(11)); return; }

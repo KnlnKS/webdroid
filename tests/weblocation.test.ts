@@ -136,6 +136,17 @@ test("fragment navigation reports the upstream URL after native history commits"
   } finally { await page.close(); }
 });
 
+test("document completion reports history changes made during parsing", async () => {
+  const page = await fixture(`<script>
+    addEventListener("message", event => { if (event.data?.kind === "loaded") document.documentElement.dataset.loaded = event.data.url; });
+    history.replaceState(null, "", "/next");
+  </script>`);
+  try {
+    await page.waitForFunction(() => !!document.documentElement.dataset.loaded);
+    expect(await page.evaluate(() => document.documentElement.dataset.loaded)).toBe("https://upstream.example:9443/next");
+  } finally { await page.close(); }
+});
+
 test("location rewriting preserves constructors, destructuring and dynamic scopes", async () => {
   const page = await fixture();
   try {
