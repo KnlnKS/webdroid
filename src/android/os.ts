@@ -3,6 +3,7 @@
 import { JMessage, obtain } from "./messenger";
 import { parcelCreator, type JParcel } from "./parcel";
 import { keyCodes, deadChar } from "./keycodes";
+import { mem } from "../native/mem";
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
@@ -347,7 +348,7 @@ rt.register({
   },
   fields: ["dalvikPss", "nativePss", "otherPss"],
   methods: {
-    "getTotalPss()I": () => ((performance as any).memory?.usedJSHeapSize ?? 0) / 1024 | 0,
+    "getTotalPss()I": function (this: { dalvikPss: number; nativePss: number; otherPss: number }) { return this.dalvikPss + this.nativePss + this.otherPss; },
     ...noops("<init>()V"),
     ...stubs(0, "getTotalPrivateDirty()I", "getTotalSharedDirty()I"),
     "getMemoryStat(Ljava/lang/String;)Ljava/lang/String;": () => "0",
@@ -356,8 +357,10 @@ rt.register({
 rt.register({
   name: "android/os/Debug", ctor: class extends JObj {},
   methods: {
-    "static getNativeHeapAllocatedSize()J": () => BigInt(((performance as any).memory?.usedJSHeapSize ?? 0) | 0),
-    "static getNativeHeapSize()J": () => BigInt(((performance as any).memory?.totalJSHeapSize ?? 0) | 0),
+    // the native heap is the guest allocator's: bytes in use, the extent it has reached, and the gap
+    "static getNativeHeapAllocatedSize()J": () => BigInt(Math.round(mem.stats().used)),
+    "static getNativeHeapSize()J": () => BigInt(Math.round(mem.stats().peak)),
+    "static getNativeHeapFreeSize()J": () => BigInt(Math.max(0, Math.round(mem.stats().peak - mem.stats().used))),
     ...stubs(0, "static isDebuggerConnected()Z", "static waitingForDebugger()Z"),
     "static threadCpuTimeNanos()J": () => BigInt(Math.round(performance.now() * 1e6)),
     "static getPss()J": () => BigInt((((performance as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1024) | 0),
@@ -369,12 +372,13 @@ rt.register({
       return m;
     },
     // the JS heap is the nearest thing to this process's dalvik footprint; nothing here is shared
-    "static getMemoryInfo(Landroid/os/Debug$MemoryInfo;)V": (info: { dalvikPss: number; dalvikPrivateDirty: number } | null) => {
+    "static getMemoryInfo(Landroid/os/Debug$MemoryInfo;)V": (info: { dalvikPss: number; dalvikPrivateDirty: number; nativePss: number; nativePrivateDirty: number } | null) => {
       if (!info) throw rt.mkThrowable("java/lang/NullPointerException", "memoryInfo");
       const kb = (((performance as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1024) | 0;
       info.dalvikPss = kb; info.dalvikPrivateDirty = kb;
+      const native = Math.round(mem.stats().used / 1024);
+      info.nativePss = native; info.nativePrivateDirty = native;
     },
-    ...stubs(0n, "static getNativeHeapFreeSize()J"),
   },
 });
 {
