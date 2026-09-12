@@ -296,6 +296,10 @@ export const contextMethods: NativeSpec["methods"] = {
   },
   "stopService(Landroid/content/Intent;)Z": (intent: JIntent) => svcStop(intent?.component),
   "bindService(Landroid/content/Intent;Landroid/content/ServiceConnection;I)Z": async function (this: JContext, intent: JIntent, connection: unknown, flags: number) { return svcBind(this, intent, connection, flags); },
+  "bindService(Landroid/content/Intent;ILjava/util/concurrent/Executor;Landroid/content/ServiceConnection;)Z": async function (this: JContext, intent: JIntent, flags: number, executor: unknown, connection: unknown) {
+    if (!executor) throw rt.mkThrowable("java/lang/NullPointerException", "executor");
+    return svcBind(this, intent, connection, flags, executor);
+  },
   "unbindService(Landroid/content/ServiceConnection;)V": svcUnbind,
   "startActivity(Landroid/content/Intent;)V": async function (this: JContext, intent: JIntent) {
     await launchIntent(this.$host, intent);

@@ -4,7 +4,7 @@ import { type JContext, JContextWrapper } from "./context";
 import { appHost, jclsNameOf } from "./apphost";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { onMain, inMainJob } from "./mainloop";
-import { reportUncaught, PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "./os";
+import { reportUncaught, PROCESS_PID, PROCESS_UID, PROCESS_NAME, JFnRunnable } from "./os";
 import { packages, qualifyComponent, type PackageRecord } from "./packages";
 import { getPM } from "./pm";
 import { binderTransport, exportBinder } from "./binder";
@@ -124,7 +124,16 @@ export function unbindLocalService(key: string): Promise<void> {
 type Connection = { key: string; owner: PackageRecord; process: string; remote: boolean; cancelDeath: (() => void) | null };
 const connections = new Map<unknown, Connection>();
 let nextConnection = 1;
-export async function svcBind(ctx: JContext, intent: JIntent, connection: unknown, flags: number): Promise<number> {
+/** ServiceConnection callbacks run on the caller's main queue, or on the Executor the API 29 overload names. */
+function connectionDelivery(executor: unknown): (job: () => Promise<void>) => Promise<void> {
+  if (!executor) return onMain;
+  return job => {
+    rt.link("webdroid/FnRunnable"); const runnable = new JFnRunnable(); runnable.fn = job;
+    return vcall(executor, "execute", "(Ljava/lang/Runnable;)V", runnable);
+  };
+}
+export async function svcBind(ctx: JContext, intent: JIntent, connection: unknown, flags: number, executor: unknown = null): Promise<number> {
+  const deliver = connectionDelivery(executor);
   const resolved = await vcall(getPM(), "resolveService", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", intent, 0);
   const info = resolved?.serviceInfo, owner = info && packages.get(info.packageName);
   if (!owner || (!info.exported && owner.pkg !== ctx.$host.pkg)) return 0;
@@ -143,20 +152,20 @@ export async function svcBind(ctx: JContext, intent: JIntent, connection: unknow
       const component = mkComponentName(owner.pkg, info.name), handle = remote ? exportBinder(binder) : null;
       if (handle) record.cancelDeath = binderTransport.watch(handle.pid, () => {
         record.cancelDeath = null;
-        void onMain(async () => {
+        void deliver(async () => {
           if (connections.get(connection) !== record) return;
           await vcall(connection, "onServiceDisconnected", "(Landroid/content/ComponentName;)V", component);
           if (connections.get(connection) === record && flags & 1) connect();
         }).catch(reportUncaught);
       });
-      return onMain(async () => {
+      return deliver(async () => {
         if (connections.get(connection) !== record) return;
         if (binder) await vcall(connection, "onServiceConnected", "(Landroid/content/ComponentName;Landroid/os/IBinder;)V", component, binder);
         else await vcall(connection, "onNullBinding", "(Landroid/content/ComponentName;)V", component);
       });
     }).catch(error => {
       if (connections.get(connection) !== record) return;
-      void onMain(() => vcall(connection, "onBindingDied", "(Landroid/content/ComponentName;)V", mkComponentName(owner.pkg, info.name))).catch(reportUncaught);
+      void deliver(() => vcall(connection, "onBindingDied", "(Landroid/content/ComponentName;)V", mkComponentName(owner.pkg, info.name))).catch(reportUncaught);
       reportUncaught(error);
     });
   };
