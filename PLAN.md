@@ -2,6 +2,19 @@
 
 ## Resume — 2026-09-11
 
+Latest checkpoint: `3902e02` completes genuine SDK DEFAULT_SIGN_IN on webdroid and
+the dedicated Android reference. Webdroid also succeeds after a full reload with its
+persisted account. The original client and microG APKs are unchanged. Typecheck,
+650 tests / 20,620 assertions, affected APK compilation, executable framework probes,
+6/6 text comparisons and all 111 E2E steps pass their diagnostic checks. Goldens are
+unchanged. Corpus renders 13/14; TikTok still fails and reaches two additional Keva
+diagnostics. Performance acceptance remains open: two Harmonic comparisons show about
+15.5% more CPU with a persistent shimmer callback, while a direct current run returns
+to baseline timing. Missing visibility callback dispatch is a hypothesis to investigate,
+not an established cause. See the authentication verification in implementation history.
+The successful Chrome session remains on 41979; production verification uses 41986.
+The chronology below retains earlier checkpoints and unresolved broader integration work.
+
 Work resumed from `28b9246` on `codex/microg-webview-base`. Commits `0ff3003` and
 `349c4e0` fix the duplicate-base investigation below. Google's current identifier
 document supplies one base pointing to `/v3/signin/`; the old proxy added a second.
@@ -181,8 +194,12 @@ exposes SharedPreferences.getString returning a stored string set. microG intent
 catches ClassCastException inside runCatching for format migration; returning the wrong
 value delays the cast until outside that catch. String/string-set getters now enforce
 their types. Webdroid returns `authentication: true`, with no current process missing APIs,
-uncaught errors or authentication warnings. Repeat-after-reload and final broader checks
-are in progress; this verifies DEFAULT_SIGN_IN, not every OAuth scope or token mode.
+uncaught errors or authentication warnings. A further full reload and account selection
+also succeeds. Typecheck and 650 tests / 20,620 assertions pass, as do affected APK
+compilation, framework probes and text comparisons. Final E2E completes all 111 steps
+without added diagnostics, layout/draw errors or wedges. Corpus retains 13/14 rendered
+with TikTok's additional Keva call coverage; performance acceptance remains open as
+described at the top. This verifies DEFAULT_SIGN_IN, not every OAuth scope or token mode.
 
 The location implementation rewrites static Location references in isolated HTTP(S)
 scripts using the existing TypeScript parser on the server. Ordinary objects and local
@@ -204,10 +221,10 @@ variable Keva gap reproduces on the baseline. Goldens are unchanged. Quiet CPU/m
 acceptance remains open. Image encoders were absent at the latest check; earlier
 encoder PIDs are historical, not a current blocker.
 The Chrome tab remains open at `http://localhost:41979/?apk=GmsClient.apk`.
-Encoding processes remain active under a replacement parent; inspect
-current process state rather than relying on the earlier PID for quiet measurements.
+No image encoders were active during the latest Harmonic comparisons; earlier encoding
+processes and PIDs are historical. Inspect current load before further measurements.
 
-Servers: current checkout 41977, original baseline 41978, instrumented login 41979,
+Servers: current production verification 41986, original baseline 41978, instrumented login 41979,
 runner baseline `4acef6d` on 41981 (`/tmp/webdroid-map-thread-baseline`),
 window baseline `05141f6` on 41982 (`/tmp/webdroid-window-baseline`).
 The baseline worktree is `/tmp/webdroid-microg-resume-baseline`. Temporary diagnostic
@@ -262,7 +279,10 @@ not full Android parity. Google authentication in webdroid remains unsuccessful.
 - Native/JNI and graphics fixes allow real map tiles/labels, loaded/camera-idle callbacks
   and panning. Complete map interaction parity remains open.
 
-### Google sign-in: exact stopping point
+### Google sign-in: historical checkpoint (2026-09-10)
+
+The successful SDK sign-in and reload verification in the resume above supersede this
+pre-resume failure record.
 
 Password and phone verification succeed in webdroid. Choosing the device user and
 accepting the already-authorized Google terms leads to "Something went wrong".

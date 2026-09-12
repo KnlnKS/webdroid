@@ -1,6 +1,6 @@
 # Engineering constraints and investigation results
 
-Retained findings through 2026-09-10, organized by engineering problem.
+Retained findings through 2026-09-11, organized by engineering problem.
 [PLAN.md](../PLAN.md) owns active work; [AGENTS.md](../AGENTS.md) owns implementation and
 verification rules. This document preserves failure mechanisms, constraints, negative results
 and evidence limits, not a complete API-coverage claim. Older source comments naming AGENTS
@@ -9,14 +9,11 @@ Temporary /tmp evidence may expire. Committed regression fixtures are the durabl
 
 ## microG completion and open acceptance
 
-The 2026-09-10 handoff at the top of PLAN.md supersedes the historical status below.
-Android passed interactive Google consent and stored the test account, then the SDK
-returned status 8. Webdroid still fails after consent. Moving renderer metadata out of
-the visible query fixes a verified request-contamination bug but does not resolve login.
-Google's observed null `.replace` exception points to its single-BASE requirement and
-the proxy's unconditional BASE injection; that next investigation remains unimplemented.
-The final WebView change passes typecheck, browser transport/restart checks and all
-1,002 unit tests. Full Android parity is not established.
+The 2026-09-11 resume in PLAN.md owns current status. Both Android and webdroid now
+return `authentication: true` through the genuine SDK's DEFAULT_SIGN_IN flow. Webdroid
+also succeeds after a further full reload using its persisted account/preferences.
+Earlier consent, missing platform operations and OAuth registration failures are
+explained below. Full Android/API parity is not established.
 
 Genuine microG v0.3.16.252432 and Companion run as installed system packages with scoped
 compatibility signatures. Resy's own availability checks accept them and its Play Services
@@ -895,6 +892,60 @@ processes have empty missing sets; the observed flow has no console errors or au
 warnings. The debugger breakpoint was removed and the debugger disabled before this run.
 No auth callbacks, account data or tokens were injected. Evidence:
 `/tmp/webdroid-preferences-{before,after,typecheck,units}.log`.
+
+### Authentication verification at 3902e02
+
+A further full reload and account selection again returns `authentication: true`.
+The four reached process missing sets remain empty, with no console errors or auth
+warnings. This verifies genuine DEFAULT_SIGN_IN with persisted browser-owned credentials;
+other OAuth scopes, server auth codes and ID-token modes have not been established.
+The unchanged original GmsClient APK remains the browser fixture. The microG
+[helpful information](https://github.com/microg/GmsCore/wiki/Helpful-Information) and
+[prerequisites](https://github.com/microg/GmsCore/wiki/Prerequisites) describe account
+setup and platform requirements; they do not replace the actual SDK result above.
+
+Typecheck and 650 tests / 20,620 assertions pass. microG, GmsClient and Resy smoke
+compile with zero method failures; executable framework probes and 6/6 text comparisons
+pass. The final serialized E2E run completes 111 steps in 269.3 seconds, all rendered,
+with no added missing/error/native-required diagnostics, layout/draw errors or wedges
+versus the stored `28b9246` capture. The earlier FitNotes FragmentManager-destroyed
+error is gone. Minimum Doodle FPS is 40 versus 39, Flappy 27 versus 27. Goldens are
+unchanged. Evidence: `/tmp/webdroid-auth-complete-{smoke-*,fwtest,textcmp,e2e}.log`
+and `...-e2e-comparison.json`.
+
+Corpus renders 13/14 APKs on both builds. TikTok remains the failure; current reaches
+25 distinct gaps versus 23 in the matched baseline capture, adding nativeStoreString
+and its failed-call diagnostic. No other APK adds diagnostics. Twelve-second targeted
+reruns have identical normalized gaps/errors, but neither reaches nativeStoreString.
+Thirty-second reruns reach it only on current; baseline instead reaches an additional
+fetchBoolean failure. This establishes variable coverage in the already unsupported
+Keva path, not baseline reproduction of the new call. Evidence:
+`/tmp/webdroid-auth-complete-corpus-comparison.json` and
+`...-tiktok{-long,}-{baseline,current}.{json,log}`.
+
+Two serialized Harmonic pairs, with order reversed in the second, show foreground
+CPU 7149.31 → 8257.52 ms and 7329.42 → 8474.77 ms (about +15.5%). Wall time grows
+25.42 → 43.41 seconds and 24.35 → 43.32 seconds. Both builds render visibly and
+advance ticks without errors; no competing image encoders are present. Slow current
+runs retain the actual APK's `sh` Choreographer callback through the first ten steps,
+settling on pixels instead of idle. A direct full current run takes 24.32 seconds and
+7518.95 ms CPU with no early shimmer callback. Narrow runs on pre-cancellation,
+cancellation-only, pre-platform-fix and current builds all settle idle. These results
+leave performance acceptance open; they do not justify a regression waiver.
+
+DEX inspection shows `sh` invalidates active BoxShimmerLayout instances each frame.
+Their onVisibilityAggregated callback stops the animation when hidden. The current
+View.setVisibility changes state/layout/draw flags without dispatching visibility
+callbacks, unlike the paired AOSP View/ViewGroup implementation. A timing-dependent
+attachment/hide sequence is therefore a candidate cause, but the retained instance's
+ancestor visibility has not been captured. A two-second delay of the public topstories
+request did not reproduce the active callback. No speculative visibility change or
+app-specific animation suppression was applied. Next reproduce and inspect an active
+instance before implementing general callback propagation. Evidence:
+`/tmp/webdroid-auth-complete-harmonic-{baseline,current,reverse-*}.{json,log}`,
+`/tmp/webdroid-auth-harmonic-current-full-direct.json`,
+`/tmp/webdroid-harmonic-{sh,shimmer}.dis` and
+`/tmp/webdroid-{view-setflags,view-visibility-aggregate,group-visibility-aggregate}.dis`.
 
 ## WebView upstream bases — 2026-09-11
 
