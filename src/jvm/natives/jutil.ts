@@ -891,7 +891,24 @@ function setMethods(): NativeSpec["methods"] {
     "toArray()[Ljava/lang/Object;": function (this: JSet) { return jarray(setItems(this)); },
     "toArray([Ljava/lang/Object;)[Ljava/lang/Object;": function (this: JSet, out: unknown[]) { return fillToArray(setItems(this), out); },
     "toString()Ljava/lang/String;": function (this: JSet) { return "[" + setItems(this).join(", ") + "]"; },
+    // Set equality is membership, not identity: an empty HashSet equals any empty Set.
+    "equals(Ljava/lang/Object;)Z": async function (this: JSet, o: unknown) {
+      if (o === this) return 1;
+      if (!(o instanceof JObj) || !rt.iof(o, "java/util/Set")) return 0;
+      if ((o instanceof JSet ? o.m.size + o.slow.length : await size(o)) !== this.m.size + this.slow.length) return 0;
+      return vcall(this, "containsAll", "(Ljava/util/Collection;)Z", o);
+    },
+    "hashCode()I": function (this: JSet) { return hashSum(setItems(this)); },
   };
+}
+/** the Set contract's hash: the members' hashes summed, so order never matters */
+function hashSum(a: unknown[], h = 0, from = 0): number | Promise<number> {
+  for (let i = from; i < a.length; i++) {
+    const r = jhash(a[i]);
+    if (r instanceof Promise) return r.then((x) => hashSum(a, (h + x) | 0, i + 1));
+    h = (h + r) | 0;
+  }
+  return h;
 }
 function addToSet(s: JSet, v: unknown): number | Promise<number> {
   if (s instanceof JTreeSet) return tadd(s, v);
