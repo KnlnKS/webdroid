@@ -380,10 +380,27 @@ function attachBase(this: JContextWrapper, base: JContext) {
   if (base) this.$host = base.$host;
 }
 // ContextWrapper/ContextThemeWrapper/Application/Service all delegate to a base context
+/** ContextWrapper's entry for a getter AOSP forwards to mBase: the base's virtual entry answers when
+ *  an app subclass overrides it there (a Resources proxy installed by attachBaseContext, a skin engine);
+ *  the platform's own implementation is reached directly, without a second dispatch. */
+const viaBase = (name: string, desc: string) => {
+  const mangled = mangleMethod(name, desc), own = contextMethods[name + desc] as (...a: unknown[]) => unknown;
+  return function (this: JContextWrapper, ...args: unknown[]) {
+    const impl = (this.base as unknown as Record<string, ((...a: unknown[]) => unknown) | undefined> | null)?.[mangled];
+    return impl === undefined || impl === own ? own.apply(this, args) : impl.apply(this.base, args);
+  };
+};
 export const wrapperMethods: NativeSpec["methods"] = {
   ...contextMethods,
   "attachBaseContext(Landroid/content/Context;)V": attachBase,
   "getBaseContext()Landroid/content/Context;": function (this: JContextWrapper) { return this.base; },
+  ...Object.fromEntries(["getResources()Landroid/content/res/Resources;", "getAssets()Landroid/content/res/AssetManager;",
+    "getSystemService(Ljava/lang/String;)Ljava/lang/Object;", "getClassLoader()Ljava/lang/ClassLoader;",
+    "getApplicationContext()Landroid/content/Context;", "getPackageManager()Landroid/content/pm/PackageManager;",
+    "getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;"].map((sig) => {
+    const i = sig.indexOf("(");
+    return [sig, viaBase(sig.slice(0, i), sig.slice(i))];
+  })),
 };
 rt.register({
   name: "android/content/ContextWrapper", ctor: JContextWrapper, sup: "android/content/Context",

@@ -1,4 +1,4 @@
-import { JContextWrapper, JAttributionSource, contextMethods, systemService, wrapperMethods, display, displayListeners, grantPermissions } from "./context";
+import { JContextWrapper, JAttributionSource, systemService, wrapperMethods, display, displayListeners, grantPermissions } from "./context";
 import { JWindow } from "./window";
 import {
   JIntent, activityTransport, systemActivities, deliverActivityResult, RESULT_OK, RESULT_CANCELED, launchIntent, mkComponentName,
@@ -139,7 +139,7 @@ const lifecycleCbMethods: NativeSpec["methods"] = {
   },
 };
 export const activityMethods: NonNullable<NativeSpec["methods"]> = {
-  ...contextMethods,
+  ...wrapperMethods,
   "<init>()V": function (this: JActivity) { this.window.activity = this; },
   "getWindow()Landroid/view/Window;": function (this: JActivity) { return this.window; },
   "setMediaController(Landroid/media/session/MediaController;)V": function (this: JActivity, controller: unknown) { this.mediaController = controller; },
@@ -1025,7 +1025,7 @@ rt.register({
 rt.register({ name: "android/app/Service", ctor: JService, sup: "android/content/ContextWrapper",
   ifaces: ["android/content/ComponentCallbacks2", "android/content/ComponentCallbacks"],
   methods: {
-    ...contextMethods,
+    ...wrapperMethods,
     "getApplication()Landroid/app/Application;": function (this: JService) { return this.$host.application; },
     ...noops("<init>()V", "onCreate()V", "onDestroy()V", "onRebind(Landroid/content/Intent;)V",
       "onStart(Landroid/content/Intent;I)V"),

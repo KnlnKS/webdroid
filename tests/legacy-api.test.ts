@@ -468,3 +468,27 @@ test("Android path loaders expose the BaseDexClassLoader hierarchy", async () =>
     expect(rt.iof(rt.make(name), "dalvik/system/BaseDexClassLoader")).toBe(1);
   }
 });
+
+test("ContextWrapper.getResources reaches a base context's overriding getResources, and Context.getString goes through it", async () => {
+  const host = new Resources(null, {});
+  const assets = rt.make("android/content/res/AssetManager") as JAssetManager;
+  assets.host = host;
+  const plain = await newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V", assets, null, null) as JResources;
+  // a Resources subclass that serves strings the table lacks, behind a ContextWrapper subclass
+  // that answers getResources with it: what a string-store proxy installed by attachBaseContext does
+  rt.register({ name: "test/StoreResources", ctor: class extends (rt.link("android/content/res/Resources").ctor as any) {}, sup: "android/content/res/Resources",
+    methods: { "getString(I)Ljava/lang/String;": (id: number) => "store:" + id.toString(16) } });
+  rt.register({ name: "test/ProxyContext", ctor: class extends (rt.link("android/content/ContextWrapper").ctor as any) {}, sup: "android/content/ContextWrapper",
+    methods: { "getResources()Landroid/content/res/Resources;": function (this: { store: unknown }) { return this.store; } } });
+  const store = await newObj("test/StoreResources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V", assets, null, null);
+  const base = rt.make("android/content/Context") as JObj & { $host: unknown };
+  base.$host = { res: host, jresources: plain, pkg: "test" };
+  const proxy = await newObj("test/ProxyContext", "(Landroid/content/Context;)V", base) as JObj & { store: unknown };
+  proxy.store = store;
+  const outer = await newObj("android/view/ContextThemeWrapper", "(Landroid/content/Context;)V", proxy);
+  expect(await vcall(outer, "getResources", "()Landroid/content/res/Resources;")).toBe(store);
+  expect(await vcall(outer, "getString", "(I)Ljava/lang/String;", 0x7f1143e8)).toBe("store:7f1143e8");
+  // a wrapper over the platform context still answers the platform's own Resources directly
+  const direct = await newObj("android/content/ContextWrapper", "(Landroid/content/Context;)V", base);
+  expect(await vcall(direct, "getResources", "()Landroid/content/res/Resources;")).toBe(plain);
+});
