@@ -21,6 +21,7 @@ interface Ins {
   regs: number[];       // 35c/3rc arg regs
   wideLit: bigint;      // 51l
   constKind?: "F" | "D"; // const reinterpreted as float/double (set by typeConsts)
+  nullRecv?: boolean;    // an instance invoke whose receiver may be the null constant 0 (set by typeConsts)
 }
 
 const NO_REGS: number[] = [];
@@ -423,6 +424,9 @@ ${catchBody}
           else if (ft === "D") mark(i.a, "D");
         } else if (n.startsWith("invoke") && !n.startsWith("invoke-custom")) {
           const isInstance = !n.startsWith("invoke-static");
+          // a const reaching an object receiver is the null constant: the call must NPE, not
+          // fall through to 0's (absent) method
+          if (isInstance && liveDefs?.get(i.regs[0])?.size) i.nullRecv = true;
           let ri = isInstance ? 1 : 0;
           for (const pt of dex.protoParamTypes(dex.method(i.b).proto)) {
             if (pt === "F") mark(i.regs[ri], "F");
@@ -456,7 +460,8 @@ ${catchBody}
         // defs: a const kills whatever reached this register; a move copies the source's set
         if (n.startsWith("const/") || n === "const" || n.startsWith("const-wide")) {
           defs.set(i.a, new Set([i]));
-        } else if (n === "move" || n === "move/from16" || n === "move/16" || n === "move-wide" || n === "move-wide/from16" || n === "move-wide/16") {
+        } else if (n === "move" || n === "move/from16" || n === "move/16" || n === "move-wide" || n === "move-wide/from16" || n === "move-wide/16"
+          || n === "move-object" || n === "move-object/from16" || n === "move-object/16") {
           const src = defs.get(i.b);
           if (src) defs.set(i.a, new Set(src)); else defs.delete(i.a);
         } else {
@@ -759,7 +764,7 @@ ${catchBody}
       args.push(isRef(p) ? ref(r) : r);
       ri += isWide(p) ? 2 : 1;
     }
-    const recv = isInstance ? `v${i.regs[0]}` : "";
+    const recv = isInstance ? (i.nullRecv ? ref(`v${i.regs[0]}`) : `v${i.regs[0]}`) : "";
     const argStr = args.join(",");
 
     if (clsName[0] === "[") {
