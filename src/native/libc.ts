@@ -7,7 +7,7 @@ import { hostLib, hostData, hostFn, NORET, ARG0, SERVED, ptr, vaList, type HostF
 import { E, ERRSTR } from "./abi";
 import { invalidateRange, markProcessExited, setRawSyscall, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
-import { stdioInit, readInto } from "./stdio";
+import { stdioInit, readInto, fdWriteBack } from "./stdio";
 import { pthreadInit, futex } from "./pthread";
 import { zlibInit } from "./zlib";
 import { libmInit } from "./libm";
@@ -44,6 +44,20 @@ export function writeTs(p: number, ms: number, unit = 1e6): void {
 }
 /** an off_t argument: 64-bit on LP64, 32-bit on ILP32 */
 export const offArg = (a: { i(): number; l(): bigint }) => (PTR === 8 ? Number(a.l()) : a.i());
+/** MAP_SHARED writable file mappings awaiting write-back; `va` is the mapping's start, `off` its file offset */
+const sharedMaps: { va: bigint; n: number; off: number; writeBack: (off: number, bytes: Uint8Array) => void }[] = [];
+/** Write the part of every shared mapping inside [va, va+n) back to its file; `drop` forgets the mappings touched (munmap, MAP_FIXED). */
+function syncShared(va: bigint, n: number, drop: boolean): void {
+  if (!sharedMaps.length) return;
+  const end = va + BigInt(n);
+  for (let i = sharedMaps.length - 1; i >= 0; i--) {
+    const m = sharedMaps[i], lo = m.va > va ? m.va : va, hi = m.va + BigInt(m.n) < end ? m.va + BigInt(m.n) : end;
+    if (lo >= hi) continue;
+    const start = guestAt(lo);
+    m.writeBack(m.off + Number(lo - m.va), mem.u8.slice(start, start + Number(hi - lo)));
+    if (drop) sharedMaps.splice(i, 1);
+  }
+}
 
 function setErrno(cpu: Cpu, e: number): void { mem.st32(cpu.errnoAddr, e); }
 /** the common "-1 and errno" return */
@@ -320,8 +334,9 @@ export function libcInit(): void {
       mem.decommitVa(va, n);
       return 0;
     },
-    // File mappings are private copies, shared ones included: one process sees its own stores
-    // through the mapping, and nothing persists them to the file.
+    // File mappings are copies of the file's bytes: a private one keeps its stores to itself, and a
+    // MAP_SHARED writable one writes its bytes back to the file on msync and munmap (Linux would
+    // share the page cache continuously; a reader of the file between two syncs sees the older bytes).
     mmap: (cpu, a) => {
       const hint = a.va(), n = Number(a.va()), prot = a.i(), flags = a.i(), fd = a.i(), off = offArg(a);
       const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
@@ -329,15 +344,19 @@ export function libcInit(): void {
       const reserve = (flags & 0x20) !== 0 && prot === 0;
       const p = flags & 0x10 ? hint : mem.mapVa(n, reserve);
       if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return failed(E.NOMEM);
-      if (flags & 0x10 && !reserve) { invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
-      if (fd !== -1 && !(flags & 0x20)) { const r = readInto(cpu, fd, off, guestAt(p), n); return r instanceof Promise ? r.then(() => p) : p; }
+      if (flags & 0x10 && !reserve) { invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); syncShared(hint, n, true); }
+      if (fd !== -1 && !(flags & 0x20)) {
+        if (flags & 1 && prot & 2) { const writeBack = fdWriteBack(fd); if (writeBack) sharedMaps.push({ va: BigInt(p), n, off, writeBack }); }
+        const r = readInto(cpu, fd, off, guestAt(p), n); return r instanceof Promise ? r.then(() => p) : p;
+      }
       return p;
     },
     mmap64: (cpu, a) => M.mmap(cpu, a),
-    munmap: (cpu, a) => (mem.unmapVa(a.va(), Number(a.va())) ? 0 : fail(cpu, E.INVAL)),
+    munmap: (cpu, a) => { const va = a.va(), n = Number(a.va()); syncShared(va, n, true); return mem.unmapVa(va, n) ? 0 : fail(cpu, E.INVAL); },
     mremap: (cpu) => { fail(cpu, E.NOSYS); return PTR === 8 ? -1n : -1; },
     madvise: (_c, a) => { const va = a.va(), n = Number(a.va()); if (a.i() === 4) mem.dropVa(va, n); return 0; },   // MADV_DONTNEED
-    msync: () => 0, mlock: () => 0, munlock: () => 0,
+    msync: (cpu, a) => { const va = a.va(), n = Number(a.va()); if (va & 4095n) return fail(cpu, E.INVAL); syncShared(va, n, false); return 0; },
+    mlock: () => 0, munlock: () => 0,
     getrlimit: (_c, a) => { a.i(); const r = a.p(); stp(r, 0x100000); stp(r + PTR, 0x100000); return 0; },
     setrlimit: () => 0,
     // the raw syscalls a runtime issues past libc: futex is the one that must block

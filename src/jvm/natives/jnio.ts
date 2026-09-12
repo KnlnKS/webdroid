@@ -171,23 +171,27 @@ function duplicateBuffer(source: JByteBuffer): JByteBuffer {
   return b;
 }
 defineException("java/nio/ReadOnlyBufferException", "java/lang/UnsupportedOperationException");
-class JMappedByteBuffer extends JByteBuffer {}
+class JMappedByteBuffer extends JByteBuffer { flush: (() => void) | null = null; }
 rt.register({
   name: "java/nio/MappedByteBuffer", ctor: JMappedByteBuffer, sup: "java/nio/ByteBuffer",
   methods: {
     ...chaining("Ljava/nio/MappedByteBuffer;"),
     "isLoaded()Z": () => 1,
     "load()Ljava/nio/MappedByteBuffer;": function (this: JMappedByteBuffer) { return this; },
-    "force()Ljava/nio/MappedByteBuffer;": function (this: JMappedByteBuffer) { return this; },
+    "force()Ljava/nio/MappedByteBuffer;": function (this: JMappedByteBuffer) { this.flush?.(); return this; },
   },
 });
-export function mappedReadOnlyBuffer(data: Uint8Array): JBuffer {
+/** A buffer over `data` itself; `flush` (force) persists the file a READ_WRITE mapping shares its bytes with, and a read-only
+ *  mapping has none. The bytes are the mapping, so a writer's stores are in the file's storage before any force. */
+export function mappedBuffer(data: Uint8Array, flush: (() => void) | null): JBuffer {
   rt.link("java/nio/MappedByteBuffer");
   const buffer = new JMappedByteBuffer();
   buffer.backing = { storage: { kind: "direct", ab: data.buffer as ArrayBuffer } };
-  buffer.byteOffset = data.byteOffset; buffer.cap = buffer.lim = data.length; buffer.readOnly = true;
+  buffer.byteOffset = data.byteOffset; buffer.cap = buffer.lim = data.length; buffer.readOnly = flush === null;
+  buffer.flush = flush;
   return buffer;
 }
+export const mappedReadOnlyBuffer = (data: Uint8Array): JBuffer => mappedBuffer(data, null);
 export function mkByteBuffer(cap: number, direct = false): JByteBuffer {
   if (cap < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative buffer capacity");
   const b = new JByteBuffer();

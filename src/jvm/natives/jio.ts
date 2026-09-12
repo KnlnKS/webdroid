@@ -4,7 +4,7 @@ import { rt, JObj, type NativeSpec } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray, utf8, concat, i8, u8 } from "../abi";
 import { vcall, vcallMaybe, after, stringHash, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
-import { mappedReadOnlyBuffer, type JBuffer } from "./jnio";
+import { mappedBuffer, mappedReadOnlyBuffer, type JBuffer } from "./jnio";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
  *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
@@ -588,12 +588,14 @@ function flushFOS(s: JFOS) {
 // RandomAccessFile: the whole file in memory with a cursor, written back as it grows. The
 // vfs has no partial write, so "rw" is read-modify-write — correct, and the sizes an apk
 // opens this way (a cache index, a downloaded chunk) are the sizes it already unzipped.
-class JRAF extends JObj { path = ""; buf: Uint8Array = new Uint8Array(0); source: FileSource | null = null; pos = 0; write = false; }
+/** `maps` are the live READ_WRITE mappings sharing `buf`: growth moves them to the new storage, as they are the file's pages */
+class JRAF extends JObj { path = ""; buf: Uint8Array = new Uint8Array(0); source: FileSource | null = null; pos = 0; write = false; maps: JBuffer[] | null = null; }
 const rafGrow = (f: JRAF, need: number) => {
   if (need <= f.buf.length) return;
   const n = new Uint8Array(need);
   n.set(f.buf);
   f.buf = n;
+  if (f.maps) for (const m of f.maps) m.backing.storage = { kind: "direct", ab: n.buffer };
 };
 const rafOpen = function (this: JRAF, p: string, mode: string) {
   this.path = vfs.norm(p);
@@ -1192,10 +1194,18 @@ rt.register({
       const file = this.readable();
       if (!mode) return rt.npe();
       if (position < 0n || size < 0n || size > 0x7fffffffn) throw rt.mkThrowable("java/lang/IllegalArgumentException", "position/size");
-      if (mode.ename !== "READ_ONLY") throw rt.unimplemented("FileChannel writable mappings");
-      if (position + size > BigInt(file.source?.size ?? file.buf.length)) throw rt.mkThrowable("java/io/IOException", "mapping exceeds file size");
       const start = Number(position), length = Number(size);
-      return file.source ? readFully(file.source, start, length).then(mappedReadOnlyBuffer) : mappedReadOnlyBuffer(file.buf.subarray(start, start + length));
+      if (mode.ename === "READ_ONLY") {
+        if (position + size > BigInt(file.source?.size ?? file.buf.length)) throw rt.mkThrowable("java/io/IOException", "mapping exceeds file size");
+        return file.source ? readFully(file.source, start, length).then(mappedReadOnlyBuffer) : mappedReadOnlyBuffer(file.buf.subarray(start, start + length));
+      }
+      if (!(file instanceof JRAF) || !file.write) throw rt.mkThrowable("java/nio/channels/NonWritableChannelException", null);
+      // a writable mapping past the end extends the file first (FileChannelImpl.map truncates it up to position + size)
+      if (start + length > file.buf.length) { rafGrow(file, start + length); vfs.write(file.path, file.buf); }
+      if (mode.ename === "PRIVATE") return mappedBuffer(file.buf.slice(start, start + length), () => {});
+      const buffer = mappedBuffer(file.buf.subarray(start, start + length), () => vfs.write(file.path, file.buf));
+      (file.maps ??= []).push(buffer);
+      return buffer;
     },
     "read(Ljava/nio/ByteBuffer;)I": function (this: JFileChannel, dst: JBuffer) { return channelRead(this, dst); },
     "read(Ljava/nio/ByteBuffer;J)I": function (this: JFileChannel, dst: JBuffer, position: bigint) {
@@ -1218,6 +1228,7 @@ rt.register({
 mkEnumSet("java/nio/channels/FileChannel$MapMode", ["READ_ONLY", "READ_WRITE", "PRIVATE"]);
 defineException("java/nio/channels/ClosedChannelException", "java/io/IOException");
 defineException("java/nio/channels/NonReadableChannelException", "java/lang/IllegalStateException");
+defineException("java/nio/channels/NonWritableChannelException", "java/lang/IllegalStateException");
 
 // ── java.nio.file minimal (datastore atomic-write path)
 class JNioPath extends JObj { p = ""; }

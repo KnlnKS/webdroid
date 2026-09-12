@@ -234,6 +234,26 @@ export function readInto(cpu: Cpu, fd: number, off: number, dst: number, n: numb
 function flushFd(f: Fd): void {
   if (f.dirty && !f.synthetic) { vfs.write(f.path, f.data.slice(0, f.len)); f.dirty = false; }
 }
+/** A MAP_SHARED file mapping's write-back: bytes land in the open description while it lasts (and reach
+ *  the file at once, as page-cache stores would) and in the file itself once the descriptor is closed,
+ *  since the mapping outlives it. Null for descriptors that are not plain files. */
+export function fdWriteBack(fd: number): ((off: number, bytes: Uint8Array) => void) | null {
+  const f = fds.get(fd);
+  if (!f || f.synthetic || f.random || f.dir || f.rpipe || f.wpipe || f.event || f.timer || f.epoll) return null;
+  return (off, bytes) => {
+    if (f.references > 0) {
+      grow(f, off + bytes.length);
+      if (off > f.len) f.data.fill(0, f.len, off);
+      f.data.set(bytes, off); f.len = Math.max(f.len, off + bytes.length); f.dirty = true; flushFd(f);
+      return;
+    }
+    const current = vfs.read(f.path) ?? new Uint8Array(0), end = off + bytes.length;
+    const data = current.length >= end ? current : new Uint8Array(end);
+    if (data !== current) data.set(current);
+    data.set(bytes, off);
+    vfs.write(f.path, data);
+  };
+}
 function fdClose(cpu: Cpu | null, fd: number): number {
   if (isNativeSocket(fd)) return cpu ? nativeSocketClose(cpu, fd) : fail(cpu, E.BADF);
   const f = fds.get(fd);
