@@ -1,9 +1,42 @@
 const EMPTY_CHUNK = new Uint8Array(0);
 
+export type Ipv4 = [number, number, number, number];
+export function parseIpv4(text: string): Ipv4 | null {
+  const match = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
+  if (!match) return null;
+  const bytes: Ipv4 = [+match[1], +match[2], +match[3], +match[4]];
+  return bytes.every((byte) => byte <= 255) ? bytes : null;
+}
+export const ipv4Key = (bytes: ArrayLike<number>): number => ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0;
+export const ipv4Text = (bytes: ArrayLike<number>): string => `${bytes[0]}.${bytes[1]}.${bytes[2]}.${bytes[3]}`;
+// A name resolves to a stable address in 198.18.0.0/15 (RFC 2544's benchmarking block, unrouted)
+// shared by Java's InetAddress and the native resolver: whichever side later dials the address,
+// the relay is given the name it stands for. A numeric literal is itself.
+const syntheticByHost = new Map<string, Ipv4>();
+const hostBySynthetic = new Map<number, string>();
+let nextSynthetic = 1;
+export function syntheticAddress(host: string): Ipv4 {
+  const numeric = parseIpv4(host);
+  if (numeric) return numeric;
+  const found = syntheticByHost.get(host);
+  if (found) return found;
+  const id = nextSynthetic++ & 0xffff;
+  const bytes: Ipv4 = [198, 18, id >>> 8, id & 255];
+  syntheticByHost.set(host, bytes);
+  hostBySynthetic.set(ipv4Key(bytes), host);
+  return bytes;
+}
+export const syntheticHost = (bytes: ArrayLike<number>): string | null => hostBySynthetic.get(ipv4Key(bytes)) ?? null;
+/** the name to dial for `host`: a synthetic literal stands for the name it was allotted to */
+export function dialName(host: string): string {
+  const numeric = parseIpv4(host);
+  return (numeric && syntheticHost(numeric)) || host;
+}
+
 const relayUrl = (host: string, port: number, tls: boolean) => {
   const page = typeof location === "undefined" ? { protocol: "http:", host: "localhost" } : location;
   return `${page.protocol === "https:" ? "wss" : "ws"}://${page.host}` +
-    `/tcp?host=${encodeURIComponent(host)}&port=${port}${tls ? "&tls=1" : ""}`;
+    `/tcp?host=${encodeURIComponent(dialName(host))}&port=${port}${tls ? "&tls=1" : ""}`;
 };
 
 interface RelayEndpoint {

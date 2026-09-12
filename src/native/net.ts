@@ -1,6 +1,6 @@
 // Bionic IPv4 sockets: TCP over the browser WebSocket relay, plus process-local UDP.
 
-import { Relay } from "../shell/relay";
+import { Relay, syntheticAddress, syntheticHost } from "../shell/relay";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { hostLib, PTR, stp, type HostFn, type HostRet, ptr } from "./host";
@@ -53,9 +53,6 @@ interface Ipv4Endpoint { address: [number, number, number, number]; port: number
 
 const sockets = new Map<number, NativeSocketFd>();
 const datagramBindings = new Set<NativeDatagramSocket>();
-const syntheticHosts = new Map<number, string>();
-const syntheticAddresses = new Map<string, [number, number, number, number]>();
-let nextSynthetic = 1;
 let nextDatagramPort = 49_152;
 export const netDebug = { events: [] as string[] };
 function record(event: string): void {
@@ -105,17 +102,7 @@ function parseIpv4(text: string): [number, number, number, number] | null {
   return bytes.every((byte) => byte <= 255) ? bytes : null;
 }
 
-function addressFor(host: string): [number, number, number, number] {
-  const numeric = parseIpv4(host);
-  if (numeric) return numeric;
-  const found = syntheticAddresses.get(host);
-  if (found) return found;
-  const id = nextSynthetic++ & 0xffff;
-  const bytes: [number, number, number, number] = [198, 18, id >>> 8, id & 255];
-  syntheticAddresses.set(host, bytes);
-  syntheticHosts.set(ipv4Key(bytes), host);
-  return bytes;
-}
+const addressFor = syntheticAddress;
 
 const addrinfoLayout = () => PTR === 8
   ? { size: 48, canon: 24, addr: 32, next: 40 }
@@ -220,7 +207,7 @@ function nativeConnect(cpu: Cpu, fd: number, sockaddr: number, length: number): 
   const endpoint = readEndpoint(cpu, sockaddr, length);
   if (!endpoint) return -1;
   const { address: bytes, port } = endpoint;
-  const host = syntheticHosts.get(ipv4Key(bytes)) ?? ipv4Text(bytes);
+  const host = syntheticHost(bytes) ?? ipv4Text(bytes);
   record(`connect fd=${fd} ${host}:${port} nonblock=${socket.nonblock}`);
   const relay = new Relay(host, port, false);
   socket.relay = relay;
@@ -628,7 +615,7 @@ function copyText(text: string, destination: number, capacity: number): boolean 
 function nativeGetnameinfo(sockaddr: number, length: number, host: number, hostLength: number, service: number, serviceLength: number, flags = 0): number {
   if (!sockaddr || length < 8 || mem.ld16u(sockaddr) !== AF_INET) return EAI_ADDRFAMILY;
   const bytes = mem.u8.subarray(sockaddr + 4, sockaddr + 8);
-  const numeric = ipv4Text(bytes), resolved = syntheticHosts.get(ipv4Key(bytes));
+  const numeric = ipv4Text(bytes), resolved = syntheticHost(bytes);
   if (!resolved && flags & NI_NAMEREQD) return EAI_NONAME;
   const name = flags & NI_NUMERICHOST ? numeric : resolved ?? numeric;
   const port = (mem.u8[sockaddr + 2] << 8) | mem.u8[sockaddr + 3];

@@ -13,7 +13,7 @@ import { stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
 import { jarray, strArray, dotName, utf8, i8, u8 } from "../abi";
 import { vfs, type JInputStream, type JOutputStream } from "./jio";
-import { Relay } from "../../shell/relay";
+import { Relay, syntheticAddress, syntheticHost, ipv4Text, type Ipv4 } from "../../shell/relay";
 
 rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager", "javax/net/ssl/KeyManager",
   "javax/net/ssl/SSLSession", "java/nio/channels/ReadableByteChannel", "java/nio/channels/WritableByteChannel",
@@ -116,20 +116,43 @@ rt.register({
   },
 });
 
-// java.net addresses, and Socket over the relay above
-class JInetAddress extends JObj { host = ""; }
-const inetAddr = (host: string | null) => Object.assign(new JInetAddress(), { host: host ?? "" });
+// java.net addresses, and Socket over the relay above. A name's address is the synthetic one the
+// native resolver hands out for it, so an app that resolves in Java and dials natively (or the
+// other way round) reaches the same relay connection.
+class JInetAddress extends JObj { host = ""; bytes: Ipv4 = [0, 0, 0, 0]; }
+class JInet4Address extends JInetAddress {}
+const inetAddr = (host: string | null) => {
+  const name = host === null || host === "" ? "localhost" : host;
+  return Object.assign(new JInet4Address(), { host: name, bytes: name === "localhost" ? [127, 0, 0, 1] as Ipv4 : syntheticAddress(name) });
+};
+const inetBytes = (bytes: Int8Array, host: string | null) => {
+  if (bytes?.length !== 4) throw rt.mkThrowable("java/net/UnknownHostException", "addr is of illegal length");
+  const ip: Ipv4 = [bytes[0] & 255, bytes[1] & 255, bytes[2] & 255, bytes[3] & 255];
+  return Object.assign(new JInet4Address(), { host: host ?? syntheticHost(ip) ?? ipv4Text(ip), bytes: ip });
+};
+rt.register({ name: "java/net/Inet4Address", ctor: JInet4Address, sup: "java/net/InetAddress" });
+rt.register({ name: "java/net/Inet6Address", ctor: class extends JInetAddress {}, sup: "java/net/InetAddress" });
 rt.register({
   name: "java/net/InetAddress", ctor: JInetAddress,
   methods: {
     "static getByName(Ljava/lang/String;)Ljava/net/InetAddress;": inetAddr,
     "static getAllByName(Ljava/lang/String;)[Ljava/net/InetAddress;": (h: string) => jarray([inetAddr(h)], "Ljava/net/InetAddress;"),
+    "static getByAddress([B)Ljava/net/InetAddress;": (b: Int8Array) => inetBytes(b, null),
+    "static getByAddress(Ljava/lang/String;[B)Ljava/net/InetAddress;": (h: string | null, b: Int8Array) => inetBytes(b, h),
+    "static getLoopbackAddress()Ljava/net/InetAddress;": () => inetAddr("localhost"),
+    "static getLocalHost()Ljava/net/InetAddress;": () => inetAddr("localhost"),
     "getHostName()Ljava/lang/String;": function (this: JInetAddress) { return this.host; },
-    "getHostAddress()Ljava/lang/String;": function (this: JInetAddress) { return "0.0.0.0"; },
-    "getAddress()[B": () => new Int8Array(4),
-    "isLoopbackAddress()Z": function (this: JInetAddress) { return this.host === "localhost" || this.host.startsWith("127.") ? 1 : 0; },
-    "isAnyLocalAddress()Z": function (this: JInetAddress) { return this.host === "0.0.0.0" ? 1 : 0; },
-    "toString()Ljava/lang/String;": function (this: JInetAddress) { return this.host + "/0.0.0.0"; },
+    "getCanonicalHostName()Ljava/lang/String;": function (this: JInetAddress) { return this.host; },
+    "getHostAddress()Ljava/lang/String;": function (this: JInetAddress) { return ipv4Text(this.bytes); },
+    "getAddress()[B": function (this: JInetAddress) { return Int8Array.from(this.bytes); },
+    "isLoopbackAddress()Z": function (this: JInetAddress) { return this.bytes[0] === 127 ? 1 : 0; },
+    "isAnyLocalAddress()Z": function (this: JInetAddress) { return this.bytes.every((b) => b === 0) ? 1 : 0; },
+    "isSiteLocalAddress()Z": function (this: JInetAddress) { const [a, b] = this.bytes; return a === 10 || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) ? 1 : 0; },
+    "isLinkLocalAddress()Z": function (this: JInetAddress) { return this.bytes[0] === 169 && this.bytes[1] === 254 ? 1 : 0; },
+    "isMulticastAddress()Z": function (this: JInetAddress) { return this.bytes[0] >= 224 && this.bytes[0] < 240 ? 1 : 0; },
+    "equals(Ljava/lang/Object;)Z": function (this: JInetAddress, o: unknown) { return o instanceof JInetAddress && o.bytes.every((b, i) => b === this.bytes[i]) ? 1 : 0; },
+    "hashCode()I": function (this: JInetAddress) { return ((this.bytes[0] << 24) | (this.bytes[1] << 16) | (this.bytes[2] << 8) | this.bytes[3]) | 0; },
+    "toString()Ljava/lang/String;": function (this: JInetAddress) { return this.host + "/" + ipv4Text(this.bytes); },
   },
 });
 // NetworkInterface: the browser exposes no interfaces, and the relay's address is the server's,
