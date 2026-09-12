@@ -898,7 +898,7 @@ rt.register({
     "<init>()V": function () {},
     "<init>(Landroid/graphics/Matrix;)V": function (this: JMatrix, o: JMatrix) { if (o) this.m = [...o.m]; },
     "reset()V": function (this: JMatrix) { this.m = [1, 0, 0, 1, 0, 0]; },
-    "set(Landroid/graphics/Matrix;)V": function (this: JMatrix, o: JMatrix) { this.m = [...o.m]; },
+    "set(Landroid/graphics/Matrix;)V": function (this: JMatrix, o: JMatrix | null) { this.m = o ? [...o.m] : [1, 0, 0, 1, 0, 0]; },
     "isIdentity()Z": function (this: JMatrix) { return isIdentityM(this.m) ? 1 : 0; },
     "setPolyToPoly([FI[FII)Z": function (this: JMatrix, src: Float32Array, si: number, dst: Float32Array, di: number, count: number) {
       if (count > 4) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);

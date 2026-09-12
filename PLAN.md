@@ -167,9 +167,13 @@ run. Java's primitive conversion matrix and long-to-float boundary results agree
 The account survives reload. The picker next required `PackageManager.getApplicationIcon`;
 package icons now resolve from their owning archive, with the paired Android default
 icon for apps without one. Current/installed/default/missing-resource/unknown-package
-browser probes pass without missing APIs. The picker renders its heading/icon, then
-CircleImageView fails on `Matrix.set(null)`, which Android defines as an identity reset.
-The SDK result remains unverified; there is no need to repeat MFA.
+browser probes pass without missing APIs. CircleImageView next calls `Matrix.set(null)`;
+the delegate now implements Android's identity reset, with a failing-before regression.
+The complete account picker works and selecting the saved account returns SDK status 8.
+microG logs the upstream cause: `UNREGISTERED_ON_API_CONSOLE`, specifically requiring
+the client's package name and SHA-1 certificate registration. Verify the exact Android
+reference error and configure the authorized test project before retesting. Typecheck
+and 647 tests / 20,595 assertions pass; broader final regression checks remain pending.
 
 The location implementation rewrites static Location references in isolated HTTP(S)
 scripts using the existing TypeScript parser on the server. Ordinary objects and local

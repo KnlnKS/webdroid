@@ -847,7 +847,17 @@ NameNotFoundException. No missing APIs are recorded. Evidence:
 `/tmp/webdroid-application-icon-{probe.log,typecheck.log}`, and
 `/tmp/webdroid-{application-icon,default-icon,package-load-icon}.dis`.
 The real picker then exposes CircleImageView.updateShaderMatrix calling Matrix.set
-with null; our delegate incorrectly dereferences it. The final SDK result is pending.
+with null; our delegate incorrectly dereferences it.
+
+The one-line Matrix.set fix restores identity for null, matching both public Android
+documentation and the paired framework bytecode's reset branch. The regression verifies
+copy independence and null reset; it fails before and passes after. Typecheck and all
+647 tests / 20,595 assertions pass. Evidence: `/tmp/webdroid-matrix-{before,after,units}.log`
+and `/tmp/webdroid-matrix-framework.dis`. The live account picker now renders its account
+row and selecting it returns SDK status 8. Its warning gives the exact upstream cause:
+UNREGISTERED_ON_API_CONSOLE, asking for matching package/SHA-1 OAuth registration.
+No missing APIs appear in the four current process diagnostics. Android previously
+returned status 8, but its exact warning still needs a fresh matched comparison.
 
 ## WebView upstream bases — 2026-09-11
 
