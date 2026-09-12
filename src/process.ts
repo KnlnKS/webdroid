@@ -1,12 +1,13 @@
 import "./natives";
 import { processBroker, connectProcess, processPresentation } from "./shell/processes";
-import { bootApk, setScreenCanvas, tick, SCREEN_W, SCREEN_H } from "./shell/device";
+import { bootApk, setScreenCanvas, tick, SCREEN_W, SCREEN_H, currentApp, pressBack, dispatchPointer } from "./shell/device";
 import { setProcessIdentity, recordVsync } from "./android/os";
 import { attachIme, drainInput } from "./shell/input";
 import { setWebLayer } from "./android/webkit";
 import { parsePackageArchive, packageArchive } from "./android/packagearchive";
 import { PackedArchive, packedArchives } from "./shell/packedarchive";
 import { rt } from "./jvm/runtime";
+import { overlays } from "./android/popup";
 import { jitStats } from "./native/core";
 import type { Install } from "./shell/install";
 import { installedPath, registerPackage } from "./android/pm";
@@ -37,6 +38,9 @@ processPresentation.changed = (visible) => {
   if (visible && !frameId) frameId = requestAnimationFrame(frame);
   else if (!visible && frameId) { cancelAnimationFrame(frameId); frameId = 0; }
 };
+// the realm's share of the main page's `wd`: enough to see its stack and drive it from a probe
+(globalThis as { wd?: unknown }).wd = { rt, app: () => currentApp(), overlays, back: pressBack,
+  tap: async (x: number, y: number) => { await dispatchPointer(0, x, y); await dispatchPointer(1, x, y); } };
 window.addEventListener("pagehide", () => broker.fail(pid, "Process frame unloaded"), { once: true });
 try {
   const data = await broker.bootstrap(pid);
