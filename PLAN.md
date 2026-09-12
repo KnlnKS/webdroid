@@ -2,7 +2,9 @@
 
 ## Current checkpoint
 
-Branch `codex/microg-webview-base` continues from `28b9246`. At `3902e02`, genuine
+Integration resumed from `28b9246` on `codex/microg-webview-base` and is now merged
+into `main`. The temporary branches and baseline worktrees have been removed.
+At `3902e02`, genuine
 microG v0.3.16.252432 and the unchanged Google SDK client complete DEFAULT_SIGN_IN
 in webdroid and on the dedicated Android reference. Browser authentication succeeds
 again after a full reload using its persisted account. All four reached processes
