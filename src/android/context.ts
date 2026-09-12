@@ -75,8 +75,11 @@ export class PermissionStore {
 }
 let permissionStore = new PermissionStore();
 export function usePermissionStore(store: PermissionStore) { permissionStore = store; }
-const permissionState = (name: string) =>
-  RUNTIME_PERMISSIONS.has(name) && !permissionStore.get(appHost?.pkg ?? "").has(name) ? -1 : 0;
+// granted by the app's own request, or to a system package by the default grant policy
+const permissionState = (name: string) => {
+  const pkg = appHost?.pkg ?? "";
+  return RUNTIME_PERMISSIONS.has(name) && !permissionStore.get(pkg).has(name) && !packages.get(pkg)?.grants.has(name) ? -1 : 0;
+};
 export function grantPermissions(names: string[]): Int32Array {
   permissionStore.grant(appHost?.pkg ?? "", names);
   return new Int32Array(names.length);
@@ -114,6 +117,7 @@ const SERVICE_CLASS: Record<string, string> = {
   permission_controller: "android/permission/PermissionControllerManager",
   locale: "android/app/LocaleManager",
   dropbox: "android/os/DropBoxManager",
+  wifi: "android/net/wifi/WifiManager",
 };
 const SERVICE_NAME = new Map(Object.entries(SERVICE_CLASS).map(([n, c]) => [c, n]));
 SERVICE_NAME.set("android/view/WindowManager", "window");

@@ -1060,6 +1060,7 @@ rt.register({
   methods: {
     ...numCommon("F", JFloat),
     "static valueOf(F)Ljava/lang/Float;": (v: number) => box(JFloat, v),
+    "static valueOf(Ljava/lang/String;)Ljava/lang/Float;": (s: string) => box(JFloat, Math.fround(parseFloatJ(s))),
     "static parseFloat(Ljava/lang/String;)F": (s: string) => Math.fround(parseFloatJ(s)),
     "static hashCode(F)I": floatToIntBits,
     "static floatToIntBits(F)I": floatToIntBits,
@@ -1079,6 +1080,7 @@ rt.register({
   methods: {
     ...numCommon("D", JDouble),
     "static valueOf(D)Ljava/lang/Double;": (v: number) => box(JDouble, v),
+    "static valueOf(Ljava/lang/String;)Ljava/lang/Double;": (s: string) => box(JDouble, parseFloatJ(s)),
     "static parseDouble(Ljava/lang/String;)D": parseFloatJ,
     "static doubleToLongBits(D)J": doubleToLongBits,
     "static doubleToRawLongBits(D)J": doubleToLongBits,

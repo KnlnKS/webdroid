@@ -1788,10 +1788,6 @@ const vgMethods: NativeSpec["methods"] = {
   },
   "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JViewGroup, ev: JMotionEvent) {
     const action = ev.action & 0xff;
-    if (this.touchL) {
-      const r = await vcall(this.touchL, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev);
-      if (r) return 1;
-    }
     if (action === 0) { this.touchTarget = null; this.disallowIntercept = false; }
     let intercepted = false;
     if (!this.disallowIntercept && (action === 0 || this.touchTarget)) {
@@ -1829,6 +1825,10 @@ const vgMethods: NativeSpec["methods"] = {
       ev.action = oldAction;
       this.touchTarget = null;
     }
+    // AOSP: the group's own OnTouchListener sees only what no child took (View.dispatchTouchEvent
+    // runs when there is no touch target); a listener that swallows everything, like the one
+    // BottomSheetDialog puts on its sheet, must not starve the sheet's buttons.
+    if (this.touchL && await vcall(this.touchL, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev)) return 1;
     const self = await guardCall(this, M_onTouchEvent, ev);
     return self ? 1 : 0;
   },

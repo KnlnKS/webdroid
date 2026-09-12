@@ -309,6 +309,9 @@ export function listMethods(): Methods {
     },
     "size()I": function (this: JList) { return this.a.length; },
     "isEmpty()Z": function (this: JList) { return this.a.length === 0 ? 1 : 0; },
+    // a shallow copy with its own element store, as ArrayList.clone: Object.clone would share
+    // the backing array and a listener removing itself mid-iteration would shrink the "copy"
+    "clone()Ljava/lang/Object;": function (this: JList) { const c = new (this.constructor as new () => JList)(); c.a = this.a.slice(); return c; },
     // capacity is advisory on a JS array; the JDK signature still has to exist
     "ensureCapacity(I)V": () => {},
     "trimToSize()V": () => {},
@@ -587,6 +590,13 @@ function mapMethods(): NativeSpec["methods"] {
     "<init>(IF)V": function () {},
     "<init>(IFI)V": function () {},
     "<init>(IFZ)V": function (this: JMap, _c: number, _f: number, ao: number) { this.access = !!ao; },
+    "clone()Ljava/lang/Object;": function (this: JMap) {
+      const c = new (this.constructor as new () => JMap)();
+      c.access = this.access;
+      for (const [k, e] of this.m) c.m.set(k, { k: e.k, v: e.v });
+      c.slow = this.slow.map((e) => ({ k: e.k, v: e.v }));
+      return c;
+    },
     "<init>(Ljava/util/Map;)V": async function (this: JMap, src: unknown) {
       if (src instanceof JMap) { this.m = new Map(src.m); this.slow = src.slow.slice(); }
       else if (src) await copyMapInto(src, this);
@@ -841,6 +851,12 @@ function setMethods(): NativeSpec["methods"] {
     "<init>()V": function () {},
     "<init>(Ljava/util/Comparator;)V": function () {},
     "<init>(I)V": function () {},
+    "clone()Ljava/lang/Object;": function (this: JSet) {
+      const c = new (this.constructor as new () => JSet)();
+      for (const [k, e] of this.m) c.m.set(k, { k: e.k, v: e.v });
+      c.slow = this.slow.map((e) => ({ k: e.k, v: e.v }));
+      return c;
+    },
     "<init>(Ljava/util/Collection;)V": async function (this: JSet, c: unknown) {
       for (const v of await toJsArray(c)) await addToSet(this, v);
     },

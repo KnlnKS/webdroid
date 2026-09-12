@@ -16,7 +16,7 @@ import { jarray, splitSig } from "../jvm/abi";
 import { JEditable, JSpannable, JSpanned, csText, textSelection, setTextSelection } from "./text";
 import { JView, invalidate } from "./view";
 import { JMatrix } from "./graphics";
-import { JTextView, JEditText, focusedEdit, focusEditText, inputEl, editInput, fireEditorAction } from "./textview";
+import { JTextView, JEditText, focusedEdit, focusEditText, inputEl, editInput, fireEditorAction, editorAction } from "./textview";
 import { inMainJob, onMain } from "./mainloop";
 import { PARCELABLE } from "./os";
 
@@ -274,7 +274,13 @@ rt.register({
       "commitContent(Landroid/view/inputmethod/InputContentInfo;ILandroid/os/Bundle;)Z", "reportFullscreenMode(Z)Z",
       "requestCursorUpdates(I)Z", "requestCursorUpdates(II)Z",
       "previewHandwritingGesture(Landroid/view/inputmethod/PreviewableHandwritingGesture;Landroid/os/CancellationSignal;)Z"),
-    ...stubs(1, "performEditorAction(I)Z", "performContextMenuAction(I)Z",
+    // EditableInputConnection: the editor action reaches the TextView it serves
+    "performEditorAction(I)Z": async function (this: JBaseInputConnection, code: number) {
+      if (!(this.view instanceof JTextView)) return 0;
+      await editorAction(this.view, code);
+      return 1;
+    },
+    ...stubs(1, "performContextMenuAction(I)Z",
       "performPrivateCommand(Ljava/lang/String;Landroid/os/Bundle;)Z", "performSpellCheck()Z",
       "clearMetaKeyStates(I)Z", "setImeConsumesInput(Z)Z"),
     ...stubs(null, "getHandler()Landroid/os/Handler;",

@@ -82,9 +82,11 @@ export const device = {
   /** the browser's dark-mode preference, live as a device's is (see setDeviceNight) */
   get night(): boolean { return globalThis.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false; },
   /** PackageManager.hasSystemFeature: what this device can back — touch, both orientations,
-   *  a network, a WebView — and nothing it cannot (no camera, GPS, telephony or sensors) */
+   *  a network, a WebView, location (browser geolocation stands behind the gps and network
+   *  providers the LocationManager lists) — and nothing it cannot (no camera, telephony or sensors) */
   features: ["android.hardware.touchscreen", "android.hardware.touchscreen.multitouch", "android.hardware.touchscreen.multitouch.distinct",
     "android.hardware.faketouch", "android.hardware.screen.portrait", "android.hardware.screen.landscape", "android.hardware.wifi",
+    "android.hardware.location", "android.hardware.location.gps", "android.hardware.location.network",
     "android.software.webview", "android.software.input_methods", "android.software.home_screen", "android.software.app_widgets"],
   /** /proc/cpuinfo, /proc/meminfo and uname: VFPv3 without NEON, as the ARM32 tier implements */
   cpu: { cores: 4, features: "swp half thumb fastmult vfp edsp thumbee vfpv3 tls", hardware: "webdroid", memKb: 2 * 1024 * 1024 },

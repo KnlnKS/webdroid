@@ -129,6 +129,12 @@ async function applyHolder(target: unknown, h: JPVH, t: number) {
   if (h.name) return applyAnimProp(target, h.name, h.cur as number);
 }
 /** the property's value now: what an XML animator with no valueFrom (or no valueTo) starts from */
+/** where a one-key animator starts: the Property's own get, or the named getter */
+async function currentValue(target: unknown, prop: unknown, name: string): Promise<number> {
+  if (!prop) return readAnimProp(target, name);
+  const v: unknown = await vcall(prop, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", target);
+  return Number(v && typeof v === "object" && "v" in v ? (v as { v: unknown }).v : v ?? 0);
+}
 async function readAnimProp(target: unknown, prop: string): Promise<number> {
   const field = VIEW_ANIM_PROPS[prop];
   if (field && target instanceof JView) return target[field];
@@ -341,7 +347,7 @@ const vaMethods: NativeSpec["methods"] = {
   "start()V": async function (this: JValueAnimator) {
     if (Number.isNaN(this.from) || Number.isNaN(this.to)) {
       // a single value animates from the property's current value (ValueAnimator: from 0)
-      const cur = this.target ? await readAnimProp(this.target, this.propName) : 0;
+      const cur = this.target ? await currentValue(this.target, this.prop, this.propName) : 0;
       if (Number.isNaN(this.from)) this.from = cur;
       if (Number.isNaN(this.to)) this.to = cur;
     }
@@ -349,6 +355,10 @@ const vaMethods: NativeSpec["methods"] = {
     this.startReversed = false;
     this.startT = performance.now();
     this.running = true;
+    // AOSP's start() animates fraction 0 at once, so getAnimatedValue() read from a start
+    // listener or before the first frame is the first key, not whatever was there before.
+    if (this.objKeys) this.cur = await objAt(this, 0);
+    else { const v = this.keys ? this.keys[0] : this.from; this.cur = this.isInt ? Math.round(v) : v; }
     for (const l of [...this.animLs]) {
       try { await vcall(l, "onAnimationStart", "(Landroid/animation/Animator;)V", this); } catch (e) { reportUncaught(e); }
     }

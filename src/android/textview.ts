@@ -11,7 +11,7 @@ import {
   fontDescent, fontAscent, fontTop, fontBottom, measureText, typefaceFor, JTypeface, tfDefault, type JRect,
   type JCanvas, cssColor, tfMedium
 } from "./graphics";
-import { vcall, mkEnumSet } from "../jvm/natives/jlang";
+import { vcall, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import {
   attrTable, type Resources, resolveStyleValue, rvDimen, rvColor, rvInt, type RV, rvString, type JAttrSet,
   obtainStyled
@@ -726,16 +726,24 @@ setFocusHook((v, on) => {
   if (v instanceof JEditText) focusEditText(on ? v : null);
   else if (on && focusedEdit) focusEditText(null);
 });
-/** the IME action key: AOSP hands the listener the action out of imeOptions and, when nothing
- *  consumes it, moves focus off the field the way closing the keyboard does. */
-export async function fireEditorAction(): Promise<boolean> {
+/**
+ * TextView.onEditorAction: the listener first; then AOSP's defaults — NEXT/PREVIOUS move focus
+ * on and DONE closes the keyboard, both of which leave the field here, while any other action
+ * (SEARCH, GO, SEND, or none) is delivered as an ENTER key press to the view, which is what a
+ * field that listens with an OnKeyListener rather than an editor-action listener receives.
+ */
+export async function editorAction(tv: JTextView, action: number): Promise<boolean> {
+  if (tv.editorActionL && await vcall(tv.editorActionL, "onEditorAction",
+    "(Landroid/widget/TextView;ILandroid/view/KeyEvent;)Z", tv, action, null)) return true;
+  if (action === 5 || action === 6 || action === 7) { if (tv === focusedEdit) focusEditText(null); return false; }
+  rt.link("android/view/KeyEvent");
+  for (const act of [0, 1]) await vcall(tv, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", await newObj("android/view/KeyEvent", "(II)V", act, 66));
+  return true;
+}
+/** the IME action key on the focused field */
+export function fireEditorAction(): Promise<boolean> {
   const et = focusedEdit;
-  if (!et) return false;
-  const action = (et.imeOptions & 0xff) || 0;
-  if (et.editorActionL && await vcall(et.editorActionL, "onEditorAction",
-    "(Landroid/widget/TextView;ILandroid/view/KeyEvent;)Z", et, action, null)) return true;
-  focusEditText(null);
-  return false;
+  return et ? editorAction(et, (et.imeOptions & 0xff) || 0) : Promise.resolve(false);
 }
 export function focusEditText(et: JEditText | null) {
   if (focusedEdit === et) return;

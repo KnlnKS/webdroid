@@ -497,6 +497,7 @@ rt.register({ name: "android/widget/HorizontalScrollView", ctor: class extends J
 // ── RelativeLayout (common-rule subset)
 class JRelativeLP extends JMarginLP {
   rules = new Map<number, number>(); // verb → anchor id or boolean(-1 true)
+  alignWithParent = false;           // layout_alignWithParentIfMissing, a public field on AOSP
 }
 const RL = {
   LEFT_OF: 0, RIGHT_OF: 1, ABOVE: 2, BELOW: 3, ALIGN_BASELINE: 4, ALIGN_LEFT: 5, ALIGN_TOP: 6,
@@ -607,6 +608,22 @@ const relativeMethods: NativeSpec["methods"] = {
           if (aB) t = anchorPos(aB).t + aB.measuredH - c.measuredH;
           const aBase = anchor(RL.ALIGN_BASELINE);
           if (aBase) t = anchorPos(aBase).t;
+          // AOSP getChildMeasureSpec: rules that fix both edges measure the child EXACTLY to the
+          // span between them, whatever its layout_width/height (a later rule overrides an
+          // earlier one, as in applyHorizontalSizeRules)
+          const lE = lp.rules.get(RL.ALIGN_PARENT_LEFT) ? this.padL + m.marginL : aL ? anchorPos(aL).l : rOf ? anchorPos(rOf).l + rOf.measuredW + m.marginL : NaN;
+          const rE = lp.rules.get(RL.ALIGN_PARENT_RIGHT) ? availW - this.padR - m.marginR : aR ? anchorPos(aR).l + aR.measuredW : lOf ? anchorPos(lOf).l - m.marginR : NaN;
+          const tE = lp.rules.get(RL.ALIGN_PARENT_TOP) ? this.padT + m.marginT : aT ? anchorPos(aT).t : below ? anchorPos(below).t + below.measuredH + m.marginT : NaN;
+          const bE = lp.rules.get(RL.ALIGN_PARENT_BOTTOM) ? availH - this.padB - m.marginB : aB ? anchorPos(aB).t + aB.measuredH : above ? anchorPos(above).t - m.marginB : NaN;
+          const spanW = rE - lE, spanH = bE - tE;
+          if (spanW === spanW || spanH === spanH) {
+            if (spanW === spanW) l = lE;
+            if (spanH === spanH) t = tE;
+            const w = spanW === spanW ? Math.max(0, spanW) : c.measuredW, h = spanH === spanH ? Math.max(0, spanH) : c.measuredH;
+            if (w !== c.measuredW || h !== c.measuredH) await measureView(c,
+              spanW === spanW ? makeSpec(w, MS_EXACTLY) : childMeasureSpec(wSpec, this.padL + this.padR + m.marginL + m.marginR, lp.width),
+              spanH === spanH ? makeSpec(h, MS_EXACTLY) : childMeasureSpec(hSpec, this.padT + this.padB + m.marginT + m.marginB, lp.height));
+          }
         }
         const p = pos.get(c);
         if (!p) pos.set(c, { l, t });
@@ -642,6 +659,7 @@ rt.register({ name: "android/widget/RelativeLayout", ctor: JRelativeLayout, sup:
   methods: relativeMethods });
 rt.register({
   name: "android/widget/RelativeLayout$LayoutParams", ctor: JRelativeLP, sup: "android/view/ViewGroup$MarginLayoutParams",
+  fields: ["alignWithParent"],
   methods: {
     "<init>(II)V": function (this: JRelativeLP, w: number, h: number) { this.width = w; this.height = h; },
     "<init>(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JRelativeLP, o: JLayoutParams) {

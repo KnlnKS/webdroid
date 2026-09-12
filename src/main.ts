@@ -16,7 +16,7 @@ import { clearRoots } from "./shell/hostfs";
 import { perf, perfReset } from "./perf";
 import { uiState } from "./android/view";
 import { onMain, mainDbg } from "./android/mainloop";
-import { imeInput } from "./android/ime";
+import { imeInput, imeAction } from "./android/ime";
 import { overlays } from "./android/popup";
 import { setWebLayer, webViewInfo } from "./android/webkit";
 import { native } from "./native/debug";
@@ -340,6 +340,8 @@ const wd = {
     await imeInput(s);
     return "typed " + s;
   },
+  // the keyboard's action key on the focused field (Search, Go, Done…)
+  enter: async () => "action " + (await imeAction() ? "handled" : "ignored"),
 };
 (globalThis as any).wd = wd;
 

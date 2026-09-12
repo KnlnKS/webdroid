@@ -270,7 +270,8 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     attachView(this.ensureRoot().content, v);
   },
   "show()V": async function (this: JDialog) {
-    if (this.showing) return;
+    // AOSP: showing again after hide() only makes the decor visible again
+    if (this.showing) { if (this.root && this.root.visibility === 4) { this.root.visibility = 0; requestLayout(this.root); } return; }
     this.showing = true;
     const root = this.ensureRoot();
     await loadCardBg(root);

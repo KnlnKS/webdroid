@@ -22,6 +22,9 @@ type Action =
    */
   | { type: "typeInto"; x: number; y: number; text: string }
   | { type: "back" }
+  /** The keyboard's action key on the focused field — Search/Go/Done on the soft keyboard, a
+   *  hardware ENTER on the emulator; both reach TextView.onEditorAction. */
+  | { type: "enter" }
   | { type: "swipe"; from: [number, number]; to: [number, number]; ms?: number }
   /** No input — just settle and capture (e.g. after an async screen load). */
   | { type: "settle" };
