@@ -622,7 +622,11 @@ for (const [name, methods, statics] of [
     "getCurrentModeType()I": () => 1,
   }],
   ["android/app/KeyguardManager", { "isKeyguardLocked()Z": () => 0, "inKeyguardRestrictedInputMode()Z": () => 0, "isDeviceSecure()Z": () => 0 }],
-  ["android/hardware/SensorManager", { "getDefaultSensor(I)Landroid/hardware/Sensor;": () => null, "getSensorList(I)Ljava/util/List;": () => newArrayList(), "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z": () => 0, "unregisterListener(Landroid/hardware/SensorEventListener;)V": () => {} }],
+  ["android/hardware/SensorManager", { "getDefaultSensor(I)Landroid/hardware/Sensor;": () => null, "getSensorList(I)Ljava/util/List;": () => newArrayList(), "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z": () => 0,
+    "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;II)Z": () => 0,
+    "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;ILandroid/os/Handler;)Z": () => 0,
+    "unregisterListener(Landroid/hardware/SensorEventListener;)V": () => {},
+    "unregisterListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;)V": () => {} }],
   ["android/os/BatteryManager", { "getIntProperty(I)I": () => 80, "isCharging()Z": () => 1 }],
   ["android/hardware/display/DisplayManager", {
     // one fixed built-in display: unknown ids are null as in AOSP, and registered listeners
