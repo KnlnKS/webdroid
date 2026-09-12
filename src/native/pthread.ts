@@ -3,7 +3,7 @@
 
 import { mem, AddrMap, NativeFault } from "./mem";
 import { hostLib, NORET, SERVED, type HostFn, stp, stpVa } from "./host";
-import { Cpu, bindCpu, cpuByTid, cpuOf, yieldToLoop } from "./cpu";
+import { Cpu, bindCpu, cpuByTid, cpuOf, cpus, yieldToLoop } from "./cpu";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
 import { TLS_KEYS } from "./core";
 import { RET_SENTINEL, E } from "./abi";
@@ -32,6 +32,10 @@ function rwRelease(cpu: Cpu, l: RwLock): number {
   return 0;
 }
 const threads = new Map<number, { done: Promise<void>; retval: bigint; detached: boolean; joined: boolean; exited: boolean }>();
+/** pthread_t (the thread's pthread_internal_t address) → Cpu tid, for as long as the thread is joinable or alive */
+const handles = new Map<number, number>();
+export const tidOf = (handle: number): number => handles.get(handle >>> 0) ?? cpuBySelf(handle >>> 0)?.tid ?? -1;
+function cpuBySelf(handle: number): Cpu | undefined { for (const c of cpus) if (c.pthreadSelf === handle) return c; return undefined; }
 let keySeq = 1, threadSeq = 0;
 const keyDtors = new Map<number, number>();                              // pthread key → destructor, run for the thread's non-null values at its exit
 /** key destructors, as many rounds as they keep setting values (Bionic stops at four) */
@@ -163,13 +167,14 @@ function startThread(parent: Cpu, start: number, arg: bigint, detached: boolean)
           cpu.depth--; cpu.finished = true; cpu.signals.length = 0;
           jt.alive = 0; rec.exited = true;
           cpu.dispose();
-          if (rec.detached) threads.delete(cpu.tid);
+          if (rec.detached) { threads.delete(cpu.tid); handles.delete(cpu.pthreadSelf); }
           resolve();
         }
       })();
     }, 0);
   });
   threads.set(cpu.tid, rec);
+  handles.set(cpu.pthreadSelf, cpu.tid);
   return cpu;
 }
 
@@ -179,7 +184,7 @@ export function pthreadInit(): void {
       const out = a.p(), attr = a.p(), start = a.p(), arg = a.va();
       try {
         const cpu = startThread(parent, start, arg, !!attr && !!(mem.ld32(attr) & 1));
-        stp(out, cpu.tid);
+        stp(out, cpu.pthreadSelf);
         return 0;
       } catch (e) {
         if (e instanceof NativeFault && (e.message === "[native] out of stack address space" || e.message === "[native] out of memory for thread data")) return E.AGAIN;
@@ -187,7 +192,7 @@ export function pthreadInit(): void {
       }
     },
     pthread_join: async (cpu, a) => {
-      const tid = a.i(), retp = a.va();
+      const handle = a.p(), tid = tidOf(handle), retp = a.va();
       if (tid === cpu.tid) return E.DEADLK;
       const t = threads.get(tid);
       if (!t) return E.SRCH;
@@ -198,17 +203,18 @@ export function pthreadInit(): void {
         if (cpu.a64) stpVa(mem.txVa(retp), t.retval);
         else mem.st32(mem.txVa(retp), Number(t.retval));
       }
-      threads.delete(tid);
+      threads.delete(tid); handles.delete(handle);
       return 0;
     },
     pthread_detach: (_c, a) => {
-      const tid = a.i(), t = threads.get(tid);
+      const handle = a.p(), tid = tidOf(handle), t = threads.get(tid);
       if (!t) return E.SRCH;
       if (t.detached || t.joined) return E.INVAL;
       t.detached = true;
-      if (t.exited) threads.delete(tid);
+      if (t.exited) { threads.delete(tid); handles.delete(handle); }
       return 0;
     },
+    pthread_gettid_np: (_c, a) => { const tid = tidOf(a.p()); return tid < 0 ? -1 : 4242 + tid; },
     pthread_exit: (cpu, a) => {
       const rv = a.va();
       const t = threads.get(cpu.tid);
@@ -220,7 +226,7 @@ export function pthreadInit(): void {
     pthread_equal: (_c, a) => (a.i() === a.i() ? 1 : 0),
     pthread_sigmask: (cpu, a) => cpu.sigmask(a.i(), a.p(), a.p(), cpu.a64 ? 8 : 4),
     pthread_sigmask64: (cpu, a) => cpu.sigmask(a.i(), a.p(), a.p(), 8),
-    pthread_setname_np: (_c, a) => { const c = cpuByTid(a.i()); const n = a.str(); if (c) { c.name = n; c.jthread.jname = n; } return 0; },
+    pthread_setname_np: (_c, a) => { const c = cpuByTid(tidOf(a.p())); const n = a.str(); if (c) { c.name = n; c.jthread.jname = n; } return 0; },
     pthread_getschedparam: (_c, a) => { a.i(); const pol = a.p(), par = a.p(); if (pol) mem.st32(pol, 0); if (par) mem.st32(par, 0); return 0; },
     pthread_setschedparam: () => 0,
     pthread_attr_init: (_c, a) => { mem.st32(a.p(), 0); return 0; },

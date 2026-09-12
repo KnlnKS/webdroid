@@ -90,6 +90,8 @@ export class Cpu {
   a64 = false;
   pcx = 15; lrx = 14; spx = 13;
   private threadData = 0;
+  /** the pthread_internal_t this thread is known by: pthread_self(), the handle pthread_create hands out */
+  pthreadSelf = 0;
   jthread: JThread;
   tid: number;
   stackBase = 0; stackTop = 0;
@@ -112,14 +114,19 @@ export class Cpu {
     mem.initHooks.push(() => this.views());
     this.args = A64 ? new Args64(this) : new Args(this);
     this.setAbi(A64);
-    // the TLS block, errno, then the pthread key table the core serves lookups from
-    this.threadData = mem.calloc(1, 264 + 8 * TLS_KEYS);
+    // the TLS block, errno, the pthread key table the core serves lookups from, then the
+    // pthread_internal_t pthread_self() names (bionic's layout: tid at +0x10, the stack in
+    // attr at +0x20/+0x28), which TLS slot 1 points at as on a device
+    this.threadData = mem.calloc(1, 264 + 8 * TLS_KEYS + PTHREAD_SIZE);
     if (!this.threadData) throw new NativeFault("[native] out of memory for thread data");
     this.tlsBase = this.threadData;
     this.errnoAddr = this.threadData + 256;
     this.u32[OFF_ERRNO >> 2] = this.errnoAddr;
     this.tlsTab = this.threadData + 264;
     this.u32[OFF_TLSTAB >> 2] = this.tlsTab;
+    this.pthreadSelf = this.tlsTab + 8 * TLS_KEYS;
+    mem.st32(this.pthreadSelf + 0x10, 4242 + this.tid);
+    mem.st32(this.tlsBase + (A64 ? 8 : 4), this.pthreadSelf);
     cpus.add(this);
   }
   private views(): void {
@@ -264,6 +271,7 @@ export class Cpu {
       const s = mem.allocStack(STACK_SIZE);
       this.stackBase = s.base; this.stackTop = s.top;
       this.w[2 * this.spx] = s.top; this.w[2 * this.spx + 1] = 0;
+      if (this.a64) { mem.st64(this.pthreadSelf + 0x20, BigInt(s.base)); mem.st64(this.pthreadSelf + 0x28, BigInt(s.top - s.base)); }
     }
   }
 
@@ -510,6 +518,8 @@ export class Cpu {
 /** libc's syscall(2) dispatcher, installed at init: raw svc/swi numbers the core leaves to the host */
 let rawSyscall: ((cpu: Cpu, nr: number, a: ArgReader) => HostRet | Promise<HostRet>) | null = null;
 export function setRawSyscall(fn: (cpu: Cpu, nr: number, a: ArgReader) => HostRet | Promise<HostRet>): void { rawSyscall = fn; }
+/** bionic's pthread_internal_t is under 0x200 bytes; a crash reporter scans it up to a page */
+const PTHREAD_SIZE = 0x200;
 let tidSeq = 0;
 export const cpus = new Set<Cpu>();
 const byThread = new WeakMap<JThread, Cpu>();

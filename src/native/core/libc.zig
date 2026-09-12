@@ -294,7 +294,11 @@ pub fn call(c: *Cpu, id: u8) Result {
             const p: u32 = if (arg(c, 0) == 0) 0 else (ptr(c, 0) orelse return .fault);
             ret(c, mem.usable_size(p));
         },
-        .pthread_self => ret(c, c.tid),
+        // bionic keeps the thread's pthread_internal_t* in TLS slot 1
+        .pthread_self => {
+            const tls: u32 = @truncate(c.tls);
+            ret(c, if (c.a64 != 0) mem.ptr(u64, tls + 8).* else mem.ptr(u32, tls + 4).*);
+        },
         .pthread_getspecific => {
             const k: u32 = @truncate(arg(c, 0));
             ret(c, if (k < TLS_KEYS) mem.ptr(u64, c.tls_tab + 8 * k).* else 0);

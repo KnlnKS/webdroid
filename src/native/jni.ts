@@ -51,6 +51,19 @@ interface MethodRec { info: ClassInfo; name: string; desc: string; mangled: stri
 interface FieldRec { prop: string; type: string; isStatic: boolean; owner: any }
 const methods: MethodRec[] = [null as unknown as MethodRec];
 const methodIds = new WeakMap<ClassInfo, Map<string, number>>();
+// A jmethodID/jfieldID is an ArtMethod*/ArtField* on a device, and an image may read the bytes
+// it points at (libmetasec sizes ArtMethod as the gap between two ids of one class and scans
+// them): each id is therefore a zeroed block in guest memory, mapped back to its record here.
+const ID_BLOCK = 64;
+const methodIdx = new Map<number, number>(), fieldIdx = new Map<number, number>();
+function mintId(table: Map<number, number>, index: number): number {
+  const p = mem.calloc(1, ID_BLOCK);
+  if (!p) throw new Error("out of memory for JNI ids");
+  table.set(p, index);
+  return p;
+}
+const methodOf = (id: number): MethodRec | undefined => methods[methodIdx.get(id >>> 0) ?? 0];
+const fieldOf = (id: number): FieldRec | undefined => fields[fieldIdx.get(id >>> 0) ?? 0];
 /** a jmethodID is canonical: the same method looked up twice, or reached through a reflected
  *  Method, is the same id (an engine caches ids per proxy method and matches by identity) */
 function methodId(info: ClassInfo, name: string, desc: string, isStatic: boolean): number {
@@ -61,7 +74,7 @@ function methodId(info: ClassInfo, name: string, desc: string, isStatic: boolean
   if (id === undefined) {
     const { params, ret } = parseMethodDesc(desc);
     methods.push({ info, name, desc, mangled: mangleMethod(name, desc), isStatic, params, ret });
-    ids.set(key, (id = methods.length - 1));
+    ids.set(key, (id = mintId(methodIdx, methods.length - 1)));
   }
   return id;
 }
@@ -81,7 +94,7 @@ function fieldId(info: ClassInfo, prop: string, type: string, isStatic: boolean)
   let id = ids.get(key);
   if (id === undefined) {
     fields.push({ prop, type, isStatic, owner: isStatic ? info.ctor : null });
-    ids.set(key, id = fields.length - 1);
+    ids.set(key, id = mintId(fieldIdx, fields.length - 1));
   }
   return id;
 }
@@ -269,7 +282,7 @@ export function jniInit(): void {
     return m instanceof JCtor ? methodId(m.owner, "<init>", m.desc, false) : 0;
   });
   def(9, "ToReflectedMethod", (_c, a) => {
-    a.p(); a.p(); const m = methods[a.i()]; a.i();
+    a.p(); a.p(); const m = methodOf(a.p()); a.i();
     if (!m) return 0;
     if (m.name === "<init>") {
       const c = classCtors(m.info).find((ctor) => ctor.desc === m.desc);
@@ -302,7 +315,7 @@ export function jniInit(): void {
   def(26, "EnsureLocalCapacity", () => 0);
   def(27, "AllocObject", async (cpu, a) => { a.p(); const i = infoOf(a.p()); if (!i) return 0; const p = (i.owner ?? rt).initClass(i); if (p) await p; return toRef(new i.ctor(), cpu); });
   const newObject = (read: (m: MethodRec, a: ArgReader) => unknown[]) => async (cpu: Cpu, a: ArgReader) => {
-    a.p(); const i = infoOf(a.p()); const m = methods[a.i()];
+    a.p(); const i = infoOf(a.p()); const m = methodOf(a.p());
     if (!i || !m) return 0;
     try {
       const p = (i.owner ?? rt).initClass(i); if (p) await p;
@@ -350,7 +363,7 @@ export function jniInit(): void {
           a.p();
           const self = kind === "static" ? null : deref(a.p());
           if (kind !== "virtual") a.p(); // jclass
-          const m = methods[a.i()];
+          const m = methodOf(a.p());
           if (!m) { pend(cpu, throwable("java/lang/NoSuchMethodError", "bad methodID")); return 0; }
           const args = read(m, a);
           if (jniTrace.on) console.log("[jni] ←", m.info.name, m.name, m.desc, args.map((v) => typeof v === "string" ? JSON.stringify(v.slice(0, 200)) : Array.isArray(v) ? `[${v.length}]` : String(v)).join(" "));
@@ -384,10 +397,10 @@ export function jniInit(): void {
     const P = PRIM[k], D = PRIM_DESC[k];
     const fromJava = (v: unknown, cpu: Cpu): HostRet => retWord(D, v, cpu);
     const toJava = (a: ArgReader): unknown => D === "J" ? a.l() : D === "F" ? a.f() : D === "D" ? a.d() : D === "L" ? deref(a.p()) : D === "Z" ? (a.i() & 255 ? 1 : 0) : a.i();
-    def(95 + k, `Get${P}Field`, (cpu, a) => { a.p(); const o = deref(a.p()) as any; const f = fields[a.i()]; return o && f ? fromJava(o[f.prop], cpu) : D === "J" ? 0n : 0; });
-    def(104 + k, `Set${P}Field`, (_c, a) => { a.p(); const o = deref(a.p()) as any; const f = fields[a.i()]; const v = toJava(a); if (o && f) o[f.prop] = v; });
-    def(145 + k, `GetStatic${P}Field`, (cpu, a) => { a.p(); a.p(); const f = fields[a.i()]; return f ? fromJava(f.owner[f.prop], cpu) : D === "J" ? 0n : 0; });
-    def(154 + k, `SetStatic${P}Field`, (_c, a) => { a.p(); a.p(); const f = fields[a.i()]; const v = toJava(a); if (f) f.owner[f.prop] = v; });
+    def(95 + k, `Get${P}Field`, (cpu, a) => { a.p(); const o = deref(a.p()) as any; const f = fieldOf(a.p()); return o && f ? fromJava(o[f.prop], cpu) : D === "J" ? 0n : 0; });
+    def(104 + k, `Set${P}Field`, (_c, a) => { a.p(); const o = deref(a.p()) as any; const f = fieldOf(a.p()); const v = toJava(a); if (o && f) o[f.prop] = v; });
+    def(145 + k, `GetStatic${P}Field`, (cpu, a) => { a.p(); a.p(); const f = fieldOf(a.p()); return f ? fromJava(f.owner[f.prop], cpu) : D === "J" ? 0n : 0; });
+    def(154 + k, `SetStatic${P}Field`, (_c, a) => { a.p(); a.p(); const f = fieldOf(a.p()); const v = toJava(a); if (f) f.owner[f.prop] = v; });
   }
   // strings
   def(163, "NewString", (_c, a) => { a.p(); const p = a.p(), n = a.i(); let s = ""; for (let i = 0; i < n; i++) s += String.fromCharCode(mem.ld16u(p + i * 2)); return toRef(s); });

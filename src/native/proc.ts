@@ -7,6 +7,7 @@ import { mem } from "./mem";
 import { hostLib, hostData, type HostFn, type ArgReader, PTR, stp, ldp, vaList, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import { type Cpu, cpuByTid, sigHandlers } from "./cpu";
+import { tidOf } from "./pthread";
 import { fail, logLine, LAYOUT, strncpy, snprintfInto, readTm } from "./libc";
 import { MONTHS, DAYS } from "../jvm/natives/jtime";
 import { format } from "./printf";
@@ -92,6 +93,8 @@ export function procInit(): void {
     ptrace: (cpu) => fail(cpu, E.PERM),
     // signals: a handler runs on the target thread, at once when it is parked in a host call
     // (as a kernel interrupts a syscall) and at its next slice boundary when it is running
+    // bionic reserves the first two realtime signals for itself: SIGRTMIN is 34, SIGRTMAX 64
+    __libc_current_sigrtmin: () => 34, __libc_current_sigrtmax: () => 64,
     sigaction: (_c, a) => sigaction(a, false),
     // bionic's 64-bit-mask variant: the same record on LP64; on ILP32 the mask widens to 8
     // bytes at +4 and pushes sa_flags to +12
@@ -99,7 +102,7 @@ export function procInit(): void {
     signal: (_c, a) => { const sig = a.i(), fn = a.p(), prev = sigHandlers.get(sig)?.fn ?? 0; if (fn > 1) sigHandlers.set(sig, { fn, flags: 0 }); else sigHandlers.delete(sig); return prev; },
     // a thread that has run to its end is gone: ESRCH, which a stop-the-world collector discounts
     pthread_kill: (c, a) => {
-      const tid = a.i(), t = cpuByTid(tid), sig = a.i(), r = !t || t.finished ? E.SRCH : 0;
+      const tid = tidOf(a.p()), t = cpuByTid(tid), sig = a.i(), r = !t || t.finished ? E.SRCH : 0;
       killLog.push(`${c.name}->${t?.name ?? "tid" + tid}:${sig}=${r}${t ? `/${t.state},${t.loops},${t.parked ? "p" : ""}` : ""}`);
       if (killLog.length > 300) killLog.splice(0, 100);
       if (r === 0) t!.kill(sig);
