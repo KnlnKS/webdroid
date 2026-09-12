@@ -82,6 +82,14 @@ function gnuHashSymCount(p: number, ptr: number): number {
 }
 
 export function loadElf(name: string, bytes: Uint8Array, resolve: Resolver): Module {
+  const { mod, relocate } = mapElf(name, bytes);
+  relocate(resolve);
+  return mod;
+}
+
+/** Map and parse an image without binding its imports: DT_NEEDED modules must be loaded
+ *  before `relocate` sees them, and every unresolved slot stays a stub for good. */
+export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate: (resolve: Resolver) => void } {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const cls = bytes[4];
   if (dv.getUint32(0, true) !== 0x464c457f || (cls !== 1 && cls !== 2) || bytes[5] !== 1) throw new Error(`${name}: not a little-endian ELF image`);
@@ -118,7 +126,7 @@ export function loadElf(name: string, bytes: Uint8Array, resolve: Resolver): Mod
     exidx: { addr: base + exidxAddr, count: exidxSz >> 3 }, symbols: { addr: new Uint32Array(0), names: [] },
     refs: 1, inited: false, phdr, phnum,
   };
-  if (!dynOff) return mod;
+  if (!dynOff) return { mod, relocate: () => {} };
 
   // .dynamic. REL and RELA never both appear: a file carries whichever its ABI defines, so one
   // pair of variables holds it either way.
@@ -168,6 +176,7 @@ export function loadElf(name: string, bytes: Uint8Array, resolve: Resolver): Mod
 
   // relocations: DT_SYMBOLIC modules bind to their own definitions first, which is what the
   // `shndx !== 0` check above already gives us for every module.
+  const relocate = (resolve: Resolver) => {
   const cache = new Map<number, number>();
   const symValue = (idx: number): number => {
     let v = cache.get(idx);
@@ -205,7 +214,8 @@ export function loadElf(name: string, bytes: Uint8Array, resolve: Resolver): Mod
   if (rel) apply(rel, relsz);
   if (jmprel) apply(jmprel, pltrelsz);
   for (let i = 0; i < initArrSz; i += f.ptr) mod.initArray.push(mem.u32[(base + initArr + i) >>> 2]);
-  return mod;
+  };
+  return { mod, relocate };
 }
 
 /** the nearest symbol at or before `pc` in `m`, or null */

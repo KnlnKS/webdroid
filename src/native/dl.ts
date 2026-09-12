@@ -2,7 +2,7 @@
 // stubs), dlopen/dlsym over virtual host libs and APK-shipped libraries, exidx lookup for the
 // guest's own unwinder.
 
-import { loadElf, symbolize, nearestSymbol, type Module } from "./elf";
+import { mapElf, symbolize, nearestSymbol, type Module } from "./elf";
 import { mem } from "./mem";
 import { probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp } from "./host";
 import { cpuFor, setSymbolizeHook, setBacktraceHook, setA64, isA64, type Cpu } from "./cpu";
@@ -40,7 +40,7 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false,
   const q = (async () => {
     const path = apkLibPath(name, owner), b = bytes ?? (path ? await owner.readClasspath(path) : null);
     if (!b) throw new Error(`dlopen failed: library "${name}" not found`);
-    const mod = loadElf(name, b, resolveGlobal);
+    const { mod, relocate } = mapElf(name, b);
     // a process is one ABI: the first image decides which emitter its code compiles with
     if (!modules.length) setA64(mod.w64);
     else if (mod.w64 !== isA64()) throw new Error(`${name}: ${mod.w64 ? "64" : "32"}-bit image in a ${isA64() ? "64" : "32"}-bit process`);
@@ -48,6 +48,7 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false,
     byName.set(name, mod);
     // dependencies that are real modules in the apk load (and initialise) first; host libs need nothing
     for (const n of mod.needed) if (!hostLibNames().includes(n) && !byName.has(n) && apkLibPath(n, owner)) await loadModule(n, undefined, link, owner);
+    relocate(resolveGlobal);
     if (!link) await runInit(mod);
     return mod;
   })();
