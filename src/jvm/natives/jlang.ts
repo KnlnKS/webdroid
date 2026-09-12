@@ -1646,6 +1646,13 @@ rt.register({
     "<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V": function (this: JRef, o: unknown) { this.referent = o; },
   },
 });
+rt.register({
+  name: "java/lang/ref/PhantomReference", ctor: class extends JRef {}, sup: "java/lang/ref/Reference",
+  methods: {
+    "<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V": function () {},
+    "get()Ljava/lang/Object;": () => null,
+  },
+});
 rt.register({ name: "java/lang/ref/ReferenceQueue", ctor: class extends JObj {}, methods: {
   "<init>()V": function () {},
   "poll()Ljava/lang/ref/Reference;": () => null,
