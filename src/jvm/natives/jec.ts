@@ -204,6 +204,10 @@ rt.register({
   methods: {
     "static getInstance(Ljava/lang/String;)Ljava/security/KeyFactory;": keyFactory,
     "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/KeyFactory;": keyFactory,
+    "static getInstance(Ljava/lang/String;Ljava/security/Provider;)Ljava/security/KeyFactory;": (algo: string, provider: unknown) => {
+      if (!provider) throw rt.mkThrowable("java/lang/IllegalArgumentException", "missing provider");
+      return keyFactory(algo);
+    },
     "getAlgorithm()Ljava/lang/String;": function (this: JKeyFactory) { return this.algo; },
     "generatePublic(Ljava/security/spec/KeySpec;)Ljava/security/PublicKey;": function (this: JKeyFactory, spec: any) {
       if (rt.iof(spec, "java/security/spec/ECPublicKeySpec")) return ecPublic(curveOfSpec(spec.params), spec.w.x.v, spec.w.y.v);
