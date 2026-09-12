@@ -33,6 +33,7 @@ export function provisionPackages(): Promise<void> {
       if (globalThis.localStorage?.getItem(componentState.key(component)) === null) componentState.set(component, 2);
     }
     for (const permission of spec.grants) { record.grants.add(permission); signaturePermissions.add(permission); }
+    for (const permission of spec.defaultGrants) record.grants.add(permission);
     const metadata = record.application?.children.find((n) => n.name === "meta-data" && attrStr(n, "name") === spec.signatureMetadata);
     const value = metadata && attr(metadata, "value");
     const signature = value?.type === TV.REFERENCE ? resString(record.res, value.data) : value?.str;
