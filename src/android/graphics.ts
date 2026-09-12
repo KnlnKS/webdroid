@@ -385,6 +385,7 @@ const paintMethods: NativeSpec["methods"] = {
   "setMaskFilter(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;": function (this: JPaint, f: JBlurMaskFilter | null) { return this.maskFilter = f; },
   "getColor()I": function (this: JPaint) { return this.color; },
   "setAlpha(I)V": function (this: JPaint, a: number) { this.color = ((a << 24) | (this.color & 0xffffff)) | 0; },
+  "setARGB(IIII)V": function (this: JPaint, a: number, r: number, g: number, b: number) { this.color = ((a & 255) << 24 | (r & 255) << 16 | (g & 255) << 8 | (b & 255)) | 0; },
   "getAlpha()I": function (this: JPaint) { return this.color >>> 24; },
   "setStyle(Landroid/graphics/Paint$Style;)V": function (this: JPaint, s: { ord: number }) { this.style = s?.ord ?? 0; },
   "getStyle()Landroid/graphics/Paint$Style;": function (this: JPaint) { return paintStyleEnum[this.style]; },
@@ -924,6 +925,22 @@ rt.register({
       this.m = matMul(a.m, b.m);
       return 1;
     },
+    // AOSP Matrix.setRectToRect: an empty source resets and fails; FILL scales each axis to
+    // the destination, the others scale uniformly and place the result at START/CENTER/END
+    "setRectToRect(Landroid/graphics/RectF;Landroid/graphics/RectF;Landroid/graphics/Matrix$ScaleToFit;)Z": function (this: JMatrix, src: JRectF, dst: JRectF, fit: JSimpleEnum) {
+      if (!src || !dst) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const sw = src.right - src.left, sh = src.bottom - src.top;
+      if (!(sw > 0 && sh > 0)) { this.m = [1, 0, 0, 1, 0, 0]; return 0; }
+      const dw = dst.right - dst.left, dh = dst.bottom - dst.top;
+      let sx = dw / sw, sy = dh / sh, tx = 0, ty = 0;
+      if (fit.ord !== 0) {
+        const s = Math.min(sx, sy); sx = sy = s;
+        const extraX = dw - sw * s, extraY = dh - sh * s, share = fit.ord === 2 ? 0.5 : fit.ord === 3 ? 1 : 0;
+        tx = extraX * share; ty = extraY * share;
+      }
+      this.m = [sx, 0, 0, sy, dst.left - src.left * sx + tx, dst.top - src.top * sy + ty];
+      return 1;
+    },
     "mapRect(Landroid/graphics/RectF;)Z": function (this: JMatrix, r: JRectF) {
       const m = this.m, l = r.left, t = r.top, rt_ = r.right, b = r.bottom;
       const x0 = m[0] * l + m[2] * t + m[4], y0 = m[1] * l + m[3] * t + m[5];
@@ -1168,6 +1185,7 @@ rt.register({ name: "android/graphics/Bitmap", ctor: JBitmap, ifaces: ["android/
     if (bytes) b.pixels().set(u8(bytes));
     return b;
   }); } } });
+mkEnumSet("android/graphics/Matrix$ScaleToFit", ["FILL", "START", "CENTER", "END"]);
 const bitmapConfigs = mkEnumSet("android/graphics/Bitmap$Config", ["ALPHA_8", "RGB_565", "ARGB_4444", "ARGB_8888", "RGBA_F16", "HARDWARE", "RGBA_1010102"]);
 mkEnumSet("android/graphics/Bitmap$CompressFormat", ["JPEG", "PNG", "WEBP"]);
 

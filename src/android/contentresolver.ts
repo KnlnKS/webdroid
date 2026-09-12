@@ -256,6 +256,8 @@ for (const [cls, table] of [["Global", "global"], ["Secure", "secure"], ["System
     },
   });
 }
+// the column-name interface every provider contract extends
+rt.register({ name: "android/provider/BaseColumns", ctor: class extends JObj {}, statics: { _ID: "_id", _COUNT: "_count" } });
 rt.register({ name: "android/provider/Settings", ctor: class extends JObj {},
   statics: { ACTION_APPLICATION_DETAILS_SETTINGS: "android.settings.APPLICATION_DETAILS_SETTINGS",
              ACTION_SETTINGS: "android.settings.SETTINGS" } });

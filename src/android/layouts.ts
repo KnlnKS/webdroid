@@ -497,6 +497,7 @@ rt.register({ name: "android/widget/HorizontalScrollView", ctor: class extends J
 // ── RelativeLayout (common-rule subset)
 class JRelativeLP extends JMarginLP {
   rules = new Map<number, number>(); // verb → anchor id or boolean(-1 true)
+  alignWithParent = false;           // layout_alignWithParentIfMissing, a public field on AOSP
 }
 const RL = {
   LEFT_OF: 0, RIGHT_OF: 1, ABOVE: 2, BELOW: 3, ALIGN_BASELINE: 4, ALIGN_LEFT: 5, ALIGN_TOP: 6,
@@ -658,6 +659,7 @@ rt.register({ name: "android/widget/RelativeLayout", ctor: JRelativeLayout, sup:
   methods: relativeMethods });
 rt.register({
   name: "android/widget/RelativeLayout$LayoutParams", ctor: JRelativeLP, sup: "android/view/ViewGroup$MarginLayoutParams",
+  fields: ["alignWithParent"],
   methods: {
     "<init>(II)V": function (this: JRelativeLP, w: number, h: number) { this.width = w; this.height = h; },
     "<init>(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JRelativeLP, o: JLayoutParams) {
