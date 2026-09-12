@@ -9,7 +9,7 @@ Temporary /tmp evidence may expire. Committed regression fixtures are the durabl
 
 ## microG completion and open acceptance
 
-The 2026-09-11 resume in PLAN.md owns current status. Both Android and webdroid now
+PLAN.md owns current status. Both Android and webdroid now
 return `authentication: true` through the genuine SDK's DEFAULT_SIGN_IN flow. Webdroid
 also succeeds after a further full reload using its persisted account/preferences.
 Earlier consent, missing platform operations and OAuth registration failures are
@@ -35,14 +35,13 @@ the completion worktree starts from b567197.
   before package initialization: losing Firebase Installations' private JSON changed FCM tokens
   across launches. Binary restore, rename, deletion, empty directories, non-persistent cache
   files and interleaved preference writes were verified.
-- Google accepted the test password and reached an interactive second factor; no authenticated
-  Google-account result is established. Shared account ownership/visibility work is recorded in
-  the later account-state update below; authenticator Binder dispatch remains an obstacle.
+- Shared account ownership, authenticator dispatch and Google sign-in are covered in the
+  account-state and authentication updates below, including their earlier failure mechanisms.
 - The dedicated Firebase project is webdroid-microg-test, Android client org.webdroid.gmsclient,
   free Spark plan. Configuration, browser state, credentials and registration tokens stay outside
   Git/reports. Upstream HTTP-form logs contain authorization values even without the word token:
   exclude the whole tag. The 260ca78 verification checkpoint below records regression/performance
-  evidence; interactive Google authentication remains unverified.
+  evidence; the later authentication checkpoint records successful interactive sign-in.
 
 ### Messaging and process recovery
 
