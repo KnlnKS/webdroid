@@ -169,3 +169,15 @@ test("a Looper Printer sees the dispatch lines around a handled message", async 
   expect(lines[0].startsWith(">>>>> Dispatching to ")).toBe(true);
   expect(lines[1].startsWith("<<<<< Finished to ")).toBe(true);
 });
+
+test("Resources string getters throw NotFoundException for ids the table lacks", async () => {
+  const host = new Resources(null, {});
+  const assets = rt.make("android/content/res/AssetManager") as JAssetManager;
+  assets.host = host;
+  const res = await newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V", assets, null, null) as JResources;
+  const notFound = { constructor: rt.link("android/content/res/Resources$NotFoundException").ctor };
+  await expect(vcall(res, "getString", "(I)Ljava/lang/String;", 0x7f11240f)).rejects.toMatchObject(notFound);
+  await expect(vcall(res, "getText", "(I)Ljava/lang/CharSequence;", 0x7f11240f)).rejects.toMatchObject(notFound);
+  await expect(vcall(res, "getStringArray", "(I)[Ljava/lang/String;", 0x7f030001)).rejects.toMatchObject(notFound);
+  expect(await vcall(res, "getText", "(ILjava/lang/CharSequence;)Ljava/lang/CharSequence;", 0x7f11240f, "fallback")).toBe("fallback");
+});

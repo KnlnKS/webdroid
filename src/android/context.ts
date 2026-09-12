@@ -1,15 +1,14 @@
 import { type JFile, vfs, mkFile } from "../jvm/natives/jio";
 import { JObj, rt, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
-import { resString, themeOf, JTheme, rvColor, obtainStyled, type JAttrSet, JTypedArray } from "./res";
-import { newObj, javaFormat, vcall } from "../jvm/natives/jlang";
+import { resString, themeOf, JTheme, obtainStyled, type JAttrSet, JTypedArray } from "./res";
+import { newObj, vcall } from "../jvm/natives/jlang";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { getInflater } from "./inflate";
 import { getAppInfo, getPM } from "./pm";
 import { contentResolver } from "./contentresolver";
 import { mainLooper, mainExecutor, PROCESS_PID, PROCESS_UID } from "./os";
 import { getPrefs } from "./sharedprefs";
-import { loadColorStateList, loadDrawable } from "./drawable";
 import { JAssetManager, type JConfiguration, scopedResources } from "./resnative";
 import { dbPath } from "./sqlite";
 import { type JIntent, launchIntent } from "./intent";
@@ -32,7 +31,12 @@ const packageContexts = new Map<string, Promise<JContext>>();
 export const services = new Map<string, unknown>();
 /** a string resource of the running app ("" before boot) */
 export const appString = (id: number) => (appHost ? resString(appHost.res, id) : "");
-function ctxString(this: JContext, id: number) { return resString(this.$host.res, id); }
+/** a Context getter that is getResources().name(args[, getTheme()]) through the virtual entries */
+const viaResources = (name: string, desc: string, themed = false) => async function (this: JContext, ...args: unknown[]) {
+  const resources = await vcall(this, "getResources", "()Landroid/content/res/Resources;");
+  if (themed) args.push(await vcall(this, "getTheme", "()Landroid/content/res/Resources$Theme;"));
+  return vcall(resources, name, desc, ...args);
+};
 // the one logical display (Display.DEFAULT_DISPLAY = 0); AOSP hands out one Display per id
 let defaultDisplay: unknown;
 export const display = () => defaultDisplay ??= newObj("android/view/Display", null);
@@ -216,18 +220,14 @@ export const contextMethods: NativeSpec["methods"] = {
   "getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;": function (this: JContext, name: string) {
     return getPrefs(this.$host.pkg, name);
   },
-  "getString(I)Ljava/lang/String;": ctxString,
-  "getString(I[Ljava/lang/Object;)Ljava/lang/String;": function (this: JContext, id: number, args: unknown[]) {
-    return javaFormat(resString(this.$host.res, id), args);
-  },
-  "getText(I)Ljava/lang/CharSequence;": ctxString,
-  "getColor(I)I": function (this: JContext, id: number) { return rvColor(this.$host.res, this.$host.res.ref(id), 0); },
-  "getColorStateList(I)Landroid/content/res/ColorStateList;": async function (this: JContext, id: number) {
-    return loadColorStateList(this.$host.res, id, themeOf(this));
-  },
-  "getDrawable(I)Landroid/graphics/drawable/Drawable;": function (this: JContext, id: number) {
-    return loadDrawable(this.$host.res, id, themeOf(this));
-  },
+  // Context's resource getters are getResources().getX(id[, getTheme()]) in AOSP: both calls are
+  // virtual, so an app's Resources or ContextWrapper subclass (a string store, a skin engine) answers them.
+  "getString(I)Ljava/lang/String;": viaResources("getString", "(I)Ljava/lang/String;"),
+  "getString(I[Ljava/lang/Object;)Ljava/lang/String;": viaResources("getString", "(I[Ljava/lang/Object;)Ljava/lang/String;"),
+  "getText(I)Ljava/lang/CharSequence;": viaResources("getText", "(I)Ljava/lang/CharSequence;"),
+  "getColor(I)I": viaResources("getColor", "(ILandroid/content/res/Resources$Theme;)I", true),
+  "getColorStateList(I)Landroid/content/res/ColorStateList;": viaResources("getColorStateList", "(ILandroid/content/res/Resources$Theme;)Landroid/content/res/ColorStateList;", true),
+  "getDrawable(I)Landroid/graphics/drawable/Drawable;": viaResources("getDrawable", "(ILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;", true),
   "getAssets()Landroid/content/res/AssetManager;": function (this: JContext) {
     const a = new JAssetManager();
     a.host = this.$host.res;

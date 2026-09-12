@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newXmlPullParser } from "./xmlpull";
-import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, resString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
+import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
 import { JTypedValue, complexToFraction, type JDisplayMetrics } from "./util";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
@@ -277,22 +277,31 @@ function initResources(this: JResources, assets: JAssetManager | null, metrics: 
   scopeResources(this, assets.host, config ?? new JConfiguration());
   if (metrics) { Object.assign(this.host.dm, metrics); configurationMetrics(this); }
 }
-const getString = function (this: JResources, id: number) { return resString(this.host, id); };
+const notFound = (what: string, id: number) => rt.mkThrowable("android/content/res/Resources$NotFoundException", `${what} resource ID #0x${(id >>> 0).toString(16)}`);
+/** the string behind `id`; an id the table has no entry for is NotFoundException, as AOSP throws it — an app's
+ *  Resources subclass may catch that and serve the string from a store of its own */
+const stringOf = (res: Resources, id: number): string => rvString(res, res.ref(id)) ?? (() => { throw notFound("String", id); })();
+const pluralOf = (res: Resources, id: number, n: number): string => pluralString(res, id, n) ?? (() => { throw notFound("Plural", id); })();
+const stringsOf = (res: Resources, id: number): string[] => res.bag(id) ? bagStrings(res, id) : (() => { throw notFound("String array", id); })();
+const getString = function (this: JResources, id: number) { return stringOf(this.host, id); };
 const getColor = function (this: JResources, id: number) { return rvColor(this.host, this.host.ref(id), 0); };
 const resMethods: NativeSpec["methods"] = {
   "getString(I)Ljava/lang/String;": getString,
   "getString(I[Ljava/lang/Object;)Ljava/lang/String;": function (this: JResources, id: number, args: unknown[]) {
-    return javaFormat(resString(this.host, id), args);
+    return javaFormat(stringOf(this.host, id), args);
   },
   "getText(I)Ljava/lang/CharSequence;": getString,
+  "getText(ILjava/lang/CharSequence;)Ljava/lang/CharSequence;": function (this: JResources, id: number, def: unknown) {
+    return rvString(this.host, this.host.ref(id)) ?? def;
+  },
   "getQuantityString(II)Ljava/lang/String;": function (this: JResources, id: number, n: number) {
-    return pluralString(this.host, id, n) ?? "";
+    return pluralOf(this.host, id, n);
   },
   "getQuantityString(II[Ljava/lang/Object;)Ljava/lang/String;": function (this: JResources, id: number, n: number, args: unknown[]) {
-    return javaFormat(pluralString(this.host, id, n) ?? "", args);
+    return javaFormat(pluralOf(this.host, id, n), args);
   },
   "getQuantityText(II)Ljava/lang/CharSequence;": function (this: JResources, id: number, n: number) {
-    return pluralString(this.host, id, n) ?? "";
+    return pluralOf(this.host, id, n);
   },
   "getColor(I)I": getColor,
   "getColor(ILandroid/content/res/Resources$Theme;)I": getColor,
@@ -320,8 +329,8 @@ const resMethods: NativeSpec["methods"] = {
     function (this: JResources, id: number, t: JTheme | null) {
       return loadDrawable(this.host, id, t);
     },
-  "getStringArray(I)[Ljava/lang/String;": function (this: JResources, id: number) { return jarray(bagStrings(this.host, id), "Ljava/lang/String;"); },
-  "getTextArray(I)[Ljava/lang/CharSequence;": function (this: JResources, id: number) { return jarray(bagStrings(this.host, id), "Ljava/lang/CharSequence;"); },
+  "getStringArray(I)[Ljava/lang/String;": function (this: JResources, id: number) { return jarray(stringsOf(this.host, id), "Ljava/lang/String;"); },
+  "getTextArray(I)[Ljava/lang/CharSequence;": function (this: JResources, id: number) { return jarray(stringsOf(this.host, id), "Ljava/lang/CharSequence;"); },
   "getIntArray(I)[I": function (this: JResources, id: number) {
     return Int32Array.from(arrayValues(this.host, id).map((v) => rvInt(this.host, this.host.resolveRefs(v), 0)));
   },
