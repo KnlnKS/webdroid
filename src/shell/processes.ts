@@ -47,6 +47,8 @@ type ActivityRequest = { kind: "launch"; id: number; taskId: number; component: 
   | { kind: "visibility"; phase: "pause" | "stop" | "resume" }
   | { kind: "result"; request: number; code: number; data: IntentData | null } | { kind: "back" } | { kind: "finishTask"; taskId: number; resume: boolean };
 export const processPresentation = { visible: true, changed: (_visible: boolean) => {} };
+/** AOSP ActivityRecord: how long the previous activity may take to pause, then to stop */
+const PAUSE_TIMEOUT_MS = 500, STOP_TIMEOUT_MS = 11_000;
 type PackageSnapshot = { pkg: string; source: Uint8Array | PackedArchive; uid: number; system: boolean; grants: string[]; signatures: Uint8Array[] | null };
 type ProcessEndpoint = {
   activity: (request: ActivityRequest) => Promise<void>;
@@ -111,11 +113,11 @@ class ProcessBroker {
     const target = this.connect(pkg, process), activity = { id: this.nextActivity++, pid: target.pid, taskId, caller, previous: 0, request };
     return this.queueActivity(async () => {
       const previous = this.entry(this.foregroundPid || caller); activity.previous = previous.pid;
-      await this.request(previous, (endpoint) => endpoint.activity({ kind: "visibility", phase: "pause" }));
+      await this.visibility(previous, "pause", PAUSE_TIMEOUT_MS);
       this.activities.push(activity);
       try {
         await this.request(target, (endpoint) => endpoint.activity({ kind: "launch", id: activity.id, taskId, component, intent, caller: callingClass ? { pkg: source.pkg, cls: callingClass } : null }));
-        await this.request(previous, (endpoint) => endpoint.activity({ kind: "visibility", phase: "stop" }));
+        await this.visibility(previous, "stop", STOP_TIMEOUT_MS);
         this.show(target.pid);
       } catch (error) {
         this.activities.splice(this.activities.indexOf(activity), 1);
@@ -155,6 +157,21 @@ class ProcessBroker {
     if (!this.foregroundPid || this.foregroundPid === caller) return false;
     this.queueActivity(() => this.request(this.entry(this.foregroundPid), (endpoint) => endpoint.activity({ kind: "back" })));
     return true;
+  }
+  /**
+   * The previous activity gets PAUSE_TIMEOUT / STOP_TIMEOUT to answer, as on AOSP, and the
+   * launch goes ahead without it: a process whose main thread is blocked in a binder call —
+   * one the new activity exists to answer, as when a service asks the user for a permission —
+   * would otherwise hold the launch forever. Its late answer still lands, and a dead process
+   * answers nothing.
+   */
+  private visibility(entry: Entry, phase: "pause" | "stop", timeoutMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, timeoutMs);
+      this.request(entry, (endpoint) => endpoint.activity({ kind: "visibility", phase }))
+        .catch((error) => { if (!entry.dead) console.error("[activity process]", error); })
+        .finally(() => { clearTimeout(timer); resolve(); });
+    });
   }
   private queueActivity(run: () => Promise<void>): Promise<void> {
     this.activityQueue = this.activityQueue.then(run).catch((error) => console.error("[activity process]", error));
