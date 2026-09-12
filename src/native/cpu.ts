@@ -467,7 +467,11 @@ export class Cpu {
     else { this.w[0] = v | 0; this.w[1] = v < 0 ? -1 : 0; }
   }
   private trap(e: unknown): NativeFault {
-    if (e instanceof NativeFault) return e;
+    if (e instanceof NativeFault) {
+      // a fault a host function raised (mem.tx on a bad pointer argument) names no guest site: add the block it was called from
+      if (!e.pc) { e.message += ` @ ${symbolizeHook(this.bpc)} (block 0x${this.bpc.toString(16)}, ${this.name})`; e.pc = this.bpc; }
+      return e;
+    }
     this.snapshot();
     // the wasm frame (region function and byte offset) says which emitted code trapped
     const frame = e instanceof Error ? /wasm-function\[\d+\]:0x[0-9a-f]+/.exec(e.stack ?? "") : null;
