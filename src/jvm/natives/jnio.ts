@@ -264,11 +264,8 @@ rt.register({
     "put([FII)Ljava/nio/FloatBuffer;": function (this: JFloatBuffer, arr: Float32Array, off: number, len: number) { return putFloats(this, arr, off, len); },
     "get()F": function (this: JFloatBuffer) { this.clampGet(1); return this.dv.getFloat32(this.pos++ << 2, this.little); },
     "get(I)F": function (this: JFloatBuffer, i: number) { return this.dv.getFloat32(i << 2, this.little); },
-    "get([F)Ljava/nio/FloatBuffer;": function (this: JFloatBuffer, arr: Float32Array) {
-      this.clampGet(arr.length);
-      for (let i = 0; i < arr.length; i++) arr[i] = this.dv.getFloat32((this.pos + i) << 2, this.little);
-      this.pos += arr.length; return this;
-    },
+    "get([F)Ljava/nio/FloatBuffer;": function (this: JFloatBuffer, arr: Float32Array) { return getFloats(this, arr, 0, arr.length); },
+    "get([FII)Ljava/nio/FloatBuffer;": function (this: JFloatBuffer, arr: Float32Array, off: number, len: number) { return getFloats(this, arr, off, len); },
   },
 });
 // GL sprite batches refill a nativeOrder() FloatBuffer every frame: copy through a Float32Array
@@ -278,6 +275,13 @@ function putFloats(b: JFloatBuffer, arr: Float32Array, off: number, len: number)
   const byteOff = b.dv.byteOffset;
   if (b.little && !(byteOff & 3)) new Float32Array(b.ab, byteOff, b.cap).set(len === arr.length ? arr : arr.subarray(off, off + len), b.pos);
   else for (let i = 0; i < len; i++) b.dv.setFloat32((b.pos + i) << 2, arr[off + i], b.little);
+  b.pos += len; return b;
+}
+function getFloats(b: JFloatBuffer, arr: Float32Array, off: number, len: number): JFloatBuffer {
+  b.clampGet(len);
+  const byteOff = b.dv.byteOffset;
+  if (b.little && !(byteOff & 3)) arr.set(new Float32Array(b.ab, byteOff + (b.pos << 2), len), off);
+  else for (let i = 0; i < len; i++) arr[off + i] = b.dv.getFloat32((b.pos + i) << 2, b.little);
   b.pos += len; return b;
 }
 function intBufferMethods(): NativeSpec["methods"] {

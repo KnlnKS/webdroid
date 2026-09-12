@@ -4,7 +4,7 @@ import { rt, JObj, type NativeSpec } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray, utf8, concat, i8, u8 } from "../abi";
 import { vcall, vcallMaybe, after, stringHash, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
-import { mappedReadOnlyBuffer } from "./jnio";
+import { mappedReadOnlyBuffer, type JBuffer } from "./jnio";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
  *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
@@ -1163,6 +1163,14 @@ function fileChannel(this: JInputStream | JRAF | JFOS): JFileChannel {
   }
   return channel;
 }
+function channelRead(channel: JFileChannel, dst: JBuffer): number | Promise<number> {
+  const file = channel.readable(), len = dst.lim - dst.pos;
+  if (len === 0) return 0;
+  dst.clampPut(0);
+  const view = new Int8Array(dst.ab, dst.dv.byteOffset + dst.pos, len);
+  const n = file instanceof JRAF ? rafRead(file, view, 0, len) : (file as any)[readBII](view, 0, len);
+  return after(n, (n: number) => { if (n > 0) dst.pos += n; return n; });
+}
 rt.register({
   name: "java/nio/channels/FileChannel", ctor: JFileChannel,
   methods: {
@@ -1187,6 +1195,12 @@ rt.register({
       if (position + size > BigInt(file.source?.size ?? file.buf.length)) throw rt.mkThrowable("java/io/IOException", "mapping exceeds file size");
       const start = Number(position), length = Number(size);
       return file.source ? readFully(file.source, start, length).then(mappedReadOnlyBuffer) : mappedReadOnlyBuffer(file.buf.subarray(start, start + length));
+    },
+    "read(Ljava/nio/ByteBuffer;)I": function (this: JFileChannel, dst: JBuffer) { return channelRead(this, dst); },
+    "read(Ljava/nio/ByteBuffer;J)I": function (this: JFileChannel, dst: JBuffer, position: bigint) {
+      const file = this.readable(), saved = file.pos;
+      file.pos = Number(position);
+      return after(channelRead(this, dst), (n) => { file.pos = saved; return n; });
     },
     "force(Z)V": () => {},
     "tryLock()Ljava/nio/channels/FileLock;": fileLock,
