@@ -67,7 +67,12 @@ rt.register({
       return vcall(pm, "getXml", "(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/content/res/XmlResourceParser;", this.packageName, id, info);
     },
     "loadLabel(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;": function (this: JPackageItemInfo) { return applicationLabel(this); },
-    "loadIcon(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;": function (this: JPackageItemInfo) { return this.archiveResources && this.icon ? loadDrawable(this.archiveResources, this.icon, null) : null; },
+    "loadIcon(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;": async function (this: JPackageItemInfo, pm: JPackageManager) {
+      const info = this instanceof JComponentInfo ? this.applicationInfo : this instanceof JApplicationInfo ? this : null;
+      const icon = this.icon ? await vcall(pm, "getDrawable", "(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/graphics/drawable/Drawable;", this.packageName, this.icon, info) : null;
+      return icon ?? vcall(this, "loadDefaultIcon", "(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;", pm);
+    },
+    "loadDefaultIcon(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;": (pm: JPackageManager) => vcall(pm, "getDefaultActivityIcon", "()Landroid/graphics/drawable/Drawable;"),
   },
 });
 class JPermissionInfo extends JPackageItemInfo {
@@ -96,6 +101,10 @@ rt.register({ name: "android/content/pm/ComponentInfo", ctor: JComponentInfo, su
   methods: {
     "<init>()V": function () {},
     "isEnabled()Z": function (this: JComponentInfo) { return this.enabled && (this.applicationInfo?.enabled ?? 1) ? 1 : 0; },
+    "loadDefaultIcon(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;": function (this: JComponentInfo, pm: JPackageManager) {
+      return this.applicationInfo ? vcall(this.applicationInfo, "loadIcon", "(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;", pm)
+        : vcall(pm, "getDefaultActivityIcon", "()Landroid/graphics/drawable/Drawable;");
+    },
   },
 });
 class JActivityInfo extends JComponentInfo {
@@ -574,6 +583,15 @@ rt.register({
       try { return mkXmlParser(res, id); }
       catch (error) { if (error instanceof rt.link("android/content/res/Resources$NotFoundException").ctor) return null; throw error; }
     },
+    "getDrawable(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/graphics/drawable/Drawable;": async (pkg: string, id: number, info: JApplicationInfo | null) => {
+      const res = info?.archiveResources ?? (pkg === appHost?.pkg ? appHost.res : (await installedPackage(pkg))?.archive.res);
+      return res?.tbl(id)?.entry(id) ? loadDrawable(res, id, null) : null;
+    },
+    "getDefaultActivityIcon()Landroid/graphics/drawable/Drawable;": () => {
+      const res = appHost?.res, id = res?.idFor("drawable", "sym_def_app_icon", "android");
+      if (!res || !id) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Default application icon");
+      return loadDrawable(res, id, null);
+    },
     "getReceiverInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;": (component: JComponentName, flags: number) => {
       const [name, node, owner] = lookupComponent(component, "receiver", flags);
       return receiverInfo(name, node, flags, owner);
@@ -629,6 +647,13 @@ rt.register({
       return appHost ? getAppInfo(appHost) : new JApplicationInfo();
     },
     "getApplicationLabel(Landroid/content/pm/ApplicationInfo;)Ljava/lang/CharSequence;": applicationLabel,
+    "getApplicationIcon(Landroid/content/pm/ApplicationInfo;)Landroid/graphics/drawable/Drawable;": function (info: JApplicationInfo) {
+      return vcall(info, "loadIcon", "(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;", this);
+    },
+    "getApplicationIcon(Ljava/lang/String;)Landroid/graphics/drawable/Drawable;": async function (pkg: string) {
+      const info = await vcall(this, "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 0x400);
+      return vcall(this, "getApplicationIcon", "(Landroid/content/pm/ApplicationInfo;)Landroid/graphics/drawable/Drawable;", info);
+    },
     "getPackageArchiveInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;": async (path: string, flags: number) => { const archive = await readArchive(path); return archive ? archiveInfo(archive, path, flags) : null; },
     "getPackageArchiveInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$PackageInfoFlags;)Landroid/content/pm/PackageInfo;": async (path: string, flags: JInfoFlags) => { const archive = await readArchive(path); return archive ? archiveInfo(archive, path, Number(flags.value)) : null; },
     "resolveActivity(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;": resolveActivity,

@@ -164,8 +164,12 @@ preserve long values, widen valid conversions and reject invalid conversions/rec
 The unchanged microG parser accepts long expiry, boolean and integer fixture values
 without missing APIs; the baseline throws the same missing setLong error as the live
 run. Java's primitive conversion matrix and long-to-float boundary results agree.
-Reload the saved account with this fix and verify the SDK result; do not repeat MFA
-or claim complete authentication before that result is observed.
+The account survives reload. The picker next required `PackageManager.getApplicationIcon`;
+package icons now resolve from their owning archive, with the paired Android default
+icon for apps without one. Current/installed/default/missing-resource/unknown-package
+browser probes pass without missing APIs. The picker renders its heading/icon, then
+CircleImageView fails on `Matrix.set(null)`, which Android defines as an identity reset.
+The SDK result remains unverified; there is no need to repeat MFA.
 
 The location implementation rewrites static Location references in isolated HTTP(S)
 scripts using the existing TypeScript parser on the server. Ordinary objects and local

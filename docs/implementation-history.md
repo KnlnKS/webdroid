@@ -834,7 +834,20 @@ The genuine unchanged AuthResponse parser now parses expiry 9007199254740993, in
 This does not expand reflection's pre-existing access-control implementation.
 Evidence: `/tmp/webdroid-authresponse-{parse.dis,probe.log,baseline-probe.log}`,
 `/tmp/webdroid-field-callers.log`, `/tmp/webdroid-reflection-field-{tests,typecheck,oracle}.log`.
-The live saved account still needs a reload with this fix and SDK verification.
+The full reflection verification passes typecheck and 646 tests / 20,592 assertions.
+After reload the account survives and SDK sign-in reaches AuthSignInActivity. Its
+missing PackageManager.getApplicationIcon prevents the picker from initializing.
+The paired ApplicationPackageManager bytecode delegates the String overload through
+getApplicationInfo with MATCH_UNINSTALLED_PACKAGES, then ApplicationInfo.loadIcon.
+PackageItemInfo and ComponentInfo now load package resources and use Android's actual
+default application icon when necessary. No drawable substitute is fabricated.
+A Chromium probe returns the 216x216 default for the iconless client and the installed
+microG's 144x144 icon; invalid resources return null and unknown packages throw
+NameNotFoundException. No missing APIs are recorded. Evidence:
+`/tmp/webdroid-application-icon-{probe.log,typecheck.log}`, and
+`/tmp/webdroid-{application-icon,default-icon,package-load-icon}.dis`.
+The real picker then exposes CircleImageView.updateShaderMatrix calling Matrix.set
+with null; our delegate incorrectly dereferences it. The final SDK result is pending.
 
 ## WebView upstream bases — 2026-09-11
 
