@@ -6,5 +6,6 @@ import { harmonic } from "./harmonic";
 import { calculatorm } from "./calculatorm";
 import { lichess } from "./lichess";
 import { doodlejump } from "./doodlejump";
+import { reddit } from "./reddit";
 
-export const FLOWS: Flow[] = [fitnotes, mihonOnboarding, mihonApp, flappybird, harmonic, calculatorm, lichess, doodlejump];
+export const FLOWS: Flow[] = [fitnotes, mihonOnboarding, mihonApp, flappybird, harmonic, calculatorm, lichess, doodlejump, reddit];
