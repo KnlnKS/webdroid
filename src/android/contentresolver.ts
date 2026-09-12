@@ -110,7 +110,8 @@ async function openPfd(u: JUri, mode: string) {
     const provider = await contentProvider(u);
     if (provider) return vcall(provider, "openFile", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", u, mode);
     if (u.uri.startsWith("content:")) throw rt.mkThrowable("java/io/FileNotFoundException", u.uri);
-    return mkPfd(vfs.read(fileOf(u)) ?? new Uint8Array(0), (b) => vfs.write(fileOf(u), b));
+    const write = (mode ?? "r").includes("w");
+    return Object.assign(mkPfd(vfs.read(fileOf(u)) ?? new Uint8Array(0), (b) => vfs.write(fileOf(u), b)), { path: fileOf(u), flags: write ? 0x42 : 0 });
   }
   const id = documentId(u, true);
   const write = (mode ?? "r").includes("w");

@@ -18,7 +18,7 @@ import { uiState } from "./view";
 import { mkExecutor } from "../jvm/natives/jconc";
 import { yieldToLoop } from "../native/cpu";
 import { mkFile, JInputStream, JOutputStream, vfs, type JFileDescriptor } from "../jvm/natives/jio";
-import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd } from "../native/stdio";
+import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd } from "../native/stdio";
 import { newArrayList, newStringSet } from "../jvm/natives/jutil";
 
 rt.register({
@@ -632,10 +632,18 @@ class JParcelFileDescriptor extends JObj {
   flags = 0;
   fd = -1;
 }
-/** the native descriptor, opened on first request: only a fd that crosses JNI needs one */
+/** the native descriptor, opened on first request: only a fd that crosses JNI needs one. A
+ *  read-only descriptor over bytes with no file behind them reads those bytes. */
 function pfdFd(p: JParcelFileDescriptor): number {
   if (p.fd < 0 && p.path) p.fd = javaOpenFd(p.path, p.flags);
+  else if (p.fd < 0 && !p.sink) p.fd = javaBytesFd("pfd", p.bytes);
   return p.fd;
+}
+/** a java.io stream's descriptor opens its file into the native table when first asked (O_TRUNC
+ *  and O_EXCL already happened when the stream opened it) */
+export function descriptorFd(d: JFileDescriptor): number {
+  if (d.fd < 0 && d.path) d.fd = javaOpenFd(d.path, d.flags & ~0x280);
+  return d.fd;
 }
 export function mkPfd(bytes: Uint8Array, sink: ((b: Uint8Array, closed?: boolean) => unknown) | null): JParcelFileDescriptor {
   const p = new JParcelFileDescriptor();
@@ -680,6 +688,13 @@ rt.register({
     "getFd()I": function (this: JParcelFileDescriptor) { return pfdFd(this); },
     "static adoptFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd }),
     "static fromFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd }),
+    // AOSP dup(FileDescriptor): a new descriptor on the same open file description
+    "static dup(Ljava/io/FileDescriptor;)Landroid/os/ParcelFileDescriptor;": (d: JFileDescriptor | null) => {
+      if (!d || descriptorFd(d) < 0) throw rt.mkThrowable("java/io/IOException", "Invalid file descriptor");
+      const fd = javaDupFd(d.fd);
+      if (fd < 0) throw rt.mkThrowable("java/io/IOException", "dup failed: EBADF (Bad file descriptor)");
+      return Object.assign(new JParcelFileDescriptor(), { fd });
+    },
     "detachFd()I": function (this: JParcelFileDescriptor) { const fd = pfdFd(this); this.fd = -1; return fd; },
     "dup()Landroid/os/ParcelFileDescriptor;": function (this: JParcelFileDescriptor) { return Object.assign(mkPfd(this.bytes, this.sink), { path: this.path, flags: this.flags }); },
     "getStatSize()J": function (this: JParcelFileDescriptor) { return BigInt(this.bytes.length); },
@@ -995,14 +1010,14 @@ rt.register({
   name: "android/system/Os", ctor: class extends JObj {},
   methods: {
     [`static lseek(${FD}JI)J`]: (d: JFileDescriptor, off: bigint, whence: number) => {
-      const r = javaSeekFd(d.fd, Number(off), whence);
+      const r = javaSeekFd(descriptorFd(d), Number(off), whence);
       if (r < 0) throw errno("lseek", 9);
       return BigInt(r);
     },
     [`static close(${FD})V`]: (d: JFileDescriptor) => { javaCloseFd(d.fd); d.fd = -1; },
     [`static dup(${FD})${FD}`]: (d: JFileDescriptor) => {
       const n = rt.make("java/io/FileDescriptor") as JFileDescriptor;
-      n.fd = javaDupFd(d.fd);
+      n.fd = javaDupFd(descriptorFd(d));
       if (n.fd < 0) throw errno("dup", 9);
       return n;
     },

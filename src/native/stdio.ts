@@ -155,6 +155,8 @@ function put(f: Fd): number { const fd = allocateFd(); fds.set(fd, f); return fd
 export const javaOpenFd = (path: string, flags: number): number => fdOpen(null, path, flags);
 export const javaCloseFd = (fd: number): void => { fdClose(null, fd); };
 export const javaSeekFd = (fd: number, off: number, whence: number): number => fdSeek(null, fd, off, whence);
+/** a read-only descriptor over bytes that exist only in memory (an archive entry, a document) */
+export const javaBytesFd = (name: string, bytes: Uint8Array): number => put({ ...fdBase(name), data: bytes, len: bytes.length, synthetic: true });
 export const javaDupFd = (fd: number): number => { const f = fds.get(fd); if (!f) return -1; f.references++; return put(f); };
 
 function grow(f: Fd, need: number): void {

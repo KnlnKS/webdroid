@@ -11,6 +11,7 @@ import { javaFormat, defineException, vcall } from "../jvm/natives/jlang";
 import { type JLocale, localeTag, localeDirection, usLocale } from "../jvm/natives/jvalues";
 import { jarray } from "../jvm/abi";
 import { streamOf, streamOfSource } from "../jvm/natives/jio";
+import { mkPfd } from "./os";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 import { fontResource } from "./fonts";
 
@@ -236,8 +237,12 @@ rt.register({
     "getLength()J": function (this: JAssetFd) { return BigInt(this.bytes.length); },
     "getDeclaredLength()J": function (this: JAssetFd) { return BigInt(this.bytes.length); },
     "getStartOffset()J": () => 0n,
-    "getParcelFileDescriptor()Landroid/os/ParcelFileDescriptor;": function (this: JAssetFd) { return this.pfd; },
-    "getFileDescriptor()Ljava/io/FileDescriptor;": () => rt.make("java/io/FileDescriptor"),
+    // an entry with no ParcelFileDescriptor of its own is served as one over its bytes, which is
+    // why getStartOffset answers 0
+    "getFileDescriptor()Ljava/io/FileDescriptor;": function (this: JAssetFd) {
+      return vcall(this.pfd ??= mkPfd(this.bytes, null), "getFileDescriptor", "()Ljava/io/FileDescriptor;");
+    },
+    "getParcelFileDescriptor()Landroid/os/ParcelFileDescriptor;": function (this: JAssetFd) { return this.pfd ??= mkPfd(this.bytes, null); },
     "close()V": () => {},
   },
 });

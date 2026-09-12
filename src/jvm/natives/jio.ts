@@ -311,6 +311,7 @@ rt.register({
   },
 });
 function openRead(this: JInputStream, p: string) {
+  inputPaths.set(this, vfs.norm(p));
   const bytes = vfs.read(p);
   if (bytes) this.buf = bytes;
   else {
@@ -322,7 +323,7 @@ function openRead(this: JInputStream, p: string) {
 rt.register({
   name: "java/io/FileInputStream", ctor: class extends JInputStream {}, sup: "java/io/InputStream",
   methods: {
-    "getFD()Ljava/io/FileDescriptor;": () => new JFileDescriptor(),
+    "getFD()Ljava/io/FileDescriptor;": function (this: JInputStream) { return descriptorOf(this, inputPaths.get(this) ?? "", 0); },
     "getChannel()Ljava/nio/channels/FileChannel;": fileChannel,
     "<init>(Ljava/io/File;)V": function (this: JInputStream, f: JFile) { openRead.call(this, f.path); },
     "<init>(Ljava/lang/String;)V": openRead,
@@ -381,10 +382,23 @@ async function wrappedBytes(stream: JInputStream, length: number): Promise<Uint8
   return new Uint8Array(out.buffer, 0, got);
 }
 
-export class JFileDescriptor extends JObj { fd = -1; }
+/** A stream's descriptor names its open file (`path`, open(2) `flags`); the native descriptor
+ *  number is opened from those the first time something outside java.io asks for it. A
+ *  RandomAccessFile's is kept so streams built on it write at its shared file pointer. */
+export class JFileDescriptor extends JObj { fd = -1; path = ""; flags = 0; owner: JObj | null = null; }
+const descriptors = new WeakMap<JObj, JFileDescriptor>();
+const inputPaths = new WeakMap<JObj, string>();
+function descriptorOf(owner: JObj, path: string, flags: number): JFileDescriptor {
+  let d = descriptors.get(owner);
+  if (!d) { d = new JFileDescriptor(); d.path = path; d.flags = flags; d.owner = owner; descriptors.set(owner, d); }
+  return d;
+}
 rt.register({
   name: "java/io/FileDescriptor", ctor: JFileDescriptor,
-  methods: { "<init>()V": () => {}, "sync()V": () => {}, "valid()Z": function (this: JFileDescriptor) { return this.fd >= 0 ? 1 : 0; } },
+  methods: {
+    "<init>()V": () => {}, "sync()V": () => {},
+    "valid()Z": function (this: JFileDescriptor) { return this.fd >= 0 || (this.owner !== null && !closedFiles.has(this.owner)) ? 1 : 0; },
+  },
 });
 export class JOutputStream extends JObj {
   chunks: number[] = [];
@@ -557,7 +571,9 @@ rt.register({
   },
 });
 
+const O_WRONLY = 1, O_RDWR = 2, O_CREAT = 0x40, O_APPEND = 0x400;
 class JFOS extends JOutputStream {
+  shared: JFileDescriptor | null = null;
   fpath = "";
   append = false;
   offset = 0;
@@ -573,17 +589,25 @@ function openWrite(this: JFOS, path: string, append = 0) {
 rt.register({
   name: "java/io/FileOutputStream", ctor: JFOS, sup: "java/io/OutputStream",
   methods: {
-    "getFD()Ljava/io/FileDescriptor;": () => new JFileDescriptor(),
+    "getFD()Ljava/io/FileDescriptor;": function (this: JFOS) { return descriptors.get(this) ?? this.shared ?? descriptorOf(this, this.fpath, O_WRONLY | O_CREAT | (this.append ? O_APPEND : 0)); },
     "getChannel()Ljava/nio/channels/FileChannel;": fileChannel,
+    // AOSP: a stream over an open descriptor writes to that open file at its shared position
+    "<init>(Ljava/io/FileDescriptor;)V": function (this: JFOS, d: JFileDescriptor | null) {
+      if (!d) throw rt.mkThrowable("java/lang/NullPointerException", "fdObj == null");
+      if (!d.path) throw rt.mkThrowable("java/io/IOException", "descriptor has no file to write");
+      this.shared = d; this.fpath = d.path;
+      if (!(d.owner instanceof JRAF)) { this.append = true; this.offset = vfs.read(d.path)?.length ?? 0; }
+    },
     "<init>(Ljava/io/File;)V": function (this: JFOS, f: JFile) { openWrite.call(this, f.path); },
     "<init>(Ljava/io/File;Z)V": function (this: JFOS, f: JFile, app: number) { openWrite.call(this, f.path, app); },
     "<init>(Ljava/lang/String;)V": openWrite,
     "<init>(Ljava/lang/String;Z)V": openWrite,
-    "write(I)V": function (this: JFOS, b: number) { checkFileOpen(this); this.chunks.push(b & 0xff); },
+    "write(I)V": function (this: JFOS, b: number) { checkFileOpen(this); this.chunks.push(b & 0xff); if (this.shared) flushFOS(this); },
     "write([BII)V": function (this: JFOS, b: Int8Array, off: number, len: number) {
       checkFileOpen(this);
       if (off < 0 || len < 0 || len > b.length - off) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
       for (let i = 0; i < len; i++) this.chunks.push(b[off + i] & 0xff);
+      if (this.shared) flushFOS(this);
     },
     "flush()V": function (this: JFOS) { checkFileOpen(this); flushFOS(this); },
     "close()V": function (this: JFOS) { if (!closedFiles.has(this)) { flushFOS(this); closeFile(this); } },
@@ -591,6 +615,8 @@ rt.register({
 });
 function flushFOS(s: JFOS) {
   if (!s.chunks.length) return;
+  const raf = s.shared?.owner;
+  if (raf instanceof JRAF) { const b = new Int8Array(s.chunks); s.chunks.length = 0; rafWrite(raf, b, 0, b.length); return; }
   const old = vfs.read(s.fpath) ?? new Uint8Array(0);
   const start = s.append ? old.length : s.offset;
   const merged = new Uint8Array(Math.max(old.length, start + s.chunks.length));
@@ -636,7 +662,7 @@ rt.register({
       this.pos += step;
       return step;
     },
-    "getFD()Ljava/io/FileDescriptor;": () => new JFileDescriptor(),
+    "getFD()Ljava/io/FileDescriptor;": function (this: JRAF) { return descriptorOf(this, this.path, this.write ? O_RDWR | O_CREAT : 0); },
     "read()I": async function (this: JRAF) {
       checkFileOpen(this);
       if (!this.source) return this.pos < this.buf.length ? this.buf[this.pos++] : -1;
