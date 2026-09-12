@@ -203,7 +203,7 @@ class JWebView extends JViewGroup {
     else if (data.kind === "loaded") {
       this.remoteHeight = typeof data.height === "number" ? data.height : 0;
       this.finishLoad(typeof data.url === "string" ? data.url : null, typeof data.title === "string" ? data.title : "", typeof data.error === "string" ? data.error : null);
-    } else if (data.kind === "navigate" && typeof data.url === "string") this.navigate(data.url);
+    } else if (data.kind === "navigate" && typeof data.url === "string") this.navigate(data.url, data.replace === true);
     else if (data.kind === "evaluated" && typeof data.seq === "number" && typeof data.value === "string") this.evaluations.get(data.seq)?.(data.value);
   };
   private send(data: object, transfer: Transferable[] = []) { this.el?.contentWindow?.postMessage({ ...data, bridge: this.remote?.id }, this.remoteOrigin, transfer); }
@@ -301,10 +301,14 @@ class JWebView extends JViewGroup {
       this.navigate(href);
     }, true);
   }
-  private navigate(href: string) {
+  private navigate(href: string, replace = false) {
     void onMain(async () => {
       if (await vcall(this.client, "shouldOverrideUrlLoading", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Z", this, mkRequest(href, true))) return;
-      this.loadUrl(href);
+      if (replace && this.idx >= 0 && !/^javascript:/i.test(href)) {
+        const entry = { url: href, src: srcFor(href, this) };
+        this.hist[this.idx] = entry;
+        this.go(entry, false);
+      } else this.loadUrl(href);
     });
   }
   /** Chromium JSON-encodes the completion value; undefined, functions and throws all read as null */

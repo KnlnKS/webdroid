@@ -1,4 +1,5 @@
 import { installWebHistory } from "./webhistory";
+import { installWebLocation } from "./weblocation";
 
 export const WEB_INJECT = `<script>(function(){
 const config = window.__wdWebView, f = window.frameElement;
@@ -29,6 +30,7 @@ for (const [name, methods] of Object.entries(interfaces)) {
   Object.defineProperty(window, name, {value: object, configurable: true});
 }
 const send = data => parent.postMessage({bridge: id, ...data}, "*");
+(${installWebLocation.toString()})(config, (url, replace) => send({kind: "navigate", url, replace}));
 window.navigation?.addEventListener("navigate", event => {
   if (!event.cancelable || event.destination.sameDocument || event.hashChange || event.formData || event.downloadRequest) return;
   const url = new URL(event.destination.url);
@@ -138,7 +140,10 @@ self.addEventListener("fetch", event => {
         if (value) headers.set("x-wd-cookie", value); else headers.delete("x-wd-cookie");
       }
       const frame = localProxy && original.searchParams.get("frame") === "1";
-      const response = await fetch("/proxy?manual=1&url=" + encodeURIComponent(target) + (frame ? "&frame=1" : ""), { method, headers, body, credentials: "omit" });
+      if (isolated && (frame || request.destination === "script") && !request.integrity) {
+        headers.delete("x-wd-if-none-match"); headers.delete("x-wd-if-modified-since");
+      }
+      const response = await fetch("/proxy?manual=1&url=" + encodeURIComponent(target) + (frame ? "&frame=1" : "") + (isolated && !request.integrity && /^https?:/.test(page) ? "&webview=1" : ""), { method, headers, body, credentials: "omit" });
       const values = response.headers.get("x-wd-set-cookie");
       if (include && values) await message(client, {kind: "webcookies", url: target, values: JSON.parse(values)});
       const status = Number(response.headers.get("x-wd-status") || response.status), location = response.headers.get("location");

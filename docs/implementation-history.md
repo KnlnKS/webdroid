@@ -733,6 +733,42 @@ Evidence: `/tmp/webdroid-webhistory-{tests,port-before,typecheck,units}.log` and
 protected test-config `resume-network/` response captures. Credentials and raw request
 payloads are excluded from reports and source control.
 
+## WebView upstream Location — 2026-09-11
+
+The controlled retry with static Location virtualization changes GetCredential's
+hostname from `127.0.0.1` to `accounts.google.com`; Origin, Referer and request path
+retain their previous correct values. Consent now returns a non-null payload without
+error 13. The broker's microG cookie jar contains the genuine HttpOnly `oauth_token`,
+and Google's page navigates to `#close`. Script-visible cookies exclude that token,
+as expected. There are no page errors. No account is stored yet because fragment
+navigation has no Java WebView completion notification.
+
+The exact microG LoginActivity source reads the token in `closeWeb(false)` after
+`onPageFinished` sees `#close`, then performs the real AuthRequest exchange. Its
+`JsBridge.addAccount` is a no-op. Chromium's AwWebContentsObserver separately posts
+visited-history and page-finished callbacks for fragment navigation, without page-start
+or page-commit-visible. Calling the full-load completion path would emit extra callbacks.
+Sources: [microG v0.3.16.252432 LoginActivity](https://github.com/microg/GmsCore/blob/v0.3.16.252432/play-services-core/src/main/java/org/microg/gms/auth/login/LoginActivity.java)
+and [Chromium AwWebContentsObserver](https://chromium.googlesource.com/chromium/src.git/+/master/android_webview/java/src/org/chromium/android_webview/AwWebContentsObserver.java).
+
+The server uses the existing TypeScript parser to preserve source slices while routing
+static Location access through a Window/Document owner helper. Real browser security
+origins remain unchanged. Inline executable scripts and handlers participate; JSON/data
+scripts and integrity-protected resources do not. Local bindings, getters, receivers,
+constructors, simple destructuring and history/fragment behavior have Chromium tests.
+Constructor precedence initially failed and is covered by a regression test. The HTML
+rewriter collects script chunks before replacement so unclosed script content is retained.
+Dynamic computed names, generated code, native evaluateJavascript, some destructuring/
+optional chains and reflection remain outside the current transformation. Parser source
+maps are not regenerated. This is not complete proxy transparency.
+
+Typecheck and 637 tests / 20,476 assertions pass, including 32 Chromium cases. Eighteen
+cached public scripts (4.64 MB total) remain syntactically valid after transformation.
+Their aggregate transformation took 2.8 seconds under competing load; this is not an
+isolated benchmark. TypeScript stays server-side. Broader transport/E2E and performance
+acceptance remain pending. Evidence: `/tmp/webdroid-weblocation-{typecheck,units,tests,
+public-syntax,preflight}.log`; protected consent captures stay outside the repository.
+
 ## WebView upstream bases — 2026-09-11
 
 Resumed microG from `28b9246` on `codex/microg-webview-base`. The current public

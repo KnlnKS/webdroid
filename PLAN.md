@@ -148,6 +148,22 @@ through its navigation service and serializes the hostname into GetCredential. T
 proves another renderer-origin leak; its causal role in Google's error still needs a
 controlled comparison. Do not rewrite this Google-specific payload or fabricate a
 credential. Investigate general upstream location semantics before another MFA attempt.
+The controlled upstream-location implementation now sends `accounts.google.com` in
+GetCredential. The same consent flow returns a payload without error 13, and the
+microG-owned cookie jar contains Google's real HttpOnly `oauth_token`. The page reaches
+`#close`, but no account is stored yet: fragment navigation does not reach the Java
+WebView client's `onPageFinished`. Chromium explicitly delivers that callback without
+`onPageStarted` or `onPageCommitVisible` for fragment navigation. Implement and verify
+that platform behavior before repeating sign-in. Preserve the live authenticated page.
+
+The location implementation rewrites static Location references in isolated HTTP(S)
+scripts using the existing TypeScript parser on the server. Ordinary objects and local
+bindings retain their behavior; the browser still owns its security origin. Integrity
+protected scripts are unchanged. Typecheck and all 637 tests / 20,476 assertions pass,
+including 32 Chromium cases; genuine identifier/password/verification/consent execute
+without page exceptions. This is a bounded implementation: dynamic property names,
+generated code, native evaluateJavascript, some destructuring and reflective access
+are not virtualized. Broader APK/transport/E2E and quiet performance checks remain open.
 The Chrome tab remains open at `http://localhost:41979/?apk=GmsClient.apk`.
 Encoding processes remain active under a replacement parent; inspect
 current process state rather than relying on the earlier PID for quiet measurements.

@@ -2,6 +2,7 @@ import index from "./index.html";
 import processIndex from "./process.html";
 import { WEB_PROXY_WORKER, WEB_FRAME } from "./src/shell/webinject";
 import { htmlAttribute, webDocument } from "./src/shell/webhtml";
+import { webScript } from "./src/shell/webscript";
 import { openInstall } from "./src/shell/install";
 import { prepareSystemPackages } from "./scripts/system-packages";
 import { ensureFrameworkRes } from "./scripts/gen-framework-res";
@@ -63,6 +64,7 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
       const q = new URL(req.url).searchParams;
       const url = q.get("url");
       const frame = q.get("frame") === "1", manual = q.get("manual") === "1";
+      const isolated = q.get("webview") === "1";
       if (!url || !/^https?:\/\//.test(url)) return new Response("bad url", { status: 400 });
       try {
         const headers = new Headers();
@@ -70,7 +72,7 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
         req.headers.forEach((v, k) => {
           if (k.startsWith("x-wd-")) headers.set(k.slice(5), v);
         });
-        const encoded = !frame && headers.has("accept-encoding");
+        const encoded = !frame && !isolated && headers.has("accept-encoding");
         const upstream = await fetch(url, {
           method: req.method === "HEAD" ? "HEAD" : req.method,
           headers,
@@ -95,7 +97,12 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
           // Served from our origin so the shell can script it; <base> keeps its subresources and
           // links resolving against the real one. text() re-encodes as UTF-8, so say so.
           h.set("content-type", "text/html; charset=utf-8");
-          return new Response(webDocument(await upstream.text(), upstream.url), { status: upstream.status, headers: h });
+          if (isolated) { h.delete("etag"); h.delete("last-modified"); }
+          return new Response(webDocument(await upstream.text(), upstream.url, isolated), { status: upstream.status, headers: h });
+        }
+        if (isolated && upstream.body && /^(?:text|application)\/(?:x-)?(?:java|ecma)script(?:;|$)/i.test(upstream.headers.get("content-type") ?? "")) {
+          h.delete("etag"); h.delete("last-modified");
+          return new Response(webScript(await upstream.text()), { status: upstream.status, headers: h });
         }
         return new Response(upstream.body, { status: upstream.status, headers: h });
       } catch (e) {

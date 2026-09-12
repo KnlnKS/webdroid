@@ -34,7 +34,8 @@
     "fflate": "^0.8.2",
     "node-forge": "^1.4.0",
     "sql.js": "workspace:*",
-    "tough-cookie": "^6.0.2"
+    "tough-cookie": "^6.0.2",
+    "typescript": "^5.9.2"
   },
   "devDependencies": {
     "@types/bun": "^1.4.0",
@@ -43,7 +44,6 @@
     "@types/sql.js": "^1.4.11",
     "pixelmatch": "^7.2.0",
     "playwright": "^1.62.1",
-    "pngjs": "^7.0.0",
-    "typescript": "^5.9.2"
+    "pngjs": "^7.0.0"
   }
 }

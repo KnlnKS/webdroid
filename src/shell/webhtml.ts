@@ -1,4 +1,5 @@
 import { WEB_INJECT } from "./webinject";
+import { webScript } from "./webscript";
 
 export const htmlAttribute = (value: string) => value.replace(/[&"<]/g, c => c === "&" ? "&amp;" : c === '"' ? "&quot;" : "&lt;");
 
@@ -12,17 +13,29 @@ function bases(rewriter: HTMLRewriter, visit: (element: HTMLRewriterTypes.Elemen
   } });
 }
 
-export function webDocument(html: string, url?: string): string {
+export function webDocument(html: string, url?: string, scripts = false): string {
+  scripts &&= url !== undefined && /^https?:/.test(url);
   let hasBase = false, hasHref = false;
-  if (url !== undefined) bases(new HTMLRewriter(), element => {
-    hasBase = true;
-    hasHref ||= element.hasAttribute("href");
-  }).transform(html);
+  const scriptBodies: string[][] = [];
+  if (url !== undefined) {
+    const scan = bases(new HTMLRewriter(), element => {
+      hasBase = true;
+      hasHref ||= element.hasAttribute("href");
+    });
+    if (scripts) scan.on("script", {
+      element() { scriptBodies.push([]); },
+      text(text) { scriptBodies[scriptBodies.length - 1].push(text.text); },
+    });
+    scan.transform(html);
+  }
 
   const injection = (url === undefined ? "" : `<meta name="wd-proxy-url" content="${htmlAttribute(url)}">`
     + `<base data-wd-document-base${hasBase ? " data-wd-fallback" : ""} href="${htmlAttribute(url)}">`) + WEB_INJECT;
   let inserted = false;
   const rewriter = new HTMLRewriter().on("*", { element(element) {
+    if (scripts) for (const [name, value] of element.attributes) {
+      if (/^on/i.test(name)) element.setAttribute(name, webScript(value));
+    }
     if (inserted || element.tagName === "html") return;
     if (element.tagName === "head") element.prepend(injection, { html: true });
     else element.before(injection, { html: true });
@@ -36,6 +49,17 @@ export function webDocument(html: string, url?: string): string {
     },
     end(end) { if (!inserted) end.append(injection, { html: true }); },
   });
+  if (scripts) {
+    let index = 0;
+    rewriter.on("script", {
+      element(element) {
+        const body = scriptBodies[index++].join("");
+        const type = element.getAttribute("type")?.trim() ?? "";
+        if (!element.hasAttribute("src") && (!type || type === "module" || /^(?:text|application)\/(?:java|ecma)script$/i.test(type)))
+          element.setInnerContent(webScript(body), { html: true });
+      },
+    });
+  }
   if (url !== undefined) bases(rewriter, element => {
     const href = element.getAttribute("href");
     // Pre-base resources need the upstream fallback; replace it when the document supplies its own href.
