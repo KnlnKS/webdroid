@@ -51,6 +51,7 @@ import "./android/view";
 import "./android/viewanimator";
 import "./android/gravity";
 import "./android/layouts";
+import "./android/tabhost";
 import "./android/textview";
 import "./android/imageview";
 import "./android/widget";

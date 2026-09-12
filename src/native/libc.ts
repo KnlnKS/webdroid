@@ -172,8 +172,18 @@ let r48 = 0x1234abcd330en;
 const A48 = 0x5deece66dn, C48 = 0xbn, M48 = (1n << 48n) - 1n;
 const next48 = () => { r48 = (A48 * r48 + C48) & M48; return Number(r48 >> 17n); };
 
-const TIMERFD_NR64: Record<number, string> = { 85: "timerfd_create", 86: "timerfd_settime", 87: "timerfd_gettime" };
-const TIMERFD_NR32: Record<number, string> = { 350: "timerfd_create", 353: "timerfd_settime", 354: "timerfd_gettime" };
+/** raw syscall numbers served by the libc function of the same shape (an offset in a register on
+ *  LP64 makes mmap direct; ILP32's mmap2 counts pages and _llseek splits the offset, so neither is here) */
+const SYSCALL_NR64: Record<number, string> = {
+  85: "timerfd_create", 86: "timerfd_settime", 87: "timerfd_gettime",
+  56: "openat", 57: "close", 62: "lseek", 63: "read", 64: "write", 80: "fstat", 101: "nanosleep", 113: "clock_gettime",
+  129: "kill", 131: "tgkill", 169: "gettimeofday", 215: "munmap", 222: "mmap", 226: "mprotect",
+};
+const SYSCALL_NR32: Record<number, string> = {
+  350: "timerfd_create", 353: "timerfd_settime", 354: "timerfd_gettime",
+  322: "openat", 6: "close", 3: "read", 4: "write", 162: "nanosleep", 263: "clock_gettime", 37: "kill", 268: "tgkill",
+  78: "gettimeofday", 91: "munmap", 125: "mprotect",
+};
 /** the device's RAM as sysinfo and ActivityManager.getMemoryInfo both report it */
 const TOTAL_RAM = 4 * 2 ** 30, FREE_RAM = 2 * 2 ** 30;
 /** struct sysinfo: uptime, loads[3], totalram, freeram, sharedram, bufferram, totalswap, freeswap
@@ -198,8 +208,9 @@ function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promise<HostR
   if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); crypto.getRandomValues(mem.bytes(buf, n)); return n; } // getrandom
   if (nr === (PTR === 8 ? 122 : 241)) return 0;                             // sched_setaffinity: one core, nothing to pin
   if (nr === (PTR === 8 ? 179 : 116)) { fillSysinfo(a.p()); return 0; }    // sysinfo
-  // timerfd_create/settime/gettime: the argument cursor sits past nr, where the wrappers' arguments start
-  const name = (PTR === 8 ? TIMERFD_NR64 : TIMERFD_NR32)[nr];
+  // the numbers whose wrapper takes the syscall's own arguments: the argument cursor sits
+  // past nr, where those start
+  const name = (PTR === 8 ? SYSCALL_NR64 : SYSCALL_NR32)[nr];
   if (name) return hostFn("libc.so", name)!(cpu, a);
   calledMissing.add("syscall " + nr);
   return fail(cpu, E.NOSYS);

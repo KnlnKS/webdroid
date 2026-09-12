@@ -92,6 +92,9 @@ rt.register({
   name: "java/util/AbstractMap$SimpleImmutableEntry", ctor: JSimpleImmutableEntry, ifaces: ["java/util/Map$Entry"],
   methods: {
     "<init>(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JSimpleImmutableEntry, k: unknown, v: unknown) { this.e = { k, v }; },
+    "<init>(Ljava/util/Map$Entry;)V": async function (this: JSimpleImmutableEntry, entry: unknown) {
+      this.e = { k: await vcall(entry, "getKey", "()Ljava/lang/Object;"), v: await vcall(entry, "getValue", "()Ljava/lang/Object;") };
+    },
     "getKey()Ljava/lang/Object;": function (this: JSimpleImmutableEntry) { return this.e.k; },
     "getValue()Ljava/lang/Object;": function (this: JSimpleImmutableEntry) { return this.e.v; },
     "setValue(Ljava/lang/Object;)Ljava/lang/Object;": function (): never {

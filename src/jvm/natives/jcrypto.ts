@@ -7,7 +7,7 @@ import { concat, i8, u8 } from "../abi";
 import { JKeyGenSpec } from "../../android/security";
 import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain, rsaCrypt, binary } from "./jrsa";
 import { generateEc, isEcCurve, curveOfParams } from "./jec";
-import { caStoreMethods } from "./jx509";
+import { caStoreMethods, parseX509 } from "./jx509";
 import { type JBuffer, bufferView } from "./jnio";
 
 rt.markers("java/security/Key", "javax/crypto/SecretKey", "java/security/spec/KeySpec");
@@ -299,18 +299,35 @@ rt.register({
 // since a device keystore outlives the process). Other store types start empty, as a JCA
 // KeyStore does before load(); there is no file to load from.
 const KS_KEY = "wd:keystore:";
+type StoredCert = { der?: Uint8Array; encoded?: Uint8Array };
 class JKeyStore extends JObj {
   type = "";
   loaded = false;
   entries = new Map<string, JSecretKeySpec | JRsaPrivateKey>();
+  /** trusted-certificate entries (setCertificateEntry); a persisted one is parsed on first use */
+  certs = new Map<string, JObj>();
+  pendingCerts = new Map<string, string>();
+  async certOf(alias: string): Promise<JObj | null> {
+    const have = this.certs.get(alias);
+    if (have) return have;
+    const der = this.pendingCerts.get(alias);
+    if (der === undefined) return null;
+    const cert = await parseX509(Uint8Array.from(atob(der), (c) => c.charCodeAt(0)));
+    this.pendingCerts.delete(alias);
+    this.certs.set(alias, cert);
+    return cert;
+  }
+  hasCert(alias: string): boolean { return this.certs.has(alias) || this.pendingCerts.has(alias); }
   persist() {
     if (this.type !== "AndroidKeyStore") return;
-    const o: Record<string, [string, string] | { kind: "rsa"; private: string; public: string; certificate: string }> = {};
+    const o: Record<string, [string, string] | { kind: "rsa"; private: string; public: string; certificate: string } | { kind: "cert"; certificate: string }> = {};
+    const encode = (b: Uint8Array) => btoa(binary(b));
     for (const [a, k] of this.entries) {
-      const encode = (b: Uint8Array) => btoa(binary(b));
       if (k instanceof JRsaPrivateKey) o[a] = { kind: "rsa", private: encode(k.encoded), public: encode(k.publicKey.encoded), certificate: encode(k.certificate!.encoded) };
       else o[a] = [k.algo, encode(k.key)];
     }
+    for (const [a, c] of this.certs) { const der = (c as StoredCert).der ?? (c as StoredCert).encoded; if (der) o[a] = { kind: "cert", certificate: encode(der) }; }
+    for (const [a, der] of this.pendingCerts) o[a] = { kind: "cert", certificate: der };
     try { globalThis.localStorage?.setItem(KS_KEY + this.type, JSON.stringify(o)); } catch { /* quota */ }
   }
   load() {
@@ -325,6 +342,8 @@ class JKeyStore extends JObj {
           this.entries.set(a, mkSecretKey(Uint8Array.from(atob(entry[1]), (c) => c.charCodeAt(0)), entry[0]));
         } else if (entry && entry.kind === "rsa" && typeof entry.private === "string" && typeof entry.public === "string" && typeof entry.certificate === "string") {
           this.entries.set(a, restoreRsa(entry.private, entry.public, entry.certificate));
+        } else if (entry && entry.kind === "cert" && typeof entry.certificate === "string") {
+          this.pendingCerts.set(a, entry.certificate);
         }
       }
     } catch { /* corrupt */ }
@@ -362,11 +381,16 @@ rt.register({
     "getType()Ljava/lang/String;": function (this: JKeyStore) { return this.type; },
     "load(Ljava/io/InputStream;[C)V": function (this: JKeyStore) { this.loaded = true; },
     "load(Ljava/security/KeyStore$LoadStoreParameter;)V": function (this: JKeyStore) { this.loaded = true; },
-    "aliases()Ljava/util/Enumeration;": function (this: JKeyStore) { return mkIter([...this.entries.keys()]); },
-    "size()I": function (this: JKeyStore) { return ready(this).entries.size; },
-    "containsAlias(Ljava/lang/String;)Z": function (this: JKeyStore, a: string) { return ready(this).entries.has(a) ? 1 : 0; },
+    "aliases()Ljava/util/Enumeration;": function (this: JKeyStore) { return mkIter([...this.entries.keys(), ...this.certs.keys(), ...this.pendingCerts.keys()]); },
+    "size()I": function (this: JKeyStore) { return ready(this).entries.size + this.certs.size + this.pendingCerts.size; },
+    "containsAlias(Ljava/lang/String;)Z": function (this: JKeyStore, a: string) { return ready(this).entries.has(a) || this.hasCert(a) ? 1 : 0; },
     "isKeyEntry(Ljava/lang/String;)Z": function (this: JKeyStore, a: string) { return this.entries.has(a) ? 1 : 0; },
-    "isCertificateEntry(Ljava/lang/String;)Z": () => 0,
+    "isCertificateEntry(Ljava/lang/String;)Z": function (this: JKeyStore, a: string) { return this.hasCert(a) ? 1 : 0; },
+    "setCertificateEntry(Ljava/lang/String;Ljava/security/cert/Certificate;)V": function (this: JKeyStore, a: string, cert: JObj) {
+      if (a === null || cert === null) throw rt.mkThrowable("java/lang/NullPointerException", a === null ? "alias == null" : "cert == null");
+      if (ready(this).entries.has(a)) throw rt.mkThrowable("java/security/KeyStoreException", "Cannot overwrite own certificate");
+      this.certs.set(a, cert); this.pendingCerts.delete(a); this.persist();
+    },
     "getKey(Ljava/lang/String;[C)Ljava/security/Key;": function (this: JKeyStore, a: string) { return ready(this).entries.get(a) ?? null; },
     "getEntry(Ljava/lang/String;Ljava/security/KeyStore$ProtectionParameter;)Ljava/security/KeyStore$Entry;": function (this: JKeyStore, a: string) {
       const k = ready(this).entries.get(a);
@@ -382,9 +406,9 @@ rt.register({
       if (!(k instanceof JSecretKeySpec)) throw rt.mkThrowable("java/security/KeyStoreException", "Unsupported key type");
       this.entries.set(a, k); this.persist();
     },
-    "deleteEntry(Ljava/lang/String;)V": function (this: JKeyStore, a: string) { this.entries.delete(a); this.persist(); },
+    "deleteEntry(Ljava/lang/String;)V": function (this: JKeyStore, a: string) { this.entries.delete(a); this.certs.delete(a); this.pendingCerts.delete(a); this.persist(); },
     "getCertificate(Ljava/lang/String;)Ljava/security/cert/Certificate;": function (this: JKeyStore, alias: string) {
-      const key = ready(this).entries.get(alias); return key instanceof JRsaPrivateKey ? key.certificate : null;
+      const key = ready(this).entries.get(alias); return key instanceof JRsaPrivateKey ? key.certificate : this.certOf(alias);
     },
     "getCertificateChain(Ljava/lang/String;)[Ljava/security/cert/Certificate;": function (this: JKeyStore, alias: string) {
       const key = ready(this).entries.get(alias); return key instanceof JRsaPrivateKey ? rsaChain(key) : null;

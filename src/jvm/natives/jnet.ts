@@ -444,6 +444,8 @@ defineException("java/net/ProtocolException", "java/io/IOException");
 defineException("javax/net/ssl/SSLException", "java/io/IOException");
 defineException("javax/net/ssl/SSLHandshakeException", "javax/net/ssl/SSLException");
 defineException("javax/net/ssl/SSLPeerUnverifiedException", "javax/net/ssl/SSLException");
+defineException("javax/net/ssl/SSLProtocolException", "javax/net/ssl/SSLException");
+defineException("javax/net/ssl/SSLKeyException", "javax/net/ssl/SSLException");
 defineException("java/net/URISyntaxException", "java/lang/Exception");
 
 const SCHEMES = /^(https?|ftp|file|jar):$/;       // what Android's URL has a handler for

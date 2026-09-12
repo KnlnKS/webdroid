@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { defineException, vcall } from "./jlang";
 import { mem } from "../../native/mem";
-import { decodeString } from "../charset";
+import { decodeString, encodeString } from "../charset";
 
 type BufferStorage = { kind: "heap"; ab: ArrayBuffer } | { kind: "direct"; ab: ArrayBuffer } | { kind: "native"; address: number | bigint };
 const directBuffers = new FinalizationRegistry<number>((address) => mem.free(address));
@@ -449,6 +449,16 @@ rt.register({
   methods: {
     ...coderChain("Ljava/nio/charset/CharsetEncoder;"),
     "canEncode(C)Z": function (this: JCharsetCoder, c: number) { return encodable(this.cs, c) ? 1 : 0; },
+    "encode(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;Z)Ljava/nio/charset/CoderResult;":
+      function (this: JCharsetCoder, src: JBuffer, dst: JBuffer) {
+        let text = "";
+        for (let i = src.pos; i < src.lim; i++) text += String.fromCharCode(src.dv.getUint16(i << 1, src.little));
+        const bytes = encodeString(text, this.cs), n = Math.min(bytes.length, dst.lim - dst.pos);
+        for (let i = 0; i < n; i++) dst.dv.setInt8(dst.pos + i, bytes[i]);
+        dst.pos += n;
+        src.pos = src.lim;
+        return n < bytes.length ? CODER_OVERFLOW : CODER_UNDERFLOW;
+      },
     "canEncode(Ljava/lang/CharSequence;)Z": async function (this: JCharsetCoder, cs: unknown) {
       const s = typeof cs === "string" ? cs : String(await vcall(cs, "toString", "()Ljava/lang/String;"));
       for (let i = 0; i < s.length; i++) if (!encodable(this.cs, s.charCodeAt(i))) return 0;

@@ -499,6 +499,10 @@ for (const [name, methods, statics] of [
     // the screen is on and this app was never exempted from doze, which is the state an app
     // offering a "disable battery optimisation" prompt is asking about
     "isDeviceIdleMode()Z": () => 0,
+    "getCurrentThermalStatus()I": () => 0,                                       // THERMAL_STATUS_NONE
+    ...noops("addThermalStatusListener(Landroid/os/PowerManager$OnThermalStatusChangedListener;)V",
+      "addThermalStatusListener(Ljava/util/concurrent/Executor;Landroid/os/PowerManager$OnThermalStatusChangedListener;)V",
+      "removeThermalStatusListener(Landroid/os/PowerManager$OnThermalStatusChangedListener;)V"),
     ...stubs(1, "isInteractive()Z"),
     ...stubs(0, "isPowerSaveMode()Z", "isSustainedPerformanceModeSupported()Z", "isDeviceLightIdleMode()Z",
       "isLowPowerStandbyEnabled()Z", "isIgnoringBatteryOptimizations(Ljava/lang/String;)Z"),

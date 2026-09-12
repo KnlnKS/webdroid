@@ -347,7 +347,47 @@ rt.register({
     "getTransportInfo()Landroid/net/TransportInfo;": () => null },
 });
 rt.markers("android/net/TransportInfo");
-rt.register({ name: "android/net/wifi/WifiInfo", ctor: class extends JObj {}, ifaces: ["android/net/TransportInfo", "android/os/Parcelable"] });
+// ── Wi-Fi: the relay's network is the one Wi-Fi network, and everything a location permission
+// would gate (SSID, BSSID, address) reads as the platform's redacted values
+class JWifiInfo extends JObj {}
+rt.register({
+  name: "android/net/wifi/WifiInfo", ctor: JWifiInfo, ifaces: ["android/net/TransportInfo", "android/os/Parcelable"],
+  methods: {
+    "getSSID()Ljava/lang/String;": () => "<unknown ssid>",
+    "getBSSID()Ljava/lang/String;": () => "02:00:00:00:00:00",
+    "getMacAddress()Ljava/lang/String;": () => "02:00:00:00:00:00",
+    "getNetworkId()I": () => -1,
+    "getIpAddress()I": () => 0,
+    "getRssi()I": () => -127,
+    "getLinkSpeed()I": () => -1,
+    "getFrequency()I": () => -1,
+    "getHiddenSSID()Z": () => 0,
+    "describeContents()I": () => 0,
+  },
+});
+class JDhcpInfo extends JObj { ipAddress = 0; gateway = 0; netmask = 0; dns1 = 0; dns2 = 0; serverAddress = 0; leaseDuration = 0; }
+rt.register({
+  name: "android/net/DhcpInfo", ctor: JDhcpInfo, ifaces: ["android/os/Parcelable"],
+  fields: ["ipAddress", "gateway", "netmask", "dns1", "dns2", "serverAddress", "leaseDuration"],
+  methods: { "<init>()V": function () {} },
+});
+rt.register({
+  name: "android/net/wifi/WifiManager", ctor: class extends JObj {},
+  statics: { WIFI_STATE_DISABLED: 1, WIFI_STATE_ENABLED: 3, WIFI_STATE_UNKNOWN: 4, WIFI_STATE_CHANGED_ACTION: "android.net.wifi.WIFI_STATE_CHANGED", NETWORK_STATE_CHANGED_ACTION: "android.net.wifi.STATE_CHANGE", SCAN_RESULTS_AVAILABLE_ACTION: "android.net.wifi.SCAN_RESULTS" },
+  methods: {
+    "isWifiEnabled()Z": () => NET_TYPE === 1 ? 1 : 0,
+    "getWifiState()I": () => NET_TYPE === 1 ? 3 : 1,
+    "setWifiEnabled(Z)Z": () => 0,
+    "getConnectionInfo()Landroid/net/wifi/WifiInfo;": () => new JWifiInfo(),
+    "getDhcpInfo()Landroid/net/DhcpInfo;": () => new JDhcpInfo(),
+    "getScanResults()Ljava/util/List;": () => newArrayList(),
+    "getConfiguredNetworks()Ljava/util/List;": () => newArrayList(),
+    "startScan()Z": () => 0,
+    "isScanAlwaysAvailable()Z": () => 0,
+    "is5GHzBandSupported()Z": () => 0,
+    "isP2pSupported()Z": () => 0,
+  },
+});
 class JNetworkRequest extends JObj { caps: number[] = []; transports: number[] = []; }
 class JNetworkRequestBuilder extends JObj { r = new JNetworkRequest(); }
 rt.register({

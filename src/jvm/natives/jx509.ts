@@ -53,7 +53,7 @@ function dnString(rdn: Node, f: Awaited<ReturnType<typeof forge>>): string {
   return attrs.map((a) => `${a.shortName ?? a.type}=${a.value.replace(/([,+"\\<>;])/g, "\\$1")}`).reverse().join(",");
 }
 /** parse one DER certificate */
-async function parseX509(input: Uint8Array): Promise<JX509> {
+export async function parseX509(input: Uint8Array): Promise<JX509> {
   const f = await forge();
   const root = (f.asn1 as any).fromDer(binary(input), { strict: false, decodeBitStrings: false }) as Node;
   const c = rt.make("java/security/cert/X509Certificate") as JX509;

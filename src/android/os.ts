@@ -183,6 +183,9 @@ rt.register({
     },
     "post(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.post(r, 0); },
     "postDelayed(Ljava/lang/Runnable;J)Z": function (this: JHandler, r: unknown, d: bigint) { return this.post(r, Number(d)); },
+    "postDelayed(Ljava/lang/Runnable;Ljava/lang/Object;J)Z": function (this: JHandler, r: unknown, token: unknown, d: bigint) {
+      return this.send(obtain(this, 0, token, 0, 0, r), Number(d));
+    },
     "postAtTime(Ljava/lang/Runnable;J)Z": function (this: JHandler, r: unknown, at: bigint) {
       return this.post(r, Math.max(0, Number(at) - uptimeMillis()));
     },
@@ -337,7 +340,10 @@ rt.register({
 });
 // the process's memory as the one heap the page has: no separate native, dalvik or graphics accounting
 rt.register({
-  name: "android/os/Debug$MemoryInfo", ctor: class extends JObj { dalvikPss = 0; nativePss = 0; otherPss = 0; },
+  name: "android/os/Debug$MemoryInfo", ctor: class extends JObj {
+    dalvikPss = 0; nativePss = 0; otherPss = 0;
+    dalvikSharedDirty = 0; dalvikPrivateDirty = 0; nativeSharedDirty = 0; nativePrivateDirty = 0; otherSharedDirty = 0; otherPrivateDirty = 0;
+  },
   fields: ["dalvikPss", "nativePss", "otherPss"],
   methods: {
     "getTotalPss()I": () => ((performance as any).memory?.usedJSHeapSize ?? 0) / 1024 | 0,
@@ -353,6 +359,12 @@ rt.register({
     "static getNativeHeapSize()J": () => BigInt(((performance as any).memory?.totalJSHeapSize ?? 0) | 0),
     ...stubs(0, "static isDebuggerConnected()Z", "static waitingForDebugger()Z"),
     "static threadCpuTimeNanos()J": () => BigInt(Math.round(performance.now() * 1e6)),
+    // the JS heap is the nearest thing to this process's dalvik footprint; nothing here is shared
+    "static getMemoryInfo(Landroid/os/Debug$MemoryInfo;)V": (info: { dalvikPss: number; dalvikPrivateDirty: number } | null) => {
+      if (!info) throw rt.mkThrowable("java/lang/NullPointerException", "memoryInfo");
+      const kb = (((performance as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1024) | 0;
+      info.dalvikPss = kb; info.dalvikPrivateDirty = kb;
+    },
     ...stubs(0n, "static getNativeHeapFreeSize()J"),
   },
 });

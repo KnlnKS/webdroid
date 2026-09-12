@@ -115,6 +115,7 @@ const SERVICE_CLASS: Record<string, string> = {
   locale: "android/app/LocaleManager",
   dropbox: "android/os/DropBoxManager",
   storage: "android/os/storage/StorageManager",
+  wifi: "android/net/wifi/WifiManager",
 };
 const SERVICE_NAME = new Map(Object.entries(SERVICE_CLASS).map(([n, c]) => [c, n]));
 SERVICE_NAME.set("android/view/WindowManager", "window");
@@ -378,6 +379,10 @@ rt.register({
     "<init>(Landroid/content/Context;I)V": function (this: JContextWrapper, base: JContext, themeId: number) {
       attachBase.call(this, base);
       if (themeId) callSelf(contextMethods, "setTheme(I)V", this, themeId);
+    },
+    "<init>(Landroid/content/Context;Landroid/content/res/Resources$Theme;)V": function (this: JContextWrapper, base: JContext, theme: unknown) {
+      attachBase.call(this, base);
+      if (theme) (this as { ownTheme?: unknown }).ownTheme = theme;
     },
   },
 });
