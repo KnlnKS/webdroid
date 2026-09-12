@@ -248,6 +248,9 @@ fn discover(r: *Region, page: *cpu.Page) bool {
         }
         r.blocks[i].n = n;
     }
+    // The blocks registered after that hold no instructions, so entering one leaves the region:
+    // the flags a predecessor still keeps pending must be settled on that edge as on any exit.
+    for (r.blocks[i..r.nblocks]) |*b| b.exits = true;
     return r.nblocks > 0;
 }
 
