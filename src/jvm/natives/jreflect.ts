@@ -2,7 +2,7 @@
 
 import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
 import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat, splitSig } from "../abi";
-import { vcall, boxInt, box, boxObject, stringHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit, enclosingClass } from "./jlang";
+import { vcall, boxInt, box, boxObject, stringHash, idHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit, enclosingClass } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 
 // ── annotation cache per class: methodIdx (within its dex) → EncAnnotation[]
@@ -201,7 +201,7 @@ rt.register({
     "getActualTypeArguments()[Ljava/lang/reflect/Type;": function (this: JPType) { return jarray(this.args.slice(), "Ljava/lang/reflect/Type;"); },
     "toString()Ljava/lang/String;": function (this: JPType) { return this.key; },
     "hashCode()I": function (this: JPType) { return stringHash(this.key); },
-    "equals(Ljava/lang/Object;)Z": function (this: JPType, o: unknown) { return o instanceof JPType && o.key === this.key ? 1 : 0; },
+    "equals(Ljava/lang/Object;)Z": function (this: JPType, o: unknown) { return typeEquals(this, o) ? 1 : 0; },
   },
 });
 class JTypeVar extends JObj { name = ""; key = ""; decl: unknown = null; bounds: unknown[] = []; }
@@ -209,10 +209,22 @@ class JWildcard extends JObj { upper: unknown[] = []; lower: unknown[] = []; key
 class JGenericArray extends JObj { component: unknown = null; key = ""; }
 const typeKey = (a: any): string => a?.key ?? (a?.ci ? dotName(a.ci.name) : a?.primName ?? a?.arrDesc ?? "?");
 const types = (a: unknown[]) => jarray(a.slice(), "Ljava/lang/reflect/Type;");
-const typeEquality = <T extends { key: string }>(C: new () => T) => ({
+/** Type equality as java.lang.reflect defines it: a type variable is its name AND its generic declaration
+ *  (List's E is not ArrayList's E — Gson's resolve keys a visited map by TypeVariable and would otherwise
+ *  answer the second one unresolved), a parameterized type its raw type and arguments; `key` is the display text */
+function typeEquals(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a instanceof JTypeVar) return b instanceof JTypeVar && a.name === b.name && a.decl === b.decl;
+  if (a instanceof JPType) return b instanceof JPType && a.raw === b.raw && a.args.length === b.args.length && a.args.every((x, i) => typeEquals(x, b.args[i]));
+  if (a instanceof JGenericArray) return b instanceof JGenericArray && typeEquals(a.component, b.component);
+  if (a instanceof JWildcard) return b instanceof JWildcard && a.upper.length === b.upper.length && a.lower.length === b.lower.length
+    && a.upper.every((x, i) => typeEquals(x, b.upper[i])) && a.lower.every((x, i) => typeEquals(x, b.lower[i]));
+  return false;
+}
+const typeEquality = <T extends { key: string }>() => ({
   "toString()Ljava/lang/String;": function (this: T) { return this.key; },
-  "hashCode()I": function (this: T) { return stringHash(this.key); },
-  "equals(Ljava/lang/Object;)Z": function (this: T, o: unknown) { return o instanceof C && o.key === this.key ? 1 : 0; },
+  "hashCode()I": function (this: T) { return stringHash(this.key) ^ (this instanceof JTypeVar && this.decl ? idHash(this.decl) : 0); },
+  "equals(Ljava/lang/Object;)Z": function (this: T, o: unknown) { return typeEquals(this, o) ? 1 : 0; },
 });
 for (const n of ["java/lang/reflect/TypeVariable", "java/lang/reflect/WildcardType", "java/lang/reflect/GenericArrayType"]) rt.register({ name: n, ctor: class extends JObj {}, ifaces: ["java/lang/reflect/Type"] });
 rt.register({
@@ -221,7 +233,7 @@ rt.register({
     "getName()Ljava/lang/String;": function (this: JTypeVar) { return this.name; },
     "getBounds()[Ljava/lang/reflect/Type;": function (this: JTypeVar) { return types(this.bounds.length ? this.bounds : [rt.classFor("java/lang/Object")]); },
     "getGenericDeclaration()Ljava/lang/reflect/GenericDeclaration;": function (this: JTypeVar) { return this.decl; },
-    ...typeEquality(JTypeVar),
+    ...typeEquality<JTypeVar>(),
   },
 });
 rt.register({
@@ -229,14 +241,14 @@ rt.register({
   methods: {
     "getUpperBounds()[Ljava/lang/reflect/Type;": function (this: JWildcard) { return types(this.upper); },
     "getLowerBounds()[Ljava/lang/reflect/Type;": function (this: JWildcard) { return types(this.lower); },
-    ...typeEquality(JWildcard),
+    ...typeEquality<JWildcard>(),
   },
 });
 rt.register({
   name: "webdroid/GenericArray", ctor: JGenericArray, ifaces: ["java/lang/reflect/GenericArrayType", "java/lang/reflect/Type"],
   methods: {
     "getGenericComponentType()Ljava/lang/reflect/Type;": function (this: JGenericArray) { return this.component; },
-    ...typeEquality(JGenericArray),
+    ...typeEquality<JGenericArray>(),
   },
 });
 /** parse one type signature at ref.pos: a JClass, or one of the generic Type objects above */
