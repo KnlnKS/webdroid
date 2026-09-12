@@ -259,6 +259,7 @@ export function probeHost(sym: string, lib: string): number {
   return missingStub(lib + "!" + sym);
 }
 export function hostData(lib: string, sym: string, addr: number): void { libOf(lib).set(sym, addr); }
+export function hostFn(lib: string, sym: string): HostFn | undefined { const v = libs.get(lib)?.get(sym); return typeof v === "function" ? v : undefined; }
 export function hostLibNames(): string[] { return [...libs.keys()]; }
 export function lookupHost(sym: string, lib?: string): number | undefined {
   for (const [ln, m] of libs) {

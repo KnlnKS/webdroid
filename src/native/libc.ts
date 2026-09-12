@@ -3,7 +3,7 @@
 // printf/scanf in printf.ts.
 
 import { mem, NativeFault, guestAt } from "./mem";
-import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, calledMissing } from "./host";
+import { hostLib, hostData, hostFn, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, calledMissing } from "./host";
 import { E, ERRSTR } from "./abi";
 import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
@@ -172,6 +172,8 @@ let r48 = 0x1234abcd330en;
 const A48 = 0x5deece66dn, C48 = 0xbn, M48 = (1n << 48n) - 1n;
 const next48 = () => { r48 = (A48 * r48 + C48) & M48; return Number(r48 >> 17n); };
 
+const TIMERFD_NR64: Record<number, string> = { 85: "timerfd_create", 86: "timerfd_settime", 87: "timerfd_gettime" };
+const TIMERFD_NR32: Record<number, string> = { 350: "timerfd_create", 353: "timerfd_settime", 354: "timerfd_gettime" };
 export function libcInit(): void {
   LAYOUT = PTR === 8 ? LAYOUT64 : LAYOUT32;
   // _ctype_ (257 bytes, index c+1), tzname
@@ -304,6 +306,9 @@ export function libcInit(): void {
       if (nr === (PTR === 8 ? 178 : 224)) return 4242 + cpu.tid;              // gettid
       if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); crypto.getRandomValues(mem.bytes(buf, n)); return n; } // getrandom
       if (nr === (PTR === 8 ? 122 : 241)) return 0;                             // sched_setaffinity: one core, nothing to pin
+      // timerfd_create/settime/gettime: the argument cursor sits past nr, where the wrappers' arguments start
+      const name = (PTR === 8 ? TIMERFD_NR64 : TIMERFD_NR32)[nr];
+      if (name) return hostFn("libc.so", name)!(cpu, a);
       calledMissing.add("syscall " + nr);
       return fail(cpu, E.NOSYS);
     },
