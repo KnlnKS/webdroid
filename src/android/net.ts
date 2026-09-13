@@ -240,6 +240,19 @@ class JUriBuilder extends JObj {
   scheme: string | null = null; opaque: string | null = null; authority: string | null = null;
   path: string | null = null; query: string | null = null; fragment: string | null = null;
 }
+rt.register({ name: "android/content/ContentUris", ctor: class extends JObj {}, methods: {
+  "static parseId(Landroid/net/Uri;)J": async (uri: JUri) => {
+    const segment = await vcall(uri, "getLastPathSegment", "()Ljava/lang/String;");
+    return segment === null ? -1n : vcall(rt.link("java/lang/Long").ctor, "parseLong", "(Ljava/lang/String;)J", segment);
+  },
+  "static appendId(Landroid/net/Uri$Builder;J)Landroid/net/Uri$Builder;": (builder: JUriBuilder, id: bigint) =>
+    vcall(builder, "appendEncodedPath", "(Ljava/lang/String;)Landroid/net/Uri$Builder;", String(id)),
+  "static withAppendedId(Landroid/net/Uri;J)Landroid/net/Uri;": async (uri: JUri, id: bigint) => {
+    const builder = await vcall(uri, "buildUpon", "()Landroid/net/Uri$Builder;");
+    await vcall(builder, "appendEncodedPath", "(Ljava/lang/String;)Landroid/net/Uri$Builder;", String(id));
+    return vcall(builder, "build", "()Landroid/net/Uri;");
+  },
+} });
 function uriBuilderFrom(u: JUri): JUriBuilder {
   const p = uriParts(u), b = new JUriBuilder();
   b.scheme = p.scheme;
@@ -388,11 +401,14 @@ rt.register({
     "isP2pSupported()Z": () => 0,
   },
 });
-class JNetworkRequest extends JObj { caps: number[] = []; transports: number[] = []; }
+class JNetworkRequest extends JObj { caps: number[] = []; transports: number[] = []; specifier: unknown = null; }
 class JNetworkRequestBuilder extends JObj { r = new JNetworkRequest(); }
 rt.register({
   name: "android/net/NetworkRequest", ctor: JNetworkRequest,
   methods: {
+    "getTransportTypes()[I": function (this: JNetworkRequest) { return Int32Array.from(this.transports); },
+    "getCapabilities()[I": function (this: JNetworkRequest) { return Int32Array.from(this.caps); },
+    "getNetworkSpecifier()Landroid/net/NetworkSpecifier;": function (this: JNetworkRequest) { return this.specifier; },
     "hasCapability(I)Z": function (this: JNetworkRequest, c: number) { return this.caps.includes(c) ? 1 : 0; },
     "hasTransport(I)Z": function (this: JNetworkRequest, t: number) { return this.transports.includes(t) ? 1 : 0; },
   },
@@ -401,14 +417,15 @@ rt.register({
   name: "android/net/NetworkRequest$Builder", ctor: JNetworkRequestBuilder,
   methods: {
     "<init>()V": function () {},
-    "addCapability(I)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, c: number) { this.r.caps.push(c); return this; },
+    "setNetworkSpecifier(Landroid/net/NetworkSpecifier;)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, specifier: unknown) { this.r.specifier = specifier; return this; },
+    "addCapability(I)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, c: number) { if (!this.r.caps.includes(c)) this.r.caps.push(c); return this; },
     "removeCapability(I)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, c: number) {
       this.r.caps = this.r.caps.filter((x) => x !== c); return this;
     },
-    "addTransportType(I)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, t: number) { this.r.transports.push(t); return this; },
+    "addTransportType(I)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, t: number) { if (!this.r.transports.includes(t)) this.r.transports.push(t); return this; },
     "build()Landroid/net/NetworkRequest;": function (this: JNetworkRequestBuilder) {
-      const r = new JNetworkRequest();
-      r.caps = this.r.caps.slice(); r.transports = this.r.transports.slice();
+      const r = new JNetworkRequest(); r.specifier = this.r.specifier;
+      r.caps = this.r.caps.slice().sort((a, b) => a - b); r.transports = this.r.transports.slice().sort((a, b) => a - b);
       return r;
     },
   },

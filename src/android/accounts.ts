@@ -1,6 +1,6 @@
 import { JObj, rt, type NativeSpec } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { defineException, stringHash, vcall, curThread, mainThread } from "../jvm/natives/jlang";
+import { defineException, stringHash, vcall, curThread, mainThread, boxInt, newObj } from "../jvm/natives/jlang";
 import { appHost } from "./apphost";
 import { onMain } from "./mainloop";
 import { PROCESS_UID, bundleBox, bundlePrimitive, type JHandler, type JBundle } from "./os";
@@ -227,6 +227,14 @@ const methods: NativeSpec["methods"] = {
   [`getAccountVisibility(${ACC}${S})I`]: (a: JAccount, pkg: string) => {
     const stored = find(a);
     return stored ? packages.get(stored.owner)?.uid === packages.get(pkg)?.uid ? 1 : stored.visibility[pkg] ?? 4 : 0;
+  },
+  [`getAccountsAndVisibilityForPackage(${S}${S})Ljava/util/Map;`]: async (pkg: string, type: string | null) => {
+    const result = await newObj("java/util/HashMap");
+    for (const account of accounts()) if (owns(account) && (type === null || account.type === type)) {
+      const visibility = packages.get(account.owner)?.uid === packages.get(pkg)?.uid ? 1 : account.visibility[pkg] ?? 4;
+      await vcall(result, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", toJ(account), boxInt(visibility));
+    }
+    return result;
   },
   [`notifyAccountAuthenticated(${ACC})Z`]: (a: JAccount) => +!!find(a),
 };
