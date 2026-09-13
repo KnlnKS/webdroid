@@ -88,6 +88,7 @@ rt.register({
 
 // ── the frame layer (shell-owned) and the per-frame sweep
 let layer: HTMLElement | null = null;
+let layerObserver: ResizeObserver | null = null;
 let proxyReady: Promise<void> | null = null;
 function webProxy(): Promise<void> {
   return proxyReady ??= (async () => {
@@ -98,7 +99,14 @@ function webProxy(): Promise<void> {
   })();
 }
 /** the shell's <div> that sits exactly over the canvas; without one every WebView stays inert */
-export function setWebLayer(el: HTMLElement) { layer = el; }
+export function setWebLayer(el: HTMLElement) {
+  layerObserver?.disconnect();
+  layer = el;
+  layerObserver = new ResizeObserver(([entry]) => {
+    el.style.setProperty("--wd-web-scale", String(entry.contentRect.width * device.density / device.width));
+  });
+  layerObserver.observe(el);
+}
 let frame = 1;
 const live = new Set<JWebView>();
 /** after each canvas draw pass: show the WebViews that pass painted, at their on-screen rect */
@@ -237,7 +245,7 @@ export class JWebView extends JViewGroup {
   frame(): HTMLIFrameElement | null {
     if (this.el || !layer) return this.el;
     const el = this.el = document.createElement("iframe");
-    el.style.cssText = "position:absolute;border:0;pointer-events:auto";
+    el.style.cssText = "position:absolute;border:0;pointer-events:auto;transform-origin:top left;transform:scale(var(--wd-web-scale,1))";
     el.hidden = true;
     (el as unknown as { __wdIfaces: unknown }).__wdIfaces = this.ifaces;
     el.addEventListener("load", () => this.onLoad());
@@ -378,10 +386,9 @@ export class JWebView extends JViewGroup {
     if (r <= l || b <= t) return false;
     if (l !== this.x0 || t !== this.y0 || r !== this.x1 || b !== this.y1) {
       this.x0 = l; this.y0 = t; this.x1 = r; this.y1 = b;
-      // percentages: the canvas is CSS-scaled and the layer scales with it
       const s = this.el!.style;
       s.left = l / device.width * 100 + "%"; s.top = t / device.height * 100 + "%";
-      s.width = (r - l) / device.width * 100 + "%"; s.height = (b - t) / device.height * 100 + "%";
+      s.width = (r - l) / device.density + "px"; s.height = (b - t) / device.density + "px";
     }
     return true;
   }
