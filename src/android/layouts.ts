@@ -5,7 +5,9 @@ import {
   requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState, viewConstructors
 } from "./view";
 import { type NativeSpec, rt, callSelf, noops } from "../jvm/runtime";
-import { type JAttrSet, obtainStyled, rvInt, rvFloat, onFramework } from "./res";
+import { type JAttrSet, obtainStyled, rvInt, rvFloat, rvDimen, onFramework } from "./res";
+import { type JDrawable, loadDrawableRV, drawChild } from "./drawable";
+import type { JCanvas } from "./graphics";
 import { gravityH, gravityV, G } from "./gravity";
 import { type JMotionEvent, trackVelocity, restVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
 import { device } from "../shell/config";
@@ -111,6 +113,13 @@ export class JLinearLayout extends JViewGroup {
   orientation = 0; // 0 horizontal, 1 vertical
   gravity = 48 | G.START;
   weightSum = 0;
+  showDividers = 0; dividerPadding = 0;
+  divider: JDrawable | null = null;
+  dividerW = 0; dividerH = 0;
+  dividerBefore(index: number): boolean { return !!(this.showDividers & (index === 0 ? 1 : 2)); }
+  dividerSpace(count: number): number {
+    return count ? ((this.showDividers & 1 ? 1 : 0) + (this.showDividers & 2 ? count - 1 : 0) + (this.showDividers & 4 ? 1 : 0)) * (this.orientation === 1 ? this.dividerH : this.dividerW) : 0;
+  }
 }
 function mainMargin(c: JView, vertical: boolean): number {
   const m = c.lp instanceof JMarginLP ? c.lp : null;
@@ -124,18 +133,37 @@ export const linearMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JLinearLayout, c: unknown, set: JAttrSet | null) {
     await initViewFromCtx(this, c, set);
     if (set && this.jres) {
-      const ta = obtainStyled(this.jres, this.theme, set, [AID("orientation"), AID("gravity"), AID("weightSum")], 0, 0);
+      const ta = obtainStyled(this.jres, this.theme, set, [AID("orientation"), AID("gravity"), AID("weightSum"), AID("showDividers"), AID("dividerPadding"), AID("divider")], 0, 0);
       if (ta.vals[0]) this.orientation = rvInt(this.jres, ta.vals[0], 0);
       if (ta.vals[1]) this.gravity = rvInt(this.jres, ta.vals[1], this.gravity);
       if (ta.vals[2]) this.weightSum = rvFloat(this.jres, ta.vals[2], 0);
+      if (ta.vals[3]) this.showDividers = rvInt(this.jres, ta.vals[3], 0);
+      if (ta.vals[4]) this.dividerPadding = Math.round(rvDimen(this.jres, ta.vals[4]));
+      if (ta.vals[5]) await callSelf(linearMethods, "setDividerDrawable(Landroid/graphics/drawable/Drawable;)V", this, await loadDrawableRV(this.jres, ta.vals[5], this.theme));
     }
   },
   "setOrientation(I)V": function (this: JLinearLayout, o: number) { this.orientation = o; requestLayout(this); },
   "getOrientation()I": function (this: JLinearLayout) { return this.orientation; },
   "setGravity(I)V": function (this: JLinearLayout, g: number) { this.gravity = g; requestLayout(this); },
   "setWeightSum(F)V": function (this: JLinearLayout, w: number) { this.weightSum = w; },
-  ...noops("setShowDividers(I)V", "setDividerDrawable(Landroid/graphics/drawable/Drawable;)V",
-    "setBaselineAligned(Z)V"),
+  "setShowDividers(I)V": function (this: JLinearLayout, flags: number) { if (this.showDividers !== flags) { this.showDividers = flags; requestLayout(this); } },
+  "getShowDividers()I": function (this: JLinearLayout) { return this.showDividers; },
+  "setDividerPadding(I)V": function (this: JLinearLayout, padding: number) { this.dividerPadding = padding; invalidate(this); },
+  "getDividerPadding()I": function (this: JLinearLayout) { return this.dividerPadding; },
+  "getDividerDrawable()Landroid/graphics/drawable/Drawable;": function (this: JLinearLayout) { return this.divider; },
+  "getDividerWidth()I": function (this: JLinearLayout) { return this.dividerW; },
+  "setDividerDrawable(Landroid/graphics/drawable/Drawable;)V": async function (this: JLinearLayout, divider: JDrawable | null) {
+    if (this.divider === divider) return;
+    this.divider = divider;
+    this.dividerW = divider ? await vcall(divider, "getIntrinsicWidth", "()I") : 0;
+    this.dividerH = divider ? await vcall(divider, "getIntrinsicHeight", "()I") : 0;
+    requestLayout(this);
+  },
+  "hasDividerBeforeChildAt(I)Z": function (this: JLinearLayout, index: number) {
+    if (index === this.children.length) return +(!!(this.showDividers & 4));
+    return +this.dividerBefore(this.children.slice(0, index).filter(c => c.visibility !== 8).length);
+  },
+  ...noops("setBaselineAligned(Z)V"),
   "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": function (this: JLinearLayout) {
     const lp = new JLinearLP();
     if (this.orientation === 1) { lp.width = MATCH_PARENT; lp.height = WRAP_CONTENT; }
@@ -154,8 +182,11 @@ export const linearMethods: NativeSpec["methods"] = {
     const mainPad = vertical ? this.padT + this.padB : this.padL + this.padR;
     const crossPad = vertical ? this.padL + this.padR : this.padT + this.padB;
     const kids = this.children.filter((c) => c.visibility !== 8);
+    const dividerSize = vertical ? this.dividerH : this.dividerW;
     let totalMain = 0, maxCross = 0, totalWeight = 0, consumed = 0, skipped = false;
-    for (const c of kids) {
+    for (let i = 0; i < kids.length; i++) {
+      const c = kids[i];
+      if (this.dividerBefore(i)) totalMain += dividerSize;
       const mMain = mainMargin(c, vertical), mCross = crossMargin(c, vertical);
       const weight = c.lp instanceof JLinearLP ? c.lp.weight : 0;
       const excessOnly = weight > 0 && (vertical ? c.lp!.height : c.lp!.width) === 0;
@@ -171,11 +202,12 @@ export const linearMethods: NativeSpec["methods"] = {
       totalMain += (vertical ? c.measuredH : c.measuredW) + mMain;
       maxCross = Math.max(maxCross, (vertical ? c.measuredW : c.measuredH) + mCross);
     }
+    if (kids.length && this.showDividers & 4) totalMain += dividerSize;
     const size = resolveSizeAndState(totalMain + mainPad, mainSpec);
     let excess = size - totalMain - mainPad + consumed;
     if (skipped || (excess !== 0 && totalWeight > 0)) {
       let wsum = this.weightSum > 0 ? this.weightSum : totalWeight;
-      totalMain = 0;
+      totalMain = this.dividerSpace(kids.length);
       for (const c of kids) {
         const mMain = mainMargin(c, vertical), mCross = crossMargin(c, vertical);
         const weight = c.lp instanceof JLinearLP ? c.lp.weight : 0;
@@ -208,7 +240,7 @@ export const linearMethods: NativeSpec["methods"] = {
   "onLayout(ZIIII)V": async function (this: JLinearLayout) {
     const vertical = this.orientation === 1;
     const kids = this.children.filter((c) => c.visibility !== 8);
-    let used = 0;
+    let used = this.dividerSpace(kids.length);
     for (const c of kids) used += (vertical ? c.measuredH : c.measuredW) + mainMargin(c, vertical);
     const gm = this.gravity;
     let pos = vertical
@@ -216,7 +248,9 @@ export const linearMethods: NativeSpec["methods"] = {
         : gravityV(gm) === 80 ? this.height() - this.padB - used : this.padT)
       : (gravityH(gm) === 1 ? this.padL + ((this.width() - this.padL - this.padR - used) >> 1)
         : gravityH(gm) === 5 ? this.width() - this.padR - used : this.padL);
-    for (const c of kids) {
+    for (let i = 0; i < kids.length; i++) {
+      const c = kids[i];
+      if (this.dividerBefore(i)) pos += vertical ? this.dividerH : this.dividerW;
       const lp = c.lp instanceof JLinearLP ? c.lp : null;
       const mlp = c.lp instanceof JMarginLP ? c.lp : null;
       const g = lp && lp.gravity !== -1 ? lp.gravity : this.gravity;
@@ -238,11 +272,32 @@ export const linearMethods: NativeSpec["methods"] = {
       }
     }
   },
+  "onDraw(Landroid/graphics/Canvas;)V": async function (this: JLinearLayout, canvas: JCanvas) {
+    if (!this.divider || !this.showDividers) return;
+    const vertical = this.orientation === 1, kids = this.children.filter(c => c.visibility !== 8);
+    const size = vertical ? this.dividerH : this.dividerW, d = this.divider;
+    const draw = async (position: number) => {
+      await vcall(d, "setBounds", "(IIII)V", vertical ? this.padL + this.dividerPadding : position,
+        vertical ? position : this.padT + this.dividerPadding,
+        vertical ? this.width() - this.padR - this.dividerPadding : position + size,
+        vertical ? position + size : this.height() - this.padB - this.dividerPadding);
+      await drawChild(d, canvas);
+    };
+    for (let i = 0; i < kids.length; i++) if (this.dividerBefore(i)) {
+      const c = kids[i], lp = c.lp instanceof JMarginLP ? c.lp : null;
+      await draw(vertical ? c.top - (lp?.marginT ?? 0) - size : c.left - (lp?.marginL ?? 0) - size);
+    }
+    if (this.showDividers & 4) {
+      const c = kids.at(-1), lp = c?.lp instanceof JMarginLP ? c.lp : null;
+      await draw(c ? vertical ? c.bottom + (lp?.marginB ?? 0) : c.right + (lp?.marginR ?? 0)
+        : vertical ? this.height() - this.padB - size : this.width() - this.padR - size);
+    }
+  },
 };
 rt.register({
   name: "android/widget/LinearLayout", ctor: JLinearLayout, sup: "android/view/ViewGroup",
   clinit: () => { rt.link("android/widget/LinearLayout$LayoutParams"); },
-  statics: { HORIZONTAL: 0, VERTICAL: 1, SHOW_DIVIDER_NONE: 0, SHOW_DIVIDER_MIDDLE: 2 },
+  statics: { HORIZONTAL: 0, VERTICAL: 1, SHOW_DIVIDER_NONE: 0, SHOW_DIVIDER_BEGINNING: 1, SHOW_DIVIDER_MIDDLE: 2, SHOW_DIVIDER_END: 4 },
   methods: linearMethods,
 });
 rt.register({
