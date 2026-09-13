@@ -250,6 +250,16 @@ rt.register({
       return old;
     },
     "evictAll()V": function (this: JLruCache) { this.m.clear(); },
+    "resize(I)V": function (this: JLruCache, n: number) {
+      if (n <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "maxSize <= 0");
+      this.max = n;
+      while (this.m.size > n) this.m.delete(this.m.keys().next().value);
+    },
+    "snapshot()Ljava/util/Map;": async function (this: JLruCache) {
+      const result = rt.make("java/util/LinkedHashMap");
+      for (const [key, value] of this.m) await vcall(result, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value);
+      return result;
+    },
     "size()I": function (this: JLruCache) { return this.m.size; },
     "maxSize()I": function (this: JLruCache) { return this.max; },
   },
