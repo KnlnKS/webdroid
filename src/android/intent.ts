@@ -209,7 +209,7 @@ const intentMethods: NativeSpec["methods"] = {
 for (const [t, d, dflt] of [["String", "Ljava/lang/String;", null], ["Int", "I", 0], ["Long", "J", 0n],
   ["Boolean", "Z", 0], ["Float", "F", 0], ["Double", "D", 0], ["CharSequence", "Ljava/lang/CharSequence;", null],
   ["Parcelable", "Landroid/os/Parcelable;", null], ["Serializable", "Ljava/io/Serializable;", null],
-  ["Bundle", "Landroid/os/Bundle;", null], ["StringArrayList", "Ljava/util/ArrayList;", null],
+  ["Bundle", "Landroid/os/Bundle;", null],
   ["IntArray", "[I", null], ["ByteArray", "[B", null], ["StringArray", "[Ljava/lang/String;", null]] as const) {
   intentMethods[`putExtra(Ljava/lang/String;${d})Landroid/content/Intent;`] = function (this: JIntent, k: string, v: unknown) {
     this.extras.map.set(k, bundleBox(v, d));
@@ -230,6 +230,10 @@ for (const [t, d, dflt] of [["String", "Ljava/lang/String;", null], ["Int", "I",
       return this.extras.map.get(k) ?? null;
     };
   }
+}
+for (const type of ["String", "Integer", "CharSequence", "Parcelable"]) {
+  intentMethods[`put${type}ArrayListExtra(Ljava/lang/String;Ljava/util/ArrayList;)Landroid/content/Intent;`] = function (this: JIntent, key: string, value: unknown) { this.extras.map.set(key, value); return this; };
+  intentMethods[`get${type}ArrayListExtra(Ljava/lang/String;)Ljava/util/ArrayList;`] = function (this: JIntent, key: string) { return this.extras.map.get(key) ?? null; };
 }
 class JShortcutIconResource extends JObj { packageName = ""; resourceName = ""; }
 rt.register({
