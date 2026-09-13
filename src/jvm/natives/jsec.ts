@@ -145,6 +145,9 @@ type Digest = (data: Uint8Array) => Uint8Array;
 const DIGESTS = new Map<string, [Digest, number]>([
   ["MD5", [md5, 16]], ["SHA-1", [sha1, 20]], ["SHA1", [sha1, 20]], ["SHA", [sha1, 20]], ["SHA-256", [sha256, 32]], ["SHA256", [sha256, 32]],
 ]);
+export function digestBytes(algorithm: string, data: Uint8Array): Uint8Array | null {
+  return DIGESTS.get(algorithm.toUpperCase())?.[0](data) ?? null;
+}
 class JMessageDigest extends JObj {
   algo = "";
   fn: Digest = sha256;

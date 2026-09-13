@@ -21,6 +21,7 @@ import { matchesIntentFilter } from "./intent-filter";
 import { csText } from "./text";
 import type { JActivity } from "./app";
 import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, type ComponentKind } from "./packages";
+import { digestBytes } from "../jvm/natives/jsec";
 
 class JFeatureInfo extends JObj {
   name: string | null = null;   // null on the glEsVersion entry, as AOSP leaves it
@@ -549,6 +550,55 @@ rt.register({
     ...stubs(0, "getPackageSource()I", "describeContents()I"),
   },
 });
+class JApkChecksum extends JObj {
+  splitName: string | null = null;
+  type = 0;
+  value = new Int8Array(0);
+  installerPackageName: string | null = null;
+}
+rt.register({
+  name: "android/content/pm/Checksum", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable"],
+  statics: {
+    TYPE_WHOLE_MERKLE_ROOT_4K_SHA256: 1, TYPE_WHOLE_MD5: 2, TYPE_WHOLE_SHA1: 4, TYPE_WHOLE_SHA256: 8,
+    TYPE_WHOLE_SHA512: 16, TYPE_PARTIAL_MERKLE_ROOT_1M_SHA256: 32, TYPE_PARTIAL_MERKLE_ROOT_1M_SHA512: 64,
+  },
+});
+rt.register({
+  name: "android/content/pm/ApkChecksum", ctor: JApkChecksum, ifaces: ["android/os/Parcelable"],
+  methods: {
+    "getSplitName()Ljava/lang/String;": function (this: JApkChecksum) { return this.splitName; },
+    "getType()I": function (this: JApkChecksum) { return this.type; },
+    "getValue()[B": function (this: JApkChecksum) { return this.value; },
+    "getInstallerPackageName()Ljava/lang/String;": function (this: JApkChecksum) { return this.installerPackageName; },
+    "getInstallerCertificate()Ljava/security/cert/Certificate;": () => null,
+    "describeContents()I": () => 0,
+  },
+});
+rt.markers("android/content/pm/PackageManager$OnChecksumsReadyListener");
+
+const wholeChecksumAlgorithms: readonly [number, string][] = [[2, "MD5"], [4, "SHA-1"], [8, "SHA-256"]];
+async function apkChecksums(pkg: string, includeSplits: boolean, required: number): Promise<JList> {
+  if (!packages.has(pkg)) await installedPackage(pkg);
+  const record = packages.get(pkg);
+  if (!record) throw nameNotFound(pkg);
+  const files: [string | null, string][] = [[null, record.path]];
+  if (includeSplits && pkg === appHost?.pkg) files.push(...appHost.splits.map((name): [string, string] => [name, apkPath(name)]));
+  const result = newArrayList();
+  for (const [splitName, path] of files) {
+    const bytes = await vfs.readFile(path);
+    if (!bytes) continue;
+    for (const [type, algorithm] of wholeChecksumAlgorithms) {
+      if (!(required & type)) continue;
+      const value = digestBytes(algorithm, bytes);
+      if (value) result.a.push(Object.assign(new JApkChecksum(), { splitName, type, value: new Int8Array(value) }));
+    }
+    if (required & 16) {
+      const value = new Uint8Array(await crypto.subtle.digest("SHA-512", bytes.slice()));
+      result.a.push(Object.assign(new JApkChecksum(), { splitName, type: 16, value: new Int8Array(value) }));
+    }
+  }
+  return result;
+}
 class JPackageManager extends JObj {}
 let cachedPM: JPackageManager | null = null;
 export function getPM(): JPackageManager {
@@ -566,6 +616,12 @@ rt.register({
     FEATURE_LOCATION_GPS: "android.hardware.location.gps", FEATURE_LOCATION_NETWORK: "android.hardware.location.network", FEATURE_MICROPHONE: "android.hardware.microphone", FEATURE_WIFI: "android.hardware.wifi", FEATURE_BLUETOOTH: "android.hardware.bluetooth",
     FEATURE_VR_MODE: "android.software.vr.mode", FEATURE_TELEPHONY: "android.hardware.telephony", FEATURE_LEANBACK: "android.software.leanback" },
   methods: {
+    "requestChecksums(Ljava/lang/String;ZILjava/util/List;Landroid/content/pm/PackageManager$OnChecksumsReadyListener;)V":
+      async (pkg: string | null, includeSplits: number, required: number, trustedInstallers: unknown, listener: unknown) => {
+        if (pkg === null || trustedInstallers === null || listener === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+        const checksums = await apkChecksums(pkg, includeSplits !== 0, required);
+        await vcall(listener, "onChecksumsReady", "(Ljava/util/List;)V", checksums);
+      },
     "getProviderInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ProviderInfo;": (comp: JComponentName, flags: number) => {
       const [cls, node, owner] = lookupComponent(comp, "provider", flags);
       return providerInfo(cls, comp.pkg, authoritiesOf(node).join(";"), node, flags, owner);
