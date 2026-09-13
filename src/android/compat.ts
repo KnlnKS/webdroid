@@ -603,6 +603,34 @@ rt.register({
 });
 rt.markers("android/view/GestureDetector$OnGestureListener", "android/view/GestureDetector$OnDoubleTapListener");
 
+class JScaleGestureDetector extends JObj {
+  listener: unknown = null;
+}
+rt.register({
+  name: "android/view/ScaleGestureDetector", ctor: JScaleGestureDetector,
+  methods: {
+    "<init>(Landroid/content/Context;Landroid/view/ScaleGestureDetector$OnScaleGestureListener;)V":
+      function (this: JScaleGestureDetector, _context: unknown, listener: unknown) { this.listener = listener; },
+    "<init>(Landroid/content/Context;Landroid/view/ScaleGestureDetector$OnScaleGestureListener;Landroid/os/Handler;)V":
+      function (this: JScaleGestureDetector, _context: unknown, listener: unknown) { this.listener = listener; },
+    "onTouchEvent(Landroid/view/MotionEvent;)Z": () => 0,
+    ...stubs(0, "isInProgress()Z", "getFocusX()F", "getFocusY()F", "getCurrentSpan()F",
+      "getCurrentSpanX()F", "getCurrentSpanY()F", "getPreviousSpan()F", "getPreviousSpanX()F",
+      "getPreviousSpanY()F", "getTimeDelta()J"),
+    ...stubs(1, "getScaleFactor()F"),
+  },
+});
+rt.register({
+  name: "android/view/ScaleGestureDetector$SimpleOnScaleGestureListener", ctor: class extends JObj {},
+  ifaces: ["android/view/ScaleGestureDetector$OnScaleGestureListener"],
+  methods: {
+    ...noops("<init>()V", "onScaleEnd(Landroid/view/ScaleGestureDetector;)V"),
+    ...stubs(0, "onScale(Landroid/view/ScaleGestureDetector;)Z"),
+    ...stubs(1, "onScaleBegin(Landroid/view/ScaleGestureDetector;)Z"),
+  },
+});
+rt.markers("android/view/ScaleGestureDetector$OnScaleGestureListener");
+
 // ── GestureStore/GestureLibrary — stubbed (legacy, sometimes touched by old ad SDKs)
 rt.register({
   name: "android/gesture/GestureStore", ctor: class extends JObj {},

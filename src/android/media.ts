@@ -583,6 +583,7 @@ rt.register({
     "getName(Landroid/content/Context;)Ljava/lang/CharSequence;": () => "Phone",
     "getSupportedTypes()I": () => 3,
     "getPlaybackType()I": () => 0,
+    "getDeviceType()I": () => 0,
     "getPlaybackStream()I": () => 3,
     "getVolume()I": () => 15,
     "getVolumeMax()I": () => 15,

@@ -105,6 +105,7 @@ rt.register({
     },
     "getLayoutDirection()I": function (this: JConfiguration) { return (this.screenLayout & 0xc0) === 0x80 ? 1 : 0; },
     "isNightModeActive()Z": function (this: JConfiguration) { return (this.uiMode & 0x30) === 0x20 ? 1 : 0; },
+    "isScreenWideColorGamut()Z": function (this: JConfiguration) { return (this.colorMode & 3) === 2 ? 1 : 0; },
   },
 });
 // API 33: no per-app locale override is ever set here, so the app's locales are the system's
