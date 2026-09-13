@@ -39,10 +39,18 @@ export function put<O extends object>(tbl: (O | null)[], obj: O | null): number 
   return tbl.length - 1;
 }
 
-function bytesFrom(buf: JBuffer | null): Uint8Array | null {
+function bytesFrom(buf: JBuffer | null): Uint8Array<ArrayBuffer> | null {
   if (!buf) return null;
   const v = bufferView(buf);
-  return new Uint8Array(v.ab, v.byteFromPos);
+  return new Uint8Array(v.ab, v.byteFromPos, (buf.lim - buf.pos) * 2 ** buf.elemShift);
+}
+
+function getIntegers(name: number, out: Int32Array, off: number): void {
+  const v = gl?.getParameter(name);
+  if (v && typeof v === "object") {
+    if ("length" in v) { out.set(v as ArrayLike<number>, off); return; }
+    out[off] = T.ids.get(v) ?? 0;
+  } else out[off] = Number(v ?? 0);
 }
 
 // glGetActiveAttrib/glGetActiveUniform share everything but the query; name is NUL-terminated
@@ -98,6 +106,8 @@ rt.register({
     "static glEnable(I)V": (cap: number) => gl?.enable(cap),
     "static glDisable(I)V": (cap: number) => gl?.disable(cap),
     "static glBlendFunc(II)V": (s: number, d: number) => gl?.blendFunc(s, d),
+    "static glBlendFuncSeparate(IIII)V": (sr: number, dr: number, sa: number, da: number) => gl?.blendFuncSeparate(sr, dr, sa, da),
+    "static glPolygonOffset(FF)V": (factor: number, units: number) => gl?.polygonOffset(factor, units),
     "static glActiveTexture(I)V": (t: number) => gl?.activeTexture(t),
     "static glPixelStorei(II)V": (name: number, p: number) => gl?.pixelStorei(name, p),
     "static glCreateProgram()I": () => put(T.programs, gl?.createProgram() ?? null),
@@ -127,7 +137,15 @@ rt.register({
     },
     "static glUniform1i(II)V": (loc: number, v: number) => { if (loc >= 0) gl?.uniform1i(T.uniforms[loc]!, v); },
     "static glUniform1f(IF)V": (loc: number, v: number) => { if (loc >= 0) gl?.uniform1f(T.uniforms[loc]!, v); },
+    "static glUniform2f(IFF)V": (loc: number, x: number, y: number) => { if (loc >= 0) gl?.uniform2f(T.uniforms[loc]!, x, y); },
+    "static glUniform3f(IFFF)V": (loc: number, x: number, y: number, z: number) => { if (loc >= 0) gl?.uniform3f(T.uniforms[loc]!, x, y, z); },
     "static glUniform4f(IFFFF)V": (loc: number, a: number, b: number, c: number, d: number) => { if (loc >= 0) gl?.uniform4f(T.uniforms[loc]!, a, b, c, d); },
+    "static glUniform2fv(II[FI)V": (loc: number, n: number, values: Float32Array, off: number) => { if (loc >= 0) gl?.uniform2fv(T.uniforms[loc]!, values.subarray(off, off + n * 2)); },
+    "static glUniform3fv(II[FI)V": (loc: number, n: number, values: Float32Array, off: number) => { if (loc >= 0) gl?.uniform3fv(T.uniforms[loc]!, values.subarray(off, off + n * 3)); },
+    "static glUniform4fv(II[FI)V": (loc: number, n: number, values: Float32Array, off: number) => { if (loc >= 0) gl?.uniform4fv(T.uniforms[loc]!, values.subarray(off, off + n * 4)); },
+    "static glUniform2iv(II[II)V": (loc: number, n: number, values: Int32Array, off: number) => { if (loc >= 0) gl?.uniform2iv(T.uniforms[loc]!, values.subarray(off, off + n * 2)); },
+    "static glUniform4iv(II[II)V": (loc: number, n: number, values: Int32Array, off: number) => { if (loc >= 0) gl?.uniform4iv(T.uniforms[loc]!, values.subarray(off, off + n * 4)); },
+    "static glUniformMatrix3fv(IIZ[FI)V": (loc: number, n: number, transpose: number, values: Float32Array, off: number) => { if (loc >= 0) gl?.uniformMatrix3fv(T.uniforms[loc]!, !!transpose, values.subarray(off, off + n * 9)); },
     "static glUniformMatrix4fv(IIZ[FI)V": (loc: number, count: number, transpose: number, mat: Float32Array, off: number) => {
       if (loc >= 0) gl?.uniformMatrix4fv(T.uniforms[loc]!, !!transpose, mat.subarray(off, off + count * 16));
     },
@@ -180,7 +198,27 @@ rt.register({
       const b = bytesFrom(data);
       if (b) gl?.texSubImage2D(target, level, xo, yo, w, h, format, type, b);
     },
+    "static glCopyTexSubImage2D(IIIIIIII)V": (target: number, level: number, xo: number, yo: number, x: number, y: number, w: number, h: number) => gl?.copyTexSubImage2D(target, level, xo, yo, x, y, w, h),
+    "static glGenFramebuffers(I[II)V": (n: number, out: Int32Array, off: number) => {
+      for (let i = 0; i < n; i++) out[off + i] = put(T.fbos, gl?.createFramebuffer() ?? null);
+    },
+    "static glBindFramebuffer(II)V": (target: number, handle: number) => gl?.bindFramebuffer(target, T.fbos[handle] ?? null),
+    "static glFramebufferTexture2D(IIIII)V": (target: number, attachment: number, texTarget: number, texture: number, level: number) => gl?.framebufferTexture2D(target, attachment, texTarget, T.textures[texture] ?? null, level),
+    "static glDeleteFramebuffers(I[II)V": (n: number, arr: Int32Array, off: number) => {
+      for (let i = 0; i < n; i++) { const h = arr[off + i], o = T.fbos[h]; if (o) { gl?.deleteFramebuffer(o); T.fbos[h] = null; } }
+    },
+    "static glReadPixels(IIIIIILjava/nio/Buffer;)V": (x: number, y: number, w: number, h: number, format: number, type: number, data: JBuffer) => {
+      const b = bytesFrom(data);
+      if (!b) return;
+      const C = type === 0x1406 ? Float32Array : type === 0x1405 ? Uint32Array : type === 0x1404 ? Int32Array
+        : type === 0x1400 ? Int8Array : type === 0x1401 ? Uint8Array : type === 0x1402 ? Int16Array : Uint16Array;
+      const aligned = b.byteOffset % C.BYTES_PER_ELEMENT === 0;
+      const pixels = aligned ? new C(b.buffer, b.byteOffset, Math.floor(b.byteLength / C.BYTES_PER_ELEMENT)) : new C(b.slice().buffer, 0, Math.floor(b.byteLength / C.BYTES_PER_ELEMENT));
+      gl?.readPixels(x, y, w, h, format, type, pixels);
+      if (!aligned) b.set(new Uint8Array(pixels.buffer));
+    },
     "static glDrawArrays(III)V": (mode: number, first: number, count: number) => gl?.drawArrays(mode, first, count),
+    "static glDrawElements(IIII)V": (mode: number, count: number, type: number, offset: number) => gl?.drawElements(mode, count, type, offset),
     "static glDrawElements(IIILjava/nio/Buffer;)V": (mode: number, count: number, type: number, indices: JBuffer | null) => {
       const b = bytesFrom(indices);
       if (b) {
@@ -194,6 +232,7 @@ rt.register({
     },
     "static glEnableVertexAttribArray(I)V": (idx: number) => gl?.enableVertexAttribArray(idx),
     "static glDisableVertexAttribArray(I)V": (idx: number) => gl?.disableVertexAttribArray(idx),
+    "static glVertexAttrib4fv(I[FI)V": (idx: number, values: Float32Array, off: number) => gl?.vertexAttrib4fv(idx, values.subarray(off, off + 4)),
     "static glVertexAttribPointer(IIIZILjava/nio/Buffer;)V":
       (idx: number, size: number, type: number, normalized: number, stride: number, buf: JBuffer | null) => {
         // client-side arrays: upload to a transient buffer (AndEngine mostly uses VBOs → buf null)
@@ -218,15 +257,10 @@ rt.register({
         default: return "";
       }
     },
-    "static glGetIntegerv(I[II)V": (name: number, out: Int32Array, off: number) => {
-      const v = gl?.getParameter(name);
-      if (typeof v === "number") out[off] = v;
-      else if (v && "length" in v) for (let i = 0; i < (v as ArrayLike<number>).length; i++) out[off + i] = (v as ArrayLike<number>)[i];
-      else out[off] = name === 0x0d33 ? 4096 : name === 0x8869 ? 16 : 0;
-    },
+    "static glGetIntegerv(I[II)V": getIntegers,
     "static glGetIntegerv(ILjava/nio/IntBuffer;)V": (name: number, buf: JBuffer) => {
       const b = bytesFrom(buf);
-      if (b) new Int32Array(b.buffer, b.byteOffset)[0] = name === 0x0d33 ? 4096 : 16;
+      if (b) getIntegers(name, new Int32Array(b.buffer, b.byteOffset, b.byteLength / 4), 0);
     },
     "static glGetError()I": () => gl?.getError() ?? 0,
     "static glFinish()V": () => gl?.finish(),
