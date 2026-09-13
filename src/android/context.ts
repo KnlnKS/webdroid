@@ -8,7 +8,7 @@ import { getInflater } from "./inflate";
 import { getAppInfo, getPM } from "./pm";
 import { contentResolver } from "./contentresolver";
 import { mainLooper, mainExecutor, PROCESS_PID, PROCESS_UID } from "./os";
-import { getPrefs } from "./sharedprefs";
+import { getPrefs, movePrefs } from "./sharedprefs";
 import { JAssetManager, type JConfiguration, scopedResources } from "./resnative";
 import { dbPath } from "./sqlite";
 import { type JIntent, launchIntent } from "./intent";
@@ -223,6 +223,10 @@ export const contextMethods: NativeSpec["methods"] = {
   "getSystemServiceName(Ljava/lang/Class;)Ljava/lang/String;": (cls: any) => cls?.ci?.name?.split("/").pop() ?? null,
   "getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;": function (this: JContext, name: string) {
     return getPrefs(this.$host.pkg, name);
+  },
+  "moveSharedPreferencesFrom(Landroid/content/Context;Ljava/lang/String;)Z": function (this: JContext, source: JContext, name: string) {
+    if (!source || name == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    return movePrefs(source.$host.pkg, this.$host.pkg, name) ? 1 : 0;
   },
   // Context's resource getters are getResources().getX(id[, getTheme()]) in AOSP: both calls are
   // virtual, so an app's Resources or ContextWrapper subclass (a string store, a skin engine) answers them.

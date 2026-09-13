@@ -36,6 +36,17 @@ class PreferenceStore {
       return true;
     } catch { return false; }
   }
+  move(source: string, target: string): boolean {
+    if (source === target) return true;
+    const persisted = globalThis.localStorage?.getItem("wd:prefs:" + source);
+    if (!this.files.has(source) && persisted == null) return true;
+    const values = new Map(this.open(source));
+    if (!this.persist(target, values)) return false;
+    try { globalThis.localStorage?.removeItem("wd:prefs:" + source); }
+    catch { return false; }
+    this.files.delete(source);
+    return true;
+  }
 }
 export let preferenceStore = new PreferenceStore();
 export function usePreferenceStore(store: PreferenceStore): void {
@@ -60,6 +71,16 @@ export function getPrefs(pkg: string, name: string): JSharedPrefs {
     prefsCache.set(key, p);
   }
   return p;
+}
+export function movePrefs(sourcePkg: string, targetPkg: string, name: string): boolean {
+  const source = sourcePkg + ":" + name;
+  const target = targetPkg + ":" + name;
+  const moved = preferenceStore.move(source, target);
+  if (moved && source !== target) {
+    prefsCache.delete(source);
+    prefsCache.delete(target);
+  }
+  return moved;
 }
 class JPrefsEditor extends JObj {
   prefs!: JSharedPrefs;

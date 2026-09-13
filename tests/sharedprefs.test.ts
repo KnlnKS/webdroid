@@ -3,7 +3,7 @@ import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { vcall } from "../src/jvm/natives/jlang";
 import { newStringSet, toJsArray } from "../src/jvm/natives/jutil";
-import { getPrefs } from "../src/android/sharedprefs";
+import { getPrefs, movePrefs } from "../src/android/sharedprefs";
 
 rt.linkNatives();
 
@@ -22,4 +22,16 @@ test("string preference getters throw on a stored value of the wrong type", asyn
   expect(await vcall(prefs, "getString", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "missing", "default")).toBe("default");
   const fallback = newStringSet(["fallback"]);
   expect(await vcall(prefs, "getStringSet", "(Ljava/lang/String;Ljava/util/Set;)Ljava/util/Set;", "missing", fallback)).toBe(fallback);
+});
+
+test("preference files move between context packages and leave no source file", async () => {
+  const source = getPrefs("test.preferences.source", "account");
+  const editor = await vcall(source, "edit", "()Landroid/content/SharedPreferences$Editor;");
+  await vcall(editor, "putString", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;", "token", "value");
+  expect(await vcall(editor, "commit", "()Z")).toBe(1);
+
+  expect(movePrefs("test.preferences.source", "test.preferences.target", "account")).toBe(true);
+  expect(await vcall(getPrefs("test.preferences.target", "account"), "getString", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "token", null)).toBe("value");
+  expect(await vcall(getPrefs("test.preferences.source", "account"), "contains", "(Ljava/lang/String;)Z", "token")).toBe(0);
+  expect(movePrefs("test.preferences.missing", "test.preferences.target", "missing")).toBe(true);
 });
