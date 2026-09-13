@@ -9,6 +9,7 @@ import { device } from "../shell/config";
 import { formatDate } from "../jvm/natives/jtext";
 import { toJsArray } from "../jvm/natives/jutil";
 import { localeDirection } from "../jvm/natives/jvalues";
+import { JPersistableBundle, bundleBox } from "./os";
 
 class JAnnotation extends JObj { key: string | null = null; value: string | null = null; }
 async function writeAnnotation(this: JAnnotation, parcel: JObj) {
@@ -34,6 +35,49 @@ rt.register({
     "writeToParcelInternal(Landroid/os/Parcel;I)V": writeAnnotation,
   },
 });
+
+class JTtsSpan extends JObj { type: string | null = null; args: JPersistableBundle | null = null; }
+async function writeTtsSpan(this: JTtsSpan, parcel: JParcel) {
+  await vcall(parcel, "writeString", "(Ljava/lang/String;)V", this.type);
+  await vcall(parcel, "writePersistableBundle", "(Landroid/os/PersistableBundle;)V", this.args);
+}
+rt.register({ name: "android/text/style/TtsSpan", ctor: JTtsSpan, ifaces: ["android/text/ParcelableSpan"], methods: {
+  "<init>(Ljava/lang/String;Landroid/os/PersistableBundle;)V": function (this: JTtsSpan, type: string, args: JPersistableBundle) { this.type = type; this.args = args; },
+  "<init>(Landroid/os/Parcel;)V": async function (this: JTtsSpan, parcel: JParcel) {
+    this.type = await vcall(parcel, "readString", "()Ljava/lang/String;");
+    this.args = await vcall(parcel, "readPersistableBundle", "()Landroid/os/PersistableBundle;");
+  },
+  "getType()Ljava/lang/String;": function (this: JTtsSpan) { return this.type; },
+  "getArgs()Landroid/os/PersistableBundle;": function (this: JTtsSpan) { return this.args; },
+  "getSpanTypeId()I": () => 24, "getSpanTypeIdInternal()I": () => 24, "describeContents()I": () => 0,
+  "writeToParcel(Landroid/os/Parcel;I)V": writeTtsSpan,
+  "writeToParcelInternal(Landroid/os/Parcel;I)V": writeTtsSpan,
+} });
+class JTtsBuilder extends JObj { type = ""; args = new JPersistableBundle(); }
+rt.register({ name: "android/text/style/TtsSpan$Builder", ctor: JTtsBuilder, methods: {
+  "<init>(Ljava/lang/String;)V": function (this: JTtsBuilder, type: string) { this.type = type; },
+  "build()Landroid/text/style/TtsSpan;": function (this: JTtsBuilder) { const span = new JTtsSpan(); span.type = this.type; span.args = this.args; return span; },
+  ...Object.fromEntries([["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "J"]].map(([type, desc]) => [
+    `set${type}Argument(Ljava/lang/String;${desc})Landroid/text/style/TtsSpan$Builder;`,
+    function (this: JTtsBuilder, key: string, value: unknown) { this.args.map.set(key, desc === "Ljava/lang/String;" ? value : bundleBox(value, desc)); return this; },
+  ])),
+} });
+class JTtsSemioticBuilder extends JTtsBuilder {}
+rt.register({ name: "android/text/style/TtsSpan$SemioticClassBuilder", ctor: JTtsSemioticBuilder, sup: "android/text/style/TtsSpan$Builder", methods: {
+  "<init>(Ljava/lang/String;)V": function (this: JTtsBuilder, type: string) { this.type = type; },
+  ...Object.fromEntries(["Gender", "Animacy", "Multiplicity", "Case"].map(name => [
+    `set${name}(Ljava/lang/String;)Landroid/text/style/TtsSpan$SemioticClassBuilder;`,
+    function (this: JTtsBuilder, value: string) { this.args.map.set("android.arg." + name.toLowerCase(), value); return this; },
+  ])),
+} });
+for (const name of ["Text", "Verbatim"]) {
+  const kind = name.toLowerCase();
+  rt.register({ name: `android/text/style/TtsSpan$${name}Builder`, ctor: class extends JTtsSemioticBuilder {}, sup: "android/text/style/TtsSpan$SemioticClassBuilder", methods: {
+    "<init>()V": function (this: JTtsBuilder) { this.type = "android.type." + kind; },
+    "<init>(Ljava/lang/String;)V": function (this: JTtsBuilder, value: string) { this.type = "android.type." + kind; this.args.map.set("android.arg." + kind, value); },
+    [`set${name}(Ljava/lang/String;)Landroid/text/style/TtsSpan$${name}Builder;`]: function (this: JTtsBuilder, value: string) { this.args.map.set("android.arg." + kind, value); return this; },
+  } });
+}
 
 export class JTextPaint extends JPaint {
   linkColor = -16776961;
