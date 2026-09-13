@@ -19,7 +19,7 @@ export const youtube: Flow = {
     { id: "search-open", label: "Open search", action: { type: "tapText", text: "Search" }, settleDelayMs: 3000 },
     { id: "search-type", label: "Type Big Buck Bunny", action: { type: "typeInto", ...point(576, 144), text: "Big Buck Bunny" }, settleDelayMs: 1000 },
     { id: "search-go", label: "Search results", action: { type: "tapAt", ...point(576, 288) }, settleDelayMs: 15000 },
-    { id: "results-swipe", label: "Reveal the first film result", action: { type: "swipe", from: pair(540, 1600), to: pair(540, 600), ms: 400, untilText: "Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film", maxSwipes: 4 }, settleDelayMs: 3000 },
+    { id: "results-swipe", label: "Reveal the first film result", action: { type: "swipe", from: pair(540, 1500), to: pair(540, 900), ms: 400, untilText: "Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film", maxSwipes: 8 }, settleDelayMs: 3000 },
     { id: "video-open", label: "Open Big Buck Bunny", action: { type: "tapText", text: "Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film" }, settleDelayMs: 15000, animated: true },
     { id: "show-controls", label: "Show player controls", action: { type: "tapAt", ...point(540, 360) }, settleDelayMs: 1000 },
     { id: "pause", label: "Pause playback", action: { type: "tapText", text: "Pause video" }, settleDelayMs: 2000 },
