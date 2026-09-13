@@ -497,6 +497,24 @@ rt.register({
       Object.assign(new JVibrationEffect(), { timings: Array.from(timings), repeat }),
   },
 });
+class JAccessibilityServiceInfo extends JObj {
+  eventTypes = 0;
+  feedbackType = 0;
+  flags = 0;
+  notificationTimeout = 0n;
+  packageNames: string[] | null = null;
+  capabilities = 0;
+  id: string | null = null;
+}
+rt.register({
+  name: "android/accessibilityservice/AccessibilityServiceInfo", ctor: JAccessibilityServiceInfo,
+  fields: ["eventTypes", "feedbackType", "flags", "notificationTimeout", "packageNames"],
+  methods: {
+    "<init>()V": function () {},
+    "getCapabilities()I": function (this: JAccessibilityServiceInfo) { return this.capabilities; },
+    "getId()Ljava/lang/String;": function (this: JAccessibilityServiceInfo) { return this.id; },
+  },
+});
 for (const [name, methods, statics] of [
   ["android/app/ActivityManager", {
     "getMemoryClass()I": () => 256,
