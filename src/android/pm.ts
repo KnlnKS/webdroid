@@ -324,6 +324,7 @@ class JPackageInfo extends JObj {
   signatures: unknown = null; signingInfo: unknown = null;
   reqFeatures: unknown = null;
   requestedPermissions: string[] | null = null;
+  requestedPermissionsFlags: Int32Array | null = null;
   activities: unknown = null; receivers: unknown = null; services: unknown = null; providers: unknown = null;
 }
 /**
@@ -368,10 +369,16 @@ function requestedPermissions(root = manifestRoot): string[] | null {
   }
   return names.size ? jarray([...names], "Ljava/lang/String;") : null;
 }
+async function fillRequestedPermissions(info: JPackageInfo, root = manifestRoot, installed = true): Promise<void> {
+  info.requestedPermissions = requestedPermissions(root);
+  if (!info.requestedPermissions) return;
+  info.requestedPermissionsFlags = Int32Array.from(await Promise.all(info.requestedPermissions.map(async (name) =>
+    1 | (installed && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", name, info.packageName) === 0 ? 2 : 0))));
+}
 rt.register({
   name: "android/content/pm/PackageInfo", ctor: JPackageInfo, ifaces: ["android/os/Parcelable"],
   fields: ["packageName", "versionName", "versionCode", "splitNames", "applicationInfo", "firstInstallTime",
-    "lastUpdateTime", "signatures", "signingInfo", "reqFeatures", "requestedPermissions", "activities", "receivers",
+    "lastUpdateTime", "signatures", "signingInfo", "reqFeatures", "requestedPermissions", "requestedPermissionsFlags", "activities", "receivers",
     "services", "providers"],
   methods: {
     "<init>()V": function () {},
@@ -608,7 +615,7 @@ rt.register({
       const record = packages.get(pkg);
       if (record && (record !== currentPackage || record.system)) return recordInfo(record, flags);
       const installed = await installedPackage(pkg);
-      if (installed) return archiveInfo(installed.archive, installed.path, flags);
+      if (installed) return archiveInfo(installed.archive, installed.path, flags, true);
       if (appHost && pkg !== appHost.pkg) throw nameNotFound(pkg);
       const pi = new JPackageInfo();
       pi.packageName = pkg;
@@ -631,7 +638,7 @@ rt.register({
         if (flags & 0x8000000) pi.signingInfo = signingInfo(certificates);
       }
       pi.reqFeatures = reqFeatures();
-      if (flags & 0x1000) pi.requestedPermissions = requestedPermissions();
+      if (flags & 0x1000) await fillRequestedPermissions(pi);
       if (flags & 2) pi.receivers = jarray([...manifestReceivers].filter(([name, node]) => visibleComponent(name, node, flags)).map(([name, node]) => receiverInfo(name, node, flags)), "Landroid/content/pm/ActivityInfo;");
       if (flags & 4) pi.services = jarray([...manifestServices].filter(([name, node]) => visibleComponent(name, node, flags)).map(([name, node]) => serviceInfo(name, node, flags)), "Landroid/content/pm/ServiceInfo;");
       pi.activities = jarray([...manifestActivities.keys()].map((n) => mkActivityInfo(n.replace(/\//g, "."))), "Landroid/content/pm/ActivityInfo;");
@@ -644,7 +651,7 @@ rt.register({
       const record = packages.get(pkg);
       if (record && (record !== currentPackage || record.system)) return recordAppInfo(record, flags);
       const installed = await installedPackage(pkg);
-      if (installed) return archiveInfo(installed.archive, installed.path, flags).applicationInfo;
+      if (installed) return (await archiveInfo(installed.archive, installed.path, flags, true)).applicationInfo;
       if (appHost && pkg !== appHost.pkg) throw nameNotFound(pkg);
       return appHost ? getAppInfo(appHost) : new JApplicationInfo();
     },
@@ -888,7 +895,7 @@ async function readArchive(path: string): Promise<PackageArchive | null> {
   if (!archive) archiveCache.set(bytes, archive = parsePackageArchive(bytes));
   try { return await archive; } catch { return null; }
 }
-function archiveInfo(archive: PackageArchive, path: string, flags: number): JPackageInfo {
+async function archiveInfo(archive: PackageArchive, path: string, flags: number, installed = false): Promise<JPackageInfo> {
   const { root, pkg, res, certificates } = archive;
   const app = root.children.find((c) => c.name === "application");
   rt.link("android/content/pm/PackageInfo"); rt.link("android/content/pm/ApplicationInfo");
@@ -898,7 +905,7 @@ function archiveInfo(archive: PackageArchive, path: string, flags: number): JPac
   ai.processName = pkg;
   ai.className = app && attrStr(app, "name") || null;
   info.applicationInfo = ai; info.reqFeatures = reqFeatures(root);
-  if (flags & 0x1000) info.requestedPermissions = requestedPermissions(root);
+  if (flags & 0x1000) await fillRequestedPermissions(info, root, installed);
   if (flags & 64) info.signatures = signatures(certificates);
   if (flags & 0x8000000) info.signingInfo = signingInfo(certificates);
   return info;
@@ -956,7 +963,7 @@ async function recordInfo(record: PackageRecord, flags: number): Promise<JPackag
   if (flags & 64) pi.signatures = signatures(await record.visibleCertificates());
   if (flags & 0x8000000) pi.signingInfo = signingInfo(await record.visibleCertificates());
   pi.reqFeatures = reqFeatures(root);
-  if (flags & 0x1000) pi.requestedPermissions = requestedPermissions(root);
+  if (flags & 0x1000) await fillRequestedPermissions(pi, root);
   if (flags & 1) pi.activities = jarray([...record.components.activity].filter(([n, node]) => visibleComponent(n, node, flags, record)).map(([n]) => mkActivityInfo(n, record)), "Landroid/content/pm/ActivityInfo;");
   if (flags & 2) pi.receivers = jarray([...record.components.receiver].filter(([n, node]) => visibleComponent(n, node, flags, record)).map(([n, node]) => receiverInfo(n, node, flags, record)), "Landroid/content/pm/ActivityInfo;");
   if (flags & 4) pi.services = jarray([...record.components.service].filter(([n, node]) => visibleComponent(n, node, flags, record)).map(([n, node]) => serviceInfo(n, node, flags, record)), "Landroid/content/pm/ServiceInfo;");
@@ -986,7 +993,7 @@ export async function installPackageArchive(bytes: Uint8Array, expectedPackage: 
   if (archive.pkg === appHost?.pkg) throw new Error("Replacing the running package is unsupported");
   if (!archive.certificates.length) throw new Error("APK is unsigned");
   const previous = await installedPackage(archive.pkg);
-  if (previous && archiveInfo(archive, "", 0).longVersionCode < archiveInfo(previous.archive, previous.path, 0).longVersionCode)
+  if (previous && (await archiveInfo(archive, "", 0)).longVersionCode < (await archiveInfo(previous.archive, previous.path, 0)).longVersionCode)
     throw new Error("APK version is older than installed package");
   if (previous && (previous.archive.certificates.length !== archive.certificates.length || previous.archive.certificates.some((cert, i) => {
     const next = archive.certificates[i]; return !next || cert.length !== next.length || cert.some((b, j) => b !== next[j]);
