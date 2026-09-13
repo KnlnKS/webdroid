@@ -335,6 +335,8 @@ export class JView extends JObj {
   /** android:contentDescription — the label an icon-only control answers to */
   contentDesc: string | null = null;
   drawnText: string[] | null = null;
+  drawnTextPoints: Float32Array | null = null;
+  drawnTextCount = 0;
   /** nested scrolling: AOSP defaults this on for ScrollView/RecyclerView-shaped children,
    *  and the accepted parent is remembered for the life of one gesture */
   nestedEnabled = true;
@@ -733,6 +735,7 @@ async function drawLayered(v: JView, cv: JCanvas, w: number, h: number) {
 async function drawSemantic(v: JView, cv: JCanvas) {
   const parentOwner = cv.semanticOwner;
   if (v.drawnText) v.drawnText.length = 0;
+  v.drawnTextCount = 0;
   cv.semanticOwner = v;
   try {
     await drawSelf(v, cv);

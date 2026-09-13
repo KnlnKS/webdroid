@@ -284,6 +284,7 @@ const wd = {
   locateText: (s: string): { x: number; y: number } | null => {
     const normalized = (text: unknown) => String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
     const want = normalized(s);
+    const matches = (candidate: string) => candidate === want || candidate.startsWith(want);
     const decor = topDecor();
     // An overlay's own left/top already carry its position — the layout pass lays it out AT
     // o.x/o.y — so seeding the walk with them again doubles the offset.
@@ -295,8 +296,12 @@ const wd = {
         // the emulator driver resolves a tapText against text OR content-desc, so an icon-only
         // control (an overflow button, a nav arrow) has to be findable here the same way
         const cd = normalized(v.contentDesc);
-        if ([txt, raw, drawn, cd].some((candidate) => candidate === want || candidate.startsWith(want)) && v.right > v.left)
+        if ((matches(txt) || matches(raw) || matches(cd)) && v.right > v.left)
           return { x: x + (v.right - v.left) / 2, y: y + (v.bottom - v.top) / 2 };
+        if (matches(drawn) && v.drawnTextCount > 0) {
+          const tx = v.drawnTextPoints?.[0], ty = v.drawnTextPoints?.[1];
+          if (Number.isFinite(tx) && Number.isFinite(ty) && tx >= 0 && tx < SCREEN_W && ty >= 0 && ty < SCREEN_H) return { x: tx, y: ty };
+        }
       }
     }
     return null;

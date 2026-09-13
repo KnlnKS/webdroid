@@ -657,7 +657,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const x = hg === 1 ? (contentL + contentR) / 2 : hg === 5 ? contentR : contentL;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      cv.recordText(line);
+      cv.recordText(line, x, y, this.paintT.textSize, hg === 1 ? 1 : hg === 5 ? 2 : 0);
       ctx.fillText(line, x, y);
       if (this.paintT.strikeThru && line) {
         const w = widths[i];
