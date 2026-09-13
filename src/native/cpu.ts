@@ -90,6 +90,7 @@ export class Cpu {
   a64 = false;
   pcx = 15; lrx = 14; spx = 13;
   private threadData = 0;
+  private staticTlsBlocks = new Map<object, number>();
   /** the pthread_internal_t this thread is known by: pthread_self(), the handle pthread_create hands out */
   pthreadSelf = 0;
   jthread: JThread;
@@ -258,12 +259,25 @@ export class Cpu {
     if (!cpus.has(this)) return;
     this.finished = true;
     if (this.stackTop) mem.freeStack(this.stackBase, this.stackTop);
+    for (const p of this.staticTlsBlocks.values()) mem.free(p);
+    this.staticTlsBlocks.clear();
     mem.free(this.threadData); mem.free(this.env);
     this.threadData = this.errnoAddr = this.env = this.stackBase = this.stackTop = 0;
     this.signals.length = 0;
     cpus.delete(this);
     if (byThread.get(this.jthread) === this) byThread.delete(this.jthread);
     core.cpu_free(this.base);
+  }
+
+  staticTls(key: object, image: Uint8Array, size: number, align: number): number {
+    const existing = this.staticTlsBlocks.get(key);
+    if (existing !== undefined) return existing;
+    const p = mem.memalign(Math.max(8, align), size);
+    if (!p) throw new NativeFault("[native] out of memory for static TLS");
+    mem.memset(p, 0, size);
+    mem.u8.set(image, p);
+    this.staticTlsBlocks.set(key, p);
+    return p;
   }
 
   ensureStack(): void {

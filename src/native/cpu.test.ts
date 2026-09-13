@@ -5,6 +5,22 @@ import { defineHost } from "./host";
 import { mem } from "./mem";
 
 for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 thread identity", () => {
+  test("static TLS is initialized once per guest thread", () => {
+    setA64(a64);
+    const first = new Cpu(new JThread(), "tls-a"), second = new Cpu(new JThread(), "tls-b"), key = {};
+    try {
+      const image = Uint8Array.of(3, 5, 8), a = first.staticTls(key, image, 8, 16), b = second.staticTls(key, image, 8, 16);
+      expect(a & 15).toBe(0);
+      expect(a).not.toBe(b);
+      expect(first.staticTls(key, image, 8, 16)).toBe(a);
+      expect([...mem.u8.subarray(a, a + 8)]).toEqual([3, 5, 8, 0, 0, 0, 0, 0]);
+      mem.u8[a] = 13;
+      expect(mem.u8[b]).toBe(3);
+    } finally {
+      first.dispose(); second.dispose();
+    }
+  });
+
   test("a parked guest releases its Java thread on host completion and rejection", async () => {
     setA64(a64);
     for (const reject of [false, true]) {

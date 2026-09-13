@@ -4,7 +4,7 @@
 
 import { mapElf, symbolize, nearestSymbol, type Module } from "./elf";
 import { mem } from "./mem";
-import { probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp } from "./host";
+import { defineHost, probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp } from "./host";
 import { cpuFor, setSymbolizeHook, setBacktraceHook, setA64, isA64, type Cpu } from "./cpu";
 import { trampSlot, RET_SENTINEL } from "./abi";
 import { rt, type Runtime } from "../jvm/runtime";
@@ -20,6 +20,8 @@ const HANDLE_BASE = 0x100;
 let dlerrorMsg: string | null = null;
 let dlerrorBuf = 0;
 const inflight = new Map<string, Promise<Module>>();
+const tlsDescriptors = new Map<number, { mod: Module; offset: number }>();
+let tlsDescResolver = 0;
 
 function basename(p: string): string { return p.slice(p.lastIndexOf("/") + 1); }
 
@@ -49,11 +51,28 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false,
     // dependencies that are real modules in the apk load (and initialise) first; host libs need nothing
     for (const n of mod.needed) if (!hostLibNames().includes(n) && !byName.has(n) && apkLibPath(n, owner)) await loadModule(n, undefined, link, owner, cpu);
     relocate(resolveGlobal);
+    installTlsDescriptors(mod);
     if (!link) await runInit(mod, cpu);
     return mod;
   })();
   inflight.set(name, q);
   try { return await q; } finally { inflight.delete(name); }
+}
+
+function installTlsDescriptors(mod: Module): void {
+  if (!mod.tlsDescriptors.length) return;
+  if (!tlsDescResolver) tlsDescResolver = defineHost("__tlsdesc_resolver", (cpu, a) => {
+    const descriptor = a.p(), entry = tlsDescriptors.get(descriptor);
+    if (!entry) return cpu.fault("invalid TLS descriptor");
+    const tls = entry.mod.tls;
+    if (!tls) return cpu.fault("TLS descriptor without a TLS segment");
+    return cpu.staticTls(entry.mod, tls.image, tls.size, tls.align) + entry.offset - cpu.tlsBase;
+  });
+  for (const entry of mod.tlsDescriptors) {
+    tlsDescriptors.set(entry.addr, { mod, offset: entry.offset });
+    stp(entry.addr, tlsDescResolver);
+    stp(entry.addr + PTR, entry.offset);
+  }
 }
 
 async function runInit(mod: Module, cpu: Cpu): Promise<void> {

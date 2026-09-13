@@ -27,37 +27,39 @@ export interface Module {
   /** the program headers, copied into guest memory for dl_iterate_phdr */
   phdr: number;
   phnum: number;
+  tls: { image: Uint8Array; size: number; align: number } | null;
+  tlsDescriptors: { addr: number; offset: number }[];
 }
 
 type Resolver = (sym: string, weak: boolean, from: Module) => number;
 
-const PT_LOAD = 1, PT_DYNAMIC = 2, PT_ARM_EXIDX = 0x70000001;
+const PT_LOAD = 1, PT_DYNAMIC = 2, PT_TLS = 7, PT_ARM_EXIDX = 0x70000001;
 
 interface Fmt {
   machine: number; ptr: number;
-  phEnt: number; phOff: number; phVaddr: number; phFilesz: number; phMemsz: number;
+  phEnt: number; phOff: number; phVaddr: number; phFilesz: number; phMemsz: number; phAlign: number;
   dynEnt: number;
   symEnt: number; symValue: number; symInfo: number; symShndx: number;
   relEnt: number; rela: boolean;
-  RELATIVE: number; ABS: number; GLOB_DAT: number; JUMP_SLOT: number; REL32: number;
+  RELATIVE: number; ABS: number; GLOB_DAT: number; JUMP_SLOT: number; REL32: number; TLSDESC: number;
 }
 const ELF32: Fmt = {
   machine: 0x28, ptr: 4,
-  phEnt: 32, phOff: 4, phVaddr: 8, phFilesz: 16, phMemsz: 20,
+  phEnt: 32, phOff: 4, phVaddr: 8, phFilesz: 16, phMemsz: 20, phAlign: 28,
   dynEnt: 8,
   symEnt: 16, symValue: 4, symInfo: 12, symShndx: 14,
   relEnt: 8, rela: false,
-  RELATIVE: 23, ABS: 2, GLOB_DAT: 21, JUMP_SLOT: 22, REL32: 3,
+  RELATIVE: 23, ABS: 2, GLOB_DAT: 21, JUMP_SLOT: 22, REL32: 3, TLSDESC: -1,
 };
 const ELF64: Fmt = {
   machine: 0xb7, ptr: 8,
-  phEnt: 56, phOff: 8, phVaddr: 16, phFilesz: 32, phMemsz: 40,
+  phEnt: 56, phOff: 8, phVaddr: 16, phFilesz: 32, phMemsz: 40, phAlign: 48,
   dynEnt: 16,
   symEnt: 24, symValue: 8, symInfo: 4, symShndx: 6,
   relEnt: 24, rela: true,
   // AArch64 emits exactly these four across every .so in the corpus; R_AARCH64_REL32 exists but
   // is not one of them, and -1 matches no type
-  RELATIVE: 1027, ABS: 257, GLOB_DAT: 1025, JUMP_SLOT: 1026, REL32: -1,
+  RELATIVE: 1027, ABS: 257, GLOB_DAT: 1025, JUMP_SLOT: 1026, REL32: -1, TLSDESC: 1031,
 };
 
 // Packed relative relocations use a different format. Ignoring one of these tags is not a partial
@@ -144,6 +146,7 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
   const phoff = dv.getUint32(cls === 2 ? 32 : 28, true);
   const phentsize = dv.getUint16(cls === 2 ? 54 : 42, true), phnum = dv.getUint16(cls === 2 ? 56 : 44, true);
   let lo = 0xffffffff, hi = 0, dynOff = 0, dynSz = 0, exidxAddr = 0, exidxSz = 0;
+  let tls: Module["tls"] = null;
   const loads: { off: number; vaddr: number; filesz: number; memsz: number }[] = [];
   for (let i = 0; i < phnum; i++) {
     const p = phoff + i * (phentsize || f.phEnt);
@@ -154,6 +157,11 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
       lo = Math.min(lo, (vaddr & -PAGE_SIZE) >>> 0);
       hi = Math.max(hi, ((vaddr + memsz + PAGE_SIZE - 1) & -PAGE_SIZE) >>> 0);
     } else if (type === PT_DYNAMIC) { dynOff = vaddr; dynSz = memsz; }
+    else if (type === PT_TLS) {
+      const align = dv.getUint32(p + f.phAlign, true);
+      if (filesz > memsz || off + filesz > bytes.length || align && (align & (align - 1))) throw new Error(`${name}: invalid PT_TLS`);
+      tls = { image: bytes.slice(off, off + filesz), size: memsz, align: align || 1 };
+    }
     // exidx is ARM's unwind table; AArch64 has no such segment and reuses the number
     else if (type === PT_ARM_EXIDX && cls === 1) { exidxAddr = vaddr; exidxSz = memsz; }
   }
@@ -169,7 +177,7 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
   const mod: Module = {
     name, base, end: base + hi, w64: cls === 2, exports: new Map(), initArray: [], init: 0, needed: [],
     exidx: { addr: base + exidxAddr, count: exidxSz >> 3 }, symbols: { addr: new Uint32Array(0), names: [] },
-    refs: 1, inited: false, phdr, phnum,
+    refs: 1, inited: false, phdr, phnum, tls, tlsDescriptors: [],
   };
   if (!dynOff) return { mod, relocate: () => {} };
 
@@ -248,6 +256,11 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
       case f.ABS: value = (f.rela ? 0 : mem.u32[at]) + symValue(sym) + addend; break;
       case f.GLOB_DAT: case f.JUMP_SLOT: value = symValue(sym) + addend; break;
       case f.REL32: value = mem.u32[at] + symValue(sym) - (base + off); break;
+      case f.TLSDESC:
+        if (!mod.tls || sym) throw new Error(`${name}: unsupported TLS descriptor symbol ${sym}`);
+        if (addend < 0 || addend >= mod.tls.size) throw new Error(`${name}: TLS descriptor offset is out of range`);
+        mod.tlsDescriptors.push({ addr: base + off, offset: addend });
+        return;
       case 0: return;
       default: throw new Error(`${name}: unsupported relocation type ${type} at 0x${off.toString(16)}`);
     }
