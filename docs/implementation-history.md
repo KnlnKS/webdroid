@@ -1782,3 +1782,51 @@ stack unit now use virtual-address planes; smaller mappings retain the plane-0 f
 the same flow, resume was 355 MB peak with 3.67 GB free, the first swipe was 377 MB with 3.64 GB
 free, and the second-swipe dwell finished at 396 MB with 3.62 GB free. All 13 steps completed
 without a native fault or main-loop wedge; the second swipe and final dwell ran at 31 and 87 fps.
+
+### 2026-09-13 — TikTok, Resy and YouTube parity integration
+
+The exact bundled TikTok 46.8.3, Resy 1.18.0-687 and YouTube 21.36.45 packages now complete
+their guest flows unchanged in webdroid and on the dedicated Android reference. The final
+webdroid captures cover 13 TikTok steps, 13 Resy steps and 16 YouTube steps. TikTok resumes its
+For You feed and renders different advancing video after two swipes; Resy searches for Carbone,
+opens the venue, returns and opens Near Me; YouTube searches for Big Buck Bunny, exercises the
+player controls, pause/resume, fullscreen/back and renders different Shorts after a swipe.
+
+Resy's MapLibre wedge was an EGL ownership mismatch, not a pthread condition-variable failure.
+The app creates and binds its context through Java EGL10, then renders through native GLES. Java
+stored the current binding globally while native GLES looked it up by CPU object, found no owner,
+cleared the context and faulted during Mapbox's `call_once`; the next render waited on the poisoned
+once flag while Activity pause synchronously joined the GL thread. Java EGL10/EGL14 and native
+EGL/GLES now use the Android guest `JThread` as the canonical owner, share surface state and keep
+validated per-thread wrapper caches. A Java-EGL-to-native-GLES regression test covers the exact
+boundary. The 13-step replay completed in 140.3 seconds without a wedge, new error or reached
+missing API.
+
+TikTok's native renderer reached A64 `SQRSHL`; the core now implements the SQSHL/UQSHL/SQRSHL/
+UQRSHL lane semantics and agrees with the hardware oracle. Its repeated anonymous native mappings
+also use virtual-address planes, preventing the monotonic low-plane growth that previously ended
+in `std::bad_alloc`. The surrounding platform work supplies path-valued property animation,
+font feature/variation state, split-limit-compatible regex behavior and correct in-layout measure
+cache invalidation. These are Android/JDK contracts exercised by the package rather than package
+checks or substituted content.
+
+YouTube's late SurfaceView frames were omitted when the parent display list had already been
+recorded; recorded surface nodes now retain and invalidate against their first arriving frame.
+Opening search additionally reached `AudioRecord`. Webdroid reports supported PCM buffer sizes
+and a truthful uninitialized/stopped recorder because this browser device exposes no audio-input
+device; it does not fabricate captured audio. The 16-step targeted run rendered every state with
+clean reached telemetry. A manually reused full-Chrome tab can intermittently show a black canvas
+even while its Android view tree and frame ticks advance; repeatable headless Chrome captures and
+the AVD reference render the same tested states, so the evidence does not justify an app-specific
+canvas workaround.
+
+All three smoke compilations finished with zero method failures. Consolidated typecheck and the
+focused EGL, AudioRecord, A64, graphics, animation, regex, surface and measure regressions pass.
+Paired screenshots remain under `tests/e2e/actual/paired/`; the exact-app golden directories used
+only for capture are not committed.
+
+The one requested serialized full E2E run completed with exit code 0 in 806.8 seconds. Every flow
+rendered every step. The requested smoke-scored flows completed TikTok 13/13, Resy 13/13 and
+YouTube 16/16; their per-step records contain no main-loop wedge or settle timeout. The run also
+reproduced previously documented diagnostics outside this task, including Lichess native-thread
+errors and Harmonic's unchanged final shimmer frame, without turning them into app-parity work.
