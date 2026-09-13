@@ -322,6 +322,7 @@ rt.register({
     "static getElapsedCpuTime()J": () => BigInt(Math.round(performance.now())),
     "static myTid()I": () => threadTid(curThread),
     "static myUid()I": () => PROCESS_UID,
+    "static isApplicationUid(I)Z": (uid: number) => { const appId = uid % 100000; return appId >= 10000 && appId <= 19999 ? 1 : 0; },
     "static getGidForName(Ljava/lang/String;)I": (name: string | null) => {
       if (name === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
       return androidGroupId(name);

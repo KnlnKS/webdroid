@@ -74,6 +74,13 @@ test("Os.sysconf reports the configured page and processor counts", () => {
   expect(scall("android/system/Os", "sysconf", "(I)J", -1)).toBe(-1n);
 });
 
+test("Process.isApplicationUid checks the app id across users", () => {
+  expect(scall("android/os/Process", "isApplicationUid", "(I)Z", 10001)).toBe(1);
+  expect(scall("android/os/Process", "isApplicationUid", "(I)Z", 210001)).toBe(1);
+  expect(scall("android/os/Process", "isApplicationUid", "(I)Z", 1000)).toBe(0);
+  expect(scall("android/os/Process", "isApplicationUid", "(I)Z", 90000)).toBe(0);
+});
+
 test("Resources(AssetManager, DisplayMetrics, Configuration) scopes its own configuration and metrics", async () => {
   const host = new Resources(null, {});
   const assets = rt.make("android/content/res/AssetManager") as JAssetManager;
