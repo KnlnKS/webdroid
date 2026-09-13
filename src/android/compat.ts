@@ -279,6 +279,8 @@ class JAnimation extends JObj {
   startTime = -1;             // START_ON_FIRST_FRAME
   started = false; ended = false; flipped = false; initialized = false;
   repeated = 0;
+  scale = 1;
+  target: JView | null = null;
   /** built-in subclasses: [from, to] pairs plus the pivot, each with its Description type */
   p: number[] = [];
   pt: number[] = [];
@@ -331,9 +333,19 @@ async function stepViewAnim(v: JView): Promise<boolean> {
   }
   const tf = (v.animTf ??= new JTransformation()) as JTransformation;
   tf.alpha = 1; tf.matrix.m = [1, 0, 0, 1, 0, 0];
-  const more = await getTransformation(a, performance.now(), tf, v);
+  a.target = v;
+  let more: boolean;
+  try {
+    more = !!await vcall(a, "getTransformation", "(JLandroid/view/animation/Transformation;F)Z",
+      BigInt(Math.floor(performance.now())), tf, 1);
+  } finally {
+    if (a.target === v) a.target = null;
+  }
   invalidate();
-  if (!more && v.jAnim === a) { v.jAnim = null; if (!a.fillAfter) v.animTf = null; }
+  if (!more && v.jAnim === a) {
+    v.jAnim = null;
+    if (!a.fillAfter) v.animTf = null;
+  }
   return more;
 }
 
@@ -378,12 +390,19 @@ const animMethods: NativeSpec["methods"] = {
   "hasStarted()Z": function (this: JAnimation) { return this.started ? 1 : 0; },
   "initialize(IIII)V": function (this: JAnimation) { this.initialized = true; },
   "isInitialized()Z": function (this: JAnimation) { return this.initialized ? 1 : 0; },
+  "getScaleFactor()F": function (this: JAnimation) { return this.scale; },
   ...noops("<init>()V", "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", "setZAdjustment(I)V",
     "setDetachWallpaper(Z)V", "setBackgroundColor(I)V",
     "applyTransformation(FLandroid/view/animation/Transformation;)V"),
   ...stubs(1, "willChangeBounds()Z", "willChangeTransformationMatrix()Z"),
   "getTransformation(JLandroid/view/animation/Transformation;)Z": async function (this: JAnimation, now: bigint, t: JTransformation) {
-    return await getTransformation(this, Number(now), t, null) ? 1 : 0;
+    return await getTransformation(this, Number(now), t, this.target) ? 1 : 0;
+  },
+  "getTransformation(JLandroid/view/animation/Transformation;F)Z": async function (
+    this: JAnimation, now: bigint, t: JTransformation, scale: number,
+  ) {
+    this.scale = scale;
+    return await vcall(this, "getTransformation", "(JLandroid/view/animation/Transformation;)Z", now, t);
   },
 };
 rt.register({ name: "android/view/animation/Animation", ctor: JAnimation, methods: animMethods });
