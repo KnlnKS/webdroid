@@ -55,6 +55,16 @@ test("ViewGroup retains whether child states contribute", async () => {
   expect(await vcall(group, "addStatesFromChildren", "()Z")).toBe(1);
 });
 
+test("LongSparseArray removes and indexes sorted long keys", async () => {
+  const sparse = await newObj("android/util/LongSparseArray", "(I)V", 2);
+  await vcall(sparse, "put", "(JLjava/lang/Object;)V", 9n, "nine");
+  await vcall(sparse, "put", "(JLjava/lang/Object;)V", 3n, "three");
+  expect(await vcall(sparse, "keyAt", "(I)J", 0)).toBe(3n);
+  expect(await vcall(sparse, "valueAt", "(I)Ljava/lang/Object;", 1)).toBe("nine");
+  await vcall(sparse, "remove", "(J)V", 3n);
+  expect(await vcall(sparse, "size", "()I")).toBe(1);
+});
+
 test("PaintDrawable owns a rectangular shape and supports rounded corners", async () => {
   const drawable = await newObj("android/graphics/drawable/PaintDrawable", "(I)V", 0xff123456 | 0);
   expect((await vcall(drawable, "getPaint", "()Landroid/graphics/Paint;")).color).toBe(0xff123456 | 0);

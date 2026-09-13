@@ -111,13 +111,22 @@ rt.register({ name: "android/util/SparseArray", ctor: JSparseArray, methods: spa
 rt.register({ name: "android/util/SparseIntArray", ctor: class extends JSparseArray {}, methods: sparseMethods("I", 0, "android/util/SparseIntArray") });
 rt.register({ name: "android/util/SparseBooleanArray", ctor: class extends JSparseArray {}, methods: sparseMethods("Z", 0, "android/util/SparseBooleanArray") });
 rt.register({ name: "android/util/SparseLongArray", ctor: class extends JSparseArray {}, methods: sparseMethods("J", 0n, "android/util/SparseLongArray") });
-rt.register({ name: "android/util/LongSparseArray", ctor: class extends JSparseArray {},
+class JLongSparseArray extends JSparseArray {
+  longKeys(): bigint[] { return [...(this.m as unknown as Map<bigint, unknown>).keys()].sort((a, b) => a < b ? -1 : a > b ? 1 : 0); }
+}
+rt.register({ name: "android/util/LongSparseArray", ctor: JLongSparseArray,
   methods: {
     "<init>()V": function () {},
-    "get(J)Ljava/lang/Object;": function (this: JSparseArray, k: bigint) { return this.m.get(k as any) ?? null; },
-    "put(JLjava/lang/Object;)V": function (this: JSparseArray, k: bigint, v: unknown) { this.set(k as any, v); },
-    "size()I": function (this: JSparseArray) { return this.m.size; },
-    "delete(J)V": function (this: JSparseArray, k: bigint) { this.del(k as any); },
+    "<init>(I)V": function () {},
+    "get(J)Ljava/lang/Object;": function (this: JLongSparseArray, k: bigint) { return this.m.get(k as any) ?? null; },
+    "put(JLjava/lang/Object;)V": function (this: JLongSparseArray, k: bigint, v: unknown) { this.set(k as any, v); },
+    "size()I": function (this: JLongSparseArray) { return this.m.size; },
+    "delete(J)V": function (this: JLongSparseArray, k: bigint) { this.del(k as any); },
+    "remove(J)V": function (this: JLongSparseArray, k: bigint) { this.del(k as any); },
+    "keyAt(I)J": function (this: JLongSparseArray, i: number) { return this.longKeys()[i]; },
+    "valueAt(I)Ljava/lang/Object;": function (this: JLongSparseArray, i: number) { return this.m.get(this.longKeys()[i] as any) ?? null; },
+    "removeAt(I)V": function (this: JLongSparseArray, i: number) { this.del(this.longKeys()[i] as any); },
+    "clear()V": function (this: JLongSparseArray) { this.reset(); },
   } });
 
 // android.util.StateSet: a spec lists the state ids a drawable/color entry needs (negative =
