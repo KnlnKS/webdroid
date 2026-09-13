@@ -298,6 +298,10 @@ const wd = {
         const cd = normalized(v.contentDesc);
         if ((matches(txt) || matches(raw) || matches(cd)) && v.right > v.left)
           return { x: x + (v.right - v.left) / 2, y: y + (v.bottom - v.top) / 2 };
+      }
+    }
+    for (const rootView of roots) {
+      for (const { v } of walkTree(rootView, 0, 0, 0, true)) {
         const hit = locateDrawnText(v, want, SCREEN_W, SCREEN_H);
         if (hit) return hit;
       }
