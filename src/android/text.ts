@@ -10,6 +10,8 @@ import { formatDate } from "../jvm/natives/jtext";
 import { toJsArray } from "../jvm/natives/jutil";
 import { localeDirection } from "../jvm/natives/jvalues";
 import { JPersistableBundle, bundleBox } from "./os";
+import { type JLocaleList, readLocaleList } from "./resnative";
+import type { JLocale } from "../jvm/natives/jvalues";
 
 class JAnnotation extends JObj { key: string | null = null; value: string | null = null; }
 async function writeAnnotation(this: JAnnotation, parcel: JObj) {
@@ -346,6 +348,19 @@ rt.register({
   },
 });
 class JReplacementSpan extends JMetricAffectingSpan {}
+class JLocaleSpan extends JMetricAffectingSpan { locales!: JLocaleList; }
+function localeState(this: JLocaleSpan, paint: JTextPaint) { return vcall(paint, "setTextLocales", "(Landroid/os/LocaleList;)V", this.locales); }
+function writeLocaleSpan(this: JLocaleSpan, parcel: JParcel, flags: number) { return vcall(this.locales, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, flags); }
+rt.register({ name: "android/text/style/LocaleSpan", ctor: JLocaleSpan, sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"], methods: {
+  "<init>(Ljava/util/Locale;)V": async function (this: JLocaleSpan, locale: JLocale | null) { this.locales = await newObj("android/os/LocaleList", "([Ljava/util/Locale;)V", locale ? [locale] : []); },
+  "<init>(Landroid/os/LocaleList;)V": function (this: JLocaleSpan, locales: JLocaleList) { if (!locales) return rt.npe(); this.locales = locales; },
+  "<init>(Landroid/os/Parcel;)V": async function (this: JLocaleSpan, parcel: JParcel) { this.locales = await readLocaleList(parcel); },
+  "getLocale()Ljava/util/Locale;": function (this: JLocaleSpan) { return this.locales.values[0] ?? null; },
+  "getLocales()Landroid/os/LocaleList;": function (this: JLocaleSpan) { return this.locales; },
+  "getSpanTypeId()I": () => 23, "getSpanTypeIdInternal()I": () => 23, "describeContents()I": () => 0,
+  "writeToParcel(Landroid/os/Parcel;I)V": writeLocaleSpan, "writeToParcelInternal(Landroid/os/Parcel;I)V": writeLocaleSpan,
+  "updateDrawState(Landroid/text/TextPaint;)V": localeState, "updateMeasureState(Landroid/text/TextPaint;)V": localeState,
+} });
 rt.register({
   name: "android/text/style/ReplacementSpan", ctor: JReplacementSpan,
   sup: "android/text/style/MetricAffectingSpan",

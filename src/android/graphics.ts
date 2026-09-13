@@ -5,7 +5,8 @@ import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle } from "./handles";
 import { vcall, mkEnumSet, JSimpleEnum, linkInit, stringHash } from "../jvm/natives/jlang";
-import { usLocale } from "../jvm/natives/jvalues";
+import { type JLocale, localeTag, usLocale } from "../jvm/natives/jvalues";
+import type { JLocaleList } from "./resnative";
 import { readStreamFully, vfs } from "../jvm/natives/jio";
 import { jclsNameOf } from "./apphost";
 import { JBuffer } from "../jvm/natives/jnio";
@@ -332,6 +333,8 @@ export class JPaint extends JObj {
   xfermode: JObj | null = null;      // kept only so getXfermode() round-trips
   blendMode: JSimpleEnum | null = null;
   letterSpacingEm = 0;
+  locales: JLocaleList | null = null;
+  language = localeTag(usLocale);
   underline = false; strikeThru = false; fakeBold = false;
 
   // font() is called per text op and per measure; the result is a pure function of
@@ -381,8 +384,16 @@ const paintMethods: NativeSpec["methods"] = {
   "setColor(I)V": function (this: JPaint, c: number) { this.color = c; },
   "setColor(J)V": function (this: JPaint, c: bigint) { this.color = Number(BigInt.asIntN(32, c >> 32n)); },
   "getColorLong()J": function (this: JPaint) { return BigInt(this.color >>> 0) << 32n; },
-  "getTextLocale()Ljava/util/Locale;": () => usLocale,
-  "getTextLocales()Landroid/os/LocaleList;": async () => vcall((await linkInit("android/os/LocaleList")).ctor, "getDefault", "()Landroid/os/LocaleList;"),
+  "getTextLocale()Ljava/util/Locale;": function (this: JPaint) { return this.locales?.values[0] ?? usLocale; },
+  "getTextLocales()Landroid/os/LocaleList;": async function (this: JPaint) { return this.locales ??= await vcall((await linkInit("android/os/LocaleList")).ctor, "getDefault", "()Landroid/os/LocaleList;"); },
+  "setTextLocale(Ljava/util/Locale;)V": function (this: JPaint, locale: JLocale) {
+    if (!locale) throw rt.mkThrowable("java/lang/IllegalArgumentException", "locale cannot be null");
+    this.locales = Object.assign(rt.make("android/os/LocaleList"), { values: [locale] }); this.language = localeTag(locale);
+  },
+  "setTextLocales(Landroid/os/LocaleList;)V": function (this: JPaint, locales: JLocaleList) {
+    if (!locales?.values.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "locales cannot be null or empty");
+    this.locales = locales; this.language = localeTag(locales.values[0]);
+  },
   "getShader()Landroid/graphics/Shader;": function (this: JPaint) { return this.shaderObj; },
   "getStrokeMiter()F": () => 4,
   "getXfermode()Landroid/graphics/Xfermode;": function (this: JPaint) { return this.xfermode; },
@@ -441,8 +452,8 @@ const paintMethods: NativeSpec["methods"] = {
   "setFakeBoldText(Z)V": function (this: JPaint, v: number) { this.fakeBold = !!v; },
   "setLetterSpacing(F)V": function (this: JPaint, v: number) { this.letterSpacingEm = v; },
   ...noops("<init>()V", "<init>(I)V", "setHinting(I)V", "setSubpixelText(Z)V", "setLinearText(Z)V",
-    "setElegantTextHeight(Z)V", "setFontFeatureSettings(Ljava/lang/String;)V", "setTextLocale(Ljava/util/Locale;)V",
-    "setTextLocales(Landroid/os/LocaleList;)V", "setTextScaleX(F)V", "setTextSkewX(F)V", "setStartHyphenEdit(I)V",
+    "setElegantTextHeight(Z)V", "setFontFeatureSettings(Ljava/lang/String;)V",
+    "setTextScaleX(F)V", "setTextSkewX(F)V", "setStartHyphenEdit(I)V",
     "setEndHyphenEdit(I)V", "setWordSpacing(F)V", "setDither(Z)V", "setFilterBitmap(Z)V", "setStrokeMiter(F)V",
     "setFlags(I)V", "setShadowLayer(FFFI)V", "clearShadowLayer()V"),
   ...stubs(1, "isFilterBitmap()Z", "getHinting()I", "setFontVariationSettings(Ljava/lang/String;)Z",
@@ -465,7 +476,7 @@ const paintMethods: NativeSpec["methods"] = {
     return vcall(this, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", str, a, b, r);
   },
   "getTextBounds(Ljava/lang/String;IILandroid/graphics/Rect;)V": function (this: JPaint, s: string, a: number, b: number, r: JRect) {
-    const ctx = measureCtx(this.font());
+    const ctx = measureCtx(this.font(), this.language);
     const m = ctx.measureText(s.slice(a, b));
     r.left = Math.floor(-(m.actualBoundingBoxLeft ?? 0));
     r.right = Math.ceil(m.actualBoundingBoxRight ?? m.width);
@@ -492,12 +503,12 @@ const paintMethods: NativeSpec["methods"] = {
   "ascent()F": function (this: JPaint) { return fontAscent(this); },
   "descent()F": function (this: JPaint) { return fontDescent(this); },
   "getTextWidths(Ljava/lang/String;[F)I": function (this: JPaint, s: string, w: Float32Array) {
-    const ctx = measureCtx(this.font());
+    const ctx = measureCtx(this.font(), this.language);
     for (let i = 0; i < s.length; i++) w[i] = ctx.measureText(s[i]).width;
     return s.length;
   },
   "breakText(Ljava/lang/String;ZF[F)I": function (this: JPaint, s: string, fwd: number, max: number, out: Float32Array | null) {
-    const ctx = measureCtx(this.font());
+    const ctx = measureCtx(this.font(), this.language);
     let acc = 0, i = 0;
     for (; i < s.length; i++) {
       const w = ctx.measureText(s[i]).width;
@@ -515,6 +526,7 @@ export function copyPaint(src: JPaint, dst: JPaint) {
   dst.maskFilter = src.maskFilter;
   dst.filterColor = src.filterColor; dst.filterMatrix = src.filterMatrix; dst.filterObj = src.filterObj; dst.underline = src.underline; dst.fakeBold = src.fakeBold;
   dst.letterSpacingEm = src.letterSpacingEm;
+  dst.locales = src.locales; dst.language = src.language;
   dst.blend = src.blend; dst.xfermode = src.xfermode; dst.blendMode = src.blendMode;
 }
 class JFontMetrics extends JObj { top = 0; ascent = 0; descent = 0; bottom = 0; leading = 0; }
@@ -536,12 +548,13 @@ let _measureCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | 
  * assigns ctx.font itself leaves that memo naming a font the context no longer has — and the
  * next cache miss then measures with the wrong one.
  */
-export function measureCtx(font?: string): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
+export function measureCtx(font?: string, language = "en-US"): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
   if (!_measureCtx) {
     const c = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : (document.createElement("canvas"));
     _measureCtx = c.getContext("2d") as CanvasRenderingContext2D;
   }
   if (font !== undefined) setFont(_measureCtx, font);
+  if ("lang" in _measureCtx && _measureCtx.lang !== language) _measureCtx.lang = language;
   return _measureCtx;
 }
 // Browser text measurement is the hot path of every layout AND every draw (a TextView
@@ -556,14 +569,15 @@ let lastFont = "";
 function setFont(ctx: { font: string }, f: string): void {
   if (f !== lastFont) { ctx.font = f; lastFont = f; }
 }
-function rawWidth(f: string, s: string): number {
-  let byFont = widthCache.get(f);
-  if (byFont === undefined) widthCache.set(f, byFont = new Map());
+function rawWidth(f: string, s: string, language: string): number {
+  const key = language === "en-US" ? f : f + "\0" + language;
+  let byFont = widthCache.get(key);
+  if (byFont === undefined) widthCache.set(key, byFont = new Map());
   const hit = byFont.get(s);
   if (hit !== undefined) return hit;
   perf.measureTextMiss++;
-  const w = measureCtx(f).measureText(s).width;
-  if (++widthCount > WIDTH_CACHE_MAX) { widthCache = new Map([[f, byFont = new Map()]]); widthCount = 1; }
+  const w = measureCtx(f, language).measureText(s).width;
+  if (++widthCount > WIDTH_CACHE_MAX) { widthCache = new Map([[key, byFont = new Map()]]); widthCount = 1; }
   byFont.set(s, w);
   return w;
 }
@@ -584,7 +598,7 @@ export function runAdvances(p: JPaint, text: string, start: number, end: number,
 
 export function measureText(p: JPaint, s: string): number {
   perf.measureText++;
-  return Math.fround(rawWidth(p.font(), s) + p.letterSpacingEm * p.textSize * s.length);
+  return Math.fround(rawWidth(p.font(), s, p.language) + p.letterSpacingEm * p.textSize * s.length);
 }
 /**
  * The device font's vertical metrics, in em units: AOSP's Roboto build reports hhea
@@ -1572,6 +1586,7 @@ export const JOINS = ["miter", "round", "bevel"] as const;
 function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
   const ctx = cv.ctx;
   ctx.font = p.font();
+  if ("lang" in ctx) ctx.lang = p.language;
   ctx.fillStyle = p.fillStyle(ctx) as string;
   ctx.textAlign = p.textAlignN === 1 ? "center" : p.textAlignN === 2 ? "right" : "left";
   ctx.textBaseline = "alphabetic";

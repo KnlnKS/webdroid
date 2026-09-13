@@ -13,6 +13,8 @@ import { jarray } from "../jvm/abi";
 import { streamOf, streamOfSource } from "../jvm/natives/jio";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 import { fontResource } from "./fonts";
+import { type JParcel, readString, writeString } from "./parcel";
+import { parcelCreator } from "./parcelable";
 
 export class JResources extends JObj {
   host!: Resources;
@@ -35,7 +37,7 @@ export function mkJResources(host: Resources, system = true): JResources {
   if (system) systemRes = r;
   return r;
 }
-class JLocaleList extends JObj { values: JLocale[] = []; }
+export class JLocaleList extends JObj { values: JLocale[] = []; }
 const emptyLocaleList = new JLocaleList();
 const localeList = Object.assign(new JLocaleList(), { values: [usLocale] });
 const sameLocale = (a: JLocale | null, b: JLocale | null) => a === b || !!a && !!b &&
@@ -119,7 +121,8 @@ rt.register({
   },
 });
 rt.register({
-  name: "android/os/LocaleList", ctor: JLocaleList,
+  name: "android/os/LocaleList", ctor: JLocaleList, ifaces: ["android/os/Parcelable"],
+  statics: { get CREATOR() { return parcelCreator("android/os/LocaleList", readLocaleList); } },
   methods: {
     "<init>([Ljava/util/Locale;)V": function (this: JLocaleList, locales: JLocale[]) {
       if (!locales || locales.some(l => !l)) throw rt.mkThrowable("java/lang/NullPointerException", "locales");
@@ -137,8 +140,13 @@ rt.register({
     "size()I": function (this: JLocaleList) { return this.values.length; },
     "isEmpty()Z": function (this: JLocaleList) { return this.values.length === 0 ? 1 : 0; },
     "toLanguageTags()Ljava/lang/String;": function (this: JLocaleList) { return this.values.map(localeTag).join(","); },
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JLocaleList, parcel: JParcel) { writeString(parcel, this.values.map(localeTag).join(",")); },
   },
 });
+export function readLocaleList(parcel: JParcel): Promise<JLocaleList> {
+  return vcall(rt.link("android/os/LocaleList").ctor, "forLanguageTags", "(Ljava/lang/String;)Landroid/os/LocaleList;", readString(parcel));
+}
 
 /**
  * The one device Configuration every Resources reports. Night mode is device state, not an app
