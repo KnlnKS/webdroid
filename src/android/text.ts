@@ -1182,23 +1182,6 @@ rt.register({
   },
 });
 
-const sameLocalDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-rt.register({
-  name: "android/text/format/DateUtils", ctor: class extends JObj {},
-  statics: { SECOND_IN_MILLIS: 1000n, MINUTE_IN_MILLIS: 60000n, HOUR_IN_MILLIS: 3600000n, DAY_IN_MILLIS: 86400000n, WEEK_IN_MILLIS: 604800000n, YEAR_IN_MILLIS: 31449600000n },
-  methods: {
-    "static isToday(J)Z": (t: bigint) => sameLocalDay(new Date(Number(t)), new Date()) ? 1 : 0,
-    "static formatElapsedTime(J)Ljava/lang/String;": (s: bigint) => formatElapsed(Number(s)),
-    "static formatElapsedTime(Ljava/lang/StringBuilder;J)Ljava/lang/String;": (_sb: unknown, s: bigint) => formatElapsed(Number(s)),
-  },
-});
-/** h:mm:ss above an hour, m:ss below, as DateUtils.formatElapsedTime */
-function formatElapsed(seconds: number): string {
-  const h = Math.floor(seconds / 3600), m = Math.floor(seconds % 3600 / 60), s = seconds % 60;
-  const two = (n: number) => String(n).padStart(2, "0");
-  return h ? `${h}:${two(m)}:${two(s)}` : `${m}:${two(s)}`;
-}
-
 // ── android.text.format.Formatter: SI units and the 900 roll-over, as API 26+ formats them
 const BYTE_UNITS = ["B", "kB", "MB", "GB", "TB", "PB"];
 const fmtBytes = (n: bigint, short: boolean) => {

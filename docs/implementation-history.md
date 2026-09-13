@@ -2181,3 +2181,15 @@ cleared its attached flag before either callback, causing Maps' AndroidViewHolde
 its own detach-time read observation. Detachment now clears attachment after the callbacks
 and retains the dispatch thread through child and listener awaits. A suspended child/parent
 ordering test and typecheck pass; app verification follows the next server restart.
+
+The next full-Chrome JIT-enabled run survives search, place construction and route selection
+for eight minutes, with 11,851 regions/1,006 modules and advancing main ticks. The prior
+renderer crash remains intermittent; JIT enablement alone is not established as its cause.
+ViewSwitcher and comparator binary search now reach live route estimates. DateUtils date-range
+formatting then blocks route construction. Its new implementation maps Android's flags to
+bounded cached Intl formatters, handles zones and exclusive midnight ends, and appends through
+the supplied Java Formatter. Ten cases match a real Android 35 app_process probe after
+normalizing ICU-version whitespace differences; 15 focused tests and typecheck pass. After
+restart, Maps no longer reports the detach-time AndroidViewHolder error or DateUtils failure;
+route construction next reaches missing android.icu.text.NumberFormat. The route still does
+not finish rendering and geometry differs from the AVD.
