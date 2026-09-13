@@ -523,6 +523,11 @@ rt.register({
       const m = /^(?:[^:/?#]+:)?\/\/([^/?#]*)/.exec(this.u);
       return m?.[1] || null;
     },
+    "getAuthority()Ljava/lang/String;": function (this: JURI) {
+      const raw = /^(?:[^:/?#]+:)?\/\/([^/?#]*)/.exec(this.u)?.[1];
+      if (!raw) return null;
+      try { return decodeURIComponent(raw); } catch { return raw; }
+    },
     "getHost()Ljava/lang/String;": function (this: JURI) { return this.url()?.hostname ?? null; },
     "getPath()Ljava/lang/String;": function (this: JURI) { return this.url()?.pathname ?? this.u.replace(/^[a-z]+:/i, ""); },
     "toURL()Ljava/net/URL;": function (this: JURI) { const u = new JURL(); urlInit(u, this.u); return u; },
