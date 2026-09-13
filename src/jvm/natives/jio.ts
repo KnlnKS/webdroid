@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray, utf8, concat, i8, u8 } from "../abi";
-import { vcall, vcallMaybe, after, stringHash, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
+import { vcall, vcallMaybe, after, stringHash, stringCompare, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
 import { mappedBuffer, mappedReadOnlyBuffer, type JBuffer } from "./jnio";
 
@@ -93,6 +93,11 @@ export const vfs = {
 };
 
 export class JFile extends JObj { path = ""; }
+function compareFile(this: JFile, other: unknown): number {
+  if (other === null) throw rt.mkThrowable("java/lang/NullPointerException", "pathname");
+  if (!(other instanceof JFile)) throw rt.mkThrowable("java/lang/ClassCastException", "Not a File");
+  return stringCompare(this.path, other.path);
+}
 export function mkFile(path: string): JFile { const f = new JFile(); f.path = vfs.norm(path); return f; }
 const listFiles = (d: JFile) => jarray(vfs.list(d.path).map((n) => mkFile(d.path + "/" + n)), "Ljava/io/File;");
 // apps implement these to pick over a directory listing (File.listFiles(filter))
@@ -175,6 +180,8 @@ rt.register({
     "setReadable(Z)Z": () => 1, "setWritable(Z)Z": () => 1, "setExecutable(Z)Z": () => 1,
     "setReadable(ZZ)Z": () => 1, "setWritable(ZZ)Z": () => 1, "setExecutable(ZZ)Z": () => 1,
     "toString()Ljava/lang/String;": function (this: JFile) { return this.path; },
+    "compareTo(Ljava/io/File;)I": compareFile,
+    "compareTo(Ljava/lang/Object;)I": compareFile,
     "equals(Ljava/lang/Object;)Z": function (this: JFile, o: unknown) { return o instanceof JFile && o.path === this.path ? 1 : 0; },
     "hashCode()I": function (this: JFile) { return stringHash(this.path) ^ 1234321; },
     "toPath()Ljava/nio/file/Path;": function (this: JFile) { return mkPath(this.path); },

@@ -556,14 +556,15 @@ sm("equals(Ljava/lang/Object;)Z", function (o: unknown) { return (this as string
 sm("equalsIgnoreCase(Ljava/lang/String;)Z", function (o: string | null) {
   return o !== null && this.toLowerCase() === o.toLowerCase() ? 1 : 0;
 });
-sm("compareTo(Ljava/lang/String;)I", function (o: string) {
-  const n = Math.min(this.length, o.length);
+export function stringCompare(a: string, b: string): number {
+  const n = Math.min(a.length, b.length);
   for (let i = 0; i < n; i++) {
-    const d = this.charCodeAt(i) - o.charCodeAt(i);
+    const d = a.charCodeAt(i) - b.charCodeAt(i);
     if (d) return d;
   }
-  return this.length - o.length;
-});
+  return a.length - b.length;
+}
+sm("compareTo(Ljava/lang/String;)I", function (o: string) { return stringCompare(this as string, o); });
 const COMPARE_TO_STRING = mangleMethod("compareTo", "(Ljava/lang/String;)I");
 sm("compareTo(Ljava/lang/Object;)I", function (o: string) { return (this as any)[COMPARE_TO_STRING](o); });
 sm("compareToIgnoreCase(Ljava/lang/String;)I", function (o: string) {
