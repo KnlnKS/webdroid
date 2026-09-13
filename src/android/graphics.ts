@@ -1427,7 +1427,22 @@ export function locateDrawnText(owner: DrawnTextOwner, text: string, width: numb
   return bestIndex < 0 ? null : { x: points[bestIndex * 2], y: points[bestIndex * 2 + 1] };
 }
 // ── Canvas method bodies shared by several overloads
-function canvasSave(this: JCanvas) { this.ctx.save(); return this.saveCount++; }
+export function saveCanvas(cv: JCanvas): number {
+  cv.ctx.save();
+  return cv.saveCount++;
+}
+export function restoreCanvas(cv: JCanvas): void {
+  if (cv.saveCount <= 1) throw rt.mkThrowable("java/lang/IllegalStateException", "Underflow in restore - more restores than saves");
+  cv.ctx.restore();
+  cv.saveCount--;
+}
+export function restoreCanvasToCount(cv: JCanvas, count: number): void {
+  if (count < 1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Underflow in restoreToCount - more restores than saves");
+  while (cv.saveCount > count) { cv.ctx.restore(); cv.saveCount--; }
+}
+function canvasSave(this: JCanvas): number {
+  return saveCanvas(this);
+}
 /** run a transform about (px, py) instead of the origin */
 function aboutPivot(ctx: JCanvas["ctx"], px: number, py: number, f: () => void) {
   ctx.translate(px, py); f(); ctx.translate(-px, -py);
@@ -1489,13 +1504,13 @@ export const canvasMethods: NativeSpec["methods"] = {
   "saveLayer(FFFFLandroid/graphics/Paint;I)I": canvasSave,
   "saveLayer(Landroid/graphics/RectF;Landroid/graphics/Paint;I)I": canvasSave,
   "saveLayerAlpha(FFFFI)I": function (this: JCanvas, l: number, t: number, r: number, b: number, a: number) {
-    this.ctx.save();
+    const count = saveCanvas(this);
     this.ctx.globalAlpha *= a / 255;
-    return this.saveCount++;
+    return count;
   },
-  "restore()V": function (this: JCanvas) { this.ctx.restore(); this.saveCount--; },
-  "restoreToCount(I)V": function (this: JCanvas, c: number) {
-    while (this.saveCount > c) { this.ctx.restore(); this.saveCount--; }
+  "restore()V": function (this: JCanvas) { restoreCanvas(this); },
+  "restoreToCount(I)V": function (this: JCanvas, count: number) {
+    restoreCanvasToCount(this, count);
   },
   "getSaveCount()I": function (this: JCanvas) { return this.saveCount; },
   "translate(FF)V": function (this: JCanvas, x: number, y: number) { this.ctx.translate(x, y); },

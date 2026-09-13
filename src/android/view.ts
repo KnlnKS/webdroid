@@ -686,6 +686,7 @@ export async function drawView(v: JView, cv: JCanvas, parent?: JViewGroup) {
   // or every later frame inherits a dead frame's clip and the screen stays blank.
   const sc = cv.saveCount;
   ctx.save();
+  cv.saveCount++;
   try {
     ctx.translate(v.left + v.translationX, v.top + v.translationY);
     if (v.alphaV < 1) ctx.globalAlpha *= v.alphaV;
@@ -718,7 +719,6 @@ export async function drawView(v: JView, cv: JCanvas, parent?: JViewGroup) {
     noteDrawError(v, e);
   } finally {
     while (cv.saveCount > sc) { ctx.restore(); cv.saveCount--; }
-    ctx.restore();
   }
 }
 

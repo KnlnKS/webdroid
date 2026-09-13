@@ -6,7 +6,7 @@ import {
 import { mkEnumSet } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, stubs, noops } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvColor } from "./res";
-import type { JBitmap, JCanvas } from "./graphics";
+import { restoreCanvasToCount, saveCanvas, type JBitmap, type JCanvas } from "./graphics";
 
 export class JImageView extends JView {
   private dr: JDrawable | null = null;
@@ -101,7 +101,7 @@ const imageViewMethods: NativeSpec["methods"] = {
       }
     }
   },
-  "onDraw(Landroid/graphics/Canvas;)V": function (this: JImageView, cv: JCanvas) {
+  "onDraw(Landroid/graphics/Canvas;)V": function (this: JImageView, cv: JCanvas): unknown {
     const d = this.drawable;
     if (!d) return;
     const dw = Math.max(1, d.intrinsicW()), dh = Math.max(1, d.intrinsicH());
@@ -123,17 +123,23 @@ const imageViewMethods: NativeSpec["methods"] = {
       w = Math.round(dw * s); h = Math.round(dh * s);
       l = this.padL + ((aw - w) >> 1); t = this.padT + ((ah - h) >> 1);
       const ctx = cv.ctx;
-      ctx.save();
+      const saveCount = saveCanvas(cv);
       ctx.beginPath();
       ctx.rect(this.padL, this.padT, aw, ah);
       ctx.clip();
       d.bounds.left = l; d.bounds.top = t; d.bounds.right = l + w; d.bounds.bottom = t + h;
-      drawChild(d, cv);
-      ctx.restore();
-      return;
+      try {
+        const result = drawChild(d, cv);
+        if (result instanceof Promise) return result.finally(() => restoreCanvasToCount(cv, saveCount));
+      } catch (error) {
+        restoreCanvasToCount(cv, saveCount);
+        throw error;
+      }
+      restoreCanvasToCount(cv, saveCount);
+      return undefined;
     }
     d.bounds.left = l; d.bounds.top = t; d.bounds.right = l + w; d.bounds.bottom = t + h;
-    drawChild(d, cv);
+    return drawChild(d, cv);
   },
 };
 rt.register({ name: "android/widget/ImageView", ctor: JImageView, sup: "android/view/View", methods: imageViewMethods });
