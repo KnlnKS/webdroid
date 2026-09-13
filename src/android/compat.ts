@@ -128,7 +128,7 @@ rt.register({
   },
 });
 
-function minimumScalingSpan(): number {
+export function minimumScalingSpan(): number {
   const res = currentResources();
   const id = res?.idFor("dimen", "config_minScalingSpan", "android");
   return Math.round(res && id ? rvDimen(res, res.ref(id)) : 27 * device.densityDpi / 25.4);
@@ -495,7 +495,7 @@ rt.markers("android/view/animation/Animation$AnimationListener");
 
 const DOUBLE_TAP_TIMEOUT = 300, DOUBLE_TAP_MIN_TIME = 40, LONG_PRESS_TIMEOUT = 450;
 type PendingTap = { down: JMotionEvent; up: JMotionEvent | null; deferred: boolean; cancelled: boolean; timer: ReturnType<typeof setTimeout> };
-class JGestureDetector extends JObj {
+export class JGestureDetector extends JObj {
   l: unknown = null;
   doubleListener: unknown = null;
   down: JMotionEvent | null = null;
@@ -596,8 +596,9 @@ rt.register({
     "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JGestureDetector, event: JMotionEvent) { return inMainJob() ? this.touch(event) : onMain(() => this.touch(event)); },
   },
 });
+export class JSimpleGestureListener extends JObj {}
 rt.register({
-  name: "android/view/GestureDetector$SimpleOnGestureListener", ctor: class extends JObj {},
+  name: "android/view/GestureDetector$SimpleOnGestureListener", ctor: JSimpleGestureListener,
   ifaces: ["android/view/GestureDetector$OnGestureListener", "android/view/GestureDetector$OnDoubleTapListener"],
   methods: {
     ...noops("<init>()V", "onLongPress(Landroid/view/MotionEvent;)V", "onShowPress(Landroid/view/MotionEvent;)V"),

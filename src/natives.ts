@@ -86,6 +86,7 @@ import "./android/security";
 import "./android/transition";
 import "./android/sqlite";
 import "./android/compat";
+import "./android/scalegesture";
 import "./android/dialog";
 import "./android/pickers";
 import "./android/listview";
