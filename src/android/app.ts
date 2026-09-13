@@ -515,6 +515,7 @@ rt.register({
     "getId()Ljava/lang/String;": function (this: JAccessibilityServiceInfo) { return this.id; },
   },
 });
+const activeOpWatchers = new WeakMap<JObj, Map<unknown, { ops: string[]; executor: unknown }>>();
 for (const [name, methods, statics] of [
   ["android/app/ActivityManager", {
     "getMemoryClass()I": () => 256,
@@ -694,6 +695,16 @@ for (const [name, methods, statics] of [
     "startOpNoThrow(Ljava/lang/String;ILjava/lang/String;)I": function (this: JObj, op: string, uid: number, pkg: string) {
       return vcall(this, "checkOpNoThrow", "(Ljava/lang/String;ILjava/lang/String;)I", op, uid, pkg);
     },
+    "startWatchingActive([Ljava/lang/String;Ljava/util/concurrent/Executor;Landroid/app/AppOpsManager$OnOpActiveChangedListener;)V":
+      function (this: JObj, ops: string[] | null, executor: unknown, listener: unknown) {
+        if (ops === null || executor === null || listener === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+        let watchers = activeOpWatchers.get(this);
+        if (!watchers) activeOpWatchers.set(this, watchers = new Map());
+        watchers.set(listener, { ops: [...ops], executor });
+      },
+    "stopWatchingActive(Landroid/app/AppOpsManager$OnOpActiveChangedListener;)V": function (this: JObj, listener: unknown) {
+      activeOpWatchers.get(this)?.delete(listener);
+    },
     ...stubs(null, "static permissionToOp(Ljava/lang/String;)Ljava/lang/String;"),
     ...stubs(0, "noteOp(Ljava/lang/String;ILjava/lang/String;)I", "noteProxyOp(Ljava/lang/String;Ljava/lang/String;)I",
       "noteProxyOpNoThrow(Ljava/lang/String;Ljava/lang/String;)I", "checkOp(Ljava/lang/String;ILjava/lang/String;)I",
@@ -806,7 +817,7 @@ rt.register({
   },
 });
 // apps `implements` this to track refresh-rate / display changes; it must link even though it never fires here
-rt.markers("android/hardware/display/DisplayManager$DisplayListener", "android/app/AppOpsManager$OnOpChangedListener");
+rt.markers("android/hardware/display/DisplayManager$DisplayListener", "android/app/AppOpsManager$OnOpChangedListener", "android/app/AppOpsManager$OnOpActiveChangedListener");
 // AccessibilityManager callback interfaces — apps `implements` these to watch for a
 // screen reader turning on; must link even though it never fires here (see above).
 for (const n of ["AccessibilityStateChangeListener", "TouchExplorationStateChangeListener", "AccessibilityServicesStateChangeListener"]) {
