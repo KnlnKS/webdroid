@@ -415,7 +415,8 @@ rt.register({
   name: "android/graphics/Path", ctor: JPath,
   methods: {
     "<init>()V": function () {},
-    "<init>(Landroid/graphics/Path;)V": function (this: JPath, o: JPath) { if (o) this.ops = o.ops.slice(); },
+    "<init>(Landroid/graphics/Path;)V": function (this: JPath, o: JPath) { if (o) copyPath(this, o); },
+    "set(Landroid/graphics/Path;)V": function (this: JPath, o: JPath) { copyPath(this, o); },
     "reset()V": function (this: JPath) { this.ops.length = 0; this.dirty = true; },
     "rewind()V": function (this: JPath) { this.ops.length = 0; this.dirty = true; },
     "moveTo(FF)V": function (this: JPath, x: number, y: number) { this.add(["m", x, y]); this.curX = this.startX = x; this.curY = this.startY = y; },
@@ -507,6 +508,15 @@ rt.register({
     },
   },
 });
+
+function copyPath(dst: JPath, src: JPath): void {
+  dst.ops = src.ops.map((op) => op.slice() as PathOp);
+  dst.curX = src.curX; dst.curY = src.curY;
+  dst.startX = src.startX; dst.startY = src.startY;
+  dst.fillRule = src.fillRule;
+  dst.p2d = null;
+  dst.dirty = true;
+}
 
 // These three walk coordinates only: an op's trailing scalars are radii and angles, and moving
 // or bounding a path must not touch them. Exported because AOSP's own Path bytecode reaches
