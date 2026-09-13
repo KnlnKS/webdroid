@@ -162,6 +162,12 @@ function bridge(o: JObj, thread: JThread): WebInterfaces[string] {
 }
 
 const WV_S = "(Landroid/webkit/WebView;Ljava/lang/String;)V";
+const navigationKeys: Record<number, readonly [string, number]> = {
+  19: ["ArrowUp", 38], 20: ["ArrowDown", 40], 21: ["ArrowLeft", 37], 22: ["ArrowRight", 39],
+  23: ["Enter", 13], 61: ["Tab", 9], 62: [" ", 32], 66: ["Enter", 13], 67: ["Backspace", 8],
+  92: ["PageUp", 33], 93: ["PageDown", 34], 111: ["Escape", 27], 112: ["Delete", 46],
+  122: ["Home", 36], 123: ["End", 35],
+};
 const REQ = "com/android/webview/chromium/WebViewContentsClientAdapter$WebResourceRequestAdapter";
 class JReq extends JObj { url = ""; main = true; gesture = false; }
 function mkRequest(url: string, gesture = false): JReq {
@@ -343,6 +349,19 @@ export class JWebView extends JViewGroup {
     if (!w) return "null";
     try { return JSON.stringify((w as unknown as { eval(s: string): unknown }).eval(js)) ?? "null"; } catch { return "null"; }
   }
+  async keyEvent(code: number, event: unknown, type: "keydown" | "keyup"): Promise<number> {
+    if (await vcall(this.client, "shouldOverrideKeyEvent", "(Landroid/webkit/WebView;Landroid/view/KeyEvent;)Z", this, event)) return 1;
+    const key = navigationKeys[code];
+    if (!key || !this.el || !this.loaded) return 0;
+    const init = { key: key[0], code: code === 62 ? "Space" : key[0], keyCode: key[1], which: key[1], bubbles: true, cancelable: true,
+      repeat: (await vcall(event, "getRepeatCount", "()I")) > 0 };
+    const generation = this.gen;
+    // Renderer handlers can call back into Java; never hold the main queue awaiting them.
+    void Promise.resolve(this.evalJs(`(document.activeElement || document.body).dispatchEvent(new KeyboardEvent(${JSON.stringify(type)}, ${JSON.stringify(init)}))`)).then((unhandled) => {
+      if (unhandled === "true" && this.gen === generation) void onMain(() => vcall(this.client, "onUnhandledKeyEvent", "(Landroid/webkit/WebView;Landroid/view/KeyEvent;)V", this, event));
+    });
+    return 1;
+  }
   /** screen rect of the view: up the tree, clipped by each ancestor the way its dispatchDraw clips */
   place(): boolean {
     let l = 0, t = 0, r = this.width(), b = this.height(), v: JView = this;
@@ -423,6 +442,8 @@ rt.register({
     "evaluateJavascript(Ljava/lang/String;Landroid/webkit/ValueCallback;)V": function (this: JWebView, js: string, cb: unknown) {
       void Promise.resolve(this.evalJs(js)).then((r) => cb && onMain(() => vcall(cb, "onReceiveValue", "(Ljava/lang/Object;)V", r)));
     },
+    "onKeyDown(ILandroid/view/KeyEvent;)Z": function (this: JWebView, code: number, event: unknown) { return this.keyEvent(code, event, "keydown"); },
+    "onKeyUp(ILandroid/view/KeyEvent;)Z": function (this: JWebView, code: number, event: unknown) { return this.keyEvent(code, event, "keyup"); },
     "addJavascriptInterface(Ljava/lang/Object;Ljava/lang/String;)V": function (this: JWebView, o: JObj, name: string) { this.ifaces[name] = bridge(o, this.bridgeThread); },
     "removeJavascriptInterface(Ljava/lang/String;)V": function (this: JWebView, name: string) { delete this.ifaces[name]; },
     "getContentHeight()I": function (this: JWebView) { return this.contentHeight(); },
