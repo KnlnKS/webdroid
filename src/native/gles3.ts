@@ -283,8 +283,7 @@ const EXT: [string, string][] = [
 // ES2 extensions that ES 3.0 core subsumes without a new entry point; an engine gating on the name sees them
 const CORE = "GL_OES_element_index_uint GL_OES_depth24 GL_OES_packed_depth_stencil GL_OES_standard_derivatives GL_OES_texture_float GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_rgb8_rgba8 GL_OES_depth_texture GL_OES_texture_npot GL_OES_fbo_render_mipmap GL_EXT_texture_rg GL_EXT_sRGB GL_EXT_blend_minmax";
 const extsOf = new WeakMap<GL, string[]>();
-function exts(): string[] {
-  const gl = g();
+export function gles3Extensions(gl: GL): string[] {
   let e = extsOf.get(gl);
   if (!e) { e = CORE.split(" "); for (const [w, n] of EXT) if (gl.getExtension(w) && n) e.push(n); extsOf.set(gl, e); }
   return e;
@@ -295,14 +294,14 @@ function str(name: number): string {
     case 0x1f01: return (g().getExtension("WEBGL_debug_renderer_info") && (g().getParameter(0x9246) as string)) || "WebGL2";
     case 0x1f02: return "OpenGL ES 3.0 webdroid";
     case 0x8b8c: return "OpenGL ES GLSL ES 3.00";
-    case 0x1f03: return exts().join(" ");
+    case 0x1f03: return gles3Extensions(g()).join(" ");
     default: return "";
   }
 }
 function param(pname: number): unknown {
   switch (pname) {
     case 0x821b: return 3; case 0x821c: return 0;                                   // MAJOR/MINOR_VERSION
-    case 0x821d: return exts().length;                                              // NUM_EXTENSIONS
+    case 0x821d: return gles3Extensions(g()).length;                               // NUM_EXTENSIONS
     case 0x87fe: case 0x8df9: return 0;                                             // NUM_PROGRAM/SHADER_BINARY_FORMATS
     case 0x86a2: return (g().getParameter(0x86a3) as Uint32Array).length;           // NUM_COMPRESSED_TEXTURE_FORMATS
     default: return g().getParameter(pname);
@@ -370,7 +369,7 @@ export function gles3Init(): void {
     ...glCommon,
     // ── strings, state queries, errors
     glGetString: (_c, a) => cstr(str(a.i())),
-    glGetStringi: (_c, a) => { const n = a.i(), i = a.i(); return cstr(n === 0x1f03 ? exts()[i] ?? "" : ""); },
+    glGetStringi: (_c, a) => { const n = a.i(), i = a.i(); return cstr(n === 0x1f03 ? gles3Extensions(g())[i] ?? "" : ""); },
     glGetIntegeri_v: (_c, a) => { const t = a.i(), i = a.i(); out(g().getIndexedParameter(t, i), a.p(), st32, 4); },
     glGetInteger64i_v: (_c, a) => { const t = a.i(), i = a.i(); out(g().getIndexedParameter(t, i), a.p(), st64, 8); },
     glGetInternalformativ: (_c, a) => {

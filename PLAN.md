@@ -41,7 +41,8 @@ platform contracts; run the full serialized E2E suite at the end.
    the screen because computeScrollOffset returned false on its final position update.
    Focused ARM32/A64 and scroller checks pass. Chrome now has zero errors in a bounded
    GL trace, no black label backgrounds, and a visible place card with photos. A JIT-disabled
-   headless run still shows incorrect water/polygons. Queue draining now covers a later
+   headless run now renders correct water/land colors after sharing the supported GLES
+   extension list; the empty Java list had selected padded palettes with logical coordinates. Queue draining now covers a later
    request-worker failure and needs another app pass.
    Place construction also progressed through TextureView transforms, TransitionDrawable,
    corrected set interfaces, Arrays.deepToString, TouchDelegate, clearSpans and Range.

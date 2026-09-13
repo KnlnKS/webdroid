@@ -4,6 +4,7 @@ import { rt, JObj } from "../jvm/runtime";
 import { JBuffer, bufferView } from "../jvm/natives/jnio";
 import { JBitmap } from "./graphics";
 import { gles1String } from "../native/gles1";
+import { gles3Extensions } from "../native/gles3";
 
 // ── The active GL context (one GLSurfaceView at a time is typical)
 type GL = WebGL2RenderingContext | WebGLRenderingContext;
@@ -253,7 +254,7 @@ rt.register({
       switch (name) {
         case 0x1f00: return "webdroid"; case 0x1f01: return "webdroid-webgl";
         case 0x1f02: return "OpenGL ES 2.0"; case 0x8b8c: return "OpenGL ES GLSL ES 1.00";
-        case 0x1f03: return "";
+        case 0x1f03: return gl && "createVertexArray" in gl ? gles3Extensions(gl).join(" ") : "";
         default: return "";
       }
     },

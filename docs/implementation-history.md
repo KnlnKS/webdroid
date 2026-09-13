@@ -2103,3 +2103,15 @@ transfer on failure. Eight focused queue/executor checks (58 assertions) and typ
 App verification of this queue change is pending. The ActivityManager test-harness query is
 also implemented, but its place-video path still requires verification. Main-thread trace
 identity, transient Compose attachment, serialization and rendering issues remain open.
+
+The white-water cause is the Java GLES extension query, not triangulation. Unchanged native
+tessellation probes return correct areas for a square, reversed winding, a hole and separate
+polygons. GPU-buffer inspection finds a blue-row triangle covering a sampled white-ocean
+pixel. Transform feedback then shows the shader rejecting that row: Maps allocated a padded
+32×16 palette while its shader used reciprocal logical dimensions 1/29 and 1/10. Empty Java
+GL_EXTENSIONS selects the app's power-of-two fallback; native GLES already reports WebGL 2's
+non-power-of-two support. Java now reuses the native capability list for a WebGL 2 context.
+No app data, shader, geometry or texture dimensions are changed. A fresh JIT-disabled Maps
+run renders blue oceans/lakes and expected land colors (headless-npot-fixed-home.png), with
+GL error zero and advancing frames. Typecheck passes. Full Chrome and detailed place/route
+comparison remain to be repeated. UI attachment, trace identity and visual differences remain.
