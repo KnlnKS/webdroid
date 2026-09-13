@@ -10,52 +10,36 @@ platform contracts; run the full serialized E2E suite at the end.
 
 ## Checkpoint
 
-- Own Chrome tab: `http://localhost:4126/?apk=Google%20Maps.apk&screen=1080x2424@480`.
-- Android reference captures home, Golden Gate Bridge place details, and a driving route
-  from Ferry Building. Files are in `webdroid-shots/maps/` (ignored).
-- Full Chrome reaches live autocomplete and starts place construction. A fresh headless run
-  draws map geometry and labels, with visibly incorrect colors/polygons. Full Chrome has
-  still shown a blank map on recent runs. Place/route parity is not achieved.
-- Focused commits cover native APS2/RELR relocation, executor virtual factories/completion,
-  matrix inversion, AtomicFile, value contracts, frame constructors/relative rules,
-  reference queues, message queues, integer buffers, provider identity and widget/GL types.
-- Further commits cover SAX, ClipData/IntentFilter parcels, StatsEvent, TimeAnimator,
-  provider file snapshots, serialization block lengths, live-thread enumeration,
-  TLS ALPN, URI parsing and CharSequence encoding. Bootstrap platform queries are committed.
-- Real TLS probes through the relay and through Java SSLSocket negotiate HTTP/2 with Google.
-  Maps progressed through TLS selection and URI encoding to DNS address selection;
-  subsequent fixes cover connected socket endpoints, hierarchical URI construction,
-  cyclic barriers, stream composition, buffer ranges, View.ALPHA and abstract reflection.
-- A later microG receiver reached missing Intent list extras; the getter/setter fix is
-  committed and requires another all-process check. Main-process
-  capability probes still name unsupported hardware/service classes; do not treat empty
-  service telemetry as complete app coverage.
-- Maps smoke: 72,887 classes, zero method failures. Focused checks and typecheck pass at
-  recent checkpoints; rerun affected checks after subsequent edits. Full E2E not run yet.
+- Full installed Chrome runs the unchanged APK at port 4126 with JIT enabled. Fresh
+  runs render the home map and Golden Gate Bridge place map with correct colors.
+  Search and place details work partially. Screenshot parity is not achieved.
+- Android reference captures include home, place, Ferry Building driving directions,
+  and route preview. Captures are in `webdroid-shots/maps/` (ignored).
+- Focused commits now cover native loading/rendering, networking, platform value and
+  collection contracts, resources and widgets, attachment lifecycle ordering, date
+  ranges, ICU percentage formatting, floating array search, and Handler thread identity.
+  Evidence and limitations are recorded in `docs/implementation-history.md`.
+- Route construction reaches time estimates and route cards without the earlier
+  DateUtils, ICU NumberFormat, SortedMap or double binarySearch exceptions. The route
+  remains visually incomplete: descendants retain layout requests beneath a clean
+  ancestor and some text has never been measured. A diagnostic ancestor request made
+  those details appear. The map container remains INVISIBLE after the transition.
+- Startup still reports the LoginPromoTutorialController trace-span mismatch. The
+  Handler identity fix passes focused tests but did not remove that app error.
+  The previously observed detached AndroidViewHolder error is absent in fresh runs.
+- Maps smoke at an earlier checkpoint: 72,887 classes, zero method failures. Focused
+  checks and typecheck pass after recent edits. Full E2E has not run yet.
+- An earlier Chrome/JIT crash has not reproduced in several fresh headed runs. This
+  is not proof it is resolved. Diagnostic instrumentation invalidates timing results.
 
 ## Next
 
-1. Continue rendering diagnosis after verifying the CriticalNative calling convention and
-   Scroller completion fixes in Chrome after restart. Chrome passed a JNI environment pointer as glEnable's
-   enum; DEX annotations show that method is CriticalNative. A place card remained below
-   the screen because computeScrollOffset returned false on its final position update.
-   Focused ARM32/A64 and scroller checks pass. Chrome now has zero errors in a bounded
-   GL trace, no black label backgrounds, and a visible place card with photos. A JIT-disabled
-   headless run now renders correct water/land colors after sharing the supported GLES
-   extension list; the empty Java list had selected padded palettes with logical coordinates. Queue draining now covers a later
-   request-worker failure and needs another app pass.
-   Place construction also progressed through TextureView transforms, TransitionDrawable,
-   corrected set interfaces, Arrays.deepToString, TouchDelegate, clearSpans and Range.
-   The preceding blockers were
-   Collections.disjoint, Rational, TtsSpan, ScaleGestureDetector and LocaleSpan. Native SQLite
-   cache open/query/close now succeeds after the lock-query and shared-file-content fixes.
-   Android HTTP header indexing, EGL no-context handles and GLES calls allow styles to load
-   and tiles to prepare/draw. Investigate incorrect map rendering and the full-Chrome blank
-   map. The startup trace-span mismatch and transient Compose attachment error remain;
-   a thread/looper identity fix removed the observed VTO main-thread error in one later run.
-   Inspect all process diagnostics and advancing queues/frames again.
-2. Exercise matching Maps search/place/directions interactions in Chrome and Android;
-   capture screenshots, correct generic failures and record evidence limits.
-3. Verify changed contracts, measure functioning startup/idle behavior, then run the full
-   serialized E2E suite and compare ambiguous failures to the base. Keep goldens unchanged.
-4. Finish focused commits and leave this worktree separate; do not merge.
+1. Trace the lost route layout request and hidden map transition to their generic
+   platform causes. Continue checking startup thread/span ordering and remaining API
+   failures against Android/bytecode evidence.
+2. Exercise matching Maps search, place, directions and preview interactions in Chrome
+   and Android. Capture fresh screenshots; fix geometry and behavior without app cases.
+3. Verify affected contracts and Maps compilation, measure functioning rendering with
+   instrumentation disabled, then run the full serialized E2E suite. Compare ambiguous
+   failures to starting commit `f3fefda` under matching settings; preserve goldens.
+4. Remove temporary diagnostics, finish focused commits, leave the worktree separate.

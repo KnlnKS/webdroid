@@ -96,3 +96,64 @@ for (const inLayout of [false, true]) test(`${inLayout ? "addViewInLayout" : "ad
   });
   await onMain(() => expect(events).toEqual(["attached", "added", "listener"]));
 });
+
+for (const [method, desc, args] of [
+  ["removeView", "(Landroid/view/View;)V", "child"],
+  ["removeViewInLayout", "(Landroid/view/View;)V", "child"],
+  ["removeViewAt", "(I)V", "index"],
+  ["removeViews", "(II)V", "range"],
+  ["removeViewsInLayout", "(II)V", "range"],
+  ["removeAllViews", "()V", "all"],
+  ["removeAllViewsInLayout", "()V", "all"],
+] as const) test(`${method} completes detachment before the child is re-added`, async () => {
+  const parent = rt.make("android/widget/FrameLayout"), child = rt.make("android/view/View");
+  if (!(parent instanceof JView) || !(child instanceof JView)) throw new Error("Invalid view delegates");
+  const events: string[] = [];
+  Object.assign(child, {
+    [mangleMethod("onDetachedFromWindow", "()V")]: async () => {
+      expect(child.parent).toBe(parent);
+      expect(child.attached).toBe(true);
+      await Promise.resolve();
+      events.push("detached");
+    },
+  });
+  Object.assign(parent, {
+    [mangleMethod("onViewRemoved", "(Landroid/view/View;)V")]: async () => {
+      expect(child.parent).toBe(args === "range" || args === "all" ? parent : null);
+      expect(child.attached).toBe(false);
+      await Promise.resolve();
+      events.push("removed");
+    },
+  });
+  await vcall(parent, "setOnHierarchyChangeListener", "(Landroid/view/ViewGroup$OnHierarchyChangeListener;)V", {
+    [mangleMethod("onChildViewAdded", "(Landroid/view/View;Landroid/view/View;)V")]: () => {},
+    [mangleMethod("onChildViewRemoved", "(Landroid/view/View;Landroid/view/View;)V")]: async () => {
+      await Promise.resolve();
+      events.push("listener");
+    },
+  });
+  await onMain(async () => {
+    await dispatchAttached(parent);
+    await vcall(parent, "addView", "(Landroid/view/View;)V", child);
+    await vcall(parent, method, desc, ...(args === "child" ? [child] : args === "index" ? [0] : args === "range" ? [0, 1] : []));
+    expect(events).toEqual(["detached", "removed", "listener"]);
+    await vcall(parent, "addView", "(Landroid/view/View;)V", child);
+  });
+  await onMain(() => expect(child.attached).toBe(true));
+});
+
+test("removeDetachedView finishes window removal after temporary parent detachment", async () => {
+  const parent = rt.make("android/widget/FrameLayout"), child = rt.make("android/view/View");
+  if (!(parent instanceof JView) || !(child instanceof JView)) throw new Error("Invalid view delegates");
+  await onMain(async () => {
+    await dispatchAttached(parent);
+    await vcall(parent, "addView", "(Landroid/view/View;)V", child);
+    await vcall(parent, "detachViewFromParent", "(Landroid/view/View;)V", child);
+    expect(child.attached).toBe(true);
+    expect(child.parent).toBe(null);
+    await vcall(parent, "removeDetachedView", "(Landroid/view/View;Z)V", child, 0);
+    expect(child.attached).toBe(false);
+    await vcall(parent, "addView", "(Landroid/view/View;)V", child);
+  });
+  await onMain(() => expect(child.attached).toBe(true));
+});

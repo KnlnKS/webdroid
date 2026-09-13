@@ -2222,3 +2222,19 @@ virtual call, including Handler.Callback falling through to handleMessage after
 suspension. Logged and unlogged dispatch tests pass. A fresh headed Chrome Maps run
 still reports the LoginPromoTutorialController trace-span mismatch, so this corrects
 a platform contract without establishing the cause of that remaining app failure.
+
+### Complete Java view removal before returning
+
+The route had an unattached subtree beneath the attached MainLayout: native removal
+queued dispatchDetached after Java had re-added the same view. That late detachment
+also excluded surviving layout requests from replay. Java remove methods now await
+detachment and the onViewRemoved/hierarchy callbacks, preserving thread identity and
+Android's parent-link ordering. Range removal remains linear. Temporary detachment
+still preserves window attachment until removeDetachedView.
+
+A focused removal/re-add test reproduced premature returns across all seven removal
+entry points; those tests and temporary-detachment coverage now pass. A fresh headed
+Maps run has no detached children beneath attached parents and renders route estimates,
+distance, traffic text and Preview without diagnostic layout requests. The map remains
+hidden, and the progressing renderer now reports missing Matrix.perspectiveM. Startup
+trace mismatch, small icons and other geometry differences remain unresolved.
