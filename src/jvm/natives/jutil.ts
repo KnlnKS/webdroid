@@ -848,7 +848,8 @@ for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/conc
   rt.register({
     name: n, ctor: class extends JMap {}, typeVars: "K,V",
     sup: n === "java/util/LinkedHashMap" ? "java/util/HashMap" : n === "android/util/ArrayMap" ? "java/lang/Object" : "java/util/AbstractMap",
-    ifaces: ["java/util/Map", "java/util/concurrent/ConcurrentMap", "java/util/SortedMap", "java/lang/Cloneable", "java/io/Serializable"],
+    ifaces: ["java/util/Map", ...(n === "java/util/concurrent/ConcurrentHashMap" ? ["java/util/concurrent/ConcurrentMap"] : []),
+      ...(["java/util/WeakHashMap", "android/util/ArrayMap"].includes(n) ? [] : ["java/lang/Cloneable", "java/io/Serializable"])],
     methods,
   });
 }

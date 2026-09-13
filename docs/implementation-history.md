@@ -2200,3 +2200,9 @@ fraction digit setters preserve their min/max invariant and long formatting avoi
 precision loss. Three focused tests match Android 35 percentage, locale, rounding and long
 probes; typecheck passes. Maps advances to route-map construction, where double-array binary
 search is missing. The detailed route cards and controls still have layout defects.
+
+Maps bwep.a checks instanceof SortedMap before calling comparator(). The hash-map family
+incorrectly advertised SortedMap and ConcurrentMap on every implementation. Registrations
+now expose ConcurrentMap only on ConcurrentHashMap, and no hash map claims SortedMap;
+WeakHashMap and ArrayMap also no longer claim unsupported clone/serialization interfaces.
+Focused type checks preserve TreeMap's SortedMap contract. App verification follows restart.
