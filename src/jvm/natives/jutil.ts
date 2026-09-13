@@ -1994,6 +1994,7 @@ rt.register({
     "static binarySearch([CC)I": taBinarySearch,
     "static binarySearch([JJ)I": taBinarySearch,
     "static binarySearch([Ljava/lang/Object;Ljava/lang/Object;)I": (a: unknown[], k: unknown) => arrBinarySearch(a, k, null),
+    "static binarySearch([Ljava/lang/Object;Ljava/lang/Object;Ljava/util/Comparator;)I": arrBinarySearch,
   },
 });
 // The typed-array Arrays statics: one body per operation serves every element type, because
