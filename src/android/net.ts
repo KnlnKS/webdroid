@@ -363,6 +363,7 @@ rt.register({
     "getFrequency()I": () => -1,
     "getHiddenSSID()Z": () => 0,
     "describeContents()I": () => 0,
+    "toString()Ljava/lang/String;": () => "SSID: <unknown ssid>, BSSID: 02:00:00:00:00:00, MAC: 02:00:00:00:00:00, RSSI: -127, Link speed: -1Mbps, Net ID: -1",
   },
 });
 class JDhcpInfo extends JObj { ipAddress = 0; gateway = 0; netmask = 0; dns1 = 0; dns2 = 0; serverAddress = 0; leaseDuration = 0; }
@@ -370,6 +371,16 @@ rt.register({
   name: "android/net/DhcpInfo", ctor: JDhcpInfo, ifaces: ["android/os/Parcelable"],
   fields: ["ipAddress", "gateway", "netmask", "dns1", "dns2", "serverAddress", "leaseDuration"],
   methods: { "<init>()V": function () {} },
+});
+class JWifiLock extends JObj { held = false; refCounted = true; }
+rt.register({
+  name: "android/net/wifi/WifiManager$WifiLock", ctor: JWifiLock,
+  methods: {
+    "acquire()V": function (this: JWifiLock) { this.held = true; },
+    "release()V": function (this: JWifiLock) { this.held = false; },
+    "isHeld()Z": function (this: JWifiLock) { return +this.held; },
+    "setReferenceCounted(Z)V": function (this: JWifiLock, enabled: number) { this.refCounted = !!enabled; },
+  },
 });
 rt.register({
   name: "android/net/wifi/WifiManager", ctor: class extends JObj {},
@@ -382,6 +393,8 @@ rt.register({
     "getDhcpInfo()Landroid/net/DhcpInfo;": () => new JDhcpInfo(),
     "getScanResults()Ljava/util/List;": () => newArrayList(),
     "getConfiguredNetworks()Ljava/util/List;": () => newArrayList(),
+    "createWifiLock(ILjava/lang/String;)Landroid/net/wifi/WifiManager$WifiLock;": () => new JWifiLock(),
+    "createWifiLock(Ljava/lang/String;)Landroid/net/wifi/WifiManager$WifiLock;": () => new JWifiLock(),
     "startScan()Z": () => 0,
     "isScanAlwaysAvailable()Z": () => 0,
     "is5GHzBandSupported()Z": () => 0,
@@ -618,35 +631,5 @@ rt.register({
     "static getMobileTxBytes()J": () => -1n,
     "static getUidRxBytes(I)J": () => -1n,
     "static getUidTxBytes(I)J": () => -1n,
-  },
-});
-
-// The one network is Wi-Fi (NetworkInfo says so), so the Wi-Fi radio is on and associated.
-// What a browser cannot see is what AOSP hides from an app without location access anyway:
-// the SSID/BSSID placeholders, no RSSI, no scan results.
-rt.register({
-  name: "android/net/wifi/WifiInfo", ctor: class extends JObj {},
-  methods: {
-    "getSSID()Ljava/lang/String;": () => "<unknown ssid>",
-    "getBSSID()Ljava/lang/String;": () => "02:00:00:00:00:00",
-    "getMacAddress()Ljava/lang/String;": () => "02:00:00:00:00:00",
-    "getRssi()I": () => -127,
-    "getNetworkId()I": () => -1,
-    "getLinkSpeed()I": () => -1,
-    "getFrequency()I": () => -1,
-    "getIpAddress()I": () => 0,
-    "toString()Ljava/lang/String;": () => "SSID: <unknown ssid>, BSSID: 02:00:00:00:00:00, MAC: 02:00:00:00:00:00, RSSI: -127, Link speed: -1Mbps, Net ID: -1",
-  },
-});
-rt.register({
-  name: "android/net/wifi/WifiManager", ctor: class extends JObj {},
-  statics: { WIFI_STATE_DISABLED: 1, WIFI_STATE_ENABLED: 3 },
-  methods: {
-    "isWifiEnabled()Z": () => 1,
-    "getWifiState()I": () => 3,
-    "getConnectionInfo()Landroid/net/wifi/WifiInfo;": () => rt.make("android/net/wifi/WifiInfo"),
-    "getScanResults()Ljava/util/List;": () => newArrayList(),
-    "getConfiguredNetworks()Ljava/util/List;": () => newArrayList(),
-    ...stubs(0, "startScan()Z", "is5GHzBandSupported()Z", "isScanAlwaysAvailable()Z", "setWifiEnabled(Z)Z"),
   },
 });

@@ -108,6 +108,7 @@ const SERVICE_CLASS: Record<string, string> = {
   clipboard: "android/content/ClipboardManager",
   uimode: "android/app/UiModeManager",
   accessibility: "android/view/accessibility/AccessibilityManager",
+  captioning: "android/view/accessibility/CaptioningManager",
   keyguard: "android/app/KeyguardManager",
   jobscheduler: "android/app/job/JobScheduler",
   sensor: "android/hardware/SensorManager",

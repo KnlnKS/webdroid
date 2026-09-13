@@ -52,6 +52,7 @@ class JWebSettings extends JObj {
 }
 const settingsMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>()V": function () {},
+  "static getDefaultUserAgent(Landroid/content/Context;)Ljava/lang/String;": () => UA,
   "setAppCacheEnabled(Z)V": () => {}, "setAppCacheMaxSize(J)V": () => {}, "setAppCachePath(Ljava/lang/String;)V": () => {},
   "setDatabasePath(Ljava/lang/String;)V": () => {}, "setGeolocationDatabasePath(Ljava/lang/String;)V": () => {},
   "setEnableSmoothTransition(Z)V": () => {},
@@ -84,6 +85,17 @@ rt.register({
     MIXED_CONTENT_ALWAYS_ALLOW: 0, MIXED_CONTENT_NEVER_ALLOW: 1, MIXED_CONTENT_COMPATIBILITY_MODE: 2,
   },
 });
+
+class JServiceWorkerController extends JObj { client: unknown = null; }
+const serviceWorkerController = new JServiceWorkerController();
+rt.register({
+  name: "android/webkit/ServiceWorkerController", ctor: JServiceWorkerController,
+  methods: {
+    "static getInstance()Landroid/webkit/ServiceWorkerController;": () => serviceWorkerController,
+    "setServiceWorkerClient(Landroid/webkit/ServiceWorkerClient;)V": function (this: JServiceWorkerController, client: unknown) { this.client = client; },
+  },
+});
+rt.register({ name: "android/webkit/ServiceWorkerClient", ctor: class extends JObj {} });
 
 // ── the frame layer (shell-owned) and the per-frame sweep
 let layer: HTMLElement | null = null;
@@ -172,6 +184,34 @@ function mkRequest(url: string, gesture = false): JReq {
 class JWebErr extends JObj { code = -1; desc = ""; }
 
 interface Entry { url: string; src?: string; doc?: string }
+class JWebHistoryItem extends JObj {
+  constructor(public entry: Entry) { super(); }
+}
+class JWebBackForwardList extends JObj {
+  constructor(public entries: Entry[], public index: number) { super(); }
+}
+rt.register({
+  name: "android/webkit/WebHistoryItem", ctor: JWebHistoryItem,
+  methods: {
+    "getUrl()Ljava/lang/String;": function (this: JWebHistoryItem) { return this.entry.url; },
+    "getOriginalUrl()Ljava/lang/String;": function (this: JWebHistoryItem) { return this.entry.url; },
+    "getTitle()Ljava/lang/String;": () => null,
+    "getFavicon()Landroid/graphics/Bitmap;": () => null,
+  },
+});
+rt.register({
+  name: "android/webkit/WebBackForwardList", ctor: JWebBackForwardList,
+  methods: {
+    "getSize()I": function (this: JWebBackForwardList) { return this.entries.length; },
+    "getCurrentIndex()I": function (this: JWebBackForwardList) { return this.index; },
+    "getCurrentItem()Landroid/webkit/WebHistoryItem;": function (this: JWebBackForwardList) {
+      return this.index < 0 ? null : new JWebHistoryItem(this.entries[this.index]);
+    },
+    "getItemAtIndex(I)Landroid/webkit/WebHistoryItem;": function (this: JWebBackForwardList, index: number) {
+      return index < 0 || index >= this.entries.length ? null : new JWebHistoryItem(this.entries[index]);
+    },
+  },
+});
 export class JWebView extends JViewGroup {
   settings = inst<JWebSettings>("android/webkit/WebSettings");
   client = inst("android/webkit/WebViewClient");
@@ -418,6 +458,9 @@ rt.register({
     "goBack()V": function (this: JWebView) { this.step(-1); },
     "goForward()V": function (this: JWebView) { this.step(1); },
     "goBackOrForward(I)V": function (this: JWebView, n: number) { this.step(n); },
+    "copyBackForwardList()Landroid/webkit/WebBackForwardList;": function (this: JWebView) {
+      return new JWebBackForwardList(this.hist.map((entry) => ({ ...entry })), this.idx);
+    },
     // Chromium prunes every entry but the current one
     "clearHistory()V": function (this: JWebView) { if (this.idx >= 0) { this.hist = [this.hist[this.idx]]; this.idx = 0; } },
     "evaluateJavascript(Ljava/lang/String;Landroid/webkit/ValueCallback;)V": function (this: JWebView, js: string, cb: unknown) {

@@ -19,6 +19,7 @@ const complete = (callback: unknown, value: boolean) => {
 export const thirdPartyCookies = new WeakSet<JObj>();
 class JCookieManager extends JObj {}
 let instance: JCookieManager | null = null;
+let acceptFileSchemeCookies = false;
 // the deprecated syncer: cookies are written through as they are set, so every sync is a no-op
 let syncManager: JObj | null = null;
 rt.register({
@@ -36,6 +37,8 @@ rt.register({
   name: "android/webkit/CookieManager", ctor: JCookieManager,
   methods: {
     "static getInstance()Landroid/webkit/CookieManager;": () => instance ??= new JCookieManager(),
+    "static setAcceptFileSchemeCookies(Z)V": (accept: number) => { acceptFileSchemeCookies = !!accept; },
+    "static allowFileSchemeCookies()Z": () => acceptFileSchemeCookies ? 1 : 0,
     "getCookie(Ljava/lang/String;)Ljava/lang/String;": async (url: string) => (await store()).get(url) || null,
     "setCookie(Ljava/lang/String;Ljava/lang/String;)V": async (url: string, value: string) => { (await store()).set(url, value); },
     "setCookie(Ljava/lang/String;Ljava/lang/String;Landroid/webkit/ValueCallback;)V": async (url: string, value: string, callback: unknown) => { complete(callback, (await store()).set(url, value)); },

@@ -314,6 +314,9 @@ export class JView extends JObj {
   systemUiVisibility = 0;
 
   idNum = -1;
+  accessibilityTraversalBefore = -1;
+  accessibilityTraversalAfter = -1;
+  fadingEdgeLength = 0;
   /** android:contentDescription — the label an icon-only control answers to */
   contentDesc: string | null = null;
   /** nested scrolling: AOSP defaults this on for ScrollView/RecyclerView-shaped children,
@@ -358,6 +361,7 @@ export class JView extends JObj {
   focusable = false; focusableInTouchMode = false;
   autoHandwritingEnabled = true;
   clickL: unknown = null; longClickL: unknown = null; touchL: unknown = null; keyL: unknown = null; focusL: unknown = null;
+  scrollChangeL: unknown = null;
   insetsL: unknown = null; a11yDelegate: unknown = null; dragL: unknown = null;
   fitsSys = false;
   overlay: JViewOverlay | null = null;
@@ -858,24 +862,26 @@ const viewMethods: NativeSpec["methods"] = {
   "setScrollX(I)V": function (this: JView, x: number) {
     const old = this.scrollX;
     this.scrollX = x; invalidate();
-    if (old !== x) fireScrollChanged(this);
+    if (old !== x) fireScrollChanged(this, old, this.scrollY);
   },
   "setScrollY(I)V": function (this: JView, y: number) {
     const old = this.scrollY;
     this.scrollY = y; invalidate();
-    if (old !== y) fireScrollChanged(this);
+    if (old !== y) fireScrollChanged(this, this.scrollX, old);
   },
   "getScrollX()I": function (this: JView) { return this.scrollX; },
   "getScrollY()I": function (this: JView) { return this.scrollY; },
   "scrollTo(II)V": function (this: JView, x: number, y: number) {
     const ox = this.scrollX, oy = this.scrollY;
     this.scrollX = x; this.scrollY = y; invalidate();
-    if (ox !== x || oy !== y) fireScrollChanged(this);
+    if (ox !== x || oy !== y) fireScrollChanged(this, ox, oy);
   },
   "scrollBy(II)V": function (this: JView, x: number, y: number) {
+    const ox = this.scrollX, oy = this.scrollY;
     this.scrollX += x; this.scrollY += y; invalidate();
-    if (x || y) fireScrollChanged(this);
+    if (x || y) fireScrollChanged(this, ox, oy);
   },
+  "setOnScrollChangeListener(Landroid/view/View$OnScrollChangeListener;)V": function (this: JView, listener: unknown) { this.scrollChangeL = listener; },
   "isEnabled()Z": function (this: JView) { return this.enabled ? 1 : 0; },
   "setEnabled(Z)V": function (this: JView, e: number) {
     this.enabled = !!e;
@@ -1026,6 +1032,12 @@ const viewMethods: NativeSpec["methods"] = {
   "getContentDescription()Ljava/lang/CharSequence;": function (this: JView) { return this.contentDesc; },
   "setAccessibilityDelegate(Landroid/view/View$AccessibilityDelegate;)V": function (this: JView, d: unknown) { this.a11yDelegate = d; },
   "getAccessibilityDelegate()Landroid/view/View$AccessibilityDelegate;": function (this: JView) { return this.a11yDelegate; },
+  "setAccessibilityTraversalBefore(I)V": function (this: JView, id: number) { this.accessibilityTraversalBefore = id; },
+  "getAccessibilityTraversalBefore()I": function (this: JView) { return this.accessibilityTraversalBefore; },
+  "setAccessibilityTraversalAfter(I)V": function (this: JView, id: number) { this.accessibilityTraversalAfter = id; },
+  "getAccessibilityTraversalAfter()I": function (this: JView) { return this.accessibilityTraversalAfter; },
+  "setFadingEdgeLength(I)V": function (this: JView, length: number) { this.fadingEdgeLength = length; },
+  "getVerticalFadingEdgeLength()I": function (this: JView) { return this.fadingEdgeLength; },
   "setStateListAnimator(Landroid/animation/StateListAnimator;)V": async function (this: JView, sla: unknown) {
     this.stateListAnimator = sla;
     if (sla) await vcall(sla, "setTarget", "(Landroid/view/View;)V", this);
@@ -1406,7 +1418,7 @@ const viewMethods: NativeSpec["methods"] = {
     "dispatchPopulateAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)Z",
     "isAccessibilityHeading()Z", "isScreenReaderFocusable()Z", "isInLayout()Z", "getMeasuredState()I",
     "getRotationX()F", "getRotationY()F", "getClipToOutline()Z", "isHovered()Z", "isAccessibilityFocused()Z",
-    "isDuplicateParentStateEnabled()Z", "getAccessibilityLiveRegion()I", "getVerticalFadingEdgeLength()I",
+    "isDuplicateParentStateEnabled()Z", "getAccessibilityLiveRegion()I",
     "awakenScrollBars()Z", "getWindowSystemUiVisibility()I", "onHoverEvent(Landroid/view/MotionEvent;)Z",
     "dispatchHoverEvent(Landroid/view/MotionEvent;)Z", "onDragEvent(Landroid/view/DragEvent;)Z",
     "onKeyPreIme(ILandroid/view/KeyEvent;)Z", "onCheckIsTextEditor()Z", "fitSystemWindows(Landroid/graphics/Rect;)Z",
@@ -1918,7 +1930,10 @@ function getVTO(v: JView): JVTO {
   return o;
 }
 /** fire-and-forget: scroll setters are synchronous void natives, same shape as refreshDrawableState */
-function fireScrollChanged(v: JView) { void getVTO(v).dispatchScrollChanged(); }
+function fireScrollChanged(v: JView, oldX: number, oldY: number) {
+  if (v.scrollChangeL) void vcall(v.scrollChangeL, "onScrollChange", "(Landroid/view/View;IIII)V", v, v.scrollX, v.scrollY, oldX, oldY).catch(reportUncaught);
+  void getVTO(v).dispatchScrollChanged();
+}
 class JA11yAction extends JObj { actionId = 0; label: string | null = null; }
 rt.register({ name: "android/view/accessibility/AccessibilityNodeInfo", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable"] });
 rt.markers("android/view/accessibility/AccessibilityRecord");

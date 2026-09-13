@@ -6,7 +6,7 @@ import { mangleMethod } from "../jvm/abi";
 import { vcall, JThread, setCurThread, curThread } from "../jvm/natives/jlang";
 import { JView, JViewGroup, guardCall, initViewFromCtx, invalidate, uiState, requestLayout, specSize, defaultSize } from "./view";
 import { onMain } from "./mainloop";
-import { JCanvas, JBitmap } from "./graphics";
+import { JCanvas, JBitmap, type JRect } from "./graphics";
 import { setGL, gl, tables } from "./gl";
 import { reportUncaught, mainLooper, mainHandler } from "./os";
 import { perf } from "../perf";
@@ -187,6 +187,8 @@ export class EglContext {
   }
 }
 export const glSurfaces = { current: null as EglContext | null };
+let pixelCopyFrame: OffscreenCanvas | null = null;
+export function setPixelCopyFrame(frame: OffscreenCanvas): void { pixelCopyFrame = frame; }
 
 // PixelCopy: the surface's last presented frame into a Bitmap, the listener told on its handler's looper
 rt.markers("android/view/PixelCopy$OnPixelCopyFinishedListener");
@@ -194,6 +196,17 @@ const pixelCopy = async (s: GlSurface | null, bmp: JBitmap, listener: unknown): 
   let result = 1;                                                              // ERROR_UNKNOWN
   if (s?.present) { bmp.ctx.drawImage(s.present, 0, 0, bmp.w, bmp.h); result = 0; }
   else if (!s) result = 2;                                                     // ERROR_TIMEOUT: nothing is there to copy
+  await onMain(() => vcall(listener, "onPixelCopyFinished", "(I)V", result));
+};
+const windowPixelCopy = async (rect: JRect | null, bmp: JBitmap, listener: unknown): Promise<void> => {
+  const left = rect?.left ?? 0, top = rect?.top ?? 0;
+  const width = rect ? rect.right - left : device.width;
+  const height = rect ? rect.bottom - top : device.height;
+  let result = 0;
+  if (width <= 0 || height <= 0 || bmp.recycled || bmp.immutable) result = 5;
+  else if (left < 0 || top < 0 || left + width > device.width || top + height > device.height) result = 4;
+  else if (!pixelCopyFrame) result = 3;
+  else bmp.ctx.drawImage(pixelCopyFrame, left, top, width, height, 0, 0, bmp.w, bmp.h);
   await onMain(() => vcall(listener, "onPixelCopyFinished", "(I)V", result));
 };
 rt.register({
@@ -204,6 +217,8 @@ rt.register({
       (v: JView, bmp: JBitmap, l: unknown) => { void pixelCopy(getHolder(v).surface, bmp, l); },
     "static request(Landroid/view/Surface;Landroid/graphics/Bitmap;Landroid/view/PixelCopy$OnPixelCopyFinishedListener;Landroid/os/Handler;)V":
       (s: JSurface, bmp: JBitmap, l: unknown) => { void pixelCopy(s.surf, bmp, l); },
+    "static request(Landroid/view/Window;Landroid/graphics/Rect;Landroid/graphics/Bitmap;Landroid/view/PixelCopy$OnPixelCopyFinishedListener;Landroid/os/Handler;)V":
+      (_window: unknown, rect: JRect | null, bmp: JBitmap, listener: unknown) => { void windowPixelCopy(rect, bmp, listener); },
   },
 });
 class JEGLContext extends JObj { egl!: EglContext; }
