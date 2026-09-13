@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { curThread, JThread, newObj, setCurThread, vcall } from "../src/jvm/natives/jlang";
 import { JBinder, binderTransport, importBinder } from "../src/android/binder";
 
 class Callback extends JObj { binder: unknown = null; }
@@ -45,6 +45,12 @@ test("RemoteCallbackList removes dead remote Binders and unlinks replacement reg
     const list = await newObj("android/os/RemoteCallbackList"), cb = callback(importBinder({ pid: 987654, id: 1 }));
     expect(await register(list, cb)).toBe(1);
     expect(await register(list, cb)).toBe(1);
+    expect(watches.size).toBe(1);
+    const previousThread = curThread;
+    setCurThread(new JThread()); const first = register(list, cb);
+    setCurThread(new JThread()); const second = register(list, cb);
+    setCurThread(previousThread);
+    await Promise.all([first, second]);
     expect(watches.size).toBe(1);
     alive = false;
     for (const died of watches) died();

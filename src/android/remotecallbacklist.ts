@@ -7,10 +7,12 @@ class JRemoteCallbackList extends JObj {
   killed = false;
 }
 class JCallback extends JObj {
+  dead = false;
   constructor(readonly list: JRemoteCallbackList, readonly binder: unknown, readonly callback: unknown, readonly cookie: unknown) { super(); }
 }
 rt.register({ name: "android/os/RemoteCallbackList$Callback", ctor: JCallback, ifaces: ["android/os/IBinder$DeathRecipient"], methods: {
   "binderDied()V": async function (this: JCallback) {
+    this.dead = true;
     this.list.callbacks.delete(this.binder);
     await vcall(this.list, "onCallbackDied", "(Landroid/os/IInterface;Ljava/lang/Object;)V", this.callback, this.cookie);
   },
@@ -53,11 +55,13 @@ rt.register({ name: "android/os/RemoteCallbackList", ctor: JRemoteCallbackList, 
     await vcall(this, "unregister", "(Landroid/os/IInterface;)Z", callback);
     try { await vcall(binder, "linkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)V", entry, 0); }
     catch (error) { if (rt.iof(error, "android/os/RemoteException")) return 0; throw error; }
-    if (this.killed) {
+    if (this.killed || entry.dead) {
       await vcall(binder, "unlinkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)Z", entry, 0);
       return 0;
     }
+    const previous = this.callbacks.get(binder);
     this.callbacks.set(binder, entry);
+    if (previous) await vcall(binder, "unlinkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)Z", previous, 0);
     return 1;
   },
   "unregister(Landroid/os/IInterface;)Z": async function (this: JRemoteCallbackList, callback: unknown) {
