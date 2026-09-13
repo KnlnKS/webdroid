@@ -541,6 +541,68 @@ rt.register({
   },
 });
 
+type BarrierGeneration = { broken: boolean; waiters: Set<() => void> };
+class JCyclicBarrier extends JObj {
+  parties = 0; remaining = 0; action: unknown = null;
+  generation: BarrierGeneration = { broken: false, waiters: new Set() };
+  tripping: Promise<void> | null = null;
+  tripThread: JThread | null = null;
+  breakGeneration(): void {
+    this.generation.broken = true; this.remaining = this.parties;
+    for (const wake of this.generation.waiters) wake(); this.generation.waiters.clear();
+  }
+  advance(): void {
+    const previous = this.generation;
+    this.generation = { broken: false, waiters: new Set() }; this.remaining = this.parties;
+    for (const wake of previous.waiters) wake(); previous.waiters.clear();
+  }
+  async await(thread: JThread, timeout?: number): Promise<number> {
+    if (this.tripping && this.tripThread !== thread) await this.tripping.catch(() => {});
+    const generation = this.generation;
+    if (generation.broken) throw rt.mkThrowable("java/util/concurrent/BrokenBarrierException", null);
+    if (thread.interrupted) { thread.interrupted = 0; this.breakGeneration(); throw rt.mkThrowable("java/lang/InterruptedException", null); }
+    const index = --this.remaining;
+    if (index === 0) {
+      try {
+        if (this.action) { this.tripThread = thread; this.tripping = vcall(this.action, "run", "()V"); await this.tripping; }
+        this.advance(); return 0;
+      } catch (error) { this.breakGeneration(); throw error; }
+      finally { this.tripping = null; this.tripThread = null; }
+    }
+    if (timeout !== undefined && timeout <= 0) { this.breakGeneration(); throw rt.mkThrowable("java/util/concurrent/TimeoutException", null); }
+    let signalled: boolean;
+    try {
+      signalled = await park(thread, wake => { generation.waiters.add(wake); return () => { generation.waiters.delete(wake); }; }, timeout);
+    } catch (error) {
+      if (this.tripping) await this.tripping.catch(() => {});
+      if (generation === this.generation && !generation.broken) { this.breakGeneration(); throw error; }
+      thread.interrupted = 1;
+      if (generation.broken) throw rt.mkThrowable("java/util/concurrent/BrokenBarrierException", null);
+      return index;
+    }
+    if (this.tripping) await this.tripping.catch(() => {});
+    if (generation.broken) throw rt.mkThrowable("java/util/concurrent/BrokenBarrierException", null);
+    if (generation !== this.generation) return index;
+    if (!signalled) { this.breakGeneration(); throw rt.mkThrowable("java/util/concurrent/TimeoutException", null); }
+    throw rt.mkThrowable("java/lang/IllegalStateException", "Barrier woke without advancing");
+  }
+}
+function initBarrier(this: JCyclicBarrier, parties: number, action: unknown = null): void {
+  if (parties <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "parties <= 0");
+  this.parties = this.remaining = parties; this.action = action;
+}
+rt.register({ name: "java/util/concurrent/CyclicBarrier", ctor: JCyclicBarrier, methods: {
+  "<init>(I)V": initBarrier,
+  "<init>(ILjava/lang/Runnable;)V": initBarrier,
+  "getParties()I": function (this: JCyclicBarrier) { return this.parties; },
+  "getNumberWaiting()I": function (this: JCyclicBarrier) { return this.parties - this.remaining; },
+  "isBroken()Z": function (this: JCyclicBarrier) { return +this.generation.broken; },
+  "await()I": function (this: JCyclicBarrier) { return this.await(curThread); },
+  "await(JLjava/util/concurrent/TimeUnit;)I": function (this: JCyclicBarrier, duration: bigint, unit: JTimeUnit) { return this.await(curThread, Math.max(0, Number(duration) * unit.ms)); },
+  "reset()V": async function (this: JCyclicBarrier) { if (this.tripping && this.tripThread !== curThread) await this.tripping.catch(() => {}); this.breakGeneration(); this.advance(); },
+} });
+defineException("java/util/concurrent/BrokenBarrierException", "java/lang/Exception");
+
 class JCountDownLatch extends JObj {
   n = 0;
   waiters: (() => void)[] = [];
