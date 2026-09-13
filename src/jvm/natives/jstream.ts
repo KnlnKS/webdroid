@@ -40,6 +40,10 @@ rt.register({
 rt.register({
   name: "java/util/stream/Stream", ctor: JStream,
   methods: {
+    "static empty()Ljava/util/stream/Stream;": () => mkStream([]),
+    "static of(Ljava/lang/Object;)Ljava/util/stream/Stream;": (value: unknown) => mkStream([value]),
+    "static of([Ljava/lang/Object;)Ljava/util/stream/Stream;": (values: unknown[]) => mkStream(values.slice()),
+    "static concat(Ljava/util/stream/Stream;Ljava/util/stream/Stream;)Ljava/util/stream/Stream;": (a: JStream, b: JStream) => mkStream([...a.a, ...b.a]),
     "filter(Ljava/util/function/Predicate;)Ljava/util/stream/Stream;": async function (this: JStream, p: unknown) {
       const out: unknown[] = [];
       for (const x of this.a) if (await vcall(p, "test", "(Ljava/lang/Object;)Z", x)) out.push(x);

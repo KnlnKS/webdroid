@@ -42,7 +42,7 @@ test("Set.of rejects null and duplicates and stays immutable", async () => {
   await expect(vcall(immutable, "add", "(Ljava/lang/Object;)Z", "c"))
     .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
   await expect(of("a", "a")).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
-  await expect(of("a", null)).rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
+  await expect(Promise.resolve().then(() => of("a", null))).rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
 });
 
 test("Collection.stream exposes collection contents to stream operations", async () => {
@@ -61,4 +61,20 @@ test("Map.of rejects null and duplicate keys and stays immutable", async () => {
     .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
   await expect(of("a", 1, "a", 2)).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
   await expect(of("a", 1, "b", null)).rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
+});
+
+test("Collections.disjoint uses value equality", async () => {
+  const collections = rt.link("java/util/Collections").ctor as any;
+  const disjoint = collections[mangleMethod("disjoint", "(Ljava/util/Collection;Ljava/util/Collection;)Z")];
+  expect(await disjoint(await set("java/util/HashSet", "a"), await set("java/util/HashSet", "b"))).toBe(1);
+  expect(await disjoint(await set("java/util/HashSet", "a"), await set("java/util/LinkedHashSet", "a"))).toBe(0);
+});
+
+test("List.of rejects null and stays immutable", async () => {
+  const of = (rt.link("java/util/List").ctor as any)[mangleMethod("of", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;")];
+  const immutable = await of("a", "b");
+  expect(await vcall(immutable, "get", "(I)Ljava/lang/Object;", 1)).toBe("b");
+  await expect(vcall(immutable, "add", "(Ljava/lang/Object;)Z", "c"))
+    .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
+  await expect(Promise.resolve().then(() => of("a", null))).rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
 });

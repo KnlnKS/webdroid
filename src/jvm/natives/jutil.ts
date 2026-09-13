@@ -511,6 +511,47 @@ rt.register({
   ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/Queue", "java/util/Deque", "java/util/RandomAccess", "java/io/Serializable"],
   methods: listMethods(),
 });
+class JImmutableList extends JList {}
+function immutableList(items: unknown[]): JImmutableList {
+  if (items.some((item) => item === null)) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  const result = new JImmutableList();
+  result.a = items.slice();
+  return result;
+}
+const immutableListMethods = listMethods();
+for (const method of [
+  "set(ILjava/lang/Object;)Ljava/lang/Object;", "add(Ljava/lang/Object;)Z", "add(ILjava/lang/Object;)V",
+  "remove(I)Ljava/lang/Object;", "remove(Ljava/lang/Object;)Z", "removeIf(Ljava/util/function/Predicate;)Z", "clear()V",
+  "addAll(Ljava/util/Collection;)Z", "addAll(ILjava/util/Collection;)Z", "removeAll(Ljava/util/Collection;)Z",
+  "sort(Ljava/util/Comparator;)V", "replaceAll(Ljava/util/function/UnaryOperator;)V",
+]) immutableListMethods[method] = () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
+immutableListMethods["iterator()Ljava/util/Iterator;"] = function (this: JImmutableList) {
+  const iterator = mkIter(this.a.slice()); iterator.readOnly = true; return iterator;
+};
+immutableListMethods["listIterator()Ljava/util/ListIterator;"] = immutableListMethods["iterator()Ljava/util/Iterator;"];
+immutableListMethods["listIterator(I)Ljava/util/ListIterator;"] = function (this: JImmutableList, at: number) {
+  if (at < 0 || at > this.a.length) ioobe(at, this.a.length);
+  const iterator = mkIter(this.a.slice()); iterator.i = at; iterator.readOnly = true; return iterator;
+};
+immutableListMethods["subList(II)Ljava/util/List;"] = function (this: JImmutableList, from: number, to: number) {
+  if (from < 0 || to > this.a.length || from > to) ioobe(from < 0 ? from : to, this.a.length);
+  return immutableList(this.a.slice(from, to));
+};
+rt.register({
+  name: "webdroid/ImmutableList", ctor: JImmutableList, sup: "java/util/AbstractList", typeVars: "E",
+  ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/RandomAccess", "java/io/Serializable"], methods: immutableListMethods,
+});
+const listFactories: Methods = {
+  "static copyOf(Ljava/util/Collection;)Ljava/util/List;": async (collection: unknown) => {
+    if (collection === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    return immutableList(await toJsArray(collection));
+  },
+  "static of([Ljava/lang/Object;)Ljava/util/List;": (items: unknown[]) => immutableList(items),
+};
+for (let count = 0; count <= 10; count++) {
+  const descriptor = `(${"Ljava/lang/Object;".repeat(count)})Ljava/util/List;`;
+  listFactories[`static of${descriptor}`] = (...items: unknown[]) => immutableList(items);
+}
 // Vector's pre-Collections API, which Stack inherits.
 function vectorMethods(base: Methods): Methods {
   const edge = (i: number) => function (this: JList) {
@@ -751,6 +792,12 @@ rt.register({
 });
 
 const mapFactories: Methods = {
+  "static entry(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Map$Entry;": (key: unknown, value: unknown) => {
+    if (key === null || value === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    const entry = new JSimpleImmutableEntry();
+    entry.e = { k: key, v: value };
+    return entry;
+  },
   "static copyOf(Ljava/util/Map;)Ljava/util/Map;": async (source: unknown) => {
     if (source === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
     const entries: [unknown, unknown][] = [];
@@ -1903,7 +1950,7 @@ const listDefaults: Methods = {
   },
 };
 rt.register({ name: "java/util/Collection", ctor: class extends JObj {}, ifaces: ["java/lang/Iterable"], typeVars: "E", methods: collDefaults });
-rt.register({ name: "java/util/List", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], typeVars: "E", methods: listDefaults });
+rt.register({ name: "java/util/List", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], typeVars: "E", methods: { ...listDefaults, ...listFactories } });
 rt.register({ name: "java/util/Set", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], typeVars: "E", methods: setFactories });
 rt.register({ name: "java/util/Queue", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], typeVars: "E" });
 rt.register({ name: "java/util/Deque", ctor: class extends JObj {}, ifaces: ["java/util/Queue"], typeVars: "E" });
@@ -2161,6 +2208,13 @@ rt.register({
     "static addAll(Ljava/util/Collection;[Ljava/lang/Object;)Z": async (c: unknown, arr: unknown[]) => {
       for (const v of arr) await vcall(c, "add", "(Ljava/lang/Object;)Z", v);
       return arr.length ? 1 : 0;
+    },
+    "static disjoint(Ljava/util/Collection;Ljava/util/Collection;)Z": async (a: unknown, b: unknown) => {
+      if (a === null || b === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const left = await toJsArray(a), right = await toJsArray(b);
+      const [smaller, larger] = left.length <= right.length ? [left, right] : [right, left];
+      for (const value of smaller) if ((await indexIn(larger, value)) >= 0) return 0;
+      return 1;
     },
     "static nCopies(ILjava/lang/Object;)Ljava/util/List;": (n: number, v: unknown) => {
       const l = new JList(); l.a = new Array(n).fill(v); return l;
