@@ -2187,6 +2187,16 @@ function fillMetrics(dm: JDisplayMetrics, heightPx: number) {
 class JDisplayMode extends JObj {}
 let theMode: JDisplayMode | null = null;
 const displayMode = () => (theMode ??= new JDisplayMode());
+class JHdrCapabilities extends JObj {}
+const hdrCapabilities = new JHdrCapabilities();
+rt.register({
+  name: "android/view/Display$HdrCapabilities", ctor: JHdrCapabilities,
+  statics: { HDR_TYPE_DOLBY_VISION: 1, HDR_TYPE_HDR10: 2, HDR_TYPE_HLG: 3, HDR_TYPE_HDR10_PLUS: 4 },
+  methods: {
+    "getSupportedHdrTypes()[I": () => new Int32Array(0),
+    ...stubs(0, "getDesiredMaxLuminance()F", "getDesiredMaxAverageLuminance()F", "getDesiredMinLuminance()F"),
+  },
+});
 rt.register({
   name: "android/view/Display$Mode", ctor: JDisplayMode,
   methods: {
@@ -2210,6 +2220,7 @@ rt.register({
     "getPresentationDeadlineNanos()J": () => 16666667n,
     "getMode()Landroid/view/Display$Mode;": () => displayMode(),
     "getSupportedModes()[Landroid/view/Display$Mode;": () => jarray([displayMode()], "Landroid/view/Display$Mode;"),
+    "getHdrCapabilities()Landroid/view/Display$HdrCapabilities;": () => hdrCapabilities,
     // a rectangular framebuffer has no rounded corners; androidx asks the Display and the
     // WindowInsets for them through the same descriptor
     "getRoundedCorner(I)Landroid/view/RoundedCorner;": () => null,

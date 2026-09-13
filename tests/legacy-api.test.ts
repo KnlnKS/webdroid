@@ -171,6 +171,21 @@ test("AbstractExecutorService submit returns the virtual newTaskFor result", asy
   expect(await vcall(future, "get", "()Ljava/lang/Object;")).toBe("done");
 });
 
+test("sets retain their intersection and a non-HDR display reports no modes", async () => {
+  const set = await newObj("java/util/HashSet");
+  await vcall(set, "add", "(Ljava/lang/Object;)Z", "a");
+  await vcall(set, "add", "(Ljava/lang/Object;)Z", "b");
+  const keep = await newObj("java/util/HashSet");
+  await vcall(keep, "add", "(Ljava/lang/Object;)Z", "b");
+  expect(await vcall(set, "retainAll", "(Ljava/util/Collection;)Z", keep)).toBe(1);
+  expect(await vcall(set, "contains", "(Ljava/lang/Object;)Z", "a")).toBe(0);
+  expect(await vcall(set, "contains", "(Ljava/lang/Object;)Z", "b")).toBe(1);
+
+  const display = await newObj("android/view/Display");
+  const hdr = await vcall(display, "getHdrCapabilities", "()Landroid/view/Display$HdrCapabilities;");
+  expect(await vcall(hdr, "getSupportedHdrTypes", "()[I")).toHaveLength(0);
+});
+
 test("Resources(AssetManager, DisplayMetrics, Configuration) scopes its own configuration and metrics", async () => {
   const host = new Resources(null, {});
   const assets = rt.make("android/content/res/AssetManager") as JAssetManager;

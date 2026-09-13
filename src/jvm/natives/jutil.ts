@@ -919,6 +919,16 @@ function setMethods(): NativeSpec["methods"] {
       for (const v of await toJsArray(c)) ch = (await vcall(this, "remove", "(Ljava/lang/Object;)Z", v)) || ch;
       return ch;
     },
+    "retainAll(Ljava/util/Collection;)Z": async function (this: JSet, c: unknown) {
+      let ch = 0;
+      for (const v of setItems(this)) {
+        if (!(await vcall(c, "contains", "(Ljava/lang/Object;)Z", v))) {
+          await vcall(this, "remove", "(Ljava/lang/Object;)Z", v);
+          ch = 1;
+        }
+      }
+      return ch;
+    },
     "containsAll(Ljava/util/Collection;)Z": async function (this: JSet, c: unknown) {
       for (const v of await toJsArray(c)) if (!(await vcall(this, "contains", "(Ljava/lang/Object;)Z", v))) return 0;
       return 1;
