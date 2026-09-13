@@ -18,3 +18,12 @@ test("IntBuffer bulk range writes honor order, position and limits", async () =>
     expect(await vcall(buffer, "position", "()I")).toBe(3);
   }
 });
+test("ShortBuffer bulk ranges preserve signed values and bounds", async () => {
+  const bytes = await vcall(rt.link("java/nio/ByteBuffer").ctor, "allocate", "(I)Ljava/nio/ByteBuffer;", 8);
+  const buffer = await vcall(bytes, "asShortBuffer", "()Ljava/nio/ShortBuffer;");
+  await vcall(buffer, "put", "([SII)Ljava/nio/ShortBuffer;", Int16Array.of(8, -32768, 32767, 9), 1, 2);
+  expect(await vcall(buffer, "get", "(I)S", 0)).toBe(-32768);
+  expect(await vcall(buffer, "get", "(I)S", 1)).toBe(32767);
+  await expect(vcall(buffer, "put", "([SII)Ljava/nio/ShortBuffer;", Int16Array.of(1), 1, 1)).rejects.toBeDefined();
+  expect(await vcall(buffer, "position", "()I")).toBe(2);
+});

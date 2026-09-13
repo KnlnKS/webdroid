@@ -324,6 +324,14 @@ function putInts(buffer: JIntBuffer, values: Int32Array, offset: number, count: 
   buffer.pos += count;
   return buffer;
 }
+function putShorts(buffer: JShortBuffer, values: Int16Array, offset: number, count: number): JShortBuffer {
+  if (offset < 0 || count < 0 || offset > values.length - count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  buffer.clampPut(count);
+  const view = buffer.dv;
+  if (buffer.little && !(view.byteOffset & 1)) new Int16Array(view.buffer, view.byteOffset, buffer.cap).set(values.subarray(offset, offset + count), buffer.pos);
+  else for (let i = 0; i < count; i++) view.setInt16((buffer.pos + i) << 1, values[offset + i], buffer.little);
+  buffer.pos += count; return buffer;
+}
 function intBufferMethods(): NativeSpec["methods"] {
   return {
     ...bufferBaseMethods(),
@@ -355,11 +363,8 @@ rt.register({
     "put(S)Ljava/nio/ShortBuffer;": function (this: JShortBuffer, v: number) { this.clampPut(1); this.dv.setInt16(this.pos++ << 1, v, this.little); return this; },
     "get()S": function (this: JShortBuffer) { this.clampGet(1); return this.dv.getInt16(this.pos++ << 1, this.little); },
     "get(I)S": function (this: JShortBuffer, i: number) { return this.dv.getInt16(i << 1, this.little); },
-    "put([S)Ljava/nio/ShortBuffer;": function (this: JShortBuffer, arr: Int16Array) {
-      this.clampPut(arr.length);
-      for (let i = 0; i < arr.length; i++) this.dv.setInt16((this.pos + i) << 1, arr[i], this.little);
-      this.pos += arr.length; return this;
-    },
+    "put([S)Ljava/nio/ShortBuffer;": function (this: JShortBuffer, arr: Int16Array) { return putShorts(this, arr, 0, arr.length); },
+    "put([SII)Ljava/nio/ShortBuffer;": function (this: JShortBuffer, arr: Int16Array, off: number, len: number) { return putShorts(this, arr, off, len); },
   },
 });
 rt.register({
