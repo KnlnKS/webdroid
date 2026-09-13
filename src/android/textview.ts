@@ -63,7 +63,7 @@ export class JTextView extends JView {
   editableFactory: unknown = null; spannableFactory: unknown = null;
   keyListener: unknown = null; movementMethod: unknown = null; selActionMode: unknown = null; editorActionL: unknown = null;
   drawableTint: JColorStateList | null = null;
-  imeOptions = 0; breakStrategy = 0; hyphenation = 0; autoSizeType = 0;
+  imeOptions = 0; privateImeOptions: string | null = null; breakStrategy = 0; hyphenation = 0; autoSizeType = 0;
   linksClickable = true; fontVariation: string | null = null;
   maxW = Infinity;
   /** getLayout's StaticLayout and the inputs it was built from */
@@ -458,6 +458,8 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getInputType()I": function (this: JTextView) { return this.inputTypeV; },
   "setImeOptions(I)V": function (this: JTextView, o: number) { this.imeOptions = o; },
   "getImeOptions()I": function (this: JTextView) { return this.imeOptions; },
+  "setPrivateImeOptions(Ljava/lang/String;)V": function (this: JTextView, options: string | null) { this.privateImeOptions = options; },
+  "getPrivateImeOptions()Ljava/lang/String;": function (this: JTextView) { return this.privateImeOptions; },
   "setKeyListener(Landroid/text/method/KeyListener;)V": function (this: JTextView, l: unknown) { this.keyListener = l; },
   "getKeyListener()Landroid/text/method/KeyListener;": function (this: JTextView) { return this.keyListener; },
   "setMovementMethod(Landroid/text/method/MovementMethod;)V": function (this: JTextView, m: unknown) { this.movementMethod = m; },

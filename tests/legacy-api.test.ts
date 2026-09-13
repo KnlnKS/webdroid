@@ -32,6 +32,12 @@ test("View context clickability is independently mutable", async () => {
   expect(await vcall(view, "isClickable", "()Z")).toBe(0);
 });
 
+test("EditText retains private IME options", async () => {
+  const edit = await newObj("android/widget/EditText", "(Landroid/content/Context;)V", null);
+  await vcall(edit, "setPrivateImeOptions", "(Ljava/lang/String;)V", "com.example.mode=test");
+  expect(await vcall(edit, "getPrivateImeOptions", "()Ljava/lang/String;")).toBe("com.example.mode=test");
+});
+
 test("View retains outline shadow colors", async () => {
   const view = await newObj("android/view/View", "(Landroid/content/Context;)V", null);
   expect(await vcall(view, "getOutlineAmbientShadowColor", "()I")).toBe(-16777216);
