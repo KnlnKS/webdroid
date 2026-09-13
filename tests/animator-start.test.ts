@@ -40,3 +40,25 @@ test("a one-value ObjectAnimator on a Property starts from the Property's curren
   expect(await vcall(await vcall(anim, "getAnimatedValue", "()Ljava/lang/Object;"), "floatValue", "()F")).toBe(0.25);
   await vcall(anim, "cancel", "()V");
 });
+
+class TimeListener extends JObj { times: [bigint, bigint][] = []; }
+rt.register({ name: "test/TimeListener", ctor: TimeListener, ifaces: ["android/animation/TimeAnimator$TimeListener"], methods: {
+  "onTimeUpdate(Landroid/animation/TimeAnimator;JJ)V": function (this: TimeListener, _anim: unknown, total: bigint, delta: bigint) { this.times.push([total, delta]); },
+} });
+test("TimeAnimator starts at zero and keeps ticking beyond the inherited duration", async () => {
+  const { uiState } = await import("../src/android/view");
+  const { onMain } = await import("../src/android/mainloop");
+  const listener = await newObj("test/TimeListener"), animator = await newObj("android/animation/TimeAnimator");
+  await vcall(animator, "setTimeListener", "(Landroid/animation/TimeAnimator$TimeListener;)V", listener);
+  await vcall(animator, "setDuration", "(J)Landroid/animation/ValueAnimator;", 0n);
+  const frame = async () => { for (const hook of [...uiState.animHooks]) if (!hook()) uiState.animHooks.delete(hook); await onMain(() => {}); };
+  try {
+    await vcall(animator, "start", "()V");
+    await frame();
+    expect(listener.times).toEqual([[0n, 0n]]);
+    await Bun.sleep(5); await frame();
+    expect(listener.times[1][0]).toBeGreaterThan(0n);
+    expect(listener.times[1][1]).toBe(listener.times[1][0]);
+    expect(await vcall(animator, "isRunning", "()Z")).toBe(1);
+  } finally { await vcall(animator, "cancel", "()V"); await frame(); }
+});

@@ -60,7 +60,17 @@ async function objAt(a: { objKeys: unknown[] | null; evaluator: unknown }, t: nu
 const accelDecel = (t: number) => Math.cos((t + 1) * Math.PI) / 2 + 0.5;
 async function animTick(a: JValueAnimator): Promise<boolean> {
   if (a.paused) return true;
-  const el = performance.now() - a.startT - a.delayMs;
+  const now = performance.now(), el = now - a.startT - a.delayMs;
+  if (a instanceof JTimeAnimator) {
+    if (el < 0) return true;
+    if (!a.timeStarted) { a.startT = now - a.delayMs; a.timeStarted = true; }
+    if (a.timeListener) {
+      const total = Math.floor(now - a.startT - a.delayMs), delta = a.lastTime < 0 ? 0 : total - a.lastTime;
+      a.lastTime = total;
+      await vcall(a.timeListener, "onTimeUpdate", "(Landroid/animation/TimeAnimator;JJ)V", a, BigInt(total), BigInt(delta));
+    }
+    return a.running;
+  }
   let t: number, done = false;
   if (el < 0) t = 0;
   else if (a.durationMs <= 0) { t = 1; done = true; }
@@ -354,6 +364,7 @@ const vaMethods: NativeSpec["methods"] = {
     this.reversed = this.startReversed;
     this.startReversed = false;
     this.startT = performance.now();
+    if (this instanceof JTimeAnimator) { this.lastTime = -1; this.timeStarted = false; }
     this.running = true;
     // AOSP's start() animates fraction 0 at once, so getAnimatedValue() read from a start
     // listener or before the first frame is the first key, not whatever was there before.
@@ -394,6 +405,12 @@ const vaMethods: NativeSpec["methods"] = {
 };
 rt.register({ name: "android/animation/Animator", ctor: class extends JValueAnimator {}, methods: vaMethods });
 rt.register({ name: "android/animation/ValueAnimator", ctor: JValueAnimator, sup: "android/animation/Animator", methods: vaMethods });
+class JTimeAnimator extends JValueAnimator { timeListener: unknown = null; lastTime = -1; timeStarted = false; }
+rt.markers("android/animation/TimeAnimator$TimeListener");
+rt.register({ name: "android/animation/TimeAnimator", ctor: JTimeAnimator, sup: "android/animation/ValueAnimator", methods: {
+  "<init>()V": function () {},
+  "setTimeListener(Landroid/animation/TimeAnimator$TimeListener;)V": function (this: JTimeAnimator, listener: unknown) { this.timeListener = listener; },
+} });
 rt.register({
   name: "android/animation/ObjectAnimator", ctor: class extends JValueAnimator {}, sup: "android/animation/ValueAnimator",
   methods: {
