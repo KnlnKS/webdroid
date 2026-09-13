@@ -6,6 +6,12 @@ import { mkIter, newLinkedHashSet, toJsArray } from "./jutil";
 
 class JJSONObject extends JObj { o: Record<string, unknown> = Object.create(null); }
 class JJSONArray extends JObj { a: unknown[] = []; }
+function putAt(self: JJSONArray, index: number, value: unknown): JJSONArray {
+  if (index < 0) throw rt.mkThrowable("org/json/JSONException", `Index ${index} out of range [0..${self.a.length}]`);
+  while (self.a.length < index) self.a.push(null);
+  self.a[index] = value;
+  return self;
+}
 class JJSONTokener extends JObj {
   source = ""; pos = 0;
   init(source: string) { this.source = source?.charCodeAt(0) === 0xfeff ? source.slice(1) : source; this.pos = 0; }
@@ -253,11 +259,11 @@ rt.register({
     "getJSONObject(I)Lorg/json/JSONObject;": function (this: JJSONArray, i: number) { return jsonWrap(this.a[i]); },
     "getString(I)Ljava/lang/String;": function (this: JJSONArray, i: number) { return String(this.a[i]); },
     "remove(I)Ljava/lang/Object;": function (this: JJSONArray, i: number) { return jsonWrap(this.a.splice(i, 1)[0] ?? null); },
-    "put(ILjava/lang/Object;)Lorg/json/JSONArray;": function (this: JJSONArray, i: number, v: unknown) {
-      while (this.a.length < i) this.a.push(null);
-      this.a[i] = jsonUnwrap(v);
-      return this;
-    },
+    "put(ILjava/lang/Object;)Lorg/json/JSONArray;": function (this: JJSONArray, i: number, v: unknown) { return putAt(this, i, jsonUnwrap(v)); },
+    "put(II)Lorg/json/JSONArray;": function (this: JJSONArray, i: number, v: number) { return putAt(this, i, v); },
+    "put(IJ)Lorg/json/JSONArray;": function (this: JJSONArray, i: number, v: bigint) { return putAt(this, i, jsonUnwrap(v)); },
+    "put(ID)Lorg/json/JSONArray;": function (this: JJSONArray, i: number, v: number) { return putAt(this, i, v); },
+    "put(IZ)Lorg/json/JSONArray;": function (this: JJSONArray, i: number, v: number) { return putAt(this, i, !!v); },
     "put(J)Lorg/json/JSONArray;": function (this: JJSONArray, v: bigint) { this.a.push(jsonUnwrap(v)); return this; },
     "toString()Ljava/lang/String;": function (this: JJSONArray) { return jsonText64(this.a); },
     "toString(I)Ljava/lang/String;": function (this: JJSONArray, indent: number) { return JSON.stringify(this.a, null, indent); },
