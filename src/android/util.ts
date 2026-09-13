@@ -115,6 +115,55 @@ rt.register({
 });
 
 class JPair extends JObj { first: unknown = null; second: unknown = null; }
+class JRange extends JObj { lower: unknown = null; upper: unknown = null; }
+async function initRange(this: JRange, lower: unknown, upper: unknown) {
+  if (lower === null || upper === null) return rt.npe();
+  if (await vcall(lower, "compareTo", "(Ljava/lang/Object;)I", upper) > 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "lower must be less than or equal to upper");
+  this.lower = lower; this.upper = upper;
+}
+async function createRange(lower: unknown, upper: unknown): Promise<JRange> {
+  const range = new JRange(); await initRange.call(range, lower, upper); return range;
+}
+async function combineRange(this: JRange, lower: unknown, upper: unknown, extend: boolean, other?: JRange) {
+  if (lower === null || upper === null) return rt.npe();
+  const lo = await vcall(lower, "compareTo", "(Ljava/lang/Object;)I", this.lower);
+  const hi = await vcall(upper, "compareTo", "(Ljava/lang/Object;)I", this.upper);
+  if (lo <= 0 && hi >= 0) return extend ? other ?? createRange(lower, upper) : this;
+  if (lo >= 0 && hi <= 0) return extend ? this : other ?? createRange(lower, upper);
+  return createRange((extend ? lo >= 0 : lo <= 0) ? this.lower : lower, (extend ? hi <= 0 : hi >= 0) ? this.upper : upper);
+}
+rt.register({ name: "android/util/Range", ctor: JRange, typeVars: "T", methods: {
+  "<init>(Ljava/lang/Comparable;Ljava/lang/Comparable;)V": initRange,
+  "static create(Ljava/lang/Comparable;Ljava/lang/Comparable;)Landroid/util/Range;": createRange,
+  "getLower()Ljava/lang/Comparable;": function (this: JRange) { return this.lower; },
+  "getUpper()Ljava/lang/Comparable;": function (this: JRange) { return this.upper; },
+  "contains(Ljava/lang/Comparable;)Z": async function (this: JRange, value: unknown) {
+    if (value === null) return rt.npe();
+    return +(await vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.lower) >= 0 && await vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.upper) <= 0);
+  },
+  "contains(Landroid/util/Range;)Z": async function (this: JRange, range: JRange | null) {
+    if (!range) return rt.npe();
+    return +(await vcall(range.lower, "compareTo", "(Ljava/lang/Object;)I", this.lower) >= 0 && await vcall(range.upper, "compareTo", "(Ljava/lang/Object;)I", this.upper) <= 0);
+  },
+  "clamp(Ljava/lang/Comparable;)Ljava/lang/Comparable;": async function (this: JRange, value: unknown) {
+    if (value === null) return rt.npe();
+    if (await vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.lower) < 0) return this.lower;
+    return await vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.upper) > 0 ? this.upper : value;
+  },
+  ...Object.fromEntries(["intersect", "extend"].flatMap(name => [
+    [`${name}(Landroid/util/Range;)Landroid/util/Range;`, function (this: JRange, range: JRange | null) {
+      if (!range) return rt.npe();
+      return combineRange.call(this, range.lower, range.upper, name === "extend", range);
+    }],
+    [`${name}(Ljava/lang/Comparable;Ljava/lang/Comparable;)Landroid/util/Range;`, function (this: JRange, lower: unknown, upper: unknown) { return combineRange.call(this, lower, upper, name === "extend"); }],
+  ])),
+  "extend(Ljava/lang/Comparable;)Landroid/util/Range;": function (this: JRange, value: unknown) { return combineRange.call(this, value, value, true); },
+  "equals(Ljava/lang/Object;)Z": async function (this: JRange, other: unknown) {
+    return +(other instanceof JRange && (this === other || await vcall(this.lower, "equals", "(Ljava/lang/Object;)Z", other.lower) && await vcall(this.upper, "equals", "(Ljava/lang/Object;)Z", other.upper)));
+  },
+  "hashCode()I": async function (this: JRange) { return (Math.imul(31, 31 + await vcall(this.lower, "hashCode", "()I")) + await vcall(this.upper, "hashCode", "()I")) | 0; },
+  "toString()Ljava/lang/String;": async function (this: JRange) { return `[${await vcall(this.lower, "toString", "()Ljava/lang/String;")}, ${await vcall(this.upper, "toString", "()Ljava/lang/String;")}]`; },
+} });
 rt.register({
   name: "android/util/Pair", ctor: JPair,
   fields: ["first", "second"],
