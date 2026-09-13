@@ -401,6 +401,13 @@ rt.register({
   name: "android/net/wifi/WifiManager", ctor: class extends JObj {},
   statics: { WIFI_STATE_DISABLED: 1, WIFI_STATE_ENABLED: 3, WIFI_STATE_UNKNOWN: 4, WIFI_STATE_CHANGED_ACTION: "android.net.wifi.WIFI_STATE_CHANGED", NETWORK_STATE_CHANGED_ACTION: "android.net.wifi.STATE_CHANGE", SCAN_RESULTS_AVAILABLE_ACTION: "android.net.wifi.SCAN_RESULTS" },
   methods: {
+    "static calculateSignalLevel(II)I": (rssi: number, numLevels: number) => {
+      if (rssi <= -100) return 0;
+      const top = (numLevels - 1) | 0;
+      if (rssi >= -55) return top;
+      const scaled = Math.fround(Math.fround(Math.fround(rssi + 100) * Math.fround(top)) / 45);
+      return Math.trunc(scaled) | 0;
+    },
     "isWifiEnabled()Z": () => NET_TYPE === 1 ? 1 : 0,
     "getWifiState()I": () => NET_TYPE === 1 ? 3 : 1,
     "setWifiEnabled(Z)Z": () => 0,
