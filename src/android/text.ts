@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { vcall, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import { type JDate, type JCalendar } from "../jvm/natives/jtime";
-import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances } from "./graphics";
+import { JPaint, JCanvas, JTypeface, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances, typefaceFor } from "./graphics";
 import { device } from "../shell/config";
 import { formatDate } from "../jvm/natives/jtext";
 import { toJsArray } from "../jvm/natives/jutil";
@@ -328,7 +328,6 @@ for (const [name] of [
   ["android/text/style/UnderlineSpan", {}],
   ["android/text/style/StrikethroughSpan", {}],
   ["android/text/style/RelativeSizeSpan", { size: 1 }],
-  ["android/text/style/TypefaceSpan", {}],
   ["android/text/style/ClickableSpan", {}],
   ["android/text/style/URLSpan", {}],
 ] as const) {
@@ -347,6 +346,26 @@ for (const [name] of [
     },
   });
 }
+
+class JTypefaceSpan extends JMetricAffectingSpan {
+  family: string | null = null;
+  typeface: JTypeface | null = null;
+}
+function applyTypefaceSpan(this: JTypefaceSpan, paint: JTextPaint): void {
+  paint.tf = this.typeface ?? typefaceFor(this.family, paint.tf.style());
+}
+rt.register({
+  name: "android/text/style/TypefaceSpan", ctor: JTypefaceSpan,
+  ...spanHierarchy["android/text/style/TypefaceSpan"],
+  methods: {
+    "<init>(Ljava/lang/String;)V": function (this: JTypefaceSpan, family: string | null) { this.family = family; },
+    "<init>(Landroid/graphics/Typeface;)V": function (this: JTypefaceSpan, typeface: JTypeface) { this.typeface = typeface; },
+    "getFamily()Ljava/lang/String;": function (this: JTypefaceSpan) { return this.family; },
+    "getTypeface()Landroid/graphics/Typeface;": function (this: JTypefaceSpan) { return this.typeface; },
+    "updateDrawState(Landroid/text/TextPaint;)V": applyTypefaceSpan,
+    "updateMeasureState(Landroid/text/TextPaint;)V": applyTypefaceSpan,
+  },
+});
 
 class JImageSpan extends JReplacementSpan { drawable: unknown = null; }
 rt.register({

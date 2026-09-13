@@ -127,6 +127,7 @@ const SERVICE_CLASS: Record<string, string> = {
   dropbox: "android/os/DropBoxManager",
   storage: "android/os/storage/StorageManager",
   netstats: "android/app/usage/NetworkStatsManager",
+  storagestats: "android/app/usage/StorageStatsManager",
   measurement_service: "android/adservices/measurement/MeasurementManager",
   wifi: "android/net/wifi/WifiManager",
   telephony_subscription_service: "android/telephony/SubscriptionManager",
@@ -135,6 +136,7 @@ const SERVICE_NAME = new Map(Object.entries(SERVICE_CLASS).map(([n, c]) => [c, n
 SERVICE_NAME.set("android/view/WindowManager", "window");
 export function systemService(jctx: JContext, name: string): unknown {
   if (name === "layout_inflater") return getInflater(jctx);
+  if (name === "storagestats") return null;
   let s = services.get(name);
   if (s) return s;
   const cls = SERVICE_CLASS[name];
