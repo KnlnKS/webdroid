@@ -1,5 +1,7 @@
 import { gl, setGL } from "../android/gl";
-import { type EglContext, glSurfaces } from "../android/glview";
+import type { EglContext } from "../android/glview";
+
+export const glSurfaces = { current: null as EglContext | null };
 
 const contexts = new WeakMap<object, EglContext>();
 let activeOwner: object | null = null;

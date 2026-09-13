@@ -676,7 +676,7 @@ export function gles3Init(): void {
     const set = method(`uniformMatrix${m}fv`);
     G[`glUniformMatrix${m}fv`] = (_c, a) => { const u = U(a.i()), cnt = a.i(), t = !!(a.i() & 255), p = a.p(); if (u) set().call(g(), u, t, f32(p, cnt * e)); };
   }
-  for (const [name, fn] of Object.entries(G)) G[name] = (cpu, args) => { activateEglCurrent(cpu); return fn(cpu, args); };
+  for (const [name, fn] of Object.entries(G)) G[name] = (cpu, args) => { activateEglCurrent(cpu.jthread); return fn(cpu, args); };
   // the probe: after each entry point, count and name a GL error
   if (glProbe) for (const [k, f] of Object.entries(G)) {
     if (k === "glGetError") continue;

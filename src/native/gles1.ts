@@ -266,7 +266,7 @@ export function gles1Init(): void {
   const noCtx = () => { calledMissing.add("gles1:call without a current context"); };
   /** wrap: current-context guard + optional getError probe */
   const W = (name: string, fn: (c: Ctx, a: ArgReader, cpu: Cpu) => HostRet): HostFn => (cpu, a) => {
-    activateEglCurrent(cpu);
+    activateEglCurrent(cpu.jthread);
     const c = cur();
     if (!c) { noCtx(); return 0; }
     const r = fn(c, a, cpu);
