@@ -42,44 +42,38 @@ rt.register({
 });
 
 class JSparseArray extends JObj {
-  m = new Map<number, unknown>();
-  sorted: number[] | null = null;
+  m = new Map<number | bigint, unknown>();
+  sorted: (number | bigint)[] | null = null;
   /** keys in index order (Android keeps them sorted ascending) */
-  keys(): number[] { return this.sorted ??= [...this.m.keys()].sort((a, b) => a - b); }
-  set(k: number, v: unknown) { if (!this.m.has(k)) this.sorted = null; this.m.set(k, v); }
-  del(k: number) { if (this.m.delete(k)) this.sorted = null; }
+  keys(): (number | bigint)[] { return this.sorted ??= [...this.m.keys()].sort((a, b) => a < b ? -1 : a > b ? 1 : 0); }
+  set(k: number | bigint, v: unknown) { if (!this.m.has(k)) this.sorted = null; this.m.set(k, v); }
+  del(k: number | bigint) { if (this.m.delete(k)) this.sorted = null; }
   reset() { this.m.clear(); this.sorted = null; }
 }
-const sparseMethods = (valDesc: string, dflt: unknown, cls = "android/util/SparseArray"): NativeSpec["methods"] => ({
+const sparseMethods = (valDesc: string, dflt: unknown, cls = "android/util/SparseArray", key = "I"): NativeSpec["methods"] => ({
   "<init>()V": function () {},
   [`clone()L${cls};`]: function (this: JSparseArray) { const c = new (this.constructor as new () => JSparseArray)(); for (const [k, v] of this.m) c.set(k, v); return c; },
   "<init>(I)V": function () {},
-  [`get(I)${valDesc}`]: function (this: JSparseArray, k: number) { return this.m.get(k) ?? dflt; },
-  [`get(I${valDesc})${valDesc}`]: function (this: JSparseArray, k: number, d: unknown) { return this.m.has(k) ? this.m.get(k) : d; },
-  [`put(I${valDesc})V`]: function (this: JSparseArray, k: number, v: unknown) { this.set(k, v); },
-  [`append(I${valDesc})V`]: function (this: JSparseArray, k: number, v: unknown) { this.set(k, v); },
+  [`get(${key})${valDesc}`]: function (this: JSparseArray, k: number | bigint) { return this.m.get(k) ?? dflt; },
+  [`get(${key}${valDesc})${valDesc}`]: function (this: JSparseArray, k: number | bigint, d: unknown) { return this.m.has(k) ? this.m.get(k) : d; },
+  [`put(${key}${valDesc})V`]: function (this: JSparseArray, k: number | bigint, v: unknown) { this.set(k, v); },
+  [`append(${key}${valDesc})V`]: function (this: JSparseArray, k: number | bigint, v: unknown) { this.set(k, v); },
   "size()I": function (this: JSparseArray) { return this.m.size; },
-  "keyAt(I)I": function (this: JSparseArray, i: number) { return this.keys()[i]; },
+  [`keyAt(I)${key}`]: function (this: JSparseArray, i: number) { return this.keys()[i]; },
   [`valueAt(I)${valDesc}`]: function (this: JSparseArray, i: number) { return this.m.get(this.keys()[i]) ?? dflt; },
-  "delete(I)V": function (this: JSparseArray, k: number) { this.del(k); },
-  "remove(I)V": function (this: JSparseArray, k: number) { this.del(k); },
+  [`delete(${key})V`]: function (this: JSparseArray, k: number | bigint) { this.del(k); },
+  [`remove(${key})V`]: function (this: JSparseArray, k: number | bigint) { this.del(k); },
   "removeAt(I)V": function (this: JSparseArray, i: number) { this.del(this.keys()[i]); },
   "clear()V": function (this: JSparseArray) { this.reset(); },
-  "indexOfKey(I)I": function (this: JSparseArray, k: number) { return this.keys().indexOf(k); },
-  [`indexOfValue(${valDesc})I`]: function (this: JSparseArray, v: unknown) { return [...this.m.values()].indexOf(v); },
+  [`indexOfKey(${key})I`]: function (this: JSparseArray, k: number | bigint) { const keys = this.keys(); let lo = 0, hi = keys.length; while (lo < hi) { const mid = (lo + hi) >>> 1; if (keys[mid] < k) lo = mid + 1; else hi = mid; } return keys[lo] === k ? lo : ~lo; },
+  [`indexOfValue(${valDesc})I`]: function (this: JSparseArray, v: unknown) { return this.keys().findIndex(k => this.m.get(k) === v); },
 });
 rt.register({ name: "android/util/SparseArray", ctor: JSparseArray, methods: sparseMethods("Ljava/lang/Object;", null) });
 rt.register({ name: "android/util/SparseIntArray", ctor: class extends JSparseArray {}, methods: sparseMethods("I", 0, "android/util/SparseIntArray") });
 rt.register({ name: "android/util/SparseBooleanArray", ctor: class extends JSparseArray {}, methods: sparseMethods("Z", 0, "android/util/SparseBooleanArray") });
 rt.register({ name: "android/util/SparseLongArray", ctor: class extends JSparseArray {}, methods: sparseMethods("J", 0n, "android/util/SparseLongArray") });
 rt.register({ name: "android/util/LongSparseArray", ctor: class extends JSparseArray {},
-  methods: {
-    "<init>()V": function () {},
-    "get(J)Ljava/lang/Object;": function (this: JSparseArray, k: bigint) { return this.m.get(k as any) ?? null; },
-    "put(JLjava/lang/Object;)V": function (this: JSparseArray, k: bigint, v: unknown) { this.set(k as any, v); },
-    "size()I": function (this: JSparseArray) { return this.m.size; },
-    "delete(J)V": function (this: JSparseArray, k: bigint) { this.del(k as any); },
-  } });
+  methods: sparseMethods("Ljava/lang/Object;", null, "android/util/LongSparseArray", "J") });
 
 // android.util.StateSet: a spec lists the state ids a drawable/color entry needs (negative =
 // must be absent), 0 terminates either array; both wildcards are answered by the constants.
@@ -229,7 +223,9 @@ rt.register({
     "static complexToDimensionPixelSize(ILandroid/util/DisplayMetrics;)I": (data: number, dm: JDisplayMetrics) => {
       return Math.round(complexToPx(data, dm));
     },
+    "getComplexUnit()I": function (this: JTypedValue) { return this.data & 15; },
     "static complexToDimension(ILandroid/util/DisplayMetrics;)F": (data: number, dm: JDisplayMetrics) => complexToPx(data, dm),
+    "static complexToDimensionPixelOffset(ILandroid/util/DisplayMetrics;)I": (data: number, dm: JDisplayMetrics) => rt.f2i(complexToPx(data, dm)),
     "static applyDimension(IFLandroid/util/DisplayMetrics;)F": (unit: number, v: number, dm: JDisplayMetrics) => {
       switch (unit) {
         case 1: return v * dm.density;

@@ -1885,6 +1885,32 @@ type Fillable = { fill(v: unknown, s?: number, e?: number): unknown };
 const fill = (a: Fillable, v: unknown) => a.fill(v);
 const fillRange = (a: Fillable, f: number, t: number, v: unknown) => a.fill(v, f, t);
 class JArrays extends JObj {}
+function deepEquals(a: unknown, b: unknown): number | Promise<number> {
+  if (a === b) return 1;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return 0;
+    return deepArrayEquals(a, b, 0);
+  }
+  if (ArrayBuffer.isView(a) && ArrayBuffer.isView(b)) {
+    if (a.constructor !== b.constructor || a.byteLength !== b.byteLength) return 0;
+    if (a instanceof Float32Array && b instanceof Float32Array || a instanceof Float64Array && b instanceof Float64Array) {
+      for (let i = 0; i < a.length; i++) if (!Object.is(a[i], b[i])) return 0;
+      return 1;
+    }
+    const x = new Uint8Array(a.buffer, a.byteOffset, a.byteLength), y = new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return 0;
+    return 1;
+  }
+  return jeq(a, b);
+}
+function deepArrayEquals(a: unknown[], b: unknown[], start: number): number | Promise<number> {
+  for (let i = start; i < a.length; i++) {
+    const equal = deepEquals(a[i], b[i]);
+    if (equal instanceof Promise) return equal.then(ok => ok ? deepArrayEquals(a, b, i + 1) : 0);
+    if (!equal) return 0;
+  }
+  return 1;
+}
 class JArraysList extends JList {}
 rt.register({
   name: "webdroid/ArraysList", ctor: JArraysList,
@@ -1926,6 +1952,7 @@ rt.register({
     "static toString([J)Ljava/lang/String;": (a: BigInt64Array) => (a ? "[" + Array.from(a).join(", ") + "]" : "null"),
     "static toString([Z)Ljava/lang/String;": (a: Uint8Array) => (a ? "[" + Array.from(a, (v) => (v ? "true" : "false")).join(", ") + "]" : "null"),
     "static deepHashCode([Ljava/lang/Object;)I": (a: unknown[] | null) => (a ? hashSeq(a) : 0),
+    "static deepEquals([Ljava/lang/Object;[Ljava/lang/Object;)Z": deepEquals,
     "static equals([Ljava/lang/Object;[Ljava/lang/Object;)Z": async (a: unknown[], b: unknown[]) => {
       if (a === b) return 1;
       if (!a || !b || a.length !== b.length) return 0;
@@ -1941,6 +1968,8 @@ rt.register({
     // library that builds a character class out of a key set depends on it
     "static toString([Ljava/lang/Object;)Ljava/lang/String;": async (a: unknown[]) =>
       a ? "[" + (await Promise.all(a.map((x) => (x === null ? "null" : vcall(x, "toString", "()Ljava/lang/String;"))))).join(", ") + "]" : "null",
+    "static binarySearch([BB)I": taBinarySearch,
+    "static binarySearch([SS)I": taBinarySearch,
     "static binarySearch([II)I": taBinarySearch,
     "static binarySearch([CC)I": taBinarySearch,
     "static binarySearch([JJ)I": taBinarySearch,
@@ -2006,6 +2035,15 @@ function objCopyOf(a: unknown[], n: number, elem?: string): unknown[] {
   return jarray(c, elem);
 }
 
+async function shuffle(list: unknown, random?: unknown): Promise<void> {
+  const values = [...await toJsArray(list)];
+  for (let i = values.length; i > 1; i--) {
+    const j = random === undefined ? Math.floor(Math.random() * i) : await vcall(random, "nextInt", "(I)I", i);
+    [values[i - 1], values[j]] = [values[j], values[i - 1]];
+  }
+  const iterator = await vcall(list, "listIterator", "()Ljava/util/ListIterator;");
+  for (const value of values) { await vcall(iterator, "next", "()Ljava/lang/Object;"); await vcall(iterator, "set", "(Ljava/lang/Object;)V", value); }
+}
 class JCollections extends JObj {}
 const extreme = (sign: number) => async (c: unknown, cmp: unknown = null) => {
   const a = await toJsArray(c);
@@ -2055,12 +2093,8 @@ rt.register({
     "static binarySearch(Ljava/util/List;Ljava/lang/Object;)I": (l: unknown, k: unknown) => listBinarySearch(l, k, null),
     "static binarySearch(Ljava/util/List;Ljava/lang/Object;Ljava/util/Comparator;)I": listBinarySearch,
     "static reverse(Ljava/util/List;)V": (l: JList) => l.a.reverse(),
-    "static shuffle(Ljava/util/List;)V": (l: JList) => {
-      for (let i = l.a.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [l.a[i], l.a[j]] = [l.a[j], l.a[i]];
-      }
-    },
+    "static shuffle(Ljava/util/List;)V": shuffle,
+    "static shuffle(Ljava/util/List;Ljava/util/Random;)V": shuffle,
     "static addAll(Ljava/util/Collection;[Ljava/lang/Object;)Z": async (c: unknown, arr: unknown[]) => {
       for (const v of arr) await vcall(c, "add", "(Ljava/lang/Object;)Z", v);
       return arr.length ? 1 : 0;
