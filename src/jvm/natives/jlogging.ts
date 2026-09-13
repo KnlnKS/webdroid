@@ -1,17 +1,30 @@
 import { JObj, rt } from "../runtime";
+import { JThrowable } from "./jlang";
 
-class JLogger extends JObj { lname = ""; }
+class JLogger extends JObj { lname = ""; level: JLevel | null = null; }
+const loggers = new Map<string, JLogger>();
+function log(this: JLogger, level: JLevel, message: string, error?: JThrowable | null) {
+  if (level.value < (this.level?.value ?? 800) || this.level?.value === 2147483647) return;
+  const frames = error && "jframes" in error && Array.isArray(error.jframes) ? error.jframes : [];
+  const detail = error ? `\n${error.msg}${frames.length ? "\n  at " + frames.join("\n  at ") : ""}` : "";
+  const method = level.value >= 1000 ? "error" : level.value >= 900 ? "warn" : "info";
+  console[method](`[java.util.logging/${this.lname}] ${message}${detail}`);
+}
 rt.register({
   name: "java/util/logging/Logger", ctor: JLogger,
   methods: {
-    "static getLogger(Ljava/lang/String;)Ljava/util/logging/Logger;": (n: string) => { const l = new JLogger(); l.lname = n; return l; },
-    "log(Ljava/util/logging/Level;Ljava/lang/String;)V": () => {},
-    "log(Ljava/util/logging/Level;Ljava/lang/String;Ljava/lang/Throwable;)V": () => {},
-    "info(Ljava/lang/String;)V": () => {},
-    "warning(Ljava/lang/String;)V": () => {},
-    "fine(Ljava/lang/String;)V": () => {},
-    "isLoggable(Ljava/util/logging/Level;)Z": () => 0,
-    "setLevel(Ljava/util/logging/Level;)V": () => {},
+    "static getLogger(Ljava/lang/String;)Ljava/util/logging/Logger;": (n: string) => { let l = loggers.get(n); if (!l) { l = new JLogger(); l.lname = n; loggers.set(n, l); } return l; },
+    "getName()Ljava/lang/String;": function (this: JLogger) { return this.lname; },
+    "getLevel()Ljava/util/logging/Level;": function (this: JLogger) { return this.level; },
+    "log(Ljava/util/logging/Level;Ljava/lang/String;)V": log,
+    "log(Ljava/util/logging/Level;Ljava/lang/String;Ljava/lang/Throwable;)V": log,
+    "logp(Ljava/util/logging/Level;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JLogger, level: JLevel, _class: string, _method: string, message: string) { log.call(this, level, message); },
+    "logp(Ljava/util/logging/Level;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)V": function (this: JLogger, level: JLevel, _class: string, _method: string, message: string, error: JThrowable) { log.call(this, level, message, error); },
+    "info(Ljava/lang/String;)V": function (this: JLogger, message: string) { log.call(this, levels.INFO, message); },
+    "warning(Ljava/lang/String;)V": function (this: JLogger, message: string) { log.call(this, levels.WARNING, message); },
+    "fine(Ljava/lang/String;)V": function (this: JLogger, message: string) { log.call(this, levels.FINE, message); },
+    "isLoggable(Ljava/util/logging/Level;)Z": function (this: JLogger, level: JLevel) { return +(level.value >= (this.level?.value ?? 800) && this.level?.value !== 2147483647); },
+    "setLevel(Ljava/util/logging/Level;)V": function (this: JLogger, level: JLevel | null) { this.level = level; },
     "addHandler(Ljava/util/logging/Handler;)V": () => {},
     "setUseParentHandlers(Z)V": () => {},
   },
