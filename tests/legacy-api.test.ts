@@ -79,6 +79,14 @@ test("LinkedList has the AbstractSequentialList hierarchy", async () => {
   expect(rt.iof(list, "java/util/AbstractList")).toBeTruthy();
 });
 
+test("reached Java value utilities preserve their platform contracts", async () => {
+  const first = await newObj("java/lang/Character", "(C)V", 65);
+  const second = await newObj("java/lang/Character", "(C)V", 66);
+  expect(await vcall(first, "compareTo", "(Ljava/lang/Object;)I", second)).toBeLessThan(0);
+  expect(await scall("java/util/Arrays", "toString", "([B)Ljava/lang/String;", new Int8Array([-1, 0, 1]))).toBe("[-1, 0, 1]");
+  expect(await scall("java/lang/Math", "log1p", "(D)D", Math.E - 1)).toBeCloseTo(1);
+});
+
 test("layout containers expose their covariant LayoutParams descriptors", () => {
   for (const name of ["FrameLayout", "LinearLayout", "RelativeLayout"]) {
     const view = rt.make(`android/widget/${name}`) as unknown as Record<string, unknown>;

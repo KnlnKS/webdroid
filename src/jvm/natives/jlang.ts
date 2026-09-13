@@ -1188,6 +1188,8 @@ rt.register({
     "static isDefined(I)Z": () => 1,
     "<init>(C)V": function (this: JChar, v: number) { this.v = v; },
     "charValue()C": function (this: JChar) { return this.v; },
+    "compareTo(Ljava/lang/Character;)I": cmpV,
+    "compareTo(Ljava/lang/Object;)I": cmpV,
     "equals(Ljava/lang/Object;)Z": function (this: JChar, o: unknown) { return o instanceof JChar && o.v === this.v ? 1 : 0; },
     "hashCode()I": function (this: JChar) { return this.v; },
     "toString()Ljava/lang/String;": function (this: JChar) { return String.fromCharCode(this.v); },
@@ -1241,6 +1243,7 @@ rt.register({
     "static floorMod(JJ)J": (a: bigint, b: bigint) => ((a % b) + b) % b,
     "static atan2(DD)D": (a: number, b: number) => Math.atan2(a, b),
     "static hypot(DD)D": (a: number, b: number) => Math.hypot(a, b),
+    "static log1p(D)D": (value: number) => Math.log1p(value),
     "static copySign(DD)D": (magnitude: number, sign: number) => longBitsToDouble(
       doubleToLongBits(magnitude) & 0x7fffffffffffffffn | doubleToLongBits(sign) & -0x8000000000000000n),
     "static copySign(FF)F": (magnitude: number, sign: number) => intBitsToFloat(

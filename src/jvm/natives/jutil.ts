@@ -1965,6 +1965,10 @@ rt.register({
       const l = new JArraysList(); l.a = arr; return l;
     },
     ...Object.fromEntries([..."BCSIJFD"].flatMap((t) => [[`static sort([${t})V`, taSort], [`static sort([${t}II)V`, taSort]])),
+    "static toString([B)Ljava/lang/String;": (values: Int8Array | null) => values ? `[${Array.from(values).join(", ")}]` : "null",
+    "static toString([S)Ljava/lang/String;": (values: Int16Array | null) => values ? `[${Array.from(values).join(", ")}]` : "null",
+    "static toString([C)Ljava/lang/String;": (values: Uint16Array | null) => values ? `[${Array.from(values, (value) => String.fromCharCode(value)).join(", ")}]` : "null",
+    "static toString([D)Ljava/lang/String;": (values: Float64Array | null) => values ? `[${Array.from(values, fmtDouble).join(", ")}]` : "null",
     "static sort([Ljava/lang/Object;)V": (a: unknown[]) => sortInPlace(a, null),
     "static sort([Ljava/lang/Object;II)V": (a: unknown[], from: number, to: number) => sortInPlace(a, null, from, to),
     "static sort([Ljava/lang/Object;Ljava/util/Comparator;)V": (a: unknown[], cmp: unknown) => sortInPlace(a, cmp),
