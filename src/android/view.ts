@@ -213,8 +213,14 @@ function windowOffset(view: JView): [number, number] {
   for (let v: JView | null = view; v; v = v.parent) { tx += v.left - v.scrollX + v.translationX; ty += v.top - v.scrollY + v.translationY; }
   return [tx, ty];
 }
-function removeChild(this: JViewGroup, c: JView) { return detachView(this, c); }
-function removeChildInLayout(this: JViewGroup, c: JView) { return detachView(this, c, false); }
+async function removeChild(this: JViewGroup, c: JView) {
+  if (this.children.includes(c)) await noteTransientChild(this, c, false);
+  await detachView(this, c);
+}
+async function removeChildInLayout(this: JViewGroup, c: JView) {
+  if (this.children.includes(c)) await noteTransientChild(this, c, false);
+  await detachView(this, c, false);
+}
 /** AOSP removeViews/removeAllViews: the children leave without requests and the parent asks
  *  once; the *InLayout forms do not ask at all */
 async function removeRange(vg: JViewGroup, start: number, n: number, request: boolean) {
@@ -1363,7 +1369,7 @@ const viewMethods: NativeSpec["methods"] = {
     const info = rt.link("android/view/Display");
     return new info.ctor();
   },
-  "hasTransientState()Z": function (this: JView) { return this.transientState > 0 ? 1 : 0; },
+  "hasTransientState()Z": function (this: JView) { return this.transientState > 0 || (this as JViewGroup).transientChildren > 0 ? 1 : 0; },
   "setHasTransientState(Z)V": function (this: JView, v: number) { this.transientState = Math.max(0, this.transientState + (v ? 1 : -1)); },
   "static combineMeasuredStates(II)I": (a: number, b: number) => a | b,
   "getPivotX()F": function (this: JView) { return this.pivotXv ?? this.width() / 2; },
@@ -1531,6 +1537,7 @@ export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | n
 
 export class JViewGroup extends JView {
   children: JView[] = [];
+  transientChildren = 0;
   /** ViewGroup.getNestedScrollAxes() — the axes of the nested scroll in progress */
   nestedAxes = 0;
   drawingOrderEnabled = false;
@@ -1602,6 +1609,7 @@ async function childRemoved(parent: JViewGroup, child: JView) {
  */
 export async function attachView(parent: JViewGroup, child: JView, index = -1, request = true) {
   if (!await linkChild(parent, child, index)) return;
+  await noteTransientChild(parent, child, true);
   await guardMaybe(parent, M_onViewAdded, child);
   if (parent.hierarchyChangeL) {
     await vcall(parent.hierarchyChangeL, "onChildViewAdded", "(Landroid/view/View;Landroid/view/View;)V", parent, child);
@@ -1698,6 +1706,14 @@ async function addView3(this: JViewGroup, c: JView, i: number, lp: JLayoutParams
     : await guardCall(this, M_genDefaultLP);
   await resolveLp(c.lp!);
   await attachView(this, c, i);
+}
+const M_hasTransientState = mangleMethod("hasTransientState", "()Z");
+const M_childTransientChanged = mangleMethod("childHasTransientStateChanged", "(Landroid/view/View;Z)V");
+async function noteTransientChild(parent: JViewGroup, child: JView, added: boolean) {
+  const method = jmethod(child, M_hasTransientState);
+  if (method && await guardApply(method as JMethod, child)) {
+    await guardMaybe(parent, M_childTransientChanged, child, added ? 1 : 0);
+  }
 }
 /**
  * AOSP funnels every addView overload through the overridable 3-arg one, and subclasses do real
@@ -1823,6 +1839,14 @@ const vgMethods: NativeSpec["methods"] = {
   },
   "setOnHierarchyChangeListener(Landroid/view/ViewGroup$OnHierarchyChangeListener;)V": function (this: JViewGroup, l: unknown) {
     this.hierarchyChangeL = l;
+  },
+  "childHasTransientStateChanged(Landroid/view/View;Z)V": async function (this: JViewGroup, _child: JView, has: number) {
+    const before = this.transientChildren > 0;
+    this.transientChildren = Math.max(0, this.transientChildren + (has ? 1 : -1));
+    const after = this.transientChildren > 0;
+    if (before !== after && this.parent) {
+      await guardMaybe(this.parent, M_childTransientChanged, this, after ? 1 : 0);
+    }
   },
   "setClipChildren(Z)V": function (this: JViewGroup, v: number) { this.clipChildren = !!v; },
   "getClipChildren()Z": function (this: JViewGroup) { return this.clipChildren ? 1 : 0; },
