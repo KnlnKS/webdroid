@@ -379,11 +379,12 @@ rt.register({
     dalvikPss = 0; nativePss = 0; otherPss = 0;
     dalvikSharedDirty = 0; dalvikPrivateDirty = 0; nativeSharedDirty = 0; nativePrivateDirty = 0; otherSharedDirty = 0; otherPrivateDirty = 0;
   },
-  fields: ["dalvikPss", "nativePss", "otherPss"],
+  fields: ["dalvikPss", "nativePss", "otherPss", "dalvikSharedDirty", "dalvikPrivateDirty", "nativeSharedDirty", "nativePrivateDirty", "otherSharedDirty", "otherPrivateDirty"],
   methods: {
     "getTotalPss()I": function (this: { dalvikPss: number; nativePss: number; otherPss: number }) { return this.dalvikPss + this.nativePss + this.otherPss; },
     ...noops("<init>()V"),
-    ...stubs(0, "getTotalPrivateDirty()I", "getTotalSharedDirty()I"),
+    "getTotalPrivateDirty()I": function (this: { dalvikPrivateDirty: number; nativePrivateDirty: number; otherPrivateDirty: number }) { return this.dalvikPrivateDirty + this.nativePrivateDirty + this.otherPrivateDirty; },
+    "getTotalSharedDirty()I": function (this: { dalvikSharedDirty: number; nativeSharedDirty: number; otherSharedDirty: number }) { return this.dalvikSharedDirty + this.nativeSharedDirty + this.otherSharedDirty; },
     "getMemoryStat(Ljava/lang/String;)Ljava/lang/String;": () => "0",
   },
 });

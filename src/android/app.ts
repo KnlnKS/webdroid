@@ -476,6 +476,8 @@ rt.register({
 let audioSession = 0;
 for (const [name, methods, statics] of [
   ["android/app/ActivityManager", {
+    "static isUserAMonkey()Z": () => 0,
+    "static isRunningInUserTestHarness()Z": () => 0,
     "getMemoryClass()I": () => 256,
     "getLargeMemoryClass()I": () => 512,
     "isLowRamDevice()Z": () => 0,
