@@ -30,9 +30,34 @@ rt.register({
   },
 });
 
+class JMessageQueue extends JObj {
+  owner: JLooper | null = null;
+  messages = new Map<JMessage, number>();
+  handlers = new Set<unknown>();
+  scheduled = false;
+  isIdle(): boolean {
+    const now = uptimeMillis();
+    for (const when of this.messages.values()) if (when <= now) return false;
+    return true;
+  }
+  checkIdle() {
+    if (!this.owner || this.scheduled || !this.handlers.size || !this.isIdle()) return;
+    this.scheduled = true;
+    setTimeout(() => void this.owner!.run(async () => {
+      this.scheduled = false;
+      if (!this.isIdle()) return;
+      for (const handler of [...this.handlers]) {
+        if (!this.handlers.has(handler)) continue;
+        try { if (!await vcall(handler, "queueIdle", "()Z")) this.handlers.delete(handler); }
+        catch (error) { this.handlers.delete(handler); reportUncaught(error); }
+      }
+    }), 0);
+  }
+}
 class JLooper extends JObj {
   thread: JThread;
   q: Promise<unknown> = Promise.resolve();
+  queue = Object.assign(new JMessageQueue(), { owner: this });
   printer: unknown = null;   // Looper.setMessageLogging
   constructor(thread?: JThread) { super(); this.thread = thread ?? curThread; }
   /** Messages run serialized on the looper's thread. The main looper is the shell's queue; any
@@ -74,25 +99,23 @@ rt.register({
     "getThread()Ljava/lang/Thread;": function (this: JLooper) { return this.thread; },
     "isCurrentThread()Z": function (this: JLooper) { return curThread === this.thread ? 1 : 0; },
     ...noops("static prepareMainLooper()V", "quit()V", "quitSafely()V"),
-    "getQueue()Landroid/os/MessageQueue;": () => mainQueue,
+    "getQueue()Landroid/os/MessageQueue;": function (this: JLooper) { return this.queue; },
     "setMessageLogging(Landroid/util/Printer;)V": function (this: JLooper, printer: unknown) { this.printer = printer; },
     "static myQueue()Landroid/os/MessageQueue;": () => {
       if (!curThread.looper) throw rt.mkThrowable("java/lang/IllegalStateException", "No Looper; Looper.prepare() wasn't called on this thread.");
-      return mainQueue;
+      return (curThread.looper as JLooper).queue;
     },
   },
 });
-class JMessageQueue extends JObj {}
-const mainQueue = new JMessageQueue();
 rt.register({
   name: "android/os/MessageQueue", ctor: JMessageQueue,
   methods: {
-    "addIdleHandler(Landroid/os/MessageQueue$IdleHandler;)V": (h: unknown) => {
-      setTimeout(() => void onMain(async () => {
-        try { await vcall(h, "queueIdle", "()Z"); } catch (e) { console.error("[idle]", e); }
-      }), 50);
+    "isIdle()Z": function (this: JMessageQueue) { return +this.isIdle(); },
+    "addIdleHandler(Landroid/os/MessageQueue$IdleHandler;)V": function (this: JMessageQueue, h: unknown) {
+      if (!h) throw rt.mkThrowable("java/lang/NullPointerException", "handler");
+      this.handlers.add(h); this.checkIdle();
     },
-    "removeIdleHandler(Landroid/os/MessageQueue$IdleHandler;)V": () => {},
+    "removeIdleHandler(Landroid/os/MessageQueue$IdleHandler;)V": function (this: JMessageQueue, h: unknown) { this.handlers.delete(h); },
   },
 });
 // A callback interface an app implements has to be registered or its class cannot link, and
@@ -120,13 +143,18 @@ export class JHandler extends JObj {
     let set = this.pending.get(key);
     if (!set) this.pending.set(key, (set = new Set()));
     set.add(msg);
+    const queue = this.looper.queue;
+    queue.messages.set(msg, uptimeMillis() + Math.max(0, delay));
     // still pending until it runs, so a removeMessages/hasMessages in between sees it
-    const go = () => this.looper.run(() => {
+    const go = () => this.looper.run(async () => {
+      queue.messages.delete(msg);
       if (!set.delete(msg)) return;
       if (!set.size) this.pending.delete(key);
       const printer = this.looper.printer;
-      if (printer) return dispatchLogged(this, msg, printer);
-      return vcall(this, "dispatchMessage", "(Landroid/os/Message;)V", msg).catch(reportUncaught);
+      try {
+        if (printer) await dispatchLogged(this, msg, printer);
+        else await vcall(this, "dispatchMessage", "(Landroid/os/Message;)V", msg).catch(reportUncaught);
+      } finally { queue.checkIdle(); }
     });
     if (delay > 0) msg.timer = setTimeout(() => void go(), delay); else void go();
     return 1;
@@ -135,9 +163,10 @@ export class JHandler extends JObj {
   cancel(key: unknown): void {
     const messages = this.pending.get(key);
     if (!messages) return;
-    for (const m of messages) clearTimeout(m.timer);
+    for (const m of messages) { clearTimeout(m.timer); this.looper.queue.messages.delete(m); }
     messages.clear();
     this.pending.delete(key);
+    this.looper.queue.checkIdle();
   }
 }
 /** The window's handler, which View.post/postDelayed/scheduleDrawable enqueue on. Lazy so it
@@ -322,6 +351,9 @@ rt.register({
     "static getElapsedCpuTime()J": () => BigInt(Math.round(performance.now())),
     "static myTid()I": () => threadTid(curThread),
     "static myUid()I": () => PROCESS_UID,
+    "static myUserHandle()Landroid/os/UserHandle;": () => vcall(rt.link("android/os/UserHandle").ctor,
+      "getUserHandleForUid", "(I)Landroid/os/UserHandle;", PROCESS_UID),
+    "static isApplicationUid(I)Z": (uid: number) => uid > 0 && uid % 100000 >= 10000 && uid % 100000 <= 19999 ? 1 : 0,
     "static getGidForName(Ljava/lang/String;)I": (name: string | null) => {
       if (name === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
       return androidGroupId(name);
