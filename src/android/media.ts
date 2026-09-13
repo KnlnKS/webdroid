@@ -574,10 +574,29 @@ rt.register({ name: "android/media/MediaRouter$RouteCategory", ctor: JRouteCateg
   "getName(Landroid/content/Context;)Ljava/lang/CharSequence;": function (this: JRouteCategory) { return this.name; },
   "isGroupable()Z": function (this: JRouteCategory) { return this.groupable ? 1 : 0; },
 } });
+class JCaptionStyle extends JObj {
+  foregroundColor = -1; backgroundColor = -16777216; edgeType = 0; edgeColor = -16777216; windowColor = 0xff;
+  typeface: unknown = null;
+}
+const defaultCaptionStyle = new JCaptionStyle();
+rt.register({
+  name: "android/view/accessibility/CaptioningManager$CaptionStyle", ctor: JCaptionStyle,
+  fields: ["foregroundColor", "backgroundColor", "edgeType", "edgeColor", "windowColor", "typeface"],
+  statics: { DEFAULT: defaultCaptionStyle },
+  methods: {
+    "<init>(IIIIILandroid/graphics/Typeface;)V": function (this: JCaptionStyle, foreground: number, background: number,
+      edgeType: number, edgeColor: number, window: number, typeface: unknown) {
+      Object.assign(this, { foregroundColor: foreground, backgroundColor: background, edgeType, edgeColor, windowColor: window, typeface });
+    },
+    "getTypeface()Landroid/graphics/Typeface;": function (this: JCaptionStyle) { return this.typeface; },
+    ...stubs(1, "hasForegroundColor()Z", "hasBackgroundColor()Z", "hasEdgeType()Z", "hasEdgeColor()Z", "hasWindowColor()Z"),
+  },
+});
 rt.register({ name: "android/view/accessibility/CaptioningManager", ctor: class extends JObj {}, methods: {
   "isEnabled()Z": () => 0,
   "getFontScale()F": () => 1,
   "getLocale()Ljava/util/Locale;": () => null,
+  "getUserStyle()Landroid/view/accessibility/CaptioningManager$CaptionStyle;": () => defaultCaptionStyle,
   "addCaptioningChangeListener(Landroid/view/accessibility/CaptioningManager$CaptioningChangeListener;)V": () => {},
   "removeCaptioningChangeListener(Landroid/view/accessibility/CaptioningManager$CaptioningChangeListener;)V": () => {},
 } });
