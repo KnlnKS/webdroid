@@ -40,3 +40,11 @@ test("a one-value ObjectAnimator on a Property starts from the Property's curren
   expect(await vcall(await vcall(anim, "getAnimatedValue", "()Ljava/lang/Object;"), "floatValue", "()F")).toBe(0.25);
   await vcall(anim, "cancel", "()V");
 });
+
+test("Animator clone uses the covariant framework descriptor", async () => {
+  const anim = await newObj("android/animation/ValueAnimator", "()V");
+  await vcall(anim, "setDuration", "(J)Landroid/animation/Animator;", 750n);
+  const copy = await vcall(anim, "clone", "()Landroid/animation/Animator;");
+  expect(copy).not.toBe(anim);
+  expect(await vcall(copy, "getDuration", "()J")).toBe(750n);
+});

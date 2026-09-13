@@ -315,6 +315,11 @@ function setDur(this: JValueAnimator, d: bigint) {
   this.durationMs = Number(d);
   return this;
 }
+function cloneAnimator(this: JValueAnimator): JValueAnimator {
+  const copy = new (this.constructor as new () => JValueAnimator)();
+  Object.assign(copy, this, { running: false, paused: false, updateLs: [...this.updateLs], animLs: [...this.animLs], holders: [...this.holders] });
+  return copy;
+}
 const vaMethods: NativeSpec["methods"] = {
   "setDuration(J)Landroid/animation/ValueAnimator;": setDur,
   "setDuration(J)Landroid/animation/Animator;": setDur,
@@ -370,11 +375,8 @@ const vaMethods: NativeSpec["methods"] = {
     a.holders = [...(hs ?? [])];
     return a;
   },
-  "clone()Landroid/animation/ValueAnimator;": function (this: JValueAnimator) {
-    const c = new (this.constructor as any)() as JValueAnimator;
-    Object.assign(c, this, { running: false, paused: false, updateLs: [...this.updateLs], animLs: [...this.animLs], holders: [...this.holders] });
-    return c;
-  },
+  "clone()Landroid/animation/Animator;": cloneAnimator,
+  "clone()Landroid/animation/ValueAnimator;": cloneAnimator,
   "setStartDelay(J)V": function (this: JValueAnimator, d: bigint) { this.delayMs = Number(d); },
   "getStartDelay()J": function (this: JValueAnimator) { return BigInt(this.delayMs); },
   "setTarget(Ljava/lang/Object;)V": function (this: JValueAnimator, t: unknown) { setTargetDeep(this, t); },
