@@ -191,3 +191,30 @@ test("Locale constants carry their language and country, and JSON text prints a 
   const json = await newObj("org/json/JSONObject", "(Ljava/util/Map;)V", map);
   expect(await vcall(json, "toString", "()Ljava/lang/String;")).toBe('{"big":9007199254740993}');
 });
+
+test("ULocale bridges ICU locale ids and java.util.Locale", async () => {
+  const locale = await scall("android/icu/util/ULocale", "forLanguageTag", "(Ljava/lang/String;)Landroid/icu/util/ULocale;", "ar-EG");
+  expect(await vcall(locale, "getLanguage", "()Ljava/lang/String;")).toBe("ar");
+  expect(await vcall(locale, "getCountry", "()Ljava/lang/String;")).toBe("EG");
+  expect(await vcall(locale, "isRightToLeft", "()Z")).toBe(1);
+  const javaLocale = await vcall(locale, "toLocale", "()Ljava/util/Locale;");
+  expect(await vcall(javaLocale, "toLanguageTag", "()Ljava/lang/String;")).toBe("ar-EG");
+  expect(await vcall(javaLocale, "equals", "(Ljava/lang/Object;)Z", await scall("java/util/Locale", "forLanguageTag", "(Ljava/lang/String;)Ljava/util/Locale;", "ar-EG"))).toBe(1);
+
+  const builder = await newObj("android/icu/util/ULocale$Builder");
+  await vcall(builder, "setLanguageTag", "(Ljava/lang/String;)Landroid/icu/util/ULocale$Builder;", "en-US");
+  await vcall(builder, "setUnicodeLocaleKeyword", "(Ljava/lang/String;Ljava/lang/String;)Landroid/icu/util/ULocale$Builder;", "calendar", "gregorian");
+  const built = await vcall(builder, "build", "()Landroid/icu/util/ULocale;");
+  expect(await vcall(built, "getKeywordValue", "(Ljava/lang/String;)Ljava/lang/String;", "calendar")).toBe("gregorian");
+});
+
+test("ICU Currency exposes ISO codes, symbols, names, and fraction digits", async () => {
+  const currency = await scall("android/icu/util/Currency", "getInstance", "(Ljava/lang/String;)Landroid/icu/util/Currency;", "usd");
+  expect(await vcall(currency, "getCurrencyCode", "()Ljava/lang/String;")).toBe("USD");
+  expect(await vcall(currency, "getSymbol", "()Ljava/lang/String;")).toBe("$");
+  expect(await vcall(currency, "getDefaultFractionDigits", "()I")).toBe(2);
+  const locale = await scall("android/icu/util/ULocale", "forLanguageTag", "(Ljava/lang/String;)Landroid/icu/util/ULocale;", "en-US");
+  const choice = new Int8Array([1]);
+  expect(await vcall(currency, "getName", "(Landroid/icu/util/ULocale;I[Z)Ljava/lang/String;", locale, 1, choice)).toContain("US");
+  expect(choice[0]).toBe(0);
+});
