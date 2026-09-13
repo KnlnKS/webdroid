@@ -530,6 +530,7 @@ rt.register({
     "getPort()I": function (this: JURI) { return Number(this.url()?.port) || -1; },
     "getRawQuery()Ljava/lang/String;": function (this: JURI) { return rawUriQuery(this.u); },
     "getQuery()Ljava/lang/String;": function (this: JURI) { const q = this.url()?.search; return q ? q.slice(1) : null; },
+    "getRawFragment()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf("#"); return i < 0 ? null : this.u.slice(i + 1); },
     "getFragment()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf("#"); return i < 0 ? null : this.u.slice(i + 1); },
     "getRawPath()Ljava/lang/String;": function (this: JURI) { return this.url()?.pathname ?? null; },
     "getSchemeSpecificPart()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf(":"); return i < 0 ? this.u : this.u.slice(i + 1); },

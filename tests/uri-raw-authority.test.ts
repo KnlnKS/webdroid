@@ -29,3 +29,14 @@ test("URI.getRawQuery preserves the hierarchical query component", async () => {
   const opaque = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "mailto:user@example.test?subject=hello");
   expect(await vcall(opaque, "getRawQuery", "()Ljava/lang/String;")).toBeNull();
 });
+
+test("URI.getRawFragment preserves escaped and empty fragments", async () => {
+  const escaped = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "https://example.test/a?q=1#section%202%2F3");
+  expect(await vcall(escaped, "getRawFragment", "()Ljava/lang/String;")).toBe("section%202%2F3");
+  const opaque = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "mailto:user@example.test#contact%20card");
+  expect(await vcall(opaque, "getRawFragment", "()Ljava/lang/String;")).toBe("contact%20card");
+  const empty = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "relative#");
+  expect(await vcall(empty, "getRawFragment", "()Ljava/lang/String;")).toBe("");
+  const absent = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "relative");
+  expect(await vcall(absent, "getRawFragment", "()Ljava/lang/String;")).toBeNull();
+});
