@@ -411,6 +411,7 @@ export class JView extends JObj {
     if (this.background) await vcall(this.background, "setState", "([I)Z", Int32Array.from(st));
     await guardMaybe(this, M_drawableStateChanged);
     if (this.stateListAnimator) await vcall(this.stateListAnimator, "setState", "([I)V", Int32Array.from(st));
+    if (this.parent instanceof JViewGroup && this.parent.addStatesFromChildren) await vcall(this.parent, "childDrawableStateChanged", "(Landroid/view/View;)V", this);
     invalidate();
   }
 }
@@ -1492,6 +1493,7 @@ export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | n
 
 export class JViewGroup extends JView {
   children: JView[] = [];
+  addStatesFromChildren = false;
   /** ViewGroup.getNestedScrollAxes() — the axes of the nested scroll in progress */
   nestedAxes = 0;
   drawingOrderEnabled = false;
@@ -1793,13 +1795,25 @@ const vgMethods: NativeSpec["methods"] = {
     await drawView(c, cv, this);
     return 0;
   },
+  "addStatesFromChildren()Z": function (this: JViewGroup) { return +this.addStatesFromChildren; },
+  "setAddStatesFromChildren(Z)V": function (this: JViewGroup, enabled: number) { this.addStatesFromChildren = !!enabled; return this.refreshDrawableState(); },
+  "childDrawableStateChanged(Landroid/view/View;)V": function (this: JViewGroup) { if (this.addStatesFromChildren) return this.refreshDrawableState(); },
+  "onCreateDrawableState(I)[I": async function (this: JViewGroup, extra: number) {
+    const states = this.baseState();
+    if (this.addStatesFromChildren) for (const child of this.children) {
+      const childStates: Int32Array = await vcall(child, "getDrawableState", "()[I");
+      for (const state of childStates) if (state !== 0) states.push(state);
+    }
+    const out = new Int32Array(states.length + Math.max(0, extra | 0));
+    out.set(states);
+    return out;
+  },
   "static getChildMeasureSpec(III)I": (spec: number, padding: number, dim: number) => childMeasureSpec(spec, padding, dim),
   ...noops("onViewAdded(Landroid/view/View;)V", "onViewRemoved(Landroid/view/View;)V",
     "setChildrenDrawingCacheEnabled(Z)V", "setHandwritingBoundsOffsets(FFFF)V", "suppressLayout(Z)V",
     "setMotionEventSplittingEnabled(Z)V", "setDescendantFocusability(I)V",
     "requestChildFocus(Landroid/view/View;Landroid/view/View;)V", "focusableViewAvailable(Landroid/view/View;)V",
     "requestTransparentRegion(Landroid/view/View;)V", "setLayoutTransition(Landroid/animation/LayoutTransition;)V",
-    "setAddStatesFromChildren(Z)V", "childDrawableStateChanged(Landroid/view/View;)V",
     "startViewTransition(Landroid/view/View;)V", "endViewTransition(Landroid/view/View;)V"),
   ...stubs(null, "focusSearch(Landroid/view/View;I)Landroid/view/View;",
     "getLayoutTransition()Landroid/animation/LayoutTransition;"),
