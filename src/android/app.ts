@@ -474,6 +474,22 @@ rt.register({
 });
 
 let audioSession = 0;
+class JVibrationEffect extends JObj {
+  timings: bigint[] = [];
+  repeat = -1;
+}
+rt.register({
+  name: "android/os/VibrationEffect", ctor: JVibrationEffect, ifaces: ["android/os/Parcelable"],
+  statics: { DEFAULT_AMPLITUDE: -1 },
+  methods: {
+    "static createPredefined(I)Landroid/os/VibrationEffect;": () => Object.assign(new JVibrationEffect(), { timings: [30n] }),
+    "static createOneShot(JI)Landroid/os/VibrationEffect;": (ms: bigint) => Object.assign(new JVibrationEffect(), { timings: [ms] }),
+    "static createWaveform([JI)Landroid/os/VibrationEffect;": (timings: BigInt64Array | bigint[], repeat: number) =>
+      Object.assign(new JVibrationEffect(), { timings: Array.from(timings), repeat }),
+    "static createWaveform([J[II)Landroid/os/VibrationEffect;": (timings: BigInt64Array | bigint[], _amplitudes: Int32Array, repeat: number) =>
+      Object.assign(new JVibrationEffect(), { timings: Array.from(timings), repeat }),
+  },
+});
 for (const [name, methods, statics] of [
   ["android/app/ActivityManager", {
     "getMemoryClass()I": () => 256,
@@ -527,7 +543,8 @@ for (const [name, methods, statics] of [
   }],
   ["android/os/Vibrator", {
     "vibrate(J)V": (ms: bigint) => globalThis.navigator?.vibrate?.(Number(ms)),
-    "vibrate(Landroid/os/VibrationEffect;)V": () => globalThis.navigator?.vibrate?.(30),
+    "vibrate(Landroid/os/VibrationEffect;)V": (effect: JVibrationEffect) =>
+      globalThis.navigator?.vibrate?.(effect.timings.map(Number)),
     "hasVibrator()Z": () => 1,
     "cancel()V": () => {},
     // navigator.vibrate is a bare on/off motor: no amplitude, no composed primitives

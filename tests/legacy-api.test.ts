@@ -151,6 +151,7 @@ test("optional device services report their unavailable state", async () => {
   const backup = await newObj("android/app/backup/BackupManager", "(Landroid/content/Context;)V", null);
   expect(await vcall(backup, "requestRestore", "(Landroid/app/backup/RestoreObserver;)I", null)).toBe(-1);
   expect(scall("android/hardware/Camera", "getNumberOfCameras", "()I")).toBe(0);
+  expect(scall("android/os/VibrationEffect", "createPredefined", "(I)Landroid/os/VibrationEffect;", 0)).not.toBeNull();
 
   const builder = scall("android/util/StatsEvent", "newBuilder", "()Landroid/util/StatsEvent$Builder;");
   expect(await vcall(builder, "setAtomId", "(I)Landroid/util/StatsEvent$Builder;", 100)).toBe(builder);
