@@ -545,6 +545,14 @@ rt.register({
   },
 });
 rt.markers("android/media/MediaRouter$Callback", "android/media/MediaRouter$VolumeCallback");
+rt.register({ name: "android/view/accessibility/CaptioningManager", ctor: class extends JObj {}, methods: {
+  "isEnabled()Z": () => 0,
+  "getFontScale()F": () => 1,
+  "getLocale()Ljava/util/Locale;": () => null,
+  "addCaptioningChangeListener(Landroid/view/accessibility/CaptioningManager$CaptioningChangeListener;)V": () => {},
+  "removeCaptioningChangeListener(Landroid/view/accessibility/CaptioningManager$CaptioningChangeListener;)V": () => {},
+} });
+rt.markers("android/view/accessibility/CaptioningManager$CaptioningChangeListener");
 rt.register({
   name: "android/media/MediaRouter$RouteInfo", ctor: JRouteInfo,
   methods: {

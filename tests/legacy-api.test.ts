@@ -140,6 +140,20 @@ test("network support objects retain packet and HTTP parameter state", async () 
   expect(await vcall(integer, "signum", "()I")).toBeGreaterThanOrEqual(0);
 });
 
+test("optional device services report their unavailable state", async () => {
+  const agent = await newObj("android/app/backup/BackupAgentHelper");
+  const helper = rt.make("android/app/backup/BackupHelper");
+  await vcall(agent, "addHelper", "(Ljava/lang/String;Landroid/app/backup/BackupHelper;)V", "prefs", helper);
+  const backup = await newObj("android/app/backup/BackupManager", "(Landroid/content/Context;)V", null);
+  expect(await vcall(backup, "requestRestore", "(Landroid/app/backup/RestoreObserver;)I", null)).toBe(-1);
+  expect(scall("android/hardware/Camera", "getNumberOfCameras", "()I")).toBe(0);
+
+  const builder = scall("android/util/StatsEvent", "newBuilder", "()Landroid/util/StatsEvent$Builder;");
+  expect(await vcall(builder, "setAtomId", "(I)Landroid/util/StatsEvent$Builder;", 100)).toBe(builder);
+  expect(await vcall(builder, "writeInt", "(I)Landroid/util/StatsEvent$Builder;", 7)).toBe(builder);
+  expect(await vcall(builder, "build", "()Landroid/util/StatsEvent;")).not.toBeNull();
+});
+
 test("Resources(AssetManager, DisplayMetrics, Configuration) scopes its own configuration and metrics", async () => {
   const host = new Resources(null, {});
   const assets = rt.make("android/content/res/AssetManager") as JAssetManager;

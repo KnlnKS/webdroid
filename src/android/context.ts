@@ -100,6 +100,7 @@ const SERVICE_CLASS: Record<string, string> = {
   power: "android/os/PowerManager",
   input: "android/hardware/input/InputManager",
   media_router: "android/media/MediaRouter",
+  captioning: "android/view/accessibility/CaptioningManager",
   vibrator: "android/os/Vibrator",
   audio: "android/media/AudioManager",
   phone: "android/telephony/TelephonyManager",

@@ -76,6 +76,12 @@ rt.register({
   },
 });
 rt.register({
+  name: "dalvik/system/DexClassLoader", ctor: class extends JClassLoader {}, sup: "dalvik/system/PathClassLoader",
+  methods: {
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V": init,
+  },
+});
+rt.register({
   name: "webdroid/PackageClassLoader", ctor: class extends JClassLoader {}, sup: "java/lang/ClassLoader",
   methods: {
     "<init>(Ljava/lang/String;)V": async function (this: JClassLoader, path: string) {

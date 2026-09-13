@@ -439,6 +439,9 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
   "rawQuery(Ljava/lang/String;[Ljava/lang/String;)Landroid/database/Cursor;": function (this: JSQLiteDatabase, sql: string, args: unknown[] | null) {
     return runQuery(this, sql, args);
   },
+  "rawQuery(Ljava/lang/String;[Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;": function (this: JSQLiteDatabase, sql: string, args: unknown[] | null) {
+    return runQuery(this, sql, args);
+  },
   "query(Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
     function (this: JSQLiteDatabase, table: string, cols: string[] | null, sel: string | null, selArgs: unknown[] | null, groupBy: string | null, having: string | null, orderBy: string | null) {
       const sql = buildQuery(table, cols, sel, groupBy, having, orderBy, null);

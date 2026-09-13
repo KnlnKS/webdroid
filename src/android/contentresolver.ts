@@ -80,6 +80,11 @@ rt.register({ name: "android/content/ContentProviderClient", ctor: JProviderClie
       return vcall(this.provider, name, desc, ...args);
     },
   ])),
+  "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
+    async function (this: JProviderClient, ...args: unknown[]) {
+      if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "ContentProviderClient is closed");
+      return vcall(this.provider, "query", providerOperations.query, ...args.slice(0, 5));
+    },
 } });
 
 export function contentResolver(): unknown {

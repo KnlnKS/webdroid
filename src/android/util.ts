@@ -41,6 +41,23 @@ rt.register({
   },
 });
 
+class JStatsEvent extends JObj { atomId = 0; values: unknown[] = []; }
+class JStatsEventBuilder extends JObj { event = new JStatsEvent(); }
+rt.register({ name: "android/util/StatsEvent", ctor: JStatsEvent, methods: {
+  "static newBuilder()Landroid/util/StatsEvent$Builder;": () => new JStatsEventBuilder(),
+} });
+rt.register({ name: "android/util/StatsEvent$Builder", ctor: JStatsEventBuilder, methods: {
+  "setAtomId(I)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder, id: number) { this.event.atomId = id; return this; },
+  "writeInt(I)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder, value: number) { this.event.values.push(value); return this; },
+  "writeLong(J)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder, value: bigint) { this.event.values.push(value); return this; },
+  "writeBoolean(Z)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder, value: number) { this.event.values.push(!!value); return this; },
+  "writeString(Ljava/lang/String;)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder, value: string) { this.event.values.push(value); return this; },
+  "writeByteArray([B)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder, value: Int8Array) { this.event.values.push(value); return this; },
+  "usePooledBuffer()Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder) { return this; },
+  "build()Landroid/util/StatsEvent;": function (this: JStatsEventBuilder) { return this.event; },
+} });
+rt.register({ name: "android/util/StatsLog", ctor: class extends JObj {}, methods: { "static write(Landroid/util/StatsEvent;)V": () => {} } });
+
 class JSparseArray extends JObj {
   m = new Map<number, unknown>();
   sorted: number[] | null = null;

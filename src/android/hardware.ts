@@ -6,6 +6,22 @@ import { device } from "../shell/config";
 import { newArrayList } from "../jvm/natives/jutil";
 
 rt.markers("android/hardware/SensorEventListener");
+rt.markers("android/hardware/TriggerEventListener");
+class JTriggerEvent extends JObj { values = new Float32Array(0); timestamp = 0n; }
+rt.register({ name: "android/hardware/TriggerEvent", ctor: JTriggerEvent, fields: ["values", "timestamp"] });
+class JCameraInfo extends JObj { facing = 0; orientation = 0; }
+rt.register({
+  name: "android/hardware/Camera$CameraInfo", ctor: JCameraInfo, fields: ["facing", "orientation"],
+  statics: { CAMERA_FACING_BACK: 0, CAMERA_FACING_FRONT: 1 }, methods: { "<init>()V": function () {} },
+});
+rt.register({
+  name: "android/hardware/Camera", ctor: class extends JObj {},
+  methods: {
+    "static getNumberOfCameras()I": () => 0,
+    "static getCameraInfo(ILandroid/hardware/Camera$CameraInfo;)V": () => { throw rt.mkThrowable("java/lang/RuntimeException", "Unknown camera ID"); },
+  },
+});
+rt.markers("android/hardware/camera2/CameraCharacteristics", "android/hardware/camera2/CaptureResult");
 rt.register({ name: "android/hardware/HardwareBuffer", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable", "java/lang/AutoCloseable"] });
 
 class JSensor extends JObj { type = 0; sname = ""; vendor = ""; maxRange = 0; resolution = 0; minDelay = 0; }

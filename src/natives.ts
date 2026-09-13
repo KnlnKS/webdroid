@@ -76,6 +76,7 @@ import "./android/menu";
 import "./android/decor";
 import "./android/fragment";
 import "./android/app";
+import "./android/backup";
 import "./android/popup";
 import "./android/security";
 import "./android/transition";
