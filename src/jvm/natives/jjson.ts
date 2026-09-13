@@ -175,6 +175,38 @@ function jsonUnwrap(v: unknown): unknown {
   if (typeof v === "bigint") return Number.isSafeInteger(Number(v)) ? Number(v) : v;
   return v;
 }
+async function publicWrap(v: unknown): Promise<unknown> {
+  if (v === null || v === undefined || v instanceof JJSONObject || v instanceof JJSONArray) return v ?? null;
+  if (Array.isArray(v)) {
+    const array = new JJSONArray();
+    array.a = v.map(jsonUnwrap);
+    return array;
+  }
+  if (ArrayBuffer.isView(v) && !(v instanceof DataView)) {
+    const array = new JJSONArray();
+    if ("length" in v && typeof v.length === "number" && "at" in v && typeof v.at === "function")
+      for (let i = 0; i < v.length; i++) array.a.push(jsonUnwrap(v.at(i)));
+    return array;
+  }
+  if (typeof v === "string" || typeof v === "number" || typeof v === "bigint" || typeof v === "boolean") return v;
+  if (rt.iof(v, "java/util/Map")) {
+    const object = new JJSONObject();
+    await initFromMap(object, v);
+    return object;
+  }
+  if (rt.iof(v, "java/util/Collection")) {
+    const array = new JJSONArray();
+    array.a = (await toJsArray(v)).map(jsonUnwrap);
+    return array;
+  }
+  if (rt.iof(v, "java/lang/Number") || rt.iof(v, "java/lang/Boolean") || rt.iof(v, "java/lang/Character")) return v;
+  return null;
+}
+async function initFromMap(object: JJSONObject, map: unknown): Promise<void> {
+  for (const entry of await toJsArray(await vcall(map, "entrySet", "()Ljava/util/Set;"))) {
+    object.o[String(await vcall(entry, "getKey", "()Ljava/lang/Object;"))] = jsonUnwrap(await vcall(entry, "getValue", "()Ljava/lang/Object;"));
+  }
+}
 /** the JSON text of a stored tree; a long that reached storage unboxed (a Map's boxed values) prints its digits */
 const jsonText64 = (v: unknown, indent?: number): string =>
   JSON.stringify(v, (_k, x) => typeof x === "bigint" ? `\u0000${x}\u0000` : x, indent).replace(/"\\u0000(-?\d+)\\u0000"/g, "$1");
@@ -191,12 +223,9 @@ rt.register({
     "<init>(Lorg/json/JSONObject;[Ljava/lang/String;)V": function (this: JJSONObject, src: JJSONObject, names: string[]) {
       for (const k of names) if (k in src.o) this.o[k] = src.o[k];
     },
-    "<init>(Ljava/util/Map;)V": async function (this: JJSONObject, m: unknown) {
-      for (const e of await toJsArray(await vcall(m, "entrySet", "()Ljava/util/Set;"))) {
-        this.o[String(await vcall(e, "getKey", "()Ljava/lang/Object;"))] = jsonUnwrap(await vcall(e, "getValue", "()Ljava/lang/Object;"));
-      }
-    },
+    "<init>(Ljava/util/Map;)V": function (this: JJSONObject, map: unknown) { return initFromMap(this, map); },
     "static quote(Ljava/lang/String;)Ljava/lang/String;": (s: string | null) => JSON.stringify(s ?? "").replaceAll("/", "\\/"),
+    "static wrap(Ljava/lang/Object;)Ljava/lang/Object;": publicWrap,
     "put(Ljava/lang/String;Ljava/lang/Object;)Lorg/json/JSONObject;": function (this: JJSONObject, k: string, v: unknown) {
       this.o[k] = jsonUnwrap(v);
       return this;
