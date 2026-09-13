@@ -2,7 +2,7 @@ import { type JParcel, writeInt, readInt, writeString8, readString8, parcelCreat
 // android.text.* — TextPaint, TextUtils, Spannable/Editable (spans stored, minimally styled).
 
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
-import { vcall, mkEnumSet, newObj } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import { type JDate, type JCalendar } from "../jvm/natives/jtime";
 import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances } from "./graphics";
 import { device } from "../shell/config";
@@ -816,16 +816,16 @@ function replacementSpans(cs: unknown): SpanRec[] {
   return cs instanceof JSpanned ? cs.spans.filter((s) => s.end > s.start && rt.iof(s.span, "android/text/style/ReplacementSpan")).sort((a, b) => a.start - b.start) : [];
 }
 async function measureReplacements(cs: unknown, paint: JTextPaint, spans = replacementSpans(cs)): Promise<Replacement[]> {
-  const result: Replacement[] = [];
+  const result: Replacement[] = [], thread = curThread;
   for (const span of spans) {
     const p = new JTextPaint(); copyPaint(paint, p); p.density = paint.density;
     if (cs instanceof JSpanned) for (const style of cs.spans) {
       if (style.end <= span.start || style.start >= span.end || rt.iof(style.span, "android/text/style/ReplacementSpan")) continue;
-      if (rt.iof(style.span, "android/text/style/MetricAffectingSpan")) await vcall(style.span, "updateMeasureState", "(Landroid/text/TextPaint;)V", p);
+      if (rt.iof(style.span, "android/text/style/MetricAffectingSpan")) await vcallOn(thread, style.span, "updateMeasureState", "(Landroid/text/TextPaint;)V", p);
     }
     const metrics: SpanMetrics = await newObj("android/graphics/Paint$FontMetricsInt"); fillFontMetrics(p, metrics, true);
-    const width = await vcall(span.span, "getSize", "(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I", p, cs, span.start, span.end, metrics);
-    result.push({ ...span, width, metrics, paint: p });
+    const width = await vcallOn(thread, span.span, "getSize", "(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I", p, cs, span.start, span.end, metrics);
+    result.push({ ...span, width: Number(width), metrics, paint: p });
   }
   return result;
 }
@@ -890,7 +890,7 @@ export function greedyBreaks(text: string, p: JTextPaint, first: number, firstCo
   if (!out.length) out.push({ start: 0, end: 0, text: "", width: 0 });
   return out;
 }
-class JLayout extends JObj {
+export class JLayout extends JObj {
   text = "";
   /** the CharSequence the layout was built from, kept for its spans (LineHeightSpan) */
   src: unknown = null;
@@ -980,21 +980,22 @@ function primaryHorizontal(this: JLayout, off: number) {
     }
     return 0;
 }
-async function drawLayout(this: JLayout, c: JCanvas) {
+export async function drawLayout(this: JLayout, c: JCanvas, gravity = 0) {
+    const thread = curThread;
     for (let i = 0; i < this.lines.length; i++) {
       const line = this.lines[i], end = line.start + line.text.length, baseline = this.baseline(i);
-      let position = line.start, x = 0;
+      let position = line.start, x = gravity === 1 ? (this.width - line.width) / 2 : gravity === 5 ? this.width - line.width : 0;
       for (const span of this.replacements) {
         if (span.end <= position || span.start >= end) continue;
         if (span.start > position) {
           const text = this.text.slice(position, span.start);
-          await vcall(c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text, x, baseline, this.paint);
+          await vcallOn(thread, c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text, x, baseline, this.paint);
           x += measureText(this.paint, text);
         }
-        await vcall(span.span, "draw", "(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V", c, this.src, span.start, span.end, x, this.lineTop(i), baseline, this.lineTop(i + 1), span.paint);
+        await vcallOn(thread, span.span, "draw", "(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V", c, this.src, span.start, span.end, x, this.lineTop(i), baseline, this.lineTop(i + 1), span.paint);
         x += span.width; position = span.end;
       }
-      if (position < end) await vcall(c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", this.text.slice(position, end), x, baseline, this.paint);
+      if (position < end) await vcallOn(thread, c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", this.text.slice(position, end), x, baseline, this.paint);
     }
 }
 const layoutMethods: NonNullable<NativeSpec["methods"]> = {
@@ -1058,7 +1059,7 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
     return this.baseline(i);
   },
   "draw(Landroid/graphics/Canvas;)V": drawLayout,
-  "draw(Landroid/graphics/Canvas;Landroid/graphics/Path;Landroid/graphics/Paint;I)V": drawLayout,
+  "draw(Landroid/graphics/Canvas;Landroid/graphics/Path;Landroid/graphics/Paint;I)V": function (this: JLayout, c: JCanvas) { return drawLayout.call(this, c); },
 };
 rt.register({ name: "android/text/Layout", ctor: JLayout, methods: layoutMethods });
 
@@ -1166,15 +1167,8 @@ rt.register({
     "setUseBoundsForWidth(Z)Landroid/text/StaticLayout$Builder;": slSetter(),
     "setUseLineSpacingFromFallbacks(Z)Landroid/text/StaticLayout$Builder;": slSetter(),
     "setLineBreakConfig(Landroid/graphics/text/LineBreakConfig;)Landroid/text/StaticLayout$Builder;": slSetter(),
-    "build()Landroid/text/StaticLayout;": async function (this: JSLBuilder) {
-      const l = new JStaticLayout();
-      l.text = spannedString(this.cs); l.src = this.cs; l.paint = this.p; l.width = this.w;
-      l.spacingMult = this.smult; l.spacingAdd = this.sadd; l.includePad = this.incl;
-      const spans = replacementSpans(this.cs);
-      if (spans.length) l.replacements = await measureReplacements(this.cs, this.p, spans);
-      l.layoutLines(this.maxLines);
-      await l.applyLineHeightSpans();
-      return l;
+    "build()Landroid/text/StaticLayout;": function (this: JSLBuilder) {
+      return mkSpannedLayout(this.cs, this.p, this.w, this.smult, this.sadd, this.maxLines, this.incl);
     },
   },
 });
@@ -1185,6 +1179,16 @@ export function mkStaticLayout(text: string, p: JTextPaint, w: number, mult = 1,
   l.text = text; l.paint = p; l.width = Math.max(0, w);
   l.spacingMult = mult; l.spacingAdd = add;
   l.layoutLines(maxLines);
+  return l;
+}
+export async function mkSpannedLayout(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean): Promise<JLayout> {
+  const l = new JStaticLayout();
+  l.text = spannedString(cs); l.src = cs; l.paint = p; l.width = Math.max(0, w);
+  l.spacingMult = mult; l.spacingAdd = add; l.includePad = includePad;
+  const spans = replacementSpans(cs);
+  if (spans.length) l.replacements = await measureReplacements(cs, p, spans);
+  l.layoutLines(maxLines);
+  await l.applyLineHeightSpans();
   return l;
 }
 

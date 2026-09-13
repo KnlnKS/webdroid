@@ -4,7 +4,7 @@ import {
   type JColorStateList, mkCsl, type JDrawable, loadColorStateList, loadDrawableRV, cslColor, loadDrawable,
   drawChild
 } from "./drawable";
-import { JTextPaint, JEditable, spannedString, mkStaticLayout } from "./text";
+import { JTextPaint, JEditable, JSpanned, JLayout, spannedString, mkStaticLayout, mkSpannedLayout, drawLayout } from "./text";
 import { G, gravityV, gravityH } from "./gravity";
 import { device } from "../shell/config";
 import {
@@ -104,6 +104,8 @@ export class JTextView extends JView {
   lineWidths: number[] = [];
   wrapMemo: WrapMemo | null = null; hintMemo: WrapMemo | null = null;
   layoutWidthFor = -1;
+  spanLayout: JLayout | null = null;
+  spanFont = ""; spanLS = NaN; spanMax = NaN;
   inputTypeV = 1;
   styleBits = 0;
   includePad = true;
@@ -202,6 +204,32 @@ export class JTextView extends JView {
   }
   /** the text's lines at `avail` */
   linesFor(avail: number): Wrapped { return (this.wrapMemo ??= new WrapMemo()).get(this, this.displayText(), avail); }
+  measuredLines(avail: number): Wrapped | Promise<Wrapped> {
+    const cs = this.rawText;
+    if (!(cs instanceof JSpanned) || !cs.spans.some(s => rt.iof(s.span, "android/text/style/ReplacementSpan"))) {
+      this.spanLayout = null; return this.linesFor(avail);
+    }
+    return this.spannedLines(cs, avail);
+  }
+  private async spannedLines(cs: JSpanned, avail: number): Promise<Wrapped> {
+    const p = this.paintT, font = p.font(), max = this.singleLine ? 1 : this.maxLinesV;
+    let layout = this.spanLayout;
+    if (!layout || layout.src !== cs || font !== this.spanFont || p.letterSpacingEm !== this.spanLS) {
+      layout = await mkSpannedLayout(cs, p, avail, this.lineSpacingMult, this.lineSpacingExtra, max, this.includePad);
+      this.spanLayout = layout; this.spanFont = font; this.spanLS = p.letterSpacingEm;
+    } else if (layout.width !== avail || this.spanMax !== max || layout.spacingMult !== this.lineSpacingMult ||
+        layout.spacingAdd !== this.lineSpacingExtra || layout.includePad !== this.includePad) {
+      layout.width = Math.max(0, avail); layout.spacingMult = this.lineSpacingMult; layout.spacingAdd = this.lineSpacingExtra;
+      layout.includePad = this.includePad;
+      layout.layoutLines(max);
+      await layout.applyLineHeightSpans();
+    }
+    this.spanMax = max;
+    const lines: string[] = [], widths: number[] = [];
+    let maxW = 0;
+    for (const l of layout.lines) { lines.push(l.text); widths.push(l.width); maxW = Math.max(maxW, l.width); }
+    return { lines, widths, maxW };
+  }
   /** an empty field draws its hint every frame, so the hint keeps a memo of its own */
   private hintUpperOf = ""; private hintUpper = "";
   hintFor(avail: number): Wrapped {
@@ -365,9 +393,11 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     await guardCall(this, mangleMethod("setText", "(Ljava/lang/CharSequence;)V"), s);
   },
   "setText(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V": async function (this: JTextView, cs: unknown) {
+    const changedSpans = cs instanceof JSpanned || this.rawText instanceof JSpanned;
     this.rawText = cs;
+    if (changedSpans) this.spanLayout = null;
     const t = spannedString(cs);
-    if (t !== this.text) {
+    if (t !== this.text || changedSpans) {
       this.text = t;
       this.layoutWidthFor = -1;
       requestLayout(this);
@@ -541,6 +571,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   // AOSP: null until the first measure; afterwards the Layout over the measured text width
   "getLayout()Landroid/text/Layout;": function (this: JTextView) {
     if (this.layoutWidthFor < 0) return null;
+    if (this.spanLayout) return this.spanLayout;
     const dlW = this.drawableL ? Math.max(0, this.drawableL.intrinsicW()) + this.drawablePad : 0;
     const drW = this.drawableR ? Math.max(0, this.drawableR.intrinsicW()) + this.drawablePad : 0;
     const w = this.layoutWidthFor - this.padL - this.padR - dlW - drW;
@@ -594,9 +625,11 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const display = this.displayText() || "";
     if (wMode === MS_EXACTLY) {
       w = wSize;
-      this.useLines(this.linesFor(w - this.padL - this.padR - dlW));
+      const measured = this.measuredLines(w - this.padL - this.padR - dlW);
+      this.useLines(measured instanceof Promise ? await measured : measured);
     } else {
-      let lay = this.linesFor(availText);
+      const measured = this.measuredLines(availText);
+      let lay = measured instanceof Promise ? await measured : measured;
       let tw = lay.maxW;
       if (!display && this.hint) tw = Math.max(tw, measureText(this.paintT, this.hint));
       w = Math.ceil(tw) + this.padL + this.padR + dlW;
@@ -607,12 +640,16 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       // stay wrapped for the desired width, so a clamp leaves both the height (too few lines)
       // and the draw (a line wider than the view, silently clipped) wrong.
       const finalAvail = w - this.padL - this.padR - dlW;
-      if (finalAvail < availText) lay = this.linesFor(finalAvail);
+      if (finalAvail !== availText) {
+        const measured = this.measuredLines(finalAvail);
+        lay = measured instanceof Promise ? await measured : measured;
+      }
       this.useLines(lay);
     }
     const lineCount = Math.max(this.lines.length, display || this.hint ? 1 : 0, this.minLinesV);
     const vPad = this.padT + this.padB;
     let h = this.textHeight(lineCount) + vPad + dtH;
+    if (this.spanLayout) h = Math.max(h, this.spanLayout.lineTop(this.spanLayout.lines.length) + (this.spanLayout.tops ? 0 : this.spanLayout.padBottom) + vPad + dtH);
     h = Math.max(h, this.minH, (this.drawableL ? this.drawableL.intrinsicH() : 0) + vPad, (this.drawableR ? this.drawableR.intrinsicH() : 0) + vPad);
     if (specMode(hSpec) !== MS_EXACTLY) {
       const min = vcallOn(thread, this, "getSuggestedMinimumHeight", "()I");
@@ -630,6 +667,15 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const drW = this.drawableR ? Math.max(0, this.drawableR.intrinsicW()) : 0;
     const contentL = this.padL + (dlW ? dlW + this.drawablePad : 0);
     const contentR = this.width() - this.padR - (drW ? drW + this.drawablePad : 0);
+    const avail = contentR - contentL;
+    if (this.layoutWidthFor !== this.width()) {
+      const measured = this.measuredLines(avail);
+      if (measured instanceof Promise) return measured.then(lay => {
+        this.useLines(lay); this.layoutWidthFor = this.width();
+        return callSelf(textViewMethods, "onDraw(Landroid/graphics/Canvas;)V", this, cv);
+      });
+      this.useLines(measured); this.layoutWidthFor = this.width();
+    }
     if (this.drawableL) {
       const dh = Math.max(0, this.drawableL.intrinsicH());
       this.drawableL.bounds.left = this.padL;
@@ -646,10 +692,13 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       this.drawableR.bounds.bottom = ((this.height() - dh) >> 1) + dh;
       drawChild(this.drawableR, cv);
     }
-    const avail = contentR - contentL;
-    if (this.layoutWidthFor !== this.width()) {
-      this.useLines(this.linesFor(avail));
-      this.layoutWidthFor = this.width();
+    if (!showHint && this.spanLayout) {
+      const layout = this.spanLayout, vg = gravityV(this.gravityT);
+      const height = layout.lineTop(layout.lines.length) + (layout.tops ? 0 : layout.padBottom);
+      const y = vg === 16 ? (this.height() - this.padT - this.padB - height) / 2 + this.padT : vg === 80 ? this.height() - this.padB - height : this.padT;
+      this.paintT.color = cslColor(this.colors, this.drawableState());
+      ctx.save(); ctx.translate(contentL, y);
+      return drawLayout.call(layout, cv, gravityH(this.gravityT)).finally(() => ctx.restore());
     }
     const hintLay = showHint ? this.hintFor(avail) : null;
     const lines = hintLay ? hintLay.lines : this.lines, widths = hintLay ? hintLay.widths : this.lineWidths;

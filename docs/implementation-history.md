@@ -2487,3 +2487,12 @@ endpoint behavior and immutable SpannedString results, with a plain-string fast 
 Three checks (14 assertions) cover nested image spans, snapshot isolation, null/single-input
 semantics, duplicate/NoCopySpan ownership and inclusive endpoints. TextView's independent
 plain-text drawing path remains to be connected to the existing span-aware Layout renderer.
+
+TextView now measures and draws replacement spans through that Layout implementation,
+retaining measured span geometry across width changes and repeated measures. Ordinary text
+keeps its synchronous cached path. A Chrome fixture exercises a suspending replacement
+callback, pixel output, centered positioning, height, reuse, getLayout and switching back to
+plain text; it fails against the preceding TextView (zero callbacks and transparent pixels).
+The fixed browser fixture, concatenation checks and typecheck pass. A fresh unchanged Maps
+place renders its gold rating stars, and search/directions/preview remain reachable. General
+character styling and all span mutation/ellipsis cases are not established by these checks.
