@@ -16,6 +16,7 @@ import { mkVPA } from "./viewanimator";
 import type { JContext } from "./context";
 import { onMain, mainDbg } from "./mainloop";
 import type { JWindow } from "./window";
+import { absGravity, gravityApply, G } from "./gravity";
 
 // MeasureSpec
 export const MS_EXACTLY = 0x40000000;
@@ -243,6 +244,7 @@ const M_performLongClick = mangleMethod("performLongClick", "()Z");
 const M_onLayout = mangleMethod("onLayout", "(ZIIII)V");
 const M_draw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
 const M_onDraw = mangleMethod("onDraw", "(Landroid/graphics/Canvas;)V");
+const M_onDrawForeground = mangleMethod("onDrawForeground", "(Landroid/graphics/Canvas;)V");
 const M_dispatchDraw = mangleMethod("dispatchDraw", "(Landroid/graphics/Canvas;)V");
 const M_onSizeChanged = mangleMethod("onSizeChanged", "(IIII)V");
 const M_onTouchEvent = mangleMethod("onTouchEvent", "(Landroid/view/MotionEvent;)Z");
@@ -337,6 +339,8 @@ export class JView extends JObj {
   outline: JOutline | null = null;
   outlineDirty = true;
   outlineW = -1; outlineH = -1;
+  foregroundGravity = G.FILL;
+  foregroundW = -1; foregroundH = -1;
   stateListAnimator: unknown = null;
   keyboardCluster = false;
   touchBlocksFocus = false;
@@ -423,6 +427,7 @@ export class JView extends JObj {
     const st = raw ? [...raw].filter((x) => x !== 0) : this.baseState();
     this.stateCache = st;
     if (this.background) await vcall(this.background, "setState", "([I)Z", Int32Array.from(st));
+    if (this.foreground) await vcall(this.foreground, "setState", "([I)Z", Int32Array.from(st));
     await guardMaybe(this, M_drawableStateChanged);
     if (this.stateListAnimator) await vcall(this.stateListAnimator, "setState", "([I)V", Int32Array.from(st));
     if (this.parent instanceof JViewGroup && this.parent.addStatesFromChildren) await vcall(this.parent, "childDrawableStateChanged", "(Landroid/view/View;)V", this);
@@ -764,6 +769,27 @@ async function drawContent(v: JView, cv: JCanvas) {
   await guardMaybe(v, M_onDraw, cv);
   await guardMaybe(v, M_dispatchDraw, cv);
   if (v.overlay) await drawOverlay(v.overlay, cv);
+  ctx.translate(v.scrollX, v.scrollY);
+  if (v.foreground || jmethod(v, M_onDrawForeground) !== drawForeground) await guardMaybe(v, M_onDrawForeground, cv);
+}
+
+async function drawForeground(this: JView, cv: JCanvas) {
+  const d = this.foreground;
+  if (!d) return;
+  const thread = curThread, w = this.width(), h = this.height();
+  if (this.foregroundW !== w || this.foregroundH !== h) {
+    this.foregroundW = w; this.foregroundH = h;
+    const bounds = new JRect();
+    bounds.right = w; bounds.bottom = h;
+    if (this.foregroundGravity !== G.FILL) {
+      const dw = await vcallOn(thread, d, "getIntrinsicWidth", "()I");
+      const dh = await vcallOn(thread, d, "getIntrinsicHeight", "()I");
+      const ld = await vcallOn(thread, this, "getLayoutDirection", "()I");
+      gravityApply(absGravity(this.foregroundGravity, Number(ld)), Number(dw), Number(dh), bounds, 0, 0, bounds);
+    }
+    await vcallOn(thread, d, "setBounds", "(IIII)V", bounds.left, bounds.top, bounds.right, bounds.bottom);
+  }
+  await vcallOn(thread, d, "draw", "(Landroid/graphics/Canvas;)V", cv);
 }
 
 function drawSurface(v: JView, ctx: JCanvas["ctx"]) {
@@ -882,7 +908,21 @@ const viewMethods: NativeSpec["methods"] = {
     setBackground.call(this, id ? await loadDrawable(this.jres!, id, this.theme) : null);
   },
   "getBackground()Landroid/graphics/drawable/Drawable;": function (this: JView) { return this.background; },
-  "setForeground(Landroid/graphics/drawable/Drawable;)V": function (this: JView, d: JDrawable | null) { this.foreground = d; },
+  "setForeground(Landroid/graphics/drawable/Drawable;)V": async function (this: JView, d: JDrawable | null) {
+    if (this.foreground === d) return;
+    if (this.foreground) this.foreground.callback = null;
+    this.foreground = d; this.foregroundW = -1;
+    if (d) { await vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState())); d.callback = this; }
+    requestLayout(this); invalidate(this);
+  },
+  "onDrawForeground(Landroid/graphics/Canvas;)V": drawForeground,
+  "getForegroundGravity()I": function (this: JView) { return this.foregroundGravity; },
+  "setForegroundGravity(I)V": function (this: JView, gravity: number) {
+    if (!(gravity & G.H_MASK)) gravity |= G.START;
+    if (!(gravity & G.V_MASK)) gravity |= G.TOP;
+    this.foregroundGravity = gravity; this.foregroundW = -1;
+    requestLayout(this); invalidate(this);
+  },
   "getAlpha()F": function (this: JView) { return this.alphaV; },
   "setAlpha(F)V": function (this: JView, a: number) { this.alphaV = a; invalidate(); },
   "setTranslationX(F)V": function (this: JView, x: number) { this.translationX = x; invalidate(); },
@@ -1014,7 +1054,7 @@ const viewMethods: NativeSpec["methods"] = {
   "postInvalidateOnAnimation(IIII)V": function () { invalidate(); },
   "postInvalidateDelayed(J)V": function (ms: bigint) { setTimeout(invalidate, Number(ms)); },
   "postInvalidateDelayed(JIIII)V": function (ms: bigint) { setTimeout(invalidate, Number(ms)); },
-  "invalidateDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JView) { this.outlineDirty = true; invalidate(this); },
+  "invalidateDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JView, d: JDrawable) { this.outlineDirty = true; if (d === this.foreground) this.foregroundW = -1; invalidate(this); },
   // AOSP posts these on the attached window's handler, i.e. the main looper. Going straight
   // to setTimeout skipped the main-looper queue, so a posted Runnable could interleave with a
   // layout or a Handler dispatch at every await -- the check-then-act race class that gave us
@@ -1437,7 +1477,7 @@ const viewMethods: NativeSpec["methods"] = {
     "onInitializeAccessibilityNodeInfo(Landroid/view/accessibility/AccessibilityNodeInfo;)V",
     "onInitializeAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V", "setLabelFor(I)V",
     "destroyDrawingCache()V", "buildDrawingCache()V", "setTransitionName(Ljava/lang/String;)V",
-    "setForegroundGravity(I)V", "sendAccessibilityEvent(I)V", "announceForAccessibility(Ljava/lang/CharSequence;)V",
+  "sendAccessibilityEvent(I)V", "announceForAccessibility(Ljava/lang/CharSequence;)V",
     "setVerticalScrollBarEnabled(Z)V", "setHorizontalScrollBarEnabled(Z)V",
     "setScrollBarStyle(I)V", "setScrollContainer(Z)V", "setImportantForAutofill(I)V",
     "setDefaultFocusHighlightEnabled(Z)V", "setForceDarkAllowed(Z)V",

@@ -2455,3 +2455,11 @@ BOUNDS/PADDED_BOUNDS and Android 15's path-capable canClip contract match AOSP. 
 pixel probe confirms transparent corners/opaque center, one provider call over two draws,
 refresh after invalidateOutline and no clipping with a null provider. Provider/background/inset
 checks and typecheck pass. Fresh place imagery appears without manually invalidating it.
+
+MaterialCardView's white thumbnail stroke lived in a foreground drawable that View stored
+but never drew. View now dispatches onDrawForeground after content/children/overlay, retaining
+virtual overrides, foreground state/callbacks and cached gravity bounds. The common fill case
+avoids intrinsic-size queries; views without a foreground or override skip the extra callback.
+Focused checks cover suspended bounds callbacks, executing-thread retention, centered versus
+fill bounds and callback removal. Typecheck passes. A real Chrome bitmap probe paints green
+foreground over red background, then reveals red after removing the foreground.
