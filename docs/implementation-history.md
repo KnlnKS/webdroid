@@ -2064,3 +2064,23 @@ mismatch and transient unattached Compose view still occurred. Other concurrent 
 captures consume substantial CPU; no performance numbers from this diagnostic period are
 accepted as benchmarks. The AVD Golden Gate Bridge place screenshot/XML was refreshed.
 Typecheck and affected checks pass; the final full E2E suite has not run.
+
+Subsequent Maps place interaction reached TextureView transforms, TransitionDrawable,
+Arrays.deepToString, TouchDelegate, SpannableStringBuilder.clearSpans and Range. Focused
+commits implement those platform contracts. Unordered set metadata incorrectly included
+SortedSet, sending unchanged app bytecode into a comparator call; that interface was removed.
+Place photos now appear in full Chrome, although the map remained blank with black label
+backgrounds. Headless place content stayed below the screen: the app's pcl.computeScroll
+reads the current offset only when computeScrollOffset returns true. Our scroller returned
+false while producing its final offset. It now delivers that final update before returning
+false on the following call, covered for Scroller and OverScroller.
+
+Full-Chrome GL tracing exposed glEnable/disable receiving 83420592, the JNI environment
+pointer, and glStencilFunc receiving environment/class before the actual enum. DEX method
+annotations mark ten RendererJni methods CriticalNative. Registration now caches that
+annotation and omits JNI handles and the local-reference frame for critical calls. ARM32
+and A64 tests cover mixed integer, long, float and double arguments, double returns, and
+the ordinary FastNative convention. Both tests and typecheck pass. The host crashed before
+app verification of this fix and the scroller change; committed work survived. The server
+and reference AVD were restarted, with full Chrome alone to reduce diagnostic resource use.
+Rendering parity, all-process diagnostics, and the final full E2E remain unverified.

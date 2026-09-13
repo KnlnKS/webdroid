@@ -35,7 +35,14 @@ platform contracts; run the full serialized E2E suite at the end.
 
 ## Next
 
-1. Verify place selection after LinearLayout divider support. The preceding blockers were
+1. Verify the committed CriticalNative calling convention and Scroller completion fixes
+   after the host crash/restart. Chrome passed a JNI environment pointer as glEnable's
+   enum; DEX annotations show that method is CriticalNative. A place card remained below
+   the screen because computeScrollOffset returned false on its final position update.
+   Focused ARM32/A64 and scroller checks pass; app verification remains pending.
+   Place construction also progressed through TextureView transforms, TransitionDrawable,
+   corrected set interfaces, Arrays.deepToString, TouchDelegate, clearSpans and Range.
+   The preceding blockers were
    Collections.disjoint, Rational, TtsSpan, ScaleGestureDetector and LocaleSpan. Native SQLite
    cache open/query/close now succeeds after the lock-query and shared-file-content fixes.
    Android HTTP header indexing, EGL no-context handles and GLES calls allow styles to load
