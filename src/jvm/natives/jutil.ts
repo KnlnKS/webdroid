@@ -956,10 +956,11 @@ function addToSet(s: JSet, v: unknown): number | Promise<number> {
   return slowFind(s.slow, v).then((i) => (i >= 0 ? 0 : (s.slow.push({ k: v, v }), 1)));
 }
 rt.register({ name: "webdroid/BaseSet", ctor: JSet, typeVars: "E", ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"], methods: setMethods() });
+class JEnumSet extends JSet {}
 for (const n of ["java/util/HashSet", "java/util/LinkedHashSet",
   "java/util/concurrent/CopyOnWriteArraySet", "java/util/EnumSet", "java/util/concurrent/ConcurrentHashMap$KeySetView"]) {
   rt.register({
-    name: n, ctor: class extends JSet {}, typeVars: "E",
+    name: n, ctor: n === "java/util/EnumSet" ? JEnumSet : class extends JSet {}, typeVars: "E",
     sup: n === "java/util/LinkedHashSet" ? "java/util/HashSet" : "java/util/AbstractSet",
     ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/util/SortedSet", "java/io/Serializable"],
     methods: n === "java/util/EnumSet" ? { ...setMethods(), ...enumSetStatics() } : setMethods(),
@@ -967,7 +968,7 @@ for (const n of ["java/util/HashSet", "java/util/LinkedHashSet",
 }
 function enumSetStatics() {
   const fromValues = async (cls: JObj, all: boolean, extra: unknown[]) => {
-    const s = new JSet();
+    const s = new JEnumSet();
     if (all) {
       const info = (cls as { ci?: ClassInfo }).ci!;
       const p = rt.initClass(info); if (p) await p;
@@ -983,6 +984,9 @@ function enumSetStatics() {
     "static of(Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown) => fromValues(null!, false, [a]),
     "static of(Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, b: unknown) => fromValues(null!, false, [a, b]),
     "static of(Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, b: unknown, c: unknown) => fromValues(null!, false, [a, b, c]),
+    "static of(Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, b: unknown, c: unknown, d: unknown) => fromValues(null!, false, [a, b, c, d]),
+    "static of(Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, b: unknown, c: unknown, d: unknown, e: unknown) => fromValues(null!, false, [a, b, c, d, e]),
+    "static of(Ljava/lang/Enum;[Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, rest: unknown[]) => fromValues(null!, false, [a, ...rest]),
     "static copyOf(Ljava/util/Collection;)Ljava/util/EnumSet;": async (c: JObj) => fromValues(null!, false, await toJsArray(c)),
   };
 }
@@ -2040,6 +2044,8 @@ rt.register({
     "static newSetFromMap(Ljava/util/Map;)Ljava/util/Set;": () => rt.make("java/util/HashSet"),
     "static unmodifiableMap(Ljava/util/Map;)Ljava/util/Map;": (m: unknown) => m,
     "static unmodifiableSet(Ljava/util/Set;)Ljava/util/Set;": (s: unknown) => s,
+    "static reverseOrder()Ljava/util/Comparator;": () => mkCmp((a, b) => jcmp(null, b, a)),
+    "static reverseOrder(Ljava/util/Comparator;)Ljava/util/Comparator;": (cmp: unknown) => mkCmp((a, b) => jcmp(cmp, b, a)),
     "static unmodifiableCollection(Ljava/util/Collection;)Ljava/util/Collection;": (c: unknown) => c,
     "static synchronizedList(Ljava/util/List;)Ljava/util/List;": (l: unknown) => l,
     "static synchronizedMap(Ljava/util/Map;)Ljava/util/Map;": (m: unknown) => m,
@@ -2130,7 +2136,7 @@ async function streamProperties(stream: unknown): Promise<Map<string, string>> {
   const bytes = await readStreamFully(stream);
   return propertyText(charsToString(bytes, 0, bytes.length));
 }
-class JProps extends JMap {}
+export class JProps extends JMap {}
 const setProperties = (props: JProps, entries: Map<string, string>) => { for (const [k, v] of entries) props.m.set(k, { k, v }); };
 rt.register({
   name: "java/util/Properties", ctor: JProps, sup: "java/util/HashMap",
@@ -2235,4 +2241,3 @@ rt.register({
     },
   },
 });
-

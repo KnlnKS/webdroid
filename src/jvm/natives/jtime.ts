@@ -53,6 +53,7 @@ for (const n of ["Date", "Time", "Timestamp"]) {
 
 // ── TimeZone (device local zone)
 class JTimeZone extends JObj { id = "GMT"; }
+const zoneIds = ["GMT", "UTC", ...Intl.supportedValuesOf("timeZone")].sort();
 export const localTz = new JTimeZone();
 try { localTz.id = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "GMT"; } catch { /* */ }
 /** the zone's name as Intl spells it; an unknown id falls back to the id itself */
@@ -83,7 +84,7 @@ rt.register({
     "getDisplayName(Ljava/util/Locale;)Ljava/lang/String;": function (this: JTimeZone) { return tzName(this.id, 1); },
     "getDisplayName(ZI)Ljava/lang/String;": function (this: JTimeZone, _dst: number, style: number) { return tzName(this.id, style); },
     "getDisplayName(ZILjava/util/Locale;)Ljava/lang/String;": function (this: JTimeZone, _dst: number, style: number) { return tzName(this.id, style); },
-    "static getAvailableIDs()[Ljava/lang/String;": () => jarray([localTz.id], "Ljava/lang/String;"),
+    "static getAvailableIDs()[Ljava/lang/String;": () => jarray(zoneIds.slice(), "Ljava/lang/String;"),
     "setID(Ljava/lang/String;)V": function (this: JTimeZone, id: string) { this.id = id; },
   },
 });

@@ -1,6 +1,7 @@
 // java.math: BigDecimal = (unscaled bigint, scale) with JDK rounding/layout semantics; BigInteger over bigint.
 
 import { rt, JObj } from "../runtime";
+import { jarray } from "../abi";
 import { mkEnumSet, fmtDouble, JSimpleEnum } from "./jlang";
 
 const arith = (msg: string): never => { throw rt.mkThrowable("java/lang/ArithmeticException", msg); };
@@ -502,6 +503,10 @@ rt.register({
     "remainder(Ljava/math/BigInteger;)Ljava/math/BigInteger;": function (this: JBigInteger, o: JBigInteger) {
       if (o.v === 0n) arith("BigInteger divide by zero");
       return mkBI(this.v % o.v);
+    },
+    "divideAndRemainder(Ljava/math/BigInteger;)[Ljava/math/BigInteger;": function (this: JBigInteger, o: JBigInteger) {
+      if (o.v === 0n) arith("BigInteger divide by zero");
+      return jarray([mkBI(this.v / o.v), mkBI(this.v % o.v)], "Ljava/math/BigInteger;");
     },
     "mod(Ljava/math/BigInteger;)Ljava/math/BigInteger;": function (this: JBigInteger, m: JBigInteger) {
       if (m.v <= 0n) arith("BigInteger: modulus not positive");
