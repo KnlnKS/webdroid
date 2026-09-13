@@ -18,14 +18,21 @@ platform contracts; run the full serialized E2E suite at the end.
 - Focused commits cover native APS2/RELR relocation, executor virtual factories/completion,
   matrix inversion, AtomicFile, value contracts, frame constructors/relative rules,
   reference queues, message queues, integer buffers, provider identity and widget/GL types.
-- Uncommitted work includes SAX, bootstrap platform APIs, ClipData/Parcel, IntentFilter
-  path matching, StatsEvent, TimeAnimator and the next GLES operations.
+- Further commits cover SAX, ClipData/IntentFilter parcels, StatsEvent, TimeAnimator,
+  provider file snapshots, serialization block lengths, live-thread enumeration,
+  TLS ALPN, URI parsing and CharSequence encoding. Bootstrap platform queries are committed.
+- Real TLS probes through the relay and through Java SSLSocket negotiate HTTP/2 with Google.
+  Maps progressed through TLS selection and URI encoding to DNS address selection;
+  the latest build includes Collections.shuffle(Random) and InetSocketAddress.getHostString.
+- Both observed microG process realms currently report no missing APIs. Main-process
+  capability probes still name unsupported hardware/service classes; do not treat empty
+  service telemetry as complete app coverage.
 - Maps smoke: 72,887 classes, zero method failures. Focused checks and typecheck pass at
   recent checkpoints; rerun affected checks after subsequent edits. Full E2E not run yet.
 
 ## Next
 
-1. Follow native rendering, Cronet/network startup and remote provider openFile failures.
+1. Follow native rendering and Maps network requests after DNS address selection.
    Read all process diagnostics. Distinguish slow initialization from a deadlock using
    advancing frames, queue state and initialization/task state.
 2. Exercise matching Maps search/place/directions interactions in Chrome and Android;

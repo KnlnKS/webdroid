@@ -1840,3 +1840,40 @@ allows; it does not report a fabricated upload. Cronet previously threw construc
 References: Android 15 [ClipData](https://android.googlesource.com/platform/frameworks/base/+/android-15.0.0_r1/core/java/android/content/ClipData.java),
 [TextUtils](https://android.googlesource.com/platform/frameworks/base/+/android-15.0.0_r1/core/java/android/text/TextUtils.java),
 and API 35 [StatsEvent](https://android.googlesource.com/platform/prebuilts/fullsdk/sources/+/refs/heads/androidx-metrics-release/android-35/android/util/StatsEvent.java).
+
+
+### Maps networking and file transfer
+
+microG's unchanged FontsProvider opens a read-only system font. Provider IPC previously
+omitted openFile; read-only file snapshots now cross the boundary and lazily obtain a
+native descriptor, allowing JNI file reads and mappings. ParcelFileDescriptor loads lazy
+file sources, duplicates native descriptors, and closes descriptors owned by AutoClose
+streams. This does not implement shared writable descriptors or pipes across processes.
+Focused descriptor tests cover shared duplicate offsets, independent close lifetime and
+lazy bytes. Chrome no longer reports the font-provider openFile failure.
+
+ObjectInputStream computed the end of TC_BLOCKDATA using the position before reading the
+one-byte length. That shortened every small block by one byte and made its final payload
+byte look like a serialization tag. A two-block regression test now consumes both values.
+
+Maps' bundled gRPC platform selection reached missing SSLContext provider operations.
+The relay now accepts ALPN offers and returns Bun's actual negotiated protocol. Java
+SSLParameters and SSLSocket retain copied offers and report no selection before handshake.
+Both a WebSocket relay probe and a Java SSLSocket probe negotiated h2 with www.google.com.
+This verifies the transport handshake, not Maps request success. SSLEngine's pre-handshake
+ALPN query is supported; engine wrap/unwrap are not implemented. Existing relay certificate
+representation and other TLS configuration limits remain.
+
+The gRPC resolver constructs a scheme-less URI such as //host:443. Delegating this to
+JavaScript URL rejected valid hosts and discarded explicit default ports. Java URI now
+parses components directly. CharBuffer.wrap(CharSequence) preserves a live read-only view;
+one-shot CharsetEncoder encoding consumes UTF-16 input and reports malformed/unmappable
+input according to the selected action. Existing incremental coder limitations remain.
+Missing Collections.shuffle(List, Random) and InetSocketAddress.getHostString were the next
+address-selection failures. Focused tests pass; Maps still shows no tiles or search results.
+
+IntentFilter moved into its canonical matching module. Its Android 15 parcel layout includes
+static/dynamic MIME types, scheme-specific patterns, authority/path patterns and metadata.
+PatternMatcher retains its parsed pattern payload. URI-relative groups and advanced-glob
+matching remain explicit unsupported cases. Wearable AddListenerRequest previously failed
+writing its IntentFilter array. A parcel round trip preserves matching and consumes all data.
