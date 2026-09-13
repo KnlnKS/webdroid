@@ -39,6 +39,36 @@ export class JIntent extends JObj {
     }
   }
 }
+class JClipDescription extends JObj {
+  constructor(readonly label: unknown, readonly mimeTypes: string[]) { super(); }
+}
+class JClipItem extends JObj {
+  constructor(readonly intent: JIntent | null = null) { super(); }
+}
+class JClipData extends JObj {
+  description: JClipDescription | null = null;
+  items: JClipItem[] = [];
+}
+rt.register({ name: "android/content/ClipDescription", ctor: JClipDescription, methods: {
+  "getLabel()Ljava/lang/CharSequence;": function (this: JClipDescription) { return this.label; },
+  "getMimeTypeCount()I": function (this: JClipDescription) { return this.mimeTypes.length; },
+  "getMimeType(I)Ljava/lang/String;": function (this: JClipDescription, index: number) { return this.mimeTypes[index]; },
+} });
+rt.register({ name: "android/content/ClipData$Item", ctor: JClipItem, methods: {
+  "<init>(Landroid/content/Intent;)V": function (this: JClipItem, intent: JIntent) { Reflect.set(this, "intent", intent); },
+  "getIntent()Landroid/content/Intent;": function (this: JClipItem) { return this.intent; },
+} });
+rt.register({ name: "android/content/ClipData", ctor: JClipData, ifaces: ["android/os/Parcelable"], methods: {
+  "static newIntent(Ljava/lang/CharSequence;Landroid/content/Intent;)Landroid/content/ClipData;": (label: unknown, intent: JIntent) => {
+    const clip = new JClipData();
+    clip.description = new JClipDescription(label, ["text/vnd.android.intent"]);
+    clip.items.push(new JClipItem(intent));
+    return clip;
+  },
+  "getDescription()Landroid/content/ClipDescription;": function (this: JClipData) { return this.description; },
+  "getItemCount()I": function (this: JClipData) { return this.items.length; },
+  "getItemAt(I)Landroid/content/ClipData$Item;": function (this: JClipData, index: number) { return this.items[index]; },
+} });
 function copyBounds(rect: JRect): JRect {
   rt.link("android/graphics/Rect");
   return Object.assign(new JRect(), { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
