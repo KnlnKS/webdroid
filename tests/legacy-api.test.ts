@@ -142,6 +142,10 @@ test("Process.isApplicationUid checks the app id across users", () => {
   expect(scall("android/os/Process", "isApplicationUid", "(I)Z", 90000)).toBe(0);
 });
 
+test("ActivityManager reports a normal device environment", () => {
+  expect(scall("android/app/ActivityManager", "isRunningInTestHarness", "()Z")).toBe(0);
+});
+
 test("security providers retain their constructor metadata", async () => {
   const provider = await newObj("java/security/Provider", "(Ljava/lang/String;DLjava/lang/String;)V", "Test", 1.5, "test provider");
   expect(await vcall(provider, "getName", "()Ljava/lang/String;")).toBe("Test");

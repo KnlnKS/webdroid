@@ -518,6 +518,7 @@ for (const [name, methods, statics] of [
     "static getMyMemoryState(Landroid/app/ActivityManager$RunningAppProcessInfo;)V": (info: JRunningAppProcessInfo) => {
       if (info) fillProc(info);
     },
+    "static isRunningInTestHarness()Z": () => 0,
   }],
   ["android/os/PowerManager", {
     "newWakeLock(ILjava/lang/String;)Landroid/os/PowerManager$WakeLock;": () => {
