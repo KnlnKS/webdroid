@@ -236,19 +236,24 @@ const inputStreamMethods: NativeSpec["methods"] = {
     this.pos += n;
     return n;
   },
-  "available()I": function (this: JInputStream) { return (this.source?.size ?? this.buf.length) - this.pos; },
+  "available()I": function (this: JInputStream) { return this.wrapped ? vcallMaybe(this.wrapped, "available", "()I") : (this.source?.size ?? this.buf.length) - this.pos; },
   "skip(J)J": function (this: JInputStream, n: bigint) {
-    const k = Math.min(Number(n), (this.source?.size ?? this.buf.length) - this.pos);
+    if (this.wrapped) return vcallMaybe(this.wrapped, "skip", "(J)J", n);
+    const k = Math.max(0, Math.min(Number(n), (this.source?.size ?? this.buf.length) - this.pos));
     this.pos += k;
     return BigInt(k);
   },
-  "close()V": function () {},
-  "mark(I)V": function (this: JInputStream) { (this as any).markPos = this.pos; },
-  "reset()V": function (this: JInputStream) { this.pos = (this as any).markPos ?? 0; },
-  "markSupported()Z": () => 1,
+  "close()V": function (this: JInputStream) { if (this.wrapped) return vcallMaybe(this.wrapped, "close", "()V"); },
+  "mark(I)V": function (this: JInputStream, limit: number) { if (this.wrapped) return vcallMaybe(this.wrapped, "mark", "(I)V", limit); (this as any).markPos = this.pos; },
+  "reset()V": function (this: JInputStream) { if (this.wrapped) return vcallMaybe(this.wrapped, "reset", "()V"); this.pos = (this as any).markPos ?? 0; },
+  "markSupported()Z": function (this: JInputStream) { return this.wrapped ? vcallMaybe(this.wrapped, "markSupported", "()Z") : 1; },
 };
 const readI = mangleMethod("read", "()I"), readBII = mangleMethod("read", "([BII)I");
 const writeBII = mangleMethod("write", "([BII)V");
+function usesReads(stream: unknown, prototype = JInputStream.prototype): stream is JInputStream {
+  const s = stream as Record<string, unknown> | null, p = prototype as unknown as Record<string, unknown>;
+  return stream instanceof JInputStream && s![readI] === p[readI] && s![readBII] === p[readBII];
+}
 // the DataInput/DataOutput primitives, big-endian as the JDK reads and writes them
 type Get = (v: DataView) => unknown;
 type Put = (v: DataView, x: never) => void;
@@ -269,8 +274,7 @@ const writers = (write: (n: number, put: Put) => unknown) =>
   Object.fromEntries(PRIMS.map(([name, d, n, , put]) => [`write${name}(${"SBC".includes(d) ? "I" : d})V`, write(n, put)])) as NonNullable<NativeSpec["methods"]>;
 /** every byte an InputStream has left: in place when its reads are ours, else through its virtual read */
 export async function readStreamFully(s: unknown): Promise<Uint8Array> {
-  const base = JInputStream.prototype as any;
-  if (s instanceof JInputStream && !s.wrapped && (s as any)[readI] === base[readI] && (s as any)[readBII] === base[readBII]) {
+  if (usesReads(s) && !s.wrapped) {
     checkFileOpen(s);
     const out = s.source ? await readFully(s.source, s.pos) : s.buf.subarray(s.pos);
     s.pos += out.length;
@@ -314,17 +318,56 @@ rt.register({
     "close()V": function (this: JInputStream) { closeFile(this); },
   },
 });
-/** a wrapping stream shares the source's bytes and cursor, or — when the source is an app's own
- *  stream — reads through the source's virtual read, which is the only way in */
 function adoptStream(this: JInputStream, src: JInputStream) {
-  if (src instanceof JInputStream) { this.buf = src.buf; this.source = src.source; this.pos = src.pos; }
-  else this.wrapped = src;
+  this.wrapped = src;
+}
+class JBufferedIn extends JInputStream {
+  count = 0; marked = -1; markLimit = 0; closed = false;
+  check() { if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed"); }
+  async fill(): Promise<void> {
+    if (this.marked < 0) this.pos = 0;
+    else if (this.pos >= this.buf.length) {
+      if (this.marked > 0) { this.buf.copyWithin(0, this.marked, this.pos); this.pos -= this.marked; this.marked = 0; }
+      else if (this.buf.length >= this.markLimit) { this.marked = -1; this.pos = 0; }
+      else { const bytes = new Uint8Array(Math.min(this.buf.length * 2, this.markLimit)); bytes.set(this.buf); this.buf = bytes; }
+    }
+    this.count = this.pos;
+    const n = await vcall(this.wrapped, "read", "([BII)I", i8(this.buf), this.pos, this.buf.length - this.pos);
+    if (n > 0) this.count = this.pos + n;
+  }
+}
+function bufferedIn(this: JBufferedIn, source: unknown, size = 8192): void {
+  if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Buffer size <= 0");
+  this.wrapped = source; this.buf = new Uint8Array(size);
 }
 rt.register({
-  name: "java/io/BufferedInputStream", ctor: class extends JInputStream {}, sup: "java/io/InputStream",
+  name: "java/io/BufferedInputStream", ctor: JBufferedIn, sup: "java/io/InputStream",
   methods: {
-    "<init>(Ljava/io/InputStream;)V": adoptStream,
-    "<init>(Ljava/io/InputStream;I)V": adoptStream,
+    "<init>(Ljava/io/InputStream;)V": bufferedIn,
+    "<init>(Ljava/io/InputStream;I)V": bufferedIn,
+    "read()I": async function (this: JBufferedIn) { this.check(); if (this.pos >= this.count) await this.fill(); return this.pos < this.count ? this.buf[this.pos++] : -1; },
+    "read([BII)I": async function (this: JBufferedIn, out: Int8Array, offset: number, count: number) {
+      this.check();
+      if (!out) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      if (offset < 0 || count < 0 || offset > out.length - count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      if (!count) return 0;
+      if (this.pos >= this.count) {
+        if (count >= this.buf.length && this.marked < 0) return vcall(this.wrapped, "read", "([BII)I", out, offset, count);
+        await this.fill(); if (this.pos >= this.count) return -1;
+      }
+      const n = Math.min(count, this.count - this.pos);
+      out.set(i8(this.buf, this.pos, n), offset); this.pos += n; return n;
+    },
+    "available()I": function (this: JBufferedIn) { this.check(); return after(vcallMaybe(this.wrapped, "available", "()I"), n => Math.min(2147483647, this.count - this.pos + n)); },
+    "skip(J)J": async function (this: JBufferedIn, count: bigint) {
+      this.check(); if (count <= 0n) return 0n;
+      if (this.pos >= this.count) { if (this.marked < 0) return vcall(this.wrapped, "skip", "(J)J", count); await this.fill(); }
+      const n = Math.min(Number(count), this.count - this.pos); this.pos += n; return BigInt(n);
+    },
+    "mark(I)V": function (this: JBufferedIn, limit: number) { this.marked = this.pos; this.markLimit = limit; },
+    "reset()V": function (this: JBufferedIn) { this.check(); if (this.marked < 0) throw rt.mkThrowable("java/io/IOException", "Resetting to invalid mark"); this.pos = this.marked; },
+    "markSupported()Z": () => 1,
+    "close()V": function (this: JBufferedIn) { if (!this.closed) { this.closed = true; this.buf = new Uint8Array(0); return vcall(this.wrapped, "close", "()V"); } },
   },
 });
 rt.register({
@@ -346,12 +389,20 @@ function dataRead(length: number, decode: (b: Uint8Array) => unknown) {
   return function (this: JInputStream) { return after(dataBytes(this, length), decode); };
 }
 function dataBytes(stream: JInputStream, length: number): Uint8Array | Promise<Uint8Array> {
+  checkFileOpen(stream);
   const take = (bytes: Uint8Array) => {
     if (bytes.length !== length) throw rt.mkThrowable("java/io/EOFException", null);
     stream.pos += length;
     return bytes;
   };
-  if (stream.wrapped) return wrappedBytes(stream, length).then(take);
+  if (stream.wrapped) {
+    const source = stream.wrapped;
+    if (usesReads(source)) return after(dataBytes(source, length), take);
+    if (source instanceof JBufferedIn && usesReads(source, JBufferedIn.prototype) && source.count - source.pos >= length) {
+      source.check(); const bytes = source.buf.subarray(source.pos, source.pos + length); source.pos += length; return take(bytes);
+    }
+    return wrappedBytes(stream, length).then(take);
+  }
   return stream.source ? readFully(stream.source, stream.pos, length).then(take) : take(stream.buf.subarray(stream.pos, stream.pos + length));
 }
 /** as many of `length` bytes as the wrapped stream has, one virtual read at a time */
