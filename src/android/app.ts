@@ -659,20 +659,6 @@ for (const [name, methods, statics] of [
       "startWatchingMode(Ljava/lang/String;Ljava/lang/String;Landroid/app/AppOpsManager$OnOpChangedListener;)V",
       "stopWatchingMode(Landroid/app/AppOpsManager$OnOpChangedListener;)V"),
   }, { MODE_ALLOWED: 0, MODE_IGNORED: 1, MODE_ERRORED: 2, MODE_DEFAULT: 3 }],
-  ["android/view/accessibility/AccessibilityManager", {
-    // No real accessibility service runs here — a device with accessibility off reports
-    // both flags false. Listeners register (so `implements` links) but never fire, which
-    // IS the correct behavior for this state, not a stub shortcut.
-    "isEnabled()Z": () => 0,
-    "isTouchExplorationEnabled()Z": () => 0,
-    "getRecommendedTimeoutMillis(II)I": (orig: number) => orig,
-    "addAccessibilityStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityStateChangeListener;)Z": () => 1,
-    "removeAccessibilityStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityStateChangeListener;)Z": () => 1,
-    "addTouchExplorationStateChangeListener(Landroid/view/accessibility/AccessibilityManager$TouchExplorationStateChangeListener;)Z": () => 1,
-    "removeTouchExplorationStateChangeListener(Landroid/view/accessibility/AccessibilityManager$TouchExplorationStateChangeListener;)Z": () => 1,
-    "getEnabledAccessibilityServiceList(I)Ljava/util/List;": () => newArrayList(),
-    "getInstalledAccessibilityServiceList()Ljava/util/List;": () => newArrayList(),
-  }],
   ["android/content/ClipboardManager", {
     "setPrimaryClip(Landroid/content/ClipData;)V": () => {},
     "getPrimaryClip()Landroid/content/ClipData;": () => null,
@@ -745,9 +731,28 @@ rt.register({
 });
 // apps `implements` this to track refresh-rate / display changes; it must link even though it never fires here
 rt.markers("android/hardware/display/DisplayManager$DisplayListener", "android/app/AppOpsManager$OnOpChangedListener");
-// AccessibilityManager callback interfaces — apps `implements` these to watch for a
-// screen reader turning on; must link even though it never fires here (see above).
-for (const n of ["AccessibilityStateChangeListener", "TouchExplorationStateChangeListener"]) {
+class JAccessibilityManager extends JObj {
+  stateListeners = new Set<unknown>();
+  touchListeners = new Set<unknown>();
+  servicesListeners = new Set<unknown>();
+}
+rt.register({
+  name: "android/view/accessibility/AccessibilityManager", ctor: JAccessibilityManager,
+  methods: {
+    "isEnabled()Z": () => 0,
+    "isTouchExplorationEnabled()Z": () => 0,
+    "getRecommendedTimeoutMillis(II)I": (orig: number) => orig,
+    "addAccessibilityStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityStateChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { this.stateListeners.add(listener); return 1; },
+    "removeAccessibilityStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityStateChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { return +this.stateListeners.delete(listener); },
+    "addTouchExplorationStateChangeListener(Landroid/view/accessibility/AccessibilityManager$TouchExplorationStateChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { this.touchListeners.add(listener); return 1; },
+    "removeTouchExplorationStateChangeListener(Landroid/view/accessibility/AccessibilityManager$TouchExplorationStateChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { return +this.touchListeners.delete(listener); },
+    "addAccessibilityServicesStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)V": function (this: JAccessibilityManager, listener: unknown) { this.servicesListeners.add(listener); },
+    "removeAccessibilityServicesStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { return +this.servicesListeners.delete(listener); },
+    "getEnabledAccessibilityServiceList(I)Ljava/util/List;": () => newArrayList(),
+    "getInstalledAccessibilityServiceList()Ljava/util/List;": () => newArrayList(),
+  },
+});
+for (const n of ["AccessibilityStateChangeListener", "TouchExplorationStateChangeListener", "AccessibilityServicesStateChangeListener"]) {
   rt.register({ name: "android/view/accessibility/AccessibilityManager$" + n, ctor: class extends JObj {} });
 }
 rt.register({
