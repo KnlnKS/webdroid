@@ -1281,6 +1281,12 @@ export class JCanvas extends JObj {
   saveCount = 1;
   bmp: JBitmap | null = null;
   semanticOwner: { drawnText: string[] | null; drawnTextPoints: Float32Array | null; drawnTextCount: number } | null = null;
+  semanticBase: [number, number, number, number, number, number] | null = null;
+  semanticTransform(): [number, number, number, number, number, number] {
+    const m = this.ctx.getTransform();
+    const current = [m.a, m.b, m.c, m.d, m.e, m.f];
+    return this.semanticBase ? matMul(this.semanticBase, current) : current as [number, number, number, number, number, number];
+  }
   recordText(text: string, x?: number, y?: number, size?: number, align = 0) {
     const owner = this.semanticOwner;
     if (!owner) return;
@@ -1294,8 +1300,15 @@ export class JCanvas extends JObj {
     }
     const cx = x + (align === 0 ? size : align === 2 ? -size : 0), cy = y - size * 0.3;
     const m = this.ctx.getTransform();
-    owner.drawnTextPoints[i * 2] = m.a * cx + m.c * cy + m.e;
-    owner.drawnTextPoints[i * 2 + 1] = m.b * cx + m.d * cy + m.f;
+    let sx = m.a * cx + m.c * cy + m.e, sy = m.b * cx + m.d * cy + m.f;
+    if (this.semanticBase) {
+      const b = this.semanticBase;
+      const px = sx;
+      sx = b[0] * px + b[2] * sy + b[4];
+      sy = b[1] * px + b[3] * sy + b[5];
+    }
+    owner.drawnTextPoints[i * 2] = sx;
+    owner.drawnTextPoints[i * 2 + 1] = sy;
   }
   static wrap(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, w: number, h: number): JCanvas {
     const c = new JCanvas();

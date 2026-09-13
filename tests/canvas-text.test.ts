@@ -28,6 +28,18 @@ test("Canvas records custom-drawn text for semantic lookup", async () => {
   expect(owner.drawnTextPoints![3]).toBeCloseTo(25.6);
 });
 
+test("Canvas maps layered semantic text through its parent transform", async () => {
+  const cv = canvas(), paint = new JPaint();
+  const owner = { drawnText: null as string[] | null, drawnTextPoints: null as Float32Array | null, drawnTextCount: 0 };
+  cv.semanticBase = [1, 0, 0, 1, 100, 200];
+  cv.semanticOwner = owner;
+
+  await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "layered", 0, 0, paint);
+
+  expect(owner.drawnTextPoints![0]).toBe(158);
+  expect(owner.drawnTextPoints![1]).toBeCloseTo(205.6);
+});
+
 test("Canvas resolves virtual CharSequence text before drawing", async () => {
   class Sequence extends JObj {
     [mangleMethod("toString", "()Ljava/lang/String;")]() { return "Big Buck Bunny"; }

@@ -729,6 +729,7 @@ async function drawLayered(v: JView, cv: JCanvas, w: number, h: number) {
   lctx.globalAlpha = 1;
   lctx.clearRect(0, 0, w, h);
   const lcv = JCanvas.wrap(lctx, w, h);
+  lcv.semanticBase = cv.semanticTransform();
   await drawSemantic(v, lcv);
   cv.ctx.drawImage(layer, 0, 0);
 }
