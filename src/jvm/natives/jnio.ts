@@ -292,6 +292,15 @@ function getFloats(b: JFloatBuffer, arr: Float32Array, off: number, len: number)
   else for (let i = 0; i < len; i++) arr[off + i] = b.dv.getFloat32((b.pos + i) << 2, b.little);
   b.pos += len; return b;
 }
+function putInts(buffer: JIntBuffer, values: Int32Array, offset: number, count: number): JIntBuffer {
+  if (offset < 0 || count < 0 || offset > values.length - count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  buffer.clampPut(count);
+  const view = buffer.dv;
+  if (buffer.little && !(view.byteOffset & 3)) new Int32Array(view.buffer, view.byteOffset, buffer.cap).set(values.subarray(offset, offset + count), buffer.pos);
+  else for (let i = 0; i < count; i++) view.setInt32((buffer.pos + i) << 2, values[offset + i], buffer.little);
+  buffer.pos += count;
+  return buffer;
+}
 function intBufferMethods(): NativeSpec["methods"] {
   return {
     ...bufferBaseMethods(),
@@ -300,11 +309,8 @@ function intBufferMethods(): NativeSpec["methods"] {
     "static wrap([I)Ljava/nio/IntBuffer;": (arr: Int32Array) => wrapArray(JIntBuffer, arr, 2),
     "put(I)Ljava/nio/IntBuffer;": function (this: JIntBuffer, v: number) { this.clampPut(1); this.dv.setInt32(this.pos++ << 2, v, this.little); return this; },
     "put(II)Ljava/nio/IntBuffer;": function (this: JIntBuffer, i: number, v: number) { this.clampPut(0); this.dv.setInt32(i << 2, v, this.little); return this; },
-    "put([I)Ljava/nio/IntBuffer;": function (this: JIntBuffer, arr: Int32Array) {
-      this.clampPut(arr.length);
-      for (let i = 0; i < arr.length; i++) this.dv.setInt32((this.pos + i) << 2, arr[i], this.little);
-      this.pos += arr.length; return this;
-    },
+    "put([I)Ljava/nio/IntBuffer;": function (this: JIntBuffer, arr: Int32Array) { return putInts(this, arr, 0, arr.length); },
+    "put([III)Ljava/nio/IntBuffer;": function (this: JIntBuffer, arr: Int32Array, off: number, len: number) { return putInts(this, arr, off, len); },
     "get()I": function (this: JIntBuffer) { this.clampGet(1); return this.dv.getInt32(this.pos++ << 2, this.little); },
     "get(I)I": function (this: JIntBuffer, i: number) { return this.dv.getInt32(i << 2, this.little); },
     "get([I)Ljava/nio/IntBuffer;": function (this: JIntBuffer, arr: Int32Array) {
