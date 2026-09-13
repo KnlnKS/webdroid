@@ -821,16 +821,19 @@ rt.register({
   },
 });
 mkEnumSet("android/graphics/Shader$TileMode", ["CLAMP", "REPEAT", "MIRROR", "DECAL"]);
+const bitmapShaderTiles = new WeakMap<JBitmap, { generation: number; tiles: Map<string, CanvasPattern> }>();
 class JBitmapShader extends JShader {
   bitmap!: JBitmap;
   tileX = 0; tileY = 0;
-  private generation = -1;
-  private tiles = new Map<string, CanvasPattern>();
   private cached: CanvasPattern | null = null;
   private cacheKey = "";
   draw(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): void {
     const bitmap = this.bitmap;
-    if (this.generation !== bitmap.genId) { this.generation = bitmap.genId; this.tiles.clear(); this.cached = null; }
+    let cache = bitmapShaderTiles.get(bitmap);
+    if (!cache || cache.generation !== bitmap.genId) {
+      cache = { generation: bitmap.genId, tiles: new Map() };
+      bitmapShaderTiles.set(bitmap, cache);
+    }
     const inverse = ctx.getTransform().inverse();
     const corners = [[0, 0], [ctx.canvas.width, 0], [0, ctx.canvas.height], [ctx.canvas.width, ctx.canvas.height]]
       .map(([x, y]) => inverse.transformPoint({ x, y }));
@@ -845,17 +848,21 @@ class JBitmapShader extends JShader {
     const ys = segments(this.tileY, bitmap.h, Math.min(...corners.map(p => p.y)), Math.max(...corners.map(p => p.y)));
     for (const [x0, x1, sx, sw] of xs) for (const [y0, y1, sy, sh] of ys) {
       if (x1 <= x0 || y1 <= y0) continue;
-      const key = `${sx},${sy},${sw},${sh}`;
-      let pattern = this.tiles.get(key);
+      const nx = this.tileX === 2 ? 2 : 1, ny = this.tileY === 2 ? 2 : 1;
+      const key = `${sx},${sy},${sw},${sh},${nx},${ny}`;
+      let pattern = cache.tiles.get(key);
       if (!pattern) {
-        const nx = this.tileX === 2 ? 2 : 1, ny = this.tileY === 2 ? 2 : 1;
-        const tile = new OffscreenCanvas(sw * nx, sh * ny), c = tile.getContext("2d")!;
-        for (let x = 0; x < nx; x++) for (let y = 0; y < ny; y++) {
-          c.setTransform(x ? -1 : 1, 0, 0, y ? -1 : 1, x ? sw * 2 : 0, y ? sh * 2 : 0);
-          c.drawImage(bitmap.canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+        let tile = bitmap.canvas;
+        if (sx !== 0 || sy !== 0 || sw !== bitmap.w || sh !== bitmap.h || nx !== 1 || ny !== 1) {
+          tile = new OffscreenCanvas(sw * nx, sh * ny);
+          const c = tile.getContext("2d")!;
+          for (let x = 0; x < nx; x++) for (let y = 0; y < ny; y++) {
+            c.setTransform(x ? -1 : 1, 0, 0, y ? -1 : 1, x ? sw * 2 : 0, y ? sh * 2 : 0);
+            c.drawImage(bitmap.canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+          }
         }
         pattern = ctx.createPattern(tile, "repeat")!;
-        this.tiles.set(key, pattern);
+        cache.tiles.set(key, pattern);
       }
       ctx.fillStyle = pattern;
       ctx.fillRect(x0, y0, x1 - x0, y1 - y0);

@@ -2290,3 +2290,20 @@ then draw, with a 20x10 drawable filling the expected centered 100x50 area of a 
 view; the center is red, the upper margin transparent, and the canvas transform is
 restored. The preceding build skipped the bounds callback. Full Maps visual verification
 continues alongside an independent bitmap-shader GPU allocation investigation.
+
+### Share immutable bitmap shader tiles
+
+Headed Chrome failed GPU IOSurface allocation even for 1x1 tiles while the host had
+57% memory free. A software Canvas2D diagnostic stayed alive and traced 902,254
+OffscreenCanvas constructions in about three minutes; over 99% came from bitmap
+shader tiles. Fresh shader instances repeatedly copied the same bitmaps (54 bitmap
+objects served 230,142 sampled shader draws), defeating the per-instance cache.
+
+Cache tiles weakly by bitmap and pixel generation, including mirror dimensions in
+the key, and use the original canvas for uncropped, unmirrored tiles. A real Chrome
+pixel probe checks 2,048 pixels across all 16 tile-mode combinations, repeated shader
+instances, and mutation invalidation, with no failures. The fresh hardware-accelerated
+Chrome Maps run reached search/place/start selection without GPU allocation errors;
+only 127 shader tile canvases were allocated at the place checkpoint, including the
+probe. This removes the measured allocation explosion, not the separate startup
+trace mismatch, missing route map, or clipped chip geometry. Typecheck passes.
