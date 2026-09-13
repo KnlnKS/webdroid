@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
 import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { mangleMethod } from "../src/jvm/abi";
 
 class RecordingRunnable extends JObj { runs = 0; }
 rt.register({
@@ -68,4 +69,19 @@ test("a native pool submit queues before returning its future", async () => {
   const future = await vcall(ex, "submit", "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;", task, "result");
   expect(await vcall(queue, "size", "()I")).toBe(1);
   expect(await vcall(future, "get", "()Ljava/lang/Object;")).toBe("result");
+});
+
+test("ForkJoinPool executes tasks and exposes their result", async () => {
+  rt.register({
+    name: "test/ConstTask", ctor: class extends (rt.link("java/util/concurrent/RecursiveTask").ctor as typeof JObj) {},
+    sup: "java/util/concurrent/RecursiveTask", methods: { "compute()Ljava/lang/Object;": () => "done" },
+  });
+  const pool = await newObj("java/util/concurrent/ForkJoinPool", "(I)V", 2);
+  const task = rt.make("test/ConstTask");
+  expect(await vcall(pool, "invoke", "(Ljava/util/concurrent/ForkJoinTask;)Ljava/lang/Object;", task)).toBe("done");
+  expect(await vcall(task, "getRawResult", "()Ljava/lang/Object;")).toBe("done");
+  const submitted = await vcall(pool, "submit", "(Ljava/util/concurrent/ForkJoinTask;)Ljava/util/concurrent/ForkJoinTask;", rt.make("test/ConstTask"));
+  expect(await vcall(submitted, "join", "()Ljava/lang/Object;")).toBe("done");
+  const common = (rt.link("java/util/concurrent/ForkJoinPool").ctor as any)[mangleMethod("commonPool", "()Ljava/util/concurrent/ForkJoinPool;")]();
+  expect(common).toBe((rt.link("java/util/concurrent/ForkJoinPool").ctor as any)[mangleMethod("commonPool", "()Ljava/util/concurrent/ForkJoinPool;")]());
 });

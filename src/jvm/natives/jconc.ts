@@ -450,6 +450,90 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
     },
   });
 }
+let commonForkJoinPool: JExecutor | null = null;
+class JForkJoinTask extends JObj { future: JFuture | null = null; result: unknown = null; }
+const forkJoinDesc = (task: JForkJoinTask) => rt.iof(task, "java/util/concurrent/RecursiveAction") ? "()V" : "()Ljava/lang/Object;";
+const forkTask = (task: JForkJoinTask, pool: JExecutor) => {
+  task.future = submit(pool, task, "compute", forkJoinDesc(task));
+  return task;
+};
+async function runForkJoinTask(task: JForkJoinTask): Promise<unknown> {
+  const value = await vcall(task, "compute", forkJoinDesc(task));
+  if (value !== undefined) task.result = value;
+  return task.result;
+}
+async function invokeForkJoinTasks(tasks: JForkJoinTask[]): Promise<void> {
+  for (let i = tasks.length - 1; i > 0; i--) await vcall(tasks[i], "fork", "()Ljava/util/concurrent/ForkJoinTask;");
+  if (tasks.length) await vcall(tasks[0], "invoke", "()Ljava/lang/Object;");
+  for (let i = 1; i < tasks.length; i++) await vcall(tasks[i], "join", "()Ljava/lang/Object;");
+}
+const forkJoinMethods: NativeSpec["methods"] = {
+  "<init>()V": function () {},
+  "fork()Ljava/util/concurrent/ForkJoinTask;": function (this: JForkJoinTask) {
+    const pool = (rt.link("java/util/concurrent/ForkJoinPool").ctor as any)[mangleMethod("commonPool", "()Ljava/util/concurrent/ForkJoinPool;")]() as JExecutor;
+    return forkTask(this, pool);
+  },
+  "join()Ljava/lang/Object;": async function (this: JForkJoinTask) {
+    if (this.future) {
+      const value = await futureGet(this.future);
+      if (value !== undefined && value !== null) this.result = value;
+    }
+    return this.result;
+  },
+  "get()Ljava/lang/Object;": async function (this: JForkJoinTask) { return vcall(this, "join", "()Ljava/lang/Object;"); },
+  "invoke()Ljava/lang/Object;": function (this: JForkJoinTask) { return runForkJoinTask(this); },
+  "getRawResult()Ljava/lang/Object;": function (this: JForkJoinTask) { return this.result; },
+  "isDone()Z": function (this: JForkJoinTask) { return !this.future || this.future.done ? 1 : 0; },
+  "isCancelled()Z": function (this: JForkJoinTask) { return this.future?.cancelled ? 1 : 0; },
+  "cancel(Z)Z": function (this: JForkJoinTask, interrupt: number) {
+    if (!this.future || this.future.done) return 0;
+    cancelFuture(this.future, interrupt);
+    return 1;
+  },
+  "static invokeAll(Ljava/util/concurrent/ForkJoinTask;Ljava/util/concurrent/ForkJoinTask;)V": async (first: JForkJoinTask, second: JForkJoinTask) => {
+    await vcall(second, "fork", "()Ljava/util/concurrent/ForkJoinTask;");
+    await runForkJoinTask(first);
+    await vcall(second, "join", "()Ljava/lang/Object;");
+  },
+  "static invokeAll([Ljava/util/concurrent/ForkJoinTask;)V": (tasks: JForkJoinTask[]) => invokeForkJoinTasks(tasks),
+  "static invokeAll(Ljava/util/Collection;)Ljava/util/Collection;": async (tasks: unknown) => {
+    await invokeForkJoinTasks(await vcall(tasks, "toArray", "()[Ljava/lang/Object;"));
+    return tasks;
+  },
+};
+rt.register({ name: "java/util/concurrent/ForkJoinTask", ctor: JForkJoinTask, ifaces: ["java/util/concurrent/Future", "java/io/Serializable"], methods: forkJoinMethods });
+rt.register({ name: "java/util/concurrent/RecursiveTask", ctor: class extends JForkJoinTask {}, sup: "java/util/concurrent/ForkJoinTask", typeVars: "V", methods: { "<init>()V": function () {} } });
+rt.register({ name: "java/util/concurrent/RecursiveAction", ctor: class extends JForkJoinTask {}, sup: "java/util/concurrent/ForkJoinTask", methods: { "<init>()V": function () {} } });
+rt.register({
+  name: "java/util/concurrent/ForkJoinPool", ctor: class extends JExecutor {},
+  ifaces: ["java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"],
+  sup: "java/util/concurrent/AbstractExecutorService",
+  methods: {
+    ...executorMethods,
+    "<init>()V": function (this: JExecutor) { initScheduled.call(this, navigator.hardwareConcurrency || 4); },
+    "<init>(I)V": function (this: JExecutor, parallelism: number) {
+      if (parallelism <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+      initScheduled.call(this, parallelism);
+    },
+    "static commonPool()Ljava/util/concurrent/ForkJoinPool;": () => {
+      if (!commonForkJoinPool) {
+        const pool = rt.make("java/util/concurrent/ForkJoinPool") as JExecutor;
+        initScheduled.call(pool, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
+        commonForkJoinPool = pool;
+      }
+      return commonForkJoinPool;
+    },
+    "static getCommonPoolParallelism()I": () => Math.max(1, (navigator.hardwareConcurrency || 4) - 1),
+    "invoke(Ljava/util/concurrent/ForkJoinTask;)Ljava/lang/Object;": (task: unknown) => vcall(task, "invoke", "()Ljava/lang/Object;"),
+    "execute(Ljava/util/concurrent/ForkJoinTask;)V": function (this: JExecutor, task: JForkJoinTask) { forkTask(task, this); },
+    "submit(Ljava/util/concurrent/ForkJoinTask;)Ljava/util/concurrent/ForkJoinTask;": function (this: JExecutor, task: JForkJoinTask) { return forkTask(task, this); },
+    "getParallelism()I": function (this: JExecutor) { return this.limit; },
+    "getPoolSize()I": function (this: JExecutor) { return this.workers.length; },
+    "getActiveThreadCount()I": function (this: JExecutor) { return this.workers.filter((worker) => worker.busy).length; },
+    "getQueuedTaskCount()J": function (this: JExecutor) { return BigInt(this.tasks.length); },
+    "isQuiescent()Z": function (this: JExecutor) { return this.pending === 0 ? 1 : 0; },
+  },
+});
 rt.register({
   name: "java/util/concurrent/AbstractExecutorService", ctor: class extends JExecutor {},
   ifaces: ["java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"],
