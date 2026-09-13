@@ -48,10 +48,10 @@ export function dialName(host: string): string {
   return (numeric && syntheticHost(numeric)) || host;
 }
 
-const relayUrl = (host: string, port: number, tls: boolean) => {
+const relayUrl = (host: string, port: number, tls: boolean, alpn: string[]) => {
   const page = typeof location === "undefined" ? { protocol: "http:", host: "localhost" } : location;
   return `${page.protocol === "https:" ? "wss" : "ws"}://${page.host}` +
-    `/tcp?host=${encodeURIComponent(dialName(host))}&port=${port}${tls ? "&tls=1" : ""}`;
+    `/tcp?host=${encodeURIComponent(dialName(host))}&port=${port}${tls ? "&tls=1" + alpn.map(p => "&alpn=" + encodeURIComponent(p)).join("") : ""}`;
 };
 
 interface RelayEndpoint {
@@ -68,12 +68,13 @@ export class Relay {
   private qLen = 0;
   private readonly waiters = new Set<() => void>();
   connected = false;
+  applicationProtocol: string | null = null;
   eof = false;
   localEndpoint: RelayEndpoint | null = null;
   readonly ready: Promise<void>;
 
-  constructor(host: string, port: number, tls: boolean) {
-    const transport = (this.transport = new WebSocket(relayUrl(host, port, tls)));
+  constructor(host: string, port: number, tls: boolean, alpn: string[] = []) {
+    const transport = (this.transport = new WebSocket(relayUrl(host, port, tls, alpn)));
     transport.binaryType = "arraybuffer";
     let settled = false;
     const wake = () => { for (const waiter of this.waiters) waiter(); this.waiters.clear(); };
@@ -83,13 +84,15 @@ export class Relay {
         if (typeof event.data === "string") {
           if (!settled) {
             try {
-              const message = JSON.parse(event.data) as { type?: unknown; localFamily?: unknown; localAddress?: unknown; localPort?: unknown };
+              const message = JSON.parse(event.data) as { type?: unknown; localFamily?: unknown; localAddress?: unknown; localPort?: unknown; alpn?: unknown };
               if (message.type === "ready" && (message.localFamily === "IPv4" || message.localFamily === "IPv6") &&
                   typeof message.localAddress === "string" && Number.isInteger(message.localPort) &&
                   Number(message.localPort) >= 1 && Number(message.localPort) <= 65535) {
+                this.applicationProtocol = typeof message.alpn === "string" ? message.alpn : "";
                 this.localEndpoint = { family: message.localFamily, address: message.localAddress, port: Number(message.localPort) };
               }
             } catch { /* old relays send plain "ok" */ }
+            this.applicationProtocol ??= "";
             settled = true; this.connected = true; resolve(); wake();
           }
           return;

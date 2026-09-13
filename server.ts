@@ -13,7 +13,7 @@ import dns from "node:dns/promises";
 await Promise.all([prepareSystemPackages(), ensureFrameworkRes()]);
 const webRelay = new WebRelay();
 
-type TcpData = { kind: "tcp"; host: string; port: number; tls: boolean; sock: import("bun").Socket | null; ready: boolean; pending: (Uint8Array | Buffer)[] };
+type TcpData = { kind: "tcp"; host: string; port: number; tls: boolean; alpn: string[]; sock: import("bun").Socket | null; ready: boolean; pending: (Uint8Array | Buffer)[] };
 
 // Hop-by-hop/encoding headers never survive the proxy; the framing/isolation set is dropped
 // only for `frame=1`, where the shell embeds the document in an iframe it must be able to script.
@@ -183,7 +183,9 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
     if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
       return new Response("bad target", { status: 400 });
     }
-    const data: TcpData = { kind: "tcp", host, port, tls: u.searchParams.get("tls") === "1", sock: null, ready: false, pending: [] };
+    const alpn = u.searchParams.getAll("alpn");
+    if (alpn.length > 32 || alpn.some(p => !p.length || Buffer.byteLength(p) > 255)) return new Response("bad ALPN", { status: 400 });
+    const data: TcpData = { alpn, kind: "tcp", host, port, tls: u.searchParams.get("tls") === "1", sock: null, ready: false, pending: [] };
     return srv.upgrade(req, { data }) ? undefined : new Response("expected websocket", { status: 400 });
   },
   websocket: {
@@ -198,13 +200,14 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
         d.ready = true;
         ws.send(JSON.stringify({
           type: "ready", localFamily: socket.localFamily,
-          localAddress: socket.localAddress, localPort: socket.localPort,
+          localAddress: socket.localAddress, localPort: socket.localPort, alpn: socket.alpnProtocol || "",
         }));
         for (const m of d.pending.splice(0)) d.sock?.write(m);
       };
       try {
         d.sock = await Bun.connect({
-          hostname: d.host, port: d.port, tls: d.tls,
+          hostname: d.host, port: d.port,
+          tls: d.tls ? { ALPNProtocols: Buffer.concat(d.alpn.flatMap(p => { const bytes = Buffer.from(p); return [Buffer.from([bytes.length]), bytes]; })) } : false,
           socket: {
             data: (_s, chunk) => { ws.send(chunk); },
             handshake: (socket, ok, err) => { if (ok) ready(socket); else ws.close(4001, String(err ?? "tls handshake failed").slice(0, 100)); },

@@ -86,7 +86,12 @@ rt.register({
 });
 rt.markers("java/net/Authenticator$RequestorType");
 
-class JSSLContext extends JObj {}
+class JSSLContext extends JObj { protocol = "TLS"; provider: unknown = null; }
+function sslContext(protocol: string | null, provider: unknown = null): JSSLContext {
+  if (protocol === null) throw rt.mkThrowable("java/lang/NullPointerException", "protocol");
+  if (!["Default", "TLS", "TLSv1", "TLSv1.1", "TLSv1.2", "TLSv1.3", "SSL"].includes(protocol)) throw rt.mkThrowable("java/security/NoSuchAlgorithmException", protocol);
+  return Object.assign(new JSSLContext(), { protocol, provider });
+}
 let defaultSSLContext: JSSLContext | null = null;
 rt.register({
   name: "javax/net/ssl/SSLContext", ctor: JSSLContext,
@@ -96,8 +101,15 @@ rt.register({
       if (!context) throw rt.mkThrowable("java/lang/NullPointerException", "context");
       defaultSSLContext = context;
     },
-    "static getInstance(Ljava/lang/String;)Ljavax/net/ssl/SSLContext;": () => new JSSLContext(),
+    "static getInstance(Ljava/lang/String;)Ljavax/net/ssl/SSLContext;": sslContext,
+    "static getInstance(Ljava/lang/String;Ljava/security/Provider;)Ljavax/net/ssl/SSLContext;": (protocol: string, provider: unknown) => {
+      if (!provider) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Missing provider");
+      return sslContext(protocol, provider);
+    },
+    "getProtocol()Ljava/lang/String;": function (this: JSSLContext) { return this.protocol; },
+    "createSSLEngine()Ljavax/net/ssl/SSLEngine;": () => rt.make("javax/net/ssl/SSLEngine"),
     "init([Ljavax/net/ssl/KeyManager;[Ljavax/net/ssl/TrustManager;Ljava/security/SecureRandom;)V": () => {},
+    "getProvider()Ljava/security/Provider;": function (this: JSSLContext) { return this.provider ?? vcall(rt.link("java/security/Security").ctor, "getProvider", "(Ljava/lang/String;)Ljava/security/Provider;", "AndroidOpenSSL"); },
     "getSocketFactory()Ljavax/net/ssl/SSLSocketFactory;": () => rt.make("javax/net/ssl/SSLSocketFactory"),
   },
 });
@@ -198,7 +210,7 @@ rt.register({
   },
 });
 class JSocket extends JObj {
-  host = ""; port = 0; tls = false; relay: Relay | null = null; closed = 0; soTimeout = 0;
+  host = ""; port = 0; tls = false; alpn: string[] = []; relay: Relay | null = null; closed = 0; soTimeout = 0;
   private opening: Promise<void> | null = null;
   /** Opening is deferred so an SSLSocket wrapping a plain one can take the target over and
    *  connect with TLS instead -- which is exactly how OkHttp builds an HTTPS connection. */
@@ -206,7 +218,7 @@ class JSocket extends JObj {
     if (this.closed) throw rt.mkThrowable("java/net/SocketException", "Socket is closed");
     if (this.opening) return this.opening;
     if (this.relay) return Promise.resolve();
-    const r = this.relay = new Relay(this.host, this.port, this.tls);
+    const r = this.relay = new Relay(this.host, this.port, this.tls, this.alpn);
     return this.opening = r.ready.catch(() => {
       r.close();
       if (this.relay === r) this.relay = null;
@@ -331,20 +343,27 @@ rt.register({
     "getSupportedCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
     "setHandshakeTimeout(I)V": () => {},
     "addHandshakeCompletedListener(Ljavax/net/ssl/HandshakeCompletedListener;)V": () => {},
-    "getSSLParameters()Ljavax/net/ssl/SSLParameters;": () => rt.make("javax/net/ssl/SSLParameters"),
-    "setSSLParameters(Ljavax/net/ssl/SSLParameters;)V": () => {},
-    // The relay opens TLS without ALPN, so the server answers as HTTP/1.1. Saying so is
-    // load-bearing: a client told "h2" would send an HTTP/2 preface down an HTTP/1.1 connection.
-    "getApplicationProtocol()Ljava/lang/String;": () => "http/1.1",
-    "getHandshakeApplicationProtocol()Ljava/lang/String;": () => "http/1.1",
+    "getSSLParameters()Ljavax/net/ssl/SSLParameters;": function (this: JSSLSocket) {
+      rt.link("javax/net/ssl/SSLParameters"); return Object.assign(new JSSLParameters(), { protocols: [...this.alpn] });
+    },
+    "setSSLParameters(Ljavax/net/ssl/SSLParameters;)V": function (this: JSSLSocket, p: JSSLParameters | null) {
+      if (!p) throw rt.mkThrowable("java/lang/IllegalArgumentException", "parameters == null");
+      this.alpn = [...p.protocols];
+    },
+    "getApplicationProtocol()Ljava/lang/String;": function (this: JSSLSocket) { return this.relay?.applicationProtocol ?? null; },
+    "getHandshakeApplicationProtocol()Ljava/lang/String;": () => null,
   },
 });
+rt.register({ name: "javax/net/ssl/SSLEngine", ctor: class extends JObj {}, methods: {
+  "getApplicationProtocol()Ljava/lang/String;": () => null,
+  "getHandshakeApplicationProtocol()Ljava/lang/String;": () => null,
+} });
 class JSSLParameters extends JObj { protocols: string[] = []; }
 rt.register({
   name: "javax/net/ssl/SSLParameters", ctor: JSSLParameters,
   methods: {
     "<init>()V": function () {},
-    "setApplicationProtocols([Ljava/lang/String;)V": function (this: JSSLParameters, v: string[]) { this.protocols = [...(v ?? [])]; },
+    "setApplicationProtocols([Ljava/lang/String;)V": function (this: JSSLParameters, v: string[]) { if (!v || v.some(p => !p)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid application protocols"); this.protocols = [...v]; },
     "getApplicationProtocols()[Ljava/lang/String;": function (this: JSSLParameters) { return strArray(this.protocols); },
     "setProtocols([Ljava/lang/String;)V": () => {},
     "getProtocols()[Ljava/lang/String;": () => strArray(PROTOCOLS),
