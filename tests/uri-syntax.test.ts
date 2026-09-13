@@ -24,3 +24,9 @@ test("URI parses relative authorities without URL normalization", async () => {
     expect(await vcall(uri, "getPath", "()Ljava/lang/String;")).toBe(path);
   }
 });
+test("URI component construction quotes delimiters and retains empty query and fragment", async () => {
+  const uri = await newObj("java/net/URI", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", "https", "example.com:443", "/a b?c", "", "");
+  expect(await vcall(uri, "toString", "()Ljava/lang/String;")).toBe("https://example.com:443/a%20b%3Fc?#");
+  expect(await vcall(uri, "getPath", "()Ljava/lang/String;")).toBe("/a b?c");
+  expect(await vcall(uri, "getQuery", "()Ljava/lang/String;")).toBe("");
+});

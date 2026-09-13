@@ -435,6 +435,20 @@ function parseURI(uri: string) {
     ssp: uri.slice(scheme ? scheme.length + 1 : 0).split("#", 1)[0] };
 }
 const decodeUriPart = (part: string | null): string | null => part === null ? null : decodeURIComponent(part);
+function quoteUriPart(value: string, delimiters: string): string {
+  let result = "";
+  for (const c of value) result += /[A-Za-z0-9_.!~*'()-]/.test(c) || delimiters.includes(c) || c.charCodeAt(0) > 159 && !/\s/u.test(c) ? c : encodeURIComponent(c);
+  return result;
+}
+function hierarchicalURI(scheme: string | null, authority: string | null, path: string | null, query: string | null, fragment: string | null): string {
+  const uri = (scheme === null ? "" : scheme + ":") + (authority === null ? "" : "//" + quoteUriPart(authority, ";:@&=+$,[]")) +
+    quoteUriPart(path ?? "", ";:@&=+$,/") + (query === null ? "" : "?" + quoteUriPart(query, ";/?:@&=+$,[]")) +
+    (fragment === null ? "" : "#" + quoteUriPart(fragment, ";/?:@&=+$,[]"));
+  if (scheme !== null && !/^[A-Za-z][A-Za-z0-9+.-]*$/.test(scheme) || (scheme !== null || authority !== null) && path && !path.startsWith("/")) {
+    rt.link("java/net/URISyntaxException"); const error = new JURISyntaxException(); uriSyntax.call(error, uri, "Invalid scheme or relative path"); throw error;
+  }
+  return uri;
+}
 const mkURI = (u: string | null) => Object.assign(new JURI(), { u: u ?? "" });
 // URLEncoder/URLDecoder: application/x-www-form-urlencoded, which is encodeURIComponent plus
 // "+" for a space and the extra unreserved set Java leaves alone.
@@ -459,14 +473,15 @@ rt.register({
   name: "java/net/URI", ctor: JURI, ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   methods: {
     "<init>(Ljava/lang/String;)V": function (this: JURI, s: string) { this.u = s ?? ""; },
-    // (scheme, userInfo, host, port, path, query, fragment): how a URL is rebuilt from parts
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V":
-      function (this: JURI, sch: string | null, ui: string | null, host: string | null, port: number, path: string | null, q: string | null, f: string | null) {
-        this.u = (sch ? sch + ":" : "") + (host ? "//" + (ui ? ui + "@" : "") + host + (port === -1 ? "" : ":" + port) : "") +
-          (path ?? "") + (q ? "?" + q : "") + (f ? "#" + f : "");
+      function (this: JURI, scheme: string | null, user: string | null, host: string | null, port: number, path: string | null, query: string | null, fragment: string | null) {
+        const authority = host === null ? null : (user === null ? "" : user + "@") + (host.includes(":") && !host.startsWith("[") ? "[" + host + "]" : host) + (port === -1 ? "" : ":" + port);
+        this.u = hierarchicalURI(scheme, authority, path, query, fragment);
       },
-    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JURI, sch: string | null, host: string | null, path: string | null, f: string | null) {
-      this.u = (sch ? sch + ":" : "") + (host ? "//" + host : "") + (path ?? "") + (f ? "#" + f : "");
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V":
+      function (this: JURI, scheme: string | null, authority: string | null, path: string | null, query: string | null, fragment: string | null) { this.u = hierarchicalURI(scheme, authority, path, query, fragment); },
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JURI, scheme: string | null, host: string | null, path: string | null, fragment: string | null) {
+      this.u = hierarchicalURI(scheme, host?.includes(":") && !host.startsWith("[") ? "[" + host + "]" : host, path, null, fragment);
     },
     "static create(Ljava/lang/String;)Ljava/net/URI;": mkURI,
     "toString()Ljava/lang/String;": function (this: JURI) { return this.u; },
