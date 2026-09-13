@@ -35,6 +35,7 @@ rt.register({
     "static getDefault()Ljavax/net/SocketFactory;": () => socketFactory,
     "createSocket()Ljava/net/Socket;": async () => newObj("java/net/Socket", null),
     "createSocket(Ljava/lang/String;I)Ljava/net/Socket;": (h: string, p: number) => dial("java/net/Socket", h, p),
+    "createSocket(Ljava/net/InetAddress;I)Ljava/net/Socket;": (address: JInetAddress, port: number) => dial("java/net/Socket", address?.host ?? "localhost", port),
   },
 });
 class JSSLSocketFactory extends JSocketFactory {}
@@ -53,7 +54,9 @@ rt.register({
         if (autoClose && plain) { plain.relay?.close(); plain.relay = null; plain.closed = 1; }
         return s;
       },
+    "createSocket()Ljava/net/Socket;": () => newObj("javax/net/ssl/SSLSocket"),
     "createSocket(Ljava/lang/String;I)Ljava/net/Socket;": (h: string, p: number) => dial("javax/net/ssl/SSLSocket", h, p),
+    "createSocket(Ljava/net/InetAddress;I)Ljava/net/Socket;": (address: JInetAddress, port: number) => dial("javax/net/ssl/SSLSocket", address?.host ?? "localhost", port),
     "getDefaultCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
     "getSupportedCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
   },
@@ -271,7 +274,10 @@ const socketMethods: NativeSpec["methods"] = {
   "shutdownInput()V": () => {},
   "shutdownOutput()V": () => {},
   "getPort()I": function (this: JSocket) { return this.port; },
-  "getLocalPort()I": () => 0,
+  "getLocalPort()I": function (this: JSocket) { return this.relay?.localEndpoint?.port ?? -1; },
+  "getLocalSocketAddress()Ljava/net/SocketAddress;": function (this: JSocket) {
+    const local = this.relay?.localEndpoint; return local ? inetSock(local.address, local.port) : null;
+  },
   "getInetAddress()Ljava/net/InetAddress;": function (this: JSocket) { return inetAddr(this.host); },
   "getRemoteSocketAddress()Ljava/net/SocketAddress;": function (this: JSocket) { return inetSock(this.host, this.port); },
   "setTcpNoDelay(Z)V": () => {}, "setKeepAlive(Z)V": () => {},
@@ -375,9 +381,6 @@ rt.register({
     "setUseCipherSuitesOrder(Z)V": () => {},
   },
 });
-// OkHttp's Android platform asks these before configuring ALPN/session tickets on a socket.
-// Our sockets are relay-backed, so there is nothing to configure -- but the answer has to be
-// "yes, that is one of ours", or it falls back to a reflection path that is not there either.
 rt.register({
   name: "android/net/ssl/SSLSockets", ctor: class extends JObj {},
   methods: {
