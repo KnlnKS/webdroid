@@ -64,6 +64,23 @@ test("FileChannel.read fills a ByteBuffer from streams and random-access files",
   expect(await vcall(rafChannel, "position", "()J")).toBe(0n);
 });
 
+test("FileChannel.write drains a ByteBuffer at the shared file position", async () => {
+  const output = await newObj("java/io/FileOutputStream", "(Ljava/lang/String;)V", "/tmp/nio-channel-write.bin");
+  const channel = await vcall(output, "getChannel", "()Ljava/nio/channels/FileChannel;");
+  const buffer = await scall("java/nio/ByteBuffer", "wrap", "([B)Ljava/nio/ByteBuffer;", Int8Array.from([1, 2, 3]));
+  expect(await vcall(channel, "write", "(Ljava/nio/ByteBuffer;)I", buffer)).toBe(3);
+  expect(await vcall(buffer, "position", "()I")).toBe(3);
+  expect(await vcall(channel, "position", "()J")).toBe(3n);
+  await vcall(output, "close", "()V");
+  expect([...vfs.read("/tmp/nio-channel-write.bin")!]).toEqual([1, 2, 3]);
+
+  const input = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/tmp/nio-channel-write.bin");
+  const readOnly = await vcall(input, "getChannel", "()Ljava/nio/channels/FileChannel;");
+  await expect(vcall(readOnly, "write", "(Ljava/nio/ByteBuffer;)I", buffer)).rejects.toMatchObject({
+    constructor: rt.link("java/nio/channels/NonWritableChannelException").ctor,
+  });
+});
+
 test("FloatBuffer bulk get honours offsets, lengths and underflow", async () => {
   const buffer = await scall("java/nio/FloatBuffer", "allocate", "(I)Ljava/nio/FloatBuffer;", 6);
   await vcall(buffer, "put", "([F)Ljava/nio/FloatBuffer;", Float32Array.from([1, 2, 3, 4, 5, 6]));

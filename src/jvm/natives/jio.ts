@@ -1178,6 +1178,11 @@ class JFileChannel extends JObj {
     if (this.file instanceof JInputStream || this.file instanceof JRAF) return this.file;
     throw rt.mkThrowable("java/nio/channels/NonReadableChannelException", null);
   }
+  writable(): JFOS | JRAF {
+    this.opened();
+    if (this.file instanceof JFOS || this.file instanceof JRAF && this.file.write) return this.file;
+    throw rt.mkThrowable("java/nio/channels/NonWritableChannelException", null);
+  }
 }
 const fileChannels = new WeakMap<JObj, JFileChannel>();
 const closedFiles = new WeakSet<JObj>();
@@ -1204,6 +1209,14 @@ function channelRead(channel: JFileChannel, dst: JBuffer): number | Promise<numb
   const view = new Int8Array(dst.ab, dst.dv.byteOffset + dst.pos, len);
   const n = file instanceof JRAF ? rafRead(file, view, 0, len) : (file as any)[readBII](view, 0, len);
   return after(n, (n: number) => { if (n > 0) dst.pos += n; return n; });
+}
+function channelWrite(channel: JFileChannel, src: JBuffer): number | Promise<number> {
+  if (!src) throw rt.mkThrowable("java/lang/NullPointerException", "src");
+  const file = channel.writable(), len = src.lim - src.pos;
+  if (len === 0) return 0;
+  const view = new Int8Array(src.ab, src.dv.byteOffset + src.pos, len);
+  const written = file instanceof JRAF ? rafWrite(file, view, 0, len) : vcallMaybe(file, "write", "([BII)V", view, 0, len);
+  return after(written, () => { src.pos += len; return len; });
 }
 rt.register({
   name: "java/nio/channels/FileChannel", ctor: JFileChannel,
@@ -1244,6 +1257,7 @@ rt.register({
       file.pos = Number(position);
       return after(channelRead(this, dst), (n) => { file.pos = saved; return n; });
     },
+    "write(Ljava/nio/ByteBuffer;)I": function (this: JFileChannel, src: JBuffer) { return channelWrite(this, src); },
     "force(Z)V": () => {},
     "tryLock()Ljava/nio/channels/FileLock;": fileLock,
     "tryLock(JJZ)Ljava/nio/channels/FileLock;": fileLock,
