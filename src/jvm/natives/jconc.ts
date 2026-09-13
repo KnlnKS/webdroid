@@ -233,6 +233,7 @@ class JFuture extends JObj {
 /** get(): the value, or the task's throwable as ExecutionException (cause = it, message = its toString) */
 async function futureGet(f: JFuture) {
   if (!f.cancelled && f.promise) await f.promise;
+  if (f instanceof JCompletable) return completableValue(f, false);
   if (f.cancelled) throw rt.mkThrowable("java/util/concurrent/CancellationException", null);
   if (f.error) throw await newObj("java/util/concurrent/ExecutionException", "(Ljava/lang/Throwable;)V", f.error);
   return f.value;
@@ -712,6 +713,7 @@ rt.register({ name: "java/util/concurrent/BlockingDeque", ctor: class extends JO
 defineException("java/util/concurrent/RejectedExecutionException", "java/lang/RuntimeException");
 defineException("java/util/concurrent/TimeoutException", "java/lang/Exception");
 defineException("java/util/concurrent/ExecutionException", "java/lang/Exception");
+defineException("java/util/concurrent/CompletionException", "java/lang/RuntimeException");
 defineException("java/util/concurrent/CancellationException", "java/lang/IllegalStateException");
 
 class JAtomicArr extends JObj { a: unknown[] = []; }
@@ -950,22 +952,57 @@ rt.register({
 // CompletableFuture: completed from outside, so the promise is armed by the constructor
 class JCompletable extends JFuture { settle: () => void = () => {}; }
 const completable = () => { const f = new JCompletable(); f.promise = new Promise<void>((r) => { f.settle = r; }); return f; };
-const settleWith = (f: JCompletable, value: unknown, error: unknown) => { if (f.done) return 0; f.value = value; f.error = error; f.done = 1; f.settle(); return 1; };
+const settleWith = (f: JCompletable, value: unknown, error: unknown) => { if (f.done) return 0; f.value = value; f.error = error; f.cancelled = rt.iof(error, "java/util/concurrent/CancellationException") ? 1 : 0; f.done = 1; f.settle(); return 1; };
+const completionError = (error: unknown) => rt.iof(error, "java/util/concurrent/CompletionException")
+  ? error : newObj("java/util/concurrent/CompletionException", "(Ljava/lang/Throwable;)V", error);
+async function completableValue(future: JCompletable, join: boolean) {
+  if (future.cancelled) throw future.error;
+  if (!future.error) return future.value;
+  if (join) throw await completionError(future.error);
+  const cause = rt.iof(future.error, "java/util/concurrent/CompletionException")
+    ? await vcall(future.error, "getCause", "()Ljava/lang/Throwable;") : null;
+  throw await newObj("java/util/concurrent/ExecutionException", "(Ljava/lang/Throwable;)V", cause ?? future.error);
+}
+class JAsyncSupply extends JObj {
+  constructor(public future: JCompletable, public supplier: unknown) { super(); }
+}
+rt.register({
+  name: "webdroid/AsyncSupply", ctor: JAsyncSupply,
+  ifaces: ["java/lang/Runnable", "java/util/concurrent/CompletableFuture$AsynchronousCompletionTask"],
+  methods: {
+    "run()V": async function (this: JAsyncSupply) {
+      if (this.future.done) return;
+      try { settleWith(this.future, await vcall(this.supplier, "get", "()Ljava/lang/Object;"), null); }
+      catch (error) { settleWith(this.future, null, await completionError(rt.jx(error))); }
+    },
+  },
+});
+let completionExecutor: JExecutor | null = null;
+async function supplyAsync(supplier: unknown, executor: unknown) {
+  if (supplier == null || executor == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  const future = completable();
+  rt.link("webdroid/AsyncSupply");
+  await vcall(executor, "execute", "(Ljava/lang/Runnable;)V", new JAsyncSupply(future, supplier));
+  return future;
+}
 rt.register({
   name: "java/util/concurrent/CompletableFuture", ctor: JCompletable, sup: "webdroid/Future",
   ifaces: ["java/util/concurrent/Future", "java/util/concurrent/CompletionStage"],
   methods: {
     "<init>()V": function (this: JCompletable) { this.promise = new Promise<void>((r) => { this.settle = r; }); },
     "static completedFuture(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;": (v: unknown) => { const f = completable(); settleWith(f, v, null); return f; },
+    "static supplyAsync(Ljava/util/function/Supplier;)Ljava/util/concurrent/CompletableFuture;": (supplier: unknown) =>
+      supplyAsync(supplier, completionExecutor ??= mkExecutor(Math.max(2, (globalThis.navigator?.hardwareConcurrency ?? 4) - 1))),
+    "static supplyAsync(Ljava/util/function/Supplier;Ljava/util/concurrent/Executor;)Ljava/util/concurrent/CompletableFuture;": supplyAsync,
     "complete(Ljava/lang/Object;)Z": function (this: JCompletable, v: unknown) { return settleWith(this, v, null); },
-    "completeExceptionally(Ljava/lang/Throwable;)Z": function (this: JCompletable, t: unknown) { return settleWith(this, null, t); },
-    "join()Ljava/lang/Object;": function (this: JCompletable) { return futureGet(this); },
-    "getNow(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JCompletable, d: unknown) { return this.done && !this.error ? this.value : d; },
+    "completeExceptionally(Ljava/lang/Throwable;)Z": function (this: JCompletable, t: unknown) { if (t == null) throw rt.mkThrowable("java/lang/NullPointerException", null); return settleWith(this, null, t); },
+    "join()Ljava/lang/Object;": async function (this: JCompletable) { if (!this.done) await this.promise; return completableValue(this, true); },
+    "getNow(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JCompletable, d: unknown) { return !this.done ? d : this.error ? completableValue(this, true) : this.value; },
     "isCompletedExceptionally()Z": function (this: JCompletable) { return this.done && this.error ? 1 : 0; },
-    "cancel(Z)Z": function (this: JCompletable) { if (this.done) return 0; this.cancelled = this.done = 1; this.settle(); return 1; },
+    "cancel(Z)Z": function (this: JCompletable) { return settleWith(this, null, rt.mkThrowable("java/util/concurrent/CancellationException", null)) || this.cancelled; },
   },
 });
-rt.markers("java/util/concurrent/CompletionStage");
+rt.markers("java/util/concurrent/CompletionStage", "java/util/concurrent/CompletableFuture$AsynchronousCompletionTask");
 
 class JFutureTask extends JFuture {
   callable: unknown = null;
