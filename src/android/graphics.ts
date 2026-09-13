@@ -233,14 +233,17 @@ rt.register({
       }
       hsv[0] = (h + 360) % 360; hsv[1] = mx ? d / mx : 0; hsv[2] = mx;
     },
-    "static HSVToColor([F)I": (hsv: Float32Array) => {
-      const [h, s, v] = [hsv[0], hsv[1], hsv[2]];
-      const c = v * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = v - c;
-      let [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
-      return (0xff000000 | (Math.round((r + m) * 255) << 16) | (Math.round((g + m) * 255) << 8) | Math.round((b + m) * 255)) | 0;
-    },
+    "static HSVToColor([F)I": (hsv: Float32Array) => hsvToColor(255, hsv),
+    "static HSVToColor(I[F)I": (alpha: number, hsv: Float32Array) => hsvToColor(alpha, hsv),
   },
 });
+
+function hsvToColor(alpha: number, hsv: Float32Array): number {
+  const [h, s, v] = [hsv[0], hsv[1], hsv[2]];
+  const c = v * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = v - c;
+  const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  return ((alpha << 24) | (Math.round((r + m) * 255) << 16) | (Math.round((g + m) * 255) << 8) | Math.round((b + m) * 255)) | 0;
+}
 
 const ROBOTO = "Roboto, sans-serif";
 export class JTypeface extends JObj {
