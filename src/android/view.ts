@@ -2,13 +2,13 @@ import { perf } from "../perf";
 import { TV } from "./axml";
 import { setInvalidateHook, JRect, JCanvas, JMatrix, matMul, rotM, type JPoint } from "./graphics";
 import { mangleMethod, jmethod, type JMethod, jarray } from "../jvm/abi";
-import { vcall, vcallMaybe, after, idHash } from "../jvm/natives/jlang";
+import { vcall, vcallMaybe, after, idHash, box, JFloat } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor } from "./drawable";
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme } from "./res";
 import { mainHandler, reportUncaught } from "./os";
-import type { JDisplayMetrics } from "./util";
+import { JProperty, type JDisplayMetrics } from "./util";
 import { csText } from "./text";
 import { device } from "../shell/config";
 import { rootWindowInsets, type JWindowInsets, sysIns } from "./windowinsets";
@@ -1772,6 +1772,7 @@ const vgMethods: NativeSpec["methods"] = {
     this.hierarchyChangeL = l;
   },
   "setClipChildren(Z)V": function (this: JViewGroup, v: number) { this.clipChildren = !!v; },
+  "getClipChildren()Z": function (this: JViewGroup) { return +this.clipChildren; },
   "setClipToPadding(Z)V": function (this: JViewGroup, v: number) { this.clipToPadding = !!v; },
   "getClipToPadding()Z": function (this: JViewGroup) { return this.clipToPadding ? 1 : 0; },
   "getDescendantFocusability()I": () => 0x20000,
@@ -2042,10 +2043,18 @@ rt.register({
   },
 });
 
+rt.register({ name: "webdroid/ViewAlphaProperty", ctor: class extends JProperty {}, sup: "android/util/Property", methods: {
+  "get(Ljava/lang/Object;)Ljava/lang/Object;": async (view: unknown) => box(JFloat, await vcall(view, "getAlpha", "()F")),
+  "set(Ljava/lang/Object;Ljava/lang/Object;)V": (view: unknown, value: JFloat) => vcall(view, "setAlpha", "(F)V", value.v),
+} });
 rt.register({
   name: "android/view/View", ctor: JView,
+  clinit: () => {
+    rt.link("android/view/View").ctor.s$ALPHA = Object.assign(rt.make("webdroid/ViewAlphaProperty"), { name: "alpha", type: rt.classFor("java/lang/Float") });
+  },
   ifaces: ["android/graphics/drawable/Drawable$Callback"],
   statics: {
+    ALPHA: null,
     VISIBLE: 0, INVISIBLE: 4, GONE: 8, NO_ID: -1,
     EMPTY_STATE_SET: new Int32Array(0), SELECTED_STATE_SET: Int32Array.of(0x10100a1),
     MEASURED_STATE_MASK: -0x1000000, MEASURED_SIZE_MASK: 0x00ffffff,

@@ -128,7 +128,7 @@ rt.register({
 
 // ── android.util.Property / IntProperty / FloatProperty: abstract get/set handles that
 // ObjectAnimator drives. The primitive subclasses unbox into the app's setValue override.
-class JProperty extends JObj { type: unknown = null; name = ""; }
+export class JProperty extends JObj { type: unknown = null; name = ""; }
 rt.register({
   name: "android/util/Property", ctor: JProperty,
   methods: {

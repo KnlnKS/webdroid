@@ -62,3 +62,19 @@ test("TimeAnimator starts at zero and keeps ticking beyond the inherited duratio
     expect(await vcall(animator, "isRunning", "()Z")).toBe(1);
   } finally { await vcall(animator, "cancel", "()V"); await frame(); }
 });
+
+test("View.ALPHA reads and writes through the view's virtual accessors", async () => {
+  class CustomAlpha extends JObj { value = 0.4; }
+  rt.register({ name: "test/CustomAlpha", ctor: CustomAlpha, sup: "android/view/View", methods: {
+    "getAlpha()F": function (this: CustomAlpha) { return this.value; },
+    "setAlpha(F)V": function (this: CustomAlpha, value: number) { this.value = value; },
+  } });
+  await rt.initClass(rt.link("android/view/View"));
+  const prop = rt.link("android/view/View").ctor.s$ALPHA, target = rt.make("test/CustomAlpha");
+  expect(await vcall(prop, "getName", "()Ljava/lang/String;")).toBe("alpha");
+  await vcall(prop, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", target, box(JFloat, 0.25));
+  const anim = scall("android/animation/ObjectAnimator", "ofFloat", "(Ljava/lang/Object;Landroid/util/Property;[F)Landroid/animation/ObjectAnimator;", target, prop, new Float32Array([1]));
+  await vcall(anim, "start", "()V");
+  expect(anim.from).toBe(0.25);
+  await vcall(anim, "cancel", "()V");
+});
