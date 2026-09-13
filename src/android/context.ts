@@ -125,6 +125,7 @@ const SERVICE_CLASS: Record<string, string> = {
   dropbox: "android/os/DropBoxManager",
   storage: "android/os/storage/StorageManager",
   netstats: "android/app/usage/NetworkStatsManager",
+  measurement_service: "android/adservices/measurement/MeasurementManager",
   wifi: "android/net/wifi/WifiManager",
   telephony_subscription_service: "android/telephony/SubscriptionManager",
 };
@@ -222,7 +223,10 @@ export const contextMethods: NativeSpec["methods"] = {
     const n = cls?.ci?.name ?? "";
     return systemService(this, SERVICE_NAME.get(n) ?? n.split("/").pop() ?? "");
   },
-  "getSystemServiceName(Ljava/lang/Class;)Ljava/lang/String;": (cls: any) => cls?.ci?.name?.split("/").pop() ?? null,
+  "getSystemServiceName(Ljava/lang/Class;)Ljava/lang/String;": (cls: { ci?: { name?: string } } | null) => {
+    const name = cls?.ci?.name ?? "";
+    return SERVICE_NAME.get(name) ?? null;
+  },
   "getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;": function (this: JContext, name: string) {
     return getPrefs(this.$host.pkg, name);
   },
