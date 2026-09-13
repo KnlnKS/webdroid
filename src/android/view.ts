@@ -329,6 +329,7 @@ export class JView extends JObj {
   keyboardCluster = false;
   touchBlocksFocus = false;
   pointerIcon: JPointerIcon | null = null;
+  touchDelegate: JObj | null = null;
   left = 0; top = 0; right = 0; bottom = 0;
   static $nextDrawingId = 0;
   measuredW = 0; measuredH = 0;
@@ -1109,9 +1110,12 @@ const viewMethods: NativeSpec["methods"] = {
   "setOverScrollMode(I)V": function (this: JView, m: number) { this.overScrollMode = m; },
   "getOverScrollMode()I": function (this: JView) { return this.overScrollMode; },
   "getViewTreeObserver()Landroid/view/ViewTreeObserver;": function (this: JView) { return getVTO(this); },
+  "setTouchDelegate(Landroid/view/TouchDelegate;)V": function (this: JView, delegate: JObj | null) { this.touchDelegate = delegate; },
+  "getTouchDelegate()Landroid/view/TouchDelegate;": function (this: JView) { return this.touchDelegate; },
   "onTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JView, ev: JMotionEvent) {
+    if (!this.enabled) return +(this.clickable || this.longClickable);
+    if (this.touchDelegate && await vcall(this.touchDelegate, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", ev)) return 1;
     if (!this.clickable && !this.longClickable) return 0;
-    if (!this.enabled) return 1;
     switch (ev.action & 0xff) {
       case 0: // DOWN
         this.pressed = true;
@@ -1420,7 +1424,7 @@ const viewMethods: NativeSpec["methods"] = {
     "onRestoreInstanceState(Landroid/os/Parcelable;)V", "saveHierarchyState(Landroid/util/SparseArray;)V",
     "restoreHierarchyState(Landroid/util/SparseArray;)V", "setDrawingCacheEnabled(Z)V",
     "addFocusables(Ljava/util/ArrayList;II)V", "addTouchables(Ljava/util/ArrayList;)V", "cancelPendingInputEvents()V",
-    "setTouchDelegate(Landroid/view/TouchDelegate;)V", "setAccessibilityPaneTitle(Ljava/lang/CharSequence;)V",
+    "setAccessibilityPaneTitle(Ljava/lang/CharSequence;)V",
     "setStateDescription(Ljava/lang/CharSequence;)V", "setAccessibilityHeading(Z)V", "setScreenReaderFocusable(Z)V",
     "setDuplicateParentStateEnabled(Z)V", "setAddStatesFromChildren(Z)V", "onWindowFocusChanged(Z)V",
     "dispatchWindowFocusChanged(Z)V", "onFocusChanged(ZILandroid/graphics/Rect;)V", "setRotationX(F)V",
@@ -1982,11 +1986,32 @@ rt.register({
   },
 });
 rt.markers("android/view/autofill/AutofillId");
+class JTouchDelegate extends JObj {
+  bounds = new JRect();
+  slopBounds = new JRect();
+  view!: JView;
+  slop = 0;
+  targeted = false;
+}
 rt.register({
-  name: "android/view/TouchDelegate", ctor: class extends JObj {},
+  name: "android/view/TouchDelegate", ctor: JTouchDelegate,
   methods: {
-    "<init>(Landroid/graphics/Rect;Landroid/view/View;)V": () => {},
-    "onTouchEvent(Landroid/view/MotionEvent;)Z": () => 0,
+    "<init>(Landroid/graphics/Rect;Landroid/view/View;)V": function (this: JTouchDelegate, bounds: JRect, view: JView) {
+      this.bounds = bounds; this.view = view; this.slop = device.touchSlop;
+      Object.assign(this.slopBounds, { left: bounds.left - this.slop, top: bounds.top - this.slop, right: bounds.right + this.slop, bottom: bounds.bottom + this.slop });
+    },
+    "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JTouchDelegate, ev: JMotionEvent) {
+      const x = Math.trunc(ev.x), y = Math.trunc(ev.y), action = ev.action & 255;
+      const contains = (b: JRect) => x >= b.left && y >= b.top && x < b.right && y < b.bottom;
+      let send = false, hit = true;
+      if (action === 0) send = this.targeted = contains(this.bounds);
+      else if (action === 1 || action === 2 || action === 5 || action === 6) { send = this.targeted; hit = contains(this.slopBounds); }
+      else if (action === 3) { send = this.targeted; this.targeted = false; }
+      if (!send) return 0;
+      ev.x = hit ? this.view.width() >> 1 : -this.slop * 2;
+      ev.y = hit ? this.view.height() >> 1 : -this.slop * 2;
+      return guardCall(this.view, M_dispatchTouch, ev);
+    },
   },
 });
 // ViewTreeObserver callback interfaces — apps `implements` these directly (Compose's
