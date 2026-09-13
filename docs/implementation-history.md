@@ -2175,3 +2175,9 @@ The visible UI probe now excludes INVISIBLE ancestors as well as GONE ancestors.
 autocomplete container while leaving individual suggestion children VISIBLE; uiTree and
 locateText previously reported these invisible suggestions. A fresh Chrome route-entry probe
 now reports only the visible search controls. The full diagnostic tree retains hidden nodes.
+
+AOSP retains mAttachInfo through onDetachedFromWindow and attach-state listeners. Webdroid
+cleared its attached flag before either callback, causing Maps' AndroidViewHolder to reject
+its own detach-time read observation. Detachment now clears attachment after the callbacks
+and retains the dispatch thread through child and listener awaits. A suspended child/parent
+ordering test and typecheck pass; app verification follows the next server restart.

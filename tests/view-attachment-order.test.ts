@@ -3,10 +3,42 @@ import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { mangleMethod } from "../src/jvm/abi";
 import { newObj, vcall, curThread, mainThread, setCurThread, JThread } from "../src/jvm/natives/jlang";
-import { JView, dispatchAttached } from "../src/android/view";
+import { JView, dispatchAttached, dispatchDetached } from "../src/android/view";
 import { onMain } from "../src/android/mainloop";
 
 rt.linkNatives();
+test("detachment retains attachment and thread identity through child and listener callbacks", async () => {
+  const parent = await newObj("android/widget/FrameLayout", "(Landroid/content/Context;)V", null);
+  const child = await newObj("android/view/View", "(Landroid/content/Context;)V", null);
+  if (!(parent instanceof JView) || !(child instanceof JView)) throw new Error("Invalid view delegates");
+  await vcall(parent, "addView", "(Landroid/view/View;)V", child);
+  await dispatchAttached(parent);
+  const thread = new JThread();
+  const events: string[] = [];
+  for (const [name, view] of [["child", child], ["parent", parent]] as const) {
+    Object.assign(view, {
+      [mangleMethod("onDetachedFromWindow", "()V")]: async () => {
+        expect(curThread).toBe(thread);
+        expect(view.attached).toBe(true);
+        expect(parent.attached).toBe(true);
+        events.push(name);
+        await Promise.resolve();
+      },
+    });
+    await vcall(view, "addOnAttachStateChangeListener", "(Landroid/view/View$OnAttachStateChangeListener;)V", {
+      [mangleMethod("onViewDetachedFromWindow", "(Landroid/view/View;)V")]: () => {
+        expect(curThread).toBe(thread);
+        expect(view.attached).toBe(true);
+        events.push(`${name} listener`);
+      },
+    });
+  }
+  await dispatchDetached(parent, thread);
+  expect(events).toEqual(["child", "child listener", "parent", "parent listener"]);
+  expect(parent.attached).toBe(false);
+  expect(child.attached).toBe(false);
+  expect(curThread).toBe(mainThread);
+});
 test("attachment callbacks retain their dispatch thread across suspension", async () => {
   const view = rt.make("android/view/View");
   if (!(view instanceof JView)) throw new Error("Invalid view delegate");

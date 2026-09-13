@@ -239,7 +239,6 @@ const M_onSizeChanged = mangleMethod("onSizeChanged", "(IIII)V");
 const M_onTouchEvent = mangleMethod("onTouchEvent", "(Landroid/view/MotionEvent;)Z");
 const M_onIntercept = mangleMethod("onInterceptTouchEvent", "(Landroid/view/MotionEvent;)Z");
 const M_dispatchTouch = mangleMethod("dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z");
-const M_onDetached = mangleMethod("onDetachedFromWindow", "()V");
 const M_onConfigChanged = mangleMethod("onConfigurationChanged", "(Landroid/content/res/Configuration;)V");
 const M_drawableStateChanged = mangleMethod("drawableStateChanged", "()V");
 const M_onCreateDrawableState = mangleMethod("onCreateDrawableState", "(I)[I");
@@ -1627,12 +1626,12 @@ export async function dispatchConfigurationChanged(v: JView, cfg: unknown) {
   try { await guardMaybe(v, M_onConfigChanged, cfg); } catch (e) { reportUncaught(e); }
   if (v instanceof JViewGroup) for (const c of [...v.children]) await dispatchConfigurationChanged(c, cfg);
 }
-export async function dispatchDetached(v: JView) {
+export async function dispatchDetached(v: JView, thread = curThread) {
   if (!v.attached) return;
+  if (v instanceof JViewGroup) for (const c of [...v.children]) await dispatchDetached(c, thread);
+  await vcallOn(thread, v, "onDetachedFromWindow", "()V");
+  for (const l of [...v.attachLs]) await vcallOn(thread, l, "onViewDetachedFromWindow", "(Landroid/view/View;)V", v);
   v.attached = false;
-  if (v instanceof JViewGroup) for (const c of [...v.children]) await dispatchDetached(c);
-  await guardMaybe(v, M_onDetached);
-  for (const l of [...v.attachLs]) await vcall(l, "onViewDetachedFromWindow", "(Landroid/view/View;)V", v);
   if (!v.parent) await vtoMap.get(v)?.dispatchWindowAttached(false);
 }
 
