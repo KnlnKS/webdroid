@@ -22,6 +22,7 @@ test("SpannableString.valueOf preserves identity and copied spans", async () => 
   const copy = await scall("android/text/SpannableString", "valueOf", "(Ljava/lang/CharSequence;)Landroid/text/SpannableString;", await newObj("android/text/SpannedString", "(Ljava/lang/CharSequence;)V", source));
   expect(await vcall(copy, "toString", "()Ljava/lang/String;")).toBe("hello");
   expect(await vcall(copy, "getSpanStart", "(Ljava/lang/Object;)I", span)).toBe(1);
+  expect(await scall("android/text/Html", "toHtml", "(Landroid/text/Spanned;I)Ljava/lang/String;", copy, 0)).toBe("hello");
 });
 
 test("View context clickability is independently mutable", async () => {
@@ -45,6 +46,13 @@ test("View retains outline shadow colors", async () => {
   await vcall(view, "setOutlineSpotShadowColor", "(I)V", 0xff445566 | 0);
   expect(await vcall(view, "getOutlineAmbientShadowColor", "()I")).toBe(0xff112233 | 0);
   expect(await vcall(view, "getOutlineSpotShadowColor", "()I")).toBe(0xff445566 | 0);
+});
+
+test("ViewGroup retains whether child states contribute", async () => {
+  const group = await newObj("android/widget/FrameLayout", "(Landroid/content/Context;)V", null);
+  expect(await vcall(group, "addStatesFromChildren", "()Z")).toBe(0);
+  await vcall(group, "setAddStatesFromChildren", "(Z)V", 1);
+  expect(await vcall(group, "addStatesFromChildren", "()Z")).toBe(1);
 });
 
 test("PaintDrawable owns a rectangular shape and supports rounded corners", async () => {
@@ -219,6 +227,11 @@ test("AbstractExecutorService submit returns the virtual newTaskFor result", asy
   expect(rt.iof(future, "java/util/concurrent/FutureTask")).toBe(1);
   expect(rt.iof(future, "java/lang/Runnable")).toBe(1);
   expect(await vcall(future, "get", "()Ljava/lang/Object;")).toBe("done");
+  const callable = scall("java/util/concurrent/Executors", "callable", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Callable;", runnable);
+  const tasks = await newObj("java/util/ArrayList");
+  await vcall(tasks, "add", "(Ljava/lang/Object;)Z", callable);
+  const futures = await vcall(executor, "invokeAll", "(Ljava/util/Collection;)Ljava/util/List;", tasks);
+  expect(await vcall(futures, "size", "()I")).toBe(1);
 });
 
 test("sets retain their intersection and a non-HDR display reports no modes", async () => {

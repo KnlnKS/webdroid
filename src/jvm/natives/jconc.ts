@@ -311,10 +311,35 @@ const executorMethods: NativeSpec["methods"] = {
     await vcall(this, "execute", "(Ljava/lang/Runnable;)V", task);
     return task;
   },
-  "submit(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;": async function (this: JExecutor, c: unknown) {
+    "submit(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;": async function (this: JExecutor, c: unknown) {
     const task = await vcall(this, "newTaskFor", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;", c);
     await vcall(this, "execute", "(Ljava/lang/Runnable;)V", task);
-    return task;
+      return task;
+    },
+  "invokeAll(Ljava/util/Collection;)Ljava/util/List;": async function (this: JExecutor, tasks: JList) {
+    if (tasks == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    const futures = newArrayList();
+    for (const task of tasks.a) futures.a.push(await vcall(this, "submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;", task));
+    for (const future of futures.a) {
+      try { await vcall(future, "get", "()Ljava/lang/Object;"); } catch {}
+    }
+    return futures;
+  },
+  "invokeAll(Ljava/util/Collection;JLjava/util/concurrent/TimeUnit;)Ljava/util/List;": async function (this: JExecutor, tasks: JList, timeout: bigint, unit: JTimeUnit) {
+    if (tasks == null || unit == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    const futures = newArrayList();
+    for (const task of tasks.a) futures.a.push(await vcall(this, "submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;", task));
+    const deadline = performance.now() + Number(timeout) * unit.ms;
+    for (let i = 0; i < futures.a.length; i++) {
+      const remaining = Math.max(0, deadline - performance.now());
+      try { await vcall(futures.a[i], "get", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;", BigInt(Math.ceil(remaining * 1e6)), TUS.NANOSECONDS); }
+      catch (e) {
+        if (!rt.iof(e, "java/util/concurrent/TimeoutException")) continue;
+        for (; i < futures.a.length; i++) await vcall(futures.a[i], "cancel", "(Z)Z", 1);
+        break;
+      }
+    }
+    return futures;
   },
   "shutdown()V": function (this: JExecutor) { this.shut = true; },
   "shutdownNow()Ljava/util/List;": function (this: JExecutor) {
@@ -475,6 +500,11 @@ rt.register({
         c.r = r; c.result = result;
         return c;
       },
+    "static callable(Ljava/lang/Runnable;)Ljava/util/concurrent/Callable;": (r: unknown) => {
+      const c = new (rt.link("webdroid/RunnableCallable").ctor as typeof JRunnableCallable)();
+      c.r = r;
+      return c;
+    },
     "static newSingleThreadExecutor()Ljava/util/concurrent/ExecutorService;": mkExecutor,
     "static newSingleThreadExecutor(Ljava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ExecutorService;": (factory: unknown) => mkExecutor(1, factory),
     "static newFixedThreadPool(I)Ljava/util/concurrent/ExecutorService;": mkExecutor,
