@@ -1,6 +1,6 @@
 import { rt } from "../jvm/runtime";
 import { jmethod, mangleMethod } from "../jvm/abi";
-import { vcall, curThread, vcallOn } from "../jvm/natives/jlang";
+import { vcall, curThread, vcallOn, newObj } from "../jvm/natives/jlang";
 import { JFrameLayout } from "./layouts";
 import { JView, type JLayoutParams, initViewFromCtx } from "./view";
 import { AID, obtainStyled, rvInt, type JAttrSet } from "./res";
@@ -88,4 +88,23 @@ rt.register({ name: "android/widget/ViewAnimator", ctor: JViewAnimator, sup: "an
   "getOutAnimation()Landroid/view/animation/Animation;": function (this: JViewAnimator) { return this.outAnimation; },
   "setInAnimation(Landroid/content/Context;I)V": async function (this: JViewAnimator, context: unknown, id: number) { this.inAnimation = await vcall(rt.link("android/view/animation/AnimationUtils").ctor, "loadAnimation", "(Landroid/content/Context;I)Landroid/view/animation/Animation;", context, id); },
   "setOutAnimation(Landroid/content/Context;I)V": async function (this: JViewAnimator, context: unknown, id: number) { this.outAnimation = await vcall(rt.link("android/view/animation/AnimationUtils").ctor, "loadAnimation", "(Landroid/content/Context;I)Landroid/view/animation/Animation;", context, id); },
+} });
+
+rt.markers("android/widget/ViewSwitcher$ViewFactory");
+rt.register({ name: "android/widget/ViewSwitcher", ctor: class extends JViewAnimator {}, sup: "android/widget/ViewAnimator", methods: {
+  "<init>(Landroid/content/Context;)V": init,
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": init,
+  "addView(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V": function (this: JViewAnimator, child: JView, index: number, lp: JLayoutParams) {
+    if (this.children.length >= 2) throw rt.mkThrowable("java/lang/IllegalStateException", "Can't add more than 2 views to a ViewSwitcher");
+    return jmethod(JViewAnimator.prototype, mangleMethod("addView", "(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V"))!.call(this, child, index, lp);
+  },
+  "getNextView()Landroid/view/View;": function (this: JViewAnimator) { return this.children[this.displayed === 0 ? 1 : 0] ?? null; },
+  "setFactory(Landroid/widget/ViewSwitcher$ViewFactory;)V": async function (this: JViewAnimator, factory: unknown) {
+    for (let i = 0; i < 2; i++) {
+      const child = await vcall(factory, "makeView", "()Landroid/view/View;");
+      const lp = await vcall(child, "getLayoutParams", "()Landroid/view/ViewGroup$LayoutParams;") ?? await newObj("android/widget/FrameLayout$LayoutParams", "(II)V", -1, -2);
+      await vcall(this, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", child, lp);
+    }
+  },
+  "reset()V": async function (this: JViewAnimator) { this.first = true; for (const child of this.children) await vcall(child, "setVisibility", "(I)V", 8); },
 } });

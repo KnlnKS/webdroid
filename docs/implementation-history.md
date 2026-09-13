@@ -2163,3 +2163,10 @@ error. A temporary-profile window of installed full Chrome renders the home map 
 JIT disabled (chrome-isolated-home.png, boot 3683 ms under concurrent diagnostic load), while
 the reused Browser Use session remained blank and much slower. Profile, instrumentation and
 saved state differ; this comparison does not isolate a cause or constitute a benchmark.
+
+Submitting Ferry Building with the IME action reaches route construction in both full Chrome
+and headless Maps. The subsequent missing ViewSwitcher is implemented as a two-child
+ViewAnimator with factory creation, next-view lookup and reset. The comparator overload of
+Arrays.binarySearch now reuses its existing binary-search implementation. Focused tests verify
+a suspended comparator and insertion points, plus ViewSwitcher factory/limit/reset behavior;
+typecheck passes. The app pass for these additions remains pending.
