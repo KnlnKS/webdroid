@@ -355,7 +355,7 @@ export class JView extends JObj {
   scaleXv = 1; scaleYv = 1;
   rotationV = 0;
   pivotXv: number | null = null; pivotYv: number | null = null;
-  clickable = false; longClickable = false;
+  clickable = false; longClickable = false; contextClickable = false;
   enabled = true; pressed = false; selected = false; activated = false; focused = false;
   focusable = false; focusableInTouchMode = false;
   autoHandwritingEnabled = true;
@@ -890,6 +890,8 @@ const viewMethods: NativeSpec["methods"] = {
   },
   "isClickable()Z": function (this: JView) { return this.clickable ? 1 : 0; },
   "setClickable(Z)V": function (this: JView, c: number) { this.clickable = !!c; },
+  "isContextClickable()Z": function (this: JView) { return +this.contextClickable; },
+  "setContextClickable(Z)V": function (this: JView, c: number) { this.contextClickable = !!c; },
   "setLongClickable(Z)V": function (this: JView, c: number) { this.longClickable = !!c; },
   "isLongClickable()Z": function (this: JView) { return this.longClickable ? 1 : 0; },
   "isPressed()Z": function (this: JView) { return this.pressed ? 1 : 0; },
