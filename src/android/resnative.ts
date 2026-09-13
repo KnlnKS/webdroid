@@ -25,6 +25,12 @@ function openRawResource(this: JResources, id: number, value = new JTypedValue()
   fillTypedValue(this.host, { t: TV.REFERENCE, d: file.id }, value);
   return streamOf(bytes);
 }
+function openRawResourceFd(this: JResources, id: number) {
+  const file = this.host.pathOf(id);
+  const bytes = file?.arsc.files(file.path);
+  if (!file || !bytes) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Resource 0x" + id.toString(16));
+  return mkAssetFd(bytes);
+}
 /** the app's Resources double as the system ones: framework attrs resolve through the same table */
 let systemRes: JResources | null = null;
 export function mkJResources(host: Resources, system = true): JResources {
@@ -381,6 +387,7 @@ const resMethods: NativeSpec["methods"] = {
   },
   "openRawResource(I)Ljava/io/InputStream;": openRawResource,
   "openRawResource(ILandroid/util/TypedValue;)Ljava/io/InputStream;": openRawResource,
+  "openRawResourceFd(I)Landroid/content/res/AssetFileDescriptor;": openRawResourceFd,
   "obtainAttributes(Landroid/util/AttributeSet;[I)Landroid/content/res/TypedArray;": function (this: JResources, set: JAttrSet | null, attrs: Int32Array) {
     return obtainStyled(this.host, null, set, attrs, 0, 0);
   },
