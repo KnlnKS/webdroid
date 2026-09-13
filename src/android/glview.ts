@@ -148,7 +148,15 @@ rt.markers("android/opengl/GLSurfaceView$Renderer", "android/opengl/GLSurfaceVie
 // (JView.surfaceLayer). SurfaceHolder callbacks fire on the main looper once the view has a size,
 // as SurfaceFlinger's surface creation does. The Java EGL10 and the native libEGL both bind to
 // these surfaces (glSurfaces), so there is exactly one drawing buffer per SurfaceView.
-export interface GlSurface { view: JView | null; width: number; height: number; present: ImageBitmap | VideoFrame | null; frames: number; onFrame?: () => void }
+export interface GlSurface {
+  view: JView | null;
+  width: number;
+  height: number;
+  present: ImageBitmap | VideoFrame | null;
+  frames: number;
+  presentationTimeNanos?: bigint;
+  onFrame?: () => void;
+}
 export function presentSurface(surface: GlSurface, frame: ImageBitmap | VideoFrame): void {
   surface.present?.close();
   surface.present = frame;

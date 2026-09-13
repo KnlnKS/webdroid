@@ -32,7 +32,7 @@ export function eglInit(): void {
     eglBindAPI: () => 1, eglQueryAPI: () => 0x30a0,
     eglQueryString: (_c, a) => {
       a.i(); const n = a.i();
-      return cstr(n === 0x3053 ? "webdroid" : n === 0x3054 ? "1.5" : n === 0x3055 ? "EGL_KHR_create_context EGL_KHR_surfaceless_context" : n === 0x308d ? "OpenGL_ES" : "");
+      return cstr(n === 0x3053 ? "webdroid" : n === 0x3054 ? "1.5" : n === 0x3055 ? "EGL_ANDROID_presentation_time EGL_KHR_create_context EGL_KHR_surfaceless_context" : n === 0x308d ? "OpenGL_ES" : "");
     },
     eglGetConfigs: (_c, a) => { a.i(); const cfgs = a.p(), size = a.i(), num = a.p(); if (cfgs && size > 0) mem.st32(cfgs, 1); if (num) mem.st32(num, 1); return 1; },
     eglChooseConfig: (_c, a) => {
@@ -88,6 +88,12 @@ export function eglInit(): void {
       a.i(); const s = surfaces[a.i()], c = glSurfaces.current;
       if (!s || !c || c.target !== s) { err = EGL_BAD_SURFACE; return 0; }
       return c.swap().then(() => 1);
+    },
+    eglPresentationTimeANDROID: (_c, a) => {
+      a.i(); const s = surfaces[a.i()], time = a.l();
+      if (!s) { err = EGL_BAD_SURFACE; return 0; }
+      s.presentationTimeNanos = time;
+      return 1;
     },
     eglGetCurrentContext: () => { const c = glSurfaces.current; return c ? Math.max(0, contexts.indexOf(c)) : 0; },
     eglGetCurrentDisplay: () => 1,
