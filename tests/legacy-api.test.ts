@@ -38,6 +38,12 @@ test("View accepts a generic motion listener", async () => {
   await expect(vcall(view, "setOnGenericMotionListener", "(Landroid/view/View$OnGenericMotionListener;)V", new JObj())).resolves.toBeUndefined();
 });
 
+test("DataSetObserver base callbacks are no-ops", async () => {
+  const observer = await newObj("android/database/DataSetObserver", "()V");
+  await expect(vcall(observer, "onChanged", "()V")).resolves.toBeUndefined();
+  await expect(vcall(observer, "onInvalidated", "()V")).resolves.toBeUndefined();
+});
+
 test("EditText retains private IME options", async () => {
   const edit = await newObj("android/widget/EditText", "(Landroid/content/Context;)V", null);
   await vcall(edit, "setPrivateImeOptions", "(Ljava/lang/String;)V", "com.example.mode=test");

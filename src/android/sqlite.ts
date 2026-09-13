@@ -676,7 +676,7 @@ rt.register({ name: "android/database/sqlite/SQLiteDatabase", ctor: JSQLiteDatab
 rt.markers("android/database/sqlite/SQLiteDatabase$CursorFactory");
 rt.register({ name: "android/database/ContentObserver", ctor: class extends JObj {},
   methods: { "<init>(Landroid/os/Handler;)V": function () {} } });
-rt.register({ name: "android/database/DataSetObserver", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
+rt.register({ name: "android/database/DataSetObserver", ctor: class extends JObj {}, methods: { ...noops("<init>()V", "onChanged()V", "onInvalidated()V") } });
 rt.register({
   name: "android/database/DatabaseUtils", ctor: class extends JObj {},
   methods: {
