@@ -69,6 +69,10 @@ rt.register({
     },
   },
 });
+rt.register({
+  name: "android/app/Instrumentation", ctor: class extends JObj {},
+  methods: { "<init>()V": function () {} },
+});
 export class JActivity extends JContextWrapper {
   window = new JWindow();
   intent: JIntent | null = null;

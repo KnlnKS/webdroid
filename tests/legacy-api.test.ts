@@ -131,6 +131,11 @@ test("reached platform queries return device state and default WebView identity"
   expect(await vcall(rt.classFor("java/lang/String"), "getAnnotations", "()[Ljava/lang/annotation/Annotation;")).toHaveLength(0);
 });
 
+test("Instrumentation is a constructible framework class", async () => {
+  expect(rt.link("android/app/Instrumentation").stub).toBe(false);
+  expect(await newObj("android/app/Instrumentation")).toBeInstanceOf(rt.link("android/app/Instrumentation").ctor);
+});
+
 test("Runtime.exec(String) tokenizes the program and reports the unavailable process", async () => {
   const runtime = await scall("java/lang/Runtime", "getRuntime", "()Ljava/lang/Runtime;");
   await expect(vcall(runtime, "exec", "(Ljava/lang/String;)Ljava/lang/Process;", "getprop ro.product.cpu.abi"))
