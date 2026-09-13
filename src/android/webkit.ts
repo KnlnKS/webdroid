@@ -12,18 +12,11 @@ import { mkUri } from "./net";
 import { appHost } from "./apphost";
 import { webCookies, thirdPartyCookies } from "./cookies";
 import { WebBridge, type WebInterfaces } from "../shell/webbridge";
+import { EXT_MIME, MIME_EXT } from "../mime";
 import { WEB_INJECT } from "../shell/webinject";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
 
-const EXT_MIME: Record<string, string> = {
-  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
-  html: "text/html", htm: "text/html", css: "text/css", js: "text/javascript", json: "application/json", xml: "text/xml",
-  csv: "text/csv", txt: "text/plain", pdf: "application/pdf", zip: "application/zip", mp4: "video/mp4", mp3: "audio/mpeg",
-  apk: "application/vnd.android.package-archive", db: "application/octet-stream",
-};
-const MIME_EXT: Record<string, string> = {};
-for (const [e, m] of Object.entries(EXT_MIME)) MIME_EXT[m] ??= e;
 rt.register({
   name: "android/webkit/MimeTypeMap", ctor: class extends JObj {},
   methods: {

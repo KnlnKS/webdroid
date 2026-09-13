@@ -8,6 +8,7 @@
 // verifier needs and nothing more, so an app that PINS a certificate will correctly fail rather
 // than be told a comforting lie.
 import { rt, JObj, type NativeSpec } from "../runtime";
+import { mimeFromFilename } from "../../mime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
 import { stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
@@ -673,6 +674,7 @@ rt.register({
   name: "java/net/URLConnection", ctor: JURLConnection,
   fields: { connected: "connected", url: "url", doInput: "doIn", doOutput: "doOut", useCaches: "useCaches" },
   methods: {
+    "static guessContentTypeFromName(Ljava/lang/String;)Ljava/lang/String;": (name: string | null) => mimeFromFilename(name ?? rt.npe()),
     "<init>(Ljava/net/URL;)V": function (this: JURLConnection, u: JURL) { this.url = u; },
     "connect()V": async function (this: JURLConnection) { await this.connect(); },
     "getURL()Ljava/net/URL;": function (this: JURLConnection) { return this.url; },
