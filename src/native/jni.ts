@@ -7,7 +7,7 @@ import { Cpu, cpuFor, type CallArg } from "./cpu";
 import { rt, JObj, type ClassInfo, type Runtime } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, splitSig, u8, primElem } from "../jvm/abi";
 import { curThread, JClass, stackTraceText } from "../jvm/natives/jlang";
-import { JCtor, JMethod, classCtors, mkMethod } from "../jvm/natives/jreflect";
+import { JCtor, JMethod, classCtors, mkMethod, methodAnnotations } from "../jvm/natives/jreflect";
 import { JBuffer, directBufferAddress, nativeByteBuffer } from "../jvm/natives/jnio";
 const enc = new TextEncoder();
 
@@ -99,7 +99,7 @@ function fieldId(info: ClassInfo, prop: string, type: string, isStatic: boolean)
   return id;
 }
 
-interface Registered { info: ClassInfo; cls: string; name: string; sig: string; fn: number; isStatic: boolean; params: string[]; ret: string; label: string }
+interface Registered { info: ClassInfo; cls: string; name: string; sig: string; fn: number; isStatic: boolean; critical: boolean; params: string[]; ret: string; label: string }
 export const registered: Registered[] = [];
 
 const clsName = (o: unknown): string => {
@@ -198,9 +198,9 @@ async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unk
   const prevCur = cur, previousRuntime = cpu.nativeRuntime;
   cpu.nativeRuntime = r.info.owner ?? rt;
   cur = cpu;
-  pushFrame(cpu);
+  if (!r.critical) pushFrame(cpu);
   try {
-    const list: CallArg[] = [envFor(cpu), toRef(r.isStatic ? cpu.nativeRuntime.classFor(r.cls) : self)];
+    const list: CallArg[] = r.critical ? [] : [envFor(cpu), toRef(r.isStatic ? cpu.nativeRuntime.classFor(r.cls) : self)];
     for (let i = 0; i < params.length; i++) {
       const t = params[i], v = args[i];
       switch (t[0]) {
@@ -235,7 +235,7 @@ async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unk
     const exc = cpu.exc;
     if (exc) { cpu.exc = null; throw exc; }
     return out;
-  } finally { popFrame(cpu); cpu.nativeRuntime = previousRuntime; cur = prevCur; }
+  } finally { if (!r.critical) popFrame(cpu); cpu.nativeRuntime = previousRuntime; cur = prevCur; }
 }
 
 let envTable = 0;
@@ -515,7 +515,8 @@ function registerNative(info: ClassInfo, name: string, sig: string, fn: number):
     for (const m of def.directMethods) { const mr = dex.method(m.methodIdx); if (mr.name === name && dex.methodDesc(m.methodIdx) === sig) { isStatic = (m.flags & 0x8) !== 0; break; } }
   }
   const { params, ret } = parseMethodDesc(sig);
-  const rec: Registered = { info, cls: info.name, name, sig, fn, isStatic, params, ret, label: info.name.split("/").pop() + "." + name };
+  const critical = isStatic && methodAnnotations(info, name, sig).some(a => a.type === "dalvik/annotation/optimization/CriticalNative");
+  const rec: Registered = { info, cls: info.name, name, sig, fn, isStatic, critical, params, ret, label: info.name.split("/").pop() + "." + name };
   registered.push(rec);
   (info.owner ?? rt).registerJni(info.name, name + sig, function (this: unknown, ...args: unknown[]) {
     return callGuestNative(cpuFor(curThread), rec, this, args);

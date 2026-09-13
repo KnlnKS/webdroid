@@ -36,6 +36,9 @@ function classAnno(info: ClassInfo): ClassAnno {
   annoCache.set(info, a);
   return a;
 }
+export function methodAnnotations(info: ClassInfo, name: string, desc: string): EncAnnotation[] {
+  return classAnno(info).methodsByRef.get(name + desc) ?? [];
+}
 
 /** a descriptor as Java spells the type: int, java.lang.String, byte[] */
 function javaTypeName(d: string): string {
@@ -631,7 +634,7 @@ rt.register({
       const val = r instanceof Promise ? await r : r;
       return boxReturn(parseMethodDesc(this.desc).ret, val);
     },
-    ...annotatedElement(function (this: JMethod) { return classAnno(this.owner).methodsByRef.get(this.name + this.desc) ?? []; }),
+    ...annotatedElement(function (this: JMethod) { return methodAnnotations(this.owner, this.name, this.desc); }),
     "getParameterAnnotations()[[Ljava/lang/annotation/Annotation;": function (this: JMethod) { return paramAnnotations(this.owner, this.name, this.desc); },
     "getGenericReturnType()Ljava/lang/reflect/Type;": function (this: JMethod) { return genericMethodTypes(this.owner, this.name, this.desc).ret; },
     // Java's own spelling, which a JNI caller parses for the name and parameter types
