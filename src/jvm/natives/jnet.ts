@@ -665,11 +665,16 @@ class JURLConnection extends JObj {
   inStream: JInputStream | null = null;
   ac: AbortController | null = null;
   res: HttpRes | null = null;
+  pending: Promise<HttpRes> | null = null;
   /** The one fetch. Everything that needs the response funnels through here, which is what makes
    *  the connection lazy the way AOSP's is. The whole body is awaited: the VM can suspend, a
    *  Java read() cannot fail half-way, and the proxy has already removed the framing. */
-  async connect(): Promise<HttpRes> {
-    if (this.res) return this.res;
+  connect(): Promise<HttpRes> {
+    if (this.res) return Promise.resolve(this.res);
+    return this.pending ??= this.fetchResponse().finally(() => { this.pending = null; });
+  }
+  private async fetchResponse(): Promise<HttpRes> {
+    this.connected = 1;
     const ac = (this.ac = new AbortController());
     let timer: ReturnType<typeof setTimeout> | undefined, timedOut = "";
     // fetch resolves once the head is in, so the connect timeout runs until then and the read timeout after
@@ -741,7 +746,11 @@ rt.register({
   fields: { connected: "connected", url: "url", doInput: "doIn", doOutput: "doOut", useCaches: "useCaches" },
   methods: {
     "<init>(Ljava/net/URL;)V": function (this: JURLConnection, u: JURL) { this.url = u; },
-    "connect()V": async function (this: JURLConnection) { await this.connect(); },
+    "connect()V": async function (this: JURLConnection) {
+      this.connected = 1;
+      // Fetch buffers uploads: connecting must leave the output stream writable until a response is requested.
+      if (!this.doOut) await this.connect();
+    },
     "getURL()Ljava/net/URL;": function (this: JURLConnection) { return this.url; },
     "getInputStream()Ljava/io/InputStream;": withRes(function (r) {
       if (!this.doIn) throw rt.mkThrowable("java/net/ProtocolException", "Cannot read from URLConnection if doInput=false (call setDoInput(true))");
@@ -752,15 +761,19 @@ rt.register({
     }),
     "getOutputStream()Ljava/io/OutputStream;": function (this: JURLConnection) {
       if (!this.doOut) throw rt.mkThrowable("java/net/ProtocolException", "cannot write to a URLConnection if doOutput=false - call setDoOutput(true)");
+      if (this.res || this.pending) throw rt.mkThrowable("java/net/ProtocolException", "Cannot write output after reading input");
       if (this.method === "GET") this.method = "POST";   // a GET that writes a body becomes a POST (OpenJDK and AOSP alike)
+      this.connected = 1;
       return this.out ??= rt.make("java/io/OutputStream") as JOutputStream;
     },
     "setRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JURLConnection, k: string | null, v: string) {
+      if (this.connected) throw rt.mkThrowable("java/lang/IllegalStateException", "Already connected");
       if (k === null) throw rt.mkThrowable("java/lang/NullPointerException", "key is null");
       this.req = this.req.filter(([n]) => n.toLowerCase() !== k.toLowerCase());
       this.req.push([k, v]);
     },
     "addRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JURLConnection, k: string | null, v: string) {
+      if (this.connected) throw rt.mkThrowable("java/lang/IllegalStateException", "Already connected");
       if (k === null) throw rt.mkThrowable("java/lang/NullPointerException", "key is null");
       this.req.push([k, v]);
     },
@@ -826,7 +839,7 @@ rt.register({
   },
   methods: {
     "setRequestMethod(Ljava/lang/String;)V": function (this: JHttpURLConnection, m: string) {
-      if (this.res || this.ac) throw rt.mkThrowable("java/net/ProtocolException", "Can't reset method: already connected");
+      if (this.connected) throw rt.mkThrowable("java/net/ProtocolException", "Can't reset method: already connected");
       if (!HTTP_METHODS.has(m)) throw rt.mkThrowable("java/net/ProtocolException", "Invalid HTTP method: " + m);
       this.method = m;
     },
