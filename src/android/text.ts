@@ -1,7 +1,7 @@
 // android.text.* — TextPaint, TextUtils, Spannable/Editable (spans stored, minimally styled).
 
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
-import { vcall, mkEnumSet, newObj } from "../jvm/natives/jlang";
+import { vcall, vcallMaybe, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import { type JDate, type JCalendar } from "../jvm/natives/jtime";
 import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances } from "./graphics";
 import { device } from "../shell/config";
@@ -195,6 +195,11 @@ function editMutators(ret: string): NonNullable<NativeSpec["methods"]> {
       return vcall(this, "replace", "(IILjava/lang/CharSequence;II)L" + ret + ";", a, b, cs, 0, text.length);
     },
     [`replace(IILjava/lang/CharSequence;II)L${ret};`]: async function (this: JSpannable, a: number, b: number, cs: unknown, start: number, end: number) {
+      if (!(cs instanceof JSpanned) && rt.iof(cs, "android/text/Spanned"))
+        cs = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", cs);
+      const incoming = cs instanceof JSpanned ? cs.spans.filter((r) => r.start < end && r.end > start).map((r) => ({
+        ...r, start: a + Math.max(start, r.start) - start, end: a + Math.min(end, r.end) - start,
+      })) : [];
       const text = (await csText(cs)).slice(start, end), delta = text.length - (b - a);
       this.text = this.text.slice(0, a) + text + this.text.slice(b);
       const moved = (position: number, mode: number) => position < a ? position : position > b ? position + delta :
@@ -203,6 +208,7 @@ function editMutators(ret: string): NonNullable<NativeSpec["methods"]> {
         span.start = moved(span.start, span.flags >> 4 & 0xf);
         span.end = moved(span.end, span.flags & 0xf);
       }
+      for (const span of incoming) if (!this.spans.some((r) => r.span === span.span)) this.spans.push(span);
       return this;
     },
     [`insert(ILjava/lang/CharSequence;)L${ret};`]: async function (this: JSpannable, i: number, cs: unknown) {
@@ -215,15 +221,16 @@ function editMutators(ret: string): NonNullable<NativeSpec["methods"]> {
     },
   };
 }
+async function appendSpanned(this: JSpannable, cs: unknown) {
+  const length = this.text.length;
+  return vcall(this, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", length, length, cs, 0, (await csText(cs)).length);
+}
 rt.register({
   name: "android/text/SpannableStringBuilder", ctor: class extends JSpannable {},
   ifaces: ["java/lang/CharSequence", "android/text/Spannable", "android/text/Spanned", "android/text/Editable", "java/lang/Appendable"],
   methods: {
     ...spanMethods,
-    "append(Ljava/lang/CharSequence;)Landroid/text/SpannableStringBuilder;": function (this: JSpannable, cs: unknown) {
-      this.text += spannedString(cs);
-      return this;
-    },
+    "append(Ljava/lang/CharSequence;)Landroid/text/SpannableStringBuilder;": appendSpanned,
     "append(C)Landroid/text/SpannableStringBuilder;": function (this: JSpannable, c: number) {
       this.text += String.fromCharCode(c);
       return this;
@@ -305,7 +312,6 @@ const spanHierarchy: Record<string, { sup?: string; ifaces?: string[] }> = {
   "android/text/style/URLSpan": { sup: "android/text/style/ClickableSpan" },
 };
 for (const [name] of [
-  ["android/text/style/ForegroundColorSpan", { color: 0 }],
   ["android/text/style/BackgroundColorSpan", { color: 0 }],
   ["android/text/style/StyleSpan", { style: 0 }],
   ["android/text/style/UnderlineSpan", {}],
@@ -334,6 +340,42 @@ for (const [name] of [
       "getStyle()I": function (this: any) { return this.style; },
     },
   });
+}
+
+class JForegroundColorSpan extends JObj { color = 0; }
+rt.register({ name: "android/text/style/ForegroundColorSpan", ctor: JForegroundColorSpan,
+  ...spanHierarchy["android/text/style/ForegroundColorSpan"], methods: {
+    "<init>(I)V": function (this: JForegroundColorSpan, color: number) { this.color = color; },
+    "getForegroundColor()I": function (this: JForegroundColorSpan) { return this.color; },
+    "updateDrawState(Landroid/text/TextPaint;)V": function (this: JForegroundColorSpan, paint: JTextPaint) { paint.color = this.color; },
+  },
+});
+
+export function drawStyledText(src: unknown, text: string, start: number, canvas: JCanvas, paint: JTextPaint, x: number, y: number, color = paint.color): Promise<void> | undefined {
+  if (!(src instanceof JSpanned)) return;
+  const end = start + text.length;
+  const spans = src.spans.filter((r) => r.start < end && r.end > start && rt.iof(r.span, "android/text/style/CharacterStyle")
+    && !rt.iof(r.span, "android/text/style/ReplacementSpan"));
+  if (!spans.length) return;
+  spans.sort((a, b) => (b.flags & 0xff0000) - (a.flags & 0xff0000));
+  const edges = [...new Set([start, end, ...spans.flatMap((r) => [Math.max(start, r.start), Math.min(end, r.end)])])].sort((a, b) => a - b);
+  return (async () => {
+    const p = new JTextPaint();
+    canvas.ctx.save();
+    try {
+      for (let i = 0; i < edges.length - 1; i++) {
+        copyPaint(paint, p); p.color = color; p.textAlignN = 0;
+        for (const r of spans) if (r.start <= edges[i] && r.end > edges[i]) {
+          const pending = vcallMaybe(r.span, "updateDrawState", "(Landroid/text/TextPaint;)V", p);
+          if (pending instanceof Promise) await pending;
+        }
+        const run = text.slice(edges[i] - start, edges[i + 1] - start);
+        const pending = vcallMaybe(canvas, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", run, x, y, p);
+        if (pending instanceof Promise) await pending;
+        x += measureText(p, run);
+      }
+    } finally { canvas.ctx.restore(); }
+  })();
 }
 
 class JAbsoluteSizeSpan extends JObj { size = 0; dip = 0; }
@@ -421,10 +463,7 @@ rt.register({
   ifaces: ["android/text/Editable", "java/lang/CharSequence", "android/text/Spannable", "android/text/Spanned"],
   methods: {
     ...spanMethods,
-    "append(Ljava/lang/CharSequence;)Landroid/text/Editable;": function (this: JEditable, cs: unknown) {
-      this.text += spannedString(cs);
-      return this;
-    },
+    "append(Ljava/lang/CharSequence;)Landroid/text/Editable;": appendSpanned,
     "clear()V": function (this: JEditable) { this.text = ""; this.spans = []; },
     ...editMutators("android/text/Editable"),
   },
@@ -840,13 +879,18 @@ async function drawLayout(this: JLayout, c: JCanvas) {
         if (span.end <= position || span.start >= end) continue;
         if (span.start > position) {
           const text = this.text.slice(position, span.start);
-          await vcall(c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text, x, baseline, this.paint);
+          await (drawStyledText(this.src, text, position, c, this.paint, x, baseline)
+            ?? vcall(c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text, x, baseline, this.paint));
           x += measureText(this.paint, text);
         }
         await vcall(span.span, "draw", "(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V", c, this.src, span.start, span.end, x, this.lineTop(i), baseline, this.lineTop(i + 1), span.paint);
         x += span.width; position = span.end;
       }
-      if (position < end) await vcall(c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", this.text.slice(position, end), x, baseline, this.paint);
+      if (position < end) {
+        const text = this.text.slice(position, end);
+        await (drawStyledText(this.src, text, position, c, this.paint, x, baseline)
+          ?? vcall(c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text, x, baseline, this.paint));
+      }
     }
 }
 const layoutMethods: NonNullable<NativeSpec["methods"]> = {
