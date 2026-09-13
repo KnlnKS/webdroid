@@ -88,6 +88,16 @@ test("ColorDrawable constant state creates an independent copy", async () => {
   expect(await vcall(copy, "getColor", "()I")).toBe(0xff123456 | 0);
 });
 
+test("RippleDrawable constant state clones its content", async () => {
+  const content = await newObj("android/graphics/drawable/ColorDrawable", "(I)V", 0xffabcdef | 0);
+  const ripple = await newObj("android/graphics/drawable/RippleDrawable", "(Landroid/content/res/ColorStateList;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V", null, content, null);
+  const state = await vcall(ripple, "getConstantState", "()Landroid/graphics/drawable/Drawable$ConstantState;");
+  const copy = await vcall(state, "newDrawable", "()Landroid/graphics/drawable/Drawable;");
+
+  expect(copy).not.toBe(ripple);
+  expect(await vcall(copy, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", 0)).not.toBe(content);
+});
+
 test("ByteBuffer absolute long and double accessors leave the position alone", async () => {
   const buffer = await scall("java/nio/ByteBuffer", "allocate", "(I)Ljava/nio/ByteBuffer;", 24);
   await vcall(buffer, "putLong", "(IJ)Ljava/nio/ByteBuffer;", 8, -2n);

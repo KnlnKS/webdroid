@@ -778,6 +778,26 @@ class JRippleDrawable extends JLayerDrawable {
     return true;
   }
 }
+function cloneDrawable(d: JDrawable): JDrawable {
+  const copy = Object.assign(Object.create(Object.getPrototypeOf(d)), d) as JDrawable;
+  copy.bounds = Object.assign(new JRect(), d.bounds);
+  copy.stateSet = [...d.stateSet];
+  copy.callback = null;
+  if (d instanceof JStateListDrawable) {
+    (copy as JStateListDrawable).items = d.items.map((item) => ({ ...item, states: [...item.states], negStates: [...item.negStates], d: cloneDrawable(item.d) }));
+  }
+  if (d instanceof JAnimationDrawable) {
+    (copy as JAnimationDrawable).frames = d.frames.map((frame) => ({ ...frame, d: cloneDrawable(frame.d) }));
+  }
+  if (d instanceof JLayerDrawable) {
+    const layered = copy as JLayerDrawable;
+    layered.layers = d.layers.map((layer) => ({ ...layer, insets: [...layer.insets], d: cloneDrawable(layer.d) }));
+    layered.ids = [...d.ids];
+    for (const layer of layered.layers) layer.d.callback = layered;
+  }
+  if (d instanceof JRippleDrawable) (copy as JRippleDrawable).mask = d.mask ? cloneDrawable(d.mask) : null;
+  return copy;
+}
 rt.register({
   name: "android/graphics/drawable/RippleDrawable", ctor: JRippleDrawable, sup: "android/graphics/drawable/LayerDrawable",
   methods: {
@@ -800,8 +820,17 @@ rt.register({
     "hasFocusStateSpecified()Z": () => 1,
     "setRadius(I)V": function (this: JRippleDrawable, r: number) { this.explicitRadius = r; },
     "getRadius()I": function (this: JRippleDrawable) { return this.explicitRadius; },
+    "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;": function (this: JRippleDrawable) {
+      const source = this;
+      const state = rt.make("android/graphics/drawable/RippleDrawable$RippleState") as JDrawableState;
+      state.create = () => cloneDrawable(source);
+      return state;
+    },
   },
 });
+rt.register({ name: "android/graphics/drawable/RippleDrawable$RippleState", ctor: JDrawableState, sup: "android/graphics/drawable/Drawable$ConstantState", methods: {
+  "newDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableState) { return this.create(); },
+} });
 rt.register({
   name: "android/graphics/drawable/InsetDrawable", ctor: class extends JLayerDrawable {}, sup: "android/graphics/drawable/LayerDrawable",
   methods: {
