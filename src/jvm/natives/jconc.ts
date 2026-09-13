@@ -295,6 +295,16 @@ function execute(this: JExecutor, r: unknown) {
     console.error("[executor]", (e.msg ?? f.error) + (e.jframes ? "\n  at " + e.jframes.join("\n  at ") : ""), e.jsStack ?? "");
   });
 }
+function removeQueued(this: JExecutor, task: unknown): number {
+  const index = this.tasks.findIndex((entry) => entry.task === task);
+  if (index < 0) return 0;
+  const [entry] = this.tasks.splice(index, 1);
+  mirror(this)?.splice(index, 1);
+  this.pending--;
+  this.jobs.delete(entry.f);
+  entry.finish();
+  return 1;
+}
 const D_TASK_FOR_CALLABLE = "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;";
 const D_TASK_FOR_RUNNABLE = "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;";
 const K_EXECUTE = mangleMethod("execute", "(Ljava/lang/Runnable;)V");
@@ -436,6 +446,7 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       "getActiveCount()I": function (this: JExecutor) { return this.workers.filter((w) => w.busy).length; },
       "getCorePoolSize()I": function (this: JExecutor) { return this.limit; },
       "getMaximumPoolSize()I": function (this: JExecutor) { return this.limit; },
+      "remove(Ljava/lang/Runnable;)Z": removeQueued,
       "setKeepAliveTime(JLjava/util/concurrent/TimeUnit;)V": function () {},
       "getQueue()Ljava/util/concurrent/BlockingQueue;": function (this: JExecutor) {
         if (!this.queue) { const queue = rt.make("java/util/concurrent/LinkedBlockingQueue") as JList; queue.a = this.tasks.map((t) => t.task); this.queue = queue; }

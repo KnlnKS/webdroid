@@ -71,6 +71,18 @@ test("a native pool submit queues before returning its future", async () => {
   expect(await vcall(future, "get", "()Ljava/lang/Object;")).toBe("result");
 });
 
+test("a pool removes a runnable that has not started", async () => {
+  const queue = await newObj("java/util/concurrent/LinkedBlockingQueue");
+  const ex = await pool(queue);
+  const task = rt.make("test/QueueRunnable") as RecordingRunnable;
+  await vcall(ex, "execute", "(Ljava/lang/Runnable;)V", task);
+  expect(await vcall(ex, "remove", "(Ljava/lang/Runnable;)Z", task)).toBe(1);
+  expect(await vcall(ex, "remove", "(Ljava/lang/Runnable;)Z", task)).toBe(0);
+  expect(await vcall(queue, "isEmpty", "()Z")).toBe(1);
+  await Bun.sleep(10);
+  expect(task.runs).toBe(0);
+});
+
 test("ForkJoinPool executes tasks and exposes their result", async () => {
   rt.register({
     name: "test/ConstTask", ctor: class extends (rt.link("java/util/concurrent/RecursiveTask").ctor as typeof JObj) {},
