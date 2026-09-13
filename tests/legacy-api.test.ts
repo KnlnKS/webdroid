@@ -173,6 +173,7 @@ test("AbstractExecutorService submit returns the virtual newTaskFor result", asy
 
 test("sets retain their intersection and a non-HDR display reports no modes", async () => {
   const set = await newObj("java/util/HashSet");
+  expect(rt.iof(set, "java/util/SortedSet")).toBe(0);
   await vcall(set, "add", "(Ljava/lang/Object;)Z", "a");
   await vcall(set, "add", "(Ljava/lang/Object;)Z", "b");
   const keep = await newObj("java/util/HashSet");
