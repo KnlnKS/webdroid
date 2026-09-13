@@ -1951,3 +1951,11 @@ The final Chrome session uses the system dark appearance; matching light referen
 captures are retained from earlier verification. Temporary tracing was removed and
 the duplicate instrumented tabs were closed. Signed-in feed, search and playback
 remain unverified pending user authentication in Chrome and emulator-5586.
+
+A subsequent lookup investigation added temporary cold-runner tracing of method,
+DEX offset and receiver types. Fresh dark-mode startup, the persistent Chrome
+profile on port 4107, and a fresh browser seeded with the Twitch-only preferences
+from the affected port-4109 session did not reproduce the length lookup. The
+restored preferences also skip the optional MIUI probe, so that difference alone
+does not identify the failure. Temporary instrumentation was removed; diagnostic
+logs remain local under mobile-31. Authentication is still pending.
