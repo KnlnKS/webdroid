@@ -2,15 +2,16 @@
 
 import { rt, JObj, stubs, noops, fieldGetters } from "../jvm/runtime";
 import { stringHash, vcall } from "../jvm/natives/jlang";
-import { newArrayList, type JList } from "../jvm/natives/jutil";
+import { newArrayList, newStringSet, type JList } from "../jvm/natives/jutil";
 import { vfs } from "../jvm/natives/jio";
 import type { JBuffer } from "../jvm/natives/jnio";
 rt.markers("android/media/AudioManager$OnAudioFocusChangeListener");
 /** the rate the Web Audio output actually runs at */
 export const outputSampleRate = (): number => actx?.sampleRate ?? 44100;
 import { onMain } from "./mainloop";
-import { reportUncaught } from "./os";
+import { JBundle, reportUncaught } from "./os";
 import { mkUri } from "./net";
+import { csText } from "./text";
 
 rt.register({ name: "android/media/RingtoneManager", ctor: class extends JObj {},
   statics: { TYPE_RINGTONE: 1, TYPE_NOTIFICATION: 2, TYPE_ALARM: 4, TYPE_ALL: 7 },
@@ -74,6 +75,8 @@ class JPlaybackState extends JObj {
 class JPlaybackStateBuilder extends JObj {
   value = new JPlaybackState();
 }
+class JMediaMetadata extends JObj { values = new Map<string, unknown>(); }
+class JMediaMetadataBuilder extends JObj { value = new JMediaMetadata(); }
 rt.register({ name: "android/media/session/MediaSession$Token", ctor: JMediaSessionToken, ifaces: ["android/os/Parcelable"], methods: {
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": () => {},
@@ -82,6 +85,8 @@ rt.register({ name: "android/media/session/MediaSession$Callback", ctor: class e
 rt.register({ name: "android/media/session/MediaController", ctor: JMediaController, methods: {
   "<init>(Landroid/content/Context;Landroid/media/session/MediaSession$Token;)V": function (this: JMediaController, _context: unknown, token: JMediaSessionToken) { this.token = token; },
   "getSessionToken()Landroid/media/session/MediaSession$Token;": function (this: JMediaController) { return this.token; },
+  "getMetadata()Landroid/media/MediaMetadata;": function (this: JMediaController) { return this.token?.session?.metadata ?? null; },
+  "getPlaybackState()Landroid/media/session/PlaybackState;": function (this: JMediaController) { return this.token?.session?.playbackState ?? null; },
 } });
 rt.register({ name: "android/media/session/PlaybackState$CustomAction", ctor: JPlaybackCustomAction, ifaces: ["android/os/Parcelable"], methods: {
   "getAction()Ljava/lang/String;": function (this: JPlaybackCustomAction) { return this.action; },
@@ -122,6 +127,29 @@ rt.register({ name: "android/media/session/PlaybackState$Builder", ctor: JPlayba
   "build()Landroid/media/session/PlaybackState;": function (this: JPlaybackStateBuilder) {
     return Object.assign(new JPlaybackState(), this.value, { customActions: newArrayList(this.value.customActions.a.slice()) });
   },
+} });
+rt.register({ name: "android/media/MediaMetadata", ctor: JMediaMetadata, ifaces: ["android/os/Parcelable"], methods: {
+  "containsKey(Ljava/lang/String;)Z": function (this: JMediaMetadata, key: string) { return +this.values.has(key); },
+  "keySet()Ljava/util/Set;": function (this: JMediaMetadata) { return newStringSet(this.values.keys()); },
+  "getText(Ljava/lang/String;)Ljava/lang/CharSequence;": function (this: JMediaMetadata, key: string) { return this.values.get(key) ?? null; },
+  "getString(Ljava/lang/String;)Ljava/lang/String;": async function (this: JMediaMetadata, key: string) { const value = this.values.get(key); return value == null ? null : csText(value); },
+  "getLong(Ljava/lang/String;)J": function (this: JMediaMetadata, key: string) { const value = this.values.get(key); return typeof value === "bigint" ? value : 0n; },
+  "getBitmap(Ljava/lang/String;)Landroid/graphics/Bitmap;": function (this: JMediaMetadata, key: string) { return this.values.get(key) ?? null; },
+  "getRating(Ljava/lang/String;)Landroid/media/Rating;": function (this: JMediaMetadata, key: string) { return this.values.get(key) ?? null; },
+  "describeContents()I": () => 0,
+  "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JMediaMetadata, parcel: unknown) {
+    const bundle = new JBundle(); bundle.map = new Map(this.values);
+    await vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", bundle);
+  },
+} });
+rt.register({ name: "android/media/MediaMetadata$Builder", ctor: JMediaMetadataBuilder, methods: {
+  "<init>()V": () => {},
+  "putText(Ljava/lang/String;Ljava/lang/CharSequence;)Landroid/media/MediaMetadata$Builder;": function (this: JMediaMetadataBuilder, key: string, value: unknown) { this.value.values.set(key, value); return this; },
+  "putString(Ljava/lang/String;Ljava/lang/String;)Landroid/media/MediaMetadata$Builder;": function (this: JMediaMetadataBuilder, key: string, value: string) { this.value.values.set(key, value); return this; },
+  "putLong(Ljava/lang/String;J)Landroid/media/MediaMetadata$Builder;": function (this: JMediaMetadataBuilder, key: string, value: bigint) { this.value.values.set(key, value); return this; },
+  "putBitmap(Ljava/lang/String;Landroid/graphics/Bitmap;)Landroid/media/MediaMetadata$Builder;": function (this: JMediaMetadataBuilder, key: string, value: unknown) { this.value.values.set(key, value); return this; },
+  "putRating(Ljava/lang/String;Landroid/media/Rating;)Landroid/media/MediaMetadata$Builder;": function (this: JMediaMetadataBuilder, key: string, value: unknown) { this.value.values.set(key, value); return this; },
+  "build()Landroid/media/MediaMetadata;": function (this: JMediaMetadataBuilder) { const value = new JMediaMetadata(); value.values = new Map(this.value.values); return value; },
 } });
 rt.register({ name: "android/media/session/MediaSession", ctor: JMediaSession, methods: {
   "<init>(Landroid/content/Context;Ljava/lang/String;)V": () => {},
