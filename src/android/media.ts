@@ -531,6 +531,7 @@ rt.markers("android/media/MediaScannerConnection$OnScanCompletedListener",
 
 // ── MediaRouter: one route, the device's own display, with no presentation display behind it
 class JRouteInfo extends JObj {}
+class JRouteCategory extends JObj { name: unknown = ""; groupable = false; }
 const theRoute = new JRouteInfo();
 rt.register({
   name: "android/media/MediaRouter", ctor: class extends JObj {},
@@ -539,12 +540,18 @@ rt.register({
     "getSelectedRoute(I)Landroid/media/MediaRouter$RouteInfo;": () => theRoute,
     "getDefaultRoute()Landroid/media/MediaRouter$RouteInfo;": () => theRoute,
     "getRouteAt(I)Landroid/media/MediaRouter$RouteInfo;": (i: number) => (i === 0 ? theRoute : null),
+    "createRouteCategory(Ljava/lang/CharSequence;Z)Landroid/media/MediaRouter$RouteCategory;": (name: unknown, groupable: number) => Object.assign(new JRouteCategory(), { name, groupable: !!groupable }),
     ...stubs(1, "getRouteCount()I"),
     ...noops("addCallback(ILandroid/media/MediaRouter$Callback;)V",
       "addCallback(ILandroid/media/MediaRouter$Callback;I)V", "removeCallback(Landroid/media/MediaRouter$Callback;)V"),
   },
 });
 rt.markers("android/media/MediaRouter$Callback", "android/media/MediaRouter$VolumeCallback");
+rt.register({ name: "android/media/MediaRouter$RouteCategory", ctor: JRouteCategory, methods: {
+  "getName()Ljava/lang/CharSequence;": function (this: JRouteCategory) { return this.name; },
+  "getName(Landroid/content/Context;)Ljava/lang/CharSequence;": function (this: JRouteCategory) { return this.name; },
+  "isGroupable()Z": function (this: JRouteCategory) { return this.groupable ? 1 : 0; },
+} });
 rt.register({ name: "android/view/accessibility/CaptioningManager", ctor: class extends JObj {}, methods: {
   "isEnabled()Z": () => 0,
   "getFontScale()F": () => 1,

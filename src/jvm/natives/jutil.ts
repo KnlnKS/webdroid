@@ -2052,6 +2052,9 @@ rt.register({
     "static binarySearch(Ljava/util/List;Ljava/lang/Object;)I": (l: unknown, k: unknown) => listBinarySearch(l, k, null),
     "static binarySearch(Ljava/util/List;Ljava/lang/Object;Ljava/util/Comparator;)I": listBinarySearch,
     "static reverseOrder()Ljava/util/Comparator;": () => mkCmp((a, b) => vcall(b, "compareTo", "(Ljava/lang/Object;)I", a)),
+    "static reverseOrder(Ljava/util/Comparator;)Ljava/util/Comparator;": (c: unknown) => c === null
+      ? mkCmp((a, b) => vcall(b, "compareTo", "(Ljava/lang/Object;)I", a))
+      : mkCmp((a, b) => vcall(c, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", b, a)),
     "static reverse(Ljava/util/List;)V": (l: JList) => l.a.reverse(),
     "static shuffle(Ljava/util/List;)V": (l: JList) => {
       for (let i = l.a.length - 1; i > 0; i--) {

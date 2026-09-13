@@ -53,6 +53,7 @@ rt.register({ name: "android/util/StatsEvent$Builder", ctor: JStatsEventBuilder,
   "writeBoolean(Z)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder, value: number) { this.event.values.push(!!value); return this; },
   "writeString(Ljava/lang/String;)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder, value: string) { this.event.values.push(value); return this; },
   "writeByteArray([B)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder, value: Int8Array) { this.event.values.push(value); return this; },
+  "addBooleanAnnotation(BZ)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder) { return this; },
   "usePooledBuffer()Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder) { return this; },
   "build()Landroid/util/StatsEvent;": function (this: JStatsEventBuilder) { return this.event; },
 } });

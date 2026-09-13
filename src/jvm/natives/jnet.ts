@@ -197,6 +197,18 @@ rt.register({
   },
 });
 rt.markers("java/net/SocketAddress");
+class JServerSocket extends JObj { closed = false; }
+rt.register({
+  name: "java/net/ServerSocket", ctor: JServerSocket, ifaces: ["java/io/Closeable"],
+  methods: {
+    "<init>()V": function () {},
+    "bind(Ljava/net/SocketAddress;)V": () => { throw rt.mkThrowable("java/io/IOException", "inbound sockets are unavailable"); },
+    "bind(Ljava/net/SocketAddress;I)V": () => { throw rt.mkThrowable("java/io/IOException", "inbound sockets are unavailable"); },
+    "close()V": function (this: JServerSocket) { this.closed = true; },
+    "isClosed()Z": function (this: JServerSocket) { return this.closed ? 1 : 0; },
+    "isBound()Z": () => 0,
+  },
+});
 class JInetSocketAddress extends JObj { host = ""; port = 0; addr: JInetAddress | null = null; }
 const inetSock = (host: string | null, port: number) => Object.assign(new JInetSocketAddress(), { host: host ?? "", port });
 rt.register({

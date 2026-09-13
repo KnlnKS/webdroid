@@ -102,6 +102,7 @@ test("reached JDK utility primitives preserve their Java behavior", async () => 
 
   const reverse = scall("java/util/Collections", "reverseOrder", "()Ljava/util/Comparator;");
   expect(await vcall(reverse, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", "a", "b")).toBeGreaterThan(0);
+  expect(scall("java/util/Collections", "reverseOrder", "(Ljava/util/Comparator;)Ljava/util/Comparator;", reverse)).not.toBeNull();
 
   const levelCtor = rt.link("java/util/logging/Level").ctor as any;
   await rt.initClass(rt.link("java/util/logging/Level"));
@@ -138,6 +139,9 @@ test("network support objects retain packet and HTTP parameter state", async () 
   const integer = await newObj("java/math/BigInteger", "(ILjava/util/Random;)V", 13, random);
   expect(await vcall(integer, "bitLength", "()I")).toBeLessThanOrEqual(13);
   expect(await vcall(integer, "signum", "()I")).toBeGreaterThanOrEqual(0);
+
+  const server = await newObj("java/net/ServerSocket");
+  await expect(vcall(server, "bind", "(Ljava/net/SocketAddress;)V", null)).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
 });
 
 test("optional device services report their unavailable state", async () => {
