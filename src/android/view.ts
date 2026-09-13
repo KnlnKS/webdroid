@@ -1439,7 +1439,7 @@ const viewMethods: NativeSpec["methods"] = {
     "setDuplicateParentStateEnabled(Z)V", "setAddStatesFromChildren(Z)V", "onWindowFocusChanged(Z)V",
     "dispatchWindowFocusChanged(Z)V", "onFocusChanged(ZILandroid/graphics/Rect;)V", "setRotationX(F)V",
     "setRotationY(F)V", "setTransitionAlpha(F)V", "setBackgroundTintMode(Landroid/graphics/PorterDuff$Mode;)V",
-    "setOnHoverListener(Landroid/view/View$OnHoverListener;)V", "setVerticalFadingEdgeEnabled(Z)V",
+    "setOnHoverListener(Landroid/view/View$OnHoverListener;)V", "setVerticalFadingEdgeEnabled(Z)V", "setHorizontalFadingEdgeEnabled(Z)V",
     "setScrollbarFadingEnabled(Z)V", "setScrollIndicators(II)V", "setNextFocusLeftId(I)V", "setNextFocusRightId(I)V",
     "setSystemGestureExclusionRects(Ljava/util/List;)V", "setFrameContentVelocity(F)V",
     "setAnimationMatrix(Landroid/graphics/Matrix;)V", "onScrollChanged(IIII)V",
