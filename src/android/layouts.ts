@@ -668,6 +668,11 @@ rt.register({
     "addRule(I)V": function (this: JRelativeLP, verb: number) { this.rules.set(verb, -1); },
     "addRule(II)V": function (this: JRelativeLP, verb: number, anchor: number) { this.rules.set(verb, anchor); },
     "removeRule(I)V": function (this: JRelativeLP, verb: number) { this.rules.delete(verb); },
+    "getRules()[I": function (this: JRelativeLP) {
+      const rules = new Int32Array(22);
+      for (const [verb, anchor] of this.rules) if (verb >= 0 && verb < rules.length) rules[verb] = anchor;
+      return rules;
+    },
   },
 });
 

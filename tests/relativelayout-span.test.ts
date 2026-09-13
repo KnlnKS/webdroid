@@ -27,3 +27,13 @@ test("a RelativeLayout child fixed on both edges is measured to the span between
   expect(pill.measuredW).toBe(936);
   expect([band.top, band.bottom, band.measuredW]).toEqual([0, 168, 10]);
 });
+
+test("RelativeLayout rules expose their verb-indexed anchors", async () => {
+  const params = await newObj("android/widget/RelativeLayout$LayoutParams", "(II)V", 1, 1);
+  await vcall(params, "addRule", "(II)V", RIGHT_OF, 42);
+  await vcall(params, "addRule", "(I)V", ALIGN_PARENT_RIGHT);
+  const rules = await vcall(params, "getRules", "()[I") as Int32Array;
+  expect(rules.length).toBe(22);
+  expect(rules[RIGHT_OF]).toBe(42);
+  expect(rules[ALIGN_PARENT_RIGHT]).toBe(-1);
+});
