@@ -1877,3 +1877,41 @@ static/dynamic MIME types, scheme-specific patterns, authority/path patterns and
 PatternMatcher retains its parsed pattern payload. URI-relative groups and advanced-glob
 matching remain explicit unsupported cases. Wearable AddListenerRequest previously failed
 writing its IntentFilter array. A parcel round trip preserves matching and consumes all data.
+
+
+### Maps stream, property and reflection failures
+
+The GL-Map thread stopped at ShortBuffer.put(short[], offset, length). Range writes now
+validate bounds and remaining capacity, copying aligned native-order arrays in bulk and
+using DataView for other byte orders. Signed-value and bounds checks pass. Missing
+SequenceInputStream and Channels blocked stream composition; the adapters preserve stream
+close ownership, ByteBuffer ranges, and native-memory view refresh across suspension.
+Sequence exhaustion/close and channel round-trip tests pass.
+
+The scale bar's ObjectAnimator used inherited View.ALPHA, which was absent. Its null
+property reached an empty setter name and a JavaScript toUpperCase exception. The property
+now dispatches through virtual getAlpha/setAlpha; a one-value animator starts at the
+view's current value. ViewGroup.getClipChildren returns its existing clipping state.
+Locale.Category supports independent display/format defaults. Locale-dependent formatter
+default propagation elsewhere remains incomplete.
+
+Guava's Finalizer reflected finalizeReferent on an abstract interface in Maps' DEX.
+Reflection had dropped every declaration without a JavaScript function. Method metadata
+now survives without a body; a probe on the unchanged bvss interface finds public abstract
+flags and invokes a test implementation through Method.invoke. AssertionError constructors
+now retain object details and throwable causes, exposing that underlying failure. Source-
+qualified logger parameter overloads support indexed substitution; they do not implement
+full MessageFormat patterns or handler dispatch.
+
+The next Chrome run had no earlier main-thread/GL exceptions but still no map geometry or
+working search. It completed roughly 152,000 measure calls during startup; this is a
+performance investigation, not a passing timing measurement. A diagnostic object-graph
+walk stalled the tab and was terminated, then the tab reloaded. Use narrow object paths
+or explicit counters instead of heap-wide queries. A microG process reached missing
+Intent.getParcelableArrayListExtra; named list-extra getters/setters now preserve the
+canonical extras map. All process realms must be checked again after reload.
+
+ObjectOutputStream.enableReplaceObject is a newly observed cache-path failure. Existing
+object graph serialization is explicitly unsupported; adding a switch alone would not
+make that cache work. Investigate independently of map network/rendering progress.
+Full E2E remains deferred until the Maps development pass is complete.

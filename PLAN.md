@@ -23,8 +23,10 @@ platform contracts; run the full serialized E2E suite at the end.
   TLS ALPN, URI parsing and CharSequence encoding. Bootstrap platform queries are committed.
 - Real TLS probes through the relay and through Java SSLSocket negotiate HTTP/2 with Google.
   Maps progressed through TLS selection and URI encoding to DNS address selection;
-  the latest build includes Collections.shuffle(Random) and InetSocketAddress.getHostString.
-- Both observed microG process realms currently report no missing APIs. Main-process
+  subsequent fixes cover connected socket endpoints, hierarchical URI construction,
+  cyclic barriers, stream composition, buffer ranges, View.ALPHA and abstract reflection.
+- A later microG receiver reached missing Intent list extras; the getter/setter fix is
+  committed and requires another all-process check. Main-process
   capability probes still name unsupported hardware/service classes; do not treat empty
   service telemetry as complete app coverage.
 - Maps smoke: 72,887 classes, zero method failures. Focused checks and typecheck pass at
@@ -32,7 +34,8 @@ platform contracts; run the full serialized E2E suite at the end.
 
 ## Next
 
-1. Follow native rendering and Maps network requests after DNS address selection.
+1. Follow native rendering and Maps network requests using temporary relay byte counters
+   in src/main.ts and src/shell/relay.ts; remove the counters before completing the task.
    Read all process diagnostics. Distinguish slow initialization from a deadlock using
    advancing frames, queue state and initialization/task state.
 2. Exercise matching Maps search/place/directions interactions in Chrome and Android;
