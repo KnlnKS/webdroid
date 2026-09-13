@@ -52,8 +52,9 @@ export async function receiveProvider(request: ProviderRequest, caller: Caller):
   if (!info || !host?.application || info.packageName !== host.pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Provider unavailable: " + request.authority);
   if (!info.exported && info.applicationInfo.uid !== caller.uid) throw rt.mkThrowable("java/lang/SecurityException", "Provider is not exported");
   const provider = await attachProvider(host.application, info);
+  const args = await Promise.all(request.args.map(decode));
   return withCallingIdentity(caller, async () => {
-    const value = await vcall(provider, request.name, request.desc, ...await Promise.all(request.args.map(decode)));
+    const value = await vcall(provider, request.name, request.desc, ...args);
     if (request.name !== "query" || !value) return { kind: "value", value: await encode(value) };
     const columns: string[] = await vcall(value, "getColumnNames", "()[Ljava/lang/String;"), rows: Value[][] = [];
     try {

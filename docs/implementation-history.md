@@ -1799,3 +1799,24 @@ an arbitrary 50 ms delay. The focused Handler tests cover cancellation behind a 
 reposting, cleanup, due versus future messages, and repeated idle transitions. A slow Maps
 native startup was initially suspected to be a queue stall; it subsequently completed with
 no initializing classes or native fault. That observation is not a performance measurement.
+
+### Maps UI and provider dispatch
+
+The reference AVD (`webdroid_maps_ref`, emulator-5588) runs the unchanged Google-signed
+Maps APK. Home, Golden Gate Bridge place details, and a Ferry Building-to-bridge driving
+route render real tiles and results; screenshots are under `webdroid-shots/maps/` (ignored).
+Chrome at 4126 has reached the search bar but not map parity. Its first search tap exposed
+IntentFilter.addDataPath, after earlier checked-state binding failures.
+
+A remote provider call decoded arguments after establishing Binder calling identity. The
+suspending decode let dispatch inherit a different Java thread, making microG's concurrent
+GmsService initialization appear reentrant and exposing null enum values. Decode before
+entering the identity scope; provider invocation now starts in that scope's synchronous
+prefix. Subsequent Maps reloads did not reproduce that exception. This is observed-path
+coverage, not proof for every cross-process initialization schedule.
+
+EGL10 constructed a JEGLConfig while registering the Java EGLConfig name to an unrelated
+constructor. Register the actual class. CompoundButton omitted Checkable, so Maps' general
+property binder rejected CHECKED on AppCompatRadioButton. Focused class-identity and tint
+checks pass. Canvas.drawPicture previously discarded recordings; replay its display list
+inside saved state and apply destination translation/scaling, following AOSP Canvas.java.
