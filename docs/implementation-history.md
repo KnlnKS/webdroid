@@ -1735,3 +1735,45 @@ Remaining optional gaps: `media_metrics`, MIUI referrer, AppSet and AppsFlyer LV
 classes, and Cronet's DnsConfig warning. microG keeps two activities resumed in its realm
 (`IdentityCredentialChooserActivity` under `AssistedSignInActivity`), unverified against
 Android.
+
+### 2026-09-13 — Twitch TV startup and guest playback
+
+The supplied `Twitch.xapk` is Android TV 13.0.0.2 (1100000018), with 2,360 DEX
+classes and ARM32 Sentry libraries. In the `codex/twitch-parity` worktree based on
+`f3fefda`, startup failed before the app's WebView was created. The later Kotlin
+`thermalNotificationHandler` error was a consequence of incomplete `onCreate`.
+
+- RemoteCallbackList was absent. Its implementation keys callbacks by Binder,
+  links death recipients, unlinks replacements, and snapshots broadcasts. The
+  same tests pass against the paired AOSP class, including concurrent registration
+  on separate Java threads. Rechecking after the suspending death link prevents
+  duplicate watches and resurrection after kill/death.
+- MediaSession and PlaybackState.Builder were the next startup gaps. Sessions
+  preserve token/controller identity and dispatch commands through the callback's
+  looper; replacement/release suppress pending callbacks. Playback builders create
+  independent snapshots and preserve long values. This does not implement the
+  whole media-session service or claim token/PlaybackState parcel transport.
+- WorkManager's ObjectInputStream read truncated short block data by one byte:
+  JavaScript evaluated the starting cursor before awaiting the length byte. Reading
+  the length first fixes the block boundary, including primitives spanning blocks.
+- Thread.getState now distinguishes lifecycle, monitor contention and timed or
+  untimed parking. Restarting a terminated thread throws IllegalThreadStateException.
+- PackageInfo.requestedPermissionsFlags now aligns each permission with the
+  canonical PackageManager grant state, and archive queries report ungranted flags.
+
+Full Chrome reaches home, search, live video/chat, quality selection, chat hiding
+and QR activation with unchanged app/library bytecode. One observed live stream
+advanced at 1280×720 with no reported dropped video frames; this is functional
+evidence, not a controlled performance comparison. Main-realm Java missing/error
+lists were empty, as were missing lists in both background realms. The WebView
+console still reports an upstream service-worker origin restriction, so empty
+Java telemetry does not mean every browser operation succeeds. The page's Pause
+button has an empty mouse handler in shipped Twitch JavaScript; TV key behavior
+needs Android comparison before attributing it to the platform.
+
+Typecheck, eight focused tests (45 assertions), and Twitch smoke compilation
+(zero method failures) pass. Reference screenshot parity and the final full E2E
+gate remain pending. The isolated API 35 AVD boots but cannot install the ARM32
+split; a separately installed official API 25 ARM32 image requires software
+emulation and its renderer launch is under investigation. No visual goldens or
+APK contents were changed. Account-only flows require completing QR activation.
