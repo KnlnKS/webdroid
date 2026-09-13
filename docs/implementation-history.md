@@ -2427,3 +2427,12 @@ sign-in tutorial without that error but hit a separate transition-span mismatch,
 absence in that run cannot establish a startup fix. The temporary flow also waited for
 Search here as text while the Compose omnibox exposes it as a description; that timeout
 was a harness lookup failure, not a blank Maps home screen.
+
+A lightweight span-write probe reproduced the startup mismatch without changing app bytecode:
+FutureTask.run awaited its Callable on a worker, then invoked done() with the ambient main
+thread. Guava's direct completion listener consequently installed ClientParametersManagerImpl's
+trace over LoginPromoTutorialController.isSignedOut on the UI thread. Capturing the executing
+thread and dispatching done() with vcallOn fixes this boundary. The focused success/failure
+completion check fails on the preceding code (observing main instead of the worker); six
+executor checks (30 assertions) and typecheck pass. Fresh full Chrome without the span/canvas
+instrumentation reaches the sign-in tutorial with no trace-end errors.

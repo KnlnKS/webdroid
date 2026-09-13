@@ -26,8 +26,9 @@ platform contracts; run the full serialized E2E suite at the end.
   place action chips. LinearLayout cross measurement now keeps preview controls at the
   bottom. Unicode block lookup, file-descriptor bitmap decoding and sequential lists cover
   additional observed failures. Text, image, map-camera and control-state differences remain.
-- Startup still reports the LoginPromoTutorialController trace-span mismatch. The
-  Handler identity fix passes focused tests but did not remove that app error.
+- The startup LoginPromoTutorialController trace-span mismatch was traced to FutureTask
+  invoking completion on the ambient main thread after worker suspension. The callback now
+  retains its executing thread; a fresh Chrome startup reaches the sign-in tutorial without it.
   The previously observed detached AndroidViewHolder error is absent in fresh runs.
 - Maps smoke at an earlier checkpoint: 72,887 classes, zero method failures. Focused
   checks and typecheck pass after recent edits. Full E2E has not run yet.

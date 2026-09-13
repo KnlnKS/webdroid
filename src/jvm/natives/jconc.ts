@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec, type ClassInfo } from "../runtime";
 import { parkTimeout, unparkTimeout } from "../yield";
-import { vcall, newObj, JThread, JEnum, setCurThread, curThread, park, defineException } from "./jlang";
+import { vcall, vcallOn, newObj, JThread, JEnum, setCurThread, curThread, park, defineException } from "./jlang";
 import { JList, newArrayList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods } from "./jutil";
 import { JRandom, randomSeed } from "./jrandom";
 import { splitSig } from "../abi";
@@ -1075,14 +1075,14 @@ rt.register({
     },
     "run()V": async function (this: JFutureTask) {
       if (this.done || this.thread) return;
-      this.thread = curThread;
+      const thread = this.thread = curThread;
       try {
         const value = await vcall(this.callable, "call", "()Ljava/lang/Object;");
         if (!this.cancelled) this.value = value;
       } catch (e) { this.error = rt.jx(e); } // surfaces from get(), as AOSP's setException
       this.done = 1; this.thread = null;
       this.wake(null);
-      if (!this.cancelled) await vcall(this, "done", "()V");
+      if (!this.cancelled) await vcallOn(thread, this, "done", "()V");
     },
     "done()V": function () {},
     "get()Ljava/lang/Object;": function (this: JFutureTask) { return futureGet(this); },
