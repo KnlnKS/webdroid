@@ -1887,6 +1887,22 @@ type Fillable = { fill(v: unknown, s?: number, e?: number): unknown };
 const fill = (a: Fillable, v: unknown) => a.fill(v);
 const fillRange = (a: Fillable, f: number, t: number, v: unknown) => a.fill(v, f, t);
 class JArrays extends JObj {}
+async function deepToString(a: unknown[] | null, ancestors = new Set<unknown[]>): Promise<string> {
+  if (a === null) return "null";
+  if (ancestors.has(a)) return "[...]";
+  ancestors.add(a);
+  const parts: string[] = [];
+  for (const x of a) {
+    if (Array.isArray(x)) parts.push(await deepToString(x, ancestors));
+    else if (x instanceof Uint8Array) parts.push("[" + Array.from(x, v => v ? "true" : "false").join(", ") + "]");
+    else if (x instanceof Uint16Array) parts.push("[" + Array.from(x, v => String.fromCharCode(v)).join(", ") + "]");
+    else if (x instanceof Float32Array || x instanceof Float64Array) parts.push("[" + Array.from(x, fmtDouble).join(", ") + "]");
+    else if (x instanceof Int8Array || x instanceof Int16Array || x instanceof Int32Array || x instanceof BigInt64Array) parts.push("[" + x.join(", ") + "]");
+    else parts.push(x === null ? "null" : await vcall(x, "toString", "()Ljava/lang/String;"));
+  }
+  ancestors.delete(a);
+  return "[" + parts.join(", ") + "]";
+}
 function deepEquals(a: unknown, b: unknown): number | Promise<number> {
   if (a === b) return 1;
   if (Array.isArray(a) && Array.isArray(b)) {
@@ -1956,6 +1972,7 @@ rt.register({
     "static toString([Z)Ljava/lang/String;": (a: Uint8Array) => (a ? "[" + Array.from(a, (v) => (v ? "true" : "false")).join(", ") + "]" : "null"),
     "static deepHashCode([Ljava/lang/Object;)I": (a: unknown[] | null) => (a ? hashSeq(a) : 0),
     "static deepEquals([Ljava/lang/Object;[Ljava/lang/Object;)Z": deepEquals,
+    "static deepToString([Ljava/lang/Object;)Ljava/lang/String;": (a: unknown[] | null) => deepToString(a),
     "static equals([Ljava/lang/Object;[Ljava/lang/Object;)Z": async (a: unknown[], b: unknown[]) => {
       if (a === b) return 1;
       if (!a || !b || a.length !== b.length) return 0;
