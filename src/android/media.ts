@@ -678,6 +678,23 @@ rt.markers("android/media/AudioRouting$OnRoutingChangedListener");
 rt.register({ name: "android/media/AudioTimestamp", ctor: class extends JObj { framePosition = 0n; nanoTime = 0n; }, fields: { framePosition: "framePosition", nanoTime: "nanoTime" }, methods: { "<init>()V": () => {} } });
 rt.markers("android/media/AudioTrack$OnPlaybackPositionUpdateListener",
   "android/media/AudioRecord$OnRecordPositionUpdateListener");
+
+class JAudioRecord extends JObj { state = 0; recordingState = 1; }
+rt.register({
+  name: "android/media/AudioRecord", ctor: JAudioRecord,
+  statics: { STATE_UNINITIALIZED: 0, STATE_INITIALIZED: 1, RECORDSTATE_STOPPED: 1, RECORDSTATE_RECORDING: 3, ERROR: -1, ERROR_BAD_VALUE: -2, ERROR_INVALID_OPERATION: -3 },
+  methods: {
+    "<init>(IIIII)V": () => {},
+    "static getMinBufferSize(III)I": (rate: number, channels: number, encoding: number) => {
+      const count = channels === 16 ? 1 : channels === 12 ? 2 : 0;
+      const bytes = encoding === 3 ? 1 : encoding === 2 ? 2 : encoding === 4 ? 4 : 0;
+      return rate >= 4000 && rate <= 192000 && count && bytes ? Math.max(256, Math.ceil(rate / 10) * count * bytes) : -2;
+    },
+    ...fieldGetters({ "getState()I": "state", "getRecordingState()I": "recordingState" }),
+    "release()V": function (this: JAudioRecord) { this.state = 0; this.recordingState = 1; },
+  },
+});
+
 class JAudioFormat extends JObj { encoding = 0; sampleRate = 0; channelMask = 0; channelIndexMask = 0; }
 rt.register({
   name: "android/media/AudioFormat", ctor: JAudioFormat,
