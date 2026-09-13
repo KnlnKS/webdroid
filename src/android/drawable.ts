@@ -1,7 +1,7 @@
 // android.graphics.drawable.* — Drawable hierarchy, XML inflation, 9-patch, vectors.
 
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
-import { vcall, mkEnumSet } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, after, mkEnumSet } from "../jvm/natives/jlang";
 import { mangleMethod, jmethod, intBitsToFloat } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf } from "./graphics";
 import { device } from "../shell/config";
@@ -36,6 +36,9 @@ export class JDrawable extends JObj {
   onStateChange(): boolean { return false; }
 }
 
+export function drawableSize(d: JDrawable, vertical: boolean, thread = curThread): number | Promise<number> {
+  return after(vcallOn(thread, d, vertical ? "getIntrinsicHeight" : "getIntrinsicWidth", "()I"), Number);
+}
 const M_onBoundsChange = mangleMethod("onBoundsChange", "(Landroid/graphics/Rect;)V");
 const M_onStateChange = mangleMethod("onStateChange", "([I)Z");
 const M_onLevelChange = mangleMethod("onLevelChange", "(I)Z");
@@ -80,8 +83,8 @@ const drawableMethods: NativeSpec["methods"] = {
   },
   "getIntrinsicWidth()I": function (this: JDrawable) { return this.intrinsicW(); },
   "getIntrinsicHeight()I": function (this: JDrawable) { return this.intrinsicH(); },
-  "getMinimumWidth()I": function (this: JDrawable) { return Math.max(0, this.intrinsicW()); },
-  "getMinimumHeight()I": function (this: JDrawable) { return Math.max(0, this.intrinsicH()); },
+  "getMinimumWidth()I": function (this: JDrawable) { return after(drawableSize(this, false), n => Math.max(0, n)); },
+  "getMinimumHeight()I": function (this: JDrawable) { return after(drawableSize(this, true), n => Math.max(0, n)); },
   "setAlpha(I)V": function (this: JDrawable, a: number) { this.alpha = a; },
   "getAlpha()I": function (this: JDrawable) { return this.alpha; },
   "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JDrawable, f: any) { this.tint = f?.tint ?? null; this.tintMatrix = f?.matrix ?? null; },
@@ -568,12 +571,32 @@ class JLayerDrawable extends JDrawable {
     };
     return step(0);
   }
+  size(vertical: boolean): number | Promise<number> {
+    const thread = curThread, edge = vertical ? 1 : 0;
+    let size = -1;
+    const step = (i: number): number | Promise<number> => {
+      for (; i < this.layers.length; i++) {
+        const l = this.layers[i], explicit = vertical ? l.h : l.w;
+        const n = explicit !== undefined && explicit >= 0 ? explicit : drawableSize(l.d, vertical, thread);
+        const inset = l.insets[edge] + l.insets[edge + 2];
+        if (n instanceof Promise) return n.then(value => {
+          if (value >= 0) size = Math.max(size, value + inset);
+          return step(i + 1);
+        });
+        if (n >= 0) size = Math.max(size, n + inset);
+      }
+      return size;
+    };
+    return step(0);
+  }
   intrinsicW(): number { return this.layers.reduce((a, l) => Math.max(a, l.d.intrinsicW() + l.insets[0] + l.insets[2]), -1); }
   intrinsicH(): number { return this.layers.reduce((a, l) => Math.max(a, l.d.intrinsicH() + l.insets[1] + l.insets[3]), -1); }
 }
 rt.register({
   name: "android/graphics/drawable/LayerDrawable", ctor: JLayerDrawable, sup: "android/graphics/drawable/Drawable",
   methods: {
+    "getIntrinsicWidth()I": function (this: JLayerDrawable) { return this.size(false); },
+    "getIntrinsicHeight()I": function (this: JLayerDrawable) { return this.size(true); },
     "draw(Landroid/graphics/Canvas;)V": function (this: JLayerDrawable, cv: JCanvas) { return this.drawLayers(cv); },
     // AOSP: each layer's inset plus that layer's own padding, the widest of each edge. This is
     // what an InsetDrawable used as a window background reports, and what tells the window how
@@ -731,6 +754,9 @@ class JAdaptiveIconDrawable extends JLayerDrawable {
     this.clip(cv);
     super.paint(cv);
     cv.ctx.restore();
+  }
+  size(vertical: boolean): number | Promise<number> {
+    return after(super.size(vertical), n => n < 0 ? n : Math.round(n * 2 / 3));
   }
   // the viewport, not the 108dp layers the children actually are
   intrinsicW(): number { const w = super.intrinsicW(); return w < 0 ? w : Math.round(w * 2 / 3); }

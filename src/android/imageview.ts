@@ -1,9 +1,9 @@
 import { AID } from "./res";
 import { JView, initViewFromCtx, requestLayout, invalidate, resolveSizeAndState, specMode, MS_EXACTLY } from "./view";
 import {
-  type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, cslColor, drawChild
+  type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, cslColor, drawChild, drawableSize
 } from "./drawable";
-import { mkEnumSet } from "../jvm/natives/jlang";
+import { curThread, mkEnumSet } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, stubs, noops } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvColor } from "./res";
 import type { JBitmap, JCanvas } from "./graphics";
@@ -14,8 +14,10 @@ export class JImageView extends JView {
   set drawable(d: JDrawable | null) {
     if (this.dr) this.dr.callback = null;
     this.dr = d;
+    this.drawableW = d?.intrinsicW() ?? -1; this.drawableH = d?.intrinsicH() ?? -1;
     if (d) d.callback = this;
   }
+  drawableW = -1; drawableH = -1;
   scaleType = 3; // FIT_CENTER
   adjustBounds = false;
   tintCsl: JColorStateList | null = null;
@@ -85,9 +87,14 @@ const imageViewMethods: NativeSpec["methods"] = {
   "setImageLevel(I)V": function (this: JImageView, l: number) { if (this.drawable) this.drawable.level = l; },
   ...stubs(null, "getScaleType()Landroid/widget/ImageView$ScaleType;"),
   ...noops("setImageMatrix(Landroid/graphics/Matrix;)V", "setImageURI(Landroid/net/Uri;)V"),
-  "onMeasure(II)V": function (this: JImageView, wSpec: number, hSpec: number) {
-    const dw = Math.max(0, this.drawable?.intrinsicW() ?? 0);
-    const dh = Math.max(0, this.drawable?.intrinsicH() ?? 0);
+  "onMeasure(II)V": async function (this: JImageView, wSpec: number, hSpec: number) {
+    if (this.drawable) {
+      const thread = curThread, w = drawableSize(this.drawable, false, thread);
+      this.drawableW = w instanceof Promise ? await w : w;
+      const h = drawableSize(this.drawable, true, thread);
+      this.drawableH = h instanceof Promise ? await h : h;
+    }
+    const dw = Math.max(0, this.drawableW), dh = Math.max(0, this.drawableH);
     let w = dw + this.padL + this.padR;
     let h = dh + this.padT + this.padB;
     w = Math.max(w, this.minW); h = Math.max(h, this.minH);
@@ -104,7 +111,7 @@ const imageViewMethods: NativeSpec["methods"] = {
   "onDraw(Landroid/graphics/Canvas;)V": function (this: JImageView, cv: JCanvas) {
     const d = this.drawable;
     if (!d) return;
-    const dw = Math.max(1, d.intrinsicW()), dh = Math.max(1, d.intrinsicH());
+    const dw = Math.max(1, this.drawableW), dh = Math.max(1, this.drawableH);
     const aw = this.width() - this.padL - this.padR, ah = this.height() - this.padT - this.padB;
     let l = this.padL, t = this.padT, w = aw, h = ah;
     const st = this.scaleType;

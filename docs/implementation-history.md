@@ -2257,3 +2257,22 @@ its width-positive precondition and repeatedly aborted layout. Store Picture dim
 when recording starts, independently of RenderNode's positioned bounds. The same fresh
 Chrome probe now returns 32x48 and typecheck passes. Full preview verification follows;
 this change alone does not fix drawable sizing or hidden map visibility.
+
+### Dispatch drawable size overrides during widget measurement
+
+Maps' Options drawable reported 96px through Java getIntrinsicWidth but -1 through
+its native base helper; a custom image drawable similarly reported 84 versus -1.
+LayerDrawable now dispatches child intrinsic-size overrides and honors explicit layer
+sizes. Drawable minimum sizes, View suggested minimums and TextView measurement use
+the public size contract. ImageView retains measured drawable dimensions for drawing.
+The thread-scoped virtual-call helper preserves synchronous returns to avoid allocating
+promises for native size queries; asynchronous overrides retain the caller thread.
+
+The 18 focused drawable, Handler and attachment tests pass (91 assertions), as does
+typecheck. Fresh headed Maps shows Save/Share/Close with 96px widths instead of zero.
+One run crashed soon after startup; a repeat reached the sign-in tutorial without the
+usual trace error and continued through search/place. Neither observation resolves the
+intermittent crash or startup race. The capture also exposes existing drawing-order
+failures: ImageView mutates bounds without notifying its drawable and drops an async
+draw result; container bounds callbacks are not awaited. A Chrome probe observes only
+`draw`, missing `onBoundsChange`, for a resized custom drawable. These remain next.

@@ -11,7 +11,7 @@ import {
   fontDescent, fontAscent, fontTop, fontBottom, measureText, typefaceFor, JTypeface, tfDefault, type JRect,
   type JCanvas, cssColor, tfMedium
 } from "./graphics";
-import { vcall, mkEnumSet, newObj } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import {
   attrTable, type Resources, resolveStyleValue, rvDimen, rvColor, rvInt, type RV, rvString, type JAttrSet,
   obtainStyled
@@ -577,7 +577,8 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getBaseline()I": function (this: JTextView) { return this.padT + this.ascent(); },
   "getEditableText()Landroid/text/Editable;": function (this: JTextView) { return this.getEditable(); },
   "setEnabled(Z)V": function (this: JTextView, e: number) { this.enabled = !!e; void this.refreshDrawableState(); },
-  "onMeasure(II)V": function (this: JTextView, wSpec: number, hSpec: number) {
+  "onMeasure(II)V": async function (this: JTextView, wSpec: number, hSpec: number) {
+    const thread = curThread;
     const wMode = specMode(wSpec), wSize = specSize(wSpec);
     const dlW = (this.drawableL ? Math.max(0, this.drawableL.intrinsicW()) + this.drawablePad : 0)
       + (this.drawableR ? Math.max(0, this.drawableR.intrinsicW()) + this.drawablePad : 0);
@@ -594,7 +595,8 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       let tw = lay.maxW;
       if (!display && this.hint) tw = Math.max(tw, measureText(this.paintT, this.hint));
       w = Math.ceil(tw) + this.padL + this.padR + dlW;
-      w = Math.min(Math.max(w, this.minW), this.maxW);
+      const min = vcallOn(thread, this, "getSuggestedMinimumWidth", "()I");
+      w = Math.max(Math.min(Math.max(w, this.minW), this.maxW), Number(min instanceof Promise ? await min : min));
       if (wMode === MS_AT_MOST) w = Math.min(w, wSize);
       // AOSP rebuilds the layout at the width the view actually got. Without this the lines
       // stay wrapped for the desired width, so a clamp leaves both the height (too few lines)
@@ -607,6 +609,10 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const vPad = this.padT + this.padB;
     let h = this.textHeight(lineCount) + vPad + dtH;
     h = Math.max(h, this.minH, (this.drawableL ? this.drawableL.intrinsicH() : 0) + vPad, (this.drawableR ? this.drawableR.intrinsicH() : 0) + vPad);
+    if (specMode(hSpec) !== MS_EXACTLY) {
+      const min = vcallOn(thread, this, "getSuggestedMinimumHeight", "()I");
+      h = Math.max(h, Number(min instanceof Promise ? await min : min));
+    }
     this.measuredW = w;
     this.measuredH = resolveSizeAndState(h, hSpec);
     this.layoutWidthFor = w;
