@@ -117,6 +117,7 @@ export class JLinearLayout extends JViewGroup {
   orientation = 0; // 0 horizontal, 1 vertical
   gravity = 48 | G.START;
   weightSum = 0;
+  baselineAlignedChildIndex = -1;
 }
 function mainMargin(c: JView, vertical: boolean): number {
   const m = c.lp instanceof JMarginLP ? c.lp : null;
@@ -140,6 +141,12 @@ export const linearMethods: NativeSpec["methods"] = {
   "getOrientation()I": function (this: JLinearLayout) { return this.orientation; },
   "setGravity(I)V": function (this: JLinearLayout, g: number) { this.gravity = g; requestLayout(this); },
   "setWeightSum(F)V": function (this: JLinearLayout, w: number) { this.weightSum = w; },
+  "setBaselineAlignedChildIndex(I)V": function (this: JLinearLayout, index: number) {
+    if (index < 0 || index >= this.children.length)
+      throw rt.mkThrowable("java/lang/IllegalArgumentException", `base aligned child index out of range (0, ${this.children.length})`);
+    this.baselineAlignedChildIndex = index;
+  },
+  "getBaselineAlignedChildIndex()I": function (this: JLinearLayout) { return this.baselineAlignedChildIndex; },
   ...noops("setShowDividers(I)V", "setDividerDrawable(Landroid/graphics/drawable/Drawable;)V",
     "setBaselineAligned(Z)V"),
   "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": function (this: JLinearLayout) {
