@@ -33,6 +33,11 @@ test("View context clickability is independently mutable", async () => {
   expect(await vcall(view, "isClickable", "()Z")).toBe(0);
 });
 
+test("View accepts a generic motion listener", async () => {
+  const view = await newObj("android/view/View", "(Landroid/content/Context;)V", null);
+  await expect(vcall(view, "setOnGenericMotionListener", "(Landroid/view/View$OnGenericMotionListener;)V", new JObj())).resolves.toBeUndefined();
+});
+
 test("EditText retains private IME options", async () => {
   const edit = await newObj("android/widget/EditText", "(Landroid/content/Context;)V", null);
   await vcall(edit, "setPrivateImeOptions", "(Ljava/lang/String;)V", "com.example.mode=test");
