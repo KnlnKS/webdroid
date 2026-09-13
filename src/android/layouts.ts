@@ -24,7 +24,7 @@ function adoptLp<T extends JMarginLP>(Ctor: new () => T, lp: JLayoutParams | nul
   return n;
 }
 
-export class JFrameLayout extends JViewGroup {}
+export class JFrameLayout extends JViewGroup { measureAllChildren = false; }
 const frameMethods: NativeSpec["methods"] = {
   ...viewConstructors,
   "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": function (this: JFrameLayout) {
@@ -43,7 +43,7 @@ const frameMethods: NativeSpec["methods"] = {
   "onMeasure(II)V": async function (this: JFrameLayout, wSpec: number, hSpec: number) {
     let mw = 0, mh = 0, matchCount = 0;
     for (const c of this.children) {
-      if (c.visibility === 8) continue;
+      if (c.visibility === 8 && !this.measureAllChildren) continue;
       await measureChildWithMargins(this, c, wSpec, 0, hSpec, 0);
       const lp = c.lp instanceof JMarginLP ? c.lp : null;
       mw = Math.max(mw, c.measuredW + (lp ? lp.marginL + lp.marginR : 0));
@@ -54,7 +54,7 @@ const frameMethods: NativeSpec["methods"] = {
     this.measuredH = resolveSizeAndState(Math.max(mh + this.padT + this.padB, this.minH), hSpec);
     if (matchCount <= 1 || (specMode(wSpec) === MS_EXACTLY && specMode(hSpec) === MS_EXACTLY)) return;
     for (const c of this.children) {
-      if (c.visibility === 8) continue;
+      if (c.visibility === 8 && !this.measureAllChildren) continue;
       const lp = c.lp;
       if (lp && (lp.width === MATCH_PARENT || lp.height === MATCH_PARENT)) {
         const ml = lp instanceof JMarginLP ? lp.marginL + lp.marginR : 0;
@@ -87,7 +87,8 @@ const frameMethods: NativeSpec["methods"] = {
     }
   },
   "setForegroundGravity(I)V": () => {},
-  "setMeasureAllChildren(Z)V": () => {},
+  "setMeasureAllChildren(Z)V": function (this: JFrameLayout, all: number) { this.measureAllChildren = !!all; },
+  "getMeasureAllChildren()Z": function (this: JFrameLayout) { return +this.measureAllChildren; },
 };
 rt.register({
   name: "android/widget/FrameLayout", ctor: JFrameLayout, sup: "android/view/ViewGroup",

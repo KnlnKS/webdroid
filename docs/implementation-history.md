@@ -2152,3 +2152,14 @@ The static query now checks the requested UTF-16 range against the existing Unic
 bidirectional properties (R, AL, AN, RLE, RLO), including supplementary code points and range
 validation. The remaining Bidi object-analysis API is not implemented. Focused tests cover
 Latin/CJK, Hebrew/Arabic, directional controls, Adlam surrogate pairs, slices and invalid ranges.
+
+Maps' directions fragment also reached missing ViewAnimator through olc. The new FrameLayout
+subclass selects/wraps children, preserves selection on insertion/removal, and uses the
+existing view-animation APIs. FrameLayout now honors measureAllChildren, enabled by default
+for ViewAnimator and configurable from attributes. Focused switching/removal and hidden-child
+measurement checks pass, as does typecheck. Route-result parity is still pending: selecting
+the start suggestion currently leaves a blank content area without the earlier missing-class
+error. A temporary-profile window of installed full Chrome renders the home map with native
+JIT disabled (chrome-isolated-home.png, boot 3683 ms under concurrent diagnostic load), while
+the reused Browser Use session remained blank and much slower. Profile, instrumentation and
+saved state differ; this comparison does not isolate a cause or constitute a benchmark.

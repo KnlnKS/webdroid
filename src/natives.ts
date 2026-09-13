@@ -54,6 +54,7 @@ import "./android/motionevent";
 import "./android/windowinsets";
 import "./android/view";
 import "./android/viewanimator";
+import "./android/view-switching";
 import "./android/gravity";
 import "./android/layouts";
 import "./android/tabhost";
