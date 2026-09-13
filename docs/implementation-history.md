@@ -2415,3 +2415,15 @@ cover suspension, live mutation, a single destination iterator for bulk insertio
 identity and caller-thread retention across iterator callbacks. Typecheck passes; a fresh Maps search/place/directions run has no
 AbstractSequentialList or decodeFileDescriptor missing entries. The startup span mismatch
 persists and is being traced independently.
+
+AnimatorSet completion used an independent timeout that launched all end listeners as
+floating promises. A focused main-queue gate test reproduces both callbacks beginning before
+the current job finishes, and the second listener starting before the first returns. The
+completion now runs as one main-looper job, awaiting listeners and chained startup in order.
+Seven animator checks (19 assertions) and typecheck pass; the new check fails on the prior
+implementation. Fresh Maps renders the home map and local-content cards. Startup still
+reports the LoginPromoTutorialController span mismatch. An instrumented run reached the
+sign-in tutorial without that error but hit a separate transition-span mismatch, so the
+absence in that run cannot establish a startup fix. The temporary flow also waited for
+Search here as text while the Compose omnibox exposes it as a description; that timeout
+was a harness lookup failure, not a blank Maps home screen.

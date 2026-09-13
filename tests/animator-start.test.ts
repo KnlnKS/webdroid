@@ -97,3 +97,25 @@ test("AnimatorSet notifies start listeners before starting its children", async 
   await vcallOn(thread, set, "start", "()V");
   expect(events).toEqual(["first", "second", "child"]);
 });
+
+test("AnimatorSet completion waits for the main job and serializes end listeners", async () => {
+  const { onMain } = await import("../src/android/mainloop");
+  const set = await newObj("android/animation/AnimatorSet"), events: string[] = [];
+  let release!: () => void, finish!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const ended = new Promise<void>(resolve => { finish = resolve; });
+  for (const name of ["first", "second"]) await vcall(set, "addListener", "(Landroid/animation/Animator$AnimatorListener;)V", {
+    [mangleMethod("onAnimationStart", "(Landroid/animation/Animator;)V")]: () => {},
+    [mangleMethod("onAnimationEnd", "(Landroid/animation/Animator;)V")]: async () => {
+      events.push(name + " begin");
+      await Bun.sleep(5);
+      events.push(name + " end");
+      if (name === "second") finish();
+    },
+  });
+  const job = onMain(async () => { await vcall(set, "start", "()V"); await blocked; events.push("job end"); });
+  try { await Bun.sleep(15); expect(events).toEqual([]); }
+  finally { release(); }
+  await job; await ended;
+  expect(events).toEqual(["job end", "first begin", "first end", "second begin", "second end"]);
+});

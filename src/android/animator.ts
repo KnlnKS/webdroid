@@ -467,9 +467,13 @@ rt.register({
       const total = this.sequential ? this.anims.reduce((s, a) => s + a.delayMs + a.durationMs, 0)
         : Math.max(0, ...this.anims.map((a) => a.delayMs + a.durationMs));
       setTimeout(() => {
-        this.running = false;
-        for (const l of [...this.animLs]) void vcall(l, "onAnimationEnd", "(Landroid/animation/Animator;)V", this).catch(reportUncaught);
-        if (this.next) void guardCall(this.next, M_start);
+        void onMain(async () => {
+          this.running = false;
+          for (const l of [...this.animLs]) {
+            try { await vcall(l, "onAnimationEnd", "(Landroid/animation/Animator;)V", this); } catch (e) { reportUncaught(e); }
+          }
+          if (this.next) await guardCall(this.next, M_start);
+        }).catch(reportUncaught);
       }, total);
     },
     "cancel()V": async function (this: JAnimatorSet) { this.running = false; for (const a of this.anims) await guardCall(a, M_cancel); },

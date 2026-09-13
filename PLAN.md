@@ -11,8 +11,9 @@ platform contracts; run the full serialized E2E suite at the end.
 ## Checkpoint
 
 - Full installed Chrome runs the unchanged APK at port 4126 with JIT enabled.
-  Search, place details, directions and preview are reachable. Base-map rendering
-  remains inconsistent; screenshot parity is not achieved.
+  Search, place details, directions and preview are reachable. Settled full-JIT previews
+  render water, roads and labels, although initial tile preparation can take tens of seconds.
+  Screenshot parity is not achieved.
 - Android reference captures include home, place, Ferry Building driving directions,
   and route preview. Captures are in `webdroid-shots/maps/` (ignored).
 - Focused commits now cover native loading/rendering, networking, platform value and
@@ -22,8 +23,9 @@ platform contracts; run the full serialized E2E suite at the end.
 - AnimatorSet start callbacks now make the incoming search container visible and
   clear the app's full-screen flag when directions open. Route lines and the preview
   maneuver render. Awaiting inherited compound-button measurement fixes clipped
-  place action chips. Preview control geometry and base-map GL output remain under
-  investigation, alongside text and image differences.
+  place action chips. LinearLayout cross measurement now keeps preview controls at the
+  bottom. Unicode block lookup, file-descriptor bitmap decoding and sequential lists cover
+  additional observed failures. Text, image, map-camera and control-state differences remain.
 - Startup still reports the LoginPromoTutorialController trace-span mismatch. The
   Handler identity fix passes focused tests but did not remove that app error.
   The previously observed detached AndroidViewHolder error is absent in fresh runs.
@@ -36,7 +38,7 @@ platform contracts; run the full serialized E2E suite at the end.
 
 ## Next
 
-1. Diagnose remaining base-map rendering and preview layout failures. Continue
+1. Diagnose remaining image, text, camera and control-state differences. Continue
    checking startup thread/span ordering and remaining API failures against
    Android/bytecode evidence.
 2. Exercise matching Maps search, place, directions and preview interactions in Chrome
