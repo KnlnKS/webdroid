@@ -95,6 +95,7 @@ export class JActivity extends JContextWrapper {
   changingConfigurations = false;
   lastNonConfig: unknown = null;
   requestedOrientation = -1;
+  mediaController: unknown = null;
 }
 /** Fire an ActivityLifecycleCallbacks event (both Pre/Post + the plain variant, API 29+ shapes).
  *  androidx ReportFragment.LifecycleCallbacks uses the Post* variants to advance the activity Lifecycle. */
@@ -137,6 +138,8 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   ...contextMethods,
   "<init>()V": function (this: JActivity) { this.window.activity = this; },
   "getWindow()Landroid/view/Window;": function (this: JActivity) { return this.window; },
+  "setMediaController(Landroid/media/session/MediaController;)V": function (this: JActivity, controller: unknown) { this.mediaController = controller; },
+  "getMediaController()Landroid/media/session/MediaController;": function (this: JActivity) { return this.mediaController; },
   "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JActivity) { return this.window.backDispatcher(); },
   "getApplication()Landroid/app/Application;": function (this: JActivity) { return this.$host.application; },
   "setTaskDescription(Landroid/app/ActivityManager$TaskDescription;)V": function (this: JActivity, d: JTaskDescription | null) { this.taskDescription = d; },
