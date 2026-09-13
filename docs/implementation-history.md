@@ -2531,3 +2531,11 @@ notification loop entered onMain but dispatched subsequent callbacks through amb
 state after awaits. Each callback now uses the explicit main thread. A suspending listener
 check observes [main, worker] on the preceding implementation and [main, main] after the fix;
 both focused preference checks (7 assertions) and typecheck pass.
+
+Resources.getValue discarded the selected configuration's density and the source resource ID.
+A Maps marker resource queried through getValue reported density 0, while openRawResource and
+an Android API 35 app_process oracle both reported 480 for the same res/9J0.png entry.
+Value lookup now carries selected density through resolved references and preserves unresolved
+references when requested. Four assertions cover selection, aliases and reused TypedValues;
+the preceding implementation fails. Fresh Chrome matches the Android oracle's density, ID and
+path; typecheck passes. This metadata discrepancy alone has not established marker-size parity.

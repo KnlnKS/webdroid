@@ -350,9 +350,15 @@ const resMethods: NativeSpec["methods"] = {
     return ta;
   },
   "getValue(ILandroid/util/TypedValue;Z)V": function (this: JResources, id: number, tv: JTypedValue, resolve: number) {
-    let v = this.host.value(id);
-    if (resolve) v = this.host.resolveRefs(v);
-    fillTypedValue(this.host, v, tv);
+    tv.density = 0;
+    let v = this.host.value(id, tv);
+    for (let depth = 0; resolve && v.t === TV.REFERENCE && v.d && depth < 20; depth++) {
+      id = v.d;
+      v = this.host.value(id, tv);
+    }
+    if (!resolve && v.t === TV.REFERENCE) { tv.type = v.t; tv.data = v.d; tv.assetCookie = 1; }
+    else fillTypedValue(this.host, v, tv);
+    tv.resourceId = id;
   },
   "getResourceName(I)Ljava/lang/String;": function (this: JResources, id: number) {
     return (id >>> 24 === 1 ? "android" : this.host.arsc?.pkgName ?? "app") + ":" + this.host.idType(id) + "/" + this.host.idName(id);
