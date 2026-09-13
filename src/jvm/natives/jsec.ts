@@ -225,7 +225,7 @@ rt.register({
 });
 
 // java.util.Random's generator seeded from the CSPRNG; nextBytes itself stays crypto-backed.
-class JSecureRandom extends JRandom { algo = "SHA1PRNG"; }
+class JSecureRandom extends JRandom { algo = "SHA1PRNG"; provider: JProvider | null = null; }
 const secureRandom = (algo: string) => { rt.link("java/security/SecureRandom"); const r = new JSecureRandom(); r.algo = algo; r.setSeed(randomSeed()); return r; };
 rt.register({
   name: "java/security/SecureRandom", ctor: JSecureRandom, sup: "java/util/Random",
@@ -238,6 +238,12 @@ rt.register({
       return secureRandom(algo);
     },
     "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/SecureRandom;": (algo: string) => secureRandom(algo),
+    "static getInstance(Ljava/lang/String;Ljava/security/Provider;)Ljava/security/SecureRandom;": (algo: string, provider: JProvider | null) => {
+      if (algo === null) throw rt.mkThrowable("java/lang/NullPointerException", "algorithm == null");
+      if (!provider) throw rt.mkThrowable("java/lang/IllegalArgumentException", "missing provider");
+      const random = secureRandom(algo); random.provider = provider; return random;
+    },
+    "getProvider()Ljava/security/Provider;": function (this: JSecureRandom) { return this.provider ?? providers[0]; },
     "static getInstanceStrong()Ljava/security/SecureRandom;": () => secureRandom("SHA1PRNG"),
     "getAlgorithm()Ljava/lang/String;": function (this: JSecureRandom) { return this.algo; },
     "nextBytes([B)V": (b: Int8Array) => crypto.getRandomValues(u8(b)),
