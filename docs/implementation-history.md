@@ -1760,6 +1760,18 @@ classes and ARM32 Sentry libraries. In the `codex/twitch-parity` worktree based 
   untimed parking. Restarting a terminated thread throws IllegalThreadStateException.
 - PackageInfo.requestedPermissionsFlags now aligns each permission with the
   canonical PackageManager grant state, and archive queries report ungranted flags.
+- Android Back did nothing inside the page: the APK's onBackPressed sends an
+  Escape KeyEvent to WebView, whose inherited key handler returned false. WebView
+  now forwards navigation key down/up events, retaining Java listener/client
+  interception. Renderer dispatch must not block the main queue: page handlers
+  can synchronously call Java through the bridge. Unhandled results return to the
+  WebViewClient asynchronously.
+- The isolated renderer boot document defaulted to Windows-1252 before replacing
+  its document. An inserted UTF-8 meta element could not repair the already chosen
+  encoding, so external script literals such as a category's bullet were garbled.
+  The boot document now declares UTF-8 before its script, and rewritten script
+  responses advertise UTF-8. A fresh browser reports UTF-8 and renders the bullet
+  correctly; previously decoded scripts can remain cached in an existing browser.
 
 Full Chrome reaches home, search, live video/chat, quality selection, chat hiding
 and QR activation with unchanged app/library bytecode. One observed live stream
@@ -1771,9 +1783,45 @@ Java telemetry does not mean every browser operation succeeds. The page's Pause
 button has an empty mouse handler in shipped Twitch JavaScript; TV key behavior
 needs Android comparison before attributing it to the platform.
 
-Typecheck, eight focused tests (45 assertions), and Twitch smoke compilation
-(zero method failures) pass. Reference screenshot parity and the final full E2E
-gate remain pending. The isolated API 35 AVD boots but cannot install the ARM32
-split; a separately installed official API 25 ARM32 image requires software
-emulation and its renderer launch is under investigation. No visual goldens or
-APK contents were changed. Account-only flows require completing QR activation.
+Typecheck, 713 unit tests (20,909 assertions), and Twitch smoke compilation
+(zero method failures) pass. Reference screenshot parity remains pending. The
+isolated API 35 AVD boots but cannot install the ARM32 split. The official API 25
+ARM32 image reaches Android home with host GL, but QEMU CPU threads hang during
+installation, also with a confirmed single CPU. An old crash-consent dialog had
+blocked renderer retries; separate crash-report storage let boot proceed without
+uploading those reports. No visual goldens or APK contents were changed.
+Account-only flows require completing QR activation.
+
+
+Final regression check: serialized full E2E completed 134/134 steps across 11
+flows in 694.6 s; the identical suite against `f3fefda` on a separate port took
+689.3 s. Neither run reported queue wedges, capture failures, native-required
+entries or layout/draw errors. Every flow's missing-API set matched baseline.
+This does not establish full app functionality: TikTok remains on its splash in
+both builds (all five captures are pixel-identical below the status bar), with
+19 missing APIs and 114 versus 110 error-level logs. The extra distinct messages
+are parent/child lifecycle diagnostics. Lichess reproduces the same native
+pthread error types (35, 22, 3), with 57 versus 54 error logs. Flappy Bird remains
+slow at 28 versus 29 minimum FPS. These are unresolved baseline limitations.
+
+FitNotes and Mihon onboarding scores match baseline (41.54 and 17.56 content
+diff). Mihon app scores 57.82 versus 57.10: launch pixels differ only in the
+empty-state emoticon rectangle; the final Library capture also has 105 changed
+pixels in its selected navigation icon. Harmonic scores 30.00 versus 29.46;
+inspection shows updated vote/comment counts, a replaced story and shifted
+scroll position. Goldens remain unchanged. Single-run timing and live-content
+variation do not establish a performance improvement: aggregate duration is
+similar, while individual draw/boot counters vary. Per-step telemetry, both full
+reports, screenshots and performance rollups are retained under the ignored
+`twitch-investigation` artifact directory and the separate baseline worktree.
+
+A serialized Mihon-only repeat scored 58.09 (candidate) and 57.78 (baseline).
+The selected-icon region also changes within each unchanged build (76 and 35
+pixels respectively), reproducing that small capture variation without any code
+change. Both repeats complete 17 steps with no missing APIs or errors. Original
+full-suite outputs were restored after saving repeat artifacts separately.
+
+Final full-Chrome captures use `127.0.0.1:4106` as the shell origin, giving the
+isolated renderer a fresh cache namespace. The category heading renders its
+Unicode bullet correctly and Android Back returns to Home. The original Chrome
+origin retained previously decoded scripts despite a parent-page hard reload.
