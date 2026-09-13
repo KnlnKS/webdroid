@@ -44,6 +44,14 @@ test("DataSetObserver base callbacks are no-ops", async () => {
   await expect(vcall(observer, "onInvalidated", "()V")).resolves.toBeUndefined();
 });
 
+test("ReentrantLock timed tryLock acquires cooperatively", async () => {
+  const lock = await newObj("java/util/concurrent/locks/ReentrantLock", "()V");
+  const unit = (rt.link("java/util/concurrent/TimeUnit").ctor as any).s$MILLISECONDS;
+  expect(await vcall(lock, "tryLock", "(JLjava/util/concurrent/TimeUnit;)Z", 0n, unit)).toBe(1);
+  expect(await vcall(lock, "isHeldByCurrentThread", "()Z")).toBe(1);
+  await vcall(lock, "unlock", "()V");
+});
+
 test("EditText retains private IME options", async () => {
   const edit = await newObj("android/widget/EditText", "(Landroid/content/Context;)V", null);
   await vcall(edit, "setPrivateImeOptions", "(Ljava/lang/String;)V", "com.example.mode=test");

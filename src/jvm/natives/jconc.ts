@@ -535,6 +535,7 @@ rt.register({
     "lock()V": function (this: JLock) { this.held++; },
     "unlock()V": function (this: JLock) { this.held--; },
     "tryLock()Z": function (this: JLock) { this.held++; return 1; },
+    "tryLock(JLjava/util/concurrent/TimeUnit;)Z": function (this: JLock) { this.held++; return 1; },
     "lockInterruptibly()V": function (this: JLock) { this.held++; },
     "isHeldByCurrentThread()Z": function (this: JLock) { return this.held > 0 ? 1 : 0; },
     "isLocked()Z": function (this: JLock) { return this.held > 0 ? 1 : 0; },
