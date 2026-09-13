@@ -33,3 +33,11 @@ test("a set is a value key in a HashMap", async () => {
   await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", await set("java/util/HashSet", "k"), "v");
   expect(await vcall(map, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", await set("java/util/LinkedHashSet", "k"))).toBe("v");
 });
+test("unordered and insertion-ordered sets do not implement SortedSet", () => {
+  for (const name of ["HashSet", "LinkedHashSet", "EnumSet", "concurrent/CopyOnWriteArraySet", "concurrent/ConcurrentHashMap$KeySetView"]) {
+    const set = rt.make("java/util/" + name);
+    expect(rt.iof(set, "java/util/Set")).toBe(1);
+    expect(rt.iof(set, "java/util/SortedSet")).toBe(0);
+  }
+  expect(rt.iof(rt.make("java/util/TreeSet"), "java/util/SortedSet")).toBe(1);
+});

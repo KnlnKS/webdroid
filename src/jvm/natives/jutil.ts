@@ -964,7 +964,7 @@ for (const n of ["java/util/HashSet", "java/util/LinkedHashSet",
   rt.register({
     name: n, ctor: n === "java/util/EnumSet" ? JEnumSet : class extends JSet {}, typeVars: "E",
     sup: n === "java/util/LinkedHashSet" ? "java/util/HashSet" : "java/util/AbstractSet",
-    ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/util/SortedSet", "java/io/Serializable"],
+    ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"],
     methods: n === "java/util/EnumSet" ? { ...setMethods(), ...enumSetStatics() } : setMethods(),
   });
 }
