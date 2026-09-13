@@ -1496,9 +1496,13 @@ rt.register({
         queueMicrotask(async () => {
           const prev = curThread;
           curThread = this;
-          try { await vcall(this, "run", "()V"); }
+          try {
+            let running: Promise<unknown>;
+            try { running = vcall(this, "run", "()V"); } finally { curThread = prev; }
+            await running;
+          }
           catch (e) { console.error("[thread " + this.jname + "]", e); }
-          finally { this.alive = 0; curThread = prev; threadExit.hook?.(this); resolve(); }
+          finally { this.alive = 0; threadExit.hook?.(this); resolve(); }
         });
       });
     },

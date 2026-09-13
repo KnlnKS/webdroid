@@ -71,7 +71,7 @@ class JLooper extends JObj {
       await this.thread.untilIdle();                                             // a thread blocked in native code runs no message, as on a device
       const prev = curThread;
       setCurThread(this.thread);
-      try { return await job(); } finally { setCurThread(prev); }
+      try { return job(); } finally { setCurThread(prev); }
     });
     this.q = p.catch(() => { /* a failed message must not poison the queue */ });
     return p;
