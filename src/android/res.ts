@@ -286,6 +286,33 @@ export class JAttrSet extends JObj {
   theme: JTheme | null = null;
 }
 
+export class JXmlParser extends JObj {
+  events: { type: number; node: XmlNode | null; depth: number }[] = [];
+  pos = -1;
+  res!: Resources;
+  set = new JAttrSet();
+  get node(): XmlNode | null { return this.events[this.pos]?.node ?? null; }
+}
+
+/** A pull parser positioned on a drawable's current start tag, as DrawableInflater supplies it. */
+export function xmlParserAtNode(res: Resources, root: XmlNode): JXmlParser {
+  const parser = new JXmlParser();
+  parser.res = res;
+  parser.set.res = res;
+  const events: JXmlParser["events"] = [];
+  const walk = (node: XmlNode, depth: number) => {
+    events.push({ type: 2, node, depth });
+    for (const child of node.children) walk(child, depth + 1);
+    events.push({ type: 3, node, depth });
+  };
+  walk(root, 1);
+  events.push({ type: 1, node: null, depth: 0 });
+  parser.events = events;
+  parser.pos = 0;
+  parser.set.node = root;
+  return parser;
+}
+
 // ── TypedArray (result of obtainStyledAttributes)
 export class JTypedArray extends JObj {
   res!: Resources;

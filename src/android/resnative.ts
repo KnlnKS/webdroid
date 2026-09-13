@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newXmlPullParser } from "./xmlpull";
-import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
+import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, JXmlParser, obtainStyled, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
 import { JTypedValue, complexToFraction, type JDisplayMetrics } from "./util";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
@@ -633,13 +633,6 @@ rt.register({
 });
 
 // XmlResourceParser (pull parser over XmlNode tree)
-class JXmlParser extends JObj {
-  events: { type: number; node: XmlNode | null; depth: number }[] = [];
-  pos = -1;
-  res!: Resources;
-  set = new JAttrSet();
-  get node(): XmlNode | null { return this.events[this.pos]?.node ?? null; }
-}
 export function mkXmlParser(res: Resources, id: number): JXmlParser {
   rt.link("android/content/res/XmlResourceParser");
   const bytes = id ? res.fileOf(id)?.bytes : null;

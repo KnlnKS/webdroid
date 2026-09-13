@@ -1,12 +1,12 @@
 // android.graphics.drawable.* — Drawable hierarchy, XML inflation, 9-patch, vectors.
 
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
-import { vcall, mkEnumSet } from "../jvm/natives/jlang";
+import { vcall, newObj, mkEnumSet, defineException } from "../jvm/natives/jlang";
 import { mangleMethod, jmethod, intBitsToFloat } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf } from "./graphics";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
-import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, normRV } from "./res";
+import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, normRV, xmlParserAtNode } from "./res";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 
 export const ST = {
@@ -173,6 +173,7 @@ function copyBounds(from: JDrawable, to: JDrawable) {
 }
 rt.register({ name: "android/graphics/drawable/Drawable", ctor: JDrawable, methods: drawableMethods });
 rt.markers("android/graphics/drawable/Drawable$Callback");
+defineException("android/view/InflateException", "java/lang/RuntimeException");
 class JConstantState extends JObj {}
 class JDrawableState extends JConstantState {
   create!: () => JDrawable;
@@ -1184,7 +1185,7 @@ async function itemDrawable(res: Resources, node: XmlNode, theme: JTheme | null)
   if (da) return loadDrawableRV(res, da, theme);
   return node.children.length ? inflateDrawableNode(res, node.children[0], theme) : null;
 }
-async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme | null): Promise<JDrawable> {
+export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme | null): Promise<JDrawable> {
   const get = (id: number) => nodeAttr(res, node, id);
   const colorOf = (v: RV | null, d = 0) => {
     if (v && v.t === TV.ATTRIBUTE) v = theme?.lookup(v.d) ?? null;
@@ -1396,8 +1397,23 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
       return new JColorDrawable();
     }
     default:
-      rt.noteMissing("drawable tag <" + node.name + ">");
-      return new JColorDrawable();
+      if (!node.name.includes(".")) {
+        rt.noteMissing("drawable tag <" + node.name + ">");
+        return new JColorDrawable();
+      }
+      let drawable: unknown;
+      try {
+        drawable = await newObj(node.name.replace(/\./g, "/"));
+      } catch {
+        throw rt.mkThrowable("android/view/InflateException", "Error inflating class " + node.name);
+      }
+      if (!(drawable instanceof JDrawable)) {
+        throw rt.mkThrowable("android/view/InflateException", "Class is not a Drawable " + node.name);
+      }
+      const parser = xmlParserAtNode(res, node);
+      await vcall(drawable, "inflate", "(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V",
+        res.jobj, parser, parser, theme);
+      return drawable;
   }
 }
 /** rvInt for drawable XML attrs, which arrive unresolved: follows @references (via rvColor). */
