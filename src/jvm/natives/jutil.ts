@@ -2099,6 +2099,7 @@ const extreme = (sign: number) => async (c: unknown, cmp: unknown = null) => {
 };
 const collMax = extreme(1), collMin = extreme(-1);
 const emptyList = new JList();
+const emptyIterator = mkIter([]);
 rt.register({
   name: "java/util/Collections", ctor: JCollections,
   clinit: () => {
@@ -2109,6 +2110,7 @@ rt.register({
   },
   methods: {
     "static emptyList()Ljava/util/List;": () => newArrayList(),
+    "static emptyIterator()Ljava/util/Iterator;": () => emptyIterator,
     "static emptyMap()Ljava/util/Map;": () => new JMap(),
     "static emptySet()Ljava/util/Set;": () => new JSet(),
     "static singletonList(Ljava/lang/Object;)Ljava/util/List;": (v: unknown) => { const l = new JList(); l.a = [v]; return l; },
