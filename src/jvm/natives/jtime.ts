@@ -345,6 +345,29 @@ function toJsRegex(p: string, flags: number, global: boolean): RegExp {
 const compile = (p: string, flags = 0) => { const pt = new JPattern(); pt.src = p; pt.flags = flags; return pt; };
 const quoteRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const patternRe = (p: JPattern) => toJsRegex(p.flags & 16 ? quoteRe(p.src) : p.src, p.flags, true);
+function splitPattern(pattern: JPattern, sequence: unknown, limit: number): string[] {
+  const input = jToString(sequence), re = patternRe(pattern), out: string[] = [];
+  re.lastIndex = 0;
+  let index = 0;
+  for (let match = re.exec(input); match; match = re.exec(input)) {
+    const end = match.index + match[0].length;
+    if (index === 0 && match.index === 0 && end === 0) {
+      re.lastIndex += (input.codePointAt(re.lastIndex) ?? 0) > 0xffff ? 2 : 1;
+      continue;
+    }
+    if (limit > 0 && out.length === limit - 1) {
+      out.push(input.slice(index));
+      return jarray(out, "Ljava/lang/String;");
+    }
+    out.push(input.slice(index, match.index));
+    index = end;
+    if (end === match.index) re.lastIndex += (input.codePointAt(re.lastIndex) ?? 0) > 0xffff ? 2 : 1;
+  }
+  if (index === 0) return jarray([input], "Ljava/lang/String;");
+  out.push(input.slice(index));
+  if (limit === 0) while (out.at(-1) === "") out.pop();
+  return jarray(out, "Ljava/lang/String;");
+}
 rt.register({
   name: "java/util/regex/Pattern", ctor: JPattern, ifaces: ["java/io/Serializable"],
   statics: { CASE_INSENSITIVE: 2, MULTILINE: 8, DOTALL: 32, LITERAL: 16, UNICODE_CASE: 64 },
@@ -361,11 +384,8 @@ rt.register({
     },
     "pattern()Ljava/lang/String;": function (this: JPattern) { return this.src; },
     "toString()Ljava/lang/String;": function (this: JPattern) { return this.src; },
-    "split(Ljava/lang/CharSequence;)[Ljava/lang/String;": function (this: JPattern, s: unknown) {
-      const out = jToString(s).split(toJsRegex(this.src, this.flags, false));
-      while (out.length > 1 && out[out.length - 1] === "") out.pop();
-      return jarray(out, "Ljava/lang/String;");
-    },
+    "split(Ljava/lang/CharSequence;)[Ljava/lang/String;": function (this: JPattern, s: unknown) { return splitPattern(this, s, 0); },
+    "split(Ljava/lang/CharSequence;I)[Ljava/lang/String;": function (this: JPattern, s: unknown, limit: number) { return splitPattern(this, s, limit); },
   },
 });
 rt.markers("java/util/regex/MatchResult");
