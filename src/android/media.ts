@@ -32,11 +32,6 @@ rt.register({
     "onQueueChanged(Ljava/util/List;)V", "onQueueTitleChanged(Ljava/lang/CharSequence;)V",
     "onExtrasChanged(Landroid/os/Bundle;)V", "onAudioInfoChanged(Landroid/media/session/MediaController$PlaybackInfo;)V") },
 });
-rt.register({
-  name: "android/media/MediaRoute2ProviderService", ctor: class extends JObj {}, sup: "android/app/Service",
-  methods: { "<init>()V": function () {} },
-});
-
 class JAudioAttributes extends JObj { usage = 0; contentType = 0; flags = 0x800; }
 rt.register({
   name: "android/media/AudioAttributes", ctor: JAudioAttributes, ifaces: ["android/os/Parcelable"],

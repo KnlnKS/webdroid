@@ -973,6 +973,10 @@ rt.register({ name: "android/app/Service", ctor: JService, sup: "android/content
     "startForeground(ILandroid/app/Notification;I)V": function (this: JObj) { svcFg(this, true); }, // the type is advisory
     "stopForeground(Z)V": function (this: JObj) { svcFg(this, false); },
   } });
+rt.register({
+  name: "android/media/MediaRoute2ProviderService", ctor: class extends JService {}, sup: "android/app/Service",
+  methods: { ...wrapperMethods, "<init>()V": function () {} },
+});
 
 // API-30 WindowInsetsAnimation: the APK ships desugar stubs whose <clinit> throws
 // NoClassDefFoundError; real framework classes shadow them on-device, so must ours.
