@@ -2,8 +2,10 @@
 // so synchronous page calls can wait while the Java runtime continues executing.
 
 import { rt, JObj, type NativeSpec, type ClassInfo, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
-import { mangleMethod, parseMethodDesc } from "../jvm/abi";
+import { mangleMethod, parseMethodDesc, jmethod } from "../jvm/abi";
 import { vcall, mkEnumSet, JThread, curThread, setCurThread, type JSimpleEnum } from "../jvm/natives/jlang";
+import { readStreamFully } from "../jvm/natives/jio";
+import { toJsArray } from "../jvm/natives/jutil";
 import { JViewGroup, initViewFromCtx, defaultSize, type JView } from "./view";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
@@ -11,7 +13,7 @@ import { type JContext } from "./context";
 import { mkUri } from "./net";
 import { appHost } from "./apphost";
 import { webCookies, thirdPartyCookies } from "./cookies";
-import { WebBridge, type WebInterfaces } from "../shell/webbridge";
+import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge";
 import { EXT_MIME, MIME_EXT } from "../mime";
 import { WEB_INJECT } from "../shell/webinject";
 
@@ -171,7 +173,7 @@ const navigationKeys: Record<number, readonly [string, number]> = {
   122: ["Home", 36], 123: ["End", 35],
 };
 const REQ = "com/android/webview/chromium/WebViewContentsClientAdapter$WebResourceRequestAdapter";
-class JReq extends JObj { url = ""; main = true; gesture = false; }
+class JReq extends JObj { url = ""; main = true; gesture = false; method = "GET"; headers: unknown = null; }
 function mkRequest(url: string, gesture = false): JReq {
   const r = inst<JReq>(REQ);
   r.url = url; r.gesture = gesture;
@@ -193,6 +195,7 @@ export class JWebView extends JViewGroup {
   idx = -1;
   ifaces: WebInterfaces = Object.create(null);
   bridgeThread = Object.assign(new JThread(), { jname: "JavaBridge" });
+  private requestThread = Object.assign(new JThread(), { jname: "Chrome_IOThread" });
   private remote: WebBridge | null = null;
   private remoteOrigin = "";
   private remoteHeight = 0;
@@ -200,6 +203,7 @@ export class JWebView extends JViewGroup {
   private nextEval = 0;
   private evaluations = new Map<number, (value: string) => void>();
   private pendingScripts = new Map<number, string>();
+  private scriptReady = false;
   private message = (event: MessageEvent) => {
     if (event.source !== this.el?.contentWindow || event.origin !== this.remoteOrigin || event.data?.bridge !== this.remote?.id) return;
     const data = event.data;
@@ -213,6 +217,9 @@ export class JWebView extends JViewGroup {
         ports[0].postMessage(jar.network(data.url, this.url ?? "", values, thirdPartyCookies.has(this))); ports[0].close();
       };
       this.send({ kind: "load", src: this.hist[this.idx]?.src, doc: this.hist[this.idx]?.doc, userAgent: this.settings.v.userAgentString }, [channel.port2]);
+    }
+    else if (data.kind === "script-ready") {
+      this.scriptReady = true;
       for (const [seq, script] of this.pendingScripts) this.send({ kind: "eval", seq, script });
       this.pendingScripts.clear();
     }
@@ -225,6 +232,7 @@ export class JWebView extends JViewGroup {
   };
   private send(data: object, transfer: Transferable[] = []) { this.el?.contentWindow?.postMessage({ ...data, bridge: this.remote?.id }, this.remoteOrigin, transfer); }
   private closeBridge() {
+    this.scriptReady = false;
     this.remote?.close(); this.remote = null; this.remoteOrigin = "";
     this.cookiePort?.close(); this.cookiePort = null;
     window.removeEventListener("message", this.message);
@@ -260,13 +268,18 @@ export class JWebView extends JViewGroup {
         else { el.removeAttribute("srcdoc"); el.src = e.src!; }
       };
       this.closeBridge();
-      if (Object.keys(this.ifaces).length) {
-        const remote = this.remote = new WebBridge({ ...this.ifaces }, webCookies(appHost?.pkg ?? ""), () => this.url);
+      const base = rt.link("android/webkit/WebViewClient").ctor.prototype;
+      const intercept = ["Landroid/webkit/WebResourceRequest;", "Ljava/lang/String;"].some(arg => {
+        const method = mangleMethod("shouldInterceptRequest", "(Landroid/webkit/WebView;" + arg + ")Landroid/webkit/WebResourceResponse;");
+        return jmethod(this.client, method) !== jmethod(base, method);
+      });
+      if (intercept || Object.keys(this.ifaces).length) {
+        const remote = this.remote = new WebBridge({ ...this.ifaces }, webCookies(appHost?.pkg ?? ""), () => this.url, intercept ? request => this.intercept(request) : undefined);
         window.addEventListener("message", this.message);
         void remote.ready.then((origin) => {
           if (this.gen !== g) return;
           this.remoteOrigin = origin;
-          el.removeAttribute("srcdoc"); el.src = origin + "/webview?__wd_bridge=" + remote.id + "&__wd_url=" + encodeURIComponent(e.url) + "&__wd_ua=" + encodeURIComponent(String(this.settings.v.userAgentString));
+          el.removeAttribute("srcdoc"); el.src = origin + "/webview?__wd_bridge=" + remote.id + "&__wd_url=" + encodeURIComponent(e.url) + "&__wd_ua=" + encodeURIComponent(String(this.settings.v.userAgentString)) + (intercept ? "&__wd_intercept=1" : "");
         }).catch(() => { if (this.gen === g) this.finishLoad(null, "", "WebView bridge unavailable"); });
       } else if (e.src?.startsWith("/proxy?")) void webProxy().then(load).catch((error) => { console.error("[webview transport]", error); load(); });
       else load();
@@ -276,6 +289,32 @@ export class JWebView extends JViewGroup {
   loadUrl(url: string) {
     if (/^javascript:/i.test(url)) { this.evalJs(url.slice(11)); return; }
     this.go({ url, src: srcFor(url, this) });
+  }
+  private async intercept(request: WebRequest): Promise<WebResponse | null> {
+    const previous = curThread;
+    setCurThread(this.requestThread);
+    try {
+      const req = mkRequest(request.url);
+      req.main = request.main; req.method = request.method;
+      req.headers = inst("java/util/HashMap");
+      for (const [key, value] of Object.entries(request.headers)) await vcall(req.headers, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value);
+      const response = await vcall(this.client, "shouldInterceptRequest", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Landroid/webkit/WebResourceResponse;", this, req) as JWebResourceResponse | null;
+      if (!response) return null;
+      const headers: Record<string, string> = {};
+      if (response.headers) for (const entry of await toJsArray(await vcall(response.headers, "entrySet", "()Ljava/util/Set;"))) {
+        const key = await vcall(entry, "getKey", "()Ljava/lang/Object;") as string;
+        headers[key] = await vcall(entry, "getValue", "()Ljava/lang/Object;") as string;
+      }
+      if (response.mime) headers["content-type"] = response.mime + (response.enc ? "; charset=" + response.enc : "");
+      let binary = "";
+      if (response.data) {
+        try {
+          const bytes = await readStreamFully(response.data);
+          for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
+        } finally { await vcall(response.data, "close", "()V"); }
+      }
+      return { body: btoa(binary), status: response.status, reason: response.reason, headers };
+    } finally { if (curThread === this.requestThread) setCurThread(previous); }
   }
   step(n: number) {
     const i = this.idx + n;
@@ -349,7 +388,7 @@ export class JWebView extends JViewGroup {
       const done = (value: string) => { clearTimeout(timer); this.evaluations.delete(seq); this.pendingScripts.delete(seq); resolve(value); };
       const timer = setTimeout(() => done("null"), 30_000);
       this.evaluations.set(seq, done);
-      if (this.cookiePort) this.send({ kind: "eval", seq, script: js });
+      if (this.scriptReady) this.send({ kind: "eval", seq, script: js });
       else this.pendingScripts.set(seq, js);
     });
     const w = win(this);
@@ -563,8 +602,8 @@ rt.register({
     "isForMainFrame()Z": function (this: JReq) { return this.main ? 1 : 0; },
     "isRedirect()Z": () => 0,
     "hasGesture()Z": function (this: JReq) { return this.gesture ? 1 : 0; },
-    "getMethod()Ljava/lang/String;": () => "GET",
-    "getRequestHeaders()Ljava/util/Map;": () => inst("java/util/HashMap"),
+    "getMethod()Ljava/lang/String;": function (this: JReq) { return this.method; },
+    "getRequestHeaders()Ljava/util/Map;": function (this: JReq) { return this.headers ??= inst("java/util/HashMap"); },
   },
 });
 rt.register({

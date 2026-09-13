@@ -74,7 +74,24 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
           if (k.startsWith("x-wd-")) headers.set(k.slice(5), v);
         });
         const encoded = !frame && !isolated && headers.has("accept-encoding");
-        const upstream = await fetch(url, {
+        const bridge = q.get("bridge");
+        let intercepted: Response | null = null;
+        if (bridge) {
+          const result = await webRelay.call(new Request(new URL("/webview-call?id=" + encodeURIComponent(bridge), req.url), {
+            method: "POST", signal: req.signal,
+            body: JSON.stringify({ kind: "request", url, method: req.method, main: frame, headers: Object.fromEntries(headers) }),
+          }));
+          if (!result.ok) throw new Error("WebView request callback unavailable");
+          const reply = await result.json();
+          if (reply.error) throw new Error(reply.error);
+          if (reply.value) {
+            const value = reply.value;
+            intercepted = new Response(req.method === "HEAD" || [204, 205, 304].includes(value.status) ? null : Buffer.from(value.body, "base64"), {
+              status: value.status, statusText: value.reason, headers: value.headers,
+            });
+          }
+        }
+        const upstream = intercepted ?? await fetch(url, {
           method: req.method === "HEAD" ? "HEAD" : req.method,
           headers,
           body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
@@ -86,7 +103,7 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
           if (!DROP.test(k) && !(frame && DROP_FRAME.test(k))) h.set(k, v);
         });
         h.set("Access-Control-Allow-Origin", "*");
-        h.set("x-wd-final-url", upstream.url);
+        h.set("x-wd-final-url", upstream.url || url);
         if (manual) {
           h.set("x-wd-status", String(upstream.status));
           const cookies = upstream.headers.getSetCookie();
@@ -99,7 +116,7 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
           // links resolving against the real one. text() re-encodes as UTF-8, so say so.
           h.set("content-type", "text/html; charset=utf-8");
           if (isolated) { h.delete("etag"); h.delete("last-modified"); }
-          return new Response(webDocument(await upstream.text(), upstream.url, isolated), { status: upstream.status, headers: h });
+          return new Response(webDocument(await upstream.text(), upstream.url || url, isolated), { status: upstream.status, headers: h });
         }
         if (isolated && upstream.body && /^(?:text|application)\/(?:x-)?(?:java|ecma)script(?:;|$)/i.test(upstream.headers.get("content-type") ?? "")) {
           h.delete("etag"); h.delete("last-modified");
