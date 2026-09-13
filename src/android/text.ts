@@ -282,10 +282,22 @@ rt.register({
     ...editMutators("android/text/SpannableStringBuilder"),
     ...editMutators("android/text/Editable"),
     "clear()V": function (this: JSpannable) { this.text = ""; this.spans = []; },
+    "clearSpans()V": function (this: JSpannable) {
+      if (!this.spans.some(s => rt.iof(s.span, "android/text/SpanWatcher"))) { this.spans.length = 0; return; }
+      return (async () => {
+        while (this.spans.length) {
+          const removed = this.spans.pop()!;
+          const watchers = this.spans.filter(s => rt.iof(s.span, "android/text/SpanWatcher") && s.start <= removed.end && s.end >= removed.start &&
+            (s.start === s.end || removed.start === removed.end || s.start !== removed.end && s.end !== removed.start))
+            .sort((a, b) => (b.flags & 0xff0000) - (a.flags & 0xff0000));
+          for (const s of watchers) await vcall(s.span, "onSpanRemoved", "(Landroid/text/Spannable;Ljava/lang/Object;II)V", this, removed.span, removed.start, removed.end);
+        }
+      })();
+    },
   },
 });
 for (const i of ["android/text/Spannable", "android/text/Spanned", "android/text/Editable",
-  "android/text/TextWatcher", "android/text/InputFilter", "android/text/ParcelableSpan", "android/text/NoCopySpan"]) {
+  "android/text/TextWatcher", "android/text/SpanWatcher", "android/text/InputFilter", "android/text/ParcelableSpan", "android/text/NoCopySpan"]) {
   rt.register({ name: i, ctor: class extends JObj {} });
 }
 rt.register({
