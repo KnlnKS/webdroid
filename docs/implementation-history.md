@@ -2348,3 +2348,19 @@ both constructors. Capture the caller thread before initialization and restore i
 both construction stages, without retaining global thread state across the wait. The
 construction and Handler tests pass (six assertions), as does typecheck. Fresh headed
 Maps still reports the startup trace-span mismatch, so that separate race remains.
+
+### Await inherited text measurement in compound widgets
+
+The visible Directions chip measured 354px inside a 144px FrameLayout. A live measure
+trace found the parent had observed a zero-width chip; CompoundButton discarded the
+promise from TextView.onMeasure, so its measurement finished later. CheckedTextView
+had the same call pattern. Await both inherited measurements before adding indicator
+space or applying height constraints.
+
+A real Chrome Canvas2D probe with delayed suggested minimums reproduced both widgets
+returning zero dimensions before the callback finished. The rebuilt browser reports
+354px for each child and parent. Fresh Maps now lays out Directions at [48,1536,402,1680]
+with non-overlapping Tickets and Share, replacing the clipped negative-left chip.
+Typecheck passes. The fresh Android reference also wraps the place title onto two
+lines; that observed wrapping is not a parity defect. Base map tiles, rating decoration,
+preview control geometry and the startup trace error remain unresolved.

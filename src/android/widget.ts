@@ -1,7 +1,7 @@
 import { AID } from "./res";
 import { JView, initViewFromCtx, invalidate, resolveSizeAndState, uiState, JViewGroup } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawChild } from "./drawable";
-import { rt, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters, flagSetters } from "../jvm/runtime";
+import { rt, type NativeSpec, stubs, noops, callSelf, fieldGetters, flagGetters, fieldSetters, flagSetters } from "../jvm/runtime";
 import { type JAttrSet, rvColor, obtainStyled, rvInt } from "./res";
 import { TV } from "./axml";
 import { type JCanvas, cssColor } from "./graphics";
@@ -234,8 +234,8 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
     this.buttonW = id ? (kind === "switch" ? device.dp(52) : device.dp(32)) : 0;
     await this.applyButtonTint();
   },
-  "onMeasure(II)V": function (this: JCompoundButton, wSpec: number, hSpec: number) {
-    (textViewMethods["onMeasure(II)V"] as (a: number, b: number) => void).call(this, wSpec, hSpec);
+  "onMeasure(II)V": async function (this: JCompoundButton, wSpec: number, hSpec: number) {
+    await callSelf(textViewMethods, "onMeasure(II)V", this, wSpec, hSpec);
     this.measuredW = resolveSizeAndState(this.measuredW + this.buttonW, wSpec);
     this.measuredH = Math.max(this.measuredH, device.dp(48));
   },
@@ -390,8 +390,8 @@ rt.register({
     "setCheckMarkDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JCheckedTextView, d: JDrawable | null) {
       this.checkMarkDrawable = d;
     },
-    "onMeasure(II)V": function (this: JCheckedTextView, wSpec: number, hSpec: number) {
-      (textViewMethods["onMeasure(II)V"] as (a: number, b: number) => void).call(this, wSpec, hSpec);
+    "onMeasure(II)V": async function (this: JCheckedTextView, wSpec: number, hSpec: number) {
+      await callSelf(textViewMethods, "onMeasure(II)V", this, wSpec, hSpec);
       this.measuredH = Math.max(this.measuredH, device.dp(48));
     },
     "onDraw(Landroid/graphics/Canvas;)V": function (this: JCheckedTextView, cv: JCanvas) {
