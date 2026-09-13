@@ -1257,6 +1257,9 @@ export class JCanvas extends JObj {
   saveCount = 1;
   bmp: JBitmap | null = null;
   semanticOwner: { drawnText: string[] | null } | null = null;
+  recordText(text: string) {
+    if (this.semanticOwner) (this.semanticOwner.drawnText ??= []).push(text);
+  }
   static wrap(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, w: number, h: number): JCanvas {
     const c = new JCanvas();
     c.ctx = ctx; c.w = w; c.h = h;
@@ -1571,7 +1574,7 @@ const drawColorKey = mangleMethod("drawColor", "(I)V");
 export const CAPS = ["butt", "round", "square"] as const;
 export const JOINS = ["miter", "round", "bevel"] as const;
 function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
-  if (cv.semanticOwner) (cv.semanticOwner.drawnText ??= []).push(s);
+  cv.recordText(s);
   const ctx = cv.ctx;
   ctx.font = p.font();
   ctx.fillStyle = p.fillStyle(ctx) as string;
