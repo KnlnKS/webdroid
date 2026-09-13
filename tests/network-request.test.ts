@@ -35,3 +35,15 @@ test("NetworkRequest exposes a defensive array of transport types", async () => 
   transports[0] = 7;
   expect([...(await vcall(request, "getTransportTypes", "()[I") as Int32Array)]).toEqual([1, 3]);
 });
+
+test("NetworkRequest exposes a defensive array of capabilities", async () => {
+  const builder = await newObj("android/net/NetworkRequest$Builder", "()V");
+  await vcall(builder, "addCapability", "(I)Landroid/net/NetworkRequest$Builder;", 12);
+  await vcall(builder, "addCapability", "(I)Landroid/net/NetworkRequest$Builder;", 5);
+  await vcall(builder, "addCapability", "(I)Landroid/net/NetworkRequest$Builder;", 12);
+  const request = await vcall(builder, "build", "()Landroid/net/NetworkRequest;");
+  const capabilities = await vcall(request, "getCapabilities", "()[I") as Int32Array;
+  expect([...capabilities]).toEqual([5, 12]);
+  capabilities[0] = 7;
+  expect([...(await vcall(request, "getCapabilities", "()[I") as Int32Array)]).toEqual([5, 12]);
+});
