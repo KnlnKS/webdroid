@@ -606,6 +606,11 @@ rt.markers("android/view/GestureDetector$OnGestureListener", "android/view/Gestu
 
 class JScaleGestureDetector extends JObj {
   listener: unknown = null;
+  focusX = 0;
+  focusY = 0;
+  eventTime = 0;
+  quickScale = 0;
+  stylusScale = 0;
 }
 rt.register({
   name: "android/view/ScaleGestureDetector", ctor: JScaleGestureDetector,
@@ -614,11 +619,23 @@ rt.register({
       function (this: JScaleGestureDetector, _context: unknown, listener: unknown) { this.listener = listener; },
     "<init>(Landroid/content/Context;Landroid/view/ScaleGestureDetector$OnScaleGestureListener;Landroid/os/Handler;)V":
       function (this: JScaleGestureDetector, _context: unknown, listener: unknown) { this.listener = listener; },
-    "onTouchEvent(Landroid/view/MotionEvent;)Z": () => 0,
-    ...stubs(0, "isInProgress()Z", "getFocusX()F", "getFocusY()F", "getCurrentSpan()F",
+    "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JScaleGestureDetector, event: JMotionEvent) {
+      this.focusX = event.x;
+      this.focusY = event.y;
+      this.eventTime = event.eventTime;
+      return 1;
+    },
+    "getFocusX()F": function (this: JScaleGestureDetector) { return this.focusX; },
+    "getFocusY()F": function (this: JScaleGestureDetector) { return this.focusY; },
+    "getEventTime()J": function (this: JScaleGestureDetector) { return BigInt(Math.round(this.eventTime)); },
+    ...stubs(0, "isInProgress()Z", "getCurrentSpan()F",
       "getCurrentSpanX()F", "getCurrentSpanY()F", "getPreviousSpan()F", "getPreviousSpanX()F",
       "getPreviousSpanY()F", "getTimeDelta()J"),
     ...stubs(1, "getScaleFactor()F"),
+    "setQuickScaleEnabled(Z)V": function (this: JScaleGestureDetector, enabled: number) { this.quickScale = enabled; },
+    "isQuickScaleEnabled()Z": function (this: JScaleGestureDetector) { return this.quickScale; },
+    "setStylusScaleEnabled(Z)V": function (this: JScaleGestureDetector, enabled: number) { this.stylusScale = enabled; },
+    "isStylusScaleEnabled()Z": function (this: JScaleGestureDetector) { return this.stylusScale; },
   },
 });
 rt.register({

@@ -922,6 +922,11 @@ rt.register({
     "getDynamicShortcuts()Ljava/util/List;": async function (this: JShortcutManager) {
       const list = newArrayList(); list.a = await Promise.all([...(this.packages.get(appHost?.pkg ?? "")?.values() ?? [])].map(copyShortcut)); return list;
     },
+    "getShortcuts(I)Ljava/util/List;": async function (this: JShortcutManager, flags: number) {
+      const list = newArrayList();
+      if (flags & 2) list.a = await Promise.all([...(this.packages.get(appHost?.pkg ?? "")?.values() ?? [])].map(copyShortcut));
+      return list;
+    },
     "removeAllDynamicShortcuts()V": function (this: JShortcutManager) { this.packages.delete(appHost?.pkg ?? ""); },
     "getMaxShortcutCountPerActivity()I": () => 15,
     "isRateLimitingActive()Z": () => 0,

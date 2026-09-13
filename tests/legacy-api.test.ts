@@ -38,6 +38,27 @@ test("View accepts a generic motion listener", async () => {
   await expect(vcall(view, "setOnGenericMotionListener", "(Landroid/view/View$OnGenericMotionListener;)V", new JObj())).resolves.toBeUndefined();
 });
 
+test("ScaleGestureDetector consumes single-pointer input and retains feature flags", async () => {
+  const detector = await newObj("android/view/ScaleGestureDetector", "(Landroid/content/Context;Landroid/view/ScaleGestureDetector$OnScaleGestureListener;)V", null, null);
+  await vcall(detector, "setQuickScaleEnabled", "(Z)V", 1);
+  await vcall(detector, "setStylusScaleEnabled", "(Z)V", 1);
+  expect(await vcall(detector, "isQuickScaleEnabled", "()Z")).toBe(1);
+  expect(await vcall(detector, "isStylusScaleEnabled", "()Z")).toBe(1);
+});
+
+test("screen capture callbacks can register on a device without capture events", async () => {
+  const activity = rt.make("android/app/Activity");
+  const callback = rt.make("android/app/Activity$ScreenCaptureCallback");
+  await expect(vcall(activity, "registerScreenCaptureCallback", "(Ljava/util/concurrent/Executor;Landroid/app/Activity$ScreenCaptureCallback;)V", null, callback)).resolves.toBeUndefined();
+  await expect(vcall(activity, "unregisterScreenCaptureCallback", "(Landroid/app/Activity$ScreenCaptureCallback;)V", callback)).resolves.toBeUndefined();
+});
+
+test("ShortcutManager getShortcuts filters to published dynamic shortcuts", async () => {
+  const manager = rt.make("android/content/pm/ShortcutManager");
+  expect(await vcall(await vcall(manager, "getShortcuts", "(I)Ljava/util/List;", 0), "size", "()I")).toBe(0);
+  expect(await vcall(await vcall(manager, "getShortcuts", "(I)Ljava/util/List;", 2), "size", "()I")).toBe(0);
+});
+
 test("DataSetObserver base callbacks are no-ops", async () => {
   const observer = await newObj("android/database/DataSetObserver", "()V");
   await expect(vcall(observer, "onChanged", "()V")).resolves.toBeUndefined();

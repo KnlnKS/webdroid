@@ -360,6 +360,8 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     }, 0);
   },
   "getVolumeControlStream()I": () => 3,
+  ...noops("registerScreenCaptureCallback(Ljava/util/concurrent/Executor;Landroid/app/Activity$ScreenCaptureCallback;)V",
+    "unregisterScreenCaptureCallback(Landroid/app/Activity$ScreenCaptureCallback;)V"),
   ...noops("onCreate(Landroid/os/Bundle;)V", "onPostCreate(Landroid/os/Bundle;)V", "onRestart()V", "onPostResume()V",
     "onNewIntent(Landroid/content/Intent;)V", "onSaveInstanceState(Landroid/os/Bundle;)V",
     "onRestoreInstanceState(Landroid/os/Bundle;)V", "onActivityResult(IILandroid/content/Intent;)V",
@@ -396,6 +398,7 @@ rt.register({
   statics: { RESULT_OK: -1, RESULT_CANCELED: 0, DEFAULT_KEYS_DISABLE: 0 },
   methods: activityMethods,
 });
+rt.markers("android/app/Activity$ScreenCaptureCallback");
 // ListActivity: an Activity whose content is one ListView; the app's own layout supplies it
 rt.register({
   name: "android/app/ListActivity", ctor: class extends JActivity { adapter: unknown = null; }, sup: "android/app/Activity",
