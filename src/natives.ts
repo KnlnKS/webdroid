@@ -78,6 +78,7 @@ import "./android/fragment";
 import "./android/app";
 import "./android/backup";
 import "./android/adservices";
+import "./android/camera2";
 import "./android/netstats";
 import "./android/popup";
 import "./android/security";

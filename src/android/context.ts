@@ -112,6 +112,7 @@ const SERVICE_CLASS: Record<string, string> = {
   keyguard: "android/app/KeyguardManager",
   jobscheduler: "android/app/job/JobScheduler",
   sensor: "android/hardware/SensorManager",
+  camera: "android/hardware/camera2/CameraManager",
   location: "android/location/LocationManager",
   batterymanager: "android/os/BatteryManager",
   display: "android/hardware/display/DisplayManager",
