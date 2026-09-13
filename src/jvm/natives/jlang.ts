@@ -1212,6 +1212,10 @@ rt.register({
     "static floorMod(JJ)J": (a: bigint, b: bigint) => ((a % b) + b) % b,
     "static atan2(DD)D": (a: number, b: number) => Math.atan2(a, b),
     "static hypot(DD)D": (a: number, b: number) => Math.hypot(a, b),
+    "static copySign(DD)D": (magnitude: number, sign: number) => longBitsToDouble(
+      doubleToLongBits(magnitude) & 0x7fffffffffffffffn | doubleToLongBits(sign) & -0x8000000000000000n),
+    "static copySign(FF)F": (magnitude: number, sign: number) => intBitsToFloat(
+      floatToIntBits(magnitude) & 0x7fffffff | floatToIntBits(sign) & 0x80000000),
     "static scalb(DI)D": (v: number, n: number) => v * Math.pow(2, n),
     "static scalb(FI)F": (v: number, n: number) => Math.fround(v * Math.pow(2, n)),
     "static random()D": () => Math.random(),
