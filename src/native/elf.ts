@@ -60,13 +60,6 @@ const ELF64: Fmt = {
   RELATIVE: 1027, ABS: 257, GLOB_DAT: 1025, JUMP_SLOT: 1026, REL32: -1,
 };
 
-// Relocations packed in a form we do not decode. Ignoring one of these tags is not a partial
-// load, it is an image whose relocations were silently never applied, so it is named and refused.
-const PACKED = new Map<number, string>([
-  [35, "DT_RELRSZ"], [36, "DT_RELR"], [37, "DT_RELRENT"],
-  [0x6000000f, "DT_ANDROID_REL"], [0x60000011, "DT_ANDROID_RELA"],
-]);
-
 /** how many symbols DT_GNU_HASH's tables describe. Modern arm64 images ship GNU hash alone, so
  *  DT_HASH's nchain is simply absent and there is no other way to size the symbol table. */
 function gnuHashSymCount(p: number, ptr: number): number {
@@ -131,12 +124,12 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
   // .dynamic. REL and RELA never both appear: a file carries whichever its ABI defines, so one
   // pair of variables holds it either way.
   let strtab = 0, symtab = 0, hash = 0, gnuHash = 0, rel = 0, relsz = 0, jmprel = 0, pltrelsz = 0, initArr = 0, initArrSz = 0;
+  let androidRel = 0, androidRelSz = 0;
+  let relr = 0, relrSz = 0;
   const neededOffs: number[] = [];
   for (let p = base + dynOff; p < base + dynOff + dynSz; p += f.dynEnt) {
     const tag = mem.i32[p >>> 2], val = mem.u32[(p + f.ptr) >>> 2];
     if (tag === 0) break;
-    const packed = PACKED.get(tag >>> 0);
-    if (packed) throw new Error(`${name}: ${packed} relocations are not decoded`);
     switch (tag) {
       case 1: neededOffs.push(val); break;
       case 2: pltrelsz = val; break;
@@ -149,6 +142,13 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
       case 23: jmprel = val; break;
       case 25: initArr = val; break;
       case 27: initArrSz = val; break;
+      case 0x6000000f: case 0x60000011: androidRel = val; break;
+      case 0x60000010: case 0x60000012: androidRelSz = val; break;
+      case 36: case 0x6fffe000: relr = val; break;
+      case 35: case 0x6fffe001: relrSz = val; break;
+      case 37: case 0x6fffe003:
+        if (val !== f.ptr) throw new Error(`${name}: invalid RELR entry size ${val}`);
+        break;
       case 0x6ffffef5: gnuHash = val; break;
     }
   }
@@ -190,16 +190,7 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
     cache.set(idx, v);
     return v;
   };
-  const apply = (tab: number, sz: number) => {
-    for (let p = base + tab; p < base + tab + sz; p += f.relEnt) {
-      const off = mem.u32[p >>> 2], info = mem.u32[(p + f.ptr) >>> 2];
-      // RELA's r_info splits type/symbol across the two halves of a 64-bit word; REL's packs
-      // them into one. RELA also carries the addend the linker left implicit in REL's slot.
-      const type = f.rela ? info : info & 0xff;
-      const sym = f.rela ? mem.u32[(p + f.ptr + 4) >>> 2] : info >>> 8;
-      // an LP64 addend is 64-bit; the sum is kept as a double (exact below 2^53) so a slot can
-      // hold what the linker meant even when that is outside the 4 GiB of address space here
-      const addend = !f.rela ? 0 : f.ptr === 8 ? mem.i32[(p + f.ptr * 2 + 4) >>> 2] * 4294967296 + mem.u32[(p + f.ptr * 2) >>> 2] : mem.i32[(p + f.ptr * 2) >>> 2];
+  const applyOne = (off: number, type: number, sym: number, addend: number) => {
       const at = (base + off) >>> 2;
       let value: number;
       switch (type) {
@@ -207,7 +198,7 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
         case f.ABS: value = (f.rela ? 0 : mem.u32[at]) + symValue(sym) + addend; break;
         case f.GLOB_DAT: case f.JUMP_SLOT: value = symValue(sym) + addend; break;
         case f.REL32: value = mem.u32[at] + symValue(sym) - (base + off); break;
-        case 0: continue;
+        case 0: return;
         default: throw new Error(`${name}: unsupported relocation type ${type} at 0x${off.toString(16)}`);
       }
       mem.u32[at] = value >>> 0;
@@ -216,13 +207,79 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
       // negative 64-bit offset in a register, relies on that carry (libmetasec's pointer
       // obfuscation). Nothing dereferences the intermediate, so no plane is ever named by it.
       if (f.ptr === 8) mem.u32[at + 1] = Math.floor(value / 4294967296) | 0;
+  };
+  const apply = (tab: number, sz: number) => {
+    for (let p = base + tab; p < base + tab + sz; p += f.relEnt) {
+      const off = mem.u32[p >>> 2], info = mem.u32[(p + f.ptr) >>> 2];
+      const type = f.rela ? info : info & 0xff;
+      const sym = f.rela ? mem.u32[(p + f.ptr + 4) >>> 2] : info >>> 8;
+      const addend = !f.rela ? 0 : mem.i32[(p + 20) >>> 2] * 4294967296 + mem.u32[(p + 16) >>> 2];
+      applyOne(off, type, sym, addend);
     }
   };
+  if (androidRel) {
+    const data = mem.u8.subarray(base + androidRel, base + androidRel + androidRelSz);
+    packedRelocations(data, f.rela, (off, info, addend) =>
+      applyOne(off, f.rela ? info >>> 0 : info & 0xff, f.rela ? Math.floor(info / 4294967296) : info >>> 8, addend));
+  }
+  if (relr) {
+    let off = 0;
+    const relative = (at: number) => applyOne(at, f.RELATIVE, 0, f.rela
+      ? mem.u32[(base + at) >>> 2] + mem.i32[(base + at + 4) >>> 2] * 4294967296 : 0);
+    for (let p = base + relr; p < base + relr + relrSz; p += f.ptr) {
+      const entry = mem.u32[p >>> 2];
+      if (!(entry & 1)) { relative(entry); off = entry + f.ptr; }
+      else {
+        for (let bit = 1; bit < f.ptr * 8; bit++) {
+          if ((mem.u32[(p >>> 2) + (bit >>> 5)] >>> (bit & 31)) & 1) relative(off + (bit - 1) * f.ptr);
+        }
+        off += (f.ptr * 8 - 1) * f.ptr;
+      }
+    }
+  }
   if (rel) apply(rel, relsz);
   if (jmprel) apply(jmprel, pltrelsz);
   for (let i = 0; i < initArrSz; i += f.ptr) mod.initArray.push(mem.u32[(base + initArr + i) >>> 2]);
   };
   return { mod, relocate };
+}
+
+export function packedRelocations(data: Uint8Array, rela: boolean, apply: (off: number, info: number, addend: number) => void): void {
+  if (data[0] !== 65 || data[1] !== 80 || data[2] !== 83 || data[3] !== 50) throw new Error("invalid APS2 relocation header");
+  let pos = 4;
+  const read = () => {
+    let value = 0, scale = 1;
+    for (let i = 0; i < 10; i++) {
+      if (pos === data.length) throw new Error("truncated APS2 relocation");
+      const b = data[pos++];
+      if (!(b & 128)) {
+        value += ((b & 64) ? b - 128 : b) * scale;
+        if (!Number.isSafeInteger(value)) throw new Error("APS2 relocation exceeds exact address range");
+        return value;
+      }
+      value += (b & 127) * scale;
+      scale *= 128;
+    }
+    throw new Error("invalid APS2 signed LEB128");
+  };
+  const count = read();
+  let off = read(), info = 0, addend = 0;
+  if (count < 0) throw new Error("invalid APS2 relocation count");
+  for (let index = 0; index < count;) {
+    const size = read(), flags = read();
+    if (size <= 0 || size > count - index || (flags & ~15) || (!rela && (flags & 8))) throw new Error("invalid APS2 relocation group");
+    const delta = flags & 2 ? read() : 0;
+    if (flags & 1) info = read();
+    if (!(flags & 8)) addend = 0;
+    else if (flags & 4) addend += read();
+    for (let i = 0; i < size; i++) {
+      off += flags & 2 ? delta : read();
+      if (!(flags & 1)) info = read();
+      if ((flags & 12) === 8) addend += read();
+      apply(off, info, addend);
+    }
+    index += size;
+  }
 }
 
 /** the nearest symbol at or before `pc` in `m`, or null */

@@ -1735,3 +1735,24 @@ Remaining optional gaps: `media_metrics`, MIUI referrer, AppSet and AppsFlyer LV
 classes, and Cronet's DnsConfig warning. microG keeps two activities resumed in its realm
 (`IdentityCredentialChooserActivity` under `AssistedSignInActivity`), unverified against
 Android.
+
+## Google Maps: packed native relocations (2026-09-13)
+
+The unchanged Google Maps 26.37.05.977222275 APK initially fails at
+Process.isApplicationUid on f3fefda. After passing that call, NativeLibLoader throws
+`libgmm-jni.so: DT_ANDROID_RELA relocations are not decoded`. APS2 decoding reveals
+another loader gap: the libraries use Android's older RELR tags (0x6fffe000/1/3),
+which were silently ignored, leaving constructor entries unrelocated and jumping
+to 0x131c4. Decode both APS2 and the standard/Android RELR tables through the owning
+ELF loader. Relocate before collecting init-array entries. No APK edits or JNI
+substitutes are involved.
+
+Reference: Android 13 bionic [packed relocation iterator](https://github.com/aosp-mirror/platform_bionic/blob/android13-release/linker/linker_reloc_iterators.h).
+Focused tests cover grouped/individual offsets, info and addends, negative deltas,
+malformed streams, and ELF32/ELF64 RELR bitmaps including their highest bit and
+constructor collection. Chrome progresses past the earlier native fault; full Maps
+operation is not yet established. Smoke compilation reports 72,887 classes with
+zero method failures. Android reference uses a dedicated API 35 Play Store image;
+the older Google APIs reference contains a differently signed system Maps build
+and rejects the Google-signed update. The unchanged APK installs on the Play Store
+image and renders real tiles and search results.
