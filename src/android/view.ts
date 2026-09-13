@@ -371,7 +371,7 @@ export class JView extends JObj {
   scaleXv = 1; scaleYv = 1;
   rotationV = 0;
   pivotXv: number | null = null; pivotYv: number | null = null;
-  clickable = false; longClickable = false;
+  clickable = false; longClickable = false; contextClickable = false;
   enabled = true; pressed = false; selected = false; activated = false; focused = false;
   focusable = false; focusableInTouchMode = false;
   autoHandwritingEnabled = true;
@@ -903,6 +903,8 @@ const viewMethods: NativeSpec["methods"] = {
   "setClickable(Z)V": function (this: JView, c: number) { this.clickable = !!c; },
   "setLongClickable(Z)V": function (this: JView, c: number) { this.longClickable = !!c; },
   "isLongClickable()Z": function (this: JView) { return this.longClickable ? 1 : 0; },
+  "setContextClickable(Z)V": function (this: JView, c: number) { this.contextClickable = !!c; },
+  "isContextClickable()Z": function (this: JView) { return this.contextClickable ? 1 : 0; },
   "isPressed()Z": function (this: JView) { return this.pressed ? 1 : 0; },
   "setPressed(Z)V": function (this: JView, p: number) { this.pressed = !!p; void this.refreshDrawableState(); },
   "isSelected()Z": function (this: JView) { return this.selected ? 1 : 0; },

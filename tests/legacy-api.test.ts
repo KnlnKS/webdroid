@@ -12,6 +12,34 @@ const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => (
 rt.register({ name: "test/NoopRunnable", ctor: class extends JObj {}, ifaces: ["java/lang/Runnable"], methods: { "run()V": function () {} } });
 rt.linkNatives();
 
+test("SpannableString.valueOf preserves identity and copied spans", async () => {
+  const source = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "hello");
+  const span = await newObj("java/lang/Object");
+  await vcall(source, "setSpan", "(Ljava/lang/Object;III)V", span, 1, 4, 17);
+  expect(await scall("android/text/SpannableString", "valueOf", "(Ljava/lang/CharSequence;)Landroid/text/SpannableString;", source)).toBe(source);
+  const builder = await newObj("android/text/SpannableStringBuilder", "(Ljava/lang/CharSequence;)V", "builder");
+  expect(await scall("android/text/SpannableString", "valueOf", "(Ljava/lang/CharSequence;)Landroid/text/SpannableString;", builder)).not.toBe(builder);
+  const copy = await scall("android/text/SpannableString", "valueOf", "(Ljava/lang/CharSequence;)Landroid/text/SpannableString;", await newObj("android/text/SpannedString", "(Ljava/lang/CharSequence;)V", source));
+  expect(await vcall(copy, "toString", "()Ljava/lang/String;")).toBe("hello");
+  expect(await vcall(copy, "getSpanStart", "(Ljava/lang/Object;)I", span)).toBe(1);
+});
+
+test("View context clickability is independently mutable", async () => {
+  const view = await newObj("android/view/View", "(Landroid/content/Context;)V", null);
+  expect(await vcall(view, "isContextClickable", "()Z")).toBe(0);
+  await vcall(view, "setContextClickable", "(Z)V", 1);
+  expect(await vcall(view, "isContextClickable", "()Z")).toBe(1);
+  expect(await vcall(view, "isClickable", "()Z")).toBe(0);
+});
+
+test("PaintDrawable owns a rectangular shape and supports rounded corners", async () => {
+  const drawable = await newObj("android/graphics/drawable/PaintDrawable", "(I)V", 0xff123456 | 0);
+  expect((await vcall(drawable, "getPaint", "()Landroid/graphics/Paint;")).color).toBe(0xff123456 | 0);
+  expect(await vcall(drawable, "getShape", "()Landroid/graphics/drawable/shapes/Shape;")).not.toBeNull();
+  await vcall(drawable, "setCornerRadius", "(F)V", 12);
+  expect(await vcall(drawable, "getShape", "()Landroid/graphics/drawable/shapes/Shape;")).not.toBeNull();
+});
+
 test("ByteBuffer absolute long and double accessors leave the position alone", async () => {
   const buffer = await scall("java/nio/ByteBuffer", "allocate", "(I)Ljava/nio/ByteBuffer;", 24);
   await vcall(buffer, "putLong", "(IJ)Ljava/nio/ByteBuffer;", 8, -2n);

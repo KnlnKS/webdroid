@@ -975,6 +975,18 @@ class JShapeDrawable extends JDrawable {
   intrinsicW(): number { return this.iw; }
   intrinsicH(): number { return this.ih; }
 }
+class JPaintDrawable extends JShapeDrawable {
+  setCornerRadii(radii: Float32Array | null) {
+    if (radii) {
+      const shape = new JRoundRectShape();
+      shape.outer = radii;
+      this.shape = shape;
+    } else {
+      this.shape = new JShape();
+    }
+    invalidateSelf.call(this);
+  }
+}
 // PictureDrawable replays a recorded Picture inside its bounds.
 class JPictureDrawable extends JDrawable { picture: unknown = null; }
 rt.register({
@@ -1032,6 +1044,17 @@ rt.register({
     "onDraw(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShapeDrawable, sh: JShape, cv: JCanvas, p: JPaint) {
       return jmethod(sh, M_shapeDraw)!.call(sh, cv, p);
     },
+  },
+});
+rt.register({
+  name: "android/graphics/drawable/PaintDrawable", ctor: JPaintDrawable, sup: "android/graphics/drawable/ShapeDrawable",
+  methods: {
+    "<init>()V": function (this: JPaintDrawable) { this.p.antiAlias = true; this.shape = new JShape(); },
+    "<init>(I)V": function (this: JPaintDrawable, color: number) { this.p.antiAlias = true; this.p.color = color; this.shape = new JShape(); },
+    "setCornerRadius(F)V": function (this: JPaintDrawable, radius: number) {
+      this.setCornerRadii(radius > 0 ? new Float32Array(8).fill(radius) : null);
+    },
+    "setCornerRadii([F)V": function (this: JPaintDrawable, radii: Float32Array | null) { this.setCornerRadii(radii); },
   },
 });
 rt.register({ name: "android/graphics/drawable/VectorDrawable", ctor: JVectorDrawable, sup: "android/graphics/drawable/Drawable", methods: {
