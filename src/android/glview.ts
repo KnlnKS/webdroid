@@ -442,7 +442,7 @@ rt.register({ name: "webdroid/GL10", ctor: class extends JObj {}, ifaces: ["java
   methods: { "glViewport(IIII)V": (x: number, y: number, w: number, h: number) => gl?.viewport(x, y, w, h) },
 });
 for (const i of ["javax/microedition/khronos/opengles/GL", "javax/microedition/khronos/opengles/GL10",
-  "javax/microedition/khronos/opengles/GL11", "javax/microedition/khronos/egl/EGLConfig",
+  "javax/microedition/khronos/opengles/GL11",
   "javax/microedition/khronos/egl/EGLDisplay", "javax/microedition/khronos/egl/EGL"]) {
   rt.register({ name: i, ctor: class extends JObj {} });
 }
@@ -456,6 +456,7 @@ rt.register({
 
 // ── EGL10: configs answer from the live context; window surfaces are the SurfaceView's
 class JEGLConfig extends JObj {}
+rt.register({ name: "javax/microedition/khronos/egl/EGLConfig", ctor: JEGLConfig });
 const theConfig = new JEGLConfig();
 class JEGLSurface extends JObj { surf: GlSurface | null = null; }
 const attrVal = (a: Int32Array | null, k: number): number => { if (a) for (let i = 0; i + 1 < a.length && a[i] !== 0x3038; i += 2) if (a[i] === k) return a[i + 1]; return 0; };

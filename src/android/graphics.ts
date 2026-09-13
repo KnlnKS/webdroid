@@ -1549,7 +1549,10 @@ export const canvasMethods: NativeSpec["methods"] = {
       this.ctx.drawImage(tintedBmp(b, p?.filterColor ?? null, p?.filterMatrix ?? null), 0, 0);
       this.ctx.restore();
     },
-  ...noops("<init>()V", "enableZ()V", "disableZ()V", "drawPicture(Landroid/graphics/Picture;)V",
+  "drawPicture(Landroid/graphics/Picture;)V": function (this: JCanvas, picture: JPicture) { drawPicture(this, picture); },
+  "drawPicture(Landroid/graphics/Picture;Landroid/graphics/RectF;)V": function (this: JCanvas, picture: JPicture, dst: JRect) { drawPicture(this, picture, dst); },
+  "drawPicture(Landroid/graphics/Picture;Landroid/graphics/Rect;)V": function (this: JCanvas, picture: JPicture, dst: JRect) { drawPicture(this, picture, dst); },
+  ...noops("<init>()V", "enableZ()V", "disableZ()V",
     "setDrawFilter(Landroid/graphics/DrawFilter;)V"),
   ...stubs(1, "clipOutRect(FFFF)Z", "clipOutRect(IIII)Z", "clipOutRect(Landroid/graphics/Rect;)Z",
     "clipOutPath(Landroid/graphics/Path;)Z", "isHardwareAccelerated()Z"),
@@ -1734,6 +1737,18 @@ rt.register({
     },
   },
 });
+function drawPicture(canvas: JCanvas, picture: JPicture, dst?: JRect) {
+  const ctx = canvas.ctx, node = picture.node;
+  node.hasDL = true;
+  ctx.save();
+  try {
+    if (dst) {
+      ctx.translate(dst.left, dst.top);
+      if (node.w > 0 && node.h > 0) ctx.scale((dst.right - dst.left) / node.w, (dst.bottom - dst.top) / node.h);
+    }
+    if (node.hasDL) for (const op of node.ops) op(ctx);
+  } finally { ctx.restore(); }
+}
 function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
   if (!n.hasDL) return;
   ctx.save();

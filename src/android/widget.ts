@@ -154,10 +154,17 @@ class JCompoundButton extends JButton {
   /** the android:button drawable, and the width the indicator reserves (0 = no indicator) */
   buttonD: JDrawable | null = null;
   buttonW = 0;
+  buttonTint: JColorStateList | null = null;
+  hasButtonTint = false;
+  async applyButtonTint() {
+    if (this.buttonD && this.hasButtonTint) await vcall(this.buttonD, "setTintList", "(Landroid/content/res/ColorStateList;)V", this.buttonTint);
+    invalidate(this);
+  }
   async setCheckedInternal(c: boolean) {
     if (this.checked === c) return;
     this.checked = c;
     await this.refreshDrawableState();
+    await this.applyButtonTint();
     if (this.broadcasting) return;
     this.broadcasting = true;
     if (this.checkL) {
@@ -213,15 +220,19 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
   ...flagGetters({ "isChecked()Z": "checked" }),
   ...fieldSetters({ "setOnCheckedChangeListener(Landroid/widget/CompoundButton$OnCheckedChangeListener;)V": "checkL" }),
   ...fieldGetters({ "getButtonDrawable()Landroid/graphics/drawable/Drawable;": "buttonD" }),
+  "setButtonTintList(Landroid/content/res/ColorStateList;)V": function (this: JCompoundButton, tint: JColorStateList | null) {
+    this.buttonTint = tint; this.hasButtonTint = true; return this.applyButtonTint();
+  },
+  "getButtonTintList()Landroid/content/res/ColorStateList;": function (this: JCompoundButton) { return this.buttonTint; },
   "setButtonDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JCompoundButton, d: JDrawable | null) {
     this.buttonD = d;
     this.buttonW = d ? (kind === "switch" ? device.dp(52) : device.dp(32)) : 0;
-    invalidate();
+    return this.applyButtonTint();
   },
   "setButtonDrawable(I)V": async function (this: JCompoundButton, id: number) {
     this.buttonD = id ? await loadDrawable(this.jres!, id, this.theme) : null;
     this.buttonW = id ? (kind === "switch" ? device.dp(52) : device.dp(32)) : 0;
-    invalidate();
+    await this.applyButtonTint();
   },
   "onMeasure(II)V": function (this: JCompoundButton, wSpec: number, hSpec: number) {
     (textViewMethods["onMeasure(II)V"] as (a: number, b: number) => void).call(this, wSpec, hSpec);
@@ -295,8 +306,8 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
   },
   };
 };
-rt.register({ name: "android/widget/CompoundButton", ctor: JCompoundButton, sup: "android/widget/Button", methods: compoundMethods("check") });
-rt.markers("android/widget/CompoundButton$OnCheckedChangeListener");
+rt.register({ name: "android/widget/CompoundButton", ctor: JCompoundButton, sup: "android/widget/Button", ifaces: ["android/widget/Checkable"], methods: compoundMethods("check") });
+rt.markers("android/widget/CompoundButton$OnCheckedChangeListener", "android/widget/Checkable");
 rt.register({ name: "android/widget/CheckBox", ctor: class extends JCompoundButton {}, sup: "android/widget/CompoundButton", methods: compoundMethods("check") });
 rt.register({ name: "android/widget/RadioButton", ctor: class extends JCompoundButton {}, sup: "android/widget/CompoundButton", methods: compoundMethods("radio") });
 rt.register({ name: "android/widget/Switch", ctor: class extends JCompoundButton {}, sup: "android/widget/CompoundButton", methods: compoundMethods("switch") });

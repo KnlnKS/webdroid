@@ -22,3 +22,20 @@ test("RelativeLayout rules stay live across reads, updates and removal", async (
   await vcall(lp, "removeRule", "(I)V", 3);
   expect(rules[3]).toBe(0);
 });
+
+test("CompoundButton subclasses implement Checkable and preserve tint state", async () => {
+  const button = rt.make("android/widget/RadioButton");
+  expect(rt.iof(button, "android/widget/Checkable")).toBe(1);
+  await vcall(button, "setChecked", "(Z)V", 1);
+  expect(await vcall(button, "isChecked", "()Z")).toBe(1);
+  const colors = await vcall(rt.link("android/content/res/ColorStateList").ctor, "valueOf", "(I)Landroid/content/res/ColorStateList;", 0xff123456 | 0);
+  await vcall(button, "setButtonTintList", "(Landroid/content/res/ColorStateList;)V", colors);
+  expect(await vcall(button, "getButtonTintList", "()Landroid/content/res/ColorStateList;")).toBe(colors);
+});
+
+test("EGL10 returns configurations with their declared Java type", async () => {
+  const egl = rt.make("javax/microedition/khronos/egl/EGL10"), configs = [null], count = new Int32Array(1);
+  expect(await vcall(egl, "eglChooseConfig", "(Ljavax/microedition/khronos/egl/EGLDisplay;[I[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z", null, new Int32Array([0x3038]), configs, 1, count)).toBe(1);
+  expect(count[0]).toBe(1);
+  expect(rt.iof(configs[0], "javax/microedition/khronos/egl/EGLConfig")).toBe(1);
+});

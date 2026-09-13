@@ -74,7 +74,7 @@ export class JTextView extends JView {
   hint = "";
   paintT = new JTextPaint();
   colors: JColorStateList = mkCsl(-16777216);
-  hintColors: JColorStateList = mkCsl(1627389952);
+  hintColors: JColorStateList | null = mkCsl(1627389952);
   gravityT = 48 | G.START;
   maxLinesV = Infinity;
   minLinesV = 1;
@@ -392,6 +392,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "getTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.colors; },
   "getCurrentTextColor()I": function (this: JTextView) { return cslColor(this.colors, this.drawableState()); },
+  "setHintTextColor(Landroid/content/res/ColorStateList;)V": function (this: JTextView, c: JColorStateList | null) { this.hintColors = c; invalidate(this); },
   "setHintTextColor(I)V": function (this: JTextView, c: number) { this.hintColors = mkCsl(c); invalidate(this); },
   "setGravity(I)V": function (this: JTextView, g: number) { this.gravityT = g; invalidate(); },
   "getGravity()I": function (this: JTextView) { return this.gravityT; },
@@ -648,7 +649,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     let y = (vg === 16 ? (this.height() - this.padT - this.padB - totalH) / 2 + this.padT
       : vg === 80 ? this.height() - this.padB - totalH : this.padT) + this.ascent();
     ctx.font = this.paintT.font();
-    ctx.fillStyle = cssColor(showHint ? cslColor(this.hintColors, this.drawableState()) : cslColor(this.colors, this.drawableState()));
+    ctx.fillStyle = cssColor(showHint ? cslColor(this.hintColors ?? this.colors, this.drawableState()) : cslColor(this.colors, this.drawableState()));
     ctx.textBaseline = "alphabetic";
     const hg = gravityH(this.gravityT);
     ctx.textAlign = hg === 1 ? "center" : hg === 5 ? "right" : "left";
