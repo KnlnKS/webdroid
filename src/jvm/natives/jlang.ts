@@ -1594,7 +1594,8 @@ rt.register({
   },
 });
 function enumCmp(this: JEnum, o: JEnum) { return this.ord - o.ord; }
-function enumValueOf<T extends JEnum>(values: T[], name: string): T {
+export function enumValueOf<T extends JEnum>(values: T[], name: string): T {
+  if (name === null) throw rt.mkThrowable("java/lang/NullPointerException", "Name is null");
   const v = values.find((e) => e.ename === name);
   if (!v) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No enum constant " + name);
   return v;

@@ -2,10 +2,10 @@
 
 import { rt, JObj, type NativeSpec, type ClassInfo } from "../runtime";
 import { parkTimeout, unparkTimeout } from "../yield";
-import { vcall, newObj, JThread, JEnum, setCurThread, curThread, park, defineException } from "./jlang";
+import { vcall, newObj, JThread, JEnum, enumValueOf, setCurThread, curThread, park, defineException } from "./jlang";
 import { JList, newArrayList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods } from "./jutil";
 import { JRandom, randomSeed } from "./jrandom";
-import { splitSig } from "../abi";
+import { splitSig, jarray } from "../abi";
 
 // ── atomics (single-threaded: trivial)
 const atomicCore = (d: string): NativeSpec["methods"] => ({
@@ -157,10 +157,13 @@ const TUS = Object.fromEntries(TU_DEFS.map(([name, , ns], ord) => {
   t.ename = name; t.ord = ord; t.ns = ns; t.ms = Number(ns) / 1e6;
   return [name, t];
 })) as Record<string, JTimeUnit>;
+const timeUnits = Object.values(TUS);
 rt.register({
   name: "java/util/concurrent/TimeUnit", ctor: JTimeUnit, sup: "java/lang/Enum",
   statics: { ...TUS },
   methods: {
+    "static values()[Ljava/util/concurrent/TimeUnit;": () => jarray(timeUnits.slice(), "Ljava/util/concurrent/TimeUnit;"),
+    "static valueOf(Ljava/lang/String;)Ljava/util/concurrent/TimeUnit;": (name: string) => enumValueOf(timeUnits, name),
     ...Object.fromEntries(TU_DEFS.map(([, method, ns]) =>
       [`to${method}(J)J`, function (this: JTimeUnit, v: bigint) { return tuConvert(v, this.ns, ns); }])),
     "convert(JLjava/util/concurrent/TimeUnit;)J": function (this: JTimeUnit, v: bigint, src: JTimeUnit) {
