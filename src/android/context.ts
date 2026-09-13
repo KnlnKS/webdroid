@@ -6,7 +6,7 @@ import { newObj, vcall } from "../jvm/natives/jlang";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { getInflater } from "./inflate";
 import { getAppInfo, getPM } from "./pm";
-import { contentResolver } from "./contentresolver";
+import { contentResolver, checkUriPermission } from "./contentresolver";
 import { mainLooper, mainExecutor, PROCESS_PID, PROCESS_UID } from "./os";
 import { getPrefs } from "./sharedprefs";
 import { JAssetManager, type JConfiguration, scopedResources } from "./resnative";
@@ -284,6 +284,7 @@ export const contextMethods: NativeSpec["methods"] = {
     return vfs.delete(dbPath(this.$host.pkg, name)) ? 1 : 0;
   },
   "checkSelfPermission(Ljava/lang/String;)I": (p: string) => permissionState(p),
+  "checkUriPermission(Landroid/net/Uri;III)I": checkUriPermission,
   "checkPermission(Ljava/lang/String;)I": (p: string) => permissionState(p),
   "checkPermission(Ljava/lang/String;II)I": (p: string) => permissionState(p),
   "checkCallingPermission(Ljava/lang/String;)I": (p: string) => permissionState(p),

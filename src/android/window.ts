@@ -1,3 +1,4 @@
+import { AID, rvInt, themeOf } from "./res";
 import { rt, JObj, callSelf, stubs, noops } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import type { JFrameLayout } from "./layouts";
@@ -78,6 +79,10 @@ rt.register({
       // setContentView); dialog windows materialize a bare one so insets helpers can operate
       if (!this.decor && this.activity instanceof JActivity) await ensureDecor(this.activity);
       return this.decor ??= await newObj("android/widget/FrameLayout", "(Landroid/content/Context;)V", this.activity);
+    },
+    "isFloating()Z": function (this: JWindow) {
+      const theme = this.decor?.theme ?? themeOf(this.activity);
+      return theme ? +!!rvInt(theme.res, theme.lookup(AID("windowIsFloating")), 0) : 0;
     },
     "peekDecorView()Landroid/view/View;": function (this: JWindow) { return this.decor; },
     "findViewById(I)Landroid/view/View;": function (this: JWindow, id: number) {
@@ -197,10 +202,11 @@ rt.register({
     token: JObj | null = null;
     title: unknown = "";
     preferredDisplayModeId = 0;
+    preferredRefreshRate = 0;
     screenBrightness = -1;
   },
   fields: ["width", "height", "gravity", "flags", "x", "y", "softInputMode", "windowAnimations", "dimAmount", "alpha",
-    "format", "type", "layoutInDisplayCutoutMode", "token", "preferredDisplayModeId", "screenBrightness"],
+    "format", "type", "layoutInDisplayCutoutMode", "token", "preferredDisplayModeId", "preferredRefreshRate", "screenBrightness"],
   statics: { MATCH_PARENT: -1, WRAP_CONTENT: -2, FLAG_FULLSCREEN: 1024, FLAG_KEEP_SCREEN_ON: 128, TYPE_APPLICATION: 2, SOFT_INPUT_ADJUST_RESIZE: 16, SOFT_INPUT_STATE_HIDDEN: 3,
     // no real display cutout in a fixed-viewport screen — the field just stores/reports whatever the app sets.
     LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT: 0, LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES: 1,

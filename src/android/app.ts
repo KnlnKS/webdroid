@@ -10,7 +10,7 @@ import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
-import { requestLayout, type JView, attachView, findById, dispatchConfigurationChanged, invalidate } from "./view";
+import { requestLayout, type JView, attachView, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragmentManager } from "./fragment";
 import { vcall } from "../jvm/natives/jlang";
 import { appHost, jclsNameOf } from "./apphost";
@@ -177,6 +177,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "findViewById(I)Landroid/view/View;": function (this: JActivity, id: number) {
     return this.window.decor ? findById(this.window.decor, id) : null;
   },
+  "requireViewById(I)Landroid/view/View;": requireViewById,
   "onStart()V": async function (this: JActivity) { this.started = true; return dispatchFragLifecycle(this, "onStart"); },
   "onResume()V": async function (this: JActivity) { this.resumed = true; return dispatchFragLifecycle(this, "onResume"); },
   "onPause()V": function (this: JActivity) { this.resumed = false; return dispatchFragLifecycle(this, "onPause"); },
@@ -500,6 +501,7 @@ for (const [name, methods, statics] of [
     },
   }],
   ["android/os/PowerManager", {
+    "getLocationPowerSaveMode()I": () => 0,
     "newWakeLock(ILjava/lang/String;)Landroid/os/PowerManager$WakeLock;": () => {
       const info = rt.link("android/os/PowerManager$WakeLock");
       return new info.ctor();
@@ -667,6 +669,7 @@ for (const [name, methods, statics] of [
     "addTouchExplorationStateChangeListener(Landroid/view/accessibility/AccessibilityManager$TouchExplorationStateChangeListener;)Z": () => 1,
     "removeTouchExplorationStateChangeListener(Landroid/view/accessibility/AccessibilityManager$TouchExplorationStateChangeListener;)Z": () => 1,
     "getEnabledAccessibilityServiceList(I)Ljava/util/List;": () => newArrayList(),
+    "getInstalledAccessibilityServiceList()Ljava/util/List;": () => newArrayList(),
   }],
   ["android/content/ClipboardManager", {
     "setPrimaryClip(Landroid/content/ClipData;)V": () => {},
@@ -685,6 +688,7 @@ for (const [name, methods, statics] of [
   }],
   ["android/app/KeyguardManager", { "isKeyguardLocked()Z": () => 0, "inKeyguardRestrictedInputMode()Z": () => 0, "isDeviceSecure()Z": () => 0 }],
   ["android/hardware/SensorManager", { "getDefaultSensor(I)Landroid/hardware/Sensor;": () => null, "getSensorList(I)Ljava/util/List;": () => newArrayList(), "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z": () => 0,
+    "static getAltitude(FF)F": (p0: number, p: number) => Math.fround(44330 * Math.fround(1 - Math.fround(Math.pow(Math.fround(p / p0), Math.fround(1 / Math.fround(5.255)))))),
     "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;II)Z": () => 0,
     "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;ILandroid/os/Handler;)Z": () => 0,
     "unregisterListener(Landroid/hardware/SensorEventListener;)V": () => {},
@@ -972,3 +976,10 @@ rt.register({
     "getToggleValue()Z": function (this: JAutofillValue) { return this.v ? 1 : 0; },
   },
 });
+
+rt.register({ name: "android/app/backup/BackupManager", ctor: class extends JObj {}, methods: {
+  "<init>(Landroid/content/Context;)V": () => {},
+  // There is no backup transport; these requests have the framework's service-absent behavior.
+  ...noops("dataChanged()V", "static dataChanged(Ljava/lang/String;)V"),
+  "isBackupEnabled()Z": () => 0,
+} });

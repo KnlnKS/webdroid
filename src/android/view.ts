@@ -314,6 +314,8 @@ export class JView extends JObj {
   systemUiVisibility = 0;
 
   idNum = -1;
+  accessibilityBefore = -1;
+  accessibilityAfter = -1;
   /** android:contentDescription — the label an icon-only control answers to */
   contentDesc: string | null = null;
   /** nested scrolling: AOSP defaults this on for ScrollView/RecyclerView-shaped children,
@@ -766,6 +768,11 @@ function drawingRect(this: JView, r: JRect) {
   r.left = this.scrollX; r.top = this.scrollY;
   r.right = this.scrollX + this.width(); r.bottom = this.scrollY + this.height();
 }
+export async function requireViewById(this: JObj, id: number): Promise<unknown> {
+  const view = await vcall(this, "findViewById", "(I)Landroid/view/View;", id);
+  if (!view) throw rt.mkThrowable("java/lang/IllegalArgumentException", "ID does not reference a View: " + id);
+  return view;
+}
 
 export const viewConstructors: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;)V": async function (this: JView, c: unknown) { await initViewFromCtx(this, c, null); },
@@ -1020,6 +1027,7 @@ const viewMethods: NativeSpec["methods"] = {
     return 1;
   },
   "findViewById(I)Landroid/view/View;": function (this: JView, id: number) { return findById(this, id); },
+  "requireViewById(I)Landroid/view/View;": requireViewById,
   "findViewWithTag(Ljava/lang/Object;)Landroid/view/View;": function (this: JView, tag: unknown) {
     return findByPred(this, (v) => v.tag === tag);
   },
@@ -1027,6 +1035,10 @@ const viewMethods: NativeSpec["methods"] = {
   "getLayerType()I": function (this: JView) { return this.layerType; },
   "setContentDescription(Ljava/lang/CharSequence;)V": async function (this: JView, cs: unknown) { this.contentDesc = cs === null ? null : await csText(cs); },
   "getContentDescription()Ljava/lang/CharSequence;": function (this: JView) { return this.contentDesc; },
+  "setAccessibilityTraversalBefore(I)V": function (this: JView, id: number) { this.accessibilityBefore = id; },
+  "setAccessibilityTraversalAfter(I)V": function (this: JView, id: number) { this.accessibilityAfter = id; },
+  "getAccessibilityTraversalBefore()I": function (this: JView) { return this.accessibilityBefore; },
+  "getAccessibilityTraversalAfter()I": function (this: JView) { return this.accessibilityAfter; },
   "setAccessibilityDelegate(Landroid/view/View$AccessibilityDelegate;)V": function (this: JView, d: unknown) { this.a11yDelegate = d; },
   "getAccessibilityDelegate()Landroid/view/View$AccessibilityDelegate;": function (this: JView) { return this.a11yDelegate; },
   "setStateListAnimator(Landroid/animation/StateListAnimator;)V": async function (this: JView, sla: unknown) {

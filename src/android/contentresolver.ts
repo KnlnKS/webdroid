@@ -15,7 +15,7 @@ import { newArrayList } from "../jvm/natives/jutil";
 import { getPM } from "./pm";
 import { locationTransport } from "./locationmanager";
 import { inMainJob, onMain } from "./mainloop";
-import { PROCESS_NAME } from "./os";
+import { PROCESS_NAME, PROCESS_UID } from "./os";
 
 type ProviderInfo = { name: string; authority: string; packageName: string; processName?: string };
 export const providerTransport: { acquire: (info: ProviderInfo) => Promise<unknown> } = { acquire: async () => null };
@@ -70,6 +70,11 @@ async function acquireClient(uri: JUri): Promise<JProviderClient | null> {
   const client = new JProviderClient(); client.provider = provider; return client;
 }
 rt.register({ name: "android/content/ContentProviderClient", ctor: JProviderClient, ifaces: ["java/lang/AutoCloseable"], methods: {
+  "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
+    async function (this: JProviderClient, u: JUri, projection: unknown, selection: unknown, args: unknown, sort: unknown, cancellation: unknown) {
+      if (cancellation) await vcall(cancellation, "throwIfCanceled", "()V");
+      return vcall(this, "query", providerOperations.query, u, projection, selection, args, sort);
+    },
   "release()Z": releaseClient,
   "close()V": function (this: JProviderClient) { releaseClient.call(this); },
   "getLocalContentProvider()Landroid/content/ContentProvider;": function (this: JProviderClient) {
@@ -98,6 +103,9 @@ const uriGrants = {
   all(): string[] { try { return JSON.parse(globalThis.localStorage?.getItem(this.key()) ?? "[]"); } catch { return []; } },
   set(v: string[]) { try { globalThis.localStorage?.setItem(this.key(), JSON.stringify(v)); } catch { /* private mode */ } },
 };
+export function checkUriPermission(u: JUri, _pid: number, uid: number, modes: number): number {
+  return uid === 0 || uid === PROCESS_UID && (modes & 3) !== 0 && uriGrants.all().includes(u.uri) ? 0 : -1;
+}
 const fileOf = (u: JUri) => u.uri.replace(/^file:\/\//, "");
 /** A descriptor carries the document's current bytes and writes them back when it is closed. */
 async function openPfd(u: JUri, mode: string) {
