@@ -628,14 +628,11 @@ export async function layoutView(v: JView, l: number, t: number, r: number, b: n
   if (changed || v.layoutRequired) {
     await guardCall(v, M_onLayout, changed ? 1 : 0, l, t, r, b);
     v.layoutRequired = false;
-  }
-  v.layoutRequested = false;
-  // AOSP only notifies OnLayoutChangeListener when the bounds actually moved
-  if (changed) {
     for (const ll of [...v.layoutChangeLs]) {
       await vcall(ll, "onLayoutChange", "(Landroid/view/View;IIIIIIII)V", v, l, t, r, b, oldL, oldT, oldR, oldB);
     }
   }
+  v.layoutRequested = false;
 }
 
 /** full draw of the subtree onto ctx (already positioned at parent's content origin) */
