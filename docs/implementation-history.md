@@ -2323,3 +2323,10 @@ swapping endpoints, Ferry Building to Golden Gate Bridge route lines and map con
 MainLayout's full-screen flag clears and the MapViewContainer is VISIBLE without
 manual state changes. Preview renders the maneuver icon. Base map tiles, chip geometry
 and new Math.log1p / ICU ListFormatter failures remain; parity is not established.
+
+### Newly reachable Maps math and list formatting
+
+After AnimatorSet start callbacks made full-screen content visible, layout reached
+missing Math.log1p. Register the host's precision-preserving log1p implementation;
+focused checks cover tiny inputs, signed zero, infinity and the domain boundary.
+Typecheck passes. Fresh Maps layout verification follows.

@@ -1233,7 +1233,7 @@ for (const t of ["I", "J", "F", "D"]) {
   mm[`static max(${t}${t})${t}`] = t === "J" ? (a: bigint, b: bigint) => (a > b ? a : b) : (a: number, b: number) => Math.max(a, b);
   mm[`static min(${t}${t})${t}`] = t === "J" ? (a: bigint, b: bigint) => (a < b ? a : b) : (a: number, b: number) => Math.min(a, b);
 }
-for (const f of ["sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "log10", "cbrt", "sinh", "cosh", "tanh", "floor", "ceil"] as const) {
+for (const f of ["sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "log1p", "log10", "cbrt", "sinh", "cosh", "tanh", "floor", "ceil"] as const) {
   mm[`static ${f}(D)D`] = (v: number) => Math[f](v);
 }
 rt.register({
