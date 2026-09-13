@@ -145,6 +145,7 @@ rt.register({
     "getScaledHoverSlop()I": () => Math.round(device.dp(4)),
     "getScaledFadingEdgeLength()I": () => Math.round(device.dp(12)),
     "getScaledMinScalingSpan()I": () => Math.round(device.dp(27)),
+    "getScaledMinimumScalingSpan()I": () => Math.round(device.dp(27)),
     "static getAmbiguousGestureMultiplier()F": () => 2,
     "static getMinimumFlingVelocity()I": () => 50,
     "static getMaximumFlingVelocity()I": () => 8000,
