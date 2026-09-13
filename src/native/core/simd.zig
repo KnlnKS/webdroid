@@ -545,6 +545,18 @@ fn threeSameF(comptime F: type, x: Ctx) Status {
 inline fn shiftLeftSat(comptime T: type, v: T, s: u32) T {
     return if (s >= @bitSizeOf(T)) 0 else v << @intCast(s);
 }
+inline fn saturatingShiftLeft(comptime T: type, c: *Cpu, v: T, s: u32) T {
+    if (s >= @bitSizeOf(T)) {
+        if (v == 0) return 0;
+        c.setQ();
+        return if (@typeInfo(T).int.signedness == .signed)
+            (if (v < 0) std.math.minInt(T) else std.math.maxInt(T))
+        else
+            std.math.maxInt(T);
+    }
+    const W = std.meta.Int(.signed, if (@bitSizeOf(T) == 64) 128 else 64);
+    return sat(T, c, @as(W, v) << @intCast(s));
+}
 fn threeSameI(comptime T: type, x: Ctx) Status {
     const c = x.c;
     const opcode = bits(x.w, 11, 5);
@@ -570,11 +582,11 @@ fn threeSameI(comptime T: type, x: Ctx) Status {
             5 => O[i] = sat(T, c, wn - wm),
             6 => OS[i] = if (n > m) -1 else 0,
             7 => OS[i] = if (n >= m) -1 else 0,
-            8, 10 => {
+            8, 9, 10, 11 => {
                 const s: i32 = get(i8, c, x.rm, i * @sizeOf(T));
-                if (s >= 0) O[i] = shiftLeftSat(T, n, @intCast(s)) else {
+                if (s >= 0) O[i] = if (opcode & 1 != 0) saturatingShiftLeft(T, c, n, @intCast(s)) else shiftLeftSat(T, n, @intCast(s)) else {
                     const r: u32 = @intCast(-s);
-                    if (opcode == 10) {
+                    if (opcode >= 10) {
                         if (r > bitsT) O[i] = 0 else {
                             const rounded: W = wn + (@as(W, 1) << @intCast(r - 1));
                             O[i] = @intCast(rounded >> @intCast(r));

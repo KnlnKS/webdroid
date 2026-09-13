@@ -328,6 +328,15 @@ describe("a64 simd: vector arithmetic", () => {
     expect(I(c, 3)).toEqual([100925952, 235670024, 370414096, 505158168]);
     expect(I(c, 5)).toEqual([4, 16, 36, 64]);
   });
+
+  test("sqrshl saturates left shifts and rounds signed right shifts", () => {
+    const c = run([0x4ea45e32, RET], (c) => {
+      c.si.set([0x40000000, -0x40000000, 7, -3], 4 * 17);
+      c.si.set([2, 2, -1, -2], 4 * 4);
+    });
+    expect(I(c, 18)).toEqual([0x7fffffff, -0x80000000, 4, -1]);
+    expect(c.fpsr & (1 << 27)).toBe(1 << 27);
+  });
 });
 
 // frsqrte had no coverage of any kind, here or in the hardware oracle. The architecture fixes the
