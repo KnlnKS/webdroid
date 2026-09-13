@@ -60,12 +60,57 @@ const ELF64: Fmt = {
   RELATIVE: 1027, ABS: 257, GLOB_DAT: 1025, JUMP_SLOT: 1026, REL32: -1,
 };
 
-// Relocations packed in a form we do not decode. Ignoring one of these tags is not a partial
+// Packed relative relocations use a different format. Ignoring one of these tags is not a partial
 // load, it is an image whose relocations were silently never applied, so it is named and refused.
 const PACKED = new Map<number, string>([
   [35, "DT_RELRSZ"], [36, "DT_RELR"], [37, "DT_RELRENT"],
-  [0x6000000f, "DT_ANDROID_REL"], [0x60000011, "DT_ANDROID_RELA"],
 ]);
+
+type PackedRelocation = { off: number; info: bigint; addend: number };
+
+/** Android APS2: SLEB128 values grouped by shared offset delta, symbol info and addend. */
+export function decodeAndroidPacked(name: string, bytes: Uint8Array, rela: boolean, visit: (r: PackedRelocation) => void): void {
+  if (bytes.length < 4 || bytes[0] !== 65 || bytes[1] !== 80 || bytes[2] !== 83 || bytes[3] !== 50)
+    throw new Error(`${name}: invalid Android packed relocation header`);
+  let at = 4;
+  const pop = (): bigint => {
+    let value = 0n, shift = 0n;
+    for (let i = 0; i < 10; i++) {
+      if (at >= bytes.length) throw new Error(`${name}: truncated Android packed relocations`);
+      const b = bytes[at++];
+      value |= BigInt(b & 0x7f) << shift;
+      shift += 7n;
+      if (!(b & 0x80)) return b & 0x40 ? value | (-1n << shift) : value;
+    }
+    throw new Error(`${name}: invalid Android packed relocation integer`);
+  };
+  const num = (value: bigint, what: string): number => {
+    const n = Number(value);
+    if (!Number.isSafeInteger(n)) throw new Error(`${name}: Android packed ${what} is out of range`);
+    return n;
+  };
+  const count = num(pop(), "count");
+  if (count < 0) throw new Error(`${name}: negative Android packed relocation count`);
+  let off = num(pop(), "offset"), info = 0n, addend = 0, done = 0;
+  while (done < count) {
+    const size = num(pop(), "group size"), flags = num(pop(), "group flags");
+    if (size <= 0 || size > count - done) throw new Error(`${name}: invalid Android packed relocation group size`);
+    if (flags < 0 || flags & ~15) throw new Error(`${name}: invalid Android packed relocation group flags`);
+    const offsetDelta = flags & 2 ? num(pop(), "offset delta") : 0;
+    if (flags & 1) info = pop();
+    if (flags & 8) {
+      if (!rela) throw new Error(`${name}: addend in Android packed REL relocations`);
+      if (flags & 4) addend += num(pop(), "addend");
+    } else addend = 0;
+    for (let i = 0; i < size; i++) {
+      off += flags & 2 ? offsetDelta : num(pop(), "offset delta");
+      if (!(flags & 1)) info = pop();
+      if (flags & 8 && !(flags & 4)) addend += num(pop(), "addend");
+      visit({ off, info, addend });
+      done++;
+    }
+  }
+}
 
 /** how many symbols DT_GNU_HASH's tables describe. Modern arm64 images ship GNU hash alone, so
  *  DT_HASH's nchain is simply absent and there is no other way to size the symbol table. */
@@ -130,7 +175,8 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
 
   // .dynamic. REL and RELA never both appear: a file carries whichever its ABI defines, so one
   // pair of variables holds it either way.
-  let strtab = 0, symtab = 0, hash = 0, gnuHash = 0, rel = 0, relsz = 0, jmprel = 0, pltrelsz = 0, initArr = 0, initArrSz = 0;
+  let strtab = 0, symtab = 0, hash = 0, gnuHash = 0, rel = 0, relsz = 0, androidRel = 0, androidRelSz = 0;
+  let androidRela: boolean | null = null, jmprel = 0, pltrelsz = 0, initArr = 0, initArrSz = 0;
   const neededOffs: number[] = [];
   for (let p = base + dynOff; p < base + dynOff + dynSz; p += f.dynEnt) {
     const tag = mem.i32[p >>> 2], val = mem.u32[(p + f.ptr) >>> 2];
@@ -145,6 +191,10 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
       case 6: symtab = val; break;
       case 7: case 17: rel = val; break;
       case 8: case 18: relsz = val; break;
+      case 0x6000000f: androidRel = val; androidRela = false; break;
+      case 0x60000010: androidRelSz = val; break;
+      case 0x60000011: androidRel = val; androidRela = true; break;
+      case 0x60000012: androidRelSz = val; break;
       case 12: mod.init = base + val; break;
       case 23: jmprel = val; break;
       case 25: initArr = val; break;
@@ -190,6 +240,24 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
     cache.set(idx, v);
     return v;
   };
+  const applyOne = (off: number, type: number, sym: number, addend: number) => {
+    const at = (base + off) >>> 2;
+    let value: number;
+    switch (type) {
+      case f.RELATIVE: value = (f.rela ? 0 : mem.u32[at]) + base + addend; break;
+      case f.ABS: value = (f.rela ? 0 : mem.u32[at]) + symValue(sym) + addend; break;
+      case f.GLOB_DAT: case f.JUMP_SLOT: value = symValue(sym) + addend; break;
+      case f.REL32: value = mem.u32[at] + symValue(sym) - (base + off); break;
+      case 0: return;
+      default: throw new Error(`${name}: unsupported relocation type ${type} at 0x${off.toString(16)}`);
+    }
+    mem.u32[at] = value >>> 0;
+    // The high half of a 64-bit slot carries the sum's overflow rather than a flat zero: an
+    // image that stores base + A with A past its own end, and comes back inside by adding a
+    // negative 64-bit offset in a register, relies on that carry (libmetasec's pointer
+    // obfuscation). Nothing dereferences the intermediate, so no plane is ever named by it.
+    if (f.ptr === 8) mem.u32[at + 1] = Math.floor(value / 4294967296) | 0;
+  };
   const apply = (tab: number, sz: number) => {
     for (let p = base + tab; p < base + tab + sz; p += f.relEnt) {
       const off = mem.u32[p >>> 2], info = mem.u32[(p + f.ptr) >>> 2];
@@ -200,24 +268,18 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
       // an LP64 addend is 64-bit; the sum is kept as a double (exact below 2^53) so a slot can
       // hold what the linker meant even when that is outside the 4 GiB of address space here
       const addend = !f.rela ? 0 : f.ptr === 8 ? mem.i32[(p + f.ptr * 2 + 4) >>> 2] * 4294967296 + mem.u32[(p + f.ptr * 2) >>> 2] : mem.i32[(p + f.ptr * 2) >>> 2];
-      const at = (base + off) >>> 2;
-      let value: number;
-      switch (type) {
-        case f.RELATIVE: value = (f.rela ? 0 : mem.u32[at]) + base + addend; break;
-        case f.ABS: value = (f.rela ? 0 : mem.u32[at]) + symValue(sym) + addend; break;
-        case f.GLOB_DAT: case f.JUMP_SLOT: value = symValue(sym) + addend; break;
-        case f.REL32: value = mem.u32[at] + symValue(sym) - (base + off); break;
-        case 0: continue;
-        default: throw new Error(`${name}: unsupported relocation type ${type} at 0x${off.toString(16)}`);
-      }
-      mem.u32[at] = value >>> 0;
-      // The high half of a 64-bit slot carries the sum's overflow rather than a flat zero: an
-      // image that stores base + A with A past its own end, and comes back inside by adding a
-      // negative 64-bit offset in a register, relies on that carry (libmetasec's pointer
-      // obfuscation). Nothing dereferences the intermediate, so no plane is ever named by it.
-      if (f.ptr === 8) mem.u32[at + 1] = Math.floor(value / 4294967296) | 0;
+      applyOne(off, type, sym, addend);
     }
   };
+  if (!!androidRel !== !!androidRelSz || androidRela !== null && androidRela !== f.rela)
+    throw new Error(`${name}: invalid Android packed relocation tags`);
+  if (androidRel) {
+    if (androidRel + androidRelSz > hi) throw new Error(`${name}: Android packed relocations are out of bounds`);
+    decodeAndroidPacked(name, mem.u8.subarray(base + androidRel, base + androidRel + androidRelSz), f.rela, ({ off, info, addend }) => {
+      const low = Number(info & 0xffffffffn) >>> 0;
+      applyOne(off, f.rela ? low : low & 0xff, f.rela ? Number(info >> 32n) : low >>> 8, addend);
+    });
+  }
   if (rel) apply(rel, relsz);
   if (jmprel) apply(jmprel, pltrelsz);
   for (let i = 0; i < initArrSz; i += f.ptr) mod.initArray.push(mem.u32[(base + initArr + i) >>> 2]);
