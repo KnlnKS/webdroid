@@ -35,6 +35,7 @@ import "./android/accounts";
 import "./android/authenticator";
 import "./android/parcel";
 import "./android/binder";
+import "./android/remotecallbacklist";
 import "./android/intentservice";
 import "./android/resultreceiver";
 import "./android/graphics";
