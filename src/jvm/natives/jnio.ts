@@ -416,6 +416,7 @@ const utf8 = charset("UTF-8");
 rt.register({
   name: "java/nio/charset/Charset", ctor: JCharset,
   methods: {
+    "<init>(Ljava/lang/String;[Ljava/lang/String;)V": function (this: JCharset, name: string) { this.cname = name; },
     "static forName(Ljava/lang/String;)Ljava/nio/charset/Charset;": charset,
     "static defaultCharset()Ljava/nio/charset/Charset;": () => utf8,
     "name()Ljava/lang/String;": function (this: JCharset) { return this.cname; },
@@ -437,6 +438,10 @@ rt.register({
       return out;
     },
   },
+});
+rt.register({
+  name: "java/nio/charset/spi/CharsetProvider", ctor: class extends JObj {},
+  methods: { "<init>()V": function () {} },
 });
 /** the coder classes are registered after Charset, so build them through the registry */
 function mkCoder(n: string, cs: JCharset) {
