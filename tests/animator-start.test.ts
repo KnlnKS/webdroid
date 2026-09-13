@@ -32,6 +32,21 @@ class Alpha extends JObj {
   [mangleMethod("set", "(Ljava/lang/Object;Ljava/lang/Object;)V")](_t: unknown, v: JFloat) { this.value = v.v as number; }
 }
 
+class LegacyListener extends JObj { ended = 0; }
+rt.register({
+  name: "test/LegacyAnimatorListener", ctor: LegacyListener, ifaces: ["android/animation/Animator$AnimatorListener"],
+  methods: { "onAnimationEnd(Landroid/animation/Animator;)V": function (this: LegacyListener) { this.ended++; } },
+});
+class DirectionalListener extends JObj { reverse: number[] = []; }
+rt.register({
+  name: "test/DirectionalAnimatorListener", ctor: DirectionalListener, ifaces: ["android/animation/Animator$AnimatorListener"],
+  methods: {
+    "onAnimationEnd(Landroid/animation/Animator;Z)V": function (this: DirectionalListener, _animator: unknown, reverse: number) {
+      this.reverse.push(reverse);
+    },
+  },
+});
+
 test("a one-value ObjectAnimator on a Property starts from the Property's current value", async () => {
   const prop = new Alpha(), target = new JObj();
   const anim = scall("android/animation/ObjectAnimator", "ofFloat", "(Ljava/lang/Object;Landroid/util/Property;[F)Landroid/animation/ObjectAnimator;", target, prop, new Float32Array([1]));
@@ -47,4 +62,22 @@ test("Animator clone uses the covariant framework descriptor", async () => {
   const copy = await vcall(anim, "clone", "()Landroid/animation/Animator;");
   expect(copy).not.toBe(anim);
   expect(await vcall(copy, "getDuration", "()J")).toBe(750n);
+});
+
+test("the directional end callback defaults to the legacy listener", async () => {
+  const listener = rt.make("test/LegacyAnimatorListener") as LegacyListener;
+  const defaultEnd = (rt.link("android/animation/Animator$AnimatorListener").ctor.prototype as Record<string, (...args: unknown[]) => unknown>)[
+    mangleMethod("onAnimationEnd", "(Landroid/animation/Animator;Z)V")
+  ];
+  await defaultEnd.call(listener, null, 1);
+  expect(listener.ended).toBe(1);
+});
+
+test("AnimatorSet dispatches the directional end callback", async () => {
+  const listener = rt.make("test/DirectionalAnimatorListener") as DirectionalListener;
+  const animator = await newObj("android/animation/AnimatorSet");
+  await vcall(animator, "addListener", "(Landroid/animation/Animator$AnimatorListener;)V", listener);
+  await vcall(animator, "start", "()V");
+  await Bun.sleep(10);
+  expect(listener.reverse).toEqual([0]);
 });

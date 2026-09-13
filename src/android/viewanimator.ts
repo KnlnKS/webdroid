@@ -52,7 +52,7 @@ async function vpaStart(this: JVPA) {
   this.running = true;
   this.startT = performance.now();
   if (this.startAction) { const r = this.startAction; this.startAction = null; try { await vcall(r, "run", "()V"); } catch (e) { reportUncaught(e); } }
-  if (this.listener) try { await vcall(this.listener, "onAnimationStart", "(Landroid/animation/Animator;)V", vpaAnim(this)); } catch (e) { reportUncaught(e); }
+  if (this.listener) try { await vcall(this.listener, "onAnimationStart", "(Landroid/animation/Animator;Z)V", vpaAnim(this), 0); } catch (e) { reportUncaught(e); }
   const self = this;
   // the tick is a main-looper job of its own: two animations ending in one frame must not
   // interleave their end callbacks (RecyclerView's item animator re-enters on that)
@@ -84,7 +84,7 @@ async function vpaEnd(this: JVPA, cancelled: boolean) {
   if (this.listener) {
     try {
       if (cancelled) await vcall(this.listener, "onAnimationCancel", "(Landroid/animation/Animator;)V", vpaAnim(this));
-      await vcall(this.listener, "onAnimationEnd", "(Landroid/animation/Animator;)V", vpaAnim(this));
+      await vcall(this.listener, "onAnimationEnd", "(Landroid/animation/Animator;Z)V", vpaAnim(this), 0);
     } catch (e) { reportUncaught(e); }
   }
   if (this.endAction && !cancelled) { const r = this.endAction; this.endAction = null; try { await vcall(r, "run", "()V"); } catch (e) { reportUncaught(e); } }

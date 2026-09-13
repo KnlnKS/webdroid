@@ -104,7 +104,7 @@ async function animTick(a: JValueAnimator): Promise<boolean> {
   if (done) {
     a.running = false;
     for (const l of [...a.animLs]) {
-      try { await vcall(l, "onAnimationEnd", "(Landroid/animation/Animator;)V", a); } catch (e) { reportUncaught(e); }
+      try { await vcall(l, "onAnimationEnd", "(Landroid/animation/Animator;Z)V", a, a.reversed ? 1 : 0); } catch (e) { reportUncaught(e); }
     }
     if (a.next) await guardCall(a.next, M_start);
     return false;
@@ -404,7 +404,7 @@ const vaMethods: NativeSpec["methods"] = {
     if (this.objKeys) this.cur = await objAt(this, 0);
     else { const v = this.keys ? this.keys[0] : this.from; this.cur = this.isInt ? Math.round(v) : v; }
     for (const l of [...this.animLs]) {
-      try { await vcall(l, "onAnimationStart", "(Landroid/animation/Animator;)V", this); } catch (e) { reportUncaught(e); }
+      try { await vcall(l, "onAnimationStart", "(Landroid/animation/Animator;Z)V", this, this.reversed ? 1 : 0); } catch (e) { reportUncaught(e); }
     }
     const self = this;
     // one serialized main-looper job per tick, never a floating chain (see ViewPropertyAnimator)
@@ -491,7 +491,7 @@ rt.register({
         : Math.max(0, ...this.anims.map((a) => a.delayMs + a.durationMs));
       setTimeout(() => {
         this.running = false;
-        for (const l of [...this.animLs]) void vcall(l, "onAnimationEnd", "(Landroid/animation/Animator;)V", this).catch(reportUncaught);
+        for (const l of [...this.animLs]) void vcall(l, "onAnimationEnd", "(Landroid/animation/Animator;Z)V", this, this.reversed ? 1 : 0).catch(reportUncaught);
         if (this.next) void guardCall(this.next, M_start);
       }, total);
     },
@@ -651,7 +651,18 @@ rt.register({
     },
   },
 });
-rt.markers("android/animation/Animator$AnimatorListener", "android/animation/ValueAnimator$AnimatorUpdateListener");
+rt.register({
+  name: "android/animation/Animator$AnimatorListener", ctor: class extends JObj {},
+  methods: {
+    "onAnimationStart(Landroid/animation/Animator;Z)V": function (this: unknown, animator: unknown) {
+      return vcall(this, "onAnimationStart", "(Landroid/animation/Animator;)V", animator);
+    },
+    "onAnimationEnd(Landroid/animation/Animator;Z)V": function (this: unknown, animator: unknown) {
+      return vcall(this, "onAnimationEnd", "(Landroid/animation/Animator;)V", animator);
+    },
+  },
+});
+rt.markers("android/animation/ValueAnimator$AnimatorUpdateListener");
 rt.register({
   name: "android/animation/AnimatorListenerAdapter", ctor: class extends JObj {},
   ifaces: ["android/animation/Animator$AnimatorListener"],
