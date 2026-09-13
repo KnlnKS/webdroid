@@ -529,8 +529,23 @@ rt.register({
 rt.markers("android/media/MediaScannerConnection$OnScanCompletedListener",
   "android/media/MediaScannerConnection$MediaScannerConnectionClient");
 
+class JPlaybackParams extends JObj { speed = 1; pitch = 1; fallback = 0; defaults = false; }
+rt.register({ name: "android/media/PlaybackParams", ctor: JPlaybackParams, methods: {
+  "<init>()V": function () {},
+  "allowDefaults()Landroid/media/PlaybackParams;": function (this: JPlaybackParams) { this.defaults = true; return this; },
+  "setSpeed(F)Landroid/media/PlaybackParams;": function (this: JPlaybackParams, speed: number) { this.speed = speed; return this; },
+  "getSpeed()F": function (this: JPlaybackParams) { return this.speed; },
+  "setPitch(F)Landroid/media/PlaybackParams;": function (this: JPlaybackParams, pitch: number) {
+    if (pitch < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "pitch must not be negative");
+    this.pitch = pitch; return this;
+  },
+  "getPitch()F": function (this: JPlaybackParams) { return this.pitch; },
+  "setAudioFallbackMode(I)Landroid/media/PlaybackParams;": function (this: JPlaybackParams, mode: number) { this.fallback = mode; return this; },
+  "getAudioFallbackMode()I": function (this: JPlaybackParams) { return this.fallback; },
+} });
+
 // ── MediaRouter: one route, the device's own display, with no presentation display behind it
-class JRouteInfo extends JObj {}
+class JRouteInfo extends JObj { tag: unknown = null; }
 class JRouteCategory extends JObj { name: unknown = ""; groupable = false; }
 const theRoute = new JRouteInfo();
 rt.register({
@@ -569,6 +584,8 @@ rt.register({
     "getSupportedTypes()I": () => 3,
     "getPlaybackType()I": () => 0,
     "isEnabled()Z": () => 1,
+    "getTag()Ljava/lang/Object;": function (this: JRouteInfo) { return this.tag; },
+    "setTag(Ljava/lang/Object;)V": function (this: JRouteInfo, tag: unknown) { this.tag = tag; },
   },
 });
 
