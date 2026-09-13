@@ -121,6 +121,7 @@ const SERVICE_CLASS: Record<string, string> = {
   user: "android/os/UserManager",
   shortcut: "android/content/pm/ShortcutManager",
   appops: "android/app/AppOpsManager",
+  systemhealth: "android/os/health/SystemHealthManager",
   permission_controller: "android/permission/PermissionControllerManager",
   locale: "android/app/LocaleManager",
   dropbox: "android/os/DropBoxManager",

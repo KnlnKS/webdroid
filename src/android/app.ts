@@ -516,6 +516,20 @@ rt.register({
   },
 });
 const activeOpWatchers = new WeakMap<JObj, Map<unknown, { ops: string[]; executor: unknown }>>();
+class JHealthStats extends JObj {}
+const uidHealthSnapshot = () => new JHealthStats();
+rt.register({
+  name: "android/os/health/HealthStats", ctor: JHealthStats,
+  methods: {
+    "getDataType()Ljava/lang/String;": () => "UidHealthStats",
+    ...stubs(0, "hasTimer(I)Z", "hasMeasurement(I)Z", "hasStats(I)Z", "hasTimers(I)Z", "hasMeasurements(I)Z"),
+    "getTimer(I)Landroid/os/health/TimerStat;": () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); },
+    "getMeasurement(I)J": () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); },
+    "getStats(I)Ljava/util/Map;": () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); },
+    "getTimers(I)Ljava/util/Map;": () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); },
+    "getMeasurements(I)Ljava/util/Map;": () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); },
+  },
+});
 for (const [name, methods, statics] of [
   ["android/app/ActivityManager", {
     "getMemoryClass()I": () => 256,
@@ -713,6 +727,17 @@ for (const [name, methods, statics] of [
       "startWatchingMode(Ljava/lang/String;Ljava/lang/String;Landroid/app/AppOpsManager$OnOpChangedListener;)V",
       "stopWatchingMode(Landroid/app/AppOpsManager$OnOpChangedListener;)V"),
   }, { MODE_ALLOWED: 0, MODE_IGNORED: 1, MODE_ERRORED: 2, MODE_DEFAULT: 3 }],
+  ["android/os/health/SystemHealthManager", {
+    "takeMyUidSnapshot()Landroid/os/health/HealthStats;": uidHealthSnapshot,
+    "takeUidSnapshot(I)Landroid/os/health/HealthStats;": (uid: number) => {
+      if (uid !== PROCESS_UID) throw rt.mkThrowable("java/lang/SecurityException", "BATTERY_STATS permission required");
+      return uidHealthSnapshot();
+    },
+    "takeUidSnapshots([I)[Landroid/os/health/HealthStats;": (uids: Int32Array) => {
+      if ([...uids].some((uid) => uid !== PROCESS_UID)) throw rt.mkThrowable("java/lang/SecurityException", "BATTERY_STATS permission required");
+      return jarray([...uids].map(uidHealthSnapshot), "Landroid/os/health/HealthStats;");
+    },
+  }],
   ["android/view/accessibility/AccessibilityManager", {
     // No real accessibility service runs here — a device with accessibility off reports
     // both flags false. Listeners register (so `implements` links) but never fire, which
