@@ -278,6 +278,9 @@ export const contextMethods: NativeSpec["methods"] = {
   "getDatabasePath(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, name: string) {
     return mkFile(dbPath(this.$host.pkg, name));
   },
+  "databaseList()[Ljava/lang/String;": function (this: JContext) {
+    return jarray(vfs.list(`/data/data/${this.$host.pkg}/databases`), "Ljava/lang/String;");
+  },
   "getFileStreamPath(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, name: string) {
     privDir(`/data/data/${this.$host.pkg}/files`);
     return mkFile(`/data/data/${this.$host.pkg}/files/${name}`);
