@@ -68,6 +68,12 @@ test("HandlerThread.getThreadId is -1 until started, then a stable tid distinct 
   expect(await scall("android/os/Process", "myTid", "()I")).toBe(PROCESS_PID);
 });
 
+test("Os.sysconf reports the configured page and processor counts", () => {
+  expect(scall("android/system/Os", "sysconf", "(I)J", 0x27)).toBe(4096n);
+  expect(scall("android/system/Os", "sysconf", "(I)J", 0x61)).toBe(4n);
+  expect(scall("android/system/Os", "sysconf", "(I)J", -1)).toBe(-1n);
+});
+
 test("Resources(AssetManager, DisplayMetrics, Configuration) scopes its own configuration and metrics", async () => {
   const host = new Resources(null, {});
   const assets = rt.make("android/content/res/AssetManager") as JAssetManager;

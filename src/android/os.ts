@@ -933,6 +933,7 @@ rt.register({
     },
     "static gettid()I": () => threadTid(curThread),
     "static getpid()I": () => PROCESS_PID,
+    "static sysconf(I)J": (name: number) => BigInt(name === 0x27 || name === 0x28 ? 4096 : name === 0x60 || name === 0x61 ? device.cpu.cores : name === 0x62 ? device.cpu.memKb / 4 : -1),
     "static stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {
       const st = vfs.stat(path);
       if (!st && !vfs.isDir(path)) throw errno("stat", 2);
