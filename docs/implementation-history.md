@@ -2539,3 +2539,18 @@ Value lookup now carries selected density through resolved references and preser
 references when requested. Four assertions cover selection, aliases and reused TypedValues;
 the preceding implementation fails. Fresh Chrome matches the Android oracle's density, ID and
 path; typecheck passes. This metadata discrepancy alone has not established marker-size parity.
+
+The next settled Chrome preview shows the origin marker reduced by about threefold after the
+resource-value fix, and the earlier Canvas stroke fix now renders white map-label outlines.
+A provider audit also found that pinned microG's FontsProvider returns Roboto for every request
+(its unchanged v0.3.16.252432 source and a live provider query agree), so Google Sans availability
+differs from the Play Store AVD. No APK-specific font substitution was added.
+
+The malformed thumbnail URL then exposed ContentResolver.openFileDescriptor returning empty
+storage for a nonexistent file. File URIs now use the canonical decoded URI path and delegate
+to ParcelFileDescriptor.open, which rejects missing reads. Parcel descriptor mode parsing also
+now preserves read-write access and rejects unsupported mode strings. Eight focused resolver,
+parcel and file-stream tests (61 assertions) and typecheck pass; the new resolver tests fail
+against the preceding code. Fresh Maps preview no longer reports empty decode inputs or the
+MediaMetadataRetriever fallback error. The original thumbnail URL is still incomplete, so
+this fixes false file-open success rather than restoring the image.

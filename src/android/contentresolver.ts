@@ -1,13 +1,13 @@
 import { services, type JContext } from "./context";
 import { rt, type NativeSpec, JObj, stubs, noops } from "../jvm/runtime";
 import { appHost, type AppHost } from "./apphost";
-import { type JUri, mkUri } from "./net";
+import { type JUri, mkUri, uriParts, uriDecode } from "./net";
 import {
   isDocsUri, documentId, docRead, docWrite, docInputStream, docOutputStream, docRow, isChildrenUri, docChildren,
   DOC_COLUMNS, docCells, docDelete
 } from "./documents";
 import { mkPfd } from "./os";
-import { vfs } from "../jvm/natives/jio";
+import { mkFile } from "../jvm/natives/jio";
 import { mkAssetFd } from "./resnative";
 import { newObj, defineException, vcall } from "../jvm/natives/jlang";
 import { mkCursor } from "./sqlite";
@@ -106,14 +106,20 @@ const uriGrants = {
 export function checkUriPermission(u: JUri, _pid: number, uid: number, modes: number): number {
   return uid === 0 || uid === PROCESS_UID && (modes & 3) !== 0 && uriGrants.all().includes(u.uri) ? 0 : -1;
 }
-const fileOf = (u: JUri) => u.uri.replace(/^file:\/\//, "");
+function fileOf(u: JUri): string {
+  const parts = uriParts(u);
+  if (parts.scheme !== "file") throw rt.mkThrowable("java/io/FileNotFoundException", u.uri);
+  return uriDecode(parts.path) ?? "";
+}
 /** A descriptor carries the document's current bytes and writes them back when it is closed. */
 async function openPfd(u: JUri, mode: string) {
   if (!isDocsUri(u)) {
     const provider = await contentProvider(u);
     if (provider) return vcall(provider, "openFile", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", u, mode);
     if (u.uri.startsWith("content:")) throw rt.mkThrowable("java/io/FileNotFoundException", u.uri);
-    return mkPfd(vfs.read(fileOf(u)) ?? new Uint8Array(0), (b) => vfs.write(fileOf(u), b));
+    const cls = rt.link("android/os/ParcelFileDescriptor").ctor;
+    return vcall(cls, "open", "(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;", mkFile(fileOf(u)),
+      await vcall(cls, "parseMode", "(Ljava/lang/String;)I", mode));
   }
   const id = documentId(u, true);
   const write = (mode ?? "r").includes("w");

@@ -629,9 +629,16 @@ rt.register({
       p.flags = ((mode >>> 28) & 3) - 1 + (mode & 0x08000000 ? 0x40 : 0) + (mode & 0x04000000 ? 0x200 : 0) + (mode & 0x02000000 ? 0x400 : 0);
       return p;
     },
-    "static parseMode(Ljava/lang/String;)I": (m: string) =>
-      (m?.includes("w") ? 0x28000000 : 0x10000000) | (m?.includes("t") || m === "w" ? 0x04000000 : 0)
-      | (m?.includes("a") ? 0x02000000 : 0),
+    "static parseMode(Ljava/lang/String;)I": (m: string) => {
+      switch (m) {
+        case "r": return 0x10000000;
+        case "w": case "wt": return 0x2c000000;
+        case "wa": return 0x2a000000;
+        case "rw": return 0x38000000;
+        case "rwt": return 0x3c000000;
+        default: throw rt.mkThrowable("java/lang/IllegalArgumentException", "Bad mode: " + m);
+      }
+    },
     "getFileDescriptor()Ljava/io/FileDescriptor;": function (this: JParcelFileDescriptor) {
       const d = rt.make("java/io/FileDescriptor") as JFileDescriptor;
       d.fd = pfdFd(this);
