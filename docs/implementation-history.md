@@ -1763,3 +1763,12 @@ backup classes describe hardware or system capabilities this browser device does
 The interest screen once logged a dynamic-layout expression referencing absent sibling ids;
 the feed continued and all later video captures rendered, so this is recorded as live-content
 fallback evidence rather than suppressed as a platform error.
+
+A later matched two-swipe replay reproduced the intermittent allocator failure: repeated
+private read/write mappings below 32 MB interleaved with native allocations advanced plane 0's
+monotonic heap from an 808 MB peak with 3.21 GB free to 2.56 GB with 1.46 GB free, followed by
+`std::bad_alloc`. A64 anonymous reservations and mappings of at least the existing 1 MB native
+stack unit now use virtual-address planes; smaller mappings retain the plane-0 fast path. Under
+the same flow, resume was 355 MB peak with 3.67 GB free, the first swipe was 377 MB with 3.64 GB
+free, and the second-swipe dwell finished at 396 MB with 3.62 GB free. All 13 steps completed
+without a native fault or main-loop wedge; the second swipe and final dwell ran at 31 and 87 fps.

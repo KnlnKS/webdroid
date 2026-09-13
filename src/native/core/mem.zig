@@ -317,8 +317,10 @@ fn grow(h: usize, n: u32) bool {
     return true;
 }
 fn release(h: usize) void {
-    const at = (P[h] - pool_base) / UNIT;
-    @memset(owner[at .. at + unitsOf(S[h])], -1);
+    if (S[h] != 0) {
+        const at = (P[h] - pool_base) / UNIT;
+        @memset(owner[at .. at + unitsOf(S[h])], -1);
+    }
     R[h] = 0;
     S[h] = 0;
 }
@@ -359,6 +361,16 @@ export fn map_va(n: u64, rsv: u32) u64 {
             return @as(u64, h) << 32;
         }
         return 0;
+    }
+    // Large transient mappings strand the monotonic malloc bump when they share plane 0.
+    // Keep sub-stack-sized mappings there so their allocation stays page-table-only.
+    if (pool_base != 0 and (rsv != 0 or n >= abi.STACK_SIZE)) {
+        var h: usize = 1;
+        while (h < PLANES and R[h] != 0) h += 1;
+        if (h == PLANES or (rsv == 0 and !grow(h, @intCast(n)))) return 0;
+        L[h] = PLANE_LO;
+        R[h] = n;
+        return (@as(u64, h) << 32) | L[h];
     }
     const p = map_pages(@intCast(n), rsv, PAGE_SIZE);
     if (p != 0 or pool_base == 0) return p;
