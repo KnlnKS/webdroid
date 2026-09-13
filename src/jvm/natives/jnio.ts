@@ -5,7 +5,7 @@ import { defineException, vcall } from "./jlang";
 import { mem } from "../../native/mem";
 import { decodeString, encodeString } from "../charset";
 
-type BufferStorage = { kind: "heap"; ab: ArrayBuffer } | { kind: "direct"; ab: ArrayBuffer } | { kind: "native"; address: number | bigint };
+type BufferStorage = { kind: "heap"; ab: ArrayBuffer; array: ArrayBufferView } | { kind: "direct"; ab: ArrayBuffer } | { kind: "native"; address: number | bigint };
 const directBuffers = new FinalizationRegistry<number>((address) => mem.free(address));
 
 export class JBuffer extends JObj {
@@ -65,8 +65,12 @@ function bufferBaseMethods(): NativeSpec["methods"] {
     "hasRemaining()Z": function (this: JBuffer) { return this.pos < this.lim ? 1 : 0; },
     "isDirect()Z": function (this: JBuffer) { return this.direct ? 1 : 0; },
     "isReadOnly()Z": function (this: JBuffer) { return +this.readOnly; },
-    "hasArray()Z": () => 0,
-    "arrayOffset()I": () => 0,
+    "hasArray()Z": function (this: JBuffer) { return this.backing.storage.kind === "heap" && !this.readOnly ? 1 : 0; },
+    "arrayOffset()I": function (this: JBuffer) {
+      const storage = this.backing.storage;
+      if (storage.kind !== "heap" || this.readOnly) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      return (this.dv.byteOffset - storage.array.byteOffset) >> this.elemShift;
+    },
   };
 }
 
@@ -161,7 +165,12 @@ rt.register({
       this.pos = n; this.lim = this.cap;
       return this;
     },
-    "array()[B": function (this: JByteBuffer) { if (this.readOnly) throw rt.mkThrowable("java/nio/ReadOnlyBufferException", null); return bytes(this); },
+    "array()[B": function (this: JByteBuffer) {
+      const storage = this.backing.storage;
+      if (this.readOnly) throw rt.mkThrowable("java/nio/ReadOnlyBufferException", null);
+      if (storage.kind !== "heap") throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      return storage.array;
+    },
   },
 });
 function duplicateBuffer(source: JByteBuffer): JByteBuffer {
@@ -195,7 +204,8 @@ export const mappedReadOnlyBuffer = (data: Uint8Array): JBuffer => mappedBuffer(
 export function mkByteBuffer(cap: number, direct = false): JByteBuffer {
   if (cap < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative buffer capacity");
   const b = new JByteBuffer();
-  b.backing = { storage: { kind: direct ? "direct" : "heap", ab: new ArrayBuffer(cap) } };
+  const ab = new ArrayBuffer(cap);
+  b.backing = { storage: direct ? { kind: "direct", ab } : { kind: "heap", ab, array: new Int8Array(ab) } };
   b.cap = b.lim = cap;
   b.pos = 0;
   return b;
@@ -231,7 +241,7 @@ function bytes(b: JByteBuffer): Int8Array {
 // too); ByteBuffer.wrap keeps Java's big-endian default.
 function wrapArray<T extends JBuffer>(Ctor: new () => T, arr: Int8Array | Int16Array | Uint16Array | Int32Array | Float32Array, shift: number, off = 0, len = arr.length): T {
   const b = new Ctor();
-  b.backing = { storage: { kind: "heap", ab: arr.buffer as ArrayBuffer } };
+  b.backing = { storage: { kind: "heap", ab: arr.buffer as ArrayBuffer, array: arr } };
   b.byteOffset = arr.byteOffset;
   b.elemShift = shift; b.little = shift > 0;
   b.cap = arr.length; b.pos = off; b.lim = off + len;

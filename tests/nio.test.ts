@@ -9,6 +9,21 @@ const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => (
 
 rt.linkNatives();
 
+test("heap ByteBuffers expose their backing array and slice offset", async () => {
+  const buffer = await scall("java/nio/ByteBuffer", "allocate", "(I)Ljava/nio/ByteBuffer;", 4);
+  expect(await vcall(buffer, "hasArray", "()Z")).toBe(1);
+  const array = await vcall(buffer, "array", "()[B");
+  await vcall(buffer, "position", "(I)Ljava/nio/Buffer;", 1);
+  const slice = await vcall(buffer, "slice", "()Ljava/nio/ByteBuffer;");
+  expect(await vcall(slice, "array", "()[B")).toBe(array);
+  expect(await vcall(slice, "arrayOffset", "()I")).toBe(1);
+
+  const readOnly = await vcall(buffer, "asReadOnlyBuffer", "()Ljava/nio/ByteBuffer;");
+  expect(await vcall(readOnly, "hasArray", "()Z")).toBe(0);
+  const direct = await scall("java/nio/ByteBuffer", "allocateDirect", "(I)Ljava/nio/ByteBuffer;", 4);
+  expect(await vcall(direct, "hasArray", "()Z")).toBe(0);
+});
+
 test("FileChannel.read fills a ByteBuffer from streams and random-access files", async () => {
   vfs.write("/tmp/nio-channel.bin", new Uint8Array([1, 2, 3, 4, 5, 6]));
   const input = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/tmp/nio-channel.bin");
