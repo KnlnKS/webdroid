@@ -506,8 +506,10 @@ Native performance constraints:
   Retain real crypto with lazy forge for that case; software keystore persistence doesn't imply
   hardware backing/authentication. Lazy pinned Noto COLRv1 still reads the whole font on native
   use: it saves unused-app startup bytes, not used-font bytes. Preserve asset provenance/licenses.
-- Surface/TextureView lifecycle and ownership are independent of decoded-frame counts. Replay
-  must not retain closed VideoFrames. MediaCodec/WebCodecs queues are bounded; AVC key-frame
+- Surface/TextureView lifecycle and ownership are independent of decoded-frame counts. Recorded
+  display lists install a live surface operation before the first frame: otherwise winning that
+  recording race leaves later decoded frames outside the cached list. Replay must not retain
+  closed VideoFrames. MediaCodec/WebCodecs queues are bounded; AVC key-frame
   detection uses stream headers when Android flags are absent. Audio retains real PCM/capacity/
   clock state. More than eight access units before first output and midstream format notifications
   remain unverified limitations. Writable FileChannel mappings, non-NORMAL blur and enabled

@@ -374,8 +374,9 @@ export class JView extends JObj {
   visibility = 0;                  // 0 visible, 4 invisible, 8 gone
   background: JDrawable | null = null;
   foreground: JDrawable | null = null;
-  /** a SurfaceView's surface: composited behind the view's own drawing, like SurfaceFlinger does */
+  /** A compositor surface; surfaceBacked keeps its late first frame visible through display lists. */
   surfaceLayer: OffscreenCanvas | ImageBitmap | VideoFrame | null = null;
+  surfaceBacked = false;
   alphaV = 1;
   scrollX = 0; scrollY = 0;
   translationX = 0; translationY = 0; translationZ = 0;
@@ -769,14 +770,18 @@ function drawSelf(v: JView, cv: JCanvas): Promise<void> {
 /** the view's own painting, in its own coordinate space: background, content, children, overlay */
 async function drawContent(v: JView, cv: JCanvas) {
   const ctx = cv.ctx;
-  if (v.surfaceLayer) {
-    const recorder = ctx as typeof ctx & { __isRecorder?: boolean; __record?: (draw: (target: typeof ctx) => void) => void };
-    // A surface's current frame can be replaced and closed before this display list replays.
-    if (recorder.__isRecorder) recorder.__record!((target) => {
+  const recorder = ctx as typeof ctx & { __isRecorder?: boolean; __record?: (draw: (target: typeof ctx) => void) => void };
+  if (recorder.__isRecorder && v.surfaceBacked) {
+    if (!v.surfaceLayer && v.background) {
+      await guardCall(v.background, M_setBounds, 0, 0, v.width(), v.height());
+      await guardCall(v.background, M_drawableDraw, cv);
+    }
+    // The first frame can arrive after recording; later frames replace and close their predecessor.
+    recorder.__record!((target) => {
       if (v.surfaceLayer) target.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
     });
-    else ctx.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
   }
+  else if (v.surfaceLayer) ctx.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
   else if (v.background) {
     // through setBounds, not the fields: AOSP's onBoundsChange is where wrapper/shape drawables
     // (and app subclasses) rebuild their geometry, and it only fires on a real change

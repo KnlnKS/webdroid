@@ -252,6 +252,7 @@ function getHolder(v: JView): JSurfaceHolder {
   return h;
 }
 class JSurfaceView extends JViewGroup {
+  surfaceBacked = true;
   surfW = 0; surfH = 0;
   ensureSurface(): void {
     const w = this.width(), h = this.height();
@@ -352,6 +353,7 @@ rt.register({
 });
 rt.markers("android/graphics/SurfaceTexture$OnFrameAvailableListener");
 class JTextureView extends JView {
+  surfaceBacked = true;
   listener: unknown = null;
   texture: JSurfaceTexture | null = null;
   opaque = true;
