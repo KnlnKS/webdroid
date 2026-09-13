@@ -5,7 +5,7 @@
 // authoritiesOf) lives with PackageManager in app.ts; DocumentsContract reads it from there.
 
 import { rt, JObj } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { newObj, vcall } from "../jvm/natives/jlang";
 import { isDocumentsProvider } from "./pm";
 import { registerSystemActivity, mkResultIntent } from "./intent";
 import { mkUri } from "./net";
@@ -48,11 +48,11 @@ rt.register({
     "saveRecentQuery(Ljava/lang/String;Ljava/lang/String;)V": async function (this: JSearchRecentSuggestions, query: string | null, line2: string | null) {
       if (!query?.length) return;
       if (line2 != null && !this.twoLine) throw rt.mkThrowable("java/lang/IllegalArgumentException", "twoLineDisplay must be enabled");
-      const values = rt.make("android/content/ContentValues") as { map: Map<string, unknown> };
-      values.map.set("display1", query);
-      values.map.set("query", query);
-      values.map.set("date", BigInt(Date.now()));
-      if (this.twoLine) values.map.set("display2", line2);
+      const values = await newObj("android/content/ContentValues");
+      await vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "display1", query);
+      await vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "query", query);
+      await vcall(values, "put", "(Ljava/lang/String;Ljava/lang/Long;)V", "date", BigInt(Date.now()));
+      if (this.twoLine) await vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "display2", line2);
       const resolver = await vcall(this.ctx, "getContentResolver", "()Landroid/content/ContentResolver;");
       await vcall(resolver, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", mkUri(`content://${this.authority}/suggestions`), values);
     },
