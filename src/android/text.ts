@@ -313,10 +313,8 @@ const spanHierarchy: Record<string, { sup?: string; ifaces?: string[] }> = {
 };
 for (const [name] of [
   ["android/text/style/BackgroundColorSpan", { color: 0 }],
-  ["android/text/style/StyleSpan", { style: 0 }],
   ["android/text/style/UnderlineSpan", {}],
   ["android/text/style/StrikethroughSpan", {}],
-  ["android/text/style/RelativeSizeSpan", { size: 1 }],
   ["android/text/style/TypefaceSpan", {}],
   ["android/text/style/ImageSpan", {}],
   ["android/text/style/ClickableSpan", {}],
@@ -350,6 +348,41 @@ rt.register({ name: "android/text/style/ForegroundColorSpan", ctor: JForegroundC
     "updateDrawState(Landroid/text/TextPaint;)V": function (this: JForegroundColorSpan, paint: JTextPaint) { paint.color = this.color; },
   },
 });
+
+class JStyleSpan extends JObj { style = 0; adjustment = 0x7fffffff; }
+async function applyStyle(this: JStyleSpan, paint: JTextPaint) {
+  const old = await vcall(paint, "getTypeface", "()Landroid/graphics/Typeface;");
+  const want = (old ? await vcall(old, "getStyle", "()I") : 0) | this.style;
+  const typeface = rt.link("android/graphics/Typeface").ctor;
+  let face = old ? await vcall(typeface, "create", "(Landroid/graphics/Typeface;I)Landroid/graphics/Typeface;", old, want)
+    : await vcall(typeface, "defaultFromStyle", "(I)Landroid/graphics/Typeface;", want);
+  if ((this.style & 1) && this.adjustment && this.adjustment !== 0x7fffffff) {
+    const weight = Math.max(1, Math.min(1000, await vcall(face, "getWeight", "()I") + this.adjustment));
+    face = await vcall(typeface, "create", "(Landroid/graphics/Typeface;IZ)Landroid/graphics/Typeface;", face, weight, (want & 2) ? 1 : 0);
+  }
+  const fake = want & ~await vcall(face, "getStyle", "()I");
+  if (fake & 1) await vcall(paint, "setFakeBoldText", "(Z)V", 1);
+  if (fake & 2) await vcall(paint, "setTextSkewX", "(F)V", -0.25);
+  await vcall(paint, "setTypeface", "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;", face);
+}
+rt.register({ name: "android/text/style/StyleSpan", ctor: JStyleSpan, ...spanHierarchy["android/text/style/StyleSpan"], methods: {
+  "<init>(I)V": function (this: JStyleSpan, style: number) { this.style = style; },
+  "<init>(II)V": function (this: JStyleSpan, style: number, adjustment: number) { this.style = style; this.adjustment = adjustment; },
+  "getStyle()I": function (this: JStyleSpan) { return this.style; },
+  "getFontWeightAdjustment()I": function (this: JStyleSpan) { return this.adjustment; },
+  "updateDrawState(Landroid/text/TextPaint;)V": applyStyle,
+  "updateMeasureState(Landroid/text/TextPaint;)V": applyStyle,
+} });
+class JRelativeSizeSpan extends JObj { size = 1; }
+async function applyRelativeSize(this: JRelativeSizeSpan, paint: JTextPaint) {
+  return vcall(paint, "setTextSize", "(F)V", await vcall(paint, "getTextSize", "()F") * this.size);
+}
+rt.register({ name: "android/text/style/RelativeSizeSpan", ctor: JRelativeSizeSpan, ...spanHierarchy["android/text/style/RelativeSizeSpan"], methods: {
+  "<init>(F)V": function (this: JRelativeSizeSpan, size: number) { this.size = size; },
+  "getSizeChange()F": function (this: JRelativeSizeSpan) { return this.size; },
+  "updateDrawState(Landroid/text/TextPaint;)V": applyRelativeSize,
+  "updateMeasureState(Landroid/text/TextPaint;)V": applyRelativeSize,
+} });
 
 export function drawStyledText(src: unknown, text: string, start: number, canvas: JCanvas, paint: JTextPaint, x: number, y: number, color = paint.color): Promise<void> | undefined {
   if (!(src instanceof JSpanned)) return;
