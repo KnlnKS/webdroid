@@ -411,11 +411,20 @@ function pathOp(dst: JPath, pa: JPath, pb: JPath, mode: number): number {
   return 1;
 }
 
+function copyPath(this: JPath, source: JPath) {
+  if (this === source) return;
+  this.ops = source.ops.map(op => op.slice() as PathOp);
+  this.curX = source.curX; this.curY = source.curY;
+  this.startX = source.startX; this.startY = source.startY;
+  this.fillRule = source.fillRule;
+  this.dirty = true;
+}
 rt.register({
   name: "android/graphics/Path", ctor: JPath,
   methods: {
     "<init>()V": function () {},
-    "<init>(Landroid/graphics/Path;)V": function (this: JPath, o: JPath) { if (o) this.ops = o.ops.slice(); },
+    "<init>(Landroid/graphics/Path;)V": function (this: JPath, o: JPath) { if (o) copyPath.call(this, o); },
+    "set(Landroid/graphics/Path;)V": copyPath,
     "reset()V": function (this: JPath) { this.ops.length = 0; this.dirty = true; },
     "rewind()V": function (this: JPath) { this.ops.length = 0; this.dirty = true; },
     "moveTo(FF)V": function (this: JPath, x: number, y: number) { this.add(["m", x, y]); this.curX = this.startX = x; this.curY = this.startY = y; },
