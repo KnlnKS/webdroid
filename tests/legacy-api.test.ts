@@ -194,6 +194,14 @@ test("Arrays sorts a natural-order object subrange", async () => {
   expect(values).toEqual(["z", "a", "b", "c", "y"]);
 });
 
+test("BigInteger returns quotient and remainder together", async () => {
+  const value = await newObj("java/math/BigInteger", "(Ljava/lang/String;)V", "23");
+  const divisor = await newObj("java/math/BigInteger", "(Ljava/lang/String;)V", "5");
+  const result = await vcall(value, "divideAndRemainder", "(Ljava/math/BigInteger;)[Ljava/math/BigInteger;", divisor);
+  expect(await vcall(result[0], "intValue", "()I")).toBe(4);
+  expect(await vcall(result[1], "intValue", "()I")).toBe(3);
+});
+
 test("Resources(AssetManager, DisplayMetrics, Configuration) scopes its own configuration and metrics", async () => {
   const host = new Resources(null, {});
   const assets = rt.make("android/content/res/AssetManager") as JAssetManager;
