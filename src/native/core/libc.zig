@@ -167,9 +167,13 @@ pub fn call(c: *Cpu, id: u8) Result {
         .pthread_mutex_lock, .pthread_mutex_trylock => {
             const a = ptr(c, 0) orelse return .fault;
             const w = mem.ld(u32, a);
+            const kind = w & 0xc000;
+            const constants = w & 0xe000;
             if (w & 3 == 0) {
-                if (!cpu.st(u32, c, a, (w & 0xc000) | 1 | (c.tid << 16))) return .fault;
-            } else if (w >> 16 == c.tid and w & 0x3ffc != 0x3ffc) {
+                const owner = if (kind == 0) 0 else c.tid << 16;
+                if (!cpu.st(u32, c, a, constants | 1 | owner)) return .fault;
+            } else if (kind != 0 and w >> 16 == c.tid) {
+                if (kind == 0x8000 or w & 0x3ffc == 0x3ffc) return .host;
                 if (!cpu.st(u32, c, a, w + 4)) return .fault;
             } else if (f == .pthread_mutex_trylock) {
                 ret(c, 16);
@@ -180,8 +184,9 @@ pub fn call(c: *Cpu, id: u8) Result {
         .pthread_mutex_unlock => {
             const a = ptr(c, 0) orelse return .fault;
             const w = mem.ld(u32, a);
-            if (w & 3 != 1 or w >> 16 != c.tid) return .host;
-            if (!cpu.st(u32, c, a, if (w & 0x3ffc != 0) w - 4 else w & 0xc000)) return .fault;
+            const kind = w & 0xc000;
+            if (w & 3 != 1 or (kind != 0 and w >> 16 != c.tid)) return .host;
+            if (!cpu.st(u32, c, a, if (kind != 0 and w & 0x3ffc != 0) w - 4 else w & 0xe000)) return .fault;
             ret(c, 0);
         },
         .memcpy, .memmove => {

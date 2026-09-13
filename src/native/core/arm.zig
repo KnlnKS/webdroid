@@ -4,6 +4,7 @@ const mem = @import("mem.zig");
 const cpu = @import("cpu.zig");
 const a64 = @import("a64.zig");
 const fp = @import("fp.zig");
+const simd = @import("simd.zig");
 const Cpu = cpu.Cpu;
 const Status = cpu.Status;
 const Fault = cpu.Fault;
@@ -62,6 +63,15 @@ inline fn jump(c: *Cpu, target: u32) Status {
 pub fn cond(c: *Cpu, cc: u32) bool {
     return a64.cond(c, @intCast(cc));
 }
+inline fn itState(c: *Cpu) u32 {
+    return ((c.cpsr >> 8) & 0xfc) | ((c.cpsr >> 25) & 3);
+}
+inline fn setItState(c: *Cpu, state: u32) void {
+    c.cpsr = (c.cpsr & ~@as(u32, (0x3f << 10) | (3 << 25))) | ((state & 0xfc) << 8) | ((state & 3) << 25);
+}
+inline fn advanceIt(c: *Cpu, state: u32) void {
+    setItState(c, if (state & 7 == 0) 0 else (state & 0xe0) | ((state << 1) & 0x1f));
+}
 
 const Shifted = struct { v: u32, carry: u32 };
 fn shiftReg(c: *Cpu, kind: u32, v: u32, n: u32) Shifted {
@@ -76,6 +86,29 @@ fn shiftReg(c: *Cpu, kind: u32, v: u32, n: u32) Shifted {
             return .{ .v = std.math.rotr(u32, v, k), .carry = (v >> @intCast(k - 1)) & 1 };
         },
     }
+}
+fn shiftImm(c: *Cpu, kind: u32, v: u32, n: u32) Shifted {
+    if (n != 0 or kind == 0) return shiftReg(c, kind, v, n);
+    return switch (kind) {
+        1 => .{ .v = 0, .carry = v >> 31 },
+        2 => .{ .v = @bitCast(@as(i32, @bitCast(v)) >> 31), .carry = v >> 31 },
+        else => .{ .v = (v >> 1) | (cf(c) << 31), .carry = v & 1 },
+    };
+}
+fn thumbExpandImm(c: *Cpu, imm12: u32) Shifted {
+    if (imm12 >> 10 == 0) {
+        const imm8 = imm12 & 255;
+        const v: u32 = switch ((imm12 >> 8) & 3) {
+            0 => imm8,
+            1 => imm8 | (imm8 << 16),
+            2 => (imm8 << 8) | (imm8 << 24),
+            else => imm8 * 0x01010101,
+        };
+        return .{ .v = v, .carry = cf(c) };
+    }
+    const rot = (imm12 >> 7) & 31;
+    const v = std.math.rotr(u32, 0x80 | (imm12 & 0x7f), rot);
+    return .{ .v = v, .carry = v >> 31 };
 }
 fn op2(c: *Cpu, w: u32, pc: u32) Shifted {
     if (w & (1 << 25) != 0) {
@@ -680,6 +713,365 @@ fn vfpArith(comptime F: type, c: *Cpu, w: u32, d: u32, n: u32, m: u32) ?Status {
 fn execThumb(c: *Cpu, pc: u32) Status {
     const h: u32 = ld(u16, pc);
     c.pc = pc + 2;
+    const currentIt = itState(c);
+    if (currentIt != 0) {
+        advanceIt(c, currentIt);
+        if (!cond(c, currentIt >> 4)) {
+            if ((h & 0xf800) >= 0xe800) c.pc = pc + 4;
+            return .next;
+        }
+    }
+    if ((h & 0xf800) >= 0xe800) {
+        const h2: u32 = ld(u16, pc + 2);
+        const cp = (h2 >> 8) & 15;
+        if (cp == 10 or cp == 11) {
+            if (vfp(c, h << 16 | h2, pc -% 4)) |status| {
+                if (status != .fault) c.pc = pc + 4;
+                return status;
+            }
+        }
+    }
+    if ((h & 0xefb0) == 0xef80) {
+        const h2: u32 = ld(u16, pc + 2);
+        if (h2 & 0x10 == 0) return fault(c, .undefined, h << 16 | h2, pc);
+        c.pc = pc + 4;
+        const d = (((h >> 6) & 1) << 4) | ((h2 >> 12) & 15);
+        const q = h2 & 0x40 != 0;
+        if (q and d & 1 != 0) return fault(c, .undefined, h << 16 | h2, pc);
+        const imm8 = ((h >> 5) & 0x80) | ((h & 7) << 4) | (h2 & 15);
+        const ex = simd.expandImm((h2 >> 5) & 1, (h2 >> 8) & 15, 0, imm8) orelse return fault(c, .undefined, h << 16 | h2, pc);
+        const count: u32 = if (q) 2 else 1;
+        var i: u32 = 0;
+        while (i < count) : (i += 1) {
+            const dst = vreg(u64, c, d + i);
+            dst.* = switch (ex.kind) {
+                .movi, .fmov => ex.v,
+                .mvni => ~ex.v,
+                .orr => dst.* | ex.v,
+                .bic => dst.* & ~ex.v,
+            };
+        }
+        return .next;
+    }
+    const wideMoveImm = h & 0xfbef;
+    if (wideMoveImm == 0xf04f or wideMoveImm == 0xf06f) {
+        const h2: u32 = ld(u16, pc + 2);
+        if (h2 & 0x8000 == 0) {
+            c.pc = pc + 4;
+            const imm12 = (((h >> 10) & 1) << 11) | (((h2 >> 12) & 7) << 8) | (h2 & 255);
+            const expanded = thumbExpandImm(c, imm12);
+            const out = if (wideMoveImm == 0xf06f) ~expanded.v else expanded.v;
+            set(c, (h2 >> 8) & 15, out);
+            if (h & 0x10 != 0) setNZC(c, out, expanded.carry);
+            return .next;
+        }
+    }
+    if ((h & 0xfa00) == 0xf000) {
+        const h2: u32 = ld(u16, pc + 2);
+        const op = (h >> 5) & 15;
+        if (h2 & 0x8000 == 0 and (op <= 4 or op == 8 or op == 10 or op == 11 or op == 13 or op == 14)) {
+            c.pc = pc + 4;
+            const imm12 = (((h >> 10) & 1) << 11) | (((h2 >> 12) & 7) << 8) | (h2 & 255);
+            const expanded = thumbExpandImm(c, imm12);
+            const imm = expanded.v;
+            const n = h & 15;
+            const d = (h2 >> 8) & 15;
+            const S = h & 0x10 != 0;
+            const out = switch (op) {
+                0 => r(c, n) & imm,
+                1 => r(c, n) & ~imm,
+                2 => r(c, n) | imm,
+                3 => r(c, n) | ~imm,
+                4 => r(c, n) ^ imm,
+                8 => if (S) addFlags(c, r(c, n), imm, 0) else r(c, n) +% imm,
+                10 => if (S) addFlags(c, r(c, n), imm, @intCast(cf(c))) else r(c, n) +% imm +% cf(c),
+                11 => if (S) subFlags(c, r(c, n), imm, @intCast(cf(c))) else r(c, n) -% imm -% (1 - cf(c)),
+                13 => if (S) subFlags(c, r(c, n), imm, 1) else r(c, n) -% imm,
+                else => if (S) subFlags(c, imm, r(c, n), 1) else imm -% r(c, n),
+            };
+            if (S and op <= 4) setNZC(c, out, expanded.carry);
+            if (d != 15) set(c, d, out);
+            return .next;
+        }
+    }
+    if ((h & 0xfff0) == 0xf3c0) {
+        const h2: u32 = ld(u16, pc + 2);
+        if (h2 & 0x8000 != 0) return fault(c, .undefined, h << 16 | h2, pc);
+        c.pc = pc + 4;
+        const lsb = (((h2 >> 12) & 7) << 2) | ((h2 >> 6) & 3);
+        const width = (h2 & 31) + 1;
+        const mask = if (width == 32) ~@as(u32, 0) else (@as(u32, 1) << @intCast(width)) - 1;
+        set(c, (h2 >> 8) & 15, (r(c, h & 15) >> @intCast(lsb)) & mask);
+        return .next;
+    }
+    if ((h & 0xfff0) == 0xfab0) {
+        const h2: u32 = ld(u16, pc + 2);
+        if (h2 & 0xf0f0 == 0xf080 and (h & 15) == (h2 & 15)) {
+            c.pc = pc + 4;
+            set(c, (h2 >> 8) & 15, @clz(r(c, h & 15)));
+            return .next;
+        }
+    }
+    if ((h & 0xfe00) == 0xea00) {
+        const h2: u32 = ld(u16, pc + 2);
+        if (h2 & 0x8000 != 0) return fault(c, .undefined, h << 16 | h2, pc);
+        const op = (h >> 5) & 15;
+        if (op <= 4 or op == 8 or op == 13) {
+            c.pc = pc + 4;
+            const shifted = shiftImm(c, (h2 >> 4) & 3, r(c, h2 & 15), (((h2 >> 12) & 7) << 2) | ((h2 >> 6) & 3));
+            const n = h & 15;
+            const d = (h2 >> 8) & 15;
+            const S = h & 0x10 != 0;
+            const lhs = if (n == 15 and op <= 4) 0 else r(c, n);
+            const out = switch (op) {
+                0 => lhs & shifted.v,
+                1 => lhs & ~shifted.v,
+                2 => lhs | shifted.v,
+                3 => lhs | ~shifted.v,
+                4 => lhs ^ shifted.v,
+                8 => if (S) addFlags(c, lhs, shifted.v, 0) else lhs +% shifted.v,
+                else => if (S) subFlags(c, lhs, shifted.v, 1) else lhs -% shifted.v,
+            };
+            if (S and op <= 4) setNZC(c, out, shifted.carry);
+            if (d != 15) set(c, d, out);
+            return .next;
+        }
+    }
+    if ((h & 0xfff0) == 0xfb00) {
+        const h2: u32 = ld(u16, pc + 2);
+        const op = (h2 >> 4) & 15;
+        const a = h2 >> 12;
+        if ((op == 0 or op == 1) and (op == 0 or a != 15)) {
+            c.pc = pc + 4;
+            const product = r(c, h & 15) *% r(c, h2 & 15);
+            set(c, (h2 >> 8) & 15, if (a == 15) product else if (op == 0) product +% r(c, a) else r(c, a) -% product);
+            return .next;
+        }
+    }
+    if ((h & 0xfff0) == 0xe8d0) {
+        const h2: u32 = ld(u16, pc + 2);
+        if (h2 & 0xffe0 == 0xf000) {
+            c.pc = pc + 4;
+            const half = h2 & 0x10 != 0;
+            const base = if ((h & 15) == 15) pc + 4 else r(c, h & 15);
+            const index = r(c, h2 & 15);
+            const a = addr(c, base +% if (half) index * 2 else index) orelse return badAddr(c, h << 16 | h2, pc);
+            const off: u32 = if (half) ld(u16, a) else ld(u8, a);
+            return jump(c, pc +% 4 +% off * 2);
+        }
+    }
+    if ((h & 0xffe0) == 0xe840) {
+        const h2: u32 = ld(u16, pc + 2);
+        const load = h & 0x10 != 0;
+        const n = h & 15;
+        const a = addr(c, r(c, n) +% (h2 & 255) * 4) orelse return badAddr(c, h << 16 | h2, pc);
+        if ((load and h2 & 0x0f00 != 0x0f00) or (!load and h2 & 0x0f00 == 0x0f00)) return fault(c, .undefined, h << 16 | h2, pc);
+        c.pc = pc + 4;
+        if (load) {
+            set(c, h2 >> 12, ld(u32, a));
+            c.excl = 1;
+        } else {
+            const d = (h2 >> 8) & 15;
+            if (c.excl != 0 and !st(u32, c, a, r(c, h2 >> 12))) return badAddr(c, h << 16 | h2, pc);
+            set(c, d, c.excl ^ 1);
+            c.excl = 0;
+        }
+        return .next;
+    }
+    if ((h & 0xfe40) == 0xe840) {
+        const h2: u32 = ld(u16, pc + 2);
+        c.pc = pc + 4;
+        const P = h & 0x100 != 0;
+        const U = h & 0x80 != 0;
+        const W = h & 0x20 != 0;
+        const Ld = h & 0x10 != 0;
+        if (!P and !W) return fault(c, .undefined, h << 16 | h2, pc);
+        const n = h & 15;
+        const base = r(c, n);
+        const off = (h2 & 255) * 4;
+        const indexed = if (U) base +% off else base -% off;
+        const a = addr(c, if (P) indexed else base) orelse return badAddr(c, h << 16 | h2, pc);
+        const t = h2 >> 12;
+        const t2 = (h2 >> 8) & 15;
+        if (Ld) {
+            set(c, t, ld(u32, a));
+            set(c, t2, ld(u32, a + 4));
+        } else {
+            if (!st(u32, c, a, r(c, t)) or !st(u32, c, a + 4, r(c, t2))) return badAddr(c, h << 16 | h2, pc);
+        }
+        if (W) set(c, n, indexed);
+        return .next;
+    }
+    if ((h & 0xfe40) == 0xe800) {
+        const list: u32 = ld(u16, pc + 2);
+        c.pc = pc + 4;
+        const before = h & 0x100 != 0;
+        const W = h & 0x20 != 0;
+        const Ld = h & 0x10 != 0;
+        const n = h & 15;
+        const count: u32 = @popCount(list);
+        const base = r(c, n);
+        var a = if (before) base -% count * 4 else base;
+        if (addr(c, a) == null) return badAddr(c, h << 16 | list, pc);
+        var t: u5 = 0;
+        var loadedPc: u32 = 0;
+        while (true) : (t += 1) {
+            if (list & (@as(u32, 1) << t) != 0) {
+                if (Ld) {
+                    if (t == 15) loadedPc = ld(u32, a) else set(c, t, ld(u32, a));
+                } else if (!st(u32, c, a, r(c, t))) return badAddr(c, h << 16 | list, pc);
+                a += 4;
+            }
+            if (t == 15) break;
+        }
+        if (W) set(c, n, if (before) base -% count * 4 else base +% count * 4);
+        if (Ld and list & 0x8000 != 0) return bx(c, loadedPc);
+        return .next;
+    }
+    if (h == 0xf3bf) {
+        const h2: u32 = ld(u16, pc + 2);
+        if (h2 & 0xfff0 == 0x8f20 or h2 & 0xfff0 == 0x8f40 or h2 & 0xfff0 == 0x8f50 or h2 & 0xfff0 == 0x8f60) {
+            c.pc = pc + 4;
+            if (h2 & 0xfff0 == 0x8f20) c.excl = 0;
+            return .next;
+        }
+    }
+    if ((h & 0xf800) == 0xf000) {
+        const h2: u32 = ld(u16, pc + 2);
+        const cc = (h >> 6) & 15;
+        if ((h2 & 0xd000) == 0x8000 and cc < 14) {
+            c.pc = pc + 4;
+            const raw = (((h >> 10) & 1) << 20) | (((h2 >> 11) & 1) << 19) | (((h2 >> 13) & 1) << 18) | ((h & 0x3f) << 12) | ((h2 & 0x7ff) << 1);
+            const off: u32 = @bitCast(@as(i32, @bitCast(raw << 11)) >> 11);
+            if (cond(c, cc)) return jump(c, pc +% 4 +% off);
+            return .next;
+        }
+        if ((h2 & 0xd000) == 0x9000) {
+            c.pc = pc + 4;
+            const Sb = (h >> 10) & 1;
+            const I1 = 1 - (((h2 >> 13) & 1) ^ Sb);
+            const I2 = 1 - (((h2 >> 11) & 1) ^ Sb);
+            const raw = (Sb << 24) | (I1 << 23) | (I2 << 22) | ((h & 0x3ff) << 12) | ((h2 & 0x7ff) << 1);
+            const off: u32 = @bitCast(@as(i32, @bitCast(raw << 7)) >> 7);
+            return jump(c, pc +% 4 +% off);
+        }
+    }
+    if ((h & 0xff90) == 0xf900) {
+        const h2: u32 = ld(u16, pc + 2);
+        const count: u32 = switch ((h2 >> 8) & 15) {
+            7 => 1,
+            10 => 2,
+            6 => 3,
+            2 => 4,
+            else => return fault(c, .unimplemented, h << 16 | h2, pc),
+        };
+        c.pc = pc + 4;
+        const Ld = h & 0x20 != 0;
+        const n = h & 15;
+        const d = (((h >> 6) & 1) << 4) | (h2 >> 12);
+        const a = addr(c, r(c, n)) orelse return badAddr(c, h << 16 | h2, pc);
+        var i: u32 = 0;
+        while (i < count) : (i += 1) {
+            if (Ld) vreg(u64, c, d + i).* = ld(u64, a + i * 8) else if (!st(u64, c, a + i * 8, vreg(u64, c, d + i).*)) return badAddr(c, h << 16 | h2, pc);
+        }
+        const m = h2 & 15;
+        if (m != 15) set(c, n, r(c, n) +% (if (m == 13) count * 8 else r(c, m)));
+        return .next;
+    }
+    const wideMove = h & 0xfbf0;
+    if (wideMove == 0xf240 or wideMove == 0xf2c0) {
+        const h2: u32 = ld(u16, pc + 2);
+        if (h2 & 0x8000 != 0) return fault(c, .undefined, h << 16 | h2, pc);
+        c.pc = pc + 4;
+        const d = (h2 >> 8) & 15;
+        const imm = ((h & 15) << 12) | (((h >> 10) & 1) << 11) | (((h2 >> 12) & 7) << 8) | (h2 & 255);
+        set(c, d, if (wideMove == 0xf2c0) (r(c, d) & 0xffff) | (imm << 16) else imm);
+        return .next;
+    }
+    if ((h & 0xff80) == 0xf880 and ((h >> 5) & 3) < 3) {
+        const h2: u32 = ld(u16, pc + 2);
+        c.pc = pc + 4;
+        const Ld = h & 0x10 != 0;
+        const size = (h >> 5) & 3;
+        const t = h2 >> 12;
+        const n = h & 15;
+        const base = if (n == 15 and Ld) (pc +% 4) & ~@as(u32, 3) else r(c, n);
+        const a = addr(c, base +% (h2 & 0xfff)) orelse return badAddr(c, h << 16 | h2, pc);
+        if (Ld) {
+            const value: u32 = switch (size) {
+                0 => ld(u8, a),
+                1 => ld(u16, a),
+                else => ld(u32, a),
+            };
+            if (t == 15) return bx(c, value);
+            set(c, t, value);
+        } else if (!(switch (size) {
+            0 => st(u8, c, a, @truncate(r(c, t))),
+            1 => st(u16, c, a, @truncate(r(c, t))),
+            else => st(u32, c, a, r(c, t)),
+        })) return badAddr(c, h << 16 | h2, pc);
+        return .next;
+    }
+    if ((h & 0xff80) == 0xf800 and ((h >> 5) & 3) < 3) {
+        const h2: u32 = ld(u16, pc + 2);
+        if (h2 & 0x0fc0 == 0) {
+            c.pc = pc + 4;
+            const Ld = h & 0x10 != 0;
+            const size = (h >> 5) & 3;
+            const t = h2 >> 12;
+            const a = addr(c, r(c, h & 15) +% (r(c, h2 & 15) << @intCast((h2 >> 4) & 3))) orelse return badAddr(c, h << 16 | h2, pc);
+            if (Ld) {
+                const value: u32 = switch (size) {
+                    0 => ld(u8, a),
+                    1 => ld(u16, a),
+                    else => ld(u32, a),
+                };
+                if (t == 15) return bx(c, value);
+                set(c, t, value);
+            } else if (!(switch (size) {
+                0 => st(u8, c, a, @truncate(r(c, t))),
+                1 => st(u16, c, a, @truncate(r(c, t))),
+                else => st(u32, c, a, r(c, t)),
+            })) return badAddr(c, h << 16 | h2, pc);
+            return .next;
+        }
+    }
+    // Thumb-2's indexed load/store forms carry P/U/W and an 8-bit offset in the second
+    // halfword. Compilers use them for high-register fields and spills.
+    if ((h & 0xff80) == 0xf800 and ((h >> 5) & 3) < 3) {
+        const h2: u32 = ld(u16, pc + 2);
+        if (h2 & 0x0800 == 0) return fault(c, .undefined, h << 16 | h2, pc);
+        c.pc = pc + 4;
+        const Ld = h & 0x10 != 0;
+        const size = (h >> 5) & 3;
+        const n = h & 15;
+        const t = h2 >> 12;
+        const P = h2 & 0x0400 != 0;
+        const U = h2 & 0x0200 != 0;
+        const W = h2 & 0x0100 != 0;
+        const base = r(c, n);
+        const off = h2 & 255;
+        const indexed = if (U) base +% off else base -% off;
+        const a = addr(c, if (P) indexed else base) orelse return badAddr(c, h << 16 | h2, pc);
+        if (Ld) {
+            const value: u32 = switch (size) {
+                0 => ld(u8, a),
+                1 => ld(u16, a),
+                else => ld(u32, a),
+            };
+            if (W) set(c, n, indexed);
+            if (t == 15) return bx(c, value);
+            set(c, t, value);
+        } else {
+            if (!(switch (size) {
+                0 => st(u8, c, a, @truncate(r(c, t))),
+                1 => st(u16, c, a, @truncate(r(c, t))),
+                else => st(u32, c, a, r(c, t)),
+            })) return badAddr(c, h << 16 | h2, pc);
+            if (W) set(c, n, indexed);
+        }
+        return .next;
+    }
     const top = h >> 12;
     const rd = h & 7;
     const rn = (h >> 3) & 7;
@@ -705,11 +1097,11 @@ fn execThumb(c: *Cpu, pc: u32) Status {
             switch (o) {
                 0 => {
                     set(c, r8, imm);
-                    setNZ(c, imm);
+                    if (currentIt == 0) setNZ(c, imm);
                 },
                 1 => _ = subFlags(c, r(c, r8), imm, 1),
-                2 => set(c, r8, addFlags(c, r(c, r8), imm, 0)),
-                else => set(c, r8, subFlags(c, r(c, r8), imm, 1)),
+                2 => set(c, r8, if (currentIt == 0) addFlags(c, r(c, r8), imm, 0) else r(c, r8) +% imm),
+                else => set(c, r8, if (currentIt == 0) subFlags(c, r(c, r8), imm, 1) else r(c, r8) -% imm),
             }
         },
         4 => {
@@ -879,7 +1271,11 @@ fn thumbMisc(c: *Cpu, h: u32, pc: u32, rd: u32, rn: u32) Status {
         return .next;
     }
     if ((h & 0xff00) == 0xbe00) return fault(c, .brk, h, pc);
-    if ((h & 0xff00) == 0xbf00 or (h & 0xffe8) == 0xb660) return .next;
+    if ((h & 0xff00) == 0xbf00) {
+        if (h & 15 != 0) setItState(c, h & 255);
+        return .next;
+    }
+    if ((h & 0xffe8) == 0xb660) return .next;
     const t = r(c, rn);
     switch (h & 0xffc0) {
         0xb200 => set(c, rd, sxh(t)),

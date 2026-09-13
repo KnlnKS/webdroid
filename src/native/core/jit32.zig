@@ -77,6 +77,14 @@ pub fn rwThumb(h: u32) jit.RW {
     var rw = jit.ALL32;
     rw.fr = 0;
     rw.fw = 0;
+    // IT itself is interpreted from a JIT fallback.  Its condition reads NZCV and it writes
+    // CPSR's ITSTATE bits, so pending flags from an instruction earlier in the region must be
+    // committed before the interpreter observes them and reloaded afterward.
+    if ((h & 0xff00) == 0xbf00 and h & 15 != 0) {
+        rw.fr = 15;
+        rw.fw = 15;
+        return rw;
+    }
     switch (h >> 12) {
         0, 1 => {
             const o = (h >> 11) & 3;
@@ -152,6 +160,39 @@ pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
     const h: u32 = mem.ld(u16, pc);
     const b = &r.blocks[i];
     const next = pc + 2;
+    const wideMoveImm = h & 0xfbef;
+    const wideSecond: u32 = if ((h & 0xf800) >= 0xe800) mem.ld(u16, pc + 2) else 0;
+    const wideCp = (wideSecond >> 8) & 15;
+    const wideVfp = (h & 0xf800) >= 0xe800 and (wideCp == 10 or wideCp == 11);
+    const wideCond = (h & 0xf800) == 0xf000 and (wideSecond & 0xd000) == 0x8000 and ((h >> 6) & 15) < 14;
+    const wideBranch = (h & 0xf800) == 0xf000 and (wideSecond & 0xd000) == 0x9000;
+    const wideTableBranch = (h & 0xfff0) == 0xe8d0 and (wideSecond & 0xffe0) == 0xf000;
+    if (wideTableBranch) {
+        cpu.cover(page, pc, pc + 2);
+        return .{ .len = 4, .ends = true };
+    }
+    if (wideBranch) {
+        cpu.cover(page, pc, pc + 2);
+        return .{ .len = 4, .ends = true };
+    }
+    const dataImmOp = (h >> 5) & 15;
+    const dataImm = (h & 0xfa00) == 0xf000 and wideSecond & 0x8000 == 0 and (dataImmOp <= 4 or dataImmOp == 8 or dataImmOp == 10 or dataImmOp == 11 or dataImmOp == 13 or dataImmOp == 14);
+    const wideMulOp = (wideSecond >> 4) & 15;
+    const wideMul = (h & 0xfff0) == 0xfb00 and (wideMulOp == 0 or wideMulOp == 1);
+    if (wideVfp or (h & 0xefb0) == 0xef80 or wideMoveImm == 0xf04f or wideMoveImm == 0xf06f or dataImm or wideMul or h == 0xf3bf or (h & 0xfff0) == 0xf3c0 or (h & 0xfff0) == 0xfab0 or (h & 0xfe00) == 0xea00 or (h & 0xfe40) == 0xe840 or (h & 0xfe40) == 0xe800 or wideCond or (h & 0xff90) == 0xf900) {
+        cpu.cover(page, pc, pc + 2);
+        return .{ .len = 4, .ends = false };
+    }
+    const wideMove = h & 0xfbf0;
+    if (wideMove == 0xf240 or wideMove == 0xf2c0) {
+        cpu.cover(page, pc, pc + 2);
+        return .{ .len = 4, .ends = false };
+    }
+    const wideTransfer = (((h & 0xff80) == 0xf880 or (h & 0xff80) == 0xf800) and ((h >> 5) & 3) < 3);
+    if (wideTransfer or (h & 0xfff0) == 0xf840 or (h & 0xfff0) == 0xf850) {
+        cpu.cover(page, pc, pc + 2);
+        return .{ .len = 4, .ends = false };
+    }
     switch (h >> 12) {
         4 => if ((h & 0xfc00) == 0x4400) {
             const o = (h >> 8) & 3;
@@ -159,6 +200,7 @@ pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
             if (o == 3 or ((o == 0 or o == 2) and d == 15)) return .{ .len = 2, .ends = true };
         },
         11 => {
+            if ((h & 0xff00) == 0xbf00 and h & 15 != 0) return .{ .len = 2, .ends = true };
             if ((h & 0xfe00) == 0xbc00 and h & 0x100 != 0) return .{ .len = 2, .ends = true };
             if ((h & 0xff00) == 0xbe00) return .{ .len = 2, .ends = true };
             if ((h & 0xf500) == 0xb100) {
@@ -585,6 +627,40 @@ const T_LOADS = [_]u8{ O.i32_load8_s, O.i32_load, O.i32_load16_u, O.i32_load8_u,
 pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
     const b = e.b;
     const h: u32 = mem.ld(u16, pc);
+    if ((h & 0xff00) == 0xbf00 and h & 15 != 0) {
+        e.fallback(pc, k);
+        e.exitTo((pc + 2) | 1);
+        return true;
+    }
+    const wideMoveImm = h & 0xfbef;
+    const wideSecond: u32 = if ((h & 0xf800) >= 0xe800) mem.ld(u16, pc + 2) else 0;
+    const wideCp = (wideSecond >> 8) & 15;
+    const wideVfp = (h & 0xf800) >= 0xe800 and (wideCp == 10 or wideCp == 11);
+    const wideCond = (h & 0xf800) == 0xf000 and (wideSecond & 0xd000) == 0x8000 and ((h >> 6) & 15) < 14;
+    const wideBranch = (h & 0xf800) == 0xf000 and (wideSecond & 0xd000) == 0x9000;
+    const wideTableBranch = (h & 0xfff0) == 0xe8d0 and (wideSecond & 0xffe0) == 0xf000;
+    if (wideTableBranch) {
+        e.fallback(pc, k);
+        return true;
+    }
+    if (wideBranch) {
+        e.fallback(pc, k);
+        return true;
+    }
+    const dataImmOp = (h >> 5) & 15;
+    const dataImm = (h & 0xfa00) == 0xf000 and wideSecond & 0x8000 == 0 and (dataImmOp <= 4 or dataImmOp == 8 or dataImmOp == 10 or dataImmOp == 11 or dataImmOp == 13 or dataImmOp == 14);
+    const wideMulOp = (wideSecond >> 4) & 15;
+    const wideMul = (h & 0xfff0) == 0xfb00 and (wideMulOp == 0 or wideMulOp == 1);
+    if (wideVfp or (h & 0xefb0) == 0xef80 or wideMoveImm == 0xf04f or wideMoveImm == 0xf06f or dataImm or wideMul or h == 0xf3bf or (h & 0xfff0) == 0xf3c0 or (h & 0xfff0) == 0xfab0 or (h & 0xfe00) == 0xea00 or (h & 0xfe40) == 0xe840 or (h & 0xfe40) == 0xe800 or wideCond or (h & 0xff90) == 0xf900) {
+        e.fallback(pc, k);
+        return false;
+    }
+    const wideMove = h & 0xfbf0;
+    const wideTransfer = (((h & 0xff80) == 0xf880 or (h & 0xff80) == 0xf800) and ((h >> 5) & 3) < 3);
+    if (wideMove == 0xf240 or wideMove == 0xf2c0 or wideTransfer or (h & 0xfff0) == 0xf840 or (h & 0xfff0) == 0xf850) {
+        e.fallback(pc, k);
+        return false;
+    }
     const top = h >> 12;
     const rd = h & 7;
     const rn = (h >> 3) & 7;

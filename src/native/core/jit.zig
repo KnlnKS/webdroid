@@ -1037,7 +1037,7 @@ fn simdRw(w: u32) RW {
 }
 
 inline fn ilen(comptime isa: Isa, pc: u32) u32 {
-    return if (isa == .thumb and (mem.ld(u16, pc) & 0xf800) != 0xf000) 2 else 4;
+    return if (isa == .thumb and (mem.ld(u16, pc) & 0xf800) < 0xe800) 2 else 4;
 }
 fn emitRegion(b: *Buf, r: *Region, page: *cpu.Page) void {
     switch (r.isa) {

@@ -214,7 +214,7 @@ pub fn memop(c: *Cpu, w: u32) Status {
     return .next;
 }
 
-const ImmKind = enum { movi, mvni, orr, bic, fmov };
+pub const ImmKind = enum { movi, mvni, orr, bic, fmov };
 pub fn expandImm(o: u32, cmode: u32, o2: u32, imm8: u32) ?struct { v: u64, kind: ImmKind } {
     const group = cmode >> 1;
     const logical: ImmKind = if (cmode & 1 != 0) (if (o != 0) .bic else .orr) else (if (o != 0) .mvni else .movi);
