@@ -463,6 +463,8 @@ function hashSeq(a: unknown[], h = 1, from = 0): number | Promise<number> {
 const primCmp = (x: any, y: any) => (x < y ? -1 : x > y ? 1 : 0);
 /** sort `a` where it lives: a subList view (and Arrays.sort's caller) must see the writes */
 export function sortInPlace(a: unknown[], cmp: unknown, from = 0, to = a.length): void | Promise<void> {
+  if (from > to) throw rt.mkThrowable("java/lang/IllegalArgumentException", `fromIndex(${from}) > toIndex(${to})`);
+  if (from < 0 || to > a.length) rt.aio(from < 0 ? from : to, a.length);
   if (to - from <= 1) return;
   if (!cmp) {
     const t = typeof a[from];
@@ -1926,6 +1928,7 @@ rt.register({
     },
     ...Object.fromEntries([..."BCSIJFD"].flatMap((t) => [[`static sort([${t})V`, taSort], [`static sort([${t}II)V`, taSort]])),
     "static sort([Ljava/lang/Object;)V": (a: unknown[]) => sortInPlace(a, null),
+    "static sort([Ljava/lang/Object;II)V": (a: unknown[], from: number, to: number) => sortInPlace(a, null, from, to),
     "static sort([Ljava/lang/Object;Ljava/util/Comparator;)V": (a: unknown[], cmp: unknown) => sortInPlace(a, cmp),
     "static sort([Ljava/lang/Object;IILjava/util/Comparator;)V": (a: unknown[], from: number, to: number, cmp: unknown) => sortInPlace(a, cmp, from, to),
     ...Object.fromEntries([..."ZBCSIJFD"].flatMap((t) => [[`static fill([${t}${t})V`, fill], [`static fill([${t}II${t})V`, fillRange],
