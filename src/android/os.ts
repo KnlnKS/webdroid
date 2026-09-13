@@ -317,7 +317,7 @@ rt.register({
 class JBuildVersion extends JObj {}
 rt.register({
   name: "android/os/Build$VERSION", ctor: JBuildVersion,
-  statics: { SDK_INT: device.sdk, RELEASE: device.release, CODENAME: "REL", INCREMENTAL: "1", SECURITY_PATCH: "2023-01-01", SDK: String(device.sdk), BASE_OS: "", PREVIEW_SDK_INT: 0 },
+  statics: { SDK_INT: device.sdk, RELEASE: device.release, CODENAME: "REL", INCREMENTAL: "1", SECURITY_PATCH: "2023-01-01", SDK: String(device.sdk), BASE_OS: "", PREVIEW_SDK_INT: 0, MEDIA_PERFORMANCE_CLASS: 0 },
 });
 rt.register({ name: "android/os/Build$VERSION_CODES", ctor: class extends JObj {},
   statics: Object.fromEntries([
