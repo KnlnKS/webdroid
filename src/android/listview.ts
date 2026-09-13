@@ -306,7 +306,7 @@ export class JListView extends JViewGroup {
     if (this.building) return;
     this.building = true;
     try {
-      for (const v of [...this.children]) detachView(this, v);
+      for (const v of [...this.children]) await detachView(this, v);
       this.itemViews = []; this.viewsCache = null;
       if (this.adapter) {
         const n: number = await vcall(this.adapter, "getCount", "()I");
@@ -316,7 +316,7 @@ export class JListView extends JViewGroup {
           this.itemViews.push(v); this.viewsCache = null;
         }
       }
-      for (const v of this.allViews()) attachView(this, v);
+      for (const v of this.allViews()) await attachView(this, v);
       this.updateEmptyStatus();
       this.dirty = false;
       requestLayout(this);
@@ -732,13 +732,13 @@ class JSpinner extends JListView {
   popupBg: JDrawable | null = null;
   /** the AdapterView rebuild: a Spinner materializes only the selected item */
   async rebuild() {
-    for (const v of [...this.children]) detachView(this, v);
+    for (const v of [...this.children]) await detachView(this, v);
     this.selView = null;
     const n: number = this.adapter ? await vcall(this.adapter, "getCount", "()I") : 0;
     if (this.selection >= 0 && this.selection < n) {
       this.selView = await vcall(this.adapter, "getView", "(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;",
         this.selection, null, this) as JView | null;
-      if (this.selView) attachView(this, this.selView);
+      if (this.selView) await attachView(this, this.selView);
     }
     this.dirty = false;
     requestLayout(this);
@@ -927,4 +927,3 @@ rt.register({
     ...absSpinnerMethods,
   },
 });
-

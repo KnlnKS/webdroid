@@ -166,7 +166,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
       lp.width = -1; lp.height = -1;
       v.lp = lp;
     }
-    attachView(this.window.contentParent!, v);
+    await attachView(this.window.contentParent!, v);
     requestLayout(this.window.contentParent!);
   },
   "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": async function (this: JActivity, v: JView, lp: any) {
@@ -176,7 +176,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": async function (this: JActivity, v: JView, lp: any) {
     await ensureDecor(this);
     v.lp = lp;
-    attachView(this.window.contentParent!, v);
+    await attachView(this.window.contentParent!, v);
   },
   "findViewById(I)Landroid/view/View;": function (this: JActivity, id: number) {
     return this.window.decor ? findById(this.window.decor, id) : null;

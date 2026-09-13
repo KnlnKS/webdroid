@@ -121,7 +121,7 @@ export async function ensureDecor(act: JActivity) {
     const lp = rt.make("android/widget/LinearLayout$LayoutParams");
     lp.width = -1; lp.height = -2;
     bar.lp = lp;
-    attachView(root, bar);
+    await attachView(root, bar);
     act.window.actionBarView = bar;
   } else {
     const sbc = theme.lookup(AID("statusBarColor"));
@@ -138,13 +138,13 @@ export async function ensureDecor(act: JActivity) {
     (lp as any).weight = 1;
     content.lp = lp;
   }
-  attachView(root, content);
+  await attachView(root, content);
   {
     const lp2 = rt.make("android/widget/FrameLayout$LayoutParams");
     lp2.width = -1; lp2.height = -1;
     root.lp = lp2;
   }
-  attachView(decor, root);
+  await attachView(decor, root);
   act.window.decor = decor;
   decor.windowOwner = act.window;
   act.window.contentParent = content;

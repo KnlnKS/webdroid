@@ -366,7 +366,7 @@ async function buildRowView(row: Row, jctx: any): Promise<JView> {
   title.paintT.textSize = device.dp(16);
   title.colors.defColor = pref.enabled ? -13421773 : -6710887;
   title.lp = lpFill();
-  attachView(col, title);
+  void attachView(col, title);
 
   if (pref.summaryStr) {
     const sum = mkText(jctx, theme, jres);
@@ -375,9 +375,9 @@ async function buildRowView(row: Row, jctx: any): Promise<JView> {
     sum.colors.defColor = pref.enabled ? -8355712 : -6710887;
     sum.padT = device.dp(2);
     sum.lp = lpFill();
-    attachView(col, sum);
+    void attachView(col, sum);
   }
-  attachView(rowL, col);
+  void attachView(rowL, col);
 
   if (pref instanceof JCheckBoxPreference) {
     const cb: any = rt.make("android/widget/CheckBox");
@@ -387,7 +387,7 @@ async function buildRowView(row: Row, jctx: any): Promise<JView> {
     cb.clickable = false; // the whole row toggles it; the widget itself is just an indicator
     const lp = new JLinearLP(); lp.width = -2; lp.height = -2;
     cb.lp = lp;
-    attachView(rowL, cb);
+    void attachView(rowL, cb);
   }
   return rowL;
 }

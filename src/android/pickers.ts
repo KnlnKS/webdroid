@@ -108,9 +108,9 @@ function mkColumn(tp: JTimePicker, up: () => void, down: () => void): { col: JLi
   inheritContext(col, tp);
   col.lp = stepperLP();
   const text = mkValueText(tp);
-  attachView(col, mkArrow(tp, "▲", up));
-  attachView(col, text);
-  attachView(col, mkArrow(tp, "▼", down));
+  void attachView(col, mkArrow(tp, "▲", up));
+  void attachView(col, text);
+  void attachView(col, mkArrow(tp, "▼", down));
   return { col, text };
 }
 
@@ -149,9 +149,9 @@ function buildPicker(tp: JTimePicker) {
   tp.padT = 24; tp.padB = 24;
   const hourCol = mkColumn(tp, () => { tp.hourVal = (tp.hourVal + 1) % 24; onChanged(tp); }, () => { tp.hourVal = (tp.hourVal + 23) % 24; onChanged(tp); });
   const minCol = mkColumn(tp, () => { tp.minuteVal = (tp.minuteVal + 1) % 60; onChanged(tp); }, () => { tp.minuteVal = (tp.minuteVal + 59) % 60; onChanged(tp); });
-  attachView(tp, hourCol.col);
-  attachView(tp, mkSep(tp));
-  attachView(tp, minCol.col);
+  void attachView(tp, hourCol.col);
+  void attachView(tp, mkSep(tp));
+  void attachView(tp, minCol.col);
   tp.hourText = hourCol.text;
   tp.minuteText = minCol.text;
   if (!tp.is24) {
@@ -163,9 +163,9 @@ function buildPicker(tp: JTimePicker) {
     col.lp = stepperLP();
     tp.amText = mkAmPmText(tp, "AM", () => { tp.hourVal = tp.hourVal % 12; onChanged(tp); });
     tp.pmText = mkAmPmText(tp, "PM", () => { tp.hourVal = (tp.hourVal % 12) + 12; onChanged(tp); });
-    attachView(col, tp.amText);
-    attachView(col, tp.pmText);
-    attachView(tp, col);
+    void attachView(col, tp.amText);
+    void attachView(col, tp.pmText);
+    void attachView(tp, col);
   } else {
     tp.amText = null;
     tp.pmText = null;
