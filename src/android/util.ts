@@ -294,6 +294,70 @@ for (const [n, num] of [["Size", (v: number) => v | 0], ["SizeF", (v: number) =>
   });
 }
 
+class JRational extends JObj {
+  n = 0; d = 1;
+  constructor(n = 0, d = 1) { super(); this.init(n, d); }
+  init(n: number, d: number) {
+    if (d < 0) { n = -n | 0; d = -d | 0; }
+    if (!d) { this.n = Math.sign(n); this.d = 0; }
+    else if (!n) { this.n = 0; this.d = 1; }
+    else { const g = rationalGcd(n, d); this.n = n / g | 0; this.d = d / g | 0; }
+  }
+  intValue() { return this.d ? this.n / this.d | 0 : this.n > 0 ? 0x7fffffff : this.n < 0 ? -0x80000000 : 0; }
+}
+function rationalGcd(a: number, b: number): number {
+  while (b) [a, b] = [b, a % b];
+  return Math.abs(a) | 0;
+}
+function rationalCompare(this: JRational, other: JRational): number {
+  if (other == null) rt.npe();
+  if (!(other instanceof JRational)) throw rt.mkThrowable("java/lang/ClassCastException", "Expected Rational");
+  if (this.n === other.n && this.d === other.d) return 0;
+  if (!this.d && !this.n) return 1;
+  if (!other.d && !other.n) return -1;
+  if (!this.d && this.n > 0 || !other.d && other.n < 0) return 1;
+  if (!this.d && this.n < 0 || !other.d && other.n > 0) return -1;
+  const a = this.n * other.d, b = other.n * this.d;
+  if (Number.isSafeInteger(a) && Number.isSafeInteger(b)) return a < b ? -1 : a > b ? 1 : 0;
+  const aa = BigInt(this.n) * BigInt(other.d), bb = BigInt(other.n) * BigInt(this.d);
+  return aa < bb ? -1 : aa > bb ? 1 : 0;
+}
+const rationalNaN = new JRational(0, 0), rationalInf = new JRational(1, 0), rationalNegInf = new JRational(-1, 0);
+rt.register({ name: "android/util/Rational", ctor: JRational, sup: "java/lang/Number", ifaces: ["java/lang/Comparable"],
+  statics: { NaN: rationalNaN, POSITIVE_INFINITY: rationalInf, NEGATIVE_INFINITY: rationalNegInf, ZERO: new JRational() },
+  methods: {
+    "<init>(II)V": JRational.prototype.init,
+    "getNumerator()I": function (this: JRational) { return this.n; },
+    "getDenominator()I": function (this: JRational) { return this.d; },
+    "isNaN()Z": function (this: JRational) { return !this.n && !this.d ? 1 : 0; },
+    "isInfinite()Z": function (this: JRational) { return this.n && !this.d ? 1 : 0; },
+    "isFinite()Z": function (this: JRational) { return this.d ? 1 : 0; },
+    "isZero()Z": function (this: JRational) { return !this.n && this.d ? 1 : 0; },
+    "doubleValue()D": function (this: JRational) { return this.n / this.d; },
+    "floatValue()F": function (this: JRational) { return Math.fround(Math.fround(this.n) / Math.fround(this.d)); },
+    "intValue()I": JRational.prototype.intValue,
+    "longValue()J": function (this: JRational) { return this.d || !this.n ? BigInt(this.intValue()) : this.n > 0 ? 0x7fffffffffffffffn : -0x8000000000000000n; },
+    "shortValue()S": function (this: JRational) { return this.intValue() << 16 >> 16; },
+    "byteValue()B": function (this: JRational) { return this.intValue() << 24 >> 24; },
+    "equals(Ljava/lang/Object;)Z": function (this: JRational, other: unknown) { return other instanceof JRational && this.n === other.n && this.d === other.d ? 1 : 0; },
+    "hashCode()I": function (this: JRational) { return this.d ^ (this.n << 16 | this.n >>> 16); },
+    "toString()Ljava/lang/String;": function (this: JRational) { return this.d ? `${this.n}/${this.d}` : this.n > 0 ? "Infinity" : this.n < 0 ? "-Infinity" : "NaN"; },
+    "compareTo(Landroid/util/Rational;)I": rationalCompare,
+    "compareTo(Ljava/lang/Object;)I": rationalCompare,
+    "static gcd(II)I": rationalGcd,
+    "static parseRational(Ljava/lang/String;)Landroid/util/Rational;": async (s: string) => {
+      if (s == null) rt.npe();
+      if (s === "NaN") return rationalNaN;
+      if (s === "Infinity") return rationalInf;
+      if (s === "-Infinity") return rationalNegInf;
+      const sep = s.includes(":") ? s.indexOf(":") : s.indexOf("/");
+      if (sep < 0) throw rt.mkThrowable("java/lang/NumberFormatException", "Invalid Rational: " + s);
+      const cls = rt.link("java/lang/Integer").ctor;
+      return new JRational(await vcall(cls, "parseInt", "(Ljava/lang/String;)I", s.slice(0, sep)), await vcall(cls, "parseInt", "(Ljava/lang/String;)I", s.slice(sep + 1)));
+    },
+  },
+});
+
 // ── android.util.FloatMath — deprecated, but older game loops still link it
 const fm1 = (fn: (x: number) => number) => (x: number) => Math.fround(fn(x));
 const fm2 = (fn: (a: number, b: number) => number) => (a: number, b: number) => Math.fround(fn(a, b));
