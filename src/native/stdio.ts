@@ -600,12 +600,19 @@ export function stdioInit(): void {
     ftruncate64: (cpu, a) => truncateFd(cpu, fds.get(a.i()), Number(a.l())),
     truncate: (cpu, a) => { const p = vfs.norm(a.str()), n = offArg(a); const d = vfs.read(p); if (!d) return fail(cpu, E.NOENT); const nd = new Uint8Array(n); nd.set(d.subarray(0, Math.min(n, d.length))); vfs.write(p, nd); return 0; },
     fcntl: (cpu, a) => {
-      const fd = a.i(), cmd = a.i(), value = a.i();
-      if (isNativeSocket(fd)) return nativeSocketFcntl(cpu, fd, cmd, value);
+      const fd = a.i(), cmd = a.i();
+      if (isNativeSocket(fd)) return nativeSocketFcntl(cpu, fd, cmd, a.i());
       const f = fds.get(fd);
       if (!f) return fail(cpu, E.BADF);
+      if (cmd === 5 || cmd === 12) {
+        const lock = a.p();
+        if (mem.ld16u(lock) > 2) return fail(cpu, E.INVAL);
+        mem.st16(lock, 2);
+        return 0;
+      }
       if (cmd === 3) return f.statusFlags;
       if (cmd === 4) {
+        const value = a.i();
         f.statusFlags = (f.statusFlags & ~(O_APPEND | O_NONBLOCK)) | (value & (O_APPEND | O_NONBLOCK));
         f.append = !!(f.statusFlags & O_APPEND);
         f.nonblock = !!(f.statusFlags & O_NONBLOCK);
