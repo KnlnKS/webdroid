@@ -10,6 +10,7 @@ rt.register({
     "log(Ljava/util/logging/Level;Ljava/lang/String;Ljava/lang/Throwable;)V": () => {},
     "logp(Ljava/util/logging/Level;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": () => {},
     "logp(Ljava/util/logging/Level;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)V": () => {},
+    "logp(Ljava/util/logging/Level;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V": () => {},
     "info(Ljava/lang/String;)V": () => {},
     "warning(Ljava/lang/String;)V": () => {},
     "fine(Ljava/lang/String;)V": () => {},

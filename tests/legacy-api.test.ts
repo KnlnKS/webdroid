@@ -120,6 +120,26 @@ test("reached JDK utility primitives preserve their Java behavior", async () => 
   expect(await vcall(file, "setReadOnly", "()Z")).toBe(1);
 });
 
+test("network support objects retain packet and HTTP parameter state", async () => {
+  const address = await scall("java/net/InetAddress", "getByAddress", "([B)Ljava/net/InetAddress;", Int8Array.of(-17, -1, -1, -6));
+  const bytes = Int8Array.of(1, 2, 3);
+  const packet = await newObj("java/net/DatagramPacket", "([BILjava/net/InetAddress;I)V", bytes, bytes.length, address, 1900);
+  expect(await vcall(packet, "getData", "()[B")).toBe(bytes);
+  expect(await vcall(packet, "getLength", "()I")).toBe(3);
+  expect(await vcall(packet, "getPort", "()I")).toBe(1900);
+  expect(await vcall(await vcall(packet, "getAddress", "()Ljava/net/InetAddress;"), "getHostAddress", "()Ljava/lang/String;")).toBe("239.255.255.250");
+
+  const params = await newObj("org/apache/http/params/BasicHttpParams");
+  expect(await vcall(params, "setBooleanParameter", "(Ljava/lang/String;Z)Lorg/apache/http/params/HttpParams;", "enabled", 1)).toBe(params);
+  expect(await vcall(params, "getBooleanParameter", "(Ljava/lang/String;Z)Z", "enabled", 0)).toBe(1);
+  expect(await vcall(params, "getIntParameter", "(Ljava/lang/String;I)I", "missing", 42)).toBe(42);
+
+  const random = await newObj("java/util/Random", "(J)V", 7n);
+  const integer = await newObj("java/math/BigInteger", "(ILjava/util/Random;)V", 13, random);
+  expect(await vcall(integer, "bitLength", "()I")).toBeLessThanOrEqual(13);
+  expect(await vcall(integer, "signum", "()I")).toBeGreaterThanOrEqual(0);
+});
+
 test("Resources(AssetManager, DisplayMetrics, Configuration) scopes its own configuration and metrics", async () => {
   const host = new Resources(null, {});
   const assets = rt.make("android/content/res/AssetManager") as JAssetManager;

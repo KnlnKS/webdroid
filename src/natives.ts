@@ -26,6 +26,7 @@ import "./jvm/natives/jcrypto";
 import "./jvm/natives/jec";
 import "./jvm/natives/jsignature";
 import "./jvm/natives/jnet";
+import "./jvm/natives/jhttp";
 import "./jvm/natives/jzip";
 import "./android/gl";
 import "./android/glview";

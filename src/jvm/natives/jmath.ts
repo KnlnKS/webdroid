@@ -1,7 +1,7 @@
 // java.math: BigDecimal = (unscaled bigint, scale) with JDK rounding/layout semantics; BigInteger over bigint.
 
 import { rt, JObj } from "../runtime";
-import { mkEnumSet, fmtDouble, JSimpleEnum } from "./jlang";
+import { mkEnumSet, fmtDouble, JSimpleEnum, vcall } from "./jlang";
 
 const arith = (msg: string): never => { throw rt.mkThrowable("java/lang/ArithmeticException", msg); };
 const nfe = (msg: string): never => { throw rt.mkThrowable("java/lang/NumberFormatException", msg); };
@@ -485,6 +485,14 @@ rt.register({
     "<init>([B)V": function (this: JBigInteger, b: Int8Array) {
       if (b.length === 0) nfe("Zero length BigInteger");
       this.v = BigInt.asIntN(8 * b.length, bytesToBig(b));
+    },
+    "<init>(ILjava/util/Random;)V": async function (this: JBigInteger, bits: number, random: unknown) {
+      if (bits < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "numBits must be non-negative");
+      if (bits === 0) { this.v = 0n; return; }
+      const bytes = new Int8Array((bits + 7) >> 3);
+      await vcall(random, "nextBytes", "([B)V", bytes);
+      bytes[0] &= (1 << ((bits - 1) & 7) + 1) - 1;
+      this.v = bytesToBig(bytes);
     },
     "static valueOf(J)Ljava/math/BigInteger;": (v: bigint) => mkBI(v),
     "toByteArray()[B": function (this: JBigInteger) {

@@ -544,7 +544,7 @@ rt.register({
       "addCallback(ILandroid/media/MediaRouter$Callback;I)V", "removeCallback(Landroid/media/MediaRouter$Callback;)V"),
   },
 });
-rt.markers("android/media/MediaRouter$Callback");
+rt.markers("android/media/MediaRouter$Callback", "android/media/MediaRouter$VolumeCallback");
 rt.register({
   name: "android/media/MediaRouter$RouteInfo", ctor: JRouteInfo,
   methods: {

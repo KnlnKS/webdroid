@@ -214,6 +214,41 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host + ":" + this.port; },
   },
 });
+class JDatagramPacket extends JObj {
+  data: Int8Array = new Int8Array(0); offset = 0; length = 0; address: JInetAddress | null = null; port = -1;
+}
+function packetData(packet: JDatagramPacket, data: Int8Array, offset: number, length: number) {
+  if (!data || offset < 0 || length < 0 || offset + length > data.length)
+    throw rt.mkThrowable("java/lang/IllegalArgumentException", "illegal length or offset");
+  packet.data = data; packet.offset = offset; packet.length = length;
+}
+function packetTarget(packet: JDatagramPacket, address: JInetAddress | null, port: number) {
+  if (port < 0 || port > 65535) throw rt.mkThrowable("java/lang/IllegalArgumentException", `Port out of range:${port}`);
+  packet.address = address; packet.port = port;
+}
+rt.register({
+  name: "java/net/DatagramPacket", ctor: JDatagramPacket,
+  methods: {
+    "<init>([BI)V": function (this: JDatagramPacket, data: Int8Array, length: number) { packetData(this, data, 0, length); },
+    "<init>([BII)V": function (this: JDatagramPacket, data: Int8Array, offset: number, length: number) { packetData(this, data, offset, length); },
+    "<init>([BILjava/net/InetAddress;I)V": function (this: JDatagramPacket, data: Int8Array, length: number, address: JInetAddress, port: number) {
+      packetData(this, data, 0, length); packetTarget(this, address, port);
+    },
+    "<init>([BIILjava/net/InetAddress;I)V": function (this: JDatagramPacket, data: Int8Array, offset: number, length: number, address: JInetAddress, port: number) {
+      packetData(this, data, offset, length); packetTarget(this, address, port);
+    },
+    "getData()[B": function (this: JDatagramPacket) { return this.data; },
+    "getOffset()I": function (this: JDatagramPacket) { return this.offset; },
+    "getLength()I": function (this: JDatagramPacket) { return this.length; },
+    "getAddress()Ljava/net/InetAddress;": function (this: JDatagramPacket) { return this.address; },
+    "getPort()I": function (this: JDatagramPacket) { return this.port; },
+    "setData([B)V": function (this: JDatagramPacket, data: Int8Array) { packetData(this, data, 0, data.length); },
+    "setData([BII)V": function (this: JDatagramPacket, data: Int8Array, offset: number, length: number) { packetData(this, data, offset, length); },
+    "setLength(I)V": function (this: JDatagramPacket, length: number) { packetData(this, this.data, this.offset, length); },
+    "setAddress(Ljava/net/InetAddress;)V": function (this: JDatagramPacket, address: JInetAddress | null) { this.address = address; },
+    "setPort(I)V": function (this: JDatagramPacket, port: number) { packetTarget(this, this.address, port); },
+  },
+});
 class JSocket extends JObj {
   host = ""; port = 0; tls = false; relay: Relay | null = null; closed = 0; soTimeout = 0;
   private opening: Promise<void> | null = null;
