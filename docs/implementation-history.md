@@ -2375,3 +2375,19 @@ typecheck pass. Fresh full Chrome places the previous/next controls at the botto
 chrome-preview-cross-measure-fixed.png. This JIT-disabled preview also renders water and
 roads; an earlier place capture was still waiting on map content. A matching JIT-enabled
 comparison remains necessary before attributing the inconsistent base map to either tier.
+
+A later map-label preparation reaches Character.UnicodeBlock through bvun's unchanged
+initializer. The missing class aborts that executor path. Subset and UnicodeBlock now expose
+Android 15's constants, singleton identities, aliases, gap handling and binary range lookup.
+The data is extracted from the paired AOSP Character source. An AVD Dalvik probe scanned all
+1,114,112 code points: its 362 range transitions exactly match the table. Two focused checks
+(43 assertions) and typecheck pass. Fresh Chrome initializes bvun successfully with no
+UnicodeBlock misses. This does not establish complete map-label or base-map rendering.
+
+Native-tier comparisons remain inconclusive. Full JIT initially produced beige maps while
+JIT-disabled and several partial-JIT runs rendered water/streets. However, disjoint excluded
+ranges both worked, one initially blank capture became correct later, and a fresh full-JIT
+run rendered base geometry as well. These observations do not isolate a miscompiled instruction.
+A palette probe observed matching logical/actual dimensions (29x16 and 29x14), then incorrectly
+queried a uniform absent from a different shader and terminated GL-Map; captures after that
+probe failure are invalid. The probe was removed before rebuilding for UnicodeBlock.

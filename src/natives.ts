@@ -7,6 +7,7 @@ import "./jvm/natives/jlang";
 import "./jvm/natives/jutil";
 import "./jvm/natives/jrandom";
 import "./jvm/natives/jvalues";
+import "./jvm/natives/junicode";
 import "./jvm/natives/jlogging";
 import "./jvm/natives/jtimer";
 import "./jvm/natives/jstream";
