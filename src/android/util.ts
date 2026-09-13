@@ -60,6 +60,26 @@ rt.register({ name: "android/util/StatsEvent$Builder", ctor: JStatsEventBuilder,
 } });
 rt.register({ name: "android/util/StatsLog", ctor: class extends JObj {}, methods: { "static write(Landroid/util/StatsEvent;)V": () => {} } });
 
+class JRange extends JObj { lower: unknown = null; upper: unknown = null; }
+rt.register({ name: "android/util/Range", ctor: JRange, methods: {
+  "<init>(Ljava/lang/Comparable;Ljava/lang/Comparable;)V": async function (this: JRange, lower: unknown, upper: unknown) {
+    if (lower === null || upper === null) throw rt.mkThrowable("java/lang/NullPointerException", "lower and upper must not be null");
+    if (await vcall(lower, "compareTo", "(Ljava/lang/Object;)I", upper) > 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "lower must be less than or equal to upper");
+    this.lower = lower; this.upper = upper;
+  },
+  "getLower()Ljava/lang/Comparable;": function (this: JRange) { return this.lower; },
+  "getUpper()Ljava/lang/Comparable;": function (this: JRange) { return this.upper; },
+  "contains(Ljava/lang/Comparable;)Z": async function (this: JRange, value: unknown) {
+    return (await vcall(this.lower, "compareTo", "(Ljava/lang/Object;)I", value)) <= 0 &&
+      (await vcall(this.upper, "compareTo", "(Ljava/lang/Object;)I", value)) >= 0 ? 1 : 0;
+  },
+  "clamp(Ljava/lang/Comparable;)Ljava/lang/Comparable;": async function (this: JRange, value: unknown) {
+    if (await vcall(this.lower, "compareTo", "(Ljava/lang/Object;)I", value) > 0) return this.lower;
+    if (await vcall(this.upper, "compareTo", "(Ljava/lang/Object;)I", value) < 0) return this.upper;
+    return value;
+  },
+} });
+
 class JSparseArray extends JObj {
   m = new Map<number, unknown>();
   sorted: number[] | null = null;

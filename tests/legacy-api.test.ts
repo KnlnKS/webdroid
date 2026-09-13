@@ -156,6 +156,10 @@ test("optional device services report their unavailable state", async () => {
   expect(await vcall(builder, "setAtomId", "(I)Landroid/util/StatsEvent$Builder;", 100)).toBe(builder);
   expect(await vcall(builder, "writeInt", "(I)Landroid/util/StatsEvent$Builder;", 7)).toBe(builder);
   expect(await vcall(builder, "build", "()Landroid/util/StatsEvent;")).not.toBeNull();
+
+  const range = await newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", "b", "d");
+  expect(await vcall(range, "contains", "(Ljava/lang/Comparable;)Z", "c")).toBe(1);
+  expect(await vcall(range, "clamp", "(Ljava/lang/Comparable;)Ljava/lang/Comparable;", "z")).toBe("d");
 });
 
 test("Resources(AssetManager, DisplayMetrics, Configuration) scopes its own configuration and metrics", async () => {
