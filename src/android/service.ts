@@ -4,7 +4,9 @@
 
 import { rt, JObj, stubs, noops } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jutil";
-import { JUserHandle, PARCELABLE, PROCESS_UID, userHandleForUid } from "./os";
+import { vcall } from "../jvm/natives/jlang";
+import { JUserHandle, PARCELABLE, PROCESS_UID, reportUncaught, userHandleForUid } from "./os";
+import { onMain } from "./mainloop";
 
 // ── UserHandle: handles are canonical per Android user id.
 rt.register({
@@ -33,6 +35,26 @@ rt.register({
       "isQuietModeEnabled(Landroid/os/UserHandle;)Z", "hasUserRestriction(Ljava/lang/String;)Z"),
     ...stubs(0n, "getSerialNumberForUser(Landroid/os/UserHandle;)J"),
     "getUserForSerialNumber(J)Landroid/os/UserHandle;": () => userHandleForUid(PROCESS_UID),
+  },
+});
+
+// The browser cannot join the local multicast groups required by DNS-SD. Keep the Android
+// service present, but report that discovery could not start instead of inventing devices.
+rt.markers("android/net/nsd/NsdManager$DiscoveryListener");
+rt.register({
+  name: "android/net/nsd/NsdManager", ctor: class extends JObj {},
+  statics: { PROTOCOL_DNS_SD: 1, FAILURE_INTERNAL_ERROR: 0, FAILURE_ALREADY_ACTIVE: 3, FAILURE_MAX_LIMIT: 4 },
+  methods: {
+    "discoverServices(Ljava/lang/String;ILandroid/net/nsd/NsdManager$DiscoveryListener;)V":
+      (serviceType: string, _protocol: number, listener: unknown) => {
+        if (!listener) return rt.npe();
+        void onMain(() => vcall(listener, "onStartDiscoveryFailed", "(Ljava/lang/String;I)V", serviceType, 0)).catch(reportUncaught);
+      },
+    "stopServiceDiscovery(Landroid/net/nsd/NsdManager$DiscoveryListener;)V":
+      (listener: unknown) => {
+        if (!listener) return rt.npe();
+        throw rt.mkThrowable("java/lang/IllegalArgumentException", "listener not registered");
+      },
   },
 });
 
