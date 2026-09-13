@@ -1909,6 +1909,7 @@ rt.register({
     },
     ...Object.fromEntries([..."BCSIJFD"].flatMap((t) => [[`static sort([${t})V`, taSort], [`static sort([${t}II)V`, taSort]])),
     "static sort([Ljava/lang/Object;)V": (a: unknown[]) => sortInPlace(a, null),
+    "static sort([Ljava/lang/Object;II)V": (a: unknown[], from: number, to: number) => sortInPlace(a, null, from, to),
     "static sort([Ljava/lang/Object;Ljava/util/Comparator;)V": (a: unknown[], cmp: unknown) => sortInPlace(a, cmp),
     "static sort([Ljava/lang/Object;IILjava/util/Comparator;)V": (a: unknown[], from: number, to: number, cmp: unknown) => sortInPlace(a, cmp, from, to),
     ...Object.fromEntries([..."ZBCSIJFD"].flatMap((t) => [[`static fill([${t}${t})V`, fill], [`static fill([${t}II${t})V`, fillRange],

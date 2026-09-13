@@ -188,6 +188,12 @@ test("sets retain their intersection and a non-HDR display reports no modes", as
   expect(await vcall(hdr, "getSupportedHdrTypes", "()[I")).toHaveLength(0);
 });
 
+test("Arrays sorts a natural-order object subrange", async () => {
+  const values = ["z", "c", "a", "b", "y"];
+  await scall("java/util/Arrays", "sort", "([Ljava/lang/Object;II)V", values, 1, 4);
+  expect(values).toEqual(["z", "a", "b", "c", "y"]);
+});
+
 test("Resources(AssetManager, DisplayMetrics, Configuration) scopes its own configuration and metrics", async () => {
   const host = new Resources(null, {});
   const assets = rt.make("android/content/res/AssetManager") as JAssetManager;
