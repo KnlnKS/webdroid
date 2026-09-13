@@ -50,6 +50,15 @@ function keyAt(keys: number[], t: number): number {
   const pos = t * (n - 1), i = Math.min(n - 2, Math.floor(pos)), f = pos - i;
   return keys[i] + (keys[i + 1] - keys[i]) * f;
 }
+function keyAtFractions(keys: number[], fractions: number[] | null, t: number): number {
+  if (!fractions || fractions.length !== keys.length) return keyAt(keys, t);
+  let i = 0;
+  while (i + 1 < fractions.length && t > fractions[i + 1]) i++;
+  if (i + 1 >= keys.length) return keys.at(-1) ?? 0;
+  const span = fractions[i + 1] - fractions[i];
+  const f = span > 0 ? (t - fractions[i]) / span : 0;
+  return keys[i] + (keys[i + 1] - keys[i]) * Math.max(0, Math.min(1, f));
+}
 async function objAt(a: { objKeys: unknown[] | null; evaluator: unknown }, t: number): Promise<unknown> {
   const keys = a.objKeys!, n = keys.length;
   if (n < 2) return keys[0] ?? null;
@@ -123,7 +132,7 @@ async function applyHolder(target: unknown, h: JPVH, t: number) {
     if (h.name) return applyAnimObj(target, h.name, h.cur);
     return;
   }
-  const v = keyAt(h.keys ?? [0, 1], t);
+  const v = keyAtFractions(h.keys ?? [0, 1], h.fractions, t);
   h.cur = h.isInt ? Math.round(v) : v;
   if (h.prop) return vcall(h.prop, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", target, boxedCur(h));
   if (h.name) return applyAnimProp(target, h.name, h.cur as number);
@@ -181,8 +190,34 @@ class JPVH extends JObj {
   name = ""; prop: unknown = null;
   keys: number[] | null = null; from = 0; to = 1; isInt = false;
   objKeys: unknown[] | null = null; evaluator: unknown = null;
+  fractions: number[] | null = null;
   cur: unknown = 0;
 }
+class JKeyframe extends JObj {
+  fraction = 0; value: unknown = null; hasValue = false; isInt = false; interp: unknown = null;
+}
+function keyframe(fraction: number, value: unknown, hasValue: boolean, isInt: boolean): JKeyframe {
+  return Object.assign(new JKeyframe(), { fraction, value, hasValue, isInt });
+}
+rt.register({
+  name: "android/animation/Keyframe", ctor: JKeyframe, ifaces: ["java/lang/Cloneable"],
+  methods: {
+    "static ofFloat(F)Landroid/animation/Keyframe;": (f: number) => keyframe(f, 0, false, false),
+    "static ofFloat(FF)Landroid/animation/Keyframe;": (f: number, v: number) => keyframe(f, v, true, false),
+    "static ofInt(F)Landroid/animation/Keyframe;": (f: number) => keyframe(f, 0, false, true),
+    "static ofInt(FI)Landroid/animation/Keyframe;": (f: number, v: number) => keyframe(f, v, true, true),
+    "static ofObject(F)Landroid/animation/Keyframe;": (f: number) => keyframe(f, null, false, false),
+    "static ofObject(FLjava/lang/Object;)Landroid/animation/Keyframe;": (f: number, v: unknown) => keyframe(f, v, true, false),
+    "getFraction()F": function (this: JKeyframe) { return this.fraction; },
+    "setFraction(F)V": function (this: JKeyframe, fraction: number) { this.fraction = fraction; },
+    "getValue()Ljava/lang/Object;": function (this: JKeyframe) { return this.value; },
+    "setValue(Ljava/lang/Object;)V": function (this: JKeyframe, value: unknown) { this.value = value; this.hasValue = true; },
+    "hasValue()Z": function (this: JKeyframe) { return this.hasValue ? 1 : 0; },
+    "setInterpolator(Landroid/animation/TimeInterpolator;)V": function (this: JKeyframe, interp: unknown) { this.interp = interp; },
+    "getInterpolator()Landroid/animation/TimeInterpolator;": function (this: JKeyframe) { return this.interp; },
+    "clone()Landroid/animation/Keyframe;": function (this: JKeyframe) { return Object.assign(new JKeyframe(), this); },
+  },
+});
 function pvhOf(name: string | unknown, v: ArrayLike<number> | null, isInt: boolean, byProp: boolean): JPVH {
   const h = new JPVH();
   if (byProp) { h.prop = name; h.name = (name as { name?: string })?.name ?? ""; } else h.name = name as string;
@@ -201,6 +236,13 @@ rt.register({
     },
     "static ofObject(Landroid/util/Property;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/PropertyValuesHolder;": (p: unknown, e: unknown, v: unknown[]) => {
       const h = pvhOf(p, null, false, true); h.evaluator = e; h.objKeys = [...(v ?? [])]; return h;
+    },
+    "static ofKeyframe(Ljava/lang/String;[Landroid/animation/Keyframe;)Landroid/animation/PropertyValuesHolder;": (n: string, frames: JKeyframe[]) => {
+      const h = pvhOf(n, null, frames[0]?.isInt ?? false, false);
+      h.fractions = frames.map((f) => f.fraction);
+      h.keys = frames.map((f) => Number(f.value ?? 0));
+      h.from = h.keys[0] ?? 0; h.to = h.keys.at(-1) ?? 1;
+      return h;
     },
     "getPropertyName()Ljava/lang/String;": function (this: JPVH) { return this.name; },
     "setPropertyName(Ljava/lang/String;)V": function (this: JPVH, n: string) { this.name = n; },
