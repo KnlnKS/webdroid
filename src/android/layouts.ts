@@ -4,7 +4,7 @@ import {
   resolveSizeAndState, makeSpec, MS_EXACTLY, childMeasureSpec, measureView, layoutView, initViewFromCtx,
   requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState
 } from "./view";
-import { type NativeSpec, rt, callSelf, noops } from "../jvm/runtime";
+import { JObj, type NativeSpec, rt, callSelf, noops } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvFloat, onFramework } from "./res";
 import { gravityH, gravityV, G } from "./gravity";
 import { type JMotionEvent, trackVelocity, restVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
@@ -255,6 +255,231 @@ rt.register({
       if (o instanceof JLinearLP) { this.weight = o.weight; this.gravity = o.gravity; }
     },
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": lpAttrs,
+  },
+});
+
+// ── GridLayout: row/column specs, cell sizing, alignment, and weighted expansion.
+const GRID_UNDEFINED = -2147483648;
+class JGridAlignment extends JObj {
+  constructor(readonly kind: "leading" | "trailing" | "center" | "fill" | "baseline") { super(); }
+}
+const GRID_LEADING = new JGridAlignment("leading");
+const GRID_TRAILING = new JGridAlignment("trailing");
+const GRID_CENTER = new JGridAlignment("center");
+const GRID_FILL = new JGridAlignment("fill");
+const GRID_BASELINE = new JGridAlignment("baseline");
+class JGridSpec extends JObj {
+  start = GRID_UNDEFINED;
+  size = 1;
+  alignment = GRID_LEADING;
+  weight = 0;
+}
+function gridSpec(start: number, size = 1, alignment = GRID_LEADING, weight = 0): JGridSpec {
+  if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "span must be positive");
+  return Object.assign(new JGridSpec(), { start, size, alignment, weight });
+}
+const GRID_DEFAULT_SPEC = gridSpec(GRID_UNDEFINED);
+class JGridLP extends JMarginLP {
+  rowSpec = GRID_DEFAULT_SPEC;
+  columnSpec = GRID_DEFAULT_SPEC;
+}
+type GridCell = { row: number; col: number; rowSpan: number; colSpan: number };
+class JGridLayout extends JViewGroup {
+  orientation = 0;
+  rowCount = GRID_UNDEFINED;
+  columnCount = GRID_UNDEFINED;
+  alignmentMode = 1;
+  useDefaultMargins = false;
+  rowOrderPreserved = true;
+  columnOrderPreserved = true;
+  cells = new Map<JView, GridCell>();
+  colWidths: number[] = [];
+  rowHeights: number[] = [];
+}
+function copyGridLp(o: JLayoutParams | null): JGridLP {
+  const lp = adoptLp(JGridLP, o);
+  if (o instanceof JGridLP) { lp.rowSpec = o.rowSpec; lp.columnSpec = o.columnSpec; }
+  return lp;
+}
+function assignGrid(g: JGridLayout, kids: JView[]): void {
+  const cells = g.cells;
+  cells.clear();
+  const fixedCols = g.columnCount > 0 ? g.columnCount : 1;
+  const fixedRows = g.rowCount > 0 ? g.rowCount : 1;
+  let cursor = 0;
+  for (const child of kids) {
+    const lp = child.lp instanceof JGridLP ? child.lp : null;
+    const rs = Math.max(1, lp?.rowSpec.size ?? 1), cs = Math.max(1, lp?.columnSpec.size ?? 1);
+    let row = lp?.rowSpec.start ?? GRID_UNDEFINED, col = lp?.columnSpec.start ?? GRID_UNDEFINED;
+    if (row === GRID_UNDEFINED && col === GRID_UNDEFINED) {
+      if (g.orientation === 0) { row = Math.floor(cursor / fixedCols); col = cursor % fixedCols; cursor += cs; }
+      else { col = Math.floor(cursor / fixedRows); row = cursor % fixedRows; cursor += rs; }
+    } else if (row === GRID_UNDEFINED) row = g.orientation === 1 ? cursor++ % fixedRows : 0;
+    else if (col === GRID_UNDEFINED) col = g.orientation === 0 ? cursor++ % fixedCols : 0;
+    cells.set(child, { row, col, rowSpan: rs, colSpan: cs });
+  }
+}
+function growTracks(tracks: number[], start: number, span: number, need: number): void {
+  let have = 0;
+  for (let i = 0; i < span; i++) have += tracks[start + i] ?? 0;
+  let extra = Math.max(0, need - have);
+  for (let i = 0; i < span && extra; i++) {
+    const add = Math.ceil(extra / (span - i));
+    tracks[start + i] = (tracks[start + i] ?? 0) + add;
+    extra -= add;
+  }
+}
+function trackOffset(tracks: number[], end: number): number {
+  let out = 0;
+  for (let i = 0; i < end; i++) out += tracks[i] ?? 0;
+  return out;
+}
+function trackSpan(tracks: number[], start: number, span: number): number {
+  let out = 0;
+  for (let i = 0; i < span; i++) out += tracks[start + i] ?? 0;
+  return out;
+}
+function expandWeightedTracks(g: JGridLayout, kids: JView[], tracks: number[], horizontal: boolean, available: number): void {
+  let extra = available - trackOffset(tracks, tracks.length);
+  if (extra <= 0) return;
+  const weights = Array(tracks.length).fill(0) as number[];
+  for (const child of kids) {
+    if (!(child.lp instanceof JGridLP)) continue;
+    const cell = g.cells.get(child);
+    if (!cell) continue;
+    const spec = horizontal ? child.lp.columnSpec : child.lp.rowSpec;
+    const start = horizontal ? cell.col : cell.row, span = horizontal ? cell.colSpan : cell.rowSpan;
+    for (let i = 0; i < span; i++) weights[start + i] += spec.weight / span;
+  }
+  let remaining = weights.reduce((a, b) => a + b, 0);
+  if (remaining <= 0) return;
+  for (let i = 0; i < tracks.length; i++) {
+    if (weights[i] <= 0) continue;
+    const add = Math.round(extra * weights[i] / remaining);
+    tracks[i] += add; extra -= add; remaining -= weights[i];
+  }
+}
+function alignInCell(kind: JGridAlignment["kind"], start: number, extent: number, child: number): number {
+  return kind === "trailing" ? start + extent - child : kind === "center" ? start + ((extent - child) >> 1) : start;
+}
+const gridAttrs = ["layout_row", "layout_column", "layout_rowSpan", "layout_columnSpan", "layout_rowWeight", "layout_columnWeight"] as const;
+const gridMethods: NonNullable<NativeSpec["methods"]> = {
+  "<init>(Landroid/content/Context;)V": async function (this: JGridLayout, c: unknown) { await initViewFromCtx(this, c, null); },
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JGridLayout, c: unknown, set: JAttrSet | null) {
+    await initViewFromCtx(this, c, set);
+    if (!set || !this.jres) return;
+    const ta = obtainStyled(this.jres, this.theme, set, [AID("orientation"), AID("rowCount"), AID("columnCount"), AID("useDefaultMargins"), AID("alignmentMode")], 0, 0);
+    if (ta.vals[0]) this.orientation = rvInt(this.jres, ta.vals[0], 0);
+    if (ta.vals[1]) this.rowCount = rvInt(this.jres, ta.vals[1], GRID_UNDEFINED);
+    if (ta.vals[2]) this.columnCount = rvInt(this.jres, ta.vals[2], GRID_UNDEFINED);
+    if (ta.vals[3]) this.useDefaultMargins = !!rvInt(this.jres, ta.vals[3], 0);
+    if (ta.vals[4]) this.alignmentMode = rvInt(this.jres, ta.vals[4], 1);
+  },
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": async function (this: JGridLayout, c: unknown, set: JAttrSet | null) {
+    await callSelf(gridMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
+  },
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": async function (this: JGridLayout, c: unknown, set: JAttrSet | null) {
+    await callSelf(gridMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
+  },
+  "setOrientation(I)V": function (this: JGridLayout, v: number) { this.orientation = v; requestLayout(this); },
+  "getOrientation()I": function (this: JGridLayout) { return this.orientation; },
+  "setRowCount(I)V": function (this: JGridLayout, v: number) { if (v < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "rowCount must be non-negative"); this.rowCount = v; requestLayout(this); },
+  "getRowCount()I": function (this: JGridLayout) { return this.rowCount === GRID_UNDEFINED ? 0 : this.rowCount; },
+  "setColumnCount(I)V": function (this: JGridLayout, v: number) { if (v < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "columnCount must be non-negative"); this.columnCount = v; requestLayout(this); },
+  "getColumnCount()I": function (this: JGridLayout) { return this.columnCount === GRID_UNDEFINED ? 0 : this.columnCount; },
+  "setUseDefaultMargins(Z)V": function (this: JGridLayout, v: number) { this.useDefaultMargins = !!v; requestLayout(this); },
+  "getUseDefaultMargins()Z": function (this: JGridLayout) { return this.useDefaultMargins ? 1 : 0; },
+  "setAlignmentMode(I)V": function (this: JGridLayout, v: number) { this.alignmentMode = v; requestLayout(this); },
+  "getAlignmentMode()I": function (this: JGridLayout) { return this.alignmentMode; },
+  "setRowOrderPreserved(Z)V": function (this: JGridLayout, v: number) { this.rowOrderPreserved = !!v; },
+  "isRowOrderPreserved()Z": function (this: JGridLayout) { return this.rowOrderPreserved ? 1 : 0; },
+  "setColumnOrderPreserved(Z)V": function (this: JGridLayout, v: number) { this.columnOrderPreserved = !!v; },
+  "isColumnOrderPreserved()Z": function (this: JGridLayout) { return this.columnOrderPreserved ? 1 : 0; },
+  "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": () => new JGridLP(),
+  "generateLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;": copyGridLp,
+  "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z": (lp: unknown) => +(lp instanceof JGridLP),
+  "generateLayoutParams(Landroid/util/AttributeSet;)Landroid/view/ViewGroup$LayoutParams;": function (this: JGridLayout, set: JAttrSet) {
+    const lp = lpFromAttrs(new JGridLP(), this.jres!, set);
+    const ids = gridAttrs.map(AID);
+    const vals = obtainStyled(this.jres!, set.theme, set, ids, 0, 0).vals;
+    const integer = (i: number, d: number) => vals[i] ? rvInt(this.jres!, vals[i], d) : d;
+    const weight = (i: number) => vals[i] ? rvFloat(this.jres!, vals[i], 0) : 0;
+    lp.rowSpec = gridSpec(integer(0, GRID_UNDEFINED), integer(2, 1), GRID_LEADING, weight(4));
+    lp.columnSpec = gridSpec(integer(1, GRID_UNDEFINED), integer(3, 1), GRID_LEADING, weight(5));
+    return lp;
+  },
+  "onMeasure(II)V": async function (this: JGridLayout, wSpec: number, hSpec: number) {
+    const kids = this.children.filter((c) => c.visibility !== 8);
+    assignGrid(this, kids);
+    let cols = this.columnCount > 0 ? this.columnCount : 0, rows = this.rowCount > 0 ? this.rowCount : 0;
+    for (const c of kids) {
+      const cell = this.cells.get(c);
+      if (!cell) continue;
+      cols = Math.max(cols, cell.col + cell.colSpan); rows = Math.max(rows, cell.row + cell.rowSpan);
+      await measureChildWithMargins(this, c, wSpec, 0, hSpec, 0);
+    }
+    const cw = this.colWidths = Array(cols).fill(0), rh = this.rowHeights = Array(rows).fill(0);
+    for (const c of kids) {
+      const cell = this.cells.get(c); if (!cell) continue;
+      const m = c.lp instanceof JMarginLP ? c.lp : NO_MARGIN;
+      growTracks(cw, cell.col, cell.colSpan, c.measuredW + m.marginL + m.marginR);
+      growTracks(rh, cell.row, cell.rowSpan, c.measuredH + m.marginT + m.marginB);
+    }
+    expandWeightedTracks(this, kids, cw, true, specSize(wSpec) - this.padL - this.padR);
+    expandWeightedTracks(this, kids, rh, false, specSize(hSpec) - this.padT - this.padB);
+    this.measuredW = resolveSizeAndState(trackOffset(cw, cw.length) + this.padL + this.padR, wSpec);
+    this.measuredH = resolveSizeAndState(trackOffset(rh, rh.length) + this.padT + this.padB, hSpec);
+  },
+  "onLayout(ZIIII)V": async function (this: JGridLayout) {
+    for (const c of this.children) {
+      if (c.visibility === 8) continue;
+      const cell = this.cells.get(c); if (!cell) continue;
+      const lp = c.lp instanceof JGridLP ? c.lp : null, m = c.lp instanceof JMarginLP ? c.lp : NO_MARGIN;
+      const left = this.padL + trackOffset(this.colWidths, cell.col) + m.marginL;
+      const top = this.padT + trackOffset(this.rowHeights, cell.row) + m.marginT;
+      const width = trackSpan(this.colWidths, cell.col, cell.colSpan) - m.marginL - m.marginR;
+      const height = trackSpan(this.rowHeights, cell.row, cell.rowSpan) - m.marginT - m.marginB;
+      const ha = lp?.columnSpec.alignment ?? GRID_LEADING, va = lp?.rowSpec.alignment ?? GRID_LEADING;
+      if ((ha.kind === "fill" && c.measuredW !== width) || (va.kind === "fill" && c.measuredH !== height)) {
+        await measureView(c, makeSpec(ha.kind === "fill" ? Math.max(0, width) : c.measuredW, MS_EXACTLY),
+          makeSpec(va.kind === "fill" ? Math.max(0, height) : c.measuredH, MS_EXACTLY));
+      }
+      const x = alignInCell(ha.kind, left, width, c.measuredW), y = alignInCell(va.kind, top, height, c.measuredH);
+      await layoutView(c, x, y, x + c.measuredW, y + c.measuredH);
+    }
+  },
+};
+rt.register({
+  name: "android/widget/GridLayout", ctor: JGridLayout, sup: "android/view/ViewGroup",
+  clinit: () => { rt.link("android/widget/GridLayout$LayoutParams"); rt.link("android/widget/GridLayout$Spec"); },
+  statics: {
+    HORIZONTAL: 0, VERTICAL: 1, UNDEFINED: GRID_UNDEFINED, ALIGN_BOUNDS: 0, ALIGN_MARGINS: 1,
+    LEADING: GRID_LEADING, TRAILING: GRID_TRAILING, LEFT: GRID_LEADING, TOP: GRID_LEADING,
+    RIGHT: GRID_TRAILING, BOTTOM: GRID_TRAILING, CENTER: GRID_CENTER, BASELINE: GRID_BASELINE, FILL: GRID_FILL,
+  },
+  methods: {
+    ...gridMethods,
+    "static spec(I)Landroid/widget/GridLayout$Spec;": (start: number) => gridSpec(start),
+    "static spec(II)Landroid/widget/GridLayout$Spec;": (start: number, size: number) => gridSpec(start, size),
+    "static spec(ILandroid/widget/GridLayout$Alignment;)Landroid/widget/GridLayout$Spec;": (start: number, a: JGridAlignment) => gridSpec(start, 1, a),
+    "static spec(IILandroid/widget/GridLayout$Alignment;)Landroid/widget/GridLayout$Spec;": (start: number, size: number, a: JGridAlignment) => gridSpec(start, size, a),
+    "static spec(IF)Landroid/widget/GridLayout$Spec;": (start: number, weight: number) => gridSpec(start, 1, GRID_LEADING, weight),
+    "static spec(IIF)Landroid/widget/GridLayout$Spec;": (start: number, size: number, weight: number) => gridSpec(start, size, GRID_LEADING, weight),
+    "static spec(ILandroid/widget/GridLayout$Alignment;F)Landroid/widget/GridLayout$Spec;": (start: number, a: JGridAlignment, weight: number) => gridSpec(start, 1, a, weight),
+    "static spec(IILandroid/widget/GridLayout$Alignment;F)Landroid/widget/GridLayout$Spec;": (start: number, size: number, a: JGridAlignment, weight: number) => gridSpec(start, size, a, weight),
+  },
+});
+rt.register({ name: "android/widget/GridLayout$Alignment", ctor: JGridAlignment });
+rt.register({ name: "android/widget/GridLayout$Spec", ctor: JGridSpec });
+rt.register({
+  name: "android/widget/GridLayout$LayoutParams", ctor: JGridLP, sup: "android/view/ViewGroup$MarginLayoutParams",
+  fields: ["rowSpec", "columnSpec"],
+  methods: {
+    "<init>()V": function () {},
+    "<init>(Landroid/widget/GridLayout$Spec;Landroid/widget/GridLayout$Spec;)V": function (this: JGridLP, row: JGridSpec, col: JGridSpec) { this.rowSpec = row; this.columnSpec = col; },
+    "<init>(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JGridLP, o: JLayoutParams) { Object.assign(this, copyGridLp(o)); },
+    "<init>(Landroid/view/ViewGroup$MarginLayoutParams;)V": function (this: JGridLP, o: JMarginLP) { Object.assign(this, copyGridLp(o)); },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JGridLP, _c: unknown, set: JAttrSet) { Object.assign(this, lpFromAttrs(this, set.res, set)); },
   },
 });
 
