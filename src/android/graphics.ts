@@ -337,6 +337,7 @@ export class JPaint extends JObj {
   letterSpacingEm = 0;
   textScaleX = 1;
   textSkewX = 0;
+  fontFeatureSettings: string | null = null;
   underline = false; strikeThru = false; fakeBold = false;
   shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
 
@@ -447,6 +448,8 @@ const paintMethods: NativeSpec["methods"] = {
   "setStrikeThruText(Z)V": function (this: JPaint, v: number) { this.strikeThru = !!v; },
   "setFakeBoldText(Z)V": function (this: JPaint, v: number) { this.fakeBold = !!v; },
   "setLetterSpacing(F)V": function (this: JPaint, v: number) { this.letterSpacingEm = v; },
+  "setFontFeatureSettings(Ljava/lang/String;)V": function (this: JPaint, v: string | null) { this.fontFeatureSettings = v; },
+  "getFontFeatureSettings()Ljava/lang/String;": function (this: JPaint) { return this.fontFeatureSettings; },
   "setTextScaleX(F)V": function (this: JPaint, v: number) { this.textScaleX = v; },
   "getTextScaleX()F": function (this: JPaint) { return this.textScaleX; },
   "setTextSkewX(F)V": function (this: JPaint, v: number) { this.textSkewX = v; },
@@ -458,7 +461,7 @@ const paintMethods: NativeSpec["methods"] = {
     this.shadowRadius = this.shadowDx = this.shadowDy = this.shadowColor = 0;
   },
   ...noops("<init>()V", "<init>(I)V", "setHinting(I)V", "setSubpixelText(Z)V", "setLinearText(Z)V",
-    "setElegantTextHeight(Z)V", "setFontFeatureSettings(Ljava/lang/String;)V", "setTextLocale(Ljava/util/Locale;)V",
+    "setElegantTextHeight(Z)V", "setTextLocale(Ljava/util/Locale;)V",
     "setTextLocales(Landroid/os/LocaleList;)V", "setStartHyphenEdit(I)V",
     "setEndHyphenEdit(I)V", "setWordSpacing(F)V", "setDither(Z)V", "setFilterBitmap(Z)V", "setStrokeMiter(F)V",
     "setFlags(I)V"),
@@ -533,6 +536,7 @@ function resetPaint(paint: JPaint): void {
   paint.filterColor = null; paint.filterMatrix = null; paint.filterObj = null;
   paint.blend = null; paint.xfermode = null; paint.blendMode = null;
   paint.letterSpacingEm = 0; paint.textScaleX = 1; paint.textSkewX = 0;
+  paint.fontFeatureSettings = null;
   paint.underline = false; paint.strikeThru = false; paint.fakeBold = false;
   paint.shadowRadius = paint.shadowDx = paint.shadowDy = paint.shadowColor = 0;
 }
@@ -544,6 +548,7 @@ export function copyPaint(src: JPaint, dst: JPaint) {
   dst.filterColor = src.filterColor; dst.filterMatrix = src.filterMatrix; dst.filterObj = src.filterObj;
   dst.underline = src.underline; dst.strikeThru = src.strikeThru; dst.fakeBold = src.fakeBold;
   dst.letterSpacingEm = src.letterSpacingEm; dst.textScaleX = src.textScaleX; dst.textSkewX = src.textSkewX;
+  dst.fontFeatureSettings = src.fontFeatureSettings;
   dst.blend = src.blend; dst.xfermode = src.xfermode; dst.blendMode = src.blendMode;
   dst.shadowRadius = src.shadowRadius; dst.shadowDx = src.shadowDx; dst.shadowDy = src.shadowDy; dst.shadowColor = src.shadowColor;
 }

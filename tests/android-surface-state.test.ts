@@ -35,6 +35,18 @@ test("Paint retains text scale and skew state", async () => {
   expect(await vcall(copy, "getTextSkewX", "()F")).toBe(0);
 });
 
+test("Paint retains font feature settings across copy and clears them on reset", async () => {
+  const paint = new JPaint();
+  expect(await vcall(paint, "getFontFeatureSettings", "()Ljava/lang/String;")).toBeNull();
+  await vcall(paint, "setFontFeatureSettings", "(Ljava/lang/String;)V", "kern=0");
+  expect(await vcall(paint, "getFontFeatureSettings", "()Ljava/lang/String;")).toBe("kern=0");
+
+  const copy = await newObj("android/graphics/Paint", "(Landroid/graphics/Paint;)V", paint);
+  expect(await vcall(copy, "getFontFeatureSettings", "()Ljava/lang/String;")).toBe("kern=0");
+  await vcall(copy, "reset", "()V");
+  expect(await vcall(copy, "getFontFeatureSettings", "()Ljava/lang/String;")).toBeNull();
+});
+
 test("TextView retains and exposes its shadow layer", async () => {
   const view = await newObj("android/widget/TextView");
   await vcall(view, "setShadowLayer", "(FFFI)V", 4.5, 2, -3, 0x7f123456);
