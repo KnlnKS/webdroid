@@ -34,11 +34,14 @@ platform contracts; run the full serialized E2E suite at the end.
 
 ## Next
 
-1. Follow empty tile bins and the unfinished panel transition. HTTP upload ordering and
-   wrapped-stream fixes now let Maps parse its zoom tables. Temporary bounded exception
-   capture in src/jvm/runtime.ts diagnoses failures swallowed by futures; remove it.
-   Read all process diagnostics. Distinguish slow initialization from a deadlock using
-   advancing frames, queue state and initialization/task state.
+1. Follow home rendering after the layout-listener, media-performance-class and TableLayout
+   fixes. Fresh onboarding succeeds; skipping it exposed an undefined Build.VERSION field
+   that aborted the transition, then a missing TableLayout setter. Fresh Chrome and a
+   Maps-only headless probe are being checked again. Earlier headless coordinate taps
+   used pixels where the harness expects fractions, so those runs did not leave onboarding.
+   Native disk-cache creation reports SQLite error 15 (locking protocol); inspect native
+   evidence before changing the VFS. Read all process diagnostics and distinguish slow
+   initialization from a deadlock using advancing frames and queue state.
 2. Exercise matching Maps search/place/directions interactions in Chrome and Android;
    capture screenshots, correct generic failures and record evidence limits.
 3. Verify changed contracts, measure functioning startup/idle behavior, then run the full

@@ -1946,3 +1946,23 @@ zero geometry draws, and empty base-tile bins. Tapping search creates and resume
 writer also reaches unsupported ObjectOutputStream.enableReplaceObject; object
 serialization remains unsupported. Child microG processes had no observed missing
 APIs at this checkpoint. Full E2E has not run.
+
+
+### Maps home transition diagnostics (2026-09-13)
+
+Fresh headless/Chrome startup reached onboarding, not home. Early diagnostic taps passed
+pixel coordinates to a harness that expects fractions; their apparent idle success did
+not exercise Skip. A real Skip action reproduced the transition stall. The bounded
+exception collector exposed `belc.as()I`: an API outline read the absent
+`Build.VERSION.MEDIA_PERFORMANCE_CLASS`, and int-to-long conversion failed on undefined.
+The field now reports the documented zero (no declared performance class). The transition
+then completes and constructs bottom navigation/home content, but repeated layout passes
+fail on TableLayout.setColumnShrinkable. Column shrinking and reversible stretch/shrink
+selection are implemented in the existing table owner; the affected tests and typecheck pass.
+
+Separately, View.layout suppressed layout listeners when a required layout kept the same
+bounds, contrary to AOSP. Listeners now run in the same branch as onLayout, preserving the
+unchanged/no-layout fast path; an async-listener regression test covers both cases. This
+alone did not remove the Maps transition failure. The native disk-cache error is 65551
+wrapped as SQLite code 15 (SQLITE_PROTOCOL); its root cause remains unproven. Maps has not
+drawn map geometry or achieved parity, and the final full E2E remains deferred.
