@@ -479,6 +479,7 @@ for (const [name, methods, statics] of [
     "getMemoryClass()I": () => 256,
     "getLargeMemoryClass()I": () => 512,
     "isLowRamDevice()Z": () => 0,
+    "isBackgroundRestricted()Z": () => 0,
     "getRunningAppProcesses()Ljava/util/List;": () => newArrayList([myProcess()]),
     "getProcessMemoryInfo([I)[Landroid/os/Debug$MemoryInfo;": (pids: Int32Array) => jarray(Array.from(pids, () => rt.make("android/os/Debug$MemoryInfo")), "Landroid/os/Debug$MemoryInfo;"),
     "getHistoricalProcessExitReasons(Ljava/lang/String;II)Ljava/util/List;": () => newArrayList(),

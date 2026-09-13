@@ -346,7 +346,7 @@ rt.register({
     dalvikPss = 0; nativePss = 0; otherPss = 0;
     dalvikSharedDirty = 0; dalvikPrivateDirty = 0; nativeSharedDirty = 0; nativePrivateDirty = 0; otherSharedDirty = 0; otherPrivateDirty = 0;
   },
-  fields: ["dalvikPss", "nativePss", "otherPss"],
+  fields: ["dalvikPss", "nativePss", "otherPss", "dalvikSharedDirty", "dalvikPrivateDirty", "nativeSharedDirty", "nativePrivateDirty", "otherSharedDirty", "otherPrivateDirty"],
   methods: {
     "getTotalPss()I": function (this: { dalvikPss: number; nativePss: number; otherPss: number }) { return this.dalvikPss + this.nativePss + this.otherPss; },
     ...noops("<init>()V"),
@@ -363,6 +363,7 @@ rt.register({
     "static getNativeHeapFreeSize()J": () => BigInt(Math.max(0, Math.round(mem.stats().peak - mem.stats().used))),
     ...stubs(0, "static isDebuggerConnected()Z", "static waitingForDebugger()Z"),
     "static threadCpuTimeNanos()J": () => BigInt(Math.round(performance.now() * 1e6)),
+    "static getThreadAllocCount()I": () => 0,
     "static getPss()J": () => BigInt((((performance as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1024) | 0),
     // ART's runtime counters: nothing here collects, blocks or compacts, so every stat is zero
     "static getRuntimeStat(Ljava/lang/String;)Ljava/lang/String;": (name: string) => RUNTIME_STATS.includes(name) ? "0" : null,
