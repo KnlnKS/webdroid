@@ -9,7 +9,7 @@ test("HTTP connect leaves the upload writable and response accessors share one r
   globalThis.fetch = (async (_url, init) => {
     requests.push({ method: init!.method!, body: [...init!.body as Uint8Array] });
     await Promise.resolve();
-    return new Response("ok", { status: 200, statusText: "OK" });
+    return new Response("ok", { status: 200, statusText: "OK", headers: { "Content-Type": "application/binary", "X-Example": "value" } });
   }) as typeof fetch;
   try {
     const url = await newObj("java/net/URL", "(Ljava/lang/String;)V", "https://example.test/upload");
@@ -25,6 +25,15 @@ test("HTTP connect leaves the upload writable and response accessors share one r
       vcall(connection, "getResponseMessage", "()Ljava/lang/String;"),
     ])).toEqual([200, "OK"]);
     expect(requests).toEqual([{ method: "POST", body: [1, 255] }]);
+    const headers = new Map<string, string>();
+    for (let i = 0; ; i++) {
+      const key = await vcall(connection, "getHeaderFieldKey", "(I)Ljava/lang/String;", i);
+      if (key === null) break;
+      headers.set(key.toLowerCase(), await vcall(connection, "getHeaderField", "(I)Ljava/lang/String;", i));
+    }
+    expect(headers.get("content-type")).toBe("application/binary");
+    expect(headers.get("x-example")).toBe("value");
+    expect(await vcall(connection, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;", null)).toBe("HTTP/1.1 200 OK");
     await expect(vcall(connection, "getOutputStream", "()Ljava/io/OutputStream;")).rejects.toMatchObject({ msg: "Cannot write output after reading input" });
   } finally { globalThis.fetch = original; }
 });
