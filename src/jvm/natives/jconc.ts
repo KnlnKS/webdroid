@@ -705,6 +705,7 @@ rt.register({
 for (const [i, ...ifaces] of [["java/util/concurrent/Executor"], ["java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"],
   ["java/util/concurrent/ScheduledExecutorService", "java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"], ["java/util/concurrent/Future"],
   ["java/util/concurrent/ScheduledFuture", "java/util/concurrent/Future"], ["java/util/concurrent/Callable"], ["java/util/concurrent/ThreadFactory"],
+  ["java/util/concurrent/RunnableFuture", "java/lang/Runnable", "java/util/concurrent/Future"],
   ["java/util/concurrent/RunnableScheduledFuture", "java/util/concurrent/RunnableFuture", "java/util/concurrent/ScheduledFuture"],
   ["java/util/concurrent/RejectedExecutionHandler"]]) {
   rt.register({ name: i, ctor: class extends JObj {}, ifaces });
@@ -1025,7 +1026,6 @@ rt.register({
     },
   },
 });
-rt.markers("java/util/concurrent/RunnableFuture");
 
 // ── AbstractQueuedSynchronizer: the state word, its CAS, and FIFO waiting in exclusive and shared
 // modes; a subclass supplies tryAcquire/tryRelease (and the shared pair) as the JDK's does
