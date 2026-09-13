@@ -455,10 +455,11 @@ rt.register({
   });
 }
 
-class JBaseBundle extends JObj {
+export class JBaseBundle extends JObj {
   map = new Map<string, unknown>();
   loader: unknown = null;
 }
+export class JPersistableBundle extends JBaseBundle {}
 export class JBundle extends JBaseBundle {
   constructor() { super(); rt.link("android/os/Bundle"); }
 }
@@ -544,7 +545,7 @@ for (const [t, d] of [["Parcelable", "Ljava/lang/Object;"], ["Serializable", "Lj
 rt.register({ name: "android/os/BaseBundle", ctor: JBaseBundle, methods: bundleMethods });
 rt.register({ name: "android/os/Bundle", ctor: JBundle, sup: "android/os/BaseBundle",
   ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], statics: { get EMPTY() { return new JBundle(); }, get CREATOR() { return parcelCreator("android/os/Bundle", (p) => vcall(p, "readBundle", "()Landroid/os/Bundle;")); } }, methods: bundleMethods });
-rt.register({ name: "android/os/PersistableBundle", ctor: class extends JBaseBundle {}, sup: "android/os/BaseBundle",
+rt.register({ name: "android/os/PersistableBundle", ctor: JPersistableBundle, sup: "android/os/BaseBundle",
   ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], methods: bundleMethods });
 
 export const PARCELABLE = {

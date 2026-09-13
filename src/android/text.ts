@@ -1,3 +1,4 @@
+import { type JParcel, writeInt, readInt, writeString8, readString8, parcelCreator } from "./parcel";
 // android.text.* — TextPaint, TextUtils, Spannable/Editable (spans stored, minimally styled).
 
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
@@ -460,6 +461,15 @@ async function textIndexOf(cs: unknown, needle: unknown, start = 0, end?: number
   return found > (end ?? text.length) - part.length ? -1 : found;
 }
 
+export async function writeText(text: unknown, parcel: JParcel): Promise<void> {
+  if (text !== null && rt.iof(text, "android/text/Spanned")) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Spanned text parcel");
+  writeInt(parcel, 1); writeString8(parcel, text === null ? null : await csText(text));
+}
+export async function readText(parcel: JParcel): Promise<string | null> {
+  const kind = readInt(parcel), text = readString8(parcel);
+  if (text !== null && kind !== 1 && readInt(parcel) !== 0) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Spanned text parcel");
+  return text;
+}
 class JTextUtils extends JObj {}
 // AndroidCharacter: the bidi mirror pairs of the characters apps ask about (Unicode BidiMirroring's
 // paired brackets and quotes); everything else mirrors to itself
@@ -482,7 +492,9 @@ rt.register({
 });
 rt.register({
   name: "android/text/TextUtils", ctor: JTextUtils,
+  statics: { get CHAR_SEQUENCE_CREATOR() { return parcelCreator("java/lang/CharSequence", readText); } },
   methods: {
+    "static writeToParcel(Ljava/lang/CharSequence;Landroid/os/Parcel;I)V": writeText,
     "static getOffsetBefore(Ljava/lang/CharSequence;I)I": async (cs: unknown, offset: number) => adjacentTextOffset(cs, offset, false),
     "static getOffsetAfter(Ljava/lang/CharSequence;I)I": async (cs: unknown, offset: number) => adjacentTextOffset(cs, offset, true),
     "static getLayoutDirectionFromLocale(Ljava/util/Locale;)I": localeDirection,

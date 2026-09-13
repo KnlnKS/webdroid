@@ -5,7 +5,7 @@ import { JObj, rt } from "../jvm/runtime";
 import { dotName, slashName, jarray, mangleStaticField, utf8, u8 } from "../jvm/abi";
 import { newObj, vcall, JInt, JLong, JFloat, JDouble, JBool, JByte, JShort, JChar, box, defineException } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, type JList } from "../jvm/natives/jutil";
-import { JBundle } from "./os";
+import { JBundle, JBaseBundle, JPersistableBundle } from "./os";
 import { csText } from "./text";
 import { deserialize, type Serialized } from "../jvm/serialization";
 
@@ -144,7 +144,7 @@ async function readParcelable(p: JParcel, loader: unknown) {
   const name = readString(p);
   return name === null ? null : createFrom(p, await creatorOf(name), loader);
 }
-async function writeBundle(p: JParcel, b: JBundle | null) {
+async function writeBundle(p: JParcel, b: JBaseBundle | null) {
   if (!b) return writeInt(p, -1);
   if (!b.map.size) return writeInt(p, 0);
   const lenAt = p.pos;
@@ -152,10 +152,11 @@ async function writeBundle(p: JParcel, b: JBundle | null) {
   for (const [k, v] of b.map) { writeString(p, k); await writeValue(p, v); }
   p.view.setInt32(lenAt, p.pos - lenAt - 8, true);
 }
-async function readBundle(p: JParcel, loader: unknown) {
+async function readBundle(p: JParcel, loader: unknown, persistable = false) {
   const len = readInt(p);
   if (len < 0) return null;
-  const b = rt.make("android/os/Bundle") as JBundle;
+  rt.link(persistable ? "android/os/PersistableBundle" : "android/os/Bundle");
+  const b = persistable ? new JPersistableBundle() : new JBundle();
   b.loader = loader;
   if (len === 0) return b;
   if (readInt(p) !== BNDL) throw rt.mkThrowable("java/lang/IllegalStateException", "Bad magic number for Bundle");
@@ -337,6 +338,7 @@ rt.register({
     "writeValue(Ljava/lang/Object;)V": function (this: JParcel, v: unknown) { return writeValue(this, v); },
     "writeList(Ljava/util/List;)V": function (this: JParcel, l: unknown) { return writeList(this, l); },
     "writeMap(Ljava/util/Map;)V": function (this: JParcel, m: unknown) { return writeMap(this, m); },
+    "writePersistableBundle(Landroid/os/PersistableBundle;)V": function (this: JParcel, b: JPersistableBundle | null) { return writeBundle(this, b); },
     "writeBundle(Landroid/os/Bundle;)V": function (this: JParcel, b: JBundle | null) { return writeBundle(this, b); },
     "writeParcelable(Landroid/os/Parcelable;I)V": function (this: JParcel, o: JObj | null, flags: number) { return writeParcelable(this, o, flags); },
     "writeTypedList(Ljava/util/List;)V": async function (this: JParcel, l: unknown) { return writeTyped(this, l === null ? null : await toJsArray(l), 0); },
@@ -375,6 +377,8 @@ rt.register({
     [`readList(Ljava/util/List;${L})V`]: async function (this: JParcel, out: unknown, loader: unknown) { for (const v of (await readList(this, loader))?.a ?? []) await vcall(out, "add", "(Ljava/lang/Object;)Z", v); },
     [`readHashMap(${L})Ljava/util/HashMap;`]: function (this: JParcel, loader: unknown) { return readMap(this, loader); },
     [`readMap(Ljava/util/Map;${L})V`]: async function (this: JParcel, out: unknown, loader: unknown) { const m = await readMap(this, loader); if (m) await vcall(out, "putAll", "(Ljava/util/Map;)V", m); },
+    "readPersistableBundle()Landroid/os/PersistableBundle;": function (this: JParcel) { return readBundle(this, null, true); },
+    "readPersistableBundle(Ljava/lang/ClassLoader;)Landroid/os/PersistableBundle;": function (this: JParcel, loader: unknown) { return readBundle(this, loader, true); },
     "readBundle()Landroid/os/Bundle;": function (this: JParcel) { return readBundle(this, null); },
     [`readBundle(${L})Landroid/os/Bundle;`]: function (this: JParcel, loader: unknown) { return readBundle(this, loader); },
     [`readParcelable(${L})Landroid/os/Parcelable;`]: function (this: JParcel, loader: unknown) { return readParcelable(this, loader); },

@@ -1,3 +1,4 @@
+import { readClipData } from "./clipdata";
 import { JObj, type NativeSpec, rt, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { JBundle, bundlePrimitive, bundleBox, reportUncaught, PROCESS_NAME } from "./os";
 import { appHost, type AppHost } from "./apphost";
@@ -58,8 +59,7 @@ async function readIntent(p: JParcel, intent = new JIntent()): Promise<JIntent> 
   if (count > (p.size - p.pos) / 4) throw rt.mkThrowable("android/os/BadParcelableException", "Invalid category count");
   for (let i = 0; i < count; i++) { const category = readString8(p); if (category !== null) intent.categories.add(category); }
   intent.selector = readInt(p) ? await readIntent(p) : null;
-  if (readInt(p)) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "ClipData parcel");
-  intent.clipData = null; intent.contentUserHint = readInt(p);
+  intent.clipData = readInt(p) ? await readClipData(p) : null; intent.contentUserHint = readInt(p);
   intent.extras = await vcall(p, "readBundle", "()Landroid/os/Bundle;") ?? new JBundle();
   intent.originalIntent = readInt(p) ? await readIntent(p) : null;
   return intent;
