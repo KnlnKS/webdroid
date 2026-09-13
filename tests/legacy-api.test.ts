@@ -162,6 +162,14 @@ test("optional device services report their unavailable state", async () => {
   expect(await vcall(range, "clamp", "(Ljava/lang/Comparable;)Ljava/lang/Comparable;", "z")).toBe("d");
 });
 
+test("AbstractExecutorService submit returns the virtual newTaskFor result", async () => {
+  const executor = scall("java/util/concurrent/Executors", "newSingleThreadExecutor", "()Ljava/util/concurrent/ExecutorService;");
+  const runnable = rt.make("test/NoopRunnable");
+  const future = await vcall(executor, "submit", "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;", runnable, "done");
+  expect(rt.iof(future, "java/util/concurrent/FutureTask")).toBe(1);
+  expect(await vcall(future, "get", "()Ljava/lang/Object;")).toBe("done");
+});
+
 test("Resources(AssetManager, DisplayMetrics, Configuration) scopes its own configuration and metrics", async () => {
   const host = new Resources(null, {});
   const assets = rt.make("android/content/res/AssetManager") as JAssetManager;

@@ -297,11 +297,24 @@ const executorMethods: NativeSpec["methods"] = {
       console.error("[executor]", (e.msg ?? f.error) + (e.jframes ? "\n  at " + e.jframes.join("\n  at ") : ""), e.jsStack ?? "");
     });
   },
-  "submit(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown) {
-    return submit(this, r, "run", "()V");
+  "newTaskFor(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;":
+    (r: unknown, value: unknown) => newObj("java/util/concurrent/FutureTask", "(Ljava/lang/Runnable;Ljava/lang/Object;)V", r, value),
+  "newTaskFor(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;":
+    (c: unknown) => newObj("java/util/concurrent/FutureTask", "(Ljava/util/concurrent/Callable;)V", c),
+  "submit(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;": async function (this: JExecutor, r: unknown) {
+    const task = await vcall(this, "newTaskFor", "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;", r, null);
+    await vcall(this, "execute", "(Ljava/lang/Runnable;)V", task);
+    return task;
   },
-  "submit(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;": function (this: JExecutor, c: unknown) {
-    return submit(this, c, "call", "()Ljava/lang/Object;");
+  "submit(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;": async function (this: JExecutor, r: unknown, value: unknown) {
+    const task = await vcall(this, "newTaskFor", "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;", r, value);
+    await vcall(this, "execute", "(Ljava/lang/Runnable;)V", task);
+    return task;
+  },
+  "submit(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;": async function (this: JExecutor, c: unknown) {
+    const task = await vcall(this, "newTaskFor", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;", c);
+    await vcall(this, "execute", "(Ljava/lang/Runnable;)V", task);
+    return task;
   },
   "shutdown()V": function (this: JExecutor) { this.shut = true; },
   "shutdownNow()Ljava/util/List;": function (this: JExecutor) {
