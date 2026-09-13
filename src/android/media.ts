@@ -234,6 +234,46 @@ rt.register({
   },
 });
 
+class JAudioFocusRequest extends JObj {
+  gain = 0;
+  attrs = Object.assign(new JAudioAttributes(), { usage: 1 });
+  listener: unknown = null;
+  handler: unknown = null;
+  acceptsDelayed = false;
+  pausesOnDuck = false;
+}
+class JAudioFocusRequestBuilder extends JObj { request = new JAudioFocusRequest(); }
+function setFocusGain(request: JAudioFocusRequest, gain: number) {
+  if (gain < 1 || gain > 4) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Illegal audio focus gain type " + gain);
+  request.gain = gain;
+}
+rt.register({ name: "android/media/AudioFocusRequest", ctor: JAudioFocusRequest, methods: {
+  "getFocusGain()I": function (this: JAudioFocusRequest) { return this.gain; },
+  "getAudioAttributes()Landroid/media/AudioAttributes;": function (this: JAudioFocusRequest) { return this.attrs; },
+  "willPauseWhenDucked()Z": function (this: JAudioFocusRequest) { return +this.pausesOnDuck; },
+  "acceptsDelayedFocusGain()Z": function (this: JAudioFocusRequest) { return +this.acceptsDelayed; },
+  "getOnAudioFocusChangeListener()Landroid/media/AudioManager$OnAudioFocusChangeListener;": function (this: JAudioFocusRequest) { return this.listener; },
+} });
+rt.register({ name: "android/media/AudioFocusRequest$Builder", ctor: JAudioFocusRequestBuilder, methods: {
+  "<init>(I)V": function (this: JAudioFocusRequestBuilder, gain: number) { setFocusGain(this.request, gain); },
+  "setFocusGain(I)Landroid/media/AudioFocusRequest$Builder;": function (this: JAudioFocusRequestBuilder, gain: number) { setFocusGain(this.request, gain); return this; },
+  "setAudioAttributes(Landroid/media/AudioAttributes;)Landroid/media/AudioFocusRequest$Builder;": function (this: JAudioFocusRequestBuilder, attrs: JAudioAttributes | null) {
+    if (!attrs) throw rt.mkThrowable("java/lang/NullPointerException", "Illegal null AudioAttributes");
+    this.request.attrs = attrs; return this;
+  },
+  "setOnAudioFocusChangeListener(Landroid/media/AudioManager$OnAudioFocusChangeListener;)Landroid/media/AudioFocusRequest$Builder;": function (this: JAudioFocusRequestBuilder, listener: unknown) {
+    if (!listener) throw rt.mkThrowable("java/lang/NullPointerException", "Illegal null focus listener");
+    this.request.listener = listener; this.request.handler = null; return this;
+  },
+  "setOnAudioFocusChangeListener(Landroid/media/AudioManager$OnAudioFocusChangeListener;Landroid/os/Handler;)Landroid/media/AudioFocusRequest$Builder;": function (this: JAudioFocusRequestBuilder, listener: unknown, handler: unknown) {
+    if (!listener || !handler) throw rt.mkThrowable("java/lang/NullPointerException", "Illegal null focus listener or handler");
+    this.request.listener = listener; this.request.handler = handler; return this;
+  },
+  "setAcceptsDelayedFocusGain(Z)Landroid/media/AudioFocusRequest$Builder;": function (this: JAudioFocusRequestBuilder, value: number) { this.request.acceptsDelayed = !!value; return this; },
+  "setWillPauseWhenDucked(Z)Landroid/media/AudioFocusRequest$Builder;": function (this: JAudioFocusRequestBuilder, value: number) { this.request.pausesOnDuck = !!value; return this; },
+  "build()Landroid/media/AudioFocusRequest;": function (this: JAudioFocusRequestBuilder) { return Object.assign(new JAudioFocusRequest(), this.request); },
+} });
+
 const players = new Set<JMediaPlayer>();
 const pools = new Set<JSoundPool>();
 /** AudioManager.isMusicActive: a MediaPlayer or a SoundPool stream is sounding right now. */
