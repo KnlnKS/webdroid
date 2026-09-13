@@ -401,7 +401,7 @@ async function blockBytes(s: JObjectIn, n: number): Promise<Uint8Array> {
   for (let got = 0; got < n;) {
     while (s.blockEnd <= s.pos) {
       const tag = (await dataBytes(s, 1))[0];
-      if (tag === TC_BLOCKDATA) s.blockEnd = s.pos + (await dataBytes(s, 1))[0];
+      if (tag === TC_BLOCKDATA) { const length = (await dataBytes(s, 1))[0]; s.blockEnd = s.pos + length; }
       else if (tag === TC_BLOCKDATALONG) {
         const len = await dataBytes(s, 4);
         s.blockEnd = s.pos + new DataView(len.buffer, len.byteOffset, 4).getUint32(0);
