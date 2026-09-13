@@ -9,5 +9,6 @@ import { doodlejump } from "./doodlejump";
 import { resy } from "./resy";
 import { reddit } from "./reddit";
 import { tiktok } from "./tiktok";
+import { youtube } from "./youtube";
 
-export const FLOWS: Flow[] = [fitnotes, mihonOnboarding, mihonApp, flappybird, harmonic, calculatorm, lichess, doodlejump, resy, reddit, tiktok];
+export const FLOWS: Flow[] = [fitnotes, mihonOnboarding, mihonApp, flappybird, harmonic, calculatorm, lichess, doodlejump, resy, reddit, tiktok, youtube];
