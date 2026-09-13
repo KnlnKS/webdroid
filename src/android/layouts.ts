@@ -263,7 +263,10 @@ rt.register({
 // TableLayout pre-computes per-column widths (natural max across rows, stretch columns
 // absorb leftover) and hands them to each row; rows then measure cells to exact columns.
 class JTableLayout extends JLinearLayout {
-  stretchCols = "";
+  stretchCols = new Set<number>();
+  shrinkCols = new Set<number>();
+  stretchAll = false;
+  shrinkAll = false;
   constructor() { super(); this.orientation = 1; }
 }
 class JTableRow extends JLinearLayout {
@@ -276,13 +279,26 @@ rt.register({
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JTableLayout, c: unknown, set: JAttrSet | null) {
       await callSelf(linearMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
       this.orientation = 1;
-      const scId = AID("stretchColumns");
-      const sc = scId ? set?.node?.attrs.find((a) => a.resId === scId) : undefined;
-      if (sc) this.stretchCols = sc.str ?? String(sc.data);
+      for (const [attr, cols, all] of [["stretchColumns", "stretchCols", "stretchAll"], ["shrinkColumns", "shrinkCols", "shrinkAll"]] as const) {
+        const value = set?.node?.attrs.find(a => a.resId === AID(attr));
+        const text = value?.str ?? (value ? String(value.data) : "");
+        this[all] = text.startsWith("*");
+        for (const part of text.split(",")) if (/^\s*\d+\s*$/.test(part)) this[cols].add(Number(part));
+      }
     },
-    "setStretchAllColumns(Z)V": function (this: JTableLayout, v: number) { this.stretchCols = v ? "*" : ""; requestLayout(this); },
+    "setStretchAllColumns(Z)V": function (this: JTableLayout, v: number) { this.stretchAll = !!v; },
+    "setShrinkAllColumns(Z)V": function (this: JTableLayout, v: number) { this.shrinkAll = !!v; },
+    "isStretchAllColumns()Z": function (this: JTableLayout) { return +this.stretchAll; },
+    "isShrinkAllColumns()Z": function (this: JTableLayout) { return +this.shrinkAll; },
+    "isColumnStretchable(I)Z": function (this: JTableLayout, i: number) { return +(this.stretchAll || this.stretchCols.has(i)); },
+    "isColumnShrinkable(I)Z": function (this: JTableLayout, i: number) { return +(this.shrinkAll || this.shrinkCols.has(i)); },
     "setColumnStretchable(IZ)V": function (this: JTableLayout, i: number, v: number) {
-      if (v) this.stretchCols = this.stretchCols ? this.stretchCols + "," + i : String(i);
+      if (v) this.stretchCols.add(i); else this.stretchCols.delete(i);
+      for (const row of this.children) requestLayout(row);
+    },
+    "setColumnShrinkable(IZ)V": function (this: JTableLayout, i: number, v: number) {
+      if (v) this.shrinkCols.add(i); else this.shrinkCols.delete(i);
+      for (const row of this.children) requestLayout(row);
     },
     "onMeasure(II)V": async function (this: JTableLayout, wSpec: number, hSpec: number) {
       const rows = this.children.filter((c): c is JTableRow => c.visibility !== 8 && c instanceof JTableRow);
@@ -297,10 +313,14 @@ rt.register({
       }
       const avail = specSize(wSpec) - this.padL - this.padR;
       const total = colW.reduce((a, b) => a + b, 0);
-      if (this.stretchCols && avail > total && colW.length) {
-        const idxs = this.stretchCols === "*" ? colW.map((_, i) => i)
-          : this.stretchCols.split(",").map(Number).filter((i) => i >= 0 && i < colW.length);
-        if (idxs.length) { const extra = Math.floor((avail - total) / idxs.length); for (const i of idxs) colW[i] += extra; }
+      if (avail !== total && colW.length && specMode(wSpec) !== MS_UNSPEC) {
+        const all = avail > total ? this.stretchAll : this.shrinkAll;
+        const cols = avail > total ? this.stretchCols : this.shrinkCols;
+        const indices = all ? colW.map((_, i) => i) : [...cols].filter(i => i >= 0 && i < colW.length);
+        if (indices.length) {
+          const delta = Math.trunc((avail - total) / indices.length);
+          for (const i of indices) colW[i] = Math.max(0, colW[i] + delta);
+        }
       }
       for (const row of rows) row.colWidths = colW;
       await linearOnMeasure.call(this, wSpec, hSpec);
