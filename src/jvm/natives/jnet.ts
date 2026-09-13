@@ -413,12 +413,24 @@ rt.register({
 
 class JURI extends JObj {
   u = "";
-  private parsed?: URL | null;
-  url(): URL | null {
-    if (this.parsed === undefined) { try { this.parsed = new URL(this.u); } catch { this.parsed = null; } }
-    return this.parsed;
-  }
+  private parsed: ReturnType<typeof parseURI> | null = null;
+  parts(): ReturnType<typeof parseURI> { return this.parsed ??= parseURI(this.u); }
 }
+function parseURI(uri: string) {
+  const match = /^(?:([A-Za-z][A-Za-z0-9+.-]*):)?(?:\/\/([^/?#]*))?([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/.exec(uri)!;
+  const scheme = match[1] ?? null, authority = match[2] || null;
+  const opaque = scheme !== null && !uri.slice(scheme.length + 1).startsWith("/");
+  const server = authority ? /^(?:([^@]*)@)?(\[[^\]]+\]|[^:]+)(?::([0-9]*))?$/.exec(authority) : null;
+  const candidate = server?.[2] ?? null;
+  let host: string | null = null;
+  if (candidate?.startsWith("[")) { try { new URL("http://" + candidate.replace(/%[^\]]+/, "")); host = candidate; } catch {} }
+  else if (candidate && /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.?$/.test(candidate)) host = candidate;
+  const port = host && server?.[3] ? Number(server[3]) : -1;
+  return { scheme, authority, host, port, userInfo: host ? server?.[1] ?? null : null,
+    path: opaque ? null : match[3], query: opaque ? null : match[4] ?? null, fragment: match[5] ?? null,
+    ssp: uri.slice(scheme ? scheme.length + 1 : 0).split("#", 1)[0] };
+}
+const decodeUriPart = (part: string | null): string | null => part === null ? null : decodeURIComponent(part);
 const mkURI = (u: string | null) => Object.assign(new JURI(), { u: u ?? "" });
 // URLEncoder/URLDecoder: application/x-www-form-urlencoded, which is encodeURIComponent plus
 // "+" for a space and the extra unreserved set Java leaves alone.
@@ -466,20 +478,20 @@ rt.register({
       return mkURI((m[1] ?? "") + (m[2] ?? "") + out.join("/") + m[4]);
     },
     "toASCIIString()Ljava/lang/String;": function (this: JURI) { return this.u; },
-    "getScheme()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf(":"); return i > 0 ? this.u.slice(0, i) : null; },
-    "getHost()Ljava/lang/String;": function (this: JURI) { return this.url()?.hostname ?? null; },
-    "getAuthority()Ljava/lang/String;": function (this: JURI) { const authority = /^(?:[^:/?#]+:)?\/\/([^/?#]+)/.exec(this.u)?.[1]; return authority === undefined ? null : decodeURIComponent(authority); },
-    "getRawAuthority()Ljava/lang/String;": function (this: JURI) { return /^(?:[^:/?#]+:)?\/\/([^/?#]+)/.exec(this.u)?.[1] ?? null; },
-    "getPath()Ljava/lang/String;": function (this: JURI) { return this.url()?.pathname ?? this.u.replace(/^[a-z]+:/i, ""); },
+    "getScheme()Ljava/lang/String;": function (this: JURI) { return this.parts().scheme; },
+    "getHost()Ljava/lang/String;": function (this: JURI) { return this.parts().host; },
+    "getAuthority()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().authority); },
+    "getRawAuthority()Ljava/lang/String;": function (this: JURI) { return this.parts().authority; },
+    "getPath()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().path); },
     "toURL()Ljava/net/URL;": function (this: JURI) { const u = new JURL(); urlInit(u, this.u); return u; },
-    "getUserInfo()Ljava/lang/String;": function (this: JURI) { const m = /^[^:/?#]+:\/\/([^@/?#]*)@/.exec(this.u); return m ? decodeURIComponent(m[1]) : null; },
-    "getPort()I": function (this: JURI) { return Number(this.url()?.port) || -1; },
-    "getQuery()Ljava/lang/String;": function (this: JURI) { const q = this.url()?.search; return q ? q.slice(1) : null; },
-    "getRawQuery()Ljava/lang/String;": function (this: JURI) { return /^[^?#]*\?([^#]*)/.exec(this.u)?.[1] ?? null; },
-    "getFragment()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf("#"); return i < 0 ? null : this.u.slice(i + 1); },
+    "getUserInfo()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().userInfo); },
+    "getPort()I": function (this: JURI) { return this.parts().port; },
+    "getQuery()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().query); },
+    "getRawQuery()Ljava/lang/String;": function (this: JURI) { return this.parts().query; },
+    "getFragment()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().fragment); },
     "getRawFragment()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf("#"); return i < 0 ? null : this.u.slice(i + 1); },
-    "getRawPath()Ljava/lang/String;": function (this: JURI) { return this.url()?.pathname ?? null; },
-    "getSchemeSpecificPart()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf(":"); return i < 0 ? this.u : this.u.slice(i + 1); },
+    "getRawPath()Ljava/lang/String;": function (this: JURI) { return this.parts().path; },
+    "getSchemeSpecificPart()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().ssp); },
     "resolve(Ljava/lang/String;)Ljava/net/URI;": function (this: JURI, o: string) { try { return mkURI(new URL(o, this.u).href); } catch { return mkURI(o); } },
     "equals(Ljava/lang/Object;)Z": function (this: JURI, o: unknown) { return o instanceof JURI && o.u === this.u ? 1 : 0; },
     "hashCode()I": function (this: JURI) { return stringHash(this.u); },
