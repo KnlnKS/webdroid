@@ -2006,6 +2006,7 @@ rt.register({
     "static binarySearch([II)I": taBinarySearch,
     "static binarySearch([CC)I": taBinarySearch,
     "static binarySearch([JJ)I": taBinarySearch,
+    "static binarySearch([FF)I": floatBinarySearch,
     "static binarySearch([Ljava/lang/Object;Ljava/lang/Object;)I": (a: unknown[], k: unknown) => arrBinarySearch(a, k, null),
   },
 });
@@ -2050,6 +2051,27 @@ function taBinarySearch(a: TA, k: number | bigint): number {
     const mid = (lo + hi) >> 1;
     if (a[mid] < k) lo = mid + 1;
     else if (a[mid] > k) hi = mid - 1;
+    else return mid;
+  }
+  return -(lo + 1);
+}
+const floatBits = new Int32Array(1), floatValue = new Float32Array(floatBits.buffer);
+function floatCompare(a: number, b: number): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  floatValue[0] = a;
+  const ai = Number.isNaN(a) ? 0x7fc00000 : floatBits[0];
+  floatValue[0] = b;
+  const bi = Number.isNaN(b) ? 0x7fc00000 : floatBits[0];
+  return ai === bi ? 0 : ai < bi ? -1 : 1;
+}
+function floatBinarySearch(a: Float32Array, k: number): number {
+  let lo = 0, hi = a.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const c = floatCompare(a[mid], k);
+    if (c < 0) lo = mid + 1;
+    else if (c > 0) hi = mid - 1;
     else return mid;
   }
   return -(lo + 1);

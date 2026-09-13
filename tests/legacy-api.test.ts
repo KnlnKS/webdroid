@@ -270,6 +270,14 @@ test("Arrays sorts a natural-order object subrange", async () => {
   expect(values).toEqual(["z", "a", "b", "c", "y"]);
 });
 
+test("Arrays binary-searches floats in Java order", () => {
+  const values = Float32Array.of(-0, 0, 1, NaN);
+  expect(scall("java/util/Arrays", "binarySearch", "([FF)I", values, -0)).toBe(0);
+  expect(scall("java/util/Arrays", "binarySearch", "([FF)I", values, 0)).toBe(1);
+  expect(scall("java/util/Arrays", "binarySearch", "([FF)I", values, NaN)).toBe(3);
+  expect(scall("java/util/Arrays", "binarySearch", "([FF)I", values, 0.5)).toBe(-3);
+});
+
 test("BigInteger returns quotient and remainder together", async () => {
   const value = await newObj("java/math/BigInteger", "(Ljava/lang/String;)V", "23");
   const divisor = await newObj("java/math/BigInteger", "(Ljava/lang/String;)V", "5");
