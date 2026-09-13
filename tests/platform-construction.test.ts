@@ -3,6 +3,8 @@ import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { newObj, vcall } from "../src/jvm/natives/jlang";
 import { classCtors } from "../src/jvm/natives/jreflect";
+import { mangleStaticField } from "../src/jvm/abi";
+import { glSurfaces } from "../src/android/glview";
 
 rt.linkNatives();
 test("FrameLayout declares its view constructors for reflection", () => {
@@ -38,4 +40,15 @@ test("EGL10 returns configurations with their declared Java type", async () => {
   expect(await vcall(egl, "eglChooseConfig", "(Ljavax/microedition/khronos/egl/EGLDisplay;[I[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z", null, new Int32Array([0x3038]), configs, 1, count)).toBe(1);
   expect(count[0]).toBe(1);
   expect(rt.iof(configs[0], "javax/microedition/khronos/egl/EGLConfig")).toBe(1);
+});
+
+test("EGL10 reports its no-context handle until a context is bound", async () => {
+  const egl = rt.make("javax/microedition/khronos/egl/EGL10");
+  const none = rt.link("javax/microedition/khronos/egl/EGL10").ctor[mangleStaticField("EGL_NO_CONTEXT")];
+  expect(none).not.toBeNull();
+  expect(rt.iof(none, "javax/microedition/khronos/egl/EGLContext")).toBe(1);
+  expect(await vcall(egl, "eglGetCurrentContext", "()Ljavax/microedition/khronos/egl/EGLContext;")).toBe(none);
+  expect(glSurfaces.current).toBeNull();
+  expect(await vcall(egl, "eglMakeCurrent", "(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z", null, null, null, none)).toBe(1);
+  expect(glSurfaces.current).toBeNull();
 });

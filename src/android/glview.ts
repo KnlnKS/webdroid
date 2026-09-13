@@ -461,6 +461,9 @@ const theConfig = new JEGLConfig();
 class JEGLSurface extends JObj { surf: GlSurface | null = null; }
 const attrVal = (a: Int32Array | null, k: number): number => { if (a) for (let i = 0; i + 1 < a.length && a[i] !== 0x3038; i += 2) if (a[i] === k) return a[i + 1]; return 0; };
 rt.register({ name: "javax/microedition/khronos/egl/EGLSurface", ctor: JEGLSurface });
+const noEglContext = new JEGLContext(), noEglSurface = new JEGLSurface();
+const noEglDisplay = rt.make("javax/microedition/khronos/egl/EGLDisplay");
+const eglContexts = new WeakMap<EglContext, JEGLContext>();
 const surfaceOf = (win: unknown): GlSurface | null =>
   win instanceof JSurface ? win.surf : win instanceof JSurfaceTexture ? (win.released ? null : win.surface) : win instanceof JSurfaceHolder ? win.surface : win instanceof JView ? getHolder(win).surface : null;
 rt.register({
@@ -468,7 +471,7 @@ rt.register({
   statics: {
     EGL_RED_SIZE: 0x3024, EGL_GREEN_SIZE: 0x3023, EGL_BLUE_SIZE: 0x3022, EGL_ALPHA_SIZE: 0x3021,
     EGL_DEPTH_SIZE: 0x3025, EGL_STENCIL_SIZE: 0x3026, EGL_RENDERABLE_TYPE: 0x3040, EGL_NONE: 0x3038,
-    EGL_DEFAULT_DISPLAY: null, EGL_NO_CONTEXT: null, EGL_NO_DISPLAY: null, EGL_NO_SURFACE: null,
+    EGL_DEFAULT_DISPLAY: null, EGL_NO_CONTEXT: noEglContext, EGL_NO_DISPLAY: noEglDisplay, EGL_NO_SURFACE: noEglSurface,
     EGL_SUCCESS: 0x3000, EGL_CONFIG_CAVEAT: 0x3027, EGL_SAMPLES: 0x3031, EGL_SAMPLE_BUFFERS: 0x3032,
     EGL_BUFFER_SIZE: 0x3020, EGL_SURFACE_TYPE: 0x3033, EGL_WINDOW_BIT: 4, EGL_PBUFFER_BIT: 1, EGL_CONFIG_ID: 0x3028,
     EGL_WIDTH: 0x3057, EGL_HEIGHT: 0x3056, EGL_BAD_ALLOC: 0x3003, EGL_BAD_NATIVE_WINDOW: 0x300b, EGL_CONTEXT_LOST: 0x300e,
@@ -501,7 +504,10 @@ rt.register({
     },
     "eglQueryString(Ljavax/microedition/khronos/egl/EGLDisplay;I)Ljava/lang/String;": (_d: unknown, n: number) => n === 0x3053 ? "webdroid" : n === 0x3054 ? "1.4" : "",
     "eglCreateContext(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLConfig;Ljavax/microedition/khronos/egl/EGLContext;[I)Ljavax/microedition/khronos/egl/EGLContext;":
-      (_d: unknown, _c: unknown, share: JEGLContext | null) => { const c = new JEGLContext(); c.egl = new EglContext(share?.egl); return c; },
+      (_d: unknown, _c: unknown, share: JEGLContext | null, at: Int32Array | null) => {
+        const c = new JEGLContext(); c.egl = new EglContext(share?.egl); c.egl.major = attrVal(at, 0x3098) || 1;
+        eglContexts.set(c.egl, c); return c;
+      },
     "eglCreatePbufferSurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLConfig;[I)Ljavax/microedition/khronos/egl/EGLSurface;":
       (_d: unknown, _c: unknown, at: Int32Array | null) => {
         const e = new JEGLSurface(); e.surf = { view: null, width: attrVal(at, 0x3057) || 1, height: attrVal(at, 0x3056) || 1, present: null, frames: 0 }; return e;
@@ -510,12 +516,12 @@ rt.register({
       (_d: unknown, _c: unknown, win: unknown) => {
         const s = surfaceOf(win);
         // no surface yet (the view has no size): EGL_NO_SURFACE, as a real EGL answers a dead ANativeWindow
-        if (!s) return null;
+        if (!s) return noEglSurface;
         const e = new JEGLSurface(); e.surf = s; return e;
       },
     "eglMakeCurrent(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z":
       (_d: unknown, draw: JEGLSurface | null, _r: unknown, ctx: JEGLContext | null) => {
-        if (!ctx) { glSurfaces.current = null; setGL(null); return 1; }
+        if (!ctx || ctx === noEglContext) { glSurfaces.current = null; setGL(null); return 1; }
         return ctx.egl.makeCurrent(draw?.surf ?? null) ? 1 : 0;
       },
     "eglSwapBuffers(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;)Z":
@@ -526,7 +532,13 @@ rt.register({
       "eglDestroyContext(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLContext;)Z",
       "eglTerminate(Ljavax/microedition/khronos/egl/EGLDisplay;)Z", "eglWaitGL()Z",
       "eglWaitNative(ILjava/lang/Object;)Z"),
-    "eglGetCurrentContext()Ljavax/microedition/khronos/egl/EGLContext;": () => { const c = new JEGLContext(); c.egl = glSurfaces.current ?? new EglContext(); return c; },
+    "eglGetCurrentContext()Ljavax/microedition/khronos/egl/EGLContext;": () => {
+      const current = glSurfaces.current;
+      if (!current) return noEglContext;
+      let c = eglContexts.get(current);
+      if (!c) { c = new JEGLContext(); c.egl = current; eglContexts.set(current, c); }
+      return c;
+    },
   },
 });
 
