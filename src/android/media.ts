@@ -25,6 +25,18 @@ rt.register({ name: "android/media/RingtoneManager", ctor: class extends JObj {}
 
 rt.register({ name: "android/media/Image", ctor: class extends JObj {}, ifaces: ["java/lang/AutoCloseable"] });
 
+rt.register({
+  name: "android/media/session/MediaController$Callback", ctor: class extends JObj {},
+  methods: { ...noops("<init>()V", "onSessionDestroyed()V", "onSessionEvent(Ljava/lang/String;Landroid/os/Bundle;)V",
+    "onPlaybackStateChanged(Landroid/media/session/PlaybackState;)V", "onMetadataChanged(Landroid/media/MediaMetadata;)V",
+    "onQueueChanged(Ljava/util/List;)V", "onQueueTitleChanged(Ljava/lang/CharSequence;)V",
+    "onExtrasChanged(Landroid/os/Bundle;)V", "onAudioInfoChanged(Landroid/media/session/MediaController$PlaybackInfo;)V") },
+});
+rt.register({
+  name: "android/media/MediaRoute2ProviderService", ctor: class extends JObj {}, sup: "android/app/Service",
+  methods: { "<init>()V": function () {} },
+});
+
 class JAudioAttributes extends JObj { usage = 0; contentType = 0; flags = 0x800; }
 rt.register({
   name: "android/media/AudioAttributes", ctor: JAudioAttributes, ifaces: ["android/os/Parcelable"],
