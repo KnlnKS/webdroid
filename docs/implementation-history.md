@@ -2445,3 +2445,13 @@ shared drawable setter and appearance changes now invalidate the view through th
 ancestor callback. Five drawable checks (20 assertions), including nested ancestor notification
 for image replacement/filter changes, and typecheck pass. This addresses stale image content;
 rounded clipping is a separate remaining visual difference.
+
+View.clipToOutline was an acknowledged no-op even when MaterialCardView enabled it. View
+traversal now clips through the existing Outline renderer, caching provider output until
+size, background or outline invalidation changes. Null providers disable clipping; the default
+provider asks the background for its geometry. LayerDrawable (also backing InsetDrawable)
+forwards the first nonempty child outline, preserving Maps' Material shape radius of 48 pixels.
+BOUNDS/PADDED_BOUNDS and Android 15's path-capable canClip contract match AOSP. A real Chrome
+pixel probe confirms transparent corners/opaque center, one provider call over two draws,
+refresh after invalidateOutline and no clipping with a null provider. Provider/background/inset
+checks and typecheck pass. Fresh place imagery appears without manually invalidating it.

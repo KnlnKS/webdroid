@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
 import { vcall, vcallOn, curThread, after, mkEnumSet } from "../jvm/natives/jlang";
 import { mangleMethod, jmethod, intBitsToFloat } from "../jvm/abi";
-import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf } from "./graphics";
+import { JCanvas, JRect, JRectF, JBitmap, JPaint, type JOutline, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf } from "./graphics";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { uptimeMillis } from "./os";
@@ -604,6 +604,13 @@ rt.register({
     "getIntrinsicWidth()I": function (this: JLayerDrawable) { return this.size(false); },
     "getIntrinsicHeight()I": function (this: JLayerDrawable) { return this.size(true); },
     "draw(Landroid/graphics/Canvas;)V": function (this: JLayerDrawable, cv: JCanvas) { return this.drawLayers(cv); },
+    "getOutline(Landroid/graphics/Outline;)V": async function (this: JLayerDrawable, outline: JOutline) {
+      const thread = curThread;
+      for (const { d } of this.layers) {
+        await vcallOn(thread, d, "getOutline", "(Landroid/graphics/Outline;)V", outline);
+        if (outline.kind) return;
+      }
+    },
     // AOSP: each layer's inset plus that layer's own padding, the widest of each edge. This is
     // what an InsetDrawable used as a window background reports, and what tells the window how
     // far inside itself the content has to sit.

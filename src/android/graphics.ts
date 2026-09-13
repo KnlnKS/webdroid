@@ -1649,7 +1649,7 @@ export function matrixColor(k: Float32Array, color: number): number {
 rt.register({ name: "android/graphics/Canvas", ctor: JCanvas, methods: canvasMethods });
 // android.graphics.Outline: the shape a RenderNode clips to (clipToOutline) — Compose's
 // Modifier.clip(shape) is exactly this, so a round button's ripple and children stay inside it.
-class JOutline extends JObj {
+export class JOutline extends JObj {
   kind: 0 | 1 | 2 | 3 = 0;   // empty | rect/roundRect | oval | path
   l = 0; t = 0; r = 0; b = 0; rad = 0; alpha = 1;
   path: JPath | null = null;
@@ -1678,7 +1678,7 @@ rt.register({
     "setConvexPath(Landroid/graphics/Path;)V": function (this: JOutline, p: JPath) { this.kind = 3; this.path = p; },
     "setEmpty()V": function (this: JOutline) { this.kind = 0; this.path = null; },
     "offset(II)V": function (this: JOutline, dx: number, dy: number) { this.l += dx; this.r += dx; this.t += dy; this.b += dy; },
-    "canClip()Z": function (this: JOutline) { return this.kind === 3 ? 0 : 1; },
+    "canClip()Z": () => 1,
     "isEmpty()Z": function (this: JOutline) { return this.kind === 0 ? 1 : 0; },
     "getAlpha()F": function (this: JOutline) { return this.alpha; },
     "setAlpha(F)V": function (this: JOutline, a: number) { this.alpha = asF(a); },

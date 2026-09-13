@@ -1,6 +1,6 @@
 import { perf } from "../perf";
 import { TV } from "./axml";
-import { setInvalidateHook, JRect, JCanvas, JMatrix, matMul, rotM, type JPoint } from "./graphics";
+import { setInvalidateHook, JRect, JCanvas, JMatrix, JOutline, matMul, rotM, type JPoint } from "./graphics";
 import { mangleMethod, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, vcallOn, vcallMaybe, after, idHash, box, JFloat, curThread } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor } from "./drawable";
@@ -184,10 +184,11 @@ async function performClick(this: JView) {
 function setBackground(this: JView, d: JDrawable | null) {
   if (this.background) this.background.callback = null;
   this.background = d;
+  this.outlineDirty = true;
   // AOSP hands a fresh background the view's current state; without it a stateful drawable
   // paints its "no state at all" entry until something else happens to the view
   if (d) { d.callback = this; void this.refreshDrawableState(); }
-  invalidate();
+  invalidate(this);
 }
 /** this view's origin in window coordinates */
 function windowOffset(view: JView): [number, number] {
@@ -331,7 +332,11 @@ export class JView extends JObj {
   nestedParent: JView | null = null;
   tag: unknown = null;
   keyedTags = new Map<number, unknown>();
-  outlineProvider: unknown = null;
+  outlineProvider: unknown = undefined;
+  clipToOutline = false;
+  outline: JOutline | null = null;
+  outlineDirty = true;
+  outlineW = -1; outlineH = -1;
   stateListAnimator: unknown = null;
   keyboardCluster = false;
   touchBlocksFocus = false;
@@ -690,6 +695,15 @@ export async function drawView(v: JView, cv: JCanvas, parent?: JViewGroup) {
     // asking for one: ShapeableImageView draws its mask with a DST_OUT paint that must erase
     // the image and nothing underneath it.
     const w = v.width(), h = v.height();
+    if (v.clipToOutline && v.outlineProvider !== null) {
+      const outline = v.outline ??= new JOutline();
+      if (v.outlineDirty || v.outlineW !== w || v.outlineH !== h) {
+        v.outlineDirty = false; v.outlineW = w; v.outlineH = h;
+        outline.kind = 0; outline.path = null; outline.alpha = 1;
+        await guardCall(v.outlineProvider ?? bgOutline, M_getOutline, v, outline);
+      }
+      if (outline.kind) outline.trace(ctx);
+    }
     if (v.layerType && w > 0 && h > 0) await drawLayered(v, cv, w, h);
     else {
       ctx.beginPath();
@@ -1000,7 +1014,7 @@ const viewMethods: NativeSpec["methods"] = {
   "postInvalidateOnAnimation(IIII)V": function () { invalidate(); },
   "postInvalidateDelayed(J)V": function (ms: bigint) { setTimeout(invalidate, Number(ms)); },
   "postInvalidateDelayed(JIIII)V": function (ms: bigint) { setTimeout(invalidate, Number(ms)); },
-  "invalidateDrawable(Landroid/graphics/drawable/Drawable;)V": function () { invalidate(); },
+  "invalidateDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JView) { this.outlineDirty = true; invalidate(this); },
   // AOSP posts these on the attached window's handler, i.e. the main looper. Going straight
   // to setTimeout skipped the main-looper queue, so a posted Runnable could interleave with a
   // layout or a Handler dispatch at every await -- the check-then-act race class that gave us
@@ -1077,8 +1091,10 @@ const viewMethods: NativeSpec["methods"] = {
   "setTouchscreenBlocksFocus(Z)V": function (this: JView, v: number) { this.touchBlocksFocus = !!v; },
   "getTouchscreenBlocksFocus()Z": function (this: JView) { return this.touchBlocksFocus ? 1 : 0; },
   "isKeyboardNavigationCluster()Z": function (this: JView) { return this.keyboardCluster ? 1 : 0; },
-  "setOutlineProvider(Landroid/view/ViewOutlineProvider;)V": function (this: JView, p: unknown) { this.outlineProvider = p; },
-  "getOutlineProvider()Landroid/view/ViewOutlineProvider;": function (this: JView) { return this.outlineProvider ?? bgOutline; },
+  "setOutlineProvider(Landroid/view/ViewOutlineProvider;)V": function (this: JView, p: unknown) { this.outlineProvider = p; this.outlineDirty = true; invalidate(this); },
+  "getOutlineProvider()Landroid/view/ViewOutlineProvider;": function (this: JView) { return this.outlineProvider === undefined ? bgOutline : this.outlineProvider; },
+  "setClipToOutline(Z)V": function (this: JView, clip: number) { this.clipToOutline = !!clip; invalidate(this); },
+  "getClipToOutline()Z": function (this: JView) { return this.clipToOutline ? 1 : 0; },
   "setPointerIcon(Landroid/view/PointerIcon;)V": function (this: JView, icon: JPointerIcon | null) { this.pointerIcon = icon; },
   "getPointerIcon()Landroid/view/PointerIcon;": function (this: JView) { return this.pointerIcon; },
   "onResolvePointerIcon(Landroid/view/MotionEvent;I)Landroid/view/PointerIcon;": function (this: JView) { return this.pointerIcon; },
@@ -1363,7 +1379,7 @@ const viewMethods: NativeSpec["methods"] = {
   "setTransitionVisibility(I)V": function (this: JView, v: number) { this.visibility = v; invalidate(); },
   "getClipBounds()Landroid/graphics/Rect;": function (this: JView) { return this.clipBounds; },
   "setClipBounds(Landroid/graphics/Rect;)V": function (this: JView, r: JRect | null) { this.clipBounds = r; invalidate(); },
-  "invalidateOutline()V": () => { invalidate(); },
+  "invalidateOutline()V": function (this: JView) { this.outlineDirty = true; invalidate(this); },
   "getBackgroundTintList()Landroid/content/res/ColorStateList;": function (this: JView) { return this.bgTint; },
   "setBackgroundTintList(Landroid/content/res/ColorStateList;)V": function (this: JView, csl: JColorStateList | null) {
     this.bgTint = csl;
@@ -1420,7 +1436,7 @@ const viewMethods: NativeSpec["methods"] = {
     "setSoundEffectsEnabled(Z)V", "setImportantForAccessibility(I)V", "setAccessibilityLiveRegion(I)V",
     "onInitializeAccessibilityNodeInfo(Landroid/view/accessibility/AccessibilityNodeInfo;)V",
     "onInitializeAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V", "setLabelFor(I)V",
-    "destroyDrawingCache()V", "buildDrawingCache()V", "setClipToOutline(Z)V", "setTransitionName(Ljava/lang/String;)V",
+    "destroyDrawingCache()V", "buildDrawingCache()V", "setTransitionName(Ljava/lang/String;)V",
     "setForegroundGravity(I)V", "sendAccessibilityEvent(I)V", "announceForAccessibility(Ljava/lang/CharSequence;)V",
     "setVerticalScrollBarEnabled(Z)V", "setHorizontalScrollBarEnabled(Z)V",
     "setScrollBarStyle(I)V", "setScrollContainer(Z)V", "setImportantForAutofill(I)V",
@@ -1450,7 +1466,7 @@ const viewMethods: NativeSpec["methods"] = {
     "dispatchGenericMotionEvent(Landroid/view/MotionEvent;)Z",
     "dispatchPopulateAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)Z",
     "isAccessibilityHeading()Z", "isScreenReaderFocusable()Z", "isInLayout()Z", "getMeasuredState()I",
-    "getRotationX()F", "getRotationY()F", "getClipToOutline()Z", "isHovered()Z", "isAccessibilityFocused()Z",
+    "getRotationX()F", "getRotationY()F", "isHovered()Z", "isAccessibilityFocused()Z",
     "isDuplicateParentStateEnabled()Z", "getAccessibilityLiveRegion()I", "getVerticalFadingEdgeLength()I",
     "awakenScrollBars()Z", "getWindowSystemUiVisibility()I", "onHoverEvent(Landroid/view/MotionEvent;)Z",
     "dispatchHoverEvent(Landroid/view/MotionEvent;)Z", "onDragEvent(Landroid/view/DragEvent;)Z",
@@ -2240,15 +2256,23 @@ rt.markers("android/view/ViewParent", "android/view/ViewManager");
 // apps `implements` this to watch a ViewGroup's addView/removeView traffic
 rt.markers("android/view/ViewGroup$OnHierarchyChangeListener");
 const GET_OUTLINE_DESC = "(Landroid/view/View;Landroid/graphics/Outline;)V";
+const M_getOutline = mangleMethod("getOutline", GET_OUTLINE_DESC);
 class JViewOutlineProvider extends JObj {}
 function mkOutlineProvider(fill: (view: JView, outline: unknown) => unknown): JViewOutlineProvider {
   const o = new JViewOutlineProvider();
   (o as unknown as Record<string, unknown>)[mangleMethod("getOutline", GET_OUTLINE_DESC)] = fill;
   return o;
 }
-// AOSP's default provider for every View: no background-outline shape is modeled here, so this
-// always takes the plain-bounds-rect fallback AOSP itself uses when the background can't supply one.
-const bgOutline = mkOutlineProvider((view, outline) => vcall(outline, "setRect", "(IIII)V", 0, 0, view.width(), view.height()));
+const bgOutline = mkOutlineProvider(async (view, outline) => {
+  const thread = curThread;
+  if (view.background) {
+    await vcallOn(thread, view.background, "setBounds", "(IIII)V", 0, 0, view.width(), view.height());
+    await vcallOn(thread, view.background, "getOutline", "(Landroid/graphics/Outline;)V", outline);
+  } else {
+    await vcallOn(thread, outline, "setRect", "(IIII)V", 0, 0, view.width(), view.height());
+    await vcallOn(thread, outline, "setAlpha", "(F)V", 0);
+  }
+});
 rt.register({
   name: "android/view/ViewOutlineProvider", ctor: JViewOutlineProvider,
   methods: {
@@ -2258,10 +2282,8 @@ rt.register({
   },
   statics: {
     BACKGROUND: bgOutline,
-    ALPHA: mkOutlineProvider(async (view, outline) => {
-      await vcall(outline, "setRect", "(IIII)V", 0, 0, view.width(), view.height());
-      await vcall(outline, "setAlpha", "(F)V", 1);
-    }),
+    BOUNDS: mkOutlineProvider((view, outline) => vcall(outline, "setRect", "(IIII)V", 0, 0, view.width(), view.height())),
+    PADDED_BOUNDS: mkOutlineProvider((view, outline) => vcall(outline, "setRect", "(IIII)V", view.padL, view.padT, view.width() - view.padR, view.height() - view.padB)),
   },
 });
 class JDisplay extends JObj {}
