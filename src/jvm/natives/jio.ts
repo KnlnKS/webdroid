@@ -239,7 +239,10 @@ const inputStreamMethods: NativeSpec["methods"] = {
   },
   "available()I": function (this: JInputStream) { return (this.source?.size ?? this.buf.length) - this.pos; },
   "skip(J)J": function (this: JInputStream, n: bigint) {
-    const k = Math.min(Number(n), (this.source?.size ?? this.buf.length) - this.pos);
+    if (n <= 0n) return 0n;
+    const ownRead = (JInputStream.prototype as unknown as Record<string, unknown>)[readBII];
+    if ((this as unknown as Record<string, unknown>)[readBII] !== ownRead) return skipThroughRead(this, n);
+    const k = Math.min(Number(n), Math.max(0, (this.source?.size ?? this.buf.length) - this.pos));
     this.pos += k;
     return BigInt(k);
   },
@@ -250,6 +253,17 @@ const inputStreamMethods: NativeSpec["methods"] = {
 };
 const readI = mangleMethod("read", "()I"), readBII = mangleMethod("read", "([BII)I");
 const writeBII = mangleMethod("write", "([BII)V");
+async function skipThroughRead(stream: JInputStream, count: bigint): Promise<bigint> {
+  const scratch = new Int8Array(Number(count < 2048n ? count : 2048n));
+  let remaining = count;
+  while (remaining > 0n) {
+    const length = Number(remaining < BigInt(scratch.length) ? remaining : BigInt(scratch.length));
+    const read = await vcall(stream, "read", "([BII)I", scratch, 0, length) as number;
+    if (read <= 0) break;
+    remaining -= BigInt(read);
+  }
+  return count - remaining;
+}
 // the DataInput/DataOutput primitives, big-endian as the JDK reads and writes them
 type Get = (v: DataView) => unknown;
 type Put = (v: DataView, x: never) => void;

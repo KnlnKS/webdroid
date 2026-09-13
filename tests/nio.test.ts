@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { newObj, vcall } from "../src/jvm/natives/jlang";
-import { vfs } from "../src/jvm/natives/jio";
+import { JInputStream, vfs } from "../src/jvm/natives/jio";
 import { mangleMethod } from "../src/jvm/abi";
 
 const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => (rt.link(cls).ctor as any)[mangleMethod(name, desc)](...args);
@@ -22,6 +22,25 @@ test("heap ByteBuffers expose their backing array and slice offset", async () =>
   expect(await vcall(readOnly, "hasArray", "()Z")).toBe(0);
   const direct = await scall("java/nio/ByteBuffer", "allocateDirect", "(I)Ljava/nio/ByteBuffer;", 4);
   expect(await vcall(direct, "hasArray", "()Z")).toBe(0);
+});
+
+test("InputStream.skip reads through a bytecode-style subclass", async () => {
+  class ChunkStream extends JInputStream {
+    offset = 0;
+    readonly data = Int8Array.from([1, 2, 3, 4, 5]);
+    [mangleMethod("read", "([BII)I")](out: Int8Array, off: number, len: number) {
+      if (this.offset === this.data.length) return -1;
+      const count = Math.min(len, this.data.length - this.offset);
+      out.set(this.data.subarray(this.offset, this.offset + count), off);
+      this.offset += count;
+      return count;
+    }
+  }
+  const stream = new ChunkStream();
+  expect(await vcall(stream, "skip", "(J)J", 3n)).toBe(3n);
+  expect(stream.offset).toBe(3);
+  expect(await vcall(stream, "skip", "(J)J", 10n)).toBe(2n);
+  expect(await vcall(stream, "skip", "(J)J", -1n)).toBe(0n);
 });
 
 test("FileChannel.read fills a ByteBuffer from streams and random-access files", async () => {
