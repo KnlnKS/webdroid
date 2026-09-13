@@ -1820,3 +1820,23 @@ constructor. Register the actual class. CompoundButton omitted Checkable, so Map
 property binder rejected CHECKED on AppCompatRadioButton. Focused class-identity and tint
 checks pass. Canvas.drawPicture previously discarded recordings; replay its display list
 inside saved state and apply destination translation/scaling, following AOSP Canvas.java.
+
+### Maps XML, parcels and telemetry
+
+SAX uses the existing XML pull parser's DOM parse and emits namespace, element and text
+callbacks through suspendable Java dispatch. The Android 35 probe reports factory namespace
+awareness false but an unconfigured reader true; explicit configuration overrides that.
+A Chrome probe parsed an SVG namespace, path attribute and `A&amp;B` text through asynchronous
+callbacks. InputSource stream/reader inputs work; system-id-only fetch is not implemented.
+
+ClipData uses Android 15's field order, including nested Intent/IntentSender/Uri slots;
+Intent no longer rejects all non-null ClipData on read. Plain TextUtils CharSequence parcels
+and PersistableBundle parcel entry points use canonical owners. Spanned-text parcel payloads
+remain explicitly unsupported. A nested-intent round trip consumes the entire Parcel.
+StatsEvent encodes real little-endian typed fields, annotations and error masks. StatsLog
+has no statsd socket and drops fire-and-forget telemetry, as Android's service-absent path
+allows; it does not report a fabricated upload. Cronet previously threw constructing StatsEvent.
+
+References: Android 15 [ClipData](https://android.googlesource.com/platform/frameworks/base/+/android-15.0.0_r1/core/java/android/content/ClipData.java),
+[TextUtils](https://android.googlesource.com/platform/frameworks/base/+/android-15.0.0_r1/core/java/android/text/TextUtils.java),
+and API 35 [StatsEvent](https://android.googlesource.com/platform/prebuilts/fullsdk/sources/+/refs/heads/androidx-metrics-release/android-35/android/util/StatsEvent.java).
