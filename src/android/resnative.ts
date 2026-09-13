@@ -562,6 +562,14 @@ rt.register({
       if (!v) return null;
       return loadDrawableRV(this.res, v, this.theme);
     },
+    "getFont(I)Landroid/graphics/Typeface;": async function (this: JTypedArray, i: number) {
+      const value = this.vals[i];
+      if (!value) return null;
+      const id = value.t === TV.REFERENCE ? value.d : value.r ?? 0;
+      const font = id ? await fontResource(this.res, id) : null;
+      if (!font) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Font resource at index " + i);
+      return font;
+    },
     "getType(I)I": function (this: JTypedArray, i: number) {
       const v = this.vals[i];
       if (!v) return 0;
