@@ -10,6 +10,7 @@ import { gl as current, tables as T, put } from "../android/gl";
 import { yieldToLoop } from "./cpu";
 import { perf } from "../perf";
 import { rewriteTextureSwizzles, visibleUniforms, type SwizzleRewrite, type VisibleUniforms } from "./swizzle";
+import { activateEglCurrent } from "./egl-current";
 const dec = new TextDecoder();
 export let gles3Procs: Record<string, HostFn> = {};
 export const glProbe = !!(globalThis as { __wdGlProbe?: boolean }).__wdGlProbe;
@@ -621,8 +622,9 @@ export function gles3Init(): void {
     glClientWaitSync: async (_c, a) => {
       const s = H(T().syncs, a.i()); const flags = a.i(), until = performance.now() + Number(a.ul()) / 1e6;
       if (!s) return 0x911d;                                                    // WAIT_FAILED
-      let r = g().clientWaitSync(s, flags, 0);
-      while (r === 0x911b && performance.now() < until) { await yieldToLoop(); r = g().clientWaitSync(s, 0, 0); }
+      const context = g();
+      let r = context.clientWaitSync(s, flags, 0);
+      while (r === 0x911b && performance.now() < until) { await yieldToLoop(); r = context.clientWaitSync(s, 0, 0); }
       return r;
     },
     glGetSynciv: (_c, a) => { const s = H(T().syncs, a.i()); const pn = a.i(); a.i(); const lenp = a.p(); if (lenp) mem.st32(lenp, 1); out(s && g().getSyncParameter(s, pn), a.p(), st32, 4); },
@@ -674,6 +676,7 @@ export function gles3Init(): void {
     const set = method(`uniformMatrix${m}fv`);
     G[`glUniformMatrix${m}fv`] = (_c, a) => { const u = U(a.i()), cnt = a.i(), t = !!(a.i() & 255), p = a.p(); if (u) set().call(g(), u, t, f32(p, cnt * e)); };
   }
+  for (const [name, fn] of Object.entries(G)) G[name] = (cpu, args) => { activateEglCurrent(cpu); return fn(cpu, args); };
   // the probe: after each entry point, count and name a GL error
   if (glProbe) for (const [k, f] of Object.entries(G)) {
     if (k === "glGetError") continue;

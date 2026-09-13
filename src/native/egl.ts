@@ -5,11 +5,11 @@
 
 import { mem } from "./mem";
 import { hostLib, lookupHost, defineHost, probed, cstr, type HostFn } from "./host";
-import { EglContext, glSurfaces, eglConfigAttrib, type GlSurface } from "../android/glview";
-import { setGL } from "../android/gl";
+import { EglContext, eglConfigAttrib, type GlSurface } from "../android/glview";
 import { windowOf } from "./libandroid";
 import { gles1Procs } from "./gles1";
 import { gles3Procs } from "./gles3";
+import { activateEglCurrent, bindEglCurrent, boundEglCurrent } from "./egl-current";
 
 const EGL_SUCCESS = 0x3000, EGL_BAD_ALLOC = 0x3003, EGL_BAD_CONTEXT = 0x3006, EGL_BAD_MATCH = 0x3009, EGL_BAD_NATIVE_WINDOW = 0x300b, EGL_BAD_SURFACE = 0x300d;
 let err = EGL_SUCCESS;
@@ -27,7 +27,7 @@ export function eglInit(): void {
   const E: Record<string, HostFn> = {
     eglGetDisplay: () => 1, eglGetPlatformDisplay: () => 1,
     eglInitialize: (_c, a) => { a.i(); const ma = a.p(), mi = a.p(); if (ma) mem.st32(ma, 1); if (mi) mem.st32(mi, 5); return 1; },
-    eglTerminate: () => 1, eglReleaseThread: () => 1,
+    eglTerminate: () => 1, eglReleaseThread: (cpu) => { bindEglCurrent(cpu, null); return 1; },
     eglGetError: () => { const e = err; err = EGL_SUCCESS; return e; },
     eglBindAPI: () => 1, eglQueryAPI: () => 0x30a0,
     eglQueryString: (_c, a) => {
@@ -51,7 +51,13 @@ export function eglInit(): void {
       const c = new EglContext(share); c.major = major;
       return handle(contexts, c);
     },
-    eglDestroyContext: (_c, a) => { a.i(); const h = a.i(); if (!contexts[h]) { err = EGL_BAD_CONTEXT; return 0; } contexts[h] = null; return 1; },
+    eglDestroyContext: (cpu, a) => {
+      a.i(); const h = a.i(), context = contexts[h];
+      if (!context) { err = EGL_BAD_CONTEXT; return 0; }
+      if (boundEglCurrent(cpu) === context) bindEglCurrent(cpu, null);
+      contexts[h] = null;
+      return 1;
+    },
     eglCreateWindowSurface: (_c, a) => { a.i(); a.i(); const s = windowOf(a.p()); if (!s) { err = EGL_BAD_NATIVE_WINDOW; return 0; } return handle(surfaces, s); },
     eglCreatePbufferSurface: (_c, a) => {
       a.i(); a.i(); const at = attrs(a.p());
@@ -78,14 +84,17 @@ export function eglInit(): void {
       mem.st32(out, attr === 0x3028 ? 1 : attr === 0x3098 ? c.major : attr === 0x3097 ? 0x30a0 : attr === 0x3086 ? 0x3038 : 0);
       return 1;
     },
-    eglMakeCurrent: (_c, a) => {
-      a.i(); const draw = surfaces[a.i()]; a.i(); const c = contexts[a.i()];
-      if (!c) { glSurfaces.current = null; setGL(null); return 1; }
+    eglMakeCurrent: (cpu, a) => {
+      a.i(); const draw = surfaces[a.i()]; a.i(); const contextHandle = a.i();
+      if (!contextHandle) { bindEglCurrent(cpu, null); return 1; }
+      const c = contexts[contextHandle];
+      if (!c) { err = EGL_BAD_CONTEXT; return 0; }
       if (!c.makeCurrent(draw ?? null)) { err = EGL_BAD_ALLOC; return 0; }
+      bindEglCurrent(cpu, c);
       return 1;
     },
-    eglSwapBuffers: (_c, a) => {
-      a.i(); const s = surfaces[a.i()], c = glSurfaces.current;
+    eglSwapBuffers: (cpu, a) => {
+      a.i(); const s = surfaces[a.i()], c = activateEglCurrent(cpu);
       if (!s || !c || c.target !== s) { err = EGL_BAD_SURFACE; return 0; }
       return c.swap().then(() => 1);
     },
@@ -95,9 +104,9 @@ export function eglInit(): void {
       s.presentationTimeNanos = time;
       return 1;
     },
-    eglGetCurrentContext: () => { const c = glSurfaces.current; return c ? Math.max(0, contexts.indexOf(c)) : 0; },
+    eglGetCurrentContext: (cpu) => { const c = boundEglCurrent(cpu); return c ? Math.max(0, contexts.indexOf(c)) : 0; },
     eglGetCurrentDisplay: () => 1,
-    eglGetCurrentSurface: () => { const s = glSurfaces.current?.target; return s ? Math.max(0, surfaces.indexOf(s)) : 0; },
+    eglGetCurrentSurface: (cpu) => { const s = boundEglCurrent(cpu)?.target; return s ? Math.max(0, surfaces.indexOf(s)) : 0; },
     eglWaitGL: () => 1, eglWaitNative: () => 1, eglWaitClient: () => 1,
     eglCopyBuffers: () => { err = EGL_BAD_ALLOC; return 0; },
     eglBindTexImage: () => 0, eglReleaseTexImage: () => 0,
@@ -108,7 +117,7 @@ export function eglInit(): void {
       const one = Object.hasOwn(gles1Procs, n) ? gles1Procs[n] : undefined;
       const two = Object.hasOwn(gles3Procs, n) ? gles3Procs[n] : undefined;
       // Proc addresses survive context switches; overlapping ES1/ES3 names dispatch at call time.
-      if (one && two) p = defineHost(n, (cpu, args) => (glSurfaces.current?.major === 1 ? one : two)(cpu, args));
+      if (one && two) p = defineHost(n, (cpu, args) => (activateEglCurrent(cpu)?.major === 1 ? one : two)(cpu, args));
       else p = lookupHost(n, one ? "libGLESv1_CM.so" : two ? "libGLESv2.so" : "libEGL.so");
       if (p !== undefined) { procs.set(n, p); return p; }
       probed.add("eglGetProcAddress!" + n); return 0;

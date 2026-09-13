@@ -11,6 +11,7 @@ import type { Cpu } from "./cpu";
 import { glCommon, glProbe } from "./gles3";
 import { gl } from "../android/gl";
 import { perf } from "../perf";
+import { activateEglCurrent } from "./egl-current";
 
 type GL = WebGL2RenderingContext | WebGLRenderingContext;
 export function gles1String(context: GL, name: number): string | null {
@@ -265,6 +266,7 @@ export function gles1Init(): void {
   const noCtx = () => { calledMissing.add("gles1:call without a current context"); };
   /** wrap: current-context guard + optional getError probe */
   const W = (name: string, fn: (c: Ctx, a: ArgReader, cpu: Cpu) => HostRet): HostFn => (cpu, a) => {
+    activateEglCurrent(cpu);
     const c = cur();
     if (!c) { noCtx(); return 0; }
     const r = fn(c, a, cpu);
