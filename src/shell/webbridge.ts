@@ -1,6 +1,8 @@
 import type { WebCookies } from "./webcookies";
 
 export type WebInterfaces = Record<string, Record<string, (...args: unknown[]) => Promise<unknown>>>;
+export type WebRequest = { url: string; method: string; main: boolean; headers: Record<string, string> };
+export type WebResponse = { body: string; status: number; reason: string; headers: Record<string, string> };
 
 let frameOrigin: Promise<string> | null = null;
 export class WebBridge {
@@ -9,7 +11,7 @@ export class WebBridge {
   private socket: WebSocket;
   private queue = Promise.resolve();
 
-  constructor(ifaces: WebInterfaces, cookies: Promise<WebCookies>, documentURL: () => string | null) {
+  constructor(ifaces: WebInterfaces, cookies: Promise<WebCookies>, documentURL: () => string | null, intercept?: (request: WebRequest) => Promise<WebResponse | null>) {
     const url = new URL("/webview-socket", location.href);
     url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
     url.searchParams.set("id", this.id);
@@ -37,7 +39,13 @@ export class WebBridge {
           const call: unknown = JSON.parse(body);
           if (!call || typeof call !== "object" || !("kind" in call)) throw new Error("Invalid bridge call");
           if (call.kind === "describe") reply = { value: Object.fromEntries(Object.entries(ifaces).map(([name, methods]) => [name, Object.keys(methods)])) };
-          else if (call.kind === "cookie") {
+          else if (call.kind === "request") {
+            if (!("url" in call) || typeof call.url !== "string" || !("method" in call) || typeof call.method !== "string"
+              || !("main" in call) || typeof call.main !== "boolean" || !("headers" in call) || !call.headers || typeof call.headers !== "object") throw new Error("Invalid WebView request");
+            const headers: Record<string, string> = {};
+            for (const [key, value] of Object.entries(call.headers)) if (typeof value === "string") headers[key] = value;
+            reply = { value: await intercept?.({ url: call.url, method: call.method, main: call.main, headers }) ?? null };
+          } else if (call.kind === "cookie") {
             const jar = await cookies, url = documentURL() ?? "";
             reply = { value: "value" in call && typeof call.value === "string" ? jar.set(url, call.value, false) : jar.get(url, false) };
           } else {
@@ -47,7 +55,7 @@ export class WebBridge {
             const value = await methods[call.method](...call.args);
             reply = value === undefined ? { void: true } : { value };
           }
-        } catch { reply = { error: "JavaScript interface invocation failed" }; }
+        } catch (error) { console.warn("[webview bridge]", error); reply = { error: "JavaScript interface invocation failed" }; }
         if (socket.readyState === WebSocket.OPEN) socket.send(seq + "\n" + JSON.stringify(reply));
       });
     };

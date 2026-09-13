@@ -26,6 +26,16 @@ export class JContext extends JObj {
   declare $host: AppHost;
   packageLoader: JClassLoader | null = null;
 }
+class JDisplayContext extends JContext { display: unknown = null; }
+function contextForDisplay(source: JContext, display: unknown, windowType?: number) {
+  if (display == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Display must not be null");
+  const context: JDisplayContext = rt.make("webdroid/DisplayContext");
+  context.$host = source.$host; context.packageLoader = source.packageLoader; context.display = display;
+  if (windowType === undefined) return context;
+  const window: JWindowContext = rt.make("android/window/WindowContext");
+  window.base = context; window.$host = context.$host; window.packageLoader = context.packageLoader; window.windowType = windowType;
+  return window;
+}
 const packageContexts = new Map<string, Promise<JContext>>();
 
 // system service singletons (created lazily per name)
@@ -214,6 +224,11 @@ export const contextMethods: NativeSpec["methods"] = {
     if (this === this.$host.application) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Context is not associated with a display");
     return display();
   },
+  "createDisplayContext(Landroid/view/Display;)Landroid/content/Context;": function (this: JContext, display: unknown) { return contextForDisplay(this, display); },
+  "createWindowContext(Landroid/view/Display;ILandroid/os/Bundle;)Landroid/content/Context;": function (this: JContext, display: unknown, type: number) { return contextForDisplay(this, display, type); },
+  "createWindowContext(ILandroid/os/Bundle;)Landroid/content/Context;": async function (this: JContext, type: number) {
+    return contextForDisplay(this, await vcall(this, "getDisplay", "()Landroid/view/Display;"), type);
+  },
   "getApplicationInfo()Landroid/content/pm/ApplicationInfo;": function (this: JContext) {
     return this.$host === appHost ? getAppInfo(this.$host) : vcall(getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", this.$host.pkg, 128);
   },
@@ -226,7 +241,7 @@ export const contextMethods: NativeSpec["methods"] = {
   },
   "getSystemService(Ljava/lang/Class;)Ljava/lang/Object;": function (this: JContext, cls: any) {
     const n = cls?.ci?.name ?? "";
-    return systemService(this, SERVICE_NAME.get(n) ?? n.split("/").pop() ?? "");
+    return vcall(this, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", SERVICE_NAME.get(n) ?? n.split("/").pop() ?? "");
   },
   "getSystemServiceName(Ljava/lang/Class;)Ljava/lang/String;": (cls: { ci?: { name?: string } } | null) => {
     const name = cls?.ci?.name ?? "";
@@ -381,6 +396,18 @@ function configurationContext(source: JContext, config: JConfiguration): JContex
   context.$host = Object.assign(Object.create(source.$host), { res: jresources.host, jresources, theme });
   return context;
 }
+class JWindowContext extends JContextWrapper { windowType = 0; windowManager: unknown = null; }
+rt.register({ name: "webdroid/DisplayContext", ctor: JDisplayContext, sup: "android/content/Context", methods: {
+  "getDisplay()Landroid/view/Display;": function (this: JDisplayContext) { return this.display; },
+  "isUiContext()Z": () => 0,
+} });
+rt.register({ name: "android/window/WindowContext", ctor: JWindowContext, sup: "android/content/ContextWrapper", methods: {
+  "getDisplay()Landroid/view/Display;": function (this: JWindowContext) { return vcall(this.base, "getDisplay", "()Landroid/view/Display;"); },
+  "isUiContext()Z": () => 1,
+  "getSystemService(Ljava/lang/String;)Ljava/lang/Object;": function (this: JWindowContext, name: string) {
+    return name === "window" ? this.windowManager ??= rt.make("android/view/WindowManagerImpl") : systemService(this, name);
+  },
+} });
 function attachBase(this: JContextWrapper, base: JContext) {
   this.base = base;
   if (base) this.$host = base.$host;

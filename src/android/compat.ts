@@ -621,7 +621,7 @@ rt.register({
       "onDoubleTapEvent(Landroid/view/MotionEvent;)Z"),
   },
 });
-rt.markers("android/view/GestureDetector$OnGestureListener", "android/view/GestureDetector$OnDoubleTapListener");
+rt.markers("android/view/GestureDetector$OnGestureListener", "android/view/GestureDetector$OnDoubleTapListener", "android/view/ScaleGestureDetector$OnScaleGestureListener");
 
 class JScaleGestureDetector extends JObj {
   listener: unknown = null;

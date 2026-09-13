@@ -1767,13 +1767,13 @@ const vgMethods: NativeSpec["methods"] = {
     const c = this.children[i];
     if (c) await detachView(this, c);
   },
-  "removeAllViews()V": function (this: JViewGroup) { removeRange(this, 0, this.children.length, true); },
-  "removeAllViewsInLayout()V": function (this: JViewGroup) { removeRange(this, 0, this.children.length, false); },
+  "removeAllViews()V": function (this: JViewGroup) { return removeRange(this, 0, this.children.length, true); },
+  "removeAllViewsInLayout()V": function (this: JViewGroup) { return removeRange(this, 0, this.children.length, false); },
   "getChildCount()I": function (this: JViewGroup) { return this.children.length; },
   "getChildAt(I)Landroid/view/View;": function (this: JViewGroup, i: number) { return this.children[i] ?? null; },
   "indexOfChild(Landroid/view/View;)I": function (this: JViewGroup, c: JView) { return this.children.indexOf(c); },
-  "removeViews(II)V": function (this: JViewGroup, start: number, n: number) { removeRange(this, start, n, true); },
-  "removeViewsInLayout(II)V": function (this: JViewGroup, start: number, n: number) { removeRange(this, start, n, false); },
+  "removeViews(II)V": function (this: JViewGroup, start: number, n: number) { return removeRange(this, start, n, true); },
+  "removeViewsInLayout(II)V": function (this: JViewGroup, start: number, n: number) { return removeRange(this, start, n, false); },
   "detachViewFromParent(I)V": function (this: JViewGroup, i: number) {
     const c = this.children[i];
     if (c) unlinkChild(this, c);

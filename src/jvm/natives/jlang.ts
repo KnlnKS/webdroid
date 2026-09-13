@@ -479,6 +479,7 @@ for (const [sup, names] of [
     "NegativeArraySizeException ArrayStoreException SecurityException IllegalMonitorStateException java/util/NoSuchElementException " +
     "java/util/ConcurrentModificationException"],
   ["ReflectiveOperationException", "ClassNotFoundException NoSuchMethodException NoSuchFieldException InstantiationException IllegalAccessException"],
+  ["IllegalArgumentException", "IllegalThreadStateException"],
   ["Error", "StackOverflowError OutOfMemoryError AssertionError LinkageError InternalError"],
   ["LinkageError", "NoClassDefFoundError NoSuchMethodError NoSuchFieldError UnsatisfiedLinkError AbstractMethodError ExceptionInInitializerError"],
   ["java/io/IOException", "java/io/FileNotFoundException java/io/EOFException java/io/UnsupportedEncodingException java/net/SocketException " +
@@ -555,14 +556,15 @@ sm("equals(Ljava/lang/Object;)Z", function (o: unknown) { return (this as string
 sm("equalsIgnoreCase(Ljava/lang/String;)Z", function (o: string | null) {
   return o !== null && this.toLowerCase() === o.toLowerCase() ? 1 : 0;
 });
-sm("compareTo(Ljava/lang/String;)I", function (o: string) {
-  const n = Math.min(this.length, o.length);
+export function stringCompare(a: string, b: string): number {
+  const n = Math.min(a.length, b.length);
   for (let i = 0; i < n; i++) {
-    const d = this.charCodeAt(i) - o.charCodeAt(i);
+    const d = a.charCodeAt(i) - b.charCodeAt(i);
     if (d) return d;
   }
-  return this.length - o.length;
-});
+  return a.length - b.length;
+}
+sm("compareTo(Ljava/lang/String;)I", function (o: string) { return stringCompare(this as string, o); });
 const COMPARE_TO_STRING = mangleMethod("compareTo", "(Ljava/lang/String;)I");
 sm("compareTo(Ljava/lang/Object;)I", function (o: string) { return (this as any)[COMPARE_TO_STRING](o); });
 sm("compareToIgnoreCase(Ljava/lang/String;)I", function (o: string) {
@@ -1046,6 +1048,8 @@ rt.register({
     "static lowestOneBit(J)J": (v: bigint) => v & -v,
     "static numberOfLeadingZeros(J)I": nlz64,
     "static toString(JI)Ljava/lang/String;": (v: bigint, radix: number) => v.toString(radix),
+    "static toUnsignedString(J)Ljava/lang/String;": (v: bigint) => BigInt.asUintN(64, v).toString(),
+    "static toUnsignedString(JI)Ljava/lang/String;": (v: bigint, radix: number) => BigInt.asUintN(64, v).toString(radix >= 2 && radix <= 36 ? radix : 10),
     "static compareUnsigned(JJ)I": (a: bigint, b: bigint) => { const x = BigInt.asUintN(64, a), y = BigInt.asUintN(64, b); return x < y ? -1 : x > y ? 1 : 0; },
     "static divideUnsigned(JJ)J": (a: bigint, b: bigint) => BigInt.asIntN(64, BigInt.asUintN(64, a) / BigInt.asUintN(64, b)),
     "static remainderUnsigned(JJ)J": (a: bigint, b: bigint) => BigInt.asIntN(64, BigInt.asUintN(64, a) % BigInt.asUintN(64, b)),
@@ -1098,6 +1102,7 @@ rt.register({
     "static intBitsToFloat(I)F": intBitsToFloat,
     "static isNaN(F)Z": isNaNZ,
     "static isInfinite(F)Z": isInfZ,
+    "static isFinite(F)Z": (v: number) => Number.isFinite(v) ? 1 : 0,
     "static compare(FF)I": cmpFloat,
     "static toString(F)Ljava/lang/String;": fmtFloat,
     "isNaN()Z": function (this: JFloat) { return isNaNZ(this.v); },
@@ -1117,6 +1122,7 @@ rt.register({
     "static longBitsToDouble(J)D": longBitsToDouble,
     "static isNaN(D)Z": isNaNZ,
     "static isInfinite(D)Z": isInfZ,
+    "static isFinite(D)Z": (v: number) => Number.isFinite(v) ? 1 : 0,
     "static compare(DD)I": cmpFloat,
     "static hashCode(D)I": (v: number) => { const b = doubleToLongBits(v); return Number(BigInt.asIntN(32, b ^ (b >> 32n))); },
     "static toString(D)Ljava/lang/String;": fmtDouble,
@@ -1197,6 +1203,8 @@ rt.register({
     "static toString(C)Ljava/lang/String;": (v: number) => String.fromCharCode(v),
     "static isDigit(C)Z": (c: number) => (c >= 48 && c <= 57 ? 1 : 0),
     "static isDigit(I)Z": (c: number) => (/\p{Nd}/u.test(String.fromCodePoint(c)) ? 1 : 0),
+    ...Object.fromEntries(["C", "I"].map(type => [`static isJavaIdentifierPart(${type})Z`, (c: number) =>
+      c >= 0 && c <= 0x10ffff && /[\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mc}\p{Mn}\p{Cf}\x00-\x08\x0e-\x1b\x7f-\x9f]/u.test(String.fromCodePoint(c)) ? 1 : 0])),
     ...Object.fromEntries(([["isLetter", /\p{L}/u], ["isLetterOrDigit", /[\p{L}\p{Nd}]/u], ["isWhitespace", /\s/], ["isSpaceChar", /\s/]] as const).flatMap(([n, re]) => {
       const test = (c: number) => (re.test(String.fromCodePoint(c)) ? 1 : 0);
       return [[`static ${n}(C)Z`, test], [`static ${n}(I)Z`, test]];
@@ -1399,7 +1407,11 @@ export const threadExit = { hook: null as ((t: JThread) => void) | null };
 export class JThread extends JObj {
   jname = "Thread";
   daemon = 0;
-  alive = 0;
+  private live = 0;
+  started = false;
+  parked = 0;
+  get alive() { return this.live; }
+  set alive(value: number) { this.live = value; if (value) this.started = true; }
   prio = 5;
   target: unknown = null;   // Runnable
   locals = inheritedLocals();
@@ -1448,21 +1460,24 @@ export function park(t: JThread, arm: (wake: () => void) => () => void, timeoutM
   const ie = () => rt.mkThrowable("java/lang/InterruptedException", null);
   if (t.interrupted) { t.interrupted = 0; return Promise.reject(ie()); }
   return new Promise<boolean>((resolve, reject) => {
+    t.parked = timeoutMs === undefined ? 3 : 4;
     let id: ReturnType<typeof setTimeout> | undefined;
-    const disarm = arm(() => { t.wake = null; unparkTimeout(id); resolve(true); });
+    const disarm = arm(() => { t.parked = 0; t.wake = null; unparkTimeout(id); resolve(true); });
     // a delay past 2^31-1 ms overflows setTimeout and fires at once; treat it as untimed
-    if (timeoutMs !== undefined && timeoutMs < 0x7fffffff) id = parkTimeout(() => { disarm(); t.wake = null; resolve(false); }, timeoutMs);
-    t.wake = () => { disarm(); t.wake = null; unparkTimeout(id); t.interrupted = 0; reject(ie()); };
+    if (timeoutMs !== undefined && timeoutMs < 0x7fffffff) id = parkTimeout(() => { disarm(); t.parked = 0; t.wake = null; resolve(false); }, timeoutMs);
+    t.wake = () => { disarm(); t.parked = 0; t.wake = null; unparkTimeout(id); t.interrupted = 0; reject(ie()); };
   });
 }
 
 function join(t: JThread, ms: number): Promise<void> | undefined {
   const done = t.done;
-  if (!done || ms <= 0) return done ?? undefined;
-  return new Promise((resolve) => {
-    const id = parkTimeout(resolve, ms);
-    void done.then(() => { unparkTimeout(id); resolve(); });
-  });
+  if (ms < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout");
+  if (!done || !t.alive) return;
+  return park(curThread, (wake) => {
+    let pending = true;
+    void done.then(() => { if (pending) wake(); });
+    return () => { pending = false; };
+  }, ms > 0 ? ms : undefined).then(() => {});
 }
 
 
@@ -1484,10 +1499,15 @@ rt.register({
     "setPriority(I)V": function (this: JThread, p: number) { this.prio = p; },
     "getPriority()I": function (this: JThread) { return this.prio; },
     "isAlive()Z": function (this: JThread) { return this.alive; },
+    "getState()Ljava/lang/Thread$State;": function (this: JThread) {
+      rt.link("java/lang/Thread$State");
+      return threadStates[!this.started ? 0 : !this.alive ? 5 : rt.monitors.isBlocked(this) ? 2 : this.parked || 1];
+    },
     "getId()J": function (this: JThread) { return BigInt(idHash(this)); },
     "isInterrupted()Z": function (this: JThread) { return this.interrupted; },
     "interrupt()V": function (this: JThread) { this.interrupted = 1; this.wake?.(); },
     "start()V": function (this: JThread) {
+      if (this.started) throw rt.mkThrowable("java/lang/IllegalThreadStateException", "Thread already started");
       this.alive = 1;
       liveThreads.add(this);
       // the body begins now, not after the caller's whole main-looper job: a thread that
@@ -1505,7 +1525,7 @@ rt.register({
     "run()V": async function (this: JThread) {
       if (this.target) await vcall(this.target, "run", "()V");
     },
-    "join()V": function (this: JThread) { return this.done ?? undefined; },
+    "join()V": function (this: JThread) { return join(this, 0); },
     "join(J)V": function (this: JThread, ms: bigint) { return join(this, Number(ms)); },
     "join(JI)V": function (this: JThread, ms: bigint, ns: number) { return join(this, Number(ms) + (ns > 0 ? 1 : 0)); },
     "getThreadGroup()Ljava/lang/ThreadGroup;": () => mainGroup,
@@ -1619,7 +1639,8 @@ rt.register({
   },
 });
 function enumCmp(this: JEnum, o: JEnum) { return this.ord - o.ord; }
-function enumValueOf<T extends JEnum>(values: T[], name: string): T {
+export function enumValueOf<T extends JEnum>(values: T[], name: string): T {
+  if (name === null) throw rt.mkThrowable("java/lang/NullPointerException", "Name is null");
   const v = values.find((e) => e.ename === name);
   if (!v) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No enum constant " + name);
   return v;
@@ -1647,7 +1668,7 @@ export function mkEnumSet(cls: string, names: string[], extra: NativeSpec["metho
 }
 
 rt.markers("java/lang/Thread$UncaughtExceptionHandler");
-mkEnumSet("java/lang/Thread$State", ["NEW", "RUNNABLE", "BLOCKED", "WAITING", "TIMED_WAITING", "TERMINATED"]);
+const threadStates = mkEnumSet("java/lang/Thread$State", ["NEW", "RUNNABLE", "BLOCKED", "WAITING", "TIMED_WAITING", "TERMINATED"]);
 
 // java.lang.Character.UnicodeScript. Java's constant names ARE Unicode's script names, and the
 // regex engine already carries the table, so `of()` is a property test rather than a range list.

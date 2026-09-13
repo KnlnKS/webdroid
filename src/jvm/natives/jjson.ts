@@ -210,6 +210,75 @@ async function initFromMap(object: JJSONObject, map: unknown): Promise<void> {
 /** the JSON text of a stored tree; a long that reached storage unboxed (a Map's boxed values) prints its digits */
 const jsonText64 = (v: unknown, indent?: number): string =>
   JSON.stringify(v, (_k, x) => typeof x === "bigint" ? `\u0000${x}\u0000` : x, indent).replace(/"\\u0000(-?\d+)\\u0000"/g, "$1");
+const jsonQuote = (text: string) => JSON.stringify(text).replaceAll("/", "\\/");
+type JSONScope = "emptyArray" | "array" | "emptyObject" | "object" | "key";
+class JJSONStringer extends JObj {
+  out = "";
+  stack: JSONScope[] = [];
+  nesting(): never { throw rt.mkThrowable("org/json/JSONException", "Nesting problem"); }
+  beforeValue() {
+    const i = this.stack.length - 1, scope = this.stack[i];
+    if (scope === "emptyArray") this.stack[i] = "array";
+    else if (scope === "array") this.out += ",";
+    else if (scope === "key") { this.out += ":"; this.stack[i] = "object"; }
+    else if (scope !== undefined) this.nesting();
+  }
+  open(object: boolean) {
+    if (!this.stack.length && this.out) this.nesting();
+    this.beforeValue(); this.stack.push(object ? "emptyObject" : "emptyArray"); this.out += object ? "{" : "[";
+    return this;
+  }
+  close(object: boolean) {
+    const scope = this.stack.at(-1);
+    if (object ? scope !== "emptyObject" && scope !== "object" : scope !== "emptyArray" && scope !== "array") this.nesting();
+    this.stack.pop(); this.out += object ? "}" : "]"; return this;
+  }
+  key(name: string | null) {
+    if (name == null) throw rt.mkThrowable("org/json/JSONException", "Names must be non-null");
+    const scope = this.stack.at(-1);
+    if (scope !== "emptyObject" && scope !== "object") this.nesting();
+    if (scope === "object") this.out += ",";
+    this.stack[this.stack.length - 1] = "key"; this.out += jsonQuote(name); return this;
+  }
+  value(value: unknown): this | Promise<this> {
+    if (!this.stack.length) this.nesting();
+    if (value instanceof JJSONObject) {
+      this.open(true);
+      return (async () => {
+        for (const [key, item] of Object.entries(value.o)) { this.key(key); await this.value(jsonWrap(item)); }
+        return this.close(true);
+      })();
+    }
+    if (value instanceof JJSONArray) {
+      this.open(false);
+      return (async () => {
+        for (const item of value.a) await this.value(jsonWrap(item));
+        return this.close(false);
+      })();
+    }
+    this.beforeValue();
+    const unwrapped = jsonUnwrap(value);
+    if (typeof unwrapped === "number" && !Number.isFinite(unwrapped)) throw rt.mkThrowable("org/json/JSONException", "Forbidden numeric value: " + unwrapped);
+    if (unwrapped == null || typeof unwrapped === "boolean" || typeof unwrapped === "number" || typeof unwrapped === "bigint")
+      this.out += Object.is(unwrapped, -0) ? "-0" : String(unwrapped ?? null);
+    else if (typeof unwrapped === "string") this.out += jsonQuote(unwrapped);
+    else return vcall(value, "toString", "()Ljava/lang/String;").then(text => { this.out += jsonQuote(text); return this; });
+    return this;
+  }
+}
+rt.register({ name: "org/json/JSONStringer", ctor: JJSONStringer, methods: {
+  "<init>()V": function () {},
+  "object()Lorg/json/JSONStringer;": function (this: JJSONStringer) { return this.open(true); },
+  "endObject()Lorg/json/JSONStringer;": function (this: JJSONStringer) { return this.close(true); },
+  "array()Lorg/json/JSONStringer;": function (this: JJSONStringer) { return this.open(false); },
+  "endArray()Lorg/json/JSONStringer;": function (this: JJSONStringer) { return this.close(false); },
+  "key(Ljava/lang/String;)Lorg/json/JSONStringer;": JJSONStringer.prototype.key,
+  "value(Ljava/lang/Object;)Lorg/json/JSONStringer;": JJSONStringer.prototype.value,
+  "value(J)Lorg/json/JSONStringer;": JJSONStringer.prototype.value,
+  "value(D)Lorg/json/JSONStringer;": JJSONStringer.prototype.value,
+  "value(Z)Lorg/json/JSONStringer;": function (this: JJSONStringer, value: number) { return this.value(!!value); },
+  "toString()Ljava/lang/String;": function (this: JJSONStringer) { return this.out || null; },
+} });
 rt.register({
   name: "org/json/JSONObject", ctor: JJSONObject,
   statics: { NULL: null },
@@ -224,7 +293,7 @@ rt.register({
       for (const k of names) if (k in src.o) this.o[k] = src.o[k];
     },
     "<init>(Ljava/util/Map;)V": function (this: JJSONObject, map: unknown) { return initFromMap(this, map); },
-    "static quote(Ljava/lang/String;)Ljava/lang/String;": (s: string | null) => JSON.stringify(s ?? "").replaceAll("/", "\\/"),
+    "static quote(Ljava/lang/String;)Ljava/lang/String;": (s: string | null) => jsonQuote(s ?? ""),
     "static wrap(Ljava/lang/Object;)Ljava/lang/Object;": publicWrap,
     "put(Ljava/lang/String;Ljava/lang/Object;)Lorg/json/JSONObject;": function (this: JJSONObject, k: string, v: unknown) {
       this.o[k] = jsonUnwrap(v);

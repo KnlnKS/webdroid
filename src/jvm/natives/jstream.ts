@@ -39,6 +39,7 @@ rt.register({
 });
 rt.register({
   name: "java/util/stream/Stream", ctor: JStream,
+  ifaces: ["java/util/stream/BaseStream"],
   methods: {
     "filter(Ljava/util/function/Predicate;)Ljava/util/stream/Stream;": async function (this: JStream, p: unknown) {
       const out: unknown[] = [];
@@ -73,6 +74,7 @@ rt.register({
     },
   },
 });
+rt.register({ name: "java/util/stream/BaseStream", ctor: class extends JObj {}, ifaces: ["java/lang/AutoCloseable"] });
 rt.register({ name: "java/util/stream/Collector", ctor: JCollector,
   methods: {
     "static of(Ljava/util/function/Supplier;Ljava/util/function/BiConsumer;Ljava/util/function/BinaryOperator;Ljava/util/function/Function;[Ljava/util/stream/Collector$Characteristics;)Ljava/util/stream/Collector;":

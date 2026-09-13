@@ -54,15 +54,16 @@ addEventListener("message", event => {
     send({kind: "evaluated", seq: event.data.seq, value});
   } else if (event.data.kind === "stop") window.stop();
 });
+send({kind: "script-ready"});
 })()</script>`;
 
-export const WEB_FRAME = `<!doctype html><script>(function(){
+export const WEB_FRAME = `<!doctype html><meta charset="utf-8"><script>(function(){
 const id = new URL(location.href).searchParams.get("__wd_bridge");
 addEventListener("message", async event => {
   if (!event.isTrusted || event.source !== parent || event.data?.bridge !== id || event.data.kind !== "load" || !event.ports[0]) return;
   try {
     const port = event.ports[0], send = port.postMessage.bind(port), service = navigator.serviceWorker;
-    const context = {id, page: new URL(location.href).searchParams.get("__wd_url"), agent: event.data.userAgent};
+    const context = {id, page: new URL(location.href).searchParams.get("__wd_url"), agent: event.data.userAgent, intercept: new URL(location.href).searchParams.get("__wd_intercept") === "1"};
     const stop = Event.prototype.stopImmediatePropagation;
     const controller = Object.getOwnPropertyDescriptor(ServiceWorkerContainer.prototype, "controller").get.bind(service);
     service.addEventListener("message", event => {
@@ -104,7 +105,7 @@ function message(client, data) {
 }
 async function context(client) {
   const url = new URL(client.url), config = url.searchParams;
-  if (config.has("__wd_bridge")) return {id: config.get("__wd_bridge"), page: config.get("__wd_url"), agent: config.get("__wd_ua")};
+  if (config.has("__wd_bridge")) return {id: config.get("__wd_bridge"), page: config.get("__wd_url"), agent: config.get("__wd_ua"), intercept: config.get("__wd_intercept") === "1"};
   if (url.pathname === "/proxy" && config.get("frame") === "1") return {page: config.get("url")};
   const key = client.id + client.url;
   let value = contexts.get(key);
@@ -122,7 +123,7 @@ self.addEventListener("fetch", event => {
   event.respondWith((async () => {
     const client = await self.clients.get(event.clientId);
     if (!client) return fetch(request);
-    const {page, agent, id} = await context(client), isolated = !!id;
+    const {page, agent, id, intercept} = await context(client), isolated = !!id;
     const headers = new Headers();
     request.headers.forEach((value, name) => headers.set(name.startsWith("x-wd-") ? name : "x-wd-" + name, value));
     if (agent) headers.set("x-wd-user-agent", agent);
@@ -144,7 +145,7 @@ self.addEventListener("fetch", event => {
       if (isolated && (frame || request.destination === "script") && !request.integrity) {
         headers.delete("x-wd-if-none-match"); headers.delete("x-wd-if-modified-since");
       }
-      const response = await fetch("/proxy?manual=1&url=" + encodeURIComponent(target) + (frame ? "&frame=1" : "") + (isolated && !request.integrity && /^https?:/.test(page) ? "&webview=1" : ""), { method, headers, body, credentials: "omit" });
+      const response = await fetch("/proxy?manual=1&url=" + encodeURIComponent(target) + (frame ? "&frame=1" : "") + (isolated && intercept && !redirects ? "&bridge=" + encodeURIComponent(id) : "") + (isolated && !request.integrity && /^https?:/.test(page) ? "&webview=1" : ""), { method, headers, body, credentials: "omit" });
       const values = response.headers.get("x-wd-set-cookie");
       if (include && values) await message(client, {kind: "webcookies", url: target, values: JSON.parse(values)});
       const status = Number(response.headers.get("x-wd-status") || response.status), location = response.headers.get("location");

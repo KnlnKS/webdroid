@@ -4,7 +4,7 @@ import {
   type JColorStateList, mkCsl, type JDrawable, loadColorStateList, loadDrawableRV, cslColor, loadDrawable,
   drawChild
 } from "./drawable";
-import { JTextPaint, JEditable, spannedString, mkStaticLayout } from "./text";
+import { JTextPaint, JEditable, JSpanned, spannedString, mkStaticLayout, drawStyledText } from "./text";
 import { G, gravityV, gravityH } from "./gravity";
 import { device } from "../shell/config";
 import {
@@ -67,7 +67,7 @@ export class JTextView extends JView {
   linksClickable = true; fontVariation: string | null = null;
   maxW = Infinity;
   /** getLayout's StaticLayout and the inputs it was built from */
-  layoutObj: unknown = null;
+  layoutObj: ReturnType<typeof mkStaticLayout> | null = null;
   layoutText = ""; layoutW = NaN; layoutFont = ""; layoutMax = NaN; layoutLS = NaN; layoutMult = NaN; layoutExtra = NaN;
   text = "";
   rawText: unknown = "";       // original CharSequence (may be Spannable)
@@ -121,12 +121,13 @@ export class JTextView extends JView {
     return this.upper;
   }
   lineHeight(): number {
-    return Math.round((fontDescent(this.paintT) - fontAscent(this.paintT)) * this.lineSpacingMult + this.lineSpacingExtra);
+    const height = Math.round(fontDescent(this.paintT)) - Math.round(fontAscent(this.paintT));
+    return Math.round(height * this.lineSpacingMult + this.lineSpacingExtra);
   }
   /** includeFontPadding (AOSP's default): the first line's box starts at the font's `top` and the
    *  last one's ends at its `bottom`, so a line box is taller than ascent..descent at both ends. */
-  topPad(): number { return this.includePad ? Math.round(fontAscent(this.paintT) - fontTop(this.paintT)) : 0; }
-  bottomPad(): number { return this.includePad ? Math.round(fontBottom(this.paintT) - fontDescent(this.paintT)) : 0; }
+  topPad(): number { return this.includePad ? Math.round(fontAscent(this.paintT)) - Math.floor(fontTop(this.paintT)) : 0; }
+  bottomPad(): number { return this.includePad ? Math.ceil(fontBottom(this.paintT)) - Math.round(fontDescent(this.paintT)) : 0; }
   textHeight(lines: number): number { return lines * this.lineHeight() + this.topPad() + this.bottomPad(); }
   ascent(): number { return Math.round(-fontAscent(this.paintT)) + this.topPad(); }
   /** line breaking of `text` at `avail`: a pure function of its arguments, the paint and the
@@ -362,6 +363,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setText(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V": async function (this: JTextView, cs: unknown) {
     this.rawText = cs;
+    invalidate(this);
     const t = spannedString(cs);
     if (t !== this.text) {
       this.text = t;
@@ -558,6 +560,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       this.layoutLS = p.letterSpacingEm; this.layoutMult = this.lineSpacingMult; this.layoutExtra = this.lineSpacingExtra;
       this.layoutObj = mkStaticLayout(text, p, w, this.lineSpacingMult, this.lineSpacingExtra, Number.isFinite(this.maxLinesV) ? this.maxLinesV : undefined);
     }
+    if (this.layoutObj) this.layoutObj.src = this.rawText;
     return this.layoutObj;
   },
   "getLineBounds(ILandroid/graphics/Rect;)I": function (this: JTextView, i: number, r: JRect) {
@@ -623,7 +626,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     this.measuredH = resolveSizeAndState(h, hSpec);
     this.layoutWidthFor = w;
   },
-  "onDraw(Landroid/graphics/Canvas;)V": function (this: JTextView, cv: JCanvas) {
+  "onDraw(Landroid/graphics/Canvas;)V": async function (this: JTextView, cv: JCanvas) {
     const ctx = cv.ctx;
     const display = this.displayText();
     const showHint = !display && this.hint;
@@ -661,7 +664,8 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     let y = (vg === 16 ? (this.height() - this.padT - this.padB - totalH) / 2 + this.padT
       : vg === 80 ? this.height() - this.padB - totalH : this.padT) + this.ascent();
     ctx.font = this.paintT.font();
-    ctx.fillStyle = cssColor(showHint ? cslColor(this.hintColors, this.drawableState()) : cslColor(this.colors, this.drawableState()));
+    const color = showHint ? cslColor(this.hintColors, this.drawableState()) : cslColor(this.colors, this.drawableState());
+    ctx.fillStyle = cssColor(color);
     ctx.shadowBlur = this.shadowRadius;
     ctx.shadowOffsetX = this.shadowDx;
     ctx.shadowOffsetY = this.shadowDy;
@@ -670,10 +674,17 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const hg = gravityH(this.gravityT);
     ctx.textAlign = hg === 1 ? "center" : hg === 5 ? "right" : "left";
     const x = hg === 1 ? (contentL + contentR) / 2 : hg === 5 ? contentR : contentL;
+    const styledSource = !showHint && this.rawText instanceof JSpanned && this.rawText.spans.length ? this.rawText : null;
+    let offset = 0;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       cv.recordText(line, x, y, this.paintT.textSize, hg === 1 ? 1 : hg === 5 ? 2 : 0);
-      ctx.fillText(line, x, y);
+      const start = styledSource ? display.indexOf(line, offset) : -1;
+      const styled = styledSource && start >= 0 && drawStyledText(styledSource, line, start, cv, this.paintT,
+        hg === 1 ? x - widths[i] / 2 : hg === 5 ? x - widths[i] : x, y, color);
+      if (styled) await styled;
+      else ctx.fillText(line, x, y);
+      offset = Math.max(offset, start + line.length);
       if (this.paintT.strikeThru && line) {
         const w = widths[i];
         const sx = hg === 1 ? x - w / 2 : hg === 5 ? x - w : x;

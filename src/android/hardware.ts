@@ -1,7 +1,7 @@
 // android.hardware: Sensor value classes and the listener interface apps implement.
 // SensorManager itself is a Context system service and lives with the others in app.ts.
 
-import { rt, JObj, stubs, fieldGetters, fieldSetters } from "../jvm/runtime";
+import { rt, JObj, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newArrayList } from "../jvm/natives/jutil";
 
@@ -22,6 +22,30 @@ rt.register({
   },
 });
 rt.markers("android/hardware/camera2/CameraCharacteristics", "android/hardware/camera2/CaptureResult");
+rt.register({ name: "android/hardware/camera2/CameraDevice$StateCallback", ctor: class extends JObj {},
+  statics: { ERROR_CAMERA_IN_USE: 1, ERROR_MAX_CAMERAS_IN_USE: 2, ERROR_CAMERA_DISABLED: 3, ERROR_CAMERA_DEVICE: 4, ERROR_CAMERA_SERVICE: 5 },
+  methods: noops("<init>()V", "onClosed(Landroid/hardware/camera2/CameraDevice;)V"),
+});
+rt.register({ name: "android/hardware/camera2/CameraCaptureSession$StateCallback", ctor: class extends JObj {}, methods: noops(
+  "<init>()V",
+  "onReady(Landroid/hardware/camera2/CameraCaptureSession;)V",
+  "onActive(Landroid/hardware/camera2/CameraCaptureSession;)V",
+  "onCaptureQueueEmpty(Landroid/hardware/camera2/CameraCaptureSession;)V",
+  "onClosed(Landroid/hardware/camera2/CameraCaptureSession;)V",
+  "onSurfacePrepared(Landroid/hardware/camera2/CameraCaptureSession;Landroid/view/Surface;)V",
+) });
+rt.register({ name: "android/hardware/camera2/CameraCaptureSession$CaptureCallback", ctor: class extends JObj {}, methods: noops(
+  "<init>()V",
+  "onCaptureStarted(Landroid/hardware/camera2/CameraCaptureSession;Landroid/hardware/camera2/CaptureRequest;JJ)V",
+  "onReadoutStarted(Landroid/hardware/camera2/CameraCaptureSession;Landroid/hardware/camera2/CaptureRequest;JJ)V",
+  "onCapturePartial(Landroid/hardware/camera2/CameraCaptureSession;Landroid/hardware/camera2/CaptureRequest;Landroid/hardware/camera2/CaptureResult;)V",
+  "onCaptureProgressed(Landroid/hardware/camera2/CameraCaptureSession;Landroid/hardware/camera2/CaptureRequest;Landroid/hardware/camera2/CaptureResult;)V",
+  "onCaptureCompleted(Landroid/hardware/camera2/CameraCaptureSession;Landroid/hardware/camera2/CaptureRequest;Landroid/hardware/camera2/TotalCaptureResult;)V",
+  "onCaptureFailed(Landroid/hardware/camera2/CameraCaptureSession;Landroid/hardware/camera2/CaptureRequest;Landroid/hardware/camera2/CaptureFailure;)V",
+  "onCaptureSequenceCompleted(Landroid/hardware/camera2/CameraCaptureSession;IJ)V",
+  "onCaptureSequenceAborted(Landroid/hardware/camera2/CameraCaptureSession;I)V",
+  "onCaptureBufferLost(Landroid/hardware/camera2/CameraCaptureSession;Landroid/hardware/camera2/CaptureRequest;Landroid/view/Surface;J)V",
+) });
 rt.register({ name: "android/hardware/HardwareBuffer", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable", "java/lang/AutoCloseable"] });
 
 class JSensor extends JObj { type = 0; sname = ""; vendor = ""; maxRange = 0; resolution = 0; minDelay = 0; }

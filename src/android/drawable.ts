@@ -6,7 +6,7 @@ import { mangleMethod, jmethod, intBitsToFloat } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf } from "./graphics";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
-import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, rvInt, rvString, normRV, xmlParserAtNode } from "./res";
+import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, rvInt, rvString, normRV, resolveStyleValue, xmlParserAtNode } from "./res";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 
 export const ST = {
@@ -1252,7 +1252,7 @@ async function itemDrawable(res: Resources, node: XmlNode, theme: JTheme | null)
   return node.children.length ? inflateDrawableNode(res, node.children[0], theme) : null;
 }
 export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme | null): Promise<JDrawable> {
-  const get = (id: number) => nodeAttr(res, node, id);
+  const get = (id: number, from = node) => resolveStyleValue(res, theme, nodeAttr(res, from, id));
   const colorOf = (v: RV | null, d = 0) => {
     if (v && v.t === TV.ATTRIBUTE) v = theme?.lookup(v.d) ?? null;
     if (v && v.t === TV.REFERENCE) {
@@ -1267,7 +1267,7 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
       const d = new JGradientDrawable();
       d.shape = rvColor(res, get(AT.shape), 0) & 3;
       for (const c of node.children) {
-        const cg = (id: number) => nodeAttr(res, c, id);
+        const cg = (id: number) => get(id, c);
         if (c.name === "solid") d.solid = colorOf(cg(AT.color), 0);
         else if (c.name === "corners") {
           const r = rvDimen(res, cg(AT.radius), -1);
@@ -1334,13 +1334,13 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
           d.pushLayer({
             d: child,
             insets: [
-              rvDimen(res, nodeAttr(res, c, AT.left), 0),
-              rvDimen(res, nodeAttr(res, c, AT.top), 0),
-              rvDimen(res, nodeAttr(res, c, AT.right), 0),
-              rvDimen(res, nodeAttr(res, c, AT.bottom), 0),
+              rvDimen(res, get(AT.left, c), 0),
+              rvDimen(res, get(AT.top, c), 0),
+              rvDimen(res, get(AT.right, c), 0),
+              rvDimen(res, get(AT.bottom, c), 0),
             ],
-            w: rvDimen(res, nodeAttr(res, c, AT.width), -1),
-            h: rvDimen(res, nodeAttr(res, c, AT.height), -1),
+            w: rvDimen(res, get(AT.width, c), -1),
+            h: rvDimen(res, get(AT.height, c), -1),
             gravity: nodeAttr(res, c, AT.gravity)?.d,
           });
           const idv = nodeAttr(res, c, AT.id);

@@ -45,25 +45,15 @@ function sfntStyle(b: Uint8Array, ttcIndex = 0): { weight: number; italic: boole
   return { weight: t.dv.getUint16(off + 4), italic: (t.dv.getUint16(off + 62) & 1) !== 0 };
 }
 
-/**
- * The four vertical metrics AOSP reports for a face, as fractions of the em.
- *
- * Paint.ascent/descent are the face's **hhea** ascender/descender; FontMetrics top/bottom are
- * the **OS/2 win** metrics. A browser hands back the win metrics for both, which is why
- * graphics.ts pins Roboto's by hand — every other loaded face needs the same treatment or its
- * line boxes come out as much as 12% too tall.
- */
+/** AOSP uses face ascenders for line spacing and glyph bounds for font padding. */
 function sfntMetrics(b: Uint8Array, ttcIndex = 0): { ascent: number; descent: number; top: number; bottom: number } | null {
   const t = sfntTables(b, ttcIndex);
-  const head = t?.at.get(T_HEAD), hhea = t?.at.get(T_HHEA), os2 = t?.at.get(T_OS2);
-  if (!t || head === undefined || hhea === undefined) return null;
+  const head = t?.at.get(T_HEAD), hhea = t?.at.get(T_HHEA);
+  if (!t || head === undefined || hhea === undefined || head + 44 > b.length || hhea + 8 > b.length) return null;
   const upem = t.dv.getUint16(head + 18);
   if (!upem) return null;
   const asc = t.dv.getInt16(hhea + 4) / upem, desc = -t.dv.getInt16(hhea + 6) / upem;
-  const win = os2 !== undefined && os2 + 78 <= b.length
-    ? { top: t.dv.getUint16(os2 + 74) / upem, bottom: t.dv.getUint16(os2 + 76) / upem }
-    : { top: asc, bottom: desc };
-  return { ascent: asc, descent: desc, top: Math.max(win.top, asc), bottom: Math.max(win.bottom, desc) };
+  return { ascent: asc, descent: desc, top: t.dv.getInt16(head + 42) / upem, bottom: -t.dv.getInt16(head + 38) / upem };
 }
 
 class JFontStyle extends JObj { weight = 400; slant = UPRIGHT; }
@@ -150,8 +140,7 @@ async function registerFace(f: JFont, family: string): Promise<void> {
   const src = b.byteOffset === 0 && b.byteLength === b.buffer.byteLength ? b.buffer : b.slice().buffer;
   const desc: FontFaceDescriptors & { variationSettings?: string } = { weight: String(f.style.weight), style: f.style.slant === ITALIC ? "italic" : "normal" };
   if (f.axes?.length) desc.variationSettings = f.axes.map((a) => `"${a.tag}" ${a.value}`).join(", ");
-  // Report the face's hhea metrics rather than the OS/2 win metrics the browser prefers, which
-  // is what Paint.ascent/descent mean on a device; the win pair stays as top/bottom.
+  // Keep browser line metrics aligned with Paint.ascent/descent.
   const vm = sfntMetrics(b, f.ttcIndex);
   if (vm) {
     desc.ascentOverride = `${vm.ascent * 100}%`;

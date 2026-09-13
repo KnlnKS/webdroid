@@ -1830,3 +1830,226 @@ rendered every step. The requested smoke-scored flows completed TikTok 13/13, Re
 YouTube 16/16; their per-step records contain no main-loop wedge or settle timeout. The run also
 reproduced previously documented diagnostics outside this task, including Lichess native-thread
 errors and Harmonic's unchanged final shimmer frame, without turning them into app-parity work.
+### 2026-09-13 — Twitch TV startup and guest playback
+
+The supplied `Twitch.xapk` is Android TV 13.0.0.2 (1100000018), with 2,360 DEX
+classes and ARM32 Sentry libraries. In the `codex/twitch-parity` worktree based on
+`f3fefda`, startup failed before the app's WebView was created. The later Kotlin
+`thermalNotificationHandler` error was a consequence of incomplete `onCreate`.
+
+- RemoteCallbackList was absent. Its implementation keys callbacks by Binder,
+  links death recipients, unlinks replacements, and snapshots broadcasts. The
+  same tests pass against the paired AOSP class, including concurrent registration
+  on separate Java threads. Rechecking after the suspending death link prevents
+  duplicate watches and resurrection after kill/death.
+- MediaSession and PlaybackState.Builder were the next startup gaps. Sessions
+  preserve token/controller identity and dispatch commands through the callback's
+  looper; replacement/release suppress pending callbacks. Playback builders create
+  independent snapshots and preserve long values. This does not implement the
+  whole media-session service or claim token/PlaybackState parcel transport.
+- WorkManager's ObjectInputStream read truncated short block data by one byte:
+  JavaScript evaluated the starting cursor before awaiting the length byte. Reading
+  the length first fixes the block boundary, including primitives spanning blocks.
+- Thread.getState now distinguishes lifecycle, monitor contention and timed or
+  untimed parking. Restarting a terminated thread throws IllegalThreadStateException.
+- PackageInfo.requestedPermissionsFlags now aligns each permission with the
+  canonical PackageManager grant state, and archive queries report ungranted flags.
+- Android Back did nothing inside the page: the APK's onBackPressed sends an
+  Escape KeyEvent to WebView, whose inherited key handler returned false. WebView
+  now forwards navigation key down/up events, retaining Java listener/client
+  interception. Renderer dispatch must not block the main queue: page handlers
+  can synchronously call Java through the bridge. Unhandled results return to the
+  WebViewClient asynchronously.
+- The isolated renderer boot document defaulted to Windows-1252 before replacing
+  its document. An inserted UTF-8 meta element could not repair the already chosen
+  encoding, so external script literals such as a category's bullet were garbled.
+  The boot document now declares UTF-8 before its script, and rewritten script
+  responses advertise UTF-8. A fresh browser reports UTF-8 and renders the bullet
+  correctly; previously decoded scripts can remain cached in an existing browser.
+
+Full Chrome reaches home, search, live video/chat, quality selection, chat hiding
+and QR activation with unchanged app/library bytecode. One observed live stream
+advanced at 1280×720 with no reported dropped video frames; this is functional
+evidence, not a controlled performance comparison. Main-realm Java missing/error
+lists were empty, as were missing lists in both background realms. The WebView
+console still reports an upstream service-worker origin restriction, so empty
+Java telemetry does not mean every browser operation succeeds. The page's Pause
+button has an empty mouse handler in shipped Twitch JavaScript; TV key behavior
+needs Android comparison before attributing it to the platform.
+
+Typecheck, 713 unit tests (20,909 assertions), and Twitch smoke compilation
+(zero method failures) pass. Reference screenshot parity remains pending. The
+isolated API 35 AVD boots but cannot install the ARM32 split. The official API 25
+ARM32 image reaches Android home with host GL, but QEMU CPU threads hang during
+installation, also with a confirmed single CPU. An old crash-consent dialog had
+blocked renderer retries; separate crash-report storage let boot proceed without
+uploading those reports. No visual goldens or APK contents were changed.
+Account-only flows require completing QR activation.
+
+
+Final regression check: serialized full E2E completed 134/134 steps across 11
+flows in 694.6 s; the identical suite against `f3fefda` on a separate port took
+689.3 s. Neither run reported queue wedges, capture failures, native-required
+entries or layout/draw errors. Every flow's missing-API set matched baseline.
+This does not establish full app functionality: TikTok remains on its splash in
+both builds (all five captures are pixel-identical below the status bar), with
+19 missing APIs and 114 versus 110 error-level logs. The extra distinct messages
+are parent/child lifecycle diagnostics. Lichess reproduces the same native
+pthread error types (35, 22, 3), with 57 versus 54 error logs. Flappy Bird remains
+slow at 28 versus 29 minimum FPS. These are unresolved baseline limitations.
+
+FitNotes and Mihon onboarding scores match baseline (41.54 and 17.56 content
+diff). Mihon app scores 57.82 versus 57.10: launch pixels differ only in the
+empty-state emoticon rectangle; the final Library capture also has 105 changed
+pixels in its selected navigation icon. Harmonic scores 30.00 versus 29.46;
+inspection shows updated vote/comment counts, a replaced story and shifted
+scroll position. Goldens remain unchanged. Single-run timing and live-content
+variation do not establish a performance improvement: aggregate duration is
+similar, while individual draw/boot counters vary. Per-step telemetry, both full
+reports, screenshots and performance rollups are retained under the ignored
+`twitch-investigation` artifact directory and the separate baseline worktree.
+
+A serialized Mihon-only repeat scored 58.09 (candidate) and 57.78 (baseline).
+The selected-icon region also changes within each unchanged build (76 and 35
+pixels respectively), reproducing that small capture variation without any code
+change. Both repeats complete 17 steps with no missing APIs or errors. Original
+full-suite outputs were restored after saving repeat artifacts separately.
+
+Final full-Chrome captures use `127.0.0.1:4106` as the shell origin, giving the
+isolated renderer a fresh cache namespace. The category heading renders its
+Unicode bullet correctly and Android Back returns to Home. The original Chrome
+origin retained previously decoded scripts despite a parent-page hard reload.
+
+## Twitch mobile 31.0.0 startup — 2026-09-13
+
+The replacement ARM64 bundle (3100006, three unchanged splits) installs on the
+isolated API 35 AVD, emulator-5586. The 58,282 classes smoke-compile with zero
+method failures. Android reaches welcome and web login. LoginActivity sets
+FLAG_SECURE, so adb screenshots are black; visible emulator-window captures
+provide the reference without changing app bytes or window flags.
+
+Mobile startup exposed missing CompletableFuture supplier/dependent operations,
+queue drainTo, emptyIterator, identifier classification, AtomicLongArray.lazySet,
+JSONStringer, unsigned long formatting, display/window contexts and process ABI
+fields. Undefined Build.CPU_ABI caused a downstream StringUtils null-check failure.
+Native-created iterators also lacked registered interface defaults: linking now
+copies those defaults, preserving concrete overrides. Focused tests cover these
+paths. Window contexts retain their associated display and own window manager;
+full display-area/token behavior remains outside the observed implementation.
+
+Subsequent startup needed WebSettings.getDefaultUserAgent, camera callback base
+classes, finite-number checks, File natural ordering, and TimeUnit enum values.
+Camera callbacks implement AOSP's empty defaults only; abstract app callbacks
+remain app-owned and camera capture is not claimed. A dalvikvm reference probe
+confirms java.beans.Transient and ConstructorProperties are absent on Android,
+while BaseStream and CaptureCallback exist. Optional MIUI referrer lookup can
+also appear; these probes do not establish missing Android platform behavior.
+
+Twitch login exposed two shared WebView bugs. Frame dimensions followed the
+browser's displayed phone size (475 CSS pixels here) instead of Android density
+(360 CSS pixels). Frames now lay out in density-independent pixels and scale
+through one ResizeObserver on their containing layer, avoiding per-frame layout
+reads. A Twitch-only browser check confirms 360x592 CSS layout before and after
+resizing the host viewport. Second, evaluateJavascript could send before the
+isolated renderer had an origin, throwing an invalid-target-origin browser
+exception. Evaluations now wait for renderer readiness and are cancelled with
+other outstanding evaluations when navigation destroys that renderer. Repeating
+startup/login removes that exception and leaves the main queue responsive.
+
+Full Chrome renders welcome, login, and signup (email and phone forms). Matching
+light appearance uses a temporary Chrome media emulation because macOS is dark and
+the AVD is light. Login sizing matches Android's logical geometry. A browser keyboard-map permission-policy error appears intermittently, including
+in the final dark-mode headless check. It is separate from Java diagnostics and
+does not prevent the tested native-portal login/Back interactions.
+Signed-in functionality awaits user authentication. The previous TV full-suite
+result does not validate these mobile changes. Artifacts are under
+`tests/e2e/actual/twitch-investigation/mobile-31/`.
+
+
+Welcome layout exposed missing ViewGroup.onViewAdded/onViewRemoved dispatch.
+ConstraintLayout's unchanged Barrier implementation had zero referenced widgets;
+dispatching virtual hierarchy callbacks before listeners gives it both buttons and
+the correct top direction. Mutations propagate suspended overrides, including
+in-layout and range removal, while default native hierarchy callbacks stay synchronous.
+SpannableStringBuilder now preserves appended span identities and offsets, and
+TextView/StaticLayout draw CharacterStyle runs through virtual updateDrawState.
+ForegroundColorSpan's color reaches Paint. A real browser bitmap probe verifies
+white highlighted glyphs and blue unstyled glyphs in both drawing paths. Full
+metric-affecting span measurement remains incomplete.
+
+The bundled Roobert font measured at 68 px on Android reports top=-79, ascent=-67,
+descent=14, bottom=18. An isolated instrumentation APK measured the unchanged font;
+its hhea ascender/descender are 966/-204, head yMax/yMin 1129/-251, unitsPerEm 975.
+The parser incorrectly used OS/2 win values for padded bounds, and browser-rounded
+ascenders compounded the error. Glyph bounds now supply padding; registered faces
+retain fractional metrics until Android integer rounding. Welcome rows now measure
+97 px and the final three-line block 259 px, matching AVD bounds exactly. Drawable
+XML dimensions now resolve resource/theme references before decoding; the APK's
+6 dp corner radius produces the reference's rounded buttons.
+
+A rendered login form was insufficient evidence: its Back button rejected with
+"Portals plugin is not implemented". The APK's l350 WebViewClient override serves
+bundled authentication HTML through shouldInterceptRequest, but the platform never
+called it. Isolated WebView requests now invoke the app's callback, preserving
+method, headers and main-frame identity; returned InputStreams and response metadata
+reach the existing document/script loader. Redirect callbacks follow Android's
+initial-request-only rule. Default clients avoid this callback transport. Intercepted
+bodies are currently buffered, not streamed. URLConnection.guessContentTypeFromName
+uses the shared MIME table and Android's filename/fragment/directory rules. Script
+evaluation now waits for the document's message listener, not just the outer
+renderer loader. The Twitch-only test verifies username entry/clearing, in-app Back,
+360x592 CSS dimensions through resizing, progressing frames and no observed
+uncaught/layout/draw failures or native-required entries. Raw error-level Java logs
+include SLF4J's three no-provider warnings, also observed in AVD logcat; the focused
+exception filter alone does not prove an empty raw log. Optional java.beans and
+MIUI probes remain. Full Chrome
+also exposes diagnostics in all four background Android process frames; each reports
+empty missing-API and native-required sets.
+
+The first final mobile E2E completed 134 steps in 11 flows and exposed a span
+regression: the new drawing path reached unimplemented StyleSpan and RelativeSizeSpan
+paint updates in FitNotes and TikTok. Their draw/measure callbacks now follow Android
+style composition, weight adjustment and relative sizing; three focused tests pass
+with ten assertions. Twitch also probes ScaleGestureDetector.OnScaleGestureListener,
+now linked as an interface; this does not claim a scale detector implementation.
+All 735 earlier unit tests pass (21,015 assertions), and typecheck passes after the
+span fixes. The repeated final serialized E2E completes all 134 steps across 11 flows in
+674.6 seconds. Missing-API sets match the starting commit, with no native-required
+entries, queue wedges, capture failures, or layout/draw errors. TikTok and Lichess
+retain their baseline limitations. Resy emits one unmatched Okio watchdog failure;
+a full baseline repeat, a baseline startup repeat, and a candidate startup repeat
+do not reproduce it. The isolated failure remains unresolved, not waived as a
+baseline issue. Its log and all repeat captures are retained.
+Flappy Bird's low FPS reproduces in a sequential repeat: baseline minimum 24 FPS,
+candidate 25 FPS, with nearly identical 18.96-second action totals. Original full
+captures are restored after retaining repeat artifacts separately.
+
+Final content-difference scores are FitNotes 41.12%, Mihon app 57.58%, Mihon
+onboarding 17.69%, and Harmonic 30.15% (baseline 41.54%, 57.10%, 17.56%, 29.46%).
+Mihon includes changing empty-state emoticons, and Harmonic uses live content;
+font-metric changes also affect text pixels. These scores do not prove pixel
+identity or complete compatibility. Goldens remain unchanged.
+
+Instrumented Chrome sessions reported 25,768 and 48,166 ms boot, compared with
+roughly 1.6 seconds in the focused headless run. A Chrome tab opened through the
+desktop UI reached welcome with 7,958 ms reported boot. Browser Use reported
+paused document loading during the slow reload. A short trace showed a visible,
+focused document with stalled ticks and a growing main queue; an earlier profile
+was mostly idle. Automation overhead is a candidate cause, not a controlled
+explanation or a code-level performance fix. Final ticks advance and queues drain.
+
+The ordinary Chrome launch also logged a caught `length()I is not a function`
+lookup. Login and Back work; tracing repeated navigation and a fresh dark-mode
+headless startup did not reproduce it. This remains an open compatibility finding.
+The final Chrome session uses the system dark appearance; matching light reference
+captures are retained from earlier verification. Temporary tracing was removed and
+the duplicate instrumented tabs were closed. Signed-in feed, search and playback
+remain unverified pending user authentication in Chrome and emulator-5586.
+
+A subsequent lookup investigation added temporary cold-runner tracing of method,
+DEX offset and receiver types. Fresh dark-mode startup, the persistent Chrome
+profile on port 4107, and a fresh browser seeded with the Twitch-only preferences
+from the affected port-4109 session did not reproduce the length lookup. The
+restored preferences also skip the optional MIUI probe, so that difference alone
+does not identify the failure. Temporary instrumentation was removed; diagnostic
+logs remain local under mobile-31. Authentication is still pending.
