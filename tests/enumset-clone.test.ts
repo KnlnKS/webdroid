@@ -16,3 +16,11 @@ test("EnumSet covariant clone has independent membership", async () => {
   expect(await vcall(source, "contains", "(Ljava/lang/Object;)Z", style)).toBe(1);
   expect(await vcall(copy, "isEmpty", "()Z")).toBe(1);
 });
+
+test("EnumSet fixed-arity factories retain every member", async () => {
+  const style = await vcall(await newObj("android/graphics/Paint"), "getStyle", "()Landroid/graphics/Paint$Style;");
+  const ctor = rt.link("java/util/EnumSet").ctor as any;
+  const set = await ctor[mangleMethod("of", "(Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;")](style, style, style, style);
+  expect(await vcall(set, "size", "()I")).toBe(1);
+  expect(await vcall(set, "contains", "(Ljava/lang/Object;)Z", style)).toBe(1);
+});

@@ -1038,6 +1038,8 @@ function enumSetStatics() {
     "static of(Ljava/lang/Enum;[Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, rest: unknown[]) => fromValues(null, false, [a, ...rest]),
     "static of(Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, b: unknown) => fromValues(null, false, [a, b]),
     "static of(Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, b: unknown, c: unknown) => fromValues(null, false, [a, b, c]),
+    "static of(Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, b: unknown, c: unknown, d: unknown) => fromValues(null, false, [a, b, c, d]),
+    "static of(Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, b: unknown, c: unknown, d: unknown, e: unknown) => fromValues(null, false, [a, b, c, d, e]),
     "static copyOf(Ljava/util/Collection;)Ljava/util/EnumSet;": async (c: JObj) => fromValues((c as JEnumSet).enumClass, false, await toJsArray(c)),
     "static complementOf(Ljava/util/EnumSet;)Ljava/util/EnumSet;": async (source: JEnumSet) => {
       const result = await fromValues(source.enumClass!, true, []);
