@@ -1167,6 +1167,8 @@ rt.register({
     "static toString(C)Ljava/lang/String;": (v: number) => String.fromCharCode(v),
     "static isDigit(C)Z": (c: number) => (c >= 48 && c <= 57 ? 1 : 0),
     "static isDigit(I)Z": (c: number) => (/\p{Nd}/u.test(String.fromCodePoint(c)) ? 1 : 0),
+    ...Object.fromEntries(["C", "I"].map(type => [`static isJavaIdentifierPart(${type})Z`, (c: number) =>
+      c >= 0 && c <= 0x10ffff && /[\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mc}\p{Mn}\p{Cf}\x00-\x08\x0e-\x1b\x7f-\x9f]/u.test(String.fromCodePoint(c)) ? 1 : 0])),
     ...Object.fromEntries(([["isLetter", /\p{L}/u], ["isLetterOrDigit", /[\p{L}\p{Nd}]/u], ["isWhitespace", /\s/], ["isSpaceChar", /\s/]] as const).flatMap(([n, re]) => {
       const test = (c: number) => (re.test(String.fromCodePoint(c)) ? 1 : 0);
       return [[`static ${n}(C)Z`, test], [`static ${n}(I)Z`, test]];

@@ -1,0 +1,52 @@
+import { expect, test } from "bun:test";
+import "../src/natives";
+import { JObj, rt } from "../src/jvm/runtime";
+import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newArrayList } from "../src/jvm/natives/jutil";
+
+class Destination extends JObj { values: unknown[] = []; }
+rt.register({ name: "test/DrainDestination", ctor: Destination, ifaces: ["java/util/Collection"], methods: {
+  "add(Ljava/lang/Object;)Z": function (this: Destination, value: unknown) {
+    if (value === "second") throw rt.mkThrowable("java/lang/IllegalArgumentException", "rejected");
+    this.values.push(value); return 1;
+  },
+} });
+rt.linkNatives();
+
+test("drainTo limits transfers and retains untransferred items after add throws", async () => {
+  const queue = await newObj("java/util/concurrent/LinkedBlockingQueue");
+  for (const value of ["first", "second", "third"]) await vcall(queue, "add", "(Ljava/lang/Object;)Z", value);
+  const destination = new Destination();
+  const error = await vcall(queue, "drainTo", "(Ljava/util/Collection;I)I", destination, 3).then(() => null, e => e);
+  expect(rt.iof(error, "java/lang/IllegalArgumentException")).toBeTruthy();
+  expect(destination.values).toEqual(["first"]);
+  const list = newArrayList();
+  expect(await vcall(queue, "drainTo", "(Ljava/util/Collection;I)I", list, 1)).toBe(1);
+  expect(list.a).toEqual(["second"]);
+  expect(await vcall(queue, "poll", "()Ljava/lang/Object;")).toBe("third");
+});
+
+test("emptyIterator has no elements and rejects removal without a preceding next", async () => {
+  const iterator = await vcall(rt.link("java/util/Collections").ctor, "emptyIterator", "()Ljava/util/Iterator;");
+  expect(await vcall(iterator, "hasNext", "()Z")).toBe(0);
+  const next = await vcall(iterator, "next", "()Ljava/lang/Object;").then(() => null, e => e);
+  expect(rt.iof(next, "java/util/NoSuchElementException")).toBeTruthy();
+  const remove = await vcall(iterator, "remove", "()V").then(() => null, e => e);
+  expect(rt.iof(remove, "java/lang/IllegalStateException")).toBeTruthy();
+});
+
+test("Java identifier parts include currency, combining marks and ignorable controls", async () => {
+  const character = rt.link("java/lang/Character").ctor;
+  for (const code of [65, 0x24, 0x301, 0x200c, 0, 0x1b, 0x203f, 0x2160, 0x10400])
+    expect(await vcall(character, "isJavaIdentifierPart", "(I)Z", code)).toBe(1);
+  for (const code of [-1, 0x110000, 0xd800, 9, 0x1c, 32, 0x1f600])
+    expect(await vcall(character, "isJavaIdentifierPart", "(I)Z", code)).toBe(0);
+});
+
+test("AtomicLongArray lazySet publishes full-width values and checks the index", async () => {
+  const array = await newObj("java/util/concurrent/atomic/AtomicLongArray", "(I)V", 1);
+  await vcall(array, "lazySet", "(IJ)V", 0, 9007199254740993n);
+  expect(await vcall(array, "get", "(I)J", 0)).toBe(9007199254740993n);
+  const error = await vcall(array, "lazySet", "(IJ)V", 1, 0n).then(() => null, e => e);
+  expect(rt.iof(error, "java/lang/IndexOutOfBoundsException")).toBeTruthy();
+});

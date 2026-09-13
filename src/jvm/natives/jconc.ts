@@ -119,12 +119,17 @@ rt.register({
   },
 });
 class JAtomicLongArray extends JObj { a!: BigInt64Array; }
+function atomicLongSet(this: JAtomicLongArray, i: number, value: bigint) {
+  if (i < 0 || i >= this.a.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(i));
+  this.a[i] = value;
+}
 rt.register({
   name: "java/util/concurrent/atomic/AtomicLongArray", ctor: JAtomicLongArray,
   methods: {
     "<init>(I)V": function (this: JAtomicLongArray, n: number) { this.a = new BigInt64Array(n); },
     "get(I)J": function (this: JAtomicLongArray, i: number) { return this.a[i]; },
-    "set(IJ)V": function (this: JAtomicLongArray, i: number, v: bigint) { this.a[i] = v; },
+    "set(IJ)V": atomicLongSet,
+    "lazySet(IJ)V": atomicLongSet,
     "getAndSet(IJ)J": function (this: JAtomicLongArray, i: number, v: bigint) { const o = this.a[i]; this.a[i] = v; return o; },
     "compareAndSet(IJJ)Z": function (this: JAtomicLongArray, i: number, e: bigint, v: bigint) { if (this.a[i] !== e) return 0; this.a[i] = v; return 1; },
     "incrementAndGet(I)J": function (this: JAtomicLongArray, i: number) { return (this.a[i] += 1n); },
@@ -584,6 +589,17 @@ class JBlockingQueue extends JList {
     else this.a.push(v);
   }
 }
+async function drainTo(this: JBlockingQueue, collection: unknown, max = 0x7fffffff) {
+  if (collection == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (collection === this) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+  if (max <= 0) return 0;
+  const batch = this.a.splice(0, max);
+  let count = 0;
+  try {
+    for (const value of batch) { await vcall(collection, "add", "(Ljava/lang/Object;)Z", value); count++; }
+  } finally { if (count < batch.length) this.a.unshift(...batch.slice(count)); }
+  return count;
+}
 /** BlockingDeque's ends: a parked taker still receives whatever arrives next, either end. */
 const dequeMethods = (): NonNullable<NativeSpec["methods"]> => ({
   "putFirst(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v, true); },
@@ -617,6 +633,8 @@ const mkBlockingQueue = (name: string, deque = false) => rt.register({
     "add(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
     "take()Ljava/lang/Object;": takeFirst,
     "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": timedPoll,
+    "drainTo(Ljava/util/Collection;)I": drainTo,
+    "drainTo(Ljava/util/Collection;I)I": drainTo,
   },
 });
 for (const qn of ["java/util/concurrent/LinkedBlockingQueue", "java/util/concurrent/SynchronousQueue", "java/util/concurrent/ArrayBlockingQueue", "java/util/concurrent/LinkedTransferQueue"]) mkBlockingQueue(qn);

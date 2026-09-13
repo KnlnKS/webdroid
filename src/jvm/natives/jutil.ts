@@ -2021,6 +2021,7 @@ rt.register({
   },
   methods: {
     "static emptyList()Ljava/util/List;": () => newArrayList(),
+    "static emptyIterator()Ljava/util/Iterator;": () => mkIter([]),
     "static emptyMap()Ljava/util/Map;": () => new JMap(),
     "static emptySet()Ljava/util/Set;": () => new JSet(),
     "static singletonList(Ljava/lang/Object;)Ljava/util/List;": (v: unknown) => { const l = new JList(); l.a = [v]; return l; },
@@ -2235,4 +2236,3 @@ rt.register({
     },
   },
 });
-
