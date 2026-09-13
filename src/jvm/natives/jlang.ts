@@ -1637,12 +1637,45 @@ const scriptEnums = mkEnumSet("java/lang/Character$UnicodeScript", SCRIPT_NAMES,
   },
 });
 
-class JRef extends JObj { referent: unknown = null; }
+class JRef extends JObj { referent: unknown = null; queue: JRefQueue | null = null; state = 0; }
+class JRefQueue extends JObj { items: JRef[] = []; waiters = new Set<() => void>(); }
+function enqueueReference(ref: JRef): number {
+  if (!ref.queue || ref.state) return 0;
+  collectedReferences.unregister(ref);
+  ref.referent = null;
+  if (ref instanceof JWeakRef) ref.wr = null;
+  ref.state = 1; ref.queue.items.push(ref);
+  for (const wake of ref.queue.waiters) wake();
+  ref.queue.waiters.clear();
+  return 1;
+}
+const collectedReferences = new FinalizationRegistry<WeakRef<JRef>>(ref => { const value = ref.deref(); if (value) enqueueReference(value); });
+function watchReference(ref: JRef, value: unknown, queue: JRefQueue | null): void {
+  ref.queue = queue;
+  if (queue && value && (typeof value === "object" || typeof value === "function")) collectedReferences.register(value, new WeakRef(ref), ref);
+}
+function pollReference(queue: JRefQueue): JRef | null {
+  const ref = queue.items.shift(); if (!ref) return null;
+  ref.state = 2; return ref;
+}
+async function removeReference(this: JRefQueue, ms = 0n): Promise<JRef | null> {
+  if (ms < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Negative timeout");
+  const thread = curThread, start = performance.now();
+  for (;;) {
+    if (thread.interrupted) { thread.interrupted = 0; throw rt.mkThrowable("java/lang/InterruptedException", null); }
+    const ref = pollReference(this); if (ref) return ref;
+    const remaining = Number(ms) - (performance.now() - start);
+    if (ms > 0n && remaining <= 0) return null;
+    await park(thread, wake => { this.waiters.add(wake); return () => this.waiters.delete(wake); }, ms === 0n ? undefined : remaining);
+  }
+}
 rt.register({
   name: "java/lang/ref/Reference", ctor: JRef,
   methods: {
     "get()Ljava/lang/Object;": function (this: JRef) { return this.referent; },
-    "clear()V": function (this: JRef) { this.referent = null; },
+    "clear()V": function (this: JRef) { this.referent = null; collectedReferences.unregister(this); },
+    "isEnqueued()Z": function (this: JRef) { return +(this.state === 1); },
+    "enqueue()Z": function (this: JRef) { return enqueueReference(this); },
     "static reachabilityFence(Ljava/lang/Object;)V": () => {},
   },
 });
@@ -1650,31 +1683,36 @@ class JWeakRef extends JRef { wr: WeakRef<object> | null = null; }
 rt.register({
   name: "java/lang/ref/WeakReference", ctor: JWeakRef, sup: "java/lang/ref/Reference",
   methods: {
-    "<init>(Ljava/lang/Object;)V": function (this: JWeakRef, o: object) { this.wr = o ? new WeakRef(o) : null; },
-    "<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V": function (this: JWeakRef, o: object) { this.wr = o ? new WeakRef(o) : null; },
-    "get()Ljava/lang/Object;": function (this: JWeakRef) { return this.wr?.deref() ?? null; },
-    "clear()V": function (this: JWeakRef) { this.wr = null; },
+    "<init>(Ljava/lang/Object;)V": initWeakReference,
+    "<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V": initWeakReference,
+    "get()Ljava/lang/Object;": function (this: JWeakRef) { return this.wr?.deref() ?? this.referent; },
+    "clear()V": function (this: JWeakRef) { this.wr = null; this.referent = null; collectedReferences.unregister(this); },
   },
 });
 rt.register({
   name: "java/lang/ref/SoftReference", ctor: class extends JRef {}, sup: "java/lang/ref/Reference",
   methods: {
     "<init>(Ljava/lang/Object;)V": function (this: JRef, o: unknown) { this.referent = o; },
-    "<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V": function (this: JRef, o: unknown) { this.referent = o; },
+    "<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V": function (this: JRef, o: unknown, queue: JRefQueue | null) { this.referent = o; this.queue = queue; },
   },
 });
 rt.register({
   name: "java/lang/ref/PhantomReference", ctor: class extends JRef {}, sup: "java/lang/ref/Reference",
   methods: {
-    "<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V": function () {},
+    "<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V": function (this: JRef, o: unknown, queue: JRefQueue | null) { watchReference(this, o, queue); },
     "get()Ljava/lang/Object;": () => null,
   },
 });
-rt.register({ name: "java/lang/ref/ReferenceQueue", ctor: class extends JObj {}, methods: {
+function initWeakReference(this: JWeakRef, value: unknown, queue: JRefQueue | null = null): void {
+  if (value && (typeof value === "object" || typeof value === "function")) this.wr = new WeakRef(value);
+  else this.referent = value;
+  watchReference(this, value, queue);
+}
+rt.register({ name: "java/lang/ref/ReferenceQueue", ctor: JRefQueue, methods: {
   "<init>()V": function () {},
-  "poll()Ljava/lang/ref/Reference;": () => null,
-  "remove()Ljava/lang/ref/Reference;": () => park(curThread, () => () => {}).then(() => null),
-  "remove(J)Ljava/lang/ref/Reference;": (ms: bigint) => park(curThread, () => () => {}, Number(ms)).then(() => null),
+  "poll()Ljava/lang/ref/Reference;": function (this: JRefQueue) { return pollReference(this); },
+  "remove()Ljava/lang/ref/Reference;": removeReference,
+  "remove(J)Ljava/lang/ref/Reference;": removeReference,
 } });
 
 rt.register({

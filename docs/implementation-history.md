@@ -1783,3 +1783,19 @@ singular matrix with identity. Correct the signature and compute the complete in
 without temporary arrays. Singular input returns false without modifying output.
 A perspective-transform test multiplies the result back to identity and exercises
 overlapping input/output offsets and singular input.
+
+### Maps reference queues and main-loop progress
+
+Maps' weak-reference cleanup thread reached ReferenceQueue.remove; the earlier delegate had
+no blocking queue semantics. References now distinguish active/enqueued/dequeued state,
+explicit enqueue clears the referent, and queue removal parks with interruption/timeout
+handling. Weak and phantom references register for host collection without retaining the
+Java referent. Java strings use the runtime's primitive representation and remain readable.
+`tests/reference-queue.test.ts`: 2 passing tests, 12 assertions. Host GC timing is not asserted.
+
+MessageQueue now belongs to its Looper and tracks due messages through dispatch and
+cancellation. IdleHandler callbacks honor retention/removal, rather than firing once after
+an arbitrary 50 ms delay. The focused Handler tests cover cancellation behind a busy looper,
+reposting, cleanup, due versus future messages, and repeated idle transitions. A slow Maps
+native startup was initially suspected to be a queue stall; it subsequently completed with
+no initializing classes or native fault. That observation is not a performance measurement.
