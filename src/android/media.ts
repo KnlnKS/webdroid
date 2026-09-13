@@ -32,7 +32,7 @@ rt.register({
     "onQueueChanged(Ljava/util/List;)V", "onQueueTitleChanged(Ljava/lang/CharSequence;)V",
     "onExtrasChanged(Landroid/os/Bundle;)V", "onAudioInfoChanged(Landroid/media/session/MediaController$PlaybackInfo;)V") },
 });
-class JMediaSessionToken extends JObj {}
+class JMediaSessionToken extends JObj { session: JMediaSession | null = null; }
 class JMediaSession extends JObj {
   active = false;
   flags = 0;
@@ -44,13 +44,20 @@ class JMediaSession extends JObj {
   metadata: unknown = null;
   playbackState: unknown = null;
   ratingType = 0;
-  token = new JMediaSessionToken();
+  token = Object.assign(new JMediaSessionToken(), { session: this });
+}
+class JMediaController extends JObj {
+  token: JMediaSessionToken | null = null;
 }
 rt.register({ name: "android/media/session/MediaSession$Token", ctor: JMediaSessionToken, ifaces: ["android/os/Parcelable"], methods: {
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": () => {},
 } });
 rt.register({ name: "android/media/session/MediaSession$Callback", ctor: class extends JObj {}, methods: { "<init>()V": () => {} } });
+rt.register({ name: "android/media/session/MediaController", ctor: JMediaController, methods: {
+  "<init>(Landroid/content/Context;Landroid/media/session/MediaSession$Token;)V": function (this: JMediaController, _context: unknown, token: JMediaSessionToken) { this.token = token; },
+  "getSessionToken()Landroid/media/session/MediaSession$Token;": function (this: JMediaController) { return this.token; },
+} });
 rt.register({ name: "android/media/session/MediaSession", ctor: JMediaSession, methods: {
   "<init>(Landroid/content/Context;Ljava/lang/String;)V": () => {},
   "<init>(Landroid/content/Context;Ljava/lang/String;Landroid/os/Bundle;)V": () => {},

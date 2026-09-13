@@ -9,6 +9,8 @@ test("MediaSession retains its token and active state", async () => {
   const session = await newObj("android/media/session/MediaSession", "(Landroid/content/Context;Ljava/lang/String;Landroid/os/Bundle;)V", new JObj(), "test", null);
   const token = await vcall(session, "getSessionToken", "()Landroid/media/session/MediaSession$Token;");
   expect(token).toBe(await vcall(session, "getSessionToken", "()Landroid/media/session/MediaSession$Token;"));
+  const controller = await newObj("android/media/session/MediaController", "(Landroid/content/Context;Landroid/media/session/MediaSession$Token;)V", new JObj(), token);
+  expect(await vcall(controller, "getSessionToken", "()Landroid/media/session/MediaSession$Token;")).toBe(token);
   await vcall(session, "setActive", "(Z)V", 1);
   expect(await vcall(session, "isActive", "()Z")).toBe(1);
   await vcall(session, "release", "()V");
