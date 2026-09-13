@@ -722,7 +722,7 @@ rt.register({
     "getSelectionEnd()I": function (this: JEditText) { return this.text.length; },
     ...noops("setSelection(I)V", "setSelection(II)V", "selectAll()V"),
     "performClick()Z": async function (this: JEditText) {
-      focusEditText(this);
+      await vcall(this, "requestFocus", "()Z");
       if (this.clickL) await vcall(this.clickL, "onClick", "(Landroid/view/View;)V", this);
       return 1;
     },

@@ -1687,6 +1687,14 @@ PathClassLoader whose parent is microG's `FilteredClassLoader` over the app's lo
 `GoogleApi`/`GoogleApiManager` calls resolve to Resy's bundled play-services copies exactly as
 that filter intends; the app-side traces here tag classes by dex to tell the copies apart.
 
+**Focus handoff on a reopened search.** After a keyword search, the shared search model already
+held 25 popular cities, but reopening on the location field left them GONE. The second
+`Consumable` was distinct and handled, the first search fragment had been removed, and the new
+fragment was RESUMED: this was not LiveData replay or live data. `View.requestFocus()` bypassed
+the virtual directional overload, so `SearchField` could not redirect focus to its EditText; focus
+changes also never called the registered `OnFocusChangeListener`. The Android overload chain and
+old/new listener notifications restore location mode.
+
 Gates at 8835eb4: typecheck; 670 tests / 20,693 assertions; Resy smoke-compiles 30,589
 classes with 0 method failures; `e2e --test resy` renders 12/12 with nothing missing; fitnotes
 41.54% content / 17.47% strict and mihon-onboarding 17.56% / 11.10%, identical to the

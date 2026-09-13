@@ -87,11 +87,27 @@ export const setFocusHook = (h: typeof focusHook) => { focusHook = h; };
 /** compat.ts owns android.view.animation; View.startAnimation hands it the view to drive */
 let startViewAnim: (v: JView, a: unknown) => void = () => {};
 export const setViewAnimHook = (h: typeof startViewAnim) => { startViewAnim = h; };
-function takeFocus(v: JView) {
-  v.focused = true;
-  focusHook(v, true);
+const M_onFocusChange = mangleMethod("onFocusChange", "(Landroid/view/View;Z)V");
+async function focusChange(v: JView, focused: boolean) {
+  v.focused = focused;
+  focusHook(v, focused);
+  if (v.focusL) await guardMaybe(v.focusL, M_onFocusChange, v, focused ? 1 : 0);
+}
+async function takeFocus(v: JView) {
+  if (!v.enabled || !v.focusable) return 0;
+  if (v.focused) return 1;
+  let root = v;
+  while (root.parent) root = root.parent;
+  const old = findByPred(root, (candidate) => candidate !== v && candidate.focused);
+  if (old) await focusChange(old, false);
+  await focusChange(v, true);
   focusMoved(v, v);
   return 1;
+}
+async function clearFocus(v: JView) {
+  if (!v.focused) return;
+  await focusChange(v, false);
+  focusMoved(v, null);
 }
 /** AOSP reports every focus transition to the root's observer; the tree-walk only runs when someone listens */
 function focusMoved(v: JView, now: JView | null) {
@@ -897,9 +913,11 @@ const viewMethods: NativeSpec["methods"] = {
   "setFocusableInTouchMode(Z)V": function (this: JView, f: number) { this.focusableInTouchMode = !!f; },
   "setAutoHandwritingEnabled(Z)V": function (this: JView, enabled: number) { this.autoHandwritingEnabled = !!enabled; },
   "isAutoHandwritingEnabled()Z": function (this: JView) { return this.autoHandwritingEnabled ? 1 : 0; },
-  "requestFocus()Z": function (this: JView) { return takeFocus(this); },
+  "requestFocus()Z": function (this: JView) {
+    return vcall(this, "requestFocus", "(ILandroid/graphics/Rect;)Z", 130, null);
+  },
   "findFocus()Landroid/view/View;": function (this: JView) { return this.focused ? this : null; },
-  "clearFocus()V": function (this: JView) { this.focused = false; focusHook(this, false); focusMoved(this, null); },
+  "clearFocus()V": function (this: JView) { return clearFocus(this); },
   "setOnClickListener(Landroid/view/View$OnClickListener;)V": function (this: JView, l: unknown) {
     this.clickL = l;
     if (l) this.clickable = true;
@@ -1230,7 +1248,9 @@ const viewMethods: NativeSpec["methods"] = {
   "getSuggestedMinimumHeight()I": function (this: JView) { return Math.max(this.minH, this.background?.intrinsicH() ?? 0); },
   "isFocusable()Z": function (this: JView) { return this.focusable ? 1 : 0; },
   "isFocusableInTouchMode()Z": function (this: JView) { return this.focusableInTouchMode ? 1 : 0; },
-  "requestFocus(I)Z": function (this: JView) { return takeFocus(this); },
+  "requestFocus(I)Z": function (this: JView, direction: number) {
+    return vcall(this, "requestFocus", "(ILandroid/graphics/Rect;)Z", direction, null);
+  },
   "requestFocus(ILandroid/graphics/Rect;)Z": function (this: JView) { return takeFocus(this); },
   "offsetLeftAndRight(I)V": function (this: JView, d: number) { this.left += d; this.right += d; invalidate(); },
   "offsetTopAndBottom(I)V": function (this: JView, d: number) { this.top += d; this.bottom += d; invalidate(); },
