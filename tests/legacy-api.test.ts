@@ -52,6 +52,14 @@ test("ReentrantLock timed tryLock acquires cooperatively", async () => {
   await vcall(lock, "unlock", "()V");
 });
 
+test("layout containers expose their covariant LayoutParams descriptors", () => {
+  for (const name of ["FrameLayout", "LinearLayout", "RelativeLayout"]) {
+    const view = rt.make(`android/widget/${name}`) as unknown as Record<string, unknown>;
+    const descriptor = `(Landroid/util/AttributeSet;)Landroid/widget/${name}$LayoutParams;`;
+    expect(typeof view[mangleMethod("generateLayoutParams", descriptor)]).toBe("function");
+  }
+});
+
 test("EditText retains private IME options", async () => {
   const edit = await newObj("android/widget/EditText", "(Landroid/content/Context;)V", null);
   await vcall(edit, "setPrivateImeOptions", "(Ljava/lang/String;)V", "com.example.mode=test");

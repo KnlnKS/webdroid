@@ -23,6 +23,13 @@ function adoptLp<T extends JMarginLP>(Ctor: new () => T, lp: JLayoutParams | nul
 }
 
 export class JFrameLayout extends JViewGroup {}
+/** Layout subclasses expose the covariant descriptors declared by the Android SDK in addition
+ *  to ViewGroup's erased descriptor. */
+function covariantLayoutParams(methods: NativeSpec["methods"], lp: string): void {
+  const m = methods as Record<string, unknown>;
+  m[`generateLayoutParams(Landroid/util/AttributeSet;)L${lp};`] = m["generateLayoutParams(Landroid/util/AttributeSet;)Landroid/view/ViewGroup$LayoutParams;"];
+  m[`generateDefaultLayoutParams()L${lp};`] ??= m["generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;"];
+}
 const frameMethods: NativeSpec["methods"] = {
   "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": function (this: JFrameLayout) {
     return vcallMaybe(this, "generateDefaultLayoutParams", "()Landroid/widget/FrameLayout$LayoutParams;");
@@ -85,6 +92,7 @@ const frameMethods: NativeSpec["methods"] = {
   "setForegroundGravity(I)V": () => {},
   "setMeasureAllChildren(Z)V": () => {},
 };
+covariantLayoutParams(frameMethods, "android/widget/FrameLayout$LayoutParams");
 rt.register({
   name: "android/widget/FrameLayout", ctor: JFrameLayout, sup: "android/view/ViewGroup",
   clinit: () => { rt.link("android/widget/FrameLayout$LayoutParams"); },
@@ -237,6 +245,7 @@ export const linearMethods: NativeSpec["methods"] = {
     }
   },
 };
+covariantLayoutParams(linearMethods, "android/widget/LinearLayout$LayoutParams");
 rt.register({
   name: "android/widget/LinearLayout", ctor: JLinearLayout, sup: "android/view/ViewGroup",
   clinit: () => { rt.link("android/widget/LinearLayout$LayoutParams"); },
@@ -880,6 +889,7 @@ const relativeMethods: NativeSpec["methods"] = {
     }
   },
 };
+covariantLayoutParams(relativeMethods, "android/widget/RelativeLayout$LayoutParams");
 rt.register({ name: "android/widget/RelativeLayout", ctor: JRelativeLayout, sup: "android/view/ViewGroup",
   clinit: () => { rt.link("android/widget/RelativeLayout$LayoutParams"); },
   statics: { TRUE: -1 },
