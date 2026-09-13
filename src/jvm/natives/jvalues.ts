@@ -69,7 +69,7 @@ export function localeDirection(locale: JLocale | null): number {
 /** the one locale the device speaks; also the default */
 export const usLocale = Object.assign(new JLocale(), { lang: "en", country: "US" });
 mkEnumSet("java/util/Locale$Category", ["DISPLAY", "FORMAT"]);
-let defaultLocale = usLocale;
+export let defaultLocale = usLocale;
 const categoryLocales = new Map<string, JLocale>();
 const localeNames = new Map<string, Intl.DisplayNames>();
 function displayPart(value: string, type: "language" | "script" | "region", tag: string): string {

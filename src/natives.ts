@@ -45,6 +45,7 @@ import "./android/imagedecoder";
 import "./android/fonts";
 import "./android/path";
 import "./android/text";
+import "./android/bidiformatter";
 import "./android/drawable";
 import "./android/resnative";
 import "./android/xmlpull";

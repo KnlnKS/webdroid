@@ -1088,15 +1088,6 @@ export function mkStaticLayout(text: string, p: JTextPaint, w: number, mult = 1,
 
 // Layout$Alignment enum + TextDirectionHeuristics markers
 mkEnumSet("android/text/Layout$Alignment", ["ALIGN_NORMAL", "ALIGN_OPPOSITE", "ALIGN_CENTER"]);
-class JTDH extends JObj {}
-rt.register({ name: "android/text/TextDirectionHeuristic", ctor: JTDH });
-rt.register({
-  name: "android/text/TextDirectionHeuristics", ctor: class extends JObj {},
-  statics: {
-    LTR: new JTDH(), RTL: new JTDH(), FIRSTSTRONG_LTR: new JTDH(), FIRSTSTRONG_RTL: new JTDH(),
-    ANYRTL_LTR: new JTDH(), LOCALE: new JTDH(),
-  },
-});
 rt.markers("android/graphics/text/LineBreakConfig");
 rt.register({
   name: "android/graphics/text/LineBreakConfig$Builder", ctor: class extends JObj {},
