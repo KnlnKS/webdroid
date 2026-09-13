@@ -56,6 +56,7 @@ export const providerOperations = {
   delete: "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I",
   getType: "(Landroid/net/Uri;)Ljava/lang/String;",
   call: "(Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;",
+  openFile: "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;",
 };
 class JProviderClient extends JObj { provider: unknown = null; closed = false; }
 function releaseClient(this: JProviderClient): number {

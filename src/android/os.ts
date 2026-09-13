@@ -627,7 +627,7 @@ rt.register({
  */
 class JParcelFileDescriptor extends JObj {
   bytes: Uint8Array = new Uint8Array(0);
-  sink: ((b: Uint8Array) => unknown) | null = null;
+  sink: ((b: Uint8Array, closed?: boolean) => unknown) | null = null;
   path = "";
   flags = 0;
   fd = -1;
@@ -637,11 +637,19 @@ function pfdFd(p: JParcelFileDescriptor): number {
   if (p.fd < 0 && p.path) p.fd = javaOpenFd(p.path, p.flags);
   return p.fd;
 }
-export function mkPfd(bytes: Uint8Array, sink: ((b: Uint8Array) => unknown) | null): JParcelFileDescriptor {
+export function mkPfd(bytes: Uint8Array, sink: ((b: Uint8Array, closed?: boolean) => unknown) | null): JParcelFileDescriptor {
   const p = new JParcelFileDescriptor();
   p.bytes = bytes;
   p.sink = sink;
   return p;
+}
+export function parcelFileDescriptorData(value: unknown): { bytes: Uint8Array; writable: boolean } | null {
+  return value instanceof JParcelFileDescriptor ? { bytes: value.bytes.slice(), writable: value.sink !== null } : null;
+}
+export async function writeParcelFileDescriptor(value: unknown, bytes: Uint8Array, closed = false): Promise<void> {
+  if (!(value instanceof JParcelFileDescriptor)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a ParcelFileDescriptor");
+  value.bytes = bytes.slice();
+  await value.sink?.(value.bytes, closed);
 }
 rt.register({
   name: "android/os/ParcelFileDescriptor", ctor: JParcelFileDescriptor,
@@ -687,13 +695,13 @@ rt.register({
   },
 });
 class JPfdOut extends JOutputStream { pfd: JParcelFileDescriptor | null = null; }
-const pfdFlush = async function (this: JPfdOut) { await this.pfd?.sink?.(Uint8Array.from(this.chunks)); };
+const pfdFlush = async function (this: JPfdOut, closed = false) { await this.pfd?.sink?.(Uint8Array.from(this.chunks), closed); };
 rt.register({
   name: "android/os/ParcelFileDescriptor$AutoCloseOutputStream", ctor: JPfdOut, sup: "java/io/OutputStream",
   methods: {
     "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JPfdOut, p: JParcelFileDescriptor) { this.pfd = p; },
     "flush()V": pfdFlush,
-    "close()V": pfdFlush,
+    "close()V": function (this: JPfdOut) { return pfdFlush.call(this, true); },
   },
 });
 

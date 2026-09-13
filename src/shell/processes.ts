@@ -315,7 +315,7 @@ class ProcessBroker {
     const caller = this.entry(pid);
     const owner = packages.get(pkg), node = [...owner?.components.provider.values() ?? []].find((n) => attrStr(n, "authorities")?.split(";").includes(request.authority));
     if (!node) throw new Error("Provider not installed");
-    const permission = attrStr(node, request.name === "query" || request.name === "getType" ? "readPermission" : "writePermission") ?? attrStr(node, "permission");
+    const permission = attrStr(node, request.access === "read" || request.name === "query" || request.name === "getType" ? "readPermission" : "writePermission") ?? attrStr(node, "permission");
     if (caller.pkg !== pkg && permission && await permissionDenied(permission, caller.pkg))
       throw new Error("Provider permission denied: " + permission);
     return this.request(this.connect(pkg, process), (endpoint) => endpoint.provider(request, { uid: caller.uid, pid }));
