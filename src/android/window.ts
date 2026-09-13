@@ -197,10 +197,11 @@ rt.register({
     token: JObj | null = null;
     title: unknown = "";
     preferredDisplayModeId = 0;
+    preferredRefreshRate = 0;
     screenBrightness = -1;
   },
   fields: ["width", "height", "gravity", "flags", "x", "y", "softInputMode", "windowAnimations", "dimAmount", "alpha",
-    "format", "type", "layoutInDisplayCutoutMode", "token", "preferredDisplayModeId", "screenBrightness"],
+    "format", "type", "layoutInDisplayCutoutMode", "token", "preferredDisplayModeId", "preferredRefreshRate", "screenBrightness"],
   statics: { MATCH_PARENT: -1, WRAP_CONTENT: -2, FLAG_FULLSCREEN: 1024, FLAG_KEEP_SCREEN_ON: 128, TYPE_APPLICATION: 2, SOFT_INPUT_ADJUST_RESIZE: 16, SOFT_INPUT_STATE_HIDDEN: 3,
     // no real display cutout in a fixed-viewport screen — the field just stores/reports whatever the app sets.
     LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT: 0, LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES: 1,

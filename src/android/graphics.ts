@@ -336,6 +336,7 @@ export class JPaint extends JObj {
   blendMode: JSimpleEnum | null = null;
   letterSpacingEm = 0;
   underline = false; strikeThru = false; fakeBold = false;
+  shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
 
   // font() is called per text op and per measure; the result is a pure function of
   // (typeface identity, textSize, fakeBold), so cache it and rebuild only when one changes.
@@ -380,6 +381,7 @@ const paintMethods: NativeSpec["methods"] = {
       return runAdvances(this, charsToString(chars, 0, chars.length), start, end, offset, advances, advIdx);
     },
   "<init>(Landroid/graphics/Paint;)V": function (this: JPaint, o: JPaint) { if (o) copyPaint(o, this); },
+  "reset()V": function (this: JPaint) { resetPaint(this); },
   "set(Landroid/graphics/Paint;)V": function (this: JPaint, o: JPaint) { copyPaint(o, this); },
   "setColor(I)V": function (this: JPaint, c: number) { this.color = c; },
   "setColor(J)V": function (this: JPaint, c: bigint) { this.color = Number(BigInt.asIntN(32, c >> 32n)); },
@@ -443,11 +445,17 @@ const paintMethods: NativeSpec["methods"] = {
   "setStrikeThruText(Z)V": function (this: JPaint, v: number) { this.strikeThru = !!v; },
   "setFakeBoldText(Z)V": function (this: JPaint, v: number) { this.fakeBold = !!v; },
   "setLetterSpacing(F)V": function (this: JPaint, v: number) { this.letterSpacingEm = v; },
+  "setShadowLayer(FFFI)V": function (this: JPaint, radius: number, dx: number, dy: number, color: number) {
+    this.shadowRadius = radius; this.shadowDx = dx; this.shadowDy = dy; this.shadowColor = color;
+  },
+  "clearShadowLayer()V": function (this: JPaint) {
+    this.shadowRadius = this.shadowDx = this.shadowDy = this.shadowColor = 0;
+  },
   ...noops("<init>()V", "<init>(I)V", "setHinting(I)V", "setSubpixelText(Z)V", "setLinearText(Z)V",
     "setElegantTextHeight(Z)V", "setFontFeatureSettings(Ljava/lang/String;)V", "setTextLocale(Ljava/util/Locale;)V",
     "setTextLocales(Landroid/os/LocaleList;)V", "setTextScaleX(F)V", "setTextSkewX(F)V", "setStartHyphenEdit(I)V",
     "setEndHyphenEdit(I)V", "setWordSpacing(F)V", "setDither(Z)V", "setFilterBitmap(Z)V", "setStrokeMiter(F)V",
-    "setFlags(I)V", "setShadowLayer(FFFI)V", "clearShadowLayer()V"),
+    "setFlags(I)V"),
   ...stubs(1, "isFilterBitmap()Z", "getHinting()I", "setFontVariationSettings(Ljava/lang/String;)Z",
     "getTextScaleX()F", "getFlags()I"),
   ...stubs(0, "getWordSpacing()F", "getLetterSpacing()F", "isDither()Z"),
@@ -511,14 +519,26 @@ const paintMethods: NativeSpec["methods"] = {
     return i;
   },
 };
+function resetPaint(paint: JPaint): void {
+  paint.color = -16777216; paint.style = 0; paint.strokeWidth = 0;
+  paint.textSize = device.dp(16); paint.tf = tfDefault; paint.antiAlias = true;
+  paint.textAlignN = 0; paint.shader = null; paint.shaderObj = null; paint.maskFilter = null;
+  paint.strokeCapN = "butt"; paint.strokeJoinN = "miter"; paint.dash = null;
+  paint.filterColor = null; paint.filterMatrix = null; paint.filterObj = null;
+  paint.blend = null; paint.xfermode = null; paint.blendMode = null;
+  paint.letterSpacingEm = 0; paint.underline = false; paint.strikeThru = false; paint.fakeBold = false;
+  paint.shadowRadius = paint.shadowDx = paint.shadowDy = paint.shadowColor = 0;
+}
 export function copyPaint(src: JPaint, dst: JPaint) {
   dst.color = src.color; dst.style = src.style; dst.strokeWidth = src.strokeWidth;
   dst.textSize = src.textSize; dst.tf = src.tf; dst.antiAlias = src.antiAlias;
   dst.textAlignN = src.textAlignN; dst.shader = src.shader; dst.shaderObj = src.shaderObj; dst.dash = src.dash;
-  dst.maskFilter = src.maskFilter;
-  dst.filterColor = src.filterColor; dst.filterMatrix = src.filterMatrix; dst.filterObj = src.filterObj; dst.underline = src.underline; dst.fakeBold = src.fakeBold;
+  dst.maskFilter = src.maskFilter; dst.strokeCapN = src.strokeCapN; dst.strokeJoinN = src.strokeJoinN;
+  dst.filterColor = src.filterColor; dst.filterMatrix = src.filterMatrix; dst.filterObj = src.filterObj;
+  dst.underline = src.underline; dst.strikeThru = src.strikeThru; dst.fakeBold = src.fakeBold;
   dst.letterSpacingEm = src.letterSpacingEm;
   dst.blend = src.blend; dst.xfermode = src.xfermode; dst.blendMode = src.blendMode;
+  dst.shadowRadius = src.shadowRadius; dst.shadowDx = src.shadowDx; dst.shadowDy = src.shadowDy; dst.shadowColor = src.shadowColor;
 }
 class JFontMetrics extends JObj { top = 0; ascent = 0; descent = 0; bottom = 0; leading = 0; }
 class JFontMetricsInt extends JObj { top = 0; ascent = 0; descent = 0; bottom = 0; leading = 0; }

@@ -107,6 +107,7 @@ export class JTextView extends JView {
   inputTypeV = 1;
   styleBits = 0;
   includePad = true;
+  shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
 
   constructor() {
     super();
@@ -403,6 +404,15 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "getTypeface()Landroid/graphics/Typeface;": function (this: JTextView) { return this.paintT.tf; },
   "getPaint()Landroid/text/TextPaint;": function (this: JTextView) { return this.paintT; },
+  "setShadowLayer(FFFI)V": function (this: JTextView, radius: number, dx: number, dy: number, color: number) {
+    this.shadowRadius = radius; this.shadowDx = dx; this.shadowDy = dy; this.shadowColor = color;
+    this.paintT.shadowRadius = radius; this.paintT.shadowDx = dx; this.paintT.shadowDy = dy; this.paintT.shadowColor = color;
+    invalidate(this);
+  },
+  "getShadowRadius()F": function (this: JTextView) { return this.shadowRadius; },
+  "getShadowDx()F": function (this: JTextView) { return this.shadowDx; },
+  "getShadowDy()F": function (this: JTextView) { return this.shadowDy; },
+  "getShadowColor()I": function (this: JTextView) { return this.shadowColor; },
   "setSingleLine()V": function (this: JTextView) { this.singleLine = true; requestLayout(this); },
   "setSingleLine(Z)V": function (this: JTextView, v: number) { this.singleLine = !!v; requestLayout(this); },
   "setMaxLines(I)V": function (this: JTextView, n: number) { this.maxLinesV = n || Infinity; requestLayout(this); },
@@ -560,7 +570,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     "setTextLocales(Landroid/os/LocaleList;)V", "setImeHintLocales(Landroid/os/LocaleList;)V", "beginBatchEdit()V",
     "endBatchEdit()V", "setHighlightColor(I)V", "setHorizontallyScrolling(Z)V", "setMarqueeRepeatLimit(I)V",
     "setSelectAllOnFocus(Z)V", "setTextIsSelectable(Z)V", "setError(Ljava/lang/CharSequence;)V", "setAutoLinkMask(I)V",
-    "setLinkTextColor(I)V", "setMaxEms(I)V", "setShadowLayer(FFFI)V", "setMaxHeight(I)V"),
+    "setLinkTextColor(I)V", "setMaxEms(I)V", "setMaxHeight(I)V"),
   ...stubs(1, "getIncludeFontPadding()Z"),
   ...stubs(0, "isHorizontallyScrollable()Z"),
   ...stubs(-1, "getAutoSizeMinTextSize()I", "getAutoSizeMaxTextSize()I", "getAutoSizeStepGranularity()I"),
@@ -652,6 +662,10 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       : vg === 80 ? this.height() - this.padB - totalH : this.padT) + this.ascent();
     ctx.font = this.paintT.font();
     ctx.fillStyle = cssColor(showHint ? cslColor(this.hintColors, this.drawableState()) : cslColor(this.colors, this.drawableState()));
+    ctx.shadowBlur = this.shadowRadius;
+    ctx.shadowOffsetX = this.shadowDx;
+    ctx.shadowOffsetY = this.shadowDy;
+    ctx.shadowColor = this.shadowRadius ? cssColor(this.shadowColor) : "rgba(0,0,0,0)";
     ctx.textBaseline = "alphabetic";
     const hg = gravityH(this.gravityT);
     ctx.textAlign = hg === 1 ? "center" : hg === 5 ? "right" : "left";

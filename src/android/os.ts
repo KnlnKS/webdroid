@@ -322,6 +322,7 @@ rt.register({
     // androidx's startup tracing asks how long ago this process began; there is no earlier
     // moment here than the page's own timeOrigin
     "static getStartUptimeMillis()J": () => 0n,
+    "static getStartRequestedUptimeMillis()J": () => 0n,
     "static getElapsedCpuTime()J": () => BigInt(Math.round(performance.now())),
     "static myTid()I": () => threadTid(curThread),
     "static myUid()I": () => PROCESS_UID,
@@ -1007,6 +1008,23 @@ rt.register({
   fields: ["st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid", "st_size", "st_atime", "st_mtime",
     "st_ctime", "st_blksize", "st_blocks"],
 });
+class JStructUtsname extends JObj {
+  sysname = "Linux";
+  nodename = "localhost";
+  release = "5.10.0-webdroid";
+  version = "#1 SMP PREEMPT";
+  machine = "aarch64";
+}
+rt.register({
+  name: "android/system/StructUtsname", ctor: JStructUtsname,
+  fields: ["sysname", "nodename", "release", "version", "machine"],
+  methods: {
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V":
+      function (this: JStructUtsname, sysname: string, nodename: string, release: string, version: string, machine: string) {
+        this.sysname = sysname; this.nodename = nodename; this.release = release; this.version = version; this.machine = machine;
+      },
+  },
+});
 const FD = "Ljava/io/FileDescriptor;";
 rt.register({
   name: "android/system/Os", ctor: class extends JObj {},
@@ -1025,6 +1043,11 @@ rt.register({
     },
     "static gettid()I": () => threadTid(curThread),
     "static getpid()I": () => PROCESS_PID,
+    "static uname()Landroid/system/StructUtsname;": () => {
+      const info = new JStructUtsname();
+      info.machine = rt.nativeAbis.find((abi) => Object.keys(rt.classpath).some((path) => path.startsWith("lib/" + abi + "/"))) === "armeabi-v7a" ? "armv7l" : "aarch64";
+      return info;
+    },
     "static sysconf(I)J": (name: number) => BigInt(name === 0x27 || name === 0x28 ? 4096 : name === 0x60 || name === 0x61 ? device.cpu.cores : name === 0x62 ? device.cpu.memKb / 4 : -1),
     "static stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {
       const st = vfs.stat(path);
