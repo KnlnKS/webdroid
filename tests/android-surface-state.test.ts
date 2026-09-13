@@ -21,6 +21,20 @@ test("Paint reset restores a fresh paint state", async () => {
   expect(paint.tf).toBe(fresh.tf);
 });
 
+test("Paint retains text scale and skew state", async () => {
+  const paint = new JPaint();
+  await vcall(paint, "setTextScaleX", "(F)V", 1.25);
+  await vcall(paint, "setTextSkewX", "(F)V", -0.2);
+  expect(await vcall(paint, "getTextScaleX", "()F")).toBe(1.25);
+  expect(await vcall(paint, "getTextSkewX", "()F")).toBeCloseTo(-0.2);
+
+  const copy = await newObj("android/graphics/Paint", "(Landroid/graphics/Paint;)V", paint);
+  expect(await vcall(copy, "getTextSkewX", "()F")).toBeCloseTo(-0.2);
+  await vcall(copy, "reset", "()V");
+  expect(await vcall(copy, "getTextScaleX", "()F")).toBe(1);
+  expect(await vcall(copy, "getTextSkewX", "()F")).toBe(0);
+});
+
 test("TextView retains and exposes its shadow layer", async () => {
   const view = await newObj("android/widget/TextView");
   await vcall(view, "setShadowLayer", "(FFFI)V", 4.5, 2, -3, 0x7f123456);
