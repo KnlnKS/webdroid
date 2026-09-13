@@ -635,6 +635,18 @@ rt.register({
 
 type WaitingQueue = { a: unknown[]; takers: ((value: unknown) => void)[] };
 
+async function drainQueue(this: WaitingQueue, c: unknown, max = 0x7fffffff): Promise<number> {
+  if (c == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (c === this) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Cannot drain a queue to itself");
+  const batch = this.a.splice(0, Math.max(0, max));
+  for (const value of batch) await vcall(c, "add", "(Ljava/lang/Object;)Z", value);
+  return batch.length;
+}
+const drainMethods = {
+  "drainTo(Ljava/util/Collection;)I": drainQueue,
+  "drainTo(Ljava/util/Collection;I)I": drainQueue,
+};
+
 const takeFirst = function (this: WaitingQueue): unknown {
   return this.a.length ? this.a.shift() : new Promise((resolve) => this.takers.push(resolve));
 };
@@ -685,6 +697,7 @@ const mkBlockingQueue = (name: string, deque = false) => rt.register({
     : ["java/util/concurrent/BlockingQueue", "java/util/Queue", "java/util/Collection", "java/lang/Iterable"],
   methods: {
     ...(deque ? dequeMethods() : {}),
+    ...drainMethods,
     ...Object.fromEntries(Object.entries(listMethods() ?? {}).filter(([k]) => !k.startsWith("<init>"))),
     "<init>()V": function () {},
     "<init>(I)V": function () {},
@@ -719,11 +732,7 @@ rt.register({
     "take()Ljava/lang/Object;": takeFirst,
     "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": timedPoll,
     "remainingCapacity()I": () => 0x7fffffff,
-    "drainTo(Ljava/util/Collection;)I": async function (this: JPriorityBlockingQueue, c: unknown) {
-      const n = this.a.length;
-      for (const v of this.a.splice(0)) await vcall(c, "add", "(Ljava/lang/Object;)Z", v);
-      return n;
-    },
+    ...drainMethods,
   },
 });
 

@@ -2084,3 +2084,22 @@ the ordinary FastNative convention. Both tests and typecheck pass. The host cras
 app verification of this fix and the scroller change; committed work survived. The server
 and reference AVD were restarted, with full Chrome alone to reduce diagnostic resource use.
 Rendering parity, all-process diagnostics, and the final full E2E remain unverified.
+
+After restart, full Chrome confirms the CriticalNative fix: a bounded 118-draw trace has
+zero WebGL errors and black label rectangles disappear. The scroller fix brings the place
+card into view with photos. The map remains mostly beige in full Chrome; a headless run
+with the native JIT disabled draws geometry but retains white water and incorrect polygons.
+Palette textures contain blue, uniforms and integer-offset attributes bind correctly, and
+a sampled white-ocean pixel is painted by the base fill without later water coverage. These
+observations narrow the investigation but do not identify its cause. Chrome debugging became
+unreliable; that diagnostic tab was closed. Headless timing under these conditions is not a
+performance comparison. The AVD place reference was refreshed.
+
+A later Maps bjuo request worker fails at ArrayBlockingQueue.drainTo before processing its
+batch. Both drain overloads now use one shared queue implementation, including destination
+validation, bounded FIFO/priority transfers and virtual collection adds. The batch is detached
+once, avoiding repeated array shifts. Destination exceptions propagate; Java permits partial
+transfer on failure. Eight focused queue/executor checks (58 assertions) and typecheck pass.
+App verification of this queue change is pending. The ActivityManager test-harness query is
+also implemented, but its place-video path still requires verification. Main-thread trace
+identity, transient Compose attachment, serialization and rendering issues remain open.

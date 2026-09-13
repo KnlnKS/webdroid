@@ -35,11 +35,14 @@ platform contracts; run the full serialized E2E suite at the end.
 
 ## Next
 
-1. Verify the committed CriticalNative calling convention and Scroller completion fixes
-   after the host crash/restart. Chrome passed a JNI environment pointer as glEnable's
+1. Continue rendering diagnosis after verifying the CriticalNative calling convention and
+   Scroller completion fixes in Chrome after restart. Chrome passed a JNI environment pointer as glEnable's
    enum; DEX annotations show that method is CriticalNative. A place card remained below
    the screen because computeScrollOffset returned false on its final position update.
-   Focused ARM32/A64 and scroller checks pass; app verification remains pending.
+   Focused ARM32/A64 and scroller checks pass. Chrome now has zero errors in a bounded
+   GL trace, no black label backgrounds, and a visible place card with photos. A JIT-disabled
+   headless run still shows incorrect water/polygons. Queue draining now covers a later
+   request-worker failure and needs another app pass.
    Place construction also progressed through TextureView transforms, TransitionDrawable,
    corrected set interfaces, Arrays.deepToString, TouchDelegate, clearSpans and Range.
    The preceding blockers were
