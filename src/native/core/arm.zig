@@ -812,6 +812,16 @@ fn execThumb(c: *Cpu, pc: u32) Status {
             return .next;
         }
     }
+    if ((h & 0xff80) == 0xfa00) {
+        const h2: u32 = ld(u16, pc + 2);
+        if (h2 & 0xf0f0 == 0xf000) {
+            c.pc = pc + 4;
+            const shifted = shiftReg(c, (h >> 5) & 3, r(c, h & 15), r(c, h2 & 15) & 255);
+            set(c, (h2 >> 8) & 15, shifted.v);
+            if (h & 0x10 != 0) setNZC(c, shifted.v, shifted.carry);
+            return .next;
+        }
+    }
     if ((h & 0xfe00) == 0xea00) {
         const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0x8000 != 0) return fault(c, .undefined, h << 16 | h2, pc);
@@ -986,6 +996,17 @@ fn execThumb(c: *Cpu, pc: u32) Status {
         const d = (h2 >> 8) & 15;
         const imm = ((h & 15) << 12) | (((h >> 10) & 1) << 11) | (((h2 >> 12) & 7) << 8) | (h2 & 255);
         set(c, d, if (wideMove == 0xf2c0) (r(c, d) & 0xffff) | (imm << 16) else imm);
+        return .next;
+    }
+    const wideAddress = h & 0xfbe0;
+    if (wideAddress == 0xf200 or wideAddress == 0xf2a0) {
+        const h2: u32 = ld(u16, pc + 2);
+        if (h2 & 0x8000 != 0) return fault(c, .undefined, h << 16 | h2, pc);
+        c.pc = pc + 4;
+        const imm = (((h >> 10) & 1) << 11) | (((h2 >> 12) & 7) << 8) | (h2 & 255);
+        const n = h & 15;
+        const base = if (n == 15) (pc + 4) & ~@as(u32, 3) else r(c, n);
+        set(c, (h2 >> 8) & 15, if (wideAddress == 0xf2a0) base -% imm else base +% imm);
         return .next;
     }
     if ((h & 0xff80) == 0xf880 and ((h >> 5) & 3) < 3) {

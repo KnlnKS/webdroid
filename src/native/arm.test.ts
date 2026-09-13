@@ -386,6 +386,17 @@ describe("thumb decoder", () => {
     expect(c.c).toBe(0);
   });
 
+  test("wide add and subtract immediates preserve flags", () => {
+    const c = runThumb([
+      0xf204, 0x3085, // addw r0, r4, #0x385
+      0xf2a4, 0x3185, // subw r1, r4, #0x385
+      0x4770,
+    ], (cpu) => { cpu.w[8] = 0x400; cpu.cpsr = 0xa0000000; });
+    expect(c.w[0]).toBe(0x785);
+    expect(c.w[2]).toBe(0x7b);
+    expect(c.cpsr >>> 28).toBe(0xa);
+  });
+
   test("wide carry arithmetic immediates consume and update carry", () => {
     const c = runThumb([
       0x2800,         // cmp r0, #0 (C=1)
@@ -426,6 +437,16 @@ describe("thumb decoder", () => {
     expect(c.w[22]).toBe(-2147483648);
     expect(c.c).toBe(1);
     expect(c.w[20]).toBe(12);
+  });
+
+  test("wide register-controlled shifts support high registers", () => {
+    const c = runThumb([
+      0xfa0c, 0xf201, // lsl.w r2, r12, r1
+      0xfa2c, 0xf003, // lsr.w r0, r12, r3
+      0x4770,
+    ], (cpu) => { cpu.w[24] = 0x80000001; cpu.w[2] = 1; cpu.w[6] = 31; });
+    expect(c.w[4]).toBe(2);
+    expect(c.w[0]).toBe(1);
   });
 
   test("wide count-leading-zeros handles zero and populated words", () => {

@@ -179,12 +179,13 @@ pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
     const dataImm = (h & 0xfa00) == 0xf000 and wideSecond & 0x8000 == 0 and (dataImmOp <= 4 or dataImmOp == 8 or dataImmOp == 10 or dataImmOp == 11 or dataImmOp == 13 or dataImmOp == 14);
     const wideMulOp = (wideSecond >> 4) & 15;
     const wideMul = (h & 0xfff0) == 0xfb00 and (wideMulOp == 0 or wideMulOp == 1);
-    if (wideVfp or (h & 0xefb0) == 0xef80 or wideMoveImm == 0xf04f or wideMoveImm == 0xf06f or dataImm or wideMul or h == 0xf3bf or (h & 0xfff0) == 0xf3c0 or (h & 0xfff0) == 0xfab0 or (h & 0xfe00) == 0xea00 or (h & 0xfe40) == 0xe840 or (h & 0xfe40) == 0xe800 or wideCond or (h & 0xff90) == 0xf900) {
+    if (wideVfp or (h & 0xefb0) == 0xef80 or wideMoveImm == 0xf04f or wideMoveImm == 0xf06f or dataImm or wideMul or h == 0xf3bf or (h & 0xfff0) == 0xf3c0 or (h & 0xfff0) == 0xfab0 or (h & 0xff80) == 0xfa00 or (h & 0xfe00) == 0xea00 or (h & 0xfe40) == 0xe840 or (h & 0xfe40) == 0xe800 or wideCond or (h & 0xff90) == 0xf900) {
         cpu.cover(page, pc, pc + 2);
         return .{ .len = 4, .ends = false };
     }
     const wideMove = h & 0xfbf0;
-    if (wideMove == 0xf240 or wideMove == 0xf2c0) {
+    const wideAddress = h & 0xfbe0;
+    if (wideMove == 0xf240 or wideMove == 0xf2c0 or wideAddress == 0xf200 or wideAddress == 0xf2a0) {
         cpu.cover(page, pc, pc + 2);
         return .{ .len = 4, .ends = false };
     }
@@ -651,13 +652,14 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
     const dataImm = (h & 0xfa00) == 0xf000 and wideSecond & 0x8000 == 0 and (dataImmOp <= 4 or dataImmOp == 8 or dataImmOp == 10 or dataImmOp == 11 or dataImmOp == 13 or dataImmOp == 14);
     const wideMulOp = (wideSecond >> 4) & 15;
     const wideMul = (h & 0xfff0) == 0xfb00 and (wideMulOp == 0 or wideMulOp == 1);
-    if (wideVfp or (h & 0xefb0) == 0xef80 or wideMoveImm == 0xf04f or wideMoveImm == 0xf06f or dataImm or wideMul or h == 0xf3bf or (h & 0xfff0) == 0xf3c0 or (h & 0xfff0) == 0xfab0 or (h & 0xfe00) == 0xea00 or (h & 0xfe40) == 0xe840 or (h & 0xfe40) == 0xe800 or wideCond or (h & 0xff90) == 0xf900) {
+    if (wideVfp or (h & 0xefb0) == 0xef80 or wideMoveImm == 0xf04f or wideMoveImm == 0xf06f or dataImm or wideMul or h == 0xf3bf or (h & 0xfff0) == 0xf3c0 or (h & 0xfff0) == 0xfab0 or (h & 0xff80) == 0xfa00 or (h & 0xfe00) == 0xea00 or (h & 0xfe40) == 0xe840 or (h & 0xfe40) == 0xe800 or wideCond or (h & 0xff90) == 0xf900) {
         e.fallback(pc, k);
         return false;
     }
     const wideMove = h & 0xfbf0;
+    const wideAddress = h & 0xfbe0;
     const wideTransfer = (((h & 0xff80) == 0xf880 or (h & 0xff80) == 0xf800) and ((h >> 5) & 3) < 3);
-    if (wideMove == 0xf240 or wideMove == 0xf2c0 or wideTransfer or (h & 0xfff0) == 0xf840 or (h & 0xfff0) == 0xf850) {
+    if (wideMove == 0xf240 or wideMove == 0xf2c0 or wideAddress == 0xf200 or wideAddress == 0xf2a0 or wideTransfer or (h & 0xfff0) == 0xf840 or (h & 0xfff0) == 0xf850) {
         e.fallback(pc, k);
         return false;
     }
