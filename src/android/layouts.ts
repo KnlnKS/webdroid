@@ -39,17 +39,18 @@ const frameMethods: NativeSpec["methods"] = {
   "generateLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;": (lp: JLayoutParams) => adoptLp(JFrameLP, lp),
   "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z": (lp: unknown) => +(lp instanceof JFrameLP),
   "onMeasure(II)V": async function (this: JFrameLayout, wSpec: number, hSpec: number) {
-    let mw = 0, mh = 0;
+    let mw = 0, mh = 0, matchCount = 0;
     for (const c of this.children) {
       if (c.visibility === 8) continue;
       await measureChildWithMargins(this, c, wSpec, 0, hSpec, 0);
       const lp = c.lp instanceof JMarginLP ? c.lp : null;
       mw = Math.max(mw, c.measuredW + (lp ? lp.marginL + lp.marginR : 0));
       mh = Math.max(mh, c.measuredH + (lp ? lp.marginT + lp.marginB : 0));
+      if (c.lp?.width === MATCH_PARENT || c.lp?.height === MATCH_PARENT) matchCount++;
     }
     this.measuredW = resolveSizeAndState(Math.max(mw + this.padL + this.padR, this.minW), wSpec);
     this.measuredH = resolveSizeAndState(Math.max(mh + this.padT + this.padB, this.minH), hSpec);
-    // match_parent children re-measure at final size
+    if (matchCount <= 1 || (specMode(wSpec) === MS_EXACTLY && specMode(hSpec) === MS_EXACTLY)) return;
     for (const c of this.children) {
       if (c.visibility === 8) continue;
       const lp = c.lp;
@@ -195,7 +196,7 @@ export const linearMethods: NativeSpec["methods"] = {
     this.measuredH = vertical ? size : finalCross;
     for (const c of kids) {
       const crossDim = vertical ? c.lp?.width ?? WRAP_CONTENT : c.lp?.height ?? WRAP_CONTENT;
-      if (crossDim === MATCH_PARENT) {
+      if (crossDim === MATCH_PARENT && specMode(vertical ? wSpec : hSpec) !== MS_EXACTLY) {
         const mCross = crossMargin(c, vertical);
         const cw = Math.max(0, (vertical ? this.measuredW : this.measuredH) - crossPad - mCross);
         await measureView(c,
