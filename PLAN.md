@@ -34,8 +34,9 @@ platform contracts; run the full serialized E2E suite at the end.
 
 ## Next
 
-1. Follow native rendering and Maps network requests using temporary relay byte counters
-   in src/main.ts and src/shell/relay.ts; remove the counters before completing the task.
+1. Follow empty tile bins and the unfinished panel transition. HTTP upload ordering and
+   wrapped-stream fixes now let Maps parse its zoom tables. Temporary bounded exception
+   capture in src/jvm/runtime.ts diagnoses failures swallowed by futures; remove it.
    Read all process diagnostics. Distinguish slow initialization from a deadlock using
    advancing frames, queue state and initialization/task state.
 2. Exercise matching Maps search/place/directions interactions in Chrome and Android;

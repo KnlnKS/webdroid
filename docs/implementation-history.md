@@ -1928,3 +1928,21 @@ response access because this implementation buffers the entire upload. This is a
 limit, not evidence that connect has opened a remote socket. See OpenJDK's
 [HttpURLConnection input/output ordering](https://github.com/openjdk/jdk/blob/master/src/java.base/share/classes/sun/net/www/protocol/http/HttpURLConnection.java).
 The live Maps run after this fix still needs inspection; do not infer HTTP or visual success.
+
+### Maps wrapped input and remaining rendering (2026-09-13)
+
+The HTTP upload ordering fix produces successful `/glm/mmap` responses (125,549 and
+523,306 bytes observed) and successful tile responses. Buffered/DataInput wrappers
+previously copied native input bytes and cursors, bypassing subclass reads such as
+SequenceInputStream and leaving the original cursor unchanged. Wrappers now retain
+and read the source, with buffered mark/reset and fast primitive reads from buffered
+bytes. Five affected stream tests pass (24 assertions); typecheck passes.
+
+The subsequent Chrome run parsed 52 zoom tables and built 50 lookup entries. It
+still rendered only the map background/search bar: seven GL frames after a pan,
+zero geometry draws, and empty base-tile bins. Tapping search creates and resumes
+`axfd`, but its root view remains unattached. A prior panel transition remains in
+`net.e`, delaying the new panel. These are active failures, not parity. The cache
+writer also reaches unsupported ObjectOutputStream.enableReplaceObject; object
+serialization remains unsupported. Child microG processes had no observed missing
+APIs at this checkpoint. Full E2E has not run.
