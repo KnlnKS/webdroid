@@ -6,7 +6,7 @@ import { mangleMethod, jmethod, intBitsToFloat } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf } from "./graphics";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
-import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, normRV, xmlParserAtNode } from "./res";
+import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, rvInt, rvString, normRV, xmlParserAtNode } from "./res";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 
 export const ST = {
@@ -888,6 +888,12 @@ class JDrawableWrapper extends JDrawable {
   intrinsicH(): number { return this.dr ? this.dr.intrinsicH() : -1; }
   onStateChange(): boolean { return this.dr ? this.dr.onStateChange() : false; }
 }
+class JScaleDrawable extends JDrawableWrapper {
+  scaleW = -1;
+  scaleH = -1;
+  scaleGravity = 3 | 48;
+  useIntrinsicMin = false;
+}
 function wrapSet(this: JDrawableWrapper, d: JDrawable | null) {
   if (this.dr) this.dr.callback = null;
   this.dr = d;
@@ -897,6 +903,52 @@ function wrapSet(this: JDrawableWrapper, d: JDrawable | null) {
     setBounds.call(d, this.bounds.left, this.bounds.top, this.bounds.right, this.bounds.bottom);
   }
 }
+function scaleBounds(d: JScaleDrawable, bounds: JRect): void {
+  const child = d.dr;
+  if (!child) return;
+  let width = bounds.right - bounds.left;
+  let height = bounds.bottom - bounds.top;
+  if (d.scaleW > 0) {
+    const minimum = d.useIntrinsicMin ? Math.max(0, child.intrinsicW()) : 0;
+    width -= Math.trunc((width - minimum) * (10000 - d.level) * d.scaleW / 10000);
+  }
+  if (d.scaleH > 0) {
+    const minimum = d.useIntrinsicMin ? Math.max(0, child.intrinsicH()) : 0;
+    height -= Math.trunc((height - minimum) * (10000 - d.level) * d.scaleH / 10000);
+  }
+  const horizontal = d.scaleGravity & 7;
+  const vertical = d.scaleGravity & 0x70;
+  const left = horizontal === 1 ? bounds.left + ((bounds.right - bounds.left - width) >> 1)
+    : horizontal === 5 ? bounds.right - width : bounds.left;
+  const top = vertical === 0x10 ? bounds.top + ((bounds.bottom - bounds.top - height) >> 1)
+    : vertical === 0x50 ? bounds.bottom - height : bounds.top;
+  void setBounds.call(child, left, top, left + width, top + height);
+}
+rt.register({
+  name: "android/graphics/drawable/ScaleDrawable",
+  ctor: JScaleDrawable,
+  sup: "android/graphics/drawable/DrawableWrapper",
+  methods: {
+    "<init>(Landroid/graphics/drawable/Drawable;IFF)V": function (this: JScaleDrawable, drawable: JDrawable | null, gravity: number, width: number, height: number) {
+      wrapSet.call(this, drawable);
+      this.scaleGravity = gravity;
+      this.scaleW = width;
+      this.scaleH = height;
+    },
+    "draw(Landroid/graphics/Canvas;)V": function (this: JScaleDrawable, canvas: JCanvas) {
+      if (this.dr && this.dr.level !== 0) return jmethod(this.dr, M_drawD)!.call(this.dr, canvas);
+    },
+    "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JScaleDrawable, bounds: JRect) {
+      scaleBounds(this, bounds);
+    },
+    "onLevelChange(I)Z": async function (this: JScaleDrawable, level: number) {
+      if (this.dr) await vcall(this.dr, "setLevel", "(I)Z", level);
+      scaleBounds(this, this.bounds);
+      invalidateSelf.call(this);
+      return 1;
+    },
+  },
+});
 rt.register({
   name: "android/graphics/drawable/DrawableWrapper", ctor: JDrawableWrapper, sup: "android/graphics/drawable/Drawable",
   ifaces: ["android/graphics/drawable/Drawable$Callback"],
@@ -1188,7 +1240,7 @@ const AT = attrTable(
   "endColor", "angle", "type", "gradientRadius", "src", "alpha", "tint", "viewportWidth",
   "viewportHeight", "pathData", "fillColor", "strokeColor", "strokeWidth", "fillAlpha", "fillType",
   "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id",
-  "gravity", "oneshot", "duration");
+  "gravity", "oneshot", "duration", "scaleWidth", "scaleHeight", "scaleGravity", "level", "useIntrinsicSizeAsMinimum");
 async function loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): Promise<JDrawable> {
   const root = parseAXML(bytes);
   return inflateDrawableNode(res, root, theme);
@@ -1322,6 +1374,25 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
         if (child) { d.pushLayer({ d: child, insets: [0, 0, 0, 0] }); d.ids.push(idv ? idv.d : null); }
       }
       return d;
+    }
+    case "scale": {
+      const drawable = new JScaleDrawable();
+      const child = await itemDrawable(res, node, theme);
+      const percent = (value: RV | null) => {
+        const text = value ? rvString(res, value) : "";
+        const number = Number.parseFloat(text ?? "");
+        return text?.endsWith("%") && Number.isFinite(number) ? number / 100 : -1;
+      };
+      drawable.scaleW = percent(get(AT.scaleWidth));
+      drawable.scaleH = percent(get(AT.scaleHeight));
+      drawable.scaleGravity = rvInt(res, get(AT.scaleGravity), 3 | 48);
+      drawable.useIntrinsicMin = !!rvInt(res, get(AT.useIntrinsicSizeAsMinimum), 0);
+      drawable.level = rvInt(res, get(AT.level), 0);
+      if (child) {
+        wrapSet.call(drawable, child);
+        child.level = drawable.level;
+      }
+      return drawable;
     }
     case "inset": {
       const d = new JLayerDrawable();
