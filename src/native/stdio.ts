@@ -9,7 +9,8 @@ import { LAYOUT, fail, utf8, logLine, offArg, readTs, writeTs, clockTime, scanSi
 import { format, scan } from "./printf";
 import { vfs, type VfsFile } from "../jvm/natives/jio";
 import { device } from "../shell/config";
-import type { FileSource } from "../shell/lazyfile";
+import { readFully, type FileSource } from "../shell/lazyfile";
+import { concat } from "../jvm/abi";
 import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketIoctl, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd } from "./net";
 import { allocateFd, releaseFd, reserveFd } from "./fd";
 const dec = new TextDecoder();
@@ -156,6 +157,26 @@ export const javaCloseFd = (fd: number): void => { fdClose(null, fd); };
 export const javaSeekFd = (fd: number, off: number, whence: number): number => fdSeek(null, fd, off, whence);
 export const javaDupFd = (fd: number): number => { const f = fds.get(fd); if (!f) return -1; f.references++; return put(f); };
 
+/** Read from the current offset without moving seekable descriptors; streams are consumed. */
+export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
+  const f = fds.get(fd);
+  if (f && (f.dir || (f.statusFlags & O_ACCMODE) === 1)) return null;
+  if (f && !f.random && !f.rpipe && !f.wpipe && !f.event && !f.timer && !f.epoll) {
+    try { return f.source ? await readFully(f.source, f.pos) : f.content.data.subarray(f.pos, f.content.len); }
+    catch { return null; }
+  }
+  if (!f && !isNativeSocket(fd)) return null;
+  const buffer = mem.malloc(65536), target = mem.va(buffer), chunks: Uint8Array[] = [];
+  try {
+    for (;;) {
+      const n = await fdRead(null, fd, guestAt(target), 65536);
+      if (n < 0) return null;
+      if (!n) return concat(chunks);
+      chunks.push(mem.u8.slice(guestAt(target), guestAt(target) + n));
+    }
+  } finally { mem.free(guestAt(target)); }
+}
+
 function grow(f: Fd, need: number): void {
   if (need <= f.content.data.length) return;
   const n = new Uint8Array(Math.max(need, f.content.data.length * 2, 4096));
@@ -186,7 +207,7 @@ function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   vfs.publish(f.content);
   return n;
 }
-function fdReadAt(cpu: Cpu, f: Fd, p: number, n: number, off: number): number | Promise<number> {
+function fdReadAt(cpu: Cpu | null, f: Fd, p: number, n: number, off: number): number | Promise<number> {
   if (!n) return 0;
   if (f.random) {
     let done = 0;
@@ -207,7 +228,7 @@ function fdReadAt(cpu: Cpu, f: Fd, p: number, n: number, off: number): number | 
   const done = (bytes: Uint8Array) => { mem.write(guestAt(dst), bytes); return bytes.length; };
   return value instanceof Promise ? value.then(done, () => fail(cpu, E.IO)) : done(value);
 }
-function fdRead(cpu: Cpu, fd: number, p: number, n: number): number | Promise<number> {
+function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): number | Promise<number> {
   if (isNativeSocket(fd)) return nativeSocketRead(cpu, fd, p, n);
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);

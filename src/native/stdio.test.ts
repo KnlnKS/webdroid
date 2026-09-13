@@ -4,7 +4,7 @@ import { vfs } from "../jvm/natives/jio";
 import { Cpu, setA64 } from "./cpu";
 import { lookupHost } from "./host";
 import { mem } from "./mem";
-import { fdWriteBack, javaCloseFd, javaOpenFd, renamePath, stdioInit } from "./stdio";
+import { fdWriteBack, javaCloseFd, javaOpenFd, javaFdBytes, javaSeekFd, javaDupFd, renamePath, stdioInit } from "./stdio";
 
 test("record-lock queries report no conflicting process lock through the guest pointer", async () => {
   setA64(true);
@@ -67,4 +67,38 @@ test("open files and mappings retain their identity through rename and unlink", 
   writeBack(0, Uint8Array.of(4));
   expect(vfs.read(to)).toEqual(Uint8Array.of(9));
   vfs.delete(to);
+});
+
+test("descriptor bytes retain shared positions and read lazy files through short reads", async () => {
+  const path = "/descriptor-bytes", bytes = Uint8Array.of(1, 2, 3, 4, 5);
+  for (const lazy of [false, true]) {
+    if (lazy) vfs.lazyFiles.set(path, { size: bytes.length, read: async (offset, length) => bytes.subarray(offset, offset + Math.min(length, 2)) });
+    else vfs.write(path, bytes);
+    const fd = javaOpenFd(path, 0), dup = javaDupFd(fd);
+    try {
+      expect(javaSeekFd(fd, 1, 0)).toBe(1);
+      expect(await javaFdBytes(dup)).toEqual(Uint8Array.of(2, 3, 4, 5));
+      expect(javaSeekFd(fd, 0, 1)).toBe(1);
+      expect(await javaFdBytes(fd)).toEqual(Uint8Array.of(2, 3, 4, 5));
+      expect(javaSeekFd(fd, 9, 0)).toBe(9);
+      expect(await javaFdBytes(fd)).toEqual(new Uint8Array(0));
+    } finally { javaCloseFd(fd); javaCloseFd(dup); vfs.delete(path); }
+    expect(await javaFdBytes(fd)).toBeNull();
+  }
+});
+
+test("descriptor bytes await pipe data without closing the caller's descriptor", async () => {
+  setA64(true); stdioInit();
+  const cpu = new Cpu(mainThread, "descriptor-pipe-test"), buffer = mem.malloc(16);
+  const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
+  expect(await call("pipe", buffer)).toBe(0);
+  const reader = mem.ld32(buffer), writer = mem.ld32(buffer + 4);
+  try {
+    const pending = javaFdBytes(reader);
+    mem.write(buffer + 8, Uint8Array.of(4, 5, 6));
+    expect(await call("write", writer, buffer + 8, 3)).toBe(3);
+    javaCloseFd(writer);
+    expect(await pending).toEqual(Uint8Array.of(4, 5, 6));
+    expect(await javaFdBytes(reader)).toEqual(new Uint8Array(0));
+  } finally { javaCloseFd(reader); mem.free(buffer); cpu.dispose(); }
 });

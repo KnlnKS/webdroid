@@ -2391,3 +2391,16 @@ run rendered base geometry as well. These observations do not isolate a miscompi
 A palette probe observed matching logical/actual dimensions (29x16 and 29x14), then incorrectly
 queried a uniform absent from a different shader and terminated GL-Map; captures after that
 probe failure are invalid. The probe was removed before rebuilding for UnicodeBlock.
+
+Maps' Glide fallback reaches BitmapFactory.decodeFileDescriptor through krl/kra/kqi.
+Both public overloads now decode through the shared native descriptor table. Regular and
+lazy files read from the current offset without moving it; pipe/socket reads consume the
+stream without closing the caller's descriptor. The regular-file path avoids guest-memory
+copies. Failed decodes reset output dimensions/configuration instead of retaining stale
+results. An Android 15 AVD probe verified full/bounds/sampled decoding at offset 3,
+unchanged padding for null results, invalid/empty descriptors and an open pipe after decode.
+A real Chrome pixel probe matches those dimensions, offsets and padding, including opaque
+red decoded pixels. Five descriptor tests (41 assertions) and typecheck pass. A fresh Maps
+place/directions/preview run no longer reports this missing API and renders base-map water,
+roads and labels. This does not prove every place image succeeds; AbstractSequentialList
+still aborts a separate asynchronous place-data path.

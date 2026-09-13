@@ -77,7 +77,7 @@ const wake = (socket: NativeSocket): void => {
   socket.waiters.clear();
   for (const waiter of waiters) waiter();
 };
-const socketFdOf = (cpu: Cpu, fd: number): NativeSocketFd | null => sockets.get(fd) ?? (fail(cpu, E.BADF), null);
+const socketFdOf = (cpu: Cpu | null, fd: number): NativeSocketFd | null => sockets.get(fd) ?? (fail(cpu, E.BADF), null);
 const ipv4Key = (bytes: ArrayLike<number>): number =>
   (bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24)) >>> 0;
 const ipv4Text = (bytes: ArrayLike<number>): string => `${bytes[0]}.${bytes[1]}.${bytes[2]}.${bytes[3]}`;
@@ -338,7 +338,7 @@ function putSockaddr(endpoint: Ipv4Endpoint, address: number, length: number, ca
   mem.st32(length, 16);
 }
 
-function nativeReceiveFrom(cpu: Cpu, fd: number, destination: number, length: number, flags: number, source: number, sourceLength: number): number | Promise<number> {
+function nativeReceiveFrom(cpu: Cpu | null, fd: number, destination: number, length: number, flags: number, source: number, sourceLength: number): number | Promise<number> {
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
   const socket = descriptor.socket;
@@ -430,7 +430,7 @@ export function nativeSocketFcntl(cpu: Cpu, fd: number, command: number, value: 
   return fail(cpu, E.INVAL);
 }
 
-export function nativeSocketRead(cpu: Cpu, fd: number, destination: number, length: number, nonblock = false): number | Promise<number> {
+export function nativeSocketRead(cpu: Cpu | null, fd: number, destination: number, length: number, nonblock = false): number | Promise<number> {
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
   const socket = descriptor.socket;

@@ -7,7 +7,8 @@ import { handle } from "./handles";
 import { vcall, mkEnumSet, JSimpleEnum, linkInit, stringHash } from "../jvm/natives/jlang";
 import { type JLocale, localeTag, usLocale } from "../jvm/natives/jvalues";
 import type { JLocaleList } from "./resnative";
-import { readStreamFully, vfs } from "../jvm/natives/jio";
+import { readStreamFully, vfs, type JFileDescriptor } from "../jvm/natives/jio";
+import { javaFdBytes } from "../native/stdio";
 import { jclsNameOf } from "./apphost";
 import { JBuffer } from "../jvm/natives/jnio";
 import { JPath } from "./path";
@@ -2003,6 +2004,7 @@ async function streamBytes(s: unknown): Promise<Uint8Array> {
 }
 export async function decodeBytes(bytes: Uint8Array, opts: JBFOptions | null,
   onHeader?: (width: number, height: number) => Promise<readonly [number, number]>): Promise<JBitmap | null> {
+  if (opts) { opts.outWidth = opts.outHeight = -1; opts.outMimeType = null; opts.outConfig = opts.outColorSpace = null; }
   let img: ImageBitmap | undefined;
   try {
     const blob = new Blob([bytes as BlobPart]);
@@ -2035,6 +2037,14 @@ export async function decodeBytes(bytes: Uint8Array, opts: JBFOptions | null,
 }
 async function decodeStream(stream: unknown, pad: JRect | null = null, opts: JBFOptions | null = null) {
   const bitmap = stream ? await decodeBytes(await streamBytes(stream), opts) : null;
+  if (bitmap && pad) pad.left = pad.top = pad.right = pad.bottom = -1;
+  return bitmap;
+}
+async function decodeFileDescriptor(fd: JFileDescriptor | null, pad: JRect | null = null, opts: JBFOptions | null = null) {
+  if (!fd) throw rt.mkThrowable("java/lang/NullPointerException", "fd");
+  const bytes = await javaFdBytes(fd.fd);
+  const bitmap = await decodeBytes(bytes ?? new Uint8Array(0), opts);
+  if (!bitmap && opts?.inBitmap) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Problem decoding into existing bitmap");
   if (bitmap && pad) pad.left = pad.top = pad.right = pad.bottom = -1;
   return bitmap;
 }
@@ -2072,6 +2082,8 @@ rt.register({
         decodeBytes(u8(b, off, len), o),
     "static decodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;": decodeStream,
     "static decodeStream(Ljava/io/InputStream;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;": decodeStream,
+    "static decodeFileDescriptor(Ljava/io/FileDescriptor;)Landroid/graphics/Bitmap;": decodeFileDescriptor,
+    "static decodeFileDescriptor(Ljava/io/FileDescriptor;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;": decodeFileDescriptor,
     "static decodeResource(Landroid/content/res/Resources;I)Landroid/graphics/Bitmap;": decodeResource,
     "static decodeResource(Landroid/content/res/Resources;ILandroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;": decodeResource,
     "static decodeResourceStream(Landroid/content/res/Resources;Landroid/util/TypedValue;Ljava/io/InputStream;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;": decodeResourceStream,
