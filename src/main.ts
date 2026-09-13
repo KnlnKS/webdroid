@@ -265,7 +265,7 @@ const wd = {
       for (const { v, x, y } of walkTree(root, 0, ox, oy, true)) {
         const id = v.idNum > 0 ? res.idName(v.idNum) : "";
         out.push({
-          text: String(v.text ?? ""),
+          text: String(v.text ?? v.drawnText?.join(" ") ?? ""),
           desc: String(v.contentDesc ?? ""),
           cls: clsName(v).replace(/\//g, "."),
           resId: id && !id.startsWith("0x") ? `${v.idNum >>> 24 === 1 ? "android" : app.host.pkg}:id/${id}` : "",
@@ -282,7 +282,8 @@ const wd = {
   // the space wd.tap takes). Overlays first, topmost first. Synchronous on purpose: the e2e
   // harness needs a value it can await from outside the page without holding an in-page promise.
   locateText: (s: string): { x: number; y: number } | null => {
-    const want = s.toLowerCase();
+    const normalized = (text: unknown) => String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+    const want = normalized(s);
     const decor = topDecor();
     // An overlay's own left/top already carry its position — the layout pass lays it out AT
     // o.x/o.y — so seeding the walk with them again doubles the offset.
@@ -290,11 +291,11 @@ const wd = {
     if (decor) roots.push(decor);
     for (const rootView of roots) {
       for (const { v, x, y } of walkTree(rootView, 0, 0, 0, true)) {
-        const txt = String(v.text ?? "").toLowerCase(), raw = String(v.rawText ?? "").toLowerCase();
+        const txt = normalized(v.text), raw = normalized(v.rawText), drawn = normalized(v.drawnText?.join(" "));
         // the emulator driver resolves a tapText against text OR content-desc, so an icon-only
         // control (an overflow button, a nav arrow) has to be findable here the same way
-        const cd = String(v.contentDesc ?? "").toLowerCase();
-        if ((txt === want || raw === want || cd === want) && v.right > v.left) return { x: x + (v.right - v.left) / 2, y: y + (v.bottom - v.top) / 2 };
+        const cd = normalized(v.contentDesc);
+        if ((txt === want || raw === want || drawn === want || cd === want) && v.right > v.left) return { x: x + (v.right - v.left) / 2, y: y + (v.bottom - v.top) / 2 };
       }
     }
     return null;

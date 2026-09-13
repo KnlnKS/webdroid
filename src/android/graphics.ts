@@ -1256,6 +1256,7 @@ export class JCanvas extends JObj {
   w = 0; h = 0;
   saveCount = 1;
   bmp: JBitmap | null = null;
+  semanticOwner: { drawnText: string[] | null } | null = null;
   static wrap(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, w: number, h: number): JCanvas {
     const c = new JCanvas();
     c.ctx = ctx; c.w = w; c.h = h;
@@ -1528,8 +1529,11 @@ export const canvasMethods: NativeSpec["methods"] = {
   "drawText(Ljava/lang/String;FFLandroid/graphics/Paint;)V": function (this: JCanvas, s: string, x: number, y: number, p: JPaint) {
     drawTextImpl(this, s, x, y, p);
   },
-  "drawText(Ljava/lang/CharSequence;IIFFLandroid/graphics/Paint;)V": function (this: JCanvas, s: unknown, a: number, b: number, x: number, y: number, p: JPaint) {
-    drawTextImpl(this, String(s).slice(a, b), x, y, p);
+  "drawText(Ljava/lang/CharSequence;IIFFLandroid/graphics/Paint;)V": async function (this: JCanvas, s: unknown, a: number, b: number, x: number, y: number, p: JPaint) {
+    const text = typeof s === "string" ? s : typeof (s as { text?: unknown })?.text === "string"
+      ? (s as { text: string }).text
+      : String(await vcall(s, "toString", "()Ljava/lang/String;"));
+    drawTextImpl(this, text.slice(a, b), x, y, p);
   },
   "drawText(Ljava/lang/String;IIFFLandroid/graphics/Paint;)V": function (this: JCanvas, s: string, a: number, b: number, x: number, y: number, p: JPaint) {
     drawTextImpl(this, s.slice(a, b), x, y, p);
@@ -1567,6 +1571,7 @@ const drawColorKey = mangleMethod("drawColor", "(I)V");
 export const CAPS = ["butt", "round", "square"] as const;
 export const JOINS = ["miter", "round", "bevel"] as const;
 function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
+  if (cv.semanticOwner) (cv.semanticOwner.drawnText ??= []).push(s);
   const ctx = cv.ctx;
   ctx.font = p.font();
   ctx.fillStyle = p.fillStyle(ctx) as string;
