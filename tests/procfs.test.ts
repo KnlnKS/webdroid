@@ -3,6 +3,7 @@ import "../src/natives";
 import { setProcessIdentity, setProcessName } from "../src/android/os";
 import { rt } from "../src/jvm/runtime";
 import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { mangleMethod } from "../src/jvm/abi";
 
 rt.linkNatives();
 
@@ -18,4 +19,9 @@ test("Java and native-facing procfs expose the current process cmdline", async (
     expect(new TextDecoder().decode(new Uint8Array(bytes.buffer, 0, length))).toBe("com.example.app\0");
   }
   expect(await vcall(await newObj("java/io/File", "(Ljava/lang/String;)V", "/proc/9999/cmdline"), "exists", "()Z")).toBe(0);
+});
+
+test("String.trim removes a proc cmdline terminator", () => {
+  const trim = String.prototype[mangleMethod("trim", "()Ljava/lang/String;") as keyof String] as unknown as (this: string) => string;
+  expect(trim.call("\0 com.example.app\0")).toBe("com.example.app");
 });

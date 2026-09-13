@@ -590,8 +590,16 @@ sm("startsWith(Ljava/lang/String;)Z", function (s: string) { return this.startsW
 sm("startsWith(Ljava/lang/String;I)Z", function (s: string, i: number) { return this.startsWith(s, i) ? 1 : 0; });
 sm("endsWith(Ljava/lang/String;)Z", function (s: string) { return this.endsWith(s) ? 1 : 0; });
 sm("contains(Ljava/lang/CharSequence;)Z", function (s: unknown) { return this.includes(jToString(s)) ? 1 : 0; });
-sm("trim()Ljava/lang/String;", function () { return this.trim(); });
-sm("strip()Ljava/lang/String;", function () { return this.trim(); });
+function javaTrim(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) <= 0x20) start++;
+  while (end > start && value.charCodeAt(end - 1) <= 0x20) end--;
+  return start === 0 && end === value.length ? value : value.slice(start, end);
+}
+const JAVA_WHITESPACE = /^[\t-\r\x1c-\x1f \u1680\u2000-\u2006\u2008-\u200a\u2028\u2029\u205f\u3000]+|[\t-\r\x1c-\x1f \u1680\u2000-\u2006\u2008-\u200a\u2028\u2029\u205f\u3000]+$/g;
+sm("trim()Ljava/lang/String;", function () { return javaTrim(this); });
+sm("strip()Ljava/lang/String;", function () { return this.replace(JAVA_WHITESPACE, ""); });
 sm("toLowerCase()Ljava/lang/String;", function () { return this.toLowerCase(); });
 sm("toUpperCase()Ljava/lang/String;", function () { return this.toUpperCase(); });
 sm("toLowerCase(Ljava/util/Locale;)Ljava/lang/String;", function () { return this.toLowerCase(); });
