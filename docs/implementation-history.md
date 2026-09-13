@@ -2276,3 +2276,17 @@ intermittent crash or startup race. The capture also exposes existing drawing-or
 failures: ImageView mutates bounds without notifying its drawable and drops an async
 draw result; container bounds callbacks are not awaited. A Chrome probe observes only
 `draw`, missing `onBoundsChange`, for a resized custom drawable. These remain next.
+
+### Await drawable geometry and image drawing
+
+ImageView changed drawable bounds fields directly and dropped the virtual draw result.
+LayerDrawable also discarded asynchronous child bounds callbacks. Route/place captures
+showed misplaced icons and clipped paint. Preserve callback ordering through bounds
+changes and layer drawing, including caller thread identity. ImageView scales its canvas
+around intrinsic drawable bounds and restores it only after drawing finishes.
+
+Focused layer/transition tests pass. A real Chrome Canvas2D probe now observes bounds
+then draw, with a 20x10 drawable filling the expected centered 100x50 area of a 100x100
+view; the center is red, the upper margin transparent, and the canvas transform is
+restored. The preceding build skipped the bounds callback. Full Maps visual verification
+continues alongside an independent bitmap-shader GPU allocation investigation.

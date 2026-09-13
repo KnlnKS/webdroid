@@ -1,9 +1,9 @@
 import { AID } from "./res";
 import { JView, initViewFromCtx, requestLayout, invalidate, resolveSizeAndState, specMode, MS_EXACTLY } from "./view";
 import {
-  type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, cslColor, drawChild, drawableSize
+  type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, cslColor, drawableSize
 } from "./drawable";
-import { curThread, mkEnumSet } from "../jvm/natives/jlang";
+import { curThread, vcallOn, mkEnumSet } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, stubs, noops } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvColor } from "./res";
 import type { JBitmap, JCanvas } from "./graphics";
@@ -108,11 +108,13 @@ const imageViewMethods: NativeSpec["methods"] = {
       }
     }
   },
-  "onDraw(Landroid/graphics/Canvas;)V": function (this: JImageView, cv: JCanvas) {
+  "onDraw(Landroid/graphics/Canvas;)V": async function (this: JImageView, cv: JCanvas) {
     const d = this.drawable;
     if (!d) return;
-    const dw = Math.max(1, this.drawableW), dh = Math.max(1, this.drawableH);
+    const thread = curThread;
     const aw = this.width() - this.padL - this.padR, ah = this.height() - this.padT - this.padB;
+    if (aw <= 0 || ah <= 0) return;
+    const dw = this.drawableW > 0 ? this.drawableW : aw, dh = this.drawableH > 0 ? this.drawableH : ah;
     let l = this.padL, t = this.padT, w = aw, h = ah;
     const st = this.scaleType;
     if (st === 5) { // CENTER
@@ -129,18 +131,19 @@ const imageViewMethods: NativeSpec["methods"] = {
       const s = Math.max(aw / dw, ah / dh);
       w = Math.round(dw * s); h = Math.round(dh * s);
       l = this.padL + ((aw - w) >> 1); t = this.padT + ((ah - h) >> 1);
-      const ctx = cv.ctx;
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(this.padL, this.padT, aw, ah);
-      ctx.clip();
-      d.bounds.left = l; d.bounds.top = t; d.bounds.right = l + w; d.bounds.bottom = t + h;
-      drawChild(d, cv);
-      ctx.restore();
-      return;
     }
-    d.bounds.left = l; d.bounds.top = t; d.bounds.right = l + w; d.bounds.bottom = t + h;
-    drawChild(d, cv);
+    const ctx = cv.ctx;
+    ctx.save();
+    try {
+      if (st === 6) {
+        ctx.beginPath(); ctx.rect(this.padL, this.padT, aw, ah); ctx.clip();
+      }
+      ctx.translate(l, t); ctx.scale(w / dw, h / dh);
+      const bounds = vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, dw, dh);
+      if (bounds instanceof Promise) await bounds;
+      const draw = vcallOn(thread, d, "draw", "(Landroid/graphics/Canvas;)V", cv);
+      if (draw instanceof Promise) await draw;
+    } finally { ctx.restore(); }
   },
 };
 rt.register({ name: "android/widget/ImageView", ctor: JImageView, sup: "android/view/View", methods: imageViewMethods });

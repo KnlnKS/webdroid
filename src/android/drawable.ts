@@ -107,7 +107,7 @@ const drawableMethods: NativeSpec["methods"] = {
     return 1;
   },
   "onStateChange([I)Z": function (this: JDrawable) { return this.onStateChange() ? 1 : 0; },
-  "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JDrawable) { onBoundsChangeAll(this); },
+  "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JDrawable) { return onBoundsChangeAll(this); },
   "onLevelChange(I)Z": () => 0,
   "getState()[I": function (this: JDrawable) { return Int32Array.from(this.stateSet); },
   "setLevel(I)Z": function (this: JDrawable, l: number) {
@@ -167,7 +167,7 @@ const drawableMethods: NativeSpec["methods"] = {
   ...stubs(0, "getChangingConfigurations()I", "isProjected()Z", "canApplyTheme()Z", "onLayoutDirectionChanged(I)Z"),
 };
 function onBoundsChangeAll(d: JDrawable) {
-  if (d instanceof JLayerDrawable) d.layout();
+  if (d instanceof JLayerDrawable) return d.layout();
   if (d instanceof JStateListDrawable) { const c = d.current(); if (c) copyBounds(d, c); }
 }
 function copyBounds(from: JDrawable, to: JDrawable) {
@@ -542,18 +542,24 @@ class JLayerDrawable extends JDrawable {
    *  and through its own callback the view it is drawn into */
   pushLayer(layer: JLayerDrawable["layers"][number]) { layer.d.callback = this; this.layers.push(layer); }
   /** AOSP updateLayerBounds: insets, then an explicit layer size placed by its gravity */
-  layout() {
-    for (const l of this.layers) {
-      let L = this.bounds.left + l.insets[0], T = this.bounds.top + l.insets[1];
-      let R = this.bounds.right - l.insets[2], B = this.bounds.bottom - l.insets[3];
-      const w = l.w !== undefined && l.w >= 0 ? l.w : -1, h = l.h !== undefined && l.h >= 0 ? l.h : -1;
-      if (w >= 0 || h >= 0) {
-        const g = l.gravity || (w >= 0 && h >= 0 ? 0x33 : w >= 0 ? 0x73 : 0x37);
-        if (w >= 0) { const hg = g & 7; L = hg === 1 ? ((L + R - w) >> 1) : hg === 5 ? R - w : L; R = L + w; }
-        if (h >= 0) { const vg = g & 0x70; T = vg === 16 ? ((T + B - h) >> 1) : vg === 80 ? B - h : T; B = T + h; }
+  layout(): unknown {
+    const thread = curThread;
+    const step = (i: number): unknown => {
+      for (; i < this.layers.length; i++) {
+        const l = this.layers[i];
+        let L = this.bounds.left + l.insets[0], T = this.bounds.top + l.insets[1];
+        let R = this.bounds.right - l.insets[2], B = this.bounds.bottom - l.insets[3];
+        const w = l.w !== undefined && l.w >= 0 ? l.w : -1, h = l.h !== undefined && l.h >= 0 ? l.h : -1;
+        if (w >= 0 || h >= 0) {
+          const g = l.gravity || (w >= 0 && h >= 0 ? 0x33 : w >= 0 ? 0x73 : 0x37);
+          if (w >= 0) { const hg = g & 7; L = hg === 1 ? ((L + R - w) >> 1) : hg === 5 ? R - w : L; R = L + w; }
+          if (h >= 0) { const vg = g & 0x70; T = vg === 16 ? ((T + B - h) >> 1) : vg === 80 ? B - h : T; B = T + h; }
+        }
+        const bounds = vcallOn(thread, l.d, "setBounds", "(IIII)V", L, T, R, B);
+        if (bounds instanceof Promise) return bounds.then(() => step(i + 1));
       }
-      setBounds.call(l.d, L, T, R, B);
-    }
+    };
+    return step(0);
   }
   paint(cv: JCanvas) {
     this.layout();
@@ -562,14 +568,14 @@ class JLayerDrawable extends JDrawable {
   /** Every layer through its virtual draw. Stays synchronous — no promise allocated — unless a
    *  compiled child actually suspends, in which case the rest follow it in order. */
   drawLayers(cv: JCanvas): unknown {
-    this.layout();
+    const thread = curThread;
     const step = (i: number): unknown => {
       for (; i < this.layers.length; i++) {
-        const r = drawChild(this.layers[i].d, cv);
+        const r = vcallOn(thread, this.layers[i].d, "draw", "(Landroid/graphics/Canvas;)V", cv);
         if (r instanceof Promise) return r.then(() => step(i + 1));
       }
     };
-    return step(0);
+    return after(this.layout(), () => step(0));
   }
   size(vertical: boolean): number | Promise<number> {
     const thread = curThread, edge = vertical ? 1 : 0;
@@ -738,10 +744,11 @@ rt.register({ name: "android/graphics/drawable/TransitionDrawable", ctor: JTrans
 
 class JAdaptiveIconDrawable extends JLayerDrawable {
   /** AOSP getFullBounds: each layer is the viewport grown by 25% on every side */
-  layout() {
+  async layout() {
+    const thread = curThread;
     const { left, top, right, bottom } = this.bounds;
     const dx = (right - left) / 4, dy = (bottom - top) / 4;
-    for (const l of this.layers) setBounds.call(l.d, left - dx, top - dy, right + dx, bottom + dy);
+    for (const l of this.layers) await vcallOn(thread, l.d, "setBounds", "(IIII)V", left - dx, top - dy, right + dx, bottom + dy);
   }
   clip(cv: JCanvas) {
     const { left, top, right, bottom } = this.bounds;

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { mangleMethod } from "../src/jvm/abi";
-import { newObj, vcall, curThread, JThread } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallOn, curThread, JThread } from "../src/jvm/natives/jlang";
 import { JView, measureView, makeSpec, MS_AT_MOST } from "../src/android/view";
 
 rt.linkNatives();
@@ -39,4 +39,29 @@ test("suggested view minimums respect virtual background dimensions", async () =
   await vcall(view, "setBackground", "(Landroid/graphics/drawable/Drawable;)V", d);
   expect(await vcall(view, "getSuggestedMinimumWidth", "()I")).toBe(84);
   expect(await vcall(view, "getSuggestedMinimumHeight", "()I")).toBe(48);
+});
+
+test("layer bounds and drawing await each child on the dispatch thread", async () => {
+  const events: string[] = [], thread = new JThread();
+  const children = [0, 1].map(i => {
+    const d = rt.make("android/graphics/drawable/Drawable");
+    Object.assign(d, {
+      [mangleMethod("onBoundsChange", "(Landroid/graphics/Rect;)V")]: async () => {
+        expect(curThread).toBe(thread);
+        await Promise.resolve();
+        events.push(`bounds ${i}`);
+      },
+      [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: async () => {
+        expect(curThread).toBe(thread);
+        await Promise.resolve();
+        events.push(`draw ${i}`);
+      },
+    });
+    return d;
+  });
+  const layer = await newObj("android/graphics/drawable/LayerDrawable", "([Landroid/graphics/drawable/Drawable;)V", children);
+  await vcallOn(thread, layer, "setBounds", "(IIII)V", 0, 0, 100, 100);
+  expect(events).toEqual(["bounds 0", "bounds 1"]);
+  await vcallOn(thread, layer, "draw", "(Landroid/graphics/Canvas;)V", null);
+  expect(events).toEqual(["bounds 0", "bounds 1", "draw 0", "draw 1"]);
 });
