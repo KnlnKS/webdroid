@@ -2307,3 +2307,19 @@ Chrome Maps run reached search/place/start selection without GPU allocation erro
 only 127 shader tile canvases were allocated at the place checkpoint, including the
 probe. This removes the measured allocation explosion, not the separate startup
 trace mismatch, missing route map, or clipped chip geometry. Typecheck passes.
+
+### AnimatorSet start notification restores map visibility
+
+The Maps route map stayed INVISIBLE because MainLayout.aB retained its full-screen
+content flag. Bytecode shows oam.onAnimationStart makes the incoming search container
+visible, and nfi skips outgoing cleanup when that container is already invisible.
+AnimatorSet.start never notified its listeners, so both full-screen containers stayed
+invisible and cleanup never cleared the flag. Notify start listeners before children,
+retaining the caller thread across asynchronous listeners and child starts.
+
+Six focused animator tests pass (17 assertions) and typecheck passes. Fresh full
+Chrome now displays start-location suggestions and, after selecting a start and
+swapping endpoints, Ferry Building to Golden Gate Bridge route lines and map controls.
+MainLayout's full-screen flag clears and the MapViewContainer is VISIBLE without
+manual state changes. Preview renders the maneuver icon. Base map tiles, chip geometry
+and new Math.log1p / ICU ListFormatter failures remain; parity is not established.

@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
 import { mangleMethod, jarray } from "../jvm/abi";
-import { vcall, vcallMaybe, boxInt, box, JFloat } from "../jvm/natives/jlang";
+import { vcall, vcallMaybe, vcallOn, curThread, boxInt, box, JFloat } from "../jvm/natives/jlang";
 import { toJsArray, newArrayList } from "../jvm/natives/jutil";
 import { uiState, invalidate, JView, guardCall } from "./view";
 import { reportUncaught } from "./os";
@@ -455,11 +455,15 @@ rt.register({
     "playSequentially(Ljava/util/List;)V": async function (this: JAnimatorSet, c: unknown) { this.anims = [...await toJsArray(c)] as JValueAnimator[]; this.sequential = true; },
     "getChildAnimations()Ljava/util/ArrayList;": function (this: JAnimatorSet) { return newArrayList([...this.anims]); },
     "start()V": async function (this: JAnimatorSet) {
+      const thread = curThread;
       this.running = true;
+      for (const l of [...this.animLs]) {
+        try { await vcallOn(thread, l, "onAnimationStart", "(Landroid/animation/Animator;)V", this); } catch (e) { reportUncaught(e); }
+      }
       if (this.sequential) {
         for (let i = 0; i + 1 < this.anims.length; i++) this.anims[i].next = this.anims[i + 1];
-        if (this.anims.length) await guardCall(this.anims[0], M_start);
-      } else for (const a of this.anims) await guardCall(a, M_start);
+        if (this.anims.length) await vcallOn(thread, this.anims[0], "start", "()V");
+      } else for (const a of this.anims) await vcallOn(thread, a, "start", "()V");
       const total = this.sequential ? this.anims.reduce((s, a) => s + a.delayMs + a.durationMs, 0)
         : Math.max(0, ...this.anims.map((a) => a.delayMs + a.durationMs));
       setTimeout(() => {

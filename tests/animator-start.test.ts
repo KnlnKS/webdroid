@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { mangleMethod, jarray } from "../src/jvm/abi";
-import { newObj, vcall, JFloat, box } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallOn, curThread, JThread, JFloat, box } from "../src/jvm/natives/jlang";
 
 rt.linkNatives();
 const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => (rt.link(cls).ctor as any)[mangleMethod(name, desc)](...args);
@@ -77,4 +77,23 @@ test("View.ALPHA reads and writes through the view's virtual accessors", async (
   await vcall(anim, "start", "()V");
   expect(anim.from).toBe(0.25);
   await vcall(anim, "cancel", "()V");
+});
+
+test("AnimatorSet notifies start listeners before starting its children", async () => {
+  const set = await newObj("android/animation/AnimatorSet");
+  const child = await newObj("android/animation/ValueAnimator");
+  const thread = new JThread(), events: string[] = [];
+  Object.assign(child, { [mangleMethod("start", "()V")]: () => { expect(curThread).toBe(thread); events.push("child"); } });
+  for (const name of ["first", "second"]) await vcall(set, "addListener", "(Landroid/animation/Animator$AnimatorListener;)V", {
+    [mangleMethod("onAnimationStart", "(Landroid/animation/Animator;)V")]: async (anim: unknown) => {
+      expect(anim).toBe(set);
+      expect(curThread).toBe(thread);
+      events.push(name);
+      await Promise.resolve();
+    },
+    [mangleMethod("onAnimationEnd", "(Landroid/animation/Animator;)V")]: () => {},
+  });
+  await vcall(set, "playTogether", "([Landroid/animation/Animator;)V", [child]);
+  await vcallOn(thread, set, "start", "()V");
+  expect(events).toEqual(["first", "second", "child"]);
 });
