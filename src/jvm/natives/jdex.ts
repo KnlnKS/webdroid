@@ -64,9 +64,6 @@ rt.register({
   name: "dalvik/system/BaseDexClassLoader", ctor: class extends JClassLoader {}, sup: "java/lang/ClassLoader",
 });
 rt.register({
-  name: "dalvik/system/BaseDexClassLoader", ctor: class extends JClassLoader {}, sup: "java/lang/ClassLoader",
-});
-rt.register({
   name: "dalvik/system/PathClassLoader", ctor: class extends JClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",
   methods: {
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V": init,
@@ -82,7 +79,7 @@ rt.register({
   },
 });
 rt.register({
-  name: "dalvik/system/DexClassLoader", ctor: class extends JClassLoader {}, sup: "dalvik/system/PathClassLoader",
+  name: "dalvik/system/DexClassLoader", ctor: class extends JClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",
   methods: {
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V": init,
   },
