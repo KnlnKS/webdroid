@@ -5,6 +5,12 @@ import { newObj, vcall } from "../src/jvm/natives/jlang";
 
 rt.linkNatives();
 
+test("measurement callback interface is available", () => {
+  const receiver = rt.link("android/os/OutcomeReceiver");
+  expect(receiver.native).toBe(true);
+  expect(receiver.stub).toBe(false);
+});
+
 test("disabled measurement service reports its unavailable state", async () => {
   const context = await newObj("android/content/Context");
   const cls = rt.classFor("android/adservices/measurement/MeasurementManager");

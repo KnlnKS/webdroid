@@ -594,6 +594,7 @@ rt.register({
   },
 });
 rt.markers("android/os/Parcelable", "android/os/Parcelable$Creator");
+rt.markers("android/os/OutcomeReceiver");
 class JCancellationSignal extends JObj {
   cancelled = 0;
   listener: unknown = null;
