@@ -1,5 +1,5 @@
 import { JObj, rt } from "../runtime";
-import { JThrowable } from "./jlang";
+import { JThrowable, vcall } from "./jlang";
 
 class JLogger extends JObj { lname = ""; level: JLevel | null = null; }
 const loggers = new Map<string, JLogger>();
@@ -9,6 +9,14 @@ function log(this: JLogger, level: JLevel, message: string, error?: JThrowable |
   const detail = error ? `\n${error.msg}${frames.length ? "\n  at " + frames.join("\n  at ") : ""}` : "";
   const method = level.value >= 1000 ? "error" : level.value >= 900 ? "warn" : "info";
   console[method](`[java.util.logging/${this.lname}] ${message}${detail}`);
+}
+async function logParameters(this: JLogger, level: JLevel, message: string, parameters: unknown[] | null): Promise<void> {
+  if (level.value < (this.level?.value ?? 800) || this.level?.value === 2147483647) return;
+  if (parameters?.length && /\{[0-3]/.test(message)) {
+    const text = await Promise.all(parameters.map(p => p === null ? "null" : typeof p === "object" ? vcall(p, "toString", "()Ljava/lang/String;") : String(p)));
+    message = message.replace(/\{(\d+)\}/g, (match, index: string) => text[Number(index)] ?? match);
+  }
+  log.call(this, level, message);
 }
 rt.register({
   name: "java/util/logging/Logger", ctor: JLogger,
@@ -20,6 +28,8 @@ rt.register({
     "log(Ljava/util/logging/Level;Ljava/lang/String;Ljava/lang/Throwable;)V": log,
     "logp(Ljava/util/logging/Level;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JLogger, level: JLevel, _class: string, _method: string, message: string) { log.call(this, level, message); },
     "logp(Ljava/util/logging/Level;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)V": function (this: JLogger, level: JLevel, _class: string, _method: string, message: string, error: JThrowable) { log.call(this, level, message, error); },
+    "logp(Ljava/util/logging/Level;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V": function (this: JLogger, level: JLevel, _class: string, _method: string, message: string, value: unknown) { return logParameters.call(this, level, message, [value]); },
+    "logp(Ljava/util/logging/Level;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/Object;)V": function (this: JLogger, level: JLevel, _class: string, _method: string, message: string, values: unknown[] | null) { return logParameters.call(this, level, message, values); },
     "info(Ljava/lang/String;)V": function (this: JLogger, message: string) { log.call(this, levels.INFO, message); },
     "warning(Ljava/lang/String;)V": function (this: JLogger, message: string) { log.call(this, levels.WARNING, message); },
     "fine(Ljava/lang/String;)V": function (this: JLogger, message: string) { log.call(this, levels.FINE, message); },
