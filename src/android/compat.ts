@@ -601,7 +601,7 @@ rt.register({
       "onDoubleTapEvent(Landroid/view/MotionEvent;)Z"),
   },
 });
-rt.markers("android/view/GestureDetector$OnGestureListener", "android/view/GestureDetector$OnDoubleTapListener");
+rt.markers("android/view/GestureDetector$OnGestureListener", "android/view/GestureDetector$OnDoubleTapListener", "android/view/ScaleGestureDetector$OnScaleGestureListener");
 
 // ── GestureStore/GestureLibrary — stubbed (legacy, sometimes touched by old ad SDKs)
 rt.register({
