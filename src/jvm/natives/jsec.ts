@@ -139,10 +139,13 @@ rt.register({
   },
 });
 
-type Digest = (data: Uint8Array) => Uint8Array;
+type Digest = (data: Uint8Array) => Uint8Array | Promise<Uint8Array>;
+const webDigest = (algorithm: string): Digest => async data => new Uint8Array(await crypto.subtle.digest(algorithm, data.slice().buffer));
 // Standard names plus the aliases Android's providers accept (case-insensitive); anything else is
 // honestly NoSuchAlgorithmException, which the SDKs that ask for e.g. MD5 catch and fall back from.
 const DIGESTS = new Map<string, [Digest, number]>([
+  ["SHA-384", [webDigest("SHA-384"), 48]], ["SHA384", [webDigest("SHA-384"), 48]],
+  ["SHA-512", [webDigest("SHA-512"), 64]], ["SHA512", [webDigest("SHA-512"), 64]],
   ["MD5", [md5, 16]], ["SHA-1", [sha1, 20]], ["SHA1", [sha1, 20]], ["SHA", [sha1, 20]], ["SHA-256", [sha256, 32]], ["SHA256", [sha256, 32]],
 ]);
 class JMessageDigest extends JObj {
@@ -154,11 +157,12 @@ class JMessageDigest extends JObj {
 function mdUpdate(md: JMessageDigest, b: Int8Array, off = 0, len = b.length) {
   md.parts.push(u8(b, off, len).slice());
 }
-function mdDigest(md: JMessageDigest): Int8Array {
+function mdDigest(md: JMessageDigest): Int8Array | Promise<Int8Array> {
   const all = concat(md.parts);
   md.parts = [];
   const a = md.fn(all);
-  return new Int8Array(a.buffer, 0, a.length);
+  const result = (bytes: Uint8Array) => new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length);
+  return a instanceof Promise ? a.then(result) : result(a);
 }
 rt.register({
   name: "java/security/MessageDigest", ctor: JMessageDigest,
