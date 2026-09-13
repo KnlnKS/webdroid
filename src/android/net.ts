@@ -421,13 +421,20 @@ rt.register({
     "isP2pSupported()Z": () => 0,
   },
 });
-class JNetworkRequest extends JObj { caps: number[] = []; transports: number[] = []; includeOtherUidNetworks = false; }
+class JNetworkRequest extends JObj {
+  caps: number[] = [];
+  transports: number[] = [];
+  includeOtherUidNetworks = false;
+  networkSpecifier: unknown = null;
+}
 class JNetworkRequestBuilder extends JObj { r = new JNetworkRequest(); }
+rt.markers("android/net/NetworkSpecifier");
 rt.register({
   name: "android/net/NetworkRequest", ctor: JNetworkRequest,
   methods: {
     "hasCapability(I)Z": function (this: JNetworkRequest, c: number) { return this.caps.includes(c) ? 1 : 0; },
     "hasTransport(I)Z": function (this: JNetworkRequest, t: number) { return this.transports.includes(t) ? 1 : 0; },
+    "getNetworkSpecifier()Landroid/net/NetworkSpecifier;": function (this: JNetworkRequest) { return this.networkSpecifier; },
   },
 });
 rt.register({
@@ -443,9 +450,14 @@ rt.register({
       this.r.includeOtherUidNetworks = include !== 0;
       return this;
     },
+    "setNetworkSpecifier(Landroid/net/NetworkSpecifier;)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, specifier: unknown) {
+      this.r.networkSpecifier = specifier;
+      return this;
+    },
     "build()Landroid/net/NetworkRequest;": function (this: JNetworkRequestBuilder) {
       const r = new JNetworkRequest();
       r.caps = this.r.caps.slice(); r.transports = this.r.transports.slice(); r.includeOtherUidNetworks = this.r.includeOtherUidNetworks;
+      r.networkSpecifier = this.r.networkSpecifier;
       return r;
     },
   },
