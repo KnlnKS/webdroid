@@ -1377,6 +1377,42 @@ export class JCanvas extends JObj {
     return this.shaderCtx!;
   }
 }
+
+type DrawnTextOwner = {
+  drawnText: string[] | null;
+  drawnTextPoints: Float32Array | null;
+  drawnTextCount: number;
+};
+
+export function locateDrawnText(owner: DrawnTextOwner, text: string, width: number, height: number): JPoint | null {
+  const runs = owner.drawnText;
+  const points = owner.drawnTextPoints;
+  const count = Math.min(owner.drawnTextCount, runs?.length ?? 0);
+  const normalize = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+  const want = normalize(text);
+  if (!runs || !points || !count || !want) return null;
+
+  let best = 0, bestIndex = -1;
+  const score = (candidate: string) => candidate === want ? 3 : candidate.startsWith(want) ? 2 : candidate.includes(want) ? 1 : 0;
+  const consider = (candidate: string, index: number) => {
+    const s = score(candidate);
+    const x = points[index * 2], y = points[index * 2 + 1];
+    if (s > best && Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x < width && y >= 0 && y < height) {
+      best = s;
+      bestIndex = index;
+    }
+  };
+
+  for (let i = 0; i < count; i++) consider(normalize(runs[i]), i);
+  for (let i = 0; i < count; i++) {
+    let phrase = normalize(runs[i]);
+    for (let j = i + 1; j < count; j++) {
+      phrase += " " + normalize(runs[j]);
+      consider(phrase, i);
+    }
+  }
+  return bestIndex < 0 ? null : { x: points[bestIndex * 2], y: points[bestIndex * 2 + 1] };
+}
 // ── Canvas method bodies shared by several overloads
 function canvasSave(this: JCanvas) { this.ctx.save(); return this.saveCount++; }
 /** run a transform about (px, py) instead of the origin */

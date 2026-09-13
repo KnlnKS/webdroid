@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
-import { JCanvas, JPaint } from "../src/android/graphics";
+import { JCanvas, JPaint, locateDrawnText } from "../src/android/graphics";
 import { JObj, rt } from "../src/jvm/runtime";
 import { mangleMethod } from "../src/jvm/abi";
 import { newObj, vcall } from "../src/jvm/natives/jlang";
@@ -39,6 +39,26 @@ test("Canvas resolves virtual CharSequence text before drawing", async () => {
   await vcall(cv, "drawText", "(Ljava/lang/CharSequence;IIFFLandroid/graphics/Paint;)V", new Sequence(), 4, 8, 0, 0, paint);
 
   expect(owner.drawnText).toEqual(["Buck"]);
+});
+
+test("drawn text lookup uses the matching run point", () => {
+  const owner = {
+    drawnText: ["leading", "later target", "tail"],
+    drawnTextPoints: new Float32Array([10, 11, 20, 21, 30, 31]),
+    drawnTextCount: 3,
+  };
+
+  expect(locateDrawnText(owner, "target", 100, 100)).toEqual({ x: 20, y: 21 });
+});
+
+test("drawn text lookup preserves contiguous phrases", () => {
+  const owner = {
+    drawnText: ["Big", "Buck", "Bunny"],
+    drawnTextPoints: new Float32Array([10, 11, 20, 21, 30, 31]),
+    drawnTextCount: 3,
+  };
+
+  expect(locateDrawnText(owner, "Buck Bunny", 100, 100)).toEqual({ x: 20, y: 21 });
 });
 
 test("ImageSpan retains its supplied drawable", async () => {

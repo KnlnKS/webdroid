@@ -4,7 +4,7 @@ import { recordVsync, PROCESS_PID } from "./android/os";
 import { RangeFile } from "./shell/lazyfile";
 import { mountSystemCertificates } from "./shell/cacerts";
 
-import { SYSTEM_FONT } from "./android/graphics";
+import { locateDrawnText, SYSTEM_FONT } from "./android/graphics";
 import { rt } from "./jvm/runtime";
 import { newObj, vcall, linkInit } from "./jvm/natives/jlang";
 import { mangleMethod } from "./jvm/abi";
@@ -292,16 +292,14 @@ const wd = {
     if (decor) roots.push(decor);
     for (const rootView of roots) {
       for (const { v, x, y } of walkTree(rootView, 0, 0, 0, true)) {
-        const txt = normalized(v.text), raw = normalized(v.rawText), drawn = normalized(v.drawnText?.join(" "));
+        const txt = normalized(v.text), raw = normalized(v.rawText);
         // the emulator driver resolves a tapText against text OR content-desc, so an icon-only
         // control (an overflow button, a nav arrow) has to be findable here the same way
         const cd = normalized(v.contentDesc);
         if ((matches(txt) || matches(raw) || matches(cd)) && v.right > v.left)
           return { x: x + (v.right - v.left) / 2, y: y + (v.bottom - v.top) / 2 };
-        if (matches(drawn) && v.drawnTextCount > 0) {
-          const tx = v.drawnTextPoints?.[0], ty = v.drawnTextPoints?.[1];
-          if (Number.isFinite(tx) && Number.isFinite(ty) && tx >= 0 && tx < SCREEN_W && ty >= 0 && ty < SCREEN_H) return { x: tx, y: ty };
-        }
+        const hit = locateDrawnText(v, want, SCREEN_W, SCREEN_H);
+        if (hit) return hit;
       }
     }
     return null;
