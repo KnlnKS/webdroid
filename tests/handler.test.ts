@@ -74,6 +74,17 @@ test("removing queued callbacks permits reposting the same runnable", async () =
   expect(kept.runs).toBe(1);
 });
 
+test("hasCallbacks reflects queued runnable identity", async () => {
+  const handler = new RecordingHandler(), runnable = new RecordingRunnable();
+  await onMain(async () => {
+    expect(await vcall(handler, "hasCallbacks", "(Ljava/lang/Runnable;)Z", runnable)).toBe(0);
+    await vcall(handler, "post", "(Ljava/lang/Runnable;)Z", runnable);
+    expect(await vcall(handler, "hasCallbacks", "(Ljava/lang/Runnable;)Z", runnable)).toBe(1);
+    await vcall(handler, "removeCallbacks", "(Ljava/lang/Runnable;)V", runnable);
+    expect(await vcall(handler, "hasCallbacks", "(Ljava/lang/Runnable;)Z", runnable)).toBe(0);
+  });
+});
+
 test("removeCallbacksAndMessages cancels queued messages and runnables", async () => {
   const handler = new RecordingHandler(), runnable = new RecordingRunnable();
   await onMain(async () => {

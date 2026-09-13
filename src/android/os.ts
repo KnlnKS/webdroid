@@ -203,6 +203,7 @@ rt.register({
     "removeMessages(ILjava/lang/Object;)V": function (this: JHandler, w: number) { this.cancel(w); },
     "removeCallbacksAndMessages(Ljava/lang/Object;)V": function (this: JHandler) { for (const k of [...this.pending.keys()]) this.cancel(k); },
     "hasMessages(I)Z": function (this: JHandler, w: number) { return this.pending.get(w)?.size ? 1 : 0; },
+    "hasCallbacks(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.pending.get(r)?.size ? 1 : 0; },
     // the object variant asks about messages carrying that obj; posts here are keyed by `what`
     "hasMessages(ILjava/lang/Object;)Z": function (this: JHandler, w: number) { return this.pending.get(w)?.size ? 1 : 0; },
     "getLooper()Landroid/os/Looper;": function (this: JHandler) { return this.looper; },
