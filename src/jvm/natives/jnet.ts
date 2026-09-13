@@ -514,7 +514,7 @@ rt.register({
     "getScheme()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf(":"); return i > 0 ? this.u.slice(0, i) : null; },
     "getRawAuthority()Ljava/lang/String;": function (this: JURI) {
       const m = /^(?:[^:/?#]+:)?\/\/([^/?#]*)/.exec(this.u);
-      return m ? m[1] : null;
+      return m?.[1] || null;
     },
     "getHost()Ljava/lang/String;": function (this: JURI) { return this.url()?.hostname ?? null; },
     "getPath()Ljava/lang/String;": function (this: JURI) { return this.url()?.pathname ?? this.u.replace(/^[a-z]+:/i, ""); },

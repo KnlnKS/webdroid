@@ -15,4 +15,6 @@ test("URI.getRawAuthority preserves escaped authority text", async () => {
   expect(await vcall(relative, "getRawAuthority", "()Ljava/lang/String;")).toBe("example.test");
   const opaque = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "mailto:user@example.test");
   expect(await vcall(opaque, "getRawAuthority", "()Ljava/lang/String;")).toBeNull();
+  const empty = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "file:///tmp/video.mp4");
+  expect(await vcall(empty, "getRawAuthority", "()Ljava/lang/String;")).toBeNull();
 });
