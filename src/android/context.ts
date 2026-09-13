@@ -1,7 +1,7 @@
 import { type JFile, vfs, mkFile } from "../jvm/natives/jio";
 import { JObj, rt, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
-import { resString, themeOf, JTheme, obtainStyled, type JAttrSet, JTypedArray } from "./res";
+import { resString, themeOf, JTheme, obtainStyled, resolveStyleValue, type JAttrSet, JTypedArray } from "./res";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { getInflater } from "./inflate";
@@ -14,7 +14,6 @@ import { dbPath } from "./sqlite";
 import { type JIntent, launchIntent } from "./intent";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { svcStart, svcStop, svcBind, svcUnbind } from "./runningservices";
-import { TV } from "./axml";
 import { registerReceiver, unregisterReceiver, sendBroadcast } from "./broadcast";
 import { packages } from "./packages";
 import type { JClassLoader } from "../jvm/natives/jlang";
@@ -338,11 +337,7 @@ export const contextMethods: NativeSpec["methods"] = {
     ta.res = this.$host.res;
     ta.theme = theme;
     ta.attrIds = attrs;
-    ta.vals = [...attrs].map((a) => {
-      let v = this.$host.res.styleLookup(styleId, a);
-      if (v && v.t === TV.ATTRIBUTE) v = theme.lookup(v.d);
-      return v ? this.$host.res.resolveRefs(v) : null;
-    });
+    ta.vals = [...attrs].map(a => resolveStyleValue(ta.res, theme, ta.res.styleLookup(styleId, a)));
     return ta;
   },
   "createConfigurationContext(Landroid/content/res/Configuration;)Landroid/content/Context;": function (this: JContext, config: JConfiguration) {

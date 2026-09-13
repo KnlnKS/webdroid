@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newXmlPullParser } from "./xmlpull";
-import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, obtainStyled, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
+import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, obtainStyled, resolveStyleValue, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
 import { JTypedValue, complexToFraction, type JDisplayMetrics } from "./util";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
@@ -447,11 +447,7 @@ rt.register({
       ta.res = this.res;
       ta.theme = this;
       ta.attrIds = attrs;
-      ta.vals = [...attrs].map((a) => {
-        let v = this.res.styleLookup(styleId, a);
-        if (v && v.t === TV.ATTRIBUTE) v = this.lookup(v.d);
-        return v ? this.res.resolveRefs(v) : null;
-      });
+      ta.vals = [...attrs].map(a => resolveStyleValue(this.res, this, this.res.styleLookup(styleId, a)));
       return ta;
     },
     "obtainStyledAttributes(Landroid/util/AttributeSet;[III)Landroid/content/res/TypedArray;":

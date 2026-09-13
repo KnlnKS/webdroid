@@ -2463,3 +2463,11 @@ avoids intrinsic-size queries; views without a foreground or override skip the e
 Focused checks cover suspended bounds callbacks, executing-thread retention, centered versus
 fill bounds and callback removal. Typecheck passes. A real Chrome bitmap probe paints green
 foreground over red background, then reveals red after removing the foreground.
+
+While tracing Maps' Roboto title, AppCompat was observed resetting its typeface to null during
+setTextAppearance. Explicit Context/Theme.obtainStyledAttributes(style, attrs) duplicated
+resource resolution and exposed @null as a present reference instead of masking it. Both now
+reuse resolveStyleValue. A resource-bag test covers explicit null, a theme reference to null,
+index enumeration and retaining a nonnull family; its 12 assertions pass and its first
+hasValue assertion fails against the preceding code. Typecheck passes. Maps still selects
+Roboto after this change, so it does not establish the cause of the remaining font mismatch.
