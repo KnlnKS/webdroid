@@ -857,6 +857,7 @@ class JSet extends JObj {
   slow: Ent[] = [];
   slowVersion = 0;
 }
+class JEnumSet extends JSet { enumClass: JObj | null = null; }
 /** the members, fast bucket first then the custom-equals ones (both must be walked) */
 function setItems(s: JSet): unknown[] {
   const out: unknown[] = [];
@@ -969,7 +970,7 @@ rt.register({ name: "webdroid/BaseSet", ctor: JSet, typeVars: "E", ifaces: ["jav
 for (const n of ["java/util/HashSet", "java/util/LinkedHashSet",
   "java/util/concurrent/CopyOnWriteArraySet", "java/util/EnumSet", "java/util/concurrent/ConcurrentHashMap$KeySetView"]) {
   rt.register({
-    name: n, ctor: class extends JSet {}, typeVars: "E",
+    name: n, ctor: n === "java/util/EnumSet" ? class extends JEnumSet {} : class extends JSet {}, typeVars: "E",
     sup: n === "java/util/LinkedHashSet" ? "java/util/HashSet" : "java/util/AbstractSet",
     ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"],
     methods: n === "java/util/EnumSet" ? { ...setMethods(), ...enumSetStatics() } : setMethods(),
@@ -977,7 +978,12 @@ for (const n of ["java/util/HashSet", "java/util/LinkedHashSet",
 }
 function enumSetStatics() {
   const fromValues = async (cls: JObj, all: boolean, extra: unknown[]) => {
-    const s = new JSet();
+    const s = new (rt.link("java/util/EnumSet").ctor as new () => JEnumSet)();
+    if (!cls && extra.length) {
+      const info = ((extra[0] as JObj)?.constructor as typeof JObj | undefined)?.$i;
+      if (info) cls = info.owner.classFor(info.name);
+    }
+    s.enumClass = cls;
     if (all) {
       const info = (cls as { ci?: ClassInfo }).ci!;
       const p = rt.initClass(info); if (p) await p;
@@ -994,7 +1000,12 @@ function enumSetStatics() {
     "static of(Ljava/lang/Enum;[Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, rest: unknown[]) => fromValues(null!, false, [a, ...rest]),
     "static of(Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, b: unknown) => fromValues(null!, false, [a, b]),
     "static of(Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, b: unknown, c: unknown) => fromValues(null!, false, [a, b, c]),
-    "static copyOf(Ljava/util/Collection;)Ljava/util/EnumSet;": async (c: JObj) => fromValues(null!, false, await toJsArray(c)),
+    "static copyOf(Ljava/util/Collection;)Ljava/util/EnumSet;": async (c: JObj) => fromValues((c as JEnumSet).enumClass, false, await toJsArray(c)),
+    "static complementOf(Ljava/util/EnumSet;)Ljava/util/EnumSet;": async (source: JEnumSet) => {
+      const result = await fromValues(source.enumClass!, true, []);
+      await vcall(result, "removeAll", "(Ljava/util/Collection;)Z", source);
+      return result;
+    },
   };
 }
 // ── TreeMap / TreeSet: entries live sorted in the `slow` array of the hash
