@@ -464,6 +464,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getKeyListener()Landroid/text/method/KeyListener;": function (this: JTextView) { return this.keyListener; },
   "setMovementMethod(Landroid/text/method/MovementMethod;)V": function (this: JTextView, m: unknown) { this.movementMethod = m; },
   "getMovementMethod()Landroid/text/method/MovementMethod;": function (this: JTextView) { return this.movementMethod; },
+  "getDefaultMovementMethod()Landroid/text/method/MovementMethod;": () => null,
   "getCompoundDrawablesRelative()[Landroid/graphics/drawable/Drawable;": compoundDrawables,
   "setCompoundDrawablesRelative(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
   "setCompoundDrawablesRelativeWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,

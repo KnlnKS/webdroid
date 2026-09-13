@@ -4,6 +4,7 @@ import { JCanvas, JPaint } from "../src/android/graphics";
 import { JObj, rt } from "../src/jvm/runtime";
 import { mangleMethod } from "../src/jvm/abi";
 import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { JTextView } from "../src/android/textview";
 
 rt.linkNatives();
 
@@ -45,4 +46,8 @@ test("ImageSpan retains its supplied drawable", async () => {
   const span = await newObj("android/text/style/ImageSpan", "(Landroid/graphics/drawable/Drawable;I)V", drawable, 1);
 
   expect(await vcall(span, "getDrawable", "()Landroid/graphics/drawable/Drawable;")).toBe(drawable);
+});
+
+test("TextView defaults to no movement method", async () => {
+  expect(await vcall(new JTextView(), "getDefaultMovementMethod", "()Landroid/text/method/MovementMethod;")).toBeNull();
 });
