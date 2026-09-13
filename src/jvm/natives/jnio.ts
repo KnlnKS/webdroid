@@ -3,6 +3,7 @@
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { defineException, vcall } from "./jlang";
 import { mem } from "../../native/mem";
+import { charsToString } from "../abi";
 import { decodeString, encodeString } from "../charset";
 
 type BufferStorage = { kind: "heap"; ab: ArrayBuffer } | { kind: "direct"; ab: ArrayBuffer } | { kind: "native"; address: number | bigint };
@@ -242,7 +243,29 @@ function wrapArray<T extends JBuffer>(Ctor: new () => T, arr: Int8Array | Int16A
 class JFloatBuffer extends JBuffer {}
 class JIntBuffer extends JBuffer {}
 class JShortBuffer extends JBuffer {}
-class JCharBuffer extends JBuffer {}
+class JCharBuffer extends JBuffer { sequence: unknown = null; sequenceOffset = 0; }
+async function wrapSequence(sequence: unknown, start = 0, end?: number): Promise<JCharBuffer> {
+  if (sequence === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  const length: number = typeof sequence === "string" ? sequence.length : await vcall(sequence, "length", "()I");
+  end ??= length;
+  if (start < 0 || end < start || end > length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  const b = new JCharBuffer(); b.backing = { storage: { kind: "heap", ab: new ArrayBuffer(0) } };
+  b.sequence = sequence; b.readOnly = true; b.cap = length; b.pos = start; b.lim = end; b.elemShift = 1; return b;
+}
+function charAt(buffer: JCharBuffer, index: number): number | Promise<number> {
+  if (index < 0 || index >= buffer.lim) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(index));
+  const seq = buffer.sequence;
+  return seq === null ? buffer.dv.getUint16(index << 1, buffer.little) : typeof seq === "string" ? seq.charCodeAt(buffer.sequenceOffset + index) : vcall(seq, "charAt", "(I)C", buffer.sequenceOffset + index);
+}
+async function charText(buffer: JCharBuffer): Promise<string> {
+  if (buffer.sequence !== null) {
+    const text = typeof buffer.sequence === "string" ? buffer.sequence : await (await import("../../android/text")).csText(buffer.sequence);
+    return text.slice(buffer.sequenceOffset + buffer.pos, buffer.sequenceOffset + buffer.lim);
+  }
+  const chars = new Uint16Array(buffer.lim - buffer.pos), view = buffer.dv;
+  for (let i = 0; i < chars.length; i++) chars[i] = view.getUint16((buffer.pos + i) << 1, buffer.little);
+  return charsToString(chars, 0, chars.length);
+}
 class JLongBuffer extends JBuffer {}
 class JDoubleBuffer extends JBuffer {}
 
@@ -346,9 +369,15 @@ rt.register({
     ...bufferBaseMethods(),
     ...chaining("Ljava/nio/CharBuffer;"),
     "static allocate(I)Ljava/nio/CharBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 2), JCharBuffer, 1),
+    "static wrap(Ljava/lang/CharSequence;)Ljava/nio/CharBuffer;": wrapSequence,
+    "static wrap(Ljava/lang/CharSequence;II)Ljava/nio/CharBuffer;": wrapSequence,
+    "length()I": function (this: JCharBuffer) { return this.lim - this.pos; },
+    "charAt(I)C": function (this: JCharBuffer, i: number) { if (i < 0) rt.aio(i, this.lim - this.pos); return charAt(this, this.pos + i); },
+    "get(I)C": function (this: JCharBuffer, i: number) { return charAt(this, i); },
+    "toString()Ljava/lang/String;": function (this: JCharBuffer) { return charText(this); },
     "static wrap([C)Ljava/nio/CharBuffer;": (arr: Uint16Array) => wrapArray(JCharBuffer, arr, 1),
     "static wrap([CII)Ljava/nio/CharBuffer;": (arr: Uint16Array, off: number, len: number) => wrapArray(JCharBuffer, arr, 1, off, len),
-    "get()C": function (this: JCharBuffer) { this.clampGet(1); return this.dv.getUint16(this.pos++ << 1, this.little); },
+    "get()C": function (this: JCharBuffer) { this.clampGet(1); return charAt(this, this.pos++); },
     "put(C)Ljava/nio/CharBuffer;": function (this: JCharBuffer, v: number) { this.clampPut(1); this.dv.setUint16(this.pos++ << 1, v, this.little); return this; },
   },
 });
@@ -392,18 +421,16 @@ export function bufferView(b: JBuffer): { ab: ArrayBuffer; byteOffset: number; b
   return { ab: b.ab, byteOffset: b.dv.byteOffset, byteFromPos: b.dv.byteOffset + (b.pos << b.elemShift) };
 }
 
-// ── charset coding-error policy (Mihon/OkHttp touch these; behavior is moot —
-// our encode/decode always replaces)
-class JCodingErrorAction extends JObj {}
+class JCodingErrorAction extends JObj { name = "REPORT"; }
 rt.register({
   name: "java/nio/charset/CodingErrorAction", ctor: JCodingErrorAction,
   clinit: () => {
     const c = rt.link("java/nio/charset/CodingErrorAction").ctor;
-    c.s$IGNORE = new JCodingErrorAction();
-    c.s$REPLACE = new JCodingErrorAction();
+    c.s$IGNORE = Object.assign(new JCodingErrorAction(), { name: "IGNORE" });
+    c.s$REPLACE = Object.assign(new JCodingErrorAction(), { name: "REPLACE" });
     c.s$REPORT = new JCodingErrorAction();
   },
-  methods: { "toString()Ljava/lang/String;": () => "REPLACE" },
+  methods: { "toString()Ljava/lang/String;": function (this: JCodingErrorAction) { return this.name; } },
 });
 
 class JCharset extends JObj { cname = "UTF-8"; }
@@ -440,15 +467,12 @@ function mkCoder(n: string, cs: JCharset) {
   c.cs = cs;
   return c;
 }
-// ── coders. Only UTF-8/UTF-16/Latin-1 style charsets ever reach here, and the coding-error
-// policy is fixed at REPLACE, so an encoder is its charset plus the one question anyone asks it:
-// can this character be represented?
-class JCharsetCoder extends JObj { cs: JCharset = utf8; }
+class JCharsetCoder extends JObj { cs: JCharset = utf8; malformed = "REPORT"; unmappable = "REPORT"; }
 const coderChain = (ret: string): NativeSpec["methods"] => ({
   [`charset()Ljava/nio/charset/Charset;`]: function (this: JCharsetCoder) { return this.cs; },
   [`reset()${ret}`]: function (this: JCharsetCoder) { return this; },
-  [`onMalformedInput(Ljava/nio/charset/CodingErrorAction;)${ret}`]: function (this: JCharsetCoder) { return this; },
-  [`onUnmappableCharacter(Ljava/nio/charset/CodingErrorAction;)${ret}`]: function (this: JCharsetCoder) { return this; },
+  [`onMalformedInput(Ljava/nio/charset/CodingErrorAction;)${ret}`]: function (this: JCharsetCoder, action: JCodingErrorAction) { this.malformed = action.name; return this; },
+  [`onUnmappableCharacter(Ljava/nio/charset/CodingErrorAction;)${ret}`]: function (this: JCharsetCoder, action: JCodingErrorAction) { this.unmappable = action.name; return this; },
   [`replaceWith([B)${ret}`]: function (this: JCharsetCoder) { return this; },
 });
 /** ASCII and Latin-1 have holes; every Unicode transformation format encodes everything */
@@ -458,11 +482,25 @@ rt.register({
   name: "java/nio/charset/CharsetEncoder", ctor: JCharsetCoder,
   methods: {
     ...coderChain("Ljava/nio/charset/CharsetEncoder;"),
+    "encode(Ljava/nio/CharBuffer;)Ljava/nio/ByteBuffer;": async function (this: JCharsetCoder, src: JCharBuffer) {
+      const text = await charText(src); let from = 0, cleaned = "";
+      for (let i = 0; i < text.length;) {
+        const cp = text.codePointAt(i)!, width = cp > 0xffff ? 2 : 1;
+        const malformed = cp >= 0xd800 && cp <= 0xdfff;
+        if (malformed || !encodable(this.cs, cp)) {
+          const action = malformed ? this.malformed : this.unmappable;
+          if (action === "REPORT") { src.pos += i; throw rt.mkThrowable("java/nio/charset/" + (malformed ? "MalformedInputException" : "UnmappableCharacterException"), "Input length = " + width); }
+          if (action === "IGNORE") { cleaned += text.slice(from, i); from = i + width; }
+        }
+        i += width;
+      }
+      const data = encodeString(from ? cleaned + text.slice(from) : text, this.cs);
+      src.pos = src.lim; return wrapArray(JByteBuffer, data, 0);
+    },
     "canEncode(C)Z": function (this: JCharsetCoder, c: number) { return encodable(this.cs, c) ? 1 : 0; },
     "encode(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;Z)Ljava/nio/charset/CoderResult;":
-      function (this: JCharsetCoder, src: JBuffer, dst: JBuffer) {
-        let text = "";
-        for (let i = src.pos; i < src.lim; i++) text += String.fromCharCode(src.dv.getUint16(i << 1, src.little));
+      async function (this: JCharsetCoder, src: JCharBuffer, dst: JBuffer) {
+        const text = await charText(src);
         const bytes = encodeString(text, this.cs), n = Math.min(bytes.length, dst.lim - dst.pos);
         for (let i = 0; i < n; i++) dst.dv.setInt8(dst.pos + i, bytes[i]);
         dst.pos += n;
@@ -510,3 +548,7 @@ rt.register({
   name: "java/nio/charset/StandardCharsets", ctor: class extends JObj {},
   statics: { UTF_8: utf8, ISO_8859_1: charset("ISO-8859-1"), US_ASCII: charset("US-ASCII"), UTF_16: charset("UTF-16"), UTF_16BE: charset("UTF-16BE"), UTF_16LE: charset("UTF-16LE") },
 });
+
+defineException("java/nio/charset/CharacterCodingException", "java/io/IOException");
+defineException("java/nio/charset/MalformedInputException", "java/nio/charset/CharacterCodingException");
+defineException("java/nio/charset/UnmappableCharacterException", "java/nio/charset/CharacterCodingException");
