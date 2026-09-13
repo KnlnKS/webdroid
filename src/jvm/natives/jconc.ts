@@ -298,11 +298,18 @@ const executorMethods: NativeSpec["methods"] = {
     });
   },
   "submit(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown) {
-    return submit(this, r, "run", "()V");
+    return submitTask(this, "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;", r, null);
   },
   "submit(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;": function (this: JExecutor, c: unknown) {
-    return submit(this, c, "call", "()Ljava/lang/Object;");
+    return submitTask(this, "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;", c);
   },
+  "submit(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown, result: unknown) {
+    return submitTask(this, "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;", r, result);
+  },
+  "newTaskFor(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;": (r: unknown, result: unknown) =>
+    newObj("java/util/concurrent/FutureTask", "(Ljava/lang/Runnable;Ljava/lang/Object;)V", r, result),
+  "newTaskFor(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;": (c: unknown) =>
+    newObj("java/util/concurrent/FutureTask", "(Ljava/util/concurrent/Callable;)V", c),
   "shutdown()V": function (this: JExecutor) { this.shut = true; },
   "shutdownNow()Ljava/util/List;": function (this: JExecutor) {
     this.shut = true;
@@ -327,6 +334,12 @@ const executorMethods: NativeSpec["methods"] = {
   ...repeating("scheduleAtFixedRate", true),
   ...repeating("scheduleWithFixedDelay", false),
 };
+async function submitTask(ex: JExecutor, desc: string, task: unknown, ...args: unknown[]): Promise<unknown> {
+  if (task == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  const future = await vcall(ex, "newTaskFor", desc, task, ...args);
+  await vcall(ex, "execute", "(Ljava/lang/Runnable;)V", future);
+  return future;
+}
 /** The two periodic schedules differ only in where the next run is measured from: a rate keeps
  *  the period's grid, a delay starts counting when the previous run finished. */
 function repeating(name: string, fixedRate: boolean): NativeSpec["methods"] {
@@ -431,6 +444,13 @@ function mkScheduled(count = 1, factory: unknown = null): JExecutor {
 // Executors.defaultThreadFactory()/callable() must hand back REAL objects: callers wrap them and
 // invoke newThread()/call() themselves, so the auto-stubbed interfaces are not enough.
 class JRunnableCallable extends JObj { r: unknown = null; result: unknown = null; }
+function runnableCallable(r: unknown, result: unknown = null): JRunnableCallable {
+  if (r == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  rt.link("webdroid/RunnableCallable");
+  const c = new JRunnableCallable();
+  c.r = r; c.result = result;
+  return c;
+}
 rt.register({
   name: "webdroid/RunnableCallable", ctor: JRunnableCallable, ifaces: ["java/util/concurrent/Callable"],
   methods: {
@@ -456,12 +476,8 @@ rt.register({
   methods: {
     "static defaultThreadFactory()Ljava/util/concurrent/ThreadFactory;":
       () => rt.make("webdroid/DefaultThreadFactory"),
-    "static callable(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Callable;":
-      (r: unknown, result: unknown) => {
-        const c = new (rt.link("webdroid/RunnableCallable").ctor as typeof JRunnableCallable)();
-        c.r = r; c.result = result;
-        return c;
-      },
+    "static callable(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Callable;": runnableCallable,
+    "static callable(Ljava/lang/Runnable;)Ljava/util/concurrent/Callable;": runnableCallable,
     "static newSingleThreadExecutor()Ljava/util/concurrent/ExecutorService;": mkExecutor,
     "static newSingleThreadExecutor(Ljava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ExecutorService;": (factory: unknown) => mkExecutor(1, factory),
     "static newFixedThreadPool(I)Ljava/util/concurrent/ExecutorService;": mkExecutor,
@@ -972,6 +988,7 @@ class JFutureTask extends JFuture {
   wake: (v: unknown) => void = () => {};
 }
 function armTask(t: JFutureTask, callable: unknown) {
+  if (callable == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
   t.callable = callable;
   t.promise = new Promise((r) => (t.wake = r));
 }
@@ -981,23 +998,26 @@ rt.register({
   methods: {
     "<init>(Ljava/util/concurrent/Callable;)V": function (this: JFutureTask, c: unknown) { armTask(this, c); },
     "<init>(Ljava/lang/Runnable;Ljava/lang/Object;)V": function (this: JFutureTask, r: unknown, v: unknown) {
-      armTask(this, { runnable: r });
-      this.value = v;
+      armTask(this, runnableCallable(r, v));
     },
     "run()V": async function (this: JFutureTask) {
+      if (this.done || this.thread) return;
+      this.thread = curThread;
       try {
-        const c = this.callable as any;
-        if (c?.runnable) await vcall(c.runnable, "run", "()V");
-        else if (c) this.value = await vcall(c, "call", "()Ljava/lang/Object;");
+        const value = await vcall(this.callable, "call", "()Ljava/lang/Object;");
+        if (!this.cancelled) this.value = value;
       } catch (e) { this.error = rt.jx(e); } // surfaces from get(), as AOSP's setException
-      this.done = 1;
+      this.done = 1; this.thread = null;
       this.wake(null);
     },
     "get()Ljava/lang/Object;": function (this: JFutureTask) { return futureGet(this); },
     "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JFutureTask, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); },
     "isDone()Z": function (this: JFutureTask) { return this.done; },
-    "isCancelled()Z": () => 0,
-    "cancel(Z)Z": () => 0,
+    "isCancelled()Z": function (this: JFutureTask) { return this.cancelled; },
+    "cancel(Z)Z": function (this: JFutureTask, interrupt: number) {
+      if (this.done) return 0;
+      cancelFuture(this, interrupt); this.wake(null); return 1;
+    },
   },
 });
 rt.markers("java/util/concurrent/RunnableFuture");

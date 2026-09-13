@@ -1756,3 +1756,15 @@ zero method failures. Android reference uses a dedicated API 35 Play Store image
 the older Google APIs reference contains a differently signed system Maps build
 and rejects the Google-signed update. The unchanged APK installs on the Play Store
 image and renders real tiles and search results.
+
+### Executor task factories
+
+Maps' Guava `byvz` subclasses AbstractExecutorService, overrides both newTaskFor
+methods to return its own ListenableFuture, and casts the result of super.submit
+back to that interface. Native submit instead manufactured webdroid/Future and
+bypassed both newTaskFor and execute, producing a ClassCastException. Submit now
+uses both virtual entry points, including when callbacks suspend, and supplies the
+Runnable/result overload. Default FutureTask now runs once and supports cancellation
+so this path retains cancellation behavior. The one-argument Executors.callable
+uses the existing adapter and rejects null. Focused tests cover overridden factories,
+execute, overload results, repeated run, cancellation, and existing executor queues.
