@@ -35,7 +35,7 @@ rt.register({
     ])),
     "static w(Ljava/lang/String;Ljava/lang/Throwable;)I": (tag: string, tr: unknown) => logFn("W")(tag, String((tr as any)?.msg ?? tr)),
     "static wtf(Ljava/lang/String;Ljava/lang/String;)I": logFn("WTF"),
-    "static isLoggable(Ljava/lang/String;I)Z": () => 0,
+    "static isLoggable(Ljava/lang/String;I)Z": (_tag: string, level: number) => level >= 4 ? 1 : 0,
     "static getStackTraceString(Ljava/lang/Throwable;)Ljava/lang/String;": (t: unknown) => String((t as any)?.msg ?? t ?? ""),
     "static println(ILjava/lang/String;Ljava/lang/String;)I": (p: number, tag: string, msg: string) => logFn("P")(tag, msg),
   },
