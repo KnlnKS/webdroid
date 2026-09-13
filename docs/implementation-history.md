@@ -2238,3 +2238,12 @@ Maps run has no detached children beneath attached parents and renders route est
 distance, traffic text and Preview without diagnostic layout requests. The map remains
 hidden, and the progressing renderer now reports missing Matrix.perspectiveM. Startup
 trace mismatch, small icons and other geometry differences remain unresolved.
+
+### Perspective and camera matrices
+
+Route rendering reached missing android.opengl.Matrix.perspectiveM after attachment
+recovery. Implement the field-of-view projection, preserving the output offset and
+Android float intermediates. Replace the adjacent setLookAtM identity placeholder
+with camera orientation and translation. Frustum near/far projection and camera-basis
+tests pass; typecheck passes. Fresh headed Maps no longer reports perspectiveM missing,
+but its map container still remains invisible. This does not establish map parity.

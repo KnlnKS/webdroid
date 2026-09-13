@@ -348,6 +348,15 @@ rt.register({
       m[o + 8] = (r + l) / (r - l); m[o + 9] = (t + b) / (t - b); m[o + 10] = -(f + n) / (f - n); m[o + 11] = -1;
       m[o + 14] = -2 * f * n / (f - n);
     },
+    "static perspectiveM([FIFFFF)V": (m: Float32Array, o: number, fovy: number, aspect: number, near: number, far: number) => {
+      const f = Math.fround(1 / Math.fround(Math.tan(fovy * Math.PI / 360)));
+      const range = Math.fround(1 / Math.fround(near - far));
+      m.fill(0, o, o + 16);
+      m[o] = f / aspect; m[o + 5] = f;
+      m[o + 10] = Math.fround(far + near) * range;
+      m[o + 11] = -1;
+      m[o + 14] = Math.fround(Math.fround(2 * far) * near) * range;
+    },
     "static translateM([FIFFF)V": (m: Float32Array, o: number, x: number, y: number, z: number) => {
       for (let i = 0; i < 4; i++) m[o + 12 + i] += m[o + i] * x + m[o + 4 + i] * y + m[o + 8 + i] * z;
     },
@@ -372,9 +381,19 @@ rt.register({
     "static transposeM([FI[FI)V": (r: Float32Array, ro: number, m: Float32Array, mo: number) => {
       for (let c = 0; c < 4; c++) for (let row = 0; row < 4; row++) r[ro + c * 4 + row] = m[mo + row * 4 + c];
     },
-    "static setLookAtM([FIFFFFFFFFF)V": (m: Float32Array, o: number) => {
-      for (let i = 0; i < 16; i++) m[o + i] = 0;
-      m[o] = m[o + 5] = m[o + 10] = m[o + 15] = 1;
+    "static setLookAtM([FIFFFFFFFFF)V": (m: Float32Array, o: number, ex: number, ey: number, ez: number, cx: number, cy: number, cz: number, ux: number, uy: number, uz: number) => {
+      let fx = cx - ex, fy = cy - ey, fz = cz - ez;
+      const fl = Math.hypot(fx, fy, fz);
+      fx /= fl; fy /= fl; fz /= fl;
+      let sx = fy * uz - fz * uy, sy = fz * ux - fx * uz, sz = fx * uy - fy * ux;
+      const sl = Math.hypot(sx, sy, sz);
+      sx /= sl; sy /= sl; sz /= sl;
+      m[o] = sx; m[o + 4] = sy; m[o + 8] = sz;
+      m[o + 1] = sy * fz - sz * fy; m[o + 5] = sz * fx - sx * fz; m[o + 9] = sx * fy - sy * fx;
+      m[o + 2] = -fx; m[o + 6] = -fy; m[o + 10] = -fz;
+      m[o + 3] = m[o + 7] = m[o + 11] = 0;
+      for (let i = 0; i < 3; i++) m[o + 12 + i] = -m[o + i] * ex - m[o + 4 + i] * ey - m[o + 8 + i] * ez;
+      m[o + 15] = 1;
     },
     "static length(FFF)F": (x: number, y: number, z: number) => Math.hypot(x, y, z),
   },
