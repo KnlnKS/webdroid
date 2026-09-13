@@ -14,7 +14,7 @@ export const youtube: Flow = {
   liveClock: true,
   steps: [
     { id: "launch", label: "Launch YouTube", action: { type: "launch" }, settleDelayMs: 30000 },
-    { id: "notifications", label: "Continue without notifications", action: { type: "tapText", text: "Don’t allow" }, settleDelayMs: 10000 },
+    { id: "notifications", label: "Continue without notifications", action: { type: "tapText", text: "Don’t allow", optional: true }, settleDelayMs: 10000 },
     { id: "home", label: "Guest Home", action: { type: "settle" }, settleDelayMs: 10000 },
     { id: "search-open", label: "Open search", action: { type: "tapText", text: "Search" }, settleDelayMs: 3000 },
     { id: "search-type", label: "Type Big Buck Bunny", action: { type: "typeInto", ...point(576, 144), text: "Big Buck Bunny" }, settleDelayMs: 1000 },
