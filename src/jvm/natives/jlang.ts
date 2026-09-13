@@ -1139,6 +1139,7 @@ rt.register({
     "static logicalXor(ZZ)Z": (a: number, b: number) => ((a ? 1 : 0) ^ (b ? 1 : 0)),
   },
 });
+const isISOControl = (c: number) => +((c >= 0 && c <= 0x1f) || (c >= 0x7f && c <= 0x9f));
 rt.register({
   name: "java/lang/Character", ctor: JChar,
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
@@ -1155,7 +1156,8 @@ rt.register({
     "static isSurrogatePair(CC)Z": (high: number, low: number) => +(high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff),
     "static isSurrogate(C)Z": (c: number) => (c >= 0xd800 && c <= 0xdfff ? 1 : 0),
     "static toCodePoint(CC)I": (h: number, l: number) => ((h - 0xd800) << 10) + (l - 0xdc00) + 0x10000,
-    "static isISOControl(I)Z": (c: number) => ((c >= 0 && c <= 0x1f) || (c >= 0x7f && c <= 0x9f) ? 1 : 0),
+    "static isISOControl(I)Z": isISOControl,
+    "static isISOControl(C)Z": isISOControl,
     "static isDefined(I)Z": () => 1,
     "<init>(C)V": function (this: JChar, v: number) { this.v = v; },
     "charValue()C": function (this: JChar) { return this.v; },
