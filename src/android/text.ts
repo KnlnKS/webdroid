@@ -141,7 +141,11 @@ const spanMethods: NativeSpec["methods"] = {
 rt.register({
   name: "android/text/SpannableString", ctor: JSpannable,
   ifaces: ["java/lang/CharSequence", "android/text/Spannable", "android/text/Spanned"],
-  methods: spanMethods,
+  methods: {
+    ...spanMethods,
+    "static valueOf(Ljava/lang/CharSequence;)Landroid/text/SpannableString;": (cs: unknown) =>
+      rt.iof(cs, "android/text/SpannableString") ? cs : newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", cs),
+  },
 });
 class JSpannedString extends JSpanned {}
 const immutableSpanMethods = Object.fromEntries(Object.entries(spanMethods!).filter(([name]) => !name.startsWith("setSpan(") && !name.startsWith("removeSpan(") && name !== "<init>()V"));
