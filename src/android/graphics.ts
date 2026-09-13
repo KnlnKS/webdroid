@@ -1742,6 +1742,7 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "beginRecording(II)Landroid/graphics/Canvas;": function (this: JPicture, w: number, h: number) {
+      this.node.w = w; this.node.h = h;
       return vcall(this.node, "beginRecording", "(II)Landroid/graphics/RecordingCanvas;", w, h);
     },
     "endRecording()V": function (this: JPicture) { return vcall(this.node, "endRecording", "()V"); },

@@ -2247,3 +2247,13 @@ Android float intermediates. Replace the adjacent setLookAtM identity placeholde
 with camera orientation and translation. Frustum near/far projection and camera-basis
 tests pass; typecheck passes. Fresh headed Maps no longer reports perspectiveM missing,
 but its map container still remains invisible. This does not establish map parity.
+
+### Picture recording dimensions
+
+Picture reused RenderNode recording but never stored the requested width/height:
+a headed Chrome probe recorded a 32x48 canvas and got 0x0 from Picture. Maps route
+preview uses Picture aspect ratios to size maneuver icons; the zero dimensions reached
+its width-positive precondition and repeatedly aborted layout. Store Picture dimensions
+when recording starts, independently of RenderNode's positioned bounds. The same fresh
+Chrome probe now returns 32x48 and typecheck passes. Full preview verification follows;
+this change alone does not fix drawable sizing or hidden map visibility.
