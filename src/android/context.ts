@@ -124,6 +124,7 @@ const SERVICE_CLASS: Record<string, string> = {
   locale: "android/app/LocaleManager",
   dropbox: "android/os/DropBoxManager",
   storage: "android/os/storage/StorageManager",
+  netstats: "android/app/usage/NetworkStatsManager",
   wifi: "android/net/wifi/WifiManager",
   telephony_subscription_service: "android/telephony/SubscriptionManager",
 };
