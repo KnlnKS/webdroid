@@ -1,7 +1,7 @@
 import { readStreamFully } from "./jio";
 import { jarray, mangleMethod, charsToString, dotName } from "../abi";
 import {
-  vcall, vcallMaybe, after, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, idHash, defineException,
+  vcall, vcallOn, curThread, type JThread, vcallMaybe, after, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, idHash, defineException,
   mkCmp, fmtDouble, bitCount32, cmpFloat
 } from "./jlang";
 import { JObj, rt, type NativeSpec, type ClassInfo } from "../runtime";
@@ -1597,7 +1597,7 @@ const absList: Methods = {
     return -1;
   },
   "iterator()Ljava/util/Iterator;": function (this: JAbstractList) { return new JAbsListIter(this, 0); },
-  "listIterator()Ljava/util/ListIterator;": function (this: JAbstractList) { return new JAbsListIter(this, 0); },
+  "listIterator()Ljava/util/ListIterator;": function (this: JAbstractList) { return vcall(this, "listIterator", "(I)Ljava/util/ListIterator;", 0); },
   "listIterator(I)Ljava/util/ListIterator;": async function (this: JAbstractList, at: number) {
     const n = await size(this);
     if (at < 0 || at > n) ioobe(at, n);
@@ -1721,6 +1721,52 @@ rt.register({
 rt.register({
   name: "java/util/AbstractList", ctor: JAbstractList, sup: "java/util/AbstractCollection", typeVars: "E",
   ifaces: ["java/util/List"], fields: { modCount: "modCount" }, methods: absList,
+});
+async function sequentialAt(list: JAbstractList, index: number, operation: (iterator: unknown, thread: JThread) => unknown): Promise<unknown> {
+  const thread = curThread;
+  try { return await operation(await vcall(list, "listIterator", "(I)Ljava/util/ListIterator;", index), thread); }
+  catch (error) {
+    if (rt.iof(error, "java/util/NoSuchElementException")) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "Index: " + index);
+    throw error;
+  }
+}
+rt.register({
+  name: "java/util/AbstractSequentialList", ctor: class extends JAbstractList {}, sup: "java/util/AbstractList", typeVars: "E",
+  methods: {
+    "<init>()V": function () {},
+    "get(I)Ljava/lang/Object;": function (this: JAbstractList, index: number) {
+      return sequentialAt(this, index, (it, thread) => vcallOn(thread, it, "next", "()Ljava/lang/Object;"));
+    },
+    "set(ILjava/lang/Object;)Ljava/lang/Object;": function (this: JAbstractList, index: number, value: unknown) {
+      return sequentialAt(this, index, async (it, thread) => {
+        const old = await vcallOn(thread, it, "next", "()Ljava/lang/Object;");
+        await vcallOn(thread, it, "set", "(Ljava/lang/Object;)V", value);
+        return old;
+      });
+    },
+    "add(ILjava/lang/Object;)V": function (this: JAbstractList, index: number, value: unknown) {
+      return sequentialAt(this, index, (it, thread) => vcallOn(thread, it, "add", "(Ljava/lang/Object;)V", value));
+    },
+    "remove(I)Ljava/lang/Object;": function (this: JAbstractList, index: number) {
+      return sequentialAt(this, index, async (it, thread) => {
+        const old = await vcallOn(thread, it, "next", "()Ljava/lang/Object;");
+        await vcallOn(thread, it, "remove", "()V");
+        return old;
+      });
+    },
+    "addAll(ILjava/util/Collection;)Z": function (this: JAbstractList, index: number, collection: unknown) {
+      return sequentialAt(this, index, async (it, thread) => {
+        const source = await vcallOn(thread, collection, "iterator", "()Ljava/util/Iterator;");
+        let changed = 0;
+        while (await vcallOn(thread, source, "hasNext", "()Z")) {
+          await vcallOn(thread, it, "add", "(Ljava/lang/Object;)V", await vcallOn(thread, source, "next", "()Ljava/lang/Object;"));
+          changed = 1;
+        }
+        return changed;
+      });
+    },
+    "iterator()Ljava/util/Iterator;": function (this: JAbstractList) { return vcall(this, "listIterator", "()Ljava/util/ListIterator;"); },
+  },
 });
 rt.register({
   name: "java/util/AbstractSet", ctor: JAbstractSet, sup: "java/util/AbstractCollection", typeVars: "E",

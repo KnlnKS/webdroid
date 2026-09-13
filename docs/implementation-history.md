@@ -2404,3 +2404,14 @@ red decoded pixels. Five descriptor tests (41 assertions) and typecheck pass. A 
 place/directions/preview run no longer reports this missing API and renders base-map water,
 roads and labels. This does not prove every place image succeeds; AbstractSequentialList
 still aborts a separate asynchronous place-data path.
+
+A place-data callback failed while bwge.l constructed bwfx, whose superclass is
+AbstractSequentialList. Its unchanged bytecode provides size() and listIterator(int).
+The platform superclass now implements indexed access/mutation, bulk insertion and iterator
+traversal through those overrides, translating only NoSuchElementException to index errors.
+AbstractList.listIterator() now dispatches its indexed overload, as Android does, so sequential
+subclasses retain their iterator and traversal complexity. Three focused checks (20 assertions)
+cover suspension, live mutation, a single destination iterator for bulk insertion, exception
+identity and caller-thread retention across iterator callbacks. Typecheck passes; a fresh Maps search/place/directions run has no
+AbstractSequentialList or decodeFileDescriptor missing entries. The startup span mismatch
+persists and is being traced independently.
