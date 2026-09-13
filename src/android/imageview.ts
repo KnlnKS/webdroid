@@ -3,7 +3,7 @@ import { JView, initViewFromCtx, requestLayout, invalidate, resolveSizeAndState,
 import {
   type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, cslColor, drawableSize
 } from "./drawable";
-import { curThread, vcallOn, mkEnumSet } from "../jvm/natives/jlang";
+import { curThread, vcallOn, mkEnumSet, newObj, after } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, stubs, noops } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvColor } from "./res";
 import type { JBitmap, JCanvas } from "./graphics";
@@ -11,17 +11,25 @@ import type { JBitmap, JCanvas } from "./graphics";
 export class JImageView extends JView {
   private dr: JDrawable | null = null;
   get drawable(): JDrawable | null { return this.dr; }
-  set drawable(d: JDrawable | null) {
+  setDrawable(d: JDrawable | null) {
     if (this.dr) this.dr.callback = null;
     this.dr = d;
     this.drawableW = d?.intrinsicW() ?? -1; this.drawableH = d?.intrinsicH() ?? -1;
     if (d) d.callback = this;
     invalidate(this);
+    return this.applyColorFilter();
   }
   drawableW = -1; drawableH = -1;
   scaleType = 3; // FIT_CENTER
   adjustBounds = false;
   tintCsl: JColorStateList | null = null;
+  colorFilter: unknown = null;
+  hasColorFilter = false;
+  applyColorFilter(): unknown {
+    const d = this.dr, thread = curThread;
+    if (d && this.hasColorFilter) return after(vcallOn(thread, d, "mutate", "()Landroid/graphics/drawable/Drawable;"),
+      () => vcallOn(thread, d, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", this.colorFilter));
+  }
   /** AOSP only applies these when adjustViewBounds is on */
   maxW = Infinity; maxH = Infinity;
 }
@@ -31,7 +39,7 @@ const imageViewMethods: NativeSpec["methods"] = {
     await initViewFromCtx(this, c, set);
     if (set && this.jres) {
       const ta = obtainStyled(this.jres, this.theme, set, [AID("src"), AID("scaleType"), AID("adjustViewBounds"), AID("tint")], 0, 0);
-      if (ta.vals[0]) this.drawable = await loadDrawableRV(this.jres, ta.vals[0], this.theme);
+      if (ta.vals[0]) await this.setDrawable(await loadDrawableRV(this.jres, ta.vals[0], this.theme));
       if (ta.vals[1]) this.scaleType = rvInt(this.jres, ta.vals[1], 3);
       if (ta.vals[2]) this.adjustBounds = !!rvInt(this.jres, ta.vals[2], 0);
       if (ta.vals[3]) {
@@ -41,12 +49,13 @@ const imageViewMethods: NativeSpec["methods"] = {
     }
   },
   "setImageDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JImageView, d: JDrawable | null) {
-    this.drawable = d;
+    const pending = this.setDrawable(d);
     this.layoutRequested = true;
     requestLayout(this);
+    return pending;
   },
   "setImageResource(I)V": async function (this: JImageView, id: number) {
-    this.drawable = id && this.jres ? await loadDrawable(this.jres, id, this.theme) : null;
+    await this.setDrawable(id && this.jres ? await loadDrawable(this.jres, id, this.theme) : null);
     this.layoutRequested = true;
     requestLayout(this);
   },
@@ -54,8 +63,8 @@ const imageViewMethods: NativeSpec["methods"] = {
     if (b) {
       const d = new JBitmapDrawable();
       d.bmp = b;
-      this.drawable = d;
-    } else this.drawable = null;
+      await this.setDrawable(d);
+    } else await this.setDrawable(null);
     this.layoutRequested = true;
     requestLayout(this);
   },
@@ -69,16 +78,22 @@ const imageViewMethods: NativeSpec["methods"] = {
   "setMaxHeight(I)V": function (this: JImageView, v: number) { this.maxH = v; requestLayout(this); },
   "getMaxWidth()I": function (this: JImageView) { return Number.isFinite(this.maxW) ? this.maxW : 0x7fffffff; },
   "getMaxHeight()I": function (this: JImageView) { return Number.isFinite(this.maxH) ? this.maxH : 0x7fffffff; },
-  "setColorFilter(I)V": function (this: JImageView, c: number) { if (this.drawable) this.drawable.tint = c; invalidate(this); },
-  "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": function (this: JImageView, c: number) {
-    if (this.drawable) this.drawable.tint = c;
-    invalidate(this);
+  "setColorFilter(I)V": function (this: JImageView, c: number) {
+    return vcallOn(curThread, this, "setColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", c, rt.link("android/graphics/PorterDuff$Mode").ctor.s$SRC_ATOP);
   },
-  "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JImageView, f: any) {
-    if (this.drawable) { this.drawable.tint = f?.tint ?? null; this.drawable.tintMatrix = f?.matrix ?? null; }
-    invalidate(this);
+  "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": async function (this: JImageView, c: number, mode: unknown) {
+    const thread = curThread;
+    const f = await newObj("android/graphics/PorterDuffColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", c, mode);
+    return vcallOn(thread, this, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", f);
   },
-  "clearColorFilter()V": function (this: JImageView) { if (this.drawable) { this.drawable.tint = null; this.drawable.tintMatrix = null; } invalidate(this); },
+  "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JImageView, f: unknown) {
+    if (this.colorFilter === f) return;
+    this.colorFilter = f; this.hasColorFilter = true;
+    invalidate(this);
+    return this.applyColorFilter();
+  },
+  "clearColorFilter()V": function (this: JImageView) { return vcallOn(curThread, this, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", null); },
+  "getColorFilter()Landroid/graphics/ColorFilter;": function (this: JImageView) { return this.colorFilter; },
   "getImageTintList()Landroid/content/res/ColorStateList;": function (this: JImageView) { return this.tintCsl; },
   "setImageTintList(Landroid/content/res/ColorStateList;)V": function (this: JImageView, csl: JColorStateList | null) {
     this.tintCsl = csl;

@@ -55,6 +55,35 @@ test("ImageView content and appearance updates invalidate ancestor recordings", 
     expect(targets).toEqual([view]);
   }
 });
+test("ImageView retains filters across replacement and invokes drawable overrides after mutation", async () => {
+  const view = rt.make("android/widget/ImageView"), thread = new JThread();
+  const events: [string, unknown, JThread][] = [];
+  const make = () => {
+    const d = rt.make("android/graphics/drawable/Drawable");
+    Object.assign(d, {
+      [mangleMethod("mutate", "()Landroid/graphics/drawable/Drawable;")]: async () => {
+        events.push(["mutate", d, curThread]); await Promise.resolve(); return d;
+      },
+      [mangleMethod("setColorFilter", "(Landroid/graphics/ColorFilter;)V")]: (f: unknown) => { events.push(["filter", f, curThread]); },
+    });
+    return d;
+  };
+  await vcallOn(thread, view, "setColorFilter", "(I)V", -65536);
+  const filter = await vcall(view, "getColorFilter", "()Landroid/graphics/ColorFilter;");
+  expect(filter.tint).toBe(-65536);
+  expect(events).toEqual([]);
+  for (const d of [make(), make()]) {
+    await vcallOn(thread, view, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);
+    expect(events.splice(0)).toEqual([["mutate", d, thread], ["filter", filter, thread]]);
+  }
+  const d = await vcall(view, "getDrawable", "()Landroid/graphics/drawable/Drawable;");
+  await vcallOn(thread, view, "clearColorFilter", "()V");
+  expect(events.splice(0)).toEqual([["mutate", d, thread], ["filter", null, thread]]);
+  expect(await vcall(view, "getColorFilter", "()Landroid/graphics/ColorFilter;")).toBeNull();
+  const next = make();
+  await vcallOn(thread, view, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", next);
+  expect(events).toEqual([["mutate", next, thread], ["filter", null, thread]]);
+});
 test("suggested view minimums respect virtual background dimensions", async () => {
   const { d } = drawable(), view = rt.make("android/widget/TextView");
   if (!(view instanceof JView)) throw new Error("Invalid view delegate");

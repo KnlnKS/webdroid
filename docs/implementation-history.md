@@ -2496,3 +2496,13 @@ plain text; it fails against the preceding TextView (zero callbacks and transpar
 The fixed browser fixture, concatenation checks and typecheck pass. A fresh unchanged Maps
 place renders its gold rating stars, and search/directions/preview remain reachable. General
 character styling and all span mutation/ellipsis cases are not established by these checks.
+
+Preview's red navigation arrows were app picture drawables. ImageView.setColorFilter wrote
+native tint fields instead of calling the drawable's virtual setColorFilter, so its bitmap
+paint never received the requested filter. ImageView now owns the filter, applies it after
+drawable mutation, forwards the public overloads and reapplies it to replacement images.
+The existing search icon assignment awaits the same path. Six drawable checks (27 assertions)
+cover asynchronous mutation, callback thread, filters set before an image, replacement and
+clearing; typecheck passes. Fresh Maps preview now has a disabled gray previous arrow and a
+dark next arrow, using the app's actual filter colors. The marker size, font/wrapping,
+Street View preview thumbnail and map-label outlines still differ from Android.

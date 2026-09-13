@@ -25,7 +25,10 @@ platform contracts; run the full serialized E2E suite at the end.
   maneuver render. Awaiting inherited compound-button measurement fixes clipped
   place action chips. LinearLayout cross measurement now keeps preview controls at the
   bottom. Unicode block lookup, file-descriptor bitmap decoding and sequential lists cover
-  additional observed failures. Text, image, map-camera and control-state differences remain.
+  additional observed failures. Image invalidation, outline clipping and foreground drawing
+  restore the rounded place thumbnail with its border. Search titles ellipsize; concatenated
+  replacement spans render rating stars. Virtual image-filter dispatch restores preview arrow
+  colors. Text, preview imagery, map-marker size and map-label outlines still differ.
 - The startup LoginPromoTutorialController trace-span mismatch was traced to FutureTask
   invoking completion on the ambient main thread after worker suspension. The callback now
   retains its executing thread; a fresh Chrome startup reaches the sign-in tutorial without it.
@@ -39,7 +42,7 @@ platform contracts; run the full serialized E2E suite at the end.
 
 ## Next
 
-1. Diagnose remaining image, text, camera and control-state differences. Continue
+1. Diagnose remaining preview imagery, fonts/wrapping, marker size and map-label outlines. Continue
    checking startup thread/span ordering and remaining API failures against
    Android/bytecode evidence.
 2. Exercise matching Maps search, place, directions and preview interactions in Chrome
