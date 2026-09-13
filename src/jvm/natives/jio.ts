@@ -4,6 +4,7 @@ import { rt, JObj, type NativeSpec } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray, utf8, concat, i8, u8 } from "../abi";
 import { vcall, vcallMaybe, after, stringHash, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
+import { procText } from "../../shell/procfs";
 import { mappedBuffer, mappedReadOnlyBuffer, type JBuffer } from "./jnio";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
@@ -13,6 +14,10 @@ export const apkPath = (split?: string) => split ? `/data/app/split_${split}.apk
 rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
 
 // ── VFS: path → bytes. Directories implicit.
+const procBytes = (path: string): Uint8Array | null => {
+  const text = procText(path);
+  return text === null ? null : new TextEncoder().encode(text);
+};
 export const vfs = {
   files: new Map<string, Uint8Array>(),
   lazyFiles: new Map<string, FileSource>(),
@@ -29,17 +34,17 @@ export const vfs = {
     }
     return "/" + parts.join("/");
   },
-  read(p: string): Uint8Array | null { return this.files.get(this.norm(p)) ?? null; },
+  read(p: string): Uint8Array | null { const path = this.norm(p); return this.files.get(path) ?? procBytes(path); },
   readFile(p: string): Uint8Array | Promise<Uint8Array> | null {
     const path = this.norm(p);
     const bytes = this.files.get(path);
     if (bytes) return bytes;
     const source = this.lazyFiles.get(path);
-    return source ? readFully(source) : null;
+    return source ? readFully(source) : procBytes(path);
   },
   source(p: string): FileSource | null {
     const path = this.norm(p);
-    const bytes = this.files.get(path);
+    const bytes = this.files.get(path) ?? procBytes(path);
     return bytes ? new BytesFile(bytes) : this.lazyFiles.get(path) ?? null;
   },
   stat(p: string): { size: number; source: FileSource } | null {
@@ -67,7 +72,7 @@ export const vfs = {
   },
   exists(p: string): boolean {
     p = this.norm(p);
-    return this.files.has(p) || this.lazyFiles.has(p) || this.under(p);
+    return this.files.has(p) || this.lazyFiles.has(p) || this.under(p) || procText(p) !== null;
   },
   isDir(p: string): boolean {
     p = this.norm(p);

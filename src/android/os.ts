@@ -1,6 +1,7 @@
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
 import { JMessage, obtain } from "./messenger";
+import { procIdentity } from "../shell/procfs";
 import { parcelCreator, type JParcel } from "./parcel";
 import { keyCodes, deadChar } from "./keycodes";
 import { mem } from "../native/mem";
@@ -300,7 +301,7 @@ rt.register({ name: "android/os/Build$VERSION_CODES", ctor: class extends JObj {
 });
 export let PROCESS_PID = 1000, PROCESS_UID = 10001;
 export let PROCESS_NAME = "";
-export function setProcessIdentity(pid: number, uid: number): void { PROCESS_PID = pid; PROCESS_UID = uid; }
+export function setProcessIdentity(pid: number, uid: number): void { PROCESS_PID = pid; PROCESS_UID = uid; procIdentity.pid = pid; }
 const threadTids = new WeakMap<JThread, number>();
 let tidSeq = 0;
 /** the kernel thread id of a Java thread: the main thread's is the pid, as on a device */
@@ -310,7 +311,7 @@ export function threadTid(t: JThread): number {
   if (tid === undefined) threadTids.set(t, (tid = PROCESS_PID + ++tidSeq));
   return tid;
 }
-export function setProcessName(name: string): void { PROCESS_NAME = name; }
+export function setProcessName(name: string): void { PROCESS_NAME = name; procIdentity.name = name; }
 rt.register({
   name: "android/os/Process", ctor: class extends JObj {},
   statics: { THREAD_PRIORITY_BACKGROUND: 10, THREAD_PRIORITY_DEFAULT: 0, THREAD_PRIORITY_URGENT_DISPLAY: -8 },

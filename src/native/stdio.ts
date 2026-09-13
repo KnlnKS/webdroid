@@ -8,7 +8,7 @@ import type { Cpu } from "./cpu";
 import { LAYOUT, fail, utf8, logLine, offArg, readTs, writeTs, clockTime, scanSink } from "./libc";
 import { format, scan } from "./printf";
 import { vfs } from "../jvm/natives/jio";
-import { device } from "../shell/config";
+import { procText } from "../shell/procfs";
 import type { FileSource } from "../shell/lazyfile";
 import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketIoctl, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd } from "./net";
 import { allocateFd, releaseFd, reserveFd } from "./fd";
@@ -37,7 +37,6 @@ const fds = new Map<number, Fd>();
 const files = new Map<number, number>();       // FILE* → fd
 const pushback = new Map<number, number[]>();
 const dirs = new Map<number, { entries: string[]; i: number; dirent: number }>();
-const cpuList = device.cpu.cores === 1 ? "0\n" : `0-${device.cpu.cores - 1}\n`;
 
 setNativePollProvider({
   query(fd, events) {
@@ -64,18 +63,6 @@ setNativePollProvider({
   read(cpu, fd, destination, length) { return fds.has(fd) ? fdRead(cpu, fd, destination, length) : null; },
   write(cpu, fd, source, length) { return fds.has(fd) ? fdWrite(cpu, fd, source, length) : null; },
 });
-
-function synth(path: string): string | null {
-  if (path === "/proc/cpuinfo") {
-    let s = "";
-    for (let i = 0; i < device.cpu.cores; i++) s += `processor\t: ${i}\nmodel name\t: ARMv7 Processor rev 0 (v7l)\nBogoMIPS\t: 38.40\nFeatures\t: ${device.cpu.features}\nCPU implementer\t: 0x41\nCPU architecture: 7\nCPU variant\t: 0x0\nCPU part\t: 0xc07\nCPU revision\t: 0\n\n`;
-    return s + `Hardware\t: ${device.cpu.hardware}\nRevision\t: 0000\nSerial\t\t: 0000000000000000\n`;
-  }
-  if (path === "/sys/devices/system/cpu/present" || path === "/sys/devices/system/cpu/possible" || path === "/sys/devices/system/cpu/online") return cpuList;
-  if (path === "/proc/meminfo") return `MemTotal:        ${device.cpu.memKb} kB\nMemFree:         ${device.cpu.memKb >> 1} kB\nBuffers:               0 kB\nCached:                0 kB\n`;
-  if (path === "/proc/self/maps" || path === "/proc/self/cmdline") return "";
-  return null;
-}
 
 function atPath(cpu: Cpu, dirfd: number, path: string): string | number {
   if (path.startsWith("/") || dirfd === -100) return path;
@@ -114,7 +101,7 @@ export function renamePath(cpu: Cpu | null, fromPath: string, toPath: string): n
 function accessPath(cpu: Cpu, path: string, mode: number): number {
   if (mode & ~7) return fail(cpu, E.INVAL);
   const p = vfs.norm(path);
-  return vfs.exists(p) || vfs.isDir(p) || synth(p) !== null || p === "/dev/urandom" || p === "/dev/random" ? 0 : fail(cpu, E.NOENT);
+  return vfs.exists(p) || vfs.isDir(p) || procText(p) !== null || p === "/dev/urandom" || p === "/dev/random" ? 0 : fail(cpu, E.NOENT);
 }
 function mkdirPath(cpu: Cpu, path: string): number {
   const p = vfs.norm(path);
@@ -130,7 +117,7 @@ function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
     if (acc !== 0) return fail(cpu, E.ACCES);
     return put({ ...fdBase(path), random: true });
   }
-  const s = synth(path);
+  const s = procText(path);
   if (s !== null) { const b = utf8(s); return put({ ...fdBase(path), data: b, len: b.length, synthetic: true }); }
   if (vfs.isDir(path)) {
     if (acc !== 0) return fail(cpu, E.ISDIR);
@@ -420,7 +407,7 @@ function timerState(timer: Timer, out: number): void {
 function statPath(cpu: Cpu, path: string, buf: number): number {
   path = vfs.norm(path);
   if (path === "/dev/urandom" || path === "/dev/random") { fillStat(buf, false, 0, Date.now(), path); return 0; }
-  const s = synth(path);
+  const s = procText(path);
   if (s !== null) { fillStat(buf, false, utf8(s).length, Date.now(), path); return 0; }
   if (vfs.isDir(path)) { fillStat(buf, true, 4096, Date.now(), path); return 0; }
   const file = vfs.stat(path);
