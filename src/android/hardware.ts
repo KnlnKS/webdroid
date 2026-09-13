@@ -6,6 +6,7 @@ import { device } from "../shell/config";
 import { newArrayList } from "../jvm/natives/jutil";
 
 rt.markers("android/hardware/SensorEventListener");
+rt.register({ name: "android/hardware/SensorEventListener2", ctor: class extends JObj {}, ifaces: ["android/hardware/SensorEventListener"] });
 rt.register({ name: "android/hardware/HardwareBuffer", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable", "java/lang/AutoCloseable"] });
 
 class JSensor extends JObj { type = 0; sname = ""; vendor = ""; maxRange = 0; resolution = 0; minDelay = 0; }
