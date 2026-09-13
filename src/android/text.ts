@@ -8,6 +8,7 @@ import { device } from "../shell/config";
 import { formatDate } from "../jvm/natives/jtext";
 import { toJsArray } from "../jvm/natives/jutil";
 import { localeDirection } from "../jvm/natives/jvalues";
+import { readStreamFully } from "../jvm/natives/jio";
 
 class JAnnotation extends JObj { key: string | null = null; value: string | null = null; }
 async function writeAnnotation(this: JAnnotation, parcel: JObj) {
@@ -606,9 +607,99 @@ rt.register({
   },
 });
 for (const n of ["android/text/Html$ImageGetter", "android/text/Html$TagHandler",
-  "org/xml/sax/ContentHandler", "org/xml/sax/XMLReader", "org/xml/sax/Attributes", "org/xml/sax/DTDHandler", "org/xml/sax/EntityResolver", "org/xml/sax/ErrorHandler"]) {
+  "org/xml/sax/ContentHandler", "org/xml/sax/DTDHandler", "org/xml/sax/EntityResolver", "org/xml/sax/ErrorHandler"]) {
   rt.register({ name: n, ctor: class extends JObj {} });
 }
+type SaxAttr = { uri: string; local: string; qname: string; value: string };
+class JSaxAttributes extends JObj { values: SaxAttr[] = []; }
+const saxAttributeMethods = {
+  "getLength()I": function (this: JSaxAttributes) { return this.values.length; },
+  "getURI(I)Ljava/lang/String;": function (this: JSaxAttributes, i: number) { return this.values[i]?.uri ?? null; },
+  "getLocalName(I)Ljava/lang/String;": function (this: JSaxAttributes, i: number) { return this.values[i]?.local ?? null; },
+  "getQName(I)Ljava/lang/String;": function (this: JSaxAttributes, i: number) { return this.values[i]?.qname ?? null; },
+  "getType(I)Ljava/lang/String;": function (this: JSaxAttributes, i: number) { return this.values[i] ? "CDATA" : null; },
+  "getValue(I)Ljava/lang/String;": function (this: JSaxAttributes, i: number) { return this.values[i]?.value ?? null; },
+  "getValue(Ljava/lang/String;)Ljava/lang/String;": function (this: JSaxAttributes, qname: string) { return this.values.find((a) => a.qname === qname)?.value ?? null; },
+  "getValue(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": function (this: JSaxAttributes, uri: string, local: string) {
+    return this.values.find((a) => a.uri === uri && a.local === local)?.value ?? null;
+  },
+};
+rt.register({
+  name: "org/xml/sax/Attributes", ctor: JSaxAttributes,
+  methods: saxAttributeMethods,
+});
+rt.register({
+  name: "org/xml/sax/helpers/AttributesImpl", ctor: class extends JSaxAttributes {},
+  ifaces: ["org/xml/sax/Attributes"],
+  methods: {
+    ...saxAttributeMethods,
+    "<init>()V": function () {},
+    "<init>(Lorg/xml/sax/Attributes;)V": async function (this: JSaxAttributes, source: unknown) {
+      const length = await vcall(source, "getLength", "()I") as number;
+      for (let i = 0; i < length; i++) this.values.push({
+        uri: await vcall(source, "getURI", "(I)Ljava/lang/String;", i) as string,
+        local: await vcall(source, "getLocalName", "(I)Ljava/lang/String;", i) as string,
+        qname: await vcall(source, "getQName", "(I)Ljava/lang/String;", i) as string,
+        value: await vcall(source, "getValue", "(I)Ljava/lang/String;", i) as string,
+      });
+    },
+  },
+});
+class JInputSource extends JObj { stream: unknown = null; }
+rt.register({
+  name: "org/xml/sax/InputSource", ctor: JInputSource,
+  methods: {
+    "<init>(Ljava/io/InputStream;)V": function (this: JInputSource, stream: unknown) { this.stream = stream; },
+    "setByteStream(Ljava/io/InputStream;)V": function (this: JInputSource, stream: unknown) { this.stream = stream; },
+    "getByteStream()Ljava/io/InputStream;": function (this: JInputSource) { return this.stream; },
+  },
+});
+class JXmlReader extends JObj { handler: unknown = null; }
+async function emitSax(reader: JXmlReader, source: JInputSource) {
+  const xml = new TextDecoder().decode(await readStreamFully(source.stream));
+  const doc = new DOMParser().parseFromString(xml, "text/xml");
+  if (doc.querySelector("parsererror")) throw rt.mkThrowable("org/xml/sax/SAXParseException", "Malformed XML");
+  const handler = reader.handler;
+  await vcall(handler, "startDocument", "()V");
+  const walk = async (node: Node): Promise<void> => {
+    if (node.nodeType === Node.TEXT_NODE || node.nodeType === Node.CDATA_SECTION_NODE) {
+      const text = node.nodeValue ?? "";
+      if (text) await vcall(handler, "characters", "([CII)V", Uint16Array.from(text, (c) => c.charCodeAt(0)), 0, text.length);
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const el = node as Element, attrs = new JSaxAttributes();
+    attrs.values = Array.from(el.attributes, (a) => ({ uri: a.namespaceURI ?? "", local: a.localName, qname: a.name, value: a.value }));
+    await vcall(handler, "startElement", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/xml/sax/Attributes;)V",
+      el.namespaceURI ?? "", el.localName, el.tagName, attrs);
+    for (const child of el.childNodes) await walk(child);
+    await vcall(handler, "endElement", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", el.namespaceURI ?? "", el.localName, el.tagName);
+  };
+  if (doc.documentElement) await walk(doc.documentElement);
+  await vcall(handler, "endDocument", "()V");
+}
+rt.register({
+  name: "org/xml/sax/XMLReader", ctor: JXmlReader,
+  methods: {
+    "setContentHandler(Lorg/xml/sax/ContentHandler;)V": function (this: JXmlReader, handler: unknown) { this.handler = handler; },
+    "getContentHandler()Lorg/xml/sax/ContentHandler;": function (this: JXmlReader) { return this.handler; },
+    "parse(Lorg/xml/sax/InputSource;)V": function (this: JXmlReader, source: JInputSource) { return emitSax(this, source); },
+  },
+});
+class JSaxParser extends JObj { reader = new JXmlReader(); }
+class JSaxParserFactory extends JObj {}
+rt.register({
+  name: "javax/xml/parsers/SAXParser", ctor: JSaxParser,
+  methods: { "getXMLReader()Lorg/xml/sax/XMLReader;": function (this: JSaxParser) { return this.reader; } },
+});
+rt.register({
+  name: "javax/xml/parsers/SAXParserFactory", ctor: JSaxParserFactory,
+  methods: {
+    "static newInstance()Ljavax/xml/parsers/SAXParserFactory;": () => new JSaxParserFactory(),
+    "newSAXParser()Ljavax/xml/parsers/SAXParser;": () => new JSaxParser(),
+    ...noops("setFeature(Ljava/lang/String;Z)V", "setNamespaceAware(Z)V", "setValidating(Z)V"),
+  },
+});
 // the SAX adapter every callback of which does nothing: app handlers extend it and override a few
 rt.register({
   name: "org/xml/sax/helpers/DefaultHandler", ctor: class extends JObj {},
