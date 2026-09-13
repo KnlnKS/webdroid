@@ -2193,3 +2193,10 @@ normalizing ICU-version whitespace differences; 15 focused tests and typecheck p
 restart, Maps no longer reports the detach-time AndroidViewHolder error or DateUtils failure;
 route construction next reaches missing android.icu.text.NumberFormat. The route still does
 not finish rendering and geometry differs from the AVD.
+
+The fuel-saving card reaches ICU NumberFormat.getPercentInstance/format. ICU and Java
+percentage factories now share locale-aware cached formatting with half-even rounding;
+fraction digit setters preserve their min/max invariant and long formatting avoids Number
+precision loss. Three focused tests match Android 35 percentage, locale, rounding and long
+probes; typecheck passes. Maps advances to route-map construction, where double-array binary
+search is missing. The detailed route cards and controls still have layout defects.
