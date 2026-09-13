@@ -30,7 +30,7 @@ rt.register({
   },
 });
 
-class JLooper extends JObj {
+export class JLooper extends JObj {
   thread: JThread;
   q: Promise<unknown> = Promise.resolve();
   printer: unknown = null;   // Looper.setMessageLogging
