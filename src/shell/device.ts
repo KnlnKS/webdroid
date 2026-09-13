@@ -244,7 +244,13 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     booted = { host, mainActivityCls: mainActivity ?? "", stack: [], label };
     if (!processName && mainActivity) {
       onStatus("launching " + mainActivity.split("/").pop());
-      await launchActivity(mainActivity, null);
+      const intent = new JIntent();
+      intent.action = "android.intent.action.MAIN";
+      intent.categories.add("android.intent.category.LAUNCHER");
+      intent.component = mainActivity.replaceAll("/", ".");
+      intent.componentPkg = pkg;
+      intent.flags = 0x10000000;
+      await launchActivity(mainActivity, intent);
     }
     return booted;
   });
