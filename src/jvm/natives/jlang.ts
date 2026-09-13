@@ -1356,10 +1356,13 @@ rt.register({
 
 /** the native tier releases a finished thread's Cpu and stack through this */
 export const threadExit = { hook: null as ((t: JThread) => void) | null };
+const liveThreads = new Set<JThread>();
 export class JThread extends JObj {
   jname = "Thread";
   daemon = 0;
-  alive = 0;
+  private live = 0;
+  get alive(): number { return this.live; }
+  set alive(value: number) { this.live = value; if (value) liveThreads.add(this); else liveThreads.delete(this); }
   prio = 5;
   target: unknown = null;   // Runnable
   locals = inheritedLocals();
@@ -1471,6 +1474,8 @@ rt.register({
     "setContextClassLoader(Ljava/lang/ClassLoader;)V": () => {},
     "getStackTrace()[Ljava/lang/StackTraceElement;": () => jsStackTrace(new Error().stack),
     "static currentThread()Ljava/lang/Thread;": () => curThread,
+    "static activeCount()I": () => liveThreads.size,
+    "static enumerate([Ljava/lang/Thread;)I": enumerateThreads,
     "static getAllStackTraces()Ljava/util/Map;": async () => {
       const m = await newObj("java/util/HashMap");
       await vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", curThread, jsStackTrace(new Error().stack));
@@ -1487,6 +1492,11 @@ rt.register({
   },
 });
 
+function enumerateThreads(threads: unknown[]): number {
+  let count = 0;
+  for (const thread of liveThreads) { if (count === threads.length) break; threads[count++] = thread; }
+  return count;
+}
 // One ThreadGroup for the process: crash handlers and thread factories walk up to it, and its
 // parent chain ends here (ART's "main" group under "system").
 class JThreadGroup extends JObj { gname = "main"; }
@@ -1498,8 +1508,8 @@ rt.register({
     "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V": function (this: JThreadGroup, _p: unknown, n: string) { this.gname = n; },
     "getName()Ljava/lang/String;": function (this: JThreadGroup) { return this.gname; },
     "getParent()Ljava/lang/ThreadGroup;": function (this: JThreadGroup) { return this === mainGroup ? null : mainGroup; },
-    "activeCount()I": () => 1,
-    "enumerate([Ljava/lang/Thread;)I": (a: unknown[]) => { if (a.length) a[0] = curThread; return a.length ? 1 : 0; },
+    "activeCount()I": () => liveThreads.size,
+    "enumerate([Ljava/lang/Thread;)I": enumerateThreads,
     "uncaughtException(Ljava/lang/Thread;Ljava/lang/Throwable;)V": (_t: unknown, e: unknown) => { console.error("[uncaught]", e); },
     "toString()Ljava/lang/String;": function (this: JThreadGroup) { return `java.lang.ThreadGroup[name=${this.gname},maxpri=10]`; },
   },
