@@ -968,9 +968,15 @@ rt.register({
   },
 });
 // CompletableFuture: completed from outside, so the promise is armed by the constructor
-class JCompletable extends JFuture { settle: () => void = () => {}; }
+class JCompletable extends JFuture { settle: () => void = () => {}; dependents: (() => void)[] = []; }
 const completable = () => { const f = new JCompletable(); f.promise = new Promise<void>((r) => { f.settle = r; }); return f; };
-const settleWith = (f: JCompletable, value: unknown, error: unknown) => { if (f.done) return 0; f.value = value; f.error = error; f.cancelled = rt.iof(error, "java/util/concurrent/CancellationException") ? 1 : 0; f.done = 1; f.settle(); return 1; };
+const settleWith = (f: JCompletable, value: unknown, error: unknown) => {
+  if (f.done) return 0;
+  f.value = value; f.error = error; f.cancelled = rt.iof(error, "java/util/concurrent/CancellationException") ? 1 : 0; f.done = 1;
+  f.settle();
+  for (const run of f.dependents.splice(0)) run();
+  return 1;
+};
 const completionError = (error: unknown) => rt.iof(error, "java/util/concurrent/CompletionException")
   ? error : newObj("java/util/concurrent/CompletionException", "(Ljava/lang/Throwable;)V", error);
 async function completableValue(future: JCompletable, join: boolean) {
@@ -1003,10 +1009,51 @@ async function supplyAsync(supplier: unknown, executor: unknown) {
   await vcall(executor, "execute", "(Ljava/lang/Runnable;)V", new JAsyncSupply(future, supplier));
   return future;
 }
+const completionActions = {
+  thenApply: ["java/util/function/Function", "apply", "(Ljava/lang/Object;)Ljava/lang/Object;"],
+  thenCompose: ["java/util/function/Function", "apply", "(Ljava/lang/Object;)Ljava/lang/Object;"],
+  thenAccept: ["java/util/function/Consumer", "accept", "(Ljava/lang/Object;)V"],
+  thenRun: ["java/lang/Runnable", "run", "()V"],
+  exceptionally: ["java/util/function/Function", "apply", "(Ljava/lang/Object;)Ljava/lang/Object;"],
+  handle: ["java/util/function/BiFunction", "apply", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"],
+  whenComplete: ["java/util/function/BiConsumer", "accept", "(Ljava/lang/Object;Ljava/lang/Object;)V"],
+} as const;
+type CompletionAction = keyof typeof completionActions;
+async function runDependent(source: JCompletable, target: JCompletable, action: unknown, kind: CompletionAction) {
+  if (target.done) return;
+  try {
+    const handlesError = kind === "handle" || kind === "whenComplete" || kind === "exceptionally";
+    if (source.error && !handlesError) { settleWith(target, null, await completionError(source.error)); return; }
+    if (!source.error && kind === "exceptionally") { settleWith(target, source.value, null); return; }
+    const [, method, desc] = completionActions[kind];
+    const args = kind === "thenRun" ? [] : kind === "handle" || kind === "whenComplete" ? [source.value, source.error] : [kind === "exceptionally" ? source.error : source.value];
+    const value = await vcall(action, method, desc, ...args);
+    if (kind === "thenCompose") {
+      if (value == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const next = value instanceof JCompletable ? value : await vcall(value, "toCompletableFuture", "()Ljava/util/concurrent/CompletableFuture;");
+      if (!(next instanceof JCompletable)) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      if (!next.done) await next.promise;
+      settleWith(target, next.value, next.error ? await completionError(next.error) : null);
+    } else if (kind === "whenComplete") settleWith(target, source.value, source.error ? await completionError(source.error) : null);
+    else settleWith(target, kind === "thenAccept" || kind === "thenRun" ? null : value, null);
+  } catch (error) { settleWith(target, null, await completionError(kind === "whenComplete" && source.error ? source.error : rt.jx(error))); }
+}
+const completionMethods: NonNullable<NativeSpec["methods"]> = {};
+for (const kind of Object.keys(completionActions) as CompletionAction[]) {
+  const method = function (this: JCompletable, action: unknown) {
+    if (action == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    const target = completable(), run = () => { void runDependent(this, target, action, kind); };
+    if (this.done) run(); else this.dependents.push(run);
+    return target;
+  };
+  for (const result of ["CompletableFuture", "CompletionStage"])
+    completionMethods[`${kind}(L${completionActions[kind][0]};)Ljava/util/concurrent/${result};`] = method;
+}
 rt.register({
   name: "java/util/concurrent/CompletableFuture", ctor: JCompletable, sup: "webdroid/Future",
   ifaces: ["java/util/concurrent/Future", "java/util/concurrent/CompletionStage"],
   methods: {
+    ...completionMethods,
     "<init>()V": function (this: JCompletable) { this.promise = new Promise<void>((r) => { this.settle = r; }); },
     "static completedFuture(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;": (v: unknown) => { const f = completable(); settleWith(f, v, null); return f; },
     "static supplyAsync(Ljava/util/function/Supplier;)Ljava/util/concurrent/CompletableFuture;": (supplier: unknown) =>
@@ -1017,6 +1064,7 @@ rt.register({
     "join()Ljava/lang/Object;": async function (this: JCompletable) { if (!this.done) await this.promise; return completableValue(this, true); },
     "getNow(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JCompletable, d: unknown) { return !this.done ? d : this.error ? completableValue(this, true) : this.value; },
     "isCompletedExceptionally()Z": function (this: JCompletable) { return this.done && this.error ? 1 : 0; },
+    "toCompletableFuture()Ljava/util/concurrent/CompletableFuture;": function (this: JCompletable) { return this; },
     "cancel(Z)Z": function (this: JCompletable) { return settleWith(this, null, rt.mkThrowable("java/util/concurrent/CancellationException", null)) || this.cancelled; },
   },
 });
