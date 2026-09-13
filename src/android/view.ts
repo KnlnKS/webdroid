@@ -389,6 +389,8 @@ export class JView extends JObj {
   overScrollMode = 0;
   layerType = 0;
   elevationV = 0;
+  outlineAmbientShadowColor = -16777216;
+  outlineSpotShadowColor = -16777216;
   longPressTimer: ReturnType<typeof setTimeout> | null = null;
   transientState = 0; textAlignment = 1;
   clipBounds: JRect | null = null; bgTint: JColorStateList | null = null;
@@ -873,6 +875,10 @@ const viewMethods: NativeSpec["methods"] = {
   "setPivotY(F)V": function (this: JView, p: number) { this.pivotYv = p; },
   "setElevation(F)V": function (this: JView, e: number) { this.elevationV = e; },
   "getElevation()F": function (this: JView) { return this.elevationV; },
+  "setOutlineAmbientShadowColor(I)V": function (this: JView, color: number) { this.outlineAmbientShadowColor = color; invalidate(); },
+  "getOutlineAmbientShadowColor()I": function (this: JView) { return this.outlineAmbientShadowColor; },
+  "setOutlineSpotShadowColor(I)V": function (this: JView, color: number) { this.outlineSpotShadowColor = color; invalidate(); },
+  "getOutlineSpotShadowColor()I": function (this: JView) { return this.outlineSpotShadowColor; },
   "setScrollX(I)V": function (this: JView, x: number) {
     const old = this.scrollX;
     this.scrollX = x; invalidate();

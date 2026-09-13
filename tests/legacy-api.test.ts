@@ -32,6 +32,15 @@ test("View context clickability is independently mutable", async () => {
   expect(await vcall(view, "isClickable", "()Z")).toBe(0);
 });
 
+test("View retains outline shadow colors", async () => {
+  const view = await newObj("android/view/View", "(Landroid/content/Context;)V", null);
+  expect(await vcall(view, "getOutlineAmbientShadowColor", "()I")).toBe(-16777216);
+  await vcall(view, "setOutlineAmbientShadowColor", "(I)V", 0xff112233 | 0);
+  await vcall(view, "setOutlineSpotShadowColor", "(I)V", 0xff445566 | 0);
+  expect(await vcall(view, "getOutlineAmbientShadowColor", "()I")).toBe(0xff112233 | 0);
+  expect(await vcall(view, "getOutlineSpotShadowColor", "()I")).toBe(0xff445566 | 0);
+});
+
 test("PaintDrawable owns a rectangular shape and supports rounded corners", async () => {
   const drawable = await newObj("android/graphics/drawable/PaintDrawable", "(I)V", 0xff123456 | 0);
   expect((await vcall(drawable, "getPaint", "()Landroid/graphics/Paint;")).color).toBe(0xff123456 | 0);
@@ -182,6 +191,10 @@ test("optional device services report their unavailable state", async () => {
   expect(scall("android/os/VibrationEffect", "createPredefined", "(I)Landroid/os/VibrationEffect;", 0)).not.toBeNull();
   expect(await newObj("android/media/session/MediaController$Callback")).not.toBeNull();
   expect(await newObj("android/media/MediaRoute2ProviderService")).not.toBeNull();
+  const accessibility = await newObj("android/view/accessibility/AccessibilityManager");
+  const serviceListener = rt.make("android/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener");
+  await vcall(accessibility, "addAccessibilityServicesStateChangeListener", "(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)V", serviceListener);
+  expect(await vcall(accessibility, "removeAccessibilityServicesStateChangeListener", "(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)Z", serviceListener)).toBe(1);
 
   const builder = scall("android/util/StatsEvent", "newBuilder", "()Landroid/util/StatsEvent$Builder;");
   expect(await vcall(builder, "setAtomId", "(I)Landroid/util/StatsEvent$Builder;", 100)).toBe(builder);

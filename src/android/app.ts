@@ -687,6 +687,8 @@ for (const [name, methods, statics] of [
     "removeAccessibilityStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityStateChangeListener;)Z": () => 1,
     "addTouchExplorationStateChangeListener(Landroid/view/accessibility/AccessibilityManager$TouchExplorationStateChangeListener;)Z": () => 1,
     "removeTouchExplorationStateChangeListener(Landroid/view/accessibility/AccessibilityManager$TouchExplorationStateChangeListener;)Z": () => 1,
+    "addAccessibilityServicesStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)V": () => {},
+    "removeAccessibilityServicesStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)Z": () => 1,
     "getEnabledAccessibilityServiceList(I)Ljava/util/List;": () => newArrayList(),
   }],
   ["android/content/ClipboardManager", {
@@ -781,7 +783,7 @@ rt.register({
 rt.markers("android/hardware/display/DisplayManager$DisplayListener", "android/app/AppOpsManager$OnOpChangedListener");
 // AccessibilityManager callback interfaces — apps `implements` these to watch for a
 // screen reader turning on; must link even though it never fires here (see above).
-for (const n of ["AccessibilityStateChangeListener", "TouchExplorationStateChangeListener"]) {
+for (const n of ["AccessibilityStateChangeListener", "TouchExplorationStateChangeListener", "AccessibilityServicesStateChangeListener"]) {
   rt.register({ name: "android/view/accessibility/AccessibilityManager$" + n, ctor: class extends JObj {} });
 }
 rt.register({
