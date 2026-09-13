@@ -675,6 +675,27 @@ function setMatrix(dst: Float32Array, src: Float32Array): void {
   if (src.length < 20) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(src.length));
   dst.set(src.subarray(0, 20));
 }
+class JLightingColorFilter extends JObj {
+  multiply = 0;
+  add = 0;
+  matrix = identityMatrix();
+}
+rt.register({
+  name: "android/graphics/LightingColorFilter", ctor: JLightingColorFilter, sup: "android/graphics/ColorFilter",
+  methods: {
+    "<init>(II)V": function (this: JLightingColorFilter, multiply: number, add: number) {
+      this.multiply = multiply; this.add = add;
+      this.matrix[0] = (multiply >>> 16 & 255) / 255;
+      this.matrix[6] = (multiply >>> 8 & 255) / 255;
+      this.matrix[12] = (multiply & 255) / 255;
+      this.matrix[4] = add >>> 16 & 255;
+      this.matrix[9] = add >>> 8 & 255;
+      this.matrix[14] = add & 255;
+    },
+    "getColorMultiply()I": function (this: JLightingColorFilter) { return this.multiply; },
+    "getColorAdd()I": function (this: JLightingColorFilter) { return this.add; },
+  },
+});
 function concat(a: Float32Array, b: Float32Array): Float32Array {
   const out = new Float32Array(20);
   for (let j = 0; j < 20; j += 5) {
