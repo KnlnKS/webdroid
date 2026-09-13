@@ -2,6 +2,7 @@
 
 import { rt, JObj, stubs, noops, fieldGetters } from "../jvm/runtime";
 import { stringHash, vcall } from "../jvm/natives/jlang";
+import { newArrayList, type JList } from "../jvm/natives/jutil";
 import { vfs } from "../jvm/natives/jio";
 import type { JBuffer } from "../jvm/natives/jnio";
 rt.markers("android/media/AudioManager$OnAudioFocusChangeListener");
@@ -49,6 +50,30 @@ class JMediaSession extends JObj {
 class JMediaController extends JObj {
   token: JMediaSessionToken | null = null;
 }
+class JPlaybackCustomAction extends JObj {
+  action = "";
+  name: unknown = null;
+  icon = 0;
+  extras: unknown = null;
+}
+class JPlaybackCustomActionBuilder extends JObj {
+  value = new JPlaybackCustomAction();
+}
+class JPlaybackState extends JObj {
+  state = 0;
+  position = 0n;
+  bufferedPosition = 0n;
+  speed = 0;
+  actions = 0n;
+  errorMessage: unknown = null;
+  updateTime = 0n;
+  customActions: JList = newArrayList();
+  activeQueueItemId = -1n;
+  extras: unknown = null;
+}
+class JPlaybackStateBuilder extends JObj {
+  value = new JPlaybackState();
+}
 rt.register({ name: "android/media/session/MediaSession$Token", ctor: JMediaSessionToken, ifaces: ["android/os/Parcelable"], methods: {
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": () => {},
@@ -57,6 +82,46 @@ rt.register({ name: "android/media/session/MediaSession$Callback", ctor: class e
 rt.register({ name: "android/media/session/MediaController", ctor: JMediaController, methods: {
   "<init>(Landroid/content/Context;Landroid/media/session/MediaSession$Token;)V": function (this: JMediaController, _context: unknown, token: JMediaSessionToken) { this.token = token; },
   "getSessionToken()Landroid/media/session/MediaSession$Token;": function (this: JMediaController) { return this.token; },
+} });
+rt.register({ name: "android/media/session/PlaybackState$CustomAction", ctor: JPlaybackCustomAction, ifaces: ["android/os/Parcelable"], methods: {
+  "getAction()Ljava/lang/String;": function (this: JPlaybackCustomAction) { return this.action; },
+  "getName()Ljava/lang/CharSequence;": function (this: JPlaybackCustomAction) { return this.name; },
+  "getIcon()I": function (this: JPlaybackCustomAction) { return this.icon; },
+  "getExtras()Landroid/os/Bundle;": function (this: JPlaybackCustomAction) { return this.extras; },
+} });
+rt.register({ name: "android/media/session/PlaybackState$CustomAction$Builder", ctor: JPlaybackCustomActionBuilder, methods: {
+  "<init>(Ljava/lang/String;Ljava/lang/CharSequence;I)V": function (this: JPlaybackCustomActionBuilder, action: string, name: unknown, icon: number) {
+    this.value.action = action; this.value.name = name; this.value.icon = icon;
+  },
+  "setExtras(Landroid/os/Bundle;)Landroid/media/session/PlaybackState$CustomAction$Builder;": function (this: JPlaybackCustomActionBuilder, extras: unknown) { this.value.extras = extras; return this; },
+  "build()Landroid/media/session/PlaybackState$CustomAction;": function (this: JPlaybackCustomActionBuilder) { return Object.assign(new JPlaybackCustomAction(), this.value); },
+} });
+rt.register({ name: "android/media/session/PlaybackState", ctor: JPlaybackState, ifaces: ["android/os/Parcelable"], methods: {
+  "getState()I": function (this: JPlaybackState) { return this.state; },
+  "getPosition()J": function (this: JPlaybackState) { return this.position; },
+  "getBufferedPosition()J": function (this: JPlaybackState) { return this.bufferedPosition; },
+  "getPlaybackSpeed()F": function (this: JPlaybackState) { return this.speed; },
+  "getActions()J": function (this: JPlaybackState) { return this.actions; },
+  "getErrorMessage()Ljava/lang/CharSequence;": function (this: JPlaybackState) { return this.errorMessage; },
+  "getLastPositionUpdateTime()J": function (this: JPlaybackState) { return this.updateTime; },
+  "getCustomActions()Ljava/util/List;": function (this: JPlaybackState) { return this.customActions; },
+  "getActiveQueueItemId()J": function (this: JPlaybackState) { return this.activeQueueItemId; },
+  "getExtras()Landroid/os/Bundle;": function (this: JPlaybackState) { return this.extras; },
+} });
+rt.register({ name: "android/media/session/PlaybackState$Builder", ctor: JPlaybackStateBuilder, methods: {
+  "<init>()V": () => {},
+  "setState(IJFJ)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, state: number, position: bigint, speed: number, time: bigint) {
+    this.value.state = state; this.value.position = position; this.value.speed = speed; this.value.updateTime = time; return this;
+  },
+  "setBufferedPosition(J)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, position: bigint) { this.value.bufferedPosition = position; return this; },
+  "setActions(J)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, actions: bigint) { this.value.actions = actions; return this; },
+  "setErrorMessage(Ljava/lang/CharSequence;)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, message: unknown) { this.value.errorMessage = message; return this; },
+  "addCustomAction(Landroid/media/session/PlaybackState$CustomAction;)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, action: unknown) { this.value.customActions.a.push(action); return this; },
+  "setActiveQueueItemId(J)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, id: bigint) { this.value.activeQueueItemId = id; return this; },
+  "setExtras(Landroid/os/Bundle;)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, extras: unknown) { this.value.extras = extras; return this; },
+  "build()Landroid/media/session/PlaybackState;": function (this: JPlaybackStateBuilder) {
+    return Object.assign(new JPlaybackState(), this.value, { customActions: newArrayList(this.value.customActions.a.slice()) });
+  },
 } });
 rt.register({ name: "android/media/session/MediaSession", ctor: JMediaSession, methods: {
   "<init>(Landroid/content/Context;Ljava/lang/String;)V": () => {},
