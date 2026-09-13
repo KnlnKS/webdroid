@@ -2098,6 +2098,20 @@ rt.register({
     "static reverse(Ljava/util/List;)V": (l: JList) => l.a.reverse(),
     "static shuffle(Ljava/util/List;)V": shuffle,
     "static shuffle(Ljava/util/List;Ljava/util/Random;)V": shuffle,
+    "static disjoint(Ljava/util/Collection;Ljava/util/Collection;)Z": async (a: unknown, b: unknown) => {
+      if (a == null || b == null) rt.npe();
+      if (rt.iof(a, "java/util/Set")) [a, b] = [b, a];
+      else if (!rt.iof(b, "java/util/Set")) {
+        const na = await vcall(a, "size", "()I"), nb = await vcall(b, "size", "()I");
+        if (!na || !nb) return 1;
+        if (na > nb) [a, b] = [b, a];
+      }
+      const it = await vcall(a, "iterator", "()Ljava/util/Iterator;");
+      while (await vcall(it, "hasNext", "()Z")) {
+        if (await vcall(b, "contains", "(Ljava/lang/Object;)Z", await vcall(it, "next", "()Ljava/lang/Object;"))) return 0;
+      }
+      return 1;
+    },
     "static addAll(Ljava/util/Collection;[Ljava/lang/Object;)Z": async (c: unknown, arr: unknown[]) => {
       for (const v of arr) await vcall(c, "add", "(Ljava/lang/Object;)Z", v);
       return arr.length ? 1 : 0;
