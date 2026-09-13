@@ -176,6 +176,13 @@ rt.register({
     "update(B)V": function (this: JMessageDigest, b: number) { this.parts.push(new Uint8Array([b & 0xff])); },
     "update([B)V": function (this: JMessageDigest, b: Int8Array) { mdUpdate(this, b); },
     "update([BII)V": function (this: JMessageDigest, b: Int8Array, off: number, len: number) { mdUpdate(this, b, off, len); },
+    "update(Ljava/nio/ByteBuffer;)V": async function (this: JMessageDigest, input: unknown) {
+      if (input === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const remaining: number = await vcall(input, "remaining", "()I");
+      const bytes = new Int8Array(remaining);
+      await vcall(input, "get", "([B)Ljava/nio/ByteBuffer;", bytes);
+      mdUpdate(this, bytes);
+    },
     "digest()[B": function (this: JMessageDigest) { return mdDigest(this); },
     "digest([B)[B": function (this: JMessageDigest, b: Int8Array) { mdUpdate(this, b); return mdDigest(this); },
     "reset()V": function (this: JMessageDigest) { this.parts = []; },
