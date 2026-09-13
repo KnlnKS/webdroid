@@ -178,6 +178,37 @@ function flattenPath(ops: PathOp[], all = false): Contour[] {
   return all ? out : out.filter((c) => c.length > 2);
 }
 
+export function pathKeyframeData(path: JPath | null): Float32Array {
+  if (!path) throw rt.mkThrowable("java/lang/IllegalArgumentException", "The path must not be null or empty");
+  const contours = flattenPath(path.ops, true);
+  if (!contours.some((contour) => contour.length > 1)) {
+    throw rt.mkThrowable("java/lang/IllegalArgumentException", "The path must not be null or empty");
+  }
+  const points = contours.map((contour) => contour.closed && contour.length > 1
+    && (contour[0][0] !== contour[contour.length - 1][0] || contour[0][1] !== contour[contour.length - 1][1])
+    ? [...contour, contour[0]] : contour);
+  let total = 0;
+  for (const contour of points) {
+    for (let i = 1; i < contour.length; i++) total += Math.hypot(contour[i][0] - contour[i - 1][0], contour[i][1] - contour[i - 1][1]);
+  }
+  if (total === 0) {
+    const [x, y] = points.at(-1)!.at(-1)!;
+    return new Float32Array([0, x, y, 1, x, y]);
+  }
+  const data = new Float32Array(points.reduce((count, contour) => count + contour.length, 0) * 3);
+  let length = 0, offset = 0;
+  for (const contour of points) {
+    for (let i = 0; i < contour.length; i++) {
+      if (i) length += Math.hypot(contour[i][0] - contour[i - 1][0], contour[i][1] - contour[i - 1][1]);
+      data[offset++] = Math.fround(length / total);
+      data[offset++] = Math.fround(contour[i][0]);
+      data[offset++] = Math.fround(contour[i][1]);
+    }
+  }
+  data[data.length - 3] = 1;
+  return data;
+}
+
 // ── PathMeasure: arc-length queries over the flattened contours, one contour at a time
 class JPathMeasure extends JObj {
   contours: Contour[] = [];

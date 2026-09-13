@@ -3,6 +3,7 @@ import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { mangleMethod, jarray } from "../src/jvm/abi";
 import { newObj, vcall, JFloat, box } from "../src/jvm/natives/jlang";
+import type { JPoint } from "../src/android/graphics";
 
 rt.linkNatives();
 const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => (rt.link(cls).ctor as any)[mangleMethod(name, desc)](...args);
@@ -80,4 +81,37 @@ test("AnimatorSet dispatches the directional end callback", async () => {
   await vcall(animator, "start", "()V");
   await Bun.sleep(10);
   expect(listener.reverse).toEqual([0]);
+});
+
+class PointXConverter extends JObj {
+  points: JPoint[] = [];
+  [mangleMethod("convert", "(Ljava/lang/Object;)Ljava/lang/Object;")](point: JPoint) {
+    this.points.push(point);
+    return box(JFloat, point.x);
+  }
+}
+
+test("ObjectAnimator converts reusable PointF values along every path contour", async () => {
+  const path = await newObj("android/graphics/Path", "()V");
+  await vcall(path, "moveTo", "(FF)V", 0, 0);
+  await vcall(path, "lineTo", "(FF)V", 10, 0);
+  await vcall(path, "moveTo", "(FF)V", 20, 0);
+  await vcall(path, "lineTo", "(FF)V", 30, 0);
+  const converter = new PointXConverter();
+  const anim = scall("android/animation/ObjectAnimator", "ofObject",
+    "(Ljava/lang/Object;Landroid/util/Property;Landroid/animation/TypeConverter;Landroid/graphics/Path;)Landroid/animation/ObjectAnimator;",
+    new JObj(), new Alpha(), converter, path);
+
+  const evaluator = anim.evaluator;
+  const atQuarter = await vcall(evaluator, "evaluate", "(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", 0.25, null, null);
+  const atThreeQuarters = await vcall(evaluator, "evaluate", "(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", 0.75, null, null);
+  const pastEnd = await vcall(evaluator, "evaluate", "(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", 1.25, null, null);
+  expect(await vcall(atQuarter, "floatValue", "()F")).toBe(5);
+  expect(await vcall(atThreeQuarters, "floatValue", "()F")).toBe(25);
+  expect(await vcall(pastEnd, "floatValue", "()F")).toBe(35);
+  expect(converter.points[0]).toBe(converter.points[2]);
+
+  await vcall(anim, "start", "()V");
+  expect(await vcall(await vcall(anim, "getAnimatedValue", "()Ljava/lang/Object;"), "floatValue", "()F")).toBe(0);
+  await vcall(anim, "cancel", "()V");
 });

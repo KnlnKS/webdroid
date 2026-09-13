@@ -11,7 +11,8 @@ import { onMain } from "./mainloop";
 import { parseAXML, TV, type XmlNode, type XmlAttr } from "./axml";
 import { type Resources, type RV, attrTable, T_STR, normRV, rvFloat, rvInt } from "./res";
 import type { JContext } from "./context";
-import { JRect } from "./graphics";
+import { JRect, type JPoint } from "./graphics";
+import { pathKeyframeData, type JPath } from "./path";
 
 // ── ValueAnimator/ObjectAnimator (time-driven via animHooks)
 class JValueAnimator extends JObj {
@@ -64,6 +65,32 @@ async function objAt(a: { objKeys: unknown[] | null; evaluator: unknown }, t: nu
   if (n < 2) return keys[0] ?? null;
   const pos = t * (n - 1), i = Math.min(n - 2, Math.floor(pos)), f = pos - i;
   return a.evaluator ? vcall(a.evaluator, "evaluate", "(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", Math.fround(f), keys[i], keys[i + 1]) : keys[i + 1];
+}
+class JPathEvaluator extends JObj {
+  point: JPoint = rt.make("android/graphics/PointF");
+  constructor(readonly data: Float32Array, readonly converter: unknown) { super(); }
+  [mangleMethod("evaluate", "(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")](fraction: number) {
+    const count = this.data.length / 3;
+    let start = 0, end = 1;
+    if (fraction > 1) { start = count - 2; end = count - 1; }
+    else if (fraction === 1) start = end = count - 1;
+    else if (fraction > 0) {
+      let low = 0, high = count - 1;
+      while (low <= high) {
+        const mid = (low + high) >>> 1, midFraction = this.data[mid * 3];
+        if (fraction < midFraction) high = mid - 1;
+        else if (fraction > midFraction) low = mid + 1;
+        else { start = end = mid; break; }
+      }
+      if (low > high) { start = high; end = low; }
+    }
+    const a = start * 3, b = end * 3;
+    const span = this.data[b] - this.data[a];
+    const t = span ? (fraction - this.data[a]) / span : 0;
+    this.point.x = Math.fround(this.data[a + 1] + (this.data[b + 1] - this.data[a + 1]) * t);
+    this.point.y = Math.fround(this.data[a + 2] + (this.data[b + 2] - this.data[a + 2]) * t);
+    return this.converter ? vcall(this.converter, "convert", "(Ljava/lang/Object;)Ljava/lang/Object;", this.point) : this.point;
+  }
 }
 /** AOSP's default AccelerateDecelerateInterpolator */
 const accelDecel = (t: number) => Math.cos((t + 1) * Math.PI) / 2 + 0.5;
@@ -460,6 +487,8 @@ rt.register({
       objAnim(t, { propName: p, evaluator: ev, objKeys: [...(v ?? [])] }),
     "static ofObject(Ljava/lang/Object;Landroid/util/Property;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/ObjectAnimator;": (t: unknown, p: unknown, ev: unknown, v: unknown[]) =>
       objAnim(t, { prop: p, evaluator: ev, objKeys: [...(v ?? [])] }),
+    "static ofObject(Ljava/lang/Object;Landroid/util/Property;Landroid/animation/TypeConverter;Landroid/graphics/Path;)Landroid/animation/ObjectAnimator;": (t: unknown, p: unknown, converter: unknown, path: JPath | null) =>
+      objAnim(t, { prop: p, evaluator: new JPathEvaluator(pathKeyframeData(path), converter), objKeys: [null, null] }),
     "static ofPropertyValuesHolder(Ljava/lang/Object;[Landroid/animation/PropertyValuesHolder;)Landroid/animation/ObjectAnimator;": (t: unknown, hs: JPVH[]) =>
       objAnim(t, { holders: [...(hs ?? [])] }),
     "setFloatValues([F)V": function (this: JValueAnimator, v: Float32Array) { setNumKeys(this, v, false); },
