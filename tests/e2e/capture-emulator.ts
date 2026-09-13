@@ -123,8 +123,12 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
         await emu.shell(`am start -n ${emu.shellArg(`${flow.pkg}/${flow.activity}`)}`);
         break;
       case "swipe":
-        await emu.swipe(a.from[0] * profile.width, a.from[1] * profile.height,
-                        a.to[0] * profile.width, a.to[1] * profile.height, a.ms ?? 400);
+        for (let n = 0; n < (a.maxSwipes ?? 1); n++) {
+          if (a.untilText && emu.findNode(await emu.dumpUi(), a.untilText)) break;
+          await emu.swipe(a.from[0] * profile.width, a.from[1] * profile.height,
+                          a.to[0] * profile.width, a.to[1] * profile.height, a.ms ?? 400);
+          if (a.untilText) await sleep(500);
+        }
         break;
       case "settle":
         break;

@@ -21,7 +21,7 @@ export type Act =
   | { type: "back" }
   | { type: "enter" }
   | { type: "background"; ms: number }
-  | { type: "swipe"; from: [number, number]; to: [number, number]; ms: number }
+  | { type: "swipe"; from: [number, number]; to: [number, number]; ms: number; untilText?: string; maxSwipes?: number }
   | { type: "none" };
 
 export type SettleOpts = {
@@ -269,7 +269,15 @@ function installProbe(cfg: ProbeConfig): void {
       case "back": await run(wd.back()); return;
       case "enter": await run(wd.enter()); return;
       case "background": await run(wd.background(a.ms)); return;
-      case "swipe": await run(wd.swipe(a.from[0] * s.width, a.from[1] * s.height, a.to[0] * s.width, a.to[1] * s.height, a.ms)); return;
+      case "swipe": {
+        const count = a.maxSwipes ?? 1;
+        for (let i = 0; i < count; i++) {
+          if (a.untilText && await Promise.resolve(wd.locateText(a.untilText))) return;
+          await run(wd.swipe(a.from[0] * s.width, a.from[1] * s.height, a.to[0] * s.width, a.to[1] * s.height, a.ms));
+          if (a.untilText) await sleep(500);
+        }
+        return;
+      }
       case "none": return;
     }
   };

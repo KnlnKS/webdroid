@@ -98,7 +98,7 @@ function actOf(flow: Flow, step: Step, rec?: RecordedStep): Act {
     case "back": return { type: "back" };
     case "enter": return { type: "enter" };
     case "background": return { type: "background", ms: a.ms ?? 1000 };
-    case "swipe": return { type: "swipe", from: a.from, to: a.to, ms: a.ms ?? 400 };
+    case "swipe": return { type: "swipe", from: a.from, to: a.to, ms: a.ms ?? 400, untilText: a.untilText, maxSwipes: a.maxSwipes };
     case "settle": return { type: "none" };
   }
 }

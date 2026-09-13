@@ -28,7 +28,7 @@ type Action =
   | { type: "enter" }
   /** Send the foreground task through pause/stop, leave it backgrounded briefly, then resume it. */
   | { type: "background"; ms?: number }
-  | { type: "swipe"; from: [number, number]; to: [number, number]; ms?: number }
+  | { type: "swipe"; from: [number, number]; to: [number, number]; ms?: number; untilText?: string; maxSwipes?: number }
   /** No input — just settle and capture (e.g. after an async screen load). */
   | { type: "settle" };
 
