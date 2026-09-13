@@ -60,6 +60,13 @@ test("layout containers expose their covariant LayoutParams descriptors", () => 
   }
 });
 
+test("ShapeDrawable retains its ShaderFactory", async () => {
+  const drawable = await newObj("android/graphics/drawable/ShapeDrawable", "()V");
+  const factory = await newObj("android/graphics/drawable/ShapeDrawable$ShaderFactory", "()V");
+  await vcall(drawable, "setShaderFactory", "(Landroid/graphics/drawable/ShapeDrawable$ShaderFactory;)V", factory);
+  expect(await vcall(drawable, "getShaderFactory", "()Landroid/graphics/drawable/ShapeDrawable$ShaderFactory;")).toBe(factory);
+});
+
 test("EditText retains private IME options", async () => {
   const edit = await newObj("android/widget/EditText", "(Landroid/content/Context;)V", null);
   await vcall(edit, "setPrivateImeOptions", "(Ljava/lang/String;)V", "com.example.mode=test");

@@ -1000,6 +1000,7 @@ class JShapeDrawable extends JDrawable {
   p = new JPaint();
   iw = 0; ih = 0;
   padding: JRect | null = null;
+  shaderFactory: unknown = null;
   effPaint(): JPaint { return this.tint === null ? this.p : Object.assign(new JPaint(), this.p, { color: this.tint }); }
   /** sync path for native callers (LayerDrawable layers): native shape geometry only */
   paint(cv: JCanvas) {
@@ -1070,6 +1071,18 @@ rt.register({
     "getAlpha()I": function (this: JShapeDrawable) { return this.p.color >>> 24; },
     "getOpacity()I": function (this: JShapeDrawable) { const a = this.p.color >>> 24; return a === 255 ? -1 : a === 0 ? -2 : -3; },
     "getOutline(Landroid/graphics/Outline;)V": () => {},
+    "setShaderFactory(Landroid/graphics/drawable/ShapeDrawable$ShaderFactory;)V": function (this: JShapeDrawable, factory: unknown) { this.shaderFactory = factory; },
+    "getShaderFactory()Landroid/graphics/drawable/ShapeDrawable$ShaderFactory;": function (this: JShapeDrawable) { return this.shaderFactory; },
+    "onBoundsChange(Landroid/graphics/Rect;)V": async function (this: JShapeDrawable, bounds: JRect) {
+      onBoundsChangeAll(this);
+      const width = bounds.right - bounds.left, height = bounds.bottom - bounds.top;
+      if (!this.shape) return;
+      await vcall(this.shape, "resize", "(FF)V", width, height);
+      if (this.shaderFactory) {
+        const shader = await vcall(this.shaderFactory, "resize", "(II)Landroid/graphics/Shader;", width, height);
+        await vcall(this.p, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;", shader);
+      }
+    },
     // the virtual route: an app Shape subclass's onResize/draw, and an app ShapeDrawable's onDraw
     "draw(Landroid/graphics/Canvas;)V": async function (this: JShapeDrawable, cv: JCanvas) {
       const sh = this.shape;
@@ -1086,6 +1099,7 @@ rt.register({
     },
   },
 });
+rt.register({ name: "android/graphics/drawable/ShapeDrawable$ShaderFactory", ctor: class extends JObj {}, methods: { ...noops("<init>()V") } });
 rt.register({
   name: "android/graphics/drawable/PaintDrawable", ctor: JPaintDrawable, sup: "android/graphics/drawable/ShapeDrawable",
   methods: {
