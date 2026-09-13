@@ -95,6 +95,7 @@ export const vfs = {
 export class JFile extends JObj { path = ""; }
 export function mkFile(path: string): JFile { const f = new JFile(); f.path = vfs.norm(path); return f; }
 const listFiles = (d: JFile) => jarray(vfs.list(d.path).map((n) => mkFile(d.path + "/" + n)), "Ljava/io/File;");
+const compareFiles = function (this: JFile, other: JFile) { return this.path < other.path ? -1 : this.path > other.path ? 1 : 0; };
 // apps implement these to pick over a directory listing (File.listFiles(filter))
 rt.markers("java/io/FilenameFilter", "java/io/FileFilter");
 // Default dir matches System.getProperty("java.io.tmpdir"). Creation cannot fail in the in-memory vfs.
@@ -175,6 +176,8 @@ rt.register({
     "setReadable(Z)Z": () => 1, "setWritable(Z)Z": () => 1, "setExecutable(Z)Z": () => 1,
     "setReadable(ZZ)Z": () => 1, "setWritable(ZZ)Z": () => 1, "setExecutable(ZZ)Z": () => 1,
     "toString()Ljava/lang/String;": function (this: JFile) { return this.path; },
+    "compareTo(Ljava/io/File;)I": compareFiles,
+    "compareTo(Ljava/lang/Object;)I": compareFiles,
     "equals(Ljava/lang/Object;)Z": function (this: JFile, o: unknown) { return o instanceof JFile && o.path === this.path ? 1 : 0; },
     "hashCode()I": function (this: JFile) { return stringHash(this.path) ^ 1234321; },
     "toPath()Ljava/nio/file/Path;": function (this: JFile) { return mkPath(this.path); },
@@ -387,6 +390,74 @@ rt.register({
     },
     "flush()V": function () {},
     "close()V": function () {},
+  },
+});
+
+class JStreamChannel extends JObj {
+  stream: unknown = null;
+  open = true;
+}
+function closeStreamChannel(this: JStreamChannel) {
+  if (!this.open) return;
+  this.open = false;
+  return vcall(this.stream, "close", "()V");
+}
+const streamChannelMethods: NativeSpec["methods"] = {
+  "isOpen()Z": function (this: JStreamChannel) { return this.open ? 1 : 0; },
+  "close()V": closeStreamChannel,
+};
+rt.markers("java/nio/channels/ReadableByteChannel", "java/nio/channels/WritableByteChannel",
+  "java/nio/channels/ByteChannel", "java/nio/channels/Channel");
+rt.register({
+  name: "webdroid/ReadableStreamChannel", ctor: JStreamChannel,
+  ifaces: ["java/nio/channels/ReadableByteChannel"],
+  methods: {
+    ...streamChannelMethods,
+    "read(Ljava/nio/ByteBuffer;)I": function (this: JStreamChannel, dst: JBuffer) {
+      if (!this.open) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
+      const len = dst.lim - dst.pos;
+      if (len === 0) return 0;
+      dst.clampPut(0);
+      const out = new Int8Array(dst.ab, dst.dv.byteOffset + dst.pos, len);
+      return after(vcall(this.stream, "read", "([BII)I", out, 0, len), (n: number) => {
+        if (n > 0) dst.pos += n;
+        return n;
+      });
+    },
+  },
+});
+rt.register({
+  name: "webdroid/WritableStreamChannel", ctor: JStreamChannel,
+  ifaces: ["java/nio/channels/WritableByteChannel"],
+  methods: {
+    ...streamChannelMethods,
+    "write(Ljava/nio/ByteBuffer;)I": function (this: JStreamChannel, src: JBuffer) {
+      if (!this.open) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
+      const len = src.lim - src.pos;
+      if (len === 0) return 0;
+      const bytes = new Int8Array(src.ab, src.dv.byteOffset + src.pos, len);
+      return after(vcall(this.stream, "write", "([BII)V", bytes, 0, len), () => {
+        src.pos += len;
+        return len;
+      });
+    },
+  },
+});
+rt.register({
+  name: "java/nio/channels/Channels", ctor: class extends JObj {},
+  methods: {
+    "static newChannel(Ljava/io/InputStream;)Ljava/nio/channels/ReadableByteChannel;": (stream: unknown) => {
+      if (!stream) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const channel = rt.make("webdroid/ReadableStreamChannel") as JStreamChannel;
+      channel.stream = stream;
+      return channel;
+    },
+    "static newChannel(Ljava/io/OutputStream;)Ljava/nio/channels/WritableByteChannel;": (stream: unknown) => {
+      if (!stream) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const channel = rt.make("webdroid/WritableStreamChannel") as JStreamChannel;
+      channel.stream = stream;
+      return channel;
+    },
   },
 });
 // ── java.io.Object{Input,Output}Stream, over the serialization stream's BLOCK-DATA layer only.
@@ -692,6 +763,7 @@ function rafWrite(f: JRAF, b: Int8Array, off: number, len: number) {
 
 // serialPersistentFields is a static array a serializable class declares; nothing here
 // serializes, but the <clinit> that builds the array has to be able to construct one.
+rt.markers("java/io/ObjectStreamClass");
 class JObjectStreamField extends JObj { fname = ""; ftype: unknown = null; }
 rt.register({
   name: "java/io/ObjectStreamField", ctor: JObjectStreamField, ifaces: ["java/lang/Comparable"],
@@ -875,6 +947,8 @@ class JReader extends JObj {
   src: unknown = null;
   srcChars = false;   // src reads chars (a Reader) rather than bytes (an InputStream)
   dec: TextDecoder | null = null;
+  markPos = -1;
+  markLimit = 0;
 }
 const READ_CHUNK = 8192;
 /**
@@ -884,7 +958,11 @@ const READ_CHUNK = 8192;
 function fill(r: JReader): void | Promise<void> {
   const src = r.src;
   if (!src) return;
-  if (r.pos > 0) { r.s = r.s.slice(r.pos); r.pos = 0; }
+  if (r.pos > 0 && (r.markPos < 0 || r.pos - r.markPos > r.markLimit)) {
+    r.s = r.s.slice(r.pos);
+    r.pos = 0;
+    r.markPos = -1;
+  }
   if (r.srcChars) {
     const out = new Uint16Array(READ_CHUNK);
     return after(vcall(src, "read", "([CII)I", out, 0, READ_CHUNK), (n: number) => {
@@ -947,6 +1025,27 @@ rt.register({
     "<init>(Ljava/lang/String;)V": function (this: JReader, s: string) { this.s = s; },
   },
 });
+rt.register({
+  name: "java/io/CharArrayReader", ctor: class extends JReader {}, sup: "java/io/Reader",
+  methods: {
+    "<init>([C)V": function (this: JReader, chars: Uint16Array) {
+      if (chars === null) return rt.npe();
+      this.s = charsToString(chars, 0, chars.length);
+      this.markPos = 0;
+      this.markLimit = chars.length;
+    },
+    "<init>([CII)V": function (this: JReader, chars: Uint16Array, off: number, len: number) {
+      if (chars === null) return rt.npe();
+      if (off < 0 || len < 0 || off > chars.length || off + len < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+      this.s = charsToString(chars, off, Math.min(len, chars.length - off));
+      this.markPos = 0;
+      this.markLimit = this.s.length;
+    },
+    "markSupported()Z": () => 1,
+    "mark(I)V": function (this: JReader) { this.markPos = this.pos; this.markLimit = this.s.length; },
+    "reset()V": function (this: JReader) { this.pos = this.markPos < 0 ? 0 : this.markPos; },
+  },
+});
 // UTF-8 whatever charset was asked for
 const decodeStream = function (this: JReader, s: unknown) { this.src = s; };
 rt.register({
@@ -988,6 +1087,16 @@ rt.register({
         return line.endsWith("\r") ? line.slice(0, -1) : line;
       };
       return step();
+    },
+    "markSupported()Z": () => 1,
+    "mark(I)V": function (this: JReader, limit: number) {
+      if (limit < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Read-ahead limit < 0");
+      this.markPos = this.pos;
+      this.markLimit = limit;
+    },
+    "reset()V": function (this: JReader) {
+      if (this.markPos < 0 || this.pos - this.markPos > this.markLimit) throw rt.mkThrowable("java/io/IOException", "Mark invalid");
+      this.pos = this.markPos;
     },
   },
 });

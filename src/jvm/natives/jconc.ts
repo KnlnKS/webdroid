@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, type ClassInfo } from "../runtime";
 import { parkTimeout, unparkTimeout } from "../yield";
 import { vcall, newObj, JThread, JEnum, setCurThread, curThread, park, defineException } from "./jlang";
-import { JList, newArrayList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods } from "./jutil";
+import { JList, newArrayList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods, toJsArray } from "./jutil";
 import { JRandom, randomSeed } from "./jrandom";
 import { splitSig } from "../abi";
 
@@ -125,6 +125,7 @@ rt.register({
     "<init>(I)V": function (this: JAtomicLongArray, n: number) { this.a = new BigInt64Array(n); },
     "get(I)J": function (this: JAtomicLongArray, i: number) { return this.a[i]; },
     "set(IJ)V": function (this: JAtomicLongArray, i: number, v: bigint) { this.a[i] = v; },
+    "lazySet(IJ)V": function (this: JAtomicLongArray, i: number, v: bigint) { this.a[i] = v; },
     "getAndSet(IJ)J": function (this: JAtomicLongArray, i: number, v: bigint) { const o = this.a[i]; this.a[i] = v; return o; },
     "compareAndSet(IJJ)Z": function (this: JAtomicLongArray, i: number, e: bigint, v: bigint) { if (this.a[i] !== e) return 0; this.a[i] = v; return 1; },
     "incrementAndGet(I)J": function (this: JAtomicLongArray, i: number) { return (this.a[i] += 1n); },
@@ -217,7 +218,7 @@ async function runTask(ex: JExecutor, worker: JExecutor["workers"][number], entr
     ex.pending--; ex.jobs.delete(f); worker.busy = false;
     f.done = 1; f.thread = null;
     entry.finish();
-    if (ex.tasks.length) setTimeout(() => drainExecutor(ex), 0);
+    if (ex.tasks.length) queueMicrotask(() => drainExecutor(ex));
     else if (ex.shut) for (const w of ex.workers) if (!w.busy && w.thread) w.thread.alive = 0;
   }
 }
@@ -275,7 +276,7 @@ function submit(ex: JExecutor, task: unknown, method: string, desc: string, dela
     let timer: ReturnType<typeof setTimeout> | undefined;
     const enqueue = () => {
       timer = undefined; ex.tasks.push(entry); mirror(ex)?.push(task);
-      setTimeout(() => drainExecutor(ex), 0);
+      queueMicrotask(() => drainExecutor(ex));
     };
     if (delay > 0) timer = setTimeout(enqueue, delay); else enqueue();
     f.cancel = () => {
@@ -299,6 +300,11 @@ const executorMethods: NativeSpec["methods"] = {
   },
   "submit(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown) {
     return submit(this, r, "run", "()V");
+  },
+  "submit(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown, result: unknown) {
+    const future = submit(this, r, "run", "()V");
+    future.value = result;
+    return future;
   },
   "submit(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;": function (this: JExecutor, c: unknown) {
     return submit(this, c, "call", "()Ljava/lang/Object;");
@@ -604,6 +610,16 @@ const dequeMethods = (): NonNullable<NativeSpec["methods"]> => ({
   "pollLast()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.a.length ? this.a.pop() : null; },
   "peekFirst()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.a[0] ?? null; },
   "peekLast()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.a[this.a.length - 1] ?? null; },
+  "removeFirstOccurrence(Ljava/lang/Object;)Z": async function (this: JBlockingQueue, v: unknown) {
+    const i = await vcall(this, "indexOf", "(Ljava/lang/Object;)I", v) as number;
+    if (i < 0) return 0;
+    this.a.splice(i, 1); return 1;
+  },
+  "removeLastOccurrence(Ljava/lang/Object;)Z": async function (this: JBlockingQueue, v: unknown) {
+    const i = await vcall(this, "lastIndexOf", "(Ljava/lang/Object;)I", v) as number;
+    if (i < 0) return 0;
+    this.a.splice(i, 1); return 1;
+  },
 });
 const mkBlockingQueue = (name: string, deque = false) => rt.register({
   name, ctor: class extends JBlockingQueue {},
@@ -615,12 +631,27 @@ const mkBlockingQueue = (name: string, deque = false) => rt.register({
     ...Object.fromEntries(Object.entries(listMethods() ?? {}).filter(([k]) => !k.startsWith("<init>"))),
     "<init>()V": function () {},
     "<init>(I)V": function () {},
+    "<init>(Ljava/util/Collection;)V": async function (this: JBlockingQueue, c: unknown) {
+      for (const v of await toJsArray(c)) this.enqueue(v);
+    },
     "put(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); },
     "offer(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
     "offer(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
     "add(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
     "take()Ljava/lang/Object;": takeFirst,
     "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": timedPoll,
+    "drainTo(Ljava/util/Collection;)I": async function (this: JBlockingQueue, c: unknown) {
+      if (c === this) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+      const n = this.a.length;
+      for (const v of this.a.splice(0)) await vcall(c, "add", "(Ljava/lang/Object;)Z", v);
+      return n;
+    },
+    "drainTo(Ljava/util/Collection;I)I": async function (this: JBlockingQueue, c: unknown, max: number) {
+      if (c === this) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+      const n = Math.min(Math.max(max, 0), this.a.length);
+      for (const v of this.a.splice(0, n)) await vcall(c, "add", "(Ljava/lang/Object;)Z", v);
+      return n;
+    },
   },
 });
 for (const qn of ["java/util/concurrent/LinkedBlockingQueue", "java/util/concurrent/SynchronousQueue", "java/util/concurrent/ArrayBlockingQueue", "java/util/concurrent/LinkedTransferQueue"]) mkBlockingQueue(qn);
@@ -969,7 +1000,7 @@ function dispatchCompletion(target: JCompletable, action: () => Promise<unknown>
   };
   if (executor) {
     void vcall(executor, "execute", "(Ljava/lang/Runnable;)V", task).catch((error) => settleWith(target, null, rt.jx(error)));
-  } else setTimeout(() => void task.runTask(), 0);
+  } else queueMicrotask(() => void task.runTask());
 }
 function dependent(source: JCompletable, action: (value: unknown, error: unknown) => Promise<unknown>, executor: unknown = null): JCompletable {
   const target = completable();

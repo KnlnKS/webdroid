@@ -258,6 +258,16 @@ function viewBuffer<T extends JBuffer>(src: JByteBuffer, Ctor: new () => T, shif
   return b;
 }
 
+async function wrapChars(sequence: unknown, start = 0, end?: number): Promise<JCharBuffer> {
+  if (sequence === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  const text = typeof sequence === "string" ? sequence : String(await vcall(sequence, "toString", "()Ljava/lang/String;"));
+  const chars = new Uint16Array(text.length);
+  for (let i = 0; i < text.length; i++) chars[i] = text.charCodeAt(i);
+  const buffer = wrapArray(JCharBuffer, chars, 1, start, (end ?? text.length) - start);
+  buffer.readOnly = true;
+  return buffer;
+}
+
 // FloatBuffer (typical GL usage)
 rt.register({
   name: "java/nio/FloatBuffer", ctor: JFloatBuffer, sup: "java/nio/Buffer",
@@ -342,6 +352,8 @@ rt.register({
     "static allocate(I)Ljava/nio/CharBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 2), JCharBuffer, 1),
     "static wrap([C)Ljava/nio/CharBuffer;": (arr: Uint16Array) => wrapArray(JCharBuffer, arr, 1),
     "static wrap([CII)Ljava/nio/CharBuffer;": (arr: Uint16Array, off: number, len: number) => wrapArray(JCharBuffer, arr, 1, off, len),
+    "static wrap(Ljava/lang/CharSequence;)Ljava/nio/CharBuffer;": (sequence: unknown) => wrapChars(sequence),
+    "static wrap(Ljava/lang/CharSequence;II)Ljava/nio/CharBuffer;": (sequence: unknown, start: number, end: number) => wrapChars(sequence, start, end),
     "get()C": function (this: JCharBuffer) { this.clampGet(1); return this.dv.getUint16(this.pos++ << 1, this.little); },
     "put(C)Ljava/nio/CharBuffer;": function (this: JCharBuffer, v: number) { this.clampPut(1); this.dv.setUint16(this.pos++ << 1, v, this.little); return this; },
   },
@@ -448,10 +460,12 @@ const coderChain = (ret: string): NativeSpec["methods"] => ({
 /** ASCII and Latin-1 have holes; every Unicode transformation format encodes everything */
 const encodable = (cs: JCharset, c: number) =>
   /^(US-ASCII|ASCII)$/i.test(cs.cname) ? c < 0x80 : /8859-1|latin/i.test(cs.cname) ? c < 0x100 : true;
+const maxBytesPerChar = (cs: JCharset) => /UTF-?32/i.test(cs.cname) ? 4 : /UTF-?16/i.test(cs.cname) ? 4 : /UTF-?8/i.test(cs.cname) ? 3 : 1;
 rt.register({
   name: "java/nio/charset/CharsetEncoder", ctor: JCharsetCoder,
   methods: {
     ...coderChain("Ljava/nio/charset/CharsetEncoder;"),
+    "maxBytesPerChar()F": function (this: JCharsetCoder) { return maxBytesPerChar(this.cs); },
     "canEncode(C)Z": function (this: JCharsetCoder, c: number) { return encodable(this.cs, c) ? 1 : 0; },
     "encode(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;Z)Ljava/nio/charset/CoderResult;":
       function (this: JCharsetCoder, src: JBuffer, dst: JBuffer) {

@@ -9,6 +9,13 @@ const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => (
 
 rt.linkNatives();
 
+test("File comparison orders normalized paths through both overloads", async () => {
+  const a = await newObj("java/io/File", "(Ljava/lang/String;)V", "/tmp/a");
+  const b = await newObj("java/io/File", "(Ljava/lang/String;)V", "/tmp/b");
+  expect(await vcall(a, "compareTo", "(Ljava/io/File;)I", b)).toBe(-1);
+  expect(await vcall(b, "compareTo", "(Ljava/lang/Object;)I", a)).toBe(1);
+});
+
 test("FileChannel.read fills a ByteBuffer from streams and random-access files", async () => {
   vfs.write("/tmp/nio-channel.bin", new Uint8Array([1, 2, 3, 4, 5, 6]));
   const input = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/tmp/nio-channel.bin");
@@ -28,6 +35,24 @@ test("FileChannel.read fills a ByteBuffer from streams and random-access files",
   expect(await vcall(rafChannel, "read", "(Ljava/nio/ByteBuffer;J)I", buffer, 4n)).toBe(2);
   expect(await vcall(buffer, "get", "(I)B", 1)).toBe(6);
   expect(await vcall(rafChannel, "position", "()J")).toBe(0n);
+});
+
+test("Channels adapt input and output streams without copying their state", async () => {
+  const input = await newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array([1, 2, 3]));
+  const readable = await scall("java/nio/channels/Channels", "newChannel",
+    "(Ljava/io/InputStream;)Ljava/nio/channels/ReadableByteChannel;", input);
+  const dst = await scall("java/nio/ByteBuffer", "allocate", "(I)Ljava/nio/ByteBuffer;", 3);
+  expect(await vcall(readable, "read", "(Ljava/nio/ByteBuffer;)I", dst)).toBe(3);
+  expect(await vcall(dst, "position", "()I")).toBe(3);
+
+  const output = await newObj("java/io/ByteArrayOutputStream", "()V");
+  const writable = await scall("java/nio/channels/Channels", "newChannel",
+    "(Ljava/io/OutputStream;)Ljava/nio/channels/WritableByteChannel;", output);
+  await vcall(dst, "flip", "()Ljava/nio/Buffer;");
+  expect(await vcall(writable, "write", "(Ljava/nio/ByteBuffer;)I", dst)).toBe(3);
+  expect(Array.from(await vcall(output, "toByteArray", "()[B"))).toEqual([1, 2, 3]);
+  await vcall(writable, "close", "()V");
+  expect(await vcall(writable, "isOpen", "()Z")).toBe(0);
 });
 
 test("FloatBuffer bulk get honours offsets, lengths and underflow", async () => {
