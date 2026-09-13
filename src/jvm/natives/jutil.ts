@@ -2,7 +2,7 @@ import { readStreamFully } from "./jio";
 import { jarray, mangleMethod, charsToString, dotName } from "../abi";
 import {
   vcall, vcallMaybe, after, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, idHash, defineException,
-  mkCmp, fmtDouble, bitCount32
+  mkCmp, fmtDouble, bitCount32, cmpFloat
 } from "./jlang";
 import { JObj, rt, type NativeSpec, type ClassInfo } from "../runtime";
 
@@ -1994,6 +1994,10 @@ rt.register({
     "static binarySearch([II)I": taBinarySearch,
     "static binarySearch([CC)I": taBinarySearch,
     "static binarySearch([JJ)I": taBinarySearch,
+    "static binarySearch([FF)I": floatBinarySearch,
+    "static binarySearch([DD)I": floatBinarySearch,
+    "static binarySearch([FIIF)I": floatBinarySearchRange,
+    "static binarySearch([DIID)I": floatBinarySearchRange,
     "static binarySearch([Ljava/lang/Object;Ljava/lang/Object;)I": (a: unknown[], k: unknown) => arrBinarySearch(a, k, null),
     "static binarySearch([Ljava/lang/Object;Ljava/lang/Object;Ljava/util/Comparator;)I": arrBinarySearch,
   },
@@ -2042,6 +2046,21 @@ function taBinarySearch(a: TA, k: number | bigint): number {
     else return mid;
   }
   return -(lo + 1);
+}
+function floatBinarySearchRange(a: Float32Array | Float64Array, from: number, to: number, key: number): number {
+  rangeCheck(a.length, from, to);
+  if (to > a.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(to));
+  let lo = from, hi = to - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1, order = cmpFloat(a[mid], key);
+    if (order < 0) lo = mid + 1;
+    else if (order > 0) hi = mid - 1;
+    else return mid;
+  }
+  return -(lo + 1);
+}
+function floatBinarySearch(a: Float32Array | Float64Array, key: number): number {
+  return floatBinarySearchRange(a, 0, a.length, key);
 }
 function taEq(a: TA | null, b: TA | null): number {
   if (a === b) return 1;

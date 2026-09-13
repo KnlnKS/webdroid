@@ -1069,7 +1069,7 @@ function parseFloatJ(s: string): number {
 const isNaNZ = (v: number) => (v !== v ? 1 : 0);
 const isInfZ = (v: number) => (v === Infinity || v === -Infinity ? 1 : 0);
 /** Float/Double.compare: NaN sorts above everything, including itself equal */
-const cmpFloat = (a: number, b: number) => (a < b ? -1 : a > b ? 1 : a === b ? 0 : a !== a ? (b !== b ? 0 : 1) : -1);
+export const cmpFloat = (a: number, b: number) => a < b ? -1 : a > b ? 1 : Object.is(a, b) ? 0 : a === b ? Object.is(a, -0) ? -1 : 1 : a !== a ? 1 : -1;
 rt.register({
   name: "java/lang/Float", ctor: JFloat, sup: "java/lang/Number",
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],

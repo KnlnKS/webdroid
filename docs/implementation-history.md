@@ -2206,3 +2206,9 @@ incorrectly advertised SortedMap and ConcurrentMap on every implementation. Regi
 now expose ConcurrentMap only on ConcurrentHashMap, and no hash map claims SortedMap;
 WeakHashMap and ArrayMap also no longer claim unsupported clone/serialization interfaces.
 Focused type checks preserve TreeMap's SortedMap contract. App verification follows restart.
+
+Route-map setup reaches Arrays.binarySearch(double[], double). Float/double whole-array and
+range searches now use the shared floating comparator. Float/Double.compare also distinguishes
+negative from positive zero; NaN sorts last. Tests cover infinities, signed zero, NaN, insertion
+points and invalid ranges. Four focused collection/array tests and typecheck pass; app
+verification follows restart.
