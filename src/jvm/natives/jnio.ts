@@ -341,8 +341,23 @@ rt.register({
       for (let i = 0; i < arr.length; i++) this.dv.setInt16((this.pos + i) << 1, arr[i], this.little);
       this.pos += arr.length; return this;
     },
+    "get([S)Ljava/nio/ShortBuffer;": function (this: JShortBuffer, arr: Int16Array) {
+      return getShorts(this, arr, 0, arr.length);
+    },
+    "get([SII)Ljava/nio/ShortBuffer;": function (this: JShortBuffer, arr: Int16Array, off: number, len: number) {
+      return getShorts(this, arr, off, len);
+    },
   },
 });
+function getShorts(b: JShortBuffer, arr: Int16Array, off: number, len: number): JShortBuffer {
+  if ((off | len) < 0 || off > arr.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  b.clampGet(len);
+  const byteOff = b.dv.byteOffset;
+  if (b.little && !(byteOff & 1)) arr.set(new Int16Array(b.ab, byteOff + (b.pos << 1), len), off);
+  else for (let i = 0; i < len; i++) arr[off + i] = b.dv.getInt16((b.pos + i) << 1, b.little);
+  b.pos += len;
+  return b;
+}
 rt.register({
   name: "java/nio/CharBuffer", ctor: JCharBuffer, sup: "java/nio/Buffer",
   ifaces: ["java/lang/CharSequence", "java/lang/Comparable", "java/lang/Appendable"],

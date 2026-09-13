@@ -75,6 +75,21 @@ test("FloatBuffer bulk get honours offsets, lengths and underflow", async () => 
   await expect(vcall(buffer, "get", "([FII)Ljava/nio/FloatBuffer;", out, 0, 4)).rejects.toMatchObject({});
 });
 
+test("ShortBuffer bulk get honours byte order, bounds and position", async () => {
+  const bytes = await scall("java/nio/ByteBuffer", "allocate", "(I)Ljava/nio/ByteBuffer;", 6);
+  await vcall(bytes, "putShort", "(S)Ljava/nio/ByteBuffer;", 0x1234);
+  await vcall(bytes, "putShort", "(S)Ljava/nio/ByteBuffer;", -2);
+  await vcall(bytes, "putShort", "(S)Ljava/nio/ByteBuffer;", 7);
+  await vcall(bytes, "flip", "()Ljava/nio/Buffer;");
+  const buffer = await vcall(bytes, "asShortBuffer", "()Ljava/nio/ShortBuffer;");
+  const out = new Int16Array(5);
+  expect(await vcall(buffer, "get", "([SII)Ljava/nio/ShortBuffer;", out, 1, 2)).toBe(buffer);
+  expect([...out]).toEqual([0, 0x1234, -2, 0, 0]);
+  expect(await vcall(buffer, "position", "()I")).toBe(2);
+  await expect(vcall(buffer, "get", "([SII)Ljava/nio/ShortBuffer;", out, 4, 2)).rejects.toMatchObject({});
+  await expect(vcall(buffer, "get", "([SII)Ljava/nio/ShortBuffer;", out, 0, 2)).rejects.toMatchObject({});
+});
+
 test("the dropbox service exists and has every tag disabled", async () => {
   const dropbox = rt.make("android/os/DropBoxManager");
   expect(await vcall(dropbox, "isTagEnabled", "(Ljava/lang/String;)Z", "crash")).toBe(0);
