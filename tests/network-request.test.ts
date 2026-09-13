@@ -23,3 +23,15 @@ test("NetworkRequest exposes the builder's network specifier", async () => {
   const emptyRequest = await vcall(empty, "build", "()Landroid/net/NetworkRequest;");
   expect(await vcall(emptyRequest, "getNetworkSpecifier", "()Landroid/net/NetworkSpecifier;")).toBeNull();
 });
+
+test("NetworkRequest exposes a defensive array of transport types", async () => {
+  const builder = await newObj("android/net/NetworkRequest$Builder", "()V");
+  await vcall(builder, "addTransportType", "(I)Landroid/net/NetworkRequest$Builder;", 3);
+  await vcall(builder, "addTransportType", "(I)Landroid/net/NetworkRequest$Builder;", 1);
+  await vcall(builder, "addTransportType", "(I)Landroid/net/NetworkRequest$Builder;", 3);
+  const request = await vcall(builder, "build", "()Landroid/net/NetworkRequest;");
+  const transports = await vcall(request, "getTransportTypes", "()[I") as Int32Array;
+  expect([...transports]).toEqual([1, 3]);
+  transports[0] = 7;
+  expect([...(await vcall(request, "getTransportTypes", "()[I") as Int32Array)]).toEqual([1, 3]);
+});

@@ -434,6 +434,7 @@ rt.register({
   methods: {
     "hasCapability(I)Z": function (this: JNetworkRequest, c: number) { return this.caps.includes(c) ? 1 : 0; },
     "hasTransport(I)Z": function (this: JNetworkRequest, t: number) { return this.transports.includes(t) ? 1 : 0; },
+    "getTransportTypes()[I": function (this: JNetworkRequest) { return Int32Array.from(this.transports).sort(); },
     "getNetworkSpecifier()Landroid/net/NetworkSpecifier;": function (this: JNetworkRequest) { return this.networkSpecifier; },
   },
 });
@@ -445,7 +446,10 @@ rt.register({
     "removeCapability(I)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, c: number) {
       this.r.caps = this.r.caps.filter((x) => x !== c); return this;
     },
-    "addTransportType(I)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, t: number) { this.r.transports.push(t); return this; },
+    "addTransportType(I)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, t: number) {
+      if (!this.r.transports.includes(t)) this.r.transports.push(t);
+      return this;
+    },
     "setIncludeOtherUidNetworks(Z)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, include: number) {
       this.r.includeOtherUidNetworks = include !== 0;
       return this;
