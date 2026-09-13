@@ -172,6 +172,7 @@ rt.register({
       return jarray(out, "Ljava/lang/String;");
     },
     "canRead()Z": () => 1, "canWrite()Z": () => 1, "canExecute()Z": () => 1,
+    "setReadOnly()Z": () => 1,
     "setReadable(Z)Z": () => 1, "setWritable(Z)Z": () => 1, "setExecutable(Z)Z": () => 1,
     "setReadable(ZZ)Z": () => 1, "setWritable(ZZ)Z": () => 1, "setExecutable(ZZ)Z": () => 1,
     "toString()Ljava/lang/String;": function (this: JFile) { return this.path; },
@@ -1029,6 +1030,22 @@ rt.register({
       sb.s = this.s;
       return sb;
     },
+  },
+});
+rt.register({
+  name: "java/io/CharArrayWriter", ctor: class extends JWriter {}, sup: "java/io/Writer",
+  methods: {
+    "<init>()V": function () {},
+    "<init>(I)V": function () {},
+    "reset()V": function (this: JWriter) { this.s = ""; },
+    "size()I": function (this: JWriter) { return this.s.length; },
+    "toCharArray()[C": function (this: JWriter) {
+      const out = new Uint16Array(this.s.length);
+      for (let i = 0; i < out.length; i++) out[i] = this.s.charCodeAt(i);
+      return out;
+    },
+    "toString()Ljava/lang/String;": function (this: JWriter) { return this.s; },
+    "writeTo(Ljava/io/Writer;)V": function (this: JWriter, out: unknown) { return wr(out, this.s); },
   },
 });
 rt.register({

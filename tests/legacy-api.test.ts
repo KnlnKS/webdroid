@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall } from "../src/jvm/natives/jlang";
-import { mangleMethod } from "../src/jvm/abi";
+import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { Resources } from "../src/android/res";
 import { JAssetManager, type JResources } from "../src/android/resnative";
 import { PROCESS_PID } from "../src/android/os";
@@ -91,6 +91,33 @@ test("security providers retain their constructor metadata", async () => {
   expect(scall("javax/net/ssl/SSLServerSocketFactory", "getDefault", "()Ljavax/net/ServerSocketFactory;")).not.toBeNull();
   scall("java/security/Security", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)V", "test.key", "value");
   expect(scall("java/security/Security", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", "test.key")).toBe("value");
+});
+
+test("reached JDK utility primitives preserve their Java behavior", async () => {
+  const list = await newObj("java/util/ArrayList");
+  for (const value of [1, 2, 3, 4]) await vcall(list, "add", "(Ljava/lang/Object;)Z", value);
+  const random = await newObj("java/util/Random", "(J)V", 1n);
+  await scall("java/util/Collections", "shuffle", "(Ljava/util/List;Ljava/util/Random;)V", list, random);
+  expect((list as { a: unknown[] }).a).toEqual([4, 1, 2, 3]);
+
+  const reverse = scall("java/util/Collections", "reverseOrder", "()Ljava/util/Comparator;");
+  expect(await vcall(reverse, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", "a", "b")).toBeGreaterThan(0);
+
+  const levelCtor = rt.link("java/util/logging/Level").ctor as any;
+  await rt.initClass(rt.link("java/util/logging/Level"));
+  const info = levelCtor[mangleStaticField("INFO")];
+  expect(await vcall(info, "intValue", "()I")).toBe(800);
+  expect(await vcall(info, "getName", "()Ljava/lang/String;")).toBe("INFO");
+
+  const writer = await newObj("java/io/CharArrayWriter");
+  await vcall(writer, "write", "(Ljava/lang/String;)V", "hello");
+  expect(await vcall(writer, "size", "()I")).toBe(5);
+  expect(Array.from(await vcall(writer, "toCharArray", "()[C"))).toEqual([104, 101, 108, 108, 111]);
+  await vcall(writer, "reset", "()V");
+  expect(await vcall(writer, "toString", "()Ljava/lang/String;")).toBe("");
+
+  const file = await newObj("java/io/File", "(Ljava/lang/String;)V", "/data/read-only");
+  expect(await vcall(file, "setReadOnly", "()Z")).toBe(1);
 });
 
 test("Resources(AssetManager, DisplayMetrics, Configuration) scopes its own configuration and metrics", async () => {
