@@ -9,7 +9,7 @@ import { mangleMethod } from "../jvm/abi";
 import { vcall, boxInt } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
 import { JAlertDialog } from "./dialog";
-import { JLinearLP, attachView, requestLayout, invalidate, initViewFromCtx, inheritContext } from "./view";
+import { JLinearLP, attachView, detachView, requestLayout, invalidate, initViewFromCtx, inheritContext } from "./view";
 import { tfMedium } from "./graphics";
 import { JAttrSet } from "./res";
 import { JLinearLayout } from "./layouts";
@@ -141,7 +141,7 @@ function mkAmPmText(tp: JTimePicker, label: string, fn: () => void): JTextView {
 
 /** Builds the picker's child views once (idempotent). Called lazily so a picker constructed
  *  purely in TS — e.g. by TimePickerDialog — doesn't need a Java-side <init> call. */
-function buildPicker(tp: JTimePicker) {
+async function buildPicker(tp: JTimePicker) {
   if (tp.built) return;
   tp.built = true;
   tp.orientation = 0;
@@ -149,9 +149,9 @@ function buildPicker(tp: JTimePicker) {
   tp.padT = 24; tp.padB = 24;
   const hourCol = mkColumn(tp, () => { tp.hourVal = (tp.hourVal + 1) % 24; onChanged(tp); }, () => { tp.hourVal = (tp.hourVal + 23) % 24; onChanged(tp); });
   const minCol = mkColumn(tp, () => { tp.minuteVal = (tp.minuteVal + 1) % 60; onChanged(tp); }, () => { tp.minuteVal = (tp.minuteVal + 59) % 60; onChanged(tp); });
-  attachView(tp, hourCol.col);
-  attachView(tp, mkSep(tp));
-  attachView(tp, minCol.col);
+  await attachView(tp, hourCol.col);
+  await attachView(tp, mkSep(tp));
+  await attachView(tp, minCol.col);
   tp.hourText = hourCol.text;
   tp.minuteText = minCol.text;
   if (!tp.is24) {
@@ -165,7 +165,7 @@ function buildPicker(tp: JTimePicker) {
     tp.pmText = mkAmPmText(tp, "PM", () => { tp.hourVal = (tp.hourVal % 12) + 12; onChanged(tp); });
     attachView(col, tp.amText);
     attachView(col, tp.pmText);
-    attachView(tp, col);
+    await attachView(tp, col);
   } else {
     tp.amText = null;
     tp.pmText = null;
@@ -174,22 +174,22 @@ function buildPicker(tp: JTimePicker) {
 }
 
 /** Structural rebuild: only the 12h/24h AM-PM column count changes shape, so tear down and rebuild. */
-function rebuildPicker(tp: JTimePicker) {
-  tp.children.length = 0;
+async function rebuildPicker(tp: JTimePicker) {
+  for (const child of [...tp.children]) await detachView(tp, child);
   tp.hourText = null; tp.minuteText = null; tp.amText = null; tp.pmText = null;
   tp.built = false;
-  buildPicker(tp);
+  await buildPicker(tp);
   requestLayout(tp);
 }
 
 const timePickerMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;)V": async function (this: JTimePicker, c: unknown) {
     await initViewFromCtx(this, c, null);
-    buildPicker(this);
+    return buildPicker(this);
   },
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JTimePicker, c: unknown, set: JAttrSet | null) {
     await initViewFromCtx(this, c, set);
-    buildPicker(this);
+    return buildPicker(this);
   },
   "getHour()I": function (this: JTimePicker) { return this.hourVal; },
   "setHour(I)V": function (this: JTimePicker, h: number) { this.hourVal = h | 0; onChanged(this); },
@@ -205,7 +205,7 @@ const timePickerMethods: NativeSpec["methods"] = {
     const next = !!v?.v;
     if (next === this.is24) return;
     this.is24 = next;
-    rebuildPicker(this);
+    return rebuildPicker(this);
   },
   "setOnTimeChangedListener(Landroid/widget/TimePicker$OnTimeChangedListener;)V": function (this: JTimePicker, l: unknown) { this.changeL = l; },
 };
@@ -219,7 +219,7 @@ class JTimePickerDialog extends JAlertDialog {
   picker: JTimePicker | null = null;
   timeSetL: unknown = null;
 }
-function initTimePickerDialog(d: JTimePickerDialog, c: unknown, listener: unknown, hourOfDay: number, minute: number, is24HourView: number) {
+async function initTimePickerDialog(d: JTimePickerDialog, c: unknown, listener: unknown, hourOfDay: number, minute: number, is24HourView: number) {
   d.jctx = c;
   const tp = new JTimePicker();
   tp.ctx = c;
@@ -229,7 +229,7 @@ function initTimePickerDialog(d: JTimePickerDialog, c: unknown, listener: unknow
   tp.hourVal = hourOfDay | 0;
   tp.minuteVal = minute | 0;
   tp.is24 = !!is24HourView;
-  buildPicker(tp);
+  await buildPicker(tp);
   d.picker = tp;
   d.customView = tp;
   d.timeSetL = listener;
@@ -244,12 +244,12 @@ function initTimePickerDialog(d: JTimePickerDialog, c: unknown, listener: unknow
 const timePickerDialogMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;Landroid/app/TimePickerDialog$OnTimeSetListener;IIZ)V":
     function (this: JTimePickerDialog, c: unknown, l: unknown, h: number, m: number, is24: number) {
-      initTimePickerDialog(this, c, l, h, m, is24);
+      return initTimePickerDialog(this, c, l, h, m, is24);
     },
   "<init>(Landroid/content/Context;ILandroid/app/TimePickerDialog$OnTimeSetListener;IIZ)V":
     function (this: JTimePickerDialog, c: unknown, themeId: number, l: unknown, h: number, m: number, is24: number) {
       this.themeId = themeId | 0;
-      initTimePickerDialog(this, c, l, h, m, is24);
+      return initTimePickerDialog(this, c, l, h, m, is24);
     },
   "getTimePicker()Landroid/widget/TimePicker;": function (this: JTimePickerDialog) { return this.picker; },
   "updateTime(II)V": function (this: JTimePickerDialog, h: number, m: number) {

@@ -34,7 +34,7 @@ async function runFragmentAdd(fm: JFragmentManager, frag: JFragment, containerId
       lp.width = -1; lp.height = -1;
       view.lp = lp;
     }
-    attachView(container, view);
+    await attachView(container, view);
   }
   await vcall(frag, "onViewCreated", "(Landroid/view/View;Landroid/os/Bundle;)V", view, null);
   await vcall(frag, "onActivityCreated", "(Landroid/os/Bundle;)V", null);
@@ -46,7 +46,7 @@ async function runFragmentRemove(fm: JFragmentManager, frag: JFragment) {
   await vcall(frag, "onPause", "()V");
   await vcall(frag, "onStop", "()V");
   await vcall(frag, "onDestroyView", "()V");
-  if (frag.attachedView?.parent) detachView(frag.attachedView.parent as JViewGroup, frag.attachedView);
+  if (frag.attachedView?.parent) await detachView(frag.attachedView.parent as JViewGroup, frag.attachedView);
   frag.attachedView = null;
   await vcall(frag, "onDestroy", "()V");
   await vcall(frag, "onDetach", "()V");
@@ -60,7 +60,7 @@ async function runFragmentTransaction(tx: JFragmentTransaction): Promise<number>
     if (op.kind === "replace") {
       const container = op.containerId && fm.act?.window?.decor ? findById(fm.act.window.decor, op.containerId) as JViewGroup | null : null;
       for (const old of [...fm.active]) if (old.containerId === op.containerId) await runFragmentRemove(fm, old);
-      if (container) for (const v of [...container.children]) detachView(container, v);
+      if (container) for (const v of [...container.children]) await detachView(container, v);
       await runFragmentAdd(fm, op.frag, op.containerId);
     } else if (op.kind === "add") {
       await runFragmentAdd(fm, op.frag, op.containerId);
