@@ -11,7 +11,7 @@ import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
 export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
@@ -79,11 +79,12 @@ class JLooper extends JObj {
 }
 /** Looper.loop with a Printer installed: the two lines around each dispatch that block-detectors time */
 async function dispatchLogged(handler: JHandler, msg: JMessage, printer: unknown): Promise<void> {
-  const str = async (o: unknown) => o === null ? "null" : String(await vcall(o, "toString", "()Ljava/lang/String;"));
+  const thread = curThread;
+  const str = async (o: unknown) => o === null ? "null" : String(await vcallOn(thread, o, "toString", "()Ljava/lang/String;"));
   try {
-    await vcall(printer, "println", "(Ljava/lang/String;)V", `>>>>> Dispatching to ${await str(handler)} ${await str(msg.callback)}: ${msg.what}`);
-    await vcall(handler, "dispatchMessage", "(Landroid/os/Message;)V", msg);
-    await vcall(printer, "println", "(Ljava/lang/String;)V", `<<<<< Finished to ${await str(handler)} ${await str(msg.callback)}`);
+    await vcallOn(thread, printer, "println", "(Ljava/lang/String;)V", `>>>>> Dispatching to ${await str(handler)} ${await str(msg.callback)}: ${msg.what}`);
+    await vcallOn(thread, handler, "dispatchMessage", "(Landroid/os/Message;)V", msg);
+    await vcallOn(thread, printer, "println", "(Ljava/lang/String;)V", `<<<<< Finished to ${await str(handler)} ${await str(msg.callback)}`);
   } catch (e) { reportUncaught(e); }
 }
 rt.markers("android/util/Printer");
@@ -208,9 +209,10 @@ rt.register({
     },
     "handleMessage(Landroid/os/Message;)V": function () {},
     "dispatchMessage(Landroid/os/Message;)V": async function (this: JHandler, msg: JMessage) {
+      const thread = curThread;
       if (msg.callback) await vcall(msg.callback, "run", "()V");
-      else if (!this.cb || !await vcall(this.cb, "handleMessage", "(Landroid/os/Message;)Z", msg))
-        await vcall(this, "handleMessage", "(Landroid/os/Message;)V", msg);
+      else if (!this.cb || !await vcallOn(thread, this.cb, "handleMessage", "(Landroid/os/Message;)Z", msg))
+        await vcallOn(thread, this, "handleMessage", "(Landroid/os/Message;)V", msg);
     },
     "post(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.post(r, 0); },
     "postDelayed(Ljava/lang/Runnable;J)Z": function (this: JHandler, r: unknown, d: bigint) { return this.post(r, Number(d)); },

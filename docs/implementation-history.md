@@ -2212,3 +2212,13 @@ range searches now use the shared floating comparator. Float/Double.compare also
 negative from positive zero; NaN sorts last. Tests cover infinities, signed zero, NaN, insertion
 points and invalid ranges. Four focused collection/array tests and typecheck pass; app
 verification follows restart.
+
+### Handler callback thread retention
+
+Logged dispatch awaited string conversion and Printer callbacks before invoking the
+Handler with ambient thread identity. A background-looper regression test observed
+the main thread in all four callbacks. Preserve the dispatch thread through each
+virtual call, including Handler.Callback falling through to handleMessage after
+suspension. Logged and unlogged dispatch tests pass. A fresh headed Chrome Maps run
+still reports the LoginPromoTutorialController trace-span mismatch, so this corrects
+a platform contract without establishing the cause of that remaining app failure.
