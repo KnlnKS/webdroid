@@ -2514,3 +2514,14 @@ The real-browser fixture compares all pixels for each style against the correspo
 Canvas2D operations; STROKE and FILL_AND_STROKE fail with the preceding helper. Typecheck
 passes. This observed scale-bar fix does not yet prove the cause of missing native map-label
 outlines, which were not seen in the bounded Java drawText trace.
+
+Maps' preview Glide path reached the missing FileInputStream(FileDescriptor) constructor.
+FileInputStream now uses the shared descriptor table for path and descriptor opens, retaining
+native offsets, getFD identity, lazy-file read ordering and channel mappings through rename
+and unlink. Android's public descriptor constructor borrows ownership; the hidden ownership
+constructor and path opens close their descriptor. In-memory reads copy directly into the Java
+array, while special descriptors use the existing native read implementation. Eighteen focused
+stream, descriptor, channel and atomic-file checks (121 assertions) and typecheck pass. Fresh
+Chrome reaches preview without the missing constructor. Its thumbnail still fails: a relative
+query-shaped image path and empty/undecodable input precede the MediaMetadataRetriever fallback;
+implementing the constructor alone does not establish image loading parity.

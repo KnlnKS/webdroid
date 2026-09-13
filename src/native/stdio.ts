@@ -156,6 +156,38 @@ export const javaOpenFd = (path: string, flags: number): number => fdOpen(null, 
 export const javaCloseFd = (fd: number): void => { fdClose(null, fd); };
 export const javaSeekFd = (fd: number, off: number, whence: number): number => fdSeek(null, fd, off, whence);
 export const javaDupFd = (fd: number): number => { const f = fds.get(fd); if (!f) return -1; f.references++; return put(f); };
+export function javaFdSource(fd: number): FileSource | null {
+  const f = fds.get(fd);
+  if (!f || f.dir || f.random || f.rpipe || f.wpipe || f.event || f.timer || f.epoll) return null;
+  return {
+    get size() { return f.content.len; },
+    read(offset, length) {
+      if (fds.get(fd) !== f || (f.statusFlags & O_ACCMODE) === 1) throw new Error("Bad file descriptor");
+      return f.source ? f.source.read(offset, length) : f.content.data.subarray(offset, Math.min(f.content.len, offset + length));
+    },
+  };
+}
+export function javaAvailableFd(fd: number): number {
+  const f = fds.get(fd);
+  if (!f || f.dir || (f.statusFlags & O_ACCMODE) === 1) return -1;
+  return f.rpipe ? f.rpipe.q.reduce((n, b) => n + b.length, 0) : Math.max(0, f.content.len - f.pos);
+}
+export function javaReadFd(fd: number, target: Uint8Array): number | Promise<number> {
+  const f = fds.get(fd);
+  if (f && (f.dir || (f.statusFlags & O_ACCMODE) === 1)) return -1;
+  if (f && !f.source && !f.random && !f.rpipe && !f.event && !f.timer && !f.epoll) {
+    const n = Math.max(0, Math.min(target.length, f.content.len - f.pos));
+    target.set(f.content.data.subarray(f.pos, f.pos + n)); f.pos += n;
+    return n;
+  }
+  const address = mem.va(mem.malloc(target.length));
+  const done = (n: number) => { if (n > 0) target.set(mem.bytes(guestAt(address), n)); return n; };
+  let n: number | Promise<number>;
+  try { n = fdRead(null, fd, guestAt(address), target.length); }
+  catch (e) { mem.free(guestAt(address)); throw e; }
+  if (n instanceof Promise) return n.then(done).finally(() => mem.free(guestAt(address)));
+  try { return done(n); } finally { mem.free(guestAt(address)); }
+}
 
 /** Read from the current offset without moving seekable descriptors; streams are consumed. */
 export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {

@@ -5,6 +5,7 @@ import { mangleStaticField, mangleMethod, charsToString, jarray, utf8, concat, i
 import { vcall, vcallMaybe, after, stringHash, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
 import { mappedBuffer, mappedReadOnlyBuffer, type JBuffer } from "./jnio";
+import { javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd } from "../../native/stdio";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
  *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
@@ -330,23 +331,62 @@ rt.register({
     },
   },
 });
-function openRead(this: JInputStream, p: string) {
-  const bytes = vfs.read(p);
-  if (bytes) this.buf = bytes;
-  else {
-    const source = vfs.source(p);
-    if (!source) throw rt.mkThrowable("java/io/FileNotFoundException", p);
-    this.source = source;
-  }
+class JFileInputStream extends JInputStream { fd = new JFileDescriptor(); ownsFd = false; }
+function adoptFd(this: JFileInputStream, fd: JFileDescriptor | null, owner = 0) {
+  if (!fd) return rt.npe();
+  this.fd = fd; this.ownsFd = !!owner;
+  this.source = javaFdSource(fd.fd);
+  Object.defineProperty(this, "pos", {
+    get: () => checkedFdResult(javaSeekFd(fd.fd, 0, 1)),
+    set: (position: number) => { checkedFdResult(javaSeekFd(fd.fd, position, 0)); },
+    configurable: true,
+  });
+}
+function checkedFdResult(n: number): number {
+  if (n < 0) throw rt.mkThrowable("java/io/IOException", "Invalid file descriptor operation");
+  return n;
+}
+function openRead(this: JFileInputStream, p: string) {
+  if (p == null) return rt.npe();
+  if (vfs.isDir(p)) throw rt.mkThrowable("java/io/FileNotFoundException", p);
+  const fd = javaOpenFd(p, 0);
+  if (fd < 0) throw rt.mkThrowable("java/io/FileNotFoundException", p);
+  this.fd.fd = fd;
+  adoptFd.call(this, this.fd, 1);
+}
+function readFile(this: JFileInputStream, out: Int8Array, off: number, len: number) {
+  checkFileOpen(this);
+  if (!out) return rt.npe();
+  if (off < 0 || len < 0 || off > out.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  if (!len) return 0;
+  return after(javaReadFd(this.fd.fd, u8(out, off, len)), n => checkedFdResult(n) || -1);
 }
 rt.register({
-  name: "java/io/FileInputStream", ctor: class extends JInputStream {}, sup: "java/io/InputStream",
+  name: "java/io/FileInputStream", ctor: JFileInputStream, sup: "java/io/InputStream",
   methods: {
-    "getFD()Ljava/io/FileDescriptor;": () => new JFileDescriptor(),
+    "getFD()Ljava/io/FileDescriptor;": function (this: JFileInputStream) { return this.fd; },
     "getChannel()Ljava/nio/channels/FileChannel;": fileChannel,
-    "<init>(Ljava/io/File;)V": function (this: JInputStream, f: JFile) { openRead.call(this, f.path); },
+    "<init>(Ljava/io/File;)V": function (this: JFileInputStream, f: JFile) { if (!f) return rt.npe(); openRead.call(this, f.path); },
     "<init>(Ljava/lang/String;)V": openRead,
-    "close()V": function (this: JInputStream) { closeFile(this); },
+    "<init>(Ljava/io/FileDescriptor;)V": adoptFd,
+    "<init>(Ljava/io/FileDescriptor;Z)V": adoptFd,
+    "read()I": function (this: JFileInputStream) { const b = new Int8Array(1); return after(readFile.call(this, b, 0, 1), n => n < 0 ? -1 : b[0] & 255); },
+    "read([B)I": function (this: JFileInputStream, out: Int8Array) { if (!out) return rt.npe(); return readFile.call(this, out, 0, out.length); },
+    "read([BII)I": readFile,
+    "available()I": function (this: JFileInputStream) { checkFileOpen(this); return Math.min(0x7fffffff, checkedFdResult(javaAvailableFd(this.fd.fd))); },
+    "skip(J)J": function (this: JFileInputStream, n: bigint) {
+      checkFileOpen(this);
+      const before = this.pos, next = checkedFdResult(javaSeekFd(this.fd.fd, Number(n), 1));
+      return BigInt(next - before);
+    },
+    "markSupported()Z": () => 0,
+    "mark(I)V": () => {},
+    "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+    "close()V": function (this: JFileInputStream) {
+      if (closedFiles.has(this)) return;
+      closeFile(this);
+      if (this.ownsFd) { javaCloseFd(this.fd.fd); this.fd.fd = -1; }
+    },
   },
 });
 function adoptStream(this: JInputStream, src: JInputStream) {
