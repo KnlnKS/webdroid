@@ -2,7 +2,7 @@ import { AID } from "./res";
 import {
   JMarginLP, type JLayoutParams, JViewGroup, JFrameLP, MATCH_PARENT, lpFromAttrs, lpAttrs, measureChildWithMargins,
   resolveSizeAndState, makeSpec, MS_EXACTLY, childMeasureSpec, measureView, layoutView, initViewFromCtx,
-  requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState
+  requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState, viewConstructors
 } from "./view";
 import { type NativeSpec, rt, callSelf, noops } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvFloat, onFramework } from "./res";
@@ -24,6 +24,7 @@ function adoptLp<T extends JMarginLP>(Ctor: new () => T, lp: JLayoutParams | nul
 
 export class JFrameLayout extends JViewGroup {}
 const frameMethods: NativeSpec["methods"] = {
+  ...viewConstructors,
   "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": function (this: JFrameLayout) {
     return vcallMaybe(this, "generateDefaultLayoutParams", "()Landroid/widget/FrameLayout$LayoutParams;");
   },
@@ -496,7 +497,7 @@ rt.register({ name: "android/widget/HorizontalScrollView", ctor: class extends J
 
 // ── RelativeLayout (common-rule subset)
 class JRelativeLP extends JMarginLP {
-  rules = new Map<number, number>(); // verb → anchor id or boolean(-1 true)
+  rules = new Int32Array(22);
   alignWithParent = false;           // layout_alignWithParentIfMissing, a public field on AOSP
 }
 const RL = {
@@ -540,8 +541,8 @@ const relativeMethods: NativeSpec["methods"] = {
       for (const a of set.node.attrs) {
         for (const [aid, verb] of rlAttrIds) {
           if (aid && a.resId === aid) {
-            lp.rules.set(verb, a.type === TV.BOOLEAN || a.type >= TV.INT_DEC ? (a.data ? (a.type === TV.REFERENCE ? a.data : (a.data > 1 ? a.data : -1)) : 0) : a.data);
-            if (a.type === TV.REFERENCE) lp.rules.set(verb, a.data);
+            lp.rules[verb] = a.type === TV.BOOLEAN || a.type >= TV.INT_DEC ? (a.data ? (a.type === TV.REFERENCE ? a.data : (a.data > 1 ? a.data : -1)) : 0) : a.data;
+            if (a.type === TV.REFERENCE) lp.rules[verb] = a.data;
           }
         }
       }
@@ -583,13 +584,13 @@ const relativeMethods: NativeSpec["methods"] = {
         let t = this.padT + m.marginT;
         if (lp) {
           const anchor = (verb: number): JView | null => {
-            const id = lp.rules.get(verb);
+            const id = lp.rules[verb];
             return id && id > 0 ? byId.get(id) ?? null : null;
           };
-          if (lp.rules.get(RL.ALIGN_PARENT_RIGHT)) l = availW - this.padR - c.measuredW - m.marginR;
-          if (lp.rules.get(RL.CENTER_HORIZONTAL) || lp.rules.get(RL.CENTER_IN_PARENT)) l = (availW - c.measuredW) >> 1;
-          if (lp.rules.get(RL.ALIGN_PARENT_BOTTOM)) t = availH - this.padB - c.measuredH - m.marginB;
-          if (lp.rules.get(RL.CENTER_VERTICAL) || lp.rules.get(RL.CENTER_IN_PARENT)) t = (availH - c.measuredH) >> 1;
+          if (lp.rules[RL.ALIGN_PARENT_RIGHT]) l = availW - this.padR - c.measuredW - m.marginR;
+          if (lp.rules[RL.CENTER_HORIZONTAL] || lp.rules[RL.CENTER_IN_PARENT]) l = (availW - c.measuredW) >> 1;
+          if (lp.rules[RL.ALIGN_PARENT_BOTTOM]) t = availH - this.padB - c.measuredH - m.marginB;
+          if (lp.rules[RL.CENTER_VERTICAL] || lp.rules[RL.CENTER_IN_PARENT]) t = (availH - c.measuredH) >> 1;
           const rOf = anchor(RL.RIGHT_OF);
           if (rOf) l = anchorPos(rOf).l + rOf.measuredW + m.marginL;
           const lOf = anchor(RL.LEFT_OF);
@@ -611,10 +612,10 @@ const relativeMethods: NativeSpec["methods"] = {
           // AOSP getChildMeasureSpec: rules that fix both edges measure the child EXACTLY to the
           // span between them, whatever its layout_width/height (a later rule overrides an
           // earlier one, as in applyHorizontalSizeRules)
-          const lE = lp.rules.get(RL.ALIGN_PARENT_LEFT) ? this.padL + m.marginL : aL ? anchorPos(aL).l : rOf ? anchorPos(rOf).l + rOf.measuredW + m.marginL : NaN;
-          const rE = lp.rules.get(RL.ALIGN_PARENT_RIGHT) ? availW - this.padR - m.marginR : aR ? anchorPos(aR).l + aR.measuredW : lOf ? anchorPos(lOf).l - m.marginR : NaN;
-          const tE = lp.rules.get(RL.ALIGN_PARENT_TOP) ? this.padT + m.marginT : aT ? anchorPos(aT).t : below ? anchorPos(below).t + below.measuredH + m.marginT : NaN;
-          const bE = lp.rules.get(RL.ALIGN_PARENT_BOTTOM) ? availH - this.padB - m.marginB : aB ? anchorPos(aB).t + aB.measuredH : above ? anchorPos(above).t - m.marginB : NaN;
+          const lE = lp.rules[RL.ALIGN_PARENT_LEFT] ? this.padL + m.marginL : aL ? anchorPos(aL).l : rOf ? anchorPos(rOf).l + rOf.measuredW + m.marginL : NaN;
+          const rE = lp.rules[RL.ALIGN_PARENT_RIGHT] ? availW - this.padR - m.marginR : aR ? anchorPos(aR).l + aR.measuredW : lOf ? anchorPos(lOf).l - m.marginR : NaN;
+          const tE = lp.rules[RL.ALIGN_PARENT_TOP] ? this.padT + m.marginT : aT ? anchorPos(aT).t : below ? anchorPos(below).t + below.measuredH + m.marginT : NaN;
+          const bE = lp.rules[RL.ALIGN_PARENT_BOTTOM] ? availH - this.padB - m.marginB : aB ? anchorPos(aB).t + aB.measuredH : above ? anchorPos(above).t - m.marginB : NaN;
           const spanW = rE - lE, spanH = bE - tE;
           if (spanW === spanW || spanH === spanH) {
             if (spanW === spanW) l = lE;
@@ -665,9 +666,11 @@ rt.register({
     "<init>(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JRelativeLP, o: JLayoutParams) {
       if (o) { this.width = o.width; this.height = o.height; }
     },
-    "addRule(I)V": function (this: JRelativeLP, verb: number) { this.rules.set(verb, -1); },
-    "addRule(II)V": function (this: JRelativeLP, verb: number, anchor: number) { this.rules.set(verb, anchor); },
-    "removeRule(I)V": function (this: JRelativeLP, verb: number) { this.rules.delete(verb); },
+    "getRules()[I": function (this: JRelativeLP) { return this.rules; },
+    "getRule(I)I": function (this: JRelativeLP, verb: number) { return this.rules[verb]; },
+    "addRule(I)V": function (this: JRelativeLP, verb: number) { this.rules[verb] = -1; },
+    "addRule(II)V": function (this: JRelativeLP, verb: number, anchor: number) { this.rules[verb] = anchor; },
+    "removeRule(I)V": function (this: JRelativeLP, verb: number) { this.rules[verb] = 0; },
   },
 });
 

@@ -767,7 +767,7 @@ function drawingRect(this: JView, r: JRect) {
   r.right = this.scrollX + this.width(); r.bottom = this.scrollY + this.height();
 }
 
-const viewMethods: NativeSpec["methods"] = {
+export const viewConstructors: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;)V": async function (this: JView, c: unknown) { await initViewFromCtx(this, c, null); },
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JView, c: unknown, a: JAttrSet | null) {
     await initViewFromCtx(this, c, a);
@@ -778,6 +778,9 @@ const viewMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": async function (this: JView, c: unknown, a: JAttrSet | null) {
     await initViewFromCtx(this, c, a);
   },
+};
+const viewMethods: NativeSpec["methods"] = {
+  ...viewConstructors,
   "getContext()Landroid/content/Context;": function (this: JView) { return this.ctx; },
   "getResources()Landroid/content/res/Resources;": function (this: JView) { return this.jres?.jobj ?? null; },
   "getId()I": function (this: JView) { return this.idNum; },
