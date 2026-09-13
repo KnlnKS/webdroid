@@ -31,6 +31,7 @@ import "./android/gl";
 import "./android/glview";
 import "./android/os";
 import "./android/util";
+import "./android/atomicfile";
 import "./android/accounts";
 import "./android/authenticator";
 import "./android/parcel";
