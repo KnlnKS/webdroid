@@ -928,10 +928,18 @@ function nfe(s: unknown): never {
   throw rt.mkThrowable("java/lang/NumberFormatException", `For input string: "${s}"`);
 }
 function parseIntJ(s: string, radix = 10): number {
-  if (typeof s !== "string" || !/^[+-]?[0-9a-zA-Z]+$/.test(s)) nfe(s);
-  const v = parseInt(s, radix);
-  if (Number.isNaN(v) || v > 2147483647 || v < -2147483648) nfe(s);
-  return v | 0;
+  if (typeof s !== "string" || radix < 2 || radix > 36 || !/^[+-]?[0-9a-zA-Z]+$/.test(s)) nfe(s);
+  let start = 0, negative = false;
+  if (s[0] === "+" || s[0] === "-") { negative = s[0] === "-"; start = 1; }
+  let magnitude = 0;
+  for (let i = start; i < s.length; i++) {
+    const digit = parseInt(s[i], 36);
+    if (Number.isNaN(digit) || digit >= radix) nfe(s);
+    magnitude = magnitude * radix + digit;
+  }
+  const limit = negative ? 2147483648 : 2147483647;
+  if (magnitude > limit) nfe(s);
+  return (negative ? -magnitude : magnitude) | 0;
 }
 function decodeIntJ(s: string): number {
   if (typeof s !== "string" || !s.length) nfe(s);

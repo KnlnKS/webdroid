@@ -23,4 +23,6 @@ test("Integer.decode recognizes Java decimal, hexadecimal, and octal syntax", as
   expect(await vcall(decode("#7fffffff"), "intValue", "()I")).toBe(2147483647);
   expect(() => decode("0x-1")).toThrow();
   expect(() => decode("09")).toThrow();
+  expect(() => decode("019")).toThrow();
+  expect(() => scall("java/lang/Integer", "parseInt", "(Ljava/lang/String;I)I", "12z", 10)).toThrow();
 });
