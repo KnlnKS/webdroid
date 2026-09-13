@@ -26,7 +26,7 @@ class JScroller extends JObj {
     this.curY = Math.round(this.startY + (this.finalY - this.startY) * e);
     if (t >= 1) { this.finished = true; this.curX = this.finalX; this.curY = this.finalY; }
     invalidate();
-    return !this.finished || this.curX !== this.finalX || this.curY !== this.finalY || t < 1;
+    return true;
   }
 }
 const scrollerMethods: NativeSpec["methods"] = {
@@ -34,14 +34,14 @@ const scrollerMethods: NativeSpec["methods"] = {
     this.startX = sx; this.startY = sy; this.finalX = sx + dx; this.finalY = sy + dy;
     this.startT = performance.now(); this.duration = 250;
     this.curX = sx; this.curY = sy;
-    this.finished = dx === 0 && dy === 0;
+    this.finished = false;
     invalidate();
   },
   "startScroll(IIIII)V": function (this: JScroller, sx: number, sy: number, dx: number, dy: number, dur: number) {
     this.startX = sx; this.startY = sy; this.finalX = sx + dx; this.finalY = sy + dy;
     this.startT = performance.now(); this.duration = Math.max(1, dur);
     this.curX = sx; this.curY = sy;
-    this.finished = dx === 0 && dy === 0;
+    this.finished = false;
     invalidate();
   },
   "fling(IIIIIIII)V": function (this: JScroller, sx: number, sy: number, vx: number, vy: number, minX: number, maxX: number, minY: number, maxY: number) {
