@@ -186,6 +186,9 @@ rt.register({ name: "android/graphics/drawable/Drawable$ConstantState", ctor: JC
 rt.register({ name: "android/graphics/drawable/VectorDrawable$VectorDrawableState", ctor: JDrawableState, sup: "android/graphics/drawable/Drawable$ConstantState", methods: {
   "newDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableState) { return this.create(); },
 } });
+rt.register({ name: "android/graphics/drawable/ColorDrawable$ColorState", ctor: JDrawableState, sup: "android/graphics/drawable/Drawable$ConstantState", methods: {
+  "newDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableState) { return this.create(); },
+} });
 // callers `instanceof` a drawable against Animatable to see whether it animates itself
 rt.markers("android/graphics/drawable/Animatable");
 
@@ -208,6 +211,12 @@ rt.register({
     "<init>(I)V": function (this: JColorDrawable, c: number) { this.color = c; },
     "getColor()I": function (this: JColorDrawable) { return this.color; },
     "setColor(I)V": function (this: JColorDrawable, c: number) { this.color = c; },
+    "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;": function (this: JColorDrawable) {
+      const { color, tint, alpha, autoMirrored } = this;
+      const state = rt.make("android/graphics/drawable/ColorDrawable$ColorState") as JDrawableState;
+      state.create = () => Object.assign(new JColorDrawable(), { color, tint, alpha, autoMirrored });
+      return state;
+    },
   },
 });
 

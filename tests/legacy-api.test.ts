@@ -79,6 +79,15 @@ test("AnimatedVectorDrawable reports unavailable animation", async () => {
   expect(await vcall(drawable, "isRunning", "()Z")).toBe(0);
 });
 
+test("ColorDrawable constant state creates an independent copy", async () => {
+  const original = await newObj("android/graphics/drawable/ColorDrawable", "(I)V", 0xff123456 | 0);
+  const state = await vcall(original, "getConstantState", "()Landroid/graphics/drawable/Drawable$ConstantState;");
+  const copy = await vcall(state, "newDrawable", "()Landroid/graphics/drawable/Drawable;");
+
+  expect(copy).not.toBe(original);
+  expect(await vcall(copy, "getColor", "()I")).toBe(0xff123456 | 0);
+});
+
 test("ByteBuffer absolute long and double accessors leave the position alone", async () => {
   const buffer = await scall("java/nio/ByteBuffer", "allocate", "(I)Ljava/nio/ByteBuffer;", 24);
   await vcall(buffer, "putLong", "(IJ)Ljava/nio/ByteBuffer;", 8, -2n);
