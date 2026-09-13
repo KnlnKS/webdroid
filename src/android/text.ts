@@ -303,8 +303,7 @@ const spanHierarchy: Record<string, { sup?: string; ifaces?: string[] }> = {
   "android/text/style/RelativeSizeSpan": { sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"] },
   "android/text/style/AbsoluteSizeSpan": { sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"] },
   "android/text/style/TypefaceSpan": { sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"] },
-  // Real AOSP interposes DynamicDrawableSpan between ImageSpan and ReplacementSpan;
-  // we don't implement drawable-based replacement drawing, so link straight through.
+  // Real AOSP interposes DynamicDrawableSpan between ImageSpan and ReplacementSpan.
   "android/text/style/ImageSpan": { sup: "android/text/style/ReplacementSpan" },
   "android/text/style/ClickableSpan": { sup: "android/text/style/CharacterStyle", ifaces: ["android/text/style/UpdateAppearance"] },
   "android/text/style/URLSpan": { sup: "android/text/style/ClickableSpan" },
@@ -317,7 +316,6 @@ for (const [name] of [
   ["android/text/style/StrikethroughSpan", {}],
   ["android/text/style/RelativeSizeSpan", { size: 1 }],
   ["android/text/style/TypefaceSpan", {}],
-  ["android/text/style/ImageSpan", {}],
   ["android/text/style/ClickableSpan", {}],
   ["android/text/style/URLSpan", {}],
 ] as const) {
@@ -329,17 +327,25 @@ for (const [name] of [
       "<init>(I)V": function (this: any, v: number) { this.color = v; this.style = v; this.size = v; },
       "<init>(F)V": function (this: any, v: number) { this.size = v; },
       "<init>(Ljava/lang/String;)V": function (this: any, v: string) { this.url = v; },
-      // ImageSpan's drawable forms: nothing here draws a replacement image, but the span still
-      // has to construct or the text it decorates never gets built
-      "<init>(Landroid/content/Context;II)V": function () {},
-      ...noops("<init>()V", "<init>(Landroid/content/Context;I)V", "<init>(Landroid/graphics/drawable/Drawable;)V",
-        "<init>(Landroid/graphics/drawable/Drawable;I)V"),
+      ...noops("<init>()V"),
       "getURL()Ljava/lang/String;": function (this: any) { return this.url; },
       "getForegroundColor()I": function (this: any) { return this.color; },
       "getStyle()I": function (this: any) { return this.style; },
     },
   });
 }
+
+class JImageSpan extends JReplacementSpan { drawable: unknown = null; }
+rt.register({
+  name: "android/text/style/ImageSpan", ctor: JImageSpan,
+  ...spanHierarchy["android/text/style/ImageSpan"],
+  methods: {
+    "<init>(Landroid/graphics/drawable/Drawable;)V": function (this: JImageSpan, drawable: unknown) { this.drawable = drawable; },
+    "<init>(Landroid/graphics/drawable/Drawable;I)V": function (this: JImageSpan, drawable: unknown) { this.drawable = drawable; },
+    "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JImageSpan) { return this.drawable; },
+    ...noops("<init>()V", "<init>(Landroid/content/Context;I)V", "<init>(Landroid/content/Context;II)V"),
+  },
+});
 
 class JAbsoluteSizeSpan extends JObj { size = 0; dip = 0; }
 function absoluteSize(this: JAbsoluteSizeSpan, paint: JTextPaint) {
