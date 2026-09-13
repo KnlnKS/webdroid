@@ -346,12 +346,7 @@ export const contextMethods: NativeSpec["methods"] = {
     return ta;
   },
   "createConfigurationContext(Landroid/content/res/Configuration;)Landroid/content/Context;": function (this: JContext, config: JConfiguration) {
-    const jresources = scopedResources(this.$host.res, config), theme = new JTheme();
-    theme.res = jresources.host;
-    theme.styles = (themeOf(this) ?? this.$host.theme).styles.slice();
-    const context = new JContext();
-    context.$host = Object.assign(Object.create(this.$host), { res: jresources.host, jresources, theme });
-    return context;
+    return configurationContext(this, config);
   },
   "createDeviceProtectedStorageContext()Landroid/content/Context;": function (this: JContext) { return this; },
   ...noops("registerComponentCallbacks(Landroid/content/ComponentCallbacks;)V",
@@ -365,6 +360,14 @@ rt.register({ name: "android/content/Context", ctor: JContext, methods: contextM
   statics: { LAYOUT_INFLATER_SERVICE: "layout_inflater", WINDOW_SERVICE: "window", INPUT_METHOD_SERVICE: "input_method", CONNECTIVITY_SERVICE: "connectivity", ACTIVITY_SERVICE: "activity", ACCOUNT_SERVICE: "account", NOTIFICATION_SERVICE: "notification", ALARM_SERVICE: "alarm", POWER_SERVICE: "power", VIBRATOR_SERVICE: "vibrator", AUDIO_SERVICE: "audio", CLIPBOARD_SERVICE: "clipboard", USER_SERVICE: "user", LOCATION_SERVICE: "location", SENSOR_SERVICE: "sensor", MEDIA_ROUTER_SERVICE: "media_router", TELEPHONY_SERVICE: "phone", WIFI_SERVICE: "wifi", DISPLAY_SERVICE: "display", CAMERA_SERVICE: "camera", INPUT_SERVICE: "input", STORAGE_SERVICE: "storage", BATTERY_SERVICE: "batterymanager", KEYGUARD_SERVICE: "keyguard", ACCESSIBILITY_SERVICE: "accessibility", JOB_SCHEDULER_SERVICE: "jobscheduler", UI_MODE_SERVICE: "uimode", DOWNLOAD_SERVICE: "download", MODE_PRIVATE: 0, BIND_AUTO_CREATE: 1 } });
 
 export class JContextWrapper extends JContext { base: JContext | null = null; }
+function configurationContext(source: JContext, config: JConfiguration): JContext {
+  const jresources = scopedResources(source.$host.res, config), theme = new JTheme();
+  theme.res = jresources.host;
+  theme.styles = (themeOf(source) ?? source.$host.theme).styles.slice();
+  const context = new JContext();
+  context.$host = Object.assign(Object.create(source.$host), { res: jresources.host, jresources, theme });
+  return context;
+}
 function attachBase(this: JContextWrapper, base: JContext) {
   this.base = base;
   if (base) this.$host = base.$host;
@@ -395,6 +398,9 @@ rt.register({
     "<init>(Landroid/content/Context;Landroid/content/res/Resources$Theme;)V": function (this: JContextWrapper, base: JContext, theme: unknown) {
       attachBase.call(this, base);
       if (theme) (this as { ownTheme?: unknown }).ownTheme = theme;
+    },
+    "applyOverrideConfiguration(Landroid/content/res/Configuration;)V": function (this: JContextWrapper, config: JConfiguration) {
+      this.$host = configurationContext(this, config).$host;
     },
   },
 });
