@@ -349,6 +349,7 @@ export class JView extends JObj {
   foreground: JDrawable | null = null;
   /** a SurfaceView's surface: composited behind the view's own drawing, like SurfaceFlinger does */
   surfaceLayer: OffscreenCanvas | ImageBitmap | VideoFrame | null = null;
+  surfaceTransform: JMatrix["m"] | null = null;
   alphaV = 1;
   scrollX = 0; scrollY = 0;
   translationX = 0; translationY = 0; translationZ = 0;
@@ -727,9 +728,9 @@ async function drawContent(v: JView, cv: JCanvas) {
     const recorder = ctx as typeof ctx & { __isRecorder?: boolean; __record?: (draw: (target: typeof ctx) => void) => void };
     // A surface's current frame can be replaced and closed before this display list replays.
     if (recorder.__isRecorder) recorder.__record!((target) => {
-      if (v.surfaceLayer) target.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
+      drawSurface(v, target);
     });
-    else ctx.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
+    else drawSurface(v, ctx);
   }
   else if (v.background) {
     // through setBounds, not the fields: AOSP's onBoundsChange is where wrapper/shape drawables
@@ -741,6 +742,19 @@ async function drawContent(v: JView, cv: JCanvas) {
   await guardMaybe(v, M_onDraw, cv);
   await guardMaybe(v, M_dispatchDraw, cv);
   if (v.overlay) await drawOverlay(v.overlay, cv);
+}
+
+function drawSurface(v: JView, ctx: JCanvas["ctx"]) {
+  if (!v.surfaceLayer) return;
+  if (v.surfaceTransform) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, v.width(), v.height());
+    ctx.clip();
+    ctx.transform(...v.surfaceTransform);
+    ctx.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
+    ctx.restore();
+  } else ctx.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
 }
 
 /** AOSP: a ViewGroup's overlay can host views, a plain View's only drawables */

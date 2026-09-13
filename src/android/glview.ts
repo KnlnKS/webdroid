@@ -6,7 +6,7 @@ import { mangleMethod } from "../jvm/abi";
 import { vcall, JThread, setCurThread, curThread } from "../jvm/natives/jlang";
 import { JView, JViewGroup, guardCall, initViewFromCtx, invalidate, uiState, requestLayout, specSize, defaultSize } from "./view";
 import { onMain } from "./mainloop";
-import { JCanvas, JBitmap } from "./graphics";
+import { JCanvas, JBitmap, JMatrix } from "./graphics";
 import { setGL, gl, tables } from "./gl";
 import { reportUncaught, mainLooper, mainHandler } from "./os";
 import { perf } from "../perf";
@@ -386,6 +386,15 @@ rt.register({
     "isAvailable()Z": function (this: JTextureView) { return +(this.texture !== null); },
     "setOpaque(Z)V": function (this: JTextureView, opaque: number) { this.opaque = !!opaque; },
     "isOpaque()Z": function (this: JTextureView) { return +this.opaque; },
+    "setTransform(Landroid/graphics/Matrix;)V": function (this: JTextureView, matrix: JMatrix | null) {
+      this.surfaceTransform = matrix ? [...matrix.m] : null;
+      invalidate(this);
+    },
+    "getTransform(Landroid/graphics/Matrix;)Landroid/graphics/Matrix;": function (this: JTextureView, matrix: JMatrix | null) {
+      matrix ??= new JMatrix();
+      matrix.m = this.surfaceTransform ? [...this.surfaceTransform] : [1, 0, 0, 1, 0, 0];
+      return matrix;
+    },
     "onLayout(ZIIII)V": function (this: JTextureView) { this.ensureSurface(); },
     "onAttachedToWindow()V": function (this: JTextureView) { this.ensureSurface(); },
     "onDetachedFromWindow()V": function (this: JTextureView) { this.destroySurface(); },

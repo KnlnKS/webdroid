@@ -5,8 +5,24 @@ import { newObj, vcall } from "../src/jvm/natives/jlang";
 import { classCtors } from "../src/jvm/natives/jreflect";
 import { mangleStaticField } from "../src/jvm/abi";
 import { glSurfaces } from "../src/android/glview";
+import { JMatrix } from "../src/android/graphics";
 
 rt.linkNatives();
+test("TextureView copies content transforms and resets them without changing its bounds", async () => {
+  const view = rt.make("android/view/TextureView");
+  const matrix = new JMatrix();
+  matrix.m = [2, 0, 0, 3, 10, 20];
+  await vcall(view, "setTransform", "(Landroid/graphics/Matrix;)V", matrix);
+  matrix.m[4] = 100;
+  const copy: JMatrix = await vcall(view, "getTransform", "(Landroid/graphics/Matrix;)Landroid/graphics/Matrix;", null);
+  expect(copy.m).toEqual([2, 0, 0, 3, 10, 20]);
+  copy.m[0] = 9;
+  expect(await vcall(view, "getTransform", "(Landroid/graphics/Matrix;)Landroid/graphics/Matrix;", matrix)).toBe(matrix);
+  expect(matrix.m[0]).toBe(2);
+  expect(await vcall(view, "getWidth", "()I")).toBe(0);
+  await vcall(view, "setTransform", "(Landroid/graphics/Matrix;)V", null);
+  expect((await vcall(view, "getTransform", "(Landroid/graphics/Matrix;)Landroid/graphics/Matrix;", matrix)).m).toEqual([1, 0, 0, 1, 0, 0]);
+});
 test("FrameLayout declares its view constructors for reflection", () => {
   expect(classCtors(rt.link("android/widget/FrameLayout")).map(c => c.desc)).toEqual([
     "(Landroid/content/Context;)V", "(Landroid/content/Context;Landroid/util/AttributeSet;)V",
