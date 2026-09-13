@@ -34,14 +34,12 @@ platform contracts; run the full serialized E2E suite at the end.
 
 ## Next
 
-1. Follow home rendering after the layout-listener, media-performance-class and TableLayout
-   fixes. Fresh onboarding succeeds; skipping it exposed an undefined Build.VERSION field
-   that aborted the transition, then a missing TableLayout setter. Fresh Chrome and a
-   Maps-only headless probe are being checked again. Earlier headless coordinate taps
-   used pixels where the harness expects fractions, so those runs did not leave onboarding.
-   Native disk-cache creation reports SQLite error 15 (locking protocol); inspect native
-   evidence before changing the VFS. Read all process diagnostics and distinguish slow
-   initialization from a deadlock using advancing frames and queue state.
+1. Verify place selection after BidiFormatter. Full Chrome now returns live autocomplete
+   suggestions. Home builds Local vibe cards after the layout, text and widget fixes.
+   A native-only probe proved the SQLite error 15 was caused by F_GETLK leaving the requested
+   write-lock type unchanged; the corrected query lets the unchanged native cache open.
+   Map geometry remains zero. Trace empty tile containers and the transient Compose
+   attachment error; inspect all process diagnostics and advancing queues/frames.
 2. Exercise matching Maps search/place/directions interactions in Chrome and Android;
    capture screenshots, correct generic failures and record evidence limits.
 3. Verify changed contracts, measure functioning startup/idle behavior, then run the full

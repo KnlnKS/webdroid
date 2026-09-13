@@ -1966,3 +1966,49 @@ unchanged/no-layout fast path; an async-listener regression test covers both cas
 alone did not remove the Maps transition failure. The native disk-cache error is 65551
 wrapped as SQLite code 15 (SQLITE_PROTOCOL); its root cause remains unproven. Maps has not
 drawn map geometry or achieved parity, and the final full E2E remains deferred.
+
+
+Maps home measurement then multiplied through nested FrameLayout and LinearLayout wrappers.
+A single main-queue measure job reached millions of onMeasure calls. A bounded per-view
+counter found successive wrappers doubling the calls (one Compose child measured 103,884
+times while an outer wrapper measured 1,082 times during the sample). FrameLayout now
+performs its second pass only for multiple matching children under a non-exact parent
+specification, and LinearLayout only forces uniform cross-axis size under a non-exact
+cross-axis specification, matching AOSP. Focused tests cover a nested chain (one leaf
+measure) and final sizing of multiple matching children. After this fix the Maps main queue
+drains; the inspected run had 18,330 onMeasures and further real layout/draw API failures.
+This is evidence that the pathological pass is removed, not a benchmark of working Maps.
+
+Subsequent fixes provide natural-order Arrays.sort subranges (with checked bounds and
+suspending Comparable calls), View context-clickable state, and Path.set. Path copies
+retain contour cursors/fill rule and own their mutable operation arrays. The first transient
+Compose attachment error remains a separate ordering limitation; attachment is queued by
+the current platform implementation. Native cache SQLITE_PROTOCOL and zero map geometry
+remain unresolved, and full E2E has not run.
+
+Maps now constructs home content and performs live place autocomplete in full Chrome.
+The tested path required Path.addPath with Matrix, accessibility-service state listeners,
+SpannableString.valueOf, the public minimum scaling span, Space constructors, outline
+shadow-color properties, child drawable-state aggregation, Character.offsetByCodePoints
+and CharacterStyle.wrap. Span wrappers retain distinct identities and forward draw and
+measurement behavior. SHA-384/SHA-512 MessageDigest uses WebCrypto; the earlier SHA-512
+lookup and invalid response-signature exceptions no longer occurred in the inspected run.
+Place selection next reached missing BidiFormatter; its implementation includes directional
+heuristics, embeddings/isolation and preservation of span ranges. Focused checks pass.
+
+An isolated call to the unchanged NativeSqliteDiskCacheImpl reproduced error 65551
+(SQLITE_PROTOCOL). Its trace repeatedly opened map_cache.db-shm and issued F_GETLK. The
+query returned zero but left l_type=F_WRLCK, which SQLite interprets as another process
+holding an exclusive DMS lock. Returning F_UNLCK for the current process-local descriptor
+model made the same native open/destroy probe succeed (handle 91048944). This does not add
+cross-process record locks or fix shared mmap coherence. It is no longer appropriate to
+attribute this reproduced cache-open failure to those unproven alternatives.
+
+A subsequent home run had one layout error (the transient unattached Compose view), zero
+draw errors, 4,412 onMeasure calls, and no missing methods on that observed path. Three
+microG process frames each reported an empty missing set. Their exception streams were not
+captured by the main-realm throwable collector, so this is only missing-API coverage.
+The capture headless-home-cache-fixed.png contains Local vibe cards but a blank map.
+Full Chrome autocomplete returns Golden Gate Bridge suggestions with incorrect black
+placeholder icons. Map geometry is still zero; parity and full regression verification
+remain incomplete. Timing varied with concurrent Chrome/headless load and is not a benchmark.
