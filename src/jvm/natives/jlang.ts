@@ -479,7 +479,7 @@ for (const [sup, names] of [
     "NegativeArraySizeException ArrayStoreException SecurityException IllegalMonitorStateException java/util/NoSuchElementException " +
     "java/util/ConcurrentModificationException"],
   ["ReflectiveOperationException", "ClassNotFoundException NoSuchMethodException NoSuchFieldException InstantiationException IllegalAccessException"],
-  ["Error", "StackOverflowError OutOfMemoryError AssertionError LinkageError InternalError"],
+  ["Error", "StackOverflowError OutOfMemoryError LinkageError InternalError"],
   ["LinkageError", "NoClassDefFoundError NoSuchMethodError NoSuchFieldError UnsatisfiedLinkError AbstractMethodError ExceptionInInitializerError"],
   ["java/io/IOException", "java/io/FileNotFoundException java/io/EOFException java/io/UnsupportedEncodingException java/net/SocketException " +
     "java/net/SocketTimeoutException java/net/UnknownHostException java/io/InterruptedIOException"],
@@ -488,6 +488,17 @@ for (const [sup, names] of [
   if (sup === "java/io/IOException") defineException(sup, "java/lang/Exception", ["()V", "(Ljava/lang/String;)V", "(Ljava/lang/Throwable;)V", "(Ljava/lang/String;Ljava/lang/Throwable;)V"]);
   for (const n of names.split(" ")) defineException(lang(n), lang(sup));
 }
+
+class JAssertionError extends JThrowable {}
+rt.register({ name: "java/lang/AssertionError", ctor: JAssertionError, sup: "java/lang/Error", methods: {
+  "<init>(Ljava/lang/Object;)V": async function (this: JAssertionError, detail: unknown) {
+    this.msg = detail === null ? "null" : typeof detail === "string" ? detail : await vcall(detail, "toString", "()Ljava/lang/String;");
+    if (detail instanceof JThrowable) this.cause = detail;
+  },
+  ...Object.fromEntries(["Z", "C", "I", "J", "F", "D"].map(type => ["<init>(" + type + ")V", async function (this: JAssertionError, detail: unknown) {
+    this.msg = await vcall(rt.link("java/lang/String").ctor, "valueOf", "(" + type + ")Ljava/lang/String;", detail);
+  }])),
+} });
 
 rt.mkThrowable = (cls: string, msg: string | null) => {
   let ctor = excCtors.get(cls);
