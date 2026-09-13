@@ -732,7 +732,7 @@ async function drawLayered(v: JView, cv: JCanvas, w: number, h: number) {
 
 async function drawSemantic(v: JView, cv: JCanvas) {
   const parentOwner = cv.semanticOwner;
-  v.drawnText = null;
+  if (v.drawnText) v.drawnText.length = 0;
   cv.semanticOwner = v;
   try {
     await drawSelf(v, cv);
