@@ -784,7 +784,7 @@ class JAnnotation extends JObj {
   anno!: EncAnnotation;
 }
 const annoProtoCache = new WeakMap<ClassInfo, object>();
-function mkAnnotation(anno: EncAnnotation, runtime: Runtime = rt): JAnnotation {
+export function mkAnnotation(anno: EncAnnotation, runtime: Runtime = rt): JAnnotation {
   const info = runtime.link(anno.type);
   const proto = buildAnnoProto(anno.type, info);
   const inst: JAnnotation = Object.create(proto);
@@ -795,8 +795,11 @@ function mkAnnotation(anno: EncAnnotation, runtime: Runtime = rt): JAnnotation {
 function installElements(target: object, info: ClassInfo, anno: EncAnnotation, runtime: Runtime = rt) {
   for (const [name, val] of Object.entries(anno.elements)) {
     const key = mangleMethod(name, elementDesc(info, name));
-    const resolved = resolveEncVal(val, anno.dex, runtime);
-    (target as any)[key] = () => resolved;
+    let resolved: unknown, ready = false;
+    (target as any)[key] = () => {
+      if (!ready) { resolved = resolveEncVal(val, anno.dex, runtime); ready = true; }
+      return resolved;
+    };
   }
 }
 function buildAnnoProto(type: string, info: ClassInfo): object {
