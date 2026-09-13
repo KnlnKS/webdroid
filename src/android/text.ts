@@ -263,6 +263,12 @@ class JCharacterStyle extends JObj {}
 rt.register({
   name: "android/text/style/CharacterStyle", ctor: JCharacterStyle,
   methods: {
+    "static wrap(Landroid/text/style/CharacterStyle;)Landroid/text/style/CharacterStyle;": (style: unknown) => {
+      const kind = rt.iof(style, "android/text/style/MetricAffectingSpan") ? "MetricAffectingSpan" : "CharacterStyle";
+      const wrapper = rt.make(`android/text/style/${kind}$Passthrough`) as JStylePassthrough;
+      wrapper.style = style;
+      return wrapper;
+    },
     "<init>()V": function () {},
     "getUnderlying()Landroid/text/style/CharacterStyle;": function (this: JCharacterStyle) { return this; },
   },
@@ -273,11 +279,28 @@ class JMetricAffectingSpan extends JCharacterStyle {}
 rt.register({
   name: "android/text/style/MetricAffectingSpan", ctor: JMetricAffectingSpan,
   sup: "android/text/style/CharacterStyle", ifaces: ["android/text/style/UpdateAppearance"],
-  methods: { "<init>()V": function () {} },
+  methods: {
+    "<init>()V": function () {},
+    "getUnderlying()Landroid/text/style/MetricAffectingSpan;": function (this: JMetricAffectingSpan) { return this; },
+  },
 });
 // Interface only (no ParagraphStyle registered yet to extend): the type real span classes
 // implement for the chooseHeight line-height adjustment applyLineHeightSpans applies.
 rt.markers("android/text/style/LineHeightSpan", "android/text/style/LineHeightSpan$WithDensity");
+class JStylePassthrough extends JCharacterStyle { style: unknown = null; }
+const passthroughMethods: NativeSpec["methods"] = {
+  "updateDrawState(Landroid/text/TextPaint;)V": function (this: JStylePassthrough, paint: JTextPaint) { return vcall(this.style, "updateDrawState", "(Landroid/text/TextPaint;)V", paint); },
+  "getUnderlying()Landroid/text/style/CharacterStyle;": function (this: JStylePassthrough) { return vcall(this.style, "getUnderlying", "()Landroid/text/style/CharacterStyle;"); },
+};
+rt.register({ name: "android/text/style/CharacterStyle$Passthrough", ctor: JStylePassthrough, sup: "android/text/style/CharacterStyle", methods: passthroughMethods });
+rt.register({
+  name: "android/text/style/MetricAffectingSpan$Passthrough", ctor: class extends JStylePassthrough {}, sup: "android/text/style/MetricAffectingSpan",
+  methods: {
+    ...passthroughMethods,
+    "updateMeasureState(Landroid/text/TextPaint;)V": function (this: JStylePassthrough, paint: JTextPaint) { return vcall(this.style, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint); },
+    "getUnderlying()Landroid/text/style/MetricAffectingSpan;": function (this: JStylePassthrough) { return vcall(this.style, "getUnderlying", "()Landroid/text/style/MetricAffectingSpan;"); },
+  },
+});
 class JReplacementSpan extends JMetricAffectingSpan {}
 rt.register({
   name: "android/text/style/ReplacementSpan", ctor: JReplacementSpan,
@@ -321,7 +344,9 @@ for (const [name] of [
   ["android/text/style/ClickableSpan", {}],
   ["android/text/style/URLSpan", {}],
 ] as const) {
-  const c = class extends JObj { color = 0; style = 0; size = 1; url = ""; };
+  const Base = spanHierarchy[name].sup === "android/text/style/MetricAffectingSpan" ? JMetricAffectingSpan
+    : spanHierarchy[name].sup === "android/text/style/ReplacementSpan" ? JReplacementSpan : JCharacterStyle;
+  const c = class extends Base { color = 0; style = 0; size = 1; url = ""; };
   rt.register({
     name, ctor: c,
     ...spanHierarchy[name],
@@ -336,12 +361,17 @@ for (const [name] of [
         "<init>(Landroid/graphics/drawable/Drawable;I)V"),
       "getURL()Ljava/lang/String;": function (this: any) { return this.url; },
       "getForegroundColor()I": function (this: any) { return this.color; },
+      ...(name === "android/text/style/ForegroundColorSpan" ? {
+        "updateDrawState(Landroid/text/TextPaint;)V": function (this: { color: number }, paint: JTextPaint) { return vcall(paint, "setColor", "(I)V", this.color); },
+      } : name === "android/text/style/BackgroundColorSpan" ? {
+        "updateDrawState(Landroid/text/TextPaint;)V": function (this: { color: number }, paint: JTextPaint) { paint.bgColor = this.color; },
+      } : {}),
       "getStyle()I": function (this: any) { return this.style; },
     },
   });
 }
 
-class JAbsoluteSizeSpan extends JObj { size = 0; dip = 0; }
+class JAbsoluteSizeSpan extends JMetricAffectingSpan { size = 0; dip = 0; }
 function absoluteSize(this: JAbsoluteSizeSpan, paint: JTextPaint) {
   return vcall(paint, "setTextSize", "(F)V", this.size * (this.dip ? paint.density : 1));
 }
