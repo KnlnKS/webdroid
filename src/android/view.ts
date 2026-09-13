@@ -589,17 +589,19 @@ export async function measureView(v: JView, wSpec: number, hSpec: number) {
       perf.exactSkips++;
       return;
     }
-    // a spec pair this view already measured under since its last request: the size it produced
-    const i = v.mcLen && !ignoreMeasureCache ? measureCacheFind(v, wSpec, hSpec) : -1;
-    if (i >= 0) {
-      const c = v.mc!;
-      v.oldWSpec = wSpec; v.oldHSpec = hSpec;
-      v.measuredW = c[i + 2]; v.measuredH = c[i + 3];
-      v.measureBeforeLayout = true;
-      v.layoutRequired = true;
-      perf.measureCacheHits++;
-      return;
-    }
+  }
+  // requestLayout clears the cache, so a hit here was produced after the current request.
+  // Modern Android consults that fresh entry even while FORCE_LAYOUT remains set, avoiding
+  // repeated same-spec measurement inside one parent traversal.
+  const i = v.mcLen && !ignoreMeasureCache ? measureCacheFind(v, wSpec, hSpec) : -1;
+  if (i >= 0) {
+    const c = v.mc!;
+    v.oldWSpec = wSpec; v.oldHSpec = hSpec;
+    v.measuredW = c[i + 2]; v.measuredH = c[i + 3];
+    v.measureBeforeLayout = true;
+    v.layoutRequired = true;
+    perf.measureCacheHits++;
+    return;
   }
   v.oldWSpec = wSpec; v.oldHSpec = hSpec;
   perf.onMeasures++;
