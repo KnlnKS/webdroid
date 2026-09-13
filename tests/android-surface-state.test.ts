@@ -47,6 +47,20 @@ test("Paint retains font feature settings across copy and clears them on reset",
   expect(await vcall(copy, "getFontFeatureSettings", "()Ljava/lang/String;")).toBeNull();
 });
 
+test("Paint retains font variation settings across copy and clears them on reset", async () => {
+  const paint = new JPaint();
+  expect(await vcall(paint, "getFontVariationSettings", "()Ljava/lang/String;")).toBeNull();
+  expect(await vcall(paint, "setFontVariationSettings", "(Ljava/lang/String;)Z", "'wdth' 125")).toBe(1);
+  expect(await vcall(paint, "getFontVariationSettings", "()Ljava/lang/String;")).toBe("'wdth' 125");
+
+  const copy = await newObj("android/graphics/Paint", "(Landroid/graphics/Paint;)V", paint);
+  expect(await vcall(copy, "getFontVariationSettings", "()Ljava/lang/String;")).toBe("'wdth' 125");
+  await vcall(copy, "reset", "()V");
+  expect(await vcall(copy, "getFontVariationSettings", "()Ljava/lang/String;")).toBeNull();
+  expect(await vcall(paint, "setFontVariationSettings", "(Ljava/lang/String;)Z", "")).toBe(1);
+  expect(await vcall(paint, "getFontVariationSettings", "()Ljava/lang/String;")).toBeNull();
+});
+
 test("TextView retains and exposes its shadow layer", async () => {
   const view = await newObj("android/widget/TextView");
   await vcall(view, "setShadowLayer", "(FFFI)V", 4.5, 2, -3, 0x7f123456);
