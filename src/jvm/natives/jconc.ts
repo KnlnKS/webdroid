@@ -462,6 +462,11 @@ rt.register({
         c.r = r; c.result = result;
         return c;
       },
+    "static callable(Ljava/lang/Runnable;)Ljava/util/concurrent/Callable;": (r: unknown) => {
+      const c = new (rt.link("webdroid/RunnableCallable").ctor as typeof JRunnableCallable)();
+      c.r = r;
+      return c;
+    },
     "static newSingleThreadExecutor()Ljava/util/concurrent/ExecutorService;": mkExecutor,
     "static newSingleThreadExecutor(Ljava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ExecutorService;": (factory: unknown) => mkExecutor(1, factory),
     "static newFixedThreadPool(I)Ljava/util/concurrent/ExecutorService;": mkExecutor,
@@ -951,18 +956,99 @@ rt.register({
 class JCompletable extends JFuture { settle: () => void = () => {}; }
 const completable = () => { const f = new JCompletable(); f.promise = new Promise<void>((r) => { f.settle = r; }); return f; };
 const settleWith = (f: JCompletable, value: unknown, error: unknown) => { if (f.done) return 0; f.value = value; f.error = error; f.done = 1; f.settle(); return 1; };
+class JCompletionRunnable extends JObj { runTask: () => Promise<void> = async () => {}; }
+rt.register({
+  name: "webdroid/CompletionRunnable", ctor: JCompletionRunnable, ifaces: ["java/lang/Runnable"],
+  methods: { "run()V": function (this: JCompletionRunnable) { return this.runTask(); } },
+});
+function dispatchCompletion(target: JCompletable, action: () => Promise<unknown>, executor: unknown = null): void {
+  const task = new JCompletionRunnable();
+  task.runTask = async () => {
+    try { settleWith(target, await action(), null); }
+    catch (error) { settleWith(target, null, rt.jx(error)); }
+  };
+  if (executor) {
+    void vcall(executor, "execute", "(Ljava/lang/Runnable;)V", task).catch((error) => settleWith(target, null, rt.jx(error)));
+  } else setTimeout(() => void task.runTask(), 0);
+}
+function dependent(source: JCompletable, action: (value: unknown, error: unknown) => Promise<unknown>, executor: unknown = null): JCompletable {
+  const target = completable();
+  void source.promise!.then(() => {
+    if (source.cancelled) {
+      target.cancelled = target.done = 1;
+      target.settle();
+      return;
+    }
+    dispatchCompletion(target, () => action(source.value, source.error), executor);
+  });
+  return target;
+}
+function propagate(error: unknown, value: unknown): unknown {
+  if (error) throw error;
+  return value;
+}
 rt.register({
   name: "java/util/concurrent/CompletableFuture", ctor: JCompletable, sup: "webdroid/Future",
   ifaces: ["java/util/concurrent/Future", "java/util/concurrent/CompletionStage"],
   methods: {
     "<init>()V": function (this: JCompletable) { this.promise = new Promise<void>((r) => { this.settle = r; }); },
     "static completedFuture(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;": (v: unknown) => { const f = completable(); settleWith(f, v, null); return f; },
+    "static supplyAsync(Ljava/util/function/Supplier;)Ljava/util/concurrent/CompletableFuture;": (supplier: unknown) => {
+      const f = completable(); dispatchCompletion(f, () => vcall(supplier, "get", "()Ljava/lang/Object;")); return f;
+    },
+    "static supplyAsync(Ljava/util/function/Supplier;Ljava/util/concurrent/Executor;)Ljava/util/concurrent/CompletableFuture;": (supplier: unknown, executor: unknown) => {
+      if (!executor) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const f = completable(); dispatchCompletion(f, () => vcall(supplier, "get", "()Ljava/lang/Object;"), executor); return f;
+    },
+    "static runAsync(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletableFuture;": (runnable: unknown) => {
+      const f = completable(); dispatchCompletion(f, async () => { await vcall(runnable, "run", "()V"); return null; }); return f;
+    },
+    "static allOf([Ljava/util/concurrent/CompletableFuture;)Ljava/util/concurrent/CompletableFuture;": (futures: JCompletable[]) => {
+      if (!futures) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const result = completable();
+      void Promise.all(futures.map(async (future) => {
+        if (!future) throw rt.mkThrowable("java/lang/NullPointerException", null);
+        await future.promise;
+        if (future.cancelled) throw rt.mkThrowable("java/util/concurrent/CancellationException", null);
+        if (future.error) throw future.error;
+      })).then(() => settleWith(result, null, null), (error) => settleWith(result, null, rt.jx(error)));
+      return result;
+    },
     "complete(Ljava/lang/Object;)Z": function (this: JCompletable, v: unknown) { return settleWith(this, v, null); },
     "completeExceptionally(Ljava/lang/Throwable;)Z": function (this: JCompletable, t: unknown) { return settleWith(this, null, t); },
     "join()Ljava/lang/Object;": function (this: JCompletable) { return futureGet(this); },
     "getNow(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JCompletable, d: unknown) { return this.done && !this.error ? this.value : d; },
     "isCompletedExceptionally()Z": function (this: JCompletable) { return this.done && this.error ? 1 : 0; },
     "cancel(Z)Z": function (this: JCompletable) { if (this.done) return 0; this.cancelled = this.done = 1; this.settle(); return 1; },
+    "thenApply(Ljava/util/function/Function;)Ljava/util/concurrent/CompletableFuture;": function (this: JCompletable, fn: unknown) {
+      return dependent(this, (value, error) => error ? Promise.reject(error) : vcall(fn, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", value));
+    },
+    "thenApplyAsync(Ljava/util/function/Function;Ljava/util/concurrent/Executor;)Ljava/util/concurrent/CompletableFuture;": function (this: JCompletable, fn: unknown, executor: unknown) {
+      if (!executor) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      return dependent(this, (value, error) => error ? Promise.reject(error) : vcall(fn, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", value), executor);
+    },
+    "thenAccept(Ljava/util/function/Consumer;)Ljava/util/concurrent/CompletableFuture;": function (this: JCompletable, consumer: unknown) {
+      return dependent(this, async (value, error) => { propagate(error, value); await vcall(consumer, "accept", "(Ljava/lang/Object;)V", value); return null; });
+    },
+    "thenRun(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletableFuture;": function (this: JCompletable, runnable: unknown) {
+      return dependent(this, async (value, error) => { propagate(error, value); await vcall(runnable, "run", "()V"); return null; });
+    },
+    "exceptionally(Ljava/util/function/Function;)Ljava/util/concurrent/CompletableFuture;": function (this: JCompletable, fn: unknown) {
+      return dependent(this, (value, error) => error ? vcall(fn, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", error) : Promise.resolve(value));
+    },
+    "handle(Ljava/util/function/BiFunction;)Ljava/util/concurrent/CompletableFuture;": function (this: JCompletable, fn: unknown) {
+      return dependent(this, (value, error) => vcall(fn, "apply", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", value, error));
+    },
+    "whenComplete(Ljava/util/function/BiConsumer;)Ljava/util/concurrent/CompletableFuture;": function (this: JCompletable, fn: unknown) {
+      return dependent(this, async (value, error) => { await vcall(fn, "accept", "(Ljava/lang/Object;Ljava/lang/Object;)V", value, error); return propagate(error, value); });
+    },
+    "whenCompleteAsync(Ljava/util/function/BiConsumer;)Ljava/util/concurrent/CompletableFuture;": function (this: JCompletable, fn: unknown) {
+      return dependent(this, async (value, error) => { await vcall(fn, "accept", "(Ljava/lang/Object;Ljava/lang/Object;)V", value, error); return propagate(error, value); });
+    },
+    "whenCompleteAsync(Ljava/util/function/BiConsumer;Ljava/util/concurrent/Executor;)Ljava/util/concurrent/CompletableFuture;": function (this: JCompletable, fn: unknown, executor: unknown) {
+      if (!executor) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      return dependent(this, async (value, error) => { await vcall(fn, "accept", "(Ljava/lang/Object;Ljava/lang/Object;)V", value, error); return propagate(error, value); }, executor);
+    },
   },
 });
 rt.markers("java/util/concurrent/CompletionStage");
