@@ -1013,7 +1013,10 @@ rt.register({
     "cancel(Z)Z": () => 0,
   },
 });
-rt.markers("java/util/concurrent/RunnableFuture");
+rt.register({
+  name: "java/util/concurrent/RunnableFuture", ctor: class extends JObj {},
+  ifaces: ["java/lang/Runnable", "java/util/concurrent/Future"],
+});
 
 // ── AbstractQueuedSynchronizer: the state word, its CAS, and FIFO waiting in exclusive and shared
 // modes; a subclass supplies tryAcquire/tryRelease (and the shared pair) as the JDK's does

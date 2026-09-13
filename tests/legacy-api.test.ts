@@ -167,6 +167,7 @@ test("AbstractExecutorService submit returns the virtual newTaskFor result", asy
   const runnable = rt.make("test/NoopRunnable");
   const future = await vcall(executor, "submit", "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;", runnable, "done");
   expect(rt.iof(future, "java/util/concurrent/FutureTask")).toBe(1);
+  expect(rt.iof(future, "java/lang/Runnable")).toBe(1);
   expect(await vcall(future, "get", "()Ljava/lang/Object;")).toBe("done");
 });
 
