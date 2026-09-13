@@ -1331,6 +1331,9 @@ rt.register({
 class JRuntimeCls extends JObj {}
 const theRuntime = new JRuntimeCls();
 const shutdownHooks = new Set<unknown>();
+const cannotExec = (program: string): never => {
+  throw rt.mkThrowable("java/io/IOException", `Cannot run program "${program}": error=2, No such file or directory`);
+};
 rt.register({
   name: "java/lang/Runtime", ctor: JRuntimeCls,
   methods: {
@@ -1345,9 +1348,12 @@ rt.register({
     "gc()V": () => {},
     // There is no process table behind this. A device answers for a program it cannot find the
     // same way, and callers probing for one (root checks, getprop readers) have that catch.
-    "exec([Ljava/lang/String;)Ljava/lang/Process;": (cmd: unknown[]) => {
-      throw rt.mkThrowable("java/io/IOException", `Cannot run program "${cmd?.[0] ?? ""}": error=2, No such file or directory`);
+    "exec(Ljava/lang/String;)Ljava/lang/Process;": (cmd: string) => {
+      const command = cmd?.trim();
+      if (!command) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Empty command");
+      return cannotExec(command.split(/\s+/)[0]);
     },
+    "exec([Ljava/lang/String;)Ljava/lang/Process;": (cmd: unknown[]) => cannotExec(String(cmd?.[0] ?? "")),
     "loadLibrary0(Ljava/lang/Class;Ljava/lang/String;)V": async (c: JClass | null, n: string) => loadLibrary(n, c?.ci?.owner ?? rt),
   },
 });

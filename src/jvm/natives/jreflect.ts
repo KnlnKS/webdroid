@@ -1042,14 +1042,31 @@ function installClassReflection() {
   };
   M["getDeclaredMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;"] =
     M["getMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;"];
+  const annotations = (info: ClassInfo) => {
+    const out: { annotation: EncAnnotation; runtime: Runtime }[] = [];
+    const seen = new Set<string>();
+    for (let current: ClassInfo | null = info; current; current = current.superInfo) {
+      const runtime = current.owner ?? rt;
+      for (const annotation of classAnno(current).cls) {
+        if (annotation.visibility !== 1 || seen.has(annotation.type)) continue;
+        if (current !== info && !classAnno(runtime.link(annotation.type)).cls.some((meta) => meta.type === "java/lang/annotation/Inherited")) continue;
+        seen.add(annotation.type);
+        out.push({ annotation, runtime });
+      }
+    }
+    return out;
+  };
   M["getAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;"] = function (this: JClass, cls: JClass) {
     if (!this.ci) return null;
-    const found = classAnno(this.ci).cls.find((an) => an.visibility === 1 && an.type === cls?.ci?.name && (this.ci!.owner ?? rt).link(an.type) === cls.ci);
-    return found ? mkAnnotation(found, this.ci.owner) : null;
+    const found = annotations(this.ci).find(({ annotation, runtime }) => annotation.type === cls?.ci?.name && runtime.link(annotation.type) === cls.ci);
+    return found ? mkAnnotation(found.annotation, found.runtime) : null;
   };
   M["isAnnotationPresent(Ljava/lang/Class;)Z"] = function (this: JClass, cls: JClass) {
     if (!this.ci) return 0;
-    return classAnno(this.ci).cls.some((an) => an.visibility === 1 && an.type === cls?.ci?.name && (this.ci!.owner ?? rt).link(an.type) === cls.ci) ? 1 : 0;
+    return annotations(this.ci).some(({ annotation, runtime }) => annotation.type === cls?.ci?.name && runtime.link(annotation.type) === cls.ci) ? 1 : 0;
+  };
+  M["getAnnotations()[Ljava/lang/annotation/Annotation;"] = function (this: JClass) {
+    return jarray(this.ci ? annotations(this.ci).map(({ annotation, runtime }) => mkAnnotation(annotation, runtime)) : [], "Ljava/lang/annotation/Annotation;");
   };
   M["getDeclaredAnnotations()[Ljava/lang/annotation/Annotation;"] = function (this: JClass) {
     return jarray(this.ci ? classAnno(this.ci).cls.filter((an) => an.visibility === 1).map((an) => mkAnnotation(an, this.ci!.owner)) : [], "Ljava/lang/annotation/Annotation;");

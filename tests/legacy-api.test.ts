@@ -38,6 +38,19 @@ test("Double.valueOf(String) boxes a parsed value and rejects junk", async () =>
     .rejects.toMatchObject({ constructor: rt.link("java/lang/NumberFormatException").ctor });
 });
 
+test("reached platform queries return device state and default WebView identity", async () => {
+  const context = await newObj("android/content/Context");
+  expect(await scall("android/provider/Settings", "canDrawOverlays", "(Landroid/content/Context;)Z", context)).toBe(0);
+  expect(await scall("android/webkit/WebSettings", "getDefaultUserAgent", "(Landroid/content/Context;)Ljava/lang/String;", context)).toContain("Android 13");
+  expect(await vcall(rt.classFor("java/lang/String"), "getAnnotations", "()[Ljava/lang/annotation/Annotation;")).toHaveLength(0);
+});
+
+test("Runtime.exec(String) tokenizes the program and reports the unavailable process", async () => {
+  const runtime = await scall("java/lang/Runtime", "getRuntime", "()Ljava/lang/Runtime;");
+  await expect(vcall(runtime, "exec", "(Ljava/lang/String;)Ljava/lang/Process;", "getprop ro.product.cpu.abi"))
+    .rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor, msg: expect.stringContaining('"getprop"') });
+});
+
 test("JSONObject copies only the named keys that exist", async () => {
   const source = await newObj("org/json/JSONObject", "(Ljava/lang/String;)V", '{"a":1,"b":"two","c":null}');
   const names = Object.assign(["a", "c", "missing"], { $t: "Ljava/lang/String;" });

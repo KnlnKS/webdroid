@@ -52,6 +52,7 @@ class JWebSettings extends JObj {
 }
 const settingsMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>()V": function () {},
+  "static getDefaultUserAgent(Landroid/content/Context;)Ljava/lang/String;": () => UA,
   "setAppCacheEnabled(Z)V": () => {}, "setAppCacheMaxSize(J)V": () => {}, "setAppCachePath(Ljava/lang/String;)V": () => {},
   "setDatabasePath(Ljava/lang/String;)V": () => {}, "setGeolocationDatabasePath(Ljava/lang/String;)V": () => {},
   "setEnableSmoothTransition(Z)V": () => {},

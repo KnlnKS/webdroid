@@ -280,5 +280,12 @@ for (const [cls, table] of [["Global", "global"], ["Secure", "secure"], ["System
 // the column-name interface every provider contract extends
 rt.register({ name: "android/provider/BaseColumns", ctor: class extends JObj {}, statics: { _ID: "_id", _COUNT: "_count" } });
 rt.register({ name: "android/provider/Settings", ctor: class extends JObj {},
+  methods: {
+    "static canDrawOverlays(Landroid/content/Context;)Z": (context: unknown) => {
+      if (!context) rt.npe();
+      return 0;
+    },
+  },
   statics: { ACTION_APPLICATION_DETAILS_SETTINGS: "android.settings.APPLICATION_DETAILS_SETTINGS",
+             ACTION_MANAGE_OVERLAY_PERMISSION: "android.settings.action.MANAGE_OVERLAY_PERMISSION",
              ACTION_SETTINGS: "android.settings.SETTINGS" } });
