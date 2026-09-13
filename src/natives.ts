@@ -90,6 +90,7 @@ import "./android/animator";
 import "./android/media";
 import "./android/media-format";
 import "./android/media-codec";
+import "./android/tts";
 import "./android/webkit";
 import "./android/cookies";
 import "./android/hardware";
