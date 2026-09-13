@@ -462,3 +462,9 @@ test("Locale constants carry their language and country, and JSON text prints a 
   const json = await newObj("org/json/JSONObject", "(Ljava/util/Map;)V", map);
   expect(await vcall(json, "toString", "()Ljava/lang/String;")).toBe('{"big":9007199254740993}');
 });
+
+test("Android path loaders expose the BaseDexClassLoader hierarchy", async () => {
+  for (const name of ["dalvik/system/PathClassLoader", "dalvik/system/DexClassLoader", "webdroid/PackageClassLoader"]) {
+    expect(rt.iof(rt.make(name), "dalvik/system/BaseDexClassLoader")).toBe(1);
+  }
+});

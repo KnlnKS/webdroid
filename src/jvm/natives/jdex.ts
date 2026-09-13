@@ -61,7 +61,13 @@ rt.register({
   },
 });
 rt.register({
-  name: "dalvik/system/PathClassLoader", ctor: class extends JClassLoader {}, sup: "java/lang/ClassLoader",
+  name: "dalvik/system/BaseDexClassLoader", ctor: class extends JClassLoader {}, sup: "java/lang/ClassLoader",
+});
+rt.register({
+  name: "dalvik/system/BaseDexClassLoader", ctor: class extends JClassLoader {}, sup: "java/lang/ClassLoader",
+});
+rt.register({
+  name: "dalvik/system/PathClassLoader", ctor: class extends JClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",
   methods: {
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V": init,
     "<init>(Ljava/lang/String;Ljava/lang/ClassLoader;)V": async function (this: JClassLoader, path: string, parent: JClassLoader | null) { await init.call(this, path, null, parent); },
@@ -82,7 +88,7 @@ rt.register({
   },
 });
 rt.register({
-  name: "webdroid/PackageClassLoader", ctor: class extends JClassLoader {}, sup: "java/lang/ClassLoader",
+  name: "webdroid/PackageClassLoader", ctor: class extends JClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",
   methods: {
     "<init>(Ljava/lang/String;)V": async function (this: JClassLoader, path: string) {
       await init.call(this, path, null, null);
