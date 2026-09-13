@@ -173,10 +173,15 @@ export class JTextView extends JView {
       const last = out[out.length - 1];
       let shown = out.length - 1;
       for (const l of out) shown += l.length;
-      if (shown < text.length && mw(last) > 0) {
-        let l = last;
-        while (l.length && mw(l + "…") > avail) l = l.slice(0, -1);
-        out[out.length - 1] = l + "…";
+      if (shown < text.length || mw(last) > avail) {
+        let lo = 0, hi = last.length;
+        while (lo < hi) {
+          const mid = (lo + hi + 1) >> 1;
+          if (mw(last.slice(0, mid) + "…") <= avail) lo = mid;
+          else hi = mid - 1;
+        }
+        if (lo && last.charCodeAt(lo - 1) >= 0xd800 && last.charCodeAt(lo - 1) <= 0xdbff) lo--;
+        out[out.length - 1] = last.slice(0, lo) + "…";
       }
     }
     return out;

@@ -2471,3 +2471,11 @@ reuse resolveStyleValue. A resource-bag test covers explicit null, a theme refer
 index enumeration and retaining a nonnull family; its 12 assertions pass and its first
 hasValue assertion fails against the preceding code. Typecheck passes. Maps still selects
 Roboto after this change, so it does not establish the cause of the remaining font mismatch.
+
+The place search title requested END ellipsis but kept all 1,407 pixels of text in an
+801-pixel line. TextView's breaker only considered omitted logical characters, missing
+single-line width overflow. It now checks both, using a bounded binary search instead of
+measuring successively shorter prefixes and avoiding a split surrogate pair. Real Chrome
+checks cover fitting and overflowing text, widening, cached layouts, last-line truncation,
+sub-ellipsis widths and supplementary characters. Typecheck passes; a fresh Maps place
+capture shows the requested ellipsis. This does not address other font/layout differences.
