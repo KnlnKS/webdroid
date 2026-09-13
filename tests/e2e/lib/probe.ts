@@ -20,6 +20,7 @@ export type Act =
   | { type: "type"; text: string; x?: number; y?: number }
   | { type: "back" }
   | { type: "enter" }
+  | { type: "background"; ms: number }
   | { type: "swipe"; from: [number, number]; to: [number, number]; ms: number }
   | { type: "none" };
 
@@ -267,6 +268,7 @@ function installProbe(cfg: ProbeConfig): void {
         return;
       case "back": await run(wd.back()); return;
       case "enter": await run(wd.enter()); return;
+      case "background": await run(wd.background(a.ms)); return;
       case "swipe": await run(wd.swipe(a.from[0] * s.width, a.from[1] * s.height, a.to[0] * s.width, a.to[1] * s.height, a.ms)); return;
       case "none": return;
     }

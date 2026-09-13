@@ -117,6 +117,11 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
       case "enter":
         await emu.shell("input keyevent 66");
         break;
+      case "background":
+        await emu.shell("input keyevent 3");
+        await sleep(a.ms ?? 1000);
+        await emu.shell(`am start -n ${flow.pkg}/${flow.activity}`);
+        break;
       case "swipe":
         await emu.swipe(a.from[0] * profile.width, a.from[1] * profile.height,
                         a.to[0] * profile.width, a.to[1] * profile.height, a.ms ?? 400);

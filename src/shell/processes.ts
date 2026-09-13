@@ -163,6 +163,18 @@ class ProcessBroker {
     this.queueActivity(() => this.request(this.entry(this.foregroundPid), (endpoint) => endpoint.activity({ kind: "back" })));
     return true;
   }
+  background(ms: number): Promise<void> {
+    const pid = this.foregroundPid;
+    if (!pid) return Promise.resolve();
+    return this.queueActivity(async () => {
+      const entry = this.entry(pid);
+      await this.visibility(entry, "pause", PAUSE_TIMEOUT_MS);
+      await this.visibility(entry, "stop", STOP_TIMEOUT_MS);
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      await this.request(entry, (endpoint) => endpoint.activity({ kind: "visibility", phase: "resume" }));
+      this.show(pid);
+    });
+  }
   /**
    * The previous activity gets PAUSE_TIMEOUT / STOP_TIMEOUT to answer, as on AOSP, and the
    * launch goes ahead without it: a process whose main thread is blocked in a binder call —

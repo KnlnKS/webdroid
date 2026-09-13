@@ -236,6 +236,7 @@ const wd = {
     return (fn as (...a: unknown[]) => unknown)(...args);
   },
   boot, app: () => currentApp(), back,
+  background: (ms = 1000) => processBroker().background(ms),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
   web: () => webViewInfo(),
   // framework attributes a layout used that nothing here reads: a look that is wrong with a

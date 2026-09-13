@@ -62,6 +62,7 @@ A step is declared once, semantically, in `flows/`. Two drivers interpret it:
 | | emulator (`drivers/emulator.ts`) | webdroid (`drivers/webdroid.ts` + `lib/probe.ts`) |
 |---|---|---|
 | `tapText` | `uiautomator dump` → find node → `input tap` | `wd.locateText` → `wd.tap`; falls back to the recorded coordinate |
+| `background` | HOME, then relaunch the task | pause/stop, then resume the foreground task |
 | `tapAt` | `input tap` at normalized coords | `wd.tap` |
 | `typeInto` | tap, `input text`, close the IME | `wd.tap` then `wd.type` |
 | `swipe` / `back` | `input swipe` / `keyevent 4` | `wd.swipe` / `wd.back` |

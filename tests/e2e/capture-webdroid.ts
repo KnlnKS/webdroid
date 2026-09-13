@@ -97,6 +97,7 @@ function actOf(flow: Flow, step: Step, rec?: RecordedStep): Act {
     case "typeInto": return { type: "type", x: a.x, y: a.y, text: a.text };
     case "back": return { type: "back" };
     case "enter": return { type: "enter" };
+    case "background": return { type: "background", ms: a.ms ?? 1000 };
     case "swipe": return { type: "swipe", from: a.from, to: a.to, ms: a.ms ?? 400 };
     case "settle": return { type: "none" };
   }
