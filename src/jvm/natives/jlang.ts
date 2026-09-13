@@ -40,8 +40,11 @@ export async function linkInit(cls: string): Promise<ClassInfo> {
 }
 /** `new Cls(args)` from native code: init the class, construct, run the Java constructor `desc` (none when null) */
 export async function newObj(cls: string, desc: string | null = "()V", ...args: unknown[]): Promise<any> {
-  const o = new (await linkInit(cls)).ctor();
-  if (desc !== null) await vcall(o, "<init>", desc, ...args);
+  const thread = curThread, info = await linkInit(cls), previous = curThread;
+  let o;
+  curThread = thread;
+  try { o = new info.ctor(); } finally { curThread = previous; }
+  if (desc !== null) await vcallOn(thread, o, "<init>", desc, ...args);
   return o;
 }
 /** a boxed primitive (Integer, Long, Float …) — every box class keeps its value in `v` */

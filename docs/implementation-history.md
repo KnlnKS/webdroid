@@ -2339,3 +2339,12 @@ and the AND/WIDE default. Focused tests cover empty/single lists, English punctu
 Spanish contextual conjunctions, German conjunctions, asynchronous objects and nulls.
 All three math/list tests pass (16 assertions); typecheck passes. App verification
 continues in the rebuilt Chrome session.
+
+### Retain thread identity while constructing native objects
+
+newObj awaited class initialization before constructing the host object and invoking
+its Java constructor. A controlled background-thread test observed the main thread in
+both constructors. Capture the caller thread before initialization and restore it for
+both construction stages, without retaining global thread state across the wait. The
+construction and Handler tests pass (six assertions), as does typecheck. Fresh headed
+Maps still reports the startup trace-span mismatch, so that separate race remains.
