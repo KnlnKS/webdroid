@@ -718,7 +718,7 @@ rt.register({
     "getPackageInstaller()Landroid/content/pm/PackageInstaller;": getPackageInstaller,
     ...stubs(null, "getInstallerPackageName(Ljava/lang/String;)Ljava/lang/String;"),
     ...stubs(1, "canRequestPackageInstalls()Z"),
-    ...stubs(0, "isInstantApp()Z", "isInstantApp(Ljava/lang/String;)Z"),
+    ...stubs(0, "isInstantApp()Z", "isInstantApp(Ljava/lang/String;)Z", "isPackageSuspended()Z"),
     "getNameForUid(I)Ljava/lang/String;": (uid: number) => [...packages.values()].find((p) => p.uid === uid)?.pkg ?? null,
     "getPackagesForUid(I)[Ljava/lang/String;": (uid: number) => {
       const names = [...packages.values()].filter((p) => p.uid === uid).map((p) => p.pkg);

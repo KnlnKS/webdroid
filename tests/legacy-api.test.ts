@@ -240,6 +240,10 @@ test("optional device services report their unavailable state", async () => {
   expect(await vcall(range, "clamp", "(Ljava/lang/Comparable;)Ljava/lang/Comparable;", "z")).toBe("d");
 });
 
+test("PackageManager reports the current package as active", async () => {
+  expect(await vcall(await newObj("android/content/pm/PackageManager"), "isPackageSuspended", "()Z")).toBe(0);
+});
+
 test("AbstractExecutorService submit returns the virtual newTaskFor result", async () => {
   const executor = scall("java/util/concurrent/Executors", "newSingleThreadExecutor", "()Ljava/util/concurrent/ExecutorService;");
   const runnable = rt.make("test/NoopRunnable");
