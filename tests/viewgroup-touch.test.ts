@@ -47,6 +47,13 @@ test("ViewGroup retains its child clipping state", async () => {
   expect(await vcall(group, "getClipChildren", "()Z")).toBe(0);
 });
 
+test("View retains its touch delegate", async () => {
+  const view = new JView(), delegate = new JObj();
+  expect(await vcall(view, "getTouchDelegate", "()Landroid/view/TouchDelegate;")).toBeNull();
+  await vcall(view, "setTouchDelegate", "(Landroid/view/TouchDelegate;)V", delegate);
+  expect(await vcall(view, "getTouchDelegate", "()Landroid/view/TouchDelegate;")).toBe(delegate);
+});
+
 test("a ViewGroup's OnTouchListener sees only touches no child took", async () => {
   const group = new JViewGroup(); group.right = 200; group.bottom = 200;
   const child = new JView(); child.right = 100; child.bottom = 100; child.clickable = true;

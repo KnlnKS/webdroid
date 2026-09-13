@@ -379,6 +379,7 @@ export class JView extends JObj {
   focusable = false; focusableInTouchMode = false;
   autoHandwritingEnabled = true;
   clickL: unknown = null; longClickL: unknown = null; touchL: unknown = null; keyL: unknown = null; focusL: unknown = null;
+  touchDelegate: unknown = null;
   insetsL: unknown = null; a11yDelegate: unknown = null; dragL: unknown = null;
   fitsSys = false;
   overlay: JViewOverlay | null = null;
@@ -1409,6 +1410,8 @@ const viewMethods: NativeSpec["methods"] = {
     const w = c?.window ?? c?.win;
     return this.attached && w?.backDispatcher ? w.backDispatcher() : null;
   },
+  "setTouchDelegate(Landroid/view/TouchDelegate;)V": function (this: JView, delegate: unknown) { this.touchDelegate = delegate; },
+  "getTouchDelegate()Landroid/view/TouchDelegate;": function (this: JView) { return this.touchDelegate; },
   "isLaidOut()Z": function (this: JView) { return this.right > 0 || this.bottom > 0 ? 1 : 0; },
   ...stubs(1, "isInTouchMode()Z", "performHapticFeedback(I)Z", "isHardwareAccelerated()Z", "hasWindowFocus()Z",
     "getTransitionAlpha()F", "hasOverlappingRendering()Z", "isLayoutDirectionResolved()Z"),
@@ -1431,7 +1434,7 @@ const viewMethods: NativeSpec["methods"] = {
     "onRestoreInstanceState(Landroid/os/Parcelable;)V", "saveHierarchyState(Landroid/util/SparseArray;)V",
     "restoreHierarchyState(Landroid/util/SparseArray;)V", "setDrawingCacheEnabled(Z)V",
     "addFocusables(Ljava/util/ArrayList;II)V", "addTouchables(Ljava/util/ArrayList;)V", "cancelPendingInputEvents()V",
-    "setTouchDelegate(Landroid/view/TouchDelegate;)V", "setAccessibilityPaneTitle(Ljava/lang/CharSequence;)V",
+    "setAccessibilityPaneTitle(Ljava/lang/CharSequence;)V",
     "setStateDescription(Ljava/lang/CharSequence;)V", "setAccessibilityHeading(Z)V", "setScreenReaderFocusable(Z)V",
     "setDuplicateParentStateEnabled(Z)V", "setAddStatesFromChildren(Z)V", "onWindowFocusChanged(Z)V",
     "dispatchWindowFocusChanged(Z)V", "onFocusChanged(ZILandroid/graphics/Rect;)V", "setRotationX(F)V",
