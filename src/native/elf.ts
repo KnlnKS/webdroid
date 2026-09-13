@@ -36,7 +36,7 @@ type Resolver = (sym: string, weak: boolean, from: Module) => number;
 const PT_LOAD = 1, PT_DYNAMIC = 2, PT_TLS = 7, PT_ARM_EXIDX = 0x70000001;
 
 interface Fmt {
-  machine: number; ptr: number;
+  machine: number; ptr: 4 | 8;
   phEnt: number; phOff: number; phVaddr: number; phFilesz: number; phMemsz: number; phAlign: number;
   dynEnt: number;
   symEnt: number; symValue: number; symInfo: number; symShndx: number;
@@ -61,12 +61,6 @@ const ELF64: Fmt = {
   // is not one of them, and -1 matches no type
   RELATIVE: 1027, ABS: 257, GLOB_DAT: 1025, JUMP_SLOT: 1026, REL32: -1, TLSDESC: 1031,
 };
-
-// Packed relative relocations use a different format. Ignoring one of these tags is not a partial
-// load, it is an image whose relocations were silently never applied, so it is named and refused.
-const PACKED = new Map<number, string>([
-  [35, "DT_RELRSZ"], [36, "DT_RELR"], [37, "DT_RELRENT"],
-]);
 
 type PackedRelocation = { off: number; info: bigint; addend: number };
 
@@ -111,6 +105,25 @@ export function decodeAndroidPacked(name: string, bytes: Uint8Array, rela: boole
       visit({ off, info, addend });
       done++;
     }
+  }
+}
+
+export function decodeRelr(name: string, bytes: Uint8Array, ptr: 4 | 8, visit: (off: number) => void): void {
+  if (bytes.length % ptr) throw new Error(`${name}: invalid RELR size`);
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let next = -1;
+  for (let at = 0; at < bytes.length; at += ptr) {
+    const entry = ptr === 8 ? dv.getBigUint64(at, true) : BigInt(dv.getUint32(at, true));
+    if (!(entry & 1n)) {
+      const off = Number(entry);
+      if (!Number.isSafeInteger(off)) throw new Error(`${name}: RELR offset is out of range`);
+      visit(off);
+      next = off + ptr;
+      continue;
+    }
+    if (next < 0) throw new Error(`${name}: RELR bitmap precedes an address`);
+    for (let bit = 1; bit < ptr * 8; bit++) if (entry & 1n << BigInt(bit)) visit(next + (bit - 1) * ptr);
+    next += (ptr * 8 - 1) * ptr;
   }
 }
 
@@ -184,13 +197,12 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
   // .dynamic. REL and RELA never both appear: a file carries whichever its ABI defines, so one
   // pair of variables holds it either way.
   let strtab = 0, symtab = 0, hash = 0, gnuHash = 0, rel = 0, relsz = 0, androidRel = 0, androidRelSz = 0;
+  let relr = 0, relrSz = 0, relrEnt = 0;
   let androidRela: boolean | null = null, jmprel = 0, pltrelsz = 0, initArr = 0, initArrSz = 0;
   const neededOffs: number[] = [];
   for (let p = base + dynOff; p < base + dynOff + dynSz; p += f.dynEnt) {
     const tag = mem.i32[p >>> 2], val = mem.u32[(p + f.ptr) >>> 2];
     if (tag === 0) break;
-    const packed = PACKED.get(tag >>> 0);
-    if (packed) throw new Error(`${name}: ${packed} relocations are not decoded`);
     switch (tag) {
       case 1: neededOffs.push(val); break;
       case 2: pltrelsz = val; break;
@@ -207,6 +219,9 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
       case 23: jmprel = val; break;
       case 25: initArr = val; break;
       case 27: initArrSz = val; break;
+      case 35: case 0x6fffe001: relrSz = val; break;
+      case 36: case 0x6fffe000: relr = val; break;
+      case 37: case 0x6fffe003: relrEnt = val; break;
       case 0x6ffffef5: gnuHash = val; break;
     }
   }
@@ -291,6 +306,16 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
     decodeAndroidPacked(name, mem.u8.subarray(base + androidRel, base + androidRel + androidRelSz), f.rela, ({ off, info, addend }) => {
       const low = Number(info & 0xffffffffn) >>> 0;
       applyOne(off, f.rela ? low : low & 0xff, f.rela ? Number(info >> 32n) : low >>> 8, addend);
+    });
+  }
+  if (!!relr !== !!relrSz || relrEnt && relrEnt !== f.ptr) throw new Error(`${name}: invalid RELR tags`);
+  if (relr) {
+    if (relr + relrSz > hi) throw new Error(`${name}: RELR table is out of bounds`);
+    decodeRelr(name, mem.u8.subarray(base + relr, base + relr + relrSz), f.ptr, (off) => {
+      if (off < lo || off + f.ptr > hi) throw new Error(`${name}: RELR target is out of bounds`);
+      const at = base + off;
+      if (f.ptr === 8) mem.st64(at, mem.ld64(at) + BigInt(base));
+      else mem.u32[at >>> 2] = (mem.u32[at >>> 2] + base) >>> 0;
     });
   }
   if (rel) apply(rel, relsz);

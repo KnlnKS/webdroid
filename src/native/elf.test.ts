@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decodeAndroidPacked } from "./elf";
+import { decodeAndroidPacked, decodeRelr } from "./elf";
 
 const sleb = (input: number | bigint): number[] => {
   let value = BigInt(input);
@@ -48,5 +48,21 @@ describe("Android packed relocations", () => {
     expect(() => decodeAndroidPacked("test", aps2(1, 0, 0, 0), true, () => {})).toThrow(/group size/);
     expect(() => decodeAndroidPacked("test", aps2(1, 0, 2, 0), true, () => {})).toThrow(/group size/);
     expect(() => decodeAndroidPacked("test", aps2(1, 0, 1, 8, 4, 23, 1), false, () => {})).toThrow(/addend/);
+  });
+});
+
+describe("RELR relocations", () => {
+  test("streams direct addresses and bitmap entries", () => {
+    const words = new BigUint64Array([0x1000n, 0b1011n, 0x1300n]), got: number[] = [];
+    decodeRelr("test", new Uint8Array(words.buffer), 8, (off) => got.push(off));
+    expect(got).toEqual([0x1000, 0x1008, 0x1018, 0x1300]);
+  });
+
+  test("decodes 32-bit words and rejects malformed tables", () => {
+    const words = new Uint32Array([0x2000, 0b111]), got: number[] = [];
+    decodeRelr("test", new Uint8Array(words.buffer), 4, (off) => got.push(off));
+    expect(got).toEqual([0x2000, 0x2004, 0x2008]);
+    expect(() => decodeRelr("test", Uint8Array.of(1), 8, () => {})).toThrow(/size/);
+    expect(() => decodeRelr("test", new Uint8Array(new BigUint64Array([3n]).buffer), 8, () => {})).toThrow(/precedes/);
   });
 });
