@@ -424,6 +424,57 @@ rt.register({
   });
 }
 
+class JRemoteCallbackList extends JObj {
+  callbacks: { binder: unknown; callback: unknown; cookie: unknown }[] = [];
+  broadcast: { binder: unknown; callback: unknown; cookie: unknown }[] | null = null;
+  killed = false;
+}
+rt.register({
+  name: "android/os/RemoteCallbackList", ctor: JRemoteCallbackList,
+  methods: {
+    "<init>()V": () => {},
+    "register(Landroid/os/IInterface;)Z": async function (this: JRemoteCallbackList, callback: unknown) {
+      return registerRemoteCallback(this, callback, null);
+    },
+    "register(Landroid/os/IInterface;Ljava/lang/Object;)Z": async function (this: JRemoteCallbackList, callback: unknown, cookie: unknown) {
+      return registerRemoteCallback(this, callback, cookie);
+    },
+    "unregister(Landroid/os/IInterface;)Z": async function (this: JRemoteCallbackList, callback: unknown) {
+      if (!callback) throw rt.mkThrowable("java/lang/NullPointerException", "callback must not be null");
+      const binder = await vcall(callback, "asBinder", "()Landroid/os/IBinder;");
+      const at = this.callbacks.findIndex((entry) => entry.binder === binder);
+      if (at < 0) return 0;
+      this.callbacks.splice(at, 1);
+      return 1;
+    },
+    "kill()V": function (this: JRemoteCallbackList) { this.callbacks.length = 0; this.killed = true; },
+    "beginBroadcast()I": function (this: JRemoteCallbackList) {
+      if (this.broadcast) throw rt.mkThrowable("java/lang/IllegalStateException", "beginBroadcast() called while already in a broadcast");
+      this.broadcast = this.callbacks.slice();
+      return this.broadcast.length;
+    },
+    "getBroadcastItem(I)Landroid/os/IInterface;": function (this: JRemoteCallbackList, index: number) { return this.broadcast?.[index]?.callback ?? null; },
+    "getBroadcastCookie(I)Ljava/lang/Object;": function (this: JRemoteCallbackList, index: number) { return this.broadcast?.[index]?.cookie ?? null; },
+    "finishBroadcast()V": function (this: JRemoteCallbackList) {
+      if (!this.broadcast) throw rt.mkThrowable("java/lang/IllegalStateException", "finishBroadcast() called outside of a broadcast");
+      this.broadcast = null;
+    },
+    "getRegisteredCallbackCount()I": function (this: JRemoteCallbackList) { return this.callbacks.length; },
+    "getRegisteredCallbackItem(I)Landroid/os/IInterface;": function (this: JRemoteCallbackList, index: number) { return this.callbacks[index]?.callback ?? null; },
+    "getRegisteredCallbackCookie(I)Ljava/lang/Object;": function (this: JRemoteCallbackList, index: number) { return this.callbacks[index]?.cookie ?? null; },
+    ...noops("onCallbackDied(Landroid/os/IInterface;)V", "onCallbackDied(Landroid/os/IInterface;Ljava/lang/Object;)V"),
+  },
+});
+async function registerRemoteCallback(list: JRemoteCallbackList, callback: unknown, cookie: unknown): Promise<number> {
+  if (!callback) throw rt.mkThrowable("java/lang/NullPointerException", "callback must not be null");
+  if (list.killed) return 0;
+  const binder = await vcall(callback, "asBinder", "()Landroid/os/IBinder;");
+  const at = list.callbacks.findIndex((entry) => entry.binder === binder);
+  const value = { binder, callback, cookie };
+  if (at < 0) list.callbacks.push(value); else list.callbacks[at] = value;
+  return 1;
+}
+
 class JBaseBundle extends JObj {
   map = new Map<string, unknown>();
   loader: unknown = null;
