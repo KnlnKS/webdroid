@@ -716,6 +716,51 @@ rt.register({
     "close()V": function (this: any) { return this.out ? vcallMaybe(this.out, "close", "()V") : undefined; },
   },
 });
+export async function skipStream(this: unknown, count: bigint): Promise<bigint> {
+  if (count <= 0n) return 0n;
+  const bytes = new Int8Array(Number(count > 2048n ? 2048n : count)); let remaining = count;
+  while (remaining > 0n) {
+    let n = await vcall(this, "read", "([BII)I", bytes, 0, Number(remaining > BigInt(bytes.length) ? BigInt(bytes.length) : remaining));
+    if (n < 0) break;
+    if (!n) { if (await vcall(this, "read", "()I") < 0) break; n = 1; }
+    remaining -= BigInt(n);
+  }
+  return count - remaining;
+}
+class JSequenceInputStream extends JInputStream {
+  enumeration: unknown = null; streams: unknown[] = []; current: unknown = null;
+  async advance(): Promise<void> {
+    if (this.current) await vcall(this.current, "close", "()V");
+    this.current = null;
+    if (this.enumeration ? await vcall(this.enumeration, "hasMoreElements", "()Z") : this.streams.length) {
+      this.current = this.enumeration ? await vcall(this.enumeration, "nextElement", "()Ljava/lang/Object;") : this.streams.shift();
+      if (!this.current) throw rt.mkThrowable("java/lang/NullPointerException", "stream");
+    }
+  }
+}
+rt.register({ name: "java/io/SequenceInputStream", ctor: JSequenceInputStream, sup: "java/io/InputStream", methods: {
+  "<init>(Ljava/io/InputStream;Ljava/io/InputStream;)V": async function (this: JSequenceInputStream, first: unknown, second: unknown) { this.streams = [first, second]; await this.advance(); },
+  "<init>(Ljava/util/Enumeration;)V": async function (this: JSequenceInputStream, enumeration: unknown) {
+    if (!enumeration) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    this.enumeration = enumeration; await this.advance();
+  },
+  "read()I": async function (this: JSequenceInputStream) {
+    while (this.current) { const value = await vcall(this.current, "read", "()I"); if (value >= 0) return value; await this.advance(); } return -1;
+  },
+  "read([BII)I": async function (this: JSequenceInputStream, out: Int8Array, offset: number, count: number) {
+    if (!out) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    if (offset < 0 || count < 0 || offset > out.length - count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+    if (!count) return 0;
+    while (this.current) { const n = await vcall(this.current, "read", "([BII)I", out, offset, count); if (n > 0) return n; await this.advance(); } return -1;
+  },
+  "available()I": function (this: JSequenceInputStream) { return this.current ? vcall(this.current, "available", "()I") : 0; },
+  "close()V": async function (this: JSequenceInputStream) { while (this.current) await this.advance(); },
+  "markSupported()Z": () => 0,
+  "mark(I)V": () => {},
+  "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+  "skip(J)J": skipStream,
+} });
+
 // every method forwards to the wrapped stream, as the JDK's does: a Java subclass's super.read()
 // reaches the stream it wrapped, whether that is one of ours or app code over a socket
 class JFilterInputStream extends JInputStream { in_: unknown = null; }
