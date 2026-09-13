@@ -1274,15 +1274,24 @@ mkEnumSet("java/nio/channels/FileChannel$MapMode", ["READ_ONLY", "READ_WRITE", "
 defineException("java/nio/channels/ClosedChannelException", "java/io/IOException");
 defineException("java/nio/channels/NonReadableChannelException", "java/lang/IllegalStateException");
 defineException("java/nio/channels/NonWritableChannelException", "java/lang/IllegalStateException");
+defineException("java/nio/file/FileSystemNotFoundException", "java/lang/RuntimeException");
+defineException("java/nio/file/NoSuchFileException", "java/io/IOException");
+defineException("java/nio/file/FileAlreadyExistsException", "java/io/IOException");
+defineException("java/nio/file/DirectoryNotEmptyException", "java/io/IOException");
 
 // ── java.nio.file minimal (datastore atomic-write path)
 class JNioPath extends JObj { p = ""; }
+class JNioFileSystem extends JObj {}
+class JNioFileSystemProvider extends JObj {}
+const nioFileSystem = new JNioFileSystem();
+const nioFileSystemProvider = new JNioFileSystemProvider();
 const mkPath = (p: string) => { const q = new JNioPath(); q.p = p; return q; };
 rt.register({
   name: "java/nio/file/Path", ctor: JNioPath, ifaces: ["java/lang/Comparable", "java/lang/Iterable"],
   methods: {
     "toString()Ljava/lang/String;": function (this: JNioPath) { return this.p; },
     "toFile()Ljava/io/File;": function (this: JNioPath) { return mkFile(this.p); },
+    "getFileSystem()Ljava/nio/file/FileSystem;": () => nioFileSystem,
     "getParent()Ljava/nio/file/Path;": function (this: JNioPath) {
       const i = this.p.lastIndexOf("/");
       return i <= 0 ? null : mkPath(this.p.slice(0, i));
@@ -1291,7 +1300,7 @@ rt.register({
     "getFileName()Ljava/nio/file/Path;": function (this: JNioPath) { return mkPath(this.p.split("/").pop() ?? ""); },
   },
 });
-rt.markers("java/nio/file/CopyOption");
+rt.markers("java/nio/file/CopyOption", "java/nio/file/OpenOption", "java/nio/file/attribute/FileAttribute", "java/nio/file/attribute/FileAttributeView");
 rt.register({
   name: "java/nio/file/Paths", ctor: class extends JObj {},
   methods: {
@@ -1299,11 +1308,82 @@ rt.register({
       mkPath(vfs.norm([first, ...(more ?? [])].join("/"))),
   },
 });
+rt.register({
+  name: "java/nio/file/FileSystem", ctor: JNioFileSystem, ifaces: ["java/io/Closeable"],
+  methods: {
+    "provider()Ljava/nio/file/spi/FileSystemProvider;": () => nioFileSystemProvider,
+    "isOpen()Z": () => 1,
+    "isReadOnly()Z": () => 0,
+    "getSeparator()Ljava/lang/String;": () => "/",
+    "getPath(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;": (first: string, more: string[] | null) => mkPath(vfs.norm([first, ...(more ?? [])].join("/"))),
+    "close()V": () => {},
+  },
+});
+const optionName = (option: unknown): string => option instanceof JObj && "ename" in option && typeof option.ename === "string" ? option.ename : "";
+const replaceExisting = (options: unknown[] | null) => (options ?? []).some((option) => optionName(option) === "REPLACE_EXISTING");
+function requireNioFile(path: JNioPath): void {
+  if (!vfs.exists(path.p)) throw rt.mkThrowable("java/nio/file/NoSuchFileException", path.p);
+}
+rt.register({
+  name: "java/nio/file/spi/FileSystemProvider", ctor: JNioFileSystemProvider,
+  methods: {
+    "<init>()V": function () {},
+    "getScheme()Ljava/lang/String;": () => "file",
+    "getFileSystem(Ljava/net/URI;)Ljava/nio/file/FileSystem;": async (uri: unknown) => {
+      const text = await vcall(uri, "toString", "()Ljava/lang/String;");
+      if (!/^file:/i.test(text)) throw rt.mkThrowable("java/nio/file/FileSystemNotFoundException", text);
+      return nioFileSystem;
+    },
+    "newInputStream(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/InputStream;": (path: JNioPath) =>
+      newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", path.p),
+    "newOutputStream(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;": (path: JNioPath, options: unknown[] | null) =>
+      newObj("java/io/FileOutputStream", "(Ljava/lang/String;Z)V", path.p, (options ?? []).some((option) => optionName(option) === "APPEND") ? 1 : 0),
+    "createDirectory(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)V": (path: JNioPath) => {
+      if (vfs.exists(path.p)) throw rt.mkThrowable("java/nio/file/FileAlreadyExistsException", path.p);
+      vfs.mkdir(path.p);
+    },
+    "delete(Ljava/nio/file/Path;)V": (path: JNioPath) => {
+      requireNioFile(path);
+      if (vfs.isDir(path.p)) {
+        if (vfs.list(path.p).length) throw rt.mkThrowable("java/nio/file/DirectoryNotEmptyException", path.p);
+        vfs.rmdir(path.p);
+      } else vfs.delete(path.p);
+    },
+    "deleteIfExists(Ljava/nio/file/Path;)Z": (path: JNioPath) => {
+      if (!vfs.exists(path.p)) return 0;
+      if (vfs.isDir(path.p)) {
+        if (vfs.list(path.p).length) throw rt.mkThrowable("java/nio/file/DirectoryNotEmptyException", path.p);
+        vfs.rmdir(path.p);
+      } else vfs.delete(path.p);
+      return 1;
+    },
+    "copy(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)V": async (source: JNioPath, target: JNioPath, options: unknown[] | null) => {
+      requireNioFile(source);
+      if (vfs.exists(target.p) && !replaceExisting(options)) throw rt.mkThrowable("java/nio/file/FileAlreadyExistsException", target.p);
+      const bytes = await vfs.readFile(source.p);
+      if (bytes) vfs.write(target.p, bytes.slice()); else vfs.mkdir(target.p);
+    },
+    "move(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)V": async function (this: JNioFileSystemProvider, source: JNioPath, target: JNioPath, options: unknown[] | null) {
+      await vcall(this, "copy", "(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)V", source, target, options);
+      await vcall(this, "delete", "(Ljava/nio/file/Path;)V", source);
+    },
+    "checkAccess(Ljava/nio/file/Path;[Ljava/nio/file/AccessMode;)V": (path: JNioPath) => requireNioFile(path),
+    "getFileAttributeView(Ljava/nio/file/Path;Ljava/lang/Class;[Ljava/nio/file/LinkOption;)Ljava/nio/file/attribute/FileAttributeView;": () => null,
+    "readAttributes(Ljava/nio/file/Path;Ljava/lang/Class;[Ljava/nio/file/LinkOption;)Ljava/nio/file/attribute/BasicFileAttributes;": (path: JNioPath) => {
+      requireNioFile(path);
+      return Object.assign(new JBasicAttrs(), { sz: vfs.stat(path.p)?.size ?? 0, dir: vfs.isDir(path.p) });
+    },
+  },
+});
 {
   const opt = (n: string) => { const o = new JObj(); (o as unknown as { ename: string }).ename = n; return o; };
   rt.register({
     name: "java/nio/file/StandardCopyOption", ctor: class extends JObj {}, sup: "java/lang/Enum",
     statics: { REPLACE_EXISTING: opt("REPLACE_EXISTING"), ATOMIC_MOVE: opt("ATOMIC_MOVE"), COPY_ATTRIBUTES: opt("COPY_ATTRIBUTES") },
+  });
+  rt.register({
+    name: "java/nio/file/StandardOpenOption", ctor: class extends JObj {}, sup: "java/lang/Enum", ifaces: ["java/nio/file/OpenOption"],
+    statics: { READ: opt("READ"), WRITE: opt("WRITE"), APPEND: opt("APPEND"), TRUNCATE_EXISTING: opt("TRUNCATE_EXISTING"), CREATE: opt("CREATE"), CREATE_NEW: opt("CREATE_NEW") },
   });
 }
 rt.register({
