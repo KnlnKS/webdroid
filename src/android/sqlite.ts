@@ -66,6 +66,7 @@ class JSQLiteDatabase extends JObj {
   readOnly = false;
   txDepth = 0;
   txOk = false;
+  txListener: unknown = null;
   saveTimer: ReturnType<typeof setTimeout> | null = null;
   scheduleSave() {
     if (this.readOnly || this.path === ":memory:") return;
@@ -148,7 +149,7 @@ export function dbPath(pkg: string, name: string): string {
   if (name.includes("/")) throw rt.mkThrowable("java/lang/IllegalArgumentException", `File ${name} contains a path separator`);
   return `/data/data/${pkg}/databases/${name}`;
 }
-async function openDatabase(path: string, flags = 0x10000000): Promise<JSQLiteDatabase> {
+export async function openDatabase(path: string, flags = 0x10000000): Promise<JSQLiteDatabase> {
   if (!path) throw rt.mkThrowable("java/lang/IllegalArgumentException", "path must not be empty");
   const readOnly = (flags & 1) !== 0;
   const sql = await ensureSql();
@@ -507,13 +508,31 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
   "beginTransactionNonExclusive()V": function (this: JSQLiteDatabase) {
     callSelf(dbMethods, "beginTransaction()V", this);
   },
+  "beginTransactionWithListener(Landroid/database/sqlite/SQLiteTransactionListener;)V": function (this: JSQLiteDatabase, listener: unknown) {
+    if (listener === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "transactionListener must not be null");
+    callSelf(dbMethods, "beginTransaction()V", this);
+    if (this.txDepth === 1) this.txListener = listener;
+    return vcall(listener, "onBegin", "()V");
+  },
+  "beginTransactionWithListenerNonExclusive(Landroid/database/sqlite/SQLiteTransactionListener;)V": function (this: JSQLiteDatabase, listener: unknown) {
+    return callSelf(dbMethods, "beginTransactionWithListener(Landroid/database/sqlite/SQLiteTransactionListener;)V", this, listener);
+  },
   "setTransactionSuccessful()V": function (this: JSQLiteDatabase) { this.txOk = true; },
   "endTransaction()V": function (this: JSQLiteDatabase) {
     this.txDepth--;
     if (this.txDepth <= 0) {
       this.txDepth = 0;
-      try { this.db!.exec(this.txOk ? "COMMIT" : "ROLLBACK"); } catch { /* */ }
-      this.scheduleSave();
+      const successful = this.txOk, listener = this.txListener;
+      this.txListener = null;
+      const finish = (commit: boolean) => {
+        try { this.db!.exec(commit ? "COMMIT" : "ROLLBACK"); } catch { /* */ }
+        this.scheduleSave();
+      };
+      if (!listener) { finish(successful); return; }
+      return Promise.resolve(vcall(listener, successful ? "onCommit" : "onRollback", "()V")).then(
+        () => finish(successful),
+        (error) => { finish(false); throw error; },
+      );
     }
   },
   "inTransaction()Z": function (this: JSQLiteDatabase) { return this.txDepth > 0 ? 1 : 0; },
@@ -743,6 +762,7 @@ async function openHelperDb(h: JSQLiteOpenHelper): Promise<JSQLiteDatabase> {
   return jdb;
 }
 rt.markers("android/database/DatabaseErrorHandler");
+rt.markers("android/database/sqlite/SQLiteTransactionListener");
 
 // ── androidx.sqlite bundled driver (libsqliteJni) over sql.js; handles are opaque bigints.
 interface BStmt {
