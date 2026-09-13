@@ -2,12 +2,41 @@
 // CharacterIterator, BreakIterator, Normalizer. Formatting is en-only and pattern-driven.
 
 import { rt, JObj, type NativeSpec } from "../runtime";
-import { vcall, vcallMaybe, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble } from "./jlang";
+import { vcall, vcallMaybe, vcallOn, curThread, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble } from "./jlang";
 import { strArray, jarray, utf8, slashName, dotName } from "../abi";
-import { mkIter } from "./jutil";
+import { mkIter, toJsArray } from "./jutil";
 import { JDate, JCalendar, localTz, MONTHS, DAYS, pad } from "./jtime";
 import { directionality } from "../bidi";
 import { defaultLocale, localeTag, type JLocale } from "./jvalues";
+
+class JListFormatter extends JObj {
+  formatter: Intl.ListFormat;
+  constructor(locale: JLocale = defaultLocale) {
+    super();
+    if (!locale) rt.npe();
+    this.formatter = new Intl.ListFormat(localeTag(locale));
+  }
+  async format(items: unknown[] | Promise<unknown[]>) {
+    const thread = curThread, strings: string[] = [];
+    for (const item of await items) {
+      if (item === null || item === undefined) rt.npe();
+      strings.push(typeof item === "string" ? item : String(await vcallOn(thread, item, "toString", "()Ljava/lang/String;")));
+    }
+    return this.formatter.format(strings);
+  }
+}
+rt.register({ name: "android/icu/text/ListFormatter", ctor: JListFormatter, methods: {
+  "static getInstance()Landroid/icu/text/ListFormatter;": () => new JListFormatter(),
+  "static getInstance(Ljava/util/Locale;)Landroid/icu/text/ListFormatter;": (locale: JLocale) => new JListFormatter(locale),
+  "format([Ljava/lang/Object;)Ljava/lang/String;": function (this: JListFormatter, items: unknown[] | null) {
+    if (!items) return rt.npe();
+    return this.format(items);
+  },
+  "format(Ljava/util/Collection;)Ljava/lang/String;": function (this: JListFormatter, items: unknown) {
+    if (!items) return rt.npe();
+    return this.format(toJsArray(items));
+  },
+} });
 
 rt.register({
   name: "java/text/Bidi", ctor: class extends JObj {},

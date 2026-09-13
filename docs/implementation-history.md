@@ -2330,3 +2330,12 @@ After AnimatorSet start callbacks made full-screen content visible, layout reach
 missing Math.log1p. Register the host's precision-preserving log1p implementation;
 focused checks cover tiny inputs, signed zero, infinity and the domain boundary.
 Typecheck passes. Fresh Maps layout verification follows.
+
+Ferry Building details invoke android.icu.text.ListFormatter.getInstance(Locale)
+and format(Collection). Implement default/Locale factories and collection/array
+formatting through Intl.ListFormat, preserving Java toString dispatch, caller thread
+and null failures. Android 15 ICU ListFormatter source specifies per-element toString
+and the AND/WIDE default. Focused tests cover empty/single lists, English punctuation,
+Spanish contextual conjunctions, German conjunctions, asynchronous objects and nulls.
+All three math/list tests pass (16 assertions); typecheck passes. App verification
+continues in the rebuilt Chrome session.
