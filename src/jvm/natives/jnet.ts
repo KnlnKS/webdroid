@@ -16,7 +16,7 @@ import { vfs, type JInputStream, type JOutputStream } from "./jio";
 import { Relay, syntheticAddress, syntheticHost, nameExists, ipv4Text, type Ipv4 } from "../../shell/relay";
 
 rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager", "javax/net/ssl/KeyManager",
-  "javax/net/ssl/SSLSession", "java/nio/channels/ReadableByteChannel", "java/nio/channels/WritableByteChannel",
+  "javax/net/ssl/SSLSession", "javax/net/ssl/SSLContextSpi", "java/nio/channels/ReadableByteChannel", "java/nio/channels/WritableByteChannel",
   "java/nio/channels/ByteChannel", "java/nio/channels/Channel", "java/net/ResponseCache");
 
 class JSocketFactory extends JObj {}
@@ -54,6 +54,23 @@ rt.register({
         return s;
       },
     "createSocket(Ljava/lang/String;I)Ljava/net/Socket;": (h: string, p: number) => dial("javax/net/ssl/SSLSocket", h, p),
+    "getDefaultCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
+    "getSupportedCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
+  },
+});
+
+class JServerSocketFactory extends JObj {}
+const serverSocketFactory = new JServerSocketFactory();
+rt.register({
+  name: "javax/net/ServerSocketFactory", ctor: JServerSocketFactory,
+  methods: { "static getDefault()Ljavax/net/ServerSocketFactory;": () => serverSocketFactory },
+});
+class JSSLServerSocketFactory extends JServerSocketFactory {}
+const sslServerSocketFactory = new JSSLServerSocketFactory();
+rt.register({
+  name: "javax/net/ssl/SSLServerSocketFactory", ctor: JSSLServerSocketFactory, sup: "javax/net/ServerSocketFactory",
+  methods: {
+    "static getDefault()Ljavax/net/ServerSocketFactory;": () => sslServerSocketFactory,
     "getDefaultCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
     "getSupportedCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
   },

@@ -3,6 +3,7 @@ import { rt, JObj } from "../runtime";
 import { vcall, defineException } from "./jlang";
 import { jarray, concat, u8 } from "../abi";
 import { JRandom, randomSeed } from "./jrandom";
+import { JMap } from "./jutil";
 
 const SHA256_K = new Uint32Array([0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -194,16 +195,21 @@ rt.register({
 // reached through Cipher.getInstance with no provider, so a Provider here carries no service
 // of its own. The list is still the platform's, in the platform's order: an empty one is not a
 // state any device is in, and callers index it (`getProviders()[0].getName()`) unguarded.
-class JProvider extends JObj { pname = ""; }
+class JProvider extends JMap { pname = ""; version = 0; info = ""; }
 rt.register({
-  name: "java/security/Provider", ctor: JProvider,
+  name: "java/security/Provider", ctor: JProvider, sup: "java/util/Properties",
   methods: {
+    "<init>(Ljava/lang/String;DLjava/lang/String;)V": function (this: JProvider, name: string, version: number, info: string) { this.pname = name; this.version = version; this.info = info; },
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JProvider, name: string, version: string, info: string) { this.pname = name; this.version = Number(version); this.info = info; },
     "getName()Ljava/lang/String;": function (this: JProvider) { return this.pname; },
+    "getVersion()D": function (this: JProvider) { return this.version; },
+    "getInfo()Ljava/lang/String;": function (this: JProvider) { return this.info; },
     "toString()Ljava/lang/String;": function (this: JProvider) { return this.pname; },
   },
 });
 const providers: JProvider[] = ["AndroidNSSP", "AndroidOpenSSL", "CertPathProvider",
   "AndroidKeyStoreBCWorkaround", "BC", "HarmonyJSSE", "AndroidKeyStore"].map((pname) => Object.assign(new JProvider(), { pname }));
+const securityProperties = new Map<string, string>();
 rt.register({
   name: "java/security/Security", ctor: class extends JObj {},
   methods: {
@@ -212,7 +218,11 @@ rt.register({
     "static addProvider(Ljava/security/Provider;)I": (p: JProvider) => { providers.push(p); return providers.length; },
     "static insertProviderAt(Ljava/security/Provider;I)I": (p: JProvider, i: number) => { providers.splice(i - 1, 0, p); return i; },
     "static removeProvider(Ljava/lang/String;)V": (n: string) => { const i = providers.findIndex((p) => p.pname === n); if (i >= 0) providers.splice(i, 1); },
-    "static getProperty(Ljava/lang/String;)Ljava/lang/String;": () => null,
+    "static getProperty(Ljava/lang/String;)Ljava/lang/String;": (key: string) => securityProperties.get(key) ?? null,
+    "static setProperty(Ljava/lang/String;Ljava/lang/String;)V": (key: string, value: string) => {
+      if (key == null || value == null) rt.npe();
+      securityProperties.set(key, value);
+    },
   },
 });
 

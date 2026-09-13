@@ -81,6 +81,18 @@ test("Process.isApplicationUid checks the app id across users", () => {
   expect(scall("android/os/Process", "isApplicationUid", "(I)Z", 90000)).toBe(0);
 });
 
+test("security providers retain their constructor metadata", async () => {
+  const provider = await newObj("java/security/Provider", "(Ljava/lang/String;DLjava/lang/String;)V", "Test", 1.5, "test provider");
+  expect(await vcall(provider, "getName", "()Ljava/lang/String;")).toBe("Test");
+  expect(await vcall(provider, "getVersion", "()D")).toBe(1.5);
+  expect(await vcall(provider, "getInfo", "()Ljava/lang/String;")).toBe("test provider");
+  expect(await vcall(provider, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "Cipher.Test", "Implementation")).toBeNull();
+  expect(await vcall(provider, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "Cipher.Test")).toBe("Implementation");
+  expect(scall("javax/net/ssl/SSLServerSocketFactory", "getDefault", "()Ljavax/net/ServerSocketFactory;")).not.toBeNull();
+  scall("java/security/Security", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)V", "test.key", "value");
+  expect(scall("java/security/Security", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", "test.key")).toBe("value");
+});
+
 test("Resources(AssetManager, DisplayMetrics, Configuration) scopes its own configuration and metrics", async () => {
   const host = new Resources(null, {});
   const assets = rt.make("android/content/res/AssetManager") as JAssetManager;
