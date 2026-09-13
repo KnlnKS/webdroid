@@ -933,6 +933,18 @@ function parseIntJ(s: string, radix = 10): number {
   if (Number.isNaN(v) || v > 2147483647 || v < -2147483648) nfe(s);
   return v | 0;
 }
+function decodeIntJ(s: string): number {
+  if (typeof s !== "string" || !s.length) nfe(s);
+  let sign = 1, start = 0;
+  if (s[0] === "-" || s[0] === "+") { sign = s[0] === "-" ? -1 : 1; start = 1; }
+  let radix = 10;
+  if (s.startsWith("0x", start) || s.startsWith("0X", start)) { radix = 16; start += 2; }
+  else if (s[start] === "#") { radix = 16; start++; }
+  else if (s[start] === "0" && start + 1 < s.length) { radix = 8; start++; }
+  const digits = s.slice(start);
+  if (!digits || digits[0] === "+" || digits[0] === "-") nfe(s);
+  return parseIntJ((sign < 0 ? "-" : "") + digits, radix);
+}
 const numCommon = (kind: "I" | "J" | "F" | "D" | "B" | "S", Ctor: new () => { v: number | bigint }) => ({
   [`<init>(${kind})V`]: function (this: { v: number | bigint }, v: number | bigint) { this.v = v; },
   "equals(Ljava/lang/Object;)Z": function (this: { v: number | bigint }, o: unknown) {
@@ -965,6 +977,7 @@ rt.register({
     "static getInteger(Ljava/lang/String;Ljava/lang/Integer;)Ljava/lang/Integer;": (prop: string, def: JInt) => { const v = sysLong(prop); return v === null ? def : boxInt(Number(v)); },
     "static lowestOneBit(I)I": (v: number) => v & -v,
     "static valueOf(I)Ljava/lang/Integer;": boxInt,
+    "static decode(Ljava/lang/String;)Ljava/lang/Integer;": (s: string) => boxInt(decodeIntJ(s)),
     "static valueOf(Ljava/lang/String;)Ljava/lang/Integer;": (s: string) => boxInt(parseIntJ(s)),
     "static parseInt(Ljava/lang/String;)I": (s: string) => parseIntJ(s),
     "static parseInt(Ljava/lang/String;I)I": (s: string, r: number) => parseIntJ(s, r),
