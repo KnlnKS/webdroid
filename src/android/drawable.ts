@@ -6,6 +6,7 @@ import { mangleMethod, jmethod, intBitsToFloat } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf } from "./graphics";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
+import { uptimeMillis } from "./os";
 import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, normRV } from "./res";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 
@@ -647,6 +648,71 @@ const decel = (t: number) => 1 - (1 - t) * (1 - t);
  * Every `@mipmap/ic_launcher` on a modern app is one, and without it an app's own icon — the
  * one it puts in its about screen and its first-run dialog — is a blank square.
  */
+class JTransitionDrawable extends JLayerDrawable {
+  transition = 0;
+  crossFade = false;
+  reverse = false;
+  startTime = 0;
+  duration = 0;
+  originalDuration = 0;
+  from = 0;
+  to = 0;
+  mix = 0;
+  drawTransition(cv: JCanvas): unknown {
+    let done = true;
+    if (this.transition === 1) {
+      this.startTime = uptimeMillis(); this.transition = 2; done = false;
+    } else if (this.transition === 2) {
+      const fraction = Math.min((uptimeMillis() - this.startTime) / this.duration, 1);
+      done = fraction >= 1;
+      this.mix = (this.from + (this.to - this.from) * fraction) | 0;
+    }
+    this.layout();
+    const first = this.layers[0].d, second = this.layers[1].d, alpha = this.mix;
+    if (done) {
+      const result = !this.crossFade || alpha === 0 ? drawChild(first, cv) : undefined;
+      const next = () => alpha === 255 ? drawChild(second, cv) : undefined;
+      return result instanceof Promise ? result.then(next) : next();
+    }
+    return (async () => {
+      if (this.crossFade) await vcall(first, "setAlpha", "(I)V", 255 - alpha);
+      await drawChild(first, cv);
+      if (this.crossFade) await vcall(first, "setAlpha", "(I)V", 255);
+      if (alpha > 0) {
+        await vcall(second, "setAlpha", "(I)V", alpha);
+        await drawChild(second, cv);
+        await vcall(second, "setAlpha", "(I)V", 255);
+      }
+      invalidateSelf.call(this);
+    })();
+  }
+}
+rt.register({ name: "android/graphics/drawable/TransitionDrawable", ctor: JTransitionDrawable, sup: "android/graphics/drawable/LayerDrawable", methods: {
+  "<init>([Landroid/graphics/drawable/Drawable;)V": function (this: JTransitionDrawable, ds: JDrawable[]) {
+    for (const d of ds) this.pushLayer({ d, insets: [0, 0, 0, 0] });
+  },
+  "startTransition(I)V": function (this: JTransitionDrawable, duration: number) {
+    this.from = this.mix = 0; this.to = 255; this.reverse = false;
+    this.duration = this.originalDuration = duration; this.transition = 1;
+    invalidateSelf.call(this);
+  },
+  "resetTransition()V": function (this: JTransitionDrawable) { this.mix = this.transition = 0; invalidateSelf.call(this); },
+  "reverseTransition(I)V": function (this: JTransitionDrawable, duration: number) {
+    const elapsed = uptimeMillis() - this.startTime;
+    if (elapsed > this.duration) {
+      this.reverse = this.to !== 0; this.from = this.mix = this.reverse ? 255 : 0; this.to = 255 - this.from;
+      this.duration = this.originalDuration = duration;
+      this.transition = 1; invalidateSelf.call(this);
+    } else {
+      this.reverse = !this.reverse; this.from = this.mix; this.to = this.reverse ? 0 : 255;
+      this.duration = Math.trunc(this.reverse ? elapsed : this.originalDuration - elapsed); this.transition = 1;
+    }
+  },
+  "setCrossFadeEnabled(Z)V": function (this: JTransitionDrawable, enabled: number) { this.crossFade = !!enabled; },
+  "isCrossFadeEnabled()Z": function (this: JTransitionDrawable) { return +this.crossFade; },
+  "draw(Landroid/graphics/Canvas;)V": function (this: JTransitionDrawable, cv: JCanvas) { return this.drawTransition(cv); },
+} });
+
 class JAdaptiveIconDrawable extends JLayerDrawable {
   /** AOSP getFullBounds: each layer is the viewport grown by 25% on every side */
   layout() {
