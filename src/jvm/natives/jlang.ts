@@ -640,7 +640,7 @@ sm("regionMatches(ZILjava/lang/String;II)Z", function (ignore: number, toff: num
 });
 sm("contentEquals(Ljava/lang/CharSequence;)Z", function (o: unknown) { return (this as string) === jToString(o) ? 1 : 0; });
 sm("codePointCount(II)I", function (a: number, b: number) { return b - a; });
-sm("offsetByCodePoints(II)I", function (i: number, n: number) { return i + n; });
+sm("offsetByCodePoints(II)I", function (i: number, n: number) { return offsetCodePoints(String(this), i, n); });
 sm("chars()Ljava/util/stream/IntStream;", function () { throw rt.unimplemented("String.chars"); });
 sm("getClass()Ljava/lang/Class;", function () { return rt.classFor("java/lang/String"); });
 sm("matches(Ljava/lang/String;)Z", function (p: string) { return javaMatches(p, this as string); });
@@ -1150,12 +1150,38 @@ rt.register({
     "static logicalXor(ZZ)Z": (a: number, b: number) => ((a ? 1 : 0) ^ (b ? 1 : 0)),
   },
 });
+function offsetCodePoints(text: string, index: number, offset: number): number {
+  if (index < 0 || index > text.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(index));
+  while (offset > 0 && index < text.length) {
+    const c = text.charCodeAt(index++);
+    if (c >= 0xd800 && c <= 0xdbff && index < text.length) {
+      const next = text.charCodeAt(index);
+      if (next >= 0xdc00 && next <= 0xdfff) index++;
+    }
+    offset--;
+  }
+  while (offset < 0 && index > 0) {
+    const c = text.charCodeAt(--index);
+    if (c >= 0xdc00 && c <= 0xdfff && index > 0) {
+      const previous = text.charCodeAt(index - 1);
+      if (previous >= 0xd800 && previous <= 0xdbff) index--;
+    }
+    offset++;
+  }
+  if (offset !== 0) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(offset));
+  return index;
+}
 const isISOControl = (c: number) => +((c >= 0 && c <= 0x1f) || (c >= 0x7f && c <= 0x9f));
 rt.register({
   name: "java/lang/Character", ctor: JChar,
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   statics: { MAX_VALUE: 0xffff, MIN_VALUE: 0, get TYPE() { return rt.classFor("char"); } },
   methods: {
+    "static offsetByCodePoints(Ljava/lang/CharSequence;II)I": (cs: unknown, index: number, offset: number) => {
+      if (cs == null) return rt.npe();
+      if (typeof cs === "string") return offsetCodePoints(cs, index, offset);
+      return vcall(cs, "toString", "()Ljava/lang/String;").then(text => offsetCodePoints(text, index, offset));
+    },
     "static charCount(I)I": (cp: number) => (cp >= 0x10000 ? 2 : 1),
     "static getDirectionality(C)B": directionality,
     "static getDirectionality(I)B": directionality,
