@@ -1797,6 +1797,7 @@ const vgMethods: NativeSpec["methods"] = {
     this.hierarchyChangeL = l;
   },
   "setClipChildren(Z)V": function (this: JViewGroup, v: number) { this.clipChildren = !!v; },
+  "getClipChildren()Z": function (this: JViewGroup) { return this.clipChildren ? 1 : 0; },
   "setClipToPadding(Z)V": function (this: JViewGroup, v: number) { this.clipToPadding = !!v; },
   "getClipToPadding()Z": function (this: JViewGroup) { return this.clipToPadding ? 1 : 0; },
   "getDescendantFocusability()I": () => 0x20000,

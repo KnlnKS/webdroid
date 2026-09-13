@@ -40,6 +40,13 @@ test("ViewGroup dispatches hierarchy callbacks after updating the parent link", 
   expect(events).toEqual(["added", "listener-added", "removed", "listener-removed"]);
 });
 
+test("ViewGroup retains its child clipping state", async () => {
+  const group = new JViewGroup();
+  expect(await vcall(group, "getClipChildren", "()Z")).toBe(1);
+  await vcall(group, "setClipChildren", "(Z)V", 0);
+  expect(await vcall(group, "getClipChildren", "()Z")).toBe(0);
+});
+
 test("a ViewGroup's OnTouchListener sees only touches no child took", async () => {
   const group = new JViewGroup(); group.right = 200; group.bottom = 200;
   const child = new JView(); child.right = 100; child.bottom = 100; child.clickable = true;
