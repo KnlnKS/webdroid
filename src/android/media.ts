@@ -187,11 +187,27 @@ rt.register({
   },
 });
 class JAudioAttributesBuilder extends JObj { attrs = new JAudioAttributes(); }
+function setLegacyStreamType(this: JAudioAttributesBuilder, stream: number) {
+  switch (stream) {
+    case 0: case 6: this.attrs.contentType = 1; this.attrs.usage = 2; break;
+    case 1: this.attrs.contentType = 4; this.attrs.usage = 13; break;
+    case 2: this.attrs.contentType = 4; this.attrs.usage = 6; break;
+    case 3: this.attrs.contentType = 2; this.attrs.usage = 1; break;
+    case 4: this.attrs.contentType = 4; this.attrs.usage = 4; break;
+    case 5: this.attrs.contentType = 4; this.attrs.usage = 5; break;
+    case 7: this.attrs.contentType = 4; this.attrs.usage = 13; this.attrs.flags |= 1; break;
+    case 8: this.attrs.contentType = 4; this.attrs.usage = 3; break;
+    case 9: this.attrs.contentType = 1; this.attrs.usage = 11; break;
+    default: throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid stream type " + stream);
+  }
+  return this;
+}
 rt.register({
   name: "android/media/AudioAttributes$Builder", ctor: JAudioAttributesBuilder,
   methods: {
     "<init>()V": function () {},
     "setFlags(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, flags: number) { this.attrs.flags |= flags & 0x1d1; return this; },
+    "setLegacyStreamType(I)Landroid/media/AudioAttributes$Builder;": setLegacyStreamType,
     "setAllowedCapturePolicy(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, policy: number) {
       if (policy < 1 || policy > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid capture policy " + policy);
       this.attrs.flags = (this.attrs.flags & ~0x1400) | (policy === 3 ? 0x1400 : policy === 2 ? 0x400 : 0); return this;
