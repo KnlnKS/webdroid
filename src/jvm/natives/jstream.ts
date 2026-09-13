@@ -89,11 +89,20 @@ rt.register({
   name: "java/util/stream/Collectors", ctor: class extends JObj {},
   methods: {
     "static toList()Ljava/util/stream/Collector;": () => mkCollector(() => newArrayList([]), (box, x) => { (box as JList).a.push(x); }),
+    "static toSet()Ljava/util/stream/Collector;": () => mkCollector(
+      () => rt.make("java/util/HashSet"),
+      (box, x) => vcall(box, "add", "(Ljava/lang/Object;)Z", x)),
     "static toCollection(Ljava/util/function/Supplier;)Ljava/util/stream/Collector;": (sup: unknown) => mkCollector(
       () => vcall(sup, "get", "()Ljava/lang/Object;"),
       (box, x) => vcall(box, "add", "(Ljava/lang/Object;)Z", x)),
     "static collectingAndThen(Ljava/util/stream/Collector;Ljava/util/function/Function;)Ljava/util/stream/Collector;":
       (c: JCollector, fin: unknown) => mkCollector(c.make, c.add, async (box) => apply1(fin, c.fin ? await c.fin(box) : box)),
+    "static joining(Ljava/lang/CharSequence;)Ljava/util/stream/Collector;": (delimiter: unknown) => mkCollector(
+      () => [] as string[], (box, x) => { (box as string[]).push(String(x)); }, (box) => (box as string[]).join(String(delimiter))),
+    "static joining(Ljava/lang/CharSequence;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/util/stream/Collector;":
+      (delimiter: unknown, prefix: unknown, suffix: unknown) => mkCollector(
+        () => [] as string[], (box, x) => { (box as string[]).push(String(x)); },
+        (box) => String(prefix) + (box as string[]).join(String(delimiter)) + String(suffix)),
   },
 });
 rt.register({

@@ -591,7 +591,7 @@ async function slowFind(list: Ent[], k: unknown): Promise<number> {
   }
   return -1;
 }
-function mapMethods(): NativeSpec["methods"] {
+function mapMethods(): Methods {
   return {
     "<init>()V": function () {},
     "<init>(I)V": function () {},
@@ -717,6 +717,68 @@ async function copyMapInto(src: unknown, dst: JMap) {
     await vcall(dst, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
       await vcall(e, "getKey", "()Ljava/lang/Object;"), await vcall(e, "getValue", "()Ljava/lang/Object;"));
   }
+}
+
+class JImmutableMap extends JMap {}
+async function addImmutableMapping(map: JImmutableMap, key: unknown, value: unknown): Promise<void> {
+  if (key === null || value === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  const bucket = mapKey(key);
+  if (bucket !== SLOW) {
+    if (map.m.has(bucket)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate key: " + String(key));
+    map.m.set(bucket, { k: key, v: value });
+  } else {
+    if (await slowFind(map.slow, key) >= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate key: " + String(key));
+    map.slow.push({ k: key, v: value });
+  }
+}
+async function immutableMap(entries: readonly (readonly [unknown, unknown])[]): Promise<JImmutableMap> {
+  const map = new JImmutableMap();
+  for (const [key, value] of entries) await addImmutableMapping(map, key, value);
+  return map;
+}
+const immutableMapMethods = mapMethods();
+for (const method of [
+  "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "remove(Ljava/lang/Object;)Ljava/lang/Object;",
+  "remove(Ljava/lang/Object;Ljava/lang/Object;)Z", "clear()V", "putAll(Ljava/util/Map;)V",
+  "replaceAll(Ljava/util/function/BiFunction;)V", "putIfAbsent(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+  "replace(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "replace(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z",
+  "compute(Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;", "computeIfAbsent(Ljava/lang/Object;Ljava/util/function/Function;)Ljava/lang/Object;",
+  "computeIfPresent(Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;", "merge(Ljava/lang/Object;Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;",
+]) immutableMapMethods[method] = () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
+rt.register({
+  name: "webdroid/ImmutableMap", ctor: JImmutableMap, sup: "java/util/AbstractMap", typeVars: "K,V",
+  ifaces: ["java/util/Map", "java/io/Serializable"], methods: immutableMapMethods,
+});
+
+const mapFactories: Methods = {
+  "static copyOf(Ljava/util/Map;)Ljava/util/Map;": async (source: unknown) => {
+    if (source === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    const entries: [unknown, unknown][] = [];
+    if (source instanceof JMap) for (const entry of allEnts(source)) entries.push([entry.k, entry.v]);
+    else {
+      const entrySet = await vcall(source, "entrySet", "()Ljava/util/Set;");
+      for (const entry of await toJsArray(entrySet)) entries.push([
+        await vcall(entry, "getKey", "()Ljava/lang/Object;"), await vcall(entry, "getValue", "()Ljava/lang/Object;"),
+      ]);
+    }
+    return immutableMap(entries);
+  },
+  "static ofEntries([Ljava/util/Map$Entry;)Ljava/util/Map;": async (source: unknown[]) => {
+    if (source === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    const entries: [unknown, unknown][] = [];
+    for (const entry of source) entries.push([
+      await vcall(entry, "getKey", "()Ljava/lang/Object;"), await vcall(entry, "getValue", "()Ljava/lang/Object;"),
+    ]);
+    return immutableMap(entries);
+  },
+};
+for (let count = 0; count <= 10; count++) {
+  const descriptor = `(${"Ljava/lang/Object;".repeat(count * 2)})Ljava/util/Map;`;
+  mapFactories[`static of${descriptor}`] = (...values: unknown[]) => {
+    const entries: [unknown, unknown][] = [];
+    for (let i = 0; i < values.length; i += 2) entries.push([values[i], values[i + 1]]);
+    return immutableMap(entries);
+  };
 }
 
 /** live-ish view over a JMap for keySet/values/entrySet (iteration + size + contains + remove) */
@@ -864,7 +926,7 @@ function setItems(s: JSet): unknown[] {
   for (const e of s.slow) out.push(e.k);
   return out;
 }
-function setMethods(): NativeSpec["methods"] {
+function setMethods(): Methods {
   return {
     "<init>()V": function () {},
     "<init>(Ljava/util/Comparator;)V": function () {},
@@ -956,6 +1018,37 @@ function addToSet(s: JSet, v: unknown): number | Promise<number> {
   return slowFind(s.slow, v).then((i) => (i >= 0 ? 0 : (s.slow.push({ k: v, v }), 1)));
 }
 rt.register({ name: "webdroid/BaseSet", ctor: JSet, typeVars: "E", ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"], methods: setMethods() });
+
+class JImmutableSet extends JSet {}
+async function immutableSet(items: unknown[]): Promise<JImmutableSet> {
+  const result = new JImmutableSet();
+  for (const item of items) {
+    if (item === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    if (!(await addToSet(result, item))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate element: " + String(item));
+  }
+  return result;
+}
+const immutableSetMethods = setMethods();
+for (const method of ["add(Ljava/lang/Object;)Z", "remove(Ljava/lang/Object;)Z", "clear()V", "addAll(Ljava/util/Collection;)Z", "removeAll(Ljava/util/Collection;)Z", "removeIf(Ljava/util/function/Predicate;)Z"])
+  immutableSetMethods[method] = () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
+immutableSetMethods["iterator()Ljava/util/Iterator;"] = function (this: JImmutableSet) {
+  const iterator = mkIter(setItems(this));
+  iterator.readOnly = true;
+  return iterator;
+};
+rt.register({
+  name: "webdroid/ImmutableSet", ctor: JImmutableSet, sup: "java/util/AbstractSet", typeVars: "E",
+  ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"], methods: immutableSetMethods,
+});
+
+const setFactories: Methods = {
+  "static copyOf(Ljava/util/Collection;)Ljava/util/Set;": async (collection: unknown) => immutableSet(await toJsArray(collection)),
+  "static of([Ljava/lang/Object;)Ljava/util/Set;": (items: unknown[]) => immutableSet(items),
+};
+for (let count = 0; count <= 10; count++) {
+  const descriptor = `(${"Ljava/lang/Object;".repeat(count)})Ljava/util/Set;`;
+  setFactories[`static of${descriptor}`] = (...items: unknown[]) => immutableSet(items);
+}
 for (const n of ["java/util/HashSet", "java/util/LinkedHashSet",
   "java/util/concurrent/CopyOnWriteArraySet", "java/util/EnumSet", "java/util/concurrent/ConcurrentHashMap$KeySetView"]) {
   rt.register({
@@ -1787,6 +1880,16 @@ const mapDefaults: Methods = {
 const collDefaults: Methods = {
   "removeIf(Ljava/util/function/Predicate;)Z": absCollection["removeIf(Ljava/util/function/Predicate;)Z"],
   "toArray()[Ljava/lang/Object;": absCollection["toArray()[Ljava/lang/Object;"],
+  "stream()Ljava/util/stream/Stream;": async function (this: JObj) {
+    const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
+    stream.a = await toJsArray(this);
+    return stream;
+  },
+  "parallelStream()Ljava/util/stream/Stream;": async function (this: JObj) {
+    const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
+    stream.a = await toJsArray(this);
+    return stream;
+  },
 };
 const listDefaults: Methods = {
   "sort(Ljava/util/Comparator;)V": async function (this: JObj, cmp: unknown) {
@@ -1801,7 +1904,7 @@ const listDefaults: Methods = {
 };
 rt.register({ name: "java/util/Collection", ctor: class extends JObj {}, ifaces: ["java/lang/Iterable"], typeVars: "E", methods: collDefaults });
 rt.register({ name: "java/util/List", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], typeVars: "E", methods: listDefaults });
-rt.register({ name: "java/util/Set", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], typeVars: "E" });
+rt.register({ name: "java/util/Set", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], typeVars: "E", methods: setFactories });
 rt.register({ name: "java/util/Queue", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], typeVars: "E" });
 rt.register({ name: "java/util/Deque", ctor: class extends JObj {}, ifaces: ["java/util/Queue"], typeVars: "E" });
 rt.register({ name: "java/util/SortedSet", ctor: class extends JObj {}, ifaces: ["java/util/Set"], typeVars: "E" });
@@ -1810,7 +1913,7 @@ rt.register({ name: "java/util/SortedMap", ctor: class extends JObj {}, ifaces: 
 rt.register({ name: "java/util/NavigableMap", ctor: class extends JObj {}, ifaces: ["java/util/SortedMap"], typeVars: "K,V" });
 rt.register({ name: "java/util/concurrent/ConcurrentNavigableMap", ctor: class extends JObj {}, ifaces: ["java/util/NavigableMap", "java/util/concurrent/ConcurrentMap"], typeVars: "K,V" });
 rt.register({ name: "java/util/concurrent/ConcurrentMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"], typeVars: "K,V" });
-rt.register({ name: "java/util/Map", ctor: class extends JObj {}, typeVars: "K,V", methods: mapDefaults });
+rt.register({ name: "java/util/Map", ctor: class extends JObj {}, typeVars: "K,V", methods: { ...mapDefaults, ...mapFactories } });
 rt.register({
   name: "java/util/Iterator", ctor: class extends JObj {},
   methods: {
@@ -2235,4 +2338,3 @@ rt.register({
     },
   },
 });
-
