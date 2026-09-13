@@ -21,6 +21,7 @@ export const youtube: Flow = {
     { id: "search-go", label: "Search results", action: { type: "tapAt", ...point(576, 288) }, settleDelayMs: 15000 },
     { id: "results-swipe", label: "Reveal the first film result", action: { type: "swipe", from: pair(540, 1600), to: pair(540, 600), ms: 400, untilText: "Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film", maxSwipes: 4 }, settleDelayMs: 3000 },
     { id: "video-open", label: "Open Big Buck Bunny", action: { type: "tapText", text: "Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film" }, settleDelayMs: 15000, animated: true },
+    { id: "show-controls", label: "Show player controls", action: { type: "tapAt", ...point(540, 360) }, settleDelayMs: 1000 },
     { id: "pause", label: "Pause playback", action: { type: "tapText", text: "Pause video" }, settleDelayMs: 2000 },
     { id: "resume", label: "Resume playback", action: { type: "tapText", text: "Play video" }, settleDelayMs: 3000, animated: true },
     { id: "fullscreen", label: "Enter fullscreen", action: { type: "tapText", text: "Enter fullscreen" }, settleDelayMs: 3000, animated: true },
