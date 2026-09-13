@@ -90,6 +90,18 @@ test("ShortBuffer bulk get honours byte order, bounds and position", async () =>
   await expect(vcall(buffer, "get", "([SII)Ljava/nio/ShortBuffer;", out, 0, 2)).rejects.toMatchObject({});
 });
 
+test("ShortBuffer bulk put honours offsets, bounds and position", async () => {
+  const buffer = await scall("java/nio/ShortBuffer", "allocate", "(I)Ljava/nio/ShortBuffer;", 3);
+  const input = Int16Array.from([9, 0x1234, -2, 8]);
+  expect(await vcall(buffer, "put", "([SII)Ljava/nio/ShortBuffer;", input, 1, 2)).toBe(buffer);
+  expect(await vcall(buffer, "position", "()I")).toBe(2);
+  await vcall(buffer, "flip", "()Ljava/nio/Buffer;");
+  const out = new Int16Array(2);
+  await vcall(buffer, "get", "([S)Ljava/nio/ShortBuffer;", out);
+  expect([...out]).toEqual([0x1234, -2]);
+  await expect(vcall(buffer, "put", "([SII)Ljava/nio/ShortBuffer;", input, 3, 2)).rejects.toMatchObject({});
+});
+
 test("the dropbox service exists and has every tag disabled", async () => {
   const dropbox = rt.make("android/os/DropBoxManager");
   expect(await vcall(dropbox, "isTagEnabled", "(Ljava/lang/String;)Z", "crash")).toBe(0);

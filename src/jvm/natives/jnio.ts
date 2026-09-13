@@ -336,11 +336,8 @@ rt.register({
     "put(S)Ljava/nio/ShortBuffer;": function (this: JShortBuffer, v: number) { this.clampPut(1); this.dv.setInt16(this.pos++ << 1, v, this.little); return this; },
     "get()S": function (this: JShortBuffer) { this.clampGet(1); return this.dv.getInt16(this.pos++ << 1, this.little); },
     "get(I)S": function (this: JShortBuffer, i: number) { return this.dv.getInt16(i << 1, this.little); },
-    "put([S)Ljava/nio/ShortBuffer;": function (this: JShortBuffer, arr: Int16Array) {
-      this.clampPut(arr.length);
-      for (let i = 0; i < arr.length; i++) this.dv.setInt16((this.pos + i) << 1, arr[i], this.little);
-      this.pos += arr.length; return this;
-    },
+    "put([S)Ljava/nio/ShortBuffer;": function (this: JShortBuffer, arr: Int16Array) { return putShorts(this, arr, 0, arr.length); },
+    "put([SII)Ljava/nio/ShortBuffer;": function (this: JShortBuffer, arr: Int16Array, off: number, len: number) { return putShorts(this, arr, off, len); },
     "get([S)Ljava/nio/ShortBuffer;": function (this: JShortBuffer, arr: Int16Array) {
       return getShorts(this, arr, 0, arr.length);
     },
@@ -349,6 +346,15 @@ rt.register({
     },
   },
 });
+function putShorts(b: JShortBuffer, arr: Int16Array, off: number, len: number): JShortBuffer {
+  if ((off | len) < 0 || off > arr.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  b.clampPut(len);
+  const byteOff = b.dv.byteOffset;
+  if (b.little && !(byteOff & 1)) new Int16Array(b.ab, byteOff + (b.pos << 1), len).set(arr.subarray(off, off + len));
+  else for (let i = 0; i < len; i++) b.dv.setInt16((b.pos + i) << 1, arr[off + i], b.little);
+  b.pos += len;
+  return b;
+}
 function getShorts(b: JShortBuffer, arr: Int16Array, off: number, len: number): JShortBuffer {
   if ((off | len) < 0 || off > arr.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
   b.clampGet(len);
