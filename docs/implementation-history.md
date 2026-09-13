@@ -1915,3 +1915,16 @@ ObjectOutputStream.enableReplaceObject is a newly observed cache-path failure. E
 object graph serialization is explicitly unsupported; adding a switch alone would not
 make that cache work. Investigate independently of map network/rendering progress.
 Full E2E remains deferred until the Maps development pass is complete.
+
+
+Maps' `/glm/mmap` POSTs reached Google with **zero bytes** and returned HTTP 400.
+The unchanged `btew.call` body gets its output stream at DEX pc395, calls connect at399,
+then writes at462. URLConnection.connect had already submitted and cached the empty
+request. For buffered uploads, explicit connect now fixes connection configuration while
+response access submits the completed body. Concurrent response accessors share one fetch.
+The focused test preserves bytes written after connect and rejects requesting output after
+response reading starts. Transport errors for an output connection remain deferred until
+response access because this implementation buffers the entire upload. This is an explicit
+limit, not evidence that connect has opened a remote socket. See OpenJDK's
+[HttpURLConnection input/output ordering](https://github.com/openjdk/jdk/blob/master/src/java.base/share/classes/sun/net/www/protocol/http/HttpURLConnection.java).
+The live Maps run after this fix still needs inspection; do not infer HTTP or visual success.
