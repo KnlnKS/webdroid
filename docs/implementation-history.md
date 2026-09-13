@@ -2012,3 +2012,55 @@ The capture headless-home-cache-fixed.png contains Local vibe cards but a blank 
 Full Chrome autocomplete returns Golden Gate Bridge suggestions with incorrect black
 placeholder icons. Map geometry is still zero; parity and full regression verification
 remain incomplete. Timing varied with concurrent Chrome/headless load and is not a benchmark.
+
+The native SQLite cache then failed with 65537 on fresh paths and 66058 (short read) on
+reopen. Host tracing showed one descriptor writing WAL bytes while another descriptor read
+zero bytes at the same offset. Native descriptors now share live VFS file contents; writes
+publish immediately, rename preserves open-file identity, and unlink does not resurrect a
+pathname on close. The unchanged native open/hasResource(empty key)/destroy probe now
+returns false without errors. Focused descriptor, AtomicFile and ParcelFileDescriptor checks
+pass. Cross-process record locks and complete cross-realm open-file rename semantics remain
+outside the demonstrated coverage.
+
+Tile RPCs succeeded but preparation waited indefinitely for styles. The app's own debug
+output reported ten tile responses, zero preparations and pending style futures. Its Cronet
+fallback enumerates HttpURLConnection header keys from index zero and stops at null; our
+implementation incorrectly reserved index zero for the status line. Matching Android's
+indexed-header behavior lets the unchanged response handler see Content-Type. Later debug
+output reported four style resources received, zero network failures, eight current tiles,
+142 completed preparations and 1,736,178 bytes of GL data. The string-null status-line query
+remains intact. The focused HTTP test passes.
+
+EGL10's current-context query fabricated an object while no context was bound. Maps skipped
+creating its offscreen capability context and cached zero vertex-texture units. Returning
+the non-null EGL_NO_CONTEXT sentinel and preserving live context identity lets Maps query
+32 vertex-texture units and 8192 maximum texture size in headless Chrome. Its unchanged
+vertex-texture shader then compiled. Missing GLES20 uniforms, framebuffer operations and
+buffer-offset drawing were added; integer queries now report actual scalar/array/object
+bindings. A browser probe attached a texture to a framebuffer, cleared it, read
+[255,128,0,255] into a positioned Java buffer without advancing position, and verified the
+binding reset after deletion, with GL error zero. Map geometry and labels now appear in
+headless-home-tiles-prepared.png, but colors/polygons are wrong. Recent full-Chrome runs still
+showed a blank map; neither path establishes parity. The native-only glDraws counter does
+not count these Java GLES calls.
+
+Place construction successively reached Collections.disjoint, Rational, TtsSpan,
+ScaleGestureDetector, LocaleSpan and LinearLayout divider APIs. Focused checks cover
+suspending collection comparisons, rational normalization, TTS span parcels, double-tap
+scale state (including rejected updates), locale order through paint copies/parcels, and
+visible-child divider spacing/drawing/weights. Text locales reach Canvas2D language selection
+and participate in width-cache identity. Locale lists retain all locales; Canvas2D uses the
+first language. Scale recognition follows AOSP focus/span and anchored-scale rules; the
+existing MotionEvent/input pipeline still only supplies one pointer, so this is not evidence
+of browser multi-touch support. Full-Chrome place construction next failed in pcx.onMeasure
+on getShowDividers; divider support requires another app pass.
+
+A focused suspended-thread test reproduced ambient Java thread identity leaking into
+unrelated host work. Thread.start and non-main Looper.run now restore that ambient identity
+as soon as invocation yields, while their promises preserve lifecycle and queue ordering.
+The tests cover live-thread enumeration and serialized looper jobs. One subsequent Maps run
+had no VTO 'resume must be called on the main thread' errors, but the startup trace-span
+mismatch and transient unattached Compose view still occurred. Other concurrent checkout
+captures consume substantial CPU; no performance numbers from this diagnostic period are
+accepted as benchmarks. The AVD Golden Gate Bridge place screenshot/XML was refreshed.
+Typecheck and affected checks pass; the final full E2E suite has not run.

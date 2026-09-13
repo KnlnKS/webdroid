@@ -13,8 +13,9 @@ platform contracts; run the full serialized E2E suite at the end.
 - Own Chrome tab: `http://localhost:4126/?apk=Google%20Maps.apk&screen=1080x2424@480`.
 - Android reference captures home, Golden Gate Bridge place details, and a driving route
   from Ferry Building. Files are in `webdroid-shots/maps/` (ignored).
-- Chrome reaches the search bar and UI construction. Maps tiles and matching search/route
-  interactions are not working yet; do not claim parity.
+- Full Chrome reaches live autocomplete and starts place construction. A fresh headless run
+  draws map geometry and labels, with visibly incorrect colors/polygons. Full Chrome has
+  still shown a blank map on recent runs. Place/route parity is not achieved.
 - Focused commits cover native APS2/RELR relocation, executor virtual factories/completion,
   matrix inversion, AtomicFile, value contracts, frame constructors/relative rules,
   reference queues, message queues, integer buffers, provider identity and widget/GL types.
@@ -34,12 +35,14 @@ platform contracts; run the full serialized E2E suite at the end.
 
 ## Next
 
-1. Verify place selection after BidiFormatter. Full Chrome now returns live autocomplete
-   suggestions. Home builds Local vibe cards after the layout, text and widget fixes.
-   A native-only probe proved the SQLite error 15 was caused by F_GETLK leaving the requested
-   write-lock type unchanged; the corrected query lets the unchanged native cache open.
-   Map geometry remains zero. Trace empty tile containers and the transient Compose
-   attachment error; inspect all process diagnostics and advancing queues/frames.
+1. Verify place selection after LinearLayout divider support. The preceding blockers were
+   Collections.disjoint, Rational, TtsSpan, ScaleGestureDetector and LocaleSpan. Native SQLite
+   cache open/query/close now succeeds after the lock-query and shared-file-content fixes.
+   Android HTTP header indexing, EGL no-context handles and GLES calls allow styles to load
+   and tiles to prepare/draw. Investigate incorrect map rendering and the full-Chrome blank
+   map. The startup trace-span mismatch and transient Compose attachment error remain;
+   a thread/looper identity fix removed the observed VTO main-thread error in one later run.
+   Inspect all process diagnostics and advancing queues/frames again.
 2. Exercise matching Maps search/place/directions interactions in Chrome and Android;
    capture screenshots, correct generic failures and record evidence limits.
 3. Verify changed contracts, measure functioning startup/idle behavior, then run the full
