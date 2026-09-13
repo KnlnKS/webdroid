@@ -17,6 +17,7 @@ export async function sh(args: string[], opts: { quiet?: boolean } = {}): Promis
 }
 
 export const shell = (cmd: string, opts?: { quiet?: boolean }) => sh(["shell", cmd], opts);
+export const shellArg = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
 /** Raw PNG bytes of the current screen. `exec-out` avoids the CRLF mangling of `shell`. */
 async function screencap(): Promise<Buffer> {

@@ -32,7 +32,7 @@ async function ensureDevice() {
 /** Start once so the app creates its data dir, then write the flow's seed prefs into it. */
 async function seedPrefs(flow: Flow) {
   const pkg = flow.pkg;
-  await emu.shell(`am start -n ${pkg}/${flow.activity}`);
+  await emu.shell(`am start -n ${emu.shellArg(`${pkg}/${flow.activity}`)}`);
   await sleep(6000);
   await emu.shell(`am force-stop ${pkg}`);
   await sleep(1500);
@@ -78,7 +78,7 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
 
     switch (a.type) {
       case "launch":
-        await emu.shell(`am start -n ${flow.pkg}/${flow.activity}`);
+        await emu.shell(`am start -n ${emu.shellArg(`${flow.pkg}/${flow.activity}`)}`);
         break;
       case "tapText": {
         const node = emu.findNode(await emu.dumpUi(), a.text);
@@ -120,7 +120,7 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
       case "background":
         await emu.shell("input keyevent 3");
         await sleep(a.ms ?? 1000);
-        await emu.shell(`am start -n ${flow.pkg}/${flow.activity}`);
+        await emu.shell(`am start -n ${emu.shellArg(`${flow.pkg}/${flow.activity}`)}`);
         break;
       case "swipe":
         await emu.swipe(a.from[0] * profile.width, a.from[1] * profile.height,
