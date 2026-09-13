@@ -9,7 +9,7 @@
 // than be told a comforting lie.
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
-import { stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
+import { JThrowable, stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
 import { jarray, strArray, dotName, utf8, i8, u8 } from "../abi";
 import { vfs, type JInputStream, type JOutputStream } from "./jio";
@@ -468,12 +468,16 @@ rt.register({
     "toASCIIString()Ljava/lang/String;": function (this: JURI) { return this.u; },
     "getScheme()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf(":"); return i > 0 ? this.u.slice(0, i) : null; },
     "getHost()Ljava/lang/String;": function (this: JURI) { return this.url()?.hostname ?? null; },
+    "getAuthority()Ljava/lang/String;": function (this: JURI) { const authority = /^(?:[^:/?#]+:)?\/\/([^/?#]+)/.exec(this.u)?.[1]; return authority === undefined ? null : decodeURIComponent(authority); },
+    "getRawAuthority()Ljava/lang/String;": function (this: JURI) { return /^(?:[^:/?#]+:)?\/\/([^/?#]+)/.exec(this.u)?.[1] ?? null; },
     "getPath()Ljava/lang/String;": function (this: JURI) { return this.url()?.pathname ?? this.u.replace(/^[a-z]+:/i, ""); },
     "toURL()Ljava/net/URL;": function (this: JURI) { const u = new JURL(); urlInit(u, this.u); return u; },
     "getUserInfo()Ljava/lang/String;": function (this: JURI) { const m = /^[^:/?#]+:\/\/([^@/?#]*)@/.exec(this.u); return m ? decodeURIComponent(m[1]) : null; },
     "getPort()I": function (this: JURI) { return Number(this.url()?.port) || -1; },
     "getQuery()Ljava/lang/String;": function (this: JURI) { const q = this.url()?.search; return q ? q.slice(1) : null; },
+    "getRawQuery()Ljava/lang/String;": function (this: JURI) { return /^[^?#]*\?([^#]*)/.exec(this.u)?.[1] ?? null; },
     "getFragment()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf("#"); return i < 0 ? null : this.u.slice(i + 1); },
+    "getRawFragment()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf("#"); return i < 0 ? null : this.u.slice(i + 1); },
     "getRawPath()Ljava/lang/String;": function (this: JURI) { return this.url()?.pathname ?? null; },
     "getSchemeSpecificPart()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf(":"); return i < 0 ? this.u : this.u.slice(i + 1); },
     "resolve(Ljava/lang/String;)Ljava/net/URI;": function (this: JURI, o: string) { try { return mkURI(new URL(o, this.u).href); } catch { return mkURI(o); } },
@@ -494,7 +498,20 @@ defineException("javax/net/ssl/SSLHandshakeException", "javax/net/ssl/SSLExcepti
 defineException("javax/net/ssl/SSLPeerUnverifiedException", "javax/net/ssl/SSLException");
 defineException("javax/net/ssl/SSLProtocolException", "javax/net/ssl/SSLException");
 defineException("javax/net/ssl/SSLKeyException", "javax/net/ssl/SSLException");
-defineException("java/net/URISyntaxException", "java/lang/Exception");
+class JURISyntaxException extends JThrowable { input = ""; reason = ""; index = -1; }
+function uriSyntax(this: JURISyntaxException, input: string | null, reason: string | null, index = -1): void {
+  if (input === null || reason === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (index < -1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "index < -1");
+  this.input = input; this.reason = reason; this.index = index;
+  this.msg = reason + (index >= 0 ? " at index " + index : "") + ": " + input;
+}
+rt.register({ name: "java/net/URISyntaxException", ctor: JURISyntaxException, sup: "java/lang/Exception", methods: {
+  "<init>(Ljava/lang/String;Ljava/lang/String;)V": uriSyntax,
+  "<init>(Ljava/lang/String;Ljava/lang/String;I)V": uriSyntax,
+  "getInput()Ljava/lang/String;": function (this: JURISyntaxException) { return this.input; },
+  "getReason()Ljava/lang/String;": function (this: JURISyntaxException) { return this.reason; },
+  "getIndex()I": function (this: JURISyntaxException) { return this.index; },
+} });
 
 const SCHEMES = /^(https?|ftp|file|jar):$/;       // what Android's URL has a handler for
 const DEFAULT_PORT: Record<string, number> = { "http:": 80, "https:": 443, "ftp:": 21 };
