@@ -1768,3 +1768,18 @@ Runnable/result overload. Default FutureTask now runs once and supports cancella
 so this path retains cancellation behavior. The one-argument Executors.callable
 uses the existing adapter and rejects null. Focused tests cover overridden factories,
 execute, overload results, repeated run, cancellation, and existing executor queues.
+
+Maps then stalled waiting for its native-loading ListenableFuture despite successful
+JNI initialization. Its Guava FutureTask subclass releases listeners from `done()`;
+the native FutureTask never invoked that virtual callback. Dispatch it once after
+publishing success, failure or cancellation, allowing callbacks to suspend. A test
+checks completion is visible inside the callback and repeated run cannot notify twice.
+
+### Matrix inversion
+
+Maps reaches `Matrix.invertM([FI[FI)Z` while constructing its map camera. The delegate
+was registered with a void return and computed only four cofactors, replacing a
+singular matrix with identity. Correct the signature and compute the complete inverse
+without temporary arrays. Singular input returns false without modifying output.
+A perspective-transform test multiplies the result back to identity and exercises
+overlapping input/output offsets and singular input.

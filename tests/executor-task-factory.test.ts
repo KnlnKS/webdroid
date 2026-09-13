@@ -47,3 +47,23 @@ test("cancelling FutureTask before execution wakes get and prevents its runnable
   expect(await vcall(f, "isCancelled", "()Z")).toBe(1);
   await expect(vcall(f, "get", "()Ljava/lang/Object;")).rejects.toMatchObject({ constructor: rt.link("java/util/concurrent/CancellationException").ctor });
 });
+
+class CompletionTask extends rt.link("java/util/concurrent/FutureTask").ctor { notifications = 0; completed = false; }
+rt.register({ name: "test/CompletionTask", ctor: CompletionTask, sup: "java/util/concurrent/FutureTask", methods: {
+  "done()V": async function (this: CompletionTask) {
+    this.notifications++;
+    this.completed = await vcall(this, "isDone", "()Z") === 1;
+  },
+} });
+test("FutureTask dispatches the virtual completion callback once for success and cancellation", async () => {
+  for (const cancel of [false, true]) {
+    const task = await newObj("test/FactoryTask");
+    const f = await newObj("test/CompletionTask", "(Ljava/lang/Runnable;Ljava/lang/Object;)V", task, "done");
+    if (cancel) await vcall(f, "cancel", "(Z)Z", 0);
+    await vcall(f, "run", "()V");
+    await vcall(f, "run", "()V");
+    expect(f.notifications).toBe(1);
+    expect(f.completed).toBe(true);
+    expect(task.runs).toBe(cancel ? 0 : 1);
+  }
+});

@@ -705,6 +705,7 @@ rt.register({
 for (const [i, ...ifaces] of [["java/util/concurrent/Executor"], ["java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"],
   ["java/util/concurrent/ScheduledExecutorService", "java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"], ["java/util/concurrent/Future"],
   ["java/util/concurrent/ScheduledFuture", "java/util/concurrent/Future"], ["java/util/concurrent/Callable"], ["java/util/concurrent/ThreadFactory"],
+  ["java/util/concurrent/RunnableScheduledFuture", "java/util/concurrent/RunnableFuture", "java/util/concurrent/ScheduledFuture"],
   ["java/util/concurrent/RejectedExecutionHandler"]]) {
   rt.register({ name: i, ctor: class extends JObj {}, ifaces });
 }
@@ -1009,14 +1010,18 @@ rt.register({
       } catch (e) { this.error = rt.jx(e); } // surfaces from get(), as AOSP's setException
       this.done = 1; this.thread = null;
       this.wake(null);
+      if (!this.cancelled) await vcall(this, "done", "()V");
     },
+    "done()V": function () {},
     "get()Ljava/lang/Object;": function (this: JFutureTask) { return futureGet(this); },
     "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JFutureTask, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); },
     "isDone()Z": function (this: JFutureTask) { return this.done; },
     "isCancelled()Z": function (this: JFutureTask) { return this.cancelled; },
-    "cancel(Z)Z": function (this: JFutureTask, interrupt: number) {
+    "cancel(Z)Z": async function (this: JFutureTask, interrupt: number) {
       if (this.done) return 0;
-      cancelFuture(this, interrupt); this.wake(null); return 1;
+      cancelFuture(this, interrupt); this.wake(null);
+      await vcall(this, "done", "()V");
+      return 1;
     },
   },
 });
