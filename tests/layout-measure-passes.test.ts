@@ -40,3 +40,25 @@ test("a wrapping frame aligns multiple match-parent children to its final size",
   await measureView(frame, makeSpec(200, MS_AT_MOST), makeSpec(200, MS_AT_MOST));
   expect([frame.measuredW, a.measuredW, b.measuredW]).toEqual([80, 80, 80]);
 });
+
+test("wrapping linear layouts size match-parent dividers from their siblings", async () => {
+  for (const vertical of [false, true]) {
+    const row = rt.make("android/widget/LinearLayout") as JView;
+    await vcall(row, "setOrientation", "(I)V", +vertical);
+    const child = rt.make("android/view/View") as JView;
+    const divider = rt.make("android/view/View") as JView;
+    await add(row, child, "LinearLayout", vertical ? 48 : 40, vertical ? 40 : 48);
+    await add(row, divider, "LinearLayout", vertical ? -1 : 1, vertical ? 1 : -1);
+    await measureView(row, makeSpec(300, MS_AT_MOST), makeSpec(300, MS_AT_MOST));
+    expect([row.measuredW, row.measuredH]).toEqual(vertical ? [48, 41] : [41, 48]);
+    expect([divider.measuredW, divider.measuredH]).toEqual(vertical ? [48, 1] : [1, 48]);
+  }
+});
+
+test("an all-match-parent linear layout retains the available cross dimension", async () => {
+  const row = rt.make("android/widget/LinearLayout") as JView;
+  const child = rt.make("android/view/View") as JView;
+  await add(row, child, "LinearLayout", 40, -1);
+  await measureView(row, makeSpec(300, MS_AT_MOST), makeSpec(200, MS_AT_MOST));
+  expect([row.measuredW, row.measuredH, child.measuredH]).toEqual([40, 200, 200]);
+});

@@ -2364,3 +2364,14 @@ with non-overlapping Tickets and Share, replacing the clipped negative-left chip
 Typecheck passes. The fresh Android reference also wraps the place title onto two
 lines; that observed wrapping is not a parity defect. Base map tiles, rating decoration,
 preview control geometry and the startup trace error remain unresolved.
+A Maps route-preview row measured 2,328 pixels tall: its match-parent divider supplied the
+available height to a wrap-content LinearLayout. Android excludes that child's measured
+cross dimension when siblings determine the wrapping size, then measures it against the
+resolved size. LinearLayout now follows that rule in both orientations, including weighted
+remeasurement, while preserving the all-match-parent case. A focused test reproduced
+300 instead of 48 pixels before the fix; five layout/divider checks (15 assertions) and
+typecheck pass. Fresh full Chrome places the previous/next controls at the bottom in a
+180-pixel overlay instead of the previous full-screen white strip. Captured in
+chrome-preview-cross-measure-fixed.png. This JIT-disabled preview also renders water and
+roads; an earlier place capture was still waiting on map content. A matching JIT-enabled
+comparison remains necessary before attributing the inconsistent base map to either tier.

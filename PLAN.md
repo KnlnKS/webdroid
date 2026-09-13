@@ -10,33 +10,35 @@ platform contracts; run the full serialized E2E suite at the end.
 
 ## Checkpoint
 
-- Full installed Chrome runs the unchanged APK at port 4126 with JIT enabled. Fresh
-  runs render the home map and Golden Gate Bridge place map with correct colors.
-  Search and place details work partially. Screenshot parity is not achieved.
+- Full installed Chrome runs the unchanged APK at port 4126 with JIT enabled.
+  Search, place details, directions and preview are reachable. Base-map rendering
+  remains inconsistent; screenshot parity is not achieved.
 - Android reference captures include home, place, Ferry Building driving directions,
   and route preview. Captures are in `webdroid-shots/maps/` (ignored).
 - Focused commits now cover native loading/rendering, networking, platform value and
   collection contracts, resources and widgets, attachment lifecycle ordering, date
   ranges, ICU percentage formatting, floating array search, and Handler thread identity.
   Evidence and limitations are recorded in `docs/implementation-history.md`.
-- Route construction reaches time estimates and route cards without the earlier
-  DateUtils, ICU NumberFormat, SortedMap or double binarySearch exceptions. The route
-  remains visually incomplete: descendants retain layout requests beneath a clean
-  ancestor and some text has never been measured. A diagnostic ancestor request made
-  those details appear. The map container remains INVISIBLE after the transition.
+- AnimatorSet start callbacks now make the incoming search container visible and
+  clear the app's full-screen flag when directions open. Route lines and the preview
+  maneuver render. Awaiting inherited compound-button measurement fixes clipped
+  place action chips. Preview control geometry and base-map GL output remain under
+  investigation, alongside text and image differences.
 - Startup still reports the LoginPromoTutorialController trace-span mismatch. The
   Handler identity fix passes focused tests but did not remove that app error.
   The previously observed detached AndroidViewHolder error is absent in fresh runs.
 - Maps smoke at an earlier checkpoint: 72,887 classes, zero method failures. Focused
   checks and typecheck pass after recent edits. Full E2E has not run yet.
-- An earlier Chrome/JIT crash has not reproduced in several fresh headed runs. This
-  is not proof it is resolved. Diagnostic instrumentation invalidates timing results.
+- Bitmap shader tile caching removes repeated canvas allocation across shader
+  instances (over 900,000 allocations in one earlier diagnostic run). Normal Chrome
+  now survives repeated place/route interactions; this does not prove every crash
+  resolved. Diagnostic instrumentation invalidates timing results.
 
 ## Next
 
-1. Trace the lost route layout request and hidden map transition to their generic
-   platform causes. Continue checking startup thread/span ordering and remaining API
-   failures against Android/bytecode evidence.
+1. Diagnose remaining base-map rendering and preview layout failures. Continue
+   checking startup thread/span ordering and remaining API failures against
+   Android/bytecode evidence.
 2. Exercise matching Maps search, place, directions and preview interactions in Chrome
    and Android. Capture fresh screenshots; fix geometry and behavior without app cases.
 3. Verify affected contracts and Maps compilation, measure functioning rendering with

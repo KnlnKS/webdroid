@@ -183,6 +183,8 @@ export const linearMethods: NativeSpec["methods"] = {
     const mainPad = vertical ? this.padT + this.padB : this.padL + this.padR;
     const crossPad = vertical ? this.padL + this.padR : this.padT + this.padB;
     const kids = this.children.filter((c) => c.visibility !== 8);
+    const wrapCross = specMode(vertical ? wSpec : hSpec) !== MS_EXACTLY
+      && kids.some(c => (vertical ? c.lp?.width : c.lp?.height) !== MATCH_PARENT);
     const dividerSize = vertical ? this.dividerH : this.dividerW;
     let totalMain = 0, maxCross = 0, totalWeight = 0, consumed = 0, skipped = false;
     for (let i = 0; i < kids.length; i++) {
@@ -201,7 +203,8 @@ export const linearMethods: NativeSpec["methods"] = {
       await measureChildWithMargins(this, c, wSpec, vertical ? 0 : used, hSpec, vertical ? used : 0);
       if (excessOnly) { if (vertical) c.lp!.height = 0; else c.lp!.width = 0; consumed += vertical ? c.measuredH : c.measuredW; }
       totalMain += (vertical ? c.measuredH : c.measuredW) + mMain;
-      maxCross = Math.max(maxCross, (vertical ? c.measuredW : c.measuredH) + mCross);
+      const matchCross = wrapCross && (vertical ? c.lp?.width : c.lp?.height) === MATCH_PARENT;
+      maxCross = Math.max(maxCross, (matchCross ? 0 : vertical ? c.measuredW : c.measuredH) + mCross);
     }
     if (kids.length && this.showDividers & 4) totalMain += dividerSize;
     const size = resolveSizeAndState(totalMain + mainPad, mainSpec);
@@ -209,6 +212,7 @@ export const linearMethods: NativeSpec["methods"] = {
     if (skipped || (excess !== 0 && totalWeight > 0)) {
       let wsum = this.weightSum > 0 ? this.weightSum : totalWeight;
       totalMain = this.dividerSpace(kids.length);
+      maxCross = 0;
       for (const c of kids) {
         const mMain = mainMargin(c, vertical), mCross = crossMargin(c, vertical);
         const weight = c.lp instanceof JLinearLP ? c.lp.weight : 0;
@@ -221,7 +225,8 @@ export const linearMethods: NativeSpec["methods"] = {
           await measureView(c, vertical ? crossSpec : makeSpec(target, MS_EXACTLY), vertical ? makeSpec(target, MS_EXACTLY) : crossSpec);
         }
         totalMain += (vertical ? c.measuredH : c.measuredW) + mMain;
-        maxCross = Math.max(maxCross, (vertical ? c.measuredW : c.measuredH) + mCross);
+        const matchCross = wrapCross && (vertical ? c.lp?.width : c.lp?.height) === MATCH_PARENT;
+        maxCross = Math.max(maxCross, (matchCross ? 0 : vertical ? c.measuredW : c.measuredH) + mCross);
       }
     }
     const finalCross = resolveSizeAndState(Math.max(maxCross + crossPad, vertical ? this.minW : this.minH), vertical ? wSpec : hSpec);
