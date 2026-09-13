@@ -136,6 +136,12 @@ test("Instrumentation is a constructible framework class", async () => {
   expect(await newObj("android/app/Instrumentation")).toBeInstanceOf(rt.link("android/app/Instrumentation").ctor);
 });
 
+test("InputMethodManager reports no package-backed input methods", async () => {
+  const manager = rt.make("android/view/inputmethod/InputMethodManager");
+  const methods = await vcall(manager, "getEnabledInputMethodList", "()Ljava/util/List;");
+  expect(await vcall(methods, "isEmpty", "()Z")).toBe(1);
+});
+
 test("Runtime.exec(String) tokenizes the program and reports the unavailable process", async () => {
   const runtime = await scall("java/lang/Runtime", "getRuntime", "()Ljava/lang/Runtime;");
   await expect(vcall(runtime, "exec", "(Ljava/lang/String;)Ljava/lang/Process;", "getprop ro.product.cpu.abi"))
