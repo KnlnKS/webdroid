@@ -1018,6 +1018,8 @@ rt.register({
     "static lowestOneBit(J)J": (v: bigint) => v & -v,
     "static numberOfLeadingZeros(J)I": nlz64,
     "static toString(JI)Ljava/lang/String;": (v: bigint, radix: number) => v.toString(radix),
+    "static toUnsignedString(J)Ljava/lang/String;": (v: bigint) => BigInt.asUintN(64, v).toString(),
+    "static toUnsignedString(JI)Ljava/lang/String;": (v: bigint, radix: number) => BigInt.asUintN(64, v).toString(radix >= 2 && radix <= 36 ? radix : 10),
     "static compareUnsigned(JJ)I": (a: bigint, b: bigint) => { const x = BigInt.asUintN(64, a), y = BigInt.asUintN(64, b); return x < y ? -1 : x > y ? 1 : 0; },
     "static divideUnsigned(JJ)J": (a: bigint, b: bigint) => BigInt.asIntN(64, BigInt.asUintN(64, a) / BigInt.asUintN(64, b)),
     "static remainderUnsigned(JJ)J": (a: bigint, b: bigint) => BigInt.asIntN(64, BigInt.asUintN(64, a) % BigInt.asUintN(64, b)),
