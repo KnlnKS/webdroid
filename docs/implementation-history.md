@@ -2170,3 +2170,8 @@ ViewAnimator with factory creation, next-view lookup and reset. The comparator o
 Arrays.binarySearch now reuses its existing binary-search implementation. Focused tests verify
 a suspended comparator and insertion points, plus ViewSwitcher factory/limit/reset behavior;
 typecheck passes. The app pass for these additions remains pending.
+
+The visible UI probe now excludes INVISIBLE ancestors as well as GONE ancestors. Maps hid its
+autocomplete container while leaving individual suggestion children VISIBLE; uiTree and
+locateText previously reported these invisible suggestions. A fresh Chrome route-entry probe
+now reports only the visible search controls. The full diagnostic tree retains hidden nodes.
