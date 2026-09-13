@@ -56,7 +56,7 @@ addEventListener("message", event => {
 });
 })()</script>`;
 
-export const WEB_FRAME = `<!doctype html><script>(function(){
+export const WEB_FRAME = `<!doctype html><meta charset="utf-8"><script>(function(){
 const id = new URL(location.href).searchParams.get("__wd_bridge");
 addEventListener("message", async event => {
   if (!event.isTrusted || event.source !== parent || event.data?.bridge !== id || event.data.kind !== "load" || !event.ports[0]) return;

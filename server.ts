@@ -103,6 +103,7 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
         }
         if (isolated && upstream.body && /^(?:text|application)\/(?:x-)?(?:java|ecma)script(?:;|$)/i.test(upstream.headers.get("content-type") ?? "")) {
           h.delete("etag"); h.delete("last-modified");
+          h.set("content-type", "text/javascript; charset=utf-8");
           return new Response(webScript(await upstream.text()), { status: upstream.status, headers: h });
         }
         return new Response(upstream.body, { status: upstream.status, headers: h });
