@@ -1,5 +1,5 @@
 import { AID } from "./res";
-import { JView, initViewFromCtx, invalidate, resolveSizeAndState, uiState, JViewGroup, defaultSize } from "./view";
+import { JView, initViewFromCtx, invalidate, resolveSizeAndState, uiState, JViewGroup } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawChild } from "./drawable";
 import { rt, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters, flagSetters } from "../jvm/runtime";
 import { type JAttrSet, rvColor, obtainStyled, rvInt } from "./res";
@@ -345,14 +345,21 @@ rt.register({
   },
 });
 
+async function initSpace(this: JView, context: unknown, attrs: JAttrSet | null = null, defStyle = 0) {
+  await initViewFromCtx(this, context, attrs, defStyle);
+  if (this.visibility === 0) this.visibility = 4;
+}
 rt.register({
   name: "android/widget/Space", ctor: class extends JView {}, sup: "android/view/View",
   methods: {
-    "onMeasure(II)V": function (this: JView, wSpec: number, hSpec: number) {
-      this.measuredW = defaultSize(0, wSpec);
-      this.measuredH = defaultSize(0, hSpec);
+    "<init>(Landroid/content/Context;)V": initSpace,
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": initSpace,
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": initSpace,
+    "onMeasure(II)V": async function (this: JView, wSpec: number, hSpec: number) {
+      this.measuredW = resolveSizeAndState(await vcall(this, "getSuggestedMinimumWidth", "()I"), wSpec) & 0xffffff;
+      this.measuredH = resolveSizeAndState(await vcall(this, "getSuggestedMinimumHeight", "()I"), hSpec) & 0xffffff;
     },
-    "onDraw(Landroid/graphics/Canvas;)V": () => {},
+    "draw(Landroid/graphics/Canvas;)V": () => {},
   },
 });
 
