@@ -2146,3 +2146,9 @@ Java under that identity and immediately restores the ambient thread. A suspensi
 checks callback identity without pinning the ambient thread during the wait. In the next
 headless Maps place run, the earlier attachment listener's main-thread `propagate` failure
 was absent. The independent startup span mismatch remains.
+
+Directions text preparation reached java.text.Bidi.requiresBidi from xxn's constructor.
+The static query now checks the requested UTF-16 range against the existing Unicode
+bidirectional properties (R, AL, AN, RLE, RLO), including supplementary code points and range
+validation. The remaining Bidi object-analysis API is not implemented. Focused tests cover
+Latin/CJK, Hebrew/Arabic, directional controls, Adlam surrogate pairs, slices and invalid ranges.

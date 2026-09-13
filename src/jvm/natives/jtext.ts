@@ -6,6 +6,26 @@ import { vcall, vcallMaybe, defineException, mkEnumSet, type JSimpleEnum, newObj
 import { strArray, jarray, utf8, slashName, dotName } from "../abi";
 import { mkIter } from "./jutil";
 import { JDate, JCalendar, localTz, MONTHS, DAYS, pad } from "./jtime";
+import { directionality } from "../bidi";
+
+rt.register({
+  name: "java/text/Bidi", ctor: class extends JObj {},
+  methods: {
+    "static requiresBidi([CII)Z": (text: Uint16Array | null, start: number, limit: number) => {
+      if (!text) throw rt.mkThrowable("java/lang/NullPointerException", "text");
+      if (start < 0 || start > limit || limit > text.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid text range");
+      for (let i = start; i < limit; i++) {
+        let cp = text[i];
+        if (cp >= 0xd800 && cp <= 0xdbff && i + 1 < limit && text[i + 1] >= 0xdc00 && text[i + 1] <= 0xdfff) {
+          cp = 0x10000 + ((cp - 0xd800) << 10) + text[++i] - 0xdc00;
+        }
+        const dir = directionality(cp);
+        if (dir === 1 || dir === 2 || dir === 6 || dir === 16 || dir === 17) return 1;
+      }
+      return 0;
+    },
+  },
+});
 
 export function formatDate(pattern: string, t: number): string {
   const d = new Date(t);
