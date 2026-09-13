@@ -2479,3 +2479,11 @@ measuring successively shorter prefixes and avoiding a split surrogate pair. Rea
 checks cover fitting and overflowing text, widening, cached layouts, last-line truncation,
 sub-ellipsis widths and supplementary characters. Typecheck passes; a fresh Maps place
 capture shows the requested ellipsis. This does not address other font/layout differences.
+
+Maps' basi.Q builds the rating from a number and a SpannableString containing a replacement
+span over the word "stars". TextUtils.concat discarded that span, including on the subsequent
+concatenation with the review count. Concatenation now preserves span identity, offsets,
+endpoint behavior and immutable SpannedString results, with a plain-string fast path.
+Three checks (14 assertions) cover nested image spans, snapshot isolation, null/single-input
+semantics, duplicate/NoCopySpan ownership and inclusive endpoints. TextView's independent
+plain-text drawing path remains to be connected to the existing span-aware Layout renderer.

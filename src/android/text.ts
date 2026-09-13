@@ -212,6 +212,38 @@ export async function csText(cs: unknown): Promise<string> {
   if (cs instanceof JSpanned) return cs.text;
   return String(await vcall(cs, "toString", "()Ljava/lang/String;"));
 }
+function concatText(parts: unknown[]): unknown {
+  if (parts.length === 1) return parts[0];
+  if (parts.every(p => p === null || typeof p === "string")) return parts.map(p => p ?? "null").join("");
+  return (async () => {
+    const out = new JSpannedString(), seen = new Set<unknown>();
+    let spanned = false;
+    for (let part of parts) {
+      if (part === null) part = "null";
+      if (!(part instanceof JSpanned) && rt.iof(part, "android/text/Spanned")) {
+        part = await newObj("android/text/SpannedString", "(Ljava/lang/CharSequence;)V", part);
+      }
+      const start = out.text.length;
+      const text = typeof part === "string" ? part : part instanceof JSpanned ? part.text : await csText(part);
+      for (const r of out.spans) {
+        const a = r.flags >> 4 & 0xf, b = r.flags & 0xf;
+        if (r.start === start && (a === 2 || a === 3)) r.start += text.length;
+        if (r.end === start && (b === 2 || b === 3)) r.end += text.length;
+      }
+      out.text += text;
+      if (!(part instanceof JSpanned)) continue;
+      spanned = true;
+      for (const r of part.spans) {
+        if (seen.has(r.span) || rt.iof(r.span, "android/text/NoCopySpan")) continue;
+        const a = start + r.start, b = start + r.end;
+        if ((r.flags & 0x33) === 0x33 && (a && out.text[a - 1] !== "\n" || b !== out.text.length && b && out.text[b - 1] !== "\n")) continue;
+        seen.add(r.span);
+        out.spans.push({ ...r, start: a, end: b });
+      }
+    }
+    return spanned ? out : out.text;
+  })();
+}
 const selectionStart = new JObj(), selectionEnd = new JObj();
 export async function textSelection(text: unknown): Promise<[number, number]> {
   if (!text || typeof text === "string") return [-1, -1];
@@ -682,8 +714,7 @@ rt.register({
       (out as any).$t = "Ljava/lang/String;";
       return out;
     },
-    "static concat([Ljava/lang/CharSequence;)Ljava/lang/CharSequence;": (arr: unknown[]) =>
-      arr.map(spannedString).join(""),
+    "static concat([Ljava/lang/CharSequence;)Ljava/lang/CharSequence;": concatText,
     "static ellipsize(Ljava/lang/CharSequence;Landroid/text/TextPaint;FLandroid/text/TextUtils$TruncateAt;)Ljava/lang/CharSequence;":
       (cs: unknown, p: JTextPaint, avail: number) => {
         const s = spannedString(cs);
