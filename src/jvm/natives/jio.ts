@@ -12,6 +12,8 @@ export const apkPath = (split?: string) => split ? `/data/app/split_${split}.apk
 
 rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
 
+export interface VfsFile { path: string | null; data: Uint8Array; len: number }
+const openFiles = new Map<string, VfsFile>();
 // ── VFS: path → bytes. Directories implicit.
 export const vfs = {
   files: new Map<string, Uint8Array>(),
@@ -46,15 +48,32 @@ export const vfs = {
     const source = this.source(p);
     return source ? { size: source.size, source } : null;
   },
-  write(p: string, data: Uint8Array) {
+  open(p: string): VfsFile | null {
+    const path = this.norm(p), data = this.files.get(path);
+    if (!data) return null;
+    let file = openFiles.get(path);
+    if (!file) { file = { path, data, len: data.length }; openFiles.set(path, file); }
+    return file;
+  },
+  publish(file: VfsFile) {
+    if (file.path === null || openFiles.get(file.path) !== file) return;
+    this.files.set(file.path, file.data.subarray(0, file.len));
+    this.onWrite(file.path);
+  },
+  write(p: string, data: Uint8Array, notify = true) {
     const path = this.norm(p);
     this.lazyFiles.delete(path);
     this.files.set(path, data);
-    this.onWrite(path);
+    const file = openFiles.get(path);
+    if (file) {
+      if (file.data.buffer !== data.buffer || file.data.byteOffset !== data.byteOffset) file.data = data;
+      file.len = data.length;
+    }
+    if (notify) this.onWrite(path);
   },
   mount(p: string, source: FileSource) {
     const path = this.norm(p);
-    this.files.delete(path);
+    this.delete(path, false);
     this.lazyFiles.set(path, source);
   },
   lazy() {
@@ -73,11 +92,27 @@ export const vfs = {
     p = this.norm(p);
     return !this.files.has(p) && !this.lazyFiles.has(p) && this.under(p);
   },
-  delete(p: string): boolean {
+  delete(p: string, notify = true): boolean {
     const path = this.norm(p);
+    const file = openFiles.get(path);
+    if (file) { file.path = null; openFiles.delete(path); }
     const removed = this.files.delete(path) || this.lazyFiles.delete(path);
-    if (removed) this.onWrite(path);
+    if (removed && notify) this.onWrite(path);
     return removed;
+  },
+  rename(from: string, to: string): boolean {
+    from = this.norm(from); to = this.norm(to);
+    if (!this.files.has(from) && !this.lazyFiles.has(from)) return false;
+    if (from === to) return true;
+    this.delete(to, false);
+    for (const files of [this.files, this.lazyFiles]) {
+      const value = files.get(from);
+      if (value) { files.delete(from); files.set(to, value as never); }
+    }
+    const file = openFiles.get(from);
+    if (file) { openFiles.delete(from); file.path = to; openFiles.set(to, file); }
+    this.onWrite(from); this.onWrite(to);
+    return true;
   },
   mkdir(p: string) { const path = this.norm(p); if (!this.dirs.has(path)) { this.dirs.add(path); this.onWrite(path); } },
   rmdir(p: string): boolean { const path = this.norm(p), removed = this.dirs.delete(path); if (removed) this.onWrite(path); return removed; },
@@ -145,11 +180,7 @@ rt.register({
     "delete()Z": function (this: JFile) { return vfs.delete(this.path) ? 1 : 0; },
     "deleteOnExit()V": function () {},
     "renameTo(Ljava/io/File;)Z": function (this: JFile, dst: JFile) {
-      const data = vfs.read(this.path);
-      if (!data) return 0;
-      vfs.write(dst.path, data);
-      vfs.delete(this.path);
-      return 1;
+      return vfs.rename(this.path, dst.path) ? 1 : 0;
     },
     "list()[Ljava/lang/String;": function (this: JFile) {
       return jarray(vfs.list(this.path), "Ljava/lang/String;");

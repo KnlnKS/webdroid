@@ -31,9 +31,9 @@ export class PrivateFiles {
   }
   detach(pid: number): void { this.views.delete(pid); }
   private install(view: typeof vfs, path: string, value: FileValue | null): void {
-    view.files.delete(path); view.dirs.delete(path);
-    if (value?.kind === "file") view.files.set(path, value.bytes);
-    else if (value) view.dirs.add(path);
+    view.dirs.delete(path);
+    if (value?.kind === "file") view.write(path, value.bytes, false);
+    else { view.delete(path, false); if (value) view.dirs.add(path); }
   }
   private update(path: string, value: FileValue | null): void {
     if (value) this.values.set(path, value); else this.values.delete(path);
