@@ -206,6 +206,7 @@ export class JWebView extends JViewGroup {
   private cookiePort: MessagePort | null = null;
   private nextEval = 0;
   private evaluations = new Map<number, (value: string) => void>();
+  private pendingScripts = new Map<number, string>();
   private message = (event: MessageEvent) => {
     if (event.source !== this.el?.contentWindow || event.origin !== this.remoteOrigin || event.data?.bridge !== this.remote?.id) return;
     const data = event.data;
@@ -219,6 +220,8 @@ export class JWebView extends JViewGroup {
         ports[0].postMessage(jar.network(data.url, this.url ?? "", values, thirdPartyCookies.has(this))); ports[0].close();
       };
       this.send({ kind: "load", src: this.hist[this.idx]?.src, doc: this.hist[this.idx]?.doc, userAgent: this.settings.v.userAgentString }, [channel.port2]);
+      for (const [seq, script] of this.pendingScripts) this.send({ kind: "eval", seq, script });
+      this.pendingScripts.clear();
     }
     else if (data.kind === "loaded") {
       this.remoteHeight = typeof data.height === "number" ? data.height : 0;
@@ -350,9 +353,11 @@ export class JWebView extends JViewGroup {
   evalJs(js: string): string | Promise<string> {
     if (this.remote) return new Promise<string>((resolve) => {
       const seq = ++this.nextEval;
-      const done = (value: string) => { clearTimeout(timer); this.evaluations.delete(seq); resolve(value); };
+      const done = (value: string) => { clearTimeout(timer); this.evaluations.delete(seq); this.pendingScripts.delete(seq); resolve(value); };
       const timer = setTimeout(() => done("null"), 30_000);
-      this.evaluations.set(seq, done); this.send({ kind: "eval", seq, script: js });
+      this.evaluations.set(seq, done);
+      if (this.cookiePort) this.send({ kind: "eval", seq, script: js });
+      else this.pendingScripts.set(seq, js);
     });
     const w = win(this);
     if (!w) return "null";
