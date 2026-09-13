@@ -5,7 +5,7 @@ import { parkTimeout, unparkTimeout } from "../yield";
 import { vcall, newObj, JThread, JEnum, setCurThread, curThread, park, defineException } from "./jlang";
 import { JList, newArrayList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods } from "./jutil";
 import { JRandom, randomSeed } from "./jrandom";
-import { splitSig } from "../abi";
+import { mangleMethod, splitSig } from "../abi";
 
 // ── atomics (single-threaded: trivial)
 const atomicCore = (d: string): NativeSpec["methods"] => ({
@@ -287,35 +287,46 @@ function submit(ex: JExecutor, task: unknown, method: string, desc: string, dela
   });
   return f;
 }
+function execute(this: JExecutor, r: unknown) {
+  const f = submit(this, r, "run", "()V");
+  void f.promise!.then(() => {
+    if (!f.error) return;
+    const e = f.error as { msg?: string; jsStack?: string; jframes?: string[] };
+    console.error("[executor]", (e.msg ?? f.error) + (e.jframes ? "\n  at " + e.jframes.join("\n  at ") : ""), e.jsStack ?? "");
+  });
+}
+const D_TASK_FOR_CALLABLE = "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;";
+const D_TASK_FOR_RUNNABLE = "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;";
+const K_EXECUTE = mangleMethod("execute", "(Ljava/lang/Runnable;)V");
+function taskForCallable(c: unknown) { const t = rt.make("java/util/concurrent/FutureTask") as JFutureTask; armTask(t, c); return t; }
+function taskForRunnable(r: unknown, value: unknown) { const t = taskForCallable({ runnable: r }); t.value = value; return t; }
+function submitVia(self: JExecutor, desc: string, native: (...args: never[]) => unknown, args: unknown[], direct: () => JFuture) {
+  if (args[0] == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  const own = self as unknown as Record<string, unknown>;
+  if (own[K_EXECUTE] === execute && own[mangleMethod("newTaskFor", desc)] === native) return direct();
+  return vcall(self, "newTaskFor", desc, ...args).then(async (task) => {
+    await vcall(self, "execute", "(Ljava/lang/Runnable;)V", task);
+    return task;
+  });
+}
 const executorMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
-  "execute(Ljava/lang/Runnable;)V": function (this: JExecutor, r: unknown) {
-    const f = submit(this, r, "run", "()V");
-    void f.promise!.then(() => {
-      if (!f.error) return;
-      const e = f.error as { msg?: string; jsStack?: string; jframes?: string[] };
-      console.error("[executor]", (e.msg ?? f.error) + (e.jframes ? "\n  at " + e.jframes.join("\n  at ") : ""), e.jsStack ?? "");
+  "execute(Ljava/lang/Runnable;)V": execute,
+  "newTaskFor(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;": taskForCallable,
+  "newTaskFor(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;": taskForRunnable,
+  "submit(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown) {
+    return submitVia(this, D_TASK_FOR_RUNNABLE, taskForRunnable, [r, null], () => submit(this, r, "run", "()V"));
+  },
+  "submit(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown, value: unknown) {
+    return submitVia(this, D_TASK_FOR_RUNNABLE, taskForRunnable, [r, value], () => {
+      const future = submit(this, r, "run", "()V");
+      future.value = value;
+      return future;
     });
   },
-  "newTaskFor(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;":
-    (r: unknown, value: unknown) => newObj("java/util/concurrent/FutureTask", "(Ljava/lang/Runnable;Ljava/lang/Object;)V", r, value),
-  "newTaskFor(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;":
-    (c: unknown) => newObj("java/util/concurrent/FutureTask", "(Ljava/util/concurrent/Callable;)V", c),
-  "submit(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;": async function (this: JExecutor, r: unknown) {
-    const task = await vcall(this, "newTaskFor", "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;", r, null);
-    await vcall(this, "execute", "(Ljava/lang/Runnable;)V", task);
-    return task;
+  "submit(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;": function (this: JExecutor, c: unknown) {
+    return submitVia(this, D_TASK_FOR_CALLABLE, taskForCallable, [c], () => submit(this, c, "call", "()Ljava/lang/Object;"));
   },
-  "submit(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;": async function (this: JExecutor, r: unknown, value: unknown) {
-    const task = await vcall(this, "newTaskFor", "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;", r, value);
-    await vcall(this, "execute", "(Ljava/lang/Runnable;)V", task);
-    return task;
-  },
-    "submit(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;": async function (this: JExecutor, c: unknown) {
-    const task = await vcall(this, "newTaskFor", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;", c);
-    await vcall(this, "execute", "(Ljava/lang/Runnable;)V", task);
-      return task;
-    },
   "invokeAll(Ljava/util/Collection;)Ljava/util/List;": async function (this: JExecutor, tasks: JList) {
     if (tasks == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
     const futures = newArrayList();
@@ -449,7 +460,7 @@ class JDelegatedExecutor extends JObj { delegate: unknown = null; }
 const delegated: NativeSpec["methods"] = {};
 for (const signature of Object.keys(executorMethods)) {
   const [name, desc] = splitSig(signature);
-  if (name === "<init>") continue;
+  if (name === "<init>" || name === "newTaskFor") continue;
   delegated[signature] = async function (this: JDelegatedExecutor, ...args: unknown[]) { return vcall(this.delegate, name, desc, ...args); };
 }
 rt.register({ name: "webdroid/DelegatedScheduledExecutor", ctor: JDelegatedExecutor,
