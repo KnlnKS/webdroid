@@ -2139,3 +2139,10 @@ headless run renders corrected water colors and live Golden Gate Bridge autocomp
 The startup trace-span mismatch persists. Full Chrome again lost its WebGL context and later
 crashed with error 11; a JIT-disabled comparison kept a live context but had not drawn map
 geometry when checked. Neither the crash cause nor parity is established.
+
+Attachment callback dispatch now retains its initiating thread across awaited callbacks,
+including child trees and Java addView layout-parameter work. A scoped vcallOn helper starts
+Java under that identity and immediately restores the ambient thread. A suspension test
+checks callback identity without pinning the ambient thread during the wait. In the next
+headless Maps place run, the earlier attachment listener's main-thread `propagate` failure
+was absent. The independent startup span mismatch remains.

@@ -18,6 +18,11 @@ export async function vcall(obj: any, name: string, desc: string, ...args: unkno
   const r = findMethod(obj, name, desc).apply(obj, args);
   return r instanceof Promise ? await r : r;
 }
+export function vcallOn(thread: JThread, obj: unknown, name: string, desc: string, ...args: unknown[]): Promise<any> {
+  const previous = curThread;
+  curThread = thread;
+  try { return vcall(obj, name, desc, ...args); } finally { curThread = previous; }
+}
 export function vcallMaybe(obj: any, name: string, desc: string, ...args: unknown[]): any {
   return findMethod(obj, name, desc).apply(obj, args);
 }

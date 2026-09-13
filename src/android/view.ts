@@ -2,7 +2,7 @@ import { perf } from "../perf";
 import { TV } from "./axml";
 import { setInvalidateHook, JRect, JCanvas, JMatrix, matMul, rotM, type JPoint } from "./graphics";
 import { mangleMethod, jmethod, type JMethod, jarray } from "../jvm/abi";
-import { vcall, vcallMaybe, after, idHash, box, JFloat } from "../jvm/natives/jlang";
+import { vcall, vcallOn, vcallMaybe, after, idHash, box, JFloat, curThread } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor } from "./drawable";
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops } from "../jvm/runtime";
@@ -207,9 +207,10 @@ function removeRange(vg: JViewGroup, start: number, n: number, request: boolean)
 /** AOSP addViewInLayout: addViewInner without the parent's request. Unless the caller prevents
  *  it, the child's own setLayoutParams asks, before the child has a parent to pass it to. */
 async function addInLayout(this: JViewGroup, c: JView, i: number, lp: JLayoutParams, preventRequestLayout?: number) {
+  const thread = curThread;
   c.lp = lp ? await convertLp(this, lp) : c.lp;
   if (!preventRequestLayout) requestLayoutVirtual(c);
-  await addViewInner(this, c, i, false);
+  await addViewInner(this, c, i, false, thread);
   return 1;
 }
 /** AOSP attachViewToParent: re-links a child detachViewFromParent took out. It never left the
@@ -238,7 +239,6 @@ const M_onSizeChanged = mangleMethod("onSizeChanged", "(IIII)V");
 const M_onTouchEvent = mangleMethod("onTouchEvent", "(Landroid/view/MotionEvent;)Z");
 const M_onIntercept = mangleMethod("onInterceptTouchEvent", "(Landroid/view/MotionEvent;)Z");
 const M_dispatchTouch = mangleMethod("dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z");
-const M_onAttached = mangleMethod("onAttachedToWindow", "()V");
 const M_onDetached = mangleMethod("onDetachedFromWindow", "()V");
 const M_onConfigChanged = mangleMethod("onConfigurationChanged", "(Landroid/content/res/Configuration;)V");
 const M_drawableStateChanged = mangleMethod("drawableStateChanged", "()V");
@@ -1577,13 +1577,13 @@ export function attachView(parent: JViewGroup, child: JView, index = -1, request
   if (parent.attached) void onMain(() => dispatchAttached(child));
   if (request) { requestLayoutVirtual(parent); invalidate(parent); }
 }
-async function addViewInner(parent: JViewGroup, child: JView, index: number, request = true) {
+async function addViewInner(parent: JViewGroup, child: JView, index: number, request = true, thread = curThread) {
   if (!linkChild(parent, child, index)) return;
   if (request) { requestLayoutVirtual(parent); invalidate(parent); }
-  if (parent.attached) await dispatchAttached(child);
-  await vcall(parent, "onViewAdded", "(Landroid/view/View;)V", child);
+  if (parent.attached) await dispatchAttached(child, thread);
+  await vcallOn(thread, parent, "onViewAdded", "(Landroid/view/View;)V", child);
   if (parent.hierarchyChangeL) {
-    await vcall(parent.hierarchyChangeL, "onChildViewAdded", "(Landroid/view/View;Landroid/view/View;)V", parent, child);
+    await vcallOn(thread, parent.hierarchyChangeL, "onChildViewAdded", "(Landroid/view/View;Landroid/view/View;)V", parent, child);
   }
 }
 /** AOSP removeView (request) and removeViewInLayout (no request) */
@@ -1592,27 +1592,27 @@ export function detachView(parent: JViewGroup, child: JView, request = true) {
   childRemoved(parent, child);
   if (request) { requestLayoutVirtual(parent); invalidate(parent); }
 }
-export async function dispatchAttached(v: JView) {
+export async function dispatchAttached(v: JView, thread = curThread) {
   if (v.attached) return;
-  await attachTree(v);
+  await attachTree(v, thread);
   // a root is a window's view: ViewRootImpl reports the window attached once its tree is
   if (!v.parent) await vtoMap.get(v)?.dispatchWindowAttached(true);
   // Queued attachment may follow an unattached measure and an empty hosted display list.
   requestLayout(v);
   invalidate(v);
 }
-async function attachTree(v: JView) {
+async function attachTree(v: JView, thread: typeof curThread) {
   if (v.attached) return;
   v.attached = true;
   mergeVTO(v);
-  try { await guardMaybe(v, M_onAttached); } catch (e) { reportUncaught(e); }
+  try { await vcallOn(thread, v, "onAttachedToWindow", "()V"); } catch (e) { reportUncaught(e); }
   // a snapshot, as AOSP's copy-on-write list: a one-shot listener removing itself must not skip the next
   for (const l of [...v.attachLs]) {
-    try { await vcall(l, "onViewAttachedToWindow", "(Landroid/view/View;)V", v); } catch (e) { reportUncaught(e); }
+    try { await vcallOn(thread, l, "onViewAttachedToWindow", "(Landroid/view/View;)V", v); } catch (e) { reportUncaught(e); }
   }
   // one child's failure must not prevent its siblings from attaching (e.g. ViewPager populate)
   if (v instanceof JViewGroup) for (const c of [...v.children]) {
-    try { await attachTree(c); } catch (e) { reportUncaught(e); }
+    try { await attachTree(c, thread); } catch (e) { reportUncaught(e); }
   }
   v.layoutRequested = true;
   clearMeasureCache(v);
@@ -1667,11 +1667,12 @@ export function resolveLp(lp: JLayoutParams): unknown { return (jmethod(lp, M_re
 
 /** the native terminal: every other overload reaches the tree through here */
 async function addView3(this: JViewGroup, c: JView, i: number, lp: JLayoutParams | null) {
+  const thread = curThread;
   c.lp = lp ? await convertLp(this, lp)
     : c.lp ? await convertLp(this, c.lp)
     : await guardCall(this, M_genDefaultLP);
   await resolveLp(c.lp!);
-  await addViewInner(this, c, i);
+  await addViewInner(this, c, i, true, thread);
 }
 /**
  * AOSP funnels every addView overload through the overridable 3-arg one, and subclasses do real
