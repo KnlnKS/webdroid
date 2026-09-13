@@ -107,6 +107,11 @@ rt.register({ name: "android/media/MediaCodecInfo$VideoCapabilities", ctor: JVid
     if (definition.kind !== "video") throw rt.mkThrowable("java/lang/IllegalStateException", "Not a video codec");
     return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxInt(1), boxInt(definition.maxDimension));
   },
+  "getSupportedWidths()Landroid/util/Range;": function (this: JVideoCapabilities) {
+    const definition = this.info.definition;
+    if (definition.kind !== "video") throw rt.mkThrowable("java/lang/IllegalStateException", "Not a video codec");
+    return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxInt(1), boxInt(definition.maxDimension));
+  },
   "isSizeSupported(II)Z": supportsSize, "areSizeAndRateSupported(IID)Z": supportsSize,
   "getSupportedPerformancePoints()Ljava/util/List;": () => null,
   "getAchievableFrameRatesFor(II)Landroid/util/Range;": () => null,
