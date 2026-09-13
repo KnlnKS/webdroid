@@ -1511,6 +1511,14 @@ export class JViewGroup extends JView {
   disallowIntercept = false;
   touchTarget: JView | null = null;
   hierarchyChangeL: unknown = null;
+  addChildStates = false;
+  drawableState(): number[] {
+    const own = super.drawableState();
+    if (!this.addChildStates) return own;
+    const merged = new Set(own);
+    for (const child of this.children) for (const state of child.drawableState()) merged.add(state);
+    return [...merged];
+  }
 }
 /** Convert a LayoutParams to one this ViewGroup accepts (e.g. ViewPager needs its own LP type,
  *  and casts in its onLayout otherwise). Dispatches to the ViewGroup's own check/generate overrides. */
@@ -1811,13 +1819,15 @@ const vgMethods: NativeSpec["methods"] = {
     "setMotionEventSplittingEnabled(Z)V", "setDescendantFocusability(I)V",
     "requestChildFocus(Landroid/view/View;Landroid/view/View;)V", "focusableViewAvailable(Landroid/view/View;)V",
     "requestTransparentRegion(Landroid/view/View;)V", "setLayoutTransition(Landroid/animation/LayoutTransition;)V",
-    "setAddStatesFromChildren(Z)V", "childDrawableStateChanged(Landroid/view/View;)V",
+    "childDrawableStateChanged(Landroid/view/View;)V",
     "startViewTransition(Landroid/view/View;)V", "endViewTransition(Landroid/view/View;)V"),
   ...stubs(null, "focusSearch(Landroid/view/View;I)Landroid/view/View;",
     "getLayoutTransition()Landroid/animation/LayoutTransition;"),
   ...stubs(0, "onRequestFocusInDescendants(ILandroid/graphics/Rect;)Z",
     "requestChildRectangleOnScreen(Landroid/view/View;Landroid/graphics/Rect;Z)Z", "isTransitionGroup()Z"),
   ...stubs(1, "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z"),
+  "setAddStatesFromChildren(Z)V": function (this: JViewGroup, add: number) { this.addChildStates = !!add; void this.refreshDrawableState(); },
+  "addStatesFromChildren()Z": function (this: JViewGroup) { return this.addChildStates ? 1 : 0; },
   "offsetDescendantRectToMyCoords(Landroid/view/View;Landroid/graphics/Rect;)V": function (this: JViewGroup, c: JView, r: JRect) {
     let v: JView | null = c;
     while (v && v !== this) {

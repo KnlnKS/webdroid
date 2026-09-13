@@ -605,6 +605,7 @@ rt.register({
     "static fromHtml(Ljava/lang/String;Landroid/text/Html$ImageGetter;Landroid/text/Html$TagHandler;)Landroid/text/Spanned;": (s: string) => htmlToSpan(s),
     "static fromHtml(Ljava/lang/String;ILandroid/text/Html$ImageGetter;Landroid/text/Html$TagHandler;)Landroid/text/Spanned;": (s: string) => htmlToSpan(s),
     "static toHtml(Landroid/text/Spanned;)Ljava/lang/String;": (sp: unknown) => spannedString(sp),
+    "static toHtml(Landroid/text/Spanned;I)Ljava/lang/String;": (sp: unknown) => spannedString(sp),
     // AOSP withinStyle: the five markup characters and every non-ASCII code point as entities
     "static escapeHtml(Ljava/lang/CharSequence;)Ljava/lang/String;": (cs: unknown) =>
       String(cs).replace(/[<>&'"]|[^\x00-\x7f]/gu, (c) => c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === "&" ? "&amp;" : c === "'" ? "&#39;" : c === "\"" ? "&quot;" : "&#" + c.codePointAt(0) + ";"),
