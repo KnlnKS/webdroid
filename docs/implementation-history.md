@@ -1735,3 +1735,31 @@ Remaining optional gaps: `media_metrics`, MIUI referrer, AppSet and AppsFlyer LV
 classes, and Cronet's DnsConfig warning. microG keeps two activities resumed in its realm
 (`IdentityCredentialChooserActivity` under `AssistedSignInActivity`), unverified against
 Android.
+
+### 2026-09-12 — TikTok guest feed lifecycle
+
+TikTok 46.8.3 (`TikTok.apk`) reaches a live guest For You feed. A clean 120-second feed
+observation held native allocations between 68 and 80 MB after startup (214.66 MB peak with
+more than 3.8 GB free) and reported no native fault, so earlier `std::bad_alloc`, JNI
+`GetStringChars` address-zero and Cronet `memcpy` failures are not reproducible allocator
+exhaustion. The native renderer did repeatedly feature-probe
+`eglPresentationTimeANDROID`; EGL now advertises the extension, resolves its proc address and
+keeps the requested timestamp on the destination surface. `SensorManager.getRotationMatrix`
+uses Android's normalized east/north/up construction for both 3x3 and 4x4 matrices.
+
+The TikTok smoke flow models the clean-device gates as optional semantic taps: Android's
+full-screen notice, guest sign-up, age confirmation, consent, notification denial and interest
+selection. It then backgrounds the foreground task through pause/stop and start/resume before
+two swipes. The first extended serial run rendered all 13 captures with advancing video after
+resume and both swipes, without a wedge, draw failure or native fault. Reached framework probes
+now report the real available state: overlay permission is not granted, WebSettings supplies
+its default user agent, Class annotations include inherited runtime annotations and
+`Runtime.exec(String)` tokenizes before returning IOException because webdroid has no host
+process table.
+
+Absent TikTok/Lynx/AppsFlyer/MIUI/EffectSDK classes and native methods remain optional vendor
+feature probes rather than fabricated implementations. Camera, MediaDrm, measurement and
+backup classes describe hardware or system capabilities this browser device does not provide.
+The interest screen once logged a dynamic-layout expression referencing absent sibling ids;
+the feed continued and all later video captures rendered, so this is recorded as live-content
+fallback evidence rather than suppressed as a platform error.
