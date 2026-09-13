@@ -39,6 +39,8 @@ export const CONTEXT_OPTS = {
   timezoneId: "UTC",
   colorScheme: "light" as const,
   reducedMotion: "reduce" as const,
+  geolocation: { latitude: 37.422, longitude: -122.084, accuracy: 20 },
+  permissions: ["geolocation"],
 };
 export const launchBrowser = () => chromium.launch({ headless: true, args: LAUNCH_ARGS, ignoreDefaultArgs: ["--disable-features=IsolateOrigins,site-per-process"] });
 
