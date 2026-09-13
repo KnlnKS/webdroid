@@ -200,6 +200,7 @@ rt.register({
     "<init>(Ljava/lang/String;I)V": function (this: JInetSocketAddress, h: string, p2: number) { this.host = h ?? ""; this.port = p2; },
     "<init>(Ljava/net/InetAddress;I)V": function (this: JInetSocketAddress, a: JInetAddress, p2: number) { this.addr = a; this.host = a?.host ?? ""; this.port = p2; },
     "static createUnresolved(Ljava/lang/String;I)Ljava/net/InetSocketAddress;": inetSock,
+    "getHostString()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host; },
     "getHostName()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host; },
     "getPort()I": function (this: JInetSocketAddress) { return this.port; },
     "getAddress()Ljava/net/InetAddress;": async function (this: JInetSocketAddress) {
