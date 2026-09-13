@@ -601,15 +601,21 @@ type FontMetrics = typeof SYSTEM_FONT;
 const familyMetrics = new Map<string, FontMetrics>();
 export function setFamilyMetrics(family: string, m: FontMetrics) { familyMetrics.set(family, m); }
 /** the metrics of the first family in a paint's CSS stack — the one the browser will pick */
-function metricsOf(p: JPaint): FontMetrics {
+function metricsOf(p: JPaint): FontMetrics | undefined {
   const fam = p.tf.family;
   const i = fam.indexOf(",");
-  return familyMetrics.get(i < 0 ? fam : fam.slice(0, i)) ?? SYSTEM_FONT;
+  return familyMetrics.get(i < 0 ? fam : fam.slice(0, i));
 }
 function vmetrics(p: JPaint): { a: number; d: number } {
   const f = p.font();
   const hit = vmetCache.get(f);
   if (hit) return hit;
+  const face = metricsOf(p);
+  if (face) {
+    const v = { a: -p.textSize * face.ascent, d: p.textSize * face.descent };
+    vmetCache.set(f, v);
+    return v;
+  }
   const ctx = measureCtx(f);
   const m = ctx.measureText("Ag");
   const v = {
@@ -621,16 +627,16 @@ function vmetrics(p: JPaint): { a: number; d: number } {
 }
 export function fontAscent(p: JPaint): number { return vmetrics(p).a; }
 export function fontDescent(p: JPaint): number { return vmetrics(p).d; }
-export function fontTop(p: JPaint): number { const m = metricsOf(p); return vmetrics(p).a * (m.top / m.ascent); }
-export function fontBottom(p: JPaint): number { const m = metricsOf(p); return vmetrics(p).d * (m.bottom / m.descent); }
+export function fontTop(p: JPaint): number { const m = metricsOf(p) ?? SYSTEM_FONT; return vmetrics(p).a * (m.top / m.ascent); }
+export function fontBottom(p: JPaint): number { const m = metricsOf(p) ?? SYSTEM_FONT; return vmetrics(p).d * (m.bottom / m.descent); }
 export function fillFontMetrics(p: JPaint, fm: { top: number; ascent: number; descent: number; bottom: number; leading: number } | null, int: boolean) {
   const a = fontAscent(p), d = fontDescent(p);
   const ascent = int ? Math.round(a) : a, descent = int ? Math.round(d) : d;
   if (fm) {
     const top = fontTop(p), bottom = fontBottom(p);
     fm.ascent = ascent; fm.descent = descent;
-    fm.top = int ? Math.round(top) : top;
-    fm.bottom = int ? Math.round(bottom) : bottom;
+    fm.top = int ? Math.floor(top) : top;
+    fm.bottom = int ? Math.ceil(bottom) : bottom;
     fm.leading = 0;
   }
   return descent - ascent;

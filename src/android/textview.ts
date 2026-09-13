@@ -120,12 +120,13 @@ export class JTextView extends JView {
     return this.upper;
   }
   lineHeight(): number {
-    return Math.round((fontDescent(this.paintT) - fontAscent(this.paintT)) * this.lineSpacingMult + this.lineSpacingExtra);
+    const height = Math.round(fontDescent(this.paintT)) - Math.round(fontAscent(this.paintT));
+    return Math.round(height * this.lineSpacingMult + this.lineSpacingExtra);
   }
   /** includeFontPadding (AOSP's default): the first line's box starts at the font's `top` and the
    *  last one's ends at its `bottom`, so a line box is taller than ascent..descent at both ends. */
-  topPad(): number { return this.includePad ? Math.round(fontAscent(this.paintT) - fontTop(this.paintT)) : 0; }
-  bottomPad(): number { return this.includePad ? Math.round(fontBottom(this.paintT) - fontDescent(this.paintT)) : 0; }
+  topPad(): number { return this.includePad ? Math.round(fontAscent(this.paintT)) - Math.floor(fontTop(this.paintT)) : 0; }
+  bottomPad(): number { return this.includePad ? Math.ceil(fontBottom(this.paintT)) - Math.round(fontDescent(this.paintT)) : 0; }
   textHeight(lines: number): number { return lines * this.lineHeight() + this.topPad() + this.bottomPad(); }
   ascent(): number { return Math.round(-fontAscent(this.paintT)) + this.topPad(); }
   /** line breaking of `text` at `avail`: a pure function of its arguments, the paint and the

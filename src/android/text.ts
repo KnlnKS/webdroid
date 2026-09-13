@@ -796,11 +796,11 @@ class JLayout extends JObj {
   tops: number[] | null = null; bases: number[] | null = null;
   layoutLines(maxLines = Number.MAX_SAFE_INTEGER) {
     const p = this.paint;
-    this.asc = fontAscent(p); this.desc = fontDescent(p);
+    this.asc = Math.round(fontAscent(p)); this.desc = Math.round(fontDescent(p));
     // includePad (AOSP's default): the first line's box reaches up to the font's `top` and the
     // last one's down to its `bottom`; the space between lines stays ascent..descent.
-    this.padTop = this.includePad ? Math.round(this.asc - fontTop(p)) : 0;
-    this.padBottom = this.includePad ? Math.round(fontBottom(p) - this.desc) : 0;
+    this.padTop = this.includePad ? this.asc - Math.floor(fontTop(p)) : 0;
+    this.padBottom = this.includePad ? Math.ceil(fontBottom(p)) - this.desc : 0;
     this.lines = this.replacements.length ? greedyBreaks(this.text, p, this.width, 0, this.width, maxLines,
       (start, end) => this.rangeWidth(start, end), (start, end) => {
         const span = this.replacements.find((s) => s.start < end && s.end > end);
