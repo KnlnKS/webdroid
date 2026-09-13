@@ -414,7 +414,7 @@ rt.register({
     "isP2pSupported()Z": () => 0,
   },
 });
-class JNetworkRequest extends JObj { caps: number[] = []; transports: number[] = []; }
+class JNetworkRequest extends JObj { caps: number[] = []; transports: number[] = []; includeOtherUidNetworks = false; }
 class JNetworkRequestBuilder extends JObj { r = new JNetworkRequest(); }
 rt.register({
   name: "android/net/NetworkRequest", ctor: JNetworkRequest,
@@ -432,9 +432,13 @@ rt.register({
       this.r.caps = this.r.caps.filter((x) => x !== c); return this;
     },
     "addTransportType(I)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, t: number) { this.r.transports.push(t); return this; },
+    "setIncludeOtherUidNetworks(Z)Landroid/net/NetworkRequest$Builder;": function (this: JNetworkRequestBuilder, include: number) {
+      this.r.includeOtherUidNetworks = include !== 0;
+      return this;
+    },
     "build()Landroid/net/NetworkRequest;": function (this: JNetworkRequestBuilder) {
       const r = new JNetworkRequest();
-      r.caps = this.r.caps.slice(); r.transports = this.r.transports.slice();
+      r.caps = this.r.caps.slice(); r.transports = this.r.transports.slice(); r.includeOtherUidNetworks = this.r.includeOtherUidNetworks;
       return r;
     },
   },
