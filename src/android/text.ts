@@ -7,8 +7,9 @@ import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontT
 import { device } from "../shell/config";
 import { formatDate } from "../jvm/natives/jtext";
 import { toJsArray } from "../jvm/natives/jutil";
-import { localeDirection } from "../jvm/natives/jvalues";
+import { localeDirection, usLocale } from "../jvm/natives/jvalues";
 import { readStreamFully } from "../jvm/natives/jio";
+import { directionality } from "../jvm/bidi";
 
 class JAnnotation extends JObj { key: string | null = null; value: string | null = null; }
 async function writeAnnotation(this: JAnnotation, parcel: JObj) {
@@ -42,20 +43,32 @@ export class JTextPaint extends JPaint {
   bgColor = 0;
   baselineShift = 0;
   drawableState: Int32Array | null = null;
+  underlineColor = 0;
+  underlineThickness = 0;
   /** dp/sp-based span math (updateDrawState/updateMeasureState) reads this to scale —
    *  shares the one device-density constant, not a magic literal. */
   density = device.density;
 }
 rt.register({
   name: "android/text/TextPaint", ctor: JTextPaint, sup: "android/graphics/Paint",
-  fields: ["linkColor", "bgColor", "baselineShift", "drawableState", "density"],
+  fields: ["linkColor", "bgColor", "baselineShift", "drawableState", "density", "underlineColor", "underlineThickness"],
   methods: {
     "<init>()V": function () {},
     "<init>(I)V": function () {},
     "<init>(Landroid/graphics/Paint;)V": function (this: JTextPaint, p: JPaint) {
       if (p) copyPaint(p, this);
     },
-    "set(Landroid/text/TextPaint;)V": function (this: JTextPaint, p: JTextPaint) { if (p) copyPaint(p, this); },
+    "set(Landroid/text/TextPaint;)V": function (this: JTextPaint, p: JTextPaint) {
+      if (!p) return;
+      copyPaint(p, this);
+      this.linkColor = p.linkColor;
+      this.bgColor = p.bgColor;
+      this.baselineShift = p.baselineShift;
+      this.drawableState = p.drawableState;
+      this.density = p.density;
+      this.underlineColor = p.underlineColor;
+      this.underlineThickness = p.underlineThickness;
+    },
     // the CharSequence half of Paint.getRunCharacterAdvance: same body, but flattening a
     // Spanned belongs here. AOSP's StaticLayout reads per-character advances through it.
     "getRunCharacterAdvance(Ljava/lang/CharSequence;IIIIZI[FILandroid/graphics/RectF;Landroid/graphics/Paint$RunInfo;)F":
@@ -1142,15 +1155,63 @@ export function mkStaticLayout(text: string, p: JTextPaint, w: number, mult = 1,
   return l;
 }
 
-// Layout$Alignment enum + TextDirectionHeuristics markers
+// Layout$Alignment enum + TextDirectionHeuristics
 mkEnumSet("android/text/Layout$Alignment", ["ALIGN_NORMAL", "ALIGN_OPPOSITE", "ALIGN_CENTER"]);
-class JTDH extends JObj {}
-rt.register({ name: "android/text/TextDirectionHeuristic", ctor: JTDH });
+type TextDirectionKind = "ltr" | "rtl" | "first-ltr" | "first-rtl" | "any-rtl" | "locale";
+type Direction = "ltr" | "rtl" | "unknown";
+class JTDH extends JObj { constructor(readonly kind: TextDirectionKind) { super(); } }
+
+function codePointDirection(codePoint: number): Direction {
+  const bidi = directionality(codePoint);
+  if (bidi === 0) return "ltr";
+  if (bidi === 1 || bidi === 2) return "rtl";
+  if (bidi !== -1) return "unknown";
+  if (codePoint >= 0x0590 && codePoint <= 0x08ff || codePoint >= 0xfb1d && codePoint <= 0xfdcf ||
+      codePoint >= 0xfdf0 && codePoint <= 0xfdff || codePoint >= 0xfe70 && codePoint <= 0xfeff ||
+      codePoint >= 0x10800 && codePoint <= 0x10fff || codePoint >= 0x1e800 && codePoint <= 0x1efff) return "rtl";
+  if (codePoint >= 0x2065 && codePoint <= 0x2069 || codePoint >= 0xfff0 && codePoint <= 0xfff8 ||
+      codePoint >= 0xe0000 && codePoint <= 0xe0fff || codePoint >= 0xfdd0 && codePoint <= 0xfdef ||
+      (codePoint & 0xfffe) === 0xfffe || codePoint >= 0x20a0 && codePoint <= 0x20cf ||
+      codePoint >= 0xd800 && codePoint <= 0xdfff) return "unknown";
+  return "ltr";
+}
+
+function scanDirection(text: string, start: number, count: number, anyRtl: boolean): Direction {
+  let openIsolates = 0;
+  let sawLtr = false;
+  const end = start + count;
+  for (let i = start; i < end;) {
+    const codePoint = text.codePointAt(i) ?? 0;
+    i += codePoint >= 0x10000 ? 2 : 1;
+    if (codePoint >= 0x2066 && codePoint <= 0x2068) { openIsolates++; continue; }
+    if (codePoint === 0x2069) { if (openIsolates) openIsolates--; continue; }
+    if (openIsolates) continue;
+    const dir = codePointDirection(codePoint);
+    if (!anyRtl && dir !== "unknown") return dir;
+    if (anyRtl && dir === "rtl") return "rtl";
+    if (dir === "ltr") sawLtr = true;
+  }
+  return sawLtr ? "ltr" : "unknown";
+}
+
+rt.register({ name: "android/text/TextDirectionHeuristic", ctor: JTDH, methods: {
+  "isRtl(Ljava/lang/CharSequence;II)Z": async function (this: JTDH, cs: unknown, start: number, count: number) {
+    if (cs === null || cs === undefined) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+    const text = await csText(cs);
+    if (start < 0 || count < 0 || text.length - count < start) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+    if (this.kind === "ltr") return 0;
+    if (this.kind === "rtl") return 1;
+    if (this.kind === "locale") return localeDirection(usLocale);
+    const direction = scanDirection(text, start, count, this.kind === "any-rtl");
+    if (direction !== "unknown") return direction === "rtl" ? 1 : 0;
+    return this.kind === "first-rtl" ? 1 : 0;
+  },
+} });
 rt.register({
   name: "android/text/TextDirectionHeuristics", ctor: class extends JObj {},
   statics: {
-    LTR: new JTDH(), RTL: new JTDH(), FIRSTSTRONG_LTR: new JTDH(), FIRSTSTRONG_RTL: new JTDH(),
-    ANYRTL_LTR: new JTDH(), LOCALE: new JTDH(),
+    LTR: new JTDH("ltr"), RTL: new JTDH("rtl"), FIRSTSTRONG_LTR: new JTDH("first-ltr"), FIRSTSTRONG_RTL: new JTDH("first-rtl"),
+    ANYRTL_LTR: new JTDH("any-rtl"), LOCALE: new JTDH("locale"),
   },
 });
 rt.markers("android/graphics/text/LineBreakConfig");
