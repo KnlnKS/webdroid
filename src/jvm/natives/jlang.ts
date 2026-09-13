@@ -479,6 +479,7 @@ for (const [sup, names] of [
     "NegativeArraySizeException ArrayStoreException SecurityException IllegalMonitorStateException java/util/NoSuchElementException " +
     "java/util/ConcurrentModificationException"],
   ["ReflectiveOperationException", "ClassNotFoundException NoSuchMethodException NoSuchFieldException InstantiationException IllegalAccessException"],
+  ["IllegalArgumentException", "IllegalThreadStateException"],
   ["Error", "StackOverflowError OutOfMemoryError AssertionError LinkageError InternalError"],
   ["LinkageError", "NoClassDefFoundError NoSuchMethodError NoSuchFieldError UnsatisfiedLinkError AbstractMethodError ExceptionInInitializerError"],
   ["java/io/IOException", "java/io/FileNotFoundException java/io/EOFException java/io/UnsupportedEncodingException java/net/SocketException " +
@@ -1357,7 +1358,11 @@ export const threadExit = { hook: null as ((t: JThread) => void) | null };
 export class JThread extends JObj {
   jname = "Thread";
   daemon = 0;
-  alive = 0;
+  private live = 0;
+  started = false;
+  parked = 0;
+  get alive() { return this.live; }
+  set alive(value: number) { this.live = value; if (value) this.started = true; }
   prio = 5;
   target: unknown = null;   // Runnable
   locals = inheritedLocals();
@@ -1405,21 +1410,24 @@ export function park(t: JThread, arm: (wake: () => void) => () => void, timeoutM
   const ie = () => rt.mkThrowable("java/lang/InterruptedException", null);
   if (t.interrupted) { t.interrupted = 0; return Promise.reject(ie()); }
   return new Promise<boolean>((resolve, reject) => {
+    t.parked = timeoutMs === undefined ? 3 : 4;
     let id: ReturnType<typeof setTimeout> | undefined;
-    const disarm = arm(() => { t.wake = null; unparkTimeout(id); resolve(true); });
+    const disarm = arm(() => { t.parked = 0; t.wake = null; unparkTimeout(id); resolve(true); });
     // a delay past 2^31-1 ms overflows setTimeout and fires at once; treat it as untimed
-    if (timeoutMs !== undefined && timeoutMs < 0x7fffffff) id = parkTimeout(() => { disarm(); t.wake = null; resolve(false); }, timeoutMs);
-    t.wake = () => { disarm(); t.wake = null; unparkTimeout(id); t.interrupted = 0; reject(ie()); };
+    if (timeoutMs !== undefined && timeoutMs < 0x7fffffff) id = parkTimeout(() => { disarm(); t.parked = 0; t.wake = null; resolve(false); }, timeoutMs);
+    t.wake = () => { disarm(); t.parked = 0; t.wake = null; unparkTimeout(id); t.interrupted = 0; reject(ie()); };
   });
 }
 
 function join(t: JThread, ms: number): Promise<void> | undefined {
   const done = t.done;
-  if (!done || ms <= 0) return done ?? undefined;
-  return new Promise((resolve) => {
-    const id = parkTimeout(resolve, ms);
-    void done.then(() => { unparkTimeout(id); resolve(); });
-  });
+  if (ms < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout");
+  if (!done || !t.alive) return;
+  return park(curThread, (wake) => {
+    let pending = true;
+    void done.then(() => { if (pending) wake(); });
+    return () => { pending = false; };
+  }, ms > 0 ? ms : undefined).then(() => {});
 }
 
 
@@ -1441,10 +1449,15 @@ rt.register({
     "setPriority(I)V": function (this: JThread, p: number) { this.prio = p; },
     "getPriority()I": function (this: JThread) { return this.prio; },
     "isAlive()Z": function (this: JThread) { return this.alive; },
+    "getState()Ljava/lang/Thread$State;": function (this: JThread) {
+      rt.link("java/lang/Thread$State");
+      return threadStates[!this.started ? 0 : !this.alive ? 5 : rt.monitors.isBlocked(this) ? 2 : this.parked || 1];
+    },
     "getId()J": function (this: JThread) { return BigInt(idHash(this)); },
     "isInterrupted()Z": function (this: JThread) { return this.interrupted; },
     "interrupt()V": function (this: JThread) { this.interrupted = 1; this.wake?.(); },
     "start()V": function (this: JThread) {
+      if (this.started) throw rt.mkThrowable("java/lang/IllegalThreadStateException", "Thread already started");
       this.alive = 1;
       // the body begins now, not after the caller's whole main-looper job: a thread that
       // publishes its Handler has it by the time the next lifecycle call posts to it
@@ -1461,7 +1474,7 @@ rt.register({
     "run()V": async function (this: JThread) {
       if (this.target) await vcall(this.target, "run", "()V");
     },
-    "join()V": function (this: JThread) { return this.done ?? undefined; },
+    "join()V": function (this: JThread) { return join(this, 0); },
     "join(J)V": function (this: JThread, ms: bigint) { return join(this, Number(ms)); },
     "join(JI)V": function (this: JThread, ms: bigint, ns: number) { return join(this, Number(ms) + (ns > 0 ? 1 : 0)); },
     "getThreadGroup()Ljava/lang/ThreadGroup;": () => mainGroup,
@@ -1602,7 +1615,7 @@ export function mkEnumSet(cls: string, names: string[], extra: NativeSpec["metho
 }
 
 rt.markers("java/lang/Thread$UncaughtExceptionHandler");
-mkEnumSet("java/lang/Thread$State", ["NEW", "RUNNABLE", "BLOCKED", "WAITING", "TIMED_WAITING", "TERMINATED"]);
+const threadStates = mkEnumSet("java/lang/Thread$State", ["NEW", "RUNNABLE", "BLOCKED", "WAITING", "TIMED_WAITING", "TERMINATED"]);
 
 // java.lang.Character.UnicodeScript. Java's constant names ARE Unicode's script names, and the
 // regex engine already carries the table, so `of()` is a property test rather than a range list.

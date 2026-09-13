@@ -14,6 +14,7 @@ export class Monitors {
   blocked(): { thread: unknown; obj: object | string; owner: unknown }[] {
     return [...this.waiting].map(([thread, obj]) => ({ thread, obj, owner: this.get(obj).owner }));
   }
+  isBlocked(thread: unknown): boolean { return this.waiting.has(thread); }
 
   private get(obj: object | string | null | 0): Monitor {
     if (obj == null || obj === 0) throw this.exception("NullPointerException");
