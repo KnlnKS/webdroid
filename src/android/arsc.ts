@@ -98,18 +98,19 @@ export class Arsc {
     // group), each with its own name pools — so they are read per chunk, never kept on `this`.
     const typeNames = new StringPool(view, base + view.getUint32(base + 268, true));
     const keyNames = new StringPool(view, base + view.getUint32(base + 276, true));
+    const typeIdOffset = headerSize >= 288 ? view.getUint32(base + 284, true) : 0;
     let pos = base + headerSize;
     const end = base + size;
     while (pos < end) {
       const ctype = view.getUint16(pos, true);
       const csize = view.getUint32(pos + 4, true);
-      if (ctype === 0x0201) this.parseType(view, pos, typeNames, keyNames, remap);
+      if (ctype === 0x0201) this.parseType(view, pos, typeNames, keyNames, remap, typeIdOffset);
       pos += csize;
     }
   }
 
-  private parseType(view: DataView, base: number, typeNames: StringPool, keyNames: StringPool, remap: Remap) {
-    const id = view.getUint8(base + 8);
+  private parseType(view: DataView, base: number, typeNames: StringPool, keyNames: StringPool, remap: Remap, typeIdOffset: number) {
+    const rawId = view.getUint8(base + 8), id = rawId + typeIdOffset;
     const cfgSize = view.getUint32(base + 20, true);
     const cfg: Config = { ...defaultConfig };
     const c = base + 20;
@@ -141,7 +142,7 @@ export class Arsc {
     }
     // Keep other locales as encoded chunks until a scoped resource lookup selects them.
     if (this.skipAtParse(cfg)) return;
-    const chunk: TypeChunk = { id, name: typeNames.get(id - 1), config: cfg, entries: new Map() };
+    const chunk: TypeChunk = { id, name: typeNames.get(rawId - 1), config: cfg, entries: new Map() };
     if (cfg.lang && cfg.lang !== this.device.lang || cfg.dir && cfg.dir !== this.device.dir) {
       chunk.load = () => this.parseEntries(view, base, keyNames, chunk, remap);
     } else this.parseEntries(view, base, keyNames, chunk, remap);
@@ -230,7 +231,10 @@ export class Arsc {
     return chunks;
   }
 
-  typeName(typeId: number): string { return this.types.get(typeId)?.[0]?.name ?? "?"; }
+  typeName(typeId: number, entryIdx?: number): string {
+    const chunks = this.chunksFor(typeId);
+    return (entryIdx === undefined ? chunks[0] : chunks.find((chunk) => chunk.entries.has(entryIdx)))?.name ?? "?";
+  }
 
   /** every type name the table defines, each once */
   allTypes(): string[] {
@@ -306,8 +310,8 @@ export class Arsc {
     // staging type id, which is allocated high. Ascending type id, first name wins, so the
     // finalized id is the one a name resolves to.
     for (const tid of [...this.types.keys()].sort((a, b) => a - b)) {
-      if (this.typeName(tid) !== typeName) continue;
       for (const ch of this.chunksFor(tid)) {
+        if (ch.name !== typeName) continue;
         for (const [idx, e] of ch.entries) if (!m.has(e.key)) m.set(e.key, (this.pkgId << 24) | (tid << 16) | idx);
       }
     }

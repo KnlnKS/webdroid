@@ -183,7 +183,7 @@ export class Resources {
 
   idType(resId: number): string {
     const a = this.tbl(resId);
-    return a ? a.typeName((resId >> 16) & 0xff) : "?";
+    return a ? a.typeName((resId >> 16) & 0xff, resId & 0xffff) : "?";
   }
   idName(resId: number): string {
     return this.tbl(resId)?.entry(resId)?.key ?? "0x" + resId.toString(16);
