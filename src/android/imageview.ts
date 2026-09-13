@@ -16,6 +16,7 @@ export class JImageView extends JView {
     this.dr = d;
     this.drawableW = d?.intrinsicW() ?? -1; this.drawableH = d?.intrinsicH() ?? -1;
     if (d) d.callback = this;
+    invalidate(this);
   }
   drawableW = -1; drawableH = -1;
   scaleType = 3; // FIT_CENTER
@@ -61,28 +62,28 @@ const imageViewMethods: NativeSpec["methods"] = {
   "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JImageView) { return this.drawable; },
   "setScaleType(Landroid/widget/ImageView$ScaleType;)V": function (this: JImageView, st: { ord: number }) {
     this.scaleType = st?.ord ?? 3;
-    invalidate();
+    invalidate(this);
   },
   "setAdjustViewBounds(Z)V": function (this: JImageView, v: number) { this.adjustBounds = !!v; },
   "setMaxWidth(I)V": function (this: JImageView, v: number) { this.maxW = v; requestLayout(this); },
   "setMaxHeight(I)V": function (this: JImageView, v: number) { this.maxH = v; requestLayout(this); },
   "getMaxWidth()I": function (this: JImageView) { return Number.isFinite(this.maxW) ? this.maxW : 0x7fffffff; },
   "getMaxHeight()I": function (this: JImageView) { return Number.isFinite(this.maxH) ? this.maxH : 0x7fffffff; },
-  "setColorFilter(I)V": function (this: JImageView, c: number) { if (this.drawable) this.drawable.tint = c; invalidate(); },
+  "setColorFilter(I)V": function (this: JImageView, c: number) { if (this.drawable) this.drawable.tint = c; invalidate(this); },
   "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": function (this: JImageView, c: number) {
     if (this.drawable) this.drawable.tint = c;
-    invalidate();
+    invalidate(this);
   },
   "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JImageView, f: any) {
     if (this.drawable) { this.drawable.tint = f?.tint ?? null; this.drawable.tintMatrix = f?.matrix ?? null; }
-    invalidate();
+    invalidate(this);
   },
-  "clearColorFilter()V": function (this: JImageView) { if (this.drawable) { this.drawable.tint = null; this.drawable.tintMatrix = null; } },
+  "clearColorFilter()V": function (this: JImageView) { if (this.drawable) { this.drawable.tint = null; this.drawable.tintMatrix = null; } invalidate(this); },
   "getImageTintList()Landroid/content/res/ColorStateList;": function (this: JImageView) { return this.tintCsl; },
   "setImageTintList(Landroid/content/res/ColorStateList;)V": function (this: JImageView, csl: JColorStateList | null) {
     this.tintCsl = csl;
     if (this.drawable && csl) this.drawable.tint = cslColor(csl, this.drawableState());
-    invalidate();
+    invalidate(this);
   },
   "setImageLevel(I)V": function (this: JImageView, l: number) { if (this.drawable) this.drawable.level = l; },
   ...stubs(null, "getScaleType()Landroid/widget/ImageView$ScaleType;"),

@@ -3,7 +3,7 @@ import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { mangleMethod } from "../src/jvm/abi";
 import { newObj, vcall, vcallOn, curThread, JThread } from "../src/jvm/natives/jlang";
-import { JView, measureView, makeSpec, MS_AT_MOST } from "../src/android/view";
+import { JView, JViewGroup, measureView, makeSpec, MS_AT_MOST } from "../src/android/view";
 
 rt.linkNatives();
 function drawable() {
@@ -32,6 +32,28 @@ test("ImageView measures virtual drawable dimensions and caches them for drawing
   await measureView(view, makeSpec(200, MS_AT_MOST), makeSpec(200, MS_AT_MOST));
   expect([view.measuredW, view.measuredH]).toEqual([84, 48]);
   expect(threads[0]).toBe(threads[1]);
+});
+
+test("ImageView content and appearance updates invalidate ancestor recordings", async () => {
+  const holder = rt.make("android/view/ViewGroup"), parent = rt.make("android/widget/FrameLayout");
+  const view = rt.make("android/widget/ImageView"), targets: JView[] = [];
+  if (!(holder instanceof JViewGroup) || !(parent instanceof JViewGroup) || !(view instanceof JView)) throw new Error("Invalid view delegates");
+  parent.parent = holder; view.parent = parent;
+  Object.assign(holder, {
+    [mangleMethod("onDescendantInvalidated", "(Landroid/view/View;Landroid/view/View;)V")]: (_child: JView, target: JView) => { targets.push(target); },
+  });
+  const d = rt.make("android/graphics/drawable/ColorDrawable");
+  for (const [name, desc, args] of [
+    ["setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V", [d]],
+    ["setColorFilter", "(I)V", [0xff00ff00]],
+    ["clearColorFilter", "()V", []],
+    ["setImageBitmap", "(Landroid/graphics/Bitmap;)V", [null]],
+    ["setImageResource", "(I)V", [0]],
+  ] satisfies [string, string, unknown[]][]) {
+    targets.length = 0;
+    await vcall(view, name, desc, ...args);
+    expect(targets).toEqual([view]);
+  }
 });
 test("suggested view minimums respect virtual background dimensions", async () => {
   const { d } = drawable(), view = rt.make("android/widget/TextView");

@@ -2436,3 +2436,12 @@ thread and dispatching done() with vcallOn fixes this boundary. The focused succ
 completion check fails on the preceding code (observing main instead of the worker); six
 executor checks (30 assertions) and typecheck pass. Fresh full Chrome without the span/canvas
 instrumentation reaches the sign-in tutorial with no trace-end errors.
+
+The blank Street View thumbnail contained a decoded 270x162 bitmap with real pixels.
+Its ImageView was hosted under Compose's AndroidViewHolder. Calling the public invalidate()
+made the thumbnail visible immediately: image replacement requested layout but did not notify
+ancestor recordings, while appearance setters only dirtied the global frame. ImageView's
+shared drawable setter and appearance changes now invalidate the view through the existing
+ancestor callback. Five drawable checks (20 assertions), including nested ancestor notification
+for image replacement/filter changes, and typecheck pass. This addresses stale image content;
+rounded clipping is a separate remaining visual difference.
