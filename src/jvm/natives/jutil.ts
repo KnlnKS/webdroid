@@ -994,6 +994,13 @@ function enumSetStatics() {
     return s;
   };
   return {
+    "clone()Ljava/util/EnumSet;": function (this: JEnumSet) {
+      const copy = new (this.constructor as new () => JEnumSet)();
+      copy.enumClass = this.enumClass;
+      for (const [key, entry] of this.m) copy.m.set(key, { k: entry.k, v: entry.v });
+      copy.slow = this.slow.map((entry) => ({ k: entry.k, v: entry.v }));
+      return copy;
+    },
     "static allOf(Ljava/lang/Class;)Ljava/util/EnumSet;": async (c: JObj) => fromValues(c, true, []),
     "static noneOf(Ljava/lang/Class;)Ljava/util/EnumSet;": (c: JObj) => fromValues(c, false, []),
     "static of(Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown) => fromValues(null, false, [a]),
