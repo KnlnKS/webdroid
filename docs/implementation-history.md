@@ -1825,3 +1825,129 @@ Final full-Chrome captures use `127.0.0.1:4106` as the shell origin, giving the
 isolated renderer a fresh cache namespace. The category heading renders its
 Unicode bullet correctly and Android Back returns to Home. The original Chrome
 origin retained previously decoded scripts despite a parent-page hard reload.
+
+## Twitch mobile 31.0.0 startup — 2026-09-13
+
+The replacement ARM64 bundle (3100006, three unchanged splits) installs on the
+isolated API 35 AVD, emulator-5586. The 58,282 classes smoke-compile with zero
+method failures. Android reaches welcome and web login. LoginActivity sets
+FLAG_SECURE, so adb screenshots are black; visible emulator-window captures
+provide the reference without changing app bytes or window flags.
+
+Mobile startup exposed missing CompletableFuture supplier/dependent operations,
+queue drainTo, emptyIterator, identifier classification, AtomicLongArray.lazySet,
+JSONStringer, unsigned long formatting, display/window contexts and process ABI
+fields. Undefined Build.CPU_ABI caused a downstream StringUtils null-check failure.
+Native-created iterators also lacked registered interface defaults: linking now
+copies those defaults, preserving concrete overrides. Focused tests cover these
+paths. Window contexts retain their associated display and own window manager;
+full display-area/token behavior remains outside the observed implementation.
+
+Subsequent startup needed WebSettings.getDefaultUserAgent, camera callback base
+classes, finite-number checks, File natural ordering, and TimeUnit enum values.
+Camera callbacks implement AOSP's empty defaults only; abstract app callbacks
+remain app-owned and camera capture is not claimed. A dalvikvm reference probe
+confirms java.beans.Transient and ConstructorProperties are absent on Android,
+while BaseStream and CaptureCallback exist. Optional MIUI referrer lookup can
+also appear; these probes do not establish missing Android platform behavior.
+
+Twitch login exposed two shared WebView bugs. Frame dimensions followed the
+browser's displayed phone size (475 CSS pixels here) instead of Android density
+(360 CSS pixels). Frames now lay out in density-independent pixels and scale
+through one ResizeObserver on their containing layer, avoiding per-frame layout
+reads. A Twitch-only browser check confirms 360x592 CSS layout before and after
+resizing the host viewport. Second, evaluateJavascript could send before the
+isolated renderer had an origin, throwing an invalid-target-origin browser
+exception. Evaluations now wait for renderer readiness and are cancelled with
+other outstanding evaluations when navigation destroys that renderer. Repeating
+startup/login removes that exception and leaves the main queue responsive.
+
+Full Chrome renders welcome, login, and signup (email and phone forms). Matching
+light appearance uses a temporary Chrome media emulation because macOS is dark and
+the AVD is light. Login sizing matches Android's logical geometry. A browser keyboard-map permission-policy error appears intermittently, including
+in the final dark-mode headless check. It is separate from Java diagnostics and
+does not prevent the tested native-portal login/Back interactions.
+Signed-in functionality awaits user authentication. The previous TV full-suite
+result does not validate these mobile changes. Artifacts are under
+`tests/e2e/actual/twitch-investigation/mobile-31/`.
+
+
+Welcome layout exposed missing ViewGroup.onViewAdded/onViewRemoved dispatch.
+ConstraintLayout's unchanged Barrier implementation had zero referenced widgets;
+dispatching virtual hierarchy callbacks before listeners gives it both buttons and
+the correct top direction. Mutations propagate suspended overrides, including
+in-layout and range removal, while default native hierarchy callbacks stay synchronous.
+SpannableStringBuilder now preserves appended span identities and offsets, and
+TextView/StaticLayout draw CharacterStyle runs through virtual updateDrawState.
+ForegroundColorSpan's color reaches Paint. A real browser bitmap probe verifies
+white highlighted glyphs and blue unstyled glyphs in both drawing paths. Full
+metric-affecting span measurement remains incomplete.
+
+The bundled Roobert font measured at 68 px on Android reports top=-79, ascent=-67,
+descent=14, bottom=18. An isolated instrumentation APK measured the unchanged font;
+its hhea ascender/descender are 966/-204, head yMax/yMin 1129/-251, unitsPerEm 975.
+The parser incorrectly used OS/2 win values for padded bounds, and browser-rounded
+ascenders compounded the error. Glyph bounds now supply padding; registered faces
+retain fractional metrics until Android integer rounding. Welcome rows now measure
+97 px and the final three-line block 259 px, matching AVD bounds exactly. Drawable
+XML dimensions now resolve resource/theme references before decoding; the APK's
+6 dp corner radius produces the reference's rounded buttons.
+
+A rendered login form was insufficient evidence: its Back button rejected with
+"Portals plugin is not implemented". The APK's l350 WebViewClient override serves
+bundled authentication HTML through shouldInterceptRequest, but the platform never
+called it. Isolated WebView requests now invoke the app's callback, preserving
+method, headers and main-frame identity; returned InputStreams and response metadata
+reach the existing document/script loader. Redirect callbacks follow Android's
+initial-request-only rule. Default clients avoid this callback transport. Intercepted
+bodies are currently buffered, not streamed. URLConnection.guessContentTypeFromName
+uses the shared MIME table and Android's filename/fragment/directory rules. Script
+evaluation now waits for the document's message listener, not just the outer
+renderer loader. The Twitch-only test verifies username entry/clearing, in-app Back,
+360x592 CSS dimensions through resizing, progressing frames and no observed
+uncaught/layout/draw failures or native-required entries. Raw error-level Java logs
+include SLF4J's three no-provider warnings, also observed in AVD logcat; the focused
+exception filter alone does not prove an empty raw log. Optional java.beans and
+MIUI probes remain. Full Chrome
+also exposes diagnostics in all four background Android process frames; each reports
+empty missing-API and native-required sets.
+
+The first final mobile E2E completed 134 steps in 11 flows and exposed a span
+regression: the new drawing path reached unimplemented StyleSpan and RelativeSizeSpan
+paint updates in FitNotes and TikTok. Their draw/measure callbacks now follow Android
+style composition, weight adjustment and relative sizing; three focused tests pass
+with ten assertions. Twitch also probes ScaleGestureDetector.OnScaleGestureListener,
+now linked as an interface; this does not claim a scale detector implementation.
+All 735 earlier unit tests pass (21,015 assertions), and typecheck passes after the
+span fixes. The repeated final serialized E2E completes all 134 steps across 11 flows in
+674.6 seconds. Missing-API sets match the starting commit, with no native-required
+entries, queue wedges, capture failures, or layout/draw errors. TikTok and Lichess
+retain their baseline limitations. Resy emits one unmatched Okio watchdog failure;
+a full baseline repeat, a baseline startup repeat, and a candidate startup repeat
+do not reproduce it. The isolated failure remains unresolved, not waived as a
+baseline issue. Its log and all repeat captures are retained.
+Flappy Bird's low FPS reproduces in a sequential repeat: baseline minimum 24 FPS,
+candidate 25 FPS, with nearly identical 18.96-second action totals. Original full
+captures are restored after retaining repeat artifacts separately.
+
+Final content-difference scores are FitNotes 41.12%, Mihon app 57.58%, Mihon
+onboarding 17.69%, and Harmonic 30.15% (baseline 41.54%, 57.10%, 17.56%, 29.46%).
+Mihon includes changing empty-state emoticons, and Harmonic uses live content;
+font-metric changes also affect text pixels. These scores do not prove pixel
+identity or complete compatibility. Goldens remain unchanged.
+
+Instrumented Chrome sessions reported 25,768 and 48,166 ms boot, compared with
+roughly 1.6 seconds in the focused headless run. A Chrome tab opened through the
+desktop UI reached welcome with 7,958 ms reported boot. Browser Use reported
+paused document loading during the slow reload. A short trace showed a visible,
+focused document with stalled ticks and a growing main queue; an earlier profile
+was mostly idle. Automation overhead is a candidate cause, not a controlled
+explanation or a code-level performance fix. Final ticks advance and queues drain.
+
+The ordinary Chrome launch also logged a caught `length()I is not a function`
+lookup. Login and Back work; tracing repeated navigation and a fresh dark-mode
+headless startup did not reproduce it. This remains an open compatibility finding.
+The final Chrome session uses the system dark appearance; matching light reference
+captures are retained from earlier verification. Temporary tracing was removed and
+the duplicate instrumented tabs were closed. Signed-in feed, search and playback
+remain unverified pending user authentication in Chrome and emulator-5586.
