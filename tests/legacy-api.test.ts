@@ -52,6 +52,12 @@ test("ReentrantLock timed tryLock acquires cooperatively", async () => {
   await vcall(lock, "unlock", "()V");
 });
 
+test("LinkedList has the AbstractSequentialList hierarchy", async () => {
+  const list = await newObj("java/util/LinkedList", "()V");
+  expect(rt.iof(list, "java/util/AbstractSequentialList")).toBeTruthy();
+  expect(rt.iof(list, "java/util/AbstractList")).toBeTruthy();
+});
+
 test("layout containers expose their covariant LayoutParams descriptors", () => {
   for (const name of ["FrameLayout", "LinearLayout", "RelativeLayout"]) {
     const view = rt.make(`android/widget/${name}`) as unknown as Record<string, unknown>;

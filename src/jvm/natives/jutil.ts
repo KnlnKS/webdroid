@@ -575,7 +575,8 @@ for (const n of ["java/util/ArrayList", "java/util/LinkedList", "java/util/Vecto
   const base = listMethods();
   rt.register({
     name: n, ctor: class extends JList {}, typeVars: "E",
-    sup: n === "java/util/Stack" ? "java/util/Vector" : n === "java/util/ArrayDeque" ? "java/util/AbstractCollection" : "java/util/AbstractList",
+    sup: n === "java/util/Stack" ? "java/util/Vector" : n === "java/util/ArrayDeque" ? "java/util/AbstractCollection"
+      : n === "java/util/LinkedList" ? "java/util/AbstractSequentialList" : "java/util/AbstractList",
     ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/Queue", "java/util/Deque", "java/util/RandomAccess", "java/lang/Cloneable", "java/io/Serializable"],
     methods: { ...base, ...listExtras[n]?.(base) },
   });
@@ -1776,6 +1777,10 @@ rt.register({
 rt.register({
   name: "java/util/AbstractList", ctor: JAbstractList, sup: "java/util/AbstractCollection", typeVars: "E",
   ifaces: ["java/util/List"], fields: { modCount: "modCount" }, methods: absList,
+});
+rt.register({
+  name: "java/util/AbstractSequentialList", ctor: class extends JAbstractList {}, sup: "java/util/AbstractList", typeVars: "E",
+  ifaces: ["java/util/List"], methods: absList,
 });
 rt.register({
   name: "java/util/AbstractSet", ctor: JAbstractSet, sup: "java/util/AbstractCollection", typeVars: "E",
