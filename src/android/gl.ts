@@ -326,7 +326,7 @@ rt.register({
       multMM(m, o, src, 0, t, 0);
     },
     "static setRotateM([FIFFFF)V": (m: Float32Array, o: number, a: number, x: number, y: number, z: number) => setRotate(m, a, x, y, z, o),
-    "static invertM([FI[FI)V": (inv: Float32Array, io: number, m: Float32Array, mo: number) => { invert(inv, io, m, mo); },
+    "static invertM([FI[FI)Z": invert,
     "static transposeM([FI[FI)V": (r: Float32Array, ro: number, m: Float32Array, mo: number) => {
       for (let c = 0; c < 4; c++) for (let row = 0; row < 4; row++) r[ro + c * 4 + row] = m[mo + row * 4 + c];
     },
@@ -359,16 +359,34 @@ function setRotate(m: Float32Array, deg: number, x: number, y: number, z: number
   m[o + 12] = 0; m[o + 13] = 0; m[o + 14] = 0; m[o + 15] = 1;
 }
 function invert(inv: Float32Array, io: number, src: Float32Array, so: number) {
-  const m = src.subarray(so, so + 16);
-  const r = new Float32Array(16);
-  r[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
-  r[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
-  r[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
-  r[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
-  let det = m[0] * r[0] + m[1] * r[4] + m[2] * r[8] + m[3] * r[12];
-  if (!det) { for (let i = 0; i < 16; i++) inv[io + i] = i % 5 === 0 ? 1 : 0; return; }
-  det = 1 / det;
-  for (let i = 0; i < 16; i++) inv[io + i] = (r[i] || 0) * det; // partial; adequate for 2D ortho use
+  const a = src[so], b = src[so + 1], c = src[so + 2], d = src[so + 3],
+    e = src[so + 4], f = src[so + 5], g = src[so + 6], h = src[so + 7],
+    i = src[so + 8], j = src[so + 9], k = src[so + 10], l = src[so + 11],
+    m = src[so + 12], n = src[so + 13], o = src[so + 14], p = src[so + 15];
+  const ab = a * f - b * e, ac = a * g - c * e, ad = a * h - d * e,
+    bc = b * g - c * f, bd = b * h - d * f, cd = c * h - d * g,
+    ij = i * n - j * m, ik = i * o - k * m, il = i * p - l * m,
+    jk = j * o - k * n, jl = j * p - l * n, kl = k * p - l * o;
+  const det = ab * kl - ac * jl + ad * jk + bc * il - bd * ik + cd * ij;
+  if (det === 0) return 0;
+  const r = 1 / det;
+  inv[io] = (f * kl - g * jl + h * jk) * r;
+  inv[io + 1] = (-b * kl + c * jl - d * jk) * r;
+  inv[io + 2] = (n * cd - o * bd + p * bc) * r;
+  inv[io + 3] = (-j * cd + k * bd - l * bc) * r;
+  inv[io + 4] = (-e * kl + g * il - h * ik) * r;
+  inv[io + 5] = (a * kl - c * il + d * ik) * r;
+  inv[io + 6] = (-m * cd + o * ad - p * ac) * r;
+  inv[io + 7] = (i * cd - k * ad + l * ac) * r;
+  inv[io + 8] = (e * jl - f * il + h * ij) * r;
+  inv[io + 9] = (-a * jl + b * il - d * ij) * r;
+  inv[io + 10] = (m * bd - n * ad + p * ab) * r;
+  inv[io + 11] = (-i * bd + j * ad - l * ab) * r;
+  inv[io + 12] = (-e * jk + f * ik - g * ij) * r;
+  inv[io + 13] = (a * jk - b * ik + c * ij) * r;
+  inv[io + 14] = (-m * bc + n * ac - o * ab) * r;
+  inv[io + 15] = (i * bc - j * ac + k * ab) * r;
+  return 1;
 }
 
 // ── GLSurfaceView + Renderer + EGL infra (see glview.ts)
