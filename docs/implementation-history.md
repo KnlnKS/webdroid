@@ -2551,6 +2551,14 @@ storage for a nonexistent file. File URIs now use the canonical decoded URI path
 to ParcelFileDescriptor.open, which rejects missing reads. Parcel descriptor mode parsing also
 now preserves read-write access and rejects unsupported mode strings. Eight focused resolver,
 parcel and file-stream tests (61 assertions) and typecheck pass; the new resolver tests fail
-against the preceding code. Fresh Maps preview no longer reports empty decode inputs or the
-MediaMetadataRetriever fallback error. The original thumbnail URL is still incomplete, so
+against the preceding code. An early fresh Maps preview did not report empty decode inputs or the
+MediaMetadataRetriever fallback error, but empty decode warnings recurred as later work completed. The original thumbnail URL is still incomplete, so
 this fixes false file-open success rather than restoring the image.
+
+Back input used global main-job activity to decide whether it could run inline. An external
+Back arriving while a main job was suspended therefore interleaved two main-thread flows;
+Maps reported conflicting TripDetails initialization and network callback trace spans and
+its preview could no longer close. All Back entry points are external input, so Back now
+always joins the main queue. A browser fixture holds a real main job across suspension and
+checks top-window callback ordering: the preceding implementation dispatches Back before
+the job ends; the fix waits. The focused browser check and typecheck pass.

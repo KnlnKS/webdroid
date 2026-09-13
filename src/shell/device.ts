@@ -502,7 +502,7 @@ async function buildOptionsMenu(act: JActivity) {
 // (handleLifecycleEvent inside the finish path) see the main thread, not whichever worker
 // last set curThread.
 export function pressBack(): Promise<void> {
-  return inMainJob() ? pressBack0() : onMain(pressBack0);
+  return onMain(pressBack0);
 }
 async function pressBack0() {
   // the topmost window takes the key: a dialog or popup before the activity under it
