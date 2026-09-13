@@ -77,6 +77,8 @@ rt.register({
     "getY(I)F": function (this: JMotionEvent) { return this.y; },
     "getRawX()F": function (this: JMotionEvent) { return this.rawX; },
     "getRawY()F": function (this: JMotionEvent) { return this.rawY; },
+    "getRawX(I)F": function (this: JMotionEvent) { return this.rawX; },
+    "getRawY(I)F": function (this: JMotionEvent) { return this.rawY; },
     // Single-pointer model (matches getX(I)/getY(I) above): every index reuses this event's
     // one tracked position, so PointerCoords is filled from the same backing fields.
     "getPointerCoords(ILandroid/view/MotionEvent$PointerCoords;)V": function (this: JMotionEvent, idx: number, out: JPointerCoords) {
