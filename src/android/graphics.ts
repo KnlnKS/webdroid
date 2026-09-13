@@ -1599,7 +1599,11 @@ function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
   ctx.textAlign = p.textAlignN === 1 ? "center" : p.textAlignN === 2 ? "right" : "left";
   ctx.textBaseline = "alphabetic";
   if (p.letterSpacingEm && "letterSpacing" in ctx) (ctx as any).letterSpacing = `${p.letterSpacingEm * p.textSize}px`;
-  ctx.fillText(s, x, y);
+  if (p.style !== 1) ctx.fillText(s, x, y);
+  if (p.style === 1 || p.style === 2) {
+    cv.prep(p, true);
+    ctx.strokeText(s, x, y);
+  }
   if (p.letterSpacingEm && "letterSpacing" in ctx) (ctx as any).letterSpacing = "0px";
   if (p.underline) {
     const w = measureText(p, s);

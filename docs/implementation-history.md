@@ -2506,3 +2506,11 @@ cover asynchronous mutation, callback thread, filters set before an image, repla
 clearing; typecheck passes. Fresh Maps preview now has a disabled gray previous arrow and a
 dark next arrow, using the app's actual filter colors. The marker size, font/wrapping,
 Street View preview thumbnail and map-label outlines still differ from Android.
+
+Canvas.drawText ignored Paint.Style and always filled glyphs. Maps' scale bar explicitly
+requests a five-pixel white stroke before its dark text. The common text draw helper now
+honors FILL, STROKE and FILL_AND_STROKE, sharing stroke setup with other Canvas primitives.
+The real-browser fixture compares all pixels for each style against the corresponding
+Canvas2D operations; STROKE and FILL_AND_STROKE fail with the preceding helper. Typecheck
+passes. This observed scale-bar fix does not yet prove the cause of missing native map-label
+outlines, which were not seen in the bounded Java drawText trace.

@@ -40,7 +40,22 @@ async function probe() {
   await vcall(view, "setText", "(Ljava/lang/CharSequence;)V", "A long title with a location");
   view.singleLine = view.ellipsizeEnd = true;
   const width = measureText(view.paintT, "A long title…"), wrapped = view.linesFor(width);
-  return { ...result, ellipsis: wrapped.lines, cached: wrapped === view.linesFor(width),
+  const styles: boolean[] = [];
+  for (const style of [0, 1, 2]) {
+    const actual = new OffscreenCanvas(100, 60).getContext("2d")!;
+    const expected = new OffscreenCanvas(100, 60).getContext("2d")!;
+    const paint = view.paintT;
+    paint.textSize = 40; paint.strokeWidth = 4; paint.style = style;
+    await vcall(JCanvas.wrap(actual, 100, 60), "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "Hi", 8, 45, paint);
+    expected.font = paint.font(); expected.fillStyle = expected.strokeStyle = "black";
+    expected.lineWidth = 4; expected.lineJoin = "miter";
+    if (style !== 1) expected.fillText("Hi", 8, 45);
+    if (style !== 0) expected.strokeText("Hi", 8, 45);
+    const pixels = expected.getImageData(0, 0, 100, 60).data;
+    styles.push(actual.getImageData(0, 0, 100, 60).data.every((v, i) => v === pixels[i]));
+  }
+  view.paintT.textSize = 12;
+  return { ...result, styles, ellipsis: wrapped.lines, cached: wrapped === view.linesFor(width),
     fitting: view.linesFor(measureText(view.paintT, view.text)).lines, cleared: view.spanLayout === null };
 }
 Object.defineProperty(window, "textViewProbe", { value: probe() });
