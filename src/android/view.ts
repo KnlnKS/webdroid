@@ -1614,6 +1614,7 @@ async function childRemoved(parent: JViewGroup, child: JView) {
  */
 export async function attachView(parent: JViewGroup, child: JView, index = -1, request = true) {
   if (!await linkChild(parent, child, index)) return;
+  if (!request) clearMeasureCache(parent);
   await noteTransientChild(parent, child, true);
   await guardMaybe(parent, M_onViewAdded, child);
   if (parent.hierarchyChangeL) {
@@ -1628,6 +1629,7 @@ export async function attachView(parent: JViewGroup, child: JView, index = -1, r
 /** AOSP removeView (request) and removeViewInLayout (no request) */
 export async function detachView(parent: JViewGroup, child: JView, request = true) {
   if (!unlinkChild(parent, child)) return;
+  if (!request) clearMeasureCache(parent);
   await childRemoved(parent, child);
   if (request) { requestLayoutVirtual(parent); invalidate(parent); }
 }
