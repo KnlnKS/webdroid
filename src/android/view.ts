@@ -332,6 +332,8 @@ export class JView extends JObj {
   systemUiVisibility = 0;
 
   idNum = -1;
+  accessibilityTraversalBefore = -1;
+  accessibilityTraversalAfter = -1;
   /** android:contentDescription — the label an icon-only control answers to */
   contentDesc: string | null = null;
   drawnText: string[] | null = null;
@@ -1073,6 +1075,10 @@ const viewMethods: NativeSpec["methods"] = {
   "getContentDescription()Ljava/lang/CharSequence;": function (this: JView) { return this.contentDesc; },
   "setAccessibilityDelegate(Landroid/view/View$AccessibilityDelegate;)V": function (this: JView, d: unknown) { this.a11yDelegate = d; },
   "getAccessibilityDelegate()Landroid/view/View$AccessibilityDelegate;": function (this: JView) { return this.a11yDelegate; },
+  "setAccessibilityTraversalBefore(I)V": function (this: JView, id: number) { this.accessibilityTraversalBefore = id; },
+  "getAccessibilityTraversalBefore()I": function (this: JView) { return this.accessibilityTraversalBefore; },
+  "setAccessibilityTraversalAfter(I)V": function (this: JView, id: number) { this.accessibilityTraversalAfter = id; },
+  "getAccessibilityTraversalAfter()I": function (this: JView) { return this.accessibilityTraversalAfter; },
   "setStateListAnimator(Landroid/animation/StateListAnimator;)V": async function (this: JView, sla: unknown) {
     this.stateListAnimator = sla;
     if (sla) await vcall(sla, "setTarget", "(Landroid/view/View;)V", this);
