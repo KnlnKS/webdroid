@@ -2,7 +2,7 @@ import { JObj, rt } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { JUri, mkUri } from "./net";
 import { JContentValues, mkCursor } from "./sqlite";
-import { JBundle } from "./os";
+import { JBundle, JParcelFileDescriptor, mkPfd } from "./os";
 import { JParcel } from "./parcel";
 import { exportParcel, importParcel, withCallingIdentity, type ParcelData, type Caller } from "./binder";
 import { attachProvider, providerTransport, providerOperations } from "./contentresolver";
@@ -11,7 +11,7 @@ import { appHost } from "./apphost";
 
 type Value = { kind: "uri"; value: string } | { kind: "values" | "value"; data: ParcelData };
 export type ProviderRequest = { authority: string; name: string; desc: string; args: Value[] };
-export type ProviderReply = { kind: "cursor"; columns: string[]; rows: Value[][] } | { kind: "value"; value: Value };
+export type ProviderReply = { kind: "file"; bytes: Uint8Array } | { kind: "cursor"; columns: string[]; rows: Value[][] } | { kind: "value"; value: Value };
 type ProviderCall = (pkg: string, process: string, request: ProviderRequest) => Promise<ProviderReply>;
 async function encode(value: unknown): Promise<Value> {
   if (value instanceof JUri) return { kind: "uri", value: value.uri };
@@ -31,6 +31,7 @@ class JRemoteProvider extends JObj { pkg = ""; process = ""; authority = ""; cal
 rt.register({ name: "webdroid/RemoteContentProvider", ctor: JRemoteProvider, methods: Object.fromEntries(Object.entries(providerOperations).map(([name, desc]) => [name + desc,
   async function (this: JRemoteProvider, ...args: unknown[]) {
     const result = await this.call(this.pkg, this.process, { authority: this.authority, name, desc, args: await Promise.all(args.map(encode)) });
+    if (result.kind === "file") return mkPfd(result.bytes, null);
     if (result.kind === "value") {
       const value = await decode(result.value);
       return desc.endsWith("I") && value instanceof JObj && "v" in value ? value.v : value;
@@ -55,6 +56,12 @@ export async function receiveProvider(request: ProviderRequest, caller: Caller):
   const args = await Promise.all(request.args.map(decode));
   return withCallingIdentity(caller, async () => {
     const value = await vcall(provider, request.name, request.desc, ...args);
+    if (request.name === "openFile" && value instanceof JParcelFileDescriptor) {
+      try {
+        if (value.sink || value.fd >= 0 && !value.path) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Transfer requires a read-only file snapshot");
+        return { kind: "file", bytes: value.bytes };
+      } finally { await vcall(value, "close", "()V"); }
+    }
     if (request.name !== "query" || !value) return { kind: "value", value: await encode(value) };
     const columns: string[] = await vcall(value, "getColumnNames", "()[Ljava/lang/String;"), rows: Value[][] = [];
     try {

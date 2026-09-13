@@ -50,6 +50,7 @@ async function contentProvider(uri: JUri): Promise<unknown> {
 }
 
 export const providerOperations = {
+  openFile: "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;",
   query: "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
   insert: "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;",
   update: "(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I",

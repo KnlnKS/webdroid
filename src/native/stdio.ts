@@ -152,6 +152,7 @@ function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
 }
 function put(f: Fd): number { const fd = allocateFd(); fds.set(fd, f); return fd; }
 /** a Java-side open into the same descriptor table native code reads, so a fd handed across JNI is live */
+export const javaBytesFd = (bytes: Uint8Array): number => put({ ...fdBase(""), data: bytes, len: bytes.length, synthetic: true });
 export const javaOpenFd = (path: string, flags: number): number => fdOpen(null, path, flags);
 export const javaCloseFd = (fd: number): void => { fdClose(null, fd); };
 export const javaSeekFd = (fd: number, off: number, whence: number): number => fdSeek(null, fd, off, whence);
