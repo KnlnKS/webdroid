@@ -103,6 +103,7 @@ rt.markers("android/os/MessageQueue$IdleHandler");
 rt.markers("android/os/Handler$Callback");
 defineException("android/os/RemoteException", "java/lang/Exception");
 defineException("android/os/DeadObjectException", "android/os/RemoteException");
+defineException("android/os/OperationCanceledException", "java/lang/RuntimeException");
 
 export const bootTime = typeof window === "undefined" ? performance.timeOrigin : window.parent.performance.timeOrigin;
 export const uptimeMillis = () => performance.timeOrigin - bootTime + performance.now();
@@ -593,16 +594,29 @@ rt.register({
   },
 });
 rt.markers("android/os/Parcelable", "android/os/Parcelable$Creator");
+class JCancellationSignal extends JObj {
+  cancelled = 0;
+  listener: unknown = null;
+}
+rt.markers("android/os/CancellationSignal$OnCancelListener");
 rt.register({
-  name: "android/os/CancellationSignal", ctor: class extends JObj { cancelled = 0; },
+  name: "android/os/CancellationSignal", ctor: JCancellationSignal,
   methods: {
     "<init>()V": function () {},
-    "isCanceled()Z": function (this: any) { return this.cancelled; },
-    "cancel()V": function (this: any) { this.cancelled = 1; },
-    "throwIfCanceled()V": function (this: any) {
+    "isCanceled()Z": function (this: JCancellationSignal) { return this.cancelled; },
+    "cancel()V": async function (this: JCancellationSignal) {
+      if (this.cancelled) return;
+      this.cancelled = 1;
+      if (this.listener) await vcall(this.listener, "onCancel", "()V");
+    },
+    "throwIfCanceled()V": function (this: JCancellationSignal) {
       if (this.cancelled) throw rt.mkThrowable("android/os/OperationCanceledException", null);
     },
-    "setOnCancelListener(Landroid/os/CancellationSignal$OnCancelListener;)V": () => {},
+    "setOnCancelListener(Landroid/os/CancellationSignal$OnCancelListener;)V": async function (this: JCancellationSignal, listener: unknown) {
+      if (this.listener === listener) return;
+      this.listener = listener;
+      if (this.cancelled && listener) await vcall(listener, "onCancel", "()V");
+    },
   },
 });
 

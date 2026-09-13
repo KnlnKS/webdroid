@@ -436,10 +436,18 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
       query.jdb = this; query.sql = sql; query.binds = args?.slice() ?? []; driver.query = query;
       return vcall(factory, "newCursor", "(Landroid/database/sqlite/SQLiteDatabase;Landroid/database/sqlite/SQLiteCursorDriver;Ljava/lang/String;Landroid/database/sqlite/SQLiteQuery;)Landroid/database/Cursor;", this, driver, editTable, query);
     },
+  "rawQueryWithFactory(Landroid/database/sqlite/SQLiteDatabase$CursorFactory;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
+    async function (this: JSQLiteDatabase, factory: unknown, sql: string, args: unknown[] | null, editTable: string | null, signal: unknown) {
+      if (signal) await vcall(signal, "throwIfCanceled", "()V");
+      return callSelf(dbMethods,
+        "rawQueryWithFactory(Landroid/database/sqlite/SQLiteDatabase$CursorFactory;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
+        this, factory, sql, args, editTable);
+    },
   "rawQuery(Ljava/lang/String;[Ljava/lang/String;)Landroid/database/Cursor;": function (this: JSQLiteDatabase, sql: string, args: unknown[] | null) {
     return runQuery(this, sql, args);
   },
-  "rawQuery(Ljava/lang/String;[Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;": function (this: JSQLiteDatabase, sql: string, args: unknown[] | null) {
+  "rawQuery(Ljava/lang/String;[Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;": async function (this: JSQLiteDatabase, sql: string, args: unknown[] | null, signal: unknown) {
+    if (signal) await vcall(signal, "throwIfCanceled", "()V");
     return runQuery(this, sql, args);
   },
   "query(Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":

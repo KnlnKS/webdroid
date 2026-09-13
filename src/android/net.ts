@@ -235,6 +235,32 @@ rt.register({
     "describeContents()I": () => 0,
   },
 });
+function contentId(u: JUri | null): bigint {
+  if (u === null) throw rt.mkThrowable("java/lang/NullPointerException", "contentUri");
+  const p = uriParts(u), seg = p.hier ? p.path.split("/").filter(Boolean).at(-1) : undefined;
+  if (!seg || !/^[+-]?\d+$/.test(seg)) throw rt.mkThrowable("java/lang/NumberFormatException", seg ?? "null");
+  const id = BigInt(seg);
+  if (id < -9223372036854775808n || id > 9223372036854775807n) {
+    throw rt.mkThrowable("java/lang/NumberFormatException", seg);
+  }
+  return id;
+}
+rt.register({
+  name: "android/content/ContentUris", ctor: class extends JObj {},
+  methods: {
+    "static parseId(Landroid/net/Uri;)J": contentId,
+    "static appendId(Landroid/net/Uri$Builder;J)Landroid/net/Uri$Builder;": async (builder: unknown, id: bigint) => {
+      if (builder === null) throw rt.mkThrowable("java/lang/NullPointerException", "builder");
+      return vcall(builder, "appendEncodedPath", "(Ljava/lang/String;)Landroid/net/Uri$Builder;", String(id));
+    },
+    "static withAppendedId(Landroid/net/Uri;J)Landroid/net/Uri;": async (u: JUri | null, id: bigint) => {
+      if (u === null) throw rt.mkThrowable("java/lang/NullPointerException", "contentUri");
+      const builder = await vcall(u, "buildUpon", "()Landroid/net/Uri$Builder;");
+      await vcall(builder, "appendEncodedPath", "(Ljava/lang/String;)Landroid/net/Uri$Builder;", String(id));
+      return vcall(builder, "build", "()Landroid/net/Uri;");
+    },
+  },
+});
 // Uri.Builder keeps every part already ENCODED, as AOSP does, so build() is a join.
 class JUriBuilder extends JObj {
   scheme: string | null = null; opaque: string | null = null; authority: string | null = null;
