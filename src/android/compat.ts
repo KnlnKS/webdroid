@@ -10,6 +10,7 @@ import { onMain, inMainJob } from "./mainloop";
 import { newArrayList } from "../jvm/natives/jutil";
 import { device } from "../shell/config";
 import { reportUncaught } from "./os";
+import { currentResources, rvDimen } from "./res";
 
 // ── Scroller/OverScroller: time-based interpolated scroll values
 class JScroller extends JObj {
@@ -127,6 +128,11 @@ rt.register({
   },
 });
 
+function minimumScalingSpan(): number {
+  const res = currentResources();
+  const id = res?.idFor("dimen", "config_minScalingSpan", "android");
+  return Math.round(res && id ? rvDimen(res, res.ref(id)) : 27 * device.densityDpi / 25.4);
+}
 class JViewConfiguration extends JObj {}
 const vc = new JViewConfiguration();
 rt.register({
@@ -144,7 +150,8 @@ rt.register({
     "getScaledVerticalScrollFactor()F": () => device.scrollUnit,
     "getScaledHoverSlop()I": () => Math.round(device.dp(4)),
     "getScaledFadingEdgeLength()I": () => Math.round(device.dp(12)),
-    "getScaledMinScalingSpan()I": () => Math.round(device.dp(27)),
+    "getScaledMinScalingSpan()I": minimumScalingSpan,
+    "getScaledMinimumScalingSpan()I": minimumScalingSpan,
     "static getAmbiguousGestureMultiplier()F": () => 2,
     "static getMinimumFlingVelocity()I": () => 50,
     "static getMaximumFlingVelocity()I": () => 8000,
