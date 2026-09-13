@@ -302,6 +302,14 @@ rt.register({ name: "android/os/Build$VERSION_CODES", ctor: class extends JObj {
 export let PROCESS_PID = 1000, PROCESS_UID = 10001;
 export let PROCESS_NAME = "";
 export function setProcessIdentity(pid: number, uid: number): void { PROCESS_PID = pid; PROCESS_UID = uid; procIdentity.pid = pid; }
+export class JUserHandle extends JObj { constructor(readonly id = 0) { super(); } }
+const userHandles = new Map<number, JUserHandle>();
+export function userHandleForUid(uid: number): JUserHandle {
+  const userId = Math.trunc(uid / 100000);
+  let handle = userHandles.get(userId);
+  if (!handle) { handle = new JUserHandle(userId); userHandles.set(userId, handle); }
+  return handle;
+}
 const threadTids = new WeakMap<JThread, number>();
 let tidSeq = 0;
 /** the kernel thread id of a Java thread: the main thread's is the pid, as on a device */
@@ -326,6 +334,7 @@ rt.register({
     "static getElapsedCpuTime()J": () => BigInt(Math.round(performance.now())),
     "static myTid()I": () => threadTid(curThread),
     "static myUid()I": () => PROCESS_UID,
+    "static myUserHandle()Landroid/os/UserHandle;": () => userHandleForUid(PROCESS_UID),
     "static isApplicationUid(I)Z": (uid: number) => { const appId = uid % 100000; return appId >= 10000 && appId <= 19999 ? 1 : 0; },
     "static getGidForName(Ljava/lang/String;)I": (name: string | null) => {
       if (name === null) throw rt.mkThrowable("java/lang/NullPointerException", null);

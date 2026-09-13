@@ -4,11 +4,9 @@
 
 import { rt, JObj, stubs, noops } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jutil";
-import { PARCELABLE } from "./os";
+import { JUserHandle, PARCELABLE, PROCESS_UID, userHandleForUid } from "./os";
 
-// ── UserHandle: single-user device, so one handle stands for the whole system.
-class JUserHandle extends JObj { id = 0; }
-const theUser = new JUserHandle();
+// ── UserHandle: handles are canonical per Android user id.
 rt.register({
   name: "android/os/UserHandle", ctor: JUserHandle, ifaces: ["android/os/Parcelable"],
   methods: {
@@ -19,7 +17,7 @@ rt.register({
     },
     "toString()Ljava/lang/String;": function (this: JUserHandle) { return "UserHandle{" + this.id + "}"; },
     ...PARCELABLE,
-    "static getUserHandleForUid(I)Landroid/os/UserHandle;": () => theUser,
+    "static getUserHandleForUid(I)Landroid/os/UserHandle;": userHandleForUid,
   },
 });
 
@@ -28,13 +26,13 @@ rt.register({
   name: "android/os/UserManager", ctor: class extends JObj {},
   methods: {
     "getUserName()Ljava/lang/String;": () => "Owner",
-    "getUserProfiles()Ljava/util/List;": async () => newArrayList([theUser]),
+    "getUserProfiles()Ljava/util/List;": async () => newArrayList([userHandleForUid(PROCESS_UID)]),
     ...stubs(1, "isUserUnlocked()Z", "isUserUnlocked(Landroid/os/UserHandle;)Z",
       "isUserRunning(Landroid/os/UserHandle;)Z", "isSystemUser()Z", "getUserCount()I"),
     ...stubs(0, "isUserAGoat()Z", "isDemoUser()Z", "isManagedProfile()Z", "isProfile()Z",
       "isQuietModeEnabled(Landroid/os/UserHandle;)Z", "hasUserRestriction(Ljava/lang/String;)Z"),
     ...stubs(0n, "getSerialNumberForUser(Landroid/os/UserHandle;)J"),
-    "getUserForSerialNumber(J)Landroid/os/UserHandle;": () => theUser,
+    "getUserForSerialNumber(J)Landroid/os/UserHandle;": () => userHandleForUid(PROCESS_UID),
   },
 });
 
