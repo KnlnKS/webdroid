@@ -482,6 +482,11 @@ rt.register({
       pathTransform(t, [1, 0, 0, 1, dx, dy]);
       this.ops.push(...t.ops); this.dirty = true;
     },
+    "addPath(Landroid/graphics/Path;Landroid/graphics/Matrix;)V": function (this: JPath, o: JPath, matrix: JMatrix) {
+      const t = new JPath(); t.ops = o.ops.map((op) => op.slice() as typeof op);
+      pathTransform(t, matrix.m);
+      this.ops.push(...t.ops); this.dirty = true;
+    },
     "arcTo(Landroid/graphics/RectF;FF)V": function (this: JPath, r: JRectF, start: number, sweep: number) {
       this.add(["arc", r.left, r.top, r.right, r.bottom, start, sweep, 0]);
     },
