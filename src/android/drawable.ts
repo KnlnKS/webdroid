@@ -838,6 +838,7 @@ class JVectorDrawable extends JDrawable {
   intrinsicW(): number { return this.vw * device.density; }
   intrinsicH(): number { return this.vh * device.density; }
 }
+class JAnimatedVectorDrawable extends JVectorDrawable {}
 // ── DrawableWrapper: one child, everything forwarded (AOSP's base for Clip/Scale/Inset and any
 // app drawable that decorates another). Bounds, state and level reach the child through its
 // own virtual hooks; draw() dispatches virtually so a compiled child subclass paints itself.
@@ -1065,6 +1066,16 @@ rt.register({ name: "android/graphics/drawable/VectorDrawable", ctor: JVectorDra
     return state;
   },
 } });
+rt.register({
+  name: "android/graphics/drawable/AnimatedVectorDrawable", ctor: JAnimatedVectorDrawable,
+  sup: "android/graphics/drawable/VectorDrawable", methods: {
+    "start()V": function () {},
+    "stop()V": function () {},
+    "isRunning()Z": () => 0,
+    "unregisterAnimationCallback(Landroid/graphics/drawable/Animatable2$AnimationCallback;)Z": () => 0,
+    ...noops("registerAnimationCallback(Landroid/graphics/drawable/Animatable2$AnimationCallback;)V", "clearAnimationCallbacks()V"),
+  },
+});
 
 export class JColorStateList extends JObj {
   items: { states: number[]; negStates: number[]; color: number }[] = [];
@@ -1311,6 +1322,13 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
         }
       };
       walk(node);
+      return d;
+    }
+    case "animated-vector": {
+      const d = new JAnimatedVectorDrawable();
+      const source = get(AT.drawable);
+      const vector = source ? await loadDrawableRV(res, source, theme) : null;
+      if (vector instanceof JVectorDrawable) Object.assign(d, vector);
       return d;
     }
     case "color": {

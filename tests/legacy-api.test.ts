@@ -73,6 +73,12 @@ test("PaintDrawable owns a rectangular shape and supports rounded corners", asyn
   expect(await vcall(drawable, "getShape", "()Landroid/graphics/drawable/shapes/Shape;")).not.toBeNull();
 });
 
+test("AnimatedVectorDrawable reports unavailable animation", async () => {
+  const drawable = await newObj("android/graphics/drawable/AnimatedVectorDrawable");
+  await vcall(drawable, "start", "()V");
+  expect(await vcall(drawable, "isRunning", "()Z")).toBe(0);
+});
+
 test("ByteBuffer absolute long and double accessors leave the position alone", async () => {
   const buffer = await scall("java/nio/ByteBuffer", "allocate", "(I)Ljava/nio/ByteBuffer;", 24);
   await vcall(buffer, "putLong", "(IJ)Ljava/nio/ByteBuffer;", 8, -2n);
