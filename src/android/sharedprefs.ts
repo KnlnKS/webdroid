@@ -1,5 +1,5 @@
 import { JObj, rt, type NativeSpec } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { mainThread, vcallOn } from "../jvm/natives/jlang";
 import { newStringSet, toJsArray } from "../jvm/natives/jutil";
 import { removeFrom } from "./view";
 import { onMain } from "./mainloop";
@@ -108,7 +108,7 @@ function commitEditor(e: JPrefsEditor): boolean {
     for (const l of e.prefs.listeners) {
       for (const k of changed) {
         try {
-          await vcall(l, "onSharedPreferenceChanged", "(Landroid/content/SharedPreferences;Ljava/lang/String;)V", e.prefs, k);
+          await vcallOn(mainThread, l, "onSharedPreferenceChanged", "(Landroid/content/SharedPreferences;Ljava/lang/String;)V", e.prefs, k);
         } catch (err) { console.error("[prefs listener]", err); }
       }
     }

@@ -2525,3 +2525,9 @@ stream, descriptor, channel and atomic-file checks (121 assertions) and typechec
 Chrome reaches preview without the missing constructor. Its thumbnail still fails: a relative
 query-shaped image path and empty/undecodable input precede the MediaMetadataRetriever fallback;
 implementing the constructor alone does not establish image loading parity.
+
+A fresh Maps route run logged "Not on the main thread" from a preference listener. The
+notification loop entered onMain but dispatched subsequent callbacks through ambient thread
+state after awaits. Each callback now uses the explicit main thread. A suspending listener
+check observes [main, worker] on the preceding implementation and [main, main] after the fix;
+both focused preference checks (7 assertions) and typecheck pass.
