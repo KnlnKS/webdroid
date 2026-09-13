@@ -2115,3 +2115,14 @@ No app data, shader, geometry or texture dimensions are changed. A fresh JIT-dis
 run renders blue oceans/lakes and expected land colors (headless-npot-fixed-home.png), with
 GL error zero and advancing frames. Typecheck passes. Full Chrome and detailed place/route
 comparison remain to be repeated. UI attachment, trace identity and visual differences remain.
+
+Full Chrome subsequently reports CONTEXT_LOST_WEBGL. Three stale diagnostic Maps tabs were
+closed, but context loss recurred with a single Maps tab: transferToImageBitmap throws and
+terminates GL-Map. EglContext now returns failure when a context is lost during make-current
+or swap, and Java EGL10/EGL14 plus native EGL expose EGL_CONTEXT_LOST. Other transfer errors
+still propagate. A real WebGL_lose_context probe verifies both Java swap APIs return false,
+getError reports 0x300e then clears, and a newly created context presents successfully. The
+existing framebuffer/readPixels probe still returns [255,128,0,255] without advancing buffer
+position or raising GL errors. Typecheck and six platform construction tests pass. The
+browser loss trigger and app recovery still need investigation; no parity claim follows
+from this contract check. AVD Ferry Building-to-Golden Gate Bridge route was captured again.

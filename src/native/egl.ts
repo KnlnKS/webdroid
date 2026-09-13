@@ -81,13 +81,13 @@ export function eglInit(): void {
     eglMakeCurrent: (_c, a) => {
       a.i(); const draw = surfaces[a.i()]; a.i(); const c = contexts[a.i()];
       if (!c) { glSurfaces.current = null; setGL(null); return 1; }
-      if (!c.makeCurrent(draw ?? null)) { err = EGL_BAD_ALLOC; return 0; }
+      if (!c.makeCurrent(draw ?? null)) { err = c.gl?.isContextLost() ? 0x300e : EGL_BAD_ALLOC; return 0; }
       return 1;
     },
     eglSwapBuffers: (_c, a) => {
       a.i(); const s = surfaces[a.i()], c = glSurfaces.current;
       if (!s || !c || c.target !== s) { err = EGL_BAD_SURFACE; return 0; }
-      return c.swap().then(() => 1);
+      return c.swap().then((ok) => { if (ok) return 1; err = 0x300e; return 0; });
     },
     eglGetCurrentContext: () => { const c = glSurfaces.current; return c ? Math.max(0, contexts.indexOf(c)) : 0; },
     eglGetCurrentDisplay: () => 1,
