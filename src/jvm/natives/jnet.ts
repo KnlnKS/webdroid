@@ -465,6 +465,13 @@ class JURI extends JObj {
   }
 }
 const mkURI = (u: string | null) => Object.assign(new JURI(), { u: u ?? "" });
+function rawUriQuery(uri: string): string | null {
+  const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:/.exec(uri);
+  if (scheme && uri[scheme[0].length] !== "/") return null;
+  const query = uri.indexOf("?");
+  const fragment = uri.indexOf("#");
+  return query < 0 || (fragment >= 0 && query > fragment) ? null : uri.slice(query + 1, fragment < 0 ? undefined : fragment);
+}
 // URLEncoder/URLDecoder: application/x-www-form-urlencoded, which is encodeURIComponent plus
 // "+" for a space and the extra unreserved set Java leaves alone.
 const formEncode = (s: string) =>
@@ -521,6 +528,7 @@ rt.register({
     "toURL()Ljava/net/URL;": function (this: JURI) { const u = new JURL(); urlInit(u, this.u); return u; },
     "getUserInfo()Ljava/lang/String;": function (this: JURI) { const m = /^[^:/?#]+:\/\/([^@/?#]*)@/.exec(this.u); return m ? decodeURIComponent(m[1]) : null; },
     "getPort()I": function (this: JURI) { return Number(this.url()?.port) || -1; },
+    "getRawQuery()Ljava/lang/String;": function (this: JURI) { return rawUriQuery(this.u); },
     "getQuery()Ljava/lang/String;": function (this: JURI) { const q = this.url()?.search; return q ? q.slice(1) : null; },
     "getFragment()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf("#"); return i < 0 ? null : this.u.slice(i + 1); },
     "getRawPath()Ljava/lang/String;": function (this: JURI) { return this.url()?.pathname ?? null; },

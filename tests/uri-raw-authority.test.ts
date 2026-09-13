@@ -18,3 +18,14 @@ test("URI.getRawAuthority preserves escaped authority text", async () => {
   const empty = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "file:///tmp/video.mp4");
   expect(await vcall(empty, "getRawAuthority", "()Ljava/lang/String;")).toBeNull();
 });
+
+test("URI.getRawQuery preserves the hierarchical query component", async () => {
+  const escaped = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "https://example.test/a?name=a%20b&path=%2F#fragment");
+  expect(await vcall(escaped, "getRawQuery", "()Ljava/lang/String;")).toBe("name=a%20b&path=%2F");
+  const relative = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "a/b?x=1");
+  expect(await vcall(relative, "getRawQuery", "()Ljava/lang/String;")).toBe("x=1");
+  const empty = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "https://example.test/path?#fragment");
+  expect(await vcall(empty, "getRawQuery", "()Ljava/lang/String;")).toBe("");
+  const opaque = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "mailto:user@example.test?subject=hello");
+  expect(await vcall(opaque, "getRawQuery", "()Ljava/lang/String;")).toBeNull();
+});
