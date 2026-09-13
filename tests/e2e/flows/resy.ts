@@ -39,7 +39,8 @@ export const resy: Flow = {
   steps: [
     { id: "launch", label: "Launch — onboarding under the notification alert", action: { type: "launch" }, settleDelayMs: 15000 },
     { id: "alert-ok", label: "Dismiss the upstream notification alert", action: { type: "tapText", text: "OK" }, settleDelayMs: 1500 },
-    { id: "onboarding-close", label: "Close onboarding — nearby list loads", action: { type: "tapText", text: "close" }, settleDelayMs: 25000 },
+    { id: "onboarding-close", label: "Close onboarding", action: { type: "tapText", text: "close" }, settleDelayMs: 3000 },
+    { id: "location-permission", label: "Allow location when Android asks — nearby list loads", action: { type: "tapText", text: "While using the app", optional: true }, settleDelayMs: 25000 },
     { id: "list", label: "Nearby list with live slots and the map", action: { type: "settle" }, settleDelayMs: 5000 },
     { id: "sheet-close", label: "Close the announcement sheet", action: { type: "tapAt", ...SHEET_CLOSE }, settleDelayMs: 3000 },
     { id: "search-open", label: "Open search from the action bar", action: { type: "tapAt", ...SEARCH_PILL }, settleDelayMs: 4000 },

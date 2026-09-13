@@ -11,8 +11,7 @@ import type { Act, Settled, StepResult } from "./lib/probe";
 
 export type StepRun = {
   id: string; index: number; file: string;
-  /** true when wd.tapText found the target itself; false when we fell back to the recorded
-   *  coordinate. A fallback is a finding in its own right — webdroid's view tree lacked it. */
+  /** true when wd.tapText found the target itself; false when it did not. */
   semanticHit?: boolean;
   /** which tier of the settle contract ended the step, and how long it took */
   settled: Settled["how"];
@@ -93,7 +92,7 @@ function actOf(flow: Flow, step: Step, rec?: RecordedStep): Act {
   const a = step.action;
   switch (a.type) {
     case "launch": return { type: "boot", apk: flow.apk };
-    case "tapText": return { type: "tapText", text: a.text, fallback: rec?.resolved };
+    case "tapText": return { type: "tapText", text: a.text, fallback: a.optional ? undefined : rec?.resolved };
     case "tapAt": return { type: "tap", x: a.x, y: a.y, repeat: a.repeat, everyMs: a.everyMs };
     case "typeInto": return { type: "type", x: a.x, y: a.y, text: a.text };
     case "back": return { type: "back" };
@@ -148,7 +147,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, { jobs = 1, s
                 newErrors: r.newErrors.length ? r.newErrors : undefined, web: r.web.length ? r.web : undefined, error: r.error });
     const p = r.perf;
     const flags = [
-      r.semanticHit === false ? "coord-fallback" : "",
+      r.semanticHit === false && !(step.action.type === "tapText" && step.action.optional) ? "coord-fallback" : "",
       r.settled.how === "timeout" ? `settle timeout (${Object.keys(r.settled.busy).join(" ")})` : r.settled.how === "pixels" ? "pixels" : "",
       r.wedged ? "MAIN LOOP WEDGED" : "",
       frames ? `${frames} frame${frames === 1 ? "" : "s"}` : "",

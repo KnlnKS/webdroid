@@ -11,7 +11,8 @@ export type Rect = { x: number; y: number; w: number; h: number };
 
 type Action =
   | { type: "launch" }
-  | { type: "tapText"; text: string }
+  /** An optional anchor is a no-op when absent and never replays a recorded coordinate. */
+  | { type: "tapText"; text: string; optional?: boolean }
   /** Normalized 0..1 tap. Used directly when no stable text anchor exists. `repeat` taps the
    *  same point N times, `everyMs` apart, as ONE step — a burst with no capture in between. */
   | { type: "tapAt"; x: number; y: number; repeat?: number; everyMs?: number }

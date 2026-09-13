@@ -83,8 +83,10 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
       case "tapText": {
         const node = emu.findNode(await emu.dumpUi(), a.text);
         if (!node) {
-          note = `text anchor "${a.text}" not found on screen`;
-          console.warn(`  ! step ${i} ${step.id}: ${note}`);
+          if (!a.optional) {
+            note = `text anchor "${a.text}" not found on screen`;
+            console.warn(`  ! step ${i} ${step.id}: ${note}`);
+          }
           break;
         }
         const [cx, cy] = emu.centerOf(node);
