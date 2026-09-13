@@ -1,19 +1,19 @@
 import { JObj, rt, noops } from "../jvm/runtime";
 import { jarray, u8 } from "../jvm/abi";
-import { JThrowable, vcall } from "../jvm/natives/jlang";
+import { boxInt, JThrowable, newObj, vcall } from "../jvm/natives/jlang";
 import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
 import { JMediaFormat } from "./media-format";
 import { JBufferInfo } from "./media";
 import { JSurface, presentSurface } from "./glview";
 import { mainHandler, reportUncaught } from "./os";
 
-type Definition = { kind: "video"; mime: string; codec: string; profiles: [number, number][] } | { kind: "audio"; mime: string; codec: string; profiles: [number, number][] };
+type Definition = { kind: "video"; mime: string; codec: string; maxDimension: number; profiles: [number, number][] } | { kind: "audio"; mime: string; codec: string; profiles: [number, number][] };
 const definitions: Definition[] = [
-  { kind: "video", mime: "video/avc", codec: "avc1.42002A", profiles: [[1, 8192]] },
-  { kind: "video", mime: "video/avc", codec: "avc1.4d002A", profiles: [[2, 8192]] },
-  { kind: "video", mime: "video/avc", codec: "avc1.64002A", profiles: [[8, 8192]] },
-  { kind: "video", mime: "video/x-vnd.on2.vp8", codec: "vp8", profiles: [[1, 8]] },
-  { kind: "video", mime: "video/x-vnd.on2.vp9", codec: "vp09.00.41.08", profiles: [[1, 128]] },
+  { kind: "video", mime: "video/avc", codec: "avc1.42002A", maxDimension: 4096, profiles: [[1, 8192]] },
+  { kind: "video", mime: "video/avc", codec: "avc1.4d002A", maxDimension: 4096, profiles: [[2, 8192]] },
+  { kind: "video", mime: "video/avc", codec: "avc1.64002A", maxDimension: 4096, profiles: [[8, 8192]] },
+  { kind: "video", mime: "video/x-vnd.on2.vp8", codec: "vp8", maxDimension: 16383, profiles: [[1, 8]] },
+  { kind: "video", mime: "video/x-vnd.on2.vp9", codec: "vp09.00.41.08", maxDimension: 8192, profiles: [[1, 128]] },
   { kind: "audio", mime: "audio/mp4a-latm", codec: "mp4a.40.2", profiles: [[2, 0]] },
   { kind: "audio", mime: "audio/opus", codec: "opus", profiles: [] },
 ];
@@ -102,6 +102,11 @@ const supportsSize = async function (this: JVideoCapabilities, width: number, he
 };
 rt.register({ name: "android/media/MediaCodecInfo$VideoCapabilities", ctor: JVideoCapabilities, methods: {
   "getWidthAlignment()I": () => 1, "getHeightAlignment()I": () => 1,
+  "getSupportedHeights()Landroid/util/Range;": function (this: JVideoCapabilities) {
+    const definition = this.info.definition;
+    if (definition.kind !== "video") throw rt.mkThrowable("java/lang/IllegalStateException", "Not a video codec");
+    return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxInt(1), boxInt(definition.maxDimension));
+  },
   "isSizeSupported(II)Z": supportsSize, "areSizeAndRateSupported(IID)Z": supportsSize,
   "getSupportedPerformancePoints()Ljava/util/List;": () => null,
   "getAchievableFrameRatesFor(II)Landroid/util/Range;": () => null,
