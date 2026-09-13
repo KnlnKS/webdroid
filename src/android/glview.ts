@@ -564,6 +564,8 @@ function eglFailure<T>(error: number, result: T): T { eglError = error; return r
 rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics: {
   EGL_NO_DISPLAY: noDisplay, EGL_NO_CONTEXT: noContext, EGL_NO_SURFACE: noSurface, EGL_DEFAULT_DISPLAY: 0,
   EGL_NONE: 0x3038, EGL_SUCCESS: 0x3000, EGL_WIDTH: 0x3057, EGL_HEIGHT: 0x3056, EGL_CONTEXT_CLIENT_VERSION: 0x3098,
+  EGL_CONFIG_ID: 0x3028, EGL_CONTEXT_CLIENT_TYPE: 0x3097, EGL_RENDER_BUFFER: 0x3086,
+  EGL_OPENGL_ES_API: 0x30a0, EGL_BACK_BUFFER: 0x3084,
   EGL_RED_SIZE: 0x3024, EGL_GREEN_SIZE: 0x3023, EGL_BLUE_SIZE: 0x3022, EGL_ALPHA_SIZE: 0x3021,
   EGL_DEPTH_SIZE: 0x3025, EGL_STENCIL_SIZE: 0x3026, EGL_RENDERABLE_TYPE: 0x3040, EGL_SURFACE_TYPE: 0x3033,
   EGL_OPENGL_ES2_BIT: 4, EGL_PBUFFER_BIT: 1, EGL_WINDOW_BIT: 4,
@@ -617,6 +619,19 @@ rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics
     currentContext = context; return 1;
   },
   "static eglGetCurrentContext()Landroid/opengl/EGLContext;": () => currentContext,
+  "static eglQueryContext(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLContext;I[II)Z":
+    (display: JEGL14Display, context: JEGL14Context, attribute: number, out: Int32Array, offset: number) => {
+      if (display !== defaultDisplay) return eglFailure(0x3008, 0);
+      if (!context?.egl) return eglFailure(0x3006, 0);
+      let value: number;
+      if (attribute === 0x3028) value = 1;
+      else if (attribute === 0x3097) value = 0x30a0;
+      else if (attribute === 0x3098) value = context.egl.major;
+      else if (attribute === 0x3086) value = currentContext === context && glSurfaces.current?.target ? 0x3084 : 0x3038;
+      else return eglFailure(0x3004, 0);
+      eglOut(out, offset, value);
+      return 1;
+    },
   "static eglSwapBuffers(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;)Z": async (_display: JEGL14Display, surface: JEGL14Surface) => {
     const context = glSurfaces.current;
     if (!surface?.surf || context?.target !== surface.surf) return eglFailure(0x300d, 0);
