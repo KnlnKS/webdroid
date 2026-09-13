@@ -1,7 +1,7 @@
 import { readStreamFully } from "./jio";
 import { jarray, mangleMethod, charsToString, dotName } from "../abi";
 import {
-  vcall, vcallMaybe, after, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, idHash, defineException,
+  vcall, vcallMaybe, after, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, defineException,
   mkCmp, fmtDouble, bitCount32
 } from "./jlang";
 import { JObj, rt, type NativeSpec, type ClassInfo } from "../runtime";
@@ -72,7 +72,10 @@ rt.register({
     "getKey()Ljava/lang/Object;": function (this: JMapEntry) { return this.e.k; },
     "getValue()Ljava/lang/Object;": function (this: JMapEntry) { return this.e.v; },
     "setValue(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMapEntry, v: unknown) { const o = this.e.v; this.e.v = v; return o; },
-    "hashCode()I": function (this: JMapEntry) { return idHash(this.e.k); },
+    "hashCode()I": function (this: JMapEntry) {
+      const key = jhash(this.e.k);
+      return after(key, (kh) => after(jhash(this.e.v), (vh) => (kh ^ vh) | 0));
+    },
   },
 });
 
@@ -694,13 +697,41 @@ function mapMethods(): NativeSpec["methods"] {
     "toString()Ljava/lang/String;": function (this: JMap) {
       return "{" + [...allEnts(this)].map((e) => `${e.k}=${e.v}`).join(", ") + "}";
     },
-    "hashCode()I": function (this: JMap) { return idHash(this); },
-    "equals(Ljava/lang/Object;)Z": function (this: JMap, o: unknown) { return this === o ? 1 : 0; },
+    "hashCode()I": function (this: JMap) { return mapHash([...allEnts(this)]); },
+    "equals(Ljava/lang/Object;)Z": function (this: JMap, o: unknown) {
+      if (o === this) return 1;
+      if (!(o instanceof JObj) || !rt.iof(o, "java/util/Map")) return 0;
+      const size = o instanceof JMap ? o.m.size + o.slow.length : vcallMaybe(o, "size", "()I");
+      return after(size, (n) => n === this.m.size + this.slow.length ? mapEquals([...allEnts(this)], o) : 0);
+    },
   };
 }
 function* allEnts(m: JMap): Generator<Ent> {
   yield* m.m.values();
   yield* m.slow;
+}
+function mapEquals(entries: Ent[], other: unknown, from = 0): number | Promise<number> {
+  for (let i = from; i < entries.length; i++) {
+    const entry = entries[i];
+    const equal = after(vcallMaybe(other, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", entry.k), (value) => {
+      if (entry.v !== null) return jeq(entry.v, value);
+      if (value !== null) return 0;
+      return vcallMaybe(other, "containsKey", "(Ljava/lang/Object;)Z", entry.k);
+    });
+    if (equal instanceof Promise) return equal.then((yes) => yes ? mapEquals(entries, other, i + 1) : 0);
+    if (!equal) return 0;
+  }
+  return 1;
+}
+function mapHash(entries: Ent[], from = 0, hash = 0): number | Promise<number> {
+  for (let i = from; i < entries.length; i++) {
+    const entry = entries[i], key = jhash(entry.k);
+    if (key instanceof Promise) return key.then((kh) => after(jhash(entry.v), (vh) => mapHash(entries, i + 1, (hash + (kh ^ vh)) | 0)));
+    const value = jhash(entry.v);
+    if (value instanceof Promise) return value.then((vh) => mapHash(entries, i + 1, (hash + (key ^ vh)) | 0));
+    hash = (hash + (key ^ value)) | 0;
+  }
+  return hash;
 }
 async function copyMapInto(src: unknown, dst: JMap) {
   if (src instanceof JMap) {
