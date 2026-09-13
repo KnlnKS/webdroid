@@ -2126,3 +2126,16 @@ existing framebuffer/readPixels probe still returns [255,128,0,255] without adva
 position or raising GL errors. Typecheck and six platform construction tests pass. The
 browser loss trigger and app recovery still need investigation; no parity claim follows
 from this contract check. AVD Ferry Building-to-Golden Gate Bridge route was captured again.
+
+### Maps attachment ordering after restart (2026-09-13)
+
+Java ViewGroup.addView and addViewInLayout now await the child's window attachment, then
+onViewAdded and the hierarchy listener. AOSP ViewGroup.addViewInner dispatches in that order;
+queuing attachment until after the current main job let Maps measure GmmComposeView while
+unattached. Synchronous native widget construction retains its deferred helper. Two suspended
+callback tests verify ordering and no later duplicate dispatch; five focused view tests and
+typecheck pass. Fresh full-Chrome and headless Maps runs report zero layout errors; the
+headless run renders corrected water colors and live Golden Gate Bridge autocomplete.
+The startup trace-span mismatch persists. Full Chrome again lost its WebGL context and later
+crashed with error 11; a JIT-disabled comparison kept a live context but had not drawn map
+geometry when checked. Neither the crash cause nor parity is established.

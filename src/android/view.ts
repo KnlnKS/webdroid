@@ -209,7 +209,7 @@ function removeRange(vg: JViewGroup, start: number, n: number, request: boolean)
 async function addInLayout(this: JViewGroup, c: JView, i: number, lp: JLayoutParams, preventRequestLayout?: number) {
   c.lp = lp ? await convertLp(this, lp) : c.lp;
   if (!preventRequestLayout) requestLayoutVirtual(c);
-  attachView(this, c, i, false);
+  await addViewInner(this, c, i, false);
   return 1;
 }
 /** AOSP attachViewToParent: re-links a child detachViewFromParent took out. It never left the
@@ -1567,21 +1567,24 @@ function childRemoved(parent: JViewGroup, child: JView) {
   }
   if (child.attached) void onMain(() => dispatchDetached(child));
 }
-/**
- * AOSP addViewInner: every addView overload funnels here (see addViewFunnel/addView3 below), as
- * does addViewInLayout, which passes request=false. addView asks the parent for layout through
- * its virtual requestLayout(); the in-layout form leaves that to the pass already running.
- */
+/** Native widget construction can be synchronous; its attachment runs after the current job. */
 export function attachView(parent: JViewGroup, child: JView, index = -1, request = true) {
   if (!linkChild(parent, child, index)) return;
   if (parent.hierarchyChangeL) {
     void vcall(parent.hierarchyChangeL, "onChildViewAdded", "(Landroid/view/View;Landroid/view/View;)V", parent, child);
   }
-  // Android attaches inline; we cannot, so queue behind the current main-looper job rather
-  // than starting a chain that interleaves with the caller at its first await (Compose's
-  // composition installs a snapshot read observer that must not see foreign reads).
+  // An unawaited callback chain would interleave with Compose's snapshot read observer.
   if (parent.attached) void onMain(() => dispatchAttached(child));
   if (request) { requestLayoutVirtual(parent); invalidate(parent); }
+}
+async function addViewInner(parent: JViewGroup, child: JView, index: number, request = true) {
+  if (!linkChild(parent, child, index)) return;
+  if (request) { requestLayoutVirtual(parent); invalidate(parent); }
+  if (parent.attached) await dispatchAttached(child);
+  await vcall(parent, "onViewAdded", "(Landroid/view/View;)V", child);
+  if (parent.hierarchyChangeL) {
+    await vcall(parent.hierarchyChangeL, "onChildViewAdded", "(Landroid/view/View;Landroid/view/View;)V", parent, child);
+  }
 }
 /** AOSP removeView (request) and removeViewInLayout (no request) */
 export function detachView(parent: JViewGroup, child: JView, request = true) {
@@ -1668,7 +1671,7 @@ async function addView3(this: JViewGroup, c: JView, i: number, lp: JLayoutParams
     : c.lp ? await convertLp(this, c.lp)
     : await guardCall(this, M_genDefaultLP);
   await resolveLp(c.lp!);
-  attachView(this, c, i);
+  await addViewInner(this, c, i);
 }
 /**
  * AOSP funnels every addView overload through the overridable 3-arg one, and subclasses do real
