@@ -2723,3 +2723,9 @@ getChildMeasureSpec uses the available span exactly for MATCH_PARENT when the pa
 is known. Applying that rule restores the full overlay and centers its controls. The focused
 layout checks pass; fresh Chrome places the pause button at y=957..1137 versus Android's
 952..1132. This does not implement the remaining RelativeLayout rule subset.
+
+The shell's uiTree/locateText walk subtracted scrolling but omitted translations. Maps moves
+its media controls by -258 pixels, so the reported bounds and named taps were displaced.
+The shared walk now includes each ancestor's translation. A fresh named Pause tap reaches
+the visible control and changes it to Play. Scale/rotation-aware inspection bounds remain
+outside this change.

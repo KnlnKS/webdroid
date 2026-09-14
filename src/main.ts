@@ -210,7 +210,7 @@ const clsName = (v: any): string => v.constructor?.$i?.name ?? v.constructor.nam
 /** depth-first over a view tree, with each view's absolute position (parents' scroll removed) */
 function* walkTree(v: any, depth = 0, ox = 0, oy = 0, visibleOnly = false): Generator<{ v: any; depth: number; x: number; y: number }> {
   if (visibleOnly && v.visibility !== 0) return;
-  const x = ox + v.left, y = oy + v.top;
+  const x = ox + v.left + (v.translationX ?? 0), y = oy + v.top + (v.translationY ?? 0);
   yield { v, depth, x, y };
   for (const c of v.children ?? []) yield* walkTree(c, depth + 1, x - (v.scrollX ?? 0), y - (v.scrollY ?? 0), visibleOnly);
 }
