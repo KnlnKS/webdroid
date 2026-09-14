@@ -1,6 +1,6 @@
 import "../../src/natives";
 import { rt } from "../../src/jvm/runtime";
-import { mangleField, mangleMethod } from "../../src/jvm/abi";
+import { mangleStaticField, mangleMethod } from "../../src/jvm/abi";
 import { JThread, setCurThread, mainThread, curThread, vcallMaybe, vcallOn } from "../../src/jvm/natives/jlang";
 import { gl, tables } from "../../src/android/gl";
 import { glSurfaces } from "../../src/android/glview";
@@ -25,7 +25,8 @@ async function probe() {
   const display14 = call14("eglGetDisplay", "(I)" + E14 + "EGLDisplay;", 0);
   const configs: unknown[] = [null];
   call14("eglChooseConfig", `(${E14}EGLDisplay;[II[${E14}EGLConfig;II[II)Z`, display14, null, 0, configs, 0, 1, new Int32Array(1), 0);
-  const no14 = Reflect.get(c14, mangleField("EGL_NO_CONTEXT", E14 + "EGLContext;"));
+  const no14 = Reflect.get(c14, mangleStaticField("EGL_NO_CONTEXT"));
+  if (!no14) throw new Error("EGL14 has no EGL_NO_CONTEXT handle");
   const context14 = call14("eglCreateContext", `(${E14}EGLDisplay;${E14}EGLConfig;${E14}EGLContext;[II)${E14}EGLContext;`, display14, configs[0], no14, Int32Array.of(0x3098, 2, 0x3038), 0);
   const surface14 = call14("eglCreatePbufferSurface", `(${E14}EGLDisplay;${E14}EGLConfig;[II)${E14}EGLSurface;`, display14, configs[0], Int32Array.of(0x3057, 2, 0x3056, 2, 0x3038), 0);
   const bound14 = call14("eglMakeCurrent", `(${E14}EGLDisplay;${E14}EGLSurface;${E14}EGLSurface;${E14}EGLContext;)Z`, display14, surface14, surface14, context14);
