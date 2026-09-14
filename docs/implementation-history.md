@@ -3932,3 +3932,33 @@ have no new observed diagnostics. The existing fixture's saved workouts leave
 an empty Graph, so this measures tab navigation rather than populated charts.
 Raw pairs and source/harness hashes are in the JVM worktree under
 `webdroid-shots/jvm/final-no-operands/fitnotes/`.
+
+Final selected-build Mihon also extends to seven because its first three pairs
+put the median proxy near the 5% guard with mixed directions. The complete set
+gives CPU 345.341 -> 343.343 ms/s (-0.58%), per-window median proxy
+46.70 -> 46.60 ms (-0.21%), p95 53.425 -> 52.775 ms (-1.22%) and JS heap
+359.639 -> 359.638 MB. Pooled 98-input median is 47.05 -> 46.60 ms and p95
+54.23 -> 53.275 ms. Every input completes in all 14 windows, without new
+observed diagnostics. This is Reader-settings scrolling with verified movement,
+not comic decoding. Raw evidence is alongside FitNotes in `mihon-app/`.
+
+Final selected-build Resy extends to seven after its third pair reverses both
+opportunity-proxy directions. All samples remain included, including pair five's
+CPU outlier (+7.20%). Complete medians are CPU 201.392 -> 204.222 ms/s (+1.41%),
+per-window median proxy 7.05 -> 6.65 ms (-5.67%), p95 11.25 -> 10.505 ms (-6.62%)
+and JS heap 386.983 -> 386.888 MB. Pooled 98-input median is 7.15 -> 6.65 ms,
+p95 12.115 -> 10.615 ms and ranges 1.7–16.6 -> 0.9–13.7 ms. All 14 windows
+complete 14 inputs, remain visible/alive on Metal, and match independently counted
+presentations where the served counter exists. Only the same five upstream
+resource failures appear; the earlier isolation's executor failure does not recur
+in these windows. This bounded observation does not explain that prior failure.
+
+The saved baseline/candidate Resy trees grow identically from 531 to 542 lines
+at pair five, alongside higher CPU in both builds. Matching paired content is
+verified, but the live-content period change limits comparisons across the full
+set; its causal contribution to CPU is not isolated. Main-window native
+instructions/time/slices and JIT regions are zero throughout the final FitNotes,
+Mihon and Resy captures. This does not establish zero child-process native work,
+whose performance channels remain unavailable. These results describe the
+production `6cbce0b` selection; a subsequent native synchronization review is
+recorded separately.
